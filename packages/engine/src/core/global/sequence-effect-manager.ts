@@ -1,4 +1,5 @@
 import type { AudioEngine } from '../../audio/types'
+import { createStatePathFallback } from '../project-state-store'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
@@ -51,7 +52,10 @@ export class SequenceEffectManager {
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
   ) {
-    this.slots = new EffectChainMap(audioEngine, (sequenceName) => `seq:${sequenceName}`)
+    this.slots = new EffectChainMap(audioEngine, (sequenceName) => `seq:${sequenceName}`, {
+      externalReceiverId: (sequenceName) => sequenceName,
+      statePathFallback: createStatePathFallback(audioManager),
+    })
   }
 
   hasDeclaration(sequenceName: string): boolean {

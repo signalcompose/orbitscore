@@ -1,4 +1,5 @@
 import type { AudioEngine } from '../../audio/types'
+import { createStatePathFallback } from '../project-state-store'
 
 import { AudioManager } from './audio-manager'
 import { resolvePathDirect } from './audio-resolver'
@@ -21,7 +22,10 @@ export class PluginInstrumentManager {
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
   ) {
-    this.slots = new EffectChainMap(audioEngine, (seqName) => `seq:${seqName}`)
+    this.slots = new EffectChainMap(audioEngine, (seqName) => `seq:${seqName}`, {
+      externalReceiverId: (seqName) => seqName,
+      statePathFallback: createStatePathFallback(audioManager),
+    })
   }
 
   hasDeclaration(): boolean {

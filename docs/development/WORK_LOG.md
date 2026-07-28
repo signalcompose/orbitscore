@@ -109,6 +109,181 @@ fixture パスを存在しないものに変える変異で **6件が red**:
 **反証条件**: fixture 化後もなお ETXTBSY が出たら、この機序は誤りで**外部 writer を疑い直す**。
 PR #561 の診断計装を残したのは、そのときの自白装置として。
 
+### 6.316 feat(engine): project.yaml から plugin state を宣言時に自動復元 #541 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ 実装・変異検証・**実機 gated E2E 完了**（受け入れ基準達成）
+
+`project.yaml` の `states:` を、instrument / master effect / per-sequence effect の新規宣言時に
+SC.5 identity で引き、明示 `statePath` が無い場合だけ daemon の `loadPlugin` へ渡す経路を追加。
+manifest は保存側と同じ parser / identity key を使い、未生成は no-op、壊れた manifest は throw、
+登記済み state ファイルの欠損は stderr へ診断したうえで state 無しの load へ degrade する。
+
+ライブコーディングの再評価を壊さないため、slot の `.orbs` 宣言値 `declaredStatePath` と
+初回 load の実効値 `statePath` を分離。冪等判定は前者だけを見て、respawn self-heal は後者を
+再利用する。sum / aux はアドレス指定が未決のため #564 のまま対象外。
+
+U1–U10 はすべて3 manager の public API 経由で検証。resolver 無効化、優先順位逆転、
+declared/effective 統合、欠損時 throw / 診断削除、manifest parse 握り潰し、`seq:` receiver 混入、
+role 除去、空 documentDirectory guard 除去、不在 manifest throw、self-heal の実効値再利用削除を
+それぞれ red にし、重複 `loadPlugin` 呼び出しも `toHaveBeenCalledTimes(1)` で検出した。変異後は
+`/tmp/claude-501/541-mutation-backup/` の原本と全対象を `cmp` し、一致を確認。
+
+**検証**:
+
+- `npm run build` ✅
+- `npm test` ✅ **1798 passed / 30 skipped / 0 failed**（ベースライン 1773 + 新規 25）。
+  内訳は初回実装 16 / ラウンド1修正 +7 / ラウンド2修正 +2 で、
+  **レビューのラウンドごとにテストが増えている**（いずれも変異で red を実測）
+- `npm run lint` ✅ error 0（warning 2件はいずれも本変更と無関係の既存ファイル:
+  `plugin-catalog-reader.ts` と `audio-slicer.spec.ts`）
+- **実機 gated E2E ✅ 2 passed**（`npm run test:e2e:gated`）— 受け入れ基準の本体
+
+### 実機で初めて見えた不具合（ユニット全緑・受け入れ監査通過をすり抜けた）
+
+**1回目の実機実行は落ちた。** `restored 261.63Hz must match saved 392.00Hz` — default C4 に
+落ちており、自動復元が発火していなかった。ユニット 1789 件は全緑、Fable の受け入れ監査も
+「このままマージ可」だった状態でこれである。
+
+一時プローブ（`console.error` → engine stderr → `get_log`）で実値を観測して確定した原因:
+
+```
+dir=/Users/yamato/Src/proj_orbitscore/orbitscore  ← REPO_ROOT。tmpRoot ではない
+key=stSeq/instrument/CLAPTestSynth/0              ← key は正しい
+manifest not found at <REPO_ROOT>/project.yaml
+```
+
+**実装ではなく E2E ハーネスの問題だった。** 拡張は documentDirectory を2経路で渡す:
+
+| 経路 | documentDirectory |
+|---|---|
+| `run_selection`（`extension.ts:2699`） | `path.dirname(editor.document.uri.fsPath)` = 開いているファイルのディレクトリ |
+| `evaluate_orbitscore`（`extension.ts:2839`） | **workspace root** |
+
+gated E2E はアプリを REPO_ROOT を workspace として起動していたため、tmpRoot 内の fixture を
+`run_selection` で評価する先行フェーズは tmpRoot になる一方、`evaluate_orbitscore` しか使わない
+復元フェーズは REPO_ROOT になっていた。**テストが直前行で `global.setDocumentDirectory(root)` を
+呼んでも効かない** — REPL は毎 eval のメタ行 `//#documentDirectory <workspace>` を
+`sessionDocumentDirectory` として保持し、**バッファ実行のたびに冒頭で再適用する**ため上書きされる。
+
+修正: **アプリの workspace を tmpRoot で開く**。両経路が一致し、テスト側の脆い
+`setDocumentDirectory` 手当て3箇所も不要になった。ユーザーが曲フォルダを開く実際の使い方にも近い。
+
+その副作用で先行テストが `auto-started engine running` タイムアウトになった。
+`autoStartConfiguredRustEngine` は `resolveAudioDeviceSetting()` が空だと即 return し、その値は
+`vscode.workspace.getConfiguration('orbitscore').inspect('audioDevice').workspaceValue`
+= `<workspace>/.vscode/settings.json` 由来。リポジトリにはあるが新規 tmpRoot には無かった。
+セットアップで `<tmpRoot>/.vscode/settings.json` を生成して解決（デバイス名はマシン依存を避け、
+実装がサポートするセンチネル `__default__` を使う）。
+
+### 診断が暴いたテストの穴（同 PR で塞いだ）
+
+復元テストは `saved.path` のバイト一致しか見ておらず、**保存がどのディレクトリに落ちたかを
+一度も検証していなかった** — 保存が別ディレクトリでも通る。同ファイル内の先行フェーズは
+`projectFile` まで assert しているのに、復元フェーズだけが緩かった。
+`identityKey` / `projectFile` / `states/` 配下の3点を追加し、次に同型で転んだときに
+「保存が違う場所」か「復元が読めていない」かが**テストの失敗メッセージだけで切り分けられる**ようにした
+（今回は切り分けにプローブを1往復挟む必要があった）。
+
+### PR レビュー（5名並行）で塞いだもの
+
+`/simplify`（4観点）→ `/code:pr-review-team` ラウンド1（code-reviewer / silent-failure-hunter /
+pr-test-analyzer / comment-analyzer）+ **Fable 独立監査をラウンド1に並行投入**した。
+
+**🔴 pr-test-analyzer が実証した false green**: `resolveRegisteredPluginStatePath` の
+`if (code !== 'ENOENT') throw error` を削除して**全 fs エラーを握り潰す変異**を入れても、
+当初の 16 件が**全部通った**（worktree を切って実測）。自分の変異検証がこの分岐を漏らしていた。
+
+**Fable が見つけた2つの実質的な穴**（いずれも一次ソース照合つき）:
+
+1. **`access(F_OK)` が弱すぎた** — F_OK は存在しか見ず、**ディレクトリでも成功し、可読性を検査しない**。
+   CLAP/VST3 両 child とも state 読取失敗は `?` で即死する（`orbit-clap-instrument-child/src/main.rs:186` /
+   `orbit-vst3-instrument-child/src/main.rs:279` 付近）ため、chmod 000 の state・ディレクトリを指す登記・
+   空文字登記が「degrade できたはずなのに硬い load 失敗」に化けていた。
+   `stat` + `isFile()` + `access(R_OK)` に置換し、**失敗の種類にかかわらず degrade へ合流**
+2. **保存後の daemon respawn で default 音色に戻る窓** — 登記が無い状態で load した slot は
+   `loadedPlugins` cache に `statePath=undefined` が凍結される。その後 `savePluginState` で登記されても、
+   respawn の再ロードは state 無しになる。**初回セッションで最も起きやすい流れ**なので follow-up にせず
+   本 PR に取り込み、保存成功時に cache の `statePath` を `saved.path` へ更新するようにした
+
+**失敗ポリシーの線引きを Fable の案に差し替えた**: 当初は「非 ENOENT は一律 fail」としていたが、
+**「登記簿そのもの（manifest）が読めない = fail、派生データ（state ファイル）が読めない = degrade」**
+の方が #541 の「楽譜を機械の派生データの問題でブロックしない」原則の延長として筋が通る。
+
+**観測性は Fable 案を採用**: 「no-op 経路に breadcrumb」ではなく
+**「復元が適用されたときだけ1行出す」**（`[plugin-state] restoring '<key>' from <path>`）。
+正常系はゼロ行のまま、故障位置が「ディレクトリ違い / manifest 不在 / key 不一致」に三分割される。
+`console.log` は engine stdout → `shouldFilterLine`（既知パターン以外は通す）→ `outputChannel` →
+`get_log` に届き、`ERROR:` 接頭辞が付かないので既存の「ERROR 行が増えないこと」assert を壊さない
+（配線は実コードで裏取り済み）。
+
+### ラウンド2（fix-scoped 縮小レビュー）— **自分の修正が作り込んだ穴を検出した**
+
+ラウンド1の指摘はすべて original-diff 起因だったため、規約どおり provenance で縮小し、
+**fix 差分に対して2問だけ**（「この修正が導入する新しい故障モードは何か」
+「新コードはどの実行コンテキストで走るか」）を問うた。
+
+**Important 1件が出た。上の穴2を塞ぐ修正が、別の穴を開けていた。**
+
+`RustEnginePlayer.savePluginState` の cache 更新は、呼び出し元 `ProjectStateStore.saveBody` の
+`bytesWritten > 0` 検証**より前**に走る。`daemon-client` は `bytes_written` が有限数かしか
+検証しないので **`0` は例外を投げずに通り**、cache だけ書き換わってから上位が throw する。
+
+結果、**呼び出し元には失敗と見えるのに in-memory cache だけがこっそり更新される**。
+manifest には登記されないので次セッションでは再現せず、**同一セッション内の次の respawn で
+遅延顕在化する** silent failure。修正前は passthrough だったのでこの窓は無かった。
+
+修正: cache 更新を `saved.bytesWritten > 0` のガード内に入れ、
+「cache 更新」と「呼び出し元への成功宣言」が同じ検証を共有するようにした。
+
+**規約「fixer の差分はラウンドを閉じる前に再点検する」が実際に機能した例**。
+ラウンド1で閉じていれば、この silent failure はそのまま出荷されていた。
+
+Minor もう1件: `stat` は通ったが `access(R_OK)` が ENOENT で落ちる TOCTOU 窓で、診断が
+「is not readable」に丸められて「存在しない」という理由が失われていた
+（下の「Cannot parse → Cannot read」と**同じ嘘の診断類型**）。正確な文言に修正。
+
+### 新しい観測可能な表面を E2E で押さえた
+
+この PR は復元適用時のログという**新しい観測可能な表面**を足したのに、当初それを E2E で
+押さえていなかった（規約「その PR が追加した観測可能な表面を必ず1つ以上 E2E で押さえる」違反）。
+
+Cycle B の `get_log` に `[plugin-state] restoring` と identity key が**同じ行に**現れることを
+assert に追加し、**実機で緑を確認**。これで
+**engine stdout → extension outputChannel → `get_log`** というプロセス境界を跨ぐ配線が実証された。
+ユニットテストは `vi.spyOn(console, 'error')` で同一プロセス内を見ているだけなので、
+この境界は E2E でしか守れない（silent-failure-hunter の指摘どおり）。
+
+**差分精読で見つけた2点**（レビュアー指摘ではない）:
+
+- `parseManifest` の「Cannot **parse**」が catch で「Cannot **read**」に包み直されて
+  **一次ラベルが嘘になっていた**（#563 の `Unknown sequence`・#567 の嘘コメントと同型）。
+  `parseManifest` を try の外へ出して素通しに
+- cache 更新が daemon の戻り値ではなく要求値のパスを使っていた → `saved.path` に
+
+**検証環境についての注記**: 実装を委譲した Codex 側の sandbox では `listen EPERM 127.0.0.1`
+により mock daemon / MCP HTTP 系の 95件が落ちていた。**これは sandbox の artifact であって
+退行ではない** — 同一差分を sandbox 外で回すと上記のとおり全緑になる。委譲先の
+「何件 failed」報告は、実行環境を確認せずに退行と読んではいけない（逆に、緑報告も
+そのまま信じない）。
+
+**本変更で残る follow-up（issue 化済み）**:
+
+- **#569**: 宣言時に登記済み state ファイルが欠損していれば state 無しへ degrade して音を出せる
+  一方、初回 load 後に同じファイルが消えた respawn では再 load が失敗する。
+  **🔴 本 PR がこの issue の露出範囲を広げた**: PR 前は statePath を持つのが
+  `instrument(path, statePath)` と明示的に書いた宣言だけ（`.vstpreset` 明示指定は互換入力に降格済みで
+  実質ほぼ存在しない）だったのに対し、PR 後は**一度でも state を保存した宣言はすべて**該当し、
+  それが通常経路になる。さらに watchdog を読むと、初回 attach 後の child 死亡は fast-fail ではなく
+  通常の respawn 経路に入るため、**20ms（`WATCHDOG_POLL`）間隔の respawn ループになる疑いがある**
+  （**未実証** — 再現テストで確定させること）。owner の音楽的判断待ち
+- **#568**: 同名・別 path の plugin は SC.5 key が衝突しうる。`normalizePluginInstanceName` が
+  パスを捨てるため。fingerprint 併記は `version: 1` の `states:` 値型を変えるため別 schema issue
+- **#567**: OrbitStudio `get_log` は要求行数を黙って末尾 500 行へ cap する。E2E の ERROR 件数
+  前後比較はスライディングウィンドウ上の補助判定に留まる（復元の主判定は non-default pitch）。
+  既存テストの `RESTORE_LOG_LINES = 2000` は実際には効いておらず、
+  「窓を広げて計測を安定させる」というコメントが事実と食い違っていたので実態に合わせた
+
 ### 6.315 test: prove the tone loop on real hardware — PR #563 のレビュー〜出荷 (Jul 29, 2026)
 
 **Date**: 2026-07-29

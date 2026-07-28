@@ -79,6 +79,94 @@ function parseManifest(source: string, manifestPath: string): ProjectManifest {
   return manifest as ProjectManifest
 }
 
+/**
+ * project.yaml の SC.5 identity 登記を、daemon に渡せる絶対 state path へ解決する。
+ *
+ * document context が無い場合と manifest / identity が未登記の場合は通常状態として no-op。
+ * manifest 自体の破損は parseManifest の既存契約どおり throw し、登記済みファイルだけが
+ * 欠損している場合は音を止めず state 無しへ degrade する（stderr には診断を残す）。
+ *
+ * project.yaml は `.orbs` と同じローカルプロジェクト内にあり、同一の信頼ドメインとして扱う。
+ * そのため手編集された登記値の絶対パスや `../` による project 外参照はユーザーの責任範囲。
+ * 書き込み側は常に `projectDirectory/states/<決定論的ファイル名>` を使うため、保存処理から
+ * project 外へ書き出すことは構造的にできない。
+ */
+export async function resolveRegisteredPluginStatePath(
+  projectDirectory: string,
+  identity: PluginStateIdentity,
+): Promise<string | undefined> {
+  // AudioManager.getDocumentDirectory() は未設定時に空文字列を返す。ここを path.join() より
+  // 前で止めないと、engine の cwd にある project.yaml を暗黙に読むことになる。
+  if (!projectDirectory) {
+    return undefined
+  }
+
+  const key = identityKey(identity)
+  const manifestPath = path.join(projectDirectory, 'project.yaml')
+  let source: string
+  try {
+    source = await fs.promises.readFile(manifestPath, 'utf8')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined
+    }
+    // 原因を本文に連結する（PluginInstrumentManager.resolveStatePath と同型）。
+    // `{ cause }` は tsconfig の lib が ES2022.Error を含まないため使わない。
+    const cause = error instanceof Error ? ` (cause: ${error.message})` : ''
+    throw new Error(
+      `Cannot read plugin state manifest '${manifestPath}' for identity '${key}'.${cause}`,
+    )
+  }
+  const manifest = parseManifest(source, manifestPath)
+
+  const registeredPath = manifest.states[key]
+  if (registeredPath === undefined) {
+    return undefined
+  }
+
+  const absoluteStatePath = path.resolve(projectDirectory, registeredPath)
+  let stateStats: fs.Stats
+  try {
+    stateStats = await fs.promises.stat(absoluteStatePath)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    const detail = error instanceof Error ? ` (${code ?? 'unknown'}: ${error.message})` : ''
+    console.error(
+      `Registered plugin state '${absoluteStatePath}' for '${key}' ${
+        code === 'ENOENT' ? 'does not exist' : `is not readable${detail}`
+      }; loading the plugin without state.`,
+    )
+    return undefined
+  }
+  if (!stateStats.isFile()) {
+    console.error(
+      `Registered plugin state '${absoluteStatePath}' for '${key}' is not a file; ` +
+        'loading the plugin without state.',
+    )
+    return undefined
+  }
+  try {
+    await fs.promises.access(absoluteStatePath, fs.constants.R_OK)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    const detail = error instanceof Error ? ` (${code ?? 'unknown'}: ${error.message})` : ''
+    console.error(
+      `Registered plugin state '${absoluteStatePath}' for '${key}' ${
+        code === 'ENOENT' ? 'does not exist' : `is not readable${detail}`
+      }; loading the plugin without state.`,
+    )
+    return undefined
+  }
+  return absoluteStatePath
+}
+
+export function createStatePathFallback(directoryProvider: {
+  getDocumentDirectory(): string
+}): (identity: PluginStateIdentity) => Promise<string | undefined> {
+  return (identity) =>
+    resolveRegisteredPluginStatePath(directoryProvider.getDocumentDirectory(), identity)
+}
+
 async function syncDirectory(directory: string): Promise<void> {
   const handle = await fs.promises.open(directory, 'r')
   try {

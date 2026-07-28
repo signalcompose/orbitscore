@@ -12,6 +12,7 @@ interface FakeDaemon {
   loadPlugin: ReturnType<typeof vi.fn>
   pluginNoteOn: ReturnType<typeof vi.fn>
   pluginNoteOff: ReturnType<typeof vi.fn>
+  savePluginState: ReturnType<typeof vi.fn>
   setBusRouting: ReturnType<typeof vi.fn>
   quit: ReturnType<typeof vi.fn>
 }
@@ -33,6 +34,12 @@ function createHarness() {
     loadPlugin: vi.fn().mockResolvedValue(ECHO_LOAD_RESULT),
     pluginNoteOn: vi.fn().mockResolvedValue(undefined),
     pluginNoteOff: vi.fn().mockResolvedValue(undefined),
+    savePluginState: vi.fn().mockImplementation((_target, absolutePath) =>
+      Promise.resolve({
+        path: absolutePath,
+        bytesWritten: 12,
+      }),
+    ),
     setBusRouting: vi.fn().mockResolvedValue(undefined),
     quit: vi.fn().mockResolvedValue(undefined),
   }
@@ -228,6 +235,121 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       undefined,
       'plugin:lead',
       '/songs/lead.vstpreset',
+    )
+  })
+
+  it('uses the daemon-returned saved path when reloading the cached plugin after respawn', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.loadPlugin(
+      '/plugins/kontakt.vst3',
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:lead',
+    )
+    const requestedStatePath = '/songs/states/requested-lead.state'
+    const savedStatePath = '/daemon/states/actual-lead.state'
+    daemon.savePluginState.mockResolvedValueOnce({
+      path: savedStatePath,
+      bytesWritten: 12,
+    })
+
+    await player.savePluginState(
+      { role: 'instrument', instance: 'plugin:lead' },
+      requestedStatePath,
+    )
+
+    expect(daemon.savePluginState).toHaveBeenCalledTimes(1)
+    expect(daemon.savePluginState).toHaveBeenCalledWith(
+      { role: 'instrument', instance: 'plugin:lead' },
+      requestedStatePath,
+    )
+    daemon.loadPlugin.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.loadPlugin).toHaveBeenCalledTimes(1)
+    expect(daemon.loadPlugin).toHaveBeenCalledWith(
+      '/plugins/kontakt.vst3',
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:lead',
+      savedStatePath,
+    )
+  })
+
+  it('does not update the respawn cache when saving plugin state fails', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.loadPlugin(
+      '/plugins/kontakt.vst3',
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:lead',
+    )
+    daemon.savePluginState.mockRejectedValueOnce(new Error('state save failed'))
+
+    await expect(
+      player.savePluginState(
+        { role: 'instrument', instance: 'plugin:lead' },
+        '/songs/states/failed.state',
+      ),
+    ).rejects.toThrow('state save failed')
+
+    daemon.loadPlugin.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await (player as any).respawnLoop()
+
+    expect(daemon.loadPlugin).toHaveBeenCalledTimes(1)
+    expect(daemon.loadPlugin).toHaveBeenCalledWith(
+      '/plugins/kontakt.vst3',
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:lead',
+      undefined,
+    )
+  })
+
+  it('does not update the respawn cache when saving plugin state writes zero bytes', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.loadPlugin(
+      '/plugins/kontakt.vst3',
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:lead',
+    )
+    const failedStatePath = '/songs/states/zero-byte.state'
+    daemon.savePluginState.mockResolvedValueOnce({
+      path: failedStatePath,
+      bytesWritten: 0,
+    })
+
+    await expect(
+      player.savePluginState({ role: 'instrument', instance: 'plugin:lead' }, failedStatePath),
+    ).resolves.toEqual({
+      path: failedStatePath,
+      bytesWritten: 0,
+    })
+
+    daemon.loadPlugin.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await (player as any).respawnLoop()
+
+    expect(daemon.loadPlugin).toHaveBeenCalledTimes(1)
+    expect(daemon.loadPlugin).toHaveBeenCalledWith(
+      '/plugins/kontakt.vst3',
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:lead',
+      undefined,
     )
   })
 
