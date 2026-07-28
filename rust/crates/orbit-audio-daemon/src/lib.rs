@@ -27,6 +27,10 @@ pub mod outproc_effect;
 /// Out-of-process CLAP instrument production integration（Issue #420・default off・clack-free）。
 #[cfg(feature = "outproc-instrument")]
 pub mod outproc_instrument;
+/// watchdog の「起動直後に死に続ける child を tight loop で respawn し続ける」検知ロジック（#573）。
+/// **effect と instrument で共有する**（規則を2箇所に持つと片方だけ直し忘れる — #548 と同種のリスク）。
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+pub(crate) mod outproc_respawn_guard;
 pub mod protocol;
 pub mod server;
 pub mod session;
