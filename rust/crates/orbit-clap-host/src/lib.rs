@@ -31,7 +31,7 @@ pub use effect::ClapEffectProcessor;
 pub use events::{
     make_event_ring, push_neutral_event, PluginEvent, PluginEventConsumer, PluginEventProducer,
 };
-pub use instrument::ClapInstrumentProcessor;
+pub use instrument::{ClapInstrumentProcessor, EMPTY_STATE_FROM_PLUGIN};
 pub use orbit_audio_native::PostProcessor;
 pub use processor::{ClapPostProcessor, ClapProcessorStats, InstallMsg};
 

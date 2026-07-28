@@ -1282,7 +1282,8 @@ mod tests {
         let without_state = args_of(None);
         assert!(
             !without_state.iter().any(|arg| arg == "--state"),
-            "--state must be omitted when state is None (CLAP child would bail on it)"
+            "--state must be omitted when state is None (child would treat an empty value as \
+             an unsupported argument)"
         );
         // state の有無で他の引数は不変（--state ペア以外が同一）。
         let stripped: Vec<_> = with_state

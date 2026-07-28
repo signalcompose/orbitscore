@@ -17,6 +17,108 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.312 feat(clap): CLAP state parity — 同じループテストが両形式で green #557 (Jul 28, 2026)
+
+**Date**: 2026-07-28
+**Status**: 🔄 PR 準備中
+
+Epic #546 の中核制約「**プラグイン形式に依存しない**」の履行。受け入れ基準
+「VST3 と CLAP の両方で同じ E2E が green（oracle synth で無人化）」を child + IPC 層で満たす。
+
+**着手前の縦割り**（コード確認済み）:
+
+| 能力 | VST3 | CLAP |
+|---|---|---|
+| state 復元 | instrument のみ対応 | **`--state` を明示 bail** |
+| state 取得 | host 関数 + IPC（#555） | **`CLAP_EXT_STATE` 参照ゼロ** |
+
+**実装**:
+
+- `orbit-clap-host`: `ClapInstrumentProcessor::capture_state()` / `apply_state_bytes()` を
+  `CLAP_EXT_STATE`（clack の `PluginState`）経由で追加。**意味論を VST3 とそろえる** —
+  拡張が無い / save 失敗 / **空 state** はすべて `Err`（`Ok(vec![])` にしない）
+- `orbit-clap-instrument-child`: `--state` の bail を外して**復元**を実装。
+  適用は **READY を publish する前**に行う（READY 後だと「復元前の既定音色で 1 ブロック鳴る」窓ができる）
+- 同 child が `service_command_mailbox` を呼ぶようにした。#556 で共有層へ引き上げてあるので、
+  **ack の publish 順序・未知 kind の扱い・detail の切り詰め禁止は自動的に継承される**
+  （handler を書くだけで済む、という #556 の設計主張がここで実際に効いた）
+- `clap-test-synth` oracle: テストが1本も無かったので VST3 oracle と対称に5本追加。
+  あわせて **VST3 oracle にも対称の契約 pin テストを追加**した（4本 → 5本）
+
+**🔴 形式間の契約を固定する**: 両 oracle が同じ magic（`ORC1`）・同じ長さ（8）・同じバイト並びを
+使うことを、**両 oracle の `state_encoding_matches_the_cross_format_contract`** で固定した。
+別ワークスペースなので定数を共有できないため、**両側を同じリテラルに pin する**のが唯一の橋渡しになる。
+どちらか一方の定数を変えれば、その側のテストが red になる。
+
+> ⚠️ **`/simplify` の指摘で修正**: 当初は CLAP 側にしか pin テストを置いておらず、
+> 「両 oracle で固定した」という記述が**誤り**だった。CLAP の定数を CLAP のリテラルと
+> 比べるだけの自己言及的な pin で、**VST3 側の定数が変わっても何も red にならなかった**。
+> VST3 oracle にも同じテストを追加し、片側だけの契約破り（magic 変更 / 長さ変更）が
+> 実際に red になることを変異で確認した。
+
+「VST3 と CLAP で同じ E2E」という受け入れ基準は、この契約が守られて初めて意味を持つ。
+
+**配線テスト**（`orbit-clap-instrument-child/tests/mailbox_wiring.rs`・VST3 側と同構造）:
+本番 child バイナリを実際に spawn し、`--state` で 7 半音を復元して起動 →
+mailbox 経由で吸い上げ → サイドカーが復元値と一致するか検証。デバイス不要・無人。
+
+**変異検証（4種・すべて red・切り分けも確認）**:
+
+| 変異 | 結果 |
+|---|---|
+| (a) mailbox 呼び出しを無効化 | 2件とも red（**テストが loud skip で空回りしていないことの証明でもある**） |
+| (b) 分岐反転（`CMD_SAVE_STATE` を未対応に） | 保存テストのみ red |
+| (c) `--state` の復元を無効化 | 保存テストのみ red |
+| (d) 引数差し替え（別パスへ書く） | 保存テストのみ red |
+
+oracle 側も4種すべて red（magic 検証の迂回 / `note_on` がオフセットを無視 /
+バイト順の変更 / 長さチェックの境界ずらし）。
+
+**検証**: workspace 全 green / `clap-test-synth` 5 passed / fmt clean / clippy 警告 0。
+
+**レビュー（`/simplify` + レビュー3本 + Fable）で直したもの**:
+
+- **形式間の契約 pin が CLAP 側にしか無かった** — CLAP の定数を CLAP のリテラルと比べるだけの
+  自己言及的な pin で、**VST3 側の定数が変わっても何も red にならなかった**。
+  VST3 oracle にも同じテストを追加し、片側だけの契約破りが red になることを変異で確認
+- **READY 前に復元する不変条件が守られていなかった** — `apply_state_bytes` と
+  `publish_child_ready` を**入れ替えても配線テストが両方 green** だった（変異検証で判明）。
+  `load()` に state を畳んで**正しい呼び方を1箇所に強制した**
+  （VST3 の `load(..., state: Option<&[u8]>)` と同じ形。CLAP だけが別呼び出しでリスクを抱えていた）
+
+  > ⚠️ **ラウンド2で訂正**: 当初「順序ミスを**表現できなくした**」と書いたが**言い過ぎ**だった。
+  > `apply_state_bytes` は `pub` のままなので、`load(.., None)` してから後で呼ぶ逆行コードは
+  > 今でも書ける（レビュアーが実際に書いて確認）。ただしその逆行は破損 state のテストが拾う。
+  > 「表現不能にした」のではなく「**正しい呼び方を1箇所に集約し、逆行はテストが拾う**」が正確。
+- **空 state ガードが無防備だった** — oracle が常に非空を返すため踏めず、VST3 側は
+  「無防備である」とコメントで自覚するに留まっていた。oracle に「何も書かずに成功を返す」
+  モードを足して**実際に踏んで殺せるようにした**（規格上、state を持たないプラグインが
+  0 バイト + `true` を返すのは違反ではないので、架空の状況ではない）
+- **失敗系の実証がゼロだった** — 「復元に失敗したまま READY になって既定音色で鳴る経路は無い」
+  ことをコードでは読み取れるが、**裏付ける実行結果が両形式とも無かった**。破損 state で
+  READY が立たず非ゼロ終了することを実証するテストを追加
+- 陳腐化した assertion メッセージ（「CLAP child would bail on it」= **本 PR が偽にした前提**）を訂正
+- `activate` 後に `load` する点が VST3 と**非対称**であることを明記（規格上は適法だが、
+  サードパーティ CLAP での検証は残課題）
+
+**テストの脆さも解消**: 空 state テストが `detail.contains("空")` と**日本語の文言に結合**していた
+（文言を英語化しただけで無関係に red になる）。メッセージを `EMPTY_STATE_FROM_PLUGIN` 定数にして
+実装とテストが同じものを見る形にし、**①ガードを外すと red ②文言だけ変えても green** の
+両方向を実測で確認した。
+
+**追加の変異検証（2種・すべて red・切り分けも確認）**: 空ガードを外す → 空 state テストのみ red /
+復元失敗を握りつぶす → 破損 state テストのみ red。
+
+> ⚠️ **CI の非対称（記録のみ）**: `rust-spike/` は CI のワークスペース外なので、
+> **CLAP oracle の契約 pin は CI で走らない**。配線テストも macOS 限定で CI は ubuntu のみ。
+> 実質の防波堤は main workspace 側の手書きリテラルとマージ前ゲートで、機械的強制ではない。
+
+**残**: effect 側の state（両形式とも引数すら無い）・param 列挙/設定・UI hosting。
+host（daemon）側の発行経路も未実装のままで、これは spec UIH.2 の規律
+（単一未処理コマンド・respawn 時の reset・演奏停止中のみ発行）を満たす PR が担う。
+
+---
+
 ### 6.311 fix(ci): build `outproc-instrument` alone — it was broken on main (Jul 28, 2026)
 
 **Date**: 2026-07-28

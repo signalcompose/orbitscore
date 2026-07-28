@@ -16,13 +16,19 @@
 //! `com.signalcompose.clap-test-synth`
 
 use std::f32::consts::TAU;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
     PluginAudioPortsImpl,
 };
+// clack_common は直接依存に無い。clack_plugin が `pub use clack_common::stream;` で
+// 再エクスポートしているのでそちら経由で取る。
+use clack_extensions::state::{PluginState, PluginStateImpl};
+use clack_plugin::stream::{InputStream, OutputStream};
+// `Read`/`Write` は std::io の trait 実装として提供される（clack_common::stream）。
+use std::io::{Read as _, Write as _};
 use clack_extensions::note_ports::{
     NoteDialect, NoteDialects, NotePortInfo, NotePortInfoWriter, PluginNotePorts,
     PluginNotePortsImpl,
@@ -34,6 +40,40 @@ use clack_plugin::prelude::*;
 // ──────────────────────────────────────────────────────────
 // Top-level plugin type
 // ──────────────────────────────────────────────────────────
+
+
+/// #557: **state = 半音単位のピッチオフセット**（VST3 oracle `orbit-vst3-synth-oracle` と同一意味論）。
+///
+/// 形式が違っても**利用者から見た挙動は同じ**でなければならない（Epic #546 の中核制約）。
+/// したがって式・エンコード・観測方法まで VST3 側と揃える。
+pub const STATE_MAGIC: u32 = 0x4F52_4331; // "ORC1"
+/// state バイト列の長さ（magic u32 + offset i32・リトルエンディアン）。
+pub const STATE_LEN: usize = 8;
+
+/// ノート番号とピッチオフセットから発音周波数を求める（**仕様の式・単一の真実**）。
+pub fn voice_frequency_hz(key: u8, semitone_offset: i32) -> f32 {
+    440.0 * 2.0f32.powf((key as f32 + semitone_offset as f32 - 69.0) / 12.0)
+}
+
+/// state バイト列を組み立てる。
+pub fn encode_state(semitone_offset: i32) -> [u8; STATE_LEN] {
+    let mut out = [0u8; STATE_LEN];
+    out[0..4].copy_from_slice(&STATE_MAGIC.to_le_bytes());
+    out[4..8].copy_from_slice(&semitone_offset.to_le_bytes());
+    out
+}
+
+/// state バイト列を解釈する。magic 不一致・長さ不足は `None`（**黙って 0 に倒さない**）。
+pub fn decode_state(bytes: &[u8]) -> Option<i32> {
+    if bytes.len() < STATE_LEN {
+        return None;
+    }
+    let magic = u32::from_le_bytes(bytes[0..4].try_into().ok()?);
+    if magic != STATE_MAGIC {
+        return None;
+    }
+    Some(i32::from_le_bytes(bytes[4..8].try_into().ok()?))
+}
 
 pub struct TestSynth;
 
@@ -48,7 +88,9 @@ impl Plugin for TestSynth {
     ) {
         builder
             .register::<PluginAudioPorts>()
-            .register::<PluginNotePorts>();
+            .register::<PluginNotePorts>()
+            // #557: VST3 oracle と対称の state 意味論。
+            .register::<PluginState>();
     }
 }
 
@@ -66,6 +108,8 @@ impl DefaultPluginFactory for TestSynth {
             .unwrap_or(false);
 
         let shared = TestSynthShared {
+            // #557: main thread（state 拡張）が書き、audio thread の note_on が読む。
+            semitone_offset: Arc::new(AtomicI32::new(0)),
             misbehave,
             // armed = true once first note-on has been seen (only relevant in bad mode)
             armed: Arc::new(AtomicBool::new(false)),
@@ -99,9 +143,11 @@ impl DefaultPluginFactory for TestSynth {
 
     fn new_main_thread<'a>(
         _host: HostMainThreadHandle<'a>,
-        _shared: &'a Self::Shared<'a>,
+        shared: &'a Self::Shared<'a>,
     ) -> Result<Self::MainThread<'a>, PluginError> {
-        Ok(TestSynthMainThread)
+        Ok(TestSynthMainThread {
+            semitone_offset: Arc::clone(&shared.semitone_offset),
+        })
     }
 }
 
@@ -110,6 +156,9 @@ impl DefaultPluginFactory for TestSynth {
 // ──────────────────────────────────────────────────────────
 
 pub struct TestSynthShared {
+    /// #557: `PluginStateImpl` が往復させる観測可能な state（半音オフセット）。
+    /// main thread が書き、audio thread の `note_on` が読む。
+    semitone_offset: Arc<AtomicI32>,
     misbehave: bool,
     armed: Arc<AtomicBool>,
     contention: Arc<Mutex<()>>,
@@ -121,9 +170,51 @@ impl PluginShared<'_> for TestSynthShared {}
 // Main-thread data
 // ──────────────────────────────────────────────────────────
 
-pub struct TestSynthMainThread;
+pub struct TestSynthMainThread {
+    /// #557: `Shared` と同じ atomic を指す（main thread が書き audio thread が読む）。
+    semitone_offset: Arc<AtomicI32>,
+}
 
 impl PluginMainThread<'_, TestSynthShared> for TestSynthMainThread {}
+
+/// #557: CLAP の state 拡張。**VST3 oracle と同じ意味論**（半音オフセット・同じエンコード）。
+///
+/// 不正な payload は `Err` を返して**黙って 0 に倒さない** — 復元したつもりで別の音になると
+/// ループ検証が意味を失う（VST3 側 `setState` と同じ規律）。
+impl PluginStateImpl for TestSynthMainThread {
+    fn save(&mut self, output: &mut OutputStream) -> Result<(), PluginError> {
+        // 🔴 テスト用モード: 何も書かずに成功を返す。
+        //
+        // host 側の「空 state を成功として登記しない」ガードは、通常の oracle が常に
+        // 非空を返すため**どのテストでも踏めなかった**（VST3 側は無防備であることを
+        // コメントで自覚するに留まっている）。CLAP 側はこのモードで実際に踏んで殺す。
+        // 規格上、state を持たないプラグインが 0 バイト + true を返すのは違反ではない
+        // （`clap/ext/state.h` は最小バイト数を要求していない）ので、実在しうる挙動でもある。
+        if std::env::var("CLAP_TEST_SYNTH_EMPTY_STATE").is_ok_and(|v| !v.is_empty()) {
+            return Ok(());
+        }
+        let bytes = encode_state(self.semitone_offset.load(Ordering::Relaxed));
+        output
+            .write_all(&bytes)
+            .map_err(|_| PluginError::Message("clap-test-synth: failed to write state"))
+    }
+
+    fn load(&mut self, input: &mut InputStream) -> Result<(), PluginError> {
+        let mut buffer = Vec::new();
+        input.read_to_end(&mut buffer).map_err(|_| PluginError::Message(
+            "clap-test-synth: failed to read state",
+        ))?;
+        match decode_state(&buffer) {
+            Some(offset) => {
+                self.semitone_offset.store(offset, Ordering::Relaxed);
+                Ok(())
+            }
+            None => Err(PluginError::Message(
+                "clap-test-synth: state payload is not a valid ORC1 chunk",
+            )),
+        }
+    }
+}
 
 // Audio-ports extension (main thread)
 impl PluginAudioPortsImpl for TestSynthMainThread {
@@ -193,9 +284,9 @@ impl SineVoice {
         }
     }
 
-    fn note_on(&mut self, key: u8, sample_rate: f32) {
+    fn note_on(&mut self, key: u8, sample_rate: f32, semitone_offset: i32) {
         self.key = key;
-        let freq = 440.0 * 2.0f32.powf((key as f32 - 69.0) / 12.0);
+        let freq = voice_frequency_hz(key, semitone_offset);
         self.phase_inc = TAU * freq / sample_rate;
         self.phase = 0.0;
         self.active = true;
@@ -284,7 +375,11 @@ impl<'a> PluginAudioProcessor<'a, TestSynthShared, TestSynthMainThread>
                     match core_event {
                         CoreEventSpace::NoteOn(e) => {
                             if let clack_plugin::events::Match::Specific(key) = e.key() {
-                                self.voice.note_on(key as u8, self.sample_rate);
+                                self.voice.note_on(
+                                    key as u8,
+                                    self.sample_rate,
+                                    self.shared.semitone_offset.load(Ordering::Relaxed),
+                                );
                                 // arm the bad-mode violations after first note-on
                                 if self.shared.misbehave {
                                     self.shared.armed.store(true, Ordering::Release);
@@ -349,3 +444,112 @@ impl<'a> PluginAudioProcessor<'a, TestSynthShared, TestSynthMainThread>
 // ──────────────────────────────────────────────────────────
 
 clack_export_entry!(SinglePluginEntry<TestSynth>);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// state バイト列が往復すること（`clap_plugin_state` の save → load の中身）。
+    /// **VST3 oracle の同名テストと同じ意味論**であることが、形式中立の前提になる。
+    #[test]
+    fn state_round_trips_through_encoding() {
+        for offset in [-24, -1, 0, 1, 7, 24] {
+            let bytes = encode_state(offset);
+            assert_eq!(bytes.len(), STATE_LEN);
+            assert_eq!(
+                decode_state(&bytes),
+                Some(offset),
+                "encode → decode で {offset} が保存されない"
+            );
+        }
+    }
+
+    /// 🔴 不正な state を **黙って 0 に倒さない**（復元したつもりで別の音になるのを防ぐ）。
+    #[test]
+    fn state_rejects_foreign_and_short_payloads() {
+        let mut wrong_magic = encode_state(7);
+        wrong_magic[0] ^= 0xFF;
+        assert_eq!(decode_state(&wrong_magic), None, "magic 不一致を受理した");
+
+        let short = &encode_state(7)[..STATE_LEN - 1];
+        assert_eq!(decode_state(short), None, "長さ不足を受理した");
+
+        assert_eq!(decode_state(&[]), None, "空を受理した");
+    }
+
+    /// 🔴 **VST3 oracle と同じエンコードであること**を固定する。
+    ///
+    /// 両 oracle が同じ magic・同じ長さ・同じバイト並びを使うからこそ、
+    /// 「VST3 と CLAP で同じ E2E が green」という受け入れ基準が意味を持つ。
+    /// 片方だけエンコードを変えたら、この期待値が red になって気づける。
+    #[test]
+    fn state_encoding_matches_the_cross_format_contract() {
+        assert_eq!(STATE_MAGIC, 0x4F52_4331, "magic は \"ORC1\"");
+        assert_eq!(STATE_LEN, 8, "magic 4 バイト + i32 4 バイト");
+
+        let bytes = encode_state(7);
+        assert_eq!(
+            &bytes[..4],
+            &STATE_MAGIC.to_le_bytes(),
+            "先頭 4 バイトが little-endian の magic でない"
+        );
+        assert_eq!(
+            &bytes[4..8],
+            &7i32.to_le_bytes(),
+            "後半 4 バイトが little-endian の i32 オフセットでない"
+        );
+    }
+
+    /// 期待値は**仕様の式**から導出する（実装が出した値と付き合わせない）。
+    #[test]
+    fn offset_shifts_pitch_by_semitones() {
+        let base = voice_frequency_hz(69, 0);
+        assert!(
+            (base - 440.0).abs() < 1e-3,
+            "A4 (key 69・offset 0) は 440Hz のはず: {base}"
+        );
+
+        let octave_up = voice_frequency_hz(69, 12);
+        assert!(
+            (octave_up / base - 2.0).abs() < 1e-4,
+            "+12 半音で 2 倍にならない: {octave_up} / {base}"
+        );
+
+        // オフセットは key と等価に効く（key+n と offset+n が同じ音）。
+        for (key, offset) in [(60u8, 7i32), (72, -5), (69, 3)] {
+            let via_offset = voice_frequency_hz(key, offset);
+            let via_key = voice_frequency_hz((key as i32 + offset) as u8, 0);
+            assert!(
+                (via_offset - via_key).abs() < 1e-3,
+                "key={key} offset={offset}: オフセットが key と等価に効いていない"
+            );
+        }
+    }
+
+    /// 🔴 配線: `note_on` が **実際に** オフセットを使って phase_inc を決めること。
+    /// 純関数（`voice_frequency_hz`）のテストだけでは、`note_on` がそれを無視していても green になる。
+    #[test]
+    fn note_on_applies_state_offset_to_phase_increment() {
+        let sample_rate = 48_000.0f32;
+        let mut plain = SineVoice::new();
+        let mut shifted = SineVoice::new();
+
+        plain.note_on(69, sample_rate, 0);
+        shifted.note_on(69, sample_rate, 12);
+
+        let expected_plain = TAU * voice_frequency_hz(69, 0) / sample_rate;
+        let expected_shifted = TAU * voice_frequency_hz(69, 12) / sample_rate;
+        assert!(
+            (plain.phase_inc - expected_plain).abs() < 1e-6,
+            "offset 0 の phase_inc が仕様式と一致しない"
+        );
+        assert!(
+            (shifted.phase_inc - expected_shifted).abs() < 1e-6,
+            "offset 12 の phase_inc が仕様式と一致しない"
+        );
+        assert!(
+            (shifted.phase_inc / plain.phase_inc - 2.0).abs() < 1e-4,
+            "offset がヴォイスに反映されていない（phase_inc が変わらない）"
+        );
+    }
+}

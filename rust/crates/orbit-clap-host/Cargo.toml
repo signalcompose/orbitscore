@@ -29,6 +29,7 @@ clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "f874e858a
   "note-ports",
   "log",
   "params",
+  "state",
 ] }
 rtrb = "0.3"
 thiserror = { workspace = true }

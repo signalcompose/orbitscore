@@ -47,6 +47,12 @@ pub enum ClapHostError {
     StartProcessing(String),
     #[error("plugin は既にロード済み（reload / 複数同時ロードは未サポート）")]
     AlreadyLoaded,
+    /// #557: state 拡張（`CLAP_EXT_STATE`）が使えない・失敗した。
+    ///
+    /// **拡張が無い場合も Err にする**（`Ok(vec![])` にしない）。空 state を「成功」として
+    /// 登記すると、再起動時に音色を失ったことに気づけない（VST3 側 `capture_state` と同じ規律）。
+    #[error("plugin state 操作に失敗: {0}")]
+    State(String),
 }
 
 /// load_plugin が返す plugin メタデータ（daemon が logging / UI に使う）。
