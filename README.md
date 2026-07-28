@@ -187,8 +187,10 @@ See [`docs/development/IMPLEMENTATION_PLAN.md`](docs/development/IMPLEMENTATION_
 Project documentation is organized in the [`docs/`](docs/) folder:
 
 - 📏 [PROJECT_RULES.md](docs/core/PROJECT_RULES.md) - Project rules (must-read)
+- 🧭 [DESIGN_PRINCIPLES.md](docs/core/DESIGN_PRINCIPLES.md) - Product design principles (LLM-first, symmetric human/LLM workflow) — governs all feature specs
 - 📝 [WORK_LOG.md](docs/development/WORK_LOG.md) - Development history
 - 🎵 [INSTRUCTION_ORBITSCORE_DSL.md](docs/core/INSTRUCTION_ORBITSCORE_DSL.md) - Language specification (Single Source of Truth)
+- 🎛️ [Plugin capability abstraction](docs/specs-v2/PLUGIN_CAPABILITY_ABSTRACTION_v1.md) - Format-neutral plugin capabilities (VST3 / CLAP / AU) — entry point for the VST workflow spec set
 - 🗺️ [IMPLEMENTATION_PLAN.md](docs/development/IMPLEMENTATION_PLAN.md) - Implementation plan
 - 🧪 [TESTING_GUIDE.md](docs/testing/TESTING_GUIDE.md) - Testing guide
 - 📚 [INDEX.md](docs/core/INDEX.md) - Documentation index (overall structure)

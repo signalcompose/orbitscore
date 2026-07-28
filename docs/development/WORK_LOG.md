@@ -17,10 +17,165 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.306 docs: design principles + E2E harness spec 正本化 #544 (Jul 28, 2026)
+### 6.307 docs(specs-v2): Phase 0 設計 spec 3本 正本化 #547 (Jul 28, 2026)
 
 **Date**: 2026-07-28
 **Status**: 🔄 PR 準備中
+
+**内容**: Epic #546 Phase 0（設計確定）の成果物を spec として正本化。owner が5論点を承認し、
+**プラグイン形式に依存しない UX** が中核制約として追加されたことを受けた設計。
+
+- **`docs/specs-v2/PLUGIN_CAPABILITY_ABSTRACTION_v1.md`（新規・CAP.n）**: 形式中立の能力抽象。
+  能力一覧（state get/set・dirty・param・preset・UI）・VST3/CLAP/AU 対応表・スレッド境界の契約・
+  ループの定義（受け入れの単位）
+- **`docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`（新規・UIH.n）**: child 実行モデル変更
+  （メインスレッドを Cocoa runloop へ・audio を別スレッド退避）・制御語彙拡張（コマンド
+  メールボックス）・可変長 state のサイドカー運搬・ウィンドウ所有の統一・アドレッシング・故障モード
+- **`docs/specs-v2/PROJECT_FILE_SPEC_v1.md`（新規・PRJ.n）**: `project.yaml` の登記モデル・
+  離散セーフポイント方式・復元の単位・優先順位・LLM 対称 MCP 面
+- INDEX.md に「VST ワークフロー」spec set の節を追加
+- 6.306 の Status をマージ済みへ更新
+
+**🔴 一次ソース照合の結果（設計判断の根拠）**:
+
+- **dirty 通知は VST3 / CLAP の両方に存在する。ただし双方ともプラグインが呼ぶ義務が無い**
+  - VST3 `IComponentHandler2::setDirty`（`vst3-0.3.0/src/bindings.rs:6752`）—
+    SDK 原文 `ivsteditcontroller.h:311-314`: *"Tells host that the plug-in is dirty
+    (something besides parameters has changed since last save), if true the host should
+    apply a save before quitting."*
+  - CLAP `clap_host_state.mark_dirty`（`clap/ext/state.h`）
+  - → **依存できないため離散セーフポイントを基本方式**とし、dirty は受け口を両形式に
+    実装した上でセーフポイントを増やす任意の最適化として扱う。変更検知ポーリングは不採用
+- **VST3 の `IPlugFrame` は `resizeView` の1メソッドのみ**でウィンドウを閉じた通知が無い。
+  CLAP は floating 対応のため `clap_host_gui.closed(was_destroyed)` を持つ →
+  両形式とも child 所有 `NSWindow` へ埋め込み、閉じた検出を単一経路に統一
+- **CLAP は state 用途を規格として区別**（`CLAP_STATE_CONTEXT_FOR_PROJECT` / `FOR_PRESET` /
+  `FOR_DUPLICATE`）— #541 の「登記 vs preset」の切り分けを規格側が裏付けている
+
+**🔴 Fable 独立監査 2 ラウンド（同日）— 実害級の誤りを計3件訂正**:
+
+ラウンド1（初版に対して・5件）:
+- **最重要**: 初版は「**VST3 に state dirty 通知は存在しない**」としていたが**誤り**。
+  ホストコールバック interface の列挙を `IComponentHandler` で止め、`IComponentHandler2` を
+  見落としていた（#527 で記録した「登録済み4ハンドラはすべて正しい」型の誤りと同型）。
+  決定①の結論は不変だが**根拠を「VST3 に無いから」→「両形式とも任意だから」へ差し替え**
+- 他4件: 登記キーとアドレッシングの不一致 / UI クローズの経路分岐と冪等性 /
+  embedded 非対応 CLAP の未規定 / リサイズ応答義務の欠落
+
+ラウンド2（ラウンド1の修正に対して・**修正が新たに持ち込んだ誤り2件を含む**）:
+- **A-1（実害級）**: 登記キーの例を `kick/effect/0` と **chain index ベース**で書いてしまい、
+  SC.5 規範(1)「(レシーバ, 正規化名, レシーバ内の同名出現順)」と食い違っていた。SC.5 規範(4)(5)
+  によりコメントアウト → 再評価で index はずれるため、**delay に reverb の state が適用される**
+  silent failure の入口だった → SC.5 の三つ組へ修正し、UIH.5 の位置アドレスとは層が違う
+  （揮発的コマンド引数 vs 永続キー）ことを両 spec に明記
+- **A-2（実害級）**: `setFrame` を `attached` の**後**に置いていた。SDK 原文
+  （`iplugview.h:146`）: *"Note that in this call the plug-in could call a
+  IPlugFrame::resizeView ()!"* — attach 中のリサイズ要求を取りこぼす順序だった → 順序を修正し、
+  `onSize` 呼び返し義務（`:177-178`）も追加
+- **A-3**: child→host の自発イベント経路が語彙に無く、dirty 受信と child 起点クローズが
+  セーフポイントを起動できなかった → UIH.2 に `evt_seq` / `evt_kind` / `evt_ack_seq` を追加
+- **A-4**: 「Closing 中の要求は無視」が CLOSE_UI の ack を返さず host が永久待機しうる →
+  「no-op + 成功 ack」と明記
+- 軽微2件（CAP.0 の stale 参照 / CAP.6-7 に「確定後は spec へ反映」）
+
+ラウンド3（fix-scoped・**ラウンド2 で新設したハンドシェイク自体に3件**）:
+- **F-1**: 「host の保存完了を待つ」の待ち手が child メインスレッドで、応答（SAVE_STATE）を
+  処理するのも同じスレッド → **ブロックすれば必ずデッドロック**。緩く実装すれば保存スキップ。
+  完了シグナル（`evt_ack_seq`）の意味も未定義だった
+- **F-2**: 経路①のフック点を `windowWillClose` と明記していたが、AppKit が閉じ始めた**後**の
+  通知であり、保存の往復を挟めない。VST3 `removed()` は SDK 原文（`iplugview.h:151-152`）
+  *"The parent window of the view is **about to be** destroyed"* で親破棄**前**が契約 → 順序が壊れる
+- **F-3**: イベント欄を単一スロットで定義したため「取りこぼさない」規律と自己矛盾
+- → **UIH.2a（非同期ハンドシェイクのポリシー節）を新設**して一括修正: ①ブロックしない
+  （状態機械 + runloop 復帰）②`evt_ack_seq` = host 側処理の完結と定義 ③`UI_CLOSED` は
+  取りこぼし不可・`STATE_DIRTY` は合流可 ④紳士協定を作らない（3経路を同一手続きに）。
+  UIH.4c をフェーズ A / B の非同期継続へ改稿し、経路①を `windowShouldClose` へ変更
+- 併せて: PRJ.4 にファイル名の可逆エンコード要件（`a-b/c` と `a/b-c` の衝突防止）、
+  CAP.3a の列挙に `currentPreset` KVO を追加
+
+ラウンド4（owner 指示で上限超過・ハンドシェイクに限定・敵対的）:
+- **F-D1（確定デッドロック）**: 経路②が**条文3つから機械的に導ける循環待ち**になっていた。
+  UIH.2 規律3（単一メールボックス・ack を待つ間 次を投函しない）+ CLOSE_UI の ack を
+  フェーズ B へ遅らせた設計 + `evt_ack_seq` の前進に SAVE_STATE の往復が必要、の3つが噛み合い、
+  **host は SAVE_STATE を投函できず child は保存完了を待ち続ける**。症状は
+  「`close_plugin_ui` が返らずウィンドウも閉じられない」
+  → **ack の意味を二段化**（ポリシー2 新設: コマンドの ack は「受理」であって「完了」ではない）。
+  完了は `UI_CLOSED_DONE` イベントで別に通知する
+- **F-D2（未規定）**: `Closing` 中の child crash / respawn、host 停滞時の脱出条件が無かった
+  → 故障時の脱出条件を表で規定（respawn はメールボックスをリセット・host は登記を触らない /
+  host 停滞はタイムアウトで loud + 保存なしクローズ / コマンドにもタイムアウト）
+- **D-2（不変条件の継承漏れ）**: 「既存の `seq_tag` / `SLOTS` と同じ」と書きながら、
+  その核である slot 再利用ガード（`transport.rs:25-27`・**破れると UB**）を継承していなかった。
+  「一周しそうなら合流」という近似表現は**投函済みスロットの書き換え**＝ cross-process の
+  torn read と読めた → 不変条件を明記し、合流は child ローカルの pending フラグに限定。
+  消費者のいない `UI_RESIZED` は削除（リングを塞ぐだけ）
+- **D-3**: 変異検証に4項目追加。最重要は「**規律3 を忠実に守る host モックで経路②を完走**」—
+  モックが規律3 を守らないと **F-D1 があっても全項目 green のまま出荷される**
+
+ラウンド5（owner 指示・収束）:
+- **F-E1（順序違反）**: フェーズ B のトリガを「`evt_ack_seq` の**前進**」と書いたが、
+  同カウンタは全イベント共用。クローズ直前の `STATE_DIRTY` の ack でも前進するため、
+  **UI_CLOSED の保存前に解放が走る** → トリガを「`UI_CLOSED` 自身の seq への到達」に限定
+- **F-E2a**: host 停滞タイムアウト時の完了通知が無く、MCP `close_plugin_ui` が永遠に完了
+  判定できなかった（loud 報告の運搬先も未定義）→ タイムアウト経路でも `UI_CLOSED_DONE` を
+  `evt_arg`=timeout つきで投函する1手で3つの穴を閉じた
+- **F-E2b**: respawn 時リセットの**主体と順序**が未規定 → host が行う（既存
+  `reset_control_run`・`transport.rs:301` と同じパターン）。順序も固定
+- **F-E3（データ競合）**: 不変条件は転記したが **Release/Acquire プロトコルを落としていた**。
+  鏡像元 `transport.rs:7-9` が明文で定義しているもの → publish プロトコルを表で明記
+- 併せて `Closing` 中の `OPEN_UI` を failure ack と規定、変異検証を3項目追加
+
+ラウンド6（収束確認・G-1 の3点(a)(b)(c)はすべて問題なし）:
+- **F-G1（データ競合の暗黙依存）**: ラウンド4の改稿で「host は未処理スロットを**順に**処理して
+  `evt_ack_seq` を進める」の行を**削除していた**（`git diff c99f81d` で確認）。この行が無いと
+  `evt_ack_seq >= s - EVT_SLOTS` の再利用判定が成立せず、host が s-1 を飛ばして s を ack すると
+  **child が host の読み取り中スロットへ書き込む**（Release/Acquire では防げない）
+  → 「`evt_ack_seq = s` は s 以下すべての完結を意味する・追い越し禁止」を明文化
+- **F-G2（取りこぼし）**: `UI_CLOSED_DONE` の再試行規定が無く、`EVT_SLOTS` の下限も未転記
+  （鏡像元 `transport.rs:59`「2 以上であること」）→ 取りこぼし不可イベントの再試行を一般化し、
+  `EVT_SLOTS >= 2` を明記
+- 併せて軽微2件（「死の確認」= プロセス終了でありハング検知ではない / タイムアウト経路の
+  arg は「スキップできる」ではなく「判別できる」）と変異3項目を追加
+
+ラウンド7（**収束**・H-1 = 削除行の全数照合は合格 = 「柱落とし」の3連続が止まった）:
+- **F-H1**: 正常な teardown（`CONTROL_QUIT`）が in-flight ハンドシェイクと交差した場合が未規定
+  → 再試行中の `UI_CLOSED_DONE` が QUIT による child 終了で永遠に投函されず
+  `close_plugin_ui` がハングしうる。**唯一残っていた紳士協定**（自らのポリシー5 に反していた）
+  → 「host は QUIT を立てる前に in-flight を解決する」を脱出条件表に追加
+- 非ブロッキング指摘も採用: `STATE_DIRTY` の in-flight を最大1件に固定し、
+  **リング占有の上限を静的に 3 に確定**（`EVT_SLOTS = 3` なら見送りが原理的に起きない）
+- Fable 総括「これが入ればハンドシェイク全体について指摘できる実害級は尽きる」
+
+**教訓（3つ・memory 化済み）**:
+1. 「既存機構と同じ方式を使う」と書くとき、**その機構の不変条件も一緒に継承する**。
+   名前だけ借りると、元が潰したレースを再導入する
+2. さらに **「不変条件を継承する」だけでも足りない**。機構の安全性が何本の柱で成立して
+   いるかを数え、全部を転記する（今回は不変条件を転記した直後に、同じ機構の
+   Release/Acquire を落としていた）
+3. **改稿時は `git diff` の `-` 行を読む。** 足したものだけ確認して満足しない。
+   ラウンド6 で、自分が前に書いた前提行を削除していたことが判明した（「柱を落とす」3回目）
+
+**AU の一次確認（Codex 到達不能につき自力実施）**: macOS SDK ヘッダで対応表の AU 列を確定。
+`fullState`（preset 用）と `fullStateForDocument`（ドキュメント用・*"Hosts saving documents
+should use this property"*）を**規格として区別**しており、CLAP の `FOR_PRESET` / `FOR_PROJECT`
+と同型 → **3形式のうち2つが区別を持つ**（PRJ.7 を強化）。一方 **AU に dirty 通知は無い**
+（通知面を全列挙・`dirty` の語が AudioToolbox ヘッダ全体に存在しない）→ 離散セーフポイント
+方式が3形式すべてで成立する唯一の共通解であることが確定。
+
+**実装の現状（コード確認・是正対象）**: state 復元は VST3 instrument のみ（CLAP は
+`--state` を明示 `bail!`）／state 取得は VST3 も IPC 未接続・CLAP は `CLAP_EXT_STATE` 未使用／
+effect の state は両形式とも引数すら無い／param 列挙・GUI は両形式とも未実装／
+**`orbit-vst3-effect-child` が `copy-daemon-bin.sh` のバンドル対象から漏れており VST3
+エフェクトが out-of-process で動かない**。
+
+**カタログ層の実測（MCP `list_plugins` / `rescan_plugins`）**: スキャン総数 338 に対し
+catalog は 79 件（23.4%）。259 件が `moduleinfo.json` 欠如で skip され、その大半がエフェクト
+（TR5 / iZotope / UAD / Kontakt 7,8 / Massive X 等）。「effect の候補が出ない」の主因。
+
+### 6.306 docs: design principles + E2E harness spec 正本化 #544 (Jul 28, 2026)
+
+**Date**: 2026-07-28
+**Status**: ✅ **PR #545 MERGED**（main `3ad1c3f`・2026-07-28・#544 CLOSED）
 
 **内容**: 2026-07-28 の owner 設計議論で確定した規範を docs へ昇格（#544）。
 

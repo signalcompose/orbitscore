@@ -48,6 +48,26 @@ OrbitScore is a live coding music DSL for VS Code with a bundled SuperCollider a
 
 ---
 
+## 🎛️ Active spec set — VST ワークフロー（音色ループ）(`docs/specs-v2/`)
+
+プラグイン能力（state / パラメータ / preset / UI）を **VST3 / CLAP / 将来の AU で同一の UX**
+として提供するための正本仕様。進捗管理は **GitHub Epic [#546](https://github.com/signalcompose/orbitscore/issues/546)**。
+読み順は下表の番号通り（能力抽象 → UI ホスティング → プロジェクトファイル）:
+
+| # | File | Purpose |
+|---|---|---|
+| 1 | [PLUGIN_CAPABILITY_ABSTRACTION_v1.md](../specs-v2/PLUGIN_CAPABILITY_ABSTRACTION_v1.md) | 形式中立プラグイン能力抽象（CAP.n）— 能力一覧・規格対応表・**規格間の非対称（state dirty 通知）**・スレッド境界。下2本の共通土台 |
+| 2 | [PLUGIN_UI_HOSTING_SPEC_v1.md](../specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md) | プラグイン UI ホスティング（UIH.n）— child 実行モデル変更（Cocoa runloop 化）・制御語彙拡張・ウィンドウ所有・故障モード |
+| 3 | [PROJECT_FILE_SPEC_v1.md](../specs-v2/PROJECT_FILE_SPEC_v1.md) | プロジェクトファイル（PRJ.n）— `project.yaml` の登記モデル・保存タイミング（離散セーフポイント）・復元の単位 |
+
+> 上位規範は [DESIGN_PRINCIPLES.md](DESIGN_PRINCIPLES.md)、検証規律は
+> [E2E_HARNESS_SPEC.md](../testing/E2E_HARNESS_SPEC.md)。設計記録は
+> [#541](https://github.com/signalcompose/orbitscore/issues/541) /
+> [#474](https://github.com/signalcompose/orbitscore/issues/474) /
+> [#543](https://github.com/signalcompose/orbitscore/issues/543)。
+
+---
+
 ## 🚧 Development (`docs/development/`)
 
 | File | Purpose |
