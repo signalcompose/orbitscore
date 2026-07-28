@@ -62,6 +62,52 @@ describe('plugin state address resolution and project registration (#562)', () =
     })
   })
 
+  it('offsets per-sequence effect indices after the instrument source slot', async () => {
+    const { global } = harness()
+    await global.instrument('lead', './Massive-X.clap')
+    await global.sequenceEffect('lead', './Echo.clap')
+
+    const effectManager = (global as any).sequenceEffectManager
+    const firstEffect = effectManager.chainFor('lead')[0]
+    expect(firstEffect).toBeDefined()
+    vi.spyOn(effectManager, 'chainFor').mockReturnValue([
+      firstEffect,
+      {
+        ...firstEffect,
+        occurrence: 1,
+        instanceId: 'seq:lead/Echo#2',
+      },
+    ])
+
+    expect(global.resolvePluginStateTarget('lead', 0)).toEqual({
+      identity: {
+        receiver: 'lead',
+        role: 'instrument',
+        normalizedName: 'Massive-X',
+        occurrence: 0,
+      },
+      daemonTarget: { role: 'instrument', instance: 'plugin:lead' },
+    })
+    expect(global.resolvePluginStateTarget('lead', 1)).toEqual({
+      identity: {
+        receiver: 'lead',
+        role: 'effect',
+        normalizedName: 'Echo',
+        occurrence: 0,
+      },
+      daemonTarget: { role: 'effect', bus: 'seq-bus-0' },
+    })
+    expect(global.resolvePluginStateTarget('lead', 2)).toEqual({
+      identity: {
+        receiver: 'lead',
+        role: 'effect',
+        normalizedName: 'Echo',
+        occurrence: 1,
+      },
+      daemonTarget: { role: 'effect', bus: 'seq-bus-0' },
+    })
+  })
+
   it('saves non-empty state then atomically registers the SC.5 key in project.yaml', async () => {
     const { directory, audio, global } = harness()
     await global.instrument('lead', './Massive-X.clap')
@@ -112,6 +158,15 @@ describe('plugin state address resolution and project registration (#562)', () =
 
     expect(() => global.resolvePluginStateTarget('lead', 0)).toThrow(
       /built-in audio source is not a plugin.*Valid indices: <none>/,
+    )
+  })
+
+  it('reports that a MIDI source is not a hosted plugin at sequence index 0', () => {
+    const { global, sequence } = harness()
+    vi.spyOn(sequence, 'isMidi').mockReturnValue(true)
+
+    expect(() => global.resolvePluginStateTarget('lead', 0)).toThrow(
+      /MIDI source is not a hosted plugin.*Valid indices: <none>/,
     )
   })
 

@@ -456,8 +456,9 @@ impl CommandMailboxHost {
                 }
                 // SAFETY: region はこのメソッドが open_shared で得た生存 mapping を指す。
                 unsafe { warn_if_abandoned_save_succeeded(region, in_flight) };
-                remove_abandoned_sidecar(&in_flight.sidecar_path)?;
+                let cleanup_result = remove_abandoned_sidecar(&in_flight.sidecar_path);
                 state.in_flight = None;
+                cleanup_result?;
             }
 
             let previous = unsafe { (*region).cmd_seq.load(Ordering::Relaxed) };
@@ -582,11 +583,13 @@ impl CommandMailboxHost {
         // SAFETY: mmap は生存し、旧 child の死亡確認後なので child と reset writer は競合しない。
         unsafe { reset_child_starting(region) };
         state.generation = state.generation.wrapping_add(1);
-        if let Some(in_flight) = state.in_flight.as_ref() {
-            remove_abandoned_sidecar(&in_flight.sidecar_path)?;
-        }
+        let cleanup_result = state
+            .in_flight
+            .as_ref()
+            .map(|in_flight| remove_abandoned_sidecar(&in_flight.sidecar_path))
+            .unwrap_or(Ok(()));
         state.in_flight = None;
-        Ok(())
+        cleanup_result
     }
 }
 
@@ -968,6 +971,36 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    fn ack_next_success(
+        shm: std::path::PathBuf,
+        previous_seq: u64,
+        bytes_written: u64,
+    ) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            let mmap = open_shared(&shm).expect("child map");
+            let region = region_ptr(&mmap);
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                let seq = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+                if seq > previous_seq {
+                    unsafe {
+                        (*region)
+                            .cmd_result_len
+                            .store(bytes_written, Ordering::Relaxed);
+                        (*region).cmd_result.store(CMD_RESULT_OK, Ordering::Relaxed);
+                        (*region).cmd_ack_seq.store(seq, Ordering::Release);
+                    }
+                    return;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "replacement command not published"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        })
     }
 
     #[test]
@@ -1359,6 +1392,142 @@ mod tests {
             "late-ack sidecar must be removed before mailbox reuse"
         );
         child.join().expect("child join");
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn command_mailbox_late_failed_ack_does_not_emit_success_warning() {
+        let shm = mailbox_test_path("late-failed-ack");
+        let mmap = create_shared(&shm).expect("create");
+        let host = CommandMailboxHost::new(shm.clone());
+        let sidecar = mailbox_test_path("late-failed-ack-sidecar");
+
+        let timed_out_seq = match host
+            .issue_save_state_with_timeout(&sidecar, Duration::from_millis(15))
+            .expect_err("unacknowledged command must time out")
+        {
+            CommandMailboxError::Timeout { seq, .. } => seq,
+            other => panic!("unexpected timeout error: {other}"),
+        };
+        let region = region_ptr(&mmap);
+        unsafe {
+            (*region)
+                .cmd_result
+                .store(CMD_RESULT_PLUGIN_ERROR, Ordering::Relaxed);
+            (*region)
+                .cmd_ack_seq
+                .store(timed_out_seq, Ordering::Release);
+        }
+
+        let warning_messages = Arc::new(Mutex::new(Vec::new()));
+        tracing::subscriber::with_default(
+            WarningSubscriber {
+                messages: warning_messages.clone(),
+            },
+            || host.reset_after_child_exit(),
+        )
+        .expect("failed late ack cleanup and reset");
+        assert!(
+            warning_messages
+                .lock()
+                .expect("warning messages lock")
+                .iter()
+                .all(|message| !message
+                    .contains("discarding plugin state saved after mailbox timeout")),
+            "a failed late ack must not be described as a successful discarded save"
+        );
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn command_mailbox_retry_cleanup_failure_releases_slot_and_stays_loud() {
+        let shm = mailbox_test_path("retry-cleanup-failure");
+        let mmap = create_shared(&shm).expect("create");
+        let host = CommandMailboxHost::new(shm.clone());
+        let abandoned_sidecar = mailbox_test_path("retry-cleanup-directory");
+        std::fs::create_dir(&abandoned_sidecar).expect("create cleanup target directory");
+
+        let timed_out_seq = match host
+            .issue_save_state_with_timeout(&abandoned_sidecar, Duration::from_millis(15))
+            .expect_err("unacknowledged command must time out")
+        {
+            CommandMailboxError::Timeout { seq, .. } => seq,
+            other => panic!("unexpected timeout error: {other}"),
+        };
+        let region = region_ptr(&mmap);
+        unsafe {
+            (*region)
+                .cmd_result
+                .store(CMD_RESULT_PLUGIN_ERROR, Ordering::Relaxed);
+            (*region)
+                .cmd_ack_seq
+                .store(timed_out_seq, Ordering::Release);
+        }
+
+        let cleanup_error = host
+            .issue_save_state_with_timeout(
+                Path::new("/tmp/orbit-mailbox-after-cleanup-error.bin"),
+                Duration::from_millis(5),
+            )
+            .expect_err("directory sidecar cleanup must stay loud");
+        assert!(matches!(
+            cleanup_error,
+            CommandMailboxError::SidecarCleanup { path, .. } if path == abandoned_sidecar
+        ));
+
+        let child = ack_next_success(shm.clone(), timed_out_seq, 17);
+        let response = host
+            .issue_save_state_with_timeout(
+                Path::new("/tmp/orbit-mailbox-after-released-slot.bin"),
+                Duration::from_millis(250),
+            )
+            .expect("cleanup failure must not leave the mailbox slot occupied");
+        assert_eq!(response.bytes_written, 17);
+        child.join().expect("child join");
+
+        std::fs::remove_dir(abandoned_sidecar).expect("remove cleanup target directory");
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn command_mailbox_reset_cleanup_failure_releases_slot_and_stays_loud() {
+        let shm = mailbox_test_path("reset-cleanup-failure");
+        let mmap = create_shared(&shm).expect("create");
+        let host = CommandMailboxHost::new(shm.clone());
+        let abandoned_sidecar = mailbox_test_path("reset-cleanup-directory");
+        std::fs::create_dir(&abandoned_sidecar).expect("create cleanup target directory");
+
+        let timed_out_seq = match host
+            .issue_save_state_with_timeout(&abandoned_sidecar, Duration::from_millis(15))
+            .expect_err("unacknowledged command must time out")
+        {
+            CommandMailboxError::Timeout { seq, .. } => seq,
+            other => panic!("unexpected timeout error: {other}"),
+        };
+
+        let cleanup_error = host
+            .reset_after_child_exit()
+            .expect_err("directory sidecar cleanup must stay loud");
+        assert!(matches!(
+            cleanup_error,
+            CommandMailboxError::SidecarCleanup { path, .. } if path == abandoned_sidecar
+        ));
+
+        let child = ack_next_success(shm.clone(), timed_out_seq, 23);
+        let response = host
+            .issue_save_state_with_timeout(
+                Path::new("/tmp/orbit-mailbox-after-reset-cleanup-error.bin"),
+                Duration::from_millis(250),
+            )
+            .expect("reset cleanup failure must not leave the mailbox slot occupied");
+        assert_eq!(response.bytes_written, 23);
+        child.join().expect("child join");
+
+        std::fs::remove_dir(abandoned_sidecar).expect("remove cleanup target directory");
         drop(mmap);
         let _ = std::fs::remove_file(shm);
     }
