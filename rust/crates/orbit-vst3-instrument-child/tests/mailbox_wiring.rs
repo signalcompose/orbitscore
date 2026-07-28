@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 
 use orbit_audio_sandbox::transport::{read_cstr_field, write_cstr_field, CHILD_STATUS_READY};
 use orbit_audio_sandbox::{
-    create_shared, region_ptr, SharedRegion, CMD_RESULT_OK, CMD_SAVE_STATE, CONTROL_QUIT,
+    create_shared, region_ptr, CommandMailboxHost, SharedRegion, CMD_RESULT_OK, CONTROL_QUIT,
 };
 
 static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -154,28 +154,16 @@ fn real_child_captures_the_hosted_plugin_state_through_the_command_mailbox() {
 
     let sidecar = unique_temp("orbit-wiring-captured.bin");
     let _ = std::fs::remove_file(&sidecar);
-    unsafe {
-        assert!(
-            write_cstr_field(
-                &mut (*region).cmd_arg,
-                sidecar.to_str().expect("temp path is UTF-8")
-            ),
-            "cmd_arg に収まらないパス"
-        );
-        (*region).cmd_kind.store(CMD_SAVE_STATE, Ordering::Relaxed);
-        // seq を最後に Release で publish する（child は Acquire で読む）。
-        (*region).cmd_seq.store(1, Ordering::Release);
-    }
-
-    let (result, len, detail) = await_ack(region, 1, &mut guard.child);
-    assert_eq!(
-        result, CMD_RESULT_OK,
-        "本番 child が保存に失敗した: {detail}"
-    );
+    // 🔴 **host 側は production と同じ [`CommandMailboxHost`] で発行する**。手書きで
+    // `cmd_kind`/`cmd_seq` を叩くと、single-outstanding・完全一致 ack・timeout といった
+    // host 側の不変条件を**迂回したまま**「child は ack した」しか言えないテストになる。
+    let response = CommandMailboxHost::new(shm.clone())
+        .issue_save_state(&sidecar)
+        .expect("本番 child が state を保存しなかった");
 
     let captured = std::fs::read(&sidecar).expect("サイドカーが書かれていない");
     assert_eq!(
-        len,
+        response.bytes_written,
         captured.len() as u64,
         "cmd_result_len が実際に書かれたバイト数と一致しない"
     );
@@ -214,6 +202,9 @@ fn real_child_reports_an_unknown_command_instead_of_hanging() {
 
     wait_for_ready(region, &mut guard.child);
 
+    // ⚠️ ここだけ raw に書く。[`CommandMailboxHost`] は `CMD_SAVE_STATE` しか発行できず、
+    // **このテストの目的は「型付き API では作れないコマンド」を child に投げること**だから。
+    // 旧方式の残骸ではない。
     unsafe {
         assert!(write_cstr_field(
             &mut (*region).cmd_arg,

@@ -9,19 +9,13 @@ use std::time::{Duration, Instant};
 use orbit_audio_sandbox::{
     create_shared, region_ptr, CommandMailboxHost, SharedRegion, CONTROL_QUIT,
 };
+use orbit_vst3_gain_oracle::encode_state;
 
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 fn unique_temp(label: &str) -> PathBuf {
     let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!("{label}-{}-{seq}", std::process::id()))
-}
-
-fn encode_state(gain: f64) -> [u8; 12] {
-    let mut bytes = [0u8; 12];
-    bytes[..4].copy_from_slice(&0x4F52_4531u32.to_le_bytes());
-    bytes[4..].copy_from_slice(&gain.to_bits().to_le_bytes());
-    bytes
 }
 
 fn package_oracle() -> Option<PathBuf> {

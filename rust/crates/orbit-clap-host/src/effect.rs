@@ -43,7 +43,6 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 
-use clack_extensions::state::PluginState;
 use clack_host::events::io::InputEvents;
 use clack_host::prelude::{PluginInstance, StartedPluginAudioProcessor};
 
@@ -112,35 +111,14 @@ impl ClapEffectProcessor {
         Ok((processor, loaded.info))
     }
 
+    /// ホストしているプラグインの state を吸い上げる（契約は [`crate::state::capture_state`]）。
     pub fn capture_state(&mut self) -> Result<Vec<u8>, ClapHostError> {
-        let mut handle = self._instance.plugin_handle();
-        let state = handle
-            .get_extension::<PluginState>()
-            .ok_or_else(|| ClapHostError::State("plugin が CLAP_EXT_STATE を持たない".into()))?;
-        let mut bytes = Vec::new();
-        state
-            .save(&mut handle, &mut bytes)
-            .map_err(|error| ClapHostError::State(format!("save: {error}")))?;
-        if bytes.is_empty() {
-            return Err(ClapHostError::State(
-                crate::instrument::EMPTY_STATE_FROM_PLUGIN.into(),
-            ));
-        }
-        Ok(bytes)
+        crate::state::capture_state(&mut self._instance)
     }
 
+    /// 保存済み state を適用する（契約は [`crate::state::apply_state_bytes`]）。
     pub fn apply_state_bytes(&mut self, bytes: &[u8]) -> Result<(), ClapHostError> {
-        if bytes.is_empty() {
-            return Err(ClapHostError::State("空の state を適用しようとした".into()));
-        }
-        let mut handle = self._instance.plugin_handle();
-        let state = handle
-            .get_extension::<PluginState>()
-            .ok_or_else(|| ClapHostError::State("plugin が CLAP_EXT_STATE を持たない".into()))?;
-        let mut reader = bytes;
-        state
-            .load(&mut handle, &mut reader)
-            .map_err(|error| ClapHostError::State(format!("load: {error}")))
+        crate::state::apply_state_bytes(&mut self._instance, bytes)
     }
 
     /// Whether the loaded plugin exposes an audio input port.

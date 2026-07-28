@@ -22,9 +22,8 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use anyhow::{bail, Context, Result};
 #[cfg(target_os = "macos")]
 use orbit_audio_sandbox::{
-    open_shared, region_ptr, service_command_mailbox, slot_index, slot_offset, write_sidecar,
-    CommandOutcome, ParentWatch, BUF_LEN, CHANNELS, CMD_RESULT_BAD_ARG, CMD_RESULT_IO_ERROR,
-    CMD_RESULT_PLUGIN_ERROR, CMD_SAVE_STATE, CONTROL_QUIT, MAX_FRAMES,
+    open_shared, region_ptr, save_state_command, service_command_mailbox, slot_index, slot_offset,
+    ParentWatch, BUF_LEN, CHANNELS, CMD_SAVE_STATE, CONTROL_QUIT, MAX_FRAMES,
 };
 #[cfg(target_os = "macos")]
 use orbit_vst3_host::Vst3EffectProcessor;
@@ -69,24 +68,6 @@ fn parse_args() -> Result<Args> {
         sample_rate,
         state,
     })
-}
-
-#[cfg(target_os = "macos")]
-fn handle_save_state(path_arg: Option<&str>, effect: &Vst3EffectProcessor) -> CommandOutcome {
-    let Some(path) = path_arg.filter(|candidate| !candidate.is_empty()) else {
-        return CommandOutcome::failed(
-            CMD_RESULT_BAD_ARG,
-            "cmd_arg is empty or not NUL-terminated UTF-8",
-        );
-    };
-    let bytes = match effect.capture_state() {
-        Ok(bytes) => bytes,
-        Err(error) => return CommandOutcome::failed(CMD_RESULT_PLUGIN_ERROR, format!("{error}")),
-    };
-    match write_sidecar(path, &bytes) {
-        Ok(()) => CommandOutcome::ok(bytes.len() as u64),
-        Err(error) => CommandOutcome::failed(CMD_RESULT_IO_ERROR, format!("write {path}: {error}")),
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -138,7 +119,7 @@ fn main() -> Result<()> {
         }
         unsafe {
             service_command_mailbox(region, |kind, arg| match kind {
-                CMD_SAVE_STATE => Some(handle_save_state(arg, &effect)),
+                CMD_SAVE_STATE => Some(save_state_command(arg, || effect.capture_state())),
                 _ => None,
             });
         }

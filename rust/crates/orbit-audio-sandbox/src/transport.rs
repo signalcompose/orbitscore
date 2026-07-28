@@ -358,6 +358,17 @@ impl From<io::Error> for CommandMailboxError {
 #[derive(Debug)]
 struct InFlightCommand {
     seq: u64,
+    /// 投函時の [`CommandMailboxState::generation`]。ack 照合で `seq` と**併せて**見る。
+    ///
+    /// 「`seq` だけで足りるのでは」は正しい問いで、**現状の実装では実際に足りている** —
+    /// [`reset_child_starting`] は `cmd_seq` をゼロに戻さず `cmd_ack_seq` を追いつかせるだけなので、
+    /// `cmd_seq` は child の世代をまたいで単調増加し、同じ `seq` が二度使われない。
+    ///
+    /// それでも残すのは、**その単調性が共有メモリ側のリセット手順に依存している**から。
+    /// respawn 時に「綺麗な状態から始める」意図で `cmd_seq` を 0 に戻す変更を入れると、
+    /// 旧世代の待機スレッドが新世代の同番コマンドを自分のものと誤認して in-flight を
+    /// 消しにいく（= 別コマンドの ack を横取りする）。generation を見ていればその変更は
+    /// 安全側に倒れる。フィールド 2 本と `&&` 3 箇所の対価としては安い。
     generation: u64,
     abandoned: bool,
     sidecar_path: std::path::PathBuf,
@@ -633,6 +644,38 @@ impl CommandOutcome {
             len: 0,
             detail: detail.into(),
         }
+    }
+}
+
+/// [`CMD_SAVE_STATE`] handler の**共通本体**。`capture` だけがフォーマット固有。
+///
+/// 4つの child binary（VST3 / CLAP × effect / instrument）はいずれも
+/// 「cmd_arg を検証 → プラグインから state を吸い上げ → [`write_sidecar`] → 長さを返す」
+/// という同じ手順を踏む。違うのは `capture_state()` のレシーバ型（`&` か `&mut` か、
+/// `Vst3HostError` か `ClapHostError` か）だけで、それはクロージャの中に閉じる。
+///
+/// 各 child に手書きで置くと、**結果コードの割り当て**（空 arg = [`CMD_RESULT_BAD_ARG`] /
+/// プラグイン失敗 = [`CMD_RESULT_PLUGIN_ERROR`] / 書き込み失敗 = [`CMD_RESULT_IO_ERROR`]）と
+/// `detail` の文言が4箇所で独立に漂流する。host 側はこのコードで分岐するので、
+/// 1形式だけ別のコードを返すようになっても型では捕まらない。
+pub fn save_state_command<E: std::fmt::Display>(
+    path_arg: Option<&str>,
+    capture: impl FnOnce() -> Result<Vec<u8>, E>,
+) -> CommandOutcome {
+    let Some(path) = path_arg.filter(|candidate| !candidate.is_empty()) else {
+        return CommandOutcome::failed(
+            CMD_RESULT_BAD_ARG,
+            "cmd_arg is empty or not NUL-terminated UTF-8",
+        );
+    };
+    let bytes = match capture() {
+        Ok(bytes) => bytes,
+        Err(error) => return CommandOutcome::failed(CMD_RESULT_PLUGIN_ERROR, format!("{error}")),
+    };
+    // UIH.3 は fsync を要求する（`write_sidecar` が担う）。
+    match write_sidecar(path, &bytes) {
+        Ok(()) => CommandOutcome::ok(bytes.len() as u64),
+        Err(error) => CommandOutcome::failed(CMD_RESULT_IO_ERROR, format!("write {path}: {error}")),
     }
 }
 

@@ -996,6 +996,7 @@ dependencies = [
  "anyhow",
  "orbit-audio-sandbox",
  "orbit-clap-host",
+ "orbit-vst3-gain-oracle",
 ]
 
 [[package]]
@@ -1069,6 +1070,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "orbit-audio-sandbox",
+ "orbit-vst3-gain-oracle",
  "orbit-vst3-host",
 ]
 

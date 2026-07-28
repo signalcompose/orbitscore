@@ -31,3 +31,11 @@ orbit-clap-host = { path = "../orbit-clap-host" }
 orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }
 # 引数 parse / エラー伝播。
 anyhow = "1"
+
+# state 契約（magic + f64 gain bits）の**正本**。`orbit-vst3-gain-oracle` が
+# 「VST3 / CLAP effect oracle 共通の state 契約」として宣言しているものを、CLAP 側の
+# テストもそこから読む。ここで load する実プラグインは別 workspace の
+# `rust-spike/clap-test-effect`（path dep を張れない）だが、**同じ契約に合意している**
+# ことがこのテストの前提なので、期待値は片側の正本から取る。
+[dev-dependencies]
+orbit-vst3-gain-oracle = { path = "../orbit-vst3-gain-oracle" }

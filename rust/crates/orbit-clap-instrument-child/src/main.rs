@@ -6,10 +6,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use anyhow::{bail, Context, Result};
-use orbit_audio_sandbox::transport::{
-    service_command_mailbox, write_sidecar, CommandOutcome, CMD_RESULT_BAD_ARG,
-    CMD_RESULT_IO_ERROR, CMD_RESULT_PLUGIN_ERROR, CMD_SAVE_STATE,
-};
+use orbit_audio_sandbox::transport::{save_state_command, service_command_mailbox, CMD_SAVE_STATE};
 use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
     ParentWatch, SharedRegion, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
@@ -56,33 +53,6 @@ fn parse_args() -> Result<Args> {
         sample_rate,
         state,
     })
-}
-
-/// `CMD_SAVE_STATE` の本体。戻り値は [`CommandOutcome`] で、これを
-/// `service_command_mailbox` が `cmd_result` / `cmd_result_len` / `cmd_result_detail` へ
-/// publish する（この関数は共有メモリに直接触らない）。
-///
-/// **VST3 child の `handle_save_state` と同じ形**。フォーマット固有なのは
-/// `capture_state()` の呼び先だけで、プロトコル規律は共有層が持つ。
-fn handle_save_state(
-    path_arg: Option<&str>,
-    instrument: &mut ClapInstrumentProcessor,
-) -> CommandOutcome {
-    let Some(path) = path_arg.filter(|candidate| !candidate.is_empty()) else {
-        return CommandOutcome::failed(
-            CMD_RESULT_BAD_ARG,
-            "cmd_arg is empty or not NUL-terminated UTF-8",
-        );
-    };
-    let bytes = match instrument.capture_state() {
-        Err(error) => return CommandOutcome::failed(CMD_RESULT_PLUGIN_ERROR, format!("{error}")),
-        Ok(bytes) => bytes,
-    };
-    // UIH.3 は fsync を要求する（`write_sidecar` が担う）。
-    match write_sidecar(path, &bytes) {
-        Err(error) => CommandOutcome::failed(CMD_RESULT_IO_ERROR, format!("write {path}: {error}")),
-        Ok(()) => CommandOutcome::ok(bytes.len() as u64),
-    }
 }
 
 fn in_order_seqs(last: u64, cur: u64) -> impl Iterator<Item = u64> {
@@ -255,7 +225,7 @@ fn main() -> Result<()> {
         // ack の publish 順序・未知 kind の扱い・detail の切り詰め禁止は自動的に継承される。
         unsafe {
             service_command_mailbox(region, |kind, arg| match kind {
-                CMD_SAVE_STATE => Some(handle_save_state(arg, &mut instrument)),
+                CMD_SAVE_STATE => Some(save_state_command(arg, || instrument.capture_state())),
                 _ => None,
             });
         }

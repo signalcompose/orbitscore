@@ -27,7 +27,8 @@ use std::time::{Duration, Instant};
 
 use orbit_audio_sandbox::transport::{read_cstr_field, write_cstr_field, CHILD_STATUS_READY};
 use orbit_audio_sandbox::{
-    create_shared, region_ptr, SharedRegion, CMD_RESULT_OK, CMD_SAVE_STATE, CONTROL_QUIT,
+    create_shared, region_ptr, CommandMailboxError, CommandMailboxHost, SharedRegion,
+    CMD_RESULT_OK, CONTROL_QUIT,
 };
 
 static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -222,28 +223,16 @@ fn real_clap_child_captures_the_hosted_plugin_state_through_the_command_mailbox(
 
     let sidecar = unique_temp("orbit-clap-wiring-captured.bin");
     let _ = std::fs::remove_file(&sidecar);
-    unsafe {
-        assert!(
-            write_cstr_field(
-                &mut (*region).cmd_arg,
-                sidecar.to_str().expect("temp path is UTF-8")
-            ),
-            "cmd_arg に収まらないパス"
-        );
-        (*region).cmd_kind.store(CMD_SAVE_STATE, Ordering::Relaxed);
-        // seq を最後に Release で publish する（child は Acquire で読む）。
-        (*region).cmd_seq.store(1, Ordering::Release);
-    }
-
-    let (result, len, detail) = await_ack(region, 1, &mut guard.child);
-    assert_eq!(
-        result, CMD_RESULT_OK,
-        "CLAP child が保存に失敗した: {detail}"
-    );
+    // 🔴 **host 側は production と同じ [`CommandMailboxHost`] で発行する**。手書きで
+    // `cmd_kind`/`cmd_seq` を叩くと、single-outstanding・完全一致 ack・timeout といった
+    // host 側の不変条件を**迂回したまま**「child は ack した」しか言えないテストになる。
+    let response = CommandMailboxHost::new(shm.clone())
+        .issue_save_state(&sidecar)
+        .expect("CLAP child が state を保存しなかった");
 
     let captured = std::fs::read(&sidecar).expect("サイドカーが書かれていない");
     assert_eq!(
-        len,
+        response.bytes_written,
         captured.len() as u64,
         "cmd_result_len が実際に書かれたバイト数と一致しない"
     );
@@ -286,6 +275,9 @@ fn real_clap_child_reports_an_unknown_command_instead_of_hanging() {
             &mut (*region).cmd_arg,
             "/tmp/never-written"
         ));
+        // ⚠️ ここだけ raw に書く。[`CommandMailboxHost`] は `CMD_SAVE_STATE` しか発行できず、
+        // **このテストの目的は「型付き API では作れないコマンド」を child に投げること**だから。
+        // 旧方式の残骸ではない。
         (*region).cmd_kind.store(0xDEAD_BEEF, Ordering::Relaxed);
         (*region).cmd_seq.store(1, Ordering::Release);
     }
@@ -339,21 +331,15 @@ fn an_empty_state_from_the_plugin_is_reported_as_a_failure_not_logged_as_success
 
     let sidecar = unique_temp("orbit-clap-empty-captured.bin");
     let _ = std::fs::remove_file(&sidecar);
-    unsafe {
-        assert!(write_cstr_field(
-            &mut (*region).cmd_arg,
-            sidecar.to_str().expect("temp path is UTF-8")
-        ));
-        (*region).cmd_kind.store(CMD_SAVE_STATE, Ordering::Relaxed);
-        (*region).cmd_seq.store(1, Ordering::Release);
-    }
-
-    let (result, len, detail) = await_ack(region, 1, &mut guard.child);
-    assert_ne!(
-        result, CMD_RESULT_OK,
-        "空 state を成功として ack した（音色を失ったことに気づけなくなる）"
-    );
-    assert_eq!(len, 0, "失敗なのに長さが 0 でない");
+    // production と同じ発行経路で失敗させる。**host 側がこの失敗をどう表面化するか**まで
+    // 込みで検査したいので、raw に叩かない。
+    let error = CommandMailboxHost::new(shm.clone())
+        .issue_save_state(&sidecar)
+        .expect_err("空 state を成功として ack した（音色を失ったことに気づけなくなる）");
+    let CommandMailboxError::CommandFailed { result, detail, .. } = error else {
+        panic!("空 state が CommandFailed 以外で返った: {error}");
+    };
+    assert_ne!(result, CMD_RESULT_OK, "失敗なのに result が OK");
     // 🔴 リテラルを書き写さない。実装と同じ定数を見ることで、**文言ではなく
     // 「この分岐が発火したか」**を検査する（文言を整理しただけで red になるのを防ぐ）。
     assert!(

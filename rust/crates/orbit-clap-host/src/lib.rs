@@ -21,6 +21,7 @@ mod events;
 mod host;
 mod instrument;
 mod processor;
+mod state;
 
 pub use clack_host::events::io::EventBuffer;
 pub use controller::{ClapHost, ClapHostError, LoadedPluginInfo};
@@ -31,9 +32,10 @@ pub use effect::ClapEffectProcessor;
 pub use events::{
     make_event_ring, push_neutral_event, PluginEvent, PluginEventConsumer, PluginEventProducer,
 };
-pub use instrument::{ClapInstrumentProcessor, EMPTY_STATE_FROM_PLUGIN};
+pub use instrument::ClapInstrumentProcessor;
 pub use orbit_audio_native::PostProcessor;
 pub use processor::{ClapPostProcessor, ClapProcessorStats, InstallMsg};
+pub use state::EMPTY_STATE_FROM_PLUGIN;
 
 use processor::InstallConsumer;
 use std::sync::atomic::{AtomicBool, AtomicU64};
