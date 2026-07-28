@@ -4798,6 +4798,19 @@ mod outproc_load_error_test_support {
     /// 各ポーリングループは条件成立で即抜けるため、正常時の所要時間には影響しない。
     const SETUP_DEADLINE: Duration = Duration::from_secs(30);
 
+    /// パニックメッセージ用に slot の**種別だけ**を名乗る（中身は出さない）。
+    ///
+    /// #529: 失敗時に「どの状態で止まっていたか」が分かると、離脱経路の同定が効く
+    /// （Empty = spawn 失敗 / ready timeout、Closed = shm open 失敗 / supervisor 失敗）。
+    fn slot_kind<R: OutProcRole>(slot: &Mutex<ChildSlot<R>>) -> &'static str {
+        match &*slot.lock().expect("lock child slot for diagnostics") {
+            ChildSlot::Empty(_) => "Empty",
+            ChildSlot::Loading { .. } => "Loading",
+            ChildSlot::Active { .. } => "Active",
+            ChildSlot::Closed => "Closed",
+        }
+    }
+
     fn child_launch<R: OutProcRole>(
         shm_path: PathBuf,
         child_exe: PathBuf,
@@ -5207,17 +5220,42 @@ mod outproc_load_error_test_support {
             let call = std::thread::spawn(move || {
                 wrap_call.load_outproc_plugin_impl::<R>(slot_call, path, None, None)
             });
-            let deadline = std::time::Instant::now() + SETUP_DEADLINE;
+            let started = std::time::Instant::now();
+            let deadline = started + SETUP_DEADLINE;
+            let mut polls: u64 = 0;
             // PID は reset_child_starting の後に publish されるため、この READY はそれによって消されない。
-            while R::current_child_pid_atomic(&stats).load(std::sync::atomic::Ordering::Relaxed)
-                == 0
-            {
+            let call = loop {
+                polls += 1;
+                if R::current_child_pid_atomic(&stats).load(std::sync::atomic::Ordering::Relaxed)
+                    != 0
+                {
+                    break call;
+                }
+                if call.is_finished() {
+                    // 🔴 pid を**読み直す**。前回の load と is_finished の間に worker が
+                    // pid を publish して終了した場合、「publish 前に終わった」は虚偽になる。
+                    if R::current_child_pid_atomic(&stats)
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        != 0
+                    {
+                        break call;
+                    }
+                    // 🔴 join して**実エラーを message に載せる**。ここで join せずに落ちると、
+                    // #529 の原因そのもの（エラー握り潰し → 原因を語らない panic）を再演する。
+                    let result = call.join().expect("load thread panicked");
+                    panic!(
+                        "attempt {attempt}: load call finished without ever publishing a child \
+                         PID (after {polls} polls / {:?}); its result was {result:?}",
+                        started.elapsed()
+                    );
+                }
                 assert!(
                     std::time::Instant::now() < deadline,
-                    "attempt {attempt} never completed child spawn"
+                    "attempt {attempt}: child spawn never completed (after {polls} polls / {:?})",
+                    started.elapsed()
                 );
                 std::thread::sleep(Duration::from_millis(5));
-            }
+            };
             let region = orbit_audio_sandbox::region_ptr(&mmap);
             unsafe { orbit_audio_sandbox::transport::publish_child_ready(region, has_input) };
             let result = call.join().expect("load thread panicked");
@@ -5270,24 +5308,54 @@ mod outproc_load_error_test_support {
             wrap_a.load_outproc_plugin_impl::<R>(slot_a, loading_path_owned, None, None)
         });
 
-        // 1本目が Empty -> Loading へ遷移して lock を解放するまで待つ。この deadline は
-        // セットアップ（child spawn）完了待ちであって検証対象の性質ではないので、CI の
-        // 高負荷でも越えない大きな値にする（#491: 2s では遅い runner で spawn が間に合わず
-        // flake した。ループは Loading 観測で即抜けるため通常は数 ms で終わる）。
-        let deadline = std::time::Instant::now() + SETUP_DEADLINE;
-        loop {
+        // 1本目が Empty -> Loading へ遷移して lock を解放するまで待つ。
+        //
+        // 🔴 #529: **壁時計だけに頼らない**。`Loading` は child spawn の**前**に設定されるので
+        // （`*slot = ChildSlot::Loading` → `drop(slot)` → spawn の順）、「CI が遅くて spawn が
+        // 間に合わない」ではここに到達しない。到達しない実際の経路は
+        // **worker が `Loading` を設定せずに早期 return すること**（`select_child_exe` の失敗など）で、
+        // その場合このループは deadline まで回り切ってから「never reached Loading」という
+        // **原因を何も語らないメッセージ**で落ちる。
+        //
+        // そこで待ちの条件を「`Loading` を観測 **or** worker が終了」にする。worker が先に
+        // 終わったならそれが答えなので、join してエラーを message に載せて即座に落とす。
+        // deadline は「どちらも起きない」異常系の最後の安全弁としてのみ残す。
+        let started = std::time::Instant::now();
+        let deadline = started + SETUP_DEADLINE;
+        let mut polls: u64 = 0;
+        let first_call = loop {
+            polls += 1;
             if matches!(
                 &*child_slot.lock().expect("poll child slot"),
                 ChildSlot::Loading { .. }
             ) {
-                break;
+                break first_call;
+            }
+            if first_call.is_finished() {
+                // 🔴 主張できるのは「**ポーラが Loading を観測する前に** worker が終了した」
+                // ことだけ。「Loading を一度も設定しなかった」と断言してはいけない —
+                // ポーラの反復が遅延すると、その間に worker が Loading 設定 → spawn →
+                // ready timeout → Empty まで進んで終了しうる（設定はされていた）。
+                // 離脱経路の同定は join した Err の文言に委ねる。
+                let observed = slot_kind(&child_slot);
+                let result = first_call.join().expect("load thread panicked");
+                panic!(
+                    "first LoadPlugin call finished before the poller ever observed \
+                     ChildSlot::Loading (slot is now {observed}, after {polls} polls / \
+                     {:?}); its result was {result:?}",
+                    started.elapsed()
+                );
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "first LoadPlugin call never reached ChildSlot::Loading within {SETUP_DEADLINE:?}"
+                "first LoadPlugin call neither reached ChildSlot::Loading nor finished \
+                 (slot is {}, after {polls} polls / {:?} — **反復回数が判別材料**: \
+                 数千回なら本当にスケジューリング問題、数回〜数百回ならランナー停止)",
+                slot_kind(&child_slot),
+                started.elapsed()
             );
             std::thread::sleep(Duration::from_millis(5));
-        }
+        };
 
         // 1本目はまだ ready-ack poll 中（child script は READY を publish しない）。この状態で 2本目を
         // 発行し、mutex 待ちでなく即座に "already in progress" で失敗することを検証する。

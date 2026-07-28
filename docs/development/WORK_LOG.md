@@ -17,6 +17,68 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.313 test(daemon): make the #529 flake self-diagnosing instead of silent (Jul 28, 2026)
+
+**Date**: 2026-07-28
+**Status**: 🔄 PR 準備中
+
+#529 の flake は「原因を何も語らない 30 秒 timeout」に化けていた。**症状を消す修正ではなく、
+次に落ちたときに真因を自白させる修正**（Fable が 2026-07-27 に一次ソース読解で確定した方針）。
+
+**なぜ 30 秒待つのか（既に棄却された仮説を再掲）**:
+
+- ❌ 「ポーリングが相手を飢餓させる」— worker の critical section は µs オーダー
+- ❌ 「CI が遅くて spawn が間に合わない」— `Loading` は **spawn より前**に設定される
+- ✅ **`Loading` に到達しなかったのではなく、既に離脱していた**。spawn 失敗で
+  `Loading → Empty` にサブミリ秒で戻り、5ms 間隔のポーラーが窓を丸ごと見逃す
+
+**決定的な欠陥**: 1本目のエラーは `join()` でしか回収されないのに、join は**ループの後**。
+実エラーが握り潰されて timeout panic に化けていた。
+
+**修正**（テスト内で閉じる・**本番コード無変更**）:
+
+- 待ちの条件を「`Loading` を観測 **or** worker が終了」に。終了していたら **join して実エラーを
+  message に載せる**
+- deadline assert に**反復回数と実測 elapsed** を追加（Fable が「決定的判別方法」とした計装。
+  数千回なら本当にスケジューリング問題、数回〜数百回ならランナー停止）
+- 同型の待ちがもう1箇所あったので同時に適用
+
+**レビューで直した自分の欠陥（Fable 指摘・4件）**:
+
+1. 🔴 **コンパイルできていなかった**（`SlotKind` 未定義）。`cargo check` はテストコードを
+   含まないため素通りしていた。**`cargo test --no-run` で検出すべきだった**
+2. メッセージが「`Loading` を**一度も設定しなかった**」と断言していたが、「設定後に離脱した」
+   経路では**虚偽**になる。主張できるのは「ポーラが観測する前に worker が終了した」ことだけ
+3. もう1箇所は「join してエラーを載せる」とコメントしながら**join せずに落ちて**いた
+   — #529 の原因そのものを再演していた
+4. pid 再読が無く TOCTOU で虚偽メッセージが出る窓があった
+
+**変異検証**: `select_child_exe` を Err にして「`Loading` を一度も設定しない」経路を再現。
+修正前なら 30 秒後に無言で落ちるところが、**7.5ms で実エラーつきで落ちる**ことを確認:
+
+```
+first LoadPlugin call finished before the poller ever observed ChildSlot::Loading
+(slot is now Empty, after 2 polls / 7.5585ms);
+its result was Err(OutProcEffect("MUTATION: select_child_exe forced failure"))
+```
+
+> ⚠️ **環境差**: spawn 失敗を強制する変異は、**私の環境では通り**（ポーラが `Loading` の窓を
+> 捉えた）、**レビュアーの環境では両サイトとも 8/8 で新しい診断つきに落ちた**。
+> spawn の ENOENT 検出は fork/exec 実装依存で負荷・スケジューリングに敏感なため、
+> どちらも起こりうる。**1回の観測から「通ってしまう」と一般化して書いたのは誤り**だった。
+>
+> なお site 2 の pid 再読（TOCTOU 対策）は、レースを踏ませる合成実験を 30 回試しても
+> **一度も再現しなかった**。理屈上は正しいが窓が極めて狭く、#529 の実際の原因だった
+> 可能性は低い。コストはほぼゼロなので残す。
+
+**この issue はクローズしない**: 診断の改善であって症状の除去ではない。
+spawn 失敗そのものは残るので flake は再発しうる。
+
+**検証**: daemon 132 passed（両 feature）/ 対象テスト 10 回連続 green / workspace 全 green /
+fmt clean / clippy 0。
+
+---
+
 ### 6.312 feat(clap): CLAP state parity — 同じループテストが両形式で green #557 (Jul 28, 2026)
 
 **Date**: 2026-07-28
