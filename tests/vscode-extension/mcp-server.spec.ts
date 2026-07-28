@@ -412,6 +412,59 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect(call?.args[0]).toBe(code)
   })
 
+  it('registers save_plugin_state with (sequence,index) and returns the saved project result', async () => {
+    const saved = {
+      identityKey: 'lead/instrument/Synth/0',
+      path: '/songs/states/lead.state',
+      bytesWritten: 12,
+    }
+    const { handlers } = createStubHandlers({
+      savePluginState: (sequence, index) => {
+        expect(sequence).toBe('lead one')
+        expect(index).toBe(0)
+        return { ok: true, saved }
+      },
+    })
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const listed = await client.toolsList()
+    const listBody = listed.json as JsonRpcOk<{ tools: Array<{ name: string }> }>
+    expect(listBody.result.tools.map((tool) => tool.name)).toContain('save_plugin_state')
+
+    const response = await client.toolsCall('save_plugin_state', {
+      sequence: 'lead one',
+      index: 0,
+    })
+    const body = response.json as JsonRpcOk<ToolCallResult>
+    expect(body.result.isError).toBeFalsy()
+    expect(JSON.parse(body.result.content[0]!.text)).toEqual(saved)
+  })
+
+  it('save_plugin_state keeps daemon code/details in an isError response', async () => {
+    const { handlers } = createStubHandlers({
+      savePluginState: () => ({
+        ok: false,
+        error: 'mailbox timed out',
+        code: 'PLUGIN_STATE_TIMEOUT',
+        details: { elapsed: 5 },
+      }),
+    })
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const response = await client.toolsCall('save_plugin_state', {
+      sequence: 'master',
+      index: 1,
+    })
+    const body = response.json as JsonRpcOk<ToolCallResult>
+    expect(body.result.isError).toBe(true)
+    expect(body.result.content[0]!.text).toContain('PLUGIN_STATE_TIMEOUT')
+    expect(body.result.content[0]!.text).toContain('"elapsed":5')
+  })
+
   it('tools/call get_document_text round-trips path/text and records the call', async () => {
     const docText: DocumentText = { path: '/tmp/session.orbs', text: 'global.tempo(140)\n' }
     let getDocumentTextCalled = false

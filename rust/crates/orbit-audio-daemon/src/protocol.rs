@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: &str = "0.1";
+pub const PROTOCOL_VERSION: &str = "0.2";
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Handshake フレーム（接続後に daemon が最初に送る）。

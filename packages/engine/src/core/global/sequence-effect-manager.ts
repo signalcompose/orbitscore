@@ -7,6 +7,7 @@ import {
   EffectChainMap,
   normalizePluginInstanceName,
   resolveEffectSpec,
+  type PluginSlot,
 } from './effect-slot'
 
 /**
@@ -64,6 +65,10 @@ export class SequenceEffectManager {
 
   getBus(sequenceName: string): string | undefined {
     return this.buses.get(sequenceName)
+  }
+
+  chainFor(sequenceName: string): readonly PluginSlot[] {
+    return this.slots.chainFor(sequenceName)
   }
 
   /**

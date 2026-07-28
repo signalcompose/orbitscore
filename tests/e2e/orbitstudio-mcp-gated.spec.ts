@@ -46,7 +46,10 @@ import * as path from 'path'
 
 import { describe, it, expect, afterAll } from 'vitest'
 
-import { analyzeWavBuffer } from '../../packages/vscode-extension/src/wav-analysis'
+import {
+  analyzeWavBuffer,
+  estimateFundamentalHz,
+} from '../../packages/vscode-extension/src/wav-analysis'
 
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
 
@@ -82,6 +85,33 @@ const CLAP_TEST_EFFECT_PATH = path.join(
   REPO_ROOT,
   'rust-spike/clap-test-effect/target/release/CLAPTestEffect.clap',
 )
+/// 🔴 CLAP oracle も VST3 と同じく**その場でビルドする**。
+///
+/// 以前はパス定数を指すだけで、`fs.existsSync` で存在を確認していた。しかし
+/// **存在は鮮度を意味しない** — 実際に 2026-07-29、`target/release/` に残っていた
+/// 1ヶ月前（#557 で `PluginStateImpl` を足す前）のバンドルを掴み、
+/// `plugin が CLAP_EXT_STATE を持たない` で state 保存が落ちた。テストは
+/// **1ヶ月前の成果物を検証していた**。
+///
+/// VST3 側は最初から `package-oracle.sh` をその場で叩いており、CLAP 側だけが
+/// 非対称だった。同じ形に揃える。`bundle-macos.sh` は `cd` を持たず cwd 依存なので
+/// `cwd` を明示すること。
+const CLAP_TEST_SYNTH_BUNDLE_SCRIPT = path.join(
+  REPO_ROOT,
+  'rust-spike/clap-test-synth/bundle-macos.sh',
+)
+const CLAP_TEST_EFFECT_BUNDLE_SCRIPT = path.join(
+  REPO_ROOT,
+  'rust-spike/clap-test-effect/bundle-macos.sh',
+)
+const VST3_SYNTH_PACKAGE_SCRIPT = path.join(
+  REPO_ROOT,
+  'rust/crates/orbit-vst3-synth-oracle/package-oracle.sh',
+)
+const VST3_EFFECT_PACKAGE_SCRIPT = path.join(
+  REPO_ROOT,
+  'rust/crates/orbit-vst3-gain-oracle/package-oracle.sh',
+)
 
 const TEST_TIMEOUT_MS = 120_000
 const TEARDOWN_TIMEOUT_MS = 30_000
@@ -111,6 +141,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   // tracked repo fixture — so the write lands in the temp dir that afterAll
   // already removes, and never dirties a committed file.
   let kickLoopWorkPath: string | undefined
+
+  const waitForEngine = (running: boolean, timeoutMs: number, label: string) =>
+    waitUntil(
+      async () => {
+        const stateRes = await client!.call('get_engine_state')
+        return (JSON.parse(stateRes.text) as { running: boolean }).running === running
+      },
+      { intervalMs: 500, timeoutMs, label },
+    )
 
   afterAll(async () => {
     // Teardown: best-effort, always runs, never throws past this hook.
@@ -164,6 +203,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       //
       // Recreating `tests/fixtures/mcp-e2e/` under tmpRoot keeps the relative
       // resolution genuinely exercised (now rooted at tmpRoot instead of the repo).
+      // 実プラグインを attach する前に CLAP oracle を release でビルドし直す
+      // （定数の doc を参照 — 古いバンドルを検証してしまう事故が実際に起きた）。
+      for (const script of [CLAP_TEST_SYNTH_BUNDLE_SCRIPT, CLAP_TEST_EFFECT_BUNDLE_SCRIPT]) {
+        execFileSync('/bin/bash', [script, '--release'], {
+          cwd: path.dirname(script),
+          encoding: 'utf8',
+        })
+      }
+
       const fixtureRelDir = path.dirname(path.relative(REPO_ROOT, KICK_LOOP_FIXTURE))
       const workFixtureDir = path.join(tmpRoot, fixtureRelDir)
       fs.mkdirSync(workFixtureDir, { recursive: true })
@@ -204,15 +252,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // `ORBIT_CAPTURE_WAV` でしか有効化できない (#528) ので、自動起動した engine を
       // 一度落としてから capture 付きで起動し直す。自動起動の spawn 完了を待たずに
       // stop すると取りこぼすため、running を確認してから止める。
-      const waitForEngine = (running: boolean, timeoutMs: number, label: string) =>
-        waitUntil(
-          async () => {
-            const stateRes = await client!.call('get_engine_state')
-            return (JSON.parse(stateRes.text) as { running: boolean }).running === running
-          },
-          { intervalMs: 500, timeoutMs, label },
-        )
-
       await waitForEngine(true, 30_000, 'auto-started engine running')
       // #528 回帰ピン: capture は spawn 時にしか有効化できないので、既に走っている
       // engine に対する capture 付き start_engine は **失敗を返さなければならない**。
@@ -401,6 +440,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const afterFirstInstrumentLog = (await client.call('get_log', { lines: 500 })).text
       const firstInstrumentAttachFailed =
         afterFirstInstrumentLog.includes('[OUTPROC_ATTACH_FAILED]')
+      expect(
+        firstInstrumentAttachFailed,
+        `the #562 real MCP state path requires a live CLAP instrument. Log tail: ${afterFirstInstrumentLog.slice(-800)}`,
+      ).toBe(false)
 
       if (firstInstrumentAttachFailed) {
         // The real CLAP bundle failed to attach in this environment (e.g. no
@@ -415,6 +458,139 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             `branch not exercised. Log tail: ${afterFirstInstrumentLog.slice(-400)}`,
         )
       } else {
+        // ── #562: the same MCP state-save tool reaches all four hosted forms.
+        // Package the repository-owned VST3 oracles into ignored rust/target
+        // fixtures, then attach one CLAP and one VST3 effect to audio receivers
+        // (v1 deliberately rejects seq.effect() on instrument sequences). This
+        // stays below the one-instrument/one-effect-per-receiver limits while
+        // exercising both daemon role selectors.
+        expect(fs.existsSync(CLAP_TEST_EFFECT_PATH), CLAP_TEST_EFFECT_PATH).toBe(true)
+        const vst3SynthPath = execFileSync(
+          '/bin/bash',
+          [VST3_SYNTH_PACKAGE_SCRIPT, 'release', 'mcp-e2e'],
+          { encoding: 'utf8' },
+        ).trim()
+        const vst3EffectPath = execFileSync('/bin/bash', [VST3_EFFECT_PACKAGE_SCRIPT, 'release'], {
+          encoding: 'utf8',
+        }).trim()
+
+        const declareVst3SeqRes = await client.call('evaluate_orbitscore', {
+          code: 'var vst3StateSeq = init global.seq',
+        })
+        expect(declareVst3SeqRes.isError, declareVst3SeqRes.text).toBe(false)
+        const attachVst3InstrumentRes = await client.call('evaluate_orbitscore', {
+          code: `vst3StateSeq.instrument("${vst3SynthPath}")`,
+        })
+        expect(attachVst3InstrumentRes.isError, attachVst3InstrumentRes.text).toBe(false)
+        const attachClapEffectRes = await client.call('evaluate_orbitscore', {
+          code: `drum.effect("${CLAP_TEST_EFFECT_PATH}")`,
+        })
+        expect(attachClapEffectRes.isError, attachClapEffectRes.text).toBe(false)
+        const declareVst3EffectSeqRes = await client.call('evaluate_orbitscore', {
+          code: 'var vst3EffectSeq = init global.seq',
+        })
+        expect(declareVst3EffectSeqRes.isError, declareVst3EffectSeqRes.text).toBe(false)
+        const attachVst3EffectRes = await client.call('evaluate_orbitscore', {
+          code: `vst3EffectSeq.effect("${vst3EffectPath}")`,
+        })
+        expect(attachVst3EffectRes.isError, attachVst3EffectRes.text).toBe(false)
+        await sleep(12_000) // three real child spawns + READY handshakes
+
+        const afterFourFormAttachLog = (await client.call('get_log', { lines: 500 })).text
+        expect(
+          (afterFourFormAttachLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? []).length,
+          `all four #562 plugin forms must be live. Log tail: ${afterFourFormAttachLog.slice(-1200)}`,
+        ).toBe(0)
+
+        // Playing requests are rejected at the MCP boundary and must not stop
+        // transport as a side effect. Count the engine's own stop marker before
+        // and after the rejected request rather than inferring from process state.
+        const stoppedBeforeRejectedSave = (
+          afterFourFormAttachLog.match(/(?:✅ Global stopped|⏹ Global)/g) ?? []
+        ).length
+        const rejectedWhilePlaying = await client.call('save_plugin_state', {
+          sequence: 'instSeq',
+          index: 0,
+        })
+        expect(rejectedWhilePlaying.isError, rejectedWhilePlaying.text).toBe(true)
+        expect(rejectedWhilePlaying.text).toContain('transport is running')
+        await sleep(500)
+        const afterRejectedSaveLog = (await client.call('get_log', { lines: 500 })).text
+        expect(
+          (afterRejectedSaveLog.match(/(?:✅ Global stopped|⏹ Global)/g) ?? []).length,
+          `save rejection must not auto-stop transport. Log tail: ${afterRejectedSaveLog.slice(-800)}`,
+        ).toBe(stoppedBeforeRejectedSave)
+
+        // evaluate_orbitscore normally refreshes the workspace directory. Set
+        // the scratch project directory last in this same evaluation so
+        // project.yaml and states/ can only be written under tmpRoot.
+        const escapedProjectDirectory = tmpRoot.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+        const stopForSaveRes = await client.call('evaluate_orbitscore', {
+          code: `global.stop()\nglobal.setDocumentDirectory("${escapedProjectDirectory}")`,
+        })
+        expect(stopForSaveRes.isError, stopForSaveRes.text).toBe(false)
+        await waitUntil(
+          async () => {
+            const log = (await client!.call('get_log', { lines: 500 })).text
+            return (
+              (log.match(/(?:✅ Global stopped|⏹ Global)/g) ?? []).length >
+              stoppedBeforeRejectedSave
+            )
+          },
+          { intervalMs: 200, timeoutMs: 5_000, label: 'transport stopped before state save' },
+        )
+
+        const errorsBeforeStateSave = (
+          (await client.call('get_log', { lines: 500 })).text.match(/ERROR:/g) ?? []
+        ).length
+        const stateRequests = [
+          { sequence: 'instSeq', index: 0, identity: 'instSeq/instrument/CLAPTestSynth/0' },
+          { sequence: 'drum', index: 1, identity: 'drum/effect/CLAPTestEffect/0' },
+          {
+            sequence: 'vst3StateSeq',
+            index: 0,
+            identity: 'vst3StateSeq/instrument/SynthOracle/0',
+          },
+          {
+            sequence: 'vst3EffectSeq',
+            index: 1,
+            identity: 'vst3EffectSeq/effect/GainOracle/0',
+          },
+        ] as const
+        for (const request of stateRequests) {
+          const response = await client.call('save_plugin_state', request)
+          expect(response.isError, response.text).toBe(false)
+          const saved = JSON.parse(response.text) as {
+            path: string
+            bytesWritten: number
+            identityKey: string
+            projectFile: string
+            projectStatePath: string
+          }
+          expect(saved.bytesWritten).toBeGreaterThan(0)
+          expect(saved.identityKey).toBe(request.identity)
+          expect(saved.projectFile).toBe(path.join(tmpRoot, 'project.yaml'))
+          expect(saved.projectStatePath.startsWith('states/')).toBe(true)
+          expect(saved.path.startsWith(path.join(tmpRoot, 'states') + path.sep)).toBe(true)
+          expect(fs.statSync(saved.path).size).toBe(saved.bytesWritten)
+        }
+        const projectYaml = fs.readFileSync(path.join(tmpRoot, 'project.yaml'), 'utf8')
+        for (const request of stateRequests) expect(projectYaml).toContain(request.identity)
+
+        const invalidStateIndex = await client.call('save_plugin_state', {
+          sequence: 'drum',
+          index: 99,
+        })
+        expect(invalidStateIndex.isError, invalidStateIndex.text).toBe(true)
+        expect(invalidStateIndex.text).toContain('Valid indices:')
+        expect(invalidStateIndex.text).toContain('1 (effect, CLAPTestEffect)')
+
+        const stateSaveLog = (await client.call('get_log', { lines: 500 })).text
+        expect(
+          (stateSaveLog.match(/ERROR:/g) ?? []).length,
+          `successful #562 saves must add no ERROR: lines. Log tail: ${stateSaveLog.slice(-1200)}`,
+        ).toBe(errorsBeforeStateSave)
+
         // ── #540 P1 (a): 同一シーケンスへの別 plugin 再宣言 = v1 の差し替え拒否。
         // エラー文言は回避策（エンジン再起動）を案内する新文言であること。
         const secondInstrumentRes = await client.call('evaluate_orbitscore', {
@@ -552,6 +728,239 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         gapsAt180bpm.length,
         `expected >=3 gaps in [0.29,0.40]s (180bpm), got onsetGaps: ${JSON.stringify(analysis.onsetGaps)}`,
       ).toBeGreaterThanOrEqual(3)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    'restores an MCP-saved non-default instrument state across an engine restart with the same measured pitch',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const root = tmpRoot
+
+      // この復元フェーズは2サイクル分（約26秒）のログを跨いで ERROR/attach 失敗の
+      // 増分を見るため、既存フェーズの 500 行窓では古い行が流れて偽陰性になりうる
+      // （独立監査の指摘）。窓を広げて計測の土台を安定させる。
+      const RESTORE_LOG_LINES = 2000
+      const fixturesDir = path.join(root, 'fixtures')
+      fs.mkdirSync(fixturesDir, { recursive: true })
+      const handStatePath = path.join(fixturesDir, 'orc1-offset7.state')
+      const magic = Buffer.alloc(4)
+      magic.writeUInt32LE(0x4f52_4331)
+      const offset = Buffer.alloc(4)
+      offset.writeInt32LE(7)
+      const handState = Buffer.concat([magic, offset])
+      // This literal is Cycle A input only. If it drifts from clap-test-synth's
+      // encode_state, apply_state_bytes rejects ORC1 before READY, attach fails
+      // loudly, and a false pass is structurally impossible.
+      fs.writeFileSync(handStatePath, handState)
+
+      const shiftedWav = path.join(root, 'shifted.wav')
+      const restoredWav = path.join(root, 'restored.wav')
+      const countLogMarker = (log: string, marker: RegExp): number =>
+        (log.match(marker) ?? []).length
+      const countErrors = (log: string): number => countLogMarker(log, /ERROR:/g)
+      const countAttachFailures = (log: string): number =>
+        countLogMarker(log, /\[OUTPROC_ATTACH_FAILED\]/g)
+      const countGlobalStops = (log: string): number =>
+        countLogMarker(log, /(?:✅ Global stopped|⏹ Global)/g)
+
+      // ── Cycle A: hand-built non-default state → audible pitch → MCP save.
+      const beforeCycleALog = (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES }))
+        .text
+      const errorsBeforeCycleA = countErrors(beforeCycleALog)
+      const startShifted = await activeClient.call('start_engine', { capture_wav: shiftedWav })
+      expect(startShifted.isError, startShifted.text).toBe(false)
+      await waitForEngine(true, 15_000, 'Cycle A engine running')
+      await sleep(2500)
+
+      // A fresh engine has no Global and play() only installs a pattern. The
+      // transport setup plus RUN are the minimum executable scaffold around the
+      // adjudicated instrument(path, statePath) and play(1) operations.
+      const initShifted = await activeClient.call('evaluate_orbitscore', {
+        code: [
+          'var global = init GLOBAL',
+          'global.key("C")',
+          'global.start()',
+          'var stSeq = init global.seq',
+        ].join('\n'),
+      })
+      expect(initShifted.isError, initShifted.text).toBe(false)
+      const attachFailuresBeforeShifted = countAttachFailures(
+        (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
+      )
+      const attachShifted = await activeClient.call('evaluate_orbitscore', {
+        code: `stSeq.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)}, ${JSON.stringify(handStatePath)})`,
+      })
+      expect(attachShifted.isError, attachShifted.text).toBe(false)
+      await sleep(6000)
+      const afterShiftedAttachLog = (
+        await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })
+      ).text
+      expect(
+        countAttachFailures(afterShiftedAttachLog),
+        `Cycle A instrument attach must add no OUTPROC_ATTACH_FAILED. Log tail: ${afterShiftedAttachLog.slice(-1200)}`,
+      ).toBe(attachFailuresBeforeShifted)
+
+      const playShifted = await activeClient.call('evaluate_orbitscore', {
+        code: ['stSeq.play(1)', 'RUN(stSeq)'].join('\n'),
+      })
+      expect(playShifted.isError, playShifted.text).toBe(false)
+      await sleep(3000)
+
+      const stopsBeforeShifted = countGlobalStops(
+        (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
+      )
+      const stopShifted = await activeClient.call('evaluate_orbitscore', {
+        code: [
+          'stSeq.stop()',
+          'global.stop()',
+          `global.setDocumentDirectory(${JSON.stringify(root)})`,
+        ].join('\n'),
+      })
+      expect(stopShifted.isError, stopShifted.text).toBe(false)
+      await waitUntil(
+        async () =>
+          countGlobalStops(
+            (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
+          ) > stopsBeforeShifted,
+        {
+          intervalMs: 200,
+          timeoutMs: 5_000,
+          label: 'Cycle A transport stopped before state save',
+        },
+      )
+
+      const saveShifted = await activeClient.call('save_plugin_state', {
+        sequence: 'stSeq',
+        index: 0,
+      })
+      expect(saveShifted.isError, saveShifted.text).toBe(false)
+      const saved = JSON.parse(saveShifted.text) as { path: string; bytesWritten: number }
+      expect(saved.bytesWritten).toBe(handState.length)
+      expect(
+        fs.readFileSync(saved.path).equals(handState),
+        'MCP-saved state must be byte-identical to the Cycle A input',
+      ).toBe(true)
+
+      const stopCycleAEngine = await activeClient.call('stop_engine')
+      expect(stopCycleAEngine.isError, stopCycleAEngine.text).toBe(false)
+      await waitForEngine(false, 15_000, 'Cycle A engine stopped')
+      await sleep(1500)
+      const afterCycleALog = (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text
+      expect(
+        countErrors(afterCycleALog),
+        `Cycle A must add no ERROR: lines. Log tail: ${afterCycleALog.slice(-1200)}`,
+      ).toBe(errorsBeforeCycleA)
+
+      // ── Cycle B: the MCP output (never the hand fixture) is the restore input.
+      const errorsBeforeCycleB = countErrors(afterCycleALog)
+      const startRestored = await activeClient.call('start_engine', { capture_wav: restoredWav })
+      expect(startRestored.isError, startRestored.text).toBe(false)
+      await waitForEngine(true, 15_000, 'Cycle B engine running')
+      await sleep(2500)
+
+      const initRestored = await activeClient.call('evaluate_orbitscore', {
+        code: [
+          'var global = init GLOBAL',
+          'global.key("C")',
+          'global.start()',
+          'var rsSeq = init global.seq',
+        ].join('\n'),
+      })
+      expect(initRestored.isError, initRestored.text).toBe(false)
+      const attachFailuresBeforeRestored = countAttachFailures(
+        (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
+      )
+      const attachRestored = await activeClient.call('evaluate_orbitscore', {
+        code: `rsSeq.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)}, ${JSON.stringify(saved.path)})`,
+      })
+      expect(attachRestored.isError, attachRestored.text).toBe(false)
+      await sleep(6000)
+      const afterRestoredAttachLog = (
+        await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })
+      ).text
+      expect(
+        countAttachFailures(afterRestoredAttachLog),
+        `Cycle B instrument attach must add no OUTPROC_ATTACH_FAILED. Log tail: ${afterRestoredAttachLog.slice(-1200)}`,
+      ).toBe(attachFailuresBeforeRestored)
+
+      const playRestored = await activeClient.call('evaluate_orbitscore', {
+        code: ['rsSeq.play(1)', 'RUN(rsSeq)'].join('\n'),
+      })
+      expect(playRestored.isError, playRestored.text).toBe(false)
+      await sleep(3000)
+
+      const stopsBeforeRestored = countGlobalStops(
+        (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
+      )
+      const stopRestored = await activeClient.call('evaluate_orbitscore', {
+        code: ['rsSeq.stop()', 'global.stop()'].join('\n'),
+      })
+      expect(stopRestored.isError, stopRestored.text).toBe(false)
+      await waitUntil(
+        async () =>
+          countGlobalStops(
+            (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
+          ) > stopsBeforeRestored,
+        {
+          intervalMs: 200,
+          timeoutMs: 5_000,
+          label: 'Cycle B transport stopped before engine stop',
+        },
+      )
+
+      const stopCycleBEngine = await activeClient.call('stop_engine')
+      expect(stopCycleBEngine.isError, stopCycleBEngine.text).toBe(false)
+      await waitForEngine(false, 15_000, 'Cycle B engine stopped')
+      await sleep(1500)
+      const afterCycleBLog = (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text
+      expect(
+        countErrors(afterCycleBLog),
+        `Cycle B must add no ERROR: lines. Log tail: ${afterCycleBLog.slice(-1200)}`,
+      ).toBe(errorsBeforeCycleB)
+
+      // ── Frequency-only verdict: no state decode is duplicated in the test.
+      const shiftedBuf = fs.readFileSync(shiftedWav)
+      const restoredBuf = fs.readFileSync(restoredWav)
+      const shiftedDuration = analyzeWavBuffer(shiftedBuf).durationSec
+      const restoredDuration = analyzeWavBuffer(restoredBuf).durationSec
+      const shiftedHz = estimateFundamentalHz(shiftedBuf, {
+        fromSec: 0,
+        toSec: shiftedDuration,
+      })
+      const restoredHz = estimateFundamentalHz(restoredBuf, {
+        fromSec: 0,
+        toSec: restoredDuration,
+      })
+      expect(shiftedHz, 'Cycle A capture has no measurable steady fundamental').toBeDefined()
+      expect(restoredHz, 'Cycle B capture has no measurable steady fundamental').toBeDefined()
+
+      // MIDI-standard pitch formula is the independent musical specification.
+      const midiFrequencyHz = (midiNote: number): number => 440 * 2 ** ((midiNote - 69) / 12)
+      const expectedDefaultHz = midiFrequencyHz(60)
+      const expectedShiftedHz = midiFrequencyHz(60 + 7)
+      const shiftedMeasured = shiftedHz!
+      const restoredMeasured = restoredHz!
+      expect(
+        Math.abs(shiftedMeasured - expectedShiftedHz) / expectedShiftedHz,
+        `Cycle A ${shiftedMeasured.toFixed(2)}Hz must be offset-7 pitch ${expectedShiftedHz.toFixed(2)}Hz`,
+      ).toBeLessThanOrEqual(0.02)
+      expect(
+        Math.abs(shiftedMeasured - expectedDefaultHz) / expectedDefaultHz,
+        `Cycle A ${shiftedMeasured.toFixed(2)}Hz must be clearly distinct from default ${expectedDefaultHz.toFixed(2)}Hz`,
+      ).toBeGreaterThan(0.1)
+      expect(
+        Math.abs(restoredMeasured - shiftedMeasured) / shiftedMeasured,
+        `restored ${restoredMeasured.toFixed(2)}Hz must match saved ${shiftedMeasured.toFixed(2)}Hz`,
+      ).toBeLessThanOrEqual(0.01)
+      expect(
+        Math.abs(restoredMeasured - expectedShiftedHz) / expectedShiftedHz,
+        `restored ${restoredMeasured.toFixed(2)}Hz must be offset-7 pitch ${expectedShiftedHz.toFixed(2)}Hz`,
+      ).toBeLessThanOrEqual(0.02)
     },
     TEST_TIMEOUT_MS,
   )

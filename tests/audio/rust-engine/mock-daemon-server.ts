@@ -25,6 +25,7 @@ type MockHandler = (
 export interface MockDaemonHandlers {
   LoadSample?: MockHandler
   LoadPlugin?: MockHandler
+  GetPluginState?: MockHandler
   PluginNoteOn?: MockHandler
   PluginNoteOff?: MockHandler
   PlayAt?: MockHandler

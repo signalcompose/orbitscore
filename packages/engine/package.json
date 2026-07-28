@@ -20,7 +20,8 @@
     "supercolliderjs": "^1.0.1",
     "uuid": "^13.0.0",
     "wavefile": "^11.0.0",
-    "ws": "^8.20.0"
+    "ws": "^8.20.0",
+    "yaml": "^2.8.3"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

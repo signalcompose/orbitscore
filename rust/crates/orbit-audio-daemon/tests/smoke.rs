@@ -49,7 +49,7 @@ fn daemon_prints_ready_line_on_stdout() {
     assert!(line.contains("\"ready\""), "unexpected stdout: {line}");
     assert!(line.contains("\"port\""), "missing port field: {line}");
     assert!(
-        line.contains("\"protocol_version\":\"0.1\""),
+        line.contains("\"protocol_version\":\"0.2\""),
         "missing or unexpected protocol_version: {line}"
     );
 }

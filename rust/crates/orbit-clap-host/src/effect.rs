@@ -85,6 +85,7 @@ impl ClapEffectProcessor {
         sample_rate: u32,
         channels: usize,
         max_frames: u32,
+        state: Option<&[u8]>,
     ) -> Result<(Self, LoadedPluginInfo), ClapHostError> {
         // standalone なので daemon の監視フィールドではなく fresh な Arc を渡す
         // （callback は pump しない・resize は監視しない）。
@@ -98,13 +99,26 @@ impl ClapEffectProcessor {
             Arc::new(AtomicU64::new(0)),
         )?;
 
-        let processor = Self {
+        let mut processor = Self {
             plugin: loaded.plugin,
             buffers: loaded.buffers,
             steady: 0,
             _instance: loaded.instance,
         };
+        if let Some(bytes) = state {
+            processor.apply_state_bytes(bytes)?;
+        }
         Ok((processor, loaded.info))
+    }
+
+    /// ホストしているプラグインの state を吸い上げる（契約は [`crate::state::capture_state`]）。
+    pub fn capture_state(&mut self) -> Result<Vec<u8>, ClapHostError> {
+        crate::state::capture_state(&mut self._instance)
+    }
+
+    /// 保存済み state を適用する（契約は [`crate::state::apply_state_bytes`]）。
+    pub fn apply_state_bytes(&mut self, bytes: &[u8]) -> Result<(), ClapHostError> {
+        crate::state::apply_state_bytes(&mut self._instance, bytes)
     }
 
     /// Whether the loaded plugin exposes an audio input port.

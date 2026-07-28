@@ -375,6 +375,7 @@ impl Vst3EffectProcessor {
         bundle_path: &Path,
         sample_rate: f64,
         max_samples_per_block: i32,
+        state: Option<&[u8]>,
     ) -> Result<(Self, LoadedVst3Info), Vst3HostError> {
         let library = LoadedLibrary::open(bundle_path)?;
         let factory = unsafe { library.get_factory()? };
@@ -438,6 +439,11 @@ impl Vst3EffectProcessor {
             return Err(Vst3HostError::SetupProcessing(setup_result));
         }
 
+        // instrument と同じ VST3 正準順序: setup 済み・inactive の component へ state を適用し、
+        // 音色が確定してから READY に到達できるようにする。
+        if let Some(bytes) = state {
+            apply_state_bytes(&component, controller_handshake.controller.as_ref(), bytes)?;
+        }
         // `is_effect` drives both `process_block`'s overwrite-vs-add-mix branch (used in
         // production by `orbit-vst3-effect-child`) and the probe / two-pass signal check below
         // (`probe_effect_signal`), which only verifies the effect overwrite path. This detection
@@ -499,6 +505,15 @@ impl Vst3EffectProcessor {
             process_output_r: vec![0.0; scratch_len],
         };
         Ok((processor, info))
+    }
+
+    /// 現在の effect component state を取得する。instrument と同じ空-state拒否規律を使う。
+    pub fn capture_state(&self) -> Result<Vec<u8>, Vst3HostError> {
+        let component = self
+            .component
+            .as_ref()
+            .ok_or_else(|| Vst3HostError::State("component is not loaded".into()))?;
+        capture_component_state(component)
     }
 
     pub fn info(&self) -> &LoadedVst3Info {
@@ -805,6 +820,27 @@ fn apply_state_bytes(
     apply_state_chunks(component, controller, &chunks)
 }
 
+fn capture_component_state(component: &ComPtr<IComponent>) -> Result<Vec<u8>, Vst3HostError> {
+    let stream_wrapper = ComWrapper::new(MemoryStream::new());
+    let stream = stream_wrapper
+        .to_com_ptr::<IBStream>()
+        .ok_or_else(|| Vst3HostError::State("MemoryStream exposes no IBStream".into()))?;
+
+    let result = unsafe { component.getState(stream.as_ptr()) };
+    if !is_ok(result) {
+        return Err(Vst3HostError::State(format!(
+            "IComponent::getState failed (tresult {result:#x})"
+        )));
+    }
+    let bytes = stream_wrapper.data.borrow().clone();
+    if bytes.is_empty() {
+        return Err(Vst3HostError::State(
+            "IComponent::getState produced an empty chunk — refusing to record it as state".into(),
+        ));
+    }
+    Ok(bytes)
+}
+
 impl Vst3InstrumentProcessor {
     /// #555: 現在の plugin state を **バイト列として取り出す**（DAW ループの保存側）。
     ///
@@ -822,29 +858,7 @@ impl Vst3InstrumentProcessor {
             .component
             .as_ref()
             .ok_or_else(|| Vst3HostError::State("component is not loaded".into()))?;
-
-        let stream_wrapper = ComWrapper::new(MemoryStream::new());
-        let stream = stream_wrapper
-            .to_com_ptr::<IBStream>()
-            .ok_or_else(|| Vst3HostError::State("MemoryStream exposes no IBStream".into()))?;
-
-        let result = unsafe { component.getState(stream.as_ptr()) };
-        if !is_ok(result) {
-            return Err(Vst3HostError::State(format!(
-                "IComponent::getState failed (tresult {result:#x})"
-            )));
-        }
-
-        // `MemoryStream` は本 module 内の自前実装なので、COM の seek+read を往復せず
-        // 直接読む（`InputEventList` が `wrapper.events.borrow_mut()` を使うのと同じ流儀）。
-        let bytes = stream_wrapper.data.borrow().clone();
-        if bytes.is_empty() {
-            return Err(Vst3HostError::State(
-                "IComponent::getState produced an empty chunk — refusing to record it as state"
-                    .into(),
-            ));
-        }
-        Ok(bytes)
+        capture_component_state(component)
     }
 
     pub fn load(
@@ -2241,7 +2255,7 @@ impl IParamValueQueueTrait for HostParamValueQueue {
 }
 
 pub fn probe_plugin(path: &Path) -> ProbeResult {
-    match Vst3EffectProcessor::load(path, 48_000.0, 512) {
+    match Vst3EffectProcessor::load(path, 48_000.0, 512, None) {
         Ok((mut processor, info)) => {
             let (processed, error) = match probe_effect_signal(&mut processor) {
                 Ok(()) => (true, None),

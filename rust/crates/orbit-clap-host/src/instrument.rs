@@ -25,7 +25,6 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 
-use clack_extensions::state::PluginState;
 use clack_host::events::io::EventBuffer;
 use clack_host::events::UnknownEvent;
 use clack_host::prelude::{PluginInstance, StartedPluginAudioProcessor};
@@ -35,15 +34,6 @@ use crate::buffers::HostAudioBuffers;
 use crate::controller::{instantiate_activate, ClapHostError, LoadedPluginInfo};
 use crate::host::OrbitClapHost;
 use crate::processor::process_block_core;
-
-/// `capture_state()` が空 state を拒否したときの理由文。
-///
-/// **テストが文言に結合しないよう定数にしている**。テスト側がリテラルを書き写すと、
-/// 実装の正しさではなく**文言の一致**を検査することになり、メッセージを整理しただけで
-/// 無関係に red になる（レビュー指摘）。定数を共有すれば「この分岐が発火した」ことだけを
-/// 検査できる。
-pub const EMPTY_STATE_FROM_PLUGIN: &str =
-    "plugin が空の state を返した（0 バイトを成功として登記しない）";
 
 /// 単一スレッドで load / process / drop する instrument CLAP プロセッサ。
 ///
@@ -63,54 +53,14 @@ pub struct ClapInstrumentProcessor {
 }
 
 impl ClapInstrumentProcessor {
-    /// 現在の plugin state をバイト列で取り出す（#557・`CLAP_EXT_STATE`）。
-    ///
-    /// **VST3 側 `Vst3InstrumentProcessor::capture_state` と同じ意味論**にそろえる:
-    ///
-    /// - 拡張が無い / `save` が失敗したら `Err`。**`Ok(vec![])` にしない**
-    /// - **空 state も `Err`**。サイズ 0 を「成功」として登記すると、再起動時に音色を
-    ///   失ったことに気づけない（spec UIH.3「サイズ 0 の state を成功として登記しない」）
-    ///
-    /// メインスレッドから呼ぶこと（`PluginMainThreadHandle` の契約）。本 crate の
-    /// プロセッサは `!Send` で単一スレッド運用なので、呼び出し側が守れば自然に満たされる。
-    ///
-    /// ⚠️ **VST3 と非対称な一点**: VST3 は「setup 済み・inactive の component へ setState」が
-    /// 正準だが、**CLAP は `clap/ext/state.h` が `[main-thread]` としか規定しておらず**、
-    /// activate / processing 状態の制約が無い。本実装は `instantiate_activate` の後
-    /// （activate + start_processing 済み）に適用する。規格上は適法だが、
-    /// **activate 後の `load` に無反応な実プラグインが存在しないことは検証できていない**
-    /// （自前 oracle でしか踏んでいない）。サードパーティ CLAP での確認は残課題。
+    /// 現在の plugin state をバイト列で取り出す（#557・契約は [`crate::state::capture_state`]）。
     pub fn capture_state(&mut self) -> Result<Vec<u8>, ClapHostError> {
-        let mut handle = self._instance.plugin_handle();
-        let state = handle
-            .get_extension::<PluginState>()
-            .ok_or_else(|| ClapHostError::State("plugin が CLAP_EXT_STATE を持たない".into()))?;
-        let mut bytes = Vec::new();
-        state
-            .save(&mut handle, &mut bytes)
-            .map_err(|error| ClapHostError::State(format!("save: {error}")))?;
-        if bytes.is_empty() {
-            return Err(ClapHostError::State(EMPTY_STATE_FROM_PLUGIN.into()));
-        }
-        Ok(bytes)
+        crate::state::capture_state(&mut self._instance)
     }
 
-    /// 保存済み state を適用する（#557・spawn 時の復元経路）。
-    ///
-    /// VST3 側 `apply_state_bytes` と対称。**空バイト列は受け付けない** —
-    /// 「復元したつもりで既定音色のまま」という silent な取り違えを防ぐ。
+    /// 保存済み state を適用する（#557・契約は [`crate::state::apply_state_bytes`]）。
     pub fn apply_state_bytes(&mut self, bytes: &[u8]) -> Result<(), ClapHostError> {
-        if bytes.is_empty() {
-            return Err(ClapHostError::State("空の state を適用しようとした".into()));
-        }
-        let mut handle = self._instance.plugin_handle();
-        let state = handle
-            .get_extension::<PluginState>()
-            .ok_or_else(|| ClapHostError::State("plugin が CLAP_EXT_STATE を持たない".into()))?;
-        let mut reader = bytes;
-        state
-            .load(&mut handle, &mut reader)
-            .map_err(|error| ClapHostError::State(format!("load: {error}")))
+        crate::state::apply_state_bytes(&mut self._instance, bytes)
     }
 
     /// Converts a plugin output event into the M2 child-to-host event representation.

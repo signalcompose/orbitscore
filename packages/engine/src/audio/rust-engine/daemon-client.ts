@@ -21,7 +21,7 @@ import * as path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import WebSocket from 'ws'
 
-import type { PluginLoadResult } from '../types'
+import type { PluginLoadResult, PluginStateSaveResult, PluginStateSaveTarget } from '../types'
 
 import {
   DaemonConnectionError,
@@ -393,7 +393,7 @@ export class DaemonClient extends EventEmitter {
       // instance は instrument slot pool の宛先（'instrument' role 専用・#540 P1）。
       // 省略時は daemon 側で互換の "default"（slot 0）に解決される。
       ...(instance ? { instance } : {}),
-      // state_path は保存済みプラグイン state（'instrument' role 専用・#540 P2）。
+      // state_path は保存済みプラグイン state（effect / instrument 共通・#562）。
       // child spawn 時に適用され、respawn でも再適用される。
       ...(statePath ? { state_path: statePath } : {}),
     })
@@ -401,6 +401,28 @@ export class DaemonClient extends EventEmitter {
       pluginId: String(result.plugin_id),
       pluginName: String(result.plugin_name),
       notePortIndex: Number(result.note_port_index),
+    }
+  }
+
+  async savePluginState(
+    target: PluginStateSaveTarget,
+    absolutePath: string,
+  ): Promise<PluginStateSaveResult> {
+    const result = await this.request('GetPluginState', {
+      path: absolutePath,
+      role: target.role,
+      ...(target.role === 'effect' && target.bus ? { bus: target.bus } : {}),
+      ...(target.role === 'instrument' ? { instance: target.instance } : {}),
+    })
+    const bytesWritten = result.bytes_written
+    if (typeof bytesWritten !== 'number' || !Number.isFinite(bytesWritten)) {
+      throw new Error(
+        `GetPluginState returned an invalid bytes_written value: ${String(bytesWritten)}.`,
+      )
+    }
+    return {
+      path: String(result.path),
+      bytesWritten,
     }
   }
 

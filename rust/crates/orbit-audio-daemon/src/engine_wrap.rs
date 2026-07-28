@@ -88,6 +88,22 @@ pub enum WrapError {
     /// OOP slot が永久に closed（起動インフラの失敗）。
     #[error("out-of-process slot closed: {0}")]
     OutProcSlotClosed(String),
+    #[error("plugin state save rejected while audio is performing: {0}")]
+    PluginStatePerforming(String),
+    #[error("plugin state target error: {0}")]
+    PluginStateTarget(String),
+    #[error("plugin state child is not ready: {0}")]
+    PluginStateNotReady(String),
+    #[error("plugin state mailbox timeout: {0}")]
+    PluginStateTimeout(String),
+    #[error("plugin state is unsupported or rejected by the plugin: {0}")]
+    PluginStateUnsupported(String),
+    #[error("plugin state child exited: {0}")]
+    PluginStateChildExited(String),
+    #[error("plugin state mailbox protocol error: {0}")]
+    PluginStateProtocol(String),
+    #[error("plugin state I/O error: {0}")]
+    PluginStateIo(String),
     /// ランタイムのオーディオデバイス切替（`SelectAudioDevice`・#484 D2）が実行できない状態。
     /// capture（`ORBIT_CAPTURE_WAV`）有効時の明示拒否、または `StreamGuard` 未生存（test backend 等）
     /// の場合に返す。cpal 側の実失敗（device open 失敗等）は `Output`（`OutputError` 経由）に別れる。
@@ -174,6 +190,10 @@ pub struct EngineWrap {
     /// producer 側を別スレッドへ outsource せず常に `&self` 経由で `EngineWrap` 自身が直接書くため、
     /// `Arc` clone による cross-thread 共有が不要で、プレーンな `AtomicU64` で足りる。
     plugin_event_ring_overflow_count: AtomicU64,
+    /// control-sideで送信に成功した NoteOn の集合。state保存は音声処理と同じchild loopを止めるため、
+    /// sample schedulerだけでなくlive instrument noteが残る間もfail-closedに拒否する。
+    #[cfg(feature = "outproc-instrument")]
+    active_plugin_notes: Mutex<HashSet<(String, u8, u8)>>,
     /// device switch（#484 D2）: `StreamGuard`（延いては `cpal::Stream`）を排他所有する専用 OS thread
     /// （"audio owner thread"・`main.rs` が spawn）への要求チャンネル。`cpal::Stream` は `!Send` なので
     /// `EngineWrap`（`Arc` 共有で `Send + Sync` 必須）にはハンドルを一切持たせられない — 代わりに
@@ -1080,8 +1100,8 @@ pub(crate) trait OutProcRole: Sized {
     type Supervisor: Send;
     const ROLE_NAME: &'static str;
 
-    /// `state` は保存済みプラグイン state ファイル（#540 P2・instrument 専用）。
-    /// effect role は受け取らない契約（session 層で validation 済み）なので無視してよい。
+    /// `state` は保存済みプラグイン state ファイル。#562 以降は effect / instrument の
+    /// 両 role が READY publish 前に適用する。
     fn spawn_child(
         launch: &ChildLaunch<Self>,
         path: &std::path::Path,
@@ -1093,7 +1113,8 @@ pub(crate) trait OutProcRole: Sized {
         launch: &ChildLaunch<Self>,
         path: PathBuf,
         plugin_id: Option<String>,
-        state: Option<PathBuf>,
+        latest_state: Arc<Mutex<Option<PathBuf>>>,
+        mailbox: Arc<orbit_audio_sandbox::CommandMailboxHost>,
     ) -> std::io::Result<Self::Supervisor>;
     fn detach_keep_shm(supervisor: Self::Supervisor);
     fn role_matches(child_flags: u32) -> bool;
@@ -1147,14 +1168,13 @@ impl OutProcRole for EffectRole {
         plugin_id: Option<&str>,
         state: Option<&std::path::Path>,
     ) -> std::io::Result<std::process::Child> {
-        // effect は state 未対応（session 層が role='effect' + state_path を MALFORMED で弾く）。
-        let _ = state;
         crate::outproc_effect::spawn_effect_child(
             &launch.child_exe,
             &launch.shm_path,
             path,
             plugin_id,
             launch.sample_rate,
+            state,
         )
     }
     fn spawn_supervisor(
@@ -1162,10 +1182,10 @@ impl OutProcRole for EffectRole {
         launch: &ChildLaunch<Self>,
         path: PathBuf,
         plugin_id: Option<String>,
-        state: Option<PathBuf>,
+        latest_state: Arc<Mutex<Option<PathBuf>>>,
+        mailbox: Arc<orbit_audio_sandbox::CommandMailboxHost>,
     ) -> std::io::Result<Self::Supervisor> {
-        let _ = state;
-        crate::outproc_effect::EffectChildSupervisor::spawn(
+        crate::outproc_effect::EffectChildSupervisor::spawn_with_mailbox(
             child,
             launch.shm_path.clone(),
             launch.stats.clone(),
@@ -1173,6 +1193,8 @@ impl OutProcRole for EffectRole {
             path,
             plugin_id,
             launch.sample_rate,
+            latest_state,
+            mailbox,
         )
     }
     fn detach_keep_shm(supervisor: Self::Supervisor) {
@@ -1246,9 +1268,10 @@ impl OutProcRole for InstrumentRole {
         launch: &ChildLaunch<Self>,
         path: PathBuf,
         plugin_id: Option<String>,
-        state: Option<PathBuf>,
+        latest_state: Arc<Mutex<Option<PathBuf>>>,
+        mailbox: Arc<orbit_audio_sandbox::CommandMailboxHost>,
     ) -> std::io::Result<Self::Supervisor> {
-        crate::outproc_instrument::InstrumentChildSupervisor::spawn(
+        crate::outproc_instrument::InstrumentChildSupervisor::spawn_with_mailbox(
             child,
             launch.shm_path.clone(),
             launch.stats.clone(),
@@ -1256,7 +1279,8 @@ impl OutProcRole for InstrumentRole {
             path,
             plugin_id,
             launch.sample_rate,
-            state,
+            latest_state,
+            mailbox,
         )
     }
     fn detach_keep_shm(supervisor: Self::Supervisor) {
@@ -1317,7 +1341,11 @@ pub(crate) enum ChildSlot<R: OutProcRole = DefaultOutProcRole> {
         /// 保存済み state ファイル（#540 P2）。ロード identity の一部 — 同 path/plugin_id でも
         /// state が異なる再宣言は v1 では差し替え扱いで拒否する。
         state: Option<PathBuf>,
+        /// supervisor が次の respawn で復元する最新 state。保存成功時に `state`（ロード
+        /// identity）は変えず、この共有値だけを原子的に差し替える。
+        latest_state: Arc<Mutex<Option<PathBuf>>>,
         engaged: Arc<AtomicBool>,
+        mailbox: Arc<orbit_audio_sandbox::CommandMailboxHost>,
         _supervisor: R::Supervisor,
     },
     Closed,
@@ -2195,6 +2223,8 @@ impl EngineWrap {
             outproc_instrument_respawns: Arc::new(AtomicU64::new(0)),
             outproc_instrument_measurement_invalid: Arc::new(AtomicBool::new(false)),
             plugin_event_ring_overflow_count: AtomicU64::new(0),
+            #[cfg(feature = "outproc-instrument")]
+            active_plugin_notes: Mutex::new(HashSet::new()),
             device_switch_tx: Mutex::new(None),
             output_buffer_frames: Mutex::new(None),
             output_cb_stats: Mutex::new(None),
@@ -2472,6 +2502,17 @@ impl EngineWrap {
         plugin_id: Option<String>,
         bus: Option<String>,
     ) -> Result<LoadedPluginSummary, WrapError> {
+        self.load_outproc_effect_plugin_with_state(path, plugin_id, bus, None)
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    pub fn load_outproc_effect_plugin_with_state(
+        &self,
+        path: PathBuf,
+        plugin_id: Option<String>,
+        bus: Option<String>,
+        state: Option<PathBuf>,
+    ) -> Result<LoadedPluginSummary, WrapError> {
         // slot の解決だけを lock 下で行い、attach 本体（child spawn + READY poll）前に guard を
         // 必ず落とす: `outproc` mutex を数百 ms 保持すると 1 Hz health ticker（try_lock）や
         // stats アクセサと競合する（従来コードも guard は slot 解決の式で即 drop していた）。
@@ -2512,7 +2553,7 @@ impl EngineWrap {
             )
         };
         let result =
-            self.load_outproc_plugin_impl::<DefaultOutProcRole>(slot, path, plugin_id, None);
+            self.load_outproc_plugin_impl::<DefaultOutProcRole>(slot, path, plugin_id, state);
         if result.is_err() {
             // ロールバック: 失敗した宣言の bus を render 対象から外す（TS 側も宣言を破棄して
             // bus 名を free-list に返すため、Rust/TS の状態が対称に戻る）。
@@ -2695,6 +2736,164 @@ impl EngineWrap {
         self.load_outproc_plugin_impl::<InstrumentRole>(slot, path, plugin_id, state)
     }
 
+    /// 停止中のout-of-process childへstate保存を1回だけ発行し、同一directoryの一時ファイルを
+    /// 検証後に最終パスへatomic renameする。
+    #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+    pub fn save_outproc_plugin_state(
+        &self,
+        target: PluginStateTarget,
+        final_path: PathBuf,
+    ) -> Result<SavedPluginStateSummary, WrapError> {
+        if !self.plugin_state_save_is_stopped()? {
+            return Err(WrapError::PluginStatePerforming(
+                "active sample playback or instrument notes remain; stop playback before saving"
+                    .into(),
+            ));
+        }
+        if !final_path.is_absolute() {
+            return Err(WrapError::PluginStateIo(format!(
+                "state path must be absolute: {final_path:?}"
+            )));
+        }
+
+        let (mailbox, latest_state) = match target {
+            #[cfg(feature = "outproc-effect")]
+            PluginStateTarget::Effect { bus } => {
+                let slot = {
+                    let control_guard = self.outproc.lock().map_err(|_| {
+                        WrapError::PluginStateTarget("outproc effect mutex poisoned".into())
+                    })?;
+                    let control = control_guard.as_ref().ok_or_else(|| {
+                        WrapError::PluginStateTarget("outproc effect is not initialized".into())
+                    })?;
+                    match bus {
+                        Some(bus) => control
+                            .bus_slots
+                            .get(&bus)
+                            .ok_or_else(|| {
+                                WrapError::PluginStateTarget(format!("unknown effect bus '{bus}'"))
+                            })?
+                            .upgrade()
+                            .ok_or_else(|| {
+                                WrapError::PluginStateTarget(format!(
+                                    "effect bus '{bus}' stream is closed"
+                                ))
+                            })?,
+                        None => control.child_slot.upgrade().ok_or_else(|| {
+                            WrapError::PluginStateTarget("master effect stream is closed".into())
+                        })?,
+                    }
+                };
+                active_plugin_state_handles(&slot, "effect")?
+            }
+            #[cfg(feature = "outproc-instrument")]
+            PluginStateTarget::Instrument { instance } => {
+                let slot = {
+                    let control_guard = self.outproc_instrument.lock().map_err(|_| {
+                        WrapError::PluginStateTarget("outproc instrument mutex poisoned".into())
+                    })?;
+                    let control = control_guard.as_ref().ok_or_else(|| {
+                        WrapError::PluginStateTarget("outproc instrument is not initialized".into())
+                    })?;
+                    let index = control.instance_index.get(&instance).ok_or_else(|| {
+                        WrapError::PluginStateTarget(format!(
+                            "unknown instrument instance '{instance}'"
+                        ))
+                    })?;
+                    control.slots[*index].child_slot.upgrade().ok_or_else(|| {
+                        WrapError::PluginStateTarget(format!(
+                            "instrument instance '{instance}' stream is closed"
+                        ))
+                    })?
+                };
+                active_plugin_state_handles(&slot, "instrument")?
+            }
+        };
+
+        if !mailbox
+            .child_is_ready()
+            .map_err(plugin_state_mailbox_error)?
+        {
+            return Err(WrapError::PluginStateNotReady(
+                "the selected child is starting or respawning".into(),
+            ));
+        }
+
+        let parent = final_path.parent().ok_or_else(|| {
+            WrapError::PluginStateIo(format!("state path has no parent: {final_path:?}"))
+        })?;
+        std::fs::create_dir_all(parent).map_err(|error| {
+            WrapError::PluginStateIo(format!("create state directory {parent:?}: {error}"))
+        })?;
+        let file_name = final_path.file_name().ok_or_else(|| {
+            WrapError::PluginStateIo(format!("state path has no file name: {final_path:?}"))
+        })?;
+        let temp_path = parent.join(format!(
+            ".{}.orbit-state-{}.tmp",
+            file_name.to_string_lossy(),
+            Uuid::new_v4().simple()
+        ));
+
+        let response = match mailbox.issue_save_state(&temp_path) {
+            Ok(response) => response,
+            Err(error) => {
+                if !matches!(
+                    &error,
+                    orbit_audio_sandbox::CommandMailboxError::Timeout { .. }
+                ) {
+                    let _ = std::fs::remove_file(&temp_path);
+                } else {
+                    tracing::warn!(
+                        ?temp_path,
+                        "state mailbox timed out; retaining unique sidecar until child ack/reset"
+                    );
+                }
+                return Err(plugin_state_mailbox_error(error));
+            }
+        };
+        if response.bytes_written == 0 {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(WrapError::PluginStateUnsupported(
+                "plugin returned an empty state".into(),
+            ));
+        }
+        let actual_len = match std::fs::metadata(&temp_path) {
+            Ok(metadata) => metadata.len(),
+            Err(error) => {
+                let _ = std::fs::remove_file(&temp_path);
+                return Err(WrapError::PluginStateIo(format!(
+                    "stat state sidecar {temp_path:?} after child ack: {error}"
+                )));
+            }
+        };
+        if actual_len != response.bytes_written {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(WrapError::PluginStateProtocol(format!(
+                "child ack reported {} bytes but sidecar has {actual_len} bytes",
+                response.bytes_written
+            )));
+        }
+        std::fs::rename(&temp_path, &final_path).map_err(|error| {
+            let _ = std::fs::remove_file(&temp_path);
+            WrapError::PluginStateIo(format!(
+                "atomically replace state file {final_path:?}: {error}"
+            ))
+        })?;
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| {
+                WrapError::PluginStateIo(format!(
+                    "sync state directory {parent:?} after rename: {error}"
+                ))
+            })?;
+        record_latest_state_after_save(&latest_state, final_path.clone())?;
+
+        Ok(SavedPluginStateSummary {
+            path: final_path,
+            bytes_written: response.bytes_written,
+        })
+    }
+
     #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
     fn load_outproc_plugin_impl<R: OutProcRole>(
         &self,
@@ -2797,9 +2996,14 @@ impl EngineWrap {
             }
         };
         let region = orbit_audio_sandbox::region_ptr(&ready_mmap);
-        // SAFETY: region はこの scope で生存する ready_mmap を指す。初回を含む全 spawn の直前に
-        // readiness を初期化し、前 incarnation の READY を誤認しない。
-        unsafe { orbit_audio_sandbox::transport::reset_child_starting(region) };
+        let mailbox = Arc::new(orbit_audio_sandbox::CommandMailboxHost::new(
+            launch.shm_path.clone(),
+        ));
+        // 初回 attach も同じ reset 経路を通す。まだ child は生存していないため、
+        // 「旧 child の死亡確認後のみ reset」の前提を満たす。
+        mailbox
+            .reset_after_child_exit()
+            .map_err(|error| R::runtime_error(format!("reset command mailbox: {error}")))?;
 
         // spawn 前にセットしておくことで、即座に終了する child が通常の respawn 経路に紛れ込むのを防ぐ。
         R::set_initial_attach_pending(&launch.stats, true);
@@ -2820,12 +3024,14 @@ impl EngineWrap {
             };
         R::set_current_child_pid(&launch.stats, first_child.id());
 
+        let latest_state = Arc::new(Mutex::new(state.clone()));
         let supervisor = match R::spawn_supervisor(
             first_child,
             &launch,
             path.clone(),
             plugin_id.clone(),
-            state.clone(),
+            latest_state.clone(),
+            mailbox.clone(),
         ) {
             Ok(supervisor) => supervisor,
             Err(error) => {
@@ -2893,7 +3099,9 @@ impl EngineWrap {
             path,
             plugin_id,
             state,
+            latest_state,
             engaged: launch.engaged.clone(),
+            mailbox,
             _supervisor: supervisor,
         };
         Ok(summary)
@@ -3030,7 +3238,18 @@ impl EngineWrap {
                 length_frames: 0,
             },
             instance.as_deref(),
-        )
+        )?;
+        let name = instance
+            .as_deref()
+            .unwrap_or(DEFAULT_INSTRUMENT_INSTANCE)
+            .to_string();
+        self.active_plugin_notes
+            .lock()
+            .map_err(|_| {
+                WrapError::OutProcInstrument("active plugin note tracker mutex poisoned".into())
+            })?
+            .insert((name, channel, key));
+        Ok(())
     }
 
     /// Out-of-process instrument NoteOff, converted on the control side.
@@ -3049,7 +3268,18 @@ impl EngineWrap {
                 velocity,
             },
             instance.as_deref(),
-        )
+        )?;
+        let name = instance
+            .as_deref()
+            .unwrap_or(DEFAULT_INSTRUMENT_INSTANCE)
+            .to_string();
+        self.active_plugin_notes
+            .lock()
+            .map_err(|_| {
+                WrapError::OutProcInstrument("active plugin note tracker mutex poisoned".into())
+            })?
+            .remove(&(name, channel, key));
+        Ok(())
     }
 
     /// Builds the `VoiceAddr` shared by `plugin_note_on`/`plugin_note_off` for the
@@ -3721,6 +3951,29 @@ impl EngineWrap {
         self.engine.active_count().unwrap_or(0)
     }
 
+    /// プラグイン state 保存用の fail-closed 停止判定。
+    ///
+    /// sample scheduler のlock競合を0へ縮退させず、live NoteOnも含めて一つでも演奏中なら
+    /// `false` を返す。内部状態を判定できない場合はエラーにして保存側で拒否する。
+    #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+    fn plugin_state_save_is_stopped(&self) -> Result<bool, WrapError> {
+        let active_plays = self
+            .engine
+            .active_count_strict()
+            .map_err(|error| WrapError::Scheduler(error.to_string()))?;
+        #[cfg(feature = "outproc-instrument")]
+        {
+            let active_notes = self.active_plugin_notes.lock().map_err(|_| {
+                WrapError::OutProcInstrument("active plugin note tracker mutex poisoned".into())
+            })?;
+            Ok(active_plays == 0 && active_notes.is_empty())
+        }
+        #[cfg(not(feature = "outproc-instrument"))]
+        {
+            Ok(active_plays == 0)
+        }
+    }
+
     pub fn output_sample_rate(&self) -> u32 {
         self.sample_rate
     }
@@ -3999,6 +4252,17 @@ impl EngineWrap {
     }
 }
 
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+pub(crate) fn record_latest_state_after_save(
+    latest_state: &Arc<Mutex<Option<PathBuf>>>,
+    final_path: PathBuf,
+) -> Result<(), WrapError> {
+    *latest_state.lock().map_err(|_| {
+        WrapError::PluginStateProtocol("latest-state mutex poisoned after save".into())
+    })? = Some(final_path);
+    Ok(())
+}
+
 /// `load_outproc_plugin` の終端遷移直前の不変条件検査（release では noop）。
 /// Loading 以外を観測したら、この関数以外に slot への書き手が現れたことを意味する。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
@@ -4021,6 +4285,66 @@ fn lock_child_slot_recovering<'a, R: OutProcRole>(
         tracing::error!("child slot mutex poisoned during {site}; recovering");
         poisoned.into_inner()
     })
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+type PluginStateHandles = (
+    Arc<orbit_audio_sandbox::CommandMailboxHost>,
+    Arc<Mutex<Option<PathBuf>>>,
+);
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn active_plugin_state_handles<R: OutProcRole>(
+    child_slot: &Mutex<ChildSlot<R>>,
+    role: &str,
+) -> Result<PluginStateHandles, WrapError> {
+    let slot = child_slot
+        .lock()
+        .map_err(|_| WrapError::PluginStateTarget(format!("{role} child slot mutex poisoned")))?;
+    match &*slot {
+        ChildSlot::Active {
+            mailbox,
+            latest_state,
+            ..
+        } => Ok((mailbox.clone(), latest_state.clone())),
+        ChildSlot::Empty(_) => Err(WrapError::PluginStateTarget(format!(
+            "{role} child slot has no loaded plugin"
+        ))),
+        ChildSlot::Loading { path } => Err(WrapError::PluginStateNotReady(format!(
+            "{role} plugin is still loading from {path:?}"
+        ))),
+        ChildSlot::Closed => Err(WrapError::PluginStateTarget(format!(
+            "{role} child slot is closed"
+        ))),
+    }
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn plugin_state_mailbox_error(error: orbit_audio_sandbox::CommandMailboxError) -> WrapError {
+    use orbit_audio_sandbox::{
+        CommandMailboxError as E, CMD_RESULT_BAD_ARG, CMD_RESULT_IO_ERROR, CMD_RESULT_PLUGIN_ERROR,
+    };
+    let detail = error.to_string();
+    match error {
+        E::Timeout { .. } => WrapError::PluginStateTimeout(detail),
+        E::ChildExited { .. } => WrapError::PluginStateChildExited(detail),
+        E::CommandFailed {
+            result: CMD_RESULT_PLUGIN_ERROR,
+            ..
+        } => WrapError::PluginStateUnsupported(detail),
+        E::CommandFailed {
+            result: CMD_RESULT_IO_ERROR,
+            ..
+        } => WrapError::PluginStateIo(detail),
+        E::CommandFailed {
+            result: CMD_RESULT_BAD_ARG,
+            ..
+        }
+        | E::InvalidArgument(_)
+        | E::Mapping(_)
+        | E::SidecarCleanup { .. } => WrapError::PluginStateIo(detail),
+        _ => WrapError::PluginStateProtocol(detail),
+    }
 }
 
 /// retryable な attach 失敗（role mismatch / early-exit / timeout）の共通終端処理。
@@ -4124,6 +4448,20 @@ pub struct LoadedPluginSummary {
     pub plugin_id: String,
     pub plugin_name: Option<String>,
     pub note_port_index: u16,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PluginStateTarget {
+    #[cfg(feature = "outproc-effect")]
+    Effect { bus: Option<String> },
+    #[cfg(feature = "outproc-instrument")]
+    Instrument { instance: String },
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct SavedPluginStateSummary {
+    pub path: PathBuf,
+    pub bytes_written: u64,
 }
 
 pub struct PlayHandle {
@@ -4996,7 +5334,7 @@ mod outproc_load_error_test_support {
     /// を直接呼び、`first_child` には（respawn を誘発しない）長寿命の `sleep` を渡す（outproc_effect.rs
     /// の `supervisor_*` テストと同じ手法）。supervisor が以後の shm unlink を所有するため、ローカルの
     /// `launch` の `cleanup_shm_on_drop` は production の `load_outproc_plugin` 成功パスと同様に外す。
-    fn active_child_slot<R: OutProcRole>(
+    pub(super) fn active_child_slot<R: OutProcRole>(
         unique_path: impl Fn() -> PathBuf,
         plugin_path: &str,
         plugin_id: Option<String>,
@@ -5016,16 +5354,28 @@ mod outproc_load_error_test_support {
             .expect("spawn stub child for Active fixture");
 
         let path = PathBuf::from(plugin_path);
-        let supervisor =
-            R::spawn_supervisor(first_child, &launch, path.clone(), plugin_id.clone(), None)
-                .expect("spawn supervisor for Active fixture");
+        let mailbox = Arc::new(orbit_audio_sandbox::CommandMailboxHost::new(
+            launch.shm_path.clone(),
+        ));
+        let latest_state = Arc::new(Mutex::new(None));
+        let supervisor = R::spawn_supervisor(
+            first_child,
+            &launch,
+            path.clone(),
+            plugin_id.clone(),
+            latest_state.clone(),
+            mailbox.clone(),
+        )
+        .expect("spawn supervisor for Active fixture");
         launch.cleanup_shm_on_drop = false;
 
         ChildSlot::Active {
             path,
             plugin_id,
             state: None,
+            latest_state,
             engaged: Arc::new(AtomicBool::new(true)),
+            mailbox,
             _supervisor: supervisor,
         }
     }
@@ -5406,7 +5756,8 @@ mod outproc_load_error_test_support {
 #[cfg(all(test, feature = "outproc-effect"))]
 mod outproc_health_tests {
     use super::{
-        ChildLaunch, ChildSlot, EffectRole, EngineWrap, OutProcControl, OutProcRole, WrapError,
+        ChildLaunch, ChildSlot, EffectRole, EngineWrap, OutProcControl, OutProcRole,
+        PluginStateTarget, WrapError,
     };
     use crate::backend::StubBackend;
     use crate::outproc_effect::OutProcEffectStats;
@@ -5592,6 +5943,120 @@ mod outproc_health_tests {
             !active.load(std::sync::atomic::Ordering::Acquire),
             "attach 失敗後は activation がロールバックされること"
         );
+    }
+
+    #[test]
+    fn plugin_state_save_atomically_replaces_file_and_updates_latest_state_value() {
+        let shm_path = crate::outproc_effect::unique_shm_path();
+        let active = super::outproc_load_error_test_support::active_child_slot::<EffectRole>(
+            || shm_path.clone(),
+            "stateful-effect.clap",
+            None,
+        );
+        let latest_state = match &active {
+            ChildSlot::Active { latest_state, .. } => latest_state.clone(),
+            _ => unreachable!("fixture creates an active slot"),
+        };
+        let (wrap, _child_slot) = wrap_with_child_slot(active, OutProcEffectStats::new());
+
+        let ready_mmap = orbit_audio_sandbox::open_shared(&shm_path).expect("open ready mapping");
+        let ready_region = orbit_audio_sandbox::region_ptr(&ready_mmap);
+        // SAFETY: mapping remains alive and the stub supervisor child does not access this mapping.
+        unsafe { orbit_audio_sandbox::transport::publish_child_ready(ready_region, true) };
+
+        let state_directory = std::env::temp_dir().join(format!(
+            "orbit-daemon-plugin-state-{}-{}",
+            std::process::id(),
+            super::short_uuid()
+        ));
+        std::fs::create_dir(&state_directory).expect("create state directory");
+        let final_path = state_directory.join("effect.state");
+        std::fs::write(&final_path, b"old state").expect("seed old final state");
+        let expected_state = b"new oracle state".to_vec();
+
+        let responder_shm = shm_path.clone();
+        let responder_state = expected_state.clone();
+        let responder = std::thread::spawn(move || {
+            let mmap = orbit_audio_sandbox::open_shared(&responder_shm).expect("child map");
+            let region = orbit_audio_sandbox::region_ptr(&mmap);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            let seq = loop {
+                // SAFETY: region points into the live mapping; Acquire pairs with host publish.
+                let seq = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+                if seq != 0 {
+                    break seq;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "host did not publish SAVE_STATE"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            };
+            let sidecar = unsafe {
+                orbit_audio_sandbox::transport::read_cstr_field(&(*region).cmd_arg)
+                    .expect("valid sidecar path")
+                    .to_owned()
+            };
+            let mut file = std::fs::File::create(&sidecar).expect("create sidecar");
+            std::io::Write::write_all(&mut file, &responder_state).expect("write sidecar");
+            file.sync_all().expect("sync sidecar");
+            unsafe {
+                (*region)
+                    .cmd_result_len
+                    .store(responder_state.len() as u64, Ordering::Relaxed);
+                (*region)
+                    .cmd_result
+                    .store(orbit_audio_sandbox::CMD_RESULT_OK, Ordering::Relaxed);
+                (*region).cmd_ack_seq.store(seq, Ordering::Release);
+            }
+        });
+
+        let saved = wrap
+            .save_outproc_plugin_state(PluginStateTarget::Effect { bus: None }, final_path.clone())
+            .expect("save state");
+        responder.join().expect("responder join");
+        assert_eq!(saved.path, final_path);
+        assert_eq!(saved.bytes_written, expected_state.len() as u64);
+        assert_eq!(
+            std::fs::read(&final_path).expect("read final state"),
+            expected_state
+        );
+        assert_eq!(
+            *latest_state.lock().expect("latest state lock"),
+            Some(final_path.clone()),
+            "the exact Arc shared with the supervisor must advance after save"
+        );
+        assert_eq!(
+            std::fs::read_dir(&state_directory)
+                .expect("read state directory")
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp"))
+                .count(),
+            0,
+            "successful save must leave no sidecar"
+        );
+
+        #[cfg(feature = "outproc-instrument")]
+        {
+            wrap.active_plugin_notes
+                .lock()
+                .expect("active notes lock")
+                .insert(("plugin:lead".into(), 60, 0));
+            let rejected_path = state_directory.join("must-not-write.state");
+            assert!(matches!(
+                wrap.save_outproc_plugin_state(
+                    PluginStateTarget::Effect { bus: None },
+                    rejected_path.clone()
+                ),
+                Err(WrapError::PluginStatePerforming(_))
+            ));
+            assert!(
+                !rejected_path.exists(),
+                "performing rejection must happen before any filesystem or mailbox side effect"
+            );
+        }
+
+        std::fs::remove_dir_all(&state_directory).expect("remove state directory");
     }
 
     fn assert_effect_runtime_error_contains(error: WrapError, expected: &str) {
@@ -5879,6 +6344,41 @@ mod outproc_instrument_health_tests {
                 WrapError::OutProcInstrument(message) | WrapError::OutProcSlotClosed(message)
                 if message.contains(expected)),
             "expected OutProcInstrument error containing {expected:?}, got {error:?}"
+        );
+    }
+
+    #[cfg(not(feature = "outproc-effect"))]
+    #[test]
+    fn instrument_only_plugin_state_save_resolves_the_default_instance() {
+        let shm_path = crate::outproc_instrument::unique_shm_path();
+        let active = super::outproc_load_error_test_support::active_child_slot::<InstrumentRole>(
+            || shm_path.clone(),
+            "stateful-instrument.clap",
+            None,
+        );
+        let (wrap, _child_slot) = wrap_with_child_slot(active, OutProcInstrumentStats::new());
+        let final_path = std::env::temp_dir().join(format!(
+            "orbit-instrument-only-state-{}-{}.state",
+            std::process::id(),
+            super::short_uuid()
+        ));
+
+        let error = wrap
+            .save_outproc_plugin_state(
+                super::PluginStateTarget::Instrument {
+                    instance: super::DEFAULT_INSTRUMENT_INSTANCE.to_string(),
+                },
+                final_path.clone(),
+            )
+            .expect_err("STARTING child must reject state save after resolving the instance");
+
+        assert!(
+            matches!(error, WrapError::PluginStateNotReady(_)),
+            "instrument-only save must reach the selected child mailbox, got {error:?}"
+        );
+        assert!(
+            !final_path.exists(),
+            "not-ready rejection must happen before creating the final state file"
         );
     }
 

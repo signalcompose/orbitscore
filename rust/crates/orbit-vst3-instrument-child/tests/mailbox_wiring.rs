@@ -28,7 +28,8 @@ use std::time::{Duration, Instant};
 
 use orbit_audio_sandbox::transport::{read_cstr_field, write_cstr_field, CHILD_STATUS_READY};
 use orbit_audio_sandbox::{
-    create_shared, region_ptr, SharedRegion, CMD_RESULT_OK, CMD_SAVE_STATE, CONTROL_QUIT,
+    create_shared, region_ptr, CommandMailboxError, CommandMailboxHost, SharedRegion,
+    CMD_RESULT_OK, CONTROL_QUIT,
 };
 
 static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -113,7 +114,20 @@ fn await_ack(region: *mut SharedRegion, seq: u64, child: &mut Child) -> (u32, u6
 }
 
 fn spawn_real_child(shm: &Path, plugin: &Path, state: &Path) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_orbit-vst3-instrument-child"))
+    spawn_real_child_with_env(shm, plugin, state, &[])
+}
+
+fn spawn_real_child_with_env(
+    shm: &Path,
+    plugin: &Path,
+    state: &Path,
+    env: &[(&str, &str)],
+) -> Child {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orbit-vst3-instrument-child"));
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    command
         .arg("--shm")
         .arg(shm)
         .arg("--plugin")
@@ -154,28 +168,16 @@ fn real_child_captures_the_hosted_plugin_state_through_the_command_mailbox() {
 
     let sidecar = unique_temp("orbit-wiring-captured.bin");
     let _ = std::fs::remove_file(&sidecar);
-    unsafe {
-        assert!(
-            write_cstr_field(
-                &mut (*region).cmd_arg,
-                sidecar.to_str().expect("temp path is UTF-8")
-            ),
-            "cmd_arg に収まらないパス"
-        );
-        (*region).cmd_kind.store(CMD_SAVE_STATE, Ordering::Relaxed);
-        // seq を最後に Release で publish する（child は Acquire で読む）。
-        (*region).cmd_seq.store(1, Ordering::Release);
-    }
-
-    let (result, len, detail) = await_ack(region, 1, &mut guard.child);
-    assert_eq!(
-        result, CMD_RESULT_OK,
-        "本番 child が保存に失敗した: {detail}"
-    );
+    // 🔴 **host 側は production と同じ [`CommandMailboxHost`] で発行する**。手書きで
+    // `cmd_kind`/`cmd_seq` を叩くと、single-outstanding・完全一致 ack・timeout といった
+    // host 側の不変条件を**迂回したまま**「child は ack した」しか言えないテストになる。
+    let response = CommandMailboxHost::new(shm.clone())
+        .issue_save_state(&sidecar)
+        .expect("本番 child が state を保存しなかった");
 
     let captured = std::fs::read(&sidecar).expect("サイドカーが書かれていない");
     assert_eq!(
-        len,
+        response.bytes_written,
         captured.len() as u64,
         "cmd_result_len が実際に書かれたバイト数と一致しない"
     );
@@ -214,6 +216,9 @@ fn real_child_reports_an_unknown_command_instead_of_hanging() {
 
     wait_for_ready(region, &mut guard.child);
 
+    // ⚠️ ここだけ raw に書く。[`CommandMailboxHost`] は `CMD_SAVE_STATE` しか発行できず、
+    // **このテストの目的は「型付き API では作れないコマンド」を child に投げること**だから。
+    // 旧方式の残骸ではない。
     unsafe {
         assert!(write_cstr_field(
             &mut (*region).cmd_arg,
@@ -234,4 +239,88 @@ fn real_child_reports_an_unknown_command_instead_of_hanging() {
     );
 
     let _ = std::fs::remove_file(&restore_path);
+}
+
+#[test]
+fn an_empty_state_from_the_plugin_is_reported_as_a_failure_not_logged_as_success() {
+    let Some(bundle) = orbit_vst3_synth_oracle::package_bundle() else {
+        eprintln!("VST3 synth oracle build failed; loud skip for this machine");
+        return;
+    };
+    let restore_path = unique_temp("orbit-vst3-empty-restore.bin");
+    std::fs::write(&restore_path, orbit_vst3_synth_oracle::encode_state(0))
+        .expect("write restore state");
+    let shm = unique_temp("orbit-vst3-empty.shm");
+    let mmap = create_shared(&shm).expect("create_shared");
+    let region = region_ptr(&mmap);
+    let mut guard = ChildGuard {
+        child: spawn_real_child_with_env(
+            &shm,
+            &bundle,
+            &restore_path,
+            &[("ORBIT_VST3_SYNTH_EMPTY_STATE", "1")],
+        ),
+        region,
+        shm: shm.clone(),
+    };
+    wait_for_ready(region, &mut guard.child);
+
+    let sidecar = unique_temp("orbit-vst3-empty-captured.bin");
+    let error = CommandMailboxHost::new(shm)
+        .issue_save_state(&sidecar)
+        .expect_err("empty VST3 state must not be acknowledged as success");
+    let CommandMailboxError::CommandFailed { result, detail, .. } = error else {
+        panic!("empty VST3 state returned a non-command failure: {error}");
+    };
+    assert_ne!(result, CMD_RESULT_OK);
+    assert!(
+        detail.contains("empty chunk"),
+        "detail must identify the empty VST3 chunk: {detail:?}"
+    );
+    assert!(!sidecar.exists(), "empty state must not create a sidecar");
+
+    let _ = std::fs::remove_file(restore_path);
+}
+
+#[test]
+fn a_corrupt_state_file_makes_the_child_exit_instead_of_going_ready_with_the_default_sound() {
+    let Some(bundle) = orbit_vst3_synth_oracle::package_bundle() else {
+        eprintln!("VST3 synth oracle build failed; loud skip for this machine");
+        return;
+    };
+    let mut corrupt = orbit_vst3_synth_oracle::encode_state(RESTORED_SEMITONES);
+    corrupt[0] ^= 0xFF;
+    let restore_path = unique_temp("orbit-vst3-corrupt-restore.bin");
+    std::fs::write(&restore_path, corrupt).expect("write corrupt state");
+    let shm = unique_temp("orbit-vst3-corrupt.shm");
+    let mmap = create_shared(&shm).expect("create_shared");
+    let region = region_ptr(&mmap);
+    let mut guard = ChildGuard {
+        child: spawn_real_child(&shm, &bundle, &restore_path),
+        region,
+        shm: shm.clone(),
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Ok(Some(status)) = guard.child.try_wait() {
+            break status;
+        }
+        assert_ne!(
+            unsafe { (*region).child_status.load(Ordering::Acquire) },
+            CHILD_STATUS_READY,
+            "corrupt VST3 state must not publish READY with the default sound"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "VST3 child neither exited nor became READY"
+        );
+        std::hint::spin_loop();
+    };
+    assert!(
+        !status.success(),
+        "corrupt VST3 restore exited successfully"
+    );
+
+    let _ = std::fs::remove_file(restore_path);
 }

@@ -28,4 +28,5 @@ core-foundation-sys = "0.8"
 # #555/#553: offline のループ通しテストが oracle の state エンコードと **仕様の式**
 # （`voice_frequency_hz`）を参照する。期待値を実装からハードコードせず式から導出するため。
 [dev-dependencies]
+orbit-vst3-gain-oracle = { path = "../orbit-vst3-gain-oracle" }
 orbit-vst3-synth-oracle = { path = "../orbit-vst3-synth-oracle" }

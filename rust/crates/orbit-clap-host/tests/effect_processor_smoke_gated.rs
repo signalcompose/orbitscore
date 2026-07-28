@@ -24,6 +24,14 @@ const EFFECT_GAIN: f32 = 0.5;
 const PLUGIN_ID: &str = "com.signalcompose.clap-test-effect";
 /// test-synth の CLAP plugin id（audio input 0 / output 1 = instrument）。
 const SYNTH_PLUGIN_ID: &str = "com.signalcompose.clap-test-synth";
+const EFFECT_STATE_MAGIC: u32 = 0x4F52_4531;
+
+fn encode_effect_state(gain: f64) -> [u8; 12] {
+    let mut bytes = [0u8; 12];
+    bytes[..4].copy_from_slice(&EFFECT_STATE_MAGIC.to_le_bytes());
+    bytes[4..].copy_from_slice(&gain.to_bits().to_le_bytes());
+    bytes
+}
 
 /// repo ルート相対パスを解決する（MANIFEST_DIR = rust/crates/orbit-clap-host）。
 fn repo_path(rel: &str) -> PathBuf {
@@ -41,8 +49,9 @@ fn effect_processor_single_thread_lifecycle() {
     );
 
     // load → process → drop を同一スレッドで直列実行する（single-thread モデル）。
-    let (mut effect, info) = ClapEffectProcessor::load(&dylib, Some(PLUGIN_ID), 48_000, 2, 512)
-        .expect("load test-effect as ClapEffectProcessor");
+    let (mut effect, info) =
+        ClapEffectProcessor::load(&dylib, Some(PLUGIN_ID), 48_000, 2, 512, None)
+            .expect("load test-effect as ClapEffectProcessor");
     assert_eq!(info.plugin_id, PLUGIN_ID, "ロードした plugin id が一致");
 
     // 既知の入力（128 frames stereo）。一定振幅でなくランプにして配線ミスを検知しやすくする。
@@ -65,6 +74,42 @@ fn effect_processor_single_thread_lifecycle() {
     drop(effect);
 }
 
+#[test]
+#[ignore = "needs a built test-effect dylib (local only)"]
+fn effect_state_round_trip_restores_the_live_gain() {
+    let dylib = repo_path("rust-spike/clap-test-effect/target/debug/libclap_test_effect.dylib");
+    assert!(
+        dylib.exists(),
+        "test-effect dylib が無い: {}",
+        dylib.display()
+    );
+
+    let state = encode_effect_state(0.25);
+    let (mut restored, _) =
+        ClapEffectProcessor::load(&dylib, Some(PLUGIN_ID), 48_000, 2, 512, Some(&state))
+            .expect("restore CLAP effect state");
+    let captured = restored.capture_state().expect("capture CLAP effect state");
+    assert_eq!(captured, state);
+
+    let input: Vec<f32> = (0..256).map(|index| index as f32 * 0.001 - 0.05).collect();
+    let mut output = input.clone();
+    assert!(restored.process_block(&mut output));
+    for (actual, input) in output.iter().zip(&input) {
+        assert!((*actual - *input * 0.25).abs() < 1e-6);
+    }
+    drop(restored);
+
+    assert!(ClapEffectProcessor::load(
+        &dylib,
+        Some(PLUGIN_ID),
+        48_000,
+        2,
+        512,
+        Some(b"invalid-effect-state")
+    )
+    .is_err());
+}
+
 // γ M1 PR-C carry-forward ②: `process_block_core` の **instrument(add-mix) 分岐**を offline で検証する。
 // PR-B は effect(overwrite) 分岐しか踏まなかった。共有カーネルの add-mix 経路が回帰しないよう、audio
 // input を持たない synth（test-synth）を `ClapEffectProcessor` に load して `has_audio_input()=false`
@@ -82,7 +127,7 @@ fn instrument_branch_add_mixes_dry_signal() {
     );
 
     let (mut synth, info) =
-        ClapEffectProcessor::load(&dylib, Some(SYNTH_PLUGIN_ID), 48_000, 2, 512)
+        ClapEffectProcessor::load(&dylib, Some(SYNTH_PLUGIN_ID), 48_000, 2, 512, None)
             .expect("load test-synth as ClapEffectProcessor");
     assert_eq!(
         info.plugin_id, SYNTH_PLUGIN_ID,

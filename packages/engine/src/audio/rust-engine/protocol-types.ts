@@ -5,7 +5,7 @@
  * 型のドリフト検出はレビューで担保する（機械的同期は今は行わない）。
  */
 
-export const PROTOCOL_VERSION = '0.1' as const
+export const PROTOCOL_VERSION = '0.2' as const
 
 export interface HandshakeFrame {
   type: 'handshake'
@@ -18,6 +18,7 @@ export interface HandshakeFrame {
 export type CommandMethod =
   | 'LoadSample'
   | 'LoadPlugin'
+  | 'GetPluginState'
   // ランタイムの mixer bus routing 変更（MX.4・#459/#453 M3）: seq_bus の output(sum)/
   // sends(aux) を非 RT で書き換える。daemon が feature `outproc-effect` 無効ビルドなら
   // OUTPROC_EFFECT_UNAVAILABLE を返す。

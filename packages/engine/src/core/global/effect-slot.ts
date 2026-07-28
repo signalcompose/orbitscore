@@ -55,6 +55,9 @@ export type PluginInstanceId = string
 
 interface PluginSlotBase {
   readonly instanceId: PluginInstanceId
+  readonly receiver: string
+  /** SC.5 のレシーバ内同名出現順（0始まり）。UIH.5 chain indexとは別物。 */
+  readonly occurrence: number
   readonly normalizedName: string
   readonly resolvedPath: string
   readonly pluginId?: string
@@ -73,6 +76,7 @@ export interface EffectSlot extends PluginSlotBase {
 
 export interface InstrumentSlot extends PluginSlotBase {
   readonly role: 'instrument'
+  readonly instance: string
 }
 
 export type PluginSlot = EffectSlot | InstrumentSlot
@@ -252,14 +256,35 @@ export class EffectChainMap<K> {
       .then(() => undefined)
     const chain = this.chains.get(key) ?? []
     const occurrence =
-      chain.filter((slot) => slot !== replacing && slot.normalizedName === normalizedName).length +
-      1
-    const instanceId =
-      replacing?.instanceId ?? `${this.receiverId(key)}/${normalizedName}#${occurrence}`
+      replacing?.occurrence ??
+      chain.filter((slot) => slot !== replacing && slot.normalizedName === normalizedName).length
+    const receiver = replacing?.receiver ?? this.receiverId(key)
+    const instanceId = replacing?.instanceId ?? `${receiver}/${normalizedName}#${occurrence + 1}`
     const entry: PluginSlot =
       role === 'effect'
-        ? { role, bus, instanceId, normalizedName, resolvedPath, pluginId, load }
-        : { role, instanceId, normalizedName, resolvedPath, pluginId, statePath, load }
+        ? {
+            role,
+            bus,
+            instanceId,
+            receiver,
+            occurrence,
+            normalizedName,
+            resolvedPath,
+            pluginId,
+            load,
+          }
+        : {
+            role,
+            instance: instance ?? 'default',
+            instanceId,
+            receiver,
+            occurrence,
+            normalizedName,
+            resolvedPath,
+            pluginId,
+            statePath,
+            load,
+          }
     const nextChain = replacing
       ? chain.map((slot) => (slot === replacing ? entry : slot))
       : [...chain, entry]

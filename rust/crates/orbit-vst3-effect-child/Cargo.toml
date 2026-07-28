@@ -19,3 +19,9 @@ path = "src/main.rs"
 orbit-vst3-host = { path = "../orbit-vst3-host" }
 orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }
 anyhow = "1"
+
+# mailbox_wiring テストが load させる effect oracle。**state の encode/decode を手書きしない**
+# ため（`orbit-vst3-host/tests/offline.rs` と同じ使い方）。契約を写すと、oracle 側を直しても
+# テストだけ古い形式のまま「通る」状態が作れてしまう。
+[dev-dependencies]
+orbit-vst3-gain-oracle = { path = "../orbit-vst3-gain-oracle" }

@@ -25,8 +25,8 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use anyhow::{bail, Context, Result};
 use orbit_audio_sandbox::{
-    open_shared, region_ptr, slot_index, slot_offset, ParentWatch, BUF_LEN, CHANNELS, CONTROL_QUIT,
-    MAX_FRAMES,
+    open_shared, region_ptr, save_state_command, service_command_mailbox, slot_index, slot_offset,
+    ParentWatch, BUF_LEN, CHANNELS, CMD_SAVE_STATE, CONTROL_QUIT, MAX_FRAMES,
 };
 use orbit_clap_host::ClapEffectProcessor;
 
@@ -35,6 +35,7 @@ struct Args {
     plugin: PathBuf,
     plugin_id: Option<String>,
     sample_rate: u32,
+    state: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args> {
@@ -42,6 +43,7 @@ fn parse_args() -> Result<Args> {
     let mut plugin: Option<PathBuf> = None;
     let mut plugin_id: Option<String> = None;
     let mut sample_rate: u32 = 48_000;
+    let mut state = None;
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -55,6 +57,7 @@ fn parse_args() -> Result<Args> {
                     .parse()
                     .context("--sample-rate の parse")?
             }
+            "--state" => state = Some(PathBuf::from(it.next().context("--state に値が必要")?)),
             other => bail!("未知の引数: {other}"),
         }
     }
@@ -63,6 +66,7 @@ fn parse_args() -> Result<Args> {
         plugin: plugin.context("--plugin は必須")?,
         plugin_id,
         sample_rate,
+        state,
     })
 }
 
@@ -72,12 +76,17 @@ fn main() -> Result<()> {
     let region = region_ptr(&mmap);
 
     // 実 CLAP effect を 1 スレッドで host（load → 以降 process_block / drop も同一スレッド）。
+    let state_bytes = match args.state.as_deref() {
+        Some(path) => Some(std::fs::read(path).with_context(|| format!("read state {path:?}"))?),
+        None => None,
+    };
     let (mut effect, _info) = ClapEffectProcessor::load(
         &args.plugin,
         args.plugin_id.as_deref(),
         args.sample_rate,
         CHANNELS,
         MAX_FRAMES as u32,
+        state_bytes.as_deref(),
     )
     .with_context(|| format!("load CLAP effect {:?}", args.plugin))?;
 
@@ -109,6 +118,12 @@ fn main() -> Result<()> {
         if parent_watch.should_exit() {
             eprintln!("[orbit-clap-effect-child] 親プロセス死亡を検知、終了する");
             break;
+        }
+        unsafe {
+            service_command_mailbox(region, |kind, arg| match kind {
+                CMD_SAVE_STATE => Some(save_state_command(arg, || effect.capture_state())),
+                _ => None,
+            });
         }
         // SAFETY: 同上（region は有効）。seq_request の Acquire は host SUBMIT の Release と
         // synchronize-with し、続く input/n_frames[slot] 読み出しの可視性を確立する。

@@ -969,6 +969,7 @@ dependencies = [
  "anyhow",
  "libc",
  "memmap2",
+ "tracing",
 ]
 
 [[package]]
@@ -996,6 +997,7 @@ dependencies = [
  "anyhow",
  "orbit-audio-sandbox",
  "orbit-clap-host",
+ "orbit-vst3-gain-oracle",
 ]
 
 [[package]]
@@ -1069,6 +1071,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "orbit-audio-sandbox",
+ "orbit-vst3-gain-oracle",
  "orbit-vst3-host",
 ]
 
@@ -1084,6 +1087,7 @@ name = "orbit-vst3-host"
 version = "0.0.1"
 dependencies = [
  "core-foundation-sys",
+ "orbit-vst3-gain-oracle",
  "orbit-vst3-synth-oracle",
  "vst3",
 ]

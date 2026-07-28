@@ -19,6 +19,7 @@ import {
 } from '../core/session-log/session-log-writer'
 import { ENGINE_VERSION, DSL_VERSION } from '../version'
 import { createMixerRuntimeRegistry } from '../signal-chain/runtime'
+import type { SavedProjectPluginState } from '../core/project-state-store'
 
 import { InterpreterState } from './types'
 import { processGlobalInit, processSequenceInit } from './process-initialization'
@@ -254,6 +255,15 @@ export class InterpreterV2 {
    */
   get audioEngine(): AudioEngineBackend {
     return this.state.audioEngine
+  }
+
+  /** REPL/MCP bridgeから現在のchainを解決し、plugin stateとproject.yamlを明示保存する。 */
+  async savePluginState(sequence: string, index: number): Promise<SavedProjectPluginState> {
+    const global = this.state.currentGlobal
+    if (!global) {
+      throw new Error('Plugin state cannot be saved before a global has been initialized.')
+    }
+    return global.savePluginState(sequence, index)
   }
 }
 

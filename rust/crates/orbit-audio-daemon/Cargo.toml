@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Signal compose audio engine daemon exposing WebSocket IPC (protocol v0.1)"
+description = "Signal compose audio engine daemon exposing WebSocket IPC (protocol v0.2)"
 
 [lib]
 name = "orbit_audio_daemon"

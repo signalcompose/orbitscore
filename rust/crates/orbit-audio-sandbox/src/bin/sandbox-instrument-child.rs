@@ -11,9 +11,9 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use anyhow::{bail, Context, Result};
 use orbit_audio_sandbox::{
-    open_shared, region_ptr, service_command_mailbox, slot_index, slot_offset, CommandOutcome,
-    EventRecord, EventSpillFifo, NeutralEvent, CHANNELS, CMD_RESULT_BAD_ARG, CMD_RESULT_IO_ERROR,
-    CMD_SAVE_STATE, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
+    open_shared, region_ptr, save_state_command, service_command_mailbox, slot_index, slot_offset,
+    EventRecord, EventSpillFifo, NeutralEvent, CHANNELS, CMD_SAVE_STATE, CONTROL_QUIT,
+    MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
 };
 
 /// この fixture が `CMD_SAVE_STATE` で書き出す固定ペイロード。実 plugin の state の代役で、
@@ -92,19 +92,9 @@ fn main() -> Result<()> {
         // `service_command_mailbox` の ack / result / detail 規律そのもの。
         unsafe {
             service_command_mailbox(region, |kind, arg| match kind {
-                CMD_SAVE_STATE => Some(match arg.filter(|path| !path.is_empty()) {
-                    None => CommandOutcome::failed(
-                        CMD_RESULT_BAD_ARG,
-                        "cmd_arg is empty or not NUL-terminated UTF-8",
-                    ),
-                    Some(path) => match orbit_audio_sandbox::write_sidecar(path, FIXTURE_STATE) {
-                        Err(error) => CommandOutcome::failed(
-                            CMD_RESULT_IO_ERROR,
-                            format!("write {path}: {error}"),
-                        ),
-                        Ok(()) => CommandOutcome::ok(FIXTURE_STATE.len() as u64),
-                    },
-                }),
+                CMD_SAVE_STATE => Some(save_state_command(arg, || {
+                    Ok::<_, std::io::Error>(FIXTURE_STATE.to_vec())
+                })),
                 _ => None,
             });
         }

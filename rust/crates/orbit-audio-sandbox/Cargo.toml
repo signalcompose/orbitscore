@@ -34,6 +34,8 @@ anyhow = "1"
 # child プロセスの親死活監視(#448 orphan 対策)用 getppid(2) FFI。MIT/Apache-2.0。
 # 4 child crate(orbit-clap-effect-child 等)から共有する src/parent_watch.rs でのみ使用。
 libc = "0.2"
+# timeout 後の遅延成功 state を破棄する際、運用者へ silent にしないための構造化 warning。
+tracing = { workspace = true }
 
 # 親子で同一 SharedRegion レイアウトを共有する gain child(PR-A の parity 相手)。
 # clack 非依存(実 CLAP effect child は PR-B の別 crate)。

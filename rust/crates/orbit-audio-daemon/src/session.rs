@@ -18,6 +18,8 @@ use tracing::warn;
 
 #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
 use crate::engine_wrap::ClapPluginRole;
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+use crate::engine_wrap::PluginStateTarget;
 use crate::engine_wrap::{EngineWrap, WrapError};
 use crate::protocol::{
     Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError,
@@ -161,7 +163,7 @@ fn parse_optional_nonempty_string_param(
     }
 }
 
-/// role='instrument' 専用 param（`instance` / `state_path`）が他 role の宣言に紛れ込んだかの
+/// role='instrument' 専用 param（現在は `instance`）が他 role の宣言に紛れ込んだかの
 /// 判定（`bus` が role='effect' 専用なのと対称）。黙って無視せず MALFORMED で弾くために使う。
 #[cfg(feature = "outproc-instrument")]
 fn instrument_only_param_misused(params: &Value, field: &str) -> bool {
@@ -814,7 +816,7 @@ async fn handle_command(
         "GetStatus" => {
             let status = json!({
                 "daemon_version": env!("CARGO_PKG_VERSION"),
-                "protocol_version": "0.1",
+                "protocol_version": crate::protocol::PROTOCOL_VERSION,
                 "output_sample_rate": engine.output_sample_rate(),
                 "output_channels": engine.output_channels(),
                 "loaded_samples": engine.loaded_sample_count(),
@@ -991,18 +993,8 @@ async fn handle_command(
                         return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
                     }
                 };
-                // #540 P2: `state_path`（role='instrument' 専用・保存済み state の復元）。
-                #[cfg(feature = "outproc-instrument")]
-                if instrument_only_param_misused(&params, "state_path") {
-                    return err(
-                        &id,
-                        ProtocolError::new(
-                            "MALFORMED_REQUEST",
-                            "LoadPlugin state_path is only valid for role='instrument'",
-                        ),
-                    );
-                }
-                #[cfg(feature = "outproc-instrument")]
+                // #562: VST3/CLAP × instrument/effect の全 role で同じ state_path 復元を使う。
+                #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
                 let state_path = match parse_optional_nonempty_string_param(&params, "state_path") {
                     Ok(state_path) => state_path.map(std::path::PathBuf::from),
                     Err(message) => {
@@ -1037,9 +1029,9 @@ async fn handle_command(
                         #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
                         {
                             match params_role.as_deref() {
-                                Some("effect") => {
-                                    engine.load_outproc_effect_plugin(path, plugin_id, bus)
-                                }
+                                Some("effect") => engine.load_outproc_effect_plugin_with_state(
+                                    path, plugin_id, bus, state_path,
+                                ),
                                 Some("instrument") => engine.load_outproc_instrument_plugin(
                                     path, plugin_id, instance, state_path,
                                 ),
@@ -1052,7 +1044,9 @@ async fn handle_command(
                         )))]
                         #[cfg(feature = "outproc-effect")]
                         {
-                            engine.load_outproc_effect_plugin(path, plugin_id, bus)
+                            engine.load_outproc_effect_plugin_with_state(
+                                path, plugin_id, bus, state_path,
+                            )
                         }
                         #[cfg(all(
                             feature = "outproc-instrument",
@@ -1089,6 +1083,144 @@ async fn handle_command(
                 ProtocolError::new("MALFORMED_REQUEST", "missing 'path' param"),
             ),
         },
+        // #562: 実行中のOOP childから現在stateをsidecarへ保存する。上位層で解決済みの
+        // role/bus/instanceを受け、停止判定・single mailbox・atomic renameはEngineWrapに集約する。
+        "GetPluginState" => {
+            #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
+            {
+                err(
+                    &id,
+                    ProtocolError::new(
+                        "PLUGIN_STATE_UNAVAILABLE",
+                        "GetPluginState requires outproc-effect or outproc-instrument",
+                    ),
+                )
+            }
+            #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+            {
+                let final_path = match params
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .filter(|path| !path.is_empty())
+                {
+                    Some(path) => std::path::PathBuf::from(path),
+                    None => {
+                        return err(
+                            &id,
+                            ProtocolError::new(
+                                "MALFORMED_REQUEST",
+                                "GetPluginState requires a non-empty 'path'",
+                            ),
+                        )
+                    }
+                };
+                let target = match params.get("role").and_then(Value::as_str) {
+                    Some("effect") => {
+                        #[cfg(not(feature = "outproc-effect"))]
+                        return err(
+                            &id,
+                            ProtocolError::new(
+                                "PLUGIN_STATE_UNAVAILABLE",
+                                "GetPluginState role='effect' requires outproc-effect",
+                            ),
+                        );
+                        #[cfg(feature = "outproc-effect")]
+                        {
+                            if params.get("instance").is_some() {
+                                return err(
+                                    &id,
+                                    ProtocolError::new(
+                                        "MALFORMED_REQUEST",
+                                        "GetPluginState instance is only valid for role='instrument'",
+                                    ),
+                                );
+                            }
+                            let bus = match parse_bus_param(&params) {
+                                Ok(bus) => bus,
+                                Err(message) => {
+                                    return err(
+                                        &id,
+                                        ProtocolError::new("MALFORMED_REQUEST", message),
+                                    )
+                                }
+                            };
+                            PluginStateTarget::Effect { bus }
+                        }
+                    }
+                    Some("instrument") => {
+                        #[cfg(not(feature = "outproc-instrument"))]
+                        return err(
+                            &id,
+                            ProtocolError::new(
+                                "PLUGIN_STATE_UNAVAILABLE",
+                                "GetPluginState role='instrument' requires outproc-instrument",
+                            ),
+                        );
+                        #[cfg(feature = "outproc-instrument")]
+                        {
+                            if params.get("bus").is_some() {
+                                return err(
+                                    &id,
+                                    ProtocolError::new(
+                                        "MALFORMED_REQUEST",
+                                        "GetPluginState bus is only valid for role='effect'",
+                                    ),
+                                );
+                            }
+                            let instance =
+                                match parse_optional_nonempty_string_param(&params, "instance") {
+                                    Ok(Some(instance)) => instance,
+                                    Ok(None) => {
+                                        return err(
+                                            &id,
+                                            ProtocolError::new(
+                                                "MALFORMED_REQUEST",
+                                                "GetPluginState role='instrument' requires \
+                                                 'instance'",
+                                            ),
+                                        )
+                                    }
+                                    Err(message) => {
+                                        return err(
+                                            &id,
+                                            ProtocolError::new("MALFORMED_REQUEST", message),
+                                        )
+                                    }
+                                };
+                            PluginStateTarget::Instrument { instance }
+                        }
+                    }
+                    _ => {
+                        return err(
+                            &id,
+                            ProtocolError::new(
+                                "MALFORMED_REQUEST",
+                                "GetPluginState requires role='effect' or role='instrument'",
+                            ),
+                        )
+                    }
+                };
+                let engine = engine.clone();
+                let saved = tokio::task::spawn_blocking(move || {
+                    engine.save_outproc_plugin_state(target, final_path)
+                })
+                .await;
+                match saved {
+                    Ok(Ok(saved)) => ok(
+                        &id,
+                        json!({
+                            "path": saved.path,
+                            "bytes_written": saved.bytes_written,
+                        }),
+                    ),
+                    Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
+                    Err(join_error) => err(
+                        &id,
+                        ProtocolError::new("INTERNAL_ERROR", join_error.to_string()),
+                    ),
+                }
+            }
+        }
         // NoteOn / NoteOff（"PluginNoteOn" / "PluginNoteOff"）は関数先頭の `plugin_note_spec`
         // ディスパッチで処理済みなので、ここには到達しない。event ring 経由の送出（bounded retry・
         // #400）、key/channel 検証・spawn_blocking・応答整形の実体は `handle_plugin_note` を参照。
@@ -1493,6 +1625,28 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
             ProtocolError::new("OUTPROC_ATTACH_FAILED", msg.clone())
         }
         WrapError::OutProcSlotClosed(msg) => ProtocolError::new("OUTPROC_SLOT_CLOSED", msg.clone()),
+        WrapError::PluginStatePerforming(msg) => {
+            ProtocolError::new("PLUGIN_STATE_PERFORMING", msg.clone())
+        }
+        WrapError::PluginStateTarget(msg) => {
+            ProtocolError::new("PLUGIN_STATE_TARGET_ERROR", msg.clone())
+        }
+        WrapError::PluginStateNotReady(msg) => {
+            ProtocolError::new("PLUGIN_STATE_NOT_READY", msg.clone())
+        }
+        WrapError::PluginStateTimeout(msg) => {
+            ProtocolError::new("PLUGIN_STATE_TIMEOUT", msg.clone())
+        }
+        WrapError::PluginStateUnsupported(msg) => {
+            ProtocolError::new("PLUGIN_STATE_UNSUPPORTED", msg.clone())
+        }
+        WrapError::PluginStateChildExited(msg) => {
+            ProtocolError::new("PLUGIN_STATE_CHILD_EXITED", msg.clone())
+        }
+        WrapError::PluginStateProtocol(msg) => {
+            ProtocolError::new("PLUGIN_STATE_PROTOCOL_ERROR", msg.clone())
+        }
+        WrapError::PluginStateIo(msg) => ProtocolError::new("PLUGIN_STATE_IO_ERROR", msg.clone()),
         // ランタイム device switch（`SelectAudioDevice`・#484 D2）が実行できない状態
         // （capture 有効中の明示拒否・audio owner thread 未生存 = test backend 等）。
         WrapError::AudioDeviceSwitchUnavailable(msg) => {
@@ -1592,25 +1746,24 @@ mod tests {
         ));
     }
 
-    // #540 P1/P2（#542 レビュー test-gap）: instrument 専用 param の role 誤用判定を pin
+    // #540 P1（#542 レビュー test-gap）: instrument 専用 param の role 誤用判定を pin
     // （bus_param_invalid_for_instrument_role の対称テスト）。
     #[cfg(feature = "outproc-instrument")]
     #[test]
     fn instrument_only_param_misused_flags_only_the_combination() {
-        for field in ["instance", "state_path"] {
-            assert!(
-                instrument_only_param_misused(&json!({"role": "effect", field: "x"}), field),
-                "'{field}' on role=effect must be flagged"
-            );
-            assert!(
-                !instrument_only_param_misused(&json!({"role": "instrument", field: "x"}), field),
-                "'{field}' on role=instrument is the valid combination"
-            );
-            assert!(
-                !instrument_only_param_misused(&json!({"role": "effect"}), field),
-                "absent '{field}' must not be flagged"
-            );
-        }
+        let field = "instance";
+        assert!(
+            instrument_only_param_misused(&json!({"role": "effect", field: "x"}), field),
+            "'{field}' on role=effect must be flagged"
+        );
+        assert!(
+            !instrument_only_param_misused(&json!({"role": "instrument", field: "x"}), field),
+            "'{field}' on role=instrument is the valid combination"
+        );
+        assert!(
+            !instrument_only_param_misused(&json!({"role": "effect"}), field),
+            "absent '{field}' must not be flagged"
+        );
     }
 
     // #540 P1/P2（#542 レビュー test-gap）: 任意・非空文字列 param パーサの境界を pin。
@@ -1870,5 +2023,47 @@ mod tests {
             handle_plugin_note("id-panic", &params, &engine, 0.8, "note_on", panicking_call).await;
 
         assert_eq!(resp["error"]["code"], "INTERNAL_ERROR");
+    }
+
+    #[test]
+    fn plugin_state_errors_keep_distinct_protocol_codes() {
+        let cases = [
+            (
+                WrapError::PluginStatePerforming("performing".into()),
+                "PLUGIN_STATE_PERFORMING",
+            ),
+            (
+                WrapError::PluginStateTarget("target".into()),
+                "PLUGIN_STATE_TARGET_ERROR",
+            ),
+            (
+                WrapError::PluginStateNotReady("not ready".into()),
+                "PLUGIN_STATE_NOT_READY",
+            ),
+            (
+                WrapError::PluginStateTimeout("timeout".into()),
+                "PLUGIN_STATE_TIMEOUT",
+            ),
+            (
+                WrapError::PluginStateUnsupported("unsupported".into()),
+                "PLUGIN_STATE_UNSUPPORTED",
+            ),
+            (
+                WrapError::PluginStateChildExited("child exited".into()),
+                "PLUGIN_STATE_CHILD_EXITED",
+            ),
+            (
+                WrapError::PluginStateProtocol("protocol".into()),
+                "PLUGIN_STATE_PROTOCOL_ERROR",
+            ),
+            (
+                WrapError::PluginStateIo("io".into()),
+                "PLUGIN_STATE_IO_ERROR",
+            ),
+        ];
+
+        for (error, expected_code) in cases {
+            assert_eq!(wrap_err_to_protocol(&error).code, expected_code);
+        }
     }
 }

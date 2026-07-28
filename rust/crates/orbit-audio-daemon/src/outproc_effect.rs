@@ -31,13 +31,14 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use orbit_audio_native::PostProcessor;
-use orbit_audio_sandbox::transport::reset_child_starting;
-use orbit_audio_sandbox::{open_shared, region_ptr, PipelinedEffectHost, CONTROL_QUIT};
+use orbit_audio_sandbox::{
+    open_shared, region_ptr, CommandMailboxHost, PipelinedEffectHost, CONTROL_QUIT,
+};
 
 /// watchdog が child の生存を poll する周期（非 RT・control thread）。
 const WATCHDOG_POLL: Duration = Duration::from_millis(20);
@@ -390,6 +391,7 @@ pub fn spawn_effect_child(
     plugin: &Path,
     plugin_id: Option<&str>,
     sample_rate: u32,
+    state: Option<&Path>,
 ) -> io::Result<Child> {
     let mut cmd = Command::new(child_exe);
     cmd.arg("--shm")
@@ -401,6 +403,9 @@ pub fn spawn_effect_child(
         .stderr(Stdio::inherit());
     if let Some(id) = plugin_id {
         cmd.arg("--plugin-id").arg(id);
+    }
+    if let Some(path) = state {
+        cmd.arg("--state").arg(path);
     }
     cmd.spawn()
 }
@@ -449,6 +454,30 @@ impl EffectChildSupervisor {
     /// 返すため supervisor 外で起動する）。watchdog はこれを引き継ぎ、以降の crash で respawn する。
     #[allow(clippy::too_many_arguments)]
     pub fn spawn(
+        first_child: Child,
+        shm_path: PathBuf,
+        stats: Arc<OutProcEffectStats>,
+        child_exe: PathBuf,
+        plugin: PathBuf,
+        plugin_id: Option<String>,
+        sample_rate: u32,
+    ) -> io::Result<Self> {
+        let mailbox = Arc::new(CommandMailboxHost::new(shm_path.clone()));
+        Self::spawn_with_mailbox(
+            first_child,
+            shm_path,
+            stats,
+            child_exe,
+            plugin,
+            plugin_id,
+            sample_rate,
+            Arc::new(Mutex::new(None)),
+            mailbox,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_with_mailbox(
         mut first_child: Child,
         shm_path: PathBuf,
         stats: Arc<OutProcEffectStats>,
@@ -456,6 +485,8 @@ impl EffectChildSupervisor {
         plugin: PathBuf,
         plugin_id: Option<String>,
         sample_rate: u32,
+        latest_state: Arc<Mutex<Option<PathBuf>>>,
+        mailbox: Arc<CommandMailboxHost>,
     ) -> io::Result<Self> {
         // watchdog 専用の control mapping（host は from_mmap で 1st mapping を消費するので 2nd を開く）。
         // この MmapMut は closure に move され watchdog thread 終了まで生存する（region ポインタの前提）。
@@ -539,15 +570,33 @@ impl EffectChildSupervisor {
                             tracing::warn!(
                                 "{child_name_wd} が異常終了（{status}）→ respawn する"
                             );
-                            // SAFETY: region は watchdog が所有する生存 ctl_mmap を指す。
-                            // 前 incarnation の READY を消してから replacement を spawn する。
-                            unsafe { reset_child_starting(region) };
+                            // `try_wait=Some` で旧 child の死亡を確認済み。in-flight command を
+                            // failure ack で完了し、readiness/mailbox を reset してから replacement を
+                            // spawn する（生きた child への reset は禁止・UIH.2）。
+                            if let Err(error) = mailbox.reset_after_child_exit() {
+                                tracing::error!(
+                                    "effect mailbox reset failed; measurement invalid: {error}"
+                                );
+                                stats.measurement_invalid.store(true, Ordering::Release);
+                                break;
+                            }
+                            let state = match latest_state.lock() {
+                                Ok(state) => state.clone(),
+                                Err(_) => {
+                                    tracing::error!(
+                                        "effect latest-state mutex poisoned; measurement invalid"
+                                    );
+                                    stats.measurement_invalid.store(true, Ordering::Release);
+                                    break;
+                                }
+                            };
                             match spawn_effect_child(
                                 &child_exe,
                                 &shm_path_wd,
                                 &plugin,
                                 plugin_id.as_deref(),
                                 sample_rate,
+                                state.as_deref(),
                             ) {
                                 Ok(c) => {
                                     // PID を先に publish（kill-test が新 child を kill できるよう）。
@@ -965,6 +1014,129 @@ mod tests {
         );
         drop(sup);
         let _ = std::fs::remove_file(&shm);
+    }
+
+    #[test]
+    fn supervisor_respawn_passes_the_state_saved_after_initial_spawn() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture_dir = std::env::temp_dir().join(format!(
+            "orbit-effect-respawn-state-{}-{}",
+            std::process::id(),
+            SHM_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&fixture_dir).expect("create respawn fixture directory");
+        let args_path = fixture_dir.join("respawn-args.txt");
+        let child_script = fixture_dir.join("record-respawn-args.sh");
+        std::fs::write(
+            &child_script,
+            "#!/bin/sh\nscript_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" > \"$script_dir/respawn-args.txt\"\nsleep 0.2\n",
+        )
+        .expect("write respawn argument recorder");
+        let mut permissions = std::fs::metadata(&child_script)
+            .expect("respawn recorder metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&child_script, permissions)
+            .expect("make respawn recorder executable");
+
+        let shm = make_shm();
+        let stats = OutProcEffectStats::new();
+        let first = Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn initial stub child");
+        let first_pid = first.id();
+        let latest_state = Arc::new(Mutex::new(None));
+        let mailbox = Arc::new(CommandMailboxHost::new(shm.clone()));
+        let sup = EffectChildSupervisor::spawn_with_mailbox(
+            first,
+            shm.clone(),
+            stats.clone(),
+            child_script,
+            PathBuf::from("/ignored-effect.clap"),
+            None,
+            48_000,
+            latest_state.clone(),
+            mailbox.clone(),
+        )
+        .expect("supervisor spawn");
+
+        let saved_state = fixture_dir.join("saved-after-spawn.state");
+        let expected_state = b"saved state".to_vec();
+        let responder_shm = shm.clone();
+        let responder_state = expected_state.clone();
+        let responder = std::thread::spawn(move || {
+            let mmap = open_shared(&responder_shm).expect("open responder mapping");
+            let region = region_ptr(&mmap);
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let seq = loop {
+                let seq = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+                if seq != 0 {
+                    break seq;
+                }
+                assert!(Instant::now() < deadline, "host did not publish SAVE_STATE");
+                std::thread::yield_now();
+            };
+            let sidecar = unsafe {
+                orbit_audio_sandbox::transport::read_cstr_field(&(*region).cmd_arg)
+                    .expect("valid sidecar path")
+                    .to_owned()
+            };
+            std::fs::write(&sidecar, &responder_state).expect("write saved state sidecar");
+            unsafe {
+                (*region)
+                    .cmd_result_len
+                    .store(responder_state.len() as u64, Ordering::Relaxed);
+                (*region)
+                    .cmd_result
+                    .store(orbit_audio_sandbox::CMD_RESULT_OK, Ordering::Relaxed);
+                (*region).cmd_ack_seq.store(seq, Ordering::Release);
+            }
+        });
+        let response = mailbox
+            .issue_save_state(&saved_state)
+            .expect("mailbox state save succeeds after initial spawn");
+        responder.join().expect("state save responder");
+        assert_eq!(response.bytes_written, expected_state.len() as u64);
+        assert_eq!(
+            std::fs::read(&saved_state).expect("read successful saved state"),
+            expected_state
+        );
+        crate::engine_wrap::record_latest_state_after_save(&latest_state, saved_state.clone())
+            .expect("record latest state after successful save");
+
+        assert!(
+            Command::new("kill")
+                .args(["-9", &first_pid.to_string()])
+                .status()
+                .expect("kill initial child")
+                .success(),
+            "initial child must be forcibly terminated"
+        );
+        assert!(
+            poll_until(5, || args_path.exists()
+                && stats.respawn_count.load(Ordering::Relaxed) >= 1),
+            "watchdog did not respawn through the argument recorder"
+        );
+        let args: Vec<String> = std::fs::read_to_string(&args_path)
+            .expect("read respawn arguments")
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let state_index = args
+            .iter()
+            .position(|argument| argument == "--state")
+            .expect("respawn must receive --state");
+        assert_eq!(
+            args.get(state_index + 1).map(String::as_str),
+            saved_state.to_str(),
+            "--state must be immediately followed by the state saved after initial spawn"
+        );
+
+        drop(sup);
+        std::fs::remove_dir_all(fixture_dir).expect("remove respawn fixture directory");
+        let _ = std::fs::remove_file(shm);
     }
 
     // Critical 2（test-coverage / code review）: open_shared 失敗時に first_child を orphan 化させず reap する。

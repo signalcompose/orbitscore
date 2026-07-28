@@ -64,6 +64,30 @@ unsafe fn len_wstring(string: *const TChar) -> usize {
 
 const PLUGIN_NAME: &'static str = "Gain (vst3-rs example plugin)";
 
+/// VST3 / CLAP effect oracle 共通の state 契約（magic + f64 gain bits）。
+pub const STATE_MAGIC: u32 = 0x4F52_4531; // "ORE1"
+pub const STATE_LEN: usize = 12;
+
+pub fn encode_state(gain: f64) -> [u8; STATE_LEN] {
+    let mut bytes = [0u8; STATE_LEN];
+    bytes[..4].copy_from_slice(&STATE_MAGIC.to_le_bytes());
+    bytes[4..].copy_from_slice(&gain.to_bits().to_le_bytes());
+    bytes
+}
+
+pub fn decode_state(bytes: &[u8]) -> Option<f64> {
+    if bytes.len() != STATE_LEN {
+        return None;
+    }
+    let magic = u32::from_le_bytes(bytes[..4].try_into().ok()?);
+    if magic != STATE_MAGIC {
+        return None;
+    }
+    let bits = u64::from_le_bytes(bytes[4..].try_into().ok()?);
+    let gain = f64::from_bits(bits);
+    gain.is_finite().then_some(gain)
+}
+
 struct GainProcessor {
     gain: AtomicU64,
 }
@@ -182,11 +206,50 @@ impl IComponentTrait for GainProcessor {
         kResultOk
     }
 
-    unsafe fn setState(&self, _state: *mut IBStream) -> tresult {
+    unsafe fn setState(&self, state: *mut IBStream) -> tresult {
+        if state.is_null() {
+            return kResultFalse;
+        }
+        let Some(stream) = ComRef::from_raw(state) else {
+            return kResultFalse;
+        };
+        let mut bytes = [0u8; STATE_LEN];
+        let mut read = 0;
+        let result = stream.read(
+            bytes.as_mut_ptr().cast::<c_void>(),
+            STATE_LEN as i32,
+            &mut read,
+        );
+        if result != kResultOk || read != STATE_LEN as i32 {
+            return kResultFalse;
+        }
+        let Some(gain) = decode_state(&bytes) else {
+            return kResultFalse;
+        };
+        self.gain.store(gain.to_bits(), Ordering::Relaxed);
         kResultOk
     }
 
-    unsafe fn getState(&self, _state: *mut IBStream) -> tresult {
+    unsafe fn getState(&self, state: *mut IBStream) -> tresult {
+        if state.is_null() {
+            return kResultFalse;
+        }
+        if std::env::var_os("ORBIT_VST3_GAIN_EMPTY_STATE").is_some() {
+            return kResultOk;
+        }
+        let Some(stream) = ComRef::from_raw(state) else {
+            return kResultFalse;
+        };
+        let mut bytes = encode_state(f64::from_bits(self.gain.load(Ordering::Relaxed)));
+        let mut written = 0;
+        let result = stream.write(
+            bytes.as_mut_ptr().cast::<c_void>(),
+            STATE_LEN as i32,
+            &mut written,
+        );
+        if result != kResultOk || written != STATE_LEN as i32 {
+            return kResultFalse;
+        }
         kResultOk
     }
 }
@@ -602,4 +665,31 @@ extern "system" fn GetPluginFactory() -> *mut IPluginFactory {
         .to_com_ptr::<IPluginFactory>()
         .unwrap()
         .into_raw()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effect_state_encoding_round_trips_and_rejects_corruption() {
+        let bytes = encode_state(0.25);
+        assert_eq!(decode_state(&bytes), Some(0.25));
+        assert_eq!(bytes.len(), STATE_LEN);
+        let mut wrong_magic = bytes;
+        wrong_magic[0] ^= 0xFF;
+        assert_eq!(decode_state(&wrong_magic), None);
+        assert_eq!(decode_state(&bytes[..STATE_LEN - 1]), None);
+        assert_eq!(decode_state(&encode_state(f64::NAN)), None);
+    }
+
+    #[test]
+    fn effect_state_encoding_matches_cross_format_contract() {
+        assert_eq!(STATE_MAGIC, 0x4F52_4531);
+        assert_eq!(STATE_LEN, 12);
+        assert_eq!(
+            encode_state(0.25),
+            [0x31, 0x45, 0x52, 0x4F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xD0, 0x3F,]
+        );
+    }
 }
