@@ -5466,35 +5466,24 @@ mod outproc_load_error_test_support {
         ));
     }
 
-    /// テスト専用の「slow」child 実行可能ファイル。CLI 引数（`--shm`/`--plugin`/`--sample-rate`
-    /// 等）をすべて無視してただ sleep するだけの POSIX shell script。`load_outproc_plugin` が
-    /// 経由する `spawn_outproc_child` はこれらの引数を固定で付与するため、素の coreutils
-    /// （`sleep`/`cat` 等）は未知オプションとして即 exit してしまい「lock 外で長時間ブロックする」
-    /// 状態を再現できない（実際に `sleep` へこれらの引数を渡すと `illegal option` で即終了する）。
-    /// このクレートの CI は ubuntu-latest のみを対象とする（Windows 非対応）ので unix 専用で問題ない。
-    fn write_slow_child_script(unique_path: &impl Fn() -> PathBuf) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let script_path = unique_path().with_extension("sh");
-        std::fs::write(&script_path, "#!/bin/sh\nexec sleep 20\n")
-            .expect("write slow child script");
-        let mut perms = std::fs::metadata(&script_path)
-            .expect("stat slow child script")
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms).expect("chmod slow child script");
-        script_path
+    /// テスト専用 child はコミット済み fixture を参照する。ETXTBSY の必要条件は、exec 時点で
+    /// 対象 inode を誰かが write-open していること。fixture はテストプロセスの生存中に一度も
+    /// write-open しないため、別スレッドの spawn へ継承される write fd 自体が発生しない。
+    fn child_script_fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join(name)
     }
 
-    fn write_exit_child_script(unique_path: &impl Fn() -> PathBuf) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let script_path = unique_path().with_extension("sh");
-        std::fs::write(&script_path, "#!/bin/sh\nexit 1\n").expect("write exit child script");
-        let mut perms = std::fs::metadata(&script_path)
-            .expect("stat exit script")
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&script_path, perms).expect("chmod exit script");
-        script_path
+    /// CLI 引数（`--shm`/`--plugin`/`--sample-rate` 等）をすべて無視して sleep する
+    /// POSIX shell script。素の coreutils は未知オプションで即 exit するため fixture を使う。
+    fn slow_child_script() -> PathBuf {
+        child_script_fixture("slow-child.sh")
+    }
+
+    fn exit_child_script() -> PathBuf {
+        child_script_fixture("exit-child.sh")
     }
 
     pub(super) fn early_exit_fast_fails_and_keeps_retry_shm<R: OutProcRole>(
@@ -5505,7 +5494,7 @@ mod outproc_load_error_test_support {
         let shm_path = unique_path();
         let _ = std::fs::remove_file(&shm_path);
         let mmap = orbit_audio_sandbox::create_shared(&shm_path).expect("create shared memory");
-        let child_exe = write_exit_child_script(&unique_path);
+        let child_exe = exit_child_script();
         let stats = R::new_stats();
         let (wrap, slot) = inject(
             ChildSlot::Empty(child_launch::<R>(
@@ -5539,7 +5528,6 @@ mod outproc_load_error_test_support {
             unsafe { (*region).control.load(std::sync::atomic::Ordering::Acquire) },
             orbit_audio_sandbox::CONTROL_RUN
         );
-        let _ = std::fs::remove_file(child_exe);
     }
 
     pub(super) fn role_mismatch_retries_same_slot<R: OutProcRole + 'static>(
@@ -5552,7 +5540,7 @@ mod outproc_load_error_test_support {
         let shm_path = unique_path();
         let _ = std::fs::remove_file(&shm_path);
         let mmap = orbit_audio_sandbox::create_shared(&shm_path).expect("create shared memory");
-        let child_exe = write_slow_child_script(&unique_path);
+        let child_exe = slow_child_script();
         let stats = R::new_stats();
         let (wrap, slot) = inject(
             ChildSlot::Empty(child_launch::<R>(
@@ -5624,7 +5612,6 @@ mod outproc_load_error_test_support {
                 assert!(matches!(*slot.lock().unwrap(), ChildSlot::Active { .. }));
             }
         }
-        let _ = std::fs::remove_file(child_exe);
     }
 
     /// Important finding 1: f36e99c の regression guard。`Loading` 中の 2 本目の `LoadPlugin` は、
@@ -5645,7 +5632,7 @@ mod outproc_load_error_test_support {
         let shm_path = unique_path();
         let _ = std::fs::remove_file(&shm_path);
         let _mmap = orbit_audio_sandbox::create_shared(&shm_path).expect("create shared memory");
-        let child_exe = write_slow_child_script(&unique_path);
+        let child_exe = slow_child_script();
 
         let stats = R::new_stats();
         let launch = child_launch::<R>(shm_path.clone(), child_exe.clone(), stats.clone());
@@ -5739,7 +5726,6 @@ mod outproc_load_error_test_support {
             .join()
             .expect("first LoadPlugin call thread panicked")
             .expect("first LoadPlugin call must succeed once READY is published");
-        let _ = std::fs::remove_file(&child_exe);
     }
 }
 
