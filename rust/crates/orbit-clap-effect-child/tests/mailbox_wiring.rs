@@ -6,8 +6,10 @@ use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use orbit_audio_sandbox::transport::{read_cstr_field, write_cstr_field, CHILD_STATUS_READY};
 use orbit_audio_sandbox::{
-    create_shared, region_ptr, CommandMailboxHost, SharedRegion, CONTROL_QUIT,
+    create_shared, region_ptr, CommandMailboxError, CommandMailboxHost, SharedRegion,
+    CMD_RESULT_OK, CONTROL_QUIT,
 };
 use orbit_vst3_gain_oracle::encode_state;
 
@@ -63,10 +65,7 @@ impl Drop for ChildGuard {
 
 fn wait_ready(region: *mut SharedRegion, child: &mut Child) {
     let deadline = Instant::now() + Duration::from_secs(30);
-    while unsafe {
-        (*region).child_status.load(Ordering::Acquire)
-            != orbit_audio_sandbox::transport::CHILD_STATUS_READY
-    } {
+    while unsafe { (*region).child_status.load(Ordering::Acquire) != CHILD_STATUS_READY } {
         if let Ok(Some(status)) = child.try_wait() {
             panic!("CLAP effect child exited before READY: {status}");
         }
@@ -76,7 +75,15 @@ fn wait_ready(region: *mut SharedRegion, child: &mut Child) {
 }
 
 fn spawn_child(shm: &Path, plugin: &Path, state: &Path) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_orbit-clap-effect-child"))
+    spawn_child_with_env(shm, plugin, state, &[])
+}
+
+fn spawn_child_with_env(shm: &Path, plugin: &Path, state: &Path, env: &[(&str, &str)]) -> Child {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orbit-clap-effect-child"));
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    command
         .args(["--shm"])
         .arg(shm)
         .args(["--plugin"])
@@ -85,6 +92,28 @@ fn spawn_child(shm: &Path, plugin: &Path, state: &Path) -> Child {
         .arg(state)
         .spawn()
         .expect("spawn CLAP effect child")
+}
+
+fn await_ack(region: *mut SharedRegion, seq: u64, child: &mut Child) -> (u32, String) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while unsafe { (*region).cmd_ack_seq.load(Ordering::Acquire) } < seq {
+        if let Ok(Some(status)) = child.try_wait() {
+            panic!("CLAP effect child exited before ack: {status}");
+        }
+        assert!(
+            Instant::now() < deadline,
+            "CLAP effect child did not ack cmd_seq={seq}"
+        );
+        std::thread::yield_now();
+    }
+    unsafe {
+        (
+            (*region).cmd_result.load(Ordering::Relaxed),
+            read_cstr_field(&(*region).cmd_result_detail)
+                .expect("command detail must be NUL-terminated UTF-8")
+                .to_owned(),
+        )
+    }
 }
 
 #[test]
@@ -115,5 +144,123 @@ fn real_effect_child_restores_and_captures_state_through_the_host_mailbox() {
     assert_eq!(captured, expected);
 
     let _ = std::fs::remove_file(sidecar);
+    let _ = std::fs::remove_file(restore);
+}
+
+#[test]
+fn real_effect_child_reports_an_unknown_command_instead_of_hanging() {
+    let Some(plugin) = package_oracle() else {
+        eprintln!("CLAP effect oracle unavailable; loud skip");
+        return;
+    };
+    let restore = unique_temp("orbit-clap-effect-unknown-restore.state");
+    std::fs::write(&restore, encode_state(0.25)).expect("write restore state");
+    let shm = unique_temp("orbit-clap-effect-unknown.shm");
+    let mmap = create_shared(&shm).expect("create shared memory");
+    let region = region_ptr(&mmap);
+    let mut child = ChildGuard {
+        child: spawn_child(&shm, &plugin, &restore),
+        region,
+        shm: shm.clone(),
+    };
+    wait_ready(region, &mut child.child);
+
+    let never_written = unique_temp("orbit-clap-effect-unknown-output.state");
+    unsafe {
+        assert!(write_cstr_field(
+            &mut (*region).cmd_arg,
+            never_written.to_str().expect("UTF-8 test path"),
+        ));
+        (*region).cmd_kind.store(0xDEAD_BEEF, Ordering::Relaxed);
+        (*region).cmd_seq.store(1, Ordering::Release);
+    }
+    let (result, detail) = await_ack(region, 1, &mut child.child);
+    assert_ne!(result, CMD_RESULT_OK);
+    assert!(detail.contains("unknown cmd_kind"), "{detail:?}");
+    assert!(!never_written.exists());
+
+    let _ = std::fs::remove_file(restore);
+}
+
+#[test]
+fn an_empty_state_from_the_plugin_is_reported_as_a_failure_not_logged_as_success() {
+    let Some(plugin) = package_oracle() else {
+        eprintln!("CLAP effect oracle unavailable; loud skip");
+        return;
+    };
+    let restore = unique_temp("orbit-clap-effect-empty-restore.state");
+    std::fs::write(&restore, encode_state(0.25)).expect("write restore state");
+    let shm = unique_temp("orbit-clap-effect-empty.shm");
+    let mmap = create_shared(&shm).expect("create shared memory");
+    let region = region_ptr(&mmap);
+    let mut child = ChildGuard {
+        child: spawn_child_with_env(
+            &shm,
+            &plugin,
+            &restore,
+            &[("CLAP_TEST_EFFECT_EMPTY_STATE", "1")],
+        ),
+        region,
+        shm: shm.clone(),
+    };
+    wait_ready(region, &mut child.child);
+
+    let sidecar = unique_temp("orbit-clap-effect-empty-captured.state");
+    let error = CommandMailboxHost::new(shm)
+        .issue_save_state(&sidecar)
+        .expect_err("empty CLAP effect state must not be acknowledged as success");
+    let CommandMailboxError::CommandFailed { result, detail, .. } = error else {
+        panic!("empty CLAP effect state returned a non-command failure: {error}");
+    };
+    assert_ne!(result, CMD_RESULT_OK);
+    assert!(
+        detail.contains(orbit_clap_host::EMPTY_STATE_FROM_PLUGIN),
+        "detail must identify empty CLAP state: {detail:?}"
+    );
+    assert!(!sidecar.exists());
+
+    let _ = std::fs::remove_file(restore);
+}
+
+#[test]
+fn a_corrupt_state_file_makes_the_child_exit_instead_of_going_ready_with_the_default_sound() {
+    let Some(plugin) = package_oracle() else {
+        eprintln!("CLAP effect oracle unavailable; loud skip");
+        return;
+    };
+    let mut corrupt = encode_state(0.25);
+    corrupt[0] ^= 0xFF;
+    let restore = unique_temp("orbit-clap-effect-corrupt-restore.state");
+    std::fs::write(&restore, corrupt).expect("write corrupt restore state");
+    let shm = unique_temp("orbit-clap-effect-corrupt.shm");
+    let mmap = create_shared(&shm).expect("create shared memory");
+    let region = region_ptr(&mmap);
+    let mut child = ChildGuard {
+        child: spawn_child(&shm, &plugin, &restore),
+        region,
+        shm: shm.clone(),
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Ok(Some(status)) = child.child.try_wait() {
+            break status;
+        }
+        assert_ne!(
+            unsafe { (*region).child_status.load(Ordering::Acquire) },
+            CHILD_STATUS_READY,
+            "corrupt CLAP effect state must not publish READY with the default sound"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "CLAP effect child neither exited nor became READY"
+        );
+        std::thread::yield_now();
+    };
+    assert!(
+        !status.success(),
+        "corrupt CLAP effect restore exited successfully"
+    );
+
     let _ = std::fs::remove_file(restore);
 }

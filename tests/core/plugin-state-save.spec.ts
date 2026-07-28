@@ -115,6 +115,21 @@ describe('plugin state address resolution and project registration (#562)', () =
     )
   })
 
+  it.each([
+    ['drum', 'sum'],
+    ['reverb', 'aux'],
+  ] as const)(
+    'reports declared %s mixer buses as unsupported instead of unknown sequences',
+    (name, kind) => {
+      const { global } = harness()
+      global[kind](name)
+
+      expect(() => global.resolvePluginStateTarget(name, 1)).toThrow(
+        `'${name}' is a ${kind} bus; saving state for mixer-bus inserts is not supported in v1 (see PLUGIN_UI_HOSTING_SPEC_v1 UIH.5).`,
+      )
+    },
+  )
+
   it('does not update project.yaml when the daemon state save fails', async () => {
     const { directory, audio, global } = harness()
     await global.instrument('lead', './Massive-X.clap')
@@ -132,6 +147,29 @@ describe('plugin state address resolution and project registration (#562)', () =
       'lead/instrument',
     )
   })
+
+  it.each([
+    ['missing', undefined],
+    ['non-numeric', Number.NaN],
+    ['zero', 0],
+  ])(
+    'does not update project.yaml when the daemon returns a %s byte count',
+    async (_label, bytesWritten) => {
+      const { directory, audio, global } = harness()
+      await global.instrument('lead', './Massive-X.clap')
+      const manifestPath = path.join(directory, 'project.yaml')
+      const originalManifest = 'version: 1\nstates:\n  old/effect/state/0: states/old.state\n'
+      fs.writeFileSync(manifestPath, originalManifest)
+      audio.savePluginState.mockResolvedValueOnce({
+        path: path.join(directory, 'states', 'invalid.state'),
+        bytesWritten,
+      })
+
+      await expect(global.savePluginState('lead', 0)).rejects.toThrow('invalid byte count')
+      expect(audio.savePluginState).toHaveBeenCalledTimes(1)
+      expect(fs.readFileSync(manifestPath, 'utf8')).toBe(originalManifest)
+    },
+  )
 
   it('rejects on the TS side while transport is running without calling the daemon', async () => {
     const { audio, global } = harness()

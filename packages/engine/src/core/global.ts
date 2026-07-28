@@ -644,6 +644,12 @@ export class Global {
     } else {
       const receiver = this.sequenceRegistry.getSequence(sequence)
       if (!receiver) {
+        const mixerBus = this.mixerManager.resolveNode(sequence)
+        if (mixerBus) {
+          throw new Error(
+            `'${sequence}' is a ${mixerBus.kind} bus; saving state for mixer-bus inserts is not supported in v1 (see PLUGIN_UI_HOSTING_SPEC_v1 UIH.5).`,
+          )
+        }
         throw new Error(`Unknown sequence '${sequence}'; no plugin chain is registered.`)
       }
       const instruments = this.pluginInstrumentManager.chainFor(sequence)

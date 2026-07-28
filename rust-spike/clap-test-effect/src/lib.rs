@@ -119,6 +119,9 @@ impl PluginMainThread<'_, TestEffectShared> for TestEffectMainThread {}
 
 impl PluginStateImpl for TestEffectMainThread {
     fn save(&mut self, output: &mut OutputStream) -> Result<(), PluginError> {
+        if std::env::var_os("CLAP_TEST_EFFECT_EMPTY_STATE").is_some() {
+            return Ok(());
+        }
         let bytes = encode_state(f64::from_bits(self.gain.load(Ordering::Relaxed)));
         output
             .write_all(&bytes)

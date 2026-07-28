@@ -232,6 +232,9 @@ impl IComponentTrait for SynthProcessor {
         if state.is_null() {
             return kResultFalse;
         }
+        if std::env::var_os("ORBIT_VST3_SYNTH_EMPTY_STATE").is_some() {
+            return kResultOk;
+        }
         let stream = match ComRef::from_raw(state) {
             Some(s) => s,
             None => return kResultFalse,

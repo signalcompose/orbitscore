@@ -26,6 +26,47 @@ describe('//#savePluginState REPL meta', () => {
     ).toThrow('non-negative integer index')
   })
 
+  it('returns a correlated error envelope when malformed JSON still contains a requestId', async () => {
+    const savePluginState = vi.fn()
+    const execute = vi.fn()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const session = createReplSession({ savePluginState, execute } as any)
+
+    session.pushLine('//#savePluginState {"requestId":"req-malformed","sequence":')
+    await session.idle()
+
+    expect(savePluginState).toHaveBeenCalledTimes(0)
+    expect(execute).toHaveBeenCalledTimes(0)
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(errorLog).toHaveBeenCalledTimes(0)
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      savePluginState: {
+        requestId: 'req-malformed',
+        ok: false,
+        error: expect.stringContaining('invalid //#savePluginState JSON'),
+      },
+    })
+  })
+
+  it('keeps malformed meta without a recoverable requestId on stderr', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const session = createReplSession({
+      savePluginState: vi.fn(),
+      execute: vi.fn(),
+    } as any)
+
+    session.pushLine('//#savePluginState not-json')
+    await session.idle()
+
+    expect(log).toHaveBeenCalledTimes(0)
+    expect(errorLog).toHaveBeenCalledTimes(1)
+    expect(errorLog).toHaveBeenCalledWith(
+      expect.stringContaining('invalid //#savePluginState JSON'),
+    )
+  })
+
   it('emits one request-ID-correlated success envelope and does not evaluate DSL', async () => {
     const savePluginState = vi.fn().mockResolvedValue({
       path: '/songs/states/lead.state',

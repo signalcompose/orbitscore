@@ -414,9 +414,15 @@ export class DaemonClient extends EventEmitter {
       ...(target.role === 'effect' && target.bus ? { bus: target.bus } : {}),
       ...(target.role === 'instrument' ? { instance: target.instance } : {}),
     })
+    const bytesWritten = result.bytes_written
+    if (typeof bytesWritten !== 'number' || !Number.isFinite(bytesWritten)) {
+      throw new Error(
+        `GetPluginState returned an invalid bytes_written value: ${String(bytesWritten)}.`,
+      )
+    }
     return {
       path: String(result.path),
-      bytesWritten: Number(result.bytes_written),
+      bytesWritten,
     }
   }
 

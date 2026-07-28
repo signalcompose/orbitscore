@@ -234,6 +234,9 @@ impl IComponentTrait for GainProcessor {
         if state.is_null() {
             return kResultFalse;
         }
+        if std::env::var_os("ORBIT_VST3_GAIN_EMPTY_STATE").is_some() {
+            return kResultOk;
+        }
         let Some(stream) = ComRef::from_raw(state) else {
             return kResultFalse;
         };

@@ -75,12 +75,14 @@ state 取得（`getState` / `save`）はメインスレッドで行い、**オ�
    host 側の待機ヘルパはタイムアウトを持ち、ack された `seq` が発行した `seq` と
    一致することまで確認すること
 0-b. 🔴 **child の respawn 時、host はメールボックスを reset しなければならない（MUST）**。
-   `SharedRegion` は respawn 間で再利用され、`reset_child_starting` は `child_status` /
-   `child_flags` しか戻さない。未処理コマンドを残したまま新しい incarnation を起こすと、
+   `SharedRegion` は respawn 間で再利用される。未処理コマンドを残したまま新しい
+   incarnation を起こすと、
    **replacement child が前世代宛のコマンドを自分宛として実行し、`cmd_result=0` で ack する**
    （「保存したはずが別インスタンスの state だった」を成功として登記する経路）。
    host は「未処理なら失敗として ack を打ってから」replacement を spawn すること。
-   *現状 host 側の発行経路は未実装のため未到達。発行経路を足す PR がこの規律を同時に満たすこと*
+   host 側発行経路は `CommandMailboxHost` として実装済み（#562）。watchdog respawn は
+   `CommandMailboxHost::reset_after_child_exit` を effect / instrument の両 supervisor と
+   初回 attach の3経路から呼ぶ
 1. **コマンドはメインスレッドが処理する**。オーディオスレッドはメールボックスを見ない
 2. メインスレッドは runloop タイマー（数十 ms 周期で可）でメールボックスを polling する。
    UI 操作はリアルタイム要件を持たないため、この粒度で足りる
@@ -145,15 +147,17 @@ host は `evt_ack_seq < evt_seq` の間、未処理スロットを**順に**処�
 > 「再利用可」と判定し、**host がまだ読んでいる可能性のある `evt_arg[s-1 % EVT_SLOTS]` へ
 > 書き込む** — Release/Acquire を守っていても防げない（順序保証ではなく再利用判定の問題）。
 
-**🔴 `EVT_SLOTS >= 2`**（鏡像元 `transport.rs:59`: *"2 以上であること(連続 seq が必ず別 slot を
-指す前提)"*）。`STATE_DIRTY` の in-flight を最大1件に固定する（下記）ため**リング占有の上限は 3**
+**🔴 `EVT_SLOTS >= 2`**（鏡像元 `orbit_audio_sandbox::transport::SLOTS` の
+「連続 seq が必ず別 slot を指す」不変条件）。`STATE_DIRTY` の in-flight を最大1件に固定する
+（下記）ため**リング占有の上限は 3**
 であり、`EVT_SLOTS = 3` なら見送りが原理的に起きない。2 でも再試行規則があるので停止はしない。
 
 **🔴 slot 再利用の不変条件（鏡像元から継承する）**:
 
-> `transport.rs:25-27`: *"host は新 seq s を submit する前に `seq_done >= s - SLOTS` を確認する。
-> 満たさなければ submit を見送る(stall)。… **不変条件が破れると live-but-slow child との間で
-> データ競合 = UB になる**"*
+> `PipelinedEffectHost::process_block` / `PipelinedInstrumentHost::process_block`:
+> host は新 seq s を submit する前に `seq_done >= s - SLOTS` を確認し、満たさなければ
+> submit を見送る（stall）。**不変条件が破れると live-but-slow child との間でデータ競合 = UB
+> になる**
 
 イベント欄の鏡像は: **child は新 `evt_seq` = s を投函する前に
 `evt_ack_seq >= s - EVT_SLOTS` を確認する。満たさなければ投函を見送る。**
@@ -161,8 +165,9 @@ host は `evt_ack_seq < evt_seq` の間、未処理スロットを**順に**処�
 **🔴 publish プロトコル（Release / Acquire）も同様に継承する**:
 
 鏡像元の安全性は**不変条件と Release/Acquire 対の2本柱**で成立している
-（`transport.rs:7-9`: *"該当 slot の … を書く → `seq_request` を **Release** で進めて publish"* /
-*"child: `seq_request` を **Acquire** で読む … → n_frames/input が可視"*）。
+（`PipelinedEffectHost::process_block` / `PipelinedInstrumentHost::process_block` が
+該当 slot の payload を書いてから `seq_request` を **Release** で publish し、child loop が
+`seq_request` を **Acquire** で読んで payload の可視性を得る）。
 イベント欄には per-slot tag が無く単一カウンタ構成なので、**書き直して明記する**:
 
 | 主体 | 手順 |
@@ -174,7 +179,8 @@ host は `evt_ack_seq < evt_seq` の間、未処理スロットを**順に**処�
 
 **`Relaxed`（あるいは素朴な store）で実装してはならない。** `evt_arg` は非 atomic の
 `[u8; N]` であり、順序保証の無い cross-process 読み書きは**データ競合 = UB** になる
-（`transport.rs:25-27` が警告するものと同じクラス）。
+（`PipelinedEffectHost::process_block` / `PipelinedInstrumentHost::process_block` の
+slot 再利用 guard が防いでいるものと同じクラス）。
 
 - **投函済み・未 ack のスロットを書き換えてはならない。** host が `evt_arg`（非 atomic の
   `[u8; N]`）を読んでいる最中の書き込みは cross-process の torn read になる
@@ -199,7 +205,7 @@ host は `evt_ack_seq < evt_seq` の間、未処理スロットを**順に**処�
 
 | 事象 | 規定 |
 |---|---|
-| **`Closing` 中に child が crash → respawn** | **リセットの主体は host**（既存の `reset_control_run` と同じパターン・`transport.rs:301`）。順序を固定する: **watchdog が旧 child の死を確認 → host が in-flight 手続きを中止（登記は不変）→ host が `cmd_*` / `evt_*` をリセット → spawn**。新 child 側でゼロ初期化しない（host の polling / 投函と並行 store すると lost update になる）。**「死の確認」は プロセス終了の確認であり、ハング検知ではない** — 生存中の child を死と誤認してリセットすると並行 writer が生じる |
+| **`Closing` 中に child が crash → respawn** | **リセットの主体は host**（既存の `reset_control_run` / `CommandMailboxHost::reset_after_child_exit` と同じパターン）。順序を固定する: **watchdog が旧 child の死を確認 → host が in-flight 手続きを中止（登記は不変）→ host が `cmd_*` / `evt_*` をリセット → spawn**。新 child 側でゼロ初期化しない（host の polling / 投函と並行 store すると lost update になる）。**「死の確認」は プロセス終了の確認であり、ハング検知ではない** — 生存中の child を死と誤認してリセットすると並行 writer が生じる |
 | **host が生きたまま停滞し `evt_ack_seq` が進まない** | child は `Closing` に**無期限滞留しない**。タイムアウト後は保存なしでクローズを完遂し、**🔴 `UI_CLOSED_DONE` を `evt_arg` に「timeout・保存なし」を載せて投函する**（投函できるまで再試行する）。これで (a) MCP の完了判定が閉じ、(b) host は **タイムアウト経路だったことを判別でき**、(c) loud 報告の運搬も兼ねる |
 | **host プロセスが死亡** | 既存の `ParentWatch` が child ごと回収する（UIH.1・変更なし）。新たな規定は不要 |
 | **child の `cmd_ack_seq` が永遠に返らない** | host はコマンドにタイムアウトを持ち、**loud に失敗**させる。規律3 の待ちに脱出条件が無い状態にしない |
@@ -246,7 +252,9 @@ LOAD_STATE:
   演奏中に発行すると、そのブロック分だけ次の audio slot が遅延し **dropout を生む**
   （小バッファ 64/32 サンプルは本プロジェクトの性能ゴールであり、この遅延は許容できない）。
   分離が完了したらこの制約は外れる。
-  *host 側の発行経路は未実装のため現在は未到達。発行経路を足す PR がこの制約を満たすこと*
+  host 側発行経路は `CommandMailboxHost` として実装済み（#562）。watchdog respawn は
+  `CommandMailboxHost::reset_after_child_exit` を effect / instrument の両 supervisor と
+  初回 attach の3経路から呼ぶ
 
 ## UIH.4 ウィンドウの所有 — 形式中立のためホスト所有に統一
 
@@ -401,6 +409,13 @@ engine 側は影響を受けない。
 
 **この規則が無いと、呼び出し側が index の数え方を推測することになる**（#562 で空白が判明）。
 
+> **v1 スコープ**: `resolvePluginStateTarget` がアドレス解決する receiver は
+> **sequence と master のみ**。sum / aux バスにも insert chain 自体はあるが、state 保存対象としての
+> アドレス指定は未対応である。現在の `(receiver, index)` は平坦な receiver 名前空間を前提にする一方、
+> 実際の sequence / sum / aux は別名前空間で同名を許すため、どれを指すか衝突しうる。
+> **解決順や暗黙の優先順位は定めない**。それを行うと別プラグインの state を保存して成功扱いする
+> silent failure を作るため、名前空間を含むアドレス方式が決まるまでは loud に未対応を返す。
+
 1. **index 0 = ソーススロット。** レシーバの信号源（SC.1 規範(2) の構造トポロジーで先頭に立つもの）
    に予約する。
    - **note シーケンス**: `instrument()` プラグインが入る。宣言があれば index 0 で指せる
@@ -520,7 +535,7 @@ crash ループ時にウィンドウが繰り返し復活すると作業文脈�
   - **`Closing` 中に child を kill → respawn** させ、host が手続きを中止して
     **登記を更新しない**ことを確認（登記を書く変異を入れると red）
   - **未 ack スロットへ上書き投函する変異**を入れると red（slot 再利用の不変条件・
-    `transport.rs:25-27` の鏡像）
+    `PipelinedEffectHost::process_block` / `PipelinedInstrumentHost::process_block` の鏡像）
   - **host 停滞時にタイムアウトでクローズが完遂する**（タイムアウトを外す変異で
     `Closing` に無期限滞留 → red）
 - 判定は解析で行い人間を介在させない。**computer-use は受け入れ E2E の主経路にしない**

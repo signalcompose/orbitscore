@@ -2886,9 +2886,7 @@ impl EngineWrap {
                     "sync state directory {parent:?} after rename: {error}"
                 ))
             })?;
-        *latest_state.lock().map_err(|_| {
-            WrapError::PluginStateProtocol("latest-state mutex poisoned after save".into())
-        })? = Some(final_path.clone());
+        record_latest_state_after_save(&latest_state, final_path.clone())?;
 
         Ok(SavedPluginStateSummary {
             path: final_path,
@@ -4254,6 +4252,17 @@ impl EngineWrap {
     }
 }
 
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+pub(crate) fn record_latest_state_after_save(
+    latest_state: &Arc<Mutex<Option<PathBuf>>>,
+    final_path: PathBuf,
+) -> Result<(), WrapError> {
+    *latest_state.lock().map_err(|_| {
+        WrapError::PluginStateProtocol("latest-state mutex poisoned after save".into())
+    })? = Some(final_path);
+    Ok(())
+}
+
 /// `load_outproc_plugin` の終端遷移直前の不変条件検査（release では noop）。
 /// Loading 以外を観測したら、この関数以外に slot への書き手が現れたことを意味する。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
@@ -4332,7 +4341,8 @@ fn plugin_state_mailbox_error(error: orbit_audio_sandbox::CommandMailboxError) -
             ..
         }
         | E::InvalidArgument(_)
-        | E::Mapping(_) => WrapError::PluginStateIo(detail),
+        | E::Mapping(_)
+        | E::SidecarCleanup { .. } => WrapError::PluginStateIo(detail),
         _ => WrapError::PluginStateProtocol(detail),
     }
 }
@@ -5936,7 +5946,7 @@ mod outproc_health_tests {
     }
 
     #[test]
-    fn plugin_state_save_atomically_replaces_file_and_updates_respawn_state() {
+    fn plugin_state_save_atomically_replaces_file_and_updates_latest_state_value() {
         let shm_path = crate::outproc_effect::unique_shm_path();
         let active = super::outproc_load_error_test_support::active_child_slot::<EffectRole>(
             || shm_path.clone(),

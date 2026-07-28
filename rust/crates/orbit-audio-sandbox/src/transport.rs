@@ -33,7 +33,7 @@
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -270,6 +270,10 @@ pub struct CommandMailboxResponse {
 #[derive(Debug)]
 pub enum CommandMailboxError {
     Mapping(io::Error),
+    SidecarCleanup {
+        path: PathBuf,
+        error: io::Error,
+    },
     InvalidArgument(String),
     Busy {
         seq: u64,
@@ -302,6 +306,11 @@ impl fmt::Display for CommandMailboxError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Mapping(error) => write!(f, "plugin state mailbox mapping failed: {error}"),
+            Self::SidecarCleanup { path, error } => write!(
+                f,
+                "abandoned sidecar cleanup failed: {}: {error}",
+                path.display()
+            ),
             Self::InvalidArgument(detail) => {
                 write!(f, "invalid plugin state sidecar path: {detail}")
             }
@@ -343,7 +352,7 @@ impl fmt::Display for CommandMailboxError {
 impl std::error::Error for CommandMailboxError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Mapping(error) => Some(error),
+            Self::Mapping(error) | Self::SidecarCleanup { error, .. } => Some(error),
             _ => None,
         }
     }
@@ -445,6 +454,8 @@ impl CommandMailboxHost {
                 if ack != in_flight.seq {
                     return Err(CommandMailboxError::Poisoned { seq: in_flight.seq });
                 }
+                // SAFETY: region はこのメソッドが open_shared で得た生存 mapping を指す。
+                unsafe { warn_if_abandoned_save_succeeded(region, in_flight) };
                 remove_abandoned_sidecar(&in_flight.sidecar_path)?;
                 state.in_flight = None;
             }
@@ -564,6 +575,10 @@ impl CommandMailboxHost {
             .state
             .lock()
             .map_err(|_| CommandMailboxError::CoordinatorPoisoned)?;
+        if let Some(in_flight) = state.in_flight.as_ref() {
+            // SAFETY: region はこのメソッドが open_shared で得た生存 mapping を指す。
+            unsafe { warn_if_abandoned_save_succeeded(region, in_flight) };
+        }
         // SAFETY: mmap は生存し、旧 child の死亡確認後なので child と reset writer は競合しない。
         unsafe { reset_child_starting(region) };
         state.generation = state.generation.wrapping_add(1);
@@ -575,11 +590,40 @@ impl CommandMailboxHost {
     }
 }
 
+/// timeout で見捨てたコマンドが**実は成功していた**まま破棄される時に warning を残す。
+///
+/// UIH.3 が想定する大きな state（fsync が 5 秒を超えうる）では実際に起こる。無言で消すと、
+/// ユーザーは保存失敗を見た後、正しく書き終えていた state が消えたことに気づけない。
+///
+/// # Safety
+///
+/// `region` は生存している mapping を指していること。本ファイルの他の生ポインタ関数
+/// （[`service_command_mailbox`] / [`reset_child_starting`] 等）と同じ契約。
+/// **素の `fn` にしない** — 呼び出し側に「このポインタの有効性は誰が保証するのか」を
+/// 見せるのがこの crate の慣習で、その慣習だけがガードになっている。
+unsafe fn warn_if_abandoned_save_succeeded(region: *mut SharedRegion, in_flight: &InFlightCommand) {
+    if !in_flight.abandoned {
+        return;
+    }
+    let ack = unsafe { (*region).cmd_ack_seq.load(Ordering::Acquire) };
+    let result = unsafe { (*region).cmd_result.load(Ordering::Relaxed) };
+    if ack == in_flight.seq && result == CMD_RESULT_OK {
+        tracing::warn!(
+            seq = in_flight.seq,
+            path = %in_flight.sidecar_path.display(),
+            "discarding plugin state saved after mailbox timeout"
+        );
+    }
+}
+
 fn remove_abandoned_sidecar(path: &Path) -> Result<(), CommandMailboxError> {
     match std::fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(CommandMailboxError::Mapping(error)),
+        Err(error) => Err(CommandMailboxError::SidecarCleanup {
+            path: path.to_path_buf(),
+            error,
+        }),
     }
 }
 
@@ -859,6 +903,50 @@ mod tests {
 
     static MAILBOX_TEST_SEQ: AtomicU64 = AtomicU64::new(0);
 
+    #[derive(Clone)]
+    struct WarningSubscriber {
+        messages: Arc<Mutex<Vec<String>>>,
+    }
+
+    struct MessageVisitor<'a> {
+        messages: &'a Arc<Mutex<Vec<String>>>,
+    }
+
+    impl tracing::field::Visit for MessageVisitor<'_> {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn fmt::Debug) {
+            if field.name() == "message" {
+                self.messages
+                    .lock()
+                    .expect("warning messages lock")
+                    .push(format!("{value:?}"));
+            }
+        }
+    }
+
+    impl tracing::Subscriber for WarningSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            event.record(&mut MessageVisitor {
+                messages: &self.messages,
+            });
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
     fn mailbox_test_path(label: &str) -> std::path::PathBuf {
         let seq = MAILBOX_TEST_SEQ.fetch_add(1, Ordering::Relaxed);
         std::env::temp_dir().join(format!(
@@ -880,6 +968,91 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    #[test]
+    fn save_state_command_rejects_missing_and_empty_paths_before_capture() {
+        for path in [None, Some("")] {
+            let mut captures = 0;
+            let outcome = save_state_command(path, || {
+                captures += 1;
+                Ok::<_, io::Error>(b"must not be captured".to_vec())
+            });
+            assert_eq!(outcome.result, CMD_RESULT_BAD_ARG);
+            assert_eq!(outcome.len, 0);
+            assert_eq!(captures, 0, "invalid arguments must not invoke capture");
+        }
+    }
+
+    #[test]
+    fn save_state_command_reports_sidecar_io_errors_with_the_reason() {
+        let missing_parent = mailbox_test_path("missing-parent").join("state.bin");
+        let outcome = save_state_command(missing_parent.to_str(), || {
+            Ok::<_, io::Error>(b"captured state".to_vec())
+        });
+
+        assert_eq!(outcome.result, CMD_RESULT_IO_ERROR);
+        assert_eq!(outcome.len, 0);
+        assert!(
+            outcome.detail.contains("write")
+                && (outcome.detail.contains("No such file")
+                    || outcome.detail.contains("not found")),
+            "I/O failure detail must retain its reason: {:?}",
+            outcome.detail
+        );
+    }
+
+    #[test]
+    fn save_state_command_reports_capture_errors_as_plugin_failures() {
+        let sidecar = mailbox_test_path("capture-failure");
+        let outcome = save_state_command(sidecar.to_str(), || {
+            Err::<Vec<u8>, _>("oracle refused capture")
+        });
+
+        assert_eq!(outcome.result, CMD_RESULT_PLUGIN_ERROR);
+        assert_eq!(outcome.len, 0);
+        assert_eq!(outcome.detail, "oracle refused capture");
+        assert!(
+            !sidecar.exists(),
+            "capture failure must not create a sidecar"
+        );
+    }
+
+    #[test]
+    fn save_state_command_success_len_matches_the_written_file() {
+        let sidecar = mailbox_test_path("save-command-success");
+        let payload = b"captured plugin state";
+        let outcome = save_state_command(sidecar.to_str(), || Ok::<_, io::Error>(payload.to_vec()));
+
+        assert_eq!(outcome.result, CMD_RESULT_OK);
+        assert_eq!(outcome.len, payload.len() as u64);
+        assert_eq!(
+            std::fs::metadata(&sidecar).expect("sidecar metadata").len(),
+            outcome.len
+        );
+        assert_eq!(std::fs::read(&sidecar).expect("sidecar contents"), payload);
+        std::fs::remove_file(sidecar).expect("remove sidecar");
+    }
+
+    #[test]
+    fn abandoned_sidecar_cleanup_has_a_dedicated_diagnostic() {
+        let directory = mailbox_test_path("cleanup-directory");
+        std::fs::create_dir(&directory).expect("create cleanup target directory");
+
+        let error = remove_abandoned_sidecar(&directory)
+            .expect_err("remove_file on a directory must fail as sidecar cleanup");
+        assert!(matches!(
+            &error,
+            CommandMailboxError::SidecarCleanup { path, .. } if path == &directory
+        ));
+        assert!(
+            error
+                .to_string()
+                .starts_with("abandoned sidecar cleanup failed:"),
+            "cleanup failure must not claim that mmap failed: {error}"
+        );
+        assert!(!error.to_string().contains("mailbox mapping"));
+        std::fs::remove_dir(directory).expect("remove cleanup target directory");
     }
 
     // クロスプロセスで共有する以上、レイアウトが壊れると親子で別物を読む。サイズ/整列の回帰を捕捉。
@@ -1158,14 +1331,28 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(1));
             }
         });
-        assert_eq!(
-            host.issue_save_state_with_timeout(
-                Path::new("/tmp/orbit-mailbox-after-late-ack.bin"),
-                Duration::from_millis(250)
-            )
-            .expect("late exact ack releases the poisoned slot")
-            .bytes_written,
-            11
+        let warning_messages = Arc::new(Mutex::new(Vec::new()));
+        let response = tracing::subscriber::with_default(
+            WarningSubscriber {
+                messages: warning_messages.clone(),
+            },
+            || {
+                host.issue_save_state_with_timeout(
+                    Path::new("/tmp/orbit-mailbox-after-late-ack.bin"),
+                    Duration::from_millis(250),
+                )
+            },
+        )
+        .expect("late exact ack releases the poisoned slot");
+        assert_eq!(response.bytes_written, 11);
+        assert!(
+            warning_messages
+                .lock()
+                .expect("warning messages lock")
+                .iter()
+                .any(|message| message
+                    .contains("discarding plugin state saved after mailbox timeout")),
+            "late successful state cleanup must emit a warning"
         );
         assert!(
             !timed_out_sidecar.exists(),

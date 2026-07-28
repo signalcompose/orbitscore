@@ -969,6 +969,7 @@ dependencies = [
  "anyhow",
  "libc",
  "memmap2",
+ "tracing",
 ]
 
 [[package]]

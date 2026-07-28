@@ -89,6 +89,7 @@ export function extractSelectAudioDeviceMeta(line: string): { device: string } |
 }
 
 const SAVE_PLUGIN_STATE_META_RE = /^\s*\/\/#savePluginState\s+(.+?)\s*$/
+const SAVE_PLUGIN_STATE_REQUEST_ID_RE = /"requestId"\s*:\s*("(?:\\[\s\S]|[^"\\])*")/
 
 export interface SavePluginStateMeta {
   requestId: string
@@ -125,6 +126,17 @@ export function extractSavePluginStateMeta(line: string): SavePluginStateMeta | 
     requestId: payload.requestId,
     sequence: payload.sequence,
     index: payload.index as number,
+  }
+}
+
+function recoverSavePluginStateRequestId(line: string): string | undefined {
+  const match = line.match(SAVE_PLUGIN_STATE_REQUEST_ID_RE)
+  if (!match) return undefined
+  try {
+    const requestId = JSON.parse(match[1]!) as unknown
+    return typeof requestId === 'string' && requestId.length > 0 ? requestId : undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -248,7 +260,21 @@ export function createReplSession(interpreter: InterpreterV2): {
           await executeSavePluginStateMeta(interpreter, savePluginStateMeta)
         }
       } catch (error: any) {
-        console.error(`[ERROR] ${error?.message ?? String(error)}`)
+        const message = error?.message ?? String(error)
+        const requestId = recoverSavePluginStateRequestId(line)
+        if (requestId) {
+          console.log(
+            JSON.stringify({
+              savePluginState: {
+                requestId,
+                ok: false,
+                error: message,
+              },
+            }),
+          )
+        } else {
+          console.error(`[ERROR] ${message}`)
+        }
       }
       return
     }

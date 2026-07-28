@@ -130,7 +130,7 @@ export class ProjectStateStore {
     await fs.promises.mkdir(statesDirectory, { recursive: true })
 
     const saved = await this.audioEngine.savePluginState(target, absoluteStatePath)
-    if (saved.bytesWritten <= 0) {
+    if (!(saved.bytesWritten > 0)) {
       throw new Error(`Plugin state save returned an invalid byte count: ${saved.bytesWritten}.`)
     }
 

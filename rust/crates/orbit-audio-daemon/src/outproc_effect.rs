@@ -1016,6 +1016,129 @@ mod tests {
         let _ = std::fs::remove_file(&shm);
     }
 
+    #[test]
+    fn supervisor_respawn_passes_the_state_saved_after_initial_spawn() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture_dir = std::env::temp_dir().join(format!(
+            "orbit-effect-respawn-state-{}-{}",
+            std::process::id(),
+            SHM_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir(&fixture_dir).expect("create respawn fixture directory");
+        let args_path = fixture_dir.join("respawn-args.txt");
+        let child_script = fixture_dir.join("record-respawn-args.sh");
+        std::fs::write(
+            &child_script,
+            "#!/bin/sh\nscript_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" > \"$script_dir/respawn-args.txt\"\nsleep 0.2\n",
+        )
+        .expect("write respawn argument recorder");
+        let mut permissions = std::fs::metadata(&child_script)
+            .expect("respawn recorder metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&child_script, permissions)
+            .expect("make respawn recorder executable");
+
+        let shm = make_shm();
+        let stats = OutProcEffectStats::new();
+        let first = Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn initial stub child");
+        let first_pid = first.id();
+        let latest_state = Arc::new(Mutex::new(None));
+        let mailbox = Arc::new(CommandMailboxHost::new(shm.clone()));
+        let sup = EffectChildSupervisor::spawn_with_mailbox(
+            first,
+            shm.clone(),
+            stats.clone(),
+            child_script,
+            PathBuf::from("/ignored-effect.clap"),
+            None,
+            48_000,
+            latest_state.clone(),
+            mailbox.clone(),
+        )
+        .expect("supervisor spawn");
+
+        let saved_state = fixture_dir.join("saved-after-spawn.state");
+        let expected_state = b"saved state".to_vec();
+        let responder_shm = shm.clone();
+        let responder_state = expected_state.clone();
+        let responder = std::thread::spawn(move || {
+            let mmap = open_shared(&responder_shm).expect("open responder mapping");
+            let region = region_ptr(&mmap);
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let seq = loop {
+                let seq = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+                if seq != 0 {
+                    break seq;
+                }
+                assert!(Instant::now() < deadline, "host did not publish SAVE_STATE");
+                std::thread::yield_now();
+            };
+            let sidecar = unsafe {
+                orbit_audio_sandbox::transport::read_cstr_field(&(*region).cmd_arg)
+                    .expect("valid sidecar path")
+                    .to_owned()
+            };
+            std::fs::write(&sidecar, &responder_state).expect("write saved state sidecar");
+            unsafe {
+                (*region)
+                    .cmd_result_len
+                    .store(responder_state.len() as u64, Ordering::Relaxed);
+                (*region)
+                    .cmd_result
+                    .store(orbit_audio_sandbox::CMD_RESULT_OK, Ordering::Relaxed);
+                (*region).cmd_ack_seq.store(seq, Ordering::Release);
+            }
+        });
+        let response = mailbox
+            .issue_save_state(&saved_state)
+            .expect("mailbox state save succeeds after initial spawn");
+        responder.join().expect("state save responder");
+        assert_eq!(response.bytes_written, expected_state.len() as u64);
+        assert_eq!(
+            std::fs::read(&saved_state).expect("read successful saved state"),
+            expected_state
+        );
+        crate::engine_wrap::record_latest_state_after_save(&latest_state, saved_state.clone())
+            .expect("record latest state after successful save");
+
+        assert!(
+            Command::new("kill")
+                .args(["-9", &first_pid.to_string()])
+                .status()
+                .expect("kill initial child")
+                .success(),
+            "initial child must be forcibly terminated"
+        );
+        assert!(
+            poll_until(5, || args_path.exists()
+                && stats.respawn_count.load(Ordering::Relaxed) >= 1),
+            "watchdog did not respawn through the argument recorder"
+        );
+        let args: Vec<String> = std::fs::read_to_string(&args_path)
+            .expect("read respawn arguments")
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let state_index = args
+            .iter()
+            .position(|argument| argument == "--state")
+            .expect("respawn must receive --state");
+        assert_eq!(
+            args.get(state_index + 1).map(String::as_str),
+            saved_state.to_str(),
+            "--state must be immediately followed by the state saved after initial spawn"
+        );
+
+        drop(sup);
+        std::fs::remove_dir_all(fixture_dir).expect("remove respawn fixture directory");
+        let _ = std::fs::remove_file(shm);
+    }
+
     // Critical 2（test-coverage / code review）: open_shared 失敗時に first_child を orphan 化させず reap する。
     // shm ファイルを消してから spawn を呼び open_shared を失敗させ、Err 返却 + child が reap される
     // （kill -0 が ESRCH）ことを検証する。

@@ -797,5 +797,22 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
         `unclassified Global method: ${name}`,
       ).toBe(true)
     }
+
+    expect(
+      [...GLOBAL_DSL_METHODS].filter((name) => globalInternalMethods.has(name)),
+      'Global DSL vocabulary and internal-only API classifications must be disjoint',
+    ).toEqual([])
+  })
+
+  it('keeps plugin-state host APIs out of the Global DSL vocabulary', () => {
+    const internalOnlyNames = [
+      'savePluginState',
+      'resolvePluginStateTarget',
+      'pluginIndexError',
+    ] as const
+
+    for (const name of internalOnlyNames) {
+      expect(GLOBAL_DSL_METHODS.has(name), `${name} must remain an internal-only API`).toBe(false)
+    }
   })
 })

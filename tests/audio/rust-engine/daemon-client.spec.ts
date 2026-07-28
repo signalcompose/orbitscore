@@ -10,7 +10,7 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   DaemonClient,
@@ -325,6 +325,32 @@ describe('DaemonClient with mock server', () => {
       instance: 'plugin:lead',
     })
   })
+
+  it.each([
+    ['missing', undefined],
+    ['non-numeric', 'twelve'],
+  ])(
+    'GetPluginState rejects a %s bytes_written value at the daemon boundary without opening a socket',
+    async (_label, value) => {
+      const request = vi.spyOn(client as any, 'request').mockResolvedValue({
+        path: '/songs/states/lead.state',
+        ...(value === undefined ? {} : { bytes_written: value }),
+      })
+
+      await expect(
+        client.savePluginState(
+          { role: 'instrument', instance: 'plugin:lead' },
+          '/songs/states/lead.state',
+        ),
+      ).rejects.toThrow(`invalid bytes_written value: ${String(value)}`)
+      expect(request).toHaveBeenCalledTimes(1)
+      expect(request).toHaveBeenCalledWith('GetPluginState', {
+        path: '/songs/states/lead.state',
+        role: 'instrument',
+        instance: 'plugin:lead',
+      })
+    },
+  )
 
   it('PluginNoteOn/Off instance あり/なし: instance フィールドの含有/省略（#540 P1）', async () => {
     const url = await server.start({
