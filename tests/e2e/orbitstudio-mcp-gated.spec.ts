@@ -82,6 +82,25 @@ const CLAP_TEST_EFFECT_PATH = path.join(
   REPO_ROOT,
   'rust-spike/clap-test-effect/target/release/CLAPTestEffect.clap',
 )
+/// 🔴 CLAP oracle も VST3 と同じく**その場でビルドする**。
+///
+/// 以前はパス定数を指すだけで、`fs.existsSync` で存在を確認していた。しかし
+/// **存在は鮮度を意味しない** — 実際に 2026-07-29、`target/release/` に残っていた
+/// 1ヶ月前（#557 で `PluginStateImpl` を足す前）のバンドルを掴み、
+/// `plugin が CLAP_EXT_STATE を持たない` で state 保存が落ちた。テストは
+/// **1ヶ月前の成果物を検証していた**。
+///
+/// VST3 側は最初から `package-oracle.sh` をその場で叩いており、CLAP 側だけが
+/// 非対称だった。同じ形に揃える。`bundle-macos.sh` は `cd` を持たず cwd 依存なので
+/// `cwd` を明示すること。
+const CLAP_TEST_SYNTH_BUNDLE_SCRIPT = path.join(
+  REPO_ROOT,
+  'rust-spike/clap-test-synth/bundle-macos.sh',
+)
+const CLAP_TEST_EFFECT_BUNDLE_SCRIPT = path.join(
+  REPO_ROOT,
+  'rust-spike/clap-test-effect/bundle-macos.sh',
+)
 const VST3_SYNTH_PACKAGE_SCRIPT = path.join(
   REPO_ROOT,
   'rust/crates/orbit-vst3-synth-oracle/package-oracle.sh',
@@ -172,6 +191,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       //
       // Recreating `tests/fixtures/mcp-e2e/` under tmpRoot keeps the relative
       // resolution genuinely exercised (now rooted at tmpRoot instead of the repo).
+      // 実プラグインを attach する前に CLAP oracle を release でビルドし直す
+      // （定数の doc を参照 — 古いバンドルを検証してしまう事故が実際に起きた）。
+      for (const script of [CLAP_TEST_SYNTH_BUNDLE_SCRIPT, CLAP_TEST_EFFECT_BUNDLE_SCRIPT]) {
+        execFileSync('/bin/bash', [script, '--release'], {
+          cwd: path.dirname(script),
+          encoding: 'utf8',
+        })
+      }
+
       const fixtureRelDir = path.dirname(path.relative(REPO_ROOT, KICK_LOOP_FIXTURE))
       const workFixtureDir = path.join(tmpRoot, fixtureRelDir)
       fs.mkdirSync(workFixtureDir, { recursive: true })
