@@ -64,6 +64,13 @@ impl ClapInstrumentProcessor {
     ///
     /// メインスレッドから呼ぶこと（`PluginMainThreadHandle` の契約）。本 crate の
     /// プロセッサは `!Send` で単一スレッド運用なので、呼び出し側が守れば自然に満たされる。
+    ///
+    /// ⚠️ **VST3 と非対称な一点**: VST3 は「setup 済み・inactive の component へ setState」が
+    /// 正準だが、**CLAP は `clap/ext/state.h` が `[main-thread]` としか規定しておらず**、
+    /// activate / processing 状態の制約が無い。本実装は `instantiate_activate` の後
+    /// （activate + start_processing 済み）に適用する。規格上は適法だが、
+    /// **activate 後の `load` に無反応な実プラグインが存在しないことは検証できていない**
+    /// （自前 oracle でしか踏んでいない）。サードパーティ CLAP での確認は残課題。
     pub fn capture_state(&mut self) -> Result<Vec<u8>, ClapHostError> {
         let mut handle = self._instance.plugin_handle();
         let state = handle
@@ -114,14 +121,15 @@ impl ClapInstrumentProcessor {
     /// * `sample_rate` — サンプリングレート（Hz）。
     /// * `channels` — 出力チャンネル数（通常 2）。
     /// * `max_frames` — 最大フレーム数（共有メモリの 1 slot 容量に合わせる）。
-    /// プラグインをロードする。`state` を渡すと **返る前に適用済み**になる。
+    /// * `state` — 保存済み state。渡すと **返る前に適用済み**になる。
     ///
-    /// 🔴 **state を別呼び出しにしない理由**: 呼び出し側は load 後に
-    /// `publish_child_ready` を行う。復元を別呼び出しにすると「READY を先に publish して
-    /// しまい、復元前の既定音色で 1 ブロック鳴る」順序ミスが**書けてしまう**。
-    /// 実際、順序を入れ替えても配線テストが green のまま通ることが変異検証で判明した
-    /// （テストで守れない不変条件だった）。load に畳んで**表現できなくする**。
-    /// VST3 側 `Vst3InstrumentProcessor::load` も同じ形（`state: Option<&[u8]>`）。
+    /// # state を別呼び出しにしない理由
+    ///
+    /// 呼び出し側は load 後に `publish_child_ready` を行う。復元を別呼び出しにすると
+    /// 「READY を先に publish してしまい、復元前の既定音色で 1 ブロック鳴る」順序ミスが
+    /// **書けてしまう**。実際、順序を入れ替えても配線テストが green のまま通ることが
+    /// 変異検証で判明した（テストで守れない不変条件だった）。load に畳んで
+    /// **表現できなくする**。VST3 側 `Vst3InstrumentProcessor::load` も同じ形。
     pub fn load(
         path: &Path,
         id: Option<&str>,

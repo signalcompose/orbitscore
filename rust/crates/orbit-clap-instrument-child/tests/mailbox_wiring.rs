@@ -172,7 +172,20 @@ fn await_ack(region: *mut SharedRegion, seq: u64, child: &mut Child) -> (u32, u6
 }
 
 fn spawn_real_child(shm: &Path, plugin: &Path, state: &Path) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_orbit-clap-instrument-child"))
+    spawn_real_child_with_env(shm, plugin, state, &[])
+}
+
+fn spawn_real_child_with_env(
+    shm: &Path,
+    plugin: &Path,
+    state: &Path,
+    env: &[(&str, &str)],
+) -> Child {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orbit-clap-instrument-child"));
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    command
         .arg("--shm")
         .arg(shm)
         .arg("--plugin")
@@ -285,6 +298,121 @@ fn real_clap_child_reports_an_unknown_command_instead_of_hanging() {
     assert!(
         detail.contains("unknown cmd_kind"),
         "detail が理由を伝えていない: {detail:?}"
+    );
+
+    let _ = std::fs::remove_file(&restore_path);
+}
+
+/// 🔴 **空 state を「成功」として登記しない**ガードを実際に踏む（spec UIH.3）。
+///
+/// 通常の oracle は常に非空を返すため、このガードは**どのテストでも踏めなかった**
+/// （VST3 側は無防備であることをコメントで自覚するに留まっている）。oracle に
+/// 「何も書かずに成功を返す」モードを足して、host 側が `Err` に倒すことを実証する。
+///
+/// 規格上、state を持たないプラグインが 0 バイト + `true` を返すのは違反ではないので、
+/// これは架空の状況ではなく実在しうる挙動。
+#[test]
+fn an_empty_state_from_the_plugin_is_reported_as_a_failure_not_logged_as_success() {
+    let Some(bundle) = package_clap_oracle() else {
+        eprintln!("CLAP synth oracle build failed; loud skip for this machine");
+        return;
+    };
+
+    let restore_path = unique_temp("orbit-clap-empty-restore.bin");
+    std::fs::write(&restore_path, encode_state(0)).expect("restore state を書けない");
+
+    let shm = unique_temp("orbit-clap-empty.shm");
+    let mmap = create_shared(&shm).expect("create_shared");
+    let region = region_ptr(&mmap);
+    let mut guard = ChildGuard {
+        child: spawn_real_child_with_env(
+            &shm,
+            &bundle,
+            &restore_path,
+            &[("CLAP_TEST_SYNTH_EMPTY_STATE", "1")],
+        ),
+        region,
+        shm: shm.clone(),
+    };
+
+    wait_for_ready(region, &mut guard.child);
+
+    let sidecar = unique_temp("orbit-clap-empty-captured.bin");
+    let _ = std::fs::remove_file(&sidecar);
+    unsafe {
+        assert!(write_cstr_field(
+            &mut (*region).cmd_arg,
+            sidecar.to_str().expect("temp path is UTF-8")
+        ));
+        (*region).cmd_kind.store(CMD_SAVE_STATE, Ordering::Relaxed);
+        (*region).cmd_seq.store(1, Ordering::Release);
+    }
+
+    let (result, len, detail) = await_ack(region, 1, &mut guard.child);
+    assert_ne!(
+        result, CMD_RESULT_OK,
+        "空 state を成功として ack した（音色を失ったことに気づけなくなる）"
+    );
+    assert_eq!(len, 0, "失敗なのに長さが 0 でない");
+    assert!(
+        detail.contains("空"),
+        "detail が空 state を理由として伝えていない: {detail:?}"
+    );
+    assert!(
+        !sidecar.exists(),
+        "失敗したのにサイドカーを書いた（空ファイルが登記されうる）"
+    );
+
+    let _ = std::fs::remove_file(&restore_path);
+}
+
+/// 🔴 **壊れた state で復元に失敗したら、READY を publish せずに落ちる**こと。
+///
+/// 「復元に失敗したまま READY になって既定音色で鳴る」経路が無いことを実証する。
+/// コードを読めば `?` で早期 return するのは分かるが、**それを裏付ける実行結果が
+/// 両形式ともゼロ**だったので足す（silent-failure レビューの指摘）。
+#[test]
+fn a_corrupt_state_file_makes_the_child_exit_instead_of_going_ready_with_the_default_sound() {
+    let Some(bundle) = package_clap_oracle() else {
+        eprintln!("CLAP synth oracle build failed; loud skip for this machine");
+        return;
+    };
+
+    // magic を壊す。長さは正しいので「短すぎて弾かれた」ではないことが分かる。
+    let mut corrupt = encode_state(7);
+    corrupt[0] ^= 0xFF;
+    let restore_path = unique_temp("orbit-clap-corrupt-restore.bin");
+    std::fs::write(&restore_path, corrupt).expect("restore state を書けない");
+
+    let shm = unique_temp("orbit-clap-corrupt.shm");
+    let mmap = create_shared(&shm).expect("create_shared");
+    let region = region_ptr(&mmap);
+    let mut guard = ChildGuard {
+        child: spawn_real_child(&shm, &bundle, &restore_path),
+        region,
+        shm: shm.clone(),
+    };
+
+    // READY を待たずに終了を待つ。READY が立ってしまったら、それ自体が退行。
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Ok(Some(status)) = guard.child.try_wait() {
+            break status;
+        }
+        assert_ne!(
+            unsafe { (*region).child_status.load(Ordering::Acquire) },
+            CHILD_STATUS_READY,
+            "壊れた state なのに READY になった — 既定音色のまま鳴ってしまう"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "child が終了も READY もしないまま固まった"
+        );
+        std::hint::spin_loop();
+    };
+    assert!(
+        !status.success(),
+        "復元に失敗したのに成功終了した: {status}"
     );
 
     let _ = std::fs::remove_file(&restore_path);

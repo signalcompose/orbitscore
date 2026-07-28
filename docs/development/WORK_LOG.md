@@ -76,6 +76,33 @@ oracle 側も4種すべて red（magic 検証の迂回 / `note_on` がオフセ�
 
 **検証**: workspace 全 green / `clap-test-synth` 5 passed / fmt clean / clippy 警告 0。
 
+**レビュー（`/simplify` + レビュー3本 + Fable）で直したもの**:
+
+- **形式間の契約 pin が CLAP 側にしか無かった** — CLAP の定数を CLAP のリテラルと比べるだけの
+  自己言及的な pin で、**VST3 側の定数が変わっても何も red にならなかった**。
+  VST3 oracle にも同じテストを追加し、片側だけの契約破りが red になることを変異で確認
+- **READY 前に復元する不変条件が守られていなかった** — `apply_state_bytes` と
+  `publish_child_ready` を**入れ替えても配線テストが両方 green** だった（変異検証で判明）。
+  テストで捕まえるのではなく、`load()` に state を畳んで**順序ミスを表現できなくした**
+  （VST3 の `load(..., state: Option<&[u8]>)` と同じ形。CLAP だけが別呼び出しでリスクを抱えていた）
+- **空 state ガードが無防備だった** — oracle が常に非空を返すため踏めず、VST3 側は
+  「無防備である」とコメントで自覚するに留まっていた。oracle に「何も書かずに成功を返す」
+  モードを足して**実際に踏んで殺せるようにした**（規格上、state を持たないプラグインが
+  0 バイト + `true` を返すのは違反ではないので、架空の状況ではない）
+- **失敗系の実証がゼロだった** — 「復元に失敗したまま READY になって既定音色で鳴る経路は無い」
+  ことをコードでは読み取れるが、**裏付ける実行結果が両形式とも無かった**。破損 state で
+  READY が立たず非ゼロ終了することを実証するテストを追加
+- 陳腐化した assertion メッセージ（「CLAP child would bail on it」= **本 PR が偽にした前提**）を訂正
+- `activate` 後に `load` する点が VST3 と**非対称**であることを明記（規格上は適法だが、
+  サードパーティ CLAP での検証は残課題）
+
+**追加の変異検証（2種・すべて red・切り分けも確認）**: 空ガードを外す → 空 state テストのみ red /
+復元失敗を握りつぶす → 破損 state テストのみ red。
+
+> ⚠️ **CI の非対称（記録のみ）**: `rust-spike/` は CI のワークスペース外なので、
+> **CLAP oracle の契約 pin は CI で走らない**。配線テストも macOS 限定で CI は ubuntu のみ。
+> 実質の防波堤は main workspace 側の手書きリテラルとマージ前ゲートで、機械的強制ではない。
+
 **残**: effect 側の state（両形式とも引数すら無い）・param 列挙/設定・UI hosting。
 host（daemon）側の発行経路も未実装のままで、これは spec UIH.2 の規律
 （単一未処理コマンド・respawn 時の reset・演奏停止中のみ発行）を満たす PR が担う。

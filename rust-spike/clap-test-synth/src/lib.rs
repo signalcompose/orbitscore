@@ -183,10 +183,20 @@ impl PluginMainThread<'_, TestSynthShared> for TestSynthMainThread {}
 /// ループ検証が意味を失う（VST3 側 `setState` と同じ規律）。
 impl PluginStateImpl for TestSynthMainThread {
     fn save(&mut self, output: &mut OutputStream) -> Result<(), PluginError> {
+        // 🔴 テスト用モード: 何も書かずに成功を返す。
+        //
+        // host 側の「空 state を成功として登記しない」ガードは、通常の oracle が常に
+        // 非空を返すため**どのテストでも踏めなかった**（VST3 側は無防備であることを
+        // コメントで自覚するに留まっている）。CLAP 側はこのモードで実際に踏んで殺す。
+        // 規格上、state を持たないプラグインが 0 バイト + true を返すのは違反ではない
+        // （`clap/ext/state.h` は最小バイト数を要求していない）ので、実在しうる挙動でもある。
+        if std::env::var("CLAP_TEST_SYNTH_EMPTY_STATE").is_ok_and(|v| !v.is_empty()) {
+            return Ok(());
+        }
         let bytes = encode_state(self.semitone_offset.load(Ordering::Relaxed));
-        output.write_all(&bytes).map_err(|_| PluginError::Message(
-            "clap-test-synth: failed to write state",
-        ))
+        output
+            .write_all(&bytes)
+            .map_err(|_| PluginError::Message("clap-test-synth: failed to write state"))
     }
 
     fn load(&mut self, input: &mut InputStream) -> Result<(), PluginError> {
