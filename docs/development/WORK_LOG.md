@@ -17,10 +17,56 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.306 docs: design principles + E2E harness spec 正本化 #544 (Jul 28, 2026)
+### 6.307 docs(specs-v2): Phase 0 設計 spec 3本 正本化 #547 (Jul 28, 2026)
 
 **Date**: 2026-07-28
 **Status**: 🔄 PR 準備中
+
+**内容**: Epic #546 Phase 0（設計確定）の成果物を spec として正本化。owner が5論点を承認し、
+**プラグイン形式に依存しない UX** が中核制約として追加されたことを受けた設計。
+
+- **`docs/specs-v2/PLUGIN_CAPABILITY_ABSTRACTION_v1.md`（新規・CAP.n）**: 形式中立の能力抽象。
+  能力一覧（state get/set・dirty・param・preset・UI）・VST3/CLAP/AU 対応表・スレッド境界の契約・
+  ループの定義（受け入れの単位）
+- **`docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`（新規・UIH.n）**: child 実行モデル変更
+  （メインスレッドを Cocoa runloop へ・audio を別スレッド退避）・制御語彙拡張（コマンド
+  メールボックス）・可変長 state のサイドカー運搬・ウィンドウ所有の統一・アドレッシング・故障モード
+- **`docs/specs-v2/PROJECT_FILE_SPEC_v1.md`（新規・PRJ.n）**: `project.yaml` の登記モデル・
+  離散セーフポイント方式・復元の単位・優先順位・LLM 対称 MCP 面
+- INDEX.md に「VST ワークフロー」spec set の節を追加
+- 6.306 の Status をマージ済みへ更新
+
+**🔴 一次ソース照合で確定した非対称（設計判断の根拠）**:
+
+- **VST3 には state dirty 通知が存在しない**。`IComponentHandler` は4メソッドに閉じ
+  （`vst3-0.3.0` バインディングで実測）、`RestartFlags` も12個の閉じた列挙。最も近い
+  `kParamValuesChanged` の原文は「パラメータ値キャッシュの無効化要求」であって
+  「`getState` の出力が変わった」ではない
+- **CLAP には存在する**。`clap/ext/state.h`: *"Tell the host that the plugin state has
+  changed and should be saved again. If a parameter value changes, then it is implicit
+  that the state is dirty. [main-thread]"*
+- **VST3 の `IPlugFrame` は `resizeView` の1メソッドのみ**でウィンドウを閉じた通知が無い。
+  CLAP は floating 対応のため `clap_host_gui.closed(was_destroyed)` を持つ
+- **CLAP は state 用途を規格として区別**（`CLAP_STATE_CONTEXT_FOR_PROJECT` / `FOR_PRESET` /
+  `FOR_DUPLICATE`）— #541 の「登記 vs preset」の切り分けを規格側が裏付けている
+
+→ 最弱の形式（VST3）で成立する離散セーフポイント方式を基本とし、CLAP の `mark_dirty` は
+セーフポイントを増やす任意の最適化として扱う。変更検知ポーリングは不採用。
+
+**実装の現状（コード確認・是正対象）**: state 復元は VST3 instrument のみ（CLAP は
+`--state` を明示 `bail!`）／state 取得は VST3 も IPC 未接続・CLAP は `CLAP_EXT_STATE` 未使用／
+effect の state は両形式とも引数すら無い／param 列挙・GUI は両形式とも未実装／
+**`orbit-vst3-effect-child` が `copy-daemon-bin.sh` のバンドル対象から漏れており VST3
+エフェクトが out-of-process で動かない**。
+
+**カタログ層の実測（MCP `list_plugins` / `rescan_plugins`）**: スキャン総数 338 に対し
+catalog は 79 件（23.4%）。259 件が `moduleinfo.json` 欠如で skip され、その大半がエフェクト
+（TR5 / iZotope / UAD / Kontakt 7,8 / Massive X 等）。「effect の候補が出ない」の主因。
+
+### 6.306 docs: design principles + E2E harness spec 正本化 #544 (Jul 28, 2026)
+
+**Date**: 2026-07-28
+**Status**: ✅ **PR #545 MERGED**（main `3ad1c3f`・2026-07-28・#544 CLOSED）
 
 **内容**: 2026-07-28 の owner 設計議論で確定した規範を docs へ昇格（#544）。
 
