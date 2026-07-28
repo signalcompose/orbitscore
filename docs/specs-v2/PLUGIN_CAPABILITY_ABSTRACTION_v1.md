@@ -95,6 +95,7 @@ AU のホスト通知面を全列挙した結果（`AUAudioUnit.h`）:
 |---|---|
 | KVO on `parameterTree` | パラメータ**集合**の変化 |
 | KVO on `allParameterValues`（疑似プロパティ・`:588`） | *"issued in response to certain events where potentially all parameter values are invalidated. This includes changes to currentPreset, fullState, and fullStateForDocument."* → **キャッシュ無効化** |
+| KVO on `currentPreset` | プリセット切替。dirty の傍系（VST3 の `IUnitHandler::notifyProgramListChange` と同格）だが、上記 `allParameterValues` が currentPreset 変化を明示的に内包するため結論は変わらない |
 | KVO on bus properties / render observer | 無関係 |
 | v2 `AudioUnitAddPropertyListener` | 汎用のプロパティ変化監視 |
 

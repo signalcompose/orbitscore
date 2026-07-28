@@ -78,6 +78,24 @@ A design and implementation project for a new music DSL (Domain Specific Languag
   「no-op + 成功 ack」と明記
 - 軽微2件（CAP.0 の stale 参照 / CAP.6-7 に「確定後は spec へ反映」）
 
+ラウンド3（fix-scoped・**ラウンド2 で新設したハンドシェイク自体に3件**）:
+- **F-1**: 「host の保存完了を待つ」の待ち手が child メインスレッドで、応答（SAVE_STATE）を
+  処理するのも同じスレッド → **ブロックすれば必ずデッドロック**。緩く実装すれば保存スキップ。
+  完了シグナル（`evt_ack_seq`）の意味も未定義だった
+- **F-2**: 経路①のフック点を `windowWillClose` と明記していたが、AppKit が閉じ始めた**後**の
+  通知であり、保存の往復を挟めない。VST3 `removed()` は SDK 原文（`iplugview.h:151-152`）
+  *"The parent window of the view is **about to be** destroyed"* で親破棄**前**が契約 → 順序が壊れる
+- **F-3**: イベント欄を単一スロットで定義したため「取りこぼさない」規律と自己矛盾
+- → **UIH.2a（非同期ハンドシェイクのポリシー節）を新設**して一括修正: ①ブロックしない
+  （状態機械 + runloop 復帰）②`evt_ack_seq` = host 側処理の完結と定義 ③`UI_CLOSED` は
+  取りこぼし不可・`STATE_DIRTY` は合流可 ④紳士協定を作らない（3経路を同一手続きに）。
+  UIH.4c をフェーズ A / B の非同期継続へ改稿し、経路①を `windowShouldClose` へ変更
+- 併せて: PRJ.4 にファイル名の可逆エンコード要件（`a-b/c` と `a/b-c` の衝突防止）、
+  CAP.3a の列挙に `currentPreset` KVO を追加
+
+**レビューは3ラウンドの上限に到達**（CLAUDE.md の経済則）。ラウンド3の修正は独立再検証を
+経ていないため、その旨を owner へ明示して判断を仰ぐ。
+
 **AU の一次確認（Codex 到達不能につき自力実施）**: macOS SDK ヘッダで対応表の AU 列を確定。
 `fullState`（preset 用）と `fullStateForDocument`（ドキュメント用・*"Hosts saving documents
 should use this property"*）を**規格として区別**しており、CLAP の `FOR_PRESET` / `FOR_PROJECT`

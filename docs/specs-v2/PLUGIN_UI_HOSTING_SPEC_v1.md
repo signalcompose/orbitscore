@@ -65,38 +65,56 @@ state 取得（`getState` / `save`）はメインスレッドで行い、**オ�
 | `cmd_result: AtomicU32` | child → host | 結果コード（0 = 成功、以外は失敗種別） |
 | `cmd_result_detail: [u8; N]` | child → host | 失敗理由の文字列・サイズ等 |
 
-### 🔴 child → host の自発イベント（必須）
-
-**セーフポイントの実行主体は host である**（UIH.3: child は最終配置先へ書かない / PRJ.4:
-atomic rename と登記更新は host の責務）。ところが**セーフポイントの契機は child 側で発生する**:
-
-- プラグイン起点の dirty 通知（`setDirty` / `mark_dirty`）は child 内のホストコールバックに届く
-- UI クローズの経路①（閉じるボタン）③（CLAP `closed()`）は child 起点
-
-**したがって child が host へ自発的に通知する経路が要る。** コマンドメールボックスの鏡像:
-
-| フィールド | 方向 | 意味 |
-|---|---|---|
-| `evt_seq: AtomicU64` | child → host | child がイベント投函時に単調増加させる |
-| `evt_kind: AtomicU32` | child → host | `STATE_DIRTY` / `UI_CLOSED` / `UI_RESIZED` |
-| `evt_arg: [u8; N]` | child → host | 付随情報 |
-| `evt_ack_seq: AtomicU64` | host → child | host が処理した `evt_seq` |
-
-host は既にコマンド完了を polling しているため、同じループでイベントも拾える。
-
-**UIH.4c の手順1「セーフポイント発火」は、child 起点経路では
-「`UI_CLOSED` を投函して host のセーフポイント完了を待つ」を意味する。**
-
 **規律**:
 
-1. **コマンドとイベントはメインスレッドが処理する**。オーディオスレッドはどちらも見ない
+1. **コマンドはメインスレッドが処理する**。オーディオスレッドはメールボックスを見ない
 2. メインスレッドは runloop タイマー（数十 ms 周期で可）でメールボックスを polling する。
    UI 操作はリアルタイム要件を持たないため、この粒度で足りる
 3. **未完了のコマンドがあるうちは次を投函しない**（`cmd_seq` == `cmd_ack_seq` を待つ）。
    単一メールボックスで足りる — UI 操作は本質的に低頻度である
 4. **`cmd_result` を無視しない**。失敗は上位（daemon → MCP → 利用者）まで loud に伝える
-5. **イベントを取りこぼさない**。host は `evt_seq` の進みを検出し、`evt_ack_seq` を進める。
-   `STATE_DIRTY` の取りこぼしは保存機会の喪失に直結する
+
+## UIH.2a child → host の非同期ハンドシェイク
+
+**セーフポイントの実行主体は host だが、契機は child 側で発生する。** この非対称が本節の全体である。
+
+- 実行主体が host である根拠: UIH.3（child は最終配置先へ書かない）/ PRJ.4（atomic rename と
+  登記更新は host の責務）
+- 契機が child 側にある例: プラグイン起点の dirty 通知（`setDirty` / `mark_dirty`）は child 内の
+  ホストコールバックに届く。UI クローズの経路①③ も child 起点
+
+### ポリシー（以下すべてこれに従う）
+
+1. **child のメインスレッドは、いかなる待ち合わせでもブロックしない。**
+   待ちは**状態機械 + runloop への復帰**で表現する（継続渡し）。
+   ブロックすると、応答であるコマンドを処理するのも同じメインスレッドであるため**必ず
+   デッドロックする**
+2. **完了シグナルの意味を1つに固定する。** `evt_ack_seq` の前進 =
+   **「当該イベントに伴う host 側処理が完結した」**（保存の場合は SAVE_STATE の往復・
+   atomic rename・`project.yaml` 更新まで完了）。**受領のみの ack は定義しない**
+   （受領 ack だと child が保存前に先へ進み、セーフポイントが事実上スキップされる）
+3. **同期を要するイベントと、しないイベントを分ける。**
+   `UI_CLOSED` は**取りこぼし不可**（失うとクローズ手続きが完結しない）。
+   `STATE_DIRTY` は**最適化**なので合流（coalesce）してよい
+4. **紳士協定を作らない。** 「host が先に SAVE_STATE を済ませているはず」に依存しない。
+   **3経路すべてが同じハンドシェイクを通る**
+
+### イベント欄（リング）
+
+単一スロットでは規律3を満たせない（後続が先行を上書きする）。**既存の `seq_tag` / `SLOTS`
+と同じ per-slot 方式**を使う:
+
+| フィールド | 方向 | 意味 |
+|---|---|---|
+| `evt_seq: AtomicU64` | child → host | child が投函時に単調増加。スロットは `evt_seq % EVT_SLOTS` |
+| `evt_kind: [AtomicU32; EVT_SLOTS]` | child → host | `STATE_DIRTY` / `UI_CLOSED` / `UI_RESIZED` |
+| `evt_arg: [[u8; N]; EVT_SLOTS]` | child → host | 付随情報 |
+| `evt_ack_seq: AtomicU64` | host → child | **host 側処理が完結した** `evt_seq`（ポリシー2） |
+
+- host は `evt_ack_seq < evt_seq` の間、未処理スロットを順に処理して `evt_ack_seq` を進める
+- **リングが一周しそうな場合、child は `STATE_DIRTY` を合流させる**（最新1件のみ残す）。
+  `UI_CLOSED` は合流させず、投函できるまで状態機械が `Closing` に留まる
+- host は既にコマンド完了を polling しているため、同じループでイベントも拾える
 
 > **既存の `control` を再利用しない理由**: `control` は teardown 経路で
 > `reset_control_run` により RUN へ戻される（respawn の shm 再利用）。コマンドの意味論を
@@ -192,37 +210,51 @@ child がウィンドウを所有する以上、**プラグイン起点のリサ
 
 ### UIH.4c クローズの状態機械（経路条件つき・冪等）
 
-**UI 状態機械を持つ**: `Closed → Open → Closing → Closed`。
-**`Closing` / `Closed` 中に到達した閉じる要求は no-op として扱う。**
-
-> 🔴 **「無視」は「応答しない」ではない。** CLOSE_UI コマンド経由の要求は、no-op であっても
-> **成功 ack を返す**（`cmd_result = 0`・`cmd_result_detail = "already-closed"`）。
-> 返さないと UIH.2 規律3（`cmd_seq == cmd_ack_seq` を待つ）の host が永久待機する。
-> 閉じるボタンの直後に MCP `close_plugin_ui` が届くのは**正常系**である。
+**UI 状態機械**: `Closed → Open → Closing → Closed`。**`Closing` は非同期状態であり、
+その間 child はメインスレッドを runloop へ返す**（UIH.2a ポリシー1）。
 
 ```
-閉じる要求の到達経路（3つ）:
-  ① NSWindow の閉じるボタン（windowWillClose）        ← child 起点
-  ② CLOSE_UI コマンド                                ← host 起点
-  ③ CLAP closed(was_destroyed) コールバック            ← child 起点
-     （[thread-safe] → メインスレッドへ marshal）
+閉じる要求の到達経路（3つ・すべて同じハンドシェイクを通る）:
+  ① NSWindow の閉じるボタン → 🔴 windowShouldClose で NO を返して一旦拒否   ← child 起点
+  ② CLOSE_UI コマンド                                                      ← host 起点
+  ③ CLAP closed(was_destroyed) コールバック（[thread-safe] → main へ marshal） ← child 起点
 
-共通ハンドラ（Open のときのみ受理し、直ちに Closing へ遷移）:
-  1. 🔴 state セーフポイントを完了させる
-       ② の場合: host が CLOSE_UI の前に SAVE_STATE を済ませている
-       ①③ の場合: UI_CLOSED イベントを投函し（UIH.2）、host の保存完了を待つ
-  2. プラグイン側の解放 — 経路と形式で分岐:
-       VST3            : removed()
-       CLAP（①②）      : hide() → destroy()
-       CLAP（③ was_destroyed=true）: destroy() のみ（既に破棄済みの GUI へ hide() を呼ばない）
-       CLAP（③ was_destroyed=false）: ①② と同じ（hide() → destroy()）
-  3. NSWindow を破棄（このとき windowWillClose が再入するが Closing なので no-op）
-  4. Closed へ遷移
+フェーズ A（Open のときのみ受理・即座に Closing へ遷移して runloop へ復帰）:
+  - UI_CLOSED イベントを投函（UIH.2a）
+  - was_destroyed フラグを Closing 状態に保持
+  - 🔴 ここで待たない。ハンドラは戻る
 
-Closing / Closed 中の要求:
-  ①③ → 何もしない
-  ②   → 何もしないが 🔴 成功 ack を返す
+（host が UI_CLOSED を観測 → SAVE_STATE コマンドを投函 → child が runloop で処理 →
+  host が atomic rename と project.yaml 更新まで完了 → evt_ack_seq を前進）
+
+フェーズ B（runloop が evt_ack_seq の前進を観測して再開）:
+  1. プラグイン側の解放 — 形式と was_destroyed で分岐:
+       VST3                       : removed()   ← 親破棄より前（iplugview.h:151-152）
+       CLAP（was_destroyed=false） : hide() → destroy()
+       CLAP（was_destroyed=true）  : destroy() のみ（破棄済み GUI へ hide() を呼ばない）
+  2. NSWindow をプログラム的に閉じて破棄
+  3. Closed へ遷移
+  4. ② 起因なら CLOSE_UI に成功 ack を返す
+
+Closing / Closed 中に到達した追加の要求:
+  ①③ → no-op（既に手続き中）
+  ②   → no-op だが 🔴 成功 ack を返す（cmd_result=0 / detail="already-closing"）
 ```
+
+> 🔴 **経路①で `windowWillClose` を使ってはならない。** `windowWillClose` は AppKit が
+> ウィンドウを閉じ**始めた後**の通知で、そこから保存の往復（非同期・数十 ms〜）を挟むと
+> ウィンドウは待たずに消える。VST3 の `removed()` は SDK 原文（`iplugview.h:151-152`）で
+> *"The parent window of the view is **about to be** destroyed"* と規定され、**親破棄より前**に
+> 呼ぶ契約であるため、順序が壊れる。**`windowShouldClose` で一旦 NO を返し、フェーズ B の
+> 完了後にプログラム的に閉じる。**
+
+> 🔴 **「no-op」は「応答しない」ではない。** CLOSE_UI 経由の要求は no-op でも**成功 ack を
+> 返す**。返さないと UIH.2 規律3 の host が永久待機する。閉じるボタンの直後に MCP
+> `close_plugin_ui` が届くのは**正常系**である。
+
+> **②に特別扱いを設けない理由**: 「host が CLOSE_UI の前に SAVE_STATE を済ませている」は
+> child から検証できない紳士協定であり、host 側の実装が守らなければ黙って保存なしで閉じる
+> （UIH.2a ポリシー4）。3経路を同じ手続きに通せばこの穴は生じない。
 
 **セーフポイントは状態遷移の入口で1回だけ発火する。** runloop による直列化は「同時実行」を
 防ぐが「2回実行」は防がないため、**状態機械による再入ガードが設計要件**である
@@ -303,11 +335,15 @@ crash ループ時にウィンドウが繰り返し復活すると作業文脈�
   - **経路が重複到達しても1回のまま**（UIH.4c の再入ガードを外すと red になること）
   - **`Closing` 中の CLOSE_UI が成功 ack を返す**（ack を落とすと host が待ち続けて red）
   - **`was_destroyed=true` の経路で `hide()` が呼ばれない**（分岐を潰すと red になること）
-  - **セーフポイントがプラグイン解放より前に発火する**（`mock.invocationCallOrder` で順序固定・
-    順序を入れ替えると red）
+  - **フェーズ B が `evt_ack_seq` の前進**でのみ開始する（受領のみで進めると、保存前に解放が
+    走って red — UIH.2a ポリシー2 の検証）
+  - **フェーズ A がメインスレッドをブロックしない**（ハンドラ内でブロッキング待機に変異させると
+    SAVE_STATE が処理されずタイムアウトで red — UIH.2a ポリシー1 の検証）
+  - **経路①が `windowShouldClose` で一旦拒否する**（`windowWillClose` へ変異させると
+    解放より先にウィンドウが消えて red）
   - **`setFrame` が `attached` より前に呼ばれる**（順序を入れ替えると red）
-  - **`STATE_DIRTY` イベントを取りこぼさない**（`evt_seq` を連続で進めて全件処理されること・
-    1件落とすと red）
+  - **`UI_CLOSED` を取りこぼさない**（リングを単一スロットに変異させ、`STATE_DIRTY` を
+    連投して `UI_CLOSED` を上書きすると、クローズが完結せず red）
 - 判定は解析で行い人間を介在させない。**computer-use は受け入れ E2E の主経路にしない**
   （CAP.7）
 
