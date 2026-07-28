@@ -537,8 +537,8 @@ extern "system" fn GetPluginFactory() -> *mut IPluginFactory {
 /// 手順が変わったときに片方だけ直し忘れる。oracle 自身が「自分をどう package するか」を
 /// 知っているのが最も腐りにくい。
 ///
-/// ビルドに失敗したら `None` を返す（呼び出し側は loud skip する）。プロセス内で一度だけ
-/// 実行し、結果をキャッシュする。
+/// ビルドに失敗したら詳細を stderr に出力して `None` を返す。プロセス内で一度だけ実行し、
+/// 結果をキャッシュする。
 pub fn package_bundle() -> Option<std::path::PathBuf> {
     use std::sync::OnceLock;
     static BUNDLE: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
