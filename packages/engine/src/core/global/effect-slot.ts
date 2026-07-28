@@ -113,8 +113,9 @@ export interface EffectChainMapOptions<K> {
   readonly maxLength?: number
   readonly statePathFallback?: PluginStatePathFallbackResolver
   /**
-   * project.yaml の SC.5 identity に使う外向き receiver 名。`receiverId` が返す内部
-   * namespace (`seq:<name>` 等) とは異なる。
+   * project.yaml の SC.5 identity に使う外向き receiver 名。sequence effect / instrument
+   * では `receiverId` が返す内部 namespace (`seq:<name>`) と異なり、master effect では
+   * どちらも `'master'` で同値。
    */
   readonly externalReceiverId?: (key: K) => string
 }
@@ -286,6 +287,11 @@ export class EffectChainMap<K> {
           })
         : undefined
     const statePath = replacing?.statePath ?? spec.statePath ?? fallbackStatePath
+    if (fallbackStatePath !== undefined) {
+      console.log(
+        `[plugin-state] restoring '${externalReceiver}/${role}/${normalizedName}/${occurrence}' from ${fallbackStatePath}`,
+      )
+    }
     // bus / instance / statePath は末尾 optional（#540 P1/P2）。末尾の undefined を落とし、
     // 「必要な位置までの引数だけを渡す」契約を保つ。したがって statePath の無い master
     // insert は従来どおり 3 引数だが、statePath があればその位置までの undefined も渡す。

@@ -3,10 +3,11 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 
 import { stringify } from 'yaml'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AudioManager } from '../../packages/engine/src/core/global/audio-manager'
 import { LinkAudioManager } from '../../packages/engine/src/core/global/link-audio-manager'
+import { MixerManager } from '../../packages/engine/src/core/global/mixer-manager'
 import { PluginEffectManager } from '../../packages/engine/src/core/global/plugin-effect-manager'
 import { PluginInstrumentManager } from '../../packages/engine/src/core/global/plugin-instrument-manager'
 import { SequenceEffectManager } from '../../packages/engine/src/core/global/sequence-effect-manager'
@@ -36,6 +37,7 @@ function harness(options: { documentDirectory?: boolean; active?: boolean } = {}
     instrument: new PluginInstrumentManager(audio, audioManager, linkAudioManager),
     masterEffect: new PluginEffectManager(audio, audioManager, linkAudioManager),
     sequenceEffect: new SequenceEffectManager(audio, audioManager, linkAudioManager),
+    mixer: new MixerManager(audio, audioManager, linkAudioManager),
   }
 }
 
@@ -51,6 +53,10 @@ function register(
   }
   fs.writeFileSync(path.join(directory, 'project.yaml'), stringify({ version: 1, states: entries }))
 }
+
+beforeEach(() => {
+  vi.spyOn(console, 'log').mockImplementation(() => undefined)
+})
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -121,6 +127,10 @@ describe('project.yaml plugin state auto-restore (#541)', () => {
         ...expectedArgs(h.directory, absoluteStatePath),
       )
       expect(h.audio.loadPlugin).toHaveBeenCalledTimes(1)
+      expect(console.log).toHaveBeenCalledWith(
+        `[plugin-state] restoring '${key}' from ${absoluteStatePath}`,
+      )
+      expect(console.log).toHaveBeenCalledTimes(1)
     },
   )
 
@@ -142,6 +152,7 @@ describe('project.yaml plugin state auto-restore (#541)', () => {
       explicitStatePath,
     )
     expect(h.audio.loadPlugin).toHaveBeenCalledTimes(1)
+    expect(console.log).toHaveBeenCalledTimes(0)
   })
 
   it('U3 treats repeated declarations as idempotent using only the declared statePath', async () => {
@@ -206,6 +217,114 @@ describe('project.yaml plugin state auto-restore (#541)', () => {
         `Registered plugin state '${absoluteStatePath}' for 'lead/instrument/Synth/0' does not exist`,
       ),
     )
+    expect(error).toHaveBeenCalledTimes(1)
+  })
+
+  it('U4b degrades loudly when a registered state file is not readable', async () => {
+    const h = harness()
+    const relativeStatePath = 'states/unreadable.state'
+    const absoluteStatePath = path.join(h.directory, 'states', 'unreadable.state')
+    register(h.directory, { 'lead/instrument/Synth/0': relativeStatePath })
+    const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    const access = vi.spyOn(fs.promises, 'access').mockRejectedValueOnce(permissionError)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await h.instrument.instrument('lead', './Synth.clap')
+
+    expect(access).toHaveBeenCalledWith(absoluteStatePath, fs.constants.R_OK)
+    expect(access).toHaveBeenCalledTimes(1)
+    expect(h.audio.loadPlugin).toHaveBeenCalledWith(
+      path.join(h.directory, 'Synth.clap'),
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:lead',
+    )
+    expect(h.audio.loadPlugin).toHaveBeenCalledTimes(1)
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `Registered plugin state '${absoluteStatePath}' for 'lead/instrument/Synth/0' is not readable (EACCES: permission denied)`,
+      ),
+    )
+    expect(error).toHaveBeenCalledTimes(1)
+  })
+
+  it('U4c reports a registered state file removed before access as missing', async () => {
+    const h = harness()
+    const relativeStatePath = 'states/removed-before-access.state'
+    const absoluteStatePath = path.join(h.directory, 'states', 'removed-before-access.state')
+    register(h.directory, { 'lead/instrument/Synth/0': relativeStatePath })
+    const missingError = Object.assign(new Error('no such file or directory'), { code: 'ENOENT' })
+    const access = vi.spyOn(fs.promises, 'access').mockRejectedValueOnce(missingError)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await h.instrument.instrument('lead', './Synth.clap')
+
+    expect(access).toHaveBeenCalledWith(absoluteStatePath, fs.constants.R_OK)
+    expect(access).toHaveBeenCalledTimes(1)
+    expect(h.audio.loadPlugin).toHaveBeenCalledWith(
+      path.join(h.directory, 'Synth.clap'),
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:lead',
+    )
+    expect(h.audio.loadPlugin).toHaveBeenCalledTimes(1)
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `Registered plugin state '${absoluteStatePath}' for 'lead/instrument/Synth/0' does not exist`,
+      ),
+    )
+    expect(error).toHaveBeenCalledTimes(1)
+  })
+
+  it('U4d degrades loudly when a registered state path is a directory', async () => {
+    const h = harness()
+    const relativeStatePath = 'states/not-a-file.state'
+    const absoluteStatePath = path.join(h.directory, 'states', 'not-a-file.state')
+    fs.mkdirSync(absoluteStatePath, { recursive: true })
+    register(h.directory, { 'lead/instrument/Synth/0': relativeStatePath }, [])
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await h.instrument.instrument('lead', './Synth.clap')
+
+    expect(h.audio.loadPlugin).toHaveBeenCalledWith(
+      path.join(h.directory, 'Synth.clap'),
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:lead',
+    )
+    expect(h.audio.loadPlugin).toHaveBeenCalledTimes(1)
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `Registered plugin state '${absoluteStatePath}' for 'lead/instrument/Synth/0' is not a file`,
+      ),
+    )
+    expect(error).toHaveBeenCalledTimes(1)
+  })
+
+  it('U4e degrades loudly when the registered state path is empty', async () => {
+    const h = harness()
+    register(h.directory, { 'lead/instrument/Synth/0': '' }, [])
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    await h.instrument.instrument('lead', './Synth.clap')
+
+    expect(h.audio.loadPlugin).toHaveBeenCalledWith(
+      path.join(h.directory, 'Synth.clap'),
+      undefined,
+      'instrument',
+      undefined,
+      'plugin:lead',
+    )
+    expect(h.audio.loadPlugin).toHaveBeenCalledTimes(1)
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `Registered plugin state '${h.directory}' for 'lead/instrument/Synth/0' is not a file`,
+      ),
+    )
+    expect(error).toHaveBeenCalledTimes(1)
   })
 
   it('U5 throws with the manifest path when project.yaml is malformed', async () => {
@@ -213,12 +332,28 @@ describe('project.yaml plugin state auto-restore (#541)', () => {
     const manifestPath = path.join(h.directory, 'project.yaml')
     fs.writeFileSync(manifestPath, 'version: 1\nstates: [\n')
 
-    await expect(h.masterEffect.effect('./Limiter.clap')).rejects.toThrow(
-      expect.objectContaining({
-        message: expect.stringContaining(manifestPath),
-      }),
-    )
+    const failure = await h.masterEffect.effect('./Limiter.clap').catch((error) => error)
+
+    expect(failure).toBeInstanceOf(Error)
+    expect((failure as Error).message).toContain('Cannot parse plugin state manifest')
+    expect((failure as Error).message).not.toContain('Cannot read plugin state manifest')
+    expect((failure as Error).message).toContain(manifestPath)
     expect(h.audio.loadPlugin).not.toHaveBeenCalled()
+  })
+
+  it('U5c wraps a non-ENOENT manifest read failure with the manifest path and identity', async () => {
+    const h = harness()
+    const manifestPath = path.join(h.directory, 'project.yaml')
+    const permissionError = Object.assign(new Error('permission denied'), { code: 'EACCES' })
+    vi.spyOn(fs.promises, 'readFile').mockRejectedValueOnce(permissionError)
+
+    const failure = await h.instrument.instrument('lead', './Synth.clap').catch((error) => error)
+
+    expect(failure).toBeInstanceOf(Error)
+    expect((failure as Error).message).toContain('Cannot read plugin state manifest')
+    expect((failure as Error).message).toContain(manifestPath)
+    expect((failure as Error).message).toContain('lead/instrument/Synth/0')
+    expect(h.audio.loadPlugin).toHaveBeenCalledTimes(0)
   })
 
   it('U5b isolates an explicitly declared statePath from a malformed project.yaml', async () => {
@@ -307,6 +442,7 @@ describe('project.yaml plugin state auto-restore (#541)', () => {
     expect(h.audio.loadPlugin).toHaveBeenCalledTimes(1)
     expect(error).not.toHaveBeenCalled()
     expect(warn).not.toHaveBeenCalled()
+    expect(console.log).toHaveBeenCalledTimes(0)
   })
 
   it('U9 silently skips restoration when project.yaml does not exist', async () => {
@@ -326,6 +462,7 @@ describe('project.yaml plugin state auto-restore (#541)', () => {
     expect(h.audio.loadPlugin).toHaveBeenCalledTimes(1)
     expect(error).not.toHaveBeenCalled()
     expect(warn).not.toHaveBeenCalled()
+    expect(console.log).toHaveBeenCalledTimes(0)
   })
 
   it('U10 reuses the initial effective statePath during respawn self-heal', async () => {
@@ -380,5 +517,24 @@ describe('project.yaml plugin state auto-restore (#541)', () => {
       absoluteStatePath,
     )
     expect(h.audio.loadPlugin).toHaveBeenCalledTimes(1)
+  })
+
+  it('U12 keeps sum/aux inserts outside project.yaml auto-restore', async () => {
+    const h = harness()
+    register(h.directory, {
+      'drum/effect/GlueComp/0': 'states/external-receiver-decoy.state',
+      'sum:drum/effect/GlueComp/0': 'states/internal-receiver-decoy.state',
+    })
+
+    await h.mixer.sum('drum').effect('./GlueComp.clap')
+
+    expect(h.audio.loadPlugin).toHaveBeenCalledWith(
+      path.join(h.directory, 'GlueComp.clap'),
+      undefined,
+      'effect',
+      'sum-bus-0',
+    )
+    expect(h.audio.loadPlugin).toHaveBeenCalledTimes(1)
+    expect(console.log).toHaveBeenCalledTimes(0)
   })
 })

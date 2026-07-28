@@ -85,6 +85,11 @@ function parseManifest(source: string, manifestPath: string): ProjectManifest {
  * document context が無い場合と manifest / identity が未登記の場合は通常状態として no-op。
  * manifest 自体の破損は parseManifest の既存契約どおり throw し、登記済みファイルだけが
  * 欠損している場合は音を止めず state 無しへ degrade する（stderr には診断を残す）。
+ *
+ * project.yaml は `.orbs` と同じローカルプロジェクト内にあり、同一の信頼ドメインとして扱う。
+ * そのため手編集された登記値の絶対パスや `../` による project 外参照はユーザーの責任範囲。
+ * 書き込み側は常に `projectDirectory/states/<決定論的ファイル名>` を使うため、保存処理から
+ * project 外へ書き出すことは構造的にできない。
  */
 export async function resolveRegisteredPluginStatePath(
   projectDirectory: string,
@@ -96,32 +101,59 @@ export async function resolveRegisteredPluginStatePath(
     return undefined
   }
 
+  const key = identityKey(identity)
   const manifestPath = path.join(projectDirectory, 'project.yaml')
-  let manifest: ProjectManifest
+  let source: string
   try {
-    const source = await fs.promises.readFile(manifestPath, 'utf8')
-    manifest = parseManifest(source, manifestPath)
+    source = await fs.promises.readFile(manifestPath, 'utf8')
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return undefined
     }
-    throw error
+    // 原因を本文に連結する（PluginInstrumentManager.resolveStatePath と同型）。
+    // `{ cause }` は tsconfig の lib が ES2022.Error を含まないため使わない。
+    const cause = error instanceof Error ? ` (cause: ${error.message})` : ''
+    throw new Error(
+      `Cannot read plugin state manifest '${manifestPath}' for identity '${key}'.${cause}`,
+    )
   }
+  const manifest = parseManifest(source, manifestPath)
 
-  const key = identityKey(identity)
   const registeredPath = manifest.states[key]
   if (registeredPath === undefined) {
     return undefined
   }
 
   const absoluteStatePath = path.resolve(projectDirectory, registeredPath)
+  let stateStats: fs.Stats
   try {
-    await fs.promises.access(absoluteStatePath, fs.constants.F_OK)
+    stateStats = await fs.promises.stat(absoluteStatePath)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    const code = (error as NodeJS.ErrnoException).code
+    const detail = error instanceof Error ? ` (${code ?? 'unknown'}: ${error.message})` : ''
     console.error(
-      `Registered plugin state '${absoluteStatePath}' for '${key}' does not exist; ` +
+      `Registered plugin state '${absoluteStatePath}' for '${key}' ${
+        code === 'ENOENT' ? 'does not exist' : `is not readable${detail}`
+      }; loading the plugin without state.`,
+    )
+    return undefined
+  }
+  if (!stateStats.isFile()) {
+    console.error(
+      `Registered plugin state '${absoluteStatePath}' for '${key}' is not a file; ` +
         'loading the plugin without state.',
+    )
+    return undefined
+  }
+  try {
+    await fs.promises.access(absoluteStatePath, fs.constants.R_OK)
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    const detail = error instanceof Error ? ` (${code ?? 'unknown'}: ${error.message})` : ''
+    console.error(
+      `Registered plugin state '${absoluteStatePath}' for '${key}' ${
+        code === 'ENOENT' ? 'does not exist' : `is not readable${detail}`
+      }; loading the plugin without state.`,
     )
     return undefined
   }

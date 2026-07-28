@@ -911,6 +911,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         countAttachFailures(afterRestoredAttachLog),
         `Cycle B instrument attach must add no OUTPROC_ATTACH_FAILED. Log tail: ${afterRestoredAttachLog.slice(-1200)}`,
       ).toBe(attachFailuresBeforeRestored)
+      expect(
+        afterRestoredAttachLog,
+        `Cycle B must surface the automatic project-state restore. Log tail: ${afterRestoredAttachLog.slice(-1200)}`,
+      ).toMatch(/\[plugin-state\] restoring[^\r\n]*stSeq\/instrument\/CLAPTestSynth\/0/)
 
       const playRestored = await activeClient.call('evaluate_orbitscore', {
         code: ['stSeq.play(1)', 'RUN(stSeq)'].join('\n'),
