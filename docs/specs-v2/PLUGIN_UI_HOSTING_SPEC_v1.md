@@ -63,10 +63,24 @@ state 取得（`getState` / `save`）はメインスレッドで行い、**オ�
 | `cmd_arg: [u8; N]` | host → child | 固定長の引数域（パス文字列・param id + 値など）。可変長は UIH.3 |
 | `cmd_ack_seq: AtomicU64` | child → host | 処理完了した `cmd_seq`。host はこれで完了を判定 |
 | `cmd_result: AtomicU32` | child → host | 結果コード（0 = 成功、以外は失敗種別） |
-| `cmd_result_detail: [u8; N]` | child → host | 失敗理由の文字列・サイズ等 |
+| `cmd_result_len: AtomicU64` | child → host | 成功時に生成したバイト数（UIH.3 のサイドカー長） |
+| `cmd_result_detail: [u8; N]` | child → host | **失敗理由の文字列のみ**。成功時は空 |
 
 **規律**:
 
+0. 🔴 **host は ack を受け取るまで次のコマンドを投函してはならない（MUST）**。
+   メールボックスは1件分の領域しか持たないため、ack 前に `cmd_seq` を進めると
+   前のコマンドは**一度も実行されないまま**上書きされ、しかも child は新しい `cmd_seq` を
+   ack するので、`cmd_ack_seq >= 発行 seq` を見ている host には**成功に見える**。
+   host 側の待機ヘルパはタイムアウトを持ち、ack された `seq` が発行した `seq` と
+   一致することまで確認すること
+0-b. 🔴 **child の respawn 時、host はメールボックスを reset しなければならない（MUST）**。
+   `SharedRegion` は respawn 間で再利用され、`reset_child_starting` は `child_status` /
+   `child_flags` しか戻さない。未処理コマンドを残したまま新しい incarnation を起こすと、
+   **replacement child が前世代宛のコマンドを自分宛として実行し、`cmd_result=0` で ack する**
+   （「保存したはずが別インスタンスの state だった」を成功として登記する経路）。
+   host は「未処理なら失敗として ack を打ってから」replacement を spawn すること。
+   *現状 host 側の発行経路は未実装のため未到達。発行経路を足す PR がこの規律を同時に満たすこと*
 1. **コマンドはメインスレッドが処理する**。オーディオスレッドはメールボックスを見ない
 2. メインスレッドは runloop タイマー（数十 ms 周期で可）でメールボックスを polling する。
    UI 操作はリアルタイム要件を持たないため、この粒度で足りる
@@ -210,7 +224,7 @@ host は `evt_ack_seq < evt_seq` の間、未処理スロットを**順に**処�
 ```
 SAVE_STATE:
   host  → cmd_arg = 出力先パス（host が用意した一時パス）
-  child → 一時パスへ書き込み → fsync → cmd_result=0 / cmd_result_detail=バイト数
+  child → 一時パスへ書き込み → fsync → cmd_result=0 / cmd_result_len=バイト数
   host  → 読み取り後、PROJECT_FILE_SPEC の atomic 書き込みで確定させる
 
 LOAD_STATE:
@@ -220,8 +234,19 @@ LOAD_STATE:
 
 - **child は最終配置先へ直接書かない**。確定（atomic rename）は host 側の責務
   （PRJ.4）。child がクラッシュしても登記簿が壊れない
+- **一時パスの用意と削除は host の責務**。child は「指定されたパスへ書く」だけで、
+  自分では消さない（child がクラッシュした残骸も host が掃除する）。
+  パスは衝突しない名前を host が採ること（child は検証しない — 同一信頼境界内であり、
+  child 内では既にプラグインの任意コードが動いているため、パス検証に追加の防御価値はない）
 - 書き込み失敗・サイズ 0・読み取り不能はすべて `cmd_result` の失敗として返す。
   **サイズ 0 の state を「成功」として登記しない**
+- 🔴 **audio 専用スレッドへの分離（UIH.1 の目標状態）が完了するまで、host は演奏停止中にのみ
+  `SAVE_STATE` を発行すること（MUST）。** 現状 child のメインループは audio 処理とコマンド処理を
+  同一スレッドで直列に回しており、サイドカーの `fsync` は数 ms〜数十 ms ブロックしうる。
+  演奏中に発行すると、そのブロック分だけ次の audio slot が遅延し **dropout を生む**
+  （小バッファ 64/32 サンプルは本プロジェクトの性能ゴールであり、この遅延は許容できない）。
+  分離が完了したらこの制約は外れる。
+  *host 側の発行経路は未実装のため現在は未到達。発行経路を足す PR がこの制約を満たすこと*
 
 ## UIH.4 ウィンドウの所有 — 形式中立のためホスト所有に統一
 

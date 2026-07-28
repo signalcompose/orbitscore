@@ -15,3 +15,7 @@ path = "src/main.rs"
 orbit-vst3-host = { path = "../orbit-vst3-host" }
 orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }
 anyhow = "1"
+
+[dev-dependencies]
+# 配線テスト (tests/mailbox_wiring.rs) が実プラグインとして oracle をロードする。
+orbit-vst3-synth-oracle = { path = "../orbit-vst3-synth-oracle" }

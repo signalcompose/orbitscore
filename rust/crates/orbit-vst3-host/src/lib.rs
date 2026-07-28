@@ -806,6 +806,47 @@ fn apply_state_bytes(
 }
 
 impl Vst3InstrumentProcessor {
+    /// #555: 現在の plugin state を **バイト列として取り出す**（DAW ループの保存側）。
+    ///
+    /// VST3 正準の永続化は `IComponent::getState`。ここでは controller chunk を含めず
+    /// component chunk のみを返す — 復元側（`apply_state_chunks`）が magic 無しの
+    /// raw component state を受理する契約なので対称になる。
+    ///
+    /// **スレッド**: UI/メインスレッドから呼ぶこと（CAP.5・VST3 の規約）。
+    /// child のメインループ（現状は audio spin loop・Phase 2 で runloop 化）が呼び出す。
+    ///
+    /// `getState` が失敗した、または空を返した場合は `Err` を返す — **空 state を
+    /// 「成功」として上位へ渡さない**（サイズ 0 を登記すると音色を失う）。
+    pub fn capture_state(&self) -> Result<Vec<u8>, Vst3HostError> {
+        let component = self
+            .component
+            .as_ref()
+            .ok_or_else(|| Vst3HostError::State("component is not loaded".into()))?;
+
+        let stream_wrapper = ComWrapper::new(MemoryStream::new());
+        let stream = stream_wrapper
+            .to_com_ptr::<IBStream>()
+            .ok_or_else(|| Vst3HostError::State("MemoryStream exposes no IBStream".into()))?;
+
+        let result = unsafe { component.getState(stream.as_ptr()) };
+        if !is_ok(result) {
+            return Err(Vst3HostError::State(format!(
+                "IComponent::getState failed (tresult {result:#x})"
+            )));
+        }
+
+        // `MemoryStream` は本 module 内の自前実装なので、COM の seek+read を往復せず
+        // 直接読む（`InputEventList` が `wrapper.events.borrow_mut()` を使うのと同じ流儀）。
+        let bytes = stream_wrapper.data.borrow().clone();
+        if bytes.is_empty() {
+            return Err(Vst3HostError::State(
+                "IComponent::getState produced an empty chunk — refusing to record it as state"
+                    .into(),
+            ));
+        }
+        Ok(bytes)
+    }
+
     pub fn load(
         bundle_path: &Path,
         sample_rate: f64,

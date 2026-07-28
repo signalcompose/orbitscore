@@ -272,10 +272,8 @@ fn package_oracle() -> Option<PathBuf> {
 }
 
 fn package_synth_oracle() -> Option<PathBuf> {
-    static ORACLE: OnceLock<Option<PathBuf>> = OnceLock::new();
-    ORACLE
-        .get_or_init(|| run_package_script("orbit-vst3-synth-oracle"))
-        .clone()
+    // package 手順は oracle 自身が持つ（`orbit-vst3-instrument-child` の配線テストとの共有）。
+    orbit_vst3_synth_oracle::package_bundle()
 }
 
 /// `crates/<crate_dir>/package-oracle.sh` を実行して bundle の絶対パスを得る（失敗は loud skip）。
@@ -335,4 +333,137 @@ fn real_plugin_candidates() -> Vec<PathBuf> {
         paths.extend(rest);
     }
     paths
+}
+
+/// 実測した基本周波数（ゼロ交差の平均間隔から求める・単調な正弦波前提）。
+///
+/// 期待値は **仕様の式**（`orbit_vst3_synth_oracle::voice_frequency_hz`）から導出し、
+/// 実装が出した値と付き合わせない（E2E_HARNESS_SPEC の改ざん耐性）。
+fn measured_frequency_hz(interleaved_stereo: &[f32], sample_rate: f64) -> f64 {
+    // 左チャンネルのみを見る。正 → 負 の交差回数から周期を数える。
+    let left: Vec<f32> = interleaved_stereo.iter().step_by(2).copied().collect();
+    let mut crossings = 0usize;
+    let mut first = None;
+    let mut last = 0usize;
+    for i in 1..left.len() {
+        if left[i - 1] <= 0.0 && left[i] > 0.0 {
+            if first.is_none() {
+                first = Some(i);
+            }
+            last = i;
+            crossings += 1;
+        }
+    }
+    let first = first.expect("no upward zero crossing found — signal is silent?");
+    assert!(crossings >= 2, "need at least 2 crossings, got {crossings}");
+    let periods = (crossings - 1) as f64;
+    let samples = (last - first) as f64;
+    sample_rate * periods / samples
+}
+
+/// 🔴 #555 + #553: **ループ通し**（記録 → 再起動 → 同じ音）をデバイス不要で検証する。
+///
+/// 「宣言 → 音色を変える → **記録** → 終了 → **再起動** → 同じ音で鳴る」の中核。
+/// UI もデバイスも使わず、**周波数の解析だけで判定**する（無人・改ざん耐性）。
+#[test]
+fn state_round_trip_reproduces_the_same_pitch() {
+    use orbit_vst3_synth_oracle::{encode_state, voice_frequency_hz};
+
+    let Some(bundle) = package_synth_oracle() else {
+        eprintln!("VST3 synth oracle build failed; loud skip for this machine");
+        return;
+    };
+
+    const KEY: i16 = 69;
+    const OFFSET: i32 = 7; // 完全5度上。既定(0)と明確に違う音になる。
+                           // 周波数測定に十分な長さを取る（512 frames では 440Hz が数周期しか入らない）。
+    const RENDER_BLOCKS: usize = 16;
+
+    let render = |state: Option<&[u8]>| -> (Vec<f32>, Vst3InstrumentProcessor) {
+        let (mut processor, _info) =
+            Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, state)
+                .unwrap_or_else(|error| panic!("failed to load synth oracle: {error}"));
+        processor.push_note_on(0, KEY, 0.8, 0);
+        let mut all = Vec::new();
+        for _ in 0..RENDER_BLOCKS {
+            let mut audio = vec![0.0; FRAMES * 2];
+            assert!(processor.process_block(&mut audio));
+            all.extend_from_slice(&audio);
+        }
+        (all, processor)
+    };
+
+    // ── 1. 既定（offset 0）で鳴らす。基準になる音。
+    let (baseline_audio, _baseline) = render(None);
+    let baseline_hz = measured_frequency_hz(&baseline_audio, SAMPLE_RATE);
+    let expected_baseline = voice_frequency_hz(KEY, 0) as f64;
+    assert!(
+        (baseline_hz - expected_baseline).abs() / expected_baseline < 0.02,
+        "baseline {baseline_hz:.1}Hz != 仕様式 {expected_baseline:.1}Hz"
+    );
+
+    // ── 2. 「音色を変える」= state を適用して起動する。音が変わることを確認する。
+    let shifted_state = encode_state(OFFSET);
+    let (shifted_audio, shifted) = render(Some(&shifted_state));
+    let shifted_hz = measured_frequency_hz(&shifted_audio, SAMPLE_RATE);
+    let expected_shifted = voice_frequency_hz(KEY, OFFSET) as f64;
+    assert!(
+        (shifted_hz - expected_shifted).abs() / expected_shifted < 0.02,
+        "shifted {shifted_hz:.1}Hz != 仕様式 {expected_shifted:.1}Hz"
+    );
+    assert!(
+        (shifted_hz - baseline_hz).abs() / baseline_hz > 0.1,
+        "state を変えたのに音が変わっていない（{shifted_hz:.1}Hz vs {baseline_hz:.1}Hz）— \
+         これでは復元の成否を音で判定できない"
+    );
+
+    // ── 3. 「記録」= 実行中インスタンスから state を吸い上げる（#555 の capture_state）。
+    let recorded = shifted
+        .capture_state()
+        .expect("capture_state must return the live plugin state");
+    assert!(!recorded.is_empty(), "記録した state が空");
+
+    // ── 4. 「再起動」= 記録した state で新しいインスタンスを起こす。
+    let (restored_audio, _restored) = render(Some(&recorded));
+    let restored_hz = measured_frequency_hz(&restored_audio, SAMPLE_RATE);
+
+    // ── 5. 「同じ音で鳴る」。
+    assert!(
+        (restored_hz - shifted_hz).abs() / shifted_hz < 0.02,
+        "復元後 {restored_hz:.1}Hz が記録前 {shifted_hz:.1}Hz と一致しない — ループが閉じていない"
+    );
+    assert!(
+        (restored_hz - expected_shifted).abs() / expected_shifted < 0.02,
+        "復元後 {restored_hz:.1}Hz が仕様式 {expected_shifted:.1}Hz と一致しない"
+    );
+}
+
+/// #555: `capture_state()` が **chunk を過不足なく**取り出すことを押さえる。
+///
+/// ⚠️ **このテストは「空 chunk を Err にする」分岐を検証していない。** oracle は常に
+/// 非空を返すため、その経路を踏めない（`bytes.is_empty()` を消す変異はこのテストでは
+/// 殺せないことを実測で確認済み）。**空チェックは現時点で無防備**であり、それを
+/// 塞ぐにはモック plugin（getState が何も書かない）が要る。
+///
+/// 本テストが実際に守るのは **取りこぼしと余剰**: 長さを仕様の `STATE_LEN` に固定するので、
+/// stream 読み出しがバイトを落とす／余計に足す変異は red になる。
+#[test]
+fn capture_state_returns_exactly_the_oracle_state_length() {
+    let Some(bundle) = package_synth_oracle() else {
+        eprintln!("VST3 synth oracle build failed; loud skip for this machine");
+        return;
+    };
+    let (processor, _info) =
+        Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES as i32, None)
+            .unwrap_or_else(|error| panic!("failed to load synth oracle: {error}"));
+
+    let captured = processor
+        .capture_state()
+        .expect("oracle always produces a non-empty chunk");
+    assert_eq!(
+        captured.len(),
+        orbit_vst3_synth_oracle::STATE_LEN,
+        "oracle の state 長が仕様の STATE_LEN と一致しない — \
+         capture_state が chunk を取りこぼしているか余分に足している"
+    );
 }

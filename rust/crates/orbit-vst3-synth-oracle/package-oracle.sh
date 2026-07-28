@@ -16,7 +16,19 @@ fi
 dylib="target/$profile/liborbit_vst3_synth_oracle.dylib"
 [ -f "$dylib" ] || { echo "dylib not found: $dylib" >&2; exit 1; }
 
-bundle="target/vst3-fixtures/SynthOracle.vst3"
+# 🔴 出力先は**呼び出し元ごとに分ける**（既定は PID）。
+#
+# このスクリプトは複数クレートのテストから呼ばれる（`orbit-vst3-host` のループ通しテストと
+# `orbit-vst3-instrument-child` の配線テスト）。それぞれ**別プロセス**なので、固定パスへ
+# `rm -rf` → `mkdir` → `cp` すると、片方の `cp` の最中にもう片方が消す・`dlopen` した瞬間に
+# 差し替わる、といった競合が起きる。`cargo test` は既定でテストバイナリを逐次実行するので
+# 今は表面化しないが、`cargo test -p A` と `cargo test -p B` を別ターミナルで並行実行したり
+# `cargo nextest`（クロスバイナリ並列が既定）へ移ると即座に踏む。
+#
+# 手順の共有（直し忘れ防止）が目的であって、成果物を共有する必要は無いので、
+# 出力先を分けて競合そのものを無くす。
+slot="${2:-$$}"
+bundle="target/vst3-fixtures/$slot/SynthOracle.vst3"
 rm -rf "$bundle"
 mkdir -p "$bundle/Contents/MacOS"
 cp "$dylib" "$bundle/Contents/MacOS/SynthOracle"

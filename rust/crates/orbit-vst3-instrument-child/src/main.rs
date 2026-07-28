@@ -10,6 +10,11 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 #[cfg(target_os = "macos")]
 use anyhow::{bail, Context, Result};
 #[cfg(target_os = "macos")]
+use orbit_audio_sandbox::transport::{
+    service_command_mailbox, write_sidecar, CommandOutcome, CMD_RESULT_BAD_ARG,
+    CMD_RESULT_IO_ERROR, CMD_RESULT_PLUGIN_ERROR, CMD_SAVE_STATE,
+};
+#[cfg(target_os = "macos")]
 use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
     ParentWatch, SharedRegion, VoiceAddr, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK,
@@ -261,6 +266,34 @@ fn classify_event(event: &NeutralEvent) -> EventAction {
     }
 }
 
+/// `CMD_SAVE_STATE` の本体。戻り値は [`CommandOutcome`] で、これを
+/// `service_command_mailbox` が `cmd_result` / `cmd_result_len` / `cmd_result_detail` へ
+/// publish する（この関数は共有メモリに直接触らない）。
+///
+/// 戻り値 = `(cmd_result, cmd_result_len, cmd_result_detail)`。**どの失敗経路でも
+/// 理由を返す**（silent に握り潰さない）。
+#[cfg(target_os = "macos")]
+fn handle_save_state(
+    path_arg: Option<&str>,
+    instrument: &Vst3InstrumentProcessor,
+) -> CommandOutcome {
+    let Some(path) = path_arg.filter(|candidate| !candidate.is_empty()) else {
+        return CommandOutcome::failed(
+            CMD_RESULT_BAD_ARG,
+            "cmd_arg is empty or not NUL-terminated UTF-8",
+        );
+    };
+    let bytes = match instrument.capture_state() {
+        Err(error) => return CommandOutcome::failed(CMD_RESULT_PLUGIN_ERROR, format!("{error}")),
+        Ok(bytes) => bytes,
+    };
+    // UIH.3 は fsync を要求する（`write_sidecar` が担う）。
+    match write_sidecar(path, &bytes) {
+        Err(error) => CommandOutcome::failed(CMD_RESULT_IO_ERROR, format!("write {path}: {error}")),
+        Ok(()) => CommandOutcome::ok(bytes.len() as u64),
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn main() -> Result<()> {
     let args = parse_args()?;
@@ -317,6 +350,15 @@ fn main() -> Result<()> {
         if parent_watch.should_exit() {
             eprintln!("[orbit-vst3-instrument-child] 親プロセス死亡を検知、終了する");
             break;
+        }
+        // #555: host からのコマンドを処理する（UIH.2）。audio ブロックの合間に1件ずつ。
+        // `cmd_seq` が ack より進んでいれば未処理。**ここはメインスレッド**なので
+        // VST3 の state 操作契約（UI スレッド）を満たす。
+        unsafe {
+            service_command_mailbox(region, |kind, arg| match kind {
+                CMD_SAVE_STATE => Some(handle_save_state(arg, &instrument)),
+                _ => None,
+            });
         }
         let cur = unsafe { (*region).seq_request.load(Acquire) };
         if cur <= last {

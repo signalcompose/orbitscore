@@ -11,7 +11,10 @@ publish = false
 [lib]
 name = "orbit_vst3_synth_oracle"
 path = "src/lib.rs"
-crate-type = ["cdylib"]
+# #553: cdylib は VST3 バンドル用。rlib を併記して **Rust のテストから仕様の式
+# （`voice_frequency_hz`）と state エンコードを参照**できるようにする — 期待値を
+# 実装からハードコードせず式から導出するため（E2E_HARNESS_SPEC の改ざん耐性）。
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 vst3 = "0.3"

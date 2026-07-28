@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Acquire, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering, Ordering::Acquire, Ordering::Relaxed};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -649,4 +649,179 @@ fn gated_stress_32_frames_10k_burst_and_100k_events_per_second() {
         );
     }
     wait_for_seq(ctl, seq);
+}
+
+// ---------------------------------------------------------------------------
+// #555: コマンドメールボックス（UIH.2）を **実プロセス・実 shm 越しに**踏む。
+//
+// `orbit-vst3-host` 側の `state_round_trip_reproduces_the_same_pitch` は VST3 の
+// getState/setState が音として往復するかを見る層で、IPC は一切通らない。本節が
+// その対になる層 — フォーマット中立のプロトコル（cmd_seq を書く → child が
+// service_command_mailbox で処理 → cmd_ack_seq/cmd_result/cmd_result_len/
+// cmd_result_detail が読み戻る）そのものを検証する。
+// ---------------------------------------------------------------------------
+
+/// host 側から mailbox コマンドを1件発行する（`cmd_seq` の Release publish まで）。
+fn issue_command(ctl: *mut SharedRegion, seq: u64, kind: u32, arg: &str) {
+    unsafe {
+        assert!(
+            orbit_audio_sandbox::transport::write_cstr_field(&mut (*ctl).cmd_arg, arg),
+            "cmd_arg に収まらない引数を渡した"
+        );
+        (*ctl).cmd_kind.store(kind, Relaxed);
+        // 🔴 seq を最後に Release で publish する（child は Acquire で読む）。
+        (*ctl).cmd_seq.store(seq, Ordering::Release);
+    }
+}
+
+/// `cmd_ack_seq` が `seq` に達するまで待ち、`(result, len, detail)` を読み戻す。
+fn await_ack(ctl: *mut SharedRegion, seq: u64) -> (u32, u64, String) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while unsafe { (*ctl).cmd_ack_seq.load(Acquire) } < seq {
+        assert!(
+            Instant::now() < deadline,
+            "child が cmd_seq={seq} を ack しなかった（永久待ちの検出）"
+        );
+        std::hint::spin_loop();
+    }
+    unsafe {
+        (
+            (*ctl).cmd_result.load(Relaxed),
+            (*ctl).cmd_result_len.load(Relaxed),
+            orbit_audio_sandbox::transport::read_cstr_field(&(*ctl).cmd_result_detail)
+                .expect("detail が NUL 終端 UTF-8 でない")
+                .to_string(),
+        )
+    }
+}
+
+#[test]
+fn save_state_command_round_trips_through_real_child_over_shared_memory() {
+    let path = shm_path();
+    let mmap_host = create_shared(&path).expect("create_shared");
+    let child = spawn_child(&path, 0);
+    let mmap_ctl = open_shared(&path).expect("open_shared");
+    let ctl = region_ptr(&mmap_ctl);
+    let _guard = SandboxChildGuard::new(child, ctl, path);
+    let _host = PipelinedInstrumentHost::from_mmap(mmap_host);
+
+    let sidecar = std::env::temp_dir().join(format!("orbit-cmd-state-{}.bin", std::process::id()));
+    let _ = std::fs::remove_file(&sidecar);
+    issue_command(
+        ctl,
+        1,
+        orbit_audio_sandbox::CMD_SAVE_STATE,
+        sidecar.to_str().expect("temp path is UTF-8"),
+    );
+
+    let (result, len, detail) = await_ack(ctl, 1);
+    assert_eq!(
+        result,
+        orbit_audio_sandbox::CMD_RESULT_OK,
+        "save state が失敗した: {detail}"
+    );
+    assert_eq!(detail, "", "成功時に detail が空でない");
+    let written = std::fs::read(&sidecar).expect("サイドカーが書かれていない");
+    assert_eq!(
+        written, b"orbit-fixture-state",
+        "サイドカーの中身が child の書いたペイロードと一致しない"
+    );
+    assert_eq!(
+        len,
+        written.len() as u64,
+        "cmd_result_len が実際に書かれたバイト数と一致しない"
+    );
+    let _ = std::fs::remove_file(&sidecar);
+}
+
+#[test]
+fn unknown_command_kind_is_acked_instead_of_being_silently_dropped() {
+    let path = shm_path();
+    let mmap_host = create_shared(&path).expect("create_shared");
+    let child = spawn_child(&path, 0);
+    let mmap_ctl = open_shared(&path).expect("open_shared");
+    let ctl = region_ptr(&mmap_ctl);
+    let _guard = SandboxChildGuard::new(child, ctl, path);
+    let _host = PipelinedInstrumentHost::from_mmap(mmap_host);
+
+    // 未知の kind を黙って捨てると host は ack を永久に待つ。await_ack の
+    // タイムアウトがその退行を検出する。
+    issue_command(ctl, 1, 0xDEAD_BEEF, "/tmp/never-written");
+
+    let (result, len, detail) = await_ack(ctl, 1);
+    assert_eq!(
+        result,
+        orbit_audio_sandbox::CMD_RESULT_UNKNOWN_KIND,
+        "未知 kind が UNKNOWN_KIND 以外で ack された"
+    );
+    assert_eq!(len, 0, "失敗時に len が 0 でない");
+    assert!(
+        detail.contains("unknown cmd_kind"),
+        "detail が理由を伝えていない: {detail:?}"
+    );
+    assert!(
+        !std::path::Path::new("/tmp/never-written").exists(),
+        "未知 kind なのに副作用が起きた"
+    );
+}
+
+#[test]
+fn bad_command_arg_is_reported_without_writing_a_sidecar() {
+    let path = shm_path();
+    let mmap_host = create_shared(&path).expect("create_shared");
+    let child = spawn_child(&path, 0);
+    let mmap_ctl = open_shared(&path).expect("open_shared");
+    let ctl = region_ptr(&mmap_ctl);
+    let _guard = SandboxChildGuard::new(child, ctl, path);
+    let _host = PipelinedInstrumentHost::from_mmap(mmap_host);
+
+    issue_command(ctl, 1, orbit_audio_sandbox::CMD_SAVE_STATE, "");
+
+    let (result, len, _detail) = await_ack(ctl, 1);
+    assert_eq!(
+        result,
+        orbit_audio_sandbox::CMD_RESULT_BAD_ARG,
+        "空 cmd_arg が BAD_ARG 以外で ack された"
+    );
+    assert_eq!(len, 0, "失敗時に len が 0 でない");
+}
+
+#[test]
+fn consecutive_commands_are_each_acked_in_order() {
+    let path = shm_path();
+    let mmap_host = create_shared(&path).expect("create_shared");
+    let child = spawn_child(&path, 0);
+    let mmap_ctl = open_shared(&path).expect("open_shared");
+    let ctl = region_ptr(&mmap_ctl);
+    let _guard = SandboxChildGuard::new(child, ctl, path);
+    let _host = PipelinedInstrumentHost::from_mmap(mmap_host);
+
+    // 1件目が ack を書いた後、mailbox が次のコマンドを受け付ける状態に戻ることを見る
+    // （ack を「一度きり」にする退行 — cmd_ack_seq を上書きしない・cmd_seq 比較を
+    // 誤る等 — をここで殺す）。
+    let sidecar = std::env::temp_dir().join(format!("orbit-cmd-seq2-{}.bin", std::process::id()));
+    let _ = std::fs::remove_file(&sidecar);
+
+    issue_command(ctl, 1, 0xDEAD_BEEF, "/tmp/never-written-2");
+    let (first, _, _) = await_ack(ctl, 1);
+    assert_eq!(first, orbit_audio_sandbox::CMD_RESULT_UNKNOWN_KIND);
+
+    issue_command(
+        ctl,
+        2,
+        orbit_audio_sandbox::CMD_SAVE_STATE,
+        sidecar.to_str().expect("temp path is UTF-8"),
+    );
+    let (second, len, detail) = await_ack(ctl, 2);
+    assert_eq!(
+        second,
+        orbit_audio_sandbox::CMD_RESULT_OK,
+        "2件目が処理されなかった: {detail}"
+    );
+    assert_eq!(len, b"orbit-fixture-state".len() as u64);
+    assert_eq!(
+        detail, "",
+        "前コマンドの detail が残留している（detail をクリアしていない）"
+    );
+    let _ = std::fs::remove_file(&sidecar);
 }
