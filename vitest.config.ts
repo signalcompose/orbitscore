@@ -22,4 +22,16 @@ export default defineConfig({
       vscode: path.resolve(__dirname, 'tests/mocks/vscode.ts'),
     },
   },
+  test: {
+    // 🔴 `.claude/worktrees/` を discovery から外す。ここには subagent が作った
+    // ブランチのフルコピーが残っており、**同じ spec ファイルが何本も存在する**。
+    // vitest の位置引数は「発見済み全ファイルへの正規表現フィルタ」なので、
+    // `vitest run tests/e2e/orbitstudio-mcp-gated.spec.ts` と書いても worktree 内の
+    // 同名パスまで一致してしまう。
+    //
+    // 実害は理論上の話ではない: これで **実機 OrbitStudio が 7 個同時起動**し、
+    // daemon が 19 本残留した（2026-07-28。同種の事故は WORK_LOG にも記録がある）。
+    // gated spec 側のコメントは危険を警告しているだけで、何も強制していなかった。
+    exclude: ['**/node_modules/**', '**/dist/**', '**/.claude/worktrees/**'],
+  },
 })

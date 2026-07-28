@@ -54,6 +54,21 @@ clippy 警告 0・test green。
 
 ---
 
+**同時に塞いだ別の穴: vitest が `.claude/worktrees/` の複製 spec を拾う**
+
+gated E2E を回そうとして `vitest run tests/e2e/orbitstudio-mcp-gated.spec.ts` と書いたところ、
+**実機 OrbitStudio が7個同時起動し、daemon が19本残留した**（2026-07-28）。
+
+原因: vitest の位置引数は「発見済み全ファイルへの正規表現フィルタ」であり、パス指定ではない。
+`.claude/worktrees/agent-*` には subagent が作ったブランチのフルコピーが残っており、
+同名の spec が7本存在していた。gated spec のヘッダコメントはこの危険を警告しているが、
+**何も強制していなかった**（同種の事故は WORK_LOG 6.x にも記録がある）。
+
+`vitest.config.ts` に `exclude` を追加して discovery から外した。
+**実測: 発見ファイル数 7 → 1**（exclude を外して再計測し、7 に戻ることも確認済み）。
+
+---
+
 ### 6.307 docs(specs-v2): Phase 0 設計 spec 3本 正本化 #547 (Jul 28, 2026)
 
 **Date**: 2026-07-28
