@@ -52,13 +52,38 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - **CLAP は state 用途を規格として区別**（`CLAP_STATE_CONTEXT_FOR_PROJECT` / `FOR_PRESET` /
   `FOR_DUPLICATE`）— #541 の「登記 vs preset」の切り分けを規格側が裏付けている
 
-**🔴 初版の誤りと訂正（Fable 独立監査・同日）**: 初版は「**VST3 に state dirty 通知は
-存在しない**」と記載していたが**誤り**だった。ホストコールバック interface の列挙を
-`IComponentHandler` で止め、`IComponentHandler2` を見落としていた（このプロジェクト自身が
-#527 で記録した「登録済み4ハンドラはすべて正しい」型の誤りと同型）。決定①の結論は不変だが
-**根拠を「VST3 に無いから」→「両形式とも任意だから」へ差し替えた**。監査は他に4件を指摘し、
-すべて一次ソースで裏を取った上で反映済み（登記キーとアドレッシングの不一致 / UI クローズの
-経路分岐と冪等性 / embedded 非対応 CLAP の未規定 / リサイズ応答義務の欠落）。
+**🔴 Fable 独立監査 2 ラウンド（同日）— 実害級の誤りを計3件訂正**:
+
+ラウンド1（初版に対して・5件）:
+- **最重要**: 初版は「**VST3 に state dirty 通知は存在しない**」としていたが**誤り**。
+  ホストコールバック interface の列挙を `IComponentHandler` で止め、`IComponentHandler2` を
+  見落としていた（#527 で記録した「登録済み4ハンドラはすべて正しい」型の誤りと同型）。
+  決定①の結論は不変だが**根拠を「VST3 に無いから」→「両形式とも任意だから」へ差し替え**
+- 他4件: 登記キーとアドレッシングの不一致 / UI クローズの経路分岐と冪等性 /
+  embedded 非対応 CLAP の未規定 / リサイズ応答義務の欠落
+
+ラウンド2（ラウンド1の修正に対して・**修正が新たに持ち込んだ誤り2件を含む**）:
+- **A-1（実害級）**: 登記キーの例を `kick/effect/0` と **chain index ベース**で書いてしまい、
+  SC.5 規範(1)「(レシーバ, 正規化名, レシーバ内の同名出現順)」と食い違っていた。SC.5 規範(4)(5)
+  によりコメントアウト → 再評価で index はずれるため、**delay に reverb の state が適用される**
+  silent failure の入口だった → SC.5 の三つ組へ修正し、UIH.5 の位置アドレスとは層が違う
+  （揮発的コマンド引数 vs 永続キー）ことを両 spec に明記
+- **A-2（実害級）**: `setFrame` を `attached` の**後**に置いていた。SDK 原文
+  （`iplugview.h:146`）: *"Note that in this call the plug-in could call a
+  IPlugFrame::resizeView ()!"* — attach 中のリサイズ要求を取りこぼす順序だった → 順序を修正し、
+  `onSize` 呼び返し義務（`:177-178`）も追加
+- **A-3**: child→host の自発イベント経路が語彙に無く、dirty 受信と child 起点クローズが
+  セーフポイントを起動できなかった → UIH.2 に `evt_seq` / `evt_kind` / `evt_ack_seq` を追加
+- **A-4**: 「Closing 中の要求は無視」が CLOSE_UI の ack を返さず host が永久待機しうる →
+  「no-op + 成功 ack」と明記
+- 軽微2件（CAP.0 の stale 参照 / CAP.6-7 に「確定後は spec へ反映」）
+
+**AU の一次確認（Codex 到達不能につき自力実施）**: macOS SDK ヘッダで対応表の AU 列を確定。
+`fullState`（preset 用）と `fullStateForDocument`（ドキュメント用・*"Hosts saving documents
+should use this property"*）を**規格として区別**しており、CLAP の `FOR_PRESET` / `FOR_PROJECT`
+と同型 → **3形式のうち2つが区別を持つ**（PRJ.7 を強化）。一方 **AU に dirty 通知は無い**
+（通知面を全列挙・`dirty` の語が AudioToolbox ヘッダ全体に存在しない）→ 離散セーフポイント
+方式が3形式すべてで成立する唯一の共通解であることが確定。
 
 **実装の現状（コード確認・是正対象）**: state 復元は VST3 instrument のみ（CLAP は
 `--state` を明示 `bail!`）／state 取得は VST3 も IPC 未接続・CLAP は `CLAP_EXT_STATE` 未使用／

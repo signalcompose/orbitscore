@@ -65,14 +65,38 @@ state 取得（`getState` / `save`）はメインスレッドで行い、**オ�
 | `cmd_result: AtomicU32` | child → host | 結果コード（0 = 成功、以外は失敗種別） |
 | `cmd_result_detail: [u8; N]` | child → host | 失敗理由の文字列・サイズ等 |
 
+### 🔴 child → host の自発イベント（必須）
+
+**セーフポイントの実行主体は host である**（UIH.3: child は最終配置先へ書かない / PRJ.4:
+atomic rename と登記更新は host の責務）。ところが**セーフポイントの契機は child 側で発生する**:
+
+- プラグイン起点の dirty 通知（`setDirty` / `mark_dirty`）は child 内のホストコールバックに届く
+- UI クローズの経路①（閉じるボタン）③（CLAP `closed()`）は child 起点
+
+**したがって child が host へ自発的に通知する経路が要る。** コマンドメールボックスの鏡像:
+
+| フィールド | 方向 | 意味 |
+|---|---|---|
+| `evt_seq: AtomicU64` | child → host | child がイベント投函時に単調増加させる |
+| `evt_kind: AtomicU32` | child → host | `STATE_DIRTY` / `UI_CLOSED` / `UI_RESIZED` |
+| `evt_arg: [u8; N]` | child → host | 付随情報 |
+| `evt_ack_seq: AtomicU64` | host → child | host が処理した `evt_seq` |
+
+host は既にコマンド完了を polling しているため、同じループでイベントも拾える。
+
+**UIH.4c の手順1「セーフポイント発火」は、child 起点経路では
+「`UI_CLOSED` を投函して host のセーフポイント完了を待つ」を意味する。**
+
 **規律**:
 
-1. **コマンドはメインスレッドが処理する**。オーディオスレッドはメールボックスを見ない
+1. **コマンドとイベントはメインスレッドが処理する**。オーディオスレッドはどちらも見ない
 2. メインスレッドは runloop タイマー（数十 ms 周期で可）でメールボックスを polling する。
    UI 操作はリアルタイム要件を持たないため、この粒度で足りる
 3. **未完了のコマンドがあるうちは次を投函しない**（`cmd_seq` == `cmd_ack_seq` を待つ）。
    単一メールボックスで足りる — UI 操作は本質的に低頻度である
 4. **`cmd_result` を無視しない**。失敗は上位（daemon → MCP → 利用者）まで loud に伝える
+5. **イベントを取りこぼさない**。host は `evt_seq` の進みを検出し、`evt_ack_seq` を進める。
+   `STATE_DIRTY` の取りこぼしは保存機会の喪失に直結する
 
 > **既存の `control` を再利用しない理由**: `control` は teardown 経路で
 > `reset_control_run` により RUN へ戻される（respawn の shm 再利用）。コマンドの意味論を
@@ -126,12 +150,19 @@ CLAP のフローティングモードは使わない。
 OPEN_UI:
   child メインスレッド:
     VST3: createView("editor") → isPlatformTypeSupported("NSView")
-          → NSWindow 生成 → attached(nsview, "NSView") → setFrame(IPlugFrame 実装)
+          → 🔴 setFrame(IPlugFrame 実装)     ← attached より前（UIH.4b）
+          → getSize でウィンドウサイズを決めて NSWindow 生成
+          → attached(nsview, "NSView")
     CLAP: is_api_supported(cocoa, is_floating=false)
           → false なら 🔴 loud に失敗（UIH.4a）
-          → create(cocoa, false) → NSWindow 生成 → set_parent(nsview) → show()
-    getSize / get_size でウィンドウサイズを合わせる
+          → create(cocoa, false) → get_size → NSWindow 生成
+          → set_parent(nsview) → show()
 ```
+
+> 🔴 **`setFrame` は `attached` より前**でなければならない。SDK 原文
+> （`iplugview.h:146`・`attached()` の doc）: *"Note that in this call the plug-in could call
+> a IPlugFrame::resizeView ()!"* — **attach の最中にプラグインがリサイズを要求しうる**ため、
+> frame が未設定だとその要求を取りこぼす。`getSize` の初回取得も attach 前に行う。
 
 ### UIH.4a embedded 非対応プラグインの扱い
 
@@ -153,7 +184,8 @@ child がウィンドウを所有する以上、**プラグイン起点のリサ
 
 | 形式 | 経路 | 義務 |
 |---|---|---|
-| VST3 | `IPlugView::setFrame(IPlugFrame*)` — SDK 原文: *"Sets IPlugFrame object to allow the plug-in to inform the host about resizing"* | **`IPlugFrame` を実装して渡す**。null のままだと動的 UI を持つプラグインが誤動作しうる |
+| VST3 | `IPlugView::setFrame(IPlugFrame*)` — SDK 原文: *"Sets IPlugFrame object to allow the plug-in to inform the host about resizing"* | **`IPlugFrame` を実装し、`attached` より前に渡す**。null のままだと attach 中のリサイズ要求を取りこぼす |
+| VST3 | `IPlugView::onSize` — SDK 原文（`iplugview.h:177-178`）: *"Note that if the plug-in requests a resize (IPlugFrame::resizeView ()) onSize has to be called afterward."* | **`resizeView` を受理したら NSWindow をリサイズし、`onSize` を呼び返す** |
 | CLAP | `clap_host_gui.request_resize` / `resize_hints_changed`（`[thread-safe]`） | 受理してメインスレッドで NSWindow をリサイズ |
 
 `set_scale` / `get_resize_hints` も同様にメインスレッドで扱う。
@@ -161,23 +193,35 @@ child がウィンドウを所有する以上、**プラグイン起点のリサ
 ### UIH.4c クローズの状態機械（経路条件つき・冪等）
 
 **UI 状態機械を持つ**: `Closed → Open → Closing → Closed`。
-**`Closing` 中に到達した閉じる要求はすべて無視する**（冪等性）。
+**`Closing` / `Closed` 中に到達した閉じる要求は no-op として扱う。**
+
+> 🔴 **「無視」は「応答しない」ではない。** CLOSE_UI コマンド経由の要求は、no-op であっても
+> **成功 ack を返す**（`cmd_result = 0`・`cmd_result_detail = "already-closed"`）。
+> 返さないと UIH.2 規律3（`cmd_seq == cmd_ack_seq` を待つ）の host が永久待機する。
+> 閉じるボタンの直後に MCP `close_plugin_ui` が届くのは**正常系**である。
 
 ```
 閉じる要求の到達経路（3つ）:
-  ① NSWindow の閉じるボタン（windowWillClose）
-  ② CLOSE_UI コマンド
-  ③ CLAP closed(was_destroyed) コールバック（[thread-safe] → メインスレッドへ marshal）
+  ① NSWindow の閉じるボタン（windowWillClose）        ← child 起点
+  ② CLOSE_UI コマンド                                ← host 起点
+  ③ CLAP closed(was_destroyed) コールバック            ← child 起点
+     （[thread-safe] → メインスレッドへ marshal）
 
 共通ハンドラ（Open のときのみ受理し、直ちに Closing へ遷移）:
-  1. 🔴 state セーフポイントを発火（PRJ.3 (b)）
+  1. 🔴 state セーフポイントを完了させる
+       ② の場合: host が CLOSE_UI の前に SAVE_STATE を済ませている
+       ①③ の場合: UI_CLOSED イベントを投函し（UIH.2）、host の保存完了を待つ
   2. プラグイン側の解放 — 経路と形式で分岐:
        VST3            : removed()
        CLAP（①②）      : hide() → destroy()
        CLAP（③ was_destroyed=true）: destroy() のみ（既に破棄済みの GUI へ hide() を呼ばない）
        CLAP（③ was_destroyed=false）: ①② と同じ（hide() → destroy()）
-  3. NSWindow を破棄（このとき windowWillClose が再入するが Closing なので無視される）
+  3. NSWindow を破棄（このとき windowWillClose が再入するが Closing なので no-op）
   4. Closed へ遷移
+
+Closing / Closed 中の要求:
+  ①③ → 何もしない
+  ②   → 何もしないが 🔴 成功 ack を返す
 ```
 
 **セーフポイントは状態遷移の入口で1回だけ発火する。** runloop による直列化は「同時実行」を
@@ -202,8 +246,21 @@ LLM 側と非対称になる（DESIGN_PRINCIPLES §3 違反）。
 | daemon 以下 | `(シーケンス名, chain index)` だけを知る |
 
 これにより #474 の regex 依存はエディタ層に閉じ込められ、#495 言語サービス導入時も
-engine 側は影響を受けない。インスタンス同一性の規約は [SIGNAL_CHAIN_DSL_SPEC_v1.md](SIGNAL_CHAIN_DSL_SPEC_v1.md) の SC.5
-（レシーバ・正規化名・レシーバ内の同名出現順）に従う。
+engine 側は影響を受けない。
+
+### 🔴 位置アドレスは登記キーではない
+
+`(シーケンス名, chain index)` は「**今この瞬間**どれを開くか」を指す**揮発的なコマンド引数**
+である。**永続キーとして使ってはならない。**
+
+[SIGNAL_CHAIN_DSL_SPEC_v1.md](SIGNAL_CHAIN_DSL_SPEC_v1.md) SC.5 規範(4)(5) により、ブロック
+再評価はチェーンを置き換え、コメントアウト → 再評価でプラグインはアンロードされる。**index は
+そのたびにずれる。**
+
+**受理時に SC.5 のインスタンス同一性
+`(レシーバ, 正規化名, レシーバ内の同名出現順)` へ解決してから、state 登記に使う**
+（PRJ.1）。この解決を怠ると「UI で変えた音色が別のプラグインに適用される」silent failure に
+なる。
 
 ## UIH.6 ライフサイクル
 
@@ -244,9 +301,13 @@ crash ループ時にウィンドウが繰り返し復活すると作業文脈�
   とりわけ次を `toHaveBeenCalledTimes` で押さえる:
   - **閉じる3経路すべてでセーフポイントがちょうど1回発火する**（経路ごとに 0 回・2 回の変異）
   - **経路が重複到達しても1回のまま**（UIH.4c の再入ガードを外すと red になること）
+  - **`Closing` 中の CLOSE_UI が成功 ack を返す**（ack を落とすと host が待ち続けて red）
   - **`was_destroyed=true` の経路で `hide()` が呼ばれない**（分岐を潰すと red になること）
   - **セーフポイントがプラグイン解放より前に発火する**（`mock.invocationCallOrder` で順序固定・
     順序を入れ替えると red）
+  - **`setFrame` が `attached` より前に呼ばれる**（順序を入れ替えると red）
+  - **`STATE_DIRTY` イベントを取りこぼさない**（`evt_seq` を連続で進めて全件処理されること・
+    1件落とすと red）
 - 判定は解析で行い人間を介在させない。**computer-use は受け入れ E2E の主経路にしない**
   （CAP.7）
 

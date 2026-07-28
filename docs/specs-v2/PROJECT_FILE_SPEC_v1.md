@@ -28,22 +28,25 @@ state の運搬経路は [`PLUGIN_UI_HOSTING_SPEC_v1.md`](PLUGIN_UI_HOSTING_SPEC
 
 ```yaml
 version: 1
-states:                      # インスタンス同一性（SC.5）→ state ファイル（相対パス）
-  kick/instrument: states/kick-instrument.state
-  kick/effect/0:   states/kick-effect-0.state
-  lead/instrument: states/lead-instrument.state
+states:                      # インスタンス同一性（SC.5 の三つ組）→ state ファイル
+  kick/instrument/kontakt-8/0: states/kick-instrument-kontakt-8-0.state
+  kick/effect/reverb/0:        states/kick-effect-reverb-0.state
+  kick/effect/reverb/1:        states/kick-effect-reverb-1.state
+  lead/instrument/massive-x/0: states/lead-instrument-massive-x-0.state
 audio:
   device: "..."              # PRJ.1a: DSL 宣言があればそちらが優先
   sample_rate: 48000
 ```
+
+キーの構成 = **`<レシーバ>/<役割>/<正規化名>/<レシーバ内の同名出現順>`**。
 
 ```
 mysong/
   mysong.orbs            ← 楽譜（テキスト・人間が書く）
   project.yaml           ← 登記簿（テキスト・機械が書く・diff 可能）
   states/
-    kick-instrument.state  ← state 本体（バイナリ・マニフェストから相対参照）
-    kick-effect-0.state
+    kick-instrument-kontakt-8-0.state  ← state 本体（バイナリ・相対参照）
+    kick-effect-reverb-0.state
 ```
 
 - **バイナリを YAML へ埋め込まない**。Kontakt state は数十 MB 級。本体は `states/` の
@@ -52,19 +55,40 @@ mysong/
   正本が2つになる（drift 問題）
 - `version:` で migration に備える
 
-### 🔴 登記キーはインスタンス同一性で引く
+### 🔴 登記キーは SC.5 の三つ組で引く — チェーン位置ではない
 
-**キーはシーケンス名ではなく、UIH.5 と同じアドレッシング**（レシーバ + チェーン内位置）を使う。
+**キーは [SIGNAL_CHAIN_DSL_SPEC_v1.md](SIGNAL_CHAIN_DSL_SPEC_v1.md) SC.5 規範(1) の
+インスタンス同一性 = `(レシーバ, 正規化名, レシーバ内の同名出現順)` を使う。**
 
-理由: `CAP-STATE-GET` / `CAP-STATE-SET` は**必須能力**であり、CAP.6-2 により
-**effect も含めて全形式で揃える**対象である（CAP.0 は「effect の state は引数すら無い」を
-是正対象として列挙している）。シーケンス名だけをキーにすると、instrument 1 個 + effect N 個の
-チェーンを表現できず、UI から effect の音色を変えても登記できない。
+まず、シーケンス名だけでは足りない: `CAP-STATE-GET` / `CAP-STATE-SET` は**必須能力**であり、
+CAP.6-2 により **effect も含めて全形式で揃える**対象である（CAP.0 は「effect の state は
+引数すら無い」を是正対象として列挙している）。instrument 1 個 + effect N 個のチェーンを
+表現できないと、UI から effect の音色を変えても登記できない。
 
-インスタンス同一性の規約は [SIGNAL_CHAIN_DSL_SPEC_v1.md](SIGNAL_CHAIN_DSL_SPEC_v1.md) の SC.5
-（レシーバ・正規化名・レシーバ内の同名出現順）に従う。**UI を開く時のアドレス（UIH.5）と
-state を登記する時のキーは同一でなければならない** — 別体系にすると「UI で変えた音色が
-別のキーに保存される」事故が起きる。
+**そして、チェーン位置（index）をキーにしてはならない。** SC.5 規範(4)(5) により、
+ブロック再評価はチェーンを置き換え、コメントアウト → 再評価でプラグインはアンロードされる。
+index はそのたびにずれる:
+
+```
+チェーン [reverb, delay]     → reverb=index 0, delay=index 1
+reverb をコメントアウトして再評価 → delay=index 0
+
+index キーなら delay に reverb の state が適用される
+= 🔴 音色が黙って別のプラグインへ付け替わる silent failure
+```
+
+SC.5 の三つ組（名前 + 同名出現順）はこの操作に対して安定であり、**まさにそのために
+名前ベースで定義されている**。
+
+### UIH.5 の位置アドレスとの関係 — 層が違う
+
+| | 用途 | 寿命 |
+|---|---|---|
+| **UIH.5 の位置アドレス** `(シーケンス名, chain index)` | 「**今この瞬間**どれを開くか」を指すコマンド引数 | 揮発（呼び出し1回） |
+| **SC.5 の三つ組** | **同一性**。登記の永続キー | 永続 |
+
+**位置アドレスは受理時に SC.5 同一性へ解決してから登記に使う。**
+両者を同一視してはならない（初版は「同一でなければならない」と誤って規範化していた）。
 
 > v1 で instrument に限定する選択肢もありうるが、その場合 CAP.6-2 と衝突する。
 > **限定するなら CAP 側も同時に改訂すること**（片方だけ変えない）。
@@ -112,7 +136,7 @@ state を登記する時のキーは同一でなければならない** — 別�
 | (a) 明示保存 | MCP / コマンドからの保存要求（対称設計の LLM 半身） |
 | (b) UI クローズ時 | 人間が音色編集を終える自然な境界（UIH.4 の3経路すべて） |
 | (c) 停止・終了時 | 演奏停止 / エンジン終了 |
-| (d) 任意: プラグイン起点の dirty 通知受信時 | **最適化としてのみ**。これに依存した設計にしない。VST3 = `IComponentHandler2::setDirty`、CLAP = `clap_host_state.mark_dirty`。**両方の受け口を実装する**（CAP.6-7） |
+| (d) 任意: プラグイン起点の dirty 通知受信時 | **最適化としてのみ**。これに依存した設計にしない。VST3 = `IComponentHandler2::setDirty`（+ `performEdit` によるパラメータ編集通知）、CLAP = `clap_host_state.mark_dirty`、AU = **無し**（CAP.3a）。**受け口のある形式では実装する**（CAP.6-6） |
 
 ### 変更検知ポーリングを採らない根拠
 
@@ -195,17 +219,19 @@ DAW の「明示 preset ロード > プロジェクト保存状態」と同じ�
 
 CLAP は state の用途を規格として区別している（`clap-sys-0.5.0/src/ext/state_context.rs`）:
 
-| CLAP 定数 | 用途 | 本仕様での対応 |
-|---|---|---|
-| `CLAP_STATE_CONTEXT_FOR_PROJECT` | プロジェクト保存 | **`project.yaml` の `states:`** |
-| `CLAP_STATE_CONTEXT_FOR_PRESET` | preset として保存 | `CAP-PRESET-*` 側 |
-| `CLAP_STATE_CONTEXT_FOR_DUPLICATE` | 複製 | v1 では未使用 |
+| 用途 | CLAP | AU | VST3 |
+|---|---|---|---|
+| **プロジェクト / ドキュメント保存** → `project.yaml` の `states:` | `CLAP_STATE_CONTEXT_FOR_PROJECT` | `fullStateForDocument` | 区別なし |
+| **preset として保存** → `CAP-PRESET-*` 側 | `CLAP_STATE_CONTEXT_FOR_PRESET` | `fullState` | 区別なし |
+| 複製 | `CLAP_STATE_CONTEXT_FOR_DUPLICATE` | — | — |
 
-**規格側が既に「プロジェクト保存」と「preset」を区別している**ことは、PRJ.5 の
-「自動 state は1つ / 名前付き再利用は規格の preset で」という切り分けの裏付けになる。
+**3形式のうち2つ（CLAP・AU）が「ドキュメント保存」と「preset」を規格として区別している。**
+AU の原文は *"Hosts saving documents should use this property"*（`fullStateForDocument`）と
+ホストの取るべき側まで指定している。これは PRJ.5 の「自動 state は1つ / 名前付き再利用は
+規格の preset で」という切り分けの、規格2つ分の裏付けになる。
 
-VST3 には同等の区別が無いため、`CLAP_EXT_STATE_CONTEXT` は**あれば使う任意の改善**として
-扱い、無い場合は `clap_plugin_state` / `IComponent::getState` にフォールバックする
+VST3 には同等の区別が無いため、コンテキスト付き API は**あれば使う任意の改善**として扱い、
+無い場合は `clap_plugin_state` / `IComponent::getState` にフォールバックする
 （形式で挙動を変えないため、フォールバック側を基準の意味論とする）。
 
 ## PRJ.8 LLM 対称の MCP 面

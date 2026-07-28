@@ -29,8 +29,9 @@ preset・UI）を **VST3 / CLAP / 将来の AU で同一の UX** として提供
 **VST3 エフェクトは out-of-process で動かせない**。
 
 形式ごとに機能を足していくと、この縦割りが固定化する。**能力を先に定義し、各形式をその
-実装として揃える**。とりわけ、後述の CAP.3 のように**規格間で到達面が非対称**な箇所は、
-抽象を先に置かないと「先に実装した形式の都合」が設計に混入する。
+実装として揃える**。とりわけ、CAP.2 最終行（UI closed 通知 — CLAP にはあり VST3 には無い）の
+ように**規格間で到達面が非対称**な箇所は、抽象を先に置かないと「先に実装した形式の都合」が
+設計に混入する。
 
 ## CAP.1 能力の一覧
 
@@ -54,20 +55,60 @@ preset・UI）を **VST3 / CLAP / 将来の AU で同一の UX** として提供
 
 | 能力 | VST3 | CLAP | AU（v1 では非目標） |
 |---|---|---|---|
-| `CAP-STATE-GET` | `IComponent::getState` | `clap_plugin_state.save` | `kAudioUnitProperty_ClassInfo` / `fullState`（要一次確認） |
-| `CAP-STATE-SET` | `IComponent::setState` (+ `IEditController::setComponentState`) | `clap_plugin_state.load` | 同上（要一次確認） |
-| `CAP-STATE-DIRTY` | `IComponentHandler2::setDirty`（+ `performEdit`） | `clap_host_state.mark_dirty` | 要一次確認 |
-| `CAP-PARAM-LIST` | `IEditController::getParameterCount` / `getParameterInfo` | `clap_plugin_params.count` / `get_info` | `AUParameterTree`（要一次確認） |
-| `CAP-PARAM-GET/SET` | `getParamNormalized` / `setParamNormalized` | `get_value` / パラメータイベント | `AUParameter.value`（要一次確認） |
-| `CAP-PARAM-TEXT` | `getParamStringByValue` / `getParamValueByString` | `value_to_text` / `text_to_value` | 要一次確認 |
-| `CAP-PRESET-LIST/LOAD` | `IUnitInfo` program list | `clap_plugin_preset_load.from_location` | `factoryPresets` / `currentPreset`（要一次確認） |
-| `CAP-UI-OPEN` | `IEditController::createView` → `IPlugView::attached` | `clap_plugin_gui.create` → `set_parent` → `show` | `requestViewControllerWithCompletionHandler`（要一次確認） |
-| `CAP-UI-CLOSE` | `IPlugView::removed` | `clap_plugin_gui.hide` → `destroy` | 要一次確認 |
-| UI closed 通知 | **—**（`IPlugFrame` は `resizeView` の1メソッドのみ） | `clap_host_gui.closed(was_destroyed)` | 要一次確認 |
+| `CAP-STATE-GET` | `IComponent::getState` | `clap_plugin_state.save` | `AUAudioUnit.fullStateForDocument` |
+| `CAP-STATE-SET` | `IComponent::setState` (+ `IEditController::setComponentState`) | `clap_plugin_state.load` | 同上（同プロパティへ代入） |
+| `CAP-STATE-DIRTY` | `IComponentHandler2::setDirty`（+ `performEdit`） | `clap_host_state.mark_dirty` | **—**（CAP.3a） |
+| `CAP-PARAM-LIST` | `IEditController::getParameterCount` / `getParameterInfo` | `clap_plugin_params.count` / `get_info` | `AUAudioUnit.parameterTree` |
+| `CAP-PARAM-GET/SET` | `getParamNormalized` / `setParamNormalized` | `get_value` / パラメータイベント | `AUParameter.value` |
+| `CAP-PARAM-TEXT` | `getParamStringByValue` / `getParamValueByString` | `value_to_text` / `text_to_value` | `AUParameter` の value/string 変換 |
+| `CAP-PRESET-LIST/LOAD` | `IUnitInfo` program list | `clap_plugin_preset_load.from_location` | `factoryPresets` / `userPresets` / `currentPreset` |
+| `CAP-UI-OPEN` | `IEditController::createView` → `IPlugView::attached` | `clap_plugin_gui.create` → `set_parent` → `show` | `requestViewControllerWithCompletionHandler`（`AUViewController.h:83`） |
+| `CAP-UI-CLOSE` | `IPlugView::removed` | `clap_plugin_gui.hide` → `destroy` | view controller の破棄 |
+| UI closed 通知 | **—**（`IPlugFrame` は `resizeView` の1メソッドのみ） | `clap_host_gui.closed(was_destroyed)` | **—** |
 
-> **AU 列の扱い**: AU の実装は v1 の非目標であり、上表の AU 列は**未検証**である。
-> 推測で埋めず「要一次確認」と明示する。CAP.5 の境界条件を満たす限り、後から実装を
-> 差し込める。
+> **AU 列の扱い**: AU の**実装**は v1 の非目標だが、**到達面は macOS SDK ヘッダで一次確認済み**
+> （`AudioToolbox.framework/Headers/AUAudioUnit.h`・`CoreAudioKit.framework/Headers/AUViewController.h`）。
+> CAP.5 の境界条件を満たす限り、後から実装を差し込める。
+
+### AU が `fullState` ではなく `fullStateForDocument` である理由
+
+AU も **preset 用の state と ドキュメント用の state を規格として区別する**:
+
+> `fullState`: *"A persistable snapshot of the Audio Unit's properties and parameters,
+> suitable for saving as a **user preset**."*（`kAudioUnitProperty_ClassInfo` にブリッジ）
+>
+> `fullStateForDocument`: *"...suitable for saving in a **user's document**. This property is
+> distinct from fullState in that some state is suitable for saving in user presets, while
+> other state is not. ... **Hosts saving documents should use this property.**"*
+> （`kAudioUnitProperty_ClassInfoFromDocument` にブリッジ）
+
+`project.yaml` の `states:` は**ドキュメント側**に対応するため、AU では
+`fullStateForDocument` を使う。この区別は CLAP の
+`CLAP_STATE_CONTEXT_FOR_PROJECT` / `FOR_PRESET` と同型であり、**3形式のうち2つが規格として
+持っている**（PRJ.7）。
+
+## CAP.3a AU に dirty 通知は無い
+
+AU のホスト通知面を全列挙した結果（`AUAudioUnit.h`）:
+
+| 経路 | 意味 |
+|---|---|
+| KVO on `parameterTree` | パラメータ**集合**の変化 |
+| KVO on `allParameterValues`（疑似プロパティ・`:588`） | *"issued in response to certain events where potentially all parameter values are invalidated. This includes changes to currentPreset, fullState, and fullStateForDocument."* → **キャッシュ無効化** |
+| KVO on bus properties / render observer | 無関係 |
+| v2 `AudioUnitAddPropertyListener` | 汎用のプロパティ変化監視 |
+
+`allParameterValues` は VST3 の `kParamValuesChanged` と同型の**無効化通知**であり、
+「再保存せよ」の要求ではない。加えて **`dirty` という語は AudioToolbox のヘッダ全体に
+現れない**。
+
+→ **AU には `CAP-STATE-DIRTY` に相当するものが無い。** これにより、
+**dirty 通知に依存しない離散セーフポイント方式が3形式すべてで成立する唯一の共通解**である
+ことが確定する（CAP.3 の設計判断を AU 側からも支持する）。
+
+> **確信度: 中〜高。反証条件**: v2 の `kAudioUnitProperty_ClassInfo` に対する property
+> listener が「プラグイン起点の state 変化」を通知する契約だと Apple が別途明記していた場合。
+> ヘッダ内には該当記述が無いことを確認した。
 
 ## CAP.3 state dirty 通知 — 両形式に存在するが、いずれも「任意」
 
@@ -186,7 +227,9 @@ preset・UI）を **VST3 / CLAP / 将来の AU で同一の UX** として提供
 7. **必須能力には MCP 面が対応して存在する**。`CAP-PARAM-*` / `CAP-PRESET-*` の MCP tool
    （列挙・取得・設定・preset 選択）は、UI の実装有無にかかわらず提供される
    （DESIGN_PRINCIPLES §1）。tool 名・引数・観測形の詳細は実装 PR で定め、本仕様からは
-   「存在すること」のみを要求する
+   「存在すること」のみを要求する。**ただし確定後は本仕様へ反映する** — spec が単一
+   信頼情報源であり、tool のスキーマがコードにしか無い状態を恒久化させない
+   （DESIGN_PRINCIPLES §5）
 
 ## CAP.7 検証
 
@@ -213,6 +256,13 @@ preset・UI）を **VST3 / CLAP / 将来の AU で同一の UX** として提供
 | `kParamValuesChanged` / `kReloadComponent` の原文 | VST3 SDK `pluginterfaces/vst/ivsteditcontroller.h` |
 | `IPlugFrame` が `resizeView` の1メソッドのみであること | `vst3-0.3.0/src/bindings.rs`（`IPlugFrameVtbl`） |
 | `IPlugView::setFrame` が「プラグインがホストへリサイズを知らせるため」であること | VST3 SDK `pluginterfaces/gui/iplugview.h:184-185` |
+| **`attached()` の最中にプラグインが `resizeView` を呼びうること**（→ `setFrame` は attach 前） | VST3 SDK `pluginterfaces/gui/iplugview.h:146` |
+| `resizeView` を受理したら `onSize` を呼び返す義務 | VST3 SDK `pluginterfaces/gui/iplugview.h:177-178` |
 | `IPlugView` が常にホスト提供の親ウィンドウへ埋め込まれること | VST3 SDK `pluginterfaces/gui/iplugview.h` |
+| AU の `fullState` / `fullStateForDocument` の区別と原文 | macOS SDK `AudioToolbox.framework/Headers/AUAudioUnit.h:758-787` |
+| AU の `parameterTree` / `allParameterValues` KVO 通知 | 同 `AUAudioUnit.h:546-588` |
+| AU の preset 面（`factoryPresets` / `userPresets` / `currentPreset`） | 同 `AUAudioUnit.h:791-926` |
+| AU の UI 取得 | macOS SDK `CoreAudioKit.framework/Headers/AUViewController.h:83` |
+| AU に `dirty` の語が存在しないこと | `AudioToolbox.framework/Headers/*.h` の全文検索（該当なし） |
 
 _確立: 2026-07-28（#546 Phase 0 / #547）。改訂は owner 承認を要する。_
