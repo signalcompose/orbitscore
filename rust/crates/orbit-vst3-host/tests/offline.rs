@@ -440,17 +440,17 @@ fn state_round_trip_reproduces_the_same_pitch() {
     );
 }
 
-/// 🔴 #555: **空 state を「成功」にしない**ことを直接押さえる。
+/// #555: `capture_state()` が **chunk を過不足なく**取り出すことを押さえる。
 ///
-/// ループ通しテスト（`state_round_trip_reproduces_the_same_pitch`）はこの経路を踏めない —
-/// oracle は常に非空を返すため。空を成功にすると、サイズ 0 が登記されて**音色を失う**のに
-/// 誰も気づかない（silent failure）。空チェックを外す変異を殺すのは本テストだけである。
+/// ⚠️ **このテストは「空 chunk を Err にする」分岐を検証していない。** oracle は常に
+/// 非空を返すため、その経路を踏めない（`bytes.is_empty()` を消す変異はこのテストでは
+/// 殺せないことを実測で確認済み）。**空チェックは現時点で無防備**であり、それを
+/// 塞ぐにはモック plugin（getState が何も書かない）が要る。
+///
+/// 本テストが実際に守るのは **取りこぼしと余剰**: 長さを仕様の `STATE_LEN` に固定するので、
+/// stream 読み出しがバイトを落とす／余計に足す変異は red になる。
 #[test]
-fn capture_state_rejects_an_empty_chunk() {
-    // `MemoryStream` は new 直後が空。getState が何も書かない plugin と同じ状況を作れないため、
-    // ここでは **契約の言語化** として、空判定が公開 API のエラー経路であることを確認する。
-    // 実装の分岐そのものは `state_round_trip_*` が通る経路の裏返しであり、
-    // 「空なら Err」という契約を破ると本テストが落ちる。
+fn capture_state_returns_exactly_the_oracle_state_length() {
     let Some(bundle) = package_synth_oracle() else {
         eprintln!("VST3 synth oracle build failed; loud skip for this machine");
         return;
@@ -465,6 +465,7 @@ fn capture_state_rejects_an_empty_chunk() {
     assert_eq!(
         captured.len(),
         orbit_vst3_synth_oracle::STATE_LEN,
-        "oracle の state 長が仕様の STATE_LEN と一致しない —          capture_state が chunk を取りこぼしているか余分に足している"
+        "oracle の state 長が仕様の STATE_LEN と一致しない — \
+         capture_state が chunk を取りこぼしているか余分に足している"
     );
 }

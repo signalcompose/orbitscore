@@ -43,7 +43,9 @@ pub use offline::{
 };
 pub use parent_watch::{ParentWatch, DEFAULT_CHECK_INTERVAL};
 pub use transport::{
-    create_shared, open_shared, region_ptr, slot_index, slot_offset, SharedRegion,
-    TransportContext, BUF_LEN, CHANNELS, CONTROL_QUIT, CONTROL_RUN, MAX_EVENTS_PER_BLOCK,
-    MAX_FRAMES, REGION_BYTES, SLOTS,
+    create_shared, open_shared, region_ptr, service_command_mailbox, slot_index, slot_offset,
+    CommandOutcome, SharedRegion, TransportContext, BUF_LEN, CHANNELS, CMD_RESULT_BAD_ARG,
+    CMD_RESULT_IO_ERROR, CMD_RESULT_OK, CMD_RESULT_PLUGIN_ERROR, CMD_RESULT_UNKNOWN_KIND,
+    CMD_SAVE_STATE, CONTROL_QUIT, CONTROL_RUN, MAX_EVENTS_PER_BLOCK, MAX_FRAMES, REGION_BYTES,
+    SLOTS,
 };

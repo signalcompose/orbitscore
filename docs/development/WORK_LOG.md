@@ -65,17 +65,47 @@ state を吸い上げる経路が無かった**。`orbit-vst3-host` に `MemoryS
 期待値は実装値ではなく**仕様の式から導出**する（E2E_HARNESS_SPEC の改ざん耐性）。
 oracle crate に `rlib` を追加してテストから式を参照できるようにした。
 
-**変異検証（5種・すべて red）**: ①`getState` が state を返さない ②`setState` が
-オフセットを適用しない ③`read_stream_contents` が末尾を取りこぼす ④`seek` を省く
-⑤`capture_state` の空チェックを外す（※⑤はループテストではすり抜けたため、
-**captured state 長を固定する別テスト**を追加して殺した）。
+**変異検証（4種・すべて red）**: ①`getState` が state を返さない ②`setState` が
+オフセットを適用しない ③`read_stream_contents` が末尾を取りこぼす ④`seek` を省く。
 
-> ⑤の経験: ループテストは oracle が常に非空を返すため空経路を踏めない。
-> **1本のテストで全部を守れると思わない**。
+> ⚠️ **`capture_state` の空チェック（`bytes.is_empty()` → `Err`）は現時点で無防備**。
+> oracle は常に非空を返すためこの経路を踏めず、当該分岐を消す変異はどのテストでも
+> 殺せないことを実測で確認した。塞ぐには「`getState` が何も書かない」モック plugin が要る。
+> 当初この穴を「長さを固定する別テストで殺した」と記録していたが**誤り**で、
+> その別テスト（`capture_state_returns_exactly_the_oracle_state_length`）が実際に守るのは
+> **取りこぼしと余剰**であり、空 chunk 経路ではない。テスト名とコメントも実態に合わせた。
 
-**検証**: host 10 passed / oracle 4 passed / sandbox 44 passed / daemon 123 passed / fmt clean / clippy 0。
+**🔴 IPC そのものを実プロセス越しに検証（`/simplify` altitude 指摘で発覚）**:
+上記のループ通しテストは `capture_state()` を**同一プロセス内で直接呼ぶだけ**で、
+本 PR の新規コードの大半（メールボックス・child のポーリング）を**一度も通っていなかった**。
+「#555 = GetPluginState **IPC**」と称しながら IPC が未検証という状態だった。
+
+対応として、フォーマット中立の servicing を `orbit-audio-sandbox` へ引き上げた:
+
+- `service_command_mailbox(region, handler)` — ポーリング・ack の Release publish・
+  **未知 kind を黙って捨てない**・**detail を切り詰めない**という**プロトコル不変条件を一手に持つ**。
+  4つの child バイナリ（`orbit-{vst3,clap}-{instrument,effect}-child`）に分散させると、
+  同じ publish 順序を4箇所で守り続ける必要が生じる
+- child 側は `handler` にフォーマット固有の処理だけを書く（VST3 は `capture_state` + ファイル書き）
+- テスト fixture の `sandbox-instrument-child` も同じ関数を使うため、**実プロセス・実 shm 越しに
+  プロトコルを踏むテスト**が書けるようになった（`instrument_host_integration.rs` に4件）
+
+**変異検証（4種の壊し方・すべて red・切り分けも確認）**:
+
+| 変異 | 殺したテスト |
+|---|---|
+| (a) 分岐反転（未知 kind を OK にする） | `unknown_command` / `consecutive` |
+| (b) 呼び出し削除（ack を書かない） | 4件すべて（host が永久待ち → タイムアウト） |
+| (c) 順序・残留（detail をクリアしない） | `consecutive` のみ |
+| (d) 引数差し替え（`len` を常に 0） | `save_state` / `consecutive` |
+
+(c) が狙い撃ちのテスト1件だけを落とすことも確認した（各テストが別々の性質を守っている）。
+
+**検証**: host 10 passed / oracle 4 passed / sandbox 47 passed（+4）/ daemon 123 passed /
+workspace 全 green / fmt clean / clippy 0。
 
 **残**: 本 PR は VST3 instrument のみ。CLAP / effect への展開は形式中立の要件（CAP.6-2）として後続。
+`service_command_mailbox` を共有層に置いたので、CLAP child は handler を書くだけで済む。
 UI 経路（#474）と `project.yaml` 永続化（PRJ）も残る。
 
 ### 6.309 feat(oracle): VST3 synth oracle に観測可能な state 意味論 #553 (Jul 28, 2026)

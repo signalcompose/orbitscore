@@ -835,7 +835,9 @@ impl Vst3InstrumentProcessor {
             )));
         }
 
-        let bytes = read_stream_contents(&stream);
+        // `MemoryStream` は本 module 内の自前実装なので、COM の seek+read を往復せず
+        // 直接読む（`InputEventList` が `wrapper.events.borrow_mut()` を使うのと同じ流儀）。
+        let bytes = stream_wrapper.data.borrow().clone();
         if bytes.is_empty() {
             return Err(Vst3HostError::State(
                 "IComponent::getState produced an empty chunk — refusing to record it as state"
@@ -1307,37 +1309,6 @@ fn apply_state_chunks(
         }
     }
     Ok(())
-}
-
-/// #555: `IBStream` の中身を先頭から全部読み出す。
-///
-/// `MemoryStream` の内部フィールドを覗かず **規格の API（seek + read）だけ**で取る。
-/// plugin が書いた stream に対しても同じ手順が使えるため、将来 stream 実装を替えても壊れない。
-fn read_stream_contents(stream: &ComPtr<IBStream>) -> Vec<u8> {
-    let mut out = Vec::new();
-    unsafe {
-        let mut pos: i64 = 0;
-        if !is_ok(stream.seek(0, IBStream_::IStreamSeekMode_::kIBSeekSet as i32, &mut pos)) {
-            return out;
-        }
-        let mut chunk = [0u8; 4096];
-        loop {
-            let mut read: i32 = 0;
-            let rc = stream.read(
-                chunk.as_mut_ptr() as *mut std::ffi::c_void,
-                chunk.len() as i32,
-                &mut read,
-            );
-            if !is_ok(rc) || read <= 0 {
-                break;
-            }
-            out.extend_from_slice(&chunk[..read as usize]);
-            if (read as usize) < chunk.len() {
-                break;
-            }
-        }
-    }
-    out
 }
 
 fn sync_component_state(component: &ComPtr<IComponent>, controller: &ComPtr<IEditController>) {

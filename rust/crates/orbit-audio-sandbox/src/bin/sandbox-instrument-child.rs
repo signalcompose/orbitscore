@@ -11,9 +11,14 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use anyhow::{bail, Context, Result};
 use orbit_audio_sandbox::{
-    open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
-    CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
+    open_shared, region_ptr, service_command_mailbox, slot_index, slot_offset, CommandOutcome,
+    EventRecord, EventSpillFifo, NeutralEvent, CHANNELS, CMD_RESULT_BAD_ARG, CMD_RESULT_IO_ERROR,
+    CMD_SAVE_STATE, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
 };
+
+/// この fixture が `CMD_SAVE_STATE` で書き出す固定ペイロード。実 plugin の state の代役で、
+/// テストは「host が指定したパスへ、この中身が、この長さで届いたか」を検査する。
+const FIXTURE_STATE: &[u8] = b"orbit-fixture-state";
 
 struct Args {
     shm: PathBuf,
@@ -82,6 +87,28 @@ fn main() -> Result<()> {
         if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
             break;
         }
+        // #555: フォーマット中立の mailbox プロトコルを実プロセス越しに踏ませる。
+        // handler は VST3 の代わりに固定ペイロードを書くだけで、検証対象は
+        // `service_command_mailbox` の ack / result / detail 規律そのもの。
+        unsafe {
+            service_command_mailbox(region, |kind, arg| match kind {
+                CMD_SAVE_STATE => Some(match arg.filter(|path| !path.is_empty()) {
+                    None => CommandOutcome::failed(
+                        CMD_RESULT_BAD_ARG,
+                        "cmd_arg is empty or not NUL-terminated UTF-8",
+                    ),
+                    Some(path) => match std::fs::write(path, FIXTURE_STATE) {
+                        Err(error) => CommandOutcome::failed(
+                            CMD_RESULT_IO_ERROR,
+                            format!("write {path}: {error}"),
+                        ),
+                        Ok(()) => CommandOutcome::ok(FIXTURE_STATE.len() as u64),
+                    },
+                }),
+                _ => None,
+            });
+        }
+
         let cur = unsafe { (*region).seq_request.load(Acquire) };
         if cur <= last {
             std::hint::spin_loop();

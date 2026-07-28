@@ -268,6 +268,84 @@ pub fn read_cstr_field(src: &[u8]) -> Option<&str> {
     std::str::from_utf8(&src[..end]).ok()
 }
 
+/// mailbox コマンド1件の処理結果。[`service_command_mailbox`] の handler が返す。
+pub struct CommandOutcome {
+    /// [`CMD_RESULT_OK`] 等の結果コード。
+    pub result: u32,
+    /// 成功時に生成したバイト数（[`CMD_SAVE_STATE`] ならサイドカーの長さ）。失敗時は 0。
+    pub len: u64,
+    /// 失敗理由。成功時は空。
+    pub detail: String,
+}
+
+impl CommandOutcome {
+    /// 成功。`len` は生成バイト数。
+    pub fn ok(len: u64) -> Self {
+        Self {
+            result: CMD_RESULT_OK,
+            len,
+            detail: String::new(),
+        }
+    }
+
+    /// 失敗。`result` は `CMD_RESULT_OK` 以外、`detail` は host に見せる理由。
+    pub fn failed(result: u32, detail: impl Into<String>) -> Self {
+        Self {
+            result,
+            len: 0,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// mailbox に未処理コマンドがあれば `handler` へ渡し、結果を ack として publish する。
+/// 未処理コマンドが無ければ何もせず `false` を返す。
+///
+/// **この関数がプロトコル不変条件を一手に引き受ける** — 各 child バイナリ
+/// (`orbit-{vst3,clap}-{instrument,effect}-child`) はフォーマット固有の処理だけを
+/// handler に書く。分散させると 4 箇所で publish 順序を守り続ける必要が生じる。
+///
+/// 引き受ける不変条件:
+/// - **未知の `cmd_kind` を黙って捨てない** — handler が `None` を返したら
+///   [`CMD_RESULT_UNKNOWN_KIND`] で ack する（host が永久に待つのを防ぐ）。
+/// - **detail を切り詰めない** — 収まらなければ固定文言へ倒す。
+/// - **ack を最後に `Release` で publish する** — host は `cmd_ack_seq` を `Acquire` で
+///   読むので、これにより result / len / detail の可視性が保証される。
+///
+/// handler は `(cmd_kind, cmd_arg)` を受け取る。`cmd_arg` は NUL 終端 UTF-8 として
+/// 読めなければ `None`（handler 側で [`CMD_RESULT_BAD_ARG`] を返すか判断する）。
+///
+/// # Safety
+/// `region` は生存中の [`SharedRegion`] を指していなければならない。
+pub unsafe fn service_command_mailbox<F>(region: *mut SharedRegion, handler: F) -> bool
+where
+    F: FnOnce(u32, Option<&str>) -> Option<CommandOutcome>,
+{
+    let seq = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+    if seq <= unsafe { (*region).cmd_ack_seq.load(Ordering::Relaxed) } {
+        return false;
+    }
+    let kind = unsafe { (*region).cmd_kind.load(Ordering::Acquire) };
+    let arg = unsafe { read_cstr_field(&(*region).cmd_arg) };
+    let outcome = handler(kind, arg).unwrap_or_else(|| {
+        CommandOutcome::failed(CMD_RESULT_UNKNOWN_KIND, format!("unknown cmd_kind {kind}"))
+    });
+
+    unsafe {
+        if !write_cstr_field(&mut (*region).cmd_result_detail, &outcome.detail) {
+            let _ = write_cstr_field(&mut (*region).cmd_result_detail, "detail too long");
+        }
+        (*region)
+            .cmd_result_len
+            .store(outcome.len, Ordering::Relaxed);
+        (*region)
+            .cmd_result
+            .store(outcome.result, Ordering::Relaxed);
+        (*region).cmd_ack_seq.store(seq, Ordering::Release);
+    }
+    true
+}
+
 /// 共有領域のバイトサイズ(mmap ファイルサイズ)。
 pub const REGION_BYTES: usize = std::mem::size_of::<SharedRegion>();
 
