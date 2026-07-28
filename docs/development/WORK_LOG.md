@@ -69,8 +69,35 @@ post-package gate（`for CHILD_BIN in ...`）が `orbit-vst3-effect-child` を�
 **本バグの再発を防ぐはずのセーフティネット自身が同じ欠落を抱えていた**。ビルド一覧
 （`:89`）と gate（`:141`）の両方を修正し、テストの台帳を release.yml まで拡張した。
 
-**検証**: TS 1739 passed（+4）/ Rust 127 passed（+4）/ fmt・clippy clean /
+**検証**: TS 1739 passed（+4）/ fmt・clippy clean /
 **env を一切設定せずに VST3 エフェクトが `orbit-vst3-effect-child` を起動**することを実機で確認。
+
+**`/simplify` の指摘を反映（3エージェントが一致して挙げた重複）**:
+
+effect 側に新規追加した `from_plugin_path` / `child_exe_for_attach` は、instrument 側の
+同名関数と**列挙型名以外は逐語的に同一**だった。doc コメント自身が「instrument 側と同一規則」
+「effect 側と対称」と互いを参照し合っており、**規則を直したとき片方だけ直し忘れる運用**に
+頼っていた。#548 がまさに「片方だけ入っていなかった」バグである以上、同じ形を増やすのは筋が悪い。
+
+`outproc_child_exe` モジュールへ規則そのものを抽出し、各 role は**binary 名の対だけ**を渡す形に:
+
+- `is_vst3_plugin_path` / `child_exe_for_attach(current, plugin, clap_name, vst3_name)`
+- ログ用の `exe_label`（両 supervisor で重複していた6行）も集約
+- 抽出の結果、両 enum の `from_plugin_path` が**デッドコードになったので削除**した
+- unit テストは削除した内部メソッドではなく**公開の入口** `child_exe_for_attach` 経由へ付け替えた
+  （実際に attach で使われる経路を守る形になる）
+
+**変異検証（4種・すべて red）**: (a) 拡張子判定の反転 (b) 明示指定ガードの無効化
+(c) clap/vst3 名の入れ替え (d) ディレクトリを捨てて sibling 解決を壊す。
+**いずれも effect と instrument の両方のテストが落ちた** — 規則が本当に共有されている証拠。
+
+**doc の誤りも訂正**: `ORBIT_EFFECT_FORMAT` の存置理由を「gated テストが使うため」と
+書いていたが、repo 全体を grep すると**利用者は本ファイルとドキュメントのみ**で、gated テストは
+`OutProcEffectConfig` を直接組み立てており env を経由しない。実態（無効値の loud な起動失敗という
+既存挙動を黙って変えないため）に書き換えた。
+
+**検証**: Rust workspace 全 green（daemon は `--features outproc-effect,outproc-instrument` で 132 passed）/
+TS 1739 passed / fmt・clippy clean。
 
 ### 6.307 docs(specs-v2): Phase 0 設計 spec 3本 正本化 #547 (Jul 28, 2026)
 

@@ -16,6 +16,10 @@ pub mod engine_wrap;
 /// コンパイルされ、GPL crate `orbit-link-audio` を保持する consumer thread を起動する。
 #[cfg(feature = "link-audio")]
 pub mod link_audio;
+/// attach する plugin の拡張子から child binary を選ぶ規則。**effect と instrument で共有する**
+/// （規則を2箇所に持つと、片方だけ直し忘れる — #548 がまさにその形のバグだった）。
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+pub(crate) mod outproc_child_exe;
 /// γ M1 PR-C: out-of-process effect の daemon 配線。feature `outproc-effect`（default off・clack-free）
 /// でのみコンパイルされ、別プロセスの実 CLAP effect child へ共有メモリ transport 越しに audio を流す。
 #[cfg(feature = "outproc-effect")]

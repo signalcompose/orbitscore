@@ -78,19 +78,6 @@ impl PluginFormat {
         }
     }
 
-    /// 拡張子 `.vst3`（大文字小文字不問）のみ VST3。**それ以外はすべて Clap**。
-    /// instrument 側（`outproc_instrument::InstrumentPluginFormat::from_plugin_path`）と同一規則。
-    ///
-    /// CLAP は VST3 対応前から唯一サポートされていた format なので、未知拡張子の
-    /// フォールバック先として妥当（raw `.dylib` の CLAP を attach する gated テストがある）。
-    /// 不正な plugin path の失敗は従来どおり child 側の load エラーとして表面化する。
-    fn from_plugin_path(path: &Path) -> Self {
-        match path.extension().and_then(|extension| extension.to_str()) {
-            Some(extension) if extension.eq_ignore_ascii_case("vst3") => Self::Vst3,
-            _ => Self::Clap,
-        }
-    }
-
     fn default_child_name(self) -> &'static str {
         match self {
             Self::Clap => "orbit-clap-effect-child",
@@ -115,23 +102,15 @@ impl PluginFormat {
 /// - 冪等かつ対称: retryable な attach 失敗で `ChildLaunch` が再利用されても毎回この読み替えが
 ///   走るので、`.vst3` → `.clap` の attach し直しで元の child に戻る。
 pub(crate) fn child_exe_for_attach(current_child_exe: &Path, plugin_path: &Path) -> PathBuf {
-    // 🔴 デフォルト名は `default_child_name()` から導出する（手打ちリテラルにしない）。
-    // 決め打ちだと child をリネームしたとき is_default_name が常に false になり、
-    // **per-plugin のフォーマット切替が無音のまま無効化される**（#552 が退行しても
-    // 古いリテラル前提のテストは気づけない）。
-    let current_name = current_child_exe.file_name().and_then(|name| name.to_str());
-    let is_default_name = current_name.is_some_and(|name| {
-        name == PluginFormat::Clap.default_child_name()
-            || name == PluginFormat::Vst3.default_child_name()
-    });
-    if !is_default_name {
-        return current_child_exe.to_path_buf();
-    }
-    let desired = PluginFormat::from_plugin_path(plugin_path).default_child_name();
-    match current_child_exe.parent() {
-        Some(dir) => dir.join(desired),
-        None => PathBuf::from(desired),
-    }
+    // 規則そのものは instrument と共有する（`outproc_child_exe`）。ここが持つのは
+    // 「effect の binary 名の対」だけ。デフォルト名は `default_child_name()` から導出する
+    // （手打ちリテラルだとリネーム時に判定が false へ倒れ、切替が無音で無効化される）。
+    crate::outproc_child_exe::child_exe_for_attach(
+        current_child_exe,
+        plugin_path,
+        PluginFormat::Clap.default_child_name(),
+        PluginFormat::Vst3.default_child_name(),
+    )
 }
 
 /// OOP effect の起動設定。plugin は post-boot attach では不要で、eager start と gated test のみ使う。
@@ -163,8 +142,13 @@ impl OutProcEffectConfig {
     /// 置き換わる。プラグイン形式を利用者に見せないための設計（CAP.6-1）。
     ///
     /// 既知の非対称（許容）: 無効値（例 `ORBIT_EFFECT_FORMAT=nonsense`）は起動時エラーで
-    /// daemon を落とすが、有効値は実際の child 選択に影響しない。gated テストが初期 child を
-    /// 指定する用途で本 env を使っているため存置している。
+    /// daemon を落とすが、有効値は実際の child 選択に影響しない。
+    ///
+    /// **存置の理由**: repo 内に本 env の利用者は無い（`ORBIT_EFFECT_FORMAT` の参照は本
+    /// ファイルとドキュメントのみ。gated テストは `OutProcEffectConfig` を直接組み立てており
+    /// env を経由しない）。それでも消していないのは、既に外部から渡している運用があった場合に
+    /// **無効値の loud な起動失敗**という既存挙動を黙って変えないため。削除するなら
+    /// 「env を読まなくなった」ことが分かる形で別 PR にする。
     /// - `ORBIT_EFFECT_PLUGIN`: plugin bundle path（任意。post-boot attach は `LoadPlugin` で渡す）。
     /// - `ORBIT_EFFECT_PLUGIN_ID`: plugin id（任意）。
     pub fn from_env() -> Result<Self, String> {
@@ -492,11 +476,7 @@ impl EffectChildSupervisor {
         let shm_path_wd = shm_path.clone();
         // #552: VST3 / CLAP どちらの child かをログに出すため実際の名前を持ち込む
         // （決め打ちだと VST3 child のクラッシュが CLAP child の障害に見える）。
-        let child_name_wd = child_exe
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("orbit-effect-child")
-            .to_owned();
+        let child_name_wd = crate::outproc_child_exe::exe_label(&child_exe, "orbit-effect-child");
         // first_child は **closure に直接 move しない**: thread spawn が失敗すると closure ごと drop され
         // first_child が orphan 化して shm を spin し続ける（`Child::drop` は kill しない）。thread spawn
         // 成功を確認してから channel で渡し、spawn 失敗時は first_child を本 scope に残して reap できるようにする。
@@ -1071,18 +1051,20 @@ mod tests {
     // 混在できなければならない（CAP.6-1「上位は形式分岐を持たない」）。
     #[test]
     fn effect_plugin_format_selects_child_name_from_extension() {
-        assert_eq!(
-            PluginFormat::from_plugin_path(Path::new("reverb.clap")).default_child_name(),
-            "orbit-clap-effect-child"
-        );
-        assert_eq!(
-            PluginFormat::from_plugin_path(Path::new("Tape Echo.VST3")).default_child_name(),
-            "orbit-vst3-effect-child"
-        );
+        // 内部の format 判定ではなく**公開の入口**を通す（実際に attach で使われる経路）。
+        let current = Path::new("/opt/orbit/bin/orbit-clap-effect-child");
+        let child_for = |plugin: &str| {
+            child_exe_for_attach(current, Path::new(plugin))
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("child name")
+                .to_owned()
+        };
+        assert_eq!(child_for("reverb.clap"), "orbit-clap-effect-child");
+        assert_eq!(child_for("Tape Echo.VST3"), "orbit-vst3-effect-child");
         // 未知拡張子は CLAP へフォールバック（raw .dylib の CLAP を attach する gated テストがある）。
         assert_eq!(
-            PluginFormat::from_plugin_path(Path::new("libclap_test_effect.dylib"))
-                .default_child_name(),
+            child_for("libclap_test_effect.dylib"),
             "orbit-clap-effect-child"
         );
     }

@@ -145,19 +145,6 @@ enum InstrumentPluginFormat {
 }
 
 impl InstrumentPluginFormat {
-    /// 拡張子 `.vst3`（大文字小文字不問）のみ VST3。**それ以外はすべて Clap** —
-    /// CLAP は VST3 対応前から唯一サポートされていた instrument フォーマットだった
-    /// ため、未知拡張子のフォールバック先として妥当。一例として、CLAP gated テストは
-    /// 未バンドルの raw `.dylib`（clap-test-synth）を attach するため、ここで未知
-    /// 拡張子を reject すると既存経路が壊れる（本ブランチの実機 gated RUN で検出済み）。
-    /// 不正な plugin path の失敗は従来どおり child 側の load エラーとして表面化する。
-    fn from_plugin_path(path: &Path) -> Self {
-        match path.extension().and_then(|extension| extension.to_str()) {
-            Some(extension) if extension.eq_ignore_ascii_case("vst3") => Self::Vst3,
-            _ => Self::Clap,
-        }
-    }
-
     fn default_child_name(self) -> &'static str {
         match self {
             Self::Clap => "orbit-clap-instrument-child",
@@ -177,22 +164,14 @@ impl InstrumentPluginFormat {
 ///   `ChildLaunch` が再利用されても、毎回この読み替えが走るので .vst3 → .clap の
 ///   attach し直しで元の child に戻る（対称・冪等）。
 pub(crate) fn child_exe_for_attach(current_child_exe: &Path, plugin_path: &Path) -> PathBuf {
-    // effect 側（`outproc_effect::child_exe_for_attach`）と対称: デフォルト名は
-    // `default_child_name()` から導出する。手打ちリテラルだとリネーム時に判定が常に
-    // false へ倒れ、フォーマット切替が無音で無効化される。
-    let current_name = current_child_exe.file_name().and_then(|name| name.to_str());
-    let is_default_name = current_name.is_some_and(|name| {
-        name == InstrumentPluginFormat::Clap.default_child_name()
-            || name == InstrumentPluginFormat::Vst3.default_child_name()
-    });
-    if !is_default_name {
-        return current_child_exe.to_path_buf();
-    }
-    let desired = InstrumentPluginFormat::from_plugin_path(plugin_path).default_child_name();
-    match current_child_exe.parent() {
-        Some(dir) => dir.join(desired),
-        None => PathBuf::from(desired),
-    }
+    // 規則そのものは effect と共有する（`outproc_child_exe`）。ここが持つのは
+    // 「instrument の binary 名の対」だけ。
+    crate::outproc_child_exe::child_exe_for_attach(
+        current_child_exe,
+        plugin_path,
+        InstrumentPluginFormat::Clap.default_child_name(),
+        InstrumentPluginFormat::Vst3.default_child_name(),
+    )
 }
 
 fn default_child_exe() -> Result<PathBuf, String> {
@@ -481,11 +460,8 @@ impl InstrumentChildSupervisor {
         let watchdog_shm_path = shm_path.clone();
         // #552 と対称: VST3 / CLAP どちらの child かをログに出す（決め打ちだと VST3 child の
         // クラッシュが CLAP child の障害に見える）。
-        let child_name_wd = child_exe
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("orbit-instrument-child")
-            .to_owned();
+        let child_name_wd =
+            crate::outproc_child_exe::exe_label(&child_exe, "orbit-instrument-child");
         let (child_tx, child_rx) = std::sync::mpsc::channel::<Child>();
 
         let watchdog = match std::thread::Builder::new()
@@ -1232,18 +1208,20 @@ mod tests {
     }
     #[test]
     fn instrument_plugin_format_selects_child_name_from_extension() {
+        // 内部の format 判定ではなく**公開の入口**を通す（実際に attach で使われる経路）。
+        let current = Path::new("/opt/orbit/bin/orbit-clap-instrument-child");
+        let child_for = |plugin: &str| {
+            child_exe_for_attach(current, Path::new(plugin))
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("child name")
+                .to_owned()
+        };
+        assert_eq!(child_for("synth.clap"), "orbit-clap-instrument-child");
+        assert_eq!(child_for("synth.VST3"), "orbit-vst3-instrument-child");
+        // 未知拡張子は CLAP へフォールバック（raw .dylib の CLAP を attach する gated テストがある）。
         assert_eq!(
-            InstrumentPluginFormat::from_plugin_path(Path::new("synth.clap")).default_child_name(),
-            "orbit-clap-instrument-child"
-        );
-        assert_eq!(
-            InstrumentPluginFormat::from_plugin_path(Path::new("synth.VST3")).default_child_name(),
-            "orbit-vst3-instrument-child"
-        );
-        // 未知拡張子・raw dylib は従来どおり CLAP child（CLAP gated は未バンドル .dylib を使う）。
-        assert_eq!(
-            InstrumentPluginFormat::from_plugin_path(Path::new("libclap_test_synth.dylib"))
-                .default_child_name(),
+            child_for("libclap_test_synth.dylib"),
             "orbit-clap-instrument-child"
         );
     }

@@ -191,6 +191,10 @@ describe('#548 bundled out-of-process child binaries', () => {
         `ビルド失敗が fail-loud 経路を通らず、copy-daemon-bin.sh の best-effort に落ちる`,
     ).toEqual([])
 
+    // NOTE: 「gate が実際に落ちるか」は次の it が bash を実走して検証する（そちらが本命）。
+    // ここのテキスト照合を残しているのは、**壊れ方が読み取れる形で先に落ちる**ため。
+    // 実走テストは「exit code が 0 だった」としか言えないが、ここは欠けている binary 名を
+    // 名指しできる。実走側に包含される冗長なチェックであることを承知の上で置いている。
     const gated = checkedByReleaseGate(workflow)
     expect(gated.length, 'post-package gate の CHILD_BIN ループを抽出できていない').toBeGreaterThan(
       0,
