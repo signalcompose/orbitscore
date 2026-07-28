@@ -17,6 +17,42 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.310 feat(daemon): GetPluginState IPC — ループの保存側 #555 (Jul 28, 2026)
+
+**Date**: 2026-07-28
+**Status**: 🔄 PR 準備中
+
+Epic #546 **Phase 1**。DAW ループの**保存側**を作る。
+
+**現状の欠落**: 復元側（spawn 時 `--state`・#540 P2）は存在するが、**実行中の child から
+state を吸い上げる経路が無かった**。`orbit-vst3-host` に `MemoryStream` + `getState` の
+パターンはあったが（`sync_component_state`）、**バイト列として外へ出す公開 API が無い**。
+つまり「宣言 → 音色変更 → **記録** → 終了 → 再起動 → 同じ音」の**記録**が欠けていた。
+
+**実装**（`PLUGIN_UI_HOSTING_SPEC_v1.md` UIH.2 / UIH.3 準拠）:
+
+- `transport.rs`: **コマンドメールボックス**（`cmd_seq` / `cmd_kind` / `cmd_arg` /
+  `cmd_ack_seq` / `cmd_result` / `cmd_result_len` / `cmd_result_detail`）。既存の
+  `control`（RUN/QUIT）は teardown で reset されるため**別フィールドにする**（spec UIH.2 の理由）
+- 可変長 state は shm を通さず**サイドカーファイル経由**（host が `cmd_arg` にパスを書き、
+  child がそこへ書く）。`SharedRegion` は固定サイズ POD で数十 MB を運べない
+- `Vst3InstrumentProcessor::capture_state()`: `IComponent::getState` をバイト列で返す。
+  **空 chunk は `Err`** — サイズ 0 を「成功」として上位へ渡すと音色を失う
+- `read_stream_contents`: `MemoryStream` の内部を覗かず**規格の API（seek + read）だけ**で取る
+- child: メインループでコマンドを1件処理。**未知の kind も ack で知らせる**（silent 無視しない）
+
+**実行モデルとの関係**: spec UIH.1 は「state 操作はメインスレッド」を要求する。**現状 child の
+メインスレッドは audio spin loop なので、そこで処理すれば spec 準拠**（`control` を見るのと
+同じ seam）。Phase 2 で audio を別スレッドへ退避したら、コマンド処理は自然に Cocoa runloop
+側へ移る。→ **Phase 2 を待たずに実装できる。**
+
+**変異検証（3種・すべて red）**: ①収まらない値を切り詰めて書く（**別パスへの書き込みを招く**）
+②NUL 終端が無くても先頭から読む ③非 UTF-8 を lossy で受理する。
+
+**検証**: sandbox 44 passed（+3）/ daemon 123 passed / fmt clean / clippy 0。
+
+**残**: 本 PR は VST3 instrument のみ。CLAP / effect への展開は形式中立の要件（CAP.6-2）として後続。
+
 ### 6.309 feat(oracle): VST3 synth oracle に観測可能な state 意味論 #553 (Jul 28, 2026)
 
 **Date**: 2026-07-28

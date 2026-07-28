@@ -10,6 +10,11 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 #[cfg(target_os = "macos")]
 use anyhow::{bail, Context, Result};
 #[cfg(target_os = "macos")]
+use orbit_audio_sandbox::transport::{
+    read_cstr_field, write_cstr_field, CMD_RESULT_BAD_ARG, CMD_RESULT_IO_ERROR, CMD_RESULT_OK,
+    CMD_RESULT_PLUGIN_ERROR, CMD_RESULT_UNKNOWN_KIND, CMD_SAVE_STATE,
+};
+#[cfg(target_os = "macos")]
 use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
     ParentWatch, SharedRegion, VoiceAddr, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK,
@@ -261,6 +266,56 @@ fn classify_event(event: &NeutralEvent) -> EventAction {
     }
 }
 
+/// #555: host からのコマンドを1件処理して ack を返す（`PLUGIN_UI_HOSTING_SPEC_v1.md` UIH.2）。
+///
+/// **スレッド**: 本関数はメインスレッドから呼ばれる（現状は audio spin loop がメイン。
+/// Phase 2 で audio を別スレッドへ退避したら Cocoa runloop 側へ移る）。VST3 の state 操作は
+/// UI/メインスレッド契約なので、この位置が正しい（CAP.5）。
+///
+/// **silent failure を作らない**: 未知の kind も含め、必ず `cmd_result` と
+/// `cmd_result_detail` を書いてから `cmd_ack_seq` を Release store する。
+#[cfg(target_os = "macos")]
+fn service_command(region: *mut SharedRegion, instrument: &Vst3InstrumentProcessor, seq: u64) {
+    use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
+
+    let kind = unsafe { (*region).cmd_kind.load(Acquire) };
+    let (result, len, detail) = match kind {
+        CMD_SAVE_STATE => {
+            let arg = unsafe { read_cstr_field(&(*region).cmd_arg) };
+            match arg {
+                None | Some("") => (
+                    CMD_RESULT_BAD_ARG,
+                    0u64,
+                    "cmd_arg is empty or not NUL-terminated UTF-8".to_string(),
+                ),
+                Some(path) => match instrument.capture_state() {
+                    Err(error) => (CMD_RESULT_PLUGIN_ERROR, 0, format!("{error}")),
+                    Ok(bytes) => match std::fs::write(path, &bytes) {
+                        Err(error) => (CMD_RESULT_IO_ERROR, 0, format!("write {path}: {error}")),
+                        Ok(()) => (CMD_RESULT_OK, bytes.len() as u64, String::new()),
+                    },
+                },
+            }
+        }
+        other => (
+            CMD_RESULT_UNKNOWN_KIND,
+            0,
+            format!("unknown cmd_kind {other}"),
+        ),
+    };
+
+    unsafe {
+        // detail が収まらない場合は切り詰めずに固定文言へ倒す（write_cstr_field は false を返す）。
+        if !write_cstr_field(&mut (*region).cmd_result_detail, &detail) {
+            let _ = write_cstr_field(&mut (*region).cmd_result_detail, "detail too long");
+        }
+        (*region).cmd_result_len.store(len, Relaxed);
+        (*region).cmd_result.store(result, Relaxed);
+        // 🔴 ack は最後に Release で publish する（host は Acquire で読み、結果の可視性を得る）。
+        (*region).cmd_ack_seq.store(seq, Release);
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn main() -> Result<()> {
     let args = parse_args()?;
@@ -317,6 +372,13 @@ fn main() -> Result<()> {
         if parent_watch.should_exit() {
             eprintln!("[orbit-vst3-instrument-child] 親プロセス死亡を検知、終了する");
             break;
+        }
+        // #555: host からのコマンドを処理する（UIH.2）。audio ブロックの合間に1件ずつ。
+        // `cmd_seq` が ack より進んでいれば未処理。**ここはメインスレッド**なので
+        // VST3 の state 操作契約（UI スレッド）を満たす。
+        let cmd_seq = unsafe { (*region).cmd_seq.load(Acquire) };
+        if cmd_seq > unsafe { (*region).cmd_ack_seq.load(Relaxed) } {
+            service_command(region, &instrument, cmd_seq);
         }
         let cur = unsafe { (*region).seq_request.load(Acquire) };
         if cur <= last {

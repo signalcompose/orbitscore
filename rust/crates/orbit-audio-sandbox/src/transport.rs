@@ -205,6 +205,67 @@ pub struct SharedRegion {
     pub child_status: AtomicU32,
     /// child が実際にロードした plugin の role 判定用 bit flags（[`CHILD_FLAG_HAS_AUDIO_INPUT`]）。
     pub child_flags: AtomicU32,
+
+    // ── #555: コマンドメールボックス（`PLUGIN_UI_HOSTING_SPEC_v1.md` UIH.2）。
+    //
+    // 既存の `control`（RUN/QUIT の2値）は teardown 経路で `reset_control_run` により
+    // RUN へ戻されるため、コマンドの意味論を同じフィールドに載せると teardown と競合する。
+    // **独立したメールボックスを追加する。**
+    //
+    // 可変長データ（state は数十 MB になりうる）はここを通さない。host が
+    // `cmd_arg` にパスを書き、child がそのファイルへ書く（UIH.3 サイドカー方式）。
+    /// host -> child: 新規コマンド投函時に単調増加させる。0 = 未発行。
+    pub cmd_seq: AtomicU64,
+    /// host -> child: コマンド種別（[`CMD_SAVE_STATE`] 等）。
+    pub cmd_kind: AtomicU32,
+    /// host -> child: 固定長の引数域（サイドカーファイルの絶対パス・NUL 終端 UTF-8）。
+    pub cmd_arg: [u8; CMD_ARG_BYTES],
+    /// child -> host: 処理を完了した `cmd_seq`。host はこれで完了を判定する。
+    pub cmd_ack_seq: AtomicU64,
+    /// child -> host: 結果コード（[`CMD_RESULT_OK`] / 以外は失敗）。
+    pub cmd_result: AtomicU32,
+    /// child -> host: 成功時は書き込んだバイト数、失敗時は 0。
+    pub cmd_result_len: AtomicU64,
+    /// child -> host: 失敗理由（NUL 終端 UTF-8・空なら理由なし）。**silent failure を防ぐ**。
+    pub cmd_result_detail: [u8; CMD_DETAIL_BYTES],
+}
+
+/// `cmd_arg` のバイト長。サイドカーファイルの絶対パスを収める（macOS の PATH_MAX = 1024）。
+pub const CMD_ARG_BYTES: usize = 1024;
+/// `cmd_result_detail` のバイト長。
+pub const CMD_DETAIL_BYTES: usize = 256;
+
+/// コマンド種別: 未発行（`cmd_seq == 0` と対）。
+pub const CMD_NONE: u32 = 0;
+/// コマンド種別: 現在の plugin state を `cmd_arg` のパスへ書き出す（#555）。
+pub const CMD_SAVE_STATE: u32 = 1;
+
+/// `cmd_result`: 成功。
+pub const CMD_RESULT_OK: u32 = 0;
+/// `cmd_result`: plugin が state を返さなかった（`getState` 失敗・非対応）。
+pub const CMD_RESULT_PLUGIN_ERROR: u32 = 1;
+/// `cmd_result`: サイドカーファイルへの書き込みに失敗した。
+pub const CMD_RESULT_IO_ERROR: u32 = 2;
+/// `cmd_result`: `cmd_arg` が不正（空・非 UTF-8・NUL 終端なし）。
+pub const CMD_RESULT_BAD_ARG: u32 = 3;
+/// `cmd_result`: 未知の `cmd_kind`（**黙って無視せず ack で知らせる**）。
+pub const CMD_RESULT_UNKNOWN_KIND: u32 = 4;
+
+/// 固定長バイト配列へ NUL 終端 UTF-8 を書く。収まらなければ `false`（**切り詰めない**）。
+pub fn write_cstr_field(dst: &mut [u8], value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() + 1 > dst.len() {
+        return false;
+    }
+    dst[..bytes.len()].copy_from_slice(bytes);
+    dst[bytes.len()] = 0;
+    true
+}
+
+/// 固定長バイト配列から NUL 終端 UTF-8 を読む。NUL が無い・非 UTF-8 なら `None`。
+pub fn read_cstr_field(src: &[u8]) -> Option<&str> {
+    let end = src.iter().position(|&b| b == 0)?;
+    std::str::from_utf8(&src[..end]).ok()
 }
 
 /// 共有領域のバイトサイズ(mmap ファイルサイズ)。
@@ -448,6 +509,44 @@ mod tests {
 
         drop(mmap);
         let _ = std::fs::remove_file(path);
+    }
+
+    // ── #555: コマンドメールボックスの引数エンコード（UIH.2） ──
+
+    #[test]
+    fn cstr_field_round_trips_paths() {
+        let mut field = [0u8; CMD_ARG_BYTES];
+        let path = "/tmp/orbit-state-42.bin";
+        assert!(write_cstr_field(&mut field, path), "書き込めるはず");
+        assert_eq!(read_cstr_field(&field), Some(path));
+    }
+
+    /// 🔴 収まらない値は **切り詰めずに拒否** する。切り詰めると別のパスへ書いてしまう。
+    #[test]
+    fn cstr_field_refuses_to_truncate() {
+        let mut field = [0u8; 8];
+        assert!(
+            !write_cstr_field(&mut field, "0123456789"),
+            "収まらないのに書き込みを許した（切り詰めは別パスへの書き込みを招く）"
+        );
+        // NUL 終端ぎりぎり（7 バイト + NUL = 8）は通る。
+        assert!(write_cstr_field(&mut field, "0123456"));
+        assert_eq!(read_cstr_field(&field), Some("0123456"));
+    }
+
+    /// NUL 終端が無い / 非 UTF-8 は `None`（**黙って途中まで読まない**）。
+    #[test]
+    fn cstr_field_rejects_unterminated_and_invalid_utf8() {
+        let unterminated = [b'a'; 8];
+        assert_eq!(read_cstr_field(&unterminated), None, "NUL 無しを受理した");
+
+        let mut invalid = [0u8; 8];
+        invalid[0] = 0xFF;
+        invalid[1] = 0;
+        assert_eq!(read_cstr_field(&invalid), None, "非 UTF-8 を受理した");
+
+        let empty_terminated = [0u8; 8];
+        assert_eq!(read_cstr_field(&empty_terminated), Some(""));
     }
 
     #[test]

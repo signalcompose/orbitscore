@@ -806,6 +806,45 @@ fn apply_state_bytes(
 }
 
 impl Vst3InstrumentProcessor {
+    /// #555: 現在の plugin state を **バイト列として取り出す**（DAW ループの保存側）。
+    ///
+    /// VST3 正準の永続化は `IComponent::getState`。ここでは controller chunk を含めず
+    /// component chunk のみを返す — 復元側（`apply_state_chunks`）が magic 無しの
+    /// raw component state を受理する契約なので対称になる。
+    ///
+    /// **スレッド**: UI/メインスレッドから呼ぶこと（CAP.5・VST3 の規約）。
+    /// child のメインループ（現状は audio spin loop・Phase 2 で runloop 化）が呼び出す。
+    ///
+    /// `getState` が失敗した、または空を返した場合は `Err` を返す — **空 state を
+    /// 「成功」として上位へ渡さない**（サイズ 0 を登記すると音色を失う）。
+    pub fn capture_state(&self) -> Result<Vec<u8>, Vst3HostError> {
+        let component = self
+            .component
+            .as_ref()
+            .ok_or_else(|| Vst3HostError::State("component is not loaded".into()))?;
+
+        let stream_wrapper = ComWrapper::new(MemoryStream::new());
+        let stream = stream_wrapper
+            .to_com_ptr::<IBStream>()
+            .ok_or_else(|| Vst3HostError::State("MemoryStream exposes no IBStream".into()))?;
+
+        let result = unsafe { component.getState(stream.as_ptr()) };
+        if !is_ok(result) {
+            return Err(Vst3HostError::State(format!(
+                "IComponent::getState failed (tresult {result:#x})"
+            )));
+        }
+
+        let bytes = read_stream_contents(&stream);
+        if bytes.is_empty() {
+            return Err(Vst3HostError::State(
+                "IComponent::getState produced an empty chunk — refusing to record it as state"
+                    .into(),
+            ));
+        }
+        Ok(bytes)
+    }
+
     pub fn load(
         bundle_path: &Path,
         sample_rate: f64,
@@ -1268,6 +1307,37 @@ fn apply_state_chunks(
         }
     }
     Ok(())
+}
+
+/// #555: `IBStream` の中身を先頭から全部読み出す。
+///
+/// `MemoryStream` の内部フィールドを覗かず **規格の API（seek + read）だけ**で取る。
+/// plugin が書いた stream に対しても同じ手順が使えるため、将来 stream 実装を替えても壊れない。
+fn read_stream_contents(stream: &ComPtr<IBStream>) -> Vec<u8> {
+    let mut out = Vec::new();
+    unsafe {
+        let mut pos: i64 = 0;
+        if !is_ok(stream.seek(0, IBStream_::IStreamSeekMode_::kIBSeekSet as i32, &mut pos)) {
+            return out;
+        }
+        let mut chunk = [0u8; 4096];
+        loop {
+            let mut read: i32 = 0;
+            let rc = stream.read(
+                chunk.as_mut_ptr() as *mut std::ffi::c_void,
+                chunk.len() as i32,
+                &mut read,
+            );
+            if !is_ok(rc) || read <= 0 {
+                break;
+            }
+            out.extend_from_slice(&chunk[..read as usize]);
+            if (read as usize) < chunk.len() {
+                break;
+            }
+        }
+    }
+    out
 }
 
 fn sync_component_state(component: &ComPtr<IComponent>, controller: &ComPtr<IEditController>) {
