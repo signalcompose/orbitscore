@@ -36,22 +36,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - INDEX.md に「VST ワークフロー」spec set の節を追加
 - 6.306 の Status をマージ済みへ更新
 
-**🔴 一次ソース照合で確定した非対称（設計判断の根拠）**:
+**🔴 一次ソース照合の結果（設計判断の根拠）**:
 
-- **VST3 には state dirty 通知が存在しない**。`IComponentHandler` は4メソッドに閉じ
-  （`vst3-0.3.0` バインディングで実測）、`RestartFlags` も12個の閉じた列挙。最も近い
-  `kParamValuesChanged` の原文は「パラメータ値キャッシュの無効化要求」であって
-  「`getState` の出力が変わった」ではない
-- **CLAP には存在する**。`clap/ext/state.h`: *"Tell the host that the plugin state has
-  changed and should be saved again. If a parameter value changes, then it is implicit
-  that the state is dirty. [main-thread]"*
+- **dirty 通知は VST3 / CLAP の両方に存在する。ただし双方ともプラグインが呼ぶ義務が無い**
+  - VST3 `IComponentHandler2::setDirty`（`vst3-0.3.0/src/bindings.rs:6752`）—
+    SDK 原文 `ivsteditcontroller.h:311-314`: *"Tells host that the plug-in is dirty
+    (something besides parameters has changed since last save), if true the host should
+    apply a save before quitting."*
+  - CLAP `clap_host_state.mark_dirty`（`clap/ext/state.h`）
+  - → **依存できないため離散セーフポイントを基本方式**とし、dirty は受け口を両形式に
+    実装した上でセーフポイントを増やす任意の最適化として扱う。変更検知ポーリングは不採用
 - **VST3 の `IPlugFrame` は `resizeView` の1メソッドのみ**でウィンドウを閉じた通知が無い。
-  CLAP は floating 対応のため `clap_host_gui.closed(was_destroyed)` を持つ
+  CLAP は floating 対応のため `clap_host_gui.closed(was_destroyed)` を持つ →
+  両形式とも child 所有 `NSWindow` へ埋め込み、閉じた検出を単一経路に統一
 - **CLAP は state 用途を規格として区別**（`CLAP_STATE_CONTEXT_FOR_PROJECT` / `FOR_PRESET` /
   `FOR_DUPLICATE`）— #541 の「登記 vs preset」の切り分けを規格側が裏付けている
 
-→ 最弱の形式（VST3）で成立する離散セーフポイント方式を基本とし、CLAP の `mark_dirty` は
-セーフポイントを増やす任意の最適化として扱う。変更検知ポーリングは不採用。
+**🔴 初版の誤りと訂正（Fable 独立監査・同日）**: 初版は「**VST3 に state dirty 通知は
+存在しない**」と記載していたが**誤り**だった。ホストコールバック interface の列挙を
+`IComponentHandler` で止め、`IComponentHandler2` を見落としていた（このプロジェクト自身が
+#527 で記録した「登録済み4ハンドラはすべて正しい」型の誤りと同型）。決定①の結論は不変だが
+**根拠を「VST3 に無いから」→「両形式とも任意だから」へ差し替えた**。監査は他に4件を指摘し、
+すべて一次ソースで裏を取った上で反映済み（登記キーとアドレッシングの不一致 / UI クローズの
+経路分岐と冪等性 / embedded 非対応 CLAP の未規定 / リサイズ応答義務の欠落）。
 
 **実装の現状（コード確認・是正対象）**: state 復元は VST3 instrument のみ（CLAP は
 `--state` を明示 `bail!`）／state 取得は VST3 も IPC 未接続・CLAP は `CLAP_EXT_STATE` 未使用／

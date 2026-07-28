@@ -28,11 +28,12 @@ state の運搬経路は [`PLUGIN_UI_HOSTING_SPEC_v1.md`](PLUGIN_UI_HOSTING_SPEC
 
 ```yaml
 version: 1
-states:                      # シーケンス名 → state ファイル（相対パス）
-  kick: states/kick.state
-  lead: states/lead.state
+states:                      # インスタンス同一性（SC.5）→ state ファイル（相対パス）
+  kick/instrument: states/kick-instrument.state
+  kick/effect/0:   states/kick-effect-0.state
+  lead/instrument: states/lead-instrument.state
 audio:
-  device: "..."
+  device: "..."              # PRJ.1a: DSL 宣言があればそちらが優先
   sample_rate: 48000
 ```
 
@@ -41,8 +42,8 @@ mysong/
   mysong.orbs            ← 楽譜（テキスト・人間が書く）
   project.yaml           ← 登記簿（テキスト・機械が書く・diff 可能）
   states/
-    kick.state           ← state 本体（バイナリ・マニフェストから相対参照）
-    lead.state
+    kick-instrument.state  ← state 本体（バイナリ・マニフェストから相対参照）
+    kick-effect-0.state
 ```
 
 - **バイナリを YAML へ埋め込まない**。Kontakt state は数十 MB 級。本体は `states/` の
@@ -50,6 +51,45 @@ mysong/
 - **`plugin:` フィールドを持たない**。`kick.instrument("Kontakt 8.vst3")` と二重になり
   正本が2つになる（drift 問題）
 - `version:` で migration に備える
+
+### 🔴 登記キーはインスタンス同一性で引く
+
+**キーはシーケンス名ではなく、UIH.5 と同じアドレッシング**（レシーバ + チェーン内位置）を使う。
+
+理由: `CAP-STATE-GET` / `CAP-STATE-SET` は**必須能力**であり、CAP.6-2 により
+**effect も含めて全形式で揃える**対象である（CAP.0 は「effect の state は引数すら無い」を
+是正対象として列挙している）。シーケンス名だけをキーにすると、instrument 1 個 + effect N 個の
+チェーンを表現できず、UI から effect の音色を変えても登記できない。
+
+インスタンス同一性の規約は [SIGNAL_CHAIN_DSL_SPEC_v1.md](SIGNAL_CHAIN_DSL_SPEC_v1.md) の SC.5
+（レシーバ・正規化名・レシーバ内の同名出現順）に従う。**UI を開く時のアドレス（UIH.5）と
+state を登記する時のキーは同一でなければならない** — 別体系にすると「UI で変えた音色が
+別のキーに保存される」事故が起きる。
+
+> v1 で instrument に限定する選択肢もありうるが、その場合 CAP.6-2 と衝突する。
+> **限定するなら CAP 側も同時に改訂すること**（片方だけ変えない）。
+
+### PRJ.1a `audio:` と DSL の関係
+
+`audio.device` は **DSL にも宣言経路がある**（`global.audioDevice(deviceName)` —
+`packages/engine/src/core/global.ts:239` に実在。ただし
+[`../core/INSTRUCTION_ORBITSCORE_DSL.md`](../core/INSTRUCTION_ORBITSCORE_DSL.md) には未記載）。
+
+`plugin:` を排除した論理（正本が2つ → drift）がそのまま当てはまるため、**優先則を明文化する**:
+
+```
+.orbs の明示宣言（global.audioDevice(...)）  >  project.yaml の audio:
+```
+
+- `project.yaml` の `audio:` は**最後に使った環境の登記**であり、宣言が無い場合の既定値として
+  働く（「この曲は前回このデバイスで鳴らした」の記録）
+- DSL 宣言がある場合、登記は**更新するが権威にはしない**（PRJ.6 のフィンガープリントと同じ扱い）
+- 食い違ったら warn して `.orbs` に従う
+
+> **なぜ完全排除しないか**: デバイス名は**環境**であって意図ではなく、機材構成が変われば
+> 曲を書き換えずに変わってほしい。一方 `global.audioDevice()` は「この曲はこのデバイスで」と
+> 意図的に固定したい場合の表現である。両者は役割が違うので共存させ、優先則で drift を断つ。
+> `plugin:`（純粋に意図側）とは事情が異なる。
 
 ## PRJ.2 管理モデル
 
@@ -72,21 +112,27 @@ mysong/
 | (a) 明示保存 | MCP / コマンドからの保存要求（対称設計の LLM 半身） |
 | (b) UI クローズ時 | 人間が音色編集を終える自然な境界（UIH.4 の3経路すべて） |
 | (c) 停止・終了時 | 演奏停止 / エンジン終了 |
-| (d) 任意: CLAP `mark_dirty` 受信時 | **最適化としてのみ**。これに依存した設計にしない |
+| (d) 任意: プラグイン起点の dirty 通知受信時 | **最適化としてのみ**。これに依存した設計にしない。VST3 = `IComponentHandler2::setDirty`、CLAP = `clap_host_state.mark_dirty`。**両方の受け口を実装する**（CAP.6-7） |
 
 ### 変更検知ポーリングを採らない根拠
 
-CAP.3 のとおり、**VST3 には state dirty 通知が存在しない**（`IComponentHandler` は4メソッドに
-閉じ、`RestartFlags` の `kParamValuesChanged` はパラメータ値キャッシュの無効化要求であって
-「`getState` の出力が変わった」ではない）。一方 **CLAP には `mark_dirty` がある**:
+CAP.3 のとおり、**dirty 通知は VST3 / CLAP の両方に存在するが、双方ともプラグインが呼ぶ
+義務を負わない**:
 
-> *"Tell the host that the plugin state has changed and should be saved again. If a parameter
-> value changes, then it is implicit that the state is dirty. [main-thread]"*
-> — `clap/ext/state.h`
+> VST3 `IComponentHandler2::setDirty` — *"Tells host that the plug-in is dirty (something
+> besides parameters has changed since last save), if true the host should apply a save
+> before quitting."*
+>
+> CLAP `clap_host_state.mark_dirty` — *"Tell the host that the plugin state has changed and
+> should be saved again. If a parameter value changes, then it is implicit that the state
+> is dirty. [main-thread]"*
 
-したがって dirty 通知は**規格間で非対称**であり、これを基本方式に据えると形式ごとに
-挙動が変わる（中核制約に反する）。**最弱の形式（VST3）で成立する方式を基本とし、
-CLAP の `mark_dirty` はセーフポイントを1つ増やす任意の最適化として扱う。**
+VST3 側は `IComponentHandler2` 自体がホストのオプション実装であり、CLAP 側も拡張の
+`get_extension` が null を返しうる。加えて**プラグインが呼ばない実装は規格違反ではない**。
+したがって **dirty 通知に依存すると、呼ばないプラグインで音色が黙って失われる**。
+
+**基本方式は離散セーフポイント**とし、dirty 通知は受け取ったらセーフポイントを1つ増やす
+任意の最適化として扱う。
 
 `getState` の出力をハッシュして差分を見る方式も採らない — Kontakt 級で数十 MB を定期取得
 することになりコストが実態に合わず、取りこぼしても「検知している」ように見える
@@ -106,7 +152,8 @@ UIH.3 のサイドカー経路と組み合わせる。**確定（atomic rename�
 1. host  : 一時パスを決めて SAVE_STATE コマンドを投函
 2. child : 一時パスへ書き込み → fsync → ack（バイト数つき）
 3. host  : サイズ 0 / 失敗 ack なら 🔴 中断（登記を更新しない）
-4. host  : states/<seq>.state.tmp → states/<seq>.state へ rename
+4. host  : states/<key>.state.tmp → states/<key>.state へ rename
+           （<key> = インスタンス同一性から導く安全なファイル名。PRJ.1）
 5. host  : project.yaml を tmp → rename で更新
 ```
 
@@ -115,7 +162,8 @@ UIH.3 のサイドカー経路と組み合わせる。**確定（atomic rename�
 
 ## PRJ.5 復元の単位 — 「最後の状態のみ」（決定②）
 
-**自動 state はシーケンスあたり1つ（最後の状態）。named states は v1 で実装しない。**
+**自動 state は登記キー（インスタンス・PRJ.1）あたり1つ（最後の状態）。
+named states は v1 で実装しない。**
 
 根拠:
 
@@ -166,7 +214,8 @@ VST3 には同等の区別が無いため、`CLAP_EXT_STATE_CONTEXT` は**あれ
 |---|---|
 | プロジェクト読み取り | 登記内容と state 一覧を返す |
 | 明示保存 | PRJ.3 (a) のトリガ |
-| state 一覧 | シーケンス名 → 有無・サイズ・更新時刻 |
+| state 一覧 | インスタンス同一性（PRJ.1）→ 有無・サイズ・更新時刻 |
+| 明示復元 | 登記済み state をプラグインへ再適用（PRJ.3 (a) の対）|
 
 LLM が演奏セッションを自分で保存・復元できること。人間の面（自動保存）と**同じ state に
 合流し、同じ機構で永続化される**。

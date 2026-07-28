@@ -56,7 +56,7 @@ preset・UI）を **VST3 / CLAP / 将来の AU で同一の UX** として提供
 |---|---|---|---|
 | `CAP-STATE-GET` | `IComponent::getState` | `clap_plugin_state.save` | `kAudioUnitProperty_ClassInfo` / `fullState`（要一次確認） |
 | `CAP-STATE-SET` | `IComponent::setState` (+ `IEditController::setComponentState`) | `clap_plugin_state.load` | 同上（要一次確認） |
-| `CAP-STATE-DIRTY` | **—（存在しない）** | `clap_host_state.mark_dirty` | 要一次確認 |
+| `CAP-STATE-DIRTY` | `IComponentHandler2::setDirty`（+ `performEdit`） | `clap_host_state.mark_dirty` | 要一次確認 |
 | `CAP-PARAM-LIST` | `IEditController::getParameterCount` / `getParameterInfo` | `clap_plugin_params.count` / `get_info` | `AUParameterTree`（要一次確認） |
 | `CAP-PARAM-GET/SET` | `getParamNormalized` / `setParamNormalized` | `get_value` / パラメータイベント | `AUParameter.value`（要一次確認） |
 | `CAP-PARAM-TEXT` | `getParamStringByValue` / `getParamValueByString` | `value_to_text` / `text_to_value` | 要一次確認 |
@@ -69,13 +69,28 @@ preset・UI）を **VST3 / CLAP / 将来の AU で同一の UX** として提供
 > 推測で埋めず「要一次確認」と明示する。CAP.5 の境界条件を満たす限り、後から実装を
 > 差し込める。
 
-## CAP.3 🔴 規格間の非対称 — state dirty 通知
+## CAP.3 state dirty 通知 — 両形式に存在するが、いずれも「任意」
 
-**CLAP には存在し、VST3 には存在しない。** これは設計判断に直接影響するため明記する。
+**VST3 / CLAP のどちらにもプラグイン起点の dirty 通知がある。ただし双方とも
+プラグインが呼ぶ義務を負わない。** ここが設計判断の分かれ目である。
 
-CLAP `include/clap/ext/state.h`（一次ソース・原文）:
+### VST3: `IComponentHandler2::setDirty`
 
-> `mark_dirty`: *"Tell the host that the plugin state has changed and should be saved again.
+`pluginterfaces/vst/ivsteditcontroller.h`（SDK 原文）:
+
+> *"Tells host that the plug-in is dirty (something besides parameters has changed since
+> last save), if true the host should apply a save before quitting."*
+> `\note [UI-thread & Connected]`
+
+「**パラメータ以外の何かが最後の保存以降変わった**」— まさに不透明 state の dirty 通知である
+（`vst3-0.3.0/src/bindings.rs:6752` に `setDirty` 実在）。パラメータ変化は `performEdit` で
+別途届くため、**`setDirty` + `performEdit` の合成が CLAP の `mark_dirty` に相当する**。
+
+### CLAP: `clap_host_state.mark_dirty`
+
+`include/clap/ext/state.h`（原文）:
+
+> *"Tell the host that the plugin state has changed and should be saved again.
 > If a parameter value changes, then it is implicit that the state is dirty. [main-thread]"*
 
 拡張自体の目的も明示されている:
@@ -83,32 +98,42 @@ CLAP `include/clap/ext/state.h`（一次ソース・原文）:
 > *"Plugins can implement this extension to save and restore both parameter values and
 > non-parameter state."*
 
-VST3 側は、ホストへの通知面が `IComponentHandler` の4メソッド
-（`beginEdit` / `performEdit` / `endEdit` / `restartComponent`）に**閉じている**
-（`vst3-0.3.0` バインディングで実測）。`restartComponent` の `RestartFlags` も12個の閉じた
-列挙で、最も近い `kParamValuesChanged` の原文は:
+両者はパラメータ変化の扱い（VST3 = 別経路 / CLAP = 暗黙に含む）が違うだけで、**到達面としては
+等価**である。
+
+> ⚠️ **本節は 2026-07-28 の独立監査で訂正された。** 初版は「VST3 に dirty 通知は存在しない」と
+> 記載していたが、これは**誤り**だった。ホストコールバック interface の列挙を
+> `IComponentHandler` で止め、`IComponentHandler2` を見落としていた。
+> 教訓: **「存在しない」の主張は、列挙が尽きたことを示さなければ成立しない。**
+
+### 参考: `restartComponent` は dirty 通知ではない
+
+`RestartFlags` は12個の閉じた列挙で、最も近い `kParamValuesChanged` の原文は:
 
 > *"Multiple parameter values have changed (as result of a program change for example).
 > The host invalidates all caches of parameter values and asks the edit controller for the
 > current values."*
 
 これは**パラメータ値キャッシュの無効化要求**であって、「`getState` の出力が変わった」の
-主張ではない。**VST3 に `CAP-STATE-DIRTY` に相当するものは無い。**
+主張ではない。dirty 通知の役割を負うのは `setDirty` である。
 
 ### 設計への帰結（決定①の根拠）
 
 1. **保存の基本方式は離散セーフポイント**（明示保存 API / UI クローズ時 / 停止・終了時）。
-   これは最弱の形式（VST3）で成立し、全形式で同一に動く
+   根拠は「VST3 に通知が無いから」**ではなく**、**両形式とも通知が任意だから**である。
+   ホストが `IComponentHandler2` を公開し、かつプラグインが `setDirty` を呼ぶ場合にのみ
+   届く（CLAP の `mark_dirty` も同様）。**呼ばないプラグインで保存が落ちる設計にはできない**
 2. **`CAP-STATE-DIRTY` は「セーフポイントを追加する任意の最適化」**として扱う。
-   CLAP で `mark_dirty` を受けたらセーフポイントを1つ増やしてよいが、**これに依存した
-   設計にしない**。プラグイン側が呼ぶ義務を負う保証は無く、VST3 では原理的に来ない
+   **両形式とも受け口を実装する**（VST3 = `IComponentHandler2` を公開して `setDirty` を受ける、
+   CLAP = `mark_dirty` を受ける）。受けたらセーフポイントを1つ増やすが、依存はしない
 3. **変更検知ポーリングは採らない**。`getState` の出力をハッシュして差分を見る方式は、
    Kontakt 級で数十 MB を定期取得することになりコストが実態に合わない。また
    「検知している」ように見えて取りこぼす形は silent failure である
 
-> **反証されうる条件**: VST3 のプラグインが独自拡張で dirty 通知を提供している、または
-> 将来の VST3 SDK が該当フラグを追加した場合、2 の「原理的に来ない」は崩れる。ただし
-> その場合も 1 の基本方式は変更不要（CLAP と同じ「任意の最適化」の扱いに入るだけ）。
+> **反証されうる条件**: いずれかの規格が dirty 通知を**必須**と定めていた場合、1 の
+> 「任意だから依存できない」は崩れる。VST3 は `IComponentHandler2` 自体がホストの
+> オプション実装であり、CLAP の拡張も `get_extension` が null を返しうるため、
+> 現時点では両方とも任意である。
 
 ## CAP.4 ループの定義（受け入れの単位）
 
@@ -155,6 +180,13 @@ VST3 側は、ホストへの通知面が `IComponentHandler` の4メソッド
 4. **能力の有無は実行時に問い合わせ可能**にし、MCP から観測できること
    （LLM が「このプラグインは UI を持つか」を判断できる）
 5. 欠落している能力へのアクセスは **loud に失敗**する。silent no-op にしない
+6. **dirty 通知の受け口を両形式で実装する**。VST3 は `IComponentHandler2` をホスト側で公開して
+   `setDirty` を受け、CLAP は `mark_dirty` を受ける。受信はセーフポイントを増やすだけで、
+   保存の正しさはこれに依存しない（CAP.3）
+7. **必須能力には MCP 面が対応して存在する**。`CAP-PARAM-*` / `CAP-PRESET-*` の MCP tool
+   （列挙・取得・設定・preset 選択）は、UI の実装有無にかかわらず提供される
+   （DESIGN_PRINCIPLES §1）。tool 名・引数・観測形の詳細は実装 PR で定め、本仕様からは
+   「存在すること」のみを要求する
 
 ## CAP.7 検証
 
@@ -175,10 +207,12 @@ VST3 側は、ホストへの通知面が `IComponentHandler` の4メソッド
 | CLAP `mark_dirty` の存在と原文 | `clap/ext/state.h`（free-audio/clap main）/ `clap-sys-0.5.0/src/ext/state.rs` |
 | CLAP GUI のスレッド注記と `closed` | `clap/ext/gui.h` |
 | CLAP state context（preset / duplicate / project） | `clap-sys-0.5.0/src/ext/state_context.rs` |
-| VST3 `IComponentHandler` が4メソッドに閉じること | `vst3-0.3.0/src/bindings.rs`（`IComponentHandlerVtbl`） |
+| **VST3 `IComponentHandler2::setDirty` の存在と原文** | `vst3-0.3.0/src/bindings.rs:6752`（`IComponentHandler2Vtbl`）/ VST3 SDK `pluginterfaces/vst/ivsteditcontroller.h:311-314` |
+| VST3 のホストコールバック interface の全列挙 | `vst3-0.3.0/src/bindings.rs`: `IComponentHandler`(6545) / `IComponentHandler2`(6750) / `IComponentHandler3`(6937) / `IComponentHandlerBusActivation`(7040) / `IComponentHandlerSystemTime`(7155) / `IUnitHandler`(12989) / `IUnitHandler2`(13126) / `IPlugFrame`(1702) |
 | `RestartFlags` が12個の閉じた列挙であること | `vst3-0.3.0/src/bindings.rs`（`RestartFlags_`） |
 | `kParamValuesChanged` / `kReloadComponent` の原文 | VST3 SDK `pluginterfaces/vst/ivsteditcontroller.h` |
 | `IPlugFrame` が `resizeView` の1メソッドのみであること | `vst3-0.3.0/src/bindings.rs`（`IPlugFrameVtbl`） |
+| `IPlugView::setFrame` が「プラグインがホストへリサイズを知らせるため」であること | VST3 SDK `pluginterfaces/gui/iplugview.h:184-185` |
 | `IPlugView` が常にホスト提供の親ウィンドウへ埋め込まれること | VST3 SDK `pluginterfaces/gui/iplugview.h` |
 
 _確立: 2026-07-28（#546 Phase 0 / #547）。改訂は owner 承認を要する。_

@@ -125,16 +125,68 @@ CLAP のフローティングモードは使わない。
 ```
 OPEN_UI:
   child メインスレッド:
-    NSWindow を生成（child 所有）
-    VST3: createView("editor") → isPlatformTypeSupported → attached(nsview, "NSView")
-    CLAP: is_api_supported(cocoa, false) → create(cocoa, false) → set_parent(nsview) → show()
+    VST3: createView("editor") → isPlatformTypeSupported("NSView")
+          → NSWindow 生成 → attached(nsview, "NSView") → setFrame(IPlugFrame 実装)
+    CLAP: is_api_supported(cocoa, is_floating=false)
+          → false なら 🔴 loud に失敗（UIH.4a）
+          → create(cocoa, false) → NSWindow 生成 → set_parent(nsview) → show()
     getSize / get_size でウィンドウサイズを合わせる
-CLOSE_UI（3経路すべて同一ハンドラ）:
-    ① ウィンドウの閉じるボタン  ② CLOSE_UI コマンド  ③ CLAP closed() コールバック
-    → VST3: removed()  /  CLAP: hide() → destroy()
-    → NSWindow を破棄
-    → 🔴 閉じる前に state セーフポイントを発火（PRJ.3）
 ```
+
+### UIH.4a embedded 非対応プラグインの扱い
+
+CLAP の `is_api_supported(api, is_floating)` は embedded と floating を**別々に問う**設計で、
+floating しかサポートしないプラグインは規格上合法である。
+
+**決定**: `is_api_supported(cocoa, false)` が false のプラグインは
+**`CAP-UI-OPEN` 非対応として loud に失敗する**（floating へフォールバックしない）。
+
+理由: フォールバックを許すと UIH.4 の統一（ウィンドウ所有・閉じた検出の単一経路）が崩れ、
+プラグインによって UX が変わる。**LLM 側の経路（param / preset）でループは閉じる**ので、
+UI が開けないことは機能の喪失ではない（CAP.4）。
+
+> 実機で該当プラグインが見つかった場合は記録し、floating 対応の是非を改めて判断する。
+
+### UIH.4b リサイズ応答の義務
+
+child がウィンドウを所有する以上、**プラグイン起点のリサイズ要求に応答する義務も child が負う**。
+
+| 形式 | 経路 | 義務 |
+|---|---|---|
+| VST3 | `IPlugView::setFrame(IPlugFrame*)` — SDK 原文: *"Sets IPlugFrame object to allow the plug-in to inform the host about resizing"* | **`IPlugFrame` を実装して渡す**。null のままだと動的 UI を持つプラグインが誤動作しうる |
+| CLAP | `clap_host_gui.request_resize` / `resize_hints_changed`（`[thread-safe]`） | 受理してメインスレッドで NSWindow をリサイズ |
+
+`set_scale` / `get_resize_hints` も同様にメインスレッドで扱う。
+
+### UIH.4c クローズの状態機械（経路条件つき・冪等）
+
+**UI 状態機械を持つ**: `Closed → Open → Closing → Closed`。
+**`Closing` 中に到達した閉じる要求はすべて無視する**（冪等性）。
+
+```
+閉じる要求の到達経路（3つ）:
+  ① NSWindow の閉じるボタン（windowWillClose）
+  ② CLOSE_UI コマンド
+  ③ CLAP closed(was_destroyed) コールバック（[thread-safe] → メインスレッドへ marshal）
+
+共通ハンドラ（Open のときのみ受理し、直ちに Closing へ遷移）:
+  1. 🔴 state セーフポイントを発火（PRJ.3 (b)）
+  2. プラグイン側の解放 — 経路と形式で分岐:
+       VST3            : removed()
+       CLAP（①②）      : hide() → destroy()
+       CLAP（③ was_destroyed=true）: destroy() のみ（既に破棄済みの GUI へ hide() を呼ばない）
+       CLAP（③ was_destroyed=false）: ①② と同じ（hide() → destroy()）
+  3. NSWindow を破棄（このとき windowWillClose が再入するが Closing なので無視される）
+  4. Closed へ遷移
+```
+
+**セーフポイントは状態遷移の入口で1回だけ発火する。** runloop による直列化は「同時実行」を
+防ぐが「2回実行」は防がないため、**状態機械による再入ガードが設計要件**である
+（UIH.8 の「1回だけ発火」検証はこの要件に対応する）。
+
+> **step 1 を step 2 より先に置く理由**: state はビューではなくプラグイン本体にあるため
+> 技術的には破棄後でも取得できるが、破棄経路で例外が出た場合に state を失う。
+> **先に確定させる**。
 
 ## UIH.5 アドレッシング — テキスト位置ではない
 
@@ -150,7 +202,7 @@ LLM 側と非対称になる（DESIGN_PRINCIPLES §3 違反）。
 | daemon 以下 | `(シーケンス名, chain index)` だけを知る |
 
 これにより #474 の regex 依存はエディタ層に閉じ込められ、#495 言語サービス導入時も
-engine 側は影響を受けない。インスタンス同一性の規約は SIGNAL_CHAIN_DSL_SPEC の SC.5
+engine 側は影響を受けない。インスタンス同一性の規約は [SIGNAL_CHAIN_DSL_SPEC_v1.md](SIGNAL_CHAIN_DSL_SPEC_v1.md) の SC.5
 （レシーバ・正規化名・レシーバ内の同名出現順）に従う。
 
 ## UIH.6 ライフサイクル
@@ -173,7 +225,10 @@ crash ループ時にウィンドウが繰り返し復活すると作業文脈�
 | 故障 | 扱い |
 |---|---|
 | プラグインが UI を持たない | `CAP-UI-OPEN` 非対応として **loud に失敗**。silent no-op にしない |
+| **CLAP が embedded 非対応**（`is_api_supported(cocoa, false)` == false） | 同上（UIH.4a）。floating へフォールバックしない |
 | `createView` / `gui.create` が失敗 | `cmd_result` で失敗を返し、上位まで伝える |
+| **閉じる要求が重複到達**（閉じるボタン + コマンド + `closed()`） | UIH.4c の状態機械が `Closing` 中の要求を無視。**セーフポイントは1回だけ** |
+| **プラグインがリサイズを要求**（`IPlugFrame::resizeView` / `request_resize`） | UIH.4b のとおり応答する。**未実装のまま放置しない**（可変 UI プラグインで実害） |
 | UI 生成中に child がクラッシュ | 既存の watchdog が respawn。UIH.6 のとおりウィンドウは復活させない |
 | **audio スレッド移行によるレイテンシ退行** | 既存の `orbit-clap-effect-child/tests/roundtrip_latency_gated.rs` で検証する。**退行が出た時点で設計を見直す**（性能は要件） |
 | state 取得中にプラグインがスレッド安全でない | 規格上は許される操作なので方式は変えないが、**実機検証で dropout / クラッシュを観測する**。問題が出たプラグインは個別に記録する |
@@ -186,8 +241,12 @@ crash ループ時にウィンドウが繰り返し復活すると作業文脈�
 - **UI を開いている間の capture WAV に dropout が無いこと**（`drops == 0`・想定外の無音区間なし）
 - 既存 roundtrip latency gated テストに退行が無いこと
 - 新規テストは変異検証つき（分岐反転 / 呼び出し回数 / 順序 / 引数差し替えの4種以上）。
-  とりわけ **「閉じる3経路すべてでセーフポイントが1回だけ発火する」**ことを
-  `toHaveBeenCalledTimes` で押さえる（経路ごとに 0 回・2 回の変異を試す）
+  とりわけ次を `toHaveBeenCalledTimes` で押さえる:
+  - **閉じる3経路すべてでセーフポイントがちょうど1回発火する**（経路ごとに 0 回・2 回の変異）
+  - **経路が重複到達しても1回のまま**（UIH.4c の再入ガードを外すと red になること）
+  - **`was_destroyed=true` の経路で `hide()` が呼ばれない**（分岐を潰すと red になること）
+  - **セーフポイントがプラグイン解放より前に発火する**（`mock.invocationCallOrder` で順序固定・
+    順序を入れ替えると red）
 - 判定は解析で行い人間を介在させない。**computer-use は受け入れ E2E の主経路にしない**
   （CAP.7）
 
