@@ -120,6 +120,20 @@ state 取得（`getState` / `save`）はメインスレッドで行い、**オ�
 | `evt_arg: [[u8; N]; EVT_SLOTS]` | child → host | 付随情報 |
 | `evt_ack_seq: AtomicU64` | host → child | **host 側処理が完結した** `evt_seq`（ポリシー3） |
 
+**🔴 host はイベントを seq 順に処理する（不変条件の前提）**:
+
+**`evt_ack_seq = s` は「s 以下のすべてが完結した」を意味する。**
+host は `evt_ack_seq < evt_seq` の間、未処理スロットを**順に**処理して `evt_ack_seq` を進める。
+**追い越して前進させてはならない。**
+
+> これは文言ではなく**下記 slot 再利用不変条件の成立条件**である。host が s-1（`STATE_DIRTY`）を
+> 後回しにして s（`UI_CLOSED`）を先に完結させ ack を s へ進めると、child は s-1 のスロットを
+> 「再利用可」と判定し、**host がまだ読んでいる可能性のある `evt_arg[s-1 % EVT_SLOTS]` へ
+> 書き込む** — Release/Acquire を守っていても防げない（順序保証ではなく再利用判定の問題）。
+
+**🔴 `EVT_SLOTS >= 2`**（鏡像元 `transport.rs:59`: *"2 以上であること(連続 seq が必ず別 slot を
+指す前提)"*）。2 あれば正常経路のフェーズ B 時点で `UI_CLOSED_DONE` を常に即投函できる。
+
 **🔴 slot 再利用の不変条件（鏡像元から継承する）**:
 
 > `transport.rs:25-27`: *"host は新 seq s を submit する前に `seq_done >= s - SLOTS` を確認する。
@@ -152,7 +166,11 @@ state 取得（`getState` / `save`）はメインスレッドで行い、**オ�
 - したがって **`STATE_DIRTY` の合流は child ローカルの pending フラグで行う**
   （「dirty が立っている」を child 側に保持し、スロットが空いてから1件だけ投函する）。
   スロット上の書き換えによる合流は**禁止**
-- `UI_CLOSED` は合流させない。投函できるまで状態機械が `Closing` に留まる
+- **🔴 取りこぼし不可のイベント（`UI_CLOSED` / `UI_CLOSED_DONE`）は、投函できるまで
+  child が保持し runloop で再試行する。** 「見送る = 落とす」に倒してはならない
+  （`Closing` に留まるのはこの一般規則の特例であり、`Closed` 遷移後に投函する
+  `UI_CLOSED_DONE` にも再試行が要る — タイムアウト完遂時は host 停滞中で ack が進んでおらず、
+  投函が invariant に弾かれうる。落とすと MCP `close_plugin_ui` の完了判定が永遠に閉じない）
 - host は既にコマンド完了を polling しているため、同じループでイベントも拾える
 
 > **`UI_RESIZED` を持たない理由**: ウィンドウのリサイズは child が自分の `NSWindow` に対して
@@ -163,8 +181,8 @@ state 取得（`getState` / `save`）はメインスレッドで行い、**オ�
 
 | 事象 | 規定 |
 |---|---|
-| **`Closing` 中に child が crash → respawn** | **リセットの主体は host**（既存の `reset_control_run` と同じパターン・`transport.rs:301`）。順序を固定する: **watchdog が旧 child の死を確認 → host が in-flight 手続きを中止（登記は不変）→ host が `cmd_*` / `evt_*` をリセット → spawn**。新 child 側でゼロ初期化しない（host の polling / 投函と並行 store すると lost update になる） |
-| **host が生きたまま停滞し `evt_ack_seq` が進まない** | child は `Closing` に**無期限滞留しない**。タイムアウト後は保存なしでクローズを完遂し、**🔴 `UI_CLOSED_DONE` を `evt_arg` に「timeout・保存なし」を載せて投函する**。これで (a) MCP の完了判定が閉じ、(b) host は arg を見て登記更新をスキップでき、(c) loud 報告の運搬も兼ねる |
+| **`Closing` 中に child が crash → respawn** | **リセットの主体は host**（既存の `reset_control_run` と同じパターン・`transport.rs:301`）。順序を固定する: **watchdog が旧 child の死を確認 → host が in-flight 手続きを中止（登記は不変）→ host が `cmd_*` / `evt_*` をリセット → spawn**。新 child 側でゼロ初期化しない（host の polling / 投函と並行 store すると lost update になる）。**「死の確認」は プロセス終了の確認であり、ハング検知ではない** — 生存中の child を死と誤認してリセットすると並行 writer が生じる |
+| **host が生きたまま停滞し `evt_ack_seq` が進まない** | child は `Closing` に**無期限滞留しない**。タイムアウト後は保存なしでクローズを完遂し、**🔴 `UI_CLOSED_DONE` を `evt_arg` に「timeout・保存なし」を載せて投函する**（投函できるまで再試行する）。これで (a) MCP の完了判定が閉じ、(b) host は **タイムアウト経路だったことを判別でき**、(c) loud 報告の運搬も兼ねる |
 | **host プロセスが死亡** | 既存の `ParentWatch` が child ごと回収する（UIH.1・変更なし）。新たな規定は不要 |
 | **child の `cmd_ack_seq` が永遠に返らない** | host はコマンドにタイムアウトを持ち、**loud に失敗**させる。規律3 の待ちに脱出条件が無い状態にしない |
 | **`Closing` / `Closed` 中に `OPEN_UI` が届く** | **failure ack**（`cmd_result_detail = "closing-in-progress"`）。タイムアウト任せにしない（正常系なのに loud な失敗になる） |
@@ -413,7 +431,12 @@ crash ループ時にウィンドウが繰り返し復活すると作業文脈�
     > 前項の変異（受領 vs 完結）は**取り違えの軸が違う**ため、これを殺せない。両方要る。
 
   - **`evt_arg` の publish が Release / Acquire で行われる**（`Relaxed` へ変異させて
-    TSan / loom 等で競合が検出されること）
+    loom 等のモデル検証で競合が検出されること。TSan は別プロセス間の shm を追跡できないので
+    in-process モデルで検証する）
+  - 🔴 **host がイベントを seq 順に処理する**（s-1 を飛ばして s を先に ack する変異を入れると、
+    child が s-1 のスロットを再利用して host の読み取りと競合し red）
+  - 🔴 **`UI_CLOSED_DONE` が投函できるまで再試行される**（リングを満杯にしてタイムアウト
+    完遂させ、再試行を落とす変異を入れると `close_plugin_ui` が完了せず red）
   - **フェーズ A がメインスレッドをブロックしない**（ハンドラ内でブロッキング待機に変異させると
     SAVE_STATE が処理されずタイムアウトで red — UIH.2a ポリシー1 の検証）
   - **経路①が `windowShouldClose` で一旦拒否する**（`windowWillClose` へ変異させると

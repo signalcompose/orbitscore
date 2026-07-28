@@ -125,12 +125,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
   鏡像元 `transport.rs:7-9` が明文で定義しているもの → publish プロトコルを表で明記
 - 併せて `Closing` 中の `OPEN_UI` を failure ack と規定、変異検証を3項目追加
 
-**教訓（2つ・memory 化済み）**:
+ラウンド6（収束確認・G-1 の3点(a)(b)(c)はすべて問題なし）:
+- **F-G1（データ競合の暗黙依存）**: ラウンド4の改稿で「host は未処理スロットを**順に**処理して
+  `evt_ack_seq` を進める」の行を**削除していた**（`git diff c99f81d` で確認）。この行が無いと
+  `evt_ack_seq >= s - EVT_SLOTS` の再利用判定が成立せず、host が s-1 を飛ばして s を ack すると
+  **child が host の読み取り中スロットへ書き込む**（Release/Acquire では防げない）
+  → 「`evt_ack_seq = s` は s 以下すべての完結を意味する・追い越し禁止」を明文化
+- **F-G2（取りこぼし）**: `UI_CLOSED_DONE` の再試行規定が無く、`EVT_SLOTS` の下限も未転記
+  （鏡像元 `transport.rs:59`「2 以上であること」）→ 取りこぼし不可イベントの再試行を一般化し、
+  `EVT_SLOTS >= 2` を明記
+- 併せて軽微2件（「死の確認」= プロセス終了でありハング検知ではない / タイムアウト経路の
+  arg は「スキップできる」ではなく「判別できる」）と変異3項目を追加
+
+**教訓（3つ・memory 化済み）**:
 1. 「既存機構と同じ方式を使う」と書くとき、**その機構の不変条件も一緒に継承する**。
    名前だけ借りると、元が潰したレースを再導入する
 2. さらに **「不変条件を継承する」だけでも足りない**。機構の安全性が何本の柱で成立して
    いるかを数え、全部を転記する（今回は不変条件を転記した直後に、同じ機構の
    Release/Acquire を落としていた）
+3. **改稿時は `git diff` の `-` 行を読む。** 足したものだけ確認して満足しない。
+   ラウンド6 で、自分が前に書いた前提行を削除していたことが判明した（「柱を落とす」3回目）
 
 **AU の一次確認（Codex 到達不能につき自力実施）**: macOS SDK ヘッダで対応表の AU 列を確定。
 `fullState`（preset 用）と `fullStateForDocument`（ドキュメント用・*"Hosts saving documents
