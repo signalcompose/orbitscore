@@ -1084,6 +1084,7 @@ name = "orbit-vst3-host"
 version = "0.0.1"
 dependencies = [
  "core-foundation-sys",
+ "orbit-vst3-synth-oracle",
  "vst3",
 ]
 

@@ -51,7 +51,32 @@ state を吸い上げる経路が無かった**。`orbit-vst3-host` に `MemoryS
 
 **検証**: sandbox 44 passed（+3）/ daemon 123 passed / fmt clean / clippy 0。
 
+**🔴 ループ通し E2E を追加（受け入れ基準の中核）**:
+`orbit-vst3-host/tests/offline.rs` の `state_round_trip_reproduces_the_same_pitch`。
+**デバイス不要・無人・周波数解析だけで判定**する:
+
+1. 既定（offset 0）で鳴らす → 基本周波数が**仕様式** `voice_frequency_hz(69, 0)` と一致
+2. state を適用して起動 → 周波数が仕様式と一致し、**かつ 1 と明確に違う**
+   （違わなければ復元の成否を音で判定できない、を明示アサート）
+3. **記録** = `capture_state()` で実行中インスタンスから吸い上げ
+4. **再起動** = 記録した state で新インスタンスを起こす
+5. **同じ音**: 周波数が 3 の記録前と一致し、仕様式とも一致
+
+期待値は実装値ではなく**仕様の式から導出**する（E2E_HARNESS_SPEC の改ざん耐性）。
+oracle crate に `rlib` を追加してテストから式を参照できるようにした。
+
+**変異検証（5種・すべて red）**: ①`getState` が state を返さない ②`setState` が
+オフセットを適用しない ③`read_stream_contents` が末尾を取りこぼす ④`seek` を省く
+⑤`capture_state` の空チェックを外す（※⑤はループテストではすり抜けたため、
+**captured state 長を固定する別テスト**を追加して殺した）。
+
+> ⑤の経験: ループテストは oracle が常に非空を返すため空経路を踏めない。
+> **1本のテストで全部を守れると思わない**。
+
+**検証**: host 10 passed / oracle 4 passed / sandbox 44 passed / daemon 123 passed / fmt clean / clippy 0。
+
 **残**: 本 PR は VST3 instrument のみ。CLAP / effect への展開は形式中立の要件（CAP.6-2）として後続。
+UI 経路（#474）と `project.yaml` 永続化（PRJ）も残る。
 
 ### 6.309 feat(oracle): VST3 synth oracle に観測可能な state 意味論 #553 (Jul 28, 2026)
 
