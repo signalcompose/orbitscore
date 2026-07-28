@@ -112,8 +112,25 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - **D-3**: 変異検証に4項目追加。最重要は「**規律3 を忠実に守る host モックで経路②を完走**」—
   モックが規律3 を守らないと **F-D1 があっても全項目 green のまま出荷される**
 
-**教訓**: 「既存機構と同じ方式を使う」と書くとき、**その機構の不変条件も一緒に継承しなければ
-ならない**。名前だけ借りると、元が潰したレースを再導入する。
+ラウンド5（owner 指示・収束）:
+- **F-E1（順序違反）**: フェーズ B のトリガを「`evt_ack_seq` の**前進**」と書いたが、
+  同カウンタは全イベント共用。クローズ直前の `STATE_DIRTY` の ack でも前進するため、
+  **UI_CLOSED の保存前に解放が走る** → トリガを「`UI_CLOSED` 自身の seq への到達」に限定
+- **F-E2a**: host 停滞タイムアウト時の完了通知が無く、MCP `close_plugin_ui` が永遠に完了
+  判定できなかった（loud 報告の運搬先も未定義）→ タイムアウト経路でも `UI_CLOSED_DONE` を
+  `evt_arg`=timeout つきで投函する1手で3つの穴を閉じた
+- **F-E2b**: respawn 時リセットの**主体と順序**が未規定 → host が行う（既存
+  `reset_control_run`・`transport.rs:301` と同じパターン）。順序も固定
+- **F-E3（データ競合）**: 不変条件は転記したが **Release/Acquire プロトコルを落としていた**。
+  鏡像元 `transport.rs:7-9` が明文で定義しているもの → publish プロトコルを表で明記
+- 併せて `Closing` 中の `OPEN_UI` を failure ack と規定、変異検証を3項目追加
+
+**教訓（2つ・memory 化済み）**:
+1. 「既存機構と同じ方式を使う」と書くとき、**その機構の不変条件も一緒に継承する**。
+   名前だけ借りると、元が潰したレースを再導入する
+2. さらに **「不変条件を継承する」だけでも足りない**。機構の安全性が何本の柱で成立して
+   いるかを数え、全部を転記する（今回は不変条件を転記した直後に、同じ機構の
+   Release/Acquire を落としていた）
 
 **AU の一次確認（Codex 到達不能につき自力実施）**: macOS SDK ヘッダで対応表の AU 列を確定。
 `fullState`（preset 用）と `fullStateForDocument`（ドキュメント用・*"Hosts saving documents

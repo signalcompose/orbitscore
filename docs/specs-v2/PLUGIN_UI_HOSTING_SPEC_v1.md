@@ -129,6 +129,24 @@ state 取得（`getState` / `save`）はメインスレッドで行い、**オ�
 イベント欄の鏡像は: **child は新 `evt_seq` = s を投函する前に
 `evt_ack_seq >= s - EVT_SLOTS` を確認する。満たさなければ投函を見送る。**
 
+**🔴 publish プロトコル（Release / Acquire）も同様に継承する**:
+
+鏡像元の安全性は**不変条件と Release/Acquire 対の2本柱**で成立している
+（`transport.rs:7-9`: *"該当 slot の … を書く → `seq_request` を **Release** で進めて publish"* /
+*"child: `seq_request` を **Acquire** で読む … → n_frames/input が可視"*）。
+イベント欄には per-slot tag が無く単一カウンタ構成なので、**書き直して明記する**:
+
+| 主体 | 手順 |
+|---|---|
+| child PUBLISH | `evt_kind[s % EVT_SLOTS]` と `evt_arg[s % EVT_SLOTS]` を書く → **`evt_seq` を Release store** |
+| host READ | **`evt_seq` を Acquire load** → 進んでいれば該当 slot を読む |
+| host ACK | 処理を完了 → **`evt_ack_seq` を Release store** |
+| child READ ACK | **`evt_ack_seq` を Acquire load** |
+
+**`Relaxed`（あるいは素朴な store）で実装してはならない。** `evt_arg` は非 atomic の
+`[u8; N]` であり、順序保証の無い cross-process 読み書きは**データ競合 = UB** になる
+（`transport.rs:25-27` が警告するものと同じクラス）。
+
 - **投函済み・未 ack のスロットを書き換えてはならない。** host が `evt_arg`（非 atomic の
   `[u8; N]`）を読んでいる最中の書き込みは cross-process の torn read になる
 - したがって **`STATE_DIRTY` の合流は child ローカルの pending フラグで行う**
@@ -145,10 +163,15 @@ state 取得（`getState` / `save`）はメインスレッドで行い、**オ�
 
 | 事象 | 規定 |
 |---|---|
-| **`Closing` 中に child が crash → respawn** | respawn 後の child は**新規インスタンス**であり、`cmd_*` / `evt_*` は**リセットする**（pending は引き継がない）。host は in-flight の手続きを**中止**し、**登記を触らない**（PRJ.4 の「失敗時は前回の登記を保持」を、ack が永遠に来ないケースへも適用する） |
-| **host が生きたまま停滞し `evt_ack_seq` が進まない** | child は `Closing` に**無期限滞留しない**。タイムアウト後は **loud にエラーを報告した上で保存なしでクローズを完遂**する（ウィンドウが永久に閉じられない方が悪い）。この場合 host は登記を更新しない |
+| **`Closing` 中に child が crash → respawn** | **リセットの主体は host**（既存の `reset_control_run` と同じパターン・`transport.rs:301`）。順序を固定する: **watchdog が旧 child の死を確認 → host が in-flight 手続きを中止（登記は不変）→ host が `cmd_*` / `evt_*` をリセット → spawn**。新 child 側でゼロ初期化しない（host の polling / 投函と並行 store すると lost update になる） |
+| **host が生きたまま停滞し `evt_ack_seq` が進まない** | child は `Closing` に**無期限滞留しない**。タイムアウト後は保存なしでクローズを完遂し、**🔴 `UI_CLOSED_DONE` を `evt_arg` に「timeout・保存なし」を載せて投函する**。これで (a) MCP の完了判定が閉じ、(b) host は arg を見て登記更新をスキップでき、(c) loud 報告の運搬も兼ねる |
 | **host プロセスが死亡** | 既存の `ParentWatch` が child ごと回収する（UIH.1・変更なし）。新たな規定は不要 |
 | **child の `cmd_ack_seq` が永遠に返らない** | host はコマンドにタイムアウトを持ち、**loud に失敗**させる。規律3 の待ちに脱出条件が無い状態にしない |
+| **`Closing` / `Closed` 中に `OPEN_UI` が届く** | **failure ack**（`cmd_result_detail = "closing-in-progress"`）。タイムアウト任せにしない（正常系なのに loud な失敗になる） |
+
+> **タイムアウト後に host が遅れて保存を完遂した場合**は、二重処理として禁止しない。
+> プラグインインスタンスが生きている限り「現在の真の state」が保存されるため実害が無く、
+> 禁止するより **`evt_arg` で判別可能にする**方が整合的である。
 
 > **既存の `control` を再利用しない理由**: `control` は teardown 経路で
 > `reset_control_run` により RUN へ戻される（respawn の shm 再利用）。コマンドの意味論を
@@ -264,7 +287,7 @@ child がウィンドウを所有する以上、**プラグイン起点のリサ
   child が runloop で処理 → host が atomic rename と project.yaml 更新まで完了
   → evt_ack_seq を前進）
 
-フェーズ B（runloop が evt_ack_seq の前進を観測して再開）:
+フェーズ B（🔴 evt_ack_seq >= UI_CLOSED を投函した evt_seq、を観測して再開）:
   1. プラグイン側の解放 — 形式と was_destroyed で分岐:
        VST3                       : removed()   ← 親破棄より前（iplugview.h:151-152）
        CLAP（was_destroyed=false） : hide() → destroy()
@@ -272,6 +295,11 @@ child がウィンドウを所有する以上、**プラグイン起点のリサ
   2. NSWindow をプログラム的に閉じて破棄
   3. Closed へ遷移
   4. 🔴 UI_CLOSED_DONE イベントを投函（手続き完了の通知）
+
+🔴 フェーズ B のトリガに「単なる前進」を使ってはならない。`evt_ack_seq` は全イベント共用の
+   単一カウンタなので、クローズ直前に投函済みだった STATE_DIRTY の完了 ack でも前進する。
+   それでフェーズ B を開始すると、UI_CLOSED の保存がまだ走っていないのに解放が先行し、
+   「セーフポイントは解放より前」を破る。**必ず UI_CLOSED 自身の seq に到達したかで判定する。**
 
 Closing / Closed 中に到達した追加の要求:
   ①③ → no-op（既に手続き中）
@@ -378,6 +406,14 @@ crash ループ時にウィンドウが繰り返し復活すると作業文脈�
   - **`was_destroyed=true` の経路で `hide()` が呼ばれない**（分岐を潰すと red になること）
   - **フェーズ B が `evt_ack_seq` の前進**でのみ開始する（受領のみで進めると、保存前に解放が
     走って red — UIH.2a ポリシー3 の検証）
+  - 🔴 **フェーズ B が `UI_CLOSED` 自身の seq に紐づく**（クローズ直前に**未 ack の
+    `STATE_DIRTY` を仕込み**、トリガを「単なる前進」へ変異させると、dirty の ack で
+    解放が保存に先行して red）
+
+    > 前項の変異（受領 vs 完結）は**取り違えの軸が違う**ため、これを殺せない。両方要る。
+
+  - **`evt_arg` の publish が Release / Acquire で行われる**（`Relaxed` へ変異させて
+    TSan / loom 等で競合が検出されること）
   - **フェーズ A がメインスレッドをブロックしない**（ハンドラ内でブロッキング待機に変異させると
     SAVE_STATE が処理されずタイムアウトで red — UIH.2a ポリシー1 の検証）
   - **経路①が `windowShouldClose` で一旦拒否する**（`windowWillClose` へ変異させると
