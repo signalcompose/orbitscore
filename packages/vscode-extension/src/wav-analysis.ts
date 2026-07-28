@@ -50,8 +50,19 @@ const WINDOW_SEC = 0.02
 const MIN_ONSET_GAP_SEC = 0.2
 /** Absolute floor for the onset threshold (below this is treated as noise). */
 const ONSET_THRESHOLD_FLOOR = 0.01
+/** Steady-window size used by the pure-sine fundamental estimator. */
+const FUNDAMENTAL_WINDOW_SEC = 0.02
+/** RMS below this is silence/noise, not a usable steady tone. */
+const FUNDAMENTAL_AMPLITUDE_FLOOR = 0.01
 
-export function analyzeWavBuffer(buf: Buffer, opts?: { windowMs?: number }): WavAnalysis {
+interface ParsedFloat32Wav {
+  format: WavFormat
+  dataOff: number
+  frames: number
+  durationSec: number
+}
+
+function parseFloat32Wav(buf: Buffer): ParsedFloat32Wav {
   if (
     buf.length < 12 ||
     buf.toString('ascii', 0, 4) !== 'RIFF' ||
@@ -98,6 +109,11 @@ export function analyzeWavBuffer(buf: Buffer, opts?: { windowMs?: number }): Wav
   const bytesPerFrame = 4 * format.channels
   const frames = Math.floor(dataSize / bytesPerFrame)
   const durationSec = frames / format.sampleRate
+  return { format, dataOff, frames, durationSec }
+}
+
+export function analyzeWavBuffer(buf: Buffer, opts?: { windowMs?: number }): WavAnalysis {
+  const { format, dataOff, frames, durationSec } = parseFloat32Wav(buf)
 
   // Per-window RMS over the mono mixdown.
   const winFrames = Math.max(1, Math.floor(format.sampleRate * WINDOW_SEC))
@@ -152,6 +168,92 @@ export function analyzeWavBuffer(buf: Buffer, opts?: { windowMs?: number }): Wav
       ? { windows: windowSeries(buf, dataOff, frames, format, opts.windowMs / 1000) }
       : {}),
   }
+}
+
+/**
+ * Estimate a pure tone's fundamental from upward zero crossings in the
+ * longest steady region of the requested time range.
+ *
+ * Returns undefined when the range contains no above-threshold steady region
+ * or fewer than two crossings; silence is never reported as 0/NaN Hz.
+ */
+export function estimateFundamentalHz(
+  buf: Buffer,
+  range: { fromSec: number; toSec: number },
+): number | undefined {
+  const { format, dataOff, frames } = parseFloat32Wav(buf)
+  if (
+    !Number.isFinite(range.fromSec) ||
+    !Number.isFinite(range.toSec) ||
+    range.toSec <= range.fromSec
+  ) {
+    return undefined
+  }
+
+  const firstFrame = Math.max(0, Math.floor(range.fromSec * format.sampleRate))
+  const endFrame = Math.min(frames, Math.ceil(range.toSec * format.sampleRate))
+  if (endFrame <= firstFrame) return undefined
+
+  const monoSample = (frame: number): number => {
+    let mono = 0
+    for (let channel = 0; channel < format.channels; channel++) {
+      mono += buf.readFloatLE(dataOff + (frame * format.channels + channel) * 4)
+    }
+    return mono / format.channels
+  }
+
+  // Find the longest consecutive run of above-threshold 20ms RMS windows.
+  // The CLAP oracle is a constant-amplitude pure sine, so this excludes capture
+  // lead-in/tail silence while leaving a stationary interval for zero crossings.
+  const windowFrames = Math.max(1, Math.floor(format.sampleRate * FUNDAMENTAL_WINDOW_SEC))
+  let runStart: number | undefined
+  let bestStart: number | undefined
+  let bestEnd: number | undefined
+  for (let start = firstFrame; start < endFrame; start += windowFrames) {
+    const end = Math.min(start + windowFrames, endFrame)
+    let sumSq = 0
+    for (let frame = start; frame < end; frame++) {
+      const sample = monoSample(frame)
+      sumSq += sample * sample
+    }
+    const rms = Math.sqrt(sumSq / Math.max(1, end - start))
+    if (rms >= FUNDAMENTAL_AMPLITUDE_FLOOR) {
+      runStart ??= start
+    } else if (runStart !== undefined) {
+      if (bestStart === undefined || start - runStart > bestEnd! - bestStart) {
+        bestStart = runStart
+        bestEnd = start
+      }
+      runStart = undefined
+    }
+  }
+  if (runStart !== undefined) {
+    if (bestStart === undefined || endFrame - runStart > bestEnd! - bestStart) {
+      bestStart = runStart
+      bestEnd = endFrame
+    }
+  }
+  if (bestStart === undefined || bestEnd === undefined) return undefined
+
+  // Port of offline.rs measured_frequency_hz: frequency is the number of
+  // complete periods between the first and last upward zero crossings.
+  let crossings = 0
+  let firstCrossing: number | undefined
+  let lastCrossing = 0
+  let previous = monoSample(bestStart)
+  for (let frame = bestStart + 1; frame < bestEnd; frame++) {
+    const current = monoSample(frame)
+    if (previous <= 0 && current > 0) {
+      firstCrossing ??= frame
+      lastCrossing = frame
+      crossings++
+    }
+    previous = current
+  }
+  if (firstCrossing === undefined || crossings < 2) return undefined
+
+  const measured = (format.sampleRate * (crossings - 1)) / Math.max(1, lastCrossing - firstCrossing)
+  return Number.isFinite(measured) && measured > 0 ? measured : undefined
 }
 
 /** windows 系列の上限（JSON ペイロード肥大の防御・レビュー指摘）。 */

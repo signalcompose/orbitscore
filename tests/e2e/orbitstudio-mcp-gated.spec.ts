@@ -46,7 +46,10 @@ import * as path from 'path'
 
 import { describe, it, expect, afterAll } from 'vitest'
 
-import { analyzeWavBuffer } from '../../packages/vscode-extension/src/wav-analysis'
+import {
+  analyzeWavBuffer,
+  estimateFundamentalHz,
+} from '../../packages/vscode-extension/src/wav-analysis'
 
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
 
@@ -138,6 +141,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   // tracked repo fixture — so the write lands in the temp dir that afterAll
   // already removes, and never dirties a committed file.
   let kickLoopWorkPath: string | undefined
+
+  const waitForEngine = (running: boolean, timeoutMs: number, label: string) =>
+    waitUntil(
+      async () => {
+        const stateRes = await client!.call('get_engine_state')
+        return (JSON.parse(stateRes.text) as { running: boolean }).running === running
+      },
+      { intervalMs: 500, timeoutMs, label },
+    )
 
   afterAll(async () => {
     // Teardown: best-effort, always runs, never throws past this hook.
@@ -240,15 +252,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // `ORBIT_CAPTURE_WAV` でしか有効化できない (#528) ので、自動起動した engine を
       // 一度落としてから capture 付きで起動し直す。自動起動の spawn 完了を待たずに
       // stop すると取りこぼすため、running を確認してから止める。
-      const waitForEngine = (running: boolean, timeoutMs: number, label: string) =>
-        waitUntil(
-          async () => {
-            const stateRes = await client!.call('get_engine_state')
-            return (JSON.parse(stateRes.text) as { running: boolean }).running === running
-          },
-          { intervalMs: 500, timeoutMs, label },
-        )
-
       await waitForEngine(true, 30_000, 'auto-started engine running')
       // #528 回帰ピン: capture は spawn 時にしか有効化できないので、既に走っている
       // engine に対する capture 付き start_engine は **失敗を返さなければならない**。
@@ -725,6 +728,239 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         gapsAt180bpm.length,
         `expected >=3 gaps in [0.29,0.40]s (180bpm), got onsetGaps: ${JSON.stringify(analysis.onsetGaps)}`,
       ).toBeGreaterThanOrEqual(3)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    'restores an MCP-saved non-default instrument state across an engine restart with the same measured pitch',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const root = tmpRoot
+
+      // この復元フェーズは2サイクル分（約26秒）のログを跨いで ERROR/attach 失敗の
+      // 増分を見るため、既存フェーズの 500 行窓では古い行が流れて偽陰性になりうる
+      // （独立監査の指摘）。窓を広げて計測の土台を安定させる。
+      const RESTORE_LOG_LINES = 2000
+      const fixturesDir = path.join(root, 'fixtures')
+      fs.mkdirSync(fixturesDir, { recursive: true })
+      const handStatePath = path.join(fixturesDir, 'orc1-offset7.state')
+      const magic = Buffer.alloc(4)
+      magic.writeUInt32LE(0x4f52_4331)
+      const offset = Buffer.alloc(4)
+      offset.writeInt32LE(7)
+      const handState = Buffer.concat([magic, offset])
+      // This literal is Cycle A input only. If it drifts from clap-test-synth's
+      // encode_state, apply_state_bytes rejects ORC1 before READY, attach fails
+      // loudly, and a false pass is structurally impossible.
+      fs.writeFileSync(handStatePath, handState)
+
+      const shiftedWav = path.join(root, 'shifted.wav')
+      const restoredWav = path.join(root, 'restored.wav')
+      const countLogMarker = (log: string, marker: RegExp): number =>
+        (log.match(marker) ?? []).length
+      const countErrors = (log: string): number => countLogMarker(log, /ERROR:/g)
+      const countAttachFailures = (log: string): number =>
+        countLogMarker(log, /\[OUTPROC_ATTACH_FAILED\]/g)
+      const countGlobalStops = (log: string): number =>
+        countLogMarker(log, /(?:✅ Global stopped|⏹ Global)/g)
+
+      // ── Cycle A: hand-built non-default state → audible pitch → MCP save.
+      const beforeCycleALog = (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES }))
+        .text
+      const errorsBeforeCycleA = countErrors(beforeCycleALog)
+      const startShifted = await activeClient.call('start_engine', { capture_wav: shiftedWav })
+      expect(startShifted.isError, startShifted.text).toBe(false)
+      await waitForEngine(true, 15_000, 'Cycle A engine running')
+      await sleep(2500)
+
+      // A fresh engine has no Global and play() only installs a pattern. The
+      // transport setup plus RUN are the minimum executable scaffold around the
+      // adjudicated instrument(path, statePath) and play(1) operations.
+      const initShifted = await activeClient.call('evaluate_orbitscore', {
+        code: [
+          'var global = init GLOBAL',
+          'global.key("C")',
+          'global.start()',
+          'var stSeq = init global.seq',
+        ].join('\n'),
+      })
+      expect(initShifted.isError, initShifted.text).toBe(false)
+      const attachFailuresBeforeShifted = countAttachFailures(
+        (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
+      )
+      const attachShifted = await activeClient.call('evaluate_orbitscore', {
+        code: `stSeq.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)}, ${JSON.stringify(handStatePath)})`,
+      })
+      expect(attachShifted.isError, attachShifted.text).toBe(false)
+      await sleep(6000)
+      const afterShiftedAttachLog = (
+        await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })
+      ).text
+      expect(
+        countAttachFailures(afterShiftedAttachLog),
+        `Cycle A instrument attach must add no OUTPROC_ATTACH_FAILED. Log tail: ${afterShiftedAttachLog.slice(-1200)}`,
+      ).toBe(attachFailuresBeforeShifted)
+
+      const playShifted = await activeClient.call('evaluate_orbitscore', {
+        code: ['stSeq.play(1)', 'RUN(stSeq)'].join('\n'),
+      })
+      expect(playShifted.isError, playShifted.text).toBe(false)
+      await sleep(3000)
+
+      const stopsBeforeShifted = countGlobalStops(
+        (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
+      )
+      const stopShifted = await activeClient.call('evaluate_orbitscore', {
+        code: [
+          'stSeq.stop()',
+          'global.stop()',
+          `global.setDocumentDirectory(${JSON.stringify(root)})`,
+        ].join('\n'),
+      })
+      expect(stopShifted.isError, stopShifted.text).toBe(false)
+      await waitUntil(
+        async () =>
+          countGlobalStops(
+            (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
+          ) > stopsBeforeShifted,
+        {
+          intervalMs: 200,
+          timeoutMs: 5_000,
+          label: 'Cycle A transport stopped before state save',
+        },
+      )
+
+      const saveShifted = await activeClient.call('save_plugin_state', {
+        sequence: 'stSeq',
+        index: 0,
+      })
+      expect(saveShifted.isError, saveShifted.text).toBe(false)
+      const saved = JSON.parse(saveShifted.text) as { path: string; bytesWritten: number }
+      expect(saved.bytesWritten).toBe(handState.length)
+      expect(
+        fs.readFileSync(saved.path).equals(handState),
+        'MCP-saved state must be byte-identical to the Cycle A input',
+      ).toBe(true)
+
+      const stopCycleAEngine = await activeClient.call('stop_engine')
+      expect(stopCycleAEngine.isError, stopCycleAEngine.text).toBe(false)
+      await waitForEngine(false, 15_000, 'Cycle A engine stopped')
+      await sleep(1500)
+      const afterCycleALog = (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text
+      expect(
+        countErrors(afterCycleALog),
+        `Cycle A must add no ERROR: lines. Log tail: ${afterCycleALog.slice(-1200)}`,
+      ).toBe(errorsBeforeCycleA)
+
+      // ── Cycle B: the MCP output (never the hand fixture) is the restore input.
+      const errorsBeforeCycleB = countErrors(afterCycleALog)
+      const startRestored = await activeClient.call('start_engine', { capture_wav: restoredWav })
+      expect(startRestored.isError, startRestored.text).toBe(false)
+      await waitForEngine(true, 15_000, 'Cycle B engine running')
+      await sleep(2500)
+
+      const initRestored = await activeClient.call('evaluate_orbitscore', {
+        code: [
+          'var global = init GLOBAL',
+          'global.key("C")',
+          'global.start()',
+          'var rsSeq = init global.seq',
+        ].join('\n'),
+      })
+      expect(initRestored.isError, initRestored.text).toBe(false)
+      const attachFailuresBeforeRestored = countAttachFailures(
+        (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
+      )
+      const attachRestored = await activeClient.call('evaluate_orbitscore', {
+        code: `rsSeq.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)}, ${JSON.stringify(saved.path)})`,
+      })
+      expect(attachRestored.isError, attachRestored.text).toBe(false)
+      await sleep(6000)
+      const afterRestoredAttachLog = (
+        await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })
+      ).text
+      expect(
+        countAttachFailures(afterRestoredAttachLog),
+        `Cycle B instrument attach must add no OUTPROC_ATTACH_FAILED. Log tail: ${afterRestoredAttachLog.slice(-1200)}`,
+      ).toBe(attachFailuresBeforeRestored)
+
+      const playRestored = await activeClient.call('evaluate_orbitscore', {
+        code: ['rsSeq.play(1)', 'RUN(rsSeq)'].join('\n'),
+      })
+      expect(playRestored.isError, playRestored.text).toBe(false)
+      await sleep(3000)
+
+      const stopsBeforeRestored = countGlobalStops(
+        (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
+      )
+      const stopRestored = await activeClient.call('evaluate_orbitscore', {
+        code: ['rsSeq.stop()', 'global.stop()'].join('\n'),
+      })
+      expect(stopRestored.isError, stopRestored.text).toBe(false)
+      await waitUntil(
+        async () =>
+          countGlobalStops(
+            (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
+          ) > stopsBeforeRestored,
+        {
+          intervalMs: 200,
+          timeoutMs: 5_000,
+          label: 'Cycle B transport stopped before engine stop',
+        },
+      )
+
+      const stopCycleBEngine = await activeClient.call('stop_engine')
+      expect(stopCycleBEngine.isError, stopCycleBEngine.text).toBe(false)
+      await waitForEngine(false, 15_000, 'Cycle B engine stopped')
+      await sleep(1500)
+      const afterCycleBLog = (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text
+      expect(
+        countErrors(afterCycleBLog),
+        `Cycle B must add no ERROR: lines. Log tail: ${afterCycleBLog.slice(-1200)}`,
+      ).toBe(errorsBeforeCycleB)
+
+      // ── Frequency-only verdict: no state decode is duplicated in the test.
+      const shiftedBuf = fs.readFileSync(shiftedWav)
+      const restoredBuf = fs.readFileSync(restoredWav)
+      const shiftedDuration = analyzeWavBuffer(shiftedBuf).durationSec
+      const restoredDuration = analyzeWavBuffer(restoredBuf).durationSec
+      const shiftedHz = estimateFundamentalHz(shiftedBuf, {
+        fromSec: 0,
+        toSec: shiftedDuration,
+      })
+      const restoredHz = estimateFundamentalHz(restoredBuf, {
+        fromSec: 0,
+        toSec: restoredDuration,
+      })
+      expect(shiftedHz, 'Cycle A capture has no measurable steady fundamental').toBeDefined()
+      expect(restoredHz, 'Cycle B capture has no measurable steady fundamental').toBeDefined()
+
+      // MIDI-standard pitch formula is the independent musical specification.
+      const midiFrequencyHz = (midiNote: number): number => 440 * 2 ** ((midiNote - 69) / 12)
+      const expectedDefaultHz = midiFrequencyHz(60)
+      const expectedShiftedHz = midiFrequencyHz(60 + 7)
+      const shiftedMeasured = shiftedHz!
+      const restoredMeasured = restoredHz!
+      expect(
+        Math.abs(shiftedMeasured - expectedShiftedHz) / expectedShiftedHz,
+        `Cycle A ${shiftedMeasured.toFixed(2)}Hz must be offset-7 pitch ${expectedShiftedHz.toFixed(2)}Hz`,
+      ).toBeLessThanOrEqual(0.02)
+      expect(
+        Math.abs(shiftedMeasured - expectedDefaultHz) / expectedDefaultHz,
+        `Cycle A ${shiftedMeasured.toFixed(2)}Hz must be clearly distinct from default ${expectedDefaultHz.toFixed(2)}Hz`,
+      ).toBeGreaterThan(0.1)
+      expect(
+        Math.abs(restoredMeasured - shiftedMeasured) / shiftedMeasured,
+        `restored ${restoredMeasured.toFixed(2)}Hz must match saved ${shiftedMeasured.toFixed(2)}Hz`,
+      ).toBeLessThanOrEqual(0.01)
+      expect(
+        Math.abs(restoredMeasured - expectedShiftedHz) / expectedShiftedHz,
+        `restored ${restoredMeasured.toFixed(2)}Hz must be offset-7 pitch ${expectedShiftedHz.toFixed(2)}Hz`,
+      ).toBeLessThanOrEqual(0.02)
     },
     TEST_TIMEOUT_MS,
   )

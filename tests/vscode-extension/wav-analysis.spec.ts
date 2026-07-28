@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 
-import { analyzeWavBuffer } from '../../packages/vscode-extension/src/wav-analysis'
+import {
+  analyzeWavBuffer,
+  estimateFundamentalHz,
+} from '../../packages/vscode-extension/src/wav-analysis'
 
 /**
  * Unit tests for the capture-seam WAV analyzer (#388 Agent Bridge) using
@@ -19,6 +22,9 @@ interface BuildWavOptions {
   /** Click onset times in seconds. */
   clicks?: number[]
   clickAmp?: number
+  /** Optional full-duration sine tone used by fundamental-frequency tests. */
+  toneHz?: number
+  toneAmp?: number
   /** When false, writes 0 for both RIFF size and data size (unfinalized header, e.g. a killed writer). */
   finalizeHeader?: boolean
 }
@@ -39,6 +45,12 @@ function buildFloat32Wav(opts: BuildWavOptions): Buffer {
 
   // Precompute per-frame mono sample (silence, plus click bursts).
   const samples = new Float32Array(frames)
+  if (opts.toneHz !== undefined) {
+    const toneAmp = opts.toneAmp ?? 0.25
+    for (let i = 0; i < frames; i++) {
+      samples[i] = toneAmp * Math.sin((2 * Math.PI * opts.toneHz * i) / sampleRate)
+    }
+  }
   const clickFrames = Math.max(1, Math.floor(sampleRate * CLICK_DURATION_SEC))
   for (const t of clicks) {
     const start = Math.floor(t * sampleRate)
@@ -193,6 +205,21 @@ describe('analyzeWavBuffer', () => {
     expect(analysis.format.channels).toBe(1)
     expect(analysis.soundDetected).toBe(true)
     expect(analysis.onsets).toHaveLength(4)
+  })
+})
+
+describe('estimateFundamentalHz', () => {
+  it.each([440, 261.63, 392])('estimates a synthetic %s Hz sine within 1%', (expectedHz) => {
+    const buf = buildFloat32Wav({ seconds: 1, toneHz: expectedHz, toneAmp: 0.25 })
+    const measuredHz = estimateFundamentalHz(buf, { fromSec: 0.1, toSec: 0.9 })
+
+    expect(measuredHz).toBeDefined()
+    expect(Math.abs(measuredHz! - expectedHz) / expectedHz).toBeLessThanOrEqual(0.01)
+  })
+
+  it('returns undefined for silence', () => {
+    const buf = buildFloat32Wav({ seconds: 1 })
+    expect(estimateFundamentalHz(buf, { fromSec: 0, toSec: 1 })).toBeUndefined()
   })
 })
 
