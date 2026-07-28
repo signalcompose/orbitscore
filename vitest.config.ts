@@ -1,6 +1,6 @@
 import path from 'node:path'
 
-import { defineConfig } from 'vitest/config'
+import { configDefaults, defineConfig } from 'vitest/config'
 
 // #527 review Critical #3: `vscode` only exists as a runtime module inside a
 // real extension host (this repo only depends on `@types/vscode`), so
@@ -21,5 +21,24 @@ export default defineConfig({
     alias: {
       vscode: path.resolve(__dirname, 'tests/mocks/vscode.ts'),
     },
+  },
+  test: {
+    // 🔴 `.claude/worktrees/` を discovery から外す。ここには subagent が作った
+    // ブランチのフルコピーが残っており、**同じ spec ファイルが何本も存在する**。
+    // vitest の位置引数は「発見済み全ファイルへの正規表現フィルタ」なので、
+    // `vitest run tests/e2e/orbitstudio-mcp-gated.spec.ts` と書いても worktree 内の
+    // 同名パスまで一致してしまう。
+    //
+    // 実害は理論上の話ではない: これで **実機 OrbitStudio が 7 個同時起動**し、
+    // daemon が 19 本残留した（2026-07-28。同種の事故は WORK_LOG にも記録がある）。
+    // gated spec 側のコメントは危険を警告しているだけで、何も強制していなかった。
+    //
+    // ⚠️ **既定値を手打ちで再現しない**。`test.exclude` に配列を渡すと vitest の
+    // `defaultExclude` は**マージされず丸ごと置き換わる**（`@vitest/utils` の `deepMerge` が
+    // 配列を mergeable から除外しているため）。当初 `node_modules` / `dist` だけを手で
+    // 並べたところ、`**/.{idea,git,cache,output,temp}/**` や `**/cypress/**` の除外が
+    // 黙って消えていた — **この PR が塞ごうとしている穴と同じ形の穴**を別の場所に
+    // 開けていた（`.cache/` に spec を置くと実際に拾われることを実測で確認）。
+    exclude: [...configDefaults.exclude, '**/.claude/worktrees/**'],
   },
 })

@@ -86,6 +86,33 @@ impl PluginFormat {
     }
 }
 
+/// attach する plugin の拡張子から effect child binary を選ぶ（純関数・unit テスト対象）。
+///
+/// **#552**: 従来 effect の format は `ORBIT_EFFECT_FORMAT` による **process-global** だったため、
+/// 1つのチェーンに CLAP と VST3 のエフェクトを混在させられなかった。プラグイン形式は
+/// 利用者に見えてはならない実装の詳細であり（`PLUGIN_CAPABILITY_ABSTRACTION_v1.md` CAP.6-1
+/// 「上位は能力 ID だけを知り、形式分岐を持たない」）、instrument 側と同じ per-plugin 解決へ揃える。
+///
+/// - `current_child_exe` の file name がフォーマット別デフォルト名でない場合は
+///   **明示指定と見なして触らない**（`ORBIT_EFFECT_CHILD_BIN` override と gated テストの
+///   config 直指定を保護する）。
+/// - デフォルト名の場合は**同じディレクトリ**でフォーマットに応じた binary に読み替える。
+///   `current_exe` からの再導出はしない（テストハーネスでは `current_exe` が
+///   `target/debug/deps/` 配下になり sibling 解決が壊れるため）。
+/// - 冪等かつ対称: retryable な attach 失敗で `ChildLaunch` が再利用されても毎回この読み替えが
+///   走るので、`.vst3` → `.clap` の attach し直しで元の child に戻る。
+pub(crate) fn child_exe_for_attach(current_child_exe: &Path, plugin_path: &Path) -> PathBuf {
+    // 規則そのものは instrument と共有する（`outproc_child_exe`）。ここが持つのは
+    // 「effect の binary 名の対」だけ。デフォルト名は `default_child_name()` から導出する
+    // （手打ちリテラルだとリネーム時に判定が false へ倒れ、切替が無音で無効化される）。
+    crate::outproc_child_exe::child_exe_for_attach(
+        current_child_exe,
+        plugin_path,
+        PluginFormat::Clap.default_child_name(),
+        PluginFormat::Vst3.default_child_name(),
+    )
+}
+
 /// OOP effect の起動設定。plugin は post-boot attach では不要で、eager start と gated test のみ使う。
 /// sample_rate は device 確定後に渡すので含めない。
 pub struct OutProcEffectConfig {
@@ -104,9 +131,24 @@ pub struct OutProcEffectConfig {
 
 impl OutProcEffectConfig {
     /// 環境変数から設定を組む（production `start()` 用）:
-    /// - `ORBIT_EFFECT_FORMAT`: `clap` | `vst3`（省略時 `clap`）。
+    /// - `ORBIT_EFFECT_FORMAT`: `clap` | `vst3`（省略時 `clap`）。**初期値のみ**。
     /// - `ORBIT_EFFECT_CHILD_BIN`: child binary path（省略時は daemon exe と同一ディレクトリの
     ///   format 対応 child）。
+    ///
+    /// **🔴 #552: `ORBIT_EFFECT_FORMAT` は post-boot attach の child 選択を決めない。**
+    /// `LoadPlugin` はあらゆる経路で `select_child_exe` を通り、child exe がデフォルト名なら
+    /// **plugin パスの拡張子**で上書きされる（[`child_exe_for_attach`]）。したがってここで
+    /// 決まる `child_exe` は「最初の attach までの初期値」であり、実運用では即座に
+    /// 置き換わる。プラグイン形式を利用者に見せないための設計（CAP.6-1）。
+    ///
+    /// 既知の非対称（許容）: 無効値（例 `ORBIT_EFFECT_FORMAT=nonsense`）は起動時エラーで
+    /// daemon を落とすが、有効値は実際の child 選択に影響しない。
+    ///
+    /// **存置の理由**: repo 内に本 env の利用者は無い（`ORBIT_EFFECT_FORMAT` の参照は本
+    /// ファイルとドキュメントのみ。gated テストは `OutProcEffectConfig` を直接組み立てており
+    /// env を経由しない）。それでも消していないのは、既に外部から渡している運用があった場合に
+    /// **無効値の loud な起動失敗**という既存挙動を黙って変えないため。削除するなら
+    /// 「env を読まなくなった」ことが分かる形で別 PR にする。
     /// - `ORBIT_EFFECT_PLUGIN`: plugin bundle path（任意。post-boot attach は `LoadPlugin` で渡す）。
     /// - `ORBIT_EFFECT_PLUGIN_ID`: plugin id（任意）。
     pub fn from_env() -> Result<Self, String> {
@@ -365,7 +407,7 @@ pub fn spawn_effect_child(
 
 /// QUIT 済み（または crash した）child を bounded に reap する。timeout 超過で kill にフォールバック。
 /// `SandboxChildGuard` の reap と同じ意味論（非 RT・spin でなく yield）。
-fn reap(child: &mut Child) {
+fn reap(child: &mut Child, child_name: &str) {
     let deadline = Instant::now() + REAP_TIMEOUT;
     loop {
         match child.try_wait() {
@@ -373,7 +415,7 @@ fn reap(child: &mut Child) {
             Ok(None) if Instant::now() < deadline => std::thread::yield_now(),
             Ok(None) => {
                 tracing::warn!(
-                    "orbit-clap-effect-child が {REAP_TIMEOUT:?} 以内に終了せず kill にフォールバック"
+                    "{child_name} が {REAP_TIMEOUT:?} 以内に終了せず kill にフォールバック"
                 );
                 let _ = child.kill();
                 let _ = child.wait();
@@ -432,6 +474,9 @@ impl EffectChildSupervisor {
         let base = Instant::now();
         // respawn 用に closure へ move する shm_path（struct 側は unlink 用に原本を保持する）。
         let shm_path_wd = shm_path.clone();
+        // #552: VST3 / CLAP どちらの child かをログに出すため実際の名前を持ち込む
+        // （決め打ちだと VST3 child のクラッシュが CLAP child の障害に見える）。
+        let child_name_wd = crate::outproc_child_exe::exe_label(&child_exe, "orbit-effect-child");
         // first_child は **closure に直接 move しない**: thread spawn が失敗すると closure ごと drop され
         // first_child が orphan 化して shm を spin し続ける（`Child::drop` は kill しない）。thread spawn
         // 成功を確認してから channel で渡し、spawn 失敗時は first_child を本 scope に残して reap できるようにする。
@@ -485,12 +530,14 @@ impl EffectChildSupervisor {
                                         != orbit_audio_sandbox::transport::CHILD_STATUS_READY
                                 }
                             {
-                                tracing::warn!("orbit-clap-effect-child exited during initial attach ({status})");
+                                tracing::warn!(
+                                    "{child_name_wd} exited during initial attach ({status})"
+                                );
                                 stats.child_early_exit.store(true, Ordering::Release);
                                 break;
                             }
                             tracing::warn!(
-                                "orbit-clap-effect-child が異常終了（{status}）→ respawn する"
+                                "{child_name_wd} が異常終了（{status}）→ respawn する"
                             );
                             // SAFETY: region は watchdog が所有する生存 ctl_mmap を指す。
                             // 前 incarnation の READY を消してから replacement を spawn する。
@@ -545,7 +592,7 @@ impl EffectChildSupervisor {
                 unsafe {
                     (*region).control.store(CONTROL_QUIT, Ordering::Release);
                 }
-                reap(&mut child);
+                reap(&mut child, &child_name_wd);
                 // ここで ctl_mmap が drop（thread 終了）。shm unlink は supervisor drop が join 後に行う。
             }) {
             Ok(handle) => handle,
@@ -997,6 +1044,54 @@ mod tests {
         );
         stop.store(true, Ordering::Relaxed);
         handle.join().expect("process loop thread joins");
+    }
+
+    // #552: effect の format は attach する plugin ごとに決まる（process-global ではない）。
+    // 利用者にプラグイン形式は見えてはならず、CLAP と VST3 のエフェクトは同一チェーンに
+    // 混在できなければならない（CAP.6-1「上位は形式分岐を持たない」）。
+    #[test]
+    fn effect_plugin_format_selects_child_name_from_extension() {
+        // 内部の format 判定ではなく**公開の入口**を通す（実際に attach で使われる経路）。
+        let current = Path::new("/opt/orbit/bin/orbit-clap-effect-child");
+        let child_for = |plugin: &str| {
+            child_exe_for_attach(current, Path::new(plugin))
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("child name")
+                .to_owned()
+        };
+        assert_eq!(child_for("reverb.clap"), "orbit-clap-effect-child");
+        assert_eq!(child_for("Tape Echo.VST3"), "orbit-vst3-effect-child");
+        // 未知拡張子は CLAP へフォールバック（raw .dylib の CLAP を attach する gated テストがある）。
+        assert_eq!(
+            child_for("libclap_test_effect.dylib"),
+            "orbit-clap-effect-child"
+        );
+    }
+
+    #[test]
+    fn effect_child_exe_for_attach_swaps_within_same_directory() {
+        let clap_child = PathBuf::from("/opt/orbit/bin/orbit-clap-effect-child");
+        assert_eq!(
+            child_exe_for_attach(&clap_child, Path::new("/plugins/Tape Echo.vst3")),
+            PathBuf::from("/opt/orbit/bin/orbit-vst3-effect-child"),
+        );
+        // 対称・冪等: VST3 child から .clap を attach し直すと CLAP child へ戻る。
+        let vst3_child = PathBuf::from("/opt/orbit/bin/orbit-vst3-effect-child");
+        assert_eq!(
+            child_exe_for_attach(&vst3_child, Path::new("/plugins/Surge.clap")),
+            PathBuf::from("/opt/orbit/bin/orbit-clap-effect-child"),
+        );
+    }
+
+    #[test]
+    fn effect_child_exe_for_attach_preserves_explicit_override() {
+        // ORBIT_EFFECT_CHILD_BIN / gated テストの直指定を壊さない（デフォルト名以外は触らない）。
+        let explicit = PathBuf::from("/custom/my-effect-host");
+        assert_eq!(
+            child_exe_for_attach(&explicit, Path::new("/plugins/Tape Echo.vst3")),
+            explicit,
+        );
     }
 
     // C2（pr-review-team）: format 選択の純関数は device/child プロセス不要で CI 常時実行できるのに
