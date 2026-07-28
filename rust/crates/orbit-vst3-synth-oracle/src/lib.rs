@@ -28,6 +28,46 @@ fn copy_wstring(src: &str, dst: &mut [TChar]) {
     }
 }
 
+/// #553: **state = 半音単位のピッチオフセット**。
+///
+/// oracle が観測可能な state を持つことで、「state を変える → 音が変わる → 保存 →
+/// 復元 → 同じ音」というループを **capture WAV の解析だけで無人検証**できる
+/// （`docs/testing/E2E_HARNESS_SPEC.md` / Epic #546 Phase 1）。
+///
+/// 半音オフセットを選んだ理由: 期待値が [`voice_frequency_hz`] の式から**導出できる**ため、
+/// テストが「実装が出した値」ではなく**仕様の式**と照合できる（改ざん耐性）。
+pub const STATE_MAGIC: u32 = 0x4F52_4331; // "ORC1"
+
+/// state バイト列の長さ（magic u32 + offset i32・リトルエンディアン）。
+pub const STATE_LEN: usize = 8;
+
+/// ノート番号とピッチオフセットから発音周波数を求める（**仕様の式・単一の真実**）。
+///
+/// テストはこの関数から期待値を導出する。実装側の別経路でハードコードしないこと。
+pub fn voice_frequency_hz(key: i16, semitone_offset: i32) -> f32 {
+    440.0 * 2.0f32.powf((key as f32 + semitone_offset as f32 - 69.0) / 12.0)
+}
+
+/// state バイト列を組み立てる（`getState` と テストが共用）。
+pub fn encode_state(semitone_offset: i32) -> [u8; STATE_LEN] {
+    let mut out = [0u8; STATE_LEN];
+    out[0..4].copy_from_slice(&STATE_MAGIC.to_le_bytes());
+    out[4..8].copy_from_slice(&semitone_offset.to_le_bytes());
+    out
+}
+
+/// state バイト列を解釈する。magic 不一致・長さ不足は `None`（**黙って 0 に倒さない**）。
+pub fn decode_state(bytes: &[u8]) -> Option<i32> {
+    if bytes.len() < STATE_LEN {
+        return None;
+    }
+    let magic = u32::from_le_bytes(bytes[0..4].try_into().ok()?);
+    if magic != STATE_MAGIC {
+        return None;
+    }
+    Some(i32::from_le_bytes(bytes[4..8].try_into().ok()?))
+}
+
 #[derive(Clone, Copy)]
 struct SineVoice {
     phase: f32,
@@ -37,8 +77,8 @@ struct SineVoice {
 }
 
 impl SineVoice {
-    fn note_on(&mut self, key: i16, sample_rate: f32) {
-        let frequency = 440.0 * 2.0f32.powf((key as f32 - 69.0) / 12.0);
+    fn note_on(&mut self, key: i16, sample_rate: f32, semitone_offset: i32) {
+        let frequency = voice_frequency_hz(key, semitone_offset);
         self.phase = 0.0;
         self.phase_inc = TAU * frequency / sample_rate;
         self.active = true;
@@ -55,6 +95,8 @@ impl SineVoice {
 struct SynthProcessor {
     voice: Cell<SineVoice>,
     sample_rate: Cell<f32>,
+    /// #553: `setState` / `getState` が往復させる観測可能な state（半音オフセット）。
+    semitone_offset: Cell<i32>,
 }
 
 impl SynthProcessor {
@@ -69,6 +111,7 @@ impl SynthProcessor {
                 key: 69,
             }),
             sample_rate: Cell::new(48_000.0),
+            semitone_offset: Cell::new(0),
         }
     }
 }
@@ -153,10 +196,56 @@ impl IComponentTrait for SynthProcessor {
     unsafe fn setActive(&self, _state: TBool) -> tresult {
         kResultOk
     }
-    unsafe fn setState(&self, _state: *mut IBStream) -> tresult {
-        kResultOk
+    /// #553: ホストが渡す state を読み、半音オフセットを復元する。
+    ///
+    /// **magic 不一致・長さ不足は `kResultFalse` を返して black-hole にしない** —
+    /// 黙って 0 に倒すと「復元したつもりで別の音」になり、ループ検証が意味を失う。
+    unsafe fn setState(&self, state: *mut IBStream) -> tresult {
+        if state.is_null() {
+            return kResultFalse;
+        }
+        let stream = match ComRef::from_raw(state) {
+            Some(s) => s,
+            None => return kResultFalse,
+        };
+        let mut buffer = [0u8; STATE_LEN];
+        let mut read: i32 = 0;
+        let rc = stream.read(
+            buffer.as_mut_ptr() as *mut std::ffi::c_void,
+            STATE_LEN as i32,
+            &mut read,
+        );
+        if rc != kResultOk || read != STATE_LEN as i32 {
+            return kResultFalse;
+        }
+        match decode_state(&buffer) {
+            Some(offset) => {
+                self.semitone_offset.set(offset);
+                kResultOk
+            }
+            None => kResultFalse,
+        }
     }
-    unsafe fn getState(&self, _state: *mut IBStream) -> tresult {
+
+    /// #553: 現在の半音オフセットを state として書き出す。
+    unsafe fn getState(&self, state: *mut IBStream) -> tresult {
+        if state.is_null() {
+            return kResultFalse;
+        }
+        let stream = match ComRef::from_raw(state) {
+            Some(s) => s,
+            None => return kResultFalse,
+        };
+        let mut buffer = encode_state(self.semitone_offset.get());
+        let mut written: i32 = 0;
+        let rc = stream.write(
+            buffer.as_mut_ptr() as *mut std::ffi::c_void,
+            STATE_LEN as i32,
+            &mut written,
+        );
+        if rc != kResultOk || written != STATE_LEN as i32 {
+            return kResultFalse;
+        }
         kResultOk
     }
 }
@@ -236,9 +325,11 @@ impl IAudioProcessorTrait for SynthProcessor {
                     break;
                 }
                 match event.r#type as Event_::EventTypes {
-                    Event_::EventTypes_::kNoteOnEvent => {
-                        voice.note_on(event.__field0.noteOn.pitch, self.sample_rate.get())
-                    }
+                    Event_::EventTypes_::kNoteOnEvent => voice.note_on(
+                        event.__field0.noteOn.pitch,
+                        self.sample_rate.get(),
+                        self.semitone_offset.get(),
+                    ),
                     Event_::EventTypes_::kNoteOffEvent => {
                         voice.note_off(event.__field0.noteOff.pitch)
                     }
@@ -433,4 +524,95 @@ extern "system" fn GetPluginFactory() -> *mut IPluginFactory {
         .to_com_ptr::<IPluginFactory>()
         .unwrap()
         .into_raw()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// state バイト列が往復すること（`getState` → `setState` の中身）。
+    #[test]
+    fn state_round_trips_through_encoding() {
+        for offset in [-24, -1, 0, 1, 7, 24] {
+            let bytes = encode_state(offset);
+            assert_eq!(bytes.len(), STATE_LEN);
+            assert_eq!(
+                decode_state(&bytes),
+                Some(offset),
+                "encode → decode で {offset} が保存されない"
+            );
+        }
+    }
+
+    /// 🔴 不正な state を **黙って 0 に倒さない**（復元したつもりで別の音になるのを防ぐ）。
+    #[test]
+    fn state_rejects_foreign_and_short_payloads() {
+        let mut wrong_magic = encode_state(7);
+        wrong_magic[0] ^= 0xFF;
+        assert_eq!(decode_state(&wrong_magic), None, "magic 不一致を受理した");
+
+        let short = &encode_state(7)[..STATE_LEN - 1];
+        assert_eq!(decode_state(short), None, "長さ不足を受理した");
+
+        assert_eq!(decode_state(&[]), None, "空を受理した");
+    }
+
+    /// 期待値は**仕様の式**から導出する（実装が出した値と付き合わせない）。
+    #[test]
+    fn offset_shifts_pitch_by_semitones() {
+        let base = voice_frequency_hz(69, 0);
+        assert!(
+            (base - 440.0).abs() < 1e-3,
+            "A4 (key 69・offset 0) は 440Hz のはず: {base}"
+        );
+
+        // +12 半音 = 1 オクターブ = 周波数2倍。
+        let octave_up = voice_frequency_hz(69, 12);
+        assert!(
+            (octave_up / base - 2.0).abs() < 1e-4,
+            "+12 半音で 2 倍にならない: {octave_up} / {base}"
+        );
+
+        // オフセットは key と等価に効く（key+n と offset+n が同じ音）。
+        for (key, offset) in [(60i16, 7i32), (72, -5), (69, 3)] {
+            let via_offset = voice_frequency_hz(key, offset);
+            let via_key = voice_frequency_hz(key + offset as i16, 0);
+            assert!(
+                (via_offset - via_key).abs() < 1e-3,
+                "key={key} offset={offset}: オフセットが key と等価に効いていない"
+            );
+        }
+    }
+
+    /// 🔴 配線: `note_on` が **実際に** オフセットを使って phase_inc を決めること。
+    /// 純関数（`voice_frequency_hz`）のテストだけでは、`note_on` がそれを無視していても green になる。
+    #[test]
+    fn note_on_applies_state_offset_to_phase_increment() {
+        let sample_rate = 48_000.0f32;
+        let mut plain = SineVoice {
+            phase: 0.0,
+            phase_inc: 0.0,
+            active: false,
+            key: 0,
+        };
+        let mut shifted = plain;
+
+        plain.note_on(69, sample_rate, 0);
+        shifted.note_on(69, sample_rate, 12);
+
+        let expected_plain = TAU * voice_frequency_hz(69, 0) / sample_rate;
+        let expected_shifted = TAU * voice_frequency_hz(69, 12) / sample_rate;
+        assert!(
+            (plain.phase_inc - expected_plain).abs() < 1e-6,
+            "offset 0 の phase_inc が仕様式と一致しない"
+        );
+        assert!(
+            (shifted.phase_inc - expected_shifted).abs() < 1e-6,
+            "offset 12 の phase_inc が仕様式と一致しない"
+        );
+        assert!(
+            (shifted.phase_inc / plain.phase_inc - 2.0).abs() < 1e-4,
+            "offset がヴォイスに反映されていない（phase_inc が変わらない）"
+        );
+    }
 }

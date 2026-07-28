@@ -17,6 +17,38 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.309 feat(oracle): VST3 synth oracle に観測可能な state 意味論 #553 (Jul 28, 2026)
+
+**Date**: 2026-07-28
+**Status**: 🔄 PR 準備中
+
+Epic #546 **Phase 1** の最初の項目。受け入れ基準「VST3 と CLAP の両方で同じ E2E が green
+（**oracle synth で無人化**）」の前提を作る。
+
+**なぜ最初にこれか**: ループ（宣言 → 音色変更 → 記録 → 再起動 → 同じ音）を**無人で検証**するには、
+「state を変えると音が変わる」「state が往復する」プラグインが要る。実プラグインは人間の UI
+操作が要るため無人化できない。**oracle がこの性質を持って初めて以後の全フェーズの検証が閉じる。**
+
+**現状の問題**: `setState` / `getState` は `kResultOk` を返すだけのスタブで、音は
+`440 * 2^((key-69)/12)` の固定式。**state を変えても音が同じ**なので復元の成否を音で判定できなかった。
+
+**実装**: **state = 半音単位のピッチオフセット**（`i32`）。
+
+- `voice_frequency_hz(key, offset)` を**仕様の式・単一の真実**として公開し、テストはここから
+  期待値を導出する（E2E_HARNESS_SPEC「期待値は仕様の式から導出する」= 改ざん耐性）
+- `encode_state` / `decode_state`（magic `"ORC1"` + i32 LE）。**magic 不一致・長さ不足は
+  `None` を返し黙って 0 に倒さない** — 復元したつもりで別の音になるのを防ぐ
+- `setState` / `getState` を `IBStream` 経由で実装（不正入力は `kResultFalse`）
+- `note_on` がオフセットを実際に使う
+
+**変異検証（5種・すべて red）**: ①`note_on` がオフセットを無視（**配線を切る**）②encode で
+offset を落とす ③magic 検査を外す ④長さ検査を外す ⑤式の符号を反転。
+
+> ①が重要: 純関数 `voice_frequency_hz` のテストだけでは、`note_on` がそれを無視していても
+> green のまま通る。**配線はロジックと別にテストする**（#551 で同型の穴を踏んだ教訓）。
+
+**検証**: oracle 4 tests passed / fmt clean / clippy 0。
+
 ### 6.307 docs(specs-v2): Phase 0 設計 spec 3本 正本化 #547 (Jul 28, 2026)
 
 **Date**: 2026-07-28
