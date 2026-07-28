@@ -132,7 +132,8 @@ host は `evt_ack_seq < evt_seq` の間、未処理スロットを**順に**処�
 > 書き込む** — Release/Acquire を守っていても防げない（順序保証ではなく再利用判定の問題）。
 
 **🔴 `EVT_SLOTS >= 2`**（鏡像元 `transport.rs:59`: *"2 以上であること(連続 seq が必ず別 slot を
-指す前提)"*）。2 あれば正常経路のフェーズ B 時点で `UI_CLOSED_DONE` を常に即投函できる。
+指す前提)"*）。`STATE_DIRTY` の in-flight を最大1件に固定する（下記）ため**リング占有の上限は 3**
+であり、`EVT_SLOTS = 3` なら見送りが原理的に起きない。2 でも再試行規則があるので停止はしない。
 
 **🔴 slot 再利用の不変条件（鏡像元から継承する）**:
 
@@ -166,6 +167,9 @@ host は `evt_ack_seq < evt_seq` の間、未処理スロットを**順に**処�
 - したがって **`STATE_DIRTY` の合流は child ローカルの pending フラグで行う**
   （「dirty が立っている」を child 側に保持し、スロットが空いてから1件だけ投函する）。
   スロット上の書き換えによる合流は**禁止**
+- **`STATE_DIRTY` の in-flight は常に最大1件**（未 ack の dirty があるうちは新たに投函せず
+  pending フラグへ合流させる）。これにより**リング占有の上限が静的に決まる**:
+  `STATE_DIRTY` 1 + `UI_CLOSED` 1 + `UI_CLOSED_DONE` 1 = **3**
 - **🔴 取りこぼし不可のイベント（`UI_CLOSED` / `UI_CLOSED_DONE`）は、投函できるまで
   child が保持し runloop で再試行する。** 「見送る = 落とす」に倒してはならない
   （`Closing` に留まるのはこの一般規則の特例であり、`Closed` 遷移後に投函する
@@ -186,6 +190,7 @@ host は `evt_ack_seq < evt_seq` の間、未処理スロットを**順に**処�
 | **host プロセスが死亡** | 既存の `ParentWatch` が child ごと回収する（UIH.1・変更なし）。新たな規定は不要 |
 | **child の `cmd_ack_seq` が永遠に返らない** | host はコマンドにタイムアウトを持ち、**loud に失敗**させる。規律3 の待ちに脱出条件が無い状態にしない |
 | **`Closing` / `Closed` 中に `OPEN_UI` が届く** | **failure ack**（`cmd_result_detail = "closing-in-progress"`）。タイムアウト任せにしない（正常系なのに loud な失敗になる） |
+| **🔴 正常な teardown（`CONTROL_QUIT`）が in-flight のハンドシェイクと交差する** | **host は QUIT を立てる前に、in-flight のクローズ手続き・保留イベント・MCP 完了待ちを解決する**（UIH.6 の停止前セーフポイントと同順で直列化）。解決できないものは **loud に報告**した上で打ち切る。<br>これを規定しないと: 再試行中の `UI_CLOSED_DONE` が QUIT による child 終了で永遠に投函されず、**`close_plugin_ui` の完了判定（DONE の受信）がハングする** |
 
 > **タイムアウト後に host が遅れて保存を完遂した場合**は、二重処理として禁止しない。
 > プラグインインスタンスが生きている限り「現在の真の state」が保存されるため実害が無く、
