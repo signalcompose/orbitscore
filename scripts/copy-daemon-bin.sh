@@ -82,7 +82,8 @@ if command -v cargo >/dev/null 2>&1; then
   # （TS 専業 contributor 等）でも npm run build を落とさず、既存バイナリへ縮退する。
   if ! (cd "$PROJECT_ROOT/rust" \
     && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument \
-    && cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child -p orbit-vst3-instrument-child \
+    && cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child \
+      -p orbit-vst3-effect-child -p orbit-vst3-instrument-child \
     && cargo build --release -p orbit-plugin-scan); then
     echo "⚠️  release rebuild failed — bundling whatever exists in rust/target/release (may be stale)." >&2
   fi
@@ -93,5 +94,6 @@ fi
 copy_binary "orbit-audio-daemon"
 copy_binary "orbit-clap-effect-child"
 copy_binary "orbit-clap-instrument-child"
+copy_binary "orbit-vst3-effect-child"
 copy_binary "orbit-vst3-instrument-child"
 copy_binary "orbit-plugin-scan"
