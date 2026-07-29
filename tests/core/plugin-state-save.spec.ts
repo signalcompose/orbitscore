@@ -437,6 +437,34 @@ describe('plugin state address resolution and project registration (#562)', () =
 })
 
 describe('plugin state automatic snapshot wiring (#577)', () => {
+  it('T1: keeps normal auto-snapshot skips off stderr', async () => {
+    const { audio, global } = harness()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    await expect(global.saveAllPluginStates()).resolves.toEqual({ saved: 0, failures: 0 })
+    expect(warn).not.toHaveBeenCalled()
+    expect(log).toHaveBeenCalledWith(
+      '[plugin-state] auto-snapshot skipped: no loaded plugin targets',
+    )
+
+    const globalWithoutDirectory = new Global(audio)
+    const sequence = new Sequence(globalWithoutDirectory, audio)
+    sequence.setName('lead-without-directory')
+    await globalWithoutDirectory.instrument('lead-without-directory', '/LeadSynth.clap')
+    warn.mockClear()
+    log.mockClear()
+
+    await expect(globalWithoutDirectory.saveAllPluginStates()).resolves.toEqual({
+      saved: 0,
+      failures: 0,
+    })
+    expect(warn).not.toHaveBeenCalled()
+    expect(log).toHaveBeenCalledWith(
+      '[plugin-state] auto-snapshot skipped: document directory is not set',
+    )
+  })
+
   it('fires exactly once on a running-to-stopped transition', async () => {
     const { global } = harness()
     const snapshot = vi

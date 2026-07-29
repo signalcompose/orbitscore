@@ -12,6 +12,9 @@ const AUTO_SNAPSHOT_SHUTDOWN_BUDGET_MS = 1_200
  * This function attempts to quit the audio engine backend cleanly
  * (Rust daemon by default since cutover #108, or SuperCollider when opted out)
  * before exiting the process. It's called on SIGINT (Ctrl+C) and SIGTERM.
+ * `stop()` normally queues a fire-and-forget snapshot on the store's pending
+ * chain; shutdown opts out so its explicitly awaited snapshot does not consume
+ * the shared time budget by traversing every target twice.
  *
  * @param interpreter - Interpreter instance (may be null)
  *
@@ -25,14 +28,17 @@ export async function shutdown(interpreter: InterpreterV2 | null): Promise<void>
   if (interpreter) {
     const globals = interpreter.getGlobals()
     for (const global of globals) {
-      global.stop()
+      global.stop({ autoSnapshot: false })
     }
 
     let timeout: NodeJS.Timeout | undefined
     try {
-      const snapshot = Promise.all(globals.map((global) => global.saveAllPluginStates())).then(
-        () => 'complete' as const,
-      )
+      const snapshot = (async () => {
+        for (const global of globals) {
+          await global.saveAllPluginStates()
+        }
+        return 'complete' as const
+      })()
       const budget = new Promise<'timeout'>((resolve) => {
         timeout = setTimeout(() => resolve('timeout'), AUTO_SNAPSHOT_SHUTDOWN_BUDGET_MS)
       })

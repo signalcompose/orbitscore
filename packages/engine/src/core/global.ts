@@ -50,6 +50,7 @@ export interface ResolvedPluginStateTarget {
  * slot が既に保持している identity 素材（role / normalizedName / occurrence）を
  * そのまま写す純関数。`this` を使わないのでクラス外に置き、DSL 語彙の分類対象から外す
  * （#564: 外に出せるものを除外リストで黙らせない）。
+ * Direct slot → persistent identity/daemon address mapping shared by all save paths.
  */
 function pluginStateTargetForSlot(receiverId: string, slot: PluginSlot): ResolvedPluginStateTarget {
   return {
@@ -546,7 +547,7 @@ export class Global {
     return this
   }
 
-  stop(): this {
+  stop(options?: { autoSnapshot?: boolean }): this {
     // §L1: write the stop record BEFORE the clock clears, only if actually
     // running, and never let a log-write error block the note-offs below (a
     // throw here would otherwise leave MIDI notes hanging — music unstoppable).
@@ -556,18 +557,20 @@ export class Global {
       } catch (e) {
         console.warn(`⚠️  session-log: stop hook failed (playback continues): ${e}`)
       }
-      // Run after this synchronous stop stack has cleared the transport. The
-      // snapshot remains fire-and-forget, while its own aggregate/per-target
-      // logging provides the observable completion and failure surface.
-      void Promise.resolve()
-        .then(() => this.saveAllPluginStates())
-        .catch((error) => {
-          console.error(
-            `[plugin-state] auto-snapshot failed: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          )
-        })
+      if (options?.autoSnapshot !== false) {
+        // Run after this synchronous stop stack has cleared the transport. The
+        // snapshot remains fire-and-forget, while its own aggregate/per-target
+        // logging provides the observable completion and failure surface.
+        void Promise.resolve()
+          .then(() => this.saveAllPluginStates())
+          .catch((error) => {
+            console.error(
+              `[plugin-state] auto-snapshot failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            )
+          })
+      }
     }
     this.transportControl.stop()
     this.effectsManager.setRunningState(false)
@@ -681,8 +684,6 @@ export class Global {
     }
     return this.mixerManager.chainFor(receiver.kind, receiver.name)
   }
-
-  /** Direct slot → persistent identity/daemon address mapping shared by all save paths. */
 
   /**
    * Lists loaded plugin-state targets directly from the typed chain structure.
@@ -803,13 +804,16 @@ export class Global {
    */
   async saveAllPluginStates(): Promise<{ saved: number; failures: number }> {
     const targets = this.listPluginStateTargets()
+    // The extension's setupStderrHandler prefixes every stderr chunk with
+    // "ERROR: ". These are common normal paths (especially no loaded plugins),
+    // so keep them on stdout; warn only when the user should see an error.
     if (targets.length === 0) {
-      console.warn('[plugin-state] auto-snapshot skipped: no loaded plugin targets')
+      console.log('[plugin-state] auto-snapshot skipped: no loaded plugin targets')
       return { saved: 0, failures: 0 }
     }
     const projectDirectory = this.audioManager.getDocumentDirectory()
     if (!projectDirectory) {
-      console.warn('[plugin-state] auto-snapshot skipped: document directory is not set')
+      console.log('[plugin-state] auto-snapshot skipped: document directory is not set')
       return { saved: 0, failures: 0 }
     }
 

@@ -17,6 +17,116 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.330 fix(engine): PR #585 レビューラウンド1 — 二重 snapshot と stderr 誤警報を潰す (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Issue**: #577 (PR-A) / **PR**: #585 / **Branch**: `577-auto-snapshot-on-stop`
+**Status**: ✅ 全 1832 passed / 33 skipped / 0 failed（1829 から +3）・実機 gated E2E 5 passed
+
+`/simplify`（4観点）と **Fable 監査を並行**して回した。**2件が独立に同じ場所を指した。**
+
+#### 🔴 「warn は ERROR にならない」という設計意図が輸送層で破れていた（Fable）
+
+skip ログを `console.warn` にしたのは「**E2E の `countErrors` 同数 assert を壊さないため**」だった。
+**その前提が成立していなかった。**
+
+| 層 | 実際 |
+|---|---|
+| Node | `console.warn` は **stderr** に書く |
+| `extension.ts:1496-1507` | `process.stderr?.on('data', ...)` → ``outputChannel?.append(`ERROR: ${data.toString()}`)`` — **全チャンクに `ERROR: ` を前置** |
+| `tests/e2e/orbitstudio-mcp-gated.spec.ts:911` | `countErrors = (log) => countLogMarker(log, /ERROR:/g)`、assert は **`.toBe()` の完全一致** |
+
+つまり `[plugin-state] auto-snapshot skipped: ...` は **`get_log` 上で ERROR 行になる**。
+しかもこの warn は **プラグインを1つも積んでいない普通のセッションの毎回の stop で発火**する
+（`targets.length === 0` が最頻パス）。
+
+**現行 gated 5件が緑だったのは、`countErrors` の窓がたまたま instrument 積載状態の
+stop しか含まなかったため。**
+
+→ skip 2箇所を **`console.log`** へ。実際の保存失敗（`auto-snapshot failed for '...'`）は
+`console.error` のまま。**規範を PRJ.9 に固定**した:
+「`console.warn` は**ERROR として見せてよいもの**にだけ使う」。
+
+#### 🔴 `shutdown()` で snapshot が二重に走っていた（simplify と Fable が独立に指摘）
+
+`shutdown.ts` は全 Global に `stop()` を呼んだ**直後**に `saveAllPluginStates()` を
+明示 await していたが、**`stop()` 自身が fire-and-forget で snapshot を仕込む**（PR-A の主トリガ）。
+→ **再生中に終了するという主目的のシナリオで両方が発火**。
+
+Fable が機序を特定した:
+
+> `stop()` の fire-and-forget が先にキューへ積まれ、直後の awaited 側は同一 store の
+> pending チェーンで**その後ろに直列化**される（`project-state-store.ts:199-204`）。
+> **1.2s 予算内で全 target を2周する。**
+
+「予算を圧迫する」ではなく **実効予算が半分**だった。
+
+→ `Global.stop(options?: { autoSnapshot?: boolean })`（既定 `true` = DSL 経由は挙動不変）を足し、
+`shutdown.ts` は **`stop({ autoSnapshot: false })`** で明示保存に一本化。
+
+#### 🔴 なぜテストが検出できなかったか — 2つのテストがそれぞれ片方しか見ていなかった
+
+| テスト | 見ていたもの | 盲点 |
+|---|---|---|
+| `shutdown-plugin-state.spec.ts` | `shutdown()` の呼び出し順 | **`stop` が素の `vi.fn()`** → 内部の自動 snapshot を持たない |
+| `plugin-state-save.spec.ts` | `stop()` 単体の snapshot | `shutdown()` **経由の合成**を見ていない |
+
+**組み合わせた経路が誰の視野にも入っていなかった。**
+
+修正では**契約を再現した手書き fake を使わなかった**（fake は本物から drift して同じ盲点を
+作り直す）。`plugin-state-save.spec.ts` の `harness()` にある**実 `Global` を組むパターンを再利用**し、
+`shutdown-plugin-state.spec.ts` の既存2ケースも実 `Global` へ移した。
+
+#### 複数 Global の manifest lost-update → 直列化で塞ぎ、根本は #586 へ
+
+`projectStateStores` は **`Global` ごとの private Map**。同じ document directory を持つ
+2つの Global が `Promise.all` で並行 read-modify-write すると、atomic rename でも
+**stale read による lost update** で登記が消える（= 復元が黙って state 無しに degrade =
+Epic #546 が防ぎたい失敗そのもの）。
+
+**store キャッシュのモジュールレベル持ち上げは採らなかった。** `ProjectStateStore` は
+`audioEngine` をコンストラクタで受け取るため、**1プロセスで複数 interpreter が動く
+テストスイートでは store が「最初に作った側の audioEngine」に束縛される** — レースより悪い。
+正しい持ち上げ先は interpreter レベルだが `Global` は参照を持たない。
+
+→ PR-A は **shutdown の逐次 await**（どのみち残す性質）。根本設計は **#586**。
+**PR-C の debounce checkpoint は再生中にタイマーで発火するので直列化では守れない。**
+
+#### spec 更新（`PROJECT_FILE_SPEC_v1.md`）
+
+- PRJ.3 に **「実装状況と追跡先」の表**。**(b) UI クローズ時は #474 が前提** —
+  UIH.4 の3経路は「開いた UI を閉じる」経路であり、**UI を開く手段が無い現状では
+  閉じる経路も存在しない**。PRJ.9 の該当変異検証は **#474 完了後に実施**と明記
+- PRJ.9 に **skip ログを stderr に出さない規範**と、
+  **「`shutdown` 経路で snapshot がちょうど1回」**の変異検証項目
+
+#### 変異検証（main が sandbox 外で実行・ベースライン 32 passed からの変化で判定）
+
+| 変異 | 壊し方 | 結果 |
+|---|---|---|
+| **T2** | `shutdown.ts` の `{ autoSnapshot: false }` を外す | `1 failed \| 3 passed` — **`expected "saveAllPluginStates" to be called 1 times, but got 2 times`** |
+| **T2b** | `stop()` のガードを `if (true)` に（**呼び出し側でなく実装側**） | `2 failed \| 30 passed` — T2 と T3 の両方が落ちた |
+| **T3** | 逐次 await を `Promise.all` に戻す | `1 failed \| 3 passed` — **`expected [ 'first:start', 'second:start', …(1) ] to deeply equal [ 'first:start' ]`** |
+| **T1** | skip 2箇所を `console.warn` に戻す | `1 failed \| 27 passed` — `expected "warn" to not be called at all, but actually been called 1 times` |
+| **T1b** | **2つ目の skip（document directory）だけ**を warn に戻す | `1 failed \| 27 passed` — 1つ目で落ちて隠れていた**2つ目のパスも独立に被覆**されている |
+
+**T2 で `global.start()` が本当に `transportClock.running` を立てることが実証された**
+（立てないなら fire-and-forget が元々発火せず、opt-out 無しでも1回のままで false green になる）。
+
+復元は毎回 `cmp` で確認し、変異が残っていないことを `grep -c` で検査してから全 suite を回した。
+
+#### 記録に残すが PR-A では直さない残余リスク（Fable）
+
+- **master / sequence effect の自動保存は実機で一度も走っていない**（ユニットのみ）。
+  sum/aux は E2E の `waitUntil` が両キーを待つので直接証明あり。instrument は
+  restore サイクルの stop で間接被覆 → **PR-C の受け入れ E2E で4種同時を押さえる**
+- **load 未決着 slot の窓**: slot は `chains.set` 直後（load promise 決着前）から列挙対象。
+  手動経路と同じ窓（既存意味論）で PR-A の退行ではないが、**PR-C で露出が増える**
+- **timeout 後も snapshot はキャンセルされない**。quit と並走し、quit 後の daemon RPC 失敗が
+  per-target ERROR として遅れてログに落ちうる
+
+---
+
 ### 6.329 feat(engine): auto-snapshot plugin state on transport stop — #577 PR-A (Jul 29, 2026)
 
 **Date**: 2026-07-29
