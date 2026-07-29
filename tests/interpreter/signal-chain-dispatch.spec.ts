@@ -743,6 +743,8 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'resolvePluginStateTarget',
       // private だが Object.getOwnPropertyNames には現れる（他の private 同様に除外）。
       'pluginIndexError',
+      // resolvePluginStateTarget の bus 分岐（master / sum: / aux:）を担う private ヘルパー。
+      'pluginStateBusChain',
       // MIDI, chord, pattern, and mode registries.
       'getMidiManager',
       'importChords',

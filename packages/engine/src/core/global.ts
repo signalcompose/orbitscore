@@ -27,7 +27,12 @@ import { MidiTransportScheduler } from './global/midi-transport-scheduler'
 import { PluginEffectManager } from './global/plugin-effect-manager'
 import { PluginInstrumentManager } from './global/plugin-instrument-manager'
 import { SequenceEffectManager } from './global/sequence-effect-manager'
-import { MixerManager, MixerBusHandle, type MixerKind } from './global/mixer-manager'
+import {
+  MixerManager,
+  MixerBusHandle,
+  formatReceiverId,
+  parseReceiverId,
+} from './global/mixer-manager'
 import type { PluginSlot } from './global/effect-slot'
 import {
   ProjectStateStore,
@@ -38,32 +43,6 @@ import {
 export interface ResolvedPluginStateTarget {
   identity: PluginStateIdentity
   daemonTarget: { role: 'effect'; bus?: string } | { role: 'instrument'; instance: string }
-}
-
-function parsePluginStateBusReceiver(
-  receiverId: string,
-): { kind: MixerKind; name: string } | undefined {
-  for (const kind of ['sum', 'aux'] as const) {
-    const prefix = `${kind}:`
-    if (receiverId.startsWith(prefix)) {
-      return { kind, name: receiverId.slice(prefix.length) }
-    }
-  }
-  return undefined
-}
-
-function resolveMixerPluginStateChain(
-  mixerManager: MixerManager,
-  receiver: { kind: MixerKind; name: string },
-): readonly PluginSlot[] {
-  const bus = mixerManager.resolveBus(receiver.kind, receiver.name)
-  if (bus === undefined) {
-    throw new Error(
-      `Unknown ${receiver.kind} bus '${receiver.name}'; no plugin chain is registered for ` +
-        `'${receiver.kind}:${receiver.name}'.`,
-    )
-  }
-  return mixerManager.chainFor(receiver.kind, receiver.name)
 }
 
 export class Global {
@@ -645,6 +624,29 @@ export class Global {
   }
 
   /**
+   * The insert chain when `receiverId` addresses a bus — the `master` output
+   * endpoint (a distinct concept from sum/aux buses) or a `sum:`/`aux:`-prefixed
+   * mixer bus. Undefined when the id names no bus (sequence receivers). Throws
+   * for a prefixed id whose bus is undeclared.
+   */
+  private pluginStateBusChain(receiverId: string): readonly PluginSlot[] | undefined {
+    if (receiverId === 'master') {
+      return this.pluginEffectManager.chain()
+    }
+    const receiver = parseReceiverId(receiverId)
+    if (!receiver) {
+      return undefined
+    }
+    if (this.mixerManager.resolveBus(receiver.kind, receiver.name) === undefined) {
+      throw new Error(
+        `Unknown ${receiver.kind} bus '${receiver.name}'; no plugin chain is registered for ` +
+          `'${formatReceiverId(receiver.kind, receiver.name)}'.`,
+      )
+    }
+    return this.mixerManager.chainFor(receiver.kind, receiver.name)
+  }
+
+  /**
    * UIH.5 の揮発アドレス `(receiver,index)` を、現在のchainからSC.5 identityとdaemon slotへ
    * 同時に解決する。indexを永続キーへ流用しない。
    */
@@ -655,13 +657,9 @@ export class Global {
 
     let slot: PluginSlot | undefined
     let valid: { index: number; slot: PluginSlot }[]
-    const prefixedBus = parsePluginStateBusReceiver(receiverId)
-    if (receiverId === 'master' || prefixedBus) {
-      const effects =
-        receiverId === 'master'
-          ? this.pluginEffectManager.chain()
-          : resolveMixerPluginStateChain(this.mixerManager, prefixedBus!)
-      valid = effects.map((effect, offset) => ({ index: offset + 1, slot: effect }))
+    const busEffects = this.pluginStateBusChain(receiverId)
+    if (busEffects !== undefined) {
+      valid = busEffects.map((effect, offset) => ({ index: offset + 1, slot: effect }))
       if (index === 0) {
         throw this.pluginIndexError(
           receiverId,
@@ -670,21 +668,14 @@ export class Global {
           `${receiverId} is a bus and has no source slot; effects start at index 1`,
         )
       }
-      slot = effects[index - 1]
+      slot = busEffects[index - 1]
     } else {
       const receiver = this.sequenceRegistry.getSequence(receiverId)
       if (!receiver) {
-        const matchingBusKinds = (
-          [
-            ['sum', this.mixerManager.resolveSum(receiverId)],
-            ['aux', this.mixerManager.resolveAux(receiverId)],
-          ] as const
-        )
-          .filter((entry): entry is readonly [MixerKind, string] => entry[1] !== undefined)
-          .map(([kind]) => kind)
+        const matchingBusKinds = this.mixerManager.kindsWithBus(receiverId)
         if (matchingBusKinds.length > 0) {
           const explicitReceivers = matchingBusKinds
-            .map((kind) => `'${kind}:${receiverId}'`)
+            .map((kind) => `'${formatReceiverId(kind, receiverId)}'`)
             .join(' or ')
           throw new Error(
             `Unknown sequence '${receiverId}'; a same-named mixer bus exists. ` +
@@ -718,7 +709,7 @@ export class Global {
       throw this.pluginIndexError(
         receiverId,
         index,
-        valid!,
+        valid,
         'the requested chain slot does not exist',
       )
     }
