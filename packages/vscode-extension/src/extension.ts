@@ -2217,6 +2217,11 @@ async function rescanPlugins(): Promise<void> {
     outputChannel?.appendLine(
       `   failure reasons=${JSON.stringify(summary.failureReasons)} factory versions=${JSON.stringify(summary.factoryVersions)}`,
     )
+    for (const failure of result.failures) {
+      outputChannel?.appendLine(
+        `   failed ${path.basename(failure.path)}: ${failure.code}: ${failure.message}`,
+      )
+    }
     vscode.window.showInformationMessage(
       `OrbitScore: rescanned ${result.count} plugins (${summary.pending} pending, ${summary.failure} failed)`,
     )
@@ -2958,7 +2963,12 @@ async function rescanPluginsForAgent(): Promise<RescanPluginsResult> {
   return {
     ok: true,
     count: result.count,
+    artifactCount: result.artifactCount,
     skipped: [...result.skipped],
+    failures: result.failures.map((failure) => ({
+      ...failure,
+      slices: failure.slices ? [...failure.slices] : undefined,
+    })),
     summary: result.summary,
   }
 }

@@ -127,6 +127,56 @@ fn probe_artifact_failure_has_a_typed_reason() {
     assert!(json["error"]["message"].is_string());
 }
 
+#[test]
+fn parent_scan_probes_multiple_pending_oracles_without_swapping_results() {
+    use std::os::unix::fs::symlink;
+
+    let bundle = oracle_bundle();
+    let temp = tempfile::tempdir().expect("temporary isolated scan root");
+    let static_bundle = temp.path().join("00-Static.vst3");
+    let static_resources = static_bundle.join("Contents/Resources");
+    std::fs::create_dir_all(&static_resources).expect("static resources");
+    std::fs::write(
+        static_resources.join("moduleinfo.json"),
+        r#"{"Name":"Static","Classes":[{"CID":"STATIC","Category":"Audio Module Class","Sub Categories":["Fx"]}]}"#,
+    )
+    .expect("static moduleinfo");
+    let first = temp.path().join("10-FirstGainOracle.vst3");
+    let second = temp.path().join("20-SecondGainOracle.vst3");
+    symlink(&bundle, &first).expect("first oracle symlink");
+    symlink(&bundle, &second).expect("second oracle symlink");
+
+    let outcome = orbit_plugin_scan::scan_all_with_probes(&[temp.path().to_path_buf()], scanner());
+    assert_eq!(outcome.summary.probe_attempts, 2);
+    assert_eq!(
+        outcome.summary.success, 3,
+        "parallel worker results must be written back by artifact_index, not job number"
+    );
+    assert_eq!(outcome.summary.failure, 0);
+    assert_eq!(outcome.artifacts.len(), 3);
+
+    for expected_path in [&first, &second] {
+        let expected = expected_path.to_string_lossy();
+        let artifact = outcome
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.path == expected)
+            .unwrap_or_else(|| panic!("missing artifact result for {expected}"));
+        let orbit_plugin_scan::ArtifactState::ProbeSucceeded { plugins, .. } = &artifact.state
+        else {
+            panic!("pending oracle did not become probeSucceeded: {expected}")
+        };
+        assert!(
+            !plugins.is_empty(),
+            "oracle must expose at least one audio-module class: {expected}"
+        );
+        assert!(
+            plugins.iter().all(|plugin| plugin.path == expected),
+            "parallel worker result was written to the wrong artifact: expected {expected}, got {plugins:?}"
+        );
+    }
+}
+
 /// Optional local smoke test for a commercial/installed bundle. It is excluded from normal
 /// `cargo test` because the artifact is machine-specific.
 #[test]

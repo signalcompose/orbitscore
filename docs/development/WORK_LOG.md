@@ -17,6 +17,54 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.325 fix(scan): PR #575 review round 1 — failure recovery and observable diagnostics (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ review round 1 の8ポリシーを横断適用
+
+- negative cache を「検査未完遂」と「artifact 固有の結論」に分け、前者
+  (`timeout` / `killTimeout` / `crash` / `spawnError` / `protocolError`) は
+  明示 rescan で再試行する。分類は `is_inconclusive_failure` だけが所有する
+- Node 親 scanner を process-group leader として起動し、30分 timeout は group 全体へ
+  SIGKILL。Rust child は `killpg` 後の wait に上限を持ち、死なない child を
+  `killTimeout` として記録して次の artifact へ進む
+- cached `unsupportedArch` の即 return を撤回。全 cached failure の architecture を
+  再検証し、根拠が消えた `unsupportedArch` は再probeへ戻す
+- executable の解決経路を fingerprint に追加し、scanner schema version を 2 へ更新。
+  Mach-O header I/O error は stderr 診断へ残す
+- `rescan_plugins` に artifact 総数と `failures` 詳細を追加し、palette log でも
+  bundle 名・code・message を読めるようにした
+- flag なし scan の従来 CLAP descriptor 読取りを復元し、名前解決の案内は
+  `orbit-plugin-scan --probe-artifacts` に統一
+- core spec PC.1/PC.4 を catalog v2・明示probe・cache無効化・failure分類の実装事実へ更新
+- 実 child の crash/protocol、複数 pending worker、catalog read、無人cache復元、
+  MCP gated wiring を追加テストで固定
+
+#### 検証
+
+- `orbit-plugin-scan`: **48 passed / 0 failed / 2 ignored**。新規Rust 7件とNode 1件は
+  production mutation で赤→`/tmp/claude-501/` から復元→`cmp`一致→緑を確認
+- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings` /
+  `npm run build` / `npm run lint`: pass（lint は既存 warning 1件、error 0）
+- sandbox は loopback bind/connect を `EPERM` にするため、workspace/feature Rust test の
+  daemon protocol 各28件、npm のsocket依存4 files、real OrbitStudio gated E2E は環境失敗。
+  変更対象のNode testを含む非socket群は通過
+- HOME cache削除を含む実機2コマンドは実行環境が `rm -f` を拒否したため、
+  artifacts 339 集計と flagなしCLAP 1件の実測は未実施（別経路へは迂回していない）
+
+### 6.324 refactor(scan): `/simplify` cleanup — #549 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Commit**: `c86ef17`
+**Status**: ✅ cleanup（review round 1 前の HEAD）
+
+- TS catalog failure 型を Rust の `hostArch` / `slices` に追従
+- cache hit と probe queue の共通処理を `restore_cached_or_queue_probe` へ抽出
+- factory class の採否を `is_catalog_class` に集約
+- summary の `timeouts` / `crashes` を `failureReasons` から一経路で導出
+- 検証: Rust **403 passed / 0 failed**（不変）、TS **1801 passed / 30 skipped /
+  0 failed**（+1）
+
 ### 6.323 feat(scan): classify x86_64-only bundles before spawn — #549 (Jul 29, 2026)
 
 **Date**: 2026-07-29
@@ -124,8 +172,8 @@ B1 で 339 件すべてを probe できるようになったが、**rescan の�
 #### fingerprint に content hash を使わない
 
 独立第二意見の指摘で確定した設計。VST3 実行ファイルの総量は
-**335 bundles / 約 16.5 GB** あり、content hash を鮮度キーにすると
-**rescan のたびに 16.5 GB を全読み**することになる — cache の意義を自ら削る。
+**335 bundles / 約 16.5 GiB** あり、content hash を鮮度キーにすると
+**rescan のたびに 16.5 GiB を全読み**することになる — cache の意義を自ら削る。
 
 採用したキー: `format + canonical bundle path + executable 相対パス
 + executable の size/mtime(ns) + Info.plist の size/mtime + scanner schema version`。

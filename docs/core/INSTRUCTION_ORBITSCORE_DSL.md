@@ -1363,16 +1363,39 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
 - スキャン対象 = OS 標準ディレクトリ（macOS: `~/Library/Audio/Plug-Ins/CLAP`・
   `/Library/Audio/Plug-Ins/CLAP`・同 `VST3`）+ 環境変数 `ORBIT_PLUGIN_PATH`
   （`:` 区切り・追加検索パス・**各ディレクトリ直下のみ = 非再帰**）
-- **スキャンは UI を出さない・ブロックしない**（規範）: プラグインの実ロード（probe）は
-  コンテンツ依存プラグインがネイティブダイアログを出し得るため（実害確認 2026-07-17）、
-  **v1 では行わない**。metadata の取得: CLAP = factory metadata（dlopen のみ）、
-  VST3 = bundle 内 `Contents/Resources/moduleinfo.json` **のみ**（無ければ skip し、
-  スキャン結果 summary の `skipped` 配列で開示）。UI 抑止付き probe による skip 解消は
-  将来拡張（C1b 以降）
+- catalog v2 は互換投影 `plugins` に加えて全バンドルの `artifacts` 台帳を持つ。各 artifact は
+  `format` / `path` / `fingerprint` と次の status のいずれかを持つ:
+  - `staticSuccess`: 静的 metadata または従来の CLAP descriptor 読取りで成功。
+    `source` と投影済み `plugins` を保持
+  - `probePending`: native descriptor をまだ検査していない。`reason` を保持
+  - `probeSucceeded`: child probe 成功。`source` / `durationMs` / `descriptorApis` /
+    投影済み `plugins` を保持
+  - `probeFailed`: child probe が理由付きで失敗。`durationMs` と
+    `failure { code, message, hostArch?, slices?, exitCode?, signal? }` を保持
+- **VST3 の native probe は明示スキャン時だけ行う**（規範）。コンテンツ依存プラグインが
+  ネイティブダイアログを出し得るため（#463、実害確認 2026-07-17）、無人起動で
+  moduleinfo 無し VST3 をロードしてはならない。flag なしの `orbit-plugin-scan` は
+  VST3 を `moduleinfo.json` だけで読み、過去の fingerprint 一致 probe 結果があれば復元する。
+  一方 CLAP は #463 前からの互換挙動として descriptor を in-process で読み、
+  `plugins` 投影から消してはならない。`orbit-plugin-scan --probe-artifacts` と
+  OrbitStudio/MCP の明示 rescan は、pending と再試行対象を 1 artifact / 1 child で検査する。
+- fingerprint は `format + canonical bundle path + executable の相対パス/解決経路
+  + executable の size/mtime(ns) + Info.plist の size/mtime + scanner schema version`。
+  解決経路は `coreFoundation` / `infoPlistXml` / `convention` / `directoryScan`
+  （standalone file は `directFile`）。fingerprint 変化、または scanner schema version の
+  更新で positive/negative cache を無効化する。schema version は解決・分類・role mapping・
+  classes→entries 投影など、cached state の意味が変わる時にも上げる。
+- probe failure は「検査を完遂できなかった」環境起因と「検査を完遂して使えないと判定した」
+  artifact 固有に分ける。`timeout` / `killTimeout` / `crash` / `spawnError` /
+  `protocolError` は前者で、明示 rescan ごとに再試行する。`bundleLoad` /
+  `unsupportedArch` / `missingSymbol` / `nullFactory` / `invalidClassCount` /
+  `descriptorRead` / `invalidBundle` / `unsupportedFormat` は後者で、fingerprint が
+  変わるまで隔離する。cached failure は毎回 architecture を再検証し、
+  `unsupportedArch` の根拠が消えたら再probeして自己修復する。
 - キャッシュ = `~/.orbitscore/plugin-catalog.json`（正本はこのファイル。エンジン・
   拡張・MCP はこれを読むだけ）。生成/更新 = 初回スキャン + 明示 rescan（自動 watch は
-  v1 スコープ外）。スキャンの持ち主 = **daemon**（probe 資産が Rust 側にあるため。
-  JSON-RPC `ScanPlugins` コマンドで実行・拡張/CLI はそれを叩く）
+  v1 スコープ外）。スキャンは crash-isolated な独立 `orbit-plugin-scan` バイナリが所有し、
+  OrbitStudio と MCP は明示 rescan 時に同バイナリを起動する。
 
 ### PC.2 DSL の名前指し
 
@@ -1421,12 +1444,13 @@ kick.effect("./plugins/MyComp.clap")   // 従来の path 指定（不変・カ�
 
 - `list_plugins` ツール（#450 の doc ツール群と同じ流儀）: カタログをそのまま返す。
   LLM が「入っているプラグイン」を前提に作編曲できるようにする
-- `rescan_plugins` ツール: daemon の `ScanPlugins` を起動し完了を返す
+- `rescan_plugins` ツール: `orbit-plugin-scan --probe-artifacts` を起動し、
+  artifact 総数、success/pending/failure 集計、および
+  `failures [{ path, code, message, hostArch?, slices? }]` を返す。失敗 artifact と理由を
+  JSON ファイルの手動閲覧なしで検証できること
 
-### PC.5 v1 制約（実装事実の開示）
+### PC.5 制約（実装事実の開示）
 
-- C1b（daemon 配線）/ C2（DSL 名前解決）/ C3（補完+MCP）は未実装（C1 = スキャナ /
-  C3 = 補完 + MCP の 3 段導入）
 - 多バージョン共存（同名同 vendor 同 format の別バージョン）は区別しない —
   スキャン順で最後に見つかった path が勝つ（バージョン規則は将来拡張）
 - ファイルシステム watch による自動 rescan なし・AU（`.component`）はスキャン対象外

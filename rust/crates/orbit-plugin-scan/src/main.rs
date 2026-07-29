@@ -6,6 +6,7 @@
 use orbit_plugin_scan::{
     cache_path, now_iso8601, probe_artifact, read_catalog, resolve_scan_dirs, scan_all_with_cache,
     scan_all_with_probes_and_cache, write_catalog, ArtifactClass, ArtifactProbeError, Catalog,
+    ScanFailure, ScanSummary,
 };
 use serde::Serialize;
 use std::env;
@@ -72,19 +73,27 @@ fn run_catalog_scan(explicit_probe: bool) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let count = catalog.plugins.len();
-    let cache_path_json = json_escape(&path.to_string_lossy());
-    let skipped_json = outcome
-        .skipped
-        .iter()
-        .map(|path| format!("\"{}\"", json_escape(path)))
-        .collect::<Vec<_>>()
-        .join(",");
-    let summary_json =
-        serde_json::to_string(&outcome.summary).expect("scan summary is serializable");
-    println!("{{\"count\":{count},\"cachePath\":\"{cache_path_json}\",\"skipped\":[{skipped_json}],\"summary\":{summary_json}}}");
+    print_json_line(&CatalogScanOutput {
+        count: catalog.plugins.len(),
+        artifact_count: catalog.artifacts.len(),
+        cache_path: path.to_string_lossy().into_owned(),
+        skipped: outcome.skipped,
+        failures: outcome.failures,
+        summary: outcome.summary,
+    });
 
     ExitCode::SUCCESS
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogScanOutput {
+    count: usize,
+    artifact_count: usize,
+    cache_path: String,
+    skipped: Vec<String>,
+    failures: Vec<ScanFailure>,
+    summary: ScanSummary,
 }
 
 #[derive(Serialize)]
@@ -124,14 +133,9 @@ fn run_probe_artifact(args: Vec<OsString>) -> ExitCode {
 }
 
 fn print_json_line(value: &impl Serialize) {
-    // Serialization of these owned primitive-only protocol structs cannot fail. Keep stdout to
-    // exactly one JSON line so the PR-B1 supervisor can parse it without log filtering.
+    // Keep stdout to exactly one JSON line so supervisors can parse it without log filtering.
     println!(
         "{}",
-        serde_json::to_string(value).expect("artifact probe protocol is serializable")
+        serde_json::to_string(value).expect("scanner output is serializable")
     );
-}
-
-fn json_escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
 }

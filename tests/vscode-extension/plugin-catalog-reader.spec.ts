@@ -182,7 +182,7 @@ if [ "$1" != "--probe-artifacts" ]; then
   echo "missing explicit probe flag: $*" >&2
   exit 2
 fi
-echo '{"count":5,"cachePath":"/tmp/catalog.json","skipped":[],"summary":{"success":4,"pending":0,"failure":1,"failureReasons":{"timeout":1},"durationMs":{"p50":5,"p95":20000,"max":20000},"timeouts":1,"crashes":0,"factoryVersions":{"factory3":4}}}'
+echo '{"count":5,"artifactCount":5,"cachePath":"/tmp/catalog.json","skipped":[],"failures":[{"path":"/tmp/Broken.vst3","code":"timeout","message":"too slow"}],"summary":{"success":4,"pending":0,"failure":1,"failureReasons":{"timeout":1},"durationMs":{"p50":5,"p95":20000,"max":20000},"timeouts":1,"crashes":0,"factoryVersions":{"factory3":4},"cacheHits":3,"probeAttempts":2}}'
 `,
       { mode: 0o755 },
     )
@@ -191,8 +191,10 @@ echo '{"count":5,"cachePath":"/tmp/catalog.json","skipped":[],"summary":{"succes
     expect(result).toEqual({
       ok: true,
       count: 5,
+      artifactCount: 5,
       cachePath: '/tmp/catalog.json',
       skipped: [],
+      failures: [{ path: '/tmp/Broken.vst3', code: 'timeout', message: 'too slow' }],
       summary: {
         success: 4,
         pending: 0,
@@ -202,7 +204,73 @@ echo '{"count":5,"cachePath":"/tmp/catalog.json","skipped":[],"summary":{"succes
         timeouts: 1,
         crashes: 0,
         factoryVersions: { factory3: 4 },
+        cacheHits: 3,
+        probeAttempts: 2,
       },
     })
+  })
+
+  it('kills the scanner process group on timeout so descendants cannot become orphans', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-plugin-scan-group-timeout-'))
+    const pidFile = path.join(tmpDir, 'descendant.pid')
+    const fixture = path.resolve(__dirname, '../fixtures/plugin-catalog/scan-hang.sh')
+    const originalPidFile = process.env.ORBIT_SCAN_TEST_PID_FILE
+    process.env.ORBIT_SCAN_TEST_PID_FILE = pidFile
+    let descendantPid = 0
+    try {
+      const scan = runPluginScan(fixture, 500)
+      const completion = await Promise.race([
+        scan.then((result) => ({ kind: 'completed' as const, result })),
+        new Promise<{ kind: 'blocked' }>((resolve) =>
+          setTimeout(() => resolve({ kind: 'blocked' }), 1_500),
+        ),
+      ])
+      descendantPid = Number(fs.readFileSync(pidFile, 'utf8').trim())
+      if (completion.kind === 'blocked') {
+        try {
+          process.kill(descendantPid, 'SIGKILL')
+        } catch {
+          // The process may have exited in the race after the watchdog fired.
+        }
+        await scan
+      }
+      expect(
+        completion.kind,
+        `scanner close remained blocked because descendant pid ${descendantPid} kept its pipes open`,
+      ).toBe('completed')
+      if (completion.kind !== 'completed') return
+      const result = completion.result
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toContain('timed out')
+
+      const deadline = Date.now() + 2_000
+      let alive = true
+      while (Date.now() < deadline) {
+        try {
+          process.kill(descendantPid, 0)
+          await new Promise((resolve) => setTimeout(resolve, 20))
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+            alive = false
+            break
+          }
+          throw error
+        }
+      }
+      expect(
+        alive,
+        `scanner timeout killed only the parent; descendant pid ${descendantPid} survived`,
+      ).toBe(false)
+    } finally {
+      if (originalPidFile === undefined) delete process.env.ORBIT_SCAN_TEST_PID_FILE
+      else process.env.ORBIT_SCAN_TEST_PID_FILE = originalPidFile
+      if (descendantPid !== 0) {
+        try {
+          process.kill(descendantPid, 'SIGKILL')
+        } catch {
+          // Expected after the process-group kill; cleanup is only mutation-test hygiene.
+        }
+      }
+    }
   })
 })

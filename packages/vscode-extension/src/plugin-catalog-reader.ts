@@ -30,7 +30,7 @@ const SCAN_TIMEOUT_MS = 30 * 60_000
 export interface PluginCatalogEntry {
   readonly name: string
   readonly vendor: string
-  /** Raw scanner format tag: lowercase `clap` / `vst3` / `component`. */
+  /** Raw scanner format tag: lowercase `clap` / `vst3` (AU is not scanned). */
   readonly format: string
   readonly path: string
   readonly pluginId: string
@@ -48,9 +48,27 @@ export interface PluginCatalogFile {
 export interface PluginCatalogArtifact {
   readonly format: string
   readonly path: string
+  readonly fingerprint?: {
+    readonly scannerSchemaVersion: number
+    readonly format: string
+    readonly canonicalBundlePath: string
+    readonly executableRelativePath: string
+    readonly executableResolution?:
+      | 'directFile'
+      | 'coreFoundation'
+      | 'infoPlistXml'
+      | 'convention'
+      | 'directoryScan'
+    readonly executableSize?: number
+    readonly executableModifiedNs?: string
+    readonly infoPlistSize?: number
+    readonly infoPlistModifiedNs?: string
+  }
   readonly status: 'staticSuccess' | 'probePending' | 'probeSucceeded' | 'probeFailed'
+  readonly source?: string
   readonly reason?: string
   readonly durationMs?: number
+  readonly descriptorApis?: readonly string[]
   readonly failure?: {
     readonly code: string
     readonly message: string
@@ -157,9 +175,19 @@ export function resolvePluginScanBinaryPath(explicitPath?: string): string {
 
 export interface PluginScanOutcome {
   readonly count: number
+  readonly artifactCount: number
   readonly cachePath: string
   readonly skipped: readonly string[]
+  readonly failures: readonly PluginScanFailure[]
   readonly summary: PluginScanSummary
+}
+
+export interface PluginScanFailure {
+  readonly path: string
+  readonly code: string
+  readonly message: string
+  readonly hostArch?: string
+  readonly slices?: readonly string[]
 }
 
 export interface PluginScanSummary {
@@ -175,6 +203,8 @@ export interface PluginScanSummary {
   readonly timeouts: number
   readonly crashes: number
   readonly factoryVersions: Readonly<Record<string, number>>
+  readonly cacheHits: number
+  readonly probeAttempts: number
 }
 
 export type RunPluginScanResult = ({ ok: true } & PluginScanOutcome) | { ok: false; error: string }
@@ -184,7 +214,10 @@ export type RunPluginScanResult = ({ ok: true } & PluginScanOutcome) | { ok: fal
  * invalidates the in-memory catalog cache on success so the next
  * `loadPluginCatalog()` call picks up the fresh scan without a process restart.
  */
-export function runPluginScan(explicitBinaryPath?: string): Promise<RunPluginScanResult> {
+export function runPluginScan(
+  explicitBinaryPath?: string,
+  timeoutMs = SCAN_TIMEOUT_MS,
+): Promise<RunPluginScanResult> {
   return new Promise((resolve) => {
     let binaryPath: string
     try {
@@ -194,39 +227,85 @@ export function runPluginScan(explicitBinaryPath?: string): Promise<RunPluginSca
       return
     }
 
-    // タイムアウト必須（レビュー Important）: スキャナの存在意義 = 行儀の悪いプラグインの
-    // 隔離だが、crash でなく「ハング」だと execFile は既定で永久に待つ — palette/MCP の
-    // 呼び出しが無言で固まる。timeout 超過は SIGKILL + 明示エラーで返す。
-    child_process.execFile(
-      binaryPath,
-      ['--probe-artifacts'],
-      { timeout: SCAN_TIMEOUT_MS, killSignal: 'SIGKILL' },
-      (error, stdout, stderr) => {
-        if (error) {
-          const timedOut = error.killed || /SIGKILL/.test(String(error.signal ?? ''))
-          resolve({
-            ok: false,
-            error: timedOut
-              ? `plugin scan timed out after ${SCAN_TIMEOUT_MS / 1000}s (a plugin may be hanging during metadata read) — binary: ${binaryPath}`
-              : stderr?.trim() || error.message,
-          })
-          return
+    // `detached` makes the scanner its own process-group leader on Unix. A scanner supervises
+    // native probe children (which can spawn helpers), so a parent timeout must kill the negative
+    // process-group id rather than only the scanner PID or those descendants become orphans.
+    const child = child_process.spawn(binaryPath, ['--probe-artifacts'], {
+      detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    let timedOut = false
+    let terminationError: string | undefined
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk: string) => {
+      stdout += chunk
+    })
+    child.stderr.on('data', (chunk: string) => {
+      stderr += chunk
+    })
+
+    const timer = setTimeout(() => {
+      timedOut = true
+      try {
+        if (process.platform === 'win32') {
+          child.kill('SIGKILL')
+        } else if (child.pid !== undefined) {
+          process.kill(-child.pid, 'SIGKILL')
         }
-        try {
-          const parsed = JSON.parse(stdout) as PluginScanOutcome
-          clearPluginCatalogCache()
-          resolve({
-            ok: true,
-            count: parsed.count,
-            cachePath: parsed.cachePath,
-            skipped: parsed.skipped,
-            summary: parsed.summary,
-          })
-        } catch (parseError) {
-          const reason = parseError instanceof Error ? parseError.message : String(parseError)
-          resolve({ ok: false, error: `failed to parse orbit-plugin-scan output: ${reason}` })
+      } catch (error) {
+        const systemError = error as NodeJS.ErrnoException
+        if (systemError.code !== 'ESRCH') {
+          terminationError = error instanceof Error ? error.message : String(error)
         }
-      },
-    )
+      }
+    }, timeoutMs)
+
+    const finish = (result: RunPluginScanResult): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+    child.once('error', (error) => {
+      finish({ ok: false, error: error.message })
+    })
+    child.once('close', (code, signal) => {
+      if (timedOut) {
+        const terminationDetail = terminationError ? `; group kill failed: ${terminationError}` : ''
+        finish({
+          ok: false,
+          error: `plugin scan timed out after ${timeoutMs / 1000}s (a plugin may be hanging during metadata read) — binary: ${binaryPath}${terminationDetail}`,
+        })
+        return
+      }
+      if (code !== 0) {
+        finish({
+          ok: false,
+          error:
+            stderr.trim() || `plugin scanner exited with code ${code} (signal ${signal ?? 'none'})`,
+        })
+        return
+      }
+      try {
+        const parsed = JSON.parse(stdout) as PluginScanOutcome
+        clearPluginCatalogCache()
+        finish({
+          ok: true,
+          count: parsed.count,
+          artifactCount: parsed.artifactCount,
+          cachePath: parsed.cachePath,
+          skipped: parsed.skipped,
+          failures: parsed.failures,
+          summary: parsed.summary,
+        })
+      } catch (parseError) {
+        const reason = parseError instanceof Error ? parseError.message : String(parseError)
+        finish({ ok: false, error: `failed to parse orbit-plugin-scan output: ${reason}` })
+      }
+    })
   })
 }

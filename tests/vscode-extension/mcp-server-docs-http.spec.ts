@@ -116,7 +116,25 @@ function createStubHandlers(): OrbitScoreToolHandlers {
       return result
     },
     listPlugins: () => ({ ok: true, plugins: [] }),
-    rescanPlugins: () => ({ ok: true, count: 0, skipped: [] }),
+    rescanPlugins: () => ({
+      ok: true,
+      count: 0,
+      artifactCount: 0,
+      skipped: [],
+      failures: [],
+      summary: {
+        success: 0,
+        pending: 0,
+        failure: 0,
+        failureReasons: {},
+        durationMs: { p50: null, p95: null, max: null },
+        timeouts: 0,
+        crashes: 0,
+        factoryVersions: {},
+        cacheHits: 0,
+        probeAttempts: 0,
+      },
+    }),
   }
 }
 

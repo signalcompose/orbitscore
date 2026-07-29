@@ -53,7 +53,23 @@ pub struct Catalog {
 ///
 /// This is intentionally independent from catalog version 2: readers can keep consuming the
 /// same document shape while a scanner change invalidates every positive and negative cache hit.
-pub const SCANNER_SCHEMA_VERSION: u32 = 1;
+/// A bump is required when executable resolution/fingerprinting changes, and also when cached
+/// descriptor data would project differently: `roles_from_clap_features`,
+/// `roles_from_vst3_subcategories`, `is_catalog_class`, or the classes-to-entries conversion.
+/// Cached states contain the already-mapped `CatalogEntry` values and `descriptorApis`, so those
+/// semantic changes are otherwise invisible to a warm rescan.
+pub const SCANNER_SCHEMA_VERSION: u32 = 2;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExecutableResolution {
+    DirectFile,
+    CoreFoundation,
+    InfoPlistXml,
+    #[default]
+    Convention,
+    DirectoryScan,
+}
 
 /// Cheap freshness key for one artifact. It deliberately contains filesystem metadata only:
 /// hashing executable contents would reread roughly 16.5 GiB on every explicit rescan on the
@@ -65,6 +81,9 @@ pub struct ArtifactFingerprint {
     pub format: Format,
     pub canonical_bundle_path: String,
     pub executable_relative_path: String,
+    /// Schema-v1 fingerprints lack this field; their schema version still forces a cache miss.
+    #[serde(default)]
+    pub executable_resolution: ExecutableResolution,
     pub executable_size: Option<u64>,
     pub executable_modified_ns: Option<String>,
     pub info_plist_size: Option<u64>,
@@ -153,6 +172,18 @@ pub struct ScanSummary {
     pub probe_attempts: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanFailure {
+    pub path: String,
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_arch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slices: Option<Vec<String>>,
+}
+
 /// スキャン対象ディレクトリのデフォルト（PC.1）。
 /// `~` は `dirs_home` で解決する（HOME 環境変数が読めない場合はスキップ）。
 fn default_scan_dirs(home: Option<&Path>) -> Vec<PathBuf> {
@@ -223,16 +254,20 @@ pub fn list_bundle_candidates(dir: &Path) -> Vec<(PathBuf, Format)> {
 
 /// 全スキャンディレクトリからバンドル候補を集める（非再帰・重複除去済みディレクトリのみ対象）。
 pub fn collect_all_bundle_candidates(dirs: &[PathBuf]) -> Vec<(PathBuf, Format)> {
-    dirs.iter()
+    let mut candidates = dirs
+        .iter()
         .flat_map(|dir| list_bundle_candidates(dir))
-        .collect()
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.0.cmp(&right.0));
+    candidates
 }
 
 /// Build the artifact freshness key without reading executable contents.
 pub fn artifact_fingerprint(path: &Path, format: Format) -> ArtifactFingerprint {
     let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let executable_path = resolve_artifact_executable(&canonical_path);
-    let (executable_size, executable_modified_ns) = file_freshness(&executable_path);
+    let resolved = resolve_artifact_executable(&canonical_path);
+    let executable_path = &resolved.path;
+    let (executable_size, executable_modified_ns) = file_freshness(executable_path);
     let info_plist_path = if canonical_path.is_dir() {
         canonical_path.join("Contents/Info.plist")
     } else {
@@ -252,6 +287,7 @@ pub fn artifact_fingerprint(path: &Path, format: Format) -> ArtifactFingerprint 
         format,
         canonical_bundle_path: canonical_path.to_string_lossy().into_owned(),
         executable_relative_path,
+        executable_resolution: resolved.resolution,
         executable_size,
         executable_modified_ns,
         info_plist_size,
@@ -274,14 +310,25 @@ fn system_time_ns(time: SystemTime) -> String {
     }
 }
 
-fn resolve_artifact_executable(canonical_path: &Path) -> PathBuf {
+struct ResolvedExecutable {
+    path: PathBuf,
+    resolution: ExecutableResolution,
+}
+
+fn resolve_artifact_executable(canonical_path: &Path) -> ResolvedExecutable {
     if canonical_path.is_file() {
-        return canonical_path.to_path_buf();
+        return ResolvedExecutable {
+            path: canonical_path.to_path_buf(),
+            resolution: ExecutableResolution::DirectFile,
+        };
     }
 
     #[cfg(target_os = "macos")]
     if let Some(path) = macos_bundle_executable(canonical_path) {
-        return path;
+        return ResolvedExecutable {
+            path,
+            resolution: ExecutableResolution::CoreFoundation,
+        };
     }
 
     fallback_bundle_executable(canonical_path)
@@ -371,16 +418,22 @@ fn host_macho_arch_name() -> Option<&'static str> {
     }
 }
 
-fn fallback_bundle_executable(bundle_path: &Path) -> PathBuf {
+fn fallback_bundle_executable(bundle_path: &Path) -> ResolvedExecutable {
     let executable_dir = bundle_path.join("Contents/MacOS");
     if let Some(name) = xml_bundle_executable_name(&bundle_path.join("Contents/Info.plist")) {
-        return executable_dir.join(name);
+        return ResolvedExecutable {
+            path: executable_dir.join(name),
+            resolution: ExecutableResolution::InfoPlistXml,
+        };
     }
 
     let bundle_stem = bundle_path.file_stem().unwrap_or_default();
     let conventional = executable_dir.join(bundle_stem);
     if conventional.is_file() {
-        return conventional;
+        return ResolvedExecutable {
+            path: conventional,
+            resolution: ExecutableResolution::Convention,
+        };
     }
 
     let mut files = fs::read_dir(&executable_dir)
@@ -391,7 +444,16 @@ fn fallback_bundle_executable(bundle_path: &Path) -> PathBuf {
         .filter(|path| path.is_file())
         .collect::<Vec<_>>();
     files.sort();
-    files.into_iter().next().unwrap_or(conventional)
+    match files.into_iter().next() {
+        Some(path) => ResolvedExecutable {
+            path,
+            resolution: ExecutableResolution::DirectoryScan,
+        },
+        None => ResolvedExecutable {
+            path: conventional,
+            resolution: ExecutableResolution::Convention,
+        },
+    }
 }
 
 /// XML plists are common and this keeps non-macOS tests/builds independent of CoreFoundation.
@@ -653,7 +715,17 @@ fn preflight_artifact_architecture_for_host(
     host_arch: &str,
 ) -> Result<(), ArtifactProbeError> {
     let executable = resolve_artifact_executable(path);
-    let Some(slices) = read_macho_architectures(&executable).ok().flatten() else {
+    let slices = match read_macho_architectures(&executable.path) {
+        Ok(slices) => slices,
+        Err(error) => {
+            eprintln!(
+                "[orbit-plugin-scan] WARN: Mach-O architecture を読めません: {:?}: {error}",
+                executable.path
+            );
+            None
+        }
+    };
+    let Some(slices) = slices else {
         return Ok(());
     };
     if slices.iter().any(|slice| slice == host_arch) {
@@ -983,6 +1055,7 @@ pub fn dedup_entries(entries: Vec<CatalogEntry>) -> Vec<CatalogEntry> {
 }
 
 const ARTIFACT_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+const PROCESS_KILL_WAIT_TIMEOUT: Duration = Duration::from_secs(2);
 const PROBE_CONCURRENCY: usize = 4;
 
 /// 全ディレクトリを走査した結果。`entries` は v1 reader 向け互換投影。
@@ -990,6 +1063,7 @@ pub struct ScanOutcome {
     pub entries: Vec<CatalogEntry>,
     pub artifacts: Vec<CatalogArtifact>,
     pub skipped: Vec<String>,
+    pub failures: Vec<ScanFailure>,
     pub summary: ScanSummary,
 }
 
@@ -1023,23 +1097,30 @@ pub fn scan_all_with_probes_and_cache(
     )
 }
 
-fn refresh_cached_arch_failure(path: &Path, state: ArtifactState) -> ArtifactState {
+fn is_inconclusive_failure(code: &str) -> bool {
+    matches!(
+        code,
+        "timeout" | "killTimeout" | "crash" | "spawnError" | "protocolError"
+    )
+}
+
+fn refresh_cached_arch_failure(path: &Path, state: ArtifactState) -> Option<ArtifactState> {
     match &state {
-        ArtifactState::ProbeFailed { failure, .. } if failure.code == "unsupportedArch" => {
-            // A matching fingerprint already fixes the executable path, size, and mtime, so this
-            // result cannot change. Re-run preflight only once to migrate legacy `bundleLoad`
-            // failures into the architecture-specific classification.
-            return state;
-        }
         ArtifactState::ProbeFailed { .. } => {}
-        _ => return state,
+        _ => return Some(state),
     }
+    // Revalidate every cached failure, including `unsupportedArch`: CoreFoundation or fallback
+    // executable resolution can recover independently of the old cached diagnosis. If a formerly
+    // unsupported artifact now passes preflight, discard the negative cache and probe it again.
     match preflight_artifact_architecture(path) {
-        Err(error) => ArtifactState::ProbeFailed {
+        Err(error) => Some(ArtifactState::ProbeFailed {
             duration_ms: 0,
             failure: error.into_probe_failure(None, None),
+        }),
+        Ok(()) => match &state {
+            ArtifactState::ProbeFailed { failure, .. } if failure.code == "unsupportedArch" => None,
+            _ => Some(state),
         },
-        Ok(()) => state,
     }
 }
 
@@ -1060,8 +1141,11 @@ fn restore_cached_or_queue_probe(
 ) {
     let index = accumulation.artifacts.len();
     let path_string = path.to_string_lossy().into_owned();
-    if let Some(state) = cached_by_fingerprint.get(&fingerprint).cloned() {
-        let state = refresh_cached_arch_failure(&path, state);
+    if let Some(state) = cached_by_fingerprint
+        .get(&fingerprint)
+        .cloned()
+        .and_then(|state| refresh_cached_arch_failure(&path, state))
+    {
         if let ArtifactState::ProbeSucceeded { plugins, .. } = &state {
             accumulation.entries.extend(plugins.iter().cloned());
         }
@@ -1106,9 +1190,15 @@ where
         .filter_map(|artifact| {
             let fingerprint = artifact.fingerprint.as_ref()?;
             match &artifact.state {
-                ArtifactState::ProbeSucceeded { .. } | ArtifactState::ProbeFailed { .. } => {
+                ArtifactState::ProbeSucceeded { .. } => {
                     Some((fingerprint.clone(), artifact.state.clone()))
                 }
+                ArtifactState::ProbeFailed { failure, .. }
+                    if !explicit_probe || !is_inconclusive_failure(&failure.code) =>
+                {
+                    Some((fingerprint.clone(), artifact.state.clone()))
+                }
+                ArtifactState::ProbeFailed { .. } => None,
                 ArtifactState::StaticSuccess { .. } | ArtifactState::ProbePending { .. } => None,
             }
         })
@@ -1117,7 +1207,7 @@ where
     for (path, format) in candidates {
         let fingerprint = artifact_fingerprint(&path, format);
         match format {
-            Format::Clap => {
+            Format::Clap if explicit_probe => {
                 restore_cached_or_queue_probe(
                     path,
                     format,
@@ -1126,6 +1216,19 @@ where
                     &cached_by_fingerprint,
                     &mut accumulation,
                 );
+            }
+            Format::Clap => {
+                let found = scan_clap_bundle(&path);
+                accumulation.entries.extend(found.iter().cloned());
+                accumulation.artifacts.push(CatalogArtifact {
+                    format,
+                    path: path.to_string_lossy().into_owned(),
+                    fingerprint: Some(fingerprint),
+                    state: ArtifactState::StaticSuccess {
+                        source: "clapDescriptor".to_owned(),
+                        plugins: found,
+                    },
+                });
             }
             Format::Vst3 => match scan_vst3_bundle(&path) {
                 VstScanResult::StaticSuccess(found) => {
@@ -1218,11 +1321,27 @@ where
             _ => None,
         })
         .collect();
+    let failures = artifacts
+        .iter()
+        .filter_map(|artifact| {
+            let ArtifactState::ProbeFailed { failure, .. } = &artifact.state else {
+                return None;
+            };
+            Some(ScanFailure {
+                path: artifact.path.clone(),
+                code: failure.code.clone(),
+                message: failure.message.clone(),
+                host_arch: failure.host_arch.clone(),
+                slices: failure.slices.clone(),
+            })
+        })
+        .collect();
     let summary = summarize_artifacts(&artifacts, cache_hits, probe_attempts);
     ScanOutcome {
         entries: dedup_entries(entries),
         artifacts,
         skipped,
+        failures,
         summary,
     }
 }
@@ -1280,26 +1399,19 @@ fn run_child_probe(scanner_executable: &Path, path: &Path, format: Format) -> Pr
         }
     };
 
-    if capture.timed_out {
+    if let Some(failure) = timeout_failure(&capture, ARTIFACT_PROBE_TIMEOUT) {
         return ProbeExecution {
             duration_ms: capture.duration_ms,
-            result: Err(ProbeFailure {
-                code: "timeout".to_owned(),
-                message: format!(
-                    "artifact probe exceeded {} seconds",
-                    ARTIFACT_PROBE_TIMEOUT.as_secs()
-                ),
-                host_arch: None,
-                slices: None,
-                exit_code: capture.status.code(),
-                signal: status_signal(&capture.status),
-            }),
+            result: Err(failure),
         };
     }
 
+    let status = capture
+        .status
+        .expect("a completed process capture always has an exit status");
     let parsed = parse_child_probe_output(&capture.stdout);
     match parsed {
-        Ok(output) if output.ok && capture.status.success() => {
+        Ok(output) if output.ok && status.success() => {
             let descriptor_apis = output
                 .classes
                 .iter()
@@ -1326,9 +1438,7 @@ fn run_child_probe(scanner_executable: &Path, path: &Path, format: Format) -> Pr
             });
             ProbeExecution {
                 duration_ms: capture.duration_ms,
-                result: Err(
-                    error.into_probe_failure(capture.status.code(), status_signal(&capture.status))
-                ),
+                result: Err(error.into_probe_failure(status.code(), status_signal(&status))),
             }
         }
         Ok(_) => ProbeExecution {
@@ -1337,17 +1447,17 @@ fn run_child_probe(scanner_executable: &Path, path: &Path, format: Format) -> Pr
                 code: "protocolError".to_owned(),
                 message: format!(
                     "child returned success JSON with failing status {}; stderr={}",
-                    capture.status,
+                    status,
                     diagnostic_tail(&capture.stderr)
                 ),
                 host_arch: None,
                 slices: None,
-                exit_code: capture.status.code(),
-                signal: status_signal(&capture.status),
+                exit_code: status.code(),
+                signal: status_signal(&status),
             }),
         },
         Err(error) => {
-            let signal = status_signal(&capture.status);
+            let signal = status_signal(&status);
             ProbeExecution {
                 duration_ms: capture.duration_ms,
                 result: Err(ProbeFailure {
@@ -1362,7 +1472,7 @@ fn run_child_probe(scanner_executable: &Path, path: &Path, format: Format) -> Pr
                     ),
                     host_arch: None,
                     slices: None,
-                    exit_code: capture.status.code(),
+                    exit_code: status.code(),
                     signal,
                 }),
             }
@@ -1437,10 +1547,11 @@ fn classes_to_catalog_entries(
 }
 
 struct ProcessCapture {
-    status: ExitStatus,
+    status: Option<ExitStatus>,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     timed_out: bool,
+    kill_timed_out: bool,
     duration_ms: u64,
 }
 
@@ -1449,6 +1560,25 @@ fn run_process_with_timeout(
     args: &[std::ffi::OsString],
     timeout: Duration,
 ) -> io::Result<ProcessCapture> {
+    run_process_with_timeout_and_killer(
+        executable,
+        args,
+        timeout,
+        PROCESS_KILL_WAIT_TIMEOUT,
+        kill_process_group,
+    )
+}
+
+fn run_process_with_timeout_and_killer<F>(
+    executable: &Path,
+    args: &[std::ffi::OsString],
+    timeout: Duration,
+    kill_wait_timeout: Duration,
+    kill_group: F,
+) -> io::Result<ProcessCapture>
+where
+    F: Fn(u32) -> io::Result<()>,
+{
     let started = Instant::now();
     let mut command = Command::new(executable);
     command
@@ -1465,18 +1595,29 @@ fn run_process_with_timeout(
     let stdout_reader = thread::spawn(move || read_all(stdout));
     let stderr_reader = thread::spawn(move || read_all(stderr));
     let mut timed_out = false;
+    let mut kill_timed_out = false;
 
     let status = loop {
         if let Some(status) = child.try_wait()? {
-            break status;
+            break Some(status);
         }
         if started.elapsed() >= timeout {
             timed_out = true;
-            let kill_result = kill_process_group(pid);
-            let status = child.wait()?;
+            let kill_result = kill_group(pid);
+            let kill_started = Instant::now();
+            let status = loop {
+                if let Some(status) = child.try_wait()? {
+                    break Some(status);
+                }
+                if kill_started.elapsed() >= kill_wait_timeout {
+                    kill_timed_out = true;
+                    break None;
+                }
+                thread::sleep(Duration::from_millis(10));
+            };
             if let Err(error) = kill_result {
-                // A child may exit in the narrow try_wait→killpg race. It is already reaped here,
-                // so ESRCH is harmless; other failures still surface after avoiding a leak.
+                // ESRCH is harmless in the narrow try_wait→killpg race: the process or group no
+                // longer exists. Do not claim a specific reaping mechanism here.
                 if error.raw_os_error() != Some(libc_esrch()) {
                     return Err(error);
                 }
@@ -1486,12 +1627,57 @@ fn run_process_with_timeout(
         thread::sleep(Duration::from_millis(10));
     };
 
+    let (stdout, stderr) = if kill_timed_out {
+        // The child may still own these pipes. Joining their readers would recreate the same
+        // unbounded wait we just escaped; detach the readers and let them finish if the process
+        // eventually leaves its uninterruptible state.
+        (Vec::new(), Vec::new())
+    } else {
+        (
+            stdout_reader.join().unwrap_or_else(|_| Ok(Vec::new()))?,
+            stderr_reader.join().unwrap_or_else(|_| Ok(Vec::new()))?,
+        )
+    };
+
     Ok(ProcessCapture {
         status,
-        stdout: stdout_reader.join().unwrap_or_else(|_| Ok(Vec::new()))?,
-        stderr: stderr_reader.join().unwrap_or_else(|_| Ok(Vec::new()))?,
+        stdout,
+        stderr,
         timed_out,
+        kill_timed_out,
         duration_ms: elapsed_millis(started),
+    })
+}
+
+fn timeout_failure(capture: &ProcessCapture, timeout: Duration) -> Option<ProbeFailure> {
+    if capture.kill_timed_out {
+        return Some(ProbeFailure {
+            code: "killTimeout".to_owned(),
+            message: format!(
+                "artifact probe did not exit within {} seconds after process-group SIGKILL",
+                PROCESS_KILL_WAIT_TIMEOUT.as_secs()
+            ),
+            host_arch: None,
+            slices: None,
+            exit_code: None,
+            signal: None,
+        });
+    }
+    if !capture.timed_out {
+        return None;
+    }
+    let (exit_code, signal) = capture
+        .status
+        .as_ref()
+        .map(|status| (status.code(), status_signal(status)))
+        .unwrap_or((None, None));
+    Some(ProbeFailure {
+        code: "timeout".to_owned(),
+        message: format!("artifact probe exceeded {} seconds", timeout.as_secs()),
+        host_arch: None,
+        slices: None,
+        exit_code,
+        signal,
     })
 }
 
@@ -1891,6 +2077,93 @@ mod tests {
     }
 
     #[test]
+    fn inconclusive_failures_are_retried_only_by_explicit_rescan() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let clap = temp.path().join("Transient.clap");
+        fs::write(&clap, b"not a Mach-O").unwrap();
+        let calls = AtomicUsize::new(0);
+        let runner = |path: &Path, format: Format| {
+            let result = if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Err(ProbeFailure {
+                    code: "protocolError".to_owned(),
+                    message: "temporary malformed child output".to_owned(),
+                    host_arch: None,
+                    slices: None,
+                    exit_code: Some(0),
+                    signal: None,
+                })
+            } else {
+                Ok(ProbeSuccess {
+                    source: "clapDescriptor".to_owned(),
+                    plugins: vec![CatalogEntry {
+                        name: "Recovered".to_owned(),
+                        vendor: "Orbit".to_owned(),
+                        format,
+                        path: path.to_string_lossy().into_owned(),
+                        plugin_id: "recovered".to_owned(),
+                        roles: vec![ROLE_EFFECT.to_owned()],
+                    }],
+                    descriptor_apis: vec!["clap".to_owned()],
+                })
+            };
+            ProbeExecution {
+                duration_ms: 1,
+                result,
+            }
+        };
+        let candidates = vec![(clap, Format::Clap)];
+        let cold = scan_candidates(candidates.clone(), true, None, &runner);
+        let previous = catalog_from_outcome(&cold);
+        let unattended = scan_candidates(candidates.clone(), false, Some(&previous), &|_, _| {
+            panic!("metadata-only scan invoked explicit child probe")
+        });
+        assert_eq!(
+            unattended.summary.failure, 0,
+            "flagless CLAP scan uses its legacy in-process descriptor path"
+        );
+        let recovered = scan_candidates(candidates, true, Some(&previous), &runner);
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "temporary failure was quarantined instead of retried by explicit rescan"
+        );
+        assert_eq!(recovered.summary.failure, 0);
+        assert_eq!(recovered.summary.success, 1);
+        assert_eq!(recovered.entries[0].name, "Recovered");
+
+        for code in [
+            "timeout",
+            "killTimeout",
+            "crash",
+            "spawnError",
+            "protocolError",
+        ] {
+            assert!(
+                is_inconclusive_failure(code),
+                "{code} did not complete artifact inspection and must not be quarantined"
+            );
+        }
+        for code in [
+            "bundleLoad",
+            "unsupportedArch",
+            "missingSymbol",
+            "nullFactory",
+            "invalidClassCount",
+            "descriptorRead",
+            "invalidBundle",
+            "unsupportedFormat",
+        ] {
+            assert!(
+                !is_inconclusive_failure(code),
+                "{code} is an artifact conclusion and must remain fingerprint-cached"
+            );
+        }
+    }
+
+    #[test]
     fn extra_scan_dirs_from_env_splits_on_colon() {
         let dirs = extra_scan_dirs_from_env(Some("/a/b:/c/d: :"));
         assert_eq!(dirs, vec![PathBuf::from("/a/b"), PathBuf::from("/c/d")]);
@@ -2208,7 +2481,8 @@ mod tests {
             0,
             "metadata-only startup must not invoke a native child probe"
         );
-        assert_eq!(unattended.summary.pending, 1);
+        assert_eq!(unattended.summary.success, 1);
+        assert_eq!(unattended.summary.pending, 0);
 
         let explicit = scan_candidates(vec![candidate], true, None, &runner);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -2265,6 +2539,40 @@ mod tests {
         assert_eq!(warm.summary.cache_hits, 1);
         assert_eq!(warm.summary.probe_attempts, 0);
         assert_eq!(warm.entries.len(), 1);
+    }
+
+    #[test]
+    fn unattended_scan_restores_previous_probe_result_without_native_loading() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vst3 = temp.path().join("NoModuleInfo.vst3");
+        fs::create_dir_all(vst3.join("Contents/Resources")).unwrap();
+        let candidates = vec![(vst3, Format::Vst3)];
+        let probed = scan_candidates(candidates.clone(), true, None, &|path, format| {
+            ProbeExecution {
+                duration_ms: 1,
+                result: Ok(ProbeSuccess {
+                    source: "factory".to_owned(),
+                    plugins: vec![CatalogEntry {
+                        name: "Cached VST3".to_owned(),
+                        vendor: "Orbit".to_owned(),
+                        format,
+                        path: path.to_string_lossy().into_owned(),
+                        plugin_id: "cached-vst3".to_owned(),
+                        roles: vec![ROLE_INSTRUMENT.to_owned()],
+                    }],
+                    descriptor_apis: vec!["factory3".to_owned()],
+                }),
+            }
+        });
+        let previous = catalog_from_outcome(&probed);
+        let unattended = scan_candidates(candidates, false, Some(&previous), &|_, _| {
+            panic!("unattended scan must restore cache without a native child")
+        });
+
+        assert_eq!(unattended.summary.cache_hits, 1);
+        assert_eq!(unattended.summary.probe_attempts, 0);
+        assert_eq!(unattended.summary.success, 1);
+        assert_eq!(unattended.entries[0].name, "Cached VST3");
     }
 
     #[test]
@@ -2353,6 +2661,78 @@ mod tests {
         };
         assert_eq!(failure.host_arch.as_deref(), Some(host_arch));
         assert_eq!(failure.slices, Some(vec![other_arch.to_owned()]));
+    }
+
+    #[test]
+    fn matching_unsupported_arch_cache_is_revalidated_and_can_recover() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let Some(host_arch) = host_macho_arch_name() else {
+            return;
+        };
+        let host_cpu_type = match host_arch {
+            "x86_64" => 0x0100_0007,
+            "arm64" => 0x0100_000c,
+            _ => return,
+        };
+        let temp = tempfile::tempdir().expect("tempdir");
+        let clap = temp.path().join("ResolverRecovered.clap");
+        fs::write(&clap, thin_macho(host_cpu_type, ByteOrder::Little, true)).unwrap();
+        let fingerprint = artifact_fingerprint(&clap, Format::Clap);
+        let previous = Catalog {
+            version: 2,
+            scanned_at: "2026-07-29T00:00:00Z".to_owned(),
+            plugins: vec![],
+            artifacts: vec![CatalogArtifact {
+                format: Format::Clap,
+                path: clap.to_string_lossy().into_owned(),
+                fingerprint: Some(fingerprint),
+                state: ArtifactState::ProbeFailed {
+                    duration_ms: 0,
+                    failure: ProbeFailure {
+                        code: "unsupportedArch".to_owned(),
+                        message: "stale executable resolution".to_owned(),
+                        host_arch: Some(host_arch.to_owned()),
+                        slices: Some(vec!["stale".to_owned()]),
+                        exit_code: None,
+                        signal: None,
+                    },
+                },
+            }],
+        };
+        let calls = AtomicUsize::new(0);
+        let outcome = scan_candidates(
+            vec![(clap, Format::Clap)],
+            true,
+            Some(&previous),
+            &|path, format| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                ProbeExecution {
+                    duration_ms: 1,
+                    result: Ok(ProbeSuccess {
+                        source: "clapDescriptor".to_owned(),
+                        plugins: vec![CatalogEntry {
+                            name: "Resolver Recovered".to_owned(),
+                            vendor: "Orbit".to_owned(),
+                            format,
+                            path: path.to_string_lossy().into_owned(),
+                            plugin_id: "resolver-recovered".to_owned(),
+                            roles: vec![ROLE_EFFECT.to_owned()],
+                        }],
+                        descriptor_apis: vec!["clap".to_owned()],
+                    }),
+                }
+            },
+        );
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "cached unsupportedArch was not revalidated after executable resolution recovered"
+        );
+        assert_eq!(outcome.summary.cache_hits, 0);
+        assert_eq!(outcome.summary.probe_attempts, 1);
+        assert_eq!(outcome.summary.failure, 0);
     }
 
     #[test]
@@ -2470,6 +2850,13 @@ mod tests {
         );
         assert!(fingerprint.info_plist_modified_ns.is_some());
         assert_eq!(fingerprint.scanner_schema_version, SCANNER_SCHEMA_VERSION);
+        assert!(
+            matches!(
+                fingerprint.executable_resolution,
+                ExecutableResolution::CoreFoundation | ExecutableResolution::InfoPlistXml
+            ),
+            "fingerprint must record the executable resolution path"
+        );
 
         let json = serde_json::to_value(fingerprint).unwrap();
         assert!(
@@ -2612,6 +2999,75 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn run_child_probe_classifies_real_crash_and_protocol_error_processes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let artifact = temp.path().join("Fixture.clap");
+        fs::write(&artifact, b"not a Mach-O").unwrap();
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+
+        let crashed = run_child_probe(&fixtures.join("crash.sh"), &artifact, Format::Clap);
+        let crash = crashed.result.expect_err("SIGABRT fixture must fail");
+
+        let malformed =
+            run_child_probe(&fixtures.join("protocol-error.sh"), &artifact, Format::Clap);
+        let protocol = malformed
+            .result
+            .expect_err("garbage stdout fixture must fail");
+        assert_eq!(
+            (crash.code.as_str(), protocol.code.as_str()),
+            ("crash", "protocolError"),
+            "real child exit signal and invalid stdout must retain distinct classifications"
+        );
+        assert_eq!(crash.signal, Some(libc::SIGABRT));
+        assert_eq!(protocol.exit_code, Some(0));
+        assert_eq!(protocol.signal, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_wait_bound_returns_kill_timeout_instead_of_blocking_the_worker() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::{mpsc, Arc};
+
+        let killed_pid = Arc::new(AtomicU32::new(0));
+        let killed_pid_for_worker = Arc::clone(&killed_pid);
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let result = run_process_with_timeout_and_killer(
+                Path::new("/bin/sh"),
+                &["-c".into(), "sleep 60".into()],
+                Duration::from_millis(30),
+                Duration::from_millis(100),
+                |pid| {
+                    killed_pid_for_worker.store(pid, Ordering::SeqCst);
+                    Ok(())
+                },
+            );
+            let _ = sender.send(result);
+        });
+
+        let received = receiver.recv_timeout(Duration::from_millis(500));
+        let pid = killed_pid.load(Ordering::SeqCst);
+        if pid != 0 {
+            let _ = kill_process_group(pid);
+        }
+        let capture = received.unwrap_or_else(|_| {
+            panic!(
+                "scan worker remained blocked after killpg; child.wait() needs a finite post-kill bound"
+            )
+        });
+        let capture = capture.expect("bounded process runner");
+        assert!(capture.kill_timed_out);
+        assert_eq!(
+            timeout_failure(&capture, Duration::from_millis(30))
+                .expect("kill timeout failure")
+                .code,
+            "killTimeout"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn timeout_kills_the_entire_probe_process_group_including_grandchildren() {
         let temp = tempfile::tempdir().expect("tempdir");
         let pid_file = temp.path().join("grandchild.pid");
@@ -2657,6 +3113,39 @@ mod tests {
             !still_alive,
             "timed out probe must SIGKILL the entire process group; descendant pid {grandchild_pid} remained alive"
         );
+    }
+
+    #[test]
+    fn read_catalog_handles_missing_malformed_and_valid_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("plugin-catalog.json");
+        assert!(
+            read_catalog(&path)
+                .expect("missing catalog is normal")
+                .is_none(),
+            "missing catalog must produce a cold scan"
+        );
+
+        fs::write(&path, "{ definitely not json").unwrap();
+        let malformed = read_catalog(&path).expect_err("malformed catalog must be diagnosed");
+        assert_eq!(malformed.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            !malformed.to_string().is_empty(),
+            "JSON parser detail must remain observable: {malformed}"
+        );
+
+        fs::write(
+            &path,
+            r#"{"version":2,"scannedAt":"2026-07-29T00:00:00Z","plugins":[],"artifacts":[]}"#,
+        )
+        .unwrap();
+        let catalog = read_catalog(&path)
+            .expect("valid catalog read")
+            .expect("valid catalog exists");
+        assert_eq!(catalog.version, 2);
+        assert_eq!(catalog.scanned_at, "2026-07-29T00:00:00Z");
+        assert!(catalog.plugins.is_empty());
+        assert!(catalog.artifacts.is_empty());
     }
 
     #[test]

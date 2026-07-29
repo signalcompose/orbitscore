@@ -160,7 +160,9 @@ function createStubHandlers(overrides: Partial<OrbitScoreToolHandlers> = {}): {
       const result: RescanPluginsResult = {
         ok: true,
         count: 0,
+        artifactCount: 0,
         skipped: [],
+        failures: [],
         summary: {
           success: 0,
           pending: 0,
@@ -170,6 +172,8 @@ function createStubHandlers(overrides: Partial<OrbitScoreToolHandlers> = {}): {
           timeouts: 0,
           crashes: 0,
           factoryVersions: {},
+          cacheHits: 0,
+          probeAttempts: 0,
         },
       }
       return result
@@ -551,7 +555,15 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
         return {
           ok: true,
           count: 12,
+          artifactCount: 12,
           skipped: ['/vst3/Broken.vst3'],
+          failures: [
+            {
+              path: '/vst3/Broken.vst3',
+              code: 'timeout',
+              message: 'artifact probe exceeded 20 seconds',
+            },
+          ],
           summary: {
             success: 11,
             pending: 0,
@@ -561,6 +573,8 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
             timeouts: 1,
             crashes: 0,
             factoryVersions: { factory3: 7, factory1: 4 },
+            cacheHits: 8,
+            probeAttempts: 4,
           },
         }
       },
@@ -576,7 +590,15 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect(body.result.isError).toBeFalsy()
     expect(JSON.parse(body.result.content[0]!.text)).toEqual({
       count: 12,
+      artifactCount: 12,
       skipped: ['/vst3/Broken.vst3'],
+      failures: [
+        {
+          path: '/vst3/Broken.vst3',
+          code: 'timeout',
+          message: 'artifact probe exceeded 20 seconds',
+        },
+      ],
       summary: {
         success: 11,
         pending: 0,
@@ -586,6 +608,8 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
         timeouts: 1,
         crashes: 0,
         factoryVersions: { factory3: 7, factory1: 4 },
+        cacheHits: 8,
+        probeAttempts: 4,
       },
     })
     expect(rescanPluginsCalled).toBe(true)
