@@ -17,6 +17,94 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.328 fix(signal-chain): make ambiguous mixer bus names loud — #579 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ 実機 E2E green。**#564 と同型の silent failure を signal-chain 側でも潰した**
+
+`MixerManager.resolveNode` が **sum → aux の順に見て最初に見つかったものを返して**いた。
+
+```
+global.sum("drum").effect("Pro-Q 4")
+global.aux("drum").effect("Valhalla")   // 両方通る（declareBus は同名重複を禁止していない）
+```
+
+この状態で裸名 `drum` を参照すると**黙って sum が勝ち、エラーが出ない**。
+実害は「**aux に挿したつもりの effect / routing が sum 側へ適用される**」。
+
+#564 が state 解決で潰したのと**同型の曖昧さ**が signal-chain 側に残っていた。
+
+#### 順序という概念を消した
+
+```ts
+// before — 順序が意味を持つ
+const sum = this.resolveSum(name)
+if (sum !== undefined) return { kind: 'sum', bus: sum }
+const aux = this.resolveAux(name)
+...
+
+// after — 全 kind を列挙してから件数で分岐
+const matchingKinds = this.kindsWithBus(name)
+if (matchingKinds.length > 1) throw new Error(ambiguousMixerBusMessage(name))
+```
+
+**「sum を先に見る」という間違いが書けなくなった。**
+`kindsWithBus` は **#564 で診断のために追加したもの**で、それがそのまま解決の中核になった。
+
+#### エラーは次の一手を示す
+
+```
+Mixer bus name "drum" is ambiguous: it is declared as both sum and aux.
+Use global.sum("drum") / global.aux("drum") (string form), or a
+kind-specific mixer node variable such as `var drums = mix.sum`, to select the kind explicitly.
+```
+
+**接頭辞 `sum:drum` は出さない。** あれは UIH.5 の**永続 identity / MCP wire 形式**であり、
+DSL の識別子文法は `:` を受理しない（この到達不能性が identityKey 単射性の前提の一部）。
+DSL には既に kind 明示手段が2系統ある（文字列形とノード変数）ので**第3の表記を足さない**。
+spec（SC.2.1 規範 (8)）に**理由つきで**明記した。禁止だけ書くと後で覆される。
+
+#### 宣言時にも警告する
+
+`declareBus` で 2 kind 目の宣言時に1回だけ `console.warn`。
+**エラーは「使おうとした時」、警告は「宣言した時」**に出るので、
+書いた直後にフィードバックが返る。「silent に地雷を敷設させない」。
+
+#### 変異検証（main がクリーンな状態で再実行）
+
+| 変異 | 結果 |
+|---|---|
+| (a) sum 優先へ復帰 | 3 red |
+| **(b) 常に sum kind を返す** | **1 red**（`expected undefined to deeply equal { kind: 'aux', bus: 'aux-bus-0' }`） |
+| (c) throw → warn | 3 red |
+| (d) aux 明示形を文言から削除 | 1 red |
+
+> **🔴 main の手順ミス**: Codex が**稼働中の作業ツリー**で変異検証を始めた（**2度目**）。
+> ベースラインが `1 failed | 15 passed`、変異後も `1 failed | 15 passed` で
+> **件数が同じなのに赤いメッセージが出たので効いたと錯覚した**。
+> 実際は Codex の編集途中を測っていただけ。
+> **クリーンな状態で取り直すと `16 passed` → `15 passed | 1 failed`** と件数が変化した。
+> **動いているツリーでの測定は緑も赤も等しく無意味。**
+> 判定は**赤の有無ではなく件数の変化**で行う。
+
+#### 検証（すべて main が sandbox 外で実行）
+
+- `npm test`: **1820 passed / 33 skipped / 0 failed**（1816 から +4）
+- `npm run lint`: 0 errors / 実行後の残留プロセス **0**
+- **Rust は1行も触っていない**（`cargo fmt --check` のみ pass）
+
+#### マージ前ゲート: ビルド + 実機 E2E
+
+```
+✓ reports an ambiguous bare mixer name through run_selection and get_log   427ms
+Test Files 1 passed / Tests 5 passed（4 → 5）
+```
+
+**DSL を `run_selection` で評価し、曖昧エラーが `get_log` に出ること**を実機で確認。
+音オラクル不要の軽量ケース。**E2E 実行後の残留プロセスも 0**。
+
+---
+
 ### 6.327 feat(engine): address mixer-bus inserts for plugin state — #564 (Jul 29, 2026)
 
 **Date**: 2026-07-29（レビューラウンド1の修正を反映した最終形。`/simplify` 5952aa0 で

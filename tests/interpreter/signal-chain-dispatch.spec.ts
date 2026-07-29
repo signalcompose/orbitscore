@@ -331,6 +331,42 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     await expect(run('lead.RoleSplit()', state)).rejects.toThrow((stringError as Error).message)
   })
 
+  it('rejects an ambiguous bare mixer receiver declared by both string forms', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await run('global.sum("drum")\nglobal.aux("drum")', state)
+
+      await expect(run('drum.TALReverb4()', state)).rejects.toThrow(
+        /global\.sum\("drum"\).*global\.aux\("drum"\)/,
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('reports an ambiguous sidechain name before the aux-only validation error', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await run('var kick = init global.seq\nglobal.sum("drum")\nglobal.aux("drum")', state)
+
+      let thrown: unknown
+      try {
+        await run('kick.TALReverb4(sidechain: drum)', state)
+      } catch (error) {
+        thrown = error
+      }
+      expect(thrown).toBeInstanceOf(Error)
+      expect((thrown as Error).message).toMatch(/global\.sum\("drum"\).*global\.aux\("drum"\)/)
+      expect((thrown as Error).message).not.toMatch(/not a declared aux/i)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('throws actionable errors for unknown names, staged args, sidechain, mixer names, and second inserts', async () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)

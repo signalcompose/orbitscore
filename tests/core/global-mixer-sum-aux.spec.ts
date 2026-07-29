@@ -43,6 +43,35 @@ describe('Global.sum() / Global.aux()', () => {
     expect(global.resolveAuxBus('nope')).toBeUndefined()
   })
 
+  it('resolves a bare mixer name when only sum or only aux declares it', () => {
+    const sumOnly = makeGlobal().global
+    sumOnly.sum('drum')
+    expect(sumOnly.resolveMixerBus('drum')).toEqual({ kind: 'sum', bus: 'sum-bus-0' })
+
+    const auxOnly = makeGlobal().global
+    auxOnly.aux('drum')
+    expect(auxOnly.resolveMixerBus('drum')).toEqual({ kind: 'aux', bus: 'aux-bus-0' })
+  })
+
+  it('rejects a bare mixer name declared as both sum and aux with both explicit forms', () => {
+    const { global } = makeGlobal()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      global.sum('drum')
+      global.aux('drum')
+      global.sum('drum')
+      global.aux('drum')
+
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/ambiguous.*both sum and aux/i))
+      expect(() => global.resolveMixerBus('drum')).toThrow(
+        /global\.sum\("drum"\).*global\.aux\("drum"\)/,
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('exhausts the sum pool after the v1 cap (4) with an explicit message', () => {
     const { global } = makeGlobal()
     for (let i = 0; i < MIXER_BUS_POOL_SIZE; i++) global.sum(`s${i}`)
@@ -106,12 +135,17 @@ describe('Global.sum() / Global.aux()', () => {
     )
   })
 
-  it('sum("drum") and aux("rev") are independent namespaces/pools', () => {
+  it('keeps same-named sum and aux declarations in independent namespaces/pools', () => {
     const { global } = makeGlobal()
-    global.sum('shared-name')
-    expect(global.aux('shared-name').bus).toBe('aux-bus-0')
-    expect(global.resolveSumBus('shared-name')).toBe('sum-bus-0')
-    expect(global.resolveAuxBus('shared-name')).toBe('aux-bus-0')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      global.sum('shared-name')
+      expect(global.aux('shared-name').bus).toBe('aux-bus-0')
+      expect(global.resolveSumBus('shared-name')).toBe('sum-bus-0')
+      expect(global.resolveAuxBus('shared-name')).toBe('aux-bus-0')
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('rejects "master" as a sum/aux name — it is reserved for the output endpoint (#523 IMPORTANT 6)', () => {

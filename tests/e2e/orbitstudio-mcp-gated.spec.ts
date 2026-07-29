@@ -824,6 +824,62 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
+    'reports an ambiguous bare mixer name through run_selection and get_log',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const dslPath = path.join(tmpRoot, 'ambiguous-mixer-name.orbs')
+      const dslLines = [
+        'var global = init GLOBAL',
+        'global.sum("drum")',
+        'global.aux("drum")',
+        'drum.effect("MustNotLoad.clap")',
+      ]
+      fs.writeFileSync(dslPath, dslLines.join('\n') + '\n')
+
+      const start = await activeClient.call('start_engine')
+      expect(start.isError, start.text).toBe(false)
+      try {
+        await waitForEngine(true, 15_000, 'ambiguous mixer-name E2E engine running')
+        const opened = await activeClient.call('open_file', { path: dslPath })
+        expect(opened.isError, opened.text).toBe(false)
+        const selected = await activeClient.call('set_selection', {
+          start_line: 1,
+          start_char: 1,
+          end_line: dslLines.length,
+          end_char: 999_999,
+        })
+        expect(selected.isError, selected.text).toBe(false)
+
+        const errorPrefix = '[ERROR] Mixer bus name "drum" is ambiguous'
+        const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const errorsBefore = beforeLog.split(errorPrefix).length - 1
+        const run = await activeClient.call('run_selection')
+        expect(run.isError, run.text).toBe(false)
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return log.split(errorPrefix).length - 1 > errorsBefore
+          },
+          { intervalMs: 200, timeoutMs: 5_000, label: 'ambiguous mixer-name error in get_log' },
+        )
+
+        const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(afterLog).toContain(errorPrefix)
+        expect(afterLog).toContain('global.sum("drum")')
+        expect(afterLog).toContain('global.aux("drum")')
+      } finally {
+        const stop = await activeClient.call('stop_engine')
+        expect(stop.isError, stop.text).toBe(false)
+        await waitForEngine(false, 15_000, 'ambiguous mixer-name E2E engine stopped')
+      }
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
     'restores an MCP-saved non-default instrument state across an engine restart with the same measured pitch',
     async () => {
       expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
