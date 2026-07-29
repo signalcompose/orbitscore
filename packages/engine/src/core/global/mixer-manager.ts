@@ -35,15 +35,6 @@ export const MIXER_BUS_KINDS = ['sum', 'aux'] as const
 
 export type MixerKind = (typeof MIXER_BUS_KINDS)[number]
 
-function ambiguousMixerBusMessage(name: string): string {
-  const quotedName = JSON.stringify(name)
-  return (
-    `Mixer bus name ${quotedName} is ambiguous: it is declared as both sum and aux. ` +
-    `Use global.sum(${quotedName}) / global.aux(${quotedName}) (string form), or a ` +
-    'kind-specific mixer node variable such as `var drums = mix.sum`, to select the kind explicitly.'
-  )
-}
-
 /**
  * Round-trip converters for the prefixed receiver identity (`sum:<name>` /
  * `aux:<name>`) that addresses a mixer bus in plugin-state persistence (#564).
@@ -199,10 +190,20 @@ export class MixerManager {
     return this.kinds[kind].inserts.chainFor(name)
   }
 
+  /** #579: 曖昧な裸名の診断文言。throw（resolveNode）と warn（declareBus）で同一文言を使う。 */
+  private static ambiguousMessage(name: string): string {
+    const quotedName = JSON.stringify(name)
+    return (
+      `Mixer bus name ${quotedName} is ambiguous: it is declared as both sum and aux. ` +
+      `Use global.sum(${quotedName}) / global.aux(${quotedName}) (string form), or a ` +
+      'kind-specific mixer node variable such as `var drums = mix.sum`, to select the kind explicitly.'
+    )
+  }
+
   resolveNode(name: string): { kind: MixerKind; bus: string } | undefined {
     const matchingKinds = this.kindsWithBus(name)
     if (matchingKinds.length > 1) {
-      throw new Error(ambiguousMixerBusMessage(name))
+      throw new Error(MixerManager.ambiguousMessage(name))
     }
     const kind = matchingKinds[0]
     if (kind === undefined) return undefined
@@ -242,7 +243,7 @@ export class MixerManager {
       bus = state.pool.acquire(name)
       state.buses.set(name, bus)
       if (this.kindsWithBus(name).length > 1) {
-        console.warn(ambiguousMixerBusMessage(name))
+        console.warn(MixerManager.ambiguousMessage(name))
       }
     }
     return this.makeHandle(kind, name, bus)
