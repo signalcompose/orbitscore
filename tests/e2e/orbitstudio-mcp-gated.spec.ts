@@ -1264,26 +1264,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       await stopTransportThroughDsl('sum-bus changed transport stopped before state save')
 
       // 3. 自動記録される。
-      // INTERIM(#577): 自動記録が未実装のため明示保存で代替。
-      // この明示保存の行を削除できる条件は「#577 の停止時 snapshot が dirty ゲートを
-      // かけず、loaded 全プラグインを対象にする」こと（#577 受け入れ基準に明記済み）。
-      // この E2E ではパラメータ編集が一度も起きない（非既定 gain は state ファイルの
-      // load で入る）ため、setState だけで dirty にならないプラグインは dirty ゲート付き
-      // snapshot の対象外になり、行を消すとテストは赤になる。また、このテストは稼働中に
-      // manifest から正解キーを外科的に削除しているので、#577 の checkpoint が削除より
-      // 前に発火する設計になった場合はこの削除手順ごと #577 側で引き取って書き直すこと。
-      const savedSum = await activeClient.call('save_plugin_state', {
-        sequence: 'sum:drum',
-        index: 1,
-      })
-      expect(savedSum.isError, savedSum.text).toBe(false)
-      // aux 側の軽量チェック: 音声オラクルは張らず、保存 → 再起動 → restore ログ行で
-      // daemon 往復まで実機証明する。
-      const savedAux = await activeClient.call('save_plugin_state', {
-        sequence: 'aux:wet',
-        index: 1,
-      })
-      expect(savedAux.isError, savedAux.text).toBe(false)
+      // stop() の snapshot は fire-and-forget なので、明示保存を挟まず、両 receiver が
+      // committed manifest に登記されるまで待って非同期の daemon 往復を吸収する。
+      await waitUntil(
+        () => {
+          const states = readManifestStates()
+          return Boolean(states[receiverKey] && states[auxReceiverKey])
+        },
+        { intervalMs: 200, timeoutMs: 10_000, label: 'sum/aux auto-snapshot registered' },
+      )
       const registeredStates = readManifestStates()
       expect(registeredStates[receiverKey]).toMatch(/^states\//)
       expect(registeredStates[auxReceiverKey]).toMatch(/^states\//)
@@ -1343,5 +1332,532 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       ).toBeLessThanOrEqual(0.15)
     },
     TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    'auto-records and restores all five plugin receiver kinds across a restart without explicit saves',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const root = tmpRoot
+      const projectFile = path.join(root, 'project.yaml')
+      const sourcePath = path.join(root, 'test-assets/audio/kick.wav')
+      const dslPath = path.join(root, 'all-receiver-auto-snapshot.orbs')
+      const defaultWav = path.join(root, 'all-receiver-default.wav')
+      const preRestartWav = path.join(root, 'all-receiver-pre-restart.wav')
+      const restoredWav = path.join(root, 'all-receiver-restored.wav')
+      const receiverKeys = [
+        'master/effect/CLAPTestEffect/0',
+        'sum:autoSnapshotSum/effect/CLAPTestEffect/0',
+        'aux:autoSnapshotAux/effect/CLAPTestEffect/0',
+        'autoSnapshotEffect/effect/CLAPTestEffect/0',
+        'autoSnapshotInstrument/instrument/CLAPTestSynth/0',
+      ] as const
+
+      const instrumentDeclaration = `autoSnapshotInstrument.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)})`
+      const dslLines = [
+        'var global = init GLOBAL',
+        // The solo segment plays `autoSnapshotInstrument.play(1)`, a MIDI
+        // degree the engine rejects without a root — keep the key declared
+        // (the ERROR-count assertion caught the omission on a real device).
+        'global.key("C")',
+        'global.tempo(120)',
+        'global.beat(4 by 4)',
+        'var mix = init global.mixer',
+        'var master = mix.output(1, 2)',
+        'var autoSnapshotSum = mix.sum',
+        'var autoSnapshotAux = mix.aux',
+        `global.effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
+        `autoSnapshotSum.effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
+        `autoSnapshotAux.effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
+        'var autoSnapshotEffect = init global.seq',
+        `autoSnapshotEffect.audio(${JSON.stringify(sourcePath)}).chop(1)`,
+        `autoSnapshotEffect.effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
+        'autoSnapshotEffect.autoSnapshotSum',
+        'autoSnapshotSum.autoSnapshotAux(1).master',
+        'autoSnapshotAux.master',
+        'var autoSnapshotInstrument = init global.seq',
+        instrumentDeclaration,
+        'autoSnapshotEffect.play(1, 1, 1, 1)',
+        'global.start()',
+        'LOOP(autoSnapshotEffect)',
+        // Solo segment: stop the kick loop, then run the synth alone so the
+        // capture tail holds a clean fundamental for the pitch oracle.
+        'autoSnapshotEffect.stop()',
+        'autoSnapshotInstrument.play(1)',
+        'RUN(autoSnapshotInstrument)',
+        'autoSnapshotInstrument.stop()',
+        'global.stop()',
+      ]
+      const declarationsEndLine = dslLines.indexOf(instrumentDeclaration) + 1
+      const playbackStartLine = dslLines.indexOf('autoSnapshotEffect.play(1, 1, 1, 1)') + 1
+      const playbackEndLine = dslLines.indexOf('LOOP(autoSnapshotEffect)') + 1
+      const soloStartLine = dslLines.indexOf('autoSnapshotEffect.stop()') + 1
+      const soloEndLine = dslLines.indexOf('RUN(autoSnapshotInstrument)') + 1
+      const stopStartLine = dslLines.indexOf('autoSnapshotInstrument.stop()') + 1
+      const stopEndLine = dslLines.indexOf('global.stop()') + 1
+      expect(declarationsEndLine).toBeGreaterThan(0)
+      expect(playbackStartLine).toBe(declarationsEndLine + 1)
+      expect(playbackEndLine).toBe(playbackStartLine + 2)
+      expect(soloStartLine).toBe(playbackEndLine + 1)
+      expect(soloEndLine).toBe(soloStartLine + 2)
+      expect(stopStartLine).toBe(soloEndLine + 1)
+      expect(stopEndLine).toBe(stopStartLine + 1)
+      fs.writeFileSync(dslPath, dslLines.join('\n') + '\n')
+      const openDsl = await activeClient.call('open_file', { path: dslPath })
+      expect(openDsl.isError, openDsl.text).toBe(false)
+
+      const runDslLines = async (startLine: number, endLine: number): Promise<void> => {
+        const selected = await activeClient.call('set_selection', {
+          start_line: startLine,
+          start_char: 1,
+          end_line: endLine,
+          end_char: 999_999,
+        })
+        expect(selected.isError, selected.text).toBe(false)
+        const run = await activeClient.call('run_selection')
+        expect(run.isError, run.text).toBe(false)
+      }
+      const stopTransportThroughDsl = async (label: string): Promise<void> => {
+        const before = (await activeClient.call('get_log', { lines: 500 })).text
+        const stopsBefore = (before.match(/(?:✅ Global stopped|⏹ Global)/g) ?? []).length
+        await runDslLines(stopStartLine, stopEndLine)
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return (log.match(/(?:✅ Global stopped|⏹ Global)/g) ?? []).length > stopsBefore
+          },
+          { intervalMs: 200, timeoutMs: 5_000, label },
+        )
+      }
+      const stopEngine = async (label: string): Promise<void> => {
+        const stopped = await activeClient.call('stop_engine')
+        expect(stopped.isError, stopped.text).toBe(false)
+        await waitForEngine(false, 15_000, label)
+        await sleep(1500)
+      }
+      const readManifestStates = (): Record<string, string> => {
+        if (!fs.existsSync(projectFile)) return {}
+        const manifest = parse(fs.readFileSync(projectFile, 'utf8')) as {
+          states?: Record<string, string>
+        }
+        return { ...(manifest.states ?? {}) }
+      }
+      const writeManifestStates = (states: Record<string, string>): void => {
+        fs.writeFileSync(projectFile, stringify({ version: 1, states }))
+      }
+      // ORE1 magic + f64 LE gain — clap-test-effect's encode_state. Byte
+      // equality against auto-recorded files works because both encoders are
+      // deterministic.
+      const effectStateBytes = (gain: number): Buffer => {
+        const bytes = Buffer.alloc(12)
+        bytes.writeUInt32LE(0x4f52_4531, 0)
+        bytes.writeDoubleLE(gain, 4)
+        return bytes
+      }
+      // ORC1 magic + i32 LE semitone offset — clap-test-synth's encode_state.
+      const instrumentStateBytes = (semitoneOffset: number): Buffer => {
+        const bytes = Buffer.alloc(8)
+        bytes.writeUInt32LE(0x4f52_4331, 0)
+        bytes.writeInt32LE(semitoneOffset, 4)
+        return bytes
+      }
+      const writeStateFile = (relativePath: string, bytes: Buffer): void => {
+        const absolutePath = path.resolve(root, relativePath)
+        fs.mkdirSync(path.dirname(absolutePath), { recursive: true })
+        fs.writeFileSync(absolutePath, bytes)
+      }
+      const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
+      // ProjectStateStore.stateFileNameForIdentity: the identity tuple as
+      // JSON, base64url-encoded. Restated here so the test pins the on-disk
+      // contract instead of importing the implementation it verifies.
+      const expectedAutoStatePath = (receiverKey: string): string => {
+        const [receiver, role, normalizedName, occurrence] = receiverKey.split('/')
+        const encoded = Buffer.from(
+          JSON.stringify([receiver, role, normalizedName, Number(occurrence)]),
+          'utf8',
+        ).toString('base64url')
+        return `states/${encoded}.state`
+      }
+      // Path-bound restore-line counter: a matching line proves this receiver
+      // was restored FROM this file. The sound oracle cannot see a state swap
+      // between the three series receivers (their gains multiply
+      // commutatively), so the manifest-level wiring is pinned here instead.
+      const countRestoreLines = (log: string, receiverKey: string, statePath: string): number =>
+        log
+          .split('\n')
+          .filter(
+            (line) =>
+              line.includes(`[plugin-state] restoring '${receiverKey}' from `) &&
+              line.trimEnd().endsWith(`/${statePath}`),
+          ).length
+      // Scan 1 s windows backwards from the end of the capture: the synth solo
+      // is the last sounding segment, so the first window with a steady
+      // fundamental measures it (tail silence stays under the amplitude floor
+      // and yields undefined).
+      const lastSteadyFundamentalHz = (buf: Buffer): number | undefined => {
+        const { durationSec } = analyzeWavBuffer(buf)
+        for (let toSec = durationSec; toSec >= 1; toSec -= 0.25) {
+          const hz = estimateFundamentalHz(buf, { fromSec: toSec - 1, toSec })
+          if (hz !== undefined) return hz
+        }
+        return undefined
+      }
+      let engineRunning = false
+      const startCapture = async (wavPath: string, label: string): Promise<void> => {
+        const started = await activeClient.call('start_engine', { capture_wav: wavPath })
+        expect(started.isError, started.text).toBe(false)
+        engineRunning = true
+        await waitForEngine(true, 15_000, label)
+        await sleep(2500)
+      }
+      // Keep every cycle's timeline identical so whole-file RMS stays
+      // comparable across the three captures.
+      const runPlaybackPhases = async (): Promise<void> => {
+        await sleep(6000)
+        await runDslLines(playbackStartLine, playbackEndLine)
+        await sleep(4000)
+        await runDslLines(soloStartLine, soloEndLine)
+        await sleep(4000)
+      }
+
+      const baselineStates = readManifestStates()
+      for (const receiverKey of receiverKeys) delete baselineStates[receiverKey]
+      writeManifestStates(baselineStates)
+      const clearedStates = readManifestStates()
+      for (const receiverKey of receiverKeys) {
+        expect(clearedStates).not.toHaveProperty(receiverKey)
+      }
+
+      // Topology (NOT a series chain): the sum bus feeds master directly AND
+      // sends to aux (amount 1), whose return also feeds master. With an ideal
+      // zero-latency adder the graph would collapse to
+      //   T = g_master · g_sequence · g_sum · (1 + g_aux)
+      // Reverting any one SERIES gain to the 0.5 default moves the capture by
+      // 44.4% (master), 41.2% (sum) or 37.5% (sequence) — measured on real
+      // hardware, red as predicted. The aux term is different: every OOP
+      // insert is pipelined (+1 block of latency), so the aux return lags the
+      // direct leg by one device block. The kick's file peak lands ~66 samples
+      // after onset — inside that block — so the whole-file peak is
+      // mathematically insensitive to g_aux at ANY tolerance, and whole-file
+      // RMS moves only ~4% (measured signed −4.11% for g_aux 0.95 → 0.0; the
+      // ideal 23.1% shrinks under the kick's negative lag-autocorrelation
+      // plus silence/synth dilution). That 4.11% is real signal, not noise:
+      // the no-mutation noise floor between two same-settings captures is
+      // 3.4e-6. So the RMS restore assert below runs at 2% tolerance — tight
+      // enough that a lost aux restore goes red — while peak keeps 15% and
+      // covers the series gains only (#587: measurement sensitivity, not a
+      // signal-path defect). The aux leg itself is pinned at bus level by the
+      // daemon gated test set_bus_routing_wires_sum_send_to_aux_and_return
+      // (rust/crates/orbit-audio-daemon/tests/outproc_mixer_bus_gated.rs);
+      // the committed-bytes equality and the path-bound restore-line assert
+      // cover the aux STATE from the manifest side. T is commutative in the
+      // series gains, so a state SWAP between them is inaudible; the
+      // path-bound restore-line asserts cover that failure class too.
+      const effectStates = [
+        {
+          receiverKey: receiverKeys[0],
+          relativePath: 'states/e2e-auto-master-gain-0900.state',
+          gain: 0.9,
+        },
+        {
+          receiverKey: receiverKeys[1],
+          relativePath: 'states/e2e-auto-sum-gain-0850.state',
+          gain: 0.85,
+        },
+        {
+          receiverKey: receiverKeys[2],
+          relativePath: 'states/e2e-auto-aux-gain-0950.state',
+          gain: 0.95,
+        },
+        {
+          receiverKey: receiverKeys[3],
+          relativePath: 'states/e2e-auto-sequence-gain-0800.state',
+          gain: 0.8,
+        },
+      ] as const
+      // The gain product cannot see a pitch state, so the instrument carries
+      // its own oracle: a non-default semitone offset measured as the solo
+      // segment's fundamental (same semantics as the MCP-save instrument test).
+      const instrumentState = {
+        receiverKey: receiverKeys[4],
+        relativePath: 'states/e2e-auto-instrument-offset-0007.state',
+        semitoneOffset: 7,
+      } as const
+      const bootstrapEntries: readonly { receiverKey: string; relativePath: string }[] = [
+        ...effectStates,
+        instrumentState,
+      ]
+
+      try {
+        // ── Cycle 0: default baseline. No registered states — every plugin
+        // keeps its built-in default (gain 0.5, offset 0). The loaded cycles
+        // must differ audibly from this capture; without the baseline, a
+        // pipeline that never applied state in either loaded cycle would
+        // still pass their mutual match.
+        await startCapture(defaultWav, 'all-receiver default-baseline capture engine running')
+        const beforeDefaultLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const errorsBeforeDefault = countErrors(beforeDefaultLog)
+        await runDslLines(1, declarationsEndLine)
+        await runPlaybackPhases()
+        await stopTransportThroughDsl('all-receiver default-baseline transport stopped')
+        const afterDefaultLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterDefaultLog),
+          `default-baseline cycle must add no ERROR: lines. Log tail: ${afterDefaultLog.slice(-1200)}`,
+        ).toBe(errorsBeforeDefault)
+        await stopEngine('all-receiver default-baseline engine stopped')
+        engineRunning = false
+
+        // Bootstrap: hand-written non-default states stand in for "shape the
+        // sound in the plugin UI" until #474 ships an openable UI. This write
+        // also overwrites the registrations left by the cycle-0 stop snapshot;
+        // the committed registrations consumed by the restart are produced by
+        // the cycle-1 stop snapshot alone (asserted below).
+        for (const state of effectStates) {
+          writeStateFile(state.relativePath, effectStateBytes(state.gain))
+        }
+        writeStateFile(
+          instrumentState.relativePath,
+          instrumentStateBytes(instrumentState.semitoneOffset),
+        )
+        writeManifestStates({
+          ...readManifestStates(),
+          ...Object.fromEntries(
+            bootstrapEntries.map((state) => [state.receiverKey, state.relativePath]),
+          ),
+        })
+
+        // ── Cycle 1: load the five bootstrap states, prove they are audible,
+        // then let the stop snapshot auto-record them.
+        await startCapture(preRestartWav, 'all-receiver pre-restart capture engine running')
+        const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const errorsBefore = countErrors(beforeLog)
+        const bootstrapRestoreCountsBefore = new Map(
+          bootstrapEntries.map((state) => [
+            state.receiverKey,
+            countRestoreLines(beforeLog, state.receiverKey, state.relativePath),
+          ]),
+        )
+        await runDslLines(1, declarationsEndLine)
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            const missing = bootstrapEntries.filter(
+              (state) =>
+                countRestoreLines(log, state.receiverKey, state.relativePath) <=
+                bootstrapRestoreCountsBefore.get(state.receiverKey)!,
+            )
+            if (missing.length > 0) {
+              throw new Error(
+                `missing bootstrap restore log lines: ${missing.map((s) => s.receiverKey).join(', ')}`,
+              )
+            }
+            return true
+          },
+          {
+            intervalMs: 200,
+            timeoutMs: 10_000,
+            label: 'all five bootstrap state restore log lines',
+          },
+        )
+        await runPlaybackPhases()
+
+        // Remove every bootstrap registration after the loaded plugins have
+        // applied it. Only the automatic stop snapshot may create the committed
+        // registrations consumed by the restart below.
+        const loadedStates = readManifestStates()
+        for (const receiverKey of receiverKeys) delete loadedStates[receiverKey]
+        writeManifestStates(loadedStates)
+        const statesBeforeAutoSnapshot = readManifestStates()
+        for (const receiverKey of receiverKeys) {
+          expect(statesBeforeAutoSnapshot).not.toHaveProperty(receiverKey)
+        }
+        await stopTransportThroughDsl('all-receiver transport stopped before auto-snapshot')
+
+        await waitUntil(
+          () => {
+            const states = readManifestStates()
+            return receiverKeys.every((receiverKey) => Boolean(states[receiverKey]))
+          },
+          {
+            intervalMs: 200,
+            timeoutMs: 10_000,
+            label: 'all five receiver auto-snapshots registered',
+          },
+        )
+        const registeredStates = readManifestStates()
+        for (const receiverKey of receiverKeys) {
+          expect(registeredStates[receiverKey]).toBe(expectedAutoStatePath(receiverKey))
+        }
+        // The snapshot must have re-saved the LIVE plugin state, not left the
+        // cycle-0 default bytes behind: the committed files must equal the
+        // exact bytes the plugins loaded from the bootstrap.
+        for (const state of effectStates) {
+          expect(
+            fs
+              .readFileSync(path.join(root, expectedAutoStatePath(state.receiverKey)))
+              .equals(effectStateBytes(state.gain)),
+            `auto-recorded '${state.receiverKey}' must hold the loaded gain ${state.gain}`,
+          ).toBe(true)
+        }
+        expect(
+          fs
+            .readFileSync(path.join(root, expectedAutoStatePath(instrumentState.receiverKey)))
+            .equals(instrumentStateBytes(instrumentState.semitoneOffset)),
+          `auto-recorded '${instrumentState.receiverKey}' must hold semitone offset ` +
+            `${instrumentState.semitoneOffset}`,
+        ).toBe(true)
+
+        const afterRecordLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterRecordLog),
+          `all-receiver auto-snapshot must add no ERROR: lines. Log tail: ${afterRecordLog.slice(-1200)}`,
+        ).toBe(errorsBefore)
+
+        // Restart with only the stop-triggered committed manifest as restore
+        // input, then re-declare every receiver. The daemon emits this marker
+        // only when the registered state is actually sent back for application.
+        await stopEngine('all-receiver auto-snapshot engine stopped before restore')
+        engineRunning = false
+        await startCapture(restoredWav, 'all-receiver restore capture engine running')
+
+        const restoreBaselineLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const errorsBeforeRestore = countErrors(restoreBaselineLog)
+        // Path-bound markers: each receiver must be restored from ITS
+        // deterministic committed file. Cycle-1 bootstrap lines used the
+        // hand-written paths, so they cannot satisfy these counts.
+        const restoreCountsBeforeDeclarations = new Map(
+          receiverKeys.map((receiverKey) => [
+            receiverKey,
+            countRestoreLines(restoreBaselineLog, receiverKey, expectedAutoStatePath(receiverKey)),
+          ]),
+        )
+
+        await runDslLines(1, declarationsEndLine)
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            const missingReceiverKeys = receiverKeys.filter(
+              (receiverKey) =>
+                countRestoreLines(log, receiverKey, expectedAutoStatePath(receiverKey)) <=
+                restoreCountsBeforeDeclarations.get(receiverKey)!,
+            )
+            if (missingReceiverKeys.length > 0) {
+              throw new Error(
+                `missing restore log lines for receiver keys: ${missingReceiverKeys.join(', ')}`,
+              )
+            }
+            return true
+          },
+          {
+            intervalMs: 200,
+            timeoutMs: 10_000,
+            label: 'all five receiver state restore log lines after engine restart',
+          },
+        )
+
+        await runPlaybackPhases()
+        await stopTransportThroughDsl('all-receiver restored transport stopped')
+
+        const afterRestoreLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterRestoreLog),
+          `all-receiver restore must not increase ERROR: lines from the post-restart baseline. Log tail: ${afterRestoreLog.slice(-1200)}`,
+        ).toBeLessThanOrEqual(errorsBeforeRestore)
+
+        await stopEngine('all-receiver restored capture engine stopped')
+        engineRunning = false
+
+        const defaultBuf = fs.readFileSync(defaultWav)
+        const preRestartBuf = fs.readFileSync(preRestartWav)
+        const restoredBuf = fs.readFileSync(restoredWav)
+        const defaultAnalysis = analyzeWavBuffer(defaultBuf)
+        const preRestartAnalysis = analyzeWavBuffer(preRestartBuf)
+        const restoredAnalysis = analyzeWavBuffer(restoredBuf)
+        expect(defaultAnalysis.soundDetected, JSON.stringify(defaultAnalysis)).toBe(true)
+        expect(preRestartAnalysis.soundDetected, JSON.stringify(preRestartAnalysis)).toBe(true)
+        expect(restoredAnalysis.soundDetected, JSON.stringify(restoredAnalysis)).toBe(true)
+
+        // Loaded states must be audibly ABOVE the default baseline. Physics:
+        // the kick leg scales by T(loaded)/T(default) = 1.1934/0.1875 ≈ 6.4×
+        // and the synth leg (master gain only) by 0.9/0.5 = 1.8×, so the
+        // mixed capture gains at least ~44% — assert a 30% floor for margin.
+        expect(
+          (preRestartAnalysis.rms - defaultAnalysis.rms) / preRestartAnalysis.rms,
+          `loaded RMS ${preRestartAnalysis.rms} must clearly exceed default ${defaultAnalysis.rms}`,
+        ).toBeGreaterThan(0.3)
+        expect(
+          (preRestartAnalysis.peak - defaultAnalysis.peak) / preRestartAnalysis.peak,
+          `loaded peak ${preRestartAnalysis.peak} must clearly exceed default ${defaultAnalysis.peak}`,
+        ).toBeGreaterThan(0.3)
+
+        const restoredPeakDelta =
+          Math.abs(restoredAnalysis.peak - preRestartAnalysis.peak) / preRestartAnalysis.peak
+        const restoredRmsDelta =
+          Math.abs(restoredAnalysis.rms - preRestartAnalysis.rms) / preRestartAnalysis.rms
+        expect(
+          restoredPeakDelta,
+          `restored peak ${restoredAnalysis.peak} must match pre-restart ${preRestartAnalysis.peak}`,
+        ).toBeLessThanOrEqual(0.15)
+        // RMS tolerance is 2%, not the peak's 15%. Measured on real hardware
+        // (#587): the no-mutation noise floor between two same-settings
+        // captures is 3.4e-6 (0.00034%), while the smallest real fault — the
+        // aux insert's contribution going missing — moves whole-file RMS by
+        // 4.11% (signed, measured for g_aux 0.95 → 0.0). 2% sits ~6000× above
+        // the measured floor and ~2× under that smallest fault, so a lost aux
+        // restore goes red here while same-machine reruns stay green. The
+        // peak assert keeps 15%: its cross-run floor is unmeasured, and the
+        // whole-file peak is structurally blind to the aux leg (the pipelined
+        // aux return lags one device block behind the direct leg, and the
+        // kick's peak sits inside that block), so tightening it buys no aux
+        // detection — RMS is the discriminating meter here.
+        expect(
+          restoredRmsDelta,
+          `restored RMS ${restoredAnalysis.rms} must match pre-restart ${preRestartAnalysis.rms}`,
+        ).toBeLessThanOrEqual(0.02)
+
+        // Instrument leg: pitch, not level. Thresholds mirror the MCP-save
+        // instrument test (±2% against the musical spec, ≤1% across restart).
+        const midiFrequencyHz = (midiNote: number): number => 440 * 2 ** ((midiNote - 69) / 12)
+        const expectedDefaultHz = midiFrequencyHz(60)
+        const expectedShiftedHz = midiFrequencyHz(60 + instrumentState.semitoneOffset)
+        const defaultHz = lastSteadyFundamentalHz(defaultBuf)
+        const preRestartHz = lastSteadyFundamentalHz(preRestartBuf)
+        const restoredHz = lastSteadyFundamentalHz(restoredBuf)
+        expect(defaultHz, 'default capture has no measurable solo fundamental').toBeDefined()
+        expect(preRestartHz, 'pre-restart capture has no measurable solo fundamental').toBeDefined()
+        expect(restoredHz, 'restored capture has no measurable solo fundamental').toBeDefined()
+        expect(
+          Math.abs(defaultHz! - expectedDefaultHz) / expectedDefaultHz,
+          `default solo ${defaultHz!.toFixed(2)}Hz must be the offset-0 pitch ` +
+            `${expectedDefaultHz.toFixed(2)}Hz`,
+        ).toBeLessThanOrEqual(0.02)
+        expect(
+          Math.abs(preRestartHz! - expectedShiftedHz) / expectedShiftedHz,
+          `loaded solo ${preRestartHz!.toFixed(2)}Hz must be the offset-` +
+            `${instrumentState.semitoneOffset} pitch ${expectedShiftedHz.toFixed(2)}Hz`,
+        ).toBeLessThanOrEqual(0.02)
+        expect(
+          Math.abs(restoredHz! - preRestartHz!) / preRestartHz!,
+          `restored solo ${restoredHz!.toFixed(2)}Hz must match pre-restart ` +
+            `${preRestartHz!.toFixed(2)}Hz`,
+        ).toBeLessThanOrEqual(0.01)
+        expect(
+          Math.abs(restoredHz! - expectedShiftedHz) / expectedShiftedHz,
+          `restored solo ${restoredHz!.toFixed(2)}Hz must be the offset-` +
+            `${instrumentState.semitoneOffset} pitch ${expectedShiftedHz.toFixed(2)}Hz`,
+        ).toBeLessThanOrEqual(0.02)
+      } finally {
+        if (engineRunning) {
+          await stopEngine('all-receiver auto-record/restore engine stopped')
+        }
+      }
+    },
+    // Three engine cycles (default / loaded / restored), each with a kick and
+    // a solo segment — the shared two-cycle budget is not enough.
+    TEST_TIMEOUT_MS * 2,
   )
 })

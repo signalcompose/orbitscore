@@ -200,3 +200,111 @@ fn set_bus_routing_wires_insert_to_sum_output_and_aux_send() {
         "aux send 経路の gain 比が想定外（期待 ~{expected_aux_ratio:.5}）"
     );
 }
+
+// ── sum バス発の send（sum → aux）+ aux リターンが実機で信号を運ぶ（#587） ──────────────────
+//
+// 上のテストの send 源は insert bus（seq-bus-0）。#587 の E2E（PR #585）が使うのは
+// **sum バス発の send**（`autoSnapshotSum.autoSnapshotAux(1).master`）で、この形の send を
+// 実機で pin するテストはこれまで存在しなかった（`set_bus_routing` は source 非依存の実装だが、
+// 実装の同型性はテストの代わりにならない — #587 診断）。トポロジは E2E と同型:
+//   seq(insert) → sum(output) / sum → aux(send 1.0) / aux → master(return)
+// aux バスの dry_peak が「sum の post-insert 信号 × send 1.0」に一致すれば、
+// **sum 発 send の送達**と **aux stage への到達**が bus 単位の実測で証明される。
+#[test]
+#[ignore = "#587: needs ORBIT_EFFECT_BUSES=seq-bus-0 ORBIT_SUM_BUS_POOL=1 ORBIT_AUX_BUS_POOL=1 set before process start + a real output device + built child binary + test-effect dylib (local only)"]
+fn set_bus_routing_wires_sum_send_to_aux_and_return() {
+    assert_env("ORBIT_EFFECT_BUSES", SEQ_BUS);
+    assert_env("ORBIT_SUM_BUS_POOL", "1");
+    assert_env("ORBIT_AUX_BUS_POOL", "1");
+
+    let (cfg, wav) = setup_test();
+    let (engine, _guard) =
+        EngineWrap::start_outproc_effect_post_boot(cfg).expect("start OOP effect daemon");
+
+    let dylib = test_effect_dylib();
+    for bus in [SEQ_BUS, SUM_BUS, AUX_BUS] {
+        engine
+            .load_outproc_effect_plugin(dylib.clone(), None, Some(bus.to_owned()))
+            .unwrap_or_else(|e| panic!("attach gain oracle to bus '{bus}': {e}"));
+    }
+
+    // E2E（PR #585）と同型の配線。send 源が sum バスである点が上のテストとの唯一の違い。
+    engine
+        .set_bus_routing(SEQ_BUS, Some(SUM_BUS), &[])
+        .expect("SetBusRouting must accept seq → sum output");
+    engine
+        .set_bus_routing(SUM_BUS, Some("master"), &[(AUX_BUS.to_owned(), 1.0)])
+        .expect("SetBusRouting must accept a sum-source send to aux");
+    engine
+        .set_bus_routing(AUX_BUS, Some("master"), &[])
+        .expect("SetBusRouting must accept the aux return to master");
+
+    let sample = engine.load_sample(wav).expect("load sine sample");
+    let onset = engine.transport_or_uptime_sec() + 0.1;
+    engine
+        .play_at(
+            &sample.sample_id,
+            onset,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            Some(SEQ_BUS.to_owned()),
+        )
+        .expect("play sine tagged to seq-bus-0");
+
+    assert!(
+        wait_until(Duration::from_secs(3), || engine
+            .outproc_effect_bus_stats(AUX_BUS)
+            .map(|s| s.fresh > 0)
+            .unwrap_or(false)),
+        "aux bus '{AUX_BUS}' が fresh 処理を報告しない（sum 発 send の routing / attach を確認）"
+    );
+    std::thread::sleep(Duration::from_millis(600));
+
+    let seq_stats = engine
+        .outproc_effect_bus_stats(SEQ_BUS)
+        .expect("seq bus stats available");
+    let aux_stats = engine
+        .outproc_effect_bus_stats(AUX_BUS)
+        .expect("aux bus stats available");
+
+    println!("=== #587 sum-source send verdict ===");
+    println!(
+        "seq: dry={:.5} post={:.5} | aux: dry={:.5} post={:.5}",
+        seq_stats.dry_peak, seq_stats.post_peak, aux_stats.dry_peak, aux_stats.post_peak,
+    );
+    println!("====================================");
+
+    assert!(
+        !seq_stats.measurement_invalid,
+        "seq bus の respawn 失敗で計測無効"
+    );
+    assert!(
+        !aux_stats.measurement_invalid,
+        "aux bus の respawn 失敗で計測無効"
+    );
+    assert!(
+        seq_stats.dry_peak > 0.01,
+        "insert bus に音が届いていない (dry_peak={:.5})",
+        seq_stats.dry_peak
+    );
+
+    // closed-form oracle: aux の dry は insert(gain) × sum insert(gain) × send(1.0) = EFFECT_GAIN^2。
+    // aux の post はさらに aux 自身の gain oracle を掛けた EFFECT_GAIN^3。
+    let expected_aux_dry = EFFECT_GAIN * EFFECT_GAIN;
+    let expected_aux_post = EFFECT_GAIN * EFFECT_GAIN * EFFECT_GAIN;
+    assert!(
+        (expected_aux_dry - 0.1..=expected_aux_dry + 0.1)
+            .contains(&(aux_stats.dry_peak / seq_stats.dry_peak.max(1e-6))),
+        "sum 発 send が aux に届いていない（dry 比の期待 ~{expected_aux_dry:.5}・実測 {:.5}）",
+        aux_stats.dry_peak / seq_stats.dry_peak.max(1e-6)
+    );
+    assert!(
+        (expected_aux_post - 0.1..=expected_aux_post + 0.1)
+            .contains(&(aux_stats.post_peak / seq_stats.dry_peak.max(1e-6))),
+        "aux insert が send 信号を処理していない（post 比の期待 ~{expected_aux_post:.5}・実測 {:.5}）",
+        aux_stats.post_peak / seq_stats.dry_peak.max(1e-6)
+    );
+}

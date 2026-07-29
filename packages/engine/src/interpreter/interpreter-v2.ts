@@ -257,6 +257,11 @@ export class InterpreterV2 {
     return this.state.audioEngine
   }
 
+  /** All initialized globals, exposed for graceful shutdown safe-point handling. */
+  getGlobals(): readonly Global[] {
+    return [...this.state.globals.values()]
+  }
+
   /** REPL/MCP bridgeから現在のchainを解決し、plugin stateとproject.yamlを明示保存する。 */
   async savePluginState(sequence: string, index: number): Promise<SavedProjectPluginState> {
     const global = this.state.currentGlobal

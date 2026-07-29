@@ -180,6 +180,11 @@ export class MixerManager {
     return this.kinds[kind].buses.get(name)
   }
 
+  /** Declared names in one explicit mixer namespace, returned as a read-only copy. */
+  declaredBusNames(kind: MixerKind): readonly string[] {
+    return [...this.kinds[kind].buses.keys()]
+  }
+
   /** The kinds (sum / aux) that currently have a bus declared under `name`. */
   kindsWithBus(name: string): MixerKind[] {
     return MIXER_BUS_KINDS.filter((kind) => this.kinds[kind].buses.has(name))

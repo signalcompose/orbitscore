@@ -749,6 +749,8 @@ mod set_bus_routing_tests {
             "seq-bus-0".to_owned(),
             vec![Arc::new(AtomicU32::new(0)), Arc::new(AtomicU32::new(0))],
         );
+        // sum-bus-0 (index 1) has 1 later stage (index 2) => 1 send slot.
+        bus_sends.insert("sum-bus-0".to_owned(), vec![Arc::new(AtomicU32::new(0))]);
         *wrap.outproc.lock().expect("lock outproc for injection") = Some(OutProcControl {
             stats: OutProcEffectStats::new(),
             cb_stats: CallbackTimeStats::new(),
@@ -829,6 +831,24 @@ mod set_bus_routing_tests {
         assert_eq!(gain, 0.75);
         // The untouched slot (sum-bus-0, k=0) must remain disabled.
         assert_eq!(f32::from_bits(sends[0].load(Ordering::Relaxed)), 0.0);
+    }
+
+    /// #587: E2E（PR #585）が使う **sum バス発の send**（`sum.aux(amount)` 相当）の slot 書込みを
+    /// pin する。`set_bus_routing` は source 非依存（k = target_index − seq_index − 1）だが、
+    /// 従来この式を pin していたのは seq-bus 発のみで、sum 発は #587 診断まで未検証だった。
+    #[test]
+    fn send_from_sum_bus_stores_gain_bits_on_the_correct_slot() {
+        let wrap = wrap_with_three_stage_topology();
+        wrap.set_bus_routing("sum-bus-0", None, &[("aux-bus-0".to_owned(), 1.0)])
+            .expect("sum-source send to an aux bus must be accepted");
+        let guard = wrap.outproc.lock().unwrap();
+        let sends = guard.as_ref().unwrap().bus_sends.get("sum-bus-0").unwrap();
+        // aux-bus-0 is at absolute index 2; sum-bus-0 is at index 1 => slot k = 2 - 1 - 1 = 0.
+        assert_eq!(f32::from_bits(sends[0].load(Ordering::Relaxed)), 1.0);
+        // The seq-bus-0 slots must remain untouched (no cross-source bleed).
+        let seq_sends = guard.as_ref().unwrap().bus_sends.get("seq-bus-0").unwrap();
+        assert_eq!(f32::from_bits(seq_sends[0].load(Ordering::Relaxed)), 0.0);
+        assert_eq!(f32::from_bits(seq_sends[1].load(Ordering::Relaxed)), 0.0);
     }
 
     #[test]

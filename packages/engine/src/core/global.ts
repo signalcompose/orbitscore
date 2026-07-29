@@ -3,8 +3,6 @@
  * Represents the global transport and configuration
  */
 
-import * as path from 'path'
-
 import { AudioEngine } from '../audio/types'
 import { StackElement, PlayElement } from '../parser/types'
 import { BoundValue, ChordVoice } from '../midi/chord/types'
@@ -28,6 +26,7 @@ import { PluginEffectManager } from './global/plugin-effect-manager'
 import { PluginInstrumentManager } from './global/plugin-instrument-manager'
 import { SequenceEffectManager } from './global/sequence-effect-manager'
 import {
+  MIXER_BUS_KINDS,
   MixerManager,
   MixerBusHandle,
   formatReceiverId,
@@ -36,6 +35,7 @@ import {
 import type { PluginSlot } from './global/effect-slot'
 import {
   ProjectStateStore,
+  projectStateStoreFor,
   type PluginStateIdentity,
   type SavedProjectPluginState,
 } from './project-state-store'
@@ -43,6 +43,30 @@ import {
 export interface ResolvedPluginStateTarget {
   identity: PluginStateIdentity
   daemonTarget: { role: 'effect'; bus?: string } | { role: 'instrument'; instance: string }
+}
+
+/**
+ * slot が既に保持している identity 素材（role / normalizedName / occurrence）を
+ * そのまま写す純関数。`this` を使わないのでクラス外に置き、DSL 語彙の分類対象から外す
+ * （#564: 外に出せるものを除外リストで黙らせない）。
+ * Direct slot → persistent identity/daemon address mapping shared by all save paths.
+ */
+function pluginStateTargetForSlot(receiverId: string, slot: PluginSlot): ResolvedPluginStateTarget {
+  return {
+    identity: {
+      receiver: receiverId,
+      role: slot.role,
+      normalizedName: slot.normalizedName,
+      occurrence: slot.occurrence,
+    },
+    daemonTarget:
+      slot.role === 'instrument'
+        ? { role: 'instrument', instance: slot.instance }
+        : {
+            role: 'effect',
+            ...(slot.bus === undefined ? {} : { bus: slot.bus }),
+          },
+  }
 }
 
 export class Global {
@@ -59,8 +83,6 @@ export class Global {
   private pluginInstrumentManager: PluginInstrumentManager
   private sequenceEffectManager: SequenceEffectManager
   private mixerManager: MixerManager
-  private readonly projectStateStores = new Map<string, ProjectStateStore>()
-
   // Shared transport clock — the single Date.now() origin for both the audio
   // scheduler and the MIDI scheduler, so they stay in sync (§1). MIDI sequences
   // schedule against `midiTransport` (TransportClock-backed) instead of the SC
@@ -522,7 +544,7 @@ export class Global {
     return this
   }
 
-  stop(): this {
+  stop(options?: { autoSnapshot?: boolean }): this {
     // §L1: write the stop record BEFORE the clock clears, only if actually
     // running, and never let a log-write error block the note-offs below (a
     // throw here would otherwise leave MIDI notes hanging — music unstoppable).
@@ -531,6 +553,20 @@ export class Global {
         this._onTransportStop?.()
       } catch (e) {
         console.warn(`⚠️  session-log: stop hook failed (playback continues): ${e}`)
+      }
+      if (options?.autoSnapshot !== false) {
+        // Run after this synchronous stop stack has cleared the transport. The
+        // snapshot remains fire-and-forget, while its own aggregate/per-target
+        // logging provides the observable completion and failure surface.
+        void Promise.resolve()
+          .then(() => this.saveAllPluginStates())
+          .catch((error) => {
+            console.error(
+              `[plugin-state] auto-snapshot failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            )
+          })
       }
     }
     this.transportControl.stop()
@@ -647,6 +683,33 @@ export class Global {
   }
 
   /**
+   * Lists loaded plugin-state targets directly from the typed chain structure.
+   * No receiver-name resolution or implicit mixer-kind priority participates.
+   */
+  listPluginStateTargets(): ResolvedPluginStateTarget[] {
+    const targets: ResolvedPluginStateTarget[] = []
+    const append = (receiverId: string, chain: readonly PluginSlot[]) => {
+      for (const slot of chain) {
+        targets.push(pluginStateTargetForSlot(receiverId, slot))
+      }
+    }
+
+    append('master', this.pluginEffectManager.chain())
+    for (const kind of MIXER_BUS_KINDS) {
+      for (const name of this.mixerManager.declaredBusNames(kind)) {
+        append(formatReceiverId(kind, name), this.mixerManager.chainFor(kind, name))
+      }
+    }
+    for (const sequenceName of this.sequenceEffectManager.keys()) {
+      append(sequenceName, this.sequenceEffectManager.chainFor(sequenceName))
+    }
+    for (const sequenceName of this.pluginInstrumentManager.keys()) {
+      append(sequenceName, this.pluginInstrumentManager.chainFor(sequenceName))
+    }
+    return targets
+  }
+
+  /**
    * UIH.5 の揮発アドレス `(receiver,index)` を、現在のchainからSC.5 identityとdaemon slotへ
    * 同時に解決する。indexを永続キーへ流用しない。
    */
@@ -713,22 +776,7 @@ export class Global {
         'the requested chain slot does not exist',
       )
     }
-    const identity: PluginStateIdentity = {
-      receiver: receiverId,
-      role: slot.role,
-      normalizedName: slot.normalizedName,
-      occurrence: slot.occurrence,
-    }
-    return {
-      identity,
-      daemonTarget:
-        slot.role === 'instrument'
-          ? { role: 'instrument', instance: slot.instance }
-          : {
-              role: 'effect',
-              ...(slot.bus === undefined ? {} : { bus: slot.bus }),
-            },
-    }
+    return pluginStateTargetForSlot(receiverId, slot)
   }
 
   async savePluginState(receiverId: string, index: number): Promise<SavedProjectPluginState> {
@@ -742,13 +790,78 @@ export class Global {
         'Plugin state cannot be saved before the document has a directory; save the .orbs file first.',
       )
     }
-    const absoluteDirectory = path.resolve(projectDirectory)
-    let store = this.projectStateStores.get(absoluteDirectory)
-    if (!store) {
-      store = new ProjectStateStore(absoluteDirectory, this.audioEngine)
-      this.projectStateStores.set(absoluteDirectory, store)
-    }
+    const store = this.projectStateStore(projectDirectory)
     return store.save(resolved.identity, resolved.daemonTarget)
+  }
+
+  /**
+   * Commits every loaded plugin state at a discrete safe point. This intentionally
+   * has no dirty gate: formats/plugins that never emit dirty notifications must
+   * still be captured.
+   */
+  async saveAllPluginStates(): Promise<{ saved: number; failures: number }> {
+    const targets = this.listPluginStateTargets()
+    if (targets.length === 0) {
+      // No state can be lost. Keep this normal path on plain stdout so the
+      // extension filters it out instead of presenting an ERROR to the user.
+      console.log('[plugin-state] auto-snapshot skipped: no loaded plugin targets')
+      return { saved: 0, failures: 0 }
+    }
+    const projectDirectory = this.audioManager.getDocumentDirectory()
+    if (!projectDirectory) {
+      // Loaded state will be lost unless the document is saved. The extension
+      // preserves stdout lines containing ⚠️ without prefixing them as ERROR.
+      const identities = targets
+        .map((target) =>
+          [
+            target.identity.receiver,
+            target.identity.role,
+            target.identity.normalizedName,
+            target.identity.occurrence,
+          ].join('/'),
+        )
+        .map((identity) => `'${identity}'`)
+        .join(', ')
+      console.log(
+        `[plugin-state] ⚠️ auto-snapshot skipped: document directory is not set; ` +
+          `unsaved targets: ${identities}`,
+      )
+      return { saved: 0, failures: 0 }
+    }
+
+    const store = this.projectStateStore(projectDirectory)
+    let saved = 0
+    let failures = 0
+    for (const target of targets) {
+      try {
+        await store.save(target.identity, target.daemonTarget)
+        saved += 1
+      } catch (error) {
+        failures += 1
+        const identity = [
+          target.identity.receiver,
+          target.identity.role,
+          target.identity.normalizedName,
+          target.identity.occurrence,
+        ].join('/')
+        console.error(
+          `[plugin-state] auto-snapshot failed for '${identity}': ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+      }
+    }
+    const summary = `[plugin-state] auto-snapshot complete (${saved} saved, ${failures} failed)`
+    if (failures > 0) {
+      console.error(summary)
+    } else {
+      console.log(summary)
+    }
+    return { saved, failures }
+  }
+
+  private projectStateStore(projectDirectory: string): ProjectStateStore {
+    return projectStateStoreFor(this.audioEngine, projectDirectory)
   }
 
   private pluginIndexError(

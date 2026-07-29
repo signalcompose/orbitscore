@@ -17,6 +17,596 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.334 fix(docs/test): #587 は測定盲点と確定 — aux は信号を運んでいる。記録を訂正し sum 発 send をテストで pin (Jul 30, 2026)
+
+**Date**: 2026-07-30
+**Issue**: #577 (PR-A) / #587（再スコープ） / **PR**: #585
+**Status**: ✅ 全 1836 passed / 34 skipped / 0 failed・rust unit 10 passed（新規1・変異検証済み）・gated 1 本追加（compile 確認済み・実機 RUN は main）
+
+6.333 の「aux は音を運んでいない（製品バグ）」という判定は**誤りだった**。
+Fable 診断（3ラウンド）+ 追加実測で**測定盲点**と確定し、記録を真実に合わせた。
+
+#### 確定の根拠（機構 × 実測の両輪）
+
+1. **peak が不感な機構**: OOP insert は `PipelinedEffectHost` により +1 block/段 の遅延を持つ
+   （`host.rs:1-8`）。aux レグは直行レグより **aux insert 1 段ぶん = 1 device block 遅れて**
+   master に届く。kick.wav のファイル peak はオンセット後 **66 サンプル（1.38ms）** = その
+   block 内にあるため、遅延した aux コピーは peak の瞬間に寄与ゼロ。数値検証:
+   B ∈ {128, 480, 512, 1024}・g_aux ∈ {0.95, 0.5, 0.0} すべてで合成 peak 比 **1.00000**
+   — 「gain 0.0 でも 0%」の実測と厳密一致
+2. **RMS の帯域内**: 全体 RMS は動くが、kick の負のラグ自己相関（実測 r(512f) = **−0.199**）で
+   理想 27.5% → 19%（kick 区間単独）に縮み、無音 + synth 区間の希釈でさらに沈む
+3. **符号つき実測**: aux 0.95 → 0.0 の変異で
+   `preRestart.rms = 0.055479 / restored.rms = 0.053200` → **−4.11%**。
+   生存予測（符号確定・希釈込み 4〜15%）と一致し、死亡予測（±2-3%・符号不定）を超える
+4. **対照実験（決定打・main 実測）**: 無変異・同一設定の2回 capture 間の RMS ノイズ床は
+   **3.4e-6（0.00034%）**。−4.11% はその **約 1200 倍** — 測定ノイズでは説明不能。
+   **aux は寄与している。ただし旧 15% オラクルの帯域内**
+
+→ **#587 は「信号経路の欠陥」から「capture オラクルの感度限界」へ再スコープ**。
+
+#### RMS 許容値を 15% → 2% に締めた（restore fidelity・five-receiver テストのみ）
+
+ノイズ床の実測により、15% は**ノイズ床の 44000 倍**で判別力を捨てていたことが判明。
+締め付けは証明力を上げる方向（禁止されているのは緩める方向のみ）:
+
+| 指標 | 判断 | 根拠 |
+|---|---|---|
+| **RMS** | **0.15 → 0.02** | ノイズ床 3.4e-6 の ~6000 倍・最小故障（aux 欠落 4.11%）の ~1/2。aux の復元喪失が red になる |
+| **peak** | **0.15 のまま** | (1) peak のラン間ノイズ床は**未測定**（RMS の床を流用できない）(2) peak は aux に**構造的に盲目**なのでいくら締めても aux 検出力を買えない。直列レグ（44.4%/41.2%/37.5%）は 15% で十分検出できている |
+
+保守側の留保: ノイズ床は**このマシン1組の実測**。他マシン・高負荷時・別 device
+（44.1kHz 等）での再現性は未知だが、2% は床から3桁半の余裕があり、flaky 化するには
+ノイズが**4桁近く**悪化する必要がある。締め付け後の実機 gated RUN（main 担当）で
+flaky でないことを確認してからマージする。
+
+#### 証明力の追加（許容値は一切緩めていない）
+
+`set_bus_routing` は source 非依存の実装（`k = target_index − seq_index − 1`・
+`engine_wrap.rs:2657-2672`）だが、**E2E が使う sum バス発の send を pin するテストが
+存在しなかった**。2本追加:
+
+| テスト | 種別 | 内容 |
+|---|---|---|
+| `send_from_sum_bus_stores_gain_bits_on_the_correct_slot` | unit（CI 常走） | sum 発 send の slot 書込み（k=0）+ 隣接 slot 非汚染 |
+| `set_bus_routing_wires_sum_send_to_aux_and_return` | gated（実機） | E2E 同型トポロジ（seq→sum / sum→aux send 1.0 / aux→master）で aux バスの dry/post が closed-form（g², g³）に一致 |
+
+**変異検証**: slot 式を `target_index − 1`（source index を無視）に壊すと、
+**既存の seq-source テストは緑のまま生き残り**（seq は index 0 なので式が偶然一致）、
+**新 unit テストだけが red** — 新テストが実際の検出力を追加していることを実証。restore 後 10 passed。
+
+#### 記録の訂正（すべて「aux は音を運んでいない」の撤回）
+
+- `PROJECT_FILE_SPEC_v1.md`: (c) 行と証明の深さ表 — aux の音声接地「🔴 不可能」→
+  「✅ RMS 許容 2% への締め付けで判別可」。aux の証明を
+  **RMS assert（2%）+ 登記内容一致 + パス束縛 + バス単位実測**の4点構成に再定義
+- `orbitstudio-mcp-gated.spec.ts`: トポロジコメント — 「信号経路の欠陥」を撤回し、
+  遅延機構・−4.11% 実測・ノイズ床・許容値の設計を明記
+- 本 WORK_LOG 6.333: 判定部分に訂正注記（実測数値そのものは正しいので保持）
+
+#### #587 の扱い（判断）
+
+**リスコープコメントを投稿した上で、本 PR の gated テスト（sum 発 send）が実機 green に
+なった時点でクローズする**。理由: 残っていた本物のギャップ「sum 発 send が daemon レベルで
+未テスト」は本 PR の unit + gated テストで埋まり、aux の音声判別も許容 2% で E2E に入った。
+issue に残す独立作業が無い。**並行レグ間の 1 block スキュー**（コムフィルタ/プリエコーとして
+可聴になり得る・PDC 検討・`host.rs` 冒頭の「遅延は全体に均一」doc の不正確化）は
+#587 とは別問題なので**新 issue として切り出す**（#409 と同層の設計課題）。
+
+#### 教訓
+
+1. **1つの測定指標の不感を「信号の不在」と読み替えない。** peak は構造的に盲目だった。
+   不在を主張する前に、その指標が対象に感応する保証を先に検証する
+2. **閾値つき assert の緑/赤は、予測レンジが閾値を跨ぐとき判別力を持たない。**
+   判定には生値（符号つき）を使う — −4.11% は緑だが、符号と大きさが生存を示していた。
+   そして**閾値を選ぶ前にノイズ床を測る** — 床が分かれば閾値は設計になる（44000× → 6000×）
+3. **「実装が同型」はテストの代わりにならない。** source 非依存のコードでも、
+   使われている形（sum 発 send）はその形で pin する
+
+---
+
+### 6.333 test(e2e): 3点キャプチャ + ピッチオラクル + パス束縛。実機変異で aux の不感を発見 (Jul 30, 2026)
+
+> ⚠️ **訂正（6.334）**: 本エントリの「aux は音を運んでいない（製品バグ・信号経路の欠陥）」
+> という判定は**誤り**。実測数値（peak 0% 等）自体は正しいが、原因は信号経路ではなく
+> **測定盲点**（OOP パイプラインの +1 block 遅延 × ファイル全体 peak/RMS の不感）だった。
+> 確定根拠と訂正の全容は 6.334 を参照。
+
+**Date**: 2026-07-30
+**Issue**: #577 (PR-A) / **PR**: #585 / **発見**: **#587**（後に測定感度問題へ再スコープ）
+**Status**: ✅ 全 1836 passed / 34 skipped / 0 failed・**実機 gated 6 passed**・オラクル不感1件を実測で発見
+
+Fable 監査（完全性）が4つの穴を指摘し、うち3つを実装（ラウンド6）。**実機変異でもう1つが出た。**
+
+#### 追加した3つの証明
+
+| 穴 | 対処 |
+|---|---|
+| **C: 2点比較は「両 run とも適用ゼロ」の対称故障を通す** | **default 基準の第3キャプチャ**。`loaded` が `default` を相対 >0.3 上回ることを assert |
+| **B: instrument が一度も発音せず、state も既定だった** | **ソロ区間**を追加し、**非既定の半音オフセット +7** を bootstrap 登記。3キャプチャで基本周波数を測定（261.63 / 392 / 392Hz） |
+| **D: 積が可換なので置換故障が不可視** | 登記を**決定論的ファイル名との完全一致**へ、restore ログを**復元元パスまで**行単位検証、**committed バイト列の内容一致**も追加 |
+
+#### 🔴 実機変異で aux だけがオラクルに映らないことを発見（#587・当初は製品バグと誤判定）
+
+各 receiver の insert の gain を既定へ落として録音の peak 変化を実測:
+
+| 変異対象 | 線形モデル | **実測** | 判定（当時 → 訂正後） |
+|---|---|---|---|
+| **master** | 44.4% | **44.4%**（0.44444） | ✅ 一致 |
+| **sum** | 41.2% | **41.2%**（0.41176） | ✅ 一致 |
+| **aux** | 23.1% | **0%** | ~~寄与なし~~ → **peak が構造的に不感**（6.334） |
+
+**aux の gain を `0.0`（完全無音）にしても peak が動かない。**
+直列レグ `seq → sum → master` はモデルどおり小数点以下まで一致。当時は
+「死んでいるのは aux レグだけ」と判定したが、**線形モデル自体が遅延ゼロの理想加算を
+仮定しており、aux 項にだけその仮定が成り立たなかった**（→ 6.334）。→ **#587**
+
+#### 🔴 main が Fable の指摘を算数で却下したのは、結論として誤りだった
+
+Fable は当初「**aux は音声オラクルで検出できない**」と指摘した。main は
+「Fable は**ブリーフの例示 gain**（aux 0.7）で計算しており、**実装値**（aux 0.95）なら 23.1% で
+許容 15% を超える」と**算数で却下**した。**算数の指摘自体は正しかったが、結論は誤りだった。**
+
+**実測しなければ見逃していた。** 「予測が合っているか」を実機で確かめる工程が、
+乖離を掘り当てた（当時は製品の欠陥と解釈したが、正体は**線形モデルの遅延ゼロ仮定の破れ**
+= 測定盲点だった・6.334）。
+
+#### なぜ今まで気づかなかったか — このセッションの主題そのもの
+
+**#564 は aux を「復元ログ行で daemon 往復が通る」ことだけで証明**していた（音は測っていない）。
+
+> **ログは送信の証明であって適用の証明ではない。**
+
+送信は証明されていたが、**適用は未証明のまま**だった（適用の実証は 6.334 の
+バス単位 gated テストで初めて閉じた）。
+
+#### 🔴 変異検証の運用でさらに2つ踏んだ
+
+1. **`-t` フィルタがセットアップ役の先頭テストごと除外**し、
+   `main gated phase must initialize the MCP client first` で落ちた。
+   → **セットアップ名と対象名の両方**にマッチする正規表現にする
+2. **`receiverKeys[2]` をファイル全体で一括置換**して変異ブロック外まで書き換え、
+   無関係な赤（`missing bootstrap restore log lines`）を出した。
+   → **変異は必ずアンカー指定の局所挿入で行う**
+3. 失敗したテストが **engine を起動したまま残し、後続2件が
+   `engine is already running` で連鎖的に落ちた**（赤の出所が読めなくなる）
+
+#### 記録の訂正
+
+spec の (c) 行に「5種すべてを音声接地で確認」と書いていたが、**aux について偽**だった。
+**証明の深さを receiver 種別ごとの表に置き換え**、aux は
+「登記の内容一致 + 復元元パス束縛まで」と書き直した
+（このとき書いた「音声接地は #587 の解決待ち＝信号経路の問題」は 6.334 でさらに訂正）。
+テスト内のコメントも**予測値ではなく実測値**（aux 0.0%）に差し替えた。
+
+---
+
+### 6.331 fix(engine): PR #585 レビューラウンド2 — 直列化を store へ移し、5種すべてを実機で証明 (Jul 30, 2026)
+
+**Date**: 2026-07-30
+**Issue**: #577 (PR-A) / **PR**: #585 / **Branch**: `577-auto-snapshot-on-stop`
+**Status**: ✅ 全 1836 passed / 34 skipped / 0 failed・**実機 gated E2E 6 passed**・**#586 を本 PR で閉じた**
+
+`/code:pr-review-team`（4レビュアー）+ 先行の `/simplify` + Fable 監査。
+**ラウンド1の修正が新しい欠陥を2つ作っていた。**
+
+#### provenance 分類 — fix 起因が2件
+
+| 指摘 | 深刻度 | provenance |
+|---|---|---|
+| skip 2種を同列に落として実 state 消失を黙らせた | Important | **fix 起因 `d767c5a`** |
+| 逐次化が「先頭 Global が詰まると後続が0回」を作った | Important | **fix 起因 `d767c5a`** |
+| lost-update は `stop()` 経路では未解決 | Important | 元差分 |
+| 部分失敗継続ループが変異検証ゼロ | Important | 元差分 |
+| master / sequence effect の自動保存が実機ゼロ | Important | 元差分 |
+| 集約ログが `failures > 0` でも `console.log` | Important | 元差分 |
+
+**2件の fix 起因は、どちらも「ポリシーを書いたつもりで塊の中の非対称性を見なかった」結果。**
+
+#### 🔴 直列化は、守ろうとした状況と同じ状況で別の壊れ方を作っていた
+
+多 Global の lost-update を防ぐために `shutdown` を逐次 await にしたが、
+**`Promise.all` なら1つの Global が詰まっても他は並行に走って予算内に完了できた**ところ、
+逐次では**先頭が詰まると後続の Global は snapshot を1回も試行されない**。
+しかも lost-update 自体は **`shutdown()` しか塞げておらず、DSL 経由の `stop()` では残っていた**。
+
+**根本対処**: `ProjectStateStore` のキャッシュを
+**`WeakMap<AudioEngine, Map<absoluteDirectory, Store>>`** でモジュールレベルへ移した。
+
+- `save()` は `this.pending` でチェーンする（`project-state-store.ts:195-205`）ので、
+  **1 store インスタンスは自分の保存を直列化する**
+- `process-initialization.ts:38` により**1 interpreter 内の全 Global は同じ audioEngine を共有**
+- → **同じ directory は1つの store を共有** → `stop()` 経路も含め lost-update が構造的に不可能
+- → **異なる interpreter は異なる audioEngine** → テスト隔離が保たれる
+  （最初にモジュールレベル持ち上げを却下した理由がこれで解消）
+- → **`shutdown` を `Promise.all` に戻せる**（正しさが呼び出し側のスケジューリングではなく
+  store の不変条件から来るので starvation が消える）
+
+**#586 として先送りしたものを本 PR で閉じた。** 先送りした結果
+「片方を半分しか直さず、もう片方を悪化させる」ことになっていた。
+
+#### ログレベルを3段階に固定（ラウンド1の退行を是正）
+
+`!projectDirectory` は **`targets.length > 0` を確認した後にしか到達しない** —
+プラグインが載っていて音色がこれから失われる状況で、**手動保存経路は同じ条件で例外を投げる**。
+ラウンド1はこれを「正常パス」の skip と同列に `console.log` へ落としていた。
+
+| レベル | 場面 | 手段 |
+|---|---|---|
+| (1) 無音でよい正常 | 何も失われない（`targets===0`） | `console.log` プレーン（拡張のフィルタで消える） |
+| (2) ユーザーが行動すべき | 失われるが engine の故障ではない | **`⚠️` を含む stdout**（`shouldFilterLine`（`extension.ts:1144`）が残し、ERROR にならず `countErrors` にも当たらない）+ **失われる identity を列挙** |
+| (3) engine の失敗 | 保存失敗・`failures > 0` の集約ログ | `console.error` |
+
+#### 🔴 変異が red になっても「正しいものを守っている」証拠にはならない
+
+ラウンド1の **T1 は変異を殺したが、守っていた要件のほうが間違っていた**
+（実 state 消失を黙らせる挙動を正しいものとして固定していた）。今回この区別を実例で踏んだ。
+
+#### 変異検証（main が sandbox 外で実行・ベースライン 36 passed）
+
+| 変異 | 結果 |
+|---|---|
+| `⚠️` を消す | `expected "log" to be called with arguments` |
+| **engine 次元を外して directory のみで共有** | **`expected ProjectStateStore not to be ProjectStateStore`**（テスト隔離が load-bearing であることの証明） |
+| shutdown を逐次 await に戻す | T3 `starts every global snapshot concurrently` が red |
+| 部分失敗の try/catch を削除 | `promise rejected "Error: master refused state"` |
+
+> **変異が適用されていないのを「生き残った」と誤読しかけた。** `⚠️` の変異は perl の
+> エンコーディングで置換が効かず `31 passed` のまま返った。**`grep -c` で適用を確認**してから
+> python で回し直した。**判定の前に「変異が本当に入ったか」を検査する。**
+
+#### 🔴 ポリシー5（E2E）を自分で訂正した — 同一セッション ≠ 同一信号経路
+
+「既存 gated E2E に master と sequence effect を足す（新規テストは作らない）」と指示したが、
+**実機で sum-bus テストが落ちた**:
+
+```
+{"peak":0.031216254457831383,"soundDetected":false}: expected false to be true
+```
+
+`CLAPTestEffect` の既定 gain は **`EFFECT_GAIN = 0.5`**（`rust-spike/clap-test-effect/src/lib.rs:4`）。
+master と sequence に足すと**同じ信号経路に 0.5 × 0.5 = 0.25 の追加減衰**が入る
+（観測 peak がその比率と一致）。
+
+**「同一セッションだから限界コストはゼロ」と見積もったが、セッションは共有でも信号経路は共有ではない。**
+
+→ sum-bus テストへの追加を**完全撤回**（差分ゼロ）し、**音声オラクルを持たない専用テストを新設**。
+宣言を stop 直前へ移す案は、**effect load 完了の観測可能な信号が存在せず**
+bare sleep が「load 未決着 slot の窓」を踏むため却下した。
+**オラクルの閾値を緩める修正は明示的に禁止した**（証明力を落とす修正は直したことにならない）。
+
+#### 新設 gated テスト — `auto-registers all five plugin receiver kinds ... without explicit saves`
+
+**master / sum / aux / sequence effect / instrument の5キー**を事前削除し（削除の確認 assert つき）、
+DSL で宣言 → 再生 → **DSL で停止** → committed manifest に5キーすべてが登記されるまで `waitUntil`。
+**明示保存・capture・音声アサーションを一切持たない。** ERROR 件数の不変も確認する。
+
+**この ERROR 件数 assert が、テスト自身の設定ミス（`play(1)` の度数に対する
+`global.key("C")` の欠落）を初回実機実行で捕まえた。** 無ければ「登記は通ったから合格」で
+通り抜けていた。
+
+#### 実機での変異検証（main が実行）
+
+`stop()` の自動 snapshot ガードを `if (false)` に落として **build:clean → 実機 gated 再実行**:
+
+```
+× restores a non-default sum-bus insert ... → timed out waiting for sum/aux auto-snapshot registered after 10000ms
+× auto-registers all five plugin receiver kinds ... → timed out waiting for all five receiver auto-snapshots registered after 10000ms
+  Tests  2 failed | 4 passed (6)
+```
+
+復元後 **6 passed**・残留プロセス 0。
+
+#### 受け入れ基準の到達状況（6.332 で復元側まで到達）
+
+自動記録は5種すべてで実機成立。**復元側は 6.332 で追加**。
+
+---
+
+### 6.332 test(e2e): 復元側まで実機で証明し、変異の「適用」を検査する規律を足した (Jul 30, 2026)
+
+**Date**: 2026-07-30
+**Issue**: #577 (PR-A) / **PR**: #585
+**Status**: ✅ 全 1836 passed / 34 skipped / 0 failed・**実機 gated E2E 6 passed**・残留 0
+
+#### 何が足りなかったか — 緑の範囲がゴールより狭かった
+
+新設テストは**自動記録（committed manifest への登記）までしか証明していなかった**。
+Epic #546 の受け入れ基準は
+**「宣言 → 音色を作る → 自動記録 → 再起動 → 同じ音で鳴る」**なので、
+**再起動後に登記済み state が実際に再適用されること**まで要る。
+
+証明の深さが種別ごとにバラバラだった:
+
+| 種別 | 自動記録 | 復元（追加前） |
+|---|---|---|
+| sum | ✅ 実機 | ✅ 音声オラクル（明示保存ゼロの完全ループ） |
+| aux | ✅ 実機 | ✅ 復元ログ行（#564） |
+| **master** | ✅ 実機 | ❌ **未証明** |
+| **sequence effect** | ✅ 実機 | ❌ **未証明** |
+| instrument | ✅ 実機 | △ 別テストだが**明示保存経由**（#541） |
+
+🔴 **「復元経路は kind 非依存だから動くはず」で済ませなかった。**
+Fable の指摘どおり **master は `{ role: 'effect' }`（bus フィールド無し）**という
+他と別形状の daemon ターゲットであり、sum/aux が通っても master が通る保証にならない。
+
+#### 追加したもの
+
+音声オラクルは**複製しない**（コスト不適合）。#564 で確立した
+**`[plugin-state] restoring '<key>' from <path>` のログ行で daemon 往復を証明する**水準を
+5種すべてに広げた（`effect-slot.ts:295-298` が出す行）。
+
+- 登記確認 → **engine 停止 → 再起動** → 同じ宣言部分を再評価
+- **再宣言前のマーカー件数をベースライン化**し、**新しく増えた行**だけを数える
+  （既存行を数えて false green にしない）
+- timeout 時は**未検出のキーを列挙**する
+- 再起動後の ERROR 件数が増えないことも確認
+- **`save_plugin_state` は一切使わない**
+
+既存の sum-bus / instrument restore テストは**差分ゼロ**を維持。
+
+#### 実機変異 — master だけを狙って落ちた
+
+`plugin-effect-manager.ts` の `statePathFallback` を **master についてだけ**
+`Promise.resolve(undefined)` に変異させ、`build:clean` → 実機 gated 再実行:
+
+```
+× auto-records and restores all five plugin receiver kinds across a restart without explicit saves
+  → timed out waiting for all five receiver state restore log lines after engine restart after 10000ms;
+    last error: Error: missing restore log lines for receiver keys: master/effect/CLAPTestEffect/0
+  Tests  1 failed | 5 passed (6)
+```
+
+**他の4種は通ったまま master 固有の assert だけが落ちた** — 復元の証明が
+**種別ごとに独立して効いている**ことの実証。
+
+#### 🔴 変異検証の規律を1段強めた — 「適用されたか」を検査する
+
+**このセッションで「変異が生き残った」と読み違えかけたのが2度目。**
+
+| 回 | 実際に起きたこと | 見え方 |
+|---|---|---|
+| 1 | perl のエンコーディングで置換が効かなかった | `31 passed` のまま = 生き残ったように見える |
+| 2 | **`npm run build:clean` が型エラーで失敗**し、アプリは**変異前のバイナリ**を実行 | `6 passed` = 生き残ったように見える |
+
+2回目の型エラーは
+`Type '() => undefined' is not assignable to type 'PluginStatePathFallbackResolver'`
+（resolver は `Promise<string | undefined>` を返す）。
+`> /dev/null 2>&1` がエラーを握り潰し、**`&& echo "rebuilt"` が出ていないことを見落とした**。
+
+**規律**: 実機の変異検証では、以下を**変異前に assert する**。
+
+1. **ソースに変異が入ったこと**（`grep -c`）
+2. **ビルドが成功したこと**（exit code を握り潰さない）
+3. 🔴 **デバイスが実際に読む成果物に変異が載っていること**
+   （`packages/vscode-extension/engine/dist/**` を `grep` する。
+   `packages/engine/dist` に載っていても**コピーが失敗していれば実機には届かない**）
+
+復元時も同様に、**成果物から変異が消えたこと**を assert してから最終ゲートを回す。
+
+---
+
+### 6.330 fix(engine): PR #585 レビューラウンド1 — 二重 snapshot と stderr 誤警報を潰す (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Issue**: #577 (PR-A) / **PR**: #585 / **Branch**: `577-auto-snapshot-on-stop`
+**Status**: ✅ 全 1832 passed / 33 skipped / 0 failed（1829 から +3）・実機 gated E2E 5 passed
+
+`/simplify`（4観点）と **Fable 監査を並行**して回した。**2件が独立に同じ場所を指した。**
+
+#### 🔴 「warn は ERROR にならない」という設計意図が輸送層で破れていた（Fable）
+
+skip ログを `console.warn` にしたのは「**E2E の `countErrors` 同数 assert を壊さないため**」だった。
+**その前提が成立していなかった。**
+
+| 層 | 実際 |
+|---|---|
+| Node | `console.warn` は **stderr** に書く |
+| `extension.ts:1496-1507` | `process.stderr?.on('data', ...)` → ``outputChannel?.append(`ERROR: ${data.toString()}`)`` — **全チャンクに `ERROR: ` を前置** |
+| `tests/e2e/orbitstudio-mcp-gated.spec.ts:911` | `countErrors = (log) => countLogMarker(log, /ERROR:/g)`、assert は **`.toBe()` の完全一致** |
+
+つまり `[plugin-state] auto-snapshot skipped: ...` は **`get_log` 上で ERROR 行になる**。
+しかもこの warn は **プラグインを1つも積んでいない普通のセッションの毎回の stop で発火**する
+（`targets.length === 0` が最頻パス）。
+
+**現行 gated 5件が緑だったのは、`countErrors` の窓がたまたま instrument 積載状態の
+stop しか含まなかったため。**
+
+→ skip 2箇所を **`console.log`** へ。実際の保存失敗（`auto-snapshot failed for '...'`）は
+`console.error` のまま。**規範を PRJ.9 に固定**した:
+「`console.warn` は**ERROR として見せてよいもの**にだけ使う」。
+
+#### 🔴 `shutdown()` で snapshot が二重に走っていた（simplify と Fable が独立に指摘）
+
+`shutdown.ts` は全 Global に `stop()` を呼んだ**直後**に `saveAllPluginStates()` を
+明示 await していたが、**`stop()` 自身が fire-and-forget で snapshot を仕込む**（PR-A の主トリガ）。
+→ **再生中に終了するという主目的のシナリオで両方が発火**。
+
+Fable が機序を特定した:
+
+> `stop()` の fire-and-forget が先にキューへ積まれ、直後の awaited 側は同一 store の
+> pending チェーンで**その後ろに直列化**される（`project-state-store.ts:199-204`）。
+> **1.2s 予算内で全 target を2周する。**
+
+「予算を圧迫する」ではなく **実効予算が半分**だった。
+
+→ `Global.stop(options?: { autoSnapshot?: boolean })`（既定 `true` = DSL 経由は挙動不変）を足し、
+`shutdown.ts` は **`stop({ autoSnapshot: false })`** で明示保存に一本化。
+
+#### 🔴 なぜテストが検出できなかったか — 2つのテストがそれぞれ片方しか見ていなかった
+
+| テスト | 見ていたもの | 盲点 |
+|---|---|---|
+| `shutdown-plugin-state.spec.ts` | `shutdown()` の呼び出し順 | **`stop` が素の `vi.fn()`** → 内部の自動 snapshot を持たない |
+| `plugin-state-save.spec.ts` | `stop()` 単体の snapshot | `shutdown()` **経由の合成**を見ていない |
+
+**組み合わせた経路が誰の視野にも入っていなかった。**
+
+修正では**契約を再現した手書き fake を使わなかった**（fake は本物から drift して同じ盲点を
+作り直す）。`plugin-state-save.spec.ts` の `harness()` にある**実 `Global` を組むパターンを再利用**し、
+`shutdown-plugin-state.spec.ts` の既存2ケースも実 `Global` へ移した。
+
+#### 複数 Global の manifest lost-update → 直列化で塞ぎ、根本は #586 へ
+
+`projectStateStores` は **`Global` ごとの private Map**。同じ document directory を持つ
+2つの Global が `Promise.all` で並行 read-modify-write すると、atomic rename でも
+**stale read による lost update** で登記が消える（= 復元が黙って state 無しに degrade =
+Epic #546 が防ぎたい失敗そのもの）。
+
+**store キャッシュのモジュールレベル持ち上げは採らなかった。** `ProjectStateStore` は
+`audioEngine` をコンストラクタで受け取るため、**1プロセスで複数 interpreter が動く
+テストスイートでは store が「最初に作った側の audioEngine」に束縛される** — レースより悪い。
+正しい持ち上げ先は interpreter レベルだが `Global` は参照を持たない。
+
+→ PR-A は **shutdown の逐次 await**（どのみち残す性質）。根本設計は **#586**。
+**PR-C の debounce checkpoint は再生中にタイマーで発火するので直列化では守れない。**
+
+#### spec 更新（`PROJECT_FILE_SPEC_v1.md`）
+
+- PRJ.3 に **「実装状況と追跡先」の表**。**(b) UI クローズ時は #474 が前提** —
+  UIH.4 の3経路は「開いた UI を閉じる」経路であり、**UI を開く手段が無い現状では
+  閉じる経路も存在しない**。PRJ.9 の該当変異検証は **#474 完了後に実施**と明記
+- PRJ.9 に **skip ログを stderr に出さない規範**と、
+  **「`shutdown` 経路で snapshot がちょうど1回」**の変異検証項目
+
+#### 変異検証（main が sandbox 外で実行・ベースライン 32 passed からの変化で判定）
+
+| 変異 | 壊し方 | 結果 |
+|---|---|---|
+| **T2** | `shutdown.ts` の `{ autoSnapshot: false }` を外す | `1 failed \| 3 passed` — **`expected "saveAllPluginStates" to be called 1 times, but got 2 times`** |
+| **T2b** | `stop()` のガードを `if (true)` に（**呼び出し側でなく実装側**） | `2 failed \| 30 passed` — T2 と T3 の両方が落ちた |
+| **T3** | 逐次 await を `Promise.all` に戻す | `1 failed \| 3 passed` — **`expected [ 'first:start', 'second:start', …(1) ] to deeply equal [ 'first:start' ]`** |
+| **T1** | skip 2箇所を `console.warn` に戻す | `1 failed \| 27 passed` — `expected "warn" to not be called at all, but actually been called 1 times` |
+| **T1b** | **2つ目の skip（document directory）だけ**を warn に戻す | `1 failed \| 27 passed` — 1つ目で落ちて隠れていた**2つ目のパスも独立に被覆**されている |
+
+**T2 で `global.start()` が本当に `transportClock.running` を立てることが実証された**
+（立てないなら fire-and-forget が元々発火せず、opt-out 無しでも1回のままで false green になる）。
+
+復元は毎回 `cmp` で確認し、変異が残っていないことを `grep -c` で検査してから全 suite を回した。
+
+#### 記録に残すが PR-A では直さない残余リスク（Fable）
+
+- **master / sequence effect の自動保存は実機で一度も走っていない**（ユニットのみ）。
+  sum/aux は E2E の `waitUntil` が両キーを待つので直接証明あり。instrument は
+  restore サイクルの stop で間接被覆 → **PR-C の受け入れ E2E で4種同時を押さえる**
+- **load 未決着 slot の窓**: slot は `chains.set` 直後（load promise 決着前）から列挙対象。
+  手動経路と同じ窓（既存意味論）で PR-A の退行ではないが、**PR-C で露出が増える**
+- **timeout 後も snapshot はキャンセルされない**。quit と並走し、quit 後の daemon RPC 失敗が
+  per-target ERROR として遅れてログに落ちうる
+
+---
+
+### 6.329 feat(engine): auto-snapshot plugin state on transport stop — #577 PR-A (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ **`INTERIM(#577)` が消えた**。実機 E2E で**明示保存ゼロのループが成立**
+
+Epic #546 のループ「宣言 → 音色を作る → **自動記録** → 再起動 → 同じ音」のうち、
+**「自動記録」がどのレシーバ種別にも存在しなかった**。保存経路は
+`save_plugin_state`（MCP）と `//#savePluginState` の2つだけで、**#541 の E2E ですら MCP で叩いていた**。
+
+#### フック点（設計で特定・main がコードで裏取り）
+
+| トリガ | フック | 形 |
+|---|---|---|
+| **(c-1) transport 停止** ← **主トリガ** | `Global.stop()` の `if (this.transportClock.running)` ブロック（`_onTransportStop` と同じガード） | fire-and-forget + 完了ログ |
+| (c-2) engine 終了 | `cli/shutdown.ts` の `audioEngine.quit()` **前** | await + 予算 ~1.2s |
+
+(c-2) は **best-effort**（extension が SIGTERM の **2秒後に SIGKILL 昇格**・確認済み）。
+
+#### 列挙は `resolveMixerBus` / `resolveNode` を使わない
+
+新 API `listPluginStateTargets()` が**チェーン構造から kind 既知のまま直接構築**する。
+**名前 → kind の解決が発生しない**ので、#579 で潰した暗黙優先が構造的に入り込めない。
+
+identity の `role` / `normalizedName` / `occurrence` は **slot が既に保持**しているため、
+`resolvePluginStateTarget` の index 算出は不要。共通ヘルパ
+`pluginStateTargetForSlot`（**純関数・クラス外**）に抽出して二重実装を避けた。
+
+#### 🔴 `INTERIM(#577)` は「行削除だけ」では green にならなかった
+
+順序はコードで確認済みで安全だった:
+
+```
+writeManifestStates(loadedStates)   ← 外科的削除
+await stopTransportThroughDsl(...)  ← ここで snapshot が発火
+// INTERIM(#577)                    ← 削除対象
+```
+
+**しかし `stopTransportThroughDsl` は `Global stopped` ログ行しか待たない。**
+snapshot は fire-and-forget なので、直後の manifest 読みと **race** する。
+
+→ **明示保存2発を「両キーが登記されるまでの `waitUntil`」に置換**した。
+これで「**明示保存を一度も使わない**」受け入れ基準を満たしたまま非同期を吸収できる。
+
+> **暫定マーカーの条件は3段階で精密化された。**
+> ①「#577 が入れば消せる」→ ② Fable 指摘で「**dirty ゲートをかけない**ことが条件」→
+> ③ コードを読んで「**それでも非同期の race が残る**」。
+> **条件を書くたびに、書けていなかった前提が1つ見つかった。**
+
+#### 保存先は committed のみ
+
+`ProjectStateStore.save`（既存）へ流す。**新しい書き込み機構は作らない**。
+recovery checkpoint（別ファイル）は PR-C。
+
+- **dirty ゲートなし・loaded 全対象**（ゲートを付けると #564 の受け入れ E2E が即座に赤になる）
+- document directory 未設定 / target ゼロ → **warn で skip**（**ERROR にしない** —
+  E2E が `countErrors` 同数 assert を持つため、正当な skip を ERROR に流すと無関係なテストが赤くなる）
+- 実際の保存失敗は ERROR（本物の警報）
+
+#### 変異検証（7種・実出力を確認）
+
+```text
+(a) instrument 列挙削除    expected manifest states(4) to deeply equal states(5)
+(b) mixer prefix 削除      - "sum:drum/effect/SumGlue/0"  + "drum/effect/SumGlue/0"
+(c) 同一 target 二重保存    expected "spy" to be called 5 times, but got 6 times
+(d) dirty gate 挿入        expected "spy" to be called 1 times, but got 0 times
+stop() 呼び出し削除        expected "saveAllPluginStates" to be called 1 times, but got 0
+stop() ガード削除          ... but got 2 times
+shutdown() 順序逆転        expected 4 to be less than 3
+```
+
+**(d) が核心** — 「dirty ゲートをかけない」という受け入れ条件が**テストで固定された**。
+
+#### 分類テストが3件捕まえた（main が対処）
+
+新 public メンバー3つが未分類で落ちた。**規則どおりに切り分けた**:
+
+| メンバー | `this` | 対処 |
+|---|---|---|
+| `pluginStateTargetForSlot` | **使わない** | **クラス外のモジュール関数へ**（分類対象から外れる） |
+| `listPluginStateTargets` | 使う（8回） | 除外リスト（理由コメントつき） |
+| `saveAllPluginStates` | 使う | 同上 |
+| `projectStateStore` | 使う | 同上 |
+
+**規則は「除外リストを増やすな」ではなく「外に出せるものを除外リストで黙らせるな」**（#564 で確立）。
+
+> 1件ずつ潰すのは非効率だったので、途中で **差分から追加メンバーを一括抽出**して打ち止めにした。
+
+#### 検証（すべて main が sandbox 外で実行）
+
+- `npm test`: **1829 passed / 33 skipped / 0 failed**（1823 から +6）
+- `npm run lint`: 0 errors（**main の編集で崩れた整形を prettier で修正**）
+- 実行後の残留プロセス **0**
+- **Rust は1行も触っていない**
+
+#### マージ前ゲート: ビルド + 実機 E2E
+
+```
+✓ restores a non-default sum-bus insert across restart through its prefixed receiver identity  24.7s
+Test Files 1 passed / Tests 5 passed
+```
+
+**`INTERIM` を消した状態で、明示保存を一度も使わずに復元が成立**した。
+**E2E 後の残留プロセスも 0**。
+
+#### 残り
+
+**PR-B**（dirty 通知の配線）と **PR-C**（再生中保存の解禁 + debounce checkpoint）。
+現状は「**停止したら記録される**」まで。**演奏中に音色をいじってそのまま記録される**形は PR-C。
+
+---
+
 ### 6.328 fix(signal-chain): make ambiguous mixer bus names loud — #579 (Jul 29, 2026)
 
 **Date**: 2026-07-29
