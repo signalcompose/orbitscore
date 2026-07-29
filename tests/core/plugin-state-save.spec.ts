@@ -6,6 +6,11 @@ import { parse } from 'yaml'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
+import {
+  MIXER_BUS_KINDS,
+  formatReceiverId,
+  parseReceiverId,
+} from '../../packages/engine/src/core/global/mixer-manager'
 import { Sequence } from '../../packages/engine/src/core/sequence'
 import { stateFileNameForIdentity } from '../../packages/engine/src/core/project-state-store'
 
@@ -327,5 +332,39 @@ describe('plugin state address resolution and project registration (#562)', () =
     await expect(global.savePluginState('lead', 0)).rejects.toThrow('transport is running')
     expect(audio.savePluginState).not.toHaveBeenCalled()
     expect(audio.stop).not.toHaveBeenCalled()
+  })
+})
+
+describe('prefixed receiver id wire format (#564)', () => {
+  it.each(MIXER_BUS_KINDS.map((kind) => [kind] as const))(
+    'round-trips %s receiver ids for plain, empty, and separator-bearing names',
+    (kind) => {
+      for (const name of ['drum', '', 'a:b', 'sum', 'aux', 'sum:x']) {
+        expect(parseReceiverId(formatReceiverId(kind, name))).toEqual({ kind, name })
+      }
+    },
+  )
+
+  it('keeps everything after the first separator as the bus name', () => {
+    expect(parseReceiverId('sum:')).toEqual({ kind: 'sum', name: '' })
+    expect(parseReceiverId('sum:a:b')).toEqual({ kind: 'sum', name: 'a:b' })
+    expect(parseReceiverId('aux:sum:x')).toEqual({ kind: 'aux', name: 'sum:x' })
+  })
+
+  it('returns undefined for ids without a bus prefix', () => {
+    expect(parseReceiverId('sum')).toBeUndefined()
+    expect(parseReceiverId('aux')).toBeUndefined()
+    expect(parseReceiverId('master')).toBeUndefined()
+    expect(parseReceiverId('drum')).toBeUndefined()
+    expect(parseReceiverId('')).toBeUndefined()
+  })
+
+  it('requires the prefix to be anchored at the start of the id', () => {
+    // A drifting match (e.g. `includes` instead of `startsWith`) would classify
+    // these sequence-shaped names as bus receivers and break sequence saves.
+    expect(parseReceiverId('my-sum:x')).toBeUndefined()
+    expect(parseReceiverId('my-aux:x')).toBeUndefined()
+    expect(parseReceiverId('xsum:x')).toBeUndefined()
+    expect(parseReceiverId('lead sum:x')).toBeUndefined()
   })
 })

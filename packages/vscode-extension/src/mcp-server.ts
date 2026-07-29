@@ -799,8 +799,9 @@ function buildServer(
           'Save the current state of a running plugin into the project states directory and ' +
           'register it in project.yaml. Address the current chain with receiver and index ' +
           '(the input field remains named sequence for compatibility): plain names select ' +
-          'sequences, "master" selects the master bus, and "sum:<name>"/"aux:<name>" select ' +
-          'mixer buses. Index 0 is a note-sequence instrument; effects start at index 1. ' +
+          'sequences, "master" selects the master output endpoint, and "sum:<name>"/' +
+          '"aux:<name>" select mixer buses. Index 0 is a note-sequence instrument; effects ' +
+          'start at index 1. ' +
           'Playback must be stopped.',
         inputSchema: {
           sequence: z

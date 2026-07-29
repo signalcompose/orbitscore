@@ -1081,12 +1081,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const receiverKey = 'sum:drum/effect/CLAPTestEffect/0'
       const unprefixedDecoyKey = 'drum/effect/CLAPTestEffect/0'
       const wrongKindDecoyKey = 'aux:drum/effect/CLAPTestEffect/0'
+      // 音声オラクルは sum 側だけに置く。aux 側は「daemon 往復まで実機で通る」ことを
+      // get_log の restore 行で1点だけ証明する（フル音声オラクルの複製はコスト不適合）。
+      const auxReceiverKey = 'aux:wet/effect/CLAPTestEffect/0'
 
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
         'global.beat(4 by 4)',
         `global.sum("drum").effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
+        `global.aux("wet").effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
         'var busStateSource = init global.seq',
         `busStateSource.audio(${JSON.stringify(sourcePath)}).chop(1).output("drum")`,
         'busStateSource.play(1, 1, 1, 1)',
@@ -1095,6 +1099,14 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         'busStateSource.stop()',
         'global.stop()',
       ]
+      // 1-based line numbers derived from the script so edits cannot silently
+      // desynchronize the run_selection ranges below.
+      const playEndLine = dslLines.indexOf('LOOP(busStateSource)') + 1
+      const stopStartLine = dslLines.indexOf('busStateSource.stop()') + 1
+      const stopEndLine = dslLines.indexOf('global.stop()') + 1
+      expect(playEndLine).toBeGreaterThan(0)
+      expect(stopStartLine).toBe(playEndLine + 1)
+      expect(stopEndLine).toBe(stopStartLine + 1)
       fs.writeFileSync(dslPath, dslLines.join('\n') + '\n')
       const openDsl = await activeClient.call('open_file', { path: dslPath })
       expect(openDsl.isError, openDsl.text).toBe(false)
@@ -1119,7 +1131,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const stopTransportThroughDsl = async (label: string): Promise<void> => {
         const before = (await activeClient.call('get_log', { lines: 500 })).text
         const stopsBefore = (before.match(/(?:✅ Global stopped|⏹ Global)/g) ?? []).length
-        await runDslLines(10, 11)
+        await runDslLines(stopStartLine, stopEndLine)
         await waitUntil(
           async () => {
             const log = (await activeClient.call('get_log', { lines: 500 })).text
@@ -1159,9 +1171,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       delete baselineStates[receiverKey]
       delete baselineStates[unprefixedDecoyKey]
       delete baselineStates[wrongKindDecoyKey]
+      delete baselineStates[auxReceiverKey]
       writeManifestStates(baselineStates)
       await startCapture(defaultWav, 'sum-bus default capture engine running')
-      await runDslLines(1, 9)
+      await runDslLines(1, playEndLine)
       await sleep(4000)
       await stopTransportThroughDsl('sum-bus default transport stopped')
       await stopEngine('sum-bus default capture engine stopped')
@@ -1184,7 +1197,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
 
       // 1. .orbs の sum bus insert を、ユーザーと同じ run_selection で評価する。
       await startCapture(changedWav, 'sum-bus changed capture engine running')
-      await runDslLines(1, 9)
+      await runDslLines(1, playEndLine)
       await sleep(4000)
 
       // 2. 正しい receiver key から非既定 gain が適用済み。bootstrap key を消してから
@@ -1195,11 +1208,29 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       await stopTransportThroughDsl('sum-bus changed transport stopped before state save')
 
       // 3. 自動記録される。
-      // INTERIM(#577): 自動記録が未実装のため明示保存で代替。#577 完了時にこの行を削除すると
-      // そのまま受け入れテストになる。
-      await activeClient.call('save_plugin_state', { sequence: 'sum:drum', index: 1 })
+      // INTERIM(#577): 自動記録が未実装のため明示保存で代替。
+      // この明示保存の行を削除できる条件は「#577 の停止時 snapshot が dirty ゲートを
+      // かけず、loaded 全プラグインを対象にする」こと（#577 受け入れ基準に明記済み）。
+      // この E2E ではパラメータ編集が一度も起きない（非既定 gain は state ファイルの
+      // load で入る）ため、setState だけで dirty にならないプラグインは dirty ゲート付き
+      // snapshot の対象外になり、行を消すとテストは赤になる。また、このテストは稼働中に
+      // manifest から正解キーを外科的に削除しているので、#577 の checkpoint が削除より
+      // 前に発火する設計になった場合はこの削除手順ごと #577 側で引き取って書き直すこと。
+      const savedSum = await activeClient.call('save_plugin_state', {
+        sequence: 'sum:drum',
+        index: 1,
+      })
+      expect(savedSum.isError, savedSum.text).toBe(false)
+      // aux 側の軽量チェック: 音声オラクルは張らず、保存 → 再起動 → restore ログ行で
+      // daemon 往復まで実機証明する。
+      const savedAux = await activeClient.call('save_plugin_state', {
+        sequence: 'aux:wet',
+        index: 1,
+      })
+      expect(savedAux.isError, savedAux.text).toBe(false)
       const registeredStates = readManifestStates()
       expect(registeredStates[receiverKey]).toMatch(/^states\//)
+      expect(registeredStates[auxReceiverKey]).toMatch(/^states\//)
       expect(registeredStates[unprefixedDecoyKey]).toBe(unprefixedDecoyPath)
       expect(registeredStates[wrongKindDecoyKey]).toBe(wrongKindDecoyPath)
 
@@ -1208,8 +1239,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       await startCapture(restoredWav, 'sum-bus restored capture engine running')
 
       // 5. 同じ .orbs を run_selection で再評価し、capture で音の一致を確認する。
-      await runDslLines(1, 9)
+      await runDslLines(1, playEndLine)
       await sleep(4000)
+      // aux 側は restore が daemon まで往復した証拠として engine ログの
+      // `[plugin-state] restoring 'aux:wet/…'` 行を確認する。
+      await waitUntil(
+        async () => {
+          const log = (await activeClient.call('get_log', { lines: 1000 })).text
+          return log.includes(`[plugin-state] restoring '${auxReceiverKey}'`)
+        },
+        { intervalMs: 200, timeoutMs: 10_000, label: 'aux-bus insert restored from prefixed key' },
+      )
       await stopTransportThroughDsl('sum-bus restored transport stopped')
       await stopEngine('sum-bus restored capture engine stopped')
 

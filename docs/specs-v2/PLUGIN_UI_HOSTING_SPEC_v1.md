@@ -391,16 +391,22 @@ Closing / Closed 中に到達した追加の要求:
 
 ## UIH.5 アドレッシング — テキスト位置ではない
 
-**UI の対象指定は `(シーケンス名, chain index)` で行う。**
+**対象指定は `(receiver, chain index)` で行う。** receiver は sequence 名・`master`
+（**master 出力エンドポイント** — sum / aux の **mixer バス**とは別概念）・
+`sum:<name>` / `aux:<name>`（mixer バス）のいずれか。
 
 テキスト位置（エディタのカーソル）は人間専用の概念であり、これを下位層まで持ち込むと
 LLM 側と非対称になる（DESIGN_PRINCIPLES §3 違反）。
 
 | 層 | 責務 |
 |---|---|
-| エディタ（右クリック） | テキスト位置 → `(シーケンス名, chain index)` の**解決のみ** |
-| MCP | `open_plugin_ui(sequence, index)` / `close_plugin_ui(sequence, index)` |
-| daemon 以下 | `(シーケンス名, chain index)` だけを知る |
+| エディタ（右クリック） | テキスト位置 → `(receiver, chain index)` の**解決のみ** |
+| MCP | `save_plugin_state(receiver, index)`（実装済） / `open_plugin_ui(sequence, index)`・`close_plugin_ui(sequence, index)`（**未実装**） |
+| daemon 以下 | 解決済みの target（daemon bus / instance）と chain index だけを知る |
+
+> **UI open/close の v1 スコープ**: `open_plugin_ui` / `close_plugin_ui` は**未実装**であり、
+> **v1 では receiver を sequence に限定する**。receiver 一般化（`master` / `sum:` / `aux:`）が
+> v1 で適用されるのは state 保存・復元（`save_plugin_state` / PRJ.1 auto-restore）のみ。
 
 これにより #474 の regex 依存はエディタ層に閉じ込められ、#495 言語サービス導入時も
 engine 側は影響を受けない。
@@ -412,15 +418,28 @@ engine 側は影響を受けない。
 > **receiver 名前空間（規範）**: sum / aux バスは receiver にそれぞれ `sum:` / `aux:` を
 > 字句的に前置して指定する（例: `sum:drum`, `aux:reverb`）。接頭辞付き receiver は指定した
 > kind の同名バスだけを指し、sum → aux の解決順、`resolveNode()`、sequence への fallback を
-> 使用してはならない。daemon target には接頭辞を除いた実 bus 名を渡し、SC.5 の永続 identity
-> には接頭辞付き receiver をそのまま使う。
+> 使用してはならない。接頭辞を剥がした宣言名は当該 kind の名前空間でのルックアップキーとして
+> **のみ**使い、daemon target には**宣言名で解決した物理バス**（chain slot が保持する
+> pool 割り当て済みバス名。例: `sum-bus-0`）を渡す。receiverId から接頭辞を除いた文字列を
+> そのまま daemon に渡してはならない。SC.5 の永続 identity には接頭辞付き receiver を
+> そのまま使う。
 >
-> 接頭辞なし receiver は従来どおり sequence だけを指し、`master` だけは master バスを指す。
+> 接頭辞なし receiver は従来どおり sequence だけを指し、`master` だけは master 出力
+> エンドポイントを指す。
 > 接頭辞なしの名前と同名の sum / aux バスが存在してもバスへ暗黙解決してはならない。sequence が
 > 存在しない一方で同名バスが存在するときは、`sum:<name>` / `aux:<name>` の明示指定を促す
 > loud エラーにする。これにより、同名の sequence / sum / aux 間で別プラグインの state を保存して
 > 成功扱いする silent failure を防ぐ。`sum:x` という文字列は常に sum バス receiver と解釈し、
 > 同名 sequence への fallback は設けない。
+>
+> **暗黙の不変条件（規範）**: 接頭辞解釈が字句的である帰結として、`sum:` / `aux:` で始まる
+> **sequence 名は receiver 解決で常にバス扱い**になり、state 保存の対象として直接アドレス
+> できない（DSL の識別子文法は `:` を受理しないため DSL からは到達不能だが、内部 API 経由では
+> 起こりうる）。また、永続 identity キー `receiver/role/正規化名/出現順` の**単射性**は次の
+> 3点に依存する: (1) role が `instrument` / `effect` の固定語彙であること、(2) 正規化名が
+> basename 由来で `/` を含み得ないこと、(3) 出現順が数値であること。これらのいずれかを
+> 緩める変更は、キー衝突（別プラグインの state を同一キーへ登記する silent failure）の
+> 再検討なしに行ってはならない。
 
 1. **index 0 = ソーススロット。** レシーバの信号源（SC.1 規範(2) の構造トポロジーで先頭に立つもの）
    に予約する。
