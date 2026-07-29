@@ -143,6 +143,10 @@ describe('Global.sum() / Global.aux()', () => {
       expect(global.aux('shared-name').bus).toBe('aux-bus-0')
       expect(global.resolveSumBus('shared-name')).toBe('sum-bus-0')
       expect(global.resolveAuxBus('shared-name')).toBe('aux-bus-0')
+      // The second-kind warning fires exactly once for this declaration order
+      // (sum first, aux second) too — the namespaces stay independent, but the
+      // ambiguity is still announced (#579).
+      expect(warn).toHaveBeenCalledTimes(1)
     } finally {
       warn.mockRestore()
     }

@@ -159,6 +159,9 @@ describe('plugin state address resolution and project registration (#562)', () =
 
   it('resolves explicitly prefixed sum/aux receivers to distinct identities and daemon buses', async () => {
     const { global } = harness()
+    // The sum/aux pair on one name intentionally exercises the #579 ambiguous
+    // fixture; silence its declaration warning (restored by afterEach).
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     await global.sum('x').effect('./SumTone.clap')
     await global.aux('x').effect('./AuxTone.clap')
 
@@ -275,6 +278,9 @@ describe('plugin state address resolution and project registration (#562)', () =
 
   it('diagnoses every matching bus prefix when an unprefixed sequence is absent', () => {
     const { global } = harness()
+    // The sum/aux pair on one name intentionally exercises the #579 ambiguous
+    // fixture; silence its declaration warning (restored by afterEach).
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     global.sum('x')
     global.aux('x')
 
