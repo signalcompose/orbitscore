@@ -190,6 +190,50 @@
 
 **注意:** MCPツールの確認設定はCursor/エディタ側で管理されるため、このポリシーはAIエージェントとユーザー間の共通理解として機能する
 
+## 🖥️ Platform Support
+
+**macOS は Apple Silicon (arm64) のみ対応。Intel Mac は非対応**（owner 確定・2026-07-29）。
+
+Windows / Linux は v1.x では非対応（この決定とは独立）。
+
+### 何を意味するか
+
+- **同梱バイナリは `darwin-arm64` のみ**。universal binary は作らない
+- **x86_64 専用のプラグイン（VST3 / CLAP）はロードしない。**
+  カタログには `unsupportedArch` として `hostArch` と検出した Mach-O slice を記録し、
+  **理由が読み取れる形で残す**（黙って落とさない）
+- **Rosetta 2 経由の x86_64 ヘルパープロセスは実装しない**
+
+### 根拠
+
+**Rosetta 2 に明確な期限がある**（2026-07-29 時点の調査）:
+
+| OS | 時期 | Rosetta 2 の扱い |
+|---|---|---|
+| macOS 26 | 2025 秋 | 完全に動作。Intel アプリ起動時に警告開始 |
+| macOS 26.4 | 2026 春 | Rosetta 依存アプリの廃止通知を追加 |
+| **macOS 27** | **2026 秋** | **既存インストールを削除**（必要なら再インストール可・最後の警告） |
+| **macOS 28** | **2027 秋** | **大半のアプリで終了。**残るのは旧来の未保守ゲーム向けの一部のみ |
+
+出典: [AppleInsider](https://appleinsider.com/articles/26/06/12/how-and-when-macos-will-finally-stop-support-for-intel-apps) /
+[MacRumors](https://www.macrumors.com/2025/06/10/apple-to-phase-out-rosetta-2/) /
+[9to5Mac](https://9to5mac.com/2026/02/16/macos-26-4-will-notify-users-of-rosetta-2-discontinuation/)
+
+x86_64 のプラグインを arm64 プロセスから読むことは**原理的に不可能**で、
+Rosetta 配下の別プロセス + IPC が必要になる。その仕組みは**約14か月で寿命が尽きる**上、
+**macOS 27 の時点でユーザーが能動的に再インストールしない限り Rosetta が存在しない**ため、
+「動く前提」が先に崩れる。
+
+実測でも、arm64 で読めなかったプラグインは**すべて 2015〜2020 年の古いインストール**であり、
+同じベンダーの他製品は universal に更新済みだった（#549）。**ベンダー側の更新で解決する問題**を、
+期限付きの翻訳レイヤーを自作して迎えに行く筋合いではない。
+
+### この決定が古くなる条件
+
+Apple が Rosetta の廃止方針を撤回した場合、または owner が Intel Mac を実際に使う場合のみ再検討する。
+
+---
+
 ## 📋 Development Workflow
 
 ### Multi-Model Development Workflow (推奨)

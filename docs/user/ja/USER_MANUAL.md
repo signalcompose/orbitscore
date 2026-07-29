@@ -44,7 +44,7 @@ OrbitScoreは、度数ベースの音楽DSLを持つライブコーディング�
 | OS / Arch | Status |
 |---|---|
 | macOS Apple Silicon (arm64) | ✅ サポート対象 |
-| macOS Intel (x86_64) | ⚠️ Universal binary だが未テスト |
+| macOS Intel (x86_64) | ❌ **非対応**（同梱バイナリは arm64 のみ） |
 | Windows / Linux | ❌ v1.x では非対応 |
 | VS Code / Cursor | 1.99.0 以上 |
 
