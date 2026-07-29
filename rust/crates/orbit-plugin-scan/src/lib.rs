@@ -6,7 +6,7 @@
 //! 正本: docs/core/INSTRUCTION_ORBITSCORE_DSL.md「Plugin Catalog」節 PC.1
 
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -15,7 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// スキャン対象フォーマット。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Format {
     Clap,
@@ -27,7 +27,7 @@ pub const ROLE_INSTRUMENT: &str = "instrument";
 pub const ROLE_EFFECT: &str = "effect";
 
 /// カタログ 1 エントリ（PC.1 JSON スキーマ）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogEntry {
     pub name: String,
@@ -39,22 +39,49 @@ pub struct CatalogEntry {
 }
 
 /// トップレベルのカタログドキュメント（PC.1）。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Catalog {
     pub version: u32,
     pub scanned_at: String,
     pub plugins: Vec<CatalogEntry>,
+    #[serde(default)]
     pub artifacts: Vec<CatalogArtifact>,
+}
+
+/// Increment when scanner semantics make a cached native descriptor result incompatible.
+///
+/// This is intentionally independent from catalog version 2: readers can keep consuming the
+/// same document shape while a scanner change invalidates every positive and negative cache hit.
+pub const SCANNER_SCHEMA_VERSION: u32 = 1;
+
+/// Cheap freshness key for one artifact. It deliberately contains filesystem metadata only:
+/// hashing executable contents would reread roughly 16.5 GiB on every explicit rescan on the
+/// measured machine, defeating the cache this key enables.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactFingerprint {
+    pub scanner_schema_version: u32,
+    pub format: Format,
+    pub canonical_bundle_path: String,
+    pub executable_relative_path: String,
+    pub executable_size: Option<u64>,
+    pub executable_modified_ns: Option<String>,
+    pub info_plist_size: Option<u64>,
+    pub info_plist_modified_ns: Option<String>,
 }
 
 /// catalog v2 の artifact inventory。`plugins` は従来 reader 向けの互換投影であり、
 /// probe の状態や診断はこの別配列だけに保持する。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CatalogArtifact {
     pub format: Format,
     pub path: String,
+    /// B1 catalogs have no fingerprint. They deserialize as `None`, force one initial B2 probe,
+    /// and are rewritten with `Some` so all later scans can use the cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<ArtifactFingerprint>,
     #[serde(flatten)]
     pub state: ArtifactState,
 }
@@ -62,7 +89,7 @@ pub struct CatalogArtifact {
 /// 静的成功 / probe 待ち / probe 成功 / 理由付き probe 失敗を明示する。
 ///
 /// `moduleinfo.json` が無い artifact は `ProbePending` であり、失敗ではない。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
     tag = "status",
     rename_all = "camelCase",
@@ -88,7 +115,7 @@ pub enum ArtifactState {
     },
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProbeFailure {
     pub code: String,
@@ -118,6 +145,8 @@ pub struct ScanSummary {
     pub timeouts: usize,
     pub crashes: usize,
     pub factory_versions: BTreeMap<String, usize>,
+    pub cache_hits: usize,
+    pub probe_attempts: usize,
 }
 
 /// スキャン対象ディレクトリのデフォルト（PC.1）。
@@ -193,6 +222,166 @@ pub fn collect_all_bundle_candidates(dirs: &[PathBuf]) -> Vec<(PathBuf, Format)>
     dirs.iter()
         .flat_map(|dir| list_bundle_candidates(dir))
         .collect()
+}
+
+/// Build the artifact freshness key without reading executable contents.
+pub fn artifact_fingerprint(path: &Path, format: Format) -> ArtifactFingerprint {
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let executable_path = resolve_artifact_executable(&canonical_path);
+    let (executable_size, executable_modified_ns) = file_freshness(&executable_path);
+    let info_plist_path = if canonical_path.is_dir() {
+        canonical_path.join("Contents/Info.plist")
+    } else {
+        PathBuf::new()
+    };
+    let (info_plist_size, info_plist_modified_ns) = file_freshness(&info_plist_path);
+    let executable_relative_path = executable_path
+        .strip_prefix(&canonical_path)
+        .ok()
+        .filter(|relative| !relative.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .to_string_lossy()
+        .into_owned();
+
+    ArtifactFingerprint {
+        scanner_schema_version: SCANNER_SCHEMA_VERSION,
+        format,
+        canonical_bundle_path: canonical_path.to_string_lossy().into_owned(),
+        executable_relative_path,
+        executable_size,
+        executable_modified_ns,
+        info_plist_size,
+        info_plist_modified_ns,
+    }
+}
+
+fn file_freshness(path: &Path) -> (Option<u64>, Option<String>) {
+    let Ok(metadata) = fs::metadata(path) else {
+        return (None, None);
+    };
+    let modified_ns = metadata.modified().ok().map(system_time_ns);
+    (Some(metadata.len()), modified_ns)
+}
+
+fn system_time_ns(time: SystemTime) -> String {
+    match time.duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_nanos().to_string(),
+        Err(error) => format!("-{}", error.duration().as_nanos()),
+    }
+}
+
+fn resolve_artifact_executable(canonical_path: &Path) -> PathBuf {
+    if canonical_path.is_file() {
+        return canonical_path.to_path_buf();
+    }
+
+    #[cfg(target_os = "macos")]
+    if let Some(path) = macos_bundle_executable(canonical_path) {
+        return path;
+    }
+
+    fallback_bundle_executable(canonical_path)
+}
+
+fn fallback_bundle_executable(bundle_path: &Path) -> PathBuf {
+    let executable_dir = bundle_path.join("Contents/MacOS");
+    if let Some(name) = xml_bundle_executable_name(&bundle_path.join("Contents/Info.plist")) {
+        return executable_dir.join(name);
+    }
+
+    let bundle_stem = bundle_path.file_stem().unwrap_or_default();
+    let conventional = executable_dir.join(bundle_stem);
+    if conventional.is_file() {
+        return conventional;
+    }
+
+    let mut files = fs::read_dir(&executable_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .collect::<Vec<_>>();
+    files.sort();
+    files.into_iter().next().unwrap_or(conventional)
+}
+
+/// XML plists are common and this keeps non-macOS tests/builds independent of CoreFoundation.
+/// Binary plists on macOS are resolved by `CFBundleCopyExecutableURL` before this fallback.
+fn xml_bundle_executable_name(info_plist: &Path) -> Option<String> {
+    let text = fs::read_to_string(info_plist).ok()?;
+    let key_offset = text.find("<key>CFBundleExecutable</key>")?;
+    let remainder = &text[key_offset + "<key>CFBundleExecutable</key>".len()..];
+    let value_start = remainder.find("<string>")? + "<string>".len();
+    let value_end = remainder[value_start..].find("</string>")? + value_start;
+    let value = remainder[value_start..value_end].trim();
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_bundle_executable(bundle_path: &Path) -> Option<PathBuf> {
+    use core_foundation_sys::base::{kCFAllocatorDefault, CFRelease, CFTypeRef};
+    use core_foundation_sys::bundle::{CFBundleCopyExecutableURL, CFBundleCreate};
+    use core_foundation_sys::string::{kCFStringEncodingUTF8, CFStringCreateWithCString};
+    use core_foundation_sys::url::{
+        kCFURLPOSIXPathStyle, CFURLCreateWithFileSystemPath, CFURLGetFileSystemRepresentation,
+    };
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStringExt;
+
+    struct OwnedCf(CFTypeRef);
+    impl Drop for OwnedCf {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                // SAFETY: every stored reference is returned at +1 by a CoreFoundation Create or
+                // Copy function and is released exactly once by this guard.
+                unsafe { CFRelease(self.0) };
+            }
+        }
+    }
+
+    let path = CString::new(bundle_path.as_os_str().as_encoded_bytes()).ok()?;
+    // SAFETY: all CoreFoundation pointers are checked before use and owned Create/Copy results
+    // are held by `OwnedCf` until this function returns.
+    unsafe {
+        let cf_path =
+            CFStringCreateWithCString(kCFAllocatorDefault, path.as_ptr(), kCFStringEncodingUTF8);
+        if cf_path.is_null() {
+            return None;
+        }
+        let _cf_path_guard = OwnedCf(cf_path.cast());
+        let bundle_url =
+            CFURLCreateWithFileSystemPath(kCFAllocatorDefault, cf_path, kCFURLPOSIXPathStyle, 1);
+        if bundle_url.is_null() {
+            return None;
+        }
+        let _bundle_url_guard = OwnedCf(bundle_url.cast());
+        let bundle = CFBundleCreate(kCFAllocatorDefault, bundle_url);
+        if bundle.is_null() {
+            return None;
+        }
+        let _bundle_guard = OwnedCf(bundle.cast());
+        let executable_url = CFBundleCopyExecutableURL(bundle);
+        if executable_url.is_null() {
+            return None;
+        }
+        let _executable_url_guard = OwnedCf(executable_url.cast());
+
+        // macOS PATH_MAX is 1024; leave ample room without depending on a libc constant.
+        let mut bytes = vec![0_u8; 16 * 1024];
+        if CFURLGetFileSystemRepresentation(
+            executable_url,
+            1,
+            bytes.as_mut_ptr(),
+            bytes.len() as isize,
+        ) == 0
+        {
+            return None;
+        }
+        let length = bytes.iter().position(|byte| *byte == 0)?;
+        bytes.truncate(length);
+        Some(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+    }
 }
 
 /// CLAP バンドル 1 つを走査してカタログエントリを作る。
@@ -655,16 +844,35 @@ pub struct ScanOutcome {
 
 /// 通常起動用。filesystem inventory と moduleinfo だけを読み、native code はロードしない。
 pub fn scan_all(dirs: &[PathBuf]) -> ScanOutcome {
-    scan_candidates(collect_all_bundle_candidates(dirs), false, &|_, _| {
-        unreachable!("metadata-only scan must never invoke the child probe")
-    })
+    scan_all_with_cache(dirs, None)
+}
+
+/// 通常起動用。fingerprint が一致する native probe の成功・失敗は既存 catalog から復元する。
+pub fn scan_all_with_cache(dirs: &[PathBuf], previous: Option<&Catalog>) -> ScanOutcome {
+    scan_candidates(
+        collect_all_bundle_candidates(dirs),
+        false,
+        previous,
+        &|_, _| unreachable!("metadata-only scan must never invoke the child probe"),
+    )
 }
 
 /// ユーザーが明示した rescan 用。pending artifact を 1 artifact / 1 child で probe する。
 pub fn scan_all_with_probes(dirs: &[PathBuf], scanner_executable: &Path) -> ScanOutcome {
+    scan_all_with_probes_and_cache(dirs, scanner_executable, None)
+}
+
+/// ユーザーが明示した rescan 用。fingerprint が一致する positive/negative cache を再利用し、
+/// 未知または更新済みの artifact だけを 1 artifact / 1 child で probe する。
+pub fn scan_all_with_probes_and_cache(
+    dirs: &[PathBuf],
+    scanner_executable: &Path,
+    previous: Option<&Catalog>,
+) -> ScanOutcome {
     scan_candidates(
         collect_all_bundle_candidates(dirs),
         true,
+        previous,
         &|path, format| run_child_probe(scanner_executable, path, format),
     )
 }
@@ -672,6 +880,7 @@ pub fn scan_all_with_probes(dirs: &[PathBuf], scanner_executable: &Path) -> Scan
 fn scan_candidates<F>(
     candidates: Vec<(PathBuf, Format)>,
     explicit_probe: bool,
+    previous: Option<&Catalog>,
     probe_runner: &F,
 ) -> ScanOutcome
 where
@@ -680,20 +889,49 @@ where
     let mut entries = Vec::new();
     let mut artifacts = Vec::new();
     let mut pending = Vec::new();
+    let cached_by_fingerprint = previous
+        .into_iter()
+        .flat_map(|catalog| &catalog.artifacts)
+        .filter_map(|artifact| {
+            let fingerprint = artifact.fingerprint.as_ref()?;
+            match &artifact.state {
+                ArtifactState::ProbeSucceeded { .. } | ArtifactState::ProbeFailed { .. } => {
+                    Some((fingerprint.clone(), artifact.state.clone()))
+                }
+                ArtifactState::StaticSuccess { .. } | ArtifactState::ProbePending { .. } => None,
+            }
+        })
+        .collect::<HashMap<_, _>>();
+    let mut cache_hits = 0;
 
     for (path, format) in candidates {
         let path_string = path.to_string_lossy().into_owned();
+        let fingerprint = artifact_fingerprint(&path, format);
         match format {
             Format::Clap => {
                 let index = artifacts.len();
-                artifacts.push(CatalogArtifact {
-                    format,
-                    path: path_string,
-                    state: ArtifactState::ProbePending {
-                        reason: "nativeDescriptorNotProbed".to_owned(),
-                    },
-                });
-                pending.push((index, path, format));
+                if let Some(state) = cached_by_fingerprint.get(&fingerprint).cloned() {
+                    if let ArtifactState::ProbeSucceeded { plugins, .. } = &state {
+                        entries.extend(plugins.iter().cloned());
+                    }
+                    cache_hits += 1;
+                    artifacts.push(CatalogArtifact {
+                        format,
+                        path: path_string,
+                        fingerprint: Some(fingerprint),
+                        state,
+                    });
+                } else {
+                    artifacts.push(CatalogArtifact {
+                        format,
+                        path: path_string,
+                        fingerprint: Some(fingerprint),
+                        state: ArtifactState::ProbePending {
+                            reason: "nativeDescriptorNotProbed".to_owned(),
+                        },
+                    });
+                    pending.push((index, path, format));
+                }
             }
             Format::Vst3 => match scan_vst3_bundle(&path) {
                 VstScanResult::StaticSuccess(found) => {
@@ -701,6 +939,7 @@ where
                     artifacts.push(CatalogArtifact {
                         format,
                         path: path_string,
+                        fingerprint: Some(fingerprint),
                         state: ArtifactState::StaticSuccess {
                             source: "moduleinfo".to_owned(),
                             plugins: found,
@@ -709,21 +948,37 @@ where
                 }
                 VstScanResult::ProbePending { reason } => {
                     let index = artifacts.len();
-                    artifacts.push(CatalogArtifact {
-                        format,
-                        path: path_string,
-                        state: ArtifactState::ProbePending { reason },
-                    });
-                    pending.push((index, path, format));
+                    if let Some(state) = cached_by_fingerprint.get(&fingerprint).cloned() {
+                        if let ArtifactState::ProbeSucceeded { plugins, .. } = &state {
+                            entries.extend(plugins.iter().cloned());
+                        }
+                        cache_hits += 1;
+                        artifacts.push(CatalogArtifact {
+                            format,
+                            path: path_string,
+                            fingerprint: Some(fingerprint),
+                            state,
+                        });
+                    } else {
+                        artifacts.push(CatalogArtifact {
+                            format,
+                            path: path_string,
+                            fingerprint: Some(fingerprint),
+                            state: ArtifactState::ProbePending { reason },
+                        });
+                        pending.push((index, path, format));
+                    }
                 }
             },
         }
     }
 
+    let mut probe_attempts = 0;
     if explicit_probe {
         // Four workers implement the agreed temporary policy. Keeping each artifact in its own
         // process preserves crash attribution, while a small fixed pool keeps the 261 × 20s
-        // worst-case below the extension's 30-minute parent timeout. B2 may optimize repeat work.
+        // worst-case below the extension's 30-minute parent timeout. Fingerprint cache hits have
+        // already been removed from `pending`, including negative-cache quarantine entries.
         let next = std::sync::atomic::AtomicUsize::new(0);
         let collected = std::sync::Mutex::new(Vec::with_capacity(pending.len()));
         thread::scope(|scope| {
@@ -746,6 +1001,7 @@ where
             }
         });
         let results = collected.into_inner().expect("probe result mutex poisoned");
+        probe_attempts = results.len();
 
         for (artifact_index, execution) in results {
             match execution.result {
@@ -775,7 +1031,7 @@ where
             _ => None,
         })
         .collect();
-    let summary = summarize_artifacts(&artifacts);
+    let summary = summarize_artifacts(&artifacts, cache_hits, probe_attempts);
     ScanOutcome {
         entries: dedup_entries(entries),
         artifacts,
@@ -1105,7 +1361,11 @@ fn elapsed_millis(started: Instant) -> u64 {
     started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
 }
 
-fn summarize_artifacts(artifacts: &[CatalogArtifact]) -> ScanSummary {
+fn summarize_artifacts(
+    artifacts: &[CatalogArtifact],
+    cache_hits: usize,
+    probe_attempts: usize,
+) -> ScanSummary {
     let mut summary = ScanSummary {
         success: 0,
         pending: 0,
@@ -1119,6 +1379,8 @@ fn summarize_artifacts(artifacts: &[CatalogArtifact]) -> ScanSummary {
         timeouts: 0,
         crashes: 0,
         factory_versions: BTreeMap::new(),
+        cache_hits,
+        probe_attempts,
     };
     let mut durations = Vec::new();
     for artifact in artifacts {
@@ -1178,6 +1440,21 @@ fn percentile(sorted: &[u64], percentile: usize) -> Option<u64> {
 /// `~/.orbitscore/plugin-catalog.json` のパスを返す。
 pub fn cache_path(home: &Path) -> PathBuf {
     home.join(".orbitscore").join("plugin-catalog.json")
+}
+
+/// Read a prior catalog for positive/negative cache lookup.
+///
+/// A missing file is the normal cold-start case. Malformed or unreadable files are reported to
+/// the caller so the scanner can warn and safely continue with a cold scan.
+pub fn read_catalog(path: &Path) -> io::Result<Option<Catalog>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 /// カタログを JSON にシリアライズして `path` へ atomic write（tmp + rename）する。
@@ -1324,6 +1601,27 @@ mod tests {
     }
 
     #[test]
+    fn b1_catalog_without_fingerprints_deserializes_as_cold_cache() {
+        let catalog: Catalog = serde_json::from_str(
+            r#"{
+  "version": 2,
+  "scannedAt": "2026-07-29T00:00:00Z",
+  "plugins": [],
+  "artifacts": [{
+    "format": "vst3",
+    "path": "/p/Legacy.vst3",
+    "status": "probeFailed",
+    "durationMs": 12,
+    "failure": { "code": "bundleLoad", "message": "legacy" }
+  }]
+}"#,
+        )
+        .expect("B1 catalog remains readable");
+        assert_eq!(catalog.artifacts.len(), 1);
+        assert!(catalog.artifacts[0].fingerprint.is_none());
+    }
+
+    #[test]
     fn dedup_entries_keeps_last_write_wins() {
         let make = |vendor: &str| CatalogEntry {
             name: "Same".to_owned(),
@@ -1453,7 +1751,7 @@ mod tests {
             }
         }
 
-        let outcome = scan_candidates(vec![(bundle, Format::Vst3)], false, &|_, _| {
+        let outcome = scan_candidates(vec![(bundle, Format::Vst3)], false, None, &|_, _| {
             panic!("metadata-only scan invoked native probe")
         });
         assert_eq!(
@@ -1524,7 +1822,7 @@ mod tests {
             }
         };
 
-        let unattended = scan_candidates(vec![candidate.clone()], false, &runner);
+        let unattended = scan_candidates(vec![candidate.clone()], false, None, &runner);
         assert_eq!(
             calls.load(Ordering::SeqCst),
             0,
@@ -1532,11 +1830,215 @@ mod tests {
         );
         assert_eq!(unattended.summary.pending, 1);
 
-        let explicit = scan_candidates(vec![candidate], true, &runner);
+        let explicit = scan_candidates(vec![candidate], true, None, &runner);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(explicit.entries.len(), 1);
         assert_eq!(explicit.summary.success, 1);
         assert_eq!(explicit.summary.pending, 0);
+    }
+
+    fn catalog_from_outcome(outcome: &ScanOutcome) -> Catalog {
+        Catalog {
+            version: 2,
+            scanned_at: "2026-07-29T00:00:00Z".to_owned(),
+            plugins: outcome.entries.clone(),
+            artifacts: outcome.artifacts.clone(),
+        }
+    }
+
+    #[test]
+    fn matching_fingerprint_reuses_positive_cache_without_probing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let clap = temp.path().join("Cached.clap");
+        fs::write(&clap, b"descriptor-v1").unwrap();
+        let calls = AtomicUsize::new(0);
+        let runner = |path: &Path, format: Format| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            ProbeExecution {
+                duration_ms: 7,
+                result: Ok(ProbeSuccess {
+                    source: "clapDescriptor".to_owned(),
+                    plugins: vec![CatalogEntry {
+                        name: "Cached".to_owned(),
+                        vendor: "Orbit".to_owned(),
+                        format,
+                        path: path.to_string_lossy().into_owned(),
+                        plugin_id: "cached".to_owned(),
+                        roles: vec![ROLE_EFFECT.to_owned()],
+                    }],
+                    descriptor_apis: vec!["clap".to_owned()],
+                }),
+            }
+        };
+        let candidates = vec![(clap, Format::Clap)];
+        let cold = scan_candidates(candidates.clone(), true, None, &runner);
+        let previous = catalog_from_outcome(&cold);
+        let warm = scan_candidates(candidates, true, Some(&previous), &runner);
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "positive cache ignored: matching fingerprint was probed again"
+        );
+        assert_eq!(warm.summary.cache_hits, 1);
+        assert_eq!(warm.summary.probe_attempts, 0);
+        assert_eq!(warm.entries.len(), 1);
+    }
+
+    #[test]
+    fn matching_fingerprint_quarantines_negative_cache_without_probing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let clap = temp.path().join("Broken.clap");
+        fs::write(&clap, b"broken-v1").unwrap();
+        let calls = AtomicUsize::new(0);
+        let runner = |_: &Path, _: Format| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            ProbeExecution {
+                duration_ms: 11,
+                result: Err(ProbeFailure {
+                    code: "bundleLoad".to_owned(),
+                    message: "broken".to_owned(),
+                    exit_code: Some(1),
+                    signal: None,
+                }),
+            }
+        };
+        let candidates = vec![(clap, Format::Clap)];
+        let cold = scan_candidates(candidates.clone(), true, None, &runner);
+        let previous = catalog_from_outcome(&cold);
+        let warm = scan_candidates(candidates, true, Some(&previous), &runner);
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "negative cache removed: quarantined fingerprint was probed again"
+        );
+        assert_eq!(warm.summary.cache_hits, 1);
+        assert_eq!(warm.summary.probe_attempts, 0);
+        assert_eq!(warm.summary.failure, 1);
+        assert_eq!(warm.summary.failure_reasons["bundleLoad"], 1);
+    }
+
+    #[test]
+    fn executable_mtime_change_invalidates_cache_and_reprobes() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let clap = temp.path().join("Updated.clap");
+        fs::write(&clap, b"a").unwrap();
+        let calls = AtomicUsize::new(0);
+        let runner = |path: &Path, format: Format| {
+            let call = calls.fetch_add(1, Ordering::SeqCst);
+            let result = if call == 0 {
+                Err(ProbeFailure {
+                    code: "bundleLoad".to_owned(),
+                    message: "old executable is quarantined".to_owned(),
+                    exit_code: Some(1),
+                    signal: None,
+                })
+            } else {
+                Ok(ProbeSuccess {
+                    source: "clapDescriptor".to_owned(),
+                    plugins: vec![CatalogEntry {
+                        name: "Updated".to_owned(),
+                        vendor: "Orbit".to_owned(),
+                        format,
+                        path: path.to_string_lossy().into_owned(),
+                        plugin_id: "updated".to_owned(),
+                        roles: vec![ROLE_EFFECT.to_owned()],
+                    }],
+                    descriptor_apis: vec!["clap".to_owned()],
+                })
+            };
+            ProbeExecution {
+                duration_ms: 2,
+                result,
+            }
+        };
+        let candidates = vec![(clap.clone(), Format::Clap)];
+        let cold = scan_candidates(candidates.clone(), true, None, &runner);
+        let previous = catalog_from_outcome(&cold);
+        let old_fingerprint = artifact_fingerprint(&clap, Format::Clap);
+        let old_modified = fs::metadata(&clap).unwrap().modified().unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let new_fingerprint = loop {
+            thread::sleep(Duration::from_millis(10));
+            fs::write(&clap, b"b").unwrap();
+            if fs::metadata(&clap).unwrap().modified().unwrap() != old_modified {
+                break artifact_fingerprint(&clap, Format::Clap);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "test filesystem did not expose an executable mtime change"
+            );
+        };
+        assert_eq!(
+            old_fingerprint.executable_size, new_fingerprint.executable_size,
+            "test mutation must keep executable size constant"
+        );
+
+        let updated = scan_candidates(candidates, true, Some(&previous), &runner);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "fingerprint mtime missing: updated executable was not re-probed"
+        );
+        assert_eq!(updated.summary.cache_hits, 0);
+        assert_eq!(updated.summary.probe_attempts, 1);
+        assert_eq!(updated.summary.failure, 0);
+        assert_eq!(updated.summary.success, 1);
+    }
+
+    #[test]
+    fn fingerprint_uses_executable_and_info_plist_metadata_not_contents() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let bundle = temp.path().join("DifferentName.vst3");
+        let executable = bundle.join("Contents/MacOS/ActualExecutable");
+        let info_plist = bundle.join("Contents/Info.plist");
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::write(&executable, b"binary bytes are never hashed").unwrap();
+        fs::write(
+            &info_plist,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.orbit.fingerprint</string>
+<key>CFBundleExecutable</key><string>ActualExecutable</string>
+<key>CFBundlePackageType</key><string>BNDL</string>
+</dict></plist>"#,
+        )
+        .unwrap();
+
+        let fingerprint = artifact_fingerprint(&bundle, Format::Vst3);
+        assert_eq!(
+            fingerprint.executable_relative_path,
+            "Contents/MacOS/ActualExecutable"
+        );
+        assert_eq!(
+            fingerprint.executable_size,
+            Some(b"binary bytes are never hashed".len() as u64)
+        );
+        assert!(fingerprint.executable_modified_ns.is_some());
+        assert_eq!(
+            fingerprint.info_plist_size,
+            Some(fs::metadata(info_plist).unwrap().len())
+        );
+        assert!(fingerprint.info_plist_modified_ns.is_some());
+        assert_eq!(fingerprint.scanner_schema_version, SCANNER_SCHEMA_VERSION);
+
+        let json = serde_json::to_value(fingerprint).unwrap();
+        assert!(
+            json.get("contentHash").is_none(),
+            "fingerprint must never hash executable contents"
+        );
+        assert!(
+            json.get("bundleModifiedNs").is_none(),
+            "bundle directory mtime must not be a freshness key"
+        );
     }
 
     #[test]
@@ -1573,8 +2075,8 @@ mod tests {
             }),
         };
 
-        let before = scan_candidates(candidates.clone(), false, &runner);
-        let after = scan_candidates(candidates, true, &runner);
+        let before = scan_candidates(candidates.clone(), false, None, &runner);
+        let after = scan_candidates(candidates, true, None, &runner);
         assert_eq!(before.entries.len(), 1);
         assert_eq!(
             after.entries.len(),
@@ -1597,6 +2099,7 @@ mod tests {
         let artifact = |state| CatalogArtifact {
             format: Format::Vst3,
             path: "/p/Test.vst3".to_owned(),
+            fingerprint: None,
             state,
         };
         let artifacts = vec![
@@ -1629,7 +2132,7 @@ mod tests {
                 },
             }),
         ];
-        let summary = summarize_artifacts(&artifacts);
+        let summary = summarize_artifacts(&artifacts, 0, 4);
         assert_eq!(
             (summary.success, summary.pending, summary.failure),
             (2, 0, 2)
@@ -1640,6 +2143,8 @@ mod tests {
         assert_eq!(summary.crashes, 1);
         assert_eq!(summary.factory_versions["factory3"], 1);
         assert_eq!(summary.factory_versions["factory1"], 1);
+        assert_eq!(summary.cache_hits, 0);
+        assert_eq!(summary.probe_attempts, 4);
         assert_eq!(
             summary.duration_ms,
             DurationSummary {

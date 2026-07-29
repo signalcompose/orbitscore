@@ -17,6 +17,91 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.322 perf(scan): fingerprint + positive/negative cache — #549 B2 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ B2 完了。**warm rescan が約 165 倍速く**なり、#549 のクローズ条件（B1 + B2）が揃った
+
+B1 で 339 件すべてを probe できるようになったが、**rescan のたびに全件を probe し直していた**。
+ダイアログを出すプラグイン（#463 の FIN-BOOST 等）が毎回騒ぐため、ユーザーが rescan を
+避けるようになり、カタログが古いまま放置される。**そこを埋めたのが B2。**
+
+#### 実測（main が sandbox 外で自ら計測）
+
+| | 時間 | probe |
+|---|---|---|
+| cold rescan（キャッシュ削除後） | **12.4 秒** | 260 |
+| warm rescan（2回目） | **0.075 秒** | **0**（cacheHits 260） |
+| 3回目 | 0.063 秒 | 0 |
+
+**約 165 倍。** 失敗3件（MODO BASS / Super 8 / Philharmonik 2）も warm では再 probe されない。
+
+非退行も自分で確認: artifacts 339 / instrument 72 / effect 272 / staticSuccess 79 /
+**baseline からの欠落 0件** / Kontakt は `roles=['instrument']` のまま。
+
+> Codex は sandbox 内の隔離実測で `plugins 337 / effect 270` を観測して報告していたが、
+> これは `/bin/ps` が拒否されたことによる**環境要因**だった。sandbox 外では 339 / 272 が出る。
+> **委譲先の実測値もサンドボックス条件を確認してから採用する。**
+
+#### fingerprint に content hash を使わない
+
+独立第二意見の指摘で確定した設計。VST3 実行ファイルの総量は
+**335 bundles / 約 16.5 GB** あり、content hash を鮮度キーにすると
+**rescan のたびに 16.5 GB を全読み**することになる — cache の意義を自ら削る。
+
+採用したキー: `format + canonical bundle path + executable 相対パス
++ executable の size/mtime(ns) + Info.plist の size/mtime + scanner schema version`。
+
+**bundle directory の mtime は鮮度キーにしない**（macOS では内部 binary を置換しても
+directory mtime が期待どおり変わらない場合がある）。これは
+`fingerprint_uses_executable_and_info_plist_metadata_not_contents` で
+**テストとして固定した**（`"bundle directory mtime must not be a freshness key"`）。
+
+#### executable の解決に CoreFoundation を使う
+
+`CFBundleCopyExecutableURL` で実体を解決する（テキスト plist は fallback）。
+VST3 バンドルの実行ファイル名は `Info.plist` の `CFBundleExecutable` で決まり、
+**バンドル名と一致するとは限らない**。しかも `Info.plist` は**バイナリ plist** のことがある。
+パス規約を決め打ちすると一部プラグインだけ fingerprint が空振りし、
+**エラーを出さずにキャッシュが永久にミスし続ける**静かな故障になる。
+
+#### 後方互換
+
+`b1_catalog_without_fingerprints_deserializes_as_cold_cache` —
+B1 が生成した既存カタログは fingerprint を持たないので、**cold cache として素通り**する。
+移行処理は不要。
+
+#### 変異検証（3種・実出力を確認）
+
+```text
+positive cache ignored: matching fingerprint was probed again     left: 2  right: 1
+negative cache removed: quarantined fingerprint was probed again  left: 2  right: 1
+fingerprint mtime missing: updated executable was not re-probed   left: 1  right: 2
+```
+
+**壊れる方向が両向きなのが要点。** 1・2 は「1回であるべきが2回」（キャッシュが効いていない）、
+3 は「2回であるべきが1回」（更新を検出できていない）。同じ種類のアサーションで
+**効かせすぎと効かせなさすぎの両方**を捕まえている。`toHaveBeenCalled()` 的な
+「呼ばれたか」ではなく**回数**を見ているから成立する。
+
+各変異とも復元後に緑・`cmp` 一致を確認済み。
+
+#### 検証（すべて main が sandbox 外で実行）
+
+- `cargo test --workspace --locked`: **396 passed / 0 failed**（B1 の 391 から +5）
+- outproc-effect 143 / outproc-instrument 118 / both 186（すべて 0 failed）
+- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings`: pass
+- `npm run build` / `npm test`: **1800 passed / 30 skipped / 0 failed**
+- `npm run lint`: 0 errors / warning 1件（`tests/audio/audio-slicer.spec.ts`・**main にも存在する既存**）
+
+#### 残り
+
+残る失敗3件は **3/3 が arch mismatch**（`lipo -archs` で x86_64 のみ・host は arm64）と判明。
+分類（`unsupportedArch`）は #549 に畳み、Rosetta helper は別 issue に切り出す
+（Fable 裁定・#549 にコメント済み）。
+
+---
+
 ### 6.321 feat(scan): catalog v2 + explicit rescan での child probe — #549 B1 (Jul 29, 2026)
 
 **Date**: 2026-07-29

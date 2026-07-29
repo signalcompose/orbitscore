@@ -4,8 +4,8 @@
 //! daemon への `ScanPlugins` コマンド配線は C1b（別 PR）— このバイナリは単体で完結する。
 
 use orbit_plugin_scan::{
-    cache_path, now_iso8601, probe_artifact, resolve_scan_dirs, scan_all, scan_all_with_probes,
-    write_catalog, ArtifactClass, ArtifactProbeError, Catalog,
+    cache_path, now_iso8601, probe_artifact, read_catalog, resolve_scan_dirs, scan_all_with_cache,
+    scan_all_with_probes_and_cache, write_catalog, ArtifactClass, ArtifactProbeError, Catalog,
 };
 use serde::Serialize;
 use std::env;
@@ -38,6 +38,16 @@ fn run_catalog_scan(explicit_probe: bool) -> ExitCode {
     };
 
     let dirs = resolve_scan_dirs(Some(&home), orbit_plugin_path.as_deref());
+    let path = cache_path(&home);
+    let previous = match read_catalog(&path) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            eprintln!(
+                "[orbit-plugin-scan] WARN: 既存カタログを cache として読めません: {path:?}: {error}"
+            );
+            None
+        }
+    };
     let outcome = if explicit_probe {
         let scanner = match env::current_exe() {
             Ok(path) => path,
@@ -46,9 +56,9 @@ fn run_catalog_scan(explicit_probe: bool) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        scan_all_with_probes(&dirs, &scanner)
+        scan_all_with_probes_and_cache(&dirs, &scanner, previous.as_ref())
     } else {
-        scan_all(&dirs)
+        scan_all_with_cache(&dirs, previous.as_ref())
     };
     let catalog = Catalog {
         version: 2,
@@ -57,7 +67,6 @@ fn run_catalog_scan(explicit_probe: bool) -> ExitCode {
         artifacts: outcome.artifacts,
     };
 
-    let path = cache_path(&home);
     if let Err(error) = write_catalog(&catalog, &path) {
         eprintln!("[orbit-plugin-scan] ERROR: カタログの書き込みに失敗: {path:?}: {error}");
         return ExitCode::FAILURE;
