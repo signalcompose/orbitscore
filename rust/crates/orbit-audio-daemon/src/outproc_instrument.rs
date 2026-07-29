@@ -1093,6 +1093,31 @@ mod tests {
         p
     }
 
+    /// コミット済み fixture はテスト中に write-open しないため、exec 対象 inode に
+    /// ETXTBSY の前提となる書き込み fd が存在しない。
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join(name)
+    }
+
+    fn respawn_argument_recorder() -> PathBuf {
+        fixture("record-respawn-args.sh")
+    }
+
+    fn respawn_args_path(shm: &Path) -> PathBuf {
+        let mut path = shm.as_os_str().to_os_string();
+        path.push(".respawn-args");
+        path.into()
+    }
+
+    fn invocation_count_path(shm: &Path) -> PathBuf {
+        let mut path = shm.as_os_str().to_os_string();
+        path.push(".invocation-count");
+        path.into()
+    }
+
     /// Polls `cond` every 20ms until it's true or `timeout_secs` elapses (supervisor watchdog
     /// behavior is asynchronous).
     fn poll_until(timeout_secs: u64, mut cond: impl FnMut() -> bool) -> bool {
@@ -1192,8 +1217,6 @@ mod tests {
     // 成功の状態機械だけを検証したいので、引数を無視して生き続ける stub script に差し替える。
     #[test]
     fn supervisor_respawns_child_on_unexpected_exit() {
-        use std::os::unix::fs::PermissionsExt;
-
         let shm = make_shm();
         let stats = OutProcInstrumentStats::new();
         // #441 の regression: attach 保留中の post-READY crash は respawn しなければならない。
@@ -1209,19 +1232,7 @@ mod tests {
         let first_pid = first.id();
         // 引数（--shm/--plugin/--sample-rate）を無視して生き続ける respawn 先（spawn は成功 =
         // respawn_count++、かつ #573 の fast-fail 検知に引っかからない）。
-        let respawn_target = std::env::temp_dir().join(format!(
-            "orbit-instrument-respawn-target-{}-{}.sh",
-            std::process::id(),
-            SHM_SEQ.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::write(&respawn_target, "#!/bin/sh\nexec sleep 30\n")
-            .expect("write respawn target stub");
-        let mut permissions = std::fs::metadata(&respawn_target)
-            .expect("respawn target metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&respawn_target, permissions)
-            .expect("make respawn target executable");
+        let respawn_target = fixture("slow-child.sh");
         let sup = InstrumentChildSupervisor::spawn(
             first,
             shm.clone(),
@@ -1251,7 +1262,6 @@ mod tests {
         );
         drop(sup);
         let _ = std::fs::remove_file(&shm);
-        let _ = std::fs::remove_file(&respawn_target);
     }
 
     // #573: この respawn 先の script は元々 `sleep 0.2` で自分から終了していた。すると
@@ -1261,29 +1271,16 @@ mod tests {
     // respawn が「初回 child の強制 kill による1回」だけに確定し、決定論的なテストになる。
     #[test]
     fn supervisor_respawn_passes_the_state_saved_after_initial_spawn() {
-        use std::os::unix::fs::PermissionsExt;
-
         let fixture_dir = std::env::temp_dir().join(format!(
             "orbit-instrument-respawn-state-{}-{}",
             std::process::id(),
             SHM_SEQ.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir(&fixture_dir).expect("create respawn fixture directory");
-        let args_path = fixture_dir.join("respawn-args.txt");
-        let child_script = fixture_dir.join("record-respawn-args.sh");
-        std::fs::write(
-            &child_script,
-            "#!/bin/sh\nscript_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nprintf '%s\\n' \"$@\" > \"$script_dir/respawn-args.txt\"\nexec sleep 3600\n",
-        )
-        .expect("write respawn argument recorder");
-        let mut permissions = std::fs::metadata(&child_script)
-            .expect("respawn recorder metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&child_script, permissions)
-            .expect("make respawn recorder executable");
+        let child_script = respawn_argument_recorder();
 
         let shm = make_shm();
+        let args_path = respawn_args_path(&shm);
         let stats = OutProcInstrumentStats::new();
         let first = Command::new("sleep")
             .arg("30")
@@ -1379,6 +1376,7 @@ mod tests {
 
         drop(sup);
         std::fs::remove_dir_all(fixture_dir).expect("remove respawn fixture directory");
+        let _ = std::fs::remove_file(args_path);
         let _ = std::fs::remove_file(shm);
     }
 
@@ -1436,34 +1434,6 @@ mod tests {
         let _ = std::fs::remove_file(&shm);
     }
 
-    /// `dir` に、自身の起動回数（sidecar counter file）を記録し、`slow_at` 回目の起動のときだけ
-    /// `FAST_RESPAWN_THRESHOLD` を超えて生き続ける（それ以外は即終了する）script を書く。連続
-    /// fast-fail カウンタが「閾値以上生きた respawn でリセットされる」ことを検証するための stub。
-    /// effect 側 `write_variable_lifetime_script` のミラー。
-    fn write_variable_lifetime_script(dir: &Path, slow_at: u32) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let script = dir.join("variable-lifetime.sh");
-        std::fs::write(
-            &script,
-            format!(
-                "#!/bin/sh\nscript_dir=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\n\
-                 count_file=\"$script_dir/invocation-count.txt\"\n\
-                 n=$(cat \"$count_file\" 2>/dev/null || echo 0)\n\
-                 n=$((n+1))\n\
-                 printf '%s' \"$n\" > \"$count_file\"\n\
-                 if [ \"$n\" -eq {slow_at} ]; then\n  exec sleep 2.2\nfi\nexit 0\n"
-            ),
-        )
-        .expect("write variable-lifetime script");
-        let mut permissions = std::fs::metadata(&script)
-            .expect("variable-lifetime script metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&script, permissions)
-            .expect("make variable-lifetime script executable");
-        script
-    }
-
     // #573: 単発クラッシュ（`FAST_RESPAWN_THRESHOLD` 以上生きてから死ぬ）は連続 fast-fail カウンタを
     // リセットする——壊れた child だと誤判定されず従来どおり復帰し続けられる。3 回目の起動だけ
     // 2.2s 生きてから死ぬ script を使い、reset の前後に fast fail を積んで検証する（2 fast fails →
@@ -1476,25 +1446,19 @@ mod tests {
     // 参照）。
     #[test]
     fn supervisor_resets_fast_fail_streak_after_a_survivor() {
-        let fixture_dir = std::env::temp_dir().join(format!(
-            "orbit-instrument-fast-fail-reset-{}-{}",
-            std::process::id(),
-            SHM_SEQ.fetch_add(1, Ordering::Relaxed)
-        ));
-        std::fs::create_dir(&fixture_dir).expect("create fast-fail-reset fixture directory");
-        let script = write_variable_lifetime_script(&fixture_dir, 3);
-
         let shm = make_shm();
+        let count_path = invocation_count_path(&shm);
+        let script = fixture("variable-lifetime-child.sh");
+        let slow_at = PathBuf::from("3");
         let stats = OutProcInstrumentStats::new();
-        let first = Command::new(&script)
-            .spawn()
+        let first = spawn_instrument_child(&script, &shm, &slow_at, None, 48_000, None)
             .expect("spawn variable-lifetime stub (invocation 1)");
         let sup = InstrumentChildSupervisor::spawn(
             first,
             shm.clone(),
             stats.clone(),
             script.clone(),
-            PathBuf::from("/ignored.clap"),
+            slow_at,
             None,
             48_000,
             None,
@@ -1514,7 +1478,7 @@ mod tests {
         );
 
         drop(sup);
-        std::fs::remove_dir_all(&fixture_dir).expect("remove fast-fail-reset fixture directory");
+        let _ = std::fs::remove_file(count_path);
         let _ = std::fs::remove_file(&shm);
     }
 
