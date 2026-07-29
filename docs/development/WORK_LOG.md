@@ -17,6 +17,97 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.320 feat(scan): factory descriptor primitive — #549 PR A (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ PR A 完了（**既存 79件も通常動作も完全に不変**。カバレッジは B1 から動く）
+
+#549 の第一段。**カタログのカバレッジはまだ変わらない**。1 artifact を
+**component 初期化に到達しない深さ**で列挙する primitive を用意する段階。
+
+### 背景: 論点は「probe するか」ではなく「probe の深さ」だった
+
+インストール済み VST3 **340** のうちカタログは **79（23%）**。欠落 **261 は全て**
+`Contents/Resources/moduleinfo.json` 無し（他の失敗経路は 0件・実測）。
+役割別では **instrument がわずか 9件**（うち6件が IK Multimedia）で、
+**Native Instruments が丸ごと欠落**（Kontakt 7/8・Massive X・Battery 4・Reaktor 6・Maschine 2）。
+**Epic #546 の受け入れ基準は Kontakt を名指ししている**のに補完に出ない。
+
+owner の「プラグインのカタログの仕方はベストプラクティスがあるでしょこれ」を受けて調査した結果、
+**main が自前で立てた A / B の二択自体が誤った枠**だったと判明した。
+
+| 深さ | 得られるもの | ダイアログのリスク |
+|---|---|---|
+| 静的（`moduleinfo.json`） | class 一覧・CID | なし |
+| **factory probe（採用）** | class 一覧・CID・名前・カテゴリ | 低い |
+| component 初期化（不採用） | channel 数・bus・MIDI I/O | 高い |
+
+**#463 で実害が出た FIN-BOOST のダイアログは component 初期化の層**で起きるもので、
+factory descriptor 取得はそこまで到達しない。**「安全のために全部切る」は切りすぎだった。**
+
+調査記録: `docs/research/PLUGIN_CATALOG_SCANNING.md`（一次情報・確信度つき）
+
+### PR A の内容
+
+- `orbit-vst3-host` に **factory-only API**。`FactoryDescriptorApi` が
+  **Factory3 / Factory2 / Factory1 を型で区別**（受け入れ基準の「factory version の分布記録」に直結）。
+  失敗も `FactoryProbeError` として**型で区別**する
+- `orbit-plugin-scan` に **`probe-artifact` サブコマンド**（1 artifact を probe して stdout に JSON）
+- VST3 gain oracle に **Factory2/3 descriptor**
+- **`createInstance` 非到達テスト**
+
+既存の `probe_plugin`（`orbit-vst3-host/src/lib.rs:2257`）は実際に `load` → bus → `process_stereo` まで
+進む**深い** probe なので流用せず、別物として共存させた（独立検証で確認済み）。
+
+### 🔴 非到達テストは4条件すべてが必須 — 変異検証で実証した
+
+独立第二意見が「1つでも欠けると空洞」と指摘した4条件:
+
+1. abort は **oracle 側の `createInstance` 実装内**でプロセス即死
+2. **実際の `probe-artifact` 子バイナリ経由**（`CARGO_BIN_EXE_` の integration test）
+3. **Factory3 / Factory2-only / v1-only の3系すべて**
+4. **tripwire の生存確認（positive control）**
+
+入ったテスト:
+
+```
+create_instance_tripwire_child ... ok
+probe_artifact_never_reaches_create_instance_for_factory3_factory2_and_v1 ... ok
+create_instance_tripwire_positive_control_dies_by_sigabrt ... ok
+real_vst3_factory_probe_gated ... ignored（ORBIT_REAL_VST3 が要る）
+```
+
+**(4) の実装が要点**: abort はプロセスを即死させるのでテスト内で直接呼ぶとハーネスごと死ぬ。
+**同じ integration-test 実行ファイルを新プロセスで起動**することで、
+`abort()` が本当に効いていることを安全に確認している。
+
+**変異検証が「4条件が必須」を実証した**:
+
+| 変異 | 結果 |
+|---|---|
+| abort を**フラグ記録 + 後読み**に置換 | `disconnected tripwire child + post-read: GREEN (vacuous pass reproduced)` — **配線を切っても通ってしまう**ことを再現 |
+| **positive control を除去** | `MUTATION SURVIVED: removing the positive control let a disconnected createInstance abort tripwire pass all non-reachability tests` |
+
+後者は、**positive control が無いと abort 配線が切れていても全ての非到達テストが通る**ことの実証。
+条件(4)は「あった方が良い」ではなく**必須**だと分かる。
+
+### 検証
+
+- `cargo test --workspace --locked` ✅ **386 passed / 0 failed**（382 + 新規4）
+- `--features outproc-effect` ✅ 143 / `outproc-instrument` ✅ 118 / 両方 ✅ 186（すべて 0 failed）
+- `cargo fmt --check` ✅ / `cargo clippy --workspace --all-targets -- -D warnings` ✅
+- 実プラグインを要するテストは `#[ignore]`（通常の `cargo test` では skip）
+
+### 次段階（#549 は B1 + B2 の両方が入るまで close しない）
+
+- **B1**: catalog v2 + pending 状態 + explicit rescan での child probe + per-artifact 20s +
+  MCP/UI + Kontakt gated。**ここで instrument 9 → NI 5製品を含む増加が出る**
+- **B2**: fingerprint + positive/negative cache。**これが無いとダイアログを出すプラグインが
+  rescan のたびに騒ぎ、ユーザーが rescan を避けてカタログが古いままになる**
+
+**最終ゴールは 100% カタログ**。probe 後も「probe 失敗 / timeout / クラッシュ」が理由つきで残るので、
+その分布を実測してから個別に潰す。
+
 ### 6.319 fix(daemon): 即死する child を tight loop で respawn し続ける穴を塞ぐ #573 (Jul 29, 2026)
 
 **Date**: 2026-07-29

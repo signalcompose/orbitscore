@@ -14,6 +14,7 @@ workspace_root="$(cd "$here/../.." && pwd)"   # rust/
 cd "$workspace_root"
 
 profile="${1:-debug}"
+suffix="${2:-}"
 if [ "$profile" = "release" ]; then
   cargo build -p orbit-vst3-gain-oracle --release >&2
 else
@@ -23,7 +24,7 @@ fi
 dylib="target/$profile/liborbit_vst3_gain_oracle.dylib"
 [ -f "$dylib" ] || { echo "dylib not found: $dylib" >&2; exit 1; }
 
-bundle="target/vst3-fixtures/GainOracle.vst3"
+bundle="target/vst3-fixtures/GainOracle${suffix}.vst3"
 rm -rf "$bundle"
 mkdir -p "$bundle/Contents/MacOS"
 cp "$dylib" "$bundle/Contents/MacOS/GainOracle"
