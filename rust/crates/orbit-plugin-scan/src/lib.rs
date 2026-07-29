@@ -121,6 +121,10 @@ pub struct ProbeFailure {
     pub code: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub host_arch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slices: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signal: Option<i32>,
@@ -281,6 +285,90 @@ fn resolve_artifact_executable(canonical_path: &Path) -> PathBuf {
     }
 
     fallback_bundle_executable(canonical_path)
+}
+
+const MAX_FAT_ARCHES: usize = 64;
+const MAX_MACHO_HEADER_BYTES: u64 = (8 + MAX_FAT_ARCHES * 32) as u64;
+
+#[derive(Clone, Copy)]
+enum ByteOrder {
+    Big,
+    Little,
+}
+
+fn read_u32(bytes: &[u8], order: ByteOrder) -> u32 {
+    let bytes: [u8; 4] = bytes.try_into().expect("caller supplies four bytes");
+    match order {
+        ByteOrder::Big => u32::from_be_bytes(bytes),
+        ByteOrder::Little => u32::from_le_bytes(bytes),
+    }
+}
+
+/// Read only the Mach-O header and architecture table; plugin executables can be gigabytes.
+fn read_macho_architectures(path: &Path) -> io::Result<Option<Vec<String>>> {
+    let mut bytes = Vec::new();
+    fs::File::open(path)?
+        .take(MAX_MACHO_HEADER_BYTES)
+        .read_to_end(&mut bytes)?;
+    Ok(parse_macho_architectures(&bytes))
+}
+
+fn parse_macho_architectures(bytes: &[u8]) -> Option<Vec<String>> {
+    let magic: [u8; 4] = bytes.get(..4)?.try_into().ok()?;
+    let (order, fat_record_size) = match magic {
+        // Thin 32/64-bit Mach-O headers. The CPU type follows the magic in both layouts.
+        [0xfe, 0xed, 0xfa, 0xce] | [0xfe, 0xed, 0xfa, 0xcf] => (ByteOrder::Big, None),
+        [0xce, 0xfa, 0xed, 0xfe] | [0xcf, 0xfa, 0xed, 0xfe] => (ByteOrder::Little, None),
+        // FAT_MAGIC/FAT_CIGAM and FAT_MAGIC_64/FAT_CIGAM_64.
+        [0xca, 0xfe, 0xba, 0xbe] => (ByteOrder::Big, Some(20)),
+        [0xbe, 0xba, 0xfe, 0xca] => (ByteOrder::Little, Some(20)),
+        [0xca, 0xfe, 0xba, 0xbf] => (ByteOrder::Big, Some(32)),
+        [0xbf, 0xba, 0xfe, 0xca] => (ByteOrder::Little, Some(32)),
+        _ => return None,
+    };
+
+    let second_word = bytes.get(4..8)?;
+    let Some(record_size) = fat_record_size else {
+        return Some(vec![macho_arch_name(read_u32(second_word, order))]);
+    };
+    let count = read_u32(second_word, order) as usize;
+    if count == 0 || count > MAX_FAT_ARCHES || bytes.len() < 8 + count * record_size {
+        return None;
+    }
+
+    let mut architectures = Vec::with_capacity(count);
+    for record in bytes[8..].chunks_exact(record_size).take(count) {
+        let architecture = macho_arch_name(read_u32(&record[..4], order));
+        if !architectures.contains(&architecture) {
+            architectures.push(architecture);
+        }
+    }
+    Some(architectures)
+}
+
+fn macho_arch_name(cpu_type: u32) -> String {
+    match cpu_type {
+        7 => "x86".to_owned(),
+        0x0100_0007 => "x86_64".to_owned(),
+        12 => "arm".to_owned(),
+        0x0100_000c => "arm64".to_owned(),
+        0x0200_000c => "arm64_32".to_owned(),
+        18 => "powerpc".to_owned(),
+        0x0100_0012 => "powerpc64".to_owned(),
+        _ => format!("unknown(0x{cpu_type:08x})"),
+    }
+}
+
+fn host_macho_arch_name() -> Option<&'static str> {
+    match std::env::consts::ARCH {
+        "x86" => Some("x86"),
+        "x86_64" => Some("x86_64"),
+        "arm" => Some("arm"),
+        "aarch64" => Some("arm64"),
+        "powerpc" => Some("powerpc"),
+        "powerpc64" => Some("powerpc64"),
+        _ => None,
+    }
 }
 
 fn fallback_bundle_executable(bundle_path: &Path) -> PathBuf {
@@ -468,6 +556,10 @@ pub enum ArtifactProbeError {
     BundleLoad {
         message: String,
     },
+    UnsupportedArch {
+        host_arch: String,
+        slices: Vec<String>,
+    },
     MissingSymbol {
         symbol: String,
     },
@@ -491,6 +583,7 @@ impl ArtifactProbeError {
             Self::UnsupportedFormat { .. } => "unsupportedFormat",
             Self::InvalidBundle { .. } => "invalidBundle",
             Self::BundleLoad { .. } => "bundleLoad",
+            Self::UnsupportedArch { .. } => "unsupportedArch",
             Self::MissingSymbol { .. } => "missingSymbol",
             Self::NullFactory => "nullFactory",
             Self::InvalidClassCount { .. } => "invalidClassCount",
@@ -509,6 +602,13 @@ impl std::fmt::Display for ArtifactProbeError {
             }
             Self::InvalidBundle { path } => write!(formatter, "invalid bundle: {path}"),
             Self::BundleLoad { message } => write!(formatter, "{message}"),
+            Self::UnsupportedArch { host_arch, slices } => {
+                write!(
+                    formatter,
+                    "host architecture {host_arch} is not present in Mach-O slices [{}]",
+                    slices.join(", ")
+                )
+            }
             Self::MissingSymbol { symbol } => write!(formatter, "missing symbol: {symbol}"),
             Self::NullFactory => write!(formatter, "GetPluginFactory returned null"),
             Self::InvalidClassCount { count } => write!(formatter, "invalid class count: {count}"),
@@ -522,6 +622,49 @@ impl std::fmt::Display for ArtifactProbeError {
     }
 }
 
+impl ArtifactProbeError {
+    fn into_probe_failure(self, exit_code: Option<i32>, signal: Option<i32>) -> ProbeFailure {
+        let (host_arch, slices) = match &self {
+            Self::UnsupportedArch { host_arch, slices } => {
+                (Some(host_arch.clone()), Some(slices.clone()))
+            }
+            _ => (None, None),
+        };
+        ProbeFailure {
+            code: self.code().to_owned(),
+            message: self.to_string(),
+            host_arch,
+            slices,
+            exit_code,
+            signal,
+        }
+    }
+}
+
+fn preflight_artifact_architecture(path: &Path) -> Result<(), ArtifactProbeError> {
+    let Some(host_arch) = host_macho_arch_name() else {
+        return Ok(());
+    };
+    preflight_artifact_architecture_for_host(path, host_arch)
+}
+
+fn preflight_artifact_architecture_for_host(
+    path: &Path,
+    host_arch: &str,
+) -> Result<(), ArtifactProbeError> {
+    let executable = resolve_artifact_executable(path);
+    let Some(slices) = read_macho_architectures(&executable).ok().flatten() else {
+        return Ok(());
+    };
+    if slices.iter().any(|slice| slice == host_arch) {
+        return Ok(());
+    }
+    Err(ArtifactProbeError::UnsupportedArch {
+        host_arch: host_arch.to_owned(),
+        slices,
+    })
+}
+
 /// Child process 内でだけ呼ばれる native descriptor probe。
 pub fn probe_artifact(path: &Path) -> Result<Vec<ArtifactClass>, ArtifactProbeError> {
     let extension = path
@@ -530,8 +673,14 @@ pub fn probe_artifact(path: &Path) -> Result<Vec<ArtifactClass>, ArtifactProbeEr
         .unwrap_or_default()
         .to_ascii_lowercase();
     match extension.as_str() {
-        "clap" => probe_clap_artifact(path),
-        "vst3" => probe_vst3_artifact(path),
+        "clap" => {
+            preflight_artifact_architecture(path)?;
+            probe_clap_artifact(path)
+        }
+        "vst3" => {
+            preflight_artifact_architecture(path)?;
+            probe_vst3_artifact(path)
+        }
         _ => Err(ArtifactProbeError::UnsupportedFormat { extension }),
     }
 }
@@ -877,6 +1026,19 @@ pub fn scan_all_with_probes_and_cache(
     )
 }
 
+fn refresh_cached_arch_failure(path: &Path, state: ArtifactState) -> ArtifactState {
+    if !matches!(state, ArtifactState::ProbeFailed { .. }) {
+        return state;
+    }
+    match preflight_artifact_architecture(path) {
+        Err(error) => ArtifactState::ProbeFailed {
+            duration_ms: 0,
+            failure: error.into_probe_failure(None, None),
+        },
+        Ok(()) => state,
+    }
+}
+
 fn scan_candidates<F>(
     candidates: Vec<(PathBuf, Format)>,
     explicit_probe: bool,
@@ -911,6 +1073,7 @@ where
             Format::Clap => {
                 let index = artifacts.len();
                 if let Some(state) = cached_by_fingerprint.get(&fingerprint).cloned() {
+                    let state = refresh_cached_arch_failure(&path, state);
                     if let ArtifactState::ProbeSucceeded { plugins, .. } = &state {
                         entries.extend(plugins.iter().cloned());
                     }
@@ -949,6 +1112,7 @@ where
                 VstScanResult::ProbePending { reason } => {
                     let index = artifacts.len();
                     if let Some(state) = cached_by_fingerprint.get(&fingerprint).cloned() {
+                        let state = refresh_cached_arch_failure(&path, state);
                         if let ArtifactState::ProbeSucceeded { plugins, .. } = &state {
                             entries.extend(plugins.iter().cloned());
                         }
@@ -1064,6 +1228,12 @@ struct ChildProbeOutput {
 
 fn run_child_probe(scanner_executable: &Path, path: &Path, format: Format) -> ProbeExecution {
     let started = Instant::now();
+    if let Err(error) = preflight_artifact_architecture(path) {
+        return ProbeExecution {
+            duration_ms: elapsed_millis(started),
+            result: Err(error.into_probe_failure(None, None)),
+        };
+    }
     let capture = match run_process_with_timeout(
         scanner_executable,
         &["probe-artifact".into(), path.as_os_str().to_owned()],
@@ -1076,6 +1246,8 @@ fn run_child_probe(scanner_executable: &Path, path: &Path, format: Format) -> Pr
                 result: Err(ProbeFailure {
                     code: "spawnError".to_owned(),
                     message: error.to_string(),
+                    host_arch: None,
+                    slices: None,
                     exit_code: None,
                     signal: None,
                 }),
@@ -1092,6 +1264,8 @@ fn run_child_probe(scanner_executable: &Path, path: &Path, format: Format) -> Pr
                     "artifact probe exceeded {} seconds",
                     ARTIFACT_PROBE_TIMEOUT.as_secs()
                 ),
+                host_arch: None,
+                slices: None,
                 exit_code: capture.status.code(),
                 signal: status_signal(&capture.status),
             }),
@@ -1127,12 +1301,9 @@ fn run_child_probe(scanner_executable: &Path, path: &Path, format: Format) -> Pr
             });
             ProbeExecution {
                 duration_ms: capture.duration_ms,
-                result: Err(ProbeFailure {
-                    code: error.code().to_owned(),
-                    message: error.to_string(),
-                    exit_code: capture.status.code(),
-                    signal: status_signal(&capture.status),
-                }),
+                result: Err(
+                    error.into_probe_failure(capture.status.code(), status_signal(&capture.status))
+                ),
             }
         }
         Ok(_) => ProbeExecution {
@@ -1144,6 +1315,8 @@ fn run_child_probe(scanner_executable: &Path, path: &Path, format: Format) -> Pr
                     capture.status,
                     diagnostic_tail(&capture.stderr)
                 ),
+                host_arch: None,
+                slices: None,
                 exit_code: capture.status.code(),
                 signal: status_signal(&capture.status),
             }),
@@ -1162,6 +1335,8 @@ fn run_child_probe(scanner_executable: &Path, path: &Path, format: Format) -> Pr
                         "child produced invalid JSON ({error}); stderr={}",
                         diagnostic_tail(&capture.stderr)
                     ),
+                    host_arch: None,
+                    slices: None,
                     exit_code: capture.status.code(),
                     signal,
                 }),
@@ -1509,6 +1684,178 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn append_u32(bytes: &mut Vec<u8>, value: u32, order: ByteOrder) {
+        match order {
+            ByteOrder::Big => bytes.extend_from_slice(&value.to_be_bytes()),
+            ByteOrder::Little => bytes.extend_from_slice(&value.to_le_bytes()),
+        }
+    }
+
+    fn thin_macho(cpu_type: u32, order: ByteOrder, is_64_bit: bool) -> Vec<u8> {
+        let mut bytes = match (order, is_64_bit) {
+            (ByteOrder::Big, false) => vec![0xfe, 0xed, 0xfa, 0xce],
+            (ByteOrder::Little, false) => vec![0xce, 0xfa, 0xed, 0xfe],
+            (ByteOrder::Big, true) => vec![0xfe, 0xed, 0xfa, 0xcf],
+            (ByteOrder::Little, true) => vec![0xcf, 0xfa, 0xed, 0xfe],
+        };
+        append_u32(&mut bytes, cpu_type, order);
+        bytes
+    }
+
+    fn fat_macho(cpu_types: &[u32], order: ByteOrder, is_64_bit: bool) -> Vec<u8> {
+        let mut bytes = match (order, is_64_bit) {
+            (ByteOrder::Big, false) => vec![0xca, 0xfe, 0xba, 0xbe],
+            (ByteOrder::Little, false) => vec![0xbe, 0xba, 0xfe, 0xca],
+            (ByteOrder::Big, true) => vec![0xca, 0xfe, 0xba, 0xbf],
+            (ByteOrder::Little, true) => vec![0xbf, 0xba, 0xfe, 0xca],
+        };
+        append_u32(&mut bytes, cpu_types.len() as u32, order);
+        let record_size = if is_64_bit { 32 } else { 20 };
+        for cpu_type in cpu_types {
+            append_u32(&mut bytes, *cpu_type, order);
+            bytes.resize(bytes.len() + record_size - 4, 0);
+        }
+        bytes
+    }
+
+    #[test]
+    fn fat_headers_honor_endianness_and_32_or_64_bit_records() {
+        let expected = Some(vec!["x86_64".to_owned(), "arm64".to_owned()]);
+        for (order, is_64_bit) in [
+            (ByteOrder::Big, false),
+            (ByteOrder::Little, false),
+            (ByteOrder::Big, true),
+            (ByteOrder::Little, true),
+        ] {
+            let bytes = fat_macho(&[0x0100_0007, 0x0100_000c], order, is_64_bit);
+            assert_eq!(
+                parse_macho_architectures(&bytes),
+                expected,
+                "fat Mach-O header endian conversion is required for FAT_MAGIC/FAT_CIGAM and 64-bit variants"
+            );
+        }
+    }
+
+    #[test]
+    fn thin_headers_report_their_single_slice() {
+        assert_eq!(
+            parse_macho_architectures(&thin_macho(0x0100_000c, ByteOrder::Little, true)),
+            Some(vec!["arm64".to_owned()]),
+            "thin arm64-only Mach-O must report its slice"
+        );
+        assert_eq!(
+            parse_macho_architectures(&thin_macho(7, ByteOrder::Big, false)),
+            Some(vec!["x86".to_owned()]),
+            "thin and fat parsing must remain separate"
+        );
+    }
+
+    #[test]
+    fn universal_and_thin_arm64_executables_pass_arm64_preflight() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let universal = temp.path().join("Universal.clap");
+        let arm64_only = temp.path().join("Arm64Only.clap");
+        fs::write(
+            &universal,
+            fat_macho(&[0x0100_0007, 0x0100_000c], ByteOrder::Big, false),
+        )
+        .unwrap();
+        fs::write(
+            &arm64_only,
+            thin_macho(0x0100_000c, ByteOrder::Little, true),
+        )
+        .unwrap();
+
+        assert!(
+            preflight_artifact_architecture_for_host(&universal, "arm64").is_ok(),
+            "universal x86_64 + arm64 binary must not be rejected on arm64"
+        );
+        assert!(
+            preflight_artifact_architecture_for_host(&arm64_only, "arm64").is_ok(),
+            "thin arm64-only binary must not be rejected on arm64"
+        );
+    }
+
+    #[test]
+    fn three_x86_64_only_artifacts_are_classified_before_spawn() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let paths = ["MODO BASS.clap", "Super 8.clap", "Philharmonik 2.clap"]
+            .map(|name| temp.path().join(name));
+        for path in &paths {
+            fs::write(path, thin_macho(0x0100_0007, ByteOrder::Little, true)).unwrap();
+        }
+
+        let errors = paths
+            .iter()
+            .filter_map(|path| preflight_artifact_architecture_for_host(path, "arm64").err())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            errors.len(),
+            3,
+            "all three x86_64-only artifacts must be classified as unsupportedArch before child spawn"
+        );
+        for error in errors {
+            match error {
+                ArtifactProbeError::UnsupportedArch { host_arch, slices } => {
+                    assert_eq!(host_arch, "arm64");
+                    assert_eq!(slices, vec!["x86_64"]);
+                }
+                other => panic!("expected unsupportedArch, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn parent_arch_preflight_returns_failure_payload_without_spawning() {
+        let Some(host_arch) = host_macho_arch_name() else {
+            return;
+        };
+        let (other_cpu_type, other_arch) = if host_arch == "arm64" {
+            (0x0100_0007, "x86_64")
+        } else {
+            (0x0100_000c, "arm64")
+        };
+        let temp = tempfile::tempdir().expect("tempdir");
+        let artifact = temp.path().join("WrongArch.clap");
+        fs::write(
+            &artifact,
+            thin_macho(other_cpu_type, ByteOrder::Little, true),
+        )
+        .unwrap();
+
+        let execution = run_child_probe(
+            Path::new("/definitely/missing/orbit-plugin-scan"),
+            &artifact,
+            Format::Clap,
+        );
+        let failure = execution
+            .result
+            .expect_err("architecture mismatch must fail before spawning");
+        assert_eq!(failure.code, "unsupportedArch");
+        assert_eq!(failure.host_arch.as_deref(), Some(host_arch));
+        assert_eq!(failure.slices, Some(vec![other_arch.to_owned()]));
+        assert_eq!(failure.exit_code, None);
+        assert_eq!(failure.signal, None);
+    }
+
+    #[test]
+    fn unsupported_arch_error_serializes_host_and_slices() {
+        let error = ArtifactProbeError::UnsupportedArch {
+            host_arch: "arm64".to_owned(),
+            slices: vec!["x86_64".to_owned()],
+        };
+        let child_json = serde_json::to_value(&error).unwrap();
+        assert_eq!(child_json["kind"], "unsupportedArch");
+        assert_eq!(child_json["hostArch"], "arm64");
+        assert_eq!(child_json["slices"], serde_json::json!(["x86_64"]));
+
+        let failure_json = serde_json::to_value(error.into_probe_failure(None, None)).unwrap();
+        assert_eq!(failure_json["code"], "unsupportedArch");
+        assert_eq!(failure_json["hostArch"], "arm64");
+        assert_eq!(failure_json["slices"], serde_json::json!(["x86_64"]));
+        assert!(failure_json.get("exitCode").is_none());
+    }
 
     #[test]
     fn extra_scan_dirs_from_env_splits_on_colon() {
@@ -1902,6 +2249,8 @@ mod tests {
                 result: Err(ProbeFailure {
                     code: "bundleLoad".to_owned(),
                     message: "broken".to_owned(),
+                    host_arch: None,
+                    slices: None,
                     exit_code: Some(1),
                     signal: None,
                 }),
@@ -1924,7 +2273,57 @@ mod tests {
     }
 
     #[test]
-    fn executable_mtime_change_invalidates_cache_and_reprobes() {
+    fn matching_fingerprint_reclassifies_cached_bundle_load_without_probing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let Some(host_arch) = host_macho_arch_name() else {
+            return;
+        };
+        let (other_cpu_type, other_arch) = if host_arch == "arm64" {
+            (0x0100_0007, "x86_64")
+        } else {
+            (0x0100_000c, "arm64")
+        };
+        let temp = tempfile::tempdir().expect("tempdir");
+        let clap = temp.path().join("PreviouslyMisclassified.clap");
+        fs::write(&clap, thin_macho(other_cpu_type, ByteOrder::Little, true)).unwrap();
+        let calls = AtomicUsize::new(0);
+        let runner = |_: &Path, _: Format| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            ProbeExecution {
+                duration_ms: 14,
+                result: Err(ProbeFailure {
+                    code: "bundleLoad".to_owned(),
+                    message: "legacy load failure".to_owned(),
+                    host_arch: None,
+                    slices: None,
+                    exit_code: Some(1),
+                    signal: None,
+                }),
+            }
+        };
+        let candidates = vec![(clap, Format::Clap)];
+        let cold = scan_candidates(candidates.clone(), true, None, &runner);
+        let previous = catalog_from_outcome(&cold);
+        let warm = scan_candidates(candidates, true, Some(&previous), &runner);
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "cached architecture failure must be reclassified without spawning another child"
+        );
+        assert_eq!(warm.summary.cache_hits, 1);
+        assert_eq!(warm.summary.probe_attempts, 0);
+        assert_eq!(warm.summary.failure_reasons["unsupportedArch"], 1);
+        let ArtifactState::ProbeFailed { failure, .. } = &warm.artifacts[0].state else {
+            panic!("cached failure must remain quarantined")
+        };
+        assert_eq!(failure.host_arch.as_deref(), Some(host_arch));
+        assert_eq!(failure.slices, Some(vec![other_arch.to_owned()]));
+    }
+
+    #[test]
+    fn unsupported_arch_cache_recovers_after_executable_mtime_change() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let temp = tempfile::tempdir().expect("tempdir");
@@ -1935,9 +2334,12 @@ mod tests {
             let call = calls.fetch_add(1, Ordering::SeqCst);
             let result = if call == 0 {
                 Err(ProbeFailure {
-                    code: "bundleLoad".to_owned(),
-                    message: "old executable is quarantined".to_owned(),
-                    exit_code: Some(1),
+                    code: "unsupportedArch".to_owned(),
+                    message: "host architecture arm64 is not present in Mach-O slices [x86_64]"
+                        .to_owned(),
+                    host_arch: Some("arm64".to_owned()),
+                    slices: Some(vec!["x86_64".to_owned()]),
+                    exit_code: None,
                     signal: None,
                 })
             } else {
@@ -1961,6 +2363,12 @@ mod tests {
         };
         let candidates = vec![(clap.clone(), Format::Clap)];
         let cold = scan_candidates(candidates.clone(), true, None, &runner);
+        let ArtifactState::ProbeFailed { failure, .. } = &cold.artifacts[0].state else {
+            panic!("first probe must cache the architecture failure")
+        };
+        assert_eq!(failure.code, "unsupportedArch");
+        assert_eq!(failure.host_arch.as_deref(), Some("arm64"));
+        assert_eq!(failure.slices, Some(vec!["x86_64".to_owned()]));
         let previous = catalog_from_outcome(&cold);
         let old_fingerprint = artifact_fingerprint(&clap, Format::Clap);
         let old_modified = fs::metadata(&clap).unwrap().modified().unwrap();
@@ -2118,6 +2526,8 @@ mod tests {
                 failure: ProbeFailure {
                     code: "timeout".to_owned(),
                     message: "slow".to_owned(),
+                    host_arch: None,
+                    slices: None,
                     exit_code: None,
                     signal: Some(libc::SIGKILL),
                 },
@@ -2127,6 +2537,8 @@ mod tests {
                 failure: ProbeFailure {
                     code: "crash".to_owned(),
                     message: "boom".to_owned(),
+                    host_arch: None,
+                    slices: None,
                     exit_code: None,
                     signal: Some(libc::SIGABRT),
                 },

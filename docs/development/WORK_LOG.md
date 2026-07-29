@@ -17,6 +17,84 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.323 feat(scan): classify x86_64-only bundles before spawn — #549 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ **339/339 が説明つきで台帳に載った**（336 usable + 3 explained + **原因不明 0**）
+
+B1 で残った失敗3件を `lipo -archs` で調べたところ、**3/3 が x86_64 のみ**（host は arm64）だった。
+probe の欠陥ではなく、**プロセスのアーキテクチャという構造の壁**。
+
+#### `bundleLoad` → `unsupportedArch`
+
+```json
+{"code": "unsupportedArch",
+ "message": "host architecture arm64 is not present in Mach-O slices [x86_64]",
+ "hostArch": "arm64", "slices": ["x86_64"]}
+```
+
+MODO BASS / Super 8 / Philharmonik 2 の3件。**カタログを見るだけで理由が分かる**形になった。
+従来の `CFBundleLoadExecutable failed` は理由ではあるが不透明で、真の理由を隠していた。
+
+#### 子プロセスを起動する前に判定する
+
+Mach-O のヘッダを先に読むので、**プロセスを1つも作らずに**結論が出る。
+失敗を早く・安く・自己説明的にする3つが同時に取れる位置。
+
+fingerprint ベースのキャッシュと組み合わさるので、**ベンダーが universal 版を出せば
+mtime が変わって自動的に再 probe され成功に転じる** — こちら側のコード変更は不要。
+
+#### スコープ判断（Fable 裁定）
+
+分類を #549 に畳んだのは、**調査正本 `docs/research/PLUGIN_CATALOG_SCANNING.md` に
+`unsupported_arch` と `architecture` が既に仕様化されていた**ため。再設計ではなく未実装項目。
+加えて #549 本文が最初から「不在と故障を区別可能にする」を要求している。
+**Rosetta helper（x86_64 子プロセス）は別 issue** — 3件とも instrument なので
+effect より重い instrument IPC 経路を要する。
+
+> main の当初の根拠2つは不正確だった。「キャッシュが嘘をつく」は誤りで、
+> **機構は正しく動く**（fingerprint 変化で自動再 probe される）。嘘をつくのは
+> ユーザーへの説明のほう。「数行」も過小で、実際は fat header parse + 変異検証で数十行規模。
+
+#### 変異検証（3種・実出力を確認）
+
+```text
+fat Mach-O header endian conversion is required ...   left: None right: Some(["x86_64","arm64"])
+all three x86_64-only artifacts must be classified ... left: 0    right: 3
+thin arm64-only Mach-O must report its slice          left: None right: Some(["arm64"])
+```
+
+universal（Kontakt / Massive）と thin arm64-only（`CLAPTestEffect.clap`）の
+**両方が誤判定されないこと**も実機で確認。各変異とも復元後に緑・`cmp` 一致。
+
+#### 検証（すべて main が sandbox 外で実行）
+
+- `cargo test --workspace --locked`: **403 passed / 0 failed**（B2 の 396 から +7）
+- outproc-effect 143 / outproc-instrument 118 / both 186（すべて 0 failed）
+- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings`: pass
+- `npm test`（単独実行）: **1800 passed / 30 skipped / 0 failed**
+- 実機 rescan: cold 15.1 秒 / **warm 0.080 秒**、失敗3件はすべて `unsupportedArch`、
+  **baseline からの欠落 0件**
+
+#### 副産物: 既存テストの潜在フレークを発見
+
+`npm test` を `cargo test --workspace` と**同時に**走らせたところ、
+`tests/audio/rust-engine/daemon-client.spec.ts` の #484 D1 系2件が ENOENT で落ちた
+（単独実行では 3/3 緑）。原因は**アサーションが弱いこと**:
+
+```ts
+await expect(client.start({ ..., startupTimeoutMs: 500 })).rejects.toThrow()
+const argv = fs.readFileSync(argvFile, 'utf-8')   // 子が書き終えた保証がない
+```
+
+`start()` の reject には「子が `exit 1` で即死」と「500ms タイムアウト」の**2経路**があり、
+`.rejects.toThrow()` は**どちらでも成立する**。負荷が高いと exec が 500ms 以内に始まらず
+タイムアウト側で reject → 子はまだ `argv.txt` を書いていない。
+**「失敗した」ことだけ見て「どう失敗したか」を見ていない**ため経路の取り違えを検出できない。
+別 issue に切り出した（本 PR の変更とは無関係の既存問題）。
+
+---
+
 ### 6.322 perf(scan): fingerprint + positive/negative cache — #549 B2 (Jul 29, 2026)
 
 **Date**: 2026-07-29
