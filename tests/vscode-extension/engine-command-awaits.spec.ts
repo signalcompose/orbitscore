@@ -3,9 +3,25 @@ import type { ChildProcess } from 'child_process'
 import type { ExtensionContext, WorkspaceConfiguration } from 'vscode'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const spawnGuardState = vi.hoisted(() => ({ violations: [] as string[] }))
+
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>()
-  return { ...actual, spawn: vi.fn(actual.spawn), execFile: vi.fn(actual.execFile) }
+  const guardedSpawn = (...args: unknown[]): ChildProcess => {
+    const command = String(args[0])
+    const argv = Array.isArray(args[1]) ? args[1].map(String) : []
+    if (
+      (command === 'node' || command === process.execPath) &&
+      argv.some((arg) => /(?:^|[\\/])cli-audio\.js$/.test(arg)) &&
+      argv.includes('repl')
+    ) {
+      const message = `forbidden real cli-audio.js repl spawn: ${command} ${argv.join(' ')}`
+      spawnGuardState.violations.push(message)
+      throw new Error(message)
+    }
+    return Reflect.apply(actual.spawn, actual, args) as ChildProcess
+  }
+  return { ...actual, spawn: vi.fn(guardedSpawn), execFile: vi.fn(actual.execFile) }
 })
 
 vi.mock('../../packages/vscode-extension/src/engine-startup-runtime', () => ({
@@ -38,6 +54,12 @@ function fakeSpawnedProcess(stdinWritable = false): ChildProcess {
     } as unknown as ChildProcess['stdin'],
   }
   return proc as ChildProcess
+}
+
+async function drainDetachedExtensionWork(): Promise<void> {
+  await Promise.resolve()
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  await Promise.resolve()
 }
 
 async function activateForCommands(): Promise<void> {
@@ -107,6 +129,7 @@ describe('registered command startEngine awaits', () => {
     vi.restoreAllMocks()
     vi.useRealTimers()
     vi.resetModules()
+    spawnGuardState.violations.length = 0
     ;[child_process, ext, vscode, vscodeMock] = await Promise.all([
       import('child_process'),
       import('../../packages/vscode-extension/src/extension'),
@@ -130,9 +153,34 @@ describe('registered command startEngine awaits', () => {
     } as unknown as WorkspaceConfiguration)
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers()
+    // activate() intentionally fire-and-forgets auto-start. Let it land while spawn is still
+    // mocked, then deactivate and repeat once in case that landing installed an engine process.
+    await drainDetachedExtensionWork()
+    ext.__setOutputChannelForTest(null)
+    ext.deactivate()
+    await drainDetachedExtensionWork()
+    if (ext.__getEngineProcessForTest() && !ext.__getEngineProcessForTest()!.killed) {
+      ext.deactivate()
+      await drainDetachedExtensionWork()
+    }
+    ext.__setEngineProcessForTest(null)
+
+    // Restoring leaves the module mock's guarded real-spawn implementation in place. One more
+    // event-loop turn turns any future regression into an assertion failure instead of an orphan.
     vi.restoreAllMocks()
+    await drainDetachedExtensionWork()
+    expect(spawnGuardState.violations, spawnGuardState.violations.join('\n')).toEqual([])
+  })
+
+  it('fails closed before a real cli-audio.js repl spawn can escape', () => {
+    vi.restoreAllMocks()
+
+    expect(() => child_process.spawn('node', ['/unit-test/cli-audio.js', 'repl'])).toThrowError(
+      'forbidden real cli-audio.js repl spawn: node /unit-test/cli-audio.js repl',
+    )
+    spawnGuardState.violations.length = 0
   })
 
   it('restartEngine awaits startEngine before its registered handler settles', async () => {

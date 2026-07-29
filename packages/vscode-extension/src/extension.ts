@@ -73,7 +73,11 @@ import {
   filterDslCandidates,
 } from './dsl-completion-context'
 import { detectPluginArgContext, filterCatalogEntries } from './plugin-catalog-completion'
-import { loadPluginCatalog, runPluginScan } from './plugin-catalog-reader'
+import {
+  loadPluginCatalog,
+  runPluginScan,
+  terminateActivePluginScans,
+} from './plugin-catalog-reader'
 import {
   colorForSeq,
   findPlayArgRangeForPath,
@@ -474,6 +478,11 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
+  // Scanner processes are detached so timeout cleanup can kill their whole process group. That
+  // also means an orderly extension shutdown must stop them explicitly. If the extension host is
+  // killed immediately by a process-group signal this hook cannot run, so a scanner can still be
+  // orphaned and consume CPU; catalog writes are atomic, so this is not a data-corruption risk.
+  terminateActivePluginScans()
   if (engineProcess && !engineProcess.killed) {
     engineProcess.kill()
   }

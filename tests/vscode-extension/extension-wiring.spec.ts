@@ -26,6 +26,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { DeviceSwitchBridge } from '../../packages/vscode-extension/src/device-switch-bridge'
 import * as engineLifecycle from '../../packages/vscode-extension/src/engine-lifecycle'
 import * as ext from '../../packages/vscode-extension/src/extension'
+import * as pluginCatalogReader from '../../packages/vscode-extension/src/plugin-catalog-reader'
 // Resolves to the SAME module instance `extension.ts`'s `import * as vscode
 // from 'vscode'` gets via the root vitest.config.ts alias — pushing into
 // `vscodeMock.window.visibleTextEditors` is observed by extension.ts's own
@@ -47,6 +48,17 @@ vi.mock('../../packages/vscode-extension/src/engine-lifecycle', async (importOri
     ...actual,
     applyEngineExit: vi.fn(actual.applyEngineExit),
     applyEngineError: vi.fn(actual.applyEngineError),
+  }
+})
+
+vi.mock('../../packages/vscode-extension/src/plugin-catalog-reader', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('../../packages/vscode-extension/src/plugin-catalog-reader')
+    >()
+  return {
+    ...actual,
+    terminateActivePluginScans: vi.fn(actual.terminateActivePluginScans),
   }
 })
 
@@ -117,6 +129,13 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
     vscodeMock.window.visibleTextEditors.length = 0
     vi.mocked(engineLifecycle.applyEngineExit).mockClear()
     vi.mocked(engineLifecycle.applyEngineError).mockClear()
+    vi.mocked(pluginCatalogReader.terminateActivePluginScans).mockClear()
+  })
+
+  it('deactivate stops detached plugin scanner process groups', () => {
+    ext.deactivate()
+
+    expect(pluginCatalogReader.terminateActivePluginScans).toHaveBeenCalledOnce()
   })
 
   describe('setupStdoutHandler', () => {

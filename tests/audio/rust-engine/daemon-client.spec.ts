@@ -575,13 +575,15 @@ exit 1
   it('audioDevice 指定時は --audio-device <name> を argv に渡す', async () => {
     await expect(
       client.start({ daemonPath: recorderBin, audioDevice: 'USB Audio', startupTimeoutMs: 500 }),
-    ).rejects.toThrow()
+    ).rejects.toThrow(/daemon exited before ready/)
     const argv = fs.readFileSync(argvFile, 'utf-8').trim().split('\n')
     expect(argv).toEqual(['--audio-device', 'USB Audio'])
   })
 
   it('audioDevice 未指定時は追加 argv を渡さない', async () => {
-    await expect(client.start({ daemonPath: recorderBin, startupTimeoutMs: 500 })).rejects.toThrow()
+    await expect(client.start({ daemonPath: recorderBin, startupTimeoutMs: 500 })).rejects.toThrow(
+      /daemon exited before ready/,
+    )
     const argv = fs.readFileSync(argvFile, 'utf-8')
     expect(argv.trim()).toBe('')
   })

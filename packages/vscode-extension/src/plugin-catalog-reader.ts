@@ -26,6 +26,34 @@ import * as path from 'path'
  * の防護は残す。進捗 protocol を増やす inactivity timeout より B1 の表面を狭く保てる。
  */
 const SCAN_TIMEOUT_MS = 30 * 60_000
+/** Rust scanner supervision's `PROCESS_KILL_WAIT_TIMEOUT`と同じ意味の二段目上限。 */
+const PROCESS_KILL_WAIT_TIMEOUT = 2_000
+
+const activePluginScans = new Set<child_process.ChildProcess>()
+
+function killPluginScanProcessGroup(child: child_process.ChildProcess): void {
+  if (process.platform === 'win32') {
+    child.kill('SIGKILL')
+  } else if (child.pid !== undefined) {
+    process.kill(-child.pid, 'SIGKILL')
+  }
+}
+
+/**
+ * Best-effort shutdown for extension deactivation. On Unix each scanner is detached so its
+ * native-probe descendants can be killed with the scanner's negative process-group id.
+ */
+export function terminateActivePluginScans(): void {
+  for (const child of activePluginScans) {
+    try {
+      killPluginScanProcessGroup(child)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+        activePluginScans.delete(child)
+      }
+    }
+  }
+}
 
 export interface PluginCatalogEntry {
   readonly name: string
@@ -217,6 +245,7 @@ export type RunPluginScanResult = ({ ok: true } & PluginScanOutcome) | { ok: fal
 export function runPluginScan(
   explicitBinaryPath?: string,
   timeoutMs = SCAN_TIMEOUT_MS,
+  killWaitTimeout = PROCESS_KILL_WAIT_TIMEOUT,
 ): Promise<RunPluginScanResult> {
   return new Promise((resolve) => {
     let binaryPath: string
@@ -234,11 +263,13 @@ export function runPluginScan(
       detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
     })
+    activePluginScans.add(child)
     let stdout = ''
     let stderr = ''
     let settled = false
     let timedOut = false
     let terminationError: string | undefined
+    let killWaitTimer: NodeJS.Timeout | undefined
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
@@ -248,32 +279,39 @@ export function runPluginScan(
       stderr += chunk
     })
 
+    const finish = (result: RunPluginScanResult): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (killWaitTimer) clearTimeout(killWaitTimer)
+      resolve(result)
+    }
+
     const timer = setTimeout(() => {
       timedOut = true
       try {
-        if (process.platform === 'win32') {
-          child.kill('SIGKILL')
-        } else if (child.pid !== undefined) {
-          process.kill(-child.pid, 'SIGKILL')
-        }
+        killPluginScanProcessGroup(child)
       } catch (error) {
         const systemError = error as NodeJS.ErrnoException
         if (systemError.code !== 'ESRCH') {
           terminationError = error instanceof Error ? error.message : String(error)
         }
       }
+      killWaitTimer = setTimeout(() => {
+        const terminationDetail = terminationError ? `; group kill failed: ${terminationError}` : ''
+        finish({
+          ok: false,
+          error: `plugin scan did not exit within ${killWaitTimeout / 1000} seconds after process-group SIGKILL${terminationDetail}`,
+        })
+      }, killWaitTimeout)
     }, timeoutMs)
 
-    const finish = (result: RunPluginScanResult): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      resolve(result)
-    }
     child.once('error', (error) => {
+      activePluginScans.delete(child)
       finish({ ok: false, error: error.message })
     })
     child.once('close', (code, signal) => {
+      activePluginScans.delete(child)
       if (timedOut) {
         const terminationDetail = terminationError ? `; group kill failed: ${terminationError}` : ''
         finish({

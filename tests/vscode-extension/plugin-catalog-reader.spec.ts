@@ -1,8 +1,16 @@
+import * as child_process from 'child_process'
+import { EventEmitter } from 'events'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+import { PassThrough } from 'stream'
 
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>()
+  return { ...actual, spawn: vi.fn(actual.spawn) }
+})
 
 import {
   clearPluginCatalogCache,
@@ -10,7 +18,20 @@ import {
   resolveCatalogPath,
   resolvePluginScanBinaryPath,
   runPluginScan,
+  terminateActivePluginScans,
 } from '../../packages/vscode-extension/src/plugin-catalog-reader'
+
+function fakeNonClosingChild(pid: number): child_process.ChildProcess {
+  const child = new EventEmitter() as child_process.ChildProcess
+  Object.assign(child, {
+    pid,
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    killed: false,
+    kill: vi.fn(() => true),
+  })
+  return child
+}
 
 describe('resolveCatalogPath', () => {
   const originalEnv = process.env.ORBIT_PLUGIN_CATALOG
@@ -172,6 +193,10 @@ describe('resolvePluginScanBinaryPath', () => {
 })
 
 describe('runPluginScan', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('enables child probes only through the explicit rescan flag and returns diagnostics', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-plugin-scan-explicit-'))
     const binPath = path.join(tmpDir, 'orbit-plugin-scan')
@@ -269,6 +294,93 @@ echo '{"count":5,"artifactCount":5,"cachePath":"/tmp/catalog.json","skipped":[],
           process.kill(descendantPid, 'SIGKILL')
         } catch {
           // Expected after the process-group kill; cleanup is only mutation-test hygiene.
+        }
+      }
+    }
+  })
+
+  it('resolves after PROCESS_KILL_WAIT_TIMEOUT when group SIGKILL fails and close never fires', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-plugin-scan-kill-wait-'))
+    const binPath = path.join(tmpDir, 'orbit-plugin-scan')
+    fs.writeFileSync(binPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    const child = fakeNonClosingChild(42_424)
+    vi.mocked(child_process.spawn).mockReturnValueOnce(child)
+    const realKill = process.kill.bind(process)
+    vi.spyOn(process, 'kill').mockImplementation(((pid, signal) => {
+      if (pid === -42_424) {
+        throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+      }
+      return realKill(pid, signal)
+    }) as typeof process.kill)
+
+    const scan = runPluginScan(binPath, 10, 20)
+    const completion = await Promise.race([
+      scan.then((result) => ({ kind: 'completed' as const, result })),
+      new Promise<{ kind: 'blocked' }>((resolve) =>
+        setTimeout(() => resolve({ kind: 'blocked' }), 250),
+      ),
+    ])
+
+    expect(completion.kind, 'plugin scan promise remained unresolved after kill wait').toBe(
+      'completed',
+    )
+    if (completion.kind === 'completed') {
+      expect(completion.result).toEqual({
+        ok: false,
+        error:
+          'plugin scan did not exit within 0.02 seconds after process-group SIGKILL; group kill failed: operation not permitted',
+      })
+    }
+    child.emit('close', null, 'SIGKILL')
+  })
+
+  it('terminateActivePluginScans kills a running detached scanner process group', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-plugin-scan-deactivate-'))
+    const pidFile = path.join(tmpDir, 'descendant.pid')
+    const fixture = path.resolve(__dirname, '../fixtures/plugin-catalog/scan-hang.sh')
+    const originalPidFile = process.env.ORBIT_SCAN_TEST_PID_FILE
+    process.env.ORBIT_SCAN_TEST_PID_FILE = pidFile
+    let descendantPid = 0
+    try {
+      const scan = runPluginScan(fixture, 5_000)
+      const pidDeadline = Date.now() + 1_000
+      while (!fs.existsSync(pidFile) && Date.now() < pidDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      descendantPid = Number(fs.readFileSync(pidFile, 'utf8').trim())
+
+      terminateActivePluginScans()
+      const completion = await Promise.race([
+        scan.then((result) => ({ kind: 'completed' as const, result })),
+        new Promise<{ kind: 'blocked' }>((resolve) =>
+          setTimeout(() => resolve({ kind: 'blocked' }), 1_000),
+        ),
+      ])
+      expect(completion.kind, 'deactivation did not stop the active scanner').toBe('completed')
+
+      const exitDeadline = Date.now() + 2_000
+      let descendantAlive = true
+      while (Date.now() < exitDeadline) {
+        try {
+          process.kill(descendantPid, 0)
+          await new Promise((resolve) => setTimeout(resolve, 20))
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+            descendantAlive = false
+            break
+          }
+          throw error
+        }
+      }
+      expect(descendantAlive, `descendant pid ${descendantPid} survived deactivation`).toBe(false)
+    } finally {
+      if (originalPidFile === undefined) delete process.env.ORBIT_SCAN_TEST_PID_FILE
+      else process.env.ORBIT_SCAN_TEST_PID_FILE = originalPidFile
+      if (descendantPid !== 0) {
+        try {
+          process.kill(descendantPid, 'SIGKILL')
+        } catch {
+          // Expected after the process-group kill; cleanup is only failure-path hygiene.
         }
       }
     }
