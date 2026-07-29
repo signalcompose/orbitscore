@@ -430,16 +430,16 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect(call?.args[0]).toBe(code)
   })
 
-  it('registers save_plugin_state with (sequence,index) and returns the saved project result', async () => {
+  it('keeps the compatible sequence field and passes a prefixed receiver through unchanged', async () => {
     const saved = {
-      identityKey: 'lead/instrument/Synth/0',
-      path: '/songs/states/lead.state',
+      identityKey: 'sum:drum/effect/GlueComp/0',
+      path: '/songs/states/sum-drum.state',
       bytesWritten: 12,
     }
     const { handlers } = createStubHandlers({
       savePluginState: (sequence, index) => {
-        expect(sequence).toBe('lead one')
-        expect(index).toBe(0)
+        expect(sequence).toBe('sum:drum')
+        expect(index).toBe(1)
         return { ok: true, saved }
       },
     })
@@ -448,12 +448,17 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     await client.connect()
 
     const listed = await client.toolsList()
-    const listBody = listed.json as JsonRpcOk<{ tools: Array<{ name: string }> }>
+    const listBody = listed.json as JsonRpcOk<{
+      tools: Array<{ name: string; description?: string }>
+    }>
     expect(listBody.result.tools.map((tool) => tool.name)).toContain('save_plugin_state')
+    expect(
+      listBody.result.tools.find((tool) => tool.name === 'save_plugin_state')?.description,
+    ).toContain('sum:<name>')
 
     const response = await client.toolsCall('save_plugin_state', {
-      sequence: 'lead one',
-      index: 0,
+      sequence: 'sum:drum',
+      index: 1,
     })
     const body = response.json as JsonRpcOk<ToolCallResult>
     expect(body.result.isError).toBeFalsy()

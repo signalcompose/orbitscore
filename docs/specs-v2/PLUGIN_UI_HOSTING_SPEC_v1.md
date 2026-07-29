@@ -409,12 +409,18 @@ engine 側は影響を受けない。
 
 **この規則が無いと、呼び出し側が index の数え方を推測することになる**（#562 で空白が判明）。
 
-> **v1 スコープ**: `resolvePluginStateTarget` がアドレス解決する receiver は
-> **sequence と master のみ**。sum / aux バスにも insert chain 自体はあるが、state 保存対象としての
-> アドレス指定は未対応である。現在の `(receiver, index)` は平坦な receiver 名前空間を前提にする一方、
-> 実際の sequence / sum / aux は別名前空間で同名を許すため、どれを指すか衝突しうる。
-> **解決順や暗黙の優先順位は定めない**。それを行うと別プラグインの state を保存して成功扱いする
-> silent failure を作るため、名前空間を含むアドレス方式が決まるまでは loud に未対応を返す。
+> **receiver 名前空間（規範）**: sum / aux バスは receiver にそれぞれ `sum:` / `aux:` を
+> 字句的に前置して指定する（例: `sum:drum`, `aux:reverb`）。接頭辞付き receiver は指定した
+> kind の同名バスだけを指し、sum → aux の解決順、`resolveNode()`、sequence への fallback を
+> 使用してはならない。daemon target には接頭辞を除いた実 bus 名を渡し、SC.5 の永続 identity
+> には接頭辞付き receiver をそのまま使う。
+>
+> 接頭辞なし receiver は従来どおり sequence だけを指し、`master` だけは master バスを指す。
+> 接頭辞なしの名前と同名の sum / aux バスが存在してもバスへ暗黙解決してはならない。sequence が
+> 存在しない一方で同名バスが存在するときは、`sum:<name>` / `aux:<name>` の明示指定を促す
+> loud エラーにする。これにより、同名の sequence / sum / aux 間で別プラグインの state を保存して
+> 成功扱いする silent failure を防ぐ。`sum:x` という文字列は常に sum バス receiver と解釈し、
+> 同名 sequence への fallback は設けない。
 
 1. **index 0 = ソーススロット。** レシーバの信号源（SC.1 規範(2) の構造トポロジーで先頭に立つもの）
    に予約する。

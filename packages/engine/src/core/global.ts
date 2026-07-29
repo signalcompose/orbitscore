@@ -27,7 +27,7 @@ import { MidiTransportScheduler } from './global/midi-transport-scheduler'
 import { PluginEffectManager } from './global/plugin-effect-manager'
 import { PluginInstrumentManager } from './global/plugin-instrument-manager'
 import { SequenceEffectManager } from './global/sequence-effect-manager'
-import { MixerManager, MixerBusHandle } from './global/mixer-manager'
+import { MixerManager, MixerBusHandle, type MixerKind } from './global/mixer-manager'
 import type { PluginSlot } from './global/effect-slot'
 import {
   ProjectStateStore,
@@ -38,6 +38,32 @@ import {
 export interface ResolvedPluginStateTarget {
   identity: PluginStateIdentity
   daemonTarget: { role: 'effect'; bus?: string } | { role: 'instrument'; instance: string }
+}
+
+function parsePluginStateBusReceiver(
+  receiverId: string,
+): { kind: MixerKind; name: string } | undefined {
+  for (const kind of ['sum', 'aux'] as const) {
+    const prefix = `${kind}:`
+    if (receiverId.startsWith(prefix)) {
+      return { kind, name: receiverId.slice(prefix.length) }
+    }
+  }
+  return undefined
+}
+
+function resolveMixerPluginStateChain(
+  mixerManager: MixerManager,
+  receiver: { kind: MixerKind; name: string },
+): readonly PluginSlot[] {
+  const bus = mixerManager.resolveBus(receiver.kind, receiver.name)
+  if (bus === undefined) {
+    throw new Error(
+      `Unknown ${receiver.kind} bus '${receiver.name}'; no plugin chain is registered for ` +
+        `'${receiver.kind}:${receiver.name}'.`,
+    )
+  }
+  return mixerManager.chainFor(receiver.kind, receiver.name)
 }
 
 export class Global {
@@ -619,41 +645,56 @@ export class Global {
   }
 
   /**
-   * UIH.5 の揮発アドレス `(sequence,index)` を、現在のchainからSC.5 identityとdaemon slotへ
+   * UIH.5 の揮発アドレス `(receiver,index)` を、現在のchainからSC.5 identityとdaemon slotへ
    * 同時に解決する。indexを永続キーへ流用しない。
    */
-  resolvePluginStateTarget(sequence: string, index: number): ResolvedPluginStateTarget {
+  resolvePluginStateTarget(receiverId: string, index: number): ResolvedPluginStateTarget {
     if (!Number.isInteger(index) || index < 0) {
       throw new Error(`Plugin chain index must be a non-negative integer; received ${index}.`)
     }
 
     let slot: PluginSlot | undefined
     let valid: { index: number; slot: PluginSlot }[]
-    if (sequence === 'master') {
-      const effects = this.pluginEffectManager.chain()
+    const prefixedBus = parsePluginStateBusReceiver(receiverId)
+    if (receiverId === 'master' || prefixedBus) {
+      const effects =
+        receiverId === 'master'
+          ? this.pluginEffectManager.chain()
+          : resolveMixerPluginStateChain(this.mixerManager, prefixedBus!)
       valid = effects.map((effect, offset) => ({ index: offset + 1, slot: effect }))
       if (index === 0) {
         throw this.pluginIndexError(
-          sequence,
+          receiverId,
           index,
           valid,
-          'master is a bus and has no source slot; effects start at index 1',
+          `${receiverId} is a bus and has no source slot; effects start at index 1`,
         )
       }
       slot = effects[index - 1]
     } else {
-      const receiver = this.sequenceRegistry.getSequence(sequence)
+      const receiver = this.sequenceRegistry.getSequence(receiverId)
       if (!receiver) {
-        const mixerBus = this.mixerManager.resolveNode(sequence)
-        if (mixerBus) {
+        const matchingBusKinds = (
+          [
+            ['sum', this.mixerManager.resolveSum(receiverId)],
+            ['aux', this.mixerManager.resolveAux(receiverId)],
+          ] as const
+        )
+          .filter((entry): entry is readonly [MixerKind, string] => entry[1] !== undefined)
+          .map(([kind]) => kind)
+        if (matchingBusKinds.length > 0) {
+          const explicitReceivers = matchingBusKinds
+            .map((kind) => `'${kind}:${receiverId}'`)
+            .join(' or ')
           throw new Error(
-            `'${sequence}' is a ${mixerBus.kind} bus; saving state for mixer-bus inserts is not supported in v1 (see PLUGIN_UI_HOSTING_SPEC_v1 UIH.5).`,
+            `Unknown sequence '${receiverId}'; a same-named mixer bus exists. ` +
+              `Use ${explicitReceivers} to save its insert state.`,
           )
         }
-        throw new Error(`Unknown sequence '${sequence}'; no plugin chain is registered.`)
+        throw new Error(`Unknown sequence '${receiverId}'; no plugin chain is registered.`)
       }
-      const instruments = this.pluginInstrumentManager.chainFor(sequence)
-      const effects = this.sequenceEffectManager.chainFor(sequence)
+      const instruments = this.pluginInstrumentManager.chainFor(receiverId)
+      const effects = this.sequenceEffectManager.chainFor(receiverId)
       valid = [
         ...instruments.map((instrument) => ({ index: 0, slot: instrument })),
         ...effects.map((effect, offset) => ({ index: offset + 1, slot: effect })),
@@ -666,7 +707,7 @@ export class Global {
             : receiver.isMidi()
               ? 'the MIDI source is not a hosted plugin and is not addressable'
               : 'no plugin instrument is declared'
-          throw this.pluginIndexError(sequence, index, valid, sourceReason)
+          throw this.pluginIndexError(receiverId, index, valid, sourceReason)
         }
       } else {
         slot = effects[index - 1]
@@ -675,14 +716,14 @@ export class Global {
 
     if (!slot) {
       throw this.pluginIndexError(
-        sequence,
+        receiverId,
         index,
         valid!,
         'the requested chain slot does not exist',
       )
     }
     const identity: PluginStateIdentity = {
-      receiver: sequence,
+      receiver: receiverId,
       role: slot.role,
       normalizedName: slot.normalizedName,
       occurrence: slot.occurrence,
@@ -699,11 +740,11 @@ export class Global {
     }
   }
 
-  async savePluginState(sequence: string, index: number): Promise<SavedProjectPluginState> {
+  async savePluginState(receiverId: string, index: number): Promise<SavedProjectPluginState> {
     if (this.isTransportRunning()) {
       throw new Error('Plugin state cannot be saved while the transport is running; stop first.')
     }
-    const resolved = this.resolvePluginStateTarget(sequence, index)
+    const resolved = this.resolvePluginStateTarget(receiverId, index)
     const projectDirectory = this.audioManager.getDocumentDirectory()
     if (!projectDirectory) {
       throw new Error(

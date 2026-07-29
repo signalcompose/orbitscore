@@ -1,4 +1,5 @@
 import type { AudioEngine } from '../../audio/types'
+import { createStatePathFallback } from '../project-state-store'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
@@ -7,6 +8,7 @@ import {
   EffectChainMap,
   normalizePluginInstanceName,
   resolveEffectSpec,
+  type PluginSlot,
 } from './effect-slot'
 
 /**
@@ -31,7 +33,7 @@ export const MIXER_BUS_POOL_SIZE = 4
  */
 export const MIXER_BUS_KINDS = ['sum', 'aux'] as const
 
-type MixerKind = (typeof MIXER_BUS_KINDS)[number]
+export type MixerKind = (typeof MIXER_BUS_KINDS)[number]
 
 /**
  * Brand marking a value as a mixer bus handle. Carried by the handle itself
@@ -92,8 +94,10 @@ export class MixerManager {
   ) {
     const makeKind = (kind: MixerKind, prefix: string): KindState => ({
       buses: new Map(),
-      // #564 でアドレス指定が未決のため、sum/aux は state 自動復元の対象外。
-      inserts: new EffectChainMap(audioEngine, (name) => `${kind}:${name}`),
+      inserts: new EffectChainMap(audioEngine, (name) => `${kind}:${name}`, {
+        externalReceiverId: (name) => `${kind}:${name}`,
+        statePathFallback: createStatePathFallback(audioManager),
+      }),
       pool: new BusPool(
         prefix,
         MIXER_BUS_POOL_SIZE,
@@ -143,6 +147,16 @@ export class MixerManager {
   /** Resolves a declared aux bus name to its allocated bus, or undefined if undeclared. */
   resolveAux(name: string): string | undefined {
     return this.kinds.aux.buses.get(name)
+  }
+
+  /** Resolves a declared bus in the explicitly selected receiver namespace. */
+  resolveBus(kind: MixerKind, name: string): string | undefined {
+    return this.kinds[kind].buses.get(name)
+  }
+
+  /** Current insert chain for an explicitly selected mixer receiver. */
+  chainFor(kind: MixerKind, name: string): readonly PluginSlot[] {
+    return this.kinds[kind].inserts.chainFor(name)
   }
 
   resolveNode(name: string): { kind: MixerKind; bus: string } | undefined {

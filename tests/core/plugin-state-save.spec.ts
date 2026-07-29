@@ -152,6 +152,77 @@ describe('plugin state address resolution and project registration (#562)', () =
     )
   })
 
+  it('resolves explicitly prefixed sum/aux receivers to distinct identities and daemon buses', async () => {
+    const { global } = harness()
+    await global.sum('x').effect('./SumTone.clap')
+    await global.aux('x').effect('./AuxTone.clap')
+
+    expect(global.resolvePluginStateTarget('sum:x', 1)).toEqual({
+      identity: {
+        receiver: 'sum:x',
+        role: 'effect',
+        normalizedName: 'SumTone',
+        occurrence: 0,
+      },
+      daemonTarget: { role: 'effect', bus: 'sum-bus-0' },
+    })
+    expect(global.resolvePluginStateTarget('aux:x', 1)).toEqual({
+      identity: {
+        receiver: 'aux:x',
+        role: 'effect',
+        normalizedName: 'AuxTone',
+        occurrence: 0,
+      },
+      daemonTarget: { role: 'effect', bus: 'aux-bus-0' },
+    })
+  })
+
+  it.each([
+    ['sum', 'drum'],
+    ['aux', 'reverb'],
+  ] as const)(
+    'reports index 0 and a missing effect index loudly for %s buses',
+    async (kind, name) => {
+      const { global } = harness()
+      await global[kind](name).effect('./GlueComp.clap')
+
+      expect(() => global.resolvePluginStateTarget(`${kind}:${name}`, 0)).toThrow(
+        new RegExp(
+          `${kind}:${name} is a bus and has no source slot; effects start at index 1.*` +
+            'Valid indices: 1 \\(effect, GlueComp\\)',
+        ),
+      )
+      expect(() => global.resolvePluginStateTarget(`${kind}:${name}`, 2)).toThrow(
+        /requested chain slot does not exist.*Valid indices: 1 \(effect, GlueComp\)/,
+      )
+    },
+  )
+
+  it('saves a sum insert under its prefixed receiver identity', async () => {
+    const { directory, audio, global } = harness()
+    await global.sum('drum').effect('./GlueComp.clap')
+
+    const saved = await global.savePluginState('sum:drum', 1)
+    const identity = {
+      receiver: 'sum:drum',
+      role: 'effect' as const,
+      normalizedName: 'GlueComp',
+      occurrence: 0,
+    }
+    const expectedRelative = `states/${stateFileNameForIdentity(identity)}`
+
+    expect(saved.identityKey).toBe('sum:drum/effect/GlueComp/0')
+    expect(saved.projectStatePath).toBe(expectedRelative)
+    expect(audio.savePluginState).toHaveBeenCalledWith(
+      { role: 'effect', bus: 'sum-bus-0' },
+      path.join(directory, ...expectedRelative.split('/')),
+    )
+    expect(parse(fs.readFileSync(path.join(directory, 'project.yaml'), 'utf8'))).toEqual({
+      version: 1,
+      states: { 'sum:drum/effect/GlueComp/0': expectedRelative },
+    })
+  })
+
   it('does not expose the built-in audio source at sequence index 0', () => {
     const { global, sequence } = harness()
     sequence.audio('./kick.wav')
@@ -170,20 +241,42 @@ describe('plugin state address resolution and project registration (#562)', () =
     )
   })
 
-  it.each([
-    ['drum', 'sum'],
-    ['reverb', 'aux'],
-  ] as const)(
-    'reports declared %s mixer buses as unsupported instead of unknown sequences',
-    (name, kind) => {
-      const { global } = harness()
-      global[kind](name)
+  it('keeps an unprefixed receiver sequence-only even when a same-named bus exists', async () => {
+    const { global } = harness()
+    await global.instrument('lead', './Massive-X.clap')
+    await global.sum('lead').effect('./WrongBusEffect.clap')
 
-      expect(() => global.resolvePluginStateTarget(name, 1)).toThrow(
-        `'${name}' is a ${kind} bus; saving state for mixer-bus inserts is not supported in v1 (see PLUGIN_UI_HOSTING_SPEC_v1 UIH.5).`,
-      )
-    },
-  )
+    expect(global.resolvePluginStateTarget('lead', 0)).toEqual({
+      identity: {
+        receiver: 'lead',
+        role: 'instrument',
+        normalizedName: 'Massive-X',
+        occurrence: 0,
+      },
+      daemonTarget: { role: 'instrument', instance: 'plugin:lead' },
+    })
+  })
+
+  it('gives a lexical bus prefix priority over a same-named registered sequence', async () => {
+    const { audio, global } = harness()
+    const prefixedNameSequence = new Sequence(global, audio)
+    prefixedNameSequence.setName('sum:x')
+    await global.instrument('sum:x', './SequenceOnlySynth.clap')
+
+    expect(() => global.resolvePluginStateTarget('sum:x', 0)).toThrow(
+      "Unknown sum bus 'x'; no plugin chain is registered for 'sum:x'.",
+    )
+  })
+
+  it('diagnoses every matching bus prefix when an unprefixed sequence is absent', () => {
+    const { global } = harness()
+    global.sum('x')
+    global.aux('x')
+
+    expect(() => global.resolvePluginStateTarget('x', 1)).toThrow(
+      "Unknown sequence 'x'; a same-named mixer bus exists. Use 'sum:x' or 'aux:x' to save its insert state.",
+    )
+  })
 
   it('does not update project.yaml when the daemon state save fails', async () => {
     const { directory, audio, global } = harness()

@@ -45,6 +45,7 @@ import * as os from 'os'
 import * as path from 'path'
 
 import { describe, it, expect, afterAll } from 'vitest'
+import { parse, stringify } from 'yaml'
 
 import {
   analyzeWavBuffer,
@@ -1059,6 +1060,191 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         Math.abs(restoredMeasured - expectedShiftedHz) / expectedShiftedHz,
         `restored ${restoredMeasured.toFixed(2)}Hz must be offset-7 pitch ${expectedShiftedHz.toFixed(2)}Hz`,
       ).toBeLessThanOrEqual(0.02)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    'restores a non-default sum-bus insert across restart through its prefixed receiver identity',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const root = tmpRoot
+      const projectFile = path.join(root, 'project.yaml')
+      const sourcePath = path.join(root, 'test-assets/audio/kick.wav')
+      const dslPath = path.join(root, 'sum-bus-state.orbs')
+      const defaultWav = path.join(root, 'sum-bus-default.wav')
+      const changedWav = path.join(root, 'sum-bus-changed.wav')
+      const restoredWav = path.join(root, 'sum-bus-restored.wav')
+      const receiverKey = 'sum:drum/effect/CLAPTestEffect/0'
+      const unprefixedDecoyKey = 'drum/effect/CLAPTestEffect/0'
+      const wrongKindDecoyKey = 'aux:drum/effect/CLAPTestEffect/0'
+
+      const dslLines = [
+        'var global = init GLOBAL',
+        'global.tempo(120)',
+        'global.beat(4 by 4)',
+        `global.sum("drum").effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
+        'var busStateSource = init global.seq',
+        `busStateSource.audio(${JSON.stringify(sourcePath)}).chop(1).output("drum")`,
+        'busStateSource.play(1, 1, 1, 1)',
+        'global.start()',
+        'LOOP(busStateSource)',
+        'busStateSource.stop()',
+        'global.stop()',
+      ]
+      fs.writeFileSync(dslPath, dslLines.join('\n') + '\n')
+      const openDsl = await activeClient.call('open_file', { path: dslPath })
+      expect(openDsl.isError, openDsl.text).toBe(false)
+
+      const runDslLines = async (startLine: number, endLine: number): Promise<void> => {
+        const selected = await activeClient.call('set_selection', {
+          start_line: startLine,
+          start_char: 1,
+          end_line: endLine,
+          end_char: 999_999,
+        })
+        expect(selected.isError, selected.text).toBe(false)
+        const run = await activeClient.call('run_selection')
+        expect(run.isError, run.text).toBe(false)
+      }
+      const startCapture = async (wavPath: string, label: string): Promise<void> => {
+        const started = await activeClient.call('start_engine', { capture_wav: wavPath })
+        expect(started.isError, started.text).toBe(false)
+        await waitForEngine(true, 15_000, label)
+        await sleep(2500)
+      }
+      const stopTransportThroughDsl = async (label: string): Promise<void> => {
+        const before = (await activeClient.call('get_log', { lines: 500 })).text
+        const stopsBefore = (before.match(/(?:✅ Global stopped|⏹ Global)/g) ?? []).length
+        await runDslLines(10, 11)
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return (log.match(/(?:✅ Global stopped|⏹ Global)/g) ?? []).length > stopsBefore
+          },
+          { intervalMs: 200, timeoutMs: 5_000, label },
+        )
+      }
+      const stopEngine = async (label: string): Promise<void> => {
+        const stopped = await activeClient.call('stop_engine')
+        expect(stopped.isError, stopped.text).toBe(false)
+        await waitForEngine(false, 15_000, label)
+        await sleep(1500)
+      }
+      const readManifestStates = (): Record<string, string> => {
+        if (!fs.existsSync(projectFile)) return {}
+        const manifest = parse(fs.readFileSync(projectFile, 'utf8')) as {
+          states?: Record<string, string>
+        }
+        return { ...(manifest.states ?? {}) }
+      }
+      const writeManifestStates = (states: Record<string, string>): void => {
+        fs.writeFileSync(projectFile, stringify({ version: 1, states }))
+      }
+      const writeEffectState = (relativePath: string, gain: number): void => {
+        const absolutePath = path.resolve(root, relativePath)
+        fs.mkdirSync(path.dirname(absolutePath), { recursive: true })
+        const bytes = Buffer.alloc(12)
+        bytes.writeUInt32LE(0x4f52_4531, 0)
+        bytes.writeDoubleLE(gain, 4)
+        fs.writeFileSync(absolutePath, bytes)
+      }
+
+      // Baseline oracle: the same DSL and source through the effect's default
+      // gain (0.5), captured before any receiver-specific state is registered.
+      const baselineStates = readManifestStates()
+      delete baselineStates[receiverKey]
+      delete baselineStates[unprefixedDecoyKey]
+      delete baselineStates[wrongKindDecoyKey]
+      writeManifestStates(baselineStates)
+      await startCapture(defaultWav, 'sum-bus default capture engine running')
+      await runDslLines(1, 9)
+      await sleep(4000)
+      await stopTransportThroughDsl('sum-bus default transport stopped')
+      await stopEngine('sum-bus default capture engine stopped')
+
+      // Bootstrap the non-default 0.125 gain plus two measurable decoys. The
+      // correct prefixed key is removed after load below, so only state recording
+      // can make the subsequent restart reproduce this sound.
+      const correctRelativePath = 'states/e2e-sum-gain-0125.state'
+      const unprefixedDecoyPath = 'states/e2e-unprefixed-gain-0900.state'
+      const wrongKindDecoyPath = 'states/e2e-aux-gain-0800.state'
+      writeEffectState(correctRelativePath, 0.125)
+      writeEffectState(unprefixedDecoyPath, 0.9)
+      writeEffectState(wrongKindDecoyPath, 0.8)
+      writeManifestStates({
+        ...readManifestStates(),
+        [receiverKey]: correctRelativePath,
+        [unprefixedDecoyKey]: unprefixedDecoyPath,
+        [wrongKindDecoyKey]: wrongKindDecoyPath,
+      })
+
+      // 1. .orbs の sum bus insert を、ユーザーと同じ run_selection で評価する。
+      await startCapture(changedWav, 'sum-bus changed capture engine running')
+      await runDslLines(1, 9)
+      await sleep(4000)
+
+      // 2. 正しい receiver key から非既定 gain が適用済み。bootstrap key を消してから
+      // DSL で停止し、保存経路だけが restart 用の登記を作れる状態にする。
+      const loadedStates = readManifestStates()
+      delete loadedStates[receiverKey]
+      writeManifestStates(loadedStates)
+      await stopTransportThroughDsl('sum-bus changed transport stopped before state save')
+
+      // 3. 自動記録される。
+      // INTERIM(#577): 自動記録が未実装のため明示保存で代替。#577 完了時にこの行を削除すると
+      // そのまま受け入れテストになる。
+      await activeClient.call('save_plugin_state', { sequence: 'sum:drum', index: 1 })
+      const registeredStates = readManifestStates()
+      expect(registeredStates[receiverKey]).toMatch(/^states\//)
+      expect(registeredStates[unprefixedDecoyKey]).toBe(unprefixedDecoyPath)
+      expect(registeredStates[wrongKindDecoyKey]).toBe(wrongKindDecoyPath)
+
+      // 4. エンジンを再起動する。
+      await stopEngine('sum-bus changed capture engine stopped')
+      await startCapture(restoredWav, 'sum-bus restored capture engine running')
+
+      // 5. 同じ .orbs を run_selection で再評価し、capture で音の一致を確認する。
+      await runDslLines(1, 9)
+      await sleep(4000)
+      await stopTransportThroughDsl('sum-bus restored transport stopped')
+      await stopEngine('sum-bus restored capture engine stopped')
+
+      const defaultAnalysis = analyzeWavBuffer(fs.readFileSync(defaultWav))
+      const changedAnalysis = analyzeWavBuffer(fs.readFileSync(changedWav))
+      const restoredAnalysis = analyzeWavBuffer(fs.readFileSync(restoredWav))
+      expect(defaultAnalysis.soundDetected, JSON.stringify(defaultAnalysis)).toBe(true)
+      expect(changedAnalysis.soundDetected, JSON.stringify(changedAnalysis)).toBe(true)
+      expect(restoredAnalysis.soundDetected, JSON.stringify(restoredAnalysis)).toBe(true)
+
+      const peakRatioFromDefault = changedAnalysis.peak / defaultAnalysis.peak
+      const rmsRatioFromDefault = changedAnalysis.rms / defaultAnalysis.rms
+      expect(
+        peakRatioFromDefault,
+        `non-default peak ratio ${peakRatioFromDefault} must reflect gain 0.125 / default 0.5`,
+      ).toBeGreaterThan(0.15)
+      expect(peakRatioFromDefault).toBeLessThan(0.35)
+      expect(
+        rmsRatioFromDefault,
+        `non-default RMS ratio ${rmsRatioFromDefault} must reflect gain 0.125 / default 0.5`,
+      ).toBeGreaterThan(0.12)
+      expect(rmsRatioFromDefault).toBeLessThan(0.4)
+
+      const restoredPeakDelta =
+        Math.abs(restoredAnalysis.peak - changedAnalysis.peak) / changedAnalysis.peak
+      const restoredRmsDelta =
+        Math.abs(restoredAnalysis.rms - changedAnalysis.rms) / changedAnalysis.rms
+      expect(
+        restoredPeakDelta,
+        `restored peak ${restoredAnalysis.peak} must match pre-restart ${changedAnalysis.peak}`,
+      ).toBeLessThanOrEqual(0.08)
+      expect(
+        restoredRmsDelta,
+        `restored RMS ${restoredAnalysis.rms} must match pre-restart ${changedAnalysis.rms}`,
+      ).toBeLessThanOrEqual(0.15)
     },
     TEST_TIMEOUT_MS,
   )

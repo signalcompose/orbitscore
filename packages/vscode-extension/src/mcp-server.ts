@@ -231,7 +231,7 @@ export interface OrbitScoreToolHandlers {
   listPlugins(): Promise<ListPluginsResult> | ListPluginsResult
   /** rescan_plugins (#463 PC.4/C1b): run the scanner and return its summary. */
   rescanPlugins(): Promise<RescanPluginsResult> | RescanPluginsResult
-  /** 明示plugin state保存。UIH.5の揮発アドレス `(sequence,index)` を受ける。 */
+  /** 明示plugin state保存。互換フィールド `sequence` で UIH.5 の `(receiver,index)` を受ける。 */
   savePluginState?(
     sequence: string,
     index: number,
@@ -797,11 +797,15 @@ function buildServer(
         title: 'Save Plugin State',
         description:
           'Save the current state of a running plugin into the project states directory and ' +
-          'register it in project.yaml. Address the current chain with sequence and index: ' +
-          'index 0 is a note-sequence instrument; effects start at index 1; use sequence ' +
-          '"master" with index 1 for the master effect. Playback must be stopped.',
+          'register it in project.yaml. Address the current chain with receiver and index ' +
+          '(the input field remains named sequence for compatibility): plain names select ' +
+          'sequences, "master" selects the master bus, and "sum:<name>"/"aux:<name>" select ' +
+          'mixer buses. Index 0 is a note-sequence instrument; effects start at index 1. ' +
+          'Playback must be stopped.',
         inputSchema: {
-          sequence: z.string().describe('Sequence name, or the reserved name "master"'),
+          sequence: z
+            .string()
+            .describe('Receiver: sequence name, "master", "sum:<bus-name>", or "aux:<bus-name>"'),
           index: z.number().describe('UIH.5 chain index (instrument 0, effects 1-based)'),
         },
       },

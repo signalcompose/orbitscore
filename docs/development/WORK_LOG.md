@@ -17,6 +17,127 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.327 feat(engine): address mixer-bus inserts for plugin state — #564 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ 実機 E2E green。sum/aux が sequence と同じ土俵に乗った
+
+`global.sum("drum").effect("Pro-Q 4")` の音色が**保存できなかった**。DSL 上は挿せて音も出るのに、
+`resolvePluginStateTarget` が `master` だけを特別扱いしており sum/aux 名に到達できなかった。
+
+| レシーバ | before | after |
+|---|---|---|
+| sequence / master | ✅ 保存できる | ✅ |
+| **sum / aux** | ❌ **`not supported`** | ✅ **保存・復元できる** |
+
+#### 接頭辞方式（owner 確定）
+
+```
+save_plugin_state("sum:drum", 1)     // sum バスの drum
+save_plugin_state("aux:reverb", 1)   // aux バスの reverb
+save_plugin_state("drum", 1)         // 従来どおり sequence（後方互換）
+```
+
+**採用理由**: `mixer-manager.ts` の `EffectChainMap` が既に identity として
+`` `${kind}:${name}` `` を使っている。**新概念を増やさず内部表記を外に出すだけ**で済む。
+
+**衝突は実在した**: `declareBus` が弾くのは空文字と `"master"` だけで、sum と aux の
+名前重複は止まらない。`resolveNode` は sum → aux の順なので、**同名なら黙って sum が勝つ**。
+
+```
+global.sum("drum").effect("Pro-Q 4")
+global.aux("drum").effect("Valhalla")   // 両方通る
+```
+
+この状態で `"drum"` を保存すると **Pro-Q 4 が保存され、エラーは出ない**。
+そこで **`resolveNode()` を state 解決に持ち込まず**、両 kind を列挙して
+**次の一手を示す診断**にした:
+
+```
+Unknown sequence 'drum'; a same-named mixer bus exists.
+Use 'sum:drum' or 'aux:drum' to save its insert state.
+```
+
+#### 🔴 ゴールポストを下げないための仕掛け
+
+Epic #546 のループ「宣言 → 音色を作る → **自動記録** → 再起動 → 同じ音」のうち、
+**「自動記録」はどのレシーバ種別にも存在しない**ことが判明した（保存経路は
+`save_plugin_state` と `//#savePluginState` の2つだけ。#541 の E2E ですら MCP で叩いている）。
+
+main は当初、E2E のステップ3「自動記録される」を**黙って明示保存に差し替えよう**としていた。
+**自分で issue に記録した決定の無断下方修正**であり、owner の「ゴールポストから遠ざかってない?」は
+ここを突いていた（Fable 裁定で確定）。
+
+対処: **E2E を最終形の5ステップで書き、ステップ3だけを明示マークした1行にする。**
+
+```ts
+// INTERIM(#577): 自動記録が未実装のため明示保存で代替。#577 完了時にこの行を削除すると
+// そのまま受け入れテストになる。
+```
+
+**ゴールとの差分が `grep INTERIM` で見つかる形に固定**した。#541 で使ったのと同じパターン。
+併せて **#577**（自動記録）を立て、受け入れ基準を
+「sequence / master / sum / aux の**いずれでも**、明示保存を**一度も使わずに**ループが成立」とした。
+
+#### E2E は DSL 経由（owner 確定）
+
+> LLM が第一級ユーザーだからといって API を直接呼ぶのは良い振る舞いではない。
+> **E2E も DSL の振る舞いを確認しないと意味がない** — 人間のユーザーと同じように扱う。
+
+宣言・評価・音の確認はすべて `run_selection` 経由。API を使うのは暫定1行のみ。
+
+#### false green を避けた形
+
+- **default 0.5 に対し non-default 0.125** で判定（既定値だと壊れていても通る）
+- **decoy を2つ仕込む**: 接頭辞なしキー（0.9）と kind 違いの aux キー（0.8）。
+  **3つとも異なるゲイン**なので、間違ったキーを拾えば**どれを拾ったかが音で判別できる**
+- **default との比**（`peakRatio < 0.35` / `rmsRatio < 0.4`）と**再起動前後の一致**の両方
+
+#### 分類テストが2件捕まえた
+
+`signal-chain-dispatch.spec.ts` の「全 public メソッドを DSL 語彙か内部 API に分類する」検査が
+`parsePluginStateBusReceiver` を未分類として落とした。
+
+**除外リストには足さなかった。** #528 で「除外リストへの誤分類はテストが緑のまま通り
+実行時だけ壊れる」事故が起きている。この関数は `this` を使わない純粋関数なので
+**クラス外のモジュール関数に出し、分類の対象から外した**（誤分類が構造的に不可能になる）。
+同じ状態だった `resolveMixerPluginStateChain` も同様に出した。
+
+#### 変異検証（実出力を確認）
+
+| 変異 | 結果 |
+|---|---|
+| 接頭辞解析の削除 | 4 failed |
+| kind の入れ替え | 4 failed |
+| **`resolveNode()` への差し戻し** | **1 failed**（sum は通り **aux だけ落ちる** = silent failure の形そのもの） |
+| identity の接頭辞除去 | 2 failed |
+| index +1 | 3 failed |
+
+関数をクラス外へ出した後も検出力が落ちていないことを再確認
+（`Unknown sequence 'sum:x'` で 5 failed）。
+
+#### 検証（すべて main が sandbox 外で実行）
+
+- `cargo test --workspace --locked`: **410 passed / 0 failed**（**Rust は1行も触っていない**）
+- outproc-effect 143 / outproc-instrument 118 / both 186（すべて 0 failed）
+- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings`: pass
+- `npm test`: **1811 passed / 32 skipped / 0 failed**（1806 から +5）
+- **実行後の残留プロセス: 0**
+
+#### マージ前ゲート: ビルド + 実機 E2E
+
+```
+✓ restores a non-default sum-bus insert across restart through its prefixed receiver identity  24.8s
+✓ restores an MCP-saved non-default instrument state across an engine restart with the same measured pitch
+✓ rescans catalog v2 through MCP, reports a broken bundle, and preserves a known CLAP fixture
+✓ drives real OrbitStudio end-to-end: diagnostics-on-open, run_selection, live edit, capture verification
+Test Files 1 passed / Tests 4 passed
+```
+
+**E2E 実行後の残留プロセスも 0**（OrbitStudio / repl / daemon）。
+
+---
+
 ### 6.326 fix(scan): PR #575 review round 2 — fix-scoped hang + test process leak (Jul 29, 2026)
 
 **Date**: 2026-07-29
