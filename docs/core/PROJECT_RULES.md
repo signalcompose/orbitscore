@@ -190,6 +190,17 @@
 
 **注意:** MCPツールの確認設定はCursor/エディタ側で管理されるため、このポリシーはAIエージェントとユーザー間の共通理解として機能する
 
+## 🖥️ Platform Support
+
+**macOS は Apple Silicon (arm64) のみ対応**（owner 確定・2026-07-29）。
+Windows / Linux は v1.x では非対応。
+
+- 同梱バイナリは `darwin-arm64` のみ。universal binary は作らない
+- x86_64 専用のプラグイン（VST3 / CLAP）はロードしない。カタログには
+  `unsupportedArch` として理由を記録する（黙って落とさない）
+
+---
+
 ## 📋 Development Workflow
 
 ### Multi-Model Development Workflow (推奨)

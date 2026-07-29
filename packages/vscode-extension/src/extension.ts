@@ -73,7 +73,11 @@ import {
   filterDslCandidates,
 } from './dsl-completion-context'
 import { detectPluginArgContext, filterCatalogEntries } from './plugin-catalog-completion'
-import { loadPluginCatalog, runPluginScan } from './plugin-catalog-reader'
+import {
+  loadPluginCatalog,
+  runPluginScan,
+  terminateActivePluginScans,
+} from './plugin-catalog-reader'
 import {
   colorForSeq,
   findPlayArgRangeForPath,
@@ -474,6 +478,11 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {
+  // Scanner processes are detached so timeout cleanup can kill their whole process group. That
+  // also means an orderly extension shutdown must stop them explicitly. If the extension host is
+  // killed immediately by a process-group signal this hook cannot run, so a scanner can still be
+  // orphaned and consume CPU; catalog writes are atomic, so this is not a data-corruption risk.
+  terminateActivePluginScans()
   if (engineProcess && !engineProcess.killed) {
     engineProcess.kill()
   }
@@ -2209,11 +2218,21 @@ async function rescanPlugins(): Promise<void> {
   const result = await runPluginScan()
   if (result.ok) {
     pluginCatalogHintShown = false
+    const summary = result.summary
+    const duration = `p50=${summary.durationMs.p50 ?? '-'}ms p95=${summary.durationMs.p95 ?? '-'}ms max=${summary.durationMs.max ?? '-'}ms`
     outputChannel?.appendLine(
-      `✅ Plugin catalog rescanned: ${result.count} plugins (${result.skipped.length} skipped)`,
+      `✅ Plugin catalog rescanned: ${result.count} plugins; artifacts success=${summary.success} pending=${summary.pending} failure=${summary.failure}; ${duration}; timeout=${summary.timeouts} crash=${summary.crashes}`,
     )
+    outputChannel?.appendLine(
+      `   failure reasons=${JSON.stringify(summary.failureReasons)} factory versions=${JSON.stringify(summary.factoryVersions)}`,
+    )
+    for (const failure of result.failures) {
+      outputChannel?.appendLine(
+        `   failed ${path.basename(failure.path)}: ${failure.code}: ${failure.message}`,
+      )
+    }
     vscode.window.showInformationMessage(
-      `OrbitScore: rescanned ${result.count} plugins (${result.skipped.length} skipped)`,
+      `OrbitScore: rescanned ${result.count} plugins (${summary.pending} pending, ${summary.failure} failed)`,
     )
   } else {
     outputChannel?.appendLine(`❌ Plugin catalog rescan failed: ${result.error}`)
@@ -2950,7 +2969,17 @@ async function rescanPluginsForAgent(): Promise<RescanPluginsResult> {
     return { ok: false, error: result.error }
   }
   pluginCatalogHintShown = false
-  return { ok: true, count: result.count, skipped: [...result.skipped] }
+  return {
+    ok: true,
+    count: result.count,
+    artifactCount: result.artifactCount,
+    skipped: [...result.skipped],
+    failures: result.failures.map((failure) => ({
+      ...failure,
+      slices: failure.slices ? [...failure.slices] : undefined,
+    })),
+    summary: result.summary,
+  }
 }
 
 /** List audio devices for the MCP `list_audio_devices` tool. Mirrors `selectAudioDevice`'s guard/resolve steps but returns the list instead of prompting. */

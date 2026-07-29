@@ -548,78 +548,164 @@ impl IEditControllerTrait for GainController {
     }
 }
 
-struct Factory {}
+const FACTORY_VENDOR: &str = "OrbitScore Factory Oracle";
+const FACTORY_VERSION: &str = "5.4.9";
+const FACTORY_SDK_VERSION: &str = "VST 3.7.9";
 
-impl Class for Factory {
+fn class_identity(index: i32) -> Option<(TUID, &'static str)> {
+    match index {
+        0 => Some((GainProcessor::CID, "Audio Module Class")),
+        1 => Some((GainController::CID, "Component Controller Class")),
+        _ => None,
+    }
+}
+
+unsafe fn fill_class_info(index: i32, info: *mut PClassInfo) -> tresult {
+    let Some((cid, category)) = class_identity(index) else {
+        return kInvalidArgument;
+    };
+    let info = &mut *info;
+    info.cid = cid;
+    info.cardinality = PClassInfo_::ClassCardinality_::kManyInstances as int32;
+    copy_cstring(category, &mut info.category);
+    copy_cstring(PLUGIN_NAME, &mut info.name);
+    kResultOk
+}
+
+unsafe fn fill_class_info2(index: i32, info: *mut PClassInfo2) -> tresult {
+    let Some((cid, category)) = class_identity(index) else {
+        return kInvalidArgument;
+    };
+    let info = &mut *info;
+    info.cid = cid;
+    info.cardinality = PClassInfo_::ClassCardinality_::kManyInstances as int32;
+    copy_cstring(category, &mut info.category);
+    copy_cstring(PLUGIN_NAME, &mut info.name);
+    info.classFlags = 0;
+    copy_cstring("Fx|Dynamics", &mut info.subCategories);
+    copy_cstring(FACTORY_VENDOR, &mut info.vendor);
+    copy_cstring(FACTORY_VERSION, &mut info.version);
+    copy_cstring(FACTORY_SDK_VERSION, &mut info.sdkVersion);
+    kResultOk
+}
+
+unsafe fn fill_class_info3(index: i32, info: *mut PClassInfoW) -> tresult {
+    let Some((cid, category)) = class_identity(index) else {
+        return kInvalidArgument;
+    };
+    let info = &mut *info;
+    info.cid = cid;
+    info.cardinality = PClassInfo_::ClassCardinality_::kManyInstances as int32;
+    copy_cstring(category, &mut info.category);
+    copy_wstring("Gain Ω (Factory3 oracle)", &mut info.name);
+    info.classFlags = 0;
+    copy_cstring("Fx|Dynamics", &mut info.subCategories);
+    copy_wstring(FACTORY_VENDOR, &mut info.vendor);
+    copy_wstring(FACTORY_VERSION, &mut info.version);
+    copy_wstring(FACTORY_SDK_VERSION, &mut info.sdkVersion);
+    kResultOk
+}
+
+unsafe fn create_oracle_instance(cid: FIDString, iid: FIDString, obj: *mut *mut c_void) -> tresult {
+    let instance = match *(cid as *const TUID) {
+        GainProcessor::CID => Some(
+            ComWrapper::new(GainProcessor::new())
+                .to_com_ptr::<FUnknown>()
+                .unwrap(),
+        ),
+        GainController::CID => Some(
+            ComWrapper::new(GainController::new())
+                .to_com_ptr::<FUnknown>()
+                .unwrap(),
+        ),
+        _ => None,
+    };
+
+    if let Some(instance) = instance {
+        let ptr = instance.as_ptr();
+        ((*(*ptr).vtbl).queryInterface)(ptr, iid as *mut TUID, obj)
+    } else {
+        kInvalidArgument
+    }
+}
+
+struct FactoryV1;
+struct FactoryV2;
+struct FactoryV3;
+
+impl Class for FactoryV1 {
     type Interfaces = (IPluginFactory,);
 }
 
-impl IPluginFactoryTrait for Factory {
-    unsafe fn getFactoryInfo(&self, info: *mut PFactoryInfo) -> tresult {
-        let info = &mut *info;
+impl Class for FactoryV2 {
+    type Interfaces = (IPluginFactory2,);
+}
 
-        copy_cstring("Vendor", &mut info.vendor);
-        copy_cstring("https://example.com", &mut info.url);
-        copy_cstring("someone@example.com", &mut info.email);
-        info.flags = PFactoryInfo_::FactoryFlags_::kUnicode as int32;
+impl Class for FactoryV3 {
+    type Interfaces = (IPluginFactory3,);
+}
 
+macro_rules! impl_factory_base {
+    ($factory:ty) => {
+        impl IPluginFactoryTrait for $factory {
+            unsafe fn getFactoryInfo(&self, info: *mut PFactoryInfo) -> tresult {
+                let info = &mut *info;
+                copy_cstring(FACTORY_VENDOR, &mut info.vendor);
+                copy_cstring("https://example.com", &mut info.url);
+                copy_cstring("someone@example.com", &mut info.email);
+                info.flags = PFactoryInfo_::FactoryFlags_::kUnicode as int32;
+                kResultOk
+            }
+
+            unsafe fn countClasses(&self) -> i32 {
+                2
+            }
+
+            unsafe fn getClassInfo(&self, index: i32, info: *mut PClassInfo) -> tresult {
+                fill_class_info(index, info)
+            }
+
+            unsafe fn createInstance(
+                &self,
+                cid: FIDString,
+                iid: FIDString,
+                obj: *mut *mut c_void,
+            ) -> tresult {
+                // This abort lives inside the oracle's actual COM method. A caller that reaches
+                // createInstance dies before it can report a flag, making disconnected test
+                // wiring impossible to mistake for a successful non-reachability proof.
+                if std::env::var_os("ORBIT_VST3_FACTORY_ABORT_CREATE_INSTANCE").is_some() {
+                    std::process::abort();
+                }
+                create_oracle_instance(cid, iid, obj)
+            }
+        }
+    };
+}
+
+impl_factory_base!(FactoryV1);
+impl_factory_base!(FactoryV2);
+impl_factory_base!(FactoryV3);
+
+impl IPluginFactory2Trait for FactoryV2 {
+    unsafe fn getClassInfo2(&self, index: i32, info: *mut PClassInfo2) -> tresult {
+        fill_class_info2(index, info)
+    }
+}
+
+impl IPluginFactory2Trait for FactoryV3 {
+    unsafe fn getClassInfo2(&self, index: i32, info: *mut PClassInfo2) -> tresult {
+        fill_class_info2(index, info)
+    }
+}
+
+impl IPluginFactory3Trait for FactoryV3 {
+    unsafe fn getClassInfoUnicode(&self, index: i32, info: *mut PClassInfoW) -> tresult {
+        fill_class_info3(index, info)
+    }
+
+    unsafe fn setHostContext(&self, _context: *mut FUnknown) -> tresult {
         kResultOk
-    }
-
-    unsafe fn countClasses(&self) -> i32 {
-        2
-    }
-
-    unsafe fn getClassInfo(&self, index: i32, info: *mut PClassInfo) -> tresult {
-        match index {
-            0 => {
-                let info = &mut *info;
-                info.cid = GainProcessor::CID;
-                info.cardinality = PClassInfo_::ClassCardinality_::kManyInstances as int32;
-                copy_cstring("Audio Module Class", &mut info.category);
-                copy_cstring(PLUGIN_NAME, &mut info.name);
-
-                kResultOk
-            }
-            1 => {
-                let info = &mut *info;
-                info.cid = GainController::CID;
-                info.cardinality = PClassInfo_::ClassCardinality_::kManyInstances as int32;
-                copy_cstring("Component Controller Class", &mut info.category);
-                copy_cstring(PLUGIN_NAME, &mut info.name);
-
-                kResultOk
-            }
-            _ => kInvalidArgument,
-        }
-    }
-
-    unsafe fn createInstance(
-        &self,
-        cid: FIDString,
-        iid: FIDString,
-        obj: *mut *mut c_void,
-    ) -> tresult {
-        let instance = match *(cid as *const TUID) {
-            GainProcessor::CID => Some(
-                ComWrapper::new(GainProcessor::new())
-                    .to_com_ptr::<FUnknown>()
-                    .unwrap(),
-            ),
-            GainController::CID => Some(
-                ComWrapper::new(GainController::new())
-                    .to_com_ptr::<FUnknown>()
-                    .unwrap(),
-            ),
-            _ => None,
-        };
-
-        if let Some(instance) = instance {
-            let ptr = instance.as_ptr();
-            ((*(*ptr).vtbl).queryInterface)(ptr, iid as *mut TUID, obj)
-        } else {
-            kInvalidArgument
-        }
     }
 }
 
@@ -661,10 +747,53 @@ extern "system" fn ModuleExit() -> bool {
 
 #[no_mangle]
 extern "system" fn GetPluginFactory() -> *mut IPluginFactory {
-    ComWrapper::new(Factory {})
-        .to_com_ptr::<IPluginFactory>()
-        .unwrap()
-        .into_raw()
+    match std::env::var("ORBIT_VST3_FACTORY_ORACLE_LEVEL").as_deref() {
+        Ok("1") => ComWrapper::new(FactoryV1)
+            .to_com_ptr::<IPluginFactory>()
+            .unwrap()
+            .into_raw(),
+        Ok("2") => ComWrapper::new(FactoryV2)
+            .to_com_ptr::<IPluginFactory2>()
+            .unwrap()
+            .upcast::<IPluginFactory>()
+            .into_raw(),
+        _ => ComWrapper::new(FactoryV3)
+            .to_com_ptr::<IPluginFactory3>()
+            .unwrap()
+            .upcast::<IPluginFactory>()
+            .into_raw(),
+    }
+}
+
+/// Packages this oracle as a process-unique macOS VST3 bundle for integration tests.
+///
+/// The unique output path avoids concurrent workspace test processes replacing a bundle while
+/// another process has it loaded.
+pub fn package_bundle() -> Option<std::path::PathBuf> {
+    use std::sync::OnceLock;
+    static BUNDLE: OnceLock<Option<std::path::PathBuf>> = OnceLock::new();
+    BUNDLE
+        .get_or_init(|| {
+            let script =
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("package-oracle.sh");
+            let output = std::process::Command::new(&script)
+                .arg("debug")
+                .arg(format!("-{}", std::process::id()))
+                .output()
+                .ok()?;
+            if !output.status.success() {
+                eprintln!(
+                    "gain oracle packaging failed: status={} stderr={}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                return None;
+            }
+            Some(std::path::PathBuf::from(
+                String::from_utf8_lossy(&output.stdout).trim(),
+            ))
+        })
+        .clone()
 }
 
 #[cfg(test)]

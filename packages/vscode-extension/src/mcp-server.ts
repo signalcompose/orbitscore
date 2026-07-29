@@ -3,6 +3,7 @@ import * as fs from 'fs'
 import * as http from 'http'
 import * as path from 'path'
 
+import type { PluginScanFailure, PluginScanSummary } from './plugin-catalog-reader'
 import type { WavAnalysis } from './wav-analysis'
 
 /**
@@ -174,7 +175,14 @@ export type ListPluginsResult =
 
 /** Result of rescan_plugins: the scan summary, or an error. */
 export type RescanPluginsResult =
-  | { ok: true; count: number; skipped: string[] }
+  | {
+      ok: true
+      count: number
+      artifactCount: number
+      skipped: string[]
+      failures: PluginScanFailure[]
+      summary: PluginScanSummary
+    }
   | { ok: false; error: string }
 
 export type SavePluginStateResult =
@@ -871,8 +879,9 @@ function buildServer(
       title: 'Rescan Plugins',
       description:
         'Scan the OS plugin directories (and ORBIT_PLUGIN_PATH) and rewrite the plugin ' +
-        'catalog. Equivalent to the "Rescan Plugin Catalog" command. Returns the count ' +
-        'of plugins found and any skipped (metadata-less) entries.',
+        'catalog using explicit child probes. Equivalent to the "Rescan Plugin Catalog" ' +
+        'command. Returns per-artifact failure diagnostics, success/pending/failure counts, ' +
+        'failure reasons, duration percentiles, timeout/crash counts, and factory descriptor versions.',
     },
     async () => {
       const result = await handlers.rescanPlugins()
@@ -881,7 +890,16 @@ function buildServer(
       }
       return {
         content: [
-          { type: 'text', text: JSON.stringify({ count: result.count, skipped: result.skipped }) },
+          {
+            type: 'text',
+            text: JSON.stringify({
+              count: result.count,
+              artifactCount: result.artifactCount,
+              skipped: result.skipped,
+              failures: result.failures,
+              summary: result.summary,
+            }),
+          },
         ],
       }
     },

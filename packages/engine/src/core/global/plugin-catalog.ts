@@ -18,7 +18,7 @@ import path from 'node:path'
 export interface PluginCatalogEntry {
   readonly name: string
   readonly vendor: string
-  /** Raw catalog format tag (C1 scanner emits lowercase `clap` / `vst3` / `component`). */
+  /** Raw catalog format tag (C1 scanner emits lowercase `clap` / `vst3`; AU is not scanned). */
   readonly format: string
   readonly path: string
   readonly pluginId: string

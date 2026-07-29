@@ -146,6 +146,87 @@ impl Display for Vst3HostError {
 
 impl Error for Vst3HostError {}
 
+/// Factory descriptor API used for one class.
+///
+/// A factory may expose a newer interface while returning an error for one descriptor, so the
+/// level is recorded per class rather than once per module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactoryDescriptorApi {
+    Factory3,
+    Factory2,
+    Factory1,
+}
+
+impl FactoryDescriptorApi {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Factory3 => "factory3",
+            Self::Factory2 => "factory2",
+            Self::Factory1 => "factory1",
+        }
+    }
+}
+
+/// Metadata obtainable from a VST3 factory without creating a component instance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FactoryClassDescriptor {
+    pub name: String,
+    /// Uppercase 32-hex-digit VST3 class ID, matching `moduleinfo.json`'s CID shape.
+    pub cid: String,
+    pub category: String,
+    pub sub_categories: String,
+    pub vendor: String,
+    pub version: String,
+    pub sdk_version: String,
+    pub descriptor_api: FactoryDescriptorApi,
+}
+
+/// Failures from the factory-only probe. These variants intentionally cover only module loading
+/// and descriptor enumeration; component creation/initialization errors cannot occur in this API.
+#[derive(Debug)]
+pub enum FactoryProbeError {
+    InvalidBundle(PathBuf),
+    BundleLoad(String),
+    MissingSymbol(&'static str),
+    NullFactory,
+    InvalidClassCount(i32),
+    DescriptorRead {
+        index: i32,
+        factory3_result: Option<tresult>,
+        factory2_result: Option<tresult>,
+        factory1_result: tresult,
+    },
+}
+
+impl Display for FactoryProbeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidBundle(path) => {
+                write!(f, "invalid VST3 bundle: {}", path.display())
+            }
+            Self::BundleLoad(message) => write!(f, "CFBundle load failed: {message}"),
+            Self::MissingSymbol(symbol) => write!(f, "missing symbol: {symbol}"),
+            Self::NullFactory => write!(f, "GetPluginFactory returned null"),
+            Self::InvalidClassCount(count) => {
+                write!(f, "IPluginFactory::countClasses returned {count}")
+            }
+            Self::DescriptorRead {
+                index,
+                factory3_result,
+                factory2_result,
+                factory1_result,
+            } => write!(
+                f,
+                "factory descriptor read failed at index {index}: \
+                 Factory3={factory3_result:?}, Factory2={factory2_result:?}, \
+                 Factory1={factory1_result}"
+            ),
+        }
+    }
+}
+
+impl Error for FactoryProbeError {}
+
 #[derive(Debug, Clone)]
 pub struct LoadedVst3Info {
     pub name: String,
@@ -2252,6 +2333,147 @@ impl IParamValueQueueTrait for HostParamValueQueue {
         }
         kResultFalse
     }
+}
+
+/// Loads one VST3 module and enumerates factory descriptors only.
+///
+/// This function deliberately has no component IID/CID arguments and contains no
+/// `IPluginFactory::createInstance` call. It stops after `countClasses` and the newest available
+/// descriptor getter (`IPluginFactory3`, then Factory2, then v1). Keeping this as a separate API
+/// from [`probe_plugin`] prevents catalog metadata discovery from drifting into component
+/// initialization, bus negotiation, or audio processing.
+pub fn probe_factory_descriptors(
+    path: &Path,
+) -> Result<Vec<FactoryClassDescriptor>, FactoryProbeError> {
+    let library = LoadedLibrary::open(path).map_err(factory_open_error)?;
+    // SAFETY: `LoadedLibrary::open` keeps the successfully loaded CFBundle alive. The exported
+    // function pointer is resolved from that live bundle, and `get_factory` validates non-null
+    // before taking ownership of the returned COM reference. `factory` is declared after
+    // `library`, so it is released before the module is unloaded.
+    let factory = unsafe { library.get_factory() }.map_err(factory_open_error)?;
+    // SAFETY: `factory` is a live `IPluginFactory` COM pointer. Calling countClasses and descriptor
+    // getters is the VST3 factory-enumeration contract and does not instantiate any class.
+    let count = unsafe { factory.countClasses() };
+    if count < 0 {
+        return Err(FactoryProbeError::InvalidClassCount(count));
+    }
+
+    // `ComPtr::cast` performs QueryInterface only. QueryInterface may adjust refcounts, but it
+    // cannot invoke `IPluginFactory::createInstance`; the oracle tripwire integration test pins
+    // this boundary through the real `orbit-plugin-scan probe-artifact` child binary.
+    let factory3 = factory.cast::<IPluginFactory3>();
+    let factory2 = factory.cast::<IPluginFactory2>();
+    let mut descriptors = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        descriptors.push(read_factory_descriptor(
+            &factory,
+            factory2.as_ref(),
+            factory3.as_ref(),
+            index,
+        )?);
+    }
+    Ok(descriptors)
+}
+
+fn factory_open_error(error: Vst3HostError) -> FactoryProbeError {
+    match error {
+        Vst3HostError::InvalidBundle(path) => FactoryProbeError::InvalidBundle(path),
+        Vst3HostError::BundleLoad(message) => FactoryProbeError::BundleLoad(message),
+        Vst3HostError::MissingSymbol(symbol) => FactoryProbeError::MissingSymbol(symbol),
+        Vst3HostError::NullFactory => FactoryProbeError::NullFactory,
+        other => FactoryProbeError::BundleLoad(other.to_string()),
+    }
+}
+
+fn read_factory_descriptor(
+    factory1: &ComPtr<IPluginFactory>,
+    factory2: Option<&ComPtr<IPluginFactory2>>,
+    factory3: Option<&ComPtr<IPluginFactory3>>,
+    index: i32,
+) -> Result<FactoryClassDescriptor, FactoryProbeError> {
+    let mut factory3_result = None;
+    if let Some(factory3) = factory3 {
+        // SAFETY: PClassInfoW is a C ABI plain-data output struct. Zero is valid for all fields;
+        // the live Factory3 pointer receives its correct size/layout from the `vst3` bindings.
+        let mut info = unsafe { std::mem::zeroed::<PClassInfoW>() };
+        // SAFETY: `info` is writable for the duration of the call and `index < countClasses`.
+        let result = unsafe { factory3.getClassInfoUnicode(index, &mut info) };
+        if is_ok(result) {
+            return Ok(FactoryClassDescriptor {
+                name: char16_array_to_string(&info.name),
+                cid: tuid_to_string(&info.cid),
+                category: char8_array_to_string(&info.category),
+                sub_categories: char8_array_to_string(&info.subCategories),
+                vendor: char16_array_to_string(&info.vendor),
+                version: char16_array_to_string(&info.version),
+                sdk_version: char16_array_to_string(&info.sdkVersion),
+                descriptor_api: FactoryDescriptorApi::Factory3,
+            });
+        }
+        factory3_result = Some(result);
+    }
+
+    let mut factory2_result = None;
+    if let Some(factory2) = factory2 {
+        // SAFETY: PClassInfo2 is a C ABI plain-data output struct and is valid when zeroed.
+        let mut info = unsafe { std::mem::zeroed::<PClassInfo2>() };
+        // SAFETY: `info` is writable for the duration of the call and `index < countClasses`.
+        let result = unsafe { factory2.getClassInfo2(index, &mut info) };
+        if is_ok(result) {
+            return Ok(FactoryClassDescriptor {
+                name: char8_array_to_string(&info.name),
+                cid: tuid_to_string(&info.cid),
+                category: char8_array_to_string(&info.category),
+                sub_categories: char8_array_to_string(&info.subCategories),
+                vendor: char8_array_to_string(&info.vendor),
+                version: char8_array_to_string(&info.version),
+                sdk_version: char8_array_to_string(&info.sdkVersion),
+                descriptor_api: FactoryDescriptorApi::Factory2,
+            });
+        }
+        factory2_result = Some(result);
+    }
+
+    // SAFETY: PClassInfo is a C ABI plain-data output struct and is valid when zeroed.
+    let mut info = unsafe { std::mem::zeroed::<PClassInfo>() };
+    // SAFETY: `info` is writable for the duration of the call and `index < countClasses`.
+    let factory1_result = unsafe { factory1.getClassInfo(index, &mut info) };
+    if is_ok(factory1_result) {
+        return Ok(FactoryClassDescriptor {
+            name: char8_array_to_string(&info.name),
+            cid: tuid_to_string(&info.cid),
+            category: char8_array_to_string(&info.category),
+            sub_categories: String::new(),
+            vendor: String::new(),
+            version: String::new(),
+            sdk_version: String::new(),
+            descriptor_api: FactoryDescriptorApi::Factory1,
+        });
+    }
+
+    Err(FactoryProbeError::DescriptorRead {
+        index,
+        factory3_result,
+        factory2_result,
+        factory1_result,
+    })
+}
+
+fn char16_array_to_string(data: &[TChar]) -> String {
+    let nul = data
+        .iter()
+        .position(|value| *value == 0)
+        .unwrap_or(data.len());
+    String::from_utf16_lossy(&data[..nul])
+}
+
+fn tuid_to_string(cid: &TUID) -> String {
+    let mut encoded = String::with_capacity(32);
+    for byte in cid {
+        use std::fmt::Write;
+        write!(encoded, "{byte:02X}").expect("writing to String cannot fail");
+    }
+    encoded
 }
 
 pub fn probe_plugin(path: &Path) -> ProbeResult {

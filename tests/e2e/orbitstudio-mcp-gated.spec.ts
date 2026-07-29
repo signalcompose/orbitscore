@@ -141,6 +141,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   // tracked repo fixture — so the write lands in the temp dir that afterAll
   // already removes, and never dirties a committed file.
   let kickLoopWorkPath: string | undefined
+  let catalogSynthPath: string | undefined
+  let brokenCatalogPath: string | undefined
 
   const waitForEngine = (running: boolean, timeoutMs: number, label: string) =>
     waitUntil(
@@ -228,6 +230,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           encoding: 'utf8',
         })
       }
+      const catalogFixtureDir = path.join(tmpRoot, 'plugin-catalog-fixtures')
+      fs.mkdirSync(catalogFixtureDir, { recursive: true })
+      catalogSynthPath = path.join(catalogFixtureDir, 'CLAPTestSynth.clap')
+      fs.symlinkSync(CLAP_TEST_SYNTH_PATH, catalogSynthPath)
+      brokenCatalogPath = path.join(catalogFixtureDir, 'BrokenCatalogFixture.clap')
+      fs.writeFileSync(brokenCatalogPath, 'not a loadable CLAP bundle')
 
       const fixtureRelDir = path.dirname(path.relative(REPO_ROOT, KICK_LOOP_FIXTURE))
       const workFixtureDir = path.join(tmpRoot, fixtureRelDir)
@@ -259,7 +267,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           tmpRoot,
         ],
         {
-          env: { ...process.env, ORBITSCORE_MCP_PORT: String(port) },
+          env: {
+            ...process.env,
+            ORBITSCORE_MCP_PORT: String(port),
+            ORBIT_PLUGIN_PATH: catalogFixtureDir,
+          },
           stdio: 'ignore',
           detached: false,
         },
@@ -748,6 +760,64 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         gapsAt180bpm.length,
         `expected >=3 gaps in [0.29,0.40]s (180bpm), got onsetGaps: ${JSON.stringify(analysis.onsetGaps)}`,
       ).toBeGreaterThanOrEqual(3)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    'rescans catalog v2 through MCP, reports a broken bundle, and preserves a known CLAP fixture',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(catalogSynthPath, 'main gated phase must create the known CLAP fixture').toBeDefined()
+      expect(
+        brokenCatalogPath,
+        'main gated phase must create the deliberately broken bundle',
+      ).toBeDefined()
+      if (!client || !catalogSynthPath || !brokenCatalogPath) {
+        throw new Error('main gated phase did not initialize catalog fixture state')
+      }
+
+      const beforeCatalogLog = (await client.call('get_log', { lines: 500 })).text
+      const catalogErrorsBefore = (beforeCatalogLog.match(/ERROR:/g) ?? []).length
+      const rescanCatalog = await client.call('rescan_plugins')
+      expect(rescanCatalog.isError, rescanCatalog.text).toBe(false)
+      const rescanResult = JSON.parse(rescanCatalog.text) as {
+        count: number
+        artifactCount: number
+        failures: Array<{ path: string; code: string; message: string }>
+        summary: { success: number; pending: number; failure: number }
+      }
+      expect(
+        rescanResult.summary.success + rescanResult.summary.pending + rescanResult.summary.failure,
+      ).toBe(rescanResult.artifactCount)
+      expect(rescanResult.failures).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: brokenCatalogPath,
+            code: 'bundleLoad',
+          }),
+        ]),
+      )
+
+      const listedCatalog = await client.call('list_plugins')
+      expect(listedCatalog.isError, listedCatalog.text).toBe(false)
+      const listedPlugins = JSON.parse(listedCatalog.text) as Array<{
+        name: string
+        path: string
+      }>
+      expect(listedPlugins).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: 'CLAP Test Synth',
+            path: catalogSynthPath,
+          }),
+        ]),
+      )
+      const afterCatalogLog = (await client.call('get_log', { lines: 500 })).text
+      expect(
+        (afterCatalogLog.match(/ERROR:/g) ?? []).length,
+        `catalog rescan must add no ERROR: lines. Log tail: ${afterCatalogLog.slice(-1200)}`,
+      ).toBe(catalogErrorsBefore)
     },
     TEST_TIMEOUT_MS,
   )

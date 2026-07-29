@@ -17,6 +17,511 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.326 fix(scan): PR #575 review round 2 — fix-scoped hang + test process leak (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ レビュー収束。**実機 E2E も pass**（マージ前ゲート通過）
+
+ラウンド2は **fix-scoped の縮小レビュー**（修正差分のみ・問いは「この修正が導入する新しい
+故障モードは何か」「新コードはどの実行コンテキストで走るか」の2つ）。
+**元差分起因の新規指摘は0**で、リスクは修正自体に移っていた。
+
+#### 直したはずの「無言で固まる」を再導入していた
+
+タイムアウト時の `process.kill(-pid, 'SIGKILL')` が `ESRCH` 以外で throw するか、
+信号は送れたが対象が死なない（D-state。**まさにこの機能が想定しているハング**）場合、
+`finish()` が呼ばれず `close` も発火せず、**Promise が永久に未解決**になっていた。
+
+**Rust 側には既に `PROCESS_KILL_WAIT_TIMEOUT` があるのに Node 側へ移植していなかった**
+という非対称が原因。両側で同じ名前・同じ意味論に揃えた。
+
+レビュアーは机上でなく**実際に再現**している（`process.kill` を負の pid だけ EPERM にして
+`elapsed=4002 settled=false`）。さらに「**新しいテスト自身が手動 kill のフォールバックを
+持っている**ことが、作者が `close` の発火を保証できないと暗に認めた形跡」という
+読み方をしていた。テストの構造から設計の弱さを読む筋の良い指摘。
+
+#### `detached` が広げた孤児化の窓（鏡像欠陥）
+
+**孤児対策の修正が、逆方向の孤児経路を作っていた。** 子を独立プロセスグループにすれば
+孫まで確実に殺せるが、同時に**親のグループへの一括シグナルが子に届かなくなる**。
+どちらの向きにも「殺し損ね」が起きうるので、**両側で塞がないと片方が必ず開く**。
+
+`deactivate()` で正常終了の経路を閉じ、残る窓（拡張ホストが signal で即死）は
+コメントで明示。lock file による自己回収は本 PR には過剰なので実装しない。
+
+#### #576 のテストリーク — 真因を特定して同じ PR で直した
+
+**別 PR にしなかったのは、本 PR 自身の検証がリークで汚れたままになり
+直ったかどうかを確認できないため**（owner 判断）。実際この PR の検証中に3回踏んでいる。
+
+発生源は `tests/vscode-extension/engine-command-awaits.spec.ts`（bisect で確定）。
+**機序**: 本物の `spawn` をラップしてモックしているが、`afterEach` の
+`vi.restoreAllMocks()` が**本物に戻す**。テスト中に投げっぱなしにされた非同期処理が
+**モックが外れた後に着地して本物の `spawn` を呼ぶ**ため、毎回きっちり1本漏れる。
+テストは緑のまま、漏れたプロセスだけが ppid=1 の孤児として残る。
+
+> 「テストが終わった」と「テストが起こした処理が終わった」は別、という
+> [[subagent-completion-notice-is-not-quiescence]] と同じ構造。
+
+修正は2段構え: mock restore 前に drain → `deactivate()` → 再 drain。さらに
+**restore 後に実 spawn が起きたらテストを失敗させる guard** を追加し、
+静かな漏れを**赤いテスト**に変えた。
+
+| | 修正前 | 修正後 |
+|---|---|---|
+| 当該 spec 単独（4回） | 毎回 1本 | **0 / 0 / 0 / 0** |
+| full `npm test` | 1本 | **0本** |
+
+> Codex は sandbox で `pgrep` が使えず「実測として保証できない」と正直に報告してきた。
+> **今回の肝がその数字**なので main が測り直した。
+
+弱いアサーション側（`daemon-client.spec.ts`）も、同ファイルの `badShebangBin` テストが
+既に守っていた規律（reject の経路を文言で固定する）を適用した。
+**負荷の生産者と負荷に弱い検出器の両方**を直さないと再発する。
+
+#### 検証（すべて main が sandbox 外で実行）
+
+- `cargo test --workspace --locked`: **410 passed / 0 failed**
+- outproc-effect 143 / outproc-instrument 118 / both 186（すべて 0 failed）
+- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings`: pass
+- `npm test`: **1806 passed / 31 skipped / 0 failed**
+- **full suite 実行後の残留プロセス: 0**
+
+#### マージ前ゲート: ビルド + 実機 E2E
+
+`npm run build:clean` 後、OrbitStudio を終了してから gated E2E を実行:
+
+```
+✓ rescans catalog v2 through MCP, reports a broken bundle, and preserves a known CLAP fixture
+✓ drives real OrbitStudio end-to-end: diagnostics-on-open, run_selection, live edit, capture verification
+✓ restores an MCP-saved non-default instrument state across an engine restart with the same measured pitch
+Test Files 1 passed / Tests 3 passed
+```
+
+新 E2E は `ok` だけで判断せず、**`get_log` の `ERROR:` 件数を前後比較**し、
+**意図的に壊したバンドルが `failures` に現れること**と
+**CLAP fixture が `list_plugins` に残ること**を検証している。
+ラウンド1で直した「診断が読み出せない」問題が実機の MCP 経路で効いていることの証明。
+
+**E2E 実行後の残留プロセスも 0**（OrbitStudio / repl / daemon）。
+
+---
+
+### 6.325 fix(scan): PR #575 review round 1 — failure recovery and observable diagnostics (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ review round 1 の8ポリシーを横断適用
+
+- negative cache を「検査未完遂」と「artifact 固有の結論」に分け、前者
+  (`timeout` / `killTimeout` / `crash` / `spawnError` / `protocolError`) は
+  明示 rescan で再試行する。分類は `is_inconclusive_failure` だけが所有する
+- Node 親 scanner を process-group leader として起動し、30分 timeout は group 全体へ
+  SIGKILL。Rust child は `killpg` 後の wait に上限を持ち、死なない child を
+  `killTimeout` として記録して次の artifact へ進む
+- cached `unsupportedArch` の即 return を撤回。全 cached failure の architecture を
+  再検証し、根拠が消えた `unsupportedArch` は再probeへ戻す
+- executable の解決経路を fingerprint に追加し、scanner schema version を 2 へ更新。
+  Mach-O header I/O error は stderr 診断へ残す
+- `rescan_plugins` に artifact 総数と `failures` 詳細を追加し、palette log でも
+  bundle 名・code・message を読めるようにした
+- flag なし scan の従来 CLAP descriptor 読取りを復元し、名前解決の案内は
+  `orbit-plugin-scan --probe-artifacts` に統一
+- core spec PC.1/PC.4 を catalog v2・明示probe・cache無効化・failure分類の実装事実へ更新
+- 実 child の crash/protocol、複数 pending worker、catalog read、無人cache復元、
+  MCP gated wiring を追加テストで固定
+
+#### 検証
+
+- `orbit-plugin-scan`: **48 passed / 0 failed / 2 ignored**。新規Rust 7件とNode 1件は
+  production mutation で赤→`/tmp/claude-501/` から復元→`cmp`一致→緑を確認
+- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings` /
+  `npm run build` / `npm run lint`: pass（lint は既存 warning 1件、error 0）
+- sandbox は loopback bind/connect を `EPERM` にするため、workspace/feature Rust test の
+  daemon protocol 各28件、npm のsocket依存4 files、real OrbitStudio gated E2E は環境失敗。
+  変更対象のNode testを含む非socket群は通過
+- HOME cache削除を含む実機2コマンドは実行環境が `rm -f` を拒否したため、
+  artifacts 339 集計と flagなしCLAP 1件の実測は未実施（別経路へは迂回していない）
+
+### 6.324 refactor(scan): `/simplify` cleanup — #549 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Commit**: `c86ef17`
+**Status**: ✅ cleanup（review round 1 前の HEAD）
+
+- TS catalog failure 型を Rust の `hostArch` / `slices` に追従
+- cache hit と probe queue の共通処理を `restore_cached_or_queue_probe` へ抽出
+- factory class の採否を `is_catalog_class` に集約
+- summary の `timeouts` / `crashes` を `failureReasons` から一経路で導出
+- 検証: Rust **403 passed / 0 failed**（不変）、TS **1801 passed / 30 skipped /
+  0 failed**（+1）
+
+### 6.323 feat(scan): classify x86_64-only bundles before spawn — #549 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ **339/339 が説明つきで台帳に載った**（336 usable + 3 explained + **原因不明 0**）
+
+B1 で残った失敗3件を `lipo -archs` で調べたところ、**3/3 が x86_64 のみ**（host は arm64）だった。
+probe の欠陥ではなく、**プロセスのアーキテクチャという構造の壁**。
+
+#### `bundleLoad` → `unsupportedArch`
+
+```json
+{"code": "unsupportedArch",
+ "message": "host architecture arm64 is not present in Mach-O slices [x86_64]",
+ "hostArch": "arm64", "slices": ["x86_64"]}
+```
+
+MODO BASS / Super 8 / Philharmonik 2 の3件。**カタログを見るだけで理由が分かる**形になった。
+従来の `CFBundleLoadExecutable failed` は理由ではあるが不透明で、真の理由を隠していた。
+
+#### 子プロセスを起動する前に判定する
+
+Mach-O のヘッダを先に読むので、**プロセスを1つも作らずに**結論が出る。
+失敗を早く・安く・自己説明的にする3つが同時に取れる位置。
+
+fingerprint ベースのキャッシュと組み合わさるので、**ベンダーが universal 版を出せば
+mtime が変わって自動的に再 probe され成功に転じる** — こちら側のコード変更は不要。
+
+#### スコープ判断（Fable 裁定）
+
+分類を #549 に畳んだのは、**調査正本 `docs/research/PLUGIN_CATALOG_SCANNING.md` に
+`unsupported_arch` と `architecture` が既に仕様化されていた**ため。再設計ではなく未実装項目。
+加えて #549 本文が最初から「不在と故障を区別可能にする」を要求している。
+**Rosetta helper（x86_64 子プロセス）は別 issue** — 3件とも instrument なので
+effect より重い instrument IPC 経路を要する。
+
+> main の当初の根拠2つは不正確だった。「キャッシュが嘘をつく」は誤りで、
+> **機構は正しく動く**（fingerprint 変化で自動再 probe される）。嘘をつくのは
+> ユーザーへの説明のほう。「数行」も過小で、実際は fat header parse + 変異検証で数十行規模。
+
+#### 変異検証（3種・実出力を確認）
+
+```text
+fat Mach-O header endian conversion is required ...   left: None right: Some(["x86_64","arm64"])
+all three x86_64-only artifacts must be classified ... left: 0    right: 3
+thin arm64-only Mach-O must report its slice          left: None right: Some(["arm64"])
+```
+
+universal（Kontakt / Massive）と thin arm64-only（`CLAPTestEffect.clap`）の
+**両方が誤判定されないこと**も実機で確認。各変異とも復元後に緑・`cmp` 一致。
+
+#### 検証（すべて main が sandbox 外で実行）
+
+- `cargo test --workspace --locked`: **403 passed / 0 failed**（B2 の 396 から +7）
+- outproc-effect 143 / outproc-instrument 118 / both 186（すべて 0 failed）
+- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings`: pass
+- `npm test`（単独実行）: **1800 passed / 30 skipped / 0 failed**
+- 実機 rescan: cold 15.1 秒 / **warm 0.080 秒**、失敗3件はすべて `unsupportedArch`、
+  **baseline からの欠落 0件**
+
+#### 副産物: 既存テストの潜在フレークを発見
+
+`npm test` を `cargo test --workspace` と**同時に**走らせたところ、
+`tests/audio/rust-engine/daemon-client.spec.ts` の #484 D1 系2件が ENOENT で落ちた
+（単独実行では 3/3 緑）。原因は**アサーションが弱いこと**:
+
+```ts
+await expect(client.start({ ..., startupTimeoutMs: 500 })).rejects.toThrow()
+const argv = fs.readFileSync(argvFile, 'utf-8')   // 子が書き終えた保証がない
+```
+
+`start()` の reject には「子が `exit 1` で即死」と「500ms タイムアウト」の**2経路**があり、
+`.rejects.toThrow()` は**どちらでも成立する**。負荷が高いと exec が 500ms 以内に始まらず
+タイムアウト側で reject → 子はまだ `argv.txt` を書いていない。
+**「失敗した」ことだけ見て「どう失敗したか」を見ていない**ため経路の取り違えを検出できない。
+別 issue に切り出した（本 PR の変更とは無関係の既存問題）。
+
+---
+
+### 6.322 perf(scan): fingerprint + positive/negative cache — #549 B2 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ B2 完了。**warm rescan が約 165 倍速く**なり、#549 のクローズ条件（B1 + B2）が揃った
+
+B1 で 339 件すべてを probe できるようになったが、**rescan のたびに全件を probe し直していた**。
+ダイアログを出すプラグイン（#463 の FIN-BOOST 等）が毎回騒ぐため、ユーザーが rescan を
+避けるようになり、カタログが古いまま放置される。**そこを埋めたのが B2。**
+
+#### 実測（main が sandbox 外で自ら計測）
+
+| | 時間 | probe |
+|---|---|---|
+| cold rescan（キャッシュ削除後） | **12.4 秒** | 260 |
+| warm rescan（2回目） | **0.075 秒** | **0**（cacheHits 260） |
+| 3回目 | 0.063 秒 | 0 |
+
+**約 165 倍。** 失敗3件（MODO BASS / Super 8 / Philharmonik 2）も warm では再 probe されない。
+
+非退行も自分で確認: artifacts 339 / instrument 72 / effect 272 / staticSuccess 79 /
+**baseline からの欠落 0件** / Kontakt は `roles=['instrument']` のまま。
+
+> Codex は sandbox 内の隔離実測で `plugins 337 / effect 270` を観測して報告していたが、
+> これは `/bin/ps` が拒否されたことによる**環境要因**だった。sandbox 外では 339 / 272 が出る。
+> **委譲先の実測値もサンドボックス条件を確認してから採用する。**
+
+#### fingerprint に content hash を使わない
+
+独立第二意見の指摘で確定した設計。VST3 実行ファイルの総量は
+**335 bundles / 約 16.5 GiB** あり、content hash を鮮度キーにすると
+**rescan のたびに 16.5 GiB を全読み**することになる — cache の意義を自ら削る。
+
+採用したキー: `format + canonical bundle path + executable 相対パス
++ executable の size/mtime(ns) + Info.plist の size/mtime + scanner schema version`。
+
+**bundle directory の mtime は鮮度キーにしない**（macOS では内部 binary を置換しても
+directory mtime が期待どおり変わらない場合がある）。これは
+`fingerprint_uses_executable_and_info_plist_metadata_not_contents` で
+**テストとして固定した**（`"bundle directory mtime must not be a freshness key"`）。
+
+#### executable の解決に CoreFoundation を使う
+
+`CFBundleCopyExecutableURL` で実体を解決する（テキスト plist は fallback）。
+VST3 バンドルの実行ファイル名は `Info.plist` の `CFBundleExecutable` で決まり、
+**バンドル名と一致するとは限らない**。しかも `Info.plist` は**バイナリ plist** のことがある。
+パス規約を決め打ちすると一部プラグインだけ fingerprint が空振りし、
+**エラーを出さずにキャッシュが永久にミスし続ける**静かな故障になる。
+
+#### 後方互換
+
+`b1_catalog_without_fingerprints_deserializes_as_cold_cache` —
+B1 が生成した既存カタログは fingerprint を持たないので、**cold cache として素通り**する。
+移行処理は不要。
+
+#### 変異検証（3種・実出力を確認）
+
+```text
+positive cache ignored: matching fingerprint was probed again     left: 2  right: 1
+negative cache removed: quarantined fingerprint was probed again  left: 2  right: 1
+fingerprint mtime missing: updated executable was not re-probed   left: 1  right: 2
+```
+
+**壊れる方向が両向きなのが要点。** 1・2 は「1回であるべきが2回」（キャッシュが効いていない）、
+3 は「2回であるべきが1回」（更新を検出できていない）。同じ種類のアサーションで
+**効かせすぎと効かせなさすぎの両方**を捕まえている。`toHaveBeenCalled()` 的な
+「呼ばれたか」ではなく**回数**を見ているから成立する。
+
+各変異とも復元後に緑・`cmp` 一致を確認済み。
+
+#### 検証（すべて main が sandbox 外で実行）
+
+- `cargo test --workspace --locked`: **396 passed / 0 failed**（B1 の 391 から +5）
+- outproc-effect 143 / outproc-instrument 118 / both 186（すべて 0 failed）
+- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings`: pass
+- `npm run build` / `npm test`: **1800 passed / 30 skipped / 0 failed**
+- `npm run lint`: 0 errors / warning 1件（`tests/audio/audio-slicer.spec.ts`・**main にも存在する既存**）
+
+#### 残り
+
+残る失敗3件は **3/3 が arch mismatch**（`lipo -archs` で x86_64 のみ・host は arm64）と判明。
+分類（`unsupportedArch`）は #549 に畳み、Rosetta helper は別 issue に切り出す
+（Fable 裁定・#549 にコメント済み）。
+
+---
+
+### 6.321 feat(scan): catalog v2 + explicit rescan での child probe — #549 B1 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ B1 完了。**カバレッジ 23% → 99.1%**（#549 は B2 が入るまで close しない）
+
+PR A で用意した `probe-artifact` を親 scanner から呼ぶ段階。**ここで数字が動いた。**
+
+### 実測（実機・explicit rescan）
+
+| 項目 | before | after |
+|---|---|---|
+| total | 80 | **339** |
+| **instrument** | **9** | **72**（8倍） |
+| effect | 72 | **272** |
+| CLAP | 1 | **1**（非退行） |
+| カバレッジ | 23% | **99.1%**（339/342） |
+
+```
+success 336 / pending 0 / failure 3
+failureReasons: {bundleLoad: 3}
+durationMs: {p50: 42, p95: 976, max: 2048}
+timeouts: 0  crashes: 0
+factoryVersions: {factory2: 1, factory3: 258}
+```
+
+**所要 12 秒。** 計画の最悪値見積もり（261件が全て timeout で約22分）に対し、
+「実際は factory 取得の大半が秒未満のはず」という予測が当たった。
+**timeout 0・crash 0・ダイアログなし。**
+
+### 🔴 Epic #546 が名指しする Kontakt が入った
+
+```
+Battery 4   roles=['instrument']    Kontakt     roles=['instrument']
+Kontakt 7   roles=['instrument']    Kontakt 8   roles=['instrument']
+Maschine 2  roles=['instrument']    Massive     roles=['instrument']
+Massive X   roles=['instrument']    Reaktor 6   roles=['instrument']
+```
+
+**Native Instruments が丸ごと戻った。** しかも `roles` が **`['instrument']` のみ**に正しく解決されている。
+
+計画が「Kontakt が Factory2/3 を公開するか不明。v1 のみなら安全側 fallback で
+roles が effect+instrument になるため instrument-only と断定できない」と留保していた点は、
+**実測で解消**した:
+
+```json
+{"name":"Kontakt 8","subCategories":"Instrument","version":"8.7.2",
+ "sdkVersion":"VST 3.7.12","descriptorApi":"factory3"}
+```
+
+**Kontakt は Factory3 を公開している。** 受け入れ基準は `roles ⊇ {instrument}` で書いてあるので
+どちらでも通るが、実際には instrument-only で解決できた。
+
+### 三段階モデルが実データで成立している
+
+```
+status:  staticSuccess 79   probeSucceeded 257   probeFailed 3
+source:  moduleinfo 79      factory 256          clapDescriptor 1
+failure: {"code":"bundleLoad", ...} が 3件のみ（型で区別）
+```
+
+**`staticSuccess` の 79件が従来のカタログと完全一致** — 静的経路を壊していないことがデータで確認できた。
+**旧 79件が新カタログの部分集合であることも検証（欠落 0件）。**
+
+`moduleinfo なし` を「失敗」ではなく「**まだ probe していない**」と表現する設計は、
+`scan_vst3_bundle` の doc コメントにも反映した（「skip する」→「pending にする」）。
+
+### PR A の CI 赤（Linux dead code）が B1 で構造的に解消された
+
+PR A は CI で落ちていた:
+
+```
+error: struct `ArtifactProbeSuccess` is never constructed
+error: variants `InvalidBundle`, `BundleLoad`, ... are never constructed
+= note: `-D dead-code` implied by `-D warnings`
+```
+
+**Linux では factory probe が `cfg(target_os)` で除外され、型が dead code になる。**
+macOS では使われるので**ローカルの `clippy -D warnings` では検出できなかった**。
+
+B1 で型が `lib.rs` へ移り、非 macOS 側にも実装が置かれたので解消:
+
+```rust
+#[cfg(not(target_os = "macos"))]
+fn probe_vst3_artifact(_path: &Path) -> Result<Vec<ArtifactClass>, ArtifactProbeError> {
+    Err(ArtifactProbeError::UnsupportedPlatform)
+}
+```
+
+**「Linux では probe できない」が型で表現される**ようになった。
+
+🔴 **ローカルで Linux 側を検証する手段が無い**: `x86_64-unknown-linux-gnu` を追加して
+クロスコンパイルを試みたが、ALSA の sysroot が無く
+`pkg-config has not been configured to support cross-compilation` で失敗する。
+**この検証は CI に委ねるしかない。**
+
+**教訓**: #529 で「ローカル macOS の緑は Linux 固有問題の証明にならない」と学んだが、
+今回は**その裏返し**（macOS で通るものが Linux で落ちる）を見落とした。
+**`cfg` 分岐があるコードでは常に両方向を疑う。**
+
+### 検証
+
+- `cargo test --workspace --locked` ✅ **391 passed / 0 failed**（386 + 新規5）
+- `--features outproc-effect` ✅ 143 / `outproc-instrument` ✅ 118 / 両方 ✅ 186
+- `cargo fmt --check` ✅ / `cargo clippy --workspace --all-targets -- -D warnings` ✅
+- `npm run build` ✅ / `npm test` ✅ **1800 passed / 30 skipped / 0 failed**（1798 + 新規2）
+
+### 残り（#549 のクローズ条件）
+
+- **B2**: fingerprint + positive/negative cache。**これが無いとダイアログを出すプラグインが
+  rescan のたびに騒ぎ、ユーザーが rescan を避けてカタログが古いままになる**
+- **残る失敗 3件**（MODO BASS / Super 8 / Philharmonik 2・全て `bundleLoad`）は
+  B2 の後に個別に潰す
+
+### 6.320 feat(scan): factory descriptor primitive — #549 PR A (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ PR A 完了（**既存 79件も通常動作も完全に不変**。カバレッジは B1 から動く）
+
+#549 の第一段。**カタログのカバレッジはまだ変わらない**。1 artifact を
+**component 初期化に到達しない深さ**で列挙する primitive を用意する段階。
+
+### 背景: 論点は「probe するか」ではなく「probe の深さ」だった
+
+インストール済み VST3 **340** のうちカタログは **79（23%）**。欠落 **261 は全て**
+`Contents/Resources/moduleinfo.json` 無し（他の失敗経路は 0件・実測）。
+役割別では **instrument がわずか 9件**（うち6件が IK Multimedia）で、
+**Native Instruments が丸ごと欠落**（Kontakt 7/8・Massive X・Battery 4・Reaktor 6・Maschine 2）。
+**Epic #546 の受け入れ基準は Kontakt を名指ししている**のに補完に出ない。
+
+owner の「プラグインのカタログの仕方はベストプラクティスがあるでしょこれ」を受けて調査した結果、
+**main が自前で立てた A / B の二択自体が誤った枠**だったと判明した。
+
+| 深さ | 得られるもの | ダイアログのリスク |
+|---|---|---|
+| 静的（`moduleinfo.json`） | class 一覧・CID | なし |
+| **factory probe（採用）** | class 一覧・CID・名前・カテゴリ | 低い |
+| component 初期化（不採用） | channel 数・bus・MIDI I/O | 高い |
+
+**#463 で実害が出た FIN-BOOST のダイアログは component 初期化の層**で起きるもので、
+factory descriptor 取得はそこまで到達しない。**「安全のために全部切る」は切りすぎだった。**
+
+調査記録: `docs/research/PLUGIN_CATALOG_SCANNING.md`（一次情報・確信度つき）
+
+### PR A の内容
+
+- `orbit-vst3-host` に **factory-only API**。`FactoryDescriptorApi` が
+  **Factory3 / Factory2 / Factory1 を型で区別**（受け入れ基準の「factory version の分布記録」に直結）。
+  失敗も `FactoryProbeError` として**型で区別**する
+- `orbit-plugin-scan` に **`probe-artifact` サブコマンド**（1 artifact を probe して stdout に JSON）
+- VST3 gain oracle に **Factory2/3 descriptor**
+- **`createInstance` 非到達テスト**
+
+既存の `probe_plugin`（`orbit-vst3-host/src/lib.rs:2257`）は実際に `load` → bus → `process_stereo` まで
+進む**深い** probe なので流用せず、別物として共存させた（独立検証で確認済み）。
+
+### 🔴 非到達テストは4条件すべてが必須 — 変異検証で実証した
+
+独立第二意見が「1つでも欠けると空洞」と指摘した4条件:
+
+1. abort は **oracle 側の `createInstance` 実装内**でプロセス即死
+2. **実際の `probe-artifact` 子バイナリ経由**（`CARGO_BIN_EXE_` の integration test）
+3. **Factory3 / Factory2-only / v1-only の3系すべて**
+4. **tripwire の生存確認（positive control）**
+
+入ったテスト:
+
+```
+create_instance_tripwire_child ... ok
+probe_artifact_never_reaches_create_instance_for_factory3_factory2_and_v1 ... ok
+create_instance_tripwire_positive_control_dies_by_sigabrt ... ok
+real_vst3_factory_probe_gated ... ignored（ORBIT_REAL_VST3 が要る）
+```
+
+**(4) の実装が要点**: abort はプロセスを即死させるのでテスト内で直接呼ぶとハーネスごと死ぬ。
+**同じ integration-test 実行ファイルを新プロセスで起動**することで、
+`abort()` が本当に効いていることを安全に確認している。
+
+**変異検証が「4条件が必須」を実証した**:
+
+| 変異 | 結果 |
+|---|---|
+| abort を**フラグ記録 + 後読み**に置換 | `disconnected tripwire child + post-read: GREEN (vacuous pass reproduced)` — **配線を切っても通ってしまう**ことを再現 |
+| **positive control を除去** | `MUTATION SURVIVED: removing the positive control let a disconnected createInstance abort tripwire pass all non-reachability tests` |
+
+後者は、**positive control が無いと abort 配線が切れていても全ての非到達テストが通る**ことの実証。
+条件(4)は「あった方が良い」ではなく**必須**だと分かる。
+
+### 検証
+
+- `cargo test --workspace --locked` ✅ **386 passed / 0 failed**（382 + 新規4）
+- `--features outproc-effect` ✅ 143 / `outproc-instrument` ✅ 118 / 両方 ✅ 186（すべて 0 failed）
+- `cargo fmt --check` ✅ / `cargo clippy --workspace --all-targets -- -D warnings` ✅
+- 実プラグインを要するテストは `#[ignore]`（通常の `cargo test` では skip）
+
+### 次段階（#549 は B1 + B2 の両方が入るまで close しない）
+
+- **B1**: catalog v2 + pending 状態 + explicit rescan での child probe + per-artifact 20s +
+  MCP/UI + Kontakt gated。**ここで instrument 9 → NI 5製品を含む増加が出る**
+- **B2**: fingerprint + positive/negative cache。**これが無いとダイアログを出すプラグインが
+  rescan のたびに騒ぎ、ユーザーが rescan を避けてカタログが古いままになる**
+
+**最終ゴールは 100% カタログ**。probe 後も「probe 失敗 / timeout / クラッシュ」が理由つきで残るので、
+その分布を実測してから個別に潰す。
+
 ### 6.319 fix(daemon): 即死する child を tight loop で respawn し続ける穴を塞ぐ #573 (Jul 29, 2026)
 
 **Date**: 2026-07-29

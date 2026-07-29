@@ -1048,7 +1048,11 @@ dependencies = [
 name = "orbit-plugin-scan"
 version = "0.0.1"
 dependencies = [
+ "core-foundation-sys",
+ "libc",
  "orbit-clap-host",
+ "orbit-vst3-gain-oracle",
+ "orbit-vst3-host",
  "serde",
  "serde_json",
  "tempfile",

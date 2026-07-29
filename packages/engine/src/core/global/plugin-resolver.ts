@@ -96,7 +96,8 @@ function acceptedFormatsForRole(): readonly string[] {
   return ['clap', 'vst3']
 }
 
-const RESCAN_HINT = 'Run `orbit-plugin-scan` to (re)generate the plugin catalog, then retry.'
+const RESCAN_HINT =
+  'Run `orbit-plugin-scan --probe-artifacts` to (re)generate the plugin catalog, then retry.'
 
 export interface ResolvedCatalogPlugin {
   readonly path: string
