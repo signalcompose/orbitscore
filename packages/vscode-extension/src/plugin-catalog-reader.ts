@@ -54,6 +54,8 @@ export interface PluginCatalogArtifact {
   readonly failure?: {
     readonly code: string
     readonly message: string
+    readonly hostArch?: string
+    readonly slices?: readonly string[]
     readonly exitCode?: number
     readonly signal?: number
   }

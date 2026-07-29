@@ -92,6 +92,33 @@ describe('loadPluginCatalog', () => {
     expect(loaded?.artifacts?.[0].failure).toBeUndefined()
   })
 
+  it('preserves architecture details from a catalog v2 probe failure', () => {
+    const catalog = {
+      version: 2,
+      scannedAt: '2026-07-29T00:00:00Z',
+      plugins: [],
+      artifacts: [
+        {
+          format: 'vst3',
+          path: '/vst3/Legacy.vst3',
+          status: 'probeFailed',
+          durationMs: 0,
+          failure: {
+            code: 'unsupportedArch',
+            message: 'host architecture arm64 is not present in Mach-O slices [x86_64]',
+            hostArch: 'arm64',
+            slices: ['x86_64'],
+          },
+        },
+      ],
+    }
+    fs.writeFileSync(catalogPath, JSON.stringify(catalog))
+
+    const failure = loadPluginCatalog(catalogPath)?.artifacts?.[0].failure
+    expect(failure?.hostArch).toBe('arm64')
+    expect(failure?.slices).toEqual(['x86_64'])
+  })
+
   it('re-reads after the file mtime changes (rescan invalidation)', async () => {
     fs.writeFileSync(catalogPath, JSON.stringify({ version: 1, scannedAt: 't1', plugins: [] }))
     const first = loadPluginCatalog(catalogPath)

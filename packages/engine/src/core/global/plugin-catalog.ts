@@ -29,23 +29,6 @@ export interface PluginCatalogFile {
   readonly version: number
   readonly scannedAt: string
   readonly plugins: readonly PluginCatalogEntry[]
-  /** catalog v2 diagnostics; ignored by resolution and optional for v1 compatibility. */
-  readonly artifacts?: readonly PluginCatalogArtifact[]
-}
-
-export interface PluginCatalogArtifact {
-  readonly format: string
-  readonly path: string
-  readonly status: 'staticSuccess' | 'probePending' | 'probeSucceeded' | 'probeFailed'
-  readonly reason?: string
-  readonly durationMs?: number
-  readonly failure?: {
-    readonly code: string
-    readonly message: string
-    readonly exitCode?: number
-    readonly signal?: number
-  }
-  readonly plugins?: readonly PluginCatalogEntry[]
 }
 
 function defaultCatalogPath(): string {

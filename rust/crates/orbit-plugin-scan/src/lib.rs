@@ -672,6 +672,8 @@ pub fn probe_artifact(path: &Path) -> Result<Vec<ArtifactClass>, ArtifactProbeEr
         .and_then(|value| value.to_str())
         .unwrap_or_default()
         .to_ascii_lowercase();
+    // `run_child_probe` preflights before spawning, but keep this child-side check because the
+    // `probe-artifact` CLI can also be invoked directly.
     match extension.as_str() {
         "clap" => {
             preflight_artifact_architecture(path)?;
@@ -991,11 +993,6 @@ pub struct ScanOutcome {
     pub summary: ScanSummary,
 }
 
-/// 通常起動用。filesystem inventory と moduleinfo だけを読み、native code はロードしない。
-pub fn scan_all(dirs: &[PathBuf]) -> ScanOutcome {
-    scan_all_with_cache(dirs, None)
-}
-
 /// 通常起動用。fingerprint が一致する native probe の成功・失敗は既存 catalog から復元する。
 pub fn scan_all_with_cache(dirs: &[PathBuf], previous: Option<&Catalog>) -> ScanOutcome {
     scan_candidates(
@@ -1027,8 +1024,15 @@ pub fn scan_all_with_probes_and_cache(
 }
 
 fn refresh_cached_arch_failure(path: &Path, state: ArtifactState) -> ArtifactState {
-    if !matches!(state, ArtifactState::ProbeFailed { .. }) {
-        return state;
+    match &state {
+        ArtifactState::ProbeFailed { failure, .. } if failure.code == "unsupportedArch" => {
+            // A matching fingerprint already fixes the executable path, size, and mtime, so this
+            // result cannot change. Re-run preflight only once to migrate legacy `bundleLoad`
+            // failures into the architecture-specific classification.
+            return state;
+        }
+        ArtifactState::ProbeFailed { .. } => {}
+        _ => return state,
     }
     match preflight_artifact_architecture(path) {
         Err(error) => ArtifactState::ProbeFailed {
@@ -1036,6 +1040,48 @@ fn refresh_cached_arch_failure(path: &Path, state: ArtifactState) -> ArtifactSta
             failure: error.into_probe_failure(None, None),
         },
         Ok(()) => state,
+    }
+}
+
+struct ScanCandidateAccumulation {
+    entries: Vec<CatalogEntry>,
+    artifacts: Vec<CatalogArtifact>,
+    pending: Vec<(usize, PathBuf, Format)>,
+    cache_hits: usize,
+}
+
+fn restore_cached_or_queue_probe(
+    path: PathBuf,
+    format: Format,
+    fingerprint: ArtifactFingerprint,
+    pending_reason: String,
+    cached_by_fingerprint: &HashMap<ArtifactFingerprint, ArtifactState>,
+    accumulation: &mut ScanCandidateAccumulation,
+) {
+    let index = accumulation.artifacts.len();
+    let path_string = path.to_string_lossy().into_owned();
+    if let Some(state) = cached_by_fingerprint.get(&fingerprint).cloned() {
+        let state = refresh_cached_arch_failure(&path, state);
+        if let ArtifactState::ProbeSucceeded { plugins, .. } = &state {
+            accumulation.entries.extend(plugins.iter().cloned());
+        }
+        accumulation.cache_hits += 1;
+        accumulation.artifacts.push(CatalogArtifact {
+            format,
+            path: path_string,
+            fingerprint: Some(fingerprint),
+            state,
+        });
+    } else {
+        accumulation.artifacts.push(CatalogArtifact {
+            format,
+            path: path_string,
+            fingerprint: Some(fingerprint),
+            state: ArtifactState::ProbePending {
+                reason: pending_reason,
+            },
+        });
+        accumulation.pending.push((index, path, format));
     }
 }
 
@@ -1048,9 +1094,12 @@ fn scan_candidates<F>(
 where
     F: Fn(&Path, Format) -> ProbeExecution + Sync,
 {
-    let mut entries = Vec::new();
-    let mut artifacts = Vec::new();
-    let mut pending = Vec::new();
+    let mut accumulation = ScanCandidateAccumulation {
+        entries: Vec::new(),
+        artifacts: Vec::new(),
+        pending: Vec::new(),
+        cache_hits: 0,
+    };
     let cached_by_fingerprint = previous
         .into_iter()
         .flat_map(|catalog| &catalog.artifacts)
@@ -1064,44 +1113,26 @@ where
             }
         })
         .collect::<HashMap<_, _>>();
-    let mut cache_hits = 0;
 
     for (path, format) in candidates {
-        let path_string = path.to_string_lossy().into_owned();
         let fingerprint = artifact_fingerprint(&path, format);
         match format {
             Format::Clap => {
-                let index = artifacts.len();
-                if let Some(state) = cached_by_fingerprint.get(&fingerprint).cloned() {
-                    let state = refresh_cached_arch_failure(&path, state);
-                    if let ArtifactState::ProbeSucceeded { plugins, .. } = &state {
-                        entries.extend(plugins.iter().cloned());
-                    }
-                    cache_hits += 1;
-                    artifacts.push(CatalogArtifact {
-                        format,
-                        path: path_string,
-                        fingerprint: Some(fingerprint),
-                        state,
-                    });
-                } else {
-                    artifacts.push(CatalogArtifact {
-                        format,
-                        path: path_string,
-                        fingerprint: Some(fingerprint),
-                        state: ArtifactState::ProbePending {
-                            reason: "nativeDescriptorNotProbed".to_owned(),
-                        },
-                    });
-                    pending.push((index, path, format));
-                }
+                restore_cached_or_queue_probe(
+                    path,
+                    format,
+                    fingerprint,
+                    "nativeDescriptorNotProbed".to_owned(),
+                    &cached_by_fingerprint,
+                    &mut accumulation,
+                );
             }
             Format::Vst3 => match scan_vst3_bundle(&path) {
                 VstScanResult::StaticSuccess(found) => {
-                    entries.extend(found.iter().cloned());
-                    artifacts.push(CatalogArtifact {
+                    accumulation.entries.extend(found.iter().cloned());
+                    accumulation.artifacts.push(CatalogArtifact {
                         format,
-                        path: path_string,
+                        path: path.to_string_lossy().into_owned(),
                         fingerprint: Some(fingerprint),
                         state: ArtifactState::StaticSuccess {
                             source: "moduleinfo".to_owned(),
@@ -1110,33 +1141,25 @@ where
                     });
                 }
                 VstScanResult::ProbePending { reason } => {
-                    let index = artifacts.len();
-                    if let Some(state) = cached_by_fingerprint.get(&fingerprint).cloned() {
-                        let state = refresh_cached_arch_failure(&path, state);
-                        if let ArtifactState::ProbeSucceeded { plugins, .. } = &state {
-                            entries.extend(plugins.iter().cloned());
-                        }
-                        cache_hits += 1;
-                        artifacts.push(CatalogArtifact {
-                            format,
-                            path: path_string,
-                            fingerprint: Some(fingerprint),
-                            state,
-                        });
-                    } else {
-                        artifacts.push(CatalogArtifact {
-                            format,
-                            path: path_string,
-                            fingerprint: Some(fingerprint),
-                            state: ArtifactState::ProbePending { reason },
-                        });
-                        pending.push((index, path, format));
-                    }
+                    restore_cached_or_queue_probe(
+                        path,
+                        format,
+                        fingerprint,
+                        reason,
+                        &cached_by_fingerprint,
+                        &mut accumulation,
+                    );
                 }
             },
         }
     }
 
+    let ScanCandidateAccumulation {
+        mut entries,
+        mut artifacts,
+        pending,
+        cache_hits,
+    } = accumulation;
     let mut probe_attempts = 0;
     if explicit_probe {
         // Four workers implement the agreed temporary policy. Keeping each artifact in its own
@@ -1228,6 +1251,8 @@ struct ChildProbeOutput {
 
 fn run_child_probe(scanner_executable: &Path, path: &Path, format: Format) -> ProbeExecution {
     let started = Instant::now();
+    // Reject unsupported binaries without spawning; `probe_artifact` repeats this check as a
+    // safety net for direct `probe-artifact` CLI invocations.
     if let Err(error) = preflight_artifact_architecture(path) {
         return ProbeExecution {
             duration_ms: elapsed_millis(started),
@@ -1278,7 +1303,7 @@ fn run_child_probe(scanner_executable: &Path, path: &Path, format: Format) -> Pr
             let descriptor_apis = output
                 .classes
                 .iter()
-                .filter(|class| format == Format::Clap || class.category == "Audio Module Class")
+                .filter(|class| is_catalog_class(format, class))
                 .map(|class| class.descriptor_api.clone())
                 .collect();
             let plugins = classes_to_catalog_entries(path, format, output.classes);
@@ -1376,6 +1401,10 @@ fn diagnostic_tail(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[start..]).trim().to_owned()
 }
 
+fn is_catalog_class(format: Format, class: &ArtifactClass) -> bool {
+    format == Format::Clap || class.category == "Audio Module Class"
+}
+
 fn classes_to_catalog_entries(
     path: &Path,
     format: Format,
@@ -1383,7 +1412,7 @@ fn classes_to_catalog_entries(
 ) -> Vec<CatalogEntry> {
     classes
         .into_iter()
-        .filter(|class| format == Format::Clap || class.category == "Audio Module Class")
+        .filter(|class| is_catalog_class(format, class))
         .map(|class| {
             let categories = class
                 .sub_categories
@@ -1586,15 +1615,19 @@ fn summarize_artifacts(
                     .failure_reasons
                     .entry(failure.code.clone())
                     .or_default() += 1;
-                if failure.code == "timeout" {
-                    summary.timeouts += 1;
-                }
-                if failure.code == "crash" {
-                    summary.crashes += 1;
-                }
             }
         }
     }
+    summary.timeouts = summary
+        .failure_reasons
+        .get("timeout")
+        .copied()
+        .unwrap_or_default();
+    summary.crashes = summary
+        .failure_reasons
+        .get("crash")
+        .copied()
+        .unwrap_or_default();
     durations.sort_unstable();
     summary.duration_ms = DurationSummary {
         p50: percentile(&durations, 50),
