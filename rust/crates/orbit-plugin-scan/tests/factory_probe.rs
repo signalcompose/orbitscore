@@ -147,3 +147,35 @@ fn real_vst3_factory_probe_gated() {
     );
     assert_eq!(parse_single_json_line(&output)["ok"], true);
 }
+
+/// B1 acceptance gate: run Kontakt through the parent scanner (not just the primitive child) and
+/// prove the v2 compatibility projection exposes it to instrument completion. Factory-v1
+/// fallback is deliberately allowed to produce both roles.
+#[test]
+#[ignore = "needs ORBIT_KONTAKT_VST3 pointing to an installed Kontakt VST3 bundle (local only)"]
+fn kontakt_parent_rescan_catalogs_an_instrument_role() {
+    use std::os::unix::fs::symlink;
+
+    let kontakt = PathBuf::from(env::var_os("ORBIT_KONTAKT_VST3").expect("set ORBIT_KONTAKT_VST3"));
+    let temp = tempfile::tempdir().expect("temporary isolated scan root");
+    let link = temp.path().join("Kontakt.vst3");
+    symlink(&kontakt, &link).expect("symlink Kontakt into isolated scan root");
+
+    let outcome = orbit_plugin_scan::scan_all_with_probes(&[temp.path().to_path_buf()], scanner());
+    let kontakt_entries = outcome
+        .entries
+        .iter()
+        .filter(|entry| entry.path == link.to_string_lossy())
+        .collect::<Vec<_>>();
+    assert!(
+        !kontakt_entries.is_empty(),
+        "explicit parent rescan must project Kontakt into catalog.plugins; summary={:?}",
+        outcome.summary
+    );
+    assert!(
+        kontakt_entries
+            .iter()
+            .any(|entry| entry.roles.iter().any(|role| role == "instrument")),
+        "Kontakt roles must contain instrument (instrument-only is not required): {kontakt_entries:?}"
+    );
+}

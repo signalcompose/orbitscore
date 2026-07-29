@@ -15,12 +15,17 @@
  */
 
 import * as child_process from 'child_process'
-
-/** スキャナ実行の上限（実測は数秒・moduleinfo 読取のみでも余裕を見て 2 分）。 */
-const SCAN_TIMEOUT_MS = 120_000
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
+
+/**
+ * 親 scanner 全体の固定上限。per-artifact 20s × 261件 / 同時4件 ≒ 22分の人工的な
+ * worst case を覆う30分にする。完全撤去すると network volume の stat や supervisor /
+ * catalog write 自体のハングで palette/MCP が永久に固まるため、過去レビュー Important
+ * の防護は残す。進捗 protocol を増やす inactivity timeout より B1 の表面を狭く保てる。
+ */
+const SCAN_TIMEOUT_MS = 30 * 60_000
 
 export interface PluginCatalogEntry {
   readonly name: string
@@ -36,6 +41,23 @@ export interface PluginCatalogFile {
   readonly version: number
   readonly scannedAt: string
   readonly plugins: readonly PluginCatalogEntry[]
+  /** catalog v2 diagnostics; optional so v1 files remain readable during upgrades. */
+  readonly artifacts?: readonly PluginCatalogArtifact[]
+}
+
+export interface PluginCatalogArtifact {
+  readonly format: string
+  readonly path: string
+  readonly status: 'staticSuccess' | 'probePending' | 'probeSucceeded' | 'probeFailed'
+  readonly reason?: string
+  readonly durationMs?: number
+  readonly failure?: {
+    readonly code: string
+    readonly message: string
+    readonly exitCode?: number
+    readonly signal?: number
+  }
+  readonly plugins?: readonly PluginCatalogEntry[]
 }
 
 function defaultCatalogPath(): string {
@@ -135,6 +157,22 @@ export interface PluginScanOutcome {
   readonly count: number
   readonly cachePath: string
   readonly skipped: readonly string[]
+  readonly summary: PluginScanSummary
+}
+
+export interface PluginScanSummary {
+  readonly success: number
+  readonly pending: number
+  readonly failure: number
+  readonly failureReasons: Readonly<Record<string, number>>
+  readonly durationMs: {
+    readonly p50: number | null
+    readonly p95: number | null
+    readonly max: number | null
+  }
+  readonly timeouts: number
+  readonly crashes: number
+  readonly factoryVersions: Readonly<Record<string, number>>
 }
 
 export type RunPluginScanResult = ({ ok: true } & PluginScanOutcome) | { ok: false; error: string }
@@ -159,7 +197,7 @@ export function runPluginScan(explicitBinaryPath?: string): Promise<RunPluginSca
     // 呼び出しが無言で固まる。timeout 超過は SIGKILL + 明示エラーで返す。
     child_process.execFile(
       binaryPath,
-      [],
+      ['--probe-artifacts'],
       { timeout: SCAN_TIMEOUT_MS, killSignal: 'SIGKILL' },
       (error, stdout, stderr) => {
         if (error) {
@@ -180,6 +218,7 @@ export function runPluginScan(explicitBinaryPath?: string): Promise<RunPluginSca
             count: parsed.count,
             cachePath: parsed.cachePath,
             skipped: parsed.skipped,
+            summary: parsed.summary,
           })
         } catch (parseError) {
           const reason = parseError instanceof Error ? parseError.message : String(parseError)

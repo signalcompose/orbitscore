@@ -157,7 +157,21 @@ function createStubHandlers(overrides: Partial<OrbitScoreToolHandlers> = {}): {
     },
     rescanPlugins: () => {
       record('rescanPlugins', [])
-      const result: RescanPluginsResult = { ok: true, count: 0, skipped: [] }
+      const result: RescanPluginsResult = {
+        ok: true,
+        count: 0,
+        skipped: [],
+        summary: {
+          success: 0,
+          pending: 0,
+          failure: 0,
+          failureReasons: {},
+          durationMs: { p50: null, p95: null, max: null },
+          timeouts: 0,
+          crashes: 0,
+          factoryVersions: {},
+        },
+      }
       return result
     },
   }
@@ -534,7 +548,21 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     const { handlers } = createStubHandlers({
       rescanPlugins: () => {
         rescanPluginsCalled = true
-        return { ok: true, count: 12, skipped: ['/vst3/NoMetadata.vst3'] }
+        return {
+          ok: true,
+          count: 12,
+          skipped: ['/vst3/Broken.vst3'],
+          summary: {
+            success: 11,
+            pending: 0,
+            failure: 1,
+            failureReasons: { timeout: 1 },
+            durationMs: { p50: 8, p95: 20_000, max: 20_000 },
+            timeouts: 1,
+            crashes: 0,
+            factoryVersions: { factory3: 7, factory1: 4 },
+          },
+        }
       },
     })
     handle = await startTestServer(handlers)
@@ -548,7 +576,17 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect(body.result.isError).toBeFalsy()
     expect(JSON.parse(body.result.content[0]!.text)).toEqual({
       count: 12,
-      skipped: ['/vst3/NoMetadata.vst3'],
+      skipped: ['/vst3/Broken.vst3'],
+      summary: {
+        success: 11,
+        pending: 0,
+        failure: 1,
+        failureReasons: { timeout: 1 },
+        durationMs: { p50: 8, p95: 20_000, max: 20_000 },
+        timeouts: 1,
+        crashes: 0,
+        factoryVersions: { factory3: 7, factory1: 4 },
+      },
     })
     expect(rescanPluginsCalled).toBe(true)
   })

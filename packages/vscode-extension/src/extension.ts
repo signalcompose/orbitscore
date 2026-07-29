@@ -2209,11 +2209,16 @@ async function rescanPlugins(): Promise<void> {
   const result = await runPluginScan()
   if (result.ok) {
     pluginCatalogHintShown = false
+    const summary = result.summary
+    const duration = `p50=${summary.durationMs.p50 ?? '-'}ms p95=${summary.durationMs.p95 ?? '-'}ms max=${summary.durationMs.max ?? '-'}ms`
     outputChannel?.appendLine(
-      `✅ Plugin catalog rescanned: ${result.count} plugins (${result.skipped.length} skipped)`,
+      `✅ Plugin catalog rescanned: ${result.count} plugins; artifacts success=${summary.success} pending=${summary.pending} failure=${summary.failure}; ${duration}; timeout=${summary.timeouts} crash=${summary.crashes}`,
+    )
+    outputChannel?.appendLine(
+      `   failure reasons=${JSON.stringify(summary.failureReasons)} factory versions=${JSON.stringify(summary.factoryVersions)}`,
     )
     vscode.window.showInformationMessage(
-      `OrbitScore: rescanned ${result.count} plugins (${result.skipped.length} skipped)`,
+      `OrbitScore: rescanned ${result.count} plugins (${summary.pending} pending, ${summary.failure} failed)`,
     )
   } else {
     outputChannel?.appendLine(`❌ Plugin catalog rescan failed: ${result.error}`)
@@ -2950,7 +2955,12 @@ async function rescanPluginsForAgent(): Promise<RescanPluginsResult> {
     return { ok: false, error: result.error }
   }
   pluginCatalogHintShown = false
-  return { ok: true, count: result.count, skipped: [...result.skipped] }
+  return {
+    ok: true,
+    count: result.count,
+    skipped: [...result.skipped],
+    summary: result.summary,
+  }
 }
 
 /** List audio devices for the MCP `list_audio_devices` tool. Mirrors `selectAudioDevice`'s guard/resolve steps but returns the list instead of prompting. */

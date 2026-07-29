@@ -9,6 +9,7 @@ import {
   loadPluginCatalog,
   resolveCatalogPath,
   resolvePluginScanBinaryPath,
+  runPluginScan,
 } from '../../packages/vscode-extension/src/plugin-catalog-reader'
 
 describe('resolveCatalogPath', () => {
@@ -68,6 +69,29 @@ describe('loadPluginCatalog', () => {
     expect(loaded?.plugins[0].name).toBe('Surge XT')
   })
 
+  it('preserves catalog v2 probe-pending as distinct from failure', () => {
+    const catalog = {
+      version: 2,
+      scannedAt: '2026-07-29T00:00:00Z',
+      plugins: [],
+      artifacts: [
+        {
+          format: 'vst3',
+          path: '/vst3/Kontakt.vst3',
+          status: 'probePending',
+          reason: 'moduleinfoMissing',
+        },
+      ],
+    }
+    fs.writeFileSync(catalogPath, JSON.stringify(catalog))
+    const loaded = loadPluginCatalog(catalogPath)
+    expect(loaded?.artifacts?.[0]).toMatchObject({
+      status: 'probePending',
+      reason: 'moduleinfoMissing',
+    })
+    expect(loaded?.artifacts?.[0].failure).toBeUndefined()
+  })
+
   it('re-reads after the file mtime changes (rescan invalidation)', async () => {
     fs.writeFileSync(catalogPath, JSON.stringify({ version: 1, scannedAt: 't1', plugins: [] }))
     const first = loadPluginCatalog(catalogPath)
@@ -117,5 +141,41 @@ describe('resolvePluginScanBinaryPath', () => {
       if (originalEnv === undefined) delete process.env.ORBIT_PLUGIN_SCAN_PATH
       else process.env.ORBIT_PLUGIN_SCAN_PATH = originalEnv
     }
+  })
+})
+
+describe('runPluginScan', () => {
+  it('enables child probes only through the explicit rescan flag and returns diagnostics', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-plugin-scan-explicit-'))
+    const binPath = path.join(tmpDir, 'orbit-plugin-scan')
+    fs.writeFileSync(
+      binPath,
+      `#!/bin/sh
+if [ "$1" != "--probe-artifacts" ]; then
+  echo "missing explicit probe flag: $*" >&2
+  exit 2
+fi
+echo '{"count":5,"cachePath":"/tmp/catalog.json","skipped":[],"summary":{"success":4,"pending":0,"failure":1,"failureReasons":{"timeout":1},"durationMs":{"p50":5,"p95":20000,"max":20000},"timeouts":1,"crashes":0,"factoryVersions":{"factory3":4}}}'
+`,
+      { mode: 0o755 },
+    )
+
+    const result = await runPluginScan(binPath)
+    expect(result).toEqual({
+      ok: true,
+      count: 5,
+      cachePath: '/tmp/catalog.json',
+      skipped: [],
+      summary: {
+        success: 4,
+        pending: 0,
+        failure: 1,
+        failureReasons: { timeout: 1 },
+        durationMs: { p50: 5, p95: 20_000, max: 20_000 },
+        timeouts: 1,
+        crashes: 0,
+        factoryVersions: { factory3: 4 },
+      },
+    })
   })
 })

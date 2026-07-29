@@ -17,6 +17,119 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.321 feat(scan): catalog v2 + explicit rescan での child probe — #549 B1 (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ B1 完了。**カバレッジ 23% → 99.1%**（#549 は B2 が入るまで close しない）
+
+PR A で用意した `probe-artifact` を親 scanner から呼ぶ段階。**ここで数字が動いた。**
+
+### 実測（実機・explicit rescan）
+
+| 項目 | before | after |
+|---|---|---|
+| total | 80 | **339** |
+| **instrument** | **9** | **72**（8倍） |
+| effect | 72 | **272** |
+| CLAP | 1 | **1**（非退行） |
+| カバレッジ | 23% | **99.1%**（339/342） |
+
+```
+success 336 / pending 0 / failure 3
+failureReasons: {bundleLoad: 3}
+durationMs: {p50: 42, p95: 976, max: 2048}
+timeouts: 0  crashes: 0
+factoryVersions: {factory2: 1, factory3: 258}
+```
+
+**所要 12 秒。** 計画の最悪値見積もり（261件が全て timeout で約22分）に対し、
+「実際は factory 取得の大半が秒未満のはず」という予測が当たった。
+**timeout 0・crash 0・ダイアログなし。**
+
+### 🔴 Epic #546 が名指しする Kontakt が入った
+
+```
+Battery 4   roles=['instrument']    Kontakt     roles=['instrument']
+Kontakt 7   roles=['instrument']    Kontakt 8   roles=['instrument']
+Maschine 2  roles=['instrument']    Massive     roles=['instrument']
+Massive X   roles=['instrument']    Reaktor 6   roles=['instrument']
+```
+
+**Native Instruments が丸ごと戻った。** しかも `roles` が **`['instrument']` のみ**に正しく解決されている。
+
+計画が「Kontakt が Factory2/3 を公開するか不明。v1 のみなら安全側 fallback で
+roles が effect+instrument になるため instrument-only と断定できない」と留保していた点は、
+**実測で解消**した:
+
+```json
+{"name":"Kontakt 8","subCategories":"Instrument","version":"8.7.2",
+ "sdkVersion":"VST 3.7.12","descriptorApi":"factory3"}
+```
+
+**Kontakt は Factory3 を公開している。** 受け入れ基準は `roles ⊇ {instrument}` で書いてあるので
+どちらでも通るが、実際には instrument-only で解決できた。
+
+### 三段階モデルが実データで成立している
+
+```
+status:  staticSuccess 79   probeSucceeded 257   probeFailed 3
+source:  moduleinfo 79      factory 256          clapDescriptor 1
+failure: {"code":"bundleLoad", ...} が 3件のみ（型で区別）
+```
+
+**`staticSuccess` の 79件が従来のカタログと完全一致** — 静的経路を壊していないことがデータで確認できた。
+**旧 79件が新カタログの部分集合であることも検証（欠落 0件）。**
+
+`moduleinfo なし` を「失敗」ではなく「**まだ probe していない**」と表現する設計は、
+`scan_vst3_bundle` の doc コメントにも反映した（「skip する」→「pending にする」）。
+
+### PR A の CI 赤（Linux dead code）が B1 で構造的に解消された
+
+PR A は CI で落ちていた:
+
+```
+error: struct `ArtifactProbeSuccess` is never constructed
+error: variants `InvalidBundle`, `BundleLoad`, ... are never constructed
+= note: `-D dead-code` implied by `-D warnings`
+```
+
+**Linux では factory probe が `cfg(target_os)` で除外され、型が dead code になる。**
+macOS では使われるので**ローカルの `clippy -D warnings` では検出できなかった**。
+
+B1 で型が `lib.rs` へ移り、非 macOS 側にも実装が置かれたので解消:
+
+```rust
+#[cfg(not(target_os = "macos"))]
+fn probe_vst3_artifact(_path: &Path) -> Result<Vec<ArtifactClass>, ArtifactProbeError> {
+    Err(ArtifactProbeError::UnsupportedPlatform)
+}
+```
+
+**「Linux では probe できない」が型で表現される**ようになった。
+
+🔴 **ローカルで Linux 側を検証する手段が無い**: `x86_64-unknown-linux-gnu` を追加して
+クロスコンパイルを試みたが、ALSA の sysroot が無く
+`pkg-config has not been configured to support cross-compilation` で失敗する。
+**この検証は CI に委ねるしかない。**
+
+**教訓**: #529 で「ローカル macOS の緑は Linux 固有問題の証明にならない」と学んだが、
+今回は**その裏返し**（macOS で通るものが Linux で落ちる）を見落とした。
+**`cfg` 分岐があるコードでは常に両方向を疑う。**
+
+### 検証
+
+- `cargo test --workspace --locked` ✅ **391 passed / 0 failed**（386 + 新規5）
+- `--features outproc-effect` ✅ 143 / `outproc-instrument` ✅ 118 / 両方 ✅ 186
+- `cargo fmt --check` ✅ / `cargo clippy --workspace --all-targets -- -D warnings` ✅
+- `npm run build` ✅ / `npm test` ✅ **1800 passed / 30 skipped / 0 failed**（1798 + 新規2）
+
+### 残り（#549 のクローズ条件）
+
+- **B2**: fingerprint + positive/negative cache。**これが無いとダイアログを出すプラグインが
+  rescan のたびに騒ぎ、ユーザーが rescan を避けてカタログが古いままになる**
+- **残る失敗 3件**（MODO BASS / Super 8 / Philharmonik 2・全て `bundleLoad`）は
+  B2 の後に個別に潰す
+
 ### 6.320 feat(scan): factory descriptor primitive — #549 PR A (Jul 29, 2026)
 
 **Date**: 2026-07-29

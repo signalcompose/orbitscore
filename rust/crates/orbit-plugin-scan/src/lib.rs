@@ -5,12 +5,14 @@
 //!
 //! 正本: docs/core/INSTRUCTION_ORBITSCORE_DSL.md「Plugin Catalog」節 PC.1
 
-use serde::Serialize;
-use std::collections::HashSet;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, ExitStatus, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// スキャン対象フォーマット。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -43,6 +45,79 @@ pub struct Catalog {
     pub version: u32,
     pub scanned_at: String,
     pub plugins: Vec<CatalogEntry>,
+    pub artifacts: Vec<CatalogArtifact>,
+}
+
+/// catalog v2 の artifact inventory。`plugins` は従来 reader 向けの互換投影であり、
+/// probe の状態や診断はこの別配列だけに保持する。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogArtifact {
+    pub format: Format,
+    pub path: String,
+    #[serde(flatten)]
+    pub state: ArtifactState,
+}
+
+/// 静的成功 / probe 待ち / probe 成功 / 理由付き probe 失敗を明示する。
+///
+/// `moduleinfo.json` が無い artifact は `ProbePending` であり、失敗ではない。
+#[derive(Debug, Clone, Serialize)]
+#[serde(
+    tag = "status",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ArtifactState {
+    StaticSuccess {
+        source: String,
+        plugins: Vec<CatalogEntry>,
+    },
+    ProbePending {
+        reason: String,
+    },
+    ProbeSucceeded {
+        source: String,
+        duration_ms: u64,
+        descriptor_apis: Vec<String>,
+        plugins: Vec<CatalogEntry>,
+    },
+    ProbeFailed {
+        duration_ms: u64,
+        failure: ProbeFailure,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeFailure {
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DurationSummary {
+    pub p50: Option<u64>,
+    pub p95: Option<u64>,
+    pub max: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanSummary {
+    pub success: usize,
+    pub pending: usize,
+    pub failure: usize,
+    pub failure_reasons: BTreeMap<String, usize>,
+    pub duration_ms: DurationSummary,
+    pub timeouts: usize,
+    pub crashes: usize,
+    pub factory_versions: BTreeMap<String, usize>,
 }
 
 /// スキャン対象ディレクトリのデフォルト（PC.1）。
@@ -131,6 +206,13 @@ pub fn scan_clap_bundle(path: &Path) -> Vec<CatalogEntry> {
         }
     };
 
+    clap_entries_from_found(path, found)
+}
+
+fn clap_entries_from_found(
+    path: &Path,
+    found: Vec<orbit_clap_host::FoundPlugin>,
+) -> Vec<CatalogEntry> {
     found
         .into_iter()
         .map(|entry| {
@@ -162,50 +244,232 @@ fn roles_from_clap_features(features: &[String]) -> Vec<String> {
     }
 }
 
-/// VST3 バンドル 1 つを走査してカタログエントリを作る。
-///
-/// **`Contents/Resources/moduleinfo.json` がある場合のみ**エントリ化する（load 不要）。
-/// 無い場合は probe（実ロード）せずに skip する — コンテンツ依存プラグイン（例: FIN-BOOST）が
-/// ロード中にネイティブダイアログ（"Plugin content not found — navigate to .blob"）を出すことが
-/// 実機確認され、無人スキャンで UI が出る/ブロックするのは受け入れ不可と判断されたため（owner
-/// 実害報告・#463）。「UI 抑止付き probe」は C1b 以降で別途検討する。
-pub fn scan_vst3_bundle(path: &Path) -> VstScanResult {
-    let moduleinfo_path = path.join("Contents/Resources/moduleinfo.json");
-    if !moduleinfo_path.is_file() {
-        eprintln!("[orbit-plugin-scan] WARN: moduleinfo.json が無いため probe せず skip: {path:?}");
-        return VstScanResult::Skipped;
-    }
+/// `probe-artifact` の stdout protocol で返す descriptor。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactClass {
+    pub name: String,
+    pub cid: String,
+    pub category: String,
+    pub sub_categories: String,
+    pub vendor: String,
+    pub version: String,
+    pub sdk_version: String,
+    pub descriptor_api: String,
+}
 
-    match fs::read_to_string(&moduleinfo_path) {
-        Ok(text) => match parse_moduleinfo(&text, path) {
-            Ok(entries) if !entries.is_empty() => VstScanResult::Entries(entries),
-            Ok(_) => {
-                eprintln!(
-                    "[orbit-plugin-scan] WARN: moduleinfo.json に Audio Module Class が無い、skip: {moduleinfo_path:?}"
-                );
-                VstScanResult::Skipped
-            }
-            Err(error) => {
-                eprintln!(
-                    "[orbit-plugin-scan] WARN: moduleinfo.json の parse に失敗、skip: {moduleinfo_path:?}: {error}"
-                );
-                VstScanResult::Skipped
-            }
-        },
-        Err(error) => {
-            eprintln!(
-                "[orbit-plugin-scan] WARN: moduleinfo.json を読めません、skip: {moduleinfo_path:?}: {error}"
-            );
-            VstScanResult::Skipped
+/// Machine-readable failure reasons for the one-artifact child protocol.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ArtifactProbeError {
+    InvalidArguments {
+        expected: String,
+    },
+    UnsupportedPlatform,
+    UnsupportedFormat {
+        extension: String,
+    },
+    InvalidBundle {
+        path: String,
+    },
+    BundleLoad {
+        message: String,
+    },
+    MissingSymbol {
+        symbol: String,
+    },
+    NullFactory,
+    InvalidClassCount {
+        count: i32,
+    },
+    DescriptorRead {
+        index: i32,
+        factory3_result: Option<i32>,
+        factory2_result: Option<i32>,
+        factory1_result: i32,
+    },
+}
+
+impl ArtifactProbeError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::InvalidArguments { .. } => "invalidArguments",
+            Self::UnsupportedPlatform => "unsupportedPlatform",
+            Self::UnsupportedFormat { .. } => "unsupportedFormat",
+            Self::InvalidBundle { .. } => "invalidBundle",
+            Self::BundleLoad { .. } => "bundleLoad",
+            Self::MissingSymbol { .. } => "missingSymbol",
+            Self::NullFactory => "nullFactory",
+            Self::InvalidClassCount { .. } => "invalidClassCount",
+            Self::DescriptorRead { .. } => "descriptorRead",
         }
     }
 }
 
-/// [`scan_vst3_bundle`] の結果。moduleinfo.json 不在/不正は probe にフォールバックせず
-/// `Skipped` として明示的に扱う（呼び出し側が `skipped` リストへ集約できるように）。
+impl std::fmt::Display for ArtifactProbeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidArguments { expected } => write!(formatter, "expected {expected}"),
+            Self::UnsupportedPlatform => write!(formatter, "VST3 probing is unsupported here"),
+            Self::UnsupportedFormat { extension } => {
+                write!(formatter, "unsupported artifact extension: {extension}")
+            }
+            Self::InvalidBundle { path } => write!(formatter, "invalid bundle: {path}"),
+            Self::BundleLoad { message } => write!(formatter, "{message}"),
+            Self::MissingSymbol { symbol } => write!(formatter, "missing symbol: {symbol}"),
+            Self::NullFactory => write!(formatter, "GetPluginFactory returned null"),
+            Self::InvalidClassCount { count } => write!(formatter, "invalid class count: {count}"),
+            Self::DescriptorRead { index, .. } => {
+                write!(
+                    formatter,
+                    "failed to read class descriptor at index {index}"
+                )
+            }
+        }
+    }
+}
+
+/// Child process 内でだけ呼ばれる native descriptor probe。
+pub fn probe_artifact(path: &Path) -> Result<Vec<ArtifactClass>, ArtifactProbeError> {
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "clap" => probe_clap_artifact(path),
+        "vst3" => probe_vst3_artifact(path),
+        _ => Err(ArtifactProbeError::UnsupportedFormat { extension }),
+    }
+}
+
+fn probe_clap_artifact(path: &Path) -> Result<Vec<ArtifactClass>, ArtifactProbeError> {
+    let found = orbit_clap_host::list_plugins_in_file(path).map_err(|error| {
+        ArtifactProbeError::BundleLoad {
+            message: error.to_string(),
+        }
+    })?;
+    Ok(found
+        .into_iter()
+        .map(|entry| ArtifactClass {
+            name: entry.plugin.name.unwrap_or_else(|| entry.plugin.id.clone()),
+            cid: entry.plugin.id,
+            category: "clap.plugin".to_owned(),
+            sub_categories: entry.plugin.features.join("|"),
+            vendor: entry.plugin.vendor.unwrap_or_default(),
+            version: entry.plugin.version.unwrap_or_default(),
+            sdk_version: String::new(),
+            descriptor_api: "clap".to_owned(),
+        })
+        .collect())
+}
+
+#[cfg(target_os = "macos")]
+fn probe_vst3_artifact(path: &Path) -> Result<Vec<ArtifactClass>, ArtifactProbeError> {
+    use orbit_vst3_host::FactoryProbeError;
+
+    orbit_vst3_host::probe_factory_descriptors(path)
+        .map(|classes| {
+            classes
+                .into_iter()
+                .map(|class| ArtifactClass {
+                    name: class.name,
+                    cid: class.cid,
+                    category: class.category,
+                    sub_categories: class.sub_categories,
+                    vendor: class.vendor,
+                    version: class.version,
+                    sdk_version: class.sdk_version,
+                    descriptor_api: class.descriptor_api.as_str().to_owned(),
+                })
+                .collect()
+        })
+        .map_err(|error| match error {
+            FactoryProbeError::InvalidBundle(path) => ArtifactProbeError::InvalidBundle {
+                path: path.to_string_lossy().into_owned(),
+            },
+            FactoryProbeError::BundleLoad(message) => ArtifactProbeError::BundleLoad { message },
+            FactoryProbeError::MissingSymbol(symbol) => ArtifactProbeError::MissingSymbol {
+                symbol: symbol.to_owned(),
+            },
+            FactoryProbeError::NullFactory => ArtifactProbeError::NullFactory,
+            FactoryProbeError::InvalidClassCount(count) => {
+                ArtifactProbeError::InvalidClassCount { count }
+            }
+            FactoryProbeError::DescriptorRead {
+                index,
+                factory3_result,
+                factory2_result,
+                factory1_result,
+            } => ArtifactProbeError::DescriptorRead {
+                index,
+                factory3_result,
+                factory2_result,
+                factory1_result,
+            },
+        })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn probe_vst3_artifact(_path: &Path) -> Result<Vec<ArtifactClass>, ArtifactProbeError> {
+    Err(ArtifactProbeError::UnsupportedPlatform)
+}
+
+/// VST3 バンドル 1 つを走査してカタログエントリを作る。
+///
+/// **`Contents/Resources/moduleinfo.json` がある場合のみ**エントリ化する（load 不要）。
+/// 無い場合は probe（実ロード）せずに pending にする — コンテンツ依存プラグイン（例: FIN-BOOST）が
+/// ロード中にネイティブダイアログ（"Plugin content not found — navigate to .blob"）を出すことが
+/// 実機確認され、無人スキャンで UI が出る/ブロックするのは受け入れ不可と判断されたため（owner
+/// 実害報告・#463）。native probe は explicit rescan からのみ子プロセスで実行する。
+pub fn scan_vst3_bundle(path: &Path) -> VstScanResult {
+    let moduleinfo_path = path.join("Contents/Resources/moduleinfo.json");
+    if !moduleinfo_path.is_file() {
+        return VstScanResult::ProbePending {
+            reason: "moduleinfoMissing".to_owned(),
+        };
+    }
+
+    match fs::read_to_string(&moduleinfo_path) {
+        Ok(text) => match parse_moduleinfo(&text, path) {
+            Ok(entries) if !entries.is_empty() => VstScanResult::StaticSuccess(entries),
+            Ok(_) => {
+                eprintln!(
+                    "[orbit-plugin-scan] WARN: moduleinfo.json に Audio Module Class が無いため probe 待ち: {moduleinfo_path:?}"
+                );
+                VstScanResult::ProbePending {
+                    reason: "moduleinfoNoAudioClasses".to_owned(),
+                }
+            }
+            Err(error) => {
+                eprintln!(
+                    "[orbit-plugin-scan] WARN: moduleinfo.json の parse に失敗したため probe 待ち: {moduleinfo_path:?}: {error}"
+                );
+                VstScanResult::ProbePending {
+                    reason: "moduleinfoInvalid".to_owned(),
+                }
+            }
+        },
+        Err(error) => {
+            eprintln!(
+                "[orbit-plugin-scan] WARN: moduleinfo.json を読めないため probe 待ち: {moduleinfo_path:?}: {error}"
+            );
+            VstScanResult::ProbePending {
+                reason: "moduleinfoUnreadable".to_owned(),
+            }
+        }
+    }
+}
+
+/// [`scan_vst3_bundle`] の metadata-only 結果。
+#[derive(Debug)]
 pub enum VstScanResult {
-    Entries(Vec<CatalogEntry>),
-    Skipped,
+    StaticSuccess(Vec<CatalogEntry>),
+    ProbePending { reason: String },
 }
 
 /// Steinberg moduleinfo.json（trailing comma を含む非-strict JSON）を parse する。
@@ -378,31 +642,537 @@ pub fn dedup_entries(entries: Vec<CatalogEntry>) -> Vec<CatalogEntry> {
         .collect()
 }
 
-/// 全ディレクトリを走査した結果: dedup 済みカタログエントリと、probe せず skip した VST3
-/// バンドルのパス一覧（moduleinfo.json 不在/不正）。
+const ARTIFACT_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+const PROBE_CONCURRENCY: usize = 4;
+
+/// 全ディレクトリを走査した結果。`entries` は v1 reader 向け互換投影。
 pub struct ScanOutcome {
     pub entries: Vec<CatalogEntry>,
+    pub artifacts: Vec<CatalogArtifact>,
     pub skipped: Vec<String>,
+    pub summary: ScanSummary,
 }
 
-/// 全ディレクトリを走査し、dedup 済みカタログエントリと skip リストを返す。
+/// 通常起動用。filesystem inventory と moduleinfo だけを読み、native code はロードしない。
 pub fn scan_all(dirs: &[PathBuf]) -> ScanOutcome {
-    let candidates = collect_all_bundle_candidates(dirs);
+    scan_candidates(collect_all_bundle_candidates(dirs), false, &|_, _| {
+        unreachable!("metadata-only scan must never invoke the child probe")
+    })
+}
+
+/// ユーザーが明示した rescan 用。pending artifact を 1 artifact / 1 child で probe する。
+pub fn scan_all_with_probes(dirs: &[PathBuf], scanner_executable: &Path) -> ScanOutcome {
+    scan_candidates(
+        collect_all_bundle_candidates(dirs),
+        true,
+        &|path, format| run_child_probe(scanner_executable, path, format),
+    )
+}
+
+fn scan_candidates<F>(
+    candidates: Vec<(PathBuf, Format)>,
+    explicit_probe: bool,
+    probe_runner: &F,
+) -> ScanOutcome
+where
+    F: Fn(&Path, Format) -> ProbeExecution + Sync,
+{
     let mut entries = Vec::new();
-    let mut skipped = Vec::new();
+    let mut artifacts = Vec::new();
+    let mut pending = Vec::new();
+
     for (path, format) in candidates {
+        let path_string = path.to_string_lossy().into_owned();
         match format {
-            Format::Clap => entries.append(&mut scan_clap_bundle(&path)),
+            Format::Clap => {
+                let index = artifacts.len();
+                artifacts.push(CatalogArtifact {
+                    format,
+                    path: path_string,
+                    state: ArtifactState::ProbePending {
+                        reason: "nativeDescriptorNotProbed".to_owned(),
+                    },
+                });
+                pending.push((index, path, format));
+            }
             Format::Vst3 => match scan_vst3_bundle(&path) {
-                VstScanResult::Entries(mut found) => entries.append(&mut found),
-                VstScanResult::Skipped => skipped.push(path.to_string_lossy().into_owned()),
+                VstScanResult::StaticSuccess(found) => {
+                    entries.extend(found.iter().cloned());
+                    artifacts.push(CatalogArtifact {
+                        format,
+                        path: path_string,
+                        state: ArtifactState::StaticSuccess {
+                            source: "moduleinfo".to_owned(),
+                            plugins: found,
+                        },
+                    });
+                }
+                VstScanResult::ProbePending { reason } => {
+                    let index = artifacts.len();
+                    artifacts.push(CatalogArtifact {
+                        format,
+                        path: path_string,
+                        state: ArtifactState::ProbePending { reason },
+                    });
+                    pending.push((index, path, format));
+                }
             },
         }
     }
+
+    if explicit_probe {
+        // Four workers implement the agreed temporary policy. Keeping each artifact in its own
+        // process preserves crash attribution, while a small fixed pool keeps the 261 × 20s
+        // worst-case below the extension's 30-minute parent timeout. B2 may optimize repeat work.
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let collected = std::sync::Mutex::new(Vec::with_capacity(pending.len()));
+        thread::scope(|scope| {
+            let worker_count = PROBE_CONCURRENCY.min(pending.len());
+            for _ in 0..worker_count {
+                let next = &next;
+                let collected = &collected;
+                let pending = &pending;
+                scope.spawn(move || loop {
+                    let job = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some((artifact_index, path, format)) = pending.get(job) else {
+                        break;
+                    };
+                    let result = probe_runner(path, *format);
+                    collected
+                        .lock()
+                        .expect("probe result mutex poisoned")
+                        .push((*artifact_index, result));
+                });
+            }
+        });
+        let results = collected.into_inner().expect("probe result mutex poisoned");
+
+        for (artifact_index, execution) in results {
+            match execution.result {
+                Ok(probe) => {
+                    entries.extend(probe.plugins.iter().cloned());
+                    artifacts[artifact_index].state = ArtifactState::ProbeSucceeded {
+                        source: probe.source,
+                        duration_ms: execution.duration_ms,
+                        descriptor_apis: probe.descriptor_apis,
+                        plugins: probe.plugins,
+                    };
+                }
+                Err(failure) => {
+                    artifacts[artifact_index].state = ArtifactState::ProbeFailed {
+                        duration_ms: execution.duration_ms,
+                        failure,
+                    };
+                }
+            }
+        }
+    }
+
+    let skipped = artifacts
+        .iter()
+        .filter_map(|artifact| match artifact.state {
+            ArtifactState::ProbeFailed { .. } => Some(artifact.path.clone()),
+            _ => None,
+        })
+        .collect();
+    let summary = summarize_artifacts(&artifacts);
     ScanOutcome {
         entries: dedup_entries(entries),
+        artifacts,
         skipped,
+        summary,
     }
+}
+
+#[derive(Debug)]
+struct ProbeSuccess {
+    source: String,
+    plugins: Vec<CatalogEntry>,
+    descriptor_apis: Vec<String>,
+}
+
+#[derive(Debug)]
+struct ProbeExecution {
+    duration_ms: u64,
+    result: Result<ProbeSuccess, ProbeFailure>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChildProbeOutput {
+    ok: bool,
+    #[serde(default)]
+    classes: Vec<ArtifactClass>,
+    error: Option<ArtifactProbeError>,
+}
+
+fn run_child_probe(scanner_executable: &Path, path: &Path, format: Format) -> ProbeExecution {
+    let started = Instant::now();
+    let capture = match run_process_with_timeout(
+        scanner_executable,
+        &["probe-artifact".into(), path.as_os_str().to_owned()],
+        ARTIFACT_PROBE_TIMEOUT,
+    ) {
+        Ok(capture) => capture,
+        Err(error) => {
+            return ProbeExecution {
+                duration_ms: elapsed_millis(started),
+                result: Err(ProbeFailure {
+                    code: "spawnError".to_owned(),
+                    message: error.to_string(),
+                    exit_code: None,
+                    signal: None,
+                }),
+            };
+        }
+    };
+
+    if capture.timed_out {
+        return ProbeExecution {
+            duration_ms: capture.duration_ms,
+            result: Err(ProbeFailure {
+                code: "timeout".to_owned(),
+                message: format!(
+                    "artifact probe exceeded {} seconds",
+                    ARTIFACT_PROBE_TIMEOUT.as_secs()
+                ),
+                exit_code: capture.status.code(),
+                signal: status_signal(&capture.status),
+            }),
+        };
+    }
+
+    let parsed = parse_child_probe_output(&capture.stdout);
+    match parsed {
+        Ok(output) if output.ok && capture.status.success() => {
+            let descriptor_apis = output
+                .classes
+                .iter()
+                .filter(|class| format == Format::Clap || class.category == "Audio Module Class")
+                .map(|class| class.descriptor_api.clone())
+                .collect();
+            let plugins = classes_to_catalog_entries(path, format, output.classes);
+            ProbeExecution {
+                duration_ms: capture.duration_ms,
+                result: Ok(ProbeSuccess {
+                    source: match format {
+                        Format::Clap => "clapDescriptor",
+                        Format::Vst3 => "factory",
+                    }
+                    .to_owned(),
+                    plugins,
+                    descriptor_apis,
+                }),
+            }
+        }
+        Ok(output) if !output.ok => {
+            let error = output.error.unwrap_or(ArtifactProbeError::BundleLoad {
+                message: "child returned ok=false without an error".to_owned(),
+            });
+            ProbeExecution {
+                duration_ms: capture.duration_ms,
+                result: Err(ProbeFailure {
+                    code: error.code().to_owned(),
+                    message: error.to_string(),
+                    exit_code: capture.status.code(),
+                    signal: status_signal(&capture.status),
+                }),
+            }
+        }
+        Ok(_) => ProbeExecution {
+            duration_ms: capture.duration_ms,
+            result: Err(ProbeFailure {
+                code: "protocolError".to_owned(),
+                message: format!(
+                    "child returned success JSON with failing status {}; stderr={}",
+                    capture.status,
+                    diagnostic_tail(&capture.stderr)
+                ),
+                exit_code: capture.status.code(),
+                signal: status_signal(&capture.status),
+            }),
+        },
+        Err(error) => {
+            let signal = status_signal(&capture.status);
+            ProbeExecution {
+                duration_ms: capture.duration_ms,
+                result: Err(ProbeFailure {
+                    code: if signal.is_some() {
+                        "crash".to_owned()
+                    } else {
+                        "protocolError".to_owned()
+                    },
+                    message: format!(
+                        "child produced invalid JSON ({error}); stderr={}",
+                        diagnostic_tail(&capture.stderr)
+                    ),
+                    exit_code: capture.status.code(),
+                    signal,
+                }),
+            }
+        }
+    }
+}
+
+fn parse_child_probe_output(stdout: &[u8]) -> Result<ChildProbeOutput, serde_json::Error> {
+    // Some third-party modules write diagnostics directly to inherited stdout during bundleEntry.
+    // The helper still emits exactly one protocol object of its own; scan from the end so those
+    // foreign lines cannot turn a successful descriptor probe into a protocol failure.
+    let mut last_error = None;
+    for line in stdout.split(|byte| *byte == b'\n').rev() {
+        let line = line
+            .iter()
+            .copied()
+            .skip_while(|byte| byte.is_ascii_whitespace())
+            .collect::<Vec<_>>();
+        if line.is_empty() {
+            continue;
+        }
+        match serde_json::from_slice::<ChildProbeOutput>(&line) {
+            Ok(output) => return Ok(output),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    match last_error {
+        Some(error) => Err(error),
+        None => serde_json::from_slice::<ChildProbeOutput>(stdout),
+    }
+}
+
+fn diagnostic_tail(bytes: &[u8]) -> String {
+    const LIMIT: usize = 4096;
+    let start = bytes.len().saturating_sub(LIMIT);
+    String::from_utf8_lossy(&bytes[start..]).trim().to_owned()
+}
+
+fn classes_to_catalog_entries(
+    path: &Path,
+    format: Format,
+    classes: Vec<ArtifactClass>,
+) -> Vec<CatalogEntry> {
+    classes
+        .into_iter()
+        .filter(|class| format == Format::Clap || class.category == "Audio Module Class")
+        .map(|class| {
+            let categories = class
+                .sub_categories
+                .split('|')
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            let roles = match format {
+                Format::Clap => roles_from_clap_features(&categories),
+                Format::Vst3 => roles_from_vst3_subcategories(&categories),
+            };
+            CatalogEntry {
+                name: class.name,
+                vendor: class.vendor,
+                format,
+                path: path.to_string_lossy().into_owned(),
+                plugin_id: class.cid,
+                roles,
+            }
+        })
+        .collect()
+}
+
+struct ProcessCapture {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    timed_out: bool,
+    duration_ms: u64,
+}
+
+fn run_process_with_timeout(
+    executable: &Path,
+    args: &[std::ffi::OsString],
+    timeout: Duration,
+) -> io::Result<ProcessCapture> {
+    let started = Instant::now();
+    let mut command = Command::new(executable);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    configure_process_group(&mut command);
+
+    let mut child = command.spawn()?;
+    let pid = child.id();
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let stderr = child.stderr.take().expect("stderr was piped");
+    let stdout_reader = thread::spawn(move || read_all(stdout));
+    let stderr_reader = thread::spawn(move || read_all(stderr));
+    let mut timed_out = false;
+
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() >= timeout {
+            timed_out = true;
+            let kill_result = kill_process_group(pid);
+            let status = child.wait()?;
+            if let Err(error) = kill_result {
+                // A child may exit in the narrow try_wait→killpg race. It is already reaped here,
+                // so ESRCH is harmless; other failures still surface after avoiding a leak.
+                if error.raw_os_error() != Some(libc_esrch()) {
+                    return Err(error);
+                }
+            }
+            break status;
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+
+    Ok(ProcessCapture {
+        status,
+        stdout: stdout_reader.join().unwrap_or_else(|_| Ok(Vec::new()))?,
+        stderr: stderr_reader.join().unwrap_or_else(|_| Ok(Vec::new()))?,
+        timed_out,
+        duration_ms: elapsed_millis(started),
+    })
+}
+
+#[cfg(unix)]
+const fn libc_esrch() -> i32 {
+    libc::ESRCH
+}
+
+#[cfg(not(unix))]
+const fn libc_esrch() -> i32 {
+    3
+}
+
+fn read_all(mut reader: impl Read) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    reader.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn configure_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    // SAFETY: this callback runs after fork and before exec. setpgid is async-signal-safe, touches
+    // no Rust-managed memory, and makes the probe child the leader of an isolated process group.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) == -1 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+}
+
+#[cfg(not(unix))]
+fn configure_process_group(_command: &mut Command) {}
+
+#[cfg(unix)]
+fn kill_process_group(pid: u32) -> io::Result<()> {
+    // SAFETY: pid came directly from the child we successfully spawned and made group leader.
+    let result = unsafe { libc::killpg(pid as libc::pid_t, libc::SIGKILL) };
+    if result == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_process_group(_pid: u32) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "process-group termination requires Unix",
+    ))
+}
+
+#[cfg(unix)]
+fn status_signal(status: &ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt;
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn status_signal(_status: &ExitStatus) -> Option<i32> {
+    None
+}
+
+fn elapsed_millis(started: Instant) -> u64 {
+    started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+fn summarize_artifacts(artifacts: &[CatalogArtifact]) -> ScanSummary {
+    let mut summary = ScanSummary {
+        success: 0,
+        pending: 0,
+        failure: 0,
+        failure_reasons: BTreeMap::new(),
+        duration_ms: DurationSummary {
+            p50: None,
+            p95: None,
+            max: None,
+        },
+        timeouts: 0,
+        crashes: 0,
+        factory_versions: BTreeMap::new(),
+    };
+    let mut durations = Vec::new();
+    for artifact in artifacts {
+        match &artifact.state {
+            ArtifactState::StaticSuccess { .. } => summary.success += 1,
+            ArtifactState::ProbePending { .. } => summary.pending += 1,
+            ArtifactState::ProbeSucceeded {
+                duration_ms,
+                descriptor_apis,
+                ..
+            } => {
+                summary.success += 1;
+                durations.push(*duration_ms);
+                for api in descriptor_apis
+                    .iter()
+                    .filter(|api| api.starts_with("factory"))
+                {
+                    *summary.factory_versions.entry(api.clone()).or_default() += 1;
+                }
+            }
+            ArtifactState::ProbeFailed {
+                duration_ms,
+                failure,
+            } => {
+                summary.failure += 1;
+                durations.push(*duration_ms);
+                *summary
+                    .failure_reasons
+                    .entry(failure.code.clone())
+                    .or_default() += 1;
+                if failure.code == "timeout" {
+                    summary.timeouts += 1;
+                }
+                if failure.code == "crash" {
+                    summary.crashes += 1;
+                }
+            }
+        }
+    }
+    durations.sort_unstable();
+    summary.duration_ms = DurationSummary {
+        p50: percentile(&durations, 50),
+        p95: percentile(&durations, 95),
+        max: durations.last().copied(),
+    };
+    summary
+}
+
+fn percentile(sorted: &[u64], percentile: usize) -> Option<u64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let rank = (percentile * sorted.len()).div_ceil(100);
+    sorted.get(rank.saturating_sub(1)).copied()
 }
 
 /// `~/.orbitscore/plugin-catalog.json` のパスを返す。
@@ -541,14 +1311,16 @@ mod tests {
     #[test]
     fn catalog_serializes_top_level_shape() {
         let catalog = Catalog {
-            version: 1,
+            version: 2,
             scanned_at: "2026-07-17T00:00:00Z".to_owned(),
             plugins: vec![],
+            artifacts: vec![],
         };
         let json = serde_json::to_value(&catalog).unwrap();
-        assert_eq!(json["version"], 1);
+        assert_eq!(json["version"], 2);
         assert_eq!(json["scannedAt"], "2026-07-17T00:00:00Z");
         assert!(json["plugins"].as_array().unwrap().is_empty());
+        assert!(json["artifacts"].as_array().unwrap().is_empty());
     }
 
     #[test]
@@ -666,18 +1438,37 @@ mod tests {
     }
 
     #[test]
-    fn scan_vst3_bundle_without_moduleinfo_is_skipped_not_probed() {
+    fn scan_vst3_bundle_without_moduleinfo_is_pending_not_failed() {
         let temp = tempfile::tempdir().expect("tempdir");
         let bundle = temp.path().join("NoModuleInfo.vst3");
         fs::create_dir_all(bundle.join("Contents/Resources")).unwrap();
         // moduleinfo.json を意図的に置かない。
 
         match scan_vst3_bundle(&bundle) {
-            VstScanResult::Skipped => {}
-            VstScanResult::Entries(entries) => {
-                panic!("expected Skipped, got Entries({entries:?})")
+            VstScanResult::ProbePending { reason } => {
+                assert_eq!(reason, "moduleinfoMissing");
+            }
+            VstScanResult::StaticSuccess(entries) => {
+                panic!("moduleinfo-less artifact must be pending, not successful: {entries:?}")
             }
         }
+
+        let outcome = scan_candidates(vec![(bundle, Format::Vst3)], false, &|_, _| {
+            panic!("metadata-only scan invoked native probe")
+        });
+        assert_eq!(
+            (
+                outcome.summary.success,
+                outcome.summary.pending,
+                outcome.summary.failure
+            ),
+            (0, 1, 0),
+            "moduleinfo-less artifact must count as probe pending, never as probe failure"
+        );
+        assert!(
+            outcome.skipped.is_empty(),
+            "probe-pending artifacts must not appear in the legacy skipped projection"
+        );
     }
 
     #[test]
@@ -698,12 +1489,224 @@ mod tests {
         .unwrap();
 
         match scan_vst3_bundle(&bundle) {
-            VstScanResult::Entries(entries) => {
+            VstScanResult::StaticSuccess(entries) => {
                 assert_eq!(entries.len(), 1);
                 assert_eq!(entries[0].plugin_id, "AAAA");
             }
-            VstScanResult::Skipped => panic!("expected Entries, got Skipped"),
+            VstScanResult::ProbePending { reason } => {
+                panic!("expected StaticSuccess, got ProbePending({reason})")
+            }
         }
+    }
+
+    #[test]
+    fn explicit_flag_is_the_only_path_that_invokes_native_probe() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = AtomicUsize::new(0);
+        let candidate = (PathBuf::from("/plugins/DescriptorOnly.clap"), Format::Clap);
+        let runner = |path: &Path, format: Format| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            ProbeExecution {
+                duration_ms: 3,
+                result: Ok(ProbeSuccess {
+                    source: "clapDescriptor".to_owned(),
+                    plugins: vec![CatalogEntry {
+                        name: "Descriptor Only".to_owned(),
+                        vendor: "Orbit".to_owned(),
+                        format,
+                        path: path.to_string_lossy().into_owned(),
+                        plugin_id: "descriptor-only".to_owned(),
+                        roles: vec![ROLE_EFFECT.to_owned()],
+                    }],
+                    descriptor_apis: vec!["clap".to_owned()],
+                }),
+            }
+        };
+
+        let unattended = scan_candidates(vec![candidate.clone()], false, &runner);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "metadata-only startup must not invoke a native child probe"
+        );
+        assert_eq!(unattended.summary.pending, 1);
+
+        let explicit = scan_candidates(vec![candidate], true, &runner);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(explicit.entries.len(), 1);
+        assert_eq!(explicit.summary.success, 1);
+        assert_eq!(explicit.summary.pending, 0);
+    }
+
+    #[test]
+    fn explicit_probe_keeps_static_plugins_and_recovers_pending_clap() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let vst3 = temp.path().join("Static.vst3");
+        fs::create_dir_all(vst3.join("Contents/Resources")).unwrap();
+        fs::write(
+            vst3.join("Contents/Resources/moduleinfo.json"),
+            r#"{
+  "Name": "Static Synth",
+  "Classes": [
+    { "CID": "STATIC", "Category": "Audio Module Class", "Sub Categories": ["Instrument"] }
+  ]
+}"#,
+        )
+        .unwrap();
+        let clap = temp.path().join("Descriptor.clap");
+        fs::write(&clap, "").unwrap();
+        let candidates = vec![(vst3, Format::Vst3), (clap, Format::Clap)];
+        let runner = |path: &Path, format: Format| ProbeExecution {
+            duration_ms: 1,
+            result: Ok(ProbeSuccess {
+                source: "clapDescriptor".to_owned(),
+                plugins: vec![CatalogEntry {
+                    name: "Descriptor Effect".to_owned(),
+                    vendor: "Orbit".to_owned(),
+                    format,
+                    path: path.to_string_lossy().into_owned(),
+                    plugin_id: "descriptor-effect".to_owned(),
+                    roles: vec![ROLE_EFFECT.to_owned()],
+                }],
+                descriptor_apis: vec!["clap".to_owned()],
+            }),
+        };
+
+        let before = scan_candidates(candidates.clone(), false, &runner);
+        let after = scan_candidates(candidates, true, &runner);
+        assert_eq!(before.entries.len(), 1);
+        assert_eq!(
+            after.entries.len(),
+            2,
+            "explicit probing must not regress CLAP count"
+        );
+        for old in before.entries {
+            assert!(
+                after
+                    .entries
+                    .iter()
+                    .any(|new| dedup_key(new) == dedup_key(&old)),
+                "every legacy static plugin must remain in the catalog v2 compatibility projection"
+            );
+        }
+    }
+
+    #[test]
+    fn summary_reports_factory_versions_reasons_and_duration_percentiles() {
+        let artifact = |state| CatalogArtifact {
+            format: Format::Vst3,
+            path: "/p/Test.vst3".to_owned(),
+            state,
+        };
+        let artifacts = vec![
+            artifact(ArtifactState::StaticSuccess {
+                source: "moduleinfo".to_owned(),
+                plugins: vec![],
+            }),
+            artifact(ArtifactState::ProbeSucceeded {
+                source: "factory".to_owned(),
+                duration_ms: 10,
+                descriptor_apis: vec!["factory3".to_owned(), "factory1".to_owned()],
+                plugins: vec![],
+            }),
+            artifact(ArtifactState::ProbeFailed {
+                duration_ms: 20,
+                failure: ProbeFailure {
+                    code: "timeout".to_owned(),
+                    message: "slow".to_owned(),
+                    exit_code: None,
+                    signal: Some(libc::SIGKILL),
+                },
+            }),
+            artifact(ArtifactState::ProbeFailed {
+                duration_ms: 30,
+                failure: ProbeFailure {
+                    code: "crash".to_owned(),
+                    message: "boom".to_owned(),
+                    exit_code: None,
+                    signal: Some(libc::SIGABRT),
+                },
+            }),
+        ];
+        let summary = summarize_artifacts(&artifacts);
+        assert_eq!(
+            (summary.success, summary.pending, summary.failure),
+            (2, 0, 2)
+        );
+        assert_eq!(summary.failure_reasons["timeout"], 1);
+        assert_eq!(summary.failure_reasons["crash"], 1);
+        assert_eq!(summary.timeouts, 1);
+        assert_eq!(summary.crashes, 1);
+        assert_eq!(summary.factory_versions["factory3"], 1);
+        assert_eq!(summary.factory_versions["factory1"], 1);
+        assert_eq!(
+            summary.duration_ms,
+            DurationSummary {
+                p50: Some(20),
+                p95: Some(30),
+                max: Some(30)
+            }
+        );
+    }
+
+    #[test]
+    fn child_protocol_ignores_third_party_stdout_before_its_json_line() {
+        let stdout = br#"2026-07-29 plugin diagnostic
+{"ok":true,"classes":[]}
+"#;
+        let parsed = parse_child_probe_output(stdout).expect("find trailing protocol JSON");
+        assert!(parsed.ok);
+        assert!(parsed.classes.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_kills_the_entire_probe_process_group_including_grandchildren() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pid_file = temp.path().join("grandchild.pid");
+
+        let capture = run_process_with_timeout(
+            Path::new("/bin/sh"),
+            &[
+                "-c".into(),
+                "sleep 60 </dev/null >/dev/null 2>&1 & echo $! > \"$1\"; wait".into(),
+                "group-kill-test".into(),
+                pid_file.as_os_str().to_owned(),
+            ],
+            Duration::from_secs(2),
+        )
+        .expect("run timeout helper");
+        assert!(capture.timed_out);
+        let grandchild_pid: libc::pid_t = fs::read_to_string(&pid_file)
+            .expect("grandchild pid file")
+            .trim()
+            .parse()
+            .expect("numeric grandchild pid");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let still_alive = loop {
+            // SAFETY: signal 0 performs existence/permission checking only.
+            let result = unsafe { libc::kill(grandchild_pid, 0) };
+            if result == -1 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                break false;
+            }
+            if Instant::now() >= deadline {
+                break true;
+            }
+            thread::sleep(Duration::from_millis(20));
+        };
+        if still_alive {
+            // Mutation-test hygiene: do not leak the deliberately surviving descendant.
+            // SAFETY: the pid was emitted by the helper started by this test.
+            unsafe {
+                libc::kill(grandchild_pid, libc::SIGKILL);
+            }
+        }
+        assert!(
+            !still_alive,
+            "timed out probe must SIGKILL the entire process group; descendant pid {grandchild_pid} remained alive"
+        );
     }
 
     #[test]
