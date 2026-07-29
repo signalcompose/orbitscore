@@ -1532,24 +1532,30 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       }
 
       // Topology (NOT a series chain): the sum bus feeds master directly AND
-      // sends to aux (amount 1), whose return also feeds master. With the
-      // zero-latency pure-gain CLAPTestEffect the graph was expected to be
+      // sends to aux (amount 1), whose return also feeds master. With an ideal
+      // zero-latency adder the graph would collapse to
       //   T = g_master · g_sequence · g_sum · (1 + g_aux)
-      //
-      // MEASURED on real hardware by reverting one gain to the 0.5 default:
-      //   master 44.4% (predicted 44.4%) — assert goes red
-      //   sum    41.2% (predicted 41.2%) — assert goes red
-      //   aux     0.0% (predicted 23.1%) — assert STAYS GREEN
-      //
-      // 🔴 The aux leg contributes NOTHING to the captured audio: even g_aux = 0.0
-      // leaves the measurement unchanged. That is a signal-path defect, not a
-      // test-sensitivity problem — see #587. So the audio oracle grounds
-      // master / sum / sequence (and instrument via pitch), but CANNOT ground aux.
-      // What covers aux today is the committed-bytes equality plus the path-bound
-      // restore-line assert; audio grounding for aux waits on #587.
-      //
-      // T is commutative in the series gains, so a state SWAP between them is
-      // inaudible; the path-bound restore-line asserts cover that failure class.
+      // Reverting any one SERIES gain to the 0.5 default moves the capture by
+      // 44.4% (master), 41.2% (sum) or 37.5% (sequence) — measured on real
+      // hardware, red as predicted. The aux term is different: every OOP
+      // insert is pipelined (+1 block of latency), so the aux return lags the
+      // direct leg by one device block. The kick's file peak lands ~66 samples
+      // after onset — inside that block — so the whole-file peak is
+      // mathematically insensitive to g_aux at ANY tolerance, and whole-file
+      // RMS moves only ~4% (measured signed −4.11% for g_aux 0.95 → 0.0; the
+      // ideal 23.1% shrinks under the kick's negative lag-autocorrelation
+      // plus silence/synth dilution). That 4.11% is real signal, not noise:
+      // the no-mutation noise floor between two same-settings captures is
+      // 3.4e-6. So the RMS restore assert below runs at 2% tolerance — tight
+      // enough that a lost aux restore goes red — while peak keeps 15% and
+      // covers the series gains only (#587: measurement sensitivity, not a
+      // signal-path defect). The aux leg itself is pinned at bus level by the
+      // daemon gated test set_bus_routing_wires_sum_send_to_aux_and_return
+      // (rust/crates/orbit-audio-daemon/tests/outproc_mixer_bus_gated.rs);
+      // the committed-bytes equality and the path-bound restore-line assert
+      // cover the aux STATE from the manifest side. T is commutative in the
+      // series gains, so a state SWAP between them is inaudible; the
+      // path-bound restore-line asserts cover that failure class too.
       const effectStates = [
         {
           receiverKey: receiverKeys[0],
@@ -1796,10 +1802,22 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           restoredPeakDelta,
           `restored peak ${restoredAnalysis.peak} must match pre-restart ${preRestartAnalysis.peak}`,
         ).toBeLessThanOrEqual(0.15)
+        // RMS tolerance is 2%, not the peak's 15%. Measured on real hardware
+        // (#587): the no-mutation noise floor between two same-settings
+        // captures is 3.4e-6 (0.00034%), while the smallest real fault — the
+        // aux insert's contribution going missing — moves whole-file RMS by
+        // 4.11% (signed, measured for g_aux 0.95 → 0.0). 2% sits ~6000× above
+        // the measured floor and ~2× under that smallest fault, so a lost aux
+        // restore goes red here while same-machine reruns stay green. The
+        // peak assert keeps 15%: its cross-run floor is unmeasured, and the
+        // whole-file peak is structurally blind to the aux leg (the pipelined
+        // aux return lags one device block behind the direct leg, and the
+        // kick's peak sits inside that block), so tightening it buys no aux
+        // detection — RMS is the discriminating meter here.
         expect(
           restoredRmsDelta,
           `restored RMS ${restoredAnalysis.rms} must match pre-restart ${preRestartAnalysis.rms}`,
-        ).toBeLessThanOrEqual(0.15)
+        ).toBeLessThanOrEqual(0.02)
 
         // Instrument leg: pitch, not level. Thresholds mirror the MCP-save
         // instrument test (±2% against the musical spec, ≤1% across restart).
