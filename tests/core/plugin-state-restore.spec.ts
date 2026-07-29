@@ -519,22 +519,50 @@ describe('project.yaml plugin state auto-restore (#541)', () => {
     expect(h.audio.loadPlugin).toHaveBeenCalledTimes(1)
   })
 
-  it('U12 keeps sum/aux inserts outside project.yaml auto-restore', async () => {
+  it('U12 restores same-named sum/aux inserts only from their prefixed receiver keys', async () => {
     const h = harness()
+    const sumStatePath = 'states/sum-correct.state'
+    const auxStatePath = 'states/aux-correct.state'
     register(h.directory, {
-      'drum/effect/GlueComp/0': 'states/external-receiver-decoy.state',
-      'sum:drum/effect/GlueComp/0': 'states/internal-receiver-decoy.state',
+      'sum:drum/effect/GlueComp/0': sumStatePath,
+      'aux:drum/effect/GlueComp/0': auxStatePath,
+      'drum/effect/GlueComp/0': 'states/unprefixed-decoy.state',
     })
 
     await h.mixer.sum('drum').effect('./GlueComp.clap')
+    await h.mixer.aux('drum').effect('./GlueComp.clap')
 
-    expect(h.audio.loadPlugin).toHaveBeenCalledWith(
+    expect(h.audio.loadPlugin).toHaveBeenNthCalledWith(
+      1,
       path.join(h.directory, 'GlueComp.clap'),
       undefined,
       'effect',
       'sum-bus-0',
+      undefined,
+      path.resolve(h.directory, sumStatePath),
     )
-    expect(h.audio.loadPlugin).toHaveBeenCalledTimes(1)
-    expect(console.log).toHaveBeenCalledTimes(0)
+    expect(h.audio.loadPlugin).toHaveBeenNthCalledWith(
+      2,
+      path.join(h.directory, 'GlueComp.clap'),
+      undefined,
+      'effect',
+      'aux-bus-0',
+      undefined,
+      path.resolve(h.directory, auxStatePath),
+    )
+    expect(h.audio.loadPlugin).toHaveBeenCalledTimes(2)
+    expect(console.log).toHaveBeenCalledWith(
+      `[plugin-state] restoring 'sum:drum/effect/GlueComp/0' from ${path.resolve(
+        h.directory,
+        sumStatePath,
+      )}`,
+    )
+    expect(console.log).toHaveBeenCalledWith(
+      `[plugin-state] restoring 'aux:drum/effect/GlueComp/0' from ${path.resolve(
+        h.directory,
+        auxStatePath,
+      )}`,
+    )
+    expect(console.log).toHaveBeenCalledTimes(2)
   })
 })

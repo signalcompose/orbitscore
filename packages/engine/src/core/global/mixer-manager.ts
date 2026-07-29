@@ -1,4 +1,5 @@
 import type { AudioEngine } from '../../audio/types'
+import { createStatePathFallback } from '../project-state-store'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
@@ -7,6 +8,7 @@ import {
   EffectChainMap,
   normalizePluginInstanceName,
   resolveEffectSpec,
+  type PluginSlot,
 } from './effect-slot'
 
 /**
@@ -31,7 +33,30 @@ export const MIXER_BUS_POOL_SIZE = 4
  */
 export const MIXER_BUS_KINDS = ['sum', 'aux'] as const
 
-type MixerKind = (typeof MIXER_BUS_KINDS)[number]
+export type MixerKind = (typeof MIXER_BUS_KINDS)[number]
+
+/**
+ * Round-trip converters for the prefixed receiver identity (`sum:<name>` /
+ * `aux:<name>`) that addresses a mixer bus in plugin-state persistence (#564).
+ * This pair is the ONLY home of the wire format: producers (the
+ * `EffectChainMap` receiver ids below), the parser, and every diagnostic that
+ * spells out a prefixed id must go through it, so changing the separator
+ * changes generation, parsing, and error guidance together.
+ */
+export function formatReceiverId(kind: MixerKind, name: string): string {
+  return `${kind}:${name}`
+}
+
+/** Inverse of {@link formatReceiverId}; undefined when `id` carries no sum/aux prefix. */
+export function parseReceiverId(id: string): { kind: MixerKind; name: string } | undefined {
+  for (const kind of MIXER_BUS_KINDS) {
+    const prefix = formatReceiverId(kind, '')
+    if (id.startsWith(prefix)) {
+      return { kind, name: id.slice(prefix.length) }
+    }
+  }
+  return undefined
+}
 
 /**
  * Brand marking a value as a mixer bus handle. Carried by the handle itself
@@ -90,18 +115,23 @@ export class MixerManager {
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
   ) {
-    const makeKind = (kind: MixerKind, prefix: string): KindState => ({
-      buses: new Map(),
-      // #564 でアドレス指定が未決のため、sum/aux は state 自動復元の対象外。
-      inserts: new EffectChainMap(audioEngine, (name) => `${kind}:${name}`),
-      pool: new BusPool(
-        prefix,
-        MIXER_BUS_POOL_SIZE,
-        (name) =>
-          `global.${kind}("${name}"): ${kind} bus pool exhausted — v1 supports at most ` +
-          `${MIXER_BUS_POOL_SIZE} concurrent ${kind} buses.`,
-      ),
-    })
+    const makeKind = (kind: MixerKind, prefix: string): KindState => {
+      const receiverId = (name: string) => formatReceiverId(kind, name)
+      return {
+        buses: new Map(),
+        inserts: new EffectChainMap(audioEngine, receiverId, {
+          externalReceiverId: receiverId,
+          statePathFallback: createStatePathFallback(audioManager),
+        }),
+        pool: new BusPool(
+          prefix,
+          MIXER_BUS_POOL_SIZE,
+          (name) =>
+            `global.${kind}("${name}"): ${kind} bus pool exhausted — v1 supports at most ` +
+            `${MIXER_BUS_POOL_SIZE} concurrent ${kind} buses.`,
+        ),
+      }
+    }
     this.kinds = { sum: makeKind('sum', SUM_BUS_PREFIX), aux: makeKind('aux', AUX_BUS_PREFIX) }
   }
 
@@ -143,6 +173,21 @@ export class MixerManager {
   /** Resolves a declared aux bus name to its allocated bus, or undefined if undeclared. */
   resolveAux(name: string): string | undefined {
     return this.kinds.aux.buses.get(name)
+  }
+
+  /** Resolves a declared bus in the explicitly selected receiver namespace. */
+  resolveBus(kind: MixerKind, name: string): string | undefined {
+    return this.kinds[kind].buses.get(name)
+  }
+
+  /** The kinds (sum / aux) that currently have a bus declared under `name`. */
+  kindsWithBus(name: string): MixerKind[] {
+    return MIXER_BUS_KINDS.filter((kind) => this.kinds[kind].buses.has(name))
+  }
+
+  /** Current insert chain for an explicitly selected mixer receiver. */
+  chainFor(kind: MixerKind, name: string): readonly PluginSlot[] {
+    return this.kinds[kind].inserts.chainFor(name)
   }
 
   resolveNode(name: string): { kind: MixerKind; bus: string } | undefined {

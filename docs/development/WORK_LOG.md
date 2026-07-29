@@ -17,6 +17,143 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.327 feat(engine): address mixer-bus inserts for plugin state — #564 (Jul 29, 2026)
+
+**Date**: 2026-07-29（レビューラウンド1の修正を反映した最終形。`/simplify` 5952aa0 で
+撤回した中間設計の記述は本セクションから除去済み — 現行仕様はここだけで読める）
+**Status**: ✅ ユニット/統合 green・レビューラウンド1適用済み。sum/aux が sequence と同じ土俵に乗った
+
+`global.sum("drum").effect("Pro-Q 4")` の音色が**保存できなかった**。DSL 上は挿せて音も出るのに、
+`resolvePluginStateTarget` が `master` だけを特別扱いしており sum/aux 名に到達できなかった。
+
+| レシーバ | before | after |
+|---|---|---|
+| sequence / master | ✅ 保存できる | ✅ |
+| **sum / aux** | ❌ **`not supported`** | ✅ **保存・復元できる** |
+
+#### 接頭辞方式（owner 確定）
+
+```
+save_plugin_state("sum:drum", 1)     // sum バスの drum
+save_plugin_state("aux:reverb", 1)   // aux バスの reverb
+save_plugin_state("drum", 1)         // 従来どおり sequence（後方互換）
+```
+
+**採用理由**: `mixer-manager.ts` の `EffectChainMap` が既に identity として
+`` `${kind}:${name}` `` を使っている。**新概念を増やさず内部表記を外に出すだけ**で済む。
+
+**語彙（レビューラウンド1で統一）**: `master` は「**master 出力エンドポイント**」であり、
+sum / aux の「**mixer バス**」とは別概念。`declareBus` が `master` という名前の sum/aux バス
+宣言を明示的に禁止しており、実装が既にこの区別を強制している。MCP tool description・
+spec UIH.5 の冒頭定義と責務表をこの語彙に揃えた。`open_plugin_ui` / `close_plugin_ui` は
+**未実装**のため「UI open/close は v1 では sequence 限定」と spec に明記
+（receiver 一般化が v1 で効くのは state 保存・復元のみ）。
+
+**衝突は実在した**: `declareBus` が弾くのは空文字と `"master"` だけで、sum と aux の
+名前重複は止まらない。`resolveNode` は sum → aux の順なので、**同名なら黙って sum が勝つ**。
+
+```
+global.sum("drum").effect("Pro-Q 4")
+global.aux("drum").effect("Valhalla")   // 両方通る
+```
+
+この状態で `"drum"` を保存すると **Pro-Q 4 が保存され、エラーは出ない**。
+そこで **`resolveNode()` を state 解決に持ち込まず**、両 kind を列挙して
+**次の一手を示す診断**にした:
+
+```
+Unknown sequence 'drum'; a same-named mixer bus exists.
+Use 'sum:drum' or 'aux:drum' to save its insert state.
+```
+
+#### wire format は `formatReceiverId` / `parseReceiverId` に一元化（最終形）
+
+接頭辞付き receiver id の生成・解析は `mixer-manager.ts` の
+**`formatReceiverId(kind, name)` / `parseReceiverId(id)` のペアだけ**が持つ。
+接頭辞そのものも `formatReceiverId(kind, '')` から導出するため、**区切り文字を変えると
+生成・解析・診断文言が一緒に変わる**（片側だけ変わる縫い目が存在しない）。
+`parseReceiverId` は **先頭アンカーの `startsWith`** で判定し、`my-sum:x` のような
+sequence 形の名前をバス扱いしない。この2関数には**直接ユニットテスト**を置いた
+（空 name・複数コロン・接頭辞なし・**接頭辞が先頭に無い形**・往復性。
+`plugin-state-save.spec.ts` の `prefixed receiver id wire format (#564)`）。
+
+daemon target へ渡すのは receiverId から接頭辞を剥いだ文字列ではなく、
+**宣言名で解決した物理バス（chain slot が保持する `sum-bus-0` 等の pool 割り当て名）**。
+剥いだ宣言名は当該 kind 名前空間のルックアップキーとしてのみ使う（spec UIH.5 も同旨に修正）。
+
+#### bus 分岐は `pluginStateBusChain`（private・除外リスト登録）
+
+master / `sum:` / `aux:` の chain 解決は `Global` の private ヘルパー
+`pluginStateBusChain` が担う。この関数は **`this` を3回使う**
+（`pluginEffectManager.chain()` / `mixerManager.resolveBus` / `mixerManager.chainFor`）ため
+クラス外へ出せず、`signal-chain-dispatch.spec.ts` の分類検査では**除外リストに追加**した。
+規則は「除外リストを増やすな」ではなく**「外に出せるものを除外リストで黙らせるな」**
+（#528 の事故は「外に出せるのに除外した」誤分類が原因。出せないものの登録は正当）。
+
+#### 🔴 ゴールポストを下げないための仕掛け
+
+Epic #546 のループ「宣言 → 音色を作る → **自動記録** → 再起動 → 同じ音」のうち、
+**「自動記録」はどのレシーバ種別にも存在しない**ことが判明した（保存経路は
+`save_plugin_state` と `//#savePluginState` の2つだけ。#541 の E2E ですら MCP で叩いている）。
+
+main は当初、E2E のステップ3「自動記録される」を**黙って明示保存に差し替えよう**としていた。
+**自分で issue に記録した決定の無断下方修正**であり、owner の「ゴールポストから遠ざかってない?」は
+ここを突いていた（Fable 裁定で確定）。
+
+対処: **E2E を最終形の5ステップで書き、ステップ3だけを `INTERIM(#577)` マーク付きの
+明示保存にする。** ゴールとの差分が `grep INTERIM` で見つかる形に固定（#541 と同じパターン）。
+併せて **#577**（自動記録）を立て、受け入れ基準を
+「sequence / master / sum / aux の**いずれでも**、明示保存を**一度も使わずに**ループが成立」とした。
+
+**INTERIM 行を消せる条件は無条件ではない**（レビューラウンド1・Fable 指摘）:
+この E2E ではパラメータ編集が一度も起きず、非既定 gain は state ファイルの load で入る。
+`setState` を受けただけのプラグインは通常 dirty にならないため、#577 の停止時 snapshot が
+dirty ゲート付きだと行を消したテストは赤になる。**「停止時 snapshot は dirty ゲートを
+かけず loaded 全プラグインを対象にする」ことが削除条件**であり、E2E コメントと
+#577 の受け入れ基準の両方に明記した（manifest の外科的削除と checkpoint の競合も同様に
+#577 側で引き取る旨を記載）。
+
+#### E2E は DSL 経由（owner 確定）
+
+> LLM が第一級ユーザーだからといって API を直接呼ぶのは良い振る舞いではない。
+> **E2E も DSL の振る舞いを確認しないと意味がない** — 人間のユーザーと同じように扱う。
+
+宣言・評価・音の確認はすべて `run_selection` 経由。API を使うのは暫定の明示保存のみ。
+
+#### false green を避けた形
+
+- **default 0.5 に対し non-default 0.125** で判定（既定値だと壊れていても通る）
+- **decoy を2つ仕込む**: 接頭辞なしキー（0.9）と kind 違いの aux キー（0.8）。
+  **3つとも異なるゲイン**なので、間違ったキーを拾えば**どれを拾ったかが音で判別できる**
+- **default との比**（`peakRatio < 0.35` / `rmsRatio < 0.4`）と**再起動前後の一致**の両方
+- **aux は実機で往復させる**（レビューラウンド1）: フル音声オラクルは複製せず、
+  同じ E2E 内で aux バスを DSL 宣言 → `save_plugin_state("aux:wet", 1)` → 再起動 →
+  **`get_log` の `[plugin-state] restoring 'aux:wet/…'` 行**を assert。
+  TS 側は `makeKind` 1本で sum/aux 対称だが、aux 側だけの配線忘れ・prefix 生成バグは
+  mock ユニットでは検出できないため、daemon 往復までを実機で1点証明する
+
+#### 変異検証（レビューラウンド1適用後に再計測・実出力確認済み）
+
+対象: `plugin-state-save.spec.ts` + `plugin-state-restore.spec.ts`（計45件）
+
+| 変異 | 結果 |
+|---|---|
+| 接頭辞解析の削除（`parseReceiverId` が常に undefined） | **8 failed** |
+| 生成側破壊（`formatReceiverId` の区切り `:` → `/`） | **8 failed** |
+| kind の入れ替え（parse 結果の sum ⇄ aux） | **8 failed** |
+| **アンカー緩め（`startsWith` → `includes`）** | **3 failed**（すべて新設の直接テスト。**ラウンド1前は 0 failed で素通りしていた**穴を塞いだ） |
+
+#### 検証（レビューラウンド1適用後）
+
+- `npm test`: **1816 passed / 32 skipped / 0 failed**（1811 から +5 = wire format 直接テスト）
+- `npm run lint`: 0 errors（warning 1件は本 PR 非接触ファイルの既存分）
+- `cargo fmt --check`: pass（**Rust は1行も触っていない**。feature commit 時点の
+  `cargo test --workspace --locked` は 410 passed / 0 failed）
+- 実機 E2E（sum 音声オラクル 3面 + 再起動一致）は feature commit 時点で green。
+  aux 追加分を含む再実行は**マージ前ゲートで実施**する
+
+---
+
 ### 6.326 fix(scan): PR #575 review round 2 — fix-scoped hang + test process leak (Jul 29, 2026)
 
 **Date**: 2026-07-29
