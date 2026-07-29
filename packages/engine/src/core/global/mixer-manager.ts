@@ -190,12 +190,25 @@ export class MixerManager {
     return this.kinds[kind].inserts.chainFor(name)
   }
 
+  /** #579: 曖昧な裸名の診断文言。throw（resolveNode）と warn（declareBus）で同一文言を使う。 */
+  private static ambiguousMessage(name: string): string {
+    const quotedName = JSON.stringify(name)
+    return (
+      `Mixer bus name ${quotedName} is ambiguous: it is declared as both sum and aux. ` +
+      `Use global.sum(${quotedName}) / global.aux(${quotedName}) (string form), or a ` +
+      'kind-specific mixer node variable such as `var drums = mix.sum`, to select the kind explicitly.'
+    )
+  }
+
   resolveNode(name: string): { kind: MixerKind; bus: string } | undefined {
-    const sum = this.resolveSum(name)
-    if (sum !== undefined) return { kind: 'sum', bus: sum }
-    const aux = this.resolveAux(name)
-    if (aux !== undefined) return { kind: 'aux', bus: aux }
-    return undefined
+    const matchingKinds = this.kindsWithBus(name)
+    if (matchingKinds.length > 1) {
+      throw new Error(MixerManager.ambiguousMessage(name))
+    }
+    const kind = matchingKinds[0]
+    if (kind === undefined) return undefined
+    const bus = this.resolveBus(kind, name)
+    return bus === undefined ? undefined : { kind, bus }
   }
 
   ownsBus(bus: string): boolean {
@@ -229,6 +242,9 @@ export class MixerManager {
     if (bus === undefined) {
       bus = state.pool.acquire(name)
       state.buses.set(name, bus)
+      if (this.kindsWithBus(name).length > 1) {
+        console.warn(MixerManager.ambiguousMessage(name))
+      }
     }
     return this.makeHandle(kind, name, bus)
   }

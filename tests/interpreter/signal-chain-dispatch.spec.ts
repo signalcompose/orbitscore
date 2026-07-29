@@ -331,6 +331,122 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     await expect(run('lead.RoleSplit()', state)).rejects.toThrow((stringError as Error).message)
   })
 
+  it('rejects an ambiguous bare mixer receiver declared by both string forms', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await run('global.sum("drum")\nglobal.aux("drum")', state)
+
+      await expect(run('drum.TALReverb4()', state)).rejects.toThrow(
+        /global\.sum\("drum"\).*global\.aux\("drum"\)/,
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('rejects an ambiguous bare mixer name reached as a sequence chain method (#579)', async () => {
+    // Third resolution path to MixerManager.resolveNode(): a sequence chaining
+    // to the bare bus name (`kick.drum()`), dispatched via resolveChainDispatch
+    // — distinct from the statement-target path (`drum.TALReverb4()`, above)
+    // and the `sidechain:` path (below). Review round 1 proved by mutation
+    // that swallowing the resolver throw at this call site left the entire
+    // suite green: this test is the only guard on that path.
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await run('var kick = init global.seq\nglobal.sum("drum")\nglobal.aux("drum")', state)
+
+      await expect(run('kick.drum()', state)).rejects.toThrow(
+        /global\.sum\("drum"\).*global\.aux\("drum"\)/,
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('warns once and keeps the resolver loud when the sum half comes from a node declaration (#579 mixed form)', async () => {
+    // `var drum = mix.sum` goes through the same Global.sum() the string form
+    // uses, so declaring the OTHER kind as a string afterwards must trip the
+    // same second-kind warning and the same resolveNode() ambiguity throw —
+    // "one check covers both the string form and the node-declaration form".
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await run(
+        'var kick = init global.seq\nvar mix = init global.mixer\nvar drum = mix.sum\nglobal.aux("drum")',
+        state,
+      )
+
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/ambiguous.*both sum and aux/i))
+      // The string-form resolver throws even though the sum half was declared
+      // via the node form. The DSL chain path cannot reach this throw while
+      // the node variable is registered — the runtime registry wins (that
+      // shadowing is the escape hatch; the rescue test below pins it down).
+      expect(() => global.resolveMixerBus('drum')).toThrow(
+        /global\.sum\("drum"\).*global\.aux\("drum"\)/,
+      )
+      // And the node variable keeps the bare name usable: it resolves to the
+      // kind the variable picked, not to an error.
+      const routing = vi.spyOn(global, 'setBusRouting').mockResolvedValue(undefined)
+      await run('kick.drum', state)
+      expect(routing).toHaveBeenCalledTimes(1)
+      expect(routing).toHaveBeenCalledWith('seq-bus-0', 'sum-bus-0', [])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('declaring a kind-specific node variable rescues an ambiguous bare name (#579 registry priority)', async () => {
+    // The ambiguity diagnostic promises two escape hatches; the node-variable
+    // one works because resolveMixerNode() consults the runtime registry
+    // BEFORE the throwing string-form resolver (signal-chain/runtime.ts). This
+    // is the only test standing on that half of the promise — the string-form
+    // half is covered by the explicit resolveSumBus()/resolveAuxBus() suites.
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await run('var kick = init global.seq\nglobal.sum("drums")\nglobal.aux("drums")', state)
+      await expect(run('kick.drums', state)).rejects.toThrow(
+        /global\.sum\("drums"\).*global\.aux\("drums"\)/,
+      )
+
+      await run('var mix = init global.mixer\nvar drums = mix.sum', state)
+      const routing = vi.spyOn(global, 'setBusRouting').mockResolvedValue(undefined)
+      await run('kick.drums', state)
+      expect(routing).toHaveBeenCalledTimes(1)
+      expect(routing).toHaveBeenCalledWith('seq-bus-0', 'sum-bus-0', [])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('reports an ambiguous sidechain name before the aux-only validation error', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await run('var kick = init global.seq\nglobal.sum("drum")\nglobal.aux("drum")', state)
+
+      let thrown: unknown
+      try {
+        await run('kick.TALReverb4(sidechain: drum)', state)
+      } catch (error) {
+        thrown = error
+      }
+      expect(thrown).toBeInstanceOf(Error)
+      expect((thrown as Error).message).toMatch(/global\.sum\("drum"\).*global\.aux\("drum"\)/)
+      expect((thrown as Error).message).not.toMatch(/not a declared aux/i)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('throws actionable errors for unknown names, staged args, sidechain, mixer names, and second inserts', async () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)

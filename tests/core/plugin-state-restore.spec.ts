@@ -529,6 +529,9 @@ describe('project.yaml plugin state auto-restore (#541)', () => {
       'drum/effect/GlueComp/0': 'states/unprefixed-decoy.state',
     })
 
+    // The sum/aux pair on one name intentionally exercises the #579 ambiguous
+    // fixture; silence its declaration warning (restored by afterEach).
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     await h.mixer.sum('drum').effect('./GlueComp.clap')
     await h.mixer.aux('drum').effect('./GlueComp.clap')
 
