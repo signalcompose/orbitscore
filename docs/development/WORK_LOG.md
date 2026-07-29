@@ -17,6 +17,96 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.326 fix(scan): PR #575 review round 2 — fix-scoped hang + test process leak (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ レビュー収束。**実機 E2E も pass**（マージ前ゲート通過）
+
+ラウンド2は **fix-scoped の縮小レビュー**（修正差分のみ・問いは「この修正が導入する新しい
+故障モードは何か」「新コードはどの実行コンテキストで走るか」の2つ）。
+**元差分起因の新規指摘は0**で、リスクは修正自体に移っていた。
+
+#### 直したはずの「無言で固まる」を再導入していた
+
+タイムアウト時の `process.kill(-pid, 'SIGKILL')` が `ESRCH` 以外で throw するか、
+信号は送れたが対象が死なない（D-state。**まさにこの機能が想定しているハング**）場合、
+`finish()` が呼ばれず `close` も発火せず、**Promise が永久に未解決**になっていた。
+
+**Rust 側には既に `PROCESS_KILL_WAIT_TIMEOUT` があるのに Node 側へ移植していなかった**
+という非対称が原因。両側で同じ名前・同じ意味論に揃えた。
+
+レビュアーは机上でなく**実際に再現**している（`process.kill` を負の pid だけ EPERM にして
+`elapsed=4002 settled=false`）。さらに「**新しいテスト自身が手動 kill のフォールバックを
+持っている**ことが、作者が `close` の発火を保証できないと暗に認めた形跡」という
+読み方をしていた。テストの構造から設計の弱さを読む筋の良い指摘。
+
+#### `detached` が広げた孤児化の窓（鏡像欠陥）
+
+**孤児対策の修正が、逆方向の孤児経路を作っていた。** 子を独立プロセスグループにすれば
+孫まで確実に殺せるが、同時に**親のグループへの一括シグナルが子に届かなくなる**。
+どちらの向きにも「殺し損ね」が起きうるので、**両側で塞がないと片方が必ず開く**。
+
+`deactivate()` で正常終了の経路を閉じ、残る窓（拡張ホストが signal で即死）は
+コメントで明示。lock file による自己回収は本 PR には過剰なので実装しない。
+
+#### #576 のテストリーク — 真因を特定して同じ PR で直した
+
+**別 PR にしなかったのは、本 PR 自身の検証がリークで汚れたままになり
+直ったかどうかを確認できないため**（owner 判断）。実際この PR の検証中に3回踏んでいる。
+
+発生源は `tests/vscode-extension/engine-command-awaits.spec.ts`（bisect で確定）。
+**機序**: 本物の `spawn` をラップしてモックしているが、`afterEach` の
+`vi.restoreAllMocks()` が**本物に戻す**。テスト中に投げっぱなしにされた非同期処理が
+**モックが外れた後に着地して本物の `spawn` を呼ぶ**ため、毎回きっちり1本漏れる。
+テストは緑のまま、漏れたプロセスだけが ppid=1 の孤児として残る。
+
+> 「テストが終わった」と「テストが起こした処理が終わった」は別、という
+> [[subagent-completion-notice-is-not-quiescence]] と同じ構造。
+
+修正は2段構え: mock restore 前に drain → `deactivate()` → 再 drain。さらに
+**restore 後に実 spawn が起きたらテストを失敗させる guard** を追加し、
+静かな漏れを**赤いテスト**に変えた。
+
+| | 修正前 | 修正後 |
+|---|---|---|
+| 当該 spec 単独（4回） | 毎回 1本 | **0 / 0 / 0 / 0** |
+| full `npm test` | 1本 | **0本** |
+
+> Codex は sandbox で `pgrep` が使えず「実測として保証できない」と正直に報告してきた。
+> **今回の肝がその数字**なので main が測り直した。
+
+弱いアサーション側（`daemon-client.spec.ts`）も、同ファイルの `badShebangBin` テストが
+既に守っていた規律（reject の経路を文言で固定する）を適用した。
+**負荷の生産者と負荷に弱い検出器の両方**を直さないと再発する。
+
+#### 検証（すべて main が sandbox 外で実行）
+
+- `cargo test --workspace --locked`: **410 passed / 0 failed**
+- outproc-effect 143 / outproc-instrument 118 / both 186（すべて 0 failed）
+- `cargo fmt --check` / `cargo clippy --workspace --all-targets -- -D warnings`: pass
+- `npm test`: **1806 passed / 31 skipped / 0 failed**
+- **full suite 実行後の残留プロセス: 0**
+
+#### マージ前ゲート: ビルド + 実機 E2E
+
+`npm run build:clean` 後、OrbitStudio を終了してから gated E2E を実行:
+
+```
+✓ rescans catalog v2 through MCP, reports a broken bundle, and preserves a known CLAP fixture
+✓ drives real OrbitStudio end-to-end: diagnostics-on-open, run_selection, live edit, capture verification
+✓ restores an MCP-saved non-default instrument state across an engine restart with the same measured pitch
+Test Files 1 passed / Tests 3 passed
+```
+
+新 E2E は `ok` だけで判断せず、**`get_log` の `ERROR:` 件数を前後比較**し、
+**意図的に壊したバンドルが `failures` に現れること**と
+**CLAP fixture が `list_plugins` に残ること**を検証している。
+ラウンド1で直した「診断が読み出せない」問題が実機の MCP 経路で効いていることの証明。
+
+**E2E 実行後の残留プロセスも 0**（OrbitStudio / repl / daemon）。
+
+---
+
 ### 6.325 fix(scan): PR #575 review round 1 — failure recovery and observable diagnostics (Jul 29, 2026)
 
 **Date**: 2026-07-29
