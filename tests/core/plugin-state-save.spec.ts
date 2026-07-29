@@ -12,7 +12,10 @@ import {
   parseReceiverId,
 } from '../../packages/engine/src/core/global/mixer-manager'
 import { Sequence } from '../../packages/engine/src/core/sequence'
-import { stateFileNameForIdentity } from '../../packages/engine/src/core/project-state-store'
+import {
+  ProjectStateStore,
+  stateFileNameForIdentity,
+} from '../../packages/engine/src/core/project-state-store'
 
 const temporaryDirectories: string[] = []
 
@@ -145,6 +148,72 @@ describe('plugin state address resolution and project registration (#562)', () =
     await global.saveAllPluginStates()
 
     expect(audio.savePluginState).toHaveBeenCalledTimes(1)
+  })
+
+  it('continues after one target fails and reports the partial result as an error', async () => {
+    const { directory, audio, global } = harness()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await global.effect('./MasterLimiter.vst3')
+    await global.sum('drum').effect('./SumGlue.clap')
+    await global.aux('wet').effect('./AuxVerb.clap')
+    audio.savePluginState.mockRejectedValueOnce(new Error('master refused state'))
+
+    await expect(global.saveAllPluginStates()).resolves.toEqual({ saved: 2, failures: 1 })
+
+    expect(audio.savePluginState).toHaveBeenCalledTimes(3)
+    const states = (
+      parse(fs.readFileSync(path.join(directory, 'project.yaml'), 'utf8')) as {
+        states: Record<string, string>
+      }
+    ).states
+    expect(states).not.toHaveProperty('master/effect/MasterLimiter/0')
+    expect(states).toHaveProperty('sum:drum/effect/SumGlue/0')
+    expect(states).toHaveProperty('aux:wet/effect/AuxVerb/0')
+    expect(error).toHaveBeenCalledWith(
+      "[plugin-state] auto-snapshot failed for 'master/effect/MasterLimiter/0': master refused state",
+    )
+    expect(error).toHaveBeenCalledWith('[plugin-state] auto-snapshot complete (2 saved, 1 failed)')
+  })
+
+  it('shares a store across Globals by engine and absolute directory, but not across engines', async () => {
+    const { directory, audio, global: first } = harness()
+    const second = new Global(audio)
+    second.setDocumentDirectory(path.join(directory, '.'))
+    const otherHarness = harness()
+    const third = otherHarness.global
+    third.setDocumentDirectory(directory)
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    await first.instrument('first', './First.clap')
+    await second.instrument('second', './Second.clap')
+    await third.instrument('third', './Third.clap')
+    const save = vi.spyOn(ProjectStateStore.prototype, 'save')
+
+    await first.saveAllPluginStates()
+    await second.saveAllPluginStates()
+    await third.saveAllPluginStates()
+
+    expect(save.mock.instances[0]).toBe(save.mock.instances[1])
+    expect(save.mock.instances[2]).not.toBe(save.mock.instances[0])
+  })
+
+  it('preserves both registrations when two Globals save the same project concurrently', async () => {
+    const { directory, audio, global: first } = harness()
+    const second = new Global(audio)
+    second.setDocumentDirectory(directory)
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    await first.instrument('first', './First.clap')
+    await second.instrument('second', './Second.clap')
+
+    await Promise.all([first.saveAllPluginStates(), second.saveAllPluginStates()])
+
+    const states = (
+      parse(fs.readFileSync(path.join(directory, 'project.yaml'), 'utf8')) as {
+        states: Record<string, string>
+      }
+    ).states
+    expect(states).toHaveProperty('first/instrument/First/0')
+    expect(states).toHaveProperty('second/instrument/Second/0')
   })
 
   it('resolves instrument index 0 to SC.5 identity and the daemon instance', async () => {
@@ -437,16 +506,19 @@ describe('plugin state address resolution and project registration (#562)', () =
 })
 
 describe('plugin state automatic snapshot wiring (#577)', () => {
-  it('T1: keeps normal auto-snapshot skips off stderr', async () => {
+  it('T1: keeps zero-target skips quiet and makes unsaved loaded targets visible', async () => {
     const { audio, global } = harness()
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
 
     await expect(global.saveAllPluginStates()).resolves.toEqual({ saved: 0, failures: 0 })
     expect(warn).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
     expect(log).toHaveBeenCalledWith(
       '[plugin-state] auto-snapshot skipped: no loaded plugin targets',
     )
+    expect(log.mock.calls[0]?.[0]).not.toContain('⚠️')
 
     const globalWithoutDirectory = new Global(audio)
     const sequence = new Sequence(globalWithoutDirectory, audio)
@@ -460,8 +532,10 @@ describe('plugin state automatic snapshot wiring (#577)', () => {
       failures: 0,
     })
     expect(warn).not.toHaveBeenCalled()
+    expect(error).not.toHaveBeenCalled()
     expect(log).toHaveBeenCalledWith(
-      '[plugin-state] auto-snapshot skipped: document directory is not set',
+      '[plugin-state] ⚠️ auto-snapshot skipped: document directory is not set; ' +
+        "unsaved targets: 'lead-without-directory/instrument/LeadSynth/0'",
     )
   })
 

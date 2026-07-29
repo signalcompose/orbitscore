@@ -33,18 +33,24 @@ export async function shutdown(interpreter: InterpreterV2 | null): Promise<void>
 
     let timeout: NodeJS.Timeout | undefined
     try {
-      const snapshot = (async () => {
-        for (const global of globals) {
-          await global.saveAllPluginStates()
-        }
-        return 'complete' as const
-      })()
+      const totalTargets = globals.reduce(
+        (total, global) => total + global.listPluginStateTargets().length,
+        0,
+      )
+      let confirmedTargets = 0
+      const snapshot = Promise.all(
+        globals.map(async (global) => {
+          const result = await global.saveAllPluginStates()
+          confirmedTargets += result.saved + result.failures
+        }),
+      ).then(() => 'complete' as const)
       const budget = new Promise<'timeout'>((resolve) => {
         timeout = setTimeout(() => resolve('timeout'), AUTO_SNAPSHOT_SHUTDOWN_BUDGET_MS)
       })
       if ((await Promise.race([snapshot, budget])) === 'timeout') {
         console.error(
-          `[plugin-state] shutdown snapshot timed out after ${AUTO_SNAPSHOT_SHUTDOWN_BUDGET_MS}ms`,
+          `[plugin-state] shutdown snapshot timed out after ${AUTO_SNAPSHOT_SHUTDOWN_BUDGET_MS}ms ` +
+            `(${confirmedTargets}/${totalTargets} targets confirmed)`,
         )
       }
     } catch (e) {

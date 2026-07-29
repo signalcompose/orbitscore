@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { shutdown } from '../../packages/engine/src/cli/shutdown'
 import { Global } from '../../packages/engine/src/core/global'
+import { InterpreterV2 } from '../../packages/engine/src/interpreter/interpreter-v2'
 
 const temporaryDirectories: string[] = []
 
@@ -23,9 +24,17 @@ function mockExit(): void {
 
 function makeAudioEngine() {
   return {
+    isRunning: true,
+    startTime: 0,
+    boot: vi.fn().mockResolvedValue(undefined),
     start: vi.fn(),
     stop: vi.fn(),
     stopAll: vi.fn(),
+    clearSequenceEvents: vi.fn(),
+    reinitializeSequenceTracking: vi.fn(),
+    scheduleEvent: vi.fn(),
+    scheduleSliceEvent: vi.fn(),
+    getAudioDuration: vi.fn(() => 1),
     quit: vi.fn().mockResolvedValue(undefined),
   }
 }
@@ -39,6 +48,26 @@ function harness(audioEngine = makeAudioEngine()) {
 }
 
 describe('shutdown plugin-state snapshot (#577)', () => {
+  it('uses the real InterpreterV2 global registry during shutdown', async () => {
+    mockExit()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const audioEngine = makeAudioEngine()
+    const interpreter = new InterpreterV2({ audioEngine: audioEngine as never })
+    await interpreter.execute({
+      globalInit: { type: 'global_init', variableName: 'global' },
+      sequenceInits: [],
+      statements: [],
+    })
+    const snapshot = vi
+      .spyOn(Global.prototype, 'saveAllPluginStates')
+      .mockResolvedValue({ saved: 0, failures: 0 })
+
+    await shutdown(interpreter)
+
+    expect(snapshot).toHaveBeenCalledTimes(1)
+    expect(audioEngine.quit).toHaveBeenCalledTimes(1)
+  })
+
   it('stops and awaits every global snapshot before quitting the audio engine', async () => {
     mockExit()
     const audioEngine = makeAudioEngine()
@@ -96,7 +125,7 @@ describe('shutdown plugin-state snapshot (#577)', () => {
     expect(secondSnapshot).toHaveBeenCalledTimes(1)
   })
 
-  it('T3: awaits each global snapshot sequentially', async () => {
+  it('T3: starts every global snapshot concurrently', async () => {
     mockExit()
     vi.spyOn(console, 'log').mockImplementation(() => {})
     const audioEngine = makeAudioEngine()
@@ -128,28 +157,35 @@ describe('shutdown plugin-state snapshot (#577)', () => {
       getGlobals: () => [first, second],
       audioEngine,
     } as never)
-    await vi.waitFor(() => expect(releaseFirst).toBeTypeOf('function'))
-    expect(events).toEqual(['first:start'])
-    releaseFirst?.()
-    await vi.waitFor(() => expect(releaseSecond).toBeTypeOf('function'))
-    expect(events).toEqual(['first:start', 'first:end', 'second:start'])
+    await vi.waitFor(() => {
+      expect(releaseFirst).toBeTypeOf('function')
+      expect(releaseSecond).toBeTypeOf('function')
+    })
+    expect(events).toEqual(['first:start', 'second:start'])
     releaseSecond?.()
+    releaseFirst?.()
     await pending
 
-    expect(events).toEqual(['first:start', 'first:end', 'second:start', 'second:end'])
+    expect(events).toEqual(['first:start', 'second:start', 'second:end', 'first:end'])
   })
 
-  it('continues to quit when the snapshot exceeds its shutdown budget', async () => {
+  it('reports confirmed target progress and continues to quit after the shutdown budget', async () => {
     vi.useFakeTimers()
     mockExit()
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const audioEngine = makeAudioEngine()
-    const global = harness(audioEngine).global
-    const snapshot = vi
-      .spyOn(global, 'saveAllPluginStates')
+    const first = harness(audioEngine).global
+    const second = harness(audioEngine).global
+    vi.spyOn(first, 'listPluginStateTargets').mockReturnValue([{} as never, {} as never])
+    vi.spyOn(second, 'listPluginStateTargets').mockReturnValue([{} as never])
+    const firstSnapshot = vi
+      .spyOn(first, 'saveAllPluginStates')
+      .mockResolvedValue({ saved: 1, failures: 1 })
+    const secondSnapshot = vi
+      .spyOn(second, 'saveAllPluginStates')
       .mockImplementation(() => new Promise<never>(() => {}))
     const interpreter = {
-      getGlobals: () => [global],
+      getGlobals: () => [first, second],
       audioEngine,
     }
 
@@ -157,10 +193,11 @@ describe('shutdown plugin-state snapshot (#577)', () => {
     await vi.advanceTimersByTimeAsync(1_200)
     await pending
 
-    expect(snapshot).toHaveBeenCalledTimes(1)
+    expect(firstSnapshot).toHaveBeenCalledTimes(1)
+    expect(secondSnapshot).toHaveBeenCalledTimes(1)
     expect(audioEngine.quit).toHaveBeenCalledTimes(1)
     expect(console.error).toHaveBeenCalledWith(
-      '[plugin-state] shutdown snapshot timed out after 1200ms',
+      '[plugin-state] shutdown snapshot timed out after 1200ms (2/3 targets confirmed)',
     )
   })
 })

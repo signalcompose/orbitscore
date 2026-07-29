@@ -263,3 +263,28 @@ export class ProjectStateStore {
     }
   }
 }
+
+const projectStateStoresByAudioEngine = new WeakMap<AudioEngine, Map<string, ProjectStateStore>>()
+
+/**
+ * One store per audio engine and absolute project directory. Sharing the store
+ * makes its pending chain the serialization boundary for every Global owned by
+ * one interpreter, including fire-and-forget stop snapshots.
+ */
+export function projectStateStoreFor(
+  audioEngine: AudioEngine,
+  projectDirectory: string,
+): ProjectStateStore {
+  const absoluteDirectory = path.resolve(projectDirectory)
+  let storesByDirectory = projectStateStoresByAudioEngine.get(audioEngine)
+  if (!storesByDirectory) {
+    storesByDirectory = new Map()
+    projectStateStoresByAudioEngine.set(audioEngine, storesByDirectory)
+  }
+  let store = storesByDirectory.get(absoluteDirectory)
+  if (!store) {
+    store = new ProjectStateStore(absoluteDirectory, audioEngine)
+    storesByDirectory.set(absoluteDirectory, store)
+  }
+  return store
+}

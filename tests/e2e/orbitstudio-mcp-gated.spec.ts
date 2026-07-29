@@ -1333,4 +1333,152 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     },
     TEST_TIMEOUT_MS,
   )
+
+  it.skipIf(!appAvailable)(
+    'auto-registers all five plugin receiver kinds on DSL transport stop without explicit saves',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const root = tmpRoot
+      const projectFile = path.join(root, 'project.yaml')
+      const dslPath = path.join(root, 'all-receiver-auto-snapshot.orbs')
+      const receiverKeys = [
+        'master/effect/CLAPTestEffect/0',
+        'sum:autoSnapshotSum/effect/CLAPTestEffect/0',
+        'aux:autoSnapshotAux/effect/CLAPTestEffect/0',
+        'autoSnapshotEffect/effect/CLAPTestEffect/0',
+        'autoSnapshotInstrument/instrument/CLAPTestSynth/0',
+      ] as const
+
+      const instrumentDeclaration = `autoSnapshotInstrument.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)})`
+      const dslLines = [
+        'var global = init GLOBAL',
+        // `play(1)` below is a MIDI degree, which the engine rejects without a
+        // root. The ERROR-count assertion at the end of this test caught that
+        // omission on the first real-device run — keep the key declared.
+        'global.key("C")',
+        'global.tempo(120)',
+        'global.beat(4 by 4)',
+        `global.effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
+        `global.sum("autoSnapshotSum").effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
+        `global.aux("autoSnapshotAux").effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
+        'var autoSnapshotEffect = init global.seq',
+        `autoSnapshotEffect.effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
+        'var autoSnapshotInstrument = init global.seq',
+        instrumentDeclaration,
+        'autoSnapshotInstrument.play(1)',
+        'global.start()',
+        'RUN(autoSnapshotInstrument)',
+        'autoSnapshotInstrument.stop()',
+        'global.stop()',
+      ]
+      const declarationsEndLine = dslLines.indexOf(instrumentDeclaration) + 1
+      const playbackStartLine = dslLines.indexOf('autoSnapshotInstrument.play(1)') + 1
+      const playbackEndLine = dslLines.indexOf('RUN(autoSnapshotInstrument)') + 1
+      const stopStartLine = dslLines.indexOf('autoSnapshotInstrument.stop()') + 1
+      const stopEndLine = dslLines.indexOf('global.stop()') + 1
+      expect(declarationsEndLine).toBeGreaterThan(0)
+      expect(playbackStartLine).toBe(declarationsEndLine + 1)
+      expect(playbackEndLine).toBe(playbackStartLine + 2)
+      expect(stopStartLine).toBe(playbackEndLine + 1)
+      expect(stopEndLine).toBe(stopStartLine + 1)
+      fs.writeFileSync(dslPath, dslLines.join('\n') + '\n')
+      const openDsl = await activeClient.call('open_file', { path: dslPath })
+      expect(openDsl.isError, openDsl.text).toBe(false)
+
+      const runDslLines = async (startLine: number, endLine: number): Promise<void> => {
+        const selected = await activeClient.call('set_selection', {
+          start_line: startLine,
+          start_char: 1,
+          end_line: endLine,
+          end_char: 999_999,
+        })
+        expect(selected.isError, selected.text).toBe(false)
+        const run = await activeClient.call('run_selection')
+        expect(run.isError, run.text).toBe(false)
+      }
+      const stopTransportThroughDsl = async (label: string): Promise<void> => {
+        const before = (await activeClient.call('get_log', { lines: 500 })).text
+        const stopsBefore = (before.match(/(?:✅ Global stopped|⏹ Global)/g) ?? []).length
+        await runDslLines(stopStartLine, stopEndLine)
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return (log.match(/(?:✅ Global stopped|⏹ Global)/g) ?? []).length > stopsBefore
+          },
+          { intervalMs: 200, timeoutMs: 5_000, label },
+        )
+      }
+      const stopEngine = async (label: string): Promise<void> => {
+        const stopped = await activeClient.call('stop_engine')
+        expect(stopped.isError, stopped.text).toBe(false)
+        await waitForEngine(false, 15_000, label)
+        await sleep(1500)
+      }
+      const readManifestStates = (): Record<string, string> => {
+        if (!fs.existsSync(projectFile)) return {}
+        const manifest = parse(fs.readFileSync(projectFile, 'utf8')) as {
+          states?: Record<string, string>
+        }
+        return { ...(manifest.states ?? {}) }
+      }
+      const writeManifestStates = (states: Record<string, string>): void => {
+        fs.writeFileSync(projectFile, stringify({ version: 1, states }))
+      }
+      const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
+
+      const baselineStates = readManifestStates()
+      for (const receiverKey of receiverKeys) delete baselineStates[receiverKey]
+      writeManifestStates(baselineStates)
+      const clearedStates = readManifestStates()
+      for (const receiverKey of receiverKeys) {
+        expect(clearedStates).not.toHaveProperty(receiverKey)
+      }
+
+      const started = await activeClient.call('start_engine')
+      expect(started.isError, started.text).toBe(false)
+      await waitForEngine(true, 15_000, 'all-receiver auto-snapshot engine running')
+      await sleep(2500)
+
+      try {
+        const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const errorsBefore = countErrors(beforeLog)
+
+        // Let all five real out-of-process fixtures attach before entering the
+        // running transport interval. There is deliberately no audio oracle here.
+        await runDslLines(1, declarationsEndLine)
+        await sleep(6000)
+        await runDslLines(playbackStartLine, playbackEndLine)
+        await sleep(2000)
+        await stopTransportThroughDsl('all-receiver transport stopped before auto-snapshot')
+
+        await waitUntil(
+          () => {
+            const states = readManifestStates()
+            return receiverKeys.every((receiverKey) => Boolean(states[receiverKey]))
+          },
+          {
+            intervalMs: 200,
+            timeoutMs: 10_000,
+            label: 'all five receiver auto-snapshots registered',
+          },
+        )
+        const registeredStates = readManifestStates()
+        for (const receiverKey of receiverKeys) {
+          expect(registeredStates[receiverKey]).toMatch(/^states\//)
+        }
+
+        const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterLog),
+          `all-receiver auto-snapshot must add no ERROR: lines. Log tail: ${afterLog.slice(-1200)}`,
+        ).toBe(errorsBefore)
+      } finally {
+        await stopEngine('all-receiver auto-snapshot engine stopped')
+      }
+    },
+    TEST_TIMEOUT_MS,
+  )
 })

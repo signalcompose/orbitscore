@@ -150,7 +150,7 @@ running → stopped 遷移であり、冗長な停止では再発火しない。
 |---|---|---|
 | (a) 明示保存 | **実装済み**（`save_plugin_state` MCP / `//#savePluginState`） | #562 / #564 |
 | (b) UI クローズ時 | **未実装** | **#474**（前提）→ #577 |
-| (c) 停止・終了時 | **実装済み** | #577 PR-A |
+| (c) 停止・終了時 | **実装済み**（gated 実機 E2E で master / sum / aux / sequence effect / instrument の committed manifest 登記を直接確認） | #577 PR-A |
 | (d) dirty 通知 | **未実装** | #577 PR-B |
 
 **(b) は #474（プラグイン UI の open）を前提とする。** UIH.4 の3経路は「開いた UI を
@@ -285,10 +285,11 @@ LLM が演奏セッションを自分で保存・復元できること。人間�
 - 停止時 snapshot の完了は
   **`[plugin-state] auto-snapshot complete (N saved, M failed)`** の集約ログ1行を
   観測表面とする
-- **snapshot の skip（対象ゼロ / document directory 未設定）は stderr に出さない。**
-  engine の stderr は拡張が **`ERROR: ` を前置して** output channel へ出すため、
-  最頻の正常パスを stderr に流すとユーザーに ERROR として見え、E2E の
-  ERROR 件数 assert も壊す。`console.warn` は「ERROR として見せてよいもの」にだけ使う
+- **snapshot の対象ゼロは plain stdout**（失われる state が無く、拡張側で非表示）。
+  **対象があるのに document directory 未設定なら、失われる identity を列挙した `⚠️`
+  付き stdout**（拡張側で表示するが ERROR にはしない）。保存失敗と失敗を含む集約ログは
+  stderr とする。engine の stderr は拡張が **`ERROR: ` を前置して** output channel へ
+  出すため、ユーザー操作で解消できる未保存 document と engine の保存失敗を区別する
 - 変異検証: 保存失敗時に登記を更新しないこと、サイズ 0 を成功扱いしないこと、
   **`shutdown` 経路で snapshot がちょうど1回**であること（`stop()` 自身の
   自動 snapshot との二重発火を殺す）を、それぞれ壊して red を確認してから積む

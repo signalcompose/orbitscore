@@ -17,6 +17,129 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.331 fix(engine): PR #585 レビューラウンド2 — 直列化を store へ移し、5種すべてを実機で証明 (Jul 30, 2026)
+
+**Date**: 2026-07-30
+**Issue**: #577 (PR-A) / **PR**: #585 / **Branch**: `577-auto-snapshot-on-stop`
+**Status**: ✅ 全 1836 passed / 34 skipped / 0 failed・**実機 gated E2E 6 passed**・**#586 を本 PR で閉じた**
+
+`/code:pr-review-team`（4レビュアー）+ 先行の `/simplify` + Fable 監査。
+**ラウンド1の修正が新しい欠陥を2つ作っていた。**
+
+#### provenance 分類 — fix 起因が2件
+
+| 指摘 | 深刻度 | provenance |
+|---|---|---|
+| skip 2種を同列に落として実 state 消失を黙らせた | Important | **fix 起因 `d767c5a`** |
+| 逐次化が「先頭 Global が詰まると後続が0回」を作った | Important | **fix 起因 `d767c5a`** |
+| lost-update は `stop()` 経路では未解決 | Important | 元差分 |
+| 部分失敗継続ループが変異検証ゼロ | Important | 元差分 |
+| master / sequence effect の自動保存が実機ゼロ | Important | 元差分 |
+| 集約ログが `failures > 0` でも `console.log` | Important | 元差分 |
+
+**2件の fix 起因は、どちらも「ポリシーを書いたつもりで塊の中の非対称性を見なかった」結果。**
+
+#### 🔴 直列化は、守ろうとした状況と同じ状況で別の壊れ方を作っていた
+
+多 Global の lost-update を防ぐために `shutdown` を逐次 await にしたが、
+**`Promise.all` なら1つの Global が詰まっても他は並行に走って予算内に完了できた**ところ、
+逐次では**先頭が詰まると後続の Global は snapshot を1回も試行されない**。
+しかも lost-update 自体は **`shutdown()` しか塞げておらず、DSL 経由の `stop()` では残っていた**。
+
+**根本対処**: `ProjectStateStore` のキャッシュを
+**`WeakMap<AudioEngine, Map<absoluteDirectory, Store>>`** でモジュールレベルへ移した。
+
+- `save()` は `this.pending` でチェーンする（`project-state-store.ts:195-205`）ので、
+  **1 store インスタンスは自分の保存を直列化する**
+- `process-initialization.ts:38` により**1 interpreter 内の全 Global は同じ audioEngine を共有**
+- → **同じ directory は1つの store を共有** → `stop()` 経路も含め lost-update が構造的に不可能
+- → **異なる interpreter は異なる audioEngine** → テスト隔離が保たれる
+  （最初にモジュールレベル持ち上げを却下した理由がこれで解消）
+- → **`shutdown` を `Promise.all` に戻せる**（正しさが呼び出し側のスケジューリングではなく
+  store の不変条件から来るので starvation が消える）
+
+**#586 として先送りしたものを本 PR で閉じた。** 先送りした結果
+「片方を半分しか直さず、もう片方を悪化させる」ことになっていた。
+
+#### ログレベルを3段階に固定（ラウンド1の退行を是正）
+
+`!projectDirectory` は **`targets.length > 0` を確認した後にしか到達しない** —
+プラグインが載っていて音色がこれから失われる状況で、**手動保存経路は同じ条件で例外を投げる**。
+ラウンド1はこれを「正常パス」の skip と同列に `console.log` へ落としていた。
+
+| レベル | 場面 | 手段 |
+|---|---|---|
+| (1) 無音でよい正常 | 何も失われない（`targets===0`） | `console.log` プレーン（拡張のフィルタで消える） |
+| (2) ユーザーが行動すべき | 失われるが engine の故障ではない | **`⚠️` を含む stdout**（`shouldFilterLine`（`extension.ts:1144`）が残し、ERROR にならず `countErrors` にも当たらない）+ **失われる identity を列挙** |
+| (3) engine の失敗 | 保存失敗・`failures > 0` の集約ログ | `console.error` |
+
+#### 🔴 変異が red になっても「正しいものを守っている」証拠にはならない
+
+ラウンド1の **T1 は変異を殺したが、守っていた要件のほうが間違っていた**
+（実 state 消失を黙らせる挙動を正しいものとして固定していた）。今回この区別を実例で踏んだ。
+
+#### 変異検証（main が sandbox 外で実行・ベースライン 36 passed）
+
+| 変異 | 結果 |
+|---|---|
+| `⚠️` を消す | `expected "log" to be called with arguments` |
+| **engine 次元を外して directory のみで共有** | **`expected ProjectStateStore not to be ProjectStateStore`**（テスト隔離が load-bearing であることの証明） |
+| shutdown を逐次 await に戻す | T3 `starts every global snapshot concurrently` が red |
+| 部分失敗の try/catch を削除 | `promise rejected "Error: master refused state"` |
+
+> **変異が適用されていないのを「生き残った」と誤読しかけた。** `⚠️` の変異は perl の
+> エンコーディングで置換が効かず `31 passed` のまま返った。**`grep -c` で適用を確認**してから
+> python で回し直した。**判定の前に「変異が本当に入ったか」を検査する。**
+
+#### 🔴 ポリシー5（E2E）を自分で訂正した — 同一セッション ≠ 同一信号経路
+
+「既存 gated E2E に master と sequence effect を足す（新規テストは作らない）」と指示したが、
+**実機で sum-bus テストが落ちた**:
+
+```
+{"peak":0.031216254457831383,"soundDetected":false}: expected false to be true
+```
+
+`CLAPTestEffect` の既定 gain は **`EFFECT_GAIN = 0.5`**（`rust-spike/clap-test-effect/src/lib.rs:4`）。
+master と sequence に足すと**同じ信号経路に 0.5 × 0.5 = 0.25 の追加減衰**が入る
+（観測 peak がその比率と一致）。
+
+**「同一セッションだから限界コストはゼロ」と見積もったが、セッションは共有でも信号経路は共有ではない。**
+
+→ sum-bus テストへの追加を**完全撤回**（差分ゼロ）し、**音声オラクルを持たない専用テストを新設**。
+宣言を stop 直前へ移す案は、**effect load 完了の観測可能な信号が存在せず**
+bare sleep が「load 未決着 slot の窓」を踏むため却下した。
+**オラクルの閾値を緩める修正は明示的に禁止した**（証明力を落とす修正は直したことにならない）。
+
+#### 新設 gated テスト — `auto-registers all five plugin receiver kinds ... without explicit saves`
+
+**master / sum / aux / sequence effect / instrument の5キー**を事前削除し（削除の確認 assert つき）、
+DSL で宣言 → 再生 → **DSL で停止** → committed manifest に5キーすべてが登記されるまで `waitUntil`。
+**明示保存・capture・音声アサーションを一切持たない。** ERROR 件数の不変も確認する。
+
+**この ERROR 件数 assert が、テスト自身の設定ミス（`play(1)` の度数に対する
+`global.key("C")` の欠落）を初回実機実行で捕まえた。** 無ければ「登記は通ったから合格」で
+通り抜けていた。
+
+#### 実機での変異検証（main が実行）
+
+`stop()` の自動 snapshot ガードを `if (false)` に落として **build:clean → 実機 gated 再実行**:
+
+```
+× restores a non-default sum-bus insert ... → timed out waiting for sum/aux auto-snapshot registered after 10000ms
+× auto-registers all five plugin receiver kinds ... → timed out waiting for all five receiver auto-snapshots registered after 10000ms
+  Tests  2 failed | 4 passed (6)
+```
+
+復元後 **6 passed**・残留プロセス 0。
+
+#### 受け入れ基準の到達状況
+
+**sequence / master / sum / aux のいずれでも、明示保存を一度も使わずに自動記録が実機で成立**
+（instrument も含む5種）。`INTERIM(#577)` は PR-A で除去済み・残存 0 件。
+
+---
+
 ### 6.330 fix(engine): PR #585 レビューラウンド1 — 二重 snapshot と stderr 誤警報を潰す (Jul 29, 2026)
 
 **Date**: 2026-07-29

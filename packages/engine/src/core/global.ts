@@ -3,8 +3,6 @@
  * Represents the global transport and configuration
  */
 
-import * as path from 'path'
-
 import { AudioEngine } from '../audio/types'
 import { StackElement, PlayElement } from '../parser/types'
 import { BoundValue, ChordVoice } from '../midi/chord/types'
@@ -37,6 +35,7 @@ import {
 import type { PluginSlot } from './global/effect-slot'
 import {
   ProjectStateStore,
+  projectStateStoreFor,
   type PluginStateIdentity,
   type SavedProjectPluginState,
 } from './project-state-store'
@@ -84,8 +83,6 @@ export class Global {
   private pluginInstrumentManager: PluginInstrumentManager
   private sequenceEffectManager: SequenceEffectManager
   private mixerManager: MixerManager
-  private readonly projectStateStores = new Map<string, ProjectStateStore>()
-
   // Shared transport clock — the single Date.now() origin for both the audio
   // scheduler and the MIDI scheduler, so they stay in sync (§1). MIDI sequences
   // schedule against `midiTransport` (TransportClock-backed) instead of the SC
@@ -804,16 +801,31 @@ export class Global {
    */
   async saveAllPluginStates(): Promise<{ saved: number; failures: number }> {
     const targets = this.listPluginStateTargets()
-    // The extension's setupStderrHandler prefixes every stderr chunk with
-    // "ERROR: ". These are common normal paths (especially no loaded plugins),
-    // so keep them on stdout; warn only when the user should see an error.
     if (targets.length === 0) {
+      // No state can be lost. Keep this normal path on plain stdout so the
+      // extension filters it out instead of presenting an ERROR to the user.
       console.log('[plugin-state] auto-snapshot skipped: no loaded plugin targets')
       return { saved: 0, failures: 0 }
     }
     const projectDirectory = this.audioManager.getDocumentDirectory()
     if (!projectDirectory) {
-      console.log('[plugin-state] auto-snapshot skipped: document directory is not set')
+      // Loaded state will be lost unless the document is saved. The extension
+      // preserves stdout lines containing ⚠️ without prefixing them as ERROR.
+      const identities = targets
+        .map((target) =>
+          [
+            target.identity.receiver,
+            target.identity.role,
+            target.identity.normalizedName,
+            target.identity.occurrence,
+          ].join('/'),
+        )
+        .map((identity) => `'${identity}'`)
+        .join(', ')
+      console.log(
+        `[plugin-state] ⚠️ auto-snapshot skipped: document directory is not set; ` +
+          `unsaved targets: ${identities}`,
+      )
       return { saved: 0, failures: 0 }
     }
 
@@ -839,18 +851,17 @@ export class Global {
         )
       }
     }
-    console.log(`[plugin-state] auto-snapshot complete (${saved} saved, ${failures} failed)`)
+    const summary = `[plugin-state] auto-snapshot complete (${saved} saved, ${failures} failed)`
+    if (failures > 0) {
+      console.error(summary)
+    } else {
+      console.log(summary)
+    }
     return { saved, failures }
   }
 
   private projectStateStore(projectDirectory: string): ProjectStateStore {
-    const absoluteDirectory = path.resolve(projectDirectory)
-    let store = this.projectStateStores.get(absoluteDirectory)
-    if (!store) {
-      store = new ProjectStateStore(absoluteDirectory, this.audioEngine)
-      this.projectStateStores.set(absoluteDirectory, store)
-    }
-    return store
+    return projectStateStoreFor(this.audioEngine, projectDirectory)
   }
 
   private pluginIndexError(
