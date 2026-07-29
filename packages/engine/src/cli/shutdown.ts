@@ -4,6 +4,8 @@
 
 import { InterpreterV2 } from '../interpreter/interpreter-v2'
 
+const AUTO_SNAPSHOT_SHUTDOWN_BUDGET_MS = 1_200
+
 /**
  * Gracefully shutdown the audio engine
  *
@@ -21,9 +23,35 @@ import { InterpreterV2 } from '../interpreter/interpreter-v2'
  */
 export async function shutdown(interpreter: InterpreterV2 | null): Promise<void> {
   if (interpreter) {
+    const globals = interpreter.getGlobals()
+    for (const global of globals) {
+      global.stop()
+    }
+
+    let timeout: NodeJS.Timeout | undefined
+    try {
+      const snapshot = Promise.all(globals.map((global) => global.saveAllPluginStates())).then(
+        () => 'complete' as const,
+      )
+      const budget = new Promise<'timeout'>((resolve) => {
+        timeout = setTimeout(() => resolve('timeout'), AUTO_SNAPSHOT_SHUTDOWN_BUDGET_MS)
+      })
+      if ((await Promise.race([snapshot, budget])) === 'timeout') {
+        console.error(
+          `[plugin-state] shutdown snapshot timed out after ${AUTO_SNAPSHOT_SHUTDOWN_BUDGET_MS}ms`,
+        )
+      }
+    } catch (e) {
+      console.error(
+        `[plugin-state] shutdown snapshot failed: ${e instanceof Error ? e.message : String(e)}`,
+      )
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout)
+    }
+
     try {
       // Quit the audio engine backend (default Rust daemon; SC when opted out)
-      const audioEngine = (interpreter as any).audioEngine
+      const audioEngine = interpreter.audioEngine
       if (audioEngine && typeof audioEngine.quit === 'function') {
         await audioEngine.quit()
       }

@@ -36,6 +36,11 @@ export class PluginInstrumentManager {
     return this.slots.chainFor(sequenceName)
   }
 
+  /** Sequence names with a loaded plugin instrument. */
+  keys(): readonly string[] {
+    return this.slots.keys()
+  }
+
   async instrument(
     seqName: string,
     spec: string,

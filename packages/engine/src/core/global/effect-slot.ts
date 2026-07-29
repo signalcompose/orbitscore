@@ -179,6 +179,11 @@ export class EffectChainMap<K> {
     return [...(this.chains.get(key) ?? [])]
   }
 
+  /** Non-empty chain keys, returned as a copy so callers cannot mutate the registry. */
+  keys(): readonly K[] {
+    return [...this.chains.keys()]
+  }
+
   /**
    * `key` への現在キューされている `declare()` 呼び出しがすべて決着するまで待つ
    * （#527 review round 3）。呼び出し元が「自分の宣言が失敗した後、外部管理のリソース

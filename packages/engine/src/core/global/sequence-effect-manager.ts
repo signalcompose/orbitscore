@@ -75,6 +75,11 @@ export class SequenceEffectManager {
     return this.slots.chainFor(sequenceName)
   }
 
+  /** Sequence names with a loaded insert (passthrough-only buses are excluded). */
+  keys(): readonly string[] {
+    return this.slots.keys()
+  }
+
   /**
    * Ensures a per-sequence bus is allocated WITHOUT loading a plugin into it (MX.4/#459/#453
    * M3): `seq.output(sum)` / `seq.send(aux, gain)` need a bus to route from even when

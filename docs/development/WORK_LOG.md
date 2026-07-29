@@ -17,6 +17,117 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.329 feat(engine): auto-snapshot plugin state on transport stop — #577 PR-A (Jul 29, 2026)
+
+**Date**: 2026-07-29
+**Status**: ✅ **`INTERIM(#577)` が消えた**。実機 E2E で**明示保存ゼロのループが成立**
+
+Epic #546 のループ「宣言 → 音色を作る → **自動記録** → 再起動 → 同じ音」のうち、
+**「自動記録」がどのレシーバ種別にも存在しなかった**。保存経路は
+`save_plugin_state`（MCP）と `//#savePluginState` の2つだけで、**#541 の E2E ですら MCP で叩いていた**。
+
+#### フック点（設計で特定・main がコードで裏取り）
+
+| トリガ | フック | 形 |
+|---|---|---|
+| **(c-1) transport 停止** ← **主トリガ** | `Global.stop()` の `if (this.transportClock.running)` ブロック（`_onTransportStop` と同じガード） | fire-and-forget + 完了ログ |
+| (c-2) engine 終了 | `cli/shutdown.ts` の `audioEngine.quit()` **前** | await + 予算 ~1.2s |
+
+(c-2) は **best-effort**（extension が SIGTERM の **2秒後に SIGKILL 昇格**・確認済み）。
+
+#### 列挙は `resolveMixerBus` / `resolveNode` を使わない
+
+新 API `listPluginStateTargets()` が**チェーン構造から kind 既知のまま直接構築**する。
+**名前 → kind の解決が発生しない**ので、#579 で潰した暗黙優先が構造的に入り込めない。
+
+identity の `role` / `normalizedName` / `occurrence` は **slot が既に保持**しているため、
+`resolvePluginStateTarget` の index 算出は不要。共通ヘルパ
+`pluginStateTargetForSlot`（**純関数・クラス外**）に抽出して二重実装を避けた。
+
+#### 🔴 `INTERIM(#577)` は「行削除だけ」では green にならなかった
+
+順序はコードで確認済みで安全だった:
+
+```
+writeManifestStates(loadedStates)   ← 外科的削除
+await stopTransportThroughDsl(...)  ← ここで snapshot が発火
+// INTERIM(#577)                    ← 削除対象
+```
+
+**しかし `stopTransportThroughDsl` は `Global stopped` ログ行しか待たない。**
+snapshot は fire-and-forget なので、直後の manifest 読みと **race** する。
+
+→ **明示保存2発を「両キーが登記されるまでの `waitUntil`」に置換**した。
+これで「**明示保存を一度も使わない**」受け入れ基準を満たしたまま非同期を吸収できる。
+
+> **暫定マーカーの条件は3段階で精密化された。**
+> ①「#577 が入れば消せる」→ ② Fable 指摘で「**dirty ゲートをかけない**ことが条件」→
+> ③ コードを読んで「**それでも非同期の race が残る**」。
+> **条件を書くたびに、書けていなかった前提が1つ見つかった。**
+
+#### 保存先は committed のみ
+
+`ProjectStateStore.save`（既存）へ流す。**新しい書き込み機構は作らない**。
+recovery checkpoint（別ファイル）は PR-C。
+
+- **dirty ゲートなし・loaded 全対象**（ゲートを付けると #564 の受け入れ E2E が即座に赤になる）
+- document directory 未設定 / target ゼロ → **warn で skip**（**ERROR にしない** —
+  E2E が `countErrors` 同数 assert を持つため、正当な skip を ERROR に流すと無関係なテストが赤くなる）
+- 実際の保存失敗は ERROR（本物の警報）
+
+#### 変異検証（7種・実出力を確認）
+
+```text
+(a) instrument 列挙削除    expected manifest states(4) to deeply equal states(5)
+(b) mixer prefix 削除      - "sum:drum/effect/SumGlue/0"  + "drum/effect/SumGlue/0"
+(c) 同一 target 二重保存    expected "spy" to be called 5 times, but got 6 times
+(d) dirty gate 挿入        expected "spy" to be called 1 times, but got 0 times
+stop() 呼び出し削除        expected "saveAllPluginStates" to be called 1 times, but got 0
+stop() ガード削除          ... but got 2 times
+shutdown() 順序逆転        expected 4 to be less than 3
+```
+
+**(d) が核心** — 「dirty ゲートをかけない」という受け入れ条件が**テストで固定された**。
+
+#### 分類テストが3件捕まえた（main が対処）
+
+新 public メンバー3つが未分類で落ちた。**規則どおりに切り分けた**:
+
+| メンバー | `this` | 対処 |
+|---|---|---|
+| `pluginStateTargetForSlot` | **使わない** | **クラス外のモジュール関数へ**（分類対象から外れる） |
+| `listPluginStateTargets` | 使う（8回） | 除外リスト（理由コメントつき） |
+| `saveAllPluginStates` | 使う | 同上 |
+| `projectStateStore` | 使う | 同上 |
+
+**規則は「除外リストを増やすな」ではなく「外に出せるものを除外リストで黙らせるな」**（#564 で確立）。
+
+> 1件ずつ潰すのは非効率だったので、途中で **差分から追加メンバーを一括抽出**して打ち止めにした。
+
+#### 検証（すべて main が sandbox 外で実行）
+
+- `npm test`: **1829 passed / 33 skipped / 0 failed**（1823 から +6）
+- `npm run lint`: 0 errors（**main の編集で崩れた整形を prettier で修正**）
+- 実行後の残留プロセス **0**
+- **Rust は1行も触っていない**
+
+#### マージ前ゲート: ビルド + 実機 E2E
+
+```
+✓ restores a non-default sum-bus insert across restart through its prefixed receiver identity  24.7s
+Test Files 1 passed / Tests 5 passed
+```
+
+**`INTERIM` を消した状態で、明示保存を一度も使わずに復元が成立**した。
+**E2E 後の残留プロセスも 0**。
+
+#### 残り
+
+**PR-B**（dirty 通知の配線）と **PR-C**（再生中保存の解禁 + debounce checkpoint）。
+現状は「**停止したら記録される**」まで。**演奏中に音色をいじってそのまま記録される**形は PR-C。
+
+---
+
 ### 6.328 fix(signal-chain): make ambiguous mixer bus names loud — #579 (Jul 29, 2026)
 
 **Date**: 2026-07-29

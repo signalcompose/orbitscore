@@ -1264,26 +1264,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       await stopTransportThroughDsl('sum-bus changed transport stopped before state save')
 
       // 3. 自動記録される。
-      // INTERIM(#577): 自動記録が未実装のため明示保存で代替。
-      // この明示保存の行を削除できる条件は「#577 の停止時 snapshot が dirty ゲートを
-      // かけず、loaded 全プラグインを対象にする」こと（#577 受け入れ基準に明記済み）。
-      // この E2E ではパラメータ編集が一度も起きない（非既定 gain は state ファイルの
-      // load で入る）ため、setState だけで dirty にならないプラグインは dirty ゲート付き
-      // snapshot の対象外になり、行を消すとテストは赤になる。また、このテストは稼働中に
-      // manifest から正解キーを外科的に削除しているので、#577 の checkpoint が削除より
-      // 前に発火する設計になった場合はこの削除手順ごと #577 側で引き取って書き直すこと。
-      const savedSum = await activeClient.call('save_plugin_state', {
-        sequence: 'sum:drum',
-        index: 1,
-      })
-      expect(savedSum.isError, savedSum.text).toBe(false)
-      // aux 側の軽量チェック: 音声オラクルは張らず、保存 → 再起動 → restore ログ行で
-      // daemon 往復まで実機証明する。
-      const savedAux = await activeClient.call('save_plugin_state', {
-        sequence: 'aux:wet',
-        index: 1,
-      })
-      expect(savedAux.isError, savedAux.text).toBe(false)
+      // stop() の snapshot は fire-and-forget なので、明示保存を挟まず、両 receiver が
+      // committed manifest に登記されるまで待って非同期の daemon 往復を吸収する。
+      await waitUntil(
+        () => {
+          const states = readManifestStates()
+          return Boolean(states[receiverKey] && states[auxReceiverKey])
+        },
+        { intervalMs: 200, timeoutMs: 10_000, label: 'sum/aux auto-snapshot registered' },
+      )
       const registeredStates = readManifestStates()
       expect(registeredStates[receiverKey]).toMatch(/^states\//)
       expect(registeredStates[auxReceiverKey]).toMatch(/^states\//)

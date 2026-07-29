@@ -52,6 +52,101 @@ afterEach(() => {
 })
 
 describe('plugin state address resolution and project registration (#562)', () => {
+  it('snapshots every loaded plugin target exactly once without a dirty gate', async () => {
+    const { directory, audio, global } = harness()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    await global.effect('./MasterLimiter.vst3')
+    await global.sum('drum').effect('./SumGlue.clap')
+    await global.aux('wet').effect('./AuxVerb.clap')
+    await global.sequenceEffect('lead', './LeadEcho.clap')
+    await global.instrument('lead', './LeadSynth.clap')
+
+    const result = await global.saveAllPluginStates()
+    const identities = [
+      {
+        receiver: 'master',
+        role: 'effect' as const,
+        normalizedName: 'MasterLimiter',
+        occurrence: 0,
+      },
+      {
+        receiver: 'sum:drum',
+        role: 'effect' as const,
+        normalizedName: 'SumGlue',
+        occurrence: 0,
+      },
+      {
+        receiver: 'aux:wet',
+        role: 'effect' as const,
+        normalizedName: 'AuxVerb',
+        occurrence: 0,
+      },
+      {
+        receiver: 'lead',
+        role: 'effect' as const,
+        normalizedName: 'LeadEcho',
+        occurrence: 0,
+      },
+      {
+        receiver: 'lead',
+        role: 'instrument' as const,
+        normalizedName: 'LeadSynth',
+        occurrence: 0,
+      },
+    ]
+    const expectedStates = Object.fromEntries(
+      identities.map((identity) => [
+        `${identity.receiver}/${identity.role}/${identity.normalizedName}/${identity.occurrence}`,
+        `states/${stateFileNameForIdentity(identity)}`,
+      ]),
+    )
+
+    expect(parse(fs.readFileSync(path.join(directory, 'project.yaml'), 'utf8'))).toEqual({
+      version: 1,
+      states: expectedStates,
+    })
+    expect(audio.savePluginState).toHaveBeenCalledTimes(5)
+    expect(audio.savePluginState).toHaveBeenNthCalledWith(
+      1,
+      { role: 'effect' },
+      path.join(directory, ...expectedStates['master/effect/MasterLimiter/0'].split('/')),
+    )
+    expect(audio.savePluginState).toHaveBeenNthCalledWith(
+      2,
+      { role: 'effect', bus: 'sum-bus-0' },
+      path.join(directory, ...expectedStates['sum:drum/effect/SumGlue/0'].split('/')),
+    )
+    expect(audio.savePluginState).toHaveBeenNthCalledWith(
+      3,
+      { role: 'effect', bus: 'aux-bus-0' },
+      path.join(directory, ...expectedStates['aux:wet/effect/AuxVerb/0'].split('/')),
+    )
+    expect(audio.savePluginState).toHaveBeenNthCalledWith(
+      4,
+      { role: 'effect', bus: 'seq-bus-0' },
+      path.join(directory, ...expectedStates['lead/effect/LeadEcho/0'].split('/')),
+    )
+    expect(audio.savePluginState).toHaveBeenNthCalledWith(
+      5,
+      { role: 'instrument', instance: 'plugin:lead' },
+      path.join(directory, ...expectedStates['lead/instrument/LeadSynth/0'].split('/')),
+    )
+    expect(result).toEqual({ saved: 5, failures: 0 })
+    expect(console.log).toHaveBeenCalledWith(
+      '[plugin-state] auto-snapshot complete (5 saved, 0 failed)',
+    )
+  })
+
+  it('does not require a dirty notification to snapshot a loaded target', async () => {
+    const { audio, global } = harness()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    await global.instrument('lead', './NeverMarkedDirty.clap')
+
+    await global.saveAllPluginStates()
+
+    expect(audio.savePluginState).toHaveBeenCalledTimes(1)
+  })
+
   it('resolves instrument index 0 to SC.5 identity and the daemon instance', async () => {
     const { global } = harness()
     await global.instrument('lead', './Massive-X.clap')
@@ -338,6 +433,33 @@ describe('plugin state address resolution and project registration (#562)', () =
     await expect(global.savePluginState('lead', 0)).rejects.toThrow('transport is running')
     expect(audio.savePluginState).not.toHaveBeenCalled()
     expect(audio.stop).not.toHaveBeenCalled()
+  })
+})
+
+describe('plugin state automatic snapshot wiring (#577)', () => {
+  it('fires exactly once on a running-to-stopped transition', async () => {
+    const { global } = harness()
+    const snapshot = vi
+      .spyOn(global, 'saveAllPluginStates')
+      .mockResolvedValue({ saved: 0, failures: 0 })
+
+    global.start()
+    global.stop()
+    global.stop()
+
+    await vi.waitFor(() => expect(snapshot).toHaveBeenCalledTimes(1))
+  })
+
+  it('does not fire when stop is called while already stopped', async () => {
+    const { global } = harness()
+    const snapshot = vi
+      .spyOn(global, 'saveAllPluginStates')
+      .mockResolvedValue({ saved: 0, failures: 0 })
+
+    global.stop()
+
+    await Promise.resolve()
+    expect(snapshot).not.toHaveBeenCalled()
   })
 })
 

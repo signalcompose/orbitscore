@@ -861,6 +861,13 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'pluginIndexError',
       // resolvePluginStateTarget の bus 分岐（master / sum: / aux:）を担う private ヘルパー。
       'pluginStateBusChain',
+      // #577 PR-A: 停止時 auto-snapshot のホスト API。どちらも `this` 経由で
+      // 各 manager を読むためクラス外へ出せない（純関数の
+      // `pluginStateTargetForSlot` はモジュール関数として分類対象外にしてある）。
+      'listPluginStateTargets',
+      'saveAllPluginStates',
+      // 同上。`this.projectStateStores` の Map をキャッシュとして読むため純関数化できない。
+      'projectStateStore',
       // MIDI, chord, pattern, and mode registries.
       'getMidiManager',
       'importChords',

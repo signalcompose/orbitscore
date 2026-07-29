@@ -138,6 +138,12 @@ SC.5 の三つ組（名前 + 同名出現順）はこの操作に対して安定
 | (c) 停止・終了時 | 演奏停止 / エンジン終了 |
 | (d) 任意: プラグイン起点の dirty 通知受信時 | **最適化としてのみ**。これに依存した設計にしない。VST3 = `IComponentHandler2::setDirty`（+ `performEdit` によるパラメータ編集通知）、CLAP = `clap_host_state.mark_dirty`、AU = **無し**（CAP.3a）。**受け口のある形式では実装する**（CAP.6-6） |
 
+トリガ (c) は dirty 状態で絞り込まず、ロード済みの全プラグインを対象に
+`project.yaml` の committed snapshot へ直接保存する。主トリガは transport の
+running → stopped 遷移であり、冗長な停止では再発火しない。エンジン終了前にも同じ snapshot を
+試みるが、終了処理の時間予算内に限る best-effort とする（SIGTERM 後の SIGKILL 昇格により
+完了できない場合があるため）。
+
 ### 変更検知ポーリングを採らない根拠
 
 CAP.3 のとおり、**dirty 通知は VST3 / CLAP の両方に存在するが、双方ともプラグインが呼ぶ
@@ -262,6 +268,9 @@ LLM が演奏セッションを自分で保存・復元できること。人間�
 - **VST3 と CLAP の両方**で同じ E2E が green（oracle synth で無人化）
 - **オラクル synth に state 意味論を実装する**（state = 周波数オフセット等）。これにより
   以後のループ検証が無人で閉じる（[`../testing/E2E_HARNESS_SPEC.md`](../testing/E2E_HARNESS_SPEC.md) §7）
+- 停止時 snapshot の完了は
+  **`[plugin-state] auto-snapshot complete (N saved, M failed)`** の集約ログ1行を
+  観測表面とする
 - 変異検証: 保存失敗時に登記を更新しないこと、サイズ 0 を成功扱いしないこと、
   3つの閉じる経路それぞれでセーフポイントがちょうど1回発火することを、
   それぞれ壊して red を確認してから積む
