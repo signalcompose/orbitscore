@@ -3,7 +3,7 @@
 OrbitScore is a live coding music DSL for VS Code with a bundled SuperCollider audio engine.
 
 **Current release**: v1.1.0 (ICMC 2026 ready) — bundled scsynth, strict path resolver, automated release workflow.
-**Supported platforms**: macOS (Apple Silicon, arm64) **only**。Intel Mac は**非対応**（[PROJECT_RULES.md](PROJECT_RULES.md#platform-support) に決定と根拠）。Windows / Linux is not supported in v1.x.
+**Supported platforms**: macOS (Apple Silicon, arm64) **only**。Intel Mac は**非対応**。Windows / Linux is not supported in v1.x.
 
 ---
 

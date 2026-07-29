@@ -45,7 +45,7 @@ Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives both a S
 - **quantize** — bar-quantized scheduling control
 - **Audio foundation** — scsynth sample playback (WAV/AIFF/MP3/MP4), `.chop()` slicing, time-stretching, polymeter, `RUN()`/`LOOP()`/`MUTE()` transport, bundled scsynth
 
-**Supported platforms**: macOS Apple Silicon (arm64) **only**. Intel Macs are not supported — see [PROJECT_RULES.md](docs/core/PROJECT_RULES.md#platform-support). Windows / Linux not supported currently.
+**Supported platforms**: macOS Apple Silicon (arm64) **only**. Intel Macs are not supported. Windows / Linux not supported currently.
 
 See [WORK_LOG.md](docs/development/WORK_LOG.md) for detailed resolution notes.
 
