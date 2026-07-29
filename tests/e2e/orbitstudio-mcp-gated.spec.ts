@@ -1335,7 +1335,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
-    'auto-registers all five plugin receiver kinds on DSL transport stop without explicit saves',
+    'auto-records and restores all five plugin receiver kinds across a restart without explicit saves',
     async () => {
       expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
       expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
@@ -1470,13 +1470,66 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           expect(registeredStates[receiverKey]).toMatch(/^states\//)
         }
 
-        const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const afterRecordLog = (await activeClient.call('get_log', { lines: 500 })).text
         expect(
-          countErrors(afterLog),
-          `all-receiver auto-snapshot must add no ERROR: lines. Log tail: ${afterLog.slice(-1200)}`,
+          countErrors(afterRecordLog),
+          `all-receiver auto-snapshot must add no ERROR: lines. Log tail: ${afterRecordLog.slice(-1200)}`,
         ).toBe(errorsBefore)
+
+        // Restart with only the stop-triggered committed manifest as restore
+        // input, then re-declare every receiver. The daemon emits this marker
+        // only when the registered state is actually sent back for application.
+        await stopEngine('all-receiver auto-snapshot engine stopped before restore')
+        const restarted = await activeClient.call('start_engine')
+        expect(restarted.isError, restarted.text).toBe(false)
+        await waitForEngine(true, 15_000, 'all-receiver restore engine running')
+        await sleep(2500)
+
+        const restoreBaselineLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const errorsBeforeRestore = countErrors(restoreBaselineLog)
+        const restoreMarkers = new Map(
+          receiverKeys.map((receiverKey) => [
+            receiverKey,
+            `[plugin-state] restoring '${receiverKey}' from `,
+          ]),
+        )
+        const restoreCountsBeforeDeclarations = new Map(
+          receiverKeys.map((receiverKey) => {
+            const marker = restoreMarkers.get(receiverKey)!
+            return [receiverKey, restoreBaselineLog.split(marker).length - 1]
+          }),
+        )
+
+        await runDslLines(1, declarationsEndLine)
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            const missingReceiverKeys = receiverKeys.filter((receiverKey) => {
+              const marker = restoreMarkers.get(receiverKey)!
+              const countAfterDeclarations = log.split(marker).length - 1
+              return countAfterDeclarations <= restoreCountsBeforeDeclarations.get(receiverKey)!
+            })
+            if (missingReceiverKeys.length > 0) {
+              throw new Error(
+                `missing restore log lines for receiver keys: ${missingReceiverKeys.join(', ')}`,
+              )
+            }
+            return true
+          },
+          {
+            intervalMs: 200,
+            timeoutMs: 10_000,
+            label: 'all five receiver state restore log lines after engine restart',
+          },
+        )
+
+        const afterRestoreLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterRestoreLog),
+          `all-receiver restore must not increase ERROR: lines from the post-restart baseline. Log tail: ${afterRestoreLog.slice(-1200)}`,
+        ).toBeLessThanOrEqual(errorsBeforeRestore)
       } finally {
-        await stopEngine('all-receiver auto-snapshot engine stopped')
+        await stopEngine('all-receiver auto-record/restore engine stopped')
       }
     },
     TEST_TIMEOUT_MS,

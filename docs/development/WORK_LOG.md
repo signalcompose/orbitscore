@@ -133,10 +133,92 @@ DSL で宣言 → 再生 → **DSL で停止** → committed manifest に5キー
 
 復元後 **6 passed**・残留プロセス 0。
 
-#### 受け入れ基準の到達状況
+#### 受け入れ基準の到達状況（6.332 で復元側まで到達）
 
-**sequence / master / sum / aux のいずれでも、明示保存を一度も使わずに自動記録が実機で成立**
-（instrument も含む5種）。`INTERIM(#577)` は PR-A で除去済み・残存 0 件。
+自動記録は5種すべてで実機成立。**復元側は 6.332 で追加**。
+
+---
+
+### 6.332 test(e2e): 復元側まで実機で証明し、変異の「適用」を検査する規律を足した (Jul 30, 2026)
+
+**Date**: 2026-07-30
+**Issue**: #577 (PR-A) / **PR**: #585
+**Status**: ✅ 全 1836 passed / 34 skipped / 0 failed・**実機 gated E2E 6 passed**・残留 0
+
+#### 何が足りなかったか — 緑の範囲がゴールより狭かった
+
+新設テストは**自動記録（committed manifest への登記）までしか証明していなかった**。
+Epic #546 の受け入れ基準は
+**「宣言 → 音色を作る → 自動記録 → 再起動 → 同じ音で鳴る」**なので、
+**再起動後に登記済み state が実際に再適用されること**まで要る。
+
+証明の深さが種別ごとにバラバラだった:
+
+| 種別 | 自動記録 | 復元（追加前） |
+|---|---|---|
+| sum | ✅ 実機 | ✅ 音声オラクル（明示保存ゼロの完全ループ） |
+| aux | ✅ 実機 | ✅ 復元ログ行（#564） |
+| **master** | ✅ 実機 | ❌ **未証明** |
+| **sequence effect** | ✅ 実機 | ❌ **未証明** |
+| instrument | ✅ 実機 | △ 別テストだが**明示保存経由**（#541） |
+
+🔴 **「復元経路は kind 非依存だから動くはず」で済ませなかった。**
+Fable の指摘どおり **master は `{ role: 'effect' }`（bus フィールド無し）**という
+他と別形状の daemon ターゲットであり、sum/aux が通っても master が通る保証にならない。
+
+#### 追加したもの
+
+音声オラクルは**複製しない**（コスト不適合）。#564 で確立した
+**`[plugin-state] restoring '<key>' from <path>` のログ行で daemon 往復を証明する**水準を
+5種すべてに広げた（`effect-slot.ts:295-298` が出す行）。
+
+- 登記確認 → **engine 停止 → 再起動** → 同じ宣言部分を再評価
+- **再宣言前のマーカー件数をベースライン化**し、**新しく増えた行**だけを数える
+  （既存行を数えて false green にしない）
+- timeout 時は**未検出のキーを列挙**する
+- 再起動後の ERROR 件数が増えないことも確認
+- **`save_plugin_state` は一切使わない**
+
+既存の sum-bus / instrument restore テストは**差分ゼロ**を維持。
+
+#### 実機変異 — master だけを狙って落ちた
+
+`plugin-effect-manager.ts` の `statePathFallback` を **master についてだけ**
+`Promise.resolve(undefined)` に変異させ、`build:clean` → 実機 gated 再実行:
+
+```
+× auto-records and restores all five plugin receiver kinds across a restart without explicit saves
+  → timed out waiting for all five receiver state restore log lines after engine restart after 10000ms;
+    last error: Error: missing restore log lines for receiver keys: master/effect/CLAPTestEffect/0
+  Tests  1 failed | 5 passed (6)
+```
+
+**他の4種は通ったまま master 固有の assert だけが落ちた** — 復元の証明が
+**種別ごとに独立して効いている**ことの実証。
+
+#### 🔴 変異検証の規律を1段強めた — 「適用されたか」を検査する
+
+**このセッションで「変異が生き残った」と読み違えかけたのが2度目。**
+
+| 回 | 実際に起きたこと | 見え方 |
+|---|---|---|
+| 1 | perl のエンコーディングで置換が効かなかった | `31 passed` のまま = 生き残ったように見える |
+| 2 | **`npm run build:clean` が型エラーで失敗**し、アプリは**変異前のバイナリ**を実行 | `6 passed` = 生き残ったように見える |
+
+2回目の型エラーは
+`Type '() => undefined' is not assignable to type 'PluginStatePathFallbackResolver'`
+（resolver は `Promise<string | undefined>` を返す）。
+`> /dev/null 2>&1` がエラーを握り潰し、**`&& echo "rebuilt"` が出ていないことを見落とした**。
+
+**規律**: 実機の変異検証では、以下を**変異前に assert する**。
+
+1. **ソースに変異が入ったこと**（`grep -c`）
+2. **ビルドが成功したこと**（exit code を握り潰さない）
+3. 🔴 **デバイスが実際に読む成果物に変異が載っていること**
+   （`packages/vscode-extension/engine/dist/**` を `grep` する。
+   `packages/engine/dist` に載っていても**コピーが失敗していれば実機には届かない**）
+
+復元時も同様に、**成果物から変異が消えたこと**を assert してから最終ゲートを回す。
 
 ---
 

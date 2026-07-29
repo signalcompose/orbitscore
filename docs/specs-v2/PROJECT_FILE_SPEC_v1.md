@@ -150,7 +150,7 @@ running → stopped 遷移であり、冗長な停止では再発火しない。
 |---|---|---|
 | (a) 明示保存 | **実装済み**（`save_plugin_state` MCP / `//#savePluginState`） | #562 / #564 |
 | (b) UI クローズ時 | **未実装** | **#474**（前提）→ #577 |
-| (c) 停止・終了時 | **実装済み**（gated 実機 E2E で master / sum / aux / sequence effect / instrument の committed manifest 登記を直接確認） | #577 PR-A |
+| (c) 停止・終了時 | **実装済み**（gated 実機 E2E で master / sum / aux / sequence effect / instrument の committed manifest 自動登記と再起動後の state 再適用を確認。sum は明示保存ゼロの音声オラクルで再起動前後の一致、他4種は `[plugin-state] restoring ...` ログで daemon 往復を証明） | #577 PR-A |
 | (d) dirty 通知 | **未実装** | #577 PR-B |
 
 **(b) は #474（プラグイン UI の open）を前提とする。** UIH.4 の3経路は「開いた UI を
