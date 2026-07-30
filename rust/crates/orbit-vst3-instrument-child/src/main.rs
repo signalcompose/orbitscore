@@ -18,6 +18,8 @@ use orbit_audio_sandbox::{
     MAX_FRAMES,
 };
 #[cfg(target_os = "macos")]
+use orbit_child_runtime::run_child;
+#[cfg(target_os = "macos")]
 use orbit_vst3_host::Vst3InstrumentProcessor;
 
 #[cfg(target_os = "macos")]
@@ -281,7 +283,7 @@ fn main() -> Result<()> {
         ),
         None => None,
     };
-    let (mut instrument, _) = Vst3InstrumentProcessor::load(
+    let (instrument, _) = Vst3InstrumentProcessor::load(
         &args.plugin,
         args.sample_rate as f64,
         MAX_FRAMES as i32,
@@ -302,122 +304,145 @@ fn main() -> Result<()> {
     unsafe {
         orbit_audio_sandbox::transport::publish_child_ready(region, false);
     }
+    let (mut instrument_audio, instrument_main) = instrument.split();
 
-    let mut scratch = vec![0.0; BUF_LEN];
-    let mut event_scratch = Vec::with_capacity(MAX_EVENTS_PER_BLOCK);
-    let mut output_events = Vec::with_capacity(MAX_EVENTS_PER_BLOCK);
-    let mut output_spill = EventSpillFifo::new();
-    let mut process_errors = 0;
-    let mut last = 0;
     // orphan 対策(#448): host(daemon)が CONTROL_QUIT を書かずに死ぬ経路(プロセス exit・
-    // SIGKILL・crash)でも spin loop を抜けられるよう、親死活を低頻度で監視する。
+    // SIGKILL・crash)でも main runloop を止められるよう、親死活をタイマーで監視する。
     let mut parent_watch = ParentWatch::new();
-    loop {
-        if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
-            break;
-        }
-        if parent_watch.should_exit() {
-            eprintln!("[orbit-vst3-instrument-child] 親プロセス死亡を検知、終了する");
-            break;
-        }
-        // #555: host からのコマンドを処理する（UIH.2）。audio ブロックの合間に1件ずつ。
-        // `cmd_seq` が ack より進んでいれば未処理。**ここはメインスレッド**なので
-        // VST3 の state 操作契約（UI スレッド）を満たす。
-        unsafe {
-            service_command_mailbox(region, |kind, arg| match kind {
-                CMD_SAVE_STATE => Some(save_state_command(arg, || instrument.capture_state())),
-                _ => None,
-            });
-        }
-        let cur = unsafe { (*region).seq_request.load(Acquire) };
-        if cur <= last {
-            std::hint::spin_loop();
-            continue;
-        }
-        for seq in in_order_seqs(last, cur) {
-            let idx = slot_index(seq);
-            let off = slot_offset(seq);
-            let n_frames =
-                unsafe { ((*region).n_frames[idx].load(Relaxed) as usize).min(MAX_FRAMES) };
-            let sample_count = n_frames * CHANNELS;
-            let event_count = unsafe {
-                (*region).input_event_count[idx]
-                    .load(Relaxed)
-                    .min(MAX_EVENTS_PER_BLOCK as u32)
-            };
-            let decode_errors = unsafe {
-                decode_slot_events(
-                    &(*region).input_events[idx],
-                    event_count,
-                    &mut event_scratch,
-                )
-            };
-            if decode_errors != 0 {
-                unsafe {
-                    (*region)
-                        .event_decode_error_count
-                        .fetch_add(decode_errors as u64, Relaxed);
-                }
-            }
-            output_events.clear();
-            for event in &event_scratch {
-                match classify_event(event) {
-                    EventAction::NoteOn {
-                        channel,
-                        pitch,
-                        velocity,
-                        offset,
-                    } => {
-                        instrument.push_note_on(channel, pitch, velocity, offset);
-                    }
-                    EventAction::NoteOffAndEnd {
-                        channel,
-                        pitch,
-                        velocity,
-                        offset,
-                        end,
-                    } => {
-                        instrument.push_note_off(channel, pitch, velocity, offset);
-                        output_events.push(end);
-                    }
-                    EventAction::Unsupported => unsafe {
-                        (*region).event_decode_error_count.fetch_add(1, Relaxed);
-                    },
-                }
-            }
-            scratch[..sample_count].fill(0.0);
-            if !instrument.process_block(&mut scratch[..sample_count]) {
-                process_errors += 1;
-                unsafe {
-                    (*region).child_process_error_count.fetch_add(1, Relaxed);
-                }
-            }
+    let region_addr = region as usize;
+    let (process_errors, last_process_error) = run_child(
+        "orbit-vst3-instrument-child",
+        || {
+            // SAVE_STATE and all future UI work are serviced by the AppKit main runloop.
             unsafe {
-                publish_completed_slot(region, seq, |region| {
-                    let out_base = std::ptr::addr_of_mut!((*region).output) as *mut f32;
-                    std::ptr::copy_nonoverlapping(
-                        scratch.as_ptr(),
-                        out_base.add(off),
-                        sample_count,
-                    );
-                    let window = std::slice::from_raw_parts_mut(
-                        std::ptr::addr_of_mut!((*region).output_events[idx]) as *mut EventRecord,
-                        MAX_EVENTS_PER_BLOCK,
-                    );
-                    let outcome =
-                        write_output_events(window, &mut output_spill, output_events.drain(..));
-                    apply_output_write_outcome(region, idx, outcome);
-                    (*region).child_processed.fetch_add(1, Relaxed);
+                service_command_mailbox(region, |kind, arg| match kind {
+                    CMD_SAVE_STATE => {
+                        Some(save_state_command(arg, || instrument_main.capture_state()))
+                    }
+                    _ => None,
                 });
             }
-        }
-        last = cur.max(last);
-    }
+            if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
+                return true;
+            }
+            if parent_watch.should_exit() {
+                eprintln!("[orbit-vst3-instrument-child] 親プロセス死亡を検知、終了する");
+                return true;
+            }
+            false
+        },
+        move |stop_audio| {
+            let region = region_addr as *mut SharedRegion;
+            let mut scratch = vec![0.0; BUF_LEN];
+            let mut event_scratch = Vec::with_capacity(MAX_EVENTS_PER_BLOCK);
+            let mut output_events = Vec::with_capacity(MAX_EVENTS_PER_BLOCK);
+            let mut output_spill = EventSpillFifo::new();
+            let mut process_errors = 0u64;
+            let mut last = 0u64;
+
+            loop {
+                if stop_audio.load(Relaxed)
+                    || unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT
+                {
+                    break;
+                }
+                let cur = unsafe { (*region).seq_request.load(Acquire) };
+                if cur <= last {
+                    std::hint::spin_loop();
+                    continue;
+                }
+                for seq in in_order_seqs(last, cur) {
+                    let idx = slot_index(seq);
+                    let off = slot_offset(seq);
+                    let n_frames =
+                        unsafe { ((*region).n_frames[idx].load(Relaxed) as usize).min(MAX_FRAMES) };
+                    let sample_count = n_frames * CHANNELS;
+                    let event_count = unsafe {
+                        (*region).input_event_count[idx]
+                            .load(Relaxed)
+                            .min(MAX_EVENTS_PER_BLOCK as u32)
+                    };
+                    let decode_errors = unsafe {
+                        decode_slot_events(
+                            &(*region).input_events[idx],
+                            event_count,
+                            &mut event_scratch,
+                        )
+                    };
+                    if decode_errors != 0 {
+                        unsafe {
+                            (*region)
+                                .event_decode_error_count
+                                .fetch_add(decode_errors as u64, Relaxed);
+                        }
+                    }
+                    output_events.clear();
+                    for event in &event_scratch {
+                        match classify_event(event) {
+                            EventAction::NoteOn {
+                                channel,
+                                pitch,
+                                velocity,
+                                offset,
+                            } => instrument_audio.push_note_on(channel, pitch, velocity, offset),
+                            EventAction::NoteOffAndEnd {
+                                channel,
+                                pitch,
+                                velocity,
+                                offset,
+                                end,
+                            } => {
+                                instrument_audio.push_note_off(channel, pitch, velocity, offset);
+                                output_events.push(end);
+                            }
+                            EventAction::Unsupported => unsafe {
+                                (*region).event_decode_error_count.fetch_add(1, Relaxed);
+                            },
+                        }
+                    }
+                    scratch[..sample_count].fill(0.0);
+                    if !instrument_audio.process_block(&mut scratch[..sample_count]) {
+                        process_errors += 1;
+                        unsafe {
+                            (*region).child_process_error_count.fetch_add(1, Relaxed);
+                        }
+                    }
+                    unsafe {
+                        publish_completed_slot(region, seq, |region| {
+                            let out_base = std::ptr::addr_of_mut!((*region).output) as *mut f32;
+                            std::ptr::copy_nonoverlapping(
+                                scratch.as_ptr(),
+                                out_base.add(off),
+                                sample_count,
+                            );
+                            let window = std::slice::from_raw_parts_mut(
+                                std::ptr::addr_of_mut!((*region).output_events[idx])
+                                    as *mut EventRecord,
+                                MAX_EVENTS_PER_BLOCK,
+                            );
+                            let outcome = write_output_events(
+                                window,
+                                &mut output_spill,
+                                output_events.drain(..),
+                            );
+                            apply_output_write_outcome(region, idx, outcome);
+                            (*region).child_processed.fetch_add(1, Relaxed);
+                        });
+                    }
+                }
+                last = cur.max(last);
+            }
+            let last_process_error = instrument_audio.last_process_error();
+            // Vst3InstrumentAudio::drop runs setProcessing(0) on this thread.
+            (process_errors, last_process_error)
+        },
+    )?;
+
     if process_errors != 0 {
         eprintln!(
             "[orbit-vst3-instrument-child] plugin.process() failed for {process_errors} block(s); \
              last tresult={}",
-            instrument.last_process_error()
+            last_process_error
         );
     }
     Ok(())

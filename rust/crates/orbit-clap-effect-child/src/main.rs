@@ -28,6 +28,7 @@ use orbit_audio_sandbox::{
     open_shared, region_ptr, save_state_command, service_command_mailbox, slot_index, slot_offset,
     ParentWatch, BUF_LEN, CHANNELS, CMD_SAVE_STATE, CONTROL_QUIT, MAX_FRAMES,
 };
+use orbit_child_runtime::run_child;
 use orbit_clap_host::ClapEffectProcessor;
 
 struct Args {
@@ -80,7 +81,7 @@ fn main() -> Result<()> {
         Some(path) => Some(std::fs::read(path).with_context(|| format!("read state {path:?}"))?),
         None => None,
     };
-    let (mut effect, _info) = ClapEffectProcessor::load(
+    let (effect, _info) = ClapEffectProcessor::load(
         &args.plugin,
         args.plugin_id.as_deref(),
         args.sample_rate,
@@ -94,81 +95,82 @@ fn main() -> Result<()> {
     unsafe {
         orbit_audio_sandbox::transport::publish_child_ready(region, effect.has_audio_input());
     }
+    let (mut effect_audio, mut effect_main) = effect.split();
 
-    // in-place process_block 用の作業バッファ（ループ前に確保 = RT 安全）。
-    let mut scratch = vec![0.0f32; BUF_LEN];
-
-    // plugin.process() が失敗したブロック数。PR-C（carry-forward ①）で health signal を
-    // `SharedRegion::child_process_error_count` に載せ、失敗ブロックごとに host が live に読める
-    // shared counter へ `fetch_add` する（effect は失敗時 dry 素通しで silent になるための可視化）。
-    // local の `process_errors` は **このプロセス**の集計で、終了時 stderr 報告に使う（respawn を跨ぐと
-    // shared counter は累積するが、stderr はこの child の寄与だけを出す方が診断的）。
-    let mut process_errors: u64 = 0;
-
-    let mut last: u64 = 0;
     // orphan 対策（#448）: host（daemon）が CONTROL_QUIT を書かずに死ぬ経路（プロセス exit・
-    // SIGKILL・crash）でも spin loop を抜けられるよう、親死活を低頻度で監視する。
+    // SIGKILL・crash）でも main runloop を止められるよう、親死活をタイマーで監視する。
     let mut parent_watch = ParentWatch::new();
-    loop {
-        // host からの正常終了要求。一回限りの flag なので Relaxed で十分（PR-A gain child と同様）。
-        // SAFETY: region は host が REGION_BYTES に truncate 済みの共有ファイルを指す（map 後不変）。
-        if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
-            break;
-        }
-        if parent_watch.should_exit() {
-            eprintln!("[orbit-clap-effect-child] 親プロセス死亡を検知、終了する");
-            break;
-        }
-        unsafe {
-            service_command_mailbox(region, |kind, arg| match kind {
-                CMD_SAVE_STATE => Some(save_state_command(arg, || effect.capture_state())),
-                _ => None,
-            });
-        }
-        // SAFETY: 同上（region は有効）。seq_request の Acquire は host SUBMIT の Release と
-        // synchronize-with し、続く input/n_frames[slot] 読み出しの可視性を確立する。
-        let cur = unsafe { (*region).seq_request.load(Acquire) };
-        if cur > last {
-            // slot index / offset は当該 seq で不変なのでループ本体先頭で 1 回だけ算出する。
-            let idx = slot_index(cur);
-            let off = slot_offset(cur);
-            // SAFETY: seq_request の Acquire が host の input/n_frames[slot] 書き込みを可視化する。
-            // slot 不変条件（host が seq-SLOTS 完了を待って submit）で当該 slot は時間的に排他。
-            let count = unsafe {
-                let n = ((*region).n_frames[idx].load(Relaxed) as usize).min(MAX_FRAMES);
-                let count = n * CHANNELS;
-                let in_base = std::ptr::addr_of!((*region).input) as *const f32;
-                std::ptr::copy_nonoverlapping(in_base.add(off), scratch.as_mut_ptr(), count);
-                count
-            };
-
-            // 実 CLAP effect で 1 block を in-place 加工（共有メモリ外の scratch 上で）。
-            // 失敗時 process_block は scratch を dry のまま素通しする。
-            if !effect.process_block(&mut scratch[..count]) {
-                process_errors += 1;
-                // carry-forward ①: host(supervisor / accessor)が live に読める shared counter へ反映。
-                // SAFETY: region は map 済みで有効。fetch_add は MAP_SHARED でクロスプロセス可視。
-                // Relaxed で十分（audio data の順序づけに関与しない観測用 counter）。
-                unsafe {
-                    (*region).child_process_error_count.fetch_add(1, Relaxed);
-                }
-            }
-
-            // SAFETY: 上と同じ slot 排他。scratch（加工済み出力）を output slot へ書き戻す。
+    let region_addr = region as usize;
+    let process_errors = run_child(
+        "orbit-clap-effect-child",
+        || {
+            // Mailbox servicing is main-thread-only after #474 P1. In particular,
+            // SAVE_STATE may block on plugin serialization/fsync without stalling audio.
             unsafe {
-                let out_base = std::ptr::addr_of_mut!((*region).output) as *mut f32;
-                std::ptr::copy_nonoverlapping(scratch.as_ptr(), out_base.add(off), count);
-                (*region).child_processed.fetch_add(1, Relaxed);
-                // この slot の出力を publish（host READ の seq_tag[slot]==target Acquire と synchronize-with）。
-                (*region).seq_tag[idx].store(cur, Release);
-                // submit guard 用の最新処理 seq（host SUBMIT の Acquire と synchronize-with）。
-                (*region).seq_done.store(cur, Release);
+                service_command_mailbox(region, |kind, arg| match kind {
+                    CMD_SAVE_STATE => Some(save_state_command(arg, || effect_main.capture_state())),
+                    _ => None,
+                });
             }
-            last = cur;
-        } else {
-            std::hint::spin_loop();
-        }
-    }
+            if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
+                return true;
+            }
+            if parent_watch.should_exit() {
+                eprintln!("[orbit-clap-effect-child] 親プロセス死亡を検知、終了する");
+                return true;
+            }
+            false
+        },
+        move |stop_audio| {
+            let region = region_addr as *mut orbit_audio_sandbox::SharedRegion;
+            // in-place process_block 用の作業バッファ（audio loop 前に確保 = RT 安全）。
+            let mut scratch = vec![0.0f32; BUF_LEN];
+            let mut process_errors = 0u64;
+            let mut last = 0u64;
+            loop {
+                // Audio thread observes only the runtime stop flag and CONTROL_QUIT.
+                // Mailbox and ParentWatch remain exclusively on the main runloop.
+                if stop_audio.load(Relaxed)
+                    || unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT
+                {
+                    break;
+                }
+                let cur = unsafe { (*region).seq_request.load(Acquire) };
+                if cur <= last {
+                    std::hint::spin_loop();
+                    continue;
+                }
+                let idx = slot_index(cur);
+                let off = slot_offset(cur);
+                let count = unsafe {
+                    let n = ((*region).n_frames[idx].load(Relaxed) as usize).min(MAX_FRAMES);
+                    let count = n * CHANNELS;
+                    let in_base = std::ptr::addr_of!((*region).input) as *const f32;
+                    std::ptr::copy_nonoverlapping(in_base.add(off), scratch.as_mut_ptr(), count);
+                    count
+                };
+
+                if !effect_audio.process_block(&mut scratch[..count]) {
+                    process_errors += 1;
+                    unsafe {
+                        (*region).child_process_error_count.fetch_add(1, Relaxed);
+                    }
+                }
+
+                unsafe {
+                    let out_base = std::ptr::addr_of_mut!((*region).output) as *mut f32;
+                    std::ptr::copy_nonoverlapping(scratch.as_ptr(), out_base.add(off), count);
+                    (*region).child_processed.fetch_add(1, Relaxed);
+                    (*region).seq_tag[idx].store(cur, Release);
+                    (*region).seq_done.store(cur, Release);
+                }
+                last = cur;
+            }
+            // ClapEffectAudio::drop runs stop_processing on this audio thread.
+            process_errors
+        },
+    )?;
+
     if process_errors > 0 {
         eprintln!(
             "[orbit-clap-effect-child] plugin.process() が {process_errors} ブロックで失敗 \

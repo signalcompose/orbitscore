@@ -29,6 +29,7 @@ path = "src/main.rs"
 orbit-clap-host = { path = "../orbit-clap-host" }
 # 親子で共有する SharedRegion transport（memmap2・clack 非依存）。
 orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }
+orbit-child-runtime = { path = "../orbit-child-runtime" }
 # 引数 parse / エラー伝播。
 anyhow = "1"
 

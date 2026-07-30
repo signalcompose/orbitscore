@@ -11,6 +11,7 @@ use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
     ParentWatch, SharedRegion, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
 };
+use orbit_child_runtime::run_child;
 use orbit_clap_host::{push_neutral_event, ClapInstrumentProcessor, EventBuffer};
 
 struct Args {
@@ -185,7 +186,7 @@ fn main() -> Result<()> {
         None => None,
         Some(path) => Some(std::fs::read(path).with_context(|| format!("read state {path:?}"))?),
     };
-    let (mut instrument, _info) = ClapInstrumentProcessor::load(
+    let (instrument, _info) = ClapInstrumentProcessor::load(
         &args.plugin,
         args.plugin_id.as_deref(),
         args.sample_rate,
@@ -198,121 +199,133 @@ fn main() -> Result<()> {
     unsafe {
         orbit_audio_sandbox::transport::publish_child_ready(region, instrument.has_audio_input());
     }
-    let mut scratch = vec![0.0f32; BUF_LEN];
-    // Event window 分を事前確保し、hot loop での buffer 再確保を避ける。
-    let mut event_buf = EventBuffer::with_capacity(MAX_EVENTS_PER_BLOCK);
-    let mut output_event_buf = EventBuffer::with_capacity(MAX_EVENTS_PER_BLOCK);
-    let mut event_scratch: Vec<NeutralEvent> = Vec::with_capacity(MAX_EVENTS_PER_BLOCK);
-    let mut output_spill = EventSpillFifo::new();
-    let mut process_errors = 0u64;
-    // After a supervisor respawn this always restarts from 0, so the child re-processes every
-    // historical seq up to the current `seq_request` (no resume-point handshake exists yet).
-    // Tracked in #418.
-    let mut last = 0u64;
+    let (mut instrument_audio, mut instrument_main) = instrument.split();
     // orphan 対策(#448): host(daemon)が CONTROL_QUIT を書かずに死ぬ経路(プロセス exit・
-    // SIGKILL・crash)でも spin loop を抜けられるよう、親死活を低頻度で監視する。
+    // SIGKILL・crash)でも main runloop を止められるよう、親死活をタイマーで監視する。
     let mut parent_watch = ParentWatch::new();
-
-    loop {
-        if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
-            break;
-        }
-        if parent_watch.should_exit() {
-            eprintln!("[orbit-clap-instrument-child] 親プロセス死亡を検知、終了する");
-            break;
-        }
-        // #557: host からのコマンドを処理する（UIH.2）。VST3 child と同じ共有層を使うので、
-        // ack の publish 順序・未知 kind の扱い・detail の切り詰め禁止は自動的に継承される。
-        unsafe {
-            service_command_mailbox(region, |kind, arg| match kind {
-                CMD_SAVE_STATE => Some(save_state_command(arg, || instrument.capture_state())),
-                _ => None,
-            });
-        }
-        let cur = unsafe { (*region).seq_request.load(Acquire) };
-        if cur <= last {
-            std::hint::spin_loop();
-            continue;
-        }
-        for seq in in_order_seqs(last, cur) {
-            let idx = slot_index(seq);
-            let off = slot_offset(seq);
-            let n_frames =
-                unsafe { ((*region).n_frames[idx].load(Relaxed) as usize).min(MAX_FRAMES) };
-            let sample_count = n_frames * CHANNELS;
-            let event_count = unsafe {
-                (*region).input_event_count[idx]
-                    .load(Relaxed)
-                    .min(MAX_EVENTS_PER_BLOCK as u32)
-            };
-            let decode_errors = unsafe {
-                decode_slot_events(
-                    &(*region).input_events[idx],
-                    event_count,
-                    &mut event_scratch,
-                )
-            };
-            if decode_errors != 0 {
-                unsafe {
-                    (*region)
-                        .event_decode_error_count
-                        .fetch_add(decode_errors as u64, Relaxed);
-                }
+    let region_addr = region as usize;
+    let process_errors = run_child(
+        "orbit-clap-instrument-child",
+        || {
+            // Mailbox servicing is confined to the AppKit main runloop.
+            unsafe {
+                service_command_mailbox(region, |kind, arg| match kind {
+                    CMD_SAVE_STATE => {
+                        Some(save_state_command(arg, || instrument_main.capture_state()))
+                    }
+                    _ => None,
+                });
             }
-            event_buf.clear();
-            for event in &event_scratch {
-                // `false` means this NeutralEvent has no CLAP translation (e.g. PolyPressure,
-                // an intentional v1 drop — see orbit-clap-host/src/events.rs). Currently
-                // unreachable: the host only ever emits NoteOn/NoteOff/NoteChoke, which always
-                // translate. Reuse event_decode_error_count rather than add a new counter, per
-                // docs/development/POST_2.0_GAMMA_M2_DESIGN.md §4 ("child can't honor this
-                // event" visibility).
-                if !push_neutral_event(&mut event_buf, event) {
+            if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
+                return true;
+            }
+            if parent_watch.should_exit() {
+                eprintln!("[orbit-clap-instrument-child] 親プロセス死亡を検知、終了する");
+                return true;
+            }
+            false
+        },
+        move |stop_audio| {
+            let region = region_addr as *mut SharedRegion;
+            let mut scratch = vec![0.0f32; BUF_LEN];
+            let mut event_buf = EventBuffer::with_capacity(MAX_EVENTS_PER_BLOCK);
+            let mut output_event_buf = EventBuffer::with_capacity(MAX_EVENTS_PER_BLOCK);
+            let mut event_scratch: Vec<NeutralEvent> = Vec::with_capacity(MAX_EVENTS_PER_BLOCK);
+            let mut output_spill = EventSpillFifo::new();
+            let mut process_errors = 0u64;
+            // Respawn starts at zero; there is no resume-point handshake yet (#418).
+            let mut last = 0u64;
+
+            loop {
+                if stop_audio.load(Relaxed)
+                    || unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT
+                {
+                    break;
+                }
+                let cur = unsafe { (*region).seq_request.load(Acquire) };
+                if cur <= last {
+                    std::hint::spin_loop();
+                    continue;
+                }
+                for seq in in_order_seqs(last, cur) {
+                    let idx = slot_index(seq);
+                    let off = slot_offset(seq);
+                    let n_frames =
+                        unsafe { ((*region).n_frames[idx].load(Relaxed) as usize).min(MAX_FRAMES) };
+                    let sample_count = n_frames * CHANNELS;
+                    let event_count = unsafe {
+                        (*region).input_event_count[idx]
+                            .load(Relaxed)
+                            .min(MAX_EVENTS_PER_BLOCK as u32)
+                    };
+                    let decode_errors = unsafe {
+                        decode_slot_events(
+                            &(*region).input_events[idx],
+                            event_count,
+                            &mut event_scratch,
+                        )
+                    };
+                    if decode_errors != 0 {
+                        unsafe {
+                            (*region)
+                                .event_decode_error_count
+                                .fetch_add(decode_errors as u64, Relaxed);
+                        }
+                    }
+                    event_buf.clear();
+                    for event in &event_scratch {
+                        if !push_neutral_event(&mut event_buf, event) {
+                            unsafe {
+                                (*region).event_decode_error_count.fetch_add(1, Relaxed);
+                            }
+                        }
+                    }
+                    scratch[..sample_count].fill(0.0);
+                    if !instrument_audio.process_block(
+                        &mut scratch[..sample_count],
+                        &event_buf,
+                        &mut output_event_buf,
+                    ) {
+                        process_errors += 1;
+                        unsafe {
+                            (*region).child_process_error_count.fetch_add(1, Relaxed);
+                        }
+                    }
                     unsafe {
-                        (*region).event_decode_error_count.fetch_add(1, Relaxed);
+                        publish_completed_slot(
+                            region,
+                            seq,
+                            |region| {
+                                let out_base = std::ptr::addr_of_mut!((*region).output) as *mut f32;
+                                std::ptr::copy_nonoverlapping(
+                                    scratch.as_ptr(),
+                                    out_base.add(off),
+                                    sample_count,
+                                );
+                                let window = std::slice::from_raw_parts_mut(
+                                    std::ptr::addr_of_mut!((*region).output_events[idx])
+                                        as *mut EventRecord,
+                                    MAX_EVENTS_PER_BLOCK,
+                                );
+                                let translated = (&output_event_buf)
+                                    .into_iter()
+                                    .filter_map(ClapInstrumentProcessor::neutral_output_event);
+                                let outcome =
+                                    write_output_events(window, &mut output_spill, translated);
+                                apply_output_write_outcome(region, idx, outcome);
+                                (*region).child_processed.fetch_add(1, Relaxed);
+                            },
+                            || {},
+                        );
                     }
                 }
+                last = cur.max(last);
             }
-            scratch[..sample_count].fill(0.0);
-            if !instrument.process_block(
-                &mut scratch[..sample_count],
-                &event_buf,
-                &mut output_event_buf,
-            ) {
-                process_errors += 1;
-                unsafe {
-                    (*region).child_process_error_count.fetch_add(1, Relaxed);
-                }
-            }
-            unsafe {
-                publish_completed_slot(
-                    region,
-                    seq,
-                    |region| {
-                        let out_base = std::ptr::addr_of_mut!((*region).output) as *mut f32;
-                        std::ptr::copy_nonoverlapping(
-                            scratch.as_ptr(),
-                            out_base.add(off),
-                            sample_count,
-                        );
-                        let window = std::slice::from_raw_parts_mut(
-                            std::ptr::addr_of_mut!((*region).output_events[idx])
-                                as *mut EventRecord,
-                            MAX_EVENTS_PER_BLOCK,
-                        );
-                        let translated = (&output_event_buf)
-                            .into_iter()
-                            .filter_map(ClapInstrumentProcessor::neutral_output_event);
-                        let outcome = write_output_events(window, &mut output_spill, translated);
-                        apply_output_write_outcome(region, idx, outcome);
-                        (*region).child_processed.fetch_add(1, Relaxed);
-                    },
-                    || {},
-                );
-            }
-        }
-        last = cur.max(last);
-    }
+            // ClapInstrumentAudio::drop runs stop_processing on this audio thread.
+            process_errors
+        },
+    )?;
+
     if process_errors != 0 {
         eprintln!(
             "[orbit-clap-instrument-child] plugin.process() が {process_errors} ブロックで失敗"

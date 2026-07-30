@@ -18,6 +18,7 @@ path = "src/main.rs"
 [dependencies]
 orbit-vst3-host = { path = "../orbit-vst3-host" }
 orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }
+orbit-child-runtime = { path = "../orbit-child-runtime" }
 anyhow = "1"
 
 # mailbox_wiring テストが load させる effect oracle。**state の encode/decode を手書きしない**

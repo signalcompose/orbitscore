@@ -14,7 +14,7 @@
 //! ため**意図的に leak する**。したがってフィールド宣言順で `plugin` を `_instance` より**前**に置くことが
 //! load-bearing: `plugin` の Arc が先に落ちて `_instance` が唯一所有者になり、`_instance` drop で teardown が
 //! 実際に走る。**逆順にすると** `_instance` drop 時に refcount>1 で leak し、`plugin` drop でも teardown が
-//! 走らず**未 deactivate のままリーク**する（クラッシュでなく silent leak = smoke/parity では順序が逆でも
+//! 走らず**永久 leak（teardown はどのスレッドでも一切走らない）**になる（smoke/parity では順序が逆でも
 //! 緑なので、この宣言順を守る唯一のガードが本コメント）。本型は home == audio == 唯一スレッドなので teardown
 //! は単一スレッドで完結し、daemon の split-thread（`ClapTeardownGuard` で跨ぐ）wrong-thread 問題を sidestep する。
 //!
@@ -34,6 +34,7 @@ use crate::buffers::HostAudioBuffers;
 use crate::controller::{instantiate_activate, ClapHostError, LoadedPluginInfo};
 use crate::host::OrbitClapHost;
 use crate::processor::process_block_core;
+use crate::ClapPluginMain;
 
 /// 単一スレッドで load / process / drop する instrument CLAP プロセッサ。
 ///
@@ -155,5 +156,82 @@ impl ClapInstrumentProcessor {
             Some(output_events),
             data,
         )
+    }
+
+    /// main / audio の 2 スレッド運用（UIH.1）へ分割する（#474 P1）。
+    ///
+    /// 意味論・teardown の順序契約は [`crate::ClapEffectProcessor::split`] と同一
+    /// （audio 側の [`ClapInstrumentAudio::drop`] → main が join →
+    /// [`ClapPluginMain`] drop = 唯一所有者として home スレッドで実 teardown）。
+    /// 逆順の帰結も同じく **永久 leak（teardown はどのスレッドでも一切走らない）**。
+    pub fn split(self) -> (ClapInstrumentAudio, ClapPluginMain) {
+        let Self {
+            plugin,
+            buffers,
+            steady,
+            _instance,
+        } = self;
+        (
+            ClapInstrumentAudio {
+                plugin: Some(plugin),
+                buffers,
+                steady,
+            },
+            ClapPluginMain {
+                instance: _instance,
+            },
+        )
+    }
+}
+
+/// [`ClapInstrumentProcessor::split`] の audio スレッド側（`Send`・詳細は
+/// [`crate::ClapEffectAudio`] と同じ根拠）。
+pub struct ClapInstrumentAudio {
+    plugin: Option<StartedPluginAudioProcessor<OrbitClapHost>>,
+    buffers: HostAudioBuffers,
+    steady: u64,
+}
+
+impl ClapInstrumentAudio {
+    /// [`ClapInstrumentProcessor::process_block`] と同一の音響処理（audio スレッド側）。
+    #[must_use]
+    pub fn process_block(
+        &mut self,
+        data: &mut [f32],
+        events: &EventBuffer,
+        output_events: &mut EventBuffer,
+    ) -> bool {
+        process_block_core(
+            self.plugin
+                .as_mut()
+                .expect("CLAP instrument audio remains started until teardown"),
+            &mut self.buffers,
+            &mut self.steady,
+            &events.as_input(),
+            Some(output_events),
+            data,
+        )
+    }
+}
+
+impl Drop for ClapInstrumentAudio {
+    fn drop(&mut self) {
+        // Keep CLAP stop_processing on the audio thread during unwinding too.
+        if let Some(plugin) = self.plugin.take() {
+            let _ = plugin.stop_processing();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// audio 側が `Send` であることのコンパイル時証明（根拠は
+    /// `effect.rs::tests::audio_half_is_send` と同一）。
+    #[test]
+    fn audio_half_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<ClapInstrumentAudio>();
     }
 }

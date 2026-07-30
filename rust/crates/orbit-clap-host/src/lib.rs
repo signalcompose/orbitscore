@@ -20,6 +20,7 @@ mod effect;
 mod events;
 mod host;
 mod instrument;
+mod plugin_main;
 mod processor;
 mod state;
 
@@ -28,12 +29,13 @@ pub use controller::{ClapHost, ClapHostError, LoadedPluginInfo};
 // #463 plugin catalog スキャナ（orbit-plugin-scan）が discovery API を外部から使うために追加
 // re-export（DiscoveryError は元から公開済み）。ロジック変更なし。
 pub use discovery::{list_plugins_in_file, DiscoveryError, FoundPlugin, PluginDescriptor};
-pub use effect::ClapEffectProcessor;
+pub use effect::{ClapEffectAudio, ClapEffectProcessor};
 pub use events::{
     make_event_ring, push_neutral_event, PluginEvent, PluginEventConsumer, PluginEventProducer,
 };
-pub use instrument::ClapInstrumentProcessor;
+pub use instrument::{ClapInstrumentAudio, ClapInstrumentProcessor};
 pub use orbit_audio_native::PostProcessor;
+pub use plugin_main::ClapPluginMain;
 pub use processor::{ClapPostProcessor, ClapProcessorStats, InstallMsg};
 pub use state::EMPTY_STATE_FROM_PLUGIN;
 

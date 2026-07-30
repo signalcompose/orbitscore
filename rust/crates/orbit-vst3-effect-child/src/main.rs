@@ -26,6 +26,8 @@ use orbit_audio_sandbox::{
     ParentWatch, BUF_LEN, CHANNELS, CMD_SAVE_STATE, CONTROL_QUIT, MAX_FRAMES,
 };
 #[cfg(target_os = "macos")]
+use orbit_child_runtime::run_child;
+#[cfg(target_os = "macos")]
 use orbit_vst3_host::Vst3EffectProcessor;
 
 #[cfg(target_os = "macos")]
@@ -86,7 +88,7 @@ fn main() -> Result<()> {
         Some(path) => Some(std::fs::read(path).with_context(|| format!("read state {path:?}"))?),
         None => None,
     };
-    let (mut effect, info) = Vst3EffectProcessor::load(
+    let (effect, info) = Vst3EffectProcessor::load(
         &args.plugin,
         args.sample_rate as f64,
         MAX_FRAMES as i32,
@@ -101,59 +103,78 @@ fn main() -> Result<()> {
     unsafe {
         orbit_audio_sandbox::transport::publish_child_ready(region, info.audio_inputs > 0);
     }
+    let (mut effect_audio, effect_main) = effect.split();
 
-    let mut scratch = vec![0.0f32; BUF_LEN];
-    let mut process_errors: u64 = 0;
-
-    let mut last: u64 = 0;
     // orphan 対策(#448): host(daemon)が CONTROL_QUIT を書かずに死ぬ経路(プロセス exit・
-    // SIGKILL・crash)でも spin loop を抜けられるよう、親死活を低頻度で監視する。
+    // SIGKILL・crash)でも main runloop を止められるよう、親死活をタイマーで監視する。
     let mut parent_watch = ParentWatch::new();
-    loop {
-        if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
-            break;
-        }
-        if parent_watch.should_exit() {
-            eprintln!("[orbit-vst3-effect-child] 親プロセス死亡を検知、終了する");
-            break;
-        }
-        unsafe {
-            service_command_mailbox(region, |kind, arg| match kind {
-                CMD_SAVE_STATE => Some(save_state_command(arg, || effect.capture_state())),
-                _ => None,
-            });
-        }
-        let cur = unsafe { (*region).seq_request.load(Acquire) };
-        if cur > last {
-            let idx = slot_index(cur);
-            let off = slot_offset(cur);
-            let count = unsafe {
-                let n = ((*region).n_frames[idx].load(Relaxed) as usize).min(MAX_FRAMES);
-                let count = n * CHANNELS;
-                let in_base = std::ptr::addr_of!((*region).input) as *const f32;
-                std::ptr::copy_nonoverlapping(in_base.add(off), scratch.as_mut_ptr(), count);
-                count
-            };
-
-            if !effect.process_block(&mut scratch[..count]) {
-                process_errors += 1;
-                unsafe {
-                    (*region).child_process_error_count.fetch_add(1, Relaxed);
-                }
-            }
-
+    let region_addr = region as usize;
+    let process_errors = run_child(
+        "orbit-vst3-effect-child",
+        || {
             unsafe {
-                let out_base = std::ptr::addr_of_mut!((*region).output) as *mut f32;
-                std::ptr::copy_nonoverlapping(scratch.as_ptr(), out_base.add(off), count);
-                (*region).child_processed.fetch_add(1, Relaxed);
-                (*region).seq_tag[idx].store(cur, Release);
-                (*region).seq_done.store(cur, Release);
+                service_command_mailbox(region, |kind, arg| match kind {
+                    CMD_SAVE_STATE => Some(save_state_command(arg, || effect_main.capture_state())),
+                    _ => None,
+                });
             }
-            last = cur;
-        } else {
-            std::hint::spin_loop();
-        }
-    }
+            if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
+                return true;
+            }
+            if parent_watch.should_exit() {
+                eprintln!("[orbit-vst3-effect-child] 親プロセス死亡を検知、終了する");
+                return true;
+            }
+            false
+        },
+        move |stop_audio| {
+            let region = region_addr as *mut orbit_audio_sandbox::SharedRegion;
+            let mut scratch = vec![0.0f32; BUF_LEN];
+            let mut process_errors = 0u64;
+            let mut last = 0u64;
+
+            loop {
+                if stop_audio.load(Relaxed)
+                    || unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT
+                {
+                    break;
+                }
+                let cur = unsafe { (*region).seq_request.load(Acquire) };
+                if cur <= last {
+                    std::hint::spin_loop();
+                    continue;
+                }
+                let idx = slot_index(cur);
+                let off = slot_offset(cur);
+                let count = unsafe {
+                    let n = ((*region).n_frames[idx].load(Relaxed) as usize).min(MAX_FRAMES);
+                    let count = n * CHANNELS;
+                    let in_base = std::ptr::addr_of!((*region).input) as *const f32;
+                    std::ptr::copy_nonoverlapping(in_base.add(off), scratch.as_mut_ptr(), count);
+                    count
+                };
+
+                if !effect_audio.process_block(&mut scratch[..count]) {
+                    process_errors += 1;
+                    unsafe {
+                        (*region).child_process_error_count.fetch_add(1, Relaxed);
+                    }
+                }
+
+                unsafe {
+                    let out_base = std::ptr::addr_of_mut!((*region).output) as *mut f32;
+                    std::ptr::copy_nonoverlapping(scratch.as_ptr(), out_base.add(off), count);
+                    (*region).child_processed.fetch_add(1, Relaxed);
+                    (*region).seq_tag[idx].store(cur, Release);
+                    (*region).seq_done.store(cur, Release);
+                }
+                last = cur;
+            }
+            // Vst3EffectAudio::drop runs setProcessing(0) on this audio thread.
+            process_errors
+        },
+    )?;
+
     if process_errors > 0 {
         eprintln!(
             "[orbit-vst3-effect-child] plugin.process() failed for {process_errors} block(s); \

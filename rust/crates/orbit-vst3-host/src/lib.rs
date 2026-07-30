@@ -408,18 +408,29 @@ impl Drop for CfUrl {
     }
 }
 
-/// Single-threaded VST3 effect processor.
+/// Main(home)-thread half shared by the split VST3 effect / instrument processors (#474 P1).
 ///
-/// `Rc` makes this type `!Send` and `!Sync`. Construct, process, and drop it on the same home
-/// thread. Shutdown call order (`setProcessing` → disconnect → `controller.terminate` →
-/// `component.setActive(0)`/`terminate`) is enforced by the hand-written `Drop::drop` body below
-/// via explicit `.take()` calls, not by field declaration order. Field order is load-bearing only
-/// for the *implicit* drop of the fields `Drop::drop` does not `.take()`: `_component_handler`
-/// and `_host_context` must be declared (and therefore dropped) before `_library`, so any COM
-/// callback objects backed by the plugin's vtables are released before the dynamic library is
-/// unloaded.
-pub struct Vst3EffectProcessor {
-    processor: Option<ComPtr<IAudioProcessor>>,
+/// Holds everything the per-block `process` call does **not** need: the component (state
+/// capture), the controller handshake, the factory, and the dynamic library. `Rc` makes this
+/// `!Send` — it stays on the thread that called `load` (the home thread), which is where the
+/// VST3 `[main-thread]` contract wants `getState` (CAP.5 / UIH.1).
+///
+/// ## Teardown（🔴 順序が正しさの条件）
+///
+/// `Drop` はモノリシック時代の shutdown 列の **後半**（disconnect → `controller.terminate` →
+/// `component.setActive(0)`/`terminate` → factory 解放）を実行する。前半の
+/// `setProcessing(0)` は audio 側（[`Vst3EffectAudio`] / [`Vst3InstrumentAudio`]）の `Drop` が
+/// 担うため、**audio 側が先に drop されていなければならない**:
+/// - 未分割の composite（[`Vst3EffectProcessor`] / [`Vst3InstrumentProcessor`]）では
+///   hand-written `Drop::drop` の明示的な `.take()` 列がこれを強制する
+/// - 分割後（`split()`）は、main スレッドが **audio スレッドを join してから**本型を drop
+///   することで強制する（`orbit-child-runtime` の関数構造がこの順序を持つ）
+///
+/// Field order is load-bearing for the *implicit* drops `Drop::drop` does not `.take()`:
+/// `_component_handler` and `_host_context` must be declared (and therefore dropped) before
+/// `_library`, so any COM callback objects backed by the plugin's vtables are released before
+/// the dynamic library is unloaded.
+pub struct Vst3PluginMain {
     controller: Option<ComPtr<IEditController>>,
     component_connection: Option<ComPtr<IConnectionPoint>>,
     controller_connection: Option<ComPtr<IConnectionPoint>>,
@@ -430,6 +441,60 @@ pub struct Vst3EffectProcessor {
     _home_thread: PhantomData<Rc<()>>,
     _library: LoadedLibrary,
     info: LoadedVst3Info,
+}
+
+impl Vst3PluginMain {
+    /// 現在の component state を取得する（空 state 拒否の規律込み）。
+    ///
+    /// **スレッド**: home（main）スレッドから呼ぶこと（CAP.5・VST3 の規約）。
+    pub fn capture_state(&self) -> Result<Vec<u8>, Vst3HostError> {
+        let component = self
+            .component
+            .as_ref()
+            .ok_or_else(|| Vst3HostError::State("component is not loaded".into()))?;
+        capture_component_state(component)
+    }
+
+    pub fn info(&self) -> &LoadedVst3Info {
+        &self.info
+    }
+}
+
+impl Drop for Vst3PluginMain {
+    fn drop(&mut self) {
+        if let (Some(component_connection), Some(controller_connection)) = (
+            self.component_connection.as_ref(),
+            self.controller_connection.as_ref(),
+        ) {
+            unsafe {
+                let _ = component_connection.disconnect(controller_connection.as_ptr());
+                let _ = controller_connection.disconnect(component_connection.as_ptr());
+            }
+        }
+        let _ = self.component_connection.take();
+        let _ = self.controller_connection.take();
+        if let Some(controller) = self.controller.take() {
+            unsafe {
+                let _ = controller.terminate();
+            }
+        }
+        if let Some(component) = self.component.take() {
+            unsafe {
+                let _ = component.setActive(0);
+                let _ = component.terminate();
+            }
+        }
+        let _ = self.factory.take();
+    }
+}
+
+/// Audio-thread half of the split VST3 effect processor (#474 P1). Owns exactly what the
+/// per-block `process` call touches: the `IAudioProcessor`, the host-side COM stubs, and the
+/// de-interleave scratch buffers. `Drop` calls `setProcessing(0)`（分割後は audio スレッド上で
+/// 走る — モノリシック時代も process と同一スレッドで呼んでいたので契約上同等以上）。
+pub struct Vst3EffectAudio {
+    processor: ComPtr<IAudioProcessor>,
+    is_effect: bool,
     sample_rate: f64,
     /// `IProcessContextRequirements` flags queried once at load time (`load()`). The plugin's
     /// requirements do not change over its lifetime, so re-querying per block would be a wasted
@@ -449,6 +514,36 @@ pub struct Vst3EffectProcessor {
     process_input_r: Vec<f32>,
     process_output_l: Vec<f32>,
     process_output_r: Vec<f32>,
+}
+
+// SAFETY (#474 P1 / UIH.1): 専用 audio スレッドへの move は VST3 ホストの正準モデルである —
+// `IAudioProcessor::process` は非 main の RT スレッドから駆動されることが想定されており、
+// COM の参照カウント（`FUnknown`）は VST3 契約上スレッド安全が要求される。ここが所有する
+// host 側 COM スタブ（`ParameterChanges` / `EventList`）は move 後は所有スレッドだけが触る
+// （`thread::spawn` の引き渡しが happens-before を確立する）。加えて正しさは
+// [`Vst3PluginMain`] に記した teardown 順序（audio 側の `setProcessing(0)` が main 側の
+// terminate 列より先）に依存する — composite では明示 `Drop`、分割 child では
+// 「join してから main 側を drop」の関数構造が強制する。
+unsafe impl Send for Vst3EffectAudio {}
+
+impl Drop for Vst3EffectAudio {
+    fn drop(&mut self) {
+        let result = unsafe { self.processor.setProcessing(0) };
+        if !is_ok(result) && result != kNotImplemented {
+            eprintln!("[orbit-vst3-host] effect setProcessing(0) failed: {result}");
+        }
+    }
+}
+
+/// Single-threaded-by-default VST3 effect processor: [`Vst3EffectAudio`] + [`Vst3PluginMain`]
+/// の composite。`load` したスレッド上でそのまま使う（従来 API 互換）か、`split()` で
+/// main / audio の 2 スレッド運用（UIH.1）へ分割する。
+///
+/// Shutdown call order is enforced by the hand-written [`Drop::drop`] body below via explicit
+/// `.take()` calls, not by field declaration order.
+pub struct Vst3EffectProcessor {
+    audio: Option<Vst3EffectAudio>,
+    main: Option<Vst3PluginMain>,
 }
 
 impl Vst3EffectProcessor {
@@ -563,44 +658,96 @@ impl Vst3EffectProcessor {
 
         let scratch_len = max_samples_per_block.max(0) as usize;
         let processor = Self {
-            processor: Some(processor),
-            controller: controller_handshake.controller,
-            component_connection: controller_handshake.component_connection,
-            controller_connection: controller_handshake.controller_connection,
-            component: Some(component),
-            _component_handler: controller_handshake.component_handler,
-            _host_context: host_context,
-            factory: Some(factory),
-            _home_thread: PhantomData,
-            _library: library,
-            info: info.clone(),
-            sample_rate,
-            process_context_requirements,
-            output_parameter_changes: ParameterChanges::empty(),
-            input_events: EventList::empty(),
-            output_events: EventList::empty(),
-            block_parameter_changes: ParameterChanges::empty(),
-            process_input_l: vec![0.0; scratch_len],
-            process_input_r: vec![0.0; scratch_len],
-            process_output_l: vec![0.0; scratch_len],
-            process_output_r: vec![0.0; scratch_len],
+            audio: Some(Vst3EffectAudio {
+                processor,
+                is_effect: info.is_effect,
+                sample_rate,
+                process_context_requirements,
+                output_parameter_changes: ParameterChanges::empty(),
+                input_events: EventList::empty(),
+                output_events: EventList::empty(),
+                block_parameter_changes: ParameterChanges::empty(),
+                process_input_l: vec![0.0; scratch_len],
+                process_input_r: vec![0.0; scratch_len],
+                process_output_l: vec![0.0; scratch_len],
+                process_output_r: vec![0.0; scratch_len],
+            }),
+            main: Some(Vst3PluginMain {
+                controller: controller_handshake.controller,
+                component_connection: controller_handshake.component_connection,
+                controller_connection: controller_handshake.controller_connection,
+                component: Some(component),
+                _component_handler: controller_handshake.component_handler,
+                _host_context: host_context,
+                factory: Some(factory),
+                _home_thread: PhantomData,
+                _library: library,
+                info: info.clone(),
+            }),
         };
         Ok((processor, info))
     }
 
+    /// main / audio の 2 スレッド運用（UIH.1）へ分割する（#474 P1）。
+    ///
+    /// teardown の順序契約（audio 側 drop = `setProcessing(0)` → join →
+    /// [`Vst3PluginMain`] drop = terminate 列）は [`Vst3PluginMain`] の doc を参照。
+    pub fn split(mut self) -> (Vst3EffectAudio, Vst3PluginMain) {
+        (
+            self.audio.take().expect("VST3 effect audio is present"),
+            self.main.take().expect("VST3 effect main is present"),
+        )
+    }
+
     /// 現在の effect component state を取得する。instrument と同じ空-state拒否規律を使う。
     pub fn capture_state(&self) -> Result<Vec<u8>, Vst3HostError> {
-        let component = self
-            .component
+        self.main
             .as_ref()
-            .ok_or_else(|| Vst3HostError::State("component is not loaded".into()))?;
-        capture_component_state(component)
+            .expect("VST3 effect main is present")
+            .capture_state()
     }
 
     pub fn info(&self) -> &LoadedVst3Info {
-        &self.info
+        self.main
+            .as_ref()
+            .expect("VST3 effect main is present")
+            .info()
     }
 
+    pub fn process_stereo(
+        &mut self,
+        input_l: &[f32],
+        input_r: &[f32],
+        output_l: &mut [f32],
+        output_r: &mut [f32],
+        gain: Option<f64>,
+    ) -> Result<ProcessReport, Vst3HostError> {
+        self.audio
+            .as_mut()
+            .expect("VST3 effect audio is present")
+            .process_stereo(input_l, input_r, output_l, output_r, gain)
+    }
+
+    /// Interleaved stereo f32 blockを in-place で処理する child / offline parity 用 API
+    /// （[`Vst3EffectAudio::process_block`] へ委譲）。
+    #[must_use]
+    pub fn process_block(&mut self, data: &mut [f32]) -> bool {
+        self.audio
+            .as_mut()
+            .expect("VST3 effect audio is present")
+            .process_block(data)
+    }
+}
+
+impl Drop for Vst3EffectProcessor {
+    fn drop(&mut self) {
+        // Shutdown order is explicit and independent of field declaration order.
+        let _ = self.audio.take();
+        let _ = self.main.take();
+    }
+}
+
+impl Vst3EffectAudio {
     pub fn process_stereo(
         &mut self,
         input_l: &[f32],
@@ -648,7 +795,7 @@ impl Vst3EffectProcessor {
         }
         Ok(ProcessReport {
             processed: true,
-            is_effect: self.info.is_effect,
+            is_effect: self.is_effect,
         })
     }
 
@@ -695,7 +842,7 @@ impl Vst3EffectProcessor {
 
         for frame in 0..frames {
             let base = frame * DEFAULT_CHANNELS;
-            if self.info.is_effect {
+            if self.is_effect {
                 data[base] = self.process_output_l[frame];
                 data[base + 1] = self.process_output_r[frame];
             } else {
@@ -731,10 +878,7 @@ impl Vst3EffectProcessor {
         let Ok(num_samples) = i32::try_from(frames) else {
             return kInvalidArgument;
         };
-        let processor = self
-            .processor
-            .as_ref()
-            .expect("processor remains alive until drop");
+        let processor = &self.processor;
 
         let mut inputs = [AudioBusBuffers {
             numChannels: DEFAULT_CHANNELS as i32,
@@ -756,9 +900,9 @@ impl Vst3EffectProcessor {
             processMode: ProcessModes_::kRealtime as i32,
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
             numSamples: num_samples,
-            numInputs: if self.info.is_effect { 1 } else { 0 },
+            numInputs: if self.is_effect { 1 } else { 0 },
             numOutputs: 1,
-            inputs: if self.info.is_effect {
+            inputs: if self.is_effect {
                 inputs.as_mut_ptr()
             } else {
                 ptr::null_mut()
@@ -818,55 +962,10 @@ impl Vst3EffectProcessor {
     }
 }
 
-impl Drop for Vst3EffectProcessor {
-    fn drop(&mut self) {
-        if let Some(processor) = self.processor.take() {
-            unsafe {
-                let _ = processor.setProcessing(0);
-            }
-        }
-        if let (Some(component_connection), Some(controller_connection)) = (
-            self.component_connection.as_ref(),
-            self.controller_connection.as_ref(),
-        ) {
-            unsafe {
-                let _ = component_connection.disconnect(controller_connection.as_ptr());
-                let _ = controller_connection.disconnect(component_connection.as_ptr());
-            }
-        }
-        let _ = self.component_connection.take();
-        let _ = self.controller_connection.take();
-        if let Some(controller) = self.controller.take() {
-            unsafe {
-                let _ = controller.terminate();
-            }
-        }
-        if let Some(component) = self.component.take() {
-            unsafe {
-                let _ = component.setActive(0);
-                let _ = component.terminate();
-            }
-        }
-        let _ = self.factory.take();
-    }
-}
-
-/// Single-threaded VST3 instrument processor.
-///
-/// `Rc` makes this type `!Send` and `!Sync`. Construct, process, and drop it on the same home
-/// thread. Its explicit teardown order intentionally matches [`Vst3EffectProcessor`].
-pub struct Vst3InstrumentProcessor {
-    processor: Option<ComPtr<IAudioProcessor>>,
-    controller: Option<ComPtr<IEditController>>,
-    component_connection: Option<ComPtr<IConnectionPoint>>,
-    controller_connection: Option<ComPtr<IConnectionPoint>>,
-    component: Option<ComPtr<IComponent>>,
-    _component_handler: Option<ComWrapper<HostComponentHandler>>,
-    _host_context: ComWrapper<HostApplication>,
-    factory: Option<ComPtr<IPluginFactory>>,
-    _home_thread: PhantomData<Rc<()>>,
-    _library: LoadedLibrary,
-    info: LoadedVst3Info,
+/// Audio-thread half of the split VST3 instrument processor (#474 P1). `Send` の根拠と
+/// teardown 順序契約は [`Vst3EffectAudio`] / [`Vst3PluginMain`] と同一。
+pub struct Vst3InstrumentAudio {
+    processor: ComPtr<IAudioProcessor>,
     input_events: InputEventList,
     output_parameter_changes: ParameterChanges,
     output_events: EventList,
@@ -875,6 +974,30 @@ pub struct Vst3InstrumentProcessor {
     /// Raw tresult of the most recent failing `process()` call (RT-safe: no logging on the hot
     /// path, just stashed for the caller to surface out-of-band, e.g. on child process exit).
     last_process_error: std::cell::Cell<i32>,
+}
+
+// SAFETY: [`Vst3EffectAudio`] の SAFETY コメントと同一の根拠（VST3 の audio スレッド駆動は
+// 正準モデル・COM 参照カウントはスレッド安全・host 側 COM スタブは move 後single-thread 使用・
+// teardown 順序は composite の明示 `Drop` / 分割 child の join-then-drop が強制）。
+unsafe impl Send for Vst3InstrumentAudio {}
+
+impl Drop for Vst3InstrumentAudio {
+    fn drop(&mut self) {
+        let result = unsafe { self.processor.setProcessing(0) };
+        if !is_ok(result) && result != kNotImplemented {
+            eprintln!("[orbit-vst3-host] instrument setProcessing(0) failed: {result}");
+        }
+    }
+}
+
+/// Single-threaded-by-default VST3 instrument processor: [`Vst3InstrumentAudio`] +
+/// [`Vst3PluginMain`] の composite（構成・分割・teardown 契約は [`Vst3EffectProcessor`] と対称）。
+///
+/// Shutdown call order is enforced by the hand-written [`Drop::drop`] body below via explicit
+/// `.take()` calls, not by field declaration order.
+pub struct Vst3InstrumentProcessor {
+    audio: Option<Vst3InstrumentAudio>,
+    main: Option<Vst3PluginMain>,
 }
 
 /// #540 P2: 保存済み state を component / controller へ復元する（`.vstpreset` container と
@@ -935,11 +1058,10 @@ impl Vst3InstrumentProcessor {
     /// `getState` が失敗した、または空を返した場合は `Err` を返す — **空 state を
     /// 「成功」として上位へ渡さない**（サイズ 0 を登記すると音色を失う）。
     pub fn capture_state(&self) -> Result<Vec<u8>, Vst3HostError> {
-        let component = self
-            .component
+        self.main
             .as_ref()
-            .ok_or_else(|| Vst3HostError::State("component is not loaded".into()))?;
-        capture_component_state(component)
+            .expect("VST3 instrument main is present")
+            .capture_state()
     }
 
     pub fn load(
@@ -1056,35 +1178,94 @@ impl Vst3InstrumentProcessor {
         let scratch_len = max_samples_per_block.max(0) as usize;
         Ok((
             Self {
-                processor: Some(processor),
-                controller: controller_handshake.controller,
-                component_connection: controller_handshake.component_connection,
-                controller_connection: controller_handshake.controller_connection,
-                component: Some(component),
-                _component_handler: controller_handshake.component_handler,
-                _host_context: host_context,
-                factory: Some(factory),
-                _home_thread: PhantomData,
-                _library: library,
-                info: info.clone(),
-                input_events: InputEventList::new(),
-                output_parameter_changes: ParameterChanges::empty(),
-                output_events: EventList::empty(),
-                process_output_l: vec![0.0; scratch_len],
-                process_output_r: vec![0.0; scratch_len],
-                last_process_error: std::cell::Cell::new(0),
+                audio: Some(Vst3InstrumentAudio {
+                    processor,
+                    input_events: InputEventList::new(),
+                    output_parameter_changes: ParameterChanges::empty(),
+                    output_events: EventList::empty(),
+                    process_output_l: vec![0.0; scratch_len],
+                    process_output_r: vec![0.0; scratch_len],
+                    last_process_error: std::cell::Cell::new(0),
+                }),
+                main: Some(Vst3PluginMain {
+                    controller: controller_handshake.controller,
+                    component_connection: controller_handshake.component_connection,
+                    controller_connection: controller_handshake.controller_connection,
+                    component: Some(component),
+                    _component_handler: controller_handshake.component_handler,
+                    _host_context: host_context,
+                    factory: Some(factory),
+                    _home_thread: PhantomData,
+                    _library: library,
+                    info: info.clone(),
+                }),
             },
             info,
         ))
     }
 
     pub fn info(&self) -> &LoadedVst3Info {
-        &self.info
+        self.main
+            .as_ref()
+            .expect("VST3 instrument main is present")
+            .info()
+    }
+
+    /// main / audio の 2 スレッド運用（UIH.1）へ分割する（#474 P1）。
+    /// 順序契約は [`Vst3EffectProcessor::split`] と同一。
+    pub fn split(mut self) -> (Vst3InstrumentAudio, Vst3PluginMain) {
+        (
+            self.audio.take().expect("VST3 instrument audio is present"),
+            self.main.take().expect("VST3 instrument main is present"),
+        )
     }
 
     /// Raw tresult of the most recent failing `process()` call (0 / `kResultOk` if none since
     /// construction). Intended for out-of-band error reporting (e.g. child process exit summary),
     /// not for the audio-thread hot path.
+    pub fn last_process_error(&self) -> i32 {
+        self.audio
+            .as_ref()
+            .expect("VST3 instrument audio is present")
+            .last_process_error()
+    }
+
+    pub fn push_note_on(&self, channel: i16, pitch: i16, velocity: f32, sample_offset: i32) {
+        self.audio
+            .as_ref()
+            .expect("VST3 instrument audio is present")
+            .push_note_on(channel, pitch, velocity, sample_offset);
+    }
+
+    pub fn push_note_off(&self, channel: i16, pitch: i16, velocity: f32, sample_offset: i32) {
+        self.audio
+            .as_ref()
+            .expect("VST3 instrument audio is present")
+            .push_note_off(channel, pitch, velocity, sample_offset);
+    }
+
+    /// Queued note events are delivered at their supplied sample offsets; successful plugin
+    /// output is add-mixed into interleaved stereo `data`
+    /// （[`Vst3InstrumentAudio::process_block`] へ委譲）。
+    #[must_use]
+    pub fn process_block(&mut self, data: &mut [f32]) -> bool {
+        self.audio
+            .as_mut()
+            .expect("VST3 instrument audio is present")
+            .process_block(data)
+    }
+}
+
+impl Drop for Vst3InstrumentProcessor {
+    fn drop(&mut self) {
+        // Shutdown order is explicit and independent of field declaration order.
+        let _ = self.audio.take();
+        let _ = self.main.take();
+    }
+}
+
+impl Vst3InstrumentAudio {
+    /// Raw tresult of the most recent failing `process()` call（audio スレッド側）。
     pub fn last_process_error(&self) -> i32 {
         self.last_process_error.get()
     }
@@ -1147,12 +1328,7 @@ impl Vst3InstrumentProcessor {
             outputEvents: self.output_events.as_ptr(),
             processContext: ptr::null_mut(),
         };
-        let result = unsafe {
-            self.processor
-                .as_ref()
-                .expect("processor remains alive until drop")
-                .process(&mut process_data)
-        };
+        let result = unsafe { self.processor.process(&mut process_data) };
         self.input_events.clear();
         if !is_ok(result) {
             self.last_process_error.set(result);
@@ -1164,39 +1340,6 @@ impl Vst3InstrumentProcessor {
             data[base + 1] += self.process_output_r[frame];
         }
         true
-    }
-}
-
-impl Drop for Vst3InstrumentProcessor {
-    fn drop(&mut self) {
-        if let Some(processor) = self.processor.take() {
-            unsafe {
-                let _ = processor.setProcessing(0);
-            }
-        }
-        if let (Some(component_connection), Some(controller_connection)) = (
-            self.component_connection.as_ref(),
-            self.controller_connection.as_ref(),
-        ) {
-            unsafe {
-                let _ = component_connection.disconnect(controller_connection.as_ptr());
-                let _ = controller_connection.disconnect(component_connection.as_ptr());
-            }
-        }
-        let _ = self.component_connection.take();
-        let _ = self.controller_connection.take();
-        if let Some(controller) = self.controller.take() {
-            unsafe {
-                let _ = controller.terminate();
-            }
-        }
-        if let Some(component) = self.component.take() {
-            unsafe {
-                let _ = component.setActive(0);
-                let _ = component.terminate();
-            }
-        }
-        let _ = self.factory.take();
     }
 }
 
@@ -2614,6 +2757,13 @@ fn json_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_halves_are_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<Vst3EffectAudio>();
+        assert_send::<Vst3InstrumentAudio>();
+    }
 
     // I6(pr-review-team): `is_ok` gates every tresult check in this crate (setup/activate/process
     // ...) but had no direct unit test — pin the kResultOk/kResultTrue/kResultFalse/kNotImplemented

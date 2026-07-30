@@ -19,7 +19,7 @@
 //! ため**意図的に leak する**。したがってフィールド宣言順で `plugin` を `_instance` より**前**に置くことが
 //! load-bearing: `plugin` の Arc が先に落ちて `_instance` が唯一所有者になり、`_instance` drop で teardown が
 //! 実際に走る。**逆順にすると** `_instance` drop 時に refcount>1 で leak し、`plugin` drop でも teardown が
-//! 走らず**未 deactivate のままリーク**する（クラッシュでなく silent leak = smoke/parity では順序が逆でも
+//! 走らず**永久 leak（teardown はどのスレッドでも一切走らない）**になる（smoke/parity では順序が逆でも
 //! 緑なので、この宣言順を守る唯一のガードが本コメント）。本型は home == audio == 唯一スレッドなので teardown
 //! は単一スレッドで完結し、daemon の split-thread（`ClapTeardownGuard` で跨ぐ）wrong-thread 問題を sidestep する。
 //!
@@ -50,6 +50,7 @@ use crate::buffers::HostAudioBuffers;
 use crate::controller::{instantiate_activate, ClapHostError, LoadedPluginInfo};
 use crate::host::OrbitClapHost;
 use crate::processor::process_block_core;
+use crate::ClapPluginMain;
 
 /// 単一スレッドで load / process / drop する effect-only CLAP プロセッサ。
 ///
@@ -141,5 +142,96 @@ impl ClapEffectProcessor {
             None,
             data,
         )
+    }
+
+    /// main / audio の 2 スレッド運用（UIH.1）へ分割する（#474 P1）。
+    ///
+    /// 呼び出したスレッド（= `load` を行った home スレッド）が main 側になる。
+    /// audio 側（[`ClapEffectAudio`]・`Send`）は専用 audio スレッドへ move し、
+    /// main 側（[`ClapPluginMain`]・`!Send`）は home スレッドに残って state 操作を担う。
+    ///
+    /// ## 分割後の teardown 契約（🔴 順序が正しさの条件）
+    ///
+    /// 1. audio スレッド終了時の [`ClapEffectAudio::drop`] が `stop_processing` を呼ぶ
+    ///    （CLAP 契約: `stop_processing` は audio スレッド）
+    /// 2. main スレッドが audio スレッドを **join してから** [`ClapPluginMain`] を drop する。
+    ///    このとき `PluginInstance` が `Arc<PluginInstanceInner>` の唯一の所有者になり、
+    ///    実 teardown（deactivate → destroy）が home スレッドで走る（CLAP 契約に適合）
+    ///
+    /// 逆順（audio 側が生きたまま main 側を drop）にすると `PluginInstance::Drop` は
+    /// 意図的に leak し、その後 audio 側を drop しても teardown は開始されない。
+    /// 帰結は **永久 leak（teardown はどのスレッドでも一切走らない）**。daemon の
+    /// in-process 経路（`ClapPostProcessor` の carry-forward #1）と同じ協調規律であり、
+    /// out-of-process child では `orbit-child-runtime` の「join してから main 側を drop」
+    /// という関数構造がこの順序を強制する。
+    pub fn split(self) -> (ClapEffectAudio, ClapPluginMain) {
+        let Self {
+            plugin,
+            buffers,
+            steady,
+            _instance,
+        } = self;
+        (
+            ClapEffectAudio {
+                plugin: Some(plugin),
+                buffers,
+                steady,
+            },
+            ClapPluginMain {
+                instance: _instance,
+            },
+        )
+    }
+}
+
+/// [`ClapEffectProcessor::split`] の audio スレッド側。
+///
+/// `Send`（`StartedPluginAudioProcessor` は clack が audio スレッドへの引き渡しを想定して
+/// `Send` を提供する — daemon の `InstallMsg` が同じ根拠で cross-thread 送信している）。
+/// audio スレッドに move した後は、そのスレッドだけが触ること。
+pub struct ClapEffectAudio {
+    plugin: Option<StartedPluginAudioProcessor<OrbitClapHost>>,
+    buffers: HostAudioBuffers,
+    steady: u64,
+}
+
+impl ClapEffectAudio {
+    /// [`ClapEffectProcessor::process_block`] と同一の音響処理（audio スレッド側）。
+    #[must_use]
+    pub fn process_block(&mut self, data: &mut [f32]) -> bool {
+        process_block_core(
+            self.plugin
+                .as_mut()
+                .expect("CLAP effect audio remains started until teardown"),
+            &mut self.buffers,
+            &mut self.steady,
+            &InputEvents::empty(),
+            None,
+            data,
+        )
+    }
+}
+
+impl Drop for ClapEffectAudio {
+    fn drop(&mut self) {
+        // Drop runs on the dedicated audio thread in both the normal and
+        // unwinding paths, so a panic cannot move stop_processing to main.
+        if let Some(plugin) = self.plugin.take() {
+            let _ = plugin.stop_processing();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// audio 側が `Send`（専用 audio スレッドへ move できる）ことのコンパイル時証明。
+    /// clack の `StartedPluginAudioProcessor` / `AudioPorts` の `unsafe impl Send` に依拠する
+    /// ため、clack bump でこれが外れたらここがコンパイルエラーで検出する。
+    #[test]
+    fn audio_half_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<ClapEffectAudio>();
     }
 }

@@ -246,12 +246,22 @@ LOAD_STATE:
   child 内では既にプラグインの任意コードが動いているため、パス検証に追加の防御価値はない）
 - 書き込み失敗・サイズ 0・読み取り不能はすべて `cmd_result` の失敗として返す。
   **サイズ 0 の state を「成功」として登記しない**
-- 🔴 **audio 専用スレッドへの分離（UIH.1 の目標状態）が完了するまで、host は演奏停止中にのみ
-  `SAVE_STATE` を発行すること（MUST）。** 現状 child のメインループは audio 処理とコマンド処理を
-  同一スレッドで直列に回しており、サイドカーの `fsync` は数 ms〜数十 ms ブロックしうる。
-  演奏中に発行すると、そのブロック分だけ次の audio slot が遅延し **dropout を生む**
-  （小バッファ 64/32 サンプルは本プロジェクトの性能ゴールであり、この遅延は許容できない）。
-  分離が完了したらこの制約は外れる。
+- 🟡 **audio 専用スレッドへの分離（UIH.1 の目標状態）は #474 P1 で実装済み。**
+  4 child とも audio slot 処理は専用 audio スレッド、`SAVE_STATE` を含む command mailbox は
+  `NSApplication` main runloop のタイマーで処理する。サイドカーの書き込み・`fsync` が main
+  スレッドをブロックしても audio slot の前進を止めない構造になった。
+  #474 P1 の実機 gated は green:
+  - レイテンシは4回実測の最悪値でも要求（margin >10x）に対して **margin 49.9x**、
+    `kill にフォールバック` は0件
+  - 実機4経路は **effect 4+4 / instrument 3+3**、`capture drops == 0`
+  - 演奏中 `SAVE_STATE` は `save_during_playback.rs` が **1 passed**、state roundtrip も green
+
+  これにより、従来の「host は演奏停止中にのみ `SAVE_STATE` を発行すること」という
+  **暫定 MUST を解除し、演奏中の発行を許可する**。
+  規格上も VST3 `IComponent::getState` は
+  **`[UI-thread & (Initialized | Connected | Setup Done | Activated | Processing)]`**
+  （VST3 SDK `ivstcomponent.h:203`）であり、Processing 中の main/UI スレッドからの state
+  取得が明示的に許可されている。これを演奏中保存の VST3 規格根拠とする。
   host 側発行経路は `CommandMailboxHost` として実装済み（#562）。watchdog respawn は
   `CommandMailboxHost::reset_after_child_exit` を effect / instrument の両 supervisor と
   初回 attach の3経路から呼ぶ
@@ -566,24 +576,25 @@ crash ループ時にウィンドウが繰り返し復活すると作業文脈�
 - 判定は解析で行い人間を介在させない。**computer-use は受け入れ E2E の主経路にしない**
   （CAP.7）
 
-## UIH.9 前提となる是正
+## UIH.9 前提となる是正 — ✅ 両項目とも解消済み（2026-07-30 実測確認・#474 P0）
 
-本仕様の実装前に、以下が満たされていること:
+本仕様の実装前提として要求していた是正2件は、**いずれも解消済みであることを実測確認した**
+（確認対象 = main `ea692a0`）。経緯の記録として原文の要旨を残す:
 
-1. **`orbit-vst3-effect-child` をバンドル対象に加える**（`scripts/copy-daemon-bin.sh`）。
+1. **`orbit-vst3-effect-child` のバンドル欠落** — ✅ **解消済み（#548）**。
+   - `scripts/copy-daemon-bin.sh` は 4 child すべて（clap/vst3 × effect/instrument）を
+     bundle 前に再ビルドし（`:85-87`）、copy 対象にも含める（`:94-98`）
+   - `release.yml` の post-package gate が出荷 `.vsix` に対して 4 child の存在と実行属性を
+     検査する（欠落時は release を abort）
+   - 是正時に要求していた**バンドル済み成果物への検証**も実装済み:
+     `tests/vscode-extension/bundled-child-binaries.spec.ts`（#548 回帰ピン）が
+     「daemon が spawn しうる child（台帳A・Rust ソースから導出）⊆ バンドル供給（台帳B）」の
+     照合、release gate の CHILD_BIN 台帳照合、および **gate スクリプトの実走**（child を
+     1つずつ欠かして非ゼロ終了することの確認）まで行う
 
-   これは「未実装」ではなく**出荷物の欠落**である:
-   - daemon は `ORBIT_EFFECT_FORMAT=vst3` のとき当該 child を spawn しようとする
-     （`rust/crates/orbit-audio-daemon/src/outproc_effect.rs:84`）。既定パスは daemon 実行
-     ファイルと同一ディレクトリ（同 `default_child_exe`）
-   - しかし `copy-daemon-bin.sh` の再ビルド一覧（`:85`）にも copy 一覧（`:93-97`）にも
-     含まれていない → **出荷された拡張では VST3 エフェクトの spawn が失敗する**
-   - gated テストは自前で `cargo build -p orbit-vst3-effect-child` してから走るため
-     （`tests/outproc_effect_vst3_gated.rs:28`）、**この欠落を構造的に検出できない**
-
-   是正時は、バンドル済み成果物に対する検証（`.vsix` 内の bin 一覧）を伴わせる。
-
-2. CLAP 側の `CLAP_EXT_STATE` 配線（現状 `--state` は明示 `bail!`）
+2. **CLAP 側の `CLAP_EXT_STATE` 配線**（当初 `--state` は明示 `bail!`）— ✅ **解消済み**。
+   `orbit-clap-effect-child` は `--state` を読み `ClapEffectProcessor::load(state_bytes)` へ
+   渡し、`CMD_SAVE_STATE` → `capture_state()` も配線済み（instrument 側 #557 と対称）
 
 ---
 

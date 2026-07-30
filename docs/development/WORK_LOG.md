@@ -17,6 +17,214 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.335 feat(rust): #474 P0+P1 — child を NSApplication runloop へ。graceful teardown を復活させた (Jul 30, 2026)
+
+**Date**: 2026-07-30
+**Issue**: #474（P0 + P1）/ **Branch**: `474-plugin-ui-open`
+**Status**: ✅ P1 ゲート全通過（レイテンシ margin 105.6x / 実機4経路 / 演奏中 SAVE_STATE）
+
+**#474 の価値は owner 裁定で「人間が触れるようにプラグインを開いてあげること」に絞られた。**
+つまみ→音の変化はプラグイン内部の話で検査対象外（音が通っていれば自明）。
+これにより computer-use のティア制約・オラクル GUI のノブ・座標依存の脆さがすべて消えた。
+
+#### P0: UIH.9 の前提是正2件は解消済みだった
+
+- `orbit-vst3-effect-child` のバンドル欠落 → **#548 で解消済み**
+  （`copy-daemon-bin.sh` が4 child を rebuild+copy・`release.yml` の post-package gate・
+  `tests/vscode-extension/bundled-child-binaries.spec.ts` が台帳照合と gate 実走まで実施）
+- CLAP の `--state` 配線 → **解消済み**（`orbit-clap-effect-child/src/main.rs:79-90`）
+
+→ spec の記述だけが stale だったので実態に更新。**新規テストは不要**。
+
+#### P1: 実行モデル変更
+
+- **新 crate `orbit-child-runtime`**: `run_child(name, service_main, audio)` —
+  main = NSApplication runloop（**Accessory**・拒否時 fail-loud）+ NSTimer 20ms tick で
+  mailbox/ParentWatch/QUIT を servicing、audio = 専用スレッド（QoS user-interactive）
+- **processor の main/audio 分割**: CLAP は `split() -> (XxxAudio, ClapPluginMain)`
+  （audio 半分 = `StartedPluginAudioProcessor`・**clack が Send を公式サポート**）。
+  VST3 は monolith を `Vst3EffectAudio` / `Vst3InstrumentAudio` + 共有 `Vst3PluginMain` へ再構成
+- teardown 契約: audio 半分の `Drop` で stop_processing → join → main 半分 drop
+  （**唯一の Arc 所有者として home スレッドで deactivate/destroy**）
+- 依存追加は **`objc2-app-kit` 1 crate のみ**（`objc2` 本体は clack-host 経由で既に graph に居た）
+
+#### 🔴 レイテンシゲートが割れ、UIH.7 の停止条件が発動した
+
+```
+main ea692a0（同一マシン対照）: 4.31us   margin 154.6x  ✅
+P1（修正前）:                   507.70us margin 1.3x    🔴
+```
+
+**約118倍の退行。ユニットは 315 passed で全緑。実機ゲートだけが捕まえた。**
+
+#### 507us の正体は会計アーティファクトだった — しかし真因は production の欠陥
+
+- `measure_per_block_us` は `render_through_child_sync` の**呼び出し全体**を計測し、
+  その内部（`offline.rs:186` の `drop(guard)`）に **child teardown** が含まれる
+- child が graceful に終わらないと **`REAP_TIMEOUT = 2s`**（`child.rs:23`）待って SIGKILL
+- **507.70us × 4000 blocks = 2.0308s ≈ 2.000s + 実処理 30.8ms** → **per-block は 5〜8us**
+  （main の 4.31us と同オーダー・**audio 経路は無傷**）
+
+🔴 **真因**: `orbit-child-runtime` の **NSTimer コールバックから呼ぶ `NSApplication.stop(None)` は
+`-[NSApplication run]` を抜けさせない**。`stop` は「**現在の NSEvent の処理が完了した時点で**
+抜ける」フラグであり、**timer 発火は NSEvent ではない**。headless の Accessory child は
+イベントを一切受け取らないので、**検査点に永遠に到達しない**。
+
+**これはテスト都合ではない。** daemon の通常 teardown も全 child が「2秒待ち → SIGKILL」に落ち、
+**SIGKILL は main 側の plugin teardown（state flush を含む）を吹き飛ばす**。
+つまり **P1 は #585 が6ラウンドかけて守った「音色を失わない」を静かに壊していた。**
+
+**修正**: `app.stop(None)` の直後に **ダミーの `NSEventTypeApplicationDefined` を
+`postEvent_atStart(..., true)` で post**（Cocoa の定石）。
+
+```
+修正後（32f を4回実測）: 6.80 / 12.88 / 13.12 / 13.36us
+                       → margin 98.1 / 51.7 / 50.8 / 49.9x   ✅（要求 >10x）
+        `kill にフォールバック` の行: 0 件                     ✅
+```
+
+🔴 **約2倍のばらつきがある。** これは `/simplify` の Efficiency が特定した
+**AppKit 起動の固定コスト（約 34ms/spawn）が 4000 blocks で割られて per-block に混入**する
+ためで、**per-block の steady-state ではない**（32f と 64f がほぼ同値に張り付くのが signature）。
+**最悪でも margin 49.9x で要求 10x を大きく超える**のでゲートの合否は揺らがないが、
+**単発測定を代表値として扱わない**（初出時に 6.32us を代表値として記録したのは誤り）。
+
+**2つ目は診断が自ら挙げた反証条件**（消えなければ仮説が誤り）。**予測どおり消えた。**
+
+#### 🔴 AppKit 初期化の固定コストは残る（本PRでは修正せず follow-up）
+
+review 時の同一マシン A/B では、修正後も frame 数に比例しない固定コストが残った:
+
+| frames | main（対照） | PR #589 |
+|---|---:|---:|
+| 32f | 3.87〜3.97us | **12.49us** |
+| 64f | 5.86〜5.87us | **12.49us** |
+| 128f | 9.80〜10.33us | **16.19〜21.15us** |
+
+32f / 64f が同じ値に張り付く形から、audio hot loop の per-block 退行ではなく、
+4000 blocks で割られた **約34ms / child起動**の固定コストと読める。実際、PR branch の
+child は spawn ごとに次を stderr へ出し、main 対照では一度も出なかった:
+
+```text
+Connection Invalid error for service com.apple.hiservices-xpcservice.
+Error received in message reply handler: Connection invalid
+```
+
+`NSApplication.sharedApplication()` を Info.plist / bundle context のないコマンドライン
+バイナリから呼んだため、WindowServer / HIServices の XPC handshake が失敗している可能性がある。
+ただし計測環境は GUI login session を持たず、**実 daemon からログイン済みdesktop上で spawn
+した場合も同じかは未検証**。#573 の respawn backoff 直後であり、respawn ごとに約30〜34ms
+を再度払う点は無視しない。
+
+本PRでは AppKit 初期化を変更しない。follow-up で Info.plist / `LSUIElement` / bundle context を
+切り分け、最小bundle情報でXPC失敗を正常化または抑制できるかを調べる。#474 P3で実際にwindowを
+開く時にも32f / 64f / 128fを再測定する（UI利用によりXPCが正常化して消える可能性がある）。
+
+#### 検証（すべて main が sandbox 外で実行）
+
+| ゲート | 結果 |
+|---|---|
+| rust workspace | ✅ FAILED 0 |
+| TS 全 suite | ✅ 1836 passed / 34 skipped / 0 failed |
+| lint / `cargo fmt` / `cargo deny` | ✅ pass |
+| **レイテンシ（UIH.7）** | ✅ **margin 105.6x**（修正前 1.3x） |
+| **演奏中 SAVE_STATE** | ✅ 1 passed（**P1 の本来の狙い**） |
+| **実機4経路** | ✅ effect 4+4 / instrument 3+3 |
+
+#### 🔴 「0 passed の exit=0」を緑と読みかけた
+
+instrument の gated は feature が **`outproc-instrument`** で、effect 用の `outproc-effect` を
+使い回したため**テストが1件も走らず、それでも `exit=0`** が返った。
+**件数を見ていなければ「4経路 drops==0 を確認」と報告していた。**
+→ **`test result` の件数を必ず読む。** exit code は「走ったこと」を意味しない。
+
+#### 🔴 同一 working tree の並行編集が起きた（再発防止を記録）
+
+owner 指示で実装を Fable → Codex に切り替えた際、main が**停止指示の送信を停止と同一視**し、
+**ack を待たずに Codex を起動**した。Fable は停止指示3通の間も作業を続け、
+**約10分間、2エージェントが同じツリーを編集**した。
+
+実際に起きた危険（今回は実害なし・照合済み）:
+- Fable の変異検証が `orbit-vst3-instrument-child/src/main.rs` を自分のバックアップから復元し、
+  **その間の Codex の編集を巻き戻しうる状態**だった（Codex の最終書き込みが後で助かった）
+- Fable の `cargo test --workspace` が Codex のビルドと衝突しうる状態だった（main が kill）
+
+→ **切り替え時は `ps` でプロセス数ゼロを実測してから次を起動する。**
+**ack は自己申告。信用の順は「プロセスの消滅」＞「ack」。**
+
+#### `/simplify`（4観点）— 4つの横断ポリシーに集約して一括適用
+
+**指摘単位のローカルパッチはしない**（PR #585 でそれをやって欠陥を2つ作った）。
+**塊の中の非対称性を問う**。
+
+| ポリシー | 内容 |
+|---|---|
+| **1（最重要）** | **VST3 composite 型に明示 `impl Drop` を戻す** |
+| **2** | **teardown の表現を `Drop` 1本に統一**（4 child で揃える） |
+| **3** | `ClapPluginMain` へ統合 + テストヘルパーを `tests/common/mod.rs` へ |
+| **4** | AppKit 初期化コストは本 PR では直さず**記録して follow-up** |
+
+##### 🔴 ポリシー1: PR 前の決定を無言で覆していた
+
+`Vst3EffectProcessor` / `Vst3InstrumentProcessor`（composite・**`offline.rs` の全テストが使う経路**）が、
+teardown 順序を**フィールド宣言順の暗黙依存**に戻していた。
+
+**PR 前のコードは同じ問題に一度答えを出していた**:
+
+> Shutdown call order ... is enforced by the hand-written `Drop::drop` body below via
+> explicit `.take()` calls, **not by field declaration order**
+
+並べ替えてもコンパイラは警告せず、**`terminate()` が `setProcessing(0)` より先に呼ばれる**
+（サードパーティ VST3 でクラッシュ / 未 deactivate リークを誘発しうるホスト契約違反）。
+ガードはコメントだけで、テストも static assertion も無かった。
+
+**対比**: 同じ PR の `split()` 後の経路は、**借用チェッカーが型システムで強制**している
+（`effect_main` を借用させ、`run_child` が必ず join してから返る）。
+**構造で守る例とコメントで守る例が同居していた。**
+
+##### 🔴 ポリシー4: 1.5倍レイテンシの正体は audio hot loop ではなかった（A/B 実測）
+
+| frames | main（対照） | PR #589 |
+|---|---|---|
+| 32f | 3.87〜3.97us | **12.49us** |
+| 64f | 5.86〜5.87us | **12.49us** |
+| 128f | 9.80〜10.33us | 16.19〜21.15us |
+
+**main は frame 数に比例して伸びるのに、PR は 32f と 64f が同一値に張り付く**
+= per-block ではなく**固定コスト**（約 **34ms / プロセス起動**）。
+
+**決定的な傍証**: PR ブランチの child は spawn のたびに
+`Connection Invalid error for service com.apple.hiservices-xpcservice` を stderr へ出す
+（**main では一度も出ない**）。**Info.plist を持たないコマンドラインバイナリから
+`NSApplication.sharedApplication()` を呼んだ**ため。
+
+**audio スレッド自体はむしろ軽くなっている** — 旧実装は mailbox・ParentWatch のチェックを
+**audio の busy-spin で毎秒数百万回**やっていたのが 20ms tick へ移った。
+純増は `stop_audio` の Relaxed 1 load のみ。
+
+🔴 **#573（respawn backoff）の直後なので無視できない** — **respawn ごとに約 30ms を払う**。
+→ **[#590](https://github.com/signalcompose/orbitscore/issues/590)**（XPC 失敗の切り分け: Info.plist 不在 / `LSUIElement` 未設定 / bundle context 不在）。
+
+#### 申し送り
+
+- 🔴 **AppKit 初期化コスト 約 34ms/spawn**（上記ポリシー4）。**[#590](https://github.com/signalcompose/orbitscore/issues/590)** で切り分ける
+- ~~NSTimer が default runloop mode のみ → P3 で `NSRunLoopCommonModes` へ~~ →
+  🔴 **これは main の誤記だった。訂正する。**
+  **初回コミット `0dbd31b` の時点から `NSRunLoop::mainRunLoop().addTimer_forMode(&timer,
+  NSRunLoopCommonModes)`（`orbit-child-runtime/src/lib.rs:284`）で登録済み**であり、
+  **ウィンドウのドラッグ/リサイズ中も mailbox servicing は止まらない。**
+  設計時の申し送りを**実装で裏取りせずに転記した**もので、
+  そのままなら **P3 の担当者に存在しない作業項目**を残していた
+  （`/code:pr-review-team` の code-reviewer が発見）
+- 4 child の `service_main` closure 共通化は本PRでは見送る。共通helperの置き場は
+  `orbit-audio-sandbox` になる一方、`orbit-child-runtime` はAppKit/thread primitiveに限定して
+  sandboxへ依存しない設計であり、P2以降でchild固有の分岐も増え得るため、follow-upで再評価する
+- CLAP `call_on_main_thread_callback` の pump は未実装（既存の documented gap・P3 で必要になりうる）
+- **P1 完了により UIH.3 の「停止中のみ SAVE_STATE」MUST が外れ、#577 PR-B が本来形
+  （演奏中保存）で実装可能**になった
+
+---
+
 ### 6.334 fix(docs/test): #587 は測定盲点と確定 — aux は信号を運んでいる。記録を訂正し sum 発 send をテストで pin (Jul 30, 2026)
 
 **Date**: 2026-07-30
