@@ -17,6 +17,93 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.337 feat(rust): #474 P2 — evt リング + dirty_epoch。ordering を型で封印した (Jul 30, 2026)
+
+**Date**: 2026-07-30
+**Issue**: #474（P2）/ **Branch**: `474-plugin-ui-p2-evt-ring`
+**Status**: `cargo test --workspace`（**sandbox 外**）= exit 0 / **430 passed / 0 failed / 19 ignored**
+
+child → host の evt リング（`EVT_SLOTS = 2`・`UI_CLOSED` / `UI_CLOSED_DONE` 専用）と
+dirty 水位カウンタ `dirty_epoch` を `SharedRegion` に実装。この段階でイベントの消費者は
+まだ存在しない（P4 で接続）ため、**リング単体の正しさを自己完結して検証**した。
+
+実装 = Codex / 受け入れ監査 = main / 修正 = **Fable**（fixer をラウンド1から Fable にする
+owner 裁定の初適用）。
+
+#### 🔴 監査で弱いアサーションを1件見つけ、実行で反証した
+
+Codex が書いた `event_ring_memory_model_requires_release_acquire_pairs` は**同語反復**だった —
+「`Release` は releasing な ordering である」を主張するだけで、その定数が**呼び出し箇所で
+使われているか**を検査していない。しかも失敗メッセージは
+`"in-process memory model detected an unordered evt_arg publish/read data race"` と、
+**走ってもいないモデル検証を騙っていた**。
+
+main が実際に変異を当てて反証:
+
+```
+# transport.rs の publish 箇所を Ordering::Relaxed へ
+test event_ring_memory_model_requires_release_acquire_pairs ... ok
+test result: ok. 32 passed; 0 failed
+```
+
+**新規6テスト全部が green のまま通った。** `evt_arg` は直前に `ptr::write` で書かれる
+非 atomic の `[u8; N]` なので、これは spec が名指しで禁じている UB の再導入である。
+
+#### 修正: テストで守るのをやめ、型で潰した
+
+`#[repr(transparent)]` の newtype を submodule に置き、内部の `AtomicU64` を private にした:
+
+- `ReleaseAcquireSeq` — `publish()` = Release 固定 / `read()` = Acquire 固定 /
+  `load_own()` = 書き手自身の読み（Relaxed・理由をコメント）
+- `MonotoneEpoch` — `increment()` = Release RMW 固定 / `read()` = Acquire 固定
+
+**ordering を渡す API 面が存在しないので、逸脱がコンパイルできない。** 同語反復テストは削除した。
+main が2種の変異で実証:
+
+| 変異 | 結果 |
+|---|---|
+| `evt_seq.store(seq, Ordering::Relaxed)` | `error[E0599]: no method named 'store' found for struct 'ReleaseAcquireSeq'` |
+| `evt_seq.0.store(seq, Ordering::Relaxed)`（newtype 迂回） | `error[E0616]: field '0' of struct 'ReleaseAcquireSeq' is private` |
+
+`repr(transparent)` + `size_of == 8` のコンパイル時アサートで cross-process の
+`repr(C)` レイアウトは不変。
+
+#### `reset_child_starting` の非対称に理由を書いた
+
+evt リングは 0 にリセットするが、`dirty_epoch` はリセットしない。`cmd_seq`（**0 に戻さない**）
+とも非対称で、**その理由がどこにも書かれていなかった**。
+
+| | host 側がカーソルを保持するか | reset |
+|---|---|---|
+| `cmd_seq` | **持つ**（`InFlightCommand::seq`） | 0 に戻さない + generation で防御 |
+| `evt_seq` | **持たない**（毎 poll で shm の `evt_ack_seq + 1` から導出） | 0 に戻して安全 |
+| `dirty_epoch` | **持つ**（`EventRingHost::last_seen_dirty_epoch`） | 0 に戻さない |
+
+不変条件をコメントで明示した上で、挙動テスト
+`event_ring_host_survives_respawn_seq_reset_without_local_cursor` で守った。
+**この過程で既存テストの盲点も判明** — `evt_ack_seq` リセット除去の変異を既存の reset テストは
+見逃していた（ack が元々 0 のシナリオしか持っていなかったため）。
+
+#### sandbox の構造的限界が実際に出た
+
+Codex の `cargo test --workspace` は **exit 101 / 0 passed / 28 failed**。全28件が
+`bind` + `Operation not permitted`（daemon protocol の loopback bind 拒否）。
+Codex は迂回せず報告した。**main が sandbox 外で回し直して 28 件すべて passed を確認**。
+
+#### 調査のみ（実装せず）
+
+`service_main` の4 child 重複について、共通化可能な部分（mailbox polling / SAVE_STATE
+dispatch / QUIT 確認 / `ParentWatch`）と形式別に残す部分（CLAP/VST3 の load・state capture、
+effect の latest-block vs instrument の in-order、イベント decode）を切り分けた。
+`orbit-child-runtime` に `SharedRegion` を持たせると PR #589 の境界を壊すため、
+共通化するなら sandbox 依存を持つ別の control-plane helper crate が候補。**P2 では実装しない。**
+
+**変更ファイル**: `rust/crates/orbit-audio-sandbox/src/transport.rs`
+
+**Commit**: `355110a`
+
+---
+
 ### 6.336 docs(spec): #474 P2 の spec 先行 — dirty をリングから外し、CAP を2本足決着に合わせた (Jul 30, 2026)
 
 **Date**: 2026-07-30

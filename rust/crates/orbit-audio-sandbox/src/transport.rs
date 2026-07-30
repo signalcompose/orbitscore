@@ -30,6 +30,7 @@
 // 共有メモリは生ポインタ経由でクロスプロセス参照するため unsafe FFI 同等。
 #![allow(unsafe_code)]
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io;
@@ -65,6 +66,12 @@ pub const SLOTS: usize = 2;
 // SLOTS は 2 以上でなければならない(連続 seq が別 slot を指す = pipelined で s と s-1 が衝突しない
 // 前提。outstanding guard も seq-SLOTS を見る)。PR-C で 2→3 にする際の床を compile-time に固定。
 const _: () = assert!(SLOTS >= 2);
+
+/// child → host の取りこぼし不可イベント用 slot 数（UIH.2a）。
+///
+/// audio pipeline の [`SLOTS`] とは導出根拠が異なる。1 close cycle で同時に in-flight に
+/// なりうる `UI_CLOSED` + `UI_CLOSED_DONE` の2件から固定される。
+pub const EVT_SLOTS: usize = 2;
 
 /// seq に対応する slot のインデックス(`0..SLOTS`)。per-slot メタデータ配列(`seq_tag` /
 /// `n_frames`)の添字に使う。`slot_offset` はこれを [`BUF_LEN`] 倍したバッファ要素オフセット。
@@ -231,17 +238,295 @@ pub struct SharedRegion {
     pub cmd_result_len: AtomicU64,
     /// child -> host: 失敗理由（NUL 終端 UTF-8・空なら理由なし）。**silent failure を防ぐ**。
     pub cmd_result_detail: [u8; CMD_DETAIL_BYTES],
+
+    // ── #474 P2: child → host の取りこぼし不可イベントリング（UIH.2a）。
+    /// child -> host: 新規イベント投函時に単調増加。0 = 未発行。
+    pub evt_seq: ReleaseAcquireSeq,
+    /// child -> host: per-slot イベント種別（[`EVT_UI_CLOSED`] / [`EVT_UI_CLOSED_DONE`]）。
+    pub evt_kind: [AtomicU32; EVT_SLOTS],
+    /// child -> host: per-slot 固定長引数域（NUL 終端 UTF-8）。
+    pub evt_arg: [[u8; EVT_ARG_BYTES]; EVT_SLOTS],
+    /// host -> child: host 側処理が完結した最新の `evt_seq`。
+    ///
+    /// `s` は「`s` 以下の全イベントが完結済み」を意味するため、host は seq 順にのみ進める。
+    pub evt_ack_seq: ReleaseAcquireSeq,
+    /// child -> host: plugin dirty 通知の累積回数。respawn ではリセットしない。
+    pub dirty_epoch: MonotoneEpoch,
 }
 
 /// `cmd_arg` のバイト長。サイドカーファイルの絶対パスを収める（macOS の PATH_MAX = 1024）。
 pub const CMD_ARG_BYTES: usize = 1024;
 /// `cmd_result_detail` のバイト長。
 pub const CMD_DETAIL_BYTES: usize = 256;
+/// `evt_arg` のバイト長。close 完了理由等の短い付随情報を NUL 終端で収める。
+pub const EVT_ARG_BYTES: usize = CMD_DETAIL_BYTES;
 
 /// コマンド種別: 未発行（`cmd_seq == 0` と対）。
 pub const CMD_NONE: u32 = 0;
 /// コマンド種別: 現在の plugin state を `cmd_arg` のパスへ書き出す（#555）。
 pub const CMD_SAVE_STATE: u32 = 1;
+
+/// イベント種別: 未発行（`evt_seq == 0` と対）。
+pub const EVT_NONE: u32 = 0;
+/// イベント種別: plugin 起点の UI close が始まった。
+pub const EVT_UI_CLOSED: u32 = 1;
+/// イベント種別: UI close 手続きが完了した。
+pub const EVT_UI_CLOSED_DONE: u32 = 2;
+
+pub use evt_sync::{MonotoneEpoch, ReleaseAcquireSeq};
+
+/// evt リングの Ordering を型に封じる submodule（UIH.2a）。
+///
+/// `evt_arg` は非 atomic の `[u8; N]` で、直前の `std::ptr::write` を可視化するには
+/// publish/read と ack/reuse の両方に Release/Acquire 対が**必須**（欠けると UB データレース）。
+/// この必須性はテストでは守り切れない（ordering 定数の値を検査するテストは同語反復になり、
+/// 呼び出し箇所の逸脱を検出できない）ため、**呼び出し箇所が Ordering を渡せない API** に固定する:
+/// 内部の `AtomicU64` は本 submodule の外から不可視なので、
+/// `evt_seq.store(seq, Ordering::Relaxed)` のような逸脱は**コンパイルできない**。
+mod evt_sync {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Release publish / Acquire read を型に固定した seq カーソル。
+    ///
+    /// `evt_seq`（payload publish → host read の対）と `evt_ack_seq`（ack → slot 再利用の対）の
+    /// 両方が使う。[`SharedRegion`](super::SharedRegion) の repr(C) レイアウトを変えないため
+    /// `repr(transparent)`（shm の zero 初期化とも互換）。
+    #[repr(transparent)]
+    pub struct ReleaseAcquireSeq(AtomicU64);
+
+    impl ReleaseAcquireSeq {
+        /// 非 atomic payload を書き終えた後に seq を公開する。Release store 固定。
+        pub fn publish(&self, seq: u64) {
+            self.0.store(seq, Ordering::Release);
+        }
+
+        /// 対岸の [`Self::publish`] と synchronizes-with する読み。Acquire load 固定。
+        pub fn read(&self) -> u64 {
+            self.0.load(Ordering::Acquire)
+        }
+
+        /// このフィールドの唯一の書き手自身による読み。自分の store とは program order で
+        /// 整合するため Relaxed で十分（対岸の payload とは同期しない点に注意）。
+        pub fn load_own(&self) -> u64 {
+            self.0.load(Ordering::Relaxed)
+        }
+    }
+
+    /// 累積水位（respawn でもリセットしない単調増加カウンタ）。`dirty_epoch` が使う。
+    #[repr(transparent)]
+    pub struct MonotoneEpoch(AtomicU64);
+
+    impl MonotoneEpoch {
+        /// 水位を 1 進め、新しい水位を返す。Release RMW 固定。
+        pub fn increment(&self) -> u64 {
+            self.0.fetch_add(1, Ordering::Release).wrapping_add(1)
+        }
+
+        /// [`Self::increment`] と synchronizes-with する読み。Acquire load 固定。
+        pub fn read(&self) -> u64 {
+            self.0.load(Ordering::Acquire)
+        }
+    }
+
+    // repr(C) の SharedRegion に埋め込むため、newtype がレイアウトを変えないことを
+    // コンパイル時に固定する（repr(transparent) の宣言忘れ・剥がし事故のガード）。
+    const _: () = assert!(size_of::<ReleaseAcquireSeq>() == size_of::<AtomicU64>());
+    const _: () = assert!(size_of::<MonotoneEpoch>() == size_of::<AtomicU64>());
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingEvent {
+    kind: u32,
+    arg: [u8; EVT_ARG_BYTES],
+}
+
+/// child 側の取りこぼし不可イベント投函器（UIH.2a）。
+///
+/// [`Self::queue`] したイベントは [`Self::service`] が slot 再利用 guard に阻まれても
+/// `pending` に残り、次の main-runloop tick で再試行できる。単一 child main thread から使う。
+#[derive(Debug, Default)]
+pub struct EventRingChild {
+    pending: VecDeque<PendingEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EventRingChildError {
+    UnknownKind(u32),
+    ArgumentTooLong,
+    SequenceExhausted,
+}
+
+impl fmt::Display for EventRingChildError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownKind(kind) => write!(f, "unsupported child event kind {kind}"),
+            Self::ArgumentTooLong => write!(
+                f,
+                "event argument must contain no NUL and fit in EVT_ARG_BYTES={EVT_ARG_BYTES}"
+            ),
+            Self::SequenceExhausted => write!(f, "event ring sequence exhausted"),
+        }
+    }
+}
+
+impl std::error::Error for EventRingChildError {}
+
+impl EventRingChild {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 取りこぼし不可イベントを保留する。実際の shm 投函は [`Self::service`] が行う。
+    pub fn queue(&mut self, kind: u32, arg: &str) -> Result<(), EventRingChildError> {
+        if !matches!(kind, EVT_UI_CLOSED | EVT_UI_CLOSED_DONE) {
+            return Err(EventRingChildError::UnknownKind(kind));
+        }
+        let mut bytes = [0; EVT_ARG_BYTES];
+        if !write_cstr_field(&mut bytes, arg) {
+            return Err(EventRingChildError::ArgumentTooLong);
+        }
+        self.pending.push_back(PendingEvent { kind, arg: bytes });
+        Ok(())
+    }
+
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
+    /// slot が空く限り保留イベントを seq 順に publish する。
+    ///
+    /// `evt_ack_seq >= s - EVT_SLOTS` が偽なら先頭イベントを保持したまま戻る。payload を先に
+    /// 書き、最後の `evt_seq` Release store で host に公開する。
+    ///
+    /// # Safety
+    /// `region` は生存中の [`SharedRegion`] を指し、本メソッドの呼び出しは child の単一
+    /// main thread に直列化されていなければならない。
+    pub unsafe fn service(
+        &mut self,
+        region: *mut SharedRegion,
+    ) -> Result<usize, EventRingChildError> {
+        let mut published_count = 0;
+        while let Some(event) = self.pending.front() {
+            let previous = unsafe { (*region).evt_seq.load_own() };
+            let seq = previous
+                .checked_add(1)
+                .ok_or(EventRingChildError::SequenceExhausted)?;
+            let reusable_after = seq.saturating_sub(EVT_SLOTS as u64);
+            let ack = unsafe { (*region).evt_ack_seq.read() };
+            if ack < reusable_after {
+                break;
+            }
+
+            let index = seq as usize % EVT_SLOTS;
+            unsafe {
+                (*region).evt_kind[index].store(event.kind, Ordering::Relaxed);
+                std::ptr::write(std::ptr::addr_of_mut!((*region).evt_arg[index]), event.arg);
+                (*region).evt_seq.publish(seq);
+            }
+            self.pending.pop_front();
+            published_count += 1;
+        }
+        Ok(published_count)
+    }
+}
+
+/// host handler に渡す、shm から所有領域へコピー済みのイベント。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventRingEvent {
+    pub seq: u64,
+    pub kind: u32,
+    arg: [u8; EVT_ARG_BYTES],
+}
+
+impl EventRingEvent {
+    pub fn arg(&self) -> Option<&str> {
+        read_cstr_field(&self.arg)
+    }
+}
+
+/// host 側の seq 順イベント consumer と dirty 水位 observer（UIH.2a）。
+///
+/// **evt カーソルを保持しない**（読む位置は毎 [`Self::poll`] で shm の `evt_ack_seq + 1` から
+/// 導出する）。これは [`reset_child_starting`] が respawn 時に `evt_seq` / `evt_ack_seq` を
+/// 0 に戻せる前提条件。カーソルフィールドを足す前に、同関数内の不変条件コメントを読むこと
+/// （`last_seen_dirty_epoch` は累積水位 `dirty_epoch` に対する watermark であり、
+/// `dirty_epoch` を respawn でリセットしないからこそ保持できている — 対になる設計）。
+#[derive(Debug)]
+pub struct EventRingHost {
+    shm_path: PathBuf,
+    last_seen_dirty_epoch: AtomicU64,
+}
+
+impl EventRingHost {
+    pub fn new(shm_path: PathBuf) -> Self {
+        Self {
+            shm_path,
+            last_seen_dirty_epoch: AtomicU64::new(0),
+        }
+    }
+
+    /// publish 済みイベントを `evt_ack_seq + 1` から順に処理する。
+    ///
+    /// handler が `true` を返したイベントだけを完了済みとして Release ack する。`false` なら
+    /// その seq を未 ack のまま残し、後続を追い越さずに戻る。
+    pub fn poll<F>(&self, mut handler: F) -> io::Result<usize>
+    where
+        F: FnMut(EventRingEvent) -> bool,
+    {
+        let mmap = open_shared(&self.shm_path)?;
+        let region = region_ptr(&mmap);
+        let mut handled = 0;
+        loop {
+            let ack = unsafe { (*region).evt_ack_seq.load_own() };
+            let published = unsafe { (*region).evt_seq.read() };
+            if ack > published {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("event ring ack {ack} exceeds published seq {published}"),
+                ));
+            }
+            if ack == published {
+                return Ok(handled);
+            }
+
+            let seq = ack + 1;
+            let index = seq as usize % EVT_SLOTS;
+            let event = EventRingEvent {
+                seq,
+                kind: unsafe { (*region).evt_kind[index].load(Ordering::Relaxed) },
+                arg: unsafe { std::ptr::read(std::ptr::addr_of!((*region).evt_arg[index])) },
+            };
+            if !handler(event) {
+                return Ok(handled);
+            }
+            unsafe { (*region).evt_ack_seq.publish(seq) };
+            handled += 1;
+        }
+    }
+
+    /// dirty 水位がこの host instance の前回観測値より進んだ場合、その新しい水位を返す。
+    pub fn observe_dirty_epoch(&self) -> io::Result<Option<u64>> {
+        let mmap = open_shared(&self.shm_path)?;
+        let region = region_ptr(&mmap);
+        let current = unsafe { (*region).dirty_epoch.read() };
+        let previous = self
+            .last_seen_dirty_epoch
+            .fetch_max(current, Ordering::Relaxed);
+        Ok((current > previous).then_some(current))
+    }
+}
+
+/// plugin dirty callback から水位を1進める。通知スレッドを問わず atomic RMW で安全。
+///
+/// # Safety
+/// `region` は生存中の [`SharedRegion`] を指していなければならない。
+pub unsafe fn increment_dirty_epoch(region: *mut SharedRegion) -> u64 {
+    unsafe { (*region).dirty_epoch.increment() }
+}
 
 /// `cmd_result`: 成功。
 pub const CMD_RESULT_OK: u32 = 0;
@@ -884,6 +1169,29 @@ pub unsafe fn reset_child_starting(region: *mut SharedRegion) {
         }
         (*region).cmd_kind.store(CMD_NONE, Ordering::Relaxed);
         (*region).cmd_arg.fill(0);
+
+        // 旧 child の未処理イベントを replacement child のものと混線させない。watchdog が
+        // 旧 child の死亡と in-flight 手続きの中止を確認した後だけ呼ばれるため並行 writer はいない。
+        //
+        // ここで evt_seq / evt_ack_seq を 0 に戻せるのは、`cmd_seq`（0 に戻さない —
+        // [`InFlightCommand::generation`] のコメント参照）と違い、**host 側が evt カーソルを
+        // 一切保持しない**から: [`EventRingHost::poll`] は読む位置を毎回 shm の
+        // `evt_ack_seq + 1` から導出するので、0 リセット後も desync しようがない。
+        //
+        // 不変条件: `EventRingHost` に evt カーソル（最後に見た seq 等）のフィールドを
+        // 追加してはならない。追加するなら、この 0 リセットをやめて `cmd_seq` と同じく
+        // 単調増加（+ generation 防御）へ移行すること。さもないと host-local の旧値を
+        // 再超過するまで黙ってイベントを取りこぼす（`dirty_epoch` を 0 に戻した場合に
+        // 起きる故障と同型）。この不変条件は
+        // tests::event_ring_host_survives_respawn_seq_reset_without_local_cursor が実行で守る。
+        (*region).evt_seq.publish(0);
+        (*region).evt_ack_seq.publish(0);
+        for kind in &(*region).evt_kind {
+            kind.store(EVT_NONE, Ordering::Relaxed);
+        }
+        (*region).evt_arg.fill([0; EVT_ARG_BYTES]);
+
+        // dirty_epoch は累積水位であり、host-local last_seen と比較するため respawn では触れない。
         (*region)
             .child_status
             .store(CHILD_STATUS_STARTING, Ordering::Release);
@@ -1230,6 +1538,281 @@ mod tests {
 
         drop(mmap);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn event_ring_host_processes_strictly_in_sequence_and_acks_only_completion() {
+        let shm = mailbox_test_path("event-seq-order");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mut child = EventRingChild::new();
+        child
+            .queue(EVT_UI_CLOSED, "close-started")
+            .expect("queue UI_CLOSED");
+        child
+            .queue(EVT_UI_CLOSED_DONE, "close-complete")
+            .expect("queue UI_CLOSED_DONE");
+        assert_eq!(unsafe { child.service(region) }.expect("publish"), 2);
+
+        let host = EventRingHost::new(shm.clone());
+        let mut attempted = Vec::new();
+        assert_eq!(
+            host.poll(|event| {
+                attempted.push((event.seq, event.kind));
+                false
+            })
+            .expect("defer first event"),
+            0
+        );
+        assert_eq!(attempted, vec![(1, EVT_UI_CLOSED)]);
+        assert_eq!(
+            unsafe { (*region).evt_ack_seq.read() },
+            0,
+            "receipt alone must not ack an incomplete event"
+        );
+
+        let mut completed = Vec::new();
+        assert_eq!(
+            host.poll(|event| {
+                completed.push((
+                    event.seq,
+                    event.kind,
+                    event.arg().expect("valid event arg").to_string(),
+                ));
+                true
+            })
+            .expect("complete queued events"),
+            2
+        );
+        assert_eq!(
+            completed,
+            vec![
+                (1, EVT_UI_CLOSED, "close-started".into()),
+                (2, EVT_UI_CLOSED_DONE, "close-complete".into()),
+            ]
+        );
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 2);
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn event_ring_two_inflight_events_use_distinct_unacked_slots() {
+        let shm = mailbox_test_path("event-two-slots");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mut child = EventRingChild::new();
+        child
+            .queue(EVT_UI_CLOSED, "first-slot")
+            .expect("queue first");
+        child
+            .queue(EVT_UI_CLOSED_DONE, "second-slot")
+            .expect("queue second");
+
+        assert_eq!(
+            unsafe { child.service(region) }.expect("publish both"),
+            2,
+            "EVT_SLOTS=2 must accept both close-cycle events before either ack"
+        );
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 0);
+        let first_index = 1usize % EVT_SLOTS;
+        let second_index = 2usize % EVT_SLOTS;
+        assert_ne!(
+            first_index, second_index,
+            "consecutive unacked events must occupy distinct slots"
+        );
+        unsafe {
+            assert_eq!(
+                read_cstr_field(&(*region).evt_arg[first_index]),
+                Some("first-slot")
+            );
+            assert_eq!(
+                read_cstr_field(&(*region).evt_arg[second_index]),
+                Some("second-slot")
+            );
+        }
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    // Ordering 対（publish/read・ack/reuse・dirty）の退行はテストではなく型で防いでいる:
+    // [`evt_sync`] が AtomicU64 を封じ、呼び出し箇所は Ordering を渡せない（渡す変異は
+    // コンパイルできない）。値の同語反復を検査する旧 memory-model テストは撤去した。
+
+    /// [`reset_child_starting`] 内の不変条件コメントが述べる「host は evt カーソルを
+    /// 保持しない」を実行で守る。同一 [`EventRingHost`] instance を respawn（seq 0 リセット）
+    /// またぎで使い、replacement child の seq 1 からのイベントが取りこぼしなく届くことを検証する。
+    /// host にカーソルが生えるか、リセットが部分適用になると red になる。
+    #[test]
+    fn event_ring_host_survives_respawn_seq_reset_without_local_cursor() {
+        let shm = mailbox_test_path("event-respawn-cursor");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let host = EventRingHost::new(shm.clone());
+
+        // incarnation 1: publish → poll → ack を完走させ、host が「もしカーソルを持って
+        // いたら」旧世代の水位で汚染された状態を作る。
+        let mut old_child = EventRingChild::new();
+        old_child
+            .queue(EVT_UI_CLOSED, "old-start")
+            .expect("queue old start");
+        old_child
+            .queue(EVT_UI_CLOSED_DONE, "old-done")
+            .expect("queue old done");
+        assert_eq!(
+            unsafe { old_child.service(region) }.expect("old publish"),
+            2
+        );
+        assert_eq!(host.poll(|_| true).expect("drain old incarnation"), 2);
+
+        unsafe { reset_child_starting(region) };
+
+        // incarnation 2: seq は 1 から再スタートする。
+        let mut new_child = EventRingChild::new();
+        new_child
+            .queue(EVT_UI_CLOSED, "new-start")
+            .expect("queue new start");
+        new_child
+            .queue(EVT_UI_CLOSED_DONE, "new-done")
+            .expect("queue new done");
+        assert_eq!(
+            unsafe { new_child.service(region) }.expect("new publish"),
+            2
+        );
+
+        let mut delivered = Vec::new();
+        assert_eq!(
+            host.poll(|event| {
+                delivered.push((
+                    event.seq,
+                    event.kind,
+                    event.arg().expect("valid arg").to_string(),
+                ));
+                true
+            })
+            .expect("poll replacement incarnation"),
+            2,
+            "same host instance must deliver exactly the replacement child's events"
+        );
+        assert_eq!(
+            delivered,
+            vec![
+                (1, EVT_UI_CLOSED, "new-start".into()),
+                (2, EVT_UI_CLOSED_DONE, "new-done".into()),
+            ]
+        );
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn event_ring_child_retains_blocked_event_and_retries_after_ack() {
+        let shm = mailbox_test_path("event-retry");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mut child = EventRingChild::new();
+        child
+            .queue(EVT_UI_CLOSED, "cycle-1-start")
+            .expect("queue first");
+        child
+            .queue(EVT_UI_CLOSED_DONE, "cycle-1-done")
+            .expect("queue second");
+        child
+            .queue(EVT_UI_CLOSED, "cycle-2-start")
+            .expect("queue blocked third");
+
+        assert_eq!(unsafe { child.service(region) }.expect("first tick"), 2);
+        assert_eq!(
+            child.pending_len(),
+            1,
+            "blocked lossless event must remain queued"
+        );
+        unsafe { (*region).evt_ack_seq.publish(1) };
+        assert_eq!(unsafe { child.service(region) }.expect("retry tick"), 1);
+        assert!(child.is_empty());
+        assert_eq!(unsafe { (*region).evt_seq.read() }, 3);
+        let third_index = 3usize % EVT_SLOTS;
+        assert_eq!(
+            unsafe { read_cstr_field(&(*region).evt_arg[third_index]) },
+            Some("cycle-2-start")
+        );
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn dirty_epoch_increments_and_host_observes_monotone_watermark() {
+        let shm = mailbox_test_path("dirty-epoch");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let host = EventRingHost::new(shm.clone());
+
+        assert_eq!(host.observe_dirty_epoch().expect("initial observe"), None);
+        assert_eq!(unsafe { increment_dirty_epoch(region) }, 1);
+        assert_eq!(unsafe { increment_dirty_epoch(region) }, 2);
+        assert_eq!(
+            host.observe_dirty_epoch().expect("coalesced observe"),
+            Some(2)
+        );
+        assert_eq!(host.observe_dirty_epoch().expect("unchanged observe"), None);
+        assert_eq!(unsafe { increment_dirty_epoch(region) }, 3);
+        assert_eq!(host.observe_dirty_epoch().expect("next observe"), Some(3));
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn reset_child_starting_clears_event_ring_but_preserves_dirty_epoch() {
+        let shm = mailbox_test_path("event-reset");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let host = EventRingHost::new(shm.clone());
+        for expected in 1..=5 {
+            assert_eq!(unsafe { increment_dirty_epoch(region) }, expected);
+        }
+        assert_eq!(
+            host.observe_dirty_epoch().expect("observe old child"),
+            Some(5)
+        );
+
+        let mut child = EventRingChild::new();
+        child
+            .queue(EVT_UI_CLOSED, "old-incarnation")
+            .expect("queue old event");
+        assert_eq!(
+            unsafe { child.service(region) }.expect("publish old event"),
+            1
+        );
+        unsafe { reset_child_starting(region) };
+
+        unsafe {
+            assert_eq!((*region).evt_seq.read(), 0);
+            assert_eq!((*region).evt_ack_seq.read(), 0);
+            for index in 0..EVT_SLOTS {
+                assert_eq!((*region).evt_kind[index].load(Ordering::Relaxed), EVT_NONE);
+                assert_eq!(read_cstr_field(&(*region).evt_arg[index]), Some(""));
+            }
+            assert_eq!(
+                (*region).dirty_epoch.read(),
+                5,
+                "respawn reset must not lower the dirty watermark"
+            );
+        }
+        assert_eq!(unsafe { increment_dirty_epoch(region) }, 6);
+        assert_eq!(
+            host.observe_dirty_epoch()
+                .expect("observe replacement child"),
+            Some(6),
+            "replacement child dirty must immediately exceed host-local last_seen"
+        );
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
     }
 
     #[test]
