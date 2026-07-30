@@ -17,6 +17,83 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.336 docs(spec): #474 P2 の spec 先行 — dirty をリングから外し、CAP を2本足決着に合わせた (Jul 30, 2026)
+
+**Date**: 2026-07-30
+**Issue**: #474（P2 の spec 先行）/ **Branch**: `474-plugin-ui-p2-evt-ring`
+**Status**: spec のみ（コード変更なし）
+
+P2（evt リング実装）の前に、設計 §8 の owner 未回答6件を仕分けして spec を確定させた。
+
+#### Q2: `STATE_DIRTY` はリングに載せない（`dirty_epoch` 単調カウンタで運ぶ）
+
+owner の指示で Fable に独立判断を依頼し、**(b) 採用**（確信度 高）。決め手は
+**spec 自身の中にあった潜在矛盾**で、これは main が挙げていなかった論拠:
+
+> ポリシー3 は「ack の前進 = host 側処理が**完結した**。受領のみの ack は定義しない」と
+> 規定するが、**`STATE_DIRTY` の「host 側処理の完結」が spec のどこにも定義されていない**。
+> debounce checkpoint の完了とすると seq 順処理の強制で後続 `UI_CLOSED` の ack が
+> debounce 窓（数秒）に結合し、受領で即 ack とするとポリシー3 の例外になる。
+> (b) はこの未定義箇所を**定義する必要ごと消す**。
+
+副次的に消えたもの: pending フラグ合流規則 / `STATE_DIRTY` in-flight 最大1件制限 /
+リング占有上限 3 の導出。`EVT_SLOTS` は占有上限の再導出により **3 → 2**。
+
+#### 🔴 main の根拠2は過大主張だった（Fable が訂正・記録として残す）
+
+main は「フェーズ B 誤発火ハザードは dirty のリング同居に**由来する**ので (b) で消える」と
+主張したが、**ハザードのクラスは残る** — 先行イベントは dirty だけではなく、
+**前サイクルの `UI_CLOSED_DONE`** も `evt_ack_seq` を前進させうる。
+したがって規則（`UI_CLOSED` 自身の seq で判定）と変異検証は**削除せず維持し、
+シナリオだけ差し替えた**。
+
+#### 🔴 その裏取りで spec の曖昧さを見つけた（P3 へ登記）
+
+Fable の訂正は「child は `UI_CLOSED_DONE` 投函直後に `Closed` へ入るので、host の ack 前に
+`OPEN_UI` を受理できる」を前提にしていたが、**spec は `Closed` 中の `OPEN_UI` も
+failure ack と書いている**（UIH.2a 故障時の脱出条件）。
+
+しかし **`Closed` は状態機械の初期状態でもある**ため、字義どおり読むと **UI を一度も開けない**。
+`detail = "closing-in-progress"` からして意図は「クローズ手続きが未決着の窓」だが、
+**その窓の終端が定義されていない**。読みを3つ表にして **P3 で確定させる**旨を spec に登記した。
+
+**どちらの読みでもフェーズ B の規則は維持する**（緩めて得られるものが無く、
+緩めた場合の失敗が「セーフポイントのスキップ = 音色の喪失」であるため）。
+
+#### Q7: CAP.4 / CAP.6-7 を2本足決着に合わせた（owner 承認済み）
+
+- CAP.4 のループ表に **「永続化される場所が違う」非対称**を明記
+  （GUI つまみ = 人間のみ・DSL に残らない → スナップショット必要 /
+  オートメーション = 人間+LLM 共用・`.orbs` に残る → スナップショット不要）
+- CAP.6-7 を「**列挙・取得**は MCP・**設定は DSL（#506）が第一級**」へ改訂。
+  MCP の設定系 tool は計測・デバッグの副経路として禁じないが、
+  **CAP.4 のループはこれに依存してはならない**
+
+#### その他の裁定
+
+- **Q4**: v1 = **Open/Close UI の追加のみ**。rescan は3面すべて実装済みだった
+  （コマンドパレット / `editor/context` / MCP `rescan_plugins`）。
+  Show info / Reveal in Finder は owner が不要と裁定。階層ブラウズは補完（#495）で満たし、
+  右クリック挿入は不要
+- **Q8**: 段階的に承認（oracle で無人 E2E → 実プラグイン smoke → シナリオ化して自動 E2E へ昇格）
+- **Q3**: moot（`objc2` は P1 で導入済み）
+- **Q5 / Q6**: main が決定（REPL メタ行を足す / タイトルは `<plugin> — <receiver>[<index>]`）
+
+#### 🔴 挿入トリガーは #474 のスコープ外（#522 / #506 と同時設計を推奨）
+
+owner の「エフェクト挿入のきっかけになる打鍵から補完が走り出す形」を調べた結果、
+**`editor.action.triggerSuggest` がコードベース全体で未使用**で連鎖が繋がっていない。
+ただし core spec `:1182` は SC.0 記法 `lead.Serum(...).TALReverb4(size: 0.6).subout` を
+**#522 の受け入れ基準**として既に確定させており、**現行の `.effect("` に合わせた
+トリガーは #522 で作り直しになる**。
+
+**変更ファイル**: `docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md` /
+`docs/specs-v2/PLUGIN_CAPABILITY_ABSTRACTION_v1.md`
+
+**Commit**: `8056aa1`
+
+---
+
 ### 6.335 feat(rust): #474 P0+P1 — child を NSApplication runloop へ。graceful teardown を復活させた (Jul 30, 2026)
 
 **Date**: 2026-07-30

@@ -118,9 +118,11 @@ state 取得（`getState` / `save`）はメインスレッドで行い、**オ�
    （保存の場合は SAVE_STATE の往復・atomic rename・`project.yaml` 更新まで完了）。
    **受領のみの ack は定義しない**（受領 ack だと child が保存前に先へ進み、
    セーフポイントが事実上スキップされる）
-4. **同期を要するイベントと、しないイベントを分ける。**
+4. **リングに載せるのは取りこぼし不可のイベントだけにする。**
    `UI_CLOSED` / `UI_CLOSED_DONE` は**取りこぼし不可**（失うと手続きが完結しない）。
-   `STATE_DIRTY` は**最適化**なので合流（coalesce）してよい
+   `STATE_DIRTY` は**イベントではなく水位**（level・「前回観測以降に変化があったか」だけが
+   意味を持ち、合流してよい）であり、**リングに載せない** — 専用の `dirty_epoch` 単調
+   カウンタで運ぶ（本節末「dirty の運搬」）
 5. **紳士協定を作らない。** 「host が先に SAVE_STATE を済ませているはず」に依存しない。
    **3経路すべてが同じハンドシェイクを通る**
 
@@ -132,7 +134,7 @@ state 取得（`getState` / `save`）はメインスレッドで行い、**オ�
 | フィールド | 方向 | 意味 |
 |---|---|---|
 | `evt_seq: AtomicU64` | child → host | child が投函時に単調増加。スロットは `evt_seq % EVT_SLOTS` |
-| `evt_kind: [AtomicU32; EVT_SLOTS]` | child → host | `STATE_DIRTY` / `UI_CLOSED` / `UI_CLOSED_DONE` |
+| `evt_kind: [AtomicU32; EVT_SLOTS]` | child → host | `UI_CLOSED` / `UI_CLOSED_DONE` |
 | `evt_arg: [[u8; N]; EVT_SLOTS]` | child → host | 付随情報 |
 | `evt_ack_seq: AtomicU64` | host → child | **host 側処理が完結した** `evt_seq`（ポリシー3） |
 
@@ -142,15 +144,25 @@ state 取得（`getState` / `save`）はメインスレッドで行い、**オ�
 host は `evt_ack_seq < evt_seq` の間、未処理スロットを**順に**処理して `evt_ack_seq` を進める。
 **追い越して前進させてはならない。**
 
-> これは文言ではなく**下記 slot 再利用不変条件の成立条件**である。host が s-1（`STATE_DIRTY`）を
-> 後回しにして s（`UI_CLOSED`）を先に完結させ ack を s へ進めると、child は s-1 のスロットを
-> 「再利用可」と判定し、**host がまだ読んでいる可能性のある `evt_arg[s-1 % EVT_SLOTS]` へ
-> 書き込む** — Release/Acquire を守っていても防げない（順序保証ではなく再利用判定の問題）。
+> これは文言ではなく**下記 slot 再利用不変条件の成立条件**である。host が s-1（前サイクルの
+> `UI_CLOSED_DONE`）を後回しにして s（新サイクルの `UI_CLOSED`）を先に完結させ ack を s へ
+> 進めると、child は s-1 のスロットを「再利用可」と判定し、**host がまだ読んでいる可能性のある
+> `evt_arg[s-1 % EVT_SLOTS]` へ書き込む** — Release/Acquire を守っていても防げない
+> （順序保証ではなく再利用判定の問題）。
 
 **🔴 `EVT_SLOTS >= 2`**（鏡像元 `orbit_audio_sandbox::transport::SLOTS` の
-「連続 seq が必ず別 slot を指す」不変条件）。`STATE_DIRTY` の in-flight を最大1件に固定する
-（下記）ため**リング占有の上限は 3**
-であり、`EVT_SLOTS = 3` なら見送りが原理的に起きない。2 でも再試行規則があるので停止はしない。
+「連続 seq が必ず別 slot を指す」不変条件）。**`EVT_SLOTS = 2`。**
+
+占有上限の導出: 1 クローズサイクル内で同時に in-flight になりうるのは
+`UI_CLOSED` 1 +（host 停滞 → タイムアウト完遂時の）`UI_CLOSED_DONE` 1 = **2**。
+`EVT_SLOTS = 2` なら投函の invariant `evt_ack_seq >= s - EVT_SLOTS` は 2 件同時 in-flight まで
+満たされるため、**見送りが原理的に起きない**。3 件目が要求されるのは前サイクルの未 ack
+`UI_CLOSED_DONE` へ新サイクルの投函が重なる病的ケースのみで、これは再試行規則
+（下記）が吸収する — **遅延であり停止ではない**。
+
+> 🔴 **鏡像元の `SLOTS` と値を揃える必要はない。** `SLOTS`（audio pipeline 深さ）は
+> `transport.rs` のコメントどおり **PR-C の gated 実機計測で 2 or 3 に確定する暫定値**であり、
+> 導出根拠が別（latency/stall のトレードオフ）。`EVT_SLOTS` は上記の占有上限から独立に導く。
 
 **🔴 slot 再利用の不変条件（鏡像元から継承する）**:
 
@@ -184,12 +196,6 @@ slot 再利用 guard が防いでいるものと同じクラス）。
 
 - **投函済み・未 ack のスロットを書き換えてはならない。** host が `evt_arg`（非 atomic の
   `[u8; N]`）を読んでいる最中の書き込みは cross-process の torn read になる
-- したがって **`STATE_DIRTY` の合流は child ローカルの pending フラグで行う**
-  （「dirty が立っている」を child 側に保持し、スロットが空いてから1件だけ投函する）。
-  スロット上の書き換えによる合流は**禁止**
-- **`STATE_DIRTY` の in-flight は常に最大1件**（未 ack の dirty があるうちは新たに投函せず
-  pending フラグへ合流させる）。これにより**リング占有の上限が静的に決まる**:
-  `STATE_DIRTY` 1 + `UI_CLOSED` 1 + `UI_CLOSED_DONE` 1 = **3**
 - **🔴 取りこぼし不可のイベント（`UI_CLOSED` / `UI_CLOSED_DONE`）は、投函できるまで
   child が保持し runloop で再試行する。** 「見送る = 落とす」に倒してはならない
   （`Closing` に留まるのはこの一般規則の特例であり、`Closed` 遷移後に投函する
@@ -201,6 +207,48 @@ slot 再利用 guard が防いでいるものと同じクラス）。
 > 完結させる（UIH.4b）。host に消費者が無いイベントを高頻度で流すとリングを塞ぎ、
 > `UI_CLOSED` の投函を不必要に遅らせる。
 
+### dirty の運搬 — `dirty_epoch`（リング外・#577 PR-B）
+
+| フィールド | 方向 | 意味 |
+|---|---|---|
+| `dirty_epoch: AtomicU64` | child → host | プラグインの dirty 通知の**累積回数**（水位） |
+
+- **child**: プラグインの dirty 通知（VST3 `IComponentHandler::setDirty` /
+  CLAP `clap_host_state.mark_dirty`）を受けるたび `fetch_add(1, Release)`。
+  atomic RMW なので**通知コールバックのスレッドを問わず安全**で、メインスレッドへの
+  marshal は不要（リング投函がメインスレッド限定だったのに対する単純化）
+- **host**: 既存の polling ループで Acquire load し、**host プロセス内に保持する
+  `last_seen`** と比較する。進んでいれば「前回観測以降に少なくとも1回 dirty があった」
+  → debounce checkpoint（#577 PR-C）をスケジュールし `last_seen` を更新する。
+  `last_seen` は **shm に置かない**（child → host の片方向なので shm に要るのはカウンタ1語）
+- **ack は存在しない。** 合流はカウンタの意味論そのものであり、child は host の消費を待たない。
+  **ポリシー3 の ack 意味論はリング上のイベント専用で、dirty には適用されない**
+
+> 🔴 **`dirty_epoch` は daemon 起動時の shm truncate による 0 初期化以外で 0 に戻してはならない。**
+> **respawn 経路の region リセット（`reset_child_starting`）はこれに触れず**、新 incarnation は
+> 既存値の上に増分を続ける。
+>
+> **evt リングとは扱いが逆である点に注意** — リングは前 incarnation の未処理イベントを
+> 残すと replacement child のイベントと混線するため `reset_child_starting` でリセットするが、
+> `dirty_epoch` は水位なのでリセットしない。
+>
+> 理由は `transport.rs` の `InFlightCommand::generation` のコメントが `cmd_seq` について
+> 記録している教訓と同じ（respawn 時に「綺麗な状態から始める」意図でカウンタを 0 に戻すと壊れる。
+> 実際 `reset_child_starting` は `cmd_kind` / `cmd_arg` を消す一方で `cmd_seq` には触れていない）。
+> dirty_epoch では**より悪い**: カウンタだけ 0 に戻り host の `last_seen`（例: 42）が残ると、
+> `loaded > last_seen` が偽のままになり、**カウンタが 42 を再超過するまで dirty を黙って
+> 取りこぼす**。単調・非リセットならこの故障クラスは構造的に存在しない。
+>
+> daemon 再起動では shm truncate と host メモリの消滅が同時に起きるため、カウンタと
+> `last_seen` は両方 0 に揃う。
+
+> **なぜリングに載せないか**（決定の記録）: ポリシー3 は「ack の前進 = host 側処理が**完結した**。
+> 受領のみの ack は定義しない」と規定するが、`STATE_DIRTY` の「host 側処理の完結」は
+> 定義できない。debounce checkpoint の完了とすると、seq 順処理の強制により**後続の
+> `UI_CLOSED` の ack が debounce 窓（数秒）に結合する**。受領で即 ack とすると
+> ポリシー3 の暗黙の例外になる。dirty を ack 概念の外に出すことで、この未定義箇所を
+> **定義する必要ごと消す**。
+
 ### 故障時の脱出条件
 
 | 事象 | 規定 |
@@ -209,12 +257,28 @@ slot 再利用 guard が防いでいるものと同じクラス）。
 | **host が生きたまま停滞し `evt_ack_seq` が進まない** | child は `Closing` に**無期限滞留しない**。タイムアウト後は保存なしでクローズを完遂し、**🔴 `UI_CLOSED_DONE` を `evt_arg` に「timeout・保存なし」を載せて投函する**（投函できるまで再試行する）。これで (a) MCP の完了判定が閉じ、(b) host は **タイムアウト経路だったことを判別でき**、(c) loud 報告の運搬も兼ねる |
 | **host プロセスが死亡** | 既存の `ParentWatch` が child ごと回収する（UIH.1・変更なし）。新たな規定は不要 |
 | **child の `cmd_ack_seq` が永遠に返らない** | host はコマンドにタイムアウトを持ち、**loud に失敗**させる。規律3 の待ちに脱出条件が無い状態にしない |
-| **`Closing` / `Closed` 中に `OPEN_UI` が届く** | **failure ack**（`cmd_result_detail = "closing-in-progress"`）。タイムアウト任せにしない（正常系なのに loud な失敗になる） |
+| **`Closing` / `Closed` 中に `OPEN_UI` が届く** | **failure ack**（`cmd_result_detail = "closing-in-progress"`）。タイムアウト任せにしない（正常系なのに loud な失敗になる）。🔴 **`Closed` の語義が未解決** — 下記参照 |
 | **🔴 正常な teardown（`CONTROL_QUIT`）が in-flight のハンドシェイクと交差する** | **host は QUIT を立てる前に、in-flight のクローズ手続き・保留イベント・MCP 完了待ちを解決する**（UIH.6 の停止前セーフポイントと同順で直列化）。解決できないものは **loud に報告**した上で打ち切る。<br>これを規定しないと: 再試行中の `UI_CLOSED_DONE` が QUIT による child 終了で永遠に投函されず、**`close_plugin_ui` の完了判定（DONE の受信）がハングする** |
 
 > **タイムアウト後に host が遅れて保存を完遂した場合**は、二重処理として禁止しない。
 > プラグインインスタンスが生きている限り「現在の真の state」が保存されるため実害が無く、
 > 禁止するより **`evt_arg` で判別可能にする**方が整合的である。
+
+> 🔴 **未解決（P3 で確定させる・2026-07-30 記録）**: 上表の「`Closing` / `Closed` 中に
+> `OPEN_UI` が届く → failure ack」の **`Closed` の語義が確定していない**。
+> `Closed` は UIH.4c の状態機械（`Closed → Open → Closing → Closed`）の**初期状態でもある**ため、
+> 字義どおり読むと **UI を一度も開けない**。`detail = "closing-in-progress"` という文言からして、
+> 意図は「クローズ手続きが未決着の窓」であるはずだが、その窓の**終端が定義されていない**。
+>
+> | 読み | `Closed` の意味 | 帰結 |
+> |---|---|---|
+> | (i) 字義どおり | 状態機械の `Closed` 全体 | UI が開けない。**採れない** |
+> | (ii) 手続きの末尾 | フェーズ B 完了後、`UI_CLOSED_DONE` が **ack されるまで** | 前サイクル DONE 未 ack のままの再オープンが起きない |
+> | (iii) `Closing` のみ（表の `Closed` は誤記） | 再オープンは即受理 | 前サイクル DONE 未 ack のまま新サイクルが始まりうる |
+>
+> **P3（状態機械の実装）で (ii) / (iii) のどちらかに確定させる。** それまでの間、
+> UIH.4c のフェーズ B トリガ規則（`UI_CLOSED` 自身の seq で判定）は
+> **どちらの読みでも安全な側として無条件に維持する**。
 
 > **既存の `control` を再利用しない理由**: `control` は teardown 経路で
 > `reset_control_run` により RUN へ戻される（respawn の shm 再利用）。コマンドの意味論を
@@ -363,9 +427,17 @@ child がウィンドウを所有する以上、**プラグイン起点のリサ
   4. 🔴 UI_CLOSED_DONE イベントを投函（手続き完了の通知）
 
 🔴 フェーズ B のトリガに「単なる前進」を使ってはならない。`evt_ack_seq` は全イベント共用の
-   単一カウンタなので、クローズ直前に投函済みだった STATE_DIRTY の完了 ack でも前進する。
+   単一カウンタなので、**先行イベントの完了 ack でも前進する**。dirty をリングから外した後
+   （UIH.2a）に残る先行イベントは**前サイクルの `UI_CLOSED_DONE`** である。
    それでフェーズ B を開始すると、UI_CLOSED の保存がまだ走っていないのに解放が先行し、
    「セーフポイントは解放より前」を破る。**必ず UI_CLOSED 自身の seq に到達したかで判定する。**
+
+   > この経路の**到達可能性**は「前サイクルの `UI_CLOSED_DONE` が未 ack のまま再オープンを
+   > 受理できるか」に依存し、それは UIH.2a「故障時の脱出条件」の `OPEN_UI` 受理規則
+   > （`Closed` の語義・下記 🔴 未解決）が解消されるまで確定しない。
+   > **規則は到達可能性に依存させない** — 判定を「単なる前進」に
+   > 緩めて得られるものが無く、緩めた場合の失敗は「セーフポイントのスキップ」（= 音色の喪失）
+   > だからである。
 
 Closing / Closed 中に到達した追加の要求:
   ①③ → no-op（既に手続き中）
@@ -540,9 +612,14 @@ crash ループ時にウィンドウが繰り返し復活すると作業文脈�
   - **`was_destroyed=true` の経路で `hide()` が呼ばれない**（分岐を潰すと red になること）
   - **フェーズ B が `evt_ack_seq` の前進**でのみ開始する（受領のみで進めると、保存前に解放が
     走って red — UIH.2a ポリシー3 の検証）
-  - 🔴 **フェーズ B が `UI_CLOSED` 自身の seq に紐づく**（クローズ直前に**未 ack の
-    `STATE_DIRTY` を仕込み**、トリガを「単なる前進」へ変異させると、dirty の ack で
-    解放が保存に先行して red）
+  - 🔴 **フェーズ B が `UI_CLOSED` 自身の seq に紐づく**（**前サイクルの `UI_CLOSED_DONE` を
+    未 ack のまま**新サイクルのクローズを走らせ、トリガを「単なる前進」へ変異させると、
+    前サイクル DONE の ack で解放が保存に先行して red）
+
+    > 状態機械のユニットテストは host を trait で差し替えるため、**この仕込みは
+    > 「実運用で再オープンが受理されるか」（UIH.2a 故障時の脱出条件の曖昧点）とは
+    > 独立に構成できる。**
+    > 規則が守られていることを検証するのであって、経路の到達可能性を検証するのではない。
 
     > 前項の変異（受領 vs 完結）は**取り違えの軸が違う**ため、これを殺せない。両方要る。
 
@@ -558,8 +635,14 @@ crash ループ時にウィンドウが繰り返し復活すると作業文脈�
   - **経路①が `windowShouldClose` で一旦拒否する**（`windowWillClose` へ変異させると
     解放より先にウィンドウが消えて red）
   - **`setFrame` が `attached` より前に呼ばれる**（順序を入れ替えると red）
-  - **`UI_CLOSED` を取りこぼさない**（リングを単一スロットに変異させ、`STATE_DIRTY` を
-    連投して `UI_CLOSED` を上書きすると、クローズが完結せず red）
+  - **`UI_CLOSED` を取りこぼさない**（リングを単一スロットに変異させ、前サイクルの
+    未 ack `UI_CLOSED_DONE` の上へ新サイクルの `UI_CLOSED` を投函させると、
+    `close_plugin_ui` の完了判定が閉じず red）
+  - **`dirty_epoch` の増分が届く**（child の `fetch_add` を外す変異 / host の `last_seen`
+    更新を壊す変異で debounce checkpoint が発火せず red。#577 PR-B のテストと共有可）
+  - 🔴 **`dirty_epoch` が respawn でリセットされない**（`reset_after_child_exit` に
+    `dirty_epoch = 0` を足す変異を入れ、respawn 後の dirty が `last_seen` を超えるまで
+    検出されないことで red）
   - 🔴 **規律3 を忠実に守る host モックで経路②を完走させる**（`cmd_seq == cmd_ack_seq` を
     待ってから次を投函する host で CLOSE_UI を送る。CLOSE_UI の受理 ack をフェーズ B へ
     遅らせる変異を入れると **hang して red**）
