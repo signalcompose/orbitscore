@@ -235,6 +235,15 @@ impl IComponentTrait for SynthProcessor {
         if std::env::var_os("ORBIT_VST3_SYNTH_EMPTY_STATE").is_some() {
             return kResultOk;
         }
+        // #474 P1: getState を意図的に遅くするテスト seam。「state 取得が main スレッドを
+        // 塞いでも audio slot の前進を止めない」（UIH.3 の演奏中 SAVE_STATE 解禁）を、
+        // 遅い getState を持つ実プラグインの代役として無人検証するために使う
+        // （`orbit-vst3-instrument-child/tests/save_during_playback.rs`）。
+        if let Some(delay_ms) = std::env::var_os("ORBIT_VST3_SYNTH_STATE_DELAY_MS")
+            .and_then(|raw| raw.to_str().and_then(|s| s.parse::<u64>().ok()))
+        {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        }
         let stream = match ComRef::from_raw(state) {
             Some(s) => s,
             None => return kResultFalse,

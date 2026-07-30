@@ -17,6 +17,115 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.335 feat(rust): #474 P0+P1 — child を NSApplication runloop へ。graceful teardown を復活させた (Jul 30, 2026)
+
+**Date**: 2026-07-30
+**Issue**: #474（P0 + P1）/ **Branch**: `474-plugin-ui-open`
+**Status**: ✅ P1 ゲート全通過（レイテンシ margin 105.6x / 実機4経路 / 演奏中 SAVE_STATE）
+
+**#474 の価値は owner 裁定で「人間が触れるようにプラグインを開いてあげること」に絞られた。**
+つまみ→音の変化はプラグイン内部の話で検査対象外（音が通っていれば自明）。
+これにより computer-use のティア制約・オラクル GUI のノブ・座標依存の脆さがすべて消えた。
+
+#### P0: UIH.9 の前提是正2件は解消済みだった
+
+- `orbit-vst3-effect-child` のバンドル欠落 → **#548 で解消済み**
+  （`copy-daemon-bin.sh` が4 child を rebuild+copy・`release.yml` の post-package gate・
+  `tests/vscode-extension/bundled-child-binaries.spec.ts` が台帳照合と gate 実走まで実施）
+- CLAP の `--state` 配線 → **解消済み**（`orbit-clap-effect-child/src/main.rs:79-90`）
+
+→ spec の記述だけが stale だったので実態に更新。**新規テストは不要**。
+
+#### P1: 実行モデル変更
+
+- **新 crate `orbit-child-runtime`**: `run_child(name, service_main, audio)` —
+  main = NSApplication runloop（**Accessory**・拒否時 fail-loud）+ NSTimer 20ms tick で
+  mailbox/ParentWatch/QUIT を servicing、audio = 専用スレッド（QoS user-interactive）
+- **processor の main/audio 分割**: CLAP は `split() -> (XxxAudio, XxxMain)`
+  （audio 半分 = `StartedPluginAudioProcessor`・**clack が Send を公式サポート**）。
+  VST3 は monolith を `Vst3EffectAudio` / `Vst3InstrumentAudio` + 共有 `Vst3PluginMain` へ再構成
+- teardown 契約: audio スレッドで stop_processing → join → main 半分 drop
+  （**唯一の Arc 所有者として home スレッドで deactivate/destroy**）
+- 依存追加は **`objc2-app-kit` 1 crate のみ**（`objc2` 本体は clack-host 経由で既に graph に居た）
+
+#### 🔴 レイテンシゲートが割れ、UIH.7 の停止条件が発動した
+
+```
+main ea692a0（同一マシン対照）: 4.31us   margin 154.6x  ✅
+P1（修正前）:                   507.70us margin 1.3x    🔴
+```
+
+**約118倍の退行。ユニットは 315 passed で全緑。実機ゲートだけが捕まえた。**
+
+#### 507us の正体は会計アーティファクトだった — しかし真因は production の欠陥
+
+- `measure_per_block_us` は `render_through_child_sync` の**呼び出し全体**を計測し、
+  その内部（`offline.rs:186` の `drop(guard)`）に **child teardown** が含まれる
+- child が graceful に終わらないと **`REAP_TIMEOUT = 2s`**（`child.rs:23`）待って SIGKILL
+- **507.70us × 4000 blocks = 2.0308s ≈ 2.000s + 実処理 30.8ms** → **per-block は 5〜8us**
+  （main の 4.31us と同オーダー・**audio 経路は無傷**）
+
+🔴 **真因**: `orbit-child-runtime` の **NSTimer コールバックから呼ぶ `NSApplication.stop(None)` は
+`-[NSApplication run]` を抜けさせない**。`stop` は「**現在の NSEvent の処理が完了した時点で**
+抜ける」フラグであり、**timer 発火は NSEvent ではない**。headless の Accessory child は
+イベントを一切受け取らないので、**検査点に永遠に到達しない**。
+
+**これはテスト都合ではない。** daemon の通常 teardown も全 child が「2秒待ち → SIGKILL」に落ち、
+**SIGKILL は main 側の plugin teardown（state flush を含む）を吹き飛ばす**。
+つまり **P1 は #585 が6ラウンドかけて守った「音色を失わない」を静かに壊していた。**
+
+**修正**: `app.stop(None)` の直後に **ダミーの `NSEventTypeApplicationDefined` を
+`postEvent_atStart(..., true)` で post**（Cocoa の定石）。
+
+```
+修正後: [32f] 6.32us margin 105.6x / [64f] 100.7x / [128f] 133.4x   ✅
+        `kill にフォールバック` の行: 0 件                          ✅
+```
+
+**2つ目は診断が自ら挙げた反証条件**（消えなければ仮説が誤り）。**予測どおり消えた。**
+
+#### 検証（すべて main が sandbox 外で実行）
+
+| ゲート | 結果 |
+|---|---|
+| rust workspace | ✅ FAILED 0 |
+| TS 全 suite | ✅ 1836 passed / 34 skipped / 0 failed |
+| lint / `cargo fmt` / `cargo deny` | ✅ pass |
+| **レイテンシ（UIH.7）** | ✅ **margin 105.6x**（修正前 1.3x） |
+| **演奏中 SAVE_STATE** | ✅ 1 passed（**P1 の本来の狙い**） |
+| **実機4経路** | ✅ effect 4+4 / instrument 3+3 |
+
+#### 🔴 「0 passed の exit=0」を緑と読みかけた
+
+instrument の gated は feature が **`outproc-instrument`** で、effect 用の `outproc-effect` を
+使い回したため**テストが1件も走らず、それでも `exit=0`** が返った。
+**件数を見ていなければ「4経路 drops==0 を確認」と報告していた。**
+→ **`test result` の件数を必ず読む。** exit code は「走ったこと」を意味しない。
+
+#### 🔴 同一 working tree の並行編集が起きた（再発防止を記録）
+
+owner 指示で実装を Fable → Codex に切り替えた際、main が**停止指示の送信を停止と同一視**し、
+**ack を待たずに Codex を起動**した。Fable は停止指示3通の間も作業を続け、
+**約10分間、2エージェントが同じツリーを編集**した。
+
+実際に起きた危険（今回は実害なし・照合済み）:
+- Fable の変異検証が `orbit-vst3-instrument-child/src/main.rs` を自分のバックアップから復元し、
+  **その間の Codex の編集を巻き戻しうる状態**だった（Codex の最終書き込みが後で助かった）
+- Fable の `cargo test --workspace` が Codex のビルドと衝突しうる状態だった（main が kill）
+
+→ **切り替え時は `ps` でプロセス数ゼロを実測してから次を起動する。**
+**ack は自己申告。信用の順は「プロセスの消滅」＞「ack」。**
+
+#### 申し送り
+
+- **NSTimer が default runloop mode のみ** → **P3 で NSWindow のドラッグ/リサイズ中に
+  mailbox servicing が止まる**。`NSRunLoopCommonModes` へ（P1 ではウィンドウが無いので影響なし）
+- CLAP `call_on_main_thread_callback` の pump は未実装（既存の documented gap・P3 で必要になりうる）
+- **P1 完了により UIH.3 の「停止中のみ SAVE_STATE」MUST が外れ、#577 PR-B が本来形
+  （演奏中保存）で実装可能**になった
+
+---
+
 ### 6.334 fix(docs/test): #587 は測定盲点と確定 — aux は信号を運んでいる。記録を訂正し sum 発 send をテストで pin (Jul 30, 2026)
 
 **Date**: 2026-07-30

@@ -156,4 +156,108 @@ impl ClapInstrumentProcessor {
             data,
         )
     }
+
+    /// main / audio の 2 スレッド運用（UIH.1）へ分割する（#474 P1）。
+    ///
+    /// 意味論・teardown の順序契約は [`crate::ClapEffectProcessor::split`] と同一
+    /// （audio 側が [`ClapInstrumentAudio::stop_processing`] → main が join →
+    /// [`ClapInstrumentMain`] drop = 唯一所有者として home スレッドで実 teardown）。
+    pub fn split(self) -> (ClapInstrumentAudio, ClapInstrumentMain) {
+        let Self {
+            plugin,
+            buffers,
+            steady,
+            _instance,
+        } = self;
+        (
+            ClapInstrumentAudio {
+                plugin: Some(plugin),
+                buffers,
+                steady,
+            },
+            ClapInstrumentMain {
+                instance: _instance,
+            },
+        )
+    }
+}
+
+/// [`ClapInstrumentProcessor::split`] の audio スレッド側（`Send`・詳細は
+/// [`crate::ClapEffectAudio`] と同じ根拠）。
+pub struct ClapInstrumentAudio {
+    plugin: Option<StartedPluginAudioProcessor<OrbitClapHost>>,
+    buffers: HostAudioBuffers,
+    steady: u64,
+}
+
+impl ClapInstrumentAudio {
+    /// [`ClapInstrumentProcessor::process_block`] と同一の音響処理（audio スレッド側）。
+    #[must_use]
+    pub fn process_block(
+        &mut self,
+        data: &mut [f32],
+        events: &EventBuffer,
+        output_events: &mut EventBuffer,
+    ) -> bool {
+        process_block_core(
+            self.plugin
+                .as_mut()
+                .expect("CLAP instrument audio remains started until teardown"),
+            &mut self.buffers,
+            &mut self.steady,
+            &events.as_input(),
+            Some(output_events),
+            data,
+        )
+    }
+
+    /// audio スレッド上で `stop_processing` を呼んで audio 側を畳む
+    /// （契約は [`crate::ClapEffectAudio::stop_processing`] と同一）。
+    pub fn stop_processing(mut self) {
+        self.stop_processing_inner();
+    }
+
+    fn stop_processing_inner(&mut self) {
+        if let Some(plugin) = self.plugin.take() {
+            let _ = plugin.stop_processing();
+        }
+    }
+}
+
+impl Drop for ClapInstrumentAudio {
+    fn drop(&mut self) {
+        // Keep CLAP stop_processing on the audio thread during unwinding too.
+        self.stop_processing_inner();
+    }
+}
+
+/// [`ClapInstrumentProcessor::split`] の main（home）スレッド側（`!Send`・
+/// 順序契約は [`crate::ClapEffectMain`] と同一）。
+pub struct ClapInstrumentMain {
+    instance: PluginInstance<OrbitClapHost>,
+}
+
+impl ClapInstrumentMain {
+    /// 現在の plugin state をバイト列で取り出す（契約は [`crate::state::capture_state`]）。
+    pub fn capture_state(&mut self) -> Result<Vec<u8>, ClapHostError> {
+        crate::state::capture_state(&mut self.instance)
+    }
+
+    /// 保存済み state を適用する（契約は [`crate::state::apply_state_bytes`]）。
+    pub fn apply_state_bytes(&mut self, bytes: &[u8]) -> Result<(), ClapHostError> {
+        crate::state::apply_state_bytes(&mut self.instance, bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// audio 側が `Send` であることのコンパイル時証明（根拠は
+    /// `effect.rs::tests::audio_half_is_send` と同一）。
+    #[test]
+    fn audio_half_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<ClapInstrumentAudio>();
+    }
 }

@@ -142,4 +142,131 @@ impl ClapEffectProcessor {
             data,
         )
     }
+
+    /// main / audio の 2 スレッド運用（UIH.1）へ分割する（#474 P1）。
+    ///
+    /// 呼び出したスレッド（= `load` を行った home スレッド）が main 側になる。
+    /// audio 側（[`ClapEffectAudio`]・`Send`）は専用 audio スレッドへ move し、
+    /// main 側（[`ClapEffectMain`]・`!Send`）は home スレッドに残って state 操作を担う。
+    ///
+    /// ## 分割後の teardown 契約（🔴 順序が正しさの条件）
+    ///
+    /// 1. audio スレッドが [`ClapEffectAudio::stop_processing`] を呼んで終了する
+    ///    （CLAP 契約: `stop_processing` は audio スレッド）
+    /// 2. main スレッドが audio スレッドを **join してから** [`ClapEffectMain`] を drop する。
+    ///    このとき `PluginInstance` が `Arc<PluginInstanceInner>` の唯一の所有者になり、
+    ///    実 teardown（deactivate → destroy）が home スレッドで走る（CLAP 契約に適合）
+    ///
+    /// 逆順（audio 側が生きたまま main 側を drop）にすると `PluginInstance::Drop` は
+    /// 意図的に leak し、その後 audio 側の drop が唯一所有者として teardown を
+    /// **audio スレッドで**走らせる（deactivate の wrong-thread 違反）。daemon の
+    /// in-process 経路（`ClapPostProcessor` の carry-forward #1）と同じ協調規律であり、
+    /// out-of-process child では `orbit-child-runtime` の「join してから main 側を drop」
+    /// という関数構造がこの順序を強制する。
+    pub fn split(self) -> (ClapEffectAudio, ClapEffectMain) {
+        let Self {
+            plugin,
+            buffers,
+            steady,
+            _instance,
+        } = self;
+        (
+            ClapEffectAudio {
+                plugin: Some(plugin),
+                buffers,
+                steady,
+            },
+            ClapEffectMain {
+                instance: _instance,
+            },
+        )
+    }
+}
+
+/// [`ClapEffectProcessor::split`] の audio スレッド側。
+///
+/// `Send`（`StartedPluginAudioProcessor` は clack が audio スレッドへの引き渡しを想定して
+/// `Send` を提供する — daemon の `InstallMsg` が同じ根拠で cross-thread 送信している）。
+/// audio スレッドに move した後は、そのスレッドだけが触ること。
+pub struct ClapEffectAudio {
+    plugin: Option<StartedPluginAudioProcessor<OrbitClapHost>>,
+    buffers: HostAudioBuffers,
+    steady: u64,
+}
+
+impl ClapEffectAudio {
+    /// [`ClapEffectProcessor::process_block`] と同一の音響処理（audio スレッド側）。
+    #[must_use]
+    pub fn process_block(&mut self, data: &mut [f32]) -> bool {
+        process_block_core(
+            self.plugin
+                .as_mut()
+                .expect("CLAP effect audio remains started until teardown"),
+            &mut self.buffers,
+            &mut self.steady,
+            &InputEvents::empty(),
+            None,
+            data,
+        )
+    }
+
+    /// audio スレッド上で `stop_processing` を呼んで audio 側を畳む（CLAP 契約）。
+    ///
+    /// 返る `StoppedPluginAudioProcessor` はここで drop する（Arc refcount 減算のみ・
+    /// 実 teardown は main 側の [`ClapEffectMain`] drop が唯一所有者として行う）。
+    /// audio ループの終了時に呼ぶこと。呼び忘れても `Drop` が同じ処理を行う
+    /// （panic unwind 含め、drop が audio スレッド上で走る限り正しいスレッドに乗る）ため、
+    /// この明示メソッドは「意図した終了点」をコード上に残すためのもの。
+    pub fn stop_processing(mut self) {
+        self.stop_processing_inner();
+    }
+
+    fn stop_processing_inner(&mut self) {
+        if let Some(plugin) = self.plugin.take() {
+            let _ = plugin.stop_processing();
+        }
+    }
+}
+
+impl Drop for ClapEffectAudio {
+    fn drop(&mut self) {
+        // Drop runs on the dedicated audio thread in both the normal and
+        // unwinding paths, so a panic cannot move stop_processing to main.
+        self.stop_processing_inner();
+    }
+}
+
+/// [`ClapEffectProcessor::split`] の main（home）スレッド側。
+///
+/// `!Send`（`PluginInstance` を含む）。state 操作（`[main-thread]` 契約）を担い、
+/// drop 時に唯一の Arc 所有者として実 teardown を home スレッドで走らせる
+/// （順序契約は [`ClapEffectProcessor::split`] の doc を参照）。
+pub struct ClapEffectMain {
+    instance: PluginInstance<OrbitClapHost>,
+}
+
+impl ClapEffectMain {
+    /// ホストしているプラグインの state を吸い上げる（契約は [`crate::state::capture_state`]）。
+    pub fn capture_state(&mut self) -> Result<Vec<u8>, ClapHostError> {
+        crate::state::capture_state(&mut self.instance)
+    }
+
+    /// 保存済み state を適用する（契約は [`crate::state::apply_state_bytes`]）。
+    pub fn apply_state_bytes(&mut self, bytes: &[u8]) -> Result<(), ClapHostError> {
+        crate::state::apply_state_bytes(&mut self.instance, bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// audio 側が `Send`（専用 audio スレッドへ move できる）ことのコンパイル時証明。
+    /// clack の `StartedPluginAudioProcessor` / `AudioPorts` の `unsafe impl Send` に依拠する
+    /// ため、clack bump でこれが外れたらここがコンパイルエラーで検出する。
+    #[test]
+    fn audio_half_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<ClapEffectAudio>();
+    }
 }
