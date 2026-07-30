@@ -19,7 +19,7 @@
 //! ため**意図的に leak する**。したがってフィールド宣言順で `plugin` を `_instance` より**前**に置くことが
 //! load-bearing: `plugin` の Arc が先に落ちて `_instance` が唯一所有者になり、`_instance` drop で teardown が
 //! 実際に走る。**逆順にすると** `_instance` drop 時に refcount>1 で leak し、`plugin` drop でも teardown が
-//! 走らず**未 deactivate のままリーク**する（クラッシュでなく silent leak = smoke/parity では順序が逆でも
+//! 走らず**永久 leak（teardown はどのスレッドでも一切走らない）**になる（smoke/parity では順序が逆でも
 //! 緑なので、この宣言順を守る唯一のガードが本コメント）。本型は home == audio == 唯一スレッドなので teardown
 //! は単一スレッドで完結し、daemon の split-thread（`ClapTeardownGuard` で跨ぐ）wrong-thread 問題を sidestep する。
 //!
@@ -159,8 +159,8 @@ impl ClapEffectProcessor {
     ///    実 teardown（deactivate → destroy）が home スレッドで走る（CLAP 契約に適合）
     ///
     /// 逆順（audio 側が生きたまま main 側を drop）にすると `PluginInstance::Drop` は
-    /// 意図的に leak し、その後 audio 側の drop が唯一所有者として teardown を
-    /// **audio スレッドで**走らせる（deactivate の wrong-thread 違反）。daemon の
+    /// 意図的に leak し、その後 audio 側を drop しても teardown は開始されない。
+    /// 帰結は **永久 leak（teardown はどのスレッドでも一切走らない）**。daemon の
     /// in-process 経路（`ClapPostProcessor` の carry-forward #1）と同じ協調規律であり、
     /// out-of-process child では `orbit-child-runtime` の「join してから main 側を drop」
     /// という関数構造がこの順序を強制する。

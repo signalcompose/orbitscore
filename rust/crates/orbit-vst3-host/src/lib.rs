@@ -528,8 +528,9 @@ unsafe impl Send for Vst3EffectAudio {}
 
 impl Drop for Vst3EffectAudio {
     fn drop(&mut self) {
-        unsafe {
-            let _ = self.processor.setProcessing(0);
+        let result = unsafe { self.processor.setProcessing(0) };
+        if !is_ok(result) && result != kNotImplemented {
+            eprintln!("[orbit-vst3-host] effect setProcessing(0) failed: {result}");
         }
     }
 }
@@ -982,8 +983,9 @@ unsafe impl Send for Vst3InstrumentAudio {}
 
 impl Drop for Vst3InstrumentAudio {
     fn drop(&mut self) {
-        unsafe {
-            let _ = self.processor.setProcessing(0);
+        let result = unsafe { self.processor.setProcessing(0) };
+        if !is_ok(result) && result != kNotImplemented {
+            eprintln!("[orbit-vst3-host] instrument setProcessing(0) failed: {result}");
         }
     }
 }
@@ -2755,6 +2757,13 @@ fn json_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_halves_are_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<Vst3EffectAudio>();
+        assert_send::<Vst3InstrumentAudio>();
+    }
 
     // I6(pr-review-team): `is_ok` gates every tresult check in this crate (setup/activate/process
     // ...) but had no direct unit test — pin the kResultOk/kResultTrue/kResultFalse/kNotImplemented

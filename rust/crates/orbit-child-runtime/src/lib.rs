@@ -30,11 +30,24 @@ pub enum ChildRuntimeError {
     ServicePanicked,
     #[error("dedicated audio thread panicked: {0}")]
     AudioPanicked(String),
+    #[error("{runloop}; audio thread also failed: {audio}")]
+    RunloopAndAudioFailed {
+        runloop: Box<ChildRuntimeError>,
+        audio: Box<ChildRuntimeError>,
+    },
 }
 
 struct AudioDoneGuard(Arc<AtomicBool>);
 
 impl Drop for AudioDoneGuard {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+struct StopAudioGuard(Arc<AtomicBool>);
+
+impl Drop for StopAudioGuard {
     fn drop(&mut self) {
         self.0.store(true, Ordering::Release);
     }
@@ -114,7 +127,7 @@ impl StopCoordinator {
 /// `runloop stop -> audio join -> main-thread teardown`.
 pub fn run_child<T, A, S>(
     process_name: &str,
-    mut service_main: S,
+    service_main: S,
     audio: A,
 ) -> Result<T, ChildRuntimeError>
 where
@@ -122,18 +135,48 @@ where
     A: FnOnce(Arc<AtomicBool>) -> T + Send + 'static,
     S: FnMut() -> bool,
 {
+    run_child_with_main_loop(
+        process_name,
+        service_main,
+        audio,
+        |coordinator, service_main| run_main_loop(coordinator, service_main),
+    )
+}
+
+fn run_child_with_main_loop<T, A, S, M>(
+    process_name: &str,
+    mut service_main: S,
+    audio: A,
+    main_loop: M,
+) -> Result<T, ChildRuntimeError>
+where
+    T: Send + 'static,
+    A: FnOnce(Arc<AtomicBool>) -> T + Send + 'static,
+    S: FnMut() -> bool,
+    M: FnOnce(&StopCoordinator, &mut S) -> Result<(), ChildRuntimeError>,
+{
     let coordinator = StopCoordinator::new();
     let stop_for_audio = coordinator.stop_audio.clone();
     let audio_handle = spawn_audio(process_name, coordinator.audio_done.clone(), move || {
         audio(stop_for_audio)
     })?;
+    // Declared after the handle so unwinding signals stop before detaching the
+    // JoinHandle. On the normal path it is dropped before join for the same
+    // stop -> join ordering.
+    let stop_audio = StopAudioGuard(coordinator.stop_audio.clone());
 
-    let runloop_result = run_main_loop(&coordinator, &mut service_main);
-    coordinator.stop_audio.store(true, Ordering::Release);
+    let runloop_result = main_loop(&coordinator, &mut service_main);
+    drop(stop_audio);
     let audio_result = join_audio(audio_handle);
 
-    runloop_result?;
-    audio_result
+    match (runloop_result, audio_result) {
+        (Ok(()), audio_result) => audio_result,
+        (Err(runloop), Ok(_)) => Err(runloop),
+        (Err(runloop), Err(audio)) => Err(ChildRuntimeError::RunloopAndAudioFailed {
+            runloop: Box::new(runloop),
+            audio: Box::new(audio),
+        }),
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -321,7 +364,9 @@ fn set_audio_thread_qos() {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::panic::{catch_unwind, AssertUnwindSafe};
     use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc;
 
     #[test]
     fn service_stop_sets_audio_stop_flag() {
@@ -336,6 +381,105 @@ mod tests {
         coordinator.audio_done.store(true, Ordering::Release);
         assert!(coordinator.should_stop(false));
         assert!(coordinator.stop_audio.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn spawned_audio_completion_signals_coordinator_and_requests_stop() {
+        let coordinator = StopCoordinator::new();
+        let handle = spawn_audio("runtime-test", coordinator.audio_done.clone(), || ())
+            .expect("spawn audio");
+
+        join_audio(handle).expect("join audio");
+
+        assert!(coordinator.audio_done.load(Ordering::Acquire));
+        assert!(coordinator.should_stop(false));
+        assert!(coordinator.stop_audio.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn audio_panic_is_reported_by_join() {
+        let handle = spawn_audio("runtime-test", Arc::new(AtomicBool::new(false)), || {
+            panic!("plugin process panic")
+        })
+        .expect("spawn audio");
+
+        let error = join_audio(handle).expect_err("audio panic must fail join");
+        assert!(matches!(
+            error,
+            ChildRuntimeError::AudioPanicked(message) if message == "plugin process panic"
+        ));
+    }
+
+    #[test]
+    fn panic_payload_extracts_borrowed_string() {
+        assert_eq!(panic_payload(Box::new("borrowed panic")), "borrowed panic");
+    }
+
+    #[test]
+    fn panic_payload_extracts_owned_string() {
+        assert_eq!(
+            panic_payload(Box::new(String::from("owned panic"))),
+            "owned panic"
+        );
+    }
+
+    #[test]
+    fn panic_payload_reports_non_string_fallback() {
+        assert_eq!(panic_payload(Box::new(42)), "non-string panic payload");
+    }
+
+    #[test]
+    fn simultaneous_runloop_and_audio_failures_report_both_diagnostics() {
+        let result: Result<(), ChildRuntimeError> = run_child_with_main_loop(
+            "runtime-test",
+            || false,
+            |_stop| panic!("plugin process panic"),
+            |_coordinator, _service_main| Err(ChildRuntimeError::ServicePanicked),
+        );
+
+        let error = result.expect_err("both failures must be reported");
+        assert!(matches!(
+            &error,
+            ChildRuntimeError::RunloopAndAudioFailed { runloop, audio }
+                if matches!(runloop.as_ref(), ChildRuntimeError::ServicePanicked)
+                    && matches!(
+                        audio.as_ref(),
+                        ChildRuntimeError::AudioPanicked(message)
+                            if message == "plugin process panic"
+                    )
+        ));
+        assert_eq!(
+            error.to_string(),
+            "main-runloop service callback panicked; audio thread also failed: \
+             dedicated audio thread panicked: plugin process panic"
+        );
+    }
+
+    #[test]
+    fn main_loop_panic_still_requests_audio_stop() {
+        let (audio_stopped_tx, audio_stopped_rx) = mpsc::channel();
+
+        let panic_result = catch_unwind(AssertUnwindSafe(|| {
+            let result: Result<(), ChildRuntimeError> = run_child_with_main_loop(
+                "runtime-test",
+                || false,
+                move |stop| {
+                    while !stop.load(Ordering::Acquire) {
+                        thread::yield_now();
+                    }
+                    audio_stopped_tx
+                        .send(())
+                        .expect("test receiver remains alive");
+                },
+                |_coordinator, _service_main| panic!("main loop setup panic"),
+            );
+            let _ = result;
+        }));
+
+        assert!(panic_result.is_err());
+        audio_stopped_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("RAII guard must stop detached audio thread during unwind");
     }
 
     #[test]

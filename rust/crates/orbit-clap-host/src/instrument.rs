@@ -14,7 +14,7 @@
 //! ため**意図的に leak する**。したがってフィールド宣言順で `plugin` を `_instance` より**前**に置くことが
 //! load-bearing: `plugin` の Arc が先に落ちて `_instance` が唯一所有者になり、`_instance` drop で teardown が
 //! 実際に走る。**逆順にすると** `_instance` drop 時に refcount>1 で leak し、`plugin` drop でも teardown が
-//! 走らず**未 deactivate のままリーク**する（クラッシュでなく silent leak = smoke/parity では順序が逆でも
+//! 走らず**永久 leak（teardown はどのスレッドでも一切走らない）**になる（smoke/parity では順序が逆でも
 //! 緑なので、この宣言順を守る唯一のガードが本コメント）。本型は home == audio == 唯一スレッドなので teardown
 //! は単一スレッドで完結し、daemon の split-thread（`ClapTeardownGuard` で跨ぐ）wrong-thread 問題を sidestep する。
 //!
@@ -163,6 +163,7 @@ impl ClapInstrumentProcessor {
     /// 意味論・teardown の順序契約は [`crate::ClapEffectProcessor::split`] と同一
     /// （audio 側の [`ClapInstrumentAudio::drop`] → main が join →
     /// [`ClapPluginMain`] drop = 唯一所有者として home スレッドで実 teardown）。
+    /// 逆順の帰結も同じく **永久 leak（teardown はどのスレッドでも一切走らない）**。
     pub fn split(self) -> (ClapInstrumentAudio, ClapPluginMain) {
         let Self {
             plugin,

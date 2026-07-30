@@ -208,8 +208,14 @@ teardown 順序を**フィールド宣言順の暗黙依存**に戻していた�
 #### 申し送り
 
 - 🔴 **AppKit 初期化コスト 約 34ms/spawn**（上記ポリシー4）。**[#590](https://github.com/signalcompose/orbitscore/issues/590)** で切り分ける
-- **NSTimer が default runloop mode のみ** → **P3 で NSWindow のドラッグ/リサイズ中に
-  mailbox servicing が止まる**。`NSRunLoopCommonModes` へ（P1 ではウィンドウが無いので影響なし）
+- ~~NSTimer が default runloop mode のみ → P3 で `NSRunLoopCommonModes` へ~~ →
+  🔴 **これは main の誤記だった。訂正する。**
+  **初回コミット `0dbd31b` の時点から `NSRunLoop::mainRunLoop().addTimer_forMode(&timer,
+  NSRunLoopCommonModes)`（`orbit-child-runtime/src/lib.rs:284`）で登録済み**であり、
+  **ウィンドウのドラッグ/リサイズ中も mailbox servicing は止まらない。**
+  設計時の申し送りを**実装で裏取りせずに転記した**もので、
+  そのままなら **P3 の担当者に存在しない作業項目**を残していた
+  （`/code:pr-review-team` の code-reviewer が発見）
 - 4 child の `service_main` closure 共通化は本PRでは見送る。共通helperの置き場は
   `orbit-audio-sandbox` になる一方、`orbit-child-runtime` はAppKit/thread primitiveに限定して
   sandboxへ依存しない設計であり、P2以降でchild固有の分岐も増え得るため、follow-upで再評価する

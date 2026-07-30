@@ -250,9 +250,18 @@ LOAD_STATE:
   4 child とも audio slot 処理は専用 audio スレッド、`SAVE_STATE` を含む command mailbox は
   `NSApplication` main runloop のタイマーで処理する。サイドカーの書き込み・`fsync` が main
   スレッドをブロックしても audio slot の前進を止めない構造になった。
-  **ただし、従来の「host は演奏停止中にのみ `SAVE_STATE` を発行すること」という暫定 MUST は、
-  #474 P1 の実機 gated（4経路の音・capture drops==0・演奏中 SAVE_STATE・roundtrip）が green に
-  なるまで release gate として維持する。実測 green 後にこの MUST を解除し、演奏中の発行を許可する。**
+  #474 P1 の実機 gated は green:
+  - レイテンシは4回実測の最悪値でも要求（margin >10x）に対して **margin 49.9x**、
+    `kill にフォールバック` は0件
+  - 実機4経路は **effect 4+4 / instrument 3+3**、`capture drops == 0`
+  - 演奏中 `SAVE_STATE` は `save_during_playback.rs` が **1 passed**、state roundtrip も green
+
+  これにより、従来の「host は演奏停止中にのみ `SAVE_STATE` を発行すること」という
+  **暫定 MUST を解除し、演奏中の発行を許可する**。
+  規格上も VST3 `IComponent::getState` は
+  **`[UI-thread & (Initialized | Connected | Setup Done | Activated | Processing)]`**
+  （VST3 SDK `ivstcomponent.h:203`）であり、Processing 中の main/UI スレッドからの state
+  取得が明示的に許可されている。これを演奏中保存の VST3 規格根拠とする。
   host 側発行経路は `CommandMailboxHost` として実装済み（#562）。watchdog respawn は
   `CommandMailboxHost::reset_after_child_exit` を effect / instrument の両 supervisor と
   初回 attach の3経路から呼ぶ
