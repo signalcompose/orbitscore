@@ -41,10 +41,10 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 - **新 crate `orbit-child-runtime`**: `run_child(name, service_main, audio)` —
   main = NSApplication runloop（**Accessory**・拒否時 fail-loud）+ NSTimer 20ms tick で
   mailbox/ParentWatch/QUIT を servicing、audio = 専用スレッド（QoS user-interactive）
-- **processor の main/audio 分割**: CLAP は `split() -> (XxxAudio, XxxMain)`
+- **processor の main/audio 分割**: CLAP は `split() -> (XxxAudio, ClapPluginMain)`
   （audio 半分 = `StartedPluginAudioProcessor`・**clack が Send を公式サポート**）。
   VST3 は monolith を `Vst3EffectAudio` / `Vst3InstrumentAudio` + 共有 `Vst3PluginMain` へ再構成
-- teardown 契約: audio スレッドで stop_processing → join → main 半分 drop
+- teardown 契約: audio 半分の `Drop` で stop_processing → join → main 半分 drop
   （**唯一の Arc 所有者として home スレッドで deactivate/destroy**）
 - 依存追加は **`objc2-app-kit` 1 crate のみ**（`objc2` 本体は clack-host 経由で既に graph に居た）
 
@@ -78,11 +78,47 @@ P1（修正前）:                   507.70us margin 1.3x    🔴
 `postEvent_atStart(..., true)` で post**（Cocoa の定石）。
 
 ```
-修正後: [32f] 6.32us margin 105.6x / [64f] 100.7x / [128f] 133.4x   ✅
-        `kill にフォールバック` の行: 0 件                          ✅
+修正後（32f を4回実測）: 6.80 / 12.88 / 13.12 / 13.36us
+                       → margin 98.1 / 51.7 / 50.8 / 49.9x   ✅（要求 >10x）
+        `kill にフォールバック` の行: 0 件                     ✅
 ```
 
+🔴 **約2倍のばらつきがある。** これは `/simplify` の Efficiency が特定した
+**AppKit 起動の固定コスト（約 34ms/spawn）が 4000 blocks で割られて per-block に混入**する
+ためで、**per-block の steady-state ではない**（32f と 64f がほぼ同値に張り付くのが signature）。
+**最悪でも margin 49.9x で要求 10x を大きく超える**のでゲートの合否は揺らがないが、
+**単発測定を代表値として扱わない**（初出時に 6.32us を代表値として記録したのは誤り）。
+
 **2つ目は診断が自ら挙げた反証条件**（消えなければ仮説が誤り）。**予測どおり消えた。**
+
+#### 🔴 AppKit 初期化の固定コストは残る（本PRでは修正せず follow-up）
+
+review 時の同一マシン A/B では、修正後も frame 数に比例しない固定コストが残った:
+
+| frames | main（対照） | PR #589 |
+|---|---:|---:|
+| 32f | 3.87〜3.97us | **12.49us** |
+| 64f | 5.86〜5.87us | **12.49us** |
+| 128f | 9.80〜10.33us | **16.19〜21.15us** |
+
+32f / 64f が同じ値に張り付く形から、audio hot loop の per-block 退行ではなく、
+4000 blocks で割られた **約34ms / child起動**の固定コストと読める。実際、PR branch の
+child は spawn ごとに次を stderr へ出し、main 対照では一度も出なかった:
+
+```text
+Connection Invalid error for service com.apple.hiservices-xpcservice.
+Error received in message reply handler: Connection invalid
+```
+
+`NSApplication.sharedApplication()` を Info.plist / bundle context のないコマンドライン
+バイナリから呼んだため、WindowServer / HIServices の XPC handshake が失敗している可能性がある。
+ただし計測環境は GUI login session を持たず、**実 daemon からログイン済みdesktop上で spawn
+した場合も同じかは未検証**。#573 の respawn backoff 直後であり、respawn ごとに約30〜34ms
+を再度払う点は無視しない。
+
+本PRでは AppKit 初期化を変更しない。follow-up で Info.plist / `LSUIElement` / bundle context を
+切り分け、最小bundle情報でXPC失敗を正常化または抑制できるかを調べる。#474 P3で実際にwindowを
+開く時にも32f / 64f / 128fを再測定する（UI利用によりXPCが正常化して消える可能性がある）。
 
 #### 検証（すべて main が sandbox 外で実行）
 
@@ -116,10 +152,67 @@ owner 指示で実装を Fable → Codex に切り替えた際、main が**停�
 → **切り替え時は `ps` でプロセス数ゼロを実測してから次を起動する。**
 **ack は自己申告。信用の順は「プロセスの消滅」＞「ack」。**
 
+#### `/simplify`（4観点）— 4つの横断ポリシーに集約して一括適用
+
+**指摘単位のローカルパッチはしない**（PR #585 でそれをやって欠陥を2つ作った）。
+**塊の中の非対称性を問う**。
+
+| ポリシー | 内容 |
+|---|---|
+| **1（最重要）** | **VST3 composite 型に明示 `impl Drop` を戻す** |
+| **2** | **teardown の表現を `Drop` 1本に統一**（4 child で揃える） |
+| **3** | `ClapPluginMain` へ統合 + テストヘルパーを `tests/common/mod.rs` へ |
+| **4** | AppKit 初期化コストは本 PR では直さず**記録して follow-up** |
+
+##### 🔴 ポリシー1: PR 前の決定を無言で覆していた
+
+`Vst3EffectProcessor` / `Vst3InstrumentProcessor`（composite・**`offline.rs` の全テストが使う経路**）が、
+teardown 順序を**フィールド宣言順の暗黙依存**に戻していた。
+
+**PR 前のコードは同じ問題に一度答えを出していた**:
+
+> Shutdown call order ... is enforced by the hand-written `Drop::drop` body below via
+> explicit `.take()` calls, **not by field declaration order**
+
+並べ替えてもコンパイラは警告せず、**`terminate()` が `setProcessing(0)` より先に呼ばれる**
+（サードパーティ VST3 でクラッシュ / 未 deactivate リークを誘発しうるホスト契約違反）。
+ガードはコメントだけで、テストも static assertion も無かった。
+
+**対比**: 同じ PR の `split()` 後の経路は、**借用チェッカーが型システムで強制**している
+（`effect_main` を借用させ、`run_child` が必ず join してから返る）。
+**構造で守る例とコメントで守る例が同居していた。**
+
+##### 🔴 ポリシー4: 1.5倍レイテンシの正体は audio hot loop ではなかった（A/B 実測）
+
+| frames | main（対照） | PR #589 |
+|---|---|---|
+| 32f | 3.87〜3.97us | **12.49us** |
+| 64f | 5.86〜5.87us | **12.49us** |
+| 128f | 9.80〜10.33us | 16.19〜21.15us |
+
+**main は frame 数に比例して伸びるのに、PR は 32f と 64f が同一値に張り付く**
+= per-block ではなく**固定コスト**（約 **34ms / プロセス起動**）。
+
+**決定的な傍証**: PR ブランチの child は spawn のたびに
+`Connection Invalid error for service com.apple.hiservices-xpcservice` を stderr へ出す
+（**main では一度も出ない**）。**Info.plist を持たないコマンドラインバイナリから
+`NSApplication.sharedApplication()` を呼んだ**ため。
+
+**audio スレッド自体はむしろ軽くなっている** — 旧実装は mailbox・ParentWatch のチェックを
+**audio の busy-spin で毎秒数百万回**やっていたのが 20ms tick へ移った。
+純増は `stop_audio` の Relaxed 1 load のみ。
+
+🔴 **#573（respawn backoff）の直後なので無視できない** — **respawn ごとに約 30ms を払う**。
+→ **[#590](https://github.com/signalcompose/orbitscore/issues/590)**（XPC 失敗の切り分け: Info.plist 不在 / `LSUIElement` 未設定 / bundle context 不在）。
+
 #### 申し送り
 
+- 🔴 **AppKit 初期化コスト 約 34ms/spawn**（上記ポリシー4）。**[#590](https://github.com/signalcompose/orbitscore/issues/590)** で切り分ける
 - **NSTimer が default runloop mode のみ** → **P3 で NSWindow のドラッグ/リサイズ中に
   mailbox servicing が止まる**。`NSRunLoopCommonModes` へ（P1 ではウィンドウが無いので影響なし）
+- 4 child の `service_main` closure 共通化は本PRでは見送る。共通helperの置き場は
+  `orbit-audio-sandbox` になる一方、`orbit-child-runtime` はAppKit/thread primitiveに限定して
+  sandboxへ依存しない設計であり、P2以降でchild固有の分岐も増え得るため、follow-upで再評価する
 - CLAP `call_on_main_thread_callback` の pump は未実装（既存の documented gap・P3 で必要になりうる）
 - **P1 完了により UIH.3 の「停止中のみ SAVE_STATE」MUST が外れ、#577 PR-B が本来形
   （演奏中保存）で実装可能**になった

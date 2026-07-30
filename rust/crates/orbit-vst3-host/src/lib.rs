@@ -422,7 +422,7 @@ impl Drop for CfUrl {
 /// `setProcessing(0)` は audio 側（[`Vst3EffectAudio`] / [`Vst3InstrumentAudio`]）の `Drop` が
 /// 担うため、**audio 側が先に drop されていなければならない**:
 /// - 未分割の composite（[`Vst3EffectProcessor`] / [`Vst3InstrumentProcessor`]）では
-///   フィールド宣言順（audio が main より前）がこれを強制する
+///   hand-written `Drop::drop` の明示的な `.take()` 列がこれを強制する
 /// - 分割後（`split()`）は、main スレッドが **audio スレッドを join してから**本型を drop
 ///   することで強制する（`orbit-child-runtime` の関数構造がこの順序を持つ）
 ///
@@ -522,7 +522,7 @@ pub struct Vst3EffectAudio {
 // host 側 COM スタブ（`ParameterChanges` / `EventList`）は move 後は所有スレッドだけが触る
 // （`thread::spawn` の引き渡しが happens-before を確立する）。加えて正しさは
 // [`Vst3PluginMain`] に記した teardown 順序（audio 側の `setProcessing(0)` が main 側の
-// terminate 列より先）に依存する — composite ではフィールド順、分割 child では
+// terminate 列より先）に依存する — composite では明示 `Drop`、分割 child では
 // 「join してから main 側を drop」の関数構造が強制する。
 unsafe impl Send for Vst3EffectAudio {}
 
@@ -537,11 +537,12 @@ impl Drop for Vst3EffectAudio {
 /// Single-threaded-by-default VST3 effect processor: [`Vst3EffectAudio`] + [`Vst3PluginMain`]
 /// の composite。`load` したスレッド上でそのまま使う（従来 API 互換）か、`split()` で
 /// main / audio の 2 スレッド運用（UIH.1）へ分割する。
+///
+/// Shutdown call order is enforced by the hand-written [`Drop::drop`] body below via explicit
+/// `.take()` calls, not by field declaration order.
 pub struct Vst3EffectProcessor {
-    /// 🔴 宣言順 = drop 順: audio（`setProcessing(0)`）が main の teardown 列より先。
-    /// モノリシック時代の明示的 `Drop::drop` と同じ shutdown 順序をフィールド順で再現する。
-    audio: Vst3EffectAudio,
-    main: Vst3PluginMain,
+    audio: Option<Vst3EffectAudio>,
+    main: Option<Vst3PluginMain>,
 }
 
 impl Vst3EffectProcessor {
@@ -656,7 +657,7 @@ impl Vst3EffectProcessor {
 
         let scratch_len = max_samples_per_block.max(0) as usize;
         let processor = Self {
-            audio: Vst3EffectAudio {
+            audio: Some(Vst3EffectAudio {
                 processor,
                 is_effect: info.is_effect,
                 sample_rate,
@@ -669,8 +670,8 @@ impl Vst3EffectProcessor {
                 process_input_r: vec![0.0; scratch_len],
                 process_output_l: vec![0.0; scratch_len],
                 process_output_r: vec![0.0; scratch_len],
-            },
-            main: Vst3PluginMain {
+            }),
+            main: Some(Vst3PluginMain {
                 controller: controller_handshake.controller,
                 component_connection: controller_handshake.component_connection,
                 controller_connection: controller_handshake.controller_connection,
@@ -681,7 +682,7 @@ impl Vst3EffectProcessor {
                 _home_thread: PhantomData,
                 _library: library,
                 info: info.clone(),
-            },
+            }),
         };
         Ok((processor, info))
     }
@@ -690,17 +691,26 @@ impl Vst3EffectProcessor {
     ///
     /// teardown の順序契約（audio 側 drop = `setProcessing(0)` → join →
     /// [`Vst3PluginMain`] drop = terminate 列）は [`Vst3PluginMain`] の doc を参照。
-    pub fn split(self) -> (Vst3EffectAudio, Vst3PluginMain) {
-        (self.audio, self.main)
+    pub fn split(mut self) -> (Vst3EffectAudio, Vst3PluginMain) {
+        (
+            self.audio.take().expect("VST3 effect audio is present"),
+            self.main.take().expect("VST3 effect main is present"),
+        )
     }
 
     /// 現在の effect component state を取得する。instrument と同じ空-state拒否規律を使う。
     pub fn capture_state(&self) -> Result<Vec<u8>, Vst3HostError> {
-        self.main.capture_state()
+        self.main
+            .as_ref()
+            .expect("VST3 effect main is present")
+            .capture_state()
     }
 
     pub fn info(&self) -> &LoadedVst3Info {
-        self.main.info()
+        self.main
+            .as_ref()
+            .expect("VST3 effect main is present")
+            .info()
     }
 
     pub fn process_stereo(
@@ -712,6 +722,8 @@ impl Vst3EffectProcessor {
         gain: Option<f64>,
     ) -> Result<ProcessReport, Vst3HostError> {
         self.audio
+            .as_mut()
+            .expect("VST3 effect audio is present")
             .process_stereo(input_l, input_r, output_l, output_r, gain)
     }
 
@@ -719,7 +731,18 @@ impl Vst3EffectProcessor {
     /// （[`Vst3EffectAudio::process_block`] へ委譲）。
     #[must_use]
     pub fn process_block(&mut self, data: &mut [f32]) -> bool {
-        self.audio.process_block(data)
+        self.audio
+            .as_mut()
+            .expect("VST3 effect audio is present")
+            .process_block(data)
+    }
+}
+
+impl Drop for Vst3EffectProcessor {
+    fn drop(&mut self) {
+        // Shutdown order is explicit and independent of field declaration order.
+        let _ = self.audio.take();
+        let _ = self.main.take();
     }
 }
 
@@ -954,7 +977,7 @@ pub struct Vst3InstrumentAudio {
 
 // SAFETY: [`Vst3EffectAudio`] の SAFETY コメントと同一の根拠（VST3 の audio スレッド駆動は
 // 正準モデル・COM 参照カウントはスレッド安全・host 側 COM スタブは move 後single-thread 使用・
-// teardown 順序は composite のフィールド順 / 分割 child の join-then-drop が強制）。
+// teardown 順序は composite の明示 `Drop` / 分割 child の join-then-drop が強制）。
 unsafe impl Send for Vst3InstrumentAudio {}
 
 impl Drop for Vst3InstrumentAudio {
@@ -967,10 +990,12 @@ impl Drop for Vst3InstrumentAudio {
 
 /// Single-threaded-by-default VST3 instrument processor: [`Vst3InstrumentAudio`] +
 /// [`Vst3PluginMain`] の composite（構成・分割・teardown 契約は [`Vst3EffectProcessor`] と対称）。
+///
+/// Shutdown call order is enforced by the hand-written [`Drop::drop`] body below via explicit
+/// `.take()` calls, not by field declaration order.
 pub struct Vst3InstrumentProcessor {
-    /// 🔴 宣言順 = drop 順: audio（`setProcessing(0)`）が main の teardown 列より先。
-    audio: Vst3InstrumentAudio,
-    main: Vst3PluginMain,
+    audio: Option<Vst3InstrumentAudio>,
+    main: Option<Vst3PluginMain>,
 }
 
 /// #540 P2: 保存済み state を component / controller へ復元する（`.vstpreset` container と
@@ -1031,7 +1056,10 @@ impl Vst3InstrumentProcessor {
     /// `getState` が失敗した、または空を返した場合は `Err` を返す — **空 state を
     /// 「成功」として上位へ渡さない**（サイズ 0 を登記すると音色を失う）。
     pub fn capture_state(&self) -> Result<Vec<u8>, Vst3HostError> {
-        self.main.capture_state()
+        self.main
+            .as_ref()
+            .expect("VST3 instrument main is present")
+            .capture_state()
     }
 
     pub fn load(
@@ -1148,7 +1176,7 @@ impl Vst3InstrumentProcessor {
         let scratch_len = max_samples_per_block.max(0) as usize;
         Ok((
             Self {
-                audio: Vst3InstrumentAudio {
+                audio: Some(Vst3InstrumentAudio {
                     processor,
                     input_events: InputEventList::new(),
                     output_parameter_changes: ParameterChanges::empty(),
@@ -1156,8 +1184,8 @@ impl Vst3InstrumentProcessor {
                     process_output_l: vec![0.0; scratch_len],
                     process_output_r: vec![0.0; scratch_len],
                     last_process_error: std::cell::Cell::new(0),
-                },
-                main: Vst3PluginMain {
+                }),
+                main: Some(Vst3PluginMain {
                     controller: controller_handshake.controller,
                     component_connection: controller_handshake.component_connection,
                     controller_connection: controller_handshake.controller_connection,
@@ -1168,36 +1196,49 @@ impl Vst3InstrumentProcessor {
                     _home_thread: PhantomData,
                     _library: library,
                     info: info.clone(),
-                },
+                }),
             },
             info,
         ))
     }
 
     pub fn info(&self) -> &LoadedVst3Info {
-        self.main.info()
+        self.main
+            .as_ref()
+            .expect("VST3 instrument main is present")
+            .info()
     }
 
     /// main / audio の 2 スレッド運用（UIH.1）へ分割する（#474 P1）。
     /// 順序契約は [`Vst3EffectProcessor::split`] と同一。
-    pub fn split(self) -> (Vst3InstrumentAudio, Vst3PluginMain) {
-        (self.audio, self.main)
+    pub fn split(mut self) -> (Vst3InstrumentAudio, Vst3PluginMain) {
+        (
+            self.audio.take().expect("VST3 instrument audio is present"),
+            self.main.take().expect("VST3 instrument main is present"),
+        )
     }
 
     /// Raw tresult of the most recent failing `process()` call (0 / `kResultOk` if none since
     /// construction). Intended for out-of-band error reporting (e.g. child process exit summary),
     /// not for the audio-thread hot path.
     pub fn last_process_error(&self) -> i32 {
-        self.audio.last_process_error()
+        self.audio
+            .as_ref()
+            .expect("VST3 instrument audio is present")
+            .last_process_error()
     }
 
     pub fn push_note_on(&self, channel: i16, pitch: i16, velocity: f32, sample_offset: i32) {
         self.audio
+            .as_ref()
+            .expect("VST3 instrument audio is present")
             .push_note_on(channel, pitch, velocity, sample_offset);
     }
 
     pub fn push_note_off(&self, channel: i16, pitch: i16, velocity: f32, sample_offset: i32) {
         self.audio
+            .as_ref()
+            .expect("VST3 instrument audio is present")
             .push_note_off(channel, pitch, velocity, sample_offset);
     }
 
@@ -1206,7 +1247,18 @@ impl Vst3InstrumentProcessor {
     /// （[`Vst3InstrumentAudio::process_block`] へ委譲）。
     #[must_use]
     pub fn process_block(&mut self, data: &mut [f32]) -> bool {
-        self.audio.process_block(data)
+        self.audio
+            .as_mut()
+            .expect("VST3 instrument audio is present")
+            .process_block(data)
+    }
+}
+
+impl Drop for Vst3InstrumentProcessor {
+    fn drop(&mut self) {
+        // Shutdown order is explicit and independent of field declaration order.
+        let _ = self.audio.take();
+        let _ = self.main.take();
     }
 }
 

@@ -166,7 +166,7 @@ fn main() -> Result<()> {
                 }
                 last = cur;
             }
-            effect_audio.stop_processing();
+            // ClapEffectAudio::drop runs stop_processing on this audio thread.
             process_errors
         },
     )?;

@@ -25,19 +25,19 @@
 #![cfg(target_os = "macos")]
 #![allow(unsafe_code)]
 
-use std::path::{Path, PathBuf};
+mod common;
+
+use std::path::Path;
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use orbit_audio_sandbox::transport::CHILD_STATUS_READY;
+use common::{unique_temp, wait_for_ready, ChildGuard};
 use orbit_audio_sandbox::{
     create_shared, region_ptr, CommandMailboxHost, PipelinedInstrumentHost, SharedRegion,
-    TransportContext, CHANNELS, CONTROL_QUIT,
+    TransportContext, CHANNELS,
 };
-
-static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// 復元させる半音オフセット。既定値 0 と違う値にして「保存が現在 state を見ている」ことを
 /// 内容で判定できるようにする（mailbox_wiring と同じ規律）。
@@ -52,11 +52,6 @@ const STATE_DELAY_MS: u64 = 500;
 /// 前進量はパイプライン深さ（`SLOTS` = 一桁）+ コマンド拾い上げ前の数ブロックに留まる。
 /// 新モデルでは free-running submit で数千ブロック前進する。64 はその間の安全余裕。
 const MIN_BLOCKS_DURING_SAVE: u64 = 64;
-
-fn unique_temp(prefix: &str) -> PathBuf {
-    let id = SHM_SEQ.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("{prefix}-{}-{id}", std::process::id()))
-}
 
 /// panic（assert 失敗）による unwind でも補助スレッドを join してから先へ進めるガード。
 ///
@@ -105,51 +100,6 @@ impl<T> Drop for JoinOnDrop<T> {
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
-    }
-}
-
-/// child が exit するまで面倒を見る（テストが panic しても孤児を残さない）。
-/// mailbox_wiring.rs の同名 helper と同じもの（統合テストはファイル間で共有できないため重複）。
-struct ChildGuard {
-    child: Child,
-    region: *mut SharedRegion,
-    shm: PathBuf,
-}
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        unsafe {
-            (*self.region)
-                .control
-                .store(CONTROL_QUIT, Ordering::Release)
-        };
-        let deadline = Instant::now() + Duration::from_secs(5);
-        loop {
-            match self.child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if Instant::now() < deadline => std::hint::spin_loop(),
-                _ => {
-                    let _ = self.child.kill();
-                    let _ = self.child.wait();
-                    break;
-                }
-            }
-        }
-        let _ = std::fs::remove_file(&self.shm);
-    }
-}
-
-fn wait_for_ready(region: *mut SharedRegion, child: &mut Child) {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while unsafe { (*region).child_status.load(Ordering::Acquire) } != CHILD_STATUS_READY {
-        if let Ok(Some(status)) = child.try_wait() {
-            panic!("child が READY 前に終了した: {status}");
-        }
-        assert!(
-            Instant::now() < deadline,
-            "child が READY にならなかった（VST3 プラグインのロードに失敗した可能性）"
-        );
-        std::hint::spin_loop();
     }
 }
 

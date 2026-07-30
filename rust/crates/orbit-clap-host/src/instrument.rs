@@ -34,6 +34,7 @@ use crate::buffers::HostAudioBuffers;
 use crate::controller::{instantiate_activate, ClapHostError, LoadedPluginInfo};
 use crate::host::OrbitClapHost;
 use crate::processor::process_block_core;
+use crate::ClapPluginMain;
 
 /// 単一スレッドで load / process / drop する instrument CLAP プロセッサ。
 ///
@@ -160,9 +161,9 @@ impl ClapInstrumentProcessor {
     /// main / audio の 2 スレッド運用（UIH.1）へ分割する（#474 P1）。
     ///
     /// 意味論・teardown の順序契約は [`crate::ClapEffectProcessor::split`] と同一
-    /// （audio 側が [`ClapInstrumentAudio::stop_processing`] → main が join →
-    /// [`ClapInstrumentMain`] drop = 唯一所有者として home スレッドで実 teardown）。
-    pub fn split(self) -> (ClapInstrumentAudio, ClapInstrumentMain) {
+    /// （audio 側の [`ClapInstrumentAudio::drop`] → main が join →
+    /// [`ClapPluginMain`] drop = 唯一所有者として home スレッドで実 teardown）。
+    pub fn split(self) -> (ClapInstrumentAudio, ClapPluginMain) {
         let Self {
             plugin,
             buffers,
@@ -175,7 +176,7 @@ impl ClapInstrumentProcessor {
                 buffers,
                 steady,
             },
-            ClapInstrumentMain {
+            ClapPluginMain {
                 instance: _instance,
             },
         )
@@ -210,42 +211,14 @@ impl ClapInstrumentAudio {
             data,
         )
     }
-
-    /// audio スレッド上で `stop_processing` を呼んで audio 側を畳む
-    /// （契約は [`crate::ClapEffectAudio::stop_processing`] と同一）。
-    pub fn stop_processing(mut self) {
-        self.stop_processing_inner();
-    }
-
-    fn stop_processing_inner(&mut self) {
-        if let Some(plugin) = self.plugin.take() {
-            let _ = plugin.stop_processing();
-        }
-    }
 }
 
 impl Drop for ClapInstrumentAudio {
     fn drop(&mut self) {
         // Keep CLAP stop_processing on the audio thread during unwinding too.
-        self.stop_processing_inner();
-    }
-}
-
-/// [`ClapInstrumentProcessor::split`] の main（home）スレッド側（`!Send`・
-/// 順序契約は [`crate::ClapEffectMain`] と同一）。
-pub struct ClapInstrumentMain {
-    instance: PluginInstance<OrbitClapHost>,
-}
-
-impl ClapInstrumentMain {
-    /// 現在の plugin state をバイト列で取り出す（契約は [`crate::state::capture_state`]）。
-    pub fn capture_state(&mut self) -> Result<Vec<u8>, ClapHostError> {
-        crate::state::capture_state(&mut self.instance)
-    }
-
-    /// 保存済み state を適用する（契約は [`crate::state::apply_state_bytes`]）。
-    pub fn apply_state_bytes(&mut self, bytes: &[u8]) -> Result<(), ClapHostError> {
-        crate::state::apply_state_bytes(&mut self.instance, bytes)
+        if let Some(plugin) = self.plugin.take() {
+            let _ = plugin.stop_processing();
+        }
     }
 }
 

@@ -321,7 +321,7 @@ fn main() -> Result<()> {
                 }
                 last = cur.max(last);
             }
-            instrument_audio.stop_processing();
+            // ClapInstrumentAudio::drop runs stop_processing on this audio thread.
             process_errors
         },
     )?;
