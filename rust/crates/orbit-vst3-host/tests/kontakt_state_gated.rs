@@ -70,22 +70,17 @@ fn load_with_timeout(
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let started = Instant::now();
-        let outcome = Vst3InstrumentProcessor::load(
-            &bundle,
-            SAMPLE_RATE,
-            FRAMES,
-            state.as_deref(),
-        )
-        .map(|(processor, info)| {
-            // `info` を読んでから drop する。drop 自体が固まる経路も
-            // 測定対象なので、成功時も経過時間は送信後に測らない。
-            eprintln!(
-                "loaded: is_effect={} audio_outputs={}",
-                info.is_effect, info.audio_outputs
-            );
-            drop(processor);
-        })
-        .map_err(|error| error.to_string());
+        let outcome = Vst3InstrumentProcessor::load(&bundle, SAMPLE_RATE, FRAMES, state.as_deref())
+            .map(|(processor, info)| {
+                // `info` を読んでから drop する。drop 自体が固まる経路も
+                // 測定対象なので、成功時も経過時間は送信後に測らない。
+                eprintln!(
+                    "loaded: is_effect={} audio_outputs={}",
+                    info.is_effect, info.audio_outputs
+                );
+                drop(processor);
+            })
+            .map_err(|error| error.to_string());
         let _ = tx.send((started.elapsed(), outcome));
     });
     rx.recv_timeout(limit).ok()
@@ -116,8 +111,9 @@ fn kontakt_loads_with_saved_state() {
     let Some((bundle, state_path)) = gated_env() else {
         return;
     };
-    let bytes = std::fs::read(&state_path)
-        .unwrap_or_else(|error| panic!("state ファイルが読めない {}: {error}", state_path.display()));
+    let bytes = std::fs::read(&state_path).unwrap_or_else(|error| {
+        panic!("state ファイルが読めない {}: {error}", state_path.display())
+    });
     assert!(
         !bytes.is_empty(),
         "state ファイルが空 — 復元の検証にならない"
