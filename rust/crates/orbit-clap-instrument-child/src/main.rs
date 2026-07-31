@@ -206,6 +206,7 @@ fn main() -> Result<()> {
     let region_addr = region as usize;
     let process_errors = run_child(
         "orbit-clap-instrument-child",
+        || unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT,
         || {
             // Mailbox servicing is confined to the AppKit main runloop.
             unsafe {
@@ -215,9 +216,6 @@ fn main() -> Result<()> {
                     }
                     _ => None,
                 });
-            }
-            if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
-                return true;
             }
             if parent_watch.should_exit() {
                 eprintln!("[orbit-clap-instrument-child] 親プロセス死亡を検知、終了する");

@@ -111,15 +111,13 @@ fn main() -> Result<()> {
     let region_addr = region as usize;
     let process_errors = run_child(
         "orbit-vst3-effect-child",
+        || unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT,
         || {
             unsafe {
                 service_command_mailbox(region, |kind, arg| match kind {
                     CMD_SAVE_STATE => Some(save_state_command(arg, || effect_main.capture_state())),
                     _ => None,
                 });
-            }
-            if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
-                return true;
             }
             if parent_watch.should_exit() {
                 eprintln!("[orbit-vst3-effect-child] 親プロセス死亡を検知、終了する");

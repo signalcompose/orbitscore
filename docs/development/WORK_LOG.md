@@ -17,6 +17,222 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.342 feat(rust): #474 P3a — クローズ状態機械を AppKit 非依存の純 Rust で実装した (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474（P3a）/ **Branch**: `474-plugin-ui-p3-open-close`
+**Status**: `cargo test --workspace`（**sandbox 外**）= **440 passed / 0 failed**
+
+P3 は2分割した。**P3a = AppKit 非依存の純 Rust 部分**（変異検証で完結できる）。
+NSWindow / VST3・CLAP の GUI 呼び出しは **P3b**。設計正本が
+「UIH.8 の変異検証14項目の大半はこのモジュールのユニットテストで殺す」としているため、
+**AppKit を混ぜずに検証しきる**分割にした。
+
+fixer の新方針（Codex + `--effort xhigh`）の初適用。
+
+#### 実装
+
+- **新 crate `orbit-child-ui`**（576行・プラットフォーム依存ゼロ）:
+  `Closed → Open → Closing → Closed`。閉じる3経路（閉じるボタン / `CLOSE_UI` /
+  CLAP `closed()`）が**単一の `begin_close` 再入ガードに合流**する。
+  AppKit 呼び出しと evt 投函は `UiHostActions` trait で差し替え可能
+- **フェーズ B のトリガ** = `event_ack_seq() >= ui_closed_seq`。
+  「ring が進んだ」という汎用述語は使わない — **ack 41 は seq 42 の フェーズ B を発火できない**
+- **ドレーンゲート**（本日確定した仕様）= `Closed` かつ pending 0 かつ `evt_ack_seq == evt_seq` の
+  **3項の独立した連言**。初期 `Closed`（`0 == 0` かつ pending 0）は受理される
+- `EventRingChild::is_drained` を `transport.rs` に追加。**Ordering は型固定 API に委ね手書きしない**
+- `CMD_OPEN_UI` / `CMD_CLOSE_UI` の定数を追加（実配線は P3b）
+- **tick の `try_borrow_mut` 化**（P1 から持ち越したリスク）: nested runloop での再入時に
+  `BorrowMutError` → `catch_unwind` が「service panic」と誤認して **child 全体が停止**するのを防ぐ
+
+#### 🔴 tick スキップの観測手段は stderr（`tracing` が使えないため）
+
+main がブリーフで「**`tracing::warn!` は child プロセスでは no-op**（4 child とも `tracing` 依存すら
+無い・実測済み）なので観測手段を検討して報告せよ」と投げた点。
+
+Codex の回答は **child の stderr へ書く**（daemon が child の stderr を継承するので観測できる）。
+累積カウンタ `reentrant_tick_skip_count` と併せて `skipped_ticks=N` を出す。
+
+#### 🔴 main が実装中のモニタリングでオフバイワンを発見した
+
+6分時点で差分を読んだところ、フェーズ B のトリガが
+
+```rust
+actions.event_ack_seq() >= ui_closed_seq.saturating_sub(1)   // ← 誤り
+```
+
+になっていた。これは spec の「`evt_ack_seq >= UI_CLOSED を投函した evt_seq`」に反し、
+**`UI_CLOSED` の保存がまだ走っていないのに解放が先行する**（= セーフポイントのスキップ =
+音色の喪失）経路だった。
+
+**Codex が verifying の過程で自力修正**し、さらに**その変異を検証項目に加えた**。
+main も独立に同じ変異を当てて red を確認した（`left: Closed, right: Closing`）。
+
+**状態だけを見ていたら気づけなかった。** [[monitor-codex-yourself]] の実証。
+
+#### 変異検証: 9種（要求5種を上回る）
+
+🔴 **各変異が別々のアサーションで red** になっており、検出力の所在が特定できている:
+
+| 変異 | 落ちたアサーション |
+|---|---|
+| フェーズ B を `-1` | `left: Closed, right: Closing` |
+| `state == Closed` を削除 | `!duplicate_open.success` |
+| ドレーン述語を削除 | `!reopen_while_done_unacked.success` |
+| `is_drained` が pending を無視 | `pending_count != 0 must close the drain gate...` |
+| `is_drained` が cursor 等価を無視 | `evt_ack_seq != evt_seq must close...` |
+| 再入ガード削除 | `left: Started, right: AlreadyClosing` |
+| 重複 `CLOSE_UI` が failure | `duplicate_close.success` |
+| `try_borrow_mut` → `borrow_mut` | `RefCell already borrowed` |
+| タイムアウト無効化 | `left: Closing, right: Closed` |
+
+main は当初「**テスト関数が1つしかない**」ことを懸念したが、**見るべきはテスト関数の数ではなく
+アサーションの粒度**だった。ドレーンゲートの3連言が個別に殺されているのは、
+P2 で問題になった「片方向だけの変異」より強い。
+
+#### 🔴 workspace テストが1回目に落ちたが、環境起因だった
+
+初回 `cargo test --workspace`（sandbox 外）で 1 failed:
+
+```
+orbit-vst3-host: process_block_rejects_frames_exceeding_scratch
+failed to load oracle bundle .../GainOracle.vst3: missing symbol: GetPluginFactory
+```
+
+**P3a は `orbit-vst3-host` を触っていない。** 切り分けた結果:
+
+- フィクスチャのシンボルは**現在は存在する**（`_GetPluginFactory`）・ファイルは失敗後に再生成
+- **単独実行 ×3 はすべて 11 passed**
+- **workspace 再実行は 440 passed / 0 failed**
+
+Codex が変異検証で `cargo clean -p` を繰り返した結果、**VST3 フィクスチャの再生成と使用が
+競合**したもの。実装起因ではない。
+
+#### レビューラウンド1（PR #594）と fix R1
+
+Fable 監査 + code-reviewer + silent-failure-hunter + comment-analyzer の4本。**Critical 1件**:
+
+> `/simplify` で入れた tick の `try_borrow_mut` 化が、**再入中に `CONTROL_QUIT` を検査しない**
+> 状態を作っていた。host は `CONTROL_QUIT` の **2秒後に無条件 SIGKILL**（`REAP_TIMEOUT`）する
+> ため、close handshake も `CMD_SAVE_STATE` も飛ぶ。「速い loud failure」を
+> 「**無音の停滞**」に置き換えた形になっていた。
+
+修正は `try_call_main_service` に `should_quit` 述語を追加し、**借用の取得より前に評価**する。
+再入時も `Err(_) if quit_requested => Ok(true)` で通常の停止手続きへ合流させる。
+4 child が `(*region).control.load(Relaxed) == CONTROL_QUIT` を渡す。
+
+**ログを足すだけの対処にしないこと**をブリーフで明示した。観測できるようにする修正ではなく、
+**機能を止めない**修正が要る場面だった。
+
+#### 🔴 Codex が68分停滞し、必須変異2件が未実行だった
+
+Codex は12種類の変異（drain の3連言・phase B・reentry guard・close ack・timeout）を
+red/green ペアで回した後、**11:44 を最後に68分無活動**。status は最後まで `verifying` を表示。
+**状態でなく中身を見ていたから気づけた**（ログの mtime と cargo プロセスの不在）。
+
+回した12件はすべて **P3a 既存テストの再検証**で、**fix R1 の新規テスト2件を殺した変異が1件も無かった**。
+検証は main の担当なので、キャンセルして main が実行:
+
+| 変異 | 殺したテスト | 結果 |
+|---|---|---|
+| 再入時の `Err(_) if quit_requested` 分岐を削除 | `reentrant_main_service_tick_still_observes_teardown_request` | 12 passed / 1 failed |
+| `Err` でも `MachineState::Open` へ遷移 | `open_failure_preserves_closed_state_and_propagates_detail` | 1 passed / 1 failed |
+| `detail` を固定文言にすり替え | 同上（`left: "ui open failed"` / `right: "plugin editor creation failed"`） | 1 passed / 1 failed |
+
+3件とも狙ったテストだけが red。復元は `cmp` で一致確認。復元後 workspace **442 passed / 0 failed**。
+
+#### 🔴 fix A は半分しか塞いでいない（→ P3b の完了条件）
+
+main の受け入れ検証で発見。`ParentWatch::should_exit`（orphan 対策 #448）は
+**`service_main` クロージャの内側**にあるため、再入 tick では評価されない。
+`CONTROL_QUIT` は fix A で救われたが、**親が `CONTROL_QUIT` を書かずに死ぬ経路は救われていない**。
+
+到達可能性を列挙で確認した結果、**現時点では production で起こらない**:
+
+| 列挙 | 結果 |
+|---|---|
+| `impl UiHostActions` | `MockActions` のみ（テスト） |
+| `CMD_OPEN_UI` | 定数と re-export のみ・ハンドラ無し |
+| `NSWindow` | workspace 全体で 0 ファイル |
+
+ウィンドウが無いので modal sheet / live resize が存在せず、再入 tick 自体が起きない。
+**実害が出るのは P3b から**なので P3a では直さず、**`UiHostActions` の
+`# P3b adapter requirements` に義務として書き込んだ**（先送りの回収先を、P3b 実装者が
+必ず読む場所に固定する）。
+
+**変更ファイル**: `rust/crates/orbit-child-ui/`（新規）/ `transport.rs` / `orbit-child-runtime/src/lib.rs` /
+`orbit-audio-sandbox/src/lib.rs` / 4 child の `main.rs` / `Cargo.toml` / `Cargo.lock`
+
+**Commit**: PR #594（#474 P3a）
+
+---
+
+### 6.341 docs(spec): #474 P3 の spec 先行 — `Closed` の語義をドレーン条件で確定した (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474（P3 の spec 先行）/ **Branch**: `474-plugin-ui-p3-open-close`
+**Status**: spec のみ（コード変更なし）
+
+P2 で「P3 で確定させる」と登記した曖昧点を、**P3 の状態機械を書く前に**確定させた
+（3つの読みで再オープンの受理タイミングが変わり、`EVT_SLOTS = 2` の占有上限導出にも影響するため）。
+
+#### 確定: 読み (ii)（手続きの末尾まで）— ただし判定式は「ドレーン」
+
+> **再オープン可 ⇔ `Closed` かつ リングがドレーン済み**
+> **（保留イベント 0 件 かつ `evt_ack_seq == evt_seq`）**
+
+**この定式化により、読み (i) の「字義どおりだと UI を一度も開けない」問題が同時に消える** —
+初期状態は `evt_seq = 0` / `evt_ack_seq = 0` / pending 空で**ドレーンが自明に成立**する。
+respawn 後も `reset_child_starting` が両カウンタを 0 に戻すので同じ。
+
+#### 決定打はコードで裏取りされた
+
+「child が『自分の DONE が ack された』を判定できるか」= **できる**:
+
+- child は `evt_ack_seq` を Acquire で読める（`EventRingChild::service` が invariant 判定で既に使用）
+- child main thread が `evt_seq` の唯一の書き手なので、pending が空の時点の `evt_seq.load_own()` が
+  最後に投函した DONE の seq
+- **リングに載る kind は2種だけ**なので、完了サイクルの最終イベントは必ず DONE。
+  よって**個別 seq の記録すら不要**
+
+これが成り立たなければ (ii) は実装不能で自動的に (iii) になっていた。
+
+#### (iii) を棄却した理由（main が挙げられなかった論点）
+
+(iii) の利点は「再オープンが host の ack を待たない」ことだが、**`OPEN_UI` は host 起点のコマンド**
+であり、**host が DONE を ack できないほど停滞している状況では発行主体も同じ host 側にいる**。
+利点が実質を持たない。main は「占有上限が厳密になる」しか挙げられていなかった。
+
+#### 改訂した箇所（4件）
+
+1. 故障表の当該行 — 「`Closing` / `Closed` 中」→「クローズ手続きが未決着の間」+ ドレーン条件へ
+2. 未解決ブロック → **確定ブロック**（却下した代替と、確定が崩れる条件も併記）
+3. UIH.4c の到達可能性注記 — 「未確定」→「**到達不能**。ただし規則は無条件に維持」
+4. UIH.8 に変異検証を追加 — 🔴 **2方向**（ドレーン条件を外す → red / 初期 `Closed` で受理 → green）。
+   **片方向だけでは「常に拒否する」実装が通ってしまう**
+
+#### 🔴 先送りの回収先を固定した（owner 指摘）
+
+owner から「先送りが負の遺産として溜まらないか」「ちゃんと先の実装で回収されるか」と問われ、
+棚卸ししたところ **P2 で先送りにした6件のうち、回収先が固定されていたのは1件だけ**だった。
+
+| 項目 | 対応 |
+|---|---|
+| poll と reset の排他 | **#592 を立て、#474 の「P4 完了の条件」として明示的に紐づけた** |
+| WORK_LOG の commit ハッシュ手順 | **#593**（PROJECT_RULES の変更になるため owner 判断） |
+| `service_main` の4 child 重複 | P3 で「やるか P4 へ送るか」を決める（着手中） |
+| 並行 poll の実行テスト / Ordering 封印の未適用 | 🔴 **回収先が無い**。issue 化せず**恒久的な設計判断として確定させる**ことを提案中 |
+| プログラム順序が型で強制できない | 債務ではない（**原理的限界の記録**） |
+
+**「暫定を置くなら消せる条件と実行順序まで書く」を6件中3件で守れていなかった。**
+open issue は現在 **100件**（最古 2026-04-20）で、構造的に溜まっている。
+
+**変更ファイル**: `docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`
+
+**Commit**: PR（#474 P3・作成予定）
+
+---
+
 ### 6.340 fix(rust): #474 P2 レビューラウンド2 — 「継承したつもり」を CAS ゲートで直した (Jul 31, 2026)
 
 **Date**: 2026-07-31

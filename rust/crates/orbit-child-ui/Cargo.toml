@@ -1,0 +1,11 @@
+[package]
+name = "orbit-child-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "AppKit-independent plugin UI lifecycle state machine"
+publish = false
+
+[dependencies]

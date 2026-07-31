@@ -103,6 +103,7 @@ fn main() -> Result<()> {
     let region_addr = region as usize;
     let process_errors = run_child(
         "orbit-clap-effect-child",
+        || unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT,
         || {
             // Mailbox servicing is main-thread-only after #474 P1. In particular,
             // SAVE_STATE may block on plugin serialization/fsync without stalling audio.
@@ -111,9 +112,6 @@ fn main() -> Result<()> {
                     CMD_SAVE_STATE => Some(save_state_command(arg, || effect_main.capture_state())),
                     _ => None,
                 });
-            }
-            if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
-                return true;
             }
             if parent_watch.should_exit() {
                 eprintln!("[orbit-clap-effect-child] 親プロセス死亡を検知、終了する");
