@@ -237,6 +237,12 @@ AU のホスト通知面を全列挙した結果（`AUAudioUnit.h`）:
    out-of-process で動かないのは、形式中立の前提を破っている
 4. **能力の有無は実行時に問い合わせ可能**にし、MCP から観測できること
    （LLM が「このプラグインは UI を持つか」を判断できる）
+   - UI 操作面は `open_plugin_ui(receiver, index, expectedName?)` と
+     `close_plugin_ui(receiver, index)`。receiver は sequence / `master` / `sum:<name>` /
+     `aux:<name>`、index は UIH.5 の chain index
+   - open は attach 完了 ack、close は `UI_CLOSED_DONE` event を完了条件とし、両方 timeout を持つ
+   - `expectedName` は正規化名の誤爆ガード。不一致時は開かず、loud error に当該 receiver の
+     valid index（role・正規化名）一覧を含める
 5. 欠落している能力へのアクセスは **loud に失敗**する。silent no-op にしない
 6. **dirty 通知の受け口を両形式で実装する**。VST3 は `IComponentHandler2` をホスト側で公開して
    `setDirty` を受け、CLAP は `mark_dirty` を受ける。受信はセーフポイントを増やすだけで、

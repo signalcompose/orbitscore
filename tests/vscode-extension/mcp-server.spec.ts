@@ -1,6 +1,6 @@
 import * as http from 'http'
 
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 
 import {
   startOrbitScoreMcpServer,
@@ -486,6 +486,78 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect(body.result.isError).toBe(true)
     expect(body.result.content[0]!.text).toContain('PLUGIN_STATE_TIMEOUT')
     expect(body.result.content[0]!.text).toContain('"elapsed":5')
+  })
+
+  it('registers open/close plugin UI tools and forwards exact receiver/index/name arguments once', async () => {
+    const openPluginUi = vi.fn().mockResolvedValue({
+      ok: true,
+      result: { receiver: 'lead', index: 0, normalizedName: 'Massive-X' },
+    })
+    const closePluginUi = vi.fn().mockResolvedValue({
+      ok: true,
+      result: { receiver: 'lead', index: 0, completion: 'safepoint-completed' },
+    })
+    const { handlers } = createStubHandlers({ openPluginUi, closePluginUi })
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const listed = await client.toolsList()
+    const listBody = listed.json as JsonRpcOk<{
+      tools: Array<{ name: string; description?: string }>
+    }>
+    expect(listBody.result.tools.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(['open_plugin_ui', 'close_plugin_ui']),
+    )
+    expect(
+      listBody.result.tools.find((tool) => tool.name === 'close_plugin_ui')?.description,
+    ).toContain('UI_CLOSED_DONE')
+
+    const opened = await client.toolsCall('open_plugin_ui', {
+      receiver: 'lead',
+      index: 0,
+      expectedName: 'Massive-X',
+    })
+    const closed = await client.toolsCall('close_plugin_ui', { receiver: 'lead', index: 0 })
+
+    expect((opened.json as JsonRpcOk<ToolCallResult>).result.isError).toBeFalsy()
+    expect((closed.json as JsonRpcOk<ToolCallResult>).result.isError).toBeFalsy()
+    expect(openPluginUi).toHaveBeenCalledTimes(1)
+    expect(openPluginUi).toHaveBeenCalledWith('lead', 0, 'Massive-X')
+    expect(closePluginUi).toHaveBeenCalledTimes(1)
+    expect(closePluginUi).toHaveBeenCalledWith('lead', 0)
+  })
+
+  it('surfaces expectedName refusal and the role/name valid-index explanation as a loud error', async () => {
+    const openPluginUi = vi.fn().mockResolvedValue({
+      ok: false,
+      error:
+        "expected normalized name 'Wrong' but the current slot is 'Massive-X'; the UI was not opened. " +
+        'Valid indices: 0 (instrument, Massive-X), 1 (effect, Echo).',
+    })
+    const closePluginUi = vi.fn()
+    const { handlers } = createStubHandlers({ openPluginUi, closePluginUi })
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const response = await client.toolsCall('open_plugin_ui', {
+      receiver: 'lead',
+      index: 0,
+      expectedName: 'Wrong',
+    })
+    const body = response.json as JsonRpcOk<ToolCallResult>
+
+    expect(body.result.isError).toBe(true)
+    expect(body.result.content[0]!.text).toContain(
+      "current slot is 'Massive-X'; the UI was not opened",
+    )
+    expect(body.result.content[0]!.text).toContain(
+      'Valid indices: 0 (instrument, Massive-X), 1 (effect, Echo)',
+    )
+    expect(openPluginUi).toHaveBeenCalledTimes(1)
+    expect(openPluginUi).toHaveBeenCalledWith('lead', 0, 'Wrong')
+    expect(closePluginUi).toHaveBeenCalledTimes(0)
   })
 
   it('tools/call get_document_text round-trips path/text and records the call', async () => {

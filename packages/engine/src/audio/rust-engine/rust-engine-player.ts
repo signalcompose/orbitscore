@@ -41,7 +41,12 @@
 import { gainDbToAmplitude } from '../audio-gain-utils'
 import type { AudioEngineBackend } from '../engine-backend'
 import type { AudioDevice } from '../supercollider/types'
-import type { PluginLoadResult, PluginStateSaveTarget, PluginUiTarget } from '../types'
+import type {
+  PluginLoadResult,
+  PluginStateSaveTarget,
+  PluginUiCloseCompletion,
+  PluginUiTarget,
+} from '../types'
 
 import { DaemonClient } from './daemon-client'
 import type { AudioDeviceListEntry } from './daemon-client'
@@ -95,6 +100,28 @@ function pluginStateTarget(target: PluginUiTarget): PluginStateSaveTarget {
   return target.role === 'effect'
     ? { role: 'effect', ...(target.bus === undefined ? {} : { bus: target.bus }) }
     : { role: 'instrument', instance: target.instance }
+}
+
+function pluginUiTargetMatches(left: PluginUiTarget, right: PluginUiTarget): boolean {
+  if (left.role !== right.role || left.index !== right.index) return false
+  if (left.role === 'effect' && right.role === 'effect') return left.bus === right.bus
+  return (
+    left.role === 'instrument' && right.role === 'instrument' && left.instance === right.instance
+  )
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 /** chop slice 情報。`scheduleSliceEvent` 由来。発火時に領域（offset/duration）へ解決する。 */
@@ -272,6 +299,8 @@ export interface RustEnginePlayerOptions {
 }
 
 const DEFAULT_LOOKAHEAD_SEC = 0.05
+const PLUGIN_UI_OPEN_TIMEOUT_MS = 30_000
+const PLUGIN_UI_CLOSE_TIMEOUT_MS = 20_000
 const POLL_INTERVAL_MS = 1
 /** SC EventScheduler と同じく、過大 drift のイベントは古い残骸として skip する閾値。 */
 const MAX_DRIFT_MS = 1000
@@ -379,6 +408,12 @@ export class RustEnginePlayer implements AudioEngineBackend {
   /** UI event は daemon の evt_seq 順を保ったまま、保存・ack まで直列に完結させる。 */
   private pluginUiEventTail: Promise<void> = Promise.resolve()
   private pluginUiSafepointSaver: ((target: PluginUiTarget) => Promise<void>) | undefined
+  private readonly pendingPluginUiCloses = new Set<{
+    target: PluginUiTarget
+    resolve: (completion: PluginUiCloseCompletion) => void
+    reject: (error: Error) => void
+    timer: ReturnType<typeof setTimeout>
+  }>()
 
   /** feature gap の 1 回限り warning。stopAll で再 arm する。 */
   private warned: Set<string> = freshWarned()
@@ -569,12 +604,19 @@ export class RustEnginePlayer implements AudioEngineBackend {
     this.enqueuePluginUiEvent(() => {
       const data = eventRecord(raw, 'PluginUiCloseDone data')
       const target = pluginUiTargetFromEvent(data)
-      if (data.completion === 'timeout-without-save') {
+      const completion = data.completion
+      if (completion === 'timeout-without-save') {
         console.error(
           `[plugin-ui] ${JSON.stringify(target)} closed after timing out without saving state`,
         )
-      } else if (data.completion !== 'safepoint-completed') {
-        throw new Error(`unknown PluginUiCloseDone completion: ${String(data.completion)}`)
+      } else if (completion !== 'safepoint-completed') {
+        throw new Error(`unknown PluginUiCloseDone completion: ${String(completion)}`)
+      }
+      for (const pending of [...this.pendingPluginUiCloses]) {
+        if (!pluginUiTargetMatches(pending.target, target)) continue
+        this.pendingPluginUiCloses.delete(pending)
+        clearTimeout(pending.timer)
+        pending.resolve(completion)
       }
     })
   }
@@ -586,6 +628,12 @@ export class RustEnginePlayer implements AudioEngineBackend {
       console.error(
         `[plugin-ui] ${JSON.stringify(target)} was closed by daemon respawn and was not reopened`,
       )
+      for (const pending of [...this.pendingPluginUiCloses]) {
+        if (!pluginUiTargetMatches(pending.target, target)) continue
+        this.pendingPluginUiCloses.delete(pending)
+        clearTimeout(pending.timer)
+        pending.reject(new Error('plugin UI was closed by daemon respawn before UI_CLOSED_DONE'))
+      }
     })
   }
 
@@ -698,6 +746,58 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
   setPluginUiSafepointSaver(saver: (target: PluginUiTarget) => Promise<void>): void {
     this.pluginUiSafepointSaver = saver
+  }
+
+  async openPluginUi(
+    target: PluginStateSaveTarget,
+    index: number,
+    windowTitle: string,
+    timeoutMs = PLUGIN_UI_OPEN_TIMEOUT_MS,
+  ): Promise<void> {
+    await withTimeout(
+      this.daemon.openPluginUi(target, index, windowTitle),
+      timeoutMs,
+      `timed out waiting for plugin UI to open (${timeoutMs}ms)`,
+    )
+  }
+
+  async closePluginUi(
+    target: PluginStateSaveTarget,
+    index: number,
+    timeoutMs = PLUGIN_UI_CLOSE_TIMEOUT_MS,
+  ): Promise<PluginUiCloseCompletion> {
+    const routedTarget: PluginUiTarget = { ...target, index } as PluginUiTarget
+    let pendingEntry:
+      | {
+          target: PluginUiTarget
+          resolve: (completion: PluginUiCloseCompletion) => void
+          reject: (error: Error) => void
+          timer: ReturnType<typeof setTimeout>
+        }
+      | undefined
+    const done = new Promise<PluginUiCloseCompletion>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (pendingEntry) this.pendingPluginUiCloses.delete(pendingEntry)
+        reject(new Error(`timed out waiting for UI_CLOSED_DONE (${timeoutMs}ms)`))
+      }, timeoutMs)
+      pendingEntry = { target: routedTarget, resolve, reject, timer }
+      this.pendingPluginUiCloses.add(pendingEntry)
+    })
+    try {
+      // Register the DONE waiter before issuing CLOSE_UI: the event pump and
+      // command response use independent tasks, so DONE may race the ack.
+      const accepted = this.daemon.acceptClosePluginUi(target, index)
+      await Promise.race([accepted, done.then(() => undefined)])
+    } catch (error) {
+      if (pendingEntry) {
+        this.pendingPluginUiCloses.delete(pendingEntry)
+        clearTimeout(pendingEntry.timer)
+      }
+      throw error
+    }
+    // The daemon response above is Phase A acceptance only. This await is the
+    // sole close-completion condition exposed to callers.
+    return done
   }
 
   getCurrentOutputDevice(): AudioDevice | undefined {

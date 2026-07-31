@@ -526,7 +526,7 @@ LLM 側と非対称になる（DESIGN_PRINCIPLES §3 違反）。
 | 層 | 責務 |
 |---|---|
 | エディタ（右クリック） | テキスト位置 → `(receiver, chain index)` の**解決のみ** |
-| MCP | `save_plugin_state(receiver, index)`（実装済） / `open_plugin_ui(sequence, index)`・`close_plugin_ui(sequence, index)`（**未実装**） |
+| MCP | `save_plugin_state(receiver, index)` / `open_plugin_ui(receiver, index, expectedName?)` / `close_plugin_ui(receiver, index)`（実装済） |
 | daemon 以下 | 解決済みの target（daemon bus / instance）と chain index だけを知る |
 
 > **UI open/close の receiver スコープ**: 🟢 **全 receiver へ一般化する**
@@ -538,7 +538,13 @@ LLM 側と非対称になる（DESIGN_PRINCIPLES §3 違反）。
 >
 > 🔴 執筆時この節は「v1 では receiver を sequence に限定する」としていたが、
 > **裁定と矛盾したまま残っていた**（P4 着手前の点検で判明）。`open_plugin_ui` /
-> `close_plugin_ui` は P4 で実装する。
+> `close_plugin_ui` は P4c で実装済み。
+
+> **MCP tool schema（P4c で確定）**: `receiver` は sequence / `master` / `sum:<name>` /
+> `aux:<name>`、`index` は本節の非負 chain index。`open_plugin_ui` の `expectedName` は任意の
+> 正規化名ガードで、不一致なら daemon へ `OPEN_UI` を送らない。open は view attach 完了 ack、
+> close は `UI_CLOSED_DONE` の一致 event を受信して初めて返る。いずれも timeout と、role・
+> 正規化名を含む valid index 一覧つき loud error を持つ。
 
 これにより #474 の regex 依存はエディタ層に閉じ込められ、#495 言語サービス導入時も
 engine 側は影響を受けない。

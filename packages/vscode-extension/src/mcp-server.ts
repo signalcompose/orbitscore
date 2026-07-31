@@ -189,6 +189,10 @@ export type SavePluginStateResult =
   | { ok: true; saved: unknown }
   | { ok: false; error: string; code?: string; details?: unknown }
 
+export type PluginUiResult =
+  | { ok: true; result: unknown }
+  | { ok: false; error: string; code?: string; details?: unknown }
+
 /**
  * Arguments for register_mcp_server. `scope` is a raw string here (rather than
  * the 'project' | 'user' union) so validation lives in one place — the
@@ -236,6 +240,12 @@ export interface OrbitScoreToolHandlers {
     sequence: string,
     index: number,
   ): Promise<SavePluginStateResult> | SavePluginStateResult
+  openPluginUi?(
+    receiver: string,
+    index: number,
+    expectedName?: string,
+  ): Promise<PluginUiResult> | PluginUiResult
+  closePluginUi?(receiver: string, index: number): Promise<PluginUiResult> | PluginUiResult
   /**
    * Optional (unlike the members above): only hosts that can register
    * themselves into Claude Code expose the register_mcp_server tool — the
@@ -827,6 +837,77 @@ function buildServer(
           )
         }
         return { content: [{ type: 'text', text: JSON.stringify(result.saved) }] }
+      },
+    )
+  }
+
+  const openPluginUi = handlers.openPluginUi?.bind(handlers)
+  const closePluginUi = handlers.closePluginUi?.bind(handlers)
+  if (openPluginUi && closePluginUi) {
+    const pluginUiError = (result: Extract<PluginUiResult, { ok: false }>): ToolResult =>
+      errorResult(
+        JSON.stringify({
+          error: result.error,
+          ...(result.code ? { code: result.code } : {}),
+          ...(result.details === undefined ? {} : { details: result.details }),
+        }),
+      )
+    const receiverSchema = z
+      .string()
+      .describe('Receiver: sequence name, "master", "sum:<bus-name>", or "aux:<bus-name>"')
+    const indexSchema = z.number().describe('UIH.5 chain index (instrument 0, effects 1-based)')
+
+    server.registerTool(
+      'open_plugin_ui',
+      {
+        title: 'Open Plugin UI',
+        description:
+          'Open and attach the current plugin window addressed by receiver and chain index. ' +
+          'Returns only after the window exists. expectedName is an optional normalized-name ' +
+          'guard that prevents opening a different plugin after chain indices shift.',
+        inputSchema: {
+          receiver: receiverSchema,
+          index: indexSchema,
+          expectedName: z
+            .string()
+            .describe('Optional normalized plugin name that must match the current slot')
+            .optional(),
+        },
+      },
+      async (args) => {
+        const receiver = typeof args.receiver === 'string' ? args.receiver : ''
+        const index = typeof args.index === 'number' ? args.index : NaN
+        const expectedName = typeof args.expectedName === 'string' ? args.expectedName : undefined
+        if (!receiver || !Number.isInteger(index) || index < 0) {
+          return errorResult('receiver and a non-negative integer index are required')
+        }
+        const result = await openPluginUi(receiver, index, expectedName)
+        return result.ok
+          ? { content: [{ type: 'text', text: JSON.stringify(result.result) }] }
+          : pluginUiError(result)
+      },
+    )
+
+    server.registerTool(
+      'close_plugin_ui',
+      {
+        title: 'Close Plugin UI',
+        description:
+          'Close the plugin window addressed by receiver and chain index. Returns only after ' +
+          'UI_CLOSED_DONE, including the close-time state-save safepoint; the command ack alone ' +
+          'is not completion.',
+        inputSchema: { receiver: receiverSchema, index: indexSchema },
+      },
+      async (args) => {
+        const receiver = typeof args.receiver === 'string' ? args.receiver : ''
+        const index = typeof args.index === 'number' ? args.index : NaN
+        if (!receiver || !Number.isInteger(index) || index < 0) {
+          return errorResult('receiver and a non-negative integer index are required')
+        }
+        const result = await closePluginUi(receiver, index)
+        return result.ok
+          ? { content: [{ type: 'text', text: JSON.stringify(result.result) }] }
+          : pluginUiError(result)
       },
     )
   }

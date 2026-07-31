@@ -35,6 +35,8 @@ function harness() {
     getAudioDuration: vi.fn(() => 1),
     getMasterGainDb: () => 0,
     loadPlugin: vi.fn().mockResolvedValue({}),
+    openPluginUi: vi.fn().mockResolvedValue(undefined),
+    closePluginUi: vi.fn().mockResolvedValue('safepoint-completed'),
     savePluginState: vi.fn(async (_target, statePath: string) => {
       await fs.promises.writeFile(statePath, Buffer.from('oracle-state'))
       return { path: statePath, bytesWritten: 12 }
@@ -502,6 +504,89 @@ describe('plugin state address resolution and project registration (#562)', () =
     await expect(global.savePluginState('lead', 0)).rejects.toThrow('transport is running')
     expect(audio.savePluginState).not.toHaveBeenCalled()
     expect(audio.stop).not.toHaveBeenCalled()
+  })
+})
+
+describe('plugin UI address guard and loud diagnostics (#474 P4c)', () => {
+  it('opens the expected normalized plugin exactly once with the resolved daemon target', async () => {
+    const { audio, global } = harness()
+    await global.instrument('lead', './Massive-X.clap')
+
+    await expect(global.openPluginUi('lead', 0, 'Massive-X')).resolves.toEqual({
+      receiver: 'lead',
+      index: 0,
+      role: 'instrument',
+      normalizedName: 'Massive-X',
+    })
+
+    expect(audio.openPluginUi).toHaveBeenCalledTimes(1)
+    expect(audio.openPluginUi).toHaveBeenCalledWith(
+      { role: 'instrument', instance: 'plugin:lead' },
+      0,
+      'OrbitScore — Massive-X (lead:0)',
+    )
+  })
+
+  it('refuses an expectedName mismatch before opening and explains the current valid slot', async () => {
+    const { audio, global } = harness()
+    await global.instrument('lead', './Massive-X.clap')
+
+    await expect(global.openPluginUi('lead', 0, 'WrongSynth')).rejects.toThrow(
+      /expected normalized name 'WrongSynth' but the current slot is 'Massive-X'; the UI was not opened.*Valid indices: 0 \(instrument, Massive-X\)/,
+    )
+    expect(audio.openPluginUi).toHaveBeenCalledTimes(0)
+  })
+
+  it('keeps the expectedName comparison canonically normalized but does not accept another name', async () => {
+    const { audio, global } = harness()
+    await global.instrument('lead', './Cafe\u0301.clap')
+
+    await global.openPluginUi('lead', 0, 'Café')
+
+    expect(audio.openPluginUi).toHaveBeenCalledTimes(1)
+    expect(audio.openPluginUi).toHaveBeenCalledWith(
+      { role: 'instrument', instance: 'plugin:lead' },
+      0,
+      'OrbitScore — Café (lead:0)',
+    )
+  })
+
+  it('adds every valid role/name index when the daemon reports an unloaded or UI-less plugin', async () => {
+    const { audio, global } = harness()
+    await global.instrument('lead', './Massive-X.clap')
+    await global.sequenceEffect('lead', './Echo.clap')
+    audio.openPluginUi.mockRejectedValueOnce(new Error('CAP-UI-OPEN is unavailable'))
+
+    await expect(global.openPluginUi('lead', 1, 'Echo')).rejects.toThrow(
+      /CAP-UI-OPEN is unavailable.*Valid indices: 0 \(instrument, Massive-X\), 1 \(effect, Echo\)/,
+    )
+    expect(audio.openPluginUi).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes once with the exact target and exposes only DONE completion', async () => {
+    const { audio, global } = harness()
+    await global.sum('drum').effect('./GlueComp.clap')
+
+    await expect(global.closePluginUi('sum:drum', 1)).resolves.toEqual({
+      receiver: 'sum:drum',
+      index: 1,
+      role: 'effect',
+      normalizedName: 'GlueComp',
+      completion: 'safepoint-completed',
+    })
+    expect(audio.closePluginUi).toHaveBeenCalledTimes(1)
+    expect(audio.closePluginUi).toHaveBeenCalledWith({ role: 'effect', bus: 'sum-bus-0' }, 1)
+  })
+
+  it('reports a DONE timeout-without-save loudly with the valid role/name list', async () => {
+    const { audio, global } = harness()
+    await global.sequenceEffect('lead', './Echo.clap')
+    audio.closePluginUi.mockResolvedValueOnce('timeout-without-save')
+
+    await expect(global.closePluginUi('lead', 1)).rejects.toThrow(
+      /UI_CLOSED_DONE reported timeout-without-save.*Valid indices: 1 \(effect, Echo\)/,
+    )
+    expect(audio.closePluginUi).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -90,6 +90,7 @@ export function extractSelectAudioDeviceMeta(line: string): { device: string } |
 
 const SAVE_PLUGIN_STATE_META_RE = /^\s*\/\/#savePluginState\s+(.+?)\s*$/
 const SAVE_PLUGIN_STATE_REQUEST_ID_RE = /"requestId"\s*:\s*("(?:\\[\s\S]|[^"\\])*")/
+const PLUGIN_UI_META_RE = /^\s*\/\/#pluginUi\s+(.+?)\s*$/
 
 export interface SavePluginStateMeta {
   requestId: string
@@ -160,6 +161,91 @@ async function executeSavePluginStateMeta(
       JSON.stringify({
         savePluginState: {
           requestId: input.requestId,
+          ok: false,
+          error: error?.message ?? String(error),
+          ...(typeof error?.code === 'string' ? { code: error.code } : {}),
+          ...(error?.details === undefined ? {} : { details: error.details }),
+        },
+      }),
+    )
+  }
+}
+
+export interface PluginUiMeta {
+  requestId: string
+  action: 'open' | 'close'
+  receiver: string
+  index: number
+  expectedName?: string
+}
+
+export function extractPluginUiMeta(line: string): PluginUiMeta | undefined {
+  const match = line.match(PLUGIN_UI_META_RE)
+  if (!match) return undefined
+  let value: unknown
+  try {
+    value = JSON.parse(match[1]!)
+  } catch (error) {
+    throw new Error(
+      `invalid //#pluginUi JSON: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('//#pluginUi payload must be a JSON object')
+  }
+  const payload = value as Record<string, unknown>
+  if (typeof payload.requestId !== 'string' || payload.requestId.length === 0) {
+    throw new Error('//#pluginUi requires a non-empty string requestId')
+  }
+  if (payload.action !== 'open' && payload.action !== 'close') {
+    throw new Error("//#pluginUi action must be 'open' or 'close'")
+  }
+  if (typeof payload.receiver !== 'string' || payload.receiver.length === 0) {
+    throw new Error('//#pluginUi requires a non-empty string receiver')
+  }
+  if (!Number.isInteger(payload.index) || (payload.index as number) < 0) {
+    throw new Error('//#pluginUi requires a non-negative integer index')
+  }
+  if (payload.expectedName !== undefined && typeof payload.expectedName !== 'string') {
+    throw new Error('//#pluginUi expectedName must be a string when present')
+  }
+  return {
+    requestId: payload.requestId,
+    action: payload.action,
+    receiver: payload.receiver,
+    index: payload.index as number,
+    ...(payload.expectedName === undefined ? {} : { expectedName: payload.expectedName }),
+  }
+}
+
+function recoverPluginUiRequestId(line: string): string | undefined {
+  const match = line.match(SAVE_PLUGIN_STATE_REQUEST_ID_RE)
+  if (!match) return undefined
+  try {
+    const requestId = JSON.parse(match[1]!) as unknown
+    return typeof requestId === 'string' && requestId.length > 0 ? requestId : undefined
+  } catch {
+    return undefined
+  }
+}
+
+async function executePluginUiMeta(interpreter: InterpreterV2, input: PluginUiMeta): Promise<void> {
+  try {
+    const result =
+      input.action === 'open'
+        ? await interpreter.openPluginUi(input.receiver, input.index, input.expectedName)
+        : await interpreter.closePluginUi(input.receiver, input.index)
+    console.log(
+      JSON.stringify({
+        pluginUi: { requestId: input.requestId, action: input.action, ok: true, result },
+      }),
+    )
+  } catch (error: any) {
+    console.log(
+      JSON.stringify({
+        pluginUi: {
+          requestId: input.requestId,
+          action: input.action,
           ok: false,
           error: error?.message ?? String(error),
           ...(typeof error?.code === 'string' ? { code: error.code } : {}),
@@ -253,6 +339,21 @@ export function createReplSession(interpreter: InterpreterV2): {
   }
 
   async function handleLine(line: string): Promise<void> {
+    if (PLUGIN_UI_META_RE.test(line)) {
+      try {
+        const input = extractPluginUiMeta(line)
+        if (input) await executePluginUiMeta(interpreter, input)
+      } catch (error: any) {
+        const message = error?.message ?? String(error)
+        const requestId = recoverPluginUiRequestId(line)
+        if (requestId) {
+          console.log(JSON.stringify({ pluginUi: { requestId, ok: false, error: message } }))
+        } else {
+          console.error(`[ERROR] ${message}`)
+        }
+      }
+      return
+    }
     if (SAVE_PLUGIN_STATE_META_RE.test(line)) {
       try {
         const savePluginStateMeta = extractSavePluginStateMeta(line)

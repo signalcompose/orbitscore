@@ -45,6 +45,14 @@ export interface ResolvedPluginStateTarget {
   daemonTarget: { role: 'effect'; bus?: string } | { role: 'instrument'; instance: string }
 }
 
+export interface PluginUiOperationResult {
+  receiver: string
+  index: number
+  role: 'effect' | 'instrument'
+  normalizedName: string
+  completion?: 'safepoint-completed'
+}
+
 /**
  * slot が既に保持している identity 素材（role / normalizedName / occurrence）を
  * そのまま写す純関数。`this` を使わないのでクラス外に置き、DSL 語彙の分類対象から外す
@@ -844,6 +852,75 @@ export class Global {
     return store.save(resolved.identity, resolved.daemonTarget)
   }
 
+  async openPluginUi(
+    receiverId: string,
+    index: number,
+    expectedName?: string,
+  ): Promise<PluginUiOperationResult> {
+    const resolved = this.resolvePluginStateTarget(receiverId, index)
+    const actualName = resolved.identity.normalizedName
+    if (expectedName !== undefined && expectedName.normalize('NFC') !== actualName) {
+      throw this.pluginUiOperationError(
+        receiverId,
+        index,
+        `expected normalized name '${expectedName}' but the current slot is '${actualName}'; the UI was not opened`,
+      )
+    }
+    if (!this.audioEngine.openPluginUi) {
+      throw this.pluginUiOperationError(
+        receiverId,
+        index,
+        'plugin UI hosting requires the Rust engine backend',
+      )
+    }
+    try {
+      await this.audioEngine.openPluginUi(
+        resolved.daemonTarget,
+        index,
+        `OrbitScore — ${actualName} (${receiverId}:${index})`,
+      )
+    } catch (error) {
+      throw this.pluginUiOperationError(receiverId, index, error)
+    }
+    return {
+      receiver: receiverId,
+      index,
+      role: resolved.identity.role,
+      normalizedName: actualName,
+    }
+  }
+
+  async closePluginUi(receiverId: string, index: number): Promise<PluginUiOperationResult> {
+    const resolved = this.resolvePluginStateTarget(receiverId, index)
+    if (!this.audioEngine.closePluginUi) {
+      throw this.pluginUiOperationError(
+        receiverId,
+        index,
+        'plugin UI hosting requires the Rust engine backend',
+      )
+    }
+    let completion: Awaited<ReturnType<NonNullable<AudioEngine['closePluginUi']>>>
+    try {
+      completion = await this.audioEngine.closePluginUi(resolved.daemonTarget, index)
+    } catch (error) {
+      throw this.pluginUiOperationError(receiverId, index, error)
+    }
+    if (completion === 'timeout-without-save') {
+      throw this.pluginUiOperationError(
+        receiverId,
+        index,
+        'UI_CLOSED_DONE reported timeout-without-save; the window closed but plugin state was not saved',
+      )
+    }
+    return {
+      receiver: receiverId,
+      index,
+      role: resolved.identity.role,
+      normalizedName: resolved.identity.normalizedName,
+      completion,
+    }
+  }
+
   /**
    * Commits every loaded plugin state at a discrete safe point. This intentionally
    * has no dirty gate: formats/plugins that never emit dirty notifications must
@@ -920,19 +997,47 @@ export class Global {
     valid: { index: number; slot: PluginSlot }[],
     reason: string,
   ): Error {
-    const listed =
-      valid.length === 0
-        ? '<none>'
-        : valid
-            .map(
-              ({ index: validIndex, slot }) =>
-                `${validIndex} (${slot.role}, ${slot.normalizedName})`,
-            )
-            .join(', ')
+    const listed = this.formatPluginIndices(valid)
     return new Error(
       `Plugin chain index ${index} is invalid for '${sequence}': ${reason}. ` +
         `Valid indices: ${listed}.`,
     )
+  }
+
+  private formatPluginIndices(
+    valid: { index: number; slot: Pick<PluginSlot, 'role' | 'normalizedName'> }[],
+  ): string {
+    return valid.length === 0
+      ? '<none>'
+      : valid
+          .map(
+            ({ index: validIndex, slot }) => `${validIndex} (${slot.role}, ${slot.normalizedName})`,
+          )
+          .join(', ')
+  }
+
+  private pluginUiOperationError(receiverId: string, index: number, cause: unknown): Error {
+    const valid = this.listPluginUiStateTargets()
+      .filter(({ resolved }) => resolved.identity.receiver === receiverId)
+      .map(({ index: validIndex, resolved }) => ({
+        index: validIndex,
+        slot: {
+          role: resolved.identity.role,
+          normalizedName: resolved.identity.normalizedName,
+        },
+      }))
+      .sort((left, right) => left.index - right.index)
+    const message = cause instanceof Error ? cause.message : String(cause)
+    const wrapped = new Error(
+      `Plugin UI request for '${receiverId}' index ${index} failed: ${message}. ` +
+        `Valid indices: ${this.formatPluginIndices(valid)}.`,
+    ) as Error & { code?: string; details?: unknown }
+    if (cause instanceof Error) {
+      const protocolError = cause as Error & { code?: unknown; details?: unknown }
+      if (typeof protocolError.code === 'string') wrapped.code = protocolError.code
+      if (protocolError.details !== undefined) wrapped.details = protocolError.details
+    }
+    return wrapped
   }
 
   // Get internal state for compatibility

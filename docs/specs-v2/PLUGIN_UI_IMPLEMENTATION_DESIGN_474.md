@@ -81,7 +81,7 @@ LLM の足（オートメーション DSL・#506）は**本計画のスコープ
 | state 保存の全経路 | engine(TS) が sidecar パス決定 → daemon → `CommandMailboxHost` → child、atomic rename と `project.yaml` 登記は engine 側（`project-state-store.ts`） | **UIH の「host」は実際には daemon+engine の 2 プロセス**に分かれている。セーフポイント(b) の evt_ack 前進条件はこの跨ぎを含む（§4 P4 参照） |
 | oracle 資産 | VST3: `orbit-vst3-gain-oracle` / `orbit-vst3-synth-oracle`。CLAP: `CLAPTestEffect.clap`（テストが自前 package）。**いずれも GUI なし** | P6 で gui 拡張を oracle に実装する |
 | macOS binding 依存 | workspace に objc2 / cocoa 系 crate **なし**（core-foundation-sys のみ） | NSApplication/NSWindow 用に新規依存が要る（§8 Q3） |
-| MCP | `save_plugin_state` 等は `packages/vscode-extension/src/mcp-server.ts` に登録。`open_plugin_ui` / `close_plugin_ui` は**未実装**（spec の記載どおり） | P4 で追加 |
+| MCP | `save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` は `packages/vscode-extension/src/mcp-server.ts` に登録済み | P4c で完了 |
 
 ---
 
@@ -226,7 +226,7 @@ open→close が手元確認できること（この段階では手動確認可�
     （UIH.2a 故障表）。保存失敗は登記を更新せず loud（PRJ.4）
   - `CONTROL_QUIT` 前に in-flight クローズ手続きを解決する（UIH.2a 故障表の最終行）—
     daemon の teardown 順序に組み込む
-- MCP tool: `open_plugin_ui(receiver, index)` / `close_plugin_ui(receiver, index)`
+- MCP tool: `open_plugin_ui(receiver, index, expectedName?)` / `close_plugin_ui(receiver, index)`
   - close の完了判定 = **UI_CLOSED_DONE の受信**（ack ではない・UIH.4c 注記）。タイムアウトつき
   - 存在しない index / 未ロード / UI 非対応（CAP-UI-OPEN なし）はすべて **loud エラー**で、
     当該レシーバの有効 index 一覧（role・正規化名つき）を返す（UIH.5 規則3 — LLM の自己修正用）

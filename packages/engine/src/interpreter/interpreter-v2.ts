@@ -20,6 +20,7 @@ import {
 import { ENGINE_VERSION, DSL_VERSION } from '../version'
 import { createMixerRuntimeRegistry } from '../signal-chain/runtime'
 import type { SavedProjectPluginState } from '../core/project-state-store'
+import type { PluginUiOperationResult } from '../core/global'
 
 import { InterpreterState } from './types'
 import { processGlobalInit, processSequenceInit } from './process-initialization'
@@ -269,6 +270,22 @@ export class InterpreterV2 {
       throw new Error('Plugin state cannot be saved before a global has been initialized.')
     }
     return global.savePluginState(sequence, index)
+  }
+
+  async openPluginUi(
+    receiver: string,
+    index: number,
+    expectedName?: string,
+  ): Promise<PluginUiOperationResult> {
+    const global = this.state.currentGlobal
+    if (!global) throw new Error('Plugin UI cannot be opened before a global has been initialized.')
+    return global.openPluginUi(receiver, index, expectedName)
+  }
+
+  async closePluginUi(receiver: string, index: number): Promise<PluginUiOperationResult> {
+    const global = this.state.currentGlobal
+    if (!global) throw new Error('Plugin UI cannot be closed before a global has been initialized.')
+    return global.closePluginUi(receiver, index)
   }
 }
 

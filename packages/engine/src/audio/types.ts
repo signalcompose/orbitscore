@@ -20,6 +20,8 @@ export type PluginUiTarget =
   | { role: 'effect'; bus?: string; index: number }
   | { role: 'instrument'; instance: string; index: number }
 
+export type PluginUiCloseCompletion = 'safepoint-completed' | 'timeout-without-save'
+
 export interface PluginStateSaveResult {
   path: string
   bytesWritten: number
@@ -98,6 +100,12 @@ export interface AudioEngine {
 
   /** UI close safepoint を既存の project-state 保存フローへ接続する。 */
   setPluginUiSafepointSaver?(saver: (target: PluginUiTarget) => Promise<void>): void
+
+  /** plugin view を生成・attach し、ウィンドウ実在後の完了 ack まで待つ。 */
+  openPluginUi?(target: PluginStateSaveTarget, index: number, windowTitle: string): Promise<void>
+
+  /** CLOSE_UI の受理 ack ではなく UI_CLOSED_DONE まで待つ。 */
+  closePluginUi?(target: PluginStateSaveTarget, index: number): Promise<PluginUiCloseCompletion>
 
   pluginNoteOn?(key: number, channel: number, velocity: number, instance?: string): Promise<void>
   pluginNoteOff?(key: number, channel: number, velocity?: number, instance?: string): Promise<void>

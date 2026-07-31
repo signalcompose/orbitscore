@@ -426,6 +426,24 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
+  /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
+  async openPluginUi(
+    target: PluginStateSaveTarget,
+    index: number,
+    windowTitle: string,
+  ): Promise<void> {
+    await this.request('OpenPluginUI', {
+      target,
+      index,
+      windowTitle,
+    })
+  }
+
+  /** この Promise は Phase A の受理 ack。close 完了は player が DONE event で判定する。 */
+  async acceptClosePluginUi(target: PluginStateSaveTarget, index: number): Promise<void> {
+    await this.request('ClosePluginUI', { target, index })
+  }
+
   async ackUiSafepoint(
     target: PluginStateSaveTarget,
     index: number,
