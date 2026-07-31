@@ -17,6 +17,61 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.347 feat(engine): #474 P4b — ウィンドウを閉じたら音色が保存される (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474 / **Branch**: `474-p4b-engine-safepoint`
+**Status**: `npm test`（sandbox 外・main 実走）= **1842 passed / 0 failed / 34 skipped**
+
+セーフポイント (b) の engine 側 conductor。P4a で daemon 側が揃っていたが、
+**engine に受け手がおらず、閉じても保存されなかった**（child が 10 秒待って
+「保存なしクローズ」に落ちる）。この一段でループが閉じる。
+
+#### 設計
+
+新しい保存機構は作らず、**既存の `ProjectStateStore.savePluginState` を event 起点で
+呼ぶだけ**にした。
+
+- UI イベントは daemon の `evt_seq` 順を保って**直列化**。保存と ack を順序どおり
+  完結させてから次へ進む
+- 🔴 **保存に失敗したら ack を送らない。** `return` して抜け、
+  「`AckUiSafepoint` was not sent: <理由>」と loud に記録する。daemon は `evt_ack` を
+  進めず、child の 10 秒タイムアウトが脱出経路になる（UIH.2a 故障表）。
+  **「失敗したのに成功したように見える」経路を作らない**
+- `generation` / `evt_seq` はそのまま返す（engine が再計算すると respawn 直後の
+  クローズで別 incarnation の safepoint を ack する）
+- teardown で in-flight の保存と ack を完了させてから daemon を落とす
+
+#### 変異検証（7種すべて red）
+
+引数差し替え / 呼び出し回数 / 順序 / 分岐反転の4種類を網羅した。
+
+| 変異 | red の実出力 |
+|---|---|
+| `generation` を 0 に | expected 37, received 0 |
+| 保存失敗でも ack | expected 0 calls, got 1 |
+| timeout 通知を 0 回に | waitFor: condition not met |
+| ack を保存より先に | expected 3 to be less than 2 |
+| ack を 2 回 | expected 1 call, got 2 |
+| respawn 後に再 open | expected 0 calls, got 1 |
+| saver 有無の分岐反転 | ack 待機が timeout |
+
+#### 🔴 差分を読んで拾ったもの
+
+`tests/interpreter/signal-chain-dispatch.spec.ts` の除外リストに
+`listPluginUiStateTargets` / `savePluginUiStateAtSafepoint` を足す変更が
+**ステージから漏れていた**。テストは緑のままなので、コミットしていたら気づけなかった。
+
+これは **#528 でエディタ評価を全滅させたのと同じ機構**（逆方向テストは「全メソッドが
+DSL 語彙か内部 API 除外リストのどちらかに分類される」ことしか見ないので、
+分類の欠落は実行時にしか出ない）。**緑は差分を読まない理由にならない**という
+既存の規律が、そのまま効いた。
+
+#### 委譲先の報告との差
+
+Codex は sandbox で「loopback bind 制限により失敗」と報告したが、
+**main の実走では全件通った**。委譲先の green も red も main が回し直す規律どおり。
+
 ### 6.346 feat(rust): #474 P4a — UI 経路を daemon に通す + 未コミット実装の消失と復旧 (Jul 31, 2026)
 
 **Date**: 2026-07-31
