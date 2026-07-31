@@ -1,26 +1,40 @@
 //! Independent Window Server proof for the AppKit shell.
 
-#![cfg(target_os = "macos")]
-
+#[cfg(target_os = "macos")]
 use std::ffi::c_void;
+#[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "macos")]
 use objc2::MainThreadMarker;
+#[cfg(target_os = "macos")]
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
+#[cfg(target_os = "macos")]
 use objc2_foundation::{NSDate, NSRunLoop};
+#[cfg(target_os = "macos")]
 use orbit_child_runtime::window::WindowShell;
+#[cfg(target_os = "macos")]
 use orbit_child_ui::UiSize;
 
+#[cfg(target_os = "macos")]
 type CFIndex = isize;
+#[cfg(target_os = "macos")]
 type CFArrayRef = *const c_void;
+#[cfg(target_os = "macos")]
 type CFDictionaryRef = *const c_void;
+#[cfg(target_os = "macos")]
 type CFNumberRef = *const c_void;
+#[cfg(target_os = "macos")]
 type CFTypeRef = *const c_void;
 
+#[cfg(target_os = "macos")]
 const K_CF_NUMBER_SINT32_TYPE: u32 = 3;
+#[cfg(target_os = "macos")]
 const K_CG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1;
+#[cfg(target_os = "macos")]
 const K_CG_WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
 
+#[cfg(target_os = "macos")]
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> CFArrayRef;
@@ -40,6 +54,7 @@ unsafe extern "C" {
 ///
 /// This must **fail**, never skip: this test is the only independent evidence that a window
 /// really reached the window server, and a silent skip would turn "never verified" into green.
+#[cfg(target_os = "macos")]
 fn require_screen_capture_permission() {
     assert!(
         unsafe { CGPreflightScreenCaptureAccess() },
@@ -50,6 +65,7 @@ fn require_screen_capture_permission() {
     );
 }
 
+#[cfg(target_os = "macos")]
 #[link(name = "CoreFoundation", kind = "framework")]
 unsafe extern "C" {
     fn CFArrayGetCount(array: CFArrayRef) -> CFIndex;
@@ -59,14 +75,17 @@ unsafe extern "C" {
     fn CFRelease(value: CFTypeRef);
 }
 
+#[cfg(target_os = "macos")]
 struct OwnedWindowList(CFArrayRef);
 
+#[cfg(target_os = "macos")]
 impl Drop for OwnedWindowList {
     fn drop(&mut self) {
         unsafe { CFRelease(self.0) };
     }
 }
 
+#[cfg(target_os = "macos")]
 fn dictionary_i32(dictionary: CFDictionaryRef, key: CFTypeRef) -> Option<i32> {
     let number = unsafe { CFDictionaryGetValue(dictionary, key) };
     if number.is_null() {
@@ -83,6 +102,7 @@ fn dictionary_i32(dictionary: CFDictionaryRef, key: CFTypeRef) -> Option<i32> {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn window_server_contains(window_number: u32, owner_pid: u32) -> bool {
     let list = unsafe {
         CGWindowListCopyWindowInfo(
@@ -103,6 +123,7 @@ fn window_server_contains(window_number: u32, owner_pid: u32) -> bool {
 }
 
 /// Every on-screen window this process owns, for diagnosing a failed match.
+#[cfg(target_os = "macos")]
 fn own_window_numbers() -> Vec<i32> {
     let list = unsafe {
         CGWindowListCopyWindowInfo(
@@ -132,6 +153,7 @@ fn own_window_numbers() -> Vec<i32> {
 /// when the main run loop next processes events. Sleeping instead of running the loop leaves the
 /// window permanently absent from `CGWindowListCopyWindowInfo`, which is indistinguishable from
 /// "the window was never created" — so this loop must pump, not sleep.
+#[cfg(target_os = "macos")]
 fn wait_for_window_state(window_number: u32, expected: bool) -> bool {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
@@ -145,6 +167,7 @@ fn wait_for_window_state(window_number: u32, expected: bool) -> bool {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn run_window_shell_exists_in_cgwindowlist_and_disappears_after_close() {
     require_screen_capture_permission();
 
@@ -181,10 +204,12 @@ fn run_window_shell_exists_in_cgwindowlist_and_disappears_after_close() {
 
 #[test]
 #[ignore = "requires a logged-in macOS Window Server session"]
+#[cfg(target_os = "macos")]
 fn window_shell_exists_in_cgwindowlist_and_disappears_after_close() {
     run_window_shell_exists_in_cgwindowlist_and_disappears_after_close();
 }
 
+#[cfg(target_os = "macos")]
 fn main() {
     let run_ignored = std::env::args().any(|arg| arg == "--ignored");
     println!("running 1 test");
@@ -217,4 +242,11 @@ fn main() {
             std::panic::resume_unwind(payload);
         }
     }
+}
+
+/// Off macOS there is no Window Server to witness, so this harness reports and exits 0
+/// rather than failing — the suite it belongs to is gated on a logged-in macOS session.
+#[cfg(not(target_os = "macos"))]
+fn main() {
+    println!("window_shell_gated is macOS-only; nothing to run on this platform");
 }

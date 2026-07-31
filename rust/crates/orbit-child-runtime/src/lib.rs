@@ -87,7 +87,8 @@ pub const MAIN_TICK_INTERVAL: Duration = Duration::from_millis(20);
 /// [`MAIN_TICK_INTERVAL`] が 20ms なので 50 スキップ ≒ 1 秒。nested runloop が続く間、
 /// 毎 tick 書くと 1 秒あたり 50 回の未バッファ書き込みになる — 初回 + 1 秒ごとで
 /// 「今も再入している」ことは十分伝わる。
-#[cfg(any(target_os = "macos", test))]
+// Only the AppKit tick logs skipped ticks, so this has no meaning off macOS.
+#[cfg(target_os = "macos")]
 const REENTRANT_TICK_LOG_EVERY: u64 = 50;
 
 #[cfg(any(target_os = "macos", test))]
