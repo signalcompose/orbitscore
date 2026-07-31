@@ -22,6 +22,7 @@ pub(crate) type WindowResizeCallback = Rc<dyn Fn(UiSize)>;
 
 pub(crate) trait WindowHandle {
     fn content_view(&self) -> *mut c_void;
+    fn set_title(&mut self, title: &str) -> Result<(), String>;
     fn resize(&mut self, size: UiSize) -> Result<(), String>;
     fn close(&mut self);
 }
@@ -88,6 +89,7 @@ struct UiActions {
     poll_callbacks: Box<dyn FnMut() -> UiCallbacks>,
     window_factory: Box<dyn WindowFactory>,
     window: Option<Box<dyn WindowHandle>>,
+    next_window_title: Option<String>,
     close_callback: WindowCloseCallback,
     resize_callback: WindowResizeCallback,
 }
@@ -127,6 +129,14 @@ impl UiHostActions for UiActions {
                 return Err(detail);
             }
         };
+
+        if let Some(title) = self.next_window_title.take() {
+            if let Err(detail) = window.set_title(&title) {
+                self.endpoint.release(false);
+                window.close();
+                return Err(detail);
+            }
+        }
 
         if let Err(detail) = self.endpoint.attach(window.content_view()) {
             // The plugin-owned view must be released before its parent is destroyed.
@@ -298,6 +308,7 @@ impl UiService {
                 }),
                 window_factory,
                 window: None,
+                next_window_title: None,
                 close_callback,
                 resize_callback,
             },
@@ -320,23 +331,17 @@ impl UiService {
         self.started_at.elapsed()
     }
 
-    /// Handle one UI mailbox command. `OPEN_UI` acks after attach; `CLOSE_UI` acks at Phase A.
-    /// Service one `CMD_OPEN_UI` / `CMD_CLOSE_UI`.
-    ///
-    /// 🔴 `_arg` is discarded, so the **window title convention is not implemented yet**:
-    /// owner approved `<plugin name> — <receiver>[<index>]` (design §8 Q6) to tell several
-    /// instances of one plugin apart, but the child knows neither the receiver nor the index —
-    /// those live host-side.
-    ///
-    /// **This may be deleted once** P4 puts the rendered title into `cmd_arg` on `CMD_OPEN_UI`
-    /// (the field already exists and is already carried for `CMD_SAVE_STATE`) **and**
-    /// `WindowShell` calls `setTitle` with it. Ordering: strictly after P4, because the host is
-    /// the only side that can name the receiver. Until then every plugin window shows the
-    /// AppKit default, which is wrong as soon as two are open at once.
-    pub fn handle_command(&self, kind: u32, _arg: Option<&str>) -> CommandOutcome {
+    /// Handle one UI mailbox command. `OPEN_UI` acks after title + attach; `CLOSE_UI` acks at
+    /// Phase A. The daemon renders `<plugin name> — <receiver>[<index>]` and transports it in
+    /// `cmd_arg`; the child applies it to the host-owned window before plugin attach.
+    pub fn handle_command(&self, kind: u32, arg: Option<&str>) -> CommandOutcome {
         let now = self.now();
         let ack = {
             let mut core = self.core.borrow_mut();
+            if kind == CMD_OPEN_UI {
+                core.actions.next_window_title =
+                    arg.filter(|title| !title.is_empty()).map(str::to_owned);
+            }
             with_machine(&mut core, |machine, actions| match kind {
                 CMD_OPEN_UI => machine.open_command(actions),
                 CMD_CLOSE_UI => machine.close_command(now, actions),
@@ -494,6 +499,7 @@ mod tests {
         invoke_callback_on_close: Cell<bool>,
         close_callback_result: Cell<Option<bool>>,
         last_size: Cell<Option<UiSize>>,
+        title: RefCell<Option<String>>,
     }
 
     struct MockWindow {
@@ -504,6 +510,14 @@ mod tests {
     impl WindowHandle for MockWindow {
         fn content_view(&self) -> *mut c_void {
             std::ptr::dangling_mut::<c_void>()
+        }
+
+        fn set_title(&mut self, title: &str) -> Result<(), String> {
+            self.trace
+                .borrow_mut()
+                .push(format!("window.set_title({title})"));
+            *self.probe.title.borrow_mut() = Some(title.to_owned());
+            Ok(())
         }
 
         fn resize(&mut self, size: UiSize) -> Result<(), String> {
@@ -730,6 +744,33 @@ mod tests {
                 "window.close",
             ],
             "failure ack may be produced only after attach cleanup completes"
+        );
+    }
+
+    #[test]
+    fn open_applies_mailbox_window_title_before_plugin_attach() {
+        let fixture = Fixture::new("window-title");
+        let outcome = fixture
+            .ui
+            .handle_command(CMD_OPEN_UI, Some("Gain Oracle — lead[0]"));
+
+        assert_eq!(outcome.result, CMD_RESULT_OK);
+        assert_eq!(
+            fixture.window.title.borrow().as_deref(),
+            Some("Gain Oracle — lead[0]")
+        );
+        let trace = fixture.trace.borrow();
+        let title = trace
+            .iter()
+            .position(|call| call == "window.set_title(Gain Oracle — lead[0])")
+            .expect("set title call");
+        let attach = trace
+            .iter()
+            .position(|call| call == "endpoint.attach")
+            .expect("attach call");
+        assert!(
+            title < attach,
+            "window title must be set before plugin attach"
         );
     }
 

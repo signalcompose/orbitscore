@@ -715,6 +715,13 @@ pub const CMD_RESULT_CHILD_EXITED: u32 = 5;
 /// 上位層を含めてこの定数を唯一の production timeout として使う。テストだけは
 /// [`CommandMailboxHost::issue_save_state_with_timeout`] へ短い値を渡して timeout 分岐を踏む。
 pub const PLUGIN_STATE_MAILBOX_TIMEOUT: Duration = Duration::from_secs(5);
+/// `OPEN_UI` の完了 ack 待ち上限。
+///
+/// `OPEN_UI` は受理時でなく plugin view の生成・host window への attach が完了してから ack する。
+/// 重い plugin の `createView` は state mailbox の通常上限 5 秒を正当に超えうるため、UI open
+/// だけは専用の余裕を持つ。close handshake の 10 秒 timeout とは別物であり、daemon 側の
+/// safepoint timeout は追加しない。
+pub const OPEN_UI_MAILBOX_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandMailboxResponse {
@@ -872,8 +879,11 @@ impl CommandMailboxHost {
         self.issue_save_state_with_timeout(sidecar_path, PLUGIN_STATE_MAILBOX_TIMEOUT)
     }
 
-    pub fn issue_open_ui(&self) -> Result<CommandMailboxResponse, CommandMailboxError> {
-        self.issue_command(CMD_OPEN_UI, "", None, PLUGIN_STATE_MAILBOX_TIMEOUT)
+    pub fn issue_open_ui(
+        &self,
+        window_title: &str,
+    ) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        self.issue_command(CMD_OPEN_UI, window_title, None, OPEN_UI_MAILBOX_TIMEOUT)
     }
 
     pub fn issue_close_ui(&self) -> Result<CommandMailboxResponse, CommandMailboxError> {
@@ -1069,6 +1079,412 @@ impl CommandMailboxHost {
             .unwrap_or(Ok(()));
         state.in_flight = None;
         cleanup_result
+    }
+}
+
+/// `UI_CLOSED_DONE` が伝える close の終端理由。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiCloseCompletion {
+    SafepointCompleted,
+    TimedOutWithoutSave,
+}
+
+impl UiCloseCompletion {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SafepointCompleted => "safepoint-completed",
+            Self::TimedOutWithoutSave => "timeout-without-save",
+        }
+    }
+}
+
+/// [`UiEventPump::poll_step`] が daemon の非ブロッキング sink へ渡す固定通知。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiPumpNotification {
+    Safepoint { generation: u64, evt_seq: u64 },
+    CloseDone { completion: UiCloseCompletion },
+}
+
+#[derive(Debug)]
+pub enum UiEventPumpError {
+    Mapping(io::Error),
+    Mailbox(CommandMailboxError),
+    CoordinatorPoisoned,
+    GenerationMismatch { expected: u64, actual: u64 },
+    Protocol(String),
+}
+
+impl fmt::Display for UiEventPumpError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Mapping(error) => write!(f, "plugin UI event mapping failed: {error}"),
+            Self::Mailbox(error) => write!(f, "plugin UI reset mailbox failed: {error}"),
+            Self::CoordinatorPoisoned => write!(f, "plugin UI event pump coordinator poisoned"),
+            Self::GenerationMismatch { expected, actual } => write!(
+                f,
+                "plugin UI safepoint generation mismatch: current {expected}, got {actual}"
+            ),
+            Self::Protocol(detail) => write!(f, "plugin UI event protocol error: {detail}"),
+        }
+    }
+}
+
+impl std::error::Error for UiEventPumpError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Mapping(error) => Some(error),
+            Self::Mailbox(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<io::Error> for UiEventPumpError {
+    fn from(error: io::Error) -> Self {
+        Self::Mapping(error)
+    }
+}
+
+impl From<CommandMailboxError> for UiEventPumpError {
+    fn from(error: CommandMailboxError) -> Self {
+        Self::Mailbox(error)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UiLifecycle {
+    Closed,
+    Opening,
+    Open,
+    Closing,
+}
+
+#[derive(Debug)]
+struct UiPumpState {
+    generation: u64,
+    /// Engine へ通知済みで、`AckUiSafepoint` を待っている `UI_CLOSED`。
+    pending_safepoint: Option<u64>,
+    /// child timeout により放棄した safepoint。遅着 ack を warn 付きで受理するため保持する。
+    abandoned_safepoint: Option<u64>,
+    lifecycle: UiLifecycle,
+}
+
+impl Default for UiPumpState {
+    fn default() -> Self {
+        Self {
+            generation: 0,
+            pending_safepoint: None,
+            abandoned_safepoint: None,
+            lifecycle: UiLifecycle::Closed,
+        }
+    }
+}
+
+/// child UI event ring と respawn reset を一つの排他契約へ束ねる host coordinator。
+///
+/// # 提供する保証
+///
+/// - `poll_step` は **pump の Mutex を保持したまま** [`EventRingHost::poll`] の
+///   read → 固定 handler → ack 全区間を実行する。`ack_safepoint`、teardown drain、respawn
+///   reset も同じ Mutex を取るため、#592 の `evt_seq=0` リセット途中を poll が観測しない。
+/// - `reset_after_child_exit` は pump lock の内側で
+///   [`CommandMailboxHost::reset_after_child_exit`] を呼ぶ。全呼び出しの lock 順序は
+///   **pump → mailbox** に固定し、逆順の経路を提供しない。
+/// - [`CommandMailboxHost`] から継承する保証は、通常の command 発行と reset の host 内直列化、
+///   generation による世代跨ぎの command ack 横取り防止、および
+///   `reset_after_child_exit` を旧 child の死亡確認後にだけ呼ぶという契約である。
+/// - generation と通知済み safepoint 水位を同じ state に置くため、respawn で `evt_seq` が 0 に
+///   巻き戻っても旧世代の `AckUiSafepoint` は loud に拒否される。
+/// - handler は `UiPumpNotification` の enqueue、水位判定、既知 kind の lifecycle 簿記だけで、
+///   呼び出し側が任意の ring handler を差し込むことはできない。
+///
+/// # 提供しない保証 / sink の契約
+///
+/// - sink の配送完了や engine 側保存は待たない。sink は **非ブロッキング enqueue のみ**で
+///   なければならない。pump lock 内で channel capacity 待ち、I/O、別 task の join 等を行うと
+///   watchdog と respawn を停止させる。`false` は enqueue 不能を意味し、イベントを未 ack のまま
+///   次回へ残す。
+/// - child の 10 秒 close timeout より前に daemon 独自の timeout を設けない。脱出は child が
+///   `UI_CLOSED_DONE(timeout-without-save)` を publish した事実だけを根拠にする。
+/// - host 内 Mutex は、生存中の child process による共有メモリ store を止めない。したがって
+///   **生存中の child と reset の cross-process 競合は守られず**、reset は死亡確認後に限る。
+/// - [`EventRingHost`] の CAS gate は pump 導入後の reset 排他の主役ではない。pump を経ない
+///   raw/direct poll の同時実行を fail-loud に検出する防御線として残る。
+/// - generation は世代跨ぎの ack を拒否するが、**同一 generation 内で別の `evt_seq` を
+///   取り違えることまでは守らない**。`pending_safepoint` と in-order head の一致検査が別途必要。
+/// - raw [`EventRingHost`] / [`reset_child_starting`] を別々に使うコードまでは型で禁止しない。
+///   daemon の watchdog/initial attach は必ず本型を共有し、この契約へ通す必要がある。
+#[derive(Debug)]
+pub struct UiEventPump {
+    ring: EventRingHost,
+    state: Mutex<UiPumpState>,
+}
+
+/// respawn reset が UI lifecycle に与えた結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiPumpResetOutcome {
+    pub closed_visible_ui: bool,
+    pub generation: u64,
+}
+
+impl UiEventPump {
+    pub fn new(shm_path: PathBuf) -> Self {
+        Self {
+            ring: EventRingHost::new(shm_path),
+            state: Mutex::new(UiPumpState::default()),
+        }
+    }
+
+    /// OPEN_UI 投函直前に lifecycle を予約する。command 失敗時は [`Self::finish_open`] へ
+    /// `false` を渡して戻す。すでに open/closing なら child へ投函する前に loud に拒否する。
+    pub fn begin_open(&self) -> Result<(), UiEventPumpError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| UiEventPumpError::CoordinatorPoisoned)?;
+        if state.lifecycle != UiLifecycle::Closed {
+            return Err(UiEventPumpError::Protocol(format!(
+                "OPEN_UI requested while lifecycle is {:?}",
+                state.lifecycle
+            )));
+        }
+        state.lifecycle = UiLifecycle::Opening;
+        Ok(())
+    }
+
+    pub fn finish_open(&self, succeeded: bool) -> Result<(), UiEventPumpError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| UiEventPumpError::CoordinatorPoisoned)?;
+        if state.lifecycle == UiLifecycle::Opening {
+            state.lifecycle = if succeeded {
+                UiLifecycle::Open
+            } else {
+                UiLifecycle::Closed
+            };
+        }
+        Ok(())
+    }
+
+    /// watchdog の1 tick。固定 handler は broadcast 等への enqueue と水位判定だけを行う。
+    pub fn poll_step<F>(&self, mut sink: F) -> Result<EventPollOutcome, UiEventPumpError>
+    where
+        F: FnMut(UiPumpNotification) -> bool,
+    {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| UiEventPumpError::CoordinatorPoisoned)?;
+        let mmap = open_shared(&self.ring.shm_path)?;
+        let region = region_ptr(&mmap);
+        let mut handler_error = None;
+        let outcome = self.ring.poll(|event| match event.kind {
+            EVT_UI_CLOSED => {
+                state.lifecycle = UiLifecycle::Closing;
+                if state.pending_safepoint != Some(event.seq) {
+                    if !sink(UiPumpNotification::Safepoint {
+                        generation: state.generation,
+                        evt_seq: event.seq,
+                    }) {
+                        return false;
+                    }
+                    state.pending_safepoint = Some(event.seq);
+                }
+
+                // child のただ一つの timeout が DONE を publish した事実を見て初めて abandon する。
+                let next_seq = event.seq.saturating_add(1);
+                let published = unsafe { (*region).evt_seq.read() };
+                if published >= next_seq {
+                    let index = evt_slot_index(next_seq);
+                    let next_kind = unsafe { (*region).evt_kind[index].load(Ordering::Relaxed) };
+                    let next_arg = unsafe { read_cstr_field(&(*region).evt_arg[index]) };
+                    if next_kind == EVT_UI_CLOSED_DONE && next_arg == Some("timeout-without-save") {
+                        tracing::warn!(
+                            generation = state.generation,
+                            evt_seq = event.seq,
+                            "plugin UI safepoint was abandoned after child timeout; acking the blocked head"
+                        );
+                        state.pending_safepoint = None;
+                        state.abandoned_safepoint = Some(event.seq);
+                        return true;
+                    }
+                }
+                false
+            }
+            EVT_UI_CLOSED_DONE => {
+                let completion = match event.arg() {
+                    Some("safepoint-completed") => UiCloseCompletion::SafepointCompleted,
+                    Some("timeout-without-save") => UiCloseCompletion::TimedOutWithoutSave,
+                    other => {
+                        handler_error = Some(UiEventPumpError::Protocol(format!(
+                            "UI_CLOSED_DONE seq {} has invalid completion {other:?}",
+                            event.seq
+                        )));
+                        return false;
+                    }
+                };
+                if sink(UiPumpNotification::CloseDone { completion }) {
+                    state.lifecycle = UiLifecycle::Closed;
+                    true
+                } else {
+                    false
+                }
+            }
+            kind => {
+                handler_error = Some(UiEventPumpError::Protocol(format!(
+                    "event seq {} has unknown kind {kind}",
+                    event.seq
+                )));
+                false
+            }
+        })?;
+        match handler_error {
+            Some(error) => Err(error),
+            None => Ok(outcome),
+        }
+    }
+
+    /// engine が safepoint 保存・atomic rename・project 登記まで完了した時だけ ack を進める。
+    pub fn ack_safepoint(&self, generation: u64, evt_seq: u64) -> Result<(), UiEventPumpError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| UiEventPumpError::CoordinatorPoisoned)?;
+        if generation != state.generation {
+            return Err(UiEventPumpError::GenerationMismatch {
+                expected: state.generation,
+                actual: generation,
+            });
+        }
+        let mmap = open_shared(&self.ring.shm_path)?;
+        let region = region_ptr(&mmap);
+        let ack = unsafe { (*region).evt_ack_seq.load_own() };
+        if state.abandoned_safepoint == Some(evt_seq) && ack >= evt_seq {
+            tracing::warn!(
+                generation,
+                evt_seq,
+                "late plugin UI safepoint ack arrived after timeout-without-save; accepting completed save"
+            );
+            state.abandoned_safepoint = None;
+            return Ok(());
+        }
+        if state.pending_safepoint != Some(evt_seq) {
+            return Err(UiEventPumpError::Protocol(format!(
+                "AckUiSafepoint seq {evt_seq} does not match pending {:?}",
+                state.pending_safepoint
+            )));
+        }
+        let published = unsafe { (*region).evt_seq.read() };
+        if ack.saturating_add(1) != evt_seq || evt_seq > published {
+            return Err(UiEventPumpError::Protocol(format!(
+                "AckUiSafepoint seq {evt_seq} is not the in-order head (ack={ack}, published={published})"
+            )));
+        }
+        unsafe { (*region).evt_ack_seq.publish(evt_seq) };
+        state.pending_safepoint = None;
+        Ok(())
+    }
+
+    /// 旧 child の死亡確認後、replacement spawn 前に呼ぶ唯一の daemon reset 経路。
+    pub fn reset_after_child_exit(
+        &self,
+        mailbox: &CommandMailboxHost,
+    ) -> Result<UiPumpResetOutcome, UiEventPumpError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| UiEventPumpError::CoordinatorPoisoned)?;
+        let closed_visible_ui = state.lifecycle != UiLifecycle::Closed;
+        if let Some(evt_seq) = state.pending_safepoint.take() {
+            tracing::error!(
+                generation = state.generation,
+                evt_seq,
+                "plugin child exited with a UI safepoint waiter pending"
+            );
+        }
+        // LOCK ORDER: pump state -> command mailbox. No code may acquire these in reverse.
+        mailbox.reset_after_child_exit()?;
+        state.generation = state.generation.wrapping_add(1);
+        state.abandoned_safepoint = None;
+        state.lifecycle = UiLifecycle::Closed;
+        Ok(UiPumpResetOutcome {
+            closed_visible_ui,
+            generation: state.generation,
+        })
+    }
+
+    /// 正常 teardown の QUIT 前に、現在 publish 済みのイベントを最終処理する。
+    ///
+    /// safepoint は停止により完遂不能なので error を残して ack し、DONE の enqueue 不能も error
+    /// を残して打ち切る。これは時間経過による daemon timeout ではなく、明示 teardown の終端処理。
+    pub fn final_drain<F>(&self, mut sink: F) -> Result<EventPollOutcome, UiEventPumpError>
+    where
+        F: FnMut(UiPumpNotification) -> bool,
+    {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| UiEventPumpError::CoordinatorPoisoned)?;
+        let outcome = self.ring.poll(|event| {
+            match event.kind {
+                EVT_UI_CLOSED => {
+                    if state.pending_safepoint != Some(event.seq)
+                        && !sink(UiPumpNotification::Safepoint {
+                            generation: state.generation,
+                            evt_seq: event.seq,
+                        })
+                    {
+                        tracing::error!(
+                            evt_seq = event.seq,
+                            "teardown could not enqueue final plugin UI safepoint notification"
+                        );
+                    }
+                    tracing::error!(
+                        generation = state.generation,
+                        evt_seq = event.seq,
+                        "teardown is abandoning an incomplete plugin UI safepoint before QUIT"
+                    );
+                    state.pending_safepoint = None;
+                    state.abandoned_safepoint = Some(event.seq);
+                }
+                EVT_UI_CLOSED_DONE => {
+                    let completion = match event.arg() {
+                        Some("safepoint-completed") => UiCloseCompletion::SafepointCompleted,
+                        Some("timeout-without-save") => UiCloseCompletion::TimedOutWithoutSave,
+                        other => {
+                            tracing::error!(
+                                evt_seq = event.seq,
+                                ?other,
+                                "teardown is discarding malformed UI_CLOSED_DONE"
+                            );
+                            return true;
+                        }
+                    };
+                    if !sink(UiPumpNotification::CloseDone { completion }) {
+                        tracing::error!(
+                            evt_seq = event.seq,
+                            "teardown could not enqueue final plugin UI close completion"
+                        );
+                    }
+                }
+                kind => tracing::error!(
+                    evt_seq = event.seq,
+                    kind,
+                    "teardown is discarding an unknown plugin UI event"
+                ),
+            }
+            true
+        })?;
+        if let Some(evt_seq) = state.pending_safepoint.take() {
+            tracing::error!(
+                generation = state.generation,
+                evt_seq,
+                "teardown failed a plugin UI safepoint waiter that was not present in the ring"
+            );
+        }
+        state.lifecycle = UiLifecycle::Closed;
+        Ok(outcome)
     }
 }
 
@@ -2382,7 +2798,10 @@ mod tests {
             let child_mmap = open_shared(&child_shm).expect("child map");
             let region = region_ptr(&child_mmap);
             let mut previous_seq = 0;
-            for (expected_kind, detail) in [(CMD_OPEN_UI, ""), (CMD_CLOSE_UI, "already-closing")] {
+            for (expected_kind, expected_arg, detail) in [
+                (CMD_OPEN_UI, "Oracle — lead[0]", ""),
+                (CMD_CLOSE_UI, "", "already-closing"),
+            ] {
                 let deadline = Instant::now() + Duration::from_secs(1);
                 let seq = loop {
                     let seq = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
@@ -2394,7 +2813,7 @@ mod tests {
                 };
                 unsafe {
                     assert_eq!((*region).cmd_kind.load(Ordering::Acquire), expected_kind);
-                    assert_eq!(read_cstr_field(&(*region).cmd_arg), Some(""));
+                    assert_eq!(read_cstr_field(&(*region).cmd_arg), Some(expected_arg));
                     assert!(write_cstr_field(&mut (*region).cmd_result_detail, detail));
                     (*region).cmd_result_len.store(0, Ordering::Relaxed);
                     (*region).cmd_result.store(CMD_RESULT_OK, Ordering::Relaxed);
@@ -2404,7 +2823,7 @@ mod tests {
             }
         });
 
-        let open = host.issue_open_ui().expect("OPEN_UI ack");
+        let open = host.issue_open_ui("Oracle — lead[0]").expect("OPEN_UI ack");
         assert_eq!(open.bytes_written, 0);
         assert_eq!(open.detail, "");
         let close = host.issue_close_ui().expect("CLOSE_UI ack");
@@ -2842,6 +3261,393 @@ mod tests {
         }
         drop(mmap);
         let _ = std::fs::remove_file(path);
+    }
+
+    fn publish_ui_event(
+        region: *mut SharedRegion,
+        child: &mut EventRingChild,
+        kind: u32,
+        arg: &str,
+    ) {
+        child.queue(kind, arg).expect("queue UI event");
+        assert_eq!(
+            unsafe { child.service(region) }.expect("publish UI event"),
+            1
+        );
+    }
+
+    /// #592: poll の固定 sink が停止している間、respawn reset は pump lock の外へ出られない。
+    /// raw `reset_child_starting` へ差し替える変異では `reset_done` が release 前に届いて red になる。
+    #[test]
+    fn ui_event_pump_serializes_poll_sink_and_respawn_reset() {
+        let shm = mailbox_test_path("ui-pump-reset-exclusion");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mut child = EventRingChild::new();
+        publish_ui_event(region, &mut child, EVT_UI_CLOSED, "");
+
+        let pump = Arc::new(UiEventPump::new(shm.clone()));
+        let mailbox = Arc::new(CommandMailboxHost::new(shm.clone()));
+        let (sink_entered_tx, sink_entered_rx) = std::sync::mpsc::channel();
+        let (release_sink_tx, release_sink_rx) = std::sync::mpsc::channel();
+        let poll_pump = pump.clone();
+        let poller = std::thread::spawn(move || {
+            poll_pump.poll_step(|notification| {
+                assert!(matches!(notification, UiPumpNotification::Safepoint { .. }));
+                sink_entered_tx.send(()).expect("announce sink entry");
+                release_sink_rx.recv().expect("release sink");
+                true
+            })
+        });
+        sink_entered_rx.recv().expect("poll reached sink");
+
+        let reset_pump = pump.clone();
+        let reset_mailbox = mailbox.clone();
+        let (reset_done_tx, reset_done_rx) = std::sync::mpsc::channel();
+        let resetter = std::thread::spawn(move || {
+            let result = reset_pump.reset_after_child_exit(&reset_mailbox);
+            reset_done_tx.send(result).expect("report reset");
+        });
+        assert!(
+            matches!(
+                reset_done_rx.recv_timeout(Duration::from_millis(50)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            ),
+            "reset must remain blocked while poll_step owns the pump lock"
+        );
+        release_sink_tx.send(()).expect("release poll sink");
+        assert!(matches!(
+            poller.join().expect("poller join").expect("poll result"),
+            EventPollOutcome::Blocked { seq: 1, .. }
+        ));
+        reset_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("reset completes after poll release")
+            .expect("reset result");
+        resetter.join().expect("resetter join");
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    /// 補助 stress: safe publish order（kind/arg → seq → ack）と reset を別スレッドで交互に走らせ、
+    /// pump 排他下の poll がリセット途中の `ack > published` を一度も観測しないことを押さえる。
+    #[test]
+    fn ui_event_pump_poll_reset_stress_has_no_false_invalid_data() {
+        const ITERATIONS: usize = 4_000;
+        let shm = mailbox_test_path("ui-pump-reset-stress");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let pump = Arc::new(UiEventPump::new(shm.clone()));
+        let mailbox = Arc::new(CommandMailboxHost::new(shm.clone()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let errors = Arc::new(Mutex::new(Vec::new()));
+
+        let poll_pump = pump.clone();
+        let poll_stop = stop.clone();
+        let poll_errors = errors.clone();
+        let poller = std::thread::spawn(move || {
+            while !poll_stop.load(Ordering::Acquire) {
+                if let Err(error) = poll_pump.poll_step(|_| true) {
+                    poll_errors
+                        .lock()
+                        .expect("errors lock")
+                        .push(error.to_string());
+                }
+                std::thread::yield_now();
+            }
+        });
+
+        for _ in 0..ITERATIONS {
+            // Setup order never creates ack > published. A raw reset mutation does: seq=0 is
+            // visible before ack=0, which the concurrent poller catches often and records.
+            unsafe {
+                assert!(write_cstr_field(
+                    &mut (*region).evt_arg[evt_slot_index(1)],
+                    "safepoint-completed"
+                ));
+                (*region).evt_kind[evt_slot_index(1)].store(EVT_UI_CLOSED_DONE, Ordering::Relaxed);
+                (*region).evt_seq.publish(1);
+                (*region).evt_ack_seq.publish(1);
+            }
+            pump.reset_after_child_exit(&mailbox).expect("pump reset");
+        }
+        stop.store(true, Ordering::Release);
+        poller.join().expect("poller join");
+        let errors = errors.lock().expect("errors lock");
+        assert!(
+            errors
+                .iter()
+                .all(|error| !error.contains("ack 1 exceeds published seq 0")),
+            "poll observed a partial reset: {errors:?}"
+        );
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    /// Real shm scripted child: CLOSE_UI command ack is Phase A acceptance only. Completion is
+    /// emitted solely after engine ack advances the safepoint and child publishes DONE.
+    #[test]
+    fn ui_event_pump_close_completion_originates_from_done_not_command_ack_or_closed() {
+        let shm = mailbox_test_path("ui-pump-scripted-close");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mailbox = Arc::new(CommandMailboxHost::new(shm.clone()));
+        let pump = UiEventPump::new(shm.clone());
+        let child_shm = shm.clone();
+        let child = std::thread::spawn(move || {
+            let child_mmap = open_shared(&child_shm).expect("child map");
+            let child_region = region_ptr(&child_mmap);
+            let seq = wait_for_command(child_region);
+            unsafe {
+                assert_eq!(
+                    (*child_region).cmd_kind.load(Ordering::Acquire),
+                    CMD_CLOSE_UI
+                );
+                (*child_region)
+                    .cmd_result
+                    .store(CMD_RESULT_OK, Ordering::Relaxed);
+                (*child_region).cmd_ack_seq.store(seq, Ordering::Release);
+            }
+            let mut events = EventRingChild::new();
+            publish_ui_event(child_region, &mut events, EVT_UI_CLOSED, "");
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while unsafe { (*child_region).evt_ack_seq.read() } < 1 {
+                assert!(
+                    Instant::now() < deadline,
+                    "engine safepoint ack did not arrive"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            publish_ui_event(
+                child_region,
+                &mut events,
+                EVT_UI_CLOSED_DONE,
+                "safepoint-completed",
+            );
+        });
+
+        let issuer_mailbox = mailbox.clone();
+        let issuer = std::thread::spawn(move || issuer_mailbox.issue_close_ui());
+        issuer
+            .join()
+            .expect("issuer join")
+            .expect("Phase A command ack");
+
+        let mut notifications = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while notifications.is_empty() {
+            pump.poll_step(|event| {
+                notifications.push(event);
+                true
+            })
+            .expect("poll CLOSED");
+            assert!(Instant::now() < deadline, "UI_CLOSED was not published");
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            notifications,
+            vec![UiPumpNotification::Safepoint {
+                generation: 0,
+                evt_seq: 1
+            }],
+            "command ack plus UI_CLOSED must not claim close completion"
+        );
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 0);
+
+        pump.ack_safepoint(0, 1).expect("engine ack");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while notifications.len() < 2 {
+            pump.poll_step(|event| {
+                notifications.push(event);
+                true
+            })
+            .expect("poll DONE");
+            assert!(
+                Instant::now() < deadline,
+                "UI_CLOSED_DONE was not published"
+            );
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            notifications[1],
+            UiPumpNotification::CloseDone {
+                completion: UiCloseCompletion::SafepointCompleted
+            }
+        );
+        child.join().expect("child join");
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn ui_event_pump_does_not_ack_closed_before_engine_ack_and_notifies_once() {
+        let shm = mailbox_test_path("ui-pump-engine-ack");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mut child = EventRingChild::new();
+        publish_ui_event(region, &mut child, EVT_UI_CLOSED, "");
+        let pump = UiEventPump::new(shm.clone());
+        let mut notifications = Vec::new();
+        for _ in 0..2 {
+            assert!(matches!(
+                pump.poll_step(|event| {
+                    notifications.push(event);
+                    true
+                })
+                .expect("blocked poll"),
+                EventPollOutcome::Blocked { seq: 1, .. }
+            ));
+            assert_eq!(
+                unsafe { (*region).evt_ack_seq.read() },
+                0,
+                "Blocked UI_CLOSED must remain unacked before AckUiSafepoint"
+            );
+        }
+        assert_eq!(
+            notifications.len(),
+            1,
+            "a blocked head is notified only once"
+        );
+        pump.ack_safepoint(0, 1).expect("matching engine ack");
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 1);
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn ui_event_pump_rejects_stale_generation_even_when_evt_seq_repeats() {
+        let shm = mailbox_test_path("ui-pump-generation");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let pump = UiEventPump::new(shm.clone());
+        let mailbox = CommandMailboxHost::new(shm.clone());
+        let reset = pump
+            .reset_after_child_exit(&mailbox)
+            .expect("advance generation");
+        assert_eq!(reset.generation, 1);
+        let mut child = EventRingChild::new();
+        publish_ui_event(region, &mut child, EVT_UI_CLOSED, "");
+        pump.poll_step(|_| true).expect("notify generation 1");
+
+        assert!(matches!(
+            pump.ack_safepoint(0, 1),
+            Err(UiEventPumpError::GenerationMismatch {
+                expected: 1,
+                actual: 0
+            })
+        ));
+        assert_eq!(
+            unsafe { (*region).evt_ack_seq.read() },
+            0,
+            "stale generation must not ack replacement child's seq 1"
+        );
+        pump.ack_safepoint(1, 1).expect("current generation ack");
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn ui_event_pump_abandons_only_after_timeout_done_and_accepts_late_ack() {
+        let shm = mailbox_test_path("ui-pump-abandon");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let pump = UiEventPump::new(shm.clone());
+        let mut child = EventRingChild::new();
+        publish_ui_event(region, &mut child, EVT_UI_CLOSED, "");
+        let mut notifications = Vec::new();
+        pump.poll_step(|event| {
+            notifications.push(event);
+            true
+        })
+        .expect("initial blocked poll");
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 0);
+
+        publish_ui_event(
+            region,
+            &mut child,
+            EVT_UI_CLOSED_DONE,
+            "timeout-without-save",
+        );
+        assert_eq!(
+            pump.poll_step(|event| {
+                notifications.push(event);
+                true
+            })
+            .expect("abandon and drain DONE"),
+            advanced(2)
+        );
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 2);
+        assert_eq!(
+            notifications,
+            vec![
+                UiPumpNotification::Safepoint {
+                    generation: 0,
+                    evt_seq: 1
+                },
+                UiPumpNotification::CloseDone {
+                    completion: UiCloseCompletion::TimedOutWithoutSave
+                }
+            ]
+        );
+        pump.ack_safepoint(0, 1)
+            .expect("late completed save is accepted with warning");
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn ui_event_pump_final_drain_fails_blocked_safepoint_before_teardown() {
+        let shm = mailbox_test_path("ui-pump-final-drain");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let pump = UiEventPump::new(shm.clone());
+        let mut child = EventRingChild::new();
+        publish_ui_event(region, &mut child, EVT_UI_CLOSED, "");
+
+        let mut notifications = Vec::new();
+        assert!(matches!(
+            pump.poll_step(|event| {
+                notifications.push(event);
+                true
+            })
+            .expect("initial blocked poll"),
+            EventPollOutcome::Blocked { seq: 1, .. }
+        ));
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 0);
+
+        assert_eq!(
+            pump.final_drain(|event| {
+                notifications.push(event);
+                true
+            })
+            .expect("teardown drain"),
+            advanced(1)
+        );
+        assert_eq!(
+            unsafe { (*region).evt_ack_seq.read() },
+            1,
+            "teardown must not leave the blocked ring head behind"
+        );
+        assert_eq!(
+            notifications,
+            vec![UiPumpNotification::Safepoint {
+                generation: 0,
+                evt_seq: 1
+            }],
+            "the already-notified safepoint must not be delivered twice during drain"
+        );
+        pump.begin_open()
+            .expect("final drain returns lifecycle to Closed");
+        pump.finish_open(false).expect("release test reservation");
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
     }
 
     // 存在しないファイルは map せず Err(open は read-only open なので作成しない)。

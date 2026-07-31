@@ -17,9 +17,10 @@ use std::time::{Duration, Instant};
 use orbit_audio_native::PostProcessor;
 use orbit_audio_sandbox::{
     open_shared, region_ptr, CommandMailboxHost, NeutralEvent, PipelinedInstrumentHost,
-    TransportContext, VoiceKey, BUF_LEN, CONTROL_QUIT,
+    TransportContext, UiEventPump, VoiceKey, BUF_LEN, CONTROL_QUIT,
 };
 
+use crate::engine_wrap::PluginUiWiring;
 use crate::outproc_respawn_guard::advance_fast_respawn_streak;
 
 const WATCHDOG_POLL: Duration = Duration::from_millis(20);
@@ -450,6 +451,9 @@ impl InstrumentChildSupervisor {
         state: Option<PathBuf>,
     ) -> io::Result<Self> {
         let mailbox = Arc::new(CommandMailboxHost::new(shm_path.clone()));
+        let ui_pump = Arc::new(UiEventPump::new(shm_path.clone()));
+        let ui_target = Arc::new(Mutex::new(None));
+        let (ui_events, _) = tokio::sync::broadcast::channel(16);
         Self::spawn_with_mailbox(
             first_child,
             shm_path,
@@ -460,11 +464,16 @@ impl InstrumentChildSupervisor {
             sample_rate,
             Arc::new(Mutex::new(state)),
             mailbox,
+            PluginUiWiring {
+                pump: ui_pump,
+                target: ui_target,
+                events: ui_events,
+            },
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn spawn_with_mailbox(
+    pub(crate) fn spawn_with_mailbox(
         mut first_child: Child,
         shm_path: PathBuf,
         stats: Arc<OutProcInstrumentStats>,
@@ -474,7 +483,13 @@ impl InstrumentChildSupervisor {
         sample_rate: u32,
         latest_state: Arc<Mutex<Option<PathBuf>>>,
         mailbox: Arc<CommandMailboxHost>,
+        ui: PluginUiWiring,
     ) -> io::Result<Self> {
+        let PluginUiWiring {
+            pump: ui_pump,
+            target: ui_target,
+            events: ui_events,
+        } = ui;
         let ctl_mmap = match open_shared(&shm_path) {
             Ok(mmap) => mmap,
             Err(error) => {
@@ -601,13 +616,22 @@ impl InstrumentChildSupervisor {
                                 "{child_name_wd} exited ({status}); respawning"
                             );
                             // 旧 child の死亡確認後にだけ command failure/reset を行う。
-                            if let Err(error) = mailbox.reset_after_child_exit() {
-                                tracing::error!(
-                                    plugin = ?plugin,
-                                    "instrument mailbox reset failed; measurement invalid: {error}"
+                            let reset = match ui_pump.reset_after_child_exit(&mailbox) {
+                                Ok(reset) => reset,
+                                Err(error) => {
+                                    tracing::error!(
+                                        plugin = ?plugin,
+                                        "instrument UI pump/mailbox reset failed; measurement invalid: {error}"
+                                    );
+                                    stats.measurement_invalid.store(true, Ordering::Release);
+                                    break;
+                                }
+                            };
+                            if reset.closed_visible_ui {
+                                crate::engine_wrap::enqueue_plugin_ui_closed_by_respawn(
+                                    &ui_target,
+                                    &ui_events,
                                 );
-                                stats.measurement_invalid.store(true, Ordering::Release);
-                                break;
                             }
                             let state = match latest_state.lock() {
                                 Ok(state) => state.clone(),
@@ -652,6 +676,15 @@ impl InstrumentChildSupervisor {
                         }
                         Ok(None) => {
                             try_wait_errors = 0;
+                            if let Err(error) = ui_pump.poll_step(|notification| {
+                                crate::engine_wrap::enqueue_plugin_ui_notification(
+                                    &ui_target,
+                                    &ui_events,
+                                    notification,
+                                )
+                            }) {
+                                tracing::error!("instrument UI event pump failed: {error}");
+                            }
                             std::thread::sleep(WATCHDOG_POLL);
                         }
                         Err(error) => {
@@ -666,6 +699,15 @@ impl InstrumentChildSupervisor {
                             std::thread::sleep(WATCHDOG_POLL);
                         }
                     }
+                }
+                if let Err(error) = ui_pump.final_drain(|notification| {
+                    crate::engine_wrap::enqueue_plugin_ui_notification(
+                        &ui_target,
+                        &ui_events,
+                        notification,
+                    )
+                }) {
+                    tracing::error!("instrument UI event final drain failed before QUIT: {error}");
                 }
                 unsafe {
                     (*region).control.store(CONTROL_QUIT, Ordering::Release);
@@ -1289,6 +1331,9 @@ mod tests {
         let first_pid = first.id();
         let latest_state = Arc::new(Mutex::new(None));
         let mailbox = Arc::new(CommandMailboxHost::new(shm.clone()));
+        let ui_pump = Arc::new(UiEventPump::new(shm.clone()));
+        let ui_target = Arc::new(Mutex::new(None));
+        let (ui_events, _) = tokio::sync::broadcast::channel(16);
         let sup = InstrumentChildSupervisor::spawn_with_mailbox(
             first,
             shm.clone(),
@@ -1299,6 +1344,11 @@ mod tests {
             48_000,
             latest_state.clone(),
             mailbox.clone(),
+            PluginUiWiring {
+                pump: ui_pump,
+                target: ui_target,
+                events: ui_events,
+            },
         )
         .expect("supervisor spawn");
 

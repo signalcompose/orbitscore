@@ -20,7 +20,7 @@ use tracing::warn;
 use crate::engine_wrap::ClapPluginRole;
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 use crate::engine_wrap::PluginStateTarget;
-use crate::engine_wrap::{EngineWrap, WrapError};
+use crate::engine_wrap::{EngineWrap, PluginUiEvent, WrapError};
 use crate::protocol::{
     Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError,
     ERROR_CODE_CLAP_PROCESS_ERROR, ERROR_CODE_DEVICE_LOST, ERROR_CODE_ENGINE_LOCK_CONTENTION,
@@ -31,7 +31,8 @@ use crate::protocol::{
     ERROR_CODE_OUTPROC_INSTRUMENT_OUTPUT_DROPPED, ERROR_CODE_OUTPROC_INSTRUMENT_RESPAWN,
     ERROR_CODE_PLUGIN_EVENT_RING_OVERFLOW, ERROR_CODE_STREAM_XRUN, ERROR_CODE_UNROUTABLE_EVENTS,
     ERROR_SEVERITY_FATAL, ERROR_SEVERITY_WARNING, EVENT_DAEMON_ERROR, EVENT_PLAY_ENDED,
-    EVENT_PLAY_STARTED, EVENT_STREAM_STATS,
+    EVENT_PLAY_STARTED, EVENT_PLUGIN_UI_CLOSED, EVENT_PLUGIN_UI_CLOSED_BY_RESPAWN,
+    EVENT_PLUGIN_UI_CLOSE_DONE, EVENT_STREAM_STATS,
 };
 
 /// writer task のキュー容量。過大に積まれると back pressure をかける。
@@ -51,6 +52,57 @@ fn daemon_error_event(severity: &str, code: &str, message: String) -> Event {
             "message": message,
         }),
     )
+}
+
+fn plugin_ui_protocol_event(event: PluginUiEvent) -> Event {
+    match event {
+        PluginUiEvent::Closed {
+            target,
+            generation,
+            evt_seq,
+        } => Event::new(
+            EVENT_PLUGIN_UI_CLOSED,
+            json!({
+                "target": target,
+                "generation": generation,
+                "evt_seq": evt_seq,
+            }),
+        ),
+        PluginUiEvent::CloseDone { target, completion } => Event::new(
+            EVENT_PLUGIN_UI_CLOSE_DONE,
+            json!({
+                "target": target,
+                "completion": completion.as_str(),
+            }),
+        ),
+        PluginUiEvent::ClosedByRespawn { target } => Event::new(
+            EVENT_PLUGIN_UI_CLOSED_BY_RESPAWN,
+            json!({ "target": target }),
+        ),
+    }
+}
+
+async fn forward_plugin_ui_events(
+    mut events: tokio::sync::broadcast::Receiver<PluginUiEvent>,
+    tx: mpsc::Sender<String>,
+) {
+    loop {
+        let event = match events.recv().await {
+            Ok(event) => event,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                warn!(skipped, "plugin UI WebSocket subscriber lagged");
+                continue;
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        };
+        if tx
+            .send(to_json_or_fallback(&plugin_ui_protocol_event(event)))
+            .await
+            .is_err()
+        {
+            break;
+        }
+    }
 }
 
 #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
@@ -170,6 +222,87 @@ fn instrument_only_param_misused(params: &Value, field: &str) -> bool {
     params.get("role").and_then(Value::as_str) != Some("instrument") && params.get(field).is_some()
 }
 
+/// GetPluginState and all three UI requests share this single role/bus/instance resolver.
+/// UI requests place the vocabulary under `target`; GetPluginState's established wire shape is
+/// top-level, so callers pass the relevant object rather than duplicating the role match.
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn parse_plugin_target(
+    params: &Value,
+    method: &str,
+    _unavailable_code: &'static str,
+) -> Result<PluginStateTarget, ProtocolError> {
+    match params.get("role").and_then(Value::as_str) {
+        Some("effect") => {
+            #[cfg(not(feature = "outproc-effect"))]
+            return Err(ProtocolError::new(
+                _unavailable_code,
+                format!("{method} role='effect' requires outproc-effect"),
+            ));
+            #[cfg(feature = "outproc-effect")]
+            {
+                if params.get("instance").is_some() {
+                    return Err(ProtocolError::new(
+                        "MALFORMED_REQUEST",
+                        format!("{method} instance is only valid for role='instrument'"),
+                    ));
+                }
+                let bus = parse_bus_param(params)
+                    .map_err(|message| ProtocolError::new("MALFORMED_REQUEST", message))?;
+                Ok(PluginStateTarget::Effect { bus })
+            }
+        }
+        Some("instrument") => {
+            #[cfg(not(feature = "outproc-instrument"))]
+            return Err(ProtocolError::new(
+                _unavailable_code,
+                format!("{method} role='instrument' requires outproc-instrument"),
+            ));
+            #[cfg(feature = "outproc-instrument")]
+            {
+                if params.get("bus").is_some() {
+                    return Err(ProtocolError::new(
+                        "MALFORMED_REQUEST",
+                        format!("{method} bus is only valid for role='effect'"),
+                    ));
+                }
+                let instance = parse_optional_nonempty_string_param(params, "instance")
+                    .map_err(|message| ProtocolError::new("MALFORMED_REQUEST", message))?
+                    .ok_or_else(|| {
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            format!("{method} role='instrument' requires 'instance'"),
+                        )
+                    })?;
+                Ok(PluginStateTarget::Instrument { instance })
+            }
+        }
+        _ => Err(ProtocolError::new(
+            "MALFORMED_REQUEST",
+            format!("{method} requires role='effect' or role='instrument'"),
+        )),
+    }
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn ui_target_object<'a>(params: &'a Value, method: &str) -> Result<&'a Value, ProtocolError> {
+    params.get("target").ok_or_else(|| {
+        ProtocolError::new(
+            "MALFORMED_REQUEST",
+            format!("{method} requires a 'target' object"),
+        )
+    })
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn ui_index(params: &Value, method: &str) -> Result<u64, ProtocolError> {
+    params.get("index").and_then(Value::as_u64).ok_or_else(|| {
+        ProtocolError::new(
+            "MALFORMED_REQUEST",
+            format!("{method} requires a non-negative integer 'index'"),
+        )
+    })
+}
+
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -189,6 +322,15 @@ pub async fn run(
             }
         }
     });
+
+    // Watchdog threads publish into one daemon-internal tokio broadcast. This subscriber only
+    // adapts it to the session's existing WS writer queue; no child IPC or engine connection is
+    // added. Lag is loud because these close/safepoint frames are loss-sensitive.
+    let ui_event_task = {
+        let tx = tx.clone();
+        let events = engine.subscribe_plugin_ui_events();
+        tokio::spawn(forward_plugin_ui_events(events, tx))
+    };
 
     // StreamStats 1 Hz ticker。mpsc の送信が失敗（= writer/reader 終了）した
     // 時点で自然に exit する。reader 側が閉じる tx の clone を持つため、
@@ -697,6 +839,12 @@ pub async fn run(
         Err(e) if e.is_cancelled() => {}
         Err(e) => warn!("stats task terminated abnormally: {e}"),
     }
+    ui_event_task.abort();
+    match ui_event_task.await {
+        Ok(()) => {}
+        Err(e) if e.is_cancelled() => {}
+        Err(e) => warn!("plugin UI event task terminated abnormally: {e}"),
+    }
     drop(tx);
     if let Err(e) = writer_task.await {
         warn!("writer task terminated abnormally: {e}");
@@ -1114,91 +1262,13 @@ async fn handle_command(
                         )
                     }
                 };
-                let target = match params.get("role").and_then(Value::as_str) {
-                    Some("effect") => {
-                        #[cfg(not(feature = "outproc-effect"))]
-                        return err(
-                            &id,
-                            ProtocolError::new(
-                                "PLUGIN_STATE_UNAVAILABLE",
-                                "GetPluginState role='effect' requires outproc-effect",
-                            ),
-                        );
-                        #[cfg(feature = "outproc-effect")]
-                        {
-                            if params.get("instance").is_some() {
-                                return err(
-                                    &id,
-                                    ProtocolError::new(
-                                        "MALFORMED_REQUEST",
-                                        "GetPluginState instance is only valid for role='instrument'",
-                                    ),
-                                );
-                            }
-                            let bus = match parse_bus_param(&params) {
-                                Ok(bus) => bus,
-                                Err(message) => {
-                                    return err(
-                                        &id,
-                                        ProtocolError::new("MALFORMED_REQUEST", message),
-                                    )
-                                }
-                            };
-                            PluginStateTarget::Effect { bus }
-                        }
-                    }
-                    Some("instrument") => {
-                        #[cfg(not(feature = "outproc-instrument"))]
-                        return err(
-                            &id,
-                            ProtocolError::new(
-                                "PLUGIN_STATE_UNAVAILABLE",
-                                "GetPluginState role='instrument' requires outproc-instrument",
-                            ),
-                        );
-                        #[cfg(feature = "outproc-instrument")]
-                        {
-                            if params.get("bus").is_some() {
-                                return err(
-                                    &id,
-                                    ProtocolError::new(
-                                        "MALFORMED_REQUEST",
-                                        "GetPluginState bus is only valid for role='effect'",
-                                    ),
-                                );
-                            }
-                            let instance =
-                                match parse_optional_nonempty_string_param(&params, "instance") {
-                                    Ok(Some(instance)) => instance,
-                                    Ok(None) => {
-                                        return err(
-                                            &id,
-                                            ProtocolError::new(
-                                                "MALFORMED_REQUEST",
-                                                "GetPluginState role='instrument' requires \
-                                                 'instance'",
-                                            ),
-                                        )
-                                    }
-                                    Err(message) => {
-                                        return err(
-                                            &id,
-                                            ProtocolError::new("MALFORMED_REQUEST", message),
-                                        )
-                                    }
-                                };
-                            PluginStateTarget::Instrument { instance }
-                        }
-                    }
-                    _ => {
-                        return err(
-                            &id,
-                            ProtocolError::new(
-                                "MALFORMED_REQUEST",
-                                "GetPluginState requires role='effect' or role='instrument'",
-                            ),
-                        )
-                    }
+                let target = match parse_plugin_target(
+                    &params,
+                    "GetPluginState",
+                    "PLUGIN_STATE_UNAVAILABLE",
+                ) {
+                    Ok(target) => target,
+                    Err(error) => return err(&id, error),
                 };
                 let engine = engine.clone();
                 let saved = tokio::task::spawn_blocking(move || {
@@ -1218,6 +1288,166 @@ async fn handle_command(
                         &id,
                         ProtocolError::new("INTERNAL_ERROR", join_error.to_string()),
                     ),
+                }
+            }
+        }
+        "OpenPluginUI" => {
+            #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
+            {
+                err(
+                    &id,
+                    ProtocolError::new(
+                        "PLUGIN_UI_UNAVAILABLE",
+                        "OpenPluginUI requires outproc-effect or outproc-instrument",
+                    ),
+                )
+            }
+            #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+            {
+                let target_params = match ui_target_object(&params, "OpenPluginUI") {
+                    Ok(target) => target,
+                    Err(error) => return err(&id, error),
+                };
+                let target = match parse_plugin_target(
+                    target_params,
+                    "OpenPluginUI",
+                    "PLUGIN_UI_UNAVAILABLE",
+                ) {
+                    Ok(target) => target,
+                    Err(error) => return err(&id, error),
+                };
+                let index = match ui_index(&params, "OpenPluginUI") {
+                    Ok(index) => index,
+                    Err(error) => return err(&id, error),
+                };
+                let window_title = match params
+                    .get("windowTitle")
+                    .and_then(Value::as_str)
+                    .filter(|title| !title.trim().is_empty())
+                {
+                    Some(title) => title.to_owned(),
+                    None => {
+                        return err(
+                            &id,
+                            ProtocolError::new(
+                                "MALFORMED_REQUEST",
+                                "OpenPluginUI requires a non-empty 'windowTitle'",
+                            ),
+                        )
+                    }
+                };
+                let engine = engine.clone();
+                match tokio::task::spawn_blocking(move || {
+                    engine.open_outproc_plugin_ui(target, index, window_title)
+                })
+                .await
+                {
+                    Ok(Ok(())) => ok(&id, json!({"status": "opened"})),
+                    Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
+                    Err(error) => err(&id, ProtocolError::new("INTERNAL_ERROR", error.to_string())),
+                }
+            }
+        }
+        "ClosePluginUI" => {
+            #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
+            {
+                err(
+                    &id,
+                    ProtocolError::new(
+                        "PLUGIN_UI_UNAVAILABLE",
+                        "ClosePluginUI requires outproc-effect or outproc-instrument",
+                    ),
+                )
+            }
+            #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+            {
+                let target_params = match ui_target_object(&params, "ClosePluginUI") {
+                    Ok(target) => target,
+                    Err(error) => return err(&id, error),
+                };
+                let target = match parse_plugin_target(
+                    target_params,
+                    "ClosePluginUI",
+                    "PLUGIN_UI_UNAVAILABLE",
+                ) {
+                    Ok(target) => target,
+                    Err(error) => return err(&id, error),
+                };
+                let index = match ui_index(&params, "ClosePluginUI") {
+                    Ok(index) => index,
+                    Err(error) => return err(&id, error),
+                };
+                let engine = engine.clone();
+                match tokio::task::spawn_blocking(move || {
+                    engine.close_outproc_plugin_ui(target, index)
+                })
+                .await
+                {
+                    // This is explicitly Phase A acceptance, never close completion.
+                    Ok(Ok(())) => ok(&id, json!({"status": "accepted"})),
+                    Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
+                    Err(error) => err(&id, ProtocolError::new("INTERNAL_ERROR", error.to_string())),
+                }
+            }
+        }
+        "AckUiSafepoint" => {
+            #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
+            {
+                err(
+                    &id,
+                    ProtocolError::new(
+                        "PLUGIN_UI_UNAVAILABLE",
+                        "AckUiSafepoint requires outproc-effect or outproc-instrument",
+                    ),
+                )
+            }
+            #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+            {
+                let target_params = match ui_target_object(&params, "AckUiSafepoint") {
+                    Ok(target) => target,
+                    Err(error) => return err(&id, error),
+                };
+                let target = match parse_plugin_target(
+                    target_params,
+                    "AckUiSafepoint",
+                    "PLUGIN_UI_UNAVAILABLE",
+                ) {
+                    Ok(target) => target,
+                    Err(error) => return err(&id, error),
+                };
+                let generation = match params.get("generation").and_then(Value::as_u64) {
+                    Some(generation) => generation,
+                    None => {
+                        return err(
+                            &id,
+                            ProtocolError::new(
+                                "MALFORMED_REQUEST",
+                                "AckUiSafepoint requires integer 'generation'",
+                            ),
+                        )
+                    }
+                };
+                let evt_seq = match params.get("evt_seq").and_then(Value::as_u64) {
+                    Some(evt_seq) => evt_seq,
+                    None => {
+                        return err(
+                            &id,
+                            ProtocolError::new(
+                                "MALFORMED_REQUEST",
+                                "AckUiSafepoint requires integer 'evt_seq'",
+                            ),
+                        )
+                    }
+                };
+                let engine = engine.clone();
+                match tokio::task::spawn_blocking(move || {
+                    engine.ack_outproc_ui_safepoint(target, generation, evt_seq)
+                })
+                .await
+                {
+                    Ok(Ok(())) => ok(&id, json!({"status": "acked"})),
+                    Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
+                    Err(error) => err(&id, ProtocolError::new("INTERNAL_ERROR", error.to_string())),
                 }
             }
         }
@@ -1625,9 +1855,6 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
             ProtocolError::new("OUTPROC_ATTACH_FAILED", msg.clone())
         }
         WrapError::OutProcSlotClosed(msg) => ProtocolError::new("OUTPROC_SLOT_CLOSED", msg.clone()),
-        WrapError::PluginStatePerforming(msg) => {
-            ProtocolError::new("PLUGIN_STATE_PERFORMING", msg.clone())
-        }
         WrapError::PluginStateTarget(msg) => {
             ProtocolError::new("PLUGIN_STATE_TARGET_ERROR", msg.clone())
         }
@@ -1647,6 +1874,16 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
             ProtocolError::new("PLUGIN_STATE_PROTOCOL_ERROR", msg.clone())
         }
         WrapError::PluginStateIo(msg) => ProtocolError::new("PLUGIN_STATE_IO_ERROR", msg.clone()),
+        WrapError::PluginUiUnavailable(msg) => {
+            ProtocolError::new("PLUGIN_UI_UNAVAILABLE", msg.clone())
+        }
+        WrapError::PluginUiTarget(msg) => ProtocolError::new("PLUGIN_UI_TARGET_ERROR", msg.clone()),
+        WrapError::PluginUiProtocol(msg) => {
+            ProtocolError::new("PLUGIN_UI_PROTOCOL_ERROR", msg.clone())
+        }
+        WrapError::PluginUiCommand(msg) => {
+            ProtocolError::new("PLUGIN_UI_COMMAND_ERROR", msg.clone())
+        }
         // ランタイム device switch（`SelectAudioDevice`・#484 D2）が実行できない状態
         // （capture 有効中の明示拒否・audio owner thread 未生存 = test backend 等）。
         WrapError::AudioDeviceSwitchUnavailable(msg) => {
@@ -1658,6 +1895,100 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plugin_ui_events_use_the_existing_websocket_event_frame_schema() {
+        use crate::engine_wrap::{PluginUiCompletion, PluginUiTarget};
+
+        let target = PluginUiTarget {
+            role: "effect",
+            bus: Some("lead".into()),
+            instance: None,
+            index: 2,
+        };
+        let closed = serde_json::to_value(plugin_ui_protocol_event(PluginUiEvent::Closed {
+            target: target.clone(),
+            generation: 7,
+            evt_seq: 11,
+        }))
+        .expect("serialize closed event");
+        assert_eq!(
+            closed,
+            json!({
+                "type": "event",
+                "event": "PluginUiClosed",
+                "data": {
+                    "target": {"role": "effect", "bus": "lead", "index": 2},
+                    "generation": 7,
+                    "evt_seq": 11,
+                },
+            })
+        );
+
+        let done = serde_json::to_value(plugin_ui_protocol_event(PluginUiEvent::CloseDone {
+            target: target.clone(),
+            completion: PluginUiCompletion::SafepointCompleted,
+        }))
+        .expect("serialize done event");
+        assert_eq!(done["event"], "PluginUiCloseDone");
+        assert_eq!(done["data"]["completion"], "safepoint-completed");
+
+        let respawn =
+            serde_json::to_value(plugin_ui_protocol_event(PluginUiEvent::ClosedByRespawn {
+                target,
+            }))
+            .expect("serialize respawn event");
+        assert_eq!(respawn["event"], "PluginUiClosedByRespawn");
+        assert_eq!(respawn["data"]["target"]["index"], 2);
+    }
+
+    #[tokio::test]
+    async fn plugin_ui_broadcast_subscriber_merges_into_session_writer_queue() {
+        use crate::engine_wrap::PluginUiTarget;
+
+        let (events, receiver) = tokio::sync::broadcast::channel(4);
+        let (tx, mut rx) = mpsc::channel(4);
+        let forwarder = tokio::spawn(forward_plugin_ui_events(receiver, tx));
+        events
+            .send(PluginUiEvent::ClosedByRespawn {
+                target: PluginUiTarget {
+                    role: "instrument",
+                    bus: None,
+                    instance: Some("plugin:lead".into()),
+                    index: 3,
+                },
+            })
+            .expect("publish internal UI event");
+
+        let frame = tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
+            .await
+            .expect("writer queue receive deadline")
+            .expect("writer queue remains open");
+        let frame: Value = serde_json::from_str(&frame).expect("valid event JSON");
+        assert_eq!(frame["event"], "PluginUiClosedByRespawn");
+        assert_eq!(frame["data"]["target"]["instance"], "plugin:lead");
+        assert_eq!(frame["data"]["target"]["index"], 3);
+
+        drop(events);
+        forwarder
+            .await
+            .expect("forwarder exits when broadcast closes");
+    }
+
+    #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+    #[test]
+    fn plugin_state_and_ui_requests_share_one_target_resolver() {
+        #[cfg(feature = "outproc-effect")]
+        let params = json!({"role": "effect", "bus": "lead"});
+        #[cfg(all(not(feature = "outproc-effect"), feature = "outproc-instrument"))]
+        let params = json!({"role": "instrument", "instance": "plugin:lead"});
+
+        let state = parse_plugin_target(&params, "GetPluginState", "PLUGIN_STATE_UNAVAILABLE")
+            .expect("state target");
+        let ui = parse_plugin_target(&params, "OpenPluginUI", "PLUGIN_UI_UNAVAILABLE")
+            .expect("UI target");
+        assert_eq!(state, ui);
+    }
 
     #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
     #[test]
@@ -2028,10 +2359,6 @@ mod tests {
     #[test]
     fn plugin_state_errors_keep_distinct_protocol_codes() {
         let cases = [
-            (
-                WrapError::PluginStatePerforming("performing".into()),
-                "PLUGIN_STATE_PERFORMING",
-            ),
             (
                 WrapError::PluginStateTarget("target".into()),
                 "PLUGIN_STATE_TARGET_ERROR",
