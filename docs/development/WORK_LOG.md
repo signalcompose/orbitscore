@@ -17,6 +17,410 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.340 fix(rust): #474 P2 レビューラウンド2 — 「継承したつもり」を CAS ゲートで直した (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474（P2 のレビュー修正 R2）/ **Branch**: `474-plugin-ui-p2-evt-ring` / **PR**: #591
+**Status**: `cargo test -p orbit-audio-sandbox` = 87 passed / 0 failed / 1 ignored
+
+ラウンド2は **provenance で縮小**した（CLAUDE.md の規律）。ラウンド1の指摘はすべて
+original-diff 起因で修正済み・**original-diff 起因の新規指摘は0**だったため、元差分のレビューは
+収束とみなし、**fix 差分のみ・1レビュアー・2問限定**に切り替えた。
+
+問いは規律どおり2つだけ:「この修正が導入する新しい故障モードは何か」
+「新コードはどの実行コンテキストで走るか」。**Critical 0 / Important 2 / Minor 1**。
+
+#### 🔴 「規律2を継承」が継承になっていなかった
+
+main がラウンド1で書いたポリシーは「`CommandMailboxHost` の直列化規律を継承せよ」だったが、
+**機構名だけを指示したため、ロックの粒度が別物になっていた**:
+
+| | ロックの粒度 |
+|---|---|
+| `CommandMailboxHost::state`（既存） | doc 明示どおり「**投函と reset の短い critical section だけ**」。呼び出し元のクロージャを一切ラップしない |
+| `EventRingHost::poll`（R1 の実装） | `open_shared` から **handler 呼び出しまで全体**を保持 |
+
+そこから2つの故障が直接生まれていた — **再入デッドロック**（`std::sync::Mutex` は非再入・
+handler から poll を呼ぶと自己デッドロック・doc に禁止の明示なし）と、
+**poison 後の恒久失敗に回復経路が無い**（`CommandMailboxHost` には `reset_after_child_exit` が
+あるのに evt 側には無く、しかも任意の呼び出し元コードをロック内で実行するため引き金が広い）。
+
+メモリの教訓 [[inherit-invariants-not-just-mechanism-names]] の再演。**機構名でなく不変条件を渡すべきだった。**
+
+#### 修正: `Mutex<()>` → `AtomicBool` の CAS ゲート
+
+🔴 **「粒度を揃える」は採れない** — `read → handler → ack` が原子でないと、ラウンド1で塞いだ
+`evt_ack_seq` の lost-update が戻る。したがって handler をゲート内に置く設計は**維持**し、
+`CommandMailboxHost` との粒度差を「継承」でなく**意図的な差**として doc に理由つきで記述した。
+
+- **再入**: CAS が取れなければ即 `Err("event ring poll is non-reentrant: ...")`。
+  自己デッドロックが**明示的エラー**に変わった
+- **poison**: `Mutex` 廃止で概念自体が消滅。handler panic 時も `Drop` でゲートが解放され、
+  **次の poll は成功して同じ seq から再配送**する
+- Ordering: CAS 成功 = Acquire / ガード解放 = Release で、Mutex の unlock→lock と同じ
+  happens-before を張る（`load_own` の「唯一の書き手」前提を維持）
+
+意味論は「並行 poll を直列化」から「**検出して loud に失敗**」へ変わった。UIH.2a は
+host poller の多重化を規定しておらず、fail-loud はこのコードベースの一貫した規律であるため
+spec と矛盾しないと判断（多重 poller 化するなら retry は呼び出し側の責務、と doc に明記）。
+
+#### `tracing::warn!` が child プロセスでは no-op だった
+
+「`tracing::warn!` で loud にする」と doc に書いていたが、**4つの child バイナリはいずれも
+`Cargo.toml` に `tracing` 依存すら無く**、subscriber 初期化も存在しない（`grep -rn tracing` が空）。
+subscriber を持つのは daemon 側のみ。**主張が成立していなかった。**
+
+修正はフォールバック文言に追跡情報を載せる形にした —
+`"arg too long or embedded NUL (original len N)"`。host が `evt_arg` を読むだけで原因に迫れる。
+文言全体が `EVT_ARG_BYTES` に収まることは **const assert で静的に保証**。
+doc からは「loud にする」の主張を削り、「child では subscriber 未設定のため出力されない
+best-effort」と明記した。
+
+#### doc に「提供する保証／しない保証」を書き分けた
+
+- **提供する**: poll サイクルは host 内で同時1本 / handler panic でもゲートは解放され
+  次の poll は成功（未 ack イベントは再配送）
+- **提供しない**: 並行 poll の待機・直列化（即 `Err`・handler からの再入も同じ）/
+  `reset_child_starting` との排他（従来どおり `# Safety` 契約）
+
+#### `EventPollOutcome::Advanced { handled: NonZeroUsize }`
+
+型で `Advanced { handled: 0 }` を表現不能にした。構築箇所が
+`match NonZeroUsize::new(handled) { None => Idle, Some(h) => Advanced { handled: h } }` になり、
+元の `if handled == 0` より短くなった。`Blocked` の `handled` は 0 が正当なので `usize` のまま。
+
+#### 🔴 main の変異検証で、変異が適用されていない状態を一度読みかけた
+
+`perl` の置換パターンがコメント行で外れ、**変異が反映されていないのに green を読んで
+「生き残った」と誤読しかけた**。規律「変異は成果物への反映を assert してから回す」どおり、
+**反映を `grep` で確認してから**やり直した。
+
+| 変異 | 反映確認 | main 自身の実行結果 |
+|---|---|---|
+| `PollGateGuard::drop` の解放を握り潰す | ✅ | **5件 FAILED** |
+| CAS 検査を無効化（再入を許す） | ✅ | **1件 FAILED** |
+
+#### マージ前ゲート（owner 裁定により「退行確認に絞る」・全項目 green）
+
+P2 は消費者が未接続の基盤で DSL 表面は不変のため、DSL 網羅 E2E から得られる情報は薄い。
+一方 `repr(C)` の `SharedRegion` にフィールドを追加したことで**旧サイズの shm が拒否される**
+変更が入っており、そこが壊れていないかは実機で見る価値がある — という理由で範囲を絞った。
+
+| 項目 | 結果 |
+|---|---|
+| `npm run build:clean` | exit 0（4 child + plugin-scan を bundle） |
+| `cargo test --workspace`（**sandbox 外**） | **437 passed / 0 failed** |
+| レイテンシゲート | 1 passed・margin **106.8x / 101.9x / 137.8x**（前回 105.6x と同水準） |
+| 実機4経路 | **14 passed / 0 failed**（effect CLAP 4 / effect VST3 4 / instrument CLAP 3 / instrument VST3 3） |
+| 実機 gated E2E | **6 passed / 0 failed**（161秒・`get_log` の ERROR assert を含む） |
+| 残留プロセス | **0** |
+
+feature の取り違え（**0 passed のまま exit=0**）は起きていない — 4経路とも件数を読んで確認した。
+
+#### 🔴 main が自分の回し方で false red を2回出した（記録として残す）
+
+| | 何を誤ったか |
+|---|---|
+| 1回目 | E2E を `-t` で1本に絞ったが、この suite は**メインテストが MCP client と scratch root を初期化して後続が使う**構造で、フィルタすると `client` が `undefined` になる（**分割不能**） |
+| 2回目 | スクリプト末尾の `grep -c "FAIL "` が **0件マッチで exit 1** を返し、ジョブ全体が failed 扱いになった。「FAIL の有無 = 0」という**成功を示す出力そのもの**が失敗の原因 |
+
+**テスト失敗を見たら、まず「実装が壊れたのか、自分の回し方が壊れたのか」を切り分ける。**
+本セッションでは Fable 監査中の偽 red（並行変異検証によるビルド汚染）を含め**3回**、
+main の運用が原因の false red を出した。
+
+**変更ファイル**: `rust/crates/orbit-audio-sandbox/src/transport.rs`
+
+**Commit**: PR #591（レビューラウンド2の修正）
+
+---
+
+### 6.339 fix(rust): #474 P2 レビューラウンド1 — mailbox の host 側規律を evt リングへ移植した (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474（P2 のレビュー修正）/ **Branch**: `474-plugin-ui-p2-evt-ring` / **PR**: #591
+**Status**: `cargo test -p orbit-audio-sandbox` = 85 passed / 0 failed / 1 ignored（+5 テスト）
+
+`/code:pr-review-team` フル編成4名と **Fable 監査を並行**起動（ラウンド1から並行・遅延投入しない）。
+fixer は **Fable**（owner 確定 2026-07-30 の初適用）。
+
+#### 🔴 3件の指摘が同じ軸だった → ポリシーを先に書いて一括適用
+
+`transport.rs` には既に shm ハンドシェイク機構が1つあり（`CommandMailboxHost` /
+`service_command_mailbox`）、そこで確立した規律から **evt リングが3つとも後退していた**。
+指摘単位のローカルパッチを禁じ、次のポリシーで一括して直した:
+
+| 規律 | 既存の実装 | evt 側への移植 |
+|---|---|---|
+| 主要ペイロードは付随情報のエンコード失敗に巻き込まれない | `service_command_mailbox` の `"detail too long"` フォールバック | `EVT_ARG_FALLBACK` へ差し替えて**必ず enqueue** + `tracing::warn!`。`ArgumentTooLong` variant は削除 |
+| host 側の状態遷移は明示的に直列化する | `Mutex<CommandMailboxState>` + `generation` | `poll_gate: Mutex<()>` で read→handler→ack を直列化。poison は loud に失敗 |
+| 停滞は型で表現して loud に失敗させる | `CommandMailboxError::Timeout { seq, elapsed }` | `EventPollOutcome { Idle / Advanced / Blocked { seq, kind } }` |
+
+**Critical だった `queue()` のドロップ**: `arg` が 256 バイト超か埋め込み NUL を含むと、
+spec が取りこぼし不可と規定する `UI_CLOSED_DONE` を**一度も shm に載せない**経路だった。
+P3 でタイムアウト理由に動的な文字列（OS エラー・パス）を載せた瞬間に踏む。
+
+**Important だった `poll` の非同期性**: `&self` で内部同期がなく、複数スレッドから呼ぶと
+`evt_ack_seq` の lost-update が起きる。`observe_dirty_epoch` が `fetch_max` で並行安全なのと非対称だった。
+
+#### 🔴 main が `/simplify` で入れた退行を、レビューが検出した
+
+`evt_slot_index` の式を変異させても**全テスト green** だった。原因は 6.338 の DRY 化 —
+テスト側が持っていた独立の式（`1usize % EVT_SLOTS`）を `evt_slot_index(1)` に置き換えたため、
+**期待値が本番と同じ壊れた式で計算される自己参照**になっていた。
+期待 index をハードコード（seq 1→1 / 2→0 / 3→1）に戻し、`assert_eq!(EVT_SLOTS, 2, ...)` を添えた。
+
+**DRY 化はテストの独立性を壊しうる。** テストが検証対象と同じ関数を使ったら検証ではなくなる。
+
+#### 🔴 テストが `kind` と `seq` の取り違えを検出できなかった
+
+`evt_kind[index].store(event.kind, ..)` → `store(seq as u32, ..)` の変異が全テスト素通り。
+フィクスチャが `EVT_UI_CLOSED`(=1) を seq=1 に、`EVT_UI_CLOSED_DONE`(=2) を seq=2 に積むため
+**kind の値と seq の値が偶然一致**していた。kind ≠ seq の並び（2,1,2）で積む
+`event_ring_kind_travels_in_its_slot_not_derived_from_seq` を追加。
+
+#### 記録の欠陥: WORK_LOG の commit ハッシュが dangling だった
+
+6.336/6.337/6.338 が記録していた `8056aa1` / `355110a` / `28b993d` は
+`git merge-base --is-ancestor` が **false**（現ブランチ履歴に存在しない dangling object）。
+実ハッシュ `9dea05e` / `729fad9` / `e8e8b8e` に修正した（3件とも ancestor OK を実測）。
+
+🔴 **原因は PROJECT_RULES §Traditional Workflow の手順そのもの** — 「first commit hash を
+WORK_LOG に書いて amend する」と、記録されたハッシュは必ず amend 前の版を指し、
+`git gc` で回収されると追跡不能になる。**手順の見直しは owner 判断**なので本 PR では触らず、
+本エントリのみ PR 番号で参照する形にした。
+
+#### main の運用ミス（記録として残す）
+
+Fable 監査中に `cargo test` が6回連続 fail し、その後同一ソースで約40回 green に転じた。
+**pr-test-analyzer が同一 working tree で変異検証していた汚染**が原因で、Fable の監査を
+数十分止めた。静穏後に main が **30回連続 + 8並列×3ラウンド（計54実行）で失敗0件**を実測し、
+実レースでないことを確認した（Fable が明示した反証条件は満たされなかった）。
+**並行レビューでは worktree を分けるべきだった。**
+
+#### main による受け入れ検証（Fable の green 報告は根拠にしない）
+
+| 変異 | main 自身の実行結果 |
+|---|---|
+| `evt_kind[index].store(seq as u32, ..)` | **1件 FAILED**（`event_ring_kind_travels_in_its_slot_not_derived_from_seq`） |
+| `evt_slot_index` → `(seq-1) % EVT_SLOTS` | **3件 FAILED** |
+
+いずれも restore を `cmp` で確認、baseline 37 passed。
+
+**変更ファイル**: `rust/crates/orbit-audio-sandbox/src/transport.rs` / `docs/development/WORK_LOG.md`
+
+**Commit**: PR #591（レビューラウンド1の修正）
+
+---
+
+### 6.338 refactor(rust): #474 P2 の /simplify — slot index を関数化し、段階導入を明記した (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474（P2 の cleanup）/ **Branch**: `474-plugin-ui-p2-evt-ring`
+**Status**: 挙動不変。`cargo test -p orbit-audio-sandbox` = 80 passed / 0 failed、fmt / clippy clean
+
+`/simplify` の4エージェントのうち **Efficiency と Altitude は週次上限で失敗**したため、
+その2観点は main が直接評価した（数ステップで済む範囲であり、再委譲しない判断）。
+
+#### 適用（3件）
+
+1. **`evt_slot_index(seq)` を新設**（Reuse + Simplification が独立に指摘）。
+   `seq as usize % EVT_SLOTS` が本体2箇所 + テスト3箇所に裸で散っていた。既存 `slot_index(seq)`
+   が確立している「定数1つと関数1つを変えれば slot 割り当てが切り替わる」構造から evt 側だけ
+   外れており、`SLOTS` 側の式を変えても追随せず**黙って乖離**しうる状態だった
+2. **`EventRingChild::is_empty` を削除**（Simplification）。`pending_len() == 0` と同じ状態の
+   別表現で、公開 API 面が1つ増えていた。テストのアサーションも
+   `assert_eq!(child.pending_len(), 0, ...)` へ（メッセージ付きで意図も明示）
+3. **`evt_sync` の doc に段階導入であることを明記**（Altitude・main の評価）。
+   Ordering 封印が `cmd_*` / `seq_request` / `seq_tag` には**適用されていない**。
+   `seq_request` / `seq_tag` は audio hot path が触るため本 PR の差分から大きくはみ出す。
+   **「新しい部分だけ守った」状態であることを承知の上での段階的導入**だと書き残した
+   （既存側が安全でないという意味ではない旨も併記）
+
+#### 🔴 却下した自分の懸念（Efficiency）
+
+main は「`EventRingHost::poll` / `observe_dirty_epoch` が**呼ばれるたびに `open_shared()` で
+mmap し直している**」を懸念として挙げていたが、**既存 `CommandMailboxHost` と比較したら逆だった** —
+同 struct も `shm_path` だけを保持し、各メソッド（`:704` / `:726` / `:858`）で同様に開き直している。
+`EventRingHost` は**確立された既存パターンに従っている**のであって逸脱ではない。
+むしろ mmap を保持すると、respawn 間で shm が再利用される設計との整合を新たに考える必要が出る。
+
+#### 🔴 main が立てた前提の誤り（記録として残す）
+
+Reuse エージェントへ「`CommandMailboxChild` と `EventRingChild` の重複を見よ」と指示したが、
+**`CommandMailboxChild` という struct は実在しない**（child 側は `service_command_mailbox` という
+free function）。さらに意味論も異なる — command mailbox は **host 起点・単一 in-flight**、
+evt リングは **child 起点・複数 in-flight・lossless queue**。差分を読んで立てた仮説の方が雑だった。
+
+**変更ファイル**: `rust/crates/orbit-audio-sandbox/src/transport.rs`
+
+**Commit**: `e8e8b8e`
+
+---
+
+### 6.337 feat(rust): #474 P2 — evt リング + dirty_epoch。ordering を型で封印した (Jul 30, 2026)
+
+**Date**: 2026-07-30
+**Issue**: #474（P2）/ **Branch**: `474-plugin-ui-p2-evt-ring`
+**Status**: `cargo test --workspace`（**sandbox 外**）= exit 0 / **430 passed / 0 failed / 19 ignored**
+
+child → host の evt リング（`EVT_SLOTS = 2`・`UI_CLOSED` / `UI_CLOSED_DONE` 専用）と
+dirty 水位カウンタ `dirty_epoch` を `SharedRegion` に実装。この段階でイベントの消費者は
+まだ存在しない（P4 で接続）ため、**リング単体の正しさを自己完結して検証**した。
+
+実装 = Codex / 受け入れ監査 = main / 修正 = **Fable**（fixer をラウンド1から Fable にする
+owner 裁定の初適用）。
+
+#### 🔴 監査で弱いアサーションを1件見つけ、実行で反証した
+
+Codex が書いた `event_ring_memory_model_requires_release_acquire_pairs` は**同語反復**だった —
+「`Release` は releasing な ordering である」を主張するだけで、その定数が**呼び出し箇所で
+使われているか**を検査していない。しかも失敗メッセージは
+`"in-process memory model detected an unordered evt_arg publish/read data race"` と、
+**走ってもいないモデル検証を騙っていた**。
+
+main が実際に変異を当てて反証:
+
+```
+# transport.rs の publish 箇所を Ordering::Relaxed へ
+test event_ring_memory_model_requires_release_acquire_pairs ... ok
+test result: ok. 32 passed; 0 failed
+```
+
+**新規6テスト全部が green のまま通った。** `evt_arg` は直前に `ptr::write` で書かれる
+非 atomic の `[u8; N]` なので、これは spec が名指しで禁じている UB の再導入である。
+
+#### 修正: テストで守るのをやめ、型で潰した
+
+`#[repr(transparent)]` の newtype を submodule に置き、内部の `AtomicU64` を private にした:
+
+- `ReleaseAcquireSeq` — `publish()` = Release 固定 / `read()` = Acquire 固定 /
+  `load_own()` = 書き手自身の読み（Relaxed・理由をコメント）
+- `MonotoneEpoch` — `increment()` = Release RMW 固定 / `read()` = Acquire 固定
+
+**ordering を渡す API 面が存在しないので、逸脱がコンパイルできない。** 同語反復テストは削除した。
+main が2種の変異で実証:
+
+| 変異 | 結果 |
+|---|---|
+| `evt_seq.store(seq, Ordering::Relaxed)` | `error[E0599]: no method named 'store' found for struct 'ReleaseAcquireSeq'` |
+| `evt_seq.0.store(seq, Ordering::Relaxed)`（newtype 迂回） | `error[E0616]: field '0' of struct 'ReleaseAcquireSeq' is private` |
+
+`repr(transparent)` + `size_of == 8` のコンパイル時アサートで cross-process の
+`repr(C)` レイアウトは不変。
+
+#### `reset_child_starting` の非対称に理由を書いた
+
+evt リングは 0 にリセットするが、`dirty_epoch` はリセットしない。`cmd_seq`（**0 に戻さない**）
+とも非対称で、**その理由がどこにも書かれていなかった**。
+
+| | host 側がカーソルを保持するか | reset |
+|---|---|---|
+| `cmd_seq` | **持つ**（`InFlightCommand::seq`） | 0 に戻さない + generation で防御 |
+| `evt_seq` | **持たない**（毎 poll で shm の `evt_ack_seq + 1` から導出） | 0 に戻して安全 |
+| `dirty_epoch` | **持つ**（`EventRingHost::last_seen_dirty_epoch`） | 0 に戻さない |
+
+不変条件をコメントで明示した上で、挙動テスト
+`event_ring_host_survives_respawn_seq_reset_without_local_cursor` で守った。
+**この過程で既存テストの盲点も判明** — `evt_ack_seq` リセット除去の変異を既存の reset テストは
+見逃していた（ack が元々 0 のシナリオしか持っていなかったため）。
+
+#### sandbox の構造的限界が実際に出た
+
+Codex の `cargo test --workspace` は **exit 101 / 0 passed / 28 failed**。全28件が
+`bind` + `Operation not permitted`（daemon protocol の loopback bind 拒否）。
+Codex は迂回せず報告した。**main が sandbox 外で回し直して 28 件すべて passed を確認**。
+
+#### 調査のみ（実装せず）
+
+`service_main` の4 child 重複について、共通化可能な部分（mailbox polling / SAVE_STATE
+dispatch / QUIT 確認 / `ParentWatch`）と形式別に残す部分（CLAP/VST3 の load・state capture、
+effect の latest-block vs instrument の in-order、イベント decode）を切り分けた。
+`orbit-child-runtime` に `SharedRegion` を持たせると PR #589 の境界を壊すため、
+共通化するなら sandbox 依存を持つ別の control-plane helper crate が候補。**P2 では実装しない。**
+
+**変更ファイル**: `rust/crates/orbit-audio-sandbox/src/transport.rs`
+
+**Commit**: `729fad9`
+
+---
+
+### 6.336 docs(spec): #474 P2 の spec 先行 — dirty をリングから外し、CAP を2本足決着に合わせた (Jul 30, 2026)
+
+**Date**: 2026-07-30
+**Issue**: #474（P2 の spec 先行）/ **Branch**: `474-plugin-ui-p2-evt-ring`
+**Status**: spec のみ（コード変更なし）
+
+P2（evt リング実装）の前に、設計 §8 の owner 未回答6件を仕分けして spec を確定させた。
+
+#### Q2: `STATE_DIRTY` はリングに載せない（`dirty_epoch` 単調カウンタで運ぶ）
+
+owner の指示で Fable に独立判断を依頼し、**(b) 採用**（確信度 高）。決め手は
+**spec 自身の中にあった潜在矛盾**で、これは main が挙げていなかった論拠:
+
+> ポリシー3 は「ack の前進 = host 側処理が**完結した**。受領のみの ack は定義しない」と
+> 規定するが、**`STATE_DIRTY` の「host 側処理の完結」が spec のどこにも定義されていない**。
+> debounce checkpoint の完了とすると seq 順処理の強制で後続 `UI_CLOSED` の ack が
+> debounce 窓（数秒）に結合し、受領で即 ack とするとポリシー3 の例外になる。
+> (b) はこの未定義箇所を**定義する必要ごと消す**。
+
+副次的に消えたもの: pending フラグ合流規則 / `STATE_DIRTY` in-flight 最大1件制限 /
+リング占有上限 3 の導出。`EVT_SLOTS` は占有上限の再導出により **3 → 2**。
+
+#### 🔴 main の根拠2は過大主張だった（Fable が訂正・記録として残す）
+
+main は「フェーズ B 誤発火ハザードは dirty のリング同居に**由来する**ので (b) で消える」と
+主張したが、**ハザードのクラスは残る** — 先行イベントは dirty だけではなく、
+**前サイクルの `UI_CLOSED_DONE`** も `evt_ack_seq` を前進させうる。
+したがって規則（`UI_CLOSED` 自身の seq で判定）と変異検証は**削除せず維持し、
+シナリオだけ差し替えた**。
+
+#### 🔴 その裏取りで spec の曖昧さを見つけた（P3 へ登記）
+
+Fable の訂正は「child は `UI_CLOSED_DONE` 投函直後に `Closed` へ入るので、host の ack 前に
+`OPEN_UI` を受理できる」を前提にしていたが、**spec は `Closed` 中の `OPEN_UI` も
+failure ack と書いている**（UIH.2a 故障時の脱出条件）。
+
+しかし **`Closed` は状態機械の初期状態でもある**ため、字義どおり読むと **UI を一度も開けない**。
+`detail = "closing-in-progress"` からして意図は「クローズ手続きが未決着の窓」だが、
+**その窓の終端が定義されていない**。読みを3つ表にして **P3 で確定させる**旨を spec に登記した。
+
+**どちらの読みでもフェーズ B の規則は維持する**（緩めて得られるものが無く、
+緩めた場合の失敗が「セーフポイントのスキップ = 音色の喪失」であるため）。
+
+#### Q7: CAP.4 / CAP.6-7 を2本足決着に合わせた（owner 承認済み）
+
+- CAP.4 のループ表に **「永続化される場所が違う」非対称**を明記
+  （GUI つまみ = 人間のみ・DSL に残らない → スナップショット必要 /
+  オートメーション = 人間+LLM 共用・`.orbs` に残る → スナップショット不要）
+- CAP.6-7 を「**列挙・取得**は MCP・**設定は DSL（#506）が第一級**」へ改訂。
+  MCP の設定系 tool は計測・デバッグの副経路として禁じないが、
+  **CAP.4 のループはこれに依存してはならない**
+
+#### その他の裁定
+
+- **Q4**: v1 = **Open/Close UI の追加のみ**。rescan は3面すべて実装済みだった
+  （コマンドパレット / `editor/context` / MCP `rescan_plugins`）。
+  Show info / Reveal in Finder は owner が不要と裁定。階層ブラウズは補完（#495）で満たし、
+  右クリック挿入は不要
+- **Q8**: 段階的に承認（oracle で無人 E2E → 実プラグイン smoke → シナリオ化して自動 E2E へ昇格）
+- **Q3**: moot（`objc2` は P1 で導入済み）
+- **Q5 / Q6**: main が決定（REPL メタ行を足す / タイトルは `<plugin> — <receiver>[<index>]`）
+
+#### 🔴 挿入トリガーは #474 のスコープ外（#522 / #506 と同時設計を推奨）
+
+owner の「エフェクト挿入のきっかけになる打鍵から補完が走り出す形」を調べた結果、
+**`editor.action.triggerSuggest` がコードベース全体で未使用**で連鎖が繋がっていない。
+ただし core spec `:1182` は SC.0 記法 `lead.Serum(...).TALReverb4(size: 0.6).subout` を
+**#522 の受け入れ基準**として既に確定させており、**現行の `.effect("` に合わせた
+トリガーは #522 で作り直しになる**。
+
+**変更ファイル**: `docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md` /
+`docs/specs-v2/PLUGIN_CAPABILITY_ABSTRACTION_v1.md`
+
+**Commit**: `9dea05e`
+
+---
+
 ### 6.335 feat(rust): #474 P0+P1 — child を NSApplication runloop へ。graceful teardown を復活させた (Jul 30, 2026)
 
 **Date**: 2026-07-30
