@@ -26,6 +26,7 @@ export interface MockDaemonHandlers {
   LoadSample?: MockHandler
   LoadPlugin?: MockHandler
   GetPluginState?: MockHandler
+  AckUiSafepoint?: MockHandler
   PluginNoteOn?: MockHandler
   PluginNoteOff?: MockHandler
   PlayAt?: MockHandler

@@ -41,7 +41,7 @@
 import { gainDbToAmplitude } from '../audio-gain-utils'
 import type { AudioEngineBackend } from '../engine-backend'
 import type { AudioDevice } from '../supercollider/types'
-import type { PluginLoadResult } from '../types'
+import type { PluginLoadResult, PluginStateSaveTarget, PluginUiTarget } from '../types'
 
 import { DaemonClient } from './daemon-client'
 import type { AudioDeviceListEntry } from './daemon-client'
@@ -57,6 +57,45 @@ import { DaemonConnectionError, DaemonProtocolError, DaemonQuitError } from './e
  * pan / slice 領域 / slice varispeed（rate≠1.0）は実装済みのため gap ではない。
  */
 type GapKind = 'outputChannel' | 'masterEffect' | 'linkTempo' | 'pluginNoteDrop' | 'pluginInactive'
+
+function eventRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`)
+  }
+  return value as Record<string, unknown>
+}
+
+function eventNonNegativeInteger(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) {
+    throw new Error(`${label} must be a non-negative safe integer`)
+  }
+  return Number(value)
+}
+
+function pluginUiTargetFromEvent(data: Record<string, unknown>): PluginUiTarget {
+  const target = eventRecord(data.target, 'target')
+  const index = eventNonNegativeInteger(target.index, 'target.index')
+  if (target.role === 'effect') {
+    if (target.bus !== undefined && typeof target.bus !== 'string') {
+      throw new Error('target.bus must be a string when present')
+    }
+    return {
+      role: 'effect',
+      ...(target.bus === undefined ? {} : { bus: target.bus }),
+      index,
+    }
+  }
+  if (target.role === 'instrument' && typeof target.instance === 'string') {
+    return { role: 'instrument', instance: target.instance, index }
+  }
+  throw new Error("target must identify an 'effect' or 'instrument' plugin")
+}
+
+function pluginStateTarget(target: PluginUiTarget): PluginStateSaveTarget {
+  return target.role === 'effect'
+    ? { role: 'effect', ...(target.bus === undefined ? {} : { bus: target.bus }) }
+    : { role: 'instrument', instance: target.instance }
+}
 
 /** chop slice 情報。`scheduleSliceEvent` 由来。発火時に領域（offset/duration）へ解決する。 */
 export interface SliceSpec {
@@ -222,6 +261,8 @@ export interface RustEnginePlayerOptions {
    * @internal
    */
   wsUrlOverride?: string
+  /** WebSocket を使わず protocol/event 境界を検証するための注入 seam。@internal */
+  daemonClient?: DaemonClient
   /**
    * 各 dispatch の観測コールバック（任意・副作用なしの telemetry seam）。A0 の実機
    * timing 計測 spec が lead/drift を読むのに使う。`createAudioEngine()` の production
@@ -335,11 +376,15 @@ export class RustEnginePlayer implements AudioEngineBackend {
   /** respawn の single-flight ガード（death/close/reject が同時多発しても二重 spawn させない）。 */
   private respawnPromise: Promise<void> | null = null
 
+  /** UI event は daemon の evt_seq 順を保ったまま、保存・ack まで直列に完結させる。 */
+  private pluginUiEventTail: Promise<void> = Promise.resolve()
+  private pluginUiSafepointSaver: ((target: PluginUiTarget) => Promise<void>) | undefined
+
   /** feature gap の 1 回限り warning。stopAll で再 arm する。 */
   private warned: Set<string> = freshWarned()
 
   constructor(options: RustEnginePlayerOptions = {}) {
-    this.daemon = new DaemonClient()
+    this.daemon = options.daemonClient ?? new DaemonClient()
     this.daemonPath = options.daemonPath
     this.wsUrlOverride = options.wsUrlOverride
     this.lookaheadSec = options.lookaheadSec ?? DEFAULT_LOOKAHEAD_SEC
@@ -347,6 +392,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
     // daemon の予期せぬ死を supervise する（recovery floor / #300）。意図的 quit は DaemonClient が
     // intentionalClose で抑制するので、このリスナは crash（panic→exit / segfault / kill）のみ発火する。
     this.daemon.on('daemon-died', this.onDaemonDied)
+    this.daemon.on('plugin-ui-closed', this.onPluginUiClosed)
+    this.daemon.on('plugin-ui-close-done', this.onPluginUiCloseDone)
+    this.daemon.on('plugin-ui-closed-by-respawn', this.onPluginUiClosedByRespawn)
   }
 
   // --- AudioEngine surface ---
@@ -485,6 +533,70 @@ export class RustEnginePlayer implements AudioEngineBackend {
     })
   }
 
+  private enqueuePluginUiEvent(work: () => Promise<void> | void): void {
+    this.pluginUiEventTail = this.pluginUiEventTail.then(work).catch((error) => {
+      console.error(
+        `[plugin-ui] event handling failed: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    })
+  }
+
+  private readonly onPluginUiClosed = (raw: unknown): void => {
+    this.enqueuePluginUiEvent(async () => {
+      const data = eventRecord(raw, 'PluginUiClosed data')
+      const target = pluginUiTargetFromEvent(data)
+      const generation = eventNonNegativeInteger(data.generation, 'generation')
+      const evtSeq = eventNonNegativeInteger(data.evt_seq, 'evt_seq')
+      if (!this.pluginUiSafepointSaver) {
+        throw new Error(
+          `cannot save ${JSON.stringify(target)}: no project-state safepoint saver is registered`,
+        )
+      }
+      try {
+        await this.pluginUiSafepointSaver(target)
+      } catch (error) {
+        console.error(
+          `[plugin-ui] safepoint save failed for ${JSON.stringify(target)}; ` +
+            `AckUiSafepoint was not sent: ${error instanceof Error ? error.message : String(error)}`,
+        )
+        return
+      }
+      await this.daemon.ackUiSafepoint(pluginStateTarget(target), target.index, generation, evtSeq)
+    })
+  }
+
+  private readonly onPluginUiCloseDone = (raw: unknown): void => {
+    this.enqueuePluginUiEvent(() => {
+      const data = eventRecord(raw, 'PluginUiCloseDone data')
+      const target = pluginUiTargetFromEvent(data)
+      if (data.completion === 'timeout-without-save') {
+        console.error(
+          `[plugin-ui] ${JSON.stringify(target)} closed after timing out without saving state`,
+        )
+      } else if (data.completion !== 'safepoint-completed') {
+        throw new Error(`unknown PluginUiCloseDone completion: ${String(data.completion)}`)
+      }
+    })
+  }
+
+  private readonly onPluginUiClosedByRespawn = (raw: unknown): void => {
+    this.enqueuePluginUiEvent(() => {
+      const data = eventRecord(raw, 'PluginUiClosedByRespawn data')
+      const target = pluginUiTargetFromEvent(data)
+      console.error(
+        `[plugin-ui] ${JSON.stringify(target)} was closed by daemon respawn and was not reopened`,
+      )
+    })
+  }
+
+  private async settlePluginUiEvents(): Promise<void> {
+    for (;;) {
+      const pending = this.pluginUiEventTail
+      await pending
+      if (pending === this.pluginUiEventTail) return
+    }
+  }
+
   /** respawn を single-flight 化する（同時多発する death/close/reject で二重 spawn しないため）。 */
   private ensureRespawn(): Promise<void> {
     if (this.respawnPromise) return this.respawnPromise
@@ -576,7 +688,16 @@ export class RustEnginePlayer implements AudioEngineBackend {
         console.warn('[rust-engine] quit: respawn settled with an unexpected error:', err)
       }
     }
+    // CONTROL_QUIT の前に、既に受け取った UI close の保存・ack を完結させる。
+    await this.settlePluginUiEvents()
+    this.daemon.off('plugin-ui-closed', this.onPluginUiClosed)
+    this.daemon.off('plugin-ui-close-done', this.onPluginUiCloseDone)
+    this.daemon.off('plugin-ui-closed-by-respawn', this.onPluginUiClosedByRespawn)
     await this.daemon.quit()
+  }
+
+  setPluginUiSafepointSaver(saver: (target: PluginUiTarget) => Promise<void>): void {
+    this.pluginUiSafepointSaver = saver
   }
 
   getCurrentOutputDevice(): AudioDevice | undefined {

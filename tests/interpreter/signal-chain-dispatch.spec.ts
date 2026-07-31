@@ -865,6 +865,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       // 各 manager を読むためクラス外へ出せない（純関数の
       // `pluginStateTargetForSlot` はモジュール関数として分類対象外にしてある）。
       'listPluginStateTargets',
+      // PluginUiClosed の daemon target/index を現在の chain に照合し、同じ保存経路へ渡す
+      // safepoint conductor 内部 API。DSL 語彙としては公開しない。
+      'listPluginUiStateTargets',
+      'savePluginUiStateAtSafepoint',
       'saveAllPluginStates',
       // 同上。`this.projectStateStores` の Map をキャッシュとして読むため純関数化できない。
       'projectStateStore',
