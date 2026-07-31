@@ -4,6 +4,8 @@ use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
 
 use orbit_audio_sandbox::transport::{EventRingChild, EVT_UI_CLOSED, EVT_UI_CLOSED_DONE};
+#[cfg(test)]
+use orbit_audio_sandbox::CMD_SAVE_STATE;
 use orbit_audio_sandbox::{
     CommandOutcome, SharedRegion, CMD_CLOSE_UI, CMD_OPEN_UI, CMD_RESULT_PLUGIN_ERROR,
     CMD_RESULT_UNKNOWN_KIND,
@@ -604,6 +606,108 @@ mod tests {
         fn state(&self) -> UiState {
             self.ui.core.borrow().machine.state()
         }
+    }
+
+    /// Post one command into the real mailbox and let `service_child_main` dispatch it.
+    ///
+    /// `arg` matters for `CMD_SAVE_STATE`: without a sidecar path `save_state_command` returns
+    /// `BAD_ARG` *without* invoking the capture closure, which would make a capture-count
+    /// assertion pass for the wrong reason.
+    fn dispatch(fixture: &Fixture, kind: u32, arg: &str) {
+        let region = fixture.region.ptr();
+        unsafe {
+            (*region).cmd_kind.store(kind, Ordering::Release);
+            assert!(
+                orbit_audio_sandbox::transport::write_cstr_field(&mut (*region).cmd_arg, arg),
+                "test argument must fit cmd_arg"
+            );
+            let seq = (*region).cmd_ack_seq.load(Ordering::Relaxed) + 1;
+            (*region).cmd_seq.store(seq, Ordering::Release);
+        }
+    }
+
+    /// 🔴 Pins **which handler each command kind reaches** in [`crate::service_child_main`].
+    ///
+    /// The four children share that one body, so a swapped arm breaks all of them at once — and
+    /// the swap type-checks, since both arms return `CommandOutcome`. Nothing covered it: routing
+    /// `CMD_OPEN_UI`/`CMD_CLOSE_UI` into `save_state_command` instead left the **entire workspace
+    /// suite green** (measured 2026-07-31), while the mirror-image swap of `CMD_SAVE_STATE` was
+    /// caught by the existing real-process `mailbox_wiring` tests. Only the UI arm was unguarded.
+    ///
+    /// Asserting the capture count as well as the state matters: checking only the state would let
+    /// an implementation that runs *both* handlers pass.
+    #[test]
+    fn service_child_main_routes_each_command_kind_to_its_own_handler() {
+        let fixture = Fixture::new("dispatch");
+        let captures = Rc::new(Cell::new(0usize));
+
+        let sidecar = std::env::temp_dir().join(format!(
+            "orbit-dispatch-{}-{}.state",
+            std::process::id(),
+            line!()
+        ));
+        let run = |kind: u32, arg: &str| {
+            dispatch(&fixture, kind, arg);
+            let captures = captures.clone();
+            unsafe {
+                crate::service_child_main(fixture.region.ptr(), &fixture.ui, move || {
+                    captures.set(captures.get() + 1);
+                    Ok::<Vec<u8>, String>(vec![7])
+                })
+            }
+        };
+
+        // OPEN_UI must reach the state machine, and must not be mistaken for a state capture.
+        run(CMD_OPEN_UI, "");
+        assert_eq!(
+            fixture.state(),
+            UiState::Open,
+            "CMD_OPEN_UI must open the UI"
+        );
+        assert_eq!(
+            captures.get(),
+            0,
+            "CMD_OPEN_UI must not capture plugin state"
+        );
+
+        // CLOSE_UI likewise — and it is the same match arm, so it needs its own assertion.
+        run(CMD_CLOSE_UI, "");
+        assert_eq!(
+            fixture.state(),
+            UiState::Closing,
+            "CMD_CLOSE_UI must start the close handshake"
+        );
+        assert_eq!(
+            captures.get(),
+            0,
+            "CMD_CLOSE_UI must not capture plugin state"
+        );
+
+        // SAVE_STATE takes the other arm: it captures, and must not disturb the machine.
+        let before = fixture.state();
+        run(CMD_SAVE_STATE, sidecar.to_str().expect("utf-8 temp path"));
+        assert_eq!(
+            captures.get(),
+            1,
+            "CMD_SAVE_STATE must capture exactly once"
+        );
+        assert_eq!(
+            fixture.state(),
+            before,
+            "CMD_SAVE_STATE must not drive the UI state machine"
+        );
+
+        // An unknown kind must fall through to the mailbox's UNKNOWN_KIND result, not silently
+        // pick either handler.
+        run(9999, "");
+        assert_eq!(captures.get(), 1, "an unknown kind must not capture state");
+        let result = unsafe { (*fixture.region.ptr()).cmd_result.load(Ordering::Acquire) };
+        assert_eq!(
+            result, CMD_RESULT_UNKNOWN_KIND,
+            "an unknown kind must be reported as such"
+        );
+
+        let _ = std::fs::remove_file(&sidecar);
     }
 
     #[test]

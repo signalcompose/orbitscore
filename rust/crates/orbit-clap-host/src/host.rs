@@ -318,6 +318,72 @@ mod tests {
         );
     }
 
+    /// 🔴 Rejects sizes a plugin must not be able to push through.
+    ///
+    /// `request_resize` is a plugin-driven callback, so the values are not ours. Nothing
+    /// downstream re-checks them: `take_requested_size` casts with `as i32`, so `width > i32::MAX`
+    /// arrives at `NSWindow` as a **negative** extent, and `0` passes straight through. Deleting
+    /// the guard used to leave all 27 lib tests green (measured 2026-07-31), because the existing
+    /// marshaling test only ever sends a valid 640x480.
+    ///
+    /// Each rejected call also asserts the slot stayed empty: a guard that returns `Err` *after*
+    /// storing would still corrupt the next tick.
+    #[test]
+    fn request_resize_rejects_sizes_the_window_cannot_hold() {
+        let shared = OrbitHostShared::with_gui_callbacks(Arc::new(AtomicBool::new(false)));
+
+        for (label, size) in [
+            (
+                "zero width",
+                GuiSize {
+                    width: 0,
+                    height: 480,
+                },
+            ),
+            (
+                "zero height",
+                GuiSize {
+                    width: 640,
+                    height: 0,
+                },
+            ),
+            (
+                "beyond i32",
+                GuiSize {
+                    width: u32::MAX,
+                    height: 480,
+                },
+            ),
+        ] {
+            assert!(
+                HostGuiImpl::request_resize(&shared, size).is_err(),
+                "{label} must be rejected"
+            );
+            assert_eq!(
+                shared.take_requested_size(),
+                None,
+                "{label} must not leave a pending resize behind"
+            );
+        }
+
+        // The guard must not reject everything: a usable size still gets through.
+        assert!(HostGuiImpl::request_resize(
+            &shared,
+            GuiSize {
+                width: 640,
+                height: 480
+            }
+        )
+        .is_ok());
+        assert_eq!(
+            shared.take_requested_size(),
+            Some(UiSize {
+                width: 640,
+                height: 480
+            })
+        );
+    }
+
     #[test]
     fn gui_callbacks_are_marshaled_through_atomics_and_consumed_once() {
         let shared = OrbitHostShared::with_gui_callbacks(Arc::new(AtomicBool::new(false)));
