@@ -36,7 +36,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 | stop_engine の child kill 不全（消滅確認なし） | #607 | 新規 |
 | スタック全体 `@v` の仕様化 | #609 | owner 判断待ち |
 | diagnostics とエンジンパーサの乖離 | #610 | 新規 |
-| 7.1 の 8 ステム書き出し（本選 10/28 上演用） | #598 | P0 完了・P1 実装中 |
+| 7.1 の 8 ステム書き出し（オフライン・提出物用） | #598 | P0 完了・P1 実装中 |
+| **realtime の 7.1 マルチアウト（本選 10/28 上演用）** | #611 | 新規・DSL 表面は #598 と共有 |
 | gong の Kontakt 化 | 作品側 GONG_AS_INSTRUMENT 実装済み | state 待ち |
 
 セッション詳細は Serena `session_2026-08-01_soundcinema_submission_and_6layer_debug`。
