@@ -297,6 +297,18 @@ export function createReplSession(interpreter: InterpreterV2): {
   // 現在ファイルの dir を送るので、ファイル切替にも追従する）。
   let sessionDocumentDirectory: string | undefined
   let lineQueue: Promise<void> = Promise.resolve()
+  /// 🔴 #607: 実行中の行が滞留していることを報告するまでの待ち時間。
+  ///
+  /// `pushLine` は全行を単一の promise チェーンへ載せるので、**1 行が resolve しないと
+  /// 以後の入力が永久に待たされる**。`pushLine` は `void` を返すため呼び出し元
+  /// （MCP の `evaluate_orbitscore` 等）には成功に見え、**`ok` が返るのに何も実行されない**
+  /// という最悪の見え方になる（2026-08-01 に Kontakt を 6 声宣言して実際に発生）。
+  ///
+  /// タイムアウトで打ち切るのではなく**報告する**に留めるのは、長い処理が正当に存在するため
+  /// （instrument 6 本の attach は実測 30 秒超）。閾値は daemon の `CHILD_READY_TIMEOUT`
+  /// （60s）に合わせ、「daemon 側の上限を超えてなお終わらない」ときだけ鳴らす。
+  const QUEUE_STALL_REPORT_MS = 60_000
+  let queuedLines = 0
 
   async function executeCurrentBuffer(clearOnIncomplete: boolean): Promise<void> {
     const code = buffer.trim()
@@ -394,12 +406,41 @@ export function createReplSession(interpreter: InterpreterV2): {
     await executeCurrentBuffer(false)
   }
 
+  /// 実行中の行が [`QUEUE_STALL_REPORT_MS`] を超えても終わらないあいだ、**繰り返し**報告する。
+  ///
+  /// 打ち切らないので意味論は変わらない。変わるのは「沈黙して詰まる」が
+  /// 「詰まっている事実と原因の行が `get_log` に出る」になること。1 回だけでなく
+  /// 反復するのは、詰まりが解消したかどうかを外から判断できるようにするため。
+  const runWithStallReport = async (line: string, run: () => Promise<void>): Promise<void> => {
+    const startedAt = Date.now()
+    const preview = line.trim().slice(0, 120)
+    const timer = setInterval(() => {
+      const seconds = Math.round((Date.now() - startedAt) / 1000)
+      console.error(
+        `[ERROR] REPL queue is still blocked after ${seconds}s by: ${preview}` +
+          ` — ${queuedLines} line(s) are waiting behind it and will not run until it finishes.` +
+          ` They are accepted but NOT executed.`,
+      )
+    }, QUEUE_STALL_REPORT_MS)
+    // timer が event loop を生かし続けないようにする（CLI の終了を妨げない）。
+    timer.unref?.()
+    try {
+      await run()
+    } finally {
+      clearInterval(timer)
+    }
+  }
+
   return {
     pushLine(line: string): void {
       // handleLine は内部で全エラーを捕捉するが、防御としてチェーン自体も reject を握る
       // （1 行の異常で以後の入力が全停止しないように）。
+      queuedLines++
       lineQueue = lineQueue
-        .then(() => handleLine(line))
+        .then(() => {
+          queuedLines--
+          return runWithStallReport(line, () => handleLine(line))
+        })
         .catch((e) => {
           // handleLine は既知エラーを内部で捕捉する。ここに来るのは想定外のみ —
           // 黙って握ると REPL が silent に劣化するため、必ず痕跡を残して続行する。
