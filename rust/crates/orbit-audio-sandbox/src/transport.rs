@@ -3601,6 +3601,62 @@ mod tests {
         let _ = std::fs::remove_file(shm);
     }
 
+    /// abandon は `timeout-without-save` **だけ**が引き金であることを押さえる。
+    ///
+    /// child は ack が `UI_CLOSED` の seq に届いて初めて Phase B に入るので、Blocked の
+    /// `UI_CLOSED` を飛び越えて `safepoint-completed` が来るのはハンドシェイク違反である。
+    /// ここで abandon してしまうと、**engine が保存を確認していない safepoint を daemon が
+    /// ack** し、音色を失ったままリングだけが正常に進む（UI は再オープンでき、失敗が
+    /// どこにも現れない）。判別を落としたら red になることが、このテストの存在理由。
+    #[test]
+    fn ui_event_pump_does_not_abandon_on_a_non_timeout_done() {
+        let shm = mailbox_test_path("ui-pump-abandon-negative");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let pump = UiEventPump::new(shm.clone());
+        let mut child = EventRingChild::new();
+        publish_ui_event(region, &mut child, EVT_UI_CLOSED, "");
+        pump.poll_step(|_| true).expect("initial blocked poll");
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 0);
+
+        // ハンドシェイク違反: safepoint 未 ack のまま「保存できた」DONE が来る。
+        publish_ui_event(
+            region,
+            &mut child,
+            EVT_UI_CLOSED_DONE,
+            "safepoint-completed",
+        );
+        let mut notifications = Vec::new();
+        assert!(
+            matches!(
+                pump.poll_step(|event| {
+                    notifications.push(event);
+                    true
+                })
+                .expect("poll stays blocked"),
+                EventPollOutcome::Blocked { seq: 1, .. }
+            ),
+            "non-timeout DONE must not release the blocked safepoint"
+        );
+        assert_eq!(
+            unsafe { (*region).evt_ack_seq.read() },
+            0,
+            "ack must not advance without an engine AckUiSafepoint"
+        );
+        assert!(
+            notifications.is_empty(),
+            "the safepoint was already announced; no further notification is due"
+        );
+
+        // engine が本来の ack を出せば、そこで初めて進む。
+        pump.ack_safepoint(0, 1)
+            .expect("engine ack advances the head");
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 1);
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
     #[test]
     fn ui_event_pump_final_drain_fails_blocked_safepoint_before_teardown() {
         let shm = mailbox_test_path("ui-pump-final-drain");
