@@ -6,6 +6,8 @@
 //! processing runs on one dedicated user-interactive QoS thread.
 
 use std::any::Any;
+#[cfg(any(target_os = "macos", test))]
+use std::cell::{BorrowMutError, RefCell};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
@@ -17,6 +19,15 @@ use thiserror::Error;
 /// control-plane work, so 20 ms avoids a busy main thread while remaining
 /// responsive enough for UI commands.
 pub const MAIN_TICK_INTERVAL: Duration = Duration::from_millis(20);
+
+#[cfg(any(target_os = "macos", test))]
+fn try_call_main_service<S>(service: &RefCell<S>) -> Result<bool, BorrowMutError>
+where
+    S: FnMut() -> bool,
+{
+    let mut service = service.try_borrow_mut()?;
+    Ok((*service)())
+}
 
 #[derive(Debug, Error)]
 pub enum ChildRuntimeError {
@@ -212,7 +223,7 @@ mod appkit {
         NSObject, NSObjectProtocol, NSPoint, NSRunLoop, NSRunLoopCommonModes, NSTimer,
     };
 
-    use super::{ChildRuntimeError, StopCoordinator, MAIN_TICK_INTERVAL};
+    use super::{try_call_main_service, ChildRuntimeError, StopCoordinator, MAIN_TICK_INTERVAL};
 
     type MainService<'a> = dyn FnMut() -> bool + 'a;
 
@@ -220,6 +231,7 @@ mod appkit {
         service: RefCell<Box<MainService<'static>>>,
         coordinator: StopCoordinator,
         service_panicked: Cell<bool>,
+        reentrant_tick_skip_count: Cell<u64>,
     }
 
     define_class!(
@@ -239,9 +251,25 @@ mod appkit {
             #[unsafe(method(tick:))]
             fn tick(&self, timer: &NSTimer) {
                 let requested_stop = match catch_unwind(AssertUnwindSafe(|| {
-                    (self.ivars().service.borrow_mut())()
+                    try_call_main_service(&self.ivars().service)
                 })) {
-                    Ok(value) => value,
+                    Ok(Ok(value)) => value,
+                    Ok(Err(_busy)) => {
+                        let skipped = self
+                            .ivars()
+                            .reentrant_tick_skip_count
+                            .get()
+                            .saturating_add(1);
+                        self.ivars().reentrant_tick_skip_count.set(skipped);
+                        // Child stderr is inherited by the daemon in both effect and
+                        // instrument supervisors, so the cumulative count is visible
+                        // to the host even though child tracing has no subscriber.
+                        eprintln!(
+                            "[orbit-child-runtime] skipped reentrant main-runloop tick; \
+                             skipped_ticks={skipped}"
+                        );
+                        return;
+                    }
                     Err(_) => {
                         self.ivars().service_panicked.set(true);
                         true
@@ -284,6 +312,7 @@ mod appkit {
                 service: RefCell::new(service),
                 coordinator,
                 service_panicked: Cell::new(false),
+                reentrant_tick_skip_count: Cell::new(0),
             });
             // SAFETY: this is NSObject's designated initializer and the
             // superclass does not impose extra initialization requirements.
@@ -487,6 +516,31 @@ mod tests {
         let coordinator = StopCoordinator::new();
         assert!(!coordinator.should_stop(false));
         assert!(!coordinator.stop_audio.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn reentrant_main_service_tick_is_skipped_instead_of_panicking() {
+        let calls = std::cell::Cell::new(0);
+        let service = RefCell::new(|| {
+            calls.set(calls.get() + 1);
+            false
+        });
+        let held_by_outer_tick = service.borrow_mut();
+
+        let busy_result = catch_unwind(AssertUnwindSafe(|| try_call_main_service(&service)));
+        assert!(
+            busy_result.is_ok(),
+            "a nested tick must not panic on an active RefCell borrow"
+        );
+        assert!(
+            busy_result.expect("checked above").is_err(),
+            "a nested tick must explicitly report the busy case"
+        );
+        assert_eq!(calls.get(), 0, "the busy tick must skip service execution");
+
+        drop(held_by_outer_tick);
+        assert!(matches!(try_call_main_service(&service), Ok(false)));
+        assert_eq!(calls.get(), 1, "the next non-reentrant tick must run");
     }
 
     #[test]

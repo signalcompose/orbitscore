@@ -1,0 +1,532 @@
+//! AppKit-independent plugin UI lifecycle state machine.
+//!
+//! Platform and plugin-format operations deliberately live behind [`UiHostActions`].
+//! P3b can implement that trait with AppKit/VST3/CLAP calls without putting any of
+//! those dependencies into the transition logic tested here.
+
+use std::time::Duration;
+
+/// Detail returned when `OPEN_UI` arrives before the previous close cycle drains.
+pub const CLOSING_IN_PROGRESS_DETAIL: &str = "closing-in-progress";
+/// Detail returned when `CLOSE_UI` arrives outside [`UiState::Open`].
+pub const ALREADY_CLOSING_DETAIL: &str = "already-closing";
+
+/// Externally visible UI lifecycle state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiState {
+    Closed,
+    Open,
+    Closing,
+}
+
+/// Why Phase B completed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseCompletion {
+    /// The host completed the `UI_CLOSED` safepoint and acked that event.
+    SafepointCompleted,
+    /// The host did not ack the safepoint before the configured close timeout.
+    TimedOutWithoutSave,
+}
+
+/// Lossless child-to-host events used by the close handshake.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiEvent {
+    UiClosed,
+    UiClosedDone(CloseCompletion),
+}
+
+/// Result returned to the command mailbox handler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandAck {
+    pub success: bool,
+    pub detail: String,
+}
+
+impl CommandAck {
+    fn accepted() -> Self {
+        Self {
+            success: true,
+            detail: String::new(),
+        }
+    }
+
+    fn success_with_detail(detail: &'static str) -> Self {
+        Self {
+            success: true,
+            detail: detail.to_owned(),
+        }
+    }
+
+    fn failure(detail: impl Into<String>) -> Self {
+        Self {
+            success: false,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// Outcome for child-originated close requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseRequestDisposition {
+    Started,
+    AlreadyClosing,
+}
+
+/// All platform, plugin-format, and event-transport effects used by the state machine.
+///
+/// `try_publish_event` must be non-blocking and lossless: when it returns `None`,
+/// the implementation retains that event and a repeated call with the same value
+/// retries the retained publication rather than enqueueing a duplicate. Its returned
+/// sequence is the sequence assigned when that exact event reaches the ring.
+///
+/// `is_event_ring_drained` includes both child-local pending events and shared-memory
+/// cursors. For an `orbit_audio_sandbox::transport::EventRingChild` adapter, it maps
+/// directly to `EventRingChild::is_drained`.
+pub trait UiHostActions {
+    /// Create and show the UI. P3b supplies the format-specific implementation.
+    fn open_ui(&mut self) -> Result<(), String>;
+
+    /// Try to publish one lossless event, returning its own ring sequence on success.
+    fn try_publish_event(&mut self, event: UiEvent) -> Option<u64>;
+
+    /// Acquire-read the latest host-completed event sequence.
+    fn event_ack_seq(&self) -> u64;
+
+    /// Whether pending count is zero and `evt_ack_seq == evt_seq`.
+    fn is_event_ring_drained(&self) -> bool;
+
+    /// Release the plugin-owned UI, respecting CLAP's `was_destroyed` distinction.
+    fn release_plugin_ui(&mut self, was_destroyed: bool);
+
+    /// Destroy the child-owned window after plugin release.
+    fn destroy_window(&mut self);
+}
+
+#[derive(Debug)]
+struct ClosingState {
+    started_at: Duration,
+    was_destroyed: bool,
+    /// The exact seq returned when this cycle's `UI_CLOSED` reached the ring.
+    ui_closed_seq: Option<u64>,
+}
+
+#[derive(Debug)]
+enum MachineState {
+    Closed,
+    Open,
+    Closing(ClosingState),
+}
+
+/// `Closed -> Open -> Closing -> Closed` close-handshake state machine.
+#[derive(Debug)]
+pub struct UiCloseStateMachine {
+    state: MachineState,
+    close_timeout: Duration,
+    pending_ui_closed: bool,
+    pending_done: Option<CloseCompletion>,
+}
+
+impl UiCloseStateMachine {
+    /// Construct an initially closed machine. The empty initial event ring is drained,
+    /// so the first `OPEN_UI` is accepted when the injected drain predicate says so.
+    pub fn new(close_timeout: Duration) -> Self {
+        Self {
+            state: MachineState::Closed,
+            close_timeout,
+            pending_ui_closed: false,
+            pending_done: None,
+        }
+    }
+
+    pub fn state(&self) -> UiState {
+        match self.state {
+            MachineState::Closed => UiState::Closed,
+            MachineState::Open => UiState::Open,
+            MachineState::Closing(_) => UiState::Closing,
+        }
+    }
+
+    /// Handle `OPEN_UI`.
+    ///
+    /// Acceptance is exactly the drain gate: state is `Closed` and the event backend
+    /// reports pending count zero with equal ack/publish cursors.
+    pub fn open_command(&mut self, actions: &mut impl UiHostActions) -> CommandAck {
+        if !matches!(self.state, MachineState::Closed) || !actions.is_event_ring_drained() {
+            return CommandAck::failure(CLOSING_IN_PROGRESS_DETAIL);
+        }
+
+        match actions.open_ui() {
+            Ok(()) => {
+                self.state = MachineState::Open;
+                CommandAck::accepted()
+            }
+            Err(detail) => CommandAck::failure(detail),
+        }
+    }
+
+    /// Entry path ①: AppKit's `windowShouldClose`.
+    ///
+    /// This always returns `false`: AppKit must not destroy the window before Phase B.
+    pub fn window_should_close(&mut self, now: Duration, actions: &mut impl UiHostActions) -> bool {
+        self.begin_close(now, false, actions);
+        false
+    }
+
+    /// Entry path ②: host-originated `CLOSE_UI`.
+    ///
+    /// The accepted ack is returned during Phase A, before waiting for the safepoint.
+    /// Duplicate commands in `Closing` or `Closed` still receive a successful ack.
+    pub fn close_command(&mut self, now: Duration, actions: &mut impl UiHostActions) -> CommandAck {
+        match self.begin_close(now, false, actions) {
+            CloseRequestDisposition::Started => CommandAck::accepted(),
+            CloseRequestDisposition::AlreadyClosing => {
+                CommandAck::success_with_detail(ALREADY_CLOSING_DETAIL)
+            }
+        }
+    }
+
+    /// Entry path ③: CLAP's thread-safe `closed(was_destroyed)` callback after P3b
+    /// marshals it to the main thread.
+    pub fn clap_closed(
+        &mut self,
+        was_destroyed: bool,
+        now: Duration,
+        actions: &mut impl UiHostActions,
+    ) -> CloseRequestDisposition {
+        self.begin_close(now, was_destroyed, actions)
+    }
+
+    /// Advance lossless publication retries and the asynchronous Phase B boundary.
+    ///
+    /// This method never waits. Call it once per child main-runloop service tick.
+    pub fn tick(&mut self, now: Duration, actions: &mut impl UiHostActions) {
+        if matches!(self.state, MachineState::Closed) {
+            self.try_publish_close_events(actions);
+            return;
+        }
+
+        let phase_b = match &mut self.state {
+            MachineState::Closing(closing) => {
+                if closing.ui_closed_seq.is_none() {
+                    closing.ui_closed_seq = actions.try_publish_event(UiEvent::UiClosed);
+                }
+
+                let safepoint_completed = closing
+                    .ui_closed_seq
+                    .is_some_and(|ui_closed_seq| actions.event_ack_seq() >= ui_closed_seq);
+                let timed_out = now.saturating_sub(closing.started_at) >= self.close_timeout;
+
+                if safepoint_completed {
+                    Some((
+                        closing.was_destroyed,
+                        CloseCompletion::SafepointCompleted,
+                        false,
+                    ))
+                } else if timed_out {
+                    Some((
+                        closing.was_destroyed,
+                        CloseCompletion::TimedOutWithoutSave,
+                        closing.ui_closed_seq.is_none(),
+                    ))
+                } else {
+                    None
+                }
+            }
+            MachineState::Closed | MachineState::Open => None,
+        };
+
+        let Some((was_destroyed, completion, pending_ui_closed)) = phase_b else {
+            return;
+        };
+
+        // Phase B ordering is normative: plugin release precedes parent-window destroy.
+        actions.release_plugin_ui(was_destroyed);
+        actions.destroy_window();
+        self.state = MachineState::Closed;
+        self.pending_ui_closed = pending_ui_closed;
+        self.pending_done = Some(completion);
+        self.try_publish_close_events(actions);
+    }
+
+    fn begin_close(
+        &mut self,
+        now: Duration,
+        was_destroyed: bool,
+        actions: &mut impl UiHostActions,
+    ) -> CloseRequestDisposition {
+        // This state check is the single reentry guard shared by all three paths.
+        if !matches!(self.state, MachineState::Open) {
+            return CloseRequestDisposition::AlreadyClosing;
+        }
+
+        // Enter Closing before invoking the non-blocking event seam. The command path
+        // returns its acceptance ack immediately after this function returns.
+        self.state = MachineState::Closing(ClosingState {
+            started_at: now,
+            was_destroyed,
+            ui_closed_seq: None,
+        });
+        if let MachineState::Closing(closing) = &mut self.state {
+            closing.ui_closed_seq = actions.try_publish_event(UiEvent::UiClosed);
+        }
+        CloseRequestDisposition::Started
+    }
+
+    fn try_publish_close_events(&mut self, actions: &mut impl UiHostActions) {
+        if self.pending_ui_closed {
+            if actions.try_publish_event(UiEvent::UiClosed).is_none() {
+                return;
+            }
+            self.pending_ui_closed = false;
+        }
+        self.try_publish_done(actions);
+    }
+
+    fn try_publish_done(&mut self, actions: &mut impl UiHostActions) {
+        let Some(completion) = self.pending_done else {
+            return;
+        };
+        if actions
+            .try_publish_event(UiEvent::UiClosedDone(completion))
+            .is_some()
+        {
+            self.pending_done = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Call {
+        Open,
+        Publish(u64, UiEvent),
+        Release(bool),
+        DestroyWindow,
+    }
+
+    struct MockActions {
+        next_seq: u64,
+        published_seq: u64,
+        ack_seq: u64,
+        publishing_enabled: bool,
+        retained_event: Option<UiEvent>,
+        calls: Vec<Call>,
+    }
+
+    impl MockActions {
+        fn drained() -> Self {
+            Self {
+                next_seq: 1,
+                published_seq: 0,
+                ack_seq: 0,
+                publishing_enabled: true,
+                retained_event: None,
+                calls: Vec::new(),
+            }
+        }
+
+        fn published(&self, event: UiEvent) -> usize {
+            self.calls
+                .iter()
+                .filter(|call| matches!(call, Call::Publish(_, candidate) if *candidate == event))
+                .count()
+        }
+
+        fn releases(&self) -> Vec<bool> {
+            self.calls
+                .iter()
+                .filter_map(|call| match call {
+                    Call::Release(was_destroyed) => Some(*was_destroyed),
+                    _ => None,
+                })
+                .collect()
+        }
+    }
+
+    impl UiHostActions for MockActions {
+        fn open_ui(&mut self) -> Result<(), String> {
+            self.calls.push(Call::Open);
+            Ok(())
+        }
+
+        fn try_publish_event(&mut self, event: UiEvent) -> Option<u64> {
+            match self.retained_event {
+                Some(retained) => assert_eq!(
+                    retained, event,
+                    "lossless retry must target the retained head event"
+                ),
+                None => self.retained_event = Some(event),
+            }
+            if !self.publishing_enabled {
+                return None;
+            }
+
+            let retained = self.retained_event.take().expect("event retained above");
+            let seq = self.next_seq;
+            self.next_seq += 1;
+            self.published_seq = seq;
+            self.calls.push(Call::Publish(seq, retained));
+            Some(seq)
+        }
+
+        fn event_ack_seq(&self) -> u64 {
+            self.ack_seq
+        }
+
+        fn is_event_ring_drained(&self) -> bool {
+            self.retained_event.is_none() && self.ack_seq == self.published_seq
+        }
+
+        fn release_plugin_ui(&mut self, was_destroyed: bool) {
+            self.calls.push(Call::Release(was_destroyed));
+        }
+
+        fn destroy_window(&mut self) {
+            self.calls.push(Call::DestroyWindow);
+        }
+    }
+
+    #[test]
+    fn close_machine_converges_all_paths_and_completes_only_on_own_seq_or_timeout() {
+        #[derive(Clone, Copy)]
+        enum Path {
+            Window,
+            Command,
+            ClapDestroyed,
+        }
+
+        for path in [Path::Window, Path::Command, Path::ClapDestroyed] {
+            let mut actions = MockActions::drained();
+            let mut machine = UiCloseStateMachine::new(Duration::from_secs(10));
+
+            assert_eq!(machine.state(), UiState::Closed);
+            assert!(machine.open_command(&mut actions).success);
+            assert_eq!(machine.state(), UiState::Open);
+            let duplicate_open = machine.open_command(&mut actions);
+            assert!(!duplicate_open.success);
+            assert_eq!(duplicate_open.detail, "closing-in-progress");
+            assert_eq!(
+                actions
+                    .calls
+                    .iter()
+                    .filter(|call| matches!(call, Call::Open))
+                    .count(),
+                1,
+                "OPEN_UI requires state == Closed even when the ring is drained"
+            );
+
+            // Construct the UIH.8 hazard independently of the production open gate:
+            // seq 41 is a prior DONE, ack is still 40, and this cycle's CLOSED gets 42.
+            actions.next_seq = 42;
+            actions.published_seq = 41;
+            actions.ack_seq = 40;
+            match path {
+                Path::Window => {
+                    assert!(!machine.window_should_close(Duration::from_secs(1), &mut actions))
+                }
+                Path::Command => {
+                    let ack = machine.close_command(Duration::from_secs(1), &mut actions);
+                    assert!(ack.success, "CLOSE_UI must ack in Phase A");
+                    assert_eq!(ack.detail, "");
+                }
+                Path::ClapDestroyed => assert_eq!(
+                    machine.clap_closed(true, Duration::from_secs(1), &mut actions),
+                    CloseRequestDisposition::Started
+                ),
+            }
+            assert_eq!(machine.state(), UiState::Closing);
+            assert_eq!(actions.published(UiEvent::UiClosed), 1);
+
+            // All three duplicate entry paths converge on the same reentry guard.
+            assert!(!machine.window_should_close(Duration::from_secs(2), &mut actions));
+            assert_eq!(
+                machine.clap_closed(true, Duration::from_secs(2), &mut actions),
+                CloseRequestDisposition::AlreadyClosing
+            );
+            let duplicate_close = machine.close_command(Duration::from_secs(2), &mut actions);
+            assert!(duplicate_close.success);
+            assert_eq!(duplicate_close.detail, "already-closing");
+            assert_eq!(
+                actions.published(UiEvent::UiClosed),
+                1,
+                "duplicates must not fire a second safepoint"
+            );
+
+            // Ack 41 is forward progress, but not this cycle's UI_CLOSED seq 42.
+            actions.ack_seq = 41;
+            machine.tick(Duration::from_secs(3), &mut actions);
+            assert_eq!(machine.state(), UiState::Closing);
+            assert!(
+                actions.releases().is_empty(),
+                "prior DONE progress must not trigger Phase B"
+            );
+
+            actions.ack_seq = 42;
+            machine.tick(Duration::from_secs(4), &mut actions);
+            assert_eq!(machine.state(), UiState::Closed);
+            assert_eq!(
+                actions.releases(),
+                vec![matches!(path, Path::ClapDestroyed)]
+            );
+            assert_eq!(
+                actions.published(UiEvent::UiClosedDone(CloseCompletion::SafepointCompleted)),
+                1
+            );
+            let release_index = actions
+                .calls
+                .iter()
+                .position(|call| matches!(call, Call::Release(_)))
+                .expect("release call");
+            let destroy_index = actions
+                .calls
+                .iter()
+                .position(|call| matches!(call, Call::DestroyWindow))
+                .expect("window destroy call");
+            assert!(
+                release_index < destroy_index,
+                "plugin UI must be released before its parent window"
+            );
+
+            // Closed alone is insufficient while this cycle's DONE remains unacked.
+            let reopen_while_done_unacked = machine.open_command(&mut actions);
+            assert!(!reopen_while_done_unacked.success);
+            assert_eq!(reopen_while_done_unacked.detail, "closing-in-progress");
+            actions.ack_seq = 43;
+            assert!(machine.open_command(&mut actions).success);
+        }
+
+        // Host-stall escape: timeout tears down without an ack and retains DONE until
+        // publication succeeds, without duplicating the event on repeated ticks.
+        let mut actions = MockActions::drained();
+        let mut machine = UiCloseStateMachine::new(Duration::from_secs(10));
+        assert!(machine.open_command(&mut actions).success);
+        actions.publishing_enabled = false;
+        assert!(!machine.window_should_close(Duration::ZERO, &mut actions));
+        assert_eq!(actions.published(UiEvent::UiClosed), 0);
+        machine.tick(Duration::from_secs(9), &mut actions);
+        assert_eq!(machine.state(), UiState::Closing);
+        machine.tick(Duration::from_secs(10), &mut actions);
+        assert_eq!(machine.state(), UiState::Closed);
+        assert_eq!(actions.releases(), vec![false]);
+        assert_eq!(
+            actions.published(UiEvent::UiClosedDone(CloseCompletion::TimedOutWithoutSave)),
+            0
+        );
+        machine.tick(Duration::from_secs(11), &mut actions);
+        actions.publishing_enabled = true;
+        machine.tick(Duration::from_secs(12), &mut actions);
+        assert_eq!(
+            actions.published(UiEvent::UiClosed),
+            1,
+            "a timed-out UI_CLOSED must remain ahead of UI_CLOSED_DONE"
+        );
+        assert_eq!(
+            actions.published(UiEvent::UiClosedDone(CloseCompletion::TimedOutWithoutSave)),
+            1,
+            "UI_CLOSED_DONE must retry until it reaches the ring"
+        );
+    }
+}

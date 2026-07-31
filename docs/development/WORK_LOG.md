@@ -17,6 +17,104 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.342 feat(rust): #474 P3a — クローズ状態機械を AppKit 非依存の純 Rust で実装した (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474（P3a）/ **Branch**: `474-plugin-ui-p3-open-close`
+**Status**: `cargo test --workspace`（**sandbox 外**）= **440 passed / 0 failed**
+
+P3 は2分割した。**P3a = AppKit 非依存の純 Rust 部分**（変異検証で完結できる）。
+NSWindow / VST3・CLAP の GUI 呼び出しは **P3b**。設計正本が
+「UIH.8 の変異検証14項目の大半はこのモジュールのユニットテストで殺す」としているため、
+**AppKit を混ぜずに検証しきる**分割にした。
+
+fixer の新方針（Codex + `--effort xhigh`）の初適用。
+
+#### 実装
+
+- **新 crate `orbit-child-ui`**（532行・プラットフォーム依存ゼロ）:
+  `Closed → Open → Closing → Closed`。閉じる3経路（閉じるボタン / `CLOSE_UI` /
+  CLAP `closed()`）が**単一の `begin_close` 再入ガードに合流**する。
+  AppKit 呼び出しと evt 投函は `UiHostActions` trait で差し替え可能
+- **フェーズ B のトリガ** = `event_ack_seq() >= ui_closed_seq`。
+  「ring が進んだ」という汎用述語は使わない — **ack 41 は seq 42 の フェーズ B を発火できない**
+- **ドレーンゲート**（本日確定した仕様）= `Closed` かつ pending 0 かつ `evt_ack_seq == evt_seq` の
+  **3項の独立した連言**。初期 `Closed`（`0 == 0` かつ pending 0）は受理される
+- `EventRingChild::is_drained` を `transport.rs` に追加。**Ordering は型固定 API に委ね手書きしない**
+- `CMD_OPEN_UI` / `CMD_CLOSE_UI` の定数を追加（実配線は P3b）
+- **tick の `try_borrow_mut` 化**（P1 から持ち越したリスク）: nested runloop での再入時に
+  `BorrowMutError` → `catch_unwind` が「service panic」と誤認して **child 全体が停止**するのを防ぐ
+
+#### 🔴 tick スキップの観測手段は stderr（`tracing` が使えないため）
+
+main がブリーフで「**`tracing::warn!` は child プロセスでは no-op**（4 child とも `tracing` 依存すら
+無い・実測済み）なので観測手段を検討して報告せよ」と投げた点。
+
+Codex の回答は **child の stderr へ書く**（daemon が child の stderr を継承するので観測できる）。
+累積カウンタ `reentrant_tick_skip_count` と併せて `skipped_ticks=N` を出す。
+
+#### 🔴 main が実装中のモニタリングでオフバイワンを発見した
+
+6分時点で差分を読んだところ、フェーズ B のトリガが
+
+```rust
+actions.event_ack_seq() >= ui_closed_seq.saturating_sub(1)   // ← 誤り
+```
+
+になっていた。これは spec の「`evt_ack_seq >= UI_CLOSED を投函した evt_seq`」に反し、
+**`UI_CLOSED` の保存がまだ走っていないのに解放が先行する**（= セーフポイントのスキップ =
+音色の喪失）経路だった。
+
+**Codex が verifying の過程で自力修正**し、さらに**その変異を検証項目に加えた**。
+main も独立に同じ変異を当てて red を確認した（`left: Closed, right: Closing`）。
+
+**状態だけを見ていたら気づけなかった。** [[monitor-codex-yourself]] の実証。
+
+#### 変異検証: 9種（要求5種を上回る）
+
+🔴 **各変異が別々のアサーションで red** になっており、検出力の所在が特定できている:
+
+| 変異 | 落ちたアサーション |
+|---|---|
+| フェーズ B を `-1` | `left: Closed, right: Closing` |
+| `state == Closed` を削除 | `!duplicate_open.success` |
+| ドレーン述語を削除 | `!reopen_while_done_unacked.success` |
+| `is_drained` が pending を無視 | `pending_count != 0 must close the drain gate...` |
+| `is_drained` が cursor 等価を無視 | `evt_ack_seq != evt_seq must close...` |
+| 再入ガード削除 | `left: Started, right: AlreadyClosing` |
+| 重複 `CLOSE_UI` が failure | `duplicate_close.success` |
+| `try_borrow_mut` → `borrow_mut` | `RefCell already borrowed` |
+| タイムアウト無効化 | `left: Closing, right: Closed` |
+
+main は当初「**テスト関数が1つしかない**」ことを懸念したが、**見るべきはテスト関数の数ではなく
+アサーションの粒度**だった。ドレーンゲートの3連言が個別に殺されているのは、
+P2 で問題になった「片方向だけの変異」より強い。
+
+#### 🔴 workspace テストが1回目に落ちたが、環境起因だった
+
+初回 `cargo test --workspace`（sandbox 外）で 1 failed:
+
+```
+orbit-vst3-host: process_block_rejects_frames_exceeding_scratch
+failed to load oracle bundle .../GainOracle.vst3: missing symbol: GetPluginFactory
+```
+
+**P3a は `orbit-vst3-host` を触っていない。** 切り分けた結果:
+
+- フィクスチャのシンボルは**現在は存在する**（`_GetPluginFactory`）・ファイルは失敗後に再生成
+- **単独実行 ×3 はすべて 11 passed**
+- **workspace 再実行は 440 passed / 0 failed**
+
+Codex が変異検証で `cargo clean -p` を繰り返した結果、**VST3 フィクスチャの再生成と使用が
+競合**したもの。実装起因ではない。
+
+**変更ファイル**: `rust/crates/orbit-child-ui/`（新規）/ `transport.rs` / `orbit-child-runtime/src/lib.rs` /
+`orbit-audio-sandbox/src/lib.rs` / `Cargo.toml` / `Cargo.lock`
+
+**Commit**: PR（#474 P3a・作成予定）
+
+---
+
 ### 6.341 docs(spec): #474 P3 の spec 先行 — `Closed` の語義をドレーン条件で確定した (Jul 31, 2026)
 
 **Date**: 2026-07-31

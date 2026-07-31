@@ -293,6 +293,10 @@ const _: () =
 pub const CMD_NONE: u32 = 0;
 /// コマンド種別: 現在の plugin state を `cmd_arg` のパスへ書き出す（#555）。
 pub const CMD_SAVE_STATE: u32 = 1;
+/// コマンド種別: plugin UI を開く（#474 P3）。
+pub const CMD_OPEN_UI: u32 = 2;
+/// コマンド種別: plugin UI の非同期 close handshake を開始する（#474 P3）。
+pub const CMD_CLOSE_UI: u32 = 3;
 
 /// イベント種別: 未発行（`evt_seq == 0` と対）。
 pub const EVT_NONE: u32 = 0;
@@ -460,6 +464,17 @@ impl EventRingChild {
     /// 0 は「保留なし」を意味する(`is_empty` は同じ状態の別表現になるため置かない)。
     pub fn pending_len(&self) -> usize {
         self.pending.len()
+    }
+
+    /// リングがドレーン済みか（保留 0 件 かつ `evt_ack_seq == evt_seq`）。
+    ///
+    /// `evt_ack_seq` は host の Release publish を Acquire で読み、`evt_seq` は child 自身が
+    /// publish するカーソルなので own-writer load を使う。Ordering は [`ReleaseAcquireSeq`]
+    /// の型固定 API に委ね、ここでは手書きしない。
+    #[allow(clippy::not_unsafe_ptr_arg_deref)] // UIH P3a fixes this helper's raw-pointer signature.
+    pub fn is_drained(&self, region: *const SharedRegion) -> bool {
+        self.pending.is_empty()
+            && unsafe { (*region).evt_ack_seq.read() == (*region).evt_seq.load_own() }
     }
 
     /// slot が空く限り保留イベントを seq 順に publish する。
@@ -2048,6 +2063,42 @@ mod tests {
             0,
             "a programming error must not enqueue anything"
         );
+    }
+
+    #[test]
+    fn event_ring_child_is_drained_requires_no_pending_and_equal_cursors() {
+        let shm = mailbox_test_path("event-child-drained");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mut child = EventRingChild::new();
+
+        assert!(
+            child.is_drained(region),
+            "the initial empty ring must be drained"
+        );
+        child
+            .queue(EVT_UI_CLOSED, "pending")
+            .expect("queue pending event");
+        assert!(
+            !child.is_drained(region),
+            "pending_count != 0 must close the drain gate even when both cursors are zero"
+        );
+
+        assert_eq!(unsafe { child.service(region) }.expect("publish"), 1);
+        assert_eq!(child.pending_len(), 0);
+        assert!(
+            !child.is_drained(region),
+            "evt_ack_seq != evt_seq must close the drain gate even with no pending events"
+        );
+
+        unsafe { (*region).evt_ack_seq.publish(1) };
+        assert!(
+            child.is_drained(region),
+            "zero pending events and equal cursors must drain the ring"
+        );
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
     }
 
     /// H: seq 枯渇は loud に失敗し、イベントは pending に残る（silent drop しない）。
