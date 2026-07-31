@@ -57,7 +57,7 @@ const TEARDOWN_TIMEOUT: Duration = Duration::from_millis(500);
 const TRY_WAIT_ERROR_LIMIT: u32 = 50;
 /// 「速い失敗」とみなす生存時間の閾値（#573）。child がこの時間未満で終了したら「起動直後に死んだ」と
 /// みなし連続 fast-fail カウンタを進める。以上生きていれば単発クラッシュとみなしカウンタをリセットし
-/// 従来どおり復帰する。`CHILD_READY_TIMEOUT`（`engine_wrap.rs`・10s・attach の READY 待ち上限）より十分
+/// 従来どおり復帰する。`CHILD_READY_TIMEOUT`（`engine_wrap.rs`・60s・attach の READY 待ち上限）より十分
 /// 短く、`WATCHDOG_POLL`（20ms）よりずっと長い値にする: plugin の実際の初期化コスト（数百ms〜数秒）を
 /// fast-fail に含めたくない一方、attach 後に一瞬で死ぬパターンは確実に拾いたい。
 const FAST_RESPAWN_THRESHOLD: Duration = Duration::from_secs(2);

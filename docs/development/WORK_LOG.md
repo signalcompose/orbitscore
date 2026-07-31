@@ -17,6 +17,74 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.349 fix(daemon): 診断チャネルの故障で daemon が死ぬ経路を封鎖し、child READY 上限を実測に合わせた (#605) (Aug 1, 2026)
+
+**Date**: 2026-08-01
+**Issue**: #605
+**Status**: daemon lib test **158 passed / 0 failed**・新規プロセステスト **1 passed**・
+実機で Kontakt の state 復元が daemon 経由で初めて成功
+
+#### 症状
+
+Kontakt を `instrument(..., "states/strings.state")` で宣言すると child が READY を発行せず
+attach がタイムアウトする。**state 無しでは成功する**という非対称があり、「state 復元が
+child をフリーズさせている」ように見えていた。並行して daemon が SIGABRT で落ちていた
+（`~/Library/Logs/DiagnosticReports/orbit-audio-daemon-*.ips` に 11 件）。
+
+#### 原因1: `CHILD_READY_TIMEOUT` が実測に対して短すぎた（本命）
+
+daemon / child / shm をすべて外した gated probe
+（`orbit-vst3-host/tests/kontakt_state_gated.rs`・新規）で**host 側の state 復元は健全**と判明:
+
+| 条件 | 実測（release） |
+|---|---|
+| state 無しの load | 3.1s |
+| state あり（1.33MB の component chunk 適用） | **4.3s** |
+| 初回 dylib 検証（Gatekeeper・plugin ごとに一度） | 最大 20s |
+
+**「READY を出さない」のではなく「間に合っていなかった」。** 上限 10s → **60s**。
+根拠の内訳を定数のドキュメントに残した。
+
+#### 原因2: 診断チャネルの故障がプロセスを殺していた
+
+- `tracing_subscriber` の writer が `std::io::stderr` 直 — **書き込み失敗で panic**
+- `install_fatal_panic_hook` 自身が `eprintln!` — **再 panic** し
+  `panic_with_hook` の再帰検知が `process::abort()` を呼ぶ。よって `exit(1)` に到達しない
+
+engine 側（`daemon-client.ts`）が起動完了時に daemon stderr の購読を切っており、
+読み手の消えた pipe への書き込みが失敗していた。**engine 側で購読を維持**（蓄積だけ止めて
+以後は `[daemon]` 付きで転送）し、**daemon 側は書き込み失敗で panic しない実装**に変えた。
+
+**設計判断**: 診断チャネルの書き込みエラーは握りつぶす。通常なら禁じ手だが、ここは
+**自分を診断するためのチャネルが診断対象を殺している**構図であり、ログ1行を失う代償より
+daemon が生きて次の診断を出せることを優先した。音声処理・プロトコルの失敗は従来どおり
+loud に落とす。
+
+#### 変異検証（`tests/stderr_breakage.rs`）
+
+`Stdio::piped()` の `ChildStderr` を drop して read 端を閉じ、接続でログを誘発してから生存を見る。
+**fd を `close` するだけでは再現しない**（後続の `open` が fd 2 を再利用して書き込みが成功する）。
+
+| 変異 | 結果 | daemon の終了状態 |
+|---|---|---|
+| A: tracing writer だけ差し戻し | **red** | exit=1（hook 修正で abort を免れる） |
+| B: panic hook だけ差し戻し | 🔴 **green（生存）** | — |
+| C: 両方差し戻し | **red** | **signal 6 = SIGABRT**（本番と同一署名） |
+
+🔴 **変異 B は生き残る**: writer が直っていると panic 自体が起きず hook に到達しないため、
+panic hook 側の修正は独立に検証できていない。production に panic 注入口を足す方が害が
+大きいと判断して入れていない。この非対称はテスト本体に明記した。
+
+#### 教訓
+
+**診断が取れないこと自体が最大のバグだった。** 「stderr がどこにも出ない」を
+2時間追ったが、その stderr を engine 側が切っていた。捕捉を仕掛けた `orbs-stderr.log` が
+0 バイトだったのは、**仕掛けた fd 自体が壊れていた**からで、切り分けを空振りさせ続けた。
+
+**推測を潰した順序**: 「setState デッドロック」「controller handshake 不足」「headless モーダル」
+「child が eprintln で死ぬ」の4仮説はいずれも実測で反証された（前3つは probe の 4.3s 成功、
+最後は child のクラッシュレポートが1件も無いこと）。
+
 ### 6.348 feat(mcp): #474 P4c — UI 開閉を MCP から叩けるようにし、実機で必須ループが通った (Aug 1, 2026)
 
 **Date**: 2026-08-01

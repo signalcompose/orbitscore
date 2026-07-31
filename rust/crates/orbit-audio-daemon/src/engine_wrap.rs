@@ -1542,8 +1542,21 @@ impl Drop for ShmCleanupGuard {
 }
 
 /// child plugin load は通常 dlopen を含む。十分な上限を設け、応答を永久に保留しない。
+///
+/// **60s の根拠**（実測・2026-08-01・#605）。従来の 10s はサンプラー系で足りなかった:
+///
+/// | 内訳 | 実測 |
+/// |---|---|
+/// | Kontakt 8 の load（state 無し・release） | 3.1s |
+/// | 同（1.33MB の component state 復元込み） | 4.3s |
+/// | 初回 dylib 検証（Gatekeeper・plugin ごとに一度きり） | 最大 20s |
+///
+/// 計測は `orbit-vst3-host/tests/kontakt_state_gated.rs`。定常状態には 5s で足りるが、
+/// **初回起動・コールドキャッシュ・大規模ライブラリ**が重なる最悪ケースを許容する。
+/// この上限は「遅いプラグインを待つ」ためのもので、**ハングの検出には使わない**
+/// （ハングは child 側の `ParentWatch` と watchdog が別途拾う）。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
-const CHILD_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const CHILD_READY_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 const CHILD_READY_POLL: Duration = Duration::from_millis(10);
 
