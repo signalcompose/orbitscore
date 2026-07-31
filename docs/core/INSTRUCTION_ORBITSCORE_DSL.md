@@ -1469,7 +1469,7 @@ kick.effect("./plugins/MyComp.clap")   // 従来の path 指定（不変・カ�
 **send → aux（return bus）→ master** の並列タップで構成する。エッジは常に **source が行き先を指す**。
 reconciliation key は名前（同名 = 同一 node・再評価は再束縛）。
 
-### MX.2 sum — `global.sum(name)` / `seq.output(name)`
+### MX.2 sum / render bus / LinkAudio — `seq.output(destination)`
 
 ```js
 global.sum("drum")                    // group bus 宣言（冪等）
@@ -1490,6 +1490,33 @@ sum("drum").effect("GlueComp.clap")   // group bus 自身の insert（v1 は 1 �
   **省略**は従来どおり「既存の出力先を保持（変更なし）」を意味し、予約語との区別で
   三状態を表現する。native 側の routing エンコードは以前から `1 = Master` を持っており、
   本変更は control-plane（parse + 検証 + TS 3層 + respawn cache）のみに閉じる
+
+#### MX.2.1 数値 render bus — `seq.output(n)`（#598 P1）
+
+```orbs
+kick.output(1)
+snare.output(2)
+piano.output(8)
+```
+
+`output(n)` は既存 `output(name)` に統合された score-mode 用 routing。`n` は整数 `1..16`、
+manifest/wire 上の bus 名は先頭ゼロなしの文字列 `"1"`〜`"16"` になる。別の render bus 宣言は
+不要で、同じ番号へ出した sequence は同じ stem に合流する。audio sequence と
+`instrument()` sequence の両方で使用できる。
+
+解決順は次で固定する（既存2用途を保護するため順序も仕様）:
+
+1. 引数を文字列化した名前に一致する `global.sum(name)`
+2. 元の引数が number の場合だけ render bus (`1..16`)
+3. string 引数の既存 LinkAudio channel
+
+したがって `global.sum("1")` が宣言済みなら `output(1)` は sum bus を選ぶ。`output("1")` は
+数字に見えても render bus へ暗黙変換せず、sum が無ければ従来の LinkAudio channel 用法になる。
+範囲外・非整数・非有限の number は runtime error。数値 render bus は score-mode 宣言なので、
+P1 では記録のみを行い、WAV 書き出しは #598 P2 で有効になる。
+
+既存 `output(sumName)` と LinkAudio の warning/strict-mode、`play()` の意味論、realtime の既定出力は
+変更しない。
 
 ### MX.3 aux / send — `global.aux(name)` / `seq.send(name, amount)`
 

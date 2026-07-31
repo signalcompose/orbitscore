@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use orbit_vst3_host::{Vst3EffectProcessor, Vst3HostError, Vst3InstrumentProcessor};
+use orbit_vst3_host::{
+    Vst3EffectProcessor, Vst3HostError, Vst3InstrumentProcessor, Vst3ProcessMode,
+};
 
 const SAMPLE_RATE: f64 = 48_000.0;
 const FRAMES: usize = 512;
@@ -58,6 +60,31 @@ fn gain_oracle_is_sample_exact() {
             "gain=0.5 right sample {index}"
         );
     }
+}
+
+#[test]
+fn offline_mode_reaches_effect_setup_and_process_data() {
+    let Some(bundle) = package_oracle() else {
+        eprintln!("VST3 oracle build failed; loud skip for this machine");
+        return;
+    };
+    let (mut processor, _) = Vst3EffectProcessor::load_with_process_mode(
+        &bundle,
+        SAMPLE_RATE,
+        FRAMES as i32,
+        None,
+        Vst3ProcessMode::Offline,
+    )
+    .expect("load effect in offline mode");
+    let mut data = vec![0.25; FRAMES * 2];
+    assert!(
+        processor.process_block(&mut data),
+        "oracle rejects a setup/process mode mismatch"
+    );
+    assert!(
+        data.iter().all(|sample| *sample == -0.25),
+        "offline mode must reach the effect oracle as kOffline"
+    );
 }
 
 #[test]
@@ -132,6 +159,33 @@ fn synth_oracle_sounds_then_silences_on_note_off() {
     assert!(
         audio.iter().all(|sample| *sample == 0.0),
         "note-off must return output to silence"
+    );
+}
+
+#[test]
+fn offline_mode_reaches_instrument_setup_and_process_data() {
+    let Some(bundle) = package_synth_oracle() else {
+        eprintln!("VST3 synth oracle build failed; loud skip for this machine");
+        return;
+    };
+    let (mut processor, _) = Vst3InstrumentProcessor::load_with_process_mode(
+        &bundle,
+        SAMPLE_RATE,
+        FRAMES as i32,
+        None,
+        Vst3ProcessMode::Offline,
+    )
+    .expect("load instrument in offline mode");
+    processor.push_note_on(0, 69, 0.8, 0);
+    let mut data = vec![0.0; FRAMES * 2];
+    assert!(
+        processor.process_block(&mut data),
+        "oracle rejects a setup/process mode mismatch"
+    );
+    let peak = data.iter().copied().map(f32::abs).fold(0.0, f32::max);
+    assert!(
+        (peak - 0.125).abs() <= 0.01,
+        "offline mode must reach the synth oracle as kOffline; peak={peak}"
     );
 }
 

@@ -17,6 +17,72 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.353 feat(engine): #598 P1 — RenderScore manifest の DSL/wire を通し、TS↔daemon の契約を単一 fixture で固定 (Aug 1, 2026)
+
+**Date**: 2026-08-01
+**Issue**: #598 P1 / **Branch**: `598-p1-dsl-wire`
+**Status**: **1921 passed / 0 failed / 34 skipped**（P1 着手前 1918・+3）・lint 0・
+Rust daemon lib 29 passed
+
+#### 実装（Codex）
+
+- `output(n)` を既存 `output(name)` に統合（1..16 の整数のみ・同名 sum が優先・
+  数値風の文字列は render bus として解釈しない）
+- `RenderScore` manifest の TS 生成・検証・シリアライズ（`render-score.ts`）
+- daemon 側の受け口・語彙解析・検証（`session.rs`）。ハンドラは
+  `NOT_IMPLEMENTED: offline rendering is implemented in #598 P2` を返す（P1 の想定終端）
+
+#### 🔴 main の変異検証で見つけた2つの穴（P1 の受け入れ基準未達だった）
+
+**1. 「TS 生成 → daemon 検証」が実は検証されていなかった**
+
+受け入れ基準は「manifest の round-trip（TS 生成 → daemon 検証）」だが、実際は
+TS 側が TS→TS で round-trip し、Rust 側は**手書きの複製 JSON** を検証していた。
+両者は互いを見ていない。
+
+実証: `out_dir` を **TS 側だけ**一貫して `outDir` にリネームする変異が
+**TS 19 passed / Rust 4 passed** で完全に生き残った — engine が daemon の受け付けない
+payload を出す状態が、両側緑のまま成立する。
+
+**対処**: `tests/fixtures/render-score-manifest.json` を **wire 契約の単一の正本**とし、
+TS 側は `serializeRenderScore(createRenderScore(...))` の出力がこれと一致することを assert、
+Rust 側は `include_str!` で同じファイルを読み `validate_render_score_params` に通す。
+再変異で **TS 側リネーム → TS red / Rust 側リネーム → Rust red**（両方向）を確認。
+
+**2. `_outputChannel` と `_renderBus` の排他性が未検証**
+
+既存テストは**未設定からの初回宣言**しか通していなかったため、
+「数値 output で `_outputChannel` をクリアする行」と「文字列 output で `_renderBus` を
+クリアする行」を**それぞれ削除する変異が両方とも生き残った**（23 passed のまま）。
+実害: `output(1)` → `output("master")` と書き換えても render bus が残り、score-mode で
+意図しないバスへ出る。**再宣言（ライブコーディングの書き換え経路）**を通すテストを追加し、
+両変異が red になることを確認。
+
+#### 変異検証の一覧
+
+| 変異 | 結果 |
+|---|---|
+| TS 側だけ `out_dir`→`outDir` にリネーム | 対処前 **生存** → 対処後 **red** |
+| Rust 側だけ `out_dir`→`outDir` にリネーム | 対処後 **red**（診断文つき） |
+| 未宣言 sample の参照チェック無効化 | red |
+| 未宣言 bus の参照チェック無効化 | red |
+| state の絶対パス要求を外す | red |
+| 数値 render bus の上限（>16）を外す | red |
+| 数値 output で `_outputChannel` を消さない | 対処前 **生存** → 対処後 **red** |
+| 文字列 output で `_renderBus` を消さない | 対処前 **生存** → 対処後 **red** |
+
+#### 分類の追加
+
+`getRenderBus` を `signal-chain-dispatch.spec.ts` の内部 API リストへ（`@internal` の
+純アクセサ・インタプリタからの参照ゼロ）。これが未分類で全 suite が 1 fail していた。
+
+#### このコミットに含まれないもの
+
+**#603 の TEMP パッチ（Kontakt UI・`vst3-host/src/{lib,view}.rs`・追加50行）は除外**。
+逆適用が clean に通ることで「working tree の vst3-host 変更 = TEMP パッチのみ」を確認した上で
+退避し、**パッチ全文と正式修正の要件を #603 にコメントとして保全**した。
+
+
 ### 6.352 chore(project): 「1260」提出完了 — やり残し・課題の棚卸し (Aug 1, 2026)
 
 **Date**: 2026-08-01

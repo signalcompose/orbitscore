@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -136,12 +137,60 @@ fn outproc_role_param_is_valid(params: &Value) -> bool {
 
 /// LoadPlugin params から `bus` を取り出す純関数。`None` は無指定（master bus）、`Ok(Some(_))` は
 /// non-empty 文字列。空文字列や非文字列型は `Err` として拒否する。
-#[cfg(feature = "outproc-effect")]
 fn parse_bus_param(params: &Value) -> Result<Option<String>, &'static str> {
     match params.get("bus") {
         None => Ok(None),
         Some(Value::String(bus)) if !bus.trim().is_empty() => Ok(Some(bus.clone())),
         Some(_) => Err("'bus' must be a non-empty string"),
+    }
+}
+
+/// Wire-level plugin destination shared by GetPluginState/UI requests and RenderScore chains.
+/// Feature availability is intentionally checked only when converting this vocabulary to the
+/// live engine's PluginStateTarget; manifest validation must remain available in every build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PluginTargetVocabulary {
+    Effect { bus: Option<String> },
+    Instrument { instance: String },
+}
+
+fn parse_plugin_target_vocabulary(
+    params: &Value,
+    method: &str,
+) -> Result<PluginTargetVocabulary, ProtocolError> {
+    match params.get("role").and_then(Value::as_str) {
+        Some("effect") => {
+            if params.get("instance").is_some() {
+                return Err(ProtocolError::new(
+                    "MALFORMED_REQUEST",
+                    format!("{method} instance is only valid for role='instrument'"),
+                ));
+            }
+            let bus = parse_bus_param(params)
+                .map_err(|message| ProtocolError::new("MALFORMED_REQUEST", message))?;
+            Ok(PluginTargetVocabulary::Effect { bus })
+        }
+        Some("instrument") => {
+            if params.get("bus").is_some() {
+                return Err(ProtocolError::new(
+                    "MALFORMED_REQUEST",
+                    format!("{method} bus is only valid for role='effect'"),
+                ));
+            }
+            let instance = parse_optional_nonempty_string_param(params, "instance")
+                .map_err(|message| ProtocolError::new("MALFORMED_REQUEST", message))?
+                .ok_or_else(|| {
+                    ProtocolError::new(
+                        "MALFORMED_REQUEST",
+                        format!("{method} role='instrument' requires 'instance'"),
+                    )
+                })?;
+            Ok(PluginTargetVocabulary::Instrument { instance })
+        }
+        _ => Err(ProtocolError::new(
+            "MALFORMED_REQUEST",
+            format!("{method} requires role='effect' or role='instrument'"),
+        )),
     }
 }
 
@@ -231,8 +280,8 @@ fn parse_plugin_target(
     method: &str,
     _unavailable_code: &'static str,
 ) -> Result<PluginStateTarget, ProtocolError> {
-    match params.get("role").and_then(Value::as_str) {
-        Some("effect") => {
+    match parse_plugin_target_vocabulary(params, method)? {
+        PluginTargetVocabulary::Effect { bus: _bus } => {
             #[cfg(not(feature = "outproc-effect"))]
             return Err(ProtocolError::new(
                 _unavailable_code,
@@ -240,18 +289,12 @@ fn parse_plugin_target(
             ));
             #[cfg(feature = "outproc-effect")]
             {
-                if params.get("instance").is_some() {
-                    return Err(ProtocolError::new(
-                        "MALFORMED_REQUEST",
-                        format!("{method} instance is only valid for role='instrument'"),
-                    ));
-                }
-                let bus = parse_bus_param(params)
-                    .map_err(|message| ProtocolError::new("MALFORMED_REQUEST", message))?;
-                Ok(PluginStateTarget::Effect { bus })
+                Ok(PluginStateTarget::Effect { bus: _bus })
             }
         }
-        Some("instrument") => {
+        PluginTargetVocabulary::Instrument {
+            instance: _instance,
+        } => {
             #[cfg(not(feature = "outproc-instrument"))]
             return Err(ProtocolError::new(
                 _unavailable_code,
@@ -259,27 +302,11 @@ fn parse_plugin_target(
             ));
             #[cfg(feature = "outproc-instrument")]
             {
-                if params.get("bus").is_some() {
-                    return Err(ProtocolError::new(
-                        "MALFORMED_REQUEST",
-                        format!("{method} bus is only valid for role='effect'"),
-                    ));
-                }
-                let instance = parse_optional_nonempty_string_param(params, "instance")
-                    .map_err(|message| ProtocolError::new("MALFORMED_REQUEST", message))?
-                    .ok_or_else(|| {
-                        ProtocolError::new(
-                            "MALFORMED_REQUEST",
-                            format!("{method} role='instrument' requires 'instance'"),
-                        )
-                    })?;
-                Ok(PluginStateTarget::Instrument { instance })
+                Ok(PluginStateTarget::Instrument {
+                    instance: _instance,
+                })
             }
         }
-        _ => Err(ProtocolError::new(
-            "MALFORMED_REQUEST",
-            format!("{method} requires role='effect' or role='instrument'"),
-        )),
     }
 }
 
@@ -328,6 +355,262 @@ fn resolve_ui_target_and_index(
 fn resolve_ui_target(params: &Value, method: &str) -> Result<PluginStateTarget, ProtocolError> {
     let target_params = ui_target_object(params, method)?;
     parse_plugin_target(target_params, method, "PLUGIN_UI_UNAVAILABLE")
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenderScoreSample {
+    name: String,
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenderScorePlugin {
+    plugin: String,
+    plugin_id: Option<String>,
+    target: Value,
+    state: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenderScoreBus {
+    name: String,
+    chain: Vec<RenderScorePlugin>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenderScoreMaster {
+    chain: Vec<RenderScorePlugin>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenderScoreEvent {
+    start_sec: f64,
+    sample: String,
+    gain: f64,
+    pan: f64,
+    offset_sec: f64,
+    duration_sec: f64,
+    rate: f64,
+    bus: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenderScoreManifest {
+    sample_rate: u32,
+    duration_sec: f64,
+    block_frames: u32,
+    samples: Vec<RenderScoreSample>,
+    buses: Vec<RenderScoreBus>,
+    master: Option<RenderScoreMaster>,
+    events: Vec<RenderScoreEvent>,
+    out_dir: String,
+}
+
+fn render_score_error(message: impl Into<String>) -> ProtocolError {
+    ProtocolError::new("MALFORMED_REQUEST", message)
+}
+
+fn nonempty(value: &str) -> bool {
+    !value.trim().is_empty()
+}
+
+fn canonical_render_bus(value: &str) -> bool {
+    value
+        .parse::<u8>()
+        .ok()
+        .filter(|number| (1..=16).contains(number))
+        .is_some_and(|number| value == number.to_string())
+}
+
+fn validate_render_plugin(
+    plugin: &RenderScorePlugin,
+    containing_bus: Option<&str>,
+    location: &str,
+) -> Result<(), ProtocolError> {
+    if !nonempty(&plugin.plugin) || !std::path::Path::new(&plugin.plugin).is_absolute() {
+        return Err(render_score_error(format!(
+            "{location}.plugin must be a non-empty absolute path"
+        )));
+    }
+    if plugin.plugin_id.as_deref().is_some_and(|id| !nonempty(id)) {
+        return Err(render_score_error(format!(
+            "{location}.plugin_id must be a non-empty string"
+        )));
+    }
+    if let Some(state) = &plugin.state {
+        if !nonempty(state) || !std::path::Path::new(state).is_absolute() {
+            return Err(render_score_error(format!(
+                "{location}.state must be a non-empty absolute path"
+            )));
+        }
+    }
+
+    // This is the same parser used by GetPluginState and UI requests: role/bus/instance is one
+    // protocol vocabulary, not a RenderScore-only copy.
+    match parse_plugin_target_vocabulary(&plugin.target, "RenderScore")? {
+        PluginTargetVocabulary::Effect { bus } => match containing_bus {
+            Some(containing) => {
+                if bus.as_deref().is_some_and(|target| target != containing) {
+                    return Err(render_score_error(format!(
+                        "{location}.target.bus must match containing bus '{containing}'"
+                    )));
+                }
+            }
+            None if bus.is_some() => {
+                return Err(render_score_error(format!(
+                    "{location}.target.bus is not valid for the master chain"
+                )));
+            }
+            None => {}
+        },
+        PluginTargetVocabulary::Instrument { .. } => {
+            return Err(render_score_error(format!(
+                "{location}.target.role must be 'effect' in a P1 render chain"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_render_score_params(params: &Value) -> Result<RenderScoreManifest, ProtocolError> {
+    const REQUIRED: [&str; 8] = [
+        "sample_rate",
+        "duration_sec",
+        "block_frames",
+        "samples",
+        "buses",
+        "master",
+        "events",
+        "out_dir",
+    ];
+    let object = params
+        .as_object()
+        .ok_or_else(|| render_score_error("RenderScore params must be an object"))?;
+    for field in REQUIRED {
+        if !object.contains_key(field) {
+            return Err(render_score_error(format!(
+                "RenderScore.{field} is required"
+            )));
+        }
+    }
+    let manifest: RenderScoreManifest = serde_json::from_value(params.clone())
+        .map_err(|error| render_score_error(format!("invalid RenderScore manifest: {error}")))?;
+
+    if manifest.sample_rate == 0 {
+        return Err(render_score_error(
+            "RenderScore.sample_rate must be a positive integer",
+        ));
+    }
+    if manifest.block_frames == 0 {
+        return Err(render_score_error(
+            "RenderScore.block_frames must be a positive integer",
+        ));
+    }
+    if !manifest.duration_sec.is_finite() || manifest.duration_sec <= 0.0 {
+        return Err(render_score_error(
+            "RenderScore.duration_sec must be a positive finite number",
+        ));
+    }
+    if !nonempty(&manifest.out_dir) {
+        return Err(render_score_error(
+            "RenderScore.out_dir must be a non-empty string",
+        ));
+    }
+
+    let mut sample_names = std::collections::HashSet::new();
+    for (index, sample) in manifest.samples.iter().enumerate() {
+        if !nonempty(&sample.name) || !nonempty(&sample.path) {
+            return Err(render_score_error(format!(
+                "RenderScore.samples[{index}] name/path must be non-empty"
+            )));
+        }
+        if !sample_names.insert(sample.name.as_str()) {
+            return Err(render_score_error(format!(
+                "RenderScore.samples[{index}].name duplicates '{}'",
+                sample.name
+            )));
+        }
+    }
+
+    let mut bus_names = std::collections::HashSet::new();
+    for (bus_index, bus) in manifest.buses.iter().enumerate() {
+        if !canonical_render_bus(&bus.name) {
+            return Err(render_score_error(format!(
+                "RenderScore.buses[{bus_index}].name must be canonical '1'..'16'"
+            )));
+        }
+        if !bus_names.insert(bus.name.as_str()) {
+            return Err(render_score_error(format!(
+                "RenderScore.buses[{bus_index}].name duplicates '{}'",
+                bus.name
+            )));
+        }
+        for (plugin_index, plugin) in bus.chain.iter().enumerate() {
+            validate_render_plugin(
+                plugin,
+                Some(&bus.name),
+                &format!("RenderScore.buses[{bus_index}].chain[{plugin_index}]"),
+            )?;
+        }
+    }
+
+    if let Some(master) = &manifest.master {
+        for (index, plugin) in master.chain.iter().enumerate() {
+            validate_render_plugin(plugin, None, &format!("RenderScore.master.chain[{index}]"))?;
+        }
+    }
+
+    for (index, event) in manifest.events.iter().enumerate() {
+        let location = format!("RenderScore.events[{index}]");
+        if !event.start_sec.is_finite()
+            || event.start_sec < 0.0
+            || event.start_sec >= manifest.duration_sec
+        {
+            return Err(render_score_error(format!(
+                "{location}.start_sec must be within [0, duration_sec)"
+            )));
+        }
+        if !sample_names.contains(event.sample.as_str()) {
+            return Err(render_score_error(format!(
+                "{location}.sample references undeclared sample '{}'",
+                event.sample
+            )));
+        }
+        if !canonical_render_bus(&event.bus) || !bus_names.contains(event.bus.as_str()) {
+            return Err(render_score_error(format!(
+                "{location}.bus references undeclared render bus '{}'",
+                event.bus
+            )));
+        }
+        if !event.gain.is_finite() || !event.pan.is_finite() {
+            return Err(render_score_error(format!(
+                "{location}.gain/pan must be finite"
+            )));
+        }
+        if !event.offset_sec.is_finite() || event.offset_sec < 0.0 {
+            return Err(render_score_error(format!(
+                "{location}.offset_sec must be non-negative and finite"
+            )));
+        }
+        if !event.duration_sec.is_finite() || event.duration_sec < 0.0 {
+            return Err(render_score_error(format!(
+                "{location}.duration_sec must be non-negative and finite"
+            )));
+        }
+        if !event.rate.is_finite() || event.rate <= 0.0 {
+            return Err(render_score_error(format!(
+                "{location}.rate must be positive and finite"
+            )));
+        }
+    }
+
+    Ok(manifest)
 }
 
 pub async fn run(
@@ -1318,6 +1601,19 @@ async fn handle_command(
                 }
             }
         }
+        // #598 P1: accept the complete self-contained manifest and validate every reference.
+        // Rendering itself starts in P2, so a valid request is deliberately loud rather than a
+        // false success that could make a caller wait for files that will never be produced.
+        "RenderScore" => match validate_render_score_params(&params) {
+            Ok(_) => err(
+                &id,
+                ProtocolError::new(
+                    "NOT_IMPLEMENTED",
+                    "RenderScore manifest accepted; offline rendering is implemented in #598 P2",
+                ),
+            ),
+            Err(error) => err(&id, error),
+        },
         "OpenPluginUI" => {
             #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
             {
@@ -1872,6 +2168,123 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn valid_render_score() -> Value {
+        json!({
+            "sample_rate": 48000,
+            "duration_sec": 12.0,
+            "block_frames": 128,
+            "samples": [{"name": "kick", "path": "/score/audio/kick.wav"}],
+            "buses": [{
+                "name": "1",
+                "chain": [{
+                    "plugin": "/plugins/Glue.vst3",
+                    "plugin_id": "com.example.glue",
+                    "target": {"role": "effect", "bus": "1"},
+                    "state": "/score/states/glue.state"
+                }]
+            }],
+            "master": {"chain": []},
+            "events": [{
+                "start_sec": 0.25,
+                "sample": "kick",
+                "gain": 0.8,
+                "pan": -0.25,
+                "offset_sec": 0.0,
+                "duration_sec": 0.5,
+                "rate": 1.0,
+                "bus": "1"
+            }],
+            "out_dir": "/score/render"
+        })
+    }
+
+    /// 🔴 wire 契約の**単一の正本**。`packages/engine` が実際に出す payload そのもので、
+    /// TS 側（`tests/audio/rust-engine/render-score.spec.ts`）が
+    /// `serializeRenderScore(createRenderScore(...))` の出力と**同一であることを assert** する。
+    ///
+    /// 下の [`valid_render_score`] は「フィールドを落とす／不正値にする」変異の**素材**であって、
+    /// engine が出す形の正本ではない（手書きのコピーなので、engine 側の rename に追従しない）。
+    const ENGINE_WIRE_FIXTURE: &str =
+        include_str!("../../../../tests/fixtures/render-score-manifest.json");
+
+    /// engine が**実際に出す** manifest を daemon が受理することの証明。
+    ///
+    /// 動機（2026-08-01・main の変異検証で発見）: TS 側の round-trip と Rust 側の検証は
+    /// 互いを見ていなかった。`out_dir` を **TS 側だけ**一貫して `outDir` にリネームする変異が
+    /// **TS 19 passed / Rust 4 passed** で生き残り、engine が daemon の受け付けない payload を
+    /// 出す状態が両側緑のまま成立した。この test はその経路を塞ぐ。
+    #[test]
+    fn render_score_accepts_the_manifest_the_engine_emits() {
+        let value: Value =
+            serde_json::from_str(ENGINE_WIRE_FIXTURE).expect("shared wire fixture is valid JSON");
+        validate_render_score_params(&value).expect(
+            "daemon must accept the exact payload packages/engine emits — \
+             if this fails, the TS and Rust wire contracts have diverged \
+             (see tests/fixtures/render-score-manifest.json)",
+        );
+    }
+
+    #[test]
+    fn render_score_accepts_complete_manifest_and_rejects_field_drop() {
+        validate_render_score_params(&valid_render_score()).expect("complete manifest");
+
+        let mut dropped = valid_render_score();
+        dropped.as_object_mut().expect("object").remove("events");
+        let error = validate_render_score_params(&dropped).expect_err("events is required");
+        assert_eq!(error.code, "MALFORMED_REQUEST");
+        assert!(error.message.contains("events"));
+    }
+
+    #[test]
+    fn render_score_checks_event_and_chain_bus_names_against_declarations() {
+        let mut bad_event = valid_render_score();
+        bad_event["events"][0]["bus"] = json!("2");
+        let error = validate_render_score_params(&bad_event).expect_err("undeclared event bus");
+        assert!(error.message.contains("undeclared render bus '2'"));
+
+        let mut bad_chain = valid_render_score();
+        bad_chain["buses"][0]["chain"][0]["target"]["bus"] = json!("2");
+        let error = validate_render_score_params(&bad_chain).expect_err("mismatched chain bus");
+        assert!(error.message.contains("must match containing bus '1'"));
+    }
+
+    #[test]
+    fn render_score_and_get_plugin_state_share_target_vocabulary() {
+        let target = json!({"role": "instrument", "instance": "plugin:lead"});
+        assert_eq!(
+            parse_plugin_target_vocabulary(&target, "GetPluginState").expect("state vocabulary"),
+            parse_plugin_target_vocabulary(&target, "RenderScore").expect("render vocabulary")
+        );
+
+        let mut relative_state = valid_render_score();
+        relative_state["buses"][0]["chain"][0]["state"] = json!("states/glue.state");
+        let error = validate_render_score_params(&relative_state).expect_err("absolute state path");
+        assert!(error.message.contains("absolute path"));
+    }
+
+    #[tokio::test]
+    async fn valid_render_score_is_accepted_then_reports_not_implemented() {
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
+            .expect("stub backend starts");
+        let (tx, _rx) = mpsc::channel(1);
+        let response = handle_command(
+            Command {
+                id: "render-p1".into(),
+                method: "RenderScore".into(),
+                params: valid_render_score(),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+
+        assert_eq!(response["error"]["code"], "NOT_IMPLEMENTED");
+        assert!(response["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("P2"));
+    }
 
     #[test]
     fn plugin_ui_events_use_the_existing_websocket_event_frame_schema() {

@@ -29,7 +29,7 @@ use std::path::Path;
 
 use crate::buffers::HostAudioBuffers;
 use crate::controller::{
-    instantiate_activate, ClapHostError, HostCallbackConfig, LoadedPluginInfo,
+    instantiate_activate, ClapHostError, ClapRenderMode, HostCallbackConfig, LoadedPluginInfo,
 };
 use crate::host::OrbitClapHost;
 use crate::processor::process_block_core;
@@ -99,6 +99,27 @@ impl ClapInstrumentProcessor {
         max_frames: u32,
         state: Option<&[u8]>,
     ) -> Result<(Self, LoadedPluginInfo), ClapHostError> {
+        Self::load_with_render_mode(
+            path,
+            id,
+            sample_rate,
+            channels,
+            max_frames,
+            state,
+            ClapRenderMode::Realtime,
+        )
+    }
+
+    /// Loads an instrument with an explicit CLAP render session mode (#598 P1).
+    pub fn load_with_render_mode(
+        path: &Path,
+        id: Option<&str>,
+        sample_rate: u32,
+        channels: usize,
+        max_frames: u32,
+        state: Option<&[u8]>,
+        render_mode: ClapRenderMode,
+    ) -> Result<(Self, LoadedPluginInfo), ClapHostError> {
         // standalone なので daemon の監視フィールドではなく fresh な Arc を渡す
         // （callback は pump しない・resize は監視しない）。
         let loaded = instantiate_activate(
@@ -107,6 +128,7 @@ impl ClapInstrumentProcessor {
             sample_rate,
             channels,
             max_frames,
+            render_mode,
             HostCallbackConfig::child(),
         )?;
 

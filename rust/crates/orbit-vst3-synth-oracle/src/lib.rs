@@ -147,6 +147,8 @@ impl SineVoice {
 struct SynthProcessor {
     voice: Cell<SineVoice>,
     sample_rate: Cell<f32>,
+    /// Test oracle invariant: ProcessSetup and every ProcessData must carry the same session mode.
+    process_mode: Cell<i32>,
     /// #553: `setState` / `getState` が往復させる観測可能な state（半音オフセット）。
     semitone_offset: Cell<i32>,
 }
@@ -163,6 +165,7 @@ impl SynthProcessor {
                 key: 69,
             }),
             sample_rate: Cell::new(48_000.0),
+            process_mode: Cell::new(ProcessModes_::kRealtime as i32),
             semitone_offset: Cell::new(0),
         }
     }
@@ -352,7 +355,11 @@ impl IAudioProcessorTrait for SynthProcessor {
         0
     }
     unsafe fn setupProcessing(&self, setup: *mut ProcessSetup) -> tresult {
+        if setup.is_null() {
+            return kInvalidArgument;
+        }
         self.sample_rate.set((*setup).sampleRate as f32);
+        self.process_mode.set((*setup).processMode);
         kResultOk
     }
     unsafe fn setProcessing(&self, _state: TBool) -> tresult {
@@ -360,6 +367,9 @@ impl IAudioProcessorTrait for SynthProcessor {
     }
     unsafe fn process(&self, data: *mut ProcessData) -> tresult {
         let data = &*data;
+        if data.processMode != self.process_mode.get() {
+            return kInvalidArgument;
+        }
         let mut voice = self.voice.get();
         if data.numOutputs != 1 || data.outputs.is_null() {
             self.voice.set(voice);
@@ -401,8 +411,13 @@ impl IAudioProcessorTrait for SynthProcessor {
                 }
                 event_index += 1;
             }
+            let amplitude = if self.process_mode.get() == ProcessModes_::kOffline as i32 {
+                0.125
+            } else {
+                0.25
+            };
             let sample = if voice.active {
-                voice.phase.sin() * 0.25
+                voice.phase.sin() * amplitude
             } else {
                 0.0
             };

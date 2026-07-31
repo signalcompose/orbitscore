@@ -41,6 +41,7 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
       // output(). Without it the existing tests still pass (optional-chained),
       // but its absence meant the output()→register wiring was never exercised.
       registerLinkAudioChannel: vi.fn().mockResolvedValue(undefined),
+      setBusRouting: vi.fn().mockResolvedValue(undefined),
     } as any
 
     global = new Global(mockPlayer)
@@ -126,6 +127,75 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
       global.linkAudio()
       expect(() => seq.output('valid')).not.toThrow()
       expect(seq.getOutputChannel()).toBe('valid')
+    })
+  })
+
+  describe('numeric render buses (#598 P1)', () => {
+    it('records canonical render bus 1..16 without changing the realtime output channel', () => {
+      expect(seq.output(1)).toBe(seq)
+      expect(seq.getRenderBus()).toBe('1')
+      expect(seq.getOutputChannel()).toBeUndefined()
+      expect(seq.getState().renderBus).toBe('1')
+      expect(warnSpy).not.toHaveBeenCalled()
+
+      seq.output(16)
+      expect(seq.getRenderBus()).toBe('16')
+    })
+
+    it.each([0, 17, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+      'rejects an invalid numeric render bus: %s',
+      (bus) => {
+        expect(() => seq.output(bus)).toThrow(/integer from 1 to 16/)
+      },
+    )
+
+    it('does not reinterpret a numeric-looking string as a render bus', () => {
+      seq.output('1')
+      expect(seq.getRenderBus()).toBeUndefined()
+      expect(seq.getOutputChannel()).toBe('1')
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+    })
+
+    // 🔴 排他性（2026-08-01・main の変異検証で発見）: 上の「without changing the realtime
+    // output channel」は**未設定からの初回宣言**しか通していないため、
+    // 「数値 output で `_outputChannel` をクリアする行」と「文字列 output で `_renderBus` を
+    // クリアする行」を**それぞれ削除する変異が両方とも生き残った**（23 passed のまま）。
+    // 再宣言（= ライブコーディングで書き換える経路）を通さないと排他性は検証できない。
+    it('clears the realtime output channel when the same sequence is re-declared numerically', () => {
+      seq.output('master')
+      expect(seq.getOutputChannel()).toBe('master')
+
+      seq.output(3)
+
+      expect(seq.getRenderBus()).toBe('3')
+      expect(
+        seq.getOutputChannel(),
+        'output(3) で realtime のチャンネル指定が残ると、両方が同時に立った状態になる',
+      ).toBeUndefined()
+    })
+
+    it('clears the render bus when the same sequence is re-declared with a channel name', () => {
+      seq.output(3)
+      expect(seq.getRenderBus()).toBe('3')
+
+      seq.output('master')
+
+      expect(seq.getOutputChannel()).toBe('master')
+      expect(
+        seq.getRenderBus(),
+        'output("master") で render bus が残ると、score-mode で意図しないバスへ出力される',
+      ).toBeUndefined()
+      expect(seq.getState().renderBus).toBeUndefined()
+    })
+
+    it('resolves a same-named sum before interpreting a numeric render bus', () => {
+      global.sum('1')
+      seq.output(1)
+
+      expect(seq.getRenderBus()).toBeUndefined()
+      expect(seq.getInsertBus()).toBe('seq-bus-0')
+      expect(mockPlayer.setBusRouting).toHaveBeenCalledWith('seq-bus-0', 'sum-bus-0', [])
+      expect(warnSpy).not.toHaveBeenCalled()
     })
   })
 })

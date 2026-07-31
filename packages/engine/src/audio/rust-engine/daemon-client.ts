@@ -30,6 +30,7 @@ import {
   DaemonQuitError,
   DaemonStartupError,
 } from './errors'
+import { validateRenderScore, type RenderScore } from './render-score'
 import {
   CommandFrame,
   CommandMethod,
@@ -426,6 +427,12 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
+  /** P1 accepts and validates the complete manifest; the daemon returns NOT_IMPLEMENTED until P2. */
+  async renderScore(score: RenderScore): Promise<Record<string, unknown>> {
+    validateRenderScore(score)
+    return this.request('RenderScore', { ...score })
+  }
+
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,
@@ -660,14 +667,30 @@ export class DaemonClient extends EventEmitter {
     this.child = child
 
     const stderrChunks: string[] = []
-    // startup 診断用の stderr 収集。ready-line が settle したら detach して
-    // daemon の長期稼働中に stderr を無限に蓄積しないようにする。
+    // startup 診断用の stderr 収集。ready-line が settle したら**蓄積だけ**止める
+    // （daemon の長期稼働中に無限に溜めないため）。
+    //
+    // 🔴 #605: 以前はここで購読自体を切っていた。その結果、起動後に daemon が出す
+    // 診断（plugin load 失敗・child の異常終了・respawn）が**どこにも届かず**、
+    // engine が組み立てた1行（例: `[OUTPROC_ATTACH_FAILED] ...`）しか残らなかった。
+    // exit code も child 名も plugin パスも失われ、原因追跡が構造的に不可能だった
+    // （Kontakt の load 失敗の切り分けに2時間以上を要した実例がある）。
+    // 蓄積を止めることと転送を止めることは別である。**転送は継続する。**
+    let collecting = true
     const onStderrData = (chunk: Buffer): void => {
-      stderrChunks.push(chunk.toString())
+      const text = chunk.toString()
+      if (collecting) {
+        stderrChunks.push(text)
+        return
+      }
+      // 起動後は蓄積せず、行単位で engine のログへ転送する。
+      for (const line of text.split('\n')) {
+        if (line.trim()) console.error(`[daemon] ${line}`)
+      }
     }
     child.stderr?.on('data', onStderrData)
     const detachStderr = (): void => {
-      child.stderr?.off('data', onStderrData)
+      collecting = false
     }
 
     const reader = createInterface({ input: child.stdout! })
