@@ -17,6 +17,99 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.343 feat(rust): #474 P3b-1 — VST3 の UI エンドポイント層（順序が仕様） (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474（P3b-1）/ **Branch**: `474-plugin-ui-p3b1-gui-endpoint`
+**Status**: `cargo test --workspace`（**sandbox 外**）= **447 passed / 0 failed**（P3a 時点 442 → 新規5本）
+
+P3b も分割した。**P3b-1 = AppKit を混ぜないフォーマット GUI エンドポイント層**。
+P3a が「AppKit 非依存の純 Rust に切り出したから変異検証が成立した」分割を踏襲している。
+**今回は VST3 のみ**（CLAP は別タスク）。
+
+#### 🔴 この層の責務は「呼ぶこと」ではなく「正しい順序で呼ぶこと」
+
+VST3 の editor 取得は**順序そのものが規格要件**である。SDK 原文（`iplugview.h:146`・
+`attached()` の doc）: *"Note that in this call the plug-in could call a IPlugFrame::resizeView ()!"*
+— **attach の最中にプラグインがリサイズを要求しうる**ので、`setFrame` を後回しにすると
+その要求を取りこぼす。
+
+したがって**テストは順序を検証しなければ意味がない**。ブリーフでは oracle スタブに
+**「attach の最中に `resizeView` を呼ぶモード」を必須**にした。これが無いと順序を
+間違えても全テストが緑のまま通る。
+
+#### 実装
+
+- `orbit-child-ui`: `PluginUiEndpoint` trait + `UiSize`。**依存ゼロを維持**し、
+  親ビューは `*mut c_void` で受ける（AppKit も vst3 crate も入れない）
+- `orbit-vst3-host/src/view.rs`（新規 292行）: `IPlugView` + `IPlugFrame`。
+  `resizeView` を受けたら**同一 callstack 内で** `onSize` を呼び返す（`iplugview.h:112-114`）
+- `orbit-vst3-synth-oracle`: 呼び出しを順序込みで記録する `IPlugView` スタブ（+208行）。
+  NSView は作らない（`attached` は記録して `kResultOk` を返すだけで足りる）
+- 🔴 **`orbit-vst3-gain-oracle` は変更しない**。`createView` が null を返すままなので、
+  「GUI 非対応プラグインで loud に失敗する」負の経路が**追加作業ゼロで検証できる**
+
+#### 🔴 view の生存を controller より短く保つのをコードで強制した
+
+`ivsteditcontroller.h:535-536`: *"The life time of the editor view will never exceed the
+life time of this controller instance."*
+
+**フィールドの宣言順に頼らない**。`Drop` は `release_view()` → `release_controller()` の順で
+明示的に呼び、`release_view` は `removed()` →  view 解放 → frame 解放、
+`release_controller` には `debug_assert!(self.view.is_none())` を置いた。
+
+#### 変異検証（Codex 4種 + main の独立再現）
+
+テストは `contains` ではなく **trace 全体の等値比較**。さらに `canResize`（規格上は
+任意の位置でよい）を除いた「規範シーケンス」を別途厳密比較する二段構えにした。
+
+| 変異 | 結果 |
+|---|---|
+| `attached` ↔ `setFrame` 交換 | red（`left`/`right` に順序差） |
+| `removed()` を2回 | red（`["removed","removed","viewDropped"]`） |
+| `onSize` 呼び返しを削除 | red（`resizeView` の後が欠ける） |
+| null view で `Ok` を返す | red（負の経路が loud 失敗を保証） |
+
+🔴 **4種すべてがコンパイルエラーではなく assertion failure で red**。
+
+main が独立に `setFrame` を `getSize` の後ろへ移す変異を当てて再現した（2 tests failed・
+`left: [..., "canResize", "getSize", "setFrame", ...]`）。復元は `cmp` で一致確認。
+
+#### 🔴 Codex の rescue 経路が read-only に倒れていた
+
+`rescue`（companion → broker → app-server）が2回とも書き込みを拒否した:
+
+```
+patch rejected: writing is blocked by read-only sandbox;
+rejected by user approval settings
+```
+
+**1回目は `completed` / `Phase: done` を返しながら作業ツリーは完全に空だった。**
+完了通知だけを見ていたら実装済みと誤読していた。
+
+切り分け: `codex exec --sandbox workspace-write` を直接叩くと**書ける**（プローブで実証）。
+broker（15時間39分稼働）を再起動しても直らず、同じ手を3回目は打たずに
+**`codex exec` 直叩き**へ切り替えた。memory の
+`codex-rescue-sandbox-broker-gotcha` の「当座は companion を直叩き」は**今回効かなかった**ので
+記録の更新が要る。
+
+Codex 本体・契約枠は正常。壊れているのは rescue の JSON-RPC 経路だけ。
+
+#### spec 修正（先行）
+
+`UIH.4b` の「`set_scale` も同様にメインスレッドで扱う」が CLAP 規格と矛盾していた。
+CLAP 原文（`gui.h`・`CLAP_WINDOW_API_COCOA` の直上）:
+*"uses logical size, don't call `clap_plugin_gui->set_scale()`"*。
+cocoa は論理サイズなのでホストがスケールを押し付けると二重適用になる。
+main が一次ソースを逐語確認して修正（commit `b05538c`）。
+
+**変更ファイル**: `orbit-child-ui/src/lib.rs` / `orbit-vst3-host/{Cargo.toml,src/lib.rs,src/view.rs,tests/ui_endpoint.rs}` /
+`orbit-vst3-synth-oracle/src/lib.rs` / `Cargo.lock` / `PLUGIN_UI_HOSTING_SPEC_v1.md`
+
+**Commit**: `474-plugin-ui-p3b1-gui-endpoint`（PR 作成予定）
+
+---
+
 ### 6.342 feat(rust): #474 P3a — クローズ状態機械を AppKit 非依存の純 Rust で実装した (Jul 31, 2026)
 
 **Date**: 2026-07-31

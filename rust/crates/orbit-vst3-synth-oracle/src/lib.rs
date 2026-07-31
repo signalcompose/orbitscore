@@ -1,14 +1,66 @@
 //! Known-behavior VST3 instrument oracle: a monophonic stereo sine synth.
 #![allow(non_upper_case_globals, non_camel_case_types, non_snake_case)]
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::f32::consts::TAU;
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::{c_char, c_void, CStr, CString};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::{ptr, slice};
 
-use vst3::{uid, Class, ComRef, ComWrapper, Steinberg::Vst::*, Steinberg::*};
+use vst3::{uid, Class, ComPtr, ComRef, ComWrapper, Steinberg::Vst::*, Steinberg::*};
 
 const PLUGIN_NAME: &str = "Orbit VST3 Synth Oracle";
+const INITIAL_UI_WIDTH: i32 = 400;
+const INITIAL_UI_HEIGHT: i32 = 300;
+const ATTACH_RESIZE_WIDTH: i32 = 640;
+const ATTACH_RESIZE_HEIGHT: i32 = 480;
+
+static UI_TRACE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static UI_SCENARIO_LOCK: Mutex<()> = Mutex::new(());
+static RESIZE_DURING_ATTACH: AtomicBool = AtomicBool::new(false);
+
+fn ui_trace_guard() -> MutexGuard<'static, Vec<String>> {
+    UI_TRACE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn record_ui_call(call: &str) {
+    ui_trace_guard().push(call.to_owned());
+}
+
+/// Serialize process-local GUI-oracle scenarios that share the trace and behavior switch.
+pub fn lock_ui_scenario() -> MutexGuard<'static, ()> {
+    UI_SCENARIO_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Clear the process-local GUI call trace.
+pub fn reset_ui_trace() {
+    ui_trace_guard().clear();
+}
+
+/// Snapshot the process-local GUI call trace.
+pub fn ui_trace() -> Vec<String> {
+    ui_trace_guard().clone()
+}
+
+/// Make `attached` synchronously request a 640x480 resize from its `IPlugFrame`.
+pub fn set_resize_during_attach(enabled: bool) {
+    RESIZE_DURING_ATTACH.store(enabled, Ordering::SeqCst);
+}
+
+/// Create the same edit-controller COM class used by the packaged synth oracle.
+///
+/// The direct constructor lets host integration tests inspect this process's trace without
+/// introducing an oracle-specific interface into the production VST3 host.
+pub fn create_ui_test_controller() -> ComPtr<IEditController> {
+    ComWrapper::new(SynthController)
+        .to_com_ptr::<IEditController>()
+        .expect("SynthController exposes IEditController")
+}
 
 fn copy_cstring(src: &str, dst: &mut [c_char]) {
     let string = CString::new(src).unwrap_or_default();
@@ -430,8 +482,154 @@ impl IEditControllerTrait for SynthController {
     unsafe fn setComponentHandler(&self, _handler: *mut IComponentHandler) -> tresult {
         kResultOk
     }
-    unsafe fn createView(&self, _name: *const c_char) -> *mut IPlugView {
-        ptr::null_mut()
+    unsafe fn createView(&self, name: *const c_char) -> *mut IPlugView {
+        record_ui_call("createView");
+        if name.is_null() || CStr::from_ptr(name).to_bytes() != b"editor" {
+            return ptr::null_mut();
+        }
+
+        let wrapper = ComWrapper::new(OraclePlugView::new());
+        let view_ptr = wrapper
+            .as_com_ref::<IPlugView>()
+            .expect("OraclePlugView exposes IPlugView")
+            .as_ptr();
+        wrapper.self_ptr.set(view_ptr);
+        wrapper
+            .to_com_ptr::<IPlugView>()
+            .expect("OraclePlugView exposes IPlugView")
+            .into_raw()
+    }
+}
+
+struct OraclePlugView {
+    frame: RefCell<Option<ComPtr<IPlugFrame>>>,
+    size: Cell<ViewRect>,
+    self_ptr: Cell<*mut IPlugView>,
+}
+
+impl OraclePlugView {
+    fn new() -> Self {
+        Self {
+            frame: RefCell::new(None),
+            size: Cell::new(ViewRect {
+                left: 0,
+                top: 0,
+                right: INITIAL_UI_WIDTH,
+                bottom: INITIAL_UI_HEIGHT,
+            }),
+            self_ptr: Cell::new(ptr::null_mut()),
+        }
+    }
+}
+
+impl Drop for OraclePlugView {
+    fn drop(&mut self) {
+        record_ui_call("viewDropped");
+    }
+}
+
+impl Class for OraclePlugView {
+    type Interfaces = (IPlugView,);
+}
+
+impl IPlugViewTrait for OraclePlugView {
+    unsafe fn isPlatformTypeSupported(&self, platform_type: FIDString) -> tresult {
+        record_ui_call("isPlatformTypeSupported");
+        if !platform_type.is_null()
+            && CStr::from_ptr(platform_type).to_bytes()
+                == CStr::from_ptr(kPlatformTypeNSView).to_bytes()
+        {
+            kResultTrue
+        } else {
+            kResultFalse
+        }
+    }
+
+    unsafe fn attached(&self, _parent: *mut c_void, platform_type: FIDString) -> tresult {
+        record_ui_call("attached");
+        if platform_type.is_null()
+            || CStr::from_ptr(platform_type).to_bytes()
+                != CStr::from_ptr(kPlatformTypeNSView).to_bytes()
+        {
+            return kInvalidArgument;
+        }
+
+        if RESIZE_DURING_ATTACH.load(Ordering::SeqCst) {
+            record_ui_call("resizeView");
+            let mut requested = ViewRect {
+                left: 0,
+                top: 0,
+                right: ATTACH_RESIZE_WIDTH,
+                bottom: ATTACH_RESIZE_HEIGHT,
+            };
+            let frame = self.frame.borrow();
+            let Some(frame) = frame.as_ref() else {
+                return kNotInitialized;
+            };
+            let result = frame.resizeView(self.self_ptr.get(), &mut requested);
+            if result != kResultOk && result != kResultTrue {
+                return result;
+            }
+        }
+        kResultOk
+    }
+
+    unsafe fn removed(&self) -> tresult {
+        record_ui_call("removed");
+        kResultOk
+    }
+
+    unsafe fn onWheel(&self, _distance: f32) -> tresult {
+        kResultFalse
+    }
+
+    unsafe fn onKeyDown(&self, _key: char16, _key_code: int16, _modifiers: int16) -> tresult {
+        kResultFalse
+    }
+
+    unsafe fn onKeyUp(&self, _key: char16, _key_code: int16, _modifiers: int16) -> tresult {
+        kResultFalse
+    }
+
+    unsafe fn getSize(&self, size: *mut ViewRect) -> tresult {
+        record_ui_call("getSize");
+        let Some(size) = size.as_mut() else {
+            return kInvalidArgument;
+        };
+        *size = self.size.get();
+        kResultOk
+    }
+
+    unsafe fn onSize(&self, new_size: *mut ViewRect) -> tresult {
+        record_ui_call("onSize");
+        let Some(new_size) = new_size.as_ref() else {
+            return kInvalidArgument;
+        };
+        self.size.set(*new_size);
+        kResultOk
+    }
+
+    unsafe fn onFocus(&self, _state: TBool) -> tresult {
+        kResultOk
+    }
+
+    unsafe fn setFrame(&self, frame: *mut IPlugFrame) -> tresult {
+        record_ui_call("setFrame");
+        *self.frame.borrow_mut() = ComRef::from_raw(frame).map(|frame| frame.to_com_ptr());
+        kResultOk
+    }
+
+    unsafe fn canResize(&self) -> tresult {
+        record_ui_call("canResize");
+        kResultTrue
+    }
+
+    unsafe fn checkSizeConstraint(&self, rect: *mut ViewRect) -> tresult {
+        if rect.is_null() {
+            kInvalidArgument
+        } else {
+            kResultOk
+        }
     }
 }
 
