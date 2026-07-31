@@ -73,6 +73,10 @@ const _: () = assert!(SLOTS >= 2);
 /// なりうる `UI_CLOSED` + `UI_CLOSED_DONE` の2件から固定される。
 pub const EVT_SLOTS: usize = 2;
 
+// spec (PLUGIN_UI_HOSTING_SPEC_v1.md) の 🔴 `EVT_SLOTS >= 2`(連続 seq が必ず別 slot を指す
+// 不変条件)の床。鏡像元 `SLOTS` の const assert と同じ役目を evt 側でも compile-time に固定する。
+const _: () = assert!(EVT_SLOTS >= 2);
+
 /// seq に対応する slot のインデックス(`0..SLOTS`)。per-slot メタデータ配列(`seq_tag` /
 /// `n_frames`)の添字に使う。`slot_offset` はこれを [`BUF_LEN`] 倍したバッファ要素オフセット。
 #[inline]
@@ -270,6 +274,9 @@ pub const CMD_ARG_BYTES: usize = 1024;
 pub const CMD_DETAIL_BYTES: usize = 256;
 /// `evt_arg` のバイト長。close 完了理由等の短い付随情報を NUL 終端で収める。
 pub const EVT_ARG_BYTES: usize = CMD_DETAIL_BYTES;
+/// `arg` が `evt_arg` に収まらない時の差し替え文言（規律1・[`EventRingChild::queue`] 参照）。
+/// [`service_command_mailbox`] の `"detail too long"` フォールバックの evt 側対応物。
+pub const EVT_ARG_FALLBACK: &str = "arg too long or embedded NUL";
 
 /// コマンド種別: 未発行（`cmd_seq == 0` と対）。
 pub const CMD_NONE: u32 = 0;
@@ -293,6 +300,12 @@ pub use evt_sync::{MonotoneEpoch, ReleaseAcquireSeq};
 /// 呼び出し箇所の逸脱を検出できない）ため、**呼び出し箇所が Ordering を渡せない API** に固定する:
 /// 内部の `AtomicU64` は本 submodule の外から不可視なので、
 /// `evt_seq.store(seq, Ordering::Relaxed)` のような逸脱は**コンパイルできない**。
+///
+/// **同じ限界は「プログラム順序」の規律にもある**: payload（`evt_kind` / `evt_arg`）を
+/// 書き終えてから [`ReleaseAcquireSeq::publish`] を呼ぶ、という呼び出し側の順序は本型でも
+/// 強制できず、単一スレッドのユニットテストでは原理的に検出できない（program order 内では
+/// どちらの順でも同じ結果になる）。publish を payload より先に呼ぶ逸脱はレビューだけが
+/// ガードなので、`EventRingChild::service` の書き込み順を変えるときはこの doc に立ち返ること。
 ///
 /// **既存の atomic フィールドには適用していない**（`cmd_seq` / `cmd_ack_seq` /
 /// `seq_request` / `seq_tag` 等は生の `AtomicU64` のままで、呼び出し箇所ごとに Ordering を
@@ -334,6 +347,11 @@ mod evt_sync {
 
     impl MonotoneEpoch {
         /// 水位を 1 進め、新しい水位を返す。Release RMW 固定。
+        ///
+        /// `evt_seq` と違い `checked_add` を使わないのは意図的な非対称: こちらは通知スレッドを
+        /// 問わない atomic RMW（`fetch_add`）で、overflow 検査を挟むには CAS ループ化が要る一方、
+        /// 水位は slot 再利用判定に使われない（wrap しても UB クラスの故障に接続しない）ため
+        /// u64 の実用上尽きない範囲で wrapping を許容する。
         pub fn increment(&self) -> u64 {
             self.0.fetch_add(1, Ordering::Release).wrapping_add(1)
         }
@@ -365,10 +383,13 @@ pub struct EventRingChild {
     pending: VecDeque<PendingEvent>,
 }
 
+/// [`EventRingChild`] の失敗。**`arg` のエンコード失敗はここに無い**（規律1:
+/// 取りこぼし不可イベントを付随情報の失敗に巻き込まない — [`EventRingChild::queue`] 参照）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EventRingChildError {
+    /// 呼び出し側のプログラミングエラー。「どのイベントか」自体が不明なので、
+    /// フォールバックで enqueue するものが存在せず `Err` のままにする。
     UnknownKind(u32),
-    ArgumentTooLong,
     SequenceExhausted,
 }
 
@@ -376,10 +397,6 @@ impl fmt::Display for EventRingChildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownKind(kind) => write!(f, "unsupported child event kind {kind}"),
-            Self::ArgumentTooLong => write!(
-                f,
-                "event argument must contain no NUL and fit in EVT_ARG_BYTES={EVT_ARG_BYTES}"
-            ),
             Self::SequenceExhausted => write!(f, "event ring sequence exhausted"),
         }
     }
@@ -393,13 +410,28 @@ impl EventRingChild {
     }
 
     /// 取りこぼし不可イベントを保留する。実際の shm 投函は [`Self::service`] が行う。
+    ///
+    /// **規律1（[`service_command_mailbox`] の detail フォールバックの継承）**: `arg` が
+    /// [`EVT_ARG_BYTES`] に収まらない・埋め込み NUL を含む場合でも、イベント自体は**必ず**
+    /// enqueue する。arg は [`EVT_ARG_FALLBACK`] へ差し替え、`tracing::warn!` で loud にする。
+    /// spec（UIH.2a）が取りこぼし不可と規定する `UI_CLOSED` / `UI_CLOSED_DONE` は、
+    /// 動的な detail（OS エラー文字列・パス等）のエンコード失敗を理由に消えてはならない —
+    /// 呼び出し元が `Result` を読み捨てると MCP `close_plugin_ui` の完了判定が永遠に閉じない。
+    ///
+    /// `Err` は [`EventRingChildError::UnknownKind`] のみ（enum doc 参照）。
     pub fn queue(&mut self, kind: u32, arg: &str) -> Result<(), EventRingChildError> {
         if !matches!(kind, EVT_UI_CLOSED | EVT_UI_CLOSED_DONE) {
             return Err(EventRingChildError::UnknownKind(kind));
         }
         let mut bytes = [0; EVT_ARG_BYTES];
         if !write_cstr_field(&mut bytes, arg) {
-            return Err(EventRingChildError::ArgumentTooLong);
+            tracing::warn!(
+                kind,
+                arg_len = arg.len(),
+                "event arg does not fit or contains NUL; replacing with fallback"
+            );
+            // フォールバック文言は EVT_ARG_BYTES に静的に収まる。
+            let _ = write_cstr_field(&mut bytes, EVT_ARG_FALLBACK);
         }
         self.pending.push_back(PendingEvent { kind, arg: bytes });
         Ok(())
@@ -462,6 +494,23 @@ impl EventRingEvent {
     }
 }
 
+/// [`EventRingHost::poll`] の結果。**idle / 前進 / 先頭で停止を型で区別する**（規律3:
+/// [`CommandMailboxError::Timeout`] が停滞を型で loud にするのと同じ姿勢）。
+///
+/// spec の「故障時の脱出条件」（host は QUIT を立てる前に保留イベントを解決し、解決できない
+/// ものは loud に報告して打ち切る）の判定材料を呼び出し元へ返す: [`Self::Blocked`] の
+/// `seq` / `kind` が「何が解決できていないか」の報告内容そのものになる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventPollOutcome {
+    /// 新規イベントは無かった（`evt_ack_seq == evt_seq`）。
+    Idle,
+    /// 新規イベントを `handled` 件（>= 1）完結し ack した。未 ack は残っていない。
+    Advanced { handled: usize },
+    /// handler が `seq` / `kind` のイベントの完結を拒んだ。`handled` 件はその前に ack 済み。
+    /// 同じ seq が次回 poll の先頭に再登場する（seq 順処理: 追い越して前進しない）。
+    Blocked { handled: usize, seq: u64, kind: u32 },
+}
+
 /// host 側の seq 順イベント consumer と dirty 水位 observer（UIH.2a）。
 ///
 /// **evt カーソルを保持しない**（読む位置は毎 [`Self::poll`] で shm の `evt_ack_seq + 1` から
@@ -469,9 +518,19 @@ impl EventRingEvent {
 /// 0 に戻せる前提条件。カーソルフィールドを足す前に、同関数内の不変条件コメントを読むこと
 /// （`last_seen_dirty_epoch` は累積水位 `dirty_epoch` に対する watermark であり、
 /// `dirty_epoch` を respawn でリセットしないからこそ保持できている — 対になる設計）。
+///
+/// **スレッド安全性（規律2: [`CommandMailboxHost`] の `Mutex<CommandMailboxState>` の継承）**:
+/// [`Self::poll`] は内部 `Mutex` で直列化される。`evt_ack_seq` の Relaxed 読み
+/// （[`ReleaseAcquireSeq::load_own`]）が前提とする「唯一の書き手」は、この直列化が
+/// **host プロセス内について**与える（child プロセスは `evt_ack_seq` を読むだけで書かない）。
+/// [`Self::observe_dirty_epoch`] は `fetch_max` の RMW で自己完結して並行安全なため
+/// この Mutex を取らない。**[`reset_child_starting`] との排他だけは型で担保していない** —
+/// 同関数の `# Safety` 契約（watchdog が host 側の poll も静穏化してから呼ぶ）を参照。
 #[derive(Debug)]
 pub struct EventRingHost {
     shm_path: PathBuf,
+    /// poll の read → handler → ack publish サイクルを host 内で直列化する（struct doc 参照）。
+    poll_gate: Mutex<()>,
     last_seen_dirty_epoch: AtomicU64,
 }
 
@@ -479,6 +538,7 @@ impl EventRingHost {
     pub fn new(shm_path: PathBuf) -> Self {
         Self {
             shm_path,
+            poll_gate: Mutex::new(()),
             last_seen_dirty_epoch: AtomicU64::new(0),
         }
     }
@@ -486,11 +546,18 @@ impl EventRingHost {
     /// publish 済みイベントを `evt_ack_seq + 1` から順に処理する。
     ///
     /// handler が `true` を返したイベントだけを完了済みとして Release ack する。`false` なら
-    /// その seq を未 ack のまま残し、後続を追い越さずに戻る。
-    pub fn poll<F>(&self, mut handler: F) -> io::Result<usize>
+    /// その seq を未 ack のまま残し、後続を追い越さずに [`EventPollOutcome::Blocked`] を返す
+    /// （idle との区別は戻り値の型が持つ — 規律3）。
+    pub fn poll<F>(&self, mut handler: F) -> io::Result<EventPollOutcome>
     where
         F: FnMut(EventRingEvent) -> bool,
     {
+        // 規律2: 並行 poll は同一イベントの重複処理と evt_ack_seq の lost-update を生むため
+        // 直列化する。poison（handler panic）は loud に失敗させる（黙って続行しない）。
+        let _serialized = self
+            .poll_gate
+            .lock()
+            .map_err(|_| io::Error::other("event ring poll gate poisoned by a panicked handler"))?;
         let mmap = open_shared(&self.shm_path)?;
         let region = region_ptr(&mmap);
         let mut handled = 0;
@@ -504,7 +571,11 @@ impl EventRingHost {
                 ));
             }
             if ack == published {
-                return Ok(handled);
+                return Ok(if handled == 0 {
+                    EventPollOutcome::Idle
+                } else {
+                    EventPollOutcome::Advanced { handled }
+                });
             }
 
             let seq = ack + 1;
@@ -514,8 +585,9 @@ impl EventRingHost {
                 kind: unsafe { (*region).evt_kind[index].load(Ordering::Relaxed) },
                 arg: unsafe { std::ptr::read(std::ptr::addr_of!((*region).evt_arg[index])) },
             };
+            let kind = event.kind;
             if !handler(event) {
-                return Ok(handled);
+                return Ok(EventPollOutcome::Blocked { handled, seq, kind });
             }
             unsafe { (*region).evt_ack_seq.publish(seq) };
             handled += 1;
@@ -1164,7 +1236,15 @@ pub unsafe fn publish_child_ready(region: *mut SharedRegion, has_audio_input: bo
 /// この順序なら並行 poller が前 incarnation の `READY` と消去済み flags を組み合わせない。
 ///
 /// # Safety
-/// `region` は呼び出し元が map 済みの生存 SharedRegion を指していること。
+/// - `region` は呼び出し元が map 済みの生存 SharedRegion を指していること。
+/// - **child プロセス側**: watchdog が旧 child のプロセス消滅を確認済みであること
+///   （生存中の child と並行すると `evt_seq` / `cmd_ack_seq` の並行 store で lost update）。
+/// - **host プロセス側**: 同一 region に対する [`EventRingHost::poll`] が並行して
+///   走っていないこと。poll は host 内部の `Mutex` で相互には直列化されるが、本関数は
+///   その Mutex の外にいる。並行すると 4 つの独立 store（`evt_seq` → 0 / `evt_ack_seq` → 0 /
+///   `evt_kind` / `evt_arg`）の途中状態を poll が観測し、偽の `InvalidData`
+///   （`ack > published`）や正当な ack の消失になる。watchdog は「旧 child の死亡確認 →
+///   in-flight 手続きの中止（poll 停止を含む）→ 本関数 → spawn」の順で直列化すること。
 pub unsafe fn reset_child_starting(region: *mut SharedRegion) {
     unsafe {
         let seq = (*region).cmd_seq.load(Ordering::Acquire);
@@ -1184,8 +1264,8 @@ pub unsafe fn reset_child_starting(region: *mut SharedRegion) {
         (*region).cmd_kind.store(CMD_NONE, Ordering::Relaxed);
         (*region).cmd_arg.fill(0);
 
-        // 旧 child の未処理イベントを replacement child のものと混線させない。watchdog が
-        // 旧 child の死亡と in-flight 手続きの中止を確認した後だけ呼ばれるため並行 writer はいない。
+        // 旧 child の未処理イベントを replacement child のものと混線させない。並行 writer の
+        // 不在（child のプロセス消滅 + host 内 poll の静穏化の両方）は # Safety 契約が要求する。
         //
         // ここで evt_seq / evt_ack_seq を 0 に戻せるのは、`cmd_seq`（0 に戻さない —
         // [`InFlightCommand::generation`] のコメント参照）と違い、**host 側が evt カーソルを
@@ -1576,7 +1656,12 @@ mod tests {
                 false
             })
             .expect("defer first event"),
-            0
+            // 規律3: 「先頭で停止」は idle と型で区別され、何が未解決か（seq/kind）を運ぶ。
+            EventPollOutcome::Blocked {
+                handled: 0,
+                seq: 1,
+                kind: EVT_UI_CLOSED
+            }
         );
         assert_eq!(attempted, vec![(1, EVT_UI_CLOSED)]);
         assert_eq!(
@@ -1596,7 +1681,7 @@ mod tests {
                 true
             })
             .expect("complete queued events"),
-            2
+            EventPollOutcome::Advanced { handled: 2 }
         );
         assert_eq!(
             completed,
@@ -1606,6 +1691,11 @@ mod tests {
             ]
         );
         assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 2);
+        assert_eq!(
+            host.poll(|_| true).expect("drained ring"),
+            EventPollOutcome::Idle,
+            "no new events must be distinguishable from a blocked head"
+        );
 
         drop(mmap);
         let _ = std::fs::remove_file(shm);
@@ -1630,8 +1720,14 @@ mod tests {
             "EVT_SLOTS=2 must accept both close-cycle events before either ack"
         );
         assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 0);
-        let first_index = evt_slot_index(1);
-        let second_index = evt_slot_index(2);
+        // 期待 index は本番の evt_slot_index() から導出せずハードコードする（自己参照にすると
+        // 式の変異((seq-1) % EVT_SLOTS 等)を検出できない）。EVT_SLOTS = 2 前提の値。
+        assert_eq!(
+            EVT_SLOTS, 2,
+            "hardcoded slot indices below assume EVT_SLOTS = 2"
+        );
+        let first_index = 1usize; // seq 1 -> slot 1
+        let second_index = 0usize; // seq 2 -> slot 0
         assert_ne!(
             first_index, second_index,
             "consecutive unacked events must occupy distinct slots"
@@ -1679,7 +1775,10 @@ mod tests {
             unsafe { old_child.service(region) }.expect("old publish"),
             2
         );
-        assert_eq!(host.poll(|_| true).expect("drain old incarnation"), 2);
+        assert_eq!(
+            host.poll(|_| true).expect("drain old incarnation"),
+            EventPollOutcome::Advanced { handled: 2 }
+        );
 
         unsafe { reset_child_starting(region) };
 
@@ -1707,7 +1806,7 @@ mod tests {
                 true
             })
             .expect("poll replacement incarnation"),
-            2,
+            EventPollOutcome::Advanced { handled: 2 },
             "same host instance must deliver exactly the replacement child's events"
         );
         assert_eq!(
@@ -1748,11 +1847,179 @@ mod tests {
         assert_eq!(unsafe { child.service(region) }.expect("retry tick"), 1);
         assert_eq!(child.pending_len(), 0, "retry must drain the pending queue");
         assert_eq!(unsafe { (*region).evt_seq.read() }, 3);
-        let third_index = evt_slot_index(3);
+        // 期待 index はハードコード（evt_slot_index() を呼ぶと自己参照になり変異を検出できない）。
+        assert_eq!(
+            EVT_SLOTS, 2,
+            "hardcoded slot index below assumes EVT_SLOTS = 2"
+        );
+        let third_index = 1usize; // seq 3 -> slot 1
         assert_eq!(
             unsafe { read_cstr_field(&(*region).evt_arg[third_index]) },
             Some("cycle-2-start")
         );
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    /// B（変異検出）: kind の値と seq の値が偶然一致するフィクスチャでは
+    /// `evt_kind[index].store(event.kind, ..)` を `store(seq as u32, ..)` へ変異させても
+    /// 全 green になる。意図的に kind ≠ seq の並び（DONE, CLOSED, DONE = 2, 1, 2）で積み、
+    /// (seq, kind) の対応と shm 上の生値を明示 assert する。
+    #[test]
+    fn event_ring_kind_travels_in_its_slot_not_derived_from_seq() {
+        let shm = mailbox_test_path("event-kind-vs-seq");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mut child = EventRingChild::new();
+        child
+            .queue(EVT_UI_CLOSED_DONE, "seq1")
+            .expect("queue seq 1");
+        child.queue(EVT_UI_CLOSED, "seq2").expect("queue seq 2");
+        child
+            .queue(EVT_UI_CLOSED_DONE, "seq3")
+            .expect("queue seq 3");
+        assert_eq!(unsafe { child.service(region) }.expect("first publish"), 2);
+
+        let host = EventRingHost::new(shm.clone());
+        let mut delivered = Vec::new();
+        let mut drain = |event: EventRingEvent| {
+            delivered.push((event.seq, event.kind));
+            true
+        };
+        assert_eq!(
+            host.poll(&mut drain).expect("drain first two"),
+            EventPollOutcome::Advanced { handled: 2 }
+        );
+        assert_eq!(unsafe { child.service(region) }.expect("publish third"), 1);
+        assert_eq!(
+            host.poll(&mut drain).expect("drain third"),
+            EventPollOutcome::Advanced { handled: 1 }
+        );
+        assert_eq!(
+            delivered,
+            vec![
+                (1, EVT_UI_CLOSED_DONE),
+                (2, EVT_UI_CLOSED),
+                (3, EVT_UI_CLOSED_DONE),
+            ]
+        );
+        // shm 上の生値も確認する（index はハードコード・EVT_SLOTS = 2 前提）:
+        // seq 3 -> slot 1 = DONE、seq 2 -> slot 0 = CLOSED。
+        assert_eq!(EVT_SLOTS, 2, "hardcoded slot indices assume EVT_SLOTS = 2");
+        unsafe {
+            assert_eq!(
+                (*region).evt_kind[1].load(Ordering::Relaxed),
+                EVT_UI_CLOSED_DONE
+            );
+            assert_eq!((*region).evt_kind[0].load(Ordering::Relaxed), EVT_UI_CLOSED);
+        }
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    /// A（規律1）: 取りこぼし不可イベントは arg のエンコード失敗（長すぎ・埋め込み NUL）で
+    /// 消えない。arg はフォールバック文言へ差し替えられ、イベント自体は必ず届く。
+    #[test]
+    fn event_ring_queue_replaces_unencodable_arg_but_never_drops_the_event() {
+        let shm = mailbox_test_path("event-arg-fallback");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mut child = EventRingChild::new();
+        // NUL 終端の 1 バイト分も収まらない長さ（P3 のタイムアウト経路が載せる動的 detail を模す）。
+        let oversized = "x".repeat(EVT_ARG_BYTES);
+        child
+            .queue(EVT_UI_CLOSED_DONE, &oversized)
+            .expect("oversized arg must still enqueue the lossless event");
+        child
+            .queue(EVT_UI_CLOSED_DONE, "timeout\0detail")
+            .expect("embedded NUL must still enqueue the lossless event");
+        assert_eq!(child.pending_len(), 2, "no event may be dropped at queue()");
+        assert_eq!(unsafe { child.service(region) }.expect("publish both"), 2);
+
+        let host = EventRingHost::new(shm.clone());
+        let mut args = Vec::new();
+        assert_eq!(
+            host.poll(|event| {
+                args.push(
+                    event
+                        .arg()
+                        .expect("fallback arg must be readable")
+                        .to_string(),
+                );
+                true
+            })
+            .expect("poll fallback events"),
+            EventPollOutcome::Advanced { handled: 2 }
+        );
+        // 文言はハードコードで検証する（const 経由だと文言の破壊を検出できない）。
+        assert_eq!(args, vec!["arg too long or embedded NUL".to_string(); 2]);
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    /// H: 未知 kind は呼び出し側のプログラミングエラーとして Err のまま（enqueue しない）。
+    #[test]
+    fn event_ring_queue_rejects_unknown_kind_without_enqueueing() {
+        let mut child = EventRingChild::new();
+        assert_eq!(
+            child.queue(99, "detail"),
+            Err(EventRingChildError::UnknownKind(99))
+        );
+        assert_eq!(
+            child.pending_len(),
+            0,
+            "a programming error must not enqueue anything"
+        );
+    }
+
+    /// H: seq 枯渇は loud に失敗し、イベントは pending に残る（silent drop しない）。
+    #[test]
+    fn event_ring_service_fails_loud_on_sequence_exhaustion_and_retains_event() {
+        let shm = mailbox_test_path("event-seq-exhausted");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        unsafe { (*region).evt_seq.publish(u64::MAX) };
+        let mut child = EventRingChild::new();
+        child.queue(EVT_UI_CLOSED_DONE, "done").expect("queue");
+        assert_eq!(
+            unsafe { child.service(region) },
+            Err(EventRingChildError::SequenceExhausted)
+        );
+        assert_eq!(
+            child.pending_len(),
+            1,
+            "exhaustion must not silently drop the lossless event"
+        );
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    /// H: `ack > published` の壊れた shm 状態は InvalidData で loud に失敗する。
+    #[test]
+    fn event_ring_poll_fails_loud_when_ack_exceeds_published() {
+        let shm = mailbox_test_path("event-ack-overrun");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        unsafe { (*region).evt_ack_seq.publish(4) };
+
+        let host = EventRingHost::new(shm.clone());
+        let mut invoked = false;
+        let error = host
+            .poll(|_| {
+                invoked = true;
+                true
+            })
+            .expect_err("ack beyond published must fail loud");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            error.to_string().contains("exceeds published seq"),
+            "got: {error}"
+        );
+        assert!(!invoked, "no handler may run on corrupted ring state");
 
         drop(mmap);
         let _ = std::fs::remove_file(shm);

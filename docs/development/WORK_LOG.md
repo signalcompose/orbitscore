@@ -17,6 +17,84 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.339 fix(rust): #474 P2 レビューラウンド1 — mailbox の host 側規律を evt リングへ移植した (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474（P2 のレビュー修正）/ **Branch**: `474-plugin-ui-p2-evt-ring` / **PR**: #591
+**Status**: `cargo test -p orbit-audio-sandbox` = 85 passed / 0 failed / 1 ignored（+5 テスト）
+
+`/code:pr-review-team` フル編成4名と **Fable 監査を並行**起動（ラウンド1から並行・遅延投入しない）。
+fixer は **Fable**（owner 確定 2026-07-30 の初適用）。
+
+#### 🔴 3件の指摘が同じ軸だった → ポリシーを先に書いて一括適用
+
+`transport.rs` には既に shm ハンドシェイク機構が1つあり（`CommandMailboxHost` /
+`service_command_mailbox`）、そこで確立した規律から **evt リングが3つとも後退していた**。
+指摘単位のローカルパッチを禁じ、次のポリシーで一括して直した:
+
+| 規律 | 既存の実装 | evt 側への移植 |
+|---|---|---|
+| 主要ペイロードは付随情報のエンコード失敗に巻き込まれない | `service_command_mailbox` の `"detail too long"` フォールバック | `EVT_ARG_FALLBACK` へ差し替えて**必ず enqueue** + `tracing::warn!`。`ArgumentTooLong` variant は削除 |
+| host 側の状態遷移は明示的に直列化する | `Mutex<CommandMailboxState>` + `generation` | `poll_gate: Mutex<()>` で read→handler→ack を直列化。poison は loud に失敗 |
+| 停滞は型で表現して loud に失敗させる | `CommandMailboxError::Timeout { seq, elapsed }` | `EventPollOutcome { Idle / Advanced / Blocked { seq, kind } }` |
+
+**Critical だった `queue()` のドロップ**: `arg` が 256 バイト超か埋め込み NUL を含むと、
+spec が取りこぼし不可と規定する `UI_CLOSED_DONE` を**一度も shm に載せない**経路だった。
+P3 でタイムアウト理由に動的な文字列（OS エラー・パス）を載せた瞬間に踏む。
+
+**Important だった `poll` の非同期性**: `&self` で内部同期がなく、複数スレッドから呼ぶと
+`evt_ack_seq` の lost-update が起きる。`observe_dirty_epoch` が `fetch_max` で並行安全なのと非対称だった。
+
+#### 🔴 main が `/simplify` で入れた退行を、レビューが検出した
+
+`evt_slot_index` の式を変異させても**全テスト green** だった。原因は 6.338 の DRY 化 —
+テスト側が持っていた独立の式（`1usize % EVT_SLOTS`）を `evt_slot_index(1)` に置き換えたため、
+**期待値が本番と同じ壊れた式で計算される自己参照**になっていた。
+期待 index をハードコード（seq 1→1 / 2→0 / 3→1）に戻し、`assert_eq!(EVT_SLOTS, 2, ...)` を添えた。
+
+**DRY 化はテストの独立性を壊しうる。** テストが検証対象と同じ関数を使ったら検証ではなくなる。
+
+#### 🔴 テストが `kind` と `seq` の取り違えを検出できなかった
+
+`evt_kind[index].store(event.kind, ..)` → `store(seq as u32, ..)` の変異が全テスト素通り。
+フィクスチャが `EVT_UI_CLOSED`(=1) を seq=1 に、`EVT_UI_CLOSED_DONE`(=2) を seq=2 に積むため
+**kind の値と seq の値が偶然一致**していた。kind ≠ seq の並び（2,1,2）で積む
+`event_ring_kind_travels_in_its_slot_not_derived_from_seq` を追加。
+
+#### 記録の欠陥: WORK_LOG の commit ハッシュが dangling だった
+
+6.336/6.337/6.338 が記録していた `8056aa1` / `355110a` / `28b993d` は
+`git merge-base --is-ancestor` が **false**（現ブランチ履歴に存在しない dangling object）。
+実ハッシュ `9dea05e` / `729fad9` / `e8e8b8e` に修正した（3件とも ancestor OK を実測）。
+
+🔴 **原因は PROJECT_RULES §Traditional Workflow の手順そのもの** — 「first commit hash を
+WORK_LOG に書いて amend する」と、記録されたハッシュは必ず amend 前の版を指し、
+`git gc` で回収されると追跡不能になる。**手順の見直しは owner 判断**なので本 PR では触らず、
+本エントリのみ PR 番号で参照する形にした。
+
+#### main の運用ミス（記録として残す）
+
+Fable 監査中に `cargo test` が6回連続 fail し、その後同一ソースで約40回 green に転じた。
+**pr-test-analyzer が同一 working tree で変異検証していた汚染**が原因で、Fable の監査を
+数十分止めた。静穏後に main が **30回連続 + 8並列×3ラウンド（計54実行）で失敗0件**を実測し、
+実レースでないことを確認した（Fable が明示した反証条件は満たされなかった）。
+**並行レビューでは worktree を分けるべきだった。**
+
+#### main による受け入れ検証（Fable の green 報告は根拠にしない）
+
+| 変異 | main 自身の実行結果 |
+|---|---|
+| `evt_kind[index].store(seq as u32, ..)` | **1件 FAILED**（`event_ring_kind_travels_in_its_slot_not_derived_from_seq`） |
+| `evt_slot_index` → `(seq-1) % EVT_SLOTS` | **3件 FAILED** |
+
+いずれも restore を `cmp` で確認、baseline 37 passed。
+
+**変更ファイル**: `rust/crates/orbit-audio-sandbox/src/transport.rs` / `docs/development/WORK_LOG.md`
+
+**Commit**: PR #591（レビューラウンド1の修正）
+
+---
+
 ### 6.338 refactor(rust): #474 P2 の /simplify — slot index を関数化し、段階導入を明記した (Jul 31, 2026)
 
 **Date**: 2026-07-31
@@ -58,7 +136,7 @@ evt リングは **child 起点・複数 in-flight・lossless queue**。差分�
 
 **変更ファイル**: `rust/crates/orbit-audio-sandbox/src/transport.rs`
 
-**Commit**: `28b993d`
+**Commit**: `e8e8b8e`
 
 ---
 
@@ -145,7 +223,7 @@ effect の latest-block vs instrument の in-order、イベント decode）を�
 
 **変更ファイル**: `rust/crates/orbit-audio-sandbox/src/transport.rs`
 
-**Commit**: `355110a`
+**Commit**: `729fad9`
 
 ---
 
@@ -222,7 +300,7 @@ owner の「エフェクト挿入のきっかけになる打鍵から補完が�
 **変更ファイル**: `docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md` /
 `docs/specs-v2/PLUGIN_CAPABILITY_ABSTRACTION_v1.md`
 
-**Commit**: `8056aa1`
+**Commit**: `9dea05e`
 
 ---
 
