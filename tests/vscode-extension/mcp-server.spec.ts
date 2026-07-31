@@ -560,6 +560,38 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect(closePluginUi).toHaveBeenCalledTimes(0)
   })
 
+  // #601 review M3: the tool-side input guard (empty receiver / negative or
+  // non-integer index) had no coverage — deleting the guard forwarded garbage
+  // straight to the engine handler with every test green.
+  it.each([
+    ['empty receiver', { receiver: '', index: 0 }],
+    ['negative index', { receiver: 'lead', index: -1 }],
+    ['non-integer index', { receiver: 'lead', index: 1.5 }],
+  ])(
+    'open_plugin_ui / close_plugin_ui reject %s before reaching the engine handlers',
+    async (_label, args) => {
+      const openPluginUi = vi.fn()
+      const closePluginUi = vi.fn()
+      const { handlers } = createStubHandlers({ openPluginUi, closePluginUi })
+      handle = await startTestServer(handlers)
+      const client = new McpTestClient(handle.port)
+      await client.connect()
+
+      const opened = await client.toolsCall('open_plugin_ui', args)
+      const closed = await client.toolsCall('close_plugin_ui', args)
+
+      for (const response of [opened, closed]) {
+        const body = response.json as JsonRpcOk<ToolCallResult>
+        expect(body.result.isError).toBe(true)
+        expect(body.result.content[0]!.text).toContain(
+          'receiver and a non-negative integer index are required',
+        )
+      }
+      expect(openPluginUi).toHaveBeenCalledTimes(0)
+      expect(closePluginUi).toHaveBeenCalledTimes(0)
+    },
+  )
+
   it('tools/call get_document_text round-trips path/text and records the call', async () => {
     const docText: DocumentText = { path: '/tmp/session.orbs', text: 'global.tempo(140)\n' }
     let getDocumentTextCalled = false

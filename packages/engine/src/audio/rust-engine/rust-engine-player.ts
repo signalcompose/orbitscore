@@ -110,6 +110,14 @@ function pluginUiTargetMatches(left: PluginUiTarget, right: PluginUiTarget): boo
   )
 }
 
+/** `closePluginUi` の DONE 待ち 1 件。UI_CLOSED_DONE / respawn 中断 / timeout のどれかで settle する。 */
+interface PendingPluginUiClose {
+  target: PluginUiTarget
+  resolve: (completion: PluginUiCloseCompletion) => void
+  reject: (error: Error) => void
+  timer: ReturnType<typeof setTimeout>
+}
+
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
@@ -408,12 +416,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
   /** UI event は daemon の evt_seq 順を保ったまま、保存・ack まで直列に完結させる。 */
   private pluginUiEventTail: Promise<void> = Promise.resolve()
   private pluginUiSafepointSaver: ((target: PluginUiTarget) => Promise<void>) | undefined
-  private readonly pendingPluginUiCloses = new Set<{
-    target: PluginUiTarget
-    resolve: (completion: PluginUiCloseCompletion) => void
-    reject: (error: Error) => void
-    timer: ReturnType<typeof setTimeout>
-  }>()
+  private readonly pendingPluginUiCloses = new Set<PendingPluginUiClose>()
 
   /** feature gap の 1 回限り warning。stopAll で再 arm する。 */
   private warned: Set<string> = freshWarned()
@@ -612,12 +615,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       } else if (completion !== 'safepoint-completed') {
         throw new Error(`unknown PluginUiCloseDone completion: ${String(completion)}`)
       }
-      for (const pending of [...this.pendingPluginUiCloses]) {
-        if (!pluginUiTargetMatches(pending.target, target)) continue
-        this.pendingPluginUiCloses.delete(pending)
-        clearTimeout(pending.timer)
-        pending.resolve(completion)
-      }
+      this.settlePendingPluginUiCloses(target, (pending) => pending.resolve(completion))
     })
   }
 
@@ -628,13 +626,23 @@ export class RustEnginePlayer implements AudioEngineBackend {
       console.error(
         `[plugin-ui] ${JSON.stringify(target)} was closed by daemon respawn and was not reopened`,
       )
-      for (const pending of [...this.pendingPluginUiCloses]) {
-        if (!pluginUiTargetMatches(pending.target, target)) continue
-        this.pendingPluginUiCloses.delete(pending)
-        clearTimeout(pending.timer)
-        pending.reject(new Error('plugin UI was closed by daemon respawn before UI_CLOSED_DONE'))
-      }
+      this.settlePendingPluginUiCloses(target, (pending) =>
+        pending.reject(new Error('plugin UI was closed by daemon respawn before UI_CLOSED_DONE')),
+      )
     })
+  }
+
+  /** target に一致する DONE 待ちを全て外し、timer を止めてから settle する（M7: DONE / respawn 共通）。 */
+  private settlePendingPluginUiCloses(
+    target: PluginUiTarget,
+    settle: (pending: PendingPluginUiClose) => void,
+  ): void {
+    for (const pending of [...this.pendingPluginUiCloses]) {
+      if (!pluginUiTargetMatches(pending.target, target)) continue
+      this.pendingPluginUiCloses.delete(pending)
+      clearTimeout(pending.timer)
+      settle(pending)
+    }
   }
 
   private async settlePluginUiEvents(): Promise<void> {
@@ -767,14 +775,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     timeoutMs = PLUGIN_UI_CLOSE_TIMEOUT_MS,
   ): Promise<PluginUiCloseCompletion> {
     const routedTarget: PluginUiTarget = { ...target, index } as PluginUiTarget
-    let pendingEntry:
-      | {
-          target: PluginUiTarget
-          resolve: (completion: PluginUiCloseCompletion) => void
-          reject: (error: Error) => void
-          timer: ReturnType<typeof setTimeout>
-        }
-      | undefined
+    let pendingEntry: PendingPluginUiClose | undefined
     const done = new Promise<PluginUiCloseCompletion>((resolve, reject) => {
       const timer = setTimeout(() => {
         if (pendingEntry) this.pendingPluginUiCloses.delete(pendingEntry)

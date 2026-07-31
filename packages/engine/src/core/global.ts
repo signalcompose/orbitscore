@@ -77,19 +77,22 @@ function pluginStateTargetForSlot(receiverId: string, slot: PluginSlot): Resolve
   }
 }
 
-function daemonTargetMatchesUiTarget(
-  target: ResolvedPluginStateTarget['daemonTarget'],
-  uiTarget: PluginUiTarget,
-): boolean {
-  if (target.role !== uiTarget.role) return false
-  if (target.role === 'effect' && uiTarget.role === 'effect') {
-    return target.bus === uiTarget.bus
-  }
-  return (
-    target.role === 'instrument' &&
-    uiTarget.role === 'instrument' &&
-    target.instance === uiTarget.instance
-  )
+/**
+ * open 中の plugin UI を1枚に特定するキー。open 時の daemon slot 座標
+ * （effect: bus / instrument: instance）+ chain index。`openPluginUi` の解決結果と
+ * daemon の `PluginUiClosed` イベント target の両方から同じ値を導出できる。
+ * index を含める理由: 同一 bus に同名プラグインが複数並ぶチェーンでは
+ * role/bus だけでは1スロットに定まらない（#601 レビュー I2）。
+ */
+function pluginUiSessionKey(
+  target: { role: 'effect'; bus?: string } | { role: 'instrument'; instance: string },
+  index: number,
+): string {
+  // NUL 区切り: bus / instance（`plugin:<seq名>`）は空白を含みうるため、平文区切りでは
+  // 別 slot とキーが衝突する余地を残す。
+  return target.role === 'effect'
+    ? `effect\u0000${target.bus ?? ''}\u0000${index}`
+    : `instrument\u0000${target.instance}\u0000${index}`
 }
 
 export class Global {
@@ -116,6 +119,19 @@ export class Global {
   // Core dependencies
   private audioEngine: AudioEngine
   private globalScheduler: Scheduler
+
+  /**
+   * open 済み plugin UI の open 時解決結果（#601 レビュー I1）。
+   * UI を開いている間は人間が音色を編集している無制限の窓であり、その間に DSL 再評価で
+   * チェーンが差し替わりうる。close / safepoint 保存はここに保持した identity を使い、
+   * **現在のチェーンから再解決しない**（再解決すると role/index/bus が一致する
+   * 「それらしい別プラグイン」へ黙って保存される）。エントリは safepoint 保存成功時と
+   * close 完了時に破棄する。respawn 等で残った stale エントリは次の open が上書きする。
+   */
+  private readonly openPluginUiSessions = new Map<
+    string,
+    { receiverId: string; index: number; resolved: ResolvedPluginStateTarget }
+  >()
 
   /**
    * Creates a new Global instance with all manager components
@@ -745,14 +761,21 @@ export class Global {
     return targets
   }
 
+  /**
+   * UI クローズの safepoint 保存。**open 時に確定させた identity へ保存する**（#601 I1）。
+   * 現在のチェーンから再解決すると、UI を開いている間の DSL 再評価で slot が差し替わった
+   * とき role/index/bus の一致だけで「別プラグイン」へ黙って保存され、実際に編集した
+   * 音色が消える。open セッションが見つからなければ**保存せず loud エラー**にする
+   * （throw で抜けるので AckUiSafepoint は送られず、child の 10 秒タイムアウトが
+   * 脱出経路になる — 詰まらない・リトライしない）。
+   */
   private async savePluginUiStateAtSafepoint(target: PluginUiTarget): Promise<void> {
-    const match = this.listPluginUiStateTargets().find(
-      ({ index, resolved }) =>
-        index === target.index && daemonTargetMatchesUiTarget(resolved.daemonTarget, target),
-    )
-    if (!match) {
+    const key = pluginUiSessionKey(target, target.index)
+    const session = this.openPluginUiSessions.get(key)
+    if (!session) {
       throw new Error(
-        `Plugin UI target is not present in the current chain: ${JSON.stringify(target)}`,
+        `Plugin UI close arrived for a target with no recorded open session; ` +
+          `refusing to guess a save identity: ${JSON.stringify(target)}`,
       )
     }
     const projectDirectory = this.audioManager.getDocumentDirectory()
@@ -762,9 +785,12 @@ export class Global {
       )
     }
     await this.projectStateStore(projectDirectory).save(
-      match.resolved.identity,
-      match.resolved.daemonTarget,
+      session.resolved.identity,
+      session.resolved.daemonTarget,
     )
+    // 保存が成功したときだけ破棄する。失敗時は残し、（保存できなかった事実は上の throw で
+    // loud になった上で）次の open による上書きに委ねる。
+    this.openPluginUiSessions.delete(key)
   }
 
   /**
@@ -882,6 +908,23 @@ export class Global {
     } catch (error) {
       throw this.pluginUiOperationError(receiverId, index, error)
     }
+    // 開けた時点の identity を保存対象として確定させる（#601 I1 ポリシー）。以降の
+    // close / safepoint 保存はこのエントリを使い、現在のチェーンから再解決しない。
+    // 登録前に同一 (receiverId, index) の既存エントリをキーに関わらず evict し、
+    // 「同一 (receiverId, index) に高々1セッション」を構造的に保証する（#601 確認レビュー）。
+    // daemonTarget が変わる再 open では複合キーが別になり set では上書きされず、
+    // closePluginUi の find が Map の挿入順＝stale 側を掴んでしまうため。
+    // evict は daemon open 成功後に行う（open 失敗時に旧セッションを失わない）。
+    for (const [key, candidate] of this.openPluginUiSessions) {
+      if (candidate.receiverId === receiverId && candidate.index === index) {
+        this.openPluginUiSessions.delete(key)
+      }
+    }
+    this.openPluginUiSessions.set(pluginUiSessionKey(resolved.daemonTarget, index), {
+      receiverId,
+      index,
+      resolved,
+    })
     return {
       receiver: receiverId,
       index,
@@ -891,7 +934,21 @@ export class Global {
   }
 
   async closePluginUi(receiverId: string, index: number): Promise<PluginUiOperationResult> {
-    const resolved = this.resolvePluginStateTarget(receiverId, index)
+    // open 時に確定させたセッションを使う（#601 I1 ポリシー）。現在のチェーンから
+    // 再解決すると、UI を開いたまま slot が差し替わったとき「閉じて保存した」相手を
+    // 別プラグインの名前で報告してしまう。ウィンドウは open 時の slot 座標に居るので、
+    // CLOSE_UI の宛先も open 時の daemonTarget が正しい。
+    const session = [...this.openPluginUiSessions.values()].find(
+      (candidate) => candidate.receiverId === receiverId && candidate.index === index,
+    )
+    if (!session) {
+      throw this.pluginUiOperationError(
+        receiverId,
+        index,
+        'no plugin UI opened via open_plugin_ui is recorded for this target; ' +
+          'it may have been closed already (or by a daemon respawn)',
+      )
+    }
     if (!this.audioEngine.closePluginUi) {
       throw this.pluginUiOperationError(
         receiverId,
@@ -899,12 +956,18 @@ export class Global {
         'plugin UI hosting requires the Rust engine backend',
       )
     }
+    const sessionKey = pluginUiSessionKey(session.resolved.daemonTarget, index)
     let completion: Awaited<ReturnType<NonNullable<AudioEngine['closePluginUi']>>>
     try {
-      completion = await this.audioEngine.closePluginUi(resolved.daemonTarget, index)
+      completion = await this.audioEngine.closePluginUi(session.resolved.daemonTarget, index)
     } catch (error) {
+      // ウィンドウの生死が不明（close タイムアウト等）なのでセッションは破棄しない。
+      // 実際に消えていた場合は次の open が上書きする。
       throw this.pluginUiOperationError(receiverId, index, error)
     }
+    // DONE を受けた = ウィンドウは確実に閉じた。safepoint 保存成功時は保存側が破棄済み。
+    // timeout-without-save でもウィンドウは消えているので、ここで必ず破棄する。
+    this.openPluginUiSessions.delete(sessionKey)
     if (completion === 'timeout-without-save') {
       throw this.pluginUiOperationError(
         receiverId,
@@ -915,8 +978,8 @@ export class Global {
     return {
       receiver: receiverId,
       index,
-      role: resolved.identity.role,
-      normalizedName: resolved.identity.normalizedName,
+      role: session.resolved.identity.role,
+      normalizedName: session.resolved.identity.normalizedName,
       completion,
     }
   }

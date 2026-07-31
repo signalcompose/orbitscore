@@ -8,6 +8,7 @@ import { parse } from 'yaml'
 import { DaemonClient } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
 import { RustEnginePlayer } from '../../../packages/engine/src/audio/rust-engine/rust-engine-player'
 import { Global } from '../../../packages/engine/src/core/global'
+import { Sequence } from '../../../packages/engine/src/core/sequence'
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -52,6 +53,12 @@ describe('plugin UI safepoint conductor', () => {
     const pluginPath = path.join(directory, 'Mock.clap')
     fs.mkdirSync(pluginPath)
     await global.instrument('lead', pluginPath)
+    // #601 I1: 保存対象の identity は open 時に確定する。close イベントを流すテストは
+    // 実機と同じく、先に UI を開いてセッションを確立しておく（open の解決には
+    // 登録済み sequence が要る）。
+    new Sequence(global, player!).setName('lead')
+    vi.spyOn(daemon, 'openPluginUi').mockResolvedValue()
+    await global.openPluginUi('lead', 0)
     return global
   }
 

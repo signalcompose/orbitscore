@@ -32,7 +32,8 @@ P4c で MCP tool と REPL メタ行を足し、Epic #546 の必須ループが�
 - `open_plugin_ui(receiver, index, expectedName?)` — 完了 ack（view attach 完了）まで待つ
 - `close_plugin_ui(receiver, index)` — 🔴 完了条件は **`UI_CLOSED_DONE` の受信であって ack ではない**
 - receiver は sequence / `master` / `sum:<name>` / `aux:<name>`。**aux を含む**
-- REPL メタ行 `//#openPluginUi` / `//#closePluginUi`
+- REPL メタ行 `//#pluginUi`（JSON payload の `action: 'open' | 'close'` で開閉を区別。
+  設計時の `//#openPluginUi` / `//#closePluginUi` 2 本案は単一メタ行に統合）
 - **誤爆ガード**: `expectedName` 不一致なら **daemon へ送らずに** loud エラー。
   index がずれて別プラグインの UI が開くと、意図しない側の音色が保存される
 - **待ち受け順序**: DONE waiter を CLOSE_UI 送信より**前に**登録する。event pump と

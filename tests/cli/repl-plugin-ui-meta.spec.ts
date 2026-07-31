@@ -89,4 +89,53 @@ describe('//#pluginUi REPL meta', () => {
       },
     })
   })
+
+  // #601 I6: pushLine 経由で handleLine の catch 分岐そのものを通す
+  // （extractPluginUiMeta の直接呼び出しでは requestId 復元 → 応答経路の選択が無検証だった）。
+
+  it('answers a malformed meta line on stdout when the requestId is recoverable', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const openPluginUi = vi.fn()
+    const session = createReplSession({
+      openPluginUi,
+      closePluginUi: vi.fn(),
+      execute: vi.fn(),
+    } as any)
+
+    // action が不正 → extractPluginUiMeta が throw → catch → requestId は本文から復元できる
+    session.pushLine(
+      '//#pluginUi {"requestId":"bad-action-1","action":"toggle","receiver":"lead","index":0}',
+    )
+    await session.idle()
+
+    expect(openPluginUi).toHaveBeenCalledTimes(0)
+    expect(error).toHaveBeenCalledTimes(0)
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      pluginUi: {
+        requestId: 'bad-action-1',
+        ok: false,
+        error: "//#pluginUi action must be 'open' or 'close'",
+      },
+    })
+  })
+
+  it('falls back to a loud [ERROR] line when no requestId can be recovered', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const session = createReplSession({
+      openPluginUi: vi.fn(),
+      closePluginUi: vi.fn(),
+      execute: vi.fn(),
+    } as any)
+
+    // JSON が壊れていて requestId も取り出せない → 相関応答は不可能 → stderr へ loud に
+    session.pushLine('//#pluginUi {broken json')
+    await session.idle()
+
+    expect(log).toHaveBeenCalledTimes(0)
+    expect(error).toHaveBeenCalledTimes(1)
+    expect(String(error.mock.calls[0]?.[0])).toMatch(/^\[ERROR\] invalid \/\/#pluginUi JSON:/)
+  })
 })

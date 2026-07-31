@@ -1295,6 +1295,25 @@ export function __setEngineViewProviderForTest(
 export function __getDeviceSwitchBridgeForTest(): DeviceSwitchBridge {
   return selectAudioDeviceBridge
 }
+/** Same rationale as the device bridge seam above, for the plugin UI bridge
+ * (#601 review I5): proves the three drainAll call sites and the stdout
+ * handleLine dispatch by observing a pending `send()` resolve. */
+export function __getPluginUiBridgeForTest(): PluginUiBridge {
+  return pluginUiBridge
+}
+export function __setLiveCodingModeForTest(value: boolean): void {
+  isLiveCodingMode = value
+}
+/** `pluginUiForAgent` is module-private (only `activate()` wires it into MCP);
+ * this seam lets a spec drive the real engine-guard + meta-line round-trip. */
+export function __pluginUiForAgentForTest(
+  action: PluginUiAction,
+  receiver: string,
+  index: number,
+  expectedName?: string,
+): ReturnType<typeof pluginUiForAgent> {
+  return pluginUiForAgent(action, receiver, index, expectedName)
+}
 
 // -- Playhead test seams (#527 review round 3 Critical #1) ------------------
 //
@@ -1443,14 +1462,15 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
       const isCurrent = engineProcess === process
 
       for (const rawLine of lines) {
-        if (rawLine.trim().startsWith('{"savePluginState"')) {
+        const trimmedLine = rawLine.trim()
+        if (trimmedLine.startsWith('{"savePluginState"')) {
           const parsed = isCurrent && pluginStateBridge.handleLine(rawLine)
           if (!parsed && isCurrent) {
             outputChannel?.appendLine(
               `⚠️ received a malformed //#savePluginState result line: ${rawLine}`,
             )
           }
-        } else if (rawLine.trim().startsWith('{"pluginUi"')) {
+        } else if (trimmedLine.startsWith('{"pluginUi"')) {
           const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
           if (!parsed && isCurrent) {
             outputChannel?.appendLine(`⚠️ received a malformed //#pluginUi result line: ${rawLine}`)

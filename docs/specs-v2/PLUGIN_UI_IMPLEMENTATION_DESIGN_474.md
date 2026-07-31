@@ -236,8 +236,9 @@ open→close が手元確認できること（この段階では手動確認可�
 - UIH.6 ライフサイクル: 停止時 = セーフポイント(c) の後に child ごと消える（既存）。
   respawn = 再オープンせず「respawn により UI が閉じた」を event frame → 拡張 output channel
   へ **loud 通知**
-- REPL メタ行 `//#openPluginUi <receiver> <index>` / `//#closePluginUi`（`//#savePluginState`
-  と対称・実装コスト小。§8 Q5）
+- REPL メタ行 `//#pluginUi <json>`（`//#savePluginState` と対称・実装コスト小。§8 Q5。
+  当初案の `//#openPluginUi` / `//#closePluginUi` 2 本は、実装では JSON payload の
+  `action: 'open' | 'close'` を持つ**単一メタ行に統合**した — P4c 実装済み）
 
 **受け入れ基準**: MCP から open→close→登記→復元が通ること（実機・実プラグイン手動確認 +
 oracle は P6 で無人化）。close 完了が DONE 受信であることの変異検証（ack で完了を名乗る変異
@@ -490,7 +491,7 @@ E2E は**両方を assert**する。変異検証: child が NSWindow 生成を�
 | 6 | PROJECT_FILE_SPEC_v1 | PRJ.3 実装状況表 | (b) UI クローズ時 → 実装済みへ更新 + 観測表面（ui-close snapshot ログ 1 行）の規定 | P4 完了時 |
 | 6b | PROJECT_FILE_SPEC_v1 | PRJ.0 または PRJ.5 近傍 | **スナップショットの対象境界を規範化**: 「対象は GUI 由来の編集。オートメーション値（DSL 宣言）は保存対象ではない — DSL が担保する」（owner 決着 2026-07-30 の反映。#506/#460 の復元順序規則への参照つき）。**owner 承認要** | P4 前 |
 | 7 | PLUGIN_CAPABILITY_ABSTRACTION_v1 | CAP.6-7 | `open_plugin_ui` / `close_plugin_ui` の tool スキーマ確定後の反映（スキーマがコードにしか無い状態を作らない） | P4 完了時 |
-| 8 | core/INSTRUCTION_ORBITSCORE_DSL.md | フェーズゲート反映 | REPL メタ行（`//#openPluginUi` 等・採用時）と右クリックメニューのユーザー可視面 | P5 完了時 |
+| 8 | core/INSTRUCTION_ORBITSCORE_DSL.md | フェーズゲート反映 | REPL メタ行（`//#pluginUi`・P4c 実装済み）と右クリックメニューのユーザー可視面 | P5 完了時 |
 
 ---
 
@@ -557,6 +558,12 @@ E2E は**両方を assert**する。変異検証: child が NSWindow 生成を�
 「メニューと MCP で十分」なら省略可。
 
 > 🟢 **裁定: 足す。** `//#openPluginUi` / `//#closePluginUi` を P4 で追加する。
+>
+> **実装ノート（P4c）**: 当初裁定の 2 本のメタ行は、実装では JSON payload に
+> `action: 'open' | 'close'` を持つ**単一の `//#pluginUi`** に統合した
+> （`packages/engine/src/cli/repl-mode.ts` / `packages/vscode-extension/src/plugin-ui-bridge.ts`。
+> 空白や記号を含む receiver 名・相関 requestId・`expectedName` を 1 つの JSON で運ぶため）。
+> 裁定の実質（REPL 面の対称性を P4 で提供する）は変わっていない。
 
 **Q6. ウィンドウタイトル規約**（軽微・実装時決定でも可）— `<plugin name> — <receiver>[<index>]`
 を提案（同一プラグイン複数インスタンスの識別のため）。

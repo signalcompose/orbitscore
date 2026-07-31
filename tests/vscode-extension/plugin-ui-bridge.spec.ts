@@ -113,4 +113,94 @@ describe('PluginUiBridge', () => {
     })
     expect(bridge.pendingCount).toBe(0)
   })
+
+  // #601 review M2: the four failure paths below existed with zero coverage.
+
+  it('rejects a duplicate requestId without writing a second meta line', async () => {
+    const bridge = new PluginUiBridge()
+    const write = vi.fn().mockReturnValue(true)
+    const first = bridge.send(
+      write,
+      { requestId: 'dup-1', action: 'open', receiver: 'lead', index: 0 },
+      100,
+    )
+
+    const duplicate = bridge.send(
+      write,
+      { requestId: 'dup-1', action: 'close', receiver: 'lead', index: 0 },
+      100,
+    )
+
+    await expect(duplicate).resolves.toEqual({
+      requestId: 'dup-1',
+      action: 'close',
+      ok: false,
+      error: "duplicate plugin UI request id 'dup-1'",
+    })
+    // 元の pending は無傷のまま（2通目の書き込みも発生しない）。
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(bridge.pendingCount).toBe(1)
+    bridge.drainAll('cleanup')
+    await first
+  })
+
+  it('fails fast when writeLine reports false instead of waiting for the timeout', async () => {
+    const bridge = new PluginUiBridge()
+
+    const pending = bridge.send(
+      () => false,
+      { requestId: 'wf-1', action: 'open', receiver: 'lead', index: 0 },
+      10_000,
+    )
+
+    await expect(pending).resolves.toEqual({
+      requestId: 'wf-1',
+      action: 'open',
+      ok: false,
+      error: 'failed to write //#pluginUi to engine stdin',
+    })
+    expect(bridge.pendingCount).toBe(0)
+  })
+
+  it('fails fast when writeLine throws synchronously', async () => {
+    const bridge = new PluginUiBridge()
+
+    const pending = bridge.send(
+      () => {
+        throw new Error('stdin is gone')
+      },
+      { requestId: 'wt-1', action: 'close', receiver: 'lead', index: 0 },
+      10_000,
+    )
+
+    await expect(pending).resolves.toEqual({
+      requestId: 'wt-1',
+      action: 'close',
+      ok: false,
+      error: 'stdin is gone',
+    })
+    expect(bridge.pendingCount).toBe(0)
+  })
+
+  it('consumes a well-formed line with no pending entry without touching other pendings', async () => {
+    const bridge = new PluginUiBridge()
+    const unrelated = bridge.send(
+      () => true,
+      { requestId: 'other-1', action: 'open', receiver: 'lead', index: 0 },
+      100,
+    )
+
+    const consumed = bridge.handleLine(
+      JSON.stringify({
+        pluginUi: { requestId: 'nobody-waiting', action: 'open', ok: true, result: {} },
+      }),
+    )
+
+    // 行としては pluginUi 結果なので true（呼び出し側の malformed 警告を出させない）が、
+    // 他の pending を誤って解決しない。
+    expect(consumed).toBe(true)
+    expect(bridge.pendingCount).toBe(1)
+    bridge.drainAll('cleanup')
+    await unrelated
+  })
 })

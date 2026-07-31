@@ -854,6 +854,8 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       // REPL のメタ行 `//#savePluginState`（MCP bridge が発行）からのみ入る。
       // DSL から書けてしまうと「保存」という副作用が楽譜に紛れ込むため、意図的に語彙にしない。
       'savePluginState',
+      // #474 P4c: UI 開閉。同じく DSL 語彙ではないが、入口は別のメタ行
+      // `//#pluginUi`（JSON payload の action で open/close を区別。MCP bridge が発行）。
       'openPluginUi',
       'closePluginUi',
       // (sequence, index) を SC.5 インスタンス同一性 + daemon target へ解決する内部 API。

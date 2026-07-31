@@ -89,7 +89,7 @@ export function extractSelectAudioDeviceMeta(line: string): { device: string } |
 }
 
 const SAVE_PLUGIN_STATE_META_RE = /^\s*\/\/#savePluginState\s+(.+?)\s*$/
-const SAVE_PLUGIN_STATE_REQUEST_ID_RE = /"requestId"\s*:\s*("(?:\\[\s\S]|[^"\\])*")/
+const META_REQUEST_ID_RE = /"requestId"\s*:\s*("(?:\\[\s\S]|[^"\\])*")/
 const PLUGIN_UI_META_RE = /^\s*\/\/#pluginUi\s+(.+?)\s*$/
 
 export interface SavePluginStateMeta {
@@ -130,8 +130,12 @@ export function extractSavePluginStateMeta(line: string): SavePluginStateMeta | 
   }
 }
 
-function recoverSavePluginStateRequestId(line: string): string | undefined {
-  const match = line.match(SAVE_PLUGIN_STATE_REQUEST_ID_RE)
+/**
+ * payload の JSON が壊れていても相関 ID だけは拾って応答を返すための救済抽出。
+ * `//#savePluginState` / `//#pluginUi` 共通（requestId の運び方が同一のため 1 本）。
+ */
+function recoverMetaRequestId(line: string): string | undefined {
+  const match = line.match(META_REQUEST_ID_RE)
   if (!match) return undefined
   try {
     const requestId = JSON.parse(match[1]!) as unknown
@@ -215,17 +219,6 @@ export function extractPluginUiMeta(line: string): PluginUiMeta | undefined {
     receiver: payload.receiver,
     index: payload.index as number,
     ...(payload.expectedName === undefined ? {} : { expectedName: payload.expectedName }),
-  }
-}
-
-function recoverPluginUiRequestId(line: string): string | undefined {
-  const match = line.match(SAVE_PLUGIN_STATE_REQUEST_ID_RE)
-  if (!match) return undefined
-  try {
-    const requestId = JSON.parse(match[1]!) as unknown
-    return typeof requestId === 'string' && requestId.length > 0 ? requestId : undefined
-  } catch {
-    return undefined
   }
 }
 
@@ -345,7 +338,7 @@ export function createReplSession(interpreter: InterpreterV2): {
         if (input) await executePluginUiMeta(interpreter, input)
       } catch (error: any) {
         const message = error?.message ?? String(error)
-        const requestId = recoverPluginUiRequestId(line)
+        const requestId = recoverMetaRequestId(line)
         if (requestId) {
           console.log(JSON.stringify({ pluginUi: { requestId, ok: false, error: message } }))
         } else {
@@ -362,7 +355,7 @@ export function createReplSession(interpreter: InterpreterV2): {
         }
       } catch (error: any) {
         const message = error?.message ?? String(error)
-        const requestId = recoverSavePluginStateRequestId(line)
+        const requestId = recoverMetaRequestId(line)
         if (requestId) {
           console.log(
             JSON.stringify({
