@@ -2,8 +2,6 @@
 
 use std::ffi::c_void;
 use std::path::PathBuf;
-use std::process::Command;
-use std::sync::OnceLock;
 
 use orbit_child_ui::{PluginUiEndpoint, UiSize};
 use orbit_vst3_host::{Vst3EffectProcessor, Vst3UiEndpoint};
@@ -157,25 +155,15 @@ fn gain_oracle_without_an_editor_fails_loudly_with_detail() {
     drop(main);
 }
 
+/// The gain oracle has no editor, so it is the negative case for `begin_open`.
+///
+/// 🔴 Goes through `orbit_vst3_gain_oracle::package_bundle()`, **not** the packaging script
+/// directly: the script writes a fixed path by default, and several test binaries across crates
+/// package this same oracle as independent processes under `cargo test --workspace`. One
+/// process's `rm -rf` then races another's `cp`, which surfaces as
+/// `missing symbol: GetPluginFactory` in whichever test happens to load mid-rewrite.
+/// `package_bundle()` already keys the output slot by pid; this test bypassed it and reintroduced
+/// the race (reproduced 5 of 8 concurrent runs in review of #474 P3b).
 fn gain_oracle_bundle() -> PathBuf {
-    static BUNDLE: OnceLock<PathBuf> = OnceLock::new();
-    BUNDLE
-        .get_or_init(|| {
-            let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .expect("host crate has a parent")
-                .join("orbit-vst3-gain-oracle")
-                .join("package-oracle.sh");
-            let output = Command::new(&script)
-                .output()
-                .unwrap_or_else(|error| panic!("failed to run {}: {error}", script.display()));
-            assert!(
-                output.status.success(),
-                "gain oracle packaging failed: status={} stderr={}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr)
-            );
-            PathBuf::from(String::from_utf8_lossy(&output.stdout).trim())
-        })
-        .clone()
+    orbit_vst3_gain_oracle::package_bundle().expect("package the gain oracle bundle")
 }

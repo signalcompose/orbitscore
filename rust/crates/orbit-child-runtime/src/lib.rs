@@ -24,11 +24,34 @@ pub mod window;
 #[cfg(any(target_os = "macos", test))]
 pub use ui_service::{PluginMainHandle, UiCallbacks, UiService, UI_CLOSE_TIMEOUT};
 
-fn should_quit_with_parent(control_quit: bool, parent_should_exit: impl FnOnce() -> bool) -> bool {
-    control_quit || parent_should_exit()
+/// Why the child is shutting down. Distinguishing the two is the whole point of returning
+/// an enum instead of `bool`: they look identical from the outside (the process exits) but
+/// mean opposite things when the daemon is being debugged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuitReason {
+    /// The host wrote `CONTROL_QUIT` — an orderly shutdown.
+    HostRequested,
+    /// `getppid()` changed: the daemon died without writing `CONTROL_QUIT` (#448).
+    ParentDied,
+}
+
+fn quit_reason(
+    control_quit: bool,
+    parent_should_exit: impl FnOnce() -> bool,
+) -> Option<QuitReason> {
+    if control_quit {
+        return Some(QuitReason::HostRequested);
+    }
+    parent_should_exit().then_some(QuitReason::ParentDied)
 }
 
 /// Shared `run_child` predicate used by all plugin child binaries.
+///
+/// 🔴 Announces orphan detection on stderr. Children have no `tracing` subscriber, so stderr
+/// (inherited by the daemon) is their **only** observation channel — and once the process is
+/// gone, "the host asked us to quit" and "the daemon crashed and we noticed we were orphaned"
+/// are indistinguishable without this line. Each child used to print it; folding the predicate
+/// into one place dropped it (caught in review of #474 P3b), so it now lives with the check.
 ///
 /// # Safety
 /// `region` must point to a live mapped [`orbit_audio_sandbox::SharedRegion`].
@@ -36,10 +59,14 @@ pub unsafe fn child_should_quit(
     region: *const orbit_audio_sandbox::SharedRegion,
     parent_watch: &orbit_audio_sandbox::ParentWatch,
 ) -> bool {
-    should_quit_with_parent(
+    let reason = quit_reason(
         (unsafe { (*region).control.load(Ordering::Relaxed) }) == orbit_audio_sandbox::CONTROL_QUIT,
         || parent_watch.should_exit(),
-    )
+    );
+    if reason == Some(QuitReason::ParentDied) {
+        eprintln!("[orbit-child-runtime] 親プロセス死亡を検知、終了する");
+    }
+    reason.is_some()
 }
 
 /// Shared `run_child` main-service body used by all plugin child binaries.
@@ -705,11 +732,12 @@ mod tests {
         let held_by_outer_tick = service.borrow_mut();
 
         let requested_stop = try_call_main_service(&service, &|| {
-            should_quit_with_parent(false, || {
+            quit_reason(false, || {
                 parent_watch_checks.set(parent_watch_checks.get() + 1);
                 // This stands for `parent_watch.should_exit()` after reparenting.
                 true
             })
+            .is_some()
         })
         .expect("ParentWatch must bypass a reentrant service borrow");
 
@@ -732,9 +760,24 @@ mod tests {
         (raw, layout)
     }
 
+    /// 🔴 Keeps the two shutdown causes distinguishable.
+    ///
+    /// Both make the child exit, so a `bool` return hides which one happened — and the stderr
+    /// line that used to say so was lost when this predicate was folded into one place
+    /// (#474 P3b review). Once the process is gone, the daemon-crash case is unrecoverable
+    /// from the outside, so the distinction has to survive in the type.
+    #[test]
+    fn quit_reason_separates_host_request_from_parent_death() {
+        assert_eq!(quit_reason(true, || false), Some(QuitReason::HostRequested));
+        assert_eq!(quit_reason(false, || true), Some(QuitReason::ParentDied));
+        assert_eq!(quit_reason(false, || false), None);
+        // A live parent must not be reported as a host request either.
+        assert_eq!(quit_reason(true, || true), Some(QuitReason::HostRequested));
+    }
+
     /// 🔴 Binds `child_should_quit` to the **real** `ParentWatch` it is handed.
     ///
-    /// The test above injects its own closure into `should_quit_with_parent`, so it only covers
+    /// The test above injects its own closure into `quit_reason`, so it only covers
     /// the pure function. Replacing `|| parent_watch.should_exit()` in `child_should_quit` with
     /// `|| false` left all tests green (measured 2026-07-31) — the orphan guard from #448 was
     /// live in all four child binaries with nothing pinning the composition. This test is what
