@@ -100,6 +100,34 @@ best-effort」と明記した。
 | `PollGateGuard::drop` の解放を握り潰す | ✅ | **5件 FAILED** |
 | CAS 検査を無効化（再入を許す） | ✅ | **1件 FAILED** |
 
+#### マージ前ゲート（owner 裁定により「退行確認に絞る」・全項目 green）
+
+P2 は消費者が未接続の基盤で DSL 表面は不変のため、DSL 網羅 E2E から得られる情報は薄い。
+一方 `repr(C)` の `SharedRegion` にフィールドを追加したことで**旧サイズの shm が拒否される**
+変更が入っており、そこが壊れていないかは実機で見る価値がある — という理由で範囲を絞った。
+
+| 項目 | 結果 |
+|---|---|
+| `npm run build:clean` | exit 0（4 child + plugin-scan を bundle） |
+| `cargo test --workspace`（**sandbox 外**） | **437 passed / 0 failed** |
+| レイテンシゲート | 1 passed・margin **106.8x / 101.9x / 137.8x**（前回 105.6x と同水準） |
+| 実機4経路 | **14 passed / 0 failed**（effect CLAP 4 / effect VST3 4 / instrument CLAP 3 / instrument VST3 3） |
+| 実機 gated E2E | **6 passed / 0 failed**（161秒・`get_log` の ERROR assert を含む） |
+| 残留プロセス | **0** |
+
+feature の取り違え（**0 passed のまま exit=0**）は起きていない — 4経路とも件数を読んで確認した。
+
+#### 🔴 main が自分の回し方で false red を2回出した（記録として残す）
+
+| | 何を誤ったか |
+|---|---|
+| 1回目 | E2E を `-t` で1本に絞ったが、この suite は**メインテストが MCP client と scratch root を初期化して後続が使う**構造で、フィルタすると `client` が `undefined` になる（**分割不能**） |
+| 2回目 | スクリプト末尾の `grep -c "FAIL "` が **0件マッチで exit 1** を返し、ジョブ全体が failed 扱いになった。「FAIL の有無 = 0」という**成功を示す出力そのもの**が失敗の原因 |
+
+**テスト失敗を見たら、まず「実装が壊れたのか、自分の回し方が壊れたのか」を切り分ける。**
+本セッションでは Fable 監査中の偽 red（並行変異検証によるビルド汚染）を含め**3回**、
+main の運用が原因の false red を出した。
+
 **変更ファイル**: `rust/crates/orbit-audio-sandbox/src/transport.rs`
 
 **Commit**: PR #591（レビューラウンド2の修正）
