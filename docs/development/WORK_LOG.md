@@ -67,12 +67,42 @@ main が5種の変異を実走。うち **1件が生き残り**、テストを�
 | engine ack 前に evt_ack を進める | red（7 failed） |
 | 毎 poll 通知する | red（3 failed） |
 
+| **pump lock を取らずにリングを潰す** | 🔴 **生存 → アサーション強化後 red** |
+
+**5種中2種が生き残った。** どちらも「テストは通るが実装は壊れている」型である。
+
+##### (1) abandon の判別が無検証
+
 既存テスト `ui_event_pump_abandons_only_after_timeout_done_and_accepts_late_ack` は名前に
 **「only」と書きながらその判別を検証していなかった**（timeout 以外の DONE を一度も
 publish していない）。判別を落とすと、**engine が保存を確認していない safepoint を daemon が
 ack** し、音色を失ったままリングだけ正常に進む — UI は再オープンでき失敗がどこにも
 現れない、受け入れ基準を壊すサイレント障害になる。
 `ui_event_pump_does_not_abandon_on_a_non_timeout_done` を追加して塞いだ。
+
+##### (2) 🔴 排他テストが性質ではなくタイミングを見ていた
+
+こちらの方が重い。**この PR の存在理由（#592 の排他）を守っていなかった。**
+
+`ui_event_pump_serializes_poll_sink_and_respawn_reset` は「reset が 50ms 以内に完了しない」
+ことだけを assert していた。しかし**排他の実体はリングの不変性**であって、reset の戻りが
+遅いことではない。
+
+`reset_after_child_exit` を「**pump lock を取る前に**リングをゼロ化し、その後 lock で待つ」
+実装に差し替えると:
+
+- リングは poll の最中に破壊される（**#592 そのもの**）
+- reset の戻りは pump lock で待たされるので**タイミング assert は通る**
+- **8 テスト全部 green のまま**
+
+`evt_seq` が poll 中も保たれることを直接 assert するよう変更し、変異で red を確認した。
+
+補助のストレステストも `!error.contains("ack 1 exceeds published seq 0")` という
+**一文字列の否定**だけを検査しており、それ以外の破損を全部黙認していた。健全時の観測
+エラーは実測 0 件なので `errors.is_empty()` に締めた（緩さに代償を払っていなかった）。
+
+**教訓**: 「その変更が守るはずの性質」を assert しているか。副作用のタイミングや
+特定の文字列を見ていないか。守る対象を壊して red を確認するまで、テストの意味は未検証。
 
 #### 補足
 
