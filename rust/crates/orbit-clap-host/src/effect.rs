@@ -40,14 +40,14 @@
 //!   `effect_processor_smoke_gated.rs::instrument_branch_add_mixes_dry_signal`）。
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::Arc;
 
 use clack_host::events::io::InputEvents;
 use clack_host::prelude::{PluginInstance, StartedPluginAudioProcessor};
 
 use crate::buffers::HostAudioBuffers;
-use crate::controller::{instantiate_activate, ClapHostError, LoadedPluginInfo};
+use crate::controller::{
+    instantiate_activate, ClapHostError, HostCallbackConfig, LoadedPluginInfo,
+};
 use crate::host::OrbitClapHost;
 use crate::processor::process_block_core;
 use crate::ClapPluginMain;
@@ -96,8 +96,7 @@ impl ClapEffectProcessor {
             sample_rate,
             channels,
             max_frames,
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicU64::new(0)),
+            HostCallbackConfig::child(),
         )?;
 
         let mut processor = Self {
@@ -179,6 +178,9 @@ impl ClapEffectProcessor {
             },
             ClapPluginMain {
                 instance: _instance,
+                plugin_gui: None,
+                gui_attached: false,
+                gui_can_resize: false,
             },
         )
     }
@@ -225,6 +227,10 @@ impl Drop for ClapEffectAudio {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clack_extensions::gui::HostGuiImpl;
+    use std::path::PathBuf;
+
+    use crate::host::OrbitHostShared;
 
     /// audio 側が `Send`（専用 audio スレッドへ move できる）ことのコンパイル時証明。
     /// clack の `StartedPluginAudioProcessor` / `AudioPorts` の `unsafe impl Send` に依拠する
@@ -233,5 +239,30 @@ mod tests {
     fn audio_half_is_send() {
         fn assert_send<T: Send>() {}
         assert_send::<ClapEffectAudio>();
+    }
+
+    #[test]
+    #[ignore = "needs prebuilt release clap-test-effect dylib"]
+    fn real_load_path_delivers_plugin_initiated_close_to_main_half() {
+        let dylib = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.."))
+            .join("rust-spike/clap-test-effect/target/release/libclap_test_effect.dylib");
+        assert!(dylib.exists(), "missing {}", dylib.display());
+        let (processor, _) = ClapEffectProcessor::load(
+            &dylib,
+            Some("com.signalcompose.clap-test-effect"),
+            48_000,
+            2,
+            512,
+            None,
+        )
+        .expect("load test effect through child callback configuration");
+        let (audio, main) = processor.split();
+
+        main.instance
+            .access_shared_handler(|shared: &OrbitHostShared| HostGuiImpl::closed(shared, true));
+
+        assert_eq!(main.take_closed(), Some(true));
+        drop(audio);
+        drop(main);
     }
 }

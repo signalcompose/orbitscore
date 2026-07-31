@@ -16,6 +16,7 @@
 
 #![allow(unsafe_code)]
 
+use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 /// [`ParentWatch::should_exit`] のデフォルト rate-limit 間隔。
@@ -25,7 +26,7 @@ pub const DEFAULT_CHECK_INTERVAL: Duration = Duration::from_millis(250);
 pub struct ParentWatch {
     original_ppid: libc::pid_t,
     check_interval: Duration,
-    last_check: Instant,
+    last_check: Cell<Instant>,
 }
 
 impl ParentWatch {
@@ -42,7 +43,26 @@ impl ParentWatch {
         Self {
             original_ppid,
             check_interval,
-            last_check: Instant::now(),
+            last_check: Cell::new(Instant::now()),
+        }
+    }
+
+    /// 常に「親は死んだ」と報告する watch を作る(**テスト支援専用**)。
+    ///
+    /// [`should_exit`](Self::should_exit) は起動時に記録した `getppid()` との差で判定するため、
+    /// **プロセス内では本物の孤児化を演出できない**。ありえない pid を記録することで
+    /// 「親が死んだ」分岐を到達可能にする。
+    ///
+    /// 🔴 用途は**配線の検証**である。`child_should_quit` が本物の [`ParentWatch`] を
+    /// 参照していることを縛るテストが、これを使って合成箇所を通る
+    /// (`orbit-child-runtime` の `child_should_quit_consults_the_injected_parent_watch`)。
+    /// 純関数にクロージャを注入するテストでは、その合成は検証できない。
+    pub fn orphaned_for_tests() -> Self {
+        Self {
+            // getppid(2) は POSIX 上ここには到達しない値を返さない。
+            original_ppid: -1,
+            check_interval: Duration::ZERO,
+            last_check: Cell::new(Instant::now()),
         }
     }
 
@@ -50,12 +70,12 @@ impl ParentWatch {
     ///
     /// rate-limit: 前回チェックから `check_interval` 未満なら syscall を発行せず false を返す
     /// (spin loop 内で毎回呼んでも system call 頻度は interval に収まる)。
-    pub fn should_exit(&mut self) -> bool {
+    pub fn should_exit(&self) -> bool {
         let now = Instant::now();
-        if now.duration_since(self.last_check) < self.check_interval {
+        if now.duration_since(self.last_check.get()) < self.check_interval {
             return false;
         }
-        self.last_check = now;
+        self.last_check.set(now);
         // SAFETY: 同上。
         let current_ppid = unsafe { libc::getppid() };
         current_ppid != self.original_ppid
@@ -75,7 +95,7 @@ mod tests {
 
     #[test]
     fn does_not_fire_while_ppid_unchanged() {
-        let mut watch = ParentWatch::with_interval(Duration::from_millis(1));
+        let watch = ParentWatch::with_interval(Duration::from_millis(1));
         thread::sleep(Duration::from_millis(5));
         // このテストプロセスの親(テストランナー)は生きているので発火しないはず。
         assert!(!watch.should_exit());
@@ -83,7 +103,7 @@ mod tests {
 
     #[test]
     fn rate_limits_syscall_checks() {
-        let mut watch = ParentWatch::with_interval(Duration::from_secs(10));
+        let watch = ParentWatch::with_interval(Duration::from_secs(10));
         // 間隔未満の連続呼び出しは syscall を発行せず false を返し続ける
         // (ppid が変わっていたとしても検知しないのが rate-limit の定義)。
         for _ in 0..1000 {

@@ -8,7 +8,14 @@ authors.workspace = true
 description = "Shared main-thread AppKit runloop and dedicated audio-thread runtime for plugin child processes"
 publish = false
 
+[[test]]
+name = "window_shell_gated"
+path = "tests/window_shell_gated.rs"
+harness = false
+
 [dependencies]
+orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }
+orbit-child-ui = { path = "../orbit-child-ui" }
 thiserror = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -17,9 +24,12 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
   "std",
   "NSApplication",
   "NSEvent",
+  "NSGraphics",
   "NSGraphicsContext",
   "NSResponder",
   "NSRunningApplication",
+  "NSView",
+  "NSWindow",
 ] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = [
   "std",

@@ -15,9 +15,13 @@ use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
     PluginAudioPortsImpl,
 };
+use clack_extensions::gui::{
+    GuiApiType, GuiConfiguration, GuiSize, PluginGui, PluginGuiImpl, Window,
+};
 use clack_extensions::state::{PluginState, PluginStateImpl};
 use clack_plugin::prelude::*;
 use clack_plugin::stream::{InputStream, OutputStream};
+use std::fs::OpenOptions;
 use std::io::{Read as _, Write as _};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -70,7 +74,8 @@ impl Plugin for TestEffect {
     ) {
         builder
             .register::<PluginAudioPorts>()
-            .register::<PluginState>();
+            .register::<PluginState>()
+            .register::<PluginGui>();
     }
 }
 
@@ -116,6 +121,92 @@ pub struct TestEffectMainThread {
 }
 
 impl PluginMainThread<'_, TestEffectShared> for TestEffectMainThread {}
+
+fn trace_gui(call: &str) {
+    let Some(path) = std::env::var_os("ORBIT_CLAP_GUI_TRACE") else {
+        return;
+    };
+    let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let _ = writeln!(file, "{call}");
+}
+
+impl PluginGuiImpl for TestEffectMainThread {
+    fn is_api_supported(&mut self, configuration: GuiConfiguration) -> bool {
+        trace_gui("is_api_supported");
+        let floating_only = std::env::var_os("ORBIT_CLAP_GUI_FLOATING_ONLY").is_some();
+        configuration.api_type == GuiApiType::COCOA && configuration.is_floating == floating_only
+    }
+
+    fn get_preferred_api(&mut self) -> Option<GuiConfiguration<'_>> {
+        None
+    }
+
+    fn create(&mut self, configuration: GuiConfiguration) -> Result<(), PluginError> {
+        trace_gui("create");
+        if configuration.api_type == GuiApiType::COCOA {
+            Ok(())
+        } else {
+            Err(PluginError::Message(
+                "clap-test-effect GUI only supports cocoa",
+            ))
+        }
+    }
+
+    fn destroy(&mut self) {
+        trace_gui("destroy");
+    }
+
+    fn set_scale(&mut self, _scale: f64) -> Result<(), PluginError> {
+        trace_gui("set_scale");
+        Ok(())
+    }
+
+    fn get_size(&mut self) -> Option<GuiSize> {
+        trace_gui("get_size");
+        Some(GuiSize {
+            width: 400,
+            height: 300,
+        })
+    }
+
+    fn can_resize(&mut self) -> bool {
+        trace_gui("can_resize");
+        true
+    }
+
+    fn set_size(&mut self, _size: GuiSize) -> Result<(), PluginError> {
+        trace_gui("set_size");
+        Ok(())
+    }
+
+    fn set_parent(&mut self, window: Window) -> Result<(), PluginError> {
+        trace_gui("set_parent");
+        if window.api_type() == GuiApiType::COCOA {
+            Ok(())
+        } else {
+            Err(PluginError::Message(
+                "clap-test-effect GUI parent is not cocoa",
+            ))
+        }
+    }
+
+    fn set_transient(&mut self, _window: Window) -> Result<(), PluginError> {
+        trace_gui("set_transient");
+        Ok(())
+    }
+
+    fn show(&mut self) -> Result<(), PluginError> {
+        trace_gui("show");
+        Ok(())
+    }
+
+    fn hide(&mut self) -> Result<(), PluginError> {
+        trace_gui("hide");
+        Ok(())
+    }
+}
 
 impl PluginStateImpl for TestEffectMainThread {
     fn save(&mut self, output: &mut OutputStream) -> Result<(), PluginError> {

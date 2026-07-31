@@ -1008,6 +1008,8 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
+ "orbit-audio-sandbox",
+ "orbit-child-ui",
  "thiserror 2.0.18",
 ]
 
@@ -1034,6 +1036,7 @@ dependencies = [
  "clack-host",
  "orbit-audio-native",
  "orbit-audio-sandbox",
+ "orbit-child-ui",
  "rtrb",
  "thiserror 2.0.18",
  "tracing",
@@ -1119,6 +1122,7 @@ name = "orbit-vst3-host"
 version = "0.0.1"
 dependencies = [
  "core-foundation-sys",
+ "orbit-child-ui",
  "orbit-vst3-gain-oracle",
  "orbit-vst3-synth-oracle",
  "vst3",

@@ -21,17 +21,16 @@
 //! ⚠️ clack を bump する際は上記2つの Drop site（`plugin.rs:399` の sole-owner guard /
 //! `plugin/instance.rs:232` の teardown）の契約を再確認すること（この宣言順の正当性は library 内部実装に依存する）。
 
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::Arc;
-
 use clack_host::events::io::EventBuffer;
 use clack_host::events::UnknownEvent;
 use clack_host::prelude::{PluginInstance, StartedPluginAudioProcessor};
 use orbit_audio_sandbox::NeutralEvent;
+use std::path::Path;
 
 use crate::buffers::HostAudioBuffers;
-use crate::controller::{instantiate_activate, ClapHostError, LoadedPluginInfo};
+use crate::controller::{
+    instantiate_activate, ClapHostError, HostCallbackConfig, LoadedPluginInfo,
+};
 use crate::host::OrbitClapHost;
 use crate::processor::process_block_core;
 use crate::ClapPluginMain;
@@ -108,8 +107,7 @@ impl ClapInstrumentProcessor {
             sample_rate,
             channels,
             max_frames,
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicU64::new(0)),
+            HostCallbackConfig::child(),
         )?;
 
         let mut processor = Self {
@@ -179,6 +177,9 @@ impl ClapInstrumentProcessor {
             },
             ClapPluginMain {
                 instance: _instance,
+                plugin_gui: None,
+                gui_attached: false,
+                gui_can_resize: false,
             },
         )
     }
@@ -226,6 +227,10 @@ impl Drop for ClapInstrumentAudio {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clack_extensions::gui::HostGuiImpl;
+    use std::path::PathBuf;
+
+    use crate::host::OrbitHostShared;
 
     /// audio 側が `Send` であることのコンパイル時証明（根拠は
     /// `effect.rs::tests::audio_half_is_send` と同一）。
@@ -233,5 +238,30 @@ mod tests {
     fn audio_half_is_send() {
         fn assert_send<T: Send>() {}
         assert_send::<ClapInstrumentAudio>();
+    }
+
+    #[test]
+    #[ignore = "needs prebuilt release clap-test-synth dylib"]
+    fn real_load_path_delivers_plugin_initiated_close_to_main_half() {
+        let dylib = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.."))
+            .join("rust-spike/clap-test-synth/target/release/libclap_test_synth.dylib");
+        assert!(dylib.exists(), "missing {}", dylib.display());
+        let (processor, _) = ClapInstrumentProcessor::load(
+            &dylib,
+            Some("com.signalcompose.clap-test-synth"),
+            48_000,
+            2,
+            512,
+            None,
+        )
+        .expect("load test instrument through child callback configuration");
+        let (audio, main) = processor.split();
+
+        main.instance
+            .access_shared_handler(|shared: &OrbitHostShared| HostGuiImpl::closed(shared, false));
+
+        assert_eq!(main.take_closed(), Some(false));
+        drop(audio);
+        drop(main);
     }
 }

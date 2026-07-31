@@ -2,18 +2,26 @@
 
 #![allow(unsafe_code)]
 
+#[cfg(target_os = "macos")]
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
+#[cfg(target_os = "macos")]
 use anyhow::{bail, Context, Result};
-use orbit_audio_sandbox::transport::{save_state_command, service_command_mailbox, CMD_SAVE_STATE};
+#[cfg(target_os = "macos")]
 use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
     ParentWatch, SharedRegion, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
 };
-use orbit_child_runtime::run_child;
+#[cfg(target_os = "macos")]
+use orbit_child_runtime::{
+    child_should_quit, run_child, service_child_main, UiCallbacks, UiService,
+};
+#[cfg(target_os = "macos")]
 use orbit_clap_host::{push_neutral_event, ClapInstrumentProcessor, EventBuffer};
 
+#[cfg(target_os = "macos")]
 struct Args {
     shm: PathBuf,
     plugin: PathBuf,
@@ -23,6 +31,7 @@ struct Args {
     state: Option<PathBuf>,
 }
 
+#[cfg(target_os = "macos")]
 fn parse_args() -> Result<Args> {
     let mut shm = None;
     let mut plugin = None;
@@ -56,10 +65,12 @@ fn parse_args() -> Result<Args> {
     })
 }
 
+#[cfg(target_os = "macos")]
 fn in_order_seqs(last: u64, cur: u64) -> impl Iterator<Item = u64> {
     last.saturating_add(1)..=cur
 }
 
+#[cfg(target_os = "macos")]
 fn decode_slot_events(records: &[EventRecord], count: u32, sink: &mut Vec<NeutralEvent>) -> u32 {
     sink.clear();
     let count = (count as usize)
@@ -78,6 +89,7 @@ fn decode_slot_events(records: &[EventRecord], count: u32, sink: &mut Vec<Neutra
 
 /// Outcome of [`write_output_events`]: how many records landed in `window`, plus the health
 /// counter deltas the caller adds to `SharedRegion` after the closure returns.
+#[cfg(target_os = "macos")]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct OutputWriteOutcome {
     written: usize,
@@ -94,6 +106,7 @@ struct OutputWriteOutcome {
 /// Pure and CLAP-independent (operates on `NeutralEvent`/`EventRecord` only), so it is directly
 /// unit-testable without a live plugin -- extracted from `main()`'s per-slot `write_slot` closure
 /// for exactly that reason (see `tests::output_window_and_spill_overflow_drops_and_tracks_note_end`).
+#[cfg(target_os = "macos")]
 fn write_output_events(
     window: &mut [EventRecord],
     output_spill: &mut EventSpillFifo,
@@ -130,6 +143,7 @@ fn write_output_events(
 /// pass every CI-runnable test, since the only prior coverage exercised `write_output_events`'s
 /// returned struct in isolation, never the region counters it gets mirrored into (pr-test-analyzer,
 /// PR #422 round 2 item 2). Caller must ensure `region` is valid and `idx` is in range.
+#[cfg(target_os = "macos")]
 unsafe fn apply_output_write_outcome(
     region: *mut SharedRegion,
     idx: usize,
@@ -160,6 +174,7 @@ unsafe fn apply_output_write_outcome(
 /// `write_slot` must write audio, `output_events`, and `output_event_count`. Their writes must stay
 /// before both sequence stores: the host uses `seq_tag`'s Acquire load as the publication edge for
 /// all slot payload and then revalidates the tag after reading it.
+#[cfg(target_os = "macos")]
 unsafe fn publish_completed_slot(
     region: *mut SharedRegion,
     seq: u64,
@@ -175,6 +190,7 @@ unsafe fn publish_completed_slot(
     after_sequence_publish();
 }
 
+#[cfg(target_os = "macos")]
 fn main() -> Result<()> {
     let args = parse_args()?;
     let mmap = open_shared(&args.shm).with_context(|| format!("open_shared({:?})", args.shm))?;
@@ -199,29 +215,20 @@ fn main() -> Result<()> {
     unsafe {
         orbit_audio_sandbox::transport::publish_child_ready(region, instrument.has_audio_input());
     }
-    let (mut instrument_audio, mut instrument_main) = instrument.split();
+    let (mut instrument_audio, instrument_main) = instrument.split();
+    let (ui, main) = UiService::new(region, instrument_main, |main| UiCallbacks {
+        closed: main.take_closed(),
+        requested_size: main.take_requested_size(),
+    });
     // orphan 対策(#448): host(daemon)が CONTROL_QUIT を書かずに死ぬ経路(プロセス exit・
     // SIGKILL・crash)でも main runloop を止められるよう、親死活をタイマーで監視する。
-    let mut parent_watch = ParentWatch::new();
+    let parent_watch = ParentWatch::new();
     let region_addr = region as usize;
     let process_errors = run_child(
         "orbit-clap-instrument-child",
-        || unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT,
-        || {
-            // Mailbox servicing is confined to the AppKit main runloop.
-            unsafe {
-                service_command_mailbox(region, |kind, arg| match kind {
-                    CMD_SAVE_STATE => {
-                        Some(save_state_command(arg, || instrument_main.capture_state()))
-                    }
-                    _ => None,
-                });
-            }
-            if parent_watch.should_exit() {
-                eprintln!("[orbit-clap-instrument-child] 親プロセス死亡を検知、終了する");
-                return true;
-            }
-            false
+        || unsafe { child_should_quit(region, &parent_watch) },
+        || unsafe {
+            service_child_main(region, &ui, || main.with_mut(|main| main.capture_state()))
         },
         move |stop_audio| {
             let region = region_addr as *mut SharedRegion;
@@ -332,7 +339,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
     use orbit_audio_sandbox::{
@@ -598,4 +605,10 @@ mod tests {
             std::alloc::dealloc(region.cast(), layout);
         }
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn main() -> std::process::ExitCode {
+    eprintln!("orbit-clap-instrument-child is macOS-only (plugin UI hosting needs AppKit)");
+    std::process::ExitCode::FAILURE
 }

@@ -18,6 +18,7 @@ mod controller;
 mod discovery;
 mod effect;
 mod events;
+mod gui;
 mod host;
 mod instrument;
 mod plugin_main;

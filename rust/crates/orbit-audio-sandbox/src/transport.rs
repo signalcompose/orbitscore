@@ -719,6 +719,9 @@ pub const PLUGIN_STATE_MAILBOX_TIMEOUT: Duration = Duration::from_secs(5);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandMailboxResponse {
     pub bytes_written: u64,
+    /// Command detail returned by the child. UIH.4c permits a successful no-op
+    /// `CLOSE_UI` to carry `"already-closing"`.
+    pub detail: String,
 }
 
 #[derive(Debug)]
@@ -834,7 +837,8 @@ struct InFlightCommand {
     /// 安全側に倒れる。フィールド 2 本と `&&` 3 箇所の対価としては安い。
     generation: u64,
     abandoned: bool,
-    sidecar_path: std::path::PathBuf,
+    kind: u32,
+    sidecar_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Default)]
@@ -868,6 +872,14 @@ impl CommandMailboxHost {
         self.issue_save_state_with_timeout(sidecar_path, PLUGIN_STATE_MAILBOX_TIMEOUT)
     }
 
+    pub fn issue_open_ui(&self) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        self.issue_command(CMD_OPEN_UI, "", None, PLUGIN_STATE_MAILBOX_TIMEOUT)
+    }
+
+    pub fn issue_close_ui(&self) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        self.issue_command(CMD_CLOSE_UI, "", None, PLUGIN_STATE_MAILBOX_TIMEOUT)
+    }
+
     /// 現在の child incarnation が plugin state 復元まで終えて READY かをAcquireで確認する。
     pub fn child_is_ready(&self) -> Result<bool, CommandMailboxError> {
         let mmap = open_shared(&self.shm_path)?;
@@ -891,7 +903,16 @@ impl CommandMailboxHost {
         let sidecar = sidecar_path.to_str().ok_or_else(|| {
             CommandMailboxError::InvalidArgument("path must be valid UTF-8".into())
         })?;
+        self.issue_command(CMD_SAVE_STATE, sidecar, Some(sidecar_path), timeout)
+    }
 
+    fn issue_command(
+        &self,
+        kind: u32,
+        arg: &str,
+        sidecar_path: Option<&Path>,
+        timeout: Duration,
+    ) -> Result<CommandMailboxResponse, CommandMailboxError> {
         let mmap = open_shared(&self.shm_path)?;
         let region = region_ptr(&mmap);
         let (seq, generation) = {
@@ -910,7 +931,7 @@ impl CommandMailboxHost {
                 }
                 // SAFETY: region はこのメソッドが open_shared で得た生存 mapping を指す。
                 unsafe { warn_if_abandoned_save_succeeded(region, in_flight) };
-                let cleanup_result = remove_abandoned_sidecar(&in_flight.sidecar_path);
+                let cleanup_result = cleanup_abandoned_sidecar(in_flight);
                 state.in_flight = None;
                 cleanup_result?;
             }
@@ -920,15 +941,15 @@ impl CommandMailboxHost {
                 .checked_add(1)
                 .ok_or(CommandMailboxError::SequenceExhausted)?;
             unsafe {
-                if !write_cstr_field(&mut (*region).cmd_arg, sidecar) {
+                if !write_cstr_field(&mut (*region).cmd_arg, arg) {
                     return Err(CommandMailboxError::InvalidArgument(format!(
-                        "path must contain no NUL and fit in CMD_ARG_BYTES={CMD_ARG_BYTES}"
+                        "command argument must contain no NUL and fit in CMD_ARG_BYTES={CMD_ARG_BYTES}"
                     )));
                 }
                 let _ = write_cstr_field(&mut (*region).cmd_result_detail, "");
                 (*region).cmd_result_len.store(0, Ordering::Relaxed);
                 (*region).cmd_result.store(CMD_RESULT_OK, Ordering::Relaxed);
-                (*region).cmd_kind.store(CMD_SAVE_STATE, Ordering::Relaxed);
+                (*region).cmd_kind.store(kind, Ordering::Relaxed);
                 // Release publish: child は cmd_seq Acquire 後に kind/arg を読む。
                 (*region).cmd_seq.store(seq, Ordering::Release);
             }
@@ -937,7 +958,8 @@ impl CommandMailboxHost {
                 seq,
                 generation,
                 abandoned: false,
-                sidecar_path: sidecar_path.to_path_buf(),
+                kind,
+                sidecar_path: sidecar_path.map(Path::to_path_buf),
             });
             (seq, generation)
         };
@@ -980,7 +1002,10 @@ impl CommandMailboxHost {
                     state.in_flight = None;
                 }
                 return match result {
-                    CMD_RESULT_OK => Ok(CommandMailboxResponse { bytes_written }),
+                    CMD_RESULT_OK => Ok(CommandMailboxResponse {
+                        bytes_written,
+                        detail,
+                    }),
                     CMD_RESULT_CHILD_EXITED => {
                         Err(CommandMailboxError::ChildExited { seq, detail })
                     }
@@ -1040,7 +1065,7 @@ impl CommandMailboxHost {
         let cleanup_result = state
             .in_flight
             .as_ref()
-            .map(|in_flight| remove_abandoned_sidecar(&in_flight.sidecar_path))
+            .map(cleanup_abandoned_sidecar)
             .unwrap_or(Ok(()));
         state.in_flight = None;
         cleanup_result
@@ -1059,17 +1084,27 @@ impl CommandMailboxHost {
 /// **素の `fn` にしない** — 呼び出し側に「このポインタの有効性は誰が保証するのか」を
 /// 見せるのがこの crate の慣習で、その慣習だけがガードになっている。
 unsafe fn warn_if_abandoned_save_succeeded(region: *mut SharedRegion, in_flight: &InFlightCommand) {
-    if !in_flight.abandoned {
+    if !in_flight.abandoned || in_flight.kind != CMD_SAVE_STATE {
         return;
     }
+    let Some(sidecar_path) = in_flight.sidecar_path.as_ref() else {
+        return;
+    };
     let ack = unsafe { (*region).cmd_ack_seq.load(Ordering::Acquire) };
     let result = unsafe { (*region).cmd_result.load(Ordering::Relaxed) };
     if ack == in_flight.seq && result == CMD_RESULT_OK {
         tracing::warn!(
             seq = in_flight.seq,
-            path = %in_flight.sidecar_path.display(),
+            path = %sidecar_path.display(),
             "discarding plugin state saved after mailbox timeout"
         );
+    }
+}
+
+fn cleanup_abandoned_sidecar(in_flight: &InFlightCommand) -> Result<(), CommandMailboxError> {
+    match in_flight.sidecar_path.as_deref() {
+        Some(path) => remove_abandoned_sidecar(path),
+        None => Ok(()),
     }
 }
 
@@ -1124,7 +1159,8 @@ pub struct CommandOutcome {
     pub result: u32,
     /// 成功時に生成したバイト数（[`CMD_SAVE_STATE`] ならサイドカーの長さ）。失敗時は 0。
     pub len: u64,
-    /// 失敗理由。成功時は空。
+    /// 失敗理由。通常の成功時は空。UIH.4c の冪等 `CLOSE_UI` だけは成功時にも
+    /// `"already-closing"` を運ぶ（`orbit_child_ui::CommandAck` からの mailbox 変換）。
     pub detail: String,
 }
 
@@ -2331,6 +2367,50 @@ mod tests {
             .issue_save_state(Path::new("/tmp/orbit-mailbox-state.bin"))
             .expect("mailbox success");
         assert_eq!(response.bytes_written, 321);
+        child.join().expect("child join");
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn command_mailbox_host_issues_open_and_close_ui_with_success_detail() {
+        let shm = mailbox_test_path("ui-commands");
+        let mmap = create_shared(&shm).expect("create");
+        let host = CommandMailboxHost::new(shm.clone());
+        let child_shm = shm.clone();
+        let child = std::thread::spawn(move || {
+            let child_mmap = open_shared(&child_shm).expect("child map");
+            let region = region_ptr(&child_mmap);
+            let mut previous_seq = 0;
+            for (expected_kind, detail) in [(CMD_OPEN_UI, ""), (CMD_CLOSE_UI, "already-closing")] {
+                let deadline = Instant::now() + Duration::from_secs(1);
+                let seq = loop {
+                    let seq = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+                    if seq > previous_seq {
+                        break seq;
+                    }
+                    assert!(Instant::now() < deadline, "next UI command not published");
+                    std::thread::sleep(Duration::from_millis(1));
+                };
+                unsafe {
+                    assert_eq!((*region).cmd_kind.load(Ordering::Acquire), expected_kind);
+                    assert_eq!(read_cstr_field(&(*region).cmd_arg), Some(""));
+                    assert!(write_cstr_field(&mut (*region).cmd_result_detail, detail));
+                    (*region).cmd_result_len.store(0, Ordering::Relaxed);
+                    (*region).cmd_result.store(CMD_RESULT_OK, Ordering::Relaxed);
+                    (*region).cmd_ack_seq.store(seq, Ordering::Release);
+                }
+                previous_seq = seq;
+            }
+        });
+
+        let open = host.issue_open_ui().expect("OPEN_UI ack");
+        assert_eq!(open.bytes_written, 0);
+        assert_eq!(open.detail, "");
+        let close = host.issue_close_ui().expect("CLOSE_UI ack");
+        assert_eq!(close.bytes_written, 0);
+        assert_eq!(close.detail, "already-closing");
+
         child.join().expect("child join");
         drop(mmap);
         let _ = std::fs::remove_file(shm);

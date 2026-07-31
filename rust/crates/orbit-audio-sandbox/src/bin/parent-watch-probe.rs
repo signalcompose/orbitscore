@@ -40,7 +40,7 @@ fn main() {
         Some("watch-parent") => {
             let marker = args.next().expect("marker_path required");
             fs::write(&marker, format!("STARTED:{}", std::process::id())).expect("write marker");
-            let mut watch = ParentWatch::with_interval(Duration::from_millis(20));
+            let watch = ParentWatch::with_interval(Duration::from_millis(20));
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 if watch.should_exit() {

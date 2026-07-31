@@ -8,14 +8,21 @@
 //! - pump 側（ClapHost::pump）が `callback_requested.swap(false, AcqRel)` で読む。
 
 use clack_extensions::audio_ports::{AudioPortRescanFlags, HostAudioPortsImpl};
+use clack_extensions::gui::{GuiSize, HostGui, HostGuiImpl};
 use clack_extensions::log::{HostLog, HostLogImpl, LogSeverity};
 use clack_extensions::note_ports::{HostNotePortsImpl, NoteDialects, NotePortRescanFlags};
 use clack_extensions::params::{
     HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamRescanFlags,
 };
 use clack_host::prelude::*;
-use std::sync::atomic::{AtomicBool, Ordering};
+use orbit_child_ui::UiSize;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
+
+const NO_CLOSED_CALLBACK: u8 = 0;
+const CLOSED_NOT_DESTROYED: u8 = 1;
+const CLOSED_DESTROYED: u8 = 2;
+const NO_REQUESTED_SIZE: u64 = 0;
 
 /// ホスト型タグ — Shared / MainThread / AudioProcessor を紐付ける。
 pub struct OrbitClapHost;
@@ -25,11 +32,20 @@ impl HostHandlers for OrbitClapHost {
     type MainThread<'a> = OrbitHostMainThread<'a>;
     type AudioProcessor<'a> = ();
 
-    fn declare_extensions(builder: &mut HostExtensions<Self>, _shared: &Self::Shared<'_>) {
+    fn declare_extensions(builder: &mut HostExtensions<Self>, shared: &Self::Shared<'_>) {
         builder.register::<HostLog>().register::<HostParams>();
+        if shared.gui_callbacks.is_some() {
+            builder.register::<HostGui>();
+        }
         // audio-ports / note-ports はプラグイン側のエクステンションとして取得する
         // (ホスト提供エクステンションとしての登録は不要)。
     }
+}
+
+#[derive(Default)]
+struct GuiCallbackState {
+    closed: AtomicU8,
+    requested_size: AtomicU64,
 }
 
 /// どのスレッドからもアクセス可能なデータ。
@@ -38,11 +54,55 @@ impl HostHandlers for OrbitClapHost {
 /// audio thread から `request_callback` が呼ばれても alloc / block なし（RT 安全）。
 pub struct OrbitHostShared {
     callback_requested: Arc<AtomicBool>,
+    /// `Some` なのは out-of-process child 経路だけ。daemon の in-process 経路は
+    /// `None` のままなので、CLAP GUI host extension を広告しない。
+    gui_callbacks: Option<GuiCallbackState>,
 }
 
 impl OrbitHostShared {
+    /// GUI を使わない in-process daemon 用。
     pub fn new(callback_requested: Arc<AtomicBool>) -> Self {
-        Self { callback_requested }
+        Self {
+            callback_requested,
+            gui_callbacks: None,
+        }
+    }
+
+    /// GUI を child の main thread で扱う standalone host 用。
+    pub(crate) fn with_gui_callbacks(callback_requested: Arc<AtomicBool>) -> Self {
+        Self {
+            callback_requested,
+            gui_callbacks: Some(GuiCallbackState::default()),
+        }
+    }
+
+    pub(crate) fn take_closed(&self) -> Option<bool> {
+        let state = self
+            .gui_callbacks
+            .as_ref()?
+            .closed
+            .swap(NO_CLOSED_CALLBACK, Ordering::AcqRel);
+        match state {
+            CLOSED_NOT_DESTROYED => Some(false),
+            CLOSED_DESTROYED => Some(true),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn take_requested_size(&self) -> Option<UiSize> {
+        let packed = self
+            .gui_callbacks
+            .as_ref()?
+            .requested_size
+            .swap(NO_REQUESTED_SIZE, Ordering::AcqRel);
+        if packed == NO_REQUESTED_SIZE {
+            return None;
+        }
+        let size = GuiSize::unpack_from_u64(packed);
+        Some(UiSize {
+            width: size.width as i32,
+            height: size.height as i32,
+        })
     }
 }
 
@@ -153,6 +213,79 @@ impl HostParamsImplShared for OrbitHostShared {
     }
 }
 
+impl HostGuiImpl for OrbitHostShared {
+    /// Deliberately a no-op in v1 — **owner ruling 2026-07-31: not implemented, registered instead.**
+    ///
+    /// `clap_gui_resize_hints` (gui.h:92-103) carries `can_resize_horizontally` /
+    /// `can_resize_vertically` / `preserve_aspect_ratio` + the ratio, i.e. constraints on
+    /// **user-driven** window dragging. Ignoring them costs appearance only: the NSWindow follows
+    /// the drag while the plugin keeps its own ratio, so an aspect-locked editor gets letterboxed
+    /// or clipped. Audio, plugin state, and the close handshake are unaffected — which is why this
+    /// sits outside #474's acceptance ("open the plugin so a human can touch it").
+    ///
+    /// 🔴 **Do not write "implemented in <next phase>" here again.** The previous comment said
+    /// "P3b-2 で" and P3b-2 turned out to be the *second commit of the same PR*; nothing made its
+    /// author read this line, so the marker silently expired. A deferral is only honest if the
+    /// condition to delete it is written down:
+    ///
+    /// **This no-op may be deleted once all of the following hold:**
+    /// 1. `get_resize_hints` is called on the main thread (it is `[main-thread & !floating]`,
+    ///    so this callback — which is not — must only raise a flag that the tick consumes);
+    /// 2. the hints are applied to the window (`contentAspectRatio` when `preserve_aspect_ratio`,
+    ///    and a fixed extent for any axis whose `can_resize_*` is false);
+    /// 3. a gated test drives an **aspect-ratio-locked oracle**, drags the window off-ratio, and
+    ///    asserts the resulting frame stayed on-ratio — a mutation that skips step 2 must fail it.
+    ///
+    /// Ordering: independent of P4/P5 (no daemon, engine, or MCP surface), so it can land whenever
+    /// an aspect-locked oracle exists. VST3 has no counterpart, so this stays CLAP-only.
+    fn resize_hints_changed(&self) {}
+
+    fn request_resize(&self, new_size: GuiSize) -> Result<(), HostError> {
+        if new_size.width == 0
+            || new_size.height == 0
+            || new_size.width > i32::MAX as u32
+            || new_size.height > i32::MAX as u32
+        {
+            return Err(HostError::Message(
+                "CLAP GUI requested an invalid parent size",
+            ));
+        }
+        let callbacks = self
+            .gui_callbacks
+            .as_ref()
+            .ok_or(HostError::Message("CLAP GUI callbacks are disabled"))?;
+        callbacks
+            .requested_size
+            .store(new_size.pack_to_u64(), Ordering::Release);
+        Ok(())
+    }
+
+    fn request_show(&self) -> Result<(), HostError> {
+        Err(HostError::Message(
+            "plugin-originated CLAP GUI show is unsupported",
+        ))
+    }
+
+    fn request_hide(&self) -> Result<(), HostError> {
+        Err(HostError::Message(
+            "plugin-originated CLAP GUI hide is unsupported",
+        ))
+    }
+
+    fn closed(&self, was_destroyed: bool) {
+        if let Some(callbacks) = &self.gui_callbacks {
+            callbacks.closed.store(
+                if was_destroyed {
+                    CLOSED_DESTROYED
+                } else {
+                    CLOSED_NOT_DESTROYED
+                },
+                Ordering::Release,
+            );
+        }
+    }
+}
+
 // ---- headless pump の注記 ----------------------------------------
 // pump は ClapHost::pump() として main thread で実行する — PluginInstance<OrbitClapHost>
 // は !Send なのでそのスレッド以外に移動できない。carry-forward #2: callback_requested
@@ -183,5 +316,114 @@ mod tests {
             mt.warned_rescan_unsupported,
             "再要求でも latch は true のまま"
         );
+    }
+
+    /// 🔴 Rejects sizes a plugin must not be able to push through.
+    ///
+    /// `request_resize` is a plugin-driven callback, so the values are not ours. Nothing
+    /// downstream re-checks them: `take_requested_size` casts with `as i32`, so `width > i32::MAX`
+    /// arrives at `NSWindow` as a **negative** extent, and `0` passes straight through. Deleting
+    /// the guard used to leave all 27 lib tests green (measured 2026-07-31), because the existing
+    /// marshaling test only ever sends a valid 640x480.
+    ///
+    /// Each rejected call also asserts the slot stayed empty: a guard that returns `Err` *after*
+    /// storing would still corrupt the next tick.
+    #[test]
+    fn request_resize_rejects_sizes_the_window_cannot_hold() {
+        let shared = OrbitHostShared::with_gui_callbacks(Arc::new(AtomicBool::new(false)));
+
+        for (label, size) in [
+            (
+                "zero width",
+                GuiSize {
+                    width: 0,
+                    height: 480,
+                },
+            ),
+            (
+                "zero height",
+                GuiSize {
+                    width: 640,
+                    height: 0,
+                },
+            ),
+            (
+                "beyond i32",
+                GuiSize {
+                    width: u32::MAX,
+                    height: 480,
+                },
+            ),
+        ] {
+            assert!(
+                HostGuiImpl::request_resize(&shared, size).is_err(),
+                "{label} must be rejected"
+            );
+            assert_eq!(
+                shared.take_requested_size(),
+                None,
+                "{label} must not leave a pending resize behind"
+            );
+        }
+
+        // The guard must not reject everything: a usable size still gets through.
+        assert!(HostGuiImpl::request_resize(
+            &shared,
+            GuiSize {
+                width: 640,
+                height: 480
+            }
+        )
+        .is_ok());
+        assert_eq!(
+            shared.take_requested_size(),
+            Some(UiSize {
+                width: 640,
+                height: 480
+            })
+        );
+    }
+
+    #[test]
+    fn gui_callbacks_are_marshaled_through_atomics_and_consumed_once() {
+        let shared = OrbitHostShared::with_gui_callbacks(Arc::new(AtomicBool::new(false)));
+        let requested = GuiSize {
+            width: 640,
+            height: 480,
+        };
+
+        HostGuiImpl::request_resize(&shared, requested).expect("accept resize callback");
+        assert_eq!(
+            shared.take_requested_size(),
+            Some(UiSize {
+                width: 640,
+                height: 480
+            })
+        );
+        assert_eq!(shared.take_requested_size(), None);
+
+        HostGuiImpl::closed(&shared, false);
+        assert_eq!(shared.take_closed(), Some(false));
+        assert_eq!(shared.take_closed(), None);
+        HostGuiImpl::closed(&shared, true);
+        assert_eq!(shared.take_closed(), Some(true));
+        assert_eq!(shared.take_closed(), None);
+    }
+
+    #[test]
+    fn daemon_shared_state_keeps_gui_callbacks_disabled() {
+        let shared = OrbitHostShared::new(Arc::new(AtomicBool::new(false)));
+
+        assert!(shared.gui_callbacks.is_none());
+        assert_eq!(shared.take_closed(), None);
+        assert_eq!(shared.take_requested_size(), None);
+        assert!(HostGuiImpl::request_resize(
+            &shared,
+            GuiSize {
+                width: 640,
+                height: 480
+            }
+        )
+        .is_err());
     }
 }

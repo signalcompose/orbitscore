@@ -10,15 +10,15 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 #[cfg(target_os = "macos")]
 use anyhow::{bail, Context, Result};
 #[cfg(target_os = "macos")]
-use orbit_audio_sandbox::transport::{save_state_command, service_command_mailbox, CMD_SAVE_STATE};
-#[cfg(target_os = "macos")]
 use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
     ParentWatch, SharedRegion, VoiceAddr, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK,
     MAX_FRAMES,
 };
 #[cfg(target_os = "macos")]
-use orbit_child_runtime::run_child;
+use orbit_child_runtime::{
+    child_should_quit, run_child, service_child_main, UiCallbacks, UiService,
+};
 #[cfg(target_os = "macos")]
 use orbit_vst3_host::Vst3InstrumentProcessor;
 
@@ -305,29 +305,20 @@ fn main() -> Result<()> {
         orbit_audio_sandbox::transport::publish_child_ready(region, false);
     }
     let (mut instrument_audio, instrument_main) = instrument.split();
+    let (ui, main) = UiService::new(region, instrument_main, |main| UiCallbacks {
+        closed: None,
+        requested_size: main.take_requested_size(),
+    });
 
     // orphan 対策(#448): host(daemon)が CONTROL_QUIT を書かずに死ぬ経路(プロセス exit・
     // SIGKILL・crash)でも main runloop を止められるよう、親死活をタイマーで監視する。
-    let mut parent_watch = ParentWatch::new();
+    let parent_watch = ParentWatch::new();
     let region_addr = region as usize;
     let (process_errors, last_process_error) = run_child(
         "orbit-vst3-instrument-child",
-        || unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT,
-        || {
-            // SAVE_STATE and all future UI work are serviced by the AppKit main runloop.
-            unsafe {
-                service_command_mailbox(region, |kind, arg| match kind {
-                    CMD_SAVE_STATE => {
-                        Some(save_state_command(arg, || instrument_main.capture_state()))
-                    }
-                    _ => None,
-                });
-            }
-            if parent_watch.should_exit() {
-                eprintln!("[orbit-vst3-instrument-child] 親プロセス死亡を検知、終了する");
-                return true;
-            }
-            false
+        || unsafe { child_should_quit(region, &parent_watch) },
+        || unsafe {
+            service_child_main(region, &ui, || main.with_mut(|main| main.capture_state()))
         },
         move |stop_audio| {
             let region = region_addr as *mut SharedRegion;

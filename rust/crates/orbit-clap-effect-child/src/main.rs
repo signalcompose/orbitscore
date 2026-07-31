@@ -20,17 +20,26 @@
 
 #![allow(unsafe_code)]
 
+#[cfg(target_os = "macos")]
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
+#[cfg(target_os = "macos")]
 use anyhow::{bail, Context, Result};
+#[cfg(target_os = "macos")]
 use orbit_audio_sandbox::{
-    open_shared, region_ptr, save_state_command, service_command_mailbox, slot_index, slot_offset,
-    ParentWatch, BUF_LEN, CHANNELS, CMD_SAVE_STATE, CONTROL_QUIT, MAX_FRAMES,
+    open_shared, region_ptr, slot_index, slot_offset, ParentWatch, BUF_LEN, CHANNELS, CONTROL_QUIT,
+    MAX_FRAMES,
 };
-use orbit_child_runtime::run_child;
+#[cfg(target_os = "macos")]
+use orbit_child_runtime::{
+    child_should_quit, run_child, service_child_main, UiCallbacks, UiService,
+};
+#[cfg(target_os = "macos")]
 use orbit_clap_host::ClapEffectProcessor;
 
+#[cfg(target_os = "macos")]
 struct Args {
     shm: PathBuf,
     plugin: PathBuf,
@@ -39,6 +48,7 @@ struct Args {
     state: Option<PathBuf>,
 }
 
+#[cfg(target_os = "macos")]
 fn parse_args() -> Result<Args> {
     let mut shm: Option<PathBuf> = None;
     let mut plugin: Option<PathBuf> = None;
@@ -71,6 +81,7 @@ fn parse_args() -> Result<Args> {
     })
 }
 
+#[cfg(target_os = "macos")]
 fn main() -> Result<()> {
     let args = parse_args()?;
     let mmap = open_shared(&args.shm).with_context(|| format!("open_shared({:?})", args.shm))?;
@@ -95,29 +106,21 @@ fn main() -> Result<()> {
     unsafe {
         orbit_audio_sandbox::transport::publish_child_ready(region, effect.has_audio_input());
     }
-    let (mut effect_audio, mut effect_main) = effect.split();
+    let (mut effect_audio, effect_main) = effect.split();
+    let (ui, main) = UiService::new(region, effect_main, |main| UiCallbacks {
+        closed: main.take_closed(),
+        requested_size: main.take_requested_size(),
+    });
 
     // orphan 対策（#448）: host（daemon）が CONTROL_QUIT を書かずに死ぬ経路（プロセス exit・
     // SIGKILL・crash）でも main runloop を止められるよう、親死活をタイマーで監視する。
-    let mut parent_watch = ParentWatch::new();
+    let parent_watch = ParentWatch::new();
     let region_addr = region as usize;
     let process_errors = run_child(
         "orbit-clap-effect-child",
-        || unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT,
-        || {
-            // Mailbox servicing is main-thread-only after #474 P1. In particular,
-            // SAVE_STATE may block on plugin serialization/fsync without stalling audio.
-            unsafe {
-                service_command_mailbox(region, |kind, arg| match kind {
-                    CMD_SAVE_STATE => Some(save_state_command(arg, || effect_main.capture_state())),
-                    _ => None,
-                });
-            }
-            if parent_watch.should_exit() {
-                eprintln!("[orbit-clap-effect-child] 親プロセス死亡を検知、終了する");
-                return true;
-            }
-            false
+        || unsafe { child_should_quit(region, &parent_watch) },
+        || unsafe {
+            service_child_main(region, &ui, || main.with_mut(|main| main.capture_state()))
         },
         move |stop_audio| {
             let region = region_addr as *mut orbit_audio_sandbox::SharedRegion;
@@ -176,4 +179,10 @@ fn main() -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn main() -> std::process::ExitCode {
+    eprintln!("orbit-clap-effect-child is macOS-only (plugin UI hosting needs AppKit)");
+    std::process::ExitCode::FAILURE
 }

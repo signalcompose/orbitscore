@@ -17,6 +17,338 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.345 chore(rust): #474 P3b — CI 5往復・/simplify・レビューラウンド1 (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474 / **PR**: #596 / **Branch**: `474-plugin-ui-p3b1-gui-endpoint`
+**Status**: `cargo test --workspace`（sandbox 外）= **462 passed / 0 failed / 26 ignored**・CI 全緑
+
+6.343 / 6.344 の後に積んだ9コミット分。**個々の commit が WORK_LOG に無い状態を作っていた**
+（comment-analyzer の指摘 I2）。以下に集約する。
+
+| commit | 内容 |
+|---|---|
+| `b05538c` | spec: cocoa で `set_scale` を呼ばない（CLAP 原文を逐語確認） |
+| `373e3bc` | `/simplify` 適用 |
+| `4e6c66c` `9f2b494` `9d727fa` `335ee50` `0871898` | CI（Linux）5往復の修正 |
+| `b1f1fe3` | 先送り2件を消せる条件つきで登記 |
+| `6cb4b05` | レビューラウンド1 の Important 2件 |
+
+#### `/simplify`（4観点・適用3件）
+
+- **4 child の tick クロージャが一字一句同一** → `service_child_main` に集約（各13行 → 3行）。
+  同じ PR で `child_should_quit` は集約済みだったのに tick 本体は複製のままで一貫していなかった
+- **`child_host_callback_config()` の重複** → `HostCallbackConfig::child()` の doc に統合
+  （reuse / altitude / simplification の**3観点が独立に指摘**）。
+  🔴 **2つの doc は既に drift していた** — 片方に変異の実測結果、もう片方は「同じ注記を見よ」
+- 統合テストを**両方向**に強化（元は child 側しか見ておらず「常に有効を返す」実装でも通った）
+
+見送り6件は理由つきで commit に記録（`core-foundation-sys` 置換は対応する sys crate が
+無く手書き FFI が残るため等）。
+
+#### 🔴 CI が5回落ちた — すべて**先行するエラーに隠されていた別の層**
+
+| 回 | 失敗 | 見えなかった理由 |
+|---|---|---|
+| 1 | `orbit-child-runtime` の Linux 死にコード3件 | — |
+| 2 | CLAP child に cfg ゲートが1つも無い | 1回目が**依存クレートで止まり** child まで到達せず |
+| 3 | CLAP のテストモジュールが `#[cfg(test)]` のみ | 2回目が**非テストビルドで止まり**テストまで到達せず |
+| 4 | `unsafe fn` の項目2件が未ゲート | 3回目で止まっていた |
+| 5 | gated テストの `#![cfg]` でカスタム `main` が消える | 4回目で止まっていた |
+
+**私の修正で壊れたものは1つも無い。** P3b-2 の時点から Linux で壊れており、
+CI が1件目で止まるため往復1回につき1件しか見えなかった。
+
+#### 🔴 往復の真因は「ローカルで Linux を再現できていなかった」こと
+
+正しい形は
+
+```
+cargo clippy -p orbit-child-runtime --all-targets --target x86_64-unknown-linux-gnu --locked -- -D warnings
+```
+
+これで**1回で2件同時に見えた**。それまでの検証はすべて弱かった:
+
+| 試み | なぜ無効だったか |
+|---|---|
+| workspace 全体を Linux ターゲットで | `alsa-sys` で止まり対象まで到達しない |
+| `-p orbit-child-runtime --lib` | 🔴 **`--lib` はテストを含まない**。テスト側の失敗はそこに出ない |
+| 静的な cfg 照合「4 child すべて 0 件」 | 🔴 照合式が `unsafe fn` / `unsafe extern` を捉えていなかった |
+
+🔴 **0 件という結果は、「対象が無い」と「対象を見ていない」を区別しない。**
+同様に、macOS で回した clippy は `-D warnings` も `--locked` も feature 別も無く、
+**CI より弱い条件での測定**だった。
+
+#### レビューラウンド1（`/code:pr-review-team` + Fable 監査を並行）
+
+**Fable**（差分に**無い**もの）:
+- A-1 `resize_hints_changed` の no-op。コメントの「P3b-2 で実装」という期限が
+  **この PR の中で満了**していた → owner 裁定で**実装せず、消せる条件つきで登記**
+- A-2 ウィンドウタイトル（Q6・承認済み）未実装 → 同上（P4 で `cmd_arg` に載せる）
+- 🔴 **残余登記2件が実態より古い**と指摘 → 確認すると**どちらもこの PR 自身で履行済み**だった
+
+**silent-failure-hunter**:
+- 🔴 **孤児検知の stderr 出力が4 child すべてから消えていた**。`child_should_quit` への
+  共通化で移植されなかった。child には `tracing` subscriber が無く **stderr が唯一の観測経路**
+  なので、唯一の観測経路を削っていた。
+  → 根本原因は `bool` を返していたことなので `QuitReason { HostRequested, ParentDied }` に変更。
+  **型で区別されていなければ、落ちてもコンパイラは何も言わない**
+
+**code-reviewer**:
+- 🔴 gain oracle フィクスチャの**固定パス競合**（素の workspace で2回・並行で **8/8 中 5** 再現）。
+  対策（pid 付きスロットの `package_bundle()`）は**既に存在**し synth oracle は使っていたが、
+  この PR の新テストだけが直叩きしていた
+- レビュー中に**私が作業ツリーを編集した**ことも正しく指摘された。次から指摘が出揃うまで触らない
+
+**comment-analyzer**:
+- Critical 3件は**すべて WORK_LOG の記述**（本エントリで是正）。
+  一方 **SDK 引用（`iplugview.h:146` 等）と Rust ソース内のコメントは全件正確**と確認された
+
+**変更ファイル**: 上表の9コミット分
+
+---
+
+### 6.344 feat(rust): #474 P3b-2 — NSWindow を実配線し、実在を OS に問い合わせて証明した (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474（P3b-2）/ **Branch**: `474-plugin-ui-p3b1-gui-endpoint`
+**Status**: `cargo test --workspace`（**sandbox 外**）= **462 passed / 0 failed**
+
+**ここで初めてウィンドウが画面に出る。** P3a（AppKit 非依存の状態機械）と
+P3b-1（フォーマット GUI エンドポイント）を AppKit で繋ぐ層。
+
+#### 実装
+
+- `orbit-child-runtime/src/window.rs`（新規）: `NSWindow` 生成・delegate・リサイズ。
+  🔴 `windowShouldClose` は**常に `NO`** を返す（AppKit にフェーズ B より前に壊させない）。
+  破棄は `close()`（**`performClose:` 禁止** — 使うと AppKit が `windowShouldClose` を再照会し、
+  機械はまだ `Closing` なので取り消され、ウィンドウが永遠に残る）
+- `orbit-child-runtime/src/ui_service.rs`（新規）: 状態機械 + evt リング + WindowShell +
+  `PluginUiEndpoint` を束ね `UiHostActions` を実装。`CMD_OPEN_UI` = **完了時 ack** /
+  `CMD_CLOSE_UI` = **受理時 ack**（UIH.2a ポリシー2）
+- 4 child への追加は各 **+14〜15行**（実質 +2〜+5）。述語も `child_should_quit` に集約し、
+  「GUI コードを4回書く」を回避した
+- **`ParentWatch` の再入時ギャップを封鎖**（P3a で trait doc に登記した完了条件）。
+  `ParentWatch` を `&self` + `Cell` 化し、`should_quit` 述語に合流。
+  🔴 `abortModal` / 強制 exit のエスカレーションは**前提未検証のためスコープ外**とした
+
+#### 🔴 ウィンドウの実在を OS に問い合わせて証明した（4層の切り分け）
+
+gated テストが実機で落ちた。**「テストが落ちた」で終わらせず層を1つずつ剥がした**結果、
+**設計の前提に関わる事実**が出た。
+
+| 仮説 | 実測 |
+|---|---|
+| ウィンドウが生成されていない | ❌ `NSWindow #993` は採番済み |
+| runloop を回していない | ❌（この時点では）変わらず |
+| pid / window number の突合ミス | ❌ 定数も比較も正しい |
+| **API 自体が NULL を返している** | ✅ |
+| **Screen Recording 権限が無い** | ✅ **`CGPreflightScreenCaptureAccess() == false`** |
+
+さらに**このセッションは SSH 経由**（`sshd-session` の子）で、Ghostty に権限があっても
+**TCC は責任プロセス単位なので伝播しない**ことが系譜の実測で判明した。
+owner が **MBA10 のローカル GUI タブ**で実行して権限を通過。
+
+すると**別の欠陥が露出した** — `wait_for_window_state` が `sleep` するだけで
+**runloop を一度も回していなかった**。`makeKeyAndOrderFront` は順序付けを予約するだけで、
+window server へ届くのは runloop が次にイベントを処理したとき。
+🔴 **最初の runloop 仮説検証は、権限が無く NULL が返っていたため仮説を試せていなかった。**
+
+#### 🔴 独立性の証明（owner が実機で実行）
+
+| 段階 | 結果 |
+|---|---|
+| baseline | `ok. 1 passed` |
+| **`makeKeyAndOrderFront` 削除**（残存数 0 で反映確認） | `FAILED` + **`owned by this process: []`** |
+| 復元（`cmp` 一致） | `ok. 1 passed` |
+
+`NSWindow #1128` は**採番されている**のに CG は画面上のウィンドウを**0枚**と報告した。
+つまりこの検査は「オブジェクトが作られたか」ではなく「**実際に画面に出たか**」を見ている。
+child の自己申告なら変異段階も「作った」で通っていた。
+
+**権限が無いときは skip せず失敗させる**（`require_screen_capture_permission`）。
+黙って skip すると「一度も検証していないのに緑」になり、しかもこれは
+**child の自己申告から独立した唯一の証拠**なので、緩めると二重経路が片翼になる。
+
+#### 🔴 `child_should_quit` の配線ギャップ（main が変異で発見・main が実装）
+
+Codex の変異は `should_quit_with_parent`（**純関数**）を突いていた。
+main が**合成箇所**（`|| parent_watch.should_exit()` → `false`）を突いたところ、
+**21 件全部が緑のまま通った**。既存テストは自前のクロージャを注入しており、
+`child_should_quit` が本物の `ParentWatch` を渡すことは誰も縛っていなかった。
+
+**CLAP の `HostCallbackConfig` と同種**。こちらは **4 child すべての production 経路**で、
+壊れれば孤児 child が生き残る（#448）。
+
+> 🔴 **執筆時この節は CLAP 側を「消費者が居ないので到達不能・P3b-2 の完了条件として登記」と
+> 書いていたが誤り**（Fable 監査で判明・commit `9d727fa` で是正）。**その P3b-2 は本エントリが
+> 記述しているコミット自身**で、`take_closed` / `take_requested_size` を実 `load` 経路へ配線し
+> `real_load_path_delivers_plugin_initiated_close_to_main_half` も同時に追加している。
+> つまり**同じコミットが埋めたギャップを「未解決」と書いていた**。
+> 変異で裏取り済み（`effect.rs` の call site を `in_process` に差し替えると当該1件だけ FAILED）。
+
+対処: `ParentWatch::orphaned_for_tests()` を追加（ありえない pid を記録して
+「親が死んだ」分岐を到達可能にする）。テストは `control` を `CONTROL_RUN` のままにするので、
+**真になりうるのは parent-watch の項だけ**。3つの独立表明を置いた
+（孤児→true / 生存→false / QUIT→true）。2番目が無いと「常に true」でも通る。
+
+**同じ変異が修正前は 21 件緑 → 修正後は狙った1件だけ FAILED。** 復元は `cmp` で一致確認。
+
+#### Codex が2度停滞した
+
+P3a fix R1 で68分、本タスクで34分、いずれも**出力ゼロ・ファイル書き込みゼロ**。
+2度目は停止して **main が直接実装**した。CLAUDE.md の
+「4ラウンド目でも収束しなければ main が直す」の趣旨（**main はコンテキストを持っており、
+ブリーフを書き起こすコストの方が高い**）がそのまま当てはまる。
+ギャップを見つけたのも変異を設計したのも main だった。
+
+**変更ファイル**: `orbit-child-runtime/{Cargo.toml,src/lib.rs,src/window.rs,src/ui_service.rs,tests/window_shell_gated.rs}` /
+`orbit-audio-sandbox/{src/parent_watch.rs,src/transport.rs,src/bin/parent-watch-probe.rs}` /
+4 child の `main.rs` / `orbit-clap-host/src/{effect.rs,instrument.rs}` / `orbit-vst3-host/src/view.rs` / `Cargo.lock`
+
+**Commit**: `474-plugin-ui-p3b1-gui-endpoint`（PR 作成予定）
+
+---
+
+### 6.343 feat(rust): #474 P3b-1 — VST3 の UI エンドポイント層（順序が仕様） (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474（P3b-1）/ **Branch**: `474-plugin-ui-p3b1-gui-endpoint`
+**Status**: `cargo test --workspace`（**sandbox 外**）= **447 passed / 0 failed**（P3a 時点 442 → 新規5本）
+
+P3b も分割した。**P3b-1 = AppKit を混ぜないフォーマット GUI エンドポイント層**。
+P3a が「AppKit 非依存の純 Rust に切り出したから変異検証が成立した」分割を踏襲している。
+**今回は VST3 のみ**（CLAP は別タスク）。
+
+#### 🔴 この層の責務は「呼ぶこと」ではなく「正しい順序で呼ぶこと」
+
+VST3 の editor 取得は**順序そのものが規格要件**である。SDK 原文（`iplugview.h:146`・
+`attached()` の doc）: *"Note that in this call the plug-in could call a IPlugFrame::resizeView ()!"*
+— **attach の最中にプラグインがリサイズを要求しうる**ので、`setFrame` を後回しにすると
+その要求を取りこぼす。
+
+したがって**テストは順序を検証しなければ意味がない**。ブリーフでは oracle スタブに
+**「attach の最中に `resizeView` を呼ぶモード」を必須**にした。これが無いと順序を
+間違えても全テストが緑のまま通る。
+
+#### 実装
+
+- `orbit-child-ui`: `PluginUiEndpoint` trait + `UiSize`。**依存ゼロを維持**し、
+  親ビューは `*mut c_void` で受ける（AppKit も vst3 crate も入れない）
+- `orbit-vst3-host/src/view.rs`（新規 299行）: `IPlugView` + `IPlugFrame`。
+  `resizeView` を受けたら**同一 callstack 内で** `onSize` を呼び返す（`iplugview.h:112-114`）
+- `orbit-vst3-synth-oracle`: 呼び出しを順序込みで記録する `IPlugView` スタブ（+208行）。
+  NSView は作らない（`attached` は記録して `kResultOk` を返すだけで足りる）
+- 🔴 **`orbit-vst3-gain-oracle` は変更しない**。`createView` が null を返すままなので、
+  「GUI 非対応プラグインで loud に失敗する」負の経路が**追加作業ゼロで検証できる**
+
+#### 🔴 view の生存を controller より短く保つのをコードで強制した
+
+`ivsteditcontroller.h:535-536`: *"The life time of the editor view will never exceed the
+life time of this controller instance."*
+
+**フィールドの宣言順に頼らない**。`Drop` は `release_view()` → `release_controller()` の順で
+明示的に呼び、`release_view` は `removed()` →  view 解放 → frame 解放、
+`release_controller` には `debug_assert!(self.view.is_none())` を置いた。
+
+#### 変異検証（Codex 4種 + main の独立再現）
+
+テストは `contains` ではなく **trace 全体の等値比較**。さらに `canResize`（規格上は
+任意の位置でよい）を除いた「規範シーケンス」を別途厳密比較する二段構えにした。
+
+| 変異 | 結果 |
+|---|---|
+| `attached` ↔ `setFrame` 交換 | red（`left`/`right` に順序差） |
+| `removed()` を2回 | red（`["removed","removed","viewDropped"]`） |
+| `onSize` 呼び返しを削除 | red（`resizeView` の後が欠ける） |
+| null view で `Ok` を返す | red（負の経路が loud 失敗を保証） |
+
+🔴 **4種すべてがコンパイルエラーではなく assertion failure で red**。
+
+main が独立に `setFrame` を `getSize` の後ろへ移す変異を当てて再現した（2 tests failed・
+`left: [..., "canResize", "getSize", "setFrame", ...]`）。復元は `cmp` で一致確認。
+
+#### 🔴 Codex の rescue 経路が read-only に倒れていた
+
+`rescue`（companion → broker → app-server）が2回とも書き込みを拒否した:
+
+```
+patch rejected: writing is blocked by read-only sandbox;
+rejected by user approval settings
+```
+
+**1回目は `completed` / `Phase: done` を返しながら作業ツリーは完全に空だった。**
+完了通知だけを見ていたら実装済みと誤読していた。
+
+切り分け: `codex exec --sandbox workspace-write` を直接叩くと**書ける**（プローブで実証）。
+broker（15時間39分稼働）を再起動しても直らず、同じ手を3回目は打たずに
+**`codex exec` 直叩き**へ切り替えた。memory の
+`codex-rescue-sandbox-broker-gotcha` の「当座は companion を直叩き」は**今回効かなかった**ので
+記録の更新が要る。
+
+Codex 本体・契約枠は正常。壊れているのは rescue の JSON-RPC 経路だけ。
+
+#### spec 修正（先行）
+
+`UIH.4b` の「`set_scale` も同様にメインスレッドで扱う」が CLAP 規格と矛盾していた。
+CLAP 原文（`gui.h`・`CLAP_WINDOW_API_COCOA` の直上）:
+*"uses logical size, don't call `clap_plugin_gui->set_scale()`"*。
+cocoa は論理サイズなのでホストがスケールを押し付けると二重適用になる。
+main が一次ソースを逐語確認して修正（commit `b05538c`）。
+
+#### CLAP 側（同じ層の残り半分）
+
+**構造が VST3 と違う。** VST3 の oracle は同一プロセス内の Rust crate なので static で
+トレースを共有できたが、**CLAP プラグインは dlopen される別ビルドの dylib** で Rust の
+static はホストと共有されない。→ **トレースは env で指定したファイル経由**にした
+（`ORBIT_CLAP_GUI_TRACE` 未設定なら何も書かない）。
+
+- `orbit-clap-host/src/gui.rs`（新規）+ `host.rs` 拡張。`clack-extensions` に `"gui"` を追加
+- `closed(was_destroyed)` / `request_resize` は **`[thread-safe]`** なので atomic で受けて
+  main の tick で consume（`GuiSize::pack_to_u64` は atomic 運搬用に clack が用意している）
+- **in-process daemon 経路の挙動を変えない**ため `HostCallbackConfig` を導入。
+  `declare_extensions` は `shared.gui_callbacks.is_some()` のときだけ `HostGui` を register
+- `rust-spike/clap-test-synth` は変更しない → 「GUI 拡張なしで loud 失敗」の負の経路が
+  追加作業ゼロで書ける（VST3 で gain oracle を据え置いたのと同じ狙い）
+
+変異5種すべて red: `is_api_supported` 省略 / `set_parent`↔`show` 交換 /
+`was_destroyed=true` でも `hide` / **floating で再試行** / cocoa で `set_scale`。
+
+**検証（main 実測）**: `cargo test --workspace`（sandbox 外）= **449 passed / 0 failed**。
+CLAP 順序テストは `#[ignore]` ゲートなので workspace の件数に入らない →
+**main が別途 `--ignored` で実行し 4 passed**。件数だけ見ていたら未実行に気づけなかった。
+
+#### 🔴 配線テストは半分しか守っていなかった（main が変異で実証）
+
+`HostCallbackConfig::in_process` と `::child` は**同じ型を返す2つのコンストラクタ**で、
+取り違えてもコンパイルが通る。Codex に配線テストを追加させ、変異3種が red になった:
+
+| 変異 | 結果 |
+|---|---|
+| `controller.rs` / `effect.rs` / `instrument.rs` の**関数の中身**を差し替え | red |
+
+**しかし main が当てた「呼び出し箇所のバイパス」変異**
+（`load` の引数を `child_host_callback_config()` から
+`HostCallbackConfig::in_process(Default::default(), Default::default())` へ直接置換）は
+**28 テスト全部が緑のまま通った**。
+
+Codex が試したのは helper の中身だけで、**本番の呼び出し箇所が helper を使うことは
+誰も縛っていなかった**。#527 の `setPlayingStatus` / `setReadyStatus` 取り違えと同じ構造。
+
+**直さずに回収先を固定した**: ホスト側 GUI コールバックを消費するコードがまだ無いので
+**今日は到達不能**。P3b-2 が `closed()` / `request_resize()` を状態機械へ配線し、
+その「プラグイン起点のクローズが状態機械に届く」テストは**本物の `load` 経路を通る**ので
+初めて呼び出し箇所を縛る。→ `effect.rs` / `instrument.rs` の当該関数の doc に
+**P3b-2 の完了条件として**変異確認日つきで記載した。
+
+**変更ファイル**: `orbit-child-ui/src/lib.rs` / `orbit-vst3-host/{Cargo.toml,src/lib.rs,src/view.rs,tests/ui_endpoint.rs}` /
+`orbit-vst3-synth-oracle/src/lib.rs` / `orbit-clap-host/{Cargo.toml,src/gui.rs,src/host.rs,src/controller.rs,src/effect.rs,src/instrument.rs,src/lib.rs,src/plugin_main.rs,tests/ui_endpoint_gated.rs}` /
+`rust-spike/clap-test-effect/{Cargo.toml,src/lib.rs}` / `Cargo.lock` / `PLUGIN_UI_HOSTING_SPEC_v1.md`
+
+**Commit**: `474-plugin-ui-p3b1-gui-endpoint`（PR 作成予定）
+
+---
+
 ### 6.342 feat(rust): #474 P3a — クローズ状態機械を AppKit 非依存の純 Rust で実装した (Jul 31, 2026)
 
 **Date**: 2026-07-31
@@ -105,8 +437,25 @@ failed to load oracle bundle .../GainOracle.vst3: missing symbol: GetPluginFacto
 - **単独実行 ×3 はすべて 11 passed**
 - **workspace 再実行は 440 passed / 0 failed**
 
-Codex が変異検証で `cargo clean -p` を繰り返した結果、**VST3 フィクスチャの再生成と使用が
-競合**したもの。実装起因ではない。
+当時は「Codex が変異検証で `cargo clean -p` を繰り返した結果、VST3 フィクスチャの再生成と
+使用が競合したもの。実装起因ではない」と結論した。
+
+#### 🔴 上の診断は誤りだった（同日中にレビューで判明・commit `6cb4b05`）
+
+**真因はこの PR が持ち込んだ固定パス競合**。`ui_endpoint.rs` の `gain_oracle_bundle()` が
+`package-oracle.sh` を**引数なしで**叩き、固定パス `target/vst3-fixtures/GainOracle.vst3` へ
+`rm -rf` / `cp` していた。同じパスを別クレートのテストが**別プロセス**から叩くため、
+一方の `rm -rf` が他方の `cp` を追い越す。
+
+code-reviewer が素の `cargo test --workspace` で2回再現し、3バイナリ並行実行で
+**8回中5回**失敗させた。
+
+🔴 **「単独3回 green だから環境起因」という切り分けが誤りだった。**
+単独実行では**原理的に起きない**競合なので、その観測は仮説を否定できない。
+「再現しない = 環境のせい」と読んだのが誤りで、正しくは「その実験は競合を検出できない」。
+
+対策は既に存在していた（`orbit_vst3_gain_oracle::package_bundle()` の pid 付きスロット・
+synth oracle 側は使用済み）。この PR の新テストだけが使っていなかった。
 
 #### レビューラウンド1（PR #594）と fix R1
 

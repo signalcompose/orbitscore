@@ -5,7 +5,39 @@
 //! those dependencies into the transition logic tested here.
 
 use std::borrow::Cow;
+use std::ffi::c_void;
 use std::time::Duration;
+
+/// Logical plugin-editor size in host-view coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UiSize {
+    pub width: i32,
+    pub height: i32,
+}
+
+/// AppKit- and plugin-format-independent editor-view endpoint.
+///
+/// `begin_open` deliberately stops before the parent view is created. The caller uses its
+/// returned size to create the host-owned window, then passes that window's content view to
+/// `attach`.
+pub trait PluginUiEndpoint {
+    /// Create the plugin editor and return its initial size.
+    fn begin_open(&mut self) -> Result<UiSize, String>;
+
+    /// Embed the editor into `parent`, an opaque platform parent-view pointer.
+    fn attach(&mut self, parent: *mut c_void) -> Result<(), String>;
+
+    /// Release the plugin editor before the host destroys its parent window.
+    ///
+    /// `was_destroyed` carries CLAP's `closed()` distinction. VST3 implementations ignore it.
+    fn release(&mut self, was_destroyed: bool);
+
+    /// Whether the plugin permits user-driven window resizing.
+    fn can_resize(&self) -> bool;
+
+    /// Apply a host-originated resize to the plugin editor.
+    fn apply_host_resize(&mut self, size: UiSize) -> Result<(), String>;
+}
 
 /// Detail returned when `OPEN_UI` arrives before the previous close cycle drains.
 pub const CLOSING_IN_PROGRESS_DETAIL: &str = "closing-in-progress";
@@ -91,11 +123,13 @@ pub enum CloseRequestDisposition {
 ///   clock. Wall-clock values and non-monotonic values must not be used.
 /// - Opening a real window makes the main-runloop tick reentrant (modal sheets, live
 ///   resize, drag tracking). While a tick is reentrant the child's `service_main` is
-///   skipped, so `ParentWatch::should_exit` — the orphan guard from #448 — is not
-///   evaluated. `CONTROL_QUIT` already survives this via `run_child`'s `should_quit`
-///   predicate; the orphan case does not. P3b must extend that predicate to cover
-///   parent death before the first window can be shown, otherwise a daemon crash
-///   during a modal sheet leaves the child alive holding its plugin.
+///   skipped, so `ParentWatch::should_exit` — the orphan guard from #448 — would not be
+///   evaluated there. ✅ **Closed in P3b-2**: `child_should_quit` now evaluates both
+///   `CONTROL_QUIT` and `ParentWatch` outside the borrow, so a daemon crash during a modal
+///   sheet still tears the child down. Its composition (not just the pure predicate) is
+///   pinned by `child_should_quit_consults_the_injected_parent_watch`, which uses
+///   `ParentWatch::orphaned_for_tests` to make the parent-died branch reachable in-process.
+///   Keep that test whenever the predicate gains another term.
 pub trait UiHostActions {
     /// Create and show the UI. P3b supplies the format-specific implementation.
     fn open_ui(&mut self) -> Result<(), String>;

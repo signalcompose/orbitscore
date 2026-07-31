@@ -11,6 +11,8 @@
 
 #![cfg(target_os = "macos")]
 
+mod view;
+
 use std::cell::{Cell, RefCell};
 use std::error::Error;
 use std::ffi::{c_void, CString};
@@ -30,6 +32,8 @@ use core_foundation_sys::url::{kCFURLPOSIXPathStyle, CFURLCreateWithFileSystemPa
 use vst3::Steinberg::Vst::*;
 use vst3::Steinberg::*;
 use vst3::{Class, ComPtr, ComWrapper};
+
+pub use view::Vst3UiEndpoint;
 
 const AUDIO_MODULE_CLASS: &str = "Audio Module Class";
 const DEFAULT_CHANNELS: usize = 2;
@@ -431,6 +435,7 @@ impl Drop for CfUrl {
 /// `_library`, so any COM callback objects backed by the plugin's vtables are released before
 /// the dynamic library is unloaded.
 pub struct Vst3PluginMain {
+    ui_endpoint: Vst3UiEndpoint,
     controller: Option<ComPtr<IEditController>>,
     component_connection: Option<ComPtr<IConnectionPoint>>,
     controller_connection: Option<ComPtr<IConnectionPoint>>,
@@ -444,6 +449,11 @@ pub struct Vst3PluginMain {
 }
 
 impl Vst3PluginMain {
+    /// Format-specific endpoint used by the AppKit-owning layer.
+    pub fn ui_endpoint(&mut self) -> &mut Vst3UiEndpoint {
+        &mut self.ui_endpoint
+    }
+
     /// 現在の component state を取得する（空 state 拒否の規律込み）。
     ///
     /// **スレッド**: home（main）スレッドから呼ぶこと（CAP.5・VST3 の規約）。
@@ -462,6 +472,11 @@ impl Vst3PluginMain {
 
 impl Drop for Vst3PluginMain {
     fn drop(&mut self) {
+        // UIH.4: the editor view must be removed and released before controller termination.
+        // Do not rely on field declaration order for this lifetime constraint.
+        self.ui_endpoint.release_view();
+        self.ui_endpoint.release_controller();
+
         if let (Some(component_connection), Some(controller_connection)) = (
             self.component_connection.as_ref(),
             self.controller_connection.as_ref(),
@@ -657,6 +672,7 @@ impl Vst3EffectProcessor {
         };
 
         let scratch_len = max_samples_per_block.max(0) as usize;
+        let ui_endpoint = Vst3UiEndpoint::new(controller_handshake.controller.as_ref().cloned());
         let processor = Self {
             audio: Some(Vst3EffectAudio {
                 processor,
@@ -673,6 +689,7 @@ impl Vst3EffectProcessor {
                 process_output_r: vec![0.0; scratch_len],
             }),
             main: Some(Vst3PluginMain {
+                ui_endpoint,
                 controller: controller_handshake.controller,
                 component_connection: controller_handshake.component_connection,
                 controller_connection: controller_handshake.controller_connection,
@@ -1176,6 +1193,7 @@ impl Vst3InstrumentProcessor {
             is_effect: false,
         };
         let scratch_len = max_samples_per_block.max(0) as usize;
+        let ui_endpoint = Vst3UiEndpoint::new(controller_handshake.controller.as_ref().cloned());
         Ok((
             Self {
                 audio: Some(Vst3InstrumentAudio {
@@ -1188,6 +1206,7 @@ impl Vst3InstrumentProcessor {
                     last_process_error: std::cell::Cell::new(0),
                 }),
                 main: Some(Vst3PluginMain {
+                    ui_endpoint,
                     controller: controller_handshake.controller,
                     component_connection: controller_handshake.component_connection,
                     controller_connection: controller_handshake.controller_connection,
