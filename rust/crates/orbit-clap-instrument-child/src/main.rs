@@ -143,6 +143,7 @@ fn write_output_events(
 /// pass every CI-runnable test, since the only prior coverage exercised `write_output_events`'s
 /// returned struct in isolation, never the region counters it gets mirrored into (pr-test-analyzer,
 /// PR #422 round 2 item 2). Caller must ensure `region` is valid and `idx` is in range.
+#[cfg(target_os = "macos")]
 unsafe fn apply_output_write_outcome(
     region: *mut SharedRegion,
     idx: usize,
@@ -173,6 +174,7 @@ unsafe fn apply_output_write_outcome(
 /// `write_slot` must write audio, `output_events`, and `output_event_count`. Their writes must stay
 /// before both sequence stores: the host uses `seq_tag`'s Acquire load as the publication edge for
 /// all slot payload and then revalidates the tag after reading it.
+#[cfg(target_os = "macos")]
 unsafe fn publish_completed_slot(
     region: *mut SharedRegion,
     seq: u64,
