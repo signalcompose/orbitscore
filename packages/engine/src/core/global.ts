@@ -3,7 +3,7 @@
  * Represents the global transport and configuration
  */
 
-import { AudioEngine } from '../audio/types'
+import { AudioEngine, type PluginUiTarget } from '../audio/types'
 import { StackElement, PlayElement } from '../parser/types'
 import { BoundValue, ChordVoice } from '../midi/chord/types'
 import { evaluateChordDefinition } from '../midi/chord/resolve-chords'
@@ -67,6 +67,21 @@ function pluginStateTargetForSlot(receiverId: string, slot: PluginSlot): Resolve
             ...(slot.bus === undefined ? {} : { bus: slot.bus }),
           },
   }
+}
+
+function daemonTargetMatchesUiTarget(
+  target: ResolvedPluginStateTarget['daemonTarget'],
+  uiTarget: PluginUiTarget,
+): boolean {
+  if (target.role !== uiTarget.role) return false
+  if (target.role === 'effect' && uiTarget.role === 'effect') {
+    return target.bus === uiTarget.bus
+  }
+  return (
+    target.role === 'instrument' &&
+    uiTarget.role === 'instrument' &&
+    target.instance === uiTarget.instance
+  )
 }
 
 export class Global {
@@ -136,6 +151,9 @@ export class Global {
     this.transportControl = new TransportControl(
       this.globalScheduler,
       this.sequenceRegistry.getAllSequences(),
+    )
+    this.audioEngine.setPluginUiSafepointSaver?.((target) =>
+      this.savePluginUiStateAtSafepoint(target),
     )
   }
 
@@ -687,26 +705,58 @@ export class Global {
    * No receiver-name resolution or implicit mixer-kind priority participates.
    */
   listPluginStateTargets(): ResolvedPluginStateTarget[] {
-    const targets: ResolvedPluginStateTarget[] = []
-    const append = (receiverId: string, chain: readonly PluginSlot[]) => {
-      for (const slot of chain) {
-        targets.push(pluginStateTargetForSlot(receiverId, slot))
-      }
+    return this.listPluginUiStateTargets().map(({ resolved }) => resolved)
+  }
+
+  private listPluginUiStateTargets(): Array<{
+    index: number
+    resolved: ResolvedPluginStateTarget
+  }> {
+    const targets: Array<{ index: number; resolved: ResolvedPluginStateTarget }> = []
+    const append = (receiverId: string, chain: readonly PluginSlot[], firstIndex: number) => {
+      chain.forEach((slot, offset) => {
+        targets.push({
+          index: firstIndex + offset,
+          resolved: pluginStateTargetForSlot(receiverId, slot),
+        })
+      })
     }
 
-    append('master', this.pluginEffectManager.chain())
+    append('master', this.pluginEffectManager.chain(), 1)
     for (const kind of MIXER_BUS_KINDS) {
       for (const name of this.mixerManager.declaredBusNames(kind)) {
-        append(formatReceiverId(kind, name), this.mixerManager.chainFor(kind, name))
+        append(formatReceiverId(kind, name), this.mixerManager.chainFor(kind, name), 1)
       }
     }
     for (const sequenceName of this.sequenceEffectManager.keys()) {
-      append(sequenceName, this.sequenceEffectManager.chainFor(sequenceName))
+      append(sequenceName, this.sequenceEffectManager.chainFor(sequenceName), 1)
     }
     for (const sequenceName of this.pluginInstrumentManager.keys()) {
-      append(sequenceName, this.pluginInstrumentManager.chainFor(sequenceName))
+      append(sequenceName, this.pluginInstrumentManager.chainFor(sequenceName), 0)
     }
     return targets
+  }
+
+  private async savePluginUiStateAtSafepoint(target: PluginUiTarget): Promise<void> {
+    const match = this.listPluginUiStateTargets().find(
+      ({ index, resolved }) =>
+        index === target.index && daemonTargetMatchesUiTarget(resolved.daemonTarget, target),
+    )
+    if (!match) {
+      throw new Error(
+        `Plugin UI target is not present in the current chain: ${JSON.stringify(target)}`,
+      )
+    }
+    const projectDirectory = this.audioManager.getDocumentDirectory()
+    if (!projectDirectory) {
+      throw new Error(
+        'Plugin UI state cannot be saved before the document has a directory; save the .orbs file first.',
+      )
+    }
+    await this.projectStateStore(projectDirectory).save(
+      match.resolved.identity,
+      match.resolved.daemonTarget,
+    )
   }
 
   /**

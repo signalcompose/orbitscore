@@ -15,6 +15,11 @@ export type PluginStateSaveTarget =
   | { role: 'effect'; bus?: string }
   | { role: 'instrument'; instance: string }
 
+/** daemon の plugin UI event が返す、chain index つきの解決済み宛先。 */
+export type PluginUiTarget =
+  | { role: 'effect'; bus?: string; index: number }
+  | { role: 'instrument'; instance: string; index: number }
+
 export interface PluginStateSaveResult {
   path: string
   bytesWritten: number
@@ -90,6 +95,9 @@ export interface AudioEngine {
     target: PluginStateSaveTarget,
     absolutePath: string,
   ): Promise<PluginStateSaveResult>
+
+  /** UI close safepoint を既存の project-state 保存フローへ接続する。 */
+  setPluginUiSafepointSaver?(saver: (target: PluginUiTarget) => Promise<void>): void
 
   pluginNoteOn?(key: number, channel: number, velocity: number, instance?: string): Promise<void>
   pluginNoteOff?(key: number, channel: number, velocity?: number, instance?: string): Promise<void>

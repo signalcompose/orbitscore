@@ -426,6 +426,20 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
+  async ackUiSafepoint(
+    target: PluginStateSaveTarget,
+    index: number,
+    generation: number,
+    evtSeq: number,
+  ): Promise<void> {
+    await this.request('AckUiSafepoint', {
+      target,
+      index,
+      generation,
+      evt_seq: evtSeq,
+    })
+  }
+
   /**
    * Runtime mixer bus routing change (MX.4, #459/#453 M3): (re)sets `seqBus`'s output
    * target (sum) and/or send gains (aux). `output: undefined` means "leave untouched" —
@@ -588,6 +602,12 @@ export class DaemonClient extends EventEmitter {
         return 'stream-stats'
       case 'DaemonError':
         return 'daemon-error'
+      case 'PluginUiClosed':
+        return 'plugin-ui-closed'
+      case 'PluginUiCloseDone':
+        return 'plugin-ui-close-done'
+      case 'PluginUiClosedByRespawn':
+        return 'plugin-ui-closed-by-respawn'
       default:
         return 'unknown-event'
     }

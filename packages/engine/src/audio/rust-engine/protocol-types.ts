@@ -19,6 +19,7 @@ export type CommandMethod =
   | 'LoadSample'
   | 'LoadPlugin'
   | 'GetPluginState'
+  | 'AckUiSafepoint'
   // ランタイムの mixer bus routing 変更（MX.4・#459/#453 M3）: seq_bus の output(sum)/
   // sends(aux) を非 RT で書き換える。daemon が feature `outproc-effect` 無効ビルドなら
   // OUTPROC_EFFECT_UNAVAILABLE を返す。
@@ -74,7 +75,14 @@ export type ResponseFrame = OkResponse | ErrorResponse
 
 export interface EventFrame {
   type: 'event'
-  event: 'PlayStarted' | 'PlayEnded' | 'StreamStats' | 'DaemonError'
+  event:
+    | 'PlayStarted'
+    | 'PlayEnded'
+    | 'StreamStats'
+    | 'DaemonError'
+    | 'PluginUiClosed'
+    | 'PluginUiCloseDone'
+    | 'PluginUiClosedByRespawn'
   data: Record<string, unknown>
 }
 
