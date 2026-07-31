@@ -429,7 +429,13 @@ child がウィンドウを所有する以上、**プラグイン起点のリサ
 | VST3 | `IPlugView::onSize` — SDK 原文（`iplugview.h:177-178`）: *"Note that if the plug-in requests a resize (IPlugFrame::resizeView ()) onSize has to be called afterward."* | **`resizeView` を受理したら NSWindow をリサイズし、`onSize` を呼び返す** |
 | CLAP | `clap_host_gui.request_resize` / `resize_hints_changed`（`[thread-safe]`） | 受理してメインスレッドで NSWindow をリサイズ |
 
-`set_scale` / `get_resize_hints` も同様にメインスレッドで扱う。
+`get_resize_hints` も同様にメインスレッドで扱う。
+
+> 🔴 **CLAP の `set_scale` は cocoa では呼んではならない。** CLAP 原文（`gui.h`・
+> `CLAP_WINDOW_API_COCOA` 定義の直上）: *"uses logical size, don't call
+> `clap_plugin_gui->set_scale()`"* — cocoa は論理サイズを使うため、ホストが
+> スケールを押し付けると二重適用になる。win32（physical size）のみ `set_scale` の対象。
+> 本仕様は cocoa 埋め込みに統一している（UIH.4）ので、**`set_scale` は使わない**。
 
 ### UIH.4c クローズの状態機械（経路条件つき・冪等）
 
