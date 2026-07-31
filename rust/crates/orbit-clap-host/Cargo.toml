@@ -19,6 +19,7 @@ path = "src/lib.rs"
 
 [dependencies]
 orbit-audio-native = { path = "../orbit-audio-native" }
+orbit-child-ui = { path = "../orbit-child-ui" }
 # M2 neutral event wire 型（EventRecord/NeutralEvent）。orbit-audio-sandbox は clack-free だが、
 # こちら側から一方向に依存するのは問題ない（§4 crate 配置規約）。
 orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }
@@ -30,6 +31,7 @@ clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "f874e858a
   "log",
   "params",
   "state",
+  "gui",
 ] }
 rtrb = "0.3"
 thiserror = { workspace = true }

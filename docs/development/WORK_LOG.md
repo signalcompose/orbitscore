@@ -103,8 +103,54 @@ CLAP 原文（`gui.h`・`CLAP_WINDOW_API_COCOA` の直上）:
 cocoa は論理サイズなのでホストがスケールを押し付けると二重適用になる。
 main が一次ソースを逐語確認して修正（commit `b05538c`）。
 
+#### CLAP 側（同じ層の残り半分）
+
+**構造が VST3 と違う。** VST3 の oracle は同一プロセス内の Rust crate なので static で
+トレースを共有できたが、**CLAP プラグインは dlopen される別ビルドの dylib** で Rust の
+static はホストと共有されない。→ **トレースは env で指定したファイル経由**にした
+（`ORBIT_CLAP_GUI_TRACE` 未設定なら何も書かない）。
+
+- `orbit-clap-host/src/gui.rs`（新規）+ `host.rs` 拡張。`clack-extensions` に `"gui"` を追加
+- `closed(was_destroyed)` / `request_resize` は **`[thread-safe]`** なので atomic で受けて
+  main の tick で consume（`GuiSize::pack_to_u64` は atomic 運搬用に clack が用意している）
+- **in-process daemon 経路の挙動を変えない**ため `HostCallbackConfig` を導入。
+  `declare_extensions` は `shared.gui_callbacks.is_some()` のときだけ `HostGui` を register
+- `rust-spike/clap-test-synth` は変更しない → 「GUI 拡張なしで loud 失敗」の負の経路が
+  追加作業ゼロで書ける（VST3 で gain oracle を据え置いたのと同じ狙い）
+
+変異5種すべて red: `is_api_supported` 省略 / `set_parent`↔`show` 交換 /
+`was_destroyed=true` でも `hide` / **floating で再試行** / cocoa で `set_scale`。
+
+**検証（main 実測）**: `cargo test --workspace`（sandbox 外）= **449 passed / 0 failed**。
+CLAP 順序テストは `#[ignore]` ゲートなので workspace の件数に入らない →
+**main が別途 `--ignored` で実行し 4 passed**。件数だけ見ていたら未実行に気づけなかった。
+
+#### 🔴 配線テストは半分しか守っていなかった（main が変異で実証）
+
+`HostCallbackConfig::in_process` と `::child` は**同じ型を返す2つのコンストラクタ**で、
+取り違えてもコンパイルが通る。Codex に配線テストを追加させ、変異3種が red になった:
+
+| 変異 | 結果 |
+|---|---|
+| `controller.rs` / `effect.rs` / `instrument.rs` の**関数の中身**を差し替え | red |
+
+**しかし main が当てた「呼び出し箇所のバイパス」変異**
+（`load` の引数を `child_host_callback_config()` から
+`HostCallbackConfig::in_process(Default::default(), Default::default())` へ直接置換）は
+**28 テスト全部が緑のまま通った**。
+
+Codex が試したのは helper の中身だけで、**本番の呼び出し箇所が helper を使うことは
+誰も縛っていなかった**。#527 の `setPlayingStatus` / `setReadyStatus` 取り違えと同じ構造。
+
+**直さずに回収先を固定した**: ホスト側 GUI コールバックを消費するコードがまだ無いので
+**今日は到達不能**。P3b-2 が `closed()` / `request_resize()` を状態機械へ配線し、
+その「プラグイン起点のクローズが状態機械に届く」テストは**本物の `load` 経路を通る**ので
+初めて呼び出し箇所を縛る。→ `effect.rs` / `instrument.rs` の当該関数の doc に
+**P3b-2 の完了条件として**変異確認日つきで記載した。
+
 **変更ファイル**: `orbit-child-ui/src/lib.rs` / `orbit-vst3-host/{Cargo.toml,src/lib.rs,src/view.rs,tests/ui_endpoint.rs}` /
-`orbit-vst3-synth-oracle/src/lib.rs` / `Cargo.lock` / `PLUGIN_UI_HOSTING_SPEC_v1.md`
+`orbit-vst3-synth-oracle/src/lib.rs` / `orbit-clap-host/{Cargo.toml,src/gui.rs,src/host.rs,src/controller.rs,src/effect.rs,src/instrument.rs,src/lib.rs,src/plugin_main.rs,tests/ui_endpoint_gated.rs}` /
+`rust-spike/clap-test-effect/{Cargo.toml,src/lib.rs}` / `Cargo.lock` / `PLUGIN_UI_HOSTING_SPEC_v1.md`
 
 **Commit**: `474-plugin-ui-p3b1-gui-endpoint`（PR 作成予定）
 

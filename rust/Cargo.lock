@@ -1034,6 +1034,7 @@ dependencies = [
  "clack-host",
  "orbit-audio-native",
  "orbit-audio-sandbox",
+ "orbit-child-ui",
  "rtrb",
  "thiserror 2.0.18",
  "tracing",

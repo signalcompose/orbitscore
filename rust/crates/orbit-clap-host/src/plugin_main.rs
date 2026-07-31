@@ -1,7 +1,9 @@
+use clack_extensions::gui::PluginGui;
 use clack_host::prelude::PluginInstance;
+use orbit_child_ui::UiSize;
 
 use crate::controller::ClapHostError;
-use crate::host::OrbitClapHost;
+use crate::host::{OrbitClapHost, OrbitHostShared};
 
 /// Main（home）スレッド側を CLAP effect / instrument で共有する。
 ///
@@ -10,6 +12,9 @@ use crate::host::OrbitClapHost;
 /// 走らせる。
 pub struct ClapPluginMain {
     pub(crate) instance: PluginInstance<OrbitClapHost>,
+    pub(crate) plugin_gui: Option<PluginGui>,
+    pub(crate) gui_attached: bool,
+    pub(crate) gui_can_resize: bool,
 }
 
 impl ClapPluginMain {
@@ -21,5 +26,17 @@ impl ClapPluginMain {
     /// 保存済み state を適用する（契約は [`crate::state::apply_state_bytes`]）。
     pub fn apply_state_bytes(&mut self, bytes: &[u8]) -> Result<(), ClapHostError> {
         crate::state::apply_state_bytes(&mut self.instance, bytes)
+    }
+
+    /// Consume the most recent thread-safe CLAP `closed(was_destroyed)` callback.
+    pub fn take_closed(&self) -> Option<bool> {
+        self.instance
+            .access_shared_handler(OrbitHostShared::take_closed)
+    }
+
+    /// Consume the most recent thread-safe CLAP `request_resize` callback.
+    pub fn take_requested_size(&self) -> Option<UiSize> {
+        self.instance
+            .access_shared_handler(OrbitHostShared::take_requested_size)
     }
 }

@@ -81,6 +81,45 @@ pub(crate) struct InstantiatedPlugin {
     pub info: LoadedPluginInfo,
 }
 
+pub(crate) struct HostCallbackConfig {
+    callback_requested: Arc<AtomicBool>,
+    resize_count: Arc<AtomicU64>,
+    enable_gui_callbacks: bool,
+}
+
+impl HostCallbackConfig {
+    pub(crate) fn in_process(
+        callback_requested: Arc<AtomicBool>,
+        resize_count: Arc<AtomicU64>,
+    ) -> Self {
+        Self {
+            callback_requested,
+            resize_count,
+            enable_gui_callbacks: false,
+        }
+    }
+
+    pub(crate) fn child() -> Self {
+        Self {
+            callback_requested: Arc::new(AtomicBool::new(false)),
+            resize_count: Arc::new(AtomicU64::new(0)),
+            enable_gui_callbacks: true,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn gui_callbacks_enabled(&self) -> bool {
+        self.enable_gui_callbacks
+    }
+}
+
+fn daemon_host_callback_config(
+    callback_requested: Arc<AtomicBool>,
+    resize_count: Arc<AtomicU64>,
+) -> HostCallbackConfig {
+    HostCallbackConfig::in_process(callback_requested, resize_count)
+}
+
 /// .clap バンドルを discover → instantiate → activate → start_processing し、全部品を返す。
 ///
 /// CLAP 仕様: `PluginInstance::new` / `activate` / `start_processing` は同一スレッド（呼び出し元）で
@@ -92,9 +131,14 @@ pub(crate) fn instantiate_activate(
     sample_rate: u32,
     channels: usize,
     max_frames: u32,
-    callback_requested: Arc<AtomicBool>,
-    resize_count: Arc<AtomicU64>,
+    host_callbacks: HostCallbackConfig,
 ) -> Result<InstantiatedPlugin, ClapHostError> {
+    let HostCallbackConfig {
+        callback_requested,
+        resize_count,
+        enable_gui_callbacks,
+    } = host_callbacks;
+
     // プラグインを発見する。
     let found: FoundPlugin = match id {
         None => {
@@ -128,7 +172,13 @@ pub(crate) fn instantiate_activate(
     // PluginInstance を生成する（main thread 要件: 呼び出し元スレッドで実行）。
     // carry-forward #2: callback_requested Arc を closure にキャプチャして clone で共有。
     let mut instance = PluginInstance::<OrbitClapHost>::new(
-        move |_| OrbitHostShared::new(callback_requested.clone()),
+        move |_| {
+            if enable_gui_callbacks {
+                OrbitHostShared::with_gui_callbacks(callback_requested.clone())
+            } else {
+                OrbitHostShared::new(callback_requested.clone())
+            }
+        },
         |shared| OrbitHostMainThread::new(shared),
         &found.entry,
         &plugin_id,
@@ -240,8 +290,7 @@ impl ClapHost {
             sample_rate,
             channels,
             max_frames,
-            self.callback_requested.clone(),
-            self.resize_count.clone(),
+            daemon_host_callback_config(self.callback_requested.clone(), self.resize_count.clone()),
         )?;
 
         self.instance = Some(loaded.instance);
@@ -320,6 +369,16 @@ fn query_note_port_index(instance: &mut PluginInstance<OrbitClapHost>) -> u16 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn daemon_path_does_not_advertise_gui_callbacks() {
+        let config = daemon_host_callback_config(
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicU64::new(0)),
+        );
+
+        assert!(!config.gui_callbacks_enabled());
+    }
+
     /// 存在しない .clap パスは panic せず `Err` を返す（discovery 失敗が型で伝播する保証）。
     /// 実 dylib も audio device も不要なので CI（`cargo test`）でそのまま実行できる。
     #[test]
@@ -330,8 +389,10 @@ mod tests {
             48_000,
             2,
             512,
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicU64::new(0)),
+            daemon_host_callback_config(
+                Arc::new(AtomicBool::new(false)),
+                Arc::new(AtomicU64::new(0)),
+            ),
         );
         assert!(
             result.is_err(),

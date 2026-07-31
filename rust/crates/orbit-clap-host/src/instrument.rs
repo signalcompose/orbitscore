@@ -21,20 +21,30 @@
 //! ⚠️ clack を bump する際は上記2つの Drop site（`plugin.rs:399` の sole-owner guard /
 //! `plugin/instance.rs:232` の teardown）の契約を再確認すること（この宣言順の正当性は library 内部実装に依存する）。
 
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::Arc;
-
 use clack_host::events::io::EventBuffer;
 use clack_host::events::UnknownEvent;
 use clack_host::prelude::{PluginInstance, StartedPluginAudioProcessor};
 use orbit_audio_sandbox::NeutralEvent;
+use std::path::Path;
 
 use crate::buffers::HostAudioBuffers;
-use crate::controller::{instantiate_activate, ClapHostError, LoadedPluginInfo};
+use crate::controller::{
+    instantiate_activate, ClapHostError, HostCallbackConfig, LoadedPluginInfo,
+};
 use crate::host::OrbitClapHost;
 use crate::processor::process_block_core;
 use crate::ClapPluginMain;
+
+/// Child processes host a plugin UI, so they must advertise `HostGui`.
+///
+/// 🔴 **P3b-2 completion condition.** See the identical note on
+/// `crate::effect::child_host_callback_config`: the unit test pins this function's body,
+/// but nothing pins the call site to it, and `in_process` / `child` share a return type
+/// so the swap compiles. P3b-2's plugin-initiated-close test runs through the real `load`
+/// path and binds the call site.
+fn child_host_callback_config() -> HostCallbackConfig {
+    HostCallbackConfig::child()
+}
 
 /// 単一スレッドで load / process / drop する instrument CLAP プロセッサ。
 ///
@@ -108,8 +118,7 @@ impl ClapInstrumentProcessor {
             sample_rate,
             channels,
             max_frames,
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicU64::new(0)),
+            child_host_callback_config(),
         )?;
 
         let mut processor = Self {
@@ -179,6 +188,9 @@ impl ClapInstrumentProcessor {
             },
             ClapPluginMain {
                 instance: _instance,
+                plugin_gui: None,
+                gui_attached: false,
+                gui_can_resize: false,
             },
         )
     }
@@ -233,5 +245,10 @@ mod tests {
     fn audio_half_is_send() {
         fn assert_send<T: Send>() {}
         assert_send::<ClapInstrumentAudio>();
+    }
+
+    #[test]
+    fn child_path_advertises_gui_callbacks() {
+        assert!(child_host_callback_config().gui_callbacks_enabled());
     }
 }

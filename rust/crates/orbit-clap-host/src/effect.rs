@@ -40,17 +40,34 @@
 //!   `effect_processor_smoke_gated.rs::instrument_branch_add_mixes_dry_signal`）。
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::Arc;
 
 use clack_host::events::io::InputEvents;
 use clack_host::prelude::{PluginInstance, StartedPluginAudioProcessor};
 
 use crate::buffers::HostAudioBuffers;
-use crate::controller::{instantiate_activate, ClapHostError, LoadedPluginInfo};
+use crate::controller::{
+    instantiate_activate, ClapHostError, HostCallbackConfig, LoadedPluginInfo,
+};
 use crate::host::OrbitClapHost;
 use crate::processor::process_block_core;
 use crate::ClapPluginMain;
+
+/// Child processes host a plugin UI, so they must advertise `HostGui`.
+///
+/// 🔴 **P3b-2 completion condition.** The unit test below pins this function's body, but
+/// nothing pins the *call site* to this function: replacing the argument at the `load`
+/// call with `HostCallbackConfig::in_process(..)` compiles and leaves all 28 tests green
+/// (verified by mutation on 2026-07-31). `in_process` and `child` return the same type,
+/// so the swap is invisible to the compiler — the sibling-swap class this project has
+/// already shipped once.
+///
+/// The gap is unreachable today because nothing consumes the host GUI callbacks yet.
+/// P3b-2 wires `closed()` / `request_resize()` into the close state machine, and its test
+/// that a plugin-initiated close reaches the machine must run through the real `load`
+/// path, which binds the call site for the first time.
+fn child_host_callback_config() -> HostCallbackConfig {
+    HostCallbackConfig::child()
+}
 
 /// 単一スレッドで load / process / drop する effect-only CLAP プロセッサ。
 ///
@@ -96,8 +113,7 @@ impl ClapEffectProcessor {
             sample_rate,
             channels,
             max_frames,
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicU64::new(0)),
+            child_host_callback_config(),
         )?;
 
         let mut processor = Self {
@@ -179,6 +195,9 @@ impl ClapEffectProcessor {
             },
             ClapPluginMain {
                 instance: _instance,
+                plugin_gui: None,
+                gui_attached: false,
+                gui_can_resize: false,
             },
         )
     }
@@ -233,5 +252,10 @@ mod tests {
     fn audio_half_is_send() {
         fn assert_send<T: Send>() {}
         assert_send::<ClapEffectAudio>();
+    }
+
+    #[test]
+    fn child_path_advertises_gui_callbacks() {
+        assert!(child_host_callback_config().gui_callbacks_enabled());
     }
 }
