@@ -17,6 +17,31 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.352 chore(project): 「1260」提出完了 — やり残し・課題の棚卸し (Aug 1, 2026)
+
+**Date**: 2026-08-01
+
+**Soundcinema Düsseldorf 2026 に「1260」を締切内提出**（ステレオ 9:59.50 / 48kHz / 24bit /
+−23.0 LUFS / TP −6.1 dBFS）。#546 の必須ループ（宣言→UI→音色→自動保存→復元→演奏）が
+本番の音色選定 6 パートでそのまま使われ、実運用で初めて検証された。
+
+#### やり残し・課題（棚卸し）
+
+| 項目 | 追跡先 | 状態 |
+|---|---|---|
+| 未レビューコミット3本の PR 化 + レビューフロー | `e88d759` / `e505e40` / `892ae2b` | 🔴 次セッション最優先 |
+| Codex #598 P1 WIP の検収（19ファイル未コミット・1 fail 同居） | #598 | 実装中 |
+| #603 正式修正（TEMP パッチが working tree に適用中） | #603 | 実戦検証済み・整形待ち |
+| one-shot RUN 終端の note-off 不達（VST 鳴り続け） | #606 | 新規 |
+| stop_engine の child kill 不全（消滅確認なし） | #607 | 新規 |
+| スタック全体 `@v` の仕様化 | #609 | owner 判断待ち |
+| diagnostics とエンジンパーサの乖離 | #610 | 新規 |
+| 7.1 の 8 ステム書き出し（本選 10/28 上演用） | #598 | P0 完了・P1 実装中 |
+| gong の Kontakt 化 | 作品側 GONG_AS_INSTRUMENT 実装済み | state 待ち |
+
+セッション詳細は Serena `session_2026-08-01_soundcinema_submission_and_6layer_debug`。
+
+
 ### 6.351 fix(repl): 行途中の構文エラーを「複数行入力の途中」と誤判定して silent に永久停止する本丸バグを修正 (#608) (Aug 1, 2026)
 
 **Date**: 2026-08-01
