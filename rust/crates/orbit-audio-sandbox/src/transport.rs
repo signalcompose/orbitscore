@@ -80,6 +80,16 @@ pub fn slot_index(seq: u64) -> usize {
     seq as usize % SLOTS
 }
 
+/// evt seq に対応する slot のインデックス(`0..EVT_SLOTS`)。`evt_kind` / `evt_arg` の添字に使う。
+///
+/// [`slot_index`] と式は同じだが定数が違う([`EVT_SLOTS`] は close cycle の占有上限から、
+/// [`SLOTS`] は pipeline 深さから導出される別物)。裸の `% EVT_SLOTS` を散らさず本関数に集約し、
+/// 「定数 1 つと関数 1 つを変えれば slot 割り当てが切り替わる」構造を evt 側でも保つ。
+#[inline]
+pub fn evt_slot_index(seq: u64) -> usize {
+    seq as usize % EVT_SLOTS
+}
+
 /// seq に対応する slot の開始要素オフセット(ping-pong: `seq % SLOTS` で [`SLOTS`] 個を循環)。
 /// host / child の双方がこれで `input` / `output` を index する(モード非依存)。
 #[inline]
@@ -283,6 +293,12 @@ pub use evt_sync::{MonotoneEpoch, ReleaseAcquireSeq};
 /// 呼び出し箇所の逸脱を検出できない）ため、**呼び出し箇所が Ordering を渡せない API** に固定する:
 /// 内部の `AtomicU64` は本 submodule の外から不可視なので、
 /// `evt_seq.store(seq, Ordering::Relaxed)` のような逸脱は**コンパイルできない**。
+///
+/// **既存の atomic フィールドには適用していない**（`cmd_seq` / `cmd_ack_seq` /
+/// `seq_request` / `seq_tag` 等は生の `AtomicU64` のままで、呼び出し箇所ごとに Ordering を
+/// 手書きする）。同型へ揃えるかは別工程 — `seq_request` / `seq_tag` は audio hot path が
+/// 触るため、本 PR（#474 P2）の差分から大きくはみ出す。**新しい部分だけ守った状態である**
+/// ことを承知の上での段階的導入であり、既存側が安全でないという意味ではない。
 mod evt_sync {
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -389,12 +405,10 @@ impl EventRingChild {
         Ok(())
     }
 
+    /// まだ shm へ publish できていない取りこぼし不可イベントの件数。
+    /// 0 は「保留なし」を意味する(`is_empty` は同じ状態の別表現になるため置かない)。
     pub fn pending_len(&self) -> usize {
         self.pending.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.pending.is_empty()
     }
 
     /// slot が空く限り保留イベントを seq 順に publish する。
@@ -421,7 +435,7 @@ impl EventRingChild {
                 break;
             }
 
-            let index = seq as usize % EVT_SLOTS;
+            let index = evt_slot_index(seq);
             unsafe {
                 (*region).evt_kind[index].store(event.kind, Ordering::Relaxed);
                 std::ptr::write(std::ptr::addr_of_mut!((*region).evt_arg[index]), event.arg);
@@ -494,7 +508,7 @@ impl EventRingHost {
             }
 
             let seq = ack + 1;
-            let index = seq as usize % EVT_SLOTS;
+            let index = evt_slot_index(seq);
             let event = EventRingEvent {
                 seq,
                 kind: unsafe { (*region).evt_kind[index].load(Ordering::Relaxed) },
@@ -1616,8 +1630,8 @@ mod tests {
             "EVT_SLOTS=2 must accept both close-cycle events before either ack"
         );
         assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 0);
-        let first_index = 1usize % EVT_SLOTS;
-        let second_index = 2usize % EVT_SLOTS;
+        let first_index = evt_slot_index(1);
+        let second_index = evt_slot_index(2);
         assert_ne!(
             first_index, second_index,
             "consecutive unacked events must occupy distinct slots"
@@ -1732,9 +1746,9 @@ mod tests {
         );
         unsafe { (*region).evt_ack_seq.publish(1) };
         assert_eq!(unsafe { child.service(region) }.expect("retry tick"), 1);
-        assert!(child.is_empty());
+        assert_eq!(child.pending_len(), 0, "retry must drain the pending queue");
         assert_eq!(unsafe { (*region).evt_seq.read() }, 3);
-        let third_index = 3usize % EVT_SLOTS;
+        let third_index = evt_slot_index(3);
         assert_eq!(
             unsafe { read_cstr_field(&(*region).evt_arg[third_index]) },
             Some("cycle-2-start")

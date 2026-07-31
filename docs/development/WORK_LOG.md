@@ -17,6 +17,51 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.338 refactor(rust): #474 P2 の /simplify — slot index を関数化し、段階導入を明記した (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474（P2 の cleanup）/ **Branch**: `474-plugin-ui-p2-evt-ring`
+**Status**: 挙動不変。`cargo test -p orbit-audio-sandbox` = 80 passed / 0 failed、fmt / clippy clean
+
+`/simplify` の4エージェントのうち **Efficiency と Altitude は週次上限で失敗**したため、
+その2観点は main が直接評価した（数ステップで済む範囲であり、再委譲しない判断）。
+
+#### 適用（3件）
+
+1. **`evt_slot_index(seq)` を新設**（Reuse + Simplification が独立に指摘）。
+   `seq as usize % EVT_SLOTS` が本体2箇所 + テスト3箇所に裸で散っていた。既存 `slot_index(seq)`
+   が確立している「定数1つと関数1つを変えれば slot 割り当てが切り替わる」構造から evt 側だけ
+   外れており、`SLOTS` 側の式を変えても追随せず**黙って乖離**しうる状態だった
+2. **`EventRingChild::is_empty` を削除**（Simplification）。`pending_len() == 0` と同じ状態の
+   別表現で、公開 API 面が1つ増えていた。テストのアサーションも
+   `assert_eq!(child.pending_len(), 0, ...)` へ（メッセージ付きで意図も明示）
+3. **`evt_sync` の doc に段階導入であることを明記**（Altitude・main の評価）。
+   Ordering 封印が `cmd_*` / `seq_request` / `seq_tag` には**適用されていない**。
+   `seq_request` / `seq_tag` は audio hot path が触るため本 PR の差分から大きくはみ出す。
+   **「新しい部分だけ守った」状態であることを承知の上での段階的導入**だと書き残した
+   （既存側が安全でないという意味ではない旨も併記）
+
+#### 🔴 却下した自分の懸念（Efficiency）
+
+main は「`EventRingHost::poll` / `observe_dirty_epoch` が**呼ばれるたびに `open_shared()` で
+mmap し直している**」を懸念として挙げていたが、**既存 `CommandMailboxHost` と比較したら逆だった** —
+同 struct も `shm_path` だけを保持し、各メソッド（`:704` / `:726` / `:858`）で同様に開き直している。
+`EventRingHost` は**確立された既存パターンに従っている**のであって逸脱ではない。
+むしろ mmap を保持すると、respawn 間で shm が再利用される設計との整合を新たに考える必要が出る。
+
+#### 🔴 main が立てた前提の誤り（記録として残す）
+
+Reuse エージェントへ「`CommandMailboxChild` と `EventRingChild` の重複を見よ」と指示したが、
+**`CommandMailboxChild` という struct は実在しない**（child 側は `service_command_mailbox` という
+free function）。さらに意味論も異なる — command mailbox は **host 起点・単一 in-flight**、
+evt リングは **child 起点・複数 in-flight・lossless queue**。差分を読んで立てた仮説の方が雑だった。
+
+**変更ファイル**: `rust/crates/orbit-audio-sandbox/src/transport.rs`
+
+**Commit**: `28b993d`
+
+---
+
 ### 6.337 feat(rust): #474 P2 — evt リング + dirty_epoch。ordering を型で封印した (Jul 30, 2026)
 
 **Date**: 2026-07-30
