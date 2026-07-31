@@ -17,10 +17,10 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.351 fix(repl): 行途中の構文エラーを「複数行入力の途中」と誤判定して silent に永久停止する本丸バグを修正 (#607) (Aug 1, 2026)
+### 6.351 fix(repl): 行途中の構文エラーを「複数行入力の途中」と誤判定して silent に永久停止する本丸バグを修正 (#608) (Aug 1, 2026)
 
 **Date**: 2026-08-01
-**Issue**: #607 / **Commit**: `892ae2b`
+**Issue**: #608 / **Commit**: `892ae2b`（コミット内 Refs #607 は当時未採番の誤記・正は #608）
 **Status**: 新規 3 テスト passed・変異 3 種 red 確認・full suite 1917 passed（+5）
 
 #### 事故と診断過程
@@ -67,10 +67,10 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 2. **拡張の diagnostics とエンジンパーサの乖離** — `[...]@v` を diagnostics は
    受理し、エンジンは弾く。診断がパーサと同じ文法を見ていない（別 issue 化予定）
 
-### 6.350 fix(repl): 詰まった評価キューを沈黙させず、塞いでいる行を名指しさせる (#607) (Aug 1, 2026)
+### 6.350 fix(repl): 詰まった評価キューを沈黙させず、塞いでいる行を名指しさせる (#608) (Aug 1, 2026)
 
 **Date**: 2026-08-01
-**Issue**: #607
+**Issue**: #608（コミット内 Refs #607 は当時未採番の誤記）
 **Status**: 新規 2 テスト passed・変異検証 4 種（うち 1 種が生き残ったのでテストを追加して潰した）
 
 #### 症状
