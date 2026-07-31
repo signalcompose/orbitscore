@@ -4,6 +4,7 @@
 //! P3b can implement that trait with AppKit/VST3/CLAP calls without putting any of
 //! those dependencies into the transition logic tested here.
 
+use std::borrow::Cow;
 use std::time::Duration;
 
 /// Detail returned when `OPEN_UI` arrives before the previous close cycle drains.
@@ -36,30 +37,26 @@ pub enum UiEvent {
 }
 
 /// Result returned to the command mailbox handler.
+///
+/// 🔴 **`transport::CommandOutcome` には統合しない。** あちらは doc どおり
+/// 「`detail` = 失敗理由。成功時は空」という意味論で、`CMD_SAVE_STATE` がその契約に乗っている。
+/// 一方 spec (UIH.4c) は `Closing` / `Closed` 中の `CLOSE_UI` について
+/// **「no-op だが成功 ack を返す（`cmd_result=0` / `detail="already-closing"`）」**、つまり
+/// **成功時にも detail を持つこと**を要求する。統合すると既存コマンドの契約の意味論を変えることになる。
+///
+/// P3b で mailbox へ載せる際の変換は `success` → `CMD_RESULT_OK` / それ以外、の単純マップでよい。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandAck {
     pub success: bool,
-    pub detail: String,
+    pub detail: Cow<'static, str>,
 }
 
 impl CommandAck {
-    fn accepted() -> Self {
+    /// `detail` は `&'static str`（静的メッセージ）でも `String`（プラグイン由来の動的な理由）でも
+    /// 受ける。静的側は [`Cow::Borrowed`] のままなのでヒープ確保が起きない。
+    fn new(success: bool, detail: impl Into<Cow<'static, str>>) -> Self {
         Self {
-            success: true,
-            detail: String::new(),
-        }
-    }
-
-    fn success_with_detail(detail: &'static str) -> Self {
-        Self {
-            success: true,
-            detail: detail.to_owned(),
-        }
-    }
-
-    fn failure(detail: impl Into<String>) -> Self {
-        Self {
-            success: false,
+            success,
             detail: detail.into(),
         }
     }
@@ -152,15 +149,15 @@ impl UiCloseStateMachine {
     /// reports pending count zero with equal ack/publish cursors.
     pub fn open_command(&mut self, actions: &mut impl UiHostActions) -> CommandAck {
         if !matches!(self.state, MachineState::Closed) || !actions.is_event_ring_drained() {
-            return CommandAck::failure(CLOSING_IN_PROGRESS_DETAIL);
+            return CommandAck::new(false, CLOSING_IN_PROGRESS_DETAIL);
         }
 
         match actions.open_ui() {
             Ok(()) => {
                 self.state = MachineState::Open;
-                CommandAck::accepted()
+                CommandAck::new(true, "")
             }
-            Err(detail) => CommandAck::failure(detail),
+            Err(detail) => CommandAck::new(false, detail),
         }
     }
 
@@ -178,9 +175,9 @@ impl UiCloseStateMachine {
     /// Duplicate commands in `Closing` or `Closed` still receive a successful ack.
     pub fn close_command(&mut self, now: Duration, actions: &mut impl UiHostActions) -> CommandAck {
         match self.begin_close(now, false, actions) {
-            CloseRequestDisposition::Started => CommandAck::accepted(),
+            CloseRequestDisposition::Started => CommandAck::new(true, ""),
             CloseRequestDisposition::AlreadyClosing => {
-                CommandAck::success_with_detail(ALREADY_CLOSING_DETAIL)
+                CommandAck::new(true, ALREADY_CLOSING_DETAIL)
             }
         }
     }
@@ -259,16 +256,15 @@ impl UiCloseStateMachine {
             return CloseRequestDisposition::AlreadyClosing;
         }
 
-        // Enter Closing before invoking the non-blocking event seam. The command path
-        // returns its acceptance ack immediately after this function returns.
+        // The seam is non-blocking and does not reenter the machine, so the sequence can
+        // be resolved before the transition instead of patching the state afterwards.
+        // A `None` here just means the ring was full; `tick` retries it.
+        let ui_closed_seq = actions.try_publish_event(UiEvent::UiClosed);
         self.state = MachineState::Closing(ClosingState {
             started_at: now,
             was_destroyed,
-            ui_closed_seq: None,
+            ui_closed_seq,
         });
-        if let MachineState::Closing(closing) = &mut self.state {
-            closing.ui_closed_seq = actions.try_publish_event(UiEvent::UiClosed);
-        }
         CloseRequestDisposition::Started
     }
 

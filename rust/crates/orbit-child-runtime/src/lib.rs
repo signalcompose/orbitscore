@@ -20,6 +20,13 @@ use thiserror::Error;
 /// responsive enough for UI commands.
 pub const MAIN_TICK_INTERVAL: Duration = Duration::from_millis(20);
 
+/// 再入スキップの診断行を出す間隔（スキップ回数単位）。
+///
+/// [`MAIN_TICK_INTERVAL`] が 20ms なので 50 スキップ ≒ 1 秒。nested runloop が続く間、
+/// 毎 tick 書くと 1 秒あたり 50 回の未バッファ書き込みになる — 初回 + 1 秒ごとで
+/// 「今も再入している」ことは十分伝わる。
+const REENTRANT_TICK_LOG_EVERY: u64 = 50;
+
 #[cfg(any(target_os = "macos", test))]
 fn try_call_main_service<S>(service: &RefCell<S>) -> Result<bool, BorrowMutError>
 where
@@ -264,10 +271,19 @@ mod appkit {
                         // Child stderr is inherited by the daemon in both effect and
                         // instrument supervisors, so the cumulative count is visible
                         // to the host even though child tracing has no subscriber.
-                        eprintln!(
-                            "[orbit-child-runtime] skipped reentrant main-runloop tick; \
-                             skipped_ticks={skipped}"
-                        );
+                        //
+                        // 🔴 Rate-limited: a nested runloop (modal sheet, live resize,
+                        // drag tracking) can hold the borrow for seconds, and this tick
+                        // runs every 20ms. Logging unconditionally would emit ~50
+                        // unbuffered writes per second for the whole interaction. The
+                        // first skip announces the condition; every REENTRANT_TICK_LOG_EVERY
+                        // skips after that keeps the cumulative count fresh.
+                        if skipped == 1 || skipped.is_multiple_of(crate::REENTRANT_TICK_LOG_EVERY) {
+                            eprintln!(
+                                "[orbit-child-runtime] skipped reentrant main-runloop tick; \
+                                 skipped_ticks={skipped}"
+                            );
+                        }
                         return;
                     }
                     Err(_) => {
