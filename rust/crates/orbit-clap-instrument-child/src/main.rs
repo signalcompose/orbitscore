@@ -6,13 +6,13 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
 use anyhow::{bail, Context, Result};
-use orbit_audio_sandbox::transport::{save_state_command, service_command_mailbox, CMD_SAVE_STATE};
 use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
-    ParentWatch, SharedRegion, BUF_LEN, CHANNELS, CMD_CLOSE_UI, CMD_OPEN_UI, CONTROL_QUIT,
-    MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
+    ParentWatch, SharedRegion, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
 };
-use orbit_child_runtime::{child_should_quit, run_child, UiCallbacks, UiService};
+use orbit_child_runtime::{
+    child_should_quit, run_child, service_child_main, UiCallbacks, UiService,
+};
 use orbit_clap_host::{push_neutral_event, ClapInstrumentProcessor, EventBuffer};
 
 struct Args {
@@ -212,19 +212,8 @@ fn main() -> Result<()> {
     let process_errors = run_child(
         "orbit-clap-instrument-child",
         || unsafe { child_should_quit(region, &parent_watch) },
-        || {
-            // Mailbox servicing is confined to the AppKit main runloop.
-            unsafe {
-                service_command_mailbox(region, |kind, arg| match kind {
-                    CMD_SAVE_STATE => Some(save_state_command(arg, || {
-                        main.with_mut(|main| main.capture_state())
-                    })),
-                    CMD_OPEN_UI | CMD_CLOSE_UI => Some(ui.handle_command(kind, arg)),
-                    _ => None,
-                });
-            }
-            ui.tick(ui.now());
-            false
+        || unsafe {
+            service_child_main(region, &ui, || main.with_mut(|main| main.capture_state()))
         },
         move |stop_audio| {
             let region = region_addr as *mut SharedRegion;

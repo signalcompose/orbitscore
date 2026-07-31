@@ -52,23 +52,6 @@ use crate::host::OrbitClapHost;
 use crate::processor::process_block_core;
 use crate::ClapPluginMain;
 
-/// Child processes host a plugin UI, so they must advertise `HostGui`.
-///
-/// 🔴 **P3b-2 completion condition.** The unit test below pins this function's body, but
-/// nothing pins the *call site* to this function: replacing the argument at the `load`
-/// call with `HostCallbackConfig::in_process(..)` compiles and leaves all 28 tests green
-/// (verified by mutation on 2026-07-31). `in_process` and `child` return the same type,
-/// so the swap is invisible to the compiler — the sibling-swap class this project has
-/// already shipped once.
-///
-/// The gap is unreachable today because nothing consumes the host GUI callbacks yet.
-/// P3b-2 wires `closed()` / `request_resize()` into the close state machine, and its test
-/// that a plugin-initiated close reaches the machine must run through the real `load`
-/// path, which binds the call site for the first time.
-fn child_host_callback_config() -> HostCallbackConfig {
-    HostCallbackConfig::child()
-}
-
 /// 単一スレッドで load / process / drop する effect-only CLAP プロセッサ。
 ///
 /// `!Send`（[`PluginInstance`] を含む）。生成したスレッド上でのみ使うこと。
@@ -113,7 +96,7 @@ impl ClapEffectProcessor {
             sample_rate,
             channels,
             max_frames,
-            child_host_callback_config(),
+            HostCallbackConfig::child(),
         )?;
 
         let mut processor = Self {
@@ -256,11 +239,6 @@ mod tests {
     fn audio_half_is_send() {
         fn assert_send<T: Send>() {}
         assert_send::<ClapEffectAudio>();
-    }
-
-    #[test]
-    fn child_path_advertises_gui_callbacks() {
-        assert!(child_host_callback_config().gui_callbacks_enabled());
     }
 
     #[test]

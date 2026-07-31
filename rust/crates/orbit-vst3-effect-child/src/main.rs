@@ -22,12 +22,13 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use anyhow::{bail, Context, Result};
 #[cfg(target_os = "macos")]
 use orbit_audio_sandbox::{
-    open_shared, region_ptr, save_state_command, service_command_mailbox, slot_index, slot_offset,
-    ParentWatch, BUF_LEN, CHANNELS, CMD_CLOSE_UI, CMD_OPEN_UI, CMD_SAVE_STATE, CONTROL_QUIT,
+    open_shared, region_ptr, slot_index, slot_offset, ParentWatch, BUF_LEN, CHANNELS, CONTROL_QUIT,
     MAX_FRAMES,
 };
 #[cfg(target_os = "macos")]
-use orbit_child_runtime::{child_should_quit, run_child, UiCallbacks, UiService};
+use orbit_child_runtime::{
+    child_should_quit, run_child, service_child_main, UiCallbacks, UiService,
+};
 #[cfg(target_os = "macos")]
 use orbit_vst3_host::Vst3EffectProcessor;
 
@@ -117,18 +118,8 @@ fn main() -> Result<()> {
     let process_errors = run_child(
         "orbit-vst3-effect-child",
         || unsafe { child_should_quit(region, &parent_watch) },
-        || {
-            unsafe {
-                service_command_mailbox(region, |kind, arg| match kind {
-                    CMD_SAVE_STATE => Some(save_state_command(arg, || {
-                        main.with_mut(|main| main.capture_state())
-                    })),
-                    CMD_OPEN_UI | CMD_CLOSE_UI => Some(ui.handle_command(kind, arg)),
-                    _ => None,
-                });
-            }
-            ui.tick(ui.now());
-            false
+        || unsafe {
+            service_child_main(region, &ui, || main.with_mut(|main| main.capture_state()))
         },
         move |stop_audio| {
             let region = region_addr as *mut orbit_audio_sandbox::SharedRegion;

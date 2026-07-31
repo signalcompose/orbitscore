@@ -39,6 +39,40 @@ pub unsafe fn child_should_quit(
     )
 }
 
+/// Shared `run_child` main-service body used by all plugin child binaries.
+///
+/// Services one mailbox command and advances the UI close state machine. Returns `false`
+/// because the mailbox never asks the child to stop — teardown arrives through
+/// [`child_should_quit`] instead.
+///
+/// Both the command vocabulary and the tick contract live here rather than in each
+/// `main.rs`: the four children differ only in how they capture plugin state, and a
+/// per-child copy of this body drifts as soon as a fifth command kind appears.
+///
+/// # Safety
+/// `region` must point to a live mapped [`orbit_audio_sandbox::SharedRegion`], and this must
+/// run on the process main thread (mailbox servicing is main-thread-only after #474 P1 —
+/// `CMD_SAVE_STATE` may block on plugin serialization and fsync without stalling audio).
+pub unsafe fn service_child_main<E: std::fmt::Display>(
+    region: *mut orbit_audio_sandbox::SharedRegion,
+    ui: &UiService,
+    capture_state: impl FnOnce() -> Result<Vec<u8>, E>,
+) -> bool {
+    unsafe {
+        orbit_audio_sandbox::service_command_mailbox(region, |kind, arg| match kind {
+            orbit_audio_sandbox::CMD_SAVE_STATE => {
+                Some(orbit_audio_sandbox::save_state_command(arg, capture_state))
+            }
+            orbit_audio_sandbox::CMD_OPEN_UI | orbit_audio_sandbox::CMD_CLOSE_UI => {
+                Some(ui.handle_command(kind, arg))
+            }
+            _ => None,
+        });
+    }
+    ui.tick(ui.now());
+    false
+}
+
 /// Main-runloop service interval. Mailbox commands and liveness changes are
 /// control-plane work, so 20 ms avoids a busy main thread while remaining
 /// responsive enough for UI commands.

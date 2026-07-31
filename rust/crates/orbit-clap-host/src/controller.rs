@@ -99,6 +99,18 @@ impl HostCallbackConfig {
         }
     }
 
+    /// Out-of-process children host a plugin UI, so they must advertise `HostGui`.
+    ///
+    /// 🔴 **P3b-2 completion condition.** The unit test below pins this constructor's body,
+    /// but nothing pins the *call sites* to it: replacing the argument at either `load` call
+    /// with [`HostCallbackConfig::in_process`] compiles and leaves all tests green (verified
+    /// by mutation on 2026-07-31). Both constructors return the same type, so the swap is
+    /// invisible to the compiler — the sibling-swap class this project has already shipped once.
+    ///
+    /// The gap is unreachable today because nothing consumes the host GUI callbacks yet.
+    /// P3b-2 wires `closed()` / `request_resize()` into the close state machine, and its test
+    /// that a plugin-initiated close reaches the machine must run through the real `load` path,
+    /// which binds the call sites for the first time.
     pub(crate) fn child() -> Self {
         Self {
             callback_requested: Arc::new(AtomicBool::new(false)),
@@ -368,6 +380,20 @@ fn query_note_port_index(instance: &mut PluginInstance<OrbitClapHost>) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The child path must advertise `HostGui`; the in-process daemon path must not.
+    ///
+    /// Both assertions are needed: pinning only the child side lets a constructor that always
+    /// enables callbacks pass, which would silently start advertising GUI on the daemon path.
+    #[test]
+    fn child_enables_gui_callbacks_and_in_process_does_not() {
+        assert!(HostCallbackConfig::child().gui_callbacks_enabled());
+        assert!(!HostCallbackConfig::in_process(
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicU64::new(0))
+        )
+        .gui_callbacks_enabled());
+    }
 
     #[test]
     fn daemon_path_does_not_advertise_gui_callbacks() {
