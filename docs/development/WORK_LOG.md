@@ -17,6 +17,97 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.345 chore(rust): #474 P3b — CI 5往復・/simplify・レビューラウンド1 (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474 / **PR**: #596 / **Branch**: `474-plugin-ui-p3b1-gui-endpoint`
+**Status**: `cargo test --workspace`（sandbox 外）= **462 passed / 0 failed / 26 ignored**・CI 全緑
+
+6.343 / 6.344 の後に積んだ9コミット分。**個々の commit が WORK_LOG に無い状態を作っていた**
+（comment-analyzer の指摘 I2）。以下に集約する。
+
+| commit | 内容 |
+|---|---|
+| `b05538c` | spec: cocoa で `set_scale` を呼ばない（CLAP 原文を逐語確認） |
+| `373e3bc` | `/simplify` 適用 |
+| `4e6c66c` `9f2b494` `9d727fa` `335ee50` `0871898` | CI（Linux）5往復の修正 |
+| `b1f1fe3` | 先送り2件を消せる条件つきで登記 |
+| `6cb4b05` | レビューラウンド1 の Important 2件 |
+
+#### `/simplify`（4観点・適用3件）
+
+- **4 child の tick クロージャが一字一句同一** → `service_child_main` に集約（各13行 → 3行）。
+  同じ PR で `child_should_quit` は集約済みだったのに tick 本体は複製のままで一貫していなかった
+- **`child_host_callback_config()` の重複** → `HostCallbackConfig::child()` の doc に統合
+  （reuse / altitude / simplification の**3観点が独立に指摘**）。
+  🔴 **2つの doc は既に drift していた** — 片方に変異の実測結果、もう片方は「同じ注記を見よ」
+- 統合テストを**両方向**に強化（元は child 側しか見ておらず「常に有効を返す」実装でも通った）
+
+見送り6件は理由つきで commit に記録（`core-foundation-sys` 置換は対応する sys crate が
+無く手書き FFI が残るため等）。
+
+#### 🔴 CI が5回落ちた — すべて**先行するエラーに隠されていた別の層**
+
+| 回 | 失敗 | 見えなかった理由 |
+|---|---|---|
+| 1 | `orbit-child-runtime` の Linux 死にコード3件 | — |
+| 2 | CLAP child に cfg ゲートが1つも無い | 1回目が**依存クレートで止まり** child まで到達せず |
+| 3 | CLAP のテストモジュールが `#[cfg(test)]` のみ | 2回目が**非テストビルドで止まり**テストまで到達せず |
+| 4 | `unsafe fn` の項目2件が未ゲート | 3回目で止まっていた |
+| 5 | gated テストの `#![cfg]` でカスタム `main` が消える | 4回目で止まっていた |
+
+**私の修正で壊れたものは1つも無い。** P3b-2 の時点から Linux で壊れており、
+CI が1件目で止まるため往復1回につき1件しか見えなかった。
+
+#### 🔴 往復の真因は「ローカルで Linux を再現できていなかった」こと
+
+正しい形は
+
+```
+cargo clippy -p orbit-child-runtime --all-targets --target x86_64-unknown-linux-gnu --locked -- -D warnings
+```
+
+これで**1回で2件同時に見えた**。それまでの検証はすべて弱かった:
+
+| 試み | なぜ無効だったか |
+|---|---|
+| workspace 全体を Linux ターゲットで | `alsa-sys` で止まり対象まで到達しない |
+| `-p orbit-child-runtime --lib` | 🔴 **`--lib` はテストを含まない**。テスト側の失敗はそこに出ない |
+| 静的な cfg 照合「4 child すべて 0 件」 | 🔴 照合式が `unsafe fn` / `unsafe extern` を捉えていなかった |
+
+🔴 **0 件という結果は、「対象が無い」と「対象を見ていない」を区別しない。**
+同様に、macOS で回した clippy は `-D warnings` も `--locked` も feature 別も無く、
+**CI より弱い条件での測定**だった。
+
+#### レビューラウンド1（`/code:pr-review-team` + Fable 監査を並行）
+
+**Fable**（差分に**無い**もの）:
+- A-1 `resize_hints_changed` の no-op。コメントの「P3b-2 で実装」という期限が
+  **この PR の中で満了**していた → owner 裁定で**実装せず、消せる条件つきで登記**
+- A-2 ウィンドウタイトル（Q6・承認済み）未実装 → 同上（P4 で `cmd_arg` に載せる）
+- 🔴 **残余登記2件が実態より古い**と指摘 → 確認すると**どちらもこの PR 自身で履行済み**だった
+
+**silent-failure-hunter**:
+- 🔴 **孤児検知の stderr 出力が4 child すべてから消えていた**。`child_should_quit` への
+  共通化で移植されなかった。child には `tracing` subscriber が無く **stderr が唯一の観測経路**
+  なので、唯一の観測経路を削っていた。
+  → 根本原因は `bool` を返していたことなので `QuitReason { HostRequested, ParentDied }` に変更。
+  **型で区別されていなければ、落ちてもコンパイラは何も言わない**
+
+**code-reviewer**:
+- 🔴 gain oracle フィクスチャの**固定パス競合**（素の workspace で2回・並行で **8/8 中 5** 再現）。
+  対策（pid 付きスロットの `package_bundle()`）は**既に存在**し synth oracle は使っていたが、
+  この PR の新テストだけが直叩きしていた
+- レビュー中に**私が作業ツリーを編集した**ことも正しく指摘された。次から指摘が出揃うまで触らない
+
+**comment-analyzer**:
+- Critical 3件は**すべて WORK_LOG の記述**（本エントリで是正）。
+  一方 **SDK 引用（`iplugview.h:146` 等）と Rust ソース内のコメントは全件正確**と確認された
+
+**変更ファイル**: 上表の9コミット分
+
+---
+
 ### 6.344 feat(rust): #474 P3b-2 — NSWindow を実配線し、実在を OS に問い合わせて証明した (Jul 31, 2026)
 
 **Date**: 2026-07-31
@@ -86,9 +177,15 @@ main が**合成箇所**（`|| parent_watch.should_exit()` → `false`）を突�
 **21 件全部が緑のまま通った**。既存テストは自前のクロージャを注入しており、
 `child_should_quit` が本物の `ParentWatch` を渡すことは誰も縛っていなかった。
 
-**CLAP の `HostCallbackConfig` と同種だが深刻度が違う** — あちらは消費者が居ないので
-到達不能（P3b-2 の完了条件として登記）。こちらは **4 child すべての production 経路**で、
+**CLAP の `HostCallbackConfig` と同種**。こちらは **4 child すべての production 経路**で、
 壊れれば孤児 child が生き残る（#448）。
+
+> 🔴 **執筆時この節は CLAP 側を「消費者が居ないので到達不能・P3b-2 の完了条件として登記」と
+> 書いていたが誤り**（Fable 監査で判明・commit `9d727fa` で是正）。**その P3b-2 は本エントリが
+> 記述しているコミット自身**で、`take_closed` / `take_requested_size` を実 `load` 経路へ配線し
+> `real_load_path_delivers_plugin_initiated_close_to_main_half` も同時に追加している。
+> つまり**同じコミットが埋めたギャップを「未解決」と書いていた**。
+> 変異で裏取り済み（`effect.rs` の call site を `in_process` に差し替えると当該1件だけ FAILED）。
 
 対処: `ParentWatch::orphaned_for_tests()` を追加（ありえない pid を記録して
 「親が死んだ」分岐を到達可能にする）。テストは `control` を `CONTROL_RUN` のままにするので、
@@ -138,7 +235,7 @@ VST3 の editor 取得は**順序そのものが規格要件**である。SDK �
 
 - `orbit-child-ui`: `PluginUiEndpoint` trait + `UiSize`。**依存ゼロを維持**し、
   親ビューは `*mut c_void` で受ける（AppKit も vst3 crate も入れない）
-- `orbit-vst3-host/src/view.rs`（新規 292行）: `IPlugView` + `IPlugFrame`。
+- `orbit-vst3-host/src/view.rs`（新規 299行）: `IPlugView` + `IPlugFrame`。
   `resizeView` を受けたら**同一 callstack 内で** `onSize` を呼び返す（`iplugview.h:112-114`）
 - `orbit-vst3-synth-oracle`: 呼び出しを順序込みで記録する `IPlugView` スタブ（+208行）。
   NSView は作らない（`attached` は記録して `kResultOk` を返すだけで足りる）
@@ -340,8 +437,25 @@ failed to load oracle bundle .../GainOracle.vst3: missing symbol: GetPluginFacto
 - **単独実行 ×3 はすべて 11 passed**
 - **workspace 再実行は 440 passed / 0 failed**
 
-Codex が変異検証で `cargo clean -p` を繰り返した結果、**VST3 フィクスチャの再生成と使用が
-競合**したもの。実装起因ではない。
+当時は「Codex が変異検証で `cargo clean -p` を繰り返した結果、VST3 フィクスチャの再生成と
+使用が競合したもの。実装起因ではない」と結論した。
+
+#### 🔴 上の診断は誤りだった（同日中にレビューで判明・commit `6cb4b05`）
+
+**真因はこの PR が持ち込んだ固定パス競合**。`ui_endpoint.rs` の `gain_oracle_bundle()` が
+`package-oracle.sh` を**引数なしで**叩き、固定パス `target/vst3-fixtures/GainOracle.vst3` へ
+`rm -rf` / `cp` していた。同じパスを別クレートのテストが**別プロセス**から叩くため、
+一方の `rm -rf` が他方の `cp` を追い越す。
+
+code-reviewer が素の `cargo test --workspace` で2回再現し、3バイナリ並行実行で
+**8回中5回**失敗させた。
+
+🔴 **「単独3回 green だから環境起因」という切り分けが誤りだった。**
+単独実行では**原理的に起きない**競合なので、その観測は仮説を否定できない。
+「再現しない = 環境のせい」と読んだのが誤りで、正しくは「その実験は競合を検出できない」。
+
+対策は既に存在していた（`orbit_vst3_gain_oracle::package_bundle()` の pid 付きスロット・
+synth oracle 側は使用済み）。この PR の新テストだけが使っていなかった。
 
 #### レビューラウンド1（PR #594）と fix R1
 
