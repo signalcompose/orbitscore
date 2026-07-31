@@ -79,11 +79,29 @@ pub enum CloseRequestDisposition {
 /// `is_event_ring_drained` includes both child-local pending events and shared-memory
 /// cursors. For an `orbit_audio_sandbox::transport::EventRingChild` adapter, it maps
 /// directly to `EventRingChild::is_drained`.
+///
+/// # P3b adapter requirements
+///
+/// - `destroy_window` must use AppKit's `close()`; it must not use `performClose:`,
+///   because Phase B calls it before the machine transitions to [`UiState::Closed`].
+/// - UI events must be published only through `try_publish_event`. Publishing through
+///   another path breaks the retained-event retry contract and can duplicate
+///   `UI_CLOSED_DONE`.
+/// - Every `now` passed to this machine must come from one monotonic, `Instant`-based
+///   clock. Wall-clock values and non-monotonic values must not be used.
+/// - Opening a real window makes the main-runloop tick reentrant (modal sheets, live
+///   resize, drag tracking). While a tick is reentrant the child's `service_main` is
+///   skipped, so `ParentWatch::should_exit` — the orphan guard from #448 — is not
+///   evaluated. `CONTROL_QUIT` already survives this via `run_child`'s `should_quit`
+///   predicate; the orphan case does not. P3b must extend that predicate to cover
+///   parent death before the first window can be shown, otherwise a daemon crash
+///   during a modal sheet leaves the child alive holding its plugin.
 pub trait UiHostActions {
     /// Create and show the UI. P3b supplies the format-specific implementation.
     fn open_ui(&mut self) -> Result<(), String>;
 
     /// Try to publish one lossless event, returning its own ring sequence on success.
+    /// This is the only permitted publication path for UI events.
     fn try_publish_event(&mut self, event: UiEvent) -> Option<u64>;
 
     /// Acquire-read the latest host-completed event sequence.
@@ -95,7 +113,8 @@ pub trait UiHostActions {
     /// Release the plugin-owned UI, respecting CLAP's `was_destroyed` distinction.
     fn release_plugin_ui(&mut self, was_destroyed: bool);
 
-    /// Destroy the child-owned window after plugin release.
+    /// Destroy the child-owned window after plugin release using AppKit's `close()`.
+    /// Implementations must not call `performClose:`.
     fn destroy_window(&mut self);
 }
 
@@ -164,6 +183,7 @@ impl UiCloseStateMachine {
     /// Entry path ①: AppKit's `windowShouldClose`.
     ///
     /// This always returns `false`: AppKit must not destroy the window before Phase B.
+    /// `now` must come from the machine's monotonic, `Instant`-based clock.
     pub fn window_should_close(&mut self, now: Duration, actions: &mut impl UiHostActions) -> bool {
         self.begin_close(now, false, actions);
         false
@@ -173,6 +193,7 @@ impl UiCloseStateMachine {
     ///
     /// The accepted ack is returned during Phase A, before waiting for the safepoint.
     /// Duplicate commands in `Closing` or `Closed` still receive a successful ack.
+    /// `now` must come from the machine's monotonic, `Instant`-based clock.
     pub fn close_command(&mut self, now: Duration, actions: &mut impl UiHostActions) -> CommandAck {
         match self.begin_close(now, false, actions) {
             CloseRequestDisposition::Started => CommandAck::new(true, ""),
@@ -184,6 +205,8 @@ impl UiCloseStateMachine {
 
     /// Entry path ③: CLAP's thread-safe `closed(was_destroyed)` callback after P3b
     /// marshals it to the main thread.
+    ///
+    /// `now` must come from the machine's monotonic, `Instant`-based clock.
     pub fn clap_closed(
         &mut self,
         was_destroyed: bool,
@@ -196,6 +219,8 @@ impl UiCloseStateMachine {
     /// Advance lossless publication retries and the asynchronous Phase B boundary.
     ///
     /// This method never waits. Call it once per child main-runloop service tick.
+    /// `now` must come from the same monotonic, `Instant`-based clock used by the
+    /// close-entry methods.
     pub fn tick(&mut self, now: Duration, actions: &mut impl UiHostActions) {
         if matches!(self.state, MachineState::Closed) {
             self.try_publish_close_events(actions);
@@ -236,6 +261,10 @@ impl UiCloseStateMachine {
             return;
         };
 
+        debug_assert!(
+            self.pending_done.is_none(),
+            "a prior UI_CLOSED_DONE must not be overwritten at the Phase B boundary"
+        );
         // Phase B ordering is normative: plugin release precedes parent-window destroy.
         actions.release_plugin_ui(was_destroyed);
         actions.destroy_window();
@@ -307,6 +336,7 @@ mod tests {
         next_seq: u64,
         published_seq: u64,
         ack_seq: u64,
+        open_error: Option<String>,
         publishing_enabled: bool,
         retained_event: Option<UiEvent>,
         calls: Vec<Call>,
@@ -318,6 +348,7 @@ mod tests {
                 next_seq: 1,
                 published_seq: 0,
                 ack_seq: 0,
+                open_error: None,
                 publishing_enabled: true,
                 retained_event: None,
                 calls: Vec::new(),
@@ -345,7 +376,10 @@ mod tests {
     impl UiHostActions for MockActions {
         fn open_ui(&mut self) -> Result<(), String> {
             self.calls.push(Call::Open);
-            Ok(())
+            match self.open_error.take() {
+                Some(detail) => Err(detail),
+                None => Ok(()),
+            }
         }
 
         fn try_publish_event(&mut self, event: UiEvent) -> Option<u64> {
@@ -383,6 +417,20 @@ mod tests {
         fn destroy_window(&mut self) {
             self.calls.push(Call::DestroyWindow);
         }
+    }
+
+    #[test]
+    fn open_failure_preserves_closed_state_and_propagates_detail() {
+        let mut actions = MockActions::drained();
+        actions.open_error = Some("plugin editor creation failed".to_owned());
+        let mut machine = UiCloseStateMachine::new(Duration::from_secs(10));
+
+        let ack = machine.open_command(&mut actions);
+
+        assert_eq!(machine.state(), UiState::Closed);
+        assert!(!ack.success);
+        assert_eq!(ack.detail, "plugin editor creation failed");
+        assert_eq!(actions.calls, vec![Call::Open]);
     }
 
     #[test]

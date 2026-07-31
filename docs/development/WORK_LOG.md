@@ -32,7 +32,7 @@ fixer の新方針（Codex + `--effort xhigh`）の初適用。
 
 #### 実装
 
-- **新 crate `orbit-child-ui`**（532行・プラットフォーム依存ゼロ）:
+- **新 crate `orbit-child-ui`**（576行・プラットフォーム依存ゼロ）:
   `Closed → Open → Closing → Closed`。閉じる3経路（閉じるボタン / `CLOSE_UI` /
   CLAP `closed()`）が**単一の `begin_close` 再入ガードに合流**する。
   AppKit 呼び出しと evt 投函は `UiHostActions` trait で差し替え可能
@@ -108,10 +108,62 @@ failed to load oracle bundle .../GainOracle.vst3: missing symbol: GetPluginFacto
 Codex が変異検証で `cargo clean -p` を繰り返した結果、**VST3 フィクスチャの再生成と使用が
 競合**したもの。実装起因ではない。
 
-**変更ファイル**: `rust/crates/orbit-child-ui/`（新規）/ `transport.rs` / `orbit-child-runtime/src/lib.rs` /
-`orbit-audio-sandbox/src/lib.rs` / `Cargo.toml` / `Cargo.lock`
+#### レビューラウンド1（PR #594）と fix R1
 
-**Commit**: PR（#474 P3a・作成予定）
+Fable 監査 + code-reviewer + silent-failure-hunter + comment-analyzer の4本。**Critical 1件**:
+
+> `/simplify` で入れた tick の `try_borrow_mut` 化が、**再入中に `CONTROL_QUIT` を検査しない**
+> 状態を作っていた。host は `CONTROL_QUIT` の **2秒後に無条件 SIGKILL**（`REAP_TIMEOUT`）する
+> ため、close handshake も `CMD_SAVE_STATE` も飛ぶ。「速い loud failure」を
+> 「**無音の停滞**」に置き換えた形になっていた。
+
+修正は `try_call_main_service` に `should_quit` 述語を追加し、**借用の取得より前に評価**する。
+再入時も `Err(_) if quit_requested => Ok(true)` で通常の停止手続きへ合流させる。
+4 child が `(*region).control.load(Relaxed) == CONTROL_QUIT` を渡す。
+
+**ログを足すだけの対処にしないこと**をブリーフで明示した。観測できるようにする修正ではなく、
+**機能を止めない**修正が要る場面だった。
+
+#### 🔴 Codex が68分停滞し、必須変異2件が未実行だった
+
+Codex は12種類の変異（drain の3連言・phase B・reentry guard・close ack・timeout）を
+red/green ペアで回した後、**11:44 を最後に68分無活動**。status は最後まで `verifying` を表示。
+**状態でなく中身を見ていたから気づけた**（ログの mtime と cargo プロセスの不在）。
+
+回した12件はすべて **P3a 既存テストの再検証**で、**fix R1 の新規テスト2件を殺した変異が1件も無かった**。
+検証は main の担当なので、キャンセルして main が実行:
+
+| 変異 | 殺したテスト | 結果 |
+|---|---|---|
+| 再入時の `Err(_) if quit_requested` 分岐を削除 | `reentrant_main_service_tick_still_observes_teardown_request` | 12 passed / 1 failed |
+| `Err` でも `MachineState::Open` へ遷移 | `open_failure_preserves_closed_state_and_propagates_detail` | 1 passed / 1 failed |
+| `detail` を固定文言にすり替え | 同上（`left: "ui open failed"` / `right: "plugin editor creation failed"`） | 1 passed / 1 failed |
+
+3件とも狙ったテストだけが red。復元は `cmp` で一致確認。復元後 workspace **442 passed / 0 failed**。
+
+#### 🔴 fix A は半分しか塞いでいない（→ P3b の完了条件）
+
+main の受け入れ検証で発見。`ParentWatch::should_exit`（orphan 対策 #448）は
+**`service_main` クロージャの内側**にあるため、再入 tick では評価されない。
+`CONTROL_QUIT` は fix A で救われたが、**親が `CONTROL_QUIT` を書かずに死ぬ経路は救われていない**。
+
+到達可能性を列挙で確認した結果、**現時点では production で起こらない**:
+
+| 列挙 | 結果 |
+|---|---|
+| `impl UiHostActions` | `MockActions` のみ（テスト） |
+| `CMD_OPEN_UI` | 定数と re-export のみ・ハンドラ無し |
+| `NSWindow` | workspace 全体で 0 ファイル |
+
+ウィンドウが無いので modal sheet / live resize が存在せず、再入 tick 自体が起きない。
+**実害が出るのは P3b から**なので P3a では直さず、**`UiHostActions` の
+`# P3b adapter requirements` に義務として書き込んだ**（先送りの回収先を、P3b 実装者が
+必ず読む場所に固定する）。
+
+**変更ファイル**: `rust/crates/orbit-child-ui/`（新規）/ `transport.rs` / `orbit-child-runtime/src/lib.rs` /
+`orbit-audio-sandbox/src/lib.rs` / 4 child の `main.rs` / `Cargo.toml` / `Cargo.lock`
+
+**Commit**: PR #594（#474 P3a）
 
 ---
 

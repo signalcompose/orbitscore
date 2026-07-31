@@ -28,12 +28,21 @@ pub const MAIN_TICK_INTERVAL: Duration = Duration::from_millis(20);
 const REENTRANT_TICK_LOG_EVERY: u64 = 50;
 
 #[cfg(any(target_os = "macos", test))]
-fn try_call_main_service<S>(service: &RefCell<S>) -> Result<bool, BorrowMutError>
+fn try_call_main_service<S, Q>(
+    service: &RefCell<S>,
+    should_quit: &Q,
+) -> Result<bool, BorrowMutError>
 where
     S: FnMut() -> bool,
+    Q: Fn() -> bool + ?Sized,
 {
-    let mut service = service.try_borrow_mut()?;
-    Ok((*service)())
+    let quit_requested = should_quit();
+    let mut service = match service.try_borrow_mut() {
+        Ok(service) => service,
+        Err(_) if quit_requested => return Ok(true),
+        Err(error) => return Err(error),
+    };
+    Ok((*service)() || quit_requested)
 }
 
 #[derive(Debug, Error)]
@@ -133,8 +142,10 @@ impl StopCoordinator {
 /// Run a plugin child with its control plane on the process main thread and
 /// its audio loop on a dedicated thread.
 ///
+/// `should_quit` reads `CONTROL_QUIT` without borrowing the main-thread service,
+/// so teardown remains observable during a reentrant main-runloop tick.
 /// `service_main` is invoked only by the main runloop timer. It should service
-/// the command mailbox, then return `true` for `CONTROL_QUIT` or parent death.
+/// the command mailbox, then return `true` for parent death or another stop request.
 /// `audio` receives a stop flag owned by this runtime; the audio loop should
 /// additionally check shared-memory `CONTROL_QUIT` with a Relaxed load so it
 /// can leave immediately without touching the mailbox.
@@ -143,26 +154,32 @@ impl StopCoordinator {
 /// joined. Keeping the main-thread processor half in the caller and consuming
 /// the returned value before dropping it structurally enforces
 /// `runloop stop -> audio join -> main-thread teardown`.
-pub fn run_child<T, A, S>(
+pub fn run_child<T, A, Q, S>(
     process_name: &str,
+    should_quit: Q,
     service_main: S,
     audio: A,
 ) -> Result<T, ChildRuntimeError>
 where
     T: Send + 'static,
     A: FnOnce(Arc<AtomicBool>) -> T + Send + 'static,
+    Q: Fn() -> bool,
     S: FnMut() -> bool,
 {
     run_child_with_main_loop(
         process_name,
+        should_quit,
         service_main,
         audio,
-        |coordinator, service_main| run_main_loop(coordinator, service_main),
+        |coordinator, should_quit, service_main| {
+            run_main_loop(coordinator, should_quit, service_main)
+        },
     )
 }
 
-fn run_child_with_main_loop<T, A, S, M>(
+fn run_child_with_main_loop<T, A, Q, S, M>(
     process_name: &str,
+    should_quit: Q,
     mut service_main: S,
     audio: A,
     main_loop: M,
@@ -170,8 +187,9 @@ fn run_child_with_main_loop<T, A, S, M>(
 where
     T: Send + 'static,
     A: FnOnce(Arc<AtomicBool>) -> T + Send + 'static,
+    Q: Fn() -> bool,
     S: FnMut() -> bool,
-    M: FnOnce(&StopCoordinator, &mut S) -> Result<(), ChildRuntimeError>,
+    M: FnOnce(&StopCoordinator, &Q, &mut S) -> Result<(), ChildRuntimeError>,
 {
     let coordinator = StopCoordinator::new();
     let stop_for_audio = coordinator.stop_audio.clone();
@@ -183,7 +201,7 @@ where
     // stop -> join ordering.
     let stop_audio = StopAudioGuard(coordinator.stop_audio.clone());
 
-    let runloop_result = main_loop(&coordinator, &mut service_main);
+    let runloop_result = main_loop(&coordinator, &should_quit, &mut service_main);
     drop(stop_audio);
     let audio_result = join_audio(audio_handle);
 
@@ -200,17 +218,24 @@ where
 #[cfg(target_os = "macos")]
 fn run_main_loop(
     coordinator: &StopCoordinator,
+    should_quit: &dyn Fn() -> bool,
     service_main: &mut dyn FnMut() -> bool,
 ) -> Result<(), ChildRuntimeError> {
-    appkit::run_main_loop(coordinator, service_main)
+    appkit::run_main_loop(coordinator, should_quit, service_main)
 }
 
 #[cfg(not(target_os = "macos"))]
 fn run_main_loop(
     coordinator: &StopCoordinator,
+    should_quit: &dyn Fn() -> bool,
     service_main: &mut dyn FnMut() -> bool,
 ) -> Result<(), ChildRuntimeError> {
-    while !coordinator.should_stop(service_main()) {
+    loop {
+        let quit_requested = should_quit();
+        let service_requested_stop = service_main();
+        if coordinator.should_stop(service_requested_stop || quit_requested) {
+            break;
+        }
         thread::sleep(MAIN_TICK_INTERVAL);
     }
     Ok(())
@@ -233,9 +258,11 @@ mod appkit {
     use super::{try_call_main_service, ChildRuntimeError, StopCoordinator, MAIN_TICK_INTERVAL};
 
     type MainService<'a> = dyn FnMut() -> bool + 'a;
+    type QuitPredicate<'a> = dyn Fn() -> bool + 'a;
 
     struct TimerTargetIvars {
         service: RefCell<Box<MainService<'static>>>,
+        should_quit: Box<QuitPredicate<'static>>,
         coordinator: StopCoordinator,
         service_panicked: Cell<bool>,
         reentrant_tick_skip_count: Cell<u64>,
@@ -258,7 +285,10 @@ mod appkit {
             #[unsafe(method(tick:))]
             fn tick(&self, timer: &NSTimer) {
                 let requested_stop = match catch_unwind(AssertUnwindSafe(|| {
-                    try_call_main_service(&self.ivars().service)
+                    try_call_main_service(
+                        &self.ivars().service,
+                        self.ivars().should_quit.as_ref(),
+                    )
                 })) {
                     Ok(Ok(value)) => value,
                     Ok(Err(_busy)) => {
@@ -322,10 +352,12 @@ mod appkit {
         fn new(
             mtm: MainThreadMarker,
             service: Box<MainService<'static>>,
+            should_quit: Box<QuitPredicate<'static>>,
             coordinator: StopCoordinator,
         ) -> Retained<Self> {
             let this = Self::alloc(mtm).set_ivars(TimerTargetIvars {
                 service: RefCell::new(service),
+                should_quit,
                 coordinator,
                 service_panicked: Cell::new(false),
                 reentrant_tick_skip_count: Cell::new(0),
@@ -338,6 +370,7 @@ mod appkit {
 
     pub(super) fn run_main_loop(
         coordinator: &StopCoordinator,
+        should_quit: &dyn Fn() -> bool,
         service_main: &mut dyn FnMut() -> bool,
     ) -> Result<(), ChildRuntimeError> {
         let mtm = MainThreadMarker::new().ok_or(ChildRuntimeError::NotMainThread)?;
@@ -347,7 +380,9 @@ mod appkit {
         // to that exact lifetime is sound. It is invalidated before return.
         let service: Box<MainService<'_>> = Box::new(service_main);
         let service: Box<MainService<'static>> = unsafe { std::mem::transmute(service) };
-        let target = TimerTarget::new(mtm, service, coordinator.clone());
+        let should_quit: Box<QuitPredicate<'_>> = Box::new(should_quit);
+        let should_quit: Box<QuitPredicate<'static>> = unsafe { std::mem::transmute(should_quit) };
+        let target = TimerTarget::new(mtm, service, should_quit, coordinator.clone());
 
         let app = NSApplication::sharedApplication(mtm);
         if !app.setActivationPolicy(NSApplicationActivationPolicy::Accessory) {
@@ -478,8 +513,9 @@ mod tests {
         let result: Result<(), ChildRuntimeError> = run_child_with_main_loop(
             "runtime-test",
             || false,
+            || false,
             |_stop| panic!("plugin process panic"),
-            |_coordinator, _service_main| Err(ChildRuntimeError::ServicePanicked),
+            |_coordinator, _should_quit, _service_main| Err(ChildRuntimeError::ServicePanicked),
         );
 
         let error = result.expect_err("both failures must be reported");
@@ -508,6 +544,7 @@ mod tests {
             let result: Result<(), ChildRuntimeError> = run_child_with_main_loop(
                 "runtime-test",
                 || false,
+                || false,
                 move |stop| {
                     while !stop.load(Ordering::Acquire) {
                         thread::yield_now();
@@ -516,7 +553,7 @@ mod tests {
                         .send(())
                         .expect("test receiver remains alive");
                 },
-                |_coordinator, _service_main| panic!("main loop setup panic"),
+                |_coordinator, _should_quit, _service_main| panic!("main loop setup panic"),
             );
             let _ = result;
         }));
@@ -543,7 +580,9 @@ mod tests {
         });
         let held_by_outer_tick = service.borrow_mut();
 
-        let busy_result = catch_unwind(AssertUnwindSafe(|| try_call_main_service(&service)));
+        let busy_result = catch_unwind(AssertUnwindSafe(|| {
+            try_call_main_service(&service, &|| false)
+        }));
         assert!(
             busy_result.is_ok(),
             "a nested tick must not panic on an active RefCell borrow"
@@ -555,8 +594,40 @@ mod tests {
         assert_eq!(calls.get(), 0, "the busy tick must skip service execution");
 
         drop(held_by_outer_tick);
-        assert!(matches!(try_call_main_service(&service), Ok(false)));
+        assert!(matches!(
+            try_call_main_service(&service, &|| false),
+            Ok(false)
+        ));
         assert_eq!(calls.get(), 1, "the next non-reentrant tick must run");
+    }
+
+    #[test]
+    fn reentrant_main_service_tick_still_observes_teardown_request() {
+        let service_calls = std::cell::Cell::new(0);
+        let quit_checks = std::cell::Cell::new(0);
+        let service = RefCell::new(|| {
+            service_calls.set(service_calls.get() + 1);
+            false
+        });
+        let held_by_outer_tick = service.borrow_mut();
+        let coordinator = StopCoordinator::new();
+
+        let requested_stop = try_call_main_service(&service, &|| {
+            quit_checks.set(quit_checks.get() + 1);
+            true
+        })
+        .expect("CONTROL_QUIT must bypass a reentrant service borrow");
+
+        assert!(requested_stop);
+        assert!(coordinator.should_stop(requested_stop));
+        assert!(coordinator.stop_audio.load(Ordering::Acquire));
+        assert_eq!(quit_checks.get(), 1);
+        assert_eq!(
+            service_calls.get(),
+            0,
+            "the busy service remains skipped while teardown still advances"
+        );
+        drop(held_by_outer_tick);
     }
 
     #[test]

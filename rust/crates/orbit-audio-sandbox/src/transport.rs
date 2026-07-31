@@ -471,8 +471,10 @@ impl EventRingChild {
     /// `evt_ack_seq` は host の Release publish を Acquire で読み、`evt_seq` は child 自身が
     /// publish するカーソルなので own-writer load を使う。Ordering は [`ReleaseAcquireSeq`]
     /// の型固定 API に委ね、ここでは手書きしない。
-    #[allow(clippy::not_unsafe_ptr_arg_deref)] // UIH P3a fixes this helper's raw-pointer signature.
-    pub fn is_drained(&self, region: *const SharedRegion) -> bool {
+    ///
+    /// # Safety
+    /// `region` は生存中の [`SharedRegion`] を指していなければならない。
+    pub unsafe fn is_drained(&self, region: *const SharedRegion) -> bool {
         self.pending.is_empty()
             && unsafe { (*region).evt_ack_seq.read() == (*region).evt_seq.load_own() }
     }
@@ -2073,27 +2075,27 @@ mod tests {
         let mut child = EventRingChild::new();
 
         assert!(
-            child.is_drained(region),
+            unsafe { child.is_drained(region) },
             "the initial empty ring must be drained"
         );
         child
             .queue(EVT_UI_CLOSED, "pending")
             .expect("queue pending event");
         assert!(
-            !child.is_drained(region),
+            unsafe { !child.is_drained(region) },
             "pending_count != 0 must close the drain gate even when both cursors are zero"
         );
 
         assert_eq!(unsafe { child.service(region) }.expect("publish"), 1);
         assert_eq!(child.pending_len(), 0);
         assert!(
-            !child.is_drained(region),
+            unsafe { !child.is_drained(region) },
             "evt_ack_seq != evt_seq must close the drain gate even with no pending events"
         );
 
         unsafe { (*region).evt_ack_seq.publish(1) };
         assert!(
-            child.is_drained(region),
+            unsafe { child.is_drained(region) },
             "zero pending events and equal cursors must drain the ring"
         );
 

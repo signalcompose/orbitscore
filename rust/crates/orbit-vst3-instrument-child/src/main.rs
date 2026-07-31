@@ -312,6 +312,7 @@ fn main() -> Result<()> {
     let region_addr = region as usize;
     let (process_errors, last_process_error) = run_child(
         "orbit-vst3-instrument-child",
+        || unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT,
         || {
             // SAVE_STATE and all future UI work are serviced by the AppKit main runloop.
             unsafe {
@@ -321,9 +322,6 @@ fn main() -> Result<()> {
                     }
                     _ => None,
                 });
-            }
-            if unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT {
-                return true;
             }
             if parent_watch.should_exit() {
                 eprintln!("[orbit-vst3-instrument-child] 親プロセス死亡を検知、終了する");
