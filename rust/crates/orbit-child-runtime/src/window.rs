@@ -157,7 +157,7 @@ impl WindowShell {
             })
     }
 
-    /// Apply the daemon-rendered receiver/index title to the host window.
+    /// Apply the caller-rendered title forwarded by the daemon to the host window.
     pub fn set_title(&mut self, title: &str) -> Result<(), String> {
         let window = self
             .window

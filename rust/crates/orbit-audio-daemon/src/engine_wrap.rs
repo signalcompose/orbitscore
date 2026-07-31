@@ -4994,6 +4994,58 @@ mod plugin_ui_event_routing_tests {
     }
 
     #[test]
+    fn contended_target_lock_retries_notification() {
+        let route = Arc::new(Mutex::new(Some(target())));
+        let (events, mut receiver) = tokio::sync::broadcast::channel(1);
+        let guard = route.lock().expect("hold route lock");
+
+        assert!(!enqueue_plugin_ui_notification(
+            &route,
+            &events,
+            orbit_audio_sandbox::UiPumpNotification::Safepoint {
+                generation: 3,
+                evt_seq: 5,
+            },
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+        ));
+        drop(guard);
+        assert_eq!(*route.lock().expect("route lock"), Some(target()));
+    }
+
+    #[test]
+    fn poisoned_target_lock_still_routes_notification() {
+        let route = Arc::new(Mutex::new(Some(target())));
+        let poison_route = route.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = poison_route.lock().expect("lock before poison");
+            panic!("poison plugin UI target lock");
+        })
+        .join();
+        assert!(route.is_poisoned());
+        let (events, mut receiver) = tokio::sync::broadcast::channel(1);
+
+        assert!(enqueue_plugin_ui_notification(
+            &route,
+            &events,
+            orbit_audio_sandbox::UiPumpNotification::Safepoint {
+                generation: 3,
+                evt_seq: 5,
+            },
+        ));
+        assert_eq!(
+            receiver.try_recv().expect("event from poisoned route"),
+            PluginUiEvent::Closed {
+                target: target(),
+                generation: 3,
+                evt_seq: 5,
+            }
+        );
+    }
+
+    #[test]
     fn respawn_event_is_loud_and_consumes_the_visible_route() {
         let route = Arc::new(Mutex::new(Some(target())));
         let (events, mut receiver) = tokio::sync::broadcast::channel(1);

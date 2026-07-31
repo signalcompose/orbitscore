@@ -332,8 +332,8 @@ impl UiService {
     }
 
     /// Handle one UI mailbox command. `OPEN_UI` acks after title + attach; `CLOSE_UI` acks at
-    /// Phase A. The daemon renders `<plugin name> — <receiver>[<index>]` and transports it in
-    /// `cmd_arg`; the child applies it to the host-owned window before plugin attach.
+    /// Phase A. The daemon only validates and forwards the caller-rendered title in `cmd_arg`; the
+    /// child applies it to the host-owned window before plugin attach.
     pub fn handle_command(&self, kind: u32, arg: Option<&str>) -> CommandOutcome {
         let now = self.now();
         let ack = {

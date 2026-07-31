@@ -319,10 +319,15 @@ fn resolve_ui_target_and_index(
     params: &Value,
     method: &str,
 ) -> Result<(PluginStateTarget, u64), ProtocolError> {
-    let target_params = ui_target_object(params, method)?;
-    let target = parse_plugin_target(target_params, method, "PLUGIN_UI_UNAVAILABLE")?;
+    let target = resolve_ui_target(params, method)?;
     let index = ui_index(params, method)?;
     Ok((target, index))
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn resolve_ui_target(params: &Value, method: &str) -> Result<PluginStateTarget, ProtocolError> {
+    let target_params = ui_target_object(params, method)?;
+    parse_plugin_target(target_params, method, "PLUGIN_UI_UNAVAILABLE")
 }
 
 pub async fn run(
@@ -1383,9 +1388,8 @@ async fn handle_command(
             }
             #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
             {
-                let (target, _index) = match resolve_ui_target_and_index(&params, "AckUiSafepoint")
-                {
-                    Ok(target_and_index) => target_and_index,
+                let target = match resolve_ui_target(&params, "AckUiSafepoint") {
+                    Ok(target) => target,
                     Err(error) => return err(&id, error),
                 };
                 let generation = match params.get("generation").and_then(Value::as_u64) {
@@ -2360,10 +2364,50 @@ mod tests {
                 WrapError::PluginStateIo("io".into()),
                 "PLUGIN_STATE_IO_ERROR",
             ),
+            (
+                WrapError::PluginUiUnavailable("unavailable".into()),
+                "PLUGIN_UI_UNAVAILABLE",
+            ),
+            (
+                WrapError::PluginUiTarget("target".into()),
+                "PLUGIN_UI_TARGET_ERROR",
+            ),
+            (
+                WrapError::PluginUiProtocol("protocol".into()),
+                "PLUGIN_UI_PROTOCOL_ERROR",
+            ),
+            (
+                WrapError::PluginUiCommand("command".into()),
+                "PLUGIN_UI_COMMAND_ERROR",
+            ),
         ];
 
         for (error, expected_code) in cases {
             assert_eq!(wrap_err_to_protocol(&error).code, expected_code);
         }
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    #[tokio::test]
+    async fn ack_ui_safepoint_command_does_not_require_an_index() {
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
+            .expect("stub backend starts");
+        let (tx, _rx) = mpsc::channel(1);
+        let response = handle_command(
+            Command {
+                id: "ack-without-index".into(),
+                method: "AckUiSafepoint".into(),
+                params: json!({
+                    "target": {"role": "effect", "bus": "lead"},
+                    "generation": 0,
+                    "evt_seq": 1
+                }),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+
+        assert_eq!(response["error"]["code"], "PLUGIN_UI_UNAVAILABLE");
     }
 }

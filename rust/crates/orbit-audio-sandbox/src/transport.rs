@@ -1305,17 +1305,11 @@ impl UiEventPump {
         let outcome = self.ring.poll_mapped(region, |event| match event.kind {
             EVT_UI_CLOSED => {
                 state.lifecycle = UiLifecycle::Closing;
-                if state.pending_safepoint != Some(event.seq) {
-                    if !sink(UiPumpNotification::Safepoint {
-                        generation: state.generation,
-                        evt_seq: event.seq,
-                    }) {
-                        return false;
-                    }
-                    state.pending_safepoint = Some(event.seq);
-                }
 
-                // child のただ一つの timeout が DONE を publish した事実を見て初めて abandon する。
+                // Abandon takes precedence over notification delivery. Once the child has
+                // published timeout-without-save it has already given up, so no engine save can
+                // still happen. Retrying an undeliverable safepoint first would leave this ring
+                // head blocked forever while no editor is connected and prevent a later UI open.
                 if is_abandon_done_published(region, event.seq.saturating_add(1)) {
                     tracing::warn!(
                         generation = state.generation,
@@ -1325,6 +1319,16 @@ impl UiEventPump {
                     state.pending_safepoint = None;
                     state.abandoned_safepoint = Some(event.seq);
                     return true;
+                }
+
+                if state.pending_safepoint != Some(event.seq) {
+                    if !sink(UiPumpNotification::Safepoint {
+                        generation: state.generation,
+                        evt_seq: event.seq,
+                    }) {
+                        return false;
+                    }
+                    state.pending_safepoint = Some(event.seq);
                 }
                 false
             }
@@ -3656,6 +3660,80 @@ mod tests {
         );
         pump.ack_safepoint(0, 1)
             .expect("late completed save is accepted with warning");
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    /// An absent editor makes safepoint delivery fail on every tick. Once the child publishes its
+    /// timeout DONE, that delivery failure must no longer hide abandonment: the CLOSED head is
+    /// released, DONE can drain, and the lifecycle permits another open.
+    #[test]
+    fn ui_event_pump_abandons_after_timeout_despite_undeliverable_safepoint() {
+        let shm = mailbox_test_path("ui-pump-abandon-undeliverable");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let pump = UiEventPump::new(shm.clone());
+        let mut child = EventRingChild::new();
+        publish_ui_event(region, &mut child, EVT_UI_CLOSED, "");
+
+        let mut failed_deliveries = 0;
+        for _ in 0..3 {
+            assert!(matches!(
+                pump.poll_step(|_| {
+                    failed_deliveries += 1;
+                    false
+                })
+                .expect("blocked while editor is absent"),
+                EventPollOutcome::Blocked { seq: 1, .. }
+            ));
+        }
+        assert_eq!(
+            failed_deliveries, 3,
+            "the safepoint must be retried until the child gives up"
+        );
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 0);
+
+        publish_ui_event(
+            region,
+            &mut child,
+            EVT_UI_CLOSED_DONE,
+            "timeout-without-save",
+        );
+        assert!(matches!(
+            pump.poll_step(|_| {
+                failed_deliveries += 1;
+                false
+            })
+            .expect("abandon CLOSED before attempting DONE delivery"),
+            EventPollOutcome::Blocked { seq: 2, .. }
+        ));
+        assert_eq!(
+            unsafe { (*region).evt_ack_seq.read() },
+            1,
+            "timeout DONE must release an undeliverable CLOSED head"
+        );
+        assert_eq!(
+            failed_deliveries, 4,
+            "only DONE delivery, not the abandoned safepoint, remains attempted"
+        );
+
+        assert_eq!(
+            pump.poll_step(|notification| {
+                assert_eq!(
+                    notification,
+                    UiPumpNotification::CloseDone {
+                        completion: UiCloseCompletion::TimedOutWithoutSave
+                    }
+                );
+                true
+            })
+            .expect("drain timeout DONE after editor reconnects"),
+            advanced(1)
+        );
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 2);
+        pump.begin_open()
+            .expect("completed abandon must not permanently block a later UI open");
 
         drop(mmap);
         let _ = std::fs::remove_file(shm);
