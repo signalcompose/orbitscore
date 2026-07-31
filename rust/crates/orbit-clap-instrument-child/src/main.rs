@@ -9,9 +9,10 @@ use anyhow::{bail, Context, Result};
 use orbit_audio_sandbox::transport::{save_state_command, service_command_mailbox, CMD_SAVE_STATE};
 use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
-    ParentWatch, SharedRegion, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
+    ParentWatch, SharedRegion, BUF_LEN, CHANNELS, CMD_CLOSE_UI, CMD_OPEN_UI, CONTROL_QUIT,
+    MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
 };
-use orbit_child_runtime::run_child;
+use orbit_child_runtime::{child_should_quit, run_child, UiCallbacks, UiService};
 use orbit_clap_host::{push_neutral_event, ClapInstrumentProcessor, EventBuffer};
 
 struct Args {
@@ -199,28 +200,30 @@ fn main() -> Result<()> {
     unsafe {
         orbit_audio_sandbox::transport::publish_child_ready(region, instrument.has_audio_input());
     }
-    let (mut instrument_audio, mut instrument_main) = instrument.split();
+    let (mut instrument_audio, instrument_main) = instrument.split();
+    let (ui, main) = UiService::new(region, instrument_main, |main| UiCallbacks {
+        closed: main.take_closed(),
+        requested_size: main.take_requested_size(),
+    });
     // orphan 対策(#448): host(daemon)が CONTROL_QUIT を書かずに死ぬ経路(プロセス exit・
     // SIGKILL・crash)でも main runloop を止められるよう、親死活をタイマーで監視する。
-    let mut parent_watch = ParentWatch::new();
+    let parent_watch = ParentWatch::new();
     let region_addr = region as usize;
     let process_errors = run_child(
         "orbit-clap-instrument-child",
-        || unsafe { (*region).control.load(Relaxed) } == CONTROL_QUIT,
+        || unsafe { child_should_quit(region, &parent_watch) },
         || {
             // Mailbox servicing is confined to the AppKit main runloop.
             unsafe {
                 service_command_mailbox(region, |kind, arg| match kind {
-                    CMD_SAVE_STATE => {
-                        Some(save_state_command(arg, || instrument_main.capture_state()))
-                    }
+                    CMD_SAVE_STATE => Some(save_state_command(arg, || {
+                        main.with_mut(|main| main.capture_state())
+                    })),
+                    CMD_OPEN_UI | CMD_CLOSE_UI => Some(ui.handle_command(kind, arg)),
                     _ => None,
                 });
             }
-            if parent_watch.should_exit() {
-                eprintln!("[orbit-clap-instrument-child] 親プロセス死亡を検知、終了する");
-                return true;
-            }
+            ui.tick(ui.now());
             false
         },
         move |stop_audio| {

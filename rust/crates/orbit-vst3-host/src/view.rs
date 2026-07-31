@@ -272,6 +272,13 @@ impl PluginUiEndpoint for Vst3PluginMain {
     }
 }
 
+impl Vst3PluginMain {
+    /// Consume the most recent plugin-originated `IPlugFrame::resizeView` request.
+    pub fn take_requested_size(&self) -> Option<UiSize> {
+        self.ui_endpoint.take_requested_size()
+    }
+}
+
 fn ui_size(rect: ViewRect) -> Result<UiSize, String> {
     let width = rect
         .right

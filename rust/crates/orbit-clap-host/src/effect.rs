@@ -244,6 +244,10 @@ impl Drop for ClapEffectAudio {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clack_extensions::gui::HostGuiImpl;
+    use std::path::PathBuf;
+
+    use crate::host::OrbitHostShared;
 
     /// audio 側が `Send`（専用 audio スレッドへ move できる）ことのコンパイル時証明。
     /// clack の `StartedPluginAudioProcessor` / `AudioPorts` の `unsafe impl Send` に依拠する
@@ -257,5 +261,30 @@ mod tests {
     #[test]
     fn child_path_advertises_gui_callbacks() {
         assert!(child_host_callback_config().gui_callbacks_enabled());
+    }
+
+    #[test]
+    #[ignore = "needs prebuilt release clap-test-effect dylib"]
+    fn real_load_path_delivers_plugin_initiated_close_to_main_half() {
+        let dylib = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.."))
+            .join("rust-spike/clap-test-effect/target/release/libclap_test_effect.dylib");
+        assert!(dylib.exists(), "missing {}", dylib.display());
+        let (processor, _) = ClapEffectProcessor::load(
+            &dylib,
+            Some("com.signalcompose.clap-test-effect"),
+            48_000,
+            2,
+            512,
+            None,
+        )
+        .expect("load test effect through child callback configuration");
+        let (audio, main) = processor.split();
+
+        main.instance
+            .access_shared_handler(|shared: &OrbitHostShared| HostGuiImpl::closed(shared, true));
+
+        assert_eq!(main.take_closed(), Some(true));
+        drop(audio);
+        drop(main);
     }
 }

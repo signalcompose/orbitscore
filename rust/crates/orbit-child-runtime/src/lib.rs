@@ -15,6 +15,30 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+mod ui_service;
+#[cfg(target_os = "macos")]
+pub mod window;
+
+pub use ui_service::{PluginMainHandle, UiCallbacks, UiService, UI_CLOSE_TIMEOUT};
+
+fn should_quit_with_parent(control_quit: bool, parent_should_exit: impl FnOnce() -> bool) -> bool {
+    control_quit || parent_should_exit()
+}
+
+/// Shared `run_child` predicate used by all plugin child binaries.
+///
+/// # Safety
+/// `region` must point to a live mapped [`orbit_audio_sandbox::SharedRegion`].
+pub unsafe fn child_should_quit(
+    region: *const orbit_audio_sandbox::SharedRegion,
+    parent_watch: &orbit_audio_sandbox::ParentWatch,
+) -> bool {
+    should_quit_with_parent(
+        (unsafe { (*region).control.load(Ordering::Relaxed) }) == orbit_audio_sandbox::CONTROL_QUIT,
+        || parent_watch.should_exit(),
+    )
+}
+
 /// Main-runloop service interval. Mailbox commands and liveness changes are
 /// control-plane work, so 20 ms avoids a busy main thread while remaining
 /// responsive enough for UI commands.
@@ -628,6 +652,84 @@ mod tests {
             "the busy service remains skipped while teardown still advances"
         );
         drop(held_by_outer_tick);
+    }
+
+    #[test]
+    fn reentrant_main_service_tick_still_evaluates_parent_watch_predicate() {
+        let service_calls = std::cell::Cell::new(0);
+        let parent_watch_checks = std::cell::Cell::new(0);
+        let service = RefCell::new(|| {
+            service_calls.set(service_calls.get() + 1);
+            false
+        });
+        let held_by_outer_tick = service.borrow_mut();
+
+        let requested_stop = try_call_main_service(&service, &|| {
+            should_quit_with_parent(false, || {
+                parent_watch_checks.set(parent_watch_checks.get() + 1);
+                // This stands for `parent_watch.should_exit()` after reparenting.
+                true
+            })
+        })
+        .expect("ParentWatch must bypass a reentrant service borrow");
+
+        assert!(requested_stop);
+        assert_eq!(parent_watch_checks.get(), 1);
+        assert_eq!(
+            service_calls.get(),
+            0,
+            "the busy service remains skipped while orphan teardown advances"
+        );
+        drop(held_by_outer_tick);
+    }
+
+    /// Zeroed shared region: `CONTROL_RUN == 0`, so control alone never requests a stop.
+    fn run_state_region() -> (*mut orbit_audio_sandbox::SharedRegion, std::alloc::Layout) {
+        let layout = std::alloc::Layout::new::<orbit_audio_sandbox::SharedRegion>();
+        let raw =
+            unsafe { std::alloc::alloc_zeroed(layout) } as *mut orbit_audio_sandbox::SharedRegion;
+        assert!(!raw.is_null(), "failed to allocate a zeroed SharedRegion");
+        (raw, layout)
+    }
+
+    /// 🔴 Binds `child_should_quit` to the **real** `ParentWatch` it is handed.
+    ///
+    /// The test above injects its own closure into `should_quit_with_parent`, so it only covers
+    /// the pure function. Replacing `|| parent_watch.should_exit()` in `child_should_quit` with
+    /// `|| false` left all tests green (measured 2026-07-31) — the orphan guard from #448 was
+    /// live in all four child binaries with nothing pinning the composition. This test is what
+    /// pins it: it goes through `child_should_quit` with control at `CONTROL_RUN`, so only the
+    /// parent-watch leg can produce `true`.
+    #[test]
+    fn child_should_quit_consults_the_injected_parent_watch() {
+        let (region, layout) = run_state_region();
+        let orphaned = orbit_audio_sandbox::ParentWatch::orphaned_for_tests();
+        let live = orbit_audio_sandbox::ParentWatch::new();
+
+        let orphan_requests_quit = unsafe { child_should_quit(region, &orphaned) };
+        let live_parent_keeps_running = unsafe { child_should_quit(region, &live) };
+
+        unsafe {
+            (*region)
+                .control
+                .store(orbit_audio_sandbox::CONTROL_QUIT, Ordering::Relaxed)
+        };
+        let control_quit_requests_quit = unsafe { child_should_quit(region, &live) };
+
+        unsafe { std::alloc::dealloc(region.cast(), layout) };
+
+        assert!(
+            orphan_requests_quit,
+            "child_should_quit must consult the ParentWatch it is given, not only CONTROL_QUIT"
+        );
+        assert!(
+            !live_parent_keeps_running,
+            "a live parent with CONTROL_RUN must not request a stop"
+        );
+        assert!(
+            control_quit_requests_quit,
+            "CONTROL_QUIT must still request a stop on its own"
+        );
     }
 
     #[test]

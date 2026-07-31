@@ -238,6 +238,10 @@ impl Drop for ClapInstrumentAudio {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clack_extensions::gui::HostGuiImpl;
+    use std::path::PathBuf;
+
+    use crate::host::OrbitHostShared;
 
     /// audio 側が `Send` であることのコンパイル時証明（根拠は
     /// `effect.rs::tests::audio_half_is_send` と同一）。
@@ -250,5 +254,30 @@ mod tests {
     #[test]
     fn child_path_advertises_gui_callbacks() {
         assert!(child_host_callback_config().gui_callbacks_enabled());
+    }
+
+    #[test]
+    #[ignore = "needs prebuilt release clap-test-synth dylib"]
+    fn real_load_path_delivers_plugin_initiated_close_to_main_half() {
+        let dylib = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../.."))
+            .join("rust-spike/clap-test-synth/target/release/libclap_test_synth.dylib");
+        assert!(dylib.exists(), "missing {}", dylib.display());
+        let (processor, _) = ClapInstrumentProcessor::load(
+            &dylib,
+            Some("com.signalcompose.clap-test-synth"),
+            48_000,
+            2,
+            512,
+            None,
+        )
+        .expect("load test instrument through child callback configuration");
+        let (audio, main) = processor.split();
+
+        main.instance
+            .access_shared_handler(|shared: &OrbitHostShared| HostGuiImpl::closed(shared, false));
+
+        assert_eq!(main.take_closed(), Some(false));
+        drop(audio);
+        drop(main);
     }
 }

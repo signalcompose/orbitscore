@@ -17,6 +17,102 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.344 feat(rust): #474 P3b-2 — NSWindow を実配線し、実在を OS に問い合わせて証明した (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474（P3b-2）/ **Branch**: `474-plugin-ui-p3b1-gui-endpoint`
+**Status**: `cargo test --workspace`（**sandbox 外**）= **462 passed / 0 failed**
+
+**ここで初めてウィンドウが画面に出る。** P3a（AppKit 非依存の状態機械）と
+P3b-1（フォーマット GUI エンドポイント）を AppKit で繋ぐ層。
+
+#### 実装
+
+- `orbit-child-runtime/src/window.rs`（新規）: `NSWindow` 生成・delegate・リサイズ。
+  🔴 `windowShouldClose` は**常に `NO`** を返す（AppKit にフェーズ B より前に壊させない）。
+  破棄は `close()`（**`performClose:` 禁止** — 使うと AppKit が `windowShouldClose` を再照会し、
+  機械はまだ `Closing` なので取り消され、ウィンドウが永遠に残る）
+- `orbit-child-runtime/src/ui_service.rs`（新規）: 状態機械 + evt リング + WindowShell +
+  `PluginUiEndpoint` を束ね `UiHostActions` を実装。`CMD_OPEN_UI` = **完了時 ack** /
+  `CMD_CLOSE_UI` = **受理時 ack**（UIH.2a ポリシー2）
+- 4 child への追加は各 **+14〜15行**（実質 +2〜+5）。述語も `child_should_quit` に集約し、
+  「GUI コードを4回書く」を回避した
+- **`ParentWatch` の再入時ギャップを封鎖**（P3a で trait doc に登記した完了条件）。
+  `ParentWatch` を `&self` + `Cell` 化し、`should_quit` 述語に合流。
+  🔴 `abortModal` / 強制 exit のエスカレーションは**前提未検証のためスコープ外**とした
+
+#### 🔴 ウィンドウの実在を OS に問い合わせて証明した（4層の切り分け）
+
+gated テストが実機で落ちた。**「テストが落ちた」で終わらせず層を1つずつ剥がした**結果、
+**設計の前提に関わる事実**が出た。
+
+| 仮説 | 実測 |
+|---|---|
+| ウィンドウが生成されていない | ❌ `NSWindow #993` は採番済み |
+| runloop を回していない | ❌（この時点では）変わらず |
+| pid / window number の突合ミス | ❌ 定数も比較も正しい |
+| **API 自体が NULL を返している** | ✅ |
+| **Screen Recording 権限が無い** | ✅ **`CGPreflightScreenCaptureAccess() == false`** |
+
+さらに**このセッションは SSH 経由**（`sshd-session` の子）で、Ghostty に権限があっても
+**TCC は責任プロセス単位なので伝播しない**ことが系譜の実測で判明した。
+owner が **MBA10 のローカル GUI タブ**で実行して権限を通過。
+
+すると**別の欠陥が露出した** — `wait_for_window_state` が `sleep` するだけで
+**runloop を一度も回していなかった**。`makeKeyAndOrderFront` は順序付けを予約するだけで、
+window server へ届くのは runloop が次にイベントを処理したとき。
+🔴 **最初の runloop 仮説検証は、権限が無く NULL が返っていたため仮説を試せていなかった。**
+
+#### 🔴 独立性の証明（owner が実機で実行）
+
+| 段階 | 結果 |
+|---|---|
+| baseline | `ok. 1 passed` |
+| **`makeKeyAndOrderFront` 削除**（残存数 0 で反映確認） | `FAILED` + **`owned by this process: []`** |
+| 復元（`cmp` 一致） | `ok. 1 passed` |
+
+`NSWindow #1128` は**採番されている**のに CG は画面上のウィンドウを**0枚**と報告した。
+つまりこの検査は「オブジェクトが作られたか」ではなく「**実際に画面に出たか**」を見ている。
+child の自己申告なら変異段階も「作った」で通っていた。
+
+**権限が無いときは skip せず失敗させる**（`require_screen_capture_permission`）。
+黙って skip すると「一度も検証していないのに緑」になり、しかもこれは
+**child の自己申告から独立した唯一の証拠**なので、緩めると二重経路が片翼になる。
+
+#### 🔴 `child_should_quit` の配線ギャップ（main が変異で発見・main が実装）
+
+Codex の変異は `should_quit_with_parent`（**純関数**）を突いていた。
+main が**合成箇所**（`|| parent_watch.should_exit()` → `false`）を突いたところ、
+**21 件全部が緑のまま通った**。既存テストは自前のクロージャを注入しており、
+`child_should_quit` が本物の `ParentWatch` を渡すことは誰も縛っていなかった。
+
+**CLAP の `HostCallbackConfig` と同種だが深刻度が違う** — あちらは消費者が居ないので
+到達不能（P3b-2 の完了条件として登記）。こちらは **4 child すべての production 経路**で、
+壊れれば孤児 child が生き残る（#448）。
+
+対処: `ParentWatch::orphaned_for_tests()` を追加（ありえない pid を記録して
+「親が死んだ」分岐を到達可能にする）。テストは `control` を `CONTROL_RUN` のままにするので、
+**真になりうるのは parent-watch の項だけ**。3つの独立表明を置いた
+（孤児→true / 生存→false / QUIT→true）。2番目が無いと「常に true」でも通る。
+
+**同じ変異が修正前は 21 件緑 → 修正後は狙った1件だけ FAILED。** 復元は `cmp` で一致確認。
+
+#### Codex が2度停滞した
+
+P3a fix R1 で68分、本タスクで34分、いずれも**出力ゼロ・ファイル書き込みゼロ**。
+2度目は停止して **main が直接実装**した。CLAUDE.md の
+「4ラウンド目でも収束しなければ main が直す」の趣旨（**main はコンテキストを持っており、
+ブリーフを書き起こすコストの方が高い**）がそのまま当てはまる。
+ギャップを見つけたのも変異を設計したのも main だった。
+
+**変更ファイル**: `orbit-child-runtime/{Cargo.toml,src/lib.rs,src/window.rs,src/ui_service.rs,tests/window_shell_gated.rs}` /
+`orbit-audio-sandbox/{src/parent_watch.rs,src/transport.rs,src/bin/parent-watch-probe.rs}` /
+4 child の `main.rs` / `orbit-clap-host/src/{effect.rs,instrument.rs}` / `orbit-vst3-host/src/view.rs` / `Cargo.lock`
+
+**Commit**: `474-plugin-ui-p3b1-gui-endpoint`（PR 作成予定）
+
+---
+
 ### 6.343 feat(rust): #474 P3b-1 — VST3 の UI エンドポイント層（順序が仕様） (Jul 31, 2026)
 
 **Date**: 2026-07-31
