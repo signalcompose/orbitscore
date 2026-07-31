@@ -17,6 +17,56 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.351 fix(repl): 行途中の構文エラーを「複数行入力の途中」と誤判定して silent に永久停止する本丸バグを修正 (#607) (Aug 1, 2026)
+
+**Date**: 2026-08-01
+**Issue**: #607 / **Commit**: `892ae2b`
+**Status**: 新規 3 テスト passed・変異 3 種 red 確認・full suite 1917 passed（+5）
+
+#### 事故と診断過程
+
+パーサ未対応の記法（スタック全体への `[1,5,9]@v+10` — spec §2.5 は単音のみ定義）を
+172 箇所含む 40KB の楽譜を run_selection したところ、途中の宣言までは実行されるが
+以後がすべて沈黙。`ok` は返るが RUN も後続評価も実行されない。「instrument 同時4本
+頭打ち」に見えたが本数は可変（4/3/2本）で、固定上限は存在しなかった。
+
+診断は消去法で進めた（すべて実測）:
+
+| 仮説 | 反証手段 |
+|---|---|
+| daemon の attach 直列化 / slot 枯渇 | 新規 gated harness で逐次・同時とも 6/6 成功 |
+| Kontakt のプロセス数制限 | probe 6 プロセス同時起動、全成功 |
+| engine event loop ブロック | `sample` で kevent アイドルを確認 |
+| stdin 経路の破損 | CDP で stdin タップ — データ到達を目視 |
+| daemon request 滞留 | CDP `queryObjects` で DaemonClient pending=0 |
+| 宣言の await 滞留 | 同 EffectChainMap — cb/vc/pno 完了・**vla は呼ばれてもいない** |
+
+決め手は停滞エンジンへ**空行2連を送る**実験（バッファ強制実行のトリガー）で、
+`Expected RPAREN but got AT at line 10` が吐き出されたこと。
+
+#### 原因
+
+`repl-mode.ts` の不完全入力判定が `Expected RPAREN` の**文字列一致**を「未完」に
+含めていた。このメッセージは `but got AT`（行の途中に不正トークン = 待っても完結
+しない本物の構文エラー）でも出る。構文エラーを「未完」として silent に保留した結果、
+以後の全入力が未完バッファへ合体しセッションが停止した。6.350 の stall レポーターが
+鳴らなかったのは、バッファ保留が「実行中の行」ではなく監視の外だったため。
+
+#### 修正
+
+**「未完」= パーサが入力の終端（EOF）に達した場合のみ**、に一本化（`/\bEOF\b/`）。
+`parse-statement.ts` の `Expected comma or closing parenthesis` 系 2 箇所には
+トークン名 + 位置を付与（トークン名の無い文言は EOF と構文エラーを区別できない）。
+
+変異検証: 旧判定復元 → red / EOF 判定ごと削除（過剰報告側）→ red / 文言劣化 → red。
+
+#### 残課題（owner 判断・提案）
+
+1. **スタック全体 `@v` を仕様に足すか** — 自然な表現で作品側の需要も実在するが、
+   決定 #56/#57（per-note `@v`）の拡張になるため独断で実装しない
+2. **拡張の diagnostics とエンジンパーサの乖離** — `[...]@v` を diagnostics は
+   受理し、エンジンは弾く。診断がパーサと同じ文法を見ていない（別 issue 化予定）
+
 ### 6.350 fix(repl): 詰まった評価キューを沈黙させず、塞いでいる行を名指しさせる (#607) (Aug 1, 2026)
 
 **Date**: 2026-08-01
