@@ -329,13 +329,16 @@ export function createReplSession(interpreter: InterpreterV2): {
       console.log('✓') // Success indicator
       buffer = ''
     } catch (error: any) {
-      // 不完全入力（複数行の途中）は buffering を続ける（強制実行時は除く）
-      if (
-        !clearOnIncomplete &&
-        (error.message.includes('EOF') ||
-          error.message.includes('Expected RPAREN') ||
-          error.message.includes('Expected comma or closing parenthesis'))
-      ) {
+      // 不完全入力（複数行の途中）は buffering を続ける（強制実行時は除く）。
+      //
+      // 🔴 #607: 「未完」と判定してよいのは**パーサが入力の終端（EOF）に達した**場合だけ。
+      // 旧判定は `Expected RPAREN` を文字列一致で「未完」に含めていたが、このメッセージは
+      // `Expected RPAREN but got AT`（= 行の**途中**に不正トークンがある本物の構文エラー）
+      // でも出る。構文エラーを「未完」として silent に保留すると、以後の全入力が未完
+      // バッファへ合体して**セッション全体が沈黙のまま永久停止**する — 実機で
+      // `[1,5,9]@v+10`（パーサ未対応のスタック @v）1 行がライブセッションを丸ごと
+      // 止めた（2026-08-01）。トークンが尽きたのでなければ、待っても文は完結しない。
+      if (!clearOnIncomplete && /\bEOF\b/.test(String(error.message ?? ''))) {
         return
       }
       console.error(`[ERROR] ${error.message}`)

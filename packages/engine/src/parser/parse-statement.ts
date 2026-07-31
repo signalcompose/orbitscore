@@ -801,7 +801,13 @@ export class StatementParser {
         if (ParserUtils.current(this.tokens, this.pos).type === 'RPAREN') {
           break
         }
-        throw new Error('Expected comma or closing parenthesis after a named argument')
+        // 🔴 #607: トークン名を必ず含める。REPL は「got EOF」だけを「複数行入力の途中」と
+        // 判定する — トークン名の無いメッセージは構文エラーと未完入力を区別できず、
+        // 構文エラーの evaluate を silent に永久停止させた実績がある。
+        throw new Error(
+          `Expected comma or closing parenthesis after a named argument but got ` +
+            `${ParserUtils.current(this.tokens, this.pos).type}`,
+        )
       }
       const expressionParser = new ExpressionParser(this.tokens, this.pos)
       const argResult = expressionParser.parseArgument()
@@ -837,7 +843,12 @@ export class StatementParser {
         // Continue parsing without requiring comma
         continue
       } else {
-        throw new Error('Expected comma or closing parenthesis')
+        // 🔴 #607: 上と同じ理由でトークン名（+ 位置）を必ず含める。
+        const cur = ParserUtils.current(this.tokens, this.pos)
+        throw new Error(
+          `Expected comma or closing parenthesis but got ${cur.type}` +
+            (cur.type === 'EOF' ? '' : ` at line ${cur.line}, column ${cur.column}`),
+        )
       }
     }
 
