@@ -1814,6 +1814,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // aux return lags one device block behind the direct leg, and the
         // kick's peak sits inside that block), so tightening it buys no aux
         // detection — RMS is the discriminating meter here.
+        // Record the delta on every run, not just on failure.
+        //
+        // The assertion below only surfaces this number when it trips, so a rare
+        // failure arrives with no baseline to compare against — on 2026-07-31 a
+        // single 2.15% delta cost an hour of "regression or noise?" before anyone
+        // could say what a passing run normally measures. One log line makes the
+        // next such failure readable from the CI output alone.
+        console.log(
+          `[rms-delta] restored=${restoredAnalysis.rms} pre=${preRestartAnalysis.rms} delta=${restoredRmsDelta}`,
+        )
         expect(
           restoredRmsDelta,
           `restored RMS ${restoredAnalysis.rms} must match pre-restart ${preRestartAnalysis.rms}`,
