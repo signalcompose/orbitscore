@@ -319,6 +319,18 @@ impl UiService {
     }
 
     /// Handle one UI mailbox command. `OPEN_UI` acks after attach; `CLOSE_UI` acks at Phase A.
+    /// Service one `CMD_OPEN_UI` / `CMD_CLOSE_UI`.
+    ///
+    /// 🔴 `_arg` is discarded, so the **window title convention is not implemented yet**:
+    /// owner approved `<plugin name> — <receiver>[<index>]` (design §8 Q6) to tell several
+    /// instances of one plugin apart, but the child knows neither the receiver nor the index —
+    /// those live host-side.
+    ///
+    /// **This may be deleted once** P4 puts the rendered title into `cmd_arg` on `CMD_OPEN_UI`
+    /// (the field already exists and is already carried for `CMD_SAVE_STATE`) **and**
+    /// `WindowShell` calls `setTitle` with it. Ordering: strictly after P4, because the host is
+    /// the only side that can name the receiver. Until then every plugin window shows the
+    /// AppKit default, which is wrong as soon as two are open at once.
     pub fn handle_command(&self, kind: u32, _arg: Option<&str>) -> CommandOutcome {
         let now = self.now();
         let ack = {

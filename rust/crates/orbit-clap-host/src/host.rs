@@ -214,9 +214,31 @@ impl HostParamsImplShared for OrbitHostShared {
 }
 
 impl HostGuiImpl for OrbitHostShared {
-    fn resize_hints_changed(&self) {
-        // P3b-1 は callback の保持まで。hints の再取得と NSWindow 操作は P3b-2。
-    }
+    /// Deliberately a no-op in v1 — **owner ruling 2026-07-31: not implemented, registered instead.**
+    ///
+    /// `clap_gui_resize_hints` (gui.h:92-103) carries `can_resize_horizontally` /
+    /// `can_resize_vertically` / `preserve_aspect_ratio` + the ratio, i.e. constraints on
+    /// **user-driven** window dragging. Ignoring them costs appearance only: the NSWindow follows
+    /// the drag while the plugin keeps its own ratio, so an aspect-locked editor gets letterboxed
+    /// or clipped. Audio, plugin state, and the close handshake are unaffected — which is why this
+    /// sits outside #474's acceptance ("open the plugin so a human can touch it").
+    ///
+    /// 🔴 **Do not write "implemented in <next phase>" here again.** The previous comment said
+    /// "P3b-2 で" and P3b-2 turned out to be the *second commit of the same PR*; nothing made its
+    /// author read this line, so the marker silently expired. A deferral is only honest if the
+    /// condition to delete it is written down:
+    ///
+    /// **This no-op may be deleted once all of the following hold:**
+    /// 1. `get_resize_hints` is called on the main thread (it is `[main-thread & !floating]`,
+    ///    so this callback — which is not — must only raise a flag that the tick consumes);
+    /// 2. the hints are applied to the window (`contentAspectRatio` when `preserve_aspect_ratio`,
+    ///    and a fixed extent for any axis whose `can_resize_*` is false);
+    /// 3. a gated test drives an **aspect-ratio-locked oracle**, drags the window off-ratio, and
+    ///    asserts the resulting frame stayed on-ratio — a mutation that skips step 2 must fail it.
+    ///
+    /// Ordering: independent of P4/P5 (no daemon, engine, or MCP surface), so it can land whenever
+    /// an aspect-locked oracle exists. VST3 has no counterpart, so this stays CLAP-only.
+    fn resize_hints_changed(&self) {}
 
     fn request_resize(&self, new_size: GuiSize) -> Result<(), HostError> {
         if new_size.width == 0
