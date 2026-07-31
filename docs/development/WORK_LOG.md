@@ -17,6 +17,61 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.355 feat(vst3): offline process mode を実装 — Codex が書いたテストの相手側が存在しなかった (#598 P1) (Aug 1, 2026)
+
+**Date**: 2026-08-01
+**Issue**: #598 P1
+**Status**: `cargo clippy --all-targets` 0・workspace lib テスト全緑・
+`orbit-vst3-host --test offline` **13 passed**・`npm test` 1923 passed
+
+#### 🔴 発見（私の判定ミスの訂正）
+
+P1 を「実質完成」と判定してコミットした後、**pre-push の clippy がコンパイルエラーを出した**:
+
+```
+error[E0432]: unresolved import `orbit_vst3_host::Vst3ProcessMode`
+error[E0599]: no associated function `load_with_process_mode` ...
+```
+
+Codex は `orbit-vst3-host/tests/offline.rs` を新 API 向けに書き換えたが、
+**その API をソースに実装していなかった**（WIP バックアップを検査し、
+`Vst3ProcessMode` の出現は `tests/offline.rs` の中だけ・#603 TEMP パッチには 0 件、
+= 私の逆適用で消したのではないことを確認）。
+
+**判定が浅かった**: 「TODO 0 個 + daemon ハンドラ配線済み」で完成と見なしたが、
+`npm test` も `cargo test -p orbit-audio-daemon --lib` も **`orbit-vst3-host` の
+テストターゲットをビルドしない**。**「テストが緑」は「コンパイルが通る」を意味しない。**
+
+#### 実装（CLAP 側との対称形に合わせた）
+
+CLAP は `ClapRenderMode` / `configure_render_mode` として実装済みだったので、VST3 も同型に:
+
+- `pub enum Vst3ProcessMode { Realtime（既定）, Offline }` + `as_vst3()`
+- `Vst3EffectProcessor` / `Vst3InstrumentProcessor` に `load_with_process_mode(...)`。
+  既存 `load(...)` は `Realtime` で委譲する薄いラッパ（呼び出し側は無変更）
+- **P0 調査で特定済みの `processMode: kRealtime` ハードコード4箇所を全廃**
+  （`ProcessSetup` 2 + `ProcessData` 2）。両 audio 構造体が宣言時の mode を保持し、
+  `ProcessData` に載せ直す
+
+🔴 **setup と process で同じ値を渡すこと**が要点。VST3 の契約上この2つは一致が前提で、
+テスト用 oracle（gain / synth）は不一致を `kInvalidArgument` で弾く。
+「オフラインだけ setup を変えて process を変え忘れる」取り違えの検出器になっている。
+
+#### 変異検証（3種・すべて red）
+
+| 変異 | 結果 |
+|---|---|
+| `Offline` を `kRealtime` に読み替え（mode が届かない） | **red**（2 failed） |
+| `ProcessSetup` だけ realtime 固定（setup/process 不一致） | **red** |
+| `ProcessData` だけ realtime 固定（逆向きの不一致） | **red** |
+
+#### 教訓
+
+**委譲先の成果を「完成」と判定する前に、ワークスペース全体をコンパイルする。**
+`--lib` や個別パッケージのテストは、テストターゲットの型エラーを一切拾わない。
+今回は pre-push の clippy が最後の砦になったが、これは偶然に近い。
+
+
 ### 6.354 refactor: /simplify pass — 重複ヘルパの共有化と wire deep clone の除去 (Aug 1, 2026)
 
 **Date**: 2026-08-01
