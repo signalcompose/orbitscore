@@ -34,8 +34,9 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -274,9 +275,19 @@ pub const CMD_ARG_BYTES: usize = 1024;
 pub const CMD_DETAIL_BYTES: usize = 256;
 /// `evt_arg` のバイト長。close 完了理由等の短い付随情報を NUL 終端で収める。
 pub const EVT_ARG_BYTES: usize = CMD_DETAIL_BYTES;
-/// `arg` が `evt_arg` に収まらない時の差し替え文言（規律1・[`EventRingChild::queue`] 参照）。
+/// `arg` が `evt_arg` に収まらない時の差し替え文言の**接頭辞**（規律1・
+/// [`EventRingChild::queue`] 参照）。実際に書かれる文言は
+/// `"{EVT_ARG_FALLBACK} (original len N)"` — 元 arg のバイト長を必ず含める。
+/// child プロセスには tracing subscriber が無く、host が原因（何バイトの arg が
+/// 収まらなかったか）に迫れる唯一の経路が `evt_arg` の文言そのものだから。
 /// [`service_command_mailbox`] の `"detail too long"` フォールバックの evt 側対応物。
 pub const EVT_ARG_FALLBACK: &str = "arg too long or embedded NUL";
+
+// フォールバック文言全体（接頭辞 + " (original len " + u64 最大 20 桁 + ")"）が NUL 終端
+// 1 バイトぶんの余白を残して EVT_ARG_BYTES に静的に収まる床（`<` が NUL の 1 バイト）。
+// queue() はこの保証を前提に書き込み結果を検査しない。
+const _: () =
+    assert!(EVT_ARG_FALLBACK.len() + " (original len ".len() + 20 + ")".len() < EVT_ARG_BYTES);
 
 /// コマンド種別: 未発行（`cmd_seq == 0` と対）。
 pub const CMD_NONE: u32 = 0;
@@ -413,10 +424,16 @@ impl EventRingChild {
     ///
     /// **規律1（[`service_command_mailbox`] の detail フォールバックの継承）**: `arg` が
     /// [`EVT_ARG_BYTES`] に収まらない・埋め込み NUL を含む場合でも、イベント自体は**必ず**
-    /// enqueue する。arg は [`EVT_ARG_FALLBACK`] へ差し替え、`tracing::warn!` で loud にする。
+    /// enqueue する。arg は「[`EVT_ARG_FALLBACK`] + 元 arg のバイト長」へ差し替える。
     /// spec（UIH.2a）が取りこぼし不可と規定する `UI_CLOSED` / `UI_CLOSED_DONE` は、
     /// 動的な detail（OS エラー文字列・パス等）のエンコード失敗を理由に消えてはならない —
     /// 呼び出し元が `Result` を読み捨てると MCP `close_plugin_ui` の完了判定が永遠に閉じない。
+    ///
+    /// **差し替えの可視化は `evt_arg` の文言自体が担う**（host は poll で読める）。
+    /// `tracing::warn!` も併発するが、これは best-effort — 本メソッドが走る child バイナリ
+    /// （`orbit-vst3-*-child` / `orbit-clap-*-child`）は tracing subscriber を初期化しない
+    /// ため、production では何も出力されない（`tracing` は global subscriber 未設定なら
+    /// 黙って no-op）。warn が観測されるのは subscriber を持つ in-process 利用・テストのみ。
     ///
     /// `Err` は [`EventRingChildError::UnknownKind`] のみ（enum doc 参照）。
     pub fn queue(&mut self, kind: u32, arg: &str) -> Result<(), EventRingChildError> {
@@ -430,8 +447,10 @@ impl EventRingChild {
                 arg_len = arg.len(),
                 "event arg does not fit or contains NUL; replacing with fallback"
             );
-            // フォールバック文言は EVT_ARG_BYTES に静的に収まる。
-            let _ = write_cstr_field(&mut bytes, EVT_ARG_FALLBACK);
+            // 元の長さを host まで運ぶ（原因追跡の唯一の経路 — 上記 doc 参照）。
+            // 文言全体が EVT_ARG_BYTES に収まることは EVT_ARG_FALLBACK 脇の const assert が保証。
+            let fallback = format!("{EVT_ARG_FALLBACK} (original len {})", arg.len());
+            let _ = write_cstr_field(&mut bytes, &fallback);
         }
         self.pending.push_back(PendingEvent { kind, arg: bytes });
         Ok(())
@@ -504,8 +523,10 @@ impl EventRingEvent {
 pub enum EventPollOutcome {
     /// 新規イベントは無かった（`evt_ack_seq == evt_seq`）。
     Idle,
-    /// 新規イベントを `handled` 件（>= 1）完結し ack した。未 ack は残っていない。
-    Advanced { handled: usize },
+    /// 新規イベントを `handled` 件完結し ack した。未 ack は残っていない。
+    /// 「>= 1」はコメントでなく型が保証する（0 件の前進は [`Self::Idle`] であり、
+    /// `Advanced { handled: 0 }` は構築できない）。
+    Advanced { handled: NonZeroUsize },
     /// handler が `seq` / `kind` のイベントの完結を拒んだ。`handled` 件はその前に ack 済み。
     /// 同じ seq が次回 poll の先頭に再登場する（seq 順処理: 追い越して前進しない）。
     Blocked { handled: usize, seq: u64, kind: u32 },
@@ -519,26 +540,60 @@ pub enum EventPollOutcome {
 /// （`last_seen_dirty_epoch` は累積水位 `dirty_epoch` に対する watermark であり、
 /// `dirty_epoch` を respawn でリセットしないからこそ保持できている — 対になる設計）。
 ///
-/// **スレッド安全性（規律2: [`CommandMailboxHost`] の `Mutex<CommandMailboxState>` の継承）**:
-/// [`Self::poll`] は内部 `Mutex` で直列化される。`evt_ack_seq` の Relaxed 読み
-/// （[`ReleaseAcquireSeq::load_own`]）が前提とする「唯一の書き手」は、この直列化が
-/// **host プロセス内について**与える（child プロセスは `evt_ack_seq` を読むだけで書かない）。
+/// **スレッド安全性（`read → handler → ack` の原子性）**: [`Self::poll`] は `AtomicBool` の
+/// CAS ゲートで排他する。[`CommandMailboxHost`] の「投函と reset の短い critical section
+/// だけを `Mutex` で守り、待ち中は保持しない」規律とは**意図的に粒度が異なる**: evt 側は
+/// handler の完了と `evt_ack_seq` の ack publish が原子でないと lost-update（同一イベントの
+/// 重複処理）が起きるため、handler を含む全区間をゲートが覆う。任意の呼び出し元コード
+/// （handler）がゲート内で走る以上、ブロッキングロックでは再入 = 自己 deadlock・
+/// panic = 恒久 poison になる — だから待たずに fail-loud する CAS を使う。
+///
+/// この型が**提供する保証**:
+/// - poll の read → handler → ack サイクルは host プロセス内で同時に 1 本しか走らない。
+///   `evt_ack_seq` の Relaxed 読み（[`ReleaseAcquireSeq::load_own`]）が前提とする
+///   「唯一の書き手」はこの排他が与える（child は `evt_ack_seq` を読むだけで書かない）。
+/// - handler が panic してもゲートは RAII（[`PollGateGuard`]）で解放され、**次の poll は
+///   成功する**（恒久 poison は無い）。panic したイベントは未 ack のまま残り、次の poll が
+///   同じ seq から再配送する（handler が `false` を返したのと同じ位置に落ちる）。
+///
+/// この型が**提供しない保証**:
+/// - **並行 poll の待機・直列化はしない**: ゲートが取れない poll は待たずに即 `Err` を返す。
+///   **handler の中から同じ host の poll を呼ぶ再入も同じ `Err`**（deadlock はしないが
+///   成功もしない）。UIH.2a の想定 poller は単一なので、複数スレッドから poll する設計に
+///   変えるなら retry / 直列化は呼び出し側が持つこと。
+/// - **[`reset_child_starting`] との排他**: 同関数はこのゲートの外にいる。従来どおり
+///   `# Safety` 契約（watchdog が host 側の poll も静穏化してから呼ぶ）が要求する。
+///
 /// [`Self::observe_dirty_epoch`] は `fetch_max` の RMW で自己完結して並行安全なため
-/// この Mutex を取らない。**[`reset_child_starting`] との排他だけは型で担保していない** —
-/// 同関数の `# Safety` 契約（watchdog が host 側の poll も静穏化してから呼ぶ）を参照。
+/// ゲートを取らない。
 #[derive(Debug)]
 pub struct EventRingHost {
     shm_path: PathBuf,
-    /// poll の read → handler → ack publish サイクルを host 内で直列化する（struct doc 参照）。
-    poll_gate: Mutex<()>,
+    /// poll の read → handler → ack publish サイクルの排他フラグ（struct doc 参照）。
+    /// `true` = poll 実行中。`Mutex` にしない理由も struct doc が持つ。
+    poll_gate: AtomicBool,
     last_seen_dirty_epoch: AtomicU64,
+}
+
+/// [`EventRingHost::poll_gate`] を handler panic 時にも確実に解放する RAII ガード。
+///
+/// これが `Mutex` の poison に対する回復経路の代替: unwind 中も `Drop` は走るので、
+/// panic を跨いだ次の poll が恒久失敗しない。
+struct PollGateGuard<'a>(&'a AtomicBool);
+
+impl Drop for PollGateGuard<'_> {
+    fn drop(&mut self) {
+        // Release store: 本 poll が書いた evt_ack_seq を、次にゲートを獲得する poll の
+        // Acquire CAS へ可視化する（Mutex の unlock → lock と同じ happens-before を張る）。
+        self.0.store(false, Ordering::Release);
+    }
 }
 
 impl EventRingHost {
     pub fn new(shm_path: PathBuf) -> Self {
         Self {
             shm_path,
-            poll_gate: Mutex::new(()),
+            poll_gate: AtomicBool::new(false),
             last_seen_dirty_epoch: AtomicU64::new(0),
         }
     }
@@ -548,16 +603,27 @@ impl EventRingHost {
     /// handler が `true` を返したイベントだけを完了済みとして Release ack する。`false` なら
     /// その seq を未 ack のまま残し、後続を追い越さずに [`EventPollOutcome::Blocked`] を返す
     /// （idle との区別は戻り値の型が持つ — 規律3）。
+    ///
+    /// **再入不可**: handler の中から同じ host の poll を（直接・間接を問わず）呼ぶと、
+    /// deadlock ではなく `Err` を返す。並行 poll も同様（待たない）。保証の全体は
+    /// struct doc の「提供する保証 / 提供しない保証」を参照。
     pub fn poll<F>(&self, mut handler: F) -> io::Result<EventPollOutcome>
     where
         F: FnMut(EventRingEvent) -> bool,
     {
-        // 規律2: 並行 poll は同一イベントの重複処理と evt_ack_seq の lost-update を生むため
-        // 直列化する。poison（handler panic）は loud に失敗させる（黙って続行しない）。
-        let _serialized = self
+        // 排他の設計判断（CAS ゲート・fail-loud・panic 回復）は struct doc に集約してある。
+        // 成功時 Acquire: 前回 poll の ack 書き込み（ガード解放の Release と対）を可視化する。
+        if self
             .poll_gate
-            .lock()
-            .map_err(|_| io::Error::other("event ring poll gate poisoned by a panicked handler"))?;
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            return Err(io::Error::other(
+                "event ring poll is non-reentrant: another poll is in progress on this host \
+                 (a handler must not call poll, and concurrent pollers are not serialized)",
+            ));
+        }
+        let _gate = PollGateGuard(&self.poll_gate);
         let mmap = open_shared(&self.shm_path)?;
         let region = region_ptr(&mmap);
         let mut handled = 0;
@@ -571,10 +637,10 @@ impl EventRingHost {
                 ));
             }
             if ack == published {
-                return Ok(if handled == 0 {
-                    EventPollOutcome::Idle
-                } else {
-                    EventPollOutcome::Advanced { handled }
+                // NonZeroUsize が Idle / Advanced の境界を型で持つ（0 件の Advanced は構築不能）。
+                return Ok(match NonZeroUsize::new(handled) {
+                    None => EventPollOutcome::Idle,
+                    Some(handled) => EventPollOutcome::Advanced { handled },
                 });
             }
 
@@ -1240,8 +1306,8 @@ pub unsafe fn publish_child_ready(region: *mut SharedRegion, has_audio_input: bo
 /// - **child プロセス側**: watchdog が旧 child のプロセス消滅を確認済みであること
 ///   （生存中の child と並行すると `evt_seq` / `cmd_ack_seq` の並行 store で lost update）。
 /// - **host プロセス側**: 同一 region に対する [`EventRingHost::poll`] が並行して
-///   走っていないこと。poll は host 内部の `Mutex` で相互には直列化されるが、本関数は
-///   その Mutex の外にいる。並行すると 4 つの独立 store（`evt_seq` → 0 / `evt_ack_seq` → 0 /
+///   走っていないこと。poll 同士は host 内部の CAS ゲートで排他されるが、本関数は
+///   そのゲートの外にいる。並行すると 4 つの独立 store（`evt_seq` → 0 / `evt_ack_seq` → 0 /
 ///   `evt_kind` / `evt_arg`）の途中状態を poll が観測し、偽の `InvalidData`
 ///   （`ack > published`）や正当な ack の消失になる。watchdog は「旧 child の死亡確認 →
 ///   in-flight 手続きの中止（poll 停止を含む）→ 本関数 → spawn」の順で直列化すること。
@@ -1350,6 +1416,13 @@ mod tests {
         fn enter(&self, _span: &tracing::span::Id) {}
 
         fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    /// [`EventPollOutcome::Advanced`] の期待値コンストラクタ（`handled` は 1 以上のこと）。
+    fn advanced(handled: usize) -> EventPollOutcome {
+        EventPollOutcome::Advanced {
+            handled: NonZeroUsize::new(handled).expect("advanced() requires handled >= 1"),
+        }
     }
 
     fn mailbox_test_path(label: &str) -> std::path::PathBuf {
@@ -1681,7 +1754,7 @@ mod tests {
                 true
             })
             .expect("complete queued events"),
-            EventPollOutcome::Advanced { handled: 2 }
+            advanced(2)
         );
         assert_eq!(
             completed,
@@ -1777,7 +1850,7 @@ mod tests {
         );
         assert_eq!(
             host.poll(|_| true).expect("drain old incarnation"),
-            EventPollOutcome::Advanced { handled: 2 }
+            advanced(2)
         );
 
         unsafe { reset_child_starting(region) };
@@ -1806,7 +1879,7 @@ mod tests {
                 true
             })
             .expect("poll replacement incarnation"),
-            EventPollOutcome::Advanced { handled: 2 },
+            advanced(2),
             "same host instance must deliver exactly the replacement child's events"
         );
         assert_eq!(
@@ -1887,15 +1960,9 @@ mod tests {
             delivered.push((event.seq, event.kind));
             true
         };
-        assert_eq!(
-            host.poll(&mut drain).expect("drain first two"),
-            EventPollOutcome::Advanced { handled: 2 }
-        );
+        assert_eq!(host.poll(&mut drain).expect("drain first two"), advanced(2));
         assert_eq!(unsafe { child.service(region) }.expect("publish third"), 1);
-        assert_eq!(
-            host.poll(&mut drain).expect("drain third"),
-            EventPollOutcome::Advanced { handled: 1 }
-        );
+        assert_eq!(host.poll(&mut drain).expect("drain third"), advanced(1));
         assert_eq!(
             delivered,
             vec![
@@ -1951,10 +2018,18 @@ mod tests {
                 true
             })
             .expect("poll fallback events"),
-            EventPollOutcome::Advanced { handled: 2 }
+            advanced(2)
         );
         // 文言はハードコードで検証する（const 経由だと文言の破壊を検出できない）。
-        assert_eq!(args, vec!["arg too long or embedded NUL".to_string(); 2]);
+        // 元 arg のバイト長を必ず含む（host が原因に迫れる唯一の経路 — queue() の doc 参照）。
+        // 256 = EVT_ARG_BYTES ぶんの "x"、14 = "timeout\0detail" のバイト長。
+        assert_eq!(
+            args,
+            vec![
+                "arg too long or embedded NUL (original len 256)".to_string(),
+                "arg too long or embedded NUL (original len 14)".to_string(),
+            ]
+        );
 
         drop(mmap);
         let _ = std::fs::remove_file(shm);
@@ -2020,6 +2095,87 @@ mod tests {
             "got: {error}"
         );
         assert!(!invoked, "no handler may run on corrupted ring state");
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    /// 排他ゲート: handler の中から同じ host の poll を呼ぶ再入は、deadlock ではなく
+    /// 明示的な `Err` になり、外側の poll はそのまま完結できる。ゲートは外側 poll の
+    /// 完了で解放され、後続の poll は成功する。
+    #[test]
+    fn event_ring_poll_reentry_from_handler_fails_loud_instead_of_deadlocking() {
+        let shm = mailbox_test_path("event-poll-reentry");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mut child = EventRingChild::new();
+        child.queue(EVT_UI_CLOSED, "reentry").expect("queue");
+        assert_eq!(unsafe { child.service(region) }.expect("publish"), 1);
+
+        let host = EventRingHost::new(shm.clone());
+        let mut inner_result = None;
+        assert_eq!(
+            host.poll(|_| {
+                inner_result = Some(host.poll(|_| true));
+                true
+            })
+            .expect("outer poll must complete"),
+            advanced(1)
+        );
+        let inner = inner_result.expect("handler must have attempted the re-entrant poll");
+        let error = inner.expect_err("re-entrant poll must fail loud, not succeed");
+        assert!(
+            error.to_string().contains("non-reentrant"),
+            "error must name the contract: {error}"
+        );
+        // 再入の Err で内側イベントが処理されていない（ack は外側の 1 件ぶんだけ）。
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 1);
+        // ゲートは外側 poll の完了で解放済み。
+        assert_eq!(
+            host.poll(|_| true).expect("subsequent poll must succeed"),
+            EventPollOutcome::Idle
+        );
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    /// 排他ゲート: handler の panic でゲートが恒久 poison しない（`Mutex` 版には無かった
+    /// 回復経路）。panic したイベントは未 ack のまま残り、次の poll が同じ seq から
+    /// 再配送して完結できる。
+    #[test]
+    fn event_ring_poll_recovers_after_handler_panic_and_redelivers_unacked_event() {
+        let shm = mailbox_test_path("event-poll-panic");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mut child = EventRingChild::new();
+        child.queue(EVT_UI_CLOSED, "will-panic").expect("queue");
+        assert_eq!(unsafe { child.service(region) }.expect("publish"), 1);
+
+        let host = EventRingHost::new(shm.clone());
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            host.poll(|_| panic!("handler exploded"))
+        }));
+        assert!(
+            panicked.is_err(),
+            "handler panic must propagate to the caller"
+        );
+        assert_eq!(
+            unsafe { (*region).evt_ack_seq.read() },
+            0,
+            "a panicked handler must not ack its event"
+        );
+
+        let mut redelivered = Vec::new();
+        assert_eq!(
+            host.poll(|event| {
+                redelivered.push((event.seq, event.kind));
+                true
+            })
+            .expect("poll after a handler panic must succeed (no permanent poisoning)"),
+            advanced(1)
+        );
+        assert_eq!(redelivered, vec![(1, EVT_UI_CLOSED)]);
 
         drop(mmap);
         let _ = std::fs::remove_file(shm);

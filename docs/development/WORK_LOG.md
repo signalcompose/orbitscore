@@ -17,6 +17,95 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.340 fix(rust): #474 P2 レビューラウンド2 — 「継承したつもり」を CAS ゲートで直した (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474（P2 のレビュー修正 R2）/ **Branch**: `474-plugin-ui-p2-evt-ring` / **PR**: #591
+**Status**: `cargo test -p orbit-audio-sandbox` = 87 passed / 0 failed / 1 ignored
+
+ラウンド2は **provenance で縮小**した（CLAUDE.md の規律）。ラウンド1の指摘はすべて
+original-diff 起因で修正済み・**original-diff 起因の新規指摘は0**だったため、元差分のレビューは
+収束とみなし、**fix 差分のみ・1レビュアー・2問限定**に切り替えた。
+
+問いは規律どおり2つだけ:「この修正が導入する新しい故障モードは何か」
+「新コードはどの実行コンテキストで走るか」。**Critical 0 / Important 2 / Minor 1**。
+
+#### 🔴 「規律2を継承」が継承になっていなかった
+
+main がラウンド1で書いたポリシーは「`CommandMailboxHost` の直列化規律を継承せよ」だったが、
+**機構名だけを指示したため、ロックの粒度が別物になっていた**:
+
+| | ロックの粒度 |
+|---|---|
+| `CommandMailboxHost::state`（既存） | doc 明示どおり「**投函と reset の短い critical section だけ**」。呼び出し元のクロージャを一切ラップしない |
+| `EventRingHost::poll`（R1 の実装） | `open_shared` から **handler 呼び出しまで全体**を保持 |
+
+そこから2つの故障が直接生まれていた — **再入デッドロック**（`std::sync::Mutex` は非再入・
+handler から poll を呼ぶと自己デッドロック・doc に禁止の明示なし）と、
+**poison 後の恒久失敗に回復経路が無い**（`CommandMailboxHost` には `reset_after_child_exit` が
+あるのに evt 側には無く、しかも任意の呼び出し元コードをロック内で実行するため引き金が広い）。
+
+メモリの教訓 [[inherit-invariants-not-just-mechanism-names]] の再演。**機構名でなく不変条件を渡すべきだった。**
+
+#### 修正: `Mutex<()>` → `AtomicBool` の CAS ゲート
+
+🔴 **「粒度を揃える」は採れない** — `read → handler → ack` が原子でないと、ラウンド1で塞いだ
+`evt_ack_seq` の lost-update が戻る。したがって handler をゲート内に置く設計は**維持**し、
+`CommandMailboxHost` との粒度差を「継承」でなく**意図的な差**として doc に理由つきで記述した。
+
+- **再入**: CAS が取れなければ即 `Err("event ring poll is non-reentrant: ...")`。
+  自己デッドロックが**明示的エラー**に変わった
+- **poison**: `Mutex` 廃止で概念自体が消滅。handler panic 時も `Drop` でゲートが解放され、
+  **次の poll は成功して同じ seq から再配送**する
+- Ordering: CAS 成功 = Acquire / ガード解放 = Release で、Mutex の unlock→lock と同じ
+  happens-before を張る（`load_own` の「唯一の書き手」前提を維持）
+
+意味論は「並行 poll を直列化」から「**検出して loud に失敗**」へ変わった。UIH.2a は
+host poller の多重化を規定しておらず、fail-loud はこのコードベースの一貫した規律であるため
+spec と矛盾しないと判断（多重 poller 化するなら retry は呼び出し側の責務、と doc に明記）。
+
+#### `tracing::warn!` が child プロセスでは no-op だった
+
+「`tracing::warn!` で loud にする」と doc に書いていたが、**4つの child バイナリはいずれも
+`Cargo.toml` に `tracing` 依存すら無く**、subscriber 初期化も存在しない（`grep -rn tracing` が空）。
+subscriber を持つのは daemon 側のみ。**主張が成立していなかった。**
+
+修正はフォールバック文言に追跡情報を載せる形にした —
+`"arg too long or embedded NUL (original len N)"`。host が `evt_arg` を読むだけで原因に迫れる。
+文言全体が `EVT_ARG_BYTES` に収まることは **const assert で静的に保証**。
+doc からは「loud にする」の主張を削り、「child では subscriber 未設定のため出力されない
+best-effort」と明記した。
+
+#### doc に「提供する保証／しない保証」を書き分けた
+
+- **提供する**: poll サイクルは host 内で同時1本 / handler panic でもゲートは解放され
+  次の poll は成功（未 ack イベントは再配送）
+- **提供しない**: 並行 poll の待機・直列化（即 `Err`・handler からの再入も同じ）/
+  `reset_child_starting` との排他（従来どおり `# Safety` 契約）
+
+#### `EventPollOutcome::Advanced { handled: NonZeroUsize }`
+
+型で `Advanced { handled: 0 }` を表現不能にした。構築箇所が
+`match NonZeroUsize::new(handled) { None => Idle, Some(h) => Advanced { handled: h } }` になり、
+元の `if handled == 0` より短くなった。`Blocked` の `handled` は 0 が正当なので `usize` のまま。
+
+#### 🔴 main の変異検証で、変異が適用されていない状態を一度読みかけた
+
+`perl` の置換パターンがコメント行で外れ、**変異が反映されていないのに green を読んで
+「生き残った」と誤読しかけた**。規律「変異は成果物への反映を assert してから回す」どおり、
+**反映を `grep` で確認してから**やり直した。
+
+| 変異 | 反映確認 | main 自身の実行結果 |
+|---|---|---|
+| `PollGateGuard::drop` の解放を握り潰す | ✅ | **5件 FAILED** |
+| CAS 検査を無効化（再入を許す） | ✅ | **1件 FAILED** |
+
+**変更ファイル**: `rust/crates/orbit-audio-sandbox/src/transport.rs`
+
+**Commit**: PR #591（レビューラウンド2の修正）
+
+---
+
 ### 6.339 fix(rust): #474 P2 レビューラウンド1 — mailbox の host 側規律を evt リングへ移植した (Jul 31, 2026)
 
 **Date**: 2026-07-31
