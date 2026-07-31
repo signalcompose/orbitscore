@@ -76,6 +76,9 @@ pub const EVENT_DAEMON_ERROR: &str = "DaemonError";
 pub const EVENT_STREAM_STATS: &str = "StreamStats";
 pub const EVENT_PLAY_STARTED: &str = "PlayStarted";
 pub const EVENT_PLAY_ENDED: &str = "PlayEnded";
+pub const EVENT_PLUGIN_UI_CLOSED: &str = "PluginUiClosed";
+pub const EVENT_PLUGIN_UI_CLOSE_DONE: &str = "PluginUiCloseDone";
+pub const EVENT_PLUGIN_UI_CLOSED_BY_RESPAWN: &str = "PluginUiClosedByRespawn";
 
 pub const ERROR_SEVERITY_WARNING: &str = "warning";
 pub const ERROR_SEVERITY_FATAL: &str = "fatal";

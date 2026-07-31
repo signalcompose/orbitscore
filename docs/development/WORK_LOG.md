@@ -17,6 +17,101 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.346 feat(rust): #474 P4a — UI 経路を daemon に通す + 未コミット実装の消失と復旧 (Jul 31, 2026)
+
+**Date**: 2026-07-31
+**Issue**: #474 / #592 / **Branch**: `474-p4-daemon-mcp-wiring`
+**Status**: `cargo test --workspace`（sandbox 外）= **474 passed / 0 failed / 26 ignored**・clippy 4 feature + Linux + fmt 全緑
+
+child 側だけ完成していた UI 経路（P3 まで）を daemon に接続した。核心は
+「**ウィンドウを閉じた瞬間に音色が保存される**」セーフポイント (b) の daemon 側。
+
+#### 実装
+
+- **`UiEventPump`**（#592 の排他）— `EventRingHost::poll` と `reset_child_starting` に
+  排他が無かった。同型問題の既存解 `CommandMailboxHost`（`Mutex` + `generation`）に倣い、
+  lock 順序を **pump → mailbox** に固定。sink は非ブロッキング enqueue 限定（pump lock
+  保持中にブロックすると watchdog が詰まる）
+- **abandon 規則** — `UI_CLOSED(s)` が Blocked のまま `s+1` に
+  `UI_CLOSED_DONE(timeout-without-save)` が来たら s を loud に ack。これが無いとリングが
+  永久に Blocked し、ドレーンゲートにより **UI を二度と開けなくなる**
+- **「停止中のみ保存」ガードの撤去** — セーフポイント (b) は**演奏中に発火する**ので、
+  残すと演奏中のクローズで保存が必ず失敗し目的が壊れる
+- protocol 3種 / `PluginUiWiring` による引数集約（clippy 引数過多 9/7 の意味的解消）/
+  OPEN_UI 専用タイムアウト / ウィンドウタイトル
+
+#### 🔴 事故: 未コミット実装の消失
+
+clippy の引数過多を直す置換スクリプトが、**シグネチャ置換は 0 箇所ヒットなのに識別子置換
+だけ実行**してファイルを壊した。そこで `git checkout -- engine_wrap.rs` を打ち、
+**Codex の未コミット実装（+1736 行の一部）を破棄した**。
+
+- **`git checkout` は「直前の編集の取り消し」ではなく「未コミット変更の全破棄」**
+- 検証前でも**一度コミットしておけば安全な操作だった**。以後、委譲先の実装は
+  検証前に必ずコミットして保護する
+- 「**置換 0 件で続行しない**」— 0 件は「対象が無い」であり、そこで止まるべきだった
+  （同じ規律を今日 CI 対応で自分に課しておきながら、自分のスクリプトで踏んだ）
+
+復旧は逐次差分16個の再構成ではなく、**他ファイルが期待する形をビルドエラーから読ませて
+Codex に再実装させた**（`engine_wrap.rs` 以外は無傷だったため成立した）。
+
+#### 🔴 変異検証で見つけた検証漏れ
+
+main が **6種**の変異を実走した。
+
+| 変異 | 結果 |
+|---|---|
+| pump lock を経ない reset（ロック順序） | red にならず（ただし**変異側が的外れ** — 上端の lock を残したため排他は壊れていない。順序違反は単体テストで観測できない） |
+| generation 検査を外す | red |
+| abandon の `timeout-without-save` 判別を落とす | 🔴 **生存 → テスト追加後 red** |
+| engine ack 前に evt_ack を進める | red（7 failed） |
+| 毎 poll 通知する | red（3 failed） |
+| **pump lock を取らずにリングを潰す** | 🔴 **生存 → アサーション強化後 red** |
+
+**実質の検証漏れは2件**（3行目・6行目）。1行目も red にならなかったが、これは変異が
+守るべき性質を壊していなかった＝**私の変異の作り方が誤っていた**もので、テストの穴ではない。
+
+2件の生存はどちらも「テストは通るが実装は壊れている」型である。
+
+##### (1) abandon の判別が無検証
+
+既存テスト `ui_event_pump_abandons_only_after_timeout_done_and_accepts_late_ack` は名前に
+**「only」と書きながらその判別を検証していなかった**（timeout 以外の DONE を一度も
+publish していない）。判別を落とすと、**engine が保存を確認していない safepoint を daemon が
+ack** し、音色を失ったままリングだけ正常に進む — UI は再オープンでき失敗がどこにも
+現れない、受け入れ基準を壊すサイレント障害になる。
+`ui_event_pump_does_not_abandon_on_a_non_timeout_done` を追加して塞いだ。
+
+##### (2) 🔴 排他テストが性質ではなくタイミングを見ていた
+
+こちらの方が重い。**この PR の存在理由（#592 の排他）を守っていなかった。**
+
+`ui_event_pump_serializes_poll_sink_and_respawn_reset` は「reset が 50ms 以内に完了しない」
+ことだけを assert していた。しかし**排他の実体はリングの不変性**であって、reset の戻りが
+遅いことではない。
+
+`reset_after_child_exit` を「**pump lock を取る前に**リングをゼロ化し、その後 lock で待つ」
+実装に差し替えると:
+
+- リングは poll の最中に破壊される（**#592 そのもの**）
+- reset の戻りは pump lock で待たされるので**タイミング assert は通る**
+- **8 テスト全部 green のまま**
+
+`evt_seq` が poll 中も保たれることを直接 assert するよう変更し、変異で red を確認した。
+
+補助のストレステストも `!error.contains("ack 1 exceeds published seq 0")` という
+**一文字列の否定**だけを検査しており、それ以外の破損を全部黙認していた。健全時の観測
+エラーは実測 0 件なので `errors.is_empty()` に締めた（緩さに代償を払っていなかった）。
+
+**教訓**: 「その変更が守るはずの性質」を assert しているか。副作用のタイミングや
+特定の文字列を見ていないか。守る対象を壊して red を確認するまで、テストの意味は未検証。
+
+#### 補足
+
+sandbox 内で FAILED だった `pipelined_host_with_real_child_is_gain_delayed_one_block` は
+**sandbox 外で ok**。Codex 報告の「3 failed（headless AppKit）」も main の実走では消えた。
+委譲先の green/red はどちらも main が回し直す、という既存規律どおりの結果。
+
 ### 6.345 chore(rust): #474 P3b — CI 5往復・/simplify・レビューラウンド1 (Jul 31, 2026)
 
 **Date**: 2026-07-31

@@ -529,9 +529,16 @@ LLM 側と非対称になる（DESIGN_PRINCIPLES §3 違反）。
 | MCP | `save_plugin_state(receiver, index)`（実装済） / `open_plugin_ui(sequence, index)`・`close_plugin_ui(sequence, index)`（**未実装**） |
 | daemon 以下 | 解決済みの target（daemon bus / instance）と chain index だけを知る |
 
-> **UI open/close の v1 スコープ**: `open_plugin_ui` / `close_plugin_ui` は**未実装**であり、
-> **v1 では receiver を sequence に限定する**。receiver 一般化（`master` / `sum:` / `aux:`）が
-> v1 で適用されるのは state 保存・復元（`save_plugin_state` / PRJ.1 auto-restore）のみ。
+> **UI open/close の receiver スコープ**: 🟢 **全 receiver へ一般化する**
+> （`master` / `sum:` / `aux:` を含む・owner 裁定 2026-07-31・設計書 §8 Q1 = (b)）。
+>
+> 宛先解決は `save_plugin_state` が既に全 receiver で実装している語彙をそのまま使うため、
+> 追加コストは小さい。**#577 の受け入れ基準**が「sequence / master / sum / aux の
+> **いずれでも** UI で音色を作る」を要求しており、sequence 限定ではその基準を満たせない。
+>
+> 🔴 執筆時この節は「v1 では receiver を sequence に限定する」としていたが、
+> **裁定と矛盾したまま残っていた**（P4 着手前の点検で判明）。`open_plugin_ui` /
+> `close_plugin_ui` は P4 で実装する。
 
 これにより #474 の regex 依存はエディタ層に閉じ込められ、#495 言語サービス導入時も
 engine 側は影響を受けない。

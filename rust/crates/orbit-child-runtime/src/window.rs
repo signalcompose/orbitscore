@@ -8,7 +8,7 @@ use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowDelegate, NSWindowStyleMask};
-use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize};
+use objc2_foundation::{NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
 use orbit_child_ui::UiSize;
 
 use crate::ui_service::{WindowCloseCallback, WindowFactory, WindowHandle, WindowResizeCallback};
@@ -157,6 +157,16 @@ impl WindowShell {
             })
     }
 
+    /// Apply the caller-rendered title forwarded by the daemon to the host window.
+    pub fn set_title(&mut self, title: &str) -> Result<(), String> {
+        let window = self
+            .window
+            .as_ref()
+            .ok_or_else(|| "plugin UI window title failed: window is closed".to_owned())?;
+        window.setTitle(&NSString::from_str(title));
+        Ok(())
+    }
+
     /// Apply a plugin-requested logical content size to the host window.
     pub fn resize(&mut self, size: UiSize) -> Result<(), String> {
         if size.width <= 0 || size.height <= 0 {
@@ -201,6 +211,10 @@ impl Drop for WindowShell {
 impl WindowHandle for WindowShell {
     fn content_view(&self) -> *mut c_void {
         self.content_view()
+    }
+
+    fn set_title(&mut self, title: &str) -> Result<(), String> {
+        self.set_title(title)
     }
 
     fn resize(&mut self, size: UiSize) -> Result<(), String> {

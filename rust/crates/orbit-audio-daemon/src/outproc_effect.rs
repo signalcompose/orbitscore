@@ -37,10 +37,13 @@ use std::time::{Duration, Instant};
 
 use orbit_audio_native::PostProcessor;
 use orbit_audio_sandbox::{
-    open_shared, region_ptr, CommandMailboxHost, PipelinedEffectHost, CONTROL_QUIT,
+    open_shared, region_ptr, CommandMailboxHost, PipelinedEffectHost, UiEventPump, CONTROL_QUIT,
 };
 
-use crate::outproc_respawn_guard::advance_fast_respawn_streak;
+use crate::engine_wrap::PluginUiWiring;
+use crate::outproc_respawn_guard::{
+    advance_fast_respawn_streak, drain_ui_pump, poll_ui_pump_once, service_ui_pump_on_respawn,
+};
 
 /// watchdog が child の生存を poll する周期（非 RT・control thread）。
 const WATCHDOG_POLL: Duration = Duration::from_millis(20);
@@ -478,6 +481,9 @@ impl EffectChildSupervisor {
         sample_rate: u32,
     ) -> io::Result<Self> {
         let mailbox = Arc::new(CommandMailboxHost::new(shm_path.clone()));
+        let ui_pump = Arc::new(UiEventPump::new(shm_path.clone()));
+        let ui_target = Arc::new(Mutex::new(None));
+        let (ui_events, _) = tokio::sync::broadcast::channel(16);
         Self::spawn_with_mailbox(
             first_child,
             shm_path,
@@ -488,11 +494,16 @@ impl EffectChildSupervisor {
             sample_rate,
             Arc::new(Mutex::new(None)),
             mailbox,
+            PluginUiWiring {
+                pump: ui_pump,
+                target: ui_target,
+                events: ui_events,
+            },
         )
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn spawn_with_mailbox(
+    pub(crate) fn spawn_with_mailbox(
         mut first_child: Child,
         shm_path: PathBuf,
         stats: Arc<OutProcEffectStats>,
@@ -502,7 +513,13 @@ impl EffectChildSupervisor {
         sample_rate: u32,
         latest_state: Arc<Mutex<Option<PathBuf>>>,
         mailbox: Arc<CommandMailboxHost>,
+        ui: PluginUiWiring,
     ) -> io::Result<Self> {
+        let PluginUiWiring {
+            pump: ui_pump,
+            target: ui_target,
+            events: ui_events,
+        } = ui;
         // watchdog 専用の control mapping（host は from_mmap で 1st mapping を消費するので 2nd を開く）。
         // この MmapMut は closure に move され watchdog thread 終了まで生存する（region ポインタの前提）。
         // open_shared 失敗時は first_child を orphan 化させず reap し、作成済み shm を unlink する。
@@ -611,10 +628,13 @@ impl EffectChildSupervisor {
                             // `try_wait=Some` で旧 child の死亡を確認済み。in-flight command を
                             // failure ack で完了し、readiness/mailbox を reset してから replacement を
                             // spawn する（生きた child への reset は禁止・UIH.2）。
-                            if let Err(error) = mailbox.reset_after_child_exit() {
-                                tracing::error!(
-                                    "effect mailbox reset failed; measurement invalid: {error}"
-                                );
+                            if !service_ui_pump_on_respawn(
+                                "effect",
+                                &ui_pump,
+                                &mailbox,
+                                &ui_target,
+                                &ui_events,
+                            ) {
                                 stats.measurement_invalid.store(true, Ordering::Release);
                                 break;
                             }
@@ -657,6 +677,7 @@ impl EffectChildSupervisor {
                         }
                         Ok(None) => {
                             try_wait_errors = 0;
+                            poll_ui_pump_once("effect", &ui_pump, &ui_target, &ui_events);
                             std::thread::sleep(WATCHDOG_POLL);
                         }
                         Err(e) => {
@@ -674,6 +695,7 @@ impl EffectChildSupervisor {
                         }
                     }
                 }
+                drain_ui_pump("effect", &ui_pump, &ui_target, &ui_events);
                 // teardown: shutdown 済み（respawn しない）。現 child へ QUIT を送り reap する。
                 // SAFETY: region は生存 ctl_mmap を指す。QUIT は一回限りの flag（Release で publish）。
                 unsafe {
@@ -1112,6 +1134,9 @@ mod tests {
         let first_pid = first.id();
         let latest_state = Arc::new(Mutex::new(None));
         let mailbox = Arc::new(CommandMailboxHost::new(shm.clone()));
+        let ui_pump = Arc::new(UiEventPump::new(shm.clone()));
+        let ui_target = Arc::new(Mutex::new(None));
+        let (ui_events, _) = tokio::sync::broadcast::channel(16);
         let sup = EffectChildSupervisor::spawn_with_mailbox(
             first,
             shm.clone(),
@@ -1122,6 +1147,11 @@ mod tests {
             48_000,
             latest_state.clone(),
             mailbox.clone(),
+            PluginUiWiring {
+                pump: ui_pump,
+                target: ui_target,
+                events: ui_events,
+            },
         )
         .expect("supervisor spawn");
 
