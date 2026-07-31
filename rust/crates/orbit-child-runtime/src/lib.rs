@@ -15,10 +15,13 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+// The UI service exists to drive an AppKit window; it has no meaning without one.
+#[cfg(any(target_os = "macos", test))]
 mod ui_service;
 #[cfg(target_os = "macos")]
 pub mod window;
 
+#[cfg(any(target_os = "macos", test))]
 pub use ui_service::{PluginMainHandle, UiCallbacks, UiService, UI_CLOSE_TIMEOUT};
 
 fn should_quit_with_parent(control_quit: bool, parent_should_exit: impl FnOnce() -> bool) -> bool {
@@ -53,6 +56,7 @@ pub unsafe fn child_should_quit(
 /// `region` must point to a live mapped [`orbit_audio_sandbox::SharedRegion`], and this must
 /// run on the process main thread (mailbox servicing is main-thread-only after #474 P1 —
 /// `CMD_SAVE_STATE` may block on plugin serialization and fsync without stalling audio).
+#[cfg(any(target_os = "macos", test))]
 pub unsafe fn service_child_main<E: std::fmt::Display>(
     region: *mut orbit_audio_sandbox::SharedRegion,
     ui: &UiService,
@@ -83,6 +87,7 @@ pub const MAIN_TICK_INTERVAL: Duration = Duration::from_millis(20);
 /// [`MAIN_TICK_INTERVAL`] が 20ms なので 50 スキップ ≒ 1 秒。nested runloop が続く間、
 /// 毎 tick 書くと 1 秒あたり 50 回の未バッファ書き込みになる — 初回 + 1 秒ごとで
 /// 「今も再入している」ことは十分伝わる。
+#[cfg(any(target_os = "macos", test))]
 const REENTRANT_TICK_LOG_EVERY: u64 = 50;
 
 #[cfg(any(target_os = "macos", test))]
