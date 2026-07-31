@@ -3383,11 +3383,11 @@ mod tests {
         stop.store(true, Ordering::Release);
         poller.join().expect("poller join");
         let errors = errors.lock().expect("errors lock");
+        // 特定の一文字列だけを禁じると、それ以外の破損シグネチャを**全部黙認**する。
+        // 健全時の観測エラーは 0 件なので（実測）、締めても偽陽性は増えない。
         assert!(
-            errors
-                .iter()
-                .all(|error| !error.contains("ack 1 exceeds published seq 0")),
-            "poll observed a partial reset: {errors:?}"
+            errors.is_empty(),
+            "poll observed a partial reset or any other pump error: {errors:?}"
         );
 
         drop(mmap);
