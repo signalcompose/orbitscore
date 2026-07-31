@@ -1085,4 +1085,171 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
   it('sanity: DeviceSwitchBridge is the real vscode-free class (bridge assertions above are not vacuous)', () => {
     expect(ext.__getDeviceSwitchBridgeForTest()).toBeInstanceOf(DeviceSwitchBridge)
   })
+
+  // #601 review I5: the three `pluginUiBridge.drainAll` call sites
+  // (stopEngine / engineTerminationEffects via setupExitHandler /
+  // setupStdinErrorHandler) and the `pluginUiForAgent` → `sendPluginUiMeta` →
+  // stdout-handleLine round-trip had zero coverage — deleting any of the
+  // drainAll calls left every test green while `open_plugin_ui` /
+  // `close_plugin_ui` callers hung forever on engine death. Each spec below
+  // observes a REAL pending `send()` resolve with the site's verbatim reason,
+  // so a deleted call site fails as a timeout-reason mismatch, not a hang.
+  describe('plugin UI bridge wiring (#601 review I5)', () => {
+    beforeEach(() => {
+      ext.__setLiveCodingModeForTest(false)
+    })
+
+    it('stopEngine drains a pending //#pluginUi request with the stopped reason', async () => {
+      vi.useFakeTimers()
+      try {
+        const proc = {
+          killed: false,
+          exitCode: null,
+          signalCode: null,
+          kill: vi.fn(() => true),
+        } as unknown as ChildProcess
+        ext.__setEngineProcessForTest(proc)
+        ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+        ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+        ext.__setEngineViewProviderForTest({ refresh: () => {} })
+
+        const bridge = ext.__getPluginUiBridgeForTest()
+        const resultPromise = bridge.send(
+          () => true,
+          { requestId: 'stop-1', action: 'open', receiver: 'lead', index: 0 },
+          200,
+        )
+
+        expect(ext.stopEngine()).toBe(true)
+        // Green path: drainAll already resolved the promise and cleared the
+        // 200ms timer, so advancing is a no-op. If the stopEngine drain were
+        // deleted, this fires the bridge timeout instead and the reason
+        // assertion below fails fast (instead of the test hanging).
+        vi.advanceTimersByTime(300)
+
+        await expect(resultPromise).resolves.toEqual({
+          requestId: 'stop-1',
+          action: 'open',
+          ok: false,
+          error: 'engine was stopped before responding to //#pluginUi',
+        })
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('setupExitHandler drains a pending //#pluginUi request when the engine exits', async () => {
+      const { proc, fireExit } = fakeChildProcess()
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+      ext.__setEngineViewProviderForTest({ refresh: () => {} })
+
+      const bridge = ext.__getPluginUiBridgeForTest()
+      const resultPromise = bridge.send(
+        () => true,
+        { requestId: 'exit-1', action: 'close', receiver: 'lead', index: 0 },
+        200,
+      )
+
+      ext.setupExitHandler(proc)
+      fireExit(0)
+
+      await expect(resultPromise).resolves.toEqual({
+        requestId: 'exit-1',
+        action: 'close',
+        ok: false,
+        // applyEngineExit passes one reason string to every bridge drain; the
+        // wording names //#selectAudioDevice only (pre-existing template).
+        error: 'engine process exited before responding to //#selectAudioDevice',
+      })
+    })
+
+    it('setupStdinErrorHandler drains a pending //#pluginUi request with the stdin-error reason', async () => {
+      const { proc, fireStdinError } = fakeChildProcess()
+      ext.__setEngineProcessForTest(proc)
+      ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+
+      const bridge = ext.__getPluginUiBridgeForTest()
+      const resultPromise = bridge.send(
+        () => true,
+        { requestId: 'stdin-1', action: 'open', receiver: 'lead', index: 0 },
+        200,
+      )
+
+      ext.setupStdinErrorHandler(proc)
+      fireStdinError(new Error('EPIPE'))
+
+      await expect(resultPromise).resolves.toEqual({
+        requestId: 'stdin-1',
+        action: 'open',
+        ok: false,
+        error: 'engine stdin error: EPIPE',
+      })
+    })
+
+    it('pluginUiForAgent refuses before touching stdin when the engine is not running', async () => {
+      ext.__setEngineProcessForTest(null)
+
+      await expect(ext.__pluginUiForAgentForTest('open', 'lead', 0)).resolves.toEqual({
+        ok: false,
+        error: 'engine is not running — start the engine first',
+      })
+    })
+
+    it('pluginUiForAgent round-trips //#pluginUi through stdin and the stdout handler', async () => {
+      const fake = fakeChildProcess()
+      const written: string[] = []
+      // fakeChildProcess only wires `.on`; sendPluginUiMeta additionally needs
+      // a writable stdin. Augment the same object so identity checks hold.
+      Object.assign(fake.proc.stdin as unknown as Record<string, unknown>, {
+        writable: true,
+        write: (line: string, callback?: (error?: Error | null) => void) => {
+          written.push(line)
+          callback?.(null)
+          return true
+        },
+      })
+      ext.__setEngineProcessForTest(fake.proc)
+      ext.__setLiveCodingModeForTest(true)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({ appendLine: () => {}, append: () => {} })
+      ext.setupStdoutHandler(fake.proc, false)
+
+      const resultPromise = ext.__pluginUiForAgentForTest('open', 'lead', 0, 'Massive-X')
+
+      expect(written).toHaveLength(1)
+      expect(written[0]!.startsWith('//#pluginUi ')).toBe(true)
+      const payload = JSON.parse(written[0]!.slice('//#pluginUi '.length)) as Record<
+        string,
+        unknown
+      >
+      expect(payload).toMatchObject({
+        action: 'open',
+        receiver: 'lead',
+        index: 0,
+        expectedName: 'Massive-X',
+      })
+      expect(typeof payload.requestId).toBe('string')
+
+      // The engine answers on stdout with the correlated requestId; the stdout
+      // handler must route it into pluginUiBridge.handleLine to resolve the
+      // pending MCP call.
+      fake.fireStdoutData(
+        JSON.stringify({
+          pluginUi: {
+            requestId: payload.requestId,
+            action: 'open',
+            ok: true,
+            result: { receiver: 'lead', index: 0, normalizedName: 'Massive-X' },
+          },
+        }) + '\n',
+      )
+
+      await expect(resultPromise).resolves.toEqual({
+        ok: true,
+        result: { receiver: 'lead', index: 0, normalizedName: 'Massive-X' },
+      })
+    })
+  })
 })

@@ -32,6 +32,7 @@ import {
   type FlashConfigResult,
   type ListPluginsResult,
   type McpServerHandle,
+  type PluginUiResult,
   type RegisterMcpServerInput,
   type RescanPluginsResult,
   type SelectionInput,
@@ -53,6 +54,7 @@ import {
 } from './engine-view'
 import { DeviceSwitchBridge } from './device-switch-bridge'
 import { PluginStateBridge } from './plugin-state-bridge'
+import { PluginUiBridge, type PluginUiAction } from './plugin-ui-bridge'
 import {
   applyEngineError,
   applyEngineExit,
@@ -106,6 +108,7 @@ let mcpServerHandle: McpServerHandle | null = null
 // FIFO-match a future engine's response.
 const selectAudioDeviceBridge = new DeviceSwitchBridge()
 const pluginStateBridge = new PluginStateBridge()
+const pluginUiBridge = new PluginUiBridge()
 // Audio Engine Settings TreeView (#484 D3). Non-null once activated.
 let engineViewProvider: EngineViewProvider | null = null
 // Changes whenever a spawn is created or a user explicitly stops the engine.
@@ -463,6 +466,9 @@ export async function activate(context: vscode.ExtensionContext) {
           listPlugins: () => listPluginsForAgent(),
           rescanPlugins: () => rescanPluginsForAgent(),
           savePluginState: (sequence, index) => savePluginStateForAgent(sequence, index),
+          openPluginUi: (receiver, index, expectedName) =>
+            pluginUiForAgent('open', receiver, index, expectedName),
+          closePluginUi: (receiver, index) => pluginUiForAgent('close', receiver, index),
           registerMcpServer: (args) => registerMcpServerForAgent(args),
         },
         log: (message) => outputChannel?.appendLine(`🔌 ${message}`),
@@ -1140,6 +1146,13 @@ function shouldFilterLine(line: string): boolean {
     return true
   }
 
+  // Correlated REPL bridge envelopes are consumed above before human-log
+  // transcription. Keep successful/error payloads (which may contain project
+  // paths) out of the output channel; malformed envelopes get their own loud warning.
+  if (trimmed.startsWith('{"savePluginState"') || trimmed.startsWith('{"pluginUi"')) {
+    return true
+  }
+
   // Keep important messages
   if (line.includes('ERROR') || line.includes('⚠️') || line.includes('🎛️')) {
     return false
@@ -1281,6 +1294,25 @@ export function __setEngineViewProviderForTest(
  * asserting the handler doesn't throw. */
 export function __getDeviceSwitchBridgeForTest(): DeviceSwitchBridge {
   return selectAudioDeviceBridge
+}
+/** Same rationale as the device bridge seam above, for the plugin UI bridge
+ * (#601 review I5): proves the three drainAll call sites and the stdout
+ * handleLine dispatch by observing a pending `send()` resolve. */
+export function __getPluginUiBridgeForTest(): PluginUiBridge {
+  return pluginUiBridge
+}
+export function __setLiveCodingModeForTest(value: boolean): void {
+  isLiveCodingMode = value
+}
+/** `pluginUiForAgent` is module-private (only `activate()` wires it into MCP);
+ * this seam lets a spec drive the real engine-guard + meta-line round-trip. */
+export function __pluginUiForAgentForTest(
+  action: PluginUiAction,
+  receiver: string,
+  index: number,
+  expectedName?: string,
+): ReturnType<typeof pluginUiForAgent> {
+  return pluginUiForAgent(action, receiver, index, expectedName)
 }
 
 // -- Playhead test seams (#527 review round 3 Critical #1) ------------------
@@ -1430,12 +1462,19 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
       const isCurrent = engineProcess === process
 
       for (const rawLine of lines) {
-        if (!rawLine.trim().startsWith('{"savePluginState"')) continue
-        const parsed = isCurrent && pluginStateBridge.handleLine(rawLine)
-        if (!parsed && isCurrent) {
-          outputChannel?.appendLine(
-            `⚠️ received a malformed //#savePluginState result line: ${rawLine}`,
-          )
+        const trimmedLine = rawLine.trim()
+        if (trimmedLine.startsWith('{"savePluginState"')) {
+          const parsed = isCurrent && pluginStateBridge.handleLine(rawLine)
+          if (!parsed && isCurrent) {
+            outputChannel?.appendLine(
+              `⚠️ received a malformed //#savePluginState result line: ${rawLine}`,
+            )
+          }
+        } else if (trimmedLine.startsWith('{"pluginUi"')) {
+          const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
+          if (!parsed && isCurrent) {
+            outputChannel?.appendLine(`⚠️ received a malformed //#pluginUi result line: ${rawLine}`)
+          }
         }
       }
 
@@ -1523,6 +1562,7 @@ export function setupStdinErrorHandler(process: child_process.ChildProcess): voi
         drainDeviceBridge: (reason) => {
           selectAudioDeviceBridge.drainAll(reason)
           pluginStateBridge.drainAll(reason)
+          pluginUiBridge.drainAll(reason)
         },
       })
     } catch (innerErr) {
@@ -1543,6 +1583,7 @@ function engineTerminationEffects(): Omit<EngineExitEffects, 'logExit'> {
     drainDeviceBridge: (reason) => {
       selectAudioDeviceBridge.drainAll(reason)
       pluginStateBridge.drainAll(reason)
+      pluginUiBridge.drainAll(reason)
     },
     showStoppedStatus: () => {
       statusBarItem!.text = '🎵 OrbitScore: Stopped'
@@ -2144,6 +2185,7 @@ export function stopEngine(): boolean {
     // 10s timeout instead of failing fast.
     selectAudioDeviceBridge.drainAll('engine was stopped before responding to //#selectAudioDevice')
     pluginStateBridge.drainAll('engine was stopped before responding to //#savePluginState')
+    pluginUiBridge.drainAll('engine was stopped before responding to //#pluginUi')
 
     // Send graceful shutdown signal (SIGTERM)
     // This allows the engine to clean up SuperCollider properly
@@ -2810,6 +2852,38 @@ function sendPluginStateMeta(
   )
 }
 
+function sendPluginUiMeta(
+  action: PluginUiAction,
+  receiver: string,
+  index: number,
+  expectedName?: string,
+  timeoutMs = 35_000,
+): Promise<import('./plugin-ui-bridge').PluginUiBridgeResult> {
+  if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
+    return Promise.reject(new Error('engine stdin is not writable (engine not running?)'))
+  }
+  const stdin = engineProcess.stdin
+  return pluginUiBridge.send(
+    (line, onError) => {
+      stdin.write(line, (error) => {
+        if (error) {
+          outputChannel?.appendLine(`⚠️ failed to write //#pluginUi to stdin: ${error.message}`)
+          onError(error)
+        }
+      })
+      return true
+    },
+    {
+      requestId: randomUUID(),
+      action,
+      receiver,
+      index,
+      ...(expectedName === undefined ? {} : { expectedName }),
+    },
+    timeoutMs,
+  )
+}
+
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -2888,6 +2962,31 @@ async function savePluginStateForAgent(
       }
     }
     return { ok: true, saved: result.saved }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+async function pluginUiForAgent(
+  action: PluginUiAction,
+  receiver: string,
+  index: number,
+  expectedName?: string,
+): Promise<PluginUiResult> {
+  if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
+    return { ok: false, error: 'engine is not running — start the engine first' }
+  }
+  try {
+    const response = await sendPluginUiMeta(action, receiver, index, expectedName)
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: response.error,
+        ...(response.code ? { code: response.code } : {}),
+        ...(response.details === undefined ? {} : { details: response.details }),
+      }
+    }
+    return { ok: true, result: response.result }
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }

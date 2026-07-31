@@ -618,6 +618,41 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         expect(invalidStateIndex.text).toContain('Valid indices:')
         expect(invalidStateIndex.text).toContain('1 (effect, CLAPTestEffect)')
 
+        // #474 P4c: the guard must fail before a different window can open, and
+        // the loud response must carry role/name indices for agent self-correction.
+        const guardedUiOpen = await client.call('open_plugin_ui', {
+          receiver: 'drum',
+          index: 1,
+          expectedName: 'NotTheCurrentPlugin',
+        })
+        expect(guardedUiOpen.isError, guardedUiOpen.text).toBe(true)
+        expect(guardedUiOpen.text).toContain(
+          "current slot is 'CLAPTestEffect'; the UI was not opened",
+        )
+        expect(guardedUiOpen.text).toContain('Valid indices: 1 (effect, CLAPTestEffect)')
+
+        const openedUi = await client.call('open_plugin_ui', {
+          receiver: 'drum',
+          index: 1,
+          expectedName: 'CLAPTestEffect',
+        })
+        expect(openedUi.isError, openedUi.text).toBe(false)
+        expect(JSON.parse(openedUi.text)).toMatchObject({
+          receiver: 'drum',
+          index: 1,
+          normalizedName: 'CLAPTestEffect',
+        })
+
+        const closedUi = await client.call('close_plugin_ui', { receiver: 'drum', index: 1 })
+        expect(closedUi.isError, closedUi.text).toBe(false)
+        expect(JSON.parse(closedUi.text)).toMatchObject({
+          receiver: 'drum',
+          index: 1,
+          completion: 'safepoint-completed',
+        })
+        const afterUiCloseLog = (await client.call('get_log', { lines: 500 })).text
+        expect(afterUiCloseLog).not.toContain('timeout-without-save')
+
         const stateSaveLog = (await client.call('get_log', { lines: 500 })).text
         expect(
           (stateSaveLog.match(/ERROR:/g) ?? []).length,

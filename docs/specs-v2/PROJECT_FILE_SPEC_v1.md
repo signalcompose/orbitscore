@@ -149,7 +149,7 @@ running → stopped 遷移であり、冗長な停止では再発火しない。
 | トリガ | 状況 | 追跡先 |
 |---|---|---|
 | (a) 明示保存 | **実装済み**（`save_plugin_state` MCP / `//#savePluginState`） | #562 / #564 |
-| (b) UI クローズ時 | **未実装** | **#474**（前提）→ #577 |
+| (b) UI クローズ時 | **実装済み**（#474 P4a-P4c: daemon セーフポイント → engine 保存 → `open_plugin_ui` / `close_plugin_ui` MCP・実機 gated E2E で5種レシーバの再起動復元まで検証） | #474 → #577 |
 | (c) 停止・終了時 | **実装済み**。証明の深さは receiver 種別ごとに違う（下表） | #577 PR-A（UI 要素は #474 / aux の capture 判別は #587＝測定感度・再スコープ済み） |
 | (d) dirty 通知 | **未実装** | #577 PR-B |
 

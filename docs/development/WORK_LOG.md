@@ -17,6 +17,63 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.348 feat(mcp): #474 P4c — UI 開閉を MCP から叩けるようにし、実機で必須ループが通った (Aug 1, 2026)
+
+**Date**: 2026-08-01
+**Issue**: #474 / **Branch**: `474-p4c-mcp-tools`
+**Status**: `npm test`（sandbox 外）= **1862 passed / 0 failed / 34 skipped**・
+**実機 gated E2E = 6 passed / 0 failed**（実 OrbitStudio.app・160秒）
+
+P4a(daemon) と P4b(engine) で経路は完成していたが**外から叩けなかった**。
+P4c で MCP tool と REPL メタ行を足し、Epic #546 の必須ループが端まで通った。
+
+#### 実装
+
+- `open_plugin_ui(receiver, index, expectedName?)` — 完了 ack（view attach 完了）まで待つ
+- `close_plugin_ui(receiver, index)` — 🔴 完了条件は **`UI_CLOSED_DONE` の受信であって ack ではない**
+- receiver は sequence / `master` / `sum:<name>` / `aux:<name>`。**aux を含む**
+- REPL メタ行 `//#pluginUi`（JSON payload の `action: 'open' | 'close'` で開閉を区別。
+  設計時の `//#openPluginUi` / `//#closePluginUi` 2 本案は単一メタ行に統合）
+- **誤爆ガード**: `expectedName` 不一致なら **daemon へ送らずに** loud エラー。
+  index がずれて別プラグインの UI が開くと、意図しない側の音色が保存される
+- **待ち受け順序**: DONE waiter を CLOSE_UI 送信より**前に**登録する。event pump と
+  command response は独立タスクなので DONE が ack を追い抜く
+
+#### 🔴 main の変異検証で1種が生き残った
+
+Codex が7種（分岐 / 回数 / 順序 / 引数）を実走し全 red。**その上で main が3種を独自に回した**:
+
+| main の変異 | 結果 |
+|---|---|
+| 完了を ack で名乗る | red |
+| `timeout-without-save` を握り潰す | red |
+| **respawn 中断を成功として resolve** | 🔴 **生存 → テスト追加後 red** |
+
+child がクラッシュして再起動されると、その UI のセーフポイントは**実行されない**。
+しかし close を待つ呼び出し元に `safepoint-completed` を返すと、**音色が一切保存されて
+いないのに「保存完了」を受け取る**。既存の respawn テストはイベントハンドラ側
+（保存・ack・再オープンをしないこと）しか見ておらず、**待っている呼び出し元**が
+無検証だった。`rejects a pending close when a respawn takes the window first` を追加。
+
+**今日3回とも、委譲先の「全変異 red」報告の後で main の変異が穴を見つけている。**
+
+#### 🔴 実機 E2E で Epic #546 の受け入れ基準を満たした
+
+`ORBIT_GATED_ORBITSTUDIO=1` で実 OrbitStudio.app を起動し、MCP 呼び出しだけで駆動。
+
+| 検証 | 結果 |
+|---|---|
+| 誤爆ガードが**先に**失敗する（別ウィンドウが開く前） | ✅ |
+| エラーに有効 index 一覧が含まれる | ✅ |
+| `open_plugin_ui` でウィンドウが開く | ✅ |
+| `close_plugin_ui` が `safepoint-completed` を返す | ✅ |
+| **`get_log` に `timeout-without-save` が無い** | ✅ |
+| 同じ**測定ピッチ**で instrument state が再起動復元 | ✅ |
+| 🔴 **明示保存なしで5種すべてのレシーバが再起動復元** | ✅ |
+
+**「外部 DAW 依存は絶対却下」と決めた必須ループ（宣言 → UI → 音色 → 自動記録 →
+再起動で復元）が、実機で端から端まで通った。**
+
 ### 6.347 feat(engine): #474 P4b — ウィンドウを閉じたら音色が保存される (Jul 31, 2026)
 
 **Date**: 2026-07-31

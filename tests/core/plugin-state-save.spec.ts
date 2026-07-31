@@ -35,6 +35,11 @@ function harness() {
     getAudioDuration: vi.fn(() => 1),
     getMasterGainDb: () => 0,
     loadPlugin: vi.fn().mockResolvedValue({}),
+    openPluginUi: vi.fn().mockResolvedValue(undefined),
+    closePluginUi: vi.fn().mockResolvedValue('safepoint-completed'),
+    // Global のコンストラクタが safepoint saver を登録する。テストは
+    // mock.calls[<n>][0] で saver を取り出し、daemon の PluginUiClosed 相当を直接叩く。
+    setPluginUiSafepointSaver: vi.fn(),
     savePluginState: vi.fn(async (_target, statePath: string) => {
       await fs.promises.writeFile(statePath, Buffer.from('oracle-state'))
       return { path: statePath, bytesWritten: 12 }
@@ -502,6 +507,340 @@ describe('plugin state address resolution and project registration (#562)', () =
     await expect(global.savePluginState('lead', 0)).rejects.toThrow('transport is running')
     expect(audio.savePluginState).not.toHaveBeenCalled()
     expect(audio.stop).not.toHaveBeenCalled()
+  })
+})
+
+describe('plugin UI address guard and loud diagnostics (#474 P4c)', () => {
+  it('opens the expected normalized plugin exactly once with the resolved daemon target', async () => {
+    const { audio, global } = harness()
+    await global.instrument('lead', './Massive-X.clap')
+
+    await expect(global.openPluginUi('lead', 0, 'Massive-X')).resolves.toEqual({
+      receiver: 'lead',
+      index: 0,
+      role: 'instrument',
+      normalizedName: 'Massive-X',
+    })
+
+    expect(audio.openPluginUi).toHaveBeenCalledTimes(1)
+    expect(audio.openPluginUi).toHaveBeenCalledWith(
+      { role: 'instrument', instance: 'plugin:lead' },
+      0,
+      'OrbitScore — Massive-X (lead:0)',
+    )
+  })
+
+  it('refuses an expectedName mismatch before opening and explains the current valid slot', async () => {
+    const { audio, global } = harness()
+    await global.instrument('lead', './Massive-X.clap')
+
+    await expect(global.openPluginUi('lead', 0, 'WrongSynth')).rejects.toThrow(
+      /expected normalized name 'WrongSynth' but the current slot is 'Massive-X'; the UI was not opened.*Valid indices: 0 \(instrument, Massive-X\)/,
+    )
+    expect(audio.openPluginUi).toHaveBeenCalledTimes(0)
+  })
+
+  it('keeps the expectedName comparison canonically normalized but does not accept another name', async () => {
+    const { audio, global } = harness()
+    await global.instrument('lead', './Cafe\u0301.clap')
+
+    await global.openPluginUi('lead', 0, 'Café')
+
+    expect(audio.openPluginUi).toHaveBeenCalledTimes(1)
+    expect(audio.openPluginUi).toHaveBeenCalledWith(
+      { role: 'instrument', instance: 'plugin:lead' },
+      0,
+      'OrbitScore — Café (lead:0)',
+    )
+  })
+
+  it('adds every valid role/name index when the daemon reports an unloaded or UI-less plugin', async () => {
+    const { audio, global } = harness()
+    await global.instrument('lead', './Massive-X.clap')
+    await global.sequenceEffect('lead', './Echo.clap')
+    audio.openPluginUi.mockRejectedValueOnce(new Error('CAP-UI-OPEN is unavailable'))
+
+    await expect(global.openPluginUi('lead', 1, 'Echo')).rejects.toThrow(
+      /CAP-UI-OPEN is unavailable.*Valid indices: 0 \(instrument, Massive-X\), 1 \(effect, Echo\)/,
+    )
+    expect(audio.openPluginUi).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes once with the exact target and exposes only DONE completion', async () => {
+    const { audio, global } = harness()
+    await global.sum('drum').effect('./GlueComp.clap')
+    await global.openPluginUi('sum:drum', 1, 'GlueComp')
+
+    await expect(global.closePluginUi('sum:drum', 1)).resolves.toEqual({
+      receiver: 'sum:drum',
+      index: 1,
+      role: 'effect',
+      normalizedName: 'GlueComp',
+      completion: 'safepoint-completed',
+    })
+    expect(audio.closePluginUi).toHaveBeenCalledTimes(1)
+    expect(audio.closePluginUi).toHaveBeenCalledWith({ role: 'effect', bus: 'sum-bus-0' }, 1)
+  })
+
+  it('reports a DONE timeout-without-save loudly with the valid role/name list', async () => {
+    const { audio, global } = harness()
+    await global.sequenceEffect('lead', './Echo.clap')
+    await global.openPluginUi('lead', 1, 'Echo')
+    audio.closePluginUi.mockResolvedValueOnce('timeout-without-save')
+
+    await expect(global.closePluginUi('lead', 1)).rejects.toThrow(
+      /UI_CLOSED_DONE reported timeout-without-save.*Valid indices: 1 \(effect, Echo\)/,
+    )
+    expect(audio.closePluginUi).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('plugin UI open-time identity policy (#601 I1/I2)', () => {
+  /** Global コンストラクタが登録した safepoint saver（daemon の PluginUiClosed 相当）。 */
+  function safepointSaver(audio: any, callIndex = 0) {
+    return audio.setPluginUiSafepointSaver.mock.calls[callIndex][0] as (
+      target: unknown,
+    ) => Promise<void>
+  }
+
+  it('saves the open-time identity, not the current chain, after a swap while the UI is open', async () => {
+    const { directory, audio, global } = harness()
+    await global.sequenceEffect('lead', './Serum.clap')
+    await global.openPluginUi('lead', 1, 'Serum')
+
+    // UI を開いている間に DSL 再評価で同じ slot が別プラグインに差し替わった状況。
+    const effectManager = (global as any).sequenceEffectManager
+    const serumSlot = effectManager.chainFor('lead')[0]
+    expect(serumSlot).toBeDefined()
+    vi.spyOn(effectManager, 'chainFor').mockReturnValue([{ ...serumSlot, normalizedName: 'Diva' }])
+
+    await safepointSaver(audio)({ role: 'effect', bus: serumSlot.bus, index: 1 })
+
+    // 実際に編集していたのは open 時の Serum。差し替え後の Diva に保存してはならない。
+    expect(audio.savePluginState).toHaveBeenCalledTimes(1)
+    const serumIdentity = {
+      receiver: 'lead',
+      role: 'effect' as const,
+      normalizedName: 'Serum',
+      occurrence: 0,
+    }
+    expect(audio.savePluginState).toHaveBeenCalledWith(
+      { role: 'effect', bus: serumSlot.bus },
+      path.join(directory, 'states', stateFileNameForIdentity(serumIdentity)),
+    )
+    const manifest = parse(fs.readFileSync(path.join(directory, 'project.yaml'), 'utf8')) as {
+      states: Record<string, string>
+    }
+    expect(manifest.states).toHaveProperty('lead/effect/Serum/0')
+    expect(manifest.states).not.toHaveProperty('lead/effect/Diva/0')
+  })
+
+  it('closes with the open-time daemon target and reports the open-time plugin after a swap', async () => {
+    const { audio, global } = harness()
+    await global.sequenceEffect('lead', './Serum.clap')
+    await global.openPluginUi('lead', 1, 'Serum')
+    const effectManager = (global as any).sequenceEffectManager
+    const serumSlot = effectManager.chainFor('lead')[0]
+    vi.spyOn(effectManager, 'chainFor').mockReturnValue([{ ...serumSlot, normalizedName: 'Diva' }])
+
+    await expect(global.closePluginUi('lead', 1)).resolves.toEqual({
+      receiver: 'lead',
+      index: 1,
+      role: 'effect',
+      normalizedName: 'Serum',
+      completion: 'safepoint-completed',
+    })
+    expect(audio.closePluginUi).toHaveBeenCalledTimes(1)
+    expect(audio.closePluginUi).toHaveBeenCalledWith({ role: 'effect', bus: serumSlot.bus }, 1)
+  })
+
+  // 名前は実態どおり「safepoint 保存」の index 区別（`pluginUiSessionKey` 経由）。
+  // close 側の `find` の index 選別は下の
+  // 'closes the session selected by index …' が別途固定している（#597 と同型の
+  // 「テスト名が述べる性質と実際に通す経路のずれ」を避けるため明示しておく）。
+  it('resolves an ambiguous same-bus safepoint save to the open-time slot by index', async () => {
+    const { directory, audio, global } = harness()
+    await global.sequenceEffect('lead', './Echo.clap')
+    const effectManager = (global as any).sequenceEffectManager
+    const firstEcho = effectManager.chainFor('lead')[0]
+    expect(firstEcho).toBeDefined()
+    // 同一 bus に同名プラグインが2つ並ぶチェーン。index だけが両者を区別する。
+    vi.spyOn(effectManager, 'chainFor').mockReturnValue([
+      firstEcho,
+      { ...firstEcho, occurrence: 1, instanceId: 'seq:lead/Echo#2' },
+    ])
+    await global.openPluginUi('lead', 1, 'Echo')
+    await global.openPluginUi('lead', 2, 'Echo')
+
+    await safepointSaver(audio)({ role: 'effect', bus: firstEcho.bus, index: 1 })
+
+    expect(audio.savePluginState).toHaveBeenCalledTimes(1)
+    const occurrenceZero = {
+      receiver: 'lead',
+      role: 'effect' as const,
+      normalizedName: 'Echo',
+      occurrence: 0,
+    }
+    expect(audio.savePluginState).toHaveBeenCalledWith(
+      { role: 'effect', bus: firstEcho.bus },
+      path.join(directory, 'states', stateFileNameForIdentity(occurrenceZero)),
+    )
+    const manifest = parse(fs.readFileSync(path.join(directory, 'project.yaml'), 'utf8')) as {
+      states: Record<string, string>
+    }
+    expect(manifest.states).toHaveProperty('lead/effect/Echo/0')
+    expect(manifest.states).not.toHaveProperty('lead/effect/Echo/1')
+  })
+
+  it('refuses a safepoint save with no recorded open session and saves nothing', async () => {
+    const { audio, global } = harness()
+    await global.sequenceEffect('lead', './Serum.clap')
+    const bus = (global as any).sequenceEffectManager.chainFor('lead')[0].bus
+
+    await expect(safepointSaver(audio)({ role: 'effect', bus, index: 1 })).rejects.toThrow(
+      /no recorded open session; refusing to guess a save identity/,
+    )
+    expect(audio.savePluginState).toHaveBeenCalledTimes(0)
+  })
+
+  it('refuses a safepoint save before the document has a directory and saves nothing', async () => {
+    const { directory, audio } = harness()
+    // directory 未設定の Global（.orbs 未保存の状態）。saver は2回目の登録分。
+    // 相対パス解決は documentDirectory を要求するので絶対パスで宣言する。
+    const bare = new Global(audio)
+    const sequence = new Sequence(bare, audio)
+    sequence.setName('lead')
+    await bare.sequenceEffect('lead', path.join(directory, 'Serum.clap'))
+    await bare.openPluginUi('lead', 1, 'Serum')
+    const bus = (bare as any).sequenceEffectManager.chainFor('lead')[0].bus
+
+    await expect(safepointSaver(audio, 1)({ role: 'effect', bus, index: 1 })).rejects.toThrow(
+      /before the document has a directory/,
+    )
+    expect(audio.savePluginState).toHaveBeenCalledTimes(0)
+  })
+
+  it('rejects a second close after the session is consumed by the first', async () => {
+    const { audio, global } = harness()
+    await global.sequenceEffect('lead', './Serum.clap')
+    await global.openPluginUi('lead', 1, 'Serum')
+
+    await global.closePluginUi('lead', 1)
+
+    await expect(global.closePluginUi('lead', 1)).rejects.toThrow(
+      /no plugin UI opened via open_plugin_ui is recorded for this target/,
+    )
+    expect(audio.closePluginUi).toHaveBeenCalledTimes(1)
+  })
+
+  // 保存時の破棄（close 完了時の破棄とは別の地点）。main の変異検証で
+  // `savePluginUiStateAtSafepoint` 末尾の delete を消しても全テスト green だった
+  // 生存変異を塞ぐ: 保存済みセッションが残ると、後続の close_plugin_ui が
+  // 「保存済みの古いセッション」を掴んで二重保存・誤 close の起点になる。
+  it('consumes the session at a successful safepoint save so a later close cannot reuse it', async () => {
+    const { audio, global } = harness()
+    await global.sequenceEffect('lead', './Serum.clap')
+    await global.openPluginUi('lead', 1, 'Serum')
+    const bus = (global as any).sequenceEffectManager.chainFor('lead')[0].bus
+
+    // ユーザーがウィンドウを手で閉じた → daemon の safepoint で保存完了
+    await safepointSaver(audio)({ role: 'effect', bus, index: 1 })
+    expect(audio.savePluginState).toHaveBeenCalledTimes(1)
+
+    // 窓はもう無い。保存時に破棄されていなければここが成功してしまう。
+    await expect(global.closePluginUi('lead', 1)).rejects.toThrow(
+      /no plugin UI opened via open_plugin_ui is recorded for this target/,
+    )
+    expect(audio.closePluginUi).toHaveBeenCalledTimes(0)
+  })
+
+  // close 側の照合地点（セッションキーとは別）。main の変異検証で close の `find`
+  // から `candidate.index === index` を消しても全テスト green だった生存変異を塞ぐ:
+  // 同一 receiver に複数 index のセッションがあると、最初の一致が別 index の窓を閉じる。
+  // 変異を観測可能にするため、index 1 と 2 に**別名**のプラグインを置く
+  // （同名だと戻り値の normalizedName も daemonTarget も一致して変異が見えない）。
+  it('closes the session selected by index when the same receiver has several open UIs', async () => {
+    const { audio, global } = harness()
+    await global.sequenceEffect('lead', './Echo.clap')
+    const effectManager = (global as any).sequenceEffectManager
+    const echoSlot = effectManager.chainFor('lead')[0]
+    expect(echoSlot).toBeDefined()
+    vi.spyOn(effectManager, 'chainFor').mockReturnValue([
+      echoSlot,
+      { ...echoSlot, normalizedName: 'Reverb', instanceId: 'seq:lead/Reverb#2' },
+    ])
+    await global.openPluginUi('lead', 1, 'Echo')
+    await global.openPluginUi('lead', 2, 'Reverb')
+
+    await expect(global.closePluginUi('lead', 2)).resolves.toEqual({
+      receiver: 'lead',
+      index: 2,
+      role: 'effect',
+      normalizedName: 'Reverb',
+      completion: 'safepoint-completed',
+    })
+    expect(audio.closePluginUi).toHaveBeenCalledTimes(1)
+    expect(audio.closePluginUi).toHaveBeenCalledWith({ role: 'effect', bus: echoSlot.bus }, 2)
+
+    // index 1 のセッションは無傷で残っている（誤って選ばれ消費されていない）。
+    await expect(global.closePluginUi('lead', 1)).resolves.toMatchObject({
+      index: 1,
+      normalizedName: 'Echo',
+    })
+    expect(audio.closePluginUi).toHaveBeenCalledTimes(2)
+  })
+
+  // #601 確認レビュー Important: 「同一 (receiverId, index) に高々1セッション」の不変条件。
+  // daemonTarget が変わる再 open は複合キーが別になり `set` では上書きされないため、
+  // openPluginUi 側の evict が無いと closePluginUi の find が Map の挿入順＝stale 側を
+  // 掴む（現行 v1 API では踏めないが、undeclare/release API が1つ足された瞬間に
+  // 無警告で生きたバグになる）。
+  it('keeps at most one session per (receiver, index): re-opening with a different daemon target evicts the stale one', async () => {
+    const { audio, global } = harness()
+    await global.sequenceEffect('lead', './Serum.clap')
+    const effectManager = (global as any).sequenceEffectManager
+    const serumSlot = effectManager.chainFor('lead')[0]
+    expect(serumSlot).toBeDefined()
+    await global.openPluginUi('lead', 1, 'Serum')
+
+    // 将来の undeclare/release 相当で同じ slot の bus が変わった状況（レビュアーと同じ
+    // chainFor mock の手法）。複合キーが旧セッションと別になる再 open。
+    vi.spyOn(effectManager, 'chainFor').mockReturnValue([
+      { ...serumSlot, bus: 'seq-bus-9-different', normalizedName: 'Diva' },
+    ])
+    await global.openPluginUi('lead', 1, 'Diva')
+
+    // Map に残るのは新しい方の1つだけ。
+    expect((global as any).openPluginUiSessions.size).toBe(1)
+
+    // close は新しい方（いまユーザーが見ている窓）を掴む。
+    await expect(global.closePluginUi('lead', 1)).resolves.toMatchObject({
+      index: 1,
+      normalizedName: 'Diva',
+    })
+    expect(audio.closePluginUi).toHaveBeenCalledTimes(1)
+    expect(audio.closePluginUi).toHaveBeenCalledWith(
+      { role: 'effect', bus: 'seq-bus-9-different' },
+      1,
+    )
+  })
+
+  it('requires the Rust engine backend for both open and close, before contacting the daemon', async () => {
+    const { audio, global } = harness()
+    await global.sequenceEffect('lead', './Echo.clap')
+
+    const openImpl = audio.openPluginUi
+    delete audio.openPluginUi
+    await expect(global.openPluginUi('lead', 1, 'Echo')).rejects.toThrow(
+      /plugin UI hosting requires the Rust engine backend/,
+    )
+
+    audio.openPluginUi = openImpl
+    await global.openPluginUi('lead', 1, 'Echo')
+    delete audio.closePluginUi
+    await expect(global.closePluginUi('lead', 1)).rejects.toThrow(
+      /plugin UI hosting requires the Rust engine backend/,
+    )
   })
 })
 

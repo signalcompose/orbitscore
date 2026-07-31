@@ -8,6 +8,7 @@ import { parse } from 'yaml'
 import { DaemonClient } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
 import { RustEnginePlayer } from '../../../packages/engine/src/audio/rust-engine/rust-engine-player'
 import { Global } from '../../../packages/engine/src/core/global'
+import { Sequence } from '../../../packages/engine/src/core/sequence'
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -52,6 +53,12 @@ describe('plugin UI safepoint conductor', () => {
     const pluginPath = path.join(directory, 'Mock.clap')
     fs.mkdirSync(pluginPath)
     await global.instrument('lead', pluginPath)
+    // #601 I1: 保存対象の identity は open 時に確定する。close イベントを流すテストは
+    // 実機と同じく、先に UI を開いてセッションを確立しておく（open の解決には
+    // 登録済み sequence が要る）。
+    new Sequence(global, player!).setName('lead')
+    vi.spyOn(daemon, 'openPluginUi').mockResolvedValue()
+    await global.openPluginUi('lead', 0)
     return global
   }
 
@@ -87,6 +94,94 @@ describe('plugin UI safepoint conductor', () => {
       generation: 37,
       evt_seq: 41,
     })
+  })
+
+  it('forwards OPEN_UI and CLOSE_UI daemon requests exactly once with exact wire arguments', async () => {
+    const request = vi.spyOn(daemon as any, 'request').mockResolvedValue({ status: 'ok' })
+    const target = { role: 'instrument' as const, instance: 'plugin:lead' }
+
+    await daemon.openPluginUi(target, 0, 'OrbitScore — Massive-X (lead:0)')
+    await daemon.acceptClosePluginUi(target, 0)
+
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(request).toHaveBeenNthCalledWith(1, 'OpenPluginUI', {
+      target,
+      index: 0,
+      windowTitle: 'OrbitScore — Massive-X (lead:0)',
+    })
+    expect(request).toHaveBeenNthCalledWith(2, 'ClosePluginUI', { target, index: 0 })
+  })
+
+  it('times out a heavyweight OPEN_UI instead of waiting forever for attach completion', async () => {
+    const open = vi.spyOn(daemon, 'openPluginUi').mockImplementation(() => new Promise(() => {}))
+
+    await expect(
+      player!.openPluginUi(
+        { role: 'instrument', instance: 'plugin:lead' },
+        0,
+        'OrbitScore — Massive-X (lead:0)',
+        20,
+      ),
+    ).rejects.toThrow('timed out waiting for plugin UI to open')
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(open).toHaveBeenCalledWith(
+      { role: 'instrument', instance: 'plugin:lead' },
+      0,
+      'OrbitScore — Massive-X (lead:0)',
+    )
+  })
+
+  it('does not complete close on the command ack and resolves only for matching UI_CLOSED_DONE', async () => {
+    const accept = vi.spyOn(daemon, 'acceptClosePluginUi').mockResolvedValue()
+    const target = { role: 'instrument' as const, instance: 'plugin:lead' }
+    let settled = false
+
+    const closing = player!.closePluginUi(target, 0, 250).then((completion) => {
+      settled = true
+      return completion
+    })
+    await waitFor(() => accept.mock.calls.length === 1)
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    expect(settled).toBe(false)
+    expect(accept).toHaveBeenCalledTimes(1)
+    expect(accept).toHaveBeenCalledWith(target, 0)
+
+    daemon.emit('plugin-ui-close-done', {
+      target: { role: 'instrument', instance: 'plugin:other', index: 0 },
+      completion: 'safepoint-completed',
+    })
+    await new Promise((resolve) => setTimeout(resolve, 15))
+    expect(settled).toBe(false)
+
+    daemon.emit('plugin-ui-close-done', {
+      target: { role: 'instrument', instance: 'plugin:lead', index: 0 },
+      completion: 'safepoint-completed',
+    })
+
+    await expect(closing).resolves.toBe('safepoint-completed')
+    expect(settled).toBe(true)
+  })
+
+  it('registers the DONE waiter before CLOSE_UI so an event racing the ack is not lost', async () => {
+    const target = { role: 'instrument' as const, instance: 'plugin:lead' }
+    const accept = vi.spyOn(daemon, 'acceptClosePluginUi').mockImplementation(async () => {
+      daemon.emit('plugin-ui-close-done', {
+        target: { ...target, index: 0 },
+        completion: 'safepoint-completed',
+      })
+    })
+
+    await expect(player!.closePluginUi(target, 0, 100)).resolves.toBe('safepoint-completed')
+    expect(accept).toHaveBeenCalledTimes(1)
+    expect(accept).toHaveBeenCalledWith(target, 0)
+  })
+
+  it('times out loudly when CLOSE_UI is acked but UI_CLOSED_DONE never arrives', async () => {
+    vi.spyOn(daemon, 'acceptClosePluginUi').mockResolvedValue()
+
+    await expect(
+      player!.closePluginUi({ role: 'effect', bus: 'seq-bus-0' }, 1, 20),
+    ).rejects.toThrow('timed out waiting for UI_CLOSED_DONE')
   })
 
   it('saves through ProjectStateStore before acking the identical generation and evt_seq once', async () => {
@@ -167,6 +262,34 @@ describe('plugin UI safepoint conductor', () => {
     expect(saveState).toHaveBeenCalledTimes(0)
     expect(ack).toHaveBeenCalledTimes(0)
     expect(request).toHaveBeenCalledTimes(0)
+  })
+
+  /// respawn が close 待ちを中断したとき、呼び出し元は**失敗を受け取らねばならない**。
+  ///
+  /// child がクラッシュして再起動された時点で、その UI のセーフポイントは**実行されていない**
+  /// （直前のテストが「保存も ack もしない」ことを固定している）。ここで成功として resolve すると、
+  /// **音色が一切保存されていないのに呼び出し元は「保存完了」を受け取る** —— この PR が
+  /// 塞ごうとしているサイレント障害そのものになる。
+  ///
+  /// main の変異検証で発見: `pending.reject(...)` を `pending.resolve('safepoint-completed')` に
+  /// 差し替えても全テストが green のままだった。既存の respawn テストはイベントハンドラ側
+  /// （保存・ack・再オープンをしないこと）しか見ておらず、**待っている呼び出し元**が無検証だった。
+  it('rejects a pending close when a respawn takes the window first', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const accept = vi.spyOn(daemon, 'acceptClosePluginUi').mockResolvedValue()
+    const target = { role: 'instrument' as const, instance: 'plugin:lead' }
+
+    const closing = player!.closePluginUi(target, 0, 250)
+    await waitFor(() => accept.mock.calls.length === 1)
+
+    daemon.emit('plugin-ui-closed-by-respawn', {
+      target: { role: 'instrument', instance: 'plugin:lead', index: 0 },
+    })
+
+    await expect(closing).rejects.toThrow(/respawn before UI_CLOSED_DONE/)
+    // 保存は一度も走っていない。成功を返してはならない理由がこれ。
+    expect(saveState).toHaveBeenCalledTimes(0)
+    expect(ack).toHaveBeenCalledTimes(0)
   })
 
   it('waits for an in-flight save and ack before daemon teardown', async () => {

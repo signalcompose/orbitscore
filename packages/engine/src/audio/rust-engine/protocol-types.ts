@@ -19,6 +19,8 @@ export type CommandMethod =
   | 'LoadSample'
   | 'LoadPlugin'
   | 'GetPluginState'
+  | 'OpenPluginUI'
+  | 'ClosePluginUI'
   | 'AckUiSafepoint'
   // ランタイムの mixer bus routing 変更（MX.4・#459/#453 M3）: seq_bus の output(sum)/
   // sends(aux) を非 RT で書き換える。daemon が feature `outproc-effect` 無効ビルドなら

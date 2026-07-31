@@ -854,11 +854,17 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       // REPL のメタ行 `//#savePluginState`（MCP bridge が発行）からのみ入る。
       // DSL から書けてしまうと「保存」という副作用が楽譜に紛れ込むため、意図的に語彙にしない。
       'savePluginState',
+      // #474 P4c: UI 開閉。同じく DSL 語彙ではないが、入口は別のメタ行
+      // `//#pluginUi`（JSON payload の action で open/close を区別。MCP bridge が発行）。
+      'openPluginUi',
+      'closePluginUi',
       // (sequence, index) を SC.5 インスタンス同一性 + daemon target へ解決する内部 API。
       // UIH.5 の index 規則を実装する。インタプリタからの参照はゼロ。
       'resolvePluginStateTarget',
       // private だが Object.getOwnPropertyNames には現れる（他の private 同様に除外）。
       'pluginIndexError',
+      'formatPluginIndices',
+      'pluginUiOperationError',
       // resolvePluginStateTarget の bus 分岐（master / sum: / aux:）を担う private ヘルパー。
       'pluginStateBusChain',
       // #577 PR-A: 停止時 auto-snapshot のホスト API。どちらも `this` 経由で
@@ -936,6 +942,8 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
   it('keeps plugin-state host APIs out of the Global DSL vocabulary', () => {
     const internalOnlyNames = [
       'savePluginState',
+      'openPluginUi',
+      'closePluginUi',
       'resolvePluginStateTarget',
       'pluginIndexError',
     ] as const
