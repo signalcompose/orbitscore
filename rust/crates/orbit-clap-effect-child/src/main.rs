@@ -20,19 +20,26 @@
 
 #![allow(unsafe_code)]
 
+#[cfg(target_os = "macos")]
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
+#[cfg(target_os = "macos")]
 use anyhow::{bail, Context, Result};
+#[cfg(target_os = "macos")]
 use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, ParentWatch, BUF_LEN, CHANNELS, CONTROL_QUIT,
     MAX_FRAMES,
 };
+#[cfg(target_os = "macos")]
 use orbit_child_runtime::{
     child_should_quit, run_child, service_child_main, UiCallbacks, UiService,
 };
+#[cfg(target_os = "macos")]
 use orbit_clap_host::ClapEffectProcessor;
 
+#[cfg(target_os = "macos")]
 struct Args {
     shm: PathBuf,
     plugin: PathBuf,
@@ -41,6 +48,7 @@ struct Args {
     state: Option<PathBuf>,
 }
 
+#[cfg(target_os = "macos")]
 fn parse_args() -> Result<Args> {
     let mut shm: Option<PathBuf> = None;
     let mut plugin: Option<PathBuf> = None;
@@ -73,6 +81,7 @@ fn parse_args() -> Result<Args> {
     })
 }
 
+#[cfg(target_os = "macos")]
 fn main() -> Result<()> {
     let args = parse_args()?;
     let mmap = open_shared(&args.shm).with_context(|| format!("open_shared({:?})", args.shm))?;
@@ -170,4 +179,10 @@ fn main() -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn main() -> std::process::ExitCode {
+    eprintln!("orbit-clap-effect-child is macOS-only (plugin UI hosting needs AppKit)");
+    std::process::ExitCode::FAILURE
 }

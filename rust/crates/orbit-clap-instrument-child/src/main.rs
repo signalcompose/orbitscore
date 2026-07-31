@@ -2,19 +2,26 @@
 
 #![allow(unsafe_code)]
 
+#[cfg(target_os = "macos")]
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 
+#[cfg(target_os = "macos")]
 use anyhow::{bail, Context, Result};
+#[cfg(target_os = "macos")]
 use orbit_audio_sandbox::{
     open_shared, region_ptr, slot_index, slot_offset, EventRecord, EventSpillFifo, NeutralEvent,
     ParentWatch, SharedRegion, BUF_LEN, CHANNELS, CONTROL_QUIT, MAX_EVENTS_PER_BLOCK, MAX_FRAMES,
 };
+#[cfg(target_os = "macos")]
 use orbit_child_runtime::{
     child_should_quit, run_child, service_child_main, UiCallbacks, UiService,
 };
+#[cfg(target_os = "macos")]
 use orbit_clap_host::{push_neutral_event, ClapInstrumentProcessor, EventBuffer};
 
+#[cfg(target_os = "macos")]
 struct Args {
     shm: PathBuf,
     plugin: PathBuf,
@@ -24,6 +31,7 @@ struct Args {
     state: Option<PathBuf>,
 }
 
+#[cfg(target_os = "macos")]
 fn parse_args() -> Result<Args> {
     let mut shm = None;
     let mut plugin = None;
@@ -57,10 +65,12 @@ fn parse_args() -> Result<Args> {
     })
 }
 
+#[cfg(target_os = "macos")]
 fn in_order_seqs(last: u64, cur: u64) -> impl Iterator<Item = u64> {
     last.saturating_add(1)..=cur
 }
 
+#[cfg(target_os = "macos")]
 fn decode_slot_events(records: &[EventRecord], count: u32, sink: &mut Vec<NeutralEvent>) -> u32 {
     sink.clear();
     let count = (count as usize)
@@ -80,6 +90,7 @@ fn decode_slot_events(records: &[EventRecord], count: u32, sink: &mut Vec<Neutra
 /// Outcome of [`write_output_events`]: how many records landed in `window`, plus the health
 /// counter deltas the caller adds to `SharedRegion` after the closure returns.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[cfg(target_os = "macos")]
 struct OutputWriteOutcome {
     written: usize,
     spilled: u64,
@@ -95,6 +106,7 @@ struct OutputWriteOutcome {
 /// Pure and CLAP-independent (operates on `NeutralEvent`/`EventRecord` only), so it is directly
 /// unit-testable without a live plugin -- extracted from `main()`'s per-slot `write_slot` closure
 /// for exactly that reason (see `tests::output_window_and_spill_overflow_drops_and_tracks_note_end`).
+#[cfg(target_os = "macos")]
 fn write_output_events(
     window: &mut [EventRecord],
     output_spill: &mut EventSpillFifo,
@@ -176,6 +188,7 @@ unsafe fn publish_completed_slot(
     after_sequence_publish();
 }
 
+#[cfg(target_os = "macos")]
 fn main() -> Result<()> {
     let args = parse_args()?;
     let mmap = open_shared(&args.shm).with_context(|| format!("open_shared({:?})", args.shm))?;
@@ -590,4 +603,10 @@ mod tests {
             std::alloc::dealloc(region.cast(), layout);
         }
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn main() -> std::process::ExitCode {
+    eprintln!("orbit-clap-instrument-child is macOS-only (plugin UI hosting needs AppKit)");
+    std::process::ExitCode::FAILURE
 }
