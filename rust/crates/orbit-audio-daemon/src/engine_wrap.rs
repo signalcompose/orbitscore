@@ -1134,7 +1134,9 @@ pub(crate) struct PluginUiWiring {
 /// Fixed watchdog sink. It never waits: target lookup uses `try_lock`, broadcast send is
 /// synchronous/non-blocking, and no socket or engine callback is touched while the pump lock is
 /// held. Target contention returns false so the ring head is retried; no target means there is no
-/// correlated UI request and the event is consumed.
+/// correlated UI request and the event is consumed. A safepoint is accepted only when broadcast
+/// delivery succeeds, while a completion is consumed after a loud delivery failure because it
+/// reports an already-completed transition and its route has already been taken.
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 pub(crate) fn enqueue_plugin_ui_notification(
     target: &Mutex<Option<PluginUiTarget>>,
@@ -1153,15 +1155,18 @@ pub(crate) fn enqueue_plugin_ui_notification(
     let Some(target) = target else {
         return true;
     };
-    let event = match notification {
+    let (event, retry_if_undelivered) = match notification {
         orbit_audio_sandbox::UiPumpNotification::Safepoint {
             generation,
             evt_seq,
-        } => PluginUiEvent::Closed {
-            target,
-            generation,
-            evt_seq,
-        },
+        } => (
+            PluginUiEvent::Closed {
+                target,
+                generation,
+                evt_seq,
+            },
+            true,
+        ),
         orbit_audio_sandbox::UiPumpNotification::CloseDone { completion } => {
             let completion = match completion {
                 orbit_audio_sandbox::UiCloseCompletion::SafepointCompleted => {
@@ -1171,11 +1176,20 @@ pub(crate) fn enqueue_plugin_ui_notification(
                     PluginUiCompletion::TimedOutWithoutSave
                 }
             };
-            PluginUiEvent::CloseDone { target, completion }
+            (PluginUiEvent::CloseDone { target, completion }, false)
         }
     };
-    let _ = events.send(event);
-    true
+    match events.send(event) {
+        Ok(_) => true,
+        Err(error) => {
+            tracing::warn!(
+                event = ?error.0,
+                retrying = retry_if_undelivered,
+                "plugin UI notification could not be delivered: no broadcast receivers"
+            );
+            !retry_if_undelivered
+        }
+    }
 }
 
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
@@ -1190,7 +1204,12 @@ pub(crate) fn enqueue_plugin_ui_closed_by_respawn(
         Err(poisoned) => poisoned.into_inner().take(),
     };
     if let Some(target) = target {
-        let _ = events.send(PluginUiEvent::ClosedByRespawn { target });
+        if let Err(error) = events.send(PluginUiEvent::ClosedByRespawn { target }) {
+            tracing::warn!(
+                event = ?error.0,
+                "plugin UI respawn completion could not be delivered: no broadcast receivers"
+            );
+        }
     }
 }
 
@@ -2854,68 +2873,67 @@ impl EngineWrap {
     }
 
     #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+    fn resolve_outproc_slot(
+        &self,
+        target: &PluginStateTarget,
+        error_kind: OutProcSlotErrorKind,
+    ) -> Result<ResolvedOutProcSlot, WrapError> {
+        match target {
+            #[cfg(feature = "outproc-effect")]
+            PluginStateTarget::Effect { bus } => {
+                let control_guard = self
+                    .outproc
+                    .lock()
+                    .map_err(|_| error_kind.target("outproc effect mutex poisoned".into()))?;
+                let control = control_guard.as_ref().ok_or_else(|| {
+                    error_kind.unavailable("outproc effect is not initialized".into())
+                })?;
+                let slot = match bus {
+                    Some(bus) => control
+                        .bus_slots
+                        .get(bus)
+                        .ok_or_else(|| error_kind.target(format!("unknown effect bus '{bus}'")))?
+                        .upgrade()
+                        .ok_or_else(|| {
+                            error_kind.target(format!("effect bus '{bus}' stream is closed"))
+                        })?,
+                    None => control.child_slot.upgrade().ok_or_else(|| {
+                        error_kind.target("master effect stream is closed".into())
+                    })?,
+                };
+                Ok(ResolvedOutProcSlot::Effect(slot))
+            }
+            #[cfg(feature = "outproc-instrument")]
+            PluginStateTarget::Instrument { instance } => {
+                let control_guard = self
+                    .outproc_instrument
+                    .lock()
+                    .map_err(|_| error_kind.target("outproc instrument mutex poisoned".into()))?;
+                let control = control_guard.as_ref().ok_or_else(|| {
+                    error_kind.unavailable("outproc instrument is not initialized".into())
+                })?;
+                let slot_index = control.instance_index.get(instance).ok_or_else(|| {
+                    error_kind.target(format!("unknown instrument instance '{instance}'"))
+                })?;
+                let slot = control.slots[*slot_index]
+                    .child_slot
+                    .upgrade()
+                    .ok_or_else(|| {
+                        error_kind
+                            .target(format!("instrument instance '{instance}' stream is closed"))
+                    })?;
+                Ok(ResolvedOutProcSlot::Instrument(slot))
+            }
+        }
+    }
+
+    #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
     fn plugin_ui_handles_for_target(
         &self,
         target: &PluginStateTarget,
     ) -> Result<PluginUiHandles, WrapError> {
-        match target {
-            #[cfg(feature = "outproc-effect")]
-            PluginStateTarget::Effect { bus } => {
-                let slot = {
-                    let control_guard = self.outproc.lock().map_err(|_| {
-                        WrapError::PluginUiTarget("outproc effect mutex poisoned".into())
-                    })?;
-                    let control = control_guard.as_ref().ok_or_else(|| {
-                        WrapError::PluginUiUnavailable("outproc effect is not initialized".into())
-                    })?;
-                    match bus {
-                        Some(bus) => control
-                            .bus_slots
-                            .get(bus)
-                            .ok_or_else(|| {
-                                WrapError::PluginUiTarget(format!("unknown effect bus '{bus}'"))
-                            })?
-                            .upgrade()
-                            .ok_or_else(|| {
-                                WrapError::PluginUiTarget(format!(
-                                    "effect bus '{bus}' stream is closed"
-                                ))
-                            })?,
-                        None => control.child_slot.upgrade().ok_or_else(|| {
-                            WrapError::PluginUiTarget("master effect stream is closed".into())
-                        })?,
-                    }
-                };
-                active_plugin_ui_handles(&slot, "effect")
-            }
-            #[cfg(feature = "outproc-instrument")]
-            PluginStateTarget::Instrument { instance } => {
-                let slot = {
-                    let control_guard = self.outproc_instrument.lock().map_err(|_| {
-                        WrapError::PluginUiTarget("outproc instrument mutex poisoned".into())
-                    })?;
-                    let control = control_guard.as_ref().ok_or_else(|| {
-                        WrapError::PluginUiUnavailable(
-                            "outproc instrument is not initialized".into(),
-                        )
-                    })?;
-                    let slot_index = control.instance_index.get(instance).ok_or_else(|| {
-                        WrapError::PluginUiTarget(format!(
-                            "unknown instrument instance '{instance}'"
-                        ))
-                    })?;
-                    control.slots[*slot_index]
-                        .child_slot
-                        .upgrade()
-                        .ok_or_else(|| {
-                            WrapError::PluginUiTarget(format!(
-                                "instrument instance '{instance}' stream is closed"
-                            ))
-                        })?
-                };
-                active_plugin_ui_handles(&slot, "instrument")
-            }
-        }
+        self.resolve_outproc_slot(target, OutProcSlotErrorKind::Ui)?
+            .ui_handles()
     }
 
     /// OPEN_UI は view attach 完了 ack を待つ。window title は mailbox `cmd_arg` で child へ渡す。
@@ -3045,59 +3063,9 @@ impl EngineWrap {
             )));
         }
 
-        let (mailbox, latest_state) = match target {
-            #[cfg(feature = "outproc-effect")]
-            PluginStateTarget::Effect { bus } => {
-                let slot = {
-                    let control_guard = self.outproc.lock().map_err(|_| {
-                        WrapError::PluginStateTarget("outproc effect mutex poisoned".into())
-                    })?;
-                    let control = control_guard.as_ref().ok_or_else(|| {
-                        WrapError::PluginStateTarget("outproc effect is not initialized".into())
-                    })?;
-                    match bus {
-                        Some(bus) => control
-                            .bus_slots
-                            .get(&bus)
-                            .ok_or_else(|| {
-                                WrapError::PluginStateTarget(format!("unknown effect bus '{bus}'"))
-                            })?
-                            .upgrade()
-                            .ok_or_else(|| {
-                                WrapError::PluginStateTarget(format!(
-                                    "effect bus '{bus}' stream is closed"
-                                ))
-                            })?,
-                        None => control.child_slot.upgrade().ok_or_else(|| {
-                            WrapError::PluginStateTarget("master effect stream is closed".into())
-                        })?,
-                    }
-                };
-                active_plugin_state_handles(&slot, "effect")?
-            }
-            #[cfg(feature = "outproc-instrument")]
-            PluginStateTarget::Instrument { instance } => {
-                let slot = {
-                    let control_guard = self.outproc_instrument.lock().map_err(|_| {
-                        WrapError::PluginStateTarget("outproc instrument mutex poisoned".into())
-                    })?;
-                    let control = control_guard.as_ref().ok_or_else(|| {
-                        WrapError::PluginStateTarget("outproc instrument is not initialized".into())
-                    })?;
-                    let index = control.instance_index.get(&instance).ok_or_else(|| {
-                        WrapError::PluginStateTarget(format!(
-                            "unknown instrument instance '{instance}'"
-                        ))
-                    })?;
-                    control.slots[*index].child_slot.upgrade().ok_or_else(|| {
-                        WrapError::PluginStateTarget(format!(
-                            "instrument instance '{instance}' stream is closed"
-                        ))
-                    })?
-                };
-                active_plugin_state_handles(&slot, "instrument")?
-            }
-        };
+        let (mailbox, latest_state) = self
+            .resolve_outproc_slot(&target, OutProcSlotErrorKind::State)?
+            .state_handles()?;
 
         if !mailbox
             .child_is_ready()
@@ -4571,6 +4539,59 @@ type PluginStateHandles = (
 );
 
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+#[derive(Clone, Copy)]
+enum OutProcSlotErrorKind {
+    State,
+    Ui,
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+impl OutProcSlotErrorKind {
+    fn target(self, message: String) -> WrapError {
+        match self {
+            Self::State => WrapError::PluginStateTarget(message),
+            Self::Ui => WrapError::PluginUiTarget(message),
+        }
+    }
+
+    fn unavailable(self, message: String) -> WrapError {
+        match self {
+            Self::State => WrapError::PluginStateTarget(message),
+            Self::Ui => WrapError::PluginUiUnavailable(message),
+        }
+    }
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+enum ResolvedOutProcSlot {
+    #[cfg(feature = "outproc-effect")]
+    Effect(Arc<Mutex<ChildSlot<EffectRole>>>),
+    #[cfg(feature = "outproc-instrument")]
+    Instrument(Arc<Mutex<ChildSlot<InstrumentRole>>>),
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+impl ResolvedOutProcSlot {
+    fn state_handles(&self) -> Result<PluginStateHandles, WrapError> {
+        match self {
+            #[cfg(feature = "outproc-effect")]
+            Self::Effect(slot) => active_plugin_state_handles(slot, "effect"),
+            #[cfg(feature = "outproc-instrument")]
+            Self::Instrument(slot) => active_plugin_state_handles(slot, "instrument"),
+        }
+    }
+
+    fn ui_handles(&self) -> Result<PluginUiHandles, WrapError> {
+        match self {
+            #[cfg(feature = "outproc-effect")]
+            Self::Effect(slot) => active_plugin_ui_handles(slot, "effect"),
+            #[cfg(feature = "outproc-instrument")]
+            Self::Instrument(slot) => active_plugin_ui_handles(slot, "instrument"),
+        }
+    }
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 type PluginUiHandles = (
     Arc<orbit_audio_sandbox::CommandMailboxHost>,
     Arc<orbit_audio_sandbox::UiEventPump>,
@@ -4911,6 +4932,64 @@ mod plugin_ui_event_routing_tests {
                 completion: PluginUiCompletion::SafepointCompleted,
             }
         );
+        assert_eq!(*route.lock().expect("route lock"), None);
+    }
+
+    #[test]
+    fn undelivered_safepoint_is_retried_on_every_pump_tick() {
+        let shm = std::env::temp_dir().join(format!(
+            "orbit-ui-undelivered-safepoint-{}-{}.shm",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let mmap = orbit_audio_sandbox::create_shared(&shm).expect("create shared region");
+        let region = orbit_audio_sandbox::region_ptr(&mmap);
+        let mut child = orbit_audio_sandbox::transport::EventRingChild::new();
+        child
+            .queue(orbit_audio_sandbox::transport::EVT_UI_CLOSED, "")
+            .expect("queue UI_CLOSED");
+        unsafe { child.service(region) }.expect("publish UI_CLOSED");
+
+        let pump = orbit_audio_sandbox::UiEventPump::new(shm.clone());
+        let route = Arc::new(Mutex::new(Some(target())));
+        let (events, receiver) = tokio::sync::broadcast::channel(1);
+        drop(receiver);
+        let mut attempts = 0;
+
+        for _ in 0..3 {
+            let outcome = pump
+                .poll_step(|notification| {
+                    attempts += 1;
+                    enqueue_plugin_ui_notification(&route, &events, notification)
+                })
+                .expect("poll undelivered safepoint");
+            assert!(matches!(
+                outcome,
+                orbit_audio_sandbox::transport::EventPollOutcome::Blocked { seq: 1, .. }
+            ));
+        }
+
+        assert_eq!(attempts, 3, "delivery must be retried on every tick");
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 0);
+        assert_eq!(*route.lock().expect("route lock"), Some(target()));
+
+        drop(mmap);
+        std::fs::remove_file(shm).expect("remove shared region");
+    }
+
+    #[test]
+    fn undelivered_close_done_is_consumed_after_taking_its_route() {
+        let route = Arc::new(Mutex::new(Some(target())));
+        let (events, receiver) = tokio::sync::broadcast::channel(1);
+        drop(receiver);
+
+        assert!(enqueue_plugin_ui_notification(
+            &route,
+            &events,
+            orbit_audio_sandbox::UiPumpNotification::CloseDone {
+                completion: orbit_audio_sandbox::UiCloseCompletion::SafepointCompleted,
+            },
+        ));
         assert_eq!(*route.lock().expect("route lock"), None);
     }
 

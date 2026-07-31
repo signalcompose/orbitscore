@@ -303,6 +303,28 @@ fn ui_index(params: &Value, method: &str) -> Result<u64, ProtocolError> {
     })
 }
 
+#[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
+fn plugin_ui_unavailable(id: &str, method: &str) -> Value {
+    err(
+        id,
+        ProtocolError::new(
+            "PLUGIN_UI_UNAVAILABLE",
+            format!("{method} requires outproc-effect or outproc-instrument"),
+        ),
+    )
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn resolve_ui_target_and_index(
+    params: &Value,
+    method: &str,
+) -> Result<(PluginStateTarget, u64), ProtocolError> {
+    let target_params = ui_target_object(params, method)?;
+    let target = parse_plugin_target(target_params, method, "PLUGIN_UI_UNAVAILABLE")?;
+    let index = ui_index(params, method)?;
+    Ok((target, index))
+}
+
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -1294,30 +1316,12 @@ async fn handle_command(
         "OpenPluginUI" => {
             #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
             {
-                err(
-                    &id,
-                    ProtocolError::new(
-                        "PLUGIN_UI_UNAVAILABLE",
-                        "OpenPluginUI requires outproc-effect or outproc-instrument",
-                    ),
-                )
+                plugin_ui_unavailable(&id, "OpenPluginUI")
             }
             #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
             {
-                let target_params = match ui_target_object(&params, "OpenPluginUI") {
-                    Ok(target) => target,
-                    Err(error) => return err(&id, error),
-                };
-                let target = match parse_plugin_target(
-                    target_params,
-                    "OpenPluginUI",
-                    "PLUGIN_UI_UNAVAILABLE",
-                ) {
-                    Ok(target) => target,
-                    Err(error) => return err(&id, error),
-                };
-                let index = match ui_index(&params, "OpenPluginUI") {
-                    Ok(index) => index,
+                let (target, index) = match resolve_ui_target_and_index(&params, "OpenPluginUI") {
+                    Ok(target_and_index) => target_and_index,
                     Err(error) => return err(&id, error),
                 };
                 let window_title = match params
@@ -1351,30 +1355,12 @@ async fn handle_command(
         "ClosePluginUI" => {
             #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
             {
-                err(
-                    &id,
-                    ProtocolError::new(
-                        "PLUGIN_UI_UNAVAILABLE",
-                        "ClosePluginUI requires outproc-effect or outproc-instrument",
-                    ),
-                )
+                plugin_ui_unavailable(&id, "ClosePluginUI")
             }
             #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
             {
-                let target_params = match ui_target_object(&params, "ClosePluginUI") {
-                    Ok(target) => target,
-                    Err(error) => return err(&id, error),
-                };
-                let target = match parse_plugin_target(
-                    target_params,
-                    "ClosePluginUI",
-                    "PLUGIN_UI_UNAVAILABLE",
-                ) {
-                    Ok(target) => target,
-                    Err(error) => return err(&id, error),
-                };
-                let index = match ui_index(&params, "ClosePluginUI") {
-                    Ok(index) => index,
+                let (target, index) = match resolve_ui_target_and_index(&params, "ClosePluginUI") {
+                    Ok(target_and_index) => target_and_index,
                     Err(error) => return err(&id, error),
                 };
                 let engine = engine.clone();
@@ -1393,26 +1379,13 @@ async fn handle_command(
         "AckUiSafepoint" => {
             #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
             {
-                err(
-                    &id,
-                    ProtocolError::new(
-                        "PLUGIN_UI_UNAVAILABLE",
-                        "AckUiSafepoint requires outproc-effect or outproc-instrument",
-                    ),
-                )
+                plugin_ui_unavailable(&id, "AckUiSafepoint")
             }
             #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
             {
-                let target_params = match ui_target_object(&params, "AckUiSafepoint") {
-                    Ok(target) => target,
-                    Err(error) => return err(&id, error),
-                };
-                let target = match parse_plugin_target(
-                    target_params,
-                    "AckUiSafepoint",
-                    "PLUGIN_UI_UNAVAILABLE",
-                ) {
-                    Ok(target) => target,
+                let (target, _index) = match resolve_ui_target_and_index(&params, "AckUiSafepoint")
+                {
+                    Ok(target_and_index) => target_and_index,
                     Err(error) => return err(&id, error),
                 };
                 let generation = match params.get("generation").and_then(Value::as_u64) {

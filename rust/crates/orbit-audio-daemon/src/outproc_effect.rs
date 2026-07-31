@@ -41,7 +41,9 @@ use orbit_audio_sandbox::{
 };
 
 use crate::engine_wrap::PluginUiWiring;
-use crate::outproc_respawn_guard::advance_fast_respawn_streak;
+use crate::outproc_respawn_guard::{
+    advance_fast_respawn_streak, drain_ui_pump, poll_ui_pump_once, service_ui_pump_on_respawn,
+};
 
 /// watchdog が child の生存を poll する周期（非 RT・control thread）。
 const WATCHDOG_POLL: Duration = Duration::from_millis(20);
@@ -626,21 +628,15 @@ impl EffectChildSupervisor {
                             // `try_wait=Some` で旧 child の死亡を確認済み。in-flight command を
                             // failure ack で完了し、readiness/mailbox を reset してから replacement を
                             // spawn する（生きた child への reset は禁止・UIH.2）。
-                            let reset = match ui_pump.reset_after_child_exit(&mailbox) {
-                                Ok(reset) => reset,
-                                Err(error) => {
-                                    tracing::error!(
-                                        "effect UI pump/mailbox reset failed; measurement invalid: {error}"
-                                    );
-                                    stats.measurement_invalid.store(true, Ordering::Release);
-                                    break;
-                                }
-                            };
-                            if reset.closed_visible_ui {
-                                crate::engine_wrap::enqueue_plugin_ui_closed_by_respawn(
-                                    &ui_target,
-                                    &ui_events,
-                                );
+                            if !service_ui_pump_on_respawn(
+                                "effect",
+                                &ui_pump,
+                                &mailbox,
+                                &ui_target,
+                                &ui_events,
+                            ) {
+                                stats.measurement_invalid.store(true, Ordering::Release);
+                                break;
                             }
                             let state = match latest_state.lock() {
                                 Ok(state) => state.clone(),
@@ -681,15 +677,7 @@ impl EffectChildSupervisor {
                         }
                         Ok(None) => {
                             try_wait_errors = 0;
-                            if let Err(error) = ui_pump.poll_step(|notification| {
-                                crate::engine_wrap::enqueue_plugin_ui_notification(
-                                    &ui_target,
-                                    &ui_events,
-                                    notification,
-                                )
-                            }) {
-                                tracing::error!("effect UI event pump failed: {error}");
-                            }
+                            poll_ui_pump_once("effect", &ui_pump, &ui_target, &ui_events);
                             std::thread::sleep(WATCHDOG_POLL);
                         }
                         Err(e) => {
@@ -707,15 +695,7 @@ impl EffectChildSupervisor {
                         }
                     }
                 }
-                if let Err(error) = ui_pump.final_drain(|notification| {
-                    crate::engine_wrap::enqueue_plugin_ui_notification(
-                        &ui_target,
-                        &ui_events,
-                        notification,
-                    )
-                }) {
-                    tracing::error!("effect UI event final drain failed before QUIT: {error}");
-                }
+                drain_ui_pump("effect", &ui_pump, &ui_target, &ui_events);
                 // teardown: shutdown 済み（respawn しない）。現 child へ QUIT を送り reap する。
                 // SAFETY: region は生存 ctl_mmap を指す。QUIT は一回限りの flag（Release で publish）。
                 unsafe {

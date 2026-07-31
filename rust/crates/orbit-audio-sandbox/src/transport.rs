@@ -30,6 +30,8 @@
 // 共有メモリは生ポインタ経由でクロスプロセス参照するため unsafe FFI 同等。
 #![allow(unsafe_code)]
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::fmt;
 use std::fs::OpenOptions;
@@ -43,6 +45,12 @@ use std::time::{Duration, Instant};
 use memmap2::MmapMut;
 
 use crate::events::EventRecord;
+
+#[cfg(test)]
+thread_local! {
+    /// Per-thread counter keeps the mmap regression test deterministic under parallel cargo tests.
+    static OPEN_SHARED_CALL_COUNT: Cell<usize> = const { Cell::new(0) };
+}
 
 /// 1 ブロックの最大フレーム数(cpal buffer の上限。これを超える callback は clamp する)。
 pub const MAX_FRAMES: usize = 4096;
@@ -238,7 +246,7 @@ pub struct SharedRegion {
     // **独立したメールボックスを追加する。**
     //
     // 可変長データ（state は数十 MB になりうる）はここを通さない。host が
-    // `cmd_arg` にパスを書き、child がそのファイルへ書く（UIH.3 サイドカー方式）。
+    // `cmd_arg` に command 固有の文字列（state sidecar の絶対パス、UI の window title 等）を書く。
     /// host -> child: 新規コマンド投函時に単調増加させる。0 = 未発行。
     pub cmd_seq: AtomicU64,
     /// host -> child: コマンド種別（[`CMD_SAVE_STATE`] 等）。
@@ -269,7 +277,8 @@ pub struct SharedRegion {
     pub dirty_epoch: MonotoneEpoch,
 }
 
-/// `cmd_arg` のバイト長。サイドカーファイルの絶対パスを収める（macOS の PATH_MAX = 1024）。
+/// `cmd_arg` のバイト長。command 固有文字列を収める（state sidecar の絶対パスは macOS の
+/// PATH_MAX = 1024、UI command では window title）。
 pub const CMD_ARG_BYTES: usize = 1024;
 /// `cmd_result_detail` のバイト長。
 pub const CMD_DETAIL_BYTES: usize = 256;
@@ -582,13 +591,14 @@ pub enum EventPollOutcome {
 ///   `# Safety` 契約（watchdog が host 側の poll も静穏化してから呼ぶ）が要求する。
 ///
 /// [`Self::observe_dirty_epoch`] は `fetch_max` の RMW で自己完結して並行安全なため
-/// ゲートを取らない。
+/// ゲートを取らない。現在は transport の不変条件テストだけが使う。
 #[derive(Debug)]
-pub struct EventRingHost {
+pub(crate) struct EventRingHost {
     shm_path: PathBuf,
     /// poll の read → handler → ack publish サイクルの排他フラグ（struct doc 参照）。
     /// `true` = poll 実行中。`Mutex` にしない理由も struct doc が持つ。
     poll_gate: AtomicBool,
+    #[allow(dead_code)]
     last_seen_dirty_epoch: AtomicU64,
 }
 
@@ -607,7 +617,7 @@ impl Drop for PollGateGuard<'_> {
 }
 
 impl EventRingHost {
-    pub fn new(shm_path: PathBuf) -> Self {
+    pub(crate) fn new(shm_path: PathBuf) -> Self {
         Self {
             shm_path,
             poll_gate: AtomicBool::new(false),
@@ -624,7 +634,21 @@ impl EventRingHost {
     /// **再入不可**: handler の中から同じ host の poll を（直接・間接を問わず）呼ぶと、
     /// deadlock ではなく `Err` を返す。並行 poll も同様（待たない）。保証の全体は
     /// struct doc の「提供する保証 / 提供しない保証」を参照。
-    pub fn poll<F>(&self, mut handler: F) -> io::Result<EventPollOutcome>
+    pub(crate) fn poll<F>(&self, handler: F) -> io::Result<EventPollOutcome>
+    where
+        F: FnMut(EventRingEvent) -> bool,
+    {
+        let mmap = open_shared(&self.shm_path)?;
+        self.poll_mapped(region_ptr(&mmap), handler)
+    }
+
+    /// `region` をすでに map 済みの coordinator 向け変種。poll gate と ack 規律は
+    /// [`Self::poll`] と同一で、mapping の所有権だけを呼び出し側に残す。
+    fn poll_mapped<F>(
+        &self,
+        region: *mut SharedRegion,
+        mut handler: F,
+    ) -> io::Result<EventPollOutcome>
     where
         F: FnMut(EventRingEvent) -> bool,
     {
@@ -641,8 +665,6 @@ impl EventRingHost {
             ));
         }
         let _gate = PollGateGuard(&self.poll_gate);
-        let mmap = open_shared(&self.shm_path)?;
-        let region = region_ptr(&mmap);
         let mut handled = 0;
         loop {
             let ack = unsafe { (*region).evt_ack_seq.load_own() };
@@ -678,7 +700,8 @@ impl EventRingHost {
     }
 
     /// dirty 水位がこの host instance の前回観測値より進んだ場合、その新しい水位を返す。
-    pub fn observe_dirty_epoch(&self) -> io::Result<Option<u64>> {
+    #[allow(dead_code)]
+    pub(crate) fn observe_dirty_epoch(&self) -> io::Result<Option<u64>> {
         let mmap = open_shared(&self.shm_path)?;
         let region = region_ptr(&mmap);
         let current = unsafe { (*region).dirty_epoch.read() };
@@ -1212,8 +1235,8 @@ impl Default for UiPumpState {
 ///   raw/direct poll の同時実行を fail-loud に検出する防御線として残る。
 /// - generation は世代跨ぎの ack を拒否するが、**同一 generation 内で別の `evt_seq` を
 ///   取り違えることまでは守らない**。`pending_safepoint` と in-order head の一致検査が別途必要。
-/// - raw [`EventRingHost`] / [`reset_child_starting`] を別々に使うコードまでは型で禁止しない。
-///   daemon の watchdog/initial attach は必ず本型を共有し、この契約へ通す必要がある。
+/// - raw [`EventRingHost`] / [`reset_child_starting`] は crate 外へ公開せず、他 crate が pump を
+///   迂回することを型で禁止する。crate 内の transport 実装・テストは本契約を維持する責務を持つ。
 #[derive(Debug)]
 pub struct UiEventPump {
     ring: EventRingHost,
@@ -1279,7 +1302,7 @@ impl UiEventPump {
         let mmap = open_shared(&self.ring.shm_path)?;
         let region = region_ptr(&mmap);
         let mut handler_error = None;
-        let outcome = self.ring.poll(|event| match event.kind {
+        let outcome = self.ring.poll_mapped(region, |event| match event.kind {
             EVT_UI_CLOSED => {
                 state.lifecycle = UiLifecycle::Closing;
                 if state.pending_safepoint != Some(event.seq) {
@@ -1293,22 +1316,15 @@ impl UiEventPump {
                 }
 
                 // child のただ一つの timeout が DONE を publish した事実を見て初めて abandon する。
-                let next_seq = event.seq.saturating_add(1);
-                let published = unsafe { (*region).evt_seq.read() };
-                if published >= next_seq {
-                    let index = evt_slot_index(next_seq);
-                    let next_kind = unsafe { (*region).evt_kind[index].load(Ordering::Relaxed) };
-                    let next_arg = unsafe { read_cstr_field(&(*region).evt_arg[index]) };
-                    if next_kind == EVT_UI_CLOSED_DONE && next_arg == Some("timeout-without-save") {
-                        tracing::warn!(
-                            generation = state.generation,
-                            evt_seq = event.seq,
-                            "plugin UI safepoint was abandoned after child timeout; acking the blocked head"
-                        );
-                        state.pending_safepoint = None;
-                        state.abandoned_safepoint = Some(event.seq);
-                        return true;
-                    }
+                if is_abandon_done_published(region, event.seq.saturating_add(1)) {
+                    tracing::warn!(
+                        generation = state.generation,
+                        evt_seq = event.seq,
+                        "plugin UI safepoint was abandoned after child timeout; acking the blocked head"
+                    );
+                    state.pending_safepoint = None;
+                    state.abandoned_safepoint = Some(event.seq);
+                    return true;
                 }
                 false
             }
@@ -1486,6 +1502,19 @@ impl UiEventPump {
         state.lifecycle = UiLifecycle::Closed;
         Ok(outcome)
     }
+}
+
+/// A blocked safepoint may be abandoned only when the immediately following event is the child's
+/// explicit `timeout-without-save` completion. The caller owns a live mapping for `region`.
+fn is_abandon_done_published(region: *mut SharedRegion, next_seq: u64) -> bool {
+    let published = unsafe { (*region).evt_seq.read() };
+    if published < next_seq {
+        return false;
+    }
+    let index = evt_slot_index(next_seq);
+    let next_kind = unsafe { (*region).evt_kind[index].load(Ordering::Relaxed) };
+    let next_arg = unsafe { read_cstr_field(&(*region).evt_arg[index]) };
+    next_kind == EVT_UI_CLOSED_DONE && next_arg == Some("timeout-without-save")
 }
 
 /// timeout で見捨てたコマンドが**実は成功していた**まま破棄される時に warning を残す。
@@ -1719,6 +1748,8 @@ pub fn create_shared(path: &Path) -> io::Result<MmapMut> {
 /// # Note
 /// 返した `MmapMut` が生存する限りのみ [`region_ptr`] のポインタは有効(本関数自体は safe)。
 pub fn open_shared(path: &Path) -> io::Result<MmapMut> {
+    #[cfg(test)]
+    OPEN_SHARED_CALL_COUNT.with(|count| count.set(count.get() + 1));
     let file = OpenOptions::new().read(true).write(true).open(path)?;
     // 不変条件(map 後の生ポインタ deref が UB にならない最低サイズ)をコード側で enforce する。
     // 旧 run の stale shm(別 SLOTS 等)を渡されても silently map せず弾く。
@@ -1780,7 +1811,7 @@ pub unsafe fn publish_child_ready(region: *mut SharedRegion, has_audio_input: bo
 ///   `evt_kind` / `evt_arg`）の途中状態を poll が観測し、偽の `InvalidData`
 ///   （`ack > published`）や正当な ack の消失になる。watchdog は「旧 child の死亡確認 →
 ///   in-flight 手続きの中止（poll 停止を含む）→ 本関数 → spawn」の順で直列化すること。
-pub unsafe fn reset_child_starting(region: *mut SharedRegion) {
+pub(crate) unsafe fn reset_child_starting(region: *mut SharedRegion) {
     unsafe {
         let seq = (*region).cmd_seq.load(Ordering::Acquire);
         let ack = (*region).cmd_ack_seq.load(Ordering::Relaxed);
@@ -3485,6 +3516,27 @@ mod tests {
             }
         );
         child.join().expect("child join");
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn ui_event_pump_poll_step_maps_shared_region_once() {
+        let shm = mailbox_test_path("ui-pump-single-map");
+        let mmap = create_shared(&shm).expect("create");
+        let pump = UiEventPump::new(shm.clone());
+        OPEN_SHARED_CALL_COUNT.with(|count| count.set(0));
+
+        assert_eq!(
+            pump.poll_step(|_| true).expect("idle pump poll"),
+            EventPollOutcome::Idle
+        );
+        assert_eq!(
+            OPEN_SHARED_CALL_COUNT.with(Cell::get),
+            1,
+            "one poll_step must reuse its single shared-region mapping"
+        );
 
         drop(mmap);
         let _ = std::fs::remove_file(shm);

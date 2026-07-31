@@ -6,6 +6,10 @@
 
 use std::time::Duration;
 
+use orbit_audio_sandbox::{CommandMailboxHost, UiEventPump};
+
+use crate::engine_wrap::{PluginUiEvent, PluginUiTarget};
+
 /// 直前の spawn からの経過時間（`elapsed_since_spawn`）が `threshold` 未満なら「速い失敗」として
 /// 連続カウンタを進め、`threshold` 以上生きていれば（単発クラッシュからの正常な復帰とみなし）
 /// カウンタをリセットする純関数。
@@ -23,6 +27,63 @@ pub(crate) fn advance_fast_respawn_streak(
         consecutive_fast_fails + 1
     } else {
         0
+    }
+}
+
+/// Reset the UI coordinator after a confirmed child exit and publish the one-shot respawn
+/// completion when a visible UI was invalidated. Returns false after logging a reset failure so
+/// both watchdog roles use the same stop/continue decision.
+pub(crate) fn service_ui_pump_on_respawn(
+    role: &'static str,
+    pump: &UiEventPump,
+    mailbox: &CommandMailboxHost,
+    target: &std::sync::Mutex<Option<PluginUiTarget>>,
+    events: &tokio::sync::broadcast::Sender<PluginUiEvent>,
+) -> bool {
+    let reset = match pump.reset_after_child_exit(mailbox) {
+        Ok(reset) => reset,
+        Err(error) => {
+            tracing::error!(
+                role,
+                "plugin UI pump/mailbox reset failed; measurement invalid: {error}"
+            );
+            return false;
+        }
+    };
+    if reset.closed_visible_ui {
+        crate::engine_wrap::enqueue_plugin_ui_closed_by_respawn(target, events);
+    }
+    true
+}
+
+/// Service one watchdog tick with the shared non-blocking notification sink policy.
+pub(crate) fn poll_ui_pump_once(
+    role: &'static str,
+    pump: &UiEventPump,
+    target: &std::sync::Mutex<Option<PluginUiTarget>>,
+    events: &tokio::sync::broadcast::Sender<PluginUiEvent>,
+) {
+    if let Err(error) = pump.poll_step(|notification| {
+        crate::engine_wrap::enqueue_plugin_ui_notification(target, events, notification)
+    }) {
+        tracing::error!(role, "plugin UI event pump failed: {error}");
+    }
+}
+
+/// Drain publish-visible UI events before QUIT using the same sink as normal watchdog ticks.
+pub(crate) fn drain_ui_pump(
+    role: &'static str,
+    pump: &UiEventPump,
+    target: &std::sync::Mutex<Option<PluginUiTarget>>,
+    events: &tokio::sync::broadcast::Sender<PluginUiEvent>,
+) {
+    if let Err(error) = pump.final_drain(|notification| {
+        crate::engine_wrap::enqueue_plugin_ui_notification(target, events, notification)
+    }) {
+        tracing::error!(
+            role,
+            "plugin UI event final drain failed before QUIT: {error}"
+        );
     }
 }
 

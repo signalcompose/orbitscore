@@ -21,7 +21,9 @@ use orbit_audio_sandbox::{
 };
 
 use crate::engine_wrap::PluginUiWiring;
-use crate::outproc_respawn_guard::advance_fast_respawn_streak;
+use crate::outproc_respawn_guard::{
+    advance_fast_respawn_streak, drain_ui_pump, poll_ui_pump_once, service_ui_pump_on_respawn,
+};
 
 const WATCHDOG_POLL: Duration = Duration::from_millis(20);
 const REAP_TIMEOUT: Duration = Duration::from_secs(2);
@@ -616,22 +618,15 @@ impl InstrumentChildSupervisor {
                                 "{child_name_wd} exited ({status}); respawning"
                             );
                             // 旧 child の死亡確認後にだけ command failure/reset を行う。
-                            let reset = match ui_pump.reset_after_child_exit(&mailbox) {
-                                Ok(reset) => reset,
-                                Err(error) => {
-                                    tracing::error!(
-                                        plugin = ?plugin,
-                                        "instrument UI pump/mailbox reset failed; measurement invalid: {error}"
-                                    );
-                                    stats.measurement_invalid.store(true, Ordering::Release);
-                                    break;
-                                }
-                            };
-                            if reset.closed_visible_ui {
-                                crate::engine_wrap::enqueue_plugin_ui_closed_by_respawn(
-                                    &ui_target,
-                                    &ui_events,
-                                );
+                            if !service_ui_pump_on_respawn(
+                                "instrument",
+                                &ui_pump,
+                                &mailbox,
+                                &ui_target,
+                                &ui_events,
+                            ) {
+                                stats.measurement_invalid.store(true, Ordering::Release);
+                                break;
                             }
                             let state = match latest_state.lock() {
                                 Ok(state) => state.clone(),
@@ -676,15 +671,7 @@ impl InstrumentChildSupervisor {
                         }
                         Ok(None) => {
                             try_wait_errors = 0;
-                            if let Err(error) = ui_pump.poll_step(|notification| {
-                                crate::engine_wrap::enqueue_plugin_ui_notification(
-                                    &ui_target,
-                                    &ui_events,
-                                    notification,
-                                )
-                            }) {
-                                tracing::error!("instrument UI event pump failed: {error}");
-                            }
+                            poll_ui_pump_once("instrument", &ui_pump, &ui_target, &ui_events);
                             std::thread::sleep(WATCHDOG_POLL);
                         }
                         Err(error) => {
@@ -700,15 +687,7 @@ impl InstrumentChildSupervisor {
                         }
                     }
                 }
-                if let Err(error) = ui_pump.final_drain(|notification| {
-                    crate::engine_wrap::enqueue_plugin_ui_notification(
-                        &ui_target,
-                        &ui_events,
-                        notification,
-                    )
-                }) {
-                    tracing::error!("instrument UI event final drain failed before QUIT: {error}");
-                }
+                drain_ui_pump("instrument", &ui_pump, &ui_target, &ui_events);
                 unsafe {
                     (*region).control.store(CONTROL_QUIT, Ordering::Release);
                 }
