@@ -107,6 +107,28 @@ describe('RenderScore manifest (#598 P1)', () => {
     },
   )
 
+  // 🔴 重複名の検査（2026-08-01・main の変異検証で発見）: `ensureUnique` の
+  // `seen.has(name)` を無効化する変異が **20 passed のまま生き残った**。
+  // 重複した宣言名は「どちらが勝つか」が manifest の解釈依存になり、
+  // events の参照先が silent に入れ替わる（レンダ結果が宣言順に依存する）。
+  it('rejects duplicate sample names', () => {
+    const duplicated = manifest()
+    duplicated.samples = [
+      { name: 'kick', path: '/score/audio/kick.wav' },
+      { name: 'kick', path: '/score/audio/other.wav' },
+    ]
+    expect(() => createRenderScore(duplicated)).toThrow(/duplicates sample "kick"/)
+  })
+
+  it('rejects duplicate bus names', () => {
+    const duplicated = manifest()
+    duplicated.buses = [
+      { name: '1', chain: [] },
+      { name: '1', chain: [] },
+    ]
+    expect(() => createRenderScore(duplicated)).toThrow(/duplicates bus "1"/)
+  })
+
   it('rejects undeclared sample and bus references', () => {
     const badSample = manifest()
     badSample.events[0].sample = 'missing'

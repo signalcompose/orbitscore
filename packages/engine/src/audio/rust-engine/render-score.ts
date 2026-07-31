@@ -2,6 +2,8 @@ import path from 'node:path'
 
 import type { PluginStateSaveTarget } from '../types'
 
+import { wireObject } from './wire-validation'
+
 export interface RenderScoreSample {
   name: string
   path: string
@@ -59,11 +61,13 @@ const TOP_LEVEL_FIELDS = [
   'out_dir',
 ] as const
 
-function objectAt(value: unknown, location: string): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error(`${location} must be an object`)
-  }
-  return value as Record<string, unknown>
+/**
+ * 宣言名の一意性を検査して登録する。samples / buses が同じ規約を共有する
+ * （3つ目の宣言種別が増えても同じ形を複製しない）。daemon 側 `insert_unique` と対。
+ */
+function ensureUnique(seen: Set<string>, name: string, kind: string, location: string): void {
+  if (seen.has(name)) throw new Error(`${location}.name duplicates ${kind} "${name}"`)
+  seen.add(name)
 }
 
 function exactFields(
@@ -114,7 +118,7 @@ function renderBusName(value: unknown, location: string): string {
 }
 
 function pluginTarget(value: unknown, location: string, expectedBus: string | undefined): void {
-  const target = objectAt(value, location)
+  const target = wireObject(value, location)
   exactFields(target, ['role'], ['bus', 'instance'], location)
   if (target.role !== 'effect') {
     throw new Error(`${location}.role must be "effect" in a P1 render chain`)
@@ -137,7 +141,7 @@ function pluginChain(value: unknown, location: string, expectedBus: string | und
   if (!Array.isArray(value)) throw new Error(`${location} must be an array`)
   value.forEach((entry, index) => {
     const entryLocation = `${location}[${index}]`
-    const plugin = objectAt(entry, entryLocation)
+    const plugin = wireObject(entry, entryLocation)
     exactFields(plugin, ['plugin', 'target'], ['plugin_id', 'state'], entryLocation)
     const pluginPath = nonEmptyString(plugin.plugin, `${entryLocation}.plugin`)
     if (!path.isAbsolute(pluginPath)) {
@@ -157,7 +161,7 @@ function pluginChain(value: unknown, location: string, expectedBus: string | und
 
 /** Validates the exact P1 wire shape and all cross-references. */
 export function validateRenderScore(value: unknown): asserts value is RenderScore {
-  const score = objectAt(value, 'RenderScore')
+  const score = wireObject(value, 'RenderScore')
   exactFields(score, TOP_LEVEL_FIELDS, [], 'RenderScore')
 
   positiveInteger(score.sample_rate, 'RenderScore.sample_rate')
@@ -170,28 +174,26 @@ export function validateRenderScore(value: unknown): asserts value is RenderScor
   const sampleNames = new Set<string>()
   score.samples.forEach((entry, index) => {
     const location = `RenderScore.samples[${index}]`
-    const sample = objectAt(entry, location)
+    const sample = wireObject(entry, location)
     exactFields(sample, ['name', 'path'], [], location)
     const name = nonEmptyString(sample.name, `${location}.name`)
     nonEmptyString(sample.path, `${location}.path`)
-    if (sampleNames.has(name)) throw new Error(`${location}.name duplicates sample "${name}"`)
-    sampleNames.add(name)
+    ensureUnique(sampleNames, name, 'sample', location)
   })
 
   if (!Array.isArray(score.buses)) throw new Error('RenderScore.buses must be an array')
   const busNames = new Set<string>()
   score.buses.forEach((entry, index) => {
     const location = `RenderScore.buses[${index}]`
-    const bus = objectAt(entry, location)
+    const bus = wireObject(entry, location)
     exactFields(bus, ['name', 'chain'], [], location)
     const name = renderBusName(bus.name, `${location}.name`)
-    if (busNames.has(name)) throw new Error(`${location}.name duplicates bus "${name}"`)
-    busNames.add(name)
+    ensureUnique(busNames, name, 'bus', location)
     pluginChain(bus.chain, `${location}.chain`, name)
   })
 
   if (score.master !== null) {
-    const master = objectAt(score.master, 'RenderScore.master')
+    const master = wireObject(score.master, 'RenderScore.master')
     exactFields(master, ['chain'], [], 'RenderScore.master')
     pluginChain(master.chain, 'RenderScore.master.chain', undefined)
   }
@@ -199,7 +201,7 @@ export function validateRenderScore(value: unknown): asserts value is RenderScor
   if (!Array.isArray(score.events)) throw new Error('RenderScore.events must be an array')
   score.events.forEach((entry, index) => {
     const location = `RenderScore.events[${index}]`
-    const event = objectAt(entry, location)
+    const event = wireObject(entry, location)
     exactFields(
       event,
       ['start_sec', 'sample', 'gain', 'pan', 'offset_sec', 'duration_sec', 'rate', 'bus'],

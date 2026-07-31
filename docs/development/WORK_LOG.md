@@ -17,6 +17,55 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.354 refactor: /simplify pass — 重複ヘルパの共有化と wire deep clone の除去 (Aug 1, 2026)
+
+**Date**: 2026-08-01
+**Status**: **1923 passed / 0 failed**（pass 前 1921・+2）・lint 0・Rust daemon lib 30 passed
+
+`/simplify` の4エージェント（reuse / simplification / efficiency / altitude）をブランチ全体
+（3関心事・32ファイル）に並行適用した結果。
+
+#### 適用した指摘
+
+| 指摘 | 対応 |
+|---|---|
+| `render-score.ts` の `objectAt` が `rust-engine-player.ts` の `eventRecord` と同一 | 共有 `wire-validation.ts` へ抽出し**双方が import**（片方の private ヘルパをもう片方が読む＝依存の向きが逆、を避けた） |
+| samples / buses の重複名チェックが同型コピペ（TS・Rust とも） | `ensureUnique` / `insert_unique` に集約 |
+| `validate_render_score_params` の `params.clone()` が manifest 全体を deep clone | `RenderScoreManifest::deserialize(params)` で `&Value` から直接デシリアライズ |
+| `runWithStallReport(line, run)` の高階引数が1通りしか使われていない | 引数を落として `handleLine` を直接呼ぶ |
+
+#### 🔴 抽出したことで露見した穴（変異検証で発見）
+
+`ensureUnique` に集約した直後の再変異で、**重複名チェックを無効化する変異が 20 passed のまま
+生き残った** — samples / buses の重複名にテストが無かった（P1 実装時からの穴で、
+ヘルパへ抽出したことで初めて可視化された）。
+
+重複を許すと events の参照先が「どちらが勝つか」= manifest の解釈依存になり、
+**レンダ結果が宣言順に silent に依存する**。TS・Rust 両側にテストを追加し、
+それぞれの無効化変異が red になることを確認（TS 2 failed / Rust 5 failed）。
+
+#### 見送った指摘（理由つき）
+
+- **`write_line_best_effort` を `BestEffortStderr` に一本化**: 前者は1回のロックの下で
+  「本文 + 改行 + flush」をアトミックに行うが、後者は `MakeWriter` 契約上呼び出しごとに
+  ロックを取り直す。統合すると panic hook の1行に他スレッドの tracing 出力が割り込む余地が
+  生まれ、**#605 が問題にした診断出力の破損を別の形で再現しかねない**
+- **`_outputChannel` / `_renderBus` の判別共用体への統合**: P2 で `OfflineRenderSession` により
+  出力先の概念自体が拡張予定。今統合すると二度手間になる（altitude エージェントの判断に同意）
+- **`REQUIRED` ループを serde に委ねる**: 手書きループは
+  「`RenderScore.events is required`」という位置つきの文言を出すためのもので、
+  serde の `missing field` より診断が良い。テストもこの文言に依存している
+
+#### 🔴 レビューチームへの申し送り（この pass の対象外・既存の問題）
+
+`sequence.ts` の `output()` の **sum bus 分岐が `_outputChannel` をクリアしない**。
+`main` 時点で既にそうなっており（`git show main:` で確認）この diff 由来ではないが、
+`seq.output("kick")` → `seq.output("groupA")`（sum 宣言済み）の順で
+`_outputChannel` に古い値が残り、LinkAudio モードで `resolveDispatchChannel()` が
+古いチャンネル名を返し続ける経路が存在する。**正しさの問題なので `/simplify` では触らず、
+`/code:pr-review-team` の判断に回す。**
+
+
 ### 6.353 feat(engine): #598 P1 — RenderScore manifest の DSL/wire を通し、TS↔daemon の契約を単一 fixture で固定 (Aug 1, 2026)
 
 **Date**: 2026-08-01

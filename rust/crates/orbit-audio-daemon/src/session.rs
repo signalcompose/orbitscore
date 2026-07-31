@@ -420,6 +420,21 @@ fn nonempty(value: &str) -> bool {
     !value.trim().is_empty()
 }
 
+/// 宣言名の一意性を検査して登録する。samples / buses が同じ規約を共有する
+/// （3つ目の宣言種別が増えても同じ形を複製しない）。
+fn insert_unique<'a>(
+    seen: &mut std::collections::HashSet<&'a str>,
+    name: &'a str,
+    location: &str,
+) -> Result<(), ProtocolError> {
+    if !seen.insert(name) {
+        return Err(render_score_error(format!(
+            "{location}.name duplicates '{name}'"
+        )));
+    }
+    Ok(())
+}
+
 fn canonical_render_bus(value: &str) -> bool {
     value
         .parse::<u8>()
@@ -499,7 +514,9 @@ fn validate_render_score_params(params: &Value) -> Result<RenderScoreManifest, P
             )));
         }
     }
-    let manifest: RenderScoreManifest = serde_json::from_value(params.clone())
+    // `&Value` から直接デシリアライズする（`from_value` は所有権を要求するため manifest 全体の
+    // deep clone が必要になる — samples / buses / chain / events は数千要素になりうる）。
+    let manifest = RenderScoreManifest::deserialize(params)
         .map_err(|error| render_score_error(format!("invalid RenderScore manifest: {error}")))?;
 
     if manifest.sample_rate == 0 {
@@ -530,12 +547,11 @@ fn validate_render_score_params(params: &Value) -> Result<RenderScoreManifest, P
                 "RenderScore.samples[{index}] name/path must be non-empty"
             )));
         }
-        if !sample_names.insert(sample.name.as_str()) {
-            return Err(render_score_error(format!(
-                "RenderScore.samples[{index}].name duplicates '{}'",
-                sample.name
-            )));
-        }
+        insert_unique(
+            &mut sample_names,
+            &sample.name,
+            &format!("RenderScore.samples[{index}]"),
+        )?;
     }
 
     let mut bus_names = std::collections::HashSet::new();
@@ -545,12 +561,11 @@ fn validate_render_score_params(params: &Value) -> Result<RenderScoreManifest, P
                 "RenderScore.buses[{bus_index}].name must be canonical '1'..'16'"
             )));
         }
-        if !bus_names.insert(bus.name.as_str()) {
-            return Err(render_score_error(format!(
-                "RenderScore.buses[{bus_index}].name duplicates '{}'",
-                bus.name
-            )));
-        }
+        insert_unique(
+            &mut bus_names,
+            &bus.name,
+            &format!("RenderScore.buses[{bus_index}]"),
+        )?;
         for (plugin_index, plugin) in bus.chain.iter().enumerate() {
             validate_render_plugin(
                 plugin,
@@ -2234,6 +2249,37 @@ mod tests {
         let error = validate_render_score_params(&dropped).expect_err("events is required");
         assert_eq!(error.code, "MALFORMED_REQUEST");
         assert!(error.message.contains("events"));
+    }
+
+    /// 重複した宣言名を拒否する（2026-08-01・TS 側の同型変異が生き残ったため両側に追加）。
+    /// 重複を許すと events の参照先が「どちらが勝つか」= manifest の解釈依存になり、
+    /// レンダ結果が宣言順に silent に依存する。
+    #[test]
+    fn render_score_rejects_duplicate_sample_and_bus_names() {
+        let mut duplicate_sample = valid_render_score();
+        duplicate_sample["samples"] = json!([
+            {"name": "kick", "path": "/score/audio/kick.wav"},
+            {"name": "kick", "path": "/score/audio/other.wav"}
+        ]);
+        let error =
+            validate_render_score_params(&duplicate_sample).expect_err("duplicate sample name");
+        assert!(
+            error.message.contains("duplicates 'kick'"),
+            "unexpected message: {}",
+            error.message
+        );
+
+        let mut duplicate_bus = valid_render_score();
+        duplicate_bus["buses"] = json!([
+            {"name": "1", "chain": []},
+            {"name": "1", "chain": []}
+        ]);
+        let error = validate_render_score_params(&duplicate_bus).expect_err("duplicate bus name");
+        assert!(
+            error.message.contains("duplicates '1'"),
+            "unexpected message: {}",
+            error.message
+        );
     }
 
     #[test]

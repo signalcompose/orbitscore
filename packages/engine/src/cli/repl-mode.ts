@@ -414,7 +414,7 @@ export function createReplSession(interpreter: InterpreterV2): {
   /// 打ち切らないので意味論は変わらない。変わるのは「沈黙して詰まる」が
   /// 「詰まっている事実と原因の行が `get_log` に出る」になること。1 回だけでなく
   /// 反復するのは、詰まりが解消したかどうかを外から判断できるようにするため。
-  const runWithStallReport = async (line: string, run: () => Promise<void>): Promise<void> => {
+  const runWithStallReport = async (line: string): Promise<void> => {
     const startedAt = Date.now()
     const preview = line.trim().slice(0, 120)
     const timer = setInterval(() => {
@@ -428,7 +428,7 @@ export function createReplSession(interpreter: InterpreterV2): {
     // timer が event loop を生かし続けないようにする（CLI の終了を妨げない）。
     timer.unref?.()
     try {
-      await run()
+      await handleLine(line)
     } finally {
       clearInterval(timer)
     }
@@ -442,7 +442,7 @@ export function createReplSession(interpreter: InterpreterV2): {
       lineQueue = lineQueue
         .then(() => {
           queuedLines--
-          return runWithStallReport(line, () => handleLine(line))
+          return runWithStallReport(line)
         })
         .catch((e) => {
           // handleLine は既知エラーを内部で捕捉する。ここに来るのは想定外のみ —

@@ -49,6 +49,7 @@ import type {
 } from '../types'
 
 import { DaemonClient } from './daemon-client'
+import { wireObject } from './wire-validation'
 import type { AudioDeviceListEntry } from './daemon-client'
 import { DaemonConnectionError, DaemonProtocolError, DaemonQuitError } from './errors'
 
@@ -63,13 +64,6 @@ import { DaemonConnectionError, DaemonProtocolError, DaemonQuitError } from './e
  */
 type GapKind = 'outputChannel' | 'masterEffect' | 'linkTempo' | 'pluginNoteDrop' | 'pluginInactive'
 
-function eventRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error(`${label} must be an object`)
-  }
-  return value as Record<string, unknown>
-}
-
 function eventNonNegativeInteger(value: unknown, label: string): number {
   if (!Number.isSafeInteger(value) || Number(value) < 0) {
     throw new Error(`${label} must be a non-negative safe integer`)
@@ -78,7 +72,7 @@ function eventNonNegativeInteger(value: unknown, label: string): number {
 }
 
 function pluginUiTargetFromEvent(data: Record<string, unknown>): PluginUiTarget {
-  const target = eventRecord(data.target, 'target')
+  const target = wireObject(data.target, 'target')
   const index = eventNonNegativeInteger(target.index, 'target.index')
   if (target.role === 'effect') {
     if (target.bus !== undefined && typeof target.bus !== 'string') {
@@ -581,7 +575,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
   private readonly onPluginUiClosed = (raw: unknown): void => {
     this.enqueuePluginUiEvent(async () => {
-      const data = eventRecord(raw, 'PluginUiClosed data')
+      const data = wireObject(raw, 'PluginUiClosed data')
       const target = pluginUiTargetFromEvent(data)
       const generation = eventNonNegativeInteger(data.generation, 'generation')
       const evtSeq = eventNonNegativeInteger(data.evt_seq, 'evt_seq')
@@ -605,7 +599,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
   private readonly onPluginUiCloseDone = (raw: unknown): void => {
     this.enqueuePluginUiEvent(() => {
-      const data = eventRecord(raw, 'PluginUiCloseDone data')
+      const data = wireObject(raw, 'PluginUiCloseDone data')
       const target = pluginUiTargetFromEvent(data)
       const completion = data.completion
       if (completion === 'timeout-without-save') {
@@ -621,7 +615,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
   private readonly onPluginUiClosedByRespawn = (raw: unknown): void => {
     this.enqueuePluginUiEvent(() => {
-      const data = eventRecord(raw, 'PluginUiClosedByRespawn data')
+      const data = wireObject(raw, 'PluginUiClosedByRespawn data')
       const target = pluginUiTargetFromEvent(data)
       console.error(
         `[plugin-ui] ${JSON.stringify(target)} was closed by daemon respawn and was not reopened`,
