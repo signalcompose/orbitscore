@@ -101,16 +101,20 @@ impl HostCallbackConfig {
 
     /// Out-of-process children host a plugin UI, so they must advertise `HostGui`.
     ///
-    /// 🔴 **P3b-2 completion condition.** The unit test below pins this constructor's body,
-    /// but nothing pins the *call sites* to it: replacing the argument at either `load` call
-    /// with [`HostCallbackConfig::in_process`] compiles and leaves all tests green (verified
-    /// by mutation on 2026-07-31). Both constructors return the same type, so the swap is
-    /// invisible to the compiler — the sibling-swap class this project has already shipped once.
+    /// `child` and [`in_process`](Self::in_process) return the same type, so swapping them at a
+    /// call site is invisible to the compiler — the sibling-swap class this project has already
+    /// shipped once. **Two layers guard it, and each was verified by mutation on 2026-07-31:**
     ///
-    /// The gap is unreachable today because nothing consumes the host GUI callbacks yet.
-    /// P3b-2 wires `closed()` / `request_resize()` into the close state machine, and its test
-    /// that a plugin-initiated close reaches the machine must run through the real `load` path,
-    /// which binds the call sites for the first time.
+    /// 1. The unit test below pins this constructor's body. **Alone it was not enough**: swapping
+    ///    the argument at either `load` call left all 28 tests green.
+    /// 2. `real_load_path_delivers_plugin_initiated_close_to_main_half` (in `effect` and
+    ///    `instrument`, `#[ignore]`d — needs the prebuilt CLAP dylib) drives a plugin-initiated
+    ///    `closed()` through the **real `load` path**, so a call site that stops asking for
+    ///    `child()` reports `take_closed() == None`. Swapping `effect.rs`'s call site now fails
+    ///    exactly that test.
+    ///
+    /// 🔴 Layer 2 is the one that binds the call sites; keep those tests running whenever this
+    /// type gains another variant.
     pub(crate) fn child() -> Self {
         Self {
             callback_requested: Arc::new(AtomicBool::new(false)),

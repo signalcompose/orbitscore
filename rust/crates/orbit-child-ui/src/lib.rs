@@ -123,11 +123,13 @@ pub enum CloseRequestDisposition {
 ///   clock. Wall-clock values and non-monotonic values must not be used.
 /// - Opening a real window makes the main-runloop tick reentrant (modal sheets, live
 ///   resize, drag tracking). While a tick is reentrant the child's `service_main` is
-///   skipped, so `ParentWatch::should_exit` — the orphan guard from #448 — is not
-///   evaluated. `CONTROL_QUIT` already survives this via `run_child`'s `should_quit`
-///   predicate; the orphan case does not. P3b must extend that predicate to cover
-///   parent death before the first window can be shown, otherwise a daemon crash
-///   during a modal sheet leaves the child alive holding its plugin.
+///   skipped, so `ParentWatch::should_exit` — the orphan guard from #448 — would not be
+///   evaluated there. ✅ **Closed in P3b-2**: `child_should_quit` now evaluates both
+///   `CONTROL_QUIT` and `ParentWatch` outside the borrow, so a daemon crash during a modal
+///   sheet still tears the child down. Its composition (not just the pure predicate) is
+///   pinned by `child_should_quit_consults_the_injected_parent_watch`, which uses
+///   `ParentWatch::orphaned_for_tests` to make the parent-died branch reachable in-process.
+///   Keep that test whenever the predicate gains another term.
 pub trait UiHostActions {
     /// Create and show the UI. P3b supplies the format-specific implementation.
     fn open_ui(&mut self) -> Result<(), String>;

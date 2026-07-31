@@ -89,8 +89,8 @@ fn decode_slot_events(records: &[EventRecord], count: u32, sink: &mut Vec<Neutra
 
 /// Outcome of [`write_output_events`]: how many records landed in `window`, plus the health
 /// counter deltas the caller adds to `SharedRegion` after the closure returns.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[cfg(target_os = "macos")]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct OutputWriteOutcome {
     written: usize,
     spilled: u64,
@@ -337,7 +337,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
     use orbit_audio_sandbox::{
