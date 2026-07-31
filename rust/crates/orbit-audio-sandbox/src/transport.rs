@@ -3315,6 +3315,14 @@ mod tests {
             ),
             "reset must remain blocked while poll_step owns the pump lock"
         );
+        // 🔴 排他の実体はリングの不変性であって、reset の戻りが遅いことではない。
+        // 完了タイミングだけを見ていると、「pump lock を取る前にリングを潰し、その後
+        // lock で待つ」という #592 そのものの実装が素通りする（実際に変異で確認済み）。
+        assert_eq!(
+            unsafe { (*region).evt_seq.read() },
+            1,
+            "the event ring must not be reset while poll_step is in flight"
+        );
         release_sink_tx.send(()).expect("release poll sink");
         assert!(matches!(
             poller.join().expect("poller join").expect("poll result"),
