@@ -17,6 +17,463 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.356 fix: PR #612 レビュー統合 — `output()` の宛先排他規則を spec に確定し、保護の穴を塞ぐ (Aug 1, 2026)
+
+**Date**: 2026-08-01
+**PR**: #612 / **Status**: **1929 passed / 0 failed**（レビュー前 1923・+6）・lint 0・
+`cargo clippy --all-targets` 0・Rust workspace lib 14 crate 全緑
+
+レビュアー5名（Sonnet 4 = 差分に**在る**もの / Fable = 差分に**無い**もの）を**並行**起動。
+Critical 0 で収束したが、Important の指摘は横断的関心事に集約できたため
+**修正前にポリシーを確定**してから一括適用した（指摘単位のローカルパッチは振動の主因）。
+
+#### 🔴 ポリシー1: `output()` の宛先排他 — spec に §4.4.1 を新設
+
+**発見（Fable 監査）**: `_renderBus` のフィールドコメントは
+「**offline stem の宣言は既存の live routing を変えられない**」と不変条件を宣言しているのに、
+実装はその直後で `_outputChannel` を破壊していた。spec（§4.4）は解決順しか定めておらず、
+**再宣言時に何が残るか**が未定義だった。
+
+**実害**: `global.linkAudio()` セッションで `kick.output("Kick Ch")` が稼働中に、
+レンダ準備として `kick.output(1)` を書き足すと `_outputChannel` が消え、次の schedule で
+`resolveDispatchChannel()` が throw して**ライブ中に kick が停止する**。
+
+**確定した規則（一方向の非対称・意図的）**:
+
+| 宣言 | `_renderBus` | `_outputChannel` | `_sumOutputBus` |
+|---|---|---|---|
+| `output(n)` | 設定 | **変更しない** | **変更しない** |
+| `output(name)` | **クリア** | 設定 | 変更しない |
+| `output(sumName)` | **クリア** | 変更しない | 設定 |
+
+オフライン → live 方向を禁じるのは上記の実害のため。live → オフライン方向を許すのは、
+offline が P2 まで走らないので stale を残さない方が良いため。
+
+**これに伴い、私が P1 で追加した「排他性」テストは規則と逆の性質を固定していたので書き換えた**
+（当初は実装から挙動を推測してテスト化しており、不変条件の側を読んでいなかった）。
+
+#### 🔴 ポリシー2: 診断チャネルの保護は「tracing 経路」ではなく「subscriber 稼働後の全 stderr 書き込み」
+
+**発見（silent-failure-hunter）**: #605 の保護は `main.rs`（binary）にあったため
+**lib 側の `engine_wrap.rs` から使えず**、生 `eprintln!` が 2 箇所残っていた。
+panic hook が `exit(1)` するようになった今、**「非 UTF-8 な env var を警告できなかった」
+というだけで daemon 全体が終了する**経路になっていた。
+
+`best_effort_stderr.rs` を crate 直下へ移し、`main.rs` / `engine_wrap.rs` の
+生 `eprintln!` 4 箇所すべてに適用。起動前（subscriber 初期化より前）は対象外
+—そこは書けなければ素直に落ちるのが正しい。
+
+#### 🔴 ポリシー3: 「未完入力」判定はパース段のエラーにだけ適用する
+
+**発見（silent-failure-hunter + Fable が独立に）**: `try` が `parseAudioDSL` と
+`interpreter.execute` の**両方**を覆っていたため、`/\bEOF\b/` が実行時エラーにも作用していた。
+実行時エラーの文言はユーザー由来の文字列を含むので、たとえば
+`kick.audio("takes/EOF.wav")` の ENOENT が「未完入力」と誤判定され、
+**完結した行が silent に保留されて #608 が別経路で再発する**。
+
+parse を独立した `try` に分離。以後は「入力は完結している」ので、失敗しても必ず報告する。
+
+#### 追加したテスト（すべて変異で red 確認）
+
+| テスト | 殺す変異 |
+|---|---|
+| offline 宣言が live channel を保つ | 旧挙動（数値 output が channel を破壊）→ **red** |
+| 同名 sum に解決された時に render bus を落とす | sum 分岐のクリア削除 → **red**（従来は 25 passed のまま生存） |
+| 範囲外の拒否時に既存 routing を壊さない | 検査より前に状態を壊す → **red** |
+| 実行時エラーが "EOF" を含んでも保留しない | 旧構造（execute にも EOF 判定）→ **red** |
+| DSL テキスト経由の `output(n)`（新規ファイル） | 数値判定を落とす / 記録しない → **red** |
+| `master` の必須性（serde は Option を None に既定化） | `REQUIRED` から master を外す → **red**（従来は 6 passed のまま生存） |
+
+#### 私の裏取りで**覆した**指摘
+
+**「sum 分岐が `_outputChannel` をクリアしない」は到達不能**だった。2 エージェントが独立に
+「実害経路は実在する」と報告したが、`resolveDispatchChannel()` が `_outputChannel` を返すのは
+LinkAudio 有効時のみで、**LinkAudio と sum bus は v1 で双方向に排他**
+（`mixer-manager` の `declareBus` ゲートと `global.linkAudio()` のゲート）。issue 化は見送り、
+spec §4.4.1 に不在の根拠を記録した。
+
+#### コメント精度の修正（comment-analyzer / Fable）
+
+- SIGABRT の再現回数 **11 → 14**（実測。04:57 に数えた時点では 11 で、その後の検証中に増えていた）。
+  時刻窓も併記して検証可能にした
+- VST3 `processMode` コメントの**過般化を訂正**。一次ソース（`ivstaudioprocessor.h`）の規定は
+  「一致」ではなく「`kRealtime`↔`kOffline` の切替には `setupProcessing` が必須」。
+  本 host の 2 値域では結果的に一致が必須になるが、`kPrefetch` を含む一般則ではない
+- CLAP の「inactive でなければならない」という**根拠のない制約主張を削除**
+  （`render.h` の `set` は `[main-thread]` のみ）。activate 前に呼ぶのは host 側の選択
+- `REQUIRED` ループの存在理由を明記（`master` だけ `Option` なので serde に委ねられない）
+
+#### 運用上の失敗（記録）
+
+**レビューエージェントが共有 working tree を変異検証で書き換えた**（3 ファイル + 新規 probe
+ファイル）。差分を保全した上で HEAD へ復元。`pr-test-analyzer` に「どの変異を殺すか示せ」と
+依頼した以上、実際に変異を走らせるのは自然な行動であり、**共有ツリーで作業させない指示か
+worktree の付与が必要**だった（発注側の設計ミス）。
+
+
+### 6.355 feat(vst3): offline process mode を実装 — Codex が書いたテストの相手側が存在しなかった (#598 P1) (Aug 1, 2026)
+
+**Date**: 2026-08-01
+**Issue**: #598 P1
+**Status**: `cargo clippy --all-targets` 0・workspace lib テスト全緑・
+`orbit-vst3-host --test offline` **13 passed**・`npm test` 1923 passed
+
+#### 🔴 発見（私の判定ミスの訂正）
+
+P1 を「実質完成」と判定してコミットした後、**pre-push の clippy がコンパイルエラーを出した**:
+
+```
+error[E0432]: unresolved import `orbit_vst3_host::Vst3ProcessMode`
+error[E0599]: no associated function `load_with_process_mode` ...
+```
+
+Codex は `orbit-vst3-host/tests/offline.rs` を新 API 向けに書き換えたが、
+**その API をソースに実装していなかった**（WIP バックアップを検査し、
+`Vst3ProcessMode` の出現は `tests/offline.rs` の中だけ・#603 TEMP パッチには 0 件、
+= 私の逆適用で消したのではないことを確認）。
+
+**判定が浅かった**: 「TODO 0 個 + daemon ハンドラ配線済み」で完成と見なしたが、
+`npm test` も `cargo test -p orbit-audio-daemon --lib` も **`orbit-vst3-host` の
+テストターゲットをビルドしない**。**「テストが緑」は「コンパイルが通る」を意味しない。**
+
+#### 実装（CLAP 側との対称形に合わせた）
+
+CLAP は `ClapRenderMode` / `configure_render_mode` として実装済みだったので、VST3 も同型に:
+
+- `pub enum Vst3ProcessMode { Realtime（既定）, Offline }` + `as_vst3()`
+- `Vst3EffectProcessor` / `Vst3InstrumentProcessor` に `load_with_process_mode(...)`。
+  既存 `load(...)` は `Realtime` で委譲する薄いラッパ（呼び出し側は無変更）
+- **P0 調査で特定済みの `processMode: kRealtime` ハードコード4箇所を全廃**
+  （`ProcessSetup` 2 + `ProcessData` 2）。両 audio 構造体が宣言時の mode を保持し、
+  `ProcessData` に載せ直す
+
+🔴 **setup と process で同じ値を渡すこと**が要点。VST3 の契約上この2つは一致が前提で、
+テスト用 oracle（gain / synth）は不一致を `kInvalidArgument` で弾く。
+「オフラインだけ setup を変えて process を変え忘れる」取り違えの検出器になっている。
+
+#### 変異検証（3種・すべて red）
+
+| 変異 | 結果 |
+|---|---|
+| `Offline` を `kRealtime` に読み替え（mode が届かない） | **red**（2 failed） |
+| `ProcessSetup` だけ realtime 固定（setup/process 不一致） | **red** |
+| `ProcessData` だけ realtime 固定（逆向きの不一致） | **red** |
+
+#### 教訓
+
+**委譲先の成果を「完成」と判定する前に、ワークスペース全体をコンパイルする。**
+`--lib` や個別パッケージのテストは、テストターゲットの型エラーを一切拾わない。
+今回は pre-push の clippy が最後の砦になったが、これは偶然に近い。
+
+
+### 6.354 refactor: /simplify pass — 重複ヘルパの共有化と wire deep clone の除去 (Aug 1, 2026)
+
+**Date**: 2026-08-01
+**Status**: **1923 passed / 0 failed**（pass 前 1921・+2）・lint 0・Rust daemon lib 30 passed
+
+`/simplify` の4エージェント（reuse / simplification / efficiency / altitude）をブランチ全体
+（3関心事・32ファイル）に並行適用した結果。
+
+#### 適用した指摘
+
+| 指摘 | 対応 |
+|---|---|
+| `render-score.ts` の `objectAt` が `rust-engine-player.ts` の `eventRecord` と同一 | 共有 `wire-validation.ts` へ抽出し**双方が import**（片方の private ヘルパをもう片方が読む＝依存の向きが逆、を避けた） |
+| samples / buses の重複名チェックが同型コピペ（TS・Rust とも） | `ensureUnique` / `insert_unique` に集約 |
+| `validate_render_score_params` の `params.clone()` が manifest 全体を deep clone | `RenderScoreManifest::deserialize(params)` で `&Value` から直接デシリアライズ |
+| `runWithStallReport(line, run)` の高階引数が1通りしか使われていない | 引数を落として `handleLine` を直接呼ぶ |
+
+#### 🔴 抽出したことで露見した穴（変異検証で発見）
+
+`ensureUnique` に集約した直後の再変異で、**重複名チェックを無効化する変異が 20 passed のまま
+生き残った** — samples / buses の重複名にテストが無かった（P1 実装時からの穴で、
+ヘルパへ抽出したことで初めて可視化された）。
+
+重複を許すと events の参照先が「どちらが勝つか」= manifest の解釈依存になり、
+**レンダ結果が宣言順に silent に依存する**。TS・Rust 両側にテストを追加し、
+それぞれの無効化変異が red になることを確認（TS 2 failed / Rust 5 failed）。
+
+#### 見送った指摘（理由つき）
+
+- **`write_line_best_effort` を `BestEffortStderr` に一本化**: 前者は1回のロックの下で
+  「本文 + 改行 + flush」をアトミックに行うが、後者は `MakeWriter` 契約上呼び出しごとに
+  ロックを取り直す。統合すると panic hook の1行に他スレッドの tracing 出力が割り込む余地が
+  生まれ、**#605 が問題にした診断出力の破損を別の形で再現しかねない**
+- **`_outputChannel` / `_renderBus` の判別共用体への統合**: P2 で `OfflineRenderSession` により
+  出力先の概念自体が拡張予定。今統合すると二度手間になる（altitude エージェントの判断に同意）
+- **`REQUIRED` ループを serde に委ねる**: 手書きループは
+  「`RenderScore.events is required`」という位置つきの文言を出すためのもので、
+  serde の `missing field` より診断が良い。テストもこの文言に依存している
+
+#### 🔴 レビューチームへの申し送り（この pass の対象外・既存の問題）
+
+`sequence.ts` の `output()` の **sum bus 分岐が `_outputChannel` をクリアしない**。
+`main` 時点で既にそうなっており（`git show main:` で確認）この diff 由来ではないが、
+`seq.output("kick")` → `seq.output("groupA")`（sum 宣言済み）の順で
+`_outputChannel` に古い値が残り、LinkAudio モードで `resolveDispatchChannel()` が
+古いチャンネル名を返し続ける経路が存在する。**正しさの問題なので `/simplify` では触らず、
+`/code:pr-review-team` の判断に回す。**
+
+
+### 6.353 feat(engine): #598 P1 — RenderScore manifest の DSL/wire を通し、TS↔daemon の契約を単一 fixture で固定 (Aug 1, 2026)
+
+**Date**: 2026-08-01
+**Issue**: #598 P1 / **Branch**: `598-p1-dsl-wire`
+**Status**: **1921 passed / 0 failed / 34 skipped**（P1 着手前 1918・+3）・lint 0・
+Rust daemon lib 29 passed
+
+#### 実装（Codex）
+
+- `output(n)` を既存 `output(name)` に統合（1..16 の整数のみ・同名 sum が優先・
+  数値風の文字列は render bus として解釈しない）
+- `RenderScore` manifest の TS 生成・検証・シリアライズ（`render-score.ts`）
+- daemon 側の受け口・語彙解析・検証（`session.rs`）。ハンドラは
+  `NOT_IMPLEMENTED: offline rendering is implemented in #598 P2` を返す（P1 の想定終端）
+
+#### 🔴 main の変異検証で見つけた2つの穴（P1 の受け入れ基準未達だった）
+
+**1. 「TS 生成 → daemon 検証」が実は検証されていなかった**
+
+受け入れ基準は「manifest の round-trip（TS 生成 → daemon 検証）」だが、実際は
+TS 側が TS→TS で round-trip し、Rust 側は**手書きの複製 JSON** を検証していた。
+両者は互いを見ていない。
+
+実証: `out_dir` を **TS 側だけ**一貫して `outDir` にリネームする変異が
+**TS 19 passed / Rust 4 passed** で完全に生き残った — engine が daemon の受け付けない
+payload を出す状態が、両側緑のまま成立する。
+
+**対処**: `tests/fixtures/render-score-manifest.json` を **wire 契約の単一の正本**とし、
+TS 側は `serializeRenderScore(createRenderScore(...))` の出力がこれと一致することを assert、
+Rust 側は `include_str!` で同じファイルを読み `validate_render_score_params` に通す。
+再変異で **TS 側リネーム → TS red / Rust 側リネーム → Rust red**（両方向）を確認。
+
+**2. `_outputChannel` と `_renderBus` の排他性が未検証**
+
+既存テストは**未設定からの初回宣言**しか通していなかったため、
+「数値 output で `_outputChannel` をクリアする行」と「文字列 output で `_renderBus` を
+クリアする行」を**それぞれ削除する変異が両方とも生き残った**（23 passed のまま）。
+実害: `output(1)` → `output("master")` と書き換えても render bus が残り、score-mode で
+意図しないバスへ出る。**再宣言（ライブコーディングの書き換え経路）**を通すテストを追加し、
+両変異が red になることを確認。
+
+#### 変異検証の一覧
+
+| 変異 | 結果 |
+|---|---|
+| TS 側だけ `out_dir`→`outDir` にリネーム | 対処前 **生存** → 対処後 **red** |
+| Rust 側だけ `out_dir`→`outDir` にリネーム | 対処後 **red**（診断文つき） |
+| 未宣言 sample の参照チェック無効化 | red |
+| 未宣言 bus の参照チェック無効化 | red |
+| state の絶対パス要求を外す | red |
+| 数値 render bus の上限（>16）を外す | red |
+| 数値 output で `_outputChannel` を消さない | 対処前 **生存** → 対処後 **red** |
+| 文字列 output で `_renderBus` を消さない | 対処前 **生存** → 対処後 **red** |
+
+#### 分類の追加
+
+`getRenderBus` を `signal-chain-dispatch.spec.ts` の内部 API リストへ（`@internal` の
+純アクセサ・インタプリタからの参照ゼロ）。これが未分類で全 suite が 1 fail していた。
+
+#### このコミットに含まれないもの
+
+**#603 の TEMP パッチ（Kontakt UI・`vst3-host/src/{lib,view}.rs`・追加50行）は除外**。
+逆適用が clean に通ることで「working tree の vst3-host 変更 = TEMP パッチのみ」を確認した上で
+退避し、**パッチ全文と正式修正の要件を #603 にコメントとして保全**した。
+
+
+### 6.352 chore(project): 「1260」提出完了 — やり残し・課題の棚卸し (Aug 1, 2026)
+
+**Date**: 2026-08-01
+
+**Soundcinema Düsseldorf 2026 に「1260」を締切内提出**（ステレオ 9:59.50 / 48kHz / 24bit /
+−23.0 LUFS / TP −6.1 dBFS）。#546 の必須ループ（宣言→UI→音色→自動保存→復元→演奏）が
+本番の音色選定 6 パートでそのまま使われ、実運用で初めて検証された。
+
+#### やり残し・課題（棚卸し）
+
+| 項目 | 追跡先 | 状態 |
+|---|---|---|
+| 未レビューコミット3本の PR 化 + レビューフロー | `e88d759` / `e505e40` / `892ae2b` | 🔴 次セッション最優先 |
+| Codex #598 P1 WIP の検収（19ファイル未コミット・1 fail 同居） | #598 | 実装中 |
+| #603 正式修正（TEMP パッチが working tree に適用中） | #603 | 実戦検証済み・整形待ち |
+| one-shot RUN 終端の note-off 不達（VST 鳴り続け） | #606 | 新規 |
+| stop_engine の child kill 不全（消滅確認なし） | #607 | 新規 |
+| スタック全体 `@v` の仕様化 | #609 | owner 判断待ち |
+| diagnostics とエンジンパーサの乖離 | #610 | 新規 |
+| 7.1 の 8 ステム書き出し（オフライン・提出物用） | #598 | P0 完了・P1 実装中 |
+| **realtime の 7.1 マルチアウト（本選 10/28 上演用）** | #611 | 新規・DSL 表面は #598 と共有 |
+| gong の Kontakt 化 | 作品側 GONG_AS_INSTRUMENT 実装済み | state 待ち |
+
+セッション詳細は Serena `session_2026-08-01_soundcinema_submission_and_6layer_debug`。
+
+
+### 6.351 fix(repl): 行途中の構文エラーを「複数行入力の途中」と誤判定して silent に永久停止する本丸バグを修正 (#608) (Aug 1, 2026)
+
+**Date**: 2026-08-01
+**Issue**: #608 / **Commit**: `892ae2b`（コミット内 Refs #607 は当時未採番の誤記・正は #608）
+**Status**: 新規 3 テスト passed・変異 3 種 red 確認・full suite 1917 passed（+5）
+
+#### 事故と診断過程
+
+パーサ未対応の記法（スタック全体への `[1,5,9]@v+10` — spec §2.5 は単音のみ定義）を
+172 箇所含む 40KB の楽譜を run_selection したところ、途中の宣言までは実行されるが
+以後がすべて沈黙。`ok` は返るが RUN も後続評価も実行されない。「instrument 同時4本
+頭打ち」に見えたが本数は可変（4/3/2本）で、固定上限は存在しなかった。
+
+診断は消去法で進めた（すべて実測）:
+
+| 仮説 | 反証手段 |
+|---|---|
+| daemon の attach 直列化 / slot 枯渇 | 新規 gated harness で逐次・同時とも 6/6 成功 |
+| Kontakt のプロセス数制限 | probe 6 プロセス同時起動、全成功 |
+| engine event loop ブロック | `sample` で kevent アイドルを確認 |
+| stdin 経路の破損 | CDP で stdin タップ — データ到達を目視 |
+| daemon request 滞留 | CDP `queryObjects` で DaemonClient pending=0 |
+| 宣言の await 滞留 | 同 EffectChainMap — cb/vc/pno 完了・**vla は呼ばれてもいない** |
+
+決め手は停滞エンジンへ**空行2連を送る**実験（バッファ強制実行のトリガー）で、
+`Expected RPAREN but got AT at line 10` が吐き出されたこと。
+
+#### 原因
+
+`repl-mode.ts` の不完全入力判定が `Expected RPAREN` の**文字列一致**を「未完」に
+含めていた。このメッセージは `but got AT`（行の途中に不正トークン = 待っても完結
+しない本物の構文エラー）でも出る。構文エラーを「未完」として silent に保留した結果、
+以後の全入力が未完バッファへ合体しセッションが停止した。6.350 の stall レポーターが
+鳴らなかったのは、バッファ保留が「実行中の行」ではなく監視の外だったため。
+
+#### 修正
+
+**「未完」= パーサが入力の終端（EOF）に達した場合のみ**、に一本化（`/\bEOF\b/`）。
+`parse-statement.ts` の `Expected comma or closing parenthesis` 系 2 箇所には
+トークン名 + 位置を付与（トークン名の無い文言は EOF と構文エラーを区別できない）。
+
+変異検証: 旧判定復元 → red / EOF 判定ごと削除（過剰報告側）→ red / 文言劣化 → red。
+
+#### 残課題（owner 判断・提案）
+
+1. **スタック全体 `@v` を仕様に足すか** — 自然な表現で作品側の需要も実在するが、
+   決定 #56/#57（per-note `@v`）の拡張になるため独断で実装しない
+2. **拡張の diagnostics とエンジンパーサの乖離** — `[...]@v` を diagnostics は
+   受理し、エンジンは弾く。診断がパーサと同じ文法を見ていない（別 issue 化予定）
+
+### 6.350 fix(repl): 詰まった評価キューを沈黙させず、塞いでいる行を名指しさせる (#608) (Aug 1, 2026)
+
+**Date**: 2026-08-01
+**Issue**: #608（コミット内 Refs #607 は当時未採番の誤記）
+**Status**: 新規 2 テスト passed・変異検証 4 種（うち 1 種が生き残ったのでテストを追加して潰した）
+
+#### 症状
+
+Kontakt を 6 声宣言したところ instrument のロードが 1 件未解決のまま残り、以後の
+`global.start()` / RUN が**すべて「ok」を返しながら実行されず**、capture は無音のままだった。
+原因の特定に数時間かかった直接の理由が**この沈黙**である。
+
+#### 原因
+
+`repl-mode.ts` の `pushLine` は全行を**単一の promise チェーン**へ載せる（#476 の FIFO
+直列化）。設計は正しいが、**1 行が resolve しないと以後の入力が永久に待たされる**。
+`pushLine` は `void` を返すので、呼び出し元（MCP の `evaluate_orbitscore` 等）には
+成功に見える。
+
+#### 修正: 打ち切らずに報告する
+
+タイムアウトで打ち切らないのは、**正当な長時間処理が存在する**ため（instrument 6 本の
+attach は実測 30 秒超）。閾値は daemon の `CHILD_READY_TIMEOUT`（60s）に合わせ、
+「daemon 側の上限を超えてなお終わらない」ときだけ鳴らす。
+
+報告には **(a) 塞いでいる行 (b) 背後で待っている行数 (c) 受理と実行は別である旨**を含める。
+(a) が無いと何を直せばよいか分からず、(b) が無いと「1 行が遅い」のか
+「セッション全体が死んだ」のか区別できない。
+
+#### 変異検証
+
+| 変異 | 結果 |
+|---|---|
+| 報告が永久に発火しない（間隔を巨大化） | **red** |
+| 待機行数を報告しない | **red** |
+| 塞いでいる行を名指ししない | **red** |
+| 閾値を 1ms に縮める（誤報） | 🔴 **最初は生き残った** |
+
+4 番目が生き残ったのは、無音テストが「一瞬で終わる行」を使っていたため。
+**「遅いが正当な行」（30 秒）で押さえ直して**潰した。
+[[test-name-must-match-the-path-it-drives]] と同型で、名前は正しいのに経路が違っていた。
+
+#### 運用の失敗（記録）
+
+このセッション中、コミット時に `git stash` で Codex の未完成 P1 を退避した。**その窓で
+pre-commit hook がビルドを走らせ、#605 修正の入っていない dist（05:21:13）が焼かれた。**
+作品セッション側で「`[daemon]` 行が再び消えた」と観測され、新しいバグとして追いかけられた。
+**stash 中のビルドは、コミット対象でないソースから成果物を焼く。**
+
+### 6.349 fix(daemon): 診断チャネルの故障で daemon が死ぬ経路を封鎖し、child READY 上限を実測に合わせた (#605) (Aug 1, 2026)
+
+**Date**: 2026-08-01
+**Issue**: #605
+**Status**: daemon lib test **158 passed / 0 failed**・新規プロセステスト **1 passed**・
+実機で Kontakt の state 復元が daemon 経由で初めて成功
+
+#### 症状
+
+Kontakt を `instrument(..., "states/strings.state")` で宣言すると child が READY を発行せず
+attach がタイムアウトする。**state 無しでは成功する**という非対称があり、「state 復元が
+child をフリーズさせている」ように見えていた。並行して daemon が SIGABRT で落ちていた
+（`~/Library/Logs/DiagnosticReports/orbit-audio-daemon-*.ips` に **14 件**・04:03〜05:16 JST）。
+
+#### 原因1: `CHILD_READY_TIMEOUT` が実測に対して短すぎた（本命）
+
+daemon / child / shm をすべて外した gated probe
+（`orbit-vst3-host/tests/kontakt_state_gated.rs`・新規）で**host 側の state 復元は健全**と判明:
+
+| 条件 | 実測（release） |
+|---|---|
+| state 無しの load | 3.1s |
+| state あり（1.33MB の component chunk 適用） | **4.3s** |
+| 初回 dylib 検証（Gatekeeper・plugin ごとに一度） | 最大 20s |
+
+**「READY を出さない」のではなく「間に合っていなかった」。** 上限 10s → **60s**。
+根拠の内訳を定数のドキュメントに残した。
+
+#### 原因2: 診断チャネルの故障がプロセスを殺していた
+
+- `tracing_subscriber` の writer が `std::io::stderr` 直 — **書き込み失敗で panic**
+- `install_fatal_panic_hook` 自身が `eprintln!` — **再 panic** し
+  `panic_with_hook` の再帰検知が `process::abort()` を呼ぶ。よって `exit(1)` に到達しない
+
+engine 側（`daemon-client.ts`）が起動完了時に daemon stderr の購読を切っており、
+読み手の消えた pipe への書き込みが失敗していた。**engine 側で購読を維持**（蓄積だけ止めて
+以後は `[daemon]` 付きで転送）し、**daemon 側は書き込み失敗で panic しない実装**に変えた。
+
+**設計判断**: 診断チャネルの書き込みエラーは握りつぶす。通常なら禁じ手だが、ここは
+**自分を診断するためのチャネルが診断対象を殺している**構図であり、ログ1行を失う代償より
+daemon が生きて次の診断を出せることを優先した。音声処理・プロトコルの失敗は従来どおり
+loud に落とす。
+
+#### 変異検証（`tests/stderr_breakage.rs`）
+
+`Stdio::piped()` の `ChildStderr` を drop して read 端を閉じ、接続でログを誘発してから生存を見る。
+**fd を `close` するだけでは再現しない**（後続の `open` が fd 2 を再利用して書き込みが成功する）。
+
+| 変異 | 結果 | daemon の終了状態 |
+|---|---|---|
+| A: tracing writer だけ差し戻し | **red** | exit=1（hook 修正で abort を免れる） |
+| B: panic hook だけ差し戻し | 🔴 **green（生存）** | — |
+| C: 両方差し戻し | **red** | **signal 6 = SIGABRT**（本番と同一署名） |
+
+🔴 **変異 B は生き残る**: writer が直っていると panic 自体が起きず hook に到達しないため、
+panic hook 側の修正は独立に検証できていない。production に panic 注入口を足す方が害が
+大きいと判断して入れていない。この非対称はテスト本体に明記した。
+
+#### 教訓
+
+**診断が取れないこと自体が最大のバグだった。** 「stderr がどこにも出ない」を
+2時間追ったが、その stderr を engine 側が切っていた。捕捉を仕掛けた `orbs-stderr.log` が
+0 バイトだったのは、**仕掛けた fd 自体が壊れていた**からで、切り分けを空振りさせ続けた。
+
+**推測を潰した順序**: 「setState デッドロック」「controller handshake 不足」「headless モーダル」
+「child が eprintln で死ぬ」の4仮説はいずれも実測で反証された（前3つは probe の 4.3s 成功、
+最後は child のクラッシュレポートが1件も無いこと）。
+
 ### 6.348 feat(mcp): #474 P4c — UI 開閉を MCP から叩けるようにし、実機で必須ループが通った (Aug 1, 2026)
 
 **Date**: 2026-08-01

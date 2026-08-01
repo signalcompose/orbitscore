@@ -15,6 +15,7 @@ use crate::host::{OrbitClapHost, OrbitHostMainThread, OrbitHostShared};
 use crate::processor::InstallMsg;
 
 use clack_extensions::note_ports::{NoteDialects, NotePortInfoBuffer, PluginNotePorts};
+use clack_extensions::render::{PluginRender, RenderMode};
 use clack_host::prelude::{
     HostInfo, PluginAudioConfiguration, PluginInstance, StartedPluginAudioProcessor,
 };
@@ -53,6 +54,38 @@ pub enum ClapHostError {
     /// 登記すると、再起動時に音色を失ったことに気づけない（VST3 側 `capture_state` と同じ規律）。
     #[error("plugin state 操作に失敗: {0}")]
     State(String),
+    #[error("plugin render mode 操作に失敗: {0}")]
+    RenderMode(String),
+}
+
+/// Processing pressure declared for one CLAP host session. Realtime is the compatibility default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClapRenderMode {
+    #[default]
+    Realtime,
+    Offline,
+}
+
+/// Sets CLAP_RENDER_OFFLINE when requested and supported. The CLAP specification treats a plugin
+/// without clap.render as mode-agnostic; #598 additionally requires that fallback to be visible.
+fn configure_render_mode(
+    instance: &mut PluginInstance<OrbitClapHost>,
+    render_mode: ClapRenderMode,
+) -> Result<(), ClapHostError> {
+    if render_mode == ClapRenderMode::Realtime {
+        // Preserve the exact pre-#598 path: do not query or call clap.render for realtime sessions.
+        return Ok(());
+    }
+    let mut handle = instance.plugin_handle();
+    let Some(render) = handle.get_extension::<PluginRender>() else {
+        tracing::warn!(
+            "[orbit-clap-host] clap.render extension is unavailable; continuing offline render without mode notification"
+        );
+        return Ok(());
+    };
+    render
+        .set(&mut handle, RenderMode::Offline)
+        .map_err(|error| ClapHostError::RenderMode(error.to_string()))
 }
 
 /// load_plugin が返す plugin メタデータ（daemon が logging / UI に使う）。
@@ -147,6 +180,7 @@ pub(crate) fn instantiate_activate(
     sample_rate: u32,
     channels: usize,
     max_frames: u32,
+    render_mode: ClapRenderMode,
     host_callbacks: HostCallbackConfig,
 ) -> Result<InstantiatedPlugin, ClapHostError> {
     let HostCallbackConfig {
@@ -201,6 +235,12 @@ pub(crate) fn instantiate_activate(
         &host_info,
     )
     .map_err(|e| ClapHostError::Instantiate(e.to_string()))?;
+
+    // clap.render の `set` は一次ソース（`clap/ext/render.h`）で **`[main-thread]` とだけ**
+    // 規定されており、「inactive でなければならない」という制約は spec に存在しない（#612 監査）。
+    // ここで activate 前に呼ぶのは host 側の選択で、plugin の初期化順を単純に保つため
+    // （mode を先に確定させてから activate すれば、activate 後の再設定を考えなくてよい）。
+    configure_render_mode(&mut instance, render_mode)?;
 
     // note ポートインデックスを取得する（activate 前に実行）。
     let note_port_index = query_note_port_index(&mut instance);
@@ -306,6 +346,7 @@ impl ClapHost {
             sample_rate,
             channels,
             max_frames,
+            ClapRenderMode::Realtime,
             daemon_host_callback_config(self.callback_requested.clone(), self.resize_count.clone()),
         )?;
 
@@ -385,6 +426,11 @@ fn query_note_port_index(instance: &mut PluginInstance<OrbitClapHost>) -> u16 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn realtime_is_the_compatibility_default() {
+        assert_eq!(ClapRenderMode::default(), ClapRenderMode::Realtime);
+    }
+
     /// The child path must advertise `HostGui`; the in-process daemon path must not.
     ///
     /// Both assertions are needed: pinning only the child side lets a constructor that always
@@ -419,6 +465,7 @@ mod tests {
             48_000,
             2,
             512,
+            ClapRenderMode::Realtime,
             daemon_host_callback_config(
                 Arc::new(AtomicBool::new(false)),
                 Arc::new(AtomicU64::new(0)),

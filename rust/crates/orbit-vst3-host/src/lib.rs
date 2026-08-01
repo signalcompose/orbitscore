@@ -503,6 +503,47 @@ impl Drop for Vst3PluginMain {
     }
 }
 
+/// 1 つの VST3 ホストセッションが宣言する処理圧（#598）。realtime が互換の既定。
+///
+/// CLAP 側の [`ClapRenderMode`](../../orbit_clap_host/enum.ClapRenderMode.html) と対になる概念で、
+/// VST3 では `ProcessSetup.processMode` / `ProcessData.processMode` として渡す。
+///
+/// 🔴 **setup と process で同じ値を渡すこと。**
+///
+/// 一次ソース（`vst3_pluginterfaces/vst/ivstaudioprocessor.h`・`ProcessModes` の注記）の規定は
+/// **一致そのものではなく切替の手順**である:
+///
+/// - `kRealtime` ↔ `kPrefetch` は **`setupProcessing` を呼ばずに** realtime thread で切り替えてよく、
+///   plugin は `ProcessData::processMode` を毎 process で見ることが期待される
+/// - `kRealtime`（または `kPrefetch`）↔ **`kOffline` の切替は host が `setupProcessing` を
+///   呼ぶことを要求する**
+///
+/// 本 host の値域は `{Realtime, Offline}` の 2 値なので、上の第 2 項により
+/// 「setup と process の不一致 = `setupProcessing` を経ない offline 切替 = 規定違反」となり、
+/// 結果として一致が必須になる。`kPrefetch` を含む一般則ではない点に注意。
+///
+/// テスト用 oracle（`orbit-vst3-gain-oracle` / `orbit-vst3-synth-oracle`）は**全ての不一致**を
+/// `kInvalidArgument` で弾く。これは仕様の再現ではなく、「オフラインだけ setup を変えて
+/// process を変え忘れる」取り違えを実機に出さないための **test-only 検出器**である。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Vst3ProcessMode {
+    #[default]
+    Realtime,
+    /// 実時間より速く回す（#598 のオフラインレンダ）。ディスクストリーミングするサンプラーは
+    /// これを受け取って先読みを同期読みに切り替えることが期待される。
+    Offline,
+}
+
+impl Vst3ProcessMode {
+    /// VST3 の `ProcessModes_` 定数へ。`ProcessSetup` と `ProcessData` の両方で使う。
+    fn as_vst3(self) -> i32 {
+        match self {
+            Self::Realtime => ProcessModes_::kRealtime as i32,
+            Self::Offline => ProcessModes_::kOffline as i32,
+        }
+    }
+}
+
 /// Audio-thread half of the split VST3 effect processor (#474 P1). Owns exactly what the
 /// per-block `process` call touches: the `IAudioProcessor`, the host-side COM stubs, and the
 /// de-interleave scratch buffers. `Drop` calls `setProcessing(0)`（分割後は audio スレッド上で
@@ -511,6 +552,9 @@ pub struct Vst3EffectAudio {
     processor: ComPtr<IAudioProcessor>,
     is_effect: bool,
     sample_rate: f64,
+    /// `ProcessSetup` で宣言したのと同じ処理圧。`ProcessData` に載せ直すために保持する
+    /// （setup と process の不一致は VST3 の契約違反）。
+    process_mode: Vst3ProcessMode,
     /// `IProcessContextRequirements` flags queried once at load time (`load()`). The plugin's
     /// requirements do not change over its lifetime, so re-querying per block would be a wasted
     /// COM `queryInterface` + call on the RT hot path.
@@ -562,11 +606,31 @@ pub struct Vst3EffectProcessor {
 }
 
 impl Vst3EffectProcessor {
+    /// realtime（既定）で読み込む。`load_with_process_mode(.., Vst3ProcessMode::Realtime)` と同義で、
+    /// #598 以前からの呼び出し側をそのまま通すための薄いラッパ。
     pub fn load(
         bundle_path: &Path,
         sample_rate: f64,
         max_samples_per_block: i32,
         state: Option<&[u8]>,
+    ) -> Result<(Self, LoadedVst3Info), Vst3HostError> {
+        Self::load_with_process_mode(
+            bundle_path,
+            sample_rate,
+            max_samples_per_block,
+            state,
+            Vst3ProcessMode::Realtime,
+        )
+    }
+
+    /// 処理圧を明示して読み込む（#598）。`process_mode` は `ProcessSetup` で宣言され、
+    /// 以降の `ProcessData` にも同じ値が載る（両者の不一致は VST3 の契約違反）。
+    pub fn load_with_process_mode(
+        bundle_path: &Path,
+        sample_rate: f64,
+        max_samples_per_block: i32,
+        state: Option<&[u8]>,
+        process_mode: Vst3ProcessMode,
     ) -> Result<(Self, LoadedVst3Info), Vst3HostError> {
         let library = LoadedLibrary::open(bundle_path)?;
         let factory = unsafe { library.get_factory()? };
@@ -620,7 +684,7 @@ impl Vst3EffectProcessor {
         configure_audio_buses(&component, &processor, input_buses, output_buses)?;
 
         let mut setup = ProcessSetup {
-            processMode: ProcessModes_::kRealtime as i32,
+            processMode: process_mode.as_vst3(),
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
             maxSamplesPerBlock: max_samples_per_block,
             sampleRate: sample_rate,
@@ -676,6 +740,7 @@ impl Vst3EffectProcessor {
         let processor = Self {
             audio: Some(Vst3EffectAudio {
                 processor,
+                process_mode,
                 is_effect: info.is_effect,
                 sample_rate,
                 process_context_requirements,
@@ -914,7 +979,7 @@ impl Vst3EffectAudio {
 
         let mut process_context = self.process_context();
         let mut process_data = ProcessData {
-            processMode: ProcessModes_::kRealtime as i32,
+            processMode: self.process_mode.as_vst3(),
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
             numSamples: num_samples,
             numInputs: if self.is_effect { 1 } else { 0 },
@@ -983,6 +1048,8 @@ impl Vst3EffectAudio {
 /// teardown 順序契約は [`Vst3EffectAudio`] / [`Vst3PluginMain`] と同一。
 pub struct Vst3InstrumentAudio {
     processor: ComPtr<IAudioProcessor>,
+    /// `ProcessSetup` で宣言したのと同じ処理圧（[`Vst3EffectAudio::process_mode`] と同じ理由）。
+    process_mode: Vst3ProcessMode,
     input_events: InputEventList,
     output_parameter_changes: ParameterChanges,
     output_events: EventList,
@@ -1081,11 +1148,29 @@ impl Vst3InstrumentProcessor {
             .capture_state()
     }
 
+    /// realtime（既定）で読み込む（[`Vst3EffectProcessor::load`] と同じ契約）。
     pub fn load(
         bundle_path: &Path,
         sample_rate: f64,
         max_samples_per_block: i32,
         state: Option<&[u8]>,
+    ) -> Result<(Self, LoadedVst3Info), Vst3HostError> {
+        Self::load_with_process_mode(
+            bundle_path,
+            sample_rate,
+            max_samples_per_block,
+            state,
+            Vst3ProcessMode::Realtime,
+        )
+    }
+
+    /// 処理圧を明示して読み込む（#598・[`Vst3EffectProcessor::load_with_process_mode`] と同じ契約）。
+    pub fn load_with_process_mode(
+        bundle_path: &Path,
+        sample_rate: f64,
+        max_samples_per_block: i32,
+        state: Option<&[u8]>,
+        process_mode: Vst3ProcessMode,
     ) -> Result<(Self, LoadedVst3Info), Vst3HostError> {
         let library = LoadedLibrary::open(bundle_path)?;
         let factory = unsafe { library.get_factory()? };
@@ -1161,7 +1246,7 @@ impl Vst3InstrumentProcessor {
         }
 
         let mut setup = ProcessSetup {
-            processMode: ProcessModes_::kRealtime as i32,
+            processMode: process_mode.as_vst3(),
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
             maxSamplesPerBlock: max_samples_per_block,
             sampleRate: sample_rate,
@@ -1198,6 +1283,7 @@ impl Vst3InstrumentProcessor {
             Self {
                 audio: Some(Vst3InstrumentAudio {
                     processor,
+                    process_mode,
                     input_events: InputEventList::new(),
                     output_parameter_changes: ParameterChanges::empty(),
                     output_events: EventList::empty(),
@@ -1334,7 +1420,7 @@ impl Vst3InstrumentAudio {
             return false;
         };
         let mut process_data = ProcessData {
-            processMode: ProcessModes_::kRealtime as i32,
+            processMode: self.process_mode.as_vst3(),
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
             numSamples: num_samples,
             numInputs: 0,

@@ -90,6 +90,8 @@ pub fn decode_state(bytes: &[u8]) -> Option<f64> {
 
 struct GainProcessor {
     gain: AtomicU64,
+    /// Test oracle invariant: ProcessSetup and every ProcessData must carry the same session mode.
+    process_mode: Cell<i32>,
 }
 
 impl Class for GainProcessor {
@@ -102,6 +104,7 @@ impl GainProcessor {
     fn new() -> GainProcessor {
         GainProcessor {
             gain: AtomicU64::new(1.0f64.to_bits()),
+            process_mode: Cell::new(ProcessModes_::kRealtime as i32),
         }
     }
 }
@@ -312,7 +315,11 @@ impl IAudioProcessorTrait for GainProcessor {
         0
     }
 
-    unsafe fn setupProcessing(&self, _setup: *mut ProcessSetup) -> tresult {
+    unsafe fn setupProcessing(&self, setup: *mut ProcessSetup) -> tresult {
+        if setup.is_null() {
+            return kInvalidArgument;
+        }
+        self.process_mode.set((*setup).processMode);
         kResultOk
     }
 
@@ -322,6 +329,9 @@ impl IAudioProcessorTrait for GainProcessor {
 
     unsafe fn process(&self, data: *mut ProcessData) -> tresult {
         let process_data = &*data;
+        if process_data.processMode != self.process_mode.get() {
+            return kInvalidArgument;
+        }
 
         if let Some(param_changes) = ComRef::from_raw(process_data.inputParameterChanges) {
             let param_count = param_changes.getParameterCount();
@@ -353,6 +363,14 @@ impl IAudioProcessorTrait for GainProcessor {
         }
 
         let gain = f64::from_bits(self.gain.load(Ordering::Relaxed)) as f32;
+        // Make the raw VST3 process mode observable to host tests.  Offline
+        // rendering inverts the otherwise sample-exact oracle output, so a
+        // host that silently maps offline back to kRealtime is caught.
+        let mode_scale = if self.process_mode.get() == ProcessModes_::kOffline as i32 {
+            -1.0
+        } else {
+            1.0
+        };
 
         let num_samples = process_data.numSamples as usize;
 
@@ -384,8 +402,8 @@ impl IAudioProcessorTrait for GainProcessor {
         let output_r = slice::from_raw_parts_mut(output_channels[1], num_samples);
 
         for i in 0..num_samples {
-            output_l[i] = gain * input_l[i];
-            output_r[i] = gain * input_r[i];
+            output_l[i] = mode_scale * gain * input_l[i];
+            output_r[i] = mode_scale * gain * input_r[i];
         }
 
         kResultOk

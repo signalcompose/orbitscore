@@ -1542,8 +1542,21 @@ impl Drop for ShmCleanupGuard {
 }
 
 /// child plugin load は通常 dlopen を含む。十分な上限を設け、応答を永久に保留しない。
+///
+/// **60s の根拠**（実測・2026-08-01・#605）。従来の 10s はサンプラー系で足りなかった:
+///
+/// | 内訳 | 実測 |
+/// |---|---|
+/// | Kontakt 8 の load（state 無し・release） | 3.1s |
+/// | 同（1.33MB の component state 復元込み） | 4.3s |
+/// | 初回 dylib 検証（Gatekeeper・plugin ごとに一度きり） | 最大 20s |
+///
+/// 計測は `orbit-vst3-host/tests/kontakt_state_gated.rs`。定常状態には 5s で足りるが、
+/// **初回起動・コールドキャッシュ・大規模ライブラリ**が重なる最悪ケースを許容する。
+/// この上限は「遅いプラグインを待つ」ためのもので、**ハングの検出には使わない**
+/// （ハングは child 側の `ParentWatch` と watchdog が別途拾う）。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
-const CHILD_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const CHILD_READY_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 const CHILD_READY_POLL: Duration = Duration::from_millis(10);
 
@@ -1783,7 +1796,11 @@ fn capture_path_from_env() -> Option<PathBuf> {
         Err(std::env::VarError::NotPresent) => None,
         Err(std::env::VarError::NotUnicode(_)) => {
             // 非 UTF-8 の値を握り潰すと「capture したつもりが無効」になるので operator に報告する。
-            eprintln!("[capture] ORBIT_CAPTURE_WAV が非 UTF-8 のため無視した（capture 無効）");
+            // 🔴 #612: `eprintln!` は書き込み失敗で panic する。panic hook が `exit(1)` する
+            // ようになった今、**この警告が書けないだけで daemon 全体が終了する**。
+            crate::best_effort_stderr::write_line_best_effort(
+                "[capture] ORBIT_CAPTURE_WAV が非 UTF-8 のため無視した（capture 無効）",
+            );
             None
         }
     }
@@ -1799,8 +1816,9 @@ fn device_name_from_env() -> Option<String> {
         Ok(_) => None,
         Err(std::env::VarError::NotPresent) => None,
         Err(std::env::VarError::NotUnicode(_)) => {
-            eprintln!(
-                "[audio-device] ORBIT_AUDIO_DEVICE が非 UTF-8 のため無視した（host 既定へ縮退）"
+            // 🔴 #612: 上と同じ理由で best-effort（診断が書けないだけで daemon を殺さない）。
+            crate::best_effort_stderr::write_line_best_effort(
+                "[audio-device] ORBIT_AUDIO_DEVICE が非 UTF-8 のため無視した（host 既定へ縮退）",
             );
             None
         }

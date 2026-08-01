@@ -1,0 +1,33 @@
+{
+  "sample_rate": 48000,
+  "duration_sec": 12,
+  "block_frames": 128,
+  "samples": [{ "name": "kick", "path": "/score/audio/kick.wav" }],
+  "buses": [
+    {
+      "name": "1",
+      "chain": [
+        {
+          "plugin": "/plugins/Glue.vst3",
+          "plugin_id": "com.example.glue",
+          "target": { "role": "effect", "bus": "1" },
+          "state": "/score/states/glue.state"
+        }
+      ]
+    }
+  ],
+  "master": { "chain": [] },
+  "events": [
+    {
+      "start_sec": 0.25,
+      "sample": "kick",
+      "gain": 0.8,
+      "pan": -0.25,
+      "offset_sec": 0,
+      "duration_sec": 0.5,
+      "rate": 1,
+      "bus": "1"
+    }
+  ],
+  "out_dir": "/score/render"
+}

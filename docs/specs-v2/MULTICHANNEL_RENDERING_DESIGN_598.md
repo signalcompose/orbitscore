@@ -1,10 +1,10 @@
 # マルチチャンネルレンダリング設計 — per-bus オフラインレンダリング (#598)
 
 ```json
-{"type":"meta","doc":"MULTICHANNEL_RENDERING_DESIGN","issue":598,"status":"design-for-owner-review","date":"2026-08-01","head":"363d942","rev":2}
+{"type":"meta","doc":"MULTICHANNEL_RENDERING_DESIGN","issue":598,"status":"p1-implementation","date":"2026-08-01","head":"ea138bd","rev":3}
 ```
 
-**Status**: 設計（実装なし・owner レビュー待ち）
+**Status**: owner 裁定済み・P0 完了・P1 実装仕様
 **調査対象 HEAD**: `363d942`（行番号はこの時点で実読して確認。§3 の実測もこの HEAD で実行）
 **先行調査**: `~/Src/proj_orbitscore/Soundcinema_Düsseldorf_2026/FEASIBILITY.md`（2026-07-31）
 **依存**: #474（プラグイン UI）完了後に着手
@@ -194,18 +194,60 @@ master WAV は `hw_block`（全合流 + master post 適用後）。
 
 ### 4.3 イベント源 — score-mode（TS 仮想クロック列挙）
 
-オフライン要求は自己完結の **render manifest** として daemon へ送る:
+オフライン要求は自己完結の **render manifest** として daemon へ送る。P1 で確定する
+wire schema は次のとおり（field 名は daemon wire と同じ snake_case）:
 
 ```
 RenderScore {
-  sample_rate, duration_sec, block_frames,
-  samples:  [{name, path}],                     // LoadSample 相当
-  buses:    [{name, chain: [{plugin, state}]}], // per-bus insert chain（空 = 素通し bus）
-  master:   {chain: [...]} | none,
-  events:   [{start_sec, sample, gain, pan, slice, rate, bus, ...}],  // PlayAt 相当・絶対時刻
-  out_dir
+  sample_rate: number,
+  duration_sec: number,
+  block_frames: number,
+  samples: [{ name: string, path: string }],
+  buses: [{
+    name: "1" | ... | "16",
+    chain: [{
+      plugin: string,
+      plugin_id?: string,
+      target: { role: "effect", bus?: string },
+      state?: string
+    }]
+  }],
+  master: {
+    chain: [{
+      plugin: string,
+      plugin_id?: string,
+      target: { role: "effect" },
+      state?: string
+    }]
+  } | null,
+  events: [{
+    start_sec: number,
+    sample: string,
+    gain: number,
+    pan: number,
+    offset_sec: number,
+    duration_sec: number,
+    rate: number,
+    bus: "1" | ... | "16"
+  }],
+  out_dir: string
 }
 ```
+
+- `samples[].name` と `buses[].name` は manifest 内で一意。`events[].sample` / `events[].bus`
+  は必ず同 manifest の宣言を参照する。未宣言参照は `MALFORMED_REQUEST`。
+- bus 名は `output(n)` と同じ canonical decimal (`"1"`〜`"16"`)。先頭ゼロ表記は不可。
+- bus chain の `target` は `GetPluginState` と同じ `{role,bus,instance}` 語彙を使う。P1 の
+  bus/master chain は effect のみを受理し、bus chain の `target.bus` は省略時に包含 bus、
+  指定時は包含 bus と一致しなければならない。master は `bus` を持たない。
+- `state` は P0-C で確定した**絶対 state ファイルパス**。blob 埋め込みや project 相対 path は
+  wire に持ち込まず、TS が `resolveRegisteredPluginStatePath` で解決してから焼き込む。
+- `sample_rate` / `block_frames` は正の整数、`duration_sec` は正の有限値。event の時刻・gain・pan・
+  region・rate も有限値とし、`start_sec` は `[0, duration_sec)`、`offset_sec` / event の
+  `duration_sec` は 0 以上、`rate` は 0 より大きい。`out_dir` と各 path は非空、plugin/state path
+  は絶対 path とする。
+- `master` を含む上記 top-level field はすべて必須（master chain 無しは `null`）。P1 は
+  validation 後に `NOT_IMPLEMENTED` を返し、実レンダは P2 まで行わない。
 
 TS 側 score-mode ドライバが `.orbs` を評価し、仮想クロックで `[0, T]` の全発音を列挙して
 events を作る（LOOP は `T` で打ち切り）。`T` はレンダ要求のパラメータ。
@@ -213,21 +255,52 @@ events を作る（LOOP は `T` で打ち切り）。`T` はレンダ要求の�
 フロントエンドとして後続 issue に分離する（ライブセッションの書き出しに将来必要だが、
 「作品をファイル化する」本命ユースケースは score-mode で先に立つ）。
 
-### 4.4 DSL 表面 — `output(n)` は既存 `output(name)` に統合する【owner 裁定 §6-1】
+### 4.4 DSL 表面 — `output(n)` は既存 `output(name)` に統合する【owner 裁定済み・X1】
 
 現状の `seq.output(name)` は (a) sum バス名なら mixer routing（bus 側 wire）、
 (b) それ以外は LinkAudio channel（LinkAudio 未宣言なら警告して不発）という2用途を持つ
-（`sequence.ts:337-377`）。ここに第3の解釈を足すのではなく、
-**「宣言済みレンダーバスへの routing」として (a) 側に寄せる**ことを推奨する:
+（`sequence.ts:337-377`）。owner は **X1（同じ `output` へ統合）**を裁定した。
+解決順と意味論を次で固定する:
 
-- 案 X1（推奨）: `global.bus(...)` 等でレンダーバスを宣言 → `seq.output(1)` は宣言済み
-  バスへの routing（wire は既存の `bus` フィールド・`session.rs` の排他検証そのまま）。
-  数値は名前 `"1"` の糖衣。effect 無し bus は素通し stem（`InsertBusStage::unattached`
-  `output.rs:366-368` が既存）。
-- 案 X2: `output(n: number)` を新設し文字列（LinkAudio）と型で分ける。表面は明確だが
-  「同じ語が wire の別フィールドに落ちる」非対称が残る。
-- いずれでも `seq.effect()` 宣言済み seq は自分の insert bus がそのまま stem になる
-  （追加宣言不要）。
+1. 引数を名前へ正規化し、まず既存 `global.sum(name)` を解決する。したがって
+   `global.sum("1")` があれば `output(1)` も既存 sum routing になり、数値解釈より優先する。
+2. sum に解決されず、元の引数が number なら render bus と解釈する。整数 `1..16` のみ受理し、
+   wire/manifest の bus 名は canonical decimal string (`"1"`〜`"16"`)。
+3. string 引数は従来どおり LinkAudio channel（未宣言時の「記録 + 警告」を含む）。数字に見える
+   string は render bus に暗黙変換しない。
+
+render bus は score-mode の routing 宣言であり、`output(n)` 自体は bus を別メソッドで宣言させない。
+audio sequence と instrument sequence の両方で使える。既存 `output(sumName)` / LinkAudio 用法、
+`play()`、realtime の既定経路は変更しない。`seq.effect()` の insert chain は score manifest 構築時に
+該当 render bus の chain へ載せる（P2/P3）。P1 は routing の記録と manifest wire の確定までとする。
+
+#### 4.4.1 再宣言時に何が残るか — **オフラインの宣言は live routing を変えない**（一方向）
+
+上の解決順は「1回の呼び出しがどう解釈されるか」しか定めていない。**同じ seq に `output()` を
+2回以上宣言した時に前の宛先がどうなるか**を、次で固定する（ライブコーディングでは書き換えて
+再評価するのが常態なので、この規則が無いと挙動が宛先の種類ごとに散らばる）:
+
+| 宣言 | `_renderBus` | `_outputChannel`（LinkAudio egress） | `_sumOutputBus` |
+|---|---|---|---|
+| `output(n)`（render bus） | **設定** | **変更しない** | **変更しない** |
+| `output(name)`（LinkAudio channel） | **クリア** | 設定 | 変更しない（既存挙動） |
+| `output(sumName)`（sum 解決） | **クリア** | 変更しない（既存挙動） | 設定 |
+
+**非対称は意図的である。**
+
+- **オフライン → live 方向を禁じる理由**: `output(n)` は「後でオフラインレンダする時の宛先」の
+  宣言であって、いま鳴っている経路の指示ではない。これが live routing を壊すと、
+  `global.linkAudio()` セッションで `kick.output("Kick Ch")` が稼働中に
+  レンダ準備として `kick.output(1)` と書き足した瞬間、`_outputChannel` が消えて
+  次の schedule で `resolveDispatchChannel()` が throw し、**ライブ中に kick が停止する**
+  （2026-08-01 の #612 監査で特定）
+- **live → オフライン方向を許す理由**: オフラインレンダは P2 まで走らないので、
+  live 宛先の宣言が render bus を落としても失うものが無い。むしろ
+  「もう使わない render bus が残り続ける」stale を防げる
+
+live 宛先どうし（LinkAudio channel ↔ sum bus）の相互排他は本 issue の対象外（既存挙動のまま）。
+なお LinkAudio と sum bus は v1 で相互排他なので（`mixer-manager` の宣言ゲートと
+`global.linkAudio()` のゲートが双方向に塞ぐ）、その2つが同時に立つ状態自体が到達不能である。
 
 ### 4.5 決定論
 
@@ -283,6 +356,9 @@ owner に提示してから先へ進む。
 - §4.4 の owner 裁定を反映して `INSTRUCTION_ORBITSCORE_DSL.md` と本 spec に確定を書く。
 - `output(n)` → レンダーバス routing の TS 実装 + `RenderScore` manifest 型の確定。
 - daemon: `RenderScore` RPC の受理・検証（バス名照合・排他検証は既存パターン踏襲）。
+- P0-A の必須昇格: VST3 の setup/process 両方を session mode に従って
+  `kRealtime` / `kOffline` へ切替可能にし、CLAP は `clap.render` を query して offline を set する。
+  既定は realtime のまま。CLAP 拡張なしは warning を出して継続する。
 
 受け入れ基準: manifest の round-trip（TS 生成 → daemon 検証）のユニット + 変異検証。
 既存 DSL（`output(sumName)` / LinkAudio 用法・`effect()`）の全テスト green。
@@ -384,3 +460,161 @@ realtime >2ch モニタリング / placement DSL / プラグイン多ch / featur
 | (3) LUFS/dBTP は外部ツールで可 → ○ | 変更なし（7.1 化・整形は DAW/ffmpeg 側の仕事） |
 | 案A（DAW で最終段） | **本設計の恒久構成として昇格**（OrbitScore = stem 生成 + 音色、DAW = 空間化・整形） |
 | 案B（LinkAudio） | 不採用（§2.6 に理由を記録） |
+
+---
+
+## §P0 調査結果（2026-08-01 実施・調査のみ・実装なし）
+
+> 実施者: p598p0 調査エージェント。probe ハーネス =
+> `rust/crates/orbit-vst3-instrument-child/tests/kontakt_probe_gated.rs`（**未コミット・調査専用**）。
+> P0-A のための一時パッチ（下記 A-3）も未コミット・`TEMP(#598 P0 probe)` マーカー付き。
+
+### P0-A: Kontakt early probe
+
+**結論（第1段・確定）: Kontakt 8 は `kRealtime` のまま offline lockstep で process が返る。
+ハングしない。停止条件（process が返らない）には触れていない。**
+
+- 実行: Kontakt 8 VST3（`/Library/Audio/Plug-Ins/VST3/Kontakt 8.vst3`）を
+  `orbit-vst3-instrument-child` で load し、`render_instrument_through_child_sync_with_options`
+  相当の同期 lockstep で 5 秒分 = 1875 block（128f/48k）を駆動。
+- 実測出力: `elapsed=16.1ms (x309.7 realtime) processed=1875 process_errors=0 decode_errors=0`
+  （空ラック）。patch 入り（下記 probe3）でも 7500 block 完走・ハングなし。
+
+**結論（第2段・内容比較・確定）: 乖離は実在する。
+「ディスク読み・非同期 voice 起動が新規に必要な区間」で full-speed 側の音が遅れ・欠ける。
+`process_errors == 0` のまま起きる（サイレント障害の実証）。
+→ オフラインモード通知（VST3 `kOffline` / CLAP `clap.render`）を P1/P3 の必須項目へ昇格する。**
+
+- 条件: owner が Kontakt 8 に **Symphony Series String Ensemble**（ライブラリ実測 32.5GB・
+  state 1,333,207 bytes）をロードした state を `--state` で復元。イベント = C2/G2/E3/B3/D4 の
+  5音和音を 16 秒保持（20 秒尺の 80%）+ 0.5s ごとに C5/E5 の短音・48k/128f・7500 block。
+- 3脚: **A** = full-speed lockstep（FS キャッシュ最冷）→ **B** = full-speed 2回目（温）→
+  **C** = 実時間 paced lockstep（最温・realtime に最有利）。全脚 `processed=7500
+  process_errors=0`。A/B は **x25 realtime**（20 秒の score が 0.8 秒。x309 でないのは
+  Kontakt の DSP コストが支配項になったため — これは §3.2 の予想どおりで障害ではない）。
+
+| 区間 | 実測 | 解釈 |
+|---|---|---|
+| 0–0.5s | 3脚とも無音 | patch の立ち上がり（正常） |
+| **0.5–1.6s（初回オンセット群）** | **full-speed が系統的に欠ける**: 100ms 窓 RMS で A=0.0004 / B=0.0000 / C=0.0184（w5）、A=0.0121 / C=0.0437（w10）、A=0.0112 / C=0.0663（w11）。B は w11-13 で 0.046→0.082 と**遅れて束になって立ち上がる** | 非実時間駆動では Kontakt の非同期 voice 起動・ストリーミングが wall-clock を要するため**発音が遅れる／薄くなる**。warm cache（B）でも遅れは残る = **キャッシュでは救えない、pacing そのものの効果** |
+| 1.6–16s（ループ持続） | 3脚とも 100ms 窓 RMS が**小数6桁で一致** | ループ区間・再利用サンプルは RAM 内で完結し自己回復する。**全体 RMS の近さは成功の根拠にならない**（欠けるのは音楽的に最重要な立ち上がり） |
+| **16–17.6s（NoteOff → リリースサンプル）** | A が B/C から再び乖離（w162: A=0.0558 / B=0.0655 / C=0.0647、w166: A=0.0735 / C=0.0683） | リリースサンプルの**初回ディスク読み**で cold+fast が再び崩れる。warm（B）はほぼ C に一致 |
+| bit 比較 | A-B=0.287 / A-C=0.292 / B-C=0.312（最大絶対差・**いずれも 1.2-1.3s 地点**） | Kontakt は同 pacing でも bit 非決定（A vs B）。ただし乖離の**所在**が streaming 敏感区間に集中しており、判定は bit でなく窓 RMS で行った |
+
+- WAV 3本 + 実行ログ: `/tmp/claude/kontakt-probe/probe3-{A,B,C}-*.wav`・`probe3-run.log`
+  （検聴可。/tmp のため永続しない — 必要なら退避）。
+- **誠実な限界**: (a) 脚 C は「実時間 pacing の lockstep」であり cpal 実機 capture ではない
+  （同一 transport・同一 child で pacing だけを変数化し交絡を消す設計を採った）。
+  (b) `kRealtime` のままの実測である — **`kOffline` を立てれば直るかは未検証**（Kontakt が
+  オフラインモードで同期読みに切り替えることを期待するが、それは P3 実装後の受け入れ基準
+  「実商用プラグインで stem に効果が乗っている実機確認」で再測定する）。
+  (c) 1 patch・1 構成での実測（一般化はしない）。
+
+**副産物の発見（#474 の実装ゲャップ・本 issue と独立に修正 issue 化すべき）**:
+
+| # | 発見 | 根拠 |
+|---|---|---|
+| A-1 | **Kontakt 7/8 は現行 host で UI が開けない**（`OPEN_UI` → `edit controller is unavailable`）。Kontakt は単一コンポーネント型で `getControllerClassId` が失敗し、host に「component 自身へ IEditController を query する」VST3 正準フォールバック（SDK editorhost 慣行）が無い | `orbit-vst3-host/src/lib.rs:1383-1392`（フォールバック不在）・`view.rs:133`（エラー発生点）。実行ログで Kontakt 7/8 とも再現 |
+| A-2 | Kontakt は attach 前の `IPlugView::getSize` に kNotInitialized(5) を返し、現行 host は open を中断する | `view.rs:173-180`。実行ログ `IPlugView::getSize failed (5)` |
+| A-3 | 上記2点への**一時パッチ**（controller フォールバック + getSize 失敗時の既定サイズ）で Kontakt 8 の UI open → SAVE_STATE 経路が動作 | working tree の `TEMP(#598 P0 probe)` 差分（未コミット）。実行ログ `[probe2] UI opened` |
+
+**確信度**: 「process が返る」= 高（実測）。「kRealtime のままでは内容が壊れる」= 高
+（3脚比較で pacing 起因の乖離を実測。窓 RMS 5〜40 倍の欠落）。
+**反証可能性**: probe3 の再実行（`kontakt_probe_gated.rs` + 退避済み state）。
+別 patch・別イベント列で early-window 乖離が再現しなければ一般化を弱める。
+`kOffline` 通知で乖離が消えるかは P3 の受け入れ基準で検証する。
+
+**P3 への含意（実測済みの別материал）**: VST3 host の `ProcessContext` は現在**完全に静的**
+（`tempo: 120.0` 固定・`projectTimeSamples: 0` 固定・`lib.rs:954-978`）で、shm の
+`transport_context[slot]`（`transport.rs:235`）は**どの child も読んでいない**（全 crate grep で
+消費者ゼロ・書き手は `instrument_host.rs:286` のみ）。テンポ同期系の Kontakt patch は realtime
+でも offline でも同じ「120bpm・時刻0」を見るため、この点は両脚の比較を汚さない。
+
+### P0-B: score-mode 列挙の設計スパイク
+
+**結論: 成立する（切り出し可能）。停止条件（wall-clock と分離不能）には該当しない。**
+
+発音時刻の計算と wall-clock は既に層で分離されている:
+
+1. **audio 経路**: `Sequence.scheduleEvents(scheduler, loopIteration, baseTime)`
+   （`sequence.ts:1440`）は iteration と baseTime が純パラメータで、イベント時刻は
+   `baseTime + event.startTime + loopIteration × patternDuration` の算術
+   （`event-scheduler.ts:83-88`）。wall-clock は入らない。
+2. **loop 継続機構**（`loop-sequence.ts`）の setTimeout / `Date.now()` は「次の bar の
+   schedule 呼び出しを実時間上のいつ実行するか」だけを担い、グリッド自体は
+   `nextScheduleTime += previousDuration` の算術で前進する（`loop-sequence.ts:194`）。
+   列挙には不要。
+3. **note（instrument = Kontakt）経路**: `scheduleMidiEvents`（`sequence.ts:1129`）の
+   Stage A/B は `onTime = schedulerStartTime + baseTime + ev.startTime + sendDelay`
+   （`:1151`）と offTime を**完全に事前計算**し、Stage C で
+   `MidiScheduler.scheduleNote({onTime, offTime, ...})`（`:1214`）へ渡す。wall-clock は
+   `MidiScheduler` の 5ms poll（`midi-scheduler.ts:77-80`）に閉じている。
+4. **dispatch 層**（`rust-engine-player.ts`）の poll / clock anchor / lookahead は
+   スケジュール済みイベントの発火にのみ関与（`:1179-1189`, `:1406-1412`）。
+
+**切り出し面（推奨）**: collector を2面用意する —
+(a) `Scheduler` interface（`core/global/types.ts:11`）の収集実装に
+`scheduleEvents(collector, k, 0)` を k = 0..⌈T/patternDuration⌉-1 で直列に呼ぶ、
+(b) `MidiScheduler.scheduleNote` 互換の収集実装（`schedulerStartTime=0` を渡せば相対 ms）。
+これで `[0, T]` の全発音が本番と同一の計算経路から得られる。
+
+**注意点（設計に織り込むべき残り）**:
+- **RNG**: `gainRandom`/`panRandom`（`event-scheduler.ts:39,94`）・§12 `^r`/`Xr`
+  （`sequence.ts:1167,1172`）は `Math.random` — **manifest 構築時に値が焼き込まれる**ので
+  「同一 manifest → bit 一致」（§4.5）は成立するが、「同一 .orbs → 同一 manifest」はシード
+  なしでは成立しない（列挙の再現性が要るならシード注入を P1 で検討）。
+- **slice 領域解決**: `resolveSliceRegion`（`rust-engine-player.ts:1425-1446`）はサンプル尺
+  （daemon LoadSample メタ）依存。manifest 構築は 2-phase（先に LoadSample → 尺取得 →
+  本番と同じ `toDaemonParams` を再利用して解決）が parity 上素直。
+- score-mode v1 は「評価後の静的状態 × T」を列挙する（live の tempo/mute 動態は対象外 —
+  §4.3 の「LOOP は T で打ち切り」と整合）。
+
+### P0-C: #474 到達点（plugin state save/load の最終形）
+
+**結論: 確定した。manifest の `state` 受け渡しは「絶対 state ファイルパス」でよい。**
+
+- **保存経路**: UI close → `savePluginUiStateAtSafepoint`（`global.ts:772`）→
+  `ProjectStateStore.save(identity, target)` →
+  `audioEngine.savePluginState(target, absolutePath)` →
+  `<projectDirectory>/states/<base64url(identity)>.state` に書き、`project.yaml` の
+  `states[identityKey]` に相対パスを登記（`project-state-store.ts:214-234`・atomic rename +
+  dir sync）。identity = `{receiver, role, normalizedName, occurrence}`（SC.5）、
+  identityKey = `receiver/role/normalizedName/occurrence`（`:28-35`）。
+- **復元経路**: `resolveRegisteredPluginStatePath(projectDirectory, identity)`
+  （`project-state-store.ts:94`）が絶対パスへ解決 →
+  `loadPlugin(filePath, pluginId, role, bus, instance, statePath)`
+  （`rust-engine-player.ts:941`）→ daemon → child 起動引数 `--state <path>`
+  （`outproc_instrument.rs:398`・`orbit-vst3-instrument-child/src/main.rs:56`。
+  VST3 は `.vstpreset` container / raw component chunk の両対応、restore は
+  **setActive 前**適用 = 正準・`main.rs:276-298`）。
+- **RenderScore への含意**: オフライン child も同じ `--state` 経路をそのまま使える。
+  manifest の `chain: [{plugin, state}]` の `state` は**絶対パス**（TS 側で
+  `resolveRegisteredPluginStatePath` を再利用して identity → パス解決してから manifest に
+  焼き込む）。blob 埋め込みは不要。
+
+### P0-D: instrument offline の経路差
+
+**結論: 差分は4点。P3 は「本番 backing ring に揃える」のではなく、
+同期 publish のまま不足2点を足すのが正しい（spec §3.3 の想定を修正する）。**
+
+| # | 差分 | 本番（`instrument_host.rs`） | 簡易 publish（`offline.rs:192`） |
+|---|---|---|---|
+| D-1 | イベント配送 | `EventBackingRing` に push → 空き slot へ drain。**RT で待てないため spill/drop があり得る**（`input_event_spilled_count` / `input_event_dropped_count`・`:236-241, :279-284`） | 呼び出し側が block ごとに直接 slot へ書く。同期 1-outstanding で slot は常に空き — **構造的に lossless**。ただし `events.len() > MAX_EVENTS_PER_BLOCK`(4096) は assert panic（`offline.rs:217`）→ 事前検証か分割が要る |
+| D-2 | **transport_context** | slot ごとに書く（`instrument_host.rs:286`） | **書かない**（`offline.rs:216-228` に該当 store なし）→ P3 で追加（1行）。※現状は全 child が未消費（P0-A 末尾）なので今日の実害はないが、将来 child が消費し始めた時に offline だけ 0 値になる罠 |
+| D-3 | voice 会計・NoteChoke 注入・respawn 回復 | あり（`:257-296` ほか） | なし。オフラインは単発駆動・child 死亡は即エラーでよいので**不要が正しい** |
+| D-4 | child 出力イベント（note_end 等）の drain | あり（voice 会計のため） | なし。オフラインでは不要（stats 突き合わせで代替） |
+
+**推奨**: P3 の instrument offline 駆動は簡易 publish 系を昇格させる
+（transport_context 書き込み追加 + per-block イベント数の事前検証）。backing ring への
+片寄せは「lossless 配送」を**むしろ悪化**させる（ring/spill は RT 都合の損失許容機構）。
+spec §3.3 の「高密度イベントでの lossless 配送は P3 で本経路に揃える」は本調査で
+**逆向きに訂正**する。
+
+### 停止条件の総括
+
+| 項目 | 停止条件 | 判定 |
+|---|---|---|
+| P0-A | process が返らない・ハング | **非該当**（空ラック 310x / 実 patch 25x で完走）。内容比較は**乖離を実証** → 設計変更でなく **P1/P3 への必須項目追加**（オフラインモード通知）で対処 |
+| P0-B | 列挙が wall-clock と分離不能 | **非該当**（分離は既に層構造として存在） |
+| P0-C | —（確認事項） | 完了 |
+| P0-D | —（確認事項） | 完了（spec §3.3 の想定を1点訂正） |

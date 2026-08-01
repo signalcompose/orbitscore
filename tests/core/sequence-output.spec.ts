@@ -41,6 +41,7 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
       // output(). Without it the existing tests still pass (optional-chained),
       // but its absence meant the output()→register wiring was never exercised.
       registerLinkAudioChannel: vi.fn().mockResolvedValue(undefined),
+      setBusRouting: vi.fn().mockResolvedValue(undefined),
     } as any
 
     global = new Global(mockPlayer)
@@ -126,6 +127,111 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
       global.linkAudio()
       expect(() => seq.output('valid')).not.toThrow()
       expect(seq.getOutputChannel()).toBe('valid')
+    })
+  })
+
+  describe('numeric render buses (#598 P1)', () => {
+    it('records canonical render bus 1..16 without changing the realtime output channel', () => {
+      expect(seq.output(1)).toBe(seq)
+      expect(seq.getRenderBus()).toBe('1')
+      expect(seq.getOutputChannel()).toBeUndefined()
+      expect(seq.getState().renderBus).toBe('1')
+      expect(warnSpy).not.toHaveBeenCalled()
+
+      seq.output(16)
+      expect(seq.getRenderBus()).toBe('16')
+    })
+
+    it.each([0, 17, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+      'rejects an invalid numeric render bus: %s',
+      (bus) => {
+        expect(() => seq.output(bus)).toThrow(/integer from 1 to 16/)
+      },
+    )
+
+    it('does not reinterpret a numeric-looking string as a render bus', () => {
+      seq.output('1')
+      expect(seq.getRenderBus()).toBeUndefined()
+      expect(seq.getOutputChannel()).toBe('1')
+      expect(warnSpy).toHaveBeenCalledTimes(1)
+    })
+
+    // 🔴 §4.4.1 の一方向の非対称（#612 レビュー統合で確定）:
+    // **オフラインの宛先宣言は live routing を変えない / live 宛先の宣言は render bus をクリアする。**
+    //
+    // 経緯: 当初の実装は数値 output で `_outputChannel` をクリアしており、main の変異検証で
+    // 「排他性」として固定してしまっていた。しかし Fable 監査が、その挙動だと
+    // `global.linkAudio()` セッションで稼働中の seq にレンダ準備の `output(1)` を書き足した瞬間
+    // `resolveDispatchChannel()` が throw して**ライブ演奏が停止する**ことを特定した。
+    // `_renderBus` のフィールドコメントが宣言する不変条件とも矛盾していた。
+    it('keeps the live output channel when an offline render bus is declared', () => {
+      seq.output('master')
+      expect(seq.getOutputChannel()).toBe('master')
+
+      seq.output(3)
+
+      expect(seq.getRenderBus()).toBe('3')
+      expect(
+        seq.getOutputChannel(),
+        'オフラインの宛先宣言が live routing を壊すと、LinkAudio セッションで演奏が止まる',
+      ).toBe('master')
+    })
+
+    it('clears the render bus when the same sequence is re-declared with a channel name', () => {
+      seq.output(3)
+      expect(seq.getRenderBus()).toBe('3')
+
+      seq.output('master')
+
+      expect(seq.getOutputChannel()).toBe('master')
+      expect(
+        seq.getRenderBus(),
+        'output("master") で render bus が残ると、score-mode で意図しないバスへ出力される',
+      ).toBeUndefined()
+      expect(seq.getState().renderBus).toBeUndefined()
+    })
+
+    // 🔴 sum 分岐の render bus クリア（#612 レビューが変異で発見）: 既存の
+    // 「resolves a same-named sum ...」は **未設定の `_renderBus` から** `output(1)` を
+    // 呼ぶため、sum 分岐の `this._renderBus = undefined` を削除する変異が
+    // **25 passed のまま生き残った**。事前状態を非デフォルトにしてから遷移させる必要がある。
+    it('clears the render bus when the same name later resolves to a sum bus', () => {
+      seq.output(3)
+      expect(seq.getRenderBus()).toBe('3')
+
+      global.sum('3')
+      seq.output(3)
+
+      expect(seq.getInsertBus()).toBe('seq-bus-0')
+      expect(
+        seq.getRenderBus(),
+        'sum に解決されたのに render bus が残ると、同じ seq が sum 経由と render bus の両方へ載る',
+      ).toBeUndefined()
+    })
+
+    // 🔴 例外時の状態保全（#612 レビューが変異で発見）: 上の「rejects an invalid numeric
+    // render bus」は throw することしか見ておらず、**例外の前に既存の宛先が壊れていないか**を
+    // 検査していない。`this._outputChannel = undefined` を範囲チェックより前へ動かす変異が
+    // 生き残った。実害: `output(10)` の typo で `output(0)` と書くと、エラーは出るが
+    // その前に master ルーティングが失われ、次の再生で無音になる。
+    it('leaves existing routing untouched when a numeric render bus is rejected', () => {
+      seq.output('master')
+      seq.output(3)
+
+      expect(() => seq.output(0)).toThrow(/integer from 1 to 16/)
+
+      expect(seq.getOutputChannel(), '例外の前に live routing が壊れている').toBe('master')
+      expect(seq.getRenderBus(), '例外の前に render bus が壊れている').toBe('3')
+    })
+
+    it('resolves a same-named sum before interpreting a numeric render bus', () => {
+      global.sum('1')
+      seq.output(1)
+
+      expect(seq.getRenderBus()).toBeUndefined()
+      expect(seq.getInsertBus()).toBe('seq-bus-0')
+      expect(mockPlayer.setBusRouting).toHaveBeenCalledWith('seq-bus-0', 'sum-bus-0', [])
+      expect(warnSpy).not.toHaveBeenCalled()
     })
   })
 })

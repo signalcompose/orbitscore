@@ -106,6 +106,11 @@ export class Sequence {
   // LinkAudio output channel (only meaningful when Global.linkAudio() is enabled)
   private _outputChannel?: string
 
+  // #598 P1: score-mode render bus selected by numeric output(1..16). Kept separate from the
+  // realtime insert bus so declaring an offline stem destination cannot alter the existing live
+  // routing path before OfflineRenderSession exists (P2).
+  private _renderBus?: string
+
   // per-sequence insert bus (only meaningful when seq.effect() was declared — PH.2b / #434 S3;
   // or auto-allocated by `output()`/`send()` targeting a sum/aux bus — MX.4 / #459/#453 M3)
   private _insertBus?: string
@@ -334,41 +339,65 @@ export class Sequence {
    * iterations are not rewritten (no `seamlessParameterUpdate` — mid-loop switching is a
    * separate feature, planned for Step 3.4).
    */
-  output(channelName: string): this {
+  output(channelName: string | number): this {
     const name = this.stateManager.getName() || 'sequence'
-    if (!channelName || !channelName.trim()) {
+    const destinationName = typeof channelName === 'number' ? String(channelName) : channelName
+    if (!destinationName || !destinationName.trim()) {
       throw new Error(`Sequence '${name}': output(channelName) requires a non-empty channel name.`)
     }
 
-    const sumBus = this.global.resolveSumBus(channelName)
+    // Resolution order is normative (#598 §4.4): an existing sum named "1" must still win over
+    // numeric render-bus interpretation. This lookup therefore deliberately precedes the number
+    // branch below.
+    const sumBus = this.global.resolveSumBus(destinationName)
     if (sumBus) {
       if (this.isNoteSequence()) {
         throw new Error(
-          `Sequence '${name}': output("${channelName}") to a sum bus is only supported on ` +
+          `Sequence '${name}': output("${destinationName}") to a sum bus is only supported on ` +
             `audio sequences in v1 (not midi()/instrument() sequences).`,
         )
       }
+      // §4.4.1: live 宛先の宣言は render bus をクリアする（stale な offline 宛先を残さない）。
+      this._renderBus = undefined
       this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
       this._sumOutputBus = sumBus
       this.syncBusRouting()
       return this
     }
 
-    this._outputChannel = channelName
+    if (typeof channelName === 'number') {
+      if (!Number.isInteger(channelName) || channelName < 1 || channelName > 16) {
+        throw new Error(
+          `Sequence '${name}': output(renderBus) requires an integer from 1 to 16, got ${channelName}.`,
+        )
+      }
+      // 🔴 §4.4.1: **オフラインの宛先宣言は live routing を変えない**（一方向の非対称）。
+      // ここで `_outputChannel` をクリアしてはいけない — `global.linkAudio()` セッションで
+      // `kick.output("Kick Ch")` が稼働中に、レンダ準備として `kick.output(1)` を書き足すと
+      // 次の schedule で `resolveDispatchChannel()` が「has no .output() channel set」を
+      // throw し、**ライブ中に kick が停止する**（#612 監査で特定）。
+      // 逆向き（live 宣言が render bus をクリアする）は下の string 分岐で行う — offline は
+      // まだ走らないので stale を残さない方が良い。
+      this._renderBus = destinationName
+      return this
+    }
+
+    this._renderBus = undefined
+    this._outputChannel = destinationName
     if (this.global.isLinkAudioEnabled()) {
       // Eagerly register the channel with the plugin so its source appears in
       // Live's "Audio From" list NOW (at declaration), letting the operator
       // pre-route Ableton tracks before playback. Fire-and-forget + best-effort:
       // the dispatch path re-registers idempotently if this races the boot.
-      this.audioEngine.registerLinkAudioChannel?.(channelName)?.catch((err) => {
+      this.audioEngine.registerLinkAudioChannel?.(destinationName)?.catch((err) => {
         console.warn(
-          `⚠️  ${name}.output("${channelName}"): ` +
+          `⚠️  ${name}.output("${destinationName}"): ` +
             `eager LinkAudio channel registration failed (will retry on playback): ${err}`,
         )
       })
     } else {
       console.warn(
-        `⚠️  ${name}.output("${channelName}") ` +
+        `⚠️  ${name}.output("${destinationName}") ` +
           `was called without 'global.linkAudio()'. The channel name is recorded ` +
           `but will not take effect until LinkAudio mode is declared.`,
       )
@@ -378,6 +407,11 @@ export class Sequence {
 
   getOutputChannel(): string | undefined {
     return this._outputChannel
+  }
+
+  /** score-mode render bus selected by numeric output(1..16). @internal */
+  getRenderBus(): string | undefined {
+    return this._renderBus
   }
 
   /** Owning Global identity for Global-scoped dynamic mixer-name resolution. @internal */
@@ -1702,6 +1736,7 @@ export class Sequence {
       pan: panState.pan,
       panRandom: panState.panRandom,
       outputChannel: this._outputChannel,
+      renderBus: this._renderBus,
       insertBus: this._insertBus,
       midiPort: this._midiPort,
       midiChannel: this._midiChannel,

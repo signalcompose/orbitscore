@@ -8,6 +8,7 @@
 //!
 //! 起動失敗時は stderr に 1 行 JSON を出して非ゼロ exit code で終了する。
 
+use orbit_audio_daemon::best_effort_stderr::{best_effort_stderr, write_line_best_effort};
 use orbit_audio_daemon::engine_wrap::{DeviceSwitchRequest, EngineWrap, WrapError};
 use orbit_audio_daemon::protocol::{
     Event, ProtocolError, StartupError, StartupReady, ERROR_CODE_FATAL_PANIC, ERROR_SEVERITY_FATAL,
@@ -30,7 +31,7 @@ use std::sync::Arc;
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
+        .with_writer(best_effort_stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
@@ -60,11 +61,15 @@ fn install_fatal_panic_hook() {
                 "message": msg,
             }),
         );
+        // 🔴 #605: ここで `eprintln!` を使ってはいけない。stderr が壊れていると
+        // **panic hook 自身が panic** し、`panic_with_hook` の再帰検知が
+        // `process::abort()` を呼ぶ。すると下の `exit(1)` に到達できず、
+        // client は「終了コード 1 + DaemonError 行」ではなく **SIGABRT** を見る。
         match serde_json::to_string(&evt) {
-            Ok(line) => eprintln!("{line}"),
-            Err(e) => eprintln!(
+            Ok(line) => write_line_best_effort(&line),
+            Err(e) => write_line_best_effort(&format!(
                 r#"{{"type":"event","event":"{EVENT_DAEMON_ERROR}","data":{{"severity":"{ERROR_SEVERITY_FATAL}","code":"{ERROR_CODE_FATAL_PANIC}","message":"panic hook serialize failed: {e}"}}}}"#
-            ),
+            )),
         }
         std::process::exit(1);
     }));
@@ -237,7 +242,9 @@ fn run_list_audio_devices() -> Result<(), i32> {
             Ok(())
         }
         Err(e) => {
-            eprintln!(r#"{{"error":"{e}"}}"#);
+            // 🔴 #612: subscriber 稼働後なので best-effort（`eprintln!` の panic が
+            // hook 経由の `exit(1)` を招き、device 列挙の失敗報告が daemon 終了に化ける）。
+            write_line_best_effort(&format!(r#"{{"error":"{e}"}}"#));
             Err(1)
         }
     }
@@ -251,9 +258,10 @@ fn report_startup_failure(error: ProtocolError) {
     let line = serde_json::to_string(&payload).unwrap_or_else(|_| {
         r#"{"ready":false,"error":{"code":"INTERNAL_ERROR","message":"startup error serialization failed"}}"#.to_string()
     });
-    eprintln!("{line}");
-    use std::io::Write;
-    let _ = std::io::stderr().flush();
+    // 🔴 #612: startup error は client が parse する wire の一部。書けない状況では
+    // どのみち client に届かないが、`eprintln!` の panic で終了コードの意味論が
+    // 変わる（`Err(1)` のつもりが hook 経由になる）ため best-effort に揃える。
+    write_line_best_effort(&line);
 }
 
 #[cfg(test)]

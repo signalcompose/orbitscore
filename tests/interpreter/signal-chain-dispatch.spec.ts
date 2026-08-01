@@ -805,6 +805,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'restartLoopFromCurrentTime',
       // Output, engine-mode, and audio-buffer internals.
       'getOutputChannel',
+      // #598 P1: 数値 output(1..16) が選んだ score-mode の render bus を読む純アクセサ。
+      // `output()` という DSL 語彙が書き込み、RenderScore manifest の生成側が読む
+      // （インタプリタからの参照はゼロ）。DSL 語彙ではない。
+      'getRenderBus',
       'getGlobal',
       'routeOutputFromDsl',
       'routeSendFromDsl',

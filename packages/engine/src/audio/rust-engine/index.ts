@@ -19,6 +19,20 @@ export {
   DaemonStartupError,
 } from './errors'
 export { PROTOCOL_VERSION, isEventFrame, isHandshakeFrame, isResponseFrame } from './protocol-types'
+export {
+  createRenderScore,
+  parseRenderScore,
+  serializeRenderScore,
+  validateRenderScore,
+} from './render-score'
+export type {
+  RenderScore,
+  RenderScoreBus,
+  RenderScoreEvent,
+  RenderScoreMaster,
+  RenderScorePlugin,
+  RenderScoreSample,
+} from './render-score'
 export type {
   CommandFrame,
   CommandMethod,

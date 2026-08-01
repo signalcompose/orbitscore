@@ -28,6 +28,7 @@ export interface SequenceState {
   audioFilePath?: string
   chopDivisions?: number
   outputChannel?: string
+  renderBus?: string
 }
 
 /**
