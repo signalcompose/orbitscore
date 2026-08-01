@@ -10,7 +10,7 @@
 //! 2. panic hook 自身も `eprintln!` を呼ぶので**再 panic**
 //! 3. `panic_with_hook` の再帰検知が `std::process::abort()` → **SIGABRT**
 //!
-//! 2026-08-01 に OrbitStudio 起動経路で 11 回再現し、daemon が起動直後に落ちて
+//! 2026-08-01 に OrbitStudio 起動経路で 14 回再現し（04:03〜05:16 JST）、daemon が起動直後に落ちて
 //! plugin の attach が「READY を出さないまま timeout」に見えていた。
 //!
 //! ## このテストが本物である理由

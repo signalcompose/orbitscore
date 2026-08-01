@@ -274,6 +274,34 @@ audio sequence と instrument sequence の両方で使える。既存 `output(su
 `play()`、realtime の既定経路は変更しない。`seq.effect()` の insert chain は score manifest 構築時に
 該当 render bus の chain へ載せる（P2/P3）。P1 は routing の記録と manifest wire の確定までとする。
 
+#### 4.4.1 再宣言時に何が残るか — **オフラインの宣言は live routing を変えない**（一方向）
+
+上の解決順は「1回の呼び出しがどう解釈されるか」しか定めていない。**同じ seq に `output()` を
+2回以上宣言した時に前の宛先がどうなるか**を、次で固定する（ライブコーディングでは書き換えて
+再評価するのが常態なので、この規則が無いと挙動が宛先の種類ごとに散らばる）:
+
+| 宣言 | `_renderBus` | `_outputChannel`（LinkAudio egress） | `_sumOutputBus` |
+|---|---|---|---|
+| `output(n)`（render bus） | **設定** | **変更しない** | **変更しない** |
+| `output(name)`（LinkAudio channel） | **クリア** | 設定 | 変更しない（既存挙動） |
+| `output(sumName)`（sum 解決） | **クリア** | 変更しない（既存挙動） | 設定 |
+
+**非対称は意図的である。**
+
+- **オフライン → live 方向を禁じる理由**: `output(n)` は「後でオフラインレンダする時の宛先」の
+  宣言であって、いま鳴っている経路の指示ではない。これが live routing を壊すと、
+  `global.linkAudio()` セッションで `kick.output("Kick Ch")` が稼働中に
+  レンダ準備として `kick.output(1)` と書き足した瞬間、`_outputChannel` が消えて
+  次の schedule で `resolveDispatchChannel()` が throw し、**ライブ中に kick が停止する**
+  （2026-08-01 の #612 監査で特定）
+- **live → オフライン方向を許す理由**: オフラインレンダは P2 まで走らないので、
+  live 宛先の宣言が render bus を落としても失うものが無い。むしろ
+  「もう使わない render bus が残り続ける」stale を防げる
+
+live 宛先どうし（LinkAudio channel ↔ sum bus）の相互排他は本 issue の対象外（既存挙動のまま）。
+なお LinkAudio と sum bus は v1 で相互排他なので（`mixer-manager` の宣言ゲートと
+`global.linkAudio()` のゲートが双方向に塞ぐ）、その2つが同時に立つ状態自体が到達不能である。
+
 ### 4.5 決定論
 
 - プラグインなし構成: 同一 manifest → **bit 一致**を保証・受け入れ基準にする

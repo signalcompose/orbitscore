@@ -1796,7 +1796,11 @@ fn capture_path_from_env() -> Option<PathBuf> {
         Err(std::env::VarError::NotPresent) => None,
         Err(std::env::VarError::NotUnicode(_)) => {
             // 非 UTF-8 の値を握り潰すと「capture したつもりが無効」になるので operator に報告する。
-            eprintln!("[capture] ORBIT_CAPTURE_WAV が非 UTF-8 のため無視した（capture 無効）");
+            // 🔴 #612: `eprintln!` は書き込み失敗で panic する。panic hook が `exit(1)` する
+            // ようになった今、**この警告が書けないだけで daemon 全体が終了する**。
+            crate::best_effort_stderr::write_line_best_effort(
+                "[capture] ORBIT_CAPTURE_WAV が非 UTF-8 のため無視した（capture 無効）",
+            );
             None
         }
     }
@@ -1812,8 +1816,9 @@ fn device_name_from_env() -> Option<String> {
         Ok(_) => None,
         Err(std::env::VarError::NotPresent) => None,
         Err(std::env::VarError::NotUnicode(_)) => {
-            eprintln!(
-                "[audio-device] ORBIT_AUDIO_DEVICE が非 UTF-8 のため無視した（host 既定へ縮退）"
+            // 🔴 #612: 上と同じ理由で best-effort（診断が書けないだけで daemon を殺さない）。
+            crate::best_effort_stderr::write_line_best_effort(
+                "[audio-device] ORBIT_AUDIO_DEVICE が非 UTF-8 のため無視した（host 既定へ縮退）",
             );
             None
         }

@@ -8,6 +8,7 @@
 //!
 //! 起動失敗時は stderr に 1 行 JSON を出して非ゼロ exit code で終了する。
 
+use orbit_audio_daemon::best_effort_stderr::{best_effort_stderr, write_line_best_effort};
 use orbit_audio_daemon::engine_wrap::{DeviceSwitchRequest, EngineWrap, WrapError};
 use orbit_audio_daemon::protocol::{
     Event, ProtocolError, StartupError, StartupReady, ERROR_CODE_FATAL_PANIC, ERROR_SEVERITY_FATAL,
@@ -41,52 +42,6 @@ async fn main() {
     if let Err(code) = run().await {
         std::process::exit(code);
     }
-}
-
-/// 🔴 #605: **診断チャネルの故障で daemon を殺さないための stderr ライタ。**
-///
-/// `println!` / `eprintln!` と `std::io::stderr` を直に `with_writer` へ渡す構成は、
-/// **書き込みが失敗した時に panic する**（`eprintln!` は内部で `unwrap` 相当）。
-/// stderr が壊れた状態（読み手の消えた pipe・閉じられた fd）でこれが起きると:
-///
-/// 1. tracing の event が stderr へ書けず panic
-/// 2. panic hook（下の [`install_fatal_panic_hook`]）も `eprintln!` を使うため**再 panic**
-/// 3. `panic_with_hook` が再帰を検知して `std::process::abort` → **SIGABRT**
-///
-/// 実際に 2026-08-01 の OrbitStudio 起動経路で 11 回再現し、daemon が起動直後に
-/// 落ちていた（`~/Library/Logs/DiagnosticReports/orbit-audio-daemon-*.ips`）。
-///
-/// **なぜ書き込みエラーを握りつぶすか**: ここは「自分自身を診断するためのチャネル」であり、
-/// その故障が**診断対象のプロセスを殺す**のは因果が逆立ちしている。ログを 1 行失う代償より、
-/// daemon が生きて次の診断を出せることを優先する。音声処理やプロトコルの失敗を
-/// 握りつぶしているわけではない（それらは従来どおり loud に落とす）。
-struct BestEffortStderr;
-
-impl std::io::Write for BestEffortStderr {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        // `write_all` は Result を返すだけで panic しない。失敗しても
-        // 「書けた」ことにして呼び出し元（tracing）を巻き込まない。
-        let _ = std::io::stderr().lock().write_all(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        let _ = std::io::stderr().lock().flush();
-        Ok(())
-    }
-}
-
-fn best_effort_stderr() -> BestEffortStderr {
-    BestEffortStderr
-}
-
-/// stderr へ 1 行書く。**書けなくても panic しない**（[`BestEffortStderr`] と同じ理由）。
-fn write_line_best_effort(line: &str) {
-    use std::io::Write;
-    let mut err = std::io::stderr().lock();
-    let _ = err.write_all(line.as_bytes());
-    let _ = err.write_all(b"\n");
-    let _ = err.flush();
 }
 
 /// panic 時に DaemonError event の wire format を stderr に出力し、
@@ -287,7 +242,9 @@ fn run_list_audio_devices() -> Result<(), i32> {
             Ok(())
         }
         Err(e) => {
-            eprintln!(r#"{{"error":"{e}"}}"#);
+            // 🔴 #612: subscriber 稼働後なので best-effort（`eprintln!` の panic が
+            // hook 経由の `exit(1)` を招き、device 列挙の失敗報告が daemon 終了に化ける）。
+            write_line_best_effort(&format!(r#"{{"error":"{e}"}}"#));
             Err(1)
         }
     }
@@ -301,9 +258,10 @@ fn report_startup_failure(error: ProtocolError) {
     let line = serde_json::to_string(&payload).unwrap_or_else(|_| {
         r#"{"ready":false,"error":{"code":"INTERNAL_ERROR","message":"startup error serialization failed"}}"#.to_string()
     });
-    eprintln!("{line}");
-    use std::io::Write;
-    let _ = std::io::stderr().flush();
+    // 🔴 #612: startup error は client が parse する wire の一部。書けない状況では
+    // どのみち client に届かないが、`eprintln!` の panic で終了コードの意味論が
+    // 変わる（`Err(1)` のつもりが hook 経由になる）ため best-effort に揃える。
+    write_line_best_effort(&line);
 }
 
 #[cfg(test)]

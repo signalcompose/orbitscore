@@ -508,10 +508,23 @@ impl Drop for Vst3PluginMain {
 /// CLAP 側の [`ClapRenderMode`](../../orbit_clap_host/enum.ClapRenderMode.html) と対になる概念で、
 /// VST3 では `ProcessSetup.processMode` / `ProcessData.processMode` として渡す。
 ///
-/// 🔴 **setup と process で同じ値を渡すこと。** VST3 の仕様上この 2 つは一致していることが
-/// 前提で、テスト用 oracle（`orbit-vst3-gain-oracle` / `orbit-vst3-synth-oracle`）は
-/// 不一致を `kInvalidArgument` で弾く。オフラインだけ setup を変えて process を変え忘れる、
-/// という取り違えを実機に出さないための検出器。
+/// 🔴 **setup と process で同じ値を渡すこと。**
+///
+/// 一次ソース（`vst3_pluginterfaces/vst/ivstaudioprocessor.h`・`ProcessModes` の注記）の規定は
+/// **一致そのものではなく切替の手順**である:
+///
+/// - `kRealtime` ↔ `kPrefetch` は **`setupProcessing` を呼ばずに** realtime thread で切り替えてよく、
+///   plugin は `ProcessData::processMode` を毎 process で見ることが期待される
+/// - `kRealtime`（または `kPrefetch`）↔ **`kOffline` の切替は host が `setupProcessing` を
+///   呼ぶことを要求する**
+///
+/// 本 host の値域は `{Realtime, Offline}` の 2 値なので、上の第 2 項により
+/// 「setup と process の不一致 = `setupProcessing` を経ない offline 切替 = 規定違反」となり、
+/// 結果として一致が必須になる。`kPrefetch` を含む一般則ではない点に注意。
+///
+/// テスト用 oracle（`orbit-vst3-gain-oracle` / `orbit-vst3-synth-oracle`）は**全ての不一致**を
+/// `kInvalidArgument` で弾く。これは仕様の再現ではなく、「オフラインだけ setup を変えて
+/// process を変え忘れる」取り違えを実機に出さないための **test-only 検出器**である。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Vst3ProcessMode {
     #[default]

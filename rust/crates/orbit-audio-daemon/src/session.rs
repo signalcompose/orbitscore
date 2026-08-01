@@ -494,6 +494,15 @@ fn validate_render_plugin(
 }
 
 fn validate_render_score_params(params: &Value) -> Result<RenderScoreManifest, ProtocolError> {
+    // 🔴 このループを「serde と重複」として消してはいけない（#612 監査）。
+    //
+    // 8 個中 7 個は `RenderScoreManifest` の非 `Option` フィールドなので、欠落すれば下の
+    // `deserialize` が `missing field ...` で弾く（このループはその 7 個については
+    // 「位置つきの読みやすい文言を出す」ためのもの）。**しかし `master` だけは
+    // `Option<RenderScoreMaster>` であり、serde は欠落を黙って `None` に既定化する。**
+    // したがって `master` の必須性は **ここでしか守られていない**。消すと TS 側
+    // （`render-score.ts` は 8 個すべてを required 扱い）と乖離し、master 欠落の manifest を
+    // daemon だけが受理するようになる。
     const REQUIRED: [&str; 8] = [
         "sample_rate",
         "duration_sec",
@@ -2249,6 +2258,35 @@ mod tests {
         let error = validate_render_score_params(&dropped).expect_err("events is required");
         assert_eq!(error.code, "MALFORMED_REQUEST");
         assert!(error.message.contains("events"));
+    }
+
+    /// 🔴 `master` の必須性は手書きの `REQUIRED` ループでしか守られていない（#612 監査）。
+    ///
+    /// `RenderScoreManifest::master` は `Option<_>` なので、serde は欠落を黙って `None` に
+    /// 既定化する。他 7 フィールドは非 `Option` で serde が弾くが、`master` だけは
+    /// **ループを消すと欠落した manifest を daemon が受理してしまう** — TS 側
+    /// （`render-score.ts` は 8 個すべて required）と乖離し、wire 契約が片側で緩む。
+    ///
+    /// 実証（2026-08-01）: `REQUIRED` から `"master"` を外す変異は、この test を足す前は
+    /// **6 passed のまま生き残った**。
+    #[test]
+    fn render_score_requires_master_which_serde_would_default_to_none() {
+        let mut without_master = valid_render_score();
+        without_master
+            .as_object_mut()
+            .expect("object")
+            .remove("master");
+
+        let error = validate_render_score_params(&without_master).expect_err(
+            "master の欠落は拒否されなければならない — serde は Option を None に既定化するので、\
+             REQUIRED ループを消すとここが通ってしまい TS 側の契約と乖離する",
+        );
+        assert_eq!(error.code, "MALFORMED_REQUEST");
+        assert!(
+            error.message.contains("master"),
+            "unexpected message: {}",
+            error.message
+        );
     }
 
     /// 重複した宣言名を拒否する（2026-08-01・TS 側の同型変異が生き残ったため両側に追加）。

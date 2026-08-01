@@ -317,17 +317,16 @@ export function createReplSession(interpreter: InterpreterV2): {
       emptyLineCount = 0
       return
     }
+    // 🔴 #612 レビュー: **「未完」判定はパース段のエラーにだけ適用する。**
+    // 以前は parse と execute を 1 つの try で覆っていたため、`/\bEOF\b/` が
+    // **実行時エラーの文言にも作用**していた。実行時エラーはユーザー由来の文字列
+    // （ファイルパス・識別子・daemon のエラー echo）を含むので、たとえば
+    // `kick.audio("takes/EOF.wav")` の ENOENT が「未完入力」と誤判定され、
+    // **完結した行が silent に保留されてセッションが停止する** — #608 と同じ故障が
+    // 別経路で再発する。パースが終わった時点で「入力が完結していない」possibility は消える。
+    let ir: ReturnType<typeof parseAudioDSL>
     try {
-      const ir = parseAudioDSL(code)
-      const metaDir = extractDocumentDirectoryMeta(code)
-      if (metaDir) sessionDocumentDirectory = metaDir
-      await interpreter.execute(ir, {
-        source: code,
-        evalSource: 'human',
-        documentDirectory: sessionDocumentDirectory,
-      }) // §L1
-      console.log('✓') // Success indicator
-      buffer = ''
+      ir = parseAudioDSL(code)
     } catch (error: any) {
       // 不完全入力（複数行の途中）は buffering を続ける（強制実行時は除く）。
       //
@@ -343,7 +342,23 @@ export function createReplSession(interpreter: InterpreterV2): {
       }
       console.error(`[ERROR] ${error.message}`)
       buffer = ''
+      return
     }
+
+    // ここから先は「入力は完結している」— 失敗しても保留せず必ず報告してバッファを捨てる。
+    try {
+      const metaDir = extractDocumentDirectoryMeta(code)
+      if (metaDir) sessionDocumentDirectory = metaDir
+      await interpreter.execute(ir, {
+        source: code,
+        evalSource: 'human',
+        documentDirectory: sessionDocumentDirectory,
+      }) // §L1
+      console.log('✓') // Success indicator
+    } catch (error: any) {
+      console.error(`[ERROR] ${error.message}`)
+    }
+    buffer = ''
   }
 
   async function handleLine(line: string): Promise<void> {

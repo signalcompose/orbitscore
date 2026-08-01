@@ -17,6 +17,100 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.356 fix: PR #612 レビュー統合 — `output()` の宛先排他規則を spec に確定し、保護の穴を塞ぐ (Aug 1, 2026)
+
+**Date**: 2026-08-01
+**PR**: #612 / **Status**: **1929 passed / 0 failed**（レビュー前 1923・+6）・lint 0・
+`cargo clippy --all-targets` 0・Rust workspace lib 14 crate 全緑
+
+レビュアー5名（Sonnet 4 = 差分に**在る**もの / Fable = 差分に**無い**もの）を**並行**起動。
+Critical 0 で収束したが、Important の指摘は横断的関心事に集約できたため
+**修正前にポリシーを確定**してから一括適用した（指摘単位のローカルパッチは振動の主因）。
+
+#### 🔴 ポリシー1: `output()` の宛先排他 — spec に §4.4.1 を新設
+
+**発見（Fable 監査）**: `_renderBus` のフィールドコメントは
+「**offline stem の宣言は既存の live routing を変えられない**」と不変条件を宣言しているのに、
+実装はその直後で `_outputChannel` を破壊していた。spec（§4.4）は解決順しか定めておらず、
+**再宣言時に何が残るか**が未定義だった。
+
+**実害**: `global.linkAudio()` セッションで `kick.output("Kick Ch")` が稼働中に、
+レンダ準備として `kick.output(1)` を書き足すと `_outputChannel` が消え、次の schedule で
+`resolveDispatchChannel()` が throw して**ライブ中に kick が停止する**。
+
+**確定した規則（一方向の非対称・意図的）**:
+
+| 宣言 | `_renderBus` | `_outputChannel` | `_sumOutputBus` |
+|---|---|---|---|
+| `output(n)` | 設定 | **変更しない** | **変更しない** |
+| `output(name)` | **クリア** | 設定 | 変更しない |
+| `output(sumName)` | **クリア** | 変更しない | 設定 |
+
+オフライン → live 方向を禁じるのは上記の実害のため。live → オフライン方向を許すのは、
+offline が P2 まで走らないので stale を残さない方が良いため。
+
+**これに伴い、私が P1 で追加した「排他性」テストは規則と逆の性質を固定していたので書き換えた**
+（当初は実装から挙動を推測してテスト化しており、不変条件の側を読んでいなかった）。
+
+#### 🔴 ポリシー2: 診断チャネルの保護は「tracing 経路」ではなく「subscriber 稼働後の全 stderr 書き込み」
+
+**発見（silent-failure-hunter）**: #605 の保護は `main.rs`（binary）にあったため
+**lib 側の `engine_wrap.rs` から使えず**、生 `eprintln!` が 2 箇所残っていた。
+panic hook が `exit(1)` するようになった今、**「非 UTF-8 な env var を警告できなかった」
+というだけで daemon 全体が終了する**経路になっていた。
+
+`best_effort_stderr.rs` を crate 直下へ移し、`main.rs` / `engine_wrap.rs` の
+生 `eprintln!` 4 箇所すべてに適用。起動前（subscriber 初期化より前）は対象外
+—そこは書けなければ素直に落ちるのが正しい。
+
+#### 🔴 ポリシー3: 「未完入力」判定はパース段のエラーにだけ適用する
+
+**発見（silent-failure-hunter + Fable が独立に）**: `try` が `parseAudioDSL` と
+`interpreter.execute` の**両方**を覆っていたため、`/\bEOF\b/` が実行時エラーにも作用していた。
+実行時エラーの文言はユーザー由来の文字列を含むので、たとえば
+`kick.audio("takes/EOF.wav")` の ENOENT が「未完入力」と誤判定され、
+**完結した行が silent に保留されて #608 が別経路で再発する**。
+
+parse を独立した `try` に分離。以後は「入力は完結している」ので、失敗しても必ず報告する。
+
+#### 追加したテスト（すべて変異で red 確認）
+
+| テスト | 殺す変異 |
+|---|---|
+| offline 宣言が live channel を保つ | 旧挙動（数値 output が channel を破壊）→ **red** |
+| 同名 sum に解決された時に render bus を落とす | sum 分岐のクリア削除 → **red**（従来は 25 passed のまま生存） |
+| 範囲外の拒否時に既存 routing を壊さない | 検査より前に状態を壊す → **red** |
+| 実行時エラーが "EOF" を含んでも保留しない | 旧構造（execute にも EOF 判定）→ **red** |
+| DSL テキスト経由の `output(n)`（新規ファイル） | 数値判定を落とす / 記録しない → **red** |
+| `master` の必須性（serde は Option を None に既定化） | `REQUIRED` から master を外す → **red**（従来は 6 passed のまま生存） |
+
+#### 私の裏取りで**覆した**指摘
+
+**「sum 分岐が `_outputChannel` をクリアしない」は到達不能**だった。2 エージェントが独立に
+「実害経路は実在する」と報告したが、`resolveDispatchChannel()` が `_outputChannel` を返すのは
+LinkAudio 有効時のみで、**LinkAudio と sum bus は v1 で双方向に排他**
+（`mixer-manager` の `declareBus` ゲートと `global.linkAudio()` のゲート）。issue 化は見送り、
+spec §4.4.1 に不在の根拠を記録した。
+
+#### コメント精度の修正（comment-analyzer / Fable）
+
+- SIGABRT の再現回数 **11 → 14**（実測。04:57 に数えた時点では 11 で、その後の検証中に増えていた）。
+  時刻窓も併記して検証可能にした
+- VST3 `processMode` コメントの**過般化を訂正**。一次ソース（`ivstaudioprocessor.h`）の規定は
+  「一致」ではなく「`kRealtime`↔`kOffline` の切替には `setupProcessing` が必須」。
+  本 host の 2 値域では結果的に一致が必須になるが、`kPrefetch` を含む一般則ではない
+- CLAP の「inactive でなければならない」という**根拠のない制約主張を削除**
+  （`render.h` の `set` は `[main-thread]` のみ）。activate 前に呼ぶのは host 側の選択
+- `REQUIRED` ループの存在理由を明記（`master` だけ `Option` なので serde に委ねられない）
+
+#### 運用上の失敗（記録）
+
+**レビューエージェントが共有 working tree を変異検証で書き換えた**（3 ファイル + 新規 probe
+ファイル）。差分を保全した上で HEAD へ復元。`pr-test-analyzer` に「どの変異を殺すか示せ」と
+依頼した以上、実際に変異を走らせるのは自然な行動であり、**共有ツリーで作業させない指示か
+worktree の付与が必要**だった（発注側の設計ミス）。
+
+
 ### 6.355 feat(vst3): offline process mode を実装 — Codex が書いたテストの相手側が存在しなかった (#598 P1) (Aug 1, 2026)
 
 **Date**: 2026-08-01
@@ -324,7 +418,7 @@ pre-commit hook がビルドを走らせ、#605 修正の入っていない dist
 Kontakt を `instrument(..., "states/strings.state")` で宣言すると child が READY を発行せず
 attach がタイムアウトする。**state 無しでは成功する**という非対称があり、「state 復元が
 child をフリーズさせている」ように見えていた。並行して daemon が SIGABRT で落ちていた
-（`~/Library/Logs/DiagnosticReports/orbit-audio-daemon-*.ips` に 11 件）。
+（`~/Library/Logs/DiagnosticReports/orbit-audio-daemon-*.ips` に **14 件**・04:03〜05:16 JST）。
 
 #### 原因1: `CHILD_READY_TIMEOUT` が実測に対して短すぎた（本命）
 

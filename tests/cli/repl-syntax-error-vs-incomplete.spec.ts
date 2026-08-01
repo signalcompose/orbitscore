@@ -79,6 +79,48 @@ describe('createReplSession — syntax error vs incomplete input (#607)', () => 
     expect(errors.filter((line) => line.startsWith('[ERROR]'))).toEqual([])
   })
 
+  // 🔴 #612 レビュー（Fable 監査 + silent-failure-hunter が独立に指摘）:
+  // 「未完」判定は**パース段のエラーにだけ**適用されなければならない。
+  // 以前は parse と execute を 1 つの try で覆っていたため、`/\bEOF\b/` が実行時エラーにも
+  // 作用した。実行時エラーの文言はユーザー由来の文字列（ファイルパス・識別子・daemon の
+  // エラー echo）を含むので、"EOF" という語が偶然混ざるだけで**完結した行が silent に
+  // 保留され**、#608 と同じセッション沈黙停止が別経路で再発する。
+  it('reports a runtime error whose message contains EOF instead of buffering it', async () => {
+    const errors: string[] = []
+    vi.spyOn(console, 'error').mockImplementation((message?: unknown) => {
+      errors.push(String(message))
+    })
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+
+    const executed: string[] = []
+    const interpreter = {
+      execute: async (_ir: unknown, options: { source?: string }) => {
+        if (options.source?.includes('takes/EOF.wav')) {
+          // 実行時エラーの文言にユーザー由来のパスが載る典型（ENOENT の echo）。
+          throw new Error("ENOENT: no such file or directory, open 'takes/EOF.wav'")
+        }
+        executed.push(options.source ?? '')
+      },
+    } as never
+    const session = createReplSession(interpreter)
+
+    session.pushLine('global.audio("takes/EOF.wav")')
+    await session.idle()
+
+    expect(
+      errors.filter((line) => line.startsWith('[ERROR]')),
+      '実行時エラーが「未完入力」として silent に保留された',
+    ).toHaveLength(1)
+    expect(errors[0]).toContain('ENOENT')
+
+    // 🔴 事故の本体: この後の行が実行されること（バッファに合体して死んでいない）。
+    session.pushLine('global.tempo(120)')
+    await session.idle()
+    expect(executed, 'エラー後の行が実行されていない — バッファが死んでいる').toEqual([
+      'global.tempo(120)',
+    ])
+  })
+
   it('names the offending token for an unexpected token after an argument', async () => {
     const { session, executed, errors } = harness()
 

@@ -357,6 +357,7 @@ export class Sequence {
             `audio sequences in v1 (not midi()/instrument() sequences).`,
         )
       }
+      // §4.4.1: live 宛先の宣言は render bus をクリアする（stale な offline 宛先を残さない）。
       this._renderBus = undefined
       this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
       this._sumOutputBus = sumBus
@@ -370,7 +371,13 @@ export class Sequence {
           `Sequence '${name}': output(renderBus) requires an integer from 1 to 16, got ${channelName}.`,
         )
       }
-      this._outputChannel = undefined
+      // 🔴 §4.4.1: **オフラインの宛先宣言は live routing を変えない**（一方向の非対称）。
+      // ここで `_outputChannel` をクリアしてはいけない — `global.linkAudio()` セッションで
+      // `kick.output("Kick Ch")` が稼働中に、レンダ準備として `kick.output(1)` を書き足すと
+      // 次の schedule で `resolveDispatchChannel()` が「has no .output() channel set」を
+      // throw し、**ライブ中に kick が停止する**（#612 監査で特定）。
+      // 逆向き（live 宣言が render bus をクリアする）は下の string 分岐で行う — offline は
+      // まだ走らないので stale を残さない方が良い。
       this._renderBus = destinationName
       return this
     }

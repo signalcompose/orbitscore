@@ -236,7 +236,10 @@ pub(crate) fn instantiate_activate(
     )
     .map_err(|e| ClapHostError::Instantiate(e.to_string()))?;
 
-    // clap.render is a main-thread extension and must be selected while the plugin is inactive.
+    // clap.render の `set` は一次ソース（`clap/ext/render.h`）で **`[main-thread]` とだけ**
+    // 規定されており、「inactive でなければならない」という制約は spec に存在しない（#612 監査）。
+    // ここで activate 前に呼ぶのは host 側の選択で、plugin の初期化順を単純に保つため
+    // （mode を先に確定させてから activate すれば、activate 後の再設定を考えなくてよい）。
     configure_render_mode(&mut instance, render_mode)?;
 
     // note ポートインデックスを取得する（activate 前に実行）。

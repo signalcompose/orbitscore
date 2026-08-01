@@ -7,6 +7,8 @@
 //! 経由して `EngineWrap` を audio device なしで起動する。
 
 pub mod backend;
+/// 🔴 #605/#612: 診断チャネル（stderr）の故障で daemon を殺さない書き込み。
+pub mod best_effort_stderr;
 /// in-process CLAP plugin hosting の daemon 配線。feature `clap-host`（default off）でのみ
 /// コンパイルされ、`orbit-clap-host` の `ClapHost`(!Send) を専用スレッドで所有する（Issue #340）。
 #[cfg(feature = "clap-host")]
