@@ -44,6 +44,10 @@ function spyGlobal(): {
   ;(global as unknown as { openPluginUi: unknown }).openPluginUi = open
   ;(global as unknown as { closePluginUi: unknown }).closePluginUi = close
   // 冪等判定に使うセッション有無。既定は「開いていない」。
+  //
+  // 🔴 R2 の教訓: `openPluginUiIdempotent` そのものは stub しない（stub すると
+  // fast path・already-open catch・staleness の実装を検証できない）。
+  // stub するのは境界（hasOpenPluginUi の判定源と openPluginUi の daemon 呼び出し）だけ。
   const openTargets = new Set<string>()
   ;(global as unknown as { hasOpenPluginUi: unknown }).hasOpenPluginUi = (
     receiverId: string,
@@ -125,11 +129,78 @@ describe('🔴 ui() は冪等（#619 レビュー・F2b）', () => {
     expect(close).toHaveBeenCalledTimes(1)
   })
 
+  it('🔴 R2: child が「already open」を返したら成功扱い（race の防御）', async () => {
+    // fast path をすり抜けた場合（判定後に他所が open した race）でも、child の
+    // 状態機械が返す「already open」は失敗ではない — 目的（開いている状態）は達成済み。
+    const { global, player, open } = spyGlobal()
+    open.mockRejectedValueOnce(
+      new Error(
+        "Plugin UI request for 'cb' index 0 failed: [PLUGIN_UI_PROTOCOL_ERROR] " +
+          'plugin UI event protocol error: OPEN_UI requested while lifecycle is Open',
+      ),
+    )
+    await expect(makeSeq(global, player, 'cb').ui()).resolves.toBeDefined()
+    expect(open).toHaveBeenCalledTimes(1)
+  })
+
+  it('R2: もう一方の文言（requires state == Closed）も成功扱い', async () => {
+    const { global, player, open } = spyGlobal()
+    open.mockRejectedValueOnce(
+      new Error('OPEN_UI requires state == Closed even when the ring is drained'),
+    )
+    await expect(makeSeq(global, player, 'cb').ui()).resolves.toBeDefined()
+    expect(open).toHaveBeenCalledTimes(1)
+  })
+
+  it('already open 以外のエラーは従来どおり throw する（何でも飲み込まない）', async () => {
+    const { global, player, open } = spyGlobal()
+    open.mockRejectedValueOnce(new Error('plugin UI hosting requires the Rust engine backend'))
+    await expect(makeSeq(global, player, 'cb').ui()).rejects.toThrow('Rust engine backend')
+  })
+
   it('bus 側も同じ冪等規約に従う', async () => {
     const { global, open, openTargets } = spyGlobal()
     openTargets.add('sum:strings#1')
     await global.sum('strings').ui(1)
     expect(open).not.toHaveBeenCalled()
+  })
+})
+
+describe('🔴 R2 Critical: respawn がセッション簿記を破棄する', () => {
+  // respawn は UI を閉じるがセッションは「次の open が上書きする」設計だった。
+  // 冪等ガードはその「次の open」自体を止めるので、リスナで即時破棄しないと
+  // `ui()` が永久に no-op になる。
+  it('respawn 通知で該当セッションが消え、ui() が再び open できる', async () => {
+    const player = {
+      boot: vi.fn().mockResolvedValue(undefined),
+      getCurrentTime: vi.fn().mockReturnValue(0),
+      scheduleEvent: vi.fn(),
+      scheduleSliceEvent: vi.fn(),
+      getMasterGainDb: vi.fn().mockReturnValue(0),
+      // Global のコンストラクタが登録するリスナを捕まえる
+      setPluginUiClosedByRespawnListener: vi.fn(),
+    } as unknown as SuperColliderPlayer
+    const global = new Global(player)
+    const captured = (player.setPluginUiClosedByRespawnListener as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as (target: { role: string; instance?: string; index: number }) => void
+    expect(captured, 'Global がコンストラクタでリスナを登録していない').toBeDefined()
+
+    // 実際の session map に stale エントリを直接置く（openPluginUi の実経路は daemon が要る）。
+    const sessions = (
+      global as unknown as {
+        openPluginUiSessions: Map<string, { receiverId: string; index: number; resolved: unknown }>
+      }
+    ).openPluginUiSessions
+    sessions.set('instrument\u0000plugin:cb\u00000', {
+      receiverId: 'cb',
+      index: 0,
+      resolved: {} as never,
+    })
+    expect(global.hasOpenPluginUi('cb', 0)).toBe(true)
+
+    // respawn 通知 → セッション破棄 → 冪等判定が「閉じている」に戻る
+    captured({ role: 'instrument', instance: 'plugin:cb', index: 0 })
+    expect(global.hasOpenPluginUi('cb', 0)).toBe(false)
   })
 })
 

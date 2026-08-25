@@ -162,13 +162,9 @@ export class Global {
     // #617: `sum("x").ui()` を既存の openPluginUi / closePluginUi へ橋渡しする。
     // MixerManager は Global を知らない（循環参照を避ける）ので、ここで注入する。
     this.mixerManager.setPluginUiHandler(async (receiverId, index, open) => {
-      // `seq.ui()` と同じ冪等規約（#619 レビュー・F2b）: 楽譜の再評価で二重 open にならない。
-      if (open) {
-        if (this.hasOpenPluginUi(receiverId, index)) return
-        await this.openPluginUi(receiverId, index)
-      } else {
-        await this.closePluginUi(receiverId, index)
-      }
+      // `seq.ui()` と同じ冪等規約。規則は openPluginUiIdempotent の1箇所に集約。
+      if (open) await this.openPluginUiIdempotent(receiverId, index)
+      else await this.closePluginUi(receiverId, index)
     })
     this.quantizeManager = new QuantizeManager()
     this.midiManager = midiManager ?? new MidiManager()
@@ -190,6 +186,13 @@ export class Global {
     this.audioEngine.setPluginUiSafepointSaver?.((target) =>
       this.savePluginUiStateAtSafepoint(target),
     )
+    // #619 R2 Critical: respawn が UI を閉じたらセッション簿記も即時破棄する。
+    // 残すと `hasOpenPluginUi` が「もう開いている」と誤認し、DSL の `ui()` が
+    // 永久に no-op になる（「次の open が上書きする」という従来の回収経路を、
+    // 冪等ガード自身が塞いでしまうため）。
+    this.audioEngine.setPluginUiClosedByRespawnListener?.((target) => {
+      this.openPluginUiSessions.delete(pluginUiSessionKey(target, target.index))
+    })
   }
 
   // Tempo and meter management
@@ -900,12 +903,46 @@ export class Global {
    * 🔴 MCP / REPL メタ行の `open_plugin_ui` は**冪等にしない**。あちらは「開けと命じた」
    * のに開いていない状態を検出したい明示操作で、二重 open を loud に落とすのが正しい。
    * ここは問い合わせだけを公開し、冪等化の判断は呼び出し側（DSL 面）に置く。
+   *
+   * 🔴 staleness（#619 R2）: respawn が UI を閉じた場合はコンストラクタで登録した
+   * リスナがセッションを即時破棄するので、この判定が「閉じているのに開いている」と
+   * 誤認し続けることはない。逆方向（判定後・open 前に他所が open する race）は
+   * 呼び出し側の catch（「already open」エラーを成功扱い）が防ぐ。
    */
   hasOpenPluginUi(receiverId: string, index: number): boolean {
     for (const session of this.openPluginUiSessions.values()) {
       if (session.receiverId === receiverId && session.index === index) return true
     }
     return false
+  }
+
+  /**
+   * DSL 面（`seq.ui()` / `sum("x").ui()`）用の**冪等な** open（#619 R2）。
+   *
+   * 2段構えで冪等にする（規則はこの1箇所に集約 — 呼び出し側で複製しない）:
+   *
+   * 1. **fast path**: セッション簿記に既にあれば daemon へ行かず no-op。
+   *    respawn による staleness はコンストラクタのリスナが即時破棄するので誤認しない
+   * 2. **防御**: 判定後〜open 完了前の race で child が「already open」を返したら
+   *    成功扱いにする。判定の権威は child の状態機械（TS 側の簿記より新しい）
+   *
+   * MCP / REPL メタ行はこのメソッドを**使わない**（明示操作は二重 open を loud に落とす）。
+   */
+  async openPluginUiIdempotent(receiverId: string, index: number): Promise<void> {
+    if (this.hasOpenPluginUi(receiverId, index)) return
+    try {
+      await this.openPluginUi(receiverId, index)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // child 側の「already open」2系統（transport.rs:1270 / orbit-child-ui lib.rs:496）。
+      if (
+        message.includes('OPEN_UI requested while lifecycle is') ||
+        message.includes('OPEN_UI requires state == Closed')
+      ) {
+        return
+      }
+      throw error
+    }
   }
 
   async openPluginUi(

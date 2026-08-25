@@ -638,14 +638,11 @@ export class Sequence {
   async ui(index = 0, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (open) {
-      // 🔴 冪等（#619 レビュー・F2b）: ライブコーディングでは**ブロックの再評価が常態**で、
-      // 楽譜に書いた `cb.ui()` は評価のたびに走る。既に開いているのに再度 open すると
-      // child の状態機械が `OPEN_UI requires state == Closed` で落ちる（実測）。
-      // 「開いている状態にする」が意図なので、既に開いていれば何もしない。
-      //
+      // 🔴 冪等（#619 レビュー・F2b/R2）: ライブコーディングでは**ブロックの再評価が常態**で、
+      // 楽譜に書いた `cb.ui()` は評価のたびに走る。冪等の規則（fast path + already-open の
+      // catch・staleness 対策）は `openPluginUiIdempotent` の1箇所に集約してある。
       // MCP の `open_plugin_ui` は冪等にしない（明示操作なので二重 open は loud に落とす）。
-      if (this.global.hasOpenPluginUi(name, index)) return this
-      await this.global.openPluginUi(name, index)
+      await this.global.openPluginUiIdempotent(name, index)
     } else {
       await this.global.closePluginUi(name, index)
     }

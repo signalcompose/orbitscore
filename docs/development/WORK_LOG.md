@@ -17,6 +17,51 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.359 fix(engine): respawn 後の stale セッション簿記を解消し冪等 open を1箇所に集約 (#619 R2) (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #617（PR #619 のレビュー Round 2 対応）
+**Status**: **2019 passed / 0 failed**（+5）・**gated E2E 6/6 green**・lint 0・変異検証 4 種すべて 1 対 1 で red
+
+#### Round 2 の指摘（Critical）は正しかった
+
+`seq.ui()` の冪等ガード（`hasOpenPluginUi`）が **daemon respawn 後に stale になる**。
+respawn はセッション簿記を意図的に残す設計（「次の open が上書きする」で回収）だったが、
+冪等ガードがその回収経路自体を塞ぎ、**恒久的なサイレント no-op** になっていた。
+
+#### 修正: 規則を 1 箇所（`openPluginUiIdempotent`）に集約し 3 層で防御
+
+1. **fast path**: 簿記にあれば no-op（daemon に行かない）
+2. **staleness 対策**: `setPluginUiClosedByRespawnListener`（`setPluginUiSafepointSaver` と同じ配線パターン）で、
+   respawn が UI を閉じた瞬間に Global がセッションを破棄
+3. **race の防御**: 判定後の隙間で child が「already open」を返したら成功扱い（権威は child の状態機械）。
+   **already-open 以外は throw する**テストも置き、何でも飲み込む方向に倒れないことを固定
+
+`//#pluginUi`（MCP 経由）と `seq.ui()` の両方が同じ実装へ委譲する（「同じ判定に規則を2つ持たない」）。
+
+#### R2 のもう1つの指摘: stub 越しのテストを実装検証に置き換え
+
+`hasOpenPluginUi` を stub していたテストを、**実セッション map + 実リスナ登録**を通す形に変更。
+player 側（イベント→リスナ呼び出し）と Global 側（リスナ→セッション破棄）の両方の継ぎ目にテストを配置。
+
+#### 変異検証（4 種・検出が 1 対 1）
+
+| 変異 | red になったテスト |
+|---|---|
+| Global のリスナ登録を外す（Critical の再導入） | respawn 破棄テストのみ |
+| player のリスナ呼び出しを外す | player 側テストのみ |
+| already-open の catch を外す | race 防御テスト 2 件のみ |
+| fast path を外す | no-op テスト 2 件のみ |
+
+#### 保留（意図的）
+
+- `getSize` の許容コード（`kNotInitialized` のみ）が Kontakt 1 機種の実測に基づく点は R2 Important のまま維持。
+  他プラグインが別コードを返した場合はコードを名指しした loud なエラーになり、その時に意図的に許容へ足す。
+- ついで修正: `audio-slicer.spec.ts` の import/order warning（既存・1 行）と、
+  分類テストへの `openPluginUiIdempotent` 登録 2 箇所。
+
+---
+
 ### 6.358 feat(dsl): 楽譜からプラグイン UI を開く `seq.ui()` + Kontakt の controller fallback (#617 / #603) (Aug 26, 2026)
 
 **Date**: 2026-08-26
