@@ -99,8 +99,8 @@ describe('seq.ui() (#617)', () => {
 
 describe('🔴 ui() は冪等（#619 レビュー・F2b）', () => {
   // ライブコーディングではブロックの**再評価が常態**。楽譜に書いた `cb.ui()` は評価の
-  // たびに走るので、既に開いているのに再 open すると child の状態機械が
-  // `OPEN_UI requires state == Closed` で落ちる（実機で実測）。
+  // たびに走るので、既に開いているのに再 open すると host 側の UiEventPump が
+  // `OPEN_UI requested while lifecycle is Open` で落ちる（実機で実測）。
   it('既に開いていれば seq.ui() は open を呼ばない', async () => {
     const { global, player, open, openTargets } = spyGlobal()
     openTargets.add('cb#0')
@@ -143,10 +143,16 @@ describe('🔴 ui() は冪等（#619 レビュー・F2b）', () => {
     expect(open).toHaveBeenCalledTimes(1)
   })
 
-  it('R2: もう一方の文言（requires state == Closed）も成功扱い', async () => {
+  it('R3: child 側 desync（closing-in-progress）も成功扱い', async () => {
+    // host は Closed と見て begin_open を通したが child の UiCloseStateMachine が
+    // まだ Closed でない場合、mailbox エラーの detail に CLOSING_IN_PROGRESS_DETAIL
+    // が載って届く（CommandMailboxError::CommandFailed の Display 形式を模す）。
     const { global, player, open } = spyGlobal()
     open.mockRejectedValueOnce(
-      new Error('OPEN_UI requires state == Closed even when the ring is drained'),
+      new Error(
+        "Plugin UI request for 'cb' index 0 failed: [PLUGIN_UI_COMMAND_ERROR] " +
+          'plugin state mailbox command 7 failed (result=2): closing-in-progress',
+      ),
     )
     await expect(makeSeq(global, player, 'cb').ui()).resolves.toBeDefined()
     expect(open).toHaveBeenCalledTimes(1)

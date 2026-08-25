@@ -53,6 +53,19 @@ player 側（イベント→リスナ呼び出し）と Global 側（リスナ�
 | already-open の catch を外す | race 防御テスト 2 件のみ |
 | fast path を外す | no-op テスト 2 件のみ |
 
+#### Round 3（fix-scoped・1レビュアー）: Critical 1件 → 修正済み
+
+catch の第2文言 `OPEN_UI requires state == Closed` は **Rust 単体テストの assert メッセージ**で、
+wire を流れる実エラーではなかった（レビュアーが rust/ を grep して発見・main が一次ソースで裏取り）。
+child の UiCloseStateMachine が実際に返すのは `CLOSING_IN_PROGRESS_DETAIL = "closing-in-progress"` で、
+`CommandMailboxError::CommandFailed` の Display 経由で TS に届く。**「捏造した mock 文言」
+アンチパターンに自分で該当**していた — テストが実装の想定文言をそのまま写していたため検出不能だった。
+
+- 修正: マッチ文字列を `closing-in-progress` に置換・コメントの「実機で実測」の主張も
+  実際に実測した host 側エラー（`OPEN_UI requested while lifecycle is`）に訂正
+- テストの mock 文言を実 Display 形式（`plugin state mailbox command 7 failed (result=2): ...`）に置換
+- 変異検証: 2 つのマッチをそれぞれ外し、対応テストのみが red（1 対 1）
+
 #### 保留（意図的）
 
 - `getSize` の許容コード（`kNotInitialized` のみ）が Kontakt 1 機種の実測に基づく点は R2 Important のまま維持。

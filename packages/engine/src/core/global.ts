@@ -896,9 +896,9 @@ export class Global {
    * `(receiverId, index)` の UI セッションが既に記録されているか（#619 レビュー・F2b）。
    *
    * DSL の `seq.ui()` を**冪等**にするために使う。楽譜に `cb.ui()` と書いてブロックを
-   * 再評価すると、child の状態機械が `OPEN_UI requires state == Closed` で落ちる
-   * （実測）。ライブコーディングでは**再評価が常態**なので、DSL 面では既に開いていれば
-   * no-op にする。
+   * 再評価すると、host 側の UiEventPump が `OPEN_UI requested while lifecycle is Open`
+   * で落ちる（実機で実測したのはこの host 側エラー）。ライブコーディングでは
+   * **再評価が常態**なので、DSL 面では既に開いていれば no-op にする。
    *
    * 🔴 MCP / REPL メタ行の `open_plugin_ui` は**冪等にしない**。あちらは「開けと命じた」
    * のに開いていない状態を検出したい明示操作で、二重 open を loud に落とすのが正しい。
@@ -934,10 +934,13 @@ export class Global {
       await this.openPluginUi(receiverId, index)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      // child 側の「already open」2系統（transport.rs:1270 / orbit-child-ui lib.rs:496）。
+      // 「already open」は2系統ある。host 側 UiEventPump のゲート（transport.rs
+      // `OPEN_UI requested while lifecycle is {:?}`）と、host は Closed と見たが child の
+      // UiCloseStateMachine がまだ Closed でない desync（orbit-child-ui
+      // CLOSING_IN_PROGRESS_DETAIL = "closing-in-progress" が mailbox エラー detail で届く）。
       if (
         message.includes('OPEN_UI requested while lifecycle is') ||
-        message.includes('OPEN_UI requires state == Closed')
+        message.includes('closing-in-progress')
       ) {
         return
       }
