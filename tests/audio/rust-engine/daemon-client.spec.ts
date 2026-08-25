@@ -635,6 +635,7 @@ describe('DaemonClient killChildGracefully の両方向 (#520)', () => {
   function fakeChild(initial: { exitCode?: number | null; signalCode?: string | null }): {
     child: ChildProcess
     killCalls: string[]
+    fireExit: () => void
   } {
     const killCalls: string[] = []
     const state = {
@@ -642,6 +643,10 @@ describe('DaemonClient killChildGracefully の両方向 (#520)', () => {
       exitCode: initial.exitCode ?? null,
       signalCode: initial.signalCode ?? null,
     }
+    // 'exit' ハンドラは**記録する**。no-op mock にすると「SIGTERM で素直に終了する」
+    // 経路（deadline 前に onExit が走り clearTimeout + resolve する）が一度も走らず、
+    // `child.once('exit', onExit)` を削る変異が生き残る（ラウンド2 の指摘）。
+    let exitHandlers: Array<() => void> = []
     const child = {
       get killed() {
         return state.killed
@@ -657,11 +662,25 @@ describe('DaemonClient killChildGracefully の両方向 (#520)', () => {
         state.killed = true
         return true
       }),
-      // SIGTERM を無視する child を模す: 'exit' は最後まで発火しない。
-      once: vi.fn(),
-      off: vi.fn(),
+      once: vi.fn((event: string, fn: () => void) => {
+        if (event === 'exit') exitHandlers.push(fn)
+        return child
+      }),
+      off: vi.fn((event: string, fn: () => void) => {
+        if (event === 'exit') exitHandlers = exitHandlers.filter((h) => h !== fn)
+        return child
+      }),
     }
-    return { child: child as unknown as ChildProcess, killCalls }
+    return {
+      child: child as unknown as ChildProcess,
+      killCalls,
+      // 実 child の 'exit' 相当。once の意味論に合わせて一度きり。
+      fireExit: () => {
+        const fired = exitHandlers
+        exitHandlers = []
+        for (const h of fired) h()
+      },
+    }
   }
 
   async function killChild(client: DaemonClient, child: ChildProcess): Promise<void> {
@@ -681,6 +700,27 @@ describe('DaemonClient killChildGracefully の両方向 (#520)', () => {
       // 順序まで固定する。SIGKILL だけ・SIGTERM だけ・逆順のいずれも red にする。
       expect(killCalls).toEqual(['SIGTERM', 'SIGKILL'])
       expect(warn.mock.calls.some((c) => String(c[0]).includes('escalated to SIGKILL'))).toBe(true)
+    } finally {
+      vi.useRealTimers()
+      warn.mockRestore()
+    }
+  })
+
+  it('SIGTERM で素直に終了する child は SIGKILL へ昇格しない', async () => {
+    // deadline 前に 'exit' が来る経路。ここが壊れると、行儀のよい child まで毎回
+    // 500ms 待たされた上で SIGKILL され、偽の昇格警告が出る。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      const { child, killCalls, fireExit } = fakeChild({ exitCode: null, signalCode: null })
+      const pending = killChild(new DaemonClient(), child)
+      await vi.advanceTimersByTimeAsync(KILL_DEADLINE_MS / 2)
+      fireExit()
+      // deadline を跨いでも、clearTimeout が効いていれば SIGKILL は増えない。
+      await vi.advanceTimersByTimeAsync(KILL_DEADLINE_MS)
+      await pending
+      expect(killCalls).toEqual(['SIGTERM'])
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('escalated to SIGKILL'))).toBe(false)
     } finally {
       vi.useRealTimers()
       warn.mockRestore()

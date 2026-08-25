@@ -21,8 +21,8 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **Date**: 2026-08-25
 **Issue**: #520
-**Status**: **1933 passed / 0 failed**（着手前 1929・**+4**）・lint 0・**全 suite 計 11 回 green**
-（`/simplify` 前 5 回・適用後 3 回・レビュー修正後 3 回）
+**Status**: **1934 passed / 0 failed**（着手前 1929・**+5**）・lint 0・`cargo clippy` 0・`cargo fmt` 0
+・Rust daemon lib 31 passed・**全 suite 計 14 回 green**
 
 土台バンドル（#520 → #567 → #614 → #607）の 1 件目。着手の理由は、
 セッション開始時の現状把握で `npm test` を 2 回回したところ **1 回目が fail した**こと。
@@ -165,6 +165,55 @@ Node の実挙動を再現する fake）。新しい流儀を発明していな�
 
 **採らなかった指摘**: pr-test-analyzer の Minor（「コミットが各ブランチを変異検証したと主張
 している」）は**誤読**。そのような記述は無い（`git log` で確認済み）。
+
+#### レビューラウンド2 — fix 差分の再点検でもう1つ穴が出た
+
+ラウンド1の修正差分だけを1名で再点検（問いは2つ:「この修正が導入する新しい故障モードは何か」
+「新コードはどの実行コンテキストで走るか」）。**Important 1件**:
+
+🔴 **fake の `once` を no-op mock にしたため、「SIGTERM で素直に終了する」経路が一度も
+走っていなかった。** `child.once('exit', onExit)` の登録を削る変異も、`onExit` の
+`clearTimeout` を削る変異も**全件 green のまま生き残る**。実害は「行儀のよい child まで
+毎回 500ms 待たされた上で SIGKILL され、偽の昇格警告が出る」。
+
+対応: fake に **exit ハンドラを記録させて任意に発火**できるようにし、deadline 前に
+'exit' を起こす4件目を追加した。
+
+| 変異 | 結果 |
+|---|---|
+| (h) `child.once('exit', onExit)` の登録を削除 | **red**（新テストのみ） |
+| (i) `onExit` の `clearTimeout` を削除 | **red**（新テストのみ） |
+
+Minor 2件（private メソッドへの cast は #532 の前例と厳密には別技法 / fake timer の
+理論的リーク）は記録のみ。**「#532 のパターンを踏襲」と書いたのは fake の形についてで、
+private メソッドへの到達手段は本ファイル固有**である点を明確化しておく。
+
+#### CI ブロッカー（本 PR とは無関係・owner 裁定で本 PR に同梱）
+
+`main` の Rust CI が **`clippy::result_large_err`** で赤く、**全 PR のマージがブロック**
+されていた。`session.rs:643` の `Result<(), tungstenite::Error>` の Err が 136 バイトで、
+CI の stable clippy **1.98**（手元は 1.97）で新たに発火する。**本 PR の Rust 変更は 0 件**
+なので main 由来と確定（`git diff main...HEAD --name-only` に `.rs` なし）。
+
+owner 裁定は **Err の Box 化**（`#[allow]` や閾値緩和ではなく）。プロジェクト規約
+「lint の閾値をコードに合わせて緩めない」に沿う。`Box<T>` は 8 バイトなので閾値 128 を
+確実に下回る。呼び出し元は `server.rs:77` の1箇所のみで、`?` の変換は
+`impl<T> From<T> for Box<T>` により**呼び出し元の変更なしで成立**した。
+
+#### 🔴 実行環境の飽和で1回 false red が出た（本 PR の欠陥ではない）
+
+作業中、全 suite の1回が `Test timed out in 5000ms` で落ちた。調査したところ
+**マシンの `coreaudiod` が 907% CPU（10コア中9）で暴走**しており、CPU idle は 2% だった。
+原因は **死んだプロセスの音声出力コンテキスト 65 個が `coreaudiod` に残留**していたこと
+（`sudo killall coreaudiod` で解消・load 613 → 56・メモリも 9GB 解放）。
+
+復旧後に測り直すと **43 テスト全体で 1121ms**（飽和時はうち1件だけで 5000ms 超過）、
+全 suite 3回連続 green。**環境要因と確定**した。
+
+🔴 **副産物**: 残留していた65個のうち1個を、**24日前から孤児化していた
+`orbit-audio-daemon`** が握っていた。**#607（`stop_engine` の child kill 不全）の実害は
+「プロセスが残る」ことではなく、`coreaudiod` に音声コンテキストを固定して CPU とメモリを
+食わせ続けること**である。土台バンドル4件目の優先度が上がった。
 
 #### 採らなかったもの: argv の アトミック書き込み
 
