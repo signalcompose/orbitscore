@@ -637,10 +637,13 @@ fn validate_render_score_params(params: &Value) -> Result<RenderScoreManifest, P
     Ok(manifest)
 }
 
+/// Err を `Box` に包むのは `clippy::result_large_err` 対応（CI の stable clippy 1.98 で発火）。
+/// `tungstenite::Error` は外部 crate の型で 136 バイトあり、こちらでは小さくできない。
+/// error 経路は cold path なので 1 回のアロケーションは実質無償。
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
-) -> Result<(), tokio_tungstenite::tungstenite::Error> {
+) -> Result<(), Box<tokio_tungstenite::tungstenite::Error>> {
     let (mut write, mut read) = ws.split();
     let (tx, mut rx) = mpsc::channel::<String>(EVENT_CHANNEL_CAPACITY);
 

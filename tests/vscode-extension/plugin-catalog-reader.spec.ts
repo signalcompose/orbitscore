@@ -5,7 +5,7 @@ import * as os from 'os'
 import * as path from 'path'
 import { PassThrough } from 'stream'
 
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeAll, vi } from 'vitest'
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>()
@@ -20,6 +20,7 @@ import {
   runPluginScan,
   terminateActivePluginScans,
 } from '../../packages/vscode-extension/src/plugin-catalog-reader'
+import { SPAWN_TEST_TIMEOUT_MS, warmUpExecutable } from '../helpers/spawn-fixture'
 
 function fakeNonClosingChild(pid: number): child_process.ChildProcess {
   const child = new EventEmitter() as child_process.ChildProcess
@@ -193,111 +194,130 @@ describe('resolvePluginScanBinaryPath', () => {
 })
 
 describe('runPluginScan', () => {
+  // 🔴 #520: 実 spawn するテストは macOS のセキュリティ評価に晒される（実測 p50 90ms・
+  // 裾は数秒〜24秒）。runPluginScan は内部にも小さい timeout を持つので、評価コストを
+  // その deadline の外へ出すために事前に空 spawn しておく。
+  // 詳細は tests/helpers/spawn-fixture.ts。
+  const hangFixture = path.resolve(__dirname, '../fixtures/plugin-catalog/scan-hang.sh')
+
+  beforeAll(async () => {
+    await warmUpExecutable(hangFixture)
+  }, SPAWN_TEST_TIMEOUT_MS)
+
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('enables child probes only through the explicit rescan flag and returns diagnostics', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-plugin-scan-explicit-'))
-    const binPath = path.join(tmpDir, 'orbit-plugin-scan')
-    fs.writeFileSync(
-      binPath,
-      `#!/bin/sh
+  it(
+    'enables child probes only through the explicit rescan flag and returns diagnostics',
+    async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-plugin-scan-explicit-'))
+      const binPath = path.join(tmpDir, 'orbit-plugin-scan')
+      fs.writeFileSync(
+        binPath,
+        `#!/bin/sh
 if [ "$1" != "--probe-artifacts" ]; then
   echo "missing explicit probe flag: $*" >&2
   exit 2
 fi
 echo '{"count":5,"artifactCount":5,"cachePath":"/tmp/catalog.json","skipped":[],"failures":[{"path":"/tmp/Broken.vst3","code":"timeout","message":"too slow"}],"summary":{"success":4,"pending":0,"failure":1,"failureReasons":{"timeout":1},"durationMs":{"p50":5,"p95":20000,"max":20000},"timeouts":1,"crashes":0,"factoryVersions":{"factory3":4},"cacheHits":3,"probeAttempts":2}}'
 `,
-      { mode: 0o755 },
-    )
+        { mode: 0o755 },
+      )
 
-    const result = await runPluginScan(binPath)
-    expect(result).toEqual({
-      ok: true,
-      count: 5,
-      artifactCount: 5,
-      cachePath: '/tmp/catalog.json',
-      skipped: [],
-      failures: [{ path: '/tmp/Broken.vst3', code: 'timeout', message: 'too slow' }],
-      summary: {
-        success: 4,
-        pending: 0,
-        failure: 1,
-        failureReasons: { timeout: 1 },
-        durationMs: { p50: 5, p95: 20_000, max: 20_000 },
-        timeouts: 1,
-        crashes: 0,
-        factoryVersions: { factory3: 4 },
-        cacheHits: 3,
-        probeAttempts: 2,
-      },
-    })
-  })
+      await warmUpExecutable(binPath)
+      const result = await runPluginScan(binPath)
+      expect(result).toEqual({
+        ok: true,
+        count: 5,
+        artifactCount: 5,
+        cachePath: '/tmp/catalog.json',
+        skipped: [],
+        failures: [{ path: '/tmp/Broken.vst3', code: 'timeout', message: 'too slow' }],
+        summary: {
+          success: 4,
+          pending: 0,
+          failure: 1,
+          failureReasons: { timeout: 1 },
+          durationMs: { p50: 5, p95: 20_000, max: 20_000 },
+          timeouts: 1,
+          crashes: 0,
+          factoryVersions: { factory3: 4 },
+          cacheHits: 3,
+          probeAttempts: 2,
+        },
+      })
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
-  it('kills the scanner process group on timeout so descendants cannot become orphans', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-plugin-scan-group-timeout-'))
-    const pidFile = path.join(tmpDir, 'descendant.pid')
-    const fixture = path.resolve(__dirname, '../fixtures/plugin-catalog/scan-hang.sh')
-    const originalPidFile = process.env.ORBIT_SCAN_TEST_PID_FILE
-    process.env.ORBIT_SCAN_TEST_PID_FILE = pidFile
-    let descendantPid = 0
-    try {
-      const scan = runPluginScan(fixture, 500)
-      const completion = await Promise.race([
-        scan.then((result) => ({ kind: 'completed' as const, result })),
-        new Promise<{ kind: 'blocked' }>((resolve) =>
-          setTimeout(() => resolve({ kind: 'blocked' }), 1_500),
-        ),
-      ])
-      descendantPid = Number(fs.readFileSync(pidFile, 'utf8').trim())
-      if (completion.kind === 'blocked') {
-        try {
-          process.kill(descendantPid, 'SIGKILL')
-        } catch {
-          // The process may have exited in the race after the watchdog fired.
-        }
-        await scan
-      }
-      expect(
-        completion.kind,
-        `scanner close remained blocked because descendant pid ${descendantPid} kept its pipes open`,
-      ).toBe('completed')
-      if (completion.kind !== 'completed') return
-      const result = completion.result
-      expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toContain('timed out')
-
-      const deadline = Date.now() + 2_000
-      let alive = true
-      while (Date.now() < deadline) {
-        try {
-          process.kill(descendantPid, 0)
-          await new Promise((resolve) => setTimeout(resolve, 20))
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
-            alive = false
-            break
+  it(
+    'kills the scanner process group on timeout so descendants cannot become orphans',
+    async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-plugin-scan-group-timeout-'))
+      const pidFile = path.join(tmpDir, 'descendant.pid')
+      const fixture = hangFixture
+      const originalPidFile = process.env.ORBIT_SCAN_TEST_PID_FILE
+      process.env.ORBIT_SCAN_TEST_PID_FILE = pidFile
+      let descendantPid = 0
+      try {
+        const scan = runPluginScan(fixture, 500)
+        const completion = await Promise.race([
+          scan.then((result) => ({ kind: 'completed' as const, result })),
+          new Promise<{ kind: 'blocked' }>((resolve) =>
+            setTimeout(() => resolve({ kind: 'blocked' }), 1_500),
+          ),
+        ])
+        descendantPid = Number(fs.readFileSync(pidFile, 'utf8').trim())
+        if (completion.kind === 'blocked') {
+          try {
+            process.kill(descendantPid, 'SIGKILL')
+          } catch {
+            // The process may have exited in the race after the watchdog fired.
           }
-          throw error
+          await scan
+        }
+        expect(
+          completion.kind,
+          `scanner close remained blocked because descendant pid ${descendantPid} kept its pipes open`,
+        ).toBe('completed')
+        if (completion.kind !== 'completed') return
+        const result = completion.result
+        expect(result.ok).toBe(false)
+        if (!result.ok) expect(result.error).toContain('timed out')
+
+        const deadline = Date.now() + 2_000
+        let alive = true
+        while (Date.now() < deadline) {
+          try {
+            process.kill(descendantPid, 0)
+            await new Promise((resolve) => setTimeout(resolve, 20))
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+              alive = false
+              break
+            }
+            throw error
+          }
+        }
+        expect(
+          alive,
+          `scanner timeout killed only the parent; descendant pid ${descendantPid} survived`,
+        ).toBe(false)
+      } finally {
+        if (originalPidFile === undefined) delete process.env.ORBIT_SCAN_TEST_PID_FILE
+        else process.env.ORBIT_SCAN_TEST_PID_FILE = originalPidFile
+        if (descendantPid !== 0) {
+          try {
+            process.kill(descendantPid, 'SIGKILL')
+          } catch {
+            // Expected after the process-group kill; cleanup is only mutation-test hygiene.
+          }
         }
       }
-      expect(
-        alive,
-        `scanner timeout killed only the parent; descendant pid ${descendantPid} survived`,
-      ).toBe(false)
-    } finally {
-      if (originalPidFile === undefined) delete process.env.ORBIT_SCAN_TEST_PID_FILE
-      else process.env.ORBIT_SCAN_TEST_PID_FILE = originalPidFile
-      if (descendantPid !== 0) {
-        try {
-          process.kill(descendantPid, 'SIGKILL')
-        } catch {
-          // Expected after the process-group kill; cleanup is only mutation-test hygiene.
-        }
-      }
-    }
-  })
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
   it('resolves after PROCESS_KILL_WAIT_TIMEOUT when group SIGKILL fails and close never fires', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-plugin-scan-kill-wait-'))
@@ -334,55 +354,59 @@ echo '{"count":5,"artifactCount":5,"cachePath":"/tmp/catalog.json","skipped":[],
     child.emit('close', null, 'SIGKILL')
   })
 
-  it('terminateActivePluginScans kills a running detached scanner process group', async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-plugin-scan-deactivate-'))
-    const pidFile = path.join(tmpDir, 'descendant.pid')
-    const fixture = path.resolve(__dirname, '../fixtures/plugin-catalog/scan-hang.sh')
-    const originalPidFile = process.env.ORBIT_SCAN_TEST_PID_FILE
-    process.env.ORBIT_SCAN_TEST_PID_FILE = pidFile
-    let descendantPid = 0
-    try {
-      const scan = runPluginScan(fixture, 5_000)
-      const pidDeadline = Date.now() + 1_000
-      while (!fs.existsSync(pidFile) && Date.now() < pidDeadline) {
-        await new Promise((resolve) => setTimeout(resolve, 10))
-      }
-      descendantPid = Number(fs.readFileSync(pidFile, 'utf8').trim())
+  it(
+    'terminateActivePluginScans kills a running detached scanner process group',
+    async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-plugin-scan-deactivate-'))
+      const pidFile = path.join(tmpDir, 'descendant.pid')
+      const fixture = hangFixture
+      const originalPidFile = process.env.ORBIT_SCAN_TEST_PID_FILE
+      process.env.ORBIT_SCAN_TEST_PID_FILE = pidFile
+      let descendantPid = 0
+      try {
+        const scan = runPluginScan(fixture, 5_000)
+        const pidDeadline = Date.now() + 1_000
+        while (!fs.existsSync(pidFile) && Date.now() < pidDeadline) {
+          await new Promise((resolve) => setTimeout(resolve, 10))
+        }
+        descendantPid = Number(fs.readFileSync(pidFile, 'utf8').trim())
 
-      terminateActivePluginScans()
-      const completion = await Promise.race([
-        scan.then((result) => ({ kind: 'completed' as const, result })),
-        new Promise<{ kind: 'blocked' }>((resolve) =>
-          setTimeout(() => resolve({ kind: 'blocked' }), 1_000),
-        ),
-      ])
-      expect(completion.kind, 'deactivation did not stop the active scanner').toBe('completed')
+        terminateActivePluginScans()
+        const completion = await Promise.race([
+          scan.then((result) => ({ kind: 'completed' as const, result })),
+          new Promise<{ kind: 'blocked' }>((resolve) =>
+            setTimeout(() => resolve({ kind: 'blocked' }), 1_000),
+          ),
+        ])
+        expect(completion.kind, 'deactivation did not stop the active scanner').toBe('completed')
 
-      const exitDeadline = Date.now() + 2_000
-      let descendantAlive = true
-      while (Date.now() < exitDeadline) {
-        try {
-          process.kill(descendantPid, 0)
-          await new Promise((resolve) => setTimeout(resolve, 20))
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
-            descendantAlive = false
-            break
+        const exitDeadline = Date.now() + 2_000
+        let descendantAlive = true
+        while (Date.now() < exitDeadline) {
+          try {
+            process.kill(descendantPid, 0)
+            await new Promise((resolve) => setTimeout(resolve, 20))
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+              descendantAlive = false
+              break
+            }
+            throw error
           }
-          throw error
+        }
+        expect(descendantAlive, `descendant pid ${descendantPid} survived deactivation`).toBe(false)
+      } finally {
+        if (originalPidFile === undefined) delete process.env.ORBIT_SCAN_TEST_PID_FILE
+        else process.env.ORBIT_SCAN_TEST_PID_FILE = originalPidFile
+        if (descendantPid !== 0) {
+          try {
+            process.kill(descendantPid, 'SIGKILL')
+          } catch {
+            // Expected after the process-group kill; cleanup is only failure-path hygiene.
+          }
         }
       }
-      expect(descendantAlive, `descendant pid ${descendantPid} survived deactivation`).toBe(false)
-    } finally {
-      if (originalPidFile === undefined) delete process.env.ORBIT_SCAN_TEST_PID_FILE
-      else process.env.ORBIT_SCAN_TEST_PID_FILE = originalPidFile
-      if (descendantPid !== 0) {
-        try {
-          process.kill(descendantPid, 'SIGKILL')
-        } catch {
-          // Expected after the process-group kill; cleanup is only failure-path hygiene.
-        }
-      }
-    }
-  })
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 })

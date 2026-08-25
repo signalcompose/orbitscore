@@ -24,7 +24,7 @@ pub mod offline;
 pub mod parent_watch;
 pub mod transport;
 
-pub use child::SandboxChildGuard;
+pub use child::{warm_up_executable, SandboxChildGuard};
 pub use event_backing_ring::{EventBackingRing, EVENT_BACKING_CAPACITY};
 pub use event_spill_fifo::{EventSpillFifo, EVENT_SPILL_CAPACITY};
 pub use events::{

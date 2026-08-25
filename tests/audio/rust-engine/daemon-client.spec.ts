@@ -6,12 +6,14 @@
  * DaemonStartupError）、spawn 成功後の統合的健全性は gated real-daemon 系の対象。
  */
 
+import type { ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { createWarmExecutable, SPAWN_TEST_TIMEOUT_MS } from '../../helpers/spawn-fixture'
 import {
   DaemonClient,
   resolveDaemonBinaryPath,
@@ -511,81 +513,275 @@ describe('DaemonClient with mock server', () => {
 describe('DaemonClient real spawn error handling (C3)', () => {
   // 実 daemon バイナリを spawn する（mock 不使用）。'error' event 経路
   // （spawn 失敗 → DaemonStartupError 変換）を実際の子プロセス spawn で検証する。
+  //
+  // 🔴 #520: 実行ファイルは beforeAll で 1 回だけ作る（詳細は tests/helpers/spawn-fixture.ts）。
   let client: DaemonClient
   let tmpDir: string
   let badShebangBin: string
 
-  beforeEach(() => {
-    client = new DaemonClient()
+  beforeAll(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-spawn-error-'))
-    badShebangBin = path.join(tmpDir, 'orbit-audio-daemon')
     // exec bit はあるが shebang の interpreter が存在しないファイル。
     // execve が非同期の spawn 'error' (ENOENT) を発火する（Node の async-'error'
     // whitelist 内）。非実行ファイル (0o644) は resolveDaemonBinaryPath の
     // viability filter（isExecutableFile）で候補から外れてこの経路に到達しない
     // ため使えない。root 実行環境でもパーミッション bit に依存せず成立する。
-    fs.writeFileSync(
-      badShebangBin,
+    badShebangBin = await createWarmExecutable(
+      tmpDir,
+      'orbit-audio-daemon',
       `#!${path.join(tmpDir, 'no-such-interpreter')}\necho unreachable\n`,
-      { mode: 0o755 },
     )
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  afterAll(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  beforeEach(() => {
+    client = new DaemonClient()
   })
 
   afterEach(async () => {
     await client.quit()
-    fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
-  it('spawn が \'error\' event で失敗するバイナリは "daemon spawn failed" で reject する', async () => {
-    // exit/timeout 経路との判別のため文言まで固定して assert する。
-    await expect(client.start({ daemonPath: badShebangBin })).rejects.toThrow(/daemon spawn failed/)
-    expect(client.isRunning()).toBe(false)
-  })
+  it(
+    'spawn が \'error\' event で失敗するバイナリは "daemon spawn failed" で reject する',
+    async () => {
+      // exit/timeout 経路との判別のため文言まで固定して assert する。
+      await expect(client.start({ daemonPath: badShebangBin })).rejects.toThrow(
+        /daemon spawn failed/,
+      )
+      expect(client.isRunning()).toBe(false)
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 })
 
 describe('DaemonClient audioDevice spawn args (#484 D1)', () => {
   // 実 daemon バイナリの代わりに argv をファイルへ書き出すだけの shell script を spawn し、
   // `--audio-device <name>` が実際に子プロセスへ渡ることを検証する（daemon 側の解決・縮退
   // ロジック自体は Rust unit test で検証済み・ここは TS→spawn args の配線のみが対象）。
+  //
+  // 🔴 #520: 検証対象は「argv に何が渡るか」だけで、子プロセスが何 ms で起動・exit するかは
+  // 検証対象ではない。以前は `startupTimeoutMs: 500` を明示していたため高負荷時に timeout が
+  // exit を追い越して assert が落ちていた。いまは明示せず production の
+  // DEFAULT_STARTUP_TIMEOUT_MS に委ねる。**ここに小さい startupTimeoutMs を書き足すと戻る。**
+  //
+  // 🔴 recorder script は `beforeAll` で 1 回だけ作って warm up する。per-test で作ると
+  // macOS のセキュリティ評価を毎回払う（詳細は tests/helpers/spawn-fixture.ts）。
   let client: DaemonClient
   let tmpDir: string
   let recorderBin: string
   let argvFile: string
 
-  beforeEach(() => {
-    client = new DaemonClient()
+  beforeAll(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-audio-device-'))
-    recorderBin = path.join(tmpDir, 'orbit-audio-daemon')
     argvFile = path.join(tmpDir, 'argv.txt')
-    fs.writeFileSync(
-      recorderBin,
+    recorderBin = await createWarmExecutable(
+      tmpDir,
+      'orbit-audio-daemon',
       `#!/bin/sh
 printf '%s\n' "$@" > "${argvFile}"
 exit 1
 `,
-      { mode: 0o755 },
     )
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  afterAll(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  beforeEach(() => {
+    client = new DaemonClient()
+    // warm up の空 spawn が書いた argv を持ち越さない。各 it は自分の spawn の結果だけを見る。
+    fs.rmSync(argvFile, { force: true })
   })
 
   afterEach(async () => {
     await client.quit()
-    fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
-  it('audioDevice 指定時は --audio-device <name> を argv に渡す', async () => {
-    await expect(
-      client.start({ daemonPath: recorderBin, audioDevice: 'USB Audio', startupTimeoutMs: 500 }),
-    ).rejects.toThrow(/daemon exited before ready/)
-    const argv = fs.readFileSync(argvFile, 'utf-8').trim().split('\n')
-    expect(argv).toEqual(['--audio-device', 'USB Audio'])
+  it(
+    'audioDevice 指定時は --audio-device <name> を argv に渡す',
+    async () => {
+      await expect(
+        client.start({ daemonPath: recorderBin, audioDevice: 'USB Audio' }),
+      ).rejects.toThrow(/daemon exited before ready/)
+      await vi.waitFor(() => expect(fs.existsSync(argvFile)).toBe(true))
+      const argv = fs.readFileSync(argvFile, 'utf-8').trim().split('\n')
+      expect(argv).toEqual(['--audio-device', 'USB Audio'])
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
+
+  it(
+    'audioDevice 未指定時は追加 argv を渡さない',
+    async () => {
+      await expect(client.start({ daemonPath: recorderBin })).rejects.toThrow(
+        /daemon exited before ready/,
+      )
+      await vi.waitFor(() => expect(fs.existsSync(argvFile)).toBe(true))
+      const argv = fs.readFileSync(argvFile, 'utf-8')
+      expect(argv.trim()).toBe('')
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
+
+  it(
+    '自然終了した child の後始末は SIGKILL 昇格を報告しない (#520)',
+    async () => {
+      // start 失敗時の cleanup は killChildGracefully を通る。recorder script は自力で
+      // exit 1 するので、自然終了を検知せず SIGTERM を送る実装だと 'exit' が再発火せず
+      // deadline 満了まで待たされ、偽の昇格診断が出る。
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        await expect(client.start({ daemonPath: recorderBin })).rejects.toThrow(
+          /daemon exited before ready/,
+        )
+        // 🔴 assert は必ず mockRestore() より前に置く。mockRestore() は mock.calls も
+        // 消すため、復元後に読むとガードを外す変異が生き残る（実際に一度生き残った）。
+        expect(warn.mock.calls.some((c) => String(c[0]).includes('escalated to SIGKILL'))).toBe(
+          false,
+        )
+      } finally {
+        warn.mockRestore()
+      }
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
+})
+
+describe('DaemonClient killChildGracefully の両方向 (#520)', () => {
+  // 上の #484 D1 ブロックは「実際の start 失敗 cleanup がガードに到達すること」を
+  // 配線として押さえるが、**ガードが広すぎても同じ観測になる**（早期リターンしすぎても
+  // 「警告が出ない」は成立する）。ここでガード本体の 2 方向を決定論的に固定する。
+  //
+  // 判定は「警告が出た / 出ない」ではなく **kill シーケンスの順序**で行う。
+  // fake は #532（extension.ts stopEngine）で実証済みのパターンを踏襲し、
+  // 「kill() は killed を即 true にするが exitCode/signalCode は動かさない」という
+  // Node の実挙動を再現する。
+  const KILL_DEADLINE_MS = 500 // daemon-client.ts の DEFAULT_KILL_TIMEOUT_MS（非公開）
+
+  function fakeChild(initial: { exitCode?: number | null; signalCode?: string | null }): {
+    child: ChildProcess
+    killCalls: string[]
+    fireExit: () => void
+  } {
+    const killCalls: string[] = []
+    const state = {
+      killed: false,
+      exitCode: initial.exitCode ?? null,
+      signalCode: initial.signalCode ?? null,
+    }
+    // 'exit' ハンドラは**記録する**。no-op mock にすると「SIGTERM で素直に終了する」
+    // 経路（deadline 前に onExit が走り clearTimeout + resolve する）が一度も走らず、
+    // `child.once('exit', onExit)` を削る変異が生き残る（ラウンド2 の指摘）。
+    let exitHandlers: Array<() => void> = []
+    const child = {
+      get killed() {
+        return state.killed
+      },
+      get exitCode() {
+        return state.exitCode
+      },
+      get signalCode() {
+        return state.signalCode
+      },
+      kill: vi.fn((signal?: string) => {
+        killCalls.push(String(signal))
+        state.killed = true
+        return true
+      }),
+      once: vi.fn((event: string, fn: () => void) => {
+        if (event === 'exit') exitHandlers.push(fn)
+        return child
+      }),
+      off: vi.fn((event: string, fn: () => void) => {
+        if (event === 'exit') exitHandlers = exitHandlers.filter((h) => h !== fn)
+        return child
+      }),
+    }
+    return {
+      child: child as unknown as ChildProcess,
+      killCalls,
+      // 実 child の 'exit' 相当。once の意味論に合わせて一度きり。
+      fireExit: () => {
+        const fired = exitHandlers
+        exitHandlers = []
+        for (const h of fired) h()
+      },
+    }
+  }
+
+  async function killChild(client: DaemonClient, child: ChildProcess): Promise<void> {
+    await (
+      client as unknown as { killChildGracefully(c: ChildProcess): Promise<void> }
+    ).killChildGracefully(child)
+  }
+
+  it('生存している child は SIGTERM → SIGKILL の順に昇格し、昇格を報告する', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      const { child, killCalls } = fakeChild({ exitCode: null, signalCode: null })
+      const pending = killChild(new DaemonClient(), child)
+      await vi.advanceTimersByTimeAsync(KILL_DEADLINE_MS + 1)
+      await pending
+      // 順序まで固定する。SIGKILL だけ・SIGTERM だけ・逆順のいずれも red にする。
+      expect(killCalls).toEqual(['SIGTERM', 'SIGKILL'])
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('escalated to SIGKILL'))).toBe(true)
+    } finally {
+      vi.useRealTimers()
+      warn.mockRestore()
+    }
   })
 
-  it('audioDevice 未指定時は追加 argv を渡さない', async () => {
-    await expect(client.start({ daemonPath: recorderBin, startupTimeoutMs: 500 })).rejects.toThrow(
-      /daemon exited before ready/,
-    )
-    const argv = fs.readFileSync(argvFile, 'utf-8')
-    expect(argv.trim()).toBe('')
+  it('SIGTERM で素直に終了する child は SIGKILL へ昇格しない', async () => {
+    // deadline 前に 'exit' が来る経路。ここが壊れると、行儀のよい child まで毎回
+    // 500ms 待たされた上で SIGKILL され、偽の昇格警告が出る。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      const { child, killCalls, fireExit } = fakeChild({ exitCode: null, signalCode: null })
+      const pending = killChild(new DaemonClient(), child)
+      await vi.advanceTimersByTimeAsync(KILL_DEADLINE_MS / 2)
+      fireExit()
+      // deadline を跨いでも、clearTimeout が効いていれば SIGKILL は増えない。
+      await vi.advanceTimersByTimeAsync(KILL_DEADLINE_MS)
+      await pending
+      expect(killCalls).toEqual(['SIGTERM'])
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('escalated to SIGKILL'))).toBe(false)
+    } finally {
+      vi.useRealTimers()
+      warn.mockRestore()
+    }
+  })
+
+  it('exitCode が立っている child にはシグナルを一切送らない', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { child, killCalls } = fakeChild({ exitCode: 1 })
+      await killChild(new DaemonClient(), child)
+      expect(killCalls).toEqual([])
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('escalated to SIGKILL'))).toBe(false)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('signalCode が立っている child にもシグナルを一切送らない', async () => {
+    // exitCode 側だけを見るガードに縮めると、この 1 件だけが red になる
+    // （シグナルで死んだ child は exitCode が null のまま）。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { child, killCalls } = fakeChild({ exitCode: null, signalCode: 'SIGTERM' })
+      await killChild(new DaemonClient(), child)
+      expect(killCalls).toEqual([])
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('escalated to SIGKILL'))).toBe(false)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
 

@@ -17,6 +17,450 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.357 fix(engine): #484 D1 argv テストのフレーク解消と、偽の SIGKILL 昇格報告の停止 (#520) (Aug 25, 2026)
+
+**Date**: 2026-08-25
+**Issue**: #520
+**Status**: **1962 passed / 0 failed**（着手前 1929・**+33**）・全 suite 3回連続 green・lint 0・`cargo clippy` 0・`cargo fmt` 0
+・Rust daemon lib 31 passed・**全 suite 計 14 回 green**
+
+土台バンドル（#520 → #567 → #614 → #607）の 1 件目。着手の理由は、
+セッション開始時の現状把握で `npm test` を 2 回回したところ **1 回目が fail した**こと。
+落ちたのは #520 そのもので、**「全緑」という判定の土台が実際に揺れていた**。
+
+#### 決定論的な再現（負荷待ちをやめる）
+
+#520 は「約3回に1回」「高負荷時のみ」と記録されており、そのままでは fail-before を
+示せない。そこで recorder script に `sleep 1` を挿し、**負荷で子プロセスの exit が遅れる
+状況を機序として直接再現**した:
+
+```
+expected [Function] to throw error matching /daemon exited before ready/
+  but got 'daemon ready line timeout after 500ms'
+```
+
+セッション開始時に観測した失敗と同一の文言。以後の検証はすべてこの変異で行った。
+
+#### 原因1: 検証対象でない deadline にテストが依存していた
+
+このブロックの検証対象は「argv に何が渡るか」であって「子プロセスが 500ms 以内に
+exit すること」ではない。しかし `startupTimeoutMs: 500` が固定で埋め込まれており、
+負荷時は **timeout が exit を追い越して別の reject 理由**（`ready line timeout`）になり、
+文言まで固定した assert が落ちていた。
+
+deadline は exit 観測で即座に抜けるので、**広くても正常時の所要時間は変わらない**。
+
+当初は定数 `SPAWN_ARGV_STARTUP_TIMEOUT_MS = 10_000` に括り出したが、`/simplify` の
+altitude レビューで **production 側に `DEFAULT_STARTUP_TIMEOUT_MS = 10_000` が既にあり、
+かつ suite 全体でこのブロックだけが `startupTimeoutMs` を明示していた**ことが判明したため、
+**上書き自体をやめて production 既定に委ねる**形に変えた。定数の複製は将来 production 側を
+再調整したときに黙って乖離する。「小さい `startupTimeoutMs` を書き足すと戻る」理由は
+コメントに残した（#491 と同じ方針）。
+
+#### 原因2: 自然終了した child に SIGTERM を送り、偽の昇格を報告していた
+
+#520 本文が症状として引用していた
+`DaemonClient child did not exit within 500ms of SIGTERM; escalated to SIGKILL` は、
+**私が触っていない C3 テストでも出ていた**ため別系統として追った。
+
+`killChildGracefully` の早期リターンが `child.killed` のみを見ていた。これは
+**「signal を送ったか」しか表さず、終了の有無を含まない**。自力で exit 済みの child に
+SIGTERM を送っても `'exit'` は二度と発火しないので、**deadline 満了まで待たされた上で
+「SIGKILL へ昇格した」と偽の診断を出す**。start 失敗時の cleanup がこの経路を通るため、
+当該テストは実行のたびに 500ms を捨て、かつ診断を誤らせていた。
+
+終了判定を `exitCode !== null || signalCode !== null` に変更。
+偽の警告は **3 件 → 0 件**、テスト時間も 840ms → 330ms 台へ。
+
+#### 🔴 変異検証 — 最初のテストは変異を生き残った
+
+| 変異 | 結果 |
+|---|---|
+| (a) 新ガード（自然終了の検知）を削除 | 🔴 **最初は生き残った** → テスト修正後 **red** |
+| (b) argv から `--audio-device` を落とす | **red**（既存 assert の検出力は維持されている） |
+| (c1) 起動遅延のみ（production 既定に委ねた状態） | **green** — 負荷に耐えることの確認 |
+| (c2) さらに `startupTimeoutMs: 500` を書き戻す + 起動遅延 | **red**（3 件とも） |
+
+(a) が生き残った原因は、`vi.spyOn` の記録を **`mockRestore()` の後**に読んでいたこと。
+`mockRestore()` は `mock.calls` ごとリセットするため、**ガードを外しても記録が空のまま
+assert が通っていた**。復元より前に記録を取り出す形へ修正して red を確認した。
+[[test-name-must-match-the-path-it-drives]] と同型で、名前と経路は正しいのに
+**観測点だけがずれていた**ケース。
+
+#### `/simplify` で採った指摘
+
+| 角度 | 指摘 | 対応 |
+|---|---|---|
+| altitude | `SPAWN_ARGV_STARTUP_TIMEOUT_MS` は production 既定の複製。suite でここだけが上書きしていた | **上書きを削除**し既定に委ねた |
+| reuse / simplification | 兄弟 spec（`rust-engine-player.spec.ts:221`）に `warn.mock.calls.some((c) => String(c[0]).includes(...))` の既存イディオムがある | そちらへ寄せ `messages` アキュムレータを削除 |
+| simplification | 新規テストが argv テスト2本の**間**に挟まって対を分断していた | 2本の後ろへ移動 |
+
+**採らなかった指摘**:
+
+- **2つの early-return を1行に統合**（`child.killed || exitCode !== null || ...`）— `killed` は
+  「signal を送ったか」、`exitCode/signalCode` は「終了したか」で**意味が違う**。統合すると
+  「`killed` では足りない理由」を説明するコメントが宙に浮く
+- **`isChildAlive()` を共有ユーティリティへ切り出す** — `extension.ts` に同型の述語が
+  あるが**別パッケージ**で、共有 child-process ユーティリティが存在しない。1件のために
+  パッケージ間の依存を作るのは割に合わない。代わりに **#532 への相互参照をコメントに追加**した
+
+**PR に観察として残したもの**（issue は立てない）: `extension.ts` の `stopEngine` は
+自然終了済みプロセスにも無意味な SIGTERM を送る。ただし当該経路は deadline 待ちを
+持たないので**偽の診断は出ず、実害は「死んだ PID への1シグナル」に留まる**ため、
+[[issue-only-for-real-impact]]（放置したら誰がどう困るかを1文で書けないなら立てない）に従った。
+
+#### レビューラウンド1 — 2名が独立に同じ穴を指摘した
+
+`/code:pr-review-team`（4名）と Fable 監査を並行起動。結果:
+
+| レビュアー | Critical | Important |
+|---|---|---|
+| code-reviewer | 0 | 0 |
+| comment-analyzer | 0 | 0 |
+| Fable 監査 | 0 | 0 |
+| pr-test-analyzer | **1** | 1 |
+| silent-failure-hunter | 0 | **1**（pr-test-analyzer と同一） |
+
+🔴 **指摘の実体**: 新規テストは「自然終了した child で**警告が出ない**こと」しか示していない。
+これは **ガードが広すぎても同じ観測になる** — `if (true) return` に変えても、
+昇格経路を丸ごと削っても、「警告が出ない」は成立する。
+つまり **#520 の元バグが守っていた SIGKILL 昇格そのものには、テストが1件も無かった**。
+
+孤児プロセスの前科（#607 / #448・daemon 19本残留）を持つコードベースでこれは通せない。
+
+#### 対応: ガードの両方向を決定論的に固定する
+
+**先にポリシーを決めた**（指摘単位のパッチにしない）:
+
+> ガードには2方向（自然終了 → 早期リターン / 生存 → SIGTERM→SIGKILL 昇格）がある。
+> 両方をユニットテストで押さえ、**判定はログの有無ではなく kill シーケンスの順序**で行う。
+> 既存の統合テストは「実経路がガードに到達する」配線検証として残す。
+
+実装は **#532（`extension.ts` の `stopEngine`）で実証済みの fake process パターンを踏襲**した
+（`kill()` は `killed` を即 true にするが `exitCode`/`signalCode` は動かさない、という
+Node の実挙動を再現する fake）。新しい流儀を発明していない。
+
+🔴 **実 child で SIGTERM を無視させる案は破棄した** — `trap '' TERM` も
+`process.on('SIGTERM', () => {})` も macOS 実機で**無視できず死亡した**（実測）。
+机上で「効くはず」と書かずに測ったのが正解だった。
+
+追加した3件（+ fake timers で 500ms の deadline を即座に進める）:
+
+| テスト | 押さえるもの |
+|---|---|
+| 生存 child は SIGTERM → SIGKILL の順に昇格し報告する | 昇格経路の**存在**と**順序** |
+| `exitCode` が立つ child にはシグナルを送らない | 第1項 |
+| `signalCode` が立つ child にもシグナルを送らない | 第2項（独立） |
+
+#### 🔴 変異検証（追加分・検出が直交した）
+
+| 変異 | red になったテスト |
+|---|---|
+| (d) ガードを広げすぎる（`if (true) return`） | **昇格テストのみ** |
+| (e) `signalCode` の項を落とす | **signalCode テストのみ** |
+| (f) ガードを丸ごと削除 | **「送らない」2件のみ** |
+| (g) 昇格先を SIGKILL でなく SIGTERM にする | **昇格テストのみ** |
+
+4変異が**それぞれ対応する1件だけ**を落とした。どのテストが何を守っているかが1対1で対応する。
+
+**採らなかった指摘**: pr-test-analyzer の Minor（「コミットが各ブランチを変異検証したと主張
+している」）は**誤読**。そのような記述は無い（`git log` で確認済み）。
+
+#### レビューラウンド2 — fix 差分の再点検でもう1つ穴が出た
+
+ラウンド1の修正差分だけを1名で再点検（問いは2つ:「この修正が導入する新しい故障モードは何か」
+「新コードはどの実行コンテキストで走るか」）。**Important 1件**:
+
+🔴 **fake の `once` を no-op mock にしたため、「SIGTERM で素直に終了する」経路が一度も
+走っていなかった。** `child.once('exit', onExit)` の登録を削る変異も、`onExit` の
+`clearTimeout` を削る変異も**全件 green のまま生き残る**。実害は「行儀のよい child まで
+毎回 500ms 待たされた上で SIGKILL され、偽の昇格警告が出る」。
+
+対応: fake に **exit ハンドラを記録させて任意に発火**できるようにし、deadline 前に
+'exit' を起こす4件目を追加した。
+
+| 変異 | 結果 |
+|---|---|
+| (h) `child.once('exit', onExit)` の登録を削除 | **red**（新テストのみ） |
+| (i) `onExit` の `clearTimeout` を削除 | **red**（新テストのみ） |
+
+Minor 2件（private メソッドへの cast は #532 の前例と厳密には別技法 / fake timer の
+理論的リーク）は記録のみ。**「#532 のパターンを踏襲」と書いたのは fake の形についてで、
+private メソッドへの到達手段は本ファイル固有**である点を明確化しておく。
+
+#### CI ブロッカー（本 PR とは無関係・owner 裁定で本 PR に同梱）
+
+`main` の Rust CI が **`clippy::result_large_err`** で赤く、**全 PR のマージがブロック**
+されていた。`session.rs:643` の `Result<(), tungstenite::Error>` の Err が 136 バイトで、
+CI の stable clippy **1.98**（手元は 1.97）で新たに発火する。**本 PR の Rust 変更は 0 件**
+なので main 由来と確定（`git diff main...HEAD --name-only` に `.rs` なし）。
+
+owner 裁定は **Err の Box 化**（`#[allow]` や閾値緩和ではなく）。プロジェクト規約
+「lint の閾値をコードに合わせて緩めない」に沿う。`Box<T>` は 8 バイトなので閾値 128 を
+確実に下回る。呼び出し元は `server.rs:77` の1箇所のみで、`?` の変換は
+`impl<T> From<T> for Box<T>` により**呼び出し元の変更なしで成立**した。
+
+#### 🔴 実行環境の飽和で1回 false red が出た（本 PR の欠陥ではない）
+
+作業中、全 suite の1回が `Test timed out in 5000ms` で落ちた。調査したところ
+**マシンの `coreaudiod` が 907% CPU（10コア中9）で暴走**しており、CPU idle は 2% だった。
+原因は **死んだプロセスの音声出力コンテキスト 65 個が `coreaudiod` に残留**していたこと
+（`sudo killall coreaudiod` で解消・load 613 → 56・メモリも 9GB 解放）。
+
+復旧後に測り直すと **43 テスト全体で 1121ms**（飽和時はうち1件だけで 5000ms 超過）、
+全 suite 3回連続 green。**環境要因と確定**した。
+
+🔴 **副産物**: 残留していた65個のうち1個を、**24日前から孤児化していた
+`orbit-audio-daemon`** が握っていた。**#607（`stop_engine` の child kill 不全）の実害は
+「プロセスが残る」ことではなく、`coreaudiod` に音声コンテキストを固定して CPU とメモリを
+食わせ続けること**である。土台バンドル4件目の優先度が上がった。
+
+#### CI ブロッカーは1件ではなく2件だった（clippy 1.98 の新規 lint）
+
+`Box` 化を push したら **別の 1.98 新規 lint** が出た:
+`clippy::chunks_exact_to_as_chunks`（`tests/capture_realtime_gated.rs:113`）。
+CI は `-D warnings` かつ**最初の1件で停止**するので、このままだと1個ずつ出る。
+
+🔴 **手元で再現できていなかった原因は2つ**:
+1. 手元の clippy は **1.97**、CI は **1.98**（`rust-toolchain.toml` が無く CI は stable 最新を引く）
+2. 手元の実行に **`-- -D warnings` を付けていなかった**（警告がエラー扱いにならず「clippy 0」と誤報告していた）
+
+対処: **CI と同じ 1.98 を名前付きで導入**し（`rustup toolchain install 1.98.0`・既定の
+stable は変えない）、**CI と同一の feature 5通り**を一括実行。
+さらに **`-D warnings` を外した警告モードで全件を吐かせて**、隠れた指摘が無いことを確認した
+（cargo は最初のエラーでそのターゲットを止めるため、エラーモードだけでは背後が見えない）。
+
+**結果: ワークスペース全体・5通りすべてで指摘はこの1箇所のみ。**
+
+修正は clippy の提案どおり `as_chunks::<4>().0.iter()`。副次的に
+`try_into().unwrap()` の panic 経路も消えた。**1.97 / 1.98 の両方でコンパイルと fmt を確認**
+（`as_chunks` は 1.97 でも安定）。
+
+#### 🔴 反省: push して CI を待つ往復を1回無駄にした
+
+CI が toolchain バージョン固有の lint で落ちた時点で、**即座に同じ toolchain を入れて
+手元で再現するべきだった**。push → 待つ → 別の lint、を繰り返すのは
+[[escalation-does-not-fix-opacity]] と同型（見えないものに対して試行を増やしても解決しない。
+観測手段を先に揃える）。
+
+**follow-up 候補**: `rust-toolchain.toml` での固定。今回の混乱は「CI が stable を無固定で
+引く」ことに由来し、Rust の更新が黙って main を赤くする。owner と別途相談する。
+
+#### 🔴 本丸: spawn 系フレークの真因は macOS のセキュリティ評価だった
+
+`-D warnings` を通した後も **全 suite の 2〜3 回に1回**が落ち続けた。落ちるのは
+`daemon-client.spec.ts`(#520 の当事者) だけでなく、**一度も触っていない
+`plugin-catalog-reader.spec.ts`** と **Rust の `oracle_parity`** も同じだった。
+症状はすべて「子プロセスの起動待ちが deadline を超える」。
+
+推論を重ねず **spawn 遅延を直接測った**:
+
+| spawn 対象 | p50 | max |
+|---|---|---|
+| 既存のシステムバイナリ (`/bin/echo`・120回) | **1.0ms** | **3ms**（100ms 超 0件） |
+| 毎回新規作成した実行ファイル (40回) | **93.8ms** | 178ms |
+
+さらに**同一（warm な）実行ファイルでも 40 回に1回ほど停止**する:
+実測 **675ms / 3.8s / 9.0s / 24.6s**。CPU は load 2.8・idle 64% の健全時の値。
+
+**原因**: macOS は新規作成された実行ファイルの spawn 時にセキュリティ評価
+（Gatekeeper / XProtect / syspolicyd）を行う。テストは temp dir に実行ファイルを
+書いて spawn するので、毎回これを払う。裾は数秒〜24 秒に伸びる（裾の原因は未特定）。
+
+**これで全部つながった**:
+
+| 落ちていたもの | 何をしているか | deadline |
+|---|---|---|
+| `daemon-client.spec.ts`（#520） | recorder script を新規作成して spawn | vitest 5s |
+| `plugin-catalog-reader.spec.ts` | 偽 scan バイナリを新規作成して spawn | vitest 5s + 内部 timeout |
+| Rust `oracle_parity` | ビルドしたての child を spawn | sandbox first_block 5s |
+
+**#520 / #491 / #529 が個別 issue として追われてきたのは、同じ 1 つの原因を
+別々の症状として見ていたからだった。**
+
+#### 対策のポリシー（横断的関心事なので先に決めてから一括適用）
+
+> 1. 実行ファイルの新規作成を **per-test から per-file へ**減らし、作成直後に **1 回だけ
+>    空 spawn して評価を済ませる**（warm up）。待つのは**プロセス起動の成功まで**で、
+>    exit を待ってはいけない（ハングし続けるフィクスチャがある）
+> 2. それでも残る裾に対し、**検証対象でない deadline を実測の裾に耐える値**にする
+
+TS は `tests/helpers/spawn-fixture.ts`（`createWarmExecutable` / `warmUpExecutable` /
+`SPAWN_TEST_TIMEOUT_MS = 30_000`）、Rust は `orbit_audio_sandbox::warm_up_executable` に
+同じ形で置いた。**新しい流儀を各所で発明していない。**
+
+適用先:
+
+| 対象 | 適用内容 |
+|---|---|
+| `daemon-client.spec.ts` audioDevice ブロック | `beforeAll` で 1 回作成 + warm up / argv は per-test で削除 / timeout 30s |
+| 同 C3 ブロック | 同上 |
+| `plugin-catalog-reader.spec.ts` | 実 spawn する3件に warm up + timeout 30s（`spawn` を mock する1件は対象外） |
+| Rust `oracle_parity` | `child_exe()` で warm up + `first_block_timeout: 60s` の2段構え |
+| Rust `host_child_integration` / `instrument_host_integration` | `child_exe()` で warm up（deadline 5s/2s はそのまま） |
+
+**触らなかったもの**: `protocol.rs` の deadline は tokio の仮想時間と「これ以上メッセージが
+来ないこと」の否定的 assert で、child spawn とは無関係。`plugin-catalog-reader` の
+`spawn` を mock する1件も実 spawn しない。**deadline が検証対象そのものであるものは広げない。**
+
+#### 検証
+
+- **TS 全 suite 5回連続 green（1934 passed）** — 修正前は 2〜3 回に1回落ちていた
+- Rust `orbit-audio-sandbox` + `orbit-vst3-effect-child` 3回連続 **109 passed / 0 failed**
+- `oracle_parity` 単体 3回連続 green（正常時 0.38〜0.88s。60s の余裕は通常時のコストにならない）
+
+#### 🔴 #607 を実機で再現し、根本原因を特定して直した
+
+実機 E2E（OrbitStudio を起動し MCP を HTTP で直叩き）で、この PR が直した表面
+（偽の `escalated to SIGKILL` = 0 件）を確認した際、**別の重大な事実**が出た:
+
+```
+🛑 Engine stopped
+🛑 Engine process exited with code 0        ← engine は正常終了している
+daemon PID 90513  PPID=1                    ← なのに daemon は孤児化して生存
+音声コンテキスト保持者: ALIVE 90513 orbit-audio-daemon
+```
+
+**`stop_engine` は成功を報告し `engine_state` も `running:false` になるのに、daemon が
+生き残って coreaudiod の音声コンテキストを握り続ける。**
+
+##### 切り分け（推論でなく実測）
+
+1. **拡張の 2 秒 SIGKILL とのレースか？** → engine にだけ SIGTERM を送って確認 →
+   **daemon はやはり生存**。レースではない
+2. **`quit()` が失敗しているのか？** → `shutdown()` と `DaemonClient.quit()` に一時 probe を
+   入れて実機再実行:
+
+```
+[PROBE] shutdown entered interpreter=false
+```
+
+##### 根本原因
+
+`cli-audio.ts` は `executeCommand()` の**戻り値**で `globalInterpreter` を代入し、
+shutdown ハンドラはそれを見ていた。しかし **REPL / test など長時間モードでは
+`executeCommand()` は返らない**。`execute-command.ts` のコメント自身が
+
+> `// Note: startREPLMode() never resolves, so this never returns`
+
+と明記している。したがって**拡張が使う live coding（REPL）モードでは
+`globalInterpreter` は永遠に `null`**、shutdown ハンドラは `shutdown(null)` を呼び、
+`if (interpreter)` ブロックごと飛ばして `process.exit(0)` へ直行していた。
+**`audioEngine.quit()` は一度も呼ばれていなかった**（だから SIGKILL 昇格の警告も出ない）。
+
+#448 の `main.rs` コメントが「まとまった graceful-shutdown 配線は本 issue のスコープ外・
+別 issue 向き」と書いていた、その別 issue が #607 である。
+
+##### 対策（ポリシー）
+
+> **interpreter は生成した時点で publish する。コマンドの戻り値に依存しない。**
+
+- `cli/active-interpreter.ts`（新規）: `setActiveInterpreter` / `getActiveInterpreter`
+- `repl-mode.ts`: `startREPLMode` の `new InterpreterV2()` 直後と `startREPL(interpreter)` の
+  冒頭で publish（どちらも返らない関数）
+- `shutdown.ts`: `resolveShutdownInterpreter(getInterpreter)` を新設し、戻り値が null なら
+  registry へフォールバック。`registerShutdownHandlers` がこれを使う
+
+🔴 **フォールバックは `cli-audio.ts`（top-level・テスト不能）ではなく `shutdown.ts` に置いた。**
+最初は `cli-audio.ts` に書いたが、**テストが実コードを通れず変異が生き残った**ため設計を変えた。
+
+##### 🔴 変異検証 — 最初のテストは 2 つの変異を生き残った
+
+| 変異 | 最初の実装 | 修正後 |
+|---|---|---|
+| (A) `??` フォールバックを外す | 🔴 **生存**（テストが式を手で複製していた） | **red** |
+| (B) `startREPL` の publish を削除 | 🔴 **生存**（テストが `setActiveInterpreter` を直接呼んでいた） | **red** |
+| (C) `audioEngine.quit()` の呼び出しを削除 | red | **red** |
+| (D) 解決の優先順位を逆にする | （未実施） | **red** |
+
+原因は [[test-name-must-match-the-path-it-drives]] と同型 —
+**名前は配線を名乗っているのに、駆動していたのは手で複製した式**だった。
+`resolveShutdownInterpreter` と `startREPL` を実際に呼ぶ形へ書き直して 4 変異すべてを殺した。
+
+##### 実機での確認
+
+| | 修正前 | 修正後 |
+|---|---|---|
+| `stop_engine` 後の daemon | 🔴 生存（PPID=1） | **✓ 1 秒で消滅** |
+| 残存 daemon | 1 個 | **0 個** |
+| 音声コンテキスト | 2（daemon が保持） | **1**（`arkaudiod` のみ・orbit 由来 0） |
+
+**今日の CPU 暴走（coreaudiod 907%・残留 65 個）の発生源がこれで塞がった。**
+
+#### #567: `get_log` の silent truncation を解消
+
+`get_log` は要求値を**黙って** 500 行へ切り詰めていた（リングは 1000 保持しているのに）。
+これはエンジン側エラーが現れる**唯一のチャネル**なので、黙って窓を狭められると
+呼び出し元は「エラーが無かった」のか「見せてもらえなかった」のかを区別できない。
+ERROR 件数の前後比較は窓が固定だと単調でなく、古い ERROR が流れ出るのと同時に新しい
+ERROR が入ると**カウントが一致して false green** になる。
+
+- 上限をリング実容量（1000）へ引き上げ
+- **切り詰めたら `[get_log] truncated: ...` を先頭行で明示**（通知文言は ERROR カウントを
+  汚さない語を選ぶ）
+- 選択ロジックを **vscode 非依存の `log-ring.ts` へ切り出した** — `extension.ts` の
+  非 export 関数のままでは**テストが実コードを通せない**（今日の教訓）
+
+変異検証: 旧実装へ戻す / 通知だけ落とす / 通知に `ERROR` を混ぜる / 履歴不足でも誤報させる
+→ **4種すべて red**。
+
+#### #614: `evaluate_orbitscore` が評価結果を返すようにした
+
+`ok` は「**stdin へ書けた**」しか意味しておらず、パース/実行エラーは stderr へ非同期に
+出るだけだった。このプロジェクトは **LLM を第一級ユーザー**として設計しているのに、
+LLM には `ok` しか届かない。実機 E2E で本セッションでも踏んだ:
+`evaluate_orbitscore` が `ok` を返す一方、ログには `Variable not found: global`。
+
+##### 「どこまで待つか」を時間で決めない
+
+REPL は行を **FIFO** で処理する（#476）。コードの直後にマーカーを送れば
+**マーカーに到達した時点で先行コードの評価は完了している**。settle 時間を待つ必要も、
+長い評価（instrument 6 本の attach で 30 秒超）で誤検知することもない。
+
+- engine: `//#evalMark {"requestId":...}` を既存メタ機構（`//#pluginUi` と同じ運び方）に追加。
+  `executeCurrentBuffer` の 2 つのエラー経路で診断を記録し、マーカーで返してクリア
+- 🔴 **マーカーは「提出の境界」**なので、未完のままバッファに残った入力を**強制実行してから**
+  報告する。さもないと「何も実行していないのに ok」を返す（テストが実際にこれを暴いた）
+- extension: `EvalMarkBridge`（`plugin-ui-bridge.ts` と同型）+ `evaluateForAgent` を async 化
+
+##### 🔴 ユニットテスト全緑のまま、実機 E2E だけが配線の欠陥を捕まえた
+
+最初の実装は `evalMarkBridge.handleLine` を **`{"pluginUi"` 分岐の中**に相乗りさせていた。
+engine 側の応答は正しく出ていたが、`{"evalMark"` 行は prefix チェーンをすり抜けて
+**一度も dispatch されず全て timeout**した。**ユニットテストは全件緑**。
+専用の `else if` 分岐へ分離して解決。
+
+> **配線はユニットテストの視野の外**という本プロジェクトの原則（[[dsl-feature-requires-e2e]]）が
+> そのまま再現した。E2E を回していなければ「テストは緑だから直った」と誤報していた。
+
+##### 変異検証
+
+parse 診断の記録削除 / runtime 診断の記録削除 / mark 時のクリア削除 / 未完バッファの
+強制実行削除 / `ok` を常に true / bridge の prefix ガード削除 → **6種すべて red**
+（prefix ガードは最初 equivalent mutation で生き残ったため、キー位置の異なる JSON を
+固定するテストを足して load-bearing にした）。
+
+##### 実機での確認
+
+| 投入 | 修正前 | 修正後 |
+|---|---|---|
+| パースエラーを含む楽譜 | 🔴 `ok` | `error: evaluation failed: [parse] Expected RPAREN but got AT at line 1, column 23` |
+| 実行時エラー | 🔴 `ok` | `error: evaluation failed: [runtime] Variable not found: global` |
+| 正常な楽譜 | `ok` | `ok` |
+| 成功→失敗→成功 | — | 診断を引きずらない |
+
+#### 採らなかったもの: argv の アトミック書き込み
+
+当初は `> tmp` → `mv` で「存在＝完全」を構造的に保証する案を入れたが、**撤回した**。
+親は child の `'exit'` を観測してから読むので、**部分読みは構造上起こり得ず、
+変異でも落とせない**。証拠のない機構を残さない方針で削除した。
+
+`vi.waitFor(existsSync)` は残した。#520 のもう一つの症状（`argv.txt` の ENOENT）は
+過去に高負荷下で**実際に観測されている**ため保険として置くが、
+**変異検証できない防御である**ことをコメントに明記した。
+
+---
+
 ### 6.356 fix: PR #612 レビュー統合 — `output()` の宛先排他規則を spec に確定し、保護の穴を塞ぐ (Aug 1, 2026)
 
 **Date**: 2026-08-01

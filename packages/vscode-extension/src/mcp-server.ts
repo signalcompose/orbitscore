@@ -72,7 +72,17 @@ const { z } = require('zod') as {
 /* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
 
 /** Result of evaluating agent-supplied OrbitScore source. */
-export type EvaluateResult = { ok: true } | { ok: false; error: string }
+/**
+ * `evaluate_orbitscore` の結果（#614）。
+ *
+ * 🔴 以前は `{ ok: true }` が「**stdin へ書けた**」しか意味しておらず、パース/実行エラーは
+ * stderr へ非同期に出るだけだった。LLM は `ok` を成功と解釈するため、実機で
+ * `Variable not found: global` が出ていても先へ進んでしまう。
+ * いまは engine の評価結果まで待ち、診断があれば `ok: false` にする。
+ */
+export type EvaluateResult =
+  | { ok: true }
+  | { ok: false; error: string; diagnostics?: Array<{ kind: string; message: string }> }
 
 /** Result of a lifecycle command (start/stop engine). */
 export type CommandResult = { ok: true; message?: string } | { ok: false; error: string }
@@ -477,8 +487,10 @@ function buildServer(
       description:
         'Send OrbitScore (.orbs) source to the running engine live-coding session — ' +
         'the equivalent of "Run Selection" in the editor. The engine must be started ' +
-        'first (via the Start Engine command). Returns ok once the code was accepted ' +
-        'and written to the engine.',
+        'first (via the Start Engine command). Waits for the engine to finish evaluating ' +
+        'the submitted code and reports the result: ok only when the engine raised no parse ' +
+        'or runtime diagnostics. A failure lists the diagnostics, so you do NOT need to poll ' +
+        'get_log to find out whether your score was accepted.',
       inputSchema: { code: z.string().describe('OrbitScore source to evaluate') },
     },
     async (args) => {
@@ -785,11 +797,13 @@ function buildServer(
       description:
         'Return the last N lines of the OrbitScore output channel (engine ' +
         'stdout/stderr, MCP session log, etc.) — the same content as "OrbitScore" ' +
-        'in the Output panel. Default 50 lines, capped at 500.',
+        'in the Output panel. Default 50 lines, capped at the ring buffer capacity (1000). ' +
+        'If more lines are requested than the buffer holds, the first returned line is an ' +
+        'explicit "[get_log] truncated: ..." notice — the request is never silently shortened.',
       inputSchema: {
         lines: z
           .number()
-          .describe('Number of trailing lines to return (default 50, max 500)')
+          .describe('Number of trailing lines to return (default 50, capped at 1000)')
           .optional(),
       },
     },

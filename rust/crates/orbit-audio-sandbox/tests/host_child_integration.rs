@@ -17,11 +17,17 @@ use std::sync::atomic::{AtomicU64, Ordering::Acquire, Ordering::Relaxed};
 use std::time::{Duration, Instant};
 
 use orbit_audio_sandbox::{
-    create_shared, open_shared, region_ptr, PipelinedEffectHost, SandboxChildGuard, CHANNELS,
+    create_shared, open_shared, region_ptr, warm_up_executable, PipelinedEffectHost,
+    SandboxChildGuard, CHANNELS,
 };
 
 fn child_exe() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_sandbox-effect-child"))
+    let path = PathBuf::from(env!("CARGO_BIN_EXE_sandbox-effect-child"));
+    // 🔴 #520: `cargo build` 直後の child は「新規作成された実行ファイル」で、初回 spawn が
+    // macOS のセキュリティ評価を伴い数秒〜24 秒止まりうる。以降の deadline（本ファイルの
+    // 5s / 2s）はその裾を想定していないので、評価コストをここで先払いする。
+    warm_up_executable(&path);
+    path
 }
 
 #[test]
