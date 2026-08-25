@@ -86,6 +86,13 @@ R3 で採用した実文言 `closing-in-progress` は、Rust 側 `open_command` 
 
 #### 保留（意図的）
 
+- **Opening 同時 open race**（R4 最終再点検で確認・意図的受容）: `lifecycle is Opening` を
+  成功扱いにするため、並行 open の先行者が最終的に失敗した場合、後続側は「開いた」と
+  信じたまま resolve する。ただし先行者の失敗は先行者自身の呼び出し元に本物のエラーで
+  届く（完全なサイレントではない）。二重待ち合わせ機構は detail 意味分離のスコープ外。
+- **第3の「already open」信号**（既存挙動・fix 対象外）: プラグイン GUI 層自身が返す
+  `editor GUI/view is already open`（スペース区切り）は、状態機械と実ウィンドウの食い違い
+  でしか到達せず、TS のマッチに当たらず loud に throw される。保守的な既定として維持。
 - `getSize` の許容コード（`kNotInitialized` のみ）が Kontakt 1 機種の実測に基づく点は R2 Important のまま維持。
   他プラグインが別コードを返した場合はコードを名指しした loud なエラーになり、その時に意図的に許容へ足す。
 - ついで修正: `audio-slicer.spec.ts` の import/order warning（既存・1 行）と、
