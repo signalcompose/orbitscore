@@ -93,7 +93,7 @@ export class CompletionItem {
   ) {}
 }
 
-export const CompletionItemKind = { Method: 1 } as const
+export const CompletionItemKind = { Method: 1, Value: 11, File: 16 } as const
 
 export class MarkdownString {
   constructor(public value?: string) {}
@@ -184,8 +184,32 @@ export const commands = {
   executeCommand: async () => undefined,
 }
 
+/**
+ * 登録された補完プロバイダ（#495）。
+ *
+ * プロバイダ本体（`provideCompletionItems`）は vscode API を直接叩く層なので、
+ * **文脈検出のユニットテストでは通らない**。#614 で「配線はユニットテストの視野の外」を
+ * 踏んだばかりなので、ここで登録を捕まえて**実際に呼べる**ようにする。
+ */
+export const registeredCompletionProviders: Array<{
+  selector: unknown
+  provider: { provideCompletionItems: (...args: never[]) => unknown }
+  triggers: string[]
+}> = []
+
+export function resetRegisteredCompletionProviders(): void {
+  registeredCompletionProviders.length = 0
+}
+
 export const languages = {
-  registerCompletionItemProvider: () => fakeDisposable(),
+  registerCompletionItemProvider: (
+    selector: unknown,
+    provider: { provideCompletionItems: (...args: never[]) => unknown },
+    ...triggers: string[]
+  ) => {
+    registeredCompletionProviders.push({ selector, provider, triggers })
+    return fakeDisposable()
+  },
   registerHoverProvider: () => fakeDisposable(),
   createDiagnosticCollection: () => ({
     set: () => {},

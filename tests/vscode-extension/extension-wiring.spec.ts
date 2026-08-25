@@ -292,6 +292,45 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
       expect(combined).not.toContain('sendosc: pure noise line')
     })
 
+    // #614 導入時、`{"evalMark"` envelope だけが shouldFilterLine の除外リストから
+    // 漏れていた。envelope は失敗診断の本文（例: `[OUTPROC_ATTACH_FAILED] ...`）を
+    // 丸ごと含むので、transcribe されると同じ失敗が log に二重に現れ、get_log を
+    // 数える側（gated E2E・LLM の自己検証）の前後比較がすべてずれる。
+    it('wires transcribeLog (non-debug): drops correlated REPL envelopes (evalMark included)', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      const appended: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: () => {},
+        append: (value: string) => {
+          appended.push(value)
+        },
+      })
+
+      ext.setupStdoutHandler(proc, false)
+      const evalMarkEnvelope = JSON.stringify({
+        evalMark: {
+          requestId: 'req-1',
+          ok: false,
+          diagnostics: [
+            { kind: 'runtime', message: 'Failed to load plugin: [OUTPROC_ATTACH_FAILED] x' },
+          ],
+        },
+      })
+      fireStdoutData(
+        `${evalMarkEnvelope}\n` +
+          '{"pluginUi":{"requestId":"req-2","ok":true}}\n' +
+          '⚠️ kept line\n',
+      )
+
+      const combined = appended.join('')
+      expect(combined).toContain('⚠️ kept line')
+      expect(combined).not.toContain('OUTPROC_ATTACH_FAILED')
+      expect(combined).not.toContain('evalMark')
+      expect(combined).not.toContain('pluginUi')
+    })
+
     it('wires transcribeLog (debug): passes the raw output through unfiltered', () => {
       const { proc, fireStdoutData } = fakeChildProcess()
       const appended: string[] = []

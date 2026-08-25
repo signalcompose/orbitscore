@@ -616,6 +616,39 @@ export class Sequence {
     return this
   }
 
+  /**
+   * このシーケンスのプラグイン UI を開く / 閉じる（`seq.ui()` — #617）。
+   *
+   * ```
+   * cb.instrument("Kontakt 8.vst3")
+   * cb.ui()          // instrument の UI（index 0）
+   * cb.ui(1)         // 1つ目の effect の UI
+   * cb.ui(0, false)  // 閉じる
+   * ```
+   *
+   * 音色を作って保存する工程を**楽譜を書きながら**回せるようにするための表面。
+   * 機構は `global.openPluginUi` / `closePluginUi` をそのまま通す（**新しい経路を作らない**）。
+   *
+   * 複数の UI を同時に開くことは制限しない（owner 裁定 2026-08-25）。セッティング時に
+   * 複数パートを並べて見比べる用途があるため。
+   *
+   * @param index チェーン位置。0 = instrument、1 以降 = effect。既定 0
+   * @param open  false を渡すと閉じる。既定 true
+   */
+  async ui(index = 0, open = true): Promise<this> {
+    const name = this.stateManager.getName() || 'sequence'
+    if (open) {
+      // 🔴 冪等（#619 レビュー・F2b/R2）: ライブコーディングでは**ブロックの再評価が常態**で、
+      // 楽譜に書いた `cb.ui()` は評価のたびに走る。冪等の規則（fast path + already-open の
+      // catch・staleness 対策）は `openPluginUiIdempotent` の1箇所に集約してある。
+      // MCP の `open_plugin_ui` は冪等にしない（明示操作なので二重 open は loud に落とす）。
+      await this.global.openPluginUiIdempotent(name, index)
+    } else {
+      await this.global.closePluginUi(name, index)
+    }
+    return this
+  }
+
   isInstrument(): boolean {
     return this._instrumentDeclared
   }

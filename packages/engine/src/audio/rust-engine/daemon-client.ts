@@ -107,6 +107,28 @@ function isExecutableFile(p: string): boolean {
   }
 }
 
+/** daemon の tracing 出力が付ける ANSI 色コード（level 判定の前に剥がす）。 */
+// eslint-disable-next-line no-control-regex -- ESC (\x1b) はまさに剥がしたい対象の制御文字
+const ANSI_ESCAPE_RE = /\x1b\[[0-9;]*m/g
+
+/**
+ * 起動後に転送する daemon stderr 行のうち、エラーとして扱うべきでないものを判定する
+ * （tracing の `TRACE`/`DEBUG`/`INFO` 行）。
+ *
+ * 🔴 #605 の転送は全行を `console.error` に流していたため、daemon の INFO tracing
+ * （例: `INFO orbit_audio_daemon: listening on 127.0.0.1:...`）まで拡張側で
+ * `ERROR:` として記録され、get_log の ERROR 前後比較を数える側（gated E2E・LLM の
+ * 自己検証）が実際に壊れた。level token を読み取れない行（panic・生 print）は
+ * fail-loud に error 側へ倒す。
+ */
+export function isDaemonNonErrorTracingLine(line: string): boolean {
+  const plain = line.replace(ANSI_ESCAPE_RE, '')
+  // tracing 既定形式の「ISO timestamp + level token」だけを non-error と認める。
+  // 判定を緩めて本文中の "INFO" を拾うと本物のエラーが log から消える側に倒れるので、
+  // 迷ったら error 側（従来挙動）へ。
+  return /^\s*\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO)\s/.test(plain)
+}
+
 /**
  * Resolve the `orbit-audio-daemon` binary path via the candidate order used at
  * spawn time: explicit override → `ORBIT_AUDIO_DAEMON_PATH` env → monorepo
@@ -690,9 +712,13 @@ export class DaemonClient extends EventEmitter {
         stderrChunks.push(text)
         return
       }
-      // 起動後は蓄積せず、行単位で engine のログへ転送する。
+      // 起動後は蓄積せず、行単位で engine のログへ転送する。INFO/DEBUG/TRACE の
+      // tracing 行まで stderr に流すと拡張側で `ERROR:` として記録されるため
+      // （isDaemonNonErrorTracingLine の docstring 参照）、level で振り分ける。
       for (const line of text.split('\n')) {
-        if (line.trim()) console.error(`[daemon] ${line}`)
+        if (!line.trim()) continue
+        if (isDaemonNonErrorTracingLine(line)) console.log(`[daemon] ${line}`)
+        else console.error(`[daemon] ${line}`)
       }
     }
     child.stderr?.on('data', onStderrData)

@@ -248,6 +248,23 @@ describe('plugin UI safepoint conductor', () => {
     )
   })
 
+  it('🔴 R2: respawn closure notifies the registered listener with the target', async () => {
+    // Global はこのリスナでセッション簿記を破棄する。呼ばれないと `hasOpenPluginUi` が
+    // stale なまま「もう開いている」と誤認し、DSL の ui() が永久に no-op になる。
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const listener = vi.fn()
+    player.setPluginUiClosedByRespawnListener(listener)
+
+    daemon.emit('plugin-ui-closed-by-respawn', {
+      target: { role: 'instrument', instance: 'plugin:lead', index: 0 },
+    })
+    await waitFor(() => listener.mock.calls.length === 1)
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener).toHaveBeenCalledWith({ role: 'instrument', instance: 'plugin:lead', index: 0 })
+    error.mockRestore()
+  })
+
   it('reports respawn closure loudly without issuing save, ack, or another daemon request', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const request = vi.spyOn(daemon as any, 'request')

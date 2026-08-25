@@ -613,6 +613,13 @@ export class RustEnginePlayer implements AudioEngineBackend {
     })
   }
 
+  /** respawn による UI クローズを Global の session 簿記へ伝えるリスナ（#619 R2）。 */
+  private pluginUiClosedByRespawnListener?: (target: PluginUiTarget) => void
+
+  setPluginUiClosedByRespawnListener(listener: (target: PluginUiTarget) => void): void {
+    this.pluginUiClosedByRespawnListener = listener
+  }
+
   private readonly onPluginUiClosedByRespawn = (raw: unknown): void => {
     this.enqueuePluginUiEvent(() => {
       const data = wireObject(raw, 'PluginUiClosedByRespawn data')
@@ -620,6 +627,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
       console.error(
         `[plugin-ui] ${JSON.stringify(target)} was closed by daemon respawn and was not reopened`,
       )
+      // Global 側のセッション簿記を実態に揃える（残すと DSL ui() の冪等判定が
+      // 「もう開いている」と誤認し、open が永久に no-op になる — #619 R2 Critical）。
+      this.pluginUiClosedByRespawnListener?.(target)
       this.settlePendingPluginUiCloses(target, (pending) =>
         pending.reject(new Error('plugin UI was closed by daemon respawn before UI_CLOSED_DONE')),
       )

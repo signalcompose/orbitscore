@@ -862,6 +862,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       // `//#pluginUi`（JSON payload の action で open/close を区別。MCP bridge が発行）。
       'openPluginUi',
       'closePluginUi',
+      // #619: `seq.ui()` の冪等判定に使う問い合わせ。DSL から直接は呼ばせない。
+      'hasOpenPluginUi',
+      // #619 R2: 冪等 open の集約実装。seq.ui() / //#pluginUi の両方がここへ委譲する。
+      'openPluginUiIdempotent',
       // (sequence, index) を SC.5 インスタンス同一性 + daemon target へ解決する内部 API。
       // UIH.5 の index 規則を実装する。インタプリタからの参照はゼロ。
       'resolvePluginStateTarget',
@@ -948,6 +952,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'savePluginState',
       'openPluginUi',
       'closePluginUi',
+      // #619: `seq.ui()` の冪等判定に使う問い合わせ。DSL から直接は呼ばせない。
+      'hasOpenPluginUi',
+      // #619 R2: 冪等 open の集約実装。seq.ui() / //#pluginUi の両方がここへ委譲する。
+      'openPluginUiIdempotent',
       'resolvePluginStateTarget',
       'pluginIndexError',
     ] as const

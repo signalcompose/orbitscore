@@ -526,6 +526,7 @@ LLM 側と非対称になる（DESIGN_PRINCIPLES §3 違反）。
 | 層 | 責務 |
 |---|---|
 | エディタ（右クリック） | テキスト位置 → `(receiver, chain index)` の**解決のみ** |
+| **DSL（楽譜）** | `seq.ui(index?, open?)` / `sum("x").ui(...)` / `aux("x").ui(...)`（#617・実装済）。レシーバは構文上自明なので解決は不要 |
 | MCP | `save_plugin_state(receiver, index)` / `open_plugin_ui(receiver, index, expectedName?)` / `close_plugin_ui(receiver, index)`（実装済） |
 | daemon 以下 | 解決済みの target（daemon bus / instance）と chain index だけを知る |
 
@@ -545,6 +546,42 @@ LLM 側と非対称になる（DESIGN_PRINCIPLES §3 違反）。
 > 正規化名ガードで、不一致なら daemon へ `OPEN_UI` を送らない。open は view attach 完了 ack、
 > close は `UI_CLOSED_DONE` の一致 event を受信して初めて返る。いずれも timeout と、role・
 > 正規化名を含む valid index 一覧つき loud error を持つ。
+
+### UIH.5.1 DSL 面（`seq.ui()`）— #617
+
+**動機**: 音色を作って保存する工程を**楽譜を書きながら**回せるようにする。従来はエディタの
+右クリックか MCP からしか起動できず、その流れに乗らなかった。
+
+```
+cb.instrument("Kontakt 8.vst3")
+cb.ui()          // instrument の UI（index 0）
+cb.ui(1)         // 1つ目の effect の UI
+cb.ui(0, false)  // 閉じる
+
+sum("strings").ui(1)   // mixer bus の insert（既定 index 1）
+aux("verb").ui(1)
+```
+
+機構は `Global.openPluginUi` / `closePluginUi` を**そのまま通す**（新しい経路を作らない）。
+宛先解決・セッション簿記・エラー面は MCP 経路と同一である。
+
+**確定事項**:
+
+1. **複数同時オープンを制限しない**（owner 裁定 2026-08-25）。セッティング時に複数パートを
+   並べて見比べる用途があるため。
+2. 🔴 **DSL の open は冪等**（#619 レビュー）。既に開いている `(receiver, index)` への `ui()` は
+   **no-op** で成功する。
+   **理由**: ライブコーディングでは**ブロックの再評価が常態**で、楽譜に書いた `cb.ui()` は
+   評価のたびに走る。冪等でないと child の状態機械が `OPEN_UI requires state == Closed` で
+   落ち、正当な操作が毎回エラーになる（実測）。
+   **MCP / REPL メタ行の `open_plugin_ui` は冪等にしない** — あちらは「開け」という明示操作で、
+   二重 open は loud に落とすのが正しい。close はどちらも冪等化しない。
+3. **`master` は DSL 面を持たない**（現状）。UI open/close 自体は上記裁定どおり全 receiver へ
+   一般化済みで `master` も MCP からは開ける。DSL では `global.effect()` が master チェーンを
+   宣言するが、対応する `global.ui()` は未実装。**意図的な現状**であり、必要になれば
+   `GLOBAL_DSL_METHODS` に `ui` を足して `openPluginUi('master', index)` へ委譲すれば済む
+   （engine 側の宛先解決は既に `master` を受け付ける）。
+
 
 これにより #474 の regex 依存はエディタ層に閉じ込められ、#495 言語サービス導入時も
 engine 側は影響を受けない。

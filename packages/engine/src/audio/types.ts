@@ -22,6 +22,16 @@ export type PluginUiTarget =
 
 export type PluginUiCloseCompletion = 'safepoint-completed' | 'timeout-without-save'
 
+/**
+ * daemon respawn が開いていた UI を閉じた時の通知リスナ登録（#619 レビュー R2）。
+ *
+ * respawn は UI を閉じるが Global 側のセッション簿記は消さない（設計: 「次の open が
+ * 上書きする」）。しかし DSL の `ui()` は冪等化のためセッションの有無を**先に**見るので、
+ * stale セッションが残ると「もう開いている」と誤認して **open が永久に no-op** になる。
+ * この通知でセッションを即時破棄し、簿記を実態に揃える。
+ */
+export type PluginUiClosedByRespawnListener = (target: PluginUiTarget) => void
+
 export interface PluginStateSaveResult {
   path: string
   bytesWritten: number
@@ -100,6 +110,8 @@ export interface AudioEngine {
 
   /** UI close safepoint を既存の project-state 保存フローへ接続する。 */
   setPluginUiSafepointSaver?(saver: (target: PluginUiTarget) => Promise<void>): void
+  /** respawn による UI クローズの通知先を登録する（詳細は {@link PluginUiClosedByRespawnListener}）。 */
+  setPluginUiClosedByRespawnListener?(listener: PluginUiClosedByRespawnListener): void
 
   /** plugin view を生成・attach し、ウィンドウ実在後の完了 ack まで待つ。 */
   openPluginUi?(target: PluginStateSaveTarget, index: number, windowTitle: string): Promise<void>

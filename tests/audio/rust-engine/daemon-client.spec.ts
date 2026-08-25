@@ -16,6 +16,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createWarmExecutable, SPAWN_TEST_TIMEOUT_MS } from '../../helpers/spawn-fixture'
 import {
   DaemonClient,
+  isDaemonNonErrorTracingLine,
   resolveDaemonBinaryPath,
 } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
 import {
@@ -829,5 +830,45 @@ describe('resolveDaemonBinaryPath (C2)', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(DaemonNotFoundError)
     }
+  })
+})
+
+// #605 の起動後 stderr 転送は全行を console.error に流していたため、daemon の INFO
+// tracing まで拡張側で `ERROR:` として記録され、get_log の ERROR 前後比較（gated E2E・
+// LLM の自己検証）を実際に壊した。level token で振り分ける分類の正本がこのテスト。
+describe('isDaemonNonErrorTracingLine (#605 stderr 転送の level 振り分け)', () => {
+  // 実機の daemon が出す ANSI 色付き tracing 行（gated E2E の実測から採取）。
+  const ansiInfoLine =
+    '\x1b[2m2026-08-25T17:30:47.243628Z\x1b[0m \x1b[32m INFO\x1b[0m ' +
+    '\x1b[2morbit_audio_daemon\x1b[0m\x1b[2m:\x1b[0m orbit-audio-daemon listening on 127.0.0.1:61554'
+
+  it('INFO/DEBUG/TRACE の tracing 行は non-error（ANSI 色コード付きの実機形式を含む）', () => {
+    expect(isDaemonNonErrorTracingLine(ansiInfoLine)).toBe(true)
+    expect(
+      isDaemonNonErrorTracingLine('2026-08-25T17:30:47Z DEBUG orbit_audio_daemon: detail'),
+    ).toBe(true)
+    expect(
+      isDaemonNonErrorTracingLine('2026-08-25T17:30:47Z TRACE orbit_audio_daemon: detail'),
+    ).toBe(true)
+  })
+
+  it('WARN/ERROR の tracing 行はエラー側に残る', () => {
+    expect(
+      isDaemonNonErrorTracingLine(
+        '\x1b[2m2026-08-25T17:30:47Z\x1b[0m \x1b[33m WARN\x1b[0m outproc attach failed (retryable): x',
+      ),
+    ).toBe(false)
+    expect(isDaemonNonErrorTracingLine('2026-08-25T17:30:47Z ERROR orbit_audio_daemon: boom')).toBe(
+      false,
+    )
+  })
+
+  it('level token を読み取れない行（panic・生 print）は fail-loud にエラー側へ倒す', () => {
+    expect(isDaemonNonErrorTracingLine("thread 'main' panicked at src/main.rs:1:1:")).toBe(false)
+    expect(isDaemonNonErrorTracingLine('some bare diagnostic output')).toBe(false)
+    // 本文中に INFO が現れるだけの行を level token と誤認しない（token は行頭の
+    // ISO timestamp 直後のみ）。緩めると本物のエラーが log から消える側に倒れる。
+    expect(isDaemonNonErrorTracingLine('plugin said: INFO is my name')).toBe(false)
+    expect(isDaemonNonErrorTracingLine('loaded INFO panel for plugin')).toBe(false)
   })
 })

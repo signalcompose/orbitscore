@@ -2,9 +2,12 @@
  * Tests for AudioSlicer - file slicing functionality
  */
 
+import * as fs from 'fs'
+import * as os from 'os'
+
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
-// Mock fs and os BEFORE importing AudioSlicer
+// Mock fs and os BEFORE importing AudioSlicer（vi.mock は vitest が hoist する）
 vi.mock('fs', () => ({
   readFileSync: vi.fn(),
   writeFileSync: vi.fn(),
@@ -19,9 +22,6 @@ vi.mock('fs', () => ({
 vi.mock('os', () => ({
   tmpdir: vi.fn(() => '/tmp'),
 }))
-
-import * as os from 'os'
-import * as fs from 'fs'
 
 import { AudioSlicer } from '../../packages/engine/src/audio/audio-slicer'
 

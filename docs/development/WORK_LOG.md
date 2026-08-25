@@ -17,6 +17,398 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.359 fix(engine): respawn 後の stale セッション簿記を解消し冪等 open を1箇所に集約 (#619 R2) (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #617（PR #619 のレビュー Round 2 対応）
+**Status**: **2019 passed / 0 failed**（+5）・**gated E2E 6/6 green**・lint 0・変異検証 4 種すべて 1 対 1 で red
+
+#### Round 2 の指摘（Critical）は正しかった
+
+`seq.ui()` の冪等ガード（`hasOpenPluginUi`）が **daemon respawn 後に stale になる**。
+respawn はセッション簿記を意図的に残す設計（「次の open が上書きする」で回収）だったが、
+冪等ガードがその回収経路自体を塞ぎ、**恒久的なサイレント no-op** になっていた。
+
+#### 修正: 規則を 1 箇所（`openPluginUiIdempotent`）に集約し 3 層で防御
+
+1. **fast path**: 簿記にあれば no-op（daemon に行かない）
+2. **staleness 対策**: `setPluginUiClosedByRespawnListener`（`setPluginUiSafepointSaver` と同じ配線パターン）で、
+   respawn が UI を閉じた瞬間に Global がセッションを破棄
+3. **race の防御**: 判定後の隙間で child が「already open」を返したら成功扱い（権威は child の状態機械）。
+   **already-open 以外は throw する**テストも置き、何でも飲み込む方向に倒れないことを固定
+
+`//#pluginUi`（MCP 経由）と `seq.ui()` の両方が同じ実装へ委譲する（「同じ判定に規則を2つ持たない」）。
+
+#### R2 のもう1つの指摘: stub 越しのテストを実装検証に置き換え
+
+`hasOpenPluginUi` を stub していたテストを、**実セッション map + 実リスナ登録**を通す形に変更。
+player 側（イベント→リスナ呼び出し）と Global 側（リスナ→セッション破棄）の両方の継ぎ目にテストを配置。
+
+#### 変異検証（4 種・検出が 1 対 1）
+
+| 変異 | red になったテスト |
+|---|---|
+| Global のリスナ登録を外す（Critical の再導入） | respawn 破棄テストのみ |
+| player のリスナ呼び出しを外す | player 側テストのみ |
+| already-open の catch を外す | race 防御テスト 2 件のみ |
+| fast path を外す | no-op テスト 2 件のみ |
+
+#### Round 3（fix-scoped・1レビュアー）: Critical 1件 → 修正済み
+
+catch の第2文言 `OPEN_UI requires state == Closed` は **Rust 単体テストの assert メッセージ**で、
+wire を流れる実エラーではなかった（レビュアーが rust/ を grep して発見・main が一次ソースで裏取り）。
+child の UiCloseStateMachine が実際に返すのは `CLOSING_IN_PROGRESS_DETAIL = "closing-in-progress"` で、
+`CommandMailboxError::CommandFailed` の Display 経由で TS に届く。**「捏造した mock 文言」
+アンチパターンに自分で該当**していた — テストが実装の想定文言をそのまま写していたため検出不能だった。
+
+- 修正: マッチ文字列を `closing-in-progress` に置換・コメントの「実機で実測」の主張も
+  実際に実測した host 側エラー（`OPEN_UI requested while lifecycle is`）に訂正
+- テストの mock 文言を実 Display 形式（`plugin state mailbox command 7 failed (result=2): ...`）に置換
+- 変異検証: 2 つのマッチをそれぞれ外し、対応テストのみが red（1 対 1）
+
+#### Round 4（fixer 差分の再点検）: R3 fix 自身が新しい Critical を持ち込んでいた
+
+R3 で採用した実文言 `closing-in-progress` は、Rust 側 `open_command` が **OR 条件で3つの異なる
+拒否理由を1つの文言に潰していた**: (1) state == Open（目的達成・成功扱いで正しい）
+(2) state == Closing（UI は閉じていく・開いていない）(3) Closed だが ring 未 drain（開いていない）。
+(2)(3) を成功扱いすると「開けなかったのに開いたことにする」本物のサイレント no-op になる。
+さらに host 側マッチ `lifecycle is`（無限定）も同型の欠陥で `lifecycle is Closing` を飲んでいた。
+
+**修正は Rust 側の根本から**（意味が違うものは wire でも違う文言にする）:
+
+- `orbit-child-ui`: `ALREADY_OPEN_DETAIL = "already-open"` を新設し、`open_command` が
+  state == Open では `already-open`、Closing / ring 未 drain では従来どおり
+  `closing-in-progress` を返すよう分離（duplicate_open の rust テストも追随）
+- TS 側は `already-open` と `lifecycle is Open`（`Opening` の前方一致を兼ね、`Closing` は
+  不一致）のみ成功扱い。`closing-in-progress` / `lifecycle is Closing` は throw
+- テスト +3（Closing throw / closing-in-progress throw / Opening 前方一致の裏取り）
+- 変異検証 4 種（マッチを広げ戻す×2・外す×2）すべて対応テストのみ red
+
+#### 保留（意図的）
+
+- **Opening 同時 open race**（R4 最終再点検で確認・意図的受容）: `lifecycle is Opening` を
+  成功扱いにするため、並行 open の先行者が最終的に失敗した場合、後続側は「開いた」と
+  信じたまま resolve する。ただし先行者の失敗は先行者自身の呼び出し元に本物のエラーで
+  届く（完全なサイレントではない）。二重待ち合わせ機構は detail 意味分離のスコープ外。
+- **第3の「already open」信号**（既存挙動・fix 対象外）: プラグイン GUI 層自身が返す
+  `editor GUI/view is already open`（スペース区切り）は、状態機械と実ウィンドウの食い違い
+  でしか到達せず、TS のマッチに当たらず loud に throw される。保守的な既定として維持。
+- `getSize` の許容コード（`kNotInitialized` のみ）が Kontakt 1 機種の実測に基づく点は R2 Important のまま維持。
+  他プラグインが別コードを返した場合はコードを名指しした loud なエラーになり、その時に意図的に許容へ足す。
+- ついで修正: `audio-slicer.spec.ts` の import/order warning（既存・1 行）と、
+  分類テストへの `openPluginUiIdempotent` 登録 2 箇所。
+
+---
+
+### 6.358 feat(dsl): 楽譜からプラグイン UI を開く `seq.ui()` + Kontakt の controller fallback (#617 / #603) (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #617 / #603
+**Status**: **2014 passed / 0 failed**（着手前 1962・**+52**）・**gated E2E 6/6 green**・lint 0・`cargo clippy` 0・`cargo fmt` 0
+・Rust host lib 9 passed・**実機で Kontakt の UI open/close/再open/2声同時を確認**
+
+#### 🔴 gated E2E を実行して、main に潜んでいたプロダクトバグ2件を発見
+
+**owner 指示で Fable に調査・修正を委譲**（通常は監査専任だが明示指示による例外）。
+判断材料をブリーフ（97行）にまとめて渡した。
+
+##### まず: main が既に赤かった
+
+`git checkout main` して同じ E2E を回すベースラインを取った:
+
+| 対象 | 結果 |
+|---|---|
+| **main（`5225a55a`）** | **3 failed / 3 passed** |
+| 本ブランチ（修正前） | 3 failed / 3 passed（**失敗理由も完全一致**） |
+
+**本ブランチは1件も壊していない。** red は本日マージした **PR #616** が入れたもので、
+**CI は gated E2E を走らせないため誰も気づかなかった** — マージ前に実行していれば捕まえられた。
+
+##### 真因は2件のプロダクトバグ + 2件の連鎖
+
+Fable が**実測で独立性を先に確定**させた（テスト1の真因だけ直したら、他2件が無修正で green
+= テスト1が `stop_engine` 前に abort してエンジンを汚す連鎖だった）。
+
+**(a) `{"evalMark"` が log filter から漏れていた（#614 の抜け）**
+
+`{"savePluginState"` / `{"pluginUi"` は除外済みなのに `{"evalMark"` が漏れており、
+**診断本文ごと log ring に転写**されていた。1回の attach 失敗が `get_log` に2回現れ、
+ERROR の前後比較が全部ずれる。
+
+**(b) daemon の INFO tracing が `ERROR:` として記録されていた（#605 の抜け）**
+
+#605 の「起動後 stderr 転送」が全行 `console.error` に流していたため、
+`INFO orbit_audio_daemon: listening on ...` のような**正常ログが ERROR として計上**されていた。
+
+🔴 **この行は本日のセッション中、実機確認のたびに目にしていた。** ERROR 件数を数える場面も
+あったのに、**INFO が ERROR として出ていることに気づかなかった**。`get_log` の ERROR 前後比較は
+**LLM の自己検証手段**でもあるので、ノイズで埋まると本物のエラーが埋もれる。
+
+対処は ANSI を剥がして ISO timestamp + level token で判定し、
+**読めない行（panic・生 print）は fail-loud に error 側へ倒す**。
+
+**(d) RMS 許容 2% → 3%（測定の揺れ・故障ではない）**
+
+無故障時 delta の実測分布 {0.17, 0.21, 0.62, 2.09, 2.14, 2.15}% は**二峰性で符号も両方向**、
+pre 側の capture も揺れる = **キャプチャ窓の量子化（kick 1発ぶん）**であって復元劣化ではない。
+2% はこのクラスタの内側で、**クリーンな状態でも5回中2回落ちていた**。
+
+3% の根拠は**実測アンカー2点で挟むこと**: 最小実故障 4.11%（#587 実測）は 3% でも red /
+最悪ノイズ 2.15% の 1.4 倍上。旧コメントの「noise floor 3.4e-6」は**再起動なし連続キャプチャ**の
+値で、この比較には当てはまらない旨も注記に修正した。
+
+##### 私（main）が先に直していた2件も正しかった
+
+`instSeq.instrument(別プラグイン)` の差し替え拒否と `global.effect("nonexistent")` の
+attach 失敗は、**#614 で `isError: true` が返るようになった**ための陳腐化。
+テスト側を新しい意味論へ合わせるのが正しく、green で検証済み。
+
+##### 別 issue に切り出したもの
+
+**#620: 診断の誤帰属**（#614 の構造的な抜け）。`pendingDiagnostics` はマーカー間の
+グローバル蓄積なので、**マーカー無しの投入経路（`run_selection`）が出したエラーが次の
+`evaluate_orbitscore` の応答に付く**。LLM が「自分のせい」と誤認する。設計判断が要るため
+本 PR では直さない。🔴 **着手時はまず実機で再現させること**（構造からの推論であり未観測）。
+
+##### 補足: E2E 起動失敗の環境要因（ソケットパス 103 文字制限）
+
+Fable の green を main が再現しようとしたら**アプリが起動しなかった**。`--verbose` を付けて
+観測したところ一発で判明:
+
+```
+WARNING: IPC handle "...(scratchpad の長いパス).../1.12-main.sock" is longer than 103 chars
+```
+
+**Unix ドメインソケットのパスは macOS で 103 文字まで。** E2E に渡す `TMPDIR` を
+scratchpad 配下（115 文字超）にしていたため、アプリがシングルトン用ソケットを作れず
+起動中に死んでいた。**短いパス（`/tmp/claude/e2t`）に変えたら即起動**して 6/6 green。
+
+先に疑った署名エラー（-67062）・プロセス衝突・Gatekeeper は**すべて外れ**。
+[[escalation-does-not-fix-opacity]] — 見えない問題は推測を増やさず観測を足す
+（`--verbose` 1 個で解けた）。**gated E2E の実行手順として「TMPDIR は短いパスを使う」を
+ここに記録する。**
+
+##### 検証
+
+- **gated E2E 6/6 green（Fable 連続2回 + main 自身の再現1回）**
+- `npm test` **2014 passed / 34 skipped / 0 failed**
+- 変異検証: filter 除去 → red / INFO 判定を常時 true → 2 red・常時 false → 1 red
+
+##### 併せて掃除したもの
+
+`packages/engine/src/core/global.ts.backup`（2月付の残置バックアップ）が git 追跡されていた。
+参照ゼロを確認して削除。
+
+#### `/simplify` — 🔴 既存 provider との二重表示を発見
+
+4エージェント（reuse / simplification / efficiency / altitude）を並行起動。
+**altitude が最も重い指摘を出した。**
+
+##### 🔴 同じ面に既に持ち主がいた
+
+`extension.ts` の `completionProvider`（本作業より前から存在）が**すでに `.` を
+トリガーに登録**しており、メソッドチェーンの文脈に応じて絞り込んだ**スニペット候補**
+（`tempo(${1:120})` 等）を返していた。私はそれを確認せずに2つ目を足した。
+
+実測で重複を確認:
+
+```
+OLD[global.]: beat,tempo,quantize,audioPath,gain,compressor,limiter,normalizer,
+              effect,instrument,output,sum,aux,linkAudio,run,loop,stop
+```
+
+`global.` と打つと `tempo` が2つ（スニペット版とプレーン版）並ぶ状態だった。
+
+##### ポリシー（指摘単位のパッチにしない）
+
+> **「ドットの後のメソッド補完」の持ち主は既存 provider。** 既存は**文脈で絞る**という
+> こちらに無い機能を持つので壊さない。新 provider は **既存が返さなかった語彙だけを補う**。
+> 既存は手書きの候補表で語彙テーブルと同期していないため `ui`（#617）が出ない —
+> その穴を埋めるのが役割。
+
+`getContextualCompletions` の結果を除外集合として使い、二重表示を構造的に防いだ。
+**二重が出ないこと自体をテストで固定**した（`overlap` が空であることを assert）。
+
+##### 採った指摘
+
+| 角度 | 指摘 | 対応 |
+|---|---|---|
+| **altitude** | **既存 provider と二重表示** | 除外フィルタ + 二重を禁じるテスト |
+| altitude / simplification | 識別子を context と provider で**2回パース**し、**2つの正規表現が食い違う**（実測: `a.b.` は context 不発火・provider は `b`） | context に `identifier` を載せ、provider の正規表現を削除 |
+| reuse | 宣言抽出3関数がデータ違いの重複 | `extractVarDeclarations(source, rhsPattern?)` に統合（既存の `extractTopLevelDeclaredNames` も寄せた） |
+| simplification | Rust の二重 terminate の説明が3箇所で言い換え | `should_terminate_controller` に集約し、他はそこを指す |
+| simplification | モックの `Text: 0` が未使用 | 削除 |
+
+##### 採らなかった指摘
+
+- **`setPluginUiHandler` をコンストラクタ引数へ** — 既存の
+  `MidiManager.setPluginOutputFactory` と**同型**であり、reuse レビューも
+  「正しい precedent の踏襲」と評価している。一貫性を崩す方が高くつく
+- **`dsl-method-catalog.ts` を `require('../engine/dist/...')` に置換**（altitude 提案）
+  — 検討したが**採らない**。同ファイルの既存 `require` 2箇所は
+  **fallback を持つ**（失敗しても動く）のに対し、補完候補は**空になると機能が消える**。
+  現在の「写し + 一致テスト」は乖離を **CI で必ず捕まえる**のに対し、`require` は
+  `engine/dist` が無い開発状態で**黙って候補が減る**。トレードが逆
+- **既存 `extractDeclaredBusNames` の全文スキャン**（efficiency が発見）— 本 PR が
+  触っていない既存コード。記録のみ
+
+##### efficiency は実測で「対応不要」
+
+`document.getText()` + 抽出2本で **0.14ms/キーストローク**（1587行の実作品で計測）。
+知覚閾値の3桁下なので、キャッシュも1パス化も入れない。**数値を出して否定した**判断を採る。
+
+##### 変異検証（再実施）
+
+| 変異 | 結果 |
+|---|---|
+| 二重表示フィルタを外す | **red**（2件） |
+| `identifier` を空にする | **red**（4件） |
+| helper の `rhsPattern` を無視 | **red**（5件） |
+
+#### 追加: DSL メソッド補完（#495 第1段）
+
+owner 追加要求: 「あと記述の補完も」。
+
+##### 現状の穴
+
+補完 provider は3本動いていたが、**埋まっていたのは文字列の中だけ**だった:
+
+| 文脈 | 実装前 |
+|---|---|
+| `import { … }` / `import … from "` | ✅ |
+| `output("` → sum 名 / `send("` → aux 名 | ✅ |
+| `effect("` / `instrument("` → カタログ | ✅ |
+| **`seq.` / `global.` / `sum("x").` の後** | 🔴 **無し** |
+
+🔴 **その結果、今回足した `seq.ui()` は補完に出なかった。** engine 側に
+`SEQUENCE_DSL_METHODS` という語彙テーブルがあるのに、補完がそれを見ていなかった。
+
+##### 実装
+
+- `dsl-completion-context.ts`: `kind: 'method'` を追加。`sum(...)`/`aux(...)` はその場で
+  bus と判定し、変数名は provider が宣言を見て解決する
+- `dsl-method-catalog.ts`（新規）: 候補表。**正本は engine 側**で、ここは写し
+  （拡張は engine をプロセス境界越しに使う設計。`plugin-catalog-reader.ts` と同じ理由）
+- 🔴 **写しの乖離をテストで固定**: engine の語彙と一字一句一致することを検査する。
+  DSL にメソッドを足して候補表を更新し忘れると red（`ui` の乖離が実例）
+- `extension.ts`: provider に `method` ケースを追加。**`.` をトリガー文字に追加**
+
+##### 🔴 変異検証で2つの穴が出た
+
+**穴1: provider 本体がテストで駆動できていなかった。** 当初は文脈検出だけをテストしており、
+provider は `activate()` の中に埋まっていて呼べなかった。#614 の「配線はユニットテストの
+視野の外」と同型なので、**`dslCompletionItemProvider` を named export に切り出し**、
+`tests/mocks/vscode.ts` に登録捕捉を足して本体を直接駆動するテストを書いた。
+
+**穴2: `.` トリガーを外す変異が生き残った。** provider を直接呼ぶテストでは、
+トリガー文字が無くても通ってしまう。しかし実機では**打っても出てこない**。
+`registerCompletionProviders` を export し、**登録内容（トリガー文字）を検査**して塞いだ。
+
+| 変異 | 結果 |
+|---|---|
+| 候補表から `ui` を落とす（乖離の再現） | **red** |
+| bus 候補から `ui` を落とす | **red** |
+| `sum`/`aux` を bus と判定しない | **red** |
+| global を sequence 抽出に混ぜる | **red** |
+| 文字列の中でも発火させる | **red** |
+| sequence と global の候補源を入れ替える | **red** |
+| 未宣言の識別子にも候補を出す | **red** |
+| bus 候補を sequence に差し替える | **red** |
+| `method` ケースを丸ごと削除 | **red**（5件） |
+| **`.` トリガーを外す** | 🔴 **最初は生存** → 登録テスト追加後 **red** |
+
+##### 🔴 変異が適用されたことを毎回検証する
+
+provider を module 直下へ切り出した際に**インデントが変わり**、変異スクリプトのアンカーが
+一致せず **変異が一度も適用されないまま「全て green」**になった。危うく
+「テストが弱い」と誤診するところだった。以後、変異適用は
+`assert s.count(old) == 1` で**適用されたことを確認してから**実行する。
+
+#### owner 要求（2026-08-25）
+
+> DSL から UI を呼び出せるようにして欲しい。それが無いとセッティングするのが大変になる。
+
+SIGMUS のデモは **VST（Kontakt）+ LLM 駆動**で、音色は事前セットする方針。したがって
+**準備段階で音色を作って保存する工程**が要る。従来その工程はコンテキストメニュー（#474）か
+MCP tool からしか起動できず、**楽譜を書きながら音色を追い込む**流れに乗らなかった。
+
+#### 表面（owner 裁定）
+
+```
+cb.instrument("Kontakt 8.vst3")
+cb.ui()          // instrument の UI（index 0）
+cb.ui(1)         // 1つ目の effect の UI
+cb.ui(0, false)  // 閉じる
+
+sum("strings").ui(1)   // mixer bus の insert（既定 index 1）
+aux("verb").ui(1)
+```
+
+- **レシーバに直接生やす**（`instrument()` / `effect()` と並べて書ける）
+- **複数同時オープンを制限しない** — セッティング時に複数パートを並べて見る用途がある
+
+機構は既存の `global.openPluginUi` / `closePluginUi` を**そのまま通す**（新しい経路を作らない）。
+`MixerManager` は `Global` を知らない設計（循環参照回避）なので、`Global` 側から
+`setPluginUiHandler` で注入した。未注入で `ui()` が呼ばれたら loud に失敗する。
+
+🔴 **DSL 語彙（`SEQUENCE_DSL_METHODS` / `BUS_DSL_METHODS`）への登録を忘れない** — #528 では
+ここを落として**ユニットテスト全緑のままエディタ評価が全滅**した。語彙から `ui` を外す変異を
+テストが red にすることを確認済み。
+
+#### #603 を同梱した理由
+
+`seq.ui()` だけ入れても **Kontakt では UI が開かない**（実機で `edit controller is
+unavailable` を再現）。owner の目的は「セッティングを楽にする」で対象は Kontakt なので、
+**分けると「入ったが使えない」状態でマージすることになる**。owner 承認のうえ同梱した。
+
+TEMP パッチ（「1260」の音色選定を完走した実績あり・#603 にコメント保全）は**そのまま当たった**。
+issue が挙げていた「正式修正で必要なこと」を実施:
+
+1. **TEMP コメント → 正規 doc**。単一コンポーネント plugin では component 自身が
+   `IEditController` を実装するので `getControllerClassId` が失敗する、という機序と、
+   **実測（Kontakt 8）で fallback 無しでは開けない**ことを書いた。
+   🔴 SDK の条文は bindings に doc が無く C++ SDK が一次ソースなので、**推測の引用は書かず
+   実測した事実を根拠にした**
+2. **テスト（従来ゼロ）**: 二重 terminate 回避の判定を `should_terminate_controller()` として
+   `Drop` から切り出し、実 COM 抜きで検証できるようにした
+
+#### 🔴 変異検証
+
+| 対象 | 変異 | 結果 |
+|---|---|---|
+| #617 | `seq.ui` の open/close を反転 | **red**（5件） |
+| #617 | `seq.ui` の既定 index を 1 に | **red** |
+| #617 | bus の receiverId から prefix を落とす | **red**（4件） |
+| #617 | **語彙から `ui` を外す**（#528 の再発） | **red** |
+| #617 | UI ハンドラの注入を外す | **red**（4件） |
+| #603 | 判定を反転（共有時に terminate = 二重 terminate） | **red**（2件） |
+| #603 | **常に true（= #603 以前の挙動）** | **red** |
+| #603 | 常に false（controller を一切 terminate しない） | **red** |
+
+#### 実機での確認
+
+| プラグイン | `instrument()` | `ui()` |
+|---|---|---|
+| **Kontakt 8** | ok | **✓ open / close / 再open / 2声同時**（修正前は `edit controller is unavailable`） |
+| BM-COZY / BM-DOPE | ok | ✓ 2つ同時に開く |
+| 未ロードのスロット | — | ✓ **loud に失敗**（`no plugin instrument is declared`） |
+| ARIA Player | ok | `createView returned null`（**プラグイン側の仕様**・エラーは正確に報告される） |
+
+ログの `[vst3-view] getSize failed (5) before attach — using fallback size` は
+**#603 が想定した経路そのもの**（attach 前にサイズを確定できない plugin を既定サイズで開き、
+attach 後の `resizeView` に従う）。
+
+#### 🔴 環境要因を実装の欠陥と誤認しかけた
+
+2つ目の instrument ロードが **60 秒 timeout**（`OUTPROC_ATTACH_FAILED`）した。実装を疑う
+ところだったが、owner の**「音源の USB ドライブを繋いでいなかった」**という指摘で解決。
+BM-COZY のサンプルライブラリは `/Volumes/SSD4TB2503/Music/UJAM/BM-COZY` にあり、
+**未接続では child が READY を返せない**。接続後は同じ操作が `ok`。
+
+**テストが落ちたらまず実行環境を見る**（同日の CPU 飽和による false red と同型）。
+
+---
+
 ### 6.357 fix(engine): #484 D1 argv テストのフレーク解消と、偽の SIGKILL 昇格報告の停止 (#520) (Aug 25, 2026)
 
 **Date**: 2026-08-25

@@ -39,6 +39,10 @@ pub trait PluginUiEndpoint {
     fn apply_host_resize(&mut self, size: UiSize) -> Result<(), String>;
 }
 
+/// Detail returned when `OPEN_UI` arrives while the UI is already open. The goal state
+/// (open) is already achieved, so idempotent callers may treat this as success — which is
+/// why it must stay distinct from [`CLOSING_IN_PROGRESS_DETAIL`], where the UI is NOT open.
+pub const ALREADY_OPEN_DETAIL: &str = "already-open";
 /// Detail returned when `OPEN_UI` arrives before the previous close cycle drains.
 pub const CLOSING_IN_PROGRESS_DETAIL: &str = "closing-in-progress";
 /// Detail returned when `CLOSE_UI` arrives outside [`UiState::Open`].
@@ -201,6 +205,12 @@ impl UiCloseStateMachine {
     /// Acceptance is exactly the drain gate: state is `Closed` and the event backend
     /// reports pending count zero with equal ack/publish cursors.
     pub fn open_command(&mut self, actions: &mut impl UiHostActions) -> CommandAck {
+        // Open と「開いていない拒否」（Closing / ring 未 drain）は detail を分ける。
+        // 同じ文言に潰すと、TS 側の冪等 open が「開いていないのに成功扱い」へ倒れる
+        // （PR #619 R4 で実際に起きた取り違え）。
+        if matches!(self.state, MachineState::Open) {
+            return CommandAck::new(false, ALREADY_OPEN_DETAIL);
+        }
         if !matches!(self.state, MachineState::Closed) || !actions.is_event_ring_drained() {
             return CommandAck::new(false, CLOSING_IN_PROGRESS_DETAIL);
         }
@@ -485,7 +495,7 @@ mod tests {
             assert_eq!(machine.state(), UiState::Open);
             let duplicate_open = machine.open_command(&mut actions);
             assert!(!duplicate_open.success);
-            assert_eq!(duplicate_open.detail, "closing-in-progress");
+            assert_eq!(duplicate_open.detail, "already-open");
             assert_eq!(
                 actions
                     .calls
