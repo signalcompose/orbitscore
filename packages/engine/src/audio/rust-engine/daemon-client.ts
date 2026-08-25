@@ -271,6 +271,11 @@ export class DaemonClient extends EventEmitter {
    */
   private async killChildGracefully(child: ChildProcess): Promise<void> {
     if (child.killed) return
+    // 自然終了済みの child に SIGTERM を送っても 'exit' は二度と発火しないので、
+    // deadline 満了まで待たされた上で「SIGKILL へ昇格した」と偽の診断を出す（#520）。
+    // child.killed は「signal を送ったか」しか表さず終了の有無を含まないため、
+    // 終了判定は exitCode / signalCode で行う（どちらか非 null なら終了済み）。
+    if (child.exitCode !== null || child.signalCode !== null) return
     child.kill('SIGTERM')
     await new Promise<void>((resolve) => {
       const onExit = (): void => {

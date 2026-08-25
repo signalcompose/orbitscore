@@ -17,6 +17,81 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.357 fix(engine): #484 D1 argv テストのフレーク解消と、偽の SIGKILL 昇格報告の停止 (#520) (Aug 25, 2026)
+
+**Date**: 2026-08-25
+**Issue**: #520
+**Status**: **1930 passed / 0 failed**（着手前 1929・+1）・lint 0・**全 suite 5 回連続 green**
+
+土台バンドル（#520 → #567 → #614 → #607）の 1 件目。着手の理由は、
+セッション開始時の現状把握で `npm test` を 2 回回したところ **1 回目が fail した**こと。
+落ちたのは #520 そのもので、**「全緑」という判定の土台が実際に揺れていた**。
+
+#### 決定論的な再現（負荷待ちをやめる）
+
+#520 は「約3回に1回」「高負荷時のみ」と記録されており、そのままでは fail-before を
+示せない。そこで recorder script に `sleep 1` を挿し、**負荷で子プロセスの exit が遅れる
+状況を機序として直接再現**した:
+
+```
+expected [Function] to throw error matching /daemon exited before ready/
+  but got 'daemon ready line timeout after 500ms'
+```
+
+セッション開始時に観測した失敗と同一の文言。以後の検証はすべてこの変異で行った。
+
+#### 原因1: 検証対象でない deadline にテストが依存していた
+
+このブロックの検証対象は「argv に何が渡るか」であって「子プロセスが 500ms 以内に
+exit すること」ではない。しかし `startupTimeoutMs: 500` が固定で埋め込まれており、
+負荷時は **timeout が exit を追い越して別の reject 理由**（`ready line timeout`）になり、
+文言まで固定した assert が落ちていた。
+
+deadline は exit 観測で即座に抜けるので、**広げても正常時の所要時間は変わらない**。
+定数 `SPAWN_ARGV_STARTUP_TIMEOUT_MS = 10_000` に括り出し、
+「ここを縮めるとフレークが戻る」理由をコメントに残した（#491 と同じ方針）。
+
+#### 原因2: 自然終了した child に SIGTERM を送り、偽の昇格を報告していた
+
+#520 本文が症状として引用していた
+`DaemonClient child did not exit within 500ms of SIGTERM; escalated to SIGKILL` は、
+**私が触っていない C3 テストでも出ていた**ため別系統として追った。
+
+`killChildGracefully` の早期リターンが `child.killed` のみを見ていた。これは
+**「signal を送ったか」しか表さず、終了の有無を含まない**。自力で exit 済みの child に
+SIGTERM を送っても `'exit'` は二度と発火しないので、**deadline 満了まで待たされた上で
+「SIGKILL へ昇格した」と偽の診断を出す**。start 失敗時の cleanup がこの経路を通るため、
+当該テストは実行のたびに 500ms を捨て、かつ診断を誤らせていた。
+
+終了判定を `exitCode !== null || signalCode !== null` に変更。
+偽の警告は **3 件 → 0 件**、テスト時間も 840ms → 330ms 台へ。
+
+#### 🔴 変異検証 — 最初のテストは変異を生き残った
+
+| 変異 | 結果 |
+|---|---|
+| (a) 新ガード（自然終了の検知）を削除 | 🔴 **最初は生き残った** → テスト修正後 **red** |
+| (b) argv から `--audio-device` を落とす | **red**（既存 assert の検出力は維持されている） |
+| (c) タイムアウト定数を 500 に戻す + 起動遅延 | **red**（3 件とも） |
+
+(a) が生き残った原因は、`vi.spyOn` の記録を **`mockRestore()` の後**に読んでいたこと。
+`mockRestore()` は `mock.calls` ごとリセットするため、**ガードを外しても記録が空のまま
+assert が通っていた**。復元より前に記録を取り出す形へ修正して red を確認した。
+[[test-name-must-match-the-path-it-drives]] と同型で、名前と経路は正しいのに
+**観測点だけがずれていた**ケース。
+
+#### 採らなかったもの: argv の アトミック書き込み
+
+当初は `> tmp` → `mv` で「存在＝完全」を構造的に保証する案を入れたが、**撤回した**。
+親は child の `'exit'` を観測してから読むので、**部分読みは構造上起こり得ず、
+変異でも落とせない**。証拠のない機構を残さない方針で削除した。
+
+`vi.waitFor(existsSync)` は残した。#520 のもう一つの症状（`argv.txt` の ENOENT）は
+過去に高負荷下で**実際に観測されている**ため保険として置くが、
+**変異検証できない防御である**ことをコメントに明記した。
+
+---
+
 ### 6.356 fix: PR #612 レビュー統合 — `output()` の宛先排他規則を spec に確定し、保護の穴を塞ぐ (Aug 1, 2026)
 
 **Date**: 2026-08-01
