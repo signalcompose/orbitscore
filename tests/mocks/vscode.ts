@@ -93,7 +93,7 @@ export class CompletionItem {
   ) {}
 }
 
-export const CompletionItemKind = { Method: 1, Value: 11, File: 16, Text: 0 } as const
+export const CompletionItemKind = { Method: 1, Value: 11, File: 16 } as const
 
 export class MarkdownString {
   constructor(public value?: string) {}

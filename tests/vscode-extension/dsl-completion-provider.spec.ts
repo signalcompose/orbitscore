@@ -48,11 +48,16 @@ describe('補完 provider 本体 — メソッド候補 (#495)', () => {
     expect(labels).toContain('ui')
   })
 
-  it('global. の後に Global のメソッドが出る', async () => {
+  it('global. の後に Global の語彙を補う（既存 provider が返す分は除く）', async () => {
+    // 🔴 この provider は**既存 provider が返さなかった語彙だけ**を補う。
+    // `tempo` / `sum` は既存がスニペット付きで返すのでここには現れない（二重表示の防止）。
+    // 現れるのは既存の手書き表に無いもの＝語彙テーブルにしか無いもの。
     const src = `${SCORE}global.`
     const labels = await complete(src, 2, 7)
-    expect(labels).toContain('tempo')
-    expect(labels).toContain('sum')
+    expect(labels).not.toContain('tempo') // 既存が返す
+    expect(labels).not.toContain('sum') // 既存が返す
+    expect(labels).toContain('key') // 語彙にあるが既存の手書き表に無い
+    expect(labels).toContain('midiLatency')
     // Sequence 専用のものは出さない（候補源を取り違えていない）
     expect(labels).not.toContain('play')
   })
@@ -81,15 +86,46 @@ describe('補完 provider 本体 — メソッド候補 (#495)', () => {
     expect(labels).not.toContain('audio')
   })
 
-  it('慣例外の global 名でも Global の候補が出る', async () => {
+  it('慣例外の global 名でも Global として解決される', async () => {
+    // 🔴 既存 provider は `linePrefix.includes('global.')` で global 判定するので、
+    // `g.` には Global 候補を返さない（Sequence 側を返す）。一方こちらは**宣言**を見るので
+    // 正しく Global と判定する。
+    //
+    // ただし二重表示の除外はこちらの判定（receiver === 'global'）で行うため、
+    // 既存の Global 候補は除かれる。ここで確認するのは
+    // **「Global として解決され、Global 固有の語彙が出ること」**。
     const src = ['var g = init GLOBAL', 'g.'].join('\n')
     const labels = await complete(src, 1, 2)
-    expect(labels).toContain('tempo')
+    expect(labels).toContain('key') // Global の語彙
+    expect(labels).toContain('midiLatency')
+    expect(labels).not.toContain('play') // Sequence と取り違えていない
   })
 
   it('文字列の中では出さない（既存の面を壊さない）', async () => {
     const src = `${SCORE}cb.audio("takes/a.`
     expect(await complete(src, 2, 18)).toEqual([])
+  })
+})
+
+describe('🔴 既存 provider との二重表示を出さない (#495)', () => {
+  it('既存が返す label はこちらから出さない', async () => {
+    const { analyzeMethodChain, getContextualCompletions } = await import(
+      '../../packages/vscode-extension/src/completion-context'
+    )
+    const src = `${SCORE}global.`
+    const old = new Set(
+      getContextualCompletions(analyzeMethodChain('global.', 7), true).map((i) => String(i.label)),
+    )
+    const mine = await complete(src, 2, 7)
+    const overlap = mine.filter((label) => old.has(label))
+    expect(overlap, `二重に出る候補: ${overlap.join(',')}`).toEqual([])
+  })
+
+  it('それでも語彙にしか無いものは補われる（黙って何も出さない、にならない）', async () => {
+    const src = `${SCORE}cb.`
+    const labels = await complete(src, 2, 3)
+    // #617 で足した ui は既存の手書き表に無いので、こちらが出す
+    expect(labels).toContain('ui')
   })
 })
 

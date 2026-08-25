@@ -438,7 +438,7 @@ pub struct Vst3PluginMain {
     ui_endpoint: Vst3UiEndpoint,
     controller: Option<ComPtr<IEditController>>,
     /// controller == component（単一コンポーネント plugin）のとき true（#603）。
-    /// `Drop` で `controller.terminate()` を呼ばず、component 側の terminate に一本化する。
+    /// 理由は [`should_terminate_controller`] を参照。
     controller_shared_with_component: bool,
     component_connection: Option<ComPtr<IConnectionPoint>>,
     controller_connection: Option<ComPtr<IConnectionPoint>>,
@@ -1462,9 +1462,17 @@ struct AudioModuleClass {
 
 /// controller を独立して `terminate()` すべきか（#603）。
 ///
-/// 単一コンポーネント plugin では controller と component が**同一の COM オブジェクト**
-/// なので、両方から `terminate()` を呼ぶと同じオブジェクトを二度終了させることになり、
-/// plugin 側の状態機械が壊れる。共有時は component 側の terminate に一本化する。
+/// 🔴 **この判断の理由はここに集約する**（`shared_with_component` 各フィールドの doc は
+/// ここを指すだけにしてある）。
+///
+/// VST3 には controller を別クラスとして持つ plugin と、component 自身が
+/// `IEditController` を実装する**単一コンポーネント plugin**（Kontakt 等）の 2 形態がある。
+/// 後者では `getControllerClassId` が失敗するので component を `IEditController` へ cast して
+/// 使う（[`connect_controller`] の fallback）。
+///
+/// その結果 controller と component が**同一の COM オブジェクト**になるため、両方から
+/// `terminate()` を呼ぶと同じオブジェクトを二度終了させることになり、plugin 側の状態機械が
+/// 壊れる。共有時は component 側の terminate に一本化する。
 ///
 /// `Drop` から切り出してあるのは、実 COM オブジェクトなしでこの判定を検証するため。
 fn should_terminate_controller(shared_with_component: bool) -> bool {
@@ -1477,15 +1485,7 @@ struct ControllerHandshake {
     controller_connection: Option<ComPtr<IConnectionPoint>>,
     component_handler: Option<ComWrapper<HostComponentHandler>>,
     /// controller が component と**同一の COM オブジェクト**のとき true（#603）。
-    ///
-    /// VST3 には controller を別クラスとして持つ plugin と、component 自身が
-    /// `IEditController` を実装する **単一コンポーネント plugin** の 2 形態がある。
-    /// 後者では `getControllerClassId` が失敗するので、component を `IEditController` へ
-    /// cast して使う（下の `connect_controller` を参照）。
-    ///
-    /// teardown で **二重 terminate を避ける**ためにこのフラグが要る。同一オブジェクトに
-    /// 対して component 側と controller 側の両方から `terminate()` を呼ぶと、plugin 側の
-    /// 状態機械が壊れる。
+    /// 理由は [`should_terminate_controller`] を参照。
     shared_with_component: bool,
 }
 

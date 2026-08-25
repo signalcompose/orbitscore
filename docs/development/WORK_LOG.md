@@ -21,8 +21,74 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **Date**: 2026-08-26
 **Issue**: #617 / #603
-**Status**: **2002 passed / 0 failed**（着手前 1962・**+40**）・lint 0・`cargo clippy` 0・`cargo fmt` 0
+**Status**: **2004 passed / 0 failed**（着手前 1962・**+42**）・lint 0・`cargo clippy` 0・`cargo fmt` 0
 ・Rust host lib 9 passed・**実機で Kontakt の UI open/close/再open/2声同時を確認**
+
+#### `/simplify` — 🔴 既存 provider との二重表示を発見
+
+4エージェント（reuse / simplification / efficiency / altitude）を並行起動。
+**altitude が最も重い指摘を出した。**
+
+##### 🔴 同じ面に既に持ち主がいた
+
+`extension.ts` の `completionProvider`（本作業より前から存在）が**すでに `.` を
+トリガーに登録**しており、メソッドチェーンの文脈に応じて絞り込んだ**スニペット候補**
+（`tempo(${1:120})` 等）を返していた。私はそれを確認せずに2つ目を足した。
+
+実測で重複を確認:
+
+```
+OLD[global.]: beat,tempo,quantize,audioPath,gain,compressor,limiter,normalizer,
+              effect,instrument,output,sum,aux,linkAudio,run,loop,stop
+```
+
+`global.` と打つと `tempo` が2つ（スニペット版とプレーン版）並ぶ状態だった。
+
+##### ポリシー（指摘単位のパッチにしない）
+
+> **「ドットの後のメソッド補完」の持ち主は既存 provider。** 既存は**文脈で絞る**という
+> こちらに無い機能を持つので壊さない。新 provider は **既存が返さなかった語彙だけを補う**。
+> 既存は手書きの候補表で語彙テーブルと同期していないため `ui`（#617）が出ない —
+> その穴を埋めるのが役割。
+
+`getContextualCompletions` の結果を除外集合として使い、二重表示を構造的に防いだ。
+**二重が出ないこと自体をテストで固定**した（`overlap` が空であることを assert）。
+
+##### 採った指摘
+
+| 角度 | 指摘 | 対応 |
+|---|---|---|
+| **altitude** | **既存 provider と二重表示** | 除外フィルタ + 二重を禁じるテスト |
+| altitude / simplification | 識別子を context と provider で**2回パース**し、**2つの正規表現が食い違う**（実測: `a.b.` は context 不発火・provider は `b`） | context に `identifier` を載せ、provider の正規表現を削除 |
+| reuse | 宣言抽出3関数がデータ違いの重複 | `extractVarDeclarations(source, rhsPattern?)` に統合（既存の `extractTopLevelDeclaredNames` も寄せた） |
+| simplification | Rust の二重 terminate の説明が3箇所で言い換え | `should_terminate_controller` に集約し、他はそこを指す |
+| simplification | モックの `Text: 0` が未使用 | 削除 |
+
+##### 採らなかった指摘
+
+- **`setPluginUiHandler` をコンストラクタ引数へ** — 既存の
+  `MidiManager.setPluginOutputFactory` と**同型**であり、reuse レビューも
+  「正しい precedent の踏襲」と評価している。一貫性を崩す方が高くつく
+- **`dsl-method-catalog.ts` を `require('../engine/dist/...')` に置換**（altitude 提案）
+  — 検討したが**採らない**。同ファイルの既存 `require` 2箇所は
+  **fallback を持つ**（失敗しても動く）のに対し、補完候補は**空になると機能が消える**。
+  現在の「写し + 一致テスト」は乖離を **CI で必ず捕まえる**のに対し、`require` は
+  `engine/dist` が無い開発状態で**黙って候補が減る**。トレードが逆
+- **既存 `extractDeclaredBusNames` の全文スキャン**（efficiency が発見）— 本 PR が
+  触っていない既存コード。記録のみ
+
+##### efficiency は実測で「対応不要」
+
+`document.getText()` + 抽出2本で **0.14ms/キーストローク**（1587行の実作品で計測）。
+知覚閾値の3桁下なので、キャッシュも1パス化も入れない。**数値を出して否定した**判断を採る。
+
+##### 変異検証（再実施）
+
+| 変異 | 結果 |
+|---|---|
+| 二重表示フィルタを外す | **red**（2件） |
+| `identifier` を空にする | **red**（4件） |
+| helper の `rhsPattern` を無視 | **red**（5件） |
 
 #### 追加: DSL メソッド補完（#495 第1段）
 

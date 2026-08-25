@@ -3686,6 +3686,15 @@ export const dslCompletionItemProvider: vscode.CompletionItemProvider = {
         // #495 第1段: `<receiver>.` の後にメソッドを出す。
         // 候補源は engine の DSL 語彙の写し（`dsl-method-catalog.ts`。乖離はテストが検知）。
         //
+        // 🔴 **この面には既に持ち主がいる。** `completionProvider`（本ファイル上部・本 PR より前
+        // から存在）が同じ `.` トリガーで、メソッドチェーンの文脈に応じて絞り込んだスニペット
+        // 候補（`tempo(${1:120})` 等）を返す。ここで語彙を丸ごと返すと**同じ label が2つ並ぶ**
+        // （実測で確認）。
+        //
+        // したがってこの provider は **既存が返さなかった語彙だけを補う**。既存は手書きの
+        // 候補表で語彙テーブルと同期していないため、`ui`（#617）のような新しいメソッドが
+        // 出てこない — その穴を埋めるのがここの役割。既存の「文脈で絞る」挙動は壊さない。
+        //
         // 行だけでは変数のレシーバ種別が決まらないので、ここで**文書全体の宣言**を見る。
         // `var g = init GLOBAL` で宣言された名前なら Global、`init global.seq` なら Sequence。
         const text = document.getText()
@@ -3697,15 +3706,23 @@ export const dslCompletionItemProvider: vscode.CompletionItemProvider = {
         } else {
           // 変数名。宣言を見て決める。判定できない識別子には出さない
           // （無関係な `foo.` にまで DSL メソッドを並べない）。
-          const head = /([A-Za-z_$][\w$]*)\s*\.[A-Za-z_$\w]*$/.exec(
-            lineText.slice(0, position.character),
-          )?.[1]
+          const head = completionContext.identifier
           if (!head) return undefined
           if (extractDeclaredGlobalNames(text).includes(head)) methods = GLOBAL_METHODS
           else if (extractDeclaredSequenceNames(text).includes(head)) methods = SEQUENCE_METHODS
           else return undefined
         }
-        return makeItems(methods, vscode.CompletionItemKind.Method)
+        // 既存 provider が同じ位置で返す候補を除き、二重表示を防ぐ。
+        const alreadyOffered = new Set(
+          getContextualCompletions(
+            analyzeMethodChain(lineText, position.character),
+            completionContext.receiver === 'global',
+          ).map((item) => String(item.label)),
+        )
+        return makeItems(
+          methods.filter((method) => !alreadyOffered.has(method)),
+          vscode.CompletionItemKind.Method,
+        )
       }
       case 'sum-name':
         return makeItems(

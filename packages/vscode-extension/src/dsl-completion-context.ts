@@ -21,6 +21,14 @@ export type DslCompletionContext =
       readonly kind: 'method'
       readonly typed: string
       readonly receiver: 'sequence' | 'global' | 'bus'
+      /**
+       * ドットの手前の識別子。`receiver: 'sequence'` は**既定値**でしかないので、
+       * provider はこれを使って宣言を引き、Global か Sequence かを最終決定する。
+       *
+       * 🔴 provider 側で正規表現を組み直さないこと。同じことを決める規則が2つあると
+       * 食い違う（実測: `a.b.` はこちらが不発火・向こうが `b` を返していた）。
+       */
+      readonly identifier: string
     }
 
 /** Returns true when `position` is inside a line comment or string literal. */
@@ -105,10 +113,29 @@ export function detectDslCompletionContext(
     // それ以外の識別子は宣言を見ないと決まらないので、provider 側で解決する。
     const receiver =
       head === 'sum' || head === 'aux' ? 'bus' : head === 'global' ? 'global' : 'sequence'
-    return { kind: 'method', typed, receiver }
+    return { kind: 'method', typed, receiver, identifier: head }
   }
 
   return null
+}
+
+/**
+ * `var <name> = <rhs>` 形式の宣言から名前を集める（#495）。
+ *
+ * 3つの抽出（top-level / sequence / global）は**走査そのものは同一**で、違うのは
+ * `=` の右辺に要求するパターンだけ。分岐でなく**データ（正規表現の断片）で表現する**
+ * （CLAUDE.md の DRY 条項）。
+ *
+ * @param rhsPattern `=` の直後に続く形。`undefined` なら右辺を問わない
+ */
+function extractVarDeclarations(sourceText: string, rhsPattern?: string): string[] {
+  const names = new Set<string>()
+  const pattern = new RegExp(`^\\s*var\\s+([A-Za-z_$][\\w$]*)\\s*=${rhsPattern ?? ''}`)
+  for (const line of sourceText.split(/\r?\n/)) {
+    const match = pattern.exec(line)
+    if (match?.[1] && lexicalStateAt(line, match.index) === 'code') names.add(match[1])
+  }
+  return [...names]
 }
 
 /**
@@ -118,12 +145,7 @@ export function detectDslCompletionContext(
  * 含めない（`global.` は別の候補源を使う）。
  */
 export function extractDeclaredSequenceNames(sourceText: string): string[] {
-  const names = new Set<string>()
-  for (const line of sourceText.split(/\r?\n/)) {
-    const match = /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*init\s+[A-Za-z_$][\w$]*\.seq\b/.exec(line)
-    if (match?.[1] && lexicalStateAt(line, match.index) === 'code') names.add(match[1])
-  }
-  return [...names]
+  return extractVarDeclarations(sourceText, '\\s*init\\s+[A-Za-z_$][\\w$]*\\.seq\\b')
 }
 
 /**
@@ -132,22 +154,12 @@ export function extractDeclaredSequenceNames(sourceText: string): string[] {
  * 慣例は `global` だが別名も書けるので、決め打ちにしない。
  */
 export function extractDeclaredGlobalNames(sourceText: string): string[] {
-  const names = new Set<string>()
-  for (const line of sourceText.split(/\r?\n/)) {
-    const match = /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*init\s+GLOBAL\b/.exec(line)
-    if (match?.[1] && lexicalStateAt(line, match.index) === 'code') names.add(match[1])
-  }
-  return [...names]
+  return extractVarDeclarations(sourceText, '\\s*init\\s+GLOBAL\\b')
 }
 
 /** Mirrors engine `declaredNames`: global/sequence initializers and `var` bindings. */
 export function extractTopLevelDeclaredNames(sourceText: string): string[] {
-  const names = new Set<string>()
-  for (const line of sourceText.split(/\r?\n/)) {
-    const match = /^\s*var\s+([A-Za-z_$][\w$]*)\s*=/.exec(line)
-    if (match?.[1] && lexicalStateAt(line, match.index) === 'code') names.add(match[1])
-  }
-  return [...names]
+  return extractVarDeclarations(sourceText)
 }
 
 /** Returns names declared by `global.sum("...")` or `global.aux("...")` before the cursor. */
