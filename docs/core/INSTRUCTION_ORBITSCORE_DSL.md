@@ -1239,6 +1239,39 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
 - **将来予約（非規範）**: aux バス / send-return（pre/post-fader tap・fan-out）は同じ
   insert bus 基盤の上に実装する（#453・正本 = `POST_2.0_MIXER_DSL_DESIGN.html`）。
 
+### PH.2c プラグイン UI — `seq.ui([index][, open])`（#617）
+
+```js
+var cb = init global.seq
+cb.instrument("Kontakt 8.vst3")
+cb.ui()          // instrument の UI を開く（index 0）
+cb.ui(1)         // 1つ目の effect の UI
+cb.ui(0, false)  // 閉じる
+
+sum("strings").ui(1)   // mixer bus の insert（既定 index 1 — bus に instrument は無い）
+aux("verb").ui(1)
+```
+
+**動機**: 音色を作って保存する工程を**楽譜を書きながら**回せるようにする。従来は
+エディタの右クリックか MCP からしか UI を開けず、その流れに乗らなかった。
+
+- **index の規約は他の plugin 表面と同じ**: `0` = instrument、`1` 以降 = effect チェーン。
+  bus / master には instrument が無いので `1` から。
+- **複数同時オープンを制限しない**。セッティング時に複数パートを並べて見比べられる。
+- 🔴 **open は冪等**: 既に開いている `(receiver, index)` への `ui()` は **no-op** で成功する。
+  ライブコーディングでは**ブロックの再評価が常態**で、楽譜に書いた `cb.ui()` は評価のたびに
+  走るため、冪等でないと再評価のたびにエラーになる。**close は冪等化しない**。
+  （MCP の `open_plugin_ui` は明示操作なので冪等にしない — 二重 open は loud に落とす）
+- **未ロードのスロットでは loud に失敗する**（黙って no-op しない）。エラーは有効な index を
+  列挙する（`Valid indices: 0 (instrument, Kontakt 8)`)。
+- **`master` は DSL 面を持たない**（現状）。`master` チェーンの UI は MCP の
+  `open_plugin_ui({ receiver: "master", index })` から開ける。
+- 機構は MCP / REPL メタ行と**同一の経路**（`Global.openPluginUi` / `closePluginUi`）を通る。
+  宛先解決・セッション簿記・エラー面は共通。
+
+詳細は [`../specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`](../specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md)
+UIH.5.1。
+
 ### PH.3 プラグイン識別と format 判定
 
 - 第1引数 = path 文字列。相対 path の基準は `.audio()` の path-direct 形

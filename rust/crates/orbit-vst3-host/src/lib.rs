@@ -1471,8 +1471,13 @@ struct AudioModuleClass {
 /// 使う（[`connect_controller`] の fallback）。
 ///
 /// その結果 controller と component が**同一の COM オブジェクト**になるため、両方から
-/// `terminate()` を呼ぶと同じオブジェクトを二度終了させることになり、plugin 側の状態機械が
-/// 壊れる。共有時は component 側の terminate に一本化する。
+/// `terminate()` を呼ぶと同じオブジェクトを二度終了させることになる。共有時は component 側の
+/// terminate に一本化する。
+///
+/// 🔴 **これは COM の一般則（同一オブジェクトへの二重 terminate は未定義）に基づく予防措置で、
+/// 破損を再現観測したものではない。** 実測したのは「fallback 無しでは Kontakt 8 の UI が
+/// `edit controller is unavailable` で開かない」ことと「fallback ありで開閉・再開・2声同時が
+/// 通る」ことまでである。
 ///
 /// `Drop` から切り出してあるのは、実 COM オブジェクトなしでこの判定を検証するため。
 fn should_terminate_controller(shared_with_component: bool) -> bool {
@@ -1502,7 +1507,13 @@ fn connect_controller(
         //
         // `getControllerClassId` が失敗する plugin は、別クラスの controller を持たず
         // **component 自身が `IEditController` を実装する**。この場合は component を
-        // `IEditController` へ cast して使う（VST3 SDK 付属の editorhost が取る経路と同じ）。
+        // `IEditController` へ cast して使う。
+        //
+        // 🔴 cast の実体は COM の QueryInterface（`com-scrape-types` の `ComPtr::cast`）で、
+        // 「このオブジェクトが IEditController を実装するか」を問う正規の手段。実装しない
+        // plugin では `None` に落ちて従来どおり controller なしになる（退行なし）。
+        // **VST3 SDK 本体のテキストはこのリポジトリに無いため、SDK 条文は引用しない。**
+        // 根拠は上記の COM 意味論と、Kontakt 8 での実測（fallback 無しでは UI が開かない）。
         //
         // ここで `initialize` を呼ばないのは、**同一オブジェクトの component 側で既に
         // 済んでいる**ため。connection point の接続と state の同期も、送り先と受け手が
@@ -1529,6 +1540,13 @@ fn connect_controller(
                 shared_with_component: true,
             });
         }
+        // 🔴 controller の取得が**両方**失敗した（#619 レビュー）。plugin のロード自体は
+        // 続行できる（音は出る）が、UI は開けない。ここで黙ると、後で `seq.ui()` を呼んだ
+        // 時に出る `edit controller is unavailable` と**ロード時の根本原因が結びつかない**。
+        eprintln!(
+            "[vst3-host] no edit controller: getControllerClassId failed ({cid_result}) and the \
+             component does not expose IEditController; the plugin will load but its UI cannot open"
+        );
         return Ok(ControllerHandshake {
             controller: None,
             component_connection: None,

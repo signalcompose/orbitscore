@@ -21,8 +21,100 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **Date**: 2026-08-26
 **Issue**: #617 / #603
-**Status**: **2004 passed / 0 failed**（着手前 1962・**+42**）・lint 0・`cargo clippy` 0・`cargo fmt` 0
+**Status**: **2014 passed / 0 failed**（着手前 1962・**+52**）・**gated E2E 6/6 green**・lint 0・`cargo clippy` 0・`cargo fmt` 0
 ・Rust host lib 9 passed・**実機で Kontakt の UI open/close/再open/2声同時を確認**
+
+#### 🔴 gated E2E を実行して、main に潜んでいたプロダクトバグ2件を発見
+
+**owner 指示で Fable に調査・修正を委譲**（通常は監査専任だが明示指示による例外）。
+判断材料をブリーフ（97行）にまとめて渡した。
+
+##### まず: main が既に赤かった
+
+`git checkout main` して同じ E2E を回すベースラインを取った:
+
+| 対象 | 結果 |
+|---|---|
+| **main（`5225a55a`）** | **3 failed / 3 passed** |
+| 本ブランチ（修正前） | 3 failed / 3 passed（**失敗理由も完全一致**） |
+
+**本ブランチは1件も壊していない。** red は本日マージした **PR #616** が入れたもので、
+**CI は gated E2E を走らせないため誰も気づかなかった** — マージ前に実行していれば捕まえられた。
+
+##### 真因は2件のプロダクトバグ + 2件の連鎖
+
+Fable が**実測で独立性を先に確定**させた（テスト1の真因だけ直したら、他2件が無修正で green
+= テスト1が `stop_engine` 前に abort してエンジンを汚す連鎖だった）。
+
+**(a) `{"evalMark"` が log filter から漏れていた（#614 の抜け）**
+
+`{"savePluginState"` / `{"pluginUi"` は除外済みなのに `{"evalMark"` が漏れており、
+**診断本文ごと log ring に転写**されていた。1回の attach 失敗が `get_log` に2回現れ、
+ERROR の前後比較が全部ずれる。
+
+**(b) daemon の INFO tracing が `ERROR:` として記録されていた（#605 の抜け）**
+
+#605 の「起動後 stderr 転送」が全行 `console.error` に流していたため、
+`INFO orbit_audio_daemon: listening on ...` のような**正常ログが ERROR として計上**されていた。
+
+🔴 **この行は本日のセッション中、実機確認のたびに目にしていた。** ERROR 件数を数える場面も
+あったのに、**INFO が ERROR として出ていることに気づかなかった**。`get_log` の ERROR 前後比較は
+**LLM の自己検証手段**でもあるので、ノイズで埋まると本物のエラーが埋もれる。
+
+対処は ANSI を剥がして ISO timestamp + level token で判定し、
+**読めない行（panic・生 print）は fail-loud に error 側へ倒す**。
+
+**(d) RMS 許容 2% → 3%（測定の揺れ・故障ではない）**
+
+無故障時 delta の実測分布 {0.17, 0.21, 0.62, 2.09, 2.14, 2.15}% は**二峰性で符号も両方向**、
+pre 側の capture も揺れる = **キャプチャ窓の量子化（kick 1発ぶん）**であって復元劣化ではない。
+2% はこのクラスタの内側で、**クリーンな状態でも5回中2回落ちていた**。
+
+3% の根拠は**実測アンカー2点で挟むこと**: 最小実故障 4.11%（#587 実測）は 3% でも red /
+最悪ノイズ 2.15% の 1.4 倍上。旧コメントの「noise floor 3.4e-6」は**再起動なし連続キャプチャ**の
+値で、この比較には当てはまらない旨も注記に修正した。
+
+##### 私（main）が先に直していた2件も正しかった
+
+`instSeq.instrument(別プラグイン)` の差し替え拒否と `global.effect("nonexistent")` の
+attach 失敗は、**#614 で `isError: true` が返るようになった**ための陳腐化。
+テスト側を新しい意味論へ合わせるのが正しく、green で検証済み。
+
+##### 別 issue に切り出したもの
+
+**#620: 診断の誤帰属**（#614 の構造的な抜け）。`pendingDiagnostics` はマーカー間の
+グローバル蓄積なので、**マーカー無しの投入経路（`run_selection`）が出したエラーが次の
+`evaluate_orbitscore` の応答に付く**。LLM が「自分のせい」と誤認する。設計判断が要るため
+本 PR では直さない。🔴 **着手時はまず実機で再現させること**（構造からの推論であり未観測）。
+
+##### 補足: E2E 起動失敗の環境要因（ソケットパス 103 文字制限）
+
+Fable の green を main が再現しようとしたら**アプリが起動しなかった**。`--verbose` を付けて
+観測したところ一発で判明:
+
+```
+WARNING: IPC handle "...(scratchpad の長いパス).../1.12-main.sock" is longer than 103 chars
+```
+
+**Unix ドメインソケットのパスは macOS で 103 文字まで。** E2E に渡す `TMPDIR` を
+scratchpad 配下（115 文字超）にしていたため、アプリがシングルトン用ソケットを作れず
+起動中に死んでいた。**短いパス（`/tmp/claude/e2t`）に変えたら即起動**して 6/6 green。
+
+先に疑った署名エラー（-67062）・プロセス衝突・Gatekeeper は**すべて外れ**。
+[[escalation-does-not-fix-opacity]] — 見えない問題は推測を増やさず観測を足す
+（`--verbose` 1 個で解けた）。**gated E2E の実行手順として「TMPDIR は短いパスを使う」を
+ここに記録する。**
+
+##### 検証
+
+- **gated E2E 6/6 green（Fable 連続2回 + main 自身の再現1回）**
+- `npm test` **2014 passed / 34 skipped / 0 failed**
+- 変異検証: filter 除去 → red / INFO 判定を常時 true → 2 red・常時 false → 1 red
+
+##### 併せて掃除したもの
+
+`packages/engine/src/core/global.ts.backup`（2月付の残置バックアップ）が git 追跡されていた。
+参照ゼロを確認して削除。
 
 #### `/simplify` — 🔴 既存 provider との二重表示を発見
 

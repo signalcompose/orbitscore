@@ -29,6 +29,7 @@ function spyGlobal(): {
   player: SuperColliderPlayer
   open: ReturnType<typeof vi.fn>
   close: ReturnType<typeof vi.fn>
+  openTargets: Set<string>
 } {
   const player = {
     boot: vi.fn().mockResolvedValue(undefined),
@@ -42,7 +43,13 @@ function spyGlobal(): {
   const close = vi.fn(async () => ({}) as never)
   ;(global as unknown as { openPluginUi: unknown }).openPluginUi = open
   ;(global as unknown as { closePluginUi: unknown }).closePluginUi = close
-  return { global, player, open, close }
+  // 冪等判定に使うセッション有無。既定は「開いていない」。
+  const openTargets = new Set<string>()
+  ;(global as unknown as { hasOpenPluginUi: unknown }).hasOpenPluginUi = (
+    receiverId: string,
+    index: number,
+  ) => openTargets.has(`${receiverId}#${index}`)
+  return { global, player, open, close, openTargets }
 }
 
 describe('seq.ui() (#617)', () => {
@@ -83,6 +90,46 @@ describe('seq.ui() (#617)', () => {
     await makeSeq(global, player, 'vc').ui()
     expect(open).toHaveBeenCalledTimes(3)
     expect(open.mock.calls.map((c) => c[0])).toEqual(['vln1', 'vla', 'vc'])
+  })
+})
+
+describe('🔴 ui() は冪等（#619 レビュー・F2b）', () => {
+  // ライブコーディングではブロックの**再評価が常態**。楽譜に書いた `cb.ui()` は評価の
+  // たびに走るので、既に開いているのに再 open すると child の状態機械が
+  // `OPEN_UI requires state == Closed` で落ちる（実機で実測）。
+  it('既に開いていれば seq.ui() は open を呼ばない', async () => {
+    const { global, player, open, openTargets } = spyGlobal()
+    openTargets.add('cb#0')
+    await makeSeq(global, player, 'cb').ui()
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('開いていなければ通常どおり open する（冪等化が全部を殺していない）', async () => {
+    const { global, player, open } = spyGlobal()
+    await makeSeq(global, player, 'cb').ui()
+    expect(open).toHaveBeenCalledTimes(1)
+  })
+
+  it('index が違えば別セッションとして open する', async () => {
+    const { global, player, open, openTargets } = spyGlobal()
+    openTargets.add('cb#0')
+    await makeSeq(global, player, 'cb').ui(1)
+    expect(open).toHaveBeenCalledTimes(1)
+    expect(open).toHaveBeenCalledWith('cb', 1)
+  })
+
+  it('close は冪等化しない（閉じる指示は常に通す）', async () => {
+    const { global, player, close, openTargets } = spyGlobal()
+    openTargets.add('cb#0')
+    await makeSeq(global, player, 'cb').ui(0, false)
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('bus 側も同じ冪等規約に従う', async () => {
+    const { global, open, openTargets } = spyGlobal()
+    openTargets.add('sum:strings#1')
+    await global.sum('strings').ui(1)
+    expect(open).not.toHaveBeenCalled()
   })
 })
 

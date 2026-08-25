@@ -121,6 +121,27 @@ describe('🔴 既存 provider との二重表示を出さない (#495)', () => 
     expect(overlap, `二重に出る候補: ${overlap.join(',')}`).toEqual([])
   })
 
+  it('🔴 "global" で終わる変数名でも二重表示しない（F5）', async () => {
+    // 旧 provider は `linePrefix.includes('global.')` という**部分一致**で global 判定する。
+    // `myglobal.` はこれにマッチするので Global 候補17件を返す。こちらが宣言ベースの
+    // 判定（sequence）で除外集合を作ると**全部二重表示**になる（実測で確認した）。
+    // 除外は必ず**相手と同じ規則**で計算すること。
+    const { analyzeMethodChain, getContextualCompletions } = await import(
+      '../../packages/vscode-extension/src/completion-context'
+    )
+    const src = ['var global = init GLOBAL', 'var myglobal = init global.seq', 'myglobal.'].join(
+      '\n',
+    )
+    const old = new Set(
+      getContextualCompletions(analyzeMethodChain('myglobal.', 9), true).map((i) =>
+        String(i.label),
+      ),
+    )
+    const mine = await complete(src, 2, 9)
+    const overlap = mine.filter((label) => old.has(label))
+    expect(overlap, `二重に出る候補: ${overlap.join(',')}`).toEqual([])
+  })
+
   it('それでも語彙にしか無いものは補われる（黙って何も出さない、にならない）', async () => {
     const src = `${SCORE}cb.`
     const labels = await complete(src, 2, 3)

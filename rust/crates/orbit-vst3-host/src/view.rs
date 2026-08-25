@@ -9,8 +9,8 @@ use std::rc::Rc;
 use orbit_child_ui::{PluginUiEndpoint, UiSize};
 use vst3::Steinberg::Vst::{IEditController, IEditControllerTrait, ViewType};
 use vst3::Steinberg::{
-    kInvalidArgument, kPlatformTypeNSView, tresult, IPlugFrame, IPlugFrameTrait, IPlugView,
-    IPlugViewTrait, ViewRect,
+    kInvalidArgument, kNotInitialized, kPlatformTypeNSView, tresult, IPlugFrame, IPlugFrameTrait,
+    IPlugView, IPlugViewTrait, ViewRect,
 };
 use vst3::{Class, ComPtr, ComRef, ComWrapper};
 
@@ -172,14 +172,31 @@ impl PluginUiEndpoint for Vst3UiEndpoint {
         };
         let get_size_result = unsafe { view.getSize(&mut rect) };
         if !is_ok(get_size_result) {
-            // attach 前の `getSize` 失敗は致命ではない（#603）。
+            // 🔴 attach 前の「まだサイズが決まっていない」だけを許容する（#603 / #619 レビュー）。
             //
             // plugin によっては view が frame に attach されるまでサイズを確定できず、
-            // `getSize` が `kNotInitialized` を返す（実測: Kontakt 8）。ここで諦めると
-            // UI が開けないので、**既定サイズで開いてから plugin 側の `resizeView` 要求
-            // （`frame_state`）に従う**。plugin は attach 後に正しいサイズを通知してくる。
+            // `getSize` が `kNotInitialized` を返す（**実測: Kontakt 8** — ログに
+            // `getSize failed (5)` が出る。5 = `kNotInitialized`）。ここで諦めると UI が
+            // 開けないので、既定サイズで開いて後続の `resizeView` 要求（`frame_state`）に従う。
+            //
+            // 🔴 **それ以外の失敗まで飲み込んではいけない。** 以前は `!is_ok(..)` で全ての
+            // 失敗を許容していたため、**本当に壊れた view が空白の 1000x640 窓として
+            // 「成功」に見えた**。このプロジェクトが #607 / #614 で二度踏んだ
+            // 「成功を報告しながら壊れている」と同じ型なので、許容する失敗を名指しする。
+            //
+            // なお「plugin が attach 後に正しいサイズを通知してくる」のは IPlugView の
+            // 一般的な契約からの期待であり、**本 PR で実測したのは `kNotInitialized` が
+            // 返ること・既定サイズで UI が開けることまで**である。
+            if get_size_result != kNotInitialized {
+                drop(view);
+                drop(frame);
+                return Err(format!(
+                    "VST3 UI open failed: getSize returned {get_size_result} \
+                     (only kNotInitialized is tolerated before attach)"
+                ));
+            }
             eprintln!(
-                "[vst3-view] getSize failed ({get_size_result}) before attach — using fallback size"
+                "[vst3-view] getSize returned kNotInitialized before attach — using fallback size"
             );
             rect = ViewRect {
                 left: 0,

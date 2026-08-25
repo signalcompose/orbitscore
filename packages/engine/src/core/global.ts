@@ -162,8 +162,13 @@ export class Global {
     // #617: `sum("x").ui()` を既存の openPluginUi / closePluginUi へ橋渡しする。
     // MixerManager は Global を知らない（循環参照を避ける）ので、ここで注入する。
     this.mixerManager.setPluginUiHandler(async (receiverId, index, open) => {
-      if (open) await this.openPluginUi(receiverId, index)
-      else await this.closePluginUi(receiverId, index)
+      // `seq.ui()` と同じ冪等規約（#619 レビュー・F2b）: 楽譜の再評価で二重 open にならない。
+      if (open) {
+        if (this.hasOpenPluginUi(receiverId, index)) return
+        await this.openPluginUi(receiverId, index)
+      } else {
+        await this.closePluginUi(receiverId, index)
+      }
     })
     this.quantizeManager = new QuantizeManager()
     this.midiManager = midiManager ?? new MidiManager()
@@ -882,6 +887,25 @@ export class Global {
     }
     const store = this.projectStateStore(projectDirectory)
     return store.save(resolved.identity, resolved.daemonTarget)
+  }
+
+  /**
+   * `(receiverId, index)` の UI セッションが既に記録されているか（#619 レビュー・F2b）。
+   *
+   * DSL の `seq.ui()` を**冪等**にするために使う。楽譜に `cb.ui()` と書いてブロックを
+   * 再評価すると、child の状態機械が `OPEN_UI requires state == Closed` で落ちる
+   * （実測）。ライブコーディングでは**再評価が常態**なので、DSL 面では既に開いていれば
+   * no-op にする。
+   *
+   * 🔴 MCP / REPL メタ行の `open_plugin_ui` は**冪等にしない**。あちらは「開けと命じた」
+   * のに開いていない状態を検出したい明示操作で、二重 open を loud に落とすのが正しい。
+   * ここは問い合わせだけを公開し、冪等化の判断は呼び出し側（DSL 面）に置く。
+   */
+  hasOpenPluginUi(receiverId: string, index: number): boolean {
+    for (const session of this.openPluginUiSessions.values()) {
+      if (session.receiverId === receiverId && session.index === index) return true
+    }
+    return false
   }
 
   async openPluginUi(

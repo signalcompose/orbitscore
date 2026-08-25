@@ -653,6 +653,54 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         const afterUiCloseLog = (await client.call('get_log', { lines: 500 })).text
         expect(afterUiCloseLog).not.toContain('timeout-without-save')
 
+        // ── #617: DSL 面（`seq.ui()`）を実機で駆動する ──
+        //
+        // 🔴 UI の表示は視覚的な副作用なので直接は assert できない。そこで **`close_plugin_ui`
+        // をオラクルに使う**: close は `openPluginUiSessions` にセッションが無ければ失敗する
+        // （`no plugin UI opened via open_plugin_ui is recorded`）。したがって
+        // 「DSL で open → MCP の close が成功する」が通れば、**DSL の呼び出しが本当に
+        // `Global.openPluginUi` まで到達してセッションを登録した**ことの証明になる。
+        //
+        // これが無いと、パーサ/ディスパッチの取り違えをユニットテストは素通しする
+        // （#528 / #614 で二度踏んだ形）。
+        const dslUiOpen = await client.call('evaluate_orbitscore', {
+          code: 'drum.ui(1)',
+        })
+        expect(dslUiOpen.isError, dslUiOpen.text).toBe(false)
+
+        const dslOpenedThenClosed = await client.call('close_plugin_ui', {
+          receiver: 'drum',
+          index: 1,
+        })
+        expect(
+          dslOpenedThenClosed.isError,
+          `DSL 経由の open がセッションを登録していない: ${dslOpenedThenClosed.text}`,
+        ).toBe(false)
+
+        // close が no-op でなかったことの確認: セッションは消えているので二度目は失敗する。
+        const dslCloseAgain = await client.call('close_plugin_ui', { receiver: 'drum', index: 1 })
+        expect(dslCloseAgain.isError, dslCloseAgain.text).toBe(true)
+        expect(dslCloseAgain.text).toContain('no plugin UI opened')
+
+        // 🔴 #619 F2b: 楽譜の再評価で二重 open にならない（冪等）。
+        // 同じ行を2回評価しても、2回目が `OPEN_UI requested while lifecycle is Open` で
+        // 落ちてはいけない — ライブコーディングでは再評価が常態。
+        const dslUiReopen1 = await client.call('evaluate_orbitscore', { code: 'drum.ui(1)' })
+        expect(dslUiReopen1.isError, dslUiReopen1.text).toBe(false)
+        const dslUiReopen2 = await client.call('evaluate_orbitscore', { code: 'drum.ui(1)' })
+        expect(dslUiReopen2.isError, dslUiReopen2.text).toBe(false)
+        const afterReopenLog = (await client.call('get_log', { lines: 500 })).text
+        expect(afterReopenLog).not.toContain('OPEN_UI requested while lifecycle is Open')
+
+        // DSL 経由の close も同じ簿記に到達する。
+        const dslUiClose = await client.call('evaluate_orbitscore', { code: 'drum.ui(1, false)' })
+        expect(dslUiClose.isError, dslUiClose.text).toBe(false)
+        const afterDslClose = await client.call('close_plugin_ui', { receiver: 'drum', index: 1 })
+        expect(
+          afterDslClose.isError,
+          `DSL 経由の close がセッションを消していない: ${afterDslClose.text}`,
+        ).toBe(true)
+
         const stateSaveLog = (await client.call('get_log', { lines: 500 })).text
         expect(
           (stateSaveLog.match(/ERROR:/g) ?? []).length,
@@ -664,7 +712,14 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         const secondInstrumentRes = await client.call('evaluate_orbitscore', {
           code: `instSeq.instrument("${CLAP_TEST_EFFECT_PATH}")`,
         })
-        expect(secondInstrumentRes.isError, secondInstrumentRes.text).toBe(false)
+        // 🔴 #614 以降、`evaluate_orbitscore` は**評価結果**を返す。差し替え拒否は
+        // 実行時エラーなので `isError: true` で返り、診断も応答に含まれる。
+        // （#614 以前は「stdin へ書けた」= ok が返り、エラーは get_log にしか出なかった。
+        //  下のログ assert はその時代の名残だが、二重の確認として残す価値がある。）
+        expect(secondInstrumentRes.isError, secondInstrumentRes.text).toBe(true)
+        expect(secondInstrumentRes.text).toContain(
+          "Sequence 'instSeq' already has an instrument instance",
+        )
         await sleep(1000) // duplicate rejection is synchronous once the first slot is registered
 
         const afterSecondInstrumentLog = (await client.call('get_log', { lines: 500 })).text
@@ -716,7 +771,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const badEffectRes = await client.call('evaluate_orbitscore', {
         code: 'global.effect("nonexistent-plugin.clap")',
       })
-      expect(badEffectRes.isError, badEffectRes.text).toBe(false)
+      // 🔴 #614 以降、`evaluate_orbitscore` は評価結果を返す。out-of-process attach の失敗も
+      // 実行時エラーとして呼び出し元へ届くので `isError: true`。
+      // （#614 以前は「stdin へ書けた」= ok が返り、失敗は get_log にしか出なかった。
+      //  下のログ assert はその時代の名残だが、二重の確認として残す。）
+      expect(badEffectRes.isError, badEffectRes.text).toBe(true)
+      expect(badEffectRes.text).toContain('OUTPROC_ATTACH_FAILED')
       await sleep(6000) // real out-of-process attach attempt, then failure
 
       const afterEffectFailLog = (await client.call('get_log', { lines: 500 })).text
@@ -741,7 +801,13 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         .length
       // Exactly one NEW attach failure (the deliberate one above) — the
       // recovery statement must not add another.
-      expect(attachFailedAfterRecovery).toBe(attachFailedBefore + 1)
+      const attachFailureLines = afterRecoveryLog
+        .split('\n')
+        .filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]'))
+      expect(
+        attachFailedAfterRecovery,
+        `attach-failure lines in window: ${JSON.stringify(attachFailureLines, null, 2)}`,
+      ).toBe(attachFailedBefore + 1)
 
       // ── 6d. #521/#517 S3 regression guard: the mixer/routing DSL (bus-name
       // chain methods — mix.output/sum/aux, `.verb(0.3)` send, `.drums` sum
@@ -1837,18 +1903,30 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           restoredPeakDelta,
           `restored peak ${restoredAnalysis.peak} must match pre-restart ${preRestartAnalysis.peak}`,
         ).toBeLessThanOrEqual(0.15)
-        // RMS tolerance is 2%, not the peak's 15%. Measured on real hardware
-        // (#587): the no-mutation noise floor between two same-settings
-        // captures is 3.4e-6 (0.00034%), while the smallest real fault — the
-        // aux insert's contribution going missing — moves whole-file RMS by
-        // 4.11% (signed, measured for g_aux 0.95 → 0.0). 2% sits ~6000× above
-        // the measured floor and ~2× under that smallest fault, so a lost aux
-        // restore goes red here while same-machine reruns stay green. The
-        // peak assert keeps 15%: its cross-run floor is unmeasured, and the
-        // whole-file peak is structurally blind to the aux leg (the pipelined
-        // aux return lags one device block behind the direct leg, and the
-        // kick's peak sits inside that block), so tightening it buys no aux
-        // detection — RMS is the discriminating meter here.
+        // RMS tolerance is 3%, not the peak's 15%. Two measured anchors:
+        //
+        // - Smallest real fault (#587): the aux insert's contribution going
+        //   missing moves whole-file RMS by 4.11% (signed, measured for
+        //   g_aux 0.95 → 0.0). 3% sits 1.37× under that, so a lost aux
+        //   restore still goes red.
+        // - No-fault cross-run noise (2026-08-26, n=5 same-day full-harness
+        //   runs + 1 historical): deltas {0.17, 0.21, 0.62, 2.09, 2.14}% and
+        //   2.15% (2026-07-31). The distribution is bimodal — a ~0.2-0.6%
+        //   floor plus a recurring ~2.1% cluster whose sign flips run to run
+        //   (both pre and restored captures occasionally measure ~2% low),
+        //   i.e. a capture-window quantization artifact (about one kick onset's
+        //   worth of energy), not restore infidelity. The former 2% tolerance
+        //   sat INSIDE that cluster and failed ~2 in 5 clean runs. 3% clears
+        //   the worst observed no-fault delta by 1.4×.
+        //
+        // (#587's original 3.4e-6 "noise floor" was captured back-to-back
+        // without an engine restart — it does not describe this cross-restart
+        // comparison.) The peak assert keeps 15%: its cross-run floor is
+        // unmeasured, and the whole-file peak is structurally blind to the
+        // aux leg (the pipelined aux return lags one device block behind the
+        // direct leg, and the kick's peak sits inside that block), so
+        // tightening it buys no aux detection — RMS is the discriminating
+        // meter here.
         // Record the delta on every run, not just on failure.
         //
         // The assertion below only surfaces this number when it trips, so a rare
@@ -1862,7 +1940,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         expect(
           restoredRmsDelta,
           `restored RMS ${restoredAnalysis.rms} must match pre-restart ${preRestartAnalysis.rms}`,
-        ).toBeLessThanOrEqual(0.02)
+        ).toBeLessThanOrEqual(0.03)
 
         // Instrument leg: pitch, not level. Thresholds mirror the MCP-save
         // instrument test (±2% against the musical spec, ≤1% across restart).

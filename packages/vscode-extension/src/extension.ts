@@ -1155,7 +1155,16 @@ function shouldFilterLine(line: string): boolean {
   // Correlated REPL bridge envelopes are consumed above before human-log
   // transcription. Keep successful/error payloads (which may contain project
   // paths) out of the output channel; malformed envelopes get their own loud warning.
-  if (trimmed.startsWith('{"savePluginState"') || trimmed.startsWith('{"pluginUi"')) {
+  //
+  // 🔴 `{"evalMark"` を落とすのは見た目の問題ではない: envelope は失敗診断の本文
+  // （例: `[OUTPROC_ATTACH_FAILED] ...`）を丸ごと含むので、transcribe されると
+  // 同じ失敗が log に**二重に**現れ、get_log を数える側（E2E・LLM の自己検証）の
+  // 前後比較が全部ずれる（#614 の導入時にこの除外が漏れていた実害）。
+  if (
+    trimmed.startsWith('{"savePluginState"') ||
+    trimmed.startsWith('{"pluginUi"') ||
+    trimmed.startsWith('{"evalMark"')
+  ) {
     return true
   }
 
@@ -3713,10 +3722,19 @@ export const dslCompletionItemProvider: vscode.CompletionItemProvider = {
           else return undefined
         }
         // 既存 provider が同じ位置で返す候補を除き、二重表示を防ぐ。
+        //
+        // 🔴 `isGlobal` は**既存 provider と同じ規則で計算する**（#619 Fable 監査 F5）。
+        // こちらの宣言ベース判定を使うと、`myglobal.` のように **'global' で終わる変数名**で
+        // 食い違う（実測: 旧は部分一致で Global 候補17件を返すのに、こちらは sequence 側を
+        // 除外集合にするため全部二重表示になった）。
+        //
+        // 引き算は**相手の実際の出力**を引かなければ意味がない。判定を自前で持たず、
+        // 旧の式（`linePrefix.includes('global.')`）をそのまま使う。
+        const linePrefix = lineText.slice(0, position.character)
         const alreadyOffered = new Set(
           getContextualCompletions(
             analyzeMethodChain(lineText, position.character),
-            completionContext.receiver === 'global',
+            linePrefix.includes('global.'),
           ).map((item) => String(item.label)),
         )
         return makeItems(
