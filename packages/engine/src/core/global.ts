@@ -159,6 +159,12 @@ export class Global {
       this.linkAudioManager,
     )
     this.mixerManager = new MixerManager(audioEngine, this.audioManager, this.linkAudioManager)
+    // #617: `sum("x").ui()` を既存の openPluginUi / closePluginUi へ橋渡しする。
+    // MixerManager は Global を知らない（循環参照を避ける）ので、ここで注入する。
+    this.mixerManager.setPluginUiHandler(async (receiverId, index, open) => {
+      if (open) await this.openPluginUi(receiverId, index)
+      else await this.closePluginUi(receiverId, index)
+    })
     this.quantizeManager = new QuantizeManager()
     this.midiManager = midiManager ?? new MidiManager()
     this.midiManager.setPluginOutputFactory(() => new PluginNoteOutput(audioEngine))

@@ -17,6 +17,98 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.358 feat(dsl): 楽譜からプラグイン UI を開く `seq.ui()` + Kontakt の controller fallback (#617 / #603) (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #617 / #603
+**Status**: **1973 passed / 0 failed**（着手前 1962・**+11**）・lint 0・`cargo clippy` 0・`cargo fmt` 0
+・Rust host lib 9 passed・**実機で Kontakt の UI open/close/再open/2声同時を確認**
+
+#### owner 要求（2026-08-25）
+
+> DSL から UI を呼び出せるようにして欲しい。それが無いとセッティングするのが大変になる。
+
+SIGMUS のデモは **VST（Kontakt）+ LLM 駆動**で、音色は事前セットする方針。したがって
+**準備段階で音色を作って保存する工程**が要る。従来その工程はコンテキストメニュー（#474）か
+MCP tool からしか起動できず、**楽譜を書きながら音色を追い込む**流れに乗らなかった。
+
+#### 表面（owner 裁定）
+
+```
+cb.instrument("Kontakt 8.vst3")
+cb.ui()          // instrument の UI（index 0）
+cb.ui(1)         // 1つ目の effect の UI
+cb.ui(0, false)  // 閉じる
+
+sum("strings").ui(1)   // mixer bus の insert（既定 index 1）
+aux("verb").ui(1)
+```
+
+- **レシーバに直接生やす**（`instrument()` / `effect()` と並べて書ける）
+- **複数同時オープンを制限しない** — セッティング時に複数パートを並べて見る用途がある
+
+機構は既存の `global.openPluginUi` / `closePluginUi` を**そのまま通す**（新しい経路を作らない）。
+`MixerManager` は `Global` を知らない設計（循環参照回避）なので、`Global` 側から
+`setPluginUiHandler` で注入した。未注入で `ui()` が呼ばれたら loud に失敗する。
+
+🔴 **DSL 語彙（`SEQUENCE_DSL_METHODS` / `BUS_DSL_METHODS`）への登録を忘れない** — #528 では
+ここを落として**ユニットテスト全緑のままエディタ評価が全滅**した。語彙から `ui` を外す変異を
+テストが red にすることを確認済み。
+
+#### #603 を同梱した理由
+
+`seq.ui()` だけ入れても **Kontakt では UI が開かない**（実機で `edit controller is
+unavailable` を再現）。owner の目的は「セッティングを楽にする」で対象は Kontakt なので、
+**分けると「入ったが使えない」状態でマージすることになる**。owner 承認のうえ同梱した。
+
+TEMP パッチ（「1260」の音色選定を完走した実績あり・#603 にコメント保全）は**そのまま当たった**。
+issue が挙げていた「正式修正で必要なこと」を実施:
+
+1. **TEMP コメント → 正規 doc**。単一コンポーネント plugin では component 自身が
+   `IEditController` を実装するので `getControllerClassId` が失敗する、という機序と、
+   **実測（Kontakt 8）で fallback 無しでは開けない**ことを書いた。
+   🔴 SDK の条文は bindings に doc が無く C++ SDK が一次ソースなので、**推測の引用は書かず
+   実測した事実を根拠にした**
+2. **テスト（従来ゼロ）**: 二重 terminate 回避の判定を `should_terminate_controller()` として
+   `Drop` から切り出し、実 COM 抜きで検証できるようにした
+
+#### 🔴 変異検証
+
+| 対象 | 変異 | 結果 |
+|---|---|---|
+| #617 | `seq.ui` の open/close を反転 | **red**（5件） |
+| #617 | `seq.ui` の既定 index を 1 に | **red** |
+| #617 | bus の receiverId から prefix を落とす | **red**（4件） |
+| #617 | **語彙から `ui` を外す**（#528 の再発） | **red** |
+| #617 | UI ハンドラの注入を外す | **red**（4件） |
+| #603 | 判定を反転（共有時に terminate = 二重 terminate） | **red**（2件） |
+| #603 | **常に true（= #603 以前の挙動）** | **red** |
+| #603 | 常に false（controller を一切 terminate しない） | **red** |
+
+#### 実機での確認
+
+| プラグイン | `instrument()` | `ui()` |
+|---|---|---|
+| **Kontakt 8** | ok | **✓ open / close / 再open / 2声同時**（修正前は `edit controller is unavailable`） |
+| BM-COZY / BM-DOPE | ok | ✓ 2つ同時に開く |
+| 未ロードのスロット | — | ✓ **loud に失敗**（`no plugin instrument is declared`） |
+| ARIA Player | ok | `createView returned null`（**プラグイン側の仕様**・エラーは正確に報告される） |
+
+ログの `[vst3-view] getSize failed (5) before attach — using fallback size` は
+**#603 が想定した経路そのもの**（attach 前にサイズを確定できない plugin を既定サイズで開き、
+attach 後の `resizeView` に従う）。
+
+#### 🔴 環境要因を実装の欠陥と誤認しかけた
+
+2つ目の instrument ロードが **60 秒 timeout**（`OUTPROC_ATTACH_FAILED`）した。実装を疑う
+ところだったが、owner の**「音源の USB ドライブを繋いでいなかった」**という指摘で解決。
+BM-COZY のサンプルライブラリは `/Volumes/SSD4TB2503/Music/UJAM/BM-COZY` にあり、
+**未接続では child が READY を返せない**。接続後は同じ操作が `ok`。
+
+**テストが落ちたらまず実行環境を見る**（同日の CPU 飽和による false red と同型）。
+
+---
+
 ### 6.357 fix(engine): #484 D1 argv テストのフレーク解消と、偽の SIGKILL 昇格報告の停止 (#520) (Aug 25, 2026)
 
 **Date**: 2026-08-25

@@ -437,6 +437,9 @@ impl Drop for CfUrl {
 pub struct Vst3PluginMain {
     ui_endpoint: Vst3UiEndpoint,
     controller: Option<ComPtr<IEditController>>,
+    /// controller == component（単一コンポーネント plugin）のとき true（#603）。
+    /// `Drop` で `controller.terminate()` を呼ばず、component 側の terminate に一本化する。
+    controller_shared_with_component: bool,
     component_connection: Option<ComPtr<IConnectionPoint>>,
     controller_connection: Option<ComPtr<IConnectionPoint>>,
     component: Option<ComPtr<IComponent>>,
@@ -489,8 +492,10 @@ impl Drop for Vst3PluginMain {
         let _ = self.component_connection.take();
         let _ = self.controller_connection.take();
         if let Some(controller) = self.controller.take() {
-            unsafe {
-                let _ = controller.terminate();
+            if should_terminate_controller(self.controller_shared_with_component) {
+                unsafe {
+                    let _ = controller.terminate();
+                }
             }
         }
         if let Some(component) = self.component.take() {
@@ -756,6 +761,7 @@ impl Vst3EffectProcessor {
             main: Some(Vst3PluginMain {
                 ui_endpoint,
                 controller: controller_handshake.controller,
+                controller_shared_with_component: controller_handshake.shared_with_component,
                 component_connection: controller_handshake.component_connection,
                 controller_connection: controller_handshake.controller_connection,
                 component: Some(component),
@@ -1294,6 +1300,7 @@ impl Vst3InstrumentProcessor {
                 main: Some(Vst3PluginMain {
                     ui_endpoint,
                     controller: controller_handshake.controller,
+                    controller_shared_with_component: controller_handshake.shared_with_component,
                     component_connection: controller_handshake.component_connection,
                     controller_connection: controller_handshake.controller_connection,
                     component: Some(component),
@@ -1453,11 +1460,33 @@ struct AudioModuleClass {
     name: String,
 }
 
+/// controller を独立して `terminate()` すべきか（#603）。
+///
+/// 単一コンポーネント plugin では controller と component が**同一の COM オブジェクト**
+/// なので、両方から `terminate()` を呼ぶと同じオブジェクトを二度終了させることになり、
+/// plugin 側の状態機械が壊れる。共有時は component 側の terminate に一本化する。
+///
+/// `Drop` から切り出してあるのは、実 COM オブジェクトなしでこの判定を検証するため。
+fn should_terminate_controller(shared_with_component: bool) -> bool {
+    !shared_with_component
+}
+
 struct ControllerHandshake {
     controller: Option<ComPtr<IEditController>>,
     component_connection: Option<ComPtr<IConnectionPoint>>,
     controller_connection: Option<ComPtr<IConnectionPoint>>,
     component_handler: Option<ComWrapper<HostComponentHandler>>,
+    /// controller が component と**同一の COM オブジェクト**のとき true（#603）。
+    ///
+    /// VST3 には controller を別クラスとして持つ plugin と、component 自身が
+    /// `IEditController` を実装する **単一コンポーネント plugin** の 2 形態がある。
+    /// 後者では `getControllerClassId` が失敗するので、component を `IEditController` へ
+    /// cast して使う（下の `connect_controller` を参照）。
+    ///
+    /// teardown で **二重 terminate を避ける**ためにこのフラグが要る。同一オブジェクトに
+    /// 対して component 側と controller 側の両方から `terminate()` を呼ぶと、plugin 側の
+    /// 状態機械が壊れる。
+    shared_with_component: bool,
 }
 
 fn connect_controller(
@@ -1469,11 +1498,43 @@ fn connect_controller(
     let mut controller_cid = [0; 16];
     let cid_result = unsafe { component.getControllerClassId(&mut controller_cid) };
     if !is_ok(cid_result) {
+        // 単一コンポーネント plugin の fallback（#603）。
+        //
+        // `getControllerClassId` が失敗する plugin は、別クラスの controller を持たず
+        // **component 自身が `IEditController` を実装する**。この場合は component を
+        // `IEditController` へ cast して使う（VST3 SDK 付属の editorhost が取る経路と同じ）。
+        //
+        // ここで `initialize` を呼ばないのは、**同一オブジェクトの component 側で既に
+        // 済んでいる**ため。connection point の接続と state の同期も、送り先と受け手が
+        // 同一オブジェクトなので不要になる。
+        //
+        // 実測（2026-08-01・Kontakt 8）: この fallback が無いと UI open が
+        // `edit controller is unavailable` で失敗する。fallback ありで
+        // Soundcinema 提出作品の音色選定（6 パッチ連続の open → 選択 → close → 自動保存）を
+        // 完走した。
+        if let Some(controller) = component.as_com_ref().cast::<IEditController>() {
+            let component_handler = ComWrapper::new(HostComponentHandler);
+            let handler_ptr = component_handler
+                .as_com_ref::<IComponentHandler>()
+                .expect("HostComponentHandler exposes IComponentHandler")
+                .as_ptr();
+            unsafe {
+                let _ = controller.setComponentHandler(handler_ptr);
+            }
+            return Ok(ControllerHandshake {
+                controller: Some(controller),
+                component_connection: None,
+                controller_connection: None,
+                component_handler: Some(component_handler),
+                shared_with_component: true,
+            });
+        }
         return Ok(ControllerHandshake {
             controller: None,
             component_connection: None,
             controller_connection: None,
             component_handler: None,
+            shared_with_component: false,
         });
     }
 
@@ -1524,6 +1585,7 @@ fn connect_controller(
         component_connection,
         controller_connection,
         component_handler: Some(component_handler),
+        shared_with_component: false,
     })
 }
 
@@ -2862,6 +2924,25 @@ fn json_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // #603: 単一コンポーネント plugin（Kontakt 等）は controller と component が同一の
+    // COM オブジェクトなので、両方から terminate() を呼ぶと同じオブジェクトを二度終了
+    // させることになり plugin 側の状態機械が壊れる。この判定を実 COM 抜きで固定する。
+    #[test]
+    fn shared_controller_is_terminated_only_through_the_component() {
+        assert!(
+            !should_terminate_controller(true),
+            "controller == component のとき、controller 側の terminate は呼ばない"
+        );
+    }
+
+    #[test]
+    fn independent_controller_is_terminated_directly() {
+        assert!(
+            should_terminate_controller(false),
+            "別クラスの controller は自分で terminate する（従来の経路を壊さない）"
+        );
+    }
 
     #[test]
     fn audio_halves_are_send() {

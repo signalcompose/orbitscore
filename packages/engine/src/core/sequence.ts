@@ -616,6 +616,35 @@ export class Sequence {
     return this
   }
 
+  /**
+   * このシーケンスのプラグイン UI を開く / 閉じる（`seq.ui()` — #617）。
+   *
+   * ```
+   * cb.instrument("Kontakt 8.vst3")
+   * cb.ui()          // instrument の UI（index 0）
+   * cb.ui(1)         // 1つ目の effect の UI
+   * cb.ui(0, false)  // 閉じる
+   * ```
+   *
+   * 音色を作って保存する工程を**楽譜を書きながら**回せるようにするための表面。
+   * 機構は `global.openPluginUi` / `closePluginUi` をそのまま通す（**新しい経路を作らない**）。
+   *
+   * 複数の UI を同時に開くことは制限しない（owner 裁定 2026-08-25）。セッティング時に
+   * 複数パートを並べて見比べる用途があるため。
+   *
+   * @param index チェーン位置。0 = instrument、1 以降 = effect。既定 0
+   * @param open  false を渡すと閉じる。既定 true
+   */
+  async ui(index = 0, open = true): Promise<this> {
+    const name = this.stateManager.getName() || 'sequence'
+    if (open) {
+      await this.global.openPluginUi(name, index)
+    } else {
+      await this.global.closePluginUi(name, index)
+    }
+    return this
+  }
+
   isInstrument(): boolean {
     return this._instrumentDeclared
   }

@@ -73,6 +73,11 @@ export interface MixerBusHandle {
   readonly kind: MixerKind
   /** Declares (or idempotently re-declares) the bus's own insert (MX.2/MX.3: v1 one insert). */
   effect(path: string, pluginId?: string): Promise<MixerBusHandle>
+  /**
+   * このバスの insert のプラグイン UI を開く / 閉じる（`sum("x").ui(1)` — #617）。
+   * index はチェーン位置（bus の insert は 1 以降）。`open=false` で閉じる。
+   */
+  ui(index?: number, open?: boolean): Promise<MixerBusHandle>
   routeOutput(output: string): Promise<MixerBusHandle>
   routeSend(bus: string, amount: number): Promise<MixerBusHandle>
 }
@@ -109,6 +114,21 @@ export class MixerManager {
   private readonly kinds: Record<MixerKind, KindState>
   private readonly routings = new Map<string, { output?: string; sends: Map<string, number> }>()
   private hasRuntimeDeclaration = false
+
+  /**
+   * `sum("x").ui()` を `Global.openPluginUi` / `closePluginUi` へ橋渡しするハンドラ（#617）。
+   *
+   * `MixerManager` は `Global` を知らない（循環参照を避けるため）ので、`Global` 側から
+   * 注入する。未注入のまま `ui()` が呼ばれたら **loud に失敗する**（黙って no-op しない）。
+   */
+  private pluginUiHandler?: (receiverId: string, index: number, open: boolean) => Promise<void>
+
+  /** `Global` が構築時に配線する。 */
+  setPluginUiHandler(
+    handler: (receiverId: string, index: number, open: boolean) => Promise<void>,
+  ): void {
+    this.pluginUiHandler = handler
+  }
 
   constructor(
     private readonly audioEngine: AudioEngine,
@@ -260,6 +280,16 @@ export class MixerManager {
       bus,
       kind,
       effect: (path: string, pluginId?: string) => this.effectFor(kind, name, bus, path, pluginId),
+      ui: async (index = 1, open = true) => {
+        if (!this.pluginUiHandler) {
+          throw new Error(
+            `Mixer bus '${formatReceiverId(kind, name)}': plugin UI is not available ` +
+              '(no UI handler is wired to this engine)',
+          )
+        }
+        await this.pluginUiHandler(formatReceiverId(kind, name), index, open)
+        return this.makeHandle(kind, name, bus)
+      },
       routeOutput: async (output: string) => {
         await this.route(bus, output, undefined)
         return this.makeHandle(kind, name, bus)

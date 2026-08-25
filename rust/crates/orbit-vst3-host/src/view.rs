@@ -172,11 +172,21 @@ impl PluginUiEndpoint for Vst3UiEndpoint {
         };
         let get_size_result = unsafe { view.getSize(&mut rect) };
         if !is_ok(get_size_result) {
-            drop(view);
-            drop(frame);
-            return Err(format!(
-                "VST3 UI open failed: IPlugView::getSize failed ({get_size_result})"
-            ));
+            // attach 前の `getSize` 失敗は致命ではない（#603）。
+            //
+            // plugin によっては view が frame に attach されるまでサイズを確定できず、
+            // `getSize` が `kNotInitialized` を返す（実測: Kontakt 8）。ここで諦めると
+            // UI が開けないので、**既定サイズで開いてから plugin 側の `resizeView` 要求
+            // （`frame_state`）に従う**。plugin は attach 後に正しいサイズを通知してくる。
+            eprintln!(
+                "[vst3-view] getSize failed ({get_size_result}) before attach — using fallback size"
+            );
+            rect = ViewRect {
+                left: 0,
+                top: 0,
+                right: 1000,
+                bottom: 640,
+            };
         }
         let size = match ui_size(rect) {
             Ok(size) => size,
