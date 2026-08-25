@@ -10,6 +10,18 @@ export type DslCompletionContext =
   | { readonly kind: 'import-path'; readonly typed: string }
   | { readonly kind: 'sum-name'; readonly typed: string }
   | { readonly kind: 'aux-name'; readonly typed: string }
+  /**
+   * `seq.` / `global.` / `sum("x").` の後のメソッド補完（#495 第1段）。
+   *
+   * `receiver` は候補源の選択に使う。候補は engine の DSL 語彙テーブル
+   * （`SEQUENCE_DSL_METHODS` 等）から取るので、**DSL にメソッドを足せば補完にも自動で出る**
+   * （`seq.ui()` を足したのに補完に出ない、が起きない）。
+   */
+  | {
+      readonly kind: 'method'
+      readonly typed: string
+      readonly receiver: 'sequence' | 'global' | 'bus'
+    }
 
 /** Returns true when `position` is inside a line comment or string literal. */
 function lexicalStateAt(text: string, position: number): 'code' | 'comment' | 'string' {
@@ -77,7 +89,55 @@ export function detectDslCompletionContext(
     }
   }
 
+  // `<receiver>.` の後 → メソッド補完（#495 第1段）。
+  //
+  // 🔴 レシーバの種類は**呼び出し側**（provider）が文書全体から判定する。ここは行だけを
+  // 見るので、`sum("x").` のような**その場で分かる形**だけを解決し、変数名は
+  // `receiver: 'sequence'` を既定にして provider に委ねる。
+  const methodAccess =
+    /(?:^|[^\w$.])([A-Za-z_$][\w$]*)\s*(?:\(\s*"[^"\n]*"\s*\))?\s*\.([A-Za-z_$][\w$]*)?$/.exec(
+      prefix,
+    )
+  if (methodAccess) {
+    const head = methodAccess[1] ?? ''
+    const typed = methodAccess[2] ?? ''
+    // `sum("x").` / `aux("x").` はバスハンドル。`global.` は Global。
+    // それ以外の識別子は宣言を見ないと決まらないので、provider 側で解決する。
+    const receiver =
+      head === 'sum' || head === 'aux' ? 'bus' : head === 'global' ? 'global' : 'sequence'
+    return { kind: 'method', typed, receiver }
+  }
+
   return null
+}
+
+/**
+ * `var <name> = init global.seq` で宣言された sequence 名（#495 第1段）。
+ *
+ * メソッド補完のレシーバ判定に使う。`var global = init GLOBAL` は sequence ではないので
+ * 含めない（`global.` は別の候補源を使う）。
+ */
+export function extractDeclaredSequenceNames(sourceText: string): string[] {
+  const names = new Set<string>()
+  for (const line of sourceText.split(/\r?\n/)) {
+    const match = /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*init\s+[A-Za-z_$][\w$]*\.seq\b/.exec(line)
+    if (match?.[1] && lexicalStateAt(line, match.index) === 'code') names.add(match[1])
+  }
+  return [...names]
+}
+
+/**
+ * `var <name> = init GLOBAL` で宣言された global 名（#495 第1段）。
+ *
+ * 慣例は `global` だが別名も書けるので、決め打ちにしない。
+ */
+export function extractDeclaredGlobalNames(sourceText: string): string[] {
+  const names = new Set<string>()
+  for (const line of sourceText.split(/\r?\n/)) {
+    const match = /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*init\s+GLOBAL\b/.exec(line)
+    if (match?.[1] && lexicalStateAt(line, match.index) === 'code') names.add(match[1])
+  }
+  return [...names]
 }
 
 /** Mirrors engine `declaredNames`: global/sequence initializers and `var` bindings. */

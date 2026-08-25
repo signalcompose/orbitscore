@@ -75,7 +75,10 @@ import {
   extractDeclaredBusNames,
   extractTopLevelDeclaredNames,
   filterDslCandidates,
+  extractDeclaredGlobalNames,
+  extractDeclaredSequenceNames,
 } from './dsl-completion-context'
+import { BUS_METHODS, GLOBAL_METHODS, SEQUENCE_METHODS } from './dsl-method-catalog'
 import { detectPluginArgContext, filterCatalogEntries } from './plugin-catalog-completion'
 import {
   loadPluginCatalog,
@@ -3529,7 +3532,14 @@ function isTransportCommand(text: string): boolean {
 }
 */
 
-function registerCompletionProviders(context: vscode.ExtensionContext) {
+/**
+ * 補完プロバイダの登録（#495）。
+ *
+ * export しているのは**登録内容（トリガー文字を含む）をテストで固定する**ため。
+ * トリガーに `.` が無いと、provider 本体が正しくてもユーザーが打った時に出てこない
+ * — provider を直接呼ぶテストでは気づけない穴だった（変異検証で発見）。
+ */
+export function registerCompletionProviders(context: vscode.ExtensionContext) {
   // Context-aware completion provider
   const completionProvider = vscode.languages.registerCompletionItemProvider(
     'orbitscore',
@@ -3632,81 +3642,120 @@ function registerCompletionProviders(context: vscode.ExtensionContext) {
   // DSL completion surfaces introduced by #512.  Context recognition lives in
   // dsl-completion-context.ts so this provider is only responsible for VS Code
   // I/O and CompletionItem construction.
+  // 🔴 #495: provider 本体は vscode API を直接叩く層で、文脈検出のユニットテストでは
+  // 通らない。#614 で「配線はユニットテストの視野の外」を踏んだので、**named export に
+  // 切り出してテストから直接駆動できるようにする**。
   const dslCompletionProvider = vscode.languages.registerCompletionItemProvider(
     'orbitscore',
-    {
-      async provideCompletionItems(document, position) {
-        const lineText = document.lineAt(position).text
-        const completionContext = detectDslCompletionContext(lineText, position.character)
-        if (!completionContext) return undefined
-
-        const typedRange = new vscode.Range(
-          new vscode.Position(position.line, position.character - completionContext.typed.length),
-          position,
-        )
-        const makeItems = (candidates: readonly string[], kind: vscode.CompletionItemKind) =>
-          filterDslCandidates(candidates, completionContext.typed).map((candidate) => {
-            const item = new vscode.CompletionItem(candidate, kind)
-            item.insertText = candidate
-            item.range = typedRange
-            return item
-          })
-
-        switch (completionContext.kind) {
-          case 'sum-name':
-            return makeItems(
-              extractDeclaredBusNames(document.getText(), 'sum'),
-              vscode.CompletionItemKind.Value,
-            )
-          case 'aux-name':
-            return makeItems(
-              extractDeclaredBusNames(document.getText(), 'aux'),
-              vscode.CompletionItemKind.Value,
-            )
-          case 'import-names': {
-            const importUri = vscode.Uri.file(
-              path.resolve(path.dirname(document.uri.fsPath), completionContext.importPath),
-            )
-            let importedSource: string
-            try {
-              importedSource = Buffer.from(await vscode.workspace.fs.readFile(importUri)).toString(
-                'utf8',
-              )
-            } catch (error) {
-              // The import may still be mid-edit or absent; completion must not
-              // turn that ordinary editing state into a provider error. Logged
-              // so real failures (e.g. permissions) remain diagnosable.
-              outputChannel?.appendLine(
-                `⚠️ DSL import-name completion: could not read ${importUri.fsPath}: ${error}`,
-              )
-              return undefined
-            }
-            return makeItems(
-              extractTopLevelDeclaredNames(importedSource),
-              vscode.CompletionItemKind.Variable,
-            )
-          }
-          case 'import-path': {
-            const files = await vscode.workspace.findFiles('**/*.orbs')
-            const currentDirectory = path.dirname(document.uri.fsPath)
-            const candidates = files
-              .filter((uri) => uri.fsPath !== document.uri.fsPath)
-              .map((uri) => {
-                const relativePath = path
-                  .relative(currentDirectory, uri.fsPath)
-                  .split(path.sep)
-                  .join('/')
-                return relativePath.startsWith('.') ? relativePath : `./${relativePath}`
-              })
-            return makeItems(candidates, vscode.CompletionItemKind.File)
-          }
-        }
-      },
-    },
+    dslCompletionItemProvider,
     '"',
     '{',
+    // #495 第1段: `<receiver>.` の後のメソッド補完を出すためのトリガー。
+    // これが無いと、明示的に補完を呼び出さない限り出てこない。
+    '.',
   )
   context.subscriptions.push(dslCompletionProvider)
+}
+
+/**
+ * DSL 補完の provider 本体（#495）。
+ *
+ * `activate()` の中に埋めるとテストから駆動できないので named export にしてある
+ * （#614 の教訓: 配線はユニットテストの視野の外）。
+ */
+export const dslCompletionItemProvider: vscode.CompletionItemProvider = {
+  async provideCompletionItems(document, position) {
+    const lineText = document.lineAt(position).text
+    const completionContext = detectDslCompletionContext(lineText, position.character)
+    if (!completionContext) return undefined
+
+    const typedRange = new vscode.Range(
+      new vscode.Position(position.line, position.character - completionContext.typed.length),
+      position,
+    )
+    const makeItems = (candidates: readonly string[], kind: vscode.CompletionItemKind) =>
+      filterDslCandidates(candidates, completionContext.typed).map((candidate) => {
+        const item = new vscode.CompletionItem(candidate, kind)
+        item.insertText = candidate
+        item.range = typedRange
+        return item
+      })
+
+    switch (completionContext.kind) {
+      case 'method': {
+        // #495 第1段: `<receiver>.` の後にメソッドを出す。
+        // 候補源は engine の DSL 語彙の写し（`dsl-method-catalog.ts`。乖離はテストが検知）。
+        //
+        // 行だけでは変数のレシーバ種別が決まらないので、ここで**文書全体の宣言**を見る。
+        // `var g = init GLOBAL` で宣言された名前なら Global、`init global.seq` なら Sequence。
+        const text = document.getText()
+        let methods: readonly string[]
+        if (completionContext.receiver === 'bus') {
+          methods = BUS_METHODS
+        } else if (completionContext.receiver === 'global') {
+          methods = GLOBAL_METHODS
+        } else {
+          // 変数名。宣言を見て決める。判定できない識別子には出さない
+          // （無関係な `foo.` にまで DSL メソッドを並べない）。
+          const head = /([A-Za-z_$][\w$]*)\s*\.[A-Za-z_$\w]*$/.exec(
+            lineText.slice(0, position.character),
+          )?.[1]
+          if (!head) return undefined
+          if (extractDeclaredGlobalNames(text).includes(head)) methods = GLOBAL_METHODS
+          else if (extractDeclaredSequenceNames(text).includes(head)) methods = SEQUENCE_METHODS
+          else return undefined
+        }
+        return makeItems(methods, vscode.CompletionItemKind.Method)
+      }
+      case 'sum-name':
+        return makeItems(
+          extractDeclaredBusNames(document.getText(), 'sum'),
+          vscode.CompletionItemKind.Value,
+        )
+      case 'aux-name':
+        return makeItems(
+          extractDeclaredBusNames(document.getText(), 'aux'),
+          vscode.CompletionItemKind.Value,
+        )
+      case 'import-names': {
+        const importUri = vscode.Uri.file(
+          path.resolve(path.dirname(document.uri.fsPath), completionContext.importPath),
+        )
+        let importedSource: string
+        try {
+          importedSource = Buffer.from(await vscode.workspace.fs.readFile(importUri)).toString(
+            'utf8',
+          )
+        } catch (error) {
+          // The import may still be mid-edit or absent; completion must not
+          // turn that ordinary editing state into a provider error. Logged
+          // so real failures (e.g. permissions) remain diagnosable.
+          outputChannel?.appendLine(
+            `⚠️ DSL import-name completion: could not read ${importUri.fsPath}: ${error}`,
+          )
+          return undefined
+        }
+        return makeItems(
+          extractTopLevelDeclaredNames(importedSource),
+          vscode.CompletionItemKind.Variable,
+        )
+      }
+      case 'import-path': {
+        const files = await vscode.workspace.findFiles('**/*.orbs')
+        const currentDirectory = path.dirname(document.uri.fsPath)
+        const candidates = files
+          .filter((uri) => uri.fsPath !== document.uri.fsPath)
+          .map((uri) => {
+            const relativePath = path
+              .relative(currentDirectory, uri.fsPath)
+              .split(path.sep)
+              .join('/')
+            return relativePath.startsWith('.') ? relativePath : `./${relativePath}`
+          })
+        return makeItems(candidates, vscode.CompletionItemKind.File)
+      }
+    }
+  },
 }
 
 /**

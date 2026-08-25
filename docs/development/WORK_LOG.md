@@ -21,8 +21,67 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **Date**: 2026-08-26
 **Issue**: #617 / #603
-**Status**: **1973 passed / 0 failed**（着手前 1962・**+11**）・lint 0・`cargo clippy` 0・`cargo fmt` 0
+**Status**: **2002 passed / 0 failed**（着手前 1962・**+40**）・lint 0・`cargo clippy` 0・`cargo fmt` 0
 ・Rust host lib 9 passed・**実機で Kontakt の UI open/close/再open/2声同時を確認**
+
+#### 追加: DSL メソッド補完（#495 第1段）
+
+owner 追加要求: 「あと記述の補完も」。
+
+##### 現状の穴
+
+補完 provider は3本動いていたが、**埋まっていたのは文字列の中だけ**だった:
+
+| 文脈 | 実装前 |
+|---|---|
+| `import { … }` / `import … from "` | ✅ |
+| `output("` → sum 名 / `send("` → aux 名 | ✅ |
+| `effect("` / `instrument("` → カタログ | ✅ |
+| **`seq.` / `global.` / `sum("x").` の後** | 🔴 **無し** |
+
+🔴 **その結果、今回足した `seq.ui()` は補完に出なかった。** engine 側に
+`SEQUENCE_DSL_METHODS` という語彙テーブルがあるのに、補完がそれを見ていなかった。
+
+##### 実装
+
+- `dsl-completion-context.ts`: `kind: 'method'` を追加。`sum(...)`/`aux(...)` はその場で
+  bus と判定し、変数名は provider が宣言を見て解決する
+- `dsl-method-catalog.ts`（新規）: 候補表。**正本は engine 側**で、ここは写し
+  （拡張は engine をプロセス境界越しに使う設計。`plugin-catalog-reader.ts` と同じ理由）
+- 🔴 **写しの乖離をテストで固定**: engine の語彙と一字一句一致することを検査する。
+  DSL にメソッドを足して候補表を更新し忘れると red（`ui` の乖離が実例）
+- `extension.ts`: provider に `method` ケースを追加。**`.` をトリガー文字に追加**
+
+##### 🔴 変異検証で2つの穴が出た
+
+**穴1: provider 本体がテストで駆動できていなかった。** 当初は文脈検出だけをテストしており、
+provider は `activate()` の中に埋まっていて呼べなかった。#614 の「配線はユニットテストの
+視野の外」と同型なので、**`dslCompletionItemProvider` を named export に切り出し**、
+`tests/mocks/vscode.ts` に登録捕捉を足して本体を直接駆動するテストを書いた。
+
+**穴2: `.` トリガーを外す変異が生き残った。** provider を直接呼ぶテストでは、
+トリガー文字が無くても通ってしまう。しかし実機では**打っても出てこない**。
+`registerCompletionProviders` を export し、**登録内容（トリガー文字）を検査**して塞いだ。
+
+| 変異 | 結果 |
+|---|---|
+| 候補表から `ui` を落とす（乖離の再現） | **red** |
+| bus 候補から `ui` を落とす | **red** |
+| `sum`/`aux` を bus と判定しない | **red** |
+| global を sequence 抽出に混ぜる | **red** |
+| 文字列の中でも発火させる | **red** |
+| sequence と global の候補源を入れ替える | **red** |
+| 未宣言の識別子にも候補を出す | **red** |
+| bus 候補を sequence に差し替える | **red** |
+| `method` ケースを丸ごと削除 | **red**（5件） |
+| **`.` トリガーを外す** | 🔴 **最初は生存** → 登録テスト追加後 **red** |
+
+##### 🔴 変異が適用されたことを毎回検証する
+
+provider を module 直下へ切り出した際に**インデントが変わり**、変異スクリプトのアンカーが
+一致せず **変異が一度も適用されないまま「全て green」**になった。危うく
+「テストが弱い」と誤診するところだった。以後、変異適用は
+`assert s.count(old) == 1` で**適用されたことを確認してから**実行する。
 
 #### owner 要求（2026-08-25）
 
