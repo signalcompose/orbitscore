@@ -6,6 +6,7 @@
  * DaemonStartupError）、spawn 成功後の統合的健全性は gated real-daemon 系の対象。
  */
 
+import type { ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -613,6 +614,99 @@ exit 1
       )
       // 🔴 assert は必ず mockRestore() より前に置く。mockRestore() は mock.calls も
       // 消すため、復元後に読むとガードを外す変異が生き残る（実際に一度生き残った）。
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('escalated to SIGKILL'))).toBe(false)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
+describe('DaemonClient killChildGracefully の両方向 (#520)', () => {
+  // 上の #484 D1 ブロックは「実際の start 失敗 cleanup がガードに到達すること」を
+  // 配線として押さえるが、**ガードが広すぎても同じ観測になる**（早期リターンしすぎても
+  // 「警告が出ない」は成立する）。ここでガード本体の 2 方向を決定論的に固定する。
+  //
+  // 判定は「警告が出た / 出ない」ではなく **kill シーケンスの順序**で行う。
+  // fake は #532（extension.ts stopEngine）で実証済みのパターンを踏襲し、
+  // 「kill() は killed を即 true にするが exitCode/signalCode は動かさない」という
+  // Node の実挙動を再現する。
+  const KILL_DEADLINE_MS = 500 // daemon-client.ts の DEFAULT_KILL_TIMEOUT_MS（非公開）
+
+  function fakeChild(initial: { exitCode?: number | null; signalCode?: string | null }): {
+    child: ChildProcess
+    killCalls: string[]
+  } {
+    const killCalls: string[] = []
+    const state = {
+      killed: false,
+      exitCode: initial.exitCode ?? null,
+      signalCode: initial.signalCode ?? null,
+    }
+    const child = {
+      get killed() {
+        return state.killed
+      },
+      get exitCode() {
+        return state.exitCode
+      },
+      get signalCode() {
+        return state.signalCode
+      },
+      kill: vi.fn((signal?: string) => {
+        killCalls.push(String(signal))
+        state.killed = true
+        return true
+      }),
+      // SIGTERM を無視する child を模す: 'exit' は最後まで発火しない。
+      once: vi.fn(),
+      off: vi.fn(),
+    }
+    return { child: child as unknown as ChildProcess, killCalls }
+  }
+
+  async function killChild(client: DaemonClient, child: ChildProcess): Promise<void> {
+    await (
+      client as unknown as { killChildGracefully(c: ChildProcess): Promise<void> }
+    ).killChildGracefully(child)
+  }
+
+  it('生存している child は SIGTERM → SIGKILL の順に昇格し、昇格を報告する', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.useFakeTimers()
+    try {
+      const { child, killCalls } = fakeChild({ exitCode: null, signalCode: null })
+      const pending = killChild(new DaemonClient(), child)
+      await vi.advanceTimersByTimeAsync(KILL_DEADLINE_MS + 1)
+      await pending
+      // 順序まで固定する。SIGKILL だけ・SIGTERM だけ・逆順のいずれも red にする。
+      expect(killCalls).toEqual(['SIGTERM', 'SIGKILL'])
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('escalated to SIGKILL'))).toBe(true)
+    } finally {
+      vi.useRealTimers()
+      warn.mockRestore()
+    }
+  })
+
+  it('exitCode が立っている child にはシグナルを一切送らない', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { child, killCalls } = fakeChild({ exitCode: 1 })
+      await killChild(new DaemonClient(), child)
+      expect(killCalls).toEqual([])
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('escalated to SIGKILL'))).toBe(false)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('signalCode が立っている child にもシグナルを一切送らない', async () => {
+    // exitCode 側だけを見るガードに縮めると、この 1 件だけが red になる
+    // （シグナルで死んだ child は exitCode が null のまま）。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const { child, killCalls } = fakeChild({ exitCode: null, signalCode: 'SIGTERM' })
+      await killChild(new DaemonClient(), child)
+      expect(killCalls).toEqual([])
       expect(warn.mock.calls.some((c) => String(c[0]).includes('escalated to SIGKILL'))).toBe(false)
     } finally {
       warn.mockRestore()
