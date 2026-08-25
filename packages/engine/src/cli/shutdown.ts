@@ -4,6 +4,8 @@
 
 import { InterpreterV2 } from '../interpreter/interpreter-v2'
 
+import { getActiveInterpreter } from './active-interpreter'
+
 const AUTO_SNAPSHOT_SHUTDOWN_BUDGET_MS = 1_200
 
 /**
@@ -89,6 +91,24 @@ export async function shutdown(interpreter: InterpreterV2 | null): Promise<void>
  * ```
  */
 export function registerShutdownHandlers(getInterpreter: () => InterpreterV2 | null): void {
-  process.on('SIGINT', async () => await shutdown(getInterpreter()))
-  process.on('SIGTERM', async () => await shutdown(getInterpreter()))
+  process.on('SIGINT', async () => await shutdown(resolveShutdownInterpreter(getInterpreter)))
+  process.on('SIGTERM', async () => await shutdown(resolveShutdownInterpreter(getInterpreter)))
+}
+
+/**
+ * shutdown に渡す interpreter を解決する。
+ *
+ * 🔴 #607: 呼び出し元（`cli-audio.ts`）は `executeCommand()` の**戻り値**で
+ * interpreter を保持するが、REPL / test など長時間モードでは `executeCommand()` が
+ * **返らない**ため、その変数は永遠に `null` のままになる。その状態で SIGTERM を受けると
+ * `shutdown(null)` となり `audioEngine.quit()` が一度も呼ばれず、**Rust daemon が孤児化**する
+ * （実機で実測。孤児は coreaudiod の音声コンテキストを保持し続ける）。
+ *
+ * そのため、戻り値が無ければ**生成時に publish された registry**へフォールバックする。
+ * 🔴 この `??` を外すと #607 が再発する。
+ */
+export function resolveShutdownInterpreter(
+  getInterpreter: () => InterpreterV2 | null,
+): InterpreterV2 | null {
+  return getInterpreter() ?? getActiveInterpreter()
 }

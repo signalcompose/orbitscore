@@ -3,6 +3,7 @@
  */
 
 export * from './types'
+export * from './active-interpreter'
 export * from './parse-arguments'
 export * from './play-mode'
 export * from './repl-mode'

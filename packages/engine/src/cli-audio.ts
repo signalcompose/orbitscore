@@ -15,6 +15,8 @@ import { parseArguments, setGlobalDebugFlag, executeCommand, registerShutdownHan
 let globalInterpreter: InterpreterV2 | null = null
 
 // Register shutdown handlers
+// #607: REPL 等では executeCommand() が返らず globalInterpreter は null のままになる。
+// そのフォールバックは registerShutdownHandlers 側（resolveShutdownInterpreter）が持つ。
 registerShutdownHandlers(() => globalInterpreter)
 
 // Main

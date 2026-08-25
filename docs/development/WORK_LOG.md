@@ -21,7 +21,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **Date**: 2026-08-25
 **Issue**: #520
-**Status**: **1934 passed / 0 failed**（着手前 1929・**+5**）・**全 suite 5回連続 green**・lint 0・`cargo clippy` 0・`cargo fmt` 0
+**Status**: **1939 passed / 0 failed**（着手前 1929・**+10**）・全 suite 3回連続 green・lint 0・`cargo clippy` 0・`cargo fmt` 0
 ・Rust daemon lib 31 passed・**全 suite 計 14 回 green**
 
 土台バンドル（#520 → #567 → #614 → #607）の 1 件目。着手の理由は、
@@ -308,6 +308,84 @@ TS は `tests/helpers/spawn-fixture.ts`（`createWarmExecutable` / `warmUpExecut
 - **TS 全 suite 5回連続 green（1934 passed）** — 修正前は 2〜3 回に1回落ちていた
 - Rust `orbit-audio-sandbox` + `orbit-vst3-effect-child` 3回連続 **109 passed / 0 failed**
 - `oracle_parity` 単体 3回連続 green（正常時 0.38〜0.88s。60s の余裕は通常時のコストにならない）
+
+#### 🔴 #607 を実機で再現し、根本原因を特定して直した
+
+実機 E2E（OrbitStudio を起動し MCP を HTTP で直叩き）で、この PR が直した表面
+（偽の `escalated to SIGKILL` = 0 件）を確認した際、**別の重大な事実**が出た:
+
+```
+🛑 Engine stopped
+🛑 Engine process exited with code 0        ← engine は正常終了している
+daemon PID 90513  PPID=1                    ← なのに daemon は孤児化して生存
+音声コンテキスト保持者: ALIVE 90513 orbit-audio-daemon
+```
+
+**`stop_engine` は成功を報告し `engine_state` も `running:false` になるのに、daemon が
+生き残って coreaudiod の音声コンテキストを握り続ける。**
+
+##### 切り分け（推論でなく実測）
+
+1. **拡張の 2 秒 SIGKILL とのレースか？** → engine にだけ SIGTERM を送って確認 →
+   **daemon はやはり生存**。レースではない
+2. **`quit()` が失敗しているのか？** → `shutdown()` と `DaemonClient.quit()` に一時 probe を
+   入れて実機再実行:
+
+```
+[PROBE] shutdown entered interpreter=false
+```
+
+##### 根本原因
+
+`cli-audio.ts` は `executeCommand()` の**戻り値**で `globalInterpreter` を代入し、
+shutdown ハンドラはそれを見ていた。しかし **REPL / test など長時間モードでは
+`executeCommand()` は返らない**。`execute-command.ts` のコメント自身が
+
+> `// Note: startREPLMode() never resolves, so this never returns`
+
+と明記している。したがって**拡張が使う live coding（REPL）モードでは
+`globalInterpreter` は永遠に `null`**、shutdown ハンドラは `shutdown(null)` を呼び、
+`if (interpreter)` ブロックごと飛ばして `process.exit(0)` へ直行していた。
+**`audioEngine.quit()` は一度も呼ばれていなかった**（だから SIGKILL 昇格の警告も出ない）。
+
+#448 の `main.rs` コメントが「まとまった graceful-shutdown 配線は本 issue のスコープ外・
+別 issue 向き」と書いていた、その別 issue が #607 である。
+
+##### 対策（ポリシー）
+
+> **interpreter は生成した時点で publish する。コマンドの戻り値に依存しない。**
+
+- `cli/active-interpreter.ts`（新規）: `setActiveInterpreter` / `getActiveInterpreter`
+- `repl-mode.ts`: `startREPLMode` の `new InterpreterV2()` 直後と `startREPL(interpreter)` の
+  冒頭で publish（どちらも返らない関数）
+- `shutdown.ts`: `resolveShutdownInterpreter(getInterpreter)` を新設し、戻り値が null なら
+  registry へフォールバック。`registerShutdownHandlers` がこれを使う
+
+🔴 **フォールバックは `cli-audio.ts`（top-level・テスト不能）ではなく `shutdown.ts` に置いた。**
+最初は `cli-audio.ts` に書いたが、**テストが実コードを通れず変異が生き残った**ため設計を変えた。
+
+##### 🔴 変異検証 — 最初のテストは 2 つの変異を生き残った
+
+| 変異 | 最初の実装 | 修正後 |
+|---|---|---|
+| (A) `??` フォールバックを外す | 🔴 **生存**（テストが式を手で複製していた） | **red** |
+| (B) `startREPL` の publish を削除 | 🔴 **生存**（テストが `setActiveInterpreter` を直接呼んでいた） | **red** |
+| (C) `audioEngine.quit()` の呼び出しを削除 | red | **red** |
+| (D) 解決の優先順位を逆にする | （未実施） | **red** |
+
+原因は [[test-name-must-match-the-path-it-drives]] と同型 —
+**名前は配線を名乗っているのに、駆動していたのは手で複製した式**だった。
+`resolveShutdownInterpreter` と `startREPL` を実際に呼ぶ形へ書き直して 4 変異すべてを殺した。
+
+##### 実機での確認
+
+| | 修正前 | 修正後 |
+|---|---|---|
+| `stop_engine` 後の daemon | 🔴 生存（PPID=1） | **✓ 1 秒で消滅** |
+| 残存 daemon | 1 個 | **0 個** |
+| 音声コンテキスト | 2（daemon が保持） | **1**（`arkaudiod` のみ・orbit 由来 0） |
+
+**今日の CPU 暴走（coreaudiod 907%・残留 65 個）の発生源がこれで塞がった。**
 
 #### 採らなかったもの: argv の アトミック書き込み
 

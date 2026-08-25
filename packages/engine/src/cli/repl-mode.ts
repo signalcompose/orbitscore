@@ -7,6 +7,7 @@ import * as readline from 'readline'
 import { InterpreterV2 } from '../interpreter/interpreter-v2'
 import { parseAudioDSL } from '../parser/audio-parser'
 
+import { setActiveInterpreter } from './active-interpreter'
 import { REPLOptions } from './types'
 import { shouldEnableSessionLog } from './session-log-gate'
 
@@ -32,6 +33,9 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
 
   // Create a global interpreter
   const globalInterpreter = new InterpreterV2()
+  // 🔴 #607: startREPLMode() は返らないので、戻り値経由では shutdown ハンドラに
+  // 届かない。生成した時点で publish する（詳細は active-interpreter.ts）。
+  setActiveInterpreter(globalInterpreter)
 
   // §L1 (#229): session-log は 2.0.0 では dormant（既定 off）。file-scoped ログが
   // 複数ファイルをまたぐライブセッションに合わない設計ミスマッチのため、session-scoped で
@@ -472,6 +476,8 @@ export function createReplSession(interpreter: InterpreterV2): {
 }
 
 export async function startREPL(interpreter: InterpreterV2): Promise<void> {
+  // 🔴 #607: この関数も返らない。play/run/eval から REPL に入る経路でも publish する。
+  setActiveInterpreter(interpreter)
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
