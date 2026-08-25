@@ -66,6 +66,24 @@ child の UiCloseStateMachine が実際に返すのは `CLOSING_IN_PROGRESS_DETA
 - テストの mock 文言を実 Display 形式（`plugin state mailbox command 7 failed (result=2): ...`）に置換
 - 変異検証: 2 つのマッチをそれぞれ外し、対応テストのみが red（1 対 1）
 
+#### Round 4（fixer 差分の再点検）: R3 fix 自身が新しい Critical を持ち込んでいた
+
+R3 で採用した実文言 `closing-in-progress` は、Rust 側 `open_command` が **OR 条件で3つの異なる
+拒否理由を1つの文言に潰していた**: (1) state == Open（目的達成・成功扱いで正しい）
+(2) state == Closing（UI は閉じていく・開いていない）(3) Closed だが ring 未 drain（開いていない）。
+(2)(3) を成功扱いすると「開けなかったのに開いたことにする」本物のサイレント no-op になる。
+さらに host 側マッチ `lifecycle is`（無限定）も同型の欠陥で `lifecycle is Closing` を飲んでいた。
+
+**修正は Rust 側の根本から**（意味が違うものは wire でも違う文言にする）:
+
+- `orbit-child-ui`: `ALREADY_OPEN_DETAIL = "already-open"` を新設し、`open_command` が
+  state == Open では `already-open`、Closing / ring 未 drain では従来どおり
+  `closing-in-progress` を返すよう分離（duplicate_open の rust テストも追随）
+- TS 側は `already-open` と `lifecycle is Open`（`Opening` の前方一致を兼ね、`Closing` は
+  不一致）のみ成功扱い。`closing-in-progress` / `lifecycle is Closing` は throw
+- テスト +3（Closing throw / closing-in-progress throw / Opening 前方一致の裏取り）
+- 変異検証 4 種（マッチを広げ戻す×2・外す×2）すべて対応テストのみ red
+
 #### 保留（意図的）
 
 - `getSize` の許容コード（`kNotInitialized` のみ）が Kontakt 1 機種の実測に基づく点は R2 Important のまま維持。

@@ -143,10 +143,24 @@ describe('🔴 ui() は冪等（#619 レビュー・F2b）', () => {
     expect(open).toHaveBeenCalledTimes(1)
   })
 
-  it('R3: child 側 desync（closing-in-progress）も成功扱い', async () => {
+  it('R4: child 側 desync（already-open）も成功扱い', async () => {
     // host は Closed と見て begin_open を通したが child の UiCloseStateMachine が
-    // まだ Closed でない場合、mailbox エラーの detail に CLOSING_IN_PROGRESS_DETAIL
-    // が載って届く（CommandMailboxError::CommandFailed の Display 形式を模す）。
+    // 既に Open の場合、mailbox エラーの detail に ALREADY_OPEN_DETAIL が載って届く
+    // （CommandMailboxError::CommandFailed の Display 形式を模す）。
+    const { global, player, open } = spyGlobal()
+    open.mockRejectedValueOnce(
+      new Error(
+        "Plugin UI request for 'cb' index 0 failed: [PLUGIN_UI_COMMAND_ERROR] " +
+          'plugin state mailbox command 7 failed (result=2): already-open',
+      ),
+    )
+    await expect(makeSeq(global, player, 'cb').ui()).resolves.toBeDefined()
+    expect(open).toHaveBeenCalledTimes(1)
+  })
+
+  it('🔴 R4: closing-in-progress は「開いていない」ので throw する', async () => {
+    // Closing / ring 未 drain の拒否では UI は開いていない。成功扱いにすると
+    // 「開けなかったのに開いたことにする」サイレント no-op になる（R4 Critical）。
     const { global, player, open } = spyGlobal()
     open.mockRejectedValueOnce(
       new Error(
@@ -154,8 +168,29 @@ describe('🔴 ui() は冪等（#619 レビュー・F2b）', () => {
           'plugin state mailbox command 7 failed (result=2): closing-in-progress',
       ),
     )
+    await expect(makeSeq(global, player, 'cb').ui()).rejects.toThrow('closing-in-progress')
+  })
+
+  it('🔴 R4: lifecycle is Closing も「開いていない」ので throw する', async () => {
+    const { global, player, open } = spyGlobal()
+    open.mockRejectedValueOnce(
+      new Error(
+        "Plugin UI request for 'cb' index 0 failed: [PLUGIN_UI_PROTOCOL_ERROR] " +
+          'plugin UI event protocol error: OPEN_UI requested while lifecycle is Closing',
+      ),
+    )
+    await expect(makeSeq(global, player, 'cb').ui()).rejects.toThrow('lifecycle is Closing')
+  })
+
+  it('R4: lifecycle is Opening は成功扱い（前方一致の裏取り）', async () => {
+    const { global, player, open } = spyGlobal()
+    open.mockRejectedValueOnce(
+      new Error(
+        "Plugin UI request for 'cb' index 0 failed: [PLUGIN_UI_PROTOCOL_ERROR] " +
+          'plugin UI event protocol error: OPEN_UI requested while lifecycle is Opening',
+      ),
+    )
     await expect(makeSeq(global, player, 'cb').ui()).resolves.toBeDefined()
-    expect(open).toHaveBeenCalledTimes(1)
   })
 
   it('already open 以外のエラーは従来どおり throw する（何でも飲み込まない）', async () => {

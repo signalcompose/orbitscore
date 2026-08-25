@@ -934,13 +934,17 @@ export class Global {
       await this.openPluginUi(receiverId, index)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      // 「already open」は2系統ある。host 側 UiEventPump のゲート（transport.rs
-      // `OPEN_UI requested while lifecycle is {:?}`）と、host は Closed と見たが child の
-      // UiCloseStateMachine がまだ Closed でない desync（orbit-child-ui
-      // CLOSING_IN_PROGRESS_DETAIL = "closing-in-progress" が mailbox エラー detail で届く）。
+      // 成功扱いにしてよいのは「UI が既に開いている / 開きつつある」拒否だけ。
+      // host 側ゲート（transport.rs `OPEN_UI requested while lifecycle is {:?}`）は
+      // Open / Opening / Closing の3状態で同じ形の文言を返すが、Closing は「UI は
+      // 閉じられていく」＝目的未達なので飲み込んではいけない。`lifecycle is Open` は
+      // `Opening` の前方一致も兼ねる（Debug 表記 Open / Opening のみ一致・Closing は不一致）。
+      // child 側 desync は orbit-child-ui の ALREADY_OPEN_DETAIL（"already-open"）のみ
+      // 成功扱い。CLOSING_IN_PROGRESS_DETAIL（"closing-in-progress"）は「まだ開けない」
+      // ＝開いていないので throw に落とす（R4 で detail を分離した理由そのもの）。
       if (
-        message.includes('OPEN_UI requested while lifecycle is') ||
-        message.includes('closing-in-progress')
+        message.includes('OPEN_UI requested while lifecycle is Open') ||
+        message.includes('already-open')
       ) {
         return
       }
