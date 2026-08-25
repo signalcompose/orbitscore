@@ -1,8 +1,11 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use std::time::Duration;
+
 use orbit_audio_sandbox::{
-    max_abs_diff, render_in_process_gain, render_through_child_sync, CHANNELS, MAX_FRAMES,
+    max_abs_diff, render_in_process_gain, render_through_child_sync_with_options,
+    warm_up_executable, RenderOptions, CHANNELS, MAX_FRAMES,
 };
 
 const SAMPLE_RATE: &str = "48000";
@@ -28,7 +31,11 @@ fn package_oracle() -> Option<PathBuf> {
 }
 
 fn child_exe() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_orbit-vst3-effect-child"))
+    let path = PathBuf::from(env!("CARGO_BIN_EXE_orbit-vst3-effect-child"));
+    // 🔴 #520: ビルドしたての child は初回 spawn で macOS のセキュリティ評価を伴う。
+    // 評価コストを first_block_timeout の外へ出す（下の RenderOptions と2段構え）。
+    warm_up_executable(&path);
+    path
 }
 
 fn make_signal(total_frames: usize) -> Vec<f32> {
@@ -50,11 +57,20 @@ fn vst3_gain_oracle_oop_child_is_sample_exact_passthrough() {
 
     for &(total_frames, block_frames) in &[(64, 64), (256, 64), (300, 64), (512, 128)] {
         let input = make_signal(total_frames);
-        let through_child = render_through_child_sync(
+        // 🔴 #520: 初回ブロックは child の spawn を含む。macOS は**ビルドしたての実行ファイル**の
+        // 初回 spawn でセキュリティ評価を行い、実測で数秒〜24 秒停止することがある
+        // （詳細は tests/helpers/spawn-fixture.ts のヘッダ）。既定の 5s だと crash でないのに
+        // TimedOut で false-fail する。ここで待つのは検証対象（sample-exact な passthrough か）
+        // ではないので、初回だけ裾に耐える値を与える。2 ブロック目以降は既定のまま。
+        let (through_child, _stats) = render_through_child_sync_with_options(
             &child_exe(),
             &input,
             block_frames,
             &["--plugin", plugin, "--sample-rate", SAMPLE_RATE],
+            RenderOptions {
+                first_block_timeout: Duration::from_secs(60),
+                ..RenderOptions::default()
+            },
         )
         .expect("child round-trip 成功");
 

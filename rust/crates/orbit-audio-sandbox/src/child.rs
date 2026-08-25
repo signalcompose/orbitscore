@@ -82,3 +82,48 @@ impl Drop for SandboxChildGuard {
         }
     }
 }
+
+/// 実行ファイルを 1 回だけ空 spawn して、OS の初回評価コストを先払いする。
+///
+/// 🔴 なぜ必要か（2026-08-25 実測・#520）
+///
+/// macOS は**新規に作成された実行ファイル**の spawn 時にセキュリティ評価
+/// （Gatekeeper / XProtect / syspolicyd）を行う。実測値:
+///
+/// | spawn 対象                       | p50    | max   |
+/// |----------------------------------|--------|-------|
+/// | 既存のシステムバイナリ(/bin/echo)  | 1.0ms  | 3ms   |
+/// | 毎回新規作成した実行ファイル        | 93.8ms | 178ms |
+///
+/// さらに評価済みの実行ファイルでも稀に数秒〜24 秒停止する（実測: 675ms / 3.8s / 9.0s / 24.6s）。
+/// `cargo build` 直後の child バイナリはまさに「新規作成された実行ファイル」なので、
+/// 最初の spawn を含むブロックが数秒の deadline を超えて **crash でないのに TimedOut で
+/// false-fail** する。実際に `oracle_parity` がこれで落ちた。
+///
+/// 待つのは `'spawn' 相当`（プロセス起動の成功）までで十分なので、起動を確認したら即 kill する。
+/// **exit を待ってはいけない**（対象にはハングし続ける child も含まれる）。
+///
+/// TS 側の同等物は `tests/helpers/spawn-fixture.ts`。
+pub fn warm_up_executable(path: &std::path::Path) {
+    use std::sync::OnceLock;
+    // 同一プロセス内で同じ実行ファイルを何度も warm up しない。
+    static WARMED: OnceLock<std::sync::Mutex<std::collections::HashSet<std::path::PathBuf>>> =
+        OnceLock::new();
+    let warmed = WARMED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()));
+    {
+        let mut guard = warmed.lock().expect("warm-up set poisoned");
+        if !guard.insert(path.to_path_buf()) {
+            return;
+        }
+    }
+    // 引数なしで起動する。異常終了・即時終了のいずれでも評価は完了しているので結果は見ない。
+    if let Ok(mut child) = std::process::Command::new(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}

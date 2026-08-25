@@ -11,8 +11,9 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { createWarmExecutable, SPAWN_TEST_TIMEOUT_MS } from '../../helpers/spawn-fixture'
 import {
   DaemonClient,
   resolveDaemonBinaryPath,
@@ -512,36 +513,49 @@ describe('DaemonClient with mock server', () => {
 describe('DaemonClient real spawn error handling (C3)', () => {
   // 実 daemon バイナリを spawn する（mock 不使用）。'error' event 経路
   // （spawn 失敗 → DaemonStartupError 変換）を実際の子プロセス spawn で検証する。
+  //
+  // 🔴 #520: 実行ファイルは beforeAll で 1 回だけ作る（詳細は tests/helpers/spawn-fixture.ts）。
   let client: DaemonClient
   let tmpDir: string
   let badShebangBin: string
 
-  beforeEach(() => {
-    client = new DaemonClient()
+  beforeAll(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-spawn-error-'))
-    badShebangBin = path.join(tmpDir, 'orbit-audio-daemon')
     // exec bit はあるが shebang の interpreter が存在しないファイル。
     // execve が非同期の spawn 'error' (ENOENT) を発火する（Node の async-'error'
     // whitelist 内）。非実行ファイル (0o644) は resolveDaemonBinaryPath の
     // viability filter（isExecutableFile）で候補から外れてこの経路に到達しない
     // ため使えない。root 実行環境でもパーミッション bit に依存せず成立する。
-    fs.writeFileSync(
-      badShebangBin,
+    badShebangBin = await createWarmExecutable(
+      tmpDir,
+      'orbit-audio-daemon',
       `#!${path.join(tmpDir, 'no-such-interpreter')}\necho unreachable\n`,
-      { mode: 0o755 },
     )
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  afterAll(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  beforeEach(() => {
+    client = new DaemonClient()
   })
 
   afterEach(async () => {
     await client.quit()
-    fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
-  it('spawn が \'error\' event で失敗するバイナリは "daemon spawn failed" で reject する', async () => {
-    // exit/timeout 経路との判別のため文言まで固定して assert する。
-    await expect(client.start({ daemonPath: badShebangBin })).rejects.toThrow(/daemon spawn failed/)
-    expect(client.isRunning()).toBe(false)
-  })
+  it(
+    'spawn が \'error\' event で失敗するバイナリは "daemon spawn failed" で reject する',
+    async () => {
+      // exit/timeout 経路との判別のため文言まで固定して assert する。
+      await expect(client.start({ daemonPath: badShebangBin })).rejects.toThrow(
+        /daemon spawn failed/,
+      )
+      expect(client.isRunning()).toBe(false)
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 })
 
 describe('DaemonClient audioDevice spawn args (#484 D1)', () => {
@@ -549,76 +563,93 @@ describe('DaemonClient audioDevice spawn args (#484 D1)', () => {
   // `--audio-device <name>` が実際に子プロセスへ渡ることを検証する（daemon 側の解決・縮退
   // ロジック自体は Rust unit test で検証済み・ここは TS→spawn args の配線のみが対象）。
   //
-  // 🔴 #520: このブロックの検証対象は「argv に何が渡るか」だけで、子プロセスが何 ms で
-  // exit するかは検証対象ではない。以前は `startupTimeoutMs: 500` を明示していたため、
-  // 高負荷時に timeout が exit を追い越して `daemon ready line timeout after 500ms` が
-  // 先に reject され、文言まで固定した assert が落ちていた（負荷依存・約3回に1回）。
-  // いまは明示せず production の DEFAULT_STARTUP_TIMEOUT_MS に委ねる。deadline は exit
-  // 観測で即座に抜けるので、広くても正常時の所要時間は変わらない。
-  // **ここに小さい startupTimeoutMs を書き足すとフレークが戻る。**
+  // 🔴 #520: 検証対象は「argv に何が渡るか」だけで、子プロセスが何 ms で起動・exit するかは
+  // 検証対象ではない。以前は `startupTimeoutMs: 500` を明示していたため高負荷時に timeout が
+  // exit を追い越して assert が落ちていた。いまは明示せず production の
+  // DEFAULT_STARTUP_TIMEOUT_MS に委ねる。**ここに小さい startupTimeoutMs を書き足すと戻る。**
+  //
+  // 🔴 recorder script は `beforeAll` で 1 回だけ作って warm up する。per-test で作ると
+  // macOS のセキュリティ評価を毎回払う（詳細は tests/helpers/spawn-fixture.ts）。
   let client: DaemonClient
   let tmpDir: string
   let recorderBin: string
   let argvFile: string
 
-  beforeEach(() => {
-    client = new DaemonClient()
+  beforeAll(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-audio-device-'))
-    recorderBin = path.join(tmpDir, 'orbit-audio-daemon')
     argvFile = path.join(tmpDir, 'argv.txt')
-    fs.writeFileSync(
-      recorderBin,
+    recorderBin = await createWarmExecutable(
+      tmpDir,
+      'orbit-audio-daemon',
       `#!/bin/sh
 printf '%s\n' "$@" > "${argvFile}"
 exit 1
 `,
-      { mode: 0o755 },
     )
+  }, SPAWN_TEST_TIMEOUT_MS)
+
+  afterAll(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  beforeEach(() => {
+    client = new DaemonClient()
+    // warm up の空 spawn が書いた argv を持ち越さない。各 it は自分の spawn の結果だけを見る。
+    fs.rmSync(argvFile, { force: true })
   })
 
   afterEach(async () => {
     await client.quit()
-    fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
-  it('audioDevice 指定時は --audio-device <name> を argv に渡す', async () => {
-    await expect(
-      client.start({ daemonPath: recorderBin, audioDevice: 'USB Audio' }),
-    ).rejects.toThrow(/daemon exited before ready/)
-    // #520 のもう一つの症状（argv.txt の ENOENT）に対する保険。親は child の exit 後に
-    // しか読まないので通常は即座に成立するが、過去に高負荷下で観測されているため
-    // 素の readFileSync ではなく待ってから読む。これは変異検証できない防御である。
-    await vi.waitFor(() => expect(fs.existsSync(argvFile)).toBe(true))
-    const argv = fs.readFileSync(argvFile, 'utf-8').trim().split('\n')
-    expect(argv).toEqual(['--audio-device', 'USB Audio'])
-  })
+  it(
+    'audioDevice 指定時は --audio-device <name> を argv に渡す',
+    async () => {
+      await expect(
+        client.start({ daemonPath: recorderBin, audioDevice: 'USB Audio' }),
+      ).rejects.toThrow(/daemon exited before ready/)
+      await vi.waitFor(() => expect(fs.existsSync(argvFile)).toBe(true))
+      const argv = fs.readFileSync(argvFile, 'utf-8').trim().split('\n')
+      expect(argv).toEqual(['--audio-device', 'USB Audio'])
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 
-  it('audioDevice 未指定時は追加 argv を渡さない', async () => {
-    await expect(client.start({ daemonPath: recorderBin })).rejects.toThrow(
-      /daemon exited before ready/,
-    )
-    await vi.waitFor(() => expect(fs.existsSync(argvFile)).toBe(true))
-    const argv = fs.readFileSync(argvFile, 'utf-8')
-    expect(argv.trim()).toBe('')
-  })
-
-  it('自然終了した child の後始末は SIGKILL 昇格を報告しない (#520)', async () => {
-    // start 失敗時の cleanup は killChildGracefully を通る。recorder script は自力で
-    // exit 1 するので、自然終了を検知せず SIGTERM を送る実装だと 'exit' が再発火せず
-    // deadline 満了まで待たされ、偽の昇格診断が出る（実行のたびに 500ms を捨て、
-    // 診断も誤らせる）。
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
+  it(
+    'audioDevice 未指定時は追加 argv を渡さない',
+    async () => {
       await expect(client.start({ daemonPath: recorderBin })).rejects.toThrow(
         /daemon exited before ready/,
       )
-      // 🔴 assert は必ず mockRestore() より前に置く。mockRestore() は mock.calls も
-      // 消すため、復元後に読むとガードを外す変異が生き残る（実際に一度生き残った）。
-      expect(warn.mock.calls.some((c) => String(c[0]).includes('escalated to SIGKILL'))).toBe(false)
-    } finally {
-      warn.mockRestore()
-    }
-  })
+      await vi.waitFor(() => expect(fs.existsSync(argvFile)).toBe(true))
+      const argv = fs.readFileSync(argvFile, 'utf-8')
+      expect(argv.trim()).toBe('')
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
+
+  it(
+    '自然終了した child の後始末は SIGKILL 昇格を報告しない (#520)',
+    async () => {
+      // start 失敗時の cleanup は killChildGracefully を通る。recorder script は自力で
+      // exit 1 するので、自然終了を検知せず SIGTERM を送る実装だと 'exit' が再発火せず
+      // deadline 満了まで待たされ、偽の昇格診断が出る。
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        await expect(client.start({ daemonPath: recorderBin })).rejects.toThrow(
+          /daemon exited before ready/,
+        )
+        // 🔴 assert は必ず mockRestore() より前に置く。mockRestore() は mock.calls も
+        // 消すため、復元後に読むとガードを外す変異が生き残る（実際に一度生き残った）。
+        expect(warn.mock.calls.some((c) => String(c[0]).includes('escalated to SIGKILL'))).toBe(
+          false,
+        )
+      } finally {
+        warn.mockRestore()
+      }
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
 })
 
 describe('DaemonClient killChildGracefully の両方向 (#520)', () => {

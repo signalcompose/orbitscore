@@ -21,7 +21,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **Date**: 2026-08-25
 **Issue**: #520
-**Status**: **1934 passed / 0 failed**（着手前 1929・**+5**）・lint 0・`cargo clippy` 0・`cargo fmt` 0
+**Status**: **1934 passed / 0 failed**（着手前 1929・**+5**）・**全 suite 5回連続 green**・lint 0・`cargo clippy` 0・`cargo fmt` 0
 ・Rust daemon lib 31 passed・**全 suite 計 14 回 green**
 
 土台バンドル（#520 → #567 → #614 → #607）の 1 件目。着手の理由は、
@@ -214,6 +214,100 @@ owner 裁定は **Err の Box 化**（`#[allow]` や閾値緩和ではなく）�
 `orbit-audio-daemon`** が握っていた。**#607（`stop_engine` の child kill 不全）の実害は
 「プロセスが残る」ことではなく、`coreaudiod` に音声コンテキストを固定して CPU とメモリを
 食わせ続けること**である。土台バンドル4件目の優先度が上がった。
+
+#### CI ブロッカーは1件ではなく2件だった（clippy 1.98 の新規 lint）
+
+`Box` 化を push したら **別の 1.98 新規 lint** が出た:
+`clippy::chunks_exact_to_as_chunks`（`tests/capture_realtime_gated.rs:113`）。
+CI は `-D warnings` かつ**最初の1件で停止**するので、このままだと1個ずつ出る。
+
+🔴 **手元で再現できていなかった原因は2つ**:
+1. 手元の clippy は **1.97**、CI は **1.98**（`rust-toolchain.toml` が無く CI は stable 最新を引く）
+2. 手元の実行に **`-- -D warnings` を付けていなかった**（警告がエラー扱いにならず「clippy 0」と誤報告していた）
+
+対処: **CI と同じ 1.98 を名前付きで導入**し（`rustup toolchain install 1.98.0`・既定の
+stable は変えない）、**CI と同一の feature 5通り**を一括実行。
+さらに **`-D warnings` を外した警告モードで全件を吐かせて**、隠れた指摘が無いことを確認した
+（cargo は最初のエラーでそのターゲットを止めるため、エラーモードだけでは背後が見えない）。
+
+**結果: ワークスペース全体・5通りすべてで指摘はこの1箇所のみ。**
+
+修正は clippy の提案どおり `as_chunks::<4>().0.iter()`。副次的に
+`try_into().unwrap()` の panic 経路も消えた。**1.97 / 1.98 の両方でコンパイルと fmt を確認**
+（`as_chunks` は 1.97 でも安定）。
+
+#### 🔴 反省: push して CI を待つ往復を1回無駄にした
+
+CI が toolchain バージョン固有の lint で落ちた時点で、**即座に同じ toolchain を入れて
+手元で再現するべきだった**。push → 待つ → 別の lint、を繰り返すのは
+[[escalation-does-not-fix-opacity]] と同型（見えないものに対して試行を増やしても解決しない。
+観測手段を先に揃える）。
+
+**follow-up 候補**: `rust-toolchain.toml` での固定。今回の混乱は「CI が stable を無固定で
+引く」ことに由来し、Rust の更新が黙って main を赤くする。owner と別途相談する。
+
+#### 🔴 本丸: spawn 系フレークの真因は macOS のセキュリティ評価だった
+
+`-D warnings` を通した後も **全 suite の 2〜3 回に1回**が落ち続けた。落ちるのは
+`daemon-client.spec.ts`(#520 の当事者) だけでなく、**一度も触っていない
+`plugin-catalog-reader.spec.ts`** と **Rust の `oracle_parity`** も同じだった。
+症状はすべて「子プロセスの起動待ちが deadline を超える」。
+
+推論を重ねず **spawn 遅延を直接測った**:
+
+| spawn 対象 | p50 | max |
+|---|---|---|
+| 既存のシステムバイナリ (`/bin/echo`・120回) | **1.0ms** | **3ms**（100ms 超 0件） |
+| 毎回新規作成した実行ファイル (40回) | **93.8ms** | 178ms |
+
+さらに**同一（warm な）実行ファイルでも 40 回に1回ほど停止**する:
+実測 **675ms / 3.8s / 9.0s / 24.6s**。CPU は load 2.8・idle 64% の健全時の値。
+
+**原因**: macOS は新規作成された実行ファイルの spawn 時にセキュリティ評価
+（Gatekeeper / XProtect / syspolicyd）を行う。テストは temp dir に実行ファイルを
+書いて spawn するので、毎回これを払う。裾は数秒〜24 秒に伸びる（裾の原因は未特定）。
+
+**これで全部つながった**:
+
+| 落ちていたもの | 何をしているか | deadline |
+|---|---|---|
+| `daemon-client.spec.ts`（#520） | recorder script を新規作成して spawn | vitest 5s |
+| `plugin-catalog-reader.spec.ts` | 偽 scan バイナリを新規作成して spawn | vitest 5s + 内部 timeout |
+| Rust `oracle_parity` | ビルドしたての child を spawn | sandbox first_block 5s |
+
+**#520 / #491 / #529 が個別 issue として追われてきたのは、同じ 1 つの原因を
+別々の症状として見ていたからだった。**
+
+#### 対策のポリシー（横断的関心事なので先に決めてから一括適用）
+
+> 1. 実行ファイルの新規作成を **per-test から per-file へ**減らし、作成直後に **1 回だけ
+>    空 spawn して評価を済ませる**（warm up）。待つのは**プロセス起動の成功まで**で、
+>    exit を待ってはいけない（ハングし続けるフィクスチャがある）
+> 2. それでも残る裾に対し、**検証対象でない deadline を実測の裾に耐える値**にする
+
+TS は `tests/helpers/spawn-fixture.ts`（`createWarmExecutable` / `warmUpExecutable` /
+`SPAWN_TEST_TIMEOUT_MS = 30_000`）、Rust は `orbit_audio_sandbox::warm_up_executable` に
+同じ形で置いた。**新しい流儀を各所で発明していない。**
+
+適用先:
+
+| 対象 | 適用内容 |
+|---|---|
+| `daemon-client.spec.ts` audioDevice ブロック | `beforeAll` で 1 回作成 + warm up / argv は per-test で削除 / timeout 30s |
+| 同 C3 ブロック | 同上 |
+| `plugin-catalog-reader.spec.ts` | 実 spawn する3件に warm up + timeout 30s（`spawn` を mock する1件は対象外） |
+| Rust `oracle_parity` | `child_exe()` で warm up + `first_block_timeout: 60s` の2段構え |
+| Rust `host_child_integration` / `instrument_host_integration` | `child_exe()` で warm up（deadline 5s/2s はそのまま） |
+
+**触らなかったもの**: `protocol.rs` の deadline は tokio の仮想時間と「これ以上メッセージが
+来ないこと」の否定的 assert で、child spawn とは無関係。`plugin-catalog-reader` の
+`spawn` を mock する1件も実 spawn しない。**deadline が検証対象そのものであるものは広げない。**
+
+#### 検証
+
+- **TS 全 suite 5回連続 green（1934 passed）** — 修正前は 2〜3 回に1回落ちていた
+- Rust `orbit-audio-sandbox` + `orbit-vst3-effect-child` 3回連続 **109 passed / 0 failed**
+- `oracle_parity` 単体 3回連続 green（正常時 0.38〜0.88s。60s の余裕は通常時のコストにならない）
 
 #### 採らなかったもの: argv の アトミック書き込み
 

@@ -110,8 +110,10 @@ fn load_wav(path: &PathBuf) -> CapturedAudio {
         body.len()
     );
     let data: Vec<f32> = body
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect();
     CapturedAudio::new(data, channels, sample_rate)
 }

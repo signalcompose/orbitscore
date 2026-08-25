@@ -10,16 +10,21 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use orbit_audio_sandbox::{
-    create_shared, open_shared, region_ptr, slot_index, NeutralEvent, PipelinedInstrumentHost,
-    SandboxChildGuard, SharedRegion, TransportContext, VoiceAddr, VoiceKey, CHANNELS,
-    EVENT_BACKING_CAPACITY, EVENT_SPILL_CAPACITY, MAX_EVENTS_PER_BLOCK,
+    create_shared, open_shared, region_ptr, slot_index, warm_up_executable, NeutralEvent,
+    PipelinedInstrumentHost, SandboxChildGuard, SharedRegion, TransportContext, VoiceAddr,
+    VoiceKey, CHANNELS, EVENT_BACKING_CAPACITY, EVENT_SPILL_CAPACITY, MAX_EVENTS_PER_BLOCK,
 };
 
 static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
 const FRAMES: usize = 64;
 
 fn child_exe() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_sandbox-instrument-child"))
+    let path = PathBuf::from(env!("CARGO_BIN_EXE_sandbox-instrument-child"));
+    // 🔴 #520: `cargo build` 直後の child は「新規作成された実行ファイル」で、初回 spawn が
+    // macOS のセキュリティ評価を伴い数秒〜24 秒止まりうる。以降の deadline（本ファイルの
+    // 5s / 2s）はその裾を想定していないので、評価コストをここで先払いする。
+    warm_up_executable(&path);
+    path
 }
 
 fn shm_path() -> PathBuf {
