@@ -95,6 +95,12 @@ export function extractSelectAudioDeviceMeta(line: string): { device: string } |
 const SAVE_PLUGIN_STATE_META_RE = /^\s*\/\/#savePluginState\s+(.+?)\s*$/
 const META_REQUEST_ID_RE = /"requestId"\s*:\s*("(?:\\[\s\S]|[^"\\])*")/
 const PLUGIN_UI_META_RE = /^\s*\/\/#pluginUi\s+(.+?)\s*$/
+/**
+ * `//#evalMark <json>`（#614）: 直前に投入されたコードの**評価結果**を呼び出し元へ返すための
+ * 相関マーカー。REPL は行を FIFO で処理するので、このマーカーに到達した時点で先行コードの
+ * 評価は完了している。したがって「どこまで待つか」を時間で決める必要がない。
+ */
+const EVAL_MARK_META_RE = /^\s*\/\/#evalMark\s+(.+?)\s*$/
 
 export interface SavePluginStateMeta {
   requestId: string
@@ -314,6 +320,16 @@ export function createReplSession(interpreter: InterpreterV2): {
   const QUEUE_STALL_REPORT_MS = 60_000
   let queuedLines = 0
 
+  /**
+   * 直近の `//#evalMark` 以降に発生した診断（#614）。
+   *
+   * `evaluate_orbitscore` の `ok` は「stdin へ書けた」しか意味せず、パース/実行エラーは
+   * stderr へ非同期に出るだけだった。LLM は `ok` を成功と解釈するので、実機で
+   * `Variable not found: global` が出ているのに先へ進んでしまう（実測）。
+   * ここに溜めて `//#evalMark` で返すことで、呼び出し元が結果を受け取れるようにする。
+   */
+  let pendingDiagnostics: Array<{ kind: 'parse' | 'runtime'; message: string }> = []
+
   async function executeCurrentBuffer(clearOnIncomplete: boolean): Promise<void> {
     const code = buffer.trim()
     if (!code) {
@@ -345,6 +361,7 @@ export function createReplSession(interpreter: InterpreterV2): {
         return
       }
       console.error(`[ERROR] ${error.message}`)
+      pendingDiagnostics.push({ kind: 'parse', message: String(error.message) })
       buffer = ''
       return
     }
@@ -361,6 +378,7 @@ export function createReplSession(interpreter: InterpreterV2): {
       console.log('✓') // Success indicator
     } catch (error: any) {
       console.error(`[ERROR] ${error.message}`)
+      pendingDiagnostics.push({ kind: 'runtime', message: String(error.message) })
     }
     buffer = ''
   }
@@ -378,6 +396,29 @@ export function createReplSession(interpreter: InterpreterV2): {
         } else {
           console.error(`[ERROR] ${message}`)
         }
+      }
+      return
+    }
+    if (EVAL_MARK_META_RE.test(line)) {
+      // 🔴 マーカーは「投入は以上、結果を返せ」という**提出の境界**である。
+      // 未完のままバッファに残った入力を放置すると「何も実行していないのに ok」を返して
+      // しまう（#614 の実害そのもの）。空行2連と同じく強制実行してから報告する。
+      if (buffer.trim()) {
+        await executeCurrentBuffer(true)
+        emptyLineCount = 0
+      }
+      // ここまでで先行コードの評価は完了している（FIFO）。溜まった診断を返して空にする。
+      const requestId = recoverMetaRequestId(line)
+      const diagnostics = pendingDiagnostics
+      pendingDiagnostics = []
+      if (requestId) {
+        console.log(
+          JSON.stringify({
+            evalMark: { requestId, ok: diagnostics.length === 0, diagnostics },
+          }),
+        )
+      } else {
+        console.error('[ERROR] //#evalMark requires a non-empty string requestId')
       }
       return
     }

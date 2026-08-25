@@ -7,6 +7,7 @@ import { randomUUID } from 'crypto'
 import * as vscode from 'vscode'
 
 import { analyzeMethodChain, getContextualCompletions } from './completion-context'
+import { OUTPUT_LOG_RING_MAX, selectLogLines } from './log-ring'
 import {
   analyzeAudioPathOrdering,
   analyzeEmptyOutputArg,
@@ -55,6 +56,7 @@ import {
 import { DeviceSwitchBridge } from './device-switch-bridge'
 import { PluginStateBridge } from './plugin-state-bridge'
 import { PluginUiBridge, type PluginUiAction } from './plugin-ui-bridge'
+import { EvalMarkBridge } from './eval-mark-bridge'
 import {
   applyEngineError,
   applyEngineExit,
@@ -109,6 +111,8 @@ let mcpServerHandle: McpServerHandle | null = null
 const selectAudioDeviceBridge = new DeviceSwitchBridge()
 const pluginStateBridge = new PluginStateBridge()
 const pluginUiBridge = new PluginUiBridge()
+/** #614: `evaluate_orbitscore` に評価結果を返すための相関ブリッジ。 */
+const evalMarkBridge = new EvalMarkBridge()
 // Audio Engine Settings TreeView (#484 D3). Non-null once activated.
 let engineViewProvider: EngineViewProvider | null = null
 // Changes whenever a spawn is created or a user explicitly stops the engine.
@@ -125,7 +129,6 @@ let pluginCatalogHintShown = false
 // no other central log sink to tap, so activate() monkey-patches
 // outputChannel.appendLine/append to also push here.
 const outputLogRing: string[] = []
-const OUTPUT_LOG_RING_MAX = 1000
 
 function pushLogRing(line: string): void {
   outputLogRing.push(line)
@@ -1475,6 +1478,14 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
           if (!parsed && isCurrent) {
             outputChannel?.appendLine(`⚠️ received a malformed //#pluginUi result line: ${rawLine}`)
           }
+        } else if (trimmedLine.startsWith('{"evalMark"')) {
+          // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
+          // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
+          // dispatch されなかった（ユニットテストは全て緑・実機 E2E だけが捕まえた）。
+          const parsed = isCurrent && evalMarkBridge.handleLine(rawLine)
+          if (!parsed && isCurrent) {
+            outputChannel?.appendLine(`⚠️ received a malformed //#evalMark result line: ${rawLine}`)
+          }
         }
       }
 
@@ -1563,6 +1574,7 @@ export function setupStdinErrorHandler(process: child_process.ChildProcess): voi
           selectAudioDeviceBridge.drainAll(reason)
           pluginStateBridge.drainAll(reason)
           pluginUiBridge.drainAll(reason)
+          evalMarkBridge.drainAll(reason)
         },
       })
     } catch (innerErr) {
@@ -1584,6 +1596,7 @@ function engineTerminationEffects(): Omit<EngineExitEffects, 'logExit'> {
       selectAudioDeviceBridge.drainAll(reason)
       pluginStateBridge.drainAll(reason)
       pluginUiBridge.drainAll(reason)
+      evalMarkBridge.drainAll(reason)
     },
     showStoppedStatus: () => {
       statusBarItem!.text = '🎵 OrbitScore: Stopped'
@@ -2186,6 +2199,7 @@ export function stopEngine(): boolean {
     selectAudioDeviceBridge.drainAll('engine was stopped before responding to //#selectAudioDevice')
     pluginStateBridge.drainAll('engine was stopped before responding to //#savePluginState')
     pluginUiBridge.drainAll('engine was stopped before responding to //#pluginUi')
+    evalMarkBridge.drainAll('engine was stopped before responding to //#evalMark')
 
     // Send graceful shutdown signal (SIGTERM)
     // This allows the engine to clean up SuperCollider properly
@@ -2924,7 +2938,7 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
  * `writeCodeToEngine`. Relative audio paths resolve against the first workspace
  * folder, since the agent has no "active editor".
  */
-function evaluateForAgent(code: string): EvaluateResult {
+async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
   }
@@ -2932,10 +2946,35 @@ function evaluateForAgent(code: string): EvaluateResult {
   if (!writeCodeToEngine(code, documentDir)) {
     return { ok: false, error: 'engine stdin is not writable — the engine may have just died' }
   }
-  // ok = 「stdin へ届いた」まで。パースエラーは engine が stdout に非同期で返す
-  // （get_log で観測可能）し、play() のみで RUN/LOOP が無ければ仕様上無音
-  // （evaluate ok ≠ 発音 — WORK_LOG 6.189 の follow-on 課題）。
-  return { ok: true }
+  // 🔴 #614: 以前はここで `{ ok: true }` を返していた。しかしその ok は
+  // 「**stdin へ届いた**」までしか意味せず、パース/実行エラーは engine が stderr へ
+  // 非同期に出すだけだった。LLM は ok を成功と解釈するので、実機で
+  // `Variable not found: global` が出ていても先へ進んでしまう（実測）。
+  //
+  // REPL は行を FIFO で処理するので、コードの直後にマーカーを送れば
+  // **マーカーに到達した時点で評価は完了している**。時間で待つ必要はない。
+  const stdin = engineProcess.stdin
+  if (!stdin || !stdin.writable) {
+    return { ok: false, error: 'engine stdin is not writable — the engine may have just died' }
+  }
+  const result = await evalMarkBridge.send((line, onError) => {
+    // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
+    stdin.write(line, (error) => {
+      if (error) {
+        outputChannel?.appendLine(`⚠️ failed to write //#evalMark to stdin: ${error.message}`)
+        onError(error)
+      }
+    })
+  }, randomUUID())
+  if (result.ok) return { ok: true }
+  const detail = result.diagnostics.length
+    ? result.diagnostics.map((d) => `[${d.kind}] ${d.message}`).join('; ')
+    : (result.error ?? 'engine reported an evaluation failure')
+  return {
+    ok: false,
+    error: `evaluation failed: ${detail}`,
+    ...(result.diagnostics.length ? { diagnostics: result.diagnostics } : {}),
+  }
 }
 
 async function savePluginStateForAgent(
@@ -3440,10 +3479,12 @@ function getDiagnosticsForAgent(filePath?: string): FileDiagnostics[] {
     .map(([uri, diagnostics]) => ({ path: uri.fsPath, diagnostics: toEntries(diagnostics) }))
 }
 
-/** Return the last N lines of the output-channel ring buffer for the MCP `get_log` tool. */
+/**
+ * Return the last N lines of the output-channel ring buffer for the MCP `get_log` tool.
+ * 選択ロジックは `log-ring.ts`（vscode 非依存・テスト可能）に持たせている（#567）。
+ */
 function getLogForAgent(lines?: number): string[] {
-  const n = Math.max(1, Math.min(lines ?? 50, 500))
-  return outputLogRing.slice(-n)
+  return selectLogLines(outputLogRing, lines)
 }
 
 /** Parse a captured WAV for the MCP `analyze_audio` tool. */

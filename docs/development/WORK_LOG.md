@@ -21,7 +21,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **Date**: 2026-08-25
 **Issue**: #520
-**Status**: **1939 passed / 0 failed**（着手前 1929・**+10**）・全 suite 3回連続 green・lint 0・`cargo clippy` 0・`cargo fmt` 0
+**Status**: **1962 passed / 0 failed**（着手前 1929・**+33**）・全 suite 3回連続 green・lint 0・`cargo clippy` 0・`cargo fmt` 0
 ・Rust daemon lib 31 passed・**全 suite 計 14 回 green**
 
 土台バンドル（#520 → #567 → #614 → #607）の 1 件目。着手の理由は、
@@ -386,6 +386,68 @@ shutdown ハンドラはそれを見ていた。しかし **REPL / test など�
 | 音声コンテキスト | 2（daemon が保持） | **1**（`arkaudiod` のみ・orbit 由来 0） |
 
 **今日の CPU 暴走（coreaudiod 907%・残留 65 個）の発生源がこれで塞がった。**
+
+#### #567: `get_log` の silent truncation を解消
+
+`get_log` は要求値を**黙って** 500 行へ切り詰めていた（リングは 1000 保持しているのに）。
+これはエンジン側エラーが現れる**唯一のチャネル**なので、黙って窓を狭められると
+呼び出し元は「エラーが無かった」のか「見せてもらえなかった」のかを区別できない。
+ERROR 件数の前後比較は窓が固定だと単調でなく、古い ERROR が流れ出るのと同時に新しい
+ERROR が入ると**カウントが一致して false green** になる。
+
+- 上限をリング実容量（1000）へ引き上げ
+- **切り詰めたら `[get_log] truncated: ...` を先頭行で明示**（通知文言は ERROR カウントを
+  汚さない語を選ぶ）
+- 選択ロジックを **vscode 非依存の `log-ring.ts` へ切り出した** — `extension.ts` の
+  非 export 関数のままでは**テストが実コードを通せない**（今日の教訓）
+
+変異検証: 旧実装へ戻す / 通知だけ落とす / 通知に `ERROR` を混ぜる / 履歴不足でも誤報させる
+→ **4種すべて red**。
+
+#### #614: `evaluate_orbitscore` が評価結果を返すようにした
+
+`ok` は「**stdin へ書けた**」しか意味しておらず、パース/実行エラーは stderr へ非同期に
+出るだけだった。このプロジェクトは **LLM を第一級ユーザー**として設計しているのに、
+LLM には `ok` しか届かない。実機 E2E で本セッションでも踏んだ:
+`evaluate_orbitscore` が `ok` を返す一方、ログには `Variable not found: global`。
+
+##### 「どこまで待つか」を時間で決めない
+
+REPL は行を **FIFO** で処理する（#476）。コードの直後にマーカーを送れば
+**マーカーに到達した時点で先行コードの評価は完了している**。settle 時間を待つ必要も、
+長い評価（instrument 6 本の attach で 30 秒超）で誤検知することもない。
+
+- engine: `//#evalMark {"requestId":...}` を既存メタ機構（`//#pluginUi` と同じ運び方）に追加。
+  `executeCurrentBuffer` の 2 つのエラー経路で診断を記録し、マーカーで返してクリア
+- 🔴 **マーカーは「提出の境界」**なので、未完のままバッファに残った入力を**強制実行してから**
+  報告する。さもないと「何も実行していないのに ok」を返す（テストが実際にこれを暴いた）
+- extension: `EvalMarkBridge`（`plugin-ui-bridge.ts` と同型）+ `evaluateForAgent` を async 化
+
+##### 🔴 ユニットテスト全緑のまま、実機 E2E だけが配線の欠陥を捕まえた
+
+最初の実装は `evalMarkBridge.handleLine` を **`{"pluginUi"` 分岐の中**に相乗りさせていた。
+engine 側の応答は正しく出ていたが、`{"evalMark"` 行は prefix チェーンをすり抜けて
+**一度も dispatch されず全て timeout**した。**ユニットテストは全件緑**。
+専用の `else if` 分岐へ分離して解決。
+
+> **配線はユニットテストの視野の外**という本プロジェクトの原則（[[dsl-feature-requires-e2e]]）が
+> そのまま再現した。E2E を回していなければ「テストは緑だから直った」と誤報していた。
+
+##### 変異検証
+
+parse 診断の記録削除 / runtime 診断の記録削除 / mark 時のクリア削除 / 未完バッファの
+強制実行削除 / `ok` を常に true / bridge の prefix ガード削除 → **6種すべて red**
+（prefix ガードは最初 equivalent mutation で生き残ったため、キー位置の異なる JSON を
+固定するテストを足して load-bearing にした）。
+
+##### 実機での確認
+
+| 投入 | 修正前 | 修正後 |
+|---|---|---|
+| パースエラーを含む楽譜 | 🔴 `ok` | `error: evaluation failed: [parse] Expected RPAREN but got AT at line 1, column 23` |
+| 実行時エラー | 🔴 `ok` | `error: evaluation failed: [runtime] Variable not found: global` |
+| 正常な楽譜 | `ok` | `ok` |
+| 成功→失敗→成功 | — | 診断を引きずらない |
 
 #### 採らなかったもの: argv の アトミック書き込み
 
