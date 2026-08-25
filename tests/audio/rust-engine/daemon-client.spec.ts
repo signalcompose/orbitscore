@@ -548,14 +548,13 @@ describe('DaemonClient audioDevice spawn args (#484 D1)', () => {
   // `--audio-device <name>` が実際に子プロセスへ渡ることを検証する（daemon 側の解決・縮退
   // ロジック自体は Rust unit test で検証済み・ここは TS→spawn args の配線のみが対象）。
   //
-  // 🔴 #520: このブロックは「argv に何が渡るか」だけを検証対象とする。子プロセスが
-  // 何 ms で exit するかは検証対象ではないので、ready 待ちの deadline に負けてはいけない。
-  // 500ms 固定だった時は高負荷時に timeout が exit を追い越し、
-  // `daemon ready line timeout after 500ms` が先に reject されて assert が落ちていた
-  // （負荷依存・約3回に1回）。deadline は exit 観測で即座に抜けるので、広げても
-  // 正常時の所要時間は変わらない。ここを縮めるとフレークが戻るため下げないこと。
-  const SPAWN_ARGV_STARTUP_TIMEOUT_MS = 10_000
-
+  // 🔴 #520: このブロックの検証対象は「argv に何が渡るか」だけで、子プロセスが何 ms で
+  // exit するかは検証対象ではない。以前は `startupTimeoutMs: 500` を明示していたため、
+  // 高負荷時に timeout が exit を追い越して `daemon ready line timeout after 500ms` が
+  // 先に reject され、文言まで固定した assert が落ちていた（負荷依存・約3回に1回）。
+  // いまは明示せず production の DEFAULT_STARTUP_TIMEOUT_MS に委ねる。deadline は exit
+  // 観測で即座に抜けるので、広くても正常時の所要時間は変わらない。
+  // **ここに小さい startupTimeoutMs を書き足すとフレークが戻る。**
   let client: DaemonClient
   let tmpDir: string
   let recorderBin: string
@@ -583,11 +582,7 @@ exit 1
 
   it('audioDevice 指定時は --audio-device <name> を argv に渡す', async () => {
     await expect(
-      client.start({
-        daemonPath: recorderBin,
-        audioDevice: 'USB Audio',
-        startupTimeoutMs: SPAWN_ARGV_STARTUP_TIMEOUT_MS,
-      }),
+      client.start({ daemonPath: recorderBin, audioDevice: 'USB Audio' }),
     ).rejects.toThrow(/daemon exited before ready/)
     // #520 のもう一つの症状（argv.txt の ENOENT）に対する保険。親は child の exit 後に
     // しか読まないので通常は即座に成立するが、過去に高負荷下で観測されているため
@@ -597,32 +592,31 @@ exit 1
     expect(argv).toEqual(['--audio-device', 'USB Audio'])
   })
 
-  it('自然終了した child の後始末は SIGKILL 昇格を報告しない (#520)', async () => {
-    // start 失敗時の cleanup は killChildGracefully を通る。recorder script は自力で
-    // exit 1 するので、ここで SIGTERM を送る実装だと 'exit' が再発火せず deadline 満了まで
-    // 待たされ、偽の昇格診断が出る（= 実行のたびに 500ms を捨て、診断も誤らせる）。
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    // 🔴 mockRestore() は mock.calls も消すので、復元より前に記録を取り出す
-    // （最初の実装はここで取り違え、ガードを外す変異が生き残った）。
-    let messages = ''
-    try {
-      await expect(
-        client.start({ daemonPath: recorderBin, startupTimeoutMs: SPAWN_ARGV_STARTUP_TIMEOUT_MS }),
-      ).rejects.toThrow(/daemon exited before ready/)
-      messages = warn.mock.calls.map((c) => c.join(' ')).join('\n')
-    } finally {
-      warn.mockRestore()
-    }
-    expect(messages).not.toMatch(/escalated to SIGKILL/)
-  })
-
   it('audioDevice 未指定時は追加 argv を渡さない', async () => {
-    await expect(
-      client.start({ daemonPath: recorderBin, startupTimeoutMs: SPAWN_ARGV_STARTUP_TIMEOUT_MS }),
-    ).rejects.toThrow(/daemon exited before ready/)
+    await expect(client.start({ daemonPath: recorderBin })).rejects.toThrow(
+      /daemon exited before ready/,
+    )
     await vi.waitFor(() => expect(fs.existsSync(argvFile)).toBe(true))
     const argv = fs.readFileSync(argvFile, 'utf-8')
     expect(argv.trim()).toBe('')
+  })
+
+  it('自然終了した child の後始末は SIGKILL 昇格を報告しない (#520)', async () => {
+    // start 失敗時の cleanup は killChildGracefully を通る。recorder script は自力で
+    // exit 1 するので、自然終了を検知せず SIGTERM を送る実装だと 'exit' が再発火せず
+    // deadline 満了まで待たされ、偽の昇格診断が出る（実行のたびに 500ms を捨て、
+    // 診断も誤らせる）。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(client.start({ daemonPath: recorderBin })).rejects.toThrow(
+        /daemon exited before ready/,
+      )
+      // 🔴 assert は必ず mockRestore() より前に置く。mockRestore() は mock.calls も
+      // 消すため、復元後に読むとガードを外す変異が生き残る（実際に一度生き残った）。
+      expect(warn.mock.calls.some((c) => String(c[0]).includes('escalated to SIGKILL'))).toBe(false)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
 

@@ -21,7 +21,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 **Date**: 2026-08-25
 **Issue**: #520
-**Status**: **1930 passed / 0 failed**（着手前 1929・+1）・lint 0・**全 suite 5 回連続 green**
+**Status**: **1930 passed / 0 failed**（着手前 1929・+1）・lint 0・**全 suite 計 8 回 green**（`/simplify` 前 5 回・適用後 3 回）
 
 土台バンドル（#520 → #567 → #614 → #607）の 1 件目。着手の理由は、
 セッション開始時の現状把握で `npm test` を 2 回回したところ **1 回目が fail した**こと。
@@ -47,9 +47,14 @@ exit すること」ではない。しかし `startupTimeoutMs: 500` が固定�
 負荷時は **timeout が exit を追い越して別の reject 理由**（`ready line timeout`）になり、
 文言まで固定した assert が落ちていた。
 
-deadline は exit 観測で即座に抜けるので、**広げても正常時の所要時間は変わらない**。
-定数 `SPAWN_ARGV_STARTUP_TIMEOUT_MS = 10_000` に括り出し、
-「ここを縮めるとフレークが戻る」理由をコメントに残した（#491 と同じ方針）。
+deadline は exit 観測で即座に抜けるので、**広くても正常時の所要時間は変わらない**。
+
+当初は定数 `SPAWN_ARGV_STARTUP_TIMEOUT_MS = 10_000` に括り出したが、`/simplify` の
+altitude レビューで **production 側に `DEFAULT_STARTUP_TIMEOUT_MS = 10_000` が既にあり、
+かつ suite 全体でこのブロックだけが `startupTimeoutMs` を明示していた**ことが判明したため、
+**上書き自体をやめて production 既定に委ねる**形に変えた。定数の複製は将来 production 側を
+再調整したときに黙って乖離する。「小さい `startupTimeoutMs` を書き足すと戻る」理由は
+コメントに残した（#491 と同じ方針）。
 
 #### 原因2: 自然終了した child に SIGTERM を送り、偽の昇格を報告していた
 
@@ -72,13 +77,36 @@ SIGTERM を送っても `'exit'` は二度と発火しないので、**deadline 
 |---|---|
 | (a) 新ガード（自然終了の検知）を削除 | 🔴 **最初は生き残った** → テスト修正後 **red** |
 | (b) argv から `--audio-device` を落とす | **red**（既存 assert の検出力は維持されている） |
-| (c) タイムアウト定数を 500 に戻す + 起動遅延 | **red**（3 件とも） |
+| (c1) 起動遅延のみ（production 既定に委ねた状態） | **green** — 負荷に耐えることの確認 |
+| (c2) さらに `startupTimeoutMs: 500` を書き戻す + 起動遅延 | **red**（3 件とも） |
 
 (a) が生き残った原因は、`vi.spyOn` の記録を **`mockRestore()` の後**に読んでいたこと。
 `mockRestore()` は `mock.calls` ごとリセットするため、**ガードを外しても記録が空のまま
 assert が通っていた**。復元より前に記録を取り出す形へ修正して red を確認した。
 [[test-name-must-match-the-path-it-drives]] と同型で、名前と経路は正しいのに
 **観測点だけがずれていた**ケース。
+
+#### `/simplify` で採った指摘
+
+| 角度 | 指摘 | 対応 |
+|---|---|---|
+| altitude | `SPAWN_ARGV_STARTUP_TIMEOUT_MS` は production 既定の複製。suite でここだけが上書きしていた | **上書きを削除**し既定に委ねた |
+| reuse / simplification | 兄弟 spec（`rust-engine-player.spec.ts:221`）に `warn.mock.calls.some((c) => String(c[0]).includes(...))` の既存イディオムがある | そちらへ寄せ `messages` アキュムレータを削除 |
+| simplification | 新規テストが argv テスト2本の**間**に挟まって対を分断していた | 2本の後ろへ移動 |
+
+**採らなかった指摘**:
+
+- **2つの early-return を1行に統合**（`child.killed || exitCode !== null || ...`）— `killed` は
+  「signal を送ったか」、`exitCode/signalCode` は「終了したか」で**意味が違う**。統合すると
+  「`killed` では足りない理由」を説明するコメントが宙に浮く
+- **`isChildAlive()` を共有ユーティリティへ切り出す** — `extension.ts` に同型の述語が
+  あるが**別パッケージ**で、共有 child-process ユーティリティが存在しない。1件のために
+  パッケージ間の依存を作るのは割に合わない。代わりに **#532 への相互参照をコメントに追加**した
+
+**PR に観察として残したもの**（issue は立てない）: `extension.ts` の `stopEngine` は
+自然終了済みプロセスにも無意味な SIGTERM を送る。ただし当該経路は deadline 待ちを
+持たないので**偽の診断は出ず、実害は「死んだ PID への1シグナル」に留まる**ため、
+[[issue-only-for-real-impact]]（放置したら誰がどう困るかを1文で書けないなら立てない）に従った。
 
 #### 採らなかったもの: argv の アトミック書き込み
 
