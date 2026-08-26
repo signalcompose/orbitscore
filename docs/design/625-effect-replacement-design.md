@@ -324,7 +324,11 @@ readonly replacement?: {
 
 ## 5. 失敗モード一覧 ↔ 受け入れ基準テスト（1:1 対応表）
 
-失敗モード 27 件・テスト行 27 件。**テストの無い失敗モード、対応する失敗モードの無いテストは無い。**
+失敗モード **33 件**・対応行 **33 件**。**テストの無い失敗モード、対応する失敗モードの無いテストは無い。**
+
+> **R28-R33 は実装後に追加された行**（main の変異検証 5 件 + Fable 監査 2 件の発見）。
+> うち R28 と R33 は**テストではなく構造で閉じている** — 前者はコンパイラが、後者は型ではなく
+> メモリ順序の指定が検出器である。1:1 を保つため、検出器が何かを列に明記する。
 TS unit の新規置き場は `tests/core/plugin-effect-replace.spec.ts`（R* 番号）。rust unit は `engine_wrap.rs` 内 `effect_replace_tests` mod（instrument 版 fixture = `engine_wrap.rs:7940-` の sleep-child 方式を手本にする）。
 
 | # | 失敗モード | どう壊れるか（状態遷移） | 検出するテスト | 種別 | 変異（このテストを意味あらしめる壊し方） |
@@ -356,6 +360,12 @@ TS unit の新規置き場は `tests/core/plugin-effect-replace.spec.ts`（R* �
 | R25 | master 経路の bus 混線（master 差し替えが bus slot を対象化 / 逆） | bus=None の解決誤り | rust unit `replace_without_bus_targets_master_slot`（master slot の状態遷移を assert）+ TS R25（master の wire params に bus 無し = R3 と相補） | rust unit + unit | `bus=None` を `bus_slots` 参照へ変える → red（unknown bus） |
 | R26 | 実機で差し替えても音が変わらない / 削除が効かない / エラーが静黙（配線全長の断線） | ユニット緑のまま実機全滅（#528 型） | **gated E2E**（§6）: RMS 比 + PID + ERROR 計数 + 失敗注入 + remove + swap-back restore の複合オラクル | gated E2E | 実装の daemon 側 attach（手順7）を no-op にする → RMS 比が変化せず red（E2E がユニットの見えない配線を掴む位置にある） |
 | R27 | stream 停止と差し替えの交錯で guard の quiesce が取り消される（§2.1.1） | 手順 6 の無条件 clear が guard の `requested=true` を消す → RT が done を立てず guard は timeout 満了で ack 無し停止 → 手順 7 の `engaged=true` で停止中の RT が shm を触る | rust unit `replace_respects_stream_shutdown_latch`: (i) `shutdown=true` 先行 → replace が Err "engine is stopping" + slot/フラグ無傷、(ii) 手順 6 相当の clear ヘルパ（`clear_quiesce_unless_shutdown`）を関数として切り出し、clear 中に shutdown が立った系列で `requested` が true に復元されることを assert | rust unit | clear ヘルパから shutdown 検査を外して無条件 store に変える → red |
+| R28 | 同型 `Arc<AtomicBool>` の位置引数取り違え（`clear_quiesce_unless_shutdown` / `OutProcTeardownGuard::new` / `OutProcEffectPostProcessor::new`） | 兄弟フラグが入れ替わり、guard が誰も立てない flag を待つ／偽の ack を掴む。型検査は通る | **検出器 = コンパイラ**。引数を名前付き struct 1 つに畳み、取り違えを表現不能にした（`EffectSlotEntry` / `OutProcTeardownParts` / `OutProcEffectPostProcessorParts`） | compile | 3 引数へ戻す → `error[E0061]` |
+| R29 | `engaged` の配線切断（entry / `ChildLaunch` / RT stage のいずれかが別 Arc） | dry 窓が無言で無効化。または attach 成功後も RT が engage せず**音が恒久的に dry** | `effect_slot_wiring_tests::{bus,effect_only_master,combined_master}_slot_shares_the_engaged_flag_across_entry_launch_and_render_stage` | rust unit | entry 側／`ChildLaunch` 側それぞれを別 Arc に差し替え → 3 経路とも red |
+| R30 | shutdown latch の両端切断（guard と entry が別 Arc） | latch 機構全体が無言で無効。§2.1.1 が閉じた競合窓がそのまま開く | `effect_slot_wiring_tests::*_teardown_guard_latches_the_entry_shutdown`（3 経路） | rust unit | guard に別 Arc を渡す → 3 経路とも red |
+| R31 | guard が latch より先に quiesce 要求を publish する | 差し替え側が `shutdown=false` を読んで要求を消し、再検査でも復元しない → ack 無し停止 | `outproc_effect::tests::teardown_guard_latches_shutdown_before_requesting_quiesce`（`latch_then_request` の中間状態を観測） | rust unit | 2 つの store を入れ替える → red |
+| R32 | tenant handoff で前 tenant の `measurement_invalid` が残る | クラッシュループした effect を差し替えて復旧しても、health が daemon 再起動まで「計測無効」を報告し続ける（診断・E2E オラクルの偽陽性） | `effect_replace_tests::replace_clears_the_previous_tenants_measurement_invalid_verdict` | rust unit | teardown の reset を削除 → red |
+| R33 | latch と clear の store-buffering レース（Dekker パターン） | `Release`/`Acquire` では再検査が stale な `shutdown=false` を読みうる → 要求が消え ack 無し停止（R27 が防ぐと主張する事象がメモリモデル層に残る） | **検出器 = メモリ順序の指定**。4 アクセスを `SeqCst` にして単一全順序で閉じる。**論理インターリーブでは再現不能なのでテストは存在しない**（`loom` 相当のみが検証手段・§9-6） | 構造（テスト不能） | いずれかを `Release`/`Acquire` に戻す → テストは緑のまま（だから構造で閉じている） |
 
 ---
 
@@ -392,6 +402,24 @@ TS unit の新規置き場は `tests/core/plugin-effect-replace.spec.ts`（R* �
 2. `replace_outproc_effect_plugin` / `teardown_outproc_effect_slot` / `clear_quiesce_unless_shutdown`（§2.1 / §2.1.1 / §3.1）
 3. rust unit: FM-R5/R6/R7/R8/R16(rust)/R18/R25/R27（fixture は instrument 版 `engine_wrap.rs:7940-` の sleep-child 方式を effect 用に写す。quiesce 成功系は「requested を観測したら done を立てる」ヘルパスレッドで ack）
 - 検証: `cd rust && cargo clippy --all-targets --features outproc-effect,outproc-instrument && cargo test --features outproc-effect,outproc-instrument`（🔴 feature 無しだと該当テストが 1 件も走らない）
+
+> 🔴 **Stage B 実装者への申し送り**（#625 Fable 監査 C-3・実装前に読むこと）:
+> 1. **Empty-ensure 分岐は in-flight 予約を取らない**（`replacements_in_flight.insert` より前に
+>    return する）。同一 bus への ensure が並行すると slot の `Loading` で直列化はされるが、
+>    2 発目のエラー文言は replace 用ではなく「load already in progress」になる。
+>    **TS の per-key pending 直列化を守ること。daemon 側の直列化を過信しない。**
+> 2. `ReplacePlugin` は session の read ループを **quiesce 500ms + attach（最大
+>    `CHILD_READY_TIMEOUT` = 60s）** ブロックする。effect は「演奏中に差し替える」のが主用途
+>    なので、DaemonClient のタイムアウトが 60s より短いと
+>    client timeout → forget-and-ensure → 次宣言が `Loading` reject、という**見かけ上の
+>    エラー連鎖**が起きうる（最終的には収束する）。タイムアウト値を確認すること。
+> 3. `ReplacedPluginSummary.quarantined_slot` は **effect 経路では常に false**（隔離は `Err` で
+>    表現する）。instrument の `onQuarantinedSlot` パターンを流用するとき、effect の隔離検知を
+>    このフラグに期待しないこと（`OUTPROC_SLOT_CLOSED` への再宣言応答で知る）。
+> 4. **宣言済み bus へ `LoadPlugin` を再送する形を作らないこと。** 失敗 rollback の
+>    `active.store(false)`（`engine_wrap.rs` の初回宣言経路）に落ちると、当該 bus は RT stage を
+>    スキップし**無音 + event retain**になり、以後の replace が quiesce ack を永遠に得られない
+>    詰み状態になる。respawn replay は「fresh daemon にのみ `LoadPlugin`」を維持する。
 
 **Stage B — wire + TS 差し替え**
 1. `session.rs` ReplacePlugin role 分岐（§3.2-1）+ 既存 reject test 書き換え（FM-R4）
@@ -439,6 +467,13 @@ TS unit の新規置き場は `tests/core/plugin-effect-replace.spec.ts`（R* �
 5. **shutdown latch の clear-復元プロトコル（§2.1.1 手順6）が競合窓を完全に閉じるか** — 確信度: 中〜高。「clear 後の再検査で復元」は guard の `shutdown=true → requested=true` の store 順序（Release）と、差し替え側の clear→再検査の順序に依存する。反証方法: R27 の変異検証に加え、`loom` 相当の順序列挙（または clear ヘルパへの人為的 sleep 注入）で「guard drop がどの位置に割り込んでも requested が最終的に true になる」ことを机上でなく実行で確認する。復元が遅延しても guard の実害は `TEARDOWN_TIMEOUT` 内の待ち増加のみ（安全側に倒れる）。
 
 ---
+
+6. **`SeqCst` 化で store-buffering レース（R33）が本当に閉じたか** — 確信度: 高（C++/Rust
+   メモリモデルの標準的帰結）だが、**実行では確認していない**。論理インターリーブでは再現
+   できない層なので、既存のテスト（`after_clear` 注入・`latch_then_request` の中間観測）は
+   この性質について何も言わない。反証方法: `loom` で「3 フラグ・2 スレッド」のモデルを書き、
+   `Release`/`Acquire` 版で SB 実行が列挙され `SeqCst` 版で消えることを確認する。
+   これを入れるかどうかは follow-up 判断（`loom` は現在この repo の依存に無い）。
 
 ## 10. 未解決の疑問（解釈で埋めていない）
 

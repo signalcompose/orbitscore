@@ -254,9 +254,13 @@ struct OutProcControl {
     cb_stats: Arc<orbit_audio_native::CallbackTimeStats>,
     /// post-boot attach の状態。`StreamGuard` と共有し、supervisor は stream より後に drop する。
     child_slot: Weak<Mutex<ChildSlot>>,
+    /// master effect slot の再構築と stream shutdown 交錯の制御に必要な固定部材。
+    master_entry: EffectSlotEntry,
     /// 起動時に固定した named insert bus の effect slots。master slot は `child_slot` のまま
     /// 保持し、bus 無し LoadPlugin の後方互換を保つ。
     bus_slots: HashMap<String, Weak<Mutex<ChildSlot>>>,
+    /// bus 名 → slot 再構築部材。`bus_slots` と同じキー集合を持つ。
+    bus_entries: HashMap<String, EffectSlotEntry>,
     /// bus 名 → その bus の `OutProcEffectStats`（`outproc_effect_bus_stats` gated 計測用）。
     /// `bus_slots` と同じキー集合で、child の生死に関わらず統計自体は生存し続けるため強参照。
     bus_stats: HashMap<String, Arc<crate::outproc_effect::OutProcEffectStats>>,
@@ -275,6 +279,140 @@ struct OutProcControl {
     /// bus 名 → render 側 `InsertBusStage::send_gain_overrides` と共有する atomic ハンドル群
     /// （M2・index k = 「この bus の絶対 index + 1 + k」への send gain）。
     bus_sends: HashMap<String, Vec<Arc<AtomicU32>>>,
+    /// 同じ固定 slot に対する差し替えを直列化する。`None` は master。
+    replacements_in_flight: HashSet<Option<String>>,
+}
+
+/// effect slot 1 本分の control-side 固定部材。in-place teardown 後も同じ shm と gate を使う。
+#[cfg(feature = "outproc-effect")]
+#[derive(Clone)]
+struct EffectSlotEntry {
+    shm_path: PathBuf,
+    child_exe: PathBuf,
+    sample_rate: u32,
+    engaged: Arc<AtomicBool>,
+    quiesce_requested: Arc<AtomicBool>,
+    quiesce_done: Arc<AtomicBool>,
+    /// stream 停止が一度始まったことを示す control-side latch。false へ戻さない。
+    shutdown: Arc<AtomicBool>,
+}
+
+/// RT adapter が保持する flags と control-side slot/teardown guard を一度だけ束ねる入力。
+/// named fields にすることで同型 Arc の位置引数取り違えを構築側にも持ち込まない。
+#[cfg(feature = "outproc-effect")]
+struct EffectSlotInstallParts {
+    shm_path: PathBuf,
+    child_exe: PathBuf,
+    sample_rate: u32,
+    stats: Arc<crate::outproc_effect::OutProcEffectStats>,
+    engaged: Arc<AtomicBool>,
+    quiesce_requested: Arc<AtomicBool>,
+    quiesce_done: Arc<AtomicBool>,
+}
+
+#[cfg(feature = "outproc-effect")]
+struct InstalledEffectSlot {
+    entry: EffectSlotEntry,
+    child_slot: Arc<Mutex<ChildSlot<EffectRole>>>,
+    teardown: crate::outproc_effect::OutProcTeardownGuard,
+}
+
+/// bus / effect-only master / combined master の3経路が共有する配線点。
+/// entry・ChildLaunch・guard はここで同じ Arc から同時に構築される。
+#[cfg(feature = "outproc-effect")]
+fn install_effect_slot(parts: EffectSlotInstallParts) -> InstalledEffectSlot {
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let entry = EffectSlotEntry {
+        shm_path: parts.shm_path.clone(),
+        child_exe: parts.child_exe.clone(),
+        sample_rate: parts.sample_rate,
+        engaged: parts.engaged.clone(),
+        quiesce_requested: parts.quiesce_requested.clone(),
+        quiesce_done: parts.quiesce_done.clone(),
+        shutdown: shutdown.clone(),
+    };
+    let child_slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch::<EffectRole> {
+        shm_path: parts.shm_path,
+        child_exe: parts.child_exe,
+        sample_rate: parts.sample_rate,
+        stats: parts.stats,
+        engaged: parts.engaged,
+        cleanup_shm_on_drop: true,
+    })));
+    let teardown = crate::outproc_effect::OutProcTeardownGuard::new(
+        crate::outproc_effect::OutProcTeardownParts {
+            requested: parts.quiesce_requested,
+            done: parts.quiesce_done,
+            shutdown,
+        },
+    );
+    InstalledEffectSlot {
+        entry,
+        child_slot,
+        teardown,
+    }
+}
+
+#[cfg(feature = "outproc-effect")]
+struct EffectReplacementReservation<'a> {
+    engine: &'a EngineWrap,
+    target: Option<String>,
+    in_flight: bool,
+}
+
+#[cfg(feature = "outproc-effect")]
+impl<'a> EffectReplacementReservation<'a> {
+    fn new(engine: &'a EngineWrap, target: Option<String>) -> Self {
+        Self {
+            engine,
+            target,
+            in_flight: false,
+        }
+    }
+
+    fn mark_in_flight(&mut self) {
+        self.in_flight = true;
+    }
+}
+
+#[cfg(feature = "outproc-effect")]
+impl Drop for EffectReplacementReservation<'_> {
+    fn drop(&mut self) {
+        if !self.in_flight {
+            return;
+        }
+        let mut guard = match self.engine.outproc.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::error!(
+                    bus = ?self.target,
+                    "effect control poisoned while releasing replacement reservation"
+                );
+                poisoned.into_inner()
+            }
+        };
+        let Some(control) = guard.as_mut() else {
+            tracing::error!(
+                bus = ?self.target,
+                "effect control missing while releasing replacement reservation"
+            );
+            return;
+        };
+        control.replacements_in_flight.remove(&self.target);
+    }
+}
+
+#[cfg(all(test, feature = "outproc-effect"))]
+fn test_effect_slot_entry() -> EffectSlotEntry {
+    EffectSlotEntry {
+        shm_path: PathBuf::from("unused-effect-slot.shm"),
+        child_exe: PathBuf::from("unused-effect-child"),
+        sample_rate: 48_000,
+        engaged: Arc::new(AtomicBool::new(false)),
+        quiesce_requested: Arc::new(AtomicBool::new(false)),
+        quiesce_done: Arc::new(AtomicBool::new(false)),
+        shutdown: Arc::new(AtomicBool::new(false)),
+    }
 }
 
 /// `ORBIT_EFFECT_BUSES` の値を解析する純関数。カンマ区切りの bus 名を trim・空要素除去した上で、
@@ -457,7 +595,9 @@ struct EffectBusBuild {
 #[cfg(feature = "outproc-effect")]
 fn build_effect_bus_stages(
 ) -> Result<(Vec<orbit_audio_native::InsertBusStage>, Vec<EffectBusBuild>), WrapError> {
-    use crate::outproc_effect::{OutProcEffectPostProcessor, OutProcEffectStats};
+    use crate::outproc_effect::{
+        OutProcEffectPostProcessor, OutProcEffectPostProcessorParts, OutProcEffectStats,
+    };
     use std::sync::atomic::AtomicBool;
 
     let insert_names = effect_buses_from_env()?;
@@ -501,11 +641,13 @@ fn build_effect_bus_stages(
             orbit_audio_native::InsertBusStage::with_activation(
                 name.clone(),
                 Some(Box::new(OutProcEffectPostProcessor::new(
-                    host,
-                    engaged.clone(),
-                    stop.clone(),
-                    done.clone(),
-                    stats.clone(),
+                    OutProcEffectPostProcessorParts {
+                        host,
+                        engaged: engaged.clone(),
+                        teardown_requested: stop.clone(),
+                        teardown_done: done.clone(),
+                        stats: stats.clone(),
+                    },
                 ))),
                 0,
                 active.clone(),
@@ -530,7 +672,7 @@ fn build_effect_bus_stages(
 
 /// bus 部材を ChildSlot / 観測 map / routing map / StreamGuard 用 guard 群へ展開する（stream 起動後・
 /// sample_rate 確定後に呼ぶ）。返り値: (bus_slots, bus_stats, bus_actives, bus_kinds, bus_index,
-/// bus_routing, bus_sends, child_guards, teardowns)。
+/// bus_routing, bus_sends, bus_entries, child_guards, teardowns)。
 #[cfg(feature = "outproc-effect")]
 #[allow(clippy::type_complexity)]
 fn install_effect_bus_slots(
@@ -545,10 +687,10 @@ fn install_effect_bus_slots(
     HashMap<String, usize>,
     HashMap<String, Arc<AtomicUsize>>,
     HashMap<String, Vec<Arc<AtomicU32>>>,
+    HashMap<String, EffectSlotEntry>,
     Vec<Arc<Mutex<ChildSlot>>>,
     Vec<crate::outproc_effect::OutProcTeardownGuard>,
 ) {
-    use crate::outproc_effect::OutProcTeardownGuard;
     let mut bus_slots = HashMap::new();
     let mut bus_stats = HashMap::new();
     let mut bus_actives = HashMap::new();
@@ -556,26 +698,29 @@ fn install_effect_bus_slots(
     let mut bus_index = HashMap::new();
     let mut bus_routing = HashMap::new();
     let mut bus_sends = HashMap::new();
+    let mut bus_entries = HashMap::new();
     let mut child_guards = Vec::with_capacity(builds.len());
     let mut teardowns = Vec::with_capacity(builds.len());
     for (index, build) in builds.into_iter().enumerate() {
-        let slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch {
+        let installed = install_effect_slot(EffectSlotInstallParts {
             shm_path: build.shm_path,
             child_exe: child_exe.to_path_buf(),
             sample_rate,
             stats: build.stats.clone(),
             engaged: build.engaged,
-            cleanup_shm_on_drop: true,
-        })));
-        bus_slots.insert(build.name.clone(), Arc::downgrade(&slot));
+            quiesce_requested: build.stop,
+            quiesce_done: build.done,
+        });
+        bus_slots.insert(build.name.clone(), Arc::downgrade(&installed.child_slot));
+        bus_entries.insert(build.name.clone(), installed.entry);
         bus_stats.insert(build.name.clone(), build.stats);
         bus_actives.insert(build.name.clone(), build.active);
         bus_kinds.insert(build.name.clone(), build.kind);
         bus_index.insert(build.name.clone(), index);
         bus_routing.insert(build.name.clone(), build.routing_override);
         bus_sends.insert(build.name, build.send_gain_overrides);
-        child_guards.push(slot);
-        teardowns.push(OutProcTeardownGuard::new(build.stop, build.done));
+        child_guards.push(installed.child_slot);
+        teardowns.push(installed.teardown);
     }
     (
         bus_slots,
@@ -585,9 +730,243 @@ fn install_effect_bus_slots(
         bus_index,
         bus_routing,
         bus_sends,
+        bus_entries,
         child_guards,
         teardowns,
     )
+}
+
+#[cfg(all(test, feature = "outproc-effect"))]
+mod effect_slot_wiring_tests {
+    use super::{
+        install_effect_bus_slots, install_effect_slot, BusKind, ChildSlot, EffectBusBuild,
+        EffectRole, EffectSlotEntry, EffectSlotInstallParts, InstalledEffectSlot,
+    };
+    use crate::outproc_effect::{
+        OutProcEffectPostProcessor, OutProcEffectPostProcessorParts, OutProcEffectStats,
+    };
+    use orbit_audio_native::PostProcessor;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    const BUS: &str = "wiring-bus";
+
+    struct WiringParts {
+        shm_path: PathBuf,
+        stats: Arc<OutProcEffectStats>,
+        engaged: Arc<AtomicBool>,
+        requested: Arc<AtomicBool>,
+        done: Arc<AtomicBool>,
+        processor: OutProcEffectPostProcessor,
+    }
+
+    fn wiring_parts() -> WiringParts {
+        let shm_path = crate::outproc_effect::unique_shm_path();
+        let mmap = orbit_audio_sandbox::create_shared(&shm_path).expect("create wiring shm");
+        let host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(mmap);
+        let stats = OutProcEffectStats::new();
+        let engaged = Arc::new(AtomicBool::new(true));
+        let requested = Arc::new(AtomicBool::new(false));
+        // Guard drop must not spend the teardown timeout in these pure wiring tests.
+        let done = Arc::new(AtomicBool::new(true));
+        let processor = OutProcEffectPostProcessor::new(OutProcEffectPostProcessorParts {
+            host,
+            engaged: engaged.clone(),
+            teardown_requested: requested.clone(),
+            teardown_done: done.clone(),
+            stats: stats.clone(),
+        });
+        WiringParts {
+            shm_path,
+            stats,
+            engaged,
+            requested,
+            done,
+            processor,
+        }
+    }
+
+    fn assert_entry_launch_and_render_share_engaged(
+        entry: &EffectSlotEntry,
+        child_slot: &Mutex<ChildSlot<EffectRole>>,
+        render_engaged: &AtomicBool,
+        mut processor: OutProcEffectPostProcessor,
+        origin: &str,
+    ) {
+        entry.engaged.store(false, Ordering::Release);
+        assert!(
+            !render_engaged.load(Ordering::Acquire),
+            "{origin}: entry disengage must reach the render-side gate"
+        );
+        let launch_engaged = {
+            let slot = child_slot.lock().expect("lock wiring child slot");
+            let ChildSlot::Empty(launch) = &*slot else {
+                panic!("{origin}: fresh installed slot must be Empty");
+            };
+            assert!(
+                !launch.engaged.load(Ordering::Acquire),
+                "{origin}: entry disengage must reach ChildLaunch"
+            );
+            launch.engaged.clone()
+        };
+
+        let mut audio = vec![0.625_f32; 32];
+        processor.process(&mut audio);
+        assert!(
+            audio.iter().all(|sample| *sample == 0.625),
+            "{origin}: disengaged render path must remain dry"
+        );
+
+        // Attach completion writes through ChildLaunch. Both the replacement entry and the RT
+        // post-processor must observe that same edge; otherwise an attached insert stays dry.
+        launch_engaged.store(true, Ordering::Release);
+        assert!(
+            entry.engaged.load(Ordering::Acquire),
+            "{origin}: ChildLaunch engage must reach the replacement entry"
+        );
+        assert!(
+            render_engaged.load(Ordering::Acquire),
+            "{origin}: ChildLaunch engage must reach the render-side gate"
+        );
+        let mut engaged_audio = vec![0.375_f32; 32];
+        processor.process(&mut engaged_audio);
+        assert!(
+            engaged_audio.iter().all(|sample| *sample == 0.0),
+            "{origin}: engaged render path must enter the host (first block primes silence)"
+        );
+    }
+
+    fn install_master_fixture() -> (
+        Arc<AtomicBool>,
+        InstalledEffectSlot,
+        OutProcEffectPostProcessor,
+    ) {
+        let parts = wiring_parts();
+        let render_engaged = parts.engaged.clone();
+        let processor = parts.processor;
+        let installed = install_effect_slot(EffectSlotInstallParts {
+            shm_path: parts.shm_path,
+            child_exe: PathBuf::from("unused-master-effect-child"),
+            sample_rate: 48_000,
+            stats: parts.stats,
+            engaged: parts.engaged,
+            quiesce_requested: parts.requested,
+            quiesce_done: parts.done,
+        });
+        (render_engaged, installed, processor)
+    }
+
+    fn install_bus_fixture() -> (
+        Arc<AtomicBool>,
+        InstalledEffectSlot,
+        OutProcEffectPostProcessor,
+    ) {
+        let parts = wiring_parts();
+        let render_engaged = parts.engaged.clone();
+        let processor = parts.processor;
+        let build = EffectBusBuild {
+            name: BUS.to_owned(),
+            kind: BusKind::Insert,
+            shm_path: parts.shm_path,
+            engaged: parts.engaged,
+            stop: parts.requested,
+            done: parts.done,
+            stats: parts.stats,
+            active: Arc::new(AtomicBool::new(true)),
+            routing_override: Arc::new(AtomicUsize::new(0)),
+            send_gain_overrides: Vec::<Arc<AtomicU32>>::new(),
+        };
+        let (_, _, _, _, _, _, _, mut entries, mut child_slots, mut teardowns) =
+            install_effect_bus_slots(
+                vec![build],
+                PathBuf::from("unused-bus-effect-child").as_path(),
+                48_000,
+            );
+        let installed = InstalledEffectSlot {
+            entry: entries.remove(BUS).expect("bus entry"),
+            child_slot: child_slots.pop().expect("bus child slot"),
+            teardown: teardowns.pop().expect("bus teardown"),
+        };
+        (render_engaged, installed, processor)
+    }
+
+    #[test]
+    fn bus_slot_shares_the_engaged_flag_across_entry_launch_and_render_stage() {
+        let (render_engaged, installed, processor) = install_bus_fixture();
+        assert_entry_launch_and_render_share_engaged(
+            &installed.entry,
+            &installed.child_slot,
+            &render_engaged,
+            processor,
+            "bus pool",
+        );
+    }
+
+    #[test]
+    fn effect_only_master_slot_shares_the_engaged_flag_across_entry_launch_and_render_stage() {
+        let (render_engaged, installed, processor) = install_master_fixture();
+        assert_entry_launch_and_render_share_engaged(
+            &installed.entry,
+            &installed.child_slot,
+            &render_engaged,
+            processor,
+            "effect-only master",
+        );
+    }
+
+    #[test]
+    fn combined_master_slot_shares_the_engaged_flag_across_entry_launch_and_render_stage() {
+        let (render_engaged, installed, processor) = install_master_fixture();
+        assert_entry_launch_and_render_share_engaged(
+            &installed.entry,
+            &installed.child_slot,
+            &render_engaged,
+            processor,
+            "combined master",
+        );
+    }
+
+    #[test]
+    fn bus_teardown_guard_latches_the_entry_shutdown() {
+        let (_, installed, _) = install_bus_fixture();
+        let InstalledEffectSlot {
+            entry,
+            child_slot: _,
+            teardown,
+        } = installed;
+        assert!(!entry.shutdown.load(Ordering::Acquire));
+        drop(teardown);
+        assert!(
+            entry.shutdown.load(Ordering::Acquire),
+            "bus guard drop must latch the entry observed by replacement"
+        );
+    }
+
+    #[test]
+    fn effect_only_master_teardown_guard_latches_the_entry_shutdown() {
+        assert_master_teardown_guard_latches_entry_shutdown("effect-only master");
+    }
+
+    #[test]
+    fn combined_master_teardown_guard_latches_the_entry_shutdown() {
+        assert_master_teardown_guard_latches_entry_shutdown("combined master");
+    }
+
+    fn assert_master_teardown_guard_latches_entry_shutdown(origin: &str) {
+        let (_, installed, _) = install_master_fixture();
+        let InstalledEffectSlot {
+            entry,
+            child_slot: _,
+            teardown,
+        } = installed;
+        assert!(!entry.shutdown.load(Ordering::Acquire), "{origin}");
+        drop(teardown);
+        assert!(
+            entry.shutdown.load(Ordering::Acquire),
+            "{origin}: guard drop must latch the entry observed by replacement"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "outproc-effect"))]
@@ -736,7 +1115,7 @@ mod set_bus_routing_tests {
     use crate::backend::StubBackend;
     use crate::outproc_effect::OutProcEffectStats;
     use orbit_audio_native::CallbackTimeStats;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
     /// stage 配列 `[seq-bus-0 (Insert), sum-bus-0 (Sum), aux-bus-0 (Aux)]` を模した
@@ -766,13 +1145,16 @@ mod set_bus_routing_tests {
             stats: OutProcEffectStats::new(),
             cb_stats: CallbackTimeStats::new(),
             child_slot: Weak::new(),
+            master_entry: super::test_effect_slot_entry(),
             bus_slots: HashMap::new(),
+            bus_entries: HashMap::new(),
             bus_stats: HashMap::new(),
             bus_actives: HashMap::new(),
             bus_kinds,
             bus_index,
             bus_routing,
             bus_sends,
+            replacements_in_flight: HashSet::new(),
         });
         wrap
     }
@@ -1820,12 +2202,53 @@ impl Drop for ShmCleanupGuard {
 const CHILD_READY_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 const CHILD_READY_POLL: Duration = Duration::from_millis(10);
+/// effect in-place 差し替え時に RT transport 離脱 ack を待つ上限と poll 間隔。
+#[cfg(feature = "outproc-effect")]
+const EFFECT_QUIESCE_TIMEOUT: Duration = Duration::from_millis(500);
+#[cfg(feature = "outproc-effect")]
+const EFFECT_QUIESCE_POLL: Duration = Duration::from_millis(2);
 /// #618: tenant 差し替え時の note ring drain-and-discard ack 待ち上限。
 /// timeout は再利用禁止へ degrade し、残渣入り slot を別 tenant へ渡さない。
 #[cfg(feature = "outproc-instrument")]
 const INSTRUMENT_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 #[cfg(feature = "outproc-instrument")]
 const INSTRUMENT_DRAIN_POLL: Duration = Duration::from_millis(2);
+
+/// effect replacement が共有 quiesce flags を片付ける。stream 停止 latch が立っていれば
+/// guard 所有の request を消さず、clear 直後に latch が立つ競合も再検査で復元する。
+#[cfg(feature = "outproc-effect")]
+fn clear_quiesce_unless_shutdown(entry: &EffectSlotEntry) {
+    clear_quiesce_unless_shutdown_with(entry, || {});
+}
+
+#[cfg(feature = "outproc-effect")]
+/// Clears the quiesce handshake **unless** the stream owner has latched shutdown.
+///
+/// 🔴 `SeqCst` on the shutdown load and the `quiesce_requested` clear is load-bearing, not
+/// decoration (#625 audit B-1). This function and `OutProcTeardownGuard::latch_then_request`
+/// form a store-buffering (Dekker) pair: each side stores its own flag and then loads the
+/// other's. Under `Release`/`Acquire` alone, the re-check below is permitted to read a stale
+/// `shutdown == false` even though the guard already stored `true` — coherence only forbids
+/// reading a value *older* than one already read, and this thread read `false` a moment ago.
+/// x86-TSO realises exactly this via the store buffer. The consequence is the failure the
+/// latch exists to prevent: this thread clears the guard's `quiesce_requested`, never restores
+/// it, the audio thread therefore never acks, and the stream owner stops without a real
+/// quiesce. A single total order over these two accesses removes the interleaving.
+///
+/// The cost lands on the control thread only — the audio thread does not touch these.
+///
+/// **This is not covered by a test.** Logical interleaving (the `after_clear` hook) cannot
+/// reproduce a memory-ordering relaxation; only a model checker such as `loom` could.
+fn clear_quiesce_unless_shutdown_with(entry: &EffectSlotEntry, after_clear: impl FnOnce()) {
+    if !entry.shutdown.load(Ordering::SeqCst) {
+        entry.quiesce_requested.store(false, Ordering::SeqCst);
+        entry.quiesce_done.store(false, Ordering::Release);
+        after_clear();
+        if entry.shutdown.load(Ordering::SeqCst) {
+            entry.quiesce_requested.store(true, Ordering::Release);
+        }
+    }
+}
 
 /// CLAP host の control-side ハンドル一式（feature `clap-host` 専用）。
 #[cfg(feature = "clap-host")]
@@ -2239,7 +2662,7 @@ impl EngineWrap {
         cfg: crate::outproc_effect::OutProcEffectConfig,
     ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         use crate::outproc_effect::{
-            OutProcEffectPostProcessor, OutProcEffectStats, OutProcTeardownGuard,
+            OutProcEffectPostProcessor, OutProcEffectPostProcessorParts, OutProcEffectStats,
         };
         use std::sync::atomic::AtomicBool;
 
@@ -2260,11 +2683,13 @@ impl EngineWrap {
         let teardown_done = Arc::new(AtomicBool::new(false));
         let stats = OutProcEffectStats::new();
         let processor = Box::new(OutProcEffectPostProcessor::new(
-            host,
-            engaged.clone(),
-            teardown_requested.clone(),
-            teardown_done.clone(),
-            stats.clone(),
+            OutProcEffectPostProcessorParts {
+                host,
+                engaged: engaged.clone(),
+                teardown_requested: teardown_requested.clone(),
+                teardown_done: teardown_done.clone(),
+                stats: stats.clone(),
+            },
         ));
 
         // 3. cpal stream 起動（ここで device の sample_rate が確定する）。adapter を注入する。
@@ -2279,17 +2704,18 @@ impl EngineWrap {
             )
             .map_err(WrapError::Output)?;
         let sample_rate = stream.sample_rate;
-
-        // 4. child は初回 LoadPlugin まで作らない。engaged clone を slot に保持し、ready-ack 後に
-        //    control thread から Release store できるようにする。
-        let child_slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch {
+        let installed_master = install_effect_slot(EffectSlotInstallParts {
             shm_path,
             child_exe: cfg.child_exe.clone(),
             sample_rate,
             stats: stats.clone(),
             engaged,
-            cleanup_shm_on_drop: true,
-        })));
+            quiesce_requested: teardown_requested,
+            quiesce_done: teardown_done,
+        });
+        let master_entry = installed_master.entry;
+        let child_slot = installed_master.child_slot;
+        let master_teardown = installed_master.teardown;
         // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
         shm_cleanup.disarm();
 
@@ -2303,13 +2729,16 @@ impl EngineWrap {
                 stats,
                 cb_stats: cb_stats.clone(),
                 child_slot: Arc::downgrade(&child_slot),
+                master_entry,
                 bus_slots: HashMap::new(),
+                bus_entries: HashMap::new(),
                 bus_stats: HashMap::new(),
                 bus_actives: HashMap::new(),
                 bus_kinds: HashMap::new(),
                 bus_index: HashMap::new(),
                 bus_routing: HashMap::new(),
                 bus_sends: HashMap::new(),
+                replacements_in_flight: HashSet::new(),
             });
 
         let (
@@ -2320,6 +2749,7 @@ impl EngineWrap {
             bus_index,
             bus_routing,
             bus_sends,
+            bus_entries,
             bus_child_guards,
             bus_teardowns,
         ) = install_effect_bus_slots(bus_builds, &cfg.child_exe, sample_rate);
@@ -2330,6 +2760,7 @@ impl EngineWrap {
                 .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))?;
             let control = guard.as_mut().expect("outproc control installed");
             control.bus_slots = bus_slots;
+            control.bus_entries = bus_entries;
             control.bus_stats = bus_stats;
             control.bus_actives = bus_actives;
             control.bus_kinds = bus_kinds;
@@ -2340,7 +2771,7 @@ impl EngineWrap {
 
         // 7. StreamGuard（field 順 = teardown 順）。
         let guard = StreamGuard {
-            _outproc_teardown: OutProcTeardownGuard::new(teardown_requested, teardown_done),
+            _outproc_teardown: master_teardown,
             _outproc_bus_teardowns: bus_teardowns,
             stream,
             _child_guard: child_slot,
@@ -2458,7 +2889,7 @@ impl EngineWrap {
         instrument_cfg: crate::outproc_instrument::OutProcInstrumentConfig,
     ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         use crate::outproc_effect::{
-            OutProcEffectPostProcessor, OutProcEffectStats, OutProcTeardownGuard,
+            OutProcEffectPostProcessor, OutProcEffectPostProcessorParts, OutProcEffectStats,
         };
         let buffer_frames = Self::resolve_outproc_both_buffer_frames(
             effect_cfg.buffer_frames,
@@ -2487,13 +2918,13 @@ impl EngineWrap {
         let effect_stats = OutProcEffectStats::new();
         let processor = Box::new(CompositePostProcessor {
             instruments: instrument_posts,
-            effect: OutProcEffectPostProcessor::new(
-                effect_host,
-                effect_engaged.clone(),
-                effect_stop.clone(),
-                effect_done.clone(),
-                effect_stats.clone(),
-            ),
+            effect: OutProcEffectPostProcessor::new(OutProcEffectPostProcessorParts {
+                host: effect_host,
+                engaged: effect_engaged.clone(),
+                teardown_requested: effect_stop.clone(),
+                teardown_done: effect_done.clone(),
+                stats: effect_stats.clone(),
+            }),
         });
         let (engine, stream, stream_stats, effect_cb_stats) =
             orbit_audio_native::start_default_output_with_insert_buses_and_post(
@@ -2504,14 +2935,18 @@ impl EngineWrap {
                 device_name_from_env(),
             )
             .map_err(WrapError::Output)?;
-        let effect_slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch {
+        let installed_master = install_effect_slot(EffectSlotInstallParts {
             shm_path: effect_shm,
             child_exe: effect_cfg.child_exe.clone(),
             sample_rate: stream.sample_rate,
             stats: effect_stats.clone(),
             engaged: effect_engaged,
-            cleanup_shm_on_drop: true,
-        })));
+            quiesce_requested: effect_stop,
+            quiesce_done: effect_done,
+        });
+        let master_entry = installed_master.entry;
+        let effect_slot = installed_master.child_slot;
+        let master_teardown = installed_master.teardown;
         // unlink 所有権を起動失敗用 guard から ChildLaunch へ移す。
         effect_shm_cleanup.disarm();
         // #540 P1: pending slot を ChildLaunch へ組み上げる（sample_rate は stream 起動後に確定）。
@@ -2530,13 +2965,16 @@ impl EngineWrap {
                 stats: effect_stats,
                 cb_stats: effect_cb_stats.clone(),
                 child_slot: Arc::downgrade(&effect_slot),
+                master_entry,
                 bus_slots: HashMap::new(),
+                bus_entries: HashMap::new(),
                 bus_stats: HashMap::new(),
                 bus_actives: HashMap::new(),
                 bus_kinds: HashMap::new(),
                 bus_index: HashMap::new(),
                 bus_routing: HashMap::new(),
                 bus_sends: HashMap::new(),
+                replacements_in_flight: HashSet::new(),
             });
         *wrap.outproc_instrument.lock().map_err(|_| {
             WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
@@ -2556,6 +2994,7 @@ impl EngineWrap {
             bus_index,
             bus_routing,
             bus_sends,
+            bus_entries,
             bus_child_guards,
             bus_teardowns,
         ) = install_effect_bus_slots(bus_builds, &effect_cfg.child_exe, stream.sample_rate);
@@ -2566,6 +3005,7 @@ impl EngineWrap {
                 .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))?;
             let control = guard.as_mut().expect("outproc control installed");
             control.bus_slots = bus_slots;
+            control.bus_entries = bus_entries;
             control.bus_stats = bus_stats;
             control.bus_actives = bus_actives;
             control.bus_kinds = bus_kinds;
@@ -2575,7 +3015,7 @@ impl EngineWrap {
         }
 
         let guard = StreamGuard {
-            _outproc_teardown: OutProcTeardownGuard::new(effect_stop, effect_done),
+            _outproc_teardown: master_teardown,
             _outproc_bus_teardowns: bus_teardowns,
             _outproc_instrument_teardowns: instrument_teardowns,
             stream,
@@ -2989,6 +3429,233 @@ impl EngineWrap {
             }
         }
         result
+    }
+
+    /// effect plugin を固定 slot 上で目標 spec へ収束させる ensure 操作。
+    /// Active の異 spec だけを quiesce ack 後に同じ shm 上で建て直す。
+    #[cfg(feature = "outproc-effect")]
+    pub fn replace_outproc_effect_plugin(
+        &self,
+        path: PathBuf,
+        plugin_id: Option<String>,
+        bus: Option<String>,
+        state: Option<PathBuf>,
+    ) -> Result<ReplacedPluginSummary, WrapError> {
+        // outproc mutex より先に宣言する。early-return / panic でも後から取った mutex guard が
+        // 先に落ち、Drop が同じ mutex を安全に取り直して in-flight を解除できる。
+        let mut reservation = EffectReplacementReservation::new(self, bus.clone());
+        let (child_slot, entry, stats) = {
+            let mut guard = self
+                .outproc
+                .lock()
+                .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))?;
+            let control = guard.as_mut().ok_or_else(|| {
+                WrapError::OutProcEffectUnavailable(
+                    "outproc effect not initialized (test backend has no outproc path)".into(),
+                )
+            })?;
+            if control.replacements_in_flight.contains(&bus) {
+                return Err(WrapError::OutProcEffect(format!(
+                    "effect replacement already in progress for {}",
+                    effect_slot_label(&bus)
+                )));
+            }
+
+            let (weak_slot, entry, stats) = match bus.as_ref() {
+                Some(name) => (
+                    control.bus_slots.get(name).ok_or_else(|| {
+                        WrapError::OutProcEffect(format!(
+                            "unknown effect bus '{name}' (configured by ORBIT_EFFECT_BUSES)"
+                        ))
+                    })?,
+                    control.bus_entries.get(name).cloned().ok_or_else(|| {
+                        WrapError::OutProcEffect(format!(
+                            "effect bus '{name}' is missing its slot entry"
+                        ))
+                    })?,
+                    control.bus_stats.get(name).cloned().ok_or_else(|| {
+                        WrapError::OutProcEffect(format!(
+                            "effect bus '{name}' is missing its stats entry"
+                        ))
+                    })?,
+                ),
+                None => (
+                    &control.child_slot,
+                    control.master_entry.clone(),
+                    control.stats.clone(),
+                ),
+            };
+            if entry.shutdown.load(Ordering::Acquire) {
+                return Err(WrapError::OutProcEffect("engine is stopping".into()));
+            }
+            let child_slot = weak_slot.upgrade().ok_or_else(|| {
+                WrapError::OutProcEffect("outproc effect stream is closed".into())
+            })?;
+
+            {
+                let slot =
+                    lock_child_slot_recovering(&child_slot, "effect replacement state check");
+                match &*slot {
+                    ChildSlot::Active {
+                        path: active_path,
+                        plugin_id: active_plugin_id,
+                        state: active_state,
+                        engaged,
+                        ..
+                    } if active_path == &path
+                        && active_plugin_id == &plugin_id
+                        && active_state == &state =>
+                    {
+                        engaged.store(true, Ordering::Release);
+                        return Ok(ReplacedPluginSummary {
+                            plugin: outproc_plugin_summary(active_path, active_plugin_id),
+                            quarantined_slot: false,
+                        });
+                    }
+                    ChildSlot::Active { .. } => {}
+                    ChildSlot::Empty(_) => {
+                        drop(slot);
+                        drop(guard);
+                        if entry.shutdown.load(Ordering::Acquire) {
+                            return Err(WrapError::OutProcEffect("engine is stopping".into()));
+                        }
+                        return self
+                            .load_outproc_plugin_impl::<EffectRole>(
+                                child_slot, path, plugin_id, state,
+                            )
+                            .map(|plugin| ReplacedPluginSummary {
+                                plugin,
+                                quarantined_slot: false,
+                            });
+                    }
+                    ChildSlot::Loading { path: loading_path } => {
+                        return Err(WrapError::OutProcEffect(format!(
+                            "effect plugin load already in progress for {loading_path:?}"
+                        )));
+                    }
+                    ChildSlot::Closed => {
+                        return Err(WrapError::OutProcSlotClosed(
+                            "outproc effect slot is closed after an unrecoverable attach failure"
+                                .into(),
+                        ));
+                    }
+                }
+            }
+
+            control.replacements_in_flight.insert(bus.clone());
+            reservation.mark_in_flight();
+            (child_slot, entry, stats)
+        };
+
+        // FM-R5 mutation point: removing this teardown must leave the old Active slot in place.
+        self.teardown_outproc_effect_slot(&bus, &child_slot, &entry, stats)?;
+
+        // The stream guard may have latched shutdown while teardown was clearing its flags.
+        // Distinct wording from the pre-teardown check: by this point the old effect is
+        // already gone and the bus has degraded to dry pass-through, which is what an
+        // operator reading the log needs to know (#625 audit C-1).
+        if entry.shutdown.load(Ordering::Acquire) {
+            return Err(WrapError::OutProcEffect(
+                "engine is stopping after the previous effect was torn down;                  the bus is passing through dry"
+                    .into(),
+            ));
+        }
+        let plugin =
+            self.load_outproc_plugin_impl::<EffectRole>(child_slot, path, plugin_id, state)?;
+        Ok(ReplacedPluginSummary {
+            plugin,
+            quarantined_slot: false,
+        })
+    }
+
+    /// Active effect child を quiesce して停止し、同じ shm を使う Empty slot へ戻す。
+    #[cfg(feature = "outproc-effect")]
+    fn teardown_outproc_effect_slot(
+        &self,
+        target: &Option<String>,
+        child_slot: &Arc<Mutex<ChildSlot<EffectRole>>>,
+        entry: &EffectSlotEntry,
+        stats: Arc<crate::outproc_effect::OutProcEffectStats>,
+    ) -> Result<(), WrapError> {
+        entry.engaged.store(false, Ordering::Release);
+        entry.quiesce_done.store(false, Ordering::Release);
+        entry.quiesce_requested.store(true, Ordering::Release);
+        let deadline = std::time::Instant::now() + EFFECT_QUIESCE_TIMEOUT;
+        let quiesce_acked = loop {
+            if entry.quiesce_done.load(Ordering::Acquire) {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(EFFECT_QUIESCE_POLL);
+        };
+        if !quiesce_acked {
+            clear_quiesce_unless_shutdown(entry);
+            if !entry.shutdown.load(Ordering::Acquire) {
+                entry.engaged.store(true, Ordering::Release);
+            }
+            return Err(WrapError::OutProcEffect(
+                "effect replacement quiesce ack timed out; the previous effect is kept".into(),
+            ));
+        }
+
+        let supervisor = {
+            let mut slot = lock_child_slot_recovering(child_slot, "effect slot teardown");
+            match std::mem::replace(&mut *slot, ChildSlot::Closed) {
+                ChildSlot::Active { _supervisor, .. } => _supervisor,
+                other => {
+                    *slot = other;
+                    clear_quiesce_unless_shutdown(entry);
+                    if !entry.shutdown.load(Ordering::Acquire) {
+                        entry.engaged.store(true, Ordering::Release);
+                    }
+                    return Err(WrapError::OutProcEffect(format!(
+                        "effect replacement teardown expected an Active {} slot",
+                        effect_slot_label(target)
+                    )));
+                }
+            }
+        };
+
+        let reset = orbit_audio_sandbox::open_shared(&entry.shm_path);
+        match reset {
+            Ok(mmap) => {
+                let region = orbit_audio_sandbox::region_ptr(&mmap);
+                detach_and_reset_control_run::<EffectRole>(supervisor, region);
+            }
+            Err(error) => {
+                EffectRole::detach_keep_shm(supervisor);
+                EffectRole::set_current_child_pid(&stats, 0);
+                clear_quiesce_unless_shutdown(entry);
+                return Err(WrapError::OutProcEffect(format!(
+                    "open effect control reset mapping {:?}: {error}",
+                    entry.shm_path
+                )));
+            }
+        }
+        EffectRole::set_current_child_pid(&stats, 0);
+        // Tenant handoff clears the previous tenant's sticky health verdict (#625 audit A-1).
+        // `measurement_invalid` is latched by the watchdog when it gives up on a child
+        // (fast-fail cutoff / respawn failure / try_wait failure / poisoned mutex) and is
+        // never cleared elsewhere, so a crash-looping effect that the user then *replaces*
+        // would keep reporting "measurement invalid" for the healthy new tenant until the
+        // daemon restarts. The instrument teardown resets the same field for the same reason
+        // (see `teardown_outproc_instrument_resources`); effect stats carry the field too, so
+        // the invariant is inherited rather than skipped.
+        stats.measurement_invalid.store(false, Ordering::Release);
+        *lock_child_slot_recovering(child_slot, "effect slot teardown completion") =
+            ChildSlot::Empty(ChildLaunch::<EffectRole> {
+                shm_path: entry.shm_path.clone(),
+                child_exe: entry.child_exe.clone(),
+                sample_rate: entry.sample_rate,
+                stats,
+                engaged: entry.engaged.clone(),
+                cleanup_shm_on_drop: true,
+            });
+        // FM-R18/R27 mutation point: stale flags and shutdown-owned requests are both unsafe.
+        clear_quiesce_unless_shutdown(entry);
+        Ok(())
     }
 
     /// 実行時ルーティング切替（#459/#453 M2）: `seq_bus` の output target / send gain を非 RT で
@@ -5370,6 +6037,14 @@ fn outproc_plugin_summary(
     }
 }
 
+#[cfg(feature = "outproc-effect")]
+fn effect_slot_label(bus: &Option<String>) -> String {
+    match bus {
+        Some(name) => format!("bus '{name}'"),
+        None => "master".to_owned(),
+    }
+}
+
 #[cfg(all(test, any(feature = "outproc-effect", feature = "outproc-instrument")))]
 mod shm_cleanup_guard_tests {
     use super::ShmCleanupGuard;
@@ -6994,7 +7669,7 @@ mod outproc_health_tests {
     use crate::backend::StubBackend;
     use crate::outproc_effect::OutProcEffectStats;
     use orbit_audio_native::CallbackTimeStats;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
@@ -7011,13 +7686,16 @@ mod outproc_health_tests {
             stats: stats.clone(),
             cb_stats: CallbackTimeStats::new(),
             child_slot: Weak::new(),
+            master_entry: super::test_effect_slot_entry(),
             bus_slots: HashMap::new(),
+            bus_entries: HashMap::new(),
             bus_stats: HashMap::new(),
             bus_actives: HashMap::new(),
             bus_kinds: HashMap::new(),
             bus_index: HashMap::new(),
             bus_routing: HashMap::new(),
             bus_sends: HashMap::new(),
+            replacements_in_flight: HashSet::new(),
         });
         (wrap, stats)
     }
@@ -7033,13 +7711,16 @@ mod outproc_health_tests {
             stats,
             cb_stats: CallbackTimeStats::new(),
             child_slot: Arc::downgrade(&child_slot),
+            master_entry: super::test_effect_slot_entry(),
             bus_slots: HashMap::new(),
+            bus_entries: HashMap::new(),
             bus_stats: HashMap::new(),
             bus_actives: HashMap::new(),
             bus_kinds: HashMap::new(),
             bus_index: HashMap::new(),
             bus_routing: HashMap::new(),
             bus_sends: HashMap::new(),
+            replacements_in_flight: HashSet::new(),
         });
         (wrap, child_slot)
     }
@@ -7123,13 +7804,16 @@ mod outproc_health_tests {
             stats: OutProcEffectStats::new(),
             cb_stats: CallbackTimeStats::new(),
             child_slot: Weak::new(),
+            master_entry: super::test_effect_slot_entry(),
             bus_slots,
+            bus_entries: HashMap::new(),
             bus_stats: HashMap::new(),
             bus_actives: HashMap::new(),
             bus_kinds: HashMap::new(),
             bus_index: HashMap::new(),
             bus_routing: HashMap::new(),
             bus_sends: HashMap::new(),
+            replacements_in_flight: HashSet::new(),
         });
         let error = wrap
             .load_outproc_effect_plugin(
@@ -7157,13 +7841,16 @@ mod outproc_health_tests {
             stats: OutProcEffectStats::new(),
             cb_stats: CallbackTimeStats::new(),
             child_slot: Weak::new(),
+            master_entry: super::test_effect_slot_entry(),
             bus_slots,
+            bus_entries: HashMap::new(),
             bus_stats: HashMap::new(),
             bus_actives,
             bus_kinds: HashMap::new(),
             bus_index: HashMap::new(),
             bus_routing: HashMap::new(),
             bus_sends: HashMap::new(),
+            replacements_in_flight: HashSet::new(),
         });
         let result = wrap.load_outproc_effect_plugin(
             std::path::PathBuf::from("unused.clap"),
@@ -7923,6 +8610,492 @@ mod outproc_instrument_health_tests {
         );
 
         assert_eq!(wrap.outproc_instrument_health(), (3, 0, false, 2, 0, 0, 0));
+    }
+}
+
+#[cfg(all(test, feature = "outproc-effect"))]
+mod effect_replace_tests {
+    use super::{
+        clear_quiesce_unless_shutdown, clear_quiesce_unless_shutdown_with, test_effect_slot_entry,
+        ChildLaunch, ChildSlot, EffectRole, EffectSlotEntry, EngineWrap, OutProcControl,
+        OutProcRole, PluginUiWiring, WrapError,
+    };
+    use crate::backend::StubBackend;
+    use crate::outproc_effect::OutProcEffectStats;
+    use orbit_audio_native::CallbackTimeStats;
+    use std::collections::{HashMap, HashSet};
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    const BUS: &str = "fx1";
+    const OLD_PLUGIN: &str = "old-effect.clap";
+    const BUS_PLUGIN: &str = "bus-effect.clap";
+    const NEW_PLUGIN: &str = "new-effect.clap";
+    const WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+
+    struct SlotFixture {
+        slot: Arc<Mutex<ChildSlot<EffectRole>>>,
+        entry: EffectSlotEntry,
+        stats: Arc<OutProcEffectStats>,
+        old_pid: u32,
+    }
+
+    struct EffectFixture {
+        wrap: Arc<EngineWrap>,
+        master: SlotFixture,
+        bus: Option<SlotFixture>,
+        bus_active: Option<Arc<AtomicBool>>,
+    }
+
+    fn fixture_script(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join(name)
+    }
+
+    fn active_slot(plugin: &str, child_exe: PathBuf) -> SlotFixture {
+        let shm_path = crate::outproc_effect::unique_shm_path();
+        let _ = std::fs::remove_file(&shm_path);
+        drop(orbit_audio_sandbox::create_shared(&shm_path).expect("create fixture shm"));
+        let stats = OutProcEffectStats::new();
+        let engaged = Arc::new(AtomicBool::new(false));
+        let requested = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let mut launch = ChildLaunch::<EffectRole> {
+            shm_path: shm_path.clone(),
+            child_exe: child_exe.clone(),
+            sample_rate: 48_000,
+            stats: stats.clone(),
+            engaged: engaged.clone(),
+            cleanup_shm_on_drop: true,
+        };
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn old effect fixture child");
+        let old_pid = child.id();
+        assert!(child.try_wait().expect("try_wait old child").is_none());
+        stats.current_child_pid.store(old_pid, Ordering::Relaxed);
+        let path = PathBuf::from(plugin);
+        let latest_state = Arc::new(Mutex::new(None));
+        let mailbox = Arc::new(orbit_audio_sandbox::CommandMailboxHost::new(
+            shm_path.clone(),
+        ));
+        let ui_pump = Arc::new(orbit_audio_sandbox::UiEventPump::new(shm_path.clone()));
+        let ui_target = Arc::new(Mutex::new(None));
+        let (ui_events, _) = tokio::sync::broadcast::channel(16);
+        let supervisor = EffectRole::spawn_supervisor(
+            child,
+            &launch,
+            path.clone(),
+            None,
+            latest_state.clone(),
+            mailbox.clone(),
+            PluginUiWiring {
+                pump: ui_pump.clone(),
+                target: ui_target.clone(),
+                events: ui_events,
+            },
+        )
+        .expect("spawn old effect fixture supervisor");
+        launch.cleanup_shm_on_drop = false;
+        engaged.store(true, Ordering::Release);
+        let slot = Arc::new(Mutex::new(ChildSlot::Active {
+            path,
+            plugin_id: None,
+            state: None,
+            latest_state,
+            engaged: engaged.clone(),
+            mailbox,
+            ui_pump,
+            ui_target,
+            _supervisor: supervisor,
+        }));
+        SlotFixture {
+            slot,
+            entry: EffectSlotEntry {
+                shm_path,
+                child_exe,
+                sample_rate: 48_000,
+                engaged,
+                quiesce_requested: requested,
+                quiesce_done: done,
+                shutdown,
+            },
+            stats,
+            old_pid,
+        }
+    }
+
+    fn fixture(master_child: PathBuf, bus_child: Option<PathBuf>) -> EffectFixture {
+        let master = active_slot(OLD_PLUGIN, master_child);
+        let bus = bus_child.map(|child| active_slot(BUS_PLUGIN, child));
+        let bus_active = bus.as_ref().map(|_| Arc::new(AtomicBool::new(true)));
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let mut bus_slots = HashMap::new();
+        let mut bus_entries = HashMap::new();
+        let mut bus_stats = HashMap::new();
+        let mut bus_actives = HashMap::new();
+        if let Some(bus_fixture) = &bus {
+            bus_slots.insert(BUS.to_owned(), Arc::downgrade(&bus_fixture.slot));
+            bus_entries.insert(BUS.to_owned(), bus_fixture.entry.clone());
+            bus_stats.insert(BUS.to_owned(), bus_fixture.stats.clone());
+            bus_actives.insert(
+                BUS.to_owned(),
+                bus_active.as_ref().expect("bus active exists").clone(),
+            );
+        }
+        *wrap.outproc.lock().expect("lock effect fixture control") = Some(OutProcControl {
+            stats: master.stats.clone(),
+            cb_stats: CallbackTimeStats::new(),
+            child_slot: Arc::downgrade(&master.slot),
+            master_entry: master.entry.clone(),
+            bus_slots,
+            bus_entries,
+            bus_stats,
+            bus_actives,
+            bus_kinds: HashMap::new(),
+            bus_index: HashMap::new(),
+            bus_routing: HashMap::new(),
+            bus_sends: HashMap::new(),
+            replacements_in_flight: HashSet::new(),
+        });
+        EffectFixture {
+            wrap,
+            master,
+            bus,
+            bus_active,
+        }
+    }
+
+    fn wait_until(message: &str, mut predicate: impl FnMut() -> bool) {
+        let deadline = Instant::now() + WAIT_TIMEOUT;
+        while !predicate() {
+            assert!(Instant::now() < deadline, "timed out waiting for {message}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn process_exists(pid: u32) -> bool {
+        Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("run kill -0")
+            .success()
+    }
+
+    fn publish_ready(slot: &SlotFixture) {
+        let mmap = orbit_audio_sandbox::open_shared(&slot.entry.shm_path)
+            .expect("open fixture shm for READY");
+        let region = orbit_audio_sandbox::region_ptr(&mmap);
+        // SAFETY: mmap is live for the publish and this fixture has one READY writer.
+        unsafe { orbit_audio_sandbox::transport::publish_child_ready(region, true) };
+    }
+
+    fn spawn_quiesce_ack(entry: &EffectSlotEntry) -> std::thread::JoinHandle<()> {
+        let requested = entry.quiesce_requested.clone();
+        let done = entry.quiesce_done.clone();
+        std::thread::spawn(move || {
+            wait_until("effect quiesce request", || {
+                requested.load(Ordering::Acquire)
+            });
+            done.store(true, Ordering::Release);
+        })
+    }
+
+    fn complete_replace(
+        wrap: Arc<EngineWrap>,
+        slot: &SlotFixture,
+        target: Option<String>,
+        plugin: &str,
+    ) -> u32 {
+        let previous_pid = slot.stats.current_child_pid.load(Ordering::Relaxed);
+        let ack = spawn_quiesce_ack(&slot.entry);
+        let plugin = PathBuf::from(plugin);
+        let call = std::thread::spawn(move || {
+            wrap.replace_outproc_effect_plugin(plugin, None, target, None)
+        });
+        wait_until("replacement child pid", || {
+            let pid = slot.stats.current_child_pid.load(Ordering::Relaxed);
+            pid != 0 && pid != previous_pid
+        });
+        wait_until("old effect child teardown", || {
+            !process_exists(previous_pid)
+        });
+        publish_ready(slot);
+        call.join()
+            .expect("replacement thread panicked")
+            .expect("effect replacement succeeds");
+        ack.join().expect("quiesce ack thread panicked");
+        slot.stats.current_child_pid.load(Ordering::Relaxed)
+    }
+
+    #[test]
+    fn replace_active_tears_down_old_child_before_attach() {
+        let fixture = fixture(fixture_script("slow-child.sh"), None);
+        let old_pid = fixture.master.old_pid;
+        let new_pid = complete_replace(fixture.wrap.clone(), &fixture.master, None, NEW_PLUGIN);
+        assert_ne!(new_pid, old_pid);
+        assert!(!process_exists(old_pid), "old child must be reaped");
+        assert!(matches!(
+            &*fixture.master.slot.lock().expect("lock master"),
+            ChildSlot::Active { path, .. } if path == Path::new(NEW_PLUGIN)
+        ));
+    }
+
+    #[test]
+    fn replace_same_spec_is_idempotent() {
+        let fixture = fixture(fixture_script("slow-child.sh"), None);
+        let summary = fixture
+            .wrap
+            .replace_outproc_effect_plugin(PathBuf::from(OLD_PLUGIN), None, None, None)
+            .expect("same spec is an idempotent success");
+        assert_eq!(summary.plugin.plugin_id, OLD_PLUGIN);
+        assert_eq!(
+            fixture
+                .master
+                .stats
+                .current_child_pid
+                .load(Ordering::Relaxed),
+            fixture.master.old_pid
+        );
+        assert!(!fixture
+            .master
+            .entry
+            .quiesce_requested
+            .load(Ordering::Acquire));
+        assert!(!fixture.master.entry.quiesce_done.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn replace_rolls_back_when_quiesce_ack_times_out() {
+        let fixture = fixture(PathBuf::from("/definitely/missing/effect-child"), None);
+        let started = Instant::now();
+        let error = fixture
+            .wrap
+            .replace_outproc_effect_plugin(PathBuf::from(NEW_PLUGIN), None, None, None)
+            .expect_err("missing quiesce ack must fail before teardown");
+        assert!(started.elapsed() >= super::EFFECT_QUIESCE_TIMEOUT);
+        assert!(matches!(&error, WrapError::OutProcEffect(message)
+            if message.contains("quiesce ack timed out")
+                && message.contains("previous effect is kept")));
+        assert!(matches!(
+            &*fixture.master.slot.lock().expect("lock master"),
+            ChildSlot::Active { path, .. } if path == Path::new(OLD_PLUGIN)
+        ));
+        assert!(fixture.master.entry.engaged.load(Ordering::Acquire));
+        assert!(!fixture
+            .master
+            .entry
+            .quiesce_requested
+            .load(Ordering::Acquire));
+        assert!(!fixture.master.entry.quiesce_done.load(Ordering::Acquire));
+        assert!(process_exists(fixture.master.old_pid));
+    }
+
+    #[test]
+    fn failed_replacement_attach_keeps_bus_active() {
+        let fixture = fixture(
+            fixture_script("slow-child.sh"),
+            Some(fixture_script("exit-child.sh")),
+        );
+        let bus = fixture.bus.as_ref().expect("bus fixture");
+        let ack = spawn_quiesce_ack(&bus.entry);
+        let error = fixture
+            .wrap
+            .replace_outproc_effect_plugin(
+                PathBuf::from("/definitely/nonexistent/Issue625.clap"),
+                None,
+                Some(BUS.to_owned()),
+                None,
+            )
+            .expect_err("replacement child exits before READY");
+        ack.join().expect("quiesce ack thread panicked");
+        assert!(matches!(error, WrapError::OutProcAttachFailed(_)));
+        assert!(
+            fixture
+                .bus_active
+                .as_ref()
+                .expect("bus active")
+                .load(Ordering::Acquire),
+            "replacement failure must not deactivate an already-declared bus"
+        );
+        assert!(matches!(
+            &*bus.slot.lock().expect("lock bus"),
+            ChildSlot::Empty(_)
+        ));
+    }
+
+    #[test]
+    fn second_replace_while_in_flight_is_rejected() {
+        let fixture = fixture(fixture_script("slow-child.sh"), None);
+        let wrap_first = fixture.wrap.clone();
+        let first = std::thread::spawn(move || {
+            wrap_first.replace_outproc_effect_plugin(PathBuf::from(NEW_PLUGIN), None, None, None)
+        });
+        wait_until("effect replacement reservation", || {
+            fixture
+                .wrap
+                .outproc
+                .lock()
+                .expect("lock effect control")
+                .as_ref()
+                .expect("effect control")
+                .replacements_in_flight
+                .contains(&None)
+        });
+        let second = fixture
+            .wrap
+            .replace_outproc_effect_plugin(PathBuf::from("other-effect.clap"), None, None, None)
+            .expect_err("second replacement must fail fast");
+        assert!(matches!(&second, WrapError::OutProcEffect(message)
+            if message.contains("effect replacement already in progress")
+                && message.contains("master")));
+
+        fixture
+            .master
+            .entry
+            .quiesce_done
+            .store(true, Ordering::Release);
+        wait_until("first replacement child pid", || {
+            let pid = fixture
+                .master
+                .stats
+                .current_child_pid
+                .load(Ordering::Relaxed);
+            pid != 0 && pid != fixture.master.old_pid
+        });
+        publish_ready(&fixture.master);
+        first
+            .join()
+            .expect("first replacement thread panicked")
+            .expect("first replacement succeeds");
+    }
+
+    #[test]
+    fn quiesce_flags_reset_after_successful_replace() {
+        let fixture = fixture(fixture_script("slow-child.sh"), None);
+        complete_replace(fixture.wrap.clone(), &fixture.master, None, NEW_PLUGIN);
+        assert!(!fixture
+            .master
+            .entry
+            .quiesce_requested
+            .load(Ordering::Acquire));
+        assert!(!fixture.master.entry.quiesce_done.load(Ordering::Acquire));
+
+        complete_replace(
+            fixture.wrap.clone(),
+            &fixture.master,
+            None,
+            "third-effect.clap",
+        );
+        assert!(!fixture
+            .master
+            .entry
+            .quiesce_requested
+            .load(Ordering::Acquire));
+        assert!(!fixture.master.entry.quiesce_done.load(Ordering::Acquire));
+    }
+
+    /// #625 audit A-1: a tenant handoff must clear the previous tenant's sticky health verdict.
+    ///
+    /// `measurement_invalid` is latched by the watchdog when it gives up on a child and is
+    /// never cleared anywhere else. Without a reset here, replacing a crash-looping effect
+    /// with a healthy one leaves the daemon reporting "measurement invalid" for the new
+    /// tenant until restart — every health-based diagnostic (and the E2E error-count oracle)
+    /// then reads a verdict about a plugin that is no longer loaded.
+    #[test]
+    fn replace_clears_the_previous_tenants_measurement_invalid_verdict() {
+        let fixture = fixture(fixture_script("slow-child.sh"), None);
+        fixture
+            .master
+            .stats
+            .measurement_invalid
+            .store(true, Ordering::Release);
+        complete_replace(fixture.wrap.clone(), &fixture.master, None, NEW_PLUGIN);
+        assert!(
+            !fixture
+                .master
+                .stats
+                .measurement_invalid
+                .load(Ordering::Acquire),
+            "the new tenant must not inherit the old tenant's measurement_invalid verdict"
+        );
+    }
+
+    #[test]
+    fn replace_without_bus_targets_master_slot() {
+        let fixture = fixture(
+            fixture_script("slow-child.sh"),
+            Some(fixture_script("slow-child.sh")),
+        );
+        let bus = fixture.bus.as_ref().expect("bus fixture");
+        let bus_pid = bus.old_pid;
+        complete_replace(fixture.wrap.clone(), &fixture.master, None, NEW_PLUGIN);
+        assert!(matches!(
+            &*fixture.master.slot.lock().expect("lock master"),
+            ChildSlot::Active { path, .. } if path == Path::new(NEW_PLUGIN)
+        ));
+        assert!(matches!(
+            &*bus.slot.lock().expect("lock bus"),
+            ChildSlot::Active { path, .. } if path == Path::new(BUS_PLUGIN)
+        ));
+        assert_eq!(bus.stats.current_child_pid.load(Ordering::Relaxed), bus_pid);
+        assert!(process_exists(bus_pid));
+    }
+
+    #[test]
+    fn replace_respects_stream_shutdown_latch() {
+        let fixture = fixture(fixture_script("slow-child.sh"), None);
+        fixture.master.entry.shutdown.store(true, Ordering::Release);
+        let error = fixture
+            .wrap
+            .replace_outproc_effect_plugin(PathBuf::from(NEW_PLUGIN), None, None, None)
+            .expect_err("shutdown latch must reject replacement before touching the slot");
+        assert!(matches!(&error, WrapError::OutProcEffect(message)
+            if message.contains("engine is stopping")));
+        assert!(matches!(
+            &*fixture.master.slot.lock().expect("lock master"),
+            ChildSlot::Active { path, .. } if path == Path::new(OLD_PLUGIN)
+        ));
+        assert!(fixture.master.entry.engaged.load(Ordering::Acquire));
+        assert!(!fixture
+            .master
+            .entry
+            .quiesce_requested
+            .load(Ordering::Acquire));
+        assert!(!fixture.master.entry.quiesce_done.load(Ordering::Acquire));
+
+        let entry = test_effect_slot_entry();
+        entry.quiesce_requested.store(true, Ordering::Release);
+        entry.quiesce_done.store(true, Ordering::Release);
+        entry.shutdown.store(true, Ordering::Release);
+        clear_quiesce_unless_shutdown(&entry);
+        assert!(entry.quiesce_requested.load(Ordering::Acquire));
+        assert!(entry.quiesce_done.load(Ordering::Acquire));
+
+        let entry = test_effect_slot_entry();
+        entry.quiesce_requested.store(true, Ordering::Release);
+        entry.quiesce_done.store(true, Ordering::Release);
+        clear_quiesce_unless_shutdown_with(&entry, || {
+            // Deterministic guard interleaving: Drop stores shutdown before requested.
+            entry.shutdown.store(true, Ordering::Release);
+            entry.quiesce_requested.store(true, Ordering::Release);
+        });
+        assert!(
+            entry.quiesce_requested.load(Ordering::Acquire),
+            "a shutdown request racing the clear must be restored"
+        );
+        assert!(!entry.quiesce_done.load(Ordering::Acquire));
     }
 }
 

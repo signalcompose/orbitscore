@@ -17,6 +17,71 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.366 feat(daemon): #625 Stage A — effect insert を同一スロットで建て直す (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #625（Stage A = Rust daemon。wire 公開と TS 配線は Stage B）
+**Status**: Rust daemon lib **186 → 202**（+16）/ fmt・clippy(`--all-targets -D warnings`) 警告 0 /
+sandbox 外で全ターゲット green（`tests/protocol.rs` の 28 件も含む）
+
+#### 実装
+
+`EngineWrap::replace_outproc_effect_plugin` を新設。`engaged=false` で dry 素通しへ落とし、
+既存の quiesce ペア（stop/done）で RT の transport 離脱を ack で待ち、supervisor detach +
+shm control reset のうえ**同一 shm へ新 child を attach** する。**RT コード（`orbit-audio-native`）は
+無変更**。子プロセスの制御語彙に差し替えコマンドが無い（`CONTROL_RUN`/`CONTROL_QUIT` のみ）ため、
+差し替えは必ず child の再 spawn になる。
+
+`bus_actives` はどの経路でも触らない（一度 true にした bus を false へ戻すと、その bus に tag された
+PlayAt イベントが消費されず retain される既存ハザードを踏むため）。
+
+#### 検証の経過 — 委譲先の green 報告の後に **7 件の欠陥**が出た
+
+| 発見者 | 手段 | 発見 |
+|---|---|---|
+| Codex | 変異 8 種（すべて「ガード・分岐を削除する」型） | 0（自分の変異はすべて自分のテストが検出） |
+| **main** | 変異 **9 種**（引数の取り違え・配線切断・順序・回数・境界） | **5 件** |
+| **Fable 監査** | 不在証明・API 意味論・設計整合 | **2 件（Important）** |
+
+main の変異で出た 5 件:
+
+1. **同型 `Arc<AtomicBool>` の位置引数取り違え**（`clear_quiesce_unless_shutdown`）— 入れ替えても
+   型検査を通り、shutdown 競合時の復元先が `done` に化けて guard が**偽の ack** を掴む
+2. 同じ欠陥クラスが **`OutProcTeardownGuard::new` にも残っていた**（1 箇所ずつ潰すと別の場所に残る）
+3. `entry.engaged` を RT と別 Arc にしても全テスト緑 = **dry 窓の配線を実証するテストが無かった**
+4. `ChildLaunch.engaged` を別 Arc にしても緑 = **プラグインがロードされても insert が一度も
+   適用されない（音が恒久的に dry）**状態を誰も検出できなかった
+5. guard の **latch 順序**（`shutdown` を `requested` より先に立てる）が、コメントで宣言されて
+   いるだけでテストに守られていなかった
+
+1・2 は**テストを足さず型で潰した**（引数を名前付き struct 1 つに畳み、取り違えを表現不能に）。
+Codex は自主的に `OutProcEffectPostProcessor::new` にも同じ欠陥があることを見つけて潰し、
+同型位置引数の**網羅列挙**（検索方法つき）を提出した。5 は Codex への修正が既に 2 回に達していた
+ため、規律に従い **main が直接修正**（`latch_then_request` に抽出し中間状態を観測するテストで固定）。
+
+#### Fable 監査の Important 2 件（変異検証では原理的に届かない層）
+
+| # | 実害 | 対応 |
+|---|---|---|
+| **A-1** | tenant handoff で前 tenant の `measurement_invalid` が残る。クラッシュループした effect を差し替えて**復旧しても** health が daemon 再起動まで「計測無効」を報告し続ける | reset を追加 + テスト（変異検証済み）。instrument は同じ位置で既にリセットしていた = **借りた機構の不変条件を継承し損ねていた** |
+| **B-1** | latch と clear が **store-buffering（Dekker）パターン**。`Release`/`Acquire` では再検査が stale な `shutdown=false` を読みうる → guard の要求が消え **ack 無し停止**。R27 が防ぐと主張する事象がメモリモデル層に残っていた | 4 アクセスを `SeqCst` 化（**両側揃えないと閉じない**）+ 理由をコメントに明記 |
+
+🔴 **B-1 にはテストが無い。** 論理的インターリーブでは再現できない層で、`loom` 相当のモデル検査
+でしか検証できない。設計書の失敗モード表には「この行の検出器はテストではなく**メモリ順序の指定**」
+と明記し、`loom` 導入は follow-up 判断として §9-6 に残した。**テストが無いことを黙って通さない。**
+
+#### 設計書の更新
+
+失敗モード表を **27 → 33 行**（1:1 維持）。うち 2 行は検出器がテストではない（R28 = コンパイラ /
+R33 = メモリ順序の指定）ことを列に明記。Stage B で踏む地雷 4 点を申し送りとして §7 に追記。
+
+#### 教訓
+
+**「変異が全部 red だった」は変異の種類に依存する。** Codex の 8 種はすべて「削除」型で、
+削除を検出するテストは既にあった。**壊し方の種類を変えた瞬間に 5 件出た。**
+さらに、変異検証そのものが届かない層（不在・メモリモデル）が 2 件あり、そこは別系統の目
+（Fable）でしか見えなかった。
+
 ### 6.365 docs(spec): #625 Stage 0 — 差し替え・削除を spec 側に先行させる (Aug 26, 2026)
 
 **Date**: 2026-08-26
