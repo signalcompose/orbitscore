@@ -966,6 +966,33 @@ describe('isDaemonNonErrorTracingLine (#605 stderr 転送の level 振り分け)
     expect(isDaemonNonErrorTracingLine('INFO something else entirely')).toBe(false)
   })
 
+  // #625 実機 E2E 実測: VST3/CLAP の host crate は **child プロセスの中にリンクされて動く**
+  // ので、行の出所は child でもタグは `[orbit-vst3-host]` を名乗る。判定を `-child` 終端に
+  // 限っていたため、host が `INFO ` を名乗っても ERROR へ倒れ、**state 復元のたびに正常動作が
+  // ERROR として記録されていた**（R-E4 がこれで落ちた）。
+  it('🔴 host crate のタグ（-child で終わらない）でも level を名乗れば非エラー', () => {
+    expect(
+      isDaemonNonErrorTracingLine(
+        'INFO [orbit-vst3-host] setComponentState after state restore returned 0x3 ' +
+          '(best-effort; audio state is already applied)',
+      ),
+    ).toBe(true)
+    expect(
+      isDaemonNonErrorTracingLine(
+        'INFO [orbit-vst3-effect-child] --plugin-id=X は Phase 1 VST3 effect では未使用',
+      ),
+    ).toBe(true)
+    // 🔴 タグを広げても「level を名乗らない行」「ERROR/WARN を名乗る行」は従来どおり
+    // エラー側に倒れること（緩めすぎて本物のエラーを飲み込んでいないことの確認）。
+    expect(
+      isDaemonNonErrorTracingLine('[orbit-vst3-host] IComponent::setState rejected the state'),
+    ).toBe(false)
+    expect(isDaemonNonErrorTracingLine('WARN [orbit-vst3-host] degraded')).toBe(false)
+    expect(isDaemonNonErrorTracingLine('ERROR [orbit-vst3-host] boom')).toBe(false)
+    // 自分のコンポーネントのタグでない行は、level を名乗っていても認めない。
+    expect(isDaemonNonErrorTracingLine('INFO [some-plugin-vendor] chatter')).toBe(false)
+  })
+
   // 実機の daemon が出す ANSI 色付き tracing 行（gated E2E の実測から採取）。
   const ansiInfoLine =
     '\x1b[2m2026-08-25T17:30:47.243628Z\x1b[0m \x1b[32m INFO\x1b[0m ' +

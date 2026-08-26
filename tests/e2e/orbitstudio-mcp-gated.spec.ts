@@ -2538,6 +2538,14 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const aIdentity = `fx625/effect/${catalog.clapEffectName}/0`
       const aStateRelativePath = 'states/e2e-effect-gain-025.state'
       const aStatePath = path.resolve(root, aStateRelativePath)
+      // 🔴 B にも **非 unity** の gain を登録する。B を unity(1.0) のままにすると、
+      // 「B が正しく透過している」と「B がロードされたが一度も適用されていない」が
+      // **数値として区別できない**（実測: unity B の RMS は bus-active dry と 10 桁一致した）。
+      // 後者は engaged の配線切断そのもので、変異検証で潰した欠陥と同じ症状。
+      // A=0.25 / B=0.5 / dry=1.0 にすると 3 状態が相互に区別できる。
+      const bIdentity = `fx625/effect/${catalog.vst3EffectName}/0`
+      const bStateRelativePath = 'states/e2e-effect-gain-050.state'
+      const bStatePath = path.resolve(root, bStateRelativePath)
 
       // A's state contract is shared by the CLAP/VST3 gain oracles: ORE1 + f64 LE.
       // Register it before the first declaration so R-E1 starts at gain 0.25.
@@ -2546,6 +2554,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       aState.writeUInt32LE(0x4f52_4531, 0)
       aState.writeDoubleLE(0.25, 4)
       fs.writeFileSync(aStatePath, aState)
+      const bState = Buffer.alloc(12)
+      bState.writeUInt32LE(0x4f52_4531, 0)
+      bState.writeDoubleLE(0.5, 4)
+      fs.writeFileSync(bStatePath, bState)
       const manifest = fs.existsSync(projectFile)
         ? (parse(fs.readFileSync(projectFile, 'utf8')) as {
             version?: number
@@ -2557,7 +2569,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         stringify({
           ...manifest,
           version: manifest.version ?? 1,
-          states: { ...(manifest.states ?? {}), [aIdentity]: aStateRelativePath },
+          states: {
+            ...(manifest.states ?? {}),
+            [aIdentity]: aStateRelativePath,
+            [bIdentity]: bStateRelativePath,
+          },
         }),
       )
 
@@ -2647,6 +2663,24 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           countErrors(afterB),
           `R-E2 replacement must add no ERROR lines. Log tail: ${afterB.slice(-1200)}`,
         ).toBe(errorsBeforeB)
+        // 🔴 child PID が出ただけでは「新テナントが state 込みで立ち上がった」ことにならない。
+        // 実測では PID 出現直後に測ると窓が遷移期間を拾い、B が 0.5x ではなく 0.6x に見えた
+        // （同じ機構で測った recoveredB は 0.5000x ちょうどだった）。盲目的に sleep を伸ばす
+        // のではなく、**B の state 復元ログという本物の信号**を待ってから測る。
+        const bRestoreMarker = `[plugin-state] restoring '${bIdentity}'`
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return log.includes(bRestoreMarker)
+          },
+          { intervalMs: 200, timeoutMs: 15_000, label: '#625 R-E2 B state restored' },
+        )
+        // 🔴 この待ちは「遷移が長いから」ではない（その説は反証済み）。待ちを 2.5s 足しても
+        // b は 0.5x へ収束せず、むしろ √1.5 側で安定した（0.0626 → 0.0630 → 0.0639）。
+        // 現時点の理解: b 区間だけ、同じ bus・同じ gain・同じ send を通る**余剰音が +50%**
+        // 混入している（グラフモデルと 0.2% 以内で一致する構成はこれのみ）。待ちは定常状態を
+        // 測るために残すが、**assert が落ちるのは製品側の異常を正しく検出しているため**。
+        await sleep(2500)
         await captureSegment('b')
 
         // R-E3 is the sole path-direct plugin declaration in this scenario.
@@ -2821,11 +2855,20 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
 
       const capture = fs.readFileSync(capturePath)
       const analysis = analyzeWavBuffer(capture, { windowMs: 100 })
+      // 🔴 区間の両端に 400ms のガードを入れる。壁時計と録音タイムラインの間にはスキューが
+      // あり、**次の操作の効果が窓の末尾に食い込む**。実測: b 区間の最後の 1 窓だけが
+      // 0.232（= dry の打点レベル 0.115/0.5）を拾い、それだけで区間 RMS が 1.5 倍に見えた
+      // （他の 5 窓は recoveredB と同じ 0.115 で、機構は正しく効いていた）。
+      // ガードは「遷移ではなく定常状態を測る」ためのもので、主張そのものは緩めていない。
+      const SEGMENT_GUARD_SEC = 0.4
       const audioRange = (segment: { from: number; to: number }) => ({
-        fromSec: Math.max(0, analysis.durationSec - (stopWall - segment.from) / 1000),
+        fromSec: Math.max(
+          0,
+          analysis.durationSec - (stopWall - segment.from) / 1000 + SEGMENT_GUARD_SEC,
+        ),
         toSec: Math.min(
           analysis.durationSec,
-          analysis.durationSec - (stopWall - segment.to) / 1000,
+          analysis.durationSec - (stopWall - segment.to) / 1000 - SEGMENT_GUARD_SEC,
         ),
       })
       const segmentRms = (name: string): number => {
@@ -2852,34 +2895,127 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const recoveredBRms = segmentRms('recoveredB')
       const restoredARms = segmentRms('restoredA')
       const removedDryRms = segmentRms('removedDry')
+      // 🔴 全区間の実測値を先に出す。1 つの assert で止まると残りの区間が見えず、
+      // 高価な実機実行を払い直すことになる（#625 実測で実際に起きた）。
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#625 R-E1-R-E7] segment RMS: ' +
+          JSON.stringify(
+            {
+              dryBaseline: dryRms,
+              a: aRms,
+              b: bRms,
+              failedDry: failedDryRms,
+              recoveredB: recoveredBRms,
+              restoredA: restoredARms,
+              removedDry: removedDryRms,
+              'b/a': bRms / aRms,
+              'b/dry': bRms / dryRms,
+              'a/dry': aRms / dryRms,
+              'failedDry/dry': failedDryRms / dryRms,
+              'removedDry/dry': removedDryRms / dryRms,
+            },
+            null,
+            0,
+          ),
+      )
+      // 🔴 窓ごとの生系列。区間 RMS が 1.5 倍でも、(a) 全窓が一様に高い＝定常的な増幅 と
+      // (b) 一部の窓だけ dry(1.0x) で残りが 0.5x ＝混在 は同じ集計値になる。原因の探索先が
+      // まったく違うので、集計だけで判断しない。
+      const segmentWindows = (segment: { from: number; to: number }): string => {
+        const range = audioRange(segment)
+        return (analysis.windows ?? [])
+          .filter((w) => w.startSec >= range.fromSec && w.startSec < range.toSec)
+          .map((w) => w.rms.toFixed(3))
+          .join(',')
+      }
+      // eslint-disable-next-line no-console
+      console.log('[#625 R-E1-R-E7] b windows: ' + segmentWindows(segments.b!))
+      // eslint-disable-next-line no-console
+      console.log('[#625 R-E1-R-E7] recoveredB windows: ' + segmentWindows(segments.recoveredB!))
+
+      // 🔴 決着させる観測: 区間ごとの onset 数。b が 9/3s なら「余剰イベント」、
+      // 6/3s のままなら「1 発あたりのエネルギー増」で、原因の探索先が変わる。
+      const segmentOnsets = (segment: { from: number; to: number }): number => {
+        const range = audioRange(segment)
+        return (analysis.onsets ?? []).filter((t) => t >= range.fromSec && t < range.toSec).length
+      }
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#625 R-E1-R-E7] segment onsets/3s: ' +
+          JSON.stringify({
+            dryBaseline: segmentOnsets(segments.dryBaseline!),
+            a: segmentOnsets(segments.a!),
+            b: segmentOnsets(segments.b!),
+            failedDry: segmentOnsets(segments.failedDry!),
+            recoveredB: segmentOnsets(segments.recoveredB!),
+            restoredA: segmentOnsets(segments.restoredA!),
+            removedDry: segmentOnsets(segments.removedDry!),
+          }),
+      )
+      // 🔴 比較の基準は **bus がアクティブな dry**（= failedDry / removedDry）であって、
+      // `dryBaseline` ではない。
+      //
+      // ⚠️ かつてここには「MX.4 の経路変化で √1.5 の差が出る」と書いていたが**それは誤り**
+      // だった。実測を完全グラフモデルと突き合わせると、busDry は
+      // `kick.wav の RMS 0.1230601 × 等パワーパン(1/√2) × (sum 1.0 + send 0.2) = 0.1044211`
+      // と **6 桁一致**する（実測 0.1044200）。つまり busDry の方が理論値どおりで、
+      // `dryBaseline` が低いのは **3 秒窓の先頭 1 秒が LOOP 開始レイテンシで無音**なため
+      // （エネルギーがきっかり 2/3 = 振幅 √(2/3)）。経路の違いではない。
+      // dryBaseline の待ちを 1 バー分足せば busDry と一致するはずである。
+      const busDryRms = failedDryRms
+      const withinTolerance = 0.15
+
+      // dryBaseline が主張できるのは「宣言前から音が流れている」ことだけ。
       expect(dryRms, 'dry baseline must be audibly non-silent').toBeGreaterThan(0.01)
+      expect(
+        relativeDelta(removedDryRms, busDryRms),
+        `bus-active dry must be reproducible (failedDry=${failedDryRms}, removedDry=${removedDryRms})`,
+      ).toBeLessThanOrEqual(withinTolerance)
+
+      // R-E1 / R-E2: gain は bus-active dry に対して素直に乗る（A=0.25 / B=0.5）。
       expect(aRms, 'R-E1 gain-0.25 A must remain audibly non-silent').toBeGreaterThan(0.002)
       expect(
-        bRms / aRms,
-        `R-E2 B/A RMS ratio must be about 4x (A=${aRms}, B=${bRms})`,
-      ).toBeGreaterThan(3.2)
-      expect(bRms / aRms).toBeLessThan(4.8)
+        relativeDelta(aRms / busDryRms, 0.25),
+        `R-E1 A must attenuate to 0.25x of bus-active dry (A=${aRms}, busDry=${busDryRms})`,
+      ).toBeLessThanOrEqual(withinTolerance)
       expect(
-        relativeDelta(bRms, dryRms),
-        `R-E2 unity-gain B RMS ${bRms} must match dry ${dryRms}`,
-      ).toBeLessThanOrEqual(0.15)
+        relativeDelta(bRms / busDryRms, 0.5),
+        `R-E2 B must attenuate to 0.5x of bus-active dry (B=${bRms}, busDry=${busDryRms})`,
+      ).toBeLessThanOrEqual(withinTolerance)
       expect(
-        relativeDelta(failedDryRms, dryRms),
-        `R-E3 failed replacement RMS ${failedDryRms} must match dry ${dryRms}`,
-      ).toBeLessThanOrEqual(0.15)
+        relativeDelta(bRms / aRms, 2),
+        `R-E2 B/A RMS ratio must be about 2x (A=${aRms}, B=${bRms})`,
+      ).toBeLessThanOrEqual(withinTolerance)
+
+      // 🔴 R-E3: 失敗後は **dry** であって A でも B でもないこと。B を非 unity にしてあるので
+      // 「dry と B が数値で区別できる」— unity B のままだと、この主張は原理的に立たない
+      // （「透過している」と「一度も適用されていない」が同じ数値になるため）。
       expect(failedDryRms, 'R-E3 failure must not stop the audio').toBeGreaterThan(0.01)
+      expect(
+        relativeDelta(failedDryRms, bRms),
+        `R-E3 failed replacement must NOT still sound like B (failedDry=${failedDryRms}, B=${bRms})`,
+      ).toBeGreaterThan(withinTolerance)
+      expect(
+        relativeDelta(failedDryRms, aRms),
+        `R-E3 failed replacement must NOT sound like A either (failedDry=${failedDryRms}, A=${aRms})`,
+      ).toBeGreaterThan(withinTolerance)
+
+      // R-E4 / R-E5: 再宣言だけで B へ戻り、swap-back で保存済みの A の音色が戻る。
       expect(
         relativeDelta(recoveredBRms, bRms),
         `R-E4 recovered B RMS ${recoveredBRms} must match original B ${bRms}`,
-      ).toBeLessThanOrEqual(0.15)
+      ).toBeLessThanOrEqual(withinTolerance)
       expect(
         relativeDelta(restoredARms, aRms),
         `R-E5 restored A RMS ${restoredARms} must match original A ${aRms}`,
-      ).toBeLessThanOrEqual(0.15)
+      ).toBeLessThanOrEqual(withinTolerance)
+
+      // R-E6: remove 後は bus-active dry へ戻り、routing は生きたまま音が流れ続ける。
       expect(
-        relativeDelta(removedDryRms, dryRms),
-        `R-E6 removed-effect RMS ${removedDryRms} must match dry ${dryRms}`,
-      ).toBeLessThanOrEqual(0.15)
+        relativeDelta(removedDryRms, bRms),
+        `R-E6 removed effect must NOT still sound like B (removedDry=${removedDryRms}, B=${bRms})`,
+      ).toBeGreaterThan(withinTolerance)
       expect(removedDryRms, 'R-E6 routing must keep audio flowing after remove').toBeGreaterThan(
         0.01,
       )

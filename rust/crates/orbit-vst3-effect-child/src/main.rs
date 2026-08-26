@@ -75,15 +75,30 @@ fn parse_args() -> Result<Args> {
 }
 
 #[cfg(target_os = "macos")]
+/// `--plugin-id` が Phase 1 の VST3 effect で使われないことを伝える通知。
+///
+/// 🔴 **`INFO ` の level トークンは飾りではない。** daemon の stderr は拡張側の router
+/// （`packages/engine/src/audio/rust-engine/daemon-client.ts` の
+/// `isDaemonNonErrorTracingLine`）へ流れ、**level を名乗らない child の行は fail-loud で
+/// `ERROR:` に倒れる**。カタログ名解決は常に pluginId を付けるので、この通知は
+/// **VST3 effect をカタログ名でロードするたび**に出る。level を落とすと、正常なロードが
+/// 毎回 ERROR として記録され、`get_log` の ERROR 件数を数える診断・gated E2E・LLM の
+/// 自己検証がすべて偽陽性になる（#625 の実機 E2E がこれで落ちた）。
+///
+/// 姉妹の `orbit-vst3-instrument-child` は既に同じ形で `INFO ` を名乗っている。
+fn unused_plugin_id_notice(plugin_id: &str) -> String {
+    format!(
+        "INFO [orbit-vst3-effect-child] --plugin-id={plugin_id} は Phase 1 VST3 effect では未使用"
+    )
+}
+
 fn main() -> Result<()> {
     let args = parse_args()?;
     let mmap = open_shared(&args.shm).with_context(|| format!("open_shared({:?})", args.shm))?;
     let region = region_ptr(&mmap);
 
     if let Some(plugin_id) = &args.plugin_id {
-        eprintln!(
-            "[orbit-vst3-effect-child] --plugin-id={plugin_id} は Phase 1 VST3 effect では未使用"
-        );
+        eprintln!("{}", unused_plugin_id_notice(plugin_id));
     }
 
     let state_bytes = match args.state.as_deref() {
@@ -182,4 +197,25 @@ fn main() -> Result<()> {
 fn main() -> std::process::ExitCode {
     eprintln!("orbit-vst3-effect-child is macOS-only (VST3/CoreFoundation)");
     std::process::ExitCode::FAILURE
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unused_plugin_id_notice;
+
+    /// この通知は失敗ではないので、daemon の stderr router が非エラーと判定できる形で
+    /// なければならない。router は `^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+-child\]\s`
+    /// にマッチする行だけを非エラーとして認める（`daemon-client.ts`）。
+    #[test]
+    fn unused_plugin_id_notice_declares_a_non_error_level_token() {
+        let line = unused_plugin_id_notice("6E33225254224A00AA69301AF318797D");
+        assert!(
+            line.starts_with("INFO [orbit-vst3-effect-child] "),
+            "notice must declare a non-error level token and the child tag: {line}"
+        );
+        assert!(
+            line.contains("6E33225254224A00AA69301AF318797D"),
+            "notice must name the ignored plugin id: {line}"
+        );
+    }
 }
