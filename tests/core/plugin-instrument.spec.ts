@@ -238,6 +238,42 @@ describe('PluginInstrumentManager', () => {
     expect(global.hasOpenPluginUi('kick', 0)).toBe(true)
   })
 
+  it('rebuilds a forgotten UI session when the child reports that it is already open', async () => {
+    mockStateSave()
+    const closeFailure = new Error('CLOSE_UI transport disconnected')
+    const closePluginUi = vi
+      .fn()
+      .mockRejectedValueOnce(closeFailure)
+      .mockResolvedValueOnce('safepoint-completed')
+    const alreadyOpen = new Error(
+      "Plugin UI request for 'kick' index 0 failed: [PLUGIN_UI_COMMAND_ERROR] " +
+        'plugin state mailbox command 7 failed (result=2): already-open',
+    )
+    const openPluginUi = vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(alreadyOpen)
+    const { global } = makeGlobal(vi.fn().mockResolvedValue({}), undefined, {
+      closePluginUi,
+      openPluginUi,
+    })
+    const sequence = global.seq.setName('kick')
+    await global.instrument('kick', 'synth.clap', 'old-id')
+    await sequence.ui()
+
+    await expect(global.instrument('kick', 'other.vst3', 'new-id')).rejects.toThrow(
+      'CLOSE_UI transport disconnected',
+    )
+    expect(global.hasOpenPluginUi('kick', 0)).toBe(false)
+
+    await expect(sequence.ui()).resolves.toBe(sequence)
+    expect(openPluginUi).toHaveBeenCalledTimes(2)
+    expect(global.hasOpenPluginUi('kick', 0)).toBe(true)
+
+    // Rebuilt bookkeeping is usable by the close path, not merely visible to
+    // the idempotent fast-path.
+    await expect(sequence.ui(0, false)).resolves.toBe(sequence)
+    expect(closePluginUi).toHaveBeenCalledTimes(2)
+    expect(global.hasOpenPluginUi('kick', 0)).toBe(false)
+  })
+
   it('T3 aborts replacement and keeps the old chain when automatic state saving fails', async () => {
     const failure = new Error('state mailbox failed')
     const save = vi.spyOn(ProjectStateStore.prototype, 'save').mockRejectedValue(failure)

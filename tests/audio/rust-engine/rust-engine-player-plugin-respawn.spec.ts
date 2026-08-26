@@ -101,6 +101,29 @@ describe('RustEnginePlayer plugin note ordering', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("instrument 'plugin:kick'"))
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("instrument 'plugin:lead'"))
   })
+
+  it('re-arms the warning when the same instrument becomes inactive a second time', async () => {
+    const { player, daemon } = createHarness()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const deactivate = async () => {
+      await player.loadPlugin('/plugins/old.clap', 'old-id', 'instrument', undefined, 'plugin:kick')
+      const transportFailure = new Error('socket closed before ReplacePlugin response')
+      daemon.replacePlugin.mockRejectedValueOnce(transportFailure)
+      await expect(
+        player.replacePlugin('/plugins/new.vst3', 'new-id', 'instrument', undefined, 'plugin:kick'),
+      ).rejects.toBe(transportFailure)
+    }
+
+    await deactivate()
+    await player.pluginNoteOn(60, 0, 1, 'plugin:kick')
+    await player.pluginNoteOff(60, 0, undefined, 'plugin:kick')
+    expect(warn).toHaveBeenCalledTimes(1)
+
+    await deactivate()
+    await player.pluginNoteOn(60, 0, 1, 'plugin:kick')
+    await player.pluginNoteOff(60, 0, undefined, 'plugin:kick')
+    expect(warn).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('RustEnginePlayer plugin recovery after daemon respawn', () => {

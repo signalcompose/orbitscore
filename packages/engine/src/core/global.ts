@@ -938,6 +938,20 @@ export class Global {
     }
   }
 
+  /** Record the resolved child session and preserve one-entry-per-address invariants. */
+  private recordPluginUiSession(
+    receiverId: string,
+    index: number,
+    resolved: ResolvedPluginStateTarget,
+  ): void {
+    this.forgetPluginUiSession(receiverId, index)
+    this.openPluginUiSessions.set(pluginUiSessionKey(resolved.daemonTarget, index), {
+      receiverId,
+      index,
+      resolved,
+    })
+  }
+
   /**
    * DSL 面（`seq.ui()` / `sum("x").ui()`）用の**冪等な** open（#619 R2）。
    *
@@ -945,8 +959,9 @@ export class Global {
    *
    * 1. **fast path**: セッション簿記に既にあれば daemon へ行かず no-op。
    *    respawn による staleness はコンストラクタのリスナが即時破棄するので誤認しない
-   * 2. **防御**: 判定後〜open 完了前の race で child が「already open」を返したら
-   *    成功扱いにする。判定の権威は child の状態機械（TS 側の簿記より新しい）
+   * 2. **防御と再同期**: 判定後〜open 完了前の race、または曖昧な close 後に child が
+   *    「already open」を返したら、現在の target を再解決してセッション簿記を再構築する。
+   *    判定の権威は child の状態機械（TS 側の簿記より新しい）
    *
    * MCP / REPL メタ行はこのメソッドを**使わない**（明示操作は二重 open を loud に落とす）。
    */
@@ -968,6 +983,11 @@ export class Global {
         message.includes('OPEN_UI requested while lifecycle is Open') ||
         message.includes('already-open')
       ) {
+        // openPluginUi failed after its initial resolution, so resolve again at
+        // the recovery boundary. A missing/replaced target must remain loud;
+        // registering a guessed identity would corrupt subsequent close/save.
+        const resolved = this.resolvePluginStateTarget(receiverId, index)
+        this.recordPluginUiSession(receiverId, index, resolved)
         return
       }
       throw error
@@ -1011,12 +1031,7 @@ export class Global {
     // daemonTarget が変わる再 open では複合キーが別になり set では上書きされず、
     // closePluginUi の find が Map の挿入順＝stale 側を掴んでしまうため。
     // evict は daemon open 成功後に行う（open 失敗時に旧セッションを失わない）。
-    this.forgetPluginUiSession(receiverId, index)
-    this.openPluginUiSessions.set(pluginUiSessionKey(resolved.daemonTarget, index), {
-      receiverId,
-      index,
-      resolved,
-    })
+    this.recordPluginUiSession(receiverId, index, resolved)
     return {
       receiver: receiverId,
       index,
@@ -1054,7 +1069,9 @@ export class Global {
       completion = await this.audioEngine.closePluginUi(session.resolved.daemonTarget, index)
     } catch (error) {
       // ウィンドウの生死が不明（close タイムアウト等）なのでセッションは破棄しない。
-      // 実際に消えていた場合は次の open が上書きする。
+      // prepareInstrumentReplacement と違い、明示 close / sum.ui(false) は従来どおり
+      // 保持する。後に簿記が失われても、次の idempotent open が child の already-open
+      // 応答から同じ recordPluginUiSession 経路で再構築するため、別の回収規則は作らない。
       throw this.pluginUiOperationError(receiverId, index, error)
     }
     // DONE を受けた = ウィンドウは確実に閉じた。safepoint 保存成功時は保存側が破棄済み。

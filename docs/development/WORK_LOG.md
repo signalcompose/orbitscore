@@ -23,6 +23,36 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 **Issue**: #618（PR-2 = TS 表面 + gated E2E。PR-1 = #621 は daemon 機構）
 **Status**: TS **2034 passed** / lint 0 / **実機 gated E2E 7/7 green**（#618 E1-E6 を含む）
 
+#### PR-2 R2: **前の fix が置いた前提が両方とも壊れていた**（Critical + Important・fix 起因）
+
+前の fix は2つとも「**ユーザーが気づいて再評価すれば収束する**」を前提に台帳を忘れる判断をした。
+その前提が両方とも成立していなかった:
+
+| 前提 | 実際 |
+|---|---|
+| ノート drop の警告で気づく | `warnOnce` の dedup が `stopAll()` まで残り、**2回目以降は完全に無音** |
+| 次の `ui()` で収束する | 「already open を成功扱い」が**セッションを登録しない** → 簿記は空のまま |
+
+1件目は、**前ラウンドで Critical と認定した「気づけない」状態を、今回追加した警告自身が
+2回目以降は出せないという形で再生産**していた。
+
+2件目は **#619 で main が書いたコードの欠陥**。当時は fast-path があるので
+「既に開いている＝簿記にある」が前提だったが、簿記を忘れる経路を作ったことで
+「簿記には無いが実際には開いている」状態が生まれ、そこを通ると `close_plugin_ui` が
+**「もう閉じている」という誤った診断**で落ちる（実際にはまだ開いている）。
+
+**ポリシー**: 「復旧できる」と主張する設計は、**その復旧経路が実在することまで含めて成立する**。
+忘れる判断自体は正しい。**忘れた後の回復経路を実在させる**のが修正。
+
+- `markPluginInactive()`: 非活性化のたびに `pluginInactive:<instance>` の dedup を落とす
+  （「1回の非活性化につき1回警告」の意味論）
+- `recordPluginUiSession()`: already-open を成功扱いした時に簿記を戻す。
+  これにより **MCP の明示 close 等、別経路の stale も次の open で収束する**
+
+**main 独自の変異**: 再 arm を外す → 新テスト red / セッション登録を外す → 新テスト red。
+
+分類テストが新設ヘルパ `recordPluginUiSession` を捕捉（**今日3度目**）。内部 API として登録。
+
 #### PR-2 レビュー: Critical 1（2つの帳簿が同じ不確実性に逆の判断をしていた）
 
 silent-failure-hunter が発見。**差し替えが transport 失敗（daemon が commit したか不明）で

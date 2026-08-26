@@ -47,12 +47,24 @@ function spyGlobal(): {
   //
   // 🔴 R2 の教訓: `openPluginUiIdempotent` そのものは stub しない（stub すると
   // fast path・already-open catch・staleness の実装を検証できない）。
-  // stub するのは境界（hasOpenPluginUi の判定源と openPluginUi の daemon 呼び出し）だけ。
+  // stub するのは境界（hasOpenPluginUi の判定源、openPluginUi の daemon 呼び出し、
+  // already-open 後に再同期する現在 target の解決）だけ。
   const openTargets = new Set<string>()
   ;(global as unknown as { hasOpenPluginUi: unknown }).hasOpenPluginUi = (
     receiverId: string,
     index: number,
   ) => openTargets.has(`${receiverId}#${index}`)
+  ;(global as unknown as { resolvePluginStateTarget: unknown }).resolvePluginStateTarget = (
+    receiverId: string,
+  ) => ({
+    identity: {
+      receiver: receiverId,
+      role: 'instrument',
+      normalizedName: 'mock-plugin',
+      occurrence: 0,
+    },
+    daemonTarget: { role: 'instrument', instance: `plugin:${receiverId}` },
+  })
   return { global, player, open, close, openTargets }
 }
 
