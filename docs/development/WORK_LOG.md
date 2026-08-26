@@ -17,6 +17,66 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.363 fix(e2e): 実利用の経路へ全面的に寄せる — 標準プラグインディレクトリ + カタログ名 + audioPath (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #618（PR-2 の続き）/ 派生 #623
+**Status**: TS **2042 passed** / lint 0 / **実機 gated E2E 7/7 green**
+
+#### 🔴 owner 指摘（3段階で深まった）
+
+1. > effect やインストルメントがフルパスになってるのは改善したい
+2. > **不便云々の前に E2E テストと利用の実態が乖離してることが問題だろ**
+3. > **むしろ特殊なディレクトリに入れてるのがダメでしょ**
+
+main は最初「名前でもロードできます（実装済み）」と答えて**論点を外した**。問題は機能の有無ではなく
+**E2E が本番の経路を通っていないこと**。さらに fixture を tmp + `ORBIT_PLUGIN_PATH` に置くこと自体が
+実態と違う（実ユーザーは標準ディレクトリに入れる）。
+
+#### 変更（17箇所 + 設置方法）
+
+| 対象 | 変更後 |
+|---|---|
+| instrument / effect 15箇所 | **カタログ名**（`list_plugins` から動的取得・ハードコードしない） |
+| audio 2箇所 | **`global.audioPath()` + ファイル名** |
+| fixture の設置先 | tmp + `ORBIT_PLUGIN_PATH` → **`~/Library/Audio/Plug-Ins/{CLAP,VST3}`**（標準） |
+
+`ORBIT_PLUGIN_PATH` は起動 env から削除（継承値も明示的に除外）。
+broken bundle も標準ディレクトリへ — 「**ユーザーのフォルダに壊れたプラグインがある**」状況こそが
+rescan 失敗テストの実態。
+
+**パス形式のまま残したのは「存在しないプラグイン」の失敗テストのみ**。カタログ名だと TS の
+名前解決段階で落ち、daemon の rollback / エラー経路まで到達しないため。
+
+#### 🔴 実利用の経路へ寄せた瞬間に欠陥が3件出た
+
+1. **`--plugin-id` の警告**: カタログ解決は pluginId を**自動で補う**が VST3 は使わない。
+   パス直指定では渡さないので**一度も踏まれていなかった**
+2. **chunk 境界での行分割**: `onStderrData` が chunk をそのまま `split` するため、行が
+   チャンクを跨ぐと後半が独立した「行」になり ERROR に分類される。
+   → `createDaemonStderrLineRouter` として**純関数に抽出**して修正（クロージャ内では
+   テストできない）。変異は両方向で red
+3. **🔴 stale bundle の先勝ち**（Fable が実証）: `~/Library/Audio/Plug-Ins/CLAP/` に 7/28 の
+   古いビルドが残留し、`clap.state` を持たない実体が**カタログ順の先頭**として選ばれていた。
+   ロードも音も正常なので **state 保存まで進んで初めて分かる**
+
+#### stale bundle 問題は製品の欠陥でもある（#623 起票）
+
+**dedup は後勝ち（PC.5）なのに resolve は先勝ち**という方針の矛盾。同じプラグインを2箇所に
+持つ実ユーザーは**どちらがロードされるか制御できない**。修正案3つを trade-off つきで #623 に整理。
+
+緩和として E2E setup に「**その表示名のカタログ候補が全体で1件であること**」の検査を追加。
+
+#### 安全策: owner のプラグインに触れない
+
+`~/Library/Audio/Plug-Ins/VST3/` には owner 本人のプラグイン（242R / SuaraPortal）がある。
+**固定名5パスの allowlist を通らない削除は例外を投げる**設計にし、ディレクトリ単位の削除・
+glob・全 `.clap` 走査は書かない。実機実行後に owner のプラグインが無傷であることを確認済み。
+
+正常 fixture は**ビルド成果物への symlink** なので staleness が構造的に起きない。
+
+---
+
 ### 6.362 fix: E2E を本番経路（カタログ名）へ寄せ、そこでしか出ない欠陥2件を潰した (Aug 26, 2026)
 
 **Date**: 2026-08-26
