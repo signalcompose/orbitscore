@@ -15,6 +15,8 @@ import {
 export class PluginEffectManager {
   /** v1 master insert を固定 key の chain（上限 1）に載せる。 */
   private readonly slots: EffectChainMap<'master'>
+  /** LinkAudio exclusion stays closed once this master insert has ever been declared. */
+  private hasDeclared = false
 
   constructor(
     audioEngine: AudioEngine,
@@ -30,7 +32,7 @@ export class PluginEffectManager {
   }
 
   hasDeclaration(): boolean {
-    return this.slots.has('master')
+    return this.hasDeclared || this.slots.has('master')
   }
 
   hasUncertain(): boolean {
@@ -60,6 +62,7 @@ export class PluginEffectManager {
       () =>
         'global.effect() supports one master insert in v1; effect chains are reserved for future support.',
     )
+    this.hasDeclared = true
   }
 
   async remove(spec: string, occurrence = 0): Promise<void> {

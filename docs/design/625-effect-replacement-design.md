@@ -61,7 +61,7 @@ throw の実体は `EffectChainMap.declareBody`（`effect-slot.ts:264-274`）。
 
 以下がすべて満たされたとき done:
 
-1. `global.effect(A)`→`global.effect(B)` / `seq.effect(A)`→`seq.effect(B)` / `sum("x").effect(A)`→`.effect(B)` / `aux("x").effect(A)`→`.effect(B)` の4経路すべてが、**エンジン再起動なし・楽譜再評価のみ**で B の音になる。実証は gated E2E（§6 FM-R26）で、(i) capture WAV の区間 RMS 比が A/B の gain 差を反映、(ii) 旧 child PID 消滅 + 新 child PID 出現、(iii) `get_log` の ERROR 行数が増えない、の3オラクル全通過。
+1. `global.effect(A)`→`global.effect(B)` / `seq.effect(A)`→`seq.effect(B)` / `sum("x").effect(A)`→`.effect(B)` / `aux("x").effect(A)`→`.effect(B)` の4経路すべてが、**エンジン再起動なし・楽譜再評価のみ**で B の音になる。4経路は unit test と共通 daemon 機構で実証し、gated E2E（§6 FM-R26）は seq 経路で (i) capture WAV の区間 RMS 比、(ii) 旧 child PID 消滅 + 新 child PID 出現、(iii) `get_log` の ERROR 行数不変の3オラクルを、master 経路で PID/ERROR の最小オラクルを実証する。sum/aux は unit test と daemon 機構の同一性で被覆する。
 2. ロード失敗注入（存在しないパス）時、(i) teardown 前失敗では旧 effect が鳴り続ける（rust unit FM-R7 + TS unit FM-R13）、(ii) teardown 後失敗では bus が dry pass-through で鳴り続け（無音にならない・bus_active true 維持 = FM-R8）、同じ宣言の再発行だけで復旧する（FM-R9、E2E でも実証）。
 3. 差し替え・削除の直前に旧 insert の state が project.yaml 配下へ自動保存され（FM-R12/R22）、旧 spec の再宣言で `[plugin-state] restoring` 経由の復元が起きる（E2E で実証）。
 4. `remove("名前")` が 4 経路（global / seq / sum / aux）で動き、bus は解放されず routing が生き残る（FM-R19/R20/R21）。

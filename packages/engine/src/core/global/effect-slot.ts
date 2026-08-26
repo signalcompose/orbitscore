@@ -82,6 +82,12 @@ export interface InstrumentSlot extends PluginSlotBase {
 
 export type PluginSlot = EffectSlot | InstrumentSlot
 
+interface UncertainReplacement {
+  readonly bus: string | undefined
+  /** The forgotten effect tenant still deserves best-effort cleanup on recovery. */
+  readonly forgottenSlot?: PluginSlot
+}
+
 /**
  * 1 宣言分の入力。`normalizedName`（instance identity 用の表示名）と `resolvedPath`
  * （ロード対象の実ファイル）は意味が全く違うのに同じ `string` なので、位置引数で並べず
@@ -158,8 +164,8 @@ export class EffectChainMap<K> {
   private readonly statePathFallback?: PluginStatePathFallbackResolver
   private readonly externalReceiverId?: (key: K) => string
   private readonly replacement?: EffectChainMapOptions<K>['replacement']
-  /** A transport failure leaves daemon commit status unknown; value retains its effect bus. */
-  private readonly uncertainReplacements = new Map<K, string | undefined>()
+  /** A rejected ensure leaves commit status unknown and retains cleanup context. */
+  private readonly uncertainReplacements = new Map<K, UncertainReplacement>()
   // key ごとの直列化キュー（#527 review Important 1）。値は「前呼び出しの決着
   // （成功/失敗いずれも）待ち」で、前呼び出しの成否は自分の結果に影響させない
   // （catch で握りつぶし、必ず次の呼び出しへ進める）。
@@ -268,14 +274,16 @@ export class EffectChainMap<K> {
   ): Promise<void> {
     const receiver = this.externalReceiverId?.(key) ?? this.receiverId(key)
     const existing = this.chains.get(key)?.[0]
-    if (!existing && !this.uncertainReplacements.has(key)) {
+    const uncertain = this.uncertainReplacements.get(key)
+    const cleanupSlot = existing ?? uncertain?.forgottenSlot
+    if (!cleanupSlot && !uncertain) {
       throw new Error(
         `${receiver}: remove("${expectedNormalizedName}") — no effect insert is declared.`,
       )
     }
-    if (existing && existing.normalizedName !== expectedNormalizedName) {
+    if (cleanupSlot && cleanupSlot.normalizedName !== expectedNormalizedName) {
       throw new Error(
-        `${receiver}: remove("${expectedNormalizedName}") does not match the declared insert '${existing.normalizedName}'.`,
+        `${receiver}: remove("${expectedNormalizedName}") does not match the declared insert '${cleanupSlot.normalizedName}'.`,
       )
     }
     if (occurrence !== 0) {
@@ -290,13 +298,15 @@ export class EffectChainMap<K> {
     if (existing) {
       await existing.load
       await this.replacement?.beforeReplace(key, existing)
+    } else if (cleanupSlot) {
+      await this.beforeReplaceForgottenSlot(key, cleanupSlot)
     }
-    const bus = existing?.role === 'effect' ? existing.bus : this.uncertainReplacements.get(key)
+    const bus = existing?.role === 'effect' ? existing.bus : uncertain?.bus
     try {
       await this.audioEngine.unloadPlugin('effect', bus)
     } catch (error) {
       this.chains.delete(key)
-      this.uncertainReplacements.set(key, bus)
+      this.uncertainReplacements.set(key, { bus, forgottenSlot: cleanupSlot })
       throw error
     }
     this.chains.delete(key)
@@ -358,6 +368,8 @@ export class EffectChainMap<K> {
       throw new Error('Plugin replacement requires the Rust engine backend.')
     }
     const { role, bus, normalizedName, resolvedPath, pluginId, instance } = spec
+    const uncertain = this.uncertainReplacements.get(key)
+    const forgottenSlot = existing === undefined ? uncertain?.forgottenSlot : undefined
     const chain = this.chains.get(key) ?? []
     const occurrence = chain.filter(
       (slot) => slot !== existing && slot.normalizedName === normalizedName,
@@ -387,6 +399,7 @@ export class EffectChainMap<K> {
     }
 
     if (existing) await this.replacement!.beforeReplace(key, existing)
+    else if (forgottenSlot) await this.beforeReplaceForgottenSlot(key, forgottenSlot)
     let result: Awaited<ReturnType<NonNullable<AudioEngine['replacePlugin']>>>
     try {
       result = await this.audioEngine.replacePlugin(
@@ -398,10 +411,13 @@ export class EffectChainMap<K> {
     } catch (error) {
       if (this.replacement!.failurePolicy === 'forget-and-ensure') {
         this.chains.delete(key)
-        this.uncertainReplacements.set(key, role === 'effect' ? bus : undefined)
+        this.uncertainReplacements.set(key, {
+          bus: role === 'effect' ? bus : undefined,
+          forgottenSlot: existing ?? forgottenSlot,
+        })
       } else if (!(error instanceof DaemonProtocolError)) {
         if (existing) this.chains.delete(key)
-        this.uncertainReplacements.set(key, undefined)
+        this.uncertainReplacements.set(key, { bus: undefined })
       }
       throw error
     }
@@ -441,6 +457,18 @@ export class EffectChainMap<K> {
     )
     this.uncertainReplacements.delete(key)
     if (result.quarantinedSlot) this.replacement!.onQuarantinedSlot?.(key)
+  }
+
+  private async beforeReplaceForgottenSlot(key: K, oldSlot: PluginSlot): Promise<void> {
+    try {
+      await this.replacement!.beforeReplace(key, oldSlot)
+    } catch (error) {
+      const receiver = this.externalReceiverId?.(key) ?? this.receiverId(key)
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(
+        `[effect-replace] ⚠️ Best-effort cleanup of the uncertain old effect for '${receiver}' failed; replacement/removal will continue: ${message}`,
+      )
+    }
   }
 
   private async issueLoad(key: K, spec: PluginDeclaration, replacing?: PluginSlot): Promise<void> {

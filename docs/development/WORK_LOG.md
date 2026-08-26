@@ -17,6 +17,57 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.372 fix: PR #627 レビュー ラウンド1 の指摘を修正 (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625 / PR #627
+**Status**: TS **2071 passed** / Rust workspace 全クレート 0 failed / fmt・clippy 警告 0
+
+`/code:pr-review-team`（4レビュアー）+ Fable 最終監査の指摘を重複排除して集約。
+**Critical 0 / Important 6 / Minor 5**。うち **2 件は複数の目が独立に一致**した。
+
+#### 横断的ポリシー（指摘単位のローカルパッチにしないため先に決めた）
+
+> **「登記を忘れる」ことと「後始末を諦める」ことは別物である。**
+> 忘れた slot の情報は保持し、次回の差し替えで `beforeReplace` を試みる。ただし旧が既に
+> 消えている可能性があるので **best-effort**（通常経路は保存失敗＝中止のまま、復旧経路では
+> warn して続行）。この非対称は load-bearing で、復旧時に中止すると E2E R-E4 が実証している
+> 「再宣言だけで復旧する」が成立しなくなる。
+
+#### Important 6 件
+
+| # | 指摘 | 検出 |
+|---|---|---|
+| I-1 | 事前解体失敗の後、**state 自動保存と UI クローズが黙ってスキップ**（silent data loss） | silent-failure-hunter + code-reviewer（**独立に一致**） |
+| I-2 | master の `remove()` 成功が **linkAudio 排他ゲートを再び開く** | Fable + pr-test-analyzer（**独立に一致**） |
+| I-3 | 「audio thread はこれらに触らない」というコメントが**事実と異なる**（`quiesce_requested` は毎コールバック読まれる） | comment-analyzer |
+| I-4 | **反証済みの仮説**が E2E コメントに残っていた（**3 箇所目**） | comment-analyzer + Fable |
+| I-5 | spec が「再宣言だけで復旧」と**無条件に**約束していた（unrecoverable な attach 失敗は再起動が要る） | Fable |
+| I-6 | 設計書の完了条件と**実際の E2E 被覆**の食い違い（seq 全量・master 最小・sum/aux は E2E ゼロ） | Fable + pr-test-analyzer |
+
+I-1 は「**その契約が最も効いてほしい局面でだけ**破る」形だった。daemon 側は quiesce timeout /
+already in progress / engine is stopping で**旧を無傷で保つ**のに、TS が登記を忘れるため
+次の宣言で本物の teardown が起き、その直前の保存が一度も走らない。
+
+#### 🔴 main のミス 3 件（この期間に発生・すべて訂正済み）
+
+1. **Linux ビルドを壊した**（CI が fail）— python パッチが `fn main` の
+   `#[cfg(target_os = "macos")]` を巻き込んで削除。**macOS でしか検証していなかった**うえ、
+   **CI を確認せずに次へ進んだ**。修正したら 2 件目（テストモジュールの cfg 不整合）が出た
+2. **自分が書いたテストにコンパイルエラー**（未使用代入・`-D warnings` で error）
+3. **CI ランナーを macOS へ切り替えた** — owner 方針（コストが高いので回さない）を確認せずに。
+   **指示（「Linux をターゲットから外していい」）を勝手に拡大解釈**した。差し戻し済み
+
+#### CI の限界を明文化（ランナーは ubuntu のまま）
+
+3 の差し戻しで残った事実: **ubuntu ランナーは child crate の
+`#[cfg(not(target_os = "macos"))]` スタブしかコンパイルしない**ので、**出荷される macOS 実装は
+この job では一度も検証されない**。#625 で落ちた時に捕まえたのもスタブ側の cfg 不整合だった。
+
+ランナーは変えず、**この job が保証しないもの**を workflow のヘッダに明記した:
+「green は移植可能な部分が壊れていないことの証明であって、出荷物が動くことの証明ではない。
+後者は main が手元 macOS で回すマージ前ゲートが担う。**この job だけを根拠にマージしない**」。
+
 ### 6.371 refactor: /simplify の指摘を適用（規律を「破れない形」へ）(Aug 27, 2026)
 
 **Date**: 2026-08-27

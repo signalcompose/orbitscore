@@ -2283,7 +2283,9 @@ fn clear_quiesce_unless_shutdown(entry: &EffectSlotEntry) {
 /// it, the audio thread therefore never acks, and the stream owner stops without a real
 /// quiesce. A single total order over these two accesses removes the interleaving.
 ///
-/// The cost lands on the control thread only — the audio thread does not touch these.
+/// The `SeqCst` stores are confined to these two control-thread code paths. The audio thread
+/// reads the same `quiesce_requested` atomic with `Acquire` on every callback, but performs no
+/// `SeqCst` operation; the `shutdown` atomic itself remains control-thread-only.
 ///
 /// **This is not covered by a test.** Logical interleaving (the `after_clear` hook) cannot
 /// reproduce a memory-ordering relaxation; only a model checker such as `loom` could.
@@ -3568,7 +3570,7 @@ impl EngineWrap {
         // operator reading the log needs to know (#625 audit C-1).
         if entry.shutdown.load(Ordering::Acquire) {
             return Err(WrapError::OutProcEffect(
-                "engine is stopping after the previous effect was torn down;                  the bus is passing through dry"
+                "engine is stopping after the previous effect was torn down; the bus is passing through dry"
                     .into(),
             ));
         }
@@ -3653,6 +3655,10 @@ impl EngineWrap {
             if !entry.shutdown.load(Ordering::Acquire) {
                 entry.engaged.store(true, Ordering::Release);
             }
+            tracing::warn!(
+                slot = %effect_slot_label(target),
+                "effect replacement quiesce ack timed out; the previous effect is kept"
+            );
             return Err(WrapError::OutProcEffect(
                 "effect replacement quiesce ack timed out; the previous effect is kept".into(),
             ));
@@ -3668,6 +3674,10 @@ impl EngineWrap {
                     if !entry.shutdown.load(Ordering::Acquire) {
                         entry.engaged.store(true, Ordering::Release);
                     }
+                    tracing::warn!(
+                        slot = %effect_slot_label(target),
+                        "effect replacement teardown expected an Active slot"
+                    );
                     return Err(WrapError::OutProcEffect(format!(
                         "effect replacement teardown expected an Active {} slot",
                         effect_slot_label(target)

@@ -76,8 +76,8 @@ pub fn child_info(tag: &str, message: impl Display) -> String {
 mod tests {
     use super::{child_info, child_notice, NoticeLevel};
 
-    /// TS 側 router（`daemon-client.ts` の `isDaemonNonErrorTracingLine`）が要求する形。
-    /// ここを緩めると、正常動作が ERROR として記録される障害が 3 回目の再発をする。
+    /// TS 側 router 判定のうち load-bearing な2条件（非エラー level と `orbit-` tag）だけを
+    /// 模した簡略版。実際の正規表現が課す tag の文字種までは検証しない。
     fn accepted_by_router(line: &str) -> bool {
         let mut parts = line.splitn(3, ' ');
         let level = parts.next().unwrap_or_default();

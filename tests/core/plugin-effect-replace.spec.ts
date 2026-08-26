@@ -406,6 +406,54 @@ describe('effect plugin replacement (#625 Stage B)', () => {
     )
   })
 
+  it('I-1 retries forgotten-slot cleanup best-effort before recovery replacement', async () => {
+    const save = mockStateSave()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const quiesceTimeout = new DaemonProtocolError(
+      'OUTPROC_EFFECT_RUNTIME',
+      'effect replacement quiesce ack timed out; the previous effect is kept',
+    )
+    const replacePlugin = vi
+      .fn()
+      .mockRejectedValueOnce(quiesceTimeout)
+      .mockResolvedValueOnce(REPLACE_RESULT)
+    const { global } = makeGlobal({ replacePlugin })
+    await global.effect('old.clap', 'old-id')
+
+    await expect(global.effect('new.vst3', 'new-id')).rejects.toBe(quiesceTimeout)
+    expect(masterChain(global)).toEqual([])
+    const recoverySaveFailure = new Error('old effect is already unavailable')
+    save.mockRejectedValueOnce(recoverySaveFailure)
+
+    await expect(global.effect('new.vst3', 'new-id')).resolves.toBe(global)
+
+    expect(save).toHaveBeenCalledTimes(2)
+    expect(save).toHaveBeenNthCalledWith(
+      2,
+      { receiver: 'master', role: 'effect', normalizedName: 'old', occurrence: 0 },
+      { role: 'effect' },
+    )
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('Best-effort cleanup of the uncertain old effect'),
+    )
+    expect(replacePlugin).toHaveBeenCalledTimes(2)
+    expect(masterChain(global)).toMatchObject([{ normalizedName: 'new' }])
+  })
+
+  it('I-2 keeps the master LinkAudio exclusion sticky after remove succeeds', async () => {
+    mockStateSave()
+    const { global } = makeGlobal()
+    await global.effect('old.clap', 'old-id')
+
+    await global.remove('old')
+
+    expect(masterChain(global)).toEqual([])
+    expect(() => global.linkAudio()).toThrow(
+      'global.linkAudio() cannot be used after plugin hosting has been declared in v1.',
+    )
+  })
+
   it('R12a saves the master replacement identity and daemon target', async () => {
     const save = mockStateSave()
     const { global } = makeGlobal()
@@ -492,6 +540,7 @@ describe('effect plugin replacement (#625 Stage B)', () => {
     await global.sequenceEffectRemove('kick', 'old')
 
     const manager = (global as any).sequenceEffectManager
+    expect(unloadPlugin).toHaveBeenCalledTimes(1)
     expect(unloadPlugin).toHaveBeenCalledWith('effect', bus)
     expect(manager.getBus('kick')).toBe(bus)
     expect(manager.hasDeclaration('kick')).toBe(true)
@@ -518,10 +567,12 @@ describe('effect plugin replacement (#625 Stage B)', () => {
 
     await global.remove('old')
 
+    expect(save).toHaveBeenCalledTimes(1)
     expect(save).toHaveBeenCalledWith(
       { receiver: 'master', role: 'effect', normalizedName: 'old', occurrence: 0 },
       { role: 'effect' },
     )
+    expect(unloadPlugin).toHaveBeenCalledTimes(1)
     expect(unloadPlugin).toHaveBeenCalledWith('effect', undefined)
     expect(save.mock.invocationCallOrder[0]).toBeLessThan(unloadPlugin.mock.invocationCallOrder[0]!)
   })
@@ -533,10 +584,12 @@ describe('effect plugin replacement (#625 Stage B)', () => {
 
     await global.sequenceEffectRemove('kick', 'old')
 
+    expect(save).toHaveBeenCalledTimes(1)
     expect(save).toHaveBeenCalledWith(
       { receiver: 'kick', role: 'effect', normalizedName: 'old', occurrence: 0 },
       { role: 'effect', bus: 'seq-bus-0' },
     )
+    expect(unloadPlugin).toHaveBeenCalledTimes(1)
     expect(unloadPlugin).toHaveBeenCalledWith('effect', 'seq-bus-0')
     expect(save.mock.invocationCallOrder[0]).toBeLessThan(unloadPlugin.mock.invocationCallOrder[0]!)
   })
@@ -549,10 +602,12 @@ describe('effect plugin replacement (#625 Stage B)', () => {
 
     await drums.remove('old')
 
+    expect(save).toHaveBeenCalledTimes(1)
     expect(save).toHaveBeenCalledWith(
       { receiver: 'sum:drums', role: 'effect', normalizedName: 'old', occurrence: 0 },
       { role: 'effect', bus: 'sum-bus-0' },
     )
+    expect(unloadPlugin).toHaveBeenCalledTimes(1)
     expect(unloadPlugin).toHaveBeenCalledWith('effect', 'sum-bus-0')
     expect(save.mock.invocationCallOrder[0]).toBeLessThan(unloadPlugin.mock.invocationCallOrder[0]!)
   })
@@ -565,10 +620,12 @@ describe('effect plugin replacement (#625 Stage B)', () => {
 
     await reverb.remove('old')
 
+    expect(save).toHaveBeenCalledTimes(1)
     expect(save).toHaveBeenCalledWith(
       { receiver: 'aux:rev', role: 'effect', normalizedName: 'old', occurrence: 0 },
       { role: 'effect', bus: 'aux-bus-0' },
     )
+    expect(unloadPlugin).toHaveBeenCalledTimes(1)
     expect(unloadPlugin).toHaveBeenCalledWith('effect', 'aux-bus-0')
     expect(save.mock.invocationCallOrder[0]).toBeLessThan(unloadPlugin.mock.invocationCallOrder[0]!)
   })

@@ -813,10 +813,27 @@ impl OutProcTeardownGuard {
         // replacement would clear this request and never restore it — the stream owner would
         // then wait for an ack nobody sets. A single total order over the four accesses
         // (two here, two there) removes that interleaving. Both sides must agree; relaxing
-        // either one re-opens the window. Control thread only — the audio thread never
-        // touches these.
+        // either one re-opens the window. The `SeqCst` stores occur only in these two
+        // control-thread code paths; the audio thread reads `requested` with `Acquire` on every
+        // callback but performs no `SeqCst` operation. `shutdown` itself is control-thread-only.
         self.shutdown.store(true, Ordering::SeqCst);
         between();
+        // 🔴 `done` を掃除してから要求を publish する（#625 最終監査 A-1）。
+        //
+        // 差し替え側の clear（`clear_quiesce_unless_shutdown`）は requested → done の順で
+        // false を書くが、その瞬間に RT が「requested=true を load 済み・done=true を store
+        // 直前」だと、control の done=false の**後**に RT の done=true が着地する。以後
+        // requested=false なので RT は done に触らず、**`requested=false / done=true` が
+        // 恒久残留**する。
+        //
+        // ここで done を掃除しないと、その stale な true を次の poll が**即座に偽 ack として
+        // 掴み**、RT が実際に quiesce していないままストリーム停止へ進む。差し替え側の
+        // teardown は開始時に同じ掃除をしている（`teardown_outproc_effect_slot`）— **借りた
+        // 機構の不変条件を、こちら側だけ継承し損ねていた**。
+        //
+        // この残留状態は #625 が「共有フラグの clear と再武装」を導入して初めて成立する
+        // （それ以前は誰も requested/done を clear しなかった）。
+        self.done.store(false, Ordering::Release);
         self.requested.store(true, Ordering::SeqCst);
     }
 }
@@ -991,16 +1008,40 @@ mod tests {
 
     // teardown guard: done が事前 set なら即抜け（happy path で deadlock しない）+ requested を必ず立てる。
     #[test]
-    fn teardown_guard_exits_immediately_when_done_preset() {
+    fn teardown_guard_exits_promptly_when_the_rt_acks() {
+        // 🔴 #625 最終監査 A-1 でこのテストの主張を変えた。
+        //
+        // 旧版は「`done` を**事前に立てて**おけば guard が即抜けする」ことを固定していたが、
+        // それはまさに**偽 ack** の挙動である。guard drop 時点で `requested` は false なので、
+        // その時点の `done=true` は定義上 stale（直前の差し替えの clear と RT の store が
+        // 交錯して残った残骸）でしかない。それを ack として受け入れると、**RT が実際に
+        // quiesce していないままストリーム停止へ進む**。
+        //
+        // 守るべき本当の契約は「**RT が実際に ack すれば速やかに抜ける**」こと。ここでは
+        // RT 役のスレッドが `requested` を観測してから `done` を立てる、という実際の順序で
+        // それを実証する。
         let (tr, td) = flags();
         let shutdown = Arc::new(AtomicBool::new(false));
-        td.store(true, Ordering::Release);
+        let rt_requested = tr.clone();
+        let rt_done = td.clone();
+        let rt = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < deadline {
+                if rt_requested.load(Ordering::Acquire) {
+                    rt_done.store(true, Ordering::Release);
+                    return;
+                }
+                std::thread::yield_now();
+            }
+        });
         let t0 = Instant::now();
         drop(OutProcTeardownGuard::new(OutProcTeardownParts {
             requested: tr.clone(),
             done: td,
             shutdown: shutdown.clone(),
         }));
+        let elapsed = t0.elapsed();
+        rt.join().expect("rt thread");
         assert!(
             tr.load(Ordering::Acquire),
             "teardown_requested を必ず立てる"
@@ -1010,9 +1051,37 @@ mod tests {
             "stream shutdown latch を必ず立てる"
         );
         assert!(
-            t0.elapsed() < Duration::from_millis(100),
-            "done 事前 set 時は即抜け"
+            elapsed < TEARDOWN_TIMEOUT,
+            "RT が ack したら timeout を待たずに抜ける（elapsed={elapsed:?}）"
         );
+    }
+
+    /// #625 最終監査 A-1: guard は要求を publish する前に **stale な `done` を掃除**しなければ
+    /// ならない。掃除しないと、直前の差し替えが残した `requested=false / done=true` を次の
+    /// poll が偽 ack として掴み、RT が quiesce していないままストリーム停止へ進む。
+    #[test]
+    fn teardown_guard_clears_a_stale_done_before_requesting_quiesce() {
+        let (requested, done) = flags();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        // 直前の差し替えが残した残留状態を再現する。
+        done.store(true, Ordering::Release);
+        let guard = OutProcTeardownGuard::new(OutProcTeardownParts {
+            requested: requested.clone(),
+            done: done.clone(),
+            shutdown,
+        });
+        guard.latch_then_request(|| {});
+        let observed_done = done.load(Ordering::Acquire);
+        assert!(
+            !observed_done,
+            "a stale done from a previous replacement must not survive into the next quiesce"
+        );
+        assert!(
+            requested.load(Ordering::Acquire),
+            "the quiesce request is still published after the cleanup"
+        );
+        // guard was driven manually; skip its Drop wait (done was never acked).
+        std::mem::forget(guard);
     }
 
     /// #625: the latch must be published **before** the quiesce request.

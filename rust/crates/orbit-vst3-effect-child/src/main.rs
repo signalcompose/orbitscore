@@ -86,6 +86,7 @@ fn unused_plugin_id_notice(plugin_id: &str) -> String {
     )
 }
 
+#[cfg(target_os = "macos")]
 fn main() -> Result<()> {
     let args = parse_args()?;
     let mmap = open_shared(&args.shm).with_context(|| format!("open_shared({:?})", args.shm))?;
@@ -193,12 +194,14 @@ fn main() -> std::process::ExitCode {
     std::process::ExitCode::FAILURE
 }
 
-#[cfg(test)]
+// 対象の `unused_plugin_id_notice` は macOS 限定なので、テストも同じ cfg に揃える
+// （揃えないと Linux の `--all-targets` で unresolved import になる・CI が Linux で回る）。
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::unused_plugin_id_notice;
 
     /// この通知は失敗ではないので、daemon の stderr router が非エラーと判定できる形で
-    /// なければならない。router は `^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+-child\]\s`
+    /// なければならない。router は `^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+\]\s`
     /// にマッチする行だけを非エラーとして認める（`daemon-client.ts`）。
     #[test]
     fn unused_plugin_id_notice_declares_a_non_error_level_token() {

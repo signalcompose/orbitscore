@@ -3102,7 +3102,7 @@ mod best_effort_notice_tests {
     use super::best_effort_state_notice;
 
     /// この通知は復元の成功経路で出るので、daemon の stderr router が非エラーと判定できる形で
-    /// なければならない。router は `^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+-child\]\s`
+    /// なければならない。router は `^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+\]\s`
     /// と、daemon 自身の tracing 形式のみを非エラーとして認める（`daemon-client.ts`）。
     #[test]
     fn best_effort_state_notice_declares_a_non_error_level_token() {
