@@ -2516,4 +2516,374 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     },
     TEST_TIMEOUT_MS * 2,
   )
+
+  it.skipIf(!appAvailable)(
+    'replaces and removes playing effects with audio, state, process, failure, routing, and master oracles (#625 R-E1-R-E7)',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      expect(
+        workAudioDir,
+        'main gated phase must initialize the audio fixture directory',
+      ).toBeDefined()
+      if (!client || !tmpRoot || !workAudioDir) {
+        throw new Error('main gated phase did not initialize suite state')
+      }
+      const activeClient = client
+      const root = tmpRoot
+      const audioDir = workAudioDir
+      const catalog = requireCatalogFixtures()
+      const capturePath = path.join(root, 'effect-replace-remove-r-e1-r-e7.wav')
+      const projectFile = path.join(root, 'project.yaml')
+      const aIdentity = `fx625/effect/${catalog.clapEffectName}/0`
+      const aStateRelativePath = 'states/e2e-effect-gain-025.state'
+      const aStatePath = path.resolve(root, aStateRelativePath)
+
+      // A's state contract is shared by the CLAP/VST3 gain oracles: ORE1 + f64 LE.
+      // Register it before the first declaration so R-E1 starts at gain 0.25.
+      fs.mkdirSync(path.dirname(aStatePath), { recursive: true })
+      const aState = Buffer.alloc(12)
+      aState.writeUInt32LE(0x4f52_4531, 0)
+      aState.writeDoubleLE(0.25, 4)
+      fs.writeFileSync(aStatePath, aState)
+      const manifest = fs.existsSync(projectFile)
+        ? (parse(fs.readFileSync(projectFile, 'utf8')) as {
+            version?: number
+            states?: Record<string, string>
+          })
+        : { version: 1 }
+      fs.writeFileSync(
+        projectFile,
+        stringify({
+          ...manifest,
+          version: manifest.version ?? 1,
+          states: { ...(manifest.states ?? {}), [aIdentity]: aStateRelativePath },
+        }),
+      )
+
+      const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
+      const start = await activeClient.call('start_engine', { capture_wav: capturePath })
+      expect(start.isError, start.text).toBe(false)
+      await waitForEngine(true, 15_000, '#625 R-E1-R-E7 engine running')
+      await sleep(2500)
+
+      const segments: Record<string, { from: number; to: number }> = {}
+      const captureSegment = async (name: string): Promise<void> => {
+        await sleep(750)
+        segments[name] = { from: Date.now(), to: 0 }
+        await sleep(3000)
+        segments[name]!.to = Date.now()
+      }
+      let stopWall = Date.now()
+      try {
+        // A dry segment with the final sum/aux routing already in place is the
+        // reference for both failed replacement (R-E3) and remove (R-E6).
+        const sourceSetup = await activeClient.call('evaluate_orbitscore', {
+          code: [
+            'var global = init GLOBAL',
+            'global.tempo(120)',
+            'global.beat(4 by 4)',
+            `global.audioPath(${JSON.stringify(audioDir)})`,
+            'global.sum("fx625out")',
+            'global.aux("fx625send")',
+            'global.start()',
+            'var fx625 = init global.seq',
+            'fx625.audio("kick.wav").chop(1)',
+            'fx625.output("fx625out")',
+            'fx625.send("fx625send", 0.2)',
+            'fx625.play(1, 1, 1, 1)',
+            'LOOP(fx625)',
+          ].join('\n'),
+        })
+        expect(sourceSetup.isError, sourceSetup.text).toBe(false)
+        await captureSegment('dryBaseline')
+
+        // R-E1: A is the catalog-resolved CLAP effect restored at gain 0.25.
+        const beforeA = (await activeClient.call('get_log', { lines: 500 })).text
+        const declareA = await activeClient.call('evaluate_orbitscore', {
+          code: `fx625.effect(${JSON.stringify(catalog.clapEffectName)})`,
+        })
+        expect(declareA.isError, declareA.text).toBe(false)
+        await waitUntil(() => Promise.resolve(pluginChildPids(catalog.clapEffectPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#625 R-E1 CLAP effect child started',
+        })
+        const aChildPids = pluginChildPids(catalog.clapEffectPath)
+        expect(
+          aChildPids.length,
+          'R-E1 must observe the old CLAP effect child PID',
+        ).toBeGreaterThan(0)
+        const afterA = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterA),
+          `R-E1 declaration must add no ERROR lines. Log tail: ${afterA.slice(-1200)}`,
+        ).toBe(countErrors(beforeA))
+        await captureSegment('a')
+
+        // R-E2: replace A with catalog-resolved B while LOOP is producing audio.
+        const errorsBeforeB = countErrors((await activeClient.call('get_log', { lines: 500 })).text)
+        const declareB = await activeClient.call('evaluate_orbitscore', {
+          code: `fx625.effect(${JSON.stringify(catalog.vst3EffectName)})`,
+        })
+        expect(declareB.isError, declareB.text).toBe(false)
+        await waitUntil(() => Promise.resolve(pluginChildPids(catalog.vst3EffectPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#625 R-E2 VST3 effect child started',
+        })
+        await waitUntil(() => Promise.resolve(aChildPids.every((pid) => !processExists(pid))), {
+          intervalMs: 200,
+          timeoutMs: 10_000,
+          label: '#625 R-E2 old CLAP effect child disappeared',
+        })
+        const bChildPids = pluginChildPids(catalog.vst3EffectPath)
+        expect(
+          bChildPids.length,
+          'R-E2 must observe the new VST3 effect child PID',
+        ).toBeGreaterThan(0)
+        const afterB = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterB),
+          `R-E2 replacement must add no ERROR lines. Log tail: ${afterB.slice(-1200)}`,
+        ).toBe(errorsBeforeB)
+        await captureSegment('b')
+
+        // R-E3 is the sole path-direct plugin declaration in this scenario.
+        // A nonexistent catalog name would be rejected by TS resolution first;
+        // this path must reach the daemon's replacement failure/forget-to-dry path.
+        const beforeFailureLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const errorsBeforeFailure = countErrors(beforeFailureLog)
+        const failedReplace = await activeClient.call('evaluate_orbitscore', {
+          code: 'fx625.effect("/definitely/nonexistent/Issue625.vst3")',
+        })
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return countErrors(log) > errorsBeforeFailure
+          },
+          { intervalMs: 200, timeoutMs: 15_000, label: '#625 R-E3 failure surfaced in log' },
+        )
+        await waitUntil(() => Promise.resolve(bChildPids.every((pid) => !processExists(pid))), {
+          intervalMs: 200,
+          timeoutMs: 10_000,
+          label: '#625 R-E3 previous VST3 effect child disappeared',
+        })
+        const afterFailureLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterFailureLog),
+          `R-E3 must add an ERROR line even when evaluate_orbitscore reports ${failedReplace.isError ? 'error' : 'ok'}: ${afterFailureLog.slice(-1200)}`,
+        ).toBeGreaterThan(errorsBeforeFailure)
+        expect(pluginChildPids(catalog.clapEffectPath)).toEqual([])
+        expect(pluginChildPids(catalog.vst3EffectPath)).toEqual([])
+        await captureSegment('failedDry')
+
+        // R-E4: no restart or other repair action — redeclaring B alone recovers.
+        const errorsBeforeRecovery = countErrors(
+          (await activeClient.call('get_log', { lines: 500 })).text,
+        )
+        const recoverB = await activeClient.call('evaluate_orbitscore', {
+          code: `fx625.effect(${JSON.stringify(catalog.vst3EffectName)})`,
+        })
+        expect(recoverB.isError, recoverB.text).toBe(false)
+        await waitUntil(() => Promise.resolve(pluginChildPids(catalog.vst3EffectPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#625 R-E4 VST3 effect child recovered',
+        })
+        const recoveredBChildPids = pluginChildPids(catalog.vst3EffectPath)
+        const afterRecovery = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterRecovery),
+          `R-E4 recovery must add no ERROR lines. Log tail: ${afterRecovery.slice(-1200)}`,
+        ).toBe(errorsBeforeRecovery)
+        await captureSegment('recoveredB')
+
+        // R-E5: swapping back to A must use the sequence receiver identity and
+        // restore its saved 0.25 state, not instantiate A at its default gain.
+        const beforeSwapBackLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const errorsBeforeSwapBack = countErrors(beforeSwapBackLog)
+        const restoreMarker = `[plugin-state] restoring '${aIdentity}'`
+        const restoreMarkersBefore = beforeSwapBackLog.split(restoreMarker).length - 1
+        const swapBackA = await activeClient.call('evaluate_orbitscore', {
+          code: `fx625.effect(${JSON.stringify(catalog.clapEffectName)})`,
+        })
+        expect(swapBackA.isError, swapBackA.text).toBe(false)
+        await waitUntil(() => Promise.resolve(pluginChildPids(catalog.clapEffectPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#625 R-E5 CLAP effect child restored',
+        })
+        await waitUntil(
+          () => Promise.resolve(recoveredBChildPids.every((pid) => !processExists(pid))),
+          {
+            intervalMs: 200,
+            timeoutMs: 10_000,
+            label: '#625 R-E5 previous VST3 effect child disappeared',
+          },
+        )
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return log.split(restoreMarker).length - 1 > restoreMarkersBefore
+          },
+          { intervalMs: 200, timeoutMs: 15_000, label: '#625 R-E5 old state restore log' },
+        )
+        const afterSwapBackLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterSwapBackLog),
+          `R-E5 swap-back must add no ERROR lines. Log tail: ${afterSwapBackLog.slice(-1200)}`,
+        ).toBe(errorsBeforeSwapBack)
+        const savedManifest = parse(fs.readFileSync(projectFile, 'utf8')) as {
+          states: Record<string, string>
+        }
+        expect(savedManifest.states[aIdentity]).toBeDefined()
+        expect(fs.existsSync(path.resolve(root, savedManifest.states[aIdentity]!))).toBe(true)
+        const restoredAChildPids = pluginChildPids(catalog.clapEffectPath)
+        await captureSegment('restoredA')
+
+        // R-E6: remove A, then re-evaluate both routing declarations. Their
+        // ERROR count stays flat and the unchanged LOOP becomes dry again.
+        const errorsBeforeRemove = countErrors(
+          (await activeClient.call('get_log', { lines: 500 })).text,
+        )
+        const removeA = await activeClient.call('evaluate_orbitscore', {
+          code: `fx625.remove(${JSON.stringify(catalog.clapEffectName)})`,
+        })
+        expect(removeA.isError, removeA.text).toBe(false)
+        await waitUntil(
+          () => Promise.resolve(restoredAChildPids.every((pid) => !processExists(pid))),
+          {
+            intervalMs: 200,
+            timeoutMs: 10_000,
+            label: '#625 R-E6 removed CLAP effect child disappeared',
+          },
+        )
+        const routingAfterRemove = await activeClient.call('evaluate_orbitscore', {
+          code: ['fx625.output("fx625out")', 'fx625.send("fx625send", 0.2)'].join('\n'),
+        })
+        expect(routingAfterRemove.isError, routingAfterRemove.text).toBe(false)
+        const afterRemoveLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterRemoveLog),
+          `R-E6 remove/routing must add no ERROR lines. Log tail: ${afterRemoveLog.slice(-1200)}`,
+        ).toBe(errorsBeforeRemove)
+        await captureSegment('removedDry')
+
+        // R-E7: the master slot uses the same catalog-only declaration surface,
+        // but has distinct daemon bus semantics. Its minimum real-device oracle
+        // is a clean A→B child-process handoff.
+        const errorsBeforeMaster = countErrors(
+          (await activeClient.call('get_log', { lines: 500 })).text,
+        )
+        const masterA = await activeClient.call('evaluate_orbitscore', {
+          code: `global.effect(${JSON.stringify(catalog.clapEffectName)})`,
+        })
+        expect(masterA.isError, masterA.text).toBe(false)
+        await waitUntil(() => Promise.resolve(pluginChildPids(catalog.clapEffectPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#625 R-E7 master CLAP effect child started',
+        })
+        const masterAChildPids = pluginChildPids(catalog.clapEffectPath)
+        const masterB = await activeClient.call('evaluate_orbitscore', {
+          code: `global.effect(${JSON.stringify(catalog.vst3EffectName)})`,
+        })
+        expect(masterB.isError, masterB.text).toBe(false)
+        await waitUntil(() => Promise.resolve(pluginChildPids(catalog.vst3EffectPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#625 R-E7 master VST3 effect child started',
+        })
+        await waitUntil(
+          () => Promise.resolve(masterAChildPids.every((pid) => !processExists(pid))),
+          {
+            intervalMs: 200,
+            timeoutMs: 10_000,
+            label: '#625 R-E7 old master CLAP effect child disappeared',
+          },
+        )
+        const afterMasterLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterMasterLog),
+          `R-E7 master replacement must add no ERROR lines. Log tail: ${afterMasterLog.slice(-1200)}`,
+        ).toBe(errorsBeforeMaster)
+      } finally {
+        await activeClient.call('evaluate_orbitscore', {
+          code: 'fx625.stop()\nglobal.stop()',
+        })
+        const stopped = await activeClient.call('stop_engine')
+        expect(stopped.isError, stopped.text).toBe(false)
+        stopWall = Date.now()
+        await waitForEngine(false, 15_000, '#625 R-E1-R-E7 engine stopped')
+        await sleep(1500)
+      }
+
+      const capture = fs.readFileSync(capturePath)
+      const analysis = analyzeWavBuffer(capture, { windowMs: 100 })
+      const audioRange = (segment: { from: number; to: number }) => ({
+        fromSec: Math.max(0, analysis.durationSec - (stopWall - segment.from) / 1000),
+        toSec: Math.min(
+          analysis.durationSec,
+          analysis.durationSec - (stopWall - segment.to) / 1000,
+        ),
+      })
+      const segmentRms = (name: string): number => {
+        const segment = segments[name]
+        expect(segment, `${name} capture segment must exist`).toBeDefined()
+        const range = audioRange(segment!)
+        const windows = (analysis.windows ?? []).filter(
+          (window) => window.startSec >= range.fromSec && window.startSec < range.toSec,
+        )
+        expect(windows.length, `${name} capture segment must contain RMS windows`).toBeGreaterThan(
+          0,
+        )
+        return Math.sqrt(
+          windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
+        )
+      }
+      const relativeDelta = (actual: number, expected: number): number =>
+        Math.abs(actual - expected) / expected
+
+      const dryRms = segmentRms('dryBaseline')
+      const aRms = segmentRms('a')
+      const bRms = segmentRms('b')
+      const failedDryRms = segmentRms('failedDry')
+      const recoveredBRms = segmentRms('recoveredB')
+      const restoredARms = segmentRms('restoredA')
+      const removedDryRms = segmentRms('removedDry')
+      expect(dryRms, 'dry baseline must be audibly non-silent').toBeGreaterThan(0.01)
+      expect(aRms, 'R-E1 gain-0.25 A must remain audibly non-silent').toBeGreaterThan(0.002)
+      expect(
+        bRms / aRms,
+        `R-E2 B/A RMS ratio must be about 4x (A=${aRms}, B=${bRms})`,
+      ).toBeGreaterThan(3.2)
+      expect(bRms / aRms).toBeLessThan(4.8)
+      expect(
+        relativeDelta(bRms, dryRms),
+        `R-E2 unity-gain B RMS ${bRms} must match dry ${dryRms}`,
+      ).toBeLessThanOrEqual(0.15)
+      expect(
+        relativeDelta(failedDryRms, dryRms),
+        `R-E3 failed replacement RMS ${failedDryRms} must match dry ${dryRms}`,
+      ).toBeLessThanOrEqual(0.15)
+      expect(failedDryRms, 'R-E3 failure must not stop the audio').toBeGreaterThan(0.01)
+      expect(
+        relativeDelta(recoveredBRms, bRms),
+        `R-E4 recovered B RMS ${recoveredBRms} must match original B ${bRms}`,
+      ).toBeLessThanOrEqual(0.15)
+      expect(
+        relativeDelta(restoredARms, aRms),
+        `R-E5 restored A RMS ${restoredARms} must match original A ${aRms}`,
+      ).toBeLessThanOrEqual(0.15)
+      expect(
+        relativeDelta(removedDryRms, dryRms),
+        `R-E6 removed-effect RMS ${removedDryRms} must match dry ${dryRms}`,
+      ).toBeLessThanOrEqual(0.15)
+      expect(removedDryRms, 'R-E6 routing must keep audio flowing after remove').toBeGreaterThan(
+        0.01,
+      )
+    },
+    TEST_TIMEOUT_MS * 2,
+  )
 })

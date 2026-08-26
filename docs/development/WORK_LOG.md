@@ -17,6 +17,44 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.369 test(e2e): #625 Stage D — 差し替えと削除を音のオラクルで固定 (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625（Stage D = 実機 gated E2E）
+**Status**: シナリオ追加。TS **2068 passed / 36 skipped**（skip +1 = ゲート無しで正しく skip）
+
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` に R-E1〜R-E7 を 1 シナリオ追加。並行機構は新設せず、
+既存の capture / RMS 機構と `replaceGatedPluginFixtureSymlink` を再利用した。
+
+#### 音のオラクル（「エラーが出ない」では示せない性質）
+
+同一 WAV 内に `dry → A → B → failure dry → recovered B → restored A → removed dry` の区間を
+記録し、停止後にまとめて区間 RMS を測る。
+
+| # | オラクル |
+|---|---|
+| R-E1 | A（CLAP・state gain 0.25）が非無音の減衰レベル |
+| R-E2 | **`bRms / aRms` が 3.2〜4.8**（gain 0.25 → 1.0 の約 4 倍）+ 新 PID 出現・旧 PID 消滅・ERROR 増 0 |
+| R-E3 | 失敗注入で **`failedDryRms` が `dryRms` と一致** = 無音でも A でも B でもなく **dry**。音は止まらない |
+| R-E4 | 再宣言だけで `recoveredBRms` が `bRms` と一致（再起動なし） |
+| R-E5 | swap-back で **`restoredARms` が `aRms` と一致** = 自動保存した音色が実際に戻る + restore ログ |
+| R-E6 | remove で `removedDryRms` が `dryRms` と一致かつ非無音 = **routing が生きている** |
+| R-E7 | master 経路の PID 交代・ERROR 増 0（bus 系と slot が別物であることの実機確認） |
+
+**R-E3 と R-E5 が要**。R-E3 は設計の失敗モデル (ii)「解体後の失敗は dry 縮退（無音にならない）」を
+音で証明し、R-E5 は「差し替え直前の自動 state 保存」が音として復元されることを証明する。
+
+#### フルパス直書きは 1 箇所のみ
+
+R-E3 の失敗注入だけ（存在しないパスを daemon の失敗経路まで到達させる必要がある。カタログ名だと
+TS 解決で先に落ちる）。理由をコメントに明記。**他の全宣言は `list_plugins` 由来のカタログ名**。
+
+#### 担当の切り分け
+
+Codex は**シナリオの作成まで**。実機（OrbitStudio.app・オーディオデバイス・MCP）は sandbox で
+原理的に走らないため、**「実機で確認した」と書かせず**、確認できない事項を列挙させた。
+実行は main が `ORBIT_GATED_ORBITSTUDIO=1` で行う。
+
 ### 6.368 feat(engine): #625 Stage C — remove() で effect insert を外す (Aug 27, 2026)
 
 **Date**: 2026-08-27
