@@ -17,6 +17,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.365 docs(spec): #625 Stage 0 — 差し替え・削除を spec 側に先行させる (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #625（Stage 0 = 実装より先の spec 更新）
+**Status**: docs のみ。実装は Stage A 以降
+
+DocDD（spec が正本）に従い、実装前に仕様を更新した。effect の in-place 差し替えは
+instrument の prepare-commit 型と**失敗モデルが異なる**ため、これを書かずに実装すると
+spec に偽の文が残る（main レビュー指摘）。
+
+| ファイル | 変更 |
+|---|---|
+| `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` | SC.3 規範4 の括弧書きを「SC.5 の失敗モデル (i) prepare-commit 型」への参照へ変更。SC.5 の v1 注記に **失敗モデル 2 型**（prepare-commit / in-place）を明記し、v1 実装済み範囲に「単一 insert の異 spec 再宣言 = 差し替え」と `remove("名前")` を追加 |
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | **PH.2d を新設**（4経路共通の差し替え・削除の規則を1箇所に集約 = DRY）。PH.2 / PH.2b / MX.2 / MX.3 は PH.2d を参照する形へ |
+
+#### 設計からの意図的な逸脱（1件）
+
+設計 §7 Stage 0-3 は `docs/research/ENGINE_DAEMON_PROTOCOL.md` への
+ReplacePlugin(role=effect) / UnloadPlugin の追記も Stage 0 に置いていたが、**Stage B/C の
+wire 実装と同じコミットへ移した**。プロトコル**リファレンス**が存在しないメソッドを
+記述する状態は、本 issue が直そうとしている「宣言と実体のずれ」と同じ種類の乖離になるため。
+DSL の**仕様**（上表2ファイル）は従来どおり実装に先行させる。
+
 ### 6.364 docs(design): #625 effect insert の差し替え・削除の設計を確定 (Aug 26, 2026)
 
 **Date**: 2026-08-26
