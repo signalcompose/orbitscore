@@ -17,6 +17,77 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.360 feat(daemon): instrument 差し替えの daemon 機構（#618 PR-1） (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #618（PR-1 = spec delta + Rust daemon 機構。DSL 表面は PR-2）
+**Status**: **daemon lib 175 passed / 0 failed**・R1-R11 全件実走・clippy 0・fmt OK・
+変異検証は Codex 側 11 種 + **main 独自 6 種**
+
+#### owner 提起で「note-off 先出し」を撤回した
+
+> 切り替え時やインストルメント削除の時にノートオフ先出しだけど、これ、本当に必要か確認して。
+
+調査の結論は **不要**（詳細は issue #618 のコメント）。要点:
+
+- note-off は楽譜由来のイベントとしてスケジュール済み。旧 child は kill でプロセスごと死ぬので
+  **鳴りっぱなしは原理的に起きない**
+- 先出しすると、新インスタンスのロード失敗時に「旧は保持されるのに音だけ消えた」となり、
+  spec の失敗モデル（prepare→commit・失敗時は旧が無傷）が壊れる
+- DAW 調査で報告される stuck note は「同一インスタンスの deactivate → reactivate」か
+  「生きている別の宛先への再ルーティング」で、**完全破棄のケースは含まれない**
+
+**統一原則**: 強制 note-off が要るのは note の**発生源**が offTime より前に止まる場面
+（#606 / MUTE / LOOP 除外 / play() 差し替え）であって、**宛先**が変わる場面ではない。
+これにより #618 は **#606 への依存が消えた**。
+
+#### 設計: main の (A) 推奨を設計者が一次ソースで覆した
+
+`reset_after_child_exit` の SAFETY 注記が「旧 child の死亡確認後なので競合しない」と明記しており、
+**1 slot = 1 shm = 1 child**。同一スロットでは prepare→commit が原理的に成立しない。
+→ **(B) 予備スロットに立てて `instance_index` の指す先を張り替える**方式を採用。
+commit = map の書き換え。commit 前に旧側を一切触らないので「失敗 = 何も起きなかった」が構造的に成立する。
+
+#### main のレビューで設計の穴を1件塞いだ
+
+設計 §3.3-a の「100ms ドレイン待ち・進まなければ諦めて続行」は**タイミング推測 + サイレントな諦め**だった。
+note ring は **in-process の rtrb（slot 所有・tenant をまたいで生存）**で `reset_child_starting` の
+対象外なので、諦めた場合に残渣が次のテナントへ届く。
+
+→ 同じ PostProcessor にある**決定論的 ack ハンドシェイク**を使う形へ変更:
+`engaged=false` → drain-and-discard 要求 → **状態で待つ** → タイムアウトなら loud に警告し
+**その slot を free-list へ返さない**（隔離）。
+残渣は旧 child へ**届けず捨てる** — 旧 child は直後に死ぬので届ける意味がなく、
+届けようとしていたのは note-off 先出し思考の残滓だった。
+
+#### 🔴 受け入れ検証で main が2つの穴を発見（effort ではなく受け入れ基準の不備）
+
+**設計 §10 の失敗モード一覧と §9 のテスト表が突き合わされていなかった。**
+
+| 変異（main 独自） | 当初の結果 | 対応 |
+|---|---|---|
+| Closed の spare を free-list へ返す | **全件 green**（穴） | **R10** 追加 → 再変異で red 確認 |
+| teardown が respawn を誘発 | **テスト自体が無い**（穴） | **R11** 追加 → 再変異で red 確認 |
+| commit を prepare の前へ | 6 件 red | — |
+| `reset_control_run` を外す | R3 のみ red | — |
+| `engaged=false` の順序を崩す | 全件 green | **観測不能と判断しテストは足さない** |
+| supervisor の Drop を起こさせない | R11 + R1 red | — |
+
+Closed の spare は `spawn_outproc_supervisor` 失敗時に生じ、**shm が unlink 済みで再利用不能**。
+free-list へ返すと次のテナントが必ず失敗する。ガードは実装されていたが**テストが無かった**。
+
+**教訓**: Codex は渡されたテスト表を過不足なく実装した。抜けていたのは受け入れ基準の側であり、
+effort を上げても防げない類。**設計の失敗モード一覧の各項目にテスト行があるか**を
+工程②（設計チェック）の必須項目にする。
+
+#### 検証コマンドの落とし穴
+
+`cargo test -p orbit-audio-daemon` だけでは **33 tests しか走らず R1-R11 は feature gate で1件も実行されない**。
+`--features outproc-effect,outproc-instrument` が必須。
+Codex 報告（173）と main のベースライン（33）の食い違いで気づいた。
+
+---
+
 ### 6.359 fix(engine): respawn 後の stale セッション簿記を解消し冪等 open を1箇所に集約 (#619 R2) (Aug 26, 2026)
 
 **Date**: 2026-08-26
