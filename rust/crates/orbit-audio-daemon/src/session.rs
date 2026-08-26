@@ -243,7 +243,6 @@ fn playat_bus_and_channel_both_set(bus: &Option<String>, channel: &Option<String
 }
 
 /// role='instrument' と 'bus' の同時指定を検出する純関数（'bus' は effect 専用）。
-#[cfg(feature = "outproc-instrument")]
 fn bus_param_invalid_for_instrument_role(params: &Value) -> bool {
     params.get("role").and_then(Value::as_str) == Some("instrument") && params.get("bus").is_some()
 }
@@ -1586,7 +1585,7 @@ async fn handle_command(
                     ProtocolError::new("MALFORMED_REQUEST", "missing 'path' param"),
                 );
             };
-            if params.get("bus").is_some() {
+            if bus_param_invalid_for_instrument_role(&params) {
                 return err(
                     &id,
                     ProtocolError::new(

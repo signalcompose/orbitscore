@@ -949,6 +949,42 @@ struct OutProcInstrumentControl {
     replacements_in_flight: HashSet<String>,
 }
 
+#[cfg(feature = "outproc-instrument")]
+impl OutProcInstrumentControl {
+    fn allocate_slot(&mut self) -> Option<usize> {
+        self.free_slots.pop().or_else(|| {
+            if self.next_unassigned < self.slots.len() {
+                let index = self.next_unassigned;
+                self.next_unassigned += 1;
+                Some(index)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn free_slot(&mut self, index: usize) {
+        if !self.free_slots.contains(&index) {
+            self.free_slots.push(index);
+        }
+    }
+}
+
+#[cfg(all(test, feature = "outproc-instrument"))]
+fn test_instrument_control(
+    slots: Vec<InstrumentSlotEntry>,
+    instance_index: HashMap<String, usize>,
+    next_unassigned: usize,
+) -> OutProcInstrumentControl {
+    OutProcInstrumentControl {
+        slots,
+        instance_index,
+        free_slots: Vec::new(),
+        next_unassigned,
+        replacements_in_flight: HashSet::new(),
+    }
+}
+
 /// instance 引数の無い互換経路（旧単数 API・wire の `instance` 欠如）が写る instance 名。
 ///
 /// 「= slot 0」が**強制**されるのは instrument-only build の互換経路
@@ -1011,7 +1047,7 @@ fn build_pending_instrument_slots(
     WrapError,
 > {
     use crate::outproc_instrument::{
-        OutProcInstrumentPostProcessor, OutProcInstrumentStats, NOTE_RING_CAPACITY,
+        OutProcInstrumentPostProcessor, OutProcInstrumentStats, SlotSignals, NOTE_RING_CAPACITY,
     };
     let mut pending = Vec::with_capacity(slot_count);
     let mut posts = Vec::with_capacity(slot_count);
@@ -1034,10 +1070,12 @@ fn build_pending_instrument_slots(
             event_rx,
             NOTE_RING_CAPACITY,
             engaged.clone(),
-            stop.clone(),
-            done.clone(),
-            drain_requested.clone(),
-            drain_done.clone(),
+            SlotSignals {
+                teardown_requested: stop.clone(),
+                teardown_done: done.clone(),
+                drain_requested: drain_requested.clone(),
+                drain_done: drain_done.clone(),
+            },
             stats.clone(),
         ));
         pending.push(PendingInstrumentSlot {
@@ -2907,13 +2945,7 @@ impl EngineWrap {
             let index = match control.instance_index.get(name) {
                 Some(&index) => index,
                 None => {
-                    let next = if let Some(index) = control.free_slots.pop() {
-                        index
-                    } else if control.next_unassigned < control.slots.len() {
-                        let index = control.next_unassigned;
-                        control.next_unassigned += 1;
-                        index
-                    } else {
+                    let Some(next) = control.allocate_slot() else {
                         return Err(WrapError::OutProcInstrument(format!(
                             "instrument slot pool exhausted ({} slots, all assigned); \
                              raise ORBIT_OUTPROC_INSTRUMENT_SLOTS (max {}) and restart the engine",
@@ -3020,13 +3052,7 @@ impl EngineWrap {
                 }
             }
 
-            let spare_index = if let Some(index) = control.free_slots.pop() {
-                index
-            } else if control.next_unassigned < control.slots.len() {
-                let index = control.next_unassigned;
-                control.next_unassigned += 1;
-                index
-            } else {
+            let Some(spare_index) = control.allocate_slot() else {
                 return Err(WrapError::OutProcInstrument(format!(
                     "instrument slot pool exhausted (replacement needs one spare slot; {} slots are assigned or unavailable); \
                      raise ORBIT_OUTPROC_INSTRUMENT_SLOTS (max {}) and restart the engine",
@@ -3060,8 +3086,8 @@ impl EngineWrap {
                     WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
                 })?;
                 if let Some(control) = guard.as_mut() {
-                    if spare_is_empty && !control.free_slots.contains(&spare_index) {
-                        control.free_slots.push(spare_index);
+                    if spare_is_empty {
+                        control.free_slot(spare_index);
                     }
                     control.replacements_in_flight.remove(&name);
                 }
@@ -3088,8 +3114,8 @@ impl EngineWrap {
             WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
         })?;
         if let Some(control) = guard.as_mut() {
-            if reusable && !control.free_slots.contains(&old_index) {
-                control.free_slots.push(old_index);
+            if reusable {
+                control.free_slot(old_index);
             }
             control.replacements_in_flight.remove(&name);
         }
@@ -3162,20 +3188,14 @@ impl EngineWrap {
             }
         };
 
-        // Supervisor shutdown is published before its watchdog joins/reaps the child. Never kill
-        // the child first: that would be observed as an unexpected exit and trigger a respawn.
-        InstrumentRole::detach_keep_shm(supervisor);
-        stats.current_child_pid.store(0, Ordering::Relaxed);
-
         let reset_ok = match orbit_audio_sandbox::open_shared(&shm_path) {
             Ok(mmap) => {
                 let region = orbit_audio_sandbox::region_ptr(&mmap);
-                // SAFETY: supervisor teardown above joined the watchdog and reaped the only child;
-                // mmap remains alive for this reset call.
-                unsafe { orbit_audio_sandbox::transport::reset_control_run(region) };
+                detach_and_reset_control_run::<InstrumentRole>(supervisor, region);
                 true
             }
             Err(error) => {
+                InstrumentRole::detach_keep_shm(supervisor);
                 tracing::warn!(
                     slot = index,
                     ?shm_path,
@@ -3185,6 +3205,7 @@ impl EngineWrap {
                 false
             }
         };
+        stats.current_child_pid.store(0, Ordering::Relaxed);
 
         let launch = ChildLaunch::<InstrumentRole> {
             shm_path,
@@ -5040,9 +5061,6 @@ fn plugin_ui_pump_error(error: orbit_audio_sandbox::UiEventPumpError) -> WrapErr
 /// retryable な attach 失敗（role mismatch / early-exit / timeout）の共通終端処理。
 /// supervisor を unlink 抜きで teardown し（unlink 所有権は launch に戻る）、teardown が
 /// 書いた QUIT を RUN へ戻して、slot を retry 可能な `Empty(launch)` に復帰させる。
-///
-/// SAFETY 前提: `region` は呼び出し元 scope で生存する `ready_mmap` を指すこと
-/// （`load_outproc_plugin` の ready-ack ループからのみ呼ばれる）。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 fn retryable_attach_failure<R: OutProcRole>(
     supervisor: R::Supervisor,
@@ -5052,13 +5070,24 @@ fn retryable_attach_failure<R: OutProcRole>(
     message: String,
 ) -> WrapError {
     tracing::warn!("outproc attach failed (retryable): {message}");
-    R::detach_keep_shm(supervisor);
-    // teardown が CONTROL_QUIT を書いたので、retry する child は RUN モードで起動する必要がある。
-    unsafe { orbit_audio_sandbox::transport::reset_control_run(region) };
+    detach_and_reset_control_run::<R>(supervisor, region);
     let mut slot = lock_child_slot_recovering(child_slot, "retryable attach failure");
     debug_assert_slot_loading(&slot);
     *slot = ChildSlot::Empty(launch);
     WrapError::OutProcAttachFailed(message)
+}
+
+/// Supervisor を先に停止・join・reap してから、再利用する shm の control を RUN に戻す。
+/// child を先に kill すると watchdog が予期しない exit と誤認して respawn するため、この順序を
+/// 崩してはならない。`region` は呼び出し元が保持する mmap の生存中ポインタでなければならない。
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn detach_and_reset_control_run<R: OutProcRole>(
+    supervisor: R::Supervisor,
+    region: *mut orbit_audio_sandbox::transport::SharedRegion,
+) {
+    R::detach_keep_shm(supervisor);
+    // SAFETY: 呼び出し元が、この呼び出しの完了まで region の mmap を保持する。
+    unsafe { orbit_audio_sandbox::transport::reset_control_run(region) };
 }
 
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
@@ -7221,10 +7250,7 @@ mod outproc_health_tests {
 /// `OutProcInstrumentControl`（private struct）へ直接アクセスして注入する。
 #[cfg(all(test, feature = "outproc-instrument"))]
 mod outproc_instrument_health_tests {
-    use super::{
-        ChildLaunch, ChildSlot, EngineWrap, InstrumentRole, OutProcInstrumentControl, OutProcRole,
-        WrapError,
-    };
+    use super::{ChildLaunch, ChildSlot, EngineWrap, InstrumentRole, OutProcRole, WrapError};
     use crate::backend::StubBackend;
     use crate::outproc_instrument::OutProcInstrumentStats;
     use std::path::{Path, PathBuf};
@@ -7242,26 +7268,25 @@ mod outproc_instrument_health_tests {
         *wrap
             .outproc_instrument
             .lock()
-            .expect("lock instrument control for injection") = Some(OutProcInstrumentControl {
-            slots: vec![super::InstrumentSlotEntry {
-                event_tx,
-                stats: stats.clone(),
-                shm_path: PathBuf::from("/tmp/unused-instrument-health.shm"),
-                child_exe: PathBuf::from("unused-instrument-child"),
-                sample_rate: 48_000,
-                engaged: Arc::new(AtomicBool::new(false)),
-                drain_requested: Arc::new(AtomicBool::new(false)),
-                drain_done: Arc::new(AtomicBool::new(false)),
-                child_slot: Weak::new(),
-            }],
-            instance_index: std::collections::HashMap::from([(
-                String::from(super::DEFAULT_INSTRUMENT_INSTANCE),
-                0,
-            )]),
-            free_slots: Vec::new(),
-            next_unassigned: 1,
-            replacements_in_flight: std::collections::HashSet::new(),
-        });
+            .expect("lock instrument control for injection") =
+            Some(super::test_instrument_control(
+                vec![super::InstrumentSlotEntry {
+                    event_tx,
+                    stats: stats.clone(),
+                    shm_path: PathBuf::from("/tmp/unused-instrument-health.shm"),
+                    child_exe: PathBuf::from("unused-instrument-child"),
+                    sample_rate: 48_000,
+                    engaged: Arc::new(AtomicBool::new(false)),
+                    drain_requested: Arc::new(AtomicBool::new(false)),
+                    drain_done: Arc::new(AtomicBool::new(false)),
+                    child_slot: Weak::new(),
+                }],
+                std::collections::HashMap::from([(
+                    String::from(super::DEFAULT_INSTRUMENT_INSTANCE),
+                    0,
+                )]),
+                1,
+            ));
         (wrap, stats)
     }
 
@@ -7276,26 +7301,25 @@ mod outproc_instrument_health_tests {
         *wrap
             .outproc_instrument
             .lock()
-            .expect("lock instrument control for injection") = Some(OutProcInstrumentControl {
-            slots: vec![super::InstrumentSlotEntry {
-                event_tx,
-                stats,
-                shm_path: PathBuf::from("/tmp/unused-instrument-child-slot.shm"),
-                child_exe: PathBuf::from("unused-instrument-child"),
-                sample_rate: 48_000,
-                engaged: Arc::new(AtomicBool::new(false)),
-                drain_requested: Arc::new(AtomicBool::new(false)),
-                drain_done: Arc::new(AtomicBool::new(false)),
-                child_slot: Arc::downgrade(&child_slot),
-            }],
-            instance_index: std::collections::HashMap::from([(
-                String::from(super::DEFAULT_INSTRUMENT_INSTANCE),
-                0,
-            )]),
-            free_slots: Vec::new(),
-            next_unassigned: 1,
-            replacements_in_flight: std::collections::HashSet::new(),
-        });
+            .expect("lock instrument control for injection") =
+            Some(super::test_instrument_control(
+                vec![super::InstrumentSlotEntry {
+                    event_tx,
+                    stats,
+                    shm_path: PathBuf::from("/tmp/unused-instrument-child-slot.shm"),
+                    child_exe: PathBuf::from("unused-instrument-child"),
+                    sample_rate: 48_000,
+                    engaged: Arc::new(AtomicBool::new(false)),
+                    drain_requested: Arc::new(AtomicBool::new(false)),
+                    drain_done: Arc::new(AtomicBool::new(false)),
+                    child_slot: Arc::downgrade(&child_slot),
+                }],
+                std::collections::HashMap::from([(
+                    String::from(super::DEFAULT_INSTRUMENT_INSTANCE),
+                    0,
+                )]),
+                1,
+            ));
         (wrap, child_slot)
     }
 
@@ -7635,13 +7659,13 @@ mod outproc_instrument_health_tests {
 #[cfg(all(test, feature = "outproc-instrument"))]
 mod outproc_instrument_replace_tests {
     use super::{
-        ChildLaunch, ChildSlot, EngineWrap, InstrumentRole, InstrumentSlotEntry,
-        OutProcInstrumentControl, OutProcRole, PluginUiWiring, WrapError,
+        test_instrument_control, ChildLaunch, ChildSlot, EngineWrap, InstrumentRole,
+        InstrumentSlotEntry, OutProcRole, PluginUiWiring, WrapError,
     };
     use crate::backend::StubBackend;
     use crate::outproc_instrument::OutProcInstrumentStats;
     use orbit_audio_sandbox::NeutralEvent;
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -7659,6 +7683,7 @@ mod outproc_instrument_replace_tests {
         event_rx: Option<rtrb::Consumer<NeutralEvent>>,
         stats: Arc<OutProcInstrumentStats>,
         shm_path: PathBuf,
+        engaged: Arc<AtomicBool>,
         drain_requested: Arc<AtomicBool>,
         drain_done: Arc<AtomicBool>,
     }
@@ -7695,7 +7720,7 @@ mod outproc_instrument_replace_tests {
             shm_path: shm_path.clone(),
             child_exe,
             sample_rate: 48_000,
-            engaged,
+            engaged: engaged.clone(),
             drain_requested: drain_requested.clone(),
             drain_done: drain_done.clone(),
             child_slot: Arc::downgrade(&slot),
@@ -7707,6 +7732,7 @@ mod outproc_instrument_replace_tests {
                 event_rx: Some(event_rx),
                 stats,
                 shm_path,
+                engaged,
                 drain_requested,
                 drain_done,
             },
@@ -7781,13 +7807,11 @@ mod outproc_instrument_replace_tests {
         *wrap
             .outproc_instrument
             .lock()
-            .expect("lock replacement fixture control") = Some(OutProcInstrumentControl {
-            slots: entries,
+            .expect("lock replacement fixture control") = Some(test_instrument_control(
+            entries,
             instance_index,
-            free_slots: Vec::new(),
             next_unassigned,
-            replacements_in_flight: HashSet::new(),
-        });
+        ));
         wrap
     }
 
@@ -7840,10 +7864,12 @@ mod outproc_instrument_replace_tests {
                 event_rx,
                 16,
                 engaged,
-                Arc::new(AtomicBool::new(false)),
-                Arc::new(AtomicBool::new(false)),
-                requested.clone(),
-                done,
+                crate::outproc_instrument::SlotSignals {
+                    teardown_requested: Arc::new(AtomicBool::new(false)),
+                    teardown_done: Arc::new(AtomicBool::new(false)),
+                    drain_requested: requested.clone(),
+                    drain_done: done,
+                },
                 stats,
             );
             wait_until("drain request", || requested.load(Ordering::Acquire));
@@ -7864,12 +7890,7 @@ mod outproc_instrument_replace_tests {
         let ack = spawn_drain_ack(
             old.event_rx.take().expect("old event consumer"),
             old.shm_path.clone(),
-            {
-                let control = wrap.outproc_instrument.lock().expect("lock control");
-                control.as_ref().expect("instrument control").slots[0]
-                    .engaged
-                    .clone()
-            },
+            old.engaged.clone(),
             old.drain_requested.clone(),
             old.drain_done.clone(),
             old.stats.clone(),
@@ -7897,6 +7918,37 @@ mod outproc_instrument_replace_tests {
             1,
         );
         (wrap, old, spare, old_pid)
+    }
+
+    #[test]
+    /// `free_slot` は同じ index を二重に積まない。積むと1つの slot が2テナントへ
+    /// 同時に払い出され、shm を共有した child が2本立つ。抽出前は呼び出し側2箇所に
+    /// 手書きされていたガードなので、抽出先で不変条件が生きていることを直接固定する。
+    #[test]
+    fn free_slot_never_lists_the_same_index_twice() {
+        let mut control = test_instrument_control(Vec::new(), HashMap::new(), 0);
+
+        control.free_slot(3);
+        control.free_slot(3);
+        assert_eq!(
+            control.free_slots,
+            vec![3],
+            "duplicate free must be ignored"
+        );
+
+        control.free_slot(1);
+        assert_eq!(control.free_slots, vec![3, 1]);
+        assert_eq!(
+            control.allocate_slot(),
+            Some(1),
+            "LIFO reuse order is preserved"
+        );
+        assert_eq!(control.allocate_slot(), Some(3));
+        assert_eq!(
+            control.allocate_slot(),
+            None,
+            "no slots exist, so the unassigned pool must not hand one out"
+        );
     }
 
     #[test]
@@ -8068,12 +8120,7 @@ mod outproc_instrument_replace_tests {
         let ack = spawn_drain_ack(
             old.event_rx.take().expect("old event consumer"),
             old.shm_path.clone(),
-            {
-                let control = wrap.outproc_instrument.lock().expect("lock control");
-                control.as_ref().expect("instrument control").slots[0]
-                    .engaged
-                    .clone()
-            },
+            old.engaged.clone(),
             old.drain_requested.clone(),
             old.drain_done.clone(),
             old.stats.clone(),
@@ -8315,7 +8362,7 @@ mod outproc_instrument_replace_tests {
 
 #[cfg(all(test, feature = "outproc-instrument"))]
 mod outproc_instrument_note_tests {
-    use super::{EngineWrap, OutProcInstrumentControl, WrapError};
+    use super::{test_instrument_control, EngineWrap, WrapError};
     use crate::backend::StubBackend;
     use orbit_audio_sandbox::{NeutralEvent, VoiceAddr};
 
@@ -8329,8 +8376,8 @@ mod outproc_instrument_note_tests {
         *wrap
             .outproc_instrument
             .lock()
-            .expect("lock instrument control") = Some(OutProcInstrumentControl {
-            slots: vec![super::InstrumentSlotEntry {
+            .expect("lock instrument control") = Some(test_instrument_control(
+            vec![super::InstrumentSlotEntry {
                 event_tx,
                 stats,
                 shm_path: std::path::PathBuf::from("/tmp/unused-note-slot.shm"),
@@ -8341,14 +8388,12 @@ mod outproc_instrument_note_tests {
                 drain_done: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 child_slot: std::sync::Weak::new(),
             }],
-            instance_index: std::collections::HashMap::from([(
+            std::collections::HashMap::from([(
                 String::from(super::DEFAULT_INSTRUMENT_INSTANCE),
                 0,
             )]),
-            free_slots: Vec::new(),
-            next_unassigned: 1,
-            replacements_in_flight: std::collections::HashSet::new(),
-        });
+            1,
+        ));
         (wrap, event_rx)
     }
 
@@ -8400,8 +8445,8 @@ mod outproc_instrument_note_tests {
         *wrap
             .outproc_instrument
             .lock()
-            .expect("lock instrument control") = Some(OutProcInstrumentControl {
-            slots: vec![
+            .expect("lock instrument control") = Some(test_instrument_control(
+            vec![
                 super::InstrumentSlotEntry {
                     event_tx: tx_a,
                     stats: crate::outproc_instrument::OutProcInstrumentStats::new(),
@@ -8425,14 +8470,12 @@ mod outproc_instrument_note_tests {
                     child_slot: std::sync::Weak::new(),
                 },
             ],
-            instance_index: std::collections::HashMap::from([
+            std::collections::HashMap::from([
                 (String::from("plugin:kick"), 0),
                 (String::from("plugin:lead"), 1),
             ]),
-            free_slots: Vec::new(),
-            next_unassigned: 2,
-            replacements_in_flight: std::collections::HashSet::new(),
-        });
+            2,
+        ));
         (wrap, rx_a, rx_b)
     }
 

@@ -80,6 +80,41 @@ free-list へ返すと次のテナントが必ず失敗する。ガードは実�
 effort を上げても防げない類。**設計の失敗モード一覧の各項目にテスト行があるか**を
 工程②（設計チェック）の必須項目にする。
 
+#### /simplify（4観点並行）— 7件適用・変異検証で穴を1件発見
+
+**3エージェントが独立に同じ重複を指摘**（slot 割当ロジックが2関数に逐語コピー）。
+しかも既にエラー文言が `"all assigned"` と `"assigned or unavailable"` に分岐しており、
+**ドリフトが始まっていた**。
+
+| 適用 | 内容 |
+|---|---|
+| `allocate_slot` / `free_slot` | 割当と free-list 返却を `OutProcInstrumentControl` のメソッドへ集約 |
+| **`detach_and_reset_control_run`** | **detach → reset の順序（安全条件）が2箇所に手書きだったのを集約**。既存の `retryable_attach_failure` からも呼ぶ |
+| `SlotSignals` | 4つの `Arc<AtomicBool>` を構造体へ。**9引数コンストラクタと新規 clippy 抑制を解消**（同型引数は順序を間違えても型検査を通る） |
+| `bus_param_invalid_for_instrument_role` | ReplacePlugin も既存純関数を使う |
+| `SlotFixture.engaged` / `test_instrument_control` | テストのボイラープレート集約 |
+
+**Altitude が「instrument 専用スコープは正しい」を実コードで裏取り**: effect スロットは
+bus 名でグラフに焼き込まれ、「名前→slot の間接層」も「再利用できる空き slot」概念も存在しない。
+いま `OutProcRole` へ持ち上げるのは呼び出し元1つでの早すぎる汎化。
+
+**見送り**: RT フラグの状態列挙化（RT 意味論を変えるため別 issue）/ `lock_instrument_control`
+（14箇所・差分外）/ `wait_until` 集約（本 PR 起源でない）ほか。
+
+#### 🔴 main の変異検証で `free_slot` の不変条件が無防備と判明
+
+| 変異 | 結果 |
+|---|---|
+| `SlotSignals` の drain / teardown フィールド取り違え | 5件 red（構造体化で検出力は落ちていない） |
+| `allocate_slot` が free-list を再利用しない | 2件 red |
+| **`free_slot` の二重登録ガード削除** | **全件 green**（穴） |
+
+破れると **1つの slot が2テナントへ同時に払い出され、同じ shm を共有した child が2本立つ**。
+抽出が生んだ穴ではなく**抽出前から呼び出し側2箇所に手書きされていた無防備なガード**だが、
+名前が付いた今ならヘルパを直接テストできるので `free_slot_never_lists_the_same_index_twice` を追加。
+LIFO 再利用順と「slots が空なら未割当プールから払い出さない」も同時に固定。
+**ガード削除・LIFO→FIFO の2変異で red を確認済み。**
+
 #### 検証コマンドの落とし穴
 
 `cargo test -p orbit-audio-daemon` だけでは **33 tests しか走らず R1-R11 は feature gate で1件も実行されない**。

@@ -284,33 +284,33 @@ pub struct OutProcInstrumentPostProcessor {
     /// **本 PR では常に true で構築される**（既存起動経路は eager attach のまま無変更）。
     /// PR-1b で post-boot attach 実装時に false スタートさせる想定（詳細は Issue #431 参照）。
     engaged: Arc<AtomicBool>,
-    teardown_requested: Arc<AtomicBool>,
-    teardown_done: Arc<AtomicBool>,
-    /// #618: slot tenant 差し替え時、control thread が event ring の全残渣破棄を要求する。
-    drain_requested: Arc<AtomicBool>,
-    /// #618: `event_rx` を空にした後に audio thread が publish する決定論的 ack。
-    drain_done: Arc<AtomicBool>,
+    signals: SlotSignals,
     stats: Arc<OutProcInstrumentStats>,
     /// Last supervisor generation observed by the audio thread. This field has exactly one reader
     /// and writer (`process`) and therefore needs no atomic synchronization of its own.
     last_respawn_count: u64,
 }
 
+pub struct SlotSignals {
+    pub teardown_requested: Arc<AtomicBool>,
+    pub teardown_done: Arc<AtomicBool>,
+    /// #618: slot tenant 差し替え時、control thread が event ring の全残渣破棄を要求する。
+    pub drain_requested: Arc<AtomicBool>,
+    /// #618: `event_rx` を空にした後に audio thread が publish する決定論的 ack。
+    pub drain_done: Arc<AtomicBool>,
+}
+
 impl OutProcInstrumentPostProcessor {
     /// `host` = mmap を所有する production 構築子（`PipelinedInstrumentHost::from_mmap`）で作った
     /// host、`event_rx` = note event の受け側（`event_capacity` はその scratch buffer 分の容量）、
     /// `engaged` = child の post-boot attach 完了までの安全弁（本 PR では常に `true` で渡される）、
-    /// `teardown_requested` / `teardown_done` = supervisor と共有する協調フラグ、`stats` = 観測ミラー。
-    #[allow(clippy::too_many_arguments)]
+    /// `signals` = supervisor / replacement control と共有する協調フラグ、`stats` = 観測ミラー。
     pub fn new(
         host: PipelinedInstrumentHost,
         event_rx: rtrb::Consumer<NeutralEvent>,
         event_capacity: usize,
         engaged: Arc<AtomicBool>,
-        teardown_requested: Arc<AtomicBool>,
-        teardown_done: Arc<AtomicBool>,
-        drain_requested: Arc<AtomicBool>,
-        drain_done: Arc<AtomicBool>,
+        signals: SlotSignals,
         stats: Arc<OutProcInstrumentStats>,
     ) -> Self {
         Self {
@@ -319,10 +319,7 @@ impl OutProcInstrumentPostProcessor {
             event_scratch: Vec::with_capacity(event_capacity),
             audio_scratch: vec![0.0; BUF_LEN],
             engaged,
-            teardown_requested,
-            teardown_done,
-            drain_requested,
-            drain_done,
+            signals,
             stats,
             last_respawn_count: 0,
         }
@@ -336,15 +333,15 @@ impl OutProcInstrumentPostProcessor {
 
 impl PostProcessor for OutProcInstrumentPostProcessor {
     fn process(&mut self, data: &mut [f32]) {
-        if self.teardown_requested.load(Ordering::Acquire) {
-            self.teardown_done.store(true, Ordering::Release);
+        if self.signals.teardown_requested.load(Ordering::Acquire) {
+            self.signals.teardown_done.store(true, Ordering::Release);
             return;
         }
         // #618: tenant を切り替える slot は disengage 済みなので、旧 tenant の event を child へ
         // 渡さず全件捨てる。ack は consumer が ring を空にした後だけ publish する。
-        if self.drain_requested.load(Ordering::Acquire) {
+        if self.signals.drain_requested.load(Ordering::Acquire) {
             while self.event_rx.pop().is_ok() {}
-            self.drain_done.store(true, Ordering::Release);
+            self.signals.drain_done.store(true, Ordering::Release);
             return;
         }
         if !self.engaged.load(Ordering::Acquire) {
@@ -906,10 +903,12 @@ mod tests {
             event_rx,
             NOTE_RING_CAPACITY,
             engaged(true),
-            requested,
-            done,
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
+            SlotSignals {
+                teardown_requested: requested,
+                teardown_done: done,
+                drain_requested: Arc::new(AtomicBool::new(false)),
+                drain_done: Arc::new(AtomicBool::new(false)),
+            },
             stats.clone(),
         );
         let addr = VoiceAddr {
@@ -975,10 +974,12 @@ mod tests {
             event_rx,
             NOTE_RING_CAPACITY,
             engaged(true),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
+            SlotSignals {
+                teardown_requested: Arc::new(AtomicBool::new(false)),
+                teardown_done: Arc::new(AtomicBool::new(false)),
+                drain_requested: Arc::new(AtomicBool::new(false)),
+                drain_done: Arc::new(AtomicBool::new(false)),
+            },
             stats.clone(),
         );
         let addr = VoiceAddr {
@@ -1050,10 +1051,12 @@ mod tests {
             event_rx,
             NOTE_RING_CAPACITY,
             engaged(true),
-            requested,
-            done.clone(),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
+            SlotSignals {
+                teardown_requested: requested,
+                teardown_done: done.clone(),
+                drain_requested: Arc::new(AtomicBool::new(false)),
+                drain_done: Arc::new(AtomicBool::new(false)),
+            },
             stats.clone(),
         );
 
@@ -1112,10 +1115,12 @@ mod tests {
             event_rx,
             NOTE_RING_CAPACITY,
             engaged(false),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
+            SlotSignals {
+                teardown_requested: Arc::new(AtomicBool::new(false)),
+                teardown_done: Arc::new(AtomicBool::new(false)),
+                drain_requested: Arc::new(AtomicBool::new(false)),
+                drain_done: Arc::new(AtomicBool::new(false)),
+            },
             stats.clone(),
         );
 
@@ -1163,10 +1168,12 @@ mod tests {
             event_rx,
             NOTE_RING_CAPACITY,
             engaged(false),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
-            drain_requested,
-            drain_done.clone(),
+            SlotSignals {
+                teardown_requested: Arc::new(AtomicBool::new(false)),
+                teardown_done: Arc::new(AtomicBool::new(false)),
+                drain_requested,
+                drain_done: drain_done.clone(),
+            },
             stats.clone(),
         );
 
