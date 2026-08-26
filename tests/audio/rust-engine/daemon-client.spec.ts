@@ -287,6 +287,38 @@ describe('DaemonClient with mock server', () => {
     expect(record?.params).not.toHaveProperty('state_path')
   })
 
+  it('ReplacePlugin sends the exact instrument spec and maps quarantined_slot', async () => {
+    const request = vi.spyOn(client as any, 'request').mockResolvedValue({
+      plugin_id: 'new-id',
+      plugin_name: 'New Synth',
+      note_port_index: 3,
+      quarantined_slot: true,
+    })
+    await expect(
+      client.replacePlugin(
+        '/plugins/new.vst3',
+        'new-id',
+        'instrument',
+        undefined,
+        'plugin:kick',
+        '/songs/new.state',
+      ),
+    ).resolves.toEqual({
+      pluginId: 'new-id',
+      pluginName: 'New Synth',
+      notePortIndex: 3,
+      quarantinedSlot: true,
+    })
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(request).toHaveBeenCalledWith('ReplacePlugin', {
+      path: '/plugins/new.vst3',
+      plugin_id: 'new-id',
+      role: 'instrument',
+      instance: 'plugin:kick',
+      state_path: '/songs/new.state',
+    })
+  })
+
   it('GetPluginState sends the resolved effect target and preserves the byte result', async () => {
     const url = await server.start({
       GetPluginState: () => ({
@@ -837,6 +869,26 @@ describe('resolveDaemonBinaryPath (C2)', () => {
 // tracing まで拡張側で `ERROR:` として記録され、get_log の ERROR 前後比較（gated E2E・
 // LLM の自己検証）を実際に壊した。level token で振り分ける分類の正本がこのテスト。
 describe('isDaemonNonErrorTracingLine (#605 stderr 転送の level 振り分け)', () => {
+  // #618 E2E 実測: child は daemon の stderr を継承し tracing を持たないため、level を
+  // 名乗らない成功行が **ERROR として記録される**（`state restored from ...` が該当し、
+  // state 付きの宣言・respawn・差し替えのたびに ERROR カウントを汚していた）。
+  it('🔴 child が名乗った INFO は非エラー・名乗らない行と ERROR/WARN は従来どおりエラー', () => {
+    expect(
+      isDaemonNonErrorTracingLine(
+        'INFO [orbit-vst3-instrument-child] state restored from "/x/y.state" (8 bytes)',
+      ),
+    ).toBe(true)
+    expect(isDaemonNonErrorTracingLine('DEBUG [orbit-clap-instrument-child] hello')).toBe(true)
+    expect(
+      isDaemonNonErrorTracingLine('[orbit-vst3-instrument-child] plugin.process() failed'),
+    ).toBe(false)
+    expect(
+      isDaemonNonErrorTracingLine('ERROR [orbit-vst3-instrument-child] state restore failed'),
+    ).toBe(false)
+    expect(isDaemonNonErrorTracingLine('WARN [orbit-vst3-instrument-child] degraded')).toBe(false)
+    expect(isDaemonNonErrorTracingLine('INFO something else entirely')).toBe(false)
+  })
+
   // 実機の daemon が出す ANSI 色付き tracing 行（gated E2E の実測から採取）。
   const ansiInfoLine =
     '\x1b[2m2026-08-25T17:30:47.243628Z\x1b[0m \x1b[32m INFO\x1b[0m ' +

@@ -21,7 +21,12 @@ import * as path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import WebSocket from 'ws'
 
-import type { PluginLoadResult, PluginStateSaveResult, PluginStateSaveTarget } from '../types'
+import type {
+  PluginLoadResult,
+  PluginReplaceResult,
+  PluginStateSaveResult,
+  PluginStateSaveTarget,
+} from '../types'
 
 import {
   DaemonConnectionError,
@@ -126,7 +131,11 @@ export function isDaemonNonErrorTracingLine(line: string): boolean {
   // tracing 既定形式の「ISO timestamp + level token」だけを non-error と認める。
   // 判定を緩めて本文中の "INFO" を拾うと本物のエラーが log から消える側に倒れるので、
   // 迷ったら error 側（従来挙動）へ。
-  return /^\s*\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO)\s/.test(plain)
+  if (/^\s*\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO)\s/.test(plain)) return true
+  // child プロセスは daemon の stderr を継承し、tracing を持たない(依存を足していない)。
+  // level トークンを自分で名乗った行だけを非エラーとして認める。名乗らない行・
+  // ERROR/WARN を名乗る行は従来どおり error 側へ倒す(例: "plugin.process() failed")。
+  return /^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+-child\]\s/.test(plain)
 }
 
 /**
@@ -431,6 +440,31 @@ export class DaemonClient extends EventEmitter {
       pluginId: String(result.plugin_id),
       pluginName: String(result.plugin_name),
       notePortIndex: Number(result.note_port_index),
+    }
+  }
+
+  /** Atomically replaces (or ensure-loads) one instrument instance. */
+  async replacePlugin(
+    filePath: string,
+    pluginId: string | undefined,
+    role: 'effect' | 'instrument',
+    bus?: string,
+    instance?: string,
+    statePath?: string,
+  ): Promise<PluginReplaceResult> {
+    const result = await this.request('ReplacePlugin', {
+      path: filePath,
+      ...(pluginId === undefined ? {} : { plugin_id: pluginId }),
+      role,
+      ...(bus ? { bus } : {}),
+      ...(instance ? { instance } : {}),
+      ...(statePath ? { state_path: statePath } : {}),
+    })
+    return {
+      pluginId: String(result.plugin_id),
+      pluginName: String(result.plugin_name),
+      notePortIndex: Number(result.note_port_index),
+      quarantinedSlot: Boolean(result.quarantined_slot),
     }
   }
 

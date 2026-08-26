@@ -297,7 +297,10 @@ fn main() -> Result<()> {
     })?;
     if let (Some(state_path), Some(bytes)) = (&args.state, &state_bytes) {
         eprintln!(
-            "[orbit-vst3-instrument-child] state restored from {state_path:?} ({} bytes)",
+            // 成功通知。child は stderr を daemon から継承するため、level トークンが無いと
+            // TS 側の分類器が既定の error 側へ倒し、**成功が ERROR として記録される**
+            // (#618 の E2E が実測で検出)。child 用の `LEVEL [prefix]` 規約に従う。
+            "INFO [orbit-vst3-instrument-child] state restored from {state_path:?} ({} bytes)",
             bytes.len()
         );
     }

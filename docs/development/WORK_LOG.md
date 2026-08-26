@@ -17,6 +17,79 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.361 feat(dsl): instrument の差し替えを DSL から（#618 PR-2） (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #618（PR-2 = TS 表面 + gated E2E。PR-1 = #621 は daemon 機構）
+**Status**: TS **2034 passed** / lint 0 / **実機 gated E2E 7/7 green**（#618 E1-E6 を含む）
+
+#### 🔴 E2E が実機でしか出ない欠陥を捕まえた（owner 強調「e2e もちゃんとやってね」）
+
+E2 が「差し替えで ERROR ログが増えない」で落ちた。増えていた ERROR の正体:
+
+```
+[orbit-vst3-instrument-child] state restored from "...(8 bytes)"
+```
+
+**成功メッセージが ERROR として記録されていた。** child は daemon の stderr を継承する一方
+`tracing` 依存を持たず、TS 側の分類器（`isDaemonNonErrorTracingLine`）は
+level トークンの無い行を**既定で error 側へ倒す**設計だったため。
+
+**これは PR-2 が持ち込んだ欠陥ではない** — state 付きの宣言・respawn でも同じ行が出るので
+以前から ERROR カウントを汚していた。**ERROR 数をヘルスシグナルにする E2E を書いて初めて気づいた。**
+
+修正: **child にも level トークンの規約を与える**（`LEVEL [orbit-*-child] ...`）。
+成功行だけ `INFO` を名乗らせ、分類器はその形のみ非エラーとして認める。
+level を名乗らない行・`ERROR`/`WARN` を名乗る行は従来どおり error 側（`plugin.process() failed` 等）。
+child crate に tracing 依存を足さずに済む最小の形。
+
+変異検証（両方向）: 規約の行を**外すと** red / パターンを**緩めて level 無しも通すと** red。
+
+#### E2E は「何が鳴っているか」まで見る
+
+Codex が**ブリーフの弱点を報告**してきた: 指定した CLAP/VST3 oracle は定常出力が
+どちらも `sin * 0.25` で **RMS がほぼ同値**なので、「RMS が有意に異なる」は偽のアサーションになる。
+代わりに VST3 の +7 半音 state を使い**基本周波数**で識別する形に変えていた。
+
+```
+E1/E2/E4/E5 の RMS > 0.03（非無音）/ E3 < 0.005（無音）
+|e2Hz - e1Hz| / e1Hz > 0.25    音が「変わった」
+|e4Hz - e2Hz| / e2Hz < 0.02    失敗後も B が鳴り続けている
+|e5Hz - e1Hz| / e1Hz < 0.02    音色ループで A が戻った
+```
+
+E4・E5 は RMS では区別できず**周波数でしか証明できない**。指示より良い設計。
+併せて旧 child の **PID 消滅**と `pluginChildPids(CLAP) == []` も確認している。
+
+#### E2E 自体の変異検証
+
+daemon の commit（`instance_index` 張り替え）を revert してビルドし直し、実機で再走 → **red を確認**。
+**ただし発火したのは UI オラクル**（`open_plugin_ui` の target 解決）で、音のアサーションではない。
+音の解析は capture 停止後の最後に走るため、手前のオラクルが先に落ちる。
+**「E2E が変異を検出する」は成立したが、「音のアサーションが検出した」とは言えない**（事実として記録）。
+
+#### main の検証で 1 件 red → 修正
+
+分類テストが新設 private メソッド `prepareInstrumentReplacement` を捕捉して落ちた
+（**逆方向テストが設計どおり機能**）。DSL から到達しない内部 API として登録。
+
+---
+
+### 6.361 feat(engine): instrument 差し替えの TS 表面 + gated E2E（#618 PR-2） (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #618（PR-2 = TypeScript engine 表面・DSL orchestration・実機 E2E）
+
+- `ReplacePlugin` を daemon client / `RustEnginePlayer` / `AudioEngine` へ公開し、成功後の
+  respawn cache と active 状態を新 spec へ更新
+- instrument 宣言だけが opt-in する `EffectChainMap` 差し替え経路を追加。他の effect 3 manager の
+  1-slot 制約と `EffectSlotLimitError` は維持
+- UI close → 旧 state 自動保存 → atomic replace → chain commit を直列化。daemon 明示拒否では旧 chain
+  を保持し、transport 例外では次の `ReplacePlugin` ensure で収束する
+- document directory 未設定と隔離 slot をユーザー可視 warning にし、旧音色の project.yaml 登記と
+  新音色の state fallback 復元を接続
+- T1–T11 の unit と format 跨ぎ（CLAP → VST3）の gated E1–E6 を追加
+
 ### 6.360 feat(daemon): instrument 差し替えの daemon 機構（#618 PR-1） (Aug 26, 2026)
 
 **Date**: 2026-08-26

@@ -18,6 +18,7 @@ export interface HandshakeFrame {
 export type CommandMethod =
   | 'LoadSample'
   | 'LoadPlugin'
+  | 'ReplacePlugin'
   | 'GetPluginState'
   | 'RenderScore'
   | 'OpenPluginUI'

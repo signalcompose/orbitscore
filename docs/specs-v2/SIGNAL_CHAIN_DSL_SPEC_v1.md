@@ -101,8 +101,7 @@ Status: 正本（specs-v2）/ 2026-07-18 制定 / 受け皿 issue: \#506 / 決�
 
 > **v1 の現在地（規範4）**: per-sequence インスタンス化は **#540 P1 で実装済み**
 > （`PluginInstrumentManager` + instrument slot pool）。同一シーケンスへの異 spec 再宣言による
-> **原子的差し替え（prepare → commit・失敗時は旧保持・差し替え前 state 自動保存）は #618 で実装中**
-> （daemon 機構 = PR-1 / DSL 表面 = PR-2。PR-2 が入るまで DSL 面は従来どおり明示エラー）。
+> **原子的差し替え（prepare → commit・失敗時は旧保持・差し替え前 state 自動保存）は #618 で実装済み**。
 > effect チェーンの後勝ち・ブロック置換は未実装（#522）。
 
 ### SC.3.2 名前の正規化と衝突

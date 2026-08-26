@@ -173,6 +173,15 @@ export class Global {
       audioEngine,
       this.audioManager,
       this.linkAudioManager,
+      {
+        beforeReplace: (sequenceName, oldSlot) =>
+          this.prepareInstrumentReplacement(sequenceName, oldSlot),
+        onQuarantinedSlot: (sequenceName) => {
+          console.warn(
+            `[instrument-replace] ⚠️ Sequence '${sequenceName}' was replaced, but its old daemon slot was quarantined and cannot be reused; repeated quarantines may exhaust the instrument pool.`,
+          )
+        },
+      },
     )
     this.sequenceRegistry = new SequenceRegistry(audioEngine, this)
     this.effectsManager = new EffectsManager(
@@ -1056,6 +1065,43 @@ export class Global {
       normalizedName: session.resolved.identity.normalizedName,
       completion,
     }
+  }
+
+  /** UI close and old-tenant state commit immediately before an instrument replacement. */
+  private async prepareInstrumentReplacement(
+    sequenceName: string,
+    oldSlot: PluginSlot,
+  ): Promise<void> {
+    if (this.hasOpenPluginUi(sequenceName, 0)) {
+      try {
+        await this.closePluginUi(sequenceName, 0)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (!message.includes('timeout-without-save')) throw error
+        console.warn(
+          `[instrument-replace] ⚠️ Plugin UI for Sequence '${sequenceName}' closed without a safepoint save; attempting the required explicit state save before replacement.`,
+        )
+      }
+    }
+    const projectDirectory = this.audioManager.getDocumentDirectory()
+    if (!projectDirectory) {
+      console.warn(
+        `[instrument-replace] ⚠️ Cannot save the old instrument state for Sequence '${sequenceName}' because the document directory is not set; replacement will continue without state preservation.`,
+      )
+      return
+    }
+    if (oldSlot.role !== 'instrument') {
+      throw new Error('Instrument replacement received a non-instrument slot.')
+    }
+    await this.projectStateStore(projectDirectory).save(
+      {
+        receiver: sequenceName,
+        role: 'instrument',
+        normalizedName: oldSlot.normalizedName,
+        occurrence: oldSlot.occurrence,
+      },
+      { role: 'instrument', instance: oldSlot.instance },
+    )
   }
 
   /**

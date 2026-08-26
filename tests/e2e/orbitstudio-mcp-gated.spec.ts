@@ -133,6 +133,29 @@ function killOrbitStudio(): void {
   }
 }
 
+/** Child command lines carry `--plugin <absolute path>`; use that tenant identity as the PID oracle. */
+function pluginChildPids(pluginPath: string): number[] {
+  try {
+    return execFileSync('pgrep', ['-f', pluginPath], { encoding: 'utf8' })
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(Number)
+      .filter((pid) => Number.isSafeInteger(pid) && pid > 0)
+  } catch {
+    return []
+  }
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
 describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', () => {
   let child: ChildProcess | undefined
   let client: McpClient | undefined
@@ -707,31 +730,25 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           `successful #562 saves must add no ERROR: lines. Log tail: ${stateSaveLog.slice(-1200)}`,
         ).toBe(errorsBeforeStateSave)
 
-        // ── #540 P1 (a): 同一シーケンスへの別 plugin 再宣言 = v1 の差し替え拒否。
-        // エラー文言は回避策（エンジン再起動）を案内する新文言であること。
+        // ── #618: 同一シーケンスへの別 plugin 再宣言は replacement prepare へ進む。
+        // effect-only fixture を instrument として渡し、prepare failure が loud で旧を保持することを確認。
         const secondInstrumentRes = await client.call('evaluate_orbitscore', {
           code: `instSeq.instrument("${CLAP_TEST_EFFECT_PATH}")`,
         })
-        // 🔴 #614 以降、`evaluate_orbitscore` は**評価結果**を返す。差し替え拒否は
-        // 実行時エラーなので `isError: true` で返り、診断も応答に含まれる。
-        // （#614 以前は「stdin へ書けた」= ok が返り、エラーは get_log にしか出なかった。
-        //  下のログ assert はその時代の名残だが、二重の確認として残す価値がある。）
+        // 応答だけでなく get_log の daemon-side failure をオラクルにする。
         expect(secondInstrumentRes.isError, secondInstrumentRes.text).toBe(true)
-        expect(secondInstrumentRes.text).toContain(
-          "Sequence 'instSeq' already has an instrument instance",
-        )
-        await sleep(1000) // duplicate rejection is synchronous once the first slot is registered
+        await sleep(6000) // real replacement prepare + failed READY/role validation
 
         const afterSecondInstrumentLog = (await client.call('get_log', { lines: 500 })).text
         expect(
           afterSecondInstrumentLog,
-          `expected the v1 replacement rejection, got log tail: ${afterSecondInstrumentLog.slice(-800)}`,
-        ).toContain("Sequence 'instSeq' already has an instrument instance")
-        expect(afterSecondInstrumentLog).toContain('restart the engine to change the plugin')
+          `expected a loud replacement prepare failure, got log tail: ${afterSecondInstrumentLog.slice(-800)}`,
+        ).toContain('[OUTPROC_ATTACH_FAILED]')
+        expect(afterSecondInstrumentLog).not.toContain('restart the engine to change the plugin')
 
         // ── #540 P1 (b): 別シーケンスは自分の独立インスタンスを持てる（旧「エンジン
         // 全体で1台」制限の撤去がこの PR の表面）。同じ synth をもう1台 attach し、
-        // 新規の attach 失敗も「already has」拒否も**増えない**ことを確認する。
+        // 新規の attach 失敗が**増えない**ことを確認する。
         const attachFailuresBeforeSecondSeq = (
           afterSecondInstrumentLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? []
         ).length
@@ -1981,6 +1998,228 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     },
     // Three engine cycles (default / loaded / restored), each with a kick and
     // a solo segment — the shared two-cycle budget is not enough.
+    TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
+    'replaces a playing instrument across CLAP/VST3 with audio, state, process, failure, and UI oracles (#618 E1-E6)',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const root = tmpRoot
+      const capturePath = path.join(root, 'instrument-replace-e1-e6.wav')
+      const vst3StatePath = path.join(root, 'fixtures', 'synth-oracle-plus7.state')
+      fs.mkdirSync(path.dirname(vst3StatePath), { recursive: true })
+      const vst3State = Buffer.alloc(8)
+      vst3State.writeUInt32LE(0x4f52_4331, 0)
+      vst3State.writeInt32LE(7, 4)
+      fs.writeFileSync(vst3StatePath, vst3State)
+      const vst3SynthPath = execFileSync(
+        '/bin/bash',
+        [VST3_SYNTH_PACKAGE_SCRIPT, 'release', 'instrument-replace-e2e'],
+        { encoding: 'utf8' },
+      ).trim()
+
+      const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
+      const start = await activeClient.call('start_engine', { capture_wav: capturePath })
+      expect(start.isError, start.text).toBe(false)
+      await waitForEngine(true, 15_000, '#618 E1-E6 engine running')
+      await sleep(2500)
+      const captureWallStart = Date.now()
+      let stopWall = captureWallStart
+      const segments: Record<string, { from: number; to: number }> = {}
+      try {
+        const baselineLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const errorsBefore = countErrors(baselineLog)
+
+        // E1: A is the CLAP oracle. LOOP keeps producing fresh note lifetimes while replace runs.
+        await activeClient.call('evaluate_orbitscore', {
+          code: [
+            'var global = init GLOBAL',
+            'global.key("C")',
+            'global.tempo(120)',
+            'global.beat(4 by 4)',
+            'global.start()',
+            'var cb618 = init global.seq',
+            `cb618.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)})`,
+            'cb618.play(1, 1, 1, 1)',
+            'LOOP(cb618)',
+          ].join('\n'),
+        })
+        await waitUntil(() => Promise.resolve(pluginChildPids(CLAP_TEST_SYNTH_PATH).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 10_000,
+          label: '#618 old CLAP child started',
+        })
+        const oldChildPids = pluginChildPids(CLAP_TEST_SYNTH_PATH)
+        expect(oldChildPids.length, 'E1 must observe the old CLAP child PID').toBeGreaterThan(0)
+        segments.e1 = { from: Date.now(), to: 0 }
+        await sleep(3000)
+        segments.e1.to = Date.now()
+
+        // E2: replace while the LOOP is actively playing. The VST3 state shifts pitch by +7,
+        // giving an independent spectral oracle in addition to non-silent RMS.
+        const errorsBeforeReplace = countErrors(
+          (await activeClient.call('get_log', { lines: 500 })).text,
+        )
+        await activeClient.call('evaluate_orbitscore', {
+          code: `cb618.instrument(${JSON.stringify(vst3SynthPath)}, ${JSON.stringify(vst3StatePath)})`,
+        })
+        await waitUntil(() => Promise.resolve(pluginChildPids(vst3SynthPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#618 replacement VST3 child started',
+        })
+        await waitUntil(() => Promise.resolve(oldChildPids.every((pid) => !processExists(pid))), {
+          intervalMs: 200,
+          timeoutMs: 10_000,
+          label: '#618 old CLAP child disappeared',
+        })
+        const afterReplaceLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterReplaceLog),
+          `E2 replacement must add no ERROR lines. Log tail: ${afterReplaceLog.slice(-1200)}`,
+        ).toBe(errorsBeforeReplace)
+        segments.e2 = { from: Date.now(), to: 0 }
+        await sleep(3000)
+        segments.e2.to = Date.now()
+
+        // E6: the post-replace UI must be the VST3 tenant, not stale bookkeeping for A.
+        const errorsBeforeUi = countErrors(afterReplaceLog)
+        await activeClient.call('evaluate_orbitscore', { code: 'cb618.ui()' })
+        await sleep(1000)
+        const closeNewUi = await activeClient.call('close_plugin_ui', {
+          receiver: 'cb618',
+          index: 0,
+        })
+        expect(closeNewUi.isError, closeNewUi.text).toBe(false)
+        expect(JSON.parse(closeNewUi.text)).toMatchObject({
+          receiver: 'cb618',
+          index: 0,
+          normalizedName: 'SynthOracle',
+        })
+        const afterUiLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterUiLog),
+          `E6 new-tenant UI must add no ERROR lines. Log tail: ${afterUiLog.slice(-1200)}`,
+        ).toBe(errorsBeforeUi)
+
+        // E3: a rest-only pattern must be silent; the old tenant PIDs remain gone.
+        await activeClient.call('evaluate_orbitscore', { code: 'cb618.play(0, 0, 0, 0)' })
+        await sleep(1000)
+        segments.e3 = { from: Date.now(), to: 0 }
+        await sleep(2500)
+        segments.e3.to = Date.now()
+        expect(oldChildPids.every((pid) => !processExists(pid))).toBe(true)
+        expect(pluginChildPids(CLAP_TEST_SYNTH_PATH)).toEqual([])
+
+        // E4: a failed prepare is loud, then B must still produce B's shifted tone.
+        const beforeFailureLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const failedReplace = await activeClient.call('evaluate_orbitscore', {
+          code: 'cb618.instrument("/definitely/nonexistent/Issue618.vst3")',
+        })
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return failedReplace.isError || countErrors(log) > countErrors(beforeFailureLog)
+          },
+          { intervalMs: 200, timeoutMs: 10_000, label: '#618 failed replacement surfaced' },
+        )
+        const afterFailureLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          failedReplace.isError || countErrors(afterFailureLog) > countErrors(beforeFailureLog),
+          `E4 failure was not surfaced by evaluation or get_log: ${afterFailureLog.slice(-1200)}`,
+        ).toBe(true)
+        await activeClient.call('evaluate_orbitscore', { code: 'cb618.play(1, 1, 1, 1)' })
+        await sleep(1000)
+        segments.e4 = { from: Date.now(), to: 0 }
+        await sleep(3000)
+        segments.e4.to = Date.now()
+
+        // E5: A was automatically registered before A→B; switching back uses that state.
+        const projectFile = path.join(root, 'project.yaml')
+        const manifest = parse(fs.readFileSync(projectFile, 'utf8')) as {
+          states: Record<string, string>
+        }
+        const aIdentity = 'cb618/instrument/CLAPTestSynth/0'
+        expect(manifest.states[aIdentity]).toBeDefined()
+        expect(fs.existsSync(path.resolve(root, manifest.states[aIdentity]!))).toBe(true)
+        const logBeforeRestoreA = (await activeClient.call('get_log', { lines: 500 })).text
+        const restoreMarker = `[plugin-state] restoring '${aIdentity}'`
+        const restoreMarkersBefore = logBeforeRestoreA.split(restoreMarker).length - 1
+        await activeClient.call('evaluate_orbitscore', {
+          code: `cb618.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)})`,
+        })
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return log.split(restoreMarker).length - 1 > restoreMarkersBefore
+          },
+          { intervalMs: 200, timeoutMs: 15_000, label: '#618 old state restore log' },
+        )
+        segments.e5 = { from: Date.now(), to: 0 }
+        await sleep(3000)
+        segments.e5.to = Date.now()
+
+        const finalLog = (await activeClient.call('get_log', { lines: 500 })).text
+        // The deliberate E4 error is the only new error in this scenario.
+        expect(countErrors(finalLog)).toBeGreaterThanOrEqual(errorsBefore + 1)
+      } finally {
+        await activeClient.call('evaluate_orbitscore', {
+          code: 'cb618.stop()\nglobal.stop()',
+        })
+        const stopped = await activeClient.call('stop_engine')
+        expect(stopped.isError, stopped.text).toBe(false)
+        stopWall = Date.now()
+        await waitForEngine(false, 15_000, '#618 E1-E6 engine stopped')
+        await sleep(1500)
+      }
+
+      const capture = fs.readFileSync(capturePath)
+      const analysis = analyzeWavBuffer(capture, { windowMs: 100 })
+      const audioRange = (segment: { from: number; to: number }) => ({
+        fromSec: Math.max(0, analysis.durationSec - (stopWall - segment.from) / 1000),
+        toSec: Math.min(
+          analysis.durationSec,
+          analysis.durationSec - (stopWall - segment.to) / 1000,
+        ),
+      })
+      const segmentRms = (segment: { from: number; to: number }): number => {
+        const range = audioRange(segment)
+        const windows = (analysis.windows ?? []).filter(
+          (window) => window.startSec >= range.fromSec && window.startSec < range.toSec,
+        )
+        return Math.sqrt(
+          windows.reduce((sum, window) => sum + window.rms * window.rms, 0) /
+            Math.max(1, windows.length),
+        )
+      }
+      const e1Rms = segmentRms(segments.e1!)
+      const e2Rms = segmentRms(segments.e2!)
+      const e3Rms = segmentRms(segments.e3!)
+      const e4Rms = segmentRms(segments.e4!)
+      const e5Rms = segmentRms(segments.e5!)
+      expect(e1Rms, 'E1 CLAP baseline must be non-silent').toBeGreaterThan(0.03)
+      expect(e2Rms, 'E2 VST3 replacement must be non-silent').toBeGreaterThan(0.03)
+      expect(e3Rms, 'E3 rest pattern must be silent').toBeLessThan(0.005)
+      expect(e4Rms, 'E4 failed replacement must leave B sounding').toBeGreaterThan(0.03)
+      expect(e5Rms, 'E5 restored A must be non-silent').toBeGreaterThan(0.03)
+
+      const e1Hz = estimateFundamentalHz(capture, audioRange(segments.e1!))
+      const e2Hz = estimateFundamentalHz(capture, audioRange(segments.e2!))
+      const e4Hz = estimateFundamentalHz(capture, audioRange(segments.e4!))
+      const e5Hz = estimateFundamentalHz(capture, audioRange(segments.e5!))
+      expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
+      expect(e2Hz, 'E2 VST3 replacement needs a measurable fundamental').toBeDefined()
+      expect(e4Hz, 'E4 surviving VST3 needs a measurable fundamental').toBeDefined()
+      expect(e5Hz, 'E5 restored CLAP needs a measurable fundamental').toBeDefined()
+      expect(Math.abs(e2Hz! - e1Hz!) / e1Hz!).toBeGreaterThan(0.25)
+      expect(Math.abs(e4Hz! - e2Hz!) / e2Hz!).toBeLessThan(0.02)
+      expect(Math.abs(e5Hz! - e1Hz!) / e1Hz!).toBeLessThan(0.02)
+      expect(Math.abs(e4Rms - e2Rms) / e2Rms).toBeLessThan(0.15)
+    },
     TEST_TIMEOUT_MS * 2,
   )
 })

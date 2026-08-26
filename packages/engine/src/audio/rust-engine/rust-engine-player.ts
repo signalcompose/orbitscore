@@ -43,6 +43,7 @@ import type { AudioEngineBackend } from '../engine-backend'
 import type { AudioDevice } from '../supercollider/types'
 import type {
   PluginLoadResult,
+  PluginReplaceResult,
   PluginStateSaveTarget,
   PluginUiCloseCompletion,
   PluginUiTarget,
@@ -974,6 +975,35 @@ export class RustEnginePlayer implements AudioEngineBackend {
         }
         throw new Error(`Failed to load plugin: ${err.message}`)
       }
+      throw err
+    }
+  }
+
+  async replacePlugin(
+    filePath: string,
+    pluginId: string | undefined,
+    role: 'effect' | 'instrument',
+    bus?: string,
+    instance?: string,
+    statePath?: string,
+  ): Promise<PluginReplaceResult> {
+    const key = RustEnginePlayer.pluginKey(role, bus, instance)
+    try {
+      const result = await this.daemon.replacePlugin(
+        filePath,
+        pluginId,
+        role,
+        bus,
+        instance,
+        statePath,
+      )
+      this.loadedPlugins.set(key, { filePath, pluginId, role, bus, instance, statePath })
+      this.pluginActiveByKey.set(key, true)
+      return result
+    } catch (err) {
+      // A protocol rejection is definitive: the daemon kept the old tenant, so
+      // retain its cached spec and active bit. A transport failure is ambiguous.
+      if (!(err instanceof DaemonProtocolError)) this.pluginActiveByKey.set(key, false)
       throw err
     }
   }

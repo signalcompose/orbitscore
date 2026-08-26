@@ -10,6 +10,7 @@
 import * as path from 'path'
 
 import type { AudioEngine } from '../../audio/types'
+import { DaemonProtocolError } from '../../audio/rust-engine/errors'
 import type { PluginStateIdentity } from '../project-state-store'
 
 import { AudioManager } from './audio-manager'
@@ -118,6 +119,11 @@ export interface EffectChainMapOptions<K> {
    * どちらも `'master'` で同値。
    */
   readonly externalReceiverId?: (key: K) => string
+  /** Instrument-only opt-in. Effect managers omit this and retain the v1 limit error. */
+  readonly replacement?: {
+    readonly beforeReplace: (key: K, oldSlot: PluginSlot) => Promise<void>
+    readonly onQuarantinedSlot?: (key: K) => void
+  }
 }
 
 export class EffectSlotLimitError extends Error {
@@ -142,6 +148,9 @@ export class EffectChainMap<K> {
   private readonly maxLength: number
   private readonly statePathFallback?: PluginStatePathFallbackResolver
   private readonly externalReceiverId?: (key: K) => string
+  private readonly replacement?: EffectChainMapOptions<K>['replacement']
+  /** A transport failure leaves daemon commit status unknown; retry via ReplacePlugin ensure. */
+  private readonly uncertainReplacements = new Set<K>()
   // key ごとの直列化キュー（#527 review Important 1）。値は「前呼び出しの決着
   // （成功/失敗いずれも）待ち」で、前呼び出しの成否は自分の結果に影響させない
   // （catch で握りつぶし、必ず次の呼び出しへ進める）。
@@ -155,6 +164,7 @@ export class EffectChainMap<K> {
     this.maxLength = options.maxLength ?? 1
     this.statePathFallback = options.statePathFallback
     this.externalReceiverId = options.externalReceiverId
+    this.replacement = options.replacement
   }
 
   has(key: K): boolean {
@@ -251,6 +261,10 @@ export class EffectChainMap<K> {
         }
         return
       }
+      if (this.replacement) {
+        await this.issueReplacement(key, spec, existing)
+        return
+      }
       // 上限超過の型はこのマップが一元的に決める。呼び出し側は文言だけを渡す
       // （`EffectSlotLimitError` は effect チェーンの上限専用 — `code` を消費する
       // S4/#522 の Rust プロトコル拡張が effect を対象にしているため、他 role に
@@ -262,7 +276,102 @@ export class EffectChainMap<K> {
     // `chain[0]` が空 = チェーンも空なので、ここに `chain.length >= maxLength` の
     // ガードは要らない（到達不能）。複数 insert を許す時に必要になるのは長さ判定では
     // なく、先頭だけでなくチェーン全体と spec を突き合わせる形への書き換え（PR-1b）。
-    await this.issueLoad(key, spec)
+    if (this.replacement && this.uncertainReplacements.has(key)) {
+      await this.issueReplacement(key, spec)
+    } else {
+      await this.issueLoad(key, spec)
+    }
+  }
+
+  private async issueReplacement(
+    key: K,
+    spec: PluginDeclaration,
+    existing?: PluginSlot,
+  ): Promise<void> {
+    if (!this.audioEngine.replacePlugin) {
+      throw new Error('Instrument replacement requires the Rust engine backend.')
+    }
+    const { role, bus, normalizedName, resolvedPath, pluginId, instance } = spec
+    const chain = this.chains.get(key) ?? []
+    const occurrence = chain.filter(
+      (slot) => slot !== existing && slot.normalizedName === normalizedName,
+    ).length
+    const receiver = this.receiverId(key)
+    const instanceId = `${receiver}/${normalizedName}#${occurrence + 1}`
+    const externalReceiver =
+      spec.statePath === undefined ? this.externalReceiverId?.(key) : undefined
+    const fallbackStatePath =
+      externalReceiver !== undefined && this.statePathFallback !== undefined
+        ? await this.statePathFallback({
+            receiver: externalReceiver,
+            role,
+            normalizedName,
+            occurrence,
+          })
+        : undefined
+    const statePath = spec.statePath ?? fallbackStatePath
+    if (fallbackStatePath !== undefined) {
+      console.log(
+        `[plugin-state] restoring '${externalReceiver}/${role}/${normalizedName}/${occurrence}' from ${fallbackStatePath}`,
+      )
+    }
+    const optionalArgs: (string | undefined)[] = [bus, instance, statePath]
+    while (optionalArgs.length > 0 && optionalArgs[optionalArgs.length - 1] === undefined) {
+      optionalArgs.pop()
+    }
+
+    if (existing) await this.replacement!.beforeReplace(key, existing)
+    let result: Awaited<ReturnType<NonNullable<AudioEngine['replacePlugin']>>>
+    try {
+      result = await this.audioEngine.replacePlugin(
+        resolvedPath,
+        pluginId,
+        role,
+        ...(optionalArgs as [string?, string?, string?]),
+      )
+    } catch (error) {
+      if (!(error instanceof DaemonProtocolError)) {
+        if (existing) this.chains.delete(key)
+        this.uncertainReplacements.add(key)
+      }
+      throw error
+    }
+    const load = Promise.resolve()
+    const entry: PluginSlot =
+      role === 'effect'
+        ? {
+            role,
+            bus,
+            instanceId,
+            receiver,
+            occurrence,
+            normalizedName,
+            resolvedPath,
+            pluginId,
+            declaredStatePath: spec.statePath,
+            statePath,
+            load,
+          }
+        : {
+            role,
+            instance: instance ?? 'default',
+            instanceId,
+            receiver,
+            occurrence,
+            normalizedName,
+            resolvedPath,
+            pluginId,
+            declaredStatePath: spec.statePath,
+            statePath,
+            load,
+          }
+    const current = this.chains.get(key) ?? []
+    this.chains.set(
+      key,
+      existing ? current.map((slot) => (slot === existing ? entry : slot)) : [entry],
+    )
+    this.uncertainReplacements.delete(key)
+    if (result.quarantinedSlot) this.replacement!.onQuarantinedSlot?.(key)
   }
 
   private async issueLoad(key: K, spec: PluginDeclaration, replacing?: PluginSlot): Promise<void> {

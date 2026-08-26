@@ -11,6 +11,10 @@ export interface PluginLoadResult {
   notePortIndex: number
 }
 
+export interface PluginReplaceResult extends PluginLoadResult {
+  quarantinedSlot: boolean
+}
+
 export type PluginStateSaveTarget =
   | { role: 'effect'; bus?: string }
   | { role: 'instrument'; instance: string }
@@ -101,6 +105,16 @@ export interface AudioEngine {
     instance?: string,
     statePath?: string,
   ): Promise<PluginLoadResult>
+
+  /** Atomically replaces one per-sequence instrument instance without restarting the engine. */
+  replacePlugin?(
+    filePath: string,
+    pluginId: string | undefined,
+    role: 'effect' | 'instrument',
+    bus?: string,
+    instance?: string,
+    statePath?: string,
+  ): Promise<PluginReplaceResult>
 
   /** 現在のOOP plugin stateを停止中に取得し、指定した絶対パスへatomicに確定する。 */
   savePluginState?(
