@@ -17,6 +17,55 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.364 docs(design): #625 effect insert の差し替え・削除の設計を確定 (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #625（新規起票）
+**Status**: 設計確定（実装未着手）。ベースライン TS **2042 passed** / Rust daemon lib **186 passed**
+
+#### なぜ
+
+#618（instrument の差し替え・PR #621 マージ済み）は owner の動機「変更出来ないのは準備の段階で辛い」の
+**半分しか解いていない**。effect insert は一度挿すと engine 再起動なしに差し替えも削除もできず、
+`global.effect()` / `seq.effect()` / `sum|aux().effect()` の3経路が恒久エラーで拒否する。
+拒否文言が「chains (multiple inserts) are reserved」なのも誤答で、差し替えを頼んだ利用者に
+チェーンの話を返していた。
+
+#### 🔴 instrument の機構は流用できない
+
+instrument は N 個の同質スロットプール + `instance_index`（名前→スロットの間接層）を持つため
+「予備スロットへ prepare → 張り替えで commit」が成立した。effect は **bus 名でスロットが位置固定**
+（`bus_slots` を RT の `InsertBusStage` が直接抱える）で間接層が無く、予備スロット方式が成立しない。
+
+#### 採用機構: 同一 ChildSlot の in-place 建て直し（RT コード変更ゼロ）
+
+`engaged=false` で dry 素通しへ → 既存 quiesce ペア（stop/done）で RT の transport 離脱を ack 待ち →
+supervisor detach + shm control reset → **同一 shm へ新 child を attach**。
+子プロセスの制御語彙に差し替えコマンドが無い（`CONTROL_RUN`/`CONTROL_QUIT` のみ）ため、差し替えは
+必ず child の kill + 再 spawn になる。窓の間は**無音ではなく dry 素通し**（`outproc_effect.rs:365-367`）。
+
+失敗モデルは instrument と異なる: 解体**前**の失敗は旧 insert 無傷、解体**後**の失敗は dry 縮退 +
+forget-and-ensure（同じ宣言の再評価だけで復旧）。これは spec の一般則に反するため、**spec を先に改訂**する
+（SC.5 に失敗モデル2型を明記し、SC.3 規範4 の括弧書きをそこへ参照させる）。
+
+#### main レビュー（独立第二意見）で差し戻した2件
+
+| # | 指摘 | 結果 |
+|---|---|---|
+| 1 | **quiesce フラグの所有権競合** — 差し替えの後始末 `requested=false` が、stream 停止時に同じ Arc を使う `OutProcTeardownGuard`（`outproc_effect.rs:781-797`）の quiesce を取り消す。guard は ack 無しで stream を止め、その後 attach が成功すると停止中の RT が shm を触る | control 側専用の第3フラグ `shutdown`（latch）を新設。guard が drop 冒頭で立て、差し替え側は手順0/6/7 で検査し、clear と競合したら `requested` を復元。**RT は読まないので RT 変更ゼロを維持** |
+| 2 | **spec 更新の範囲不足** — SC.3 規範4 が失敗モデルを「SC.5 の後勝ち原則と同一」と一般則として書いており、in-place 方式は spec に偽の文を残す | SC.5 に失敗モデル2型を明記する案を採用。改訂文面まで設計書に記載 |
+
+あわせて main が実ファイルで確認: `active_plugin_notes`（`engine_wrap.rs:207`）は insert/remove のみで
+**reader が存在しない** → doc が主張する「live note 中は state 保存を fail-closed」は未実装。
+本設計の自動 state 保存が演奏中に阻まれる懸念は無い（doc と実体のずれは follow-up）。
+`OutProcTeardownGuard::new` の呼び出し箇所も 6 箇所すべてを列挙し直した（初稿は 1 箇所のみ）。
+
+#### 成果物
+
+`docs/design/625-effect-replacement-design.md` — 完了条件（曖昧語なし）/ 採用機構と却下2案 /
+決定8項目 / **失敗モード 27 件 ↔ 受け入れテスト 27 行の 1:1 対応表（全行に変異列）** /
+Stage 0-D の実装手順 / 触ってはいけないもの / 確信度の低い決定と反証方法。
+
 ### 6.363 fix(e2e): 実利用の経路へ全面的に寄せる — 標準プラグインディレクトリ + カタログ名 + audioPath (Aug 26, 2026)
 
 **Date**: 2026-08-26
