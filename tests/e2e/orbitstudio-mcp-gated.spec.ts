@@ -121,6 +121,11 @@ const GATED_PLUGIN_FIXTURE_NAMES = {
   vst3Effect: 'GainOracle.vst3',
   brokenClap: 'BrokenCatalogFixture.clap',
 } as const
+/** リポジトリにチェックインされた「ロードできないバンドル」。tmp を指すと実行後に壊れたリンクが残る。 */
+const BROKEN_CATALOG_FIXTURE_SOURCE = path.join(
+  REPO_ROOT,
+  'tests/fixtures/plugin-catalog/BrokenCatalogFixture.invalid',
+)
 const USER_CLAP_PLUGIN_DIR = path.join(os.homedir(), 'Library/Audio/Plug-Ins/CLAP')
 const USER_VST3_PLUGIN_DIR = path.join(os.homedir(), 'Library/Audio/Plug-Ins/VST3')
 const GATED_PLUGIN_FIXTURE_PATHS = {
@@ -382,8 +387,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       catalogVst3SynthPath = GATED_PLUGIN_FIXTURE_PATHS.vst3Synth
       catalogVst3EffectPath = GATED_PLUGIN_FIXTURE_PATHS.vst3Effect
       brokenCatalogPath = GATED_PLUGIN_FIXTURE_PATHS.brokenClap
-      const brokenCatalogSourcePath = path.join(tmpRoot, 'BrokenCatalogFixture.invalid')
-      fs.writeFileSync(brokenCatalogSourcePath, 'not a loadable CLAP bundle')
+      // 🔴 symlink 先を tmp に置かない: 実行後に tmp が消えると標準ディレクトリに
+      // **壊れたリンクが残り**、次回以降のスキャンに出続ける（今回直した stale bundle と
+      // 同じ性質）。リポジトリ内のチェックイン済み fixture を指せば、リンクは常に有効な
+      // まま「ロードできないバンドル」であり続ける — scanner に見せたい失敗は
+      // 「ロード不能」であって「リンク切れ」ではない。
+      const brokenCatalogSourcePath = BROKEN_CATALOG_FIXTURE_SOURCE
       replaceGatedPluginFixtureSymlink(CLAP_TEST_SYNTH_PATH, catalogClapSynthPath)
       replaceGatedPluginFixtureSymlink(CLAP_TEST_EFFECT_PATH, catalogClapEffectPath)
       replaceGatedPluginFixtureSymlink(vst3SynthPath, catalogVst3SynthPath)

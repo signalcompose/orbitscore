@@ -1,0 +1,10 @@
+not a loadable CLAP bundle
+
+このファイルは gated E2E が「ユーザーのプラグインフォルダに壊れたバンドルがある」状況を
+再現するための fixture。標準ディレクトリ（~/Library/Audio/Plug-Ins/CLAP/）へ
+`BrokenCatalogFixture.clap` という名前で symlink される。
+
+🔴 tmp ではなくリポジトリ内に置く理由: symlink 先が tmp だと、実行後に tmp が消えた時点で
+標準ディレクトリに**壊れたリンクが残り**、次回以降のスキャンに出続ける。リポジトリ内の
+固定ファイルを指せば、リンクは常に有効なまま「壊れたバンドル」であり続ける
+（scanner が期待する失敗は「ロードできない」であって「リンク切れ」ではない）。
