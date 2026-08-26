@@ -1013,12 +1013,15 @@ export class RustEnginePlayer implements AudioEngineBackend {
       this.pluginActiveByKey.set(key, true)
       return result
     } catch (err) {
-      // A protocol rejection is definitive: the daemon kept the old tenant, so
-      // retain its cached spec and active bit. A transport failure is ambiguous,
-      // so neither recovery ledger may keep claiming that the old tenant is
-      // authoritative: effect-slot forgets its chain entry and this player must
-      // forget the matching respawn declaration as the same atomic decision.
-      if (!(err instanceof DaemonProtocolError)) {
+      // Effect replacement may fail after teardown, even when the daemon returns
+      // a protocol error. Forget both ledgers for every effect error so respawn
+      // cannot replay the old tenant. Instrument keeps its established behavior:
+      // definitive protocol rejection retains the old tenant, while an ambiguous
+      // transport failure forgets it.
+      if (role === 'effect') {
+        this.loadedPlugins.delete(key)
+        this.pluginActiveByKey.delete(key)
+      } else if (!(err instanceof DaemonProtocolError)) {
         this.loadedPlugins.delete(key)
         this.markPluginInactive(key, role, instance)
       }

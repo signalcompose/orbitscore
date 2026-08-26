@@ -9,10 +9,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Global } from '../../packages/engine/src/core/global'
 import { Sequence } from '../../packages/engine/src/core/sequence'
 import { MidiManager } from '../../packages/engine/src/core/global/midi-manager'
+import { ProjectStateStore } from '../../packages/engine/src/core/project-state-store'
 import type { MidiOutput } from '../../packages/engine/src/midi/midi-output'
 import { SEQUENCE_EFFECT_BUS_POOL_SIZE } from '../../packages/engine/src/core/global/sequence-effect-manager'
 
 const T0 = 1_000_000
+const REPLACE_RESULT = {
+  pluginId: 'replacement-id',
+  pluginName: 'Replacement',
+  notePortIndex: 0,
+  quarantinedSlot: false,
+}
 
 function scheduler() {
   return {
@@ -33,6 +40,8 @@ function scheduler() {
 function harness(loadPlugin = vi.fn().mockResolvedValue({})) {
   const audio = scheduler()
   audio.loadPlugin = loadPlugin
+  const replacePlugin = vi.fn().mockResolvedValue(REPLACE_RESULT)
+  audio.replacePlugin = replacePlugin
   const midiOutput: MidiOutput = {
     ensurePort: vi.fn(() => 'IAC'),
     noteOn: vi.fn(),
@@ -48,7 +57,7 @@ function harness(loadPlugin = vi.fn().mockResolvedValue({})) {
   global.setDocumentDirectory('/songs')
   const seq = new Sequence(global, audio)
   seq.setName('drum')
-  return { audio, global, seq, loadPlugin }
+  return { audio, global, seq, loadPlugin, replacePlugin }
 }
 
 describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
@@ -94,11 +103,21 @@ describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
     expect(seq.getInsertBus()).toBe('seq-bus-0')
   })
 
-  it('rejects re-declaration with a different path or pluginId', async () => {
-    const { seq, loadPlugin } = harness()
+  it('replaces a re-declaration with a different path without issuing another load', async () => {
+    vi.spyOn(ProjectStateStore.prototype, 'save').mockResolvedValue({} as any)
+    const { seq, loadPlugin, replacePlugin } = harness()
     await seq.effect('./reverb.clap')
-    await expect(seq.effect('./delay.clap')).rejects.toThrow('one insert per sequence')
+
+    await expect(seq.effect('./delay.clap')).resolves.toBe(seq)
+
     expect(loadPlugin).toHaveBeenCalledTimes(1)
+    expect(replacePlugin).toHaveBeenCalledTimes(1)
+    expect(replacePlugin).toHaveBeenCalledWith(
+      path.resolve('/songs', 'delay.clap'),
+      undefined,
+      'effect',
+      'seq-bus-0',
+    )
   })
 
   it('accepts .vst3 effects', async () => {

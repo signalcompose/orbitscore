@@ -119,10 +119,19 @@ export interface EffectChainMapOptions<K> {
    * どちらも `'master'` で同値。
    */
   readonly externalReceiverId?: (key: K) => string
-  /** Instrument-only opt-in. Effect managers omit this and retain the v1 limit error. */
+  /** Opt-in for in-place daemon replacement. */
   readonly replacement?: {
     readonly beforeReplace: (key: K, oldSlot: PluginSlot) => Promise<void>
     readonly onQuarantinedSlot?: (key: K) => void
+    /**
+     * Registry handling after ReplacePlugin rejects.
+     *
+     * Instrument replacement can retain the old declaration after a definitive
+     * daemon rejection. Effect replacement cannot know whether teardown already
+     * happened, so every rejection forgets the declaration and makes the next
+     * declaration use ReplacePlugin as an ensure operation.
+     */
+    readonly failurePolicy: 'retain-on-reject' | 'forget-and-ensure'
   }
 }
 
@@ -177,6 +186,16 @@ export class EffectChainMap<K> {
       if (chain.length > 0) return true
     }
     return false
+  }
+
+  /** Whether replacement outcome is unknown for one key. */
+  hasUncertain(key: K): boolean {
+    return this.uncertainReplacements.has(key)
+  }
+
+  /** Whether replacement outcome is unknown for any key. */
+  hasAnyUncertain(): boolean {
+    return this.uncertainReplacements.size > 0
   }
 
   /**
@@ -289,7 +308,7 @@ export class EffectChainMap<K> {
     existing?: PluginSlot,
   ): Promise<void> {
     if (!this.audioEngine.replacePlugin) {
-      throw new Error('Instrument replacement requires the Rust engine backend.')
+      throw new Error('Plugin replacement requires the Rust engine backend.')
     }
     const { role, bus, normalizedName, resolvedPath, pluginId, instance } = spec
     const chain = this.chains.get(key) ?? []
@@ -330,7 +349,10 @@ export class EffectChainMap<K> {
         ...(optionalArgs as [string?, string?, string?]),
       )
     } catch (error) {
-      if (!(error instanceof DaemonProtocolError)) {
+      if (this.replacement!.failurePolicy === 'forget-and-ensure') {
+        this.chains.delete(key)
+        this.uncertainReplacements.add(key)
+      } else if (!(error instanceof DaemonProtocolError)) {
         if (existing) this.chains.delete(key)
         this.uncertainReplacements.add(key)
       }

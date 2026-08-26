@@ -152,13 +152,27 @@ export class Global {
       audioEngine,
       this.audioManager,
       this.linkAudioManager,
+      {
+        beforeReplace: (_key, oldSlot) => this.prepareEffectReplacement('master', oldSlot),
+        failurePolicy: 'forget-and-ensure',
+      },
     )
     this.sequenceEffectManager = new SequenceEffectManager(
       audioEngine,
       this.audioManager,
       this.linkAudioManager,
+      {
+        beforeReplace: (sequenceName, oldSlot) =>
+          this.prepareEffectReplacement(sequenceName, oldSlot),
+        failurePolicy: 'forget-and-ensure',
+      },
     )
-    this.mixerManager = new MixerManager(audioEngine, this.audioManager, this.linkAudioManager)
+    this.mixerManager = new MixerManager(
+      audioEngine,
+      this.audioManager,
+      this.linkAudioManager,
+      (receiverId, oldSlot) => this.prepareEffectReplacement(receiverId, oldSlot),
+    )
     // #617: `sum("x").ui()` を既存の openPluginUi / closePluginUi へ橋渡しする。
     // MixerManager は Global を知らない（循環参照を避ける）ので、ここで注入する。
     this.mixerManager.setPluginUiHandler(async (receiverId, index, open) => {
@@ -366,6 +380,7 @@ export class Global {
   linkAudio(targetSampleRate?: number): this {
     if (
       this.pluginEffectManager.hasDeclaration() ||
+      this.pluginEffectManager.hasUncertain() ||
       this.pluginInstrumentManager.hasDeclaration() ||
       this.sequenceEffectManager.hasAnyDeclaration() ||
       this.mixerManager.hasAnyDeclaration()
@@ -1135,6 +1150,36 @@ export class Global {
       },
       { role: 'instrument', instance: oldSlot.instance },
     )
+  }
+
+  /** UI close and old-tenant state commit immediately before an effect replacement. */
+  private async prepareEffectReplacement(receiverId: string, oldSlot: PluginSlot): Promise<void> {
+    if (this.hasOpenPluginUi(receiverId, 1)) {
+      try {
+        await this.closePluginUi(receiverId, 1)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (!message.includes('timeout-without-save')) {
+          this.forgetPluginUiSession(receiverId, 1)
+          throw error
+        }
+        console.warn(
+          `[effect-replace] ⚠️ Plugin UI for '${receiverId}' closed without a safepoint save; attempting the required explicit state save before replacement.`,
+        )
+      }
+    }
+    const projectDirectory = this.audioManager.getDocumentDirectory()
+    if (!projectDirectory) {
+      console.warn(
+        `[effect-replace] ⚠️ Cannot save the old effect state for '${receiverId}' because the document directory is not set; replacement will continue without state preservation.`,
+      )
+      return
+    }
+    if (oldSlot.role !== 'effect') {
+      throw new Error('Effect replacement received a non-effect slot.')
+    }
+    const target = pluginStateTargetForSlot(receiverId, oldSlot)
+    await this.projectStateStore(projectDirectory).save(target.identity, target.daemonTarget)
   }
 
   /**

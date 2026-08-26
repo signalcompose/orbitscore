@@ -7,6 +7,7 @@ import {
   EffectChainMap,
   normalizePluginInstanceName,
   resolveEffectSpec,
+  type EffectChainMapOptions,
   type PluginSlot,
 } from './effect-slot'
 
@@ -19,15 +20,21 @@ export class PluginEffectManager {
     audioEngine: AudioEngine,
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
+    replacement: NonNullable<EffectChainMapOptions<'master'>['replacement']>,
   ) {
     this.slots = new EffectChainMap(audioEngine, () => 'master', {
       externalReceiverId: () => 'master',
       statePathFallback: createStatePathFallback(audioManager),
+      replacement,
     })
   }
 
   hasDeclaration(): boolean {
     return this.slots.has('master')
+  }
+
+  hasUncertain(): boolean {
+    return this.slots.hasUncertain('master')
   }
 
   chain(): readonly PluginSlot[] {

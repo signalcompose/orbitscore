@@ -320,6 +320,31 @@ describe('DaemonClient with mock server', () => {
     })
   })
 
+  it('R3 ReplacePlugin sends the effect bus spec and omits bus for master', async () => {
+    const request = vi.spyOn(client as any, 'request').mockResolvedValue({
+      plugin_id: 'effect-id',
+      plugin_name: 'Effect',
+      note_port_index: 0,
+      quarantined_slot: false,
+    })
+
+    await client.replacePlugin('/plugins/sequence.clap', 'sequence-id', 'effect', 'seq-bus-0')
+    await client.replacePlugin('/plugins/master.clap', undefined, 'effect')
+
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(request).toHaveBeenNthCalledWith(1, 'ReplacePlugin', {
+      path: '/plugins/sequence.clap',
+      plugin_id: 'sequence-id',
+      role: 'effect',
+      bus: 'seq-bus-0',
+    })
+    expect(request).toHaveBeenNthCalledWith(2, 'ReplacePlugin', {
+      path: '/plugins/master.clap',
+      role: 'effect',
+    })
+    expect(request.mock.calls[1]![1]).not.toHaveProperty('bus')
+  })
+
   it('GetPluginState sends the resolved effect target and preserves the byte result', async () => {
     const url = await server.start({
       GetPluginState: () => ({

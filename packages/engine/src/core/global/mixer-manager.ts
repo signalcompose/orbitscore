@@ -134,6 +134,7 @@ export class MixerManager {
     private readonly audioEngine: AudioEngine,
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
+    replacement: (receiverId: string, oldSlot: PluginSlot) => Promise<void>,
   ) {
     const makeKind = (kind: MixerKind, prefix: string): KindState => {
       const receiverId = (name: string) => formatReceiverId(kind, name)
@@ -142,6 +143,10 @@ export class MixerManager {
         inserts: new EffectChainMap(audioEngine, receiverId, {
           externalReceiverId: receiverId,
           statePathFallback: createStatePathFallback(audioManager),
+          replacement: {
+            beforeReplace: (name, oldSlot) => replacement(receiverId(name), oldSlot),
+            failurePolicy: 'forget-and-ensure',
+          },
         }),
         pool: new BusPool(
           prefix,

@@ -106,7 +106,7 @@ export interface AudioEngine {
     statePath?: string,
   ): Promise<PluginLoadResult>
 
-  /** Atomically replaces one per-sequence instrument instance without restarting the engine. */
+  /** Atomically replaces or ensure-loads one effect or instrument slot without restarting. */
   replacePlugin?(
     filePath: string,
     pluginId: string | undefined,

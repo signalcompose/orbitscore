@@ -1,7 +1,7 @@
 # Engine Daemon IPC Protocol Specification (v0.2 draft)
 
 **ステータス**: Draft（Issue #93 の初期設計）
-**最終更新**: 2026-04-17
+**最終更新**: 2026-08-26
 **対象バージョン**: protocol v0.2
 **関連 Issue**: [#93](https://github.com/signalcompose/orbitscore/issues/93), [#107](https://github.com/signalcompose/orbitscore/issues/107), [#108](https://github.com/signalcompose/orbitscore/issues/108)
 
@@ -335,6 +335,65 @@ daemon の状態取得。
 // Response
 { "id": "u7", "result": "pong" }
 ```
+
+### ReplacePlugin（v0.2）
+
+既存の effect slot または instrument slot を daemon 再起動なしで差し替える。
+slot が空の場合は同じ command が ensure-load として動作する。
+
+```json
+// master effect（bus 省略）
+{
+  "id": "u8",
+  "method": "ReplacePlugin",
+  "params": {
+    "path": "/plugins/new.clap",
+    "plugin_id": "com.example.new",
+    "role": "effect",
+    "state_path": "/abs/project/states/master.state"
+  }
+}
+
+// named effect bus
+{
+  "id": "u8b",
+  "method": "ReplacePlugin",
+  "params": {
+    "path": "/plugins/reverb.vst3",
+    "role": "effect",
+    "bus": "seq-bus-0"
+  }
+}
+
+// instrument instance
+{
+  "id": "u8c",
+  "method": "ReplacePlugin",
+  "params": {
+    "path": "/plugins/synth.vst3",
+    "role": "instrument",
+    "instance": "plugin:lead"
+  }
+}
+
+// Response
+{
+  "id": "u8",
+  "result": {
+    "plugin_id": "com.example.new",
+    "plugin_name": "New Plugin",
+    "note_port_index": 0,
+    "quarantined_slot": false
+  }
+}
+```
+
+- `role` は `"effect"` または `"instrument"` が必須
+- effect の `bus` は任意。省略時は master effect slot。`instance` は拒否される
+- instrument の `instance` は任意（省略時は互換 slot）。`bus` は拒否される
+- `state_path` は任意で、新 tenant の起動時に適用される
+- effect の `quarantined_slot` は常に `false`。effect の隔離相当は error response で表現される
+- `outproc-effect` のない build で effect を指定すると `OUTPROC_EFFECT_UNAVAILABLE`
 
 ### GetPluginState（v0.2）
 

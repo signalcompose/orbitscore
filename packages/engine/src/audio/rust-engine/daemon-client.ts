@@ -469,7 +469,7 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
-  /** Atomically replaces (or ensure-loads) one instrument instance. */
+  /** Atomically replaces (or ensure-loads) one effect bus or instrument instance. */
   async replacePlugin(
     filePath: string,
     pluginId: string | undefined,

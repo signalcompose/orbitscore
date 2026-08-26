@@ -481,24 +481,30 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     await expect(run('kick.TALReverb4()', state)).rejects.toThrow(/S4.*multiple insert/i)
   })
 
-  it('rewrites a real EffectSlotLimitError from EffectSlotMap.declare() with the S4 pointer', async () => {
-    // Regression (#523 IMPORTANT 9): the only prior coverage constructed
-    // `new EffectSlotLimitError(...)` by hand and mocked `sequence.effect()`,
-    // so it never exercised the real path: EffectSlotMap.declare() throwing
-    // for a genuine second insert → the `instanceof EffectSlotLimitError`
-    // check in dispatch.ts → message rewrite. That kind of gap once let a
-    // real bug (wording that no longer matched the old regex) go undetected.
+  it('replaces a second real effect declaration instead of reaching the S4 limit rewrite', async () => {
+    // Stage B makes every production effect manager replacement-enabled, so a
+    // different second spec can no longer reach EffectSlotLimitError. Keep the
+    // synthetic typed-error rewrite coverage above, and pin the now-real path here.
     const scheduler = new RecordingScheduler() as RecordingScheduler & {
       loadPlugin: ReturnType<typeof vi.fn>
+      replacePlugin: ReturnType<typeof vi.fn>
     }
     scheduler.loadPlugin = vi.fn().mockResolvedValue({})
+    scheduler.replacePlugin = vi.fn().mockResolvedValue({
+      pluginId: 'replacement-id',
+      pluginName: 'Replacement',
+      notePortIndex: 0,
+      quarantinedSlot: false,
+    })
     const global = new Global(scheduler)
     const state = makeState(global)
     await run('var kick = init global.seq', state)
 
     await run('kick.TALReverb4()', state)
-    await expect(run('kick.Twin(vendor: "A")', state)).rejects.toThrow(/S4.*multiple insert/i)
+    await expect(run('kick.Twin(vendor: "A")', state)).resolves.toBeUndefined()
     expect(scheduler.loadPlugin).toHaveBeenCalledTimes(1)
+    expect(scheduler.replacePlugin).toHaveBeenCalledTimes(1)
+    expect(scheduler.replacePlugin).toHaveBeenCalledWith('/a.clap', 'a', 'effect', 'seq-bus-0')
   })
 
   it('routes bare sum/output and called aux names, awaiting the daemon result', async () => {
@@ -870,6 +876,9 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       // Object.getOwnPropertyNames には現れる（他の private 同様に除外）。
       // PluginInstrumentManager からコールバック注入で呼ばれ、DSL からは到達しない。
       'prepareInstrumentReplacement',
+      // #625 Stage B: effect manager 3系統へ注入する差し替え前処理。
+      // private で、DSL / interpreter からは直接呼ばれない。
+      'prepareEffectReplacement',
       // #618 PR-2: 曖昧な close 失敗で UI 簿記を忘れるヘルパ。fast-path が stale を
       // 恒久的に信じるのを防ぐ（#619 と同型の穴）。DSL 語彙ではない。
       'forgetPluginUiSession',
@@ -970,6 +979,8 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       // Object.getOwnPropertyNames には現れる（他の private 同様に除外）。
       // PluginInstrumentManager からコールバック注入で呼ばれ、DSL からは到達しない。
       'prepareInstrumentReplacement',
+      // #625 Stage B: private な effect 差し替え前処理。DSL 語彙ではない。
+      'prepareEffectReplacement',
       // #618 PR-2: 曖昧な close 失敗で UI 簿記を忘れるヘルパ。fast-path が stale を
       // 恒久的に信じるのを防ぐ（#619 と同型の穴）。DSL 語彙ではない。
       'forgetPluginUiSession',

@@ -17,6 +17,72 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.367 feat(engine): #625 Stage B — effect の差し替えを wire と DSL 層へ開通 (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625（Stage B = wire 公開 + TS 差し替え。`remove()` は Stage C・実機 E2E は Stage D）
+**Status**: TS **2042 → 2059**（+17）/ Rust daemon lib 202（無変更）/ sandbox 外で全スイート green
+
+#### 実装
+
+daemon の `ReplacePlugin` を `role='effect'` に開き、TS 層を差し替え可能にした。
+`global.effect(A)` → `global.effect(B)` / `seq.effect` / `sum|aux().effect` の **4 経路**が
+エンジン再起動なしで差し替わる。
+
+- `effect-slot.ts`: `failurePolicy: 'retain-on-reject' | 'forget-and-ensure'` を追加。
+  **effect は失敗の種別を問わず登記を忘れて uncertain を立てる** — in-place 差し替えは
+  「旧が既に消えているか」を呼び出し側から判別できないため。instrument は現行の
+  `'retain-on-reject'` に固定して無変更
+- `Global.prepareEffectReplacement`: UI close → 旧 state 保存 → 差し替え
+- linkAudio 排他ゲートに `hasUncertain()` を追加（master の差し替え失敗後にゲートが緩むのを防ぐ）
+
+#### 🔴 委譲先の green 報告と実測が食い違った（2 回目）
+
+Codex は「focused な Stage B テストは全部 pass」と報告したが、**sandbox で全スイートを
+回せていなかった**。main が sandbox 外で回すと **6 件 failed**。
+
+内訳は「旧挙動（異 spec は拒否）を固定していた 4 つの spec」と、**#528 の再発防止ガード**
+（全 public メソッドが DSL 語彙か内部 API に分類されることを検査する逆方向テスト）が
+`prepareEffectReplacement` を未分類として捕まえたもの。**ガードが設計どおり働いた。**
+
+修正方針は main が決めて渡した: **期待文字列を差し替えるだけの修正を禁止**した。
+実際に返っていた `'Plugin replacement requires the Rust engine backend.'` は
+**テストの mock に `replacePlugin` が無いから出るだけ**で、製品の挙動ではない。それを固定すると
+「mock の作りを固定しただけのテスト」になる。代わりに mock へ `replacePlugin` を持たせ、
+**差し替えが起きること**（呼び出し回数 + 引数）を固定し、テスト名も新しい意味論へ改名させた。
+
+`EffectSlotLimitError` の S4 ポインタ書き換えテストは **削除を禁じ**、上流の手構築エラーによる
+書き換え経路の検査を残したうえで、当該ケースを「異 spec はもう上限に到達せず差し替えになる」を
+固定する形へ転用させた。
+
+#### main の変異検証で 1 件の穴（経路の取り違え）
+
+変異 5 種のうち 4 種は red。**1 種が生き残った**:
+
+`SequenceEffectManager` の `beforeReplace` が receiver に `sequenceName` ではなく `'master'` を
+渡しても **全 2055 件が緑のまま通った**。実害は、seq の差し替えで旧 state が
+`master/effect/<name>/0` として登記され（正しくは `<seqName>/effect/<name>/0`）、
+**旧 spec を再宣言しても音色が戻らない**（しかもエラーが出ない）。
+
+原因は `prepareEffectReplacement` が **4 経路から呼ばれるのに identity を検証するテストが
+1 経路分しかなかった**こと。**呼ばれた事実だけでは経路の取り違えを検出できない。**
+
+修正では **実装を触らせなかった**（実装は正しく、足りないのはテスト）。4 経路を
+**独立したテストケース**として追加させた（1 テスト内のループにすると最初の経路が落ちた
+時点で残りが検証されない — Stage A で同じ問題が起きている）。
+
+main の再検証（4 種・うち 2 種は Codex に伝えていない壊し方）で全て red を確認:
+
+| 変異 | 検出したテスト |
+|---|---|
+| seq → `'master'`（前回の穴） | R19 |
+| master → seq 名 | R12 / R13 / R15 / R18 |
+| mixer の kind 入れ替え（sum ↔ aux） | **R20 と R21 の両方** |
+| mixer の kind 接頭辞を落とす | R20 / R21 |
+
+sum と aux は `makeKind` で同じコードを共有するため、片方だけのテストでは「4 経路を検証した」
+ように見えて実は 3 経路分になり得た。**独立ケースであることが実行で確認できた。**
+
 ### 6.366 feat(daemon): #625 Stage A — effect insert を同一スロットで建て直す (Aug 26, 2026)
 
 **Date**: 2026-08-26

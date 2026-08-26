@@ -14,7 +14,7 @@ export interface HandshakeFrame {
   capabilities: string[]
 }
 
-/** Protocol v0.1 で daemon が受け付ける method 名。 */
+/** Protocol v0.2 で daemon が受け付ける method 名。 */
 export type CommandMethod =
   | 'LoadSample'
   | 'LoadPlugin'

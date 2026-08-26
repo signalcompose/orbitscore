@@ -8,6 +8,7 @@ import {
   EffectChainMap,
   normalizePluginInstanceName,
   resolveEffectSpec,
+  type EffectChainMapOptions,
   type PluginSlot,
 } from './effect-slot'
 
@@ -51,10 +52,12 @@ export class SequenceEffectManager {
     audioEngine: AudioEngine,
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
+    replacement: NonNullable<EffectChainMapOptions<string>['replacement']>,
   ) {
     this.slots = new EffectChainMap(audioEngine, (sequenceName) => `seq:${sequenceName}`, {
       externalReceiverId: (sequenceName) => sequenceName,
       statePathFallback: createStatePathFallback(audioManager),
+      replacement,
     })
   }
 
