@@ -402,6 +402,54 @@ impl Drop for EffectReplacementReservation<'_> {
     }
 }
 
+#[cfg(feature = "outproc-effect")]
+type ResolvedOutProcEffectSlot = (
+    Arc<Mutex<ChildSlot<EffectRole>>>,
+    EffectSlotEntry,
+    Arc<crate::outproc_effect::OutProcEffectStats>,
+);
+
+#[cfg(feature = "outproc-effect")]
+fn resolve_outproc_effect_slot(
+    control: &OutProcControl,
+    bus: &Option<String>,
+) -> Result<ResolvedOutProcEffectSlot, WrapError> {
+    if control.replacements_in_flight.contains(bus) {
+        return Err(WrapError::OutProcEffect(format!(
+            "effect replacement already in progress for {}",
+            effect_slot_label(bus)
+        )));
+    }
+
+    let (weak_slot, entry, stats) = match bus.as_ref() {
+        Some(name) => (
+            control.bus_slots.get(name).ok_or_else(|| {
+                WrapError::OutProcEffect(format!(
+                    "unknown effect bus '{name}' (configured by ORBIT_EFFECT_BUSES)"
+                ))
+            })?,
+            control.bus_entries.get(name).cloned().ok_or_else(|| {
+                WrapError::OutProcEffect(format!("effect bus '{name}' is missing its slot entry"))
+            })?,
+            control.bus_stats.get(name).cloned().ok_or_else(|| {
+                WrapError::OutProcEffect(format!("effect bus '{name}' is missing its stats entry"))
+            })?,
+        ),
+        None => (
+            &control.child_slot,
+            control.master_entry.clone(),
+            control.stats.clone(),
+        ),
+    };
+    if entry.shutdown.load(Ordering::Acquire) {
+        return Err(WrapError::OutProcEffect("engine is stopping".into()));
+    }
+    let child_slot = weak_slot
+        .upgrade()
+        .ok_or_else(|| WrapError::OutProcEffect("outproc effect stream is closed".into()))?;
+    Ok((child_slot, entry, stats))
+}
+
 #[cfg(all(test, feature = "outproc-effect"))]
 fn test_effect_slot_entry() -> EffectSlotEntry {
     EffectSlotEntry {
@@ -3454,43 +3502,7 @@ impl EngineWrap {
                     "outproc effect not initialized (test backend has no outproc path)".into(),
                 )
             })?;
-            if control.replacements_in_flight.contains(&bus) {
-                return Err(WrapError::OutProcEffect(format!(
-                    "effect replacement already in progress for {}",
-                    effect_slot_label(&bus)
-                )));
-            }
-
-            let (weak_slot, entry, stats) = match bus.as_ref() {
-                Some(name) => (
-                    control.bus_slots.get(name).ok_or_else(|| {
-                        WrapError::OutProcEffect(format!(
-                            "unknown effect bus '{name}' (configured by ORBIT_EFFECT_BUSES)"
-                        ))
-                    })?,
-                    control.bus_entries.get(name).cloned().ok_or_else(|| {
-                        WrapError::OutProcEffect(format!(
-                            "effect bus '{name}' is missing its slot entry"
-                        ))
-                    })?,
-                    control.bus_stats.get(name).cloned().ok_or_else(|| {
-                        WrapError::OutProcEffect(format!(
-                            "effect bus '{name}' is missing its stats entry"
-                        ))
-                    })?,
-                ),
-                None => (
-                    &control.child_slot,
-                    control.master_entry.clone(),
-                    control.stats.clone(),
-                ),
-            };
-            if entry.shutdown.load(Ordering::Acquire) {
-                return Err(WrapError::OutProcEffect("engine is stopping".into()));
-            }
-            let child_slot = weak_slot.upgrade().ok_or_else(|| {
-                WrapError::OutProcEffect("outproc effect stream is closed".into())
-            })?;
+            let (child_slot, entry, stats) = resolve_outproc_effect_slot(control, &bus)?;
 
             {
                 let slot =
@@ -3586,42 +3598,7 @@ impl EngineWrap {
                     "outproc effect not initialized (test backend has no outproc path)".into(),
                 )
             })?;
-            if control.replacements_in_flight.contains(&bus) {
-                return Err(WrapError::OutProcEffect(format!(
-                    "effect replacement already in progress for {}",
-                    effect_slot_label(&bus)
-                )));
-            }
-            let (weak_slot, entry, stats) = match bus.as_ref() {
-                Some(name) => (
-                    control.bus_slots.get(name).ok_or_else(|| {
-                        WrapError::OutProcEffect(format!(
-                            "unknown effect bus '{name}' (configured by ORBIT_EFFECT_BUSES)"
-                        ))
-                    })?,
-                    control.bus_entries.get(name).cloned().ok_or_else(|| {
-                        WrapError::OutProcEffect(format!(
-                            "effect bus '{name}' is missing its slot entry"
-                        ))
-                    })?,
-                    control.bus_stats.get(name).cloned().ok_or_else(|| {
-                        WrapError::OutProcEffect(format!(
-                            "effect bus '{name}' is missing its stats entry"
-                        ))
-                    })?,
-                ),
-                None => (
-                    &control.child_slot,
-                    control.master_entry.clone(),
-                    control.stats.clone(),
-                ),
-            };
-            if entry.shutdown.load(Ordering::Acquire) {
-                return Err(WrapError::OutProcEffect("engine is stopping".into()));
-            }
-            let child_slot = weak_slot.upgrade().ok_or_else(|| {
-                WrapError::OutProcEffect("outproc effect stream is closed".into())
-            })?;
+            let (child_slot, entry, stats) = resolve_outproc_effect_slot(control, &bus)?;
             {
                 let slot = lock_child_slot_recovering(&child_slot, "effect unload state check");
                 match &*slot {

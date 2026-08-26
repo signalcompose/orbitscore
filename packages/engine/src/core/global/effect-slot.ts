@@ -158,10 +158,8 @@ export class EffectChainMap<K> {
   private readonly statePathFallback?: PluginStatePathFallbackResolver
   private readonly externalReceiverId?: (key: K) => string
   private readonly replacement?: EffectChainMapOptions<K>['replacement']
-  /** A transport failure leaves daemon commit status unknown; retry via ReplacePlugin ensure. */
-  private readonly uncertainReplacements = new Set<K>()
-  /** Daemon effect address retained while a failed replacement leaves the slot uncertain. */
-  private readonly uncertainEffectBuses = new Map<K, string | undefined>()
+  /** A transport failure leaves daemon commit status unknown; value retains its effect bus. */
+  private readonly uncertainReplacements = new Map<K, string | undefined>()
   // key ごとの直列化キュー（#527 review Important 1）。値は「前呼び出しの決着
   // （成功/失敗いずれも）待ち」で、前呼び出しの成否は自分の結果に影響させない
   // （catch で握りつぶし、必ず次の呼び出しへ進める）。
@@ -193,11 +191,6 @@ export class EffectChainMap<K> {
   /** Whether replacement outcome is unknown for one key. */
   hasUncertain(key: K): boolean {
     return this.uncertainReplacements.has(key)
-  }
-
-  /** Whether replacement outcome is unknown for any key. */
-  hasAnyUncertain(): boolean {
-    return this.uncertainReplacements.size > 0
   }
 
   /**
@@ -245,29 +238,24 @@ export class EffectChainMap<K> {
    * pending promise の後ろに直列でつなぐことで、このレースを避ける。
    */
   async declare(key: K, spec: PluginDeclaration, duplicateMessage: () => string): Promise<void> {
-    const previous = this.pending.get(key) ?? Promise.resolve()
-    const settled = previous
-      .catch(() => undefined)
-      .then(() => this.declareBody(key, spec, duplicateMessage))
-    const tracked = settled.catch(() => undefined)
-    this.pending.set(key, tracked)
-    try {
-      await settled
-    } finally {
-      if (this.pending.get(key) === tracked) this.pending.delete(key)
-    }
+    return this.enqueue(key, () => this.declareBody(key, spec, duplicateMessage))
   }
 
   /** Removes one named effect through the same per-key queue as declaration/replacement. */
   async remove(key: K, expectedNormalizedName: string, occurrence = 0): Promise<void> {
+    return this.enqueue(key, () => this.removeBody(key, expectedNormalizedName, occurrence))
+  }
+
+  private async enqueue<T>(key: K, body: () => Promise<T>): Promise<T> {
     const previous = this.pending.get(key) ?? Promise.resolve()
-    const settled = previous
-      .catch(() => undefined)
-      .then(() => this.removeBody(key, expectedNormalizedName, occurrence))
-    const tracked = settled.catch(() => undefined)
+    const settled = previous.catch(() => undefined).then(() => body())
+    const tracked = settled.then(
+      () => {},
+      () => {},
+    )
     this.pending.set(key, tracked)
     try {
-      await settled
+      return await settled
     } finally {
       if (this.pending.get(key) === tracked) this.pending.delete(key)
     }
@@ -303,18 +291,16 @@ export class EffectChainMap<K> {
       await existing.load
       await this.replacement?.beforeReplace(key, existing)
     }
-    const bus = existing?.role === 'effect' ? existing.bus : this.uncertainEffectBuses.get(key)
+    const bus = existing?.role === 'effect' ? existing.bus : this.uncertainReplacements.get(key)
     try {
       await this.audioEngine.unloadPlugin('effect', bus)
     } catch (error) {
       this.chains.delete(key)
-      this.uncertainReplacements.add(key)
-      this.uncertainEffectBuses.set(key, bus)
+      this.uncertainReplacements.set(key, bus)
       throw error
     }
     this.chains.delete(key)
     this.uncertainReplacements.delete(key)
-    this.uncertainEffectBuses.delete(key)
   }
 
   private async declareBody(
@@ -412,11 +398,10 @@ export class EffectChainMap<K> {
     } catch (error) {
       if (this.replacement!.failurePolicy === 'forget-and-ensure') {
         this.chains.delete(key)
-        this.uncertainReplacements.add(key)
-        if (role === 'effect') this.uncertainEffectBuses.set(key, bus)
+        this.uncertainReplacements.set(key, role === 'effect' ? bus : undefined)
       } else if (!(error instanceof DaemonProtocolError)) {
         if (existing) this.chains.delete(key)
-        this.uncertainReplacements.add(key)
+        this.uncertainReplacements.set(key, undefined)
       }
       throw error
     }
@@ -455,7 +440,6 @@ export class EffectChainMap<K> {
       existing ? current.map((slot) => (slot === existing ? entry : slot)) : [entry],
     )
     this.uncertainReplacements.delete(key)
-    this.uncertainEffectBuses.delete(key)
     if (result.quarantinedSlot) this.replacement!.onQuarantinedSlot?.(key)
   }
 

@@ -77,18 +77,12 @@ fn parse_args() -> Result<Args> {
 #[cfg(target_os = "macos")]
 /// `--plugin-id` が Phase 1 の VST3 effect で使われないことを伝える通知。
 ///
-/// 🔴 **`INFO ` の level トークンは飾りではない。** daemon の stderr は拡張側の router
-/// （`packages/engine/src/audio/rust-engine/daemon-client.ts` の
-/// `isDaemonNonErrorTracingLine`）へ流れ、**level を名乗らない child の行は fail-loud で
-/// `ERROR:` に倒れる**。カタログ名解決は常に pluginId を付けるので、この通知は
-/// **VST3 effect をカタログ名でロードするたび**に出る。level を落とすと、正常なロードが
-/// 毎回 ERROR として記録され、`get_log` の ERROR 件数を数える診断・gated E2E・LLM の
-/// 自己検証がすべて偽陽性になる（#625 の実機 E2E がこれで落ちた）。
-///
-/// 姉妹の `orbit-vst3-instrument-child` は既に同じ形で `INFO ` を名乗っている。
+/// level トークン規約の理由と TS 側の受理条件は `orbit_child_runtime::notice` に集約してある
+/// （#618 / #625: 手書きの前置が 2 回同じ障害を起こしたため）。
 fn unused_plugin_id_notice(plugin_id: &str) -> String {
-    format!(
-        "INFO [orbit-vst3-effect-child] --plugin-id={plugin_id} は Phase 1 VST3 effect では未使用"
+    orbit_child_runtime::notice::child_info(
+        "orbit-vst3-effect-child",
+        format_args!("--plugin-id={plugin_id} は Phase 1 VST3 effect では未使用"),
     )
 }
 

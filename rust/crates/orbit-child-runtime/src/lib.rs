@@ -15,6 +15,9 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+/// child / host が出す **正常系の通知**の level トークン規約（#618 / #625）。
+pub mod notice;
+
 // The UI service exists to drive an AppKit window; it has no meaning without one.
 #[cfg(any(target_os = "macos", test))]
 mod ui_service;

@@ -1571,7 +1571,11 @@ async fn handle_command(
         // 差し替えるか、Empty な slot を ensure-load する。attach は block しうるため
         // LoadPlugin と同じく spawn_blocking で tokio worker から隔離する。
         "ReplacePlugin" => {
-            let Some(role) = params.get("role").and_then(Value::as_str) else {
+            let Some(role) = params
+                .get("role")
+                .and_then(Value::as_str)
+                .filter(|role| matches!(*role, "effect" | "instrument"))
+            else {
                 return err(
                     &id,
                     ProtocolError::new(
@@ -1580,15 +1584,6 @@ async fn handle_command(
                     ),
                 );
             };
-            if !matches!(role, "effect" | "instrument") {
-                return err(
-                    &id,
-                    ProtocolError::new(
-                        "MALFORMED_REQUEST",
-                        "ReplacePlugin requires role='effect' or role='instrument'",
-                    ),
-                );
-            }
             let Some(path_str) = params.get("path").and_then(Value::as_str) else {
                 return err(
                     &id,

@@ -1692,20 +1692,16 @@ fn parse_vstpreset(bytes: &[u8]) -> Result<Option<VstPresetChunks<'_>>, Vst3Host
 /// 同期でありベストエフォート（未実装の plugin も多い）— 失敗は stderr に出すのみ。
 /// state 復元の **成功経路**で出す best-effort 通知の文言。
 ///
-/// 🔴 **`INFO ` の level トークンは飾りではない。** host の stderr は daemon 経由で拡張側の
-/// router（`packages/engine/src/audio/rust-engine/daemon-client.ts` の
-/// `isDaemonNonErrorTracingLine`）へ流れ、**level を名乗らない行は fail-loud で `ERROR:` に
-/// 倒れる**。ここは「音声側の state は既に適用済みで、controller への同期だけが best-effort で
-/// 失敗した」ことを伝える通知であり、**復元そのものは成功している**（呼び出し元はどちらも
-/// `Ok(())` を返す経路にある）。level を落とすと、正常な state 復元が毎回 ERROR として
-/// 記録され、`get_log` の ERROR 件数を数える診断・gated E2E・LLM の自己検証が偽陽性になる
-/// （#625 の実機 E2E がこれで落ちた）。
+/// 呼び出し元はどちらも `Ok(())` を返す経路にあり、**復元そのものは成功している**
+/// （controller への同期だけが best-effort で失敗した）。本物の失敗
+/// （`IComponent::setState` の拒否）は `Err` を返しており、そちらは ERROR に倒れるのが正しい。
 ///
-/// 本物の失敗（`IComponent::setState` の拒否）は `Err` を返しており、そちらは ERROR に
-/// 倒れるのが正しい。
+/// level トークン規約の理由と TS 側の受理条件は `orbit_child_runtime::notice` に集約してある。
+/// この crate は **child プロセスの中にリンクされて動く**ため、タグは `-child` で終わらない。
 fn best_effort_state_notice(what: &str, result: i32) -> String {
-    format!(
-        "INFO [orbit-vst3-host] {what} returned {result:#x} (best-effort; audio state is already applied)"
+    orbit_child_runtime::notice::child_info(
+        "orbit-vst3-host",
+        format_args!("{what} returned {result:#x} (best-effort; audio state is already applied)"),
     )
 }
 

@@ -17,6 +17,68 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.371 refactor: /simplify の指摘を適用（規律を「破れない形」へ）(Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625
+**Status**: 挙動不変。TS **2069 passed**（件数一致）/ Rust workspace 全クレート 0 failed / clippy 警告 0
+
+`/simplify` の 4 観点（reuse / simplification / efficiency / altitude）を並行で回し、
+**採用 6 項目を適用・見送り 4 項目を明記**した。
+
+#### efficiency は指摘なし — 設計の前提が差分で裏づけられた
+
+`rust/crates/orbit-audio-native/`（RT コード）が**一切変更されていない**ことを確認。
+「RT コード変更ゼロ」は案 (a) を採用した理由そのものなので、これが差分で裏づけられた意味は大きい。
+outproc mutex の保持区間が quiesce 待ち・attach 本体の外である点も確認済み。
+
+#### 🔴 最も重い指摘は **main 自身の直前の修正**に対するものだった（altitude #1）
+
+`INFO ` の level トークン規約が **3 クレート 4 箇所に手書き**され、巨大な doc コメントまで
+コピペで独立に存在していた。この規約は**すでに 2 回同じ障害を起こしている**
+（#618 で instrument に手当て → #625 で effect が取り残されていたと実機で発覚）。
+
+main は「同じ欠陥クラスが片方だけ直っていた」と指摘しておきながら、**その修正を手書きで
+3 箇所に増やしていた**。CLAP 側の child は未対応で、**3 回目の再発が構造的に待っている**状態。
+
+対処: `orbit_child_runtime::notice` に規約を集約し、**TS 側 router の受理条件をテストで固定**。
+**手書きの前置を 1 つも残さない**（既存の instrument 側 2 箇所も置換）。
+なお最初の置換で 1 箇所取りこぼし（複数行 `eprintln!` が grep パターンから外れた）、
+**awk で複数行を連結して列挙し直して**確認した — 「他には無い」は列挙を尽くして初めて言える。
+
+#### 採用した 6 項目
+
+| # | 内容 |
+|---|---|
+| A | Rust: `replace_outproc_effect_plugin` / `unload_outproc_effect_plugin` に一字一句同一の約 35 行 → private ヘルパへ |
+| B | TS: `uncertainReplacements`(Set) + `uncertainEffectBuses`(Map) の**2 並行コレクションを単一 Map へ** |
+| C | TS: `remove()` が `declare()` の直列化キューを複製 → `enqueue()` を抽出 |
+| D | TS: `hasAnyUncertain()` は呼び出し元ゼロの dead code → 削除 |
+| E | TS: `unloadPlugin` の try/catch 重複 → `finally` + 台帳ヘルパ |
+| F | Rust: `ReplacePlugin` の role 検証で同文言の `err()` が 2 回 → 1 回に |
+
+#### この PR で 3 回出た形: 「守るべき規律」→「破れない形」
+
+1. 同型 `Arc<AtomicBool>` の位置引数 → **名前付き struct**（取り違えがコンパイル不能）
+2. level トークンの手書き → **共有ヘルパ**（形を間違える余地が消える）
+3. uncertain の 2 並行コレクション → **単一 Map**（同期ずれが表現できなくなる）
+
+B は整理であると同時に将来の欠陥クラスを潰す変更。分岐が増えたとき片方だけ更新すると
+`unloadPlugin` が**誤った bus へ飛ぶ**構造だった。
+
+#### 見送った 4 項目（理由つき）
+
+| 見送り | 理由 |
+|---|---|
+| テストヘルパ（`REPLACE_RESULT` 等）の共通化 | **変異検証を通したばかりのテストをこの段階で動かしたくない** |
+| E2E 診断ログの統合 | 整形の提案で価値が小さい |
+| `prepareEffectReplacement` / `prepareInstrumentReplacement` の統合 | instrument 側の挙動に触れる。**乖離が残るのは事実**だが終盤のリスクが利得を上回る |
+| `failurePolicy` / `EffectSlotEntry` の instrument 共通化 | 設計の決定 2・4 で確定済み |
+
+altitude は後者 2 つについて「**むしろ適切な深さ**」と判断している。`failurePolicy` の 2 値は
+role の言い換えではなく「スロットに間接層があるか / bus 名で位置固定か」という daemon 側の
+構造差に対応し、spec にも失敗モデル 2 型として文書化済みであることを実コードで確認している。
+
 ### 6.370 fix(daemon): 正常動作が ERROR として記録される欠陥を 3 件（#625 実機 E2E で発覚）(Aug 27, 2026)
 
 **Date**: 2026-08-27
