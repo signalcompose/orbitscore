@@ -173,6 +173,19 @@ export class Global {
       audioEngine,
       this.audioManager,
       this.linkAudioManager,
+      {
+        beforeReplace: (sequenceName, oldSlot) =>
+          this.prepareInstrumentReplacement(sequenceName, oldSlot),
+        onQuarantinedSlot: (sequenceName) => {
+          // Gated E2E intentionally does not induce this warning: quarantine requires
+          // a drain-ack timeout, which cannot be triggered deterministically with the
+          // real app/plugin setup. It uses the same console.warn -> get_log path as
+          // existing warnings; the callback wiring itself is covered by a unit test.
+          console.warn(
+            `[instrument-replace] ⚠️ Sequence '${sequenceName}' was replaced, but its old daemon slot was quarantined and cannot be reused; repeated quarantines may exhaust the instrument pool.`,
+          )
+        },
+      },
     )
     this.sequenceRegistry = new SequenceRegistry(audioEngine, this)
     this.effectsManager = new EffectsManager(
@@ -916,6 +929,29 @@ export class Global {
     return false
   }
 
+  /** Remove every host-side UI ledger entry for this volatile `(receiver,index)` address. */
+  private forgetPluginUiSession(receiverId: string, index: number): void {
+    for (const [key, session] of this.openPluginUiSessions) {
+      if (session.receiverId === receiverId && session.index === index) {
+        this.openPluginUiSessions.delete(key)
+      }
+    }
+  }
+
+  /** Record the resolved child session and preserve one-entry-per-address invariants. */
+  private recordPluginUiSession(
+    receiverId: string,
+    index: number,
+    resolved: ResolvedPluginStateTarget,
+  ): void {
+    this.forgetPluginUiSession(receiverId, index)
+    this.openPluginUiSessions.set(pluginUiSessionKey(resolved.daemonTarget, index), {
+      receiverId,
+      index,
+      resolved,
+    })
+  }
+
   /**
    * DSL 面（`seq.ui()` / `sum("x").ui()`）用の**冪等な** open（#619 R2）。
    *
@@ -923,8 +959,9 @@ export class Global {
    *
    * 1. **fast path**: セッション簿記に既にあれば daemon へ行かず no-op。
    *    respawn による staleness はコンストラクタのリスナが即時破棄するので誤認しない
-   * 2. **防御**: 判定後〜open 完了前の race で child が「already open」を返したら
-   *    成功扱いにする。判定の権威は child の状態機械（TS 側の簿記より新しい）
+   * 2. **防御と再同期**: 判定後〜open 完了前の race、または曖昧な close 後に child が
+   *    「already open」を返したら、現在の target を再解決してセッション簿記を再構築する。
+   *    判定の権威は child の状態機械（TS 側の簿記より新しい）
    *
    * MCP / REPL メタ行はこのメソッドを**使わない**（明示操作は二重 open を loud に落とす）。
    */
@@ -946,6 +983,11 @@ export class Global {
         message.includes('OPEN_UI requested while lifecycle is Open') ||
         message.includes('already-open')
       ) {
+        // openPluginUi failed after its initial resolution, so resolve again at
+        // the recovery boundary. A missing/replaced target must remain loud;
+        // registering a guessed identity would corrupt subsequent close/save.
+        const resolved = this.resolvePluginStateTarget(receiverId, index)
+        this.recordPluginUiSession(receiverId, index, resolved)
         return
       }
       throw error
@@ -989,16 +1031,7 @@ export class Global {
     // daemonTarget が変わる再 open では複合キーが別になり set では上書きされず、
     // closePluginUi の find が Map の挿入順＝stale 側を掴んでしまうため。
     // evict は daemon open 成功後に行う（open 失敗時に旧セッションを失わない）。
-    for (const [key, candidate] of this.openPluginUiSessions) {
-      if (candidate.receiverId === receiverId && candidate.index === index) {
-        this.openPluginUiSessions.delete(key)
-      }
-    }
-    this.openPluginUiSessions.set(pluginUiSessionKey(resolved.daemonTarget, index), {
-      receiverId,
-      index,
-      resolved,
-    })
+    this.recordPluginUiSession(receiverId, index, resolved)
     return {
       receiver: receiverId,
       index,
@@ -1036,7 +1069,9 @@ export class Global {
       completion = await this.audioEngine.closePluginUi(session.resolved.daemonTarget, index)
     } catch (error) {
       // ウィンドウの生死が不明（close タイムアウト等）なのでセッションは破棄しない。
-      // 実際に消えていた場合は次の open が上書きする。
+      // prepareInstrumentReplacement と違い、明示 close / sum.ui(false) は従来どおり
+      // 保持する。後に簿記が失われても、次の idempotent open が child の already-open
+      // 応答から同じ recordPluginUiSession 経路で再構築するため、別の回収規則は作らない。
       throw this.pluginUiOperationError(receiverId, index, error)
     }
     // DONE を受けた = ウィンドウは確実に閉じた。safepoint 保存成功時は保存側が破棄済み。
@@ -1056,6 +1091,50 @@ export class Global {
       normalizedName: session.resolved.identity.normalizedName,
       completion,
     }
+  }
+
+  /** UI close and old-tenant state commit immediately before an instrument replacement. */
+  private async prepareInstrumentReplacement(
+    sequenceName: string,
+    oldSlot: PluginSlot,
+  ): Promise<void> {
+    if (this.hasOpenPluginUi(sequenceName, 0)) {
+      try {
+        await this.closePluginUi(sequenceName, 0)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (!message.includes('timeout-without-save')) {
+          // The close outcome is ambiguous. Keeping this entry would make the
+          // idempotent open fast-path permanently trust stale host-side state.
+          // Forget it before surfacing the failure; a subsequent open reconciles
+          // either possible child state via the existing "already open" defence.
+          this.forgetPluginUiSession(sequenceName, 0)
+          throw error
+        }
+        console.warn(
+          `[instrument-replace] ⚠️ Plugin UI for Sequence '${sequenceName}' closed without a safepoint save; attempting the required explicit state save before replacement.`,
+        )
+      }
+    }
+    const projectDirectory = this.audioManager.getDocumentDirectory()
+    if (!projectDirectory) {
+      console.warn(
+        `[instrument-replace] ⚠️ Cannot save the old instrument state for Sequence '${sequenceName}' because the document directory is not set; replacement will continue without state preservation.`,
+      )
+      return
+    }
+    if (oldSlot.role !== 'instrument') {
+      throw new Error('Instrument replacement received a non-instrument slot.')
+    }
+    await this.projectStateStore(projectDirectory).save(
+      {
+        receiver: sequenceName,
+        role: 'instrument',
+        normalizedName: oldSlot.normalizedName,
+        occurrence: oldSlot.occurrence,
+      },
+      { role: 'instrument', instance: oldSlot.instance },
+    )
   }
 
   /**

@@ -21,7 +21,12 @@ import * as path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import WebSocket from 'ws'
 
-import type { PluginLoadResult, PluginStateSaveResult, PluginStateSaveTarget } from '../types'
+import type {
+  PluginLoadResult,
+  PluginReplaceResult,
+  PluginStateSaveResult,
+  PluginStateSaveTarget,
+} from '../types'
 
 import {
   DaemonConnectionError,
@@ -126,7 +131,37 @@ export function isDaemonNonErrorTracingLine(line: string): boolean {
   // tracing 既定形式の「ISO timestamp + level token」だけを non-error と認める。
   // 判定を緩めて本文中の "INFO" を拾うと本物のエラーが log から消える側に倒れるので、
   // 迷ったら error 側（従来挙動）へ。
-  return /^\s*\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO)\s/.test(plain)
+  if (/^\s*\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO)\s/.test(plain)) return true
+  // child プロセスは daemon の stderr を継承し、tracing を持たない(依存を足していない)。
+  // level トークンを自分で名乗った行だけを非エラーとして認める。名乗らない行・
+  // ERROR/WARN を名乗る行は従来どおり error 側へ倒す(例: "plugin.process() failed")。
+  return /^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+-child\]\s/.test(plain)
+}
+
+/**
+ * daemon stderr の chunk を**完全な行**へ組み直し、level で振り分けて emit する。
+ *
+ * 🔴 chunk 境界は行境界と一致しない。素朴に `split('\n')` すると行の後半が独立した
+ * 「行」になり、level トークンを持たないので **成功行の続きが ERROR として記録される**
+ * （#618 の E2E をカタログ経路へ寄せた際、行数が増えて境界がずれ実際に発生した）。
+ * 改行が来るまで持ち越すことでこれを防ぐ。呼び出し側でクロージャに埋めると
+ * テストできないので、純関数として切り出してある。
+ */
+export function createDaemonStderrLineRouter(
+  onNonError: (line: string) => void,
+  onError: (line: string) => void,
+): (chunk: string) => void {
+  let partial = ''
+  return (chunk: string): void => {
+    partial += chunk
+    const lines = partial.split('\n')
+    partial = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.trim()) continue
+      if (isDaemonNonErrorTracingLine(line)) onNonError(line)
+      else onError(line)
+    }
+  }
 }
 
 /**
@@ -434,6 +469,31 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
+  /** Atomically replaces (or ensure-loads) one instrument instance. */
+  async replacePlugin(
+    filePath: string,
+    pluginId: string | undefined,
+    role: 'effect' | 'instrument',
+    bus?: string,
+    instance?: string,
+    statePath?: string,
+  ): Promise<PluginReplaceResult> {
+    const result = await this.request('ReplacePlugin', {
+      path: filePath,
+      ...(pluginId === undefined ? {} : { plugin_id: pluginId }),
+      role,
+      ...(bus ? { bus } : {}),
+      ...(instance ? { instance } : {}),
+      ...(statePath ? { state_path: statePath } : {}),
+    })
+    return {
+      pluginId: String(result.plugin_id),
+      pluginName: String(result.plugin_name),
+      notePortIndex: Number(result.note_port_index),
+      quarantinedSlot: Boolean(result.quarantined_slot),
+    }
+  }
+
   async savePluginState(
     target: PluginStateSaveTarget,
     absolutePath: string,
@@ -706,6 +766,10 @@ export class DaemonClient extends EventEmitter {
     // （Kontakt の load 失敗の切り分けに2時間以上を要した実例がある）。
     // 蓄積を止めることと転送を止めることは別である。**転送は継続する。**
     let collecting = true
+    const routeStderrLine = createDaemonStderrLineRouter(
+      (line) => console.log(`[daemon] ${line}`),
+      (line) => console.error(`[daemon] ${line}`),
+    )
     const onStderrData = (chunk: Buffer): void => {
       const text = chunk.toString()
       if (collecting) {
@@ -715,11 +779,12 @@ export class DaemonClient extends EventEmitter {
       // 起動後は蓄積せず、行単位で engine のログへ転送する。INFO/DEBUG/TRACE の
       // tracing 行まで stderr に流すと拡張側で `ERROR:` として記録されるため
       // （isDaemonNonErrorTracingLine の docstring 参照）、level で振り分ける。
-      for (const line of text.split('\n')) {
-        if (!line.trim()) continue
-        if (isDaemonNonErrorTracingLine(line)) console.log(`[daemon] ${line}`)
-        else console.error(`[daemon] ${line}`)
-      }
+      //
+      // 🔴 部分行をバッファする: chunk 境界は行境界と一致しない。素朴に split すると
+      // 行の後半が独立した「行」になり、level トークンを持たないので **成功行の続きが
+      // ERROR として記録される**（#618 の E2E をカタログ経路へ寄せた際、行数が増えて
+      // 境界がずれたことで実際に発生した）。改行が来るまで持ち越す。
+      routeStderrLine(text)
     }
     child.stderr?.on('data', onStderrData)
     const detachStderr = (): void => {

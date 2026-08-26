@@ -7,6 +7,11 @@ import { EffectChainMap, normalizePluginInstanceName, type PluginSlot } from './
 import { LinkAudioManager } from './link-audio-manager'
 import { isPluginPathSpec, resolvePluginSpec, validatePluginExtension } from './plugin-resolver'
 
+export interface PluginInstrumentReplacementHooks {
+  beforeReplace(sequenceName: string, oldSlot: PluginSlot): Promise<void>
+  onQuarantinedSlot?(sequenceName: string): void
+}
+
 /**
  * Owns per-sequence daemon instrument declarations (#540 P1). Each note sequence
  * gets an independent instrument instance — the map key is the sequence name and
@@ -21,10 +26,14 @@ export class PluginInstrumentManager {
     audioEngine: AudioEngine,
     private readonly audioManager: AudioManager,
     private readonly linkAudioManager: LinkAudioManager,
+    replacementHooks: PluginInstrumentReplacementHooks = {
+      beforeReplace: async () => undefined,
+    },
   ) {
     this.slots = new EffectChainMap(audioEngine, (seqName) => `seq:${seqName}`, {
       externalReceiverId: (seqName) => seqName,
       statePathFallback: createStatePathFallback(audioManager),
+      replacement: replacementHooks,
     })
   }
 
@@ -77,8 +86,7 @@ export class PluginInstrumentManager {
         statePath: statePath === undefined ? undefined : this.resolveStatePath(statePath),
       },
       () =>
-        `Sequence '${seqName}' already has an instrument instance; ` +
-        'v1 does not support replacing it (restart the engine to change the plugin or sound).',
+        `Sequence '${seqName}' already has an instrument instance; replacing it requires the Rust engine backend.`,
     )
   }
 

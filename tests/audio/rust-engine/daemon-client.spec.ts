@@ -16,6 +16,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createWarmExecutable, SPAWN_TEST_TIMEOUT_MS } from '../../helpers/spawn-fixture'
 import {
   DaemonClient,
+  createDaemonStderrLineRouter,
   isDaemonNonErrorTracingLine,
   resolveDaemonBinaryPath,
 } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
@@ -285,6 +286,38 @@ describe('DaemonClient with mock server', () => {
     })
     expect(record?.params).not.toHaveProperty('instance')
     expect(record?.params).not.toHaveProperty('state_path')
+  })
+
+  it('ReplacePlugin sends the exact instrument spec and maps quarantined_slot', async () => {
+    const request = vi.spyOn(client as any, 'request').mockResolvedValue({
+      plugin_id: 'new-id',
+      plugin_name: 'New Synth',
+      note_port_index: 3,
+      quarantined_slot: true,
+    })
+    await expect(
+      client.replacePlugin(
+        '/plugins/new.vst3',
+        'new-id',
+        'instrument',
+        undefined,
+        'plugin:kick',
+        '/songs/new.state',
+      ),
+    ).resolves.toEqual({
+      pluginId: 'new-id',
+      pluginName: 'New Synth',
+      notePortIndex: 3,
+      quarantinedSlot: true,
+    })
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(request).toHaveBeenCalledWith('ReplacePlugin', {
+      path: '/plugins/new.vst3',
+      plugin_id: 'new-id',
+      role: 'instrument',
+      instance: 'plugin:kick',
+      state_path: '/songs/new.state',
+    })
   })
 
   it('GetPluginState sends the resolved effect target and preserves the byte result', async () => {
@@ -836,7 +869,67 @@ describe('resolveDaemonBinaryPath (C2)', () => {
 // #605 の起動後 stderr 転送は全行を console.error に流していたため、daemon の INFO
 // tracing まで拡張側で `ERROR:` として記録され、get_log の ERROR 前後比較（gated E2E・
 // LLM の自己検証）を実際に壊した。level token で振り分ける分類の正本がこのテスト。
+describe('createDaemonStderrLineRouter (#618 chunk 境界での行分割)', () => {
+  const route = (chunks: string[]) => {
+    const nonError: string[] = []
+    const error: string[] = []
+    const router = createDaemonStderrLineRouter(
+      (line) => nonError.push(line),
+      (line) => error.push(line),
+    )
+    for (const chunk of chunks) router(chunk)
+    return { nonError, error }
+  }
+
+  // 🔴 実測（#618 の E2E をカタログ経路へ寄せた際）: 行がチャンク境界で割れると、
+  // level トークンを持たない後半が独立した行として **ERROR に分類された**。
+  it('🔴 チャンクを跨いだ行を1本に組み直す（後半が ERROR に落ちない）', () => {
+    const { nonError, error } = route([
+      'INFO [orbit-vst3-instrument-child] state restored from "/x/y.state" (',
+      '8 bytes)\n',
+    ])
+    expect(nonError).toEqual([
+      'INFO [orbit-vst3-instrument-child] state restored from "/x/y.state" (8 bytes)',
+    ])
+    expect(error).toEqual([])
+  })
+
+  it('改行が来るまで emit しない（未完の行を早出ししない）', () => {
+    const { nonError, error } = route(['INFO [orbit-clap-instrument-child] partial'])
+    expect(nonError).toEqual([])
+    expect(error).toEqual([])
+  })
+
+  it('1チャンクに複数行が来ても全部さばく・level で振り分ける', () => {
+    const { nonError, error } = route([
+      'INFO [orbit-vst3-instrument-child] ok\n[orbit-vst3-instrument-child] boom\n',
+    ])
+    expect(nonError).toEqual(['INFO [orbit-vst3-instrument-child] ok'])
+    expect(error).toEqual(['[orbit-vst3-instrument-child] boom'])
+  })
+})
+
 describe('isDaemonNonErrorTracingLine (#605 stderr 転送の level 振り分け)', () => {
+  // #618 E2E 実測: child は daemon の stderr を継承し tracing を持たないため、level を
+  // 名乗らない成功行が **ERROR として記録される**（`state restored from ...` が該当し、
+  // state 付きの宣言・respawn・差し替えのたびに ERROR カウントを汚していた）。
+  it('🔴 child が名乗った INFO は非エラー・名乗らない行と ERROR/WARN は従来どおりエラー', () => {
+    expect(
+      isDaemonNonErrorTracingLine(
+        'INFO [orbit-vst3-instrument-child] state restored from "/x/y.state" (8 bytes)',
+      ),
+    ).toBe(true)
+    expect(isDaemonNonErrorTracingLine('DEBUG [orbit-clap-instrument-child] hello')).toBe(true)
+    expect(
+      isDaemonNonErrorTracingLine('[orbit-vst3-instrument-child] plugin.process() failed'),
+    ).toBe(false)
+    expect(
+      isDaemonNonErrorTracingLine('ERROR [orbit-vst3-instrument-child] state restore failed'),
+    ).toBe(false)
+    expect(isDaemonNonErrorTracingLine('WARN [orbit-vst3-instrument-child] degraded')).toBe(false)
+    expect(isDaemonNonErrorTracingLine('INFO something else entirely')).toBe(false)
+  })
+
   // 実機の daemon が出す ANSI 色付き tracing 行（gated E2E の実測から採取）。
   const ansiInfoLine =
     '\x1b[2m2026-08-25T17:30:47.243628Z\x1b[0m \x1b[32m INFO\x1b[0m ' +

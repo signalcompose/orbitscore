@@ -17,6 +17,429 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.363 fix(e2e): 実利用の経路へ全面的に寄せる — 標準プラグインディレクトリ + カタログ名 + audioPath (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #618（PR-2 の続き）/ 派生 #623
+**Status**: TS **2042 passed** / lint 0 / **実機 gated E2E 7/7 green**
+
+#### 🔴 owner 指摘（3段階で深まった）
+
+1. > effect やインストルメントがフルパスになってるのは改善したい
+2. > **不便云々の前に E2E テストと利用の実態が乖離してることが問題だろ**
+3. > **むしろ特殊なディレクトリに入れてるのがダメでしょ**
+
+main は最初「名前でもロードできます（実装済み）」と答えて**論点を外した**。問題は機能の有無ではなく
+**E2E が本番の経路を通っていないこと**。さらに fixture を tmp + `ORBIT_PLUGIN_PATH` に置くこと自体が
+実態と違う（実ユーザーは標準ディレクトリに入れる）。
+
+#### 変更（17箇所 + 設置方法）
+
+| 対象 | 変更後 |
+|---|---|
+| instrument / effect 15箇所 | **カタログ名**（`list_plugins` から動的取得・ハードコードしない） |
+| audio 2箇所 | **`global.audioPath()` + ファイル名** |
+| fixture の設置先 | tmp + `ORBIT_PLUGIN_PATH` → **`~/Library/Audio/Plug-Ins/{CLAP,VST3}`**（標準） |
+
+`ORBIT_PLUGIN_PATH` は起動 env から削除（継承値も明示的に除外）。
+broken bundle も標準ディレクトリへ — 「**ユーザーのフォルダに壊れたプラグインがある**」状況こそが
+rescan 失敗テストの実態。
+
+**パス形式のまま残したのは「存在しないプラグイン」の失敗テストのみ**。カタログ名だと TS の
+名前解決段階で落ち、daemon の rollback / エラー経路まで到達しないため。
+
+#### 🔴 実利用の経路へ寄せた瞬間に欠陥が3件出た
+
+1. **`--plugin-id` の警告**: カタログ解決は pluginId を**自動で補う**が VST3 は使わない。
+   パス直指定では渡さないので**一度も踏まれていなかった**
+2. **chunk 境界での行分割**: `onStderrData` が chunk をそのまま `split` するため、行が
+   チャンクを跨ぐと後半が独立した「行」になり ERROR に分類される。
+   → `createDaemonStderrLineRouter` として**純関数に抽出**して修正（クロージャ内では
+   テストできない）。変異は両方向で red
+3. **🔴 stale bundle の先勝ち**（Fable が実証）: `~/Library/Audio/Plug-Ins/CLAP/` に 7/28 の
+   古いビルドが残留し、`clap.state` を持たない実体が**カタログ順の先頭**として選ばれていた。
+   ロードも音も正常なので **state 保存まで進んで初めて分かる**
+
+#### stale bundle 問題は製品の欠陥でもある（#623 起票）
+
+**dedup は後勝ち（PC.5）なのに resolve は先勝ち**という方針の矛盾。同じプラグインを2箇所に
+持つ実ユーザーは**どちらがロードされるか制御できない**。修正案3つを trade-off つきで #623 に整理。
+
+緩和として E2E setup に「**その表示名のカタログ候補が全体で1件であること**」の検査を追加。
+
+#### 安全策: owner のプラグインに触れない
+
+`~/Library/Audio/Plug-Ins/VST3/` には owner 本人のプラグイン（242R / SuaraPortal）がある。
+**固定名5パスの allowlist を通らない削除は例外を投げる**設計にし、ディレクトリ単位の削除・
+glob・全 `.clap` 走査は書かない。実機実行後に owner のプラグインが無傷であることを確認済み。
+
+正常 fixture は**ビルド成果物への symlink** なので staleness が構造的に起きない。
+
+---
+
+### 6.362 fix: E2E を本番経路（カタログ名）へ寄せ、そこでしか出ない欠陥2件を潰した (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #618（PR-2 の続き）
+**Status**: TS **2042 passed** / Rust daemon lib 186 passed / lint 0 / clippy 0 /
+**実機 gated E2E 7/7 green（カタログ経路）**
+
+#### 🔴 owner 指摘: 「不便云々の前に E2E テストと利用の実態が乖離してることが問題だろ」
+
+main は最初「名前でもロードできます（実装済み）」と答えて**論点を外した**。owner の指摘は
+**E2E が本番の経路を通っていない**こと。
+
+実利用は `resolvePluginSpec` のカタログ分岐（名前 → パス + **pluginId の自動解決**）を通るが、
+#618 の E2E はフルパス直指定で**その層をまるごと迂回**していた。
+memory [[llm-drives-orbitstudio-through-dsl]]「**人間と同じ経路でないと意味がない**」に正面から反する。
+
+→ E1-E6 をカタログ名での宣言に書き換え（機構は既存: `catalogFixtureDir` への symlink +
+`ORBIT_PLUGIN_PATH` + `rescan_plugins`）。**名前は `list_plugins` から動的に取得**しハードコードしない。
+E4（失敗ケース）だけパス形式を維持 — 存在しないカタログ名では TS の名前解決段階で落ち、
+**daemon の rollback 経路まで到達しない**ため（Codex の判断・妥当）。
+
+#### カタログ経路でしか出ない欠陥が2件出た
+
+**① `--plugin-id` の警告**: カタログ解決は pluginId を**自動で補う**（名前解決の利点）が、
+VST3 child はそれを使わず警告を出す。**パス直指定では pluginId を渡さないので一度も踏まれていなかった。**
+ユーザーが避けられない経路で毎回出るため、level トークンを付けて情報扱いにした。
+
+**② 🔴 chunk 境界での行分割**: `onStderrData` が chunk をそのまま `split('\n')` していたため、
+**行がチャンクを跨ぐと後半が独立した「行」になり、level トークンを持たないので ERROR に分類**される。
+カタログ化で行数が増えて境界がずれ、`state restored from ...(8 bytes)` の後半 `8 bytes)` だけが
+ERROR として記録された。
+
+→ **`createDaemonStderrLineRouter` として純関数に抽出**し（クロージャ内ではテストできない・
+「配線はロジックと別にテストする」規律）、改行が来るまで持ち越す形に修正。
+変異検証は両方向（持ち越しを捨てる / 未完の行を即 emit）で red を確認。
+
+#### 教訓
+
+**E2E が本番と違う経路を通っていると、その経路の欠陥は永久に見えない。**
+今回カタログ経路へ寄せた瞬間に2件出た。どちらも「テストは緑なのに実態は壊れている」型。
+
+---
+
+### 6.361 feat(dsl): instrument の差し替えを DSL から（#618 PR-2） (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #618（PR-2 = TS 表面 + gated E2E。PR-1 = #621 は daemon 機構）
+**Status**: TS **2034 passed** / lint 0 / **実機 gated E2E 7/7 green**（#618 E1-E6 を含む）
+
+#### PR-2 R2: **前の fix が置いた前提が両方とも壊れていた**（Critical + Important・fix 起因）
+
+前の fix は2つとも「**ユーザーが気づいて再評価すれば収束する**」を前提に台帳を忘れる判断をした。
+その前提が両方とも成立していなかった:
+
+| 前提 | 実際 |
+|---|---|
+| ノート drop の警告で気づく | `warnOnce` の dedup が `stopAll()` まで残り、**2回目以降は完全に無音** |
+| 次の `ui()` で収束する | 「already open を成功扱い」が**セッションを登録しない** → 簿記は空のまま |
+
+1件目は、**前ラウンドで Critical と認定した「気づけない」状態を、今回追加した警告自身が
+2回目以降は出せないという形で再生産**していた。
+
+2件目は **#619 で main が書いたコードの欠陥**。当時は fast-path があるので
+「既に開いている＝簿記にある」が前提だったが、簿記を忘れる経路を作ったことで
+「簿記には無いが実際には開いている」状態が生まれ、そこを通ると `close_plugin_ui` が
+**「もう閉じている」という誤った診断**で落ちる（実際にはまだ開いている）。
+
+**ポリシー**: 「復旧できる」と主張する設計は、**その復旧経路が実在することまで含めて成立する**。
+忘れる判断自体は正しい。**忘れた後の回復経路を実在させる**のが修正。
+
+- `markPluginInactive()`: 非活性化のたびに `pluginInactive:<instance>` の dedup を落とす
+  （「1回の非活性化につき1回警告」の意味論）
+- `recordPluginUiSession()`: already-open を成功扱いした時に簿記を戻す。
+  これにより **MCP の明示 close 等、別経路の stale も次の open で収束する**
+
+**main 独自の変異**: 再 arm を外す → 新テスト red / セッション登録を外す → 新テスト red。
+
+分類テストが新設ヘルパ `recordPluginUiSession` を捕捉（**今日3度目**）。内部 API として登録。
+
+#### PR-2 レビュー: Critical 1（2つの帳簿が同じ不確実性に逆の判断をしていた）
+
+silent-failure-hunter が発見。**差し替えが transport 失敗（daemon が commit したか不明）で
+終わったとき**:
+
+| 層 | 挙動 |
+|---|---|
+| TS 側 `chains`（`effect-slot.ts`） | `delete` して**忘れる**（再宣言で収束させる設計） |
+| engine 側 `loadedPlugins`（respawn 復元キャッシュ） | **旧 A の spec を保持したまま** |
+
+この後 daemon が respawn すると復元キャッシュが**旧 A で loadPlugin を再発行して成功**する。
+音が戻るので正常に見えるが、**鳴っているのは B ではなく A**。reload 自体は成功しているので
+`get_log` にエラーも警告も残らない ＝ **気づけない**。
+
+**ポリシー**: 2つの帳簿は、同じ「不確実性」に対して**同じ判断**をしなければならない。
+片方が「不明だから忘れる」と決めたのに、もう片方が「旧のまま覚えている」と、
+**復元時に古い方が黙って勝つ**。
+
+これで Critical-1（復元キャッシュ）と Important-2（曖昧な UI close 失敗で簿記が stale になり
+`seq.ui()` が恒久 no-op ＝ **#619 と同型**）が同じ規律で塞がる。
+UI 簿記の破棄が安全なのは、**#619 R4 で入れた「child の already-open を成功扱い」**があるため
+（実はまだ開いていた場合も次の `ui()` が収束する）。
+
+**Important-3（quarantine 警告の実機到達性）は今回対応しない**: quarantine を実機で誘発するには
+drain ack のタイムアウトが要り、gated E2E で決定論的に作れない。機構は既存の warn 経路と同一。
+理由をコードコメントに残した。
+
+**main 独自の変異**: `loadedPlugins.delete` を外す → 新テスト red /
+`forgetPluginUiSession` の呼び出しを外す → 新テスト red。
+分類テストが新設ヘルパ `forgetPluginUiSession` を捕捉して落ちたので内部 API として登録
+（**逆方向テストが2度目の仕事をした**）。
+
+#### 🔴 E2E が実機でしか出ない欠陥を捕まえた（owner 強調「e2e もちゃんとやってね」）
+
+E2 が「差し替えで ERROR ログが増えない」で落ちた。増えていた ERROR の正体:
+
+```
+[orbit-vst3-instrument-child] state restored from "...(8 bytes)"
+```
+
+**成功メッセージが ERROR として記録されていた。** child は daemon の stderr を継承する一方
+`tracing` 依存を持たず、TS 側の分類器（`isDaemonNonErrorTracingLine`）は
+level トークンの無い行を**既定で error 側へ倒す**設計だったため。
+
+**これは PR-2 が持ち込んだ欠陥ではない** — state 付きの宣言・respawn でも同じ行が出るので
+以前から ERROR カウントを汚していた。**ERROR 数をヘルスシグナルにする E2E を書いて初めて気づいた。**
+
+修正: **child にも level トークンの規約を与える**（`LEVEL [orbit-*-child] ...`）。
+成功行だけ `INFO` を名乗らせ、分類器はその形のみ非エラーとして認める。
+level を名乗らない行・`ERROR`/`WARN` を名乗る行は従来どおり error 側（`plugin.process() failed` 等）。
+child crate に tracing 依存を足さずに済む最小の形。
+
+変異検証（両方向）: 規約の行を**外すと** red / パターンを**緩めて level 無しも通すと** red。
+
+#### E2E は「何が鳴っているか」まで見る
+
+Codex が**ブリーフの弱点を報告**してきた: 指定した CLAP/VST3 oracle は定常出力が
+どちらも `sin * 0.25` で **RMS がほぼ同値**なので、「RMS が有意に異なる」は偽のアサーションになる。
+代わりに VST3 の +7 半音 state を使い**基本周波数**で識別する形に変えていた。
+
+```
+E1/E2/E4/E5 の RMS > 0.03（非無音）/ E3 < 0.005（無音）
+|e2Hz - e1Hz| / e1Hz > 0.25    音が「変わった」
+|e4Hz - e2Hz| / e2Hz < 0.02    失敗後も B が鳴り続けている
+|e5Hz - e1Hz| / e1Hz < 0.02    音色ループで A が戻った
+```
+
+E4・E5 は RMS では区別できず**周波数でしか証明できない**。指示より良い設計。
+併せて旧 child の **PID 消滅**と `pluginChildPids(CLAP) == []` も確認している。
+
+#### E2E 自体の変異検証
+
+daemon の commit（`instance_index` 張り替え）を revert してビルドし直し、実機で再走 → **red を確認**。
+**ただし発火したのは UI オラクル**（`open_plugin_ui` の target 解決）で、音のアサーションではない。
+音の解析は capture 停止後の最後に走るため、手前のオラクルが先に落ちる。
+**「E2E が変異を検出する」は成立したが、「音のアサーションが検出した」とは言えない**（事実として記録）。
+
+#### main の検証で 1 件 red → 修正
+
+分類テストが新設 private メソッド `prepareInstrumentReplacement` を捕捉して落ちた
+（**逆方向テストが設計どおり機能**）。DSL から到達しない内部 API として登録。
+
+---
+
+### 6.361 feat(engine): instrument 差し替えの TS 表面 + gated E2E（#618 PR-2） (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #618（PR-2 = TypeScript engine 表面・DSL orchestration・実機 E2E）
+
+- `ReplacePlugin` を daemon client / `RustEnginePlayer` / `AudioEngine` へ公開し、成功後の
+  respawn cache と active 状態を新 spec へ更新
+- instrument 宣言だけが opt-in する `EffectChainMap` 差し替え経路を追加。他の effect 3 manager の
+  1-slot 制約と `EffectSlotLimitError` は維持
+- UI close → 旧 state 自動保存 → atomic replace → chain commit を直列化。daemon 明示拒否では旧 chain
+  を保持し、transport 例外では次の `ReplacePlugin` ensure で収束する
+- document directory 未設定と隔離 slot をユーザー可視 warning にし、旧音色の project.yaml 登記と
+  新音色の state fallback 復元を接続
+- T1–T11 の unit と format 跨ぎ（CLAP → VST3）の gated E1–E6 を追加
+
+### 6.360 feat(daemon): instrument 差し替えの daemon 機構（#618 PR-1） (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #618（PR-1 = spec delta + Rust daemon 機構。DSL 表面は PR-2）
+**Status**: **daemon lib 175 passed / 0 failed**・R1-R11 全件実走・clippy 0・fmt OK・
+変異検証は Codex 側 11 種 + **main 独自 6 種**
+
+#### owner 提起で「note-off 先出し」を撤回した
+
+> 切り替え時やインストルメント削除の時にノートオフ先出しだけど、これ、本当に必要か確認して。
+
+調査の結論は **不要**（詳細は issue #618 のコメント）。要点:
+
+- note-off は楽譜由来のイベントとしてスケジュール済み。旧 child は kill でプロセスごと死ぬので
+  **鳴りっぱなしは原理的に起きない**
+- 先出しすると、新インスタンスのロード失敗時に「旧は保持されるのに音だけ消えた」となり、
+  spec の失敗モデル（prepare→commit・失敗時は旧が無傷）が壊れる
+- DAW 調査で報告される stuck note は「同一インスタンスの deactivate → reactivate」か
+  「生きている別の宛先への再ルーティング」で、**完全破棄のケースは含まれない**
+
+**統一原則**: 強制 note-off が要るのは note の**発生源**が offTime より前に止まる場面
+（#606 / MUTE / LOOP 除外 / play() 差し替え）であって、**宛先**が変わる場面ではない。
+これにより #618 は **#606 への依存が消えた**。
+
+#### 設計: main の (A) 推奨を設計者が一次ソースで覆した
+
+`reset_after_child_exit` の SAFETY 注記が「旧 child の死亡確認後なので競合しない」と明記しており、
+**1 slot = 1 shm = 1 child**。同一スロットでは prepare→commit が原理的に成立しない。
+→ **(B) 予備スロットに立てて `instance_index` の指す先を張り替える**方式を採用。
+commit = map の書き換え。commit 前に旧側を一切触らないので「失敗 = 何も起きなかった」が構造的に成立する。
+
+#### main のレビューで設計の穴を1件塞いだ
+
+設計 §3.3-a の「100ms ドレイン待ち・進まなければ諦めて続行」は**タイミング推測 + サイレントな諦め**だった。
+note ring は **in-process の rtrb（slot 所有・tenant をまたいで生存）**で `reset_child_starting` の
+対象外なので、諦めた場合に残渣が次のテナントへ届く。
+
+→ 同じ PostProcessor にある**決定論的 ack ハンドシェイク**を使う形へ変更:
+`engaged=false` → drain-and-discard 要求 → **状態で待つ** → タイムアウトなら loud に警告し
+**その slot を free-list へ返さない**（隔離）。
+残渣は旧 child へ**届けず捨てる** — 旧 child は直後に死ぬので届ける意味がなく、
+届けようとしていたのは note-off 先出し思考の残滓だった。
+
+#### 🔴 受け入れ検証で main が2つの穴を発見（effort ではなく受け入れ基準の不備）
+
+**設計 §10 の失敗モード一覧と §9 のテスト表が突き合わされていなかった。**
+
+| 変異（main 独自） | 当初の結果 | 対応 |
+|---|---|---|
+| Closed の spare を free-list へ返す | **全件 green**（穴） | **R10** 追加 → 再変異で red 確認 |
+| teardown が respawn を誘発 | **テスト自体が無い**（穴） | **R11** 追加 → 再変異で red 確認 |
+| commit を prepare の前へ | 6 件 red | — |
+| `reset_control_run` を外す | R3 のみ red | — |
+| `engaged=false` の順序を崩す | 全件 green | **観測不能と判断しテストは足さない** |
+| supervisor の Drop を起こさせない | R11 + R1 red | — |
+
+Closed の spare は `spawn_outproc_supervisor` 失敗時に生じ、**shm が unlink 済みで再利用不能**。
+free-list へ返すと次のテナントが必ず失敗する。ガードは実装されていたが**テストが無かった**。
+
+**教訓**: Codex は渡されたテスト表を過不足なく実装した。抜けていたのは受け入れ基準の側であり、
+effort を上げても防げない類。**設計の失敗モード一覧の各項目にテスト行があるか**を
+工程②（設計チェック）の必須項目にする。
+
+#### /simplify（4観点並行）— 7件適用・変異検証で穴を1件発見
+
+**3エージェントが独立に同じ重複を指摘**（slot 割当ロジックが2関数に逐語コピー）。
+しかも既にエラー文言が `"all assigned"` と `"assigned or unavailable"` に分岐しており、
+**ドリフトが始まっていた**。
+
+| 適用 | 内容 |
+|---|---|
+| `allocate_slot` / `free_slot` | 割当と free-list 返却を `OutProcInstrumentControl` のメソッドへ集約 |
+| **`detach_and_reset_control_run`** | **detach → reset の順序（安全条件）が2箇所に手書きだったのを集約**。既存の `retryable_attach_failure` からも呼ぶ |
+| `SlotSignals` | 4つの `Arc<AtomicBool>` を構造体へ。**9引数コンストラクタと新規 clippy 抑制を解消**（同型引数は順序を間違えても型検査を通る） |
+| `bus_param_invalid_for_instrument_role` | ReplacePlugin も既存純関数を使う |
+| `SlotFixture.engaged` / `test_instrument_control` | テストのボイラープレート集約 |
+
+**Altitude が「instrument 専用スコープは正しい」を実コードで裏取り**: effect スロットは
+bus 名でグラフに焼き込まれ、「名前→slot の間接層」も「再利用できる空き slot」概念も存在しない。
+いま `OutProcRole` へ持ち上げるのは呼び出し元1つでの早すぎる汎化。
+
+**見送り**: RT フラグの状態列挙化（RT 意味論を変えるため別 issue）/ `lock_instrument_control`
+（14箇所・差分外）/ `wait_until` 集約（本 PR 起源でない）ほか。
+
+#### 🔴 main の変異検証で `free_slot` の不変条件が無防備と判明
+
+| 変異 | 結果 |
+|---|---|
+| `SlotSignals` の drain / teardown フィールド取り違え | 5件 red（構造体化で検出力は落ちていない） |
+| `allocate_slot` が free-list を再利用しない | 2件 red |
+| **`free_slot` の二重登録ガード削除** | **全件 green**（穴） |
+
+破れると **1つの slot が2テナントへ同時に払い出され、同じ shm を共有した child が2本立つ**。
+抽出が生んだ穴ではなく**抽出前から呼び出し側2箇所に手書きされていた無防備なガード**だが、
+名前が付いた今ならヘルパを直接テストできるので `free_slot_never_lists_the_same_index_twice` を追加。
+LIFO 再利用順と「slots が空なら未割当プールから払い出さない」も同時に固定。
+**ガード削除・LIFO→FIFO の2変異で red を確認済み。**
+
+#### レビュー ラウンド1（Sonnet 4名 + Fable 監査を並行）: Critical 1 + Important 12
+
+**Fable と Sonnet 陣の指摘は1件も重複しなかった**（前者=差分に無いもの、後者=差分に在るものの正しさ）。
+
+| 出所 | 指摘 |
+|---|---|
+| silent-failure-hunter（**Critical**） | `replacements_in_flight` が commit ブロックの `?` 2箇所・teardown 後の `?`・パニックで漏れる。漏れるとその instance は**永久に**「already in progress」を返し、**この分岐にだけログが無く**復旧は daemon 再起動のみ = **気づけない** |
+| code-reviewer | 同 Critical を独立再発見 + `allocate_slot()` 直後の `upgrade()` 失敗で **`spare_index` が漏れる** |
+| **Fable F1（最重要の不在）** | **freed slot が前テナントの痕跡を持ち越す**: `VoiceTable`（reset は respawn 検知のみ・差し替えでは `respawn_count` が増えない）/ `measurement_invalid`（**`store(false)` が crate 内 0 件**）/ `probe_live_count`。**壊れた plugin を差し替えると計測無効フラグが無実の新テナントへ移り daemon 再起動まで消えない** = 差し替えの主用途でちょうど発火 |
+| Fable F2 | `ReplacePlugin` に instrument-only build のパリティガードが無い（`LoadPlugin` にはある・#542 方針） |
+| Fable F3 / comment-analyzer | spec の「commit の直前に保存」が wire 表面で実現不能 / docstring が失敗分岐を過小記述 |
+| pr-test-analyzer | ensure 意味論の4分岐のうち**3つが未テスト**（特に冪等 no-op 分岐は削除しても1件も落ちない） |
+
+#### ポリシー先行で一括適用（指摘単位のローカルパッチは禁止）
+
+> **スロットは資源のバンドルである。** 差し替えは respawn と同型のイベント。(1) 取得と解放は
+> 早期 return とパニックを跨いで対にする（RAII）(2) 前テナントの痕跡が残らない状態でのみ
+> free-list へ返し、戻せないなら隔離する (3) ログにしか出ない失敗はサイレント障害として扱う
+
+- `InstrumentReplacementReservation`（RAII）: in-flight と spare_index を**1つの予約**として表現。
+  `Drop` が `ChildSlot` の4状態を分岐し、`Active`（spawn 済み未 commit）なら teardown まで実行、
+  失敗すれば隔離してログを出す
+- **`tenant_generation` を新設**（Codex の判断で main のブリーフを訂正）。main は
+  「`respawn_count` を進めて既存 resync に乗せよ」と指示したが、**それは R11（teardown が respawn を
+  誘発しない）が固定している診断値そのものを壊す**。別カウンタなら VoiceTable のリセット経路を
+  再利用しつつ診断を汚さない
+- `InstrumentSlotTeardownFailure` enum: 失敗理由を `bool` から構造化
+- ensure 4分岐 / reset 失敗分岐 / bus ガードの配線 のテストを追加
+
+#### 🔴 main の受け入れ検証で flake を1件発見（Codex は 186 passed と報告）
+
+`r7_replacement_supervisor_respawns_the_new_plugin_spec` が**フルスイート6回中1回**失敗。
+失敗時の args は `"--shm\n<path>\n"` だけで**プラグインのパスが書かれる前**の中身だった。
+待機条件が `exists()` なのに fixture が `printf ... > file` で直接書いており、
+**作成直後・書き終える前**を読んでいた。
+
+- **単体では再現しない（0/40）** — フルスイートの並行負荷でのみ窓が開く。
+  単体で測って「直った」と結論していたら誤判定だった
+- 修正: fixture を**原子的な公開**へ（temp へ書いて `mv`）。`exists()` が「書き終わった」を意味するようになる
+- **フルスイート24回で失敗0**
+
+#### main 独自の変異検証（6種）
+
+| 変異 | red になったテスト |
+|---|---|
+| RAII ガードの `Drop` を無効化 | R2 / R5 / R10 + `replacement_reservation_releases_in_flight_on_unwind` |
+| commit の defuse を外す | R1 / R3 / R8 + reset 失敗テスト |
+| `measurement_invalid` のクリアを外す | `tenant_handoff_resets_voice_bookkeeping_and_sticky_health` |
+| `tenant_generation` を進めない | 同上 |
+| RT 側が `tenant_generation` を見ない | 同上 |
+| パリティガードの条件を殺す（**instrument-only build で**） | `replace_plugin_instrument_only_rejects_unsupported_instance_and_state` |
+
+最後の1件は**両 feature で走らせて全件 green になり**、そのガードが instrument-only でしか
+コンパイルされないことに気づいて構成を変えて取り直した。**変異が無効だったことに気づけたのは
+「red にならなかった」を疑ったから。**
+
+#### ラウンド2（fix-scoped 縮小レビュー）: Important 1件（**fix 起因**）
+
+RAII 化の副作用で、**成功パスの in-flight 解除が `free_slot` と別ロックに分かれた**。
+fix 前は1つのロック区間で両方やっていたが、fix 後は `commit_spare()` が in_flight を触らないため
+**Drop が唯一の解除者**になり、最終ガードが落ちてから Drop がロックを取り直すまでの窓で、
+同一 instance への並行 replace が「already in progress」で**偽に弾かれる**。
+
+→ 成功パスの最終ガード内でも `replacements_in_flight.remove` を呼ぶ（`HashSet::remove` は冪等なので
+Drop 側は失敗・パニック時の安全網として残す）。
+
+**この指摘は変異検証で検出できない**（窓は関数内部にあり、呼び出し元から観測すると Drop は
+必ず return 前に走るため、既存アサーションはどちらでも通る）。**並行スレッドからのみ観測可能**な
+性質なので、テストを足すより不変条件をコメントで固定する方を選んだ。
+
+#### ラウンド2 で「新規故障モードなし」と確認された点
+
+- `Drop` はパニックしない（`lock_child_slot_recovering` は poison を recover・`unwrap()` なし）
+  → 二重パニック→abort の懸念なし
+- **ロック順序**: `reservation` が全ガードより前に宣言されているため、Rust の drop 順（宣言の逆順）で
+  ネストしたガードが必ず先に落ちる。早期脱出4箇所を1つずつ辿って自己デッドロックなしを確認
+- `Drop` は `spawn_blocking` のブロッキングプール上でのみ走り、**RT スレッドから呼ばれる経路はない**
+- `tenant_generation` の `Relaxed` は `respawn_count` と同じ既存パターン
+
+#### 検証コマンドの落とし穴
+
+`cargo test -p orbit-audio-daemon` だけでは **33 tests しか走らず R1-R11 は feature gate で1件も実行されない**。
+`--features outproc-effect,outproc-instrument` が必須。
+Codex 報告（173）と main のベースライン（33）の食い違いで気づいた。
+
+---
+
 ### 6.359 fix(engine): respawn 後の stale セッション簿記を解消し冪等 open を1箇所に集約 (#619 R2) (Aug 26, 2026)
 
 **Date**: 2026-08-26

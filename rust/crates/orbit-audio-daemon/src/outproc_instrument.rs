@@ -199,6 +199,9 @@ pub struct OutProcInstrumentStats {
     pub fresh: AtomicU64,
     pub callback_count: AtomicU64,
     pub respawn_count: AtomicU64,
+    /// Slot tenant handoff generation. Unlike `respawn_count`, this does not report a watchdog
+    /// respawn; it only asks the RT host to discard tenant-local voice bookkeeping.
+    pub tenant_generation: AtomicU64,
     /// 直近 respawn のタイムスタンプ（supervisor 起動からの経過 ns・0 = 未 respawn）。#573 の
     /// fast-fail 検知が直前 spawn の生存時間を測るのに使う。`outproc_effect::OutProcEffectStats`
     /// の同名フィールドと同じ意味論。
@@ -284,26 +287,35 @@ pub struct OutProcInstrumentPostProcessor {
     /// **本 PR では常に true で構築される**（既存起動経路は eager attach のまま無変更）。
     /// PR-1b で post-boot attach 実装時に false スタートさせる想定（詳細は Issue #431 参照）。
     engaged: Arc<AtomicBool>,
-    teardown_requested: Arc<AtomicBool>,
-    teardown_done: Arc<AtomicBool>,
+    signals: SlotSignals,
     stats: Arc<OutProcInstrumentStats>,
     /// Last supervisor generation observed by the audio thread. This field has exactly one reader
     /// and writer (`process`) and therefore needs no atomic synchronization of its own.
     last_respawn_count: u64,
+    /// Last tenant handoff generation observed by the audio thread; same single-thread ownership.
+    last_tenant_generation: u64,
+}
+
+pub struct SlotSignals {
+    pub teardown_requested: Arc<AtomicBool>,
+    pub teardown_done: Arc<AtomicBool>,
+    /// #618: slot tenant 差し替え時、control thread が event ring の全残渣破棄を要求する。
+    pub drain_requested: Arc<AtomicBool>,
+    /// #618: `event_rx` を空にした後に audio thread が publish する決定論的 ack。
+    pub drain_done: Arc<AtomicBool>,
 }
 
 impl OutProcInstrumentPostProcessor {
     /// `host` = mmap を所有する production 構築子（`PipelinedInstrumentHost::from_mmap`）で作った
     /// host、`event_rx` = note event の受け側（`event_capacity` はその scratch buffer 分の容量）、
     /// `engaged` = child の post-boot attach 完了までの安全弁（本 PR では常に `true` で渡される）、
-    /// `teardown_requested` / `teardown_done` = supervisor と共有する協調フラグ、`stats` = 観測ミラー。
+    /// `signals` = supervisor / replacement control と共有する協調フラグ、`stats` = 観測ミラー。
     pub fn new(
         host: PipelinedInstrumentHost,
         event_rx: rtrb::Consumer<NeutralEvent>,
         event_capacity: usize,
         engaged: Arc<AtomicBool>,
-        teardown_requested: Arc<AtomicBool>,
-        teardown_done: Arc<AtomicBool>,
+        signals: SlotSignals,
         stats: Arc<OutProcInstrumentStats>,
     ) -> Self {
         Self {
@@ -312,18 +324,35 @@ impl OutProcInstrumentPostProcessor {
             event_scratch: Vec::with_capacity(event_capacity),
             audio_scratch: vec![0.0; BUF_LEN],
             engaged,
-            teardown_requested,
-            teardown_done,
+            signals,
             stats,
             last_respawn_count: 0,
+            last_tenant_generation: 0,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn into_event_rx_for_test(self) -> rtrb::Consumer<NeutralEvent> {
+        self.event_rx
+    }
+
+    #[cfg(test)]
+    pub(crate) fn probe_live_count_for_test(&self) -> u16 {
+        self.host.live_count(PROBE_KEY)
     }
 }
 
 impl PostProcessor for OutProcInstrumentPostProcessor {
     fn process(&mut self, data: &mut [f32]) {
-        if self.teardown_requested.load(Ordering::Acquire) {
-            self.teardown_done.store(true, Ordering::Release);
+        if self.signals.teardown_requested.load(Ordering::Acquire) {
+            self.signals.teardown_done.store(true, Ordering::Release);
+            return;
+        }
+        // #618: tenant を切り替える slot は disengage 済みなので、旧 tenant の event を child へ
+        // 渡さず全件捨てる。ack は consumer が ring を空にした後だけ publish する。
+        if self.signals.drain_requested.load(Ordering::Acquire) {
+            while self.event_rx.pop().is_ok() {}
+            self.signals.drain_done.store(true, Ordering::Release);
             return;
         }
         if !self.engaged.load(Ordering::Acquire) {
@@ -331,9 +360,13 @@ impl PostProcessor for OutProcInstrumentPostProcessor {
         }
 
         let respawn_count = self.stats.respawn_count.load(Ordering::Relaxed);
-        if respawn_count != self.last_respawn_count {
+        let tenant_generation = self.stats.tenant_generation.load(Ordering::Relaxed);
+        if respawn_count != self.last_respawn_count
+            || tenant_generation != self.last_tenant_generation
+        {
             self.host.on_child_respawned();
             self.last_respawn_count = respawn_count;
+            self.last_tenant_generation = tenant_generation;
         }
 
         self.event_scratch.clear();
@@ -885,8 +918,12 @@ mod tests {
             event_rx,
             NOTE_RING_CAPACITY,
             engaged(true),
-            requested,
-            done,
+            SlotSignals {
+                teardown_requested: requested,
+                teardown_done: done,
+                drain_requested: Arc::new(AtomicBool::new(false)),
+                drain_done: Arc::new(AtomicBool::new(false)),
+            },
             stats.clone(),
         );
         let addr = VoiceAddr {
@@ -952,8 +989,12 @@ mod tests {
             event_rx,
             NOTE_RING_CAPACITY,
             engaged(true),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
+            SlotSignals {
+                teardown_requested: Arc::new(AtomicBool::new(false)),
+                teardown_done: Arc::new(AtomicBool::new(false)),
+                drain_requested: Arc::new(AtomicBool::new(false)),
+                drain_done: Arc::new(AtomicBool::new(false)),
+            },
             stats.clone(),
         );
         let addr = VoiceAddr {
@@ -1025,8 +1066,12 @@ mod tests {
             event_rx,
             NOTE_RING_CAPACITY,
             engaged(true),
-            requested,
-            done.clone(),
+            SlotSignals {
+                teardown_requested: requested,
+                teardown_done: done.clone(),
+                drain_requested: Arc::new(AtomicBool::new(false)),
+                drain_done: Arc::new(AtomicBool::new(false)),
+            },
             stats.clone(),
         );
 
@@ -1085,8 +1130,12 @@ mod tests {
             event_rx,
             NOTE_RING_CAPACITY,
             engaged(false),
-            Arc::new(AtomicBool::new(false)),
-            Arc::new(AtomicBool::new(false)),
+            SlotSignals {
+                teardown_requested: Arc::new(AtomicBool::new(false)),
+                teardown_done: Arc::new(AtomicBool::new(false)),
+                drain_requested: Arc::new(AtomicBool::new(false)),
+                drain_done: Arc::new(AtomicBool::new(false)),
+            },
             stats.clone(),
         );
 
@@ -1100,6 +1149,59 @@ mod tests {
             Ok(note),
             "disengaged 中は event ring を drain せず、note がそのまま残っている"
         );
+
+        drop(processor);
+        std::fs::remove_file(path).expect("remove shared memory");
+    }
+
+    #[test]
+    fn replacement_drain_discards_all_events_and_acks_while_disengaged() {
+        let path = unique_shm_path();
+        let host_mmap = orbit_audio_sandbox::create_shared(&path).expect("create shared memory");
+        let host = PipelinedInstrumentHost::from_mmap(host_mmap);
+        let (mut event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
+        let note = NeutralEvent::NoteOn {
+            sample_offset: 0,
+            addr: VoiceAddr {
+                note_id: -1,
+                port_index: 0,
+                channel: 0,
+                key: 72,
+                _pad: 0,
+            },
+            velocity: 0.8,
+            tuning_cents: 0.0,
+            length_frames: 0,
+        };
+        event_tx.push(note).expect("push first stale note");
+        event_tx.push(note).expect("push second stale note");
+        let drain_requested = Arc::new(AtomicBool::new(true));
+        let drain_done = Arc::new(AtomicBool::new(false));
+        let stats = OutProcInstrumentStats::new();
+        let mut processor = OutProcInstrumentPostProcessor::new(
+            host,
+            event_rx,
+            NOTE_RING_CAPACITY,
+            engaged(false),
+            SlotSignals {
+                teardown_requested: Arc::new(AtomicBool::new(false)),
+                teardown_done: Arc::new(AtomicBool::new(false)),
+                drain_requested,
+                drain_done: drain_done.clone(),
+            },
+            stats.clone(),
+        );
+
+        let mut data = vec![0.42; 8 * CHANNELS];
+        processor.process(&mut data);
+
+        assert!(drain_done.load(Ordering::Acquire));
+        assert!(
+            processor.event_rx.pop().is_err(),
+            "drain ack must only publish after every stale event is discarded"
+        );
+        assert!(data.iter().all(|sample| *sample == 0.42));
+        assert_eq!(stats.callback_count.load(Ordering::Relaxed), 0);
 
         drop(processor);
         std::fs::remove_file(path).expect("remove shared memory");

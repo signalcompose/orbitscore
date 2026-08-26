@@ -866,6 +866,16 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'hasOpenPluginUi',
       // #619 R2: 冪等 open の集約実装。seq.ui() / //#pluginUi の両方がここへ委譲する。
       'openPluginUiIdempotent',
+      // #618 PR-2: 差し替え前の後始末（UI close → state 保存）。private だが
+      // Object.getOwnPropertyNames には現れる（他の private 同様に除外）。
+      // PluginInstrumentManager からコールバック注入で呼ばれ、DSL からは到達しない。
+      'prepareInstrumentReplacement',
+      // #618 PR-2: 曖昧な close 失敗で UI 簿記を忘れるヘルパ。fast-path が stale を
+      // 恒久的に信じるのを防ぐ（#619 と同型の穴）。DSL 語彙ではない。
+      'forgetPluginUiSession',
+      // #618 PR-2 R2: 「already open を成功扱い」した時に簿記を戻すヘルパ。
+      // 忘れた後の回復経路を実在させるためのもの。DSL 語彙ではない。
+      'recordPluginUiSession',
       // (sequence, index) を SC.5 インスタンス同一性 + daemon target へ解決する内部 API。
       // UIH.5 の index 規則を実装する。インタプリタからの参照はゼロ。
       'resolvePluginStateTarget',
@@ -956,6 +966,16 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'hasOpenPluginUi',
       // #619 R2: 冪等 open の集約実装。seq.ui() / //#pluginUi の両方がここへ委譲する。
       'openPluginUiIdempotent',
+      // #618 PR-2: 差し替え前の後始末（UI close → state 保存）。private だが
+      // Object.getOwnPropertyNames には現れる（他の private 同様に除外）。
+      // PluginInstrumentManager からコールバック注入で呼ばれ、DSL からは到達しない。
+      'prepareInstrumentReplacement',
+      // #618 PR-2: 曖昧な close 失敗で UI 簿記を忘れるヘルパ。fast-path が stale を
+      // 恒久的に信じるのを防ぐ（#619 と同型の穴）。DSL 語彙ではない。
+      'forgetPluginUiSession',
+      // #618 PR-2 R2: 「already open を成功扱い」した時に簿記を戻すヘルパ。
+      // 忘れた後の回復経路を実在させるためのもの。DSL 語彙ではない。
+      'recordPluginUiSession',
       'resolvePluginStateTarget',
       'pluginIndexError',
     ] as const

@@ -10,6 +10,7 @@ interface FakeDaemon {
   off: ReturnType<typeof vi.fn>
   on: ReturnType<typeof vi.fn>
   loadPlugin: ReturnType<typeof vi.fn>
+  replacePlugin: ReturnType<typeof vi.fn>
   pluginNoteOn: ReturnType<typeof vi.fn>
   pluginNoteOff: ReturnType<typeof vi.fn>
   savePluginState: ReturnType<typeof vi.fn>
@@ -32,6 +33,7 @@ function createHarness() {
     off: vi.fn(),
     on: vi.fn(),
     loadPlugin: vi.fn().mockResolvedValue(ECHO_LOAD_RESULT),
+    replacePlugin: vi.fn().mockResolvedValue({ ...ECHO_LOAD_RESULT, quarantinedSlot: false }),
     pluginNoteOn: vi.fn().mockResolvedValue(undefined),
     pluginNoteOff: vi.fn().mockResolvedValue(undefined),
     savePluginState: vi.fn().mockImplementation((_target, absolutePath) =>
@@ -98,6 +100,29 @@ describe('RustEnginePlayer plugin note ordering', () => {
     expect(warn).toHaveBeenCalledTimes(2)
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("instrument 'plugin:kick'"))
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("instrument 'plugin:lead'"))
+  })
+
+  it('re-arms the warning when the same instrument becomes inactive a second time', async () => {
+    const { player, daemon } = createHarness()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const deactivate = async () => {
+      await player.loadPlugin('/plugins/old.clap', 'old-id', 'instrument', undefined, 'plugin:kick')
+      const transportFailure = new Error('socket closed before ReplacePlugin response')
+      daemon.replacePlugin.mockRejectedValueOnce(transportFailure)
+      await expect(
+        player.replacePlugin('/plugins/new.vst3', 'new-id', 'instrument', undefined, 'plugin:kick'),
+      ).rejects.toBe(transportFailure)
+    }
+
+    await deactivate()
+    await player.pluginNoteOn(60, 0, 1, 'plugin:kick')
+    await player.pluginNoteOff(60, 0, undefined, 'plugin:kick')
+    expect(warn).toHaveBeenCalledTimes(1)
+
+    await deactivate()
+    await player.pluginNoteOn(60, 0, 1, 'plugin:kick')
+    await player.pluginNoteOff(60, 0, undefined, 'plugin:kick')
+    expect(warn).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -236,6 +261,101 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       'plugin:lead',
       '/songs/lead.vstpreset',
     )
+  })
+
+  it('T8 reloads the replacement spec after a daemon respawn', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.loadPlugin(
+      '/plugins/old.clap',
+      'old-id',
+      'instrument',
+      undefined,
+      'plugin:kick',
+      '/songs/old.state',
+    )
+    await player.replacePlugin(
+      '/plugins/new.vst3',
+      'new-id',
+      'instrument',
+      undefined,
+      'plugin:kick',
+      '/songs/new.state',
+    )
+    expect(daemon.replacePlugin).toHaveBeenCalledTimes(1)
+    expect(daemon.replacePlugin).toHaveBeenCalledWith(
+      '/plugins/new.vst3',
+      'new-id',
+      'instrument',
+      undefined,
+      'plugin:kick',
+      '/songs/new.state',
+    )
+    daemon.loadPlugin.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.loadPlugin).toHaveBeenCalledTimes(1)
+    expect(daemon.loadPlugin).toHaveBeenCalledWith(
+      '/plugins/new.vst3',
+      'new-id',
+      'instrument',
+      undefined,
+      'plugin:kick',
+      '/songs/new.state',
+    )
+    expect(daemon.replacePlugin.mock.invocationCallOrder[0]).toBeLessThan(
+      daemon.loadPlugin.mock.invocationCallOrder[0]!,
+    )
+  })
+
+  it('preserves a definitive ReplacePlugin rejection and the old respawn cache', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.loadPlugin('/plugins/old.clap', 'old-id', 'instrument', undefined, 'plugin:kick')
+    const rejection = new DaemonProtocolError('OUTPROC_ATTACH_FAILED', 'prepare failed')
+    daemon.replacePlugin.mockRejectedValueOnce(rejection)
+
+    await expect(
+      player.replacePlugin('/plugins/new.vst3', 'new-id', 'instrument', undefined, 'plugin:kick'),
+    ).rejects.toBe(rejection)
+    expect(player.isPluginActive('instrument', undefined, 'plugin:kick')).toBe(true)
+
+    daemon.loadPlugin.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await (player as any).respawnLoop()
+    expect(daemon.loadPlugin).toHaveBeenCalledTimes(1)
+    expect(daemon.loadPlugin).toHaveBeenCalledWith(
+      '/plugins/old.clap',
+      'old-id',
+      'instrument',
+      undefined,
+      'plugin:kick',
+      undefined,
+    )
+  })
+
+  it('forgets the respawn cache when ReplacePlugin has an ambiguous transport failure', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.loadPlugin('/plugins/old.clap', 'old-id', 'instrument', undefined, 'plugin:kick')
+    const transportFailure = new Error('socket closed before ReplacePlugin response')
+    daemon.replacePlugin.mockRejectedValueOnce(transportFailure)
+
+    await expect(
+      player.replacePlugin('/plugins/new.vst3', 'new-id', 'instrument', undefined, 'plugin:kick'),
+    ).rejects.toBe(transportFailure)
+    expect(player.isPluginActive('instrument', undefined, 'plugin:kick')).toBe(false)
+
+    daemon.loadPlugin.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await (player as any).respawnLoop()
+
+    // The daemon may have committed either tenant, so replaying the cached old
+    // spec would silently choose A after an A -> B request. Recovery must wait
+    // for the next explicit seq.instrument(...) declaration instead.
+    expect(daemon.loadPlugin).toHaveBeenCalledTimes(0)
   })
 
   it('uses the daemon-returned saved path when reloading the cached plugin after respawn', async () => {

@@ -43,6 +43,7 @@ import type { AudioEngineBackend } from '../engine-backend'
 import type { AudioDevice } from '../supercollider/types'
 import type {
   PluginLoadResult,
+  PluginReplaceResult,
   PluginStateSaveTarget,
   PluginUiCloseCompletion,
   PluginUiTarget,
@@ -942,6 +943,18 @@ export class RustEnginePlayer implements AudioEngineBackend {
     return role === 'instrument' ? `instrument:${instance ?? ''}` : `effect:${bus ?? ''}`
   }
 
+  private static warningKey(kind: GapKind, discriminator?: string): string {
+    return discriminator === undefined ? kind : `${kind}:${discriminator}`
+  }
+
+  /** Mark one declaration inactive and re-arm its once-per-inactivation note-drop warning. */
+  private markPluginInactive(key: string, role: 'effect' | 'instrument', instance?: string): void {
+    this.pluginActiveByKey.set(key, false)
+    if (role === 'instrument') {
+      this.warned.delete(RustEnginePlayer.warningKey('pluginInactive', instance ?? 'default'))
+    }
+  }
+
   async loadPlugin(
     filePath: string,
     pluginId: string | undefined,
@@ -965,7 +978,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       return result
     } catch (err) {
       // 失敗時は必ず false（呼び出し元の false-on-entry 保証に依存しない）
-      this.pluginActiveByKey.set(key, false)
+      this.markPluginInactive(key, role, instance)
       if (err instanceof DaemonProtocolError) {
         if (err.code === 'CLAP_UNAVAILABLE') {
           throw new Error(
@@ -973,6 +986,41 @@ export class RustEnginePlayer implements AudioEngineBackend {
           )
         }
         throw new Error(`Failed to load plugin: ${err.message}`)
+      }
+      throw err
+    }
+  }
+
+  async replacePlugin(
+    filePath: string,
+    pluginId: string | undefined,
+    role: 'effect' | 'instrument',
+    bus?: string,
+    instance?: string,
+    statePath?: string,
+  ): Promise<PluginReplaceResult> {
+    const key = RustEnginePlayer.pluginKey(role, bus, instance)
+    try {
+      const result = await this.daemon.replacePlugin(
+        filePath,
+        pluginId,
+        role,
+        bus,
+        instance,
+        statePath,
+      )
+      this.loadedPlugins.set(key, { filePath, pluginId, role, bus, instance, statePath })
+      this.pluginActiveByKey.set(key, true)
+      return result
+    } catch (err) {
+      // A protocol rejection is definitive: the daemon kept the old tenant, so
+      // retain its cached spec and active bit. A transport failure is ambiguous,
+      // so neither recovery ledger may keep claiming that the old tenant is
+      // authoritative: effect-slot forgets its chain entry and this player must
+      // forget the matching respawn declaration as the same atomic decision.
+      if (!(err instanceof DaemonProtocolError)) {
+        this.loadedPlugins.delete(key)
+        this.markPluginInactive(key, role, instance)
       }
       throw err
     }
@@ -1007,7 +1055,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     ) {
       this.warnOnce(
         'pluginInactive',
-        `⚠️  [rust-engine] plugin note-on/off dropped for instrument '${instance ?? 'default'}': not restored after the last daemon respawn — re-run seq.instrument(...) to restore it`,
+        `⚠️  [rust-engine] plugin note-on/off dropped for instrument '${instance ?? 'default'}': not restored after a daemon respawn, or its last replacement ended with an uncertain transport result — re-run seq.instrument(...) to restore it`,
         instance ?? 'default',
       )
       return Promise.resolve()
@@ -1031,7 +1079,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     ) {
       this.warnOnce(
         'pluginInactive',
-        `⚠️  [rust-engine] plugin note-on/off dropped for instrument '${instance ?? 'default'}': not restored after the last daemon respawn — re-run seq.instrument(...) to restore it`,
+        `⚠️  [rust-engine] plugin note-on/off dropped for instrument '${instance ?? 'default'}': not restored after a daemon respawn, or its last replacement ended with an uncertain transport result — re-run seq.instrument(...) to restore it`,
         instance ?? 'default',
       )
       return Promise.resolve()
@@ -1063,7 +1111,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       } catch (err) {
         // Cache entry intentionally remains: a later daemon respawn retries restoration.
         // per-key の false 化により、self-heal は失敗した宣言だけを再ロードする（#461 review）。
-        this.pluginActiveByKey.set(key, false)
+        this.markPluginInactive(key, role, instance)
         console.error(
           `❌ [rust-engine] failed to reload plugin after daemon respawn: ${filePath}` +
             (bus ? ` (bus=${bus})` : ''),
@@ -1505,7 +1553,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   private warnOnce(kind: GapKind, message: string, discriminator?: string): void {
-    const key = discriminator === undefined ? kind : `${kind}:${discriminator}`
+    const key = RustEnginePlayer.warningKey(kind, discriminator)
     if (this.warned.has(key)) return
     this.warned.add(key)
     console.warn(message)

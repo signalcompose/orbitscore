@@ -25,6 +25,7 @@ type MockHandler = (
 export interface MockDaemonHandlers {
   LoadSample?: MockHandler
   LoadPlugin?: MockHandler
+  ReplacePlugin?: MockHandler
   GetPluginState?: MockHandler
   AckUiSafepoint?: MockHandler
   PluginNoteOn?: MockHandler

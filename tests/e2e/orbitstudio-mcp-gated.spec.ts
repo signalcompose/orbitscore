@@ -114,6 +114,29 @@ const VST3_EFFECT_PACKAGE_SCRIPT = path.join(
   'rust/crates/orbit-vst3-gain-oracle/package-oracle.sh',
 )
 
+const GATED_PLUGIN_FIXTURE_NAMES = {
+  clapSynth: 'CLAPTestSynth.clap',
+  clapEffect: 'CLAPTestEffect.clap',
+  vst3Synth: 'SynthOracle.vst3',
+  vst3Effect: 'GainOracle.vst3',
+  brokenClap: 'BrokenCatalogFixture.clap',
+} as const
+/** リポジトリにチェックインされた「ロードできないバンドル」。tmp を指すと実行後に壊れたリンクが残る。 */
+const BROKEN_CATALOG_FIXTURE_SOURCE = path.join(
+  REPO_ROOT,
+  'tests/fixtures/plugin-catalog/BrokenCatalogFixture.invalid',
+)
+const USER_CLAP_PLUGIN_DIR = path.join(os.homedir(), 'Library/Audio/Plug-Ins/CLAP')
+const USER_VST3_PLUGIN_DIR = path.join(os.homedir(), 'Library/Audio/Plug-Ins/VST3')
+const GATED_PLUGIN_FIXTURE_PATHS = {
+  clapSynth: path.join(USER_CLAP_PLUGIN_DIR, GATED_PLUGIN_FIXTURE_NAMES.clapSynth),
+  clapEffect: path.join(USER_CLAP_PLUGIN_DIR, GATED_PLUGIN_FIXTURE_NAMES.clapEffect),
+  vst3Synth: path.join(USER_VST3_PLUGIN_DIR, GATED_PLUGIN_FIXTURE_NAMES.vst3Synth),
+  vst3Effect: path.join(USER_VST3_PLUGIN_DIR, GATED_PLUGIN_FIXTURE_NAMES.vst3Effect),
+  brokenClap: path.join(USER_CLAP_PLUGIN_DIR, GATED_PLUGIN_FIXTURE_NAMES.brokenClap),
+} as const
+const GATED_PLUGIN_FIXTURE_PATH_ALLOWLIST = new Set(Object.values(GATED_PLUGIN_FIXTURE_PATHS))
+
 const TEST_TIMEOUT_MS = 120_000
 const TEARDOWN_TIMEOUT_MS = 30_000
 
@@ -133,6 +156,75 @@ function killOrbitStudio(): void {
   }
 }
 
+/**
+ * Replace exactly one E2E-owned fixture entry in the user's standard plugin dirs.
+ * The runtime allowlist makes broad paths, globs, and unrelated installed plugins
+ * impossible targets even if a future call site passes the wrong value.
+ */
+function replaceGatedPluginFixtureSymlink(sourcePath: string, fixturePath: string): void {
+  if (!GATED_PLUGIN_FIXTURE_PATH_ALLOWLIST.has(fixturePath)) {
+    throw new Error(`refusing to replace non-E2E plugin path: ${fixturePath}`)
+  }
+  fs.rmSync(fixturePath, { recursive: true, force: true })
+  fs.symlinkSync(sourcePath, fixturePath)
+}
+
+/** Child command lines carry `--plugin <absolute path>`; use that tenant identity as the PID oracle. */
+function pluginChildPids(pluginPath: string): number[] {
+  try {
+    return execFileSync('pgrep', ['-f', pluginPath], { encoding: 'utf8' })
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(Number)
+      .filter((pid) => Number.isSafeInteger(pid) && pid > 0)
+  } catch {
+    return []
+  }
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+type CatalogPluginEntry = {
+  name: string
+  format: string
+  path: string
+  pluginId: string
+  roles: string[]
+}
+
+type CatalogRescanResult = {
+  count: number
+  artifactCount: number
+  failures: Array<{ path: string; code: string; message: string }>
+  summary: { success: number; pending: number; failure: number }
+}
+
+function catalogPluginsAt(
+  plugins: CatalogPluginEntry[],
+  pluginPath: string,
+  format: string,
+  role: 'effect' | 'instrument',
+): CatalogPluginEntry[] {
+  return plugins.filter(
+    (entry) =>
+      entry.path === pluginPath &&
+      entry.format.toLowerCase() === format &&
+      entry.roles.includes(role),
+  )
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', () => {
   let child: ChildProcess | undefined
   let client: McpClient | undefined
@@ -142,8 +234,53 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   // tracked repo fixture — so the write lands in the temp dir that afterAll
   // already removes, and never dirties a committed file.
   let kickLoopWorkPath: string | undefined
-  let catalogSynthPath: string | undefined
+  let workAudioDir: string | undefined
+  let catalogClapSynthPath: string | undefined
+  let catalogClapEffectPath: string | undefined
+  let catalogVst3SynthPath: string | undefined
+  let catalogVst3EffectPath: string | undefined
+  let catalogClapSynthName: string | undefined
+  let catalogClapEffectName: string | undefined
+  let catalogVst3SynthName: string | undefined
+  let catalogVst3EffectName: string | undefined
+  let catalogRescanResult: CatalogRescanResult | undefined
+  let catalogPlugins: CatalogPluginEntry[] | undefined
+  let catalogErrorsBefore: number | undefined
+  let catalogErrorsAfter: number | undefined
   let brokenCatalogPath: string | undefined
+
+  const requireCatalogFixtures = () => {
+    expect(catalogClapSynthPath, 'catalog CLAP synth path must be initialized').toBeDefined()
+    expect(catalogClapEffectPath, 'catalog CLAP effect path must be initialized').toBeDefined()
+    expect(catalogVst3SynthPath, 'catalog VST3 synth path must be initialized').toBeDefined()
+    expect(catalogVst3EffectPath, 'catalog VST3 effect path must be initialized').toBeDefined()
+    expect(catalogClapSynthName, 'catalog CLAP synth name must be initialized').toBeDefined()
+    expect(catalogClapEffectName, 'catalog CLAP effect name must be initialized').toBeDefined()
+    expect(catalogVst3SynthName, 'catalog VST3 synth name must be initialized').toBeDefined()
+    expect(catalogVst3EffectName, 'catalog VST3 effect name must be initialized').toBeDefined()
+    if (
+      !catalogClapSynthPath ||
+      !catalogClapEffectPath ||
+      !catalogVst3SynthPath ||
+      !catalogVst3EffectPath ||
+      !catalogClapSynthName ||
+      !catalogClapEffectName ||
+      !catalogVst3SynthName ||
+      !catalogVst3EffectName
+    ) {
+      throw new Error('main gated phase did not initialize catalog fixture state')
+    }
+    return {
+      clapSynthPath: catalogClapSynthPath,
+      clapEffectPath: catalogClapEffectPath,
+      vst3SynthPath: catalogVst3SynthPath,
+      vst3EffectPath: catalogVst3EffectPath,
+      clapSynthName: catalogClapSynthName,
+      clapEffectName: catalogClapEffectName,
+      vst3SynthName: catalogVst3SynthName,
+      vst3EffectName: catalogVst3EffectName,
+    }
+  }
 
   const waitForEngine = (running: boolean, timeoutMs: number, label: string) =>
     waitUntil(
@@ -171,6 +308,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // best-effort
       }
     }
+    // Deliberately keep the five standard-directory fixture symlinks installed.
+    // The four real fixtures point at bundles rebuilt in place, so they cannot
+    // become stale; the broken fixture intentionally models a broken user install.
+    // A later setup removes and recreates only these exact allowlisted names.
     if (tmpRoot) {
       try {
         fs.rmSync(tmpRoot, { recursive: true, force: true })
@@ -231,12 +372,32 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           encoding: 'utf8',
         })
       }
-      const catalogFixtureDir = path.join(tmpRoot, 'plugin-catalog-fixtures')
-      fs.mkdirSync(catalogFixtureDir, { recursive: true })
-      catalogSynthPath = path.join(catalogFixtureDir, 'CLAPTestSynth.clap')
-      fs.symlinkSync(CLAP_TEST_SYNTH_PATH, catalogSynthPath)
-      brokenCatalogPath = path.join(catalogFixtureDir, 'BrokenCatalogFixture.clap')
-      fs.writeFileSync(brokenCatalogPath, 'not a loadable CLAP bundle')
+      const vst3SynthPath = execFileSync(
+        '/bin/bash',
+        [VST3_SYNTH_PACKAGE_SCRIPT, 'release', 'mcp-e2e'],
+        { encoding: 'utf8' },
+      ).trim()
+      const vst3EffectPath = execFileSync('/bin/bash', [VST3_EFFECT_PACKAGE_SCRIPT, 'release'], {
+        encoding: 'utf8',
+      }).trim()
+      fs.mkdirSync(USER_CLAP_PLUGIN_DIR, { recursive: true })
+      fs.mkdirSync(USER_VST3_PLUGIN_DIR, { recursive: true })
+      catalogClapSynthPath = GATED_PLUGIN_FIXTURE_PATHS.clapSynth
+      catalogClapEffectPath = GATED_PLUGIN_FIXTURE_PATHS.clapEffect
+      catalogVst3SynthPath = GATED_PLUGIN_FIXTURE_PATHS.vst3Synth
+      catalogVst3EffectPath = GATED_PLUGIN_FIXTURE_PATHS.vst3Effect
+      brokenCatalogPath = GATED_PLUGIN_FIXTURE_PATHS.brokenClap
+      // 🔴 symlink 先を tmp に置かない: 実行後に tmp が消えると標準ディレクトリに
+      // **壊れたリンクが残り**、次回以降のスキャンに出続ける（今回直した stale bundle と
+      // 同じ性質）。リポジトリ内のチェックイン済み fixture を指せば、リンクは常に有効な
+      // まま「ロードできないバンドル」であり続ける — scanner に見せたい失敗は
+      // 「ロード不能」であって「リンク切れ」ではない。
+      const brokenCatalogSourcePath = BROKEN_CATALOG_FIXTURE_SOURCE
+      replaceGatedPluginFixtureSymlink(CLAP_TEST_SYNTH_PATH, catalogClapSynthPath)
+      replaceGatedPluginFixtureSymlink(CLAP_TEST_EFFECT_PATH, catalogClapEffectPath)
+      replaceGatedPluginFixtureSymlink(vst3SynthPath, catalogVst3SynthPath)
+      replaceGatedPluginFixtureSymlink(vst3EffectPath, catalogVst3EffectPath)
+      replaceGatedPluginFixtureSymlink(brokenCatalogSourcePath, brokenCatalogPath)
 
       const fixtureRelDir = path.dirname(path.relative(REPO_ROOT, KICK_LOOP_FIXTURE))
       const workFixtureDir = path.join(tmpRoot, fixtureRelDir)
@@ -245,13 +406,18 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       fs.copyFileSync(KICK_LOOP_FIXTURE, kickLoopWorkPath)
       // The audio the fixture's relative path must land on, mirrored at the same
       // depth from tmpRoot as it sits from REPO_ROOT.
-      const workAudioDir = path.join(tmpRoot, 'test-assets/audio')
+      workAudioDir = path.join(tmpRoot, 'test-assets/audio')
       fs.mkdirSync(workAudioDir, { recursive: true })
       fs.copyFileSync(
         path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
         path.join(workAudioDir, 'kick.wav'),
       )
       const port = 39400 + Math.floor(Math.random() * 200)
+      // Fixtures now live in the standard per-user plugin directories. Remove
+      // ORBIT_PLUGIN_PATH even when inherited from the invoking shell so this E2E
+      // cannot silently fall back to OrbitScore's extra scan-path escape hatch.
+      const appEnv = { ...process.env }
+      delete appEnv.ORBIT_PLUGIN_PATH
 
       // ── 2. Launch: `orbs` CLI with the extension in dev mode ──
       const orbsBin = path.join(appPath, 'Contents/Resources/app/bin/orbs')
@@ -269,9 +435,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         ],
         {
           env: {
-            ...process.env,
+            ...appEnv,
             ORBITSCORE_MCP_PORT: String(port),
-            ORBIT_PLUGIN_PATH: catalogFixtureDir,
           },
           stdio: 'ignore',
           detached: false,
@@ -279,6 +444,80 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
 
       client = await pollInitialize(port, { intervalMs: 2000, timeoutMs: 60_000 })
+
+      // Every plugin declaration in this gated suite follows the human/LLM path:
+      // scan the four real fixtures once, then use the scanner's actual display
+      // names everywhere. Exact path + format + role makes a missing or ambiguous
+      // fixture a loud setup failure instead of inventing a catalog name here.
+      const beforeCatalogLog = (await client.call('get_log', { lines: 500 })).text
+      catalogErrorsBefore = (beforeCatalogLog.match(/ERROR:/g) ?? []).length
+      const rescanCatalog = await client.call('rescan_plugins')
+      expect(rescanCatalog.isError, rescanCatalog.text).toBe(false)
+      catalogRescanResult = JSON.parse(rescanCatalog.text) as CatalogRescanResult
+      const listedCatalog = await client.call('list_plugins')
+      expect(listedCatalog.isError, listedCatalog.text).toBe(false)
+      catalogPlugins = JSON.parse(listedCatalog.text) as CatalogPluginEntry[]
+      const fixtureEntries = {
+        clapSynth: catalogPluginsAt(catalogPlugins, catalogClapSynthPath, 'clap', 'instrument'),
+        clapEffect: catalogPluginsAt(catalogPlugins, catalogClapEffectPath, 'clap', 'effect'),
+        vst3Synth: catalogPluginsAt(catalogPlugins, catalogVst3SynthPath, 'vst3', 'instrument'),
+        vst3Effect: catalogPluginsAt(catalogPlugins, catalogVst3EffectPath, 'vst3', 'effect'),
+      }
+      expect(fixtureEntries.clapSynth, 'catalog must contain exactly one CLAP synth').toHaveLength(
+        1,
+      )
+      expect(
+        fixtureEntries.clapEffect,
+        'catalog must contain exactly one CLAP effect',
+      ).toHaveLength(1)
+      expect(fixtureEntries.vst3Synth, 'catalog must contain exactly one VST3 synth').toHaveLength(
+        1,
+      )
+      expect(
+        fixtureEntries.vst3Effect,
+        'catalog must contain exactly one VST3 effect',
+      ).toHaveLength(1)
+      const [clapSynthEntry] = fixtureEntries.clapSynth
+      const [clapEffectEntry] = fixtureEntries.clapEffect
+      const [vst3SynthEntry] = fixtureEntries.vst3Synth
+      const [vst3EffectEntry] = fixtureEntries.vst3Effect
+      for (const entry of [clapSynthEntry, clapEffectEntry, vst3SynthEntry, vst3EffectEntry]) {
+        expect(
+          entry?.name.trim().length,
+          'catalog fixture display name must be non-empty',
+        ).toBeGreaterThan(0)
+        expect(
+          entry?.pluginId.length,
+          'catalog fixture pluginId must be non-empty',
+        ).toBeGreaterThan(0)
+      }
+      // 🔴 fixture パスに1件在ることだけでは足りない。**同じ表示名を持つ別実体**が
+      // カタログに混ざっていると、DSL の名前解決は「カタログ順の先頭」を選ぶため
+      // fixture ではない実体がロードされる。実際に起きた（2026-08-26）:
+      // `~/Library/Audio/Plug-Ins/CLAP/CLAPTestEffect.clap` に 7/28 の古いビルドが
+      // 残留しており、そちらが先勝ちして `clap.state` を持たない実体がロードされ、
+      // state 保存だけが `PLUGIN_STATE_UNSUPPORTED` で落ちた。**名前解決が指す実体が
+      // 一意であることを setup で loud に検査する。**
+      for (const entry of [clapSynthEntry, clapEffectEntry, vst3SynthEntry, vst3EffectEntry]) {
+        const sameName = catalogPlugins.filter(
+          (candidate) =>
+            candidate.name === entry!.name &&
+            candidate.format.toLowerCase() === entry!.format.toLowerCase(),
+        )
+        expect(
+          sameName.map((candidate) => candidate.path),
+          `catalog display name "${entry!.name}" must resolve to exactly one artifact; ` +
+            'a duplicate install shadows the fixture because name resolution takes the ' +
+            'first catalog candidate (remove the stale copy from the OS plugin dirs)',
+        ).toEqual([entry!.path])
+      }
+      catalogClapSynthName = clapSynthEntry!.name
+      catalogClapEffectName = clapEffectEntry!.name
+      catalogVst3SynthName = vst3SynthEntry!.name
+      catalogVst3EffectName = vst3EffectEntry!.name
+      const afterCatalogLog = (await client.call('get_log', { lines: 500 })).text
+      catalogErrorsAfter = (afterCatalogLog.match(/ERROR:/g) ?? []).length
+      const catalog = requireCatalogFixtures()
 
       // ── 3. start_engine with capture_wav, wait for it to come up ──
       // 拡張は activate 時に engine を自動起動する。capture は spawn 時の
@@ -465,7 +704,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(declareInstSeqRes.isError, declareInstSeqRes.text).toBe(false)
 
       const firstInstrumentRes = await client.call('evaluate_orbitscore', {
-        code: `instSeq.instrument("${CLAP_TEST_SYNTH_PATH}")`,
+        code: `instSeq.instrument(${JSON.stringify(catalog.clapSynthName)})`,
       })
       expect(firstInstrumentRes.isError, firstInstrumentRes.text).toBe(false)
       await sleep(6000) // real out-of-process CLAP attach: spawn + IPC handshake
@@ -492,31 +731,21 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         )
       } else {
         // ── #562: the same MCP state-save tool reaches all four hosted forms.
-        // Package the repository-owned VST3 oracles into ignored rust/target
-        // fixtures, then attach one CLAP and one VST3 effect to audio receivers
+        // Attach one CLAP and one VST3 effect to audio receivers by their
+        // scanner-provided catalog names
         // (v1 deliberately rejects seq.effect() on instrument sequences). This
         // stays below the one-instrument/one-effect-per-receiver limits while
         // exercising both daemon role selectors.
-        expect(fs.existsSync(CLAP_TEST_EFFECT_PATH), CLAP_TEST_EFFECT_PATH).toBe(true)
-        const vst3SynthPath = execFileSync(
-          '/bin/bash',
-          [VST3_SYNTH_PACKAGE_SCRIPT, 'release', 'mcp-e2e'],
-          { encoding: 'utf8' },
-        ).trim()
-        const vst3EffectPath = execFileSync('/bin/bash', [VST3_EFFECT_PACKAGE_SCRIPT, 'release'], {
-          encoding: 'utf8',
-        }).trim()
-
         const declareVst3SeqRes = await client.call('evaluate_orbitscore', {
           code: 'var vst3StateSeq = init global.seq',
         })
         expect(declareVst3SeqRes.isError, declareVst3SeqRes.text).toBe(false)
         const attachVst3InstrumentRes = await client.call('evaluate_orbitscore', {
-          code: `vst3StateSeq.instrument("${vst3SynthPath}")`,
+          code: `vst3StateSeq.instrument(${JSON.stringify(catalog.vst3SynthName)})`,
         })
         expect(attachVst3InstrumentRes.isError, attachVst3InstrumentRes.text).toBe(false)
         const attachClapEffectRes = await client.call('evaluate_orbitscore', {
-          code: `drum.effect("${CLAP_TEST_EFFECT_PATH}")`,
+          code: `drum.effect(${JSON.stringify(catalog.clapEffectName)})`,
         })
         expect(attachClapEffectRes.isError, attachClapEffectRes.text).toBe(false)
         const declareVst3EffectSeqRes = await client.call('evaluate_orbitscore', {
@@ -524,7 +753,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         })
         expect(declareVst3EffectSeqRes.isError, declareVst3EffectSeqRes.text).toBe(false)
         const attachVst3EffectRes = await client.call('evaluate_orbitscore', {
-          code: `vst3EffectSeq.effect("${vst3EffectPath}")`,
+          code: `vst3EffectSeq.effect(${JSON.stringify(catalog.vst3EffectName)})`,
         })
         expect(attachVst3EffectRes.isError, attachVst3EffectRes.text).toBe(false)
         await sleep(12_000) // three real child spawns + READY handshakes
@@ -577,17 +806,25 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           (await client.call('get_log', { lines: 500 })).text.match(/ERROR:/g) ?? []
         ).length
         const stateRequests = [
-          { sequence: 'instSeq', index: 0, identity: 'instSeq/instrument/CLAPTestSynth/0' },
-          { sequence: 'drum', index: 1, identity: 'drum/effect/CLAPTestEffect/0' },
+          {
+            sequence: 'instSeq',
+            index: 0,
+            identity: `instSeq/instrument/${catalog.clapSynthName}/0`,
+          },
+          {
+            sequence: 'drum',
+            index: 1,
+            identity: `drum/effect/${catalog.clapEffectName}/0`,
+          },
           {
             sequence: 'vst3StateSeq',
             index: 0,
-            identity: 'vst3StateSeq/instrument/SynthOracle/0',
+            identity: `vst3StateSeq/instrument/${catalog.vst3SynthName}/0`,
           },
           {
             sequence: 'vst3EffectSeq',
             index: 1,
-            identity: 'vst3EffectSeq/effect/GainOracle/0',
+            identity: `vst3EffectSeq/effect/${catalog.vst3EffectName}/0`,
           },
         ] as const
         for (const request of stateRequests) {
@@ -616,7 +853,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         })
         expect(invalidStateIndex.isError, invalidStateIndex.text).toBe(true)
         expect(invalidStateIndex.text).toContain('Valid indices:')
-        expect(invalidStateIndex.text).toContain('1 (effect, CLAPTestEffect)')
+        expect(invalidStateIndex.text).toContain(`1 (effect, ${catalog.clapEffectName})`)
 
         // #474 P4c: the guard must fail before a different window can open, and
         // the loud response must carry role/name indices for agent self-correction.
@@ -627,20 +864,20 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         })
         expect(guardedUiOpen.isError, guardedUiOpen.text).toBe(true)
         expect(guardedUiOpen.text).toContain(
-          "current slot is 'CLAPTestEffect'; the UI was not opened",
+          `current slot is '${catalog.clapEffectName}'; the UI was not opened`,
         )
-        expect(guardedUiOpen.text).toContain('Valid indices: 1 (effect, CLAPTestEffect)')
+        expect(guardedUiOpen.text).toContain(`Valid indices: 1 (effect, ${catalog.clapEffectName})`)
 
         const openedUi = await client.call('open_plugin_ui', {
           receiver: 'drum',
           index: 1,
-          expectedName: 'CLAPTestEffect',
+          expectedName: catalog.clapEffectName,
         })
         expect(openedUi.isError, openedUi.text).toBe(false)
         expect(JSON.parse(openedUi.text)).toMatchObject({
           receiver: 'drum',
           index: 1,
-          normalizedName: 'CLAPTestEffect',
+          normalizedName: catalog.clapEffectName,
         })
 
         const closedUi = await client.call('close_plugin_ui', { receiver: 'drum', index: 1 })
@@ -707,31 +944,32 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           `successful #562 saves must add no ERROR: lines. Log tail: ${stateSaveLog.slice(-1200)}`,
         ).toBe(errorsBeforeStateSave)
 
-        // ── #540 P1 (a): 同一シーケンスへの別 plugin 再宣言 = v1 の差し替え拒否。
-        // エラー文言は回避策（エンジン再起動）を案内する新文言であること。
+        // The human path rejects an effect-only catalog entry at role resolution,
+        // before the daemon sees a replacement request. Pin both the loud error
+        // and the absence of a new attach failure; daemon rollback remains covered
+        // by the path-direct nonexistent-plugin scenarios below and in #618 E4.
+        const attachFailuresBeforeRoleMismatch = (
+          (await client.call('get_log', { lines: 500 })).text.match(/\[OUTPROC_ATTACH_FAILED\]/g) ??
+          []
+        ).length
         const secondInstrumentRes = await client.call('evaluate_orbitscore', {
-          code: `instSeq.instrument("${CLAP_TEST_EFFECT_PATH}")`,
+          code: `instSeq.instrument(${JSON.stringify(catalog.clapEffectName)})`,
         })
-        // 🔴 #614 以降、`evaluate_orbitscore` は**評価結果**を返す。差し替え拒否は
-        // 実行時エラーなので `isError: true` で返り、診断も応答に含まれる。
-        // （#614 以前は「stdin へ書けた」= ok が返り、エラーは get_log にしか出なかった。
-        //  下のログ assert はその時代の名残だが、二重の確認として残す価値がある。）
         expect(secondInstrumentRes.isError, secondInstrumentRes.text).toBe(true)
         expect(secondInstrumentRes.text).toContain(
-          "Sequence 'instSeq' already has an instrument instance",
+          `Plugin "${catalog.clapEffectName}" does not support the "instrument" role`,
         )
-        await sleep(1000) // duplicate rejection is synchronous once the first slot is registered
 
         const afterSecondInstrumentLog = (await client.call('get_log', { lines: 500 })).text
         expect(
-          afterSecondInstrumentLog,
-          `expected the v1 replacement rejection, got log tail: ${afterSecondInstrumentLog.slice(-800)}`,
-        ).toContain("Sequence 'instSeq' already has an instrument instance")
-        expect(afterSecondInstrumentLog).toContain('restart the engine to change the plugin')
+          (afterSecondInstrumentLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? []).length,
+          `catalog role rejection must not reach daemon attach. Log tail: ${afterSecondInstrumentLog.slice(-800)}`,
+        ).toBe(attachFailuresBeforeRoleMismatch)
+        expect(afterSecondInstrumentLog).not.toContain('restart the engine to change the plugin')
 
         // ── #540 P1 (b): 別シーケンスは自分の独立インスタンスを持てる（旧「エンジン
         // 全体で1台」制限の撤去がこの PR の表面）。同じ synth をもう1台 attach し、
-        // 新規の attach 失敗も「already has」拒否も**増えない**ことを確認する。
+        // 新規の attach 失敗が**増えない**ことを確認する。
         const attachFailuresBeforeSecondSeq = (
           afterSecondInstrumentLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? []
         ).length
@@ -740,7 +978,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         })
         expect(declareInstSeq2Res.isError, declareInstSeq2Res.text).toBe(false)
         const secondSeqInstrumentRes = await client.call('evaluate_orbitscore', {
-          code: `instSeq2.instrument("${CLAP_TEST_SYNTH_PATH}")`,
+          code: `instSeq2.instrument(${JSON.stringify(catalog.clapSynthName)})`,
         })
         expect(secondSeqInstrumentRes.isError, secondSeqInstrumentRes.text).toBe(false)
         await sleep(6000) // 2台目の実 out-of-process attach（spawn + IPC handshake）
@@ -761,7 +999,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
 
       // ── 6c. #527: a failed plugin declaration surfaces loudly AND the engine
       // remains usable afterward (EffectChainMap rollback path). Uses a
-      // deliberately nonexistent plugin path — no real plugin binary is needed
+      // deliberately nonexistent plugin path — keep this path-direct so catalog
+      // resolution cannot reject it before the daemon attach/rollback path runs.
+      // No real plugin binary is needed
       // for this half, since resolvePluginSpec doesn't check fs existence for
       // path-direct specs (only the async out-of-process attach can fail).
       const beforeEffectFailLog = (await client.call('get_log', { lines: 500 })).text
@@ -870,29 +1110,38 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     'rescans catalog v2 through MCP, reports a broken bundle, and preserves a known CLAP fixture',
     async () => {
       expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
-      expect(catalogSynthPath, 'main gated phase must create the known CLAP fixture').toBeDefined()
+      expect(catalogRescanResult, 'main gated phase must retain the rescan result').toBeDefined()
+      expect(catalogPlugins, 'main gated phase must retain the catalog listing').toBeDefined()
+      expect(
+        catalogErrorsBefore,
+        'main gated phase must retain the pre-rescan error count',
+      ).toBeDefined()
+      expect(
+        catalogErrorsAfter,
+        'main gated phase must retain the post-rescan error count',
+      ).toBeDefined()
       expect(
         brokenCatalogPath,
         'main gated phase must create the deliberately broken bundle',
       ).toBeDefined()
-      if (!client || !catalogSynthPath || !brokenCatalogPath) {
+      if (
+        !client ||
+        !catalogRescanResult ||
+        !catalogPlugins ||
+        catalogErrorsBefore === undefined ||
+        catalogErrorsAfter === undefined ||
+        !brokenCatalogPath
+      ) {
         throw new Error('main gated phase did not initialize catalog fixture state')
       }
+      const catalog = requireCatalogFixtures()
 
-      const beforeCatalogLog = (await client.call('get_log', { lines: 500 })).text
-      const catalogErrorsBefore = (beforeCatalogLog.match(/ERROR:/g) ?? []).length
-      const rescanCatalog = await client.call('rescan_plugins')
-      expect(rescanCatalog.isError, rescanCatalog.text).toBe(false)
-      const rescanResult = JSON.parse(rescanCatalog.text) as {
-        count: number
-        artifactCount: number
-        failures: Array<{ path: string; code: string; message: string }>
-        summary: { success: number; pending: number; failure: number }
-      }
       expect(
-        rescanResult.summary.success + rescanResult.summary.pending + rescanResult.summary.failure,
-      ).toBe(rescanResult.artifactCount)
-      expect(rescanResult.failures).toEqual(
+        catalogRescanResult.summary.success +
+          catalogRescanResult.summary.pending +
+          catalogRescanResult.summary.failure,
+      ).toBe(catalogRescanResult.artifactCount)
+      expect(catalogRescanResult.failures).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
             path: brokenCatalogPath,
@@ -901,25 +1150,29 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         ]),
       )
 
-      const listedCatalog = await client.call('list_plugins')
-      expect(listedCatalog.isError, listedCatalog.text).toBe(false)
-      const listedPlugins = JSON.parse(listedCatalog.text) as Array<{
-        name: string
-        path: string
-      }>
-      expect(listedPlugins).toEqual(
+      expect(catalogPlugins).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
-            name: 'CLAP Test Synth',
-            path: catalogSynthPath,
+            name: catalog.clapSynthName,
+            path: catalog.clapSynthPath,
+          }),
+          expect.objectContaining({
+            name: catalog.clapEffectName,
+            path: catalog.clapEffectPath,
+          }),
+          expect.objectContaining({
+            name: catalog.vst3SynthName,
+            path: catalog.vst3SynthPath,
+          }),
+          expect.objectContaining({
+            name: catalog.vst3EffectName,
+            path: catalog.vst3EffectPath,
           }),
         ]),
       )
-      const afterCatalogLog = (await client.call('get_log', { lines: 500 })).text
-      expect(
-        (afterCatalogLog.match(/ERROR:/g) ?? []).length,
-        `catalog rescan must add no ERROR: lines. Log tail: ${afterCatalogLog.slice(-1200)}`,
-      ).toBe(catalogErrorsBefore)
+      expect(catalogErrorsAfter, 'catalog rescan must add no ERROR: lines').toBe(
+        catalogErrorsBefore,
+      )
     },
     TEST_TIMEOUT_MS,
   )
@@ -936,6 +1189,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         'var global = init GLOBAL',
         'global.sum("drum")',
         'global.aux("drum")',
+        // Keep this nonexistent bundle path-direct: a catalog miss would fail
+        // during TS resolution and never exercise the intended DSL ambiguity.
         'drum.effect("MustNotLoad.clap")',
       ]
       fs.writeFileSync(dslPath, dslLines.join('\n') + '\n')
@@ -988,6 +1243,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
       const activeClient = client
       const root = tmpRoot
+      const catalog = requireCatalogFixtures()
 
       // get_log は要求値にかかわらず末尾 500 行へ cap する。ERROR/attach 失敗の前後比較は
       // このスライディングウィンドウ内の補助判定で、復元の主判定は下の pitch assert。
@@ -1026,7 +1282,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
 
       // A fresh engine has no Global and play() only installs a pattern. The
       // transport setup plus RUN are the minimum executable scaffold around the
-      // adjudicated instrument(path, statePath) and play(1) operations.
+      // adjudicated instrument(catalogName, statePath) and play(1) operations.
       const initShifted = await activeClient.call('evaluate_orbitscore', {
         code: [
           'var global = init GLOBAL',
@@ -1040,7 +1296,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
       )
       const attachShifted = await activeClient.call('evaluate_orbitscore', {
-        code: `stSeq.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)}, ${JSON.stringify(handStatePath)})`,
+        code: `stSeq.instrument(${JSON.stringify(catalog.clapSynthName)}, ${JSON.stringify(handStatePath)})`,
       })
       expect(attachShifted.isError, attachShifted.text).toBe(false)
       await sleep(6000)
@@ -1090,7 +1346,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         projectStatePath: string
       }
       expect(saved.bytesWritten).toBe(handState.length)
-      expect(saved.identityKey).toBe('stSeq/instrument/CLAPTestSynth/0')
+      const instrumentIdentity = `stSeq/instrument/${catalog.clapSynthName}/0`
+      expect(saved.identityKey).toBe(instrumentIdentity)
       expect(saved.projectFile).toBe(path.join(root, 'project.yaml'))
       expect(saved.path.startsWith(path.join(root, 'states') + path.sep)).toBe(true)
       expect(
@@ -1128,7 +1385,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
       )
       const attachRestored = await activeClient.call('evaluate_orbitscore', {
-        code: `stSeq.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)})`,
+        code: `stSeq.instrument(${JSON.stringify(catalog.clapSynthName)})`,
       })
       expect(attachRestored.isError, attachRestored.text).toBe(false)
       await sleep(6000)
@@ -1142,7 +1399,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(
         afterRestoredAttachLog,
         `Cycle B must surface the automatic project-state restore. Log tail: ${afterRestoredAttachLog.slice(-1200)}`,
-      ).toMatch(/\[plugin-state\] restoring[^\r\n]*stSeq\/instrument\/CLAPTestSynth\/0/)
+      ).toMatch(
+        new RegExp(`\\[plugin-state\\] restoring[^\\r\\n]*${escapeRegExp(instrumentIdentity)}`),
+      )
 
       const playRestored = await activeClient.call('evaluate_orbitscore', {
         code: ['stSeq.play(1)', 'RUN(stSeq)'].join('\n'),
@@ -1229,27 +1488,34 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
       const activeClient = client
       const root = tmpRoot
+      const catalog = requireCatalogFixtures()
+      expect(
+        workAudioDir,
+        'main gated phase must initialize the audio fixture directory',
+      ).toBeDefined()
+      if (!workAudioDir) throw new Error('main gated phase did not initialize audio fixture state')
       const projectFile = path.join(root, 'project.yaml')
-      const sourcePath = path.join(root, 'test-assets/audio/kick.wav')
       const dslPath = path.join(root, 'sum-bus-state.orbs')
+      const audioSearchPath = path.relative(path.dirname(dslPath), workAudioDir)
       const defaultWav = path.join(root, 'sum-bus-default.wav')
       const changedWav = path.join(root, 'sum-bus-changed.wav')
       const restoredWav = path.join(root, 'sum-bus-restored.wav')
-      const receiverKey = 'sum:drum/effect/CLAPTestEffect/0'
-      const unprefixedDecoyKey = 'drum/effect/CLAPTestEffect/0'
-      const wrongKindDecoyKey = 'aux:drum/effect/CLAPTestEffect/0'
+      const receiverKey = `sum:drum/effect/${catalog.clapEffectName}/0`
+      const unprefixedDecoyKey = `drum/effect/${catalog.clapEffectName}/0`
+      const wrongKindDecoyKey = `aux:drum/effect/${catalog.clapEffectName}/0`
       // 音声オラクルは sum 側だけに置く。aux 側は「daemon 往復まで実機で通る」ことを
       // get_log の restore 行で1点だけ証明する（フル音声オラクルの複製はコスト不適合）。
-      const auxReceiverKey = 'aux:wet/effect/CLAPTestEffect/0'
+      const auxReceiverKey = `aux:wet/effect/${catalog.clapEffectName}/0`
 
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
         'global.beat(4 by 4)',
-        `global.sum("drum").effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
-        `global.aux("wet").effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
+        `global.audioPath(${JSON.stringify(audioSearchPath)})`,
+        `global.sum("drum").effect(${JSON.stringify(catalog.clapEffectName)})`,
+        `global.aux("wet").effect(${JSON.stringify(catalog.clapEffectName)})`,
         'var busStateSource = init global.seq',
-        `busStateSource.audio(${JSON.stringify(sourcePath)}).chop(1).output("drum")`,
+        'busStateSource.audio("kick.wav").chop(1).output("drum")',
         'busStateSource.play(1, 1, 1, 1)',
         'global.start()',
         'LOOP(busStateSource)',
@@ -1443,21 +1709,27 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
       const activeClient = client
       const root = tmpRoot
+      const catalog = requireCatalogFixtures()
+      expect(
+        workAudioDir,
+        'main gated phase must initialize the audio fixture directory',
+      ).toBeDefined()
+      if (!workAudioDir) throw new Error('main gated phase did not initialize audio fixture state')
       const projectFile = path.join(root, 'project.yaml')
-      const sourcePath = path.join(root, 'test-assets/audio/kick.wav')
       const dslPath = path.join(root, 'all-receiver-auto-snapshot.orbs')
+      const audioSearchPath = path.relative(path.dirname(dslPath), workAudioDir)
       const defaultWav = path.join(root, 'all-receiver-default.wav')
       const preRestartWav = path.join(root, 'all-receiver-pre-restart.wav')
       const restoredWav = path.join(root, 'all-receiver-restored.wav')
       const receiverKeys = [
-        'master/effect/CLAPTestEffect/0',
-        'sum:autoSnapshotSum/effect/CLAPTestEffect/0',
-        'aux:autoSnapshotAux/effect/CLAPTestEffect/0',
-        'autoSnapshotEffect/effect/CLAPTestEffect/0',
-        'autoSnapshotInstrument/instrument/CLAPTestSynth/0',
+        `master/effect/${catalog.clapEffectName}/0`,
+        `sum:autoSnapshotSum/effect/${catalog.clapEffectName}/0`,
+        `aux:autoSnapshotAux/effect/${catalog.clapEffectName}/0`,
+        `autoSnapshotEffect/effect/${catalog.clapEffectName}/0`,
+        `autoSnapshotInstrument/instrument/${catalog.clapSynthName}/0`,
       ] as const
 
-      const instrumentDeclaration = `autoSnapshotInstrument.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)})`
+      const instrumentDeclaration = `autoSnapshotInstrument.instrument(${JSON.stringify(catalog.clapSynthName)})`
       const dslLines = [
         'var global = init GLOBAL',
         // The solo segment plays `autoSnapshotInstrument.play(1)`, a MIDI
@@ -1466,16 +1738,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         'global.key("C")',
         'global.tempo(120)',
         'global.beat(4 by 4)',
+        `global.audioPath(${JSON.stringify(audioSearchPath)})`,
         'var mix = init global.mixer',
         'var master = mix.output(1, 2)',
         'var autoSnapshotSum = mix.sum',
         'var autoSnapshotAux = mix.aux',
-        `global.effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
-        `autoSnapshotSum.effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
-        `autoSnapshotAux.effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
+        `global.effect(${JSON.stringify(catalog.clapEffectName)})`,
+        `autoSnapshotSum.effect(${JSON.stringify(catalog.clapEffectName)})`,
+        `autoSnapshotAux.effect(${JSON.stringify(catalog.clapEffectName)})`,
         'var autoSnapshotEffect = init global.seq',
-        `autoSnapshotEffect.audio(${JSON.stringify(sourcePath)}).chop(1)`,
-        `autoSnapshotEffect.effect(${JSON.stringify(CLAP_TEST_EFFECT_PATH)})`,
+        'autoSnapshotEffect.audio("kick.wav").chop(1)',
+        `autoSnapshotEffect.effect(${JSON.stringify(catalog.clapEffectName)})`,
         'autoSnapshotEffect.autoSnapshotSum',
         'autoSnapshotSum.autoSnapshotAux(1).master',
         'autoSnapshotAux.master',
@@ -1981,6 +2254,266 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     },
     // Three engine cycles (default / loaded / restored), each with a kick and
     // a solo segment — the shared two-cycle budget is not enough.
+    TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
+    'replaces a playing instrument across CLAP/VST3 with audio, state, process, failure, and UI oracles (#618 E1-E6)',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      if (!client || !tmpRoot) {
+        throw new Error('main gated phase did not initialize suite state')
+      }
+      const activeClient = client
+      const root = tmpRoot
+      const catalog = requireCatalogFixtures()
+      const capturePath = path.join(root, 'instrument-replace-e1-e6.wav')
+      const vst3StatePath = path.join(root, 'fixtures', 'synth-oracle-plus7.state')
+      fs.mkdirSync(path.dirname(vst3StatePath), { recursive: true })
+      const vst3State = Buffer.alloc(8)
+      vst3State.writeUInt32LE(0x4f52_4331, 0)
+      vst3State.writeInt32LE(7, 4)
+      fs.writeFileSync(vst3StatePath, vst3State)
+
+      const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
+      const start = await activeClient.call('start_engine', { capture_wav: capturePath })
+      expect(start.isError, start.text).toBe(false)
+      await waitForEngine(true, 15_000, '#618 E1-E6 engine running')
+      await sleep(2500)
+      const captureWallStart = Date.now()
+      let stopWall = captureWallStart
+      const segments: Record<string, { from: number; to: number }> = {}
+      try {
+        const baselineLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const errorsBefore = countErrors(baselineLog)
+
+        // E1: A is the CLAP oracle. LOOP keeps producing fresh note lifetimes while replace runs.
+        await activeClient.call('evaluate_orbitscore', {
+          code: [
+            'var global = init GLOBAL',
+            'global.key("C")',
+            'global.tempo(120)',
+            'global.beat(4 by 4)',
+            'global.start()',
+            'var cb618 = init global.seq',
+            `cb618.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+            'cb618.play(1, 1, 1, 1)',
+            'LOOP(cb618)',
+          ].join('\n'),
+        })
+        await waitUntil(() => Promise.resolve(pluginChildPids(catalog.clapSynthPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 10_000,
+          label: '#618 old CLAP child started',
+        })
+        const oldChildPids = pluginChildPids(catalog.clapSynthPath)
+        expect(oldChildPids.length, 'E1 must observe the old CLAP child PID').toBeGreaterThan(0)
+        segments.e1 = { from: Date.now(), to: 0 }
+        await sleep(3000)
+        segments.e1.to = Date.now()
+
+        // E2: replace while the LOOP is actively playing. The VST3 state shifts pitch by +7,
+        // giving an independent spectral oracle in addition to non-silent RMS.
+        const errorsBeforeReplace = countErrors(
+          (await activeClient.call('get_log', { lines: 500 })).text,
+        )
+        await activeClient.call('evaluate_orbitscore', {
+          // The `.state` suffix makes this the state axis, not an explicit pluginId;
+          // resolvePluginSpec remains free to obtain pluginId from the catalog entry.
+          code: `cb618.instrument(${JSON.stringify(catalog.vst3SynthName)}, ${JSON.stringify(vst3StatePath)})`,
+        })
+        await waitUntil(() => Promise.resolve(pluginChildPids(catalog.vst3SynthPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#618 replacement VST3 child started',
+        })
+        await waitUntil(() => Promise.resolve(oldChildPids.every((pid) => !processExists(pid))), {
+          intervalMs: 200,
+          timeoutMs: 10_000,
+          label: '#618 old CLAP child disappeared',
+        })
+        const afterReplaceLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterReplaceLog),
+          `E2 replacement must add no ERROR lines. Log tail: ${afterReplaceLog.slice(-1200)}`,
+        ).toBe(errorsBeforeReplace)
+        segments.e2 = { from: Date.now(), to: 0 }
+        await sleep(3000)
+        segments.e2.to = Date.now()
+
+        // E6: the post-replace UI must be the VST3 tenant, not stale bookkeeping for A.
+        const errorsBeforeUi = countErrors(afterReplaceLog)
+        await activeClient.call('evaluate_orbitscore', { code: 'cb618.ui()' })
+        await sleep(1000)
+        const closeNewUi = await activeClient.call('close_plugin_ui', {
+          receiver: 'cb618',
+          index: 0,
+        })
+        expect(closeNewUi.isError, closeNewUi.text).toBe(false)
+        expect(JSON.parse(closeNewUi.text)).toMatchObject({
+          receiver: 'cb618',
+          index: 0,
+          normalizedName: catalog.vst3SynthName,
+        })
+        const afterUiLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterUiLog),
+          `E6 new-tenant UI must add no ERROR lines. Log tail: ${afterUiLog.slice(-1200)}`,
+        ).toBe(errorsBeforeUi)
+
+        // E7 (owner 指摘 2026-08-26): effect も **カタログ名だけ** で宣言でき、その UI が
+        // 開くことを実機で示す。instrument だけ catalog 経路に寄せても、effect 宣言が
+        // フルパスのままなら effect 側は本番経路を一度も通らない。
+        //
+        // 🔴 差し替えは instrument のみ。effect の異 spec 再宣言は今も明示エラー
+        //（effect slot は bus 名で位置固定・名前→slot の間接層が無い）。ここは
+        // 「名前で挿せて UI が開く」までを示す。差し替えは follow-up issue。
+        const errorsBeforeEffect = countErrors(afterUiLog)
+        const effectByName = await activeClient.call('evaluate_orbitscore', {
+          code: `global.sum("fx618").effect(${JSON.stringify(catalog.clapEffectName)})`,
+        })
+        expect(effectByName.isError, effectByName.text).toBe(false)
+        await sleep(1500)
+        const afterEffectLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterEffectLog),
+          `E7 catalog-name effect must add no ERROR lines. Log tail: ${afterEffectLog.slice(-1200)}`,
+        ).toBe(errorsBeforeEffect)
+        // UI が開けること = catalog 解決の結果が実 slot として生きている証拠。
+        // バスは source slot を持たないので effect は index 1 から（index 0 は明示エラー）。
+        const effectUiOpen = await activeClient.call('open_plugin_ui', {
+          receiver: 'sum:fx618',
+          index: 1,
+        })
+        expect(effectUiOpen.isError, effectUiOpen.text).toBe(false)
+        expect(JSON.parse(effectUiOpen.text)).toMatchObject({
+          index: 1,
+          normalizedName: catalog.clapEffectName,
+        })
+        await sleep(800)
+        const effectUiClose = await activeClient.call('close_plugin_ui', {
+          receiver: 'sum:fx618',
+          index: 1,
+        })
+        expect(effectUiClose.isError, effectUiClose.text).toBe(false)
+
+        // E3: a rest-only pattern must be silent; the old tenant PIDs remain gone.
+        await activeClient.call('evaluate_orbitscore', { code: 'cb618.play(0, 0, 0, 0)' })
+        await sleep(1000)
+        segments.e3 = { from: Date.now(), to: 0 }
+        await sleep(2500)
+        segments.e3.to = Date.now()
+        expect(oldChildPids.every((pid) => !processExists(pid))).toBe(true)
+        expect(pluginChildPids(catalog.clapSynthPath)).toEqual([])
+
+        // E4: keep this sole declaration path-direct. A missing catalog name would fail
+        // in TS resolution before ReplacePlugin; the nonexistent bundle path reaches the
+        // daemon prepare failure whose rollback must leave B producing its shifted tone.
+        const beforeFailureLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const failedReplace = await activeClient.call('evaluate_orbitscore', {
+          code: 'cb618.instrument("/definitely/nonexistent/Issue618.vst3")',
+        })
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return failedReplace.isError || countErrors(log) > countErrors(beforeFailureLog)
+          },
+          { intervalMs: 200, timeoutMs: 10_000, label: '#618 failed replacement surfaced' },
+        )
+        const afterFailureLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          failedReplace.isError || countErrors(afterFailureLog) > countErrors(beforeFailureLog),
+          `E4 failure was not surfaced by evaluation or get_log: ${afterFailureLog.slice(-1200)}`,
+        ).toBe(true)
+        await activeClient.call('evaluate_orbitscore', { code: 'cb618.play(1, 1, 1, 1)' })
+        await sleep(1000)
+        segments.e4 = { from: Date.now(), to: 0 }
+        await sleep(3000)
+        segments.e4.to = Date.now()
+
+        // E5: A was automatically registered before A→B; switching back uses that state.
+        const projectFile = path.join(root, 'project.yaml')
+        const manifest = parse(fs.readFileSync(projectFile, 'utf8')) as {
+          states: Record<string, string>
+        }
+        const aIdentity = `cb618/instrument/${catalog.clapSynthName}/0`
+        expect(manifest.states[aIdentity]).toBeDefined()
+        expect(fs.existsSync(path.resolve(root, manifest.states[aIdentity]!))).toBe(true)
+        const logBeforeRestoreA = (await activeClient.call('get_log', { lines: 500 })).text
+        const restoreMarker = `[plugin-state] restoring '${aIdentity}'`
+        const restoreMarkersBefore = logBeforeRestoreA.split(restoreMarker).length - 1
+        await activeClient.call('evaluate_orbitscore', {
+          code: `cb618.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+        })
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return log.split(restoreMarker).length - 1 > restoreMarkersBefore
+          },
+          { intervalMs: 200, timeoutMs: 15_000, label: '#618 old state restore log' },
+        )
+        segments.e5 = { from: Date.now(), to: 0 }
+        await sleep(3000)
+        segments.e5.to = Date.now()
+
+        const finalLog = (await activeClient.call('get_log', { lines: 500 })).text
+        // The deliberate E4 error is the only new error in this scenario.
+        expect(countErrors(finalLog)).toBeGreaterThanOrEqual(errorsBefore + 1)
+      } finally {
+        await activeClient.call('evaluate_orbitscore', {
+          code: 'cb618.stop()\nglobal.stop()',
+        })
+        const stopped = await activeClient.call('stop_engine')
+        expect(stopped.isError, stopped.text).toBe(false)
+        stopWall = Date.now()
+        await waitForEngine(false, 15_000, '#618 E1-E6 engine stopped')
+        await sleep(1500)
+      }
+
+      const capture = fs.readFileSync(capturePath)
+      const analysis = analyzeWavBuffer(capture, { windowMs: 100 })
+      const audioRange = (segment: { from: number; to: number }) => ({
+        fromSec: Math.max(0, analysis.durationSec - (stopWall - segment.from) / 1000),
+        toSec: Math.min(
+          analysis.durationSec,
+          analysis.durationSec - (stopWall - segment.to) / 1000,
+        ),
+      })
+      const segmentRms = (segment: { from: number; to: number }): number => {
+        const range = audioRange(segment)
+        const windows = (analysis.windows ?? []).filter(
+          (window) => window.startSec >= range.fromSec && window.startSec < range.toSec,
+        )
+        return Math.sqrt(
+          windows.reduce((sum, window) => sum + window.rms * window.rms, 0) /
+            Math.max(1, windows.length),
+        )
+      }
+      const e1Rms = segmentRms(segments.e1!)
+      const e2Rms = segmentRms(segments.e2!)
+      const e3Rms = segmentRms(segments.e3!)
+      const e4Rms = segmentRms(segments.e4!)
+      const e5Rms = segmentRms(segments.e5!)
+      expect(e1Rms, 'E1 CLAP baseline must be non-silent').toBeGreaterThan(0.03)
+      expect(e2Rms, 'E2 VST3 replacement must be non-silent').toBeGreaterThan(0.03)
+      expect(e3Rms, 'E3 rest pattern must be silent').toBeLessThan(0.005)
+      expect(e4Rms, 'E4 failed replacement must leave B sounding').toBeGreaterThan(0.03)
+      expect(e5Rms, 'E5 restored A must be non-silent').toBeGreaterThan(0.03)
+
+      const e1Hz = estimateFundamentalHz(capture, audioRange(segments.e1!))
+      const e2Hz = estimateFundamentalHz(capture, audioRange(segments.e2!))
+      const e4Hz = estimateFundamentalHz(capture, audioRange(segments.e4!))
+      const e5Hz = estimateFundamentalHz(capture, audioRange(segments.e5!))
+      expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
+      expect(e2Hz, 'E2 VST3 replacement needs a measurable fundamental').toBeDefined()
+      expect(e4Hz, 'E4 surviving VST3 needs a measurable fundamental').toBeDefined()
+      expect(e5Hz, 'E5 restored CLAP needs a measurable fundamental').toBeDefined()
+      expect(Math.abs(e2Hz! - e1Hz!) / e1Hz!).toBeGreaterThan(0.25)
+      expect(Math.abs(e4Hz! - e2Hz!) / e2Hz!).toBeLessThan(0.02)
+      expect(Math.abs(e5Hz! - e1Hz!) / e1Hz!).toBeLessThan(0.02)
+      expect(Math.abs(e4Rms - e2Rms) / e2Rms).toBeLessThan(0.15)
+    },
     TEST_TIMEOUT_MS * 2,
   )
 })
