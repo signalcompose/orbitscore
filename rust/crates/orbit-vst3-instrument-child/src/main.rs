@@ -271,7 +271,11 @@ fn main() -> Result<()> {
     let mmap = open_shared(&args.shm).with_context(|| format!("open_shared({:?})", args.shm))?;
     let region = region_ptr(&mmap);
     if let Some(plugin_id) = &args.plugin_id {
-        eprintln!("[orbit-vst3-instrument-child] --plugin-id={plugin_id} は VST3 では未使用");
+        // カタログ名で宣言すると pluginId が**自動で補われる**（名前解決の利点）が、VST3 は
+        // それを使わない。つまりユーザーが避けられない経路で毎回出るので、level トークンを
+        // 付けて情報扱いにする（付けないと TS 側の分類器が error へ倒し、ERROR 数を
+        // ヘルスシグナルにしている E2E を壊す）。#618 の E2E をカタログ経路へ寄せて発覚。
+        eprintln!("INFO [orbit-vst3-instrument-child] --plugin-id={plugin_id} は VST3 では未使用");
     }
     // #540 P2: 保存済み state は load に渡し、**setActive 前**に適用される（VST3 正準の
     // 復元フロー・#542 レビュー F7）。失敗はハードエラー — 音色が復元できていないのに

@@ -2006,9 +2006,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     async () => {
       expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
       expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
-      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      expect(
+        catalogSynthPath,
+        'main gated phase must initialize the catalog CLAP fixture',
+      ).toBeDefined()
+      if (!client || !tmpRoot || !catalogSynthPath) {
+        throw new Error('main gated phase did not initialize suite state')
+      }
       const activeClient = client
       const root = tmpRoot
+      const catalogClapPath = catalogSynthPath
       const capturePath = path.join(root, 'instrument-replace-e1-e6.wav')
       const vst3StatePath = path.join(root, 'fixtures', 'synth-oracle-plus7.state')
       fs.mkdirSync(path.dirname(vst3StatePath), { recursive: true })
@@ -2021,6 +2028,42 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         [VST3_SYNTH_PACKAGE_SCRIPT, 'release', 'instrument-replace-e2e'],
         { encoding: 'utf8' },
       ).trim()
+      const catalogVst3Path = path.join(path.dirname(catalogClapPath), 'SynthOracle.vst3')
+      fs.symlinkSync(vst3SynthPath, catalogVst3Path)
+
+      // Human-authored DSL resolves names through the catalog. Rebuild after adding
+      // the VST3 oracle, then derive both declarations from the scanner's actual
+      // entries instead of inventing display names in the test.
+      const rescanCatalog = await activeClient.call('rescan_plugins')
+      expect(rescanCatalog.isError, rescanCatalog.text).toBe(false)
+      const listedCatalog = await activeClient.call('list_plugins')
+      expect(listedCatalog.isError, listedCatalog.text).toBe(false)
+      const listedPlugins = JSON.parse(listedCatalog.text) as Array<{
+        name: string
+        format: string
+        path: string
+        pluginId: string
+        roles: string[]
+      }>
+      const catalogInstrumentsAt = (pluginPath: string, format: string) =>
+        listedPlugins.filter(
+          (entry) =>
+            entry.path === pluginPath &&
+            entry.format.toLowerCase() === format &&
+            entry.roles.includes('instrument'),
+        )
+      const clapEntries = catalogInstrumentsAt(catalogClapPath, 'clap')
+      const vst3Entries = catalogInstrumentsAt(catalogVst3Path, 'vst3')
+      expect(clapEntries, 'catalog must contain exactly one CLAP instrument oracle').toHaveLength(1)
+      expect(vst3Entries, 'catalog must contain exactly one VST3 instrument oracle').toHaveLength(1)
+      const clapCatalogEntry = clapEntries[0]!
+      const vst3CatalogEntry = vst3Entries[0]!
+      expect(clapCatalogEntry.name).toBe('CLAP Test Synth')
+      expect(clapCatalogEntry.pluginId.length).toBeGreaterThan(0)
+      expect(vst3CatalogEntry.name.trim().length).toBeGreaterThan(0)
+      expect(vst3CatalogEntry.pluginId.length).toBeGreaterThan(0)
+      const clapCatalogName = clapCatalogEntry.name
+      const vst3CatalogName = vst3CatalogEntry.name
 
       const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
       const start = await activeClient.call('start_engine', { capture_wav: capturePath })
@@ -2043,17 +2086,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             'global.beat(4 by 4)',
             'global.start()',
             'var cb618 = init global.seq',
-            `cb618.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)})`,
+            `cb618.instrument(${JSON.stringify(clapCatalogName)})`,
             'cb618.play(1, 1, 1, 1)',
             'LOOP(cb618)',
           ].join('\n'),
         })
-        await waitUntil(() => Promise.resolve(pluginChildPids(CLAP_TEST_SYNTH_PATH).length > 0), {
+        await waitUntil(() => Promise.resolve(pluginChildPids(clapCatalogEntry.path).length > 0), {
           intervalMs: 200,
           timeoutMs: 10_000,
           label: '#618 old CLAP child started',
         })
-        const oldChildPids = pluginChildPids(CLAP_TEST_SYNTH_PATH)
+        const oldChildPids = pluginChildPids(clapCatalogEntry.path)
         expect(oldChildPids.length, 'E1 must observe the old CLAP child PID').toBeGreaterThan(0)
         segments.e1 = { from: Date.now(), to: 0 }
         await sleep(3000)
@@ -2065,9 +2108,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           (await activeClient.call('get_log', { lines: 500 })).text,
         )
         await activeClient.call('evaluate_orbitscore', {
-          code: `cb618.instrument(${JSON.stringify(vst3SynthPath)}, ${JSON.stringify(vst3StatePath)})`,
+          // The `.state` suffix makes this the state axis, not an explicit pluginId;
+          // resolvePluginSpec remains free to obtain pluginId from the catalog entry.
+          code: `cb618.instrument(${JSON.stringify(vst3CatalogName)}, ${JSON.stringify(vst3StatePath)})`,
         })
-        await waitUntil(() => Promise.resolve(pluginChildPids(vst3SynthPath).length > 0), {
+        await waitUntil(() => Promise.resolve(pluginChildPids(vst3CatalogEntry.path).length > 0), {
           intervalMs: 200,
           timeoutMs: 15_000,
           label: '#618 replacement VST3 child started',
@@ -2098,7 +2143,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         expect(JSON.parse(closeNewUi.text)).toMatchObject({
           receiver: 'cb618',
           index: 0,
-          normalizedName: 'SynthOracle',
+          normalizedName: vst3CatalogName,
         })
         const afterUiLog = (await activeClient.call('get_log', { lines: 500 })).text
         expect(
@@ -2113,9 +2158,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         await sleep(2500)
         segments.e3.to = Date.now()
         expect(oldChildPids.every((pid) => !processExists(pid))).toBe(true)
-        expect(pluginChildPids(CLAP_TEST_SYNTH_PATH)).toEqual([])
+        expect(pluginChildPids(clapCatalogEntry.path)).toEqual([])
 
-        // E4: a failed prepare is loud, then B must still produce B's shifted tone.
+        // E4: keep this sole declaration path-direct. A missing catalog name would fail
+        // in TS resolution before ReplacePlugin; the nonexistent bundle path reaches the
+        // daemon prepare failure whose rollback must leave B producing its shifted tone.
         const beforeFailureLog = (await activeClient.call('get_log', { lines: 500 })).text
         const failedReplace = await activeClient.call('evaluate_orbitscore', {
           code: 'cb618.instrument("/definitely/nonexistent/Issue618.vst3")',
@@ -2143,14 +2190,14 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         const manifest = parse(fs.readFileSync(projectFile, 'utf8')) as {
           states: Record<string, string>
         }
-        const aIdentity = 'cb618/instrument/CLAPTestSynth/0'
+        const aIdentity = `cb618/instrument/${clapCatalogName}/0`
         expect(manifest.states[aIdentity]).toBeDefined()
         expect(fs.existsSync(path.resolve(root, manifest.states[aIdentity]!))).toBe(true)
         const logBeforeRestoreA = (await activeClient.call('get_log', { lines: 500 })).text
         const restoreMarker = `[plugin-state] restoring '${aIdentity}'`
         const restoreMarkersBefore = logBeforeRestoreA.split(restoreMarker).length - 1
         await activeClient.call('evaluate_orbitscore', {
-          code: `cb618.instrument(${JSON.stringify(CLAP_TEST_SYNTH_PATH)})`,
+          code: `cb618.instrument(${JSON.stringify(clapCatalogName)})`,
         })
         await waitUntil(
           async () => {

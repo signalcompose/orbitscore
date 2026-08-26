@@ -17,6 +17,49 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.362 fix: E2E を本番経路（カタログ名）へ寄せ、そこでしか出ない欠陥2件を潰した (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #618（PR-2 の続き）
+**Status**: TS **2042 passed** / Rust daemon lib 186 passed / lint 0 / clippy 0 /
+**実機 gated E2E 7/7 green（カタログ経路）**
+
+#### 🔴 owner 指摘: 「不便云々の前に E2E テストと利用の実態が乖離してることが問題だろ」
+
+main は最初「名前でもロードできます（実装済み）」と答えて**論点を外した**。owner の指摘は
+**E2E が本番の経路を通っていない**こと。
+
+実利用は `resolvePluginSpec` のカタログ分岐（名前 → パス + **pluginId の自動解決**）を通るが、
+#618 の E2E はフルパス直指定で**その層をまるごと迂回**していた。
+memory [[llm-drives-orbitstudio-through-dsl]]「**人間と同じ経路でないと意味がない**」に正面から反する。
+
+→ E1-E6 をカタログ名での宣言に書き換え（機構は既存: `catalogFixtureDir` への symlink +
+`ORBIT_PLUGIN_PATH` + `rescan_plugins`）。**名前は `list_plugins` から動的に取得**しハードコードしない。
+E4（失敗ケース）だけパス形式を維持 — 存在しないカタログ名では TS の名前解決段階で落ち、
+**daemon の rollback 経路まで到達しない**ため（Codex の判断・妥当）。
+
+#### カタログ経路でしか出ない欠陥が2件出た
+
+**① `--plugin-id` の警告**: カタログ解決は pluginId を**自動で補う**（名前解決の利点）が、
+VST3 child はそれを使わず警告を出す。**パス直指定では pluginId を渡さないので一度も踏まれていなかった。**
+ユーザーが避けられない経路で毎回出るため、level トークンを付けて情報扱いにした。
+
+**② 🔴 chunk 境界での行分割**: `onStderrData` が chunk をそのまま `split('\n')` していたため、
+**行がチャンクを跨ぐと後半が独立した「行」になり、level トークンを持たないので ERROR に分類**される。
+カタログ化で行数が増えて境界がずれ、`state restored from ...(8 bytes)` の後半 `8 bytes)` だけが
+ERROR として記録された。
+
+→ **`createDaemonStderrLineRouter` として純関数に抽出**し（クロージャ内ではテストできない・
+「配線はロジックと別にテストする」規律）、改行が来るまで持ち越す形に修正。
+変異検証は両方向（持ち越しを捨てる / 未完の行を即 emit）で red を確認。
+
+#### 教訓
+
+**E2E が本番と違う経路を通っていると、その経路の欠陥は永久に見えない。**
+今回カタログ経路へ寄せた瞬間に2件出た。どちらも「テストは緑なのに実態は壊れている」型。
+
+---
+
 ### 6.361 feat(dsl): instrument の差し替えを DSL から（#618 PR-2） (Aug 26, 2026)
 
 **Date**: 2026-08-26

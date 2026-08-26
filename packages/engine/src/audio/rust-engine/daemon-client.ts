@@ -139,6 +139,32 @@ export function isDaemonNonErrorTracingLine(line: string): boolean {
 }
 
 /**
+ * daemon stderr の chunk を**完全な行**へ組み直し、level で振り分けて emit する。
+ *
+ * 🔴 chunk 境界は行境界と一致しない。素朴に `split('\n')` すると行の後半が独立した
+ * 「行」になり、level トークンを持たないので **成功行の続きが ERROR として記録される**
+ * （#618 の E2E をカタログ経路へ寄せた際、行数が増えて境界がずれ実際に発生した）。
+ * 改行が来るまで持ち越すことでこれを防ぐ。呼び出し側でクロージャに埋めると
+ * テストできないので、純関数として切り出してある。
+ */
+export function createDaemonStderrLineRouter(
+  onNonError: (line: string) => void,
+  onError: (line: string) => void,
+): (chunk: string) => void {
+  let partial = ''
+  return (chunk: string): void => {
+    partial += chunk
+    const lines = partial.split('\n')
+    partial = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.trim()) continue
+      if (isDaemonNonErrorTracingLine(line)) onNonError(line)
+      else onError(line)
+    }
+  }
+}
+
+/**
  * Resolve the `orbit-audio-daemon` binary path via the candidate order used at
  * spawn time: explicit override → `ORBIT_AUDIO_DAEMON_PATH` env → monorepo
  * release build → monorepo debug build → .vsix-bundled binary (Issue #306).
@@ -740,6 +766,10 @@ export class DaemonClient extends EventEmitter {
     // （Kontakt の load 失敗の切り分けに2時間以上を要した実例がある）。
     // 蓄積を止めることと転送を止めることは別である。**転送は継続する。**
     let collecting = true
+    const routeStderrLine = createDaemonStderrLineRouter(
+      (line) => console.log(`[daemon] ${line}`),
+      (line) => console.error(`[daemon] ${line}`),
+    )
     const onStderrData = (chunk: Buffer): void => {
       const text = chunk.toString()
       if (collecting) {
@@ -749,11 +779,12 @@ export class DaemonClient extends EventEmitter {
       // 起動後は蓄積せず、行単位で engine のログへ転送する。INFO/DEBUG/TRACE の
       // tracing 行まで stderr に流すと拡張側で `ERROR:` として記録されるため
       // （isDaemonNonErrorTracingLine の docstring 参照）、level で振り分ける。
-      for (const line of text.split('\n')) {
-        if (!line.trim()) continue
-        if (isDaemonNonErrorTracingLine(line)) console.log(`[daemon] ${line}`)
-        else console.error(`[daemon] ${line}`)
-      }
+      //
+      // 🔴 部分行をバッファする: chunk 境界は行境界と一致しない。素朴に split すると
+      // 行の後半が独立した「行」になり、level トークンを持たないので **成功行の続きが
+      // ERROR として記録される**（#618 の E2E をカタログ経路へ寄せた際、行数が増えて
+      // 境界がずれたことで実際に発生した）。改行が来るまで持ち越す。
+      routeStderrLine(text)
     }
     child.stderr?.on('data', onStderrData)
     const detachStderr = (): void => {
