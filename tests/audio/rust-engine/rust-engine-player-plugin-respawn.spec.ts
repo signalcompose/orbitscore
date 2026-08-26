@@ -313,6 +313,28 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
     )
   })
 
+  it('forgets the respawn cache when ReplacePlugin has an ambiguous transport failure', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.loadPlugin('/plugins/old.clap', 'old-id', 'instrument', undefined, 'plugin:kick')
+    const transportFailure = new Error('socket closed before ReplacePlugin response')
+    daemon.replacePlugin.mockRejectedValueOnce(transportFailure)
+
+    await expect(
+      player.replacePlugin('/plugins/new.vst3', 'new-id', 'instrument', undefined, 'plugin:kick'),
+    ).rejects.toBe(transportFailure)
+    expect(player.isPluginActive('instrument', undefined, 'plugin:kick')).toBe(false)
+
+    daemon.loadPlugin.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await (player as any).respawnLoop()
+
+    // The daemon may have committed either tenant, so replaying the cached old
+    // spec would silently choose A after an A -> B request. Recovery must wait
+    // for the next explicit seq.instrument(...) declaration instead.
+    expect(daemon.loadPlugin).toHaveBeenCalledTimes(0)
+  })
+
   it('uses the daemon-returned saved path when reloading the cached plugin after respawn', async () => {
     const { player, daemon } = createHarness()
     players.push(player)

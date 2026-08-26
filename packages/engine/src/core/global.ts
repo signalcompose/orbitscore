@@ -177,6 +177,10 @@ export class Global {
         beforeReplace: (sequenceName, oldSlot) =>
           this.prepareInstrumentReplacement(sequenceName, oldSlot),
         onQuarantinedSlot: (sequenceName) => {
+          // Gated E2E intentionally does not induce this warning: quarantine requires
+          // a drain-ack timeout, which cannot be triggered deterministically with the
+          // real app/plugin setup. It uses the same console.warn -> get_log path as
+          // existing warnings; the callback wiring itself is covered by a unit test.
           console.warn(
             `[instrument-replace] ⚠️ Sequence '${sequenceName}' was replaced, but its old daemon slot was quarantined and cannot be reused; repeated quarantines may exhaust the instrument pool.`,
           )
@@ -925,6 +929,15 @@ export class Global {
     return false
   }
 
+  /** Remove every host-side UI ledger entry for this volatile `(receiver,index)` address. */
+  private forgetPluginUiSession(receiverId: string, index: number): void {
+    for (const [key, session] of this.openPluginUiSessions) {
+      if (session.receiverId === receiverId && session.index === index) {
+        this.openPluginUiSessions.delete(key)
+      }
+    }
+  }
+
   /**
    * DSL 面（`seq.ui()` / `sum("x").ui()`）用の**冪等な** open（#619 R2）。
    *
@@ -998,11 +1011,7 @@ export class Global {
     // daemonTarget が変わる再 open では複合キーが別になり set では上書きされず、
     // closePluginUi の find が Map の挿入順＝stale 側を掴んでしまうため。
     // evict は daemon open 成功後に行う（open 失敗時に旧セッションを失わない）。
-    for (const [key, candidate] of this.openPluginUiSessions) {
-      if (candidate.receiverId === receiverId && candidate.index === index) {
-        this.openPluginUiSessions.delete(key)
-      }
-    }
+    this.forgetPluginUiSession(receiverId, index)
     this.openPluginUiSessions.set(pluginUiSessionKey(resolved.daemonTarget, index), {
       receiverId,
       index,
@@ -1077,7 +1086,14 @@ export class Global {
         await this.closePluginUi(sequenceName, 0)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        if (!message.includes('timeout-without-save')) throw error
+        if (!message.includes('timeout-without-save')) {
+          // The close outcome is ambiguous. Keeping this entry would make the
+          // idempotent open fast-path permanently trust stale host-side state.
+          // Forget it before surfacing the failure; a subsequent open reconciles
+          // either possible child state via the existing "already open" defence.
+          this.forgetPluginUiSession(sequenceName, 0)
+          throw error
+        }
         console.warn(
           `[instrument-replace] ⚠️ Plugin UI for Sequence '${sequenceName}' closed without a safepoint save; attempting the required explicit state save before replacement.`,
         )

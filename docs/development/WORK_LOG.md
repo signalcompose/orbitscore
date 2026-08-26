@@ -23,6 +23,38 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 **Issue**: #618（PR-2 = TS 表面 + gated E2E。PR-1 = #621 は daemon 機構）
 **Status**: TS **2034 passed** / lint 0 / **実機 gated E2E 7/7 green**（#618 E1-E6 を含む）
 
+#### PR-2 レビュー: Critical 1（2つの帳簿が同じ不確実性に逆の判断をしていた）
+
+silent-failure-hunter が発見。**差し替えが transport 失敗（daemon が commit したか不明）で
+終わったとき**:
+
+| 層 | 挙動 |
+|---|---|
+| TS 側 `chains`（`effect-slot.ts`） | `delete` して**忘れる**（再宣言で収束させる設計） |
+| engine 側 `loadedPlugins`（respawn 復元キャッシュ） | **旧 A の spec を保持したまま** |
+
+この後 daemon が respawn すると復元キャッシュが**旧 A で loadPlugin を再発行して成功**する。
+音が戻るので正常に見えるが、**鳴っているのは B ではなく A**。reload 自体は成功しているので
+`get_log` にエラーも警告も残らない ＝ **気づけない**。
+
+**ポリシー**: 2つの帳簿は、同じ「不確実性」に対して**同じ判断**をしなければならない。
+片方が「不明だから忘れる」と決めたのに、もう片方が「旧のまま覚えている」と、
+**復元時に古い方が黙って勝つ**。
+
+これで Critical-1（復元キャッシュ）と Important-2（曖昧な UI close 失敗で簿記が stale になり
+`seq.ui()` が恒久 no-op ＝ **#619 と同型**）が同じ規律で塞がる。
+UI 簿記の破棄が安全なのは、**#619 R4 で入れた「child の already-open を成功扱い」**があるため
+（実はまだ開いていた場合も次の `ui()` が収束する）。
+
+**Important-3（quarantine 警告の実機到達性）は今回対応しない**: quarantine を実機で誘発するには
+drain ack のタイムアウトが要り、gated E2E で決定論的に作れない。機構は既存の warn 経路と同一。
+理由をコードコメントに残した。
+
+**main 独自の変異**: `loadedPlugins.delete` を外す → 新テスト red /
+`forgetPluginUiSession` の呼び出しを外す → 新テスト red。
+分類テストが新設ヘルパ `forgetPluginUiSession` を捕捉して落ちたので内部 API として登録
+（**逆方向テストが2度目の仕事をした**）。
+
 #### 🔴 E2E が実機でしか出ない欠陥を捕まえた（owner 強調「e2e もちゃんとやってね」）
 
 E2 が「差し替えで ERROR ログが増えない」で落ちた。増えていた ERROR の正体:

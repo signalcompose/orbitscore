@@ -870,6 +870,9 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       // Object.getOwnPropertyNames には現れる（他の private 同様に除外）。
       // PluginInstrumentManager からコールバック注入で呼ばれ、DSL からは到達しない。
       'prepareInstrumentReplacement',
+      // #618 PR-2: 曖昧な close 失敗で UI 簿記を忘れるヘルパ。fast-path が stale を
+      // 恒久的に信じるのを防ぐ（#619 と同型の穴）。DSL 語彙ではない。
+      'forgetPluginUiSession',
       // (sequence, index) を SC.5 インスタンス同一性 + daemon target へ解決する内部 API。
       // UIH.5 の index 規則を実装する。インタプリタからの参照はゼロ。
       'resolvePluginStateTarget',
@@ -964,6 +967,9 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       // Object.getOwnPropertyNames には現れる（他の private 同様に除外）。
       // PluginInstrumentManager からコールバック注入で呼ばれ、DSL からは到達しない。
       'prepareInstrumentReplacement',
+      // #618 PR-2: 曖昧な close 失敗で UI 簿記を忘れるヘルパ。fast-path が stale を
+      // 恒久的に信じるのを防ぐ（#619 と同型の穴）。DSL 語彙ではない。
+      'forgetPluginUiSession',
       'resolvePluginStateTarget',
       'pluginIndexError',
     ] as const

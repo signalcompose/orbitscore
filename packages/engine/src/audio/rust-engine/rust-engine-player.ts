@@ -1002,8 +1002,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
       return result
     } catch (err) {
       // A protocol rejection is definitive: the daemon kept the old tenant, so
-      // retain its cached spec and active bit. A transport failure is ambiguous.
-      if (!(err instanceof DaemonProtocolError)) this.pluginActiveByKey.set(key, false)
+      // retain its cached spec and active bit. A transport failure is ambiguous,
+      // so neither recovery ledger may keep claiming that the old tenant is
+      // authoritative: effect-slot forgets its chain entry and this player must
+      // forget the matching respawn declaration as the same atomic decision.
+      if (!(err instanceof DaemonProtocolError)) {
+        this.loadedPlugins.delete(key)
+        this.pluginActiveByKey.set(key, false)
+      }
       throw err
     }
   }
@@ -1037,7 +1043,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     ) {
       this.warnOnce(
         'pluginInactive',
-        `⚠️  [rust-engine] plugin note-on/off dropped for instrument '${instance ?? 'default'}': not restored after the last daemon respawn — re-run seq.instrument(...) to restore it`,
+        `⚠️  [rust-engine] plugin note-on/off dropped for instrument '${instance ?? 'default'}': not restored after a daemon respawn, or its last replacement ended with an uncertain transport result — re-run seq.instrument(...) to restore it`,
         instance ?? 'default',
       )
       return Promise.resolve()
@@ -1061,7 +1067,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     ) {
       this.warnOnce(
         'pluginInactive',
-        `⚠️  [rust-engine] plugin note-on/off dropped for instrument '${instance ?? 'default'}': not restored after the last daemon respawn — re-run seq.instrument(...) to restore it`,
+        `⚠️  [rust-engine] plugin note-on/off dropped for instrument '${instance ?? 'default'}': not restored after a daemon respawn, or its last replacement ended with an uncertain transport result — re-run seq.instrument(...) to restore it`,
         instance ?? 'default',
       )
       return Promise.resolve()

@@ -208,6 +208,36 @@ describe('PluginInstrumentManager', () => {
     )
   })
 
+  it('forgets an uncertain UI session so a failed replacement can retry opening it', async () => {
+    mockStateSave()
+    const closeFailure = new Error('CLOSE_UI transport disconnected')
+    const closePluginUi = vi.fn().mockRejectedValue(closeFailure)
+    const openPluginUi = vi.fn().mockResolvedValue(undefined)
+    const { global, replacePlugin } = makeGlobal(vi.fn().mockResolvedValue({}), undefined, {
+      closePluginUi,
+      openPluginUi,
+    })
+    const sequence = global.seq.setName('kick')
+    await global.instrument('kick', 'synth.clap', 'old-id')
+    await sequence.ui()
+    openPluginUi.mockClear()
+
+    await expect(global.instrument('kick', 'other.vst3', 'new-id')).rejects.toThrow(
+      'CLOSE_UI transport disconnected',
+    )
+
+    expect(replacePlugin).toHaveBeenCalledTimes(0)
+    expect(global.hasOpenPluginUi('kick', 0)).toBe(false)
+    await sequence.ui()
+    expect(openPluginUi).toHaveBeenCalledTimes(1)
+    expect(openPluginUi).toHaveBeenCalledWith(
+      { role: 'instrument', instance: 'plugin:kick' },
+      0,
+      'OrbitScore — synth (kick:0)',
+    )
+    expect(global.hasOpenPluginUi('kick', 0)).toBe(true)
+  })
+
   it('T3 aborts replacement and keeps the old chain when automatic state saving fails', async () => {
     const failure = new Error('state mailbox failed')
     const save = vi.spyOn(ProjectStateStore.prototype, 'save').mockRejectedValue(failure)
