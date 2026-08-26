@@ -3321,6 +3321,12 @@ impl EngineWrap {
             if teardown.is_ok() {
                 control.free_slot(old_index);
             }
+            // in-flight 解除を free_slot と同じロック区間で行う。`reservation` の Drop も
+            // 解除するが、それは**このガードが落ちた後**に別のロックを取り直すため、その間
+            // 同一 instance への並行 replace が「already in progress」で偽に弾かれる窓が開く
+            // （fix 前は1つのロック区間で両方やっていた）。`HashSet::remove` は冪等なので、
+            // Drop 側は失敗・パニック時の安全網として残したままでよい。
+            control.replacements_in_flight.remove(&name);
         }
         Ok(ReplacedPluginSummary {
             plugin: summary,

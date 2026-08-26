@@ -171,6 +171,29 @@ LIFO 再利用順と「slots が空なら未割当プールから払い出さな
 コンパイルされないことに気づいて構成を変えて取り直した。**変異が無効だったことに気づけたのは
 「red にならなかった」を疑ったから。**
 
+#### ラウンド2（fix-scoped 縮小レビュー）: Important 1件（**fix 起因**）
+
+RAII 化の副作用で、**成功パスの in-flight 解除が `free_slot` と別ロックに分かれた**。
+fix 前は1つのロック区間で両方やっていたが、fix 後は `commit_spare()` が in_flight を触らないため
+**Drop が唯一の解除者**になり、最終ガードが落ちてから Drop がロックを取り直すまでの窓で、
+同一 instance への並行 replace が「already in progress」で**偽に弾かれる**。
+
+→ 成功パスの最終ガード内でも `replacements_in_flight.remove` を呼ぶ（`HashSet::remove` は冪等なので
+Drop 側は失敗・パニック時の安全網として残す）。
+
+**この指摘は変異検証で検出できない**（窓は関数内部にあり、呼び出し元から観測すると Drop は
+必ず return 前に走るため、既存アサーションはどちらでも通る）。**並行スレッドからのみ観測可能**な
+性質なので、テストを足すより不変条件をコメントで固定する方を選んだ。
+
+#### ラウンド2 で「新規故障モードなし」と確認された点
+
+- `Drop` はパニックしない（`lock_child_slot_recovering` は poison を recover・`unwrap()` なし）
+  → 二重パニック→abort の懸念なし
+- **ロック順序**: `reservation` が全ガードより前に宣言されているため、Rust の drop 順（宣言の逆順）で
+  ネストしたガードが必ず先に落ちる。早期脱出4箇所を1つずつ辿って自己デッドロックなしを確認
+- `Drop` は `spawn_blocking` のブロッキングプール上でのみ走り、**RT スレッドから呼ばれる経路はない**
+- `tenant_generation` の `Relaxed` は `respawn_count` と同じ既存パターン
+
 #### 検証コマンドの落とし穴
 
 `cargo test -p orbit-audio-daemon` だけでは **33 tests しか走らず R1-R11 は feature gate で1件も実行されない**。
