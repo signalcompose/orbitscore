@@ -679,6 +679,13 @@ export class Sequence {
     return this
   }
 
+  /** Removes this sequence's named effect insert; instruments are never unloaded by this verb. */
+  async remove(name: string, occurrence = 0): Promise<this> {
+    const sequenceName = this.stateManager.getName() || 'sequence'
+    await this.global.sequenceEffectRemove(sequenceName, name, occurrence)
+    return this
+  }
+
   getInsertBus(): string | undefined {
     return this._insertBus
   }

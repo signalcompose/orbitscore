@@ -1,7 +1,7 @@
 # Engine Daemon IPC Protocol Specification (v0.2 draft)
 
 **ステータス**: Draft（Issue #93 の初期設計）
-**最終更新**: 2026-08-26
+**最終更新**: 2026-08-27
 **対象バージョン**: protocol v0.2
 **関連 Issue**: [#93](https://github.com/signalcompose/orbitscore/issues/93), [#107](https://github.com/signalcompose/orbitscore/issues/107), [#108](https://github.com/signalcompose/orbitscore/issues/108)
 
@@ -29,7 +29,7 @@ TypeScript 側アプリケーション層（VS Code extension / interpreter）�
 - daemon は選択した port を **stdout に 1 行 JSON**（改行終端、即 flush）で出力:
 
 ```json
-{"ready": true, "port": 52913, "protocol_version": "0.2"}
+{ "ready": true, "port": 52913, "protocol_version": "0.2" }
 ```
 
 クライアントは stdout をキャプチャしてこれを読み、接続する。
@@ -42,7 +42,7 @@ daemon が起動中に失敗した場合（audio device 取得失敗、port bind
 - **stderr** に 1 行 JSON を出力して非ゼロ終了コードで exit:
 
 ```json
-{"ready": false, "error": {"code": "DEVICE_NOT_FOUND", "message": "No audio device available"}}
+{ "ready": false, "error": { "code": "DEVICE_NOT_FOUND", "message": "No audio device available" } }
 ```
 
 クライアントは以下の順序とタイムアウトで起動を監視する:
@@ -107,11 +107,11 @@ Client                          Daemon
 
 3 種類のメッセージを扱う:
 
-| タイプ | 方向 | 識別 | 応答 |
-|---|---|---|---|
-| **Command** | Client → Daemon | `id` 必須 | 同 `id` の Response が返る |
-| **Response** | Daemon → Client | 同 `id` | — |
-| **Event** | Daemon → Client | `id` なし | — |
+| タイプ       | 方向            | 識別      | 応答                       |
+| ------------ | --------------- | --------- | -------------------------- |
+| **Command**  | Client → Daemon | `id` 必須 | 同 `id` の Response が返る |
+| **Response** | Daemon → Client | 同 `id`   | —                          |
+| **Event**    | Daemon → Client | `id` なし | —                          |
 
 ### 3.1 Command フォーマット
 
@@ -395,6 +395,30 @@ slot が空の場合は同じ command が ensure-load として動作する。
 - effect の `quarantined_slot` は常に `false`。effect の隔離相当は error response で表現される
 - `outproc-effect` のない build で effect を指定すると `OUTPROC_EFFECT_UNAVAILABLE`
 
+### UnloadPlugin（v0.2）
+
+effect slot の現在の tenant だけを停止・detach し、同じ slot を `Empty` に戻す。
+bus の割当、active 状態、routing は保持される。既に `Empty` の場合は冪等な noop。
+v1 では instrument の unload を提供しない。
+
+```json
+// named effect bus（bus 省略時は master）
+{
+  "id": "u8d",
+  "method": "UnloadPlugin",
+  "params": { "role": "effect", "bus": "seq-bus-0" }
+}
+
+// Response
+{ "id": "u8d", "result": { "status": "unloaded" } }
+// already Empty
+{ "id": "u8e", "result": { "status": "noop" } }
+```
+
+- `role` は `"effect"` のみ。欠如・`"instrument"`・その他は `MALFORMED_REQUEST`
+- `bus` は任意。省略時は master effect slot
+- `outproc-effect` のない build では `OUTPROC_EFFECT_UNAVAILABLE`
+
 ### GetPluginState（v0.2）
 
 停止中の out-of-process plugin child から現在 state を取得し、host が同一ディレクトリの
@@ -443,7 +467,6 @@ TypeScript 層でこの wire target へ解決済みであり、daemon は chain 
 ### Plugin 関連
 
 - `LoadPlugin { path, kind: "vst3" | "clap" | "midi_out" }` → `plugin_id`
-- `UnloadPlugin { plugin_id }`
 - `PluginMidiEvent { plugin_id, time_sec, event: MidiEvent }`
 - `PluginParam { plugin_id, param_id, value, ramp_sec? }`
 - `ConnectNode { src: NodeId, dst: NodeId, bus? }`
@@ -543,21 +566,21 @@ Plugin が必要になったら [Issue #107](https://github.com/signalcompose/or
 
 ## 7. エラーコード
 
-| Code | 意味 |
-|---|---|
-| `SAMPLE_NOT_FOUND` | LoadSample / PlayAt で指定 sample が存在しない |
-| `FILE_DECODE_ERROR` | LoadSample でデコードに失敗 |
-| `UNSUPPORTED_FORMAT` | サポート外の sample format |
-| `RESAMPLE_ERROR` | SRC 変換失敗 |
-| `DEVICE_NOT_FOUND` | 起動時に audio device が見つからない |
-| `DEVICE_CONFIG_ERROR` | config 取得失敗 |
-| `PLAY_ID_NOT_FOUND` | Stop で指定 play が存在しない |
-| `PROTOCOL_VERSION_MISMATCH` | handshake で version 不一致 |
-| `MALFORMED_REQUEST` | JSON / method / params が不正 |
-| `COMMAND_TIMEOUT` | クライアント側でタイムアウト検出（Response 欠落） |
-| `PARAM_OUT_OF_RANGE` | PlayAt の gain / pan 等が仕様範囲外 |
-| `SAMPLE_IN_USE` | UnloadSample で再生中のサンプルを unload しようとした |
-| `INTERNAL_ERROR` | 上記以外の予期しないエラー |
+| Code                        | 意味                                                  |
+| --------------------------- | ----------------------------------------------------- |
+| `SAMPLE_NOT_FOUND`          | LoadSample / PlayAt で指定 sample が存在しない        |
+| `FILE_DECODE_ERROR`         | LoadSample でデコードに失敗                           |
+| `UNSUPPORTED_FORMAT`        | サポート外の sample format                            |
+| `RESAMPLE_ERROR`            | SRC 変換失敗                                          |
+| `DEVICE_NOT_FOUND`          | 起動時に audio device が見つからない                  |
+| `DEVICE_CONFIG_ERROR`       | config 取得失敗                                       |
+| `PLAY_ID_NOT_FOUND`         | Stop で指定 play が存在しない                         |
+| `PROTOCOL_VERSION_MISMATCH` | handshake で version 不一致                           |
+| `MALFORMED_REQUEST`         | JSON / method / params が不正                         |
+| `COMMAND_TIMEOUT`           | クライアント側でタイムアウト検出（Response 欠落）     |
+| `PARAM_OUT_OF_RANGE`        | PlayAt の gain / pan 等が仕様範囲外                   |
+| `SAMPLE_IN_USE`             | UnloadSample で再生中のサンプルを unload しようとした |
+| `INTERNAL_ERROR`            | 上記以外の予期しないエラー                            |
 
 Phase 2 で追加予定のコード（`PLUGIN_NOT_FOUND`, `PLUGIN_INCOMPATIBLE`, `PLUGIN_INIT_ERROR`, `NODE_NOT_FOUND` 等）は #107 実装時に確定する。
 
@@ -572,13 +595,13 @@ Phase 2 で追加予定のコード（`PLUGIN_NOT_FOUND`, `PLUGIN_INCOMPATIBLE`,
 
 MCP は LLM agent とツールを繋ぐ標準プロトコル。本プロトコルとの比較:
 
-| 観点 | 本 protocol (v0.1) | MCP |
-|---|---|---|
-| 目的 | Audio engine のリアルタイム制御 | LLM agent のツール呼び出し |
-| トランスポート | WebSocket | stdio / SSE / HTTP |
-| リアルタイム性 | 必須（音声タイミング） | 低レイテンシだが必須ではない |
-| Event / Streaming | 必須（`PlayEnded` 等） | Streaming 対応あり |
-| ツール記述 | 不要（クライアントが契約を知っている） | 必須（LLM が動的に発見） |
+| 観点              | 本 protocol (v0.1)                     | MCP                          |
+| ----------------- | -------------------------------------- | ---------------------------- |
+| 目的              | Audio engine のリアルタイム制御        | LLM agent のツール呼び出し   |
+| トランスポート    | WebSocket                              | stdio / SSE / HTTP           |
+| リアルタイム性    | 必須（音声タイミング）                 | 低レイテンシだが必須ではない |
+| Event / Streaming | 必須（`PlayEnded` 等）                 | Streaming 対応あり           |
+| ツール記述        | 不要（クライアントが契約を知っている） | 必須（LLM が動的に発見）     |
 
 **結論**: 本 protocol は MCP とは別物として設計するが、**将来 LLM agent から daemon を触りたい場合は、MCP→本 protocol のブリッジ**を別途作る（Issue [#96](https://github.com/signalcompose/orbitscore/issues/96) のスコープ）。
 
@@ -628,16 +651,16 @@ MCP は LLM agent とツールを繋ぐ標準プロトコル。本プロトコ�
 
 ## 11. 検討中 / Open Questions
 
-| 質問 | 優先度 | 決定期限 | 現案 / 判断基準 |
-|---|---|---|---|
-| **時刻基準** | HIGH | #107 実装前 | daemon 内部 transport 基準、起動時 0.0 開始。`ResetTransport` / `SeekTransport` は Phase 2 で検討 |
-| **Sample hot reload** | MEDIUM | #107 実装時 | 同一ファイルでも常に新規 ID（シンプル優先） |
-| **Streaming decode** | LOW | Phase 3 | 大きい WAV のストリーミング再生は Phase 3 で評価 |
-| **Buffer size 指定** | LOW | 必要時 | daemon 一括決定（呼び出し側から指定不可） |
-| **Error details per code** | MEDIUM | #107 実装時 | 各 error code 固有の `details` フィールド仕様は実装時に確定 |
-| **Sample channel mismatch** | MEDIUM | #107 実装時 | mono ↔ stereo の自動 upmix / downmix か、`CHANNEL_MISMATCH` 拒否か、実装時に選定 |
-| **Phase 2 error codes** | LOW | Phase 2 実装時 | Plugin / Node 関連のエラーコードは実装時に確定 |
-| ~~**パラメータ検証厳密度**~~ | ✅ RESOLVED | — | Section 4 PlayAt で確定: 負の gain は reject、pan は clamp |
+| 質問                         | 優先度      | 決定期限       | 現案 / 判断基準                                                                                   |
+| ---------------------------- | ----------- | -------------- | ------------------------------------------------------------------------------------------------- |
+| **時刻基準**                 | HIGH        | #107 実装前    | daemon 内部 transport 基準、起動時 0.0 開始。`ResetTransport` / `SeekTransport` は Phase 2 で検討 |
+| **Sample hot reload**        | MEDIUM      | #107 実装時    | 同一ファイルでも常に新規 ID（シンプル優先）                                                       |
+| **Streaming decode**         | LOW         | Phase 3        | 大きい WAV のストリーミング再生は Phase 3 で評価                                                  |
+| **Buffer size 指定**         | LOW         | 必要時         | daemon 一括決定（呼び出し側から指定不可）                                                         |
+| **Error details per code**   | MEDIUM      | #107 実装時    | 各 error code 固有の `details` フィールド仕様は実装時に確定                                       |
+| **Sample channel mismatch**  | MEDIUM      | #107 実装時    | mono ↔ stereo の自動 upmix / downmix か、`CHANNEL_MISMATCH` 拒否か、実装時に選定                 |
+| **Phase 2 error codes**      | LOW         | Phase 2 実装時 | Plugin / Node 関連のエラーコードは実装時に確定                                                    |
+| ~~**パラメータ検証厳密度**~~ | ✅ RESOLVED | —              | Section 4 PlayAt で確定: 負の gain は reject、pan は clamp                                        |
 
 ---
 

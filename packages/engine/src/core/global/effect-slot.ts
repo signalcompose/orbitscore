@@ -160,6 +160,8 @@ export class EffectChainMap<K> {
   private readonly replacement?: EffectChainMapOptions<K>['replacement']
   /** A transport failure leaves daemon commit status unknown; retry via ReplacePlugin ensure. */
   private readonly uncertainReplacements = new Set<K>()
+  /** Daemon effect address retained while a failed replacement leaves the slot uncertain. */
+  private readonly uncertainEffectBuses = new Map<K, string | undefined>()
   // key ごとの直列化キュー（#527 review Important 1）。値は「前呼び出しの決着
   // （成功/失敗いずれも）待ち」で、前呼び出しの成否は自分の結果に影響させない
   // （catch で握りつぶし、必ず次の呼び出しへ進める）。
@@ -254,6 +256,65 @@ export class EffectChainMap<K> {
     } finally {
       if (this.pending.get(key) === tracked) this.pending.delete(key)
     }
+  }
+
+  /** Removes one named effect through the same per-key queue as declaration/replacement. */
+  async remove(key: K, expectedNormalizedName: string, occurrence = 0): Promise<void> {
+    const previous = this.pending.get(key) ?? Promise.resolve()
+    const settled = previous
+      .catch(() => undefined)
+      .then(() => this.removeBody(key, expectedNormalizedName, occurrence))
+    const tracked = settled.catch(() => undefined)
+    this.pending.set(key, tracked)
+    try {
+      await settled
+    } finally {
+      if (this.pending.get(key) === tracked) this.pending.delete(key)
+    }
+  }
+
+  private async removeBody(
+    key: K,
+    expectedNormalizedName: string,
+    occurrence: number,
+  ): Promise<void> {
+    const receiver = this.externalReceiverId?.(key) ?? this.receiverId(key)
+    const existing = this.chains.get(key)?.[0]
+    if (!existing && !this.uncertainReplacements.has(key)) {
+      throw new Error(
+        `${receiver}: remove("${expectedNormalizedName}") — no effect insert is declared.`,
+      )
+    }
+    if (existing && existing.normalizedName !== expectedNormalizedName) {
+      throw new Error(
+        `${receiver}: remove("${expectedNormalizedName}") does not match the declared insert '${existing.normalizedName}'.`,
+      )
+    }
+    if (occurrence !== 0) {
+      throw new Error(
+        `${receiver}: remove("${expectedNormalizedName}", ${occurrence}) — v1 supports a single insert; occurrence must be 0.`,
+      )
+    }
+    if (!this.audioEngine.unloadPlugin) {
+      throw new Error('Plugin removal requires the Rust engine backend.')
+    }
+
+    if (existing) {
+      await existing.load
+      await this.replacement?.beforeReplace(key, existing)
+    }
+    const bus = existing?.role === 'effect' ? existing.bus : this.uncertainEffectBuses.get(key)
+    try {
+      await this.audioEngine.unloadPlugin('effect', bus)
+    } catch (error) {
+      this.chains.delete(key)
+      this.uncertainReplacements.add(key)
+      this.uncertainEffectBuses.set(key, bus)
+      throw error
+    }
+    this.chains.delete(key)
+    this.uncertainReplacements.delete(key)
+    this.uncertainEffectBuses.delete(key)
   }
 
   private async declareBody(
@@ -352,6 +413,7 @@ export class EffectChainMap<K> {
       if (this.replacement!.failurePolicy === 'forget-and-ensure') {
         this.chains.delete(key)
         this.uncertainReplacements.add(key)
+        if (role === 'effect') this.uncertainEffectBuses.set(key, bus)
       } else if (!(error instanceof DaemonProtocolError)) {
         if (existing) this.chains.delete(key)
         this.uncertainReplacements.add(key)
@@ -393,6 +455,7 @@ export class EffectChainMap<K> {
       existing ? current.map((slot) => (slot === existing ? entry : slot)) : [entry],
     )
     this.uncertainReplacements.delete(key)
+    this.uncertainEffectBuses.delete(key)
     if (result.quarantinedSlot) this.replacement!.onQuarantinedSlot?.(key)
   }
 

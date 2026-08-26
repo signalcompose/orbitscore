@@ -1716,6 +1716,57 @@ async fn handle_command(
                 }
             }
         }
+        // Removes only an effect tenant. Slot and bus/routing bookkeeping stay allocated.
+        "UnloadPlugin" => {
+            if params.get("role").and_then(Value::as_str) != Some("effect")
+                || params.get("instance").is_some()
+            {
+                return err(
+                    &id,
+                    ProtocolError::new(
+                        "MALFORMED_REQUEST",
+                        "UnloadPlugin supports role='effect' in v1",
+                    ),
+                );
+            }
+            let bus = match parse_bus_param(&params) {
+                Ok(bus) => bus,
+                Err(message) => return err(&id, ProtocolError::new("MALFORMED_REQUEST", message)),
+            };
+            #[cfg(feature = "outproc-effect")]
+            {
+                let engine = engine.clone();
+                match tokio::task::spawn_blocking(move || engine.unload_outproc_effect_plugin(bus))
+                    .await
+                {
+                    Ok(Ok(status)) => ok(
+                        &id,
+                        json!({
+                            "status": match status {
+                                crate::engine_wrap::UnloadedPluginStatus::Unloaded => "unloaded",
+                                crate::engine_wrap::UnloadedPluginStatus::Noop => "noop",
+                            }
+                        }),
+                    ),
+                    Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
+                    Err(join_error) => err(
+                        &id,
+                        ProtocolError::new("INTERNAL_ERROR", join_error.to_string()),
+                    ),
+                }
+            }
+            #[cfg(not(feature = "outproc-effect"))]
+            {
+                let _ = (engine, bus);
+                err(
+                    &id,
+                    ProtocolError::new(
+                        "OUTPROC_EFFECT_UNAVAILABLE",
+                        "UnloadPlugin requires an outproc-effect daemon build",
+                    ),
+                )
+            }
+        }
         // #562: 実行中のOOP childから現在stateをsidecarへ保存する。上位層で解決済みの
         // role/bus/instanceを受け、停止判定・single mailbox・atomic renameはEngineWrapに集約する。
         "GetPluginState" => {
@@ -2420,6 +2471,40 @@ mod tests {
             assert_eq!(
                 response["error"]["message"],
                 "ReplacePlugin requires role='effect' or role='instrument'"
+            );
+        }
+
+        let unload_effect = handle_command(
+            Command {
+                id: "unload-effect".into(),
+                method: "UnloadPlugin".into(),
+                params: json!({"role": "effect", "bus": "seq-bus-0"}),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+        assert_eq!(unload_effect["error"]["code"], "OUTPROC_EFFECT_UNAVAILABLE");
+
+        for (case, role) in [("missing", None), ("instrument", Some("instrument"))] {
+            let mut params = json!({});
+            if let Some(role) = role {
+                params["role"] = json!(role);
+            }
+            let response = handle_command(
+                Command {
+                    id: format!("unload-{case}"),
+                    method: "UnloadPlugin".into(),
+                    params,
+                },
+                &engine,
+                &tx,
+            )
+            .await;
+            assert_eq!(response["error"]["code"], "MALFORMED_REQUEST");
+            assert_eq!(
+                response["error"]["message"],
+                "UnloadPlugin supports role='effect' in v1"
             );
         }
     }

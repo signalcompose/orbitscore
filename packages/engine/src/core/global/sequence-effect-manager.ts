@@ -161,4 +161,9 @@ export class SequenceEffectManager {
     }
     return bus
   }
+
+  /** Removes only the insert tenant; the allocated bus remains available to routing. */
+  async remove(sequenceName: string, spec: string, occurrence = 0): Promise<void> {
+    await this.slots.remove(sequenceName, normalizePluginInstanceName(spec), occurrence)
+  }
 }

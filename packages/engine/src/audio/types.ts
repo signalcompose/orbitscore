@@ -15,6 +15,10 @@ export interface PluginReplaceResult extends PluginLoadResult {
   quarantinedSlot: boolean
 }
 
+export interface PluginUnloadResult {
+  status: 'unloaded' | 'noop'
+}
+
 export type PluginStateSaveTarget =
   | { role: 'effect'; bus?: string }
   | { role: 'instrument'; instance: string }
@@ -115,6 +119,9 @@ export interface AudioEngine {
     instance?: string,
     statePath?: string,
   ): Promise<PluginReplaceResult>
+
+  /** Unloads one effect slot while preserving its bus allocation and routing identity. */
+  unloadPlugin?(role: 'effect', bus?: string): Promise<PluginUnloadResult>
 
   /** 現在のOOP plugin stateを停止中に取得し、指定した絶対パスへatomicに確定する。 */
   savePluginState?(

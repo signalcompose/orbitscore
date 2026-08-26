@@ -320,18 +320,24 @@ describe('DaemonClient with mock server', () => {
     })
   })
 
-  it('R3 ReplacePlugin sends the effect bus spec and omits bus for master', async () => {
-    const request = vi.spyOn(client as any, 'request').mockResolvedValue({
-      plugin_id: 'effect-id',
-      plugin_name: 'Effect',
-      note_port_index: 0,
-      quarantined_slot: false,
-    })
+  it('R3 ReplacePlugin and UnloadPlugin preserve the effect bus target and omit bus for master', async () => {
+    const request = vi.spyOn(client as any, 'request').mockImplementation(async (method: string) =>
+      method === 'UnloadPlugin'
+        ? { status: 'unloaded' }
+        : {
+            plugin_id: 'effect-id',
+            plugin_name: 'Effect',
+            note_port_index: 0,
+            quarantined_slot: false,
+          },
+    )
 
     await client.replacePlugin('/plugins/sequence.clap', 'sequence-id', 'effect', 'seq-bus-0')
     await client.replacePlugin('/plugins/master.clap', undefined, 'effect')
+    await client.unloadPlugin('effect', 'seq-bus-0')
+    await client.unloadPlugin('effect')
 
-    expect(request).toHaveBeenCalledTimes(2)
+    expect(request).toHaveBeenCalledTimes(4)
     expect(request).toHaveBeenNthCalledWith(1, 'ReplacePlugin', {
       path: '/plugins/sequence.clap',
       plugin_id: 'sequence-id',
@@ -343,6 +349,11 @@ describe('DaemonClient with mock server', () => {
       role: 'effect',
     })
     expect(request.mock.calls[1]![1]).not.toHaveProperty('bus')
+    expect(request).toHaveBeenNthCalledWith(3, 'UnloadPlugin', {
+      role: 'effect',
+      bus: 'seq-bus-0',
+    })
+    expect(request).toHaveBeenNthCalledWith(4, 'UnloadPlugin', { role: 'effect' })
   })
 
   it('GetPluginState sends the resolved effect target and preserves the byte result', async () => {

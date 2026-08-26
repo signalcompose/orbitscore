@@ -19,6 +19,7 @@ export type CommandMethod =
   | 'LoadSample'
   | 'LoadPlugin'
   | 'ReplacePlugin'
+  | 'UnloadPlugin'
   | 'GetPluginState'
   | 'RenderScore'
   | 'OpenPluginUI'

@@ -3568,6 +3568,87 @@ impl EngineWrap {
         })
     }
 
+    /// Removes the current effect tenant while preserving the slot, bus activation,
+    /// routing, and allocation bookkeeping. An already-empty slot is an idempotent noop.
+    #[cfg(feature = "outproc-effect")]
+    pub fn unload_outproc_effect_plugin(
+        &self,
+        bus: Option<String>,
+    ) -> Result<UnloadedPluginStatus, WrapError> {
+        let mut reservation = EffectReplacementReservation::new(self, bus.clone());
+        let (child_slot, entry, stats) = {
+            let mut guard = self
+                .outproc
+                .lock()
+                .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))?;
+            let control = guard.as_mut().ok_or_else(|| {
+                WrapError::OutProcEffectUnavailable(
+                    "outproc effect not initialized (test backend has no outproc path)".into(),
+                )
+            })?;
+            if control.replacements_in_flight.contains(&bus) {
+                return Err(WrapError::OutProcEffect(format!(
+                    "effect replacement already in progress for {}",
+                    effect_slot_label(&bus)
+                )));
+            }
+            let (weak_slot, entry, stats) = match bus.as_ref() {
+                Some(name) => (
+                    control.bus_slots.get(name).ok_or_else(|| {
+                        WrapError::OutProcEffect(format!(
+                            "unknown effect bus '{name}' (configured by ORBIT_EFFECT_BUSES)"
+                        ))
+                    })?,
+                    control.bus_entries.get(name).cloned().ok_or_else(|| {
+                        WrapError::OutProcEffect(format!(
+                            "effect bus '{name}' is missing its slot entry"
+                        ))
+                    })?,
+                    control.bus_stats.get(name).cloned().ok_or_else(|| {
+                        WrapError::OutProcEffect(format!(
+                            "effect bus '{name}' is missing its stats entry"
+                        ))
+                    })?,
+                ),
+                None => (
+                    &control.child_slot,
+                    control.master_entry.clone(),
+                    control.stats.clone(),
+                ),
+            };
+            if entry.shutdown.load(Ordering::Acquire) {
+                return Err(WrapError::OutProcEffect("engine is stopping".into()));
+            }
+            let child_slot = weak_slot.upgrade().ok_or_else(|| {
+                WrapError::OutProcEffect("outproc effect stream is closed".into())
+            })?;
+            {
+                let slot = lock_child_slot_recovering(&child_slot, "effect unload state check");
+                match &*slot {
+                    ChildSlot::Empty(_) => return Ok(UnloadedPluginStatus::Noop),
+                    ChildSlot::Active { .. } => {}
+                    ChildSlot::Loading { path } => {
+                        return Err(WrapError::OutProcEffect(format!(
+                            "effect plugin load already in progress for {path:?}"
+                        )));
+                    }
+                    ChildSlot::Closed => {
+                        return Err(WrapError::OutProcSlotClosed(
+                            "outproc effect slot is closed after an unrecoverable attach failure"
+                                .into(),
+                        ));
+                    }
+                }
+            }
+            control.replacements_in_flight.insert(bus.clone());
+            reservation.mark_in_flight();
+            (child_slot, entry, stats)
+        };
+
+        self.teardown_outproc_effect_slot(&bus, &child_slot, &entry, stats)?;
+        Ok(UnloadedPluginStatus::Unloaded)
+    }
+
     /// Active effect child を quiesce して停止し、同じ shm を使う Empty slot へ戻す。
     #[cfg(feature = "outproc-effect")]
     fn teardown_outproc_effect_slot(
@@ -6114,6 +6195,12 @@ pub struct ReplacedPluginSummary {
     pub quarantined_slot: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnloadedPluginStatus {
+    Unloaded,
+    Noop,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PluginStateTarget {
     #[cfg(feature = "outproc-effect")]
@@ -8618,7 +8705,7 @@ mod effect_replace_tests {
     use super::{
         clear_quiesce_unless_shutdown, clear_quiesce_unless_shutdown_with, test_effect_slot_entry,
         ChildLaunch, ChildSlot, EffectRole, EffectSlotEntry, EngineWrap, OutProcControl,
-        OutProcRole, PluginUiWiring, WrapError,
+        OutProcRole, PluginUiWiring, UnloadedPluginStatus, WrapError,
     };
     use crate::backend::StubBackend;
     use crate::outproc_effect::OutProcEffectStats;
@@ -8850,6 +8937,52 @@ mod effect_replace_tests {
             &*fixture.master.slot.lock().expect("lock master"),
             ChildSlot::Active { path, .. } if path == Path::new(NEW_PLUGIN)
         ));
+    }
+
+    #[test]
+    fn unload_keeps_bus_active_and_resets_slot_to_empty() {
+        let fixture = fixture(
+            fixture_script("slow-child.sh"),
+            Some(fixture_script("slow-child.sh")),
+        );
+        let bus = fixture.bus.as_ref().expect("bus fixture exists");
+        let old_pid = bus.old_pid;
+        let ack = spawn_quiesce_ack(&bus.entry);
+
+        let status = fixture
+            .wrap
+            .unload_outproc_effect_plugin(Some(BUS.to_owned()))
+            .expect("effect unload succeeds");
+        ack.join().expect("quiesce ack thread panicked");
+
+        assert_eq!(status, UnloadedPluginStatus::Unloaded);
+        assert!(!process_exists(old_pid), "old child must be reaped");
+        assert!(matches!(
+            &*bus.slot.lock().expect("lock bus slot"),
+            ChildSlot::Empty(_)
+        ));
+        assert!(
+            fixture
+                .bus_active
+                .as_ref()
+                .expect("bus active exists")
+                .load(Ordering::Acquire),
+            "unload must not deactivate the allocated bus"
+        );
+        {
+            let control = fixture.wrap.outproc.lock().expect("lock outproc");
+            let control = control.as_ref().expect("outproc exists");
+            assert!(control.bus_slots.contains_key(BUS));
+            assert!(control.bus_entries.contains_key(BUS));
+        }
+
+        assert_eq!(
+            fixture
+                .wrap
+                .unload_outproc_effect_plugin(Some(BUS.to_owned()))
+                .expect("empty effect unload is idempotent"),
+            UnloadedPluginStatus::Noop
+        );
     }
 
     #[test]

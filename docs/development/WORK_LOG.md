@@ -17,6 +17,53 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.368 feat(engine): #625 Stage C — remove() で effect insert を外す (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625（Stage C = 削除。実機 gated E2E は Stage D）
+**Status**: TS **2059 → 2068**（+9）/ Rust daemon lib **202 → 203**（+1）/ sandbox 外で全スイート green
+
+#### 実装
+
+`remove("名前")` を 4 経路（`global.remove` / `kick.remove` / `sum|aux("x").remove`）で実装。
+
+- daemon: `unload_outproc_effect_plugin`（replace の 1〜6 段 + load しない版）。
+  slot が Empty なら冪等 `noop`。**`bus_actives` と bus 簿記には触らない**
+- wire: `UnloadPlugin`（v1 は effect のみ受理）+ `ENGINE_DAEMON_PROTOCOL.md` 追記
+- TS: `EffectChainMap.remove()`。**`declare` と同じ per-key pending キューへ直列に載せる**。
+  名前不一致は throw（黙って別のものを消さない）。`BusPool.release` は呼ばない
+  （`seq.output()` / `seq.send()` の routing が bus 名を参照し続けるため）
+
+#### 🔴 main の全スイート実行で 3 件の失敗（3 回連続）
+
+Codex の報告に無かった失敗が、main の sandbox 外実行で出た。落ちたのは
+`dsl-method-catalog.spec.ts` = **VS Code 拡張の補完候補表が engine の DSL 語彙と一致すること**
+を検査するテスト。`remove` を語彙 3 セットに足したのに補完表を更新していなかった。
+
+**ガードが設計どおり働いた形**。放置すれば「`remove` は動くのにエディタの補完に出てこない」
+という、通常のテストでは見えない劣化になった。修正は補完カタログ 3 箇所への 1 語追加 +
+provider テストの期待値 1 箇所だったので、委譲往復に見合わず **main が直接修正**。
+
+#### 語彙 3 セットの独立検証（#528 型の事故の本丸）
+
+`remove` を **1 セットずつ独立に外す**変異を main が実施。3 セットとも red:
+
+| 外したセット | 落ちたテスト |
+|---|---|
+| `GLOBAL_DSL_METHODS` | R23a + 内部 API 分類ガード + 補完表一致（global） |
+| `SEQUENCE_DSL_METHODS` | R23b + 内部 API 分類ガード + 補完表一致（sequence） |
+| `BUS_DSL_METHODS` | R23c + 補完表一致（bus） |
+
+R23 を `R23a/b/c` に分割させたのが効いた。**まとめて 1 テストにすると 1 セット載せ忘れても
+他で緑になり、その経路だけ実機で全滅する。**
+
+#### テスト番号の衝突を是正
+
+Stage B で追加した identity テストが `R18`〜`R21` を名乗っており、設計の失敗モード表で
+`R19`〜`R23` が remove 関連に割り当て済みだったため衝突していた。
+**`R12a`〜`R12d` へ改名**（R12「差し替え前の自動 state 保存」の経路別展開なので枝番が正しい）。
+1:1 対応表が壊れたまま積むと、どのテストがどの失敗モードを守っているのか追えなくなる。
+
 ### 6.367 feat(engine): #625 Stage B — effect の差し替えを wire と DSL 層へ開通 (Aug 27, 2026)
 
 **Date**: 2026-08-27

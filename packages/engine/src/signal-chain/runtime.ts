@@ -21,6 +21,7 @@ export const GLOBAL_DSL_METHODS: ReadonlySet<string> = new Set([
   'setDocumentDirectory',
   'linkAudio',
   'effect',
+  'remove',
   'instrument',
   'sum',
   'aux',
@@ -48,6 +49,7 @@ export const SEQUENCE_DSL_METHODS: ReadonlySet<string> = new Set([
   'midi',
   'instrument',
   'effect',
+  'remove',
   // #617: `seq.ui()` — 楽譜からプラグイン UI を開く / 閉じる。
   // 🔴 ここに載せ忘れると実行時に `Unknown chain method` で弾かれる（#528 の再発）。
   'ui',
@@ -71,7 +73,7 @@ export const SEQUENCE_DSL_METHODS: ReadonlySet<string> = new Set([
   'unmute',
 ])
 
-export const BUS_DSL_METHODS: ReadonlySet<string> = new Set(['effect', 'ui'])
+export const BUS_DSL_METHODS: ReadonlySet<string> = new Set(['effect', 'remove', 'ui'])
 
 export type MixerRuntimeNode =
   | {

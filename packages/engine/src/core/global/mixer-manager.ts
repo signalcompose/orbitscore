@@ -73,6 +73,7 @@ export interface MixerBusHandle {
   readonly kind: MixerKind
   /** Declares (or idempotently re-declares) the bus's own insert (MX.2/MX.3: v1 one insert). */
   effect(path: string, pluginId?: string): Promise<MixerBusHandle>
+  remove(name: string, occurrence?: number): Promise<MixerBusHandle>
   /**
    * このバスの insert のプラグイン UI を開く / 閉じる（`sum("x").ui(1)` — #617）。
    * index はチェーン位置（bus の insert は 1 以降）。`open=false` で閉じる。
@@ -285,6 +286,7 @@ export class MixerManager {
       bus,
       kind,
       effect: (path: string, pluginId?: string) => this.effectFor(kind, name, bus, path, pluginId),
+      remove: (spec: string, occurrence = 0) => this.removeFor(kind, name, bus, spec, occurrence),
       ui: async (index = 1, open = true) => {
         if (!this.pluginUiHandler) {
           throw new Error(
@@ -360,6 +362,17 @@ export class MixerManager {
         `${kind}("${name}").effect() supports one insert per bus in v1; chains (multiple ` +
         `inserts) are reserved for future support.`,
     )
+    return this.makeHandle(kind, name, bus)
+  }
+
+  private async removeFor(
+    kind: MixerKind,
+    name: string,
+    bus: string,
+    spec: string,
+    occurrence: number,
+  ): Promise<MixerBusHandle> {
+    await this.kinds[kind].inserts.remove(name, normalizePluginInstanceName(spec), occurrence)
     return this.makeHandle(kind, name, bus)
   }
 }

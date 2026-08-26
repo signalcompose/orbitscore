@@ -61,4 +61,8 @@ export class PluginEffectManager {
         'global.effect() supports one master insert in v1; effect chains are reserved for future support.',
     )
   }
+
+  async remove(spec: string, occurrence = 0): Promise<void> {
+    await this.slots.remove('master', normalizePluginInstanceName(spec), occurrence)
+  }
 }

@@ -799,6 +799,40 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       expect(typeof bus[name as keyof typeof bus]).toBe('function')
   })
 
+  it('R23a dispatches global.remove through the Global DSL vocabulary', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    const remove = vi.spyOn(global, 'remove').mockResolvedValue(global)
+
+    await run('global.remove("old")', state)
+
+    expect(remove).toHaveBeenCalledWith('old')
+  })
+
+  it('R23b dispatches kick.remove through the Sequence DSL vocabulary', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var kick = init global.seq', state)
+    const kick = state.sequences.get('kick')!
+    const remove = vi.spyOn(kick, 'remove').mockResolvedValue(kick)
+
+    await run('kick.remove("old")', state)
+
+    expect(remove).toHaveBeenCalledWith('old')
+  })
+
+  it('R23c dispatches sum.remove through the bus DSL vocabulary', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    const bus = global.sum('drums')
+    const remove = vi.spyOn(bus, 'remove').mockResolvedValue(bus)
+    vi.spyOn(global, 'sum').mockReturnValue(bus)
+
+    await run('global.sum("drums").remove("old")', state)
+
+    expect(remove).toHaveBeenCalledWith('old')
+  })
+
   it('classifies every public receiver method as DSL vocabulary or an explicit internal API', () => {
     const sequenceInternalMethods = new Set([
       'constructor',
@@ -919,6 +953,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'isLinkAudioEnabled',
       'declareMixerRuntime',
       'sequenceEffect',
+      'sequenceEffectRemove',
       'ensureSequenceInsertBus',
       'resolveSumBus',
       'resolveAuxBus',

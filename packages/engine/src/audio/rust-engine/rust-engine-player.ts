@@ -44,6 +44,7 @@ import type { AudioDevice } from '../supercollider/types'
 import type {
   PluginLoadResult,
   PluginReplaceResult,
+  PluginUnloadResult,
   PluginStateSaveTarget,
   PluginUiCloseCompletion,
   PluginUiTarget,
@@ -1026,6 +1027,22 @@ export class RustEnginePlayer implements AudioEngineBackend {
         this.markPluginInactive(key, role, instance)
       }
       throw err
+    }
+  }
+
+  async unloadPlugin(role: 'effect', bus?: string): Promise<PluginUnloadResult> {
+    const key = RustEnginePlayer.pluginKey(role, bus)
+    try {
+      const result = await this.daemon.unloadPlugin(role, bus)
+      this.loadedPlugins.delete(key)
+      this.pluginActiveByKey.delete(key)
+      return result
+    } catch (error) {
+      // The daemon may have completed teardown before the response was lost.
+      // Forget both ledgers on every failure so respawn cannot replay the removed tenant.
+      this.loadedPlugins.delete(key)
+      this.pluginActiveByKey.delete(key)
+      throw error
     }
   }
 

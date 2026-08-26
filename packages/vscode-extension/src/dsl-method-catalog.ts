@@ -28,6 +28,7 @@ export const SEQUENCE_METHODS: readonly string[] = [
   'midi',
   'instrument',
   'effect',
+  'remove',
   'ui',
   'hold',
   'voicelead',
@@ -60,6 +61,7 @@ export const GLOBAL_METHODS: readonly string[] = [
   'setDocumentDirectory',
   'linkAudio',
   'effect',
+  'remove',
   'instrument',
   'sum',
   'aux',
@@ -74,4 +76,4 @@ export const GLOBAL_METHODS: readonly string[] = [
 ]
 
 /** `sum("x").` / `aux("x").` の後に出る候補。engine の `BUS_DSL_METHODS` と一致すること。 */
-export const BUS_METHODS: readonly string[] = ['effect', 'ui']
+export const BUS_METHODS: readonly string[] = ['effect', 'remove', 'ui']

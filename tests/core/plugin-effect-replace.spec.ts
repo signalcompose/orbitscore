@@ -19,17 +19,21 @@ function makeGlobal(
     documentDirectory?: string | false
     loadPlugin?: ReturnType<typeof vi.fn>
     replacePlugin?: ReturnType<typeof vi.fn>
+    unloadPlugin?: ReturnType<typeof vi.fn>
     closePluginUi?: ReturnType<typeof vi.fn>
     openPluginUi?: ReturnType<typeof vi.fn>
   } = {},
 ) {
   const loadPlugin = options.loadPlugin ?? vi.fn().mockResolvedValue({})
   const replacePlugin = options.replacePlugin ?? vi.fn().mockResolvedValue(REPLACE_RESULT)
+  const unloadPlugin =
+    options.unloadPlugin ?? vi.fn().mockResolvedValue({ status: 'unloaded' as const })
   const closePluginUi = options.closePluginUi ?? vi.fn().mockResolvedValue('safepoint-completed')
   const openPluginUi = options.openPluginUi ?? vi.fn().mockResolvedValue(undefined)
   const engine = {
     loadPlugin,
     replacePlugin,
+    unloadPlugin,
     savePluginState: vi.fn().mockResolvedValue({
       path: '/songs/session/states/old.state',
       bytesWritten: 12,
@@ -44,7 +48,15 @@ function makeGlobal(
   if (options.documentDirectory !== false) {
     global.setDocumentDirectory(options.documentDirectory ?? '/songs/session')
   }
-  return { global, engine, loadPlugin, replacePlugin, closePluginUi, openPluginUi }
+  return {
+    global,
+    engine,
+    loadPlugin,
+    replacePlugin,
+    unloadPlugin,
+    closePluginUi,
+    openPluginUi,
+  }
 }
 
 function mockStateSave() {
@@ -394,7 +406,7 @@ describe('effect plugin replacement (#625 Stage B)', () => {
     )
   })
 
-  it('R18 saves the master replacement identity and daemon target', async () => {
+  it('R12a saves the master replacement identity and daemon target', async () => {
     const save = mockStateSave()
     const { global } = makeGlobal()
     await global.effect('old.clap', 'old-id')
@@ -413,7 +425,7 @@ describe('effect plugin replacement (#625 Stage B)', () => {
     )
   })
 
-  it('R19 saves the sequence replacement identity and daemon target', async () => {
+  it('R12b saves the sequence replacement identity and daemon target', async () => {
     const save = mockStateSave()
     const { global } = makeGlobal()
     await global.sequenceEffect('kick', 'old.clap', 'old-id')
@@ -432,7 +444,7 @@ describe('effect plugin replacement (#625 Stage B)', () => {
     )
   })
 
-  it('R20 saves the sum replacement identity and daemon target', async () => {
+  it('R12c saves the sum replacement identity and daemon target', async () => {
     const save = mockStateSave()
     const { global } = makeGlobal()
     const drums = global.sum('drums')
@@ -452,7 +464,7 @@ describe('effect plugin replacement (#625 Stage B)', () => {
     )
   })
 
-  it('R21 saves the aux replacement identity and daemon target', async () => {
+  it('R12d saves the aux replacement identity and daemon target', async () => {
     const save = mockStateSave()
     const { global } = makeGlobal()
     const reverb = global.aux('rev')
@@ -470,5 +482,94 @@ describe('effect plugin replacement (#625 Stage B)', () => {
       },
       { role: 'effect', bus: 'aux-bus-0' },
     )
+  })
+
+  it('R19 keeps the sequence bus allocation and declaration bookkeeping after remove', async () => {
+    mockStateSave()
+    const { global, unloadPlugin } = makeGlobal()
+    const bus = await global.sequenceEffect('kick', 'old.clap', 'old-id')
+
+    await global.sequenceEffectRemove('kick', 'old')
+
+    const manager = (global as any).sequenceEffectManager
+    expect(unloadPlugin).toHaveBeenCalledWith('effect', bus)
+    expect(manager.getBus('kick')).toBe(bus)
+    expect(manager.hasDeclaration('kick')).toBe(true)
+    expect(manager.chainFor('kick')).toEqual([])
+  })
+
+  it('R21 rejects a mismatched remove name before unload and retains the declaration', async () => {
+    mockStateSave()
+    const { global, unloadPlugin } = makeGlobal()
+    await global.effect('old.clap', 'old-id')
+
+    await expect(global.remove('wrong')).rejects.toThrow(
+      `master: remove("wrong") does not match the declared insert 'old'.`,
+    )
+
+    expect(unloadPlugin).toHaveBeenCalledTimes(0)
+    expect(masterChain(global)).toMatchObject([{ normalizedName: 'old' }])
+  })
+
+  it('R22a saves the master identity before unloading the master target', async () => {
+    const save = mockStateSave()
+    const { global, unloadPlugin } = makeGlobal()
+    await global.effect('old.clap', 'old-id')
+
+    await global.remove('old')
+
+    expect(save).toHaveBeenCalledWith(
+      { receiver: 'master', role: 'effect', normalizedName: 'old', occurrence: 0 },
+      { role: 'effect' },
+    )
+    expect(unloadPlugin).toHaveBeenCalledWith('effect', undefined)
+    expect(save.mock.invocationCallOrder[0]).toBeLessThan(unloadPlugin.mock.invocationCallOrder[0]!)
+  })
+
+  it('R22b saves the sequence identity before unloading its daemon bus', async () => {
+    const save = mockStateSave()
+    const { global, unloadPlugin } = makeGlobal()
+    await global.sequenceEffect('kick', 'old.clap', 'old-id')
+
+    await global.sequenceEffectRemove('kick', 'old')
+
+    expect(save).toHaveBeenCalledWith(
+      { receiver: 'kick', role: 'effect', normalizedName: 'old', occurrence: 0 },
+      { role: 'effect', bus: 'seq-bus-0' },
+    )
+    expect(unloadPlugin).toHaveBeenCalledWith('effect', 'seq-bus-0')
+    expect(save.mock.invocationCallOrder[0]).toBeLessThan(unloadPlugin.mock.invocationCallOrder[0]!)
+  })
+
+  it('R22c saves the sum identity before unloading its daemon bus', async () => {
+    const save = mockStateSave()
+    const { global, unloadPlugin } = makeGlobal()
+    const drums = global.sum('drums')
+    await drums.effect('old.clap', 'old-id')
+
+    await drums.remove('old')
+
+    expect(save).toHaveBeenCalledWith(
+      { receiver: 'sum:drums', role: 'effect', normalizedName: 'old', occurrence: 0 },
+      { role: 'effect', bus: 'sum-bus-0' },
+    )
+    expect(unloadPlugin).toHaveBeenCalledWith('effect', 'sum-bus-0')
+    expect(save.mock.invocationCallOrder[0]).toBeLessThan(unloadPlugin.mock.invocationCallOrder[0]!)
+  })
+
+  it('R22d saves the aux identity before unloading its daemon bus', async () => {
+    const save = mockStateSave()
+    const { global, unloadPlugin } = makeGlobal()
+    const reverb = global.aux('rev')
+    await reverb.effect('old.clap', 'old-id')
+
+    await reverb.remove('old')
+
+    expect(save).toHaveBeenCalledWith(
+      { receiver: 'aux:rev', role: 'effect', normalizedName: 'old', occurrence: 0 },
+      { role: 'effect', bus: 'aux-bus-0' },
+    )
+    expect(unloadPlugin).toHaveBeenCalledWith('effect', 'aux-bus-0')
+    expect(save.mock.invocationCallOrder[0]).toBeLessThan(unloadPlugin.mock.invocationCallOrder[0]!)
   })
 })

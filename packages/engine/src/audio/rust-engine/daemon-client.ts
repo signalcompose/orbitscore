@@ -24,6 +24,7 @@ import WebSocket from 'ws'
 import type {
   PluginLoadResult,
   PluginReplaceResult,
+  PluginUnloadResult,
   PluginStateSaveResult,
   PluginStateSaveTarget,
 } from '../types'
@@ -492,6 +493,19 @@ export class DaemonClient extends EventEmitter {
       notePortIndex: Number(result.note_port_index),
       quarantinedSlot: Boolean(result.quarantined_slot),
     }
+  }
+
+  /** Unloads an effect slot without releasing or deactivating its bus. */
+  async unloadPlugin(role: 'effect', bus?: string): Promise<PluginUnloadResult> {
+    const result = await this.request('UnloadPlugin', {
+      role,
+      ...(bus ? { bus } : {}),
+    })
+    const status = result.status
+    if (status !== 'unloaded' && status !== 'noop') {
+      throw new Error(`UnloadPlugin returned an invalid status: ${String(status)}.`)
+    }
+    return { status }
   }
 
   async savePluginState(
