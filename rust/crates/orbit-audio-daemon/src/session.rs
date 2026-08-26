@@ -1602,6 +1602,19 @@ async fn handle_command(
                 Ok(state_path) => state_path.map(std::path::PathBuf::from),
                 Err(message) => return err(&id, ProtocolError::new("MALFORMED_REQUEST", message)),
             };
+            #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+            if instance.is_some() || state_path.is_some() {
+                return err(
+                    &id,
+                    ProtocolError::new(
+                        "OUTPROC_INSTRUMENT_UNAVAILABLE",
+                        "this daemon build (outproc-instrument only) supports a single \
+                         instrument instance and no state restore; rebuild with \
+                         --features outproc-effect,outproc-instrument for per-sequence \
+                         instances (ReplacePlugin instance/state_path)",
+                    ),
+                );
+            }
             let plugin_id = params
                 .get("plugin_id")
                 .and_then(Value::as_str)
@@ -1616,14 +1629,7 @@ async fn handle_command(
                 })
                 .await
                 {
-                    Ok(Ok(info)) => ok(
-                        &id,
-                        json!({
-                            "plugin_id": info.plugin_id,
-                            "plugin_name": info.plugin_name,
-                            "note_port_index": info.note_port_index,
-                        }),
-                    ),
+                    Ok(Ok(info)) => replaced_plugin_ok(&id, info),
                     Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
                     Err(join_error) => err(
                         &id,
@@ -2175,6 +2181,19 @@ fn ok(id: &str, result: Value) -> Value {
     .expect("OkResponse must be serializable")
 }
 
+#[cfg(feature = "outproc-instrument")]
+fn replaced_plugin_ok(id: &str, info: crate::engine_wrap::ReplacedPluginSummary) -> Value {
+    ok(
+        id,
+        json!({
+            "plugin_id": info.plugin.plugin_id,
+            "plugin_name": info.plugin.plugin_name,
+            "note_port_index": info.plugin.note_port_index,
+            "quarantined_slot": info.quarantined_slot,
+        }),
+    )
+}
+
 fn err(id: &str, error: ProtocolError) -> Value {
     serde_json::to_value(ErrorResponse {
         id: id.to_string(),
@@ -2297,6 +2316,95 @@ mod tests {
                 "ReplacePlugin requires role='instrument'"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn replace_plugin_handler_rejects_bus_for_instrument_role() {
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
+            .expect("stub backend starts");
+        let (tx, _rx) = mpsc::channel(1);
+        let response = handle_command(
+            Command {
+                id: "replace-instrument-bus".into(),
+                method: "ReplacePlugin".into(),
+                params: json!({
+                    "path": "/plugins/new.clap",
+                    "role": "instrument",
+                    "bus": "master"
+                }),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+
+        assert_eq!(response["error"]["code"], "MALFORMED_REQUEST");
+        assert_eq!(
+            response["error"]["message"],
+            "ReplacePlugin bus is invalid for role='instrument'"
+        );
+    }
+
+    #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+    #[tokio::test]
+    async fn replace_plugin_instrument_only_rejects_unsupported_instance_and_state() {
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
+            .expect("stub backend starts");
+        let (tx, _rx) = mpsc::channel(1);
+
+        for (case, extra) in [
+            ("instance", json!({"instance": "plugin:lead"})),
+            ("state", json!({"state_path": "/states/new.state"})),
+        ] {
+            let mut params = json!({
+                "path": "/plugins/new.clap",
+                "role": "instrument"
+            });
+            params
+                .as_object_mut()
+                .expect("params object")
+                .extend(extra.as_object().expect("extra object").clone());
+            let response = handle_command(
+                Command {
+                    id: format!("replace-instrument-only-{case}"),
+                    method: "ReplacePlugin".into(),
+                    params,
+                },
+                &engine,
+                &tx,
+            )
+            .await;
+
+            assert_eq!(response["error"]["code"], "OUTPROC_INSTRUMENT_UNAVAILABLE");
+            assert_eq!(
+                response["error"]["message"],
+                "this daemon build (outproc-instrument only) supports a single instrument \
+                 instance and no state restore; rebuild with --features \
+                 outproc-effect,outproc-instrument for per-sequence instances \
+                 (ReplacePlugin instance/state_path)"
+            );
+        }
+    }
+
+    #[cfg(feature = "outproc-instrument")]
+    #[test]
+    fn replace_plugin_success_response_reports_slot_quarantine() {
+        let response = replaced_plugin_ok(
+            "replace-quarantined",
+            crate::engine_wrap::ReplacedPluginSummary {
+                plugin: crate::engine_wrap::LoadedPluginSummary {
+                    plugin_id: "com.example.new".into(),
+                    plugin_name: Some("New Plugin".into()),
+                    note_port_index: 3,
+                },
+                quarantined_slot: true,
+            },
+        );
+
+        assert_eq!(response["result"]["plugin_id"], "com.example.new");
+        assert_eq!(response["result"]["plugin_name"], "New Plugin");
+        assert_eq!(response["result"]["note_port_index"], 3);
+        assert_eq!(response["result"]["quarantined_slot"], true);
     }
 
     #[tokio::test]

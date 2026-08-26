@@ -115,6 +115,62 @@ bus 名でグラフに焼き込まれ、「名前→slot の間接層」も「�
 LIFO 再利用順と「slots が空なら未割当プールから払い出さない」も同時に固定。
 **ガード削除・LIFO→FIFO の2変異で red を確認済み。**
 
+#### レビュー ラウンド1（Sonnet 4名 + Fable 監査を並行）: Critical 1 + Important 12
+
+**Fable と Sonnet 陣の指摘は1件も重複しなかった**（前者=差分に無いもの、後者=差分に在るものの正しさ）。
+
+| 出所 | 指摘 |
+|---|---|
+| silent-failure-hunter（**Critical**） | `replacements_in_flight` が commit ブロックの `?` 2箇所・teardown 後の `?`・パニックで漏れる。漏れるとその instance は**永久に**「already in progress」を返し、**この分岐にだけログが無く**復旧は daemon 再起動のみ = **気づけない** |
+| code-reviewer | 同 Critical を独立再発見 + `allocate_slot()` 直後の `upgrade()` 失敗で **`spare_index` が漏れる** |
+| **Fable F1（最重要の不在）** | **freed slot が前テナントの痕跡を持ち越す**: `VoiceTable`（reset は respawn 検知のみ・差し替えでは `respawn_count` が増えない）/ `measurement_invalid`（**`store(false)` が crate 内 0 件**）/ `probe_live_count`。**壊れた plugin を差し替えると計測無効フラグが無実の新テナントへ移り daemon 再起動まで消えない** = 差し替えの主用途でちょうど発火 |
+| Fable F2 | `ReplacePlugin` に instrument-only build のパリティガードが無い（`LoadPlugin` にはある・#542 方針） |
+| Fable F3 / comment-analyzer | spec の「commit の直前に保存」が wire 表面で実現不能 / docstring が失敗分岐を過小記述 |
+| pr-test-analyzer | ensure 意味論の4分岐のうち**3つが未テスト**（特に冪等 no-op 分岐は削除しても1件も落ちない） |
+
+#### ポリシー先行で一括適用（指摘単位のローカルパッチは禁止）
+
+> **スロットは資源のバンドルである。** 差し替えは respawn と同型のイベント。(1) 取得と解放は
+> 早期 return とパニックを跨いで対にする（RAII）(2) 前テナントの痕跡が残らない状態でのみ
+> free-list へ返し、戻せないなら隔離する (3) ログにしか出ない失敗はサイレント障害として扱う
+
+- `InstrumentReplacementReservation`（RAII）: in-flight と spare_index を**1つの予約**として表現。
+  `Drop` が `ChildSlot` の4状態を分岐し、`Active`（spawn 済み未 commit）なら teardown まで実行、
+  失敗すれば隔離してログを出す
+- **`tenant_generation` を新設**（Codex の判断で main のブリーフを訂正）。main は
+  「`respawn_count` を進めて既存 resync に乗せよ」と指示したが、**それは R11（teardown が respawn を
+  誘発しない）が固定している診断値そのものを壊す**。別カウンタなら VoiceTable のリセット経路を
+  再利用しつつ診断を汚さない
+- `InstrumentSlotTeardownFailure` enum: 失敗理由を `bool` から構造化
+- ensure 4分岐 / reset 失敗分岐 / bus ガードの配線 のテストを追加
+
+#### 🔴 main の受け入れ検証で flake を1件発見（Codex は 186 passed と報告）
+
+`r7_replacement_supervisor_respawns_the_new_plugin_spec` が**フルスイート6回中1回**失敗。
+失敗時の args は `"--shm\n<path>\n"` だけで**プラグインのパスが書かれる前**の中身だった。
+待機条件が `exists()` なのに fixture が `printf ... > file` で直接書いており、
+**作成直後・書き終える前**を読んでいた。
+
+- **単体では再現しない（0/40）** — フルスイートの並行負荷でのみ窓が開く。
+  単体で測って「直った」と結論していたら誤判定だった
+- 修正: fixture を**原子的な公開**へ（temp へ書いて `mv`）。`exists()` が「書き終わった」を意味するようになる
+- **フルスイート24回で失敗0**
+
+#### main 独自の変異検証（6種）
+
+| 変異 | red になったテスト |
+|---|---|
+| RAII ガードの `Drop` を無効化 | R2 / R5 / R10 + `replacement_reservation_releases_in_flight_on_unwind` |
+| commit の defuse を外す | R1 / R3 / R8 + reset 失敗テスト |
+| `measurement_invalid` のクリアを外す | `tenant_handoff_resets_voice_bookkeeping_and_sticky_health` |
+| `tenant_generation` を進めない | 同上 |
+| RT 側が `tenant_generation` を見ない | 同上 |
+| パリティガードの条件を殺す（**instrument-only build で**） | `replace_plugin_instrument_only_rejects_unsupported_instance_and_state` |
+
+最後の1件は**両 feature で走らせて全件 green になり**、そのガードが instrument-only でしか
+コンパイルされないことに気づいて構成を変えて取り直した。**変異が無効だったことに気づけたのは
+「red にならなかった」を疑ったから。**
+
 #### 検証コマンドの落とし穴
 
 `cargo test -p orbit-audio-daemon` だけでは **33 tests しか走らず R1-R11 は feature gate で1件も実行されない**。

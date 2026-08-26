@@ -199,6 +199,9 @@ pub struct OutProcInstrumentStats {
     pub fresh: AtomicU64,
     pub callback_count: AtomicU64,
     pub respawn_count: AtomicU64,
+    /// Slot tenant handoff generation. Unlike `respawn_count`, this does not report a watchdog
+    /// respawn; it only asks the RT host to discard tenant-local voice bookkeeping.
+    pub tenant_generation: AtomicU64,
     /// 直近 respawn のタイムスタンプ（supervisor 起動からの経過 ns・0 = 未 respawn）。#573 の
     /// fast-fail 検知が直前 spawn の生存時間を測るのに使う。`outproc_effect::OutProcEffectStats`
     /// の同名フィールドと同じ意味論。
@@ -289,6 +292,8 @@ pub struct OutProcInstrumentPostProcessor {
     /// Last supervisor generation observed by the audio thread. This field has exactly one reader
     /// and writer (`process`) and therefore needs no atomic synchronization of its own.
     last_respawn_count: u64,
+    /// Last tenant handoff generation observed by the audio thread; same single-thread ownership.
+    last_tenant_generation: u64,
 }
 
 pub struct SlotSignals {
@@ -322,12 +327,18 @@ impl OutProcInstrumentPostProcessor {
             signals,
             stats,
             last_respawn_count: 0,
+            last_tenant_generation: 0,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn into_event_rx_for_test(self) -> rtrb::Consumer<NeutralEvent> {
         self.event_rx
+    }
+
+    #[cfg(test)]
+    pub(crate) fn probe_live_count_for_test(&self) -> u16 {
+        self.host.live_count(PROBE_KEY)
     }
 }
 
@@ -349,9 +360,13 @@ impl PostProcessor for OutProcInstrumentPostProcessor {
         }
 
         let respawn_count = self.stats.respawn_count.load(Ordering::Relaxed);
-        if respawn_count != self.last_respawn_count {
+        let tenant_generation = self.stats.tenant_generation.load(Ordering::Relaxed);
+        if respawn_count != self.last_respawn_count
+            || tenant_generation != self.last_tenant_generation
+        {
             self.host.on_child_respawned();
             self.last_respawn_count = respawn_count;
+            self.last_tenant_generation = tenant_generation;
         }
 
         self.event_scratch.clear();
