@@ -7920,7 +7920,6 @@ mod outproc_instrument_replace_tests {
         (wrap, old, spare, old_pid)
     }
 
-    #[test]
     /// `free_slot` は同じ index を二重に積まない。積むと1つの slot が2テナントへ
     /// 同時に払い出され、shm を共有した child が2本立つ。抽出前は呼び出し側2箇所に
     /// 手書きされていたガードなので、抽出先で不変条件が生きていることを直接固定する。
