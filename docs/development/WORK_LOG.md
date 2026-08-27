@@ -17,6 +17,54 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.383 spec+design: `ui()` を名前形で残し、設計を確定 (#628) (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #628
+**Status**: **owner 確認 0 件** — 設計完成（1109 行・失敗モード 62 件・決定 20 項目・完了条件 15）
+
+#### `ui()` の決着（SC.10.10.1）
+
+owner 判断: **残す。しかも effect でも使えるようにする**（理由: LLM は Cmd+Click できないので、
+「instrument だけ DSL から開ける」形は LLM から見て実害になる）。
+
+```js
+cb.ui()                       // instrument
+cb.ui("ValhallaRoom")         // 名前が一致する insert すべて
+cb.ui("ValhallaRoom", false)  // 閉じる
+```
+
+🔴 **同名が複数あっても曖昧にならない — 選ばずに全部開くため。** #617 の設計方針
+「複数同時オープンを制限しない」と一致し、**出現順を DSL 表面に出さずに済む**
+（index 形は撤回のまま・Cmd+Click が主経路）。
+
+#### 🔴 決定の含意を Fable が発見（誰も見ていなかった）
+
+「一致するものを全部開く」は、`[A, A]` の同名 2 件で **同一 child 内に 2 枚同時**を意味する。
+ところが現行は **child あたり 1 枚**（`ui_service.rs:91` が `window: Option<Box<dyn WindowHandle>>`・
+main が実コードで確認）。
+
+対処: 多重レジストリ（`HashMap<index, WindowHandle>`）へ改め、(a) 同 index への再 open は
+**冪等 no-op**（`ui()` は楽譜に残り再評価のたびに走るため・PH.2c の「open は冪等」を継承）、
+(b) child→host の close イベントに **index を積む**（event ring の型は変えず既存 arg を使う）。
+失敗モード C15 を追加。
+
+**名前 → path の解決は TS 側**（daemon に名前照合を持ち込まない — LCS を daemon に複製しない
+決定 8 と同じ向き）。0 件一致は宣言中の insert 名を列挙する loud エラー、標準プラグイン名は
+「standard plugins have no UI」。
+
+#### Spike S を §9-1 へ反映
+
+「実測済み・成立・縮退不要」。副次的に **§9-2（mailbox 占有）の確信度が中 → 中〜高**へ上がった
+— ホスト機構のオーバーヘッドは 80µs で無視できる規模なので、占有時間は**実質プラグイン自身の
+初期化時間の総和**と分かったため。重いプラグインで秒単位の可能性は残るので、timeout 確認と
+2 段応答化のフォールバックは残置。
+
+#### 列挙コマンドの誤検出対策
+
+`ui(` の残骸検出を **`grep -rnE "\.ui\(\s*[0-9]"`（数値限定）**へ。名前形 `.ui("…")` と
+無引数 `.ui()` に掛からず、**index 形の残骸だけを 0 件確認できる**。
+
 ### 6.382 spike: 設計の核心の前提を実測で確認（Spike S・#628）(Aug 27, 2026)
 
 **Date**: 2026-08-27

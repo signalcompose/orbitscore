@@ -40,7 +40,7 @@
 | 引数位置の `[...]` | `ExpressionParser` が chord stack として解釈（文字列要素は想定外） | `parse-expression.ts:117, 909-` |
 | respawn 台帳 | `rust-engine-player.ts` の `loadedPlugins`/`pluginActiveByKey`（bus 単位 1 件） | #625 設計書 §3.7（本書では行番号未確認） |
 | カタログ補完 | `PLUGIN_ARG_RE = /\.(effect\|instrument)\(\s*"([^"\n]*)$/` — **単一行・`.effect("` 直後限定**。ラック配列内・複数行では発火しない（SC.10.10 規範 1 の退行点） | `plugin-catalog-completion.ts:39` |
-| UI の DSL 表面 | `seq.ui([index][, open])`（#617・index 0=instrument / 1〜=effect・bus は `ui(1)`）— **SC.10.10 規範 2 が index 表面を撤回** | `INSTRUCTION_ORBITSCORE_DSL.md` PH.2c（L1284-） |
+| UI の DSL 表面 | `seq.ui([index][, open])`（#617・index 0=instrument / 1〜=effect・bus は `ui(1)`）— **SC.10.10 規範 2 が index 形を撤回し、SC.10.10.1 の名前形（`ui("名前")` = 一致全部を開く）が置換** | `INSTRUCTION_ORBITSCORE_DSL.md` PH.2c（L1284-）・spec SC.10.10.1 |
 | メソッド形解決 | `resolveChainDispatch` が未知メソッドをカタログへ照合し `kind:'plugin'` を返す（S2）— **SC.10.9 が撤回** | `signal-chain/dispatch.ts:62-112` |
 
 ### 0.3 「1 child = 両フォーマット」の前例（不在証明ではなく実在証明）
@@ -107,10 +107,12 @@
 14. **補完のラック対応（SC.10.10 規範 1）**: ラック配列内・複数行・`layer` 入れ子・
     `plugin("` の各文脈で文字列カタログ補完が出る（U1-U3）+ 実機エディタで手動確認を
     PR 本文に記録。既存の `.effect("` 直後の補完は退行しない。
-15. **Cmd+Click で UI（SC.10.10 規範 2）**: カタログ要素の文字列を Cmd+Click すると当該
-    インスタンスの UI が開く（位置→path 解決は T26・実機手動確認を PR 本文に記録）。
-    MCP `open_plugin_ui` は `chain_path` 指定で動く（R28-E10）。`ui(index)` 形は DSL から
-    消えている（§10-1 の確認結果に従う）。
+15. **UI の 3 経路（SC.10.10 / SC.10.10.1）**: (a) カタログ要素の文字列を Cmd+Click すると
+    当該インスタンスの UI が開く（位置→path 解決は T26・実機手動確認を PR 本文に記録）。
+    (b) MCP `open_plugin_ui` は `chain_path` 指定で動く（R28-E10）。(c) DSL `ui("名前")` が
+    一致する insert **すべて**を開き（同名 2 件 → 2 枚同時 = 多重ウィンドウの実機確認）、
+    `ui("名前", false)` で閉じ、0 件・標準名は loud に失敗する（T27/T28・C15）。
+    数値 index 形は DSL から消えている（列挙コマンドで 0 件）。
 
 `layer`（並列）は**記法・AST・wire スキーマの予約のみ**が本スコープ（適用は stage 表記つき
 明示エラー）。並列の完了条件は §7 末尾に別掲。
@@ -350,12 +352,21 @@ plan manifest は (2) の stages に **op を注釈した形**:
 `prev_index` は**適用前チェーンの index**なのでシフトの曖昧さが無い。keep の `params` は
 standard 要素のパラメータ更新（catalog 要素の params は #522 スコープのまま）。
 
-**(6) UI**: `UiService` を「index → main-thread handle」のレジストリに一般化する。
-**同時に開ける UI は child あたり 1 枚**（現行の `window: Option<…>` 前提を維持）。
-別 index の open 要求は「close してから」の明示エラー。APPLY で drop される stage の UI が
-開いていた場合、TS が事前に close する（§3.4-(5)）ため child 側では防御的に close するだけ。
-**standard stage への open は `CMD_RESULT_BAD_ARG`**（SC.10.8 規範 5: UI を持たない —
-文言は「parameters live in the DSL」を含める）。
+**(6) UI**: `UiService` を「index → window」の**多重レジストリ**に一般化する
+（`window: Option<Box<dyn WindowHandle>>` → `HashMap<index, WindowHandle>`）。
+🔴 **child あたり 1 枚では足りない** — SC.10.10.1 規範 2-3 は「一致する insert すべての UI を
+開く」であり、`[A, A]` の同名 2 件は**同一 child 内で 2 枚同時**を要求する（#617 の
+「複数同時オープンを制限しない」のラック内版）。伴う変更:
+
+- `CMD_OPEN_UI_AT` は**同 index への再 open を冪等 no-op** にする（PH.2c の「open は冪等」を
+  継承 — `ui()` は楽譜に残り再評価のたびに走るため必須）。close は冪等化しない（同 PH.2c）。
+- child→host の `EVT_UI_CLOSED` / `EVT_UI_CLOSED_DONE` は **arg に index を積む**
+  （`EVT_ARG_BYTES` の既存 arg 文字列を使う — event ring の型は変えない）。daemon の
+  UI pump / TS の session 簿記は instanceId キー（§3.4-(5)）なので多重に自然対応する。
+- APPLY で drop される stage の UI が開いていた場合、TS が事前に close する（§3.4-(5)）ため
+  child 側では防御的に close するだけ。
+- **standard stage への open は `CMD_RESULT_BAD_ARG`**（SC.10.8 規範 5: UI を持たない —
+  文言は「parameters live in the DSL」を含める）。
 
 **(7) SharedRegion 追加 field**: `active_stage_index: AtomicU32` を**構造体末尾**に追加
 （既存 field のオフセット不変）。magic/version が無いため（§0.1）、新旧 binary 混在時の
@@ -404,9 +415,10 @@ daemon-client 1 箇所に集約する。
 **(4) UI 起動経路（SC.10.10）**: DSL の `ui(index)` 表面が撤回されたため、UI open の
 発火元は (a) **エディタの Cmd+Click**（§3.7c — 拡張が構文木位置から
 `(receiver, chain_path)` を解決し、既存の拡張→engine 経路で open を発行）と
-(b) **MCP `open_plugin_ui`**（引数を index から `chain_path` へ改める・LLM 用）の 2 つに
-なる（§10-1 の結論次第で、無引数 `seq.ui()` = instrument UI が第 3 の発火元として残る）。
-daemon 側の open/close/safepoint 機構は (3) の `chain_path` 化以外は無変更。
+(b) **MCP `open_plugin_ui`**（引数を index から `chain_path` へ改める・LLM 用）、
+(c) **DSL の `ui()` 名前形**（SC.10.10.1・owner 確定 — 解決は TS が名前 → path 群で行う =
+§3.4-(8)）の 3 つになる。daemon 側の open/close/safepoint 機構は (3) の `chain_path` 化と
+多重ウィンドウ（§3.1-(6)）以外は無変更。
 
 ### 3.3 daemon: engine_wrap.rs
 
@@ -547,6 +559,23 @@ standard の params。
 「bus → 単一 plugin」から「receiver → RackSpec」へ一般化し、fresh daemon への replay は
 `ApplyEffectChain(mode='rebuild')` を receiver ごとに 1 発。#625 申し送り 4「宣言済み bus へ
 LoadPlugin を再送しない」は「fresh daemon にのみ rebuild」の形で維持する。
+
+**(8) DSL `ui()` の名前形（SC.10.10.1・#617 表面の改修）**: `ui` は SEQUENCE / BUS の
+語彙に存置し、引数を index から**カタログ名の文字列**へ変える（index 形 = 数値引数は
+撤回済みなので受理しない）。**名前 → path 群の解決は TS**が行い、wire は従来どおり
+`chain_path` 単位で発行する（daemon / child に名前照合を持ち込まない — LCS を daemon に
+複製しない決定 8 と同じ向き）:
+
+1. `ui("名前")` → `normalizePluginInstanceName` で正規化し、登記チェーンの **catalog 要素**
+   から一致する index を**全列挙** → 各 path へ open を発行（複数一致 = 全部開く・
+   SC.10.10.1 規範 2-3。child 側の per-index 冪等 open — §3.1-(6) — により楽譜再評価で
+   エラーにならない）。
+2. 一致 0 件: 名前が標準プラグイン（レジストリ or チェーン内 standard 要素）に一致するなら
+   §3.7-7 の「standard plugins have no UI」エラー。それ以外は宣言中の insert 名を列挙した
+   loud エラー（#617 の「有効 index を列挙」の名前版・SC.10.10.1 規範 5-6）。
+3. `ui("名前", false)` は同じ解決で close（close は冪等化しない — PH.2c 継承）。
+4. 無引数 `ui()` = instrument（従来どおり）。bus の無引数は「bus has no instrument」で
+   拒否（現行挙動維持）。master は DSL 面を持たない（現状維持・MCP のみ）。
 
 ### 3.5 パーサ / interpreter: ラック値と値の位置の解決
 
@@ -691,7 +720,8 @@ UI 起動の主経路になる:
    帳簿だけ。daemon は 1 bus 1 child — ブリーフで実測済み）。effect 節へ SC.10 の要約
    （ラック形・削除は配列から・enabled・LCS・標準プラグイン）を反映する。
 2. `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` **PH.2c**: `ui([index][, open])` の index 表面
-   撤回（SC.10.10 規範 2）を反映する。残す形は §10-1（新規 owner 確認）の結論に従う。
+   撤回（SC.10.10 規範 2）と **SC.10.10.1 の名前形**（`ui("名前")` = 一致全部を開く）を
+   正として書き換える。
    **PC.3（カタログ補完）**へ「ラック配列内・入れ子でも発火」（SC.10.10 規範 1）を反映。
    メソッド形（正規化名呼び出し）に触れる記述があれば SC.10.9 の撤回を反映する
    （`grep -n "メソッド形\|正規化名" docs/core/INSTRUCTION_ORBITSCORE_DSL.md` で列挙）。
@@ -728,7 +758,7 @@ UI 起動の主経路になる:
 | 9 | LCS は TS 側のみ・トークンはカテゴリ付き。catalog の同名スペック差は同位置 replace（identity 引き継ぎ）・standard は常に keep（params 更新） | §3.4-(2)。SC.10.5 の規範を単一実装に閉じ、SC.10.1 規範 3 の名前空間分離を登記層でも保つ | 高 |
 | 10 | occurrence はロード時割り当てで不変。新規は「生存中でない最小値」を再利用（standard は identity のみ・state に使わない） | §3.4-(3)。再追加 = 保存 state の復元（SC.10.3）と両立。ファイル名形式不変 | 高 |
 | 11 | 確定拒否は登記温存（retain-on-reject）へ転回。transport 断のみ forget+uncertain | §3.4-(4)。prepare-commit が旧残存を保証するため #625 の「常に忘れる」根拠が消えた | 高 |
-| 12 | UI セッションは instanceId キー・同時 1 枚。起動は Cmd+Click（拡張）と MCP の 2 経路・宛先は `chain_path`（v1 長さ ≤1 の配列） | §3.1-(6)/§3.2-(4)/§3.7c。index シフトから保存 identity を守り、入れ子でも wire を再設計しない | 高 |
+| 12 | UI セッションは instanceId キー・child 内**多重ウィンドウ**（per-index 冪等 open・closed event は index 付き）。起動は Cmd+Click / MCP / DSL `ui()` 名前形の 3 経路・宛先は `chain_path`（v1 長さ ≤1 の配列） | §3.1-(6)/§3.2-(4)/§3.7c。SC.10.10.1 規範 2-3（同名複数 = 全部開く）が同一 child 内の複数枚を要求する | 高 |
 | 13 | 配列 AST は汎用化し chord/rack 分類は interpreter（識別子のみ配列は束縛種で決定） | §3.5-(1)。`[m7]`/`[glue]` は構文で区別不能 — 実在の文法制約 | 高 |
 | 14 | layer / 入れ子は記法・型・wire 予約まで。適用は stage エラー。入れ子直列は平坦化 | §3.5-(3)。SC.10.11 の段階そのまま | 高 |
 | 15 | 値位置の 3 カテゴリは構文で先に分類し、名前照合はカテゴリ内に閉じる。フォールバック（標準→カタログ等）は作らない | §3.5-(3)(3b)。SC.10.1 規範 3。優先チェーン（#583 型の穴の発生源）を構造的に排除 | 高 |
@@ -736,12 +766,13 @@ UI 起動の主経路になる:
 | 17 | メソッド形カタログ解決（S2 の `kind:'plugin'`）は撤去。未知メソッド診断にのみカタログ照合を残す（文字列形への誘導） | §3.5-(5)。SC.10.9。解決に使わず診断に使うのは #583 の loud 原則 | 高 |
 | 18 | Cmd+Click の位置→path 解決はエンジンパーサの AST range で行い、登記と照合してから発行する | §3.7c-(2)。#610 の同一コードパス方針・#583 の「黙って別対象を開かない」 | 高 |
 | 19 | カタログ補完は後方有界スキャナへ置換（regex の動詞直後限定を廃し、ラック配列・入れ子・`plugin("` で発火） | §3.7c-(1)。SC.10.10 規範 1 の退行防止 | 高 |
+| 20 | `ui()` 名前形の解決は TS（名前 → 一致 path **全列挙**）。wire は path のまま・daemon/child に名前照合を持ち込まない | §3.4-(8)。SC.10.10.1。決定 8（照合ロジックを複製しない）と同じ向き | 高 |
 
 ---
 
 ## 5. 失敗モード一覧 ↔ 受け入れ基準テスト（1:1 対応表）
 
-新規 **59 件**（child C1-C14 / daemon D1-D15 / TS T1-T26 / 拡張 U1-U3 / E2E 1 行 = §6 の
+新規 **62 件**（child C1-C15 / daemon D1-D15 / TS T1-T28 / 拡張 U1-U3 / E2E 1 行 = §6 の
 10 シナリオ）。TS unit の置き場は `tests/core/effect-rack.spec.ts`（新設・T\*）、rust unit は
 rack child crate 内 `mod tests`（C\*）と `engine_wrap.rs` `effect_rack_tests` mod（D\*）、
 拡張 unit は `tests/vscode-extension/`（U\*・補完スキャナと link 解決は vscode-free 純関数）。**テストの無い失敗モード、対応する失敗モードの無いテストは
@@ -758,6 +789,7 @@ rack child crate 内 `mod tests`（C\*）と `engine_wrap.rs` `effect_rack_tests
 | C5 | standard の param 更新（keep+params）が再ロードになる / 適用されない | 実 `Gain.clap` で keep+db 変更の APPLY 後、stage の構築世代カウンタ不変 + 出力ゲイン変化 | keep を drop+load に変える → red / param 適用削除 → red |
 | C13 | standard 解決の断線（`std-plugins/` 不在・`ORBIT_STD_PLUGIN_DIR` 無視・param 名→id の写像誤り） | 解決純関数の unit（既定 = 自 exe 隣・env 上書き）+ 実 Gain で db param が名前契約で引ける | env 分岐削除 → red / 写像を先頭 param 固定へ → red |
 | C14 | Gain の DSP が dB 契約から外れる | `Gain(db:-20)` で出力 = 入力 × 0.1（±誤差）・`db:0` で恒等 | 係数を線形値扱いへ → red |
+| C15 | 多重ウィンドウの退行（2 枚目 open が 1 枚目を潰す / 同 index 再 open がエラー / closed event に index が無い） | index 0 と 2 を open → 両 window 生存・index 0 再 open → 冪等 Ok・close event の arg に index | レジストリを Option 1 枚へ戻す → red / 冪等分岐削除 → red / arg の index 落とし → red |
 | C6 | drop の state capture が swap の後（実行状態を失った後）に走る / 保存失敗でも続行 | 保存パス書き込み < swap の順序を計装 assert・保存失敗注入で abort + 旧無傷 | 順序入替 → red / エラー握りつぶし → red |
 | C7 | 旧 stage list を audio スレッドで drop（プラグイン破棄が audio 側で走る） | retire 経由の破棄スレッド id を assert | audio 側 drop に変える → red |
 | C8 | READY が全 stage ロード前に出る | 2 要素中 2 個目を失敗させ、`child_status` が READY にならず LOAD_FAILED | READY を先に publish → red |
@@ -816,6 +848,8 @@ rack child crate 内 `mod tests`（C\*）と `engine_wrap.rs` `effect_rack_tests
 | T24 | メソッド形カタログ解決の残存（SC.10.9 撤回漏れ） | `kick.FabFilterProQ3()` → `effect("FabFilter Pro-Q 3")` への誘導文言エラー・宣言 0 回。ミキサー名メソッド・DSL メソッドは従来どおり | `kind:'plugin'` 分岐復活 → red |
 | T25 | `remove` の語彙残存（SC.10.3c 撤去漏れ） | 3 語彙セットに `remove` 不在 + `global.remove("X")` が `Unknown chain method` | 語彙へ再追加 → red |
 | T26 | Cmd+Click の位置→path 解決誤り（別要素の UI が開く #583 型） | link 解決 unit: 2 番目要素の文字列範囲 → `chain_path:[1]`・登記と名前不一致なら「re-evaluate first」で発行 0 回 | off-by-one → red / 照合削除 → red |
+| T27 | `ui("名前")` が一致の一部しか開かない / index 形が残存 | `[A, B, A]` で `ui(A実名)` → open が **path [0] と [2] の 2 回**（`toHaveBeenCalledTimes(2)` + 引数）・`ui(1)`（数値）は受理されない | 最初の一致で break → red / 数値受理 → red |
+| T28 | `ui()` 名前形の失敗が黙る（SC.10.10.1 規範 5-6） | 一致 0 件 → 宣言中 insert 名を列挙した loud エラー・標準名（`Gain`）→ 「standard plugins have no UI」・どちらも open 発行 0 回 | 0 件で no-op → red / 標準名をカタログ照合へ → red |
 | U1 | 補完がラック内で発火しない（SC.10.10 規範 1 の退行） | 文脈スキャナ unit: 配列内・複数行・`layer` 入れ子・`plugin("` の 4 文脈で候補が出る + 現行の `.effect("` 直後も従来どおり | スキャナを旧 regex に戻す → red |
 | U2 | 補完 role の取り違え | `instrument(["…` 文脈で instrument role のみ・`effect([` 文脈で effect role のみ（既存 `filterCatalogEntries` の引数検証） | verb 判定を固定値へ → red |
 | U3 | 後方走査の非有界化（巨大ファイルで補完が刺さる） | 上限行数（50）より遠い `effect(` は文脈と見なさない | 上限撤廃で 51 行前を拾う → red |
@@ -886,16 +920,13 @@ unit）が担い、E2E は段数・要素単位の増減・PID 不変を担う**
 > issue）。安全は PR の小ささではなく**完了条件（§1）・実機 E2E（§6）・変異検証（§5）・
 > 列挙完全性（下記）**で担保する。
 
-**Stage 0 — spec 更新 + owner 確認（docs のみ）**
-§3.8 の 5 点。旧 owner 確認 3 件は **SC.10.3b / 3c / 8 で解決済み**（2026-08-27）。
-残る確認は §10-1（`seq.ui()` 無引数形の存廃）のみ — **PH.2c の spec 反映（§3.8-2）が
-これに依存する**ので、この Stage で確認を取る。検証: レビューのみ。
+**Stage 0 — spec 更新（docs のみ）**
+§3.8 の 5 点。owner 確認は**全件決着済み**（SC.10.3b / 3c / 8 / 10.1 = 2026-08-27）。
+PH.2c の書き換えは SC.10.10.1（名前形）を正として反映する。検証: レビューのみ。
 
-**Spike S — §9-1 の実測（PR にしない・数時間で捨てる前提）**
-rack child の骨格だけ書き、実プラグイン 2 つで「片方 processing 中にもう片方を
-load/activate」が安定するか実測する。不安定なら §9-1 のフォールバック（APPLY 中のみ
-bypass）を Stage 1 の設計に反映して進む — **wire/TS 層はどちらでも変わらない**ので
-Stage 1 の他作業をブロックしない。
+**Spike S — §9-1 の実測** ✅ **完了（main 実測 2026-08-27・成立）**:
+audio 処理中の 2 つ目の load = 80µs・処理継続・faulted=false（詳細と限界は §9-1）。
+縮退案は不要。spike は `spike_s_concurrent_load.rs`（`#[ignore]`）として残置済み。
 
 **Stage 1 — 直列ラック capability 一式（1 PR）**
 
@@ -912,7 +943,8 @@ Stage 1 の他作業をブロックしない。
 5. TS: 配列 AST 汎用化と分類・3 カテゴリ解決・メソッド形撤去（§3.5）・`applyRack` + LCS +
    occurrence 固定 + `registerSavedState` + 標準レジストリ（§3.4）・daemon-client /
    protocol-types / rust-engine-player（rebuild replay）・UI セッション instanceId 化・
-   `remove()` 即時撤去・diagnostics 同期（§3.7b）+ unit T1〜T26 + 既存 suite 全 green
+   `remove()` 即時撤去・`ui()` 名前形（§3.4-(8)）・diagnostics 同期（§3.7b）+
+   unit T1〜T28 + 既存 suite 全 green
 6. 拡張: 補完スキャナ（§3.7c-(1)）・Cmd+Click link provider（§3.7c-(2)）・MCP
    `open_plugin_ui` の path 化 + unit U1〜U3 / T26
 7. gated E2E（§6）・旧 effect child 2 crate の退役
@@ -941,7 +973,7 @@ Stage 1 の他作業をブロックしない。
 | state manifest の直接読み書き | `grep -rn "manifest.states" packages/engine/src` | `project-state-store.ts` 以外に 0 件（#568 両立の前提） |
 | `EffectSlotLimitError` の消費 | `grep -rn "EffectSlotLimitError" packages/ tests/` | maxLength 撤廃後の残置/削除の判断が明示されている |
 | メソッド形解決の残骸 | `grep -rn "resolveCatalogMethodCandidates\|catalogEntriesForMethod\|kind: 'plugin'" packages/engine/src packages/vscode-extension/src` | SC.10.9 撤回後、診断用の照合（§3.5-(5)）以外に 0 件 |
-| `ui(` の DSL 表面 | `grep -rn "'ui'\|\.ui(" packages/engine/src tests/ docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | §10-1 の確認結果どおり（index 形は全廃） |
+| `ui(` の index 形の残骸 | `grep -rnE "\.ui\(\s*[0-9]" packages/engine/src tests/ docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | **0 件**（数値 index 形は全廃・SC.10.10.1）。名前形 `.ui("…")` / 無引数 `.ui()` はこの grep に掛からない（誤検出しない形に数値限定してある） |
 | 標準プラグインの参照 | `grep -rn "std-plugins\|orbit-std-gain\|ORBIT_STD_PLUGIN_DIR" rust/ packages/ tests/` | 解決規約（child 隣接 + env 上書き）が 1 実装に閉じている |
 | 旧補完 regex | `grep -n "PLUGIN_ARG_RE" packages/vscode-extension/src` | 文脈スキャナへ置換済み（旧 regex の残骸 0 件） |
 
@@ -972,13 +1004,17 @@ E2E で実証。
 
 ## 9. 確信度が低い決定と反証方法
 
-1. **同一 child 内で「audio 処理中に main スレッドで別インスタンスを load/activate」が
-   安定するか** — 確信度: 中。DAW の常套（in-process ホスティングは皆これをやる）だが、
-   本 codebase では child = 1 インスタンスが常だったため実績が無い。反証方法: Spike S
-   （§7）で実測する（rack child に実プラグイン 2 つ・片方 processing 中にもう片方を load）。不安定なら「APPLY の load 中だけ audio ループを bypass に落とす」フォールバック
-   （旧チェーンは止まるが dry にはならず、#625 の窓と同等）へ縮退できる — wire・TS 層は
-   影響を受けない。
-2. **APPLY 中の mailbox 占有**（load N 発で `CMD_*` が長時間 busy）— 確信度: 中。同一 slot の
+1. **同一 child 内で「audio 処理中に main スレッドで別インスタンスを load/activate」** —
+   ✅ **実測済み・成立（Spike S・main 実測 2026-08-27）**: audio 処理中の 2 つ目の load が
+   ok=true・**80µs**（1 block ≒ 10.7ms より 2 桁短い）・1 つ目は処理継続
+   （blocks delta=626）・faulted=false。**縮退案（APPLY 中のみ bypass）は不要**。spike は
+   `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs` に `#[ignore]` 付きで残置。
+   **限界**: GainOracle（最小プラグイン）・VST3 のみ・1 回の実測 — 「load が処理を
+   壊さないか」の検証であって「load が速いか」ではない。重いプラグインの load は秒単位
+   あり得る（それでも旧チェーンの処理が止まらないこと、が本測定の主張）。
+2. **APPLY 中の mailbox 占有**（load N 発で `CMD_*` が長時間 busy）— 確信度: 中〜高へ更新
+   （Spike S の 80µs により、ホスト側機構のオーバーヘッドは無視できる規模と判明。占有時間は
+   実質「プラグイン自身の初期化時間の総和」で、重いプラグインでは秒単位のまま）。同一 slot の
    操作は TS per-key キューと daemon in-flight で直列化済みなので競合は「同 receiver への
    save/UI」だけ。反証方法: D6 の timeout 注入 + E2E の編集中 UI open。問題が出たら
    APPLY 応答を「受理 ack + 完了 event」の 2 段へ分ける（event ring は既存部材）。
@@ -1016,36 +1052,22 @@ E2E で実証。
 - ~~gain のみのラックの v1 エラー~~ → **SC.10.8**: `gain` は言語の要素ではなく標準プラグイン
   `Gain` になった。特例そのものが消滅（`[Gain(db:-6)]` は普通の 1 プラグインラック）。
 
-**新規に確認が要る点**:
+- ~~`seq.ui()` の存廃~~ → **SC.10.10.1（owner 確定 2026-08-27・LLM 経路の観点が決め手）**:
+  残す。しかも **effect も名前形で開けるようにする** — `cb.ui()` = instrument /
+  `cb.ui("ValhallaRoom")` = **名前が一致する insert すべて**を開く（`layer` 入れ子含む・
+  複数一致は選ばず全部 = 曖昧さなし・出現順を表面に出さない）/ 第 2 引数 `false` = 同じ
+  規則で閉じる / 標準プラグイン名 = 明示エラー / 一致 0 件 = loud。index 形は撤回のまま・
+  Cmd+Click が主経路である点も不変。設計反映は §3.4-(8)・多重ウィンドウの含意は §3.1-(6)。
 
-1. 🔴 **`seq.ui()` 無引数形の存廃**（DSL 表面・PH.2c）: SC.10.10 規範 2 は「`ui([index])` の
-   **index 表面**は撤回」と定めたが、**無引数 `cb.ui()`（instrument の UI・#617）を残すか**は
-   文面から一意に読めない。bus の `ui(1)` は index 形なので確定で撤去。判断材料:
+**新規に確認が要る点**: なし（owner 確認は全件決着・2026-08-27）。
 
-   - **#617 に明記された設計理由は 2 点**（レシーバに直接生やす / 複数同時オープンを制限
-     しない）で、**どちらも Cmd+Click で満たせる**（「書きながら開く」はむしろ、行を書いて
-     評価する手順が要らない分 Cmd+Click の方が直接的）。この観点だけなら撤去して一本化が
-     素直。
-   - ただし **issue には書かれていない副次的性質**が表面から導かれる: `cb.ui()` は
-     **テキストに残る**ので、ブロックを再評価すると開き直る — 「このセッションではこの
-     パートの UI を常に開いておく」を**楽譜に書いておける**。これは Cmd+Click（一回性の
-     ジェスチャ）では代替できない。この性質に価値を認めるかは owner にしか決められない。
-   - **LLM 経路**: Cmd+Click は人間専用なので、`ui()` を撤去すると **LLM が UI を開く
-     手段は MCP `open_plugin_ui` のみ**になる。機能上は困らない（MCP は維持 — SC.10.10
-     規範 3）が、「**LLM も人間と同じ DSL 経路で駆動する**」という記録済み方針
-     （memory: llm-drives-orbitstudio-through-dsl — API 直呼びは計測系の例外）とはズレる。
-     UI open を「計測系と同種の例外」と整理するか、DSL 表面を残すかの判断材料になる。
-
-   **推奨: 無引数 `cb.ui()` のみ存置（instrument 専用・引数は全廃）**。撤去一本化と迷うが、
-   上記 2 点（テキスト常駐の副次的性質・LLM の DSL 経路）は残す側にだけ利があり、残す
-   コストは「引数なし 1 形の維持」で小さい。
-2. **auto-quarantine の follow-up 起票**（§2.3）: 「crash 帰責 index を使い、fast-fail
+1. **auto-quarantine の follow-up 起票**（§2.3）: 「crash 帰責 index を使い、fast-fail
    停止時に犯人だけ enabled:false で respawn する」を別 issue に切る（実害 1 文:
    常習クラッシュプラグインが 1 つあると、そのバスのチェーン全体が恒久 dry になる）。
-3. **未解決（実装中に確定・owner 確認不要）**: DaemonClient の request timeout が APPLY の
+2. **未解決（実装中に確定・owner 確認不要）**: DaemonClient の request timeout が APPLY の
    最悪時間（load N 発）を覆うか（§0.4-2）。覆わない場合は per-request timeout の引き上げか
    §9-2 の 2 段応答化。
-4. **別 issue（owner 確定済み・本設計のスコープ外）**: プラグイン一覧の Quick Pick /
+3. **別 issue（owner 確定済み・本設計のスコープ外）**: プラグイン一覧の Quick Pick /
    カタログに無い名前の診断（SC.10.10 引用注・§3.7c 末尾）。
 
 ---
@@ -1060,7 +1082,7 @@ E2E で実証。
 | #583 | 文の対象が同名シーケンスへ黙って解決しバスが隠れる | **同じクラスの穴を新設しない（本体は触らない）** | 値の位置の解決は「曖昧 = loud・語彙 3 種に固定・沈黙の優先チェーンを作らない」（§3.5-(3b)）。レシーバ解決（#583 本体）は不変 — 悪化させず、#583 の修正が入れば rack 経路も同じ入口で恩恵を受ける |
 | #606 | RUN 終端で note-off が届かない | **同じ条文に載せる（spec のみ・実装は Stage 2）** | SC.10.6 の「instrument ブランチ無効化 = 強制 note-off」を core spec の note-off 規定（#606 が実装追跡）へ発火ケースとして追記（§3.8-5）。flush 機構は #606 のものを layer 実装時に呼ぶ — 二重に作らない |
 | #590 | child spawn ごとに AppKit init ~34ms | **改善される（副産物）** | 機構 B で spawn は 1 レシーバ 1 回・チェーン編集は spawn ゼロ（§2.1）。#590 本体（XPC 失敗）は独立のまま |
-| #522 | SC.5 のライブ意味論（ブロック再評価・パラメータ更新） | **境界を明確化（本設計は実装しない）** | 単発形の意味論（§10-1）・プラグイン実パラメータ（§3.4-(6)）は #522 に委ねる。本設計の後は「1 レシーバ内のチェーン」は SC.10 で完結し、#522 に残るのは評価単位（ブロック）とパラメータ更新 |
+| #522 | SC.5 のライブ意味論（ブロック再評価・パラメータ更新） | **境界を明確化（本設計は実装しない）** | 単発形の意味論は SC.10.3b で確定・プラグイン実パラメータ（§3.4-(6)）は #522 に委ねる。本設計の後は「1 レシーバ内のチェーン」は SC.10 で完結し、#522 に残るのは評価単位（ブロック）とパラメータ更新 |
 | #623 | 重複プラグインの先勝ち/後勝ち不一致 | **触らない（#625 と同じ防御を維持）** | E2E setup のカタログ一意 guard を再利用（§6）。解決は #623 の owner 判断待ち。なお標準プラグインはカタログを引かないため、この不一致の影響を**構造的に受けない**（SC.10.8 規範 4） |
 | （新規起票） | プラグイン一覧の Quick Pick / カタログに無い名前の診断 | **本設計から切り出す（owner 確定）** | SC.10.10 引用注。後者は #610 と同じ場所（診断のエンジンパーサ一本化）に乗るのが自然 — 起票時に #610 へリンクする |
 | （新規起票） | auto-quarantine（crash 常習 stage の隔離） | **本設計から切り出す（§2.3-5）** | 前提部品（crash 帰責 index）は本設計が実装済みにする |
