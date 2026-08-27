@@ -84,8 +84,22 @@ pub struct ApplyPlan {
     pub save_dropped: Vec<SaveDropped>,
 }
 
+/// APPLY plan の 1 要素。
+///
+/// 🔴 **`deny_unknown_fields` を付けてはいけない。** `Load` は `#[serde(flatten)]` で
+/// `StageSpec` を展開するが、**serde は flatten と `deny_unknown_fields` の併用を支持しない**
+/// — 外側の deserializer は内側のフィールド名を知らないため `kind` / `path` / `enabled` が
+/// 軒並み「unknown field」になる。daemon 側の `EffectChainPlanStage` と同じ形で、
+/// **#628 の実機ゲートで 2 段階に分かれて発覚した**:
+///
+/// ```text
+/// parse …/apply.json: unknown field `kind` at line 1 column 302; the previous chain is kept
+/// ```
+///
+/// 厳密さは失っていない: `Keep` は自分のフィールドを列挙しており、`Load` の中身は
+/// `StageSpec` 自身の `deny_unknown_fields` が検査する。
 #[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
+#[serde(tag = "op", rename_all = "lowercase")]
 pub enum PlanStage {
     Keep {
         prev_index: usize,

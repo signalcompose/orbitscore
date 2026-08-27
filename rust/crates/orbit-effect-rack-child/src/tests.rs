@@ -683,3 +683,56 @@ fn c14_real_gain_obeys_the_decibel_contract() {
     audio.process_block(&mut unity, unsafe { &(*fixture.region).active_stage_index });
     assert_eq!(unity, [0.25, -0.5]);
 }
+
+/// 🔴 daemon が実際に書き出す APPLY plan の JSON をそのまま受理できること。
+///
+/// **#628 の実機ゲートで、daemon 側を直した直後に child 側で同じ欠陥が出た。**
+/// `PlanStage` に `deny_unknown_fields` が付いており、serde は `flatten` との併用を
+/// 支持しないため `Load` の中身が unknown field になっていた:
+///
+/// ```text
+/// parse …/apply.json: unknown field `kind` at line 1 column 302
+/// ```
+///
+/// **この文字列は daemon 側 `EffectChainPlan` の serde 出力形をそのまま写したもの**で、
+/// 手で整えないこと — wire の実物と乖離した瞬間にこのテストは無意味になる。
+#[test]
+fn apply_plan_accepts_the_manifest_the_daemon_actually_writes() {
+    let json = r#"{
+        "version": 1,
+        "stages": [
+            {"op":"load","kind":"catalog","path":"/x/CLAPTestEffect.clap","enabled":true},
+            {"op":"load","kind":"standard","name":"Gain","params":{"db":-20.0},"enabled":false},
+            {"op":"keep","prev_index":0,"enabled":true,"params":{"db":-6.0}}
+        ],
+        "save_dropped": []
+    }"#;
+    let plan: super::ApplyPlan =
+        serde_json::from_str(json).expect("daemon が書く plan は受理されなければならない");
+    assert_eq!(plan.stages.len(), 3);
+
+    // enabled が既定値へ落ちず、送られた値のまま届くこと（落ちると
+    // 「バイパスしたのに音が鳴る」という無言の故障になる）。
+    match &plan.stages[1] {
+        super::PlanStage::Load {
+            stage: super::StageSpec::Standard { name, params, enabled },
+        } => {
+            assert_eq!(name, "Gain");
+            assert_eq!(params.get("db"), Some(&-20.0));
+            assert!(!enabled, "enabled:false が既定 true に落ちてはいけない");
+        }
+        other => panic!("index 1 は standard load のはず: {other:?}"),
+    }
+}
+
+/// 内側（`StageSpec`）の `deny_unknown_fields` は生きていること。
+/// 外側から外したのは flatten の制約が理由であって、**検査を緩めたのではない**。
+#[test]
+fn unknown_fields_inside_a_stage_are_still_rejected() {
+    let json = r#"{"version":1,"stages":[{"op":"load","kind":"catalog","path":"/x/y.clap",
+                  "enabled":true,"bogus":1}],"save_dropped":[]}"#;
+    assert!(
+        serde_json::from_str::<super::ApplyPlan>(json).is_err(),
+        "stage の中の未知フィールドは従来どおり拒否されなければならない"
+    );
+}

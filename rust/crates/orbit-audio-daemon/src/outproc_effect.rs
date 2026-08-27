@@ -99,8 +99,24 @@ pub enum EffectChainStageSpec {
     },
 }
 
+/// APPLY plan の 1 要素。
+///
+/// 🔴 **`deny_unknown_fields` を付けてはいけない。** `Load` は `#[serde(flatten)]` で
+/// `EffectChainStageSpec` を展開するが、**serde は flatten と `deny_unknown_fields` の併用を
+/// 支持しない** — 外側の deserializer は内側のフィールド名を知らないため、`kind` / `path` /
+/// `enabled` などが軒並み「unknown field」になる。
+///
+/// 実機で踏んだ形（#628 gated E2E）:
+/// ```text
+/// [MALFORMED_REQUEST] effect chain apply failed at index 0 (CLAP Test Effect):
+/// invalid ApplyEffectChain chain: unknown field `enabled`; the previous chain is kept
+/// ```
+/// TS 側の unit も daemon 側の unit も緑のまま、**wire を跨いだ実物だけが落ちていた**。
+///
+/// 厳密さは失っていない: `Keep` は自分のフィールドを列挙しており、`Load` の中身は
+/// `EffectChainStageSpec` 自身の `deny_unknown_fields` が検査する。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(tag = "op", rename_all = "lowercase", deny_unknown_fields)]
+#[serde(tag = "op", rename_all = "lowercase")]
 pub enum EffectChainPlanStage {
     Keep {
         prev_index: usize,
@@ -1170,6 +1186,66 @@ impl Drop for OutProcTeardownGuard {
 
 #[cfg(test)]
 mod tests {
+    /// 🔴 TS が実際に wire へ載せる JSON をそのまま受理できること（#628 実機 E2E で発覚）。
+    ///
+    /// 両側の unit は緑だったのに実機だけが落ちた: `EffectChainPlanStage` に
+    /// `deny_unknown_fields` が付いており、**serde は `flatten` との併用を支持しない**ため
+    /// `Load` の中身（`kind` / `path` / `enabled`）が軒並み unknown field になっていた。
+    ///
+    /// **この文字列は TS 側 `effect-slot.ts` が組み立てる形をそのまま写したもの**で、
+    /// 手で綺麗にしないこと — wire の実物と乖離した瞬間にこのテストは無意味になる。
+    #[test]
+    fn apply_plan_accepts_the_payload_typescript_actually_sends() {
+        // catalog（state 付き / 無し）・standard・keep を 1 つの plan に混ぜる。
+        let json = r#"{
+            "chain": [
+                {"op":"load","kind":"catalog","path":"/x/CLAPTestEffect.clap","enabled":true},
+                {"op":"load","kind":"catalog","path":"/x/y.vst3","plugin_id":"com.x.y",
+                 "state":"/s/a.state","enabled":false},
+                {"op":"load","kind":"standard","name":"Gain","params":{"db":-20.0},"enabled":true},
+                {"op":"keep","prev_index":0,"enabled":true,"params":{"db":-6.0}}
+            ],
+            "save_dropped": [{"prev_index":1,"path":"/s/b.state"}]
+        }"#;
+        let plan: super::EffectChainPlan =
+            serde_json::from_str(json).expect("TS が送る plan は受理されなければならない");
+        assert_eq!(plan.chain.len(), 4);
+        assert_eq!(plan.save_dropped.len(), 1);
+
+        // enabled が **既定値に落ちず、送られた値のまま**届いていること（無視されると
+        // 「バイパスしたのに音が鳴る」という無言の故障になる）。
+        match &plan.chain[1] {
+            super::EffectChainPlanStage::Load {
+                stage: super::EffectChainStageSpec::Catalog { enabled, state, .. },
+            } => {
+                assert!(!enabled, "enabled:false が既定 true に落ちてはいけない");
+                assert!(state.is_some(), "state が落ちてはいけない");
+            }
+            other => panic!("index 1 は catalog load のはず: {other:?}"),
+        }
+        match &plan.chain[2] {
+            super::EffectChainPlanStage::Load {
+                stage: super::EffectChainStageSpec::Standard { name, params, .. },
+            } => {
+                assert_eq!(name, "Gain");
+                assert_eq!(params.get("db"), Some(&-20.0), "params が落ちてはいけない");
+            }
+            other => panic!("index 2 は standard load のはず: {other:?}"),
+        }
+    }
+
+    /// 内側（`EffectChainStageSpec`）の `deny_unknown_fields` は生きていること。
+    /// 外側から外したのは flatten の制約が理由であって、**検査を緩めたのではない**。
+    #[test]
+    fn unknown_fields_inside_a_stage_are_still_rejected() {
+        let json = r#"{"chain":[{"op":"load","kind":"catalog","path":"/x/y.clap",
+                      "enabled":true,"bogus":1}],"save_dropped":[]}"#;
+        assert!(
+            serde_json::from_str::<super::EffectChainPlan>(json).is_err(),
+            "stage の中の未知フィールドは従来どおり拒否されなければならない"
+        );
+    }
+
     use super::*;
     use std::sync::Mutex;
 

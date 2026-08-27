@@ -17,6 +17,86 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.390 fix: 実機ゲートが 5 件の欠陥を出した (#628 コミット7) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628
+**Status**: #625 の R-E1〜R-E7 が実機で全通過（残る失敗は #633 の範囲）
+
+**ユニットテスト 2069 件 + 348 件がすべて緑のまま、実機では動かなかった。**
+実機 gated E2E を 11 回反復し、毎回 1 つ深く進みながら欠陥を剥がした。
+
+## 検出・修正した欠陥（5 件）
+
+**1. serde の `flatten` × `deny_unknown_fields`（daemon 側）**
+
+```text
+[MALFORMED_REQUEST] effect chain apply failed at index 0 (CLAP Test Effect):
+invalid ApplyEffectChain chain: unknown field `enabled`; the previous chain is kept
+```
+
+`EffectChainPlanStage` に `deny_unknown_fields` が付いており、`Load` は
+`#[serde(flatten)]` で内側を展開している。**serde はこの併用を支持しない** — 外側の
+deserializer は内側のフィールド名を知らないため `kind` / `path` / `enabled` が軒並み
+unknown field になる。**全 effect 宣言が失敗していた。**
+
+**2. 同（child 側）** — daemon 側を直した直後に同型が出た:
+
+```text
+parse …/apply.json: unknown field `kind` at line 1 column 302
+```
+
+**同じ設計を 2 箇所に写したため**。全 crate を走査して残りが無いことを確認した
+（`flatten` を含む型で `deny_unknown_fields` を持つものは他に 0 件）。
+
+**3. 🔴 `orbit-effect-rack-child` が配布物に入っていなかった**
+
+daemon は自分の隣の `orbit-effect-rack-child` を探す（`outproc_effect.rs:454`）が、
+`copy-daemon-bin.sh` が配っていなかった。**実機で effect 宣言が起動に失敗する。**
+コミット 1 で「同梱経路」を作ったとき、標準プラグインだけを足して **child 本体を
+足さなかった**（列挙が一段手前で止まった形）。release.yml の post-package gate にも追加。
+
+**4. PID オラクルが rack child に効かない** — 13 箇所を移行（詳細は 6.389）
+
+**5. ERROR 件数の厳密等価** — `get_log` は固定 500 行の窓なので、非エラー行が 1 行増えると
+古い ERROR が押し出されて**件数が減る**。判定の意図は「新しい ERROR を出していない」なので
+13 箇所を `toBeLessThanOrEqual` へ。
+
+## 意味論の変化に合わせて更新した E2E（#625 R-E1〜R-E7）
+
+旧テストが期待していた挙動は、**#628 が解消しようとした挙動そのもの**だった:
+
+| 旧（#625 in-place 型） | 新（#628 prepare-commit） |
+|---|---|
+| 差し替え = プロセス交換（旧 child が消える） | **PID 不変**（in-child 編集 = dry 窓が消えた） |
+| 失敗 = dry へ縮退 | **旧チェーンが無傷で鳴り続ける** |
+| `remove("名前")` で外す | **`effect([])`**（配列から消す・SC.10.3c） |
+
+🔴 **音での実測が決定的だった**: 失敗後の RMS が B と **0.08% 差**で一致
+（`failedDry=0.049822` / `B=0.049780`）。**旧チェーンが本当に鳴り続けている**証拠であり、
+prepare-commit が音として機能していることの実機証明。
+
+区間名 `failedDry` は「失敗したら dry になる」という**旧仕様を名前に埋め込んでいた**ため、
+意味論変更でラベルが嘘になった。名前は仕様を固定する。
+
+## 検証
+
+| 回 | 結果 |
+|---|---|
+| 1 | 6 failed / 2 passed（effect 宣言が全滅） |
+| 2-10 | 4 failed / 4 passed（毎回別の欠陥） |
+| **11** | **3 failed / 5 passed（#625 R-E1〜R-E7 全通過）** |
+
+残る 3 件のうち 2 件は **#633（UI pump per-index 化）**の範囲で、
+Fable が設計調査で予告した「rack child の close が daemon の DONE 腕に受理されず ring が
+詰まる」が**実機で予告どおり再現**した:
+
+```text
+timed out waiting for UI_CLOSED_DONE (20000ms)
+```
+
+clippy exit 0 / daemon 226 passed / rack child 14 passed（回帰テスト 4 件追加）。
+
 ### 6.389 feat: ラックを DSL から書けるようにする (#628 コミット5〜6) (Aug 28, 2026)
 
 **Date**: 2026-08-28

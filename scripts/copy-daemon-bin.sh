@@ -107,6 +107,7 @@ if command -v cargo >/dev/null 2>&1; then
   # （TS 専業 contributor 等）でも npm run build を落とさず、既存バイナリへ縮退する。
   if ! (cd "$PROJECT_ROOT/rust" \
     && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument \
+    && cargo build --release -p orbit-effect-rack-child \
     && cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child \
       -p orbit-vst3-effect-child -p orbit-vst3-instrument-child \
     && cargo build --release -p orbit-plugin-scan \
@@ -118,6 +119,9 @@ else
 fi
 
 copy_binary "orbit-audio-daemon"
+# #628: rack effect child。daemon は `outproc_effect.rs` で自分の隣の
+# `orbit-effect-rack-child` を探す。**これが無いと effect 宣言そのものが起動に失敗する。**
+copy_binary "orbit-effect-rack-child"
 copy_binary "orbit-clap-effect-child"
 copy_binary "orbit-clap-instrument-child"
 copy_binary "orbit-vst3-effect-child"

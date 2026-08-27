@@ -44,8 +44,21 @@ function requiredChildBinariesByModule(): Map<string, string[]> {
   const byModule = new Map<string, string[]>()
   for (const file of OUTPROC_MODULES) {
     const src = fs.readFileSync(path.join(DAEMON_SRC, file), 'utf8')
-    // `Self::Vst3 => "orbit-vst3-effect-child",` の形の match アームから抽出する。
-    const names = new Set([...src.matchAll(/=>\s*"(orbit-[^"]+)"/g)].map((m) => m[1]))
+    // 抽出する形は 2 つある:
+    //   (1) `Self::Vst3 => "orbit-vst3-effect-child",` — format 分岐の match アーム
+    //   (2) `dir.join("orbit-effect-rack-child")` — 分岐を持たない単一 child（#628 の rack）
+    // 🔴 (2) を足したのは #628 で実際に取りこぼしたため。rack child は format で分岐しない
+    // （1 child が CLAP/VST3 両方を持つ）ので match アームに現れず、**台帳 A から漏れて
+    // release gate との不整合になった**。名前の綴りではなく**解決の形**で拾う。
+    // 🔴 `#[cfg(test)]` 以降は除外する。テストモジュールには変異検証用のダミー名
+    // （`temp_dir().join("orbit-nonexistent-…")`）が埋まっており、拾うと台帳 A が
+    // 存在しない child で膨らんで**全台帳が不整合になる**（実際に踏んだ）。
+    const production = src.split(/\n#\[cfg\(test\)\]/)[0]
+    const names = new Set([
+      ...[...production.matchAll(/=>\s*"(orbit-[^"]+)"/g)].map((m) => m[1]),
+      // `dir.join("orbit-effect-rack-child")` — `dir` は `current_exe` の親。
+      ...[...production.matchAll(/\bdir\.join\("(orbit-[^"]+)"\)/g)].map((m) => m[1]),
+    ])
     byModule.set(file, [...names].sort())
   }
   return byModule
