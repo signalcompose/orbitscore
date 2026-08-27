@@ -32,6 +32,11 @@
 //! cargo test -p orbit-vst3-host --test spike_s_concurrent_load -- --ignored --nocapture
 //! ```
 
+// 🔴 crate 全体が `#![cfg(target_os = "macos")]` なので、テストも同じ cfg で揃える。
+// 揃えないと Linux CI（`clippy --all-targets`）で `Vst3EffectProcessor` が解決できず落ちる。
+// #622 で直したのと同じクラス（child crate の cfg 不整合）を、main がここで踏んだ。
+#![cfg(target_os = "macos")]
+
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;

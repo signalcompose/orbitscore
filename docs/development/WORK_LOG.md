@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.384 fix: spike テストが Linux で壊れていた（#622 と同じクラスを踏んだ）(Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #628
+**Status**: 修正済み（Linux ターゲットで実測確認）
+
+PR #632 の CI が `Clippy (default features)` で落ちた。原因は **main が足した Spike S のテスト**。
+
+`orbit-vst3-host` は **crate 全体が `#![cfg(target_os = "macos")]`** なので、Linux では中身が
+空になり `Vst3EffectProcessor` が解決できない。テストに同じ cfg を付けていなかった。
+
+🔴 **#622 で直したのとまったく同じクラス**（child crate の cfg 不整合）である。しかも #622 の
+修正時に「**macOS だけで検証しない**」を教訓として記録していたのに、**同じ日に同じ形で踏んだ**。
+
+直接の原因は明確で、**`-p orbit-vst3-host` の単体テストだけを回して、default features の
+ワークスペース全体（= CI が回す形）を確認しなかった**こと。
+
+修正後は **Linux ターゲットで実測**してから push した（`cargo check --target
+x86_64-unknown-linux-gnu --all-targets -p orbit-vst3-host`）。
+
 ### 6.383 spec+design: `ui()` を名前形で残し、設計を確定 (#628) (Aug 27, 2026)
 
 **Date**: 2026-08-27
