@@ -46,9 +46,10 @@ use crate::outproc_respawn_guard::{
     advance_fast_respawn_streak, drain_ui_pump, poll_ui_pump_once, service_ui_pump_on_respawn,
 };
 
-fn enabled_by_default() -> bool {
-    true
-}
+// 🔴 `enabled` の既定値は wire と内部 config で**同じでなければならない**（片方だけ
+// 変えると「宣言では有効なのに config では無効」というずれが respawn で表面化する）。
+// 共有型のものをそのまま使い、ローカルに複製しない。
+use orbit_audio_sandbox::rack_wire::enabled_by_default;
 
 /// Control/watchdog-owned authoritative effect-rack configuration. The audio thread never reads
 /// this value; it only observes the rack child through shared memory.
@@ -75,69 +76,32 @@ pub enum ChainStageConfig {
     },
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
-pub enum EffectChainStageSpec {
-    Catalog {
-        path: PathBuf,
-        #[serde(default)]
-        plugin_id: Option<String>,
-        #[serde(default)]
-        state: Option<PathBuf>,
-        #[serde(default = "enabled_by_default")]
-        enabled: bool,
-    },
-    Standard {
-        name: String,
-        #[serde(default)]
-        params: BTreeMap<String, f64>,
-        #[serde(default = "enabled_by_default")]
-        enabled: bool,
-    },
-    Layer {
-        branches: serde_json::Value,
-    },
-}
+// 🔴 wire の型は **共有 crate に 1 つだけ**置く（`orbit_audio_sandbox::rack_wire`）。
+//
+// 初版はここに child 側と同一の型を独立に書いていた。その結果、**同じ serde 欠陥が実機で
+// 2 回出た** — ここを直した直後に child 側で同型が出た。ユニットテストは両側とも緑で、
+// wire を跨いだ実物だけが落ちていた。詳細は `rack_wire` のモジュールコメント。
+//
+// daemon 内部の `ChainStageConfig`（respawn 用の確定済み manifest・`latest_state` を保持）は
+// **役割が違う**ので別型のまま残す — あちらは「解決済みの権威 config」、こちらは
+// 「wire を流れる宣言」。
+// stage / op / save_dropped の**要素型**は共有する。これが 2 回同じ serde 欠陥を出した本体。
+pub use orbit_audio_sandbox::rack_wire::{
+    PlanStage as EffectChainPlanStage, SaveDropped as SaveDroppedStage,
+    StageSpec as EffectChainStageSpec,
+};
 
-/// APPLY plan の 1 要素。
+/// TS → daemon の `ApplyEffectChain` が運ぶ plan。
 ///
-/// 🔴 **`deny_unknown_fields` を付けてはいけない。** `Load` は `#[serde(flatten)]` で
-/// `EffectChainStageSpec` を展開するが、**serde は flatten と `deny_unknown_fields` の併用を
-/// 支持しない** — 外側の deserializer は内側のフィールド名を知らないため、`kind` / `path` /
-/// `enabled` などが軒並み「unknown field」になる。
+/// 🔴 **`orbit_audio_sandbox::rack_wire::ApplyPlan` とは別型**である。**ワイヤが違う**:
 ///
-/// 実機で踏んだ形（#628 gated E2E）:
-/// ```text
-/// [MALFORMED_REQUEST] effect chain apply failed at index 0 (CLAP Test Effect):
-/// invalid ApplyEffectChain chain: unknown field `enabled`; the previous chain is kept
-/// ```
-/// TS 側の unit も daemon 側の unit も緑のまま、**wire を跨いだ実物だけが落ちていた**。
+/// | 経路 | 要素配列のフィールド名 | 契約 |
+/// |---|---|---|
+/// | TS → daemon（JSON-RPC） | **`chain`** | `docs/research/ENGINE_DAEMON_PROTOCOL.md` に明記・変えられない |
+/// | daemon → child（`.apply.json`） | **`stages`** | 内部・`rack_wire::ApplyPlan` が持つ |
 ///
-/// 厳密さは失っていない: `Keep` は自分のフィールドを列挙しており、`Load` の中身は
-/// `EffectChainStageSpec` 自身の `deny_unknown_fields` が検査する。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(tag = "op", rename_all = "lowercase")]
-pub enum EffectChainPlanStage {
-    Keep {
-        prev_index: usize,
-        #[serde(default = "enabled_by_default")]
-        enabled: bool,
-        #[serde(default)]
-        params: BTreeMap<String, f64>,
-    },
-    Load {
-        #[serde(flatten)]
-        stage: EffectChainStageSpec,
-    },
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct SaveDroppedStage {
-    pub prev_index: usize,
-    pub path: PathBuf,
-}
-
+/// 要素の型（`EffectChainPlanStage` / `SaveDroppedStage`）は共有しているので、
+/// **2 回出た serde 欠陥のクラスは塞がっている**。外側の容器だけが経路ごとに違う。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EffectChainPlan {

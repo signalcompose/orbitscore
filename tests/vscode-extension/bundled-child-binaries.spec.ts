@@ -30,46 +30,41 @@ const RELEASE_WORKFLOW = path.join(REPO_ROOT, '.github/workflows/release.yml')
 
 /** daemon の outproc モジュールと、それぞれが必ず持つ format 分岐の数（Clap / Vst3）。 */
 const OUTPROC_MODULES = ['outproc_effect.rs', 'outproc_instrument.rs'] as const
-const FORMATS_PER_MODULE = 2
 
 /**
- * 台帳A: daemon が spawn しうる child 実行ファイル名（Rust ソースのリテラルから導出）。
+ * 台帳A: daemon が spawn しうる child 実行ファイル名。
  *
- * **パターンを名前の形に依存させない**: 初版は `orbit-[a-z0-9-]+-child` と綴りを決め打ちして
- * いたため、child をリネームすると**抽出が黙って取りこぼして台帳Aが縮み、テストが pass して
- * しまう**（変異検証で発覚）。`=>` の右辺の `orbit-*` リテラルをすべて拾い、件数で
- * 取りこぼしを検出する。
+ * 🔴 **Rust ソースを正規表現で読むのをやめた。** 以前は match アームや `.join("…")` の
+ * 形を正規表現で拾っていたが、**2 回続けて静かに取りこぼした**:
+ *
+ * 1. 初版は `orbit-[a-z0-9-]+-child` と**綴りを決め打ち** → リネームで抽出が縮み pass
+ * 2. 次は `Self::Vst3 => "…"` と**分岐の形を決め打ち** → 分岐を持たない初の child
+ *    （#628 の rack child）が漏れ、**出荷ゲートと実装が食い違った**
+ *
+ * どちらも「今ある形」に最適化した規則が新しい形で破れたもの。パターンを足してかわす
+ * 対処は**脆さを移動させるだけ**なので、daemon 側に
+ * `SPAWNABLE_CHILD_BINARIES`（`rust/crates/orbit-audio-daemon/src/lib.rs`）という
+ * **唯一の一覧**を置き、ここはそれを読むだけにした。新しい spawn 経路を足す開発者は
+ * 配列への追記を強制され、正規表現の網をすり抜けられない。
  */
-function requiredChildBinariesByModule(): Map<string, string[]> {
-  const byModule = new Map<string, string[]>()
-  for (const file of OUTPROC_MODULES) {
-    const src = fs.readFileSync(path.join(DAEMON_SRC, file), 'utf8')
-    // 抽出する形は 2 つある:
-    //   (1) `Self::Vst3 => "orbit-vst3-effect-child",` — format 分岐の match アーム
-    //   (2) `dir.join("orbit-effect-rack-child")` — 分岐を持たない単一 child（#628 の rack）
-    // 🔴 (2) を足したのは #628 で実際に取りこぼしたため。rack child は format で分岐しない
-    // （1 child が CLAP/VST3 両方を持つ）ので match アームに現れず、**台帳 A から漏れて
-    // release gate との不整合になった**。名前の綴りではなく**解決の形**で拾う。
-    // 🔴 `#[cfg(test)]` 以降は除外する。テストモジュールには変異検証用のダミー名
-    // （`temp_dir().join("orbit-nonexistent-…")`）が埋まっており、拾うと台帳 A が
-    // 存在しない child で膨らんで**全台帳が不整合になる**（実際に踏んだ）。
-    const production = src.split(/\n#\[cfg\(test\)\]/)[0]
-    const names = new Set([
-      ...[...production.matchAll(/=>\s*"(orbit-[^"]+)"/g)].map((m) => m[1]),
-      // `dir.join("orbit-effect-rack-child")` — `dir` は `current_exe` の親。
-      ...[...production.matchAll(/\bdir\.join\("(orbit-[^"]+)"\)/g)].map((m) => m[1]),
-    ])
-    byModule.set(file, [...names].sort())
+function requiredChildBinariesFromDaemon(): string[] {
+  const src = fs.readFileSync(path.join(DAEMON_SRC, 'lib.rs'), 'utf8')
+  const block = src.match(/pub const SPAWNABLE_CHILD_BINARIES: &\[&str\] = &\[([\s\S]*?)\];/)
+  if (!block) {
+    throw new Error(
+      'daemon の SPAWNABLE_CHILD_BINARIES を読めない — 定数が消えたか名前が変わった。' +
+        'この一覧が唯一の真実源なので、消すなら台帳テストの設計ごと見直すこと。',
+    )
   }
-  return byModule
+  const names = [...block[1].matchAll(/"([^"]+)"/g)].map((m) => m[1])
+  if (names.length === 0) {
+    throw new Error('SPAWNABLE_CHILD_BINARIES が空 — daemon は必ず child を spawn する')
+  }
+  return [...new Set(names)].sort()
 }
 
 function requiredChildBinaries(): string[] {
-  const all = new Set<string>()
-  for (const names of requiredChildBinariesByModule().values()) {
-    for (const n of names) all.add(n)
-  }
-  return [...all].sort()
+  return requiredChildBinariesFromDaemon()
 }
 
 /** 台帳B-1: `copy-daemon-bin.sh` が copy_binary で運ぶ名前。 */
@@ -158,19 +153,32 @@ function runReleaseGate(gateScript: string, presentBinaries: string[]): number {
 
 describe('#548 bundled out-of-process child binaries', () => {
   it('daemon が spawn しうる child はすべて copy-daemon-bin.sh のコピー対象である', () => {
-    const byModule = requiredChildBinariesByModule()
-    const required = [...new Set([...byModule.values()].flat())].sort()
+    const required = requiredChildBinaries()
     const copied = copiedByScript(fs.readFileSync(COPY_SCRIPT, 'utf8'))
 
-    // 🔴 台帳Aの取りこぼしを検出する。空振り（0件）だけでなく **部分的な縮み** も
-    // success にしない — 各 outproc モジュールは Clap / Vst3 の2分岐を必ず持つ。
-    // format を増やしたらここが落ちるので、バンドル側の追従が強制される。
-    for (const [file, names] of byModule) {
+    // 🔴 **定数が実装から乖離していないか**を検査する。台帳 A を正規表現から
+    // `SPAWNABLE_CHILD_BINARIES` へ移したので、守るべき性質が変わった —
+    // 以前は「抽出が縮んでいないか」だったが、いまは「**spawn 経路で実際に使われる名前が
+    // 定数に載っているか**」。定数は手で書くので、書き忘れれば実装だけが先に進む。
+    for (const file of OUTPROC_MODULES) {
+      const src = fs.readFileSync(path.join(DAEMON_SRC, file), 'utf8')
+      const production = src.split(/\n#\[cfg\(test\)\]/)[0]
+      // 🔴 **spawn の宛先として使われる文脈だけ**を拾う。素朴に `"orbit-*-child"` を
+      // 全部拾うと、ログ表示用の fallback 文字列（`exe_label(&exe, "orbit-effect-child")`
+      // — 実ファイル名が取れないときの表示名で、**そんな crate は存在しない**）まで
+      // 拾って偽陽性になる。実際に一度踏んだ。
+      //   (1) `Self::Vst3 => "orbit-vst3-effect-child",` — format 分岐
+      //   (2) `dir.join("orbit-effect-rack-child")`      — 分岐なしの単一 child
+      const literals = new Set([
+        ...[...production.matchAll(/=>\s*"(orbit-[a-z0-9-]+-child)"/g)].map((m) => m[1]),
+        ...[...production.matchAll(/\bdir\.join\("(orbit-[a-z0-9-]+-child)"\)/g)].map((m) => m[1]),
+      ])
+      const unlisted = [...literals].filter((name) => !required.includes(name))
       expect(
-        names.length,
-        `${file} から抽出した child 名が ${names.length} 件（期待: ${FORMATS_PER_MODULE} 以上）— ` +
-          `抽出パターンが実装に追従できていないか、format が増減した`,
-      ).toBeGreaterThanOrEqual(FORMATS_PER_MODULE)
+        unlisted,
+        `${file} が spawn する child 名が SPAWNABLE_CHILD_BINARIES に無い: ` +
+          `${unlisted.join(', ')} — daemon の定数へ追記すること（出荷ゲートがこれを見る）`,
+      ).toEqual([])
     }
 
     const missing = required.filter((name) => !copied.includes(name))

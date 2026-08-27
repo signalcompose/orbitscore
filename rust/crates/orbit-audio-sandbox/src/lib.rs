@@ -22,6 +22,8 @@ pub mod host;
 mod instrument_host;
 pub mod offline;
 pub mod parent_watch;
+/// daemon ⇄ rack child のチェーン manifest / APPLY plan の**唯一の型定義**（#628）。
+pub mod rack_wire;
 pub mod transport;
 
 pub use child::{warm_up_executable, SandboxChildGuard};

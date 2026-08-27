@@ -6,10 +6,10 @@ import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
 import {
   EffectChainMap,
-  normalizePluginInstanceName,
   resolveEffectRack,
   type ChainElement,
   type EffectChainMapOptions,
+  toRackRecipe,
 } from './effect-slot'
 
 /** Owns the v1 master effect rack and applies each complete declaration eagerly. */
@@ -47,10 +47,7 @@ export class PluginEffectManager {
   }
 
   async effect(value: string | RackRecipe, pluginId?: string): Promise<void> {
-    const recipe: RackRecipe =
-      typeof value === 'string'
-        ? [{ kind: 'catalog', spec: value, pluginId, enabled: true }]
-        : value
+    const recipe = toRackRecipe(value, pluginId)
     if (this.linkAudioManager.isEnabled()) {
       throw new Error('global.effect() cannot be used while LinkAudio is enabled in v1.')
     }
@@ -61,9 +58,5 @@ export class PluginEffectManager {
     )
     await this.slots.applyRack('master', rack)
     this.hasDeclared = true
-  }
-
-  async remove(spec: string, occurrence = 0): Promise<void> {
-    await this.slots.remove('master', normalizePluginInstanceName(spec), occurrence)
   }
 }

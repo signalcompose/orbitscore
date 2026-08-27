@@ -26,6 +26,17 @@ description = "Out-of-process audio effect sandbox transport (file-backed mmap S
 name = "orbit_audio_sandbox"
 
 [dependencies]
+# #628: daemon ⇄ rack child のチェーン manifest / APPLY plan の型を `rack_wire` で共有する。
+#
+# 🔴 依存隔離の原則（冒頭コメント）との関係: 隔離の対象は **native/cpal/clack**（音声系）で
+# あって、純粋なデータ記述である serde はそこに当たらない。この crate を選んだのは
+# **daemon と child の両方が既に依存しており、かつ clack-free** だからで、型をここへ置くこと
+# で「daemon は clack-free」という不変条件を保ったまま真実源を 1 つにできる。
+#
+# 2 箇所に写した結果、**同じ serde 欠陥が実機で 2 回出た**（`rack_wire` のモジュールコメント）。
+serde = { workspace = true }
+serde_json = { workspace = true }
+
 # file-backed mmap(MAP_SHARED)。親子で同一ファイルを map して共有メモリにする。
 # MIT/Apache-2.0(cargo-deny allow)。同期は MAP_SHARED 上の atomic(別 sync crate 不要)。
 memmap2 = "0.9"

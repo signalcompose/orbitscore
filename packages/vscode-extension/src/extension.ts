@@ -79,7 +79,11 @@ import {
   extractDeclaredSequenceNames,
 } from './dsl-completion-context'
 import { BUS_METHODS, GLOBAL_METHODS, SEQUENCE_METHODS } from './dsl-method-catalog'
-import { detectRackArgContext, filterCatalogEntries } from './plugin-catalog-completion'
+import {
+  detectRackArgContext,
+  filterCatalogEntries,
+  RACK_SCAN_MAX_LINES,
+} from './plugin-catalog-completion'
 import {
   loadPluginCatalog,
   runPluginScan,
@@ -3613,11 +3617,19 @@ export function registerCompletionProviders(context: vscode.ExtensionContext) {
         // #628: ラックは配列・複数行・`layer` の入れ子になるため、単一行 regex では
         // 発火しない（SC.10.10 規範 1 の退行点）。有界の後方スキャナを主経路にし、
         // 単一行の判定はその特殊ケースとして吸収される。
+        // 🔴 スキャナは後方 RACK_SCAN_MAX_LINES 行までしか読まない。**文書全体を
+        // materialize すると、その有界性を呼び出し側が台無しにする** — 数千行のファイルで
+        // `"` を打つたびに全行をコピーすることになる。読む範囲だけを切り出して渡す。
+        const firstRow = Math.max(0, position.line - RACK_SCAN_MAX_LINES)
         const lines: string[] = []
-        for (let row = 0; row <= position.line; row += 1) {
+        for (let row = firstRow; row <= position.line; row += 1) {
           lines.push(document.lineAt(row).text)
         }
-        const pluginContext = detectRackArgContext(lines, position.line, position.character)
+        const pluginContext = detectRackArgContext(
+          lines,
+          position.line - firstRow,
+          position.character,
+        )
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()

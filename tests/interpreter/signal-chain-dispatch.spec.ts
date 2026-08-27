@@ -578,20 +578,29 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       expect(typeof bus[name as keyof typeof bus]).toBe('function')
   })
 
-  it('T25 removes remove() from all three vocabularies and rejects it as an unknown method', async () => {
+  it('T25 removes remove() from all three vocabularies and from the implementation', async () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
-    const remove = vi.spyOn(global, 'remove').mockResolvedValue(global)
     await run('var kick = init global.seq', state)
     const kick = state.sequences.get('kick')!
-    const sequenceRemove = vi.spyOn(kick, 'remove').mockResolvedValue(kick)
     const bus = global.sum('drums')
-    const busRemove = vi.spyOn(bus, 'remove').mockResolvedValue(bus)
     vi.spyOn(global, 'sum').mockReturnValue(bus)
 
+    // 語彙から消えている。
     expect(GLOBAL_DSL_METHODS.has('remove')).toBe(false)
     expect(SEQUENCE_DSL_METHODS.has('remove')).toBe(false)
     expect(BUS_DSL_METHODS.has('remove')).toBe(false)
+
+    // 🔴 **実装ごと消えている。** 以前この位置は `vi.spyOn(global, 'remove')` で
+    // 「呼ばれないこと」を確認していたが、それは**実装が残っている前提**であり、
+    // spec SC.10.3c の「即時に撤去する」と食い違っていた（テストのコメントは
+    // 「host compatibility method として維持」と主張していたが、**その host は存在しなかった**
+    // — 呼び出し元は内部だけで循環し、daemon 側 `UnloadPlugin` は常にエラーを返すスタブ）。
+    // 「呼ばれない」より「**存在しない**」の方が強い保証なので格上げする。
+    expect((global as unknown as Record<string, unknown>).remove).toBeUndefined()
+    expect((kick as unknown as Record<string, unknown>).remove).toBeUndefined()
+    expect((bus as unknown as Record<string, unknown>).remove).toBeUndefined()
+
     await expect(run('global.remove("old")', state)).rejects.toThrow(
       'Unknown chain method "remove"',
     )
@@ -599,9 +608,6 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     await expect(run('global.sum("drums").remove("old")', state)).rejects.toThrow(
       'Unknown chain method "remove"',
     )
-    expect(remove).toHaveBeenCalledTimes(0)
-    expect(sequenceRemove).toHaveBeenCalledTimes(0)
-    expect(busRemove).toHaveBeenCalledTimes(0)
   })
 
   it('classifies every public receiver method as DSL vocabulary or an explicit internal API', () => {
@@ -632,8 +638,6 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       // global.ts が呼ぶ内部ヘルパで、DSL 語彙ではない（インタプリタからの参照はゼロ）。
       'hasAudioSource',
       'getInsertBus',
-      // SC.10.3c: implementation kept as a host compatibility method, but removed from DSL.
-      'remove',
       'isNoteSequence',
       'loadAudio',
       'prepareSlices',

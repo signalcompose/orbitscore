@@ -991,6 +991,8 @@ dependencies = [
  "anyhow",
  "libc",
  "memmap2",
+ "serde",
+ "serde_json",
  "tracing",
 ]
 

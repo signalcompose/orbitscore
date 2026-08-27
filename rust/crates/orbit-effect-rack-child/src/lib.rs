@@ -15,111 +15,18 @@ use std::sync::Arc;
 use orbit_audio_sandbox::{
     CommandOutcome, CMD_RESULT_BAD_ARG, CMD_RESULT_IO_ERROR, CMD_RESULT_OK, CMD_RESULT_PLUGIN_ERROR,
 };
-use serde::Deserialize;
 
 #[cfg(target_os = "macos")]
 pub mod macos;
 
-fn enabled_by_default() -> bool {
-    true
-}
-
-/// Spawn-time chain manifest.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct ChainManifest {
-    pub version: u32,
-    pub stages: Vec<StageSpec>,
-}
-
-/// One unloaded stage. Its format is intentionally inferred from `path`; no format field exists.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
-pub enum StageSpec {
-    Catalog {
-        path: PathBuf,
-        #[serde(default)]
-        plugin_id: Option<String>,
-        #[serde(default)]
-        state: Option<PathBuf>,
-        #[serde(default = "enabled_by_default")]
-        enabled: bool,
-    },
-    Standard {
-        name: String,
-        #[serde(default)]
-        params: BTreeMap<String, f64>,
-        #[serde(default = "enabled_by_default")]
-        enabled: bool,
-    },
-    Layer {
-        branches: serde_json::Value,
-    },
-}
-
-impl StageSpec {
-    pub fn enabled(&self) -> bool {
-        match self {
-            Self::Catalog { enabled, .. } | Self::Standard { enabled, .. } => *enabled,
-            Self::Layer { .. } => false,
-        }
-    }
-
-    pub fn params(&self) -> &BTreeMap<String, f64> {
-        static EMPTY: std::sync::LazyLock<BTreeMap<String, f64>> =
-            std::sync::LazyLock::new(BTreeMap::new);
-        match self {
-            Self::Standard { params, .. } => params,
-            _ => &EMPTY,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct ApplyPlan {
-    pub version: u32,
-    pub stages: Vec<PlanStage>,
-    #[serde(default)]
-    pub save_dropped: Vec<SaveDropped>,
-}
-
-/// APPLY plan の 1 要素。
-///
-/// 🔴 **`deny_unknown_fields` を付けてはいけない。** `Load` は `#[serde(flatten)]` で
-/// `StageSpec` を展開するが、**serde は flatten と `deny_unknown_fields` の併用を支持しない**
-/// — 外側の deserializer は内側のフィールド名を知らないため `kind` / `path` / `enabled` が
-/// 軒並み「unknown field」になる。daemon 側の `EffectChainPlanStage` と同じ形で、
-/// **#628 の実機ゲートで 2 段階に分かれて発覚した**:
-///
-/// ```text
-/// parse …/apply.json: unknown field `kind` at line 1 column 302; the previous chain is kept
-/// ```
-///
-/// 厳密さは失っていない: `Keep` は自分のフィールドを列挙しており、`Load` の中身は
-/// `StageSpec` 自身の `deny_unknown_fields` が検査する。
-#[derive(Debug, Clone, Deserialize, PartialEq)]
-#[serde(tag = "op", rename_all = "lowercase")]
-pub enum PlanStage {
-    Keep {
-        prev_index: usize,
-        #[serde(default = "enabled_by_default")]
-        enabled: bool,
-        #[serde(default)]
-        params: BTreeMap<String, f64>,
-    },
-    Load {
-        #[serde(flatten)]
-        stage: StageSpec,
-    },
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct SaveDropped {
-    pub prev_index: usize,
-    pub path: PathBuf,
-}
+// 🔴 wire の型は **共有 crate に 1 つだけ**置く（`orbit_audio_sandbox::rack_wire`）。
+//
+// 初版はこの位置に daemon 側と同一の型を独立に書いていた。その結果、**同じ serde 欠陥が
+// 実機で 2 回出た** — daemon 側を直した直後に child 側で同型が出た。ユニットテストは
+// 両側とも緑で、wire を跨いだ実物だけが落ちていた。詳細は `rack_wire` のモジュールコメント。
+pub use orbit_audio_sandbox::rack_wire::{
+    enabled_by_default, ApplyPlan, ChainManifest, PlanStage, SaveDropped, StageSpec,
+};
 
 pub fn read_manifest(path: &Path) -> Result<ChainManifest, String> {
     let bytes = std::fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
@@ -363,6 +270,11 @@ pub struct AudioChain {
     exchange: Arc<ChainExchange>,
     current: Box<StageList>,
     observed_generation: u64,
+    /// audio スレッドで起きた param 適用失敗の累計。
+    ///
+    /// 🔴 audio スレッドからログを出せない（確保・ロック・syscall 禁止）ため、ここへ積んで
+    /// **main スレッドが読み出して報告する**。`child_process_error_count` と同じ方式。
+    param_apply_errors: Arc<AtomicU64>,
 }
 
 impl AudioChain {
@@ -371,7 +283,13 @@ impl AudioChain {
             exchange,
             current,
             observed_generation: 0,
+            param_apply_errors: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// main スレッドから読む: audio スレッドで起きた param 適用失敗の累計。
+    pub fn param_apply_errors(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.param_apply_errors)
     }
 
     fn adopt_at_block_boundary(&mut self) {
@@ -413,8 +331,12 @@ impl AudioChain {
             for entry in &self.current.entries {
                 if !entry.params.is_empty() {
                     let stage = unsafe { &mut *(*entry.audio).0.get() };
-                    if let Err(detail) = stage.apply_params(&entry.params) {
-                        eprintln!("[orbit-effect-rack-child] parameter update failed: {detail}");
+                    // 🔴 ここは audio スレッド。**確保・ロック・syscall は禁止**なので
+                    // `eprintln!` を呼んではいけない（フォーマット確保 + stderr ロック +
+                    // write syscall がオーディオコールバック内で走る）。失敗は atomic の
+                    // カウンタに積むだけにして、**実際のログ出力は main スレッド**が行う。
+                    if stage.apply_params(&entry.params).is_err() {
+                        self.param_apply_errors.fetch_add(1, Ordering::Relaxed);
                     }
                 }
             }

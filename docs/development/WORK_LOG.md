@@ -17,6 +17,104 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.392 refactor: /simplify が 6 件を出し、うち 1 件は私自身の浅い修正だった (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: 6 件すべて適用
+
+`/simplify` の 4 エージェント（Reuse / Simplification / Efficiency / Altitude）を並行起動。
+
+## 🔴 根本原因: wire 型が daemon / child で二重定義されていた
+
+**Reuse と Altitude が独立に同じ結論へ到達**した。実機で**同じ serde 欠陥が 2 回出た**のは、
+同じ型を 2 箇所に書いていたため。ユニットテストは両側とも緑で、**各々が自分の型を自分で
+テストしていた**ので wire を跨いだ実物だけが落ちていた。
+
+`orbit-audio-sandbox::rack_wire` に集約した。この crate を選んだ理由:
+
+- **daemon と child の両方が既に依存**している
+- **clack-free**（コードは memmap2 のみ）なので daemon の不変条件を壊さない
+- 🔴 **本 PR は既に `CMD_APPLY_CHAIN` 等の定数をここに置いていた** — JSON の型だけが
+  その原則から外れていた
+
+集約の結果、`StageSpec` / `PlanStage` / `SaveDropped` / `enabled_by_default` は**各 1 箇所**に。
+`flatten` × `deny_unknown_fields` の併用は**全 crate で 0 件**。
+
+**外側の容器は経路ごとに分けた**（統合しかけて型エラーで気づいた）:
+
+| 経路 | 要素配列のフィールド名 | 契約 |
+|---|---|---|
+| TS → daemon（JSON-RPC） | **`chain`** | protocol doc に明記・変えられない |
+| daemon → child（`.apply.json`） | **`stages`** | 内部 |
+
+**別のワイヤなので容器は別型が正しい。** 要素型を共有すれば欠陥のクラスは塞がる。
+
+**副作用**: `serde_json` が sandbox 経由で可視になり、`u64: PartialEq<serde_json::Value>` の
+impl が増えて既存テストの型推論が曖昧になった（`orbit-clap-instrument-child`）。型注釈で解消。
+
+## 🔴 私自身の浅い修正への指摘（Altitude）
+
+コミット 7 で台帳テストに `dir.join(...)` の抽出パターンを足したが、これは
+**決め打ちの対象を変えただけ**だった:
+
+| 版 | 決め打ちの対象 | 破れ方 |
+|---|---|---|
+| 初版 | **綴り**（`orbit-*-child`） | リネームで漏れた |
+| その次 | **分岐の形**（match アーム） | 分岐なしの child で漏れた |
+| **私の修正** | **解決の形**（`dir.join`） | 次の新しい形でまた漏れる |
+
+ファイル自身のコメントが「初版は綴りを決め打ちして取りこぼした」と警告しているのを
+**読んだ上で**同型を書いていた。
+
+daemon に **`SPAWNABLE_CHILD_BINARIES`** を置き、**真実源を 1 つ**にした。新しい child を
+足す開発者は配列への追記を強制され、正規表現の網をすり抜けられない。台帳テストが守る性質も
+「抽出が縮んでいないか」から「**定数と実装が乖離していないか**」へ入れ替えた。
+**この新しいガードが導入直後に偽陽性を 1 件出し**（`exe_label` の fallback 文字列 —
+存在しない crate 名）、spawn 文脈に絞った。
+
+## RT 違反（Efficiency）
+
+`AudioChain::process_block`（**audio スレッド**）に `eprintln!` が入っていた
+— 確保 + stderr ロック + write syscall。**atomic カウンタ**へ置換し、ログ出力は main
+スレッドが行う形にした。エラー時にしか起きないパスで、**テストで踏まないぶん緩みやすい**。
+
+## 有界性の無効化（Efficiency）
+
+補完プロバイダが**文書の先頭から全行を materialize**してから 50 行の後方スキャナを
+呼んでいた。**自分で設計した有界性を呼び出し側で台無しにしていた** — 数千行のファイルで
+`"` を打つたびに全行をコピーする。読む範囲だけ切り出す形に。
+
+## `remove()` の死骸撤去（Simplification）
+
+DSL 語彙からは消えていたが、**実装チェーン全体（TS 11 箇所 + Rust）が到達不能なまま
+残っていた**。
+
+🔴 **「到達不能」を実行で実証してから消した**（peer の助言 —「机上推論だけで確定させない」）:
+
+| 確認 | 結果 |
+|---|---|
+| DSL からの到達 | **3 レシーバすべてで dispatch が拒否**（実行して確認） |
+| MCP tool | **0 件** |
+| Rust `unload_outproc_effect_plugin` | **定義と自分のユニットテスト 2 件からのみ** |
+| daemon の `UnloadPlugin` | **常にエラーを返すスタブ** |
+
+**テストの主張と spec の矛盾**も解消した。テストは「host compatibility method として維持」と
+書いていたが**その host は存在せず**、spec SC.10.3c は「即時に撤去する」と定めている。
+T25 を「**呼ばれない**」から「**存在しない**」へ格上げ — 前者は実装の存在を許すが後者は許さない。
+
+## コピペの一本化
+
+`sameCatalogSpec` / `sameCatalogElement` → `sameCatalogIdentity` /
+3 manager に複製されていた脱糖 → `toRackRecipe`（`effect-slot.ts` は「manager の複製を
+一本化する」ために作られたファイルなのに、新規追加分だけが逆行していた）。
+
+## 検証
+
+`npm run lint` exit 0 / `npm test` **2069 passed 0 failed** /
+clippy exit 0 / `cargo fmt` clean / 該当 crate **326 passed 0 failed**
+（sandbox は 83 → 86 で共有型のテスト 3 件が加算）。
+
 ### 6.391 test: 列挙13本が E2E の取り残しを出した (#628 コミット8) (Aug 28, 2026)
 
 **Date**: 2026-08-28

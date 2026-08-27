@@ -8,9 +8,9 @@ import {
   BusPool,
   type ChainElement,
   EffectChainMap,
-  normalizePluginInstanceName,
   resolveEffectRack,
   type PluginSlot,
+  toRackRecipe,
 } from './effect-slot'
 
 /**
@@ -75,7 +75,6 @@ export interface MixerBusHandle {
   readonly kind: MixerKind
   /** Declares (or idempotently re-declares) the bus's own insert (MX.2/MX.3: v1 one insert). */
   effect(value: string | RackRecipe, pluginId?: string): Promise<MixerBusHandle>
-  remove(name: string, occurrence?: number): Promise<MixerBusHandle>
   /**
    * Open/close every catalog insert matching `name`. A bus has no no-argument instrument UI.
    */
@@ -290,7 +289,6 @@ export class MixerManager {
       kind,
       effect: (value: string | RackRecipe, pluginId?: string) =>
         this.effectFor(kind, name, bus, value, pluginId),
-      remove: (spec: string, occurrence = 0) => this.removeFor(kind, name, bus, spec, occurrence),
       ui: async (catalogName?: string, open = true) => {
         if (catalogName === undefined) {
           throw new Error(`Mixer bus '${formatReceiverId(kind, name)}' has no instrument UI.`)
@@ -355,10 +353,7 @@ export class MixerManager {
   ): Promise<MixerBusHandle> {
     // LinkAudio gate は declareBus() 済みでも維持する（respawn/reload 経路で effect() 単独が
     // 再実行され得るため — resolveEffectSpec が spec 検証 → gate → 解決の順序を保証する）。
-    const recipe: RackRecipe =
-      typeof value === 'string'
-        ? [{ kind: 'catalog', spec: value, pluginId, enabled: true }]
-        : value
+    const recipe = toRackRecipe(value, pluginId)
     if (this.linkAudioManager.isEnabled()) {
       throw new Error(
         `${kind}("${name}").effect() cannot be used while LinkAudio is enabled in v1.`,
@@ -370,17 +365,6 @@ export class MixerManager {
       `${kind}("${name}").effect() cannot be used while LinkAudio is enabled in v1.`,
     )
     await this.kinds[kind].inserts.applyRack(name, rack)
-    return this.makeHandle(kind, name, bus)
-  }
-
-  private async removeFor(
-    kind: MixerKind,
-    name: string,
-    bus: string,
-    spec: string,
-    occurrence: number,
-  ): Promise<MixerBusHandle> {
-    await this.kinds[kind].inserts.remove(name, normalizePluginInstanceName(spec), occurrence)
     return this.makeHandle(kind, name, bus)
   }
 }

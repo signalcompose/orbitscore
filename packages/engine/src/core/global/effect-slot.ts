@@ -287,23 +287,34 @@ function lcsPairs(
   return pairs
 }
 
-function sameCatalogSpec(old: ChainElement, spec: RackElementSpec): boolean {
-  return (
-    old.kind === 'catalog' &&
-    spec.kind === 'catalog' &&
-    old.resolvedPath === spec.resolvedPath &&
-    old.pluginId === spec.pluginId &&
-    old.declaredStatePath === spec.declaredStatePath
-  )
+/**
+ * 単発の文字列形 `effect("X")` を **1 要素のラック**へ脱糖する（SC.10.3b）。
+ *
+ * 単発形は「完全な像」なので `effect([X])` と等価であり、**特殊経路を作らずに同じラック機構へ
+ * 流し込む**のが設計の意図。4 manager（master / seq / sum / aux）が同じ脱糖を必要とするので、
+ * ここに 1 本だけ置く — このモジュールは「manager に複製されていたロジックを一本化する」
+ * ために作られたので、**新しい複製をそこへ足さない**。
+ */
+export function toRackRecipe(value: string | RackRecipe, pluginId?: string): RackRecipe {
+  return typeof value === 'string'
+    ? [{ kind: 'catalog', spec: value, pluginId, enabled: true }]
+    : value
 }
 
-function sameCatalogElement(old: ChainElement, next: ChainElement): boolean {
+/**
+ * カタログ要素の**同一性**（LCS で対応づいた要素を keep するか replace するかの判定）。
+ *
+ * 比較する 3 フィールドは `RackElementSpec`（未解決の宣言）と `ChainElement`（登記済み）で
+ * 構造的に同じなので、**1 本にまとめてある** — 2 つに分けると、フィールドを足したとき
+ * 片方だけ直して食い違う。
+ */
+function sameCatalogIdentity(old: ChainElement, other: RackElementSpec | ChainElement): boolean {
   return (
     old.kind === 'catalog' &&
-    next.kind === 'catalog' &&
-    old.resolvedPath === next.resolvedPath &&
-    old.pluginId === next.pluginId &&
-    old.declaredStatePath === next.declaredStatePath
+    other.kind === 'catalog' &&
+    old.resolvedPath === other.resolvedPath &&
+    old.pluginId === other.pluginId &&
+    old.declaredStatePath === other.declaredStatePath
   )
 }
 
@@ -485,7 +496,8 @@ export class EffectChainMap<K> {
     for (const [nextIndex, spec] of rack.entries()) {
       const previousIndex = previousForNew.get(nextIndex)
       const old = previousIndex === undefined ? undefined : previous[previousIndex]
-      const sameSpec = old !== undefined && (old.kind === 'standard' || sameCatalogSpec(old, spec))
+      const sameSpec =
+        old !== undefined && (old.kind === 'standard' || sameCatalogIdentity(old, spec))
       const occurrence =
         old && (sameSpec || previousIndex !== undefined)
           ? old.occurrence
@@ -567,7 +579,7 @@ export class EffectChainMap<K> {
       const previousIndex = previousForNew.get(nextIndex)
       const old = previousIndex === undefined ? undefined : previous[previousIndex]
       const keep =
-        old !== undefined && (old.kind === 'standard' || sameCatalogElement(old, element))
+        old !== undefined && (old.kind === 'standard' || sameCatalogIdentity(old, element))
       if (keep) {
         operations.push({
           op: 'keep',
@@ -657,11 +669,6 @@ export class EffectChainMap<K> {
     }
   }
 
-  /** Removes one named effect through the same per-key queue as declaration/replacement. */
-  async remove(key: K, expectedNormalizedName: string, occurrence = 0): Promise<void> {
-    return this.enqueue(key, () => this.removeBody(key, expectedNormalizedName, occurrence))
-  }
-
   private async enqueue<T>(key: K, body: () => Promise<T>): Promise<T> {
     const previous = this.pending.get(key) ?? Promise.resolve()
     const settled = previous.catch(() => undefined).then(() => body())
@@ -675,52 +682,6 @@ export class EffectChainMap<K> {
     } finally {
       if (this.pending.get(key) === tracked) this.pending.delete(key)
     }
-  }
-
-  private async removeBody(
-    key: K,
-    expectedNormalizedName: string,
-    occurrence: number,
-  ): Promise<void> {
-    const receiver = this.externalReceiverId?.(key) ?? this.receiverId(key)
-    const existing = this.chains.get(key)?.[0]
-    const uncertain = this.uncertainReplacements.get(key)
-    const cleanupSlot = existing ?? uncertain?.forgottenSlot
-    if (!cleanupSlot && !uncertain) {
-      throw new Error(
-        `${receiver}: remove("${expectedNormalizedName}") — no effect insert is declared.`,
-      )
-    }
-    if (cleanupSlot && cleanupSlot.normalizedName !== expectedNormalizedName) {
-      throw new Error(
-        `${receiver}: remove("${expectedNormalizedName}") does not match the declared insert '${cleanupSlot.normalizedName}'.`,
-      )
-    }
-    if (occurrence !== 0) {
-      throw new Error(
-        `${receiver}: remove("${expectedNormalizedName}", ${occurrence}) — v1 supports a single insert; occurrence must be 0.`,
-      )
-    }
-    if (!this.audioEngine.unloadPlugin) {
-      throw new Error('Plugin removal requires the Rust engine backend.')
-    }
-
-    if (existing) {
-      await existing.load
-      await this.replacement?.beforeReplace(key, existing)
-    } else if (cleanupSlot) {
-      await this.beforeReplaceForgottenSlot(key, cleanupSlot)
-    }
-    const bus = existing?.role === 'effect' ? existing.bus : uncertain?.bus
-    try {
-      await this.audioEngine.unloadPlugin('effect', bus)
-    } catch (error) {
-      this.chains.delete(key)
-      this.uncertainReplacements.set(key, { bus, forgottenSlot: cleanupSlot })
-      throw error
-    }
-    this.chains.delete(key)
-    this.uncertainReplacements.delete(key)
   }
 
   private async declareBody(

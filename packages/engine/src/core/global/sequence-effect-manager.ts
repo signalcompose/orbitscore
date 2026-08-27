@@ -7,10 +7,10 @@ import { LinkAudioManager } from './link-audio-manager'
 import {
   BusPool,
   EffectChainMap,
-  normalizePluginInstanceName,
   resolveEffectRack,
   type ChainElement,
   type EffectChainMapOptions,
+  toRackRecipe,
 } from './effect-slot'
 
 /**
@@ -109,10 +109,7 @@ export class SequenceEffectManager {
     value: string | RackRecipe,
     pluginId?: string,
   ): Promise<string> {
-    const recipe: RackRecipe =
-      typeof value === 'string'
-        ? [{ kind: 'catalog', spec: value, pluginId, enabled: true }]
-        : value
+    const recipe = toRackRecipe(value, pluginId)
     if (this.linkAudioManager.isEnabled()) {
       throw new Error(
         `Sequence '${sequenceName}': seq.effect() cannot be used while LinkAudio is enabled in v1.`,
@@ -161,10 +158,5 @@ export class SequenceEffectManager {
       throw err
     }
     return bus
-  }
-
-  /** Removes only the insert tenant; the allocated bus remains available to routing. */
-  async remove(sequenceName: string, spec: string, occurrence = 0): Promise<void> {
-    await this.slots.remove(sequenceName, normalizePluginInstanceName(spec), occurrence)
   }
 }

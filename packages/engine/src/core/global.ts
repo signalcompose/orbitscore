@@ -428,12 +428,6 @@ export class Global {
     return this
   }
 
-  /** Removes the named master effect insert. */
-  async remove(name: string, occurrence = 0): Promise<this> {
-    await this.pluginEffectManager.remove(name, occurrence)
-    return this
-  }
-
   /**
    * Eagerly load a per-sequence hosted instrument plugin (#540 P1). `seqName` keys
    * the instance — each note sequence gets an independent daemon instrument slot.
@@ -459,18 +453,6 @@ export class Global {
     pluginId?: string,
   ): Promise<string> {
     return this.sequenceEffectManager.effect(sequenceName, value, pluginId)
-  }
-
-  /** @internal Sequence DSL bridge for effect-only removal. */
-  async sequenceEffectRemove(sequenceName: string, name: string, occurrence = 0): Promise<void> {
-    const normalizedName = normalizePluginInstanceName(name)
-    const instrument = this.pluginInstrumentManager.chainFor(sequenceName)[0]
-    if (instrument?.normalizedName === normalizedName) {
-      throw new Error(
-        `Sequence '${sequenceName}': remove() targets the effect insert; instrument removal is not supported in v1 (declare a different instrument to replace it).`,
-      )
-    }
-    await this.sequenceEffectManager.remove(sequenceName, name, occurrence)
   }
 
   /**
