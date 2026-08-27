@@ -17,6 +17,73 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.386 feat: 標準プラグイン `Gain` — 同梱 CLAP としての初号 (#628) (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #628
+**Status**: 完了（crate + bundle + アプリ同梱 + 出荷ゲート）
+
+ラック実装（Stage 1）のコミット 1。**同梱経路が通っていないと後段が標準プラグインを解決
+できない**ため、ここが先頭になる。
+
+**設計上の位置づけ**（SC.10.8 / 設計 §2.5）: 標準プラグインは「engine に DSP を抱えない」
+という確定原則に沿って、**普通の CLAP プラグイン**として作る。rack child から見れば
+カタログのプラグインと同じ 1 stage であり、特別な処理経路を持たない。違いは 3 点だけ:
+**アプリに同梱される** / **UI を持たない** / **state ファイルを持たない**。
+
+**新規 crate `orbit-std-gain`**:
+
+- CLAP effect（stereo in/out）。param は `db` の 1 本のみ。範囲 -96〜+24 dB、既定 0（素通し）
+- 🔴 **CLAP param 名 = DSL の名前付き引数名**（SC.10.8 規範 5-6）。`Gain(db: -6)` の `db` が
+  そのまま CLAP param `db` へ写る。破っても**型エラーにならず無言で効かなくなる**
+- `gui` / `state` 拡張を**宣言しない**。これが daemon 側の「標準要素への UI open / state save は
+  明示エラー」の根拠になる
+- 下限 -96 dB は**完全な 0.0** に落とす（微小な残響が「無音にした」stage から漏れないように）
+- 非有限値は乗算の手前で潰す（RT スレッドに NaN の判断を残さない）
+
+**bundle と同梱**:
+
+- `bundle-macos.sh` が cdylib を `.clap` bundle へ組む。**plugin 名は手打ちせず `lib.rs` の
+  定数から読み出す**（片方だけ直し忘れる形を作らない）
+- `scripts/copy-daemon-bin.sh` が `std-plugins/Gain.clap` を **child 実行ファイルの隣**へ配置。
+  child が `std-plugins/<name>.clap` で解決するため、置くだけで配線は不要。
+  bundle はディレクトリなので #540 の code-signing キャッシュ問題を避けて毎回作り直す
+- 🔴 **release.yml の post-package gate にも追加した**。packaging スクリプトのヘッダが述べる
+  とおり、出荷物を実際に保証しているのはこの gate である。**同梱が落ちても
+  ビルドもテストも緑のまま**で、DSL の `Gain(db: …)` が実行時に解決できずに落ちるだけなので、
+  gate を足さずに packaging だけ足すのは「一段手前で列挙を止める」形になる
+
+**検証**:
+
+- ユニット 8 件 + contract 4 件 = **12 件 green**
+- 🔴 **contract テストは in-process でプラグインを起こす**（`load_from_clack`）。dylib を
+  dlopen しないのでビルド順に依存せず、`#[ignore]` も要らない
+- **実ローダーでの確認**: `orbit-plugin-scan probe-artifact` が bundle を読み、
+  `name: "Gain"` / `category: clap.plugin` / `audio-effect|utility|stereo` を返す。
+  **`nm` で `clap_entry` が見えることはロードできる証明にならない**ので、
+  ビルド直後と**同梱先の両方**で実ローダーに通した
+- `cargo clippy --all-targets --features outproc-effect,outproc-instrument -- -D warnings`
+  をワークスペース全体で green。Linux ターゲットは `-p orbit-std-gain` で green
+  （ワークスペース全体の Linux クロスは `alsa-sys` がホストに ALSA ヘッダを要求するため
+  ローカルでは不可。CI が Linux ランナーで見る）
+
+**変異検証（壊し方 4 種を横断）**:
+
+| 変異 | 結果 |
+|---|---|
+| (a) 分岐反転: 無音フロアの判定 `<=` → `<` | `the_floor_is_exact_silence_not_merely_quiet` **red** |
+| (b) 引数差し替え: param 名 `db` → `gain` | ユニット + contract の**両方** red |
+| (c) 呼び出し回数: params の `count` 1 → 2 | `the_only_param_is_named_exactly_as_the_dsl_argument` **red** |
+| (d) 構成変更: `PluginGui` を登録 | **コンパイルエラー**（`PluginGuiImpl` 未実装）= 型が捕まえた |
+| (e) 構成変更: 最小 GUI 実装を書いて登録 | `declares_neither_ui_nor_state` **red** |
+
+🔴 **(b) が最初は contract テストを red にしなかった。** `info.name` を定数
+`PARAM_DB_NAME` と比べていたため、**定数を書き換えると両辺が一緒に動いて緑のまま通る**
+トートロジーだった。リテラル `b"db"` との比較を足して修正し、再実行で両方 red を確認。
+(d) は型が先に捕まえたためテストが実行されず、テストが空回りしていないことを (e) で別途確認した。
+
+restore 後は `cmp` でバックアップとの完全一致を確認し、全 12 件の green 復帰も確認済み。
+
 ### 6.385 spec: 実装より先に spec を #628 の到達点へ揃える（Stage 0）(Aug 27, 2026)
 
 **Date**: 2026-08-27

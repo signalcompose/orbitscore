@@ -34,6 +34,12 @@
 # child executables are bundled beside the daemon. The daemon resolves them as
 # siblings of its own executable, requiring no additional runtime wiring.
 #
+# #628 以降、**標準プラグイン**（spec SC.10.8）も同じディレクトリの `std-plugins/` へ
+# 同梱する。child は自分の実行ファイルの隣の `std-plugins/<name>.clap` を見て解決するため、
+# ここに置くだけで配線は不要（インストールレイアウトの知識を daemon / TS に持たせない）。
+# **OS のプラグインディレクトリには何も置かない** — 標準プラグインはアプリの一部であり、
+# ユーザーのカタログを汚さない。
+#
 # Usage:
 #   bash scripts/copy-daemon-bin.sh
 #
@@ -73,6 +79,25 @@ copy_binary() {
   echo "Bundled $binary_name ($PLATFORM) -> $destination_path"
 }
 
+# 標準プラグインは単一バイナリではなく **.clap bundle ディレクトリ**なので、copy_binary とは
+# 別扱いにする。#540 の code-signing キャッシュ問題は bundle 内の実行ファイルにも同じく効くため、
+# in-place 上書きを避けて毎回まるごと作り直す。
+copy_std_plugin_bundle() {
+  local bundle_name="$1"
+  local source_path="$PROJECT_ROOT/rust/target/release/std-plugins/$bundle_name"
+  local destination_path="$DEST_DIR/std-plugins/$bundle_name"
+
+  if [ ! -d "$source_path" ]; then
+    echo "⚠️  $bundle_name not found at $source_path — skipping bundle." >&2
+    return
+  fi
+
+  mkdir -p "$DEST_DIR/std-plugins"
+  rm -rf "$destination_path"
+  cp -R "$source_path" "$destination_path"
+  echo "Bundled $bundle_name ($PLATFORM) -> $destination_path"
+}
+
 # #487: stale child バイナリの黙殺コピー防止（#479 の真因）。cargo が使える環境では
 # bundle 前に daemon + 全 child を必ず再ビルドする（incremental なので通常は数秒）。
 # cargo 不在の contributor は従来どおり best-effort（存在するものをコピー・警告付き）。
@@ -84,7 +109,8 @@ if command -v cargo >/dev/null 2>&1; then
     && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument \
     && cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child \
       -p orbit-vst3-effect-child -p orbit-vst3-instrument-child \
-    && cargo build --release -p orbit-plugin-scan); then
+    && cargo build --release -p orbit-plugin-scan \
+    && bash "$PROJECT_ROOT/rust/crates/orbit-std-gain/bundle-macos.sh" --release >/dev/null); then
     echo "⚠️  release rebuild failed — bundling whatever exists in rust/target/release (may be stale)." >&2
   fi
 else
@@ -97,3 +123,6 @@ copy_binary "orbit-clap-instrument-child"
 copy_binary "orbit-vst3-effect-child"
 copy_binary "orbit-vst3-instrument-child"
 copy_binary "orbit-plugin-scan"
+
+# 標準プラグイン（SC.10.8）。`Gain` が初号で、以後ここへ足していく。
+copy_std_plugin_bundle "Gain.clap"
