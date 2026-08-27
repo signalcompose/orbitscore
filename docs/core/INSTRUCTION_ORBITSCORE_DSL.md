@@ -1244,10 +1244,23 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
 **master（PH.2）/ per-sequence（PH.2b）/ sum・aux（MX.2・MX.3）の 4 経路すべてに同じ規則が
 適用される。** 正本は `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.5（失敗モデル 2 型）。
 
+> 🔴 **#628 でモデルが確定した。** 以下は #625 時点の v1 実装（1 insert・`remove()`）の記述で
+> あり、**ラック形（複数 insert・`layer`・配列からの削除）へ移行する**。正本は
+> `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` **SC.10**、経緯は
+> `docs/design/628-effect-chain-model.md`。移行後は `remove()` は撤回される。
+
 ```js
 sum("drum").effect("TAL-Reverb-4")   // 挿す
 sum("drum").effect("ValhallaRoom")   // 差し替え（エンジン再起動なし）
-sum("drum").remove("ValhallaRoom")   // 外す
+sum("drum").remove("ValhallaRoom")   // 外す（#628 で撤回予定）
+```
+
+**移行後（SC.10）**:
+
+```js
+sum("drum").effect(["TAL-Reverb-4"])                    // 挿す
+sum("drum").effect(["ValhallaRoom"])                    // 差し替え
+sum("drum").effect([])                                  // 外す（配列から消す）
 ```
 
 - **異なる spec での再宣言 = 差し替え**（後勝ち）。エンジン再起動も楽譜の再評価も要らない。
