@@ -947,8 +947,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         //
         // これが無いと、パーサ/ディスパッチの取り違えをユニットテストは素通しする
         // （#528 / #614 で二度踏んだ形）。
+        // 🔴 #628: `ui(数値 index)` は撤回された（SC.10.10.1）。宛先は**カタログ名**で指す。
         const dslUiOpen = await client.call('evaluate_orbitscore', {
-          code: 'drum.ui(1)',
+          code: `drum.ui(${JSON.stringify(catalog.clapEffectName)})`,
         })
         expect(dslUiOpen.isError, dslUiOpen.text).toBe(false)
 
@@ -969,15 +970,21 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // 🔴 #619 F2b: 楽譜の再評価で二重 open にならない（冪等）。
         // 同じ行を2回評価しても、2回目が `OPEN_UI requested while lifecycle is Open` で
         // 落ちてはいけない — ライブコーディングでは再評価が常態。
-        const dslUiReopen1 = await client.call('evaluate_orbitscore', { code: 'drum.ui(1)' })
+        const dslUiReopen1 = await client.call('evaluate_orbitscore', {
+          code: `drum.ui(${JSON.stringify(catalog.clapEffectName)})`,
+        })
         expect(dslUiReopen1.isError, dslUiReopen1.text).toBe(false)
-        const dslUiReopen2 = await client.call('evaluate_orbitscore', { code: 'drum.ui(1)' })
+        const dslUiReopen2 = await client.call('evaluate_orbitscore', {
+          code: `drum.ui(${JSON.stringify(catalog.clapEffectName)})`,
+        })
         expect(dslUiReopen2.isError, dslUiReopen2.text).toBe(false)
         const afterReopenLog = (await client.call('get_log', { lines: 500 })).text
         expect(afterReopenLog).not.toContain('OPEN_UI requested while lifecycle is Open')
 
         // DSL 経由の close も同じ簿記に到達する。
-        const dslUiClose = await client.call('evaluate_orbitscore', { code: 'drum.ui(1, false)' })
+        const dslUiClose = await client.call('evaluate_orbitscore', {
+          code: `drum.ui(${JSON.stringify(catalog.clapEffectName)}, false)`,
+        })
         expect(dslUiClose.isError, dslUiClose.text).toBe(false)
         const afterDslClose = await client.call('close_plugin_ui', { receiver: 'drum', index: 1 })
         expect(
