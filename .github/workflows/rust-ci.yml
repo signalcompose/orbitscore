@@ -93,6 +93,17 @@ jobs:
       - name: Test (outproc-effect feature, gated tests auto-skipped)
         run: cargo test -p orbit-audio-daemon --features outproc-effect --locked
 
+      # 🔴 `#[ignore]` を明示的に回す（#629 レビュー）。対象は #622 の不変条件を**実時間で**
+      # 検査するテストで、`SETUP_DEADLINE` + `CHILD_READY_TIMEOUT` を超えて child stub が
+      # 生きることを確かめる。約 95 秒かかるので `#[ignore]` にしてあるが、**CI で回さなければ
+      # 誰も実行しない**（レビューで「実質何も守っていない」と指摘された）。
+      #
+      # テキスト検査（`no_child_fixture_ends_after_a_fixed_wait`）は script の**形**しか見ない
+      # ので、`timeout 20 ...` や `perl -e 'sleep 20'`、親監視ループ自体の破壊はすり抜ける。
+      # この behavioral テストがその穴を埋める唯一の手段なので、95 秒を払う価値があると判断した。
+      - name: Test (ignored real-time invariants — #622 fixture lifetime)
+        run: cargo test -p orbit-audio-daemon --features outproc-effect --locked -- --ignored
+
       - name: Test (outproc-instrument feature, gated tests auto-skipped)
         run: cargo test -p orbit-audio-daemon --features outproc-instrument --locked
 

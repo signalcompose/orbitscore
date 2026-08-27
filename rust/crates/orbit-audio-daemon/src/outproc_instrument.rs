@@ -1302,8 +1302,7 @@ mod tests {
         let shm = unique_shm_path();
         let _ = std::fs::remove_file(&shm); // ファイル不在 → open_shared が失敗する
         let stats = OutProcInstrumentStats::new();
-        let first = Command::new("sleep")
-            .arg("30")
+        let first = crate::outproc_stub_child::stub_child_command()
             .spawn()
             .expect("spawn stub child");
         let pid = first.id();
@@ -1410,8 +1409,7 @@ mod tests {
         let shm = make_shm();
         let args_path = respawn_args_path(&shm);
         let stats = OutProcInstrumentStats::new();
-        let first = Command::new("sleep")
-            .arg("30")
+        let first = crate::outproc_stub_child::stub_child_command()
             .spawn()
             .expect("spawn initial stub child");
         let first_pid = first.id();

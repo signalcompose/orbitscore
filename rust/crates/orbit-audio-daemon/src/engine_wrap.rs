@@ -4689,7 +4689,17 @@ impl EngineWrap {
                 const EXITED: &str = "child exited before publishing READY";
                 let detail = match early_exit.reason() {
                     Some(status) => format!("{EXITED} ({status})"),
-                    None => EXITED.to_string(),
+                    None => {
+                        // `record` は理由 → 事実の順で書くので、fired が立っていて理由が無いのは
+                        // 現構造では不到達。**黙って汎用文言へ退化させない**（#629 レビュー）—
+                        // 退化すると #622 が問題にした「SIGKILL か child のエラー終了か区別
+                        // できない」状態へ、警告も無く逆戻りする。
+                        tracing::warn!(
+                            "child early exit fired without a recorded reason; \
+                             the attach failure will not say why the child died"
+                        );
+                        EXITED.to_string()
+                    }
                 };
                 return Err(retryable_attach_failure(
                     supervisor,
@@ -7336,8 +7346,7 @@ mod outproc_load_error_test_support {
             PathBuf::from("unused-child-executable-for-respawn-only"),
             R::new_stats(),
         );
-        let first_child = std::process::Command::new("sleep")
-            .arg("30")
+        let first_child = crate::outproc_stub_child::stub_child_command()
             .spawn()
             .expect("spawn stub child for Active fixture");
 
@@ -7515,56 +7524,77 @@ mod outproc_load_error_test_support {
         ///
         /// `variable-lifetime-child.sh` は `FAST_RESPAWN_THRESHOLD`(2s) を超えて生きることで
         /// 「生存者」と判定される必要があり、`sleep 2.2` はその意味を担う。負荷は寿命を
-        /// **縮めない**（`sleep` は遅延しても短くならない）ので #622 の「黙って下回る」形には
-        /// ならず、定数を伸ばせば「生存者が出ない」でテストが落ちる。
+        /// **縮めない**（`sleep` は遅延しても短くならない・`last_respawn_ns` は spawn 直後に
+        /// 打たれるので計測寿命は伸びる方向にしか動かない）ので、#622 の「黙って下回る」形には
+        /// ならない。
+        ///
+        /// **実測（#629 レビューの指摘を受けて）**: 閾値を 2s → 3s へ動かすと
+        /// `supervisor_resets_fast_fail_streak_after_a_survivor` が
+        /// 「7 回 respawn するはず」の assert で落ちる。定数が 2.2 を超えたら**大きな声で
+        /// 落ちる**というこの例外の前提は、主張ではなく確認済みの事実である。
         const FIXED_WAIT_IS_THE_POINT: &[&str] = &["variable-lifetime-child.sh"];
 
         let dir = slow_child_script()
             .parent()
             .expect("fixtures dir")
             .to_path_buf();
+        // 🔴 **再帰する。** `read_dir` は非再帰なので、共有スニペットを置いた `lib/` が
+        // 丸ごと盲点になっていた（#629 レビューで pr-test-analyzer と code-reviewer が独立に
+        // 指摘）。「ディレクトリ全体を走査する」と書いておきながらサブディレクトリを見て
+        // いなかったのは、**この検査自身が繰り返した列挙漏れ**である。
+        let mut pending = vec![dir];
         let mut scanned = 0usize;
-        for entry in std::fs::read_dir(&dir).expect("read fixtures dir") {
-            let path = entry.expect("fixture dir entry").path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("sh") {
-                continue;
+        while let Some(current) = pending.pop() {
+            for entry in std::fs::read_dir(&current).expect("read fixtures dir") {
+                let path = entry.expect("fixture dir entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                    continue;
+                }
+                if path.extension().and_then(|ext| ext.to_str()) != Some("sh") {
+                    continue;
+                }
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("fixture file name")
+                    .to_string();
+                if FIXED_WAIT_IS_THE_POINT.contains(&name.as_str()) {
+                    continue;
+                }
+                scanned += 1;
+                let script = std::fs::read_to_string(&path).expect("read fixture");
+                let code: Vec<&str> = script
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                    .collect();
+                // 見るのは**最後の文**だけ。ループ内の `sleep 1`（ポーリング間隔）は寿命ではない。
+                let last_statement = code.last().copied().unwrap_or_default();
+                let ends_after_a_fixed_wait = last_statement
+                    .strip_prefix("exec ")
+                    .unwrap_or(last_statement)
+                    .strip_prefix("sleep ")
+                    .is_some_and(|arg| arg.trim().parse::<f64>().is_ok());
+                assert!(
+                    !ends_after_a_fixed_wait,
+                    "{name} must not end after a fixed duration: a child stub has to outlive \
+                     SETUP_DEADLINE ({SETUP_DEADLINE:?}) and CHILD_READY_TIMEOUT \
+                     ({CHILD_READY_TIMEOUT:?}), and any fixed number eventually falls below them \
+                     without anyone noticing (#622). Source lib/live-until-parent-exits.sh instead. \
+                     Script was:\n{script}"
+                );
             }
-            let name = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .expect("fixture file name")
-                .to_string();
-            if FIXED_WAIT_IS_THE_POINT.contains(&name.as_str()) {
-                continue;
-            }
-            scanned += 1;
-            let script = std::fs::read_to_string(&path).expect("read fixture");
-            let code: Vec<&str> = script
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty() && !line.starts_with('#'))
-                .collect();
-            // 見るのは**最後の文**だけ。ループ内の `sleep 1`（ポーリング間隔）は寿命ではない。
-            let last_statement = code.last().copied().unwrap_or_default();
-            let ends_after_a_fixed_wait = last_statement
-                .strip_prefix("exec ")
-                .unwrap_or(last_statement)
-                .strip_prefix("sleep ")
-                .is_some_and(|arg| arg.trim().parse::<f64>().is_ok());
-            assert!(
-                !ends_after_a_fixed_wait,
-                "{name} must not end after a fixed duration: a child stub has to outlive \
-                 SETUP_DEADLINE ({SETUP_DEADLINE:?}) and CHILD_READY_TIMEOUT \
-                 ({CHILD_READY_TIMEOUT:?}), and any fixed number eventually falls below them \
-                 without anyone noticing (#622). Source lib/live-until-parent-exits.sh instead. \
-                 Script was:\n{script}"
-            );
         }
-        assert!(
-            scanned >= 2,
-            "the fixture scan found only {scanned} script(s) — the enumeration is what makes \
-             this test meaningful (#622 was missed by checking a single file), so a scan that \
-             suddenly covers nothing is itself the failure"
+        // 期待件数を明示する。`>= 2` では、走査対象が 1 本静かに外れても気づけない
+        // （#629 レビュー Minor）。件数が変わったらこのテストごと見直させる。
+        const EXPECTED_SCANNED: usize = 4;
+        assert_eq!(
+            scanned, EXPECTED_SCANNED,
+            "the fixture scan covered {scanned} script(s), expected {EXPECTED_SCANNED} — the \
+             enumeration is what makes this test meaningful (#622 was missed by checking a \
+             single file, and the lib/ subdirectory was missed by not recursing), so a scan \
+             whose coverage changed is itself the failure"
         );
     }
 
@@ -8870,8 +8900,7 @@ mod effect_replace_tests {
             engaged: engaged.clone(),
             cleanup_shm_on_drop: true,
         };
-        let mut child = Command::new("sleep")
-            .arg("30")
+        let mut child = crate::outproc_stub_child::stub_child_command()
             .spawn()
             .expect("spawn old effect fixture child");
         let old_pid = child.id();
@@ -9430,8 +9459,7 @@ mod outproc_instrument_replace_tests {
             ChildSlot::Empty(launch) => launch,
             _ => panic!("fixture slot must start Empty"),
         };
-        let mut child = Command::new("sleep")
-            .arg("30")
+        let mut child = crate::outproc_stub_child::stub_child_command()
             .spawn()
             .expect("spawn old fixture child");
         let pid = child.id();

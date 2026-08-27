@@ -37,6 +37,10 @@ pub mod outproc_instrument;
 /// **effect と instrument で共有する**（規則を2箇所に持つと片方だけ直し忘れる — #548 と同種のリスク）。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 pub(crate) mod outproc_respawn_guard;
+/// テストが使う「殺されるまで生きる stub child」の唯一の生成経路（#622 / #629）。
+/// テストコードが固定秒数の `sleep` を直に spawn できると、fixture 側だけ直しても同じクラスが残る。
+#[cfg(all(test, any(feature = "outproc-effect", feature = "outproc-instrument")))]
+pub(crate) mod outproc_stub_child;
 pub mod protocol;
 pub mod server;
 pub mod session;

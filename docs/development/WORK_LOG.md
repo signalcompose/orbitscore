@@ -17,6 +17,87 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.377 fix: PR #629 レビュー ラウンド1 の指摘を方針として一括適用 (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #622 / PR #629
+**Status**: daemon lib **208 passed / 0 failed / 1 ignored**（`#[ignore]` も実走 95.00s で pass）
+
+owner の「レビューしないでマージして大丈夫ですか？」で手順違反に気づき、`/code:pr-review-team`
+ラウンド1（フル編成 4 名）+ **Fable 監査を並行**で回した。**Critical 2 / Important 3 / Minor 5**。
+
+#### 🔴 3 者が独立に一致した誤り — キャッシュライン分離の虚偽
+
+6.376 で「false sharing の懸念 → フィールドを struct 末尾へ」と記録したが、**`repr(Rust)` は
+宣言順とメモリ配置順を保証しない**。comment-analyzer・Fable・code-reviewer が独立に指摘し、
+**code-reviewer が `offset_of!` で実測**して決着した:
+
+- `child_early_exit`（Mutex 込み・size 48）は **offset 0**（struct の先頭）
+- RT が毎コールバック触る `fresh` は offset 48
+- → **両方とも最初の 64 バイトに同居**しており、意図した分離は成立していなかった
+
+しかも 🔴 命令形で 3 箇所に書いていたので、将来「対処済み」という誤った前提で読まれる形だった。
+**`#[repr(C)]` は足さず、保証の記述を撤回**した（元の懸念自体が推測ベースで、非ホットパスと
+確認済みのため）。
+
+#### 🔴 型で封じたのに、封じられていることを誰も検証していなかった
+
+pr-test-analyzer の指摘: `ChildEarlyExit` は「片方だけ動かす退行を表現不能にする」ために
+新設したのに、**その不能性を検証するテストが無い**。既存の attach テストは試行が 1 回なので、
+`arm_for_new_attempt()` を「フラグだけ倒す」に退行させても検出できない。
+
+**実測で裏付けた**: 同じ変異に対し **旧テスト = 2 passed（素通り）/ 新テスト = red**。
+指摘は「もっともらしい」ではなく事実だった。
+
+#### 🔴 列挙の打ち切り（Fable・非重複）
+
+`Command::new("sleep").arg("30")` が**テストコードに 7 箇所**残っていた
+（`engine_wrap.rs` 3 / `outproc_effect.rs` 2 / `outproc_instrument.rs` 2）。いずれも
+「殺されるまで生きる stub」= `slow-child.sh` と同じ契約で、**新スキャナの検出圏外**。
+
+> WORK_LOG の「固定秒数を書ける場所を無くした」は fixture ディレクトリに限れば真、
+> **テストコード全体では偽**（Fable）
+
+main が自分で grep して 7 箇所を確認（`0.2` × 4 と `2` × 1 は「即死が役目」で別クラス）。
+
+#### 適用した方針
+
+> **① 書ける場所を 1 つに絞る。検出器を賢くしない。** `outproc_stub_child` に唯一の生成経路を
+> 置き 7 箇所を移した。**秒数を渡す口が無い**。`perl -e 'sleep 20'` まで正規表現で潰す方向へは
+> 行かない — 書ける場所が 1 つなら検出は単純でよい。
+>
+> **② 宣言と実体を一致させる。** 走査を**再帰化**し（`lib/` が盲点だった）、件数を `>= 2` から
+> **`== 4` の厳密一致**へ。
+>
+> **③ 保証できないことを保証と書かない。** キャッシュライン主張を撤回。スレッド分担も
+> 「control 側も**書き手**」と実際の呼び出しに合わせた。
+>
+> **④ 型で封じたなら、封じられていることをテストする。**
+
+#### 変異検証（すべて実測）
+
+| 変異 | 結果 |
+|---|---|
+| `arm_for_new_attempt` が理由を倒さない | 新テスト red / **旧テストは素通り** |
+| 共有スニペット自身に `exec sleep 30` を足す | 再帰走査が**名指しで** red（旧走査は素通り） |
+| `FAST_RESPAWN_THRESHOLD` 2s → 3s | `supervisor_resets_fast_fail_streak_after_a_survivor` が red |
+
+3 番目は「定数を伸ばせば大きな声で落ちる」という**未実測だった主張**（pr-test-analyzer 指摘）を
+事実に変えたもの。
+
+#### レビュアー間の対立を裁定
+
+**PID 再利用**について silent-failure-hunter は「永久に終了しない・孤児問題の再導入」、
+Fable は**不同意**。**Fable を採用**した — PID は単調割当て + wraparound なので 1 秒以内の
+再利用は非現実的で、仮に起きても偽者プロセスの寿命の間だけ（有界）。
+
+#### `#[ignore]` テストを CI へ
+
+「CI に `--ignored` ジョブが無く誰も実行しない」（pr-test-analyzer / Fable が一致）を受け、
+`rust-ci.yml` にステップを追加。**手元で実走して 95.00s / pass を確認してから載せた**。
+テキスト検査は script の**形**しか見ないので、`timeout 20 ...` や親監視ループ自体の破壊は
+すり抜ける。この behavioral テストがその穴を埋める唯一の手段なので 95 秒を払う。
+
 ### 6.376 refactor: /simplify の指摘を方針として一括適用 (#622 / PR #629) (Aug 27, 2026)
 
 **Date**: 2026-08-27
