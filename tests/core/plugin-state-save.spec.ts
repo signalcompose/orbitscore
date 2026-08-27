@@ -16,6 +16,7 @@ import {
   ProjectStateStore,
   stateFileNameForIdentity,
 } from '../../packages/engine/src/core/project-state-store'
+import { installEffectChainMock } from '../helpers/effect-chain-mock'
 
 const temporaryDirectories: string[] = []
 
@@ -45,6 +46,7 @@ function harness() {
       return { path: statePath, bytesWritten: 12 }
     }),
   } as any
+  installEffectChainMock(audio)
   const global = new Global(audio)
   global.setDocumentDirectory(directory)
   const sequence = new Sequence(global, audio)
@@ -116,22 +118,22 @@ describe('plugin state address resolution and project registration (#562)', () =
     expect(audio.savePluginState).toHaveBeenCalledTimes(5)
     expect(audio.savePluginState).toHaveBeenNthCalledWith(
       1,
-      { role: 'effect' },
+      { role: 'effect', chainPath: [0] },
       path.join(directory, ...expectedStates['master/effect/MasterLimiter/0'].split('/')),
     )
     expect(audio.savePluginState).toHaveBeenNthCalledWith(
       2,
-      { role: 'effect', bus: 'sum-bus-0' },
+      { role: 'effect', bus: 'sum-bus-0', chainPath: [0] },
       path.join(directory, ...expectedStates['sum:drum/effect/SumGlue/0'].split('/')),
     )
     expect(audio.savePluginState).toHaveBeenNthCalledWith(
       3,
-      { role: 'effect', bus: 'aux-bus-0' },
+      { role: 'effect', bus: 'aux-bus-0', chainPath: [0] },
       path.join(directory, ...expectedStates['aux:wet/effect/AuxVerb/0'].split('/')),
     )
     expect(audio.savePluginState).toHaveBeenNthCalledWith(
       4,
-      { role: 'effect', bus: 'seq-bus-0' },
+      { role: 'effect', bus: 'seq-bus-0', chainPath: [0] },
       path.join(directory, ...expectedStates['lead/effect/LeadEcho/0'].split('/')),
     )
     expect(audio.savePluginState).toHaveBeenNthCalledWith(
@@ -269,7 +271,7 @@ describe('plugin state address resolution and project registration (#562)', () =
         normalizedName: 'Echo',
         occurrence: 0,
       },
-      daemonTarget: { role: 'effect', bus: 'seq-bus-0' },
+      daemonTarget: { role: 'effect', bus: 'seq-bus-0', chainPath: [0] },
     })
     expect(global.resolvePluginStateTarget('lead', 2)).toEqual({
       identity: {
@@ -278,7 +280,7 @@ describe('plugin state address resolution and project registration (#562)', () =
         normalizedName: 'Echo',
         occurrence: 1,
       },
-      daemonTarget: { role: 'effect', bus: 'seq-bus-0' },
+      daemonTarget: { role: 'effect', bus: 'seq-bus-0', chainPath: [1] },
     })
   })
 
@@ -319,7 +321,7 @@ describe('plugin state address resolution and project registration (#562)', () =
         normalizedName: 'Limiter',
         occurrence: 0,
       },
-      daemonTarget: { role: 'effect' },
+      daemonTarget: { role: 'effect', chainPath: [0] },
     })
     expect(() => global.resolvePluginStateTarget('master', 0)).toThrow(
       /Valid indices: 1 \(effect, Limiter\)/,
@@ -341,7 +343,7 @@ describe('plugin state address resolution and project registration (#562)', () =
         normalizedName: 'SumTone',
         occurrence: 0,
       },
-      daemonTarget: { role: 'effect', bus: 'sum-bus-0' },
+      daemonTarget: { role: 'effect', bus: 'sum-bus-0', chainPath: [0] },
     })
     expect(global.resolvePluginStateTarget('aux:x', 1)).toEqual({
       identity: {
@@ -350,7 +352,7 @@ describe('plugin state address resolution and project registration (#562)', () =
         normalizedName: 'AuxTone',
         occurrence: 0,
       },
-      daemonTarget: { role: 'effect', bus: 'aux-bus-0' },
+      daemonTarget: { role: 'effect', bus: 'aux-bus-0', chainPath: [0] },
     })
   })
 
@@ -391,7 +393,7 @@ describe('plugin state address resolution and project registration (#562)', () =
     expect(saved.identityKey).toBe('sum:drum/effect/GlueComp/0')
     expect(saved.projectStatePath).toBe(expectedRelative)
     expect(audio.savePluginState).toHaveBeenCalledWith(
-      { role: 'effect', bus: 'sum-bus-0' },
+      { role: 'effect', bus: 'sum-bus-0', chainPath: [0] },
       path.join(directory, ...expectedRelative.split('/')),
     )
     expect(parse(fs.readFileSync(path.join(directory, 'project.yaml'), 'utf8'))).toEqual({
@@ -535,7 +537,7 @@ describe('plugin UI address guard and loud diagnostics (#474 P4c)', () => {
     await global.instrument('lead', './Massive-X.clap')
 
     await expect(global.openPluginUi('lead', 0, 'WrongSynth')).rejects.toThrow(
-      /expected normalized name 'WrongSynth' but the current slot is 'Massive-X'; the UI was not opened.*Valid indices: 0 \(instrument, Massive-X\)/,
+      /expected normalized name 'WrongSynth' but the current slot is 'Massive-X'; re-evaluate first; the UI was not opened.*Valid indices: 0 \(instrument, Massive-X\)/,
     )
     expect(audio.openPluginUi).toHaveBeenCalledTimes(0)
   })
@@ -579,7 +581,10 @@ describe('plugin UI address guard and loud diagnostics (#474 P4c)', () => {
       completion: 'safepoint-completed',
     })
     expect(audio.closePluginUi).toHaveBeenCalledTimes(1)
-    expect(audio.closePluginUi).toHaveBeenCalledWith({ role: 'effect', bus: 'sum-bus-0' }, 1)
+    expect(audio.closePluginUi).toHaveBeenCalledWith(
+      { role: 'effect', bus: 'sum-bus-0', chainPath: [0] },
+      1,
+    )
   })
 
   it('reports a DONE timeout-without-save loudly with the valid role/name list', async () => {
@@ -625,7 +630,7 @@ describe('plugin UI open-time identity policy (#601 I1/I2)', () => {
       occurrence: 0,
     }
     expect(audio.savePluginState).toHaveBeenCalledWith(
-      { role: 'effect', bus: serumSlot.bus },
+      { role: 'effect', bus: serumSlot.bus, chainPath: [0] },
       path.join(directory, 'states', stateFileNameForIdentity(serumIdentity)),
     )
     const manifest = parse(fs.readFileSync(path.join(directory, 'project.yaml'), 'utf8')) as {
@@ -651,7 +656,10 @@ describe('plugin UI open-time identity policy (#601 I1/I2)', () => {
       completion: 'safepoint-completed',
     })
     expect(audio.closePluginUi).toHaveBeenCalledTimes(1)
-    expect(audio.closePluginUi).toHaveBeenCalledWith({ role: 'effect', bus: serumSlot.bus }, 1)
+    expect(audio.closePluginUi).toHaveBeenCalledWith(
+      { role: 'effect', bus: serumSlot.bus, chainPath: [0] },
+      1,
+    )
   })
 
   // 名前は実態どおり「safepoint 保存」の index 区別（`pluginUiSessionKey` 経由）。
@@ -682,7 +690,7 @@ describe('plugin UI open-time identity policy (#601 I1/I2)', () => {
       occurrence: 0,
     }
     expect(audio.savePluginState).toHaveBeenCalledWith(
-      { role: 'effect', bus: firstEcho.bus },
+      { role: 'effect', bus: firstEcho.bus, chainPath: [0] },
       path.join(directory, 'states', stateFileNameForIdentity(occurrenceZero)),
     )
     const manifest = parse(fs.readFileSync(path.join(directory, 'project.yaml'), 'utf8')) as {
@@ -780,7 +788,10 @@ describe('plugin UI open-time identity policy (#601 I1/I2)', () => {
       completion: 'safepoint-completed',
     })
     expect(audio.closePluginUi).toHaveBeenCalledTimes(1)
-    expect(audio.closePluginUi).toHaveBeenCalledWith({ role: 'effect', bus: echoSlot.bus }, 2)
+    expect(audio.closePluginUi).toHaveBeenCalledWith(
+      { role: 'effect', bus: echoSlot.bus, chainPath: [1] },
+      2,
+    )
 
     // index 1 のセッションは無傷で残っている（誤って選ばれ消費されていない）。
     await expect(global.closePluginUi('lead', 1)).resolves.toMatchObject({
@@ -820,7 +831,7 @@ describe('plugin UI open-time identity policy (#601 I1/I2)', () => {
     })
     expect(audio.closePluginUi).toHaveBeenCalledTimes(1)
     expect(audio.closePluginUi).toHaveBeenCalledWith(
-      { role: 'effect', bus: 'seq-bus-9-different' },
+      { role: 'effect', bus: 'seq-bus-9-different', chainPath: [0] },
       1,
     )
   })

@@ -1,4 +1,5 @@
 import type { AudioEngine } from '../../audio/types'
+import type { RackRecipe } from '../../signal-chain/rack'
 import { createStatePathFallback } from '../project-state-store'
 
 import { AudioManager } from './audio-manager'
@@ -7,9 +8,9 @@ import {
   BusPool,
   EffectChainMap,
   normalizePluginInstanceName,
-  resolveEffectSpec,
+  resolveEffectRack,
+  type ChainElement,
   type EffectChainMapOptions,
-  type PluginSlot,
 } from './effect-slot'
 
 /**
@@ -56,6 +57,8 @@ export class SequenceEffectManager {
   ) {
     this.slots = new EffectChainMap(audioEngine, (sequenceName) => `seq:${sequenceName}`, {
       externalReceiverId: (sequenceName) => sequenceName,
+      effectBus: (sequenceName) => this.buses.get(sequenceName),
+      projectDirectory: () => audioManager.getDocumentDirectory(),
       statePathFallback: createStatePathFallback(audioManager),
       replacement,
     })
@@ -74,8 +77,8 @@ export class SequenceEffectManager {
     return this.buses.get(sequenceName)
   }
 
-  chainFor(sequenceName: string): readonly PluginSlot[] {
-    return this.slots.chainFor(sequenceName)
+  chainFor(sequenceName: string): readonly ChainElement[] {
+    return this.slots.rackFor(sequenceName)
   }
 
   /** Sequence names with a loaded insert (passthrough-only buses are excluded). */
@@ -101,17 +104,25 @@ export class SequenceEffectManager {
   }
 
   /** Declares (or idempotently re-declares) the insert for `sequenceName`. Returns the allocated bus name. */
-  async effect(sequenceName: string, spec: string, pluginId?: string): Promise<string> {
-    const resolved = resolveEffectSpec(
-      spec,
-      pluginId,
+  async effect(
+    sequenceName: string,
+    value: string | RackRecipe,
+    pluginId?: string,
+  ): Promise<string> {
+    const recipe: RackRecipe =
+      typeof value === 'string'
+        ? [{ kind: 'catalog', spec: value, pluginId, enabled: true }]
+        : value
+    if (this.linkAudioManager.isEnabled()) {
+      throw new Error(
+        `Sequence '${sequenceName}': seq.effect() cannot be used while LinkAudio is enabled in v1.`,
+      )
+    }
+    const rack = resolveEffectRack(
+      recipe,
       { audioManager: this.audioManager, linkAudioManager: this.linkAudioManager },
       `Sequence '${sequenceName}': seq.effect() cannot be used while LinkAudio is enabled in v1.`,
     )
-
-    const duplicateMessage = () =>
-      `Sequence '${sequenceName}': seq.effect() supports one insert per sequence in v1; ` +
-      `chains (multiple inserts) are reserved for future support.`
 
     // passthrough（ensureBus 由来・insert 未ロード）は「既存 insert」ではない — 同じ bus を
     // その場で昇格する。実 insert が既にあれば slots.declare が冪等/self-heal/重複エラーを担う。
@@ -119,17 +130,7 @@ export class SequenceEffectManager {
     const bus = this.buses.get(sequenceName) ?? this.pool.acquire(sequenceName)
     this.buses.set(sequenceName, bus)
     try {
-      await this.slots.declare(
-        sequenceName,
-        {
-          role: 'effect',
-          bus,
-          normalizedName: normalizePluginInstanceName(spec),
-          resolvedPath: resolved.path,
-          pluginId: resolved.pluginId,
-        },
-        duplicateMessage,
-      )
+      await this.slots.applyRack(sequenceName, rack)
     } catch (err) {
       if (!hadBus) {
         // この呼び出しで新規に確保した bus の load 失敗: free-list へ返す（daemon 側も
@@ -146,7 +147,7 @@ export class SequenceEffectManager {
         // `slots.settled()` でこの key へのキューが完全に片付くのを待ってから、
         // 真に誰も宣言を持っていない場合だけ解放する。
         await this.slots.settled(sequenceName)
-        if (!this.slots.has(sequenceName)) {
+        if (!this.slots.hasAppliedRack(sequenceName) && !this.slots.hasUncertain(sequenceName)) {
           this.buses.delete(sequenceName)
           this.pool.release(bus)
         }

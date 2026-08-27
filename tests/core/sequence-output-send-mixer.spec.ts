@@ -9,6 +9,7 @@ import { Global } from '../../packages/engine/src/core/global'
 import { Sequence } from '../../packages/engine/src/core/sequence'
 import { MidiManager } from '../../packages/engine/src/core/global/midi-manager'
 import type { MidiOutput } from '../../packages/engine/src/midi/midi-output'
+import { installEffectChainMock } from '../helpers/effect-chain-mock'
 
 const T0 = 1_000_000
 
@@ -44,6 +45,7 @@ function harness(setBusRouting = vi.fn().mockResolvedValue(undefined)) {
     loadPlugin: vi.fn().mockResolvedValue({}),
     setBusRouting,
   } as any
+  installEffectChainMock(audio)
   const midiOutput = mockMidiOutput()
   const global = new Global(audio, new MidiManager(() => midiOutput))
   global.setDocumentDirectory('/songs')

@@ -7,11 +7,17 @@
  * self-heal + install/rollback」「prefix 連番 + free-list の bus pool」をここに一本化する。
  */
 
+import * as fs from 'fs'
 import * as path from 'path'
 
-import type { AudioEngine } from '../../audio/types'
+import type { AudioEngine, EffectChainApplyRequest, EffectChainPlanStage } from '../../audio/types'
 import { DaemonProtocolError } from '../../audio/rust-engine/errors'
-import type { PluginStateIdentity } from '../project-state-store'
+import type { RackRecipe } from '../../signal-chain/rack'
+import {
+  projectStateStoreFor,
+  stateFileNameForIdentity,
+  type PluginStateIdentity,
+} from '../project-state-store'
 
 import { AudioManager } from './audio-manager'
 import { effectReplaceNotice } from './effect-replace-notice'
@@ -83,6 +89,88 @@ export interface InstrumentSlot extends PluginSlotBase {
 
 export type PluginSlot = EffectSlot | InstrumentSlot
 
+export type CatalogElement = EffectSlot & {
+  readonly kind: 'catalog'
+  readonly enabled: boolean
+}
+
+export interface StandardElement {
+  readonly kind: 'standard'
+  readonly role: 'effect'
+  readonly bus: string | undefined
+  readonly instanceId: PluginInstanceId
+  readonly receiver: string
+  readonly occurrence: number
+  readonly normalizedName: string
+  readonly name: string
+  readonly params: Readonly<Record<string, number>>
+  readonly enabled: boolean
+}
+
+export type ChainElement = CatalogElement | StandardElement
+export type RegisteredChainElement = PluginSlot | StandardElement
+
+export type RackSpec = readonly RackElementSpec[]
+export type RackElementSpec = CatalogElementSpec | StandardElementSpec
+
+export interface CatalogElementSpec {
+  readonly kind: 'catalog'
+  readonly normalizedName: string
+  readonly resolvedPath: string
+  readonly pluginId: string | undefined
+  readonly declaredStatePath?: string
+  readonly enabled: boolean
+}
+
+export interface StandardElementSpec {
+  readonly kind: 'standard'
+  readonly name: string
+  readonly params: Readonly<Record<string, number>>
+  readonly enabled: boolean
+}
+
+/** Resolve the interpreter's category-classified recipe immediately before applying a rack. */
+export function resolveEffectRack(
+  recipe: RackRecipe,
+  deps: { audioManager: AudioManager; linkAudioManager: LinkAudioManager },
+  linkAudioErrorMessage: string,
+): RackSpec {
+  if (recipe.some((element) => element.kind === 'layer')) {
+    throw new Error(
+      'layer() (parallel racks) is staged behind PDC (SC.10.11); v1 supports serial chains only',
+    )
+  }
+  return recipe.map((element): RackElementSpec => {
+    if (element.kind === 'layer') {
+      // Guarded above; keep the exhaustiveness local so TypeScript does not widen the map body.
+      throw new Error(
+        'layer() (parallel racks) is staged behind PDC (SC.10.11); v1 supports serial chains only',
+      )
+    }
+    if (element.kind === 'standard') {
+      return {
+        kind: 'standard',
+        name: element.name,
+        params: { ...element.params },
+        enabled: element.enabled,
+      }
+    }
+    const qualifiedSpec = element.format
+      ? `${element.format}/${element.spec}`
+      : element.vendor
+        ? `${element.vendor}/${element.spec}`
+        : element.spec
+    const resolved = resolveEffectSpec(qualifiedSpec, element.pluginId, deps, linkAudioErrorMessage)
+    return {
+      kind: 'catalog',
+      normalizedName: normalizePluginInstanceName(element.spec),
+      resolvedPath: resolved.path,
+      pluginId: resolved.pluginId,
+      enabled: element.enabled,
+    }
+  })
+}
+
 interface UncertainReplacement {
   readonly bus: string | undefined
   /** The forgotten effect tenant still deserves best-effort cleanup on recovery. */
@@ -126,6 +214,10 @@ export interface EffectChainMapOptions<K> {
    * どちらも `'master'` で同値。
    */
   readonly externalReceiverId?: (key: K) => string
+  /** Effect bus for ApplyEffectChain; undefined selects the master rack. */
+  readonly effectBus?: (key: K) => string | undefined
+  /** Project directory used for deterministic drop-save paths and post-commit registration. */
+  readonly projectDirectory?: () => string
   /** Opt-in for in-place daemon replacement. */
   readonly replacement?: {
     readonly beforeReplace: (key: K, oldSlot: PluginSlot) => Promise<void>
@@ -153,20 +245,102 @@ export class EffectSlotLimitError extends Error {
   }
 }
 
+function elementToken(element: ChainElement | RackElementSpec): string {
+  return element.kind === 'catalog'
+    ? `catalog:${element.normalizedName}`
+    : `standard:${element.name}`
+}
+
+/** LCS with an explicit tie rule: keep the earlier old element when two solutions are equal. */
+function lcsPairs(
+  previous: readonly ChainElement[],
+  next: RackSpec,
+): Array<{ previousIndex: number; nextIndex: number }> {
+  const oldTokens = previous.map(elementToken)
+  const nextTokens = next.map(elementToken)
+  const lengths = Array.from({ length: oldTokens.length + 1 }, () =>
+    Array<number>(nextTokens.length + 1).fill(0),
+  )
+  for (let i = oldTokens.length - 1; i >= 0; i--) {
+    for (let j = nextTokens.length - 1; j >= 0; j--) {
+      lengths[i]![j] =
+        oldTokens[i] === nextTokens[j]
+          ? 1 + lengths[i + 1]![j + 1]!
+          : Math.max(lengths[i + 1]![j]!, lengths[i]![j + 1]!)
+    }
+  }
+  const pairs: Array<{ previousIndex: number; nextIndex: number }> = []
+  let i = 0
+  let j = 0
+  while (i < oldTokens.length && j < nextTokens.length) {
+    if (oldTokens[i] === nextTokens[j]) {
+      pairs.push({ previousIndex: i, nextIndex: j })
+      i += 1
+      j += 1
+    } else if (lengths[i + 1]![j]! > lengths[i]![j + 1]!) {
+      i += 1
+    } else {
+      // Tie: advance the new side, preserving the earlier old candidate for a later match.
+      j += 1
+    }
+  }
+  return pairs
+}
+
+function sameCatalogSpec(old: ChainElement, spec: RackElementSpec): boolean {
+  return (
+    old.kind === 'catalog' &&
+    spec.kind === 'catalog' &&
+    old.resolvedPath === spec.resolvedPath &&
+    old.pluginId === spec.pluginId &&
+    old.declaredStatePath === spec.declaredStatePath
+  )
+}
+
+function sameCatalogElement(old: ChainElement, next: ChainElement): boolean {
+  return (
+    old.kind === 'catalog' &&
+    next.kind === 'catalog' &&
+    old.resolvedPath === next.resolvedPath &&
+    old.pluginId === next.pluginId &&
+    old.declaredStatePath === next.declaredStatePath
+  )
+}
+
+function rackApplyProtocolError(error: DaemonProtocolError, rack: RackSpec): DaemonProtocolError {
+  const match = error.message.match(/index\s+(\d+)/i)
+  const index = match ? Number(match[1]) : 0
+  const element = rack[index]
+  const name =
+    element === undefined
+      ? '<rack>'
+      : element.kind === 'catalog'
+        ? element.normalizedName
+        : element.name
+  const cause = error.message.replace(/^\[[^\]]+\]\s*/, '')
+  return new DaemonProtocolError(
+    error.code,
+    `effect chain apply failed at index ${index} (${name}): ${cause}; the previous chain is kept`,
+    error.details,
+  )
+}
+
 /**
- * key ごとに plugin chain を持つ宣言集合。PR-1a では上限 1 を維持するが、
- * 登記自体は複数 insert と instrument role を表現できる形にしておく。
- * `declare()` が冪等再宣言・respawn 後 self-heal（`isPluginActive === false` で再ロード）・
- * 失敗時の宣言ロールバック（自分が入れた宣言のみ削除）を一手に実装する。
+ * key ごとの宣言集合。`declare()` は単一 instrument の旧経路を維持し、`applyRack()` は
+ * effect の完全な多段ラックを管理する。両経路は同じ per-key キューを共有する。
  */
 export class EffectChainMap<K> {
   private readonly chains = new Map<K, PluginSlot[]>()
+  private readonly rackChains = new Map<K, ChainElement[]>()
   private readonly maxLength: number
   private readonly statePathFallback?: PluginStatePathFallbackResolver
   private readonly externalReceiverId?: (key: K) => string
+  private readonly effectBus?: (key: K) => string | undefined
+  private readonly projectDirectory?: () => string
   private readonly replacement?: EffectChainMapOptions<K>['replacement']
   /** A rejected ensure leaves commit status unknown and retains cleanup context. */
   private readonly uncertainReplacements = new Map<K, UncertainReplacement>()
+  private readonly uncertainRacks = new Set<K>()
   // key ごとの直列化キュー（#527 review Important 1）。値は「前呼び出しの決着
   // （成功/失敗いずれも）待ち」で、前呼び出しの成否は自分の結果に影響させない
   // （catch で握りつぶし、必ず次の呼び出しへ進める）。
@@ -180,15 +354,25 @@ export class EffectChainMap<K> {
     this.maxLength = options.maxLength ?? 1
     this.statePathFallback = options.statePathFallback
     this.externalReceiverId = options.externalReceiverId
+    this.effectBus = options.effectBus
+    this.projectDirectory = options.projectDirectory
     this.replacement = options.replacement
   }
 
   has(key: K): boolean {
-    return (this.chains.get(key)?.length ?? 0) > 0
+    return (this.rackChains.get(key)?.length ?? this.chains.get(key)?.length ?? 0) > 0
+  }
+
+  /** Whether a rack image (including an intentional empty rack) was committed for this key. */
+  hasAppliedRack(key: K): boolean {
+    return this.rackChains.has(key)
   }
 
   /** いずれかの key に非空チェーンがあるか（#540 P1: `PluginInstrumentManager.hasDeclaration`）。 */
   hasAny(): boolean {
+    for (const chain of this.rackChains.values()) {
+      if (chain.length > 0) return true
+    }
     for (const chain of this.chains.values()) {
       if (chain.length > 0) return true
     }
@@ -197,7 +381,7 @@ export class EffectChainMap<K> {
 
   /** Whether replacement outcome is unknown for one key. */
   hasUncertain(key: K): boolean {
-    return this.uncertainReplacements.has(key)
+    return this.uncertainReplacements.has(key) || this.uncertainRacks.has(key)
   }
 
   /**
@@ -210,9 +394,14 @@ export class EffectChainMap<K> {
     return [...(this.chains.get(key) ?? [])]
   }
 
+  /** Rack-only typed observer for effect managers. */
+  rackFor(key: K): readonly ChainElement[] {
+    return [...(this.rackChains.get(key) ?? [])]
+  }
+
   /** Non-empty chain keys, returned as a copy so callers cannot mutate the registry. */
   keys(): readonly K[] {
-    return [...this.chains.keys()]
+    return [...new Set([...this.chains.keys(), ...this.rackChains.keys()])]
   }
 
   /**
@@ -246,6 +435,226 @@ export class EffectChainMap<K> {
    */
   async declare(key: K, spec: PluginDeclaration, duplicateMessage: () => string): Promise<void> {
     return this.enqueue(key, () => this.declareBody(key, spec, duplicateMessage))
+  }
+
+  /** Settle a complete effect rack through one prepare-commit daemon command. */
+  async applyRack(key: K, rack: RackSpec): Promise<void> {
+    return this.enqueue(key, () => this.applyRackBody(key, rack))
+  }
+
+  private async applyRackBody(key: K, rack: RackSpec): Promise<void> {
+    if (!this.audioEngine.applyEffectChain) {
+      throw new Error('Effect rack hosting requires the Rust engine backend.')
+    }
+    const previous = this.rackChains.get(key) ?? []
+    const mode: EffectChainApplyRequest['mode'] = this.uncertainRacks.has(key) ? 'rebuild' : 'diff'
+    const pairs = mode === 'rebuild' ? [] : lcsPairs(previous, rack)
+    const previousForNew = new Map(
+      pairs.map(({ previousIndex, nextIndex }) => [nextIndex, previousIndex]),
+    )
+    const keptPrevious = new Set<number>()
+    const dropPrevious = new Set<number>()
+    const receiver = this.receiverId(key)
+    const externalReceiver = this.externalReceiverId?.(key) ?? receiver
+    const bus = this.effectBus?.(key)
+
+    const usedOccurrences = new Map<string, Set<number>>()
+    const reserve = (name: string, occurrence: number): void => {
+      const used = usedOccurrences.get(name) ?? new Set<number>()
+      used.add(occurrence)
+      usedOccurrences.set(name, used)
+    }
+    const allocate = (name: string): number => {
+      const used = usedOccurrences.get(name) ?? new Set<number>()
+      let occurrence = 0
+      while (used.has(occurrence)) occurrence += 1
+      used.add(occurrence)
+      usedOccurrences.set(name, used)
+      return occurrence
+    }
+
+    // Every LCS-corresponding element survives as the same identity, including an in-place
+    // catalog spec replacement. Unmatched dropped identities are free for deterministic reuse.
+    for (const nextIndex of rack.keys()) {
+      const previousIndex = previousForNew.get(nextIndex)
+      const old = previousIndex === undefined ? undefined : previous[previousIndex]
+      if (old) reserve(old.normalizedName, old.occurrence)
+    }
+
+    const next: ChainElement[] = []
+    for (const [nextIndex, spec] of rack.entries()) {
+      const previousIndex = previousForNew.get(nextIndex)
+      const old = previousIndex === undefined ? undefined : previous[previousIndex]
+      const sameSpec = old !== undefined && (old.kind === 'standard' || sameCatalogSpec(old, spec))
+      const occurrence =
+        old && (sameSpec || previousIndex !== undefined)
+          ? old.occurrence
+          : allocate(spec.kind === 'catalog' ? spec.normalizedName : spec.name)
+      if (old) reserve(old.normalizedName, occurrence)
+      const normalizedName = spec.kind === 'catalog' ? spec.normalizedName : spec.name
+      const instanceId = old?.instanceId ?? `${receiver}/${normalizedName}#${occurrence + 1}`
+      if (spec.kind === 'catalog') {
+        next.push({
+          kind: 'catalog',
+          role: 'effect',
+          bus,
+          instanceId,
+          receiver,
+          occurrence,
+          normalizedName,
+          resolvedPath: spec.resolvedPath,
+          pluginId: spec.pluginId,
+          declaredStatePath: spec.declaredStatePath,
+          statePath: old?.kind === 'catalog' ? old.statePath : undefined,
+          enabled: spec.enabled,
+          load: Promise.resolve(),
+        })
+      } else {
+        next.push({
+          kind: 'standard',
+          role: 'effect',
+          bus,
+          instanceId,
+          receiver,
+          occurrence,
+          normalizedName,
+          name: spec.name,
+          params: { ...spec.params },
+          enabled: spec.enabled,
+        })
+      }
+      if (old && sameSpec) keptPrevious.add(previousIndex!)
+      else if (old) dropPrevious.add(previousIndex!)
+    }
+    for (const index of previous.keys()) {
+      if (!keptPrevious.has(index) && !dropPrevious.has(index)) dropPrevious.add(index)
+    }
+    const directory = this.projectDirectory?.()
+    const saveByPrevious = new Map<
+      number,
+      {
+        identity: PluginStateIdentity
+        absolutePath: string
+        relativePath: string
+        slot: CatalogElement
+      }
+    >()
+    if (directory) {
+      for (const previousIndex of [...dropPrevious].sort((a, b) => a - b)) {
+        const old = previous[previousIndex]
+        if (!old || old.kind !== 'catalog') continue
+        const identity: PluginStateIdentity = {
+          receiver: externalReceiver,
+          role: 'effect',
+          normalizedName: old.normalizedName,
+          occurrence: old.occurrence,
+        }
+        const relativePath = `states/${stateFileNameForIdentity(identity)}`
+        saveByPrevious.set(previousIndex, {
+          identity,
+          relativePath,
+          absolutePath: path.join(directory, ...relativePath.split('/')),
+          slot: old,
+        })
+      }
+      if (saveByPrevious.size > 0) {
+        await fs.promises.mkdir(path.join(directory, 'states'), { recursive: true })
+      }
+    }
+
+    const operations: EffectChainPlanStage[] = []
+    for (const [nextIndex, element] of next.entries()) {
+      const previousIndex = previousForNew.get(nextIndex)
+      const old = previousIndex === undefined ? undefined : previous[previousIndex]
+      const keep =
+        old !== undefined && (old.kind === 'standard' || sameCatalogElement(old, element))
+      if (keep) {
+        operations.push({
+          op: 'keep',
+          prev_index: previousIndex!,
+          enabled: element.enabled,
+          ...(element.kind === 'standard' ? { params: element.params } : {}),
+        })
+        continue
+      }
+      if (element.kind === 'standard') {
+        operations.push({
+          op: 'load',
+          kind: 'standard',
+          name: element.name,
+          params: element.params,
+          enabled: element.enabled,
+        })
+        continue
+      }
+      const identity: PluginStateIdentity = {
+        receiver: externalReceiver,
+        role: 'effect',
+        normalizedName: element.normalizedName,
+        occurrence: element.occurrence,
+      }
+      const replacementState =
+        previousIndex === undefined ? undefined : saveByPrevious.get(previousIndex)?.absolutePath
+      const fallbackState =
+        replacementState ??
+        element.declaredStatePath ??
+        (this.statePathFallback ? await this.statePathFallback(identity) : undefined)
+      if (fallbackState) {
+        console.log(
+          `[plugin-state] restoring '${externalReceiver}/effect/${element.normalizedName}/${element.occurrence}' from ${fallbackState}`,
+        )
+      }
+      ;(next[nextIndex] as CatalogElement) = { ...element, statePath: fallbackState }
+      operations.push({
+        op: 'load',
+        kind: 'catalog',
+        path: element.resolvedPath,
+        ...(element.pluginId === undefined ? {} : { plugin_id: element.pluginId }),
+        ...(fallbackState === undefined ? {} : { state: fallbackState }),
+        enabled: element.enabled,
+      })
+    }
+
+    for (const previousIndex of [...dropPrevious].sort((a, b) => a - b)) {
+      const old = previous[previousIndex]
+      if (old?.kind === 'catalog') await this.replacement?.beforeReplace(key, old)
+    }
+
+    const request: EffectChainApplyRequest = {
+      ...(bus === undefined ? {} : { bus }),
+      mode,
+      chain: operations,
+      saveDropped: [...saveByPrevious.entries()].map(([prev_index, saved]) => ({
+        prev_index,
+        path: saved.absolutePath,
+      })),
+    }
+    let result: Awaited<ReturnType<NonNullable<AudioEngine['applyEffectChain']>>>
+    try {
+      // Deliberately no empty-diff early return: this command is also the daemon health check.
+      result = await this.audioEngine.applyEffectChain(request)
+    } catch (error) {
+      if (error instanceof DaemonProtocolError) {
+        throw rackApplyProtocolError(error, rack)
+      }
+      this.rackChains.delete(key)
+      this.uncertainRacks.add(key)
+      throw error
+    }
+
+    this.rackChains.set(key, next)
+    this.uncertainRacks.delete(key)
+    if (directory) {
+      const store = projectStateStoreFor(this.audioEngine, directory)
+      for (const dropped of result.dropped) {
+        const saved = saveByPrevious.get(dropped.prevIndex)
+        if (!saved) continue
+        await store.registerSavedState(saved.identity, saved.relativePath, dropped.bytesWritten, {
+          resolvedPath: saved.slot.resolvedPath,
+          pluginId: saved.slot.pluginId,
+        })
+      }
+    }
   }
 
   /** Removes one named effect through the same per-key queue as declaration/replacement. */

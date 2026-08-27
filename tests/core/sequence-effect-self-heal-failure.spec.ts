@@ -12,11 +12,13 @@ import { describe, it, expect, vi } from 'vitest'
 import { SequenceEffectManager } from '../../packages/engine/src/core/global/sequence-effect-manager'
 import { AudioManager } from '../../packages/engine/src/core/global/audio-manager'
 import { LinkAudioManager } from '../../packages/engine/src/core/global/link-audio-manager'
+import { installEffectChainMock } from '../helpers/effect-chain-mock'
 
 function harness() {
   const loadPlugin = vi.fn().mockResolvedValue({})
   const isPluginActive = vi.fn().mockReturnValue(true)
   const audioEngine = { loadPlugin, isPluginActive } as any
+  const applyEffectChain = installEffectChainMock(audioEngine)
   const audioManager = new AudioManager()
   audioManager.setDocumentDirectory('/songs')
   const manager = new SequenceEffectManager(
@@ -24,18 +26,17 @@ function harness() {
     audioManager,
     new LinkAudioManager(audioEngine),
   )
-  return { manager, loadPlugin, isPluginActive }
+  return { manager, loadPlugin, isPluginActive, applyEffectChain }
 }
 
 describe('SequenceEffectManager — self-heal reload failure keeps the bus (#472)', () => {
   it('keeps hasDeclaration()/getBus() and does not recycle the bus into the pool', async () => {
-    const { manager, loadPlugin, isPluginActive } = harness()
+    const { manager, applyEffectChain } = harness()
     const bus = await manager.effect('kick', './echo.clap')
     expect(bus).toBe('seq-bus-0')
 
-    // respawn 後の stale cache を再現: 冪等再宣言が self-heal 再ロードに入り、それが失敗する
-    isPluginActive.mockReturnValue(false)
-    loadPlugin.mockRejectedValueOnce(new Error('reload failed'))
+    // An identical rack still probes daemon health; simulate a transport failure there.
+    applyEffectChain.mockRejectedValueOnce(new Error('reload failed'))
     await expect(manager.effect('kick', './echo.clap')).rejects.toThrow('reload failed')
 
     // bus は温存される（routing が参照中・LinkAudio 排他ゲートも維持）
@@ -44,19 +45,16 @@ describe('SequenceEffectManager — self-heal reload failure keeps the bus (#472
     expect(manager.getBus('kick')).toBe('seq-bus-0')
 
     // 別シーケンスの新規宣言が kick の bus を再利用しない（pool へ返却されていない）
-    isPluginActive.mockReturnValue(true)
     const other = await manager.effect('snare', './comp.clap')
     expect(other).toBe('seq-bus-1')
   })
 
   it('a retry after the failed self-heal reuses the SAME bus and succeeds', async () => {
-    const { manager, loadPlugin, isPluginActive } = harness()
+    const { manager, applyEffectChain } = harness()
     await manager.effect('kick', './echo.clap')
-    isPluginActive.mockReturnValue(false)
-    loadPlugin.mockRejectedValueOnce(new Error('reload failed'))
+    applyEffectChain.mockRejectedValueOnce(new Error('reload failed'))
     await expect(manager.effect('kick', './echo.clap')).rejects.toThrow('reload failed')
 
-    loadPlugin.mockResolvedValue({})
     const bus = await manager.effect('kick', './echo.clap')
     expect(bus).toBe('seq-bus-0')
   })

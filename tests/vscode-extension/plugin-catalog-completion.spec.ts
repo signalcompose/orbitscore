@@ -1,9 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import {
-  detectPluginArgContext,
-  filterCatalogEntries,
-} from '../../packages/vscode-extension/src/plugin-catalog-completion'
+import { filterCatalogEntries } from '../../packages/vscode-extension/src/plugin-catalog-completion'
 import type { PluginCatalogEntry } from '../../packages/vscode-extension/src/plugin-catalog-reader'
 
 const ENTRIES: PluginCatalogEntry[] = [
@@ -40,42 +37,6 @@ const ENTRIES: PluginCatalogEntry[] = [
     roles: ['instrument', 'effect'],
   },
 ]
-
-describe('detectPluginArgContext', () => {
-  it('matches at the freshly-triggered open quote', () => {
-    const line = 'kick.effect("'
-    const result = detectPluginArgContext(line, line.length)
-    expect(result).toEqual({ verb: 'effect', typed: '', quoteStartChar: line.length })
-  })
-
-  it('matches a PARTIAL in-progress string with no closing quote (owner requirement 2026-07-17)', () => {
-    const line = 'kick.effect("Sca'
-    const result = detectPluginArgContext(line, line.length)
-    expect(result).not.toBeNull()
-    expect(result?.verb).toBe('effect')
-    expect(result?.typed).toBe('Sca')
-    expect(result?.quoteStartChar).toBe(line.indexOf('"') + 1)
-  })
-
-  it('still matches when a closing quote exists later on the line but cursor is mid-string', () => {
-    const line = 'kick.effect("Sca")'
-    const cursor = line.indexOf('Sca') + 3 // right after "Sca", before the closing quote
-    const result = detectPluginArgContext(line, cursor)
-    expect(result?.typed).toBe('Sca')
-  })
-
-  it('recognizes instrument(', () => {
-    const line = 'lead.instrument("Sur'
-    const result = detectPluginArgContext(line, line.length)
-    expect(result?.verb).toBe('instrument')
-    expect(result?.typed).toBe('Sur')
-  })
-
-  it('returns null outside a plugin-name string position', () => {
-    expect(detectPluginArgContext('global.tempo(140)', 18)).toBeNull()
-    expect(detectPluginArgContext('kick.effect(', 12)).toBeNull() // no opening quote yet
-  })
-})
 
 describe('filterCatalogEntries', () => {
   it('narrows to Scaler-prefixed candidates as the user types "Sca" for instrument(', () => {

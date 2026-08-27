@@ -31,28 +31,129 @@ export interface PluginCatalogCompletionCandidate {
   readonly insertText: string
 }
 
-// Matches `.effect("` / `.instrument("` immediately followed by an in-progress
-// string (no closing quote yet) ending at the cursor. `[^"\n]*$` anchors to the
-// end of the prefix, so this matches `effect("Sca` (partial) just as well as
-// the freshly-triggered `effect("`.
-const PLUGIN_ARG_RE = /\.(effect|instrument)\(\s*"([^"\n]*)$/
+// ──────────────────────────────────────────────────────────────────────
+// ラック対応の文脈スキャナ（#628・SC.10.10 規範 1）
+// ──────────────────────────────────────────────────────────────────────
 
 /**
- * Detects whether `position` (0-based character offset into `lineText`) sits
- * inside the first string argument of `effect(` / `instrument(`. Returns the
- * verb, the partial typed text, and where that text starts — regardless of
- * whether the string's closing quote is present later on the line.
+ * 後方スキャンで遡る行数の上限。無制限にすると、閉じ括弧を書き忘れた文書で
+ * 1 打鍵ごとにファイル全体を舐めることになる。
  */
-export function detectPluginArgContext(
-  lineText: string,
-  position: number,
+export const RACK_SCAN_MAX_LINES = 50
+
+/** ラック文脈で補完対象になる呼び出し。`layer` は構造なので role を決めない。 */
+const RACK_CALL_WORDS = new Set(['effect', 'instrument', 'plugin', 'layer'])
+
+/**
+ * カーソル位置がカタログ名の文字列リテラルの中にいるかを、**複数行のラックを
+ * またいで**判定する（#628・SC.10.10 規範 1）。
+ *
+ * 単一行 regex（{@link detectPluginArgContext}）はラック配列の中・複数行・
+ * `layer` の入れ子では発火しない。ラック形への移行でそのまま退行するため、
+ * 有界の後方スキャナへ置き換える。
+ *
+ * 判定は 2 段:
+ *
+ * 1. **カーソル行**で、閉じていない `"` の中にいるか（文字列は行をまたがない）
+ * 2. その外側の**閉じていない括弧**（`[` `(` の入れ子）を遡り、
+ *    `effect(` / `instrument(` のどちらに到達するかで role を決める
+ *
+ * `plugin(` と `layer(` は途中の通過点で、role は**さらに外側**の
+ * `effect` / `instrument` が決める（`instrument(layer(["…` は instrument）。
+ *
+ * @param lines   文書の全行（カーソル行までで足りるが、呼び出し側の都合で全行可）
+ * @param line    カーソルの 0 始まり行番号
+ * @param character カーソルの 0 始まり桁
+ */
+export function detectRackArgContext(
+  lines: readonly string[],
+  line: number,
+  character: number,
 ): PluginArgContext | null {
-  const prefix = lineText.slice(0, position)
-  const match = PLUGIN_ARG_RE.exec(prefix)
-  if (!match) return null
-  const verb = match[1] as PluginVerb
-  const typed = match[2] ?? ''
-  return { verb, typed, quoteStartChar: position - typed.length }
+  const cursorLine = lines[line]
+  if (cursorLine === undefined) return null
+
+  const quote = findOpenQuote(cursorLine.slice(0, character))
+  if (quote === null) return null
+
+  const verb = resolveEnclosingVerb(lines, line, quote.quoteIndex)
+  if (!verb) return null
+
+  return {
+    verb,
+    typed: cursorLine.slice(quote.quoteIndex + 1, character),
+    quoteStartChar: quote.quoteIndex + 1,
+  }
+}
+
+/**
+ * 行の接頭辞に閉じていない `"` があれば、その位置を返す。
+ *
+ * 文字列は行をまたがないので、走査はこの行だけで完結する。`\"` は文字列の
+ * 終端にしないが、DSL に文字列内エスケープの用例は無いので防御的な扱い。
+ */
+function findOpenQuote(prefix: string): { quoteIndex: number } | null {
+  let open: number | null = null
+  for (let i = 0; i < prefix.length; i += 1) {
+    if (prefix[i] === '\\') {
+      i += 1
+      continue
+    }
+    if (prefix[i] !== '"') continue
+    open = open === null ? i : null
+  }
+  return open === null ? null : { quoteIndex: open }
+}
+
+/**
+ * 開き括弧を外側へ遡り、role を決める動詞（`effect` / `instrument`）を探す。
+ *
+ * 走査は {@link RACK_SCAN_MAX_LINES} 行で打ち切る。到達できなければ null
+ * （= ラック文脈ではない）。
+ */
+function resolveEnclosingVerb(
+  lines: readonly string[],
+  line: number,
+  fromChar: number,
+): PluginVerb | null {
+  // 未対応の閉じ括弧の数。これが 0 の状態で開き括弧に出会うと「外側の括弧」。
+  let pendingClosers = 0
+  const firstLine = Math.max(0, line - RACK_SCAN_MAX_LINES)
+
+  for (let row = line; row >= firstLine; row -= 1) {
+    const text = lines[row] ?? ''
+    const start = row === line ? fromChar - 1 : text.length - 1
+
+    for (let col = start; col >= 0; col -= 1) {
+      const ch = text[col]
+      if (ch === ')' || ch === ']') {
+        pendingClosers += 1
+        continue
+      }
+      if (ch !== '(' && ch !== '[') continue
+      if (pendingClosers > 0) {
+        pendingClosers -= 1
+        continue
+      }
+      // 対応する閉じ括弧が無い = カーソルを囲んでいる括弧。
+      if (ch === '[') continue // 配列は role を決めない。さらに外側を見る
+      const word = identifierBefore(text, col)
+      if (!word || !RACK_CALL_WORDS.has(word)) return null
+      if (word === 'effect' || word === 'instrument') return word
+      // `plugin(` / `layer(` は通過点。role はさらに外側が決める。
+    }
+  }
+  return null
+}
+
+/** `index` の直前にある識別子を返す（`.effect(` の `effect`）。 */
+function identifierBefore(text: string, index: number): string | null {
+  let end = index
+  while (end > 0 && /\s/.test(text[end - 1] ?? '')) end -= 1
+  let begin = end
+  while (begin > 0 && /[A-Za-z0-9_]/.test(text[begin - 1] ?? '')) begin -= 1
+  const word = text.slice(begin, end)
+  return word.length > 0 ? word : null
 }
 
 /**

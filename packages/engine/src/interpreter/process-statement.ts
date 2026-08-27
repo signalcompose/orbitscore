@@ -17,7 +17,7 @@ import {
 import { Global } from '../core/global'
 import { Sequence } from '../core/sequence'
 import { isMixerBusHandle } from '../core/global/mixer-manager'
-import { dispatchPlugin, resolveChainDispatch } from '../signal-chain/dispatch'
+import { resolveChainDispatch } from '../signal-chain/dispatch'
 import {
   guardBusChain,
   mixerNodeReceiver,
@@ -26,6 +26,11 @@ import {
   resolveMixerNode,
   type MixerRuntimeNode,
 } from '../signal-chain/runtime'
+import {
+  classifyArrayBinding,
+  effectArgumentsToRack,
+  instrumentArguments,
+} from '../signal-chain/rack'
 
 import { InterpreterState } from './types'
 import { callMethod } from './evaluate-method'
@@ -86,7 +91,7 @@ export async function processStatement(
       processImportStatement(statement, state)
       break
     case 'chord_binding':
-      processChordBinding(statement, state)
+      processArrayBinding(statement, state)
       break
     case 'pattern_binding':
       processPatternBinding(statement, state)
@@ -159,9 +164,6 @@ async function applyMethodChain(
         `Global method "${method}" requires parentheses; write global.${method}(...). ` +
           `Only ${[...GLOBAL_BARE_METHODS].join(' / ')} may be written bare on a Global.`,
       )
-    }
-    if (dispatch.kind === 'plugin') {
-      return dispatchPlugin(receiver, method, args, dispatch.entries, state)
     }
     if (dispatch.kind === 'mixer') {
       if (!(receiver instanceof Sequence) && !isMixerBusHandle(receiver)) {
@@ -252,6 +254,21 @@ async function applyMethodChain(
         ? receiver.routeOutputFromDsl(output)
         : receiver.routeOutput(output)
     }
+    const valueGlobal =
+      receiver instanceof Global
+        ? receiver
+        : receiver instanceof Sequence
+          ? receiver.getGlobal()
+          : state.currentGlobal
+    if (method === 'effect') {
+      if (!valueGlobal) throw new Error('effect() rack resolution requires an initialized global.')
+      return callMethod(receiver, method, [effectArgumentsToRack(args, valueGlobal)])
+    }
+    if (method === 'instrument') {
+      if (!valueGlobal)
+        throw new Error('instrument() rack resolution requires an initialized global.')
+      return callMethod(receiver, method, [...instrumentArguments(args, valueGlobal)])
+    }
     return callMethod(receiver, method, args)
   }
 
@@ -314,11 +331,15 @@ function processImportStatement(statement: ImportStatement, state: InterpreterSt
 }
 
 /** Process `var NAME = [ ... ]` (§6): bind the evaluated chord value. */
-function processChordBinding(statement: ChordBinding, state: InterpreterState): void {
-  requireGlobal(state, `chord "${statement.variableName}"`)?.defineChord(
-    statement.variableName,
-    statement.voices,
-  )
+function processArrayBinding(statement: ChordBinding, state: InterpreterState): void {
+  const global = requireGlobal(state, `array "${statement.variableName}"`)
+  if (!global) return
+  const classified = classifyArrayBinding(statement.value, global)
+  if (classified.kind === 'chord') {
+    global.defineChord(statement.variableName, classified.voices)
+  } else {
+    global.defineRack(statement.variableName, classified.rack)
+  }
 }
 
 /** Process `var NAME = <play-expr>` (§6.5): bind the raw pattern value. */

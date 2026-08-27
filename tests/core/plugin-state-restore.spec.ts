@@ -11,6 +11,7 @@ import { MixerManager } from '../../packages/engine/src/core/global/mixer-manage
 import { PluginEffectManager } from '../../packages/engine/src/core/global/plugin-effect-manager'
 import { PluginInstrumentManager } from '../../packages/engine/src/core/global/plugin-instrument-manager'
 import { SequenceEffectManager } from '../../packages/engine/src/core/global/sequence-effect-manager'
+import { installEffectChainMock } from '../helpers/effect-chain-mock'
 
 const temporaryDirectories: string[] = []
 
@@ -28,6 +29,7 @@ function harness(options: { documentDirectory?: boolean; active?: boolean } = {}
       ? {}
       : { isPluginActive: vi.fn().mockReturnValue(options.active) }),
   } as any
+  installEffectChainMock(audio)
   const audioManager = new AudioManager(audio)
   if (options.documentDirectory !== false) audioManager.setDocumentDirectory(directory)
   const linkAudioManager = new LinkAudioManager()

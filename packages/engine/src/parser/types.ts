@@ -133,6 +133,45 @@ export type ArgRef = {
   name: string
 }
 
+/** A bare identifier in a generic value position (rack variable or chord value reference). */
+export type ValueRef = {
+  type: 'value_ref'
+  name: string
+  /** Chord-only structural octave shift (`m7^+1`); rack resolution rejects a non-zero value. */
+  octaveShift: number
+}
+
+/** A call used as a value (`plugin(...)`, `Gain(...)`, `layer(...)`, or `chain(...)`). */
+export type ValueCall = {
+  type: 'value_call'
+  name: string
+  args: Array<ValueExpression | NamedArg>
+}
+
+/**
+ * Context-neutral `[ ... ]` value. The interpreter classifies it as a chord or rack after
+ * resolving identifier bindings; nested arrays remain arrays until that classification.
+ */
+export type ValueArray = {
+  type: 'value_array'
+  elements: ValueExpression[]
+  octaveShift?: number
+}
+
+export type ValueExpression =
+  | string
+  | number
+  | boolean
+  | ValueRef
+  | ValueCall
+  | ValueArray
+  | PlayChordRef
+  | PlayPitch
+  | PlayNested
+  | PlayLegato
+  | PlayTie
+  | PlayChordRemoval
+
 /**
  * Bare `sum("drum")` / `aux("rev")` reference (MX.2/MX.3, #459/#453 M3) — used to add the
  * group/return bus's own insert: `sum("drum").effect("GlueComp.clap")`. Distinct from
@@ -149,15 +188,15 @@ export type MixerHandleStatement = {
 }
 
 /**
- * `var NAME = [ ... ]` — a chord-value binding (§6, bare `[ ]` literal, decision #48).
- * Distinct from the `var x = init ...` initializers (GlobalInit / SequenceInit). Carries
- * the RAW `[ ]` voices so the interpreter evaluates them (spread/removal/`^N`) at execution
- * order against the chord namespace as it exists then (§6.5.2 評価時値渡し).
+ * `var NAME = [ ... ]` — a context-neutral array binding. The historical discriminant and
+ * `voices` field stay source-compatible with the chord AST, but their contents are generic;
+ * the interpreter classifies the value as chord or rack after resolving identifier kinds.
  */
 export type ChordBinding = {
   type: 'chord_binding'
   variableName: string
-  voices: StackElement[]
+  voices: ValueExpression[]
+  value: ValueArray
 }
 
 /** `import chords` — populate the global chord namespace from the stdlib (§6, §10-4). */

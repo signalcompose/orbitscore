@@ -33,9 +33,11 @@ import { describe, it, expect, vi } from 'vitest'
 import { SequenceEffectManager } from '../../packages/engine/src/core/global/sequence-effect-manager'
 import { AudioManager } from '../../packages/engine/src/core/global/audio-manager'
 import { LinkAudioManager } from '../../packages/engine/src/core/global/link-audio-manager'
+import { installEffectChainMock } from '../helpers/effect-chain-mock'
 
 function harness(loadPlugin: ReturnType<typeof vi.fn>) {
   const audioEngine = { loadPlugin } as any
+  installEffectChainMock(audioEngine)
   const audioManager = new AudioManager()
   audioManager.setDocumentDirectory('/songs')
   const manager = new SequenceEffectManager(
@@ -74,10 +76,7 @@ describe('SequenceEffectManager — concurrent declare() bus bookkeeping (#527 r
     expect(otherBus).not.toBe(bus)
   })
 
-  it('still frees the bus on a plain (non-concurrent) failure, as before', async () => {
-    // Regression guard for the fix itself: the ordinary single-call failure
-    // path (#461 review Important's free-list return) must keep working
-    // once the failure handling awaits `slots.settled()` first.
+  it('retains the bus after an ambiguous transport failure and reuses it for rebuild', async () => {
     const loadPlugin = vi
       .fn()
       .mockRejectedValueOnce(new Error('load failed'))
@@ -85,9 +84,9 @@ describe('SequenceEffectManager — concurrent declare() bus bookkeeping (#527 r
     const { manager } = harness(loadPlugin)
 
     await expect(manager.effect('kick', './typo.clap')).rejects.toThrow('load failed')
-    expect(manager.hasDeclaration('kick')).toBe(false)
+    expect(manager.hasDeclaration('kick')).toBe(true)
 
-    // Retry reuses the freed bus (not a fresh one further down the pool).
+    // Retry reuses the uncertain bus and converges through rebuild.
     const bus = await manager.effect('kick', './reverb.clap')
     expect(bus).toBe('seq-bus-0')
   })

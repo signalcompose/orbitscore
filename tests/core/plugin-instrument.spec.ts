@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DaemonProtocolError } from '../../packages/engine/src/audio/rust-engine/errors'
 import { Global } from '../../packages/engine/src/core/global'
 import { ProjectStateStore } from '../../packages/engine/src/core/project-state-store'
+import { installEffectChainMock } from '../helpers/effect-chain-mock'
 
 const REPLACE_RESULT = {
   pluginId: 'replacement-id',
@@ -268,7 +269,11 @@ describe('PluginInstrumentManager', () => {
 
     // Rebuilt bookkeeping is usable by the close path, not merely visible to
     // the idempotent fast-path.
-    await expect(sequence.ui(0, false)).resolves.toBe(sequence)
+    await expect(global.closePluginUi('kick', 0)).resolves.toMatchObject({
+      receiver: 'kick',
+      index: 0,
+      role: 'instrument',
+    })
     expect(closePluginUi).toHaveBeenCalledTimes(2)
     expect(global.hasOpenPluginUi('kick', 0)).toBe(false)
   })
@@ -352,11 +357,15 @@ describe('PluginInstrumentManager', () => {
   })
 
   it('allows effect and instrument declarations in both orders, including the same path', async () => {
-    const first = makeGlobal().global
+    const firstHarness = makeGlobal()
+    installEffectChainMock(firstHarness.engine)
+    const first = firstHarness.global
     await first.effect('shared.clap')
     await expect(first.instrument('kick', 'shared.clap')).resolves.toBe(first)
 
-    const second = makeGlobal().global
+    const secondHarness = makeGlobal()
+    installEffectChainMock(secondHarness.engine)
+    const second = secondHarness.global
     await second.instrument('kick', 'shared.clap')
     await expect(second.effect('shared.clap')).resolves.toBe(second)
   })
@@ -556,53 +565,40 @@ describe('PluginInstrumentManager', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("Sequence 'kick'"))
   })
 
-  it('T11 issues replacement for master, sequence, sum and aux effect managers', async () => {
-    mockStateSave()
-    const { global, replacePlugin } = makeGlobal()
-    await global.effect('master-a.clap')
-    await global.sequenceEffect('kick', 'sequence-a.clap')
-    await global.sum('drums').effect('mixer-a.clap')
-    await global.aux('verb').effect('aux-a.clap')
+  it('T11 issues one complete-chain apply for master, sequence, sum and aux managers', async () => {
+    const { global, engine, replacePlugin } = makeGlobal(undefined, undefined, {
+      documentDirectory: false,
+    })
+    const applyEffectChain = vi.fn().mockResolvedValue({
+      status: 'applied',
+      childPid: 41,
+      dropped: [],
+    })
+    engine.applyEffectChain = applyEffectChain
+    await global.effect('/master-a.clap')
+    await global.sequenceEffect('kick', '/sequence-a.clap')
+    await global.sum('drums').effect('/mixer-a.clap')
+    await global.aux('verb').effect('/aux-a.clap')
 
-    await expect(global.effect('master-b.clap')).resolves.toBe(global)
-    await expect(global.sequenceEffect('kick', 'sequence-b.clap')).resolves.toBe('seq-bus-0')
-    await expect(global.sum('drums').effect('mixer-b.clap')).resolves.toMatchObject({
+    await expect(global.effect('/master-b.clap')).resolves.toBe(global)
+    await expect(global.sequenceEffect('kick', '/sequence-b.clap')).resolves.toBe('seq-bus-0')
+    await expect(global.sum('drums').effect('/mixer-b.clap')).resolves.toMatchObject({
       kind: 'sum',
       bus: 'sum-bus-0',
     })
-    await expect(global.aux('verb').effect('aux-b.clap')).resolves.toMatchObject({
+    await expect(global.aux('verb').effect('/aux-b.clap')).resolves.toMatchObject({
       kind: 'aux',
       bus: 'aux-bus-0',
     })
 
-    expect(replacePlugin).toHaveBeenCalledTimes(4)
-    expect(replacePlugin).toHaveBeenNthCalledWith(
-      1,
-      path.resolve('/songs/session', 'master-b.clap'),
+    expect(applyEffectChain).toHaveBeenCalledTimes(8)
+    expect(applyEffectChain.mock.calls.slice(4).map(([request]) => request.bus)).toEqual([
       undefined,
-      'effect',
-    )
-    expect(replacePlugin).toHaveBeenNthCalledWith(
-      2,
-      path.resolve('/songs/session', 'sequence-b.clap'),
-      undefined,
-      'effect',
       'seq-bus-0',
-    )
-    expect(replacePlugin).toHaveBeenNthCalledWith(
-      3,
-      path.resolve('/songs/session', 'mixer-b.clap'),
-      undefined,
-      'effect',
       'sum-bus-0',
-    )
-    expect(replacePlugin).toHaveBeenNthCalledWith(
-      4,
-      path.resolve('/songs/session', 'aux-b.clap'),
-      undefined,
-      'effect',
       'aux-bus-0',
-    )
+    ])
+    expect(replacePlugin).toHaveBeenCalledTimes(0)
   })
 
   it('rejects LinkAudio in both declaration orders', async () => {

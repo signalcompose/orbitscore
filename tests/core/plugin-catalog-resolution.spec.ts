@@ -13,6 +13,7 @@ import {
   isPluginPathSpec,
   resolvePluginSpec,
 } from '../../packages/engine/src/core/global/plugin-resolver'
+import { installEffectChainMock } from '../helpers/effect-chain-mock'
 
 function writeCatalog(dir: string, catalog: PluginCatalogFile): string {
   const file = path.join(dir, 'plugin-catalog.json')
@@ -278,6 +279,7 @@ describe('Global.effect()/instrument() catalog name integration', () => {
   it('resolves a catalog instrument name to (path, pluginId) end to end', async () => {
     const loadPlugin = vi.fn().mockResolvedValue({})
     const engine = { loadPlugin, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any
+    installEffectChainMock(engine)
     const global = new Global(engine)
     global.setDocumentDirectory('/songs/session')
 
@@ -295,6 +297,7 @@ describe('Global.effect()/instrument() catalog name integration', () => {
   it('resolves a catalog effect name to (path, pluginId) end to end', async () => {
     const loadPlugin = vi.fn().mockResolvedValue({})
     const engine = { loadPlugin, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any
+    installEffectChainMock(engine)
     const global = new Global(engine)
     global.setDocumentDirectory('/songs/session')
 

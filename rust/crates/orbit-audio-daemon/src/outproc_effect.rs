@@ -665,7 +665,22 @@ pub fn spawn_effect_child(
         .arg("--sample-rate")
         .arg(sample_rate.to_string())
         .stderr(Stdio::inherit());
-    cmd.spawn()
+    let child = cmd.spawn()?;
+    // 🔴 実機 E2E の PID オラクル（#628 §6）。rack child は `--chain <manifest>` で起動するため、
+    // 既存ハーネスの `pgrep -f <pluginPath>` では**捕まらない**（旧 child は `--plugin <絶対パス>`
+    // だった）。R28-E1〜E10 はいずれも「child PID 不変 = respawn していない」を判定条件に
+    // しているので、観測経路が要る。
+    //
+    // MCP の tool 表面を増やさず `get_log` から読めるようにするため、ここで名乗る。
+    // `tracing::info!` は ISO timestamp + level 形式なので TS 側 router
+    // （`isDaemonNonErrorTracingLine`）が非エラーとして受理する — **`eprintln!` で書くと
+    // ERROR に分類され、「ERROR 増 0」を見る E2E を自分で落とす**（#618/#625 で 4 回再発した罠）。
+    tracing::info!(
+        "[orbit-effect-rack] child spawned pid={} shm={}",
+        child.id(),
+        shm_path.display()
+    );
+    Ok(child)
 }
 
 /// QUIT 済み（または crash した）child を bounded に reap する。timeout 超過で kill にフォールバック。

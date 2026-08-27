@@ -204,6 +204,26 @@ export class ProjectStateStore {
     return result
   }
 
+  /**
+   * Register a state file already written atomically by ApplyEffectChain. `fingerprint` is
+   * intentionally accepted before #568 changes the manifest value schema; today it is discarded.
+   */
+  registerSavedState(
+    identity: PluginStateIdentity,
+    relativePath: string,
+    bytesWritten: number,
+    fingerprint: { resolvedPath: string; pluginId?: string },
+  ): Promise<SavedProjectPluginState> {
+    const result = this.pending
+      .catch(() => undefined)
+      .then(() => this.registerSavedStateBody(identity, relativePath, bytesWritten, fingerprint))
+    this.pending = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
   private async saveBody(
     identity: PluginStateIdentity,
     target: PluginStateSaveTarget,
@@ -211,7 +231,6 @@ export class ProjectStateStore {
     if (!this.audioEngine.savePluginState) {
       throw new Error('Plugin state saving requires the Rust engine backend.')
     }
-    const key = identityKey(identity)
     const statesDirectory = path.join(this.projectDirectory, 'states')
     const relativeStatePath = `states/${stateFileNameForIdentity(identity)}`
     const absoluteStatePath = path.join(this.projectDirectory, ...relativeStatePath.split('/'))
@@ -222,6 +241,43 @@ export class ProjectStateStore {
       throw new Error(`Plugin state save returned an invalid byte count: ${saved.bytesWritten}.`)
     }
 
+    return this.registerSavedStateBody(
+      identity,
+      relativeStatePath,
+      saved.bytesWritten,
+      {
+        resolvedPath: '',
+      },
+      saved.path,
+    )
+  }
+
+  private async registerSavedStateBody(
+    identity: PluginStateIdentity,
+    relativeStatePath: string,
+    bytesWritten: number,
+    fingerprint: { resolvedPath: string; pluginId?: string },
+    savedPath?: string,
+  ): Promise<SavedProjectPluginState> {
+    void fingerprint
+    if (!(bytesWritten > 0)) {
+      throw new Error(`Plugin state save returned an invalid byte count: ${bytesWritten}.`)
+    }
+    const expected = `states/${stateFileNameForIdentity(identity)}`
+    if (relativeStatePath !== expected) {
+      throw new Error(
+        `Plugin state registration path '${relativeStatePath}' does not match identity path '${expected}'.`,
+      )
+    }
+    const absoluteStatePath = path.join(this.projectDirectory, ...relativeStatePath.split('/'))
+    const stat = await fs.promises.stat(absoluteStatePath)
+    if (!stat.isFile() || stat.size !== bytesWritten) {
+      throw new Error(
+        `Plugin state registration size mismatch for '${absoluteStatePath}': expected ${bytesWritten}, got ${stat.size}.`,
+      )
+    }
+
+    const key = identityKey(identity)
     const manifestPath = path.join(this.projectDirectory, 'project.yaml')
     let manifest: ProjectManifest
     try {
@@ -255,7 +311,8 @@ export class ProjectStateStore {
     }
 
     return {
-      ...saved,
+      path: savedPath ?? absoluteStatePath,
+      bytesWritten,
       identity,
       identityKey: key,
       projectFile: manifestPath,

@@ -100,7 +100,7 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     effect.mockResolvedValue((node as Extract<typeof node, { kind: 'aux' }>).handle)
 
     await run('verb.effect("Reverb.clap")', state)
-    expect(effect).toHaveBeenCalledWith('Reverb.clap')
+    expect(effect).toHaveBeenCalledWith([{ kind: 'catalog', spec: 'Reverb.clap', enabled: true }])
     await expect(run('missing.effect("x")', state)).rejects.toThrow('Variable not found: missing')
   })
 
@@ -149,8 +149,10 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     await run('global.sum("drums").effect("Comp.clap")', state)
     await run('global.aux("verb").effect("Reverb.clap")', state)
 
-    expect(sumEffect).toHaveBeenCalledWith('Comp.clap')
-    expect(auxEffect).toHaveBeenCalledWith('Reverb.clap')
+    expect(sumEffect).toHaveBeenCalledWith([{ kind: 'catalog', spec: 'Comp.clap', enabled: true }])
+    expect(auxEffect).toHaveBeenCalledWith([
+      { kind: 'catalog', spec: 'Reverb.clap', enabled: true },
+    ])
   })
 
   it('rejects a bus chain before any of its calls run, on every entry form', async () => {
@@ -199,8 +201,10 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     await run('sum("drums").effect("Comp.clap")', state)
     await run('aux("verb").effect("Reverb.clap")', state)
 
-    expect(sumEffect).toHaveBeenCalledWith('Comp.clap')
-    expect(auxEffect).toHaveBeenCalledWith('Reverb.clap')
+    expect(sumEffect).toHaveBeenCalledWith([{ kind: 'catalog', spec: 'Comp.clap', enabled: true }])
+    expect(auxEffect).toHaveBeenCalledWith([
+      { kind: 'catalog', spec: 'Reverb.clap', enabled: true },
+    ])
   })
 
   it('refuses to use any output endpoint as a receiver, including the implicit master', async () => {

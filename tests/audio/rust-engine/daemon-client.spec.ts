@@ -366,7 +366,10 @@ describe('DaemonClient with mock server', () => {
     await client.start({ wsUrlOverride: url })
 
     await expect(
-      client.savePluginState({ role: 'effect', bus: 'seq-bus-2' }, '/songs/states/master.state'),
+      client.savePluginState(
+        { role: 'effect', bus: 'seq-bus-2', chainPath: [1] },
+        '/songs/states/master.state',
+      ),
     ).resolves.toEqual({
       path: '/songs/states/master.state',
       bytesWritten: 123,
@@ -375,6 +378,7 @@ describe('DaemonClient with mock server', () => {
       path: '/songs/states/master.state',
       role: 'effect',
       bus: 'seq-bus-2',
+      chain_path: [1],
     })
   })
 
@@ -395,6 +399,7 @@ describe('DaemonClient with mock server', () => {
       path: '/songs/states/lead.state',
       role: 'instrument',
       instance: 'plugin:lead',
+      chain_path: [0],
     })
   })
 
@@ -420,9 +425,49 @@ describe('DaemonClient with mock server', () => {
         path: '/songs/states/lead.state',
         role: 'instrument',
         instance: 'plugin:lead',
+        chain_path: [0],
       })
     },
   )
+
+  it('sends one complete ApplyEffectChain plan and maps the dropped-state response', async () => {
+    const url = await server.start({
+      ApplyEffectChain: () => ({
+        status: 'applied',
+        child_pid: 912,
+        dropped: [{ prev_index: 1, path: '/states/B.state', bytes_written: 44 }],
+      }),
+    })
+    await client.start({ wsUrlOverride: url })
+    const request = {
+      bus: 'seq-bus-2',
+      mode: 'diff' as const,
+      chain: [
+        { op: 'keep' as const, prev_index: 0, enabled: false },
+        {
+          op: 'load' as const,
+          kind: 'standard' as const,
+          name: 'Gain',
+          params: { db: -6 },
+          enabled: true,
+        },
+      ],
+      saveDropped: [{ prev_index: 1, path: '/states/B.state' }],
+    }
+
+    await expect(client.applyEffectChain(request)).resolves.toEqual({
+      status: 'applied',
+      childPid: 912,
+      dropped: [{ prevIndex: 1, path: '/states/B.state', bytesWritten: 44 }],
+    })
+    expect(server.received.find((record) => record.method === 'ApplyEffectChain')?.params).toEqual({
+      role: 'effect',
+      bus: 'seq-bus-2',
+      mode: 'diff',
+      chain: request.chain,
+      save_dropped: request.saveDropped,
+    })
+  })
 
   it('PluginNoteOn/Off instance あり/なし: instance フィールドの含有/省略（#540 P1）', async () => {
     const url = await server.start({
@@ -942,6 +987,25 @@ describe('createDaemonStderrLineRouter (#618 chunk 境界での行分割)', () =
     ])
     expect(nonError).toEqual(['INFO [orbit-vst3-instrument-child] ok'])
     expect(error).toEqual(['[orbit-vst3-instrument-child] boom'])
+  })
+})
+
+describe('rack child の PID 通知が ERROR に分類されない (#628 §6)', () => {
+  // 🔴 実機 E2E の PID オラクルはこの行を `get_log` から読む（rack child は
+  // `--chain <manifest>` 起動なので `pgrep -f <pluginPath>` では捕まらない）。
+  // この行が ERROR へ倒れると、**同じ E2E が見ている「ERROR 増 0」を自分で落とす**。
+  // stderr の既定は fail-loud で ERROR なので、通ることを明示的に固定する。
+  it('daemon の tracing::info! 形式（ISO timestamp + level）が非エラーとして受理される', () => {
+    expect(
+      isDaemonNonErrorTracingLine(
+        '2026-08-28T02:31:44.123456Z  INFO orbit_audio_daemon::outproc_effect: ' +
+          '[orbit-effect-rack] child spawned pid=48732 shm=/tmp/orbit-shm-0',
+      ),
+    ).toBe(true)
+  })
+
+  it('level を名乗らない同内容の行は従来どおり ERROR 側へ倒れる（fail-loud の既定を弱めない）', () => {
+    expect(isDaemonNonErrorTracingLine('[orbit-effect-rack] child spawned pid=48732')).toBe(false)
   })
 })
 

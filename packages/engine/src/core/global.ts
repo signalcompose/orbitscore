@@ -3,12 +3,13 @@
  * Represents the global transport and configuration
  */
 
-import { AudioEngine, type PluginUiTarget } from '../audio/types'
+import { AudioEngine, type PluginStateSaveTarget, type PluginUiTarget } from '../audio/types'
 import { StackElement, PlayElement } from '../parser/types'
 import { BoundValue, ChordVoice } from '../midi/chord/types'
 import { evaluateChordDefinition } from '../midi/chord/resolve-chords'
 import { PREDEFINED_CHORDS } from '../midi/chord/predefined-chords'
 import { PluginNoteOutput } from '../midi/plugin-note-output'
+import type { RackRecipe } from '../signal-chain/rack'
 
 import { Sequence } from './sequence'
 import { Scheduler, GlobalState } from './global/types'
@@ -33,7 +34,13 @@ import {
   formatReceiverId,
   parseReceiverId,
 } from './global/mixer-manager'
-import { normalizePluginInstanceName, type PluginSlot } from './global/effect-slot'
+import {
+  normalizePluginInstanceName,
+  type ChainElement,
+  type PluginSlot,
+  type RegisteredChainElement,
+  type StandardElement,
+} from './global/effect-slot'
 import {
   ProjectStateStore,
   projectStateStoreFor,
@@ -43,7 +50,7 @@ import {
 
 export interface ResolvedPluginStateTarget {
   identity: PluginStateIdentity
-  daemonTarget: { role: 'effect'; bus?: string } | { role: 'instrument'; instance: string }
+  daemonTarget: PluginStateSaveTarget
 }
 
 export interface PluginUiOperationResult {
@@ -60,7 +67,11 @@ export interface PluginUiOperationResult {
  * （#564: 外に出せるものを除外リストで黙らせない）。
  * Direct slot → persistent identity/daemon address mapping shared by all save paths.
  */
-function pluginStateTargetForSlot(receiverId: string, slot: PluginSlot): ResolvedPluginStateTarget {
+function pluginStateTargetForSlot(
+  receiverId: string,
+  slot: PluginSlot,
+  index: number,
+): ResolvedPluginStateTarget {
   return {
     identity: {
       receiver: receiverId,
@@ -74,26 +85,13 @@ function pluginStateTargetForSlot(receiverId: string, slot: PluginSlot): Resolve
         : {
             role: 'effect',
             ...(slot.bus === undefined ? {} : { bus: slot.bus }),
+            chainPath: [index - 1],
           },
   }
 }
 
-/**
- * open 中の plugin UI を1枚に特定するキー。open 時の daemon slot 座標
- * （effect: bus / instrument: instance）+ chain index。`openPluginUi` の解決結果と
- * daemon の `PluginUiClosed` イベント target の両方から同じ値を導出できる。
- * index を含める理由: 同一 bus に同名プラグインが複数並ぶチェーンでは
- * role/bus だけでは1スロットに定まらない（#601 レビュー I2）。
- */
-function pluginUiSessionKey(
-  target: { role: 'effect'; bus?: string } | { role: 'instrument'; instance: string },
-  index: number,
-): string {
-  // NUL 区切り: bus / instance（`plugin:<seq名>`）は空白を含みうるため、平文区切りでは
-  // 別 slot とキーが衝突する余地を残す。
-  return target.role === 'effect'
-    ? `effect\u0000${target.bus ?? ''}\u0000${index}`
-    : `instrument\u0000${target.instance}\u0000${index}`
+function isStandardElement(slot: RegisteredChainElement): slot is StandardElement {
+  return 'kind' in slot && slot.kind === 'standard'
 }
 
 export class Global {
@@ -131,7 +129,7 @@ export class Global {
    */
   private readonly openPluginUiSessions = new Map<
     string,
-    { receiverId: string; index: number; resolved: ResolvedPluginStateTarget }
+    { receiverId: string; instanceId: string; resolved: ResolvedPluginStateTarget }
   >()
 
   /**
@@ -176,10 +174,9 @@ export class Global {
     )
     // #617: `sum("x").ui()` を既存の openPluginUi / closePluginUi へ橋渡しする。
     // MixerManager は Global を知らない（循環参照を避ける）ので、ここで注入する。
-    this.mixerManager.setPluginUiHandler(async (receiverId, index, open) => {
-      // `seq.ui()` と同じ冪等規約。規則は openPluginUiIdempotent の1箇所に集約。
-      if (open) await this.openPluginUiIdempotent(receiverId, index)
-      else await this.closePluginUi(receiverId, index)
+    this.mixerManager.setPluginUiHandler(async (receiverId, catalogName, open) => {
+      if (open) await this.openPluginUisByName(receiverId, catalogName)
+      else await this.closePluginUisByName(receiverId, catalogName)
     })
     this.quantizeManager = new QuantizeManager()
     this.midiManager = midiManager ?? new MidiManager()
@@ -219,7 +216,8 @@ export class Global {
     // 永久に no-op になる（「次の open が上書きする」という従来の回収経路を、
     // 冪等ガード自身が塞いでしまうため）。
     this.audioEngine.setPluginUiClosedByRespawnListener?.((target) => {
-      this.openPluginUiSessions.delete(pluginUiSessionKey(target, target.index))
+      const session = this.pluginUiSessionForDaemonTarget(target)
+      if (session) this.openPluginUiSessions.delete(session.instanceId)
     })
   }
 
@@ -288,6 +286,7 @@ export class Global {
   // and direct sequence use share one namespace. Phase R (#227) will add its own
   // value kind to the same table via the BoundValue `kind` discriminant.
   private chordRegistry = new Map<string, BoundValue>()
+  private rackRegistry = new Map<string, RackRecipe>()
 
   /** `import chords` (§6): load the stdlib chord qualities into the namespace. */
   importChords(): this {
@@ -336,11 +335,28 @@ export class Global {
     return this.chordRegistry.get(name)
   }
 
+  /** Bind a rack recipe by value; later rebinding never mutates an already-applied receiver. */
+  defineRack(name: string, rack: RackRecipe): this {
+    if (this.rackRegistry.has(name) || this.chordRegistry.has(name)) {
+      console.warn(`⚠️  value namespace: "${name}" redefined (last-write-wins).`)
+    }
+    this.chordRegistry.delete(name)
+    this.rackRegistry.set(name, structuredClone(rack) as RackRecipe)
+    return this
+  }
+
+  /** A fresh recipe copy prevents two receivers from sharing mutable rack instances. */
+  getRack(name: string): RackRecipe | undefined {
+    const rack = this.rackRegistry.get(name)
+    return rack === undefined ? undefined : (structuredClone(rack) as RackRecipe)
+  }
+
   /** Bind a chord value, warning on overwrite (§10-4: global binding + conflict warning). */
   private setChord(name: string, value: BoundValue): void {
-    if (this.chordRegistry.has(name)) {
+    if (this.chordRegistry.has(name) || this.rackRegistry.has(name)) {
       console.warn(`⚠️  chord namespace: "${name}" redefined (last-write-wins, §10-4).`)
     }
+    this.rackRegistry.delete(name)
     this.chordRegistry.set(name, value)
   }
 
@@ -407,8 +423,8 @@ export class Global {
   }
 
   /** Eagerly load the v1 single master-insert plugin. */
-  async effect(path: string, pluginId?: string): Promise<this> {
-    await this.pluginEffectManager.effect(path, pluginId)
+  async effect(value: string | RackRecipe, pluginId?: string): Promise<this> {
+    await this.pluginEffectManager.effect(value, pluginId)
     return this
   }
 
@@ -437,8 +453,12 @@ export class Global {
    * Eagerly load a per-sequence insert plugin for `sequenceName` (`seq.effect()` —
    * PH.2b / #434 S3). Returns the allocated insert bus name.
    */
-  async sequenceEffect(sequenceName: string, path: string, pluginId?: string): Promise<string> {
-    return this.sequenceEffectManager.effect(sequenceName, path, pluginId)
+  async sequenceEffect(
+    sequenceName: string,
+    value: string | RackRecipe,
+    pluginId?: string,
+  ): Promise<string> {
+    return this.sequenceEffectManager.effect(sequenceName, value, pluginId)
   }
 
   /** @internal Sequence DSL bridge for effect-only removal. */
@@ -768,7 +788,7 @@ export class Global {
    * mixer bus. Undefined when the id names no bus (sequence receivers). Throws
    * for a prefixed id whose bus is undeclared.
    */
-  private pluginStateBusChain(receiverId: string): readonly PluginSlot[] | undefined {
+  private pluginStateBusChain(receiverId: string): readonly ChainElement[] | undefined {
     if (receiverId === 'master') {
       return this.pluginEffectManager.chain()
     }
@@ -798,11 +818,17 @@ export class Global {
     resolved: ResolvedPluginStateTarget
   }> {
     const targets: Array<{ index: number; resolved: ResolvedPluginStateTarget }> = []
-    const append = (receiverId: string, chain: readonly PluginSlot[], firstIndex: number) => {
+    const append = (
+      receiverId: string,
+      chain: readonly RegisteredChainElement[],
+      firstIndex: number,
+    ) => {
       chain.forEach((slot, offset) => {
+        if (isStandardElement(slot)) return
+        const index = firstIndex + offset
         targets.push({
-          index: firstIndex + offset,
-          resolved: pluginStateTargetForSlot(receiverId, slot),
+          index,
+          resolved: pluginStateTargetForSlot(receiverId, slot, index),
         })
       })
     }
@@ -831,8 +857,7 @@ export class Global {
    * 脱出経路になる — 詰まらない・リトライしない）。
    */
   private async savePluginUiStateAtSafepoint(target: PluginUiTarget): Promise<void> {
-    const key = pluginUiSessionKey(target, target.index)
-    const session = this.openPluginUiSessions.get(key)
+    const session = this.pluginUiSessionForDaemonTarget(target)
     if (!session) {
       throw new Error(
         `Plugin UI close arrived for a target with no recorded open session; ` +
@@ -845,83 +870,95 @@ export class Global {
         'Plugin UI state cannot be saved before the document has a directory; save the .orbs file first.',
       )
     }
-    await this.projectStateStore(projectDirectory).save(
-      session.resolved.identity,
-      session.resolved.daemonTarget,
-    )
+    const currentIndex = this.currentIndexForInstance(session.receiverId, session.instanceId)
+    if (currentIndex === undefined) {
+      throw new Error(
+        `Plugin UI instance '${session.instanceId}' is no longer present; refusing to guess a save target.`,
+      )
+    }
+    await this.projectStateStore(projectDirectory).save(session.resolved.identity, {
+      ...session.resolved.daemonTarget,
+      chainPath: [session.resolved.identity.role === 'effect' ? currentIndex - 1 : 0],
+    })
     // 保存が成功したときだけ破棄する。失敗時は残し、（保存できなかった事実は上の throw で
     // loud になった上で）次の open による上書きに委ねる。
-    this.openPluginUiSessions.delete(key)
+    this.openPluginUiSessions.delete(session.instanceId)
   }
 
   /**
    * UIH.5 の揮発アドレス `(receiver,index)` を、現在のchainからSC.5 identityとdaemon slotへ
    * 同時に解決する。indexを永続キーへ流用しない。
    */
-  resolvePluginStateTarget(receiverId: string, index: number): ResolvedPluginStateTarget {
+  private pluginEntriesForReceiver(
+    receiverId: string,
+  ): Array<{ index: number; slot: RegisteredChainElement }> {
+    const busEffects = this.pluginStateBusChain(receiverId)
+    if (busEffects !== undefined) {
+      return busEffects.map((slot, offset) => ({ index: offset + 1, slot }))
+    }
+    const receiver = this.sequenceRegistry.getSequence(receiverId)
+    if (!receiver) {
+      const matchingBusKinds = this.mixerManager.kindsWithBus(receiverId)
+      if (matchingBusKinds.length > 0) {
+        const explicitReceivers = matchingBusKinds
+          .map((kind) => `'${formatReceiverId(kind, receiverId)}'`)
+          .join(' or ')
+        throw new Error(
+          `Unknown sequence '${receiverId}'; a same-named mixer bus exists. ` +
+            `Use ${explicitReceivers} to save its insert state.`,
+        )
+      }
+      throw new Error(`Unknown sequence '${receiverId}'; no plugin chain is registered.`)
+    }
+    return [
+      ...this.pluginInstrumentManager.chainFor(receiverId).map((slot) => ({ index: 0, slot })),
+      ...this.sequenceEffectManager
+        .chainFor(receiverId)
+        .map((slot, offset) => ({ index: offset + 1, slot })),
+    ]
+  }
+
+  private resolvePluginStateEntry(
+    receiverId: string,
+    index: number,
+  ): { resolved: ResolvedPluginStateTarget; instanceId: string } {
     if (!Number.isInteger(index) || index < 0) {
       throw new Error(`Plugin chain index must be a non-negative integer; received ${index}.`)
     }
-
-    let slot: PluginSlot | undefined
-    let valid: { index: number; slot: PluginSlot }[]
     const busEffects = this.pluginStateBusChain(receiverId)
-    if (busEffects !== undefined) {
-      valid = busEffects.map((effect, offset) => ({ index: offset + 1, slot: effect }))
-      if (index === 0) {
-        throw this.pluginIndexError(
-          receiverId,
-          index,
-          valid,
-          `${receiverId} is a bus and has no source slot; effects start at index 1`,
-        )
-      }
-      slot = busEffects[index - 1]
-    } else {
-      const receiver = this.sequenceRegistry.getSequence(receiverId)
-      if (!receiver) {
-        const matchingBusKinds = this.mixerManager.kindsWithBus(receiverId)
-        if (matchingBusKinds.length > 0) {
-          const explicitReceivers = matchingBusKinds
-            .map((kind) => `'${formatReceiverId(kind, receiverId)}'`)
-            .join(' or ')
-          throw new Error(
-            `Unknown sequence '${receiverId}'; a same-named mixer bus exists. ` +
-              `Use ${explicitReceivers} to save its insert state.`,
-          )
-        }
-        throw new Error(`Unknown sequence '${receiverId}'; no plugin chain is registered.`)
-      }
-      const instruments = this.pluginInstrumentManager.chainFor(receiverId)
-      const effects = this.sequenceEffectManager.chainFor(receiverId)
-      valid = [
-        ...instruments.map((instrument) => ({ index: 0, slot: instrument })),
-        ...effects.map((effect, offset) => ({ index: offset + 1, slot: effect })),
-      ]
-      if (index === 0) {
-        slot = instruments[0]
-        if (!slot) {
-          const sourceReason = receiver.hasAudioSource()
-            ? 'the built-in audio source is not a plugin and is not addressable in v1'
-            : receiver.isMidi()
-              ? 'the MIDI source is not a hosted plugin and is not addressable'
-              : 'no plugin instrument is declared'
-          throw this.pluginIndexError(receiverId, index, valid, sourceReason)
-        }
-      } else {
-        slot = effects[index - 1]
-      }
-    }
-
-    if (!slot) {
+    const valid = this.pluginEntriesForReceiver(receiverId)
+    if (busEffects !== undefined && index === 0) {
       throw this.pluginIndexError(
         receiverId,
         index,
         valid,
-        'the requested chain slot does not exist',
+        `${receiverId} is a bus and has no source slot; effects start at index 1`,
       )
     }
-    return pluginStateTargetForSlot(receiverId, slot)
+    const entry = valid.find((candidate) => candidate.index === index)
+    if (!entry) {
+      const receiver = this.sequenceRegistry.getSequence(receiverId)
+      const sourceReason =
+        index === 0 && receiver
+          ? receiver.hasAudioSource()
+            ? 'the built-in audio source is not a plugin and is not addressable in v1'
+            : receiver.isMidi()
+              ? 'the MIDI source is not a hosted plugin and is not addressable'
+              : 'no plugin instrument is declared'
+          : 'the requested chain slot does not exist'
+      throw this.pluginIndexError(receiverId, index, valid, sourceReason)
+    }
+    if (isStandardElement(entry.slot)) {
+      throw new Error('standard plugins have no UI/state; parameters live in the DSL (SC.10.8)')
+    }
+    return {
+      resolved: pluginStateTargetForSlot(receiverId, entry.slot, index),
+      instanceId: entry.slot.instanceId,
+    }
+  }
+
+  resolvePluginStateTarget(receiverId: string, index: number): ResolvedPluginStateTarget {
+    return this.resolvePluginStateEntry(receiverId, index).resolved
   }
 
   async savePluginState(receiverId: string, index: number): Promise<SavedProjectPluginState> {
@@ -957,33 +994,110 @@ export class Global {
    * 呼び出し側の catch（「already open」エラーを成功扱い）が防ぐ。
    */
   hasOpenPluginUi(receiverId: string, index: number): boolean {
-    for (const session of this.openPluginUiSessions.values()) {
-      if (session.receiverId === receiverId && session.index === index) return true
+    try {
+      const entry = this.resolvePluginStateEntry(receiverId, index)
+      return this.openPluginUiSessions.has(entry.instanceId)
+    } catch {
+      return false
     }
-    return false
   }
 
   /** Remove every host-side UI ledger entry for this volatile `(receiver,index)` address. */
   private forgetPluginUiSession(receiverId: string, index: number): void {
-    for (const [key, session] of this.openPluginUiSessions) {
-      if (session.receiverId === receiverId && session.index === index) {
-        this.openPluginUiSessions.delete(key)
-      }
-    }
+    const entry = this.resolvePluginStateEntry(receiverId, index)
+    this.openPluginUiSessions.delete(entry.instanceId)
   }
 
   /** Record the resolved child session and preserve one-entry-per-address invariants. */
   private recordPluginUiSession(
     receiverId: string,
-    index: number,
+    instanceId: string,
     resolved: ResolvedPluginStateTarget,
   ): void {
-    this.forgetPluginUiSession(receiverId, index)
-    this.openPluginUiSessions.set(pluginUiSessionKey(resolved.daemonTarget, index), {
+    this.openPluginUiSessions.set(instanceId, {
       receiverId,
-      index,
+      instanceId,
       resolved,
     })
+  }
+
+  private currentIndexForInstance(receiverId: string, instanceId: string): number | undefined {
+    return this.pluginEntriesForReceiver(receiverId).find(
+      ({ slot }) => slot.instanceId === instanceId,
+    )?.index
+  }
+
+  private pluginUiSessionForDaemonTarget(
+    target: PluginUiTarget,
+  ): { receiverId: string; instanceId: string; resolved: ResolvedPluginStateTarget } | undefined {
+    for (const session of this.openPluginUiSessions.values()) {
+      const currentIndex = this.currentIndexForInstance(session.receiverId, session.instanceId)
+      if (currentIndex !== target.index) continue
+      const daemonTarget = session.resolved.daemonTarget
+      if (target.role === 'instrument') {
+        if (daemonTarget.role === 'instrument' && daemonTarget.instance === target.instance) {
+          return session
+        }
+      } else if (daemonTarget.role === 'effect' && daemonTarget.bus === target.bus) {
+        return session
+      }
+    }
+    return undefined
+  }
+
+  private catalogIndicesByName(receiverId: string, requestedName: string): number[] {
+    const normalized = normalizePluginInstanceName(requestedName)
+    const entries = this.pluginEntriesForReceiver(receiverId)
+    const matching = entries
+      .filter(
+        ({ slot }) =>
+          !('kind' in slot && slot.kind === 'standard') &&
+          slot.role === 'effect' &&
+          slot.normalizedName === normalized,
+      )
+      .map(({ index }) => index)
+    if (matching.length > 0) return matching
+    if (
+      normalized === 'Gain' ||
+      entries.some(
+        ({ slot }) =>
+          'kind' in slot && slot.kind === 'standard' && slot.normalizedName === normalized,
+      )
+    ) {
+      throw new Error('standard plugins have no UI/state; parameters live in the DSL (SC.10.8)')
+    }
+    const declared = entries
+      .filter(({ slot }) => slot.role === 'effect')
+      .map(({ slot }) => slot.normalizedName)
+    throw new Error(
+      `No catalog insert named '${normalized}' is declared for '${receiverId}'. ` +
+        `Declared inserts: ${declared.length === 0 ? '<none>' : declared.join(', ')}.`,
+    )
+  }
+
+  /** DSL `ui("name")`: open every matching catalog stage in chain order. */
+  async openPluginUisByName(receiverId: string, requestedName: string): Promise<void> {
+    if (typeof requestedName !== 'string') {
+      throw new Error(
+        'ui() expects a catalog plugin name string; numeric indexes are not supported.',
+      )
+    }
+    const normalized = normalizePluginInstanceName(requestedName)
+    for (const index of this.catalogIndicesByName(receiverId, requestedName)) {
+      await this.openPluginUiIdempotent(receiverId, index, normalized)
+    }
+  }
+
+  /** DSL `ui("name", false)`: close every matching open catalog stage in chain order. */
+  async closePluginUisByName(receiverId: string, requestedName: string): Promise<void> {
+    if (typeof requestedName !== 'string') {
+      throw new Error(
+        'ui() expects a catalog plugin name string; numeric indexes are not supported.',
+      )
+    }
+    for (const index of this.catalogIndicesByName(receiverId, requestedName)) {
+      await this.closePluginUi(receiverId, index)
+    }
   }
 
   /**
@@ -999,10 +1113,14 @@ export class Global {
    *
    * MCP / REPL メタ行はこのメソッドを**使わない**（明示操作は二重 open を loud に落とす）。
    */
-  async openPluginUiIdempotent(receiverId: string, index: number): Promise<void> {
+  async openPluginUiIdempotent(
+    receiverId: string,
+    index: number,
+    expectedName?: string,
+  ): Promise<void> {
     if (this.hasOpenPluginUi(receiverId, index)) return
     try {
-      await this.openPluginUi(receiverId, index)
+      await this.openPluginUi(receiverId, index, expectedName)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       // 成功扱いにしてよいのは「UI が既に開いている / 開きつつある」拒否だけ。
@@ -1020,8 +1138,8 @@ export class Global {
         // openPluginUi failed after its initial resolution, so resolve again at
         // the recovery boundary. A missing/replaced target must remain loud;
         // registering a guessed identity would corrupt subsequent close/save.
-        const resolved = this.resolvePluginStateTarget(receiverId, index)
-        this.recordPluginUiSession(receiverId, index, resolved)
+        const entry = this.resolvePluginStateEntry(receiverId, index)
+        this.recordPluginUiSession(receiverId, entry.instanceId, entry.resolved)
         return
       }
       throw error
@@ -1033,13 +1151,15 @@ export class Global {
     index: number,
     expectedName?: string,
   ): Promise<PluginUiOperationResult> {
-    const resolved = this.resolvePluginStateTarget(receiverId, index)
+    const entry = this.resolvePluginStateEntry(receiverId, index)
+    const resolved = entry.resolved
     const actualName = resolved.identity.normalizedName
     if (expectedName !== undefined && expectedName.normalize('NFC') !== actualName) {
       throw this.pluginUiOperationError(
         receiverId,
         index,
-        `expected normalized name '${expectedName}' but the current slot is '${actualName}'; the UI was not opened`,
+        `expected normalized name '${expectedName}' but the current slot is '${actualName}'; ` +
+          're-evaluate first; the UI was not opened',
       )
     }
     if (!this.audioEngine.openPluginUi) {
@@ -1065,7 +1185,7 @@ export class Global {
     // daemonTarget が変わる再 open では複合キーが別になり set では上書きされず、
     // closePluginUi の find が Map の挿入順＝stale 側を掴んでしまうため。
     // evict は daemon open 成功後に行う（open 失敗時に旧セッションを失わない）。
-    this.recordPluginUiSession(receiverId, index, resolved)
+    this.recordPluginUiSession(receiverId, entry.instanceId, resolved)
     return {
       receiver: receiverId,
       index,
@@ -1075,13 +1195,16 @@ export class Global {
   }
 
   async closePluginUi(receiverId: string, index: number): Promise<PluginUiOperationResult> {
-    // open 時に確定させたセッションを使う（#601 I1 ポリシー）。現在のチェーンから
-    // 再解決すると、UI を開いたまま slot が差し替わったとき「閉じて保存した」相手を
-    // 別プラグインの名前で報告してしまう。ウィンドウは open 時の slot 座標に居るので、
-    // CLOSE_UI の宛先も open 時の daemonTarget が正しい。
-    const session = [...this.openPluginUiSessions.values()].find(
-      (candidate) => candidate.receiverId === receiverId && candidate.index === index,
-    )
+    // Current index → instanceId で open セッションを引く。identity は open 時の値を保持し、
+    // daemon target は LCS 編集後の現在の chain_path を使うため、前段の挿抜で index が動いても
+    // 別 plugin の state と取り違えない。
+    let entry: ReturnType<Global['resolvePluginStateEntry']>
+    try {
+      entry = this.resolvePluginStateEntry(receiverId, index)
+    } catch (error) {
+      throw this.pluginUiOperationError(receiverId, index, error)
+    }
+    const session = this.openPluginUiSessions.get(entry.instanceId)
     if (!session) {
       throw this.pluginUiOperationError(
         receiverId,
@@ -1097,10 +1220,9 @@ export class Global {
         'plugin UI hosting requires the Rust engine backend',
       )
     }
-    const sessionKey = pluginUiSessionKey(session.resolved.daemonTarget, index)
     let completion: Awaited<ReturnType<NonNullable<AudioEngine['closePluginUi']>>>
     try {
-      completion = await this.audioEngine.closePluginUi(session.resolved.daemonTarget, index)
+      completion = await this.audioEngine.closePluginUi(entry.resolved.daemonTarget, index)
     } catch (error) {
       // ウィンドウの生死が不明（close タイムアウト等）なのでセッションは破棄しない。
       // prepareInstrumentReplacement と違い、明示 close / sum.ui(false) は従来どおり
@@ -1110,7 +1232,7 @@ export class Global {
     }
     // DONE を受けた = ウィンドウは確実に閉じた。safepoint 保存成功時は保存側が破棄済み。
     // timeout-without-save でもウィンドウは消えているので、ここで必ず破棄する。
-    this.openPluginUiSessions.delete(sessionKey)
+    this.openPluginUiSessions.delete(session.instanceId)
     if (completion === 'timeout-without-save') {
       throw this.pluginUiOperationError(
         receiverId,
@@ -1171,34 +1293,27 @@ export class Global {
     )
   }
 
-  /** UI close and old-tenant state commit immediately before an effect replacement. */
+  /** Close a disappearing effect UI before ApplyEffectChain performs its atomic drop/save. */
   private async prepareEffectReplacement(receiverId: string, oldSlot: PluginSlot): Promise<void> {
-    if (this.hasOpenPluginUi(receiverId, 1)) {
+    if (this.openPluginUiSessions.has(oldSlot.instanceId)) {
+      const currentIndex = this.currentIndexForInstance(receiverId, oldSlot.instanceId)
+      if (currentIndex === undefined) return
       try {
-        await this.closePluginUi(receiverId, 1)
+        await this.closePluginUi(receiverId, currentIndex)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         if (!message.includes('timeout-without-save')) {
-          this.forgetPluginUiSession(receiverId, 1)
+          this.openPluginUiSessions.delete(oldSlot.instanceId)
           throw error
         }
         effectReplaceNotice(
-          `Plugin UI for '${receiverId}' closed without a safepoint save; attempting the required explicit state save before replacement.`,
+          `Plugin UI for '${receiverId}' closed without a safepoint save; ApplyEffectChain will perform the required dropped-state save.`,
         )
       }
-    }
-    const projectDirectory = this.audioManager.getDocumentDirectory()
-    if (!projectDirectory) {
-      effectReplaceNotice(
-        `Cannot save the old effect state for '${receiverId}' because the document directory is not set; replacement will continue without state preservation.`,
-      )
-      return
     }
     if (oldSlot.role !== 'effect') {
       throw new Error('Effect replacement received a non-effect slot.')
     }
-    const target = pluginStateTargetForSlot(receiverId, oldSlot)
-    await this.projectStateStore(projectDirectory).save(target.identity, target.daemonTarget)
   }
 
   /**
@@ -1274,7 +1389,7 @@ export class Global {
   private pluginIndexError(
     sequence: string,
     index: number,
-    valid: { index: number; slot: PluginSlot }[],
+    valid: { index: number; slot: RegisteredChainElement }[],
     reason: string,
   ): Error {
     const listed = this.formatPluginIndices(valid)
@@ -1285,7 +1400,10 @@ export class Global {
   }
 
   private formatPluginIndices(
-    valid: { index: number; slot: Pick<PluginSlot, 'role' | 'normalizedName'> }[],
+    valid: {
+      index: number
+      slot: Pick<RegisteredChainElement, 'role' | 'normalizedName'>
+    }[],
   ): string {
     return valid.length === 0
       ? '<none>'

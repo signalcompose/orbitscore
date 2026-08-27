@@ -9,6 +9,30 @@ import {
 } from '../../packages/vscode-extension/src/diagnostics-analysis'
 
 describe('analyzeGlobalOncePerFile', () => {
+  it('T22 accepts multiline rack arrays and value-position plugin/standard/layer syntax', () => {
+    const text = [
+      'var global = init GLOBAL',
+      'var kick = init global.seq',
+      'var glue = [',
+      '  "Catalog A",',
+      '  plugin("Catalog B", enabled: false),',
+      '  Gain(db: -20),',
+      '  [["Catalog C"]]',
+      ']',
+      'kick.effect(glue)',
+      'kick.instrument(layer(["Instrument A", "Instrument B"]))',
+    ].join('\n')
+
+    const issues = [
+      ...analyzeGlobalOncePerFile(text),
+      ...analyzeAudioPathOrdering(text),
+      ...analyzeEmptyOutputArg(text),
+      ...analyzeLinkAudioMissingOutput(text),
+      ...analyzeOutputWithoutLinkAudio(text),
+    ]
+    expect(issues).toEqual([])
+  })
+
   it('should return no issues for single occurrence of each state-setter', () => {
     const text = [
       'var global = init GLOBAL',

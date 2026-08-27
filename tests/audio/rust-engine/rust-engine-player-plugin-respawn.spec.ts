@@ -14,6 +14,7 @@ interface FakeDaemon {
   pluginNoteOn: ReturnType<typeof vi.fn>
   pluginNoteOff: ReturnType<typeof vi.fn>
   savePluginState: ReturnType<typeof vi.fn>
+  applyEffectChain: ReturnType<typeof vi.fn>
   setBusRouting: ReturnType<typeof vi.fn>
   quit: ReturnType<typeof vi.fn>
 }
@@ -42,6 +43,11 @@ function createHarness() {
         bytesWritten: 12,
       }),
     ),
+    applyEffectChain: vi.fn().mockResolvedValue({
+      status: 'applied',
+      childPid: 80,
+      dropped: [],
+    }),
     setBusRouting: vi.fn().mockResolvedValue(undefined),
     quit: vi.fn().mockResolvedValue(undefined),
   }
@@ -155,6 +161,51 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
     // PluginEffectManager's self-heal check doesn't mistake this recovery
     // for a still-stale cache.
     expect(player.isPluginActive()).toBe(true)
+  })
+
+  it('T15 replays every stage of one effect receiver as exactly one rebuild APPLY', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.applyEffectChain({
+      bus: 'seq-bus-0',
+      mode: 'diff',
+      chain: [
+        {
+          op: 'load',
+          kind: 'catalog',
+          path: '/A.clap',
+          plugin_id: 'a',
+          state: '/A.state',
+          enabled: true,
+        },
+        { op: 'load', kind: 'standard', name: 'Gain', params: { db: -6 }, enabled: false },
+        { op: 'load', kind: 'catalog', path: '/B.vst3', plugin_id: 'b', enabled: true },
+      ],
+      saveDropped: [],
+    })
+    daemon.applyEffectChain.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.applyEffectChain).toHaveBeenCalledTimes(1)
+    expect(daemon.applyEffectChain).toHaveBeenCalledWith({
+      bus: 'seq-bus-0',
+      mode: 'rebuild',
+      chain: [
+        {
+          op: 'load',
+          kind: 'catalog',
+          path: '/A.clap',
+          plugin_id: 'a',
+          state: '/A.state',
+          enabled: true,
+        },
+        { op: 'load', kind: 'standard', name: 'Gain', params: { db: -6 }, enabled: false },
+        { op: 'load', kind: 'catalog', path: '/B.vst3', plugin_id: 'b', enabled: true },
+      ],
+      saveDropped: [],
+    })
   })
 
   it('logs a reload failure and retains the plugin for the next respawn retry', async () => {

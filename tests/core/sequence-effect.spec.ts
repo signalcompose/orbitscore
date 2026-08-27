@@ -2,6 +2,8 @@
  * seq.effect() — per-sequence plugin insert (PH.2b / #434 S3).
  */
 
+import * as fs from 'node:fs'
+import * as os from 'node:os'
 import path from 'node:path'
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -12,8 +14,10 @@ import { MidiManager } from '../../packages/engine/src/core/global/midi-manager'
 import { ProjectStateStore } from '../../packages/engine/src/core/project-state-store'
 import type { MidiOutput } from '../../packages/engine/src/midi/midi-output'
 import { SEQUENCE_EFFECT_BUS_POOL_SIZE } from '../../packages/engine/src/core/global/sequence-effect-manager'
+import { installEffectChainMock } from '../helpers/effect-chain-mock'
 
 const T0 = 1_000_000
+const temporaryDirectories: string[] = []
 const REPLACE_RESULT = {
   pluginId: 'replacement-id',
   pluginName: 'Replacement',
@@ -38,10 +42,13 @@ function scheduler() {
 }
 
 function harness(loadPlugin = vi.fn().mockResolvedValue({})) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-sequence-effect-'))
+  temporaryDirectories.push(directory)
   const audio = scheduler()
   audio.loadPlugin = loadPlugin
   const replacePlugin = vi.fn().mockResolvedValue(REPLACE_RESULT)
   audio.replacePlugin = replacePlugin
+  const applyEffectChain = installEffectChainMock(audio)
   const midiOutput: MidiOutput = {
     ensurePort: vi.fn(() => 'IAC'),
     noteOn: vi.fn(),
@@ -54,10 +61,10 @@ function harness(loadPlugin = vi.fn().mockResolvedValue({})) {
     closeAll: vi.fn(),
   }
   const global = new Global(audio, new MidiManager(() => midiOutput))
-  global.setDocumentDirectory('/songs')
+  global.setDocumentDirectory(directory)
   const seq = new Sequence(global, audio)
   seq.setName('drum')
-  return { audio, global, seq, loadPlugin, replacePlugin }
+  return { audio, global, seq, loadPlugin, replacePlugin, applyEffectChain, directory }
 }
 
 describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
@@ -69,14 +76,17 @@ describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     vi.useRealTimers()
+    for (const directory of temporaryDirectories.splice(0)) {
+      fs.rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   it('allocates the first pool bus and loads via LoadPlugin(role=effect, bus)', async () => {
-    const { seq, loadPlugin } = harness()
+    const { seq, loadPlugin, directory } = harness()
     await expect(seq.effect('./reverb.clap')).resolves.toBe(seq)
     expect(seq.getInsertBus()).toBe('seq-bus-0')
     expect(loadPlugin).toHaveBeenCalledWith(
-      path.resolve('/songs', 'reverb.clap'),
+      path.resolve(directory, 'reverb.clap'),
       undefined,
       'effect',
       'seq-bus-0',
@@ -105,7 +115,7 @@ describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
 
   it('replaces a re-declaration with a different path without issuing another load', async () => {
     vi.spyOn(ProjectStateStore.prototype, 'save').mockResolvedValue({} as any)
-    const { seq, loadPlugin, replacePlugin } = harness()
+    const { seq, loadPlugin, replacePlugin, directory } = harness()
     await seq.effect('./reverb.clap')
 
     await expect(seq.effect('./delay.clap')).resolves.toBe(seq)
@@ -113,7 +123,7 @@ describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
     expect(loadPlugin).toHaveBeenCalledTimes(1)
     expect(replacePlugin).toHaveBeenCalledTimes(1)
     expect(replacePlugin).toHaveBeenCalledWith(
-      path.resolve('/songs', 'delay.clap'),
+      path.resolve(directory, 'delay.clap'),
       undefined,
       'effect',
       'seq-bus-0',
@@ -121,10 +131,10 @@ describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
   })
 
   it('accepts .vst3 effects', async () => {
-    const { seq, loadPlugin } = harness()
+    const { seq, loadPlugin, directory } = harness()
     await expect(seq.effect('reverb.vst3')).resolves.toBe(seq)
     expect(loadPlugin).toHaveBeenCalledWith(
-      path.resolve('/songs', 'reverb.vst3'),
+      path.resolve(directory, 'reverb.vst3'),
       undefined,
       'effect',
       'seq-bus-0',
@@ -209,7 +219,7 @@ describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
     const seq = new Sequence(global, audio)
     seq.setName('drum')
     await expect(seq.effect('./reverb.clap')).rejects.toThrow(
-      'Plugin hosting requires the Rust engine backend',
+      'Effect rack hosting requires the Rust engine backend',
     )
   })
 

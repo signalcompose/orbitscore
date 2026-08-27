@@ -23,6 +23,11 @@ import {
   ScopeRoot,
   ScopeMode,
   Meter,
+  NamedArg,
+  ValueArray,
+  ValueCall,
+  ValueExpression,
+  ValueRef,
 } from './types'
 import { ParserUtils } from './parser-utils'
 
@@ -130,6 +135,153 @@ export class ExpressionParser {
     }
 
     throw new Error(`Unexpected token in argument: ${token.type}`)
+  }
+
+  /** Parse a generic value expression used by rack arrays and rack-aware method arguments. */
+  parseValueExpression(arrayElement = false): { value: ValueExpression; newPos: number } {
+    this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+    const token = ParserUtils.current(this.tokens, this.pos)
+    if (token.type === 'LBRACKET') return this.parseValueArray()
+    if (token.type === 'STRING') {
+      const parsed = this.parseString()
+      return { value: parsed.value, newPos: parsed.newPos }
+    }
+    if (token.type === 'IDENTIFIER') {
+      if (ParserUtils.peek(this.tokens, this.pos).type === 'LPAREN') {
+        return this.parseValueCall()
+      }
+      const id = ParserUtils.advance(this.tokens, this.pos)
+      this.pos = id.newPos
+      if (ParserUtils.isBooleanLiteral(id.token.value)) {
+        return { value: ParserUtils.parseBoolean(id.token.value), newPos: this.pos }
+      }
+      let octaveShift = 0
+      if (ParserUtils.current(this.tokens, this.pos).type === 'CARET') {
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+        octaveShift = this.parseSignedNumber()
+      }
+      const value: ValueRef | PlayChordRef = {
+        type: arrayElement ? 'chord_ref' : 'value_ref',
+        name: id.token.value,
+        octaveShift,
+      }
+      return { value, newPos: this.pos }
+    }
+    if (token.type === 'MINUS') {
+      const value = this.parseChordRemoval()
+      return { value, newPos: this.pos }
+    }
+    const parsed = this.parseArgument()
+    return { value: parsed.value as ValueExpression, newPos: parsed.newPos }
+  }
+
+  /** Parse the context-neutral array used by bindings/effect()/instrument(). */
+  parseValueArray(): { value: ValueArray; newPos: number } {
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'LBRACKET').newPos
+    const elements: ValueExpression[] = []
+    while (
+      ParserUtils.current(this.tokens, this.pos).type !== 'RBRACKET' &&
+      !ParserUtils.isEOF(this.tokens, this.pos)
+    ) {
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+      if (ParserUtils.current(this.tokens, this.pos).type === 'RBRACKET') break
+      const parsed = this.parseValueExpression(true)
+      this.pos = parsed.newPos
+      elements.push(parsed.value)
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+      if (ParserUtils.current(this.tokens, this.pos).type === 'COMMA') {
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      } else if (ParserUtils.current(this.tokens, this.pos).type !== 'RBRACKET') {
+        const current = ParserUtils.current(this.tokens, this.pos)
+        throw new Error(
+          `Expected comma or closing bracket but got ${current.type} at line ${current.line}, column ${current.column}`,
+        )
+      }
+    }
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'RBRACKET').newPos
+    let octaveShift: number | undefined
+    if (ParserUtils.current(this.tokens, this.pos).type === 'CARET') {
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      octaveShift = this.parseSignedNumber()
+    }
+    return {
+      value: {
+        type: 'value_array',
+        elements,
+        ...(octaveShift === undefined ? {} : { octaveShift }),
+      },
+      newPos: this.pos,
+    }
+  }
+
+  private parseValueCall(): { value: ValueCall; newPos: number } {
+    const name = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
+    this.pos = name.newPos
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'LPAREN').newPos
+    const args: Array<ValueExpression | NamedArg> = []
+    while (
+      ParserUtils.current(this.tokens, this.pos).type !== 'RPAREN' &&
+      !ParserUtils.isEOF(this.tokens, this.pos)
+    ) {
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+      if (ParserUtils.current(this.tokens, this.pos).type === 'RPAREN') break
+      if (
+        ParserUtils.current(this.tokens, this.pos).type === 'IDENTIFIER' &&
+        ParserUtils.peek(this.tokens, this.pos).type === 'COLON'
+      ) {
+        args.push(this.parseValueNamedArgument())
+      } else {
+        const parsed = this.parseValueExpression()
+        this.pos = parsed.newPos
+        args.push(parsed.value)
+      }
+      this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
+      if (ParserUtils.current(this.tokens, this.pos).type === 'COMMA') {
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      } else if (ParserUtils.current(this.tokens, this.pos).type !== 'RPAREN') {
+        const current = ParserUtils.current(this.tokens, this.pos)
+        throw new Error(
+          `Expected comma or closing parenthesis in ${name.token.value}() but got ${current.type}`,
+        )
+      }
+    }
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'RPAREN').newPos
+    return {
+      value: { type: 'value_call', name: name.token.value, args },
+      newPos: this.pos,
+    }
+  }
+
+  private parseValueNamedArgument(): NamedArg {
+    const name = ParserUtils.expect(this.tokens, this.pos, 'IDENTIFIER')
+    this.pos = name.newPos
+    this.pos = ParserUtils.expect(this.tokens, this.pos, 'COLON').newPos
+    const token = ParserUtils.current(this.tokens, this.pos)
+    if (token.type === 'STRING') {
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      return { type: 'named_arg', name: name.token.value, value: token.value }
+    }
+    if (token.type === 'MINUS' || token.type === 'NUMBER') {
+      const negative = token.type === 'MINUS'
+      if (negative) this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      const number = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+      this.pos = number.newPos
+      const value = ParserUtils.parseNumber(number.token)
+      return { type: 'named_arg', name: name.token.value, value: negative ? -value : value }
+    }
+    if (token.type === 'IDENTIFIER') {
+      this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+      return {
+        type: 'named_arg',
+        name: name.token.value,
+        value: ParserUtils.isBooleanLiteral(token.value)
+          ? ParserUtils.parseBoolean(token.value)
+          : { type: 'ref', name: token.value },
+      }
+    }
+    throw new Error(
+      `named argument "${name.token.value}:" expects a number, string, boolean, or identifier — got "${token.value}".`,
+    )
   }
 
   /**

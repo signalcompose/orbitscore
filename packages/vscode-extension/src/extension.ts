@@ -79,7 +79,7 @@ import {
   extractDeclaredSequenceNames,
 } from './dsl-completion-context'
 import { BUS_METHODS, GLOBAL_METHODS, SEQUENCE_METHODS } from './dsl-method-catalog'
-import { detectPluginArgContext, filterCatalogEntries } from './plugin-catalog-completion'
+import { detectRackArgContext, filterCatalogEntries } from './plugin-catalog-completion'
 import {
   loadPluginCatalog,
   runPluginScan,
@@ -3604,14 +3604,20 @@ export function registerCompletionProviders(context: vscode.ExtensionContext) {
   // user types further characters inside the string; VS Code does this
   // client-side via each item's `range`, so no re-trigger characters are
   // needed for the common case (registered `"` covers the initial open-quote
-  // fire; detectPluginArgContext itself matches a partial, unclosed string,
+  // fire; detectRackArgContext itself matches a partial, unclosed string,
   // so a real re-invocation — e.g. Ctrl+Space — still resolves correctly too).
   const pluginCompletionProvider = vscode.languages.registerCompletionItemProvider(
     'orbitscore',
     {
       provideCompletionItems(document, position) {
-        const lineText = document.lineAt(position).text
-        const pluginContext = detectPluginArgContext(lineText, position.character)
+        // #628: ラックは配列・複数行・`layer` の入れ子になるため、単一行 regex では
+        // 発火しない（SC.10.10 規範 1 の退行点）。有界の後方スキャナを主経路にし、
+        // 単一行の判定はその特殊ケースとして吸収される。
+        const lines: string[] = []
+        for (let row = 0; row <= position.line; row += 1) {
+          lines.push(document.lineAt(row).text)
+        }
+        const pluginContext = detectRackArgContext(lines, position.line, position.character)
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
