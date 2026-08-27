@@ -14,6 +14,7 @@ import { DaemonProtocolError } from '../../audio/rust-engine/errors'
 import type { PluginStateIdentity } from '../project-state-store'
 
 import { AudioManager } from './audio-manager'
+import { effectReplaceNotice } from './effect-replace-notice'
 import { LinkAudioManager } from './link-audio-manager'
 import {
   KNOWN_PLUGIN_EXTENSIONS,
@@ -479,8 +480,12 @@ export class EffectChainMap<K> {
     } catch (error) {
       const receiver = this.externalReceiverId?.(key) ?? this.receiverId(key)
       const message = error instanceof Error ? error.message : String(error)
-      console.warn(
-        `[effect-replace] ⚠️ Best-effort cleanup of the uncertain old effect for '${receiver}' failed; replacement/removal will continue: ${message}`,
+      // 🔴 stream の選択は `effectReplaceNotice` が握る（呼び出し側で `console.warn` を
+      // 使わないこと）。理由はそのモジュールの docstring を参照 — 拡張は engine の stderr を
+      // 内容を見ずに `ERROR:` で記録するので、正常に継続する通知を warn で出すと E2E R-E4
+      // 「復旧は ERROR 行を増やさない」が落ちる。実際に落ちた（#625・4 回目の再発）。
+      effectReplaceNotice(
+        `Best-effort cleanup of the uncertain old effect for '${receiver}' failed; replacement/removal will continue: ${message}`,
       )
     }
   }

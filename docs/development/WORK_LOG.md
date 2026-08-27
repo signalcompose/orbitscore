@@ -17,6 +17,57 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.374 fix: 正常な継続を ERROR として記録していた（4 回目の再発）(Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625 / PR #627
+**Status**: 実機 gated E2E が **1 failed** → 修正 → 再実行
+
+マージ前ゲートの実機 gated E2E（8 件）で **R-E4 が落ちた**。「復旧は ERROR 行を増やさない」
+というオラクルに対し、ERROR 行が 17 → 18 に増えていた。増えた 1 行はこれ:
+
+```
+ERROR: [effect-replace] ⚠️ Best-effort cleanup of the uncertain old effect for 'fx625' failed;
+       replacement/removal will continue: [PLUGIN_STATE_TARGET_ERROR] effect child slot has no loaded plugin
+```
+
+**ラウンド1 の I-1 修正で足した `console.warn` が原因。**
+
+#### 構造
+
+拡張は engine プロセスの stderr を、**内容を一切見ずに**まるごと `ERROR:` を付けて出力
+チャネルへ流す（`extension.ts` の `setupStderrHandler`）。Node の `console.warn` は stderr へ
+書くので、**正常に継続する操作を warn で報告した瞬間に ERROR として記録される**。
+同じファイルの兄弟通知（`[plugin-state] restoring`）が `console.log` なのはこの理由だった。
+
+これは `af041307`「正常なプラグイン操作を error として記録するのをやめる」で直した欠陥の
+**4 回目の再発**である。Rust 側は `8258c40a` で `orbit_child_runtime::notice` へ集約して
+破れない形にしたが、**TS 側には同じ罠が残っていた**。
+
+#### 対処 — 1 箇所を直さず、方針を全箇所へ
+
+PR が追加した `console.warn` を列挙すると **3 箇所**あり、いずれも「正常に継続する」通知
+だった（うち実機で発火したのは 1 箇所）。落ちた 1 箇所だけを直すのは指摘単位のローカル
+パッチになるため、`effect-replace-notice.ts` を新設して**呼び出し側が stream を選べない形**
+にし、3 箇所すべてを移行した（Rust の `notice.rs` の TS 版）。
+
+`tests/core/effect-replace-notice.spec.ts` が **文言ではなくストリーム**を固定する。
+`console.warn` へ戻す変異で 2 件とも red になることを実測した。
+
+#### 🔴 この欠陥を誰が捕まえられなかったか
+
+| 層 | 結果 |
+|---|---|
+| ユニットテスト（TS 2073 件） | 検出せず |
+| `/code:pr-review-team` 4 名 | 検出せず |
+| Fable 収束監査 | 検出せず |
+| main の変異検証 8 種 | 検出せず |
+| **実機 gated E2E** | **検出** |
+
+理由は明快で、**ストリームの深刻度分類は engine の外（拡張）で起きる**からである。
+engine のテストからは原理的に見えない。CLAUDE.md の「E2E が最重要」「壊れるのは配線であり、
+配線は E2E でしか見えない」がそのまま実証された形。
+
 ### 6.373 test: 変異検証で見つけた3つの穴を塞ぐ + 収束監査 (Aug 27, 2026)
 
 **Date**: 2026-08-27

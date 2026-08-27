@@ -14,6 +14,7 @@ import { Sequence } from './sequence'
 import { Scheduler, GlobalState } from './global/types'
 import { TempoManager } from './global/tempo-manager'
 import { AudioManager } from './global/audio-manager'
+import { effectReplaceNotice } from './global/effect-replace-notice'
 import { EffectsManager } from './global/effects-manager'
 import { TransportControl } from './global/transport-control'
 import { SequenceRegistry } from './global/sequence-registry'
@@ -1181,15 +1182,15 @@ export class Global {
           this.forgetPluginUiSession(receiverId, 1)
           throw error
         }
-        console.warn(
-          `[effect-replace] ⚠️ Plugin UI for '${receiverId}' closed without a safepoint save; attempting the required explicit state save before replacement.`,
+        effectReplaceNotice(
+          `Plugin UI for '${receiverId}' closed without a safepoint save; attempting the required explicit state save before replacement.`,
         )
       }
     }
     const projectDirectory = this.audioManager.getDocumentDirectory()
     if (!projectDirectory) {
-      console.warn(
-        `[effect-replace] ⚠️ Cannot save the old effect state for '${receiverId}' because the document directory is not set; replacement will continue without state preservation.`,
+      effectReplaceNotice(
+        `Cannot save the old effect state for '${receiverId}' because the document directory is not set; replacement will continue without state preservation.`,
       )
       return
     }

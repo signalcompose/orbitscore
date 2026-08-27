@@ -283,15 +283,21 @@ describe('effect plugin replacement (#625 Stage B)', () => {
     ])
   })
 
-  it('R14 warns once and continues replacement when the document directory is unset', async () => {
+  it('R14 notifies once on stdout and continues replacement when the document directory is unset', async () => {
+    // 🔴 通知先は **stdout でなければならない**（#625・4 回目の再発）。拡張は engine の
+    // stderr を内容を見ずに `ERROR:` で記録するので、`console.warn` に戻すと「正常に継続
+    // する操作」が ERROR として残る。ストリームの規約は
+    // `tests/core/effect-replace-notice.spec.ts` が本体側で固定している。
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { global, replacePlugin } = makeGlobal({ documentDirectory: false })
     await global.effect('/plugins/old.clap', 'old-id')
 
     await expect(global.effect('/plugins/new.vst3', 'new-id')).resolves.toBe(global)
 
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('document directory'))
+    const notices = log.mock.calls.filter(([line]) => String(line).includes('document directory'))
+    expect(notices).toHaveLength(1)
+    expect(warn).toHaveBeenCalledTimes(0)
     expect(replacePlugin).toHaveBeenCalledTimes(1)
     expect(replacePlugin).toHaveBeenCalledWith('/plugins/new.vst3', 'new-id', 'effect')
   })
@@ -408,6 +414,11 @@ describe('effect plugin replacement (#625 Stage B)', () => {
 
   it('I-1 retries forgotten-slot cleanup best-effort before recovery replacement', async () => {
     const save = mockStateSave()
+    // 🔴 `log`（stdout）と `warn`（stderr）の**両方**を張る。拡張は engine の stderr を
+    // 内容を見ずに `ERROR:` で記録するので（`extension.ts` の `setupStderrHandler`）、
+    // この通知が warn へ戻ると「復旧は ERROR 行を増やさない」E2E R-E4 が落ちる。
+    // 実際に一度落とした（#625・4 回目の再発）。ここで stream を固定する。
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const quiesceTimeout = new DaemonProtocolError(
       'OUTPROC_EFFECT_RUNTIME',
@@ -433,10 +444,11 @@ describe('effect plugin replacement (#625 Stage B)', () => {
       { receiver: 'master', role: 'effect', normalizedName: 'old', occurrence: 0 },
       { role: 'effect' },
     )
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining('Best-effort cleanup of the uncertain old effect'),
+    const notices = log.mock.calls.filter(([line]) =>
+      String(line).includes('Best-effort cleanup of the uncertain old effect'),
     )
+    expect(notices).toHaveLength(1)
+    expect(warn).toHaveBeenCalledTimes(0)
     expect(replacePlugin).toHaveBeenCalledTimes(2)
     expect(masterChain(global)).toMatchObject([{ normalizedName: 'new' }])
   })
