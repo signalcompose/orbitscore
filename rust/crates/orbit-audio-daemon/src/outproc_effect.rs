@@ -225,8 +225,6 @@ fn default_child_exe(format: PluginFormat) -> Result<PathBuf, String> {
 pub struct OutProcEffectStats {
     /// 初回 attach の READY 待ち中。watchdog はこの間の child exit を respawn せず fast-fail へ渡す。
     pub initial_attach_pending: AtomicBool,
-    /// 初回 attach 中に child が exit したことを watchdog が publish する。
-    pub child_early_exit: AtomicBool,
     /// child から fresh な出力を読めた callback 数。
     pub fresh: AtomicU64,
     /// child が間に合わず repeat-previous した callback 数（slot 数決定の主指標の一つ）。
@@ -255,6 +253,12 @@ pub struct OutProcEffectStats {
     /// 現在稼働中の child の PID（start / respawn 時に store）。gated kill-test がこの PID を kill して
     /// daemon の生存 + respawn 復帰を検証する。0 = 未起動。
     pub current_child_pid: AtomicU32,
+    /// 初回 attach 中の child exit（**事実と理由の対**）。詳細は
+    /// [`crate::outproc_child_exit::ChildEarlyExit`]。
+    ///
+    /// 🔴 **struct の末尾に置くこと。** 中身に `Mutex` を含むので、RT が毎コールバック触る
+    /// atomic 群（`fresh` / `callback_count` 等）と同じキャッシュラインに乗せない。
+    pub child_early_exit: crate::outproc_child_exit::ChildEarlyExit,
 }
 
 impl OutProcEffectStats {
@@ -600,7 +604,7 @@ impl EffectChildSupervisor {
                                 tracing::warn!(
                                     "{child_name_wd} exited during initial attach ({status})"
                                 );
-                                stats.child_early_exit.store(true, Ordering::Release);
+                                stats.child_early_exit.record(status);
                                 break;
                             }
                             // #573: 起動直後に死に続ける child を tight loop で respawn し続けない。
@@ -1304,8 +1308,7 @@ mod tests {
         let shm = make_shm();
         let args_path = respawn_args_path(&shm);
         let stats = OutProcEffectStats::new();
-        let first = Command::new("sleep")
-            .arg("30")
+        let first = crate::outproc_stub_child::stub_child_command()
             .spawn()
             .expect("spawn initial stub child");
         let first_pid = first.id();
@@ -1516,8 +1519,7 @@ mod tests {
         let shm = unique_shm_path();
         let _ = std::fs::remove_file(&shm); // ファイル不在 → open_shared が失敗する
         let stats = OutProcEffectStats::new();
-        let first = Command::new("sleep")
-            .arg("30")
+        let first = crate::outproc_stub_child::stub_child_command()
             .spawn()
             .expect("spawn stub child");
         let pid = first.id();

@@ -17,6 +17,268 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.378 fix: CI へ足した `--ignored` が実機依存テストを起こしていた (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #622 / PR #629
+**Status**: CI 修正後 `--lib -- --ignored` で **1 passed**（95.01s）
+
+6.377 で「`#[ignore]` テストが CI で走らない」を直すために足したステップが、**CI を落とした**。
+
+#### 何が起きたか
+
+落ちたのは私が足した 95 秒テストでは**ない**（それは CI でも 95.00s / pass）。落ちたのは
+`capture_realtime_gated.rs` の `examples22_realtime_capture_matches_schedule` — **実機オーディオ
+デバイスを要する gated テスト**である。`-- --ignored` が、通常 skip されているそれらを
+**まとめて起動した**。
+
+#### 🔴 列挙漏れを、また同じ PR の中でやった
+
+fix 再点検（サブエージェント）は「crate 内の `#[ignore]` は 3 箇所のみ（`link_audio.rs` 2 /
+`engine_wrap.rs` 1）」と列挙し、安全と判定した。**その列挙は `src/` しか見ておらず、`tests/`
+ディレクトリの統合テストを数えていなかった。** main はそれを検証せずに CI へ出した。
+
+実際に数えると **`tests/*_gated.rs` に 28 件**あり、すべて「実機デバイス / 実プラグイン /
+特定 env が要る」ものだった。
+
+#### 構造（これが罠の本体）
+
+**`#[ignore]` は「遅い」印と「実機が要る」印の両方に使われており、`--ignored` はその区別を
+しない。** したがって「遅いテストを CI で回したい」という要求に `--ignored` で応えると、
+必ず実機依存テストを巻き込む。
+
+#### 修正
+
+ステップに **`--lib` を足した**（lib のユニットテストだけを対象にする）。手元での実走も
+最初からその形だったので、**CI ステップだけが実走と違う形になっていた**のが直接の原因。
+
+#### 教訓
+
+- **委譲先の列挙を鵜呑みにしない。** 「N 箇所しかない」は、どの範囲を見た N かを確認する
+- **手元で実走した形と、CI に書く形を一致させる。** 手元は `--lib` 付き、CI は無しだった
+
+### 6.377 fix: PR #629 レビュー ラウンド1 の指摘を方針として一括適用 (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #622 / PR #629
+**Status**: daemon lib **208 passed / 0 failed / 1 ignored**（`#[ignore]` も実走 95.00s で pass）
+
+owner の「レビューしないでマージして大丈夫ですか？」で手順違反に気づき、`/code:pr-review-team`
+ラウンド1（フル編成 4 名）+ **Fable 監査を並行**で回した。**Critical 2 / Important 3 / Minor 5**。
+
+#### 🔴 3 者が独立に一致した誤り — キャッシュライン分離の虚偽
+
+6.376 で「false sharing の懸念 → フィールドを struct 末尾へ」と記録したが、**`repr(Rust)` は
+宣言順とメモリ配置順を保証しない**。comment-analyzer・Fable・code-reviewer が独立に指摘し、
+**code-reviewer が `offset_of!` で実測**して決着した:
+
+- `child_early_exit`（Mutex 込み・size 48）は **offset 0**（struct の先頭）
+- RT が毎コールバック触る `fresh` は offset 48
+- → **両方とも最初の 64 バイトに同居**しており、意図した分離は成立していなかった
+
+しかも 🔴 命令形で 3 箇所に書いていたので、将来「対処済み」という誤った前提で読まれる形だった。
+**`#[repr(C)]` は足さず、保証の記述を撤回**した（元の懸念自体が推測ベースで、非ホットパスと
+確認済みのため）。
+
+#### 🔴 型で封じたのに、封じられていることを誰も検証していなかった
+
+pr-test-analyzer の指摘: `ChildEarlyExit` は「片方だけ動かす退行を表現不能にする」ために
+新設したのに、**その不能性を検証するテストが無い**。既存の attach テストは試行が 1 回なので、
+`arm_for_new_attempt()` を「フラグだけ倒す」に退行させても検出できない。
+
+**実測で裏付けた**: 同じ変異に対し **旧テスト = 2 passed（素通り）/ 新テスト = red**。
+指摘は「もっともらしい」ではなく事実だった。
+
+#### 🔴 列挙の打ち切り（Fable・非重複）
+
+`Command::new("sleep").arg("30")` が**テストコードに 7 箇所**残っていた
+（`engine_wrap.rs` 3 / `outproc_effect.rs` 2 / `outproc_instrument.rs` 2）。いずれも
+「殺されるまで生きる stub」= `slow-child.sh` と同じ契約で、**新スキャナの検出圏外**。
+
+> WORK_LOG の「固定秒数を書ける場所を無くした」は fixture ディレクトリに限れば真、
+> **テストコード全体では偽**（Fable）
+
+main が自分で grep して 7 箇所を確認（`0.2` × 4 と `2` × 1 は「即死が役目」で別クラス）。
+
+#### 適用した方針
+
+> **① 書ける場所を 1 つに絞る。検出器を賢くしない。** `outproc_stub_child` に唯一の生成経路を
+> 置き 7 箇所を移した。**秒数を渡す口が無い**。`perl -e 'sleep 20'` まで正規表現で潰す方向へは
+> 行かない — 書ける場所が 1 つなら検出は単純でよい。
+>
+> **② 宣言と実体を一致させる。** 走査を**再帰化**し（`lib/` が盲点だった）、件数を `>= 2` から
+> **`== 4` の厳密一致**へ。
+>
+> **③ 保証できないことを保証と書かない。** キャッシュライン主張を撤回。スレッド分担も
+> 「control 側も**書き手**」と実際の呼び出しに合わせた。
+>
+> **④ 型で封じたなら、封じられていることをテストする。**
+
+#### 変異検証（すべて実測）
+
+| 変異 | 結果 |
+|---|---|
+| `arm_for_new_attempt` が理由を倒さない | 新テスト red / **旧テストは素通り** |
+| 共有スニペット自身に `exec sleep 30` を足す | 再帰走査が**名指しで** red（旧走査は素通り） |
+| `FAST_RESPAWN_THRESHOLD` 2s → 3s | `supervisor_resets_fast_fail_streak_after_a_survivor` が red |
+
+3 番目は「定数を伸ばせば大きな声で落ちる」という**未実測だった主張**（pr-test-analyzer 指摘）を
+事実に変えたもの。
+
+#### レビュアー間の対立を裁定
+
+**PID 再利用**について silent-failure-hunter は「永久に終了しない・孤児問題の再導入」、
+Fable は**不同意**。**Fable を採用**した — PID は単調割当て + wraparound なので 1 秒以内の
+再利用は非現実的で、仮に起きても偽者プロセスの寿命の間だけ（有界）。
+
+#### `#[ignore]` テストを CI へ
+
+「CI に `--ignored` ジョブが無く誰も実行しない」（pr-test-analyzer / Fable が一致）を受け、
+`rust-ci.yml` にステップを追加。**手元で実走して 95.00s / pass を確認してから載せた**。
+テキスト検査は script の**形**しか見ないので、`timeout 20 ...` や親監視ループ自体の破壊は
+すり抜ける。この behavioral テストがその穴を埋める唯一の手段なので 95 秒を払う。
+
+### 6.376 refactor: /simplify の指摘を方針として一括適用 (#622 / PR #629) (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #622 / PR #629
+**Status**: daemon lib **205 passed / 0 failed / 1 ignored** / clippy `--all-targets` 0 警告 / fmt 通過
+
+owner の指摘「レビューしないでマージして大丈夫ですか？」で手順違反に気づき、`/simplify` を
+規定どおり回した（4 エージェント並行）。**指摘単位のパッチにせず、方針を先に決めて一括適用**した。
+
+#### 🔴 最大の発見（altitude）— 列挙を尽くしていなかった
+
+**`record-respawn-args.sh` に `exec sleep 3600` が残っていた。** 6.375 と同じ罠で、しかも
+孤児が**最大 1 時間**残る形。`slow-child.sh` の**利用者**は列挙したのに、**fixture ディレクトリ
+自体を列挙していなかった**。さらに 6.375 で書いた退行テストは 1 ファイルしか見ておらず、
+**この見落としを検出できない形**だった。
+
+4 つすべてを列挙して分類した:
+
+| fixture | 判定 |
+|---|---|
+| `exit-child.sh`（`exit 1`） | 正しい（即死が役目） |
+| `slow-child.sh` | 6.375 で修正済み |
+| `record-respawn-args.sh`（`sleep 3600`） | 🔴 同じ罠 → 修正 |
+| `variable-lifetime-child.sh`（`sleep 2.2`） | **別クラス** — 触らない |
+
+`variable-lifetime-child.sh` を例外にした根拠: 2.2s が守るのは `FAST_RESPAWN_THRESHOLD`(2s)
+だが、**負荷は寿命を縮めない**（`sleep` は遅延しても短くならない）ので「黙って下回る」形には
+ならず、定数を伸ばせば「生存者が出ない」で**大きな声で落ちる**。
+
+#### 適用した方針
+
+> **fixture の寿命は 2 種類しかない。**「殺されるまで生きる」ものは固定秒数を**書けない形**に
+> する（共有スニペットで親の生死を見る）。「特定の秒数生きる」ものは、その秒数が守る Rust
+> 定数と外れた時に**大きな声で落ちる**ことを確認した上でのみ許す。退行テストは**ディレクトリ
+> 全体を走査**し、後者を明示的な例外リストで管理する — 1 ファイルだけを見る形にしない。
+>
+> **Rust**: 早期終了の「事実」と「理由」は**1 つの操作でしか動かせない形**にする。
+
+- `tests/fixtures/lib/live-until-parent-exits.sh` を新設し、`slow-child.sh` と
+  `record-respawn-args.sh` が読み込む形へ統一（固定秒数を書ける場所を無くした）
+- 退行テストを `no_child_fixture_ends_after_a_fixed_wait` へ作り直し、**走査が 0 件になったら
+  それ自体を失敗**にした（列挙が意味の源なので）
+- `outproc_child_exit::ChildEarlyExit` を新設。公開するのは `arm_for_new_attempt()`（両方倒す）
+  と `record(status)`（理由 → 事実の順）だけで、**片方だけ動かす書き方が表現できない**。
+  置き場所は `outproc_child_exe` / `outproc_respawn_guard` の先例に倣った
+  （「規則を 2 箇所に持つと片方だけ直し忘れる — #548 がその形のバグだった」）
+
+#### レビューで浮かんだ潜在的なズレ
+
+`child_early_exit` は spawn のたびに `false` へ倒されるのに、6.375 で足した理由は**倒されて
+いなかった**。実害は出ていない（理由を読むのはフラグが true の分岐内だけで、理由を
+フラグより先に書いているため）が、**不変条件が暗黙**だった。型に畳んで表現の問題にした。
+
+#### 各エージェントの評価
+
+| 角度 | 結果 |
+|---|---|
+| Reuse | ポイズニング回復を 4 箇所に手書き・既存 `lock_child_slot_recovering` と流儀が違う → 統合で解消 |
+| Simplification | 約 50 行のコピペ → 型統合で解消。`OnceLock` 案は**リセット経路があるため不可**と判明 |
+| Efficiency | **RT から Mutex をロックする経路は無い**（列挙で確認）。false sharing の懸念 → フィールドを struct 末尾へ |
+| Altitude | 上記の見落としを検出 |
+
+#### 変異検証
+
+- `record-respawn-args.sh` を `exec sleep 3600` へ戻す → 新テストが**名指しで** red（旧テストは素通り）
+- 走査対象 0 件のガードは、**実際に main のミス（ディレクトリの取り方）を即座に捕まえた**
+
+### 6.375 fix: Rust CI flake の原因は fixture の固定寿命だった (#622) (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #622
+**Status**: daemon lib **205 passed / 0 failed / 1 ignored** / clippy `--all-targets` 0 警告 / fmt 通過
+
+#622 は「未確認の仮説（机上で確定させるな）」として資源圧の話が書かれていたが、**実装を読むと
+算術で決まる欠陥**だった。
+
+#### 原因
+
+`slow-child.sh` は `exec sleep 20` で**寿命が固定 20 秒**。一方この fixture が生き残らねば
+ならない経路は 2 つの deadline にゲートされている:
+
+| | 値 |
+|---|---|
+| child の寿命（`exec sleep 20`） | **20 秒** |
+| `SETUP_DEADLINE`（Loading 観測までの許容） | 30 秒 |
+| `CHILD_READY_TIMEOUT`（READY poll の許容） | 60 秒 |
+
+**寿命の方が短い。** 速いマシンではテスト全体がミリ秒で終わるので表面化せず、CI が詰まって
+セットアップが 20 秒を超えた時にだけ child が自然死し、READY poll が early-exit 分岐へ落ちて
+`child exited before publishing READY` を返す。**#622 が記録した署名そのもの**である。
+
+#529（effect 版・「1 本目が Loading から既に離脱」）とは原因が違うという issue の判断は正しく、
+**署名が違えば原因も違った**。
+
+fixture のコメントは「引数を無視して**生き続ける**」を契約と書いており、`sleep 20` はその
+近似だった（元は `sleep 0.2` で、#573 の cascading respawn を受けて延ばした経緯）。
+**deadline が 30/60 秒へ伸びた時に、その近似が黙って下回った。**
+
+#### 修正 — 秒数を増やさず、寿命の概念を無くす
+
+秒数を増やすのは先送りにしかならず、増やせばテスト異常終了時に**孤児がその時間だけ残る**
+（このリポジトリでは実害がある）。そこで**親の消滅で終わる**形にした。
+
+```sh
+parent=$PPID
+while kill -0 "$parent" 2>/dev/null; do
+  sleep 1
+done
+```
+
+両方の契約を実測: 親が生きている間は生存（4 秒観測）/ 親が消えたら自分も終了（**孤児なし**）。
+
+#### 固定したもの（すべて変異で実証）
+
+| テスト | 変異 | 結果 |
+|---|---|---|
+| `slow_child_fixture_has_no_fixed_lifetime` | fixture を `exec sleep 20` へ戻す | red |
+| `..._outlives_the_deadlines_it_must_survive`（`#[ignore]`） | — | 実時間で deadline 超えを検査 |
+| early-exit（effect / instrument） | エラーに終了理由を載せない | **両方** red |
+| 同上 | watchdog が status を記録しない | red |
+
+検出器は最初「`sleep N` がどこかにある」で書き、**ループ内のポーリング間隔を誤検出**した。
+「**最後の文が固定待ちで終わる**」= #622 で退行した形だけを見るよう狭めた。
+
+#### 診断（issue の「次の一手」）
+
+`child exited before publishing READY` に**終了理由**を載せた。watchdog は既に
+`tracing::warn!` へ status を出していたが、**呼び出し元へ返る `WrapError` には乗っていなかった**
+ので、受け取った側から SIGKILL（資源圧で殺された）と child 自身のエラー終了を区別できなかった。
+実ユーザーがプラグインの起動失敗を見る時にも効く。
+
+`child_early_exit_status: Mutex<Option<String>>` を両ロールの stats に追加。書き手は watchdog
+スレッド・読み手は control スレッドで**どちらも非 RT**。audio callback から触らないことを
+コメントで明示した。
+
+#### 副次的な観測
+
+隔離 worktree の並行コンパイル下でのみ watchdog 系テスト 2 件が落ち、本体ツリーでは 2 回とも
+pass した（#625 セッション）。**負荷依存**という観測は本 issue の仮説と符合する。ただし
+「同時 child 数のピークが上がった」かどうかは**実測していない**ので仮説のまま残す。
+
 ### 6.374 fix: 正常な継続を ERROR として記録していた（4 回目の再発）(Aug 27, 2026)
 
 **Date**: 2026-08-27

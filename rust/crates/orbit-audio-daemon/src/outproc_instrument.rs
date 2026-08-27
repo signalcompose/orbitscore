@@ -195,7 +195,6 @@ fn default_child_exe() -> Result<PathBuf, String> {
 #[derive(Default)]
 pub struct OutProcInstrumentStats {
     pub initial_attach_pending: AtomicBool,
-    pub child_early_exit: AtomicBool,
     pub fresh: AtomicU64,
     pub callback_count: AtomicU64,
     pub respawn_count: AtomicU64,
@@ -229,6 +228,12 @@ pub struct OutProcInstrumentStats {
     /// u32 として単調なので、audio thread から `fetch_max` で lock-free に更新できる。
     pub post_peak_bits: AtomicU32,
     pub current_child_pid: AtomicU32,
+    /// 初回 attach 中の child exit（**事実と理由の対**）。詳細は
+    /// [`crate::outproc_child_exit::ChildEarlyExit`]。
+    ///
+    /// 🔴 **struct の末尾に置くこと。** 中身に `Mutex` を含むので、RT が毎コールバック触る
+    /// atomic 群（`fresh` / `callback_count` 等）と同じキャッシュラインに乗せない。
+    pub child_early_exit: crate::outproc_child_exit::ChildEarlyExit,
 }
 
 impl OutProcInstrumentStats {
@@ -621,7 +626,7 @@ impl InstrumentChildSupervisor {
                                 }
                             {
                                 tracing::warn!(plugin = ?plugin, "{child_name_wd} exited during initial attach ({status})");
-                                stats.child_early_exit.store(true, Ordering::Release);
+                                stats.child_early_exit.record(status);
                                 break;
                             }
                             // #573: 起動直後に死に続ける child を tight loop で respawn し続けない。
@@ -1297,8 +1302,7 @@ mod tests {
         let shm = unique_shm_path();
         let _ = std::fs::remove_file(&shm); // ファイル不在 → open_shared が失敗する
         let stats = OutProcInstrumentStats::new();
-        let first = Command::new("sleep")
-            .arg("30")
+        let first = crate::outproc_stub_child::stub_child_command()
             .spawn()
             .expect("spawn stub child");
         let pid = first.id();
@@ -1405,8 +1409,7 @@ mod tests {
         let shm = make_shm();
         let args_path = respawn_args_path(&shm);
         let stats = OutProcInstrumentStats::new();
-        let first = Command::new("sleep")
-            .arg("30")
+        let first = crate::outproc_stub_child::stub_child_command()
             .spawn()
             .expect("spawn initial stub child");
         let first_pid = first.id();

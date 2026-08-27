@@ -22,6 +22,10 @@ pub mod link_audio;
 /// （規則を2箇所に持つと、片方だけ直し忘れる — #548 がまさにその形のバグだった）。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 pub(crate) mod outproc_child_exe;
+/// child の early-exit の「事実」と「理由」を対で持つ型。**effect と instrument で共有する**
+/// （2 つを別々に持つと片方だけ倒す/立てる余地が残る — #629 レビュー）。
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+pub(crate) mod outproc_child_exit;
 /// γ M1 PR-C: out-of-process effect の daemon 配線。feature `outproc-effect`（default off・clack-free）
 /// でのみコンパイルされ、別プロセスの実 CLAP effect child へ共有メモリ transport 越しに audio を流す。
 #[cfg(feature = "outproc-effect")]
@@ -33,6 +37,10 @@ pub mod outproc_instrument;
 /// **effect と instrument で共有する**（規則を2箇所に持つと片方だけ直し忘れる — #548 と同種のリスク）。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 pub(crate) mod outproc_respawn_guard;
+/// テストが使う「殺されるまで生きる stub child」の唯一の生成経路（#622 / #629）。
+/// テストコードが固定秒数の `sleep` を直に spawn できると、fixture 側だけ直しても同じクラスが残る。
+#[cfg(all(test, any(feature = "outproc-effect", feature = "outproc-instrument")))]
+pub(crate) mod outproc_stub_child;
 pub mod protocol;
 pub mod server;
 pub mod session;
