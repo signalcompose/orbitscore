@@ -17,6 +17,53 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.385 spec: 実装より先に spec を #628 の到達点へ揃える（Stage 0）(Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #628
+**Status**: 完了（設計書 §3.8 の 5 点すべて）
+
+ラック形チェーンの実装（#628 Stage 1）に着手する前に、**設計書の完了条件 §1-9 が要求する
+「spec 更新が実装より先」**を満たす工程。PR #632 は SC.10 の制定と core spec への移行注記
+までで、**§3.8 が挙げる 5 点は手つかずで残っていた**。
+
+🔴 **着手時に実ファイルで現況を照合したところ、PR #632 の本文が「core spec の誤りを訂正」と
+宣言していた当の文が未訂正で残っていた** — PH.2b の「チェーンは将来拡張（エンジン内部は
+順序付きリストで実装済み・DSL 側のガード解放のみ）」。宣言と実体のずれであり、grep 一発で
+照合できる形だった。この文を信じて #522 を見積もると誤る（順序付きリストを持っていたのは
+**TS 側の帳簿だけ**で長さは常に 1、daemon は 1 bus = 1 child なので**ガードを外しても
+複数 insert は持てない**）。
+
+**変更内容**（§3.8 の項番に対応）:
+
+1. `INSTRUCTION_ORBITSCORE_DSL.md` PH.2 / PH.2b — 「チェーンは将来拡張」を SC.10 のラック形へ
+   訂正。PH.2b には**何が誤りだったかを明示した訂正注記**を残した（同じ誤解を再生産しないため）。
+   PH.2d に SC.10 の要点（後勝ち・LCS・削除は配列から・`enabled` は単位元・ラックは値・
+   標準プラグイン）を要約として追加し、旧記述は「#625 時点の記述」として区切った。
+2. 同 PH.2c — `ui([index][, open])` を **SC.10.10.1 の名前形**（無引数 = instrument /
+   文字列 = 一致する insert をすべて開く）へ書き換え。主経路が Cmd+Click であること、
+   DSL に残す理由が **LLM から駆動できること**である点も明記。PC.3 にラック配列内・
+   複数行・`layer` 入れ子での補完発火（SC.10.10 規範 1）を追記。
+3. `SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.5 — **effect チェーンの編集が (i) prepare-commit 型へ
+   昇格**し、**差し替えの dry 窓が消える**ことを明記。(ii) in-place 型が残るのは
+   「チェーン → 空」の teardown・stream 停止・crash respawn の 3 経路だけ。`remove()` が
+   #628 で撤去されたことへの相互参照も付けた。
+4. `ENGINE_DAEMON_PROTOCOL.md` — **`ApplyEffectChain` を新設**（目標状態の全体を 1 コマンドで
+   運ぶ・`keep`/`load` op・`catalog`/`standard`/`layer` の kind・`save_dropped`・
+   `mode: diff|rebuild`）。`ReplacePlugin(role="effect")` と `UnloadPlugin` に**退役注記**。
+   `GetPluginState` ほかに **`chain_path`（0 始まりの整数配列）** を追加。MCP
+   `open_plugin_ui` も index から `chain_path` へ改めることを §8 に記載。
+5. 同 core spec の plugin 経路 note-off 規定 — **instrument ブランチの無効化・削除**を強制
+   note-off の発火ケースとして追記。**仕様の追記のみで runtime 実装は Stage 2**（#606 が作る
+   flush 機構を発火点から呼ぶ・note-off 配送機構を二重に作らない）。
+
+**副次的な注意**: 訂正注記に旧構文のリテラルをそのまま書くと、完了条件 §1-12 の列挙コマンド
+（`.ui(` の数値形が 0 件であること）が**自分の注記に引っかかって偽陽性を出す**。リテラルを
+含まない書き方へ直した。列挙で完全性を担保する設計では、**説明文もその列挙の対象になる**。
+
+**検証**: 未完了を発見したときと同じ grep を再実行し、5 点すべてが解消したことを確認。
+実装側に残る `.ui(数値)` は engine/src 3 件・tests 13 件で、これは Stage 1 のコミット 5 で処置する。
+
 ### 6.384 fix: spike テストが Linux で壊れていた（#622 と同じクラスを踏んだ）(Aug 27, 2026)
 
 **Date**: 2026-08-27

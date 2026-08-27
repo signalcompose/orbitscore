@@ -1206,8 +1206,10 @@ global.effect("~/plugins/TAL-Reverb-4.clap")   // master bus insert
 - v1 は 1 基のみ。**同一 path + pluginId の再宣言は冪等（no-op）** — ライブコーディングの
   ファイル全体再評価を壊さないため（PH.4 の instrument 冪等と同じ原理）。
   **異なる path / pluginId での再宣言は差し替え**（#625・意味論は PH.2d）。
-  チェーン（複数 insert）は将来対応。
-- 将来拡張（非規範）: 複数回呼び出し = 呼び出し順の直列チェーン（左→右）。
+- **チェーン（複数 insert）は #628 のラック形で入る**（正本 = `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`
+  **SC.10**）。表記は配列 — `global.effect(["A", Gain(db: -6)])`。`[...]` が直列、`layer([...])` が並列
+  （並列は PDC とセットで後続・SC.10.11）。**「複数回呼び出しが直列チェーンになる」形は採らない**
+  （後勝ちの単位が呼び出しではなく配列全体になるため — SC.10.3b）。
 
 ### PH.2b per-sequence effect — `seq.effect(path[, pluginId])`（#434）
 
@@ -1222,8 +1224,13 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
   master 経路の意味論は不変。
 - v1 は **1 seq = 1 insert**。同一 path + pluginId の再宣言は冪等（no-op・PH.2 と同じ
   ライブ再評価保護）。**異なる path / pluginId での再宣言は差し替え**（#625・意味論は
-  PH.2d）。チェーン（複数回呼び出し = 直列）は将来拡張（エンジン内部は順序付きリストで
-  実装済み・DSL 側のガード解放のみ）。
+  PH.2d）。**チェーン（複数 insert）は #628 のラック形で入る**（PH.2 と同じ・正本 SC.10）。
+  > 🔴 **訂正（#628）**: ここには以前「チェーンは将来拡張（エンジン内部は順序付きリストで
+  > 実装済み・DSL 側のガード解放のみ）」と書かれていたが、**これは誤りである**。順序付き
+  > リストを持っていたのは **TS 側の帳簿（`EffectChainMap`）だけ**で、その長さは常に 1 だった。
+  > daemon は **1 bus = 1 child** であり、**ガードを外しても複数 insert は持てない**。
+  > 実際にチェーンを持つには child 側の機構（1 child が N プラグインを直列に回す rack child）
+  > が要る — それを作るのが #628 である。
 - **受理フォーマットは effect と同じ**: `.clap` / `.vst3` を受理し、`.component` は未対応。
 - **エンジン実装（規範）**: `seq.effect()` 宣言はエンジンの **named insert bus** を確保し、
   当該シーケンスの再生イベントに bus tag を付けてスケジュールする。bus は宣言時点で
@@ -1263,16 +1270,34 @@ sum("drum").effect(["ValhallaRoom"])                    // 差し替え
 sum("drum").effect([])                                  // 外す（配列から消す）
 ```
 
+**移行後の要点（SC.10 の要約 — 詳細は正本を参照）**:
+
+- **後勝ち**。生き残る要素は **LCS**（最長共通部分列）で対応づけられ、**対応がついた要素は
+  音を止めずに生き続ける**。**出現順はインスタンスに固定**され、テキストから数え直さない。
+- **削除は配列から消す**こと。**`remove()` は撤回**（SC.10.3c）。
+- **`enabled: false` はその合成の単位元** — 直列では素通し、並列では無音（SC.10.2）。
+  状態は保持されるので、戻せば同じ音色で復帰する。
+- **ラックは値（レシピ）**。`var` に束縛しただけではプラグインは起動せず、レシーバへ適用された
+  時に起動する。同じラックを複数のレシーバへ適用してもインスタンスは共有されない（SC.10.4）。
+- **標準プラグイン**（`Gain(db: -6)` のような大文字呼び出し）は**アプリ同梱の CLAP** で、
+  UI も state ファイルも持たない。パラメータは DSL が正である（SC.10.8）。
+
+---
+
+以下は #625 時点（1 insert・`remove()`）の記述:
+
 - **異なる spec での再宣言 = 差し替え**（後勝ち）。エンジン再起動も楽譜の再評価も要らない。
-- **明示削除は `remove("名前")`**。名前は現在挿さっている insert の正規化名と一致する必要が
-  あり、一致しなければエラー（黙って別のものを消さない）。v1 は 1 insert なので出現順指定
-  `remove("名前", n)` は `n = 0` のみ受理する。**bus は解放されない** — `seq.output()` /
-  `seq.send()` の routing は insert が無くなっても生き続ける。
+- **明示削除は `remove("名前")`**（**#628 で撤回**）。名前は現在挿さっている insert の正規化名と
+  一致する必要があり、一致しなければエラー（黙って別のものを消さない）。v1 は 1 insert なので
+  出現順指定 `remove("名前", n)` は `n = 0` のみ受理する。**bus は解放されない** —
+  `seq.output()` / `seq.send()` の routing は insert が無くなっても生き続ける。
 - **差し替え・削除の直前に、旧 insert の state（音色）は自動保存される**。旧 spec を再宣言
   すればその音色が復元される。保存に失敗した場合は差し替えを中止し、旧 insert を保持する。
 - **演奏中でも差し替え・削除できる。** 差し替えの窓（旧プラグインの解体 〜 新プラグインの
   ロード完了）の間、その bus は **dry 素通し**になる — 音は途切れず、insert だけが一時的に
-  外れる。
+  外れる。🔴 **#628 のラック形ではこの dry 窓は消える** — rack child がプロセスを保ったまま
+  新チェーンを prepare して block 境界で切り替えるため、編集中も旧チェーンが鳴り続ける
+  （SC.5 失敗モデル (i) prepare-commit 型へ昇格）。
 - **失敗時（in-place 型の失敗モデル・SC.5)**: 旧 insert の解体**前**に失敗した場合は旧 insert が
   無傷で残る。解体**後**に失敗した場合は dry 素通しへ縮退する（**無音にはならない**）。
   縮退からの復旧は、同じ宣言をもう一度評価するだけでよい。ただし、回復不能な attach 失敗は
@@ -1281,33 +1306,45 @@ sum("drum").effect([])                                  // 外す（配列から
   成功を待って原子的に切り替わり、失敗時は旧が無傷）。スロット機構が違うため意味論も違う。
   `seq.remove()` は effect insert 専用で、instrument の削除には使えない。
 
-### PH.2c プラグイン UI — `seq.ui([index][, open])`（#617）
+### PH.2c プラグイン UI — `seq.ui([名前][, open])`（#617・#628 で名前形へ）
 
 ```js
 var cb = init global.seq
 cb.instrument("Kontakt 8.vst3")
-cb.ui()          // instrument の UI を開く（index 0）
-cb.ui(1)         // 1つ目の effect の UI
-cb.ui(0, false)  // 閉じる
+cb.ui()                       // instrument の UI を開く（無引数 = instrument）
+cb.ui("ValhallaRoom")         // 名前が一致する insert の UI（複数一致ならすべて開く）
+cb.ui("ValhallaRoom", false)  // 閉じる
 
-sum("strings").ui(1)   // mixer bus の insert（既定 index 1 — bus に instrument は無い）
-aux("verb").ui(1)
+sum("strings").ui("Pro-Q 3")  // mixer bus の insert
+aux("verb").ui("ValhallaRoom")
 ```
 
 **動機**: 音色を作って保存する工程を**楽譜を書きながら**回せるようにする。従来は
 エディタの右クリックか MCP からしか UI を開けず、その流れに乗らなかった。
 
-- **index の規約は他の plugin 表面と同じ**: `0` = instrument、`1` 以降 = effect チェーン。
-  bus / master には instrument が無いので `1` から。
+> 🔴 **#628 で数値 index 形は撤回された** — `ui()` に数値を渡す形はすべて受理されない。
+> ラックは入れ子になり得るため位置は 1 次元の index では指せず、出現順を DSL 表面に出すと
+> SC.10.3b / SC.10.5 が追い出した概念が戻ってくる。正本は
+> [`../specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`](../specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md) **SC.10.10.1**。
+
+- **無引数形 = instrument の UI**（instrument は 1 つなので指定が要らない）。bus / master には
+  instrument が無いため、無引数形は「この bus に instrument は無い」で loud に失敗する。
+- **第 1 引数はカタログ名の文字列**。**一致する insert すべての UI を開く**（`layer` の入れ子も
+  含めチェーン全体から探す）。**同名が複数あっても曖昧にならない** — 選ばずに全部開くため。
+- **標準プラグインは UI を持たない**（SC.10.8）ので、標準プラグイン名を渡すのは明示エラー。
+- **一致 0 件は loud に失敗する**（黙って no-op しない）。
+- **主経路は Cmd+Click**（SC.10.10 規範 2）: 楽譜上のプラグイン名を Cmd+Click すると当該
+  インスタンスの UI が開く。エディタが構文木の位置からパスを解決するので、**書き手が
+  数えなくてよい**。DSL の `ui()` を残すのは、**LLM が DSL 経路で駆動できる**ようにするため。
 - **複数同時オープンを制限しない**。セッティング時に複数パートを並べて見比べられる。
-- 🔴 **open は冪等**: 既に開いている `(receiver, index)` への `ui()` は **no-op** で成功する。
+- 🔴 **open は冪等**: 既に開いているインスタンスへの `ui()` は **no-op** で成功する。
   ライブコーディングでは**ブロックの再評価が常態**で、楽譜に書いた `cb.ui()` は評価のたびに
   走るため、冪等でないと再評価のたびにエラーになる。**close は冪等化しない**。
   （MCP の `open_plugin_ui` は明示操作なので冪等にしない — 二重 open は loud に落とす）
-- **未ロードのスロットでは loud に失敗する**（黙って no-op しない）。エラーは有効な index を
-  列挙する（`Valid indices: 0 (instrument, Kontakt 8)`)。
+- **未ロードのスロットでは loud に失敗する**（黙って no-op しない）。エラーは現在挿さっている
+  名前を列挙する。
 - **`master` は DSL 面を持たない**（現状）。`master` チェーンの UI は MCP の
-  `open_plugin_ui({ receiver: "master", index })` から開ける。
+  `open_plugin_ui({ receiver: "master", chain_path })` から開ける。
 - 機構は MCP / REPL メタ行と**同一の経路**（`Global.openPluginUi` / `closePluginUi`）を通る。
   宛先解決・セッション簿記・エラー面は共通。
 
@@ -1424,6 +1461,12 @@ UIH.5.1。
   終了が全声部を落とす**（1 シーケンスの停止に wildcard な解放を使わないという規範は変わらない —
   他シーケンスの発音を巻き込むため）。
   child crash で声部が消滅した後の stale な note-off は無害（受信側に該当声部が無い）。
+  🔴 **発火ケースの追加（#628・SC.10.6 規範 2）**: **instrument ブランチの無効化
+  （`enabled: false`）・削除**も強制 note-off の対象である。ブランチを無効化すると
+  **その音源で発音中のノートの発生源が止まる**ため、保留 note を解放しないと鳴りっぱなしになる。
+  **本項は仕様の追記のみで、runtime 実装は `layer`（並列 instrument）とセットの後続工程**
+  （SC.10.11・v1 では `instrument(layer([...]))` の適用自体が stage 表記エラー）。
+  実装時は **#606 が作る flush 機構をこの発火点から呼ぶ** — note-off 配送機構を二重に作らない。
 - **underscore 規約**: plugin verb は宣言専用であり `_effect` / `_instrument` 形はない。
 - `.orbslog`: 宣言は他 verb 同様に因果評価ログとして自動記録される（特別扱いなし）。
 
@@ -1537,6 +1580,10 @@ kick.effect("./plugins/MyComp.clap")   // 従来の path 指定（不変・カ�
   CLAP を優先する。
 - 補完はキャッシュファイル読取のみ（engine 起動不要）。キャッシュ不在時は候補なし + 
   rescan を促す 1 回限りの案内
+- 🔴 **ラック形でも同じ補完が出る**（#628・SC.10.10 規範 1）: `effect([` の配列内・**複数行に
+  またがるラック**・`layer([` の入れ子・`plugin("` の各文脈で、文字列リテラルの中にカタログ
+  候補が出る。役割は文脈から決まる（`instrument(` 配下では instrument の候補のみ、`effect(`
+  配下では effect の候補のみ）。
 
 ### PC.4 MCP
 
