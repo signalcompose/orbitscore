@@ -803,8 +803,10 @@ impl OutProcTeardownGuard {
     /// The stream owner would then wait for a `done` nobody will ever set, and stop the
     /// stream without a real quiesce ack.
     ///
-    /// `between` runs after the latch and before the request so a test can observe the
-    /// intermediate state and pin the order (a comment alone does not enforce it).
+    /// `between` runs after the latch **and after the stale-`done` cleanup**, immediately
+    /// before the request is published, so a test can observe the intermediate state and pin
+    /// **both** orders (a comment alone does not enforce them): the latch must already be
+    /// visible, the request must not be, and `done` must already be cleared.
     fn latch_then_request(&self, between: impl FnOnce()) {
         // 🔴 `SeqCst` on both stores is load-bearing (#625 audit B-1). This is one half of a
         // store-buffering (Dekker) pair with `clear_quiesce_unless_shutdown`, which stores
@@ -817,7 +819,6 @@ impl OutProcTeardownGuard {
         // control-thread code paths; the audio thread reads `requested` with `Acquire` on every
         // callback but performs no `SeqCst` operation. `shutdown` itself is control-thread-only.
         self.shutdown.store(true, Ordering::SeqCst);
-        between();
         // 🔴 `done` を掃除してから要求を publish する（#625 最終監査 A-1）。
         //
         // 差し替え側の clear（`clear_quiesce_unless_shutdown`）は requested → done の順で
@@ -834,6 +835,7 @@ impl OutProcTeardownGuard {
         // この残留状態は #625 が「共有フラグの clear と再武装」を導入して初めて成立する
         // （それ以前は誰も requested/done を clear しなかった）。
         self.done.store(false, Ordering::Release);
+        between();
         self.requested.store(true, Ordering::SeqCst);
     }
 }
@@ -1070,11 +1072,18 @@ mod tests {
             done: done.clone(),
             shutdown,
         });
-        guard.latch_then_request(|| {});
-        let observed_done = done.load(Ordering::Acquire);
+        // 🔴 掃除の**順序**まで固定する（main の変異検証 M7・2026-08-27）。掃除を要求の
+        // publish より **後**へ動かしても、`latch_then_request` の戻り値だけを見るテストは
+        // 通ってしまった。その順序では RT が返した**本物の ack を control が消す**ため、
+        // 実際には quiesce できているのに timeout として差し替えが失敗する。
+        // フックは要求 publish の直前で走るので、ここで見えている `done` が契約そのもの。
+        let mut done_at_publish = true;
+        guard.latch_then_request(|| {
+            done_at_publish = done.load(Ordering::Acquire);
+        });
         assert!(
-            !observed_done,
-            "a stale done from a previous replacement must not survive into the next quiesce"
+            !done_at_publish,
+            "a stale done must already be cleared at the moment the quiesce request is published"
         );
         assert!(
             requested.load(Ordering::Acquire),

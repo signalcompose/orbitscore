@@ -459,6 +459,20 @@ export class EffectChainMap<K> {
     if (result.quarantinedSlot) this.replacement!.onQuarantinedSlot?.(key)
   }
 
+  /**
+   * 🔴 この best-effort 保存は「**daemon はコミット後に Err を返さない**」という不変条件に
+   * 乗っている（#625 最終監査 §2c）。`GetPluginState` の daemonTarget は slot 座標（role +
+   * bus）だけで、**そこに載っている plugin の identity を検証しない**。もし「TS は失敗と
+   * 判定・daemon は新テナント B をコミット済み」という状態が作れてしまうと、ここで B の
+   * state が旧 A の state ファイルへ無言で上書きされる — I-1 が塞いだのと同じ silent data
+   * loss になる。
+   *
+   * 現在その状態は作れない: quiesce timeout では daemon は旧 A のまま、teardown 後の attach
+   * 失敗では slot が Empty/Closed（保存は daemon エラーになり warn へ落ちる）、WS 切断では
+   * respawn 後の新 daemon の空 slot になる。**この不変条件を壊す変更（コミット後に Err を
+   * 返す経路の追加）を daemon 側に入れるなら、先に GetPluginState 応答へ plugin 名を含めて
+   * TS 側で照合すること。**
+   */
   private async beforeReplaceForgottenSlot(key: K, oldSlot: PluginSlot): Promise<void> {
     try {
       await this.replacement!.beforeReplace(key, oldSlot)

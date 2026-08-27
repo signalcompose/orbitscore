@@ -454,6 +454,74 @@ describe('effect plugin replacement (#625 Stage B)', () => {
     )
   })
 
+  // 🔴 以下2件は main の変異検証が見つけた穴を塞ぐ（2026-08-27）。I-1 の修正本体は
+  // 「差し替えでの1回の復旧」しか固定しておらず、次の2つの壊し方が全件 green のまま
+  // 生き残った:
+  //   (a) `remove()` が忘れられた slot を無視するようにする
+  //   (b) 復旧の catch の `existing ?? forgottenSlot` を `existing` に落とす
+  // どちらも「保存されるはずの音色が黙って失われる」= I-1 と同じ故障クラスである。
+
+  it('I-1b removes a forgotten slot: it still validates the name and saves the old state', async () => {
+    const save = mockStateSave()
+    const quiesceTimeout = new DaemonProtocolError(
+      'OUTPROC_EFFECT_RUNTIME',
+      'effect replacement quiesce ack timed out; the previous effect is kept',
+    )
+    const replacePlugin = vi.fn().mockRejectedValueOnce(quiesceTimeout)
+    const { global, unloadPlugin } = makeGlobal({ replacePlugin })
+    await global.effect('old.clap', 'old-id')
+
+    await expect(global.effect('new.vst3', 'new-id')).rejects.toBe(quiesceTimeout)
+    expect(masterChain(global)).toEqual([])
+    save.mockClear()
+
+    // 登記を忘れていても、消す対象の名前は依然として検証される。
+    await expect(global.remove('not-the-old-one')).rejects.toThrow(
+      `remove("not-the-old-one") does not match the declared insert 'old'.`,
+    )
+    expect(save).toHaveBeenCalledTimes(0)
+    expect(unloadPlugin).toHaveBeenCalledTimes(0)
+
+    await expect(global.remove('old')).resolves.toBe(global)
+
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(save).toHaveBeenCalledWith(
+      { receiver: 'master', role: 'effect', normalizedName: 'old', occurrence: 0 },
+      { role: 'effect' },
+    )
+    expect(unloadPlugin).toHaveBeenCalledTimes(1)
+    expect(unloadPlugin).toHaveBeenCalledWith('effect', undefined)
+  })
+
+  it('I-1c keeps the forgotten slot across a second consecutive failure', async () => {
+    const save = mockStateSave()
+    const quiesceTimeout = new DaemonProtocolError(
+      'OUTPROC_EFFECT_RUNTIME',
+      'effect replacement quiesce ack timed out; the previous effect is kept',
+    )
+    const replacePlugin = vi
+      .fn()
+      .mockRejectedValueOnce(quiesceTimeout)
+      .mockRejectedValueOnce(quiesceTimeout)
+      .mockResolvedValueOnce(REPLACE_RESULT)
+    const { global } = makeGlobal({ replacePlugin })
+    await global.effect('old.clap', 'old-id')
+
+    await expect(global.effect('new.vst3', 'new-id')).rejects.toBe(quiesceTimeout)
+    await expect(global.effect('newer.vst3', 'newer-id')).rejects.toBe(quiesceTimeout)
+
+    await expect(global.effect('newest.vst3', 'newest-id')).resolves.toBe(global)
+
+    // 2回目の失敗で旧 slot を落とすと、この3回目の保存が起きない。
+    expect(save).toHaveBeenCalledTimes(3)
+    expect(save).toHaveBeenNthCalledWith(
+      3,
+      { receiver: 'master', role: 'effect', normalizedName: 'old', occurrence: 0 },
+      { role: 'effect' },
+    )
+    expect(masterChain(global)).toMatchObject([{ normalizedName: 'newest' }])
+  })
+
   it('R12a saves the master replacement identity and daemon target', async () => {
     const save = mockStateSave()
     const { global } = makeGlobal()

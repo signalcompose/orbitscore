@@ -17,6 +17,66 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.373 test: 変異検証で見つけた3つの穴を塞ぐ + 収束監査 (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625 / PR #627
+**Status**: TS **2073 passed** / Rust `teardown_guard` 4 passed / CI 4 check green（`c47813ca`）
+
+レビュー ラウンド1 の修正（6.372 = `c47813ca`）が CI 緑になった後、**main 自身の変異検証**を
+隔離 worktree で回した。`/code:pr-review-team` 4名 + Fable 監査を通過した差分に対して、
+**テストの穴が3件**出た。いずれも「実装は正しいが、テストがそれを固定していない」型である。
+
+#### 生き残った変異 3件
+
+| 変異 | 種類 | 実害 |
+|---|---|---|
+| 復旧 catch の `existing ?? forgottenSlot` → `existing` | 引数差し替え | **2回連続で失敗すると忘れられた slot が失われる**。以後の復旧で音色が黙って消える（I-1 と同じ故障クラス） |
+| `remove()` の `cleanupSlot` → `existing` のみ | ガード削除 | 忘れられた slot への `remove()` が**名前照合を飛ばす**。`remove("別名")` が通る |
+| `done.store(false)` を `requested.store(true)` の**後**へ移動 | **順序入替** | **RT が返した本物の ack を control が消す**。成功した quiesce が timeout 扱いになり差し替えが不要に失敗する |
+
+3件目は変異計画の時点で「落ちない可能性がある」と印を付けていたもの。**印を付けた変異が
+実際に生き残った** — 順序が load-bearing なのに、テストは `latch_then_request` の
+**戻り値だけ**を見ていて順序を見ていなかった。
+
+#### 対処
+
+- TS: `I-1b`（忘れられた slot の `remove()` でも名前を検証し旧 state を保存）と
+  `I-1c`（2回連続失敗でも忘れられた slot を落とさない）を追加
+- Rust: production 側の `between` フック（順序を観測するために**既に存在していた**もの）を
+  **`done` 掃除の後・要求 publish の直前**へ移動。テストがその瞬間の `done` を観測する
+
+**追加後に同じ変異を当て直して red を実測**した（TS: 各1件 red / Rust: M6 は1件・M7 は
+**2件** red）。
+
+#### Fable 収束監査 — 判定「収束」
+
+非重複の指摘が1件。**`GetPluginState` の daemonTarget は slot 座標（role + bus）だけで、
+そこに載っている plugin の identity を検証しない。** 「TS は失敗と判定・daemon は新テナントを
+コミット済み」の状態が作れると、best-effort 保存が**新テナントの state を旧 identity の
+ファイルへ無言で上書き**する。
+
+Fable は失敗経路を列挙して**現在は到達不能**であることを示した（quiesce timeout → daemon は
+旧のまま / teardown 後 attach 失敗 → slot は Empty で保存自体がエラー / WS 切断 → respawn 後の
+空 slot）。決め手は **daemon の replace/load 経路に「コミット後に Err を返す」パスが無い**こと。
+
+到達不能なので issue にはせず、**依存している不変条件と、それを壊す時に先にやるべきこと**を
+`beforeReplaceForgottenSlot` の docstring に記録した。
+
+また Fable は、変異3の正当性をメモリモデルの側から独立に証明した（RT の `done=true` は
+`requested` の Acquire load の後にあり、その load は control の release store と
+synchronizes-with するので、coherence 上 RT の true は control の false より後に確定する）。
+
+#### 副産物の観測（#622 へ）
+
+隔離 worktree で `supervisor_respawn_passes_the_state_saved_after_initial_spawn` と
+`supervisor_resets_fast_fail_streak_after_a_survivor` が落ちたが、**本体ツリーでは2回とも
+pass**。並行コンパイルの負荷で 5 秒ポーリングが間に合わなかった環境要因で、既知の Rust CI
+flake #622 と同じ症状。**負荷依存**という観測は #622 に足す価値がある。
+
+もう一つ、`cargo test`（統合テストバイナリを含む）が **`_dyld_start` で 13 分停止**した。
+コンパイルではなくバイナリのロード段階での停止で、`--lib` に絞ると 0.5 秒で完了した。
+
 ### 6.372 fix: PR #627 レビュー ラウンド1 の指摘を修正 (Aug 27, 2026)
 
 **Date**: 2026-08-27
