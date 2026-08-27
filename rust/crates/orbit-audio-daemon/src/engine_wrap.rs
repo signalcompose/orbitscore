@@ -7570,6 +7570,11 @@ mod outproc_load_error_test_support {
                     .filter(|line| !line.is_empty() && !line.starts_with('#'))
                     .collect();
                 // 見るのは**最後の文**だけ。ループ内の `sleep 1`（ポーリング間隔）は寿命ではない。
+                //
+                // ⚠️ 判定しているのは「最後の**実行文**」ではなく「コメント/空行を除いた最終行」。
+                // `lib/live-until-parent-exits.sh` は関数定義のみで最終行が `}` なので安全側に
+                // 倒れるが、それは**現在の書き方に依存した性質**である（#629 fix 再点検 Minor）。
+                // ライブラリ側の末尾に実行文を足す時はこの判定も見直すこと。
                 let last_statement = code.last().copied().unwrap_or_default();
                 let ends_after_a_fixed_wait = last_statement
                     .strip_prefix("exec ")

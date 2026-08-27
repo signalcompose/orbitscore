@@ -30,6 +30,12 @@ pub(crate) fn stub_child_script() -> PathBuf {
 ///
 /// **秒数を渡す口が無い**のがこの関数の存在理由。`sleep` を直に spawn する形に戻すと、
 /// その数字は Rust 側の deadline と独立に腐る（#622）。
+///
+/// **プロセス構成の違い（実測・#629 レビュー時に確認）**: 素の `sleep 30` は 1 プロセスだが、
+/// この stub は `sh` 本体 + 親監視ループ内の `sleep 1` の 2 プロセスになる。テストが `kill -9`
+/// で `sh` を落とすと内側の `sleep` は一瞬 reparent されるが、**最大 1 秒で自然に消える**
+/// （実測で確認）。`sleep 30` は kill を逃すと最大 30 秒残っていたので、**孤児の最大滞留時間は
+/// 30 秒 → 1 秒へ縮んでいる**。
 pub(crate) fn stub_child_command() -> Command {
     Command::new(stub_child_script())
 }
