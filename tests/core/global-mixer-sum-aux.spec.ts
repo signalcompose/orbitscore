@@ -4,22 +4,34 @@
 
 import path from 'node:path'
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
 import { MIXER_BUS_POOL_SIZE } from '../../packages/engine/src/core/global/mixer-manager'
+import { ProjectStateStore } from '../../packages/engine/src/core/project-state-store'
+
+const REPLACE_RESULT = {
+  pluginId: 'replacement-id',
+  pluginName: 'Replacement',
+  notePortIndex: 0,
+  quarantinedSlot: false,
+}
 
 function makeGlobal(loadPlugin = vi.fn().mockResolvedValue({})) {
+  const replacePlugin = vi.fn().mockResolvedValue(REPLACE_RESULT)
   const engine = {
     loadPlugin,
+    replacePlugin,
     boot: vi.fn(),
     quit: vi.fn(),
     isRunning: true,
   } as any
   const global = new Global(engine)
   global.setDocumentDirectory('/songs/session')
-  return { global, loadPlugin }
+  return { global, loadPlugin, replacePlugin }
 }
+
+afterEach(() => vi.restoreAllMocks())
 
 describe('Global.sum() / Global.aux()', () => {
   it('allocates the first pool bus per kind, in declaration order', () => {
@@ -116,11 +128,20 @@ describe('Global.sum() / Global.aux()', () => {
     expect(loadPlugin).toHaveBeenCalledTimes(1)
   })
 
-  it('handle.effect() rejects re-declaration with a different path', async () => {
-    const { global } = makeGlobal()
+  it('handle.effect() replaces a different path on the allocated bus without another load', async () => {
+    vi.spyOn(ProjectStateStore.prototype, 'save').mockResolvedValue({} as any)
+    const { global, loadPlugin, replacePlugin } = makeGlobal()
     await global.sum('drum').effect('./GlueComp.clap')
-    await expect(global.sum('drum').effect('./OtherComp.clap')).rejects.toThrow(
-      'one insert per bus',
+
+    await expect(global.sum('drum').effect('./OtherComp.clap')).resolves.toBeDefined()
+
+    expect(loadPlugin).toHaveBeenCalledTimes(1)
+    expect(replacePlugin).toHaveBeenCalledTimes(1)
+    expect(replacePlugin).toHaveBeenCalledWith(
+      path.resolve('/songs/session', 'OtherComp.clap'),
+      undefined,
+      'effect',
+      'sum-bus-0',
     )
   })
 

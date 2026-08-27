@@ -75,15 +75,25 @@ fn parse_args() -> Result<Args> {
 }
 
 #[cfg(target_os = "macos")]
+/// `--plugin-id` が Phase 1 の VST3 effect で使われないことを伝える通知。
+///
+/// level トークン規約の理由と TS 側の受理条件は `orbit_child_runtime::notice` に集約してある
+/// （#618 / #625: 手書きの前置が 2 回同じ障害を起こしたため）。
+fn unused_plugin_id_notice(plugin_id: &str) -> String {
+    orbit_child_runtime::notice::child_info(
+        "orbit-vst3-effect-child",
+        format_args!("--plugin-id={plugin_id} は Phase 1 VST3 effect では未使用"),
+    )
+}
+
+#[cfg(target_os = "macos")]
 fn main() -> Result<()> {
     let args = parse_args()?;
     let mmap = open_shared(&args.shm).with_context(|| format!("open_shared({:?})", args.shm))?;
     let region = region_ptr(&mmap);
 
     if let Some(plugin_id) = &args.plugin_id {
-        eprintln!(
-            "[orbit-vst3-effect-child] --plugin-id={plugin_id} は Phase 1 VST3 effect では未使用"
-        );
+        eprintln!("{}", unused_plugin_id_notice(plugin_id));
     }
 
     let state_bytes = match args.state.as_deref() {
@@ -182,4 +192,27 @@ fn main() -> Result<()> {
 fn main() -> std::process::ExitCode {
     eprintln!("orbit-vst3-effect-child is macOS-only (VST3/CoreFoundation)");
     std::process::ExitCode::FAILURE
+}
+
+// 対象の `unused_plugin_id_notice` は macOS 限定なので、テストも同じ cfg に揃える
+// （揃えないと Linux の `--all-targets` で unresolved import になる・CI が Linux で回る）。
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::unused_plugin_id_notice;
+
+    /// この通知は失敗ではないので、daemon の stderr router が非エラーと判定できる形で
+    /// なければならない。router は `^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+\]\s`
+    /// にマッチする行だけを非エラーとして認める（`daemon-client.ts`）。
+    #[test]
+    fn unused_plugin_id_notice_declares_a_non_error_level_token() {
+        let line = unused_plugin_id_notice("6E33225254224A00AA69301AF318797D");
+        assert!(
+            line.starts_with("INFO [orbit-vst3-effect-child] "),
+            "notice must declare a non-error level token and the child tag: {line}"
+        );
+        assert!(
+            line.contains("6E33225254224A00AA69301AF318797D"),
+            "notice must name the ignored plugin id: {line}"
+        );
+    }
 }

@@ -24,6 +24,7 @@ import WebSocket from 'ws'
 import type {
   PluginLoadResult,
   PluginReplaceResult,
+  PluginUnloadResult,
   PluginStateSaveResult,
   PluginStateSaveTarget,
 } from '../types'
@@ -133,9 +134,15 @@ export function isDaemonNonErrorTracingLine(line: string): boolean {
   // 迷ったら error 側（従来挙動）へ。
   if (/^\s*\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO)\s/.test(plain)) return true
   // child プロセスは daemon の stderr を継承し、tracing を持たない(依存を足していない)。
-  // level トークンを自分で名乗った行だけを非エラーとして認める。名乗らない行・
-  // ERROR/WARN を名乗る行は従来どおり error 側へ倒す(例: "plugin.process() failed")。
-  return /^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+-child\]\s/.test(plain)
+  // level トークンを自分で名乗った行だけを非エラーとして認める(例: "plugin.process() failed")。
+  //
+  // 🔴 タグは `-child` に限らない(#625)。VST3/CLAP の host crate は **child プロセスの中に
+  // リンクされて動く**ので、行の出所は child でもタグは `[orbit-vst3-host]` のように名乗る。
+  // 以前は `-child` 終端だけを認めていたため、host が `INFO ` を名乗っても ERROR へ倒れ、
+  // **state 復元のたびに正常動作が ERROR として記録されていた**(実機 E2E で発覚)。
+  // 判定に load-bearing なのは (1) 自分のコンポーネントのタグであること (2) 非エラーの
+  // level を名乗っていること の 2 点で、接尾辞ではない。
+  return /^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+\]\s/.test(plain)
 }
 
 /**
@@ -469,7 +476,7 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
-  /** Atomically replaces (or ensure-loads) one instrument instance. */
+  /** Atomically replaces (or ensure-loads) one effect bus or instrument instance. */
   async replacePlugin(
     filePath: string,
     pluginId: string | undefined,
@@ -492,6 +499,19 @@ export class DaemonClient extends EventEmitter {
       notePortIndex: Number(result.note_port_index),
       quarantinedSlot: Boolean(result.quarantined_slot),
     }
+  }
+
+  /** Unloads an effect slot without releasing or deactivating its bus. */
+  async unloadPlugin(role: 'effect', bus?: string): Promise<PluginUnloadResult> {
+    const result = await this.request('UnloadPlugin', {
+      role,
+      ...(bus ? { bus } : {}),
+    })
+    const status = result.status
+    if (status !== 'unloaded' && status !== 'noop') {
+      throw new Error(`UnloadPlugin returned an invalid status: ${String(status)}.`)
+    }
+    return { status }
   }
 
   async savePluginState(

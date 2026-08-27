@@ -1205,8 +1205,8 @@ global.effect("~/plugins/TAL-Reverb-4.clap")   // master bus insert
   役割分担に従う。
 - v1 は 1 基のみ。**同一 path + pluginId の再宣言は冪等（no-op）** — ライブコーディングの
   ファイル全体再評価を壊さないため（PH.4 の instrument 冪等と同じ原理）。
-  **異なる path / pluginId での 2 回目の呼び出しはエラー**
-  （「v1 は master insert 1 基。チェーンは将来対応」）。
+  **異なる path / pluginId での再宣言は差し替え**（#625・意味論は PH.2d）。
+  チェーン（複数 insert）は将来対応。
 - 将来拡張（非規範）: 複数回呼び出し = 呼び出し順の直列チェーン（左→右）。
 
 ### PH.2b per-sequence effect — `seq.effect(path[, pluginId])`（#434）
@@ -1221,9 +1221,9 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
   **per-sequence insert → master mix → `global.effect()`（master chain）** — 既存の
   master 経路の意味論は不変。
 - v1 は **1 seq = 1 insert**。同一 path + pluginId の再宣言は冪等（no-op・PH.2 と同じ
-  ライブ再評価保護）。異なる path / pluginId での再宣言はエラー。チェーン
-  （複数回呼び出し = 直列）は将来拡張（エンジン内部は順序付きリストで実装済み・
-  DSL 側のガード解放のみ）。
+  ライブ再評価保護）。**異なる path / pluginId での再宣言は差し替え**（#625・意味論は
+  PH.2d）。チェーン（複数回呼び出し = 直列）は将来拡張（エンジン内部は順序付きリストで
+  実装済み・DSL 側のガード解放のみ）。
 - **受理フォーマットは effect と同じ**: `.clap` / `.vst3` を受理し、`.component` は未対応。
 - **エンジン実装（規範）**: `seq.effect()` 宣言はエンジンの **named insert bus** を確保し、
   当該シーケンスの再生イベントに bus tag を付けてスケジュールする。bus は宣言時点で
@@ -1238,6 +1238,35 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
 - LinkAudio との併用不可は PH.5 に従う（`global.effect()` と同じ v1 排他）。
 - **将来予約（非規範）**: aux バス / send-return（pre/post-fader tap・fan-out）は同じ
   insert bus 基盤の上に実装する（#453・正本 = `POST_2.0_MIXER_DSL_DESIGN.html`）。
+
+### PH.2d insert の差し替え・削除（#625）
+
+**master（PH.2）/ per-sequence（PH.2b）/ sum・aux（MX.2・MX.3）の 4 経路すべてに同じ規則が
+適用される。** 正本は `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.5（失敗モデル 2 型）。
+
+```js
+sum("drum").effect("TAL-Reverb-4")   // 挿す
+sum("drum").effect("ValhallaRoom")   // 差し替え（エンジン再起動なし）
+sum("drum").remove("ValhallaRoom")   // 外す
+```
+
+- **異なる spec での再宣言 = 差し替え**（後勝ち）。エンジン再起動も楽譜の再評価も要らない。
+- **明示削除は `remove("名前")`**。名前は現在挿さっている insert の正規化名と一致する必要が
+  あり、一致しなければエラー（黙って別のものを消さない）。v1 は 1 insert なので出現順指定
+  `remove("名前", n)` は `n = 0` のみ受理する。**bus は解放されない** — `seq.output()` /
+  `seq.send()` の routing は insert が無くなっても生き続ける。
+- **差し替え・削除の直前に、旧 insert の state（音色）は自動保存される**。旧 spec を再宣言
+  すればその音色が復元される。保存に失敗した場合は差し替えを中止し、旧 insert を保持する。
+- **演奏中でも差し替え・削除できる。** 差し替えの窓（旧プラグインの解体 〜 新プラグインの
+  ロード完了）の間、その bus は **dry 素通し**になる — 音は途切れず、insert だけが一時的に
+  外れる。
+- **失敗時（in-place 型の失敗モデル・SC.5)**: 旧 insert の解体**前**に失敗した場合は旧 insert が
+  無傷で残る。解体**後**に失敗した場合は dry 素通しへ縮退する（**無音にはならない**）。
+  縮退からの復旧は、同じ宣言をもう一度評価するだけでよい。ただし、回復不能な attach 失敗は
+  スロット隔離となり、この場合はエンジン再起動が必要。
+- instrument（PH.4）の差し替えは**別の失敗モデル**（prepare-commit 型 = 新インスタンスの準備
+  成功を待って原子的に切り替わり、失敗時は旧が無傷）。スロット機構が違うため意味論も違う。
+  `seq.remove()` は effect insert 専用で、instrument の削除には使えない。
 
 ### PH.2c プラグイン UI — `seq.ui([index][, open])`（#617）
 
@@ -1532,6 +1561,7 @@ global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")
 sum("drum").effect("GlueComp.clap")   // group bus 自身の insert（v1 は 1 基・PH.2b と同規則）
+sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d）
 ```
 
 - `seq.output(name)` の名前解決: **sum 宣言があれば group bus・LinkAudio 有効なら egress
@@ -1539,6 +1569,8 @@ sum("drum").effect("GlueComp.clap")   // group bus 自身の insert（v1 は 1 �
   名前は**記録 + 警告**（§8.1.2 の既存挙動 — 後から `global.linkAudio()` を宣言する
   ワークフローを壊さないため。宣言時ハードエラーではないことに注意・#477）
 - sum の **ネストは v1 不可**（1 段・将来拡張として予約）
+- sum bus の insert も **差し替え・削除できる**（異 spec 再宣言 = 差し替え / `remove("名前")`・
+  意味論は PH.2d）
 - seq が per-seq insert（`seq.effect()`）を持つ場合の処理順: **per-seq insert → group bus**
   （DAW の track insert → group と同型）
 - **master への明示的な復帰**: `SetBusRouting` の `output` に予約語 `"master"` を渡すと、
@@ -1585,6 +1617,8 @@ kick.send("rev", 0.3)                 // send（copy・原音は継続して mas
 - send は **post-fader（= per-seq insert 適用後）固定**（v1。pre/post 切替は将来拡張）
 - `amount` は線形 gain（0.0-1.0 目安・上限は clamp しない）
 - 複数 send 可（fan-out）。send 先未宣言はエラー
+- aux bus の insert（`aux("rev").effect(...)`）も **差し替え・削除できる**（異 spec 再宣言 =
+  差し替え / `remove("名前")`・意味論は PH.2d）
 
 ### MX.4 エンジン実装（規範）
 

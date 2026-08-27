@@ -17,6 +17,574 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.374 fix: 正常な継続を ERROR として記録していた（4 回目の再発）(Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625 / PR #627
+**Status**: 実機 gated E2E が **1 failed** → 修正 → 再実行
+
+マージ前ゲートの実機 gated E2E（8 件）で **R-E4 が落ちた**。「復旧は ERROR 行を増やさない」
+というオラクルに対し、ERROR 行が 17 → 18 に増えていた。増えた 1 行はこれ:
+
+```
+ERROR: [effect-replace] ⚠️ Best-effort cleanup of the uncertain old effect for 'fx625' failed;
+       replacement/removal will continue: [PLUGIN_STATE_TARGET_ERROR] effect child slot has no loaded plugin
+```
+
+**ラウンド1 の I-1 修正で足した `console.warn` が原因。**
+
+#### 構造
+
+拡張は engine プロセスの stderr を、**内容を一切見ずに**まるごと `ERROR:` を付けて出力
+チャネルへ流す（`extension.ts` の `setupStderrHandler`）。Node の `console.warn` は stderr へ
+書くので、**正常に継続する操作を warn で報告した瞬間に ERROR として記録される**。
+同じファイルの兄弟通知（`[plugin-state] restoring`）が `console.log` なのはこの理由だった。
+
+これは `af041307`「正常なプラグイン操作を error として記録するのをやめる」で直した欠陥の
+**4 回目の再発**である。Rust 側は `8258c40a` で `orbit_child_runtime::notice` へ集約して
+破れない形にしたが、**TS 側には同じ罠が残っていた**。
+
+#### 対処 — 1 箇所を直さず、方針を全箇所へ
+
+PR が追加した `console.warn` を列挙すると **3 箇所**あり、いずれも「正常に継続する」通知
+だった（うち実機で発火したのは 1 箇所）。落ちた 1 箇所だけを直すのは指摘単位のローカル
+パッチになるため、`effect-replace-notice.ts` を新設して**呼び出し側が stream を選べない形**
+にし、3 箇所すべてを移行した（Rust の `notice.rs` の TS 版）。
+
+`tests/core/effect-replace-notice.spec.ts` が **文言ではなくストリーム**を固定する。
+`console.warn` へ戻す変異で 2 件とも red になることを実測した。
+
+#### 🔴 この欠陥を誰が捕まえられなかったか
+
+| 層 | 結果 |
+|---|---|
+| ユニットテスト（TS 2073 件） | 検出せず |
+| `/code:pr-review-team` 4 名 | 検出せず |
+| Fable 収束監査 | 検出せず |
+| main の変異検証 8 種 | 検出せず |
+| **実機 gated E2E** | **検出** |
+
+理由は明快で、**ストリームの深刻度分類は engine の外（拡張）で起きる**からである。
+engine のテストからは原理的に見えない。CLAUDE.md の「E2E が最重要」「壊れるのは配線であり、
+配線は E2E でしか見えない」がそのまま実証された形。
+
+### 6.373 test: 変異検証で見つけた3つの穴を塞ぐ + 収束監査 (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625 / PR #627
+**Status**: TS **2073 passed** / Rust `teardown_guard` 4 passed / CI 4 check green（`c47813ca`）
+
+レビュー ラウンド1 の修正（6.372 = `c47813ca`）が CI 緑になった後、**main 自身の変異検証**を
+隔離 worktree で回した。`/code:pr-review-team` 4名 + Fable 監査を通過した差分に対して、
+**テストの穴が3件**出た。いずれも「実装は正しいが、テストがそれを固定していない」型である。
+
+#### 生き残った変異 3件
+
+| 変異 | 種類 | 実害 |
+|---|---|---|
+| 復旧 catch の `existing ?? forgottenSlot` → `existing` | 引数差し替え | **2回連続で失敗すると忘れられた slot が失われる**。以後の復旧で音色が黙って消える（I-1 と同じ故障クラス） |
+| `remove()` の `cleanupSlot` → `existing` のみ | ガード削除 | 忘れられた slot への `remove()` が**名前照合を飛ばす**。`remove("別名")` が通る |
+| `done.store(false)` を `requested.store(true)` の**後**へ移動 | **順序入替** | **RT が返した本物の ack を control が消す**。成功した quiesce が timeout 扱いになり差し替えが不要に失敗する |
+
+3件目は変異計画の時点で「落ちない可能性がある」と印を付けていたもの。**印を付けた変異が
+実際に生き残った** — 順序が load-bearing なのに、テストは `latch_then_request` の
+**戻り値だけ**を見ていて順序を見ていなかった。
+
+#### 対処
+
+- TS: `I-1b`（忘れられた slot の `remove()` でも名前を検証し旧 state を保存）と
+  `I-1c`（2回連続失敗でも忘れられた slot を落とさない）を追加
+- Rust: production 側の `between` フック（順序を観測するために**既に存在していた**もの）を
+  **`done` 掃除の後・要求 publish の直前**へ移動。テストがその瞬間の `done` を観測する
+
+**追加後に同じ変異を当て直して red を実測**した（TS: 各1件 red / Rust: M6 は1件・M7 は
+**2件** red）。
+
+#### Fable 収束監査 — 判定「収束」
+
+非重複の指摘が1件。**`GetPluginState` の daemonTarget は slot 座標（role + bus）だけで、
+そこに載っている plugin の identity を検証しない。** 「TS は失敗と判定・daemon は新テナントを
+コミット済み」の状態が作れると、best-effort 保存が**新テナントの state を旧 identity の
+ファイルへ無言で上書き**する。
+
+Fable は失敗経路を列挙して**現在は到達不能**であることを示した（quiesce timeout → daemon は
+旧のまま / teardown 後 attach 失敗 → slot は Empty で保存自体がエラー / WS 切断 → respawn 後の
+空 slot）。決め手は **daemon の replace/load 経路に「コミット後に Err を返す」パスが無い**こと。
+
+到達不能なので issue にはせず、**依存している不変条件と、それを壊す時に先にやるべきこと**を
+`beforeReplaceForgottenSlot` の docstring に記録した。
+
+また Fable は、変異3の正当性をメモリモデルの側から独立に証明した（RT の `done=true` は
+`requested` の Acquire load の後にあり、その load は control の release store と
+synchronizes-with するので、coherence 上 RT の true は control の false より後に確定する）。
+
+#### 副産物の観測（#622 へ）
+
+隔離 worktree で `supervisor_respawn_passes_the_state_saved_after_initial_spawn` と
+`supervisor_resets_fast_fail_streak_after_a_survivor` が落ちたが、**本体ツリーでは2回とも
+pass**。並行コンパイルの負荷で 5 秒ポーリングが間に合わなかった環境要因で、既知の Rust CI
+flake #622 と同じ症状。**負荷依存**という観測は #622 に足す価値がある。
+
+もう一つ、`cargo test`（統合テストバイナリを含む）が **`_dyld_start` で 13 分停止**した。
+コンパイルではなくバイナリのロード段階での停止で、`--lib` に絞ると 0.5 秒で完了した。
+
+### 6.372 fix: PR #627 レビュー ラウンド1 の指摘を修正 (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625 / PR #627
+**Status**: TS **2071 passed** / Rust workspace 全クレート 0 failed / fmt・clippy 警告 0
+
+`/code:pr-review-team`（4レビュアー）+ Fable 最終監査の指摘を重複排除して集約。
+**Critical 0 / Important 6 / Minor 5**。うち **2 件は複数の目が独立に一致**した。
+
+#### 横断的ポリシー（指摘単位のローカルパッチにしないため先に決めた）
+
+> **「登記を忘れる」ことと「後始末を諦める」ことは別物である。**
+> 忘れた slot の情報は保持し、次回の差し替えで `beforeReplace` を試みる。ただし旧が既に
+> 消えている可能性があるので **best-effort**（通常経路は保存失敗＝中止のまま、復旧経路では
+> warn して続行）。この非対称は load-bearing で、復旧時に中止すると E2E R-E4 が実証している
+> 「再宣言だけで復旧する」が成立しなくなる。
+
+#### Important 6 件
+
+| # | 指摘 | 検出 |
+|---|---|---|
+| I-1 | 事前解体失敗の後、**state 自動保存と UI クローズが黙ってスキップ**（silent data loss） | silent-failure-hunter + code-reviewer（**独立に一致**） |
+| I-2 | master の `remove()` 成功が **linkAudio 排他ゲートを再び開く** | Fable + pr-test-analyzer（**独立に一致**） |
+| I-3 | 「audio thread はこれらに触らない」というコメントが**事実と異なる**（`quiesce_requested` は毎コールバック読まれる） | comment-analyzer |
+| I-4 | **反証済みの仮説**が E2E コメントに残っていた（**3 箇所目**） | comment-analyzer + Fable |
+| I-5 | spec が「再宣言だけで復旧」と**無条件に**約束していた（unrecoverable な attach 失敗は再起動が要る） | Fable |
+| I-6 | 設計書の完了条件と**実際の E2E 被覆**の食い違い（seq 全量・master 最小・sum/aux は E2E ゼロ） | Fable + pr-test-analyzer |
+
+I-1 は「**その契約が最も効いてほしい局面でだけ**破る」形だった。daemon 側は quiesce timeout /
+already in progress / engine is stopping で**旧を無傷で保つ**のに、TS が登記を忘れるため
+次の宣言で本物の teardown が起き、その直前の保存が一度も走らない。
+
+#### 🔴 main のミス 3 件（この期間に発生・すべて訂正済み）
+
+1. **Linux ビルドを壊した**（CI が fail）— python パッチが `fn main` の
+   `#[cfg(target_os = "macos")]` を巻き込んで削除。**macOS でしか検証していなかった**うえ、
+   **CI を確認せずに次へ進んだ**。修正したら 2 件目（テストモジュールの cfg 不整合）が出た
+2. **自分が書いたテストにコンパイルエラー**（未使用代入・`-D warnings` で error）
+3. **CI ランナーを macOS へ切り替えた** — owner 方針（コストが高いので回さない）を確認せずに。
+   **指示（「Linux をターゲットから外していい」）を勝手に拡大解釈**した。差し戻し済み
+
+#### CI の限界を明文化（ランナーは ubuntu のまま）
+
+3 の差し戻しで残った事実: **ubuntu ランナーは child crate の
+`#[cfg(not(target_os = "macos"))]` スタブしかコンパイルしない**ので、**出荷される macOS 実装は
+この job では一度も検証されない**。#625 で落ちた時に捕まえたのもスタブ側の cfg 不整合だった。
+
+ランナーは変えず、**この job が保証しないもの**を workflow のヘッダに明記した:
+「green は移植可能な部分が壊れていないことの証明であって、出荷物が動くことの証明ではない。
+後者は main が手元 macOS で回すマージ前ゲートが担う。**この job だけを根拠にマージしない**」。
+
+### 6.371 refactor: /simplify の指摘を適用（規律を「破れない形」へ）(Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625
+**Status**: 挙動不変。TS **2069 passed**（件数一致）/ Rust workspace 全クレート 0 failed / clippy 警告 0
+
+`/simplify` の 4 観点（reuse / simplification / efficiency / altitude）を並行で回し、
+**採用 6 項目を適用・見送り 4 項目を明記**した。
+
+#### efficiency は指摘なし — 設計の前提が差分で裏づけられた
+
+`rust/crates/orbit-audio-native/`（RT コード）が**一切変更されていない**ことを確認。
+「RT コード変更ゼロ」は案 (a) を採用した理由そのものなので、これが差分で裏づけられた意味は大きい。
+outproc mutex の保持区間が quiesce 待ち・attach 本体の外である点も確認済み。
+
+#### 🔴 最も重い指摘は **main 自身の直前の修正**に対するものだった（altitude #1）
+
+`INFO ` の level トークン規約が **3 クレート 4 箇所に手書き**され、巨大な doc コメントまで
+コピペで独立に存在していた。この規約は**すでに 2 回同じ障害を起こしている**
+（#618 で instrument に手当て → #625 で effect が取り残されていたと実機で発覚）。
+
+main は「同じ欠陥クラスが片方だけ直っていた」と指摘しておきながら、**その修正を手書きで
+3 箇所に増やしていた**。CLAP 側の child は未対応で、**3 回目の再発が構造的に待っている**状態。
+
+対処: `orbit_child_runtime::notice` に規約を集約し、**TS 側 router の受理条件をテストで固定**。
+**手書きの前置を 1 つも残さない**（既存の instrument 側 2 箇所も置換）。
+なお最初の置換で 1 箇所取りこぼし（複数行 `eprintln!` が grep パターンから外れた）、
+**awk で複数行を連結して列挙し直して**確認した — 「他には無い」は列挙を尽くして初めて言える。
+
+#### 採用した 6 項目
+
+| # | 内容 |
+|---|---|
+| A | Rust: `replace_outproc_effect_plugin` / `unload_outproc_effect_plugin` に一字一句同一の約 35 行 → private ヘルパへ |
+| B | TS: `uncertainReplacements`(Set) + `uncertainEffectBuses`(Map) の**2 並行コレクションを単一 Map へ** |
+| C | TS: `remove()` が `declare()` の直列化キューを複製 → `enqueue()` を抽出 |
+| D | TS: `hasAnyUncertain()` は呼び出し元ゼロの dead code → 削除 |
+| E | TS: `unloadPlugin` の try/catch 重複 → `finally` + 台帳ヘルパ |
+| F | Rust: `ReplacePlugin` の role 検証で同文言の `err()` が 2 回 → 1 回に |
+
+#### この PR で 3 回出た形: 「守るべき規律」→「破れない形」
+
+1. 同型 `Arc<AtomicBool>` の位置引数 → **名前付き struct**（取り違えがコンパイル不能）
+2. level トークンの手書き → **共有ヘルパ**（形を間違える余地が消える）
+3. uncertain の 2 並行コレクション → **単一 Map**（同期ずれが表現できなくなる）
+
+B は整理であると同時に将来の欠陥クラスを潰す変更。分岐が増えたとき片方だけ更新すると
+`unloadPlugin` が**誤った bus へ飛ぶ**構造だった。
+
+#### 見送った 4 項目（理由つき）
+
+| 見送り | 理由 |
+|---|---|
+| テストヘルパ（`REPLACE_RESULT` 等）の共通化 | **変異検証を通したばかりのテストをこの段階で動かしたくない** |
+| E2E 診断ログの統合 | 整形の提案で価値が小さい |
+| `prepareEffectReplacement` / `prepareInstrumentReplacement` の統合 | instrument 側の挙動に触れる。**乖離が残るのは事実**だが終盤のリスクが利得を上回る |
+| `failurePolicy` / `EffectSlotEntry` の instrument 共通化 | 設計の決定 2・4 で確定済み |
+
+altitude は後者 2 つについて「**むしろ適切な深さ**」と判断している。`failurePolicy` の 2 値は
+role の言い換えではなく「スロットに間接層があるか / bus 名で位置固定か」という daemon 側の
+構造差に対応し、spec にも失敗モデル 2 型として文書化済みであることを実コードで確認している。
+
+### 6.370 fix(daemon): 正常動作が ERROR として記録される欠陥を 3 件（#625 実機 E2E で発覚）(Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625（Stage D の実機実行で発覚。いずれも **#625 以前から存在**した欠陥）
+**Status**: 実機 gated E2E **8 passed / 0 failed**（新規 R-E1〜R-E7 を含む）/
+TS **2069 passed** / Rust workspace 全クレート 0 failed / fmt・clippy 警告 0
+
+#### 🔴 実機 E2E を 11 回回して分かったこと
+
+ユニット 2068 件・Rust 203 件が緑で、変異検証も 25 種以上通した状態で、**実機は 1 回目で
+問題を出した**。しかも 3 件とも **#625 の変更由来ではなく、以前から存在していた**。
+
+| # | 欠陥 | 発生頻度 |
+|---|---|---|
+| 1 | `orbit-vst3-effect-child` の `--plugin-id` 未使用通知が level を名乗らず ERROR に倒れる | **VST3 effect をカタログ名でロードするたび** |
+| 2 | `orbit-vst3-host` の state 復元 best-effort 通知 2 件が同様 | **state 復元のたび** |
+| 3 | stderr 分類器が `[orbit-...-child]` **終端のタグしか認めない** | host crate の通知は構造的に救えなかった |
+
+3 件とも「**正常に動いているのにログ上はエラーに見える**」形。実害は
+`get_log` の ERROR 件数を根拠にする診断の偽陽性、**LLM の自己検証経路の破壊**
+（本プロジェクトは LLM を第一級ユーザーとして設計している）、本物のエラーが埋もれること。
+
+**姉妹の instrument 側は #618 の時に同じ修正が入っており、effect 側だけ取り残されていた。**
+既存 E2E も VST3 effect のロードや state 復元を通ってはいたが、**そこで ERROR 増分を検査して
+いなかった**ため露見しなかった。今回のシナリオが「ERROR を増やさないこと」を主張して初めて出た。
+
+3 件とも**メッセージ生成を関数に切り出して変異検証つきのテスト**を付けた（文言をテスト側に
+手写しすると捏造の罠に落ちるため）。`INFO ` を落とすと red になることを確認済み。
+
+#### E2E オラクルの是正 4 件（**緩めていない。1 件はむしろ強化**）
+
+| # | 是正 | 理由 |
+|---|---|---|
+| 4 | 比較基準を `dryBaseline` → **bus アクティブの dry** へ | `dryBaseline` は 3 秒窓の先頭 1 秒が LOOP 開始レイテンシで無音（エネルギーきっかり 2/3） |
+| 5 | **B を unity gain → 0.5** | 🔴 unity のままだと「B が正しく透過している」と「**B がロードされたが一度も適用されていない**」が数値として区別できない（実測で 10 桁一致した）。後者は変異検証で潰した `ChildLaunch.engaged` 配線切断そのもの |
+| 6 | 測定窓に **400ms のガード** | 壁時計と録音タイムラインのスキューで、窓の末尾が次の操作（teardown）を拾っていた |
+| 7 | 誤った因果説明 2 箇所を訂正 | 下記 |
+
+#### 🔴 main が途中で誤った判断をした（記録として残す）
+
+`b` 区間だけがエネルギー 1.5 倍になる現象について、main は「**製品側の異常・#624 と同じ
+二重出力クラス**」と判断した。**誤りだった。**
+
+窓ごとの生系列を出したところ、打点のピークは `b` も `recoveredB` も同じ 0.115 で、
+**末尾 1 窓だけが 0.232（= dry の打点レベル 0.115/0.5）**だった。エネルギー比 1.5 は
+この 1 窓だけで説明でき（`(5×0.115² + 0.232²) / (6×0.1155²) = 1.4986`）、機構は正しく
+動いていた。
+
+**教訓: 集計値は、まったく違う 2 つの状態から同じ数字を出す。**
+「区間 RMS が 1.5 倍」に対して (a) 一様な増幅（製品の欠陥）と (b) 1 窓だけの混在（測定境界）が
+同じ値を与え、**main も Fable も生系列を見るまで (a) に傾いていた**。
+Fable の絶対値モデル（`kick.wav の RMS × 等パワーパン × (sum + send)` が 6 区間で 6 桁一致）は
+強力だったが、**集計の粒度では届かない問い**だった。
+
+先に待ちを**前**に足して効かなかったのも当然で、**汚染は末尾**にあった。
+
+### 6.369 test(e2e): #625 Stage D — 差し替えと削除を音のオラクルで固定 (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625（Stage D = 実機 gated E2E）
+**Status**: シナリオ追加。TS **2068 passed / 36 skipped**（skip +1 = ゲート無しで正しく skip）
+
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` に R-E1〜R-E7 を 1 シナリオ追加。並行機構は新設せず、
+既存の capture / RMS 機構と `replaceGatedPluginFixtureSymlink` を再利用した。
+
+#### 音のオラクル（「エラーが出ない」では示せない性質）
+
+同一 WAV 内に `dry → A → B → failure dry → recovered B → restored A → removed dry` の区間を
+記録し、停止後にまとめて区間 RMS を測る。
+
+| # | オラクル |
+|---|---|
+| R-E1 | A（CLAP・state gain 0.25）が非無音の減衰レベル |
+| R-E2 | **`bRms / aRms` が 3.2〜4.8**（gain 0.25 → 1.0 の約 4 倍）+ 新 PID 出現・旧 PID 消滅・ERROR 増 0 |
+| R-E3 | 失敗注入で **`failedDryRms` が `dryRms` と一致** = 無音でも A でも B でもなく **dry**。音は止まらない |
+| R-E4 | 再宣言だけで `recoveredBRms` が `bRms` と一致（再起動なし） |
+| R-E5 | swap-back で **`restoredARms` が `aRms` と一致** = 自動保存した音色が実際に戻る + restore ログ |
+| R-E6 | remove で `removedDryRms` が `dryRms` と一致かつ非無音 = **routing が生きている** |
+| R-E7 | master 経路の PID 交代・ERROR 増 0（bus 系と slot が別物であることの実機確認） |
+
+**R-E3 と R-E5 が要**。R-E3 は設計の失敗モデル (ii)「解体後の失敗は dry 縮退（無音にならない）」を
+音で証明し、R-E5 は「差し替え直前の自動 state 保存」が音として復元されることを証明する。
+
+#### フルパス直書きは 1 箇所のみ
+
+R-E3 の失敗注入だけ（存在しないパスを daemon の失敗経路まで到達させる必要がある。カタログ名だと
+TS 解決で先に落ちる）。理由をコメントに明記。**他の全宣言は `list_plugins` 由来のカタログ名**。
+
+#### 担当の切り分け
+
+Codex は**シナリオの作成まで**。実機（OrbitStudio.app・オーディオデバイス・MCP）は sandbox で
+原理的に走らないため、**「実機で確認した」と書かせず**、確認できない事項を列挙させた。
+実行は main が `ORBIT_GATED_ORBITSTUDIO=1` で行う。
+
+### 6.368 feat(engine): #625 Stage C — remove() で effect insert を外す (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625（Stage C = 削除。実機 gated E2E は Stage D）
+**Status**: TS **2059 → 2068**（+9）/ Rust daemon lib **202 → 203**（+1）/ sandbox 外で全スイート green
+
+#### 実装
+
+`remove("名前")` を 4 経路（`global.remove` / `kick.remove` / `sum|aux("x").remove`）で実装。
+
+- daemon: `unload_outproc_effect_plugin`（replace の 1〜6 段 + load しない版）。
+  slot が Empty なら冪等 `noop`。**`bus_actives` と bus 簿記には触らない**
+- wire: `UnloadPlugin`（v1 は effect のみ受理）+ `ENGINE_DAEMON_PROTOCOL.md` 追記
+- TS: `EffectChainMap.remove()`。**`declare` と同じ per-key pending キューへ直列に載せる**。
+  名前不一致は throw（黙って別のものを消さない）。`BusPool.release` は呼ばない
+  （`seq.output()` / `seq.send()` の routing が bus 名を参照し続けるため）
+
+#### 🔴 main の全スイート実行で 3 件の失敗（3 回連続）
+
+Codex の報告に無かった失敗が、main の sandbox 外実行で出た。落ちたのは
+`dsl-method-catalog.spec.ts` = **VS Code 拡張の補完候補表が engine の DSL 語彙と一致すること**
+を検査するテスト。`remove` を語彙 3 セットに足したのに補完表を更新していなかった。
+
+**ガードが設計どおり働いた形**。放置すれば「`remove` は動くのにエディタの補完に出てこない」
+という、通常のテストでは見えない劣化になった。修正は補完カタログ 3 箇所への 1 語追加 +
+provider テストの期待値 1 箇所だったので、委譲往復に見合わず **main が直接修正**。
+
+#### 語彙 3 セットの独立検証（#528 型の事故の本丸）
+
+`remove` を **1 セットずつ独立に外す**変異を main が実施。3 セットとも red:
+
+| 外したセット | 落ちたテスト |
+|---|---|
+| `GLOBAL_DSL_METHODS` | R23a + 内部 API 分類ガード + 補完表一致（global） |
+| `SEQUENCE_DSL_METHODS` | R23b + 内部 API 分類ガード + 補完表一致（sequence） |
+| `BUS_DSL_METHODS` | R23c + 補完表一致（bus） |
+
+R23 を `R23a/b/c` に分割させたのが効いた。**まとめて 1 テストにすると 1 セット載せ忘れても
+他で緑になり、その経路だけ実機で全滅する。**
+
+#### テスト番号の衝突を是正
+
+Stage B で追加した identity テストが `R18`〜`R21` を名乗っており、設計の失敗モード表で
+`R19`〜`R23` が remove 関連に割り当て済みだったため衝突していた。
+**`R12a`〜`R12d` へ改名**（R12「差し替え前の自動 state 保存」の経路別展開なので枝番が正しい）。
+1:1 対応表が壊れたまま積むと、どのテストがどの失敗モードを守っているのか追えなくなる。
+
+### 6.367 feat(engine): #625 Stage B — effect の差し替えを wire と DSL 層へ開通 (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #625（Stage B = wire 公開 + TS 差し替え。`remove()` は Stage C・実機 E2E は Stage D）
+**Status**: TS **2042 → 2059**（+17）/ Rust daemon lib 202（無変更）/ sandbox 外で全スイート green
+
+#### 実装
+
+daemon の `ReplacePlugin` を `role='effect'` に開き、TS 層を差し替え可能にした。
+`global.effect(A)` → `global.effect(B)` / `seq.effect` / `sum|aux().effect` の **4 経路**が
+エンジン再起動なしで差し替わる。
+
+- `effect-slot.ts`: `failurePolicy: 'retain-on-reject' | 'forget-and-ensure'` を追加。
+  **effect は失敗の種別を問わず登記を忘れて uncertain を立てる** — in-place 差し替えは
+  「旧が既に消えているか」を呼び出し側から判別できないため。instrument は現行の
+  `'retain-on-reject'` に固定して無変更
+- `Global.prepareEffectReplacement`: UI close → 旧 state 保存 → 差し替え
+- linkAudio 排他ゲートに `hasUncertain()` を追加（master の差し替え失敗後にゲートが緩むのを防ぐ）
+
+#### 🔴 委譲先の green 報告と実測が食い違った（2 回目）
+
+Codex は「focused な Stage B テストは全部 pass」と報告したが、**sandbox で全スイートを
+回せていなかった**。main が sandbox 外で回すと **6 件 failed**。
+
+内訳は「旧挙動（異 spec は拒否）を固定していた 4 つの spec」と、**#528 の再発防止ガード**
+（全 public メソッドが DSL 語彙か内部 API に分類されることを検査する逆方向テスト）が
+`prepareEffectReplacement` を未分類として捕まえたもの。**ガードが設計どおり働いた。**
+
+修正方針は main が決めて渡した: **期待文字列を差し替えるだけの修正を禁止**した。
+実際に返っていた `'Plugin replacement requires the Rust engine backend.'` は
+**テストの mock に `replacePlugin` が無いから出るだけ**で、製品の挙動ではない。それを固定すると
+「mock の作りを固定しただけのテスト」になる。代わりに mock へ `replacePlugin` を持たせ、
+**差し替えが起きること**（呼び出し回数 + 引数）を固定し、テスト名も新しい意味論へ改名させた。
+
+`EffectSlotLimitError` の S4 ポインタ書き換えテストは **削除を禁じ**、上流の手構築エラーによる
+書き換え経路の検査を残したうえで、当該ケースを「異 spec はもう上限に到達せず差し替えになる」を
+固定する形へ転用させた。
+
+#### main の変異検証で 1 件の穴（経路の取り違え）
+
+変異 5 種のうち 4 種は red。**1 種が生き残った**:
+
+`SequenceEffectManager` の `beforeReplace` が receiver に `sequenceName` ではなく `'master'` を
+渡しても **全 2055 件が緑のまま通った**。実害は、seq の差し替えで旧 state が
+`master/effect/<name>/0` として登記され（正しくは `<seqName>/effect/<name>/0`）、
+**旧 spec を再宣言しても音色が戻らない**（しかもエラーが出ない）。
+
+原因は `prepareEffectReplacement` が **4 経路から呼ばれるのに identity を検証するテストが
+1 経路分しかなかった**こと。**呼ばれた事実だけでは経路の取り違えを検出できない。**
+
+修正では **実装を触らせなかった**（実装は正しく、足りないのはテスト）。4 経路を
+**独立したテストケース**として追加させた（1 テスト内のループにすると最初の経路が落ちた
+時点で残りが検証されない — Stage A で同じ問題が起きている）。
+
+main の再検証（4 種・うち 2 種は Codex に伝えていない壊し方）で全て red を確認:
+
+| 変異 | 検出したテスト |
+|---|---|
+| seq → `'master'`（前回の穴） | R19 |
+| master → seq 名 | R12 / R13 / R15 / R18 |
+| mixer の kind 入れ替え（sum ↔ aux） | **R20 と R21 の両方** |
+| mixer の kind 接頭辞を落とす | R20 / R21 |
+
+sum と aux は `makeKind` で同じコードを共有するため、片方だけのテストでは「4 経路を検証した」
+ように見えて実は 3 経路分になり得た。**独立ケースであることが実行で確認できた。**
+
+### 6.366 feat(daemon): #625 Stage A — effect insert を同一スロットで建て直す (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #625（Stage A = Rust daemon。wire 公開と TS 配線は Stage B）
+**Status**: Rust daemon lib **186 → 202**（+16）/ fmt・clippy(`--all-targets -D warnings`) 警告 0 /
+sandbox 外で全ターゲット green（`tests/protocol.rs` の 28 件も含む）
+
+#### 実装
+
+`EngineWrap::replace_outproc_effect_plugin` を新設。`engaged=false` で dry 素通しへ落とし、
+既存の quiesce ペア（stop/done）で RT の transport 離脱を ack で待ち、supervisor detach +
+shm control reset のうえ**同一 shm へ新 child を attach** する。**RT コード（`orbit-audio-native`）は
+無変更**。子プロセスの制御語彙に差し替えコマンドが無い（`CONTROL_RUN`/`CONTROL_QUIT` のみ）ため、
+差し替えは必ず child の再 spawn になる。
+
+`bus_actives` はどの経路でも触らない（一度 true にした bus を false へ戻すと、その bus に tag された
+PlayAt イベントが消費されず retain される既存ハザードを踏むため）。
+
+#### 検証の経過 — 委譲先の green 報告の後に **7 件の欠陥**が出た
+
+| 発見者 | 手段 | 発見 |
+|---|---|---|
+| Codex | 変異 8 種（すべて「ガード・分岐を削除する」型） | 0（自分の変異はすべて自分のテストが検出） |
+| **main** | 変異 **9 種**（引数の取り違え・配線切断・順序・回数・境界） | **5 件** |
+| **Fable 監査** | 不在証明・API 意味論・設計整合 | **2 件（Important）** |
+
+main の変異で出た 5 件:
+
+1. **同型 `Arc<AtomicBool>` の位置引数取り違え**（`clear_quiesce_unless_shutdown`）— 入れ替えても
+   型検査を通り、shutdown 競合時の復元先が `done` に化けて guard が**偽の ack** を掴む
+2. 同じ欠陥クラスが **`OutProcTeardownGuard::new` にも残っていた**（1 箇所ずつ潰すと別の場所に残る）
+3. `entry.engaged` を RT と別 Arc にしても全テスト緑 = **dry 窓の配線を実証するテストが無かった**
+4. `ChildLaunch.engaged` を別 Arc にしても緑 = **プラグインがロードされても insert が一度も
+   適用されない（音が恒久的に dry）**状態を誰も検出できなかった
+5. guard の **latch 順序**（`shutdown` を `requested` より先に立てる）が、コメントで宣言されて
+   いるだけでテストに守られていなかった
+
+1・2 は**テストを足さず型で潰した**（引数を名前付き struct 1 つに畳み、取り違えを表現不能に）。
+Codex は自主的に `OutProcEffectPostProcessor::new` にも同じ欠陥があることを見つけて潰し、
+同型位置引数の**網羅列挙**（検索方法つき）を提出した。5 は Codex への修正が既に 2 回に達していた
+ため、規律に従い **main が直接修正**（`latch_then_request` に抽出し中間状態を観測するテストで固定）。
+
+#### Fable 監査の Important 2 件（変異検証では原理的に届かない層）
+
+| # | 実害 | 対応 |
+|---|---|---|
+| **A-1** | tenant handoff で前 tenant の `measurement_invalid` が残る。クラッシュループした effect を差し替えて**復旧しても** health が daemon 再起動まで「計測無効」を報告し続ける | reset を追加 + テスト（変異検証済み）。instrument は同じ位置で既にリセットしていた = **借りた機構の不変条件を継承し損ねていた** |
+| **B-1** | latch と clear が **store-buffering（Dekker）パターン**。`Release`/`Acquire` では再検査が stale な `shutdown=false` を読みうる → guard の要求が消え **ack 無し停止**。R27 が防ぐと主張する事象がメモリモデル層に残っていた | 4 アクセスを `SeqCst` 化（**両側揃えないと閉じない**）+ 理由をコメントに明記 |
+
+🔴 **B-1 にはテストが無い。** 論理的インターリーブでは再現できない層で、`loom` 相当のモデル検査
+でしか検証できない。設計書の失敗モード表には「この行の検出器はテストではなく**メモリ順序の指定**」
+と明記し、`loom` 導入は follow-up 判断として §9-6 に残した。**テストが無いことを黙って通さない。**
+
+#### 設計書の更新
+
+失敗モード表を **27 → 33 行**（1:1 維持）。うち 2 行は検出器がテストではない（R28 = コンパイラ /
+R33 = メモリ順序の指定）ことを列に明記。Stage B で踏む地雷 4 点を申し送りとして §7 に追記。
+
+#### 教訓
+
+**「変異が全部 red だった」は変異の種類に依存する。** Codex の 8 種はすべて「削除」型で、
+削除を検出するテストは既にあった。**壊し方の種類を変えた瞬間に 5 件出た。**
+さらに、変異検証そのものが届かない層（不在・メモリモデル）が 2 件あり、そこは別系統の目
+（Fable）でしか見えなかった。
+
+### 6.365 docs(spec): #625 Stage 0 — 差し替え・削除を spec 側に先行させる (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #625（Stage 0 = 実装より先の spec 更新）
+**Status**: docs のみ。実装は Stage A 以降
+
+DocDD（spec が正本）に従い、実装前に仕様を更新した。effect の in-place 差し替えは
+instrument の prepare-commit 型と**失敗モデルが異なる**ため、これを書かずに実装すると
+spec に偽の文が残る（main レビュー指摘）。
+
+| ファイル | 変更 |
+|---|---|
+| `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` | SC.3 規範4 の括弧書きを「SC.5 の失敗モデル (i) prepare-commit 型」への参照へ変更。SC.5 の v1 注記に **失敗モデル 2 型**（prepare-commit / in-place）を明記し、v1 実装済み範囲に「単一 insert の異 spec 再宣言 = 差し替え」と `remove("名前")` を追加 |
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | **PH.2d を新設**（4経路共通の差し替え・削除の規則を1箇所に集約 = DRY）。PH.2 / PH.2b / MX.2 / MX.3 は PH.2d を参照する形へ |
+
+#### 設計からの意図的な逸脱（1件）
+
+設計 §7 Stage 0-3 は `docs/research/ENGINE_DAEMON_PROTOCOL.md` への
+ReplacePlugin(role=effect) / UnloadPlugin の追記も Stage 0 に置いていたが、**Stage B/C の
+wire 実装と同じコミットへ移した**。プロトコル**リファレンス**が存在しないメソッドを
+記述する状態は、本 issue が直そうとしている「宣言と実体のずれ」と同じ種類の乖離になるため。
+DSL の**仕様**（上表2ファイル）は従来どおり実装に先行させる。
+
+### 6.364 docs(design): #625 effect insert の差し替え・削除の設計を確定 (Aug 26, 2026)
+
+**Date**: 2026-08-26
+**Issue**: #625（新規起票）
+**Status**: 設計確定（実装未着手）。ベースライン TS **2042 passed** / Rust daemon lib **186 passed**
+
+#### なぜ
+
+#618（instrument の差し替え・PR #621 マージ済み）は owner の動機「変更出来ないのは準備の段階で辛い」の
+**半分しか解いていない**。effect insert は一度挿すと engine 再起動なしに差し替えも削除もできず、
+`global.effect()` / `seq.effect()` / `sum|aux().effect()` の3経路が恒久エラーで拒否する。
+拒否文言が「chains (multiple inserts) are reserved」なのも誤答で、差し替えを頼んだ利用者に
+チェーンの話を返していた。
+
+#### 🔴 instrument の機構は流用できない
+
+instrument は N 個の同質スロットプール + `instance_index`（名前→スロットの間接層）を持つため
+「予備スロットへ prepare → 張り替えで commit」が成立した。effect は **bus 名でスロットが位置固定**
+（`bus_slots` を RT の `InsertBusStage` が直接抱える）で間接層が無く、予備スロット方式が成立しない。
+
+#### 採用機構: 同一 ChildSlot の in-place 建て直し（RT コード変更ゼロ）
+
+`engaged=false` で dry 素通しへ → 既存 quiesce ペア（stop/done）で RT の transport 離脱を ack 待ち →
+supervisor detach + shm control reset → **同一 shm へ新 child を attach**。
+子プロセスの制御語彙に差し替えコマンドが無い（`CONTROL_RUN`/`CONTROL_QUIT` のみ）ため、差し替えは
+必ず child の kill + 再 spawn になる。窓の間は**無音ではなく dry 素通し**（`outproc_effect.rs:365-367`）。
+
+失敗モデルは instrument と異なる: 解体**前**の失敗は旧 insert 無傷、解体**後**の失敗は dry 縮退 +
+forget-and-ensure（同じ宣言の再評価だけで復旧）。これは spec の一般則に反するため、**spec を先に改訂**する
+（SC.5 に失敗モデル2型を明記し、SC.3 規範4 の括弧書きをそこへ参照させる）。
+
+#### main レビュー（独立第二意見）で差し戻した2件
+
+| # | 指摘 | 結果 |
+|---|---|---|
+| 1 | **quiesce フラグの所有権競合** — 差し替えの後始末 `requested=false` が、stream 停止時に同じ Arc を使う `OutProcTeardownGuard`（`outproc_effect.rs:781-797`）の quiesce を取り消す。guard は ack 無しで stream を止め、その後 attach が成功すると停止中の RT が shm を触る | control 側専用の第3フラグ `shutdown`（latch）を新設。guard が drop 冒頭で立て、差し替え側は手順0/6/7 で検査し、clear と競合したら `requested` を復元。**RT は読まないので RT 変更ゼロを維持** |
+| 2 | **spec 更新の範囲不足** — SC.3 規範4 が失敗モデルを「SC.5 の後勝ち原則と同一」と一般則として書いており、in-place 方式は spec に偽の文を残す | SC.5 に失敗モデル2型を明記する案を採用。改訂文面まで設計書に記載 |
+
+あわせて main が実ファイルで確認: `active_plugin_notes`（`engine_wrap.rs:207`）は insert/remove のみで
+**reader が存在しない** → doc が主張する「live note 中は state 保存を fail-closed」は未実装。
+本設計の自動 state 保存が演奏中に阻まれる懸念は無い（doc と実体のずれは follow-up）。
+`OutProcTeardownGuard::new` の呼び出し箇所も 6 箇所すべてを列挙し直した（初稿は 1 箇所のみ）。
+
+#### 成果物
+
+`docs/design/625-effect-replacement-design.md` — 完了条件（曖昧語なし）/ 採用機構と却下2案 /
+決定8項目 / **失敗モード 27 件 ↔ 受け入れテスト 27 行の 1:1 対応表（全行に変異列）** /
+Stage 0-D の実装手順 / 触ってはいけないもの / 確信度の低い決定と反証方法。
+
 ### 6.363 fix(e2e): 実利用の経路へ全面的に寄せる — 標準プラグインディレクトリ + カタログ名 + audioPath (Aug 26, 2026)
 
 **Date**: 2026-08-26

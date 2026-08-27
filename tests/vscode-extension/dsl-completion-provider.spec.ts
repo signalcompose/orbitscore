@@ -65,7 +65,7 @@ describe('補完 provider 本体 — メソッド候補 (#495)', () => {
   it('sum("x"). の後に bus のメソッドが出る', async () => {
     const src = `${SCORE}sum("strings").`
     const labels = await complete(src, 2, 15)
-    expect(labels.sort()).toEqual(['effect', 'ui'])
+    expect(labels.sort()).toEqual(['effect', 'remove', 'ui'])
   })
 
   it('打ちかけの文字で絞り込む', async () => {

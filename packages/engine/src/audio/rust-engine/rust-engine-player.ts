@@ -44,6 +44,7 @@ import type { AudioDevice } from '../supercollider/types'
 import type {
   PluginLoadResult,
   PluginReplaceResult,
+  PluginUnloadResult,
   PluginStateSaveTarget,
   PluginUiCloseCompletion,
   PluginUiTarget,
@@ -955,6 +956,12 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
   }
 
+  /** Forget a declaration and its active flag entirely; distinct from marking it inactive. */
+  private forgetPluginLedger(key: string): void {
+    this.loadedPlugins.delete(key)
+    this.pluginActiveByKey.delete(key)
+  }
+
   async loadPlugin(
     filePath: string,
     pluginId: string | undefined,
@@ -1013,16 +1020,29 @@ export class RustEnginePlayer implements AudioEngineBackend {
       this.pluginActiveByKey.set(key, true)
       return result
     } catch (err) {
-      // A protocol rejection is definitive: the daemon kept the old tenant, so
-      // retain its cached spec and active bit. A transport failure is ambiguous,
-      // so neither recovery ledger may keep claiming that the old tenant is
-      // authoritative: effect-slot forgets its chain entry and this player must
-      // forget the matching respawn declaration as the same atomic decision.
-      if (!(err instanceof DaemonProtocolError)) {
+      // Effect replacement may fail after teardown, even when the daemon returns
+      // a protocol error. Forget both ledgers for every effect error so respawn
+      // cannot replay the old tenant. Instrument keeps its established behavior:
+      // definitive protocol rejection retains the old tenant, while an ambiguous
+      // transport failure forgets it.
+      if (role === 'effect') {
+        this.forgetPluginLedger(key)
+      } else if (!(err instanceof DaemonProtocolError)) {
         this.loadedPlugins.delete(key)
         this.markPluginInactive(key, role, instance)
       }
       throw err
+    }
+  }
+
+  async unloadPlugin(role: 'effect', bus?: string): Promise<PluginUnloadResult> {
+    const key = RustEnginePlayer.pluginKey(role, bus)
+    try {
+      return await this.daemon.unloadPlugin(role, bus)
+    } finally {
+      // The daemon may have completed teardown before the response was lost.
+      // Forget both ledgers on every outcome so respawn cannot replay the removed tenant.
+      this.forgetPluginLedger(key)
     }
   }
 

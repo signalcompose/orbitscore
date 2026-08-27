@@ -1690,6 +1690,21 @@ fn parse_vstpreset(bytes: &[u8]) -> Result<Option<VstPresetChunks<'_>>, Vst3Host
 ///
 /// ① の失敗は音色が復元されていないことを意味するのでハードエラー。②③ は GUI/表示側の
 /// 同期でありベストエフォート（未実装の plugin も多い）— 失敗は stderr に出すのみ。
+/// state 復元の **成功経路**で出す best-effort 通知の文言。
+///
+/// 呼び出し元はどちらも `Ok(())` を返す経路にあり、**復元そのものは成功している**
+/// （controller への同期だけが best-effort で失敗した）。本物の失敗
+/// （`IComponent::setState` の拒否）は `Err` を返しており、そちらは ERROR に倒れるのが正しい。
+///
+/// level トークン規約の理由と TS 側の受理条件は `orbit_child_runtime::notice` に集約してある。
+/// この crate は **child プロセスの中にリンクされて動く**ため、タグは `-child` で終わらない。
+fn best_effort_state_notice(what: &str, result: i32) -> String {
+    orbit_child_runtime::notice::child_info(
+        "orbit-vst3-host",
+        format_args!("{what} returned {result:#x} (best-effort; audio state is already applied)"),
+    )
+}
+
 fn apply_state_chunks(
     component: &ComPtr<IComponent>,
     controller: Option<&ComPtr<IEditController>>,
@@ -1713,7 +1728,8 @@ fn apply_state_chunks(
             let sync_result = controller.setComponentState(stream.as_ptr());
             if !is_ok(sync_result) {
                 eprintln!(
-                    "[orbit-vst3-host] setComponentState after state restore returned {sync_result:#x} (best-effort; audio state is already applied)"
+                    "{}",
+                    best_effort_state_notice("setComponentState after state restore", sync_result)
                 );
             }
         }
@@ -1726,7 +1742,8 @@ fn apply_state_chunks(
             let controller_result = unsafe { controller.setState(controller_stream.as_ptr()) };
             if !is_ok(controller_result) {
                 eprintln!(
-                    "[orbit-vst3-host] IEditController::setState returned {controller_result:#x} (best-effort; audio state is already applied)"
+                    "{}",
+                    best_effort_state_notice("IEditController::setState", controller_result)
                 );
             }
         }
@@ -3077,5 +3094,35 @@ mod tests {
             parse_vstpreset(&bad_size),
             Err(Vst3HostError::State(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod best_effort_notice_tests {
+    use super::best_effort_state_notice;
+
+    /// この通知は復元の成功経路で出るので、daemon の stderr router が非エラーと判定できる形で
+    /// なければならない。router は `^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+\]\s`
+    /// と、daemon 自身の tracing 形式のみを非エラーとして認める（`daemon-client.ts`）。
+    #[test]
+    fn best_effort_state_notice_declares_a_non_error_level_token() {
+        for what in [
+            "setComponentState after state restore",
+            "IEditController::setState",
+        ] {
+            let line = best_effort_state_notice(what, 0x3);
+            assert!(
+                line.starts_with("INFO [orbit-vst3-host] "),
+                "notice must declare a non-error level token and the host tag: {line}"
+            );
+            assert!(
+                line.contains(what),
+                "notice must name the call that degraded: {line}"
+            );
+            assert!(
+                line.contains("best-effort"),
+                "notice must say the restore itself succeeded: {line}"
+            );
+        }
     }
 }

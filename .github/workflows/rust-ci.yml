@@ -4,10 +4,24 @@ name: Rust CI
 # Rust は CI で一切検証されていなかった（Issue #326）。本 job が fmt / clippy /
 # test / license-gate を PR ごとに回す。
 #
-# スコープ（Issue #326）:
-# - ubuntu-latest で permissive + cross-platform な default グラフを検証する。
+# スコープ（Issue #326 / 限界を明文化・#625）:
+# - **ubuntu-latest** で permissive + cross-platform な default グラフを検証する。
+#   macOS ランナーはコストが高いため GitHub CI では回さない（owner 方針）。
 # - `link-audio` feature(GPL・Ableton Link・build.rs が macOS 専用)は ubuntu で
 #   ビルド不可かつ GPL 隔離方針のため CI では有効化しない。`clap-host`(permissive)は検証する。
+#
+# 🔴 **この job が保証しないもの（#625 で判明・過大評価しないこと）**:
+#   child crate 群（`orbit-vst3-effect-child` / `orbit-vst3-instrument-child` /
+#   `orbit-clap-*-child`）は `#[cfg(target_os = "macos")]` で本体を、
+#   `#[cfg(not(target_os = "macos"))]` で「macOS 専用です」と即エラー終了するスタブを定義する。
+#   ubuntu ランナーは **後者しかコンパイルしない**ので、**実際に出荷される macOS 実装は
+#   この job では一度も検証されない**。#625 でこの job が落ちた時に捕まえたのも、
+#   スタブ側の cfg 不整合であって製品コードの欠陥ではなかった。
+#
+#   したがってこの job の green は「**移植可能な部分が壊れていない**」ことの証明であって、
+#   「出荷物が動く」ことの証明ではない。後者は **main が手元 macOS で回すマージ前ゲート**
+#   （`npm run build:clean` + 実機 gated E2E・CLAUDE.md「マージ前ゲート」）が担う。
+#   **この job だけを根拠にマージしないこと。**
 # - `outproc-effect` feature(γ M1 PR-C・clack-free・default off)も検証する(clack を child に隔離した
 #   OOP effect 経路。非 gated lib test を CI で回す)。
 # - 実機 output device / multicast を要する gated テストは全て `#[ignore]` なので
@@ -20,6 +34,8 @@ on:
 jobs:
   rust:
     name: fmt / clippy / test
+    # 🔴 ubuntu のまま。macOS ランナーはコストが高いので GitHub CI では回さない（owner 方針）。
+    # この job が何を保証し **何を保証しないか** はファイル冒頭のスコープ注記を参照。
     runs-on: ubuntu-latest
     defaults:
       run:

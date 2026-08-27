@@ -33,7 +33,7 @@ export class PluginInstrumentManager {
     this.slots = new EffectChainMap(audioEngine, (seqName) => `seq:${seqName}`, {
       externalReceiverId: (seqName) => seqName,
       statePathFallback: createStatePathFallback(audioManager),
-      replacement: replacementHooks,
+      replacement: { ...replacementHooks, failurePolicy: 'retain-on-reject' },
     })
   }
 

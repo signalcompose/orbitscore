@@ -14,6 +14,7 @@ import { DaemonProtocolError } from '../../audio/rust-engine/errors'
 import type { PluginStateIdentity } from '../project-state-store'
 
 import { AudioManager } from './audio-manager'
+import { effectReplaceNotice } from './effect-replace-notice'
 import { LinkAudioManager } from './link-audio-manager'
 import {
   KNOWN_PLUGIN_EXTENSIONS,
@@ -82,6 +83,12 @@ export interface InstrumentSlot extends PluginSlotBase {
 
 export type PluginSlot = EffectSlot | InstrumentSlot
 
+interface UncertainReplacement {
+  readonly bus: string | undefined
+  /** The forgotten effect tenant still deserves best-effort cleanup on recovery. */
+  readonly forgottenSlot?: PluginSlot
+}
+
 /**
  * 1 宣言分の入力。`normalizedName`（instance identity 用の表示名）と `resolvedPath`
  * （ロード対象の実ファイル）は意味が全く違うのに同じ `string` なので、位置引数で並べず
@@ -119,10 +126,19 @@ export interface EffectChainMapOptions<K> {
    * どちらも `'master'` で同値。
    */
   readonly externalReceiverId?: (key: K) => string
-  /** Instrument-only opt-in. Effect managers omit this and retain the v1 limit error. */
+  /** Opt-in for in-place daemon replacement. */
   readonly replacement?: {
     readonly beforeReplace: (key: K, oldSlot: PluginSlot) => Promise<void>
     readonly onQuarantinedSlot?: (key: K) => void
+    /**
+     * Registry handling after ReplacePlugin rejects.
+     *
+     * Instrument replacement can retain the old declaration after a definitive
+     * daemon rejection. Effect replacement cannot know whether teardown already
+     * happened, so every rejection forgets the declaration and makes the next
+     * declaration use ReplacePlugin as an ensure operation.
+     */
+    readonly failurePolicy: 'retain-on-reject' | 'forget-and-ensure'
   }
 }
 
@@ -149,8 +165,8 @@ export class EffectChainMap<K> {
   private readonly statePathFallback?: PluginStatePathFallbackResolver
   private readonly externalReceiverId?: (key: K) => string
   private readonly replacement?: EffectChainMapOptions<K>['replacement']
-  /** A transport failure leaves daemon commit status unknown; retry via ReplacePlugin ensure. */
-  private readonly uncertainReplacements = new Set<K>()
+  /** A rejected ensure leaves commit status unknown and retains cleanup context. */
+  private readonly uncertainReplacements = new Map<K, UncertainReplacement>()
   // key ごとの直列化キュー（#527 review Important 1）。値は「前呼び出しの決着
   // （成功/失敗いずれも）待ち」で、前呼び出しの成否は自分の結果に影響させない
   // （catch で握りつぶし、必ず次の呼び出しへ進める）。
@@ -177,6 +193,11 @@ export class EffectChainMap<K> {
       if (chain.length > 0) return true
     }
     return false
+  }
+
+  /** Whether replacement outcome is unknown for one key. */
+  hasUncertain(key: K): boolean {
+    return this.uncertainReplacements.has(key)
   }
 
   /**
@@ -224,17 +245,73 @@ export class EffectChainMap<K> {
    * pending promise の後ろに直列でつなぐことで、このレースを避ける。
    */
   async declare(key: K, spec: PluginDeclaration, duplicateMessage: () => string): Promise<void> {
+    return this.enqueue(key, () => this.declareBody(key, spec, duplicateMessage))
+  }
+
+  /** Removes one named effect through the same per-key queue as declaration/replacement. */
+  async remove(key: K, expectedNormalizedName: string, occurrence = 0): Promise<void> {
+    return this.enqueue(key, () => this.removeBody(key, expectedNormalizedName, occurrence))
+  }
+
+  private async enqueue<T>(key: K, body: () => Promise<T>): Promise<T> {
     const previous = this.pending.get(key) ?? Promise.resolve()
-    const settled = previous
-      .catch(() => undefined)
-      .then(() => this.declareBody(key, spec, duplicateMessage))
-    const tracked = settled.catch(() => undefined)
+    const settled = previous.catch(() => undefined).then(() => body())
+    const tracked = settled.then(
+      () => {},
+      () => {},
+    )
     this.pending.set(key, tracked)
     try {
-      await settled
+      return await settled
     } finally {
       if (this.pending.get(key) === tracked) this.pending.delete(key)
     }
+  }
+
+  private async removeBody(
+    key: K,
+    expectedNormalizedName: string,
+    occurrence: number,
+  ): Promise<void> {
+    const receiver = this.externalReceiverId?.(key) ?? this.receiverId(key)
+    const existing = this.chains.get(key)?.[0]
+    const uncertain = this.uncertainReplacements.get(key)
+    const cleanupSlot = existing ?? uncertain?.forgottenSlot
+    if (!cleanupSlot && !uncertain) {
+      throw new Error(
+        `${receiver}: remove("${expectedNormalizedName}") — no effect insert is declared.`,
+      )
+    }
+    if (cleanupSlot && cleanupSlot.normalizedName !== expectedNormalizedName) {
+      throw new Error(
+        `${receiver}: remove("${expectedNormalizedName}") does not match the declared insert '${cleanupSlot.normalizedName}'.`,
+      )
+    }
+    if (occurrence !== 0) {
+      throw new Error(
+        `${receiver}: remove("${expectedNormalizedName}", ${occurrence}) — v1 supports a single insert; occurrence must be 0.`,
+      )
+    }
+    if (!this.audioEngine.unloadPlugin) {
+      throw new Error('Plugin removal requires the Rust engine backend.')
+    }
+
+    if (existing) {
+      await existing.load
+      await this.replacement?.beforeReplace(key, existing)
+    } else if (cleanupSlot) {
+      await this.beforeReplaceForgottenSlot(key, cleanupSlot)
+    }
+    const bus = existing?.role === 'effect' ? existing.bus : uncertain?.bus
+    try {
+      await this.audioEngine.unloadPlugin('effect', bus)
+    } catch (error) {
+      this.chains.delete(key)
+      this.uncertainReplacements.set(key, { bus, forgottenSlot: cleanupSlot })
+      throw error
+    }
+    this.chains.delete(key)
+    this.uncertainReplacements.delete(key)
   }
 
   private async declareBody(
@@ -289,9 +366,11 @@ export class EffectChainMap<K> {
     existing?: PluginSlot,
   ): Promise<void> {
     if (!this.audioEngine.replacePlugin) {
-      throw new Error('Instrument replacement requires the Rust engine backend.')
+      throw new Error('Plugin replacement requires the Rust engine backend.')
     }
     const { role, bus, normalizedName, resolvedPath, pluginId, instance } = spec
+    const uncertain = this.uncertainReplacements.get(key)
+    const forgottenSlot = existing === undefined ? uncertain?.forgottenSlot : undefined
     const chain = this.chains.get(key) ?? []
     const occurrence = chain.filter(
       (slot) => slot !== existing && slot.normalizedName === normalizedName,
@@ -321,6 +400,7 @@ export class EffectChainMap<K> {
     }
 
     if (existing) await this.replacement!.beforeReplace(key, existing)
+    else if (forgottenSlot) await this.beforeReplaceForgottenSlot(key, forgottenSlot)
     let result: Awaited<ReturnType<NonNullable<AudioEngine['replacePlugin']>>>
     try {
       result = await this.audioEngine.replacePlugin(
@@ -330,9 +410,15 @@ export class EffectChainMap<K> {
         ...(optionalArgs as [string?, string?, string?]),
       )
     } catch (error) {
-      if (!(error instanceof DaemonProtocolError)) {
+      if (this.replacement!.failurePolicy === 'forget-and-ensure') {
+        this.chains.delete(key)
+        this.uncertainReplacements.set(key, {
+          bus: role === 'effect' ? bus : undefined,
+          forgottenSlot: existing ?? forgottenSlot,
+        })
+      } else if (!(error instanceof DaemonProtocolError)) {
         if (existing) this.chains.delete(key)
-        this.uncertainReplacements.add(key)
+        this.uncertainReplacements.set(key, { bus: undefined })
       }
       throw error
     }
@@ -372,6 +458,36 @@ export class EffectChainMap<K> {
     )
     this.uncertainReplacements.delete(key)
     if (result.quarantinedSlot) this.replacement!.onQuarantinedSlot?.(key)
+  }
+
+  /**
+   * 🔴 この best-effort 保存は「**daemon はコミット後に Err を返さない**」という不変条件に
+   * 乗っている（#625 最終監査 §2c）。`GetPluginState` の daemonTarget は slot 座標（role +
+   * bus）だけで、**そこに載っている plugin の identity を検証しない**。もし「TS は失敗と
+   * 判定・daemon は新テナント B をコミット済み」という状態が作れてしまうと、ここで B の
+   * state が旧 A の state ファイルへ無言で上書きされる — I-1 が塞いだのと同じ silent data
+   * loss になる。
+   *
+   * 現在その状態は作れない: quiesce timeout では daemon は旧 A のまま、teardown 後の attach
+   * 失敗では slot が Empty/Closed（保存は daemon エラーになり warn へ落ちる）、WS 切断では
+   * respawn 後の新 daemon の空 slot になる。**この不変条件を壊す変更（コミット後に Err を
+   * 返す経路の追加）を daemon 側に入れるなら、先に GetPluginState 応答へ plugin 名を含めて
+   * TS 側で照合すること。**
+   */
+  private async beforeReplaceForgottenSlot(key: K, oldSlot: PluginSlot): Promise<void> {
+    try {
+      await this.replacement!.beforeReplace(key, oldSlot)
+    } catch (error) {
+      const receiver = this.externalReceiverId?.(key) ?? this.receiverId(key)
+      const message = error instanceof Error ? error.message : String(error)
+      // 🔴 stream の選択は `effectReplaceNotice` が握る（呼び出し側で `console.warn` を
+      // 使わないこと）。理由はそのモジュールの docstring を参照 — 拡張は engine の stderr を
+      // 内容を見ずに `ERROR:` で記録するので、正常に継続する通知を warn で出すと E2E R-E4
+      // 「復旧は ERROR 行を増やさない」が落ちる。実際に落ちた（#625・4 回目の再発）。
+      effectReplaceNotice(
+        `Best-effort cleanup of the uncertain old effect for '${receiver}' failed; replacement/removal will continue: ${message}`,
+      )
+    }
   }
 
   private async issueLoad(key: K, spec: PluginDeclaration, replacing?: PluginSlot): Promise<void> {

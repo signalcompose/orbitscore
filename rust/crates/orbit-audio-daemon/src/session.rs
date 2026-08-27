@@ -1567,69 +1567,182 @@ async fn handle_command(
                 ProtocolError::new("MALFORMED_REQUEST", "missing 'path' param"),
             ),
         },
-        // #618: LoadPlugin の Active-reject semantics を変えず、instrument 専用の ensure
-        // command として差し替えを明示する。PR-1 では TS caller はまだ存在しない。
+        // LoadPlugin の Active-reject semantics を変えず、effect / instrument の各 slot を
+        // 差し替えるか、Empty な slot を ensure-load する。attach は block しうるため
+        // LoadPlugin と同じく spawn_blocking で tokio worker から隔離する。
         "ReplacePlugin" => {
-            if params.get("role").and_then(Value::as_str) != Some("instrument") {
+            let Some(role) = params
+                .get("role")
+                .and_then(Value::as_str)
+                .filter(|role| matches!(*role, "effect" | "instrument"))
+            else {
                 return err(
                     &id,
                     ProtocolError::new(
                         "MALFORMED_REQUEST",
-                        "ReplacePlugin requires role='instrument'",
+                        "ReplacePlugin requires role='effect' or role='instrument'",
                     ),
                 );
-            }
+            };
             let Some(path_str) = params.get("path").and_then(Value::as_str) else {
                 return err(
                     &id,
                     ProtocolError::new("MALFORMED_REQUEST", "missing 'path' param"),
                 );
             };
-            if bus_param_invalid_for_instrument_role(&params) {
-                return err(
-                    &id,
-                    ProtocolError::new(
-                        "MALFORMED_REQUEST",
-                        "ReplacePlugin bus is invalid for role='instrument'",
-                    ),
-                );
-            }
-            let instance = match parse_optional_nonempty_string_param(&params, "instance") {
-                Ok(instance) => instance,
-                Err(message) => return err(&id, ProtocolError::new("MALFORMED_REQUEST", message)),
-            };
-            let state_path = match parse_optional_nonempty_string_param(&params, "state_path") {
-                Ok(state_path) => state_path.map(std::path::PathBuf::from),
-                Err(message) => return err(&id, ProtocolError::new("MALFORMED_REQUEST", message)),
-            };
-            #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-            if instance.is_some() || state_path.is_some() {
-                return err(
-                    &id,
-                    ProtocolError::new(
-                        "OUTPROC_INSTRUMENT_UNAVAILABLE",
-                        "this daemon build (outproc-instrument only) supports a single \
-                         instrument instance and no state restore; rebuild with \
-                         --features outproc-effect,outproc-instrument for per-sequence \
-                         instances (ReplacePlugin instance/state_path)",
-                    ),
-                );
-            }
             let plugin_id = params
                 .get("plugin_id")
                 .and_then(Value::as_str)
                 .map(str::to_owned);
             let path = std::path::PathBuf::from(path_str);
 
-            #[cfg(feature = "outproc-instrument")]
+            if role == "effect" {
+                if params.get("instance").is_some() {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            "ReplacePlugin instance is only valid for role='instrument'",
+                        ),
+                    );
+                }
+                let bus = match parse_bus_param(&params) {
+                    Ok(bus) => bus,
+                    Err(message) => {
+                        return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
+                    }
+                };
+                let state_path = match parse_optional_nonempty_string_param(&params, "state_path") {
+                    Ok(state_path) => state_path.map(std::path::PathBuf::from),
+                    Err(message) => {
+                        return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
+                    }
+                };
+                #[cfg(feature = "outproc-effect")]
+                {
+                    let engine = engine.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        engine.replace_outproc_effect_plugin(path, plugin_id, bus, state_path)
+                    })
+                    .await
+                    {
+                        Ok(Ok(info)) => replaced_plugin_ok(&id, info),
+                        Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
+                        Err(join_error) => err(
+                            &id,
+                            ProtocolError::new("INTERNAL_ERROR", join_error.to_string()),
+                        ),
+                    }
+                }
+                #[cfg(not(feature = "outproc-effect"))]
+                {
+                    let _ = (engine, path, plugin_id, bus, state_path);
+                    err(
+                        &id,
+                        ProtocolError::new(
+                            "OUTPROC_EFFECT_UNAVAILABLE",
+                            "ReplacePlugin requires an outproc-effect daemon build",
+                        ),
+                    )
+                }
+            } else {
+                if bus_param_invalid_for_instrument_role(&params) {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            "ReplacePlugin bus is invalid for role='instrument'",
+                        ),
+                    );
+                }
+                let instance = match parse_optional_nonempty_string_param(&params, "instance") {
+                    Ok(instance) => instance,
+                    Err(message) => {
+                        return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
+                    }
+                };
+                let state_path = match parse_optional_nonempty_string_param(&params, "state_path") {
+                    Ok(state_path) => state_path.map(std::path::PathBuf::from),
+                    Err(message) => {
+                        return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
+                    }
+                };
+                #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+                if instance.is_some() || state_path.is_some() {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "OUTPROC_INSTRUMENT_UNAVAILABLE",
+                            "this daemon build (outproc-instrument only) supports a single \
+                             instrument instance and no state restore; rebuild with \
+                             --features outproc-effect,outproc-instrument for per-sequence \
+                             instances (ReplacePlugin instance/state_path)",
+                        ),
+                    );
+                }
+                #[cfg(feature = "outproc-instrument")]
+                {
+                    let engine = engine.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        engine.replace_outproc_instrument_plugin(
+                            path, plugin_id, instance, state_path,
+                        )
+                    })
+                    .await
+                    {
+                        Ok(Ok(info)) => replaced_plugin_ok(&id, info),
+                        Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
+                        Err(join_error) => err(
+                            &id,
+                            ProtocolError::new("INTERNAL_ERROR", join_error.to_string()),
+                        ),
+                    }
+                }
+                #[cfg(not(feature = "outproc-instrument"))]
+                {
+                    let _ = (engine, path, plugin_id, instance, state_path);
+                    err(
+                        &id,
+                        ProtocolError::new(
+                            "OUTPROC_INSTRUMENT_UNAVAILABLE",
+                            "ReplacePlugin requires an outproc-instrument daemon build",
+                        ),
+                    )
+                }
+            }
+        }
+        // Removes only an effect tenant. Slot and bus/routing bookkeeping stay allocated.
+        "UnloadPlugin" => {
+            if params.get("role").and_then(Value::as_str) != Some("effect")
+                || params.get("instance").is_some()
+            {
+                return err(
+                    &id,
+                    ProtocolError::new(
+                        "MALFORMED_REQUEST",
+                        "UnloadPlugin supports role='effect' in v1",
+                    ),
+                );
+            }
+            let bus = match parse_bus_param(&params) {
+                Ok(bus) => bus,
+                Err(message) => return err(&id, ProtocolError::new("MALFORMED_REQUEST", message)),
+            };
+            #[cfg(feature = "outproc-effect")]
             {
                 let engine = engine.clone();
-                match tokio::task::spawn_blocking(move || {
-                    engine.replace_outproc_instrument_plugin(path, plugin_id, instance, state_path)
-                })
-                .await
+                match tokio::task::spawn_blocking(move || engine.unload_outproc_effect_plugin(bus))
+                    .await
                 {
-                    Ok(Ok(info)) => replaced_plugin_ok(&id, info),
+                    Ok(Ok(status)) => ok(
+                        &id,
+                        json!({
+                            "status": match status {
+                                crate::engine_wrap::UnloadedPluginStatus::Unloaded => "unloaded",
+                                crate::engine_wrap::UnloadedPluginStatus::Noop => "noop",
+                            }
+                        }),
+                    ),
                     Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
                     Err(join_error) => err(
                         &id,
@@ -1637,14 +1750,14 @@ async fn handle_command(
                     ),
                 }
             }
-            #[cfg(not(feature = "outproc-instrument"))]
+            #[cfg(not(feature = "outproc-effect"))]
             {
-                let _ = (engine, path, plugin_id, instance, state_path);
+                let _ = (engine, bus);
                 err(
                     &id,
                     ProtocolError::new(
-                        "OUTPROC_INSTRUMENT_UNAVAILABLE",
-                        "ReplacePlugin requires an outproc-instrument daemon build",
+                        "OUTPROC_EFFECT_UNAVAILABLE",
+                        "UnloadPlugin requires an outproc-effect daemon build",
                     ),
                 )
             }
@@ -2181,7 +2294,7 @@ fn ok(id: &str, result: Value) -> Value {
     .expect("OkResponse must be serializable")
 }
 
-#[cfg(feature = "outproc-instrument")]
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 fn replaced_plugin_ok(id: &str, info: crate::engine_wrap::ReplacedPluginSummary) -> Value {
     ok(
         id,
@@ -2291,11 +2404,50 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn replace_plugin_explicitly_rejects_every_non_instrument_role() {
+    async fn replace_plugin_accepts_effect_role_and_rejects_missing_or_unknown_role() {
         let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
             .expect("stub backend starts");
         let (tx, _rx) = mpsc::channel(1);
-        for (case, role) in [("effect", Some("effect")), ("missing", None)] {
+
+        let effect_response = handle_command(
+            Command {
+                id: "replace-effect".into(),
+                method: "ReplacePlugin".into(),
+                params: json!({
+                    "path": "/plugins/new.clap",
+                    "role": "effect",
+                    "bus": "seq-bus-0"
+                }),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+        assert_eq!(
+            effect_response["error"]["code"],
+            "OUTPROC_EFFECT_UNAVAILABLE"
+        );
+
+        let effect_instance_response = handle_command(
+            Command {
+                id: "replace-effect-instance".into(),
+                method: "ReplacePlugin".into(),
+                params: json!({
+                    "path": "/plugins/new.clap",
+                    "role": "effect",
+                    "instance": "plugin:lead"
+                }),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+        assert_eq!(
+            effect_instance_response["error"]["message"],
+            "ReplacePlugin instance is only valid for role='instrument'"
+        );
+
+        for (case, role) in [("missing", None), ("unknown", Some("unknown"))] {
             let mut params = json!({"path": "/plugins/new.clap"});
             if let Some(role) = role {
                 params["role"] = json!(role);
@@ -2313,7 +2465,41 @@ mod tests {
             assert_eq!(response["error"]["code"], "MALFORMED_REQUEST");
             assert_eq!(
                 response["error"]["message"],
-                "ReplacePlugin requires role='instrument'"
+                "ReplacePlugin requires role='effect' or role='instrument'"
+            );
+        }
+
+        let unload_effect = handle_command(
+            Command {
+                id: "unload-effect".into(),
+                method: "UnloadPlugin".into(),
+                params: json!({"role": "effect", "bus": "seq-bus-0"}),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+        assert_eq!(unload_effect["error"]["code"], "OUTPROC_EFFECT_UNAVAILABLE");
+
+        for (case, role) in [("missing", None), ("instrument", Some("instrument"))] {
+            let mut params = json!({});
+            if let Some(role) = role {
+                params["role"] = json!(role);
+            }
+            let response = handle_command(
+                Command {
+                    id: format!("unload-{case}"),
+                    method: "UnloadPlugin".into(),
+                    params,
+                },
+                &engine,
+                &tx,
+            )
+            .await;
+            assert_eq!(response["error"]["code"], "MALFORMED_REQUEST");
+            assert_eq!(
+                response["error"]["message"],
+                "UnloadPlugin supports role='effect' in v1"
             );
         }
     }

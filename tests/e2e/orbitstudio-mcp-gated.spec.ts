@@ -2516,4 +2516,508 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     },
     TEST_TIMEOUT_MS * 2,
   )
+
+  it.skipIf(!appAvailable)(
+    'replaces and removes playing effects with audio, state, process, failure, routing, and master oracles (#625 R-E1-R-E7)',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      expect(
+        workAudioDir,
+        'main gated phase must initialize the audio fixture directory',
+      ).toBeDefined()
+      if (!client || !tmpRoot || !workAudioDir) {
+        throw new Error('main gated phase did not initialize suite state')
+      }
+      const activeClient = client
+      const root = tmpRoot
+      const audioDir = workAudioDir
+      const catalog = requireCatalogFixtures()
+      const capturePath = path.join(root, 'effect-replace-remove-r-e1-r-e7.wav')
+      const projectFile = path.join(root, 'project.yaml')
+      const aIdentity = `fx625/effect/${catalog.clapEffectName}/0`
+      const aStateRelativePath = 'states/e2e-effect-gain-025.state'
+      const aStatePath = path.resolve(root, aStateRelativePath)
+      // 🔴 B にも **非 unity** の gain を登録する。B を unity(1.0) のままにすると、
+      // 「B が正しく透過している」と「B がロードされたが一度も適用されていない」が
+      // **数値として区別できない**（実測: unity B の RMS は bus-active dry と 10 桁一致した）。
+      // 後者は engaged の配線切断そのもので、変異検証で潰した欠陥と同じ症状。
+      // A=0.25 / B=0.5 / dry=1.0 にすると 3 状態が相互に区別できる。
+      const bIdentity = `fx625/effect/${catalog.vst3EffectName}/0`
+      const bStateRelativePath = 'states/e2e-effect-gain-050.state'
+      const bStatePath = path.resolve(root, bStateRelativePath)
+
+      // A's state contract is shared by the CLAP/VST3 gain oracles: ORE1 + f64 LE.
+      // Register it before the first declaration so R-E1 starts at gain 0.25.
+      fs.mkdirSync(path.dirname(aStatePath), { recursive: true })
+      const aState = Buffer.alloc(12)
+      aState.writeUInt32LE(0x4f52_4531, 0)
+      aState.writeDoubleLE(0.25, 4)
+      fs.writeFileSync(aStatePath, aState)
+      const bState = Buffer.alloc(12)
+      bState.writeUInt32LE(0x4f52_4531, 0)
+      bState.writeDoubleLE(0.5, 4)
+      fs.writeFileSync(bStatePath, bState)
+      const manifest = fs.existsSync(projectFile)
+        ? (parse(fs.readFileSync(projectFile, 'utf8')) as {
+            version?: number
+            states?: Record<string, string>
+          })
+        : { version: 1 }
+      fs.writeFileSync(
+        projectFile,
+        stringify({
+          ...manifest,
+          version: manifest.version ?? 1,
+          states: {
+            ...(manifest.states ?? {}),
+            [aIdentity]: aStateRelativePath,
+            [bIdentity]: bStateRelativePath,
+          },
+        }),
+      )
+
+      const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
+      const start = await activeClient.call('start_engine', { capture_wav: capturePath })
+      expect(start.isError, start.text).toBe(false)
+      await waitForEngine(true, 15_000, '#625 R-E1-R-E7 engine running')
+      await sleep(2500)
+
+      const segments: Record<string, { from: number; to: number }> = {}
+      const captureSegment = async (name: string): Promise<void> => {
+        await sleep(750)
+        segments[name] = { from: Date.now(), to: 0 }
+        await sleep(3000)
+        segments[name]!.to = Date.now()
+      }
+      let stopWall = Date.now()
+      try {
+        // A dry segment with the final sum/aux routing already in place is the
+        // reference for both failed replacement (R-E3) and remove (R-E6).
+        const sourceSetup = await activeClient.call('evaluate_orbitscore', {
+          code: [
+            'var global = init GLOBAL',
+            'global.tempo(120)',
+            'global.beat(4 by 4)',
+            `global.audioPath(${JSON.stringify(audioDir)})`,
+            'global.sum("fx625out")',
+            'global.aux("fx625send")',
+            'global.start()',
+            'var fx625 = init global.seq',
+            'fx625.audio("kick.wav").chop(1)',
+            'fx625.output("fx625out")',
+            'fx625.send("fx625send", 0.2)',
+            'fx625.play(1, 1, 1, 1)',
+            'LOOP(fx625)',
+          ].join('\n'),
+        })
+        expect(sourceSetup.isError, sourceSetup.text).toBe(false)
+        await captureSegment('dryBaseline')
+
+        // R-E1: A is the catalog-resolved CLAP effect restored at gain 0.25.
+        const beforeA = (await activeClient.call('get_log', { lines: 500 })).text
+        const declareA = await activeClient.call('evaluate_orbitscore', {
+          code: `fx625.effect(${JSON.stringify(catalog.clapEffectName)})`,
+        })
+        expect(declareA.isError, declareA.text).toBe(false)
+        await waitUntil(() => Promise.resolve(pluginChildPids(catalog.clapEffectPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#625 R-E1 CLAP effect child started',
+        })
+        const aChildPids = pluginChildPids(catalog.clapEffectPath)
+        expect(
+          aChildPids.length,
+          'R-E1 must observe the old CLAP effect child PID',
+        ).toBeGreaterThan(0)
+        const afterA = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterA),
+          `R-E1 declaration must add no ERROR lines. Log tail: ${afterA.slice(-1200)}`,
+        ).toBe(countErrors(beforeA))
+        await captureSegment('a')
+
+        // R-E2: replace A with catalog-resolved B while LOOP is producing audio.
+        const errorsBeforeB = countErrors((await activeClient.call('get_log', { lines: 500 })).text)
+        const declareB = await activeClient.call('evaluate_orbitscore', {
+          code: `fx625.effect(${JSON.stringify(catalog.vst3EffectName)})`,
+        })
+        expect(declareB.isError, declareB.text).toBe(false)
+        await waitUntil(() => Promise.resolve(pluginChildPids(catalog.vst3EffectPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#625 R-E2 VST3 effect child started',
+        })
+        await waitUntil(() => Promise.resolve(aChildPids.every((pid) => !processExists(pid))), {
+          intervalMs: 200,
+          timeoutMs: 10_000,
+          label: '#625 R-E2 old CLAP effect child disappeared',
+        })
+        const bChildPids = pluginChildPids(catalog.vst3EffectPath)
+        expect(
+          bChildPids.length,
+          'R-E2 must observe the new VST3 effect child PID',
+        ).toBeGreaterThan(0)
+        const afterB = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterB),
+          `R-E2 replacement must add no ERROR lines. Log tail: ${afterB.slice(-1200)}`,
+        ).toBe(errorsBeforeB)
+        // 🔴 child PID が出ただけでは「新テナントが state 込みで立ち上がった」ことにならない。
+        // 実測では PID 出現直後に測ると窓が遷移期間を拾い、B が 0.5x ではなく 0.6x に見えた
+        // （同じ機構で測った recoveredB は 0.5000x ちょうどだった）。盲目的に sleep を伸ばす
+        // のではなく、**B の state 復元ログという本物の信号**を待ってから測る。
+        const bRestoreMarker = `[plugin-state] restoring '${bIdentity}'`
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return log.includes(bRestoreMarker)
+          },
+          { intervalMs: 200, timeoutMs: 15_000, label: '#625 R-E2 B state restored' },
+        )
+        // 🔴 以前の「b 区間に余剰音が混入する」という仮説は実測で反証された。真因は壁時計と
+        // 録音タイムラインの境界スキューによる次区間の混入で、後段の `SEGMENT_GUARD_SEC` が
+        // 汚染された端の窓を除外する。この待ちは定常状態の区間幅を確保するために残す。
+        await sleep(2500)
+        await captureSegment('b')
+
+        // R-E3 is the sole path-direct plugin declaration in this scenario.
+        // A nonexistent catalog name would be rejected by TS resolution first;
+        // this path must reach the daemon's replacement failure/forget-to-dry path.
+        const beforeFailureLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const errorsBeforeFailure = countErrors(beforeFailureLog)
+        const failedReplace = await activeClient.call('evaluate_orbitscore', {
+          code: 'fx625.effect("/definitely/nonexistent/Issue625.vst3")',
+        })
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return countErrors(log) > errorsBeforeFailure
+          },
+          { intervalMs: 200, timeoutMs: 15_000, label: '#625 R-E3 failure surfaced in log' },
+        )
+        await waitUntil(() => Promise.resolve(bChildPids.every((pid) => !processExists(pid))), {
+          intervalMs: 200,
+          timeoutMs: 10_000,
+          label: '#625 R-E3 previous VST3 effect child disappeared',
+        })
+        const afterFailureLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterFailureLog),
+          `R-E3 must add an ERROR line even when evaluate_orbitscore reports ${failedReplace.isError ? 'error' : 'ok'}: ${afterFailureLog.slice(-1200)}`,
+        ).toBeGreaterThan(errorsBeforeFailure)
+        expect(pluginChildPids(catalog.clapEffectPath)).toEqual([])
+        expect(pluginChildPids(catalog.vst3EffectPath)).toEqual([])
+        await captureSegment('failedDry')
+
+        // R-E4: no restart or other repair action — redeclaring B alone recovers.
+        const errorsBeforeRecovery = countErrors(
+          (await activeClient.call('get_log', { lines: 500 })).text,
+        )
+        const recoverB = await activeClient.call('evaluate_orbitscore', {
+          code: `fx625.effect(${JSON.stringify(catalog.vst3EffectName)})`,
+        })
+        expect(recoverB.isError, recoverB.text).toBe(false)
+        await waitUntil(() => Promise.resolve(pluginChildPids(catalog.vst3EffectPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#625 R-E4 VST3 effect child recovered',
+        })
+        const recoveredBChildPids = pluginChildPids(catalog.vst3EffectPath)
+        const afterRecovery = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterRecovery),
+          `R-E4 recovery must add no ERROR lines. Log tail: ${afterRecovery.slice(-1200)}`,
+        ).toBe(errorsBeforeRecovery)
+        await captureSegment('recoveredB')
+
+        // R-E5: swapping back to A must use the sequence receiver identity and
+        // restore its saved 0.25 state, not instantiate A at its default gain.
+        const beforeSwapBackLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const errorsBeforeSwapBack = countErrors(beforeSwapBackLog)
+        const restoreMarker = `[plugin-state] restoring '${aIdentity}'`
+        const restoreMarkersBefore = beforeSwapBackLog.split(restoreMarker).length - 1
+        const swapBackA = await activeClient.call('evaluate_orbitscore', {
+          code: `fx625.effect(${JSON.stringify(catalog.clapEffectName)})`,
+        })
+        expect(swapBackA.isError, swapBackA.text).toBe(false)
+        await waitUntil(() => Promise.resolve(pluginChildPids(catalog.clapEffectPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#625 R-E5 CLAP effect child restored',
+        })
+        await waitUntil(
+          () => Promise.resolve(recoveredBChildPids.every((pid) => !processExists(pid))),
+          {
+            intervalMs: 200,
+            timeoutMs: 10_000,
+            label: '#625 R-E5 previous VST3 effect child disappeared',
+          },
+        )
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return log.split(restoreMarker).length - 1 > restoreMarkersBefore
+          },
+          { intervalMs: 200, timeoutMs: 15_000, label: '#625 R-E5 old state restore log' },
+        )
+        const afterSwapBackLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterSwapBackLog),
+          `R-E5 swap-back must add no ERROR lines. Log tail: ${afterSwapBackLog.slice(-1200)}`,
+        ).toBe(errorsBeforeSwapBack)
+        const savedManifest = parse(fs.readFileSync(projectFile, 'utf8')) as {
+          states: Record<string, string>
+        }
+        expect(savedManifest.states[aIdentity]).toBeDefined()
+        expect(fs.existsSync(path.resolve(root, savedManifest.states[aIdentity]!))).toBe(true)
+        const restoredAChildPids = pluginChildPids(catalog.clapEffectPath)
+        await captureSegment('restoredA')
+
+        // R-E6: remove A, then re-evaluate both routing declarations. Their
+        // ERROR count stays flat and the unchanged LOOP becomes dry again.
+        const errorsBeforeRemove = countErrors(
+          (await activeClient.call('get_log', { lines: 500 })).text,
+        )
+        const removeA = await activeClient.call('evaluate_orbitscore', {
+          code: `fx625.remove(${JSON.stringify(catalog.clapEffectName)})`,
+        })
+        expect(removeA.isError, removeA.text).toBe(false)
+        await waitUntil(
+          () => Promise.resolve(restoredAChildPids.every((pid) => !processExists(pid))),
+          {
+            intervalMs: 200,
+            timeoutMs: 10_000,
+            label: '#625 R-E6 removed CLAP effect child disappeared',
+          },
+        )
+        const routingAfterRemove = await activeClient.call('evaluate_orbitscore', {
+          code: ['fx625.output("fx625out")', 'fx625.send("fx625send", 0.2)'].join('\n'),
+        })
+        expect(routingAfterRemove.isError, routingAfterRemove.text).toBe(false)
+        const afterRemoveLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterRemoveLog),
+          `R-E6 remove/routing must add no ERROR lines. Log tail: ${afterRemoveLog.slice(-1200)}`,
+        ).toBe(errorsBeforeRemove)
+        await captureSegment('removedDry')
+
+        // R-E7: the master slot uses the same catalog-only declaration surface,
+        // but has distinct daemon bus semantics. Its minimum real-device oracle
+        // is a clean A→B child-process handoff.
+        const errorsBeforeMaster = countErrors(
+          (await activeClient.call('get_log', { lines: 500 })).text,
+        )
+        const masterA = await activeClient.call('evaluate_orbitscore', {
+          code: `global.effect(${JSON.stringify(catalog.clapEffectName)})`,
+        })
+        expect(masterA.isError, masterA.text).toBe(false)
+        await waitUntil(() => Promise.resolve(pluginChildPids(catalog.clapEffectPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#625 R-E7 master CLAP effect child started',
+        })
+        const masterAChildPids = pluginChildPids(catalog.clapEffectPath)
+        const masterB = await activeClient.call('evaluate_orbitscore', {
+          code: `global.effect(${JSON.stringify(catalog.vst3EffectName)})`,
+        })
+        expect(masterB.isError, masterB.text).toBe(false)
+        await waitUntil(() => Promise.resolve(pluginChildPids(catalog.vst3EffectPath).length > 0), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#625 R-E7 master VST3 effect child started',
+        })
+        await waitUntil(
+          () => Promise.resolve(masterAChildPids.every((pid) => !processExists(pid))),
+          {
+            intervalMs: 200,
+            timeoutMs: 10_000,
+            label: '#625 R-E7 old master CLAP effect child disappeared',
+          },
+        )
+        const afterMasterLog = (await activeClient.call('get_log', { lines: 500 })).text
+        expect(
+          countErrors(afterMasterLog),
+          `R-E7 master replacement must add no ERROR lines. Log tail: ${afterMasterLog.slice(-1200)}`,
+        ).toBe(errorsBeforeMaster)
+      } finally {
+        await activeClient.call('evaluate_orbitscore', {
+          code: 'fx625.stop()\nglobal.stop()',
+        })
+        const stopped = await activeClient.call('stop_engine')
+        expect(stopped.isError, stopped.text).toBe(false)
+        stopWall = Date.now()
+        await waitForEngine(false, 15_000, '#625 R-E1-R-E7 engine stopped')
+        await sleep(1500)
+      }
+
+      const capture = fs.readFileSync(capturePath)
+      const analysis = analyzeWavBuffer(capture, { windowMs: 100 })
+      // 🔴 区間の両端に 400ms のガードを入れる。壁時計と録音タイムラインの間にはスキューが
+      // あり、**次の操作の効果が窓の末尾に食い込む**。実測: b 区間の最後の 1 窓だけが
+      // 0.232（= dry の打点レベル 0.115/0.5）を拾い、それだけで区間 RMS が 1.5 倍に見えた
+      // （他の 5 窓は recoveredB と同じ 0.115 で、機構は正しく効いていた）。
+      // ガードは「遷移ではなく定常状態を測る」ためのもので、主張そのものは緩めていない。
+      const SEGMENT_GUARD_SEC = 0.4
+      const audioRange = (segment: { from: number; to: number }) => ({
+        fromSec: Math.max(
+          0,
+          analysis.durationSec - (stopWall - segment.from) / 1000 + SEGMENT_GUARD_SEC,
+        ),
+        toSec: Math.min(
+          analysis.durationSec,
+          analysis.durationSec - (stopWall - segment.to) / 1000 - SEGMENT_GUARD_SEC,
+        ),
+      })
+      const segmentRms = (name: string): number => {
+        const segment = segments[name]
+        expect(segment, `${name} capture segment must exist`).toBeDefined()
+        const range = audioRange(segment!)
+        const windows = (analysis.windows ?? []).filter(
+          (window) => window.startSec >= range.fromSec && window.startSec < range.toSec,
+        )
+        expect(windows.length, `${name} capture segment must contain RMS windows`).toBeGreaterThan(
+          0,
+        )
+        return Math.sqrt(
+          windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
+        )
+      }
+      const relativeDelta = (actual: number, expected: number): number =>
+        Math.abs(actual - expected) / expected
+
+      const dryRms = segmentRms('dryBaseline')
+      const aRms = segmentRms('a')
+      const bRms = segmentRms('b')
+      const failedDryRms = segmentRms('failedDry')
+      const recoveredBRms = segmentRms('recoveredB')
+      const restoredARms = segmentRms('restoredA')
+      const removedDryRms = segmentRms('removedDry')
+      // 🔴 全区間の実測値を先に出す。1 つの assert で止まると残りの区間が見えず、
+      // 高価な実機実行を払い直すことになる（#625 実測で実際に起きた）。
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#625 R-E1-R-E7] segment RMS: ' +
+          JSON.stringify(
+            {
+              dryBaseline: dryRms,
+              a: aRms,
+              b: bRms,
+              failedDry: failedDryRms,
+              recoveredB: recoveredBRms,
+              restoredA: restoredARms,
+              removedDry: removedDryRms,
+              'b/a': bRms / aRms,
+              'b/dry': bRms / dryRms,
+              'a/dry': aRms / dryRms,
+              'failedDry/dry': failedDryRms / dryRms,
+              'removedDry/dry': removedDryRms / dryRms,
+            },
+            null,
+            0,
+          ),
+      )
+      // 🔴 窓ごとの生系列。区間 RMS が 1.5 倍でも、(a) 全窓が一様に高い＝定常的な増幅 と
+      // (b) 一部の窓だけ dry(1.0x) で残りが 0.5x ＝混在 は同じ集計値になる。原因の探索先が
+      // まったく違うので、集計だけで判断しない。
+      const segmentWindows = (segment: { from: number; to: number }): string => {
+        const range = audioRange(segment)
+        return (analysis.windows ?? [])
+          .filter((w) => w.startSec >= range.fromSec && w.startSec < range.toSec)
+          .map((w) => w.rms.toFixed(3))
+          .join(',')
+      }
+      // eslint-disable-next-line no-console
+      console.log('[#625 R-E1-R-E7] b windows: ' + segmentWindows(segments.b!))
+      // eslint-disable-next-line no-console
+      console.log('[#625 R-E1-R-E7] recoveredB windows: ' + segmentWindows(segments.recoveredB!))
+
+      // 🔴 決着させる観測: 区間ごとの onset 数。b が 9/3s なら「余剰イベント」、
+      // 6/3s のままなら「1 発あたりのエネルギー増」で、原因の探索先が変わる。
+      const segmentOnsets = (segment: { from: number; to: number }): number => {
+        const range = audioRange(segment)
+        return (analysis.onsets ?? []).filter((t) => t >= range.fromSec && t < range.toSec).length
+      }
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#625 R-E1-R-E7] segment onsets/3s: ' +
+          JSON.stringify({
+            dryBaseline: segmentOnsets(segments.dryBaseline!),
+            a: segmentOnsets(segments.a!),
+            b: segmentOnsets(segments.b!),
+            failedDry: segmentOnsets(segments.failedDry!),
+            recoveredB: segmentOnsets(segments.recoveredB!),
+            restoredA: segmentOnsets(segments.restoredA!),
+            removedDry: segmentOnsets(segments.removedDry!),
+          }),
+      )
+      // 🔴 比較の基準は **bus がアクティブな dry**（= failedDry / removedDry）であって、
+      // `dryBaseline` ではない。
+      //
+      // ⚠️ かつてここには「MX.4 の経路変化で √1.5 の差が出る」と書いていたが**それは誤り**
+      // だった。実測を完全グラフモデルと突き合わせると、busDry は
+      // `kick.wav の RMS 0.1230601 × 等パワーパン(1/√2) × (sum 1.0 + send 0.2) = 0.1044211`
+      // と **6 桁一致**する（実測 0.1044200）。つまり busDry の方が理論値どおりで、
+      // `dryBaseline` が低いのは **3 秒窓の先頭 1 秒が LOOP 開始レイテンシで無音**なため
+      // （エネルギーがきっかり 2/3 = 振幅 √(2/3)）。経路の違いではない。
+      // dryBaseline の待ちを 1 バー分足せば busDry と一致するはずである。
+      const busDryRms = failedDryRms
+      const withinTolerance = 0.15
+
+      // dryBaseline が主張できるのは「宣言前から音が流れている」ことだけ。
+      expect(dryRms, 'dry baseline must be audibly non-silent').toBeGreaterThan(0.01)
+      expect(
+        relativeDelta(removedDryRms, busDryRms),
+        `bus-active dry must be reproducible (failedDry=${failedDryRms}, removedDry=${removedDryRms})`,
+      ).toBeLessThanOrEqual(withinTolerance)
+
+      // R-E1 / R-E2: gain は bus-active dry に対して素直に乗る（A=0.25 / B=0.5）。
+      expect(aRms, 'R-E1 gain-0.25 A must remain audibly non-silent').toBeGreaterThan(0.002)
+      expect(
+        relativeDelta(aRms / busDryRms, 0.25),
+        `R-E1 A must attenuate to 0.25x of bus-active dry (A=${aRms}, busDry=${busDryRms})`,
+      ).toBeLessThanOrEqual(withinTolerance)
+      expect(
+        relativeDelta(bRms / busDryRms, 0.5),
+        `R-E2 B must attenuate to 0.5x of bus-active dry (B=${bRms}, busDry=${busDryRms})`,
+      ).toBeLessThanOrEqual(withinTolerance)
+      expect(
+        relativeDelta(bRms / aRms, 2),
+        `R-E2 B/A RMS ratio must be about 2x (A=${aRms}, B=${bRms})`,
+      ).toBeLessThanOrEqual(withinTolerance)
+
+      // 🔴 R-E3: 失敗後は **dry** であって A でも B でもないこと。B を非 unity にしてあるので
+      // 「dry と B が数値で区別できる」— unity B のままだと、この主張は原理的に立たない
+      // （「透過している」と「一度も適用されていない」が同じ数値になるため）。
+      expect(failedDryRms, 'R-E3 failure must not stop the audio').toBeGreaterThan(0.01)
+      expect(
+        relativeDelta(failedDryRms, bRms),
+        `R-E3 failed replacement must NOT still sound like B (failedDry=${failedDryRms}, B=${bRms})`,
+      ).toBeGreaterThan(withinTolerance)
+      expect(
+        relativeDelta(failedDryRms, aRms),
+        `R-E3 failed replacement must NOT sound like A either (failedDry=${failedDryRms}, A=${aRms})`,
+      ).toBeGreaterThan(withinTolerance)
+
+      // R-E4 / R-E5: 再宣言だけで B へ戻り、swap-back で保存済みの A の音色が戻る。
+      expect(
+        relativeDelta(recoveredBRms, bRms),
+        `R-E4 recovered B RMS ${recoveredBRms} must match original B ${bRms}`,
+      ).toBeLessThanOrEqual(withinTolerance)
+      expect(
+        relativeDelta(restoredARms, aRms),
+        `R-E5 restored A RMS ${restoredARms} must match original A ${aRms}`,
+      ).toBeLessThanOrEqual(withinTolerance)
+
+      // R-E6: remove 後は bus-active dry へ戻り、routing は生きたまま音が流れ続ける。
+      expect(
+        relativeDelta(removedDryRms, bRms),
+        `R-E6 removed effect must NOT still sound like B (removedDry=${removedDryRms}, B=${bRms})`,
+      ).toBeGreaterThan(withinTolerance)
+      expect(removedDryRms, 'R-E6 routing must keep audio flowing after remove').toBeGreaterThan(
+        0.01,
+      )
+    },
+    TEST_TIMEOUT_MS * 2,
+  )
 })

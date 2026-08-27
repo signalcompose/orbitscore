@@ -1,20 +1,32 @@
 import path from 'node:path'
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
+import { ProjectStateStore } from '../../packages/engine/src/core/project-state-store'
+
+const REPLACE_RESULT = {
+  pluginId: 'replacement-id',
+  pluginName: 'Replacement',
+  notePortIndex: 0,
+  quarantinedSlot: false,
+}
 
 function makeGlobal(loadPlugin = vi.fn().mockResolvedValue({})) {
+  const replacePlugin = vi.fn().mockResolvedValue(REPLACE_RESULT)
   const engine = {
     loadPlugin,
+    replacePlugin,
     boot: vi.fn(),
     quit: vi.fn(),
     isRunning: true,
   } as any
   const global = new Global(engine)
   global.setDocumentDirectory('/songs/session')
-  return { global, loadPlugin }
+  return { global, loadPlugin, replacePlugin }
 }
+
+afterEach(() => vi.restoreAllMocks())
 
 describe('Global.effect()', () => {
   it.each(['synth.component'])('rejects reserved format %s', async (spec) => {
@@ -72,20 +84,36 @@ describe('Global.effect()', () => {
     expect(loadPlugin).toHaveBeenCalledTimes(1)
   })
 
-  it('rejects a second, different effect declaration', async () => {
-    const { global, loadPlugin } = makeGlobal()
+  it('replaces a second effect with a different path without issuing another load', async () => {
+    vi.spyOn(ProjectStateStore.prototype, 'save').mockResolvedValue({} as any)
+    const { global, loadPlugin, replacePlugin } = makeGlobal()
     await global.effect('echo.clap')
-    await expect(global.effect('reverb.clap')).rejects.toThrow('one master insert in v1')
+
+    await expect(global.effect('reverb.clap')).resolves.toBe(global)
+
     expect(loadPlugin).toHaveBeenCalledTimes(1)
+    expect(replacePlugin).toHaveBeenCalledTimes(1)
+    expect(replacePlugin).toHaveBeenCalledWith(
+      path.resolve('/songs/session', 'reverb.clap'),
+      undefined,
+      'effect',
+    )
   })
 
-  it('rejects the same path with a different plugin id', async () => {
-    const { global, loadPlugin } = makeGlobal()
+  it('replaces the same path with a different plugin id without issuing another load', async () => {
+    vi.spyOn(ProjectStateStore.prototype, 'save').mockResolvedValue({} as any)
+    const { global, loadPlugin, replacePlugin } = makeGlobal()
     await global.effect('bundle.clap', 'first-id')
-    await expect(global.effect('bundle.clap', 'second-id')).rejects.toThrow(
-      'one master insert in v1',
-    )
+
+    await expect(global.effect('bundle.clap', 'second-id')).resolves.toBe(global)
+
     expect(loadPlugin).toHaveBeenCalledTimes(1)
+    expect(replacePlugin).toHaveBeenCalledTimes(1)
+    expect(replacePlugin).toHaveBeenCalledWith(
+      path.resolve('/songs/session', 'bundle.clap'),
+      'second-id',
+      'effect',
+    )
   })
 
   it('rejects a backend without plugin hosting support', async () => {

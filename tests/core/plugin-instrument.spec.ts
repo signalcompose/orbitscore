@@ -6,7 +6,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DaemonProtocolError } from '../../packages/engine/src/audio/rust-engine/errors'
 import { Global } from '../../packages/engine/src/core/global'
-import { EffectSlotLimitError } from '../../packages/engine/src/core/global/effect-slot'
 import { ProjectStateStore } from '../../packages/engine/src/core/project-state-store'
 
 const REPLACE_RESULT = {
@@ -557,22 +556,53 @@ describe('PluginInstrumentManager', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("Sequence 'kick'"))
   })
 
-  it('T11 keeps replacement disabled for master, sequence, and mixer effect managers', async () => {
+  it('T11 issues replacement for master, sequence, sum and aux effect managers', async () => {
+    mockStateSave()
     const { global, replacePlugin } = makeGlobal()
     await global.effect('master-a.clap')
-    await expect(global.effect('master-b.clap')).rejects.toBeInstanceOf(EffectSlotLimitError)
-
     await global.sequenceEffect('kick', 'sequence-a.clap')
-    await expect(global.sequenceEffect('kick', 'sequence-b.clap')).rejects.toBeInstanceOf(
-      EffectSlotLimitError,
-    )
-
     await global.sum('drums').effect('mixer-a.clap')
-    await expect(global.sum('drums').effect('mixer-b.clap')).rejects.toBeInstanceOf(
-      EffectSlotLimitError,
-    )
+    await global.aux('verb').effect('aux-a.clap')
 
-    expect(replacePlugin).toHaveBeenCalledTimes(0)
+    await expect(global.effect('master-b.clap')).resolves.toBe(global)
+    await expect(global.sequenceEffect('kick', 'sequence-b.clap')).resolves.toBe('seq-bus-0')
+    await expect(global.sum('drums').effect('mixer-b.clap')).resolves.toMatchObject({
+      kind: 'sum',
+      bus: 'sum-bus-0',
+    })
+    await expect(global.aux('verb').effect('aux-b.clap')).resolves.toMatchObject({
+      kind: 'aux',
+      bus: 'aux-bus-0',
+    })
+
+    expect(replacePlugin).toHaveBeenCalledTimes(4)
+    expect(replacePlugin).toHaveBeenNthCalledWith(
+      1,
+      path.resolve('/songs/session', 'master-b.clap'),
+      undefined,
+      'effect',
+    )
+    expect(replacePlugin).toHaveBeenNthCalledWith(
+      2,
+      path.resolve('/songs/session', 'sequence-b.clap'),
+      undefined,
+      'effect',
+      'seq-bus-0',
+    )
+    expect(replacePlugin).toHaveBeenNthCalledWith(
+      3,
+      path.resolve('/songs/session', 'mixer-b.clap'),
+      undefined,
+      'effect',
+      'sum-bus-0',
+    )
+    expect(replacePlugin).toHaveBeenNthCalledWith(
+      4,
+      path.resolve('/songs/session', 'aux-b.clap'),
+      undefined,
+      'effect',
+      'aux-bus-0',
+    )
   })
 
   it('rejects LinkAudio in both declaration orders', async () => {
