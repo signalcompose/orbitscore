@@ -17,6 +17,64 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.380 design: ラックチェーンの実装設計（#628・Fable 起案 / main チェック）(Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #628 / #522
+**Status**: 設計完了・**owner 確認 3 件が Stage 0 のゲート**
+
+`docs/design/628-rack-chain-implementation-design.md`（880 行・失敗モード ↔ テスト 1:1 対応表 49 件）。
+
+#### 🔴 機構を変えると、副産物として dry 窓が消える
+
+#625 の「差し替え中は dry 素通し」は、**1 child = 1 プラグイン = プラグイン交換がプロセス交換**
+だから存在した。rack child（1 child が N プラグイン）では**プロセスが生き残る**ので、
+編集経路の失敗モデルは **(ii) in-place 型から (i) prepare-commit 型へ昇格**し、**窓自体が消える**。
+失敗しても旧チェーンが無傷で鳴り続ける。E2E oracle も「編集で child PID 不変」
+「失敗注入で RMS が編集前のまま」という強い形になる。
+
+#### main のブリーフ指示が却下された（正当な理由つき）
+
+main は「`LoadPlugin`/`ReplacePlugin`/`UnloadPlugin` を index 単位へ一般化」と指示したが、
+Fable は per-index の逐次コマンド列を却下し **1 評価 = 1 `ApplyEffectChain`（keep/load/drop の
+plan を運ぶ）** にした。理由: **逐次列は途中失敗で「半分だけ編集されたチェーン」を確定させ**、
+index シフトの暗黙規約も生む。#625 で失敗モデルの複雑さに苦しんだ直後なので妥当と判断した。
+
+#### #626 の扱いが「受容」から「条件付き受容」へ
+
+1 child が N プラグインを持つと 1 つ落ちればチェーン全体が落ちる。これを受容するが、
+**受容できるのは「同じ行の再評価 = 必ず復旧」を保証する場合のみ**と条件付けた。実体は 2 点:
+(a) TS は**空 diff でも必ず** ApplyEffectChain を発行する（短絡すると復旧が TS 層で潰れる）、
+(b) daemon は Active slot の child 健全性を検分し、抜け殻なら同一コマンド内で rebuild へ倒す。
+
+**結果として #626 の effect 側は本設計が解消する**（完了条件 10）。instrument 側は issue に残る。
+
+#### 段階は大きく取り、完了条件で締めた
+
+owner 方針「保守的にならずに一気に実装が進むように。PR ごとにレビューの時間がかかるので」を
+受け、**Stage 1 = 直列ラック一式を 1 PR**（shm + rack child + daemon + wire + parser + 診断 +
+E2E + 旧 child 退役）とした。境界は「PDC を要するか」だけ。
+
+代償として **完了条件 12「列挙コマンド一覧（9 本の grep）を実行し、コマンドと件数を PR 本文に
+記録してからレビューを呼ぶ」**を固定。**#629 の列挙漏れ 3 回（うち 1 回はレビュー 5 体を通過し
+CI だけが検出）への直接の対策**である。
+
+#### main が裏を取った実測
+
+- `orbit-plugin-scan` は `orbit-clap-host` と `orbit-vst3-host` を**両方リンクした 1 binary**
+  （両ホスト同居の前例が実在する）
+- `manifest.states[]` の読み書きは `project-state-store.ts` の **2 箇所だけ**（122 / 234 行）
+- 拡張の診断は `diagnostics-analysis.ts` の**正規表現ヒューリスティック**（エンジンパーサと別実装）
+
+#### 🔴 owner 確認 3 件（確認まで当該部分を実装しない）
+
+1. **`effect("B")` を「ラック `[B]` と等価 = 完全な像」とするか**。帰結として
+   `effect([A1,A2])` の後の `effect("B")` は A1,A2 を消す
+2. **`remove()` の撤去方法** — 即削除か、1 サイクルの移行エラーか（推奨は後者）
+3. **`gain` のみのラック**（`[gain(db:-6)]`）を v1 staged エラーにするか
+
+DSL 表面なので、#625 の教訓（spec を根拠に自己完結しない）に従い owner 確認を必須にしている。
+
 ### 6.379 spec: ラック形エフェクトチェーンを SC.10 として制定 (#628) (Aug 27, 2026)
 
 **Date**: 2026-08-27
