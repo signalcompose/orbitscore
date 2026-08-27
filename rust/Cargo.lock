@@ -1077,6 +1077,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbit-effect-rack-child"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "orbit-audio-sandbox",
+ "orbit-child-runtime",
+ "orbit-clap-host",
+ "orbit-std-gain",
+ "orbit-vst3-host",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "orbit-link-audio"
 version = "0.0.1"
 dependencies = [

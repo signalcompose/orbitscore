@@ -275,6 +275,10 @@ pub struct SharedRegion {
     pub evt_ack_seq: ReleaseAcquireSeq,
     /// child -> host: plugin dirty 通知の累積回数。respawn ではリセットしない。
     pub dirty_epoch: MonotoneEpoch,
+    /// child -> host: rack child が現在処理している stage の 0 始まり index。
+    ///
+    /// 既存 field の offset を維持するため、SharedRegion の末尾にだけ追加する。
+    pub active_stage_index: AtomicU32,
 }
 
 /// `cmd_arg` のバイト長。command 固有文字列を収める（state sidecar の絶対パスは macOS の
@@ -306,6 +310,14 @@ pub const CMD_SAVE_STATE: u32 = 1;
 pub const CMD_OPEN_UI: u32 = 2;
 /// コマンド種別: plugin UI の非同期 close handshake を開始する（#474 P3）。
 pub const CMD_CLOSE_UI: u32 = 3;
+/// コマンド種別: 構築済み effect chain を block 境界で適用する（#628）。
+pub const CMD_APPLY_CHAIN: u32 = 4;
+/// コマンド種別: 指定 stage の plugin state を保存する（#628）。
+pub const CMD_SAVE_STATE_AT: u32 = 5;
+/// コマンド種別: 指定 stage の plugin UI を開く（#628）。
+pub const CMD_OPEN_UI_AT: u32 = 6;
+/// コマンド種別: 指定 stage の plugin UI を閉じる（#628）。
+pub const CMD_CLOSE_UI_AT: u32 = 7;
 
 /// イベント種別: 未発行（`evt_seq == 0` と対）。
 pub const EVT_NONE: u32 = 0;

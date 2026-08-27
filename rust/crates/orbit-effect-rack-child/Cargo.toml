@@ -1,0 +1,36 @@
+[package]
+name = "orbit-effect-rack-child"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Out-of-process serial effect rack child hosting CLAP and macOS VST3 stages"
+publish = false
+
+[lib]
+name = "orbit_effect_rack_child"
+path = "src/lib.rs"
+
+[[bin]]
+name = "orbit-effect-rack-child"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# The rack executable is a macOS plugin host. Keeping all three host/runtime dependencies in the
+# same target section prevents the macOS-only orbit-vst3-host crate from entering Linux graphs.
+[target.'cfg(target_os = "macos")'.dependencies]
+orbit-child-runtime = { path = "../orbit-child-runtime" }
+orbit-clap-host = { path = "../orbit-clap-host" }
+orbit-vst3-host = { path = "../orbit-vst3-host" }
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+orbit-std-gain = { path = "../orbit-std-gain" }

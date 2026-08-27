@@ -17,6 +17,93 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.387 feat: 1 つの child が N プラグインを直列に回す (#628 コミット2〜3) (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #628
+**Status**: 完了（実装 = Codex / 検証 = main）
+
+ラック実装の心臓部。**1 bus = 1 child = 1 プラグイン**だった構造を、**1 child が N プラグインを
+直列に回す**形へ変える。これができるとチェーン編集が child の respawn を伴わなくなり、
+#625 の差し替え dry 窓が消える。
+
+**`transport.rs`（`orbit-audio-sandbox`）**:
+
+- `SharedRegion` の**末尾**に `active_stage_index: AtomicU32` を追加（既存 field のオフセット不変）。
+  crash 時に watchdog がこれを読んで「どの stage で落ちたか」を stderr に出せる
+- mailbox 定数 `CMD_APPLY_CHAIN=4` / `CMD_SAVE_STATE_AT=5` / `CMD_OPEN_UI_AT=6` /
+  `CMD_CLOSE_UI_AT=7`。既存 1〜3 は instrument child と共有のため**番号温存**
+
+**新 crate `orbit-effect-rack-child`（2014 行）**:
+
+- CLAP / VST3 の両ホストを 1 binary にリンクし、stage list を直列に走査する。
+  format は **path の拡張子だけ**で判定（manifest に `format` という語を持たせない = CAP.6-1）
+- `standard` stage は **自 exe の隣の `std-plugins/<name>.clap`**（`ORBIT_STD_PLUGIN_DIR` で
+  上書き可）へ解決。実体が CLAP であることは child 内部の知識に閉じる
+- stage list の差し替えは **generation 付き `AtomicPtr` の 1 回 swap**。旧リストは
+  **retire スロット経由で main スレッドが破棄**する（プラグイン破棄を audio 側で走らせない）
+- `CMD_APPLY_CHAIN` は **prepare-commit**: load を全部済ませてから block 境界で 1 回 swap。
+  途中失敗は旧チェーン無傷で abort し、failed index と原因を返す
+- `UiService` を **index → window の多重レジストリ**へ一般化（同一 child 内で複数ウィンドウ）。
+  同 index への再 open は冪等 no-op（`ui()` は楽譜に残り再評価のたびに走るため必須）
+
+🔴 **Linux CI の罠に正面から対処されている**: 3 つのホスト/ランタイム依存をすべて
+`[target.'cfg(target_os = "macos")'.dependencies]` に置き、**macOS 限定の `orbit-vst3-host` が
+Linux の依存グラフに入らない**ようにしてある。#622 と PR #632 で 2 回踏んだクラス。
+
+## 委譲と検証の経緯（記録）
+
+実装は Codex（`--effort xhigh`）に発注した。**Codex は検証の途中で外部から kill され、
+報告を返さないまま消えた。** 変異検証はその手前で止まっていた。
+
+🔴 **私の監視が壊れており、64 分気づかなかった。** companion の自己申告 `status` を見ていたが、
+kill されると `"running"` のまま残る（stale）ため、`until status != running` のループは
+**永久に発火しない**設計だった。owner 指摘を受けて `watch-codex.sh` を作成 —
+**生存signal をログの mtime にし、7 分沈黙で通知**する。memory
+`watch-liveness-not-self-reported-status` に保存。
+
+死因の切り分け: 最後に走っていた `cargo test -p orbit-child-runtime -p orbit-clap-host
+-p orbit-audio-sandbox` を私が回したら **exit 0・数秒**で完了。**ハングではなく外部 kill**
+と確定した（「1 時間応答なし」を即ハングと断定しないこと）。
+
+**成果物は使える状態だったので、検証を main が引き継いだ**（もともと検証は main の担当）。
+
+## 検証（すべて main が sandbox 外で実行）
+
+| 検証 | 結果 |
+|---|---|
+| ワークスペース clippy（`-D warnings`） | exit 0 |
+| ワークスペース全テスト | **699 passed / 0 failed / 36 ignored** |
+| rack child のテスト | 12 passed + `#[ignore]` 3 件（実機 `Gain.clap` 使用）も pass |
+| Linux ターゲット確認 | rack child / sandbox / child-runtime **OK** |
+
+`orbit-clap-host` の Linux クロスだけは `alsa-sys` のビルドで落ちるが、これは
+`orbit-audio-native → cpal → alsa` という**通常の依存**が ALSA ヘッダを要求するためで、
+本 PR とは無関係（Codex は `orbit-clap-host/Cargo.toml` を触っていない）。CI は Linux
+ランナーで見る。
+
+## 変異検証（main 実施・4 種横断・全 RED）
+
+| # | C 行 | 種別 | 変異 | 捕捉したテスト |
+|---|---|---|---|---|
+| M1 | C1 | 順序入替 | stage 走査を逆順 | C1 / C9 / C11 の 3 件 |
+| M2 | C4 | 分岐反転 | `enabled` 判定を反転 | C1 / C2 / C4 / C6 / C11 の 5 件 |
+| M3 | C9 | 呼び出し削除 | `active_stage.store` を削除 | C9 |
+| M4 | C10 | 引数差し替え | `save_state_at` を常に index 0 へ | C10 |
+| M5 | C12 | 引数差し替え | `.clap` を VST3 ホストへ誤配線 | C12 |
+| M6 | C13 | 分岐削除 | `ORBIT_STD_PLUGIN_DIR` の上書きを無視 | C13 |
+
+restore は `cmp` で完全一致を確認し、変異なしで green 復帰も確認。
+**`#[ignore]` の 3 件（C5 / C13 実物 / C14）は実機 `Gain.clap` で pass** — コミット 1 で作った
+標準プラグインが rack の中で実際に動き、**param 名 `db` が DSL 契約どおり引ける**ことの証明。
+
+## レビューへの申し送り
+
+`AudioChain::adopt_at_block_boundary` に **audio スレッドでの `panic!`** がある
+（retire スロットが未回収なら panic）。`apply` 経路は publish 前に必ず `collect_retired()` を
+呼び、`has_pending()` と `pending_stage_drops` の二重ガードがあるので設計上は到達しないが、
+**踏めば child が落ちて音が止まる**。RT パスに panic を置く判断はレビューで問う価値がある。
+
 ### 6.386 feat: 標準プラグイン `Gain` — 同梱 CLAP としての初号 (#628) (Aug 27, 2026)
 
 **Date**: 2026-08-27
