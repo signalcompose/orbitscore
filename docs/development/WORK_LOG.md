@@ -17,6 +17,73 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.376 refactor: /simplify の指摘を方針として一括適用 (#622 / PR #629) (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #622 / PR #629
+**Status**: daemon lib **205 passed / 0 failed / 1 ignored** / clippy `--all-targets` 0 警告 / fmt 通過
+
+owner の指摘「レビューしないでマージして大丈夫ですか？」で手順違反に気づき、`/simplify` を
+規定どおり回した（4 エージェント並行）。**指摘単位のパッチにせず、方針を先に決めて一括適用**した。
+
+#### 🔴 最大の発見（altitude）— 列挙を尽くしていなかった
+
+**`record-respawn-args.sh` に `exec sleep 3600` が残っていた。** 6.375 と同じ罠で、しかも
+孤児が**最大 1 時間**残る形。`slow-child.sh` の**利用者**は列挙したのに、**fixture ディレクトリ
+自体を列挙していなかった**。さらに 6.375 で書いた退行テストは 1 ファイルしか見ておらず、
+**この見落としを検出できない形**だった。
+
+4 つすべてを列挙して分類した:
+
+| fixture | 判定 |
+|---|---|
+| `exit-child.sh`（`exit 1`） | 正しい（即死が役目） |
+| `slow-child.sh` | 6.375 で修正済み |
+| `record-respawn-args.sh`（`sleep 3600`） | 🔴 同じ罠 → 修正 |
+| `variable-lifetime-child.sh`（`sleep 2.2`） | **別クラス** — 触らない |
+
+`variable-lifetime-child.sh` を例外にした根拠: 2.2s が守るのは `FAST_RESPAWN_THRESHOLD`(2s)
+だが、**負荷は寿命を縮めない**（`sleep` は遅延しても短くならない）ので「黙って下回る」形には
+ならず、定数を伸ばせば「生存者が出ない」で**大きな声で落ちる**。
+
+#### 適用した方針
+
+> **fixture の寿命は 2 種類しかない。**「殺されるまで生きる」ものは固定秒数を**書けない形**に
+> する（共有スニペットで親の生死を見る）。「特定の秒数生きる」ものは、その秒数が守る Rust
+> 定数と外れた時に**大きな声で落ちる**ことを確認した上でのみ許す。退行テストは**ディレクトリ
+> 全体を走査**し、後者を明示的な例外リストで管理する — 1 ファイルだけを見る形にしない。
+>
+> **Rust**: 早期終了の「事実」と「理由」は**1 つの操作でしか動かせない形**にする。
+
+- `tests/fixtures/lib/live-until-parent-exits.sh` を新設し、`slow-child.sh` と
+  `record-respawn-args.sh` が読み込む形へ統一（固定秒数を書ける場所を無くした）
+- 退行テストを `no_child_fixture_ends_after_a_fixed_wait` へ作り直し、**走査が 0 件になったら
+  それ自体を失敗**にした（列挙が意味の源なので）
+- `outproc_child_exit::ChildEarlyExit` を新設。公開するのは `arm_for_new_attempt()`（両方倒す）
+  と `record(status)`（理由 → 事実の順）だけで、**片方だけ動かす書き方が表現できない**。
+  置き場所は `outproc_child_exe` / `outproc_respawn_guard` の先例に倣った
+  （「規則を 2 箇所に持つと片方だけ直し忘れる — #548 がその形のバグだった」）
+
+#### レビューで浮かんだ潜在的なズレ
+
+`child_early_exit` は spawn のたびに `false` へ倒されるのに、6.375 で足した理由は**倒されて
+いなかった**。実害は出ていない（理由を読むのはフラグが true の分岐内だけで、理由を
+フラグより先に書いているため）が、**不変条件が暗黙**だった。型に畳んで表現の問題にした。
+
+#### 各エージェントの評価
+
+| 角度 | 結果 |
+|---|---|
+| Reuse | ポイズニング回復を 4 箇所に手書き・既存 `lock_child_slot_recovering` と流儀が違う → 統合で解消 |
+| Simplification | 約 50 行のコピペ → 型統合で解消。`OnceLock` 案は**リセット経路があるため不可**と判明 |
+| Efficiency | **RT から Mutex をロックする経路は無い**（列挙で確認）。false sharing の懸念 → フィールドを struct 末尾へ |
+| Altitude | 上記の見落としを検出 |
+
+#### 変異検証
+
+- `record-respawn-args.sh` を `exec sleep 3600` へ戻す → 新テストが**名指しで** red（旧テストは素通り）
+- 走査対象 0 件のガードは、**実際に main のミス（ディレクトリの取り方）を即座に捕まえた**
+
 ### 6.375 fix: Rust CI flake の原因は fixture の固定寿命だった (#622) (Aug 27, 2026)
 
 **Date**: 2026-08-27

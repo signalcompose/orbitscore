@@ -225,19 +225,6 @@ fn default_child_exe(format: PluginFormat) -> Result<PathBuf, String> {
 pub struct OutProcEffectStats {
     /// 初回 attach の READY 待ち中。watchdog はこの間の child exit を respawn せず fast-fail へ渡す。
     pub initial_attach_pending: AtomicBool,
-    /// 初回 attach 中に child が exit したことを watchdog が publish する。
-    pub child_early_exit: AtomicBool,
-    /// child が initial attach 中に exit した時の **終了理由**（`ExitStatus` の Display）。
-    ///
-    /// `child_early_exit` は「死んだ」ことしか伝えず、**SIGKILL なのか script のエラー終了なのか
-    /// 区別できない**（#622 が「次回発火時に取るべきデータ」として挙げていた欠落）。watchdog は
-    /// 既に `tracing::warn!` へ status を出しているが、**呼び出し元へ返る `WrapError` には
-    /// 乗っていなかった**ので、失敗を受け取った側からは理由が見えなかった。
-    ///
-    /// 🔴 **RT スレッドからは触らないこと。** 書き手は watchdog スレッド、読み手は control
-    /// スレッドのみで、どちらも非 RT である。`Mutex` を置けるのはそのためで、
-    /// audio callback からロックしてはならない。
-    pub child_early_exit_status: Mutex<Option<String>>,
     /// child から fresh な出力を読めた callback 数。
     pub fresh: AtomicU64,
     /// child が間に合わず repeat-previous した callback 数（slot 数決定の主指標の一つ）。
@@ -266,6 +253,12 @@ pub struct OutProcEffectStats {
     /// 現在稼働中の child の PID（start / respawn 時に store）。gated kill-test がこの PID を kill して
     /// daemon の生存 + respawn 復帰を検証する。0 = 未起動。
     pub current_child_pid: AtomicU32,
+    /// 初回 attach 中の child exit（**事実と理由の対**）。詳細は
+    /// [`crate::outproc_child_exit::ChildEarlyExit`]。
+    ///
+    /// 🔴 **struct の末尾に置くこと。** 中身に `Mutex` を含むので、RT が毎コールバック触る
+    /// atomic 群（`fresh` / `callback_count` 等）と同じキャッシュラインに乗せない。
+    pub child_early_exit: crate::outproc_child_exit::ChildEarlyExit,
 }
 
 impl OutProcEffectStats {
@@ -611,12 +604,7 @@ impl EffectChildSupervisor {
                                 tracing::warn!(
                                     "{child_name_wd} exited during initial attach ({status})"
                                 );
-                                *stats
-                                    .child_early_exit_status
-                                    .lock()
-                                    .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-                                    Some(status.to_string());
-                                stats.child_early_exit.store(true, Ordering::Release);
+                                stats.child_early_exit.record(status);
                                 break;
                             }
                             // #573: 起動直後に死に続ける child を tight loop で respawn し続けない。
