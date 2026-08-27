@@ -7,6 +7,8 @@ for argument do
     shm_path=$argument
   elif [ "$previous" = "--plugin" ]; then
     slow_at=$argument
+  elif [ "$previous" = "--chain" ]; then
+    slow_at=$(sed -n 's/.*"path":"\([0-9][0-9]*\)".*/\1/p' "$argument")
   fi
   previous=$argument
 done

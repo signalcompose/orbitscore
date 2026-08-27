@@ -17,6 +17,123 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.388 feat: effect rack の daemon 配線 (#628 コミット4) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628
+**Status**: 実装・D1〜D15 変異検証完了（sandbox 制約による integration / Linux cross check の環境停止あり）
+**Branch**: `628-rack-impl`
+
+`EffectSlotEntry` に control/watchdog 所有の `ChainConfig` を追加し、master / named bus 共通の
+`apply_outproc_effect_chain` を実装した。健全な Active+diff は rack mailbox の
+`CMD_APPLY_CHAIN`、rebuild・抜け殻 Active は #625 の teardown → `--chain` manifest spawn、
+空 chain は teardown → Empty を通る。`bus_actives` の単調 true、shutdown latch、quiesce の
+SeqCst ペアは維持した。
+
+wire に `ApplyEffectChain` を追加し、effect の `ReplacePlugin` / `UnloadPlugin` を明示退役。
+state/UI の `chain_path` を flat stage index として `CMD_SAVE_STATE_AT` / `CMD_OPEN_UI_AT` /
+`CMD_CLOSE_UI_AT` へ渡し、standard stage と nested path を明示拒否する。watchdog は respawn
+時点の権威 chain（per-stage latest state を含む）から manifest を毎回書き直す。
+
+検証: 指定 clippy は warning 0。daemon 224 passed / 0 failed / 1 ignored、sandbox 83 passed、
+rack child 12 passed / 3 ignored。D1〜D15 は各表の不変条件を production 側で一時的に壊して
+全件 red、復元後 green を確認した。workspace `cargo test` の protocol integration 28 件は
+sandbox が loopback bind を `Operation not permitted` で拒否して停止。Linux cross check は
+`alsa-sys` が cross `pkg-config` sysroot 未設定で停止し、いずれも権限・環境回避は行っていない。
+
+**main の検収（sandbox 外で実行）**:
+
+| 検証 | 結果 |
+|---|---|
+| ワークスペース clippy（`-D warnings`） | exit 0 |
+| 該当 4 crate の lib テスト | **348 passed / 0 failed**（daemon 224 / sandbox 83 / child-runtime 29 / rack child 12） |
+| **D1〜D15 変異ログの実物検分** | **15 件すべてに `test result: FAILED. 0 passed; 1 failed` + panic トレース**。各変異が対応する 1 件だけを殺しており §5.2 の 1:1 対応どおり |
+
+Codex は sandbox 制約（`tests/common/mod.rs:44` の loopback bind 拒否）に当たった際、
+**迂回せず報告して止まった**。ブリーフの指示どおりで、これは「Codex は sandbox で
+daemon protocol が原理的に走らない = だから検証は main」という分担の根拠そのもの。
+
+🔴 **委譲の監視について**: Codex への発注中、**監視の設計が壊れていて 64 分間停止に
+気づかなかった**（companion の自己申告 `status` は kill 後も `running` のまま残るため、
+待機ループが永久に発火しない）。ログの mtime を生存signal にした `watch-codex.sh` を作成し、
+以後は 7 分沈黙で通知される。詳細は memory `watch-liveness-not-self-reported-status`。
+この監視は claude-tools へ横展開した（ISSUE #292 / PR #293・`/utils:watch-codex`）。
+
+---
+
+### 6.387b 🔴 コミット2〜3 に欠陥が見つかった — UI close が daemon に届かない (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628
+**Status**: 検出・裏取り済み（修正は per-index pump 設計とセットで後続）
+
+**6.387 で「検証済み」として確定させたコミット `12676814` に、実機で必ず踏む欠陥がある。**
+
+- **child が送る**（`orbit-child-runtime/src/ui_service.rs:111-115`）:
+  `{"index":0,"completion":"safepoint-completed"}`（rack 経路 = index あり）
+- **daemon が受ける**（`orbit-audio-sandbox/src/transport.rs:1398-1409`）:
+  `Some("safepoint-completed")` / `Some("timeout-without-save")` の**完全一致のみ**。
+  それ以外は Protocol error
+
+→ **rack child の UI を閉じると 1 枚目ですら Protocol error になり、event ring の先頭が
+永久に詰まる。**
+
+**なぜ全テストを通過したか**: child 側の多重化は unit で証明され、daemon 側の受理も unit で
+証明されていて、**その 2 つを繋ぐ層だけが誰にも触られていなかった**。699 tests green・
+clippy exit 0・変異 6 種 RED をすべて通っている。core spec の
+「壊れるのは配線であり、配線は E2E でしか見えない」の実例がまた 1 つ増えた。
+
+**発見経路**: Codex がコミット 4 の実装中に「設計が『自然対応』とする前提と現コードが
+一致しない」と報告して停止 → Fable の per-index 設計調査が具体化 → main が実コードで裏取り。
+
+**あわせて判明した 2 件**:
+
+1. **TS が wire に `chain_path` を送っていない**（`packages/` の grep 0 件）。daemon 側は
+   読んで省略時 0 に倒す（`session.rs:323-345`）ので、**index≠0 が黙って 0 に化ける**
+2. 多重 close × timeout 放棄で **ring がデッドロックする**可能性（Fable の机上解析・
+   確信度「中〜高」。実装冒頭に再現 fixture を書いて反証する手順つき）
+
+---
+
+### 6.387c design: `UiEventPump` を per-index 化する設計（owner 決定 A）(#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628
+**Status**: 設計完了（起案 = Fable / 実装は後続）
+**成果物**: `docs/design/628-ui-pump-per-index-design.md`（619 行）
+
+**問題**: child 側だけ多重ウィンドウ化され、daemon の `UiEventPump` は **child 単位の単一
+`UiPumpState`** のまま（`generation` / `pending_safepoint` / `abandoned_safepoint` /
+`lifecycle` が各 1 つ）。`begin_open` は `lifecycle != Closed` を loud に拒否するので、
+**1 child につき UI 1 枚しか開けない**。
+
+実装設計書 §3.1-(6) の「daemon の UI pump は instanceId キーなので**多重に自然対応する**」
+という記述は誤りで、決定表 #12 で確信度「**高**」とされていた項目だった。
+
+**owner 判断（2026-08-28）: 案 A（pump を per-index 化）を採用。** v1 を 1 枚に制限する案 B は
+spec SC.10.10.1（`ui("名前")` = 一致するもの全部を開く）を後退させるため不採用。
+
+**設計の要点**:
+
+- **`generation` は child 単位のまま。** ring は child につき 1 本なので、per-index 化は
+  「1 つの事実の N 重複製」で**今回の事故と同型の乖離可能状態**を作る。index は別次元で持つ
+- **ack 照合キーは `(generation, index, evt_seq)` の三つ組。** seq 単独でも現状は足りるが、
+  **その十分性が他所の実装詳細に依存する**ため index を照合へ加え、取り違えを loud にする
+- **`lifecycle` と `abandoned_safepoint` は per-index map。** 単一 `Option` だと 2 件目の放棄が
+  1 件目を上書きし、遅着 ack が誤拒否される
+- **冪等 open は pump に置かない。** PH.2c は「DSL は冪等 / MCP は非冪等」を要求しており、
+  経路の知識は TS 層が持つ
+- **TS ↔ daemon の写像は TS session 簿記が open 時に確定して保持**（§3.4-(5) の instanceId
+  キー化は撤回）。「open 中 UI の index 不変」を不変条件として導入する
+
+**確認済み事実 20 件（F1-F20・全行番号つき）と未確認 3 件（U1-U3）を分離**して記述されている。
+前回の穴が「検証していない前提を書いた」ことから生まれたため、起案時に
+「確認した項目には行番号を、していない項目には未確認と明記」を条件として課した。
+失敗モード↔テスト対応表は 24 行（全行に変異つき・4 種横断）。
+
+**owner 確認事項が 1 件残っている**: 「open 中の UI がある stage より前を drop/insert すると、
+その UI は保存つきで自動 close される（自動 re-open なし）」を v1 挙動として受容するか。
+
 ### 6.387 feat: 1 つの child が N プラグインを直列に回す (#628 コミット2〜3) (Aug 27, 2026)
 
 **Date**: 2026-08-27

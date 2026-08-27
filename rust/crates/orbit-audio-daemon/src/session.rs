@@ -320,13 +320,29 @@ fn ui_target_object<'a>(params: &'a Value, method: &str) -> Result<&'a Value, Pr
 }
 
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
-fn ui_index(params: &Value, method: &str) -> Result<u64, ProtocolError> {
-    params.get("index").and_then(Value::as_u64).ok_or_else(|| {
-        ProtocolError::new(
+fn chain_path_index(params: &Value, method: &str) -> Result<u64, ProtocolError> {
+    let Some(value) = params.get("chain_path") else {
+        return Ok(0);
+    };
+    let Value::Array(path) = value else {
+        return Err(ProtocolError::new(
             "MALFORMED_REQUEST",
-            format!("{method} requires a non-negative integer 'index'"),
-        )
-    })
+            format!("{method} 'chain_path' must be an array of non-negative integers"),
+        ));
+    };
+    if path.len() > 1 {
+        return Err(ProtocolError::new(
+            "MALFORMED_REQUEST",
+            "chain_path nesting is staged behind layer()/PDC (SC.10.11); v1 supports one flat stage index",
+        ));
+    }
+    match path.first().and_then(Value::as_u64) {
+        Some(index) => Ok(index),
+        None => Err(ProtocolError::new(
+            "MALFORMED_REQUEST",
+            format!("{method} 'chain_path' must contain exactly one non-negative integer"),
+        )),
+    }
 }
 
 #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
@@ -346,7 +362,7 @@ fn resolve_ui_target_and_index(
     method: &str,
 ) -> Result<(PluginStateTarget, u64), ProtocolError> {
     let target = resolve_ui_target(params, method)?;
-    let index = ui_index(params, method)?;
+    let index = chain_path_index(params, method)?;
     Ok((target, index))
 }
 
@@ -1567,6 +1583,144 @@ async fn handle_command(
                 ProtocolError::new("MALFORMED_REQUEST", "missing 'path' param"),
             ),
         },
+        "ApplyEffectChain" => {
+            if params.get("role").and_then(Value::as_str) != Some("effect") {
+                return err(
+                    &id,
+                    ProtocolError::new(
+                        "MALFORMED_REQUEST",
+                        "ApplyEffectChain requires role='effect'",
+                    ),
+                );
+            }
+            if params.get("instance").is_some() {
+                return err(
+                    &id,
+                    ProtocolError::new(
+                        "MALFORMED_REQUEST",
+                        "ApplyEffectChain does not accept an instrument instance",
+                    ),
+                );
+            }
+            let bus = match parse_bus_param(&params) {
+                Ok(bus) => bus,
+                Err(message) => return err(&id, ProtocolError::new("MALFORMED_REQUEST", message)),
+            };
+            let mode = match params.get("mode").and_then(Value::as_str) {
+                Some(mode @ ("diff" | "rebuild")) => mode.to_owned(),
+                _ => {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            "ApplyEffectChain requires mode='diff' or mode='rebuild'",
+                        ),
+                    )
+                }
+            };
+            let chain_value = match params.get("chain") {
+                Some(value @ Value::Array(_)) => value.clone(),
+                _ => {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            "ApplyEffectChain requires a 'chain' array",
+                        ),
+                    )
+                }
+            };
+            let save_dropped_value = match params.get("save_dropped") {
+                None => json!([]),
+                Some(value @ Value::Array(_)) => value.clone(),
+                Some(_) => {
+                    return err(
+                        &id,
+                        ProtocolError::new(
+                            "MALFORMED_REQUEST",
+                            "ApplyEffectChain 'save_dropped' must be an array",
+                        ),
+                    )
+                }
+            };
+            #[cfg(feature = "outproc-effect")]
+            {
+                let mode = match mode.as_str() {
+                    "diff" => crate::outproc_effect::ApplyEffectChainMode::Diff,
+                    "rebuild" => crate::outproc_effect::ApplyEffectChainMode::Rebuild,
+                    _ => unreachable!("mode was validated above"),
+                };
+                let chain = match serde_json::from_value::<
+                    Vec<crate::outproc_effect::EffectChainPlanStage>,
+                >(chain_value)
+                {
+                    Ok(chain) => chain,
+                    Err(error) => {
+                        return err(
+                            &id,
+                            ProtocolError::new(
+                                "MALFORMED_REQUEST",
+                                format!("invalid ApplyEffectChain chain: {error}"),
+                            ),
+                        )
+                    }
+                };
+                let save_dropped = match serde_json::from_value::<
+                    Vec<crate::outproc_effect::SaveDroppedStage>,
+                >(save_dropped_value)
+                {
+                    Ok(dropped) => dropped,
+                    Err(error) => {
+                        return err(
+                            &id,
+                            ProtocolError::new(
+                                "MALFORMED_REQUEST",
+                                format!("invalid ApplyEffectChain save_dropped: {error}"),
+                            ),
+                        )
+                    }
+                };
+                let engine = engine.clone();
+                match tokio::task::spawn_blocking(move || {
+                    engine.apply_outproc_effect_chain(
+                        bus,
+                        crate::outproc_effect::EffectChainPlan {
+                            chain,
+                            save_dropped,
+                        },
+                        mode,
+                    )
+                })
+                .await
+                {
+                    Ok(Ok(summary)) => ok(
+                        &id,
+                        json!({
+                            "status": "applied",
+                            "child_pid": summary.child_pid,
+                            "dropped": summary.dropped.into_iter().map(|stage| json!({
+                                "prev_index": stage.prev_index,
+                                "path": stage.path,
+                                "bytes_written": stage.bytes_written,
+                            })).collect::<Vec<_>>(),
+                        }),
+                    ),
+                    Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
+                    Err(error) => err(&id, ProtocolError::new("INTERNAL_ERROR", error.to_string())),
+                }
+            }
+            #[cfg(not(feature = "outproc-effect"))]
+            {
+                let _ = (engine, bus, mode, chain_value, save_dropped_value);
+                err(
+                    &id,
+                    ProtocolError::new(
+                        "OUTPROC_EFFECT_UNAVAILABLE",
+                        "ApplyEffectChain requires an outproc-effect daemon build",
+                    ),
+                )
+            }
+        }
         // LoadPlugin の Active-reject semantics を変えず、effect / instrument の各 slot を
         // 差し替えるか、Empty な slot を ensure-load する。attach は block しうるため
         // LoadPlugin と同じく spawn_blocking で tokio worker から隔離する。
@@ -1584,6 +1738,15 @@ async fn handle_command(
                     ),
                 );
             };
+            if role == "effect" {
+                return err(
+                    &id,
+                    ProtocolError::new(
+                        "MALFORMED_REQUEST",
+                        "ReplacePlugin(role='effect') is superseded by ApplyEffectChain (#628)",
+                    ),
+                );
+            }
             let Some(path_str) = params.get("path").and_then(Value::as_str) else {
                 return err(
                     &id,
@@ -1596,119 +1759,62 @@ async fn handle_command(
                 .map(str::to_owned);
             let path = std::path::PathBuf::from(path_str);
 
-            if role == "effect" {
-                if params.get("instance").is_some() {
-                    return err(
-                        &id,
-                        ProtocolError::new(
-                            "MALFORMED_REQUEST",
-                            "ReplacePlugin instance is only valid for role='instrument'",
-                        ),
-                    );
-                }
-                let bus = match parse_bus_param(&params) {
-                    Ok(bus) => bus,
-                    Err(message) => {
-                        return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
-                    }
-                };
-                let state_path = match parse_optional_nonempty_string_param(&params, "state_path") {
-                    Ok(state_path) => state_path.map(std::path::PathBuf::from),
-                    Err(message) => {
-                        return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
-                    }
-                };
-                #[cfg(feature = "outproc-effect")]
-                {
-                    let engine = engine.clone();
-                    match tokio::task::spawn_blocking(move || {
-                        engine.replace_outproc_effect_plugin(path, plugin_id, bus, state_path)
-                    })
-                    .await
-                    {
-                        Ok(Ok(info)) => replaced_plugin_ok(&id, info),
-                        Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
-                        Err(join_error) => err(
-                            &id,
-                            ProtocolError::new("INTERNAL_ERROR", join_error.to_string()),
-                        ),
-                    }
-                }
-                #[cfg(not(feature = "outproc-effect"))]
-                {
-                    let _ = (engine, path, plugin_id, bus, state_path);
-                    err(
-                        &id,
-                        ProtocolError::new(
-                            "OUTPROC_EFFECT_UNAVAILABLE",
-                            "ReplacePlugin requires an outproc-effect daemon build",
-                        ),
-                    )
-                }
-            } else {
-                if bus_param_invalid_for_instrument_role(&params) {
-                    return err(
-                        &id,
-                        ProtocolError::new(
-                            "MALFORMED_REQUEST",
-                            "ReplacePlugin bus is invalid for role='instrument'",
-                        ),
-                    );
-                }
-                let instance = match parse_optional_nonempty_string_param(&params, "instance") {
-                    Ok(instance) => instance,
-                    Err(message) => {
-                        return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
-                    }
-                };
-                let state_path = match parse_optional_nonempty_string_param(&params, "state_path") {
-                    Ok(state_path) => state_path.map(std::path::PathBuf::from),
-                    Err(message) => {
-                        return err(&id, ProtocolError::new("MALFORMED_REQUEST", message))
-                    }
-                };
-                #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-                if instance.is_some() || state_path.is_some() {
-                    return err(
-                        &id,
-                        ProtocolError::new(
-                            "OUTPROC_INSTRUMENT_UNAVAILABLE",
-                            "this daemon build (outproc-instrument only) supports a single \
+            if bus_param_invalid_for_instrument_role(&params) {
+                return err(
+                    &id,
+                    ProtocolError::new(
+                        "MALFORMED_REQUEST",
+                        "ReplacePlugin bus is invalid for role='instrument'",
+                    ),
+                );
+            }
+            let instance = match parse_optional_nonempty_string_param(&params, "instance") {
+                Ok(instance) => instance,
+                Err(message) => return err(&id, ProtocolError::new("MALFORMED_REQUEST", message)),
+            };
+            let state_path = match parse_optional_nonempty_string_param(&params, "state_path") {
+                Ok(state_path) => state_path.map(std::path::PathBuf::from),
+                Err(message) => return err(&id, ProtocolError::new("MALFORMED_REQUEST", message)),
+            };
+            #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
+            if instance.is_some() || state_path.is_some() {
+                return err(
+                    &id,
+                    ProtocolError::new(
+                        "OUTPROC_INSTRUMENT_UNAVAILABLE",
+                        "this daemon build (outproc-instrument only) supports a single \
                              instrument instance and no state restore; rebuild with \
                              --features outproc-effect,outproc-instrument for per-sequence \
                              instances (ReplacePlugin instance/state_path)",
-                        ),
-                    );
-                }
-                #[cfg(feature = "outproc-instrument")]
+                    ),
+                );
+            }
+            #[cfg(feature = "outproc-instrument")]
+            {
+                let engine = engine.clone();
+                match tokio::task::spawn_blocking(move || {
+                    engine.replace_outproc_instrument_plugin(path, plugin_id, instance, state_path)
+                })
+                .await
                 {
-                    let engine = engine.clone();
-                    match tokio::task::spawn_blocking(move || {
-                        engine.replace_outproc_instrument_plugin(
-                            path, plugin_id, instance, state_path,
-                        )
-                    })
-                    .await
-                    {
-                        Ok(Ok(info)) => replaced_plugin_ok(&id, info),
-                        Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
-                        Err(join_error) => err(
-                            &id,
-                            ProtocolError::new("INTERNAL_ERROR", join_error.to_string()),
-                        ),
-                    }
-                }
-                #[cfg(not(feature = "outproc-instrument"))]
-                {
-                    let _ = (engine, path, plugin_id, instance, state_path);
-                    err(
+                    Ok(Ok(info)) => replaced_plugin_ok(&id, info),
+                    Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
+                    Err(join_error) => err(
                         &id,
-                        ProtocolError::new(
-                            "OUTPROC_INSTRUMENT_UNAVAILABLE",
-                            "ReplacePlugin requires an outproc-instrument daemon build",
-                        ),
-                    )
+                        ProtocolError::new("INTERNAL_ERROR", join_error.to_string()),
+                    ),
                 }
+            }
+            #[cfg(not(feature = "outproc-instrument"))]
+            {
+                let _ = (engine, path, plugin_id, instance, state_path);
+                err(
+                    &id,
+                    ProtocolError::new(
+                        "OUTPROC_INSTRUMENT_UNAVAILABLE",
+                        "ReplacePlugin requires an outproc-instrument daemon build",
+                    ),
+                )
             }
         }
         // Removes only an effect tenant. Slot and bus/routing bookkeeping stay allocated.
@@ -1724,43 +1830,13 @@ async fn handle_command(
                     ),
                 );
             }
-            let bus = match parse_bus_param(&params) {
-                Ok(bus) => bus,
-                Err(message) => return err(&id, ProtocolError::new("MALFORMED_REQUEST", message)),
-            };
-            #[cfg(feature = "outproc-effect")]
-            {
-                let engine = engine.clone();
-                match tokio::task::spawn_blocking(move || engine.unload_outproc_effect_plugin(bus))
-                    .await
-                {
-                    Ok(Ok(status)) => ok(
-                        &id,
-                        json!({
-                            "status": match status {
-                                crate::engine_wrap::UnloadedPluginStatus::Unloaded => "unloaded",
-                                crate::engine_wrap::UnloadedPluginStatus::Noop => "noop",
-                            }
-                        }),
-                    ),
-                    Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
-                    Err(join_error) => err(
-                        &id,
-                        ProtocolError::new("INTERNAL_ERROR", join_error.to_string()),
-                    ),
-                }
-            }
-            #[cfg(not(feature = "outproc-effect"))]
-            {
-                let _ = (engine, bus);
-                err(
-                    &id,
-                    ProtocolError::new(
-                        "OUTPROC_EFFECT_UNAVAILABLE",
-                        "UnloadPlugin requires an outproc-effect daemon build",
-                    ),
-                )
-            }
+            err(
+                &id,
+                ProtocolError::new(
+                    "MALFORMED_REQUEST",
+                    "UnloadPlugin is superseded by ApplyEffectChain (#628)",
+                ),
+            )
         }
         // #562: 実行中のOOP childから現在stateをsidecarへ保存する。上位層で解決済みの
         // role/bus/instanceを受け、停止判定・single mailbox・atomic renameはEngineWrapに集約する。
@@ -1801,9 +1877,13 @@ async fn handle_command(
                     Ok(target) => target,
                     Err(error) => return err(&id, error),
                 };
+                let chain_index = match chain_path_index(&params, "GetPluginState") {
+                    Ok(index) => index as usize,
+                    Err(error) => return err(&id, error),
+                };
                 let engine = engine.clone();
                 let saved = tokio::task::spawn_blocking(move || {
-                    engine.save_outproc_plugin_state(target, final_path)
+                    engine.save_outproc_plugin_state(target, chain_index, final_path)
                 })
                 .await;
                 match saved {
@@ -1909,6 +1989,10 @@ async fn handle_command(
                     Ok(target) => target,
                     Err(error) => return err(&id, error),
                 };
+                let index = match chain_path_index(&params, "AckUiSafepoint") {
+                    Ok(index) => index,
+                    Err(error) => return err(&id, error),
+                };
                 let generation = match params.get("generation").and_then(Value::as_u64) {
                     Some(generation) => generation,
                     None => {
@@ -1935,7 +2019,7 @@ async fn handle_command(
                 };
                 let engine = engine.clone();
                 match tokio::task::spawn_blocking(move || {
-                    engine.ack_outproc_ui_safepoint(target, generation, evt_seq)
+                    engine.ack_outproc_ui_safepoint(target, index, generation, evt_seq)
                 })
                 .await
                 {
@@ -2294,7 +2378,7 @@ fn ok(id: &str, result: Value) -> Value {
     .expect("OkResponse must be serializable")
 }
 
-#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+#[cfg(feature = "outproc-instrument")]
 fn replaced_plugin_ok(id: &str, info: crate::engine_wrap::ReplacedPluginSummary) -> Value {
     ok(
         id,
@@ -2352,6 +2436,9 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
             ProtocolError::new("OUTPROC_EFFECT_UNAVAILABLE", msg.clone())
         }
         WrapError::OutProcEffect(msg) => ProtocolError::new("OUTPROC_EFFECT_RUNTIME", msg.clone()),
+        WrapError::OutProcEffectRequest(msg) => {
+            ProtocolError::new("MALFORMED_REQUEST", msg.clone())
+        }
         WrapError::OutProcInstrumentUnavailable(msg) => {
             ProtocolError::new("OUTPROC_INSTRUMENT_UNAVAILABLE", msg.clone())
         }
@@ -2404,7 +2491,53 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn replace_plugin_accepts_effect_role_and_rejects_missing_or_unknown_role() {
+    async fn apply_effect_chain_wire_parses_the_v03_shape_and_rejects_non_effect_role() {
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
+            .expect("stub backend starts");
+        let (tx, _rx) = mpsc::channel(1);
+
+        let applied = handle_command(
+            Command {
+                id: "apply-empty".into(),
+                method: "ApplyEffectChain".into(),
+                params: json!({
+                    "role": "effect",
+                    "mode": "diff",
+                    "chain": [],
+                    "save_dropped": []
+                }),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+        // StubBackend intentionally has no outproc slots. Reaching this feature error proves the
+        // complete v0.3 request shape parsed and was dispatched instead of being rejected.
+        assert_eq!(applied["error"]["code"], "OUTPROC_EFFECT_UNAVAILABLE");
+
+        let wrong_role = handle_command(
+            Command {
+                id: "apply-instrument".into(),
+                method: "ApplyEffectChain".into(),
+                params: json!({
+                    "role": "instrument",
+                    "mode": "diff",
+                    "chain": []
+                }),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+        assert_eq!(wrong_role["error"]["code"], "MALFORMED_REQUEST");
+        assert_eq!(
+            wrong_role["error"]["message"],
+            "ApplyEffectChain requires role='effect'"
+        );
+    }
+
+    #[tokio::test]
+    async fn d12_retired_effect_replace_and_unload_report_apply_effect_chain() {
         let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
             .expect("stub backend starts");
         let (tx, _rx) = mpsc::channel(1);
@@ -2423,10 +2556,11 @@ mod tests {
             &tx,
         )
         .await;
-        assert_eq!(
-            effect_response["error"]["code"],
-            "OUTPROC_EFFECT_UNAVAILABLE"
-        );
+        assert_eq!(effect_response["error"]["code"], "MALFORMED_REQUEST");
+        assert!(effect_response["error"]["message"]
+            .as_str()
+            .expect("retirement message")
+            .contains("superseded by ApplyEffectChain"));
 
         let effect_instance_response = handle_command(
             Command {
@@ -2444,7 +2578,7 @@ mod tests {
         .await;
         assert_eq!(
             effect_instance_response["error"]["message"],
-            "ReplacePlugin instance is only valid for role='instrument'"
+            "ReplacePlugin(role='effect') is superseded by ApplyEffectChain (#628)"
         );
 
         for (case, role) in [("missing", None), ("unknown", Some("unknown"))] {
@@ -2479,7 +2613,11 @@ mod tests {
             &tx,
         )
         .await;
-        assert_eq!(unload_effect["error"]["code"], "OUTPROC_EFFECT_UNAVAILABLE");
+        assert_eq!(unload_effect["error"]["code"], "MALFORMED_REQUEST");
+        assert!(unload_effect["error"]["message"]
+            .as_str()
+            .expect("retirement message")
+            .contains("superseded by ApplyEffectChain"));
 
         for (case, role) in [("missing", None), ("instrument", Some("instrument"))] {
             let mut params = json!({});
@@ -2501,6 +2639,25 @@ mod tests {
                 response["error"]["message"],
                 "UnloadPlugin supports role='effect' in v1"
             );
+        }
+    }
+
+    #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+    #[test]
+    fn d15_chain_path_rejects_nested_or_empty_paths_and_defaults_to_zero() {
+        assert_eq!(
+            chain_path_index(&json!({}), "GetPluginState").expect("default path"),
+            0
+        );
+        assert_eq!(
+            chain_path_index(&json!({"chain_path": [1]}), "OpenPluginUI").expect("flat path"),
+            1
+        );
+        for path in [json!([]), json!([0, 1])] {
+            let error = chain_path_index(&json!({"chain_path": path}), "GetPluginState")
+                .expect_err("non-flat path must fail");
+            assert_eq!(error.code, "MALFORMED_REQUEST");
+            assert!(error.message.contains("chain_path"));
         }
     }
 

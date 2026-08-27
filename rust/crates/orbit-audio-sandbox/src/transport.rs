@@ -925,6 +925,57 @@ impl CommandMailboxHost {
         self.issue_command(CMD_CLOSE_UI, "", None, PLUGIN_STATE_MAILBOX_TIMEOUT)
     }
 
+    /// Apply a complete effect-rack plan prepared by the daemon.
+    pub fn issue_apply_chain(
+        &self,
+        plan_path: &Path,
+    ) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        let path = plan_path.to_str().ok_or_else(|| {
+            CommandMailboxError::InvalidArgument("plan path must be valid UTF-8".into())
+        })?;
+        self.issue_command(CMD_APPLY_CHAIN, path, None, PLUGIN_STATE_MAILBOX_TIMEOUT)
+    }
+
+    /// Save state for one flat rack stage.
+    pub fn issue_save_state_at(
+        &self,
+        argument: &str,
+        sidecar_path: &Path,
+    ) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        if !sidecar_path.is_absolute() {
+            return Err(CommandMailboxError::InvalidArgument(
+                "path must be absolute".into(),
+            ));
+        }
+        self.issue_command(
+            CMD_SAVE_STATE_AT,
+            argument,
+            Some(sidecar_path),
+            PLUGIN_STATE_MAILBOX_TIMEOUT,
+        )
+    }
+
+    /// Open the UI belonging to one flat rack stage.
+    pub fn issue_open_ui_at(
+        &self,
+        argument: &str,
+    ) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        self.issue_command(CMD_OPEN_UI_AT, argument, None, OPEN_UI_MAILBOX_TIMEOUT)
+    }
+
+    /// Close the UI belonging to one flat rack stage.
+    pub fn issue_close_ui_at(
+        &self,
+        argument: &str,
+    ) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        self.issue_command(
+            CMD_CLOSE_UI_AT,
+            argument,
+            None,
+            PLUGIN_STATE_MAILBOX_TIMEOUT,
+        )
+    }
+
     /// 現在の child incarnation が plugin state 復元まで終えて READY かをAcquireで確認する。
     pub fn child_is_ready(&self) -> Result<bool, CommandMailboxError> {
         let mmap = open_shared(&self.shm_path)?;
