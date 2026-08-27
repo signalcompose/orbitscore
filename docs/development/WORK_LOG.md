@@ -17,6 +17,80 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.375 fix: Rust CI flake の原因は fixture の固定寿命だった (#622) (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #622
+**Status**: daemon lib **205 passed / 0 failed / 1 ignored** / clippy `--all-targets` 0 警告 / fmt 通過
+
+#622 は「未確認の仮説（机上で確定させるな）」として資源圧の話が書かれていたが、**実装を読むと
+算術で決まる欠陥**だった。
+
+#### 原因
+
+`slow-child.sh` は `exec sleep 20` で**寿命が固定 20 秒**。一方この fixture が生き残らねば
+ならない経路は 2 つの deadline にゲートされている:
+
+| | 値 |
+|---|---|
+| child の寿命（`exec sleep 20`） | **20 秒** |
+| `SETUP_DEADLINE`（Loading 観測までの許容） | 30 秒 |
+| `CHILD_READY_TIMEOUT`（READY poll の許容） | 60 秒 |
+
+**寿命の方が短い。** 速いマシンではテスト全体がミリ秒で終わるので表面化せず、CI が詰まって
+セットアップが 20 秒を超えた時にだけ child が自然死し、READY poll が early-exit 分岐へ落ちて
+`child exited before publishing READY` を返す。**#622 が記録した署名そのもの**である。
+
+#529（effect 版・「1 本目が Loading から既に離脱」）とは原因が違うという issue の判断は正しく、
+**署名が違えば原因も違った**。
+
+fixture のコメントは「引数を無視して**生き続ける**」を契約と書いており、`sleep 20` はその
+近似だった（元は `sleep 0.2` で、#573 の cascading respawn を受けて延ばした経緯）。
+**deadline が 30/60 秒へ伸びた時に、その近似が黙って下回った。**
+
+#### 修正 — 秒数を増やさず、寿命の概念を無くす
+
+秒数を増やすのは先送りにしかならず、増やせばテスト異常終了時に**孤児がその時間だけ残る**
+（このリポジトリでは実害がある）。そこで**親の消滅で終わる**形にした。
+
+```sh
+parent=$PPID
+while kill -0 "$parent" 2>/dev/null; do
+  sleep 1
+done
+```
+
+両方の契約を実測: 親が生きている間は生存（4 秒観測）/ 親が消えたら自分も終了（**孤児なし**）。
+
+#### 固定したもの（すべて変異で実証）
+
+| テスト | 変異 | 結果 |
+|---|---|---|
+| `slow_child_fixture_has_no_fixed_lifetime` | fixture を `exec sleep 20` へ戻す | red |
+| `..._outlives_the_deadlines_it_must_survive`（`#[ignore]`） | — | 実時間で deadline 超えを検査 |
+| early-exit（effect / instrument） | エラーに終了理由を載せない | **両方** red |
+| 同上 | watchdog が status を記録しない | red |
+
+検出器は最初「`sleep N` がどこかにある」で書き、**ループ内のポーリング間隔を誤検出**した。
+「**最後の文が固定待ちで終わる**」= #622 で退行した形だけを見るよう狭めた。
+
+#### 診断（issue の「次の一手」）
+
+`child exited before publishing READY` に**終了理由**を載せた。watchdog は既に
+`tracing::warn!` へ status を出していたが、**呼び出し元へ返る `WrapError` には乗っていなかった**
+ので、受け取った側から SIGKILL（資源圧で殺された）と child 自身のエラー終了を区別できなかった。
+実ユーザーがプラグインの起動失敗を見る時にも効く。
+
+`child_early_exit_status: Mutex<Option<String>>` を両ロールの stats に追加。書き手は watchdog
+スレッド・読み手は control スレッドで**どちらも非 RT**。audio callback から触らないことを
+コメントで明示した。
+
+#### 副次的な観測
+
+隔離 worktree の並行コンパイル下でのみ watchdog 系テスト 2 件が落ち、本体ツリーでは 2 回とも
+pass した（#625 セッション）。**負荷依存**という観測は本 issue の仮説と符合する。ただし
+「同時 child 数のピークが上がった」かどうかは**実測していない**ので仮説のまま残す。
+
 ### 6.374 fix: 正常な継続を ERROR として記録していた（4 回目の再発）(Aug 27, 2026)
 
 **Date**: 2026-08-27

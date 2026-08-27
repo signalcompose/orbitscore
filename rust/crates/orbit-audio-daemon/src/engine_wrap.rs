@@ -1937,6 +1937,10 @@ pub(crate) trait OutProcRole: Sized {
     fn set_initial_attach_pending(stats: &Self::Stats, value: bool);
     fn set_child_early_exit(stats: &Self::Stats, value: bool);
     fn child_early_exit(stats: &Self::Stats) -> bool;
+    /// `child_early_exit` が true の時の**終了理由**（分かれば）。
+    ///
+    /// 「死んだ」だけでは SIGKILL と script のエラー終了を区別できない（#622）。
+    fn child_early_exit_status(stats: &Self::Stats) -> Option<String>;
     fn set_current_child_pid(stats: &Self::Stats, pid: u32);
     /// Attach する plugin のパスから、その format に対応する child を選び直す。
     ///
@@ -2032,6 +2036,13 @@ impl OutProcRole for EffectRole {
     fn child_early_exit(stats: &Self::Stats) -> bool {
         stats.child_early_exit.load(Ordering::Acquire)
     }
+    fn child_early_exit_status(stats: &Self::Stats) -> Option<String> {
+        stats
+            .child_early_exit_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
     fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
         stats.current_child_pid.store(pid, Ordering::Relaxed);
     }
@@ -2119,6 +2130,13 @@ impl OutProcRole for InstrumentRole {
     }
     fn child_early_exit(stats: &Self::Stats) -> bool {
         stats.child_early_exit.load(Ordering::Acquire)
+    }
+    fn child_early_exit_status(stats: &Self::Stats) -> Option<String> {
+        stats
+            .child_early_exit_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
     fn set_current_child_pid(stats: &Self::Stats, pid: u32) {
         stats.current_child_pid.store(pid, Ordering::Relaxed);
@@ -4686,12 +4704,20 @@ impl EngineWrap {
                 break;
             }
             if R::child_early_exit(&launch.stats) {
+                // 終了理由まで載せる（#622）。「exited」だけでは SIGKILL（資源圧で殺された）と
+                // child 自身のエラー終了を区別できず、受け取った側が次に何を見ればよいか
+                // 分からない。watchdog は既に status を tracing へ出しているが、**呼び出し元へ
+                // 返るエラーには乗っていなかった**。
+                let detail = match R::child_early_exit_status(&launch.stats) {
+                    Some(status) => format!("child exited before publishing READY ({status})"),
+                    None => "child exited before publishing READY".to_string(),
+                };
                 return Err(retryable_attach_failure(
                     supervisor,
                     region,
                     &child_slot,
                     launch,
-                    "child exited before publishing READY".into(),
+                    detail,
                 ));
             }
             if std::time::Instant::now() >= deadline {
@@ -7471,14 +7497,82 @@ mod outproc_load_error_test_support {
             .join(name)
     }
 
-    /// CLI 引数（`--shm`/`--plugin`/`--sample-rate` 等）をすべて無視して sleep する
-    /// POSIX shell script。素の coreutils は未知オプションで即 exit するため fixture を使う。
+    /// CLI 引数（`--shm`/`--plugin`/`--sample-rate` 等）をすべて無視して、**親が生きている
+    /// 限り生き続ける** POSIX shell script。素の coreutils は未知オプションで即 exit するため
+    /// fixture を使う。
+    ///
+    /// 契約は「生き続ける」であって「N 秒待つ」ではない（#622）。
+    /// [`slow_child_fixture_has_no_fixed_lifetime`] がその形を固定している。
     fn slow_child_script() -> PathBuf {
         child_script_fixture("slow-child.sh")
     }
 
     fn exit_child_script() -> PathBuf {
         child_script_fixture("exit-child.sh")
+    }
+
+    /// 🔴 #622: `slow-child.sh` に**固定寿命を持たせてはいけない**。
+    ///
+    /// この fixture が生き残らねばならない経路は [`SETUP_DEADLINE`]（Loading 観測までの許容）と
+    /// [`CHILD_READY_TIMEOUT`]（READY poll の許容）にゲートされている。ところが fixture は
+    /// `exec sleep 20` で、**両方の deadline より短かった**。速いマシンではテスト全体がミリ秒で
+    /// 終わるので表面化せず、CI が詰まってセットアップが 20 秒を超えた時にだけ child が自然死し、
+    /// READY poll が early-exit 分岐へ落ちて `child exited before publishing READY` で fail した。
+    ///
+    /// 秒数を増やす修正は採らない（テスト異常終了時に孤児がその時間だけ残るため）。fixture は
+    /// 親の消滅で終わる形にしてあり、このテストは**その形に戻ってこないこと**を固定する。
+    ///
+    /// 「時間で終わらない」ことを実時間で確かめるには deadline を超える待ちが要り単体テストに
+    /// 載らないので、ここでは**終端が固定待ちでないこと**を script の形で検査する。
+    /// 実時間側の検査は [`slow_child_fixture_outlives_the_deadlines_it_must_survive`]（`#[ignore]`）。
+    #[test]
+    fn slow_child_fixture_has_no_fixed_lifetime() {
+        use crate::engine_wrap::CHILD_READY_TIMEOUT;
+        let script = std::fs::read_to_string(slow_child_script()).expect("read slow-child fixture");
+        let code: Vec<&str> = script
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .collect();
+        // 見るのは**最後の文**だけ。ループ内の `sleep 1`（ポーリング間隔）は寿命ではないので、
+        // 「`sleep N` がどこかにある」では誤判定する。#622 で退行した形は
+        // 「script が固定待ちで**終わる**」ことそのものである。
+        let last_statement = code.last().copied().unwrap_or_default();
+        let ends_after_a_fixed_wait = last_statement
+            .strip_prefix("exec ")
+            .unwrap_or(last_statement)
+            .strip_prefix("sleep ")
+            .is_some_and(|arg| arg.trim().parse::<f64>().is_ok());
+        assert!(
+            !ends_after_a_fixed_wait,
+            "slow-child.sh must not end after a fixed duration: it has to outlive \
+             SETUP_DEADLINE ({SETUP_DEADLINE:?}) and CHILD_READY_TIMEOUT ({CHILD_READY_TIMEOUT:?}), \
+             and any fixed number eventually falls below them without anyone noticing (#622). \
+             Script was:\n{script}"
+        );
+    }
+
+    /// #622 の不変条件そのものを実時間で検査する。deadline の合計を超えて待つので
+    /// `#[ignore]`（`cargo test -- --ignored` で明示的に回す）。
+    #[test]
+    #[ignore = "waits longer than SETUP_DEADLINE + CHILD_READY_TIMEOUT by design"]
+    fn slow_child_fixture_outlives_the_deadlines_it_must_survive() {
+        use crate::engine_wrap::CHILD_READY_TIMEOUT;
+        let must_survive = SETUP_DEADLINE + CHILD_READY_TIMEOUT;
+        let mut child = std::process::Command::new(slow_child_script())
+            .arg("--shm")
+            .arg("/ignored")
+            .spawn()
+            .expect("spawn slow-child fixture");
+        std::thread::sleep(must_survive + Duration::from_secs(5));
+        let still_running = matches!(child.try_wait(), Ok(None));
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            still_running,
+            "slow-child.sh died within {must_survive:?}; the ready poll it must survive is \
+             gated by exactly that budget (#622)"
+        );
     }
 
     pub(super) fn early_exit_fast_fails_and_keeps_retry_shm<R: OutProcRole>(
@@ -7509,8 +7603,20 @@ mod outproc_load_error_test_support {
             Ok(_) => panic!("immediately exiting child must fail attach"),
             Err(error) => error,
         };
+        // 🔴 「exited」だけでは足りない（#622）。SIGKILL（資源圧で殺された）と child 自身の
+        // エラー終了を区別できず、失敗を受け取った側が次に何を見ればよいか分からない。
+        // fixture は `exit 1` なので、終了理由が載っていれば `exit status: 1` が現れる。
+        let WrapError::OutProcAttachFailed(ref message) = error else {
+            panic!("early exit must surface as OutProcAttachFailed, got {error:?}");
+        };
         assert!(
-            matches!(error, WrapError::OutProcAttachFailed(ref msg) if msg.contains("exited before publishing READY"))
+            message.contains("exited before publishing READY"),
+            "unexpected attach failure message: {message}"
+        );
+        assert!(
+            message.contains("exit status: 1"),
+            "the attach failure must carry the child's exit status, not just the fact that it \
+             exited (#622); message was: {message}"
         );
         assert!(
             started.elapsed() < Duration::from_secs(5),
