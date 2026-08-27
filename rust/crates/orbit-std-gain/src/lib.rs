@@ -107,8 +107,7 @@ impl Plugin for StdGain {
 impl DefaultPluginFactory for StdGain {
     fn get_descriptor() -> PluginDescriptor {
         use clack_plugin::plugin::features::*;
-        PluginDescriptor::new(PLUGIN_ID, PLUGIN_NAME)
-            .with_features([AUDIO_EFFECT, UTILITY, STEREO])
+        PluginDescriptor::new(PLUGIN_ID, PLUGIN_NAME).with_features([AUDIO_EFFECT, UTILITY, STEREO])
     }
 
     fn new_shared(_host: HostSharedHandle<'_>) -> Result<Self::Shared<'_>, PluginError> {
@@ -342,7 +341,10 @@ mod tests {
     #[test]
     fn positive_db_amplifies() {
         let g = db_to_linear(6.0);
-        assert!((g - 1.9952624).abs() < 1e-6, "+6 dB should be ≈1.9953, got {g}");
+        assert!(
+            (g - 1.9952624).abs() < 1e-6,
+            "+6 dB should be ≈1.9953, got {g}"
+        );
     }
 
     /// 下限は**完全な 0.0** にする。-96 dB 相当の微小な残響が残ると、

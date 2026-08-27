@@ -148,5 +148,8 @@ fn the_plugin_identifies_itself_as_gain() {
     // 同梱ファイル名 std-plugins/Gain.clap と DSL 表面 Gain(...) は
     // この名前に紐づく。変えると解決が壊れる。
     assert_eq!(PLUGIN_NAME, "Gain");
-    assert!(instance.plugin_handle().get_extension::<PluginParams>().is_some());
+    assert!(instance
+        .plugin_handle()
+        .get_extension::<PluginParams>()
+        .is_some());
 }

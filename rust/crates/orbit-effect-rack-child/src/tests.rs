@@ -715,7 +715,12 @@ fn apply_plan_accepts_the_manifest_the_daemon_actually_writes() {
     // 「バイパスしたのに音が鳴る」という無言の故障になる）。
     match &plan.stages[1] {
         super::PlanStage::Load {
-            stage: super::StageSpec::Standard { name, params, enabled },
+            stage:
+                super::StageSpec::Standard {
+                    name,
+                    params,
+                    enabled,
+                },
         } => {
             assert_eq!(name, "Gain");
             assert_eq!(params.get("db"), Some(&-20.0));
