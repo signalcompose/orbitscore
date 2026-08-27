@@ -17,6 +17,62 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.382 spike: 設計の核心の前提を実測で確認（Spike S・#628）(Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #628
+**Status**: **成功** — 縮退案は不要
+
+設計書 §9-1 が「確信度: 中」として spike を指定していた前提を実測した。
+
+#### 何を測ったか
+
+ラック設計の中核は「**新インスタンスを side で構築している間、旧 stage list は audio スレッドで
+処理を続ける = 音が途切れない**」である。これが成り立てば **#625 の dry 窓が消える**。
+
+🔴 **この codebase には実績が無かった。** 現行 child は 1 インスタンス固定で、プラグインを
+load するのは **READY を publish する前**（audio がまだ回っていない時）だけだったため。
+
+#### 結果
+
+```
+[spike] worker is running (56 blocks). loading second instance now…
+[spike] second load ok=true took=79.208µs
+[spike] blocks before=56 after=682 (delta=626) faulted=false
+```
+
+| 観測 | 意味 |
+|---|---|
+| `ok=true` | audio 処理中に、同一プロセスで 2 つ目を load **できた** |
+| `took=79.2µs` | load は **80 マイクロ秒**。1 ブロック（512 sample @48kHz ≒ **10.7ms**）よりはるかに短い |
+| `delta=626` / `faulted=false` | 1 つ目は**止まらず、出力も壊れなかった**（毎ブロック sample-exact 素通しを検証） |
+
+**縮退案（APPLY の load 中だけ audio を bypass）は不要**と判断できる。
+
+#### 測定の限界（正直に）
+
+- 測ったのは **GainOracle**（`out = gain * in` の最小プラグイン）。Kontakt のような重いプラグインの
+  load は秒単位かかり得る。**「load が処理を壊さないか」を測ったのであって「load が速いか」ではない**
+- **VST3 のみ**。CLAP は未測定（ただし CLAP の方が初期化は軽いので、厳しい方で通ったことになる）
+- **1 回の実測**。タイミング依存は繰り返しでしか出ないので、Stage 1 では繰り返し実行を入れる価値がある
+
+spike は `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs` に **`#[ignore]` 付きで
+残す**（通常のテストを壊さない）。前提が将来崩れた時に同じテストで再確認できる。
+
+#### 設計の §10-1（`seq.ui()` の存廃）が確定待ち
+
+Fable が帰属の誤りを訂正した（「再評価で開き直る」は #617 の動機ではなく、テキストに残ることの
+**副次的性質**）。判断材料:
+
+| | `cb.ui()` | Cmd+Click |
+|---|---|---|
+| #617 に明記の動機 2 点 | ✅ | ✅ **より直接的** |
+| 再評価で開き直る | ✅ | ❌ |
+| ラックの入れ子を指せる | ❌ | ✅ |
+| LLM から使える | ✅ | ❌（MCP 経路のみ） |
+
+Fable の推奨は**無引数 `cb.ui()` のみ存置**（instrument 専用・引数全廃）。owner 判断待ち。
+
 ### 6.381 spec: 標準プラグインを言語の語彙として分離し、カタログはメソッド形を撤回 (#628) (Aug 27, 2026)
 
 **Date**: 2026-08-27
