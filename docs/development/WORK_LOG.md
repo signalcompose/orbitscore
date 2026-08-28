@@ -17,6 +17,96 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.394 fix: 「確定拒否」と「不明」を分ける述語を 1 つ入れた (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: 根2 完了。根4（実機を通す経路）は継続
+
+レビューラウンド1の**根 2**。3 つの症状が**同じ 1 つの誤った前提**から出ていた:
+
+> `effect-slot.ts` は `DaemonProtocolError` を「**確定拒否 = daemon の登記は無傷**」と
+> 解釈して `uncertainRacks` に入れない。daemon 側の文言も
+> `"...; the previous chain is kept"` と言っている。
+> **この解釈が正しいのは、daemon が生きていて登記が本当に無傷なときだけ。**
+
+### 症状 3 つ
+
+| | 内容 |
+|---|---|
+| **A** | respawn 後の rack 再構築失敗が `console.error` だけで self-heal に載らない。**同じ行を何度再評価しても同じエラーが出続け、自己修復経路が存在しない**。既存の非ラック経路は `markPluginInactive` を呼んでいるのに、新設パスだけ対称のパスが無かった |
+| **B** | APPLY の mailbox timeout が state 保存と同じ **5 秒**。`OPEN_UI` は「重い plugin の `createView` は 5 秒を正当に超えうる」として専用の上限を持つのに、**N 発の load を含む APPLY が 5 秒**。超過すると child は放棄を知らず commit しうる一方 daemon は確定 Err を返し、**音 = 新チェーン / daemon 台帳 = 旧 / TS 登記 = 旧** の三者乖離が固定する。さらに **timeout が `MALFORMED_REQUEST` にマップ**されていた（timeout は不正な要求ではない） |
+| **C** | 不健全な Active への rebuild が**死んだ mailbox に save を発行**し、5 秒 × drop 件数の末に APPLY 全体が Err。**設計が「第一級で高速化する」と謳った「クラッシュした犯人を配列から消して再評価」が、まさにその状況で失敗する** |
+
+### 導入した述語（1 つで 3 箇所を揃える）
+
+> **「daemon の登記が無傷である」と言えるのは、daemon がその要求を検分して確定的に拒否し、
+> かつその間 child も daemon も生死を跨いでいないときだけ。それ以外の失敗はすべて
+> 「不明（uncertain）」であり、次回は `rebuild` に倒す。**
+
+**この repo が既に持っていた前例に乗せた** — `session.rs` のエラーコード体系には
+`CLAP_NOT_LOADED` について「TS 層が actionable に判定できるようにする専用コード（#405）」と
+書かれている。同じ形で **`OUTPROC_EFFECT_UNCERTAIN`** を足し、
+`isEffectChainRegistryIntact()` を TS 側の単一の分岐点にした。
+
+- 「確定拒否」と認めるのは `CommandMailboxError::CommandFailed` だけ。
+  `Timeout` / `ChildExited` / `Poisoned` はすべて uncertain（**保守側に倒す**）
+- respawn 失敗は**既存の `markPluginInactive` / `isPluginActive` seam** を通す
+  （新機構を作らない。既存機構を借りるなら不変条件も継承する）
+- **`APPLY_CHAIN_MAILBOX_TIMEOUT = 60s`** を新設（spawn の READY 待ちと同じ league）。
+  `PLUGIN_STATE_MAILBOX_TIMEOUT` を流用しない
+- 不健全と検分済みの Active には save を発行せず `latest_state` で代替
+
+### 変異検証（すべて main が実行・両方向を潰した）
+
+| 変異 | 結果 |
+|---|---|
+| 述語を常に `true`（元の欠陥を再導入） | red（2 件） |
+| 述語を常に `false`（過剰に uncertain） | red（1 件） |
+| `measurement_invalid` の検分を外す | red（1 件） |
+| respawn 失敗時の `markPluginInactive` を消す | red（1 件） |
+| `applyRackBody` の catch で uncertain を立てない | red（3 件） |
+
+**緩めても厳しくしても落ちる**のが要点。過剰に uncertain へ倒すと毎回 rebuild になり
+prepare-commit の利点が消えるので、そちらも守る必要がある。
+
+### 🔴 main 自身の検証ミス（記録）
+
+最初の変異が「生き残った」と出た。原因は**実行コマンドが狭かった**こと:
+
+```
+cargo test -p orbit-audio-daemon --lib                                             →  36 件
+cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument --lib → 229 件
+```
+
+daemon のテストの大半は feature の下にあり、**当該テストがそもそも走っていなかった**。
+委譲先を「部分テストだけ回して報告した」と指摘した当人が同じことをしていた。
+**feature 付きの数字と無しの数字を混ぜない。**
+
+### あわせて直したもの（Fable 監査 F-b / F-c）
+
+main が最終 fixer として書いた根1・根3 を Fable に監査させたところ、
+**私のコメント 2 件が実装と食い違っていた**:
+
+- `adopt_interlock`（テスト用 barrier）の上に、**棄却した別 atomic 案の説明**が残っていた
+- 「`load_initial` は status を set しなくなった」「The Release store below」— どちらも事実と違う
+
+コミットタイトルが「コメントが支えていた順序をコンパイラに支えさせた」なのに、
+**残ったコメント自体が新たな嘘になっていた**。両方書き直した。
+
+### 検証
+
+clippy は **default features と feature 付きの両構成**で exit 0（default 構成は
+`pre-push` で一度止められて気づいた。**feature 付きの clippy は default 構成の証拠にならない**）/
+daemon **229 passed** / sandbox 87 / rack-child 15 / `cargo fmt --check` exit 0 /
+TS **2071 passed 0 failed** / lint クリーン / `npm run typecheck:e2e` exit 0
+
+### 残り
+
+**この PR の中心機能（配列記法・N 段直列・`Gain`）は実機を一度も通っていない。**
+根 4 の gated E2E 実装が最大の残件で、前回の実機ゲートは 11 回反復して 6 件の欠陥を出した。
+owner の指示で Fable に開発プランを立て直させている（`docs/design/628-plan-reset.md` を起案中）。
+
 ### 6.393 fix: コメントが支えていた順序を、コンパイラに支えさせた (#628) (Aug 28, 2026)
 
 **Date**: 2026-08-28

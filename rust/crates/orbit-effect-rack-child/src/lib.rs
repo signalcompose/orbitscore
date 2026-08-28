@@ -230,12 +230,16 @@ pub struct ChainExchange {
     pending: AtomicPtr<StageList>,
     generation: AtomicU64,
     retired: AtomicPtr<StageList>,
-    /// The generation the audio thread had just adopted at the moment it published `retired`
-    /// (root 1 fix). Written by the audio thread with `Release` ordering immediately before the
-    /// `retired` CAS below, so any thread that observes the CAS's effect via an `Acquire` load of
-    /// `retired` is guaranteed (by the release/acquire happens-before edge on `retired` itself) to
-    /// also observe this store — see [`AudioChain::adopt_at_block_boundary`] and
-    /// [`RackController::collect_retired`] for how main uses it to decide which drops are safe.
+    /// Test-only pause point inside [`AudioChain::adopt_at_block_boundary`], between the `pending`
+    /// swap and the `retired` CAS. That gap is the window in which `apply` could once slip past the
+    /// Busy check and have its drops destroyed by the collection that followed; holding the audio
+    /// thread there with a barrier pair makes the interleaving deterministic instead of a race a
+    /// test would have to hope for.
+    ///
+    /// The adopted generation is **not** kept here. It rides inside the retired list itself
+    /// ([`StageList::retired_at_generation`]) precisely so that no separate store has to be ordered
+    /// against the CAS — see that field for why the earlier atomic-beside-the-pointer shape was
+    /// rejected.
     #[cfg(test)]
     adopt_interlock: std::sync::Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
 }

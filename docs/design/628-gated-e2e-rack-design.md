@@ -229,15 +229,36 @@ RMS 判定は既存の `segmentRms` / `relativeDelta` / `withinTolerance=0.15` �
   （owner 方針）」を明文化している。この方針の適用範囲は **per-PR CI** であり、release
   パイプライン（低頻度・既設 macos-14）には及ばない、と読むのが整合的。
 
+**実測エビデンス（2026-08-28・team-lead 実行・owner の「ローカルで実機テストできないの?」
+指摘を受けて）**:
+
+```
+$ bash rust/crates/orbit-std-gain/bundle-macos.sh
+$ cargo test -p orbit-effect-rack-child --lib -- --ignored
+test result: ok. 3 passed; 0 failed; finished in 67.35s
+```
+
+- **本 PR で初めて、出荷される `Gain` が実機で鳴ることを確認した**（c05/c13/c14 全 green）。
+- 変異 `10^(db/20)` → `db/20` で**両方の検出器が実証済み**: 実機 3 件 all red +
+  ubuntu 数理テスト 4 件 red。restore で両方 green（`cmp` で復元確認）。
+  §5 冒頭の「数理ヘルパの変異は既に CI が殺す」は実測で裏付けられた。
+- `gain_bundle_dir()` の debug ハードコードは**手元 debug 実行では問題にならない**
+  （release プロファイルを指せない件は release.yml 経由の時だけ効く — 2. の下ごしらえは
+  release.yml のためだけに要る）。
+
 **決定（4 経路・機構の新設は release.yml への step 1 つのみ）**:
 
-1. **(a) ubuntu per-PR: in-process 処理契約テスト**: `orbit-std-gain/tests/contract.rs` は既に
-   clack-host で自プラグインを **in-process 起動**している（dlopen 不要・`#[ignore]` 不要 —
-   同ファイル冒頭がその設計意図を明記）。ここへ「activate → 実バッファ 1 block process →
-   -6dB で振幅半減 / 0dB で恒等」の**処理契約テスト**を 1 本足す。既存の
-   `cargo test --workspace` ステップがそのまま拾うので **rust-ci.yml の変更はゼロ**。
-   ※実装時確認: clack-host の in-process instance で audio processor まで進められるか。
-   進められない場合はこの 1 本を諦め、per-PR の (a) 相当は 3. のマージ前ゲートに一本化する
+1. **(a) ubuntu per-PR: in-process 処理契約テスト — 実機 3 件が回るようになった今でも要る**。
+   理由は担当の重複ではなく**実行頻度の非対称**: 実機 c05/c13/c14 は (b) では rust-only PR で
+   走らず（paths フィルタ）、(c) は手動手順で、**per-PR に自動で走る検出器はこれだけ**。
+   検出の高度も違う — in-process テストは**プラグイン自身の process 契約**を、c 系は
+   **rack child 統合**を pin する（前者が赤なら原因はプラグイン側と即断できる）。
+   実体: `orbit-std-gain/tests/contract.rs` は既に clack-host で自プラグインを
+   **in-process 起動**している（dlopen 不要・`#[ignore]` 不要）。ここへ「activate →
+   実バッファ 1 block process → -6dB で振幅半減 / 0dB で恒等」の**処理契約テスト**を 1 本
+   足す。既存の `cargo test --workspace` ステップがそのまま拾うので **rust-ci.yml の変更は
+   ゼロ**。※実装時確認の但し書きは維持: clack-host の in-process instance で audio processor
+   まで進められなければこの 1 本を諦め、per-PR の (a) 相当は 3. に一本化する
    （残余ギャップとして PR 本文に明記）。
 2. **(b) release.yml（macos-14・既設）へ実 Gain テストの step を追加**: 既存の
    rack-child + bundle ビルド step（`:86-93`）の直後に足す:
@@ -248,16 +269,21 @@ RMS 判定は既存の `segmentRms` / `relativeDelta` / `withinTolerance=0.15` �
    ```
    依存はすべて直前の step でビルド済みなので増分は **+1〜2 分**。これで「出荷される組み合わせ
    （release ビルドの child × release ビルドの bundle）」がタグを切るたびに検証される。
-   **下ごしらえが 1 行要る**: `tests.rs:592-595` の `gain_bundle_dir()` は
-   `target/debug/std-plugins` を**ハードコード**しているため、`ORBIT_STD_PLUGIN_DIR` があれば
-   それを優先する形に改める（`ActualFactory` は既に同 env を読む — `macos.rs:215` — ので
-   規約の複製ではなく同じ規約への追従）。
-3. **(c) マージ前ゲート（main の手元 macOS・per-PR の実行保証）**: マージ前ゲート手順
-   （CLAUDE.md「ビルド + 実機 E2E」）に次の 1 行を**恒久追加**する:
+   **下ごしらえが 1 行要る（release.yml のためだけ）**: `tests.rs:633-635` の
+   `gain_bundle_dir()` は `target/debug/std-plugins` を**ハードコード**しているため、
+   `ORBIT_STD_PLUGIN_DIR` があればそれを優先する形に改める（`ActualFactory` は既に同 env を
+   読む — `macos.rs:215` — ので規約の複製ではなく同じ規約への追従）。
+3. **(c) マージ前ゲート（main の手元 macOS・per-PR の実行保証）— CLAUDE.md へ恒久追加する**:
    ```bash
    bash rust/crates/orbit-std-gain/bundle-macos.sh && \
      cargo test -p orbit-effect-rack-child --lib -- --ignored
    ```
+   恒久追加が妥当と判断する根拠: (i) **実測 67 秒** — 既存マージ前ゲート
+   （`build:clean` + アプリ再起動 + 実機 E2E で数分規模）に対して誤差。
+   (ii) **条件分岐を付けない** — 「rust を触った PR のみ」等の条件付き手動手順は飛ばされる
+   のがこの repo の実測クラス（列挙が一段手前で止まる型）。無条件の 67 秒の方が、条件判定の
+   認知コストより安い。(iii) 本 PR で**実行済みエビデンス**が既にある（上記 3 passed +
+   変異 red の実出力）ので、「手順として書いただけ」の状態を経由しない。
    debug ビルド同士なので `gain_bundle_dir()` の既定フォールバックで自己完結する。
    実行結果（3 passed）を PR 本文に記録する。
    `--lib` について: **`orbit-effect-rack-child` には現在 `tests/` ディレクトリが存在しない**
@@ -268,13 +294,30 @@ RMS 判定は既存の `segmentRms` / `relativeDelta` / `withinTolerance=0.15` �
 4. **(d) end-to-end は本設計の R28-E1（seg2）が担う**: 実アプリ → daemon → child →
    `std-plugins/Gain.clap` ロード → 音、の全長。gated E2E がロード可能性の最終証明。
 
-**owner 判断へ回す選択肢（推奨は「不要」）**: rust-ci.yml への **per-PR macOS ジョブ新設**。
-lean 構成（rack-child + std-gain + 依存のみビルド → `--ignored` 実行）でも cold ~8-15 分 /
-rust-cache warm ~2-4 分、macOS ランナーは Linux 比 **10 倍課金**で、**全 rust PR の全 push** に
-かかる。それが (a)+(b)+(c) の三重に対して追加で買うのは「人手ゲート (c) をすっ飛ばした場合の
-per-PR 自動検出」だけ — (c) は CLAUDE.md 上の必須手順なので、方針（rust-ci.yml 冒頭の owner
-明文）を覆してまで買う価値は無いと判断する。覆す場合は owner の明示判断とする
+**owner 判断へ回す選択肢（推奨は「不要」— 67 秒実測でさらに強まった）**: rust-ci.yml への
+**per-PR macOS ジョブ新設**。lean 構成（rack-child + std-gain + 依存のみビルド →
+`--ignored` 実行）でも cold ~8-15 分 / rust-cache warm ~2-4 分、macOS ランナーは Linux 比
+**10 倍課金**で、**全 rust PR の全 push** にかかる。それが (a)+(b)+(c) の三重に対して追加で
+買うのは「人手ゲート (c) をすっ飛ばした場合の per-PR 自動検出」だけで、**同じものが手元で
+67 秒で得られる**ことが実測済み。(c) は CLAUDE.md 上の必須手順なので、方針（rust-ci.yml
+冒頭の owner 明文）を覆してまで買う価値は無いと判断する。覆す場合は owner の明示判断とする
 （コスト方針の変更は設計書の権限外）。
+
+**検証コマンド（実装完了時に全部回す・両 clippy が load-bearing）**:
+
+```bash
+cd rust && cargo clippy --workspace --all-targets --locked -- -D warnings          # default features
+cd rust && cargo clippy --all-targets --features outproc-effect,outproc-instrument -- -D warnings
+cd rust && cargo test --workspace --locked                                          # 数理 + 合成 stage
+bash rust/crates/orbit-std-gain/bundle-macos.sh && \
+  cargo test -p orbit-effect-rack-child --lib -- --ignored                          # 実 Gain 3 件
+npm run typecheck:e2e && npm test                                                   # 型ゲート + skip 確認
+ORBIT_GATED_ORBITSTUDIO=1 ORBITSCORE_MCP_PORT=39123 <gated E2E>                     # §3 の新ブロック
+```
+
+🔴 **feature 付き clippy は default 構成の証拠にならない**（pre-push フックは default features
+で走る — 2026-08-28 実測: `--features outproc-effect,outproc-instrument` のみ回して push で
+止められた・`clippy::vec_box`）。逆も真なので**必ず両方並べる**。
 
 **却下した案**: Linux 向け `.clap` ビルド経路の新設（bundle-macos.sh と ActualFactory が
 macOS 前提で、経路の新設は「新機構を作らない」に反する。(a) を in-process で拾えば残るのは

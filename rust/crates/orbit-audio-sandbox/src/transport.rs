@@ -750,6 +750,12 @@ pub const CMD_RESULT_CHILD_EXITED: u32 = 5;
 /// 上位層を含めてこの定数を唯一の production timeout として使う。テストだけは
 /// [`CommandMailboxHost::issue_save_state_with_timeout`] へ短い値を渡して timeout 分岐を踏む。
 pub const PLUGIN_STATE_MAILBOX_TIMEOUT: Duration = Duration::from_secs(5);
+/// `APPLY_CHAIN` の完了 ack 待ち上限。
+///
+/// APPLY は単一 state 保存と違い、1 コマンド内で複数 plugin の同期 load を行う。重い plugin
+/// の連続 load は通常の state mailbox 上限 5 秒を正当に超えうるため、専用の長い上限を持つ。
+/// timeout 後も child は commit しうるので、上位層はこの失敗を registry uncertain と扱う。
+pub const APPLY_CHAIN_MAILBOX_TIMEOUT: Duration = Duration::from_secs(60);
 /// `OPEN_UI` の完了 ack 待ち上限。
 ///
 /// `OPEN_UI` は受理時でなく plugin view の生成・host window への attach が完了してから ack する。
@@ -930,10 +936,21 @@ impl CommandMailboxHost {
         &self,
         plan_path: &Path,
     ) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        self.issue_apply_chain_with_timeout(plan_path, APPLY_CHAIN_MAILBOX_TIMEOUT)
+    }
+
+    /// `timeout` の差し替えは unit test が production の長い APPLY 上限を待たずに failure
+    /// lifecycle を実証するための seam。production caller は必ず [`Self::issue_apply_chain`] を使う。
+    #[doc(hidden)]
+    pub fn issue_apply_chain_with_timeout(
+        &self,
+        plan_path: &Path,
+        timeout: Duration,
+    ) -> Result<CommandMailboxResponse, CommandMailboxError> {
         let path = plan_path.to_str().ok_or_else(|| {
             CommandMailboxError::InvalidArgument("plan path must be valid UTF-8".into())
         })?;
-        self.issue_command(CMD_APPLY_CHAIN, path, None, PLUGIN_STATE_MAILBOX_TIMEOUT)
+        self.issue_command(CMD_APPLY_CHAIN, path, None, timeout)
     }
 
     /// Save state for one flat rack stage.
@@ -2931,6 +2948,11 @@ mod tests {
         child.join().expect("child join");
         drop(mmap);
         let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn apply_chain_has_a_dedicated_timeout_longer_than_single_state_save() {
+        assert!(APPLY_CHAIN_MAILBOX_TIMEOUT > PLUGIN_STATE_MAILBOX_TIMEOUT);
     }
 
     #[test]

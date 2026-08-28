@@ -11,7 +11,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 
 import type { AudioEngine, EffectChainApplyRequest, EffectChainPlanStage } from '../../audio/types'
-import { DaemonProtocolError } from '../../audio/rust-engine/errors'
+import { DaemonProtocolError, isEffectChainRegistryIntact } from '../../audio/rust-engine/errors'
 import type { RackRecipe } from '../../signal-chain/rack'
 import {
   projectStateStoreFor,
@@ -329,9 +329,12 @@ function rackApplyProtocolError(error: DaemonProtocolError, rack: RackSpec): Dae
         ? element.normalizedName
         : element.name
   const cause = error.message.replace(/^\[[^\]]+\]\s*/, '')
+  const outcome = isEffectChainRegistryIntact(error)
+    ? 'the previous chain is kept'
+    : 'the daemon registry is uncertain; the next evaluation will rebuild the chain'
   return new DaemonProtocolError(
     error.code,
-    `effect chain apply failed at index ${index} (${name}): ${cause}; the previous chain is kept`,
+    `effect chain apply failed at index ${index} (${name}): ${cause}; ${outcome}`,
     error.details,
   )
 }
@@ -457,6 +460,13 @@ export class EffectChainMap<K> {
     if (!this.audioEngine.applyEffectChain) {
       throw new Error('Effect rack hosting requires the Rust engine backend.')
     }
+    const bus = this.effectBus?.(key)
+    // A failed post-respawn replay means the fresh daemon has no rack registry. Reuse the
+    // existing per-declaration active seam so an idempotent evaluation joins uncertain recovery.
+    if (this.audioEngine.isPluginActive?.('effect', bus) === false) {
+      this.rackChains.delete(key)
+      this.uncertainRacks.add(key)
+    }
     const previous = this.rackChains.get(key) ?? []
     const mode: EffectChainApplyRequest['mode'] = this.uncertainRacks.has(key) ? 'rebuild' : 'diff'
     const pairs = mode === 'rebuild' ? [] : lcsPairs(previous, rack)
@@ -467,7 +477,6 @@ export class EffectChainMap<K> {
     const dropPrevious = new Set<number>()
     const receiver = this.receiverId(key)
     const externalReceiver = this.externalReceiverId?.(key) ?? receiver
-    const bus = this.effectBus?.(key)
 
     const usedOccurrences = new Map<string, Set<number>>()
     const reserve = (name: string, occurrence: number): void => {
@@ -646,11 +655,13 @@ export class EffectChainMap<K> {
       // Deliberately no empty-diff early return: this command is also the daemon health check.
       result = await this.audioEngine.applyEffectChain(request)
     } catch (error) {
+      if (!isEffectChainRegistryIntact(error)) {
+        this.rackChains.delete(key)
+        this.uncertainRacks.add(key)
+      }
       if (error instanceof DaemonProtocolError) {
         throw rackApplyProtocolError(error, rack)
       }
-      this.rackChains.delete(key)
-      this.uncertainRacks.add(key)
       throw error
     }
 

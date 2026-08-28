@@ -433,12 +433,14 @@ pub fn run() -> Result<()> {
             // command has been issued yet), so it is safe to reuse as the carrier — the
             // daemon reads it only when it has just observed `CHILD_STATUS_LOAD_FAILED`.
             //
-            // 🔴 The detail is written *before* the status, and `load_initial` deliberately no
-            // longer sets the status itself. The daemon polls the status and reads the detail
-            // the moment it sees `LOAD_FAILED`; publishing the status first leaves a window in
-            // which it reads an empty field and falls back to the generic exit-status message —
-            // exactly the silent degradation this root is meant to remove. The Release store
-            // below is what makes the detail visible to the daemon's Acquire load.
+            // 🔴 Ordering is enforced inside `load_initial`, not here: it funnels every failure
+            // through one exit that calls this closure and *then* stores `CHILD_STATUS_LOAD_FAILED`
+            // with `Release`. The daemon polls that status and reads the detail the moment it sees
+            // the failure, so publishing the status first would leave a window in which it reads an
+            // empty field and falls back to the generic exit-status message — exactly the silent
+            // degradation this root is meant to remove. By the time this arm runs, both writes have
+            // already happened in the right order; `c08` pins that order by recording the status as
+            // seen from inside this closure.
             return Err(anyhow::anyhow!("{}", failure.command_outcome().detail));
         }
     };

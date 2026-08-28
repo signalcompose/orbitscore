@@ -4,7 +4,10 @@ import * as path from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { DaemonProtocolError } from '../../packages/engine/src/audio/rust-engine/errors'
+import {
+  DaemonProtocolError,
+  OUTPROC_EFFECT_UNCERTAIN,
+} from '../../packages/engine/src/audio/rust-engine/errors'
 import { Global } from '../../packages/engine/src/core/global'
 import {
   EffectChainMap,
@@ -337,6 +340,32 @@ describe('#628 effect rack LCS and identity registry', () => {
         chain: [expect.objectContaining({ op: 'load', path: '/B.clap' })],
       }),
     )
+  })
+
+  it('marks an APPLY mailbox timeout uncertain and rebuilds on the next evaluation', async () => {
+    const { map, applyEffectChain } = effectMap()
+    await map.applyRack('lead', [catalog('A')])
+    applyEffectChain.mockRejectedValueOnce(
+      new DaemonProtocolError(OUTPROC_EFFECT_UNCERTAIN, 'apply mailbox timed out'),
+    )
+
+    await expect(map.applyRack('lead', [catalog('B')])).rejects.toThrow(
+      'the daemon registry is uncertain; the next evaluation will rebuild the chain',
+    )
+    expect(map.rackFor('lead')).toEqual([])
+    expect(map.hasUncertain('lead')).toBe(true)
+
+    applyEffectChain.mockResolvedValueOnce({ status: 'applied', childPid: 4, dropped: [] })
+    await map.applyRack('lead', [catalog('B')])
+
+    expect(applyEffectChain).toHaveBeenCalledTimes(3)
+    expect(applyEffectChain.mock.calls[2]![0]).toEqual(
+      expect.objectContaining({
+        mode: 'rebuild',
+        chain: [expect.objectContaining({ op: 'load', path: '/B.clap' })],
+      }),
+    )
+    expect(map.hasUncertain('lead')).toBe(false)
   })
 
   it('T20 uses the identity filename and registers a dropped state only after APPLY succeeds', async () => {

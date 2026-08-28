@@ -56,7 +56,12 @@ import type {
 import { DaemonClient } from './daemon-client'
 import { wireObject } from './wire-validation'
 import type { AudioDeviceListEntry } from './daemon-client'
-import { DaemonConnectionError, DaemonProtocolError, DaemonQuitError } from './errors'
+import {
+  DaemonConnectionError,
+  DaemonProtocolError,
+  DaemonQuitError,
+  isEffectChainRegistryIntact,
+} from './errors'
 
 /**
  * boundary で明示する未対応 feature gap の種別（A4 era）。
@@ -1100,7 +1105,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       this.forgetPluginLedger(RustEnginePlayer.pluginKey('effect', request.bus))
       return result
     } catch (error) {
-      if (!(error instanceof DaemonProtocolError)) this.loadedEffectRacks.delete(key)
+      if (!isEffectChainRegistryIntact(error)) this.loadedEffectRacks.delete(key)
       throw error
     }
   }
@@ -1211,6 +1216,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
   private async reloadEffectRacksAfterRespawn(): Promise<void> {
     for (const { bus, chain } of this.loadedEffectRacks.values()) {
+      const key = RustEnginePlayer.pluginKey('effect', bus)
       try {
         await this.daemon.applyEffectChain({
           ...(bus === undefined ? {} : { bus }),
@@ -1218,7 +1224,11 @@ export class RustEnginePlayer implements AudioEngineBackend {
           chain: chain.map((stage) => ({ op: 'load' as const, ...stage })),
           saveDropped: [],
         })
+        this.pluginActiveByKey.delete(key)
       } catch (error) {
+        // The respawned daemon started empty, so a failed replay cannot retain the old registry.
+        // Mark this receiver inactive through the same seam used by single-plugin self-heal.
+        this.markPluginInactive(key, 'effect')
         console.error(
           `❌ [rust-engine] failed to restore effect rack after daemon respawn${
             bus === undefined ? ' (master)' : ` (bus=${bus})`

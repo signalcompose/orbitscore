@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { DaemonProtocolError } from '../../../packages/engine/src/audio/rust-engine/errors'
 import { RustEnginePlayer } from '../../../packages/engine/src/audio/rust-engine/rust-engine-player'
+import {
+  EffectChainMap,
+  type CatalogElementSpec,
+} from '../../../packages/engine/src/core/global/effect-slot'
 
 interface FakeDaemon {
   start: ReturnType<typeof vi.fn>
@@ -206,6 +210,62 @@ describe('RustEnginePlayer plugin recovery after daemon respawn', () => {
       ],
       saveDropped: [],
     })
+  })
+
+  it('marks a failed rack replay inactive so the same declaration self-heals with rebuild', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    const map = new EffectChainMap<string>(player as any, (key) => key, {
+      effectBus: () => 'seq-bus-0',
+    })
+    const rack: CatalogElementSpec[] = [
+      {
+        kind: 'catalog',
+        normalizedName: 'A',
+        resolvedPath: '/A.clap',
+        pluginId: 'a',
+        enabled: true,
+      },
+    ]
+    await map.applyRack('lead', rack)
+    daemon.applyEffectChain.mockClear()
+    daemon.applyEffectChain
+      .mockRejectedValueOnce(new DaemonProtocolError('BAD_STAGE', 'reload rejected'))
+      .mockResolvedValueOnce({ status: 'applied', childPid: 81, dropped: [] })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.applyEffectChain).toHaveBeenCalledTimes(1)
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('failed to restore effect rack after daemon respawn'),
+      expect.any(DaemonProtocolError),
+    )
+    expect(player.isPluginActive('effect', 'seq-bus-0')).toBe(false)
+
+    const activeCheck = vi.spyOn(player, 'isPluginActive')
+    await map.applyRack('lead', rack)
+
+    expect(daemon.applyEffectChain).toHaveBeenCalledTimes(2)
+    expect(activeCheck.mock.invocationCallOrder[0]).toBeLessThan(
+      daemon.applyEffectChain.mock.invocationCallOrder[1]!,
+    )
+    expect(daemon.applyEffectChain).toHaveBeenLastCalledWith({
+      bus: 'seq-bus-0',
+      mode: 'rebuild',
+      chain: [
+        {
+          op: 'load',
+          kind: 'catalog',
+          path: '/A.clap',
+          plugin_id: 'a',
+          enabled: true,
+        },
+      ],
+      saveDropped: [],
+    })
+    expect(map.hasUncertain('lead')).toBe(false)
   })
 
   it('logs a reload failure and retains the plugin for the next respawn retry', async () => {

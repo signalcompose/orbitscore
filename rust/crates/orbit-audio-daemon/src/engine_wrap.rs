@@ -76,6 +76,10 @@ pub enum WrapError {
     /// mutex poison 等）。TS 層は feature-gap と区別して rethrow する。
     #[error("out-of-process effect runtime error: {0}")]
     OutProcEffect(String),
+    /// ApplyEffectChain が child/daemon の生死または未完了 mailbox を跨ぎ、権威 config が
+    /// 要求前のままかを確認できない。TS 層は次評価を rebuild に倒す。
+    #[error("out-of-process effect registry is uncertain: {0}")]
+    OutProcEffectUncertain(String),
     #[error("malformed out-of-process effect request: {0}")]
     OutProcEffectRequest(String),
     /// out-of-process instrument がこの daemon ビルド/インスタンスで利用できない。
@@ -128,7 +132,7 @@ mod effect_rack_tests {
     use crate::backend::StubBackend;
     use crate::outproc_effect::{
         self, ApplyEffectChainMode, ChainStageConfig, EffectChainPlan, EffectChainPlanStage,
-        EffectChainStageSpec, OutProcEffectStats,
+        EffectChainStageSpec, OutProcEffectStats, SaveDroppedStage,
     };
     use orbit_audio_native::CallbackTimeStats;
     use orbit_audio_sandbox::transport::{
@@ -693,6 +697,36 @@ mod effect_rack_tests {
     }
 
     #[test]
+    fn mailbox_registry_predicate_separates_definitive_rejection_from_lifecycle_failures() {
+        use orbit_audio_sandbox::CommandMailboxError;
+
+        let definitive =
+            super::effect_chain_apply_mailbox_error(CommandMailboxError::CommandFailed {
+                seq: 1,
+                result: CMD_RESULT_PLUGIN_ERROR,
+                detail: "load rejected".into(),
+            });
+        assert!(matches!(definitive, WrapError::OutProcEffect(_)));
+
+        for uncertain in [
+            CommandMailboxError::Timeout {
+                seq: 2,
+                elapsed: Duration::from_millis(15),
+            },
+            CommandMailboxError::ChildExited {
+                seq: 3,
+                detail: "watchdog reset".into(),
+            },
+            CommandMailboxError::Poisoned { seq: 4 },
+        ] {
+            assert!(matches!(
+                super::effect_chain_apply_mailbox_error(uncertain),
+                WrapError::OutProcEffectUncertain(_)
+            ));
+        }
+    }
+
+    #[test]
     fn d6_timeout_releases_apply_reservation_for_the_next_request() {
         let fixture = rack_fixture(
             active_slot(
@@ -714,18 +748,19 @@ mod effect_rack_tests {
                 assert!(Instant::now() < deadline, "first apply was not published");
                 std::thread::sleep(Duration::from_millis(1));
             };
-            std::thread::sleep(Duration::from_millis(5_100));
+            std::thread::sleep(Duration::from_millis(25));
             unsafe {
                 (*region).cmd_result.store(CMD_RESULT_OK, Ordering::Relaxed);
                 (*region).cmd_ack_seq.store(seq, Ordering::Release);
             }
         });
-        let first = fixture.wrap.apply_outproc_effect_chain(
+        let first = fixture.wrap.apply_outproc_effect_chain_with_timeout(
             None,
             plan(vec![keep(0, false)]),
             ApplyEffectChainMode::Diff,
+            Duration::from_millis(15),
         );
-        assert!(matches!(first, Err(WrapError::OutProcEffect(_))));
+        assert!(matches!(first, Err(WrapError::OutProcEffectUncertain(_))));
         delayed.join().expect("delayed ack");
         let response = spawn_response(
             fixture.master.entry.shm_path.clone(),
@@ -1046,6 +1081,68 @@ mod effect_rack_tests {
             assert_ne!(new_pid, old_pid);
             assert!(!process_exists(old_pid));
         }
+    }
+
+    #[test]
+    fn unhealthy_active_drop_uses_latest_state_without_issuing_save() {
+        let state_dir = std::env::temp_dir().join(format!(
+            "orbit-unhealthy-drop-{}-{}",
+            std::process::id(),
+            super::short_uuid()
+        ));
+        std::fs::create_dir(&state_dir).expect("create state dir");
+        let latest_state = state_dir.join("latest.state");
+        let dropped_state = state_dir.join("dropped.state");
+        std::fs::write(&latest_state, b"last-known-state").expect("write latest state");
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("crashed.clap", Some(latest_state), true)],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        fixture
+            .master
+            .stats
+            .current_child_pid
+            .store(0, Ordering::Release);
+        let mmap = orbit_audio_sandbox::open_shared(&fixture.master.entry.shm_path)
+            .expect("open command counter map");
+        let region = orbit_audio_sandbox::region_ptr(&mmap);
+        let command_seq_before = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+        let ack = spawn_quiesce_ack(&fixture.master.entry);
+
+        let summary = fixture
+            .wrap
+            .apply_outproc_effect_chain(
+                None,
+                EffectChainPlan {
+                    chain: Vec::new(),
+                    save_dropped: vec![SaveDroppedStage {
+                        prev_index: 0,
+                        path: dropped_state.clone(),
+                    }],
+                },
+                ApplyEffectChainMode::Diff,
+            )
+            .expect("unhealthy culprit can be dropped without its dead mailbox");
+
+        ack.join().expect("quiesce ack");
+        assert_eq!(
+            unsafe { (*region).cmd_seq.load(Ordering::Acquire) },
+            command_seq_before,
+            "an inspected-unhealthy Active must not receive SAVE_STATE_AT"
+        );
+        assert_eq!(summary.child_pid, 0);
+        assert_eq!(summary.dropped.len(), 1);
+        assert_eq!(summary.dropped[0].prev_index, 0);
+        assert_eq!(summary.dropped[0].path, dropped_state);
+        assert_eq!(summary.dropped[0].bytes_written, 16);
+        assert_eq!(
+            std::fs::read(&summary.dropped[0].path).expect("read recovered state"),
+            b"last-known-state"
+        );
+        std::fs::remove_dir_all(state_dir).expect("remove state dir");
     }
 
     #[test]
@@ -4447,6 +4544,22 @@ impl EngineWrap {
         plan: crate::outproc_effect::EffectChainPlan,
         mode: crate::outproc_effect::ApplyEffectChainMode,
     ) -> Result<AppliedEffectChainSummary, WrapError> {
+        self.apply_outproc_effect_chain_with_timeout(
+            bus,
+            plan,
+            mode,
+            orbit_audio_sandbox::APPLY_CHAIN_MAILBOX_TIMEOUT,
+        )
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    fn apply_outproc_effect_chain_with_timeout(
+        &self,
+        bus: Option<String>,
+        plan: crate::outproc_effect::EffectChainPlan,
+        mode: crate::outproc_effect::ApplyEffectChainMode,
+        apply_timeout: Duration,
+    ) -> Result<AppliedEffectChainSummary, WrapError> {
         let mut reservation = EffectReplacementReservation::new(self, bus.clone());
         let (child_slot, entry, stats, bus_active) = {
             let mut guard = self
@@ -4486,18 +4599,22 @@ impl EngineWrap {
             Empty,
         }
 
-        let route = {
+        let mut route = {
             let slot = lock_child_slot_recovering(&child_slot, "effect chain route inspection");
+            let registry_is_intact = effect_chain_registry_is_intact(&slot, &stats);
             match &*slot {
                 ChildSlot::Active { mailbox, .. }
                     if mode == crate::outproc_effect::ApplyEffectChainMode::Diff
-                        && stats.current_child_pid.load(Ordering::Acquire) != 0
-                        && !stats.measurement_invalid.load(Ordering::Acquire) =>
+                        && registry_is_intact =>
                 {
                     ApplyRoute::Mailbox(mailbox.clone())
                 }
-                ChildSlot::Active { mailbox, .. } => ApplyRoute::Rebuild(Some(mailbox.clone())),
-                ChildSlot::Empty(_) if desired.is_empty() => ApplyRoute::Empty,
+                ChildSlot::Active { mailbox, .. } => {
+                    ApplyRoute::Rebuild(registry_is_intact.then(|| mailbox.clone()))
+                }
+                ChildSlot::Empty(_) if desired.is_empty() && previous.is_empty() => {
+                    ApplyRoute::Empty
+                }
                 ChildSlot::Empty(_) => ApplyRoute::Rebuild(None),
                 ChildSlot::Loading { path } => {
                     return Err(WrapError::OutProcEffect(format!(
@@ -4518,7 +4635,7 @@ impl EngineWrap {
                 .map_err(|error| {
                     WrapError::OutProcEffect(format!("write effect chain apply plan: {error}"))
                 })?;
-            match mailbox.issue_apply_chain(&plan_path) {
+            match mailbox.issue_apply_chain_with_timeout(&plan_path, apply_timeout) {
                 Ok(_) => {
                     let desired_is_empty = desired.is_empty();
                     *entry.chain.lock().map_err(|_| {
@@ -4544,6 +4661,7 @@ impl EngineWrap {
                 }
                 Err(orbit_audio_sandbox::CommandMailboxError::ChildExited { .. }) => {
                     // The desired config was computed from the pre-crash authority. Rebuild below.
+                    route = ApplyRoute::Rebuild(None);
                 }
                 Err(error) => return Err(effect_chain_apply_mailbox_error(error)),
             }
@@ -4560,18 +4678,25 @@ impl EngineWrap {
             });
         }
 
-        if let ApplyRoute::Rebuild(Some(mailbox)) = &route {
-            for dropped in &plan.save_dropped {
-                let argument = serde_json::to_string(&serde_json::json!({
-                    "index": dropped.prev_index,
-                    "path": dropped.path,
-                }))
-                .map_err(|error| WrapError::OutProcEffectRequest(error.to_string()))?;
-                mailbox
-                    .issue_save_state_at(&argument, &dropped.path)
-                    .map_err(effect_chain_apply_mailbox_error)?;
+        let dropped = match &route {
+            ApplyRoute::Rebuild(Some(mailbox)) => {
+                for stage in &plan.save_dropped {
+                    let argument = serde_json::to_string(&serde_json::json!({
+                        "index": stage.prev_index,
+                        "path": stage.path,
+                    }))
+                    .map_err(|error| WrapError::OutProcEffectRequest(error.to_string()))?;
+                    mailbox
+                        .issue_save_state_at(&argument, &stage.path)
+                        .map_err(effect_chain_apply_mailbox_error)?;
+                }
+                dropped_stage_summaries(&plan.save_dropped)?
             }
-        }
+            ApplyRoute::Rebuild(None) => {
+                dropped_stage_summaries_from_latest_state(&previous, &plan.save_dropped)?
+            }
+            ApplyRoute::Mailbox(_) | ApplyRoute::Empty => Vec::new(),
+        };
 
         let was_active = matches!(
             &*lock_child_slot_recovering(&child_slot, "effect rebuild state check"),
@@ -4587,7 +4712,7 @@ impl EngineWrap {
             entry.engaged.store(false, Ordering::Release);
             return Ok(AppliedEffectChainSummary {
                 child_pid: 0,
-                dropped: dropped_stage_summaries(&plan.save_dropped)?,
+                dropped,
             });
         }
 
@@ -4597,7 +4722,7 @@ impl EngineWrap {
         let _ = bus_active;
         Ok(AppliedEffectChainSummary {
             child_pid: stats.current_child_pid.load(Ordering::Acquire),
-            dropped: dropped_stage_summaries(&plan.save_dropped)?,
+            dropped,
         })
     }
 
@@ -7541,6 +7666,16 @@ fn active_plugin_ui_handles<R: OutProcRole>(
 }
 
 #[cfg(feature = "outproc-effect")]
+fn effect_chain_registry_is_intact(
+    slot: &ChildSlot<EffectRole>,
+    stats: &crate::outproc_effect::OutProcEffectStats,
+) -> bool {
+    matches!(slot, ChildSlot::Active { .. })
+        && stats.current_child_pid.load(Ordering::Acquire) != 0
+        && !stats.measurement_invalid.load(Ordering::Acquire)
+}
+
+#[cfg(feature = "outproc-effect")]
 fn dropped_stage_summaries(
     dropped: &[crate::outproc_effect::SaveDroppedStage],
 ) -> Result<Vec<DroppedEffectStageSummary>, WrapError> {
@@ -7565,8 +7700,64 @@ fn dropped_stage_summaries(
 }
 
 #[cfg(feature = "outproc-effect")]
+fn dropped_stage_summaries_from_latest_state(
+    previous: &crate::outproc_effect::ChainConfig,
+    dropped: &[crate::outproc_effect::SaveDroppedStage],
+) -> Result<Vec<DroppedEffectStageSummary>, WrapError> {
+    let mut summaries = Vec::new();
+    for stage in dropped {
+        let Some(crate::outproc_effect::ChainStageConfig::Catalog {
+            latest_state: Some(source),
+            ..
+        }) = previous.get(stage.prev_index)
+        else {
+            // A dead child cannot produce a first snapshot. Omitting the summary keeps TS from
+            // registering a nonexistent file while still allowing the crashed stage to be dropped.
+            continue;
+        };
+        if source != &stage.path {
+            std::fs::copy(source, &stage.path).map_err(|error| {
+                WrapError::OutProcEffect(format!(
+                    "recover dropped stage state from {source:?} to {:?}: {error}",
+                    stage.path
+                ))
+            })?;
+        }
+        let bytes_written = std::fs::metadata(&stage.path)
+            .map_err(|error| {
+                WrapError::OutProcEffect(format!(
+                    "stat recovered dropped stage state {:?}: {error}",
+                    stage.path
+                ))
+            })?
+            .len();
+        summaries.push(DroppedEffectStageSummary {
+            prev_index: stage.prev_index,
+            path: stage.path.clone(),
+            bytes_written,
+        });
+    }
+    Ok(summaries)
+}
+
+#[cfg(feature = "outproc-effect")]
+fn effect_chain_registry_is_intact_after_mailbox_error(
+    error: &orbit_audio_sandbox::CommandMailboxError,
+) -> bool {
+    matches!(
+        error,
+        orbit_audio_sandbox::CommandMailboxError::CommandFailed { .. }
+    )
+}
+
+#[cfg(feature = "outproc-effect")]
 fn effect_chain_apply_mailbox_error(error: orbit_audio_sandbox::CommandMailboxError) -> WrapError {
     use orbit_audio_sandbox::CommandMailboxError;
+    if !effect_chain_registry_is_intact_after_mailbox_error(&error) {
+        return WrapError::OutProcEffectUncertain(format!(
+            "effect chain apply ended without confirmation that the authoritative config is unchanged: {error}"
+        ));
+    }
     match error {
         CommandMailboxError::CommandFailed { detail, .. } => {
             let suffix = if detail.contains("the previous chain is kept") {
@@ -7576,12 +7767,7 @@ fn effect_chain_apply_mailbox_error(error: orbit_audio_sandbox::CommandMailboxEr
             };
             WrapError::OutProcEffect(format!("effect chain apply failed: {detail}{suffix}"))
         }
-        CommandMailboxError::Timeout { .. } => WrapError::OutProcEffect(format!(
-            "effect chain apply mailbox timed out; authoritative config is unchanged: {error}"
-        )),
-        other => WrapError::OutProcEffect(format!(
-            "effect chain apply mailbox failed; authoritative config is unchanged: {other}"
-        )),
+        _ => unreachable!("registry-intact mailbox failures are definitive child responses"),
     }
 }
 

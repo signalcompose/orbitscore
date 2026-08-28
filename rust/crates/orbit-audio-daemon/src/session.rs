@@ -2436,6 +2436,11 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
             ProtocolError::new("OUTPROC_EFFECT_UNAVAILABLE", msg.clone())
         }
         WrapError::OutProcEffect(msg) => ProtocolError::new("OUTPROC_EFFECT_RUNTIME", msg.clone()),
+        // APPLY の確定拒否と、timeout / child lifecycle を跨いで daemon 登記を確認できない
+        // 結果を分離する専用コード（#405 の CLAP_NOT_LOADED と同じく TS 層が actionable に判定）。
+        WrapError::OutProcEffectUncertain(msg) => {
+            ProtocolError::new("OUTPROC_EFFECT_UNCERTAIN", msg.clone())
+        }
         WrapError::OutProcEffectRequest(msg) => {
             ProtocolError::new("MALFORMED_REQUEST", msg.clone())
         }
@@ -3218,6 +3223,12 @@ mod tests {
     fn clap_not_loaded_maps_to_not_loaded_code() {
         let e = WrapError::ClapNotLoaded("no plugin loaded (send LoadPlugin first)".into());
         assert_eq!(wrap_err_to_protocol(&e).code, "CLAP_NOT_LOADED");
+    }
+
+    #[test]
+    fn outproc_effect_uncertain_maps_to_actionable_code() {
+        let e = WrapError::OutProcEffectUncertain("apply mailbox timed out".into());
+        assert_eq!(wrap_err_to_protocol(&e).code, "OUTPROC_EFFECT_UNCERTAIN");
     }
 
     #[test]
