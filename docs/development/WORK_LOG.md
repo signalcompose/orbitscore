@@ -17,6 +17,95 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.404 design: ミキサーの土台と、その上に乗るオプションの責務を分けた (#643) (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643)（改題: *separate the mixer foundation from the sources that ride it*）
+**成果物**: `docs/design/643-mixer-foundation-design.md`（426行）
+**Status**: 設計のみ・実装なし。Fable 起案 v1→v6・main 検収
+
+#### 発端: instrument に per-part の処理が一切できなかった
+
+`effect()` / `output()` / `send()` の3つとも note シーケンスで例外。原因は **instrument の音が
+master バッファへ直接加算され、バスグラフの外にいた**こと（`outproc_instrument.rs:396-403`）。
+
+spec は実装時期を「#517 S4 PR-1b（#522）」としていたが、**#522 の本文に instrument の insert bus
+移設は書かれていない**（grep 0件）。**宛先の無い予定**として1ヶ月宙に浮いていた。
+
+#### 設計が6回変わった — owner の押し戻しが誤った一般化を剥がした
+
+| owner 指摘 | 設計への作用 |
+|---|---|
+| audio も instrument も同じバス仕様 | gain 非対称が**現状の欠陥**と判明（`global.gain` が instrument に効かない）。注入点が `render_multi` の**内側**へ |
+| ちゃんとバスに載せれば解決では | gain の手当ては**不要**。位置を直せば自動的に消える |
+| マルチを受けられるバスを今 | アドレス `(instance, unit)` を**今確定**（protocol は後から変えられない） |
+| 土台とオプションの責務分離 | 境界表・grep 監査・`SetInstrumentBus` → **`SetSourceRouting`** |
+| UI の制限がないぶん柔軟で危険な配線 | **Forward / Feedback の2種エッジ**。焼き込み3箇所を列挙 |
+
+**設計は大きくならず、変わった**: callback → feed で core の追加は ~15 行に減り、pop 対策の機構は
+借用構造に吸収されて消え、変異テストは E2E に置き換わった。
+
+#### main の検収で確定させた事実（一次ソース）
+
+instrument は audio event を出さない（`plugin-note-output.ts` にバス引数なし）/ `process_block` は
+非ブロッキング（sleep・park・wait・recv・lock・spin が 0 件）/ `free_slots` は LIFO
+（`engine_wrap.rs:2460`）/ `get_disjoint_mut` は rustc 1.97.0 で**実コンパイル確認** /
+FTZ・DAZ は**未設定**（0 件）/ `STUB_TRANSPORT` 実在（`outproc_instrument.rs:49,388`）/
+`send_gain_overrides` の相対 index（`:1706-1707,1760`）。
+
+#### 見つかった既存欠陥
+
+1. **`global.gain` が instrument に効かない** — マスターフェーダーが効かない音がある
+2. **`output()` の3分岐のうちガードは1本だけ** — instrument の `output(1)` / `output("Kick Ch")` が
+   **黙って通り音が従わない**（silent failure 2件）
+3. `QA_2.0.0_HUMAN_RUNBOOK.md:77` が「拡張が `.orbslog` を生成する」と書いているが**拡張は
+   `enableSessionLog()` を呼ばない**（CLI も opt-in・既定 off）
+
+#### 実装計画
+
+**実装 ~900-1100 行 + テスト ~900-1100 行・2 PR**（+ follow-up 1）。切り方は**検証手段の境界**:
+PR-1 = Rust 4層（`cargo` で検証）/ PR-2 = TS + E2E（実機 OrbitStudio）。
+
+---
+
+### 6.403 docs(rules): 一律の変異検証ルールを3層方針へ置き換えた (Aug 29, 2026)
+
+**Status**: `CLAUDE.md` のみ（+67 / -25）
+
+#### 「新規テストは必ず変異検証」は owner 指示ではなかった
+
+owner の指示は**目的だけ**だった:
+
+> いくら作ってもテストが意味をなしてないと先に進めないので、テストの積み上げだけはしっかりしてください。
+
+一律ルールは過去セッションが目的を手段へ翻訳したもので、**翻訳結果が `owner 指示` の見出しを
+引き継いだため再検討されなくなっていた**。owner 本人の「指示した覚えがない」で発覚。
+
+#### 撤回の根拠
+
+旧版は #528（ハーネスが無音を出したのに警報が鳴らなかった）を**変異検証が要る根拠**として
+引いていた。しかしあれは **E2E が信号を見ていなかった**事故で、キャプチャに RMS の
+アサーションがあれば落ちた。**原因の帰属を一段間違えて、効かない規律を積んでいた。**
+
+「タイミング条件と bit 一致は E2E に届かない」も誤り — **音はデジタルで取れる**し、条件は
+DSL から駆動できる。
+
+#### 置き換えた形
+
+**大前提: 機能にはテストを書く（TDD）。型はテストの代替ではない**（軸が違う。owner 指摘の
+category error を修正）。以下は機能テストに**加えて何を足すか**:
+
+| 対象 | 追加で足すもの |
+|---|---|
+| 型が保証している誤り | **何も足さない**（型チェッカが保証することをテストで確かめない） |
+| DSL から決定論的に駆動でき信号に出る振る舞い | 機能テストそのものを**キャプチャ E2E** に |
+| 駆動できない／信号に出ない内部状態 | **変異検証** |
+
+判定軸は「聞こえるか」ではなく **「DSL から決定論的に駆動できるか」**。
+
+🔴 **指示を記録する時は、引用（owner の言葉）と解釈（手段）を見出しレベルで分けること。**
+
+---
+
 ### 6.402 fix: 降格した後に、各 call site のレベルを監査し直した (#628) (Aug 29, 2026)
 
 **Date**: 2026-08-29
