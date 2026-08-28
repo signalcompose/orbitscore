@@ -585,26 +585,42 @@ var snare = init global.seq
 ## Plugin Hosting（CLAP / VST3）
 
 > 本節は 2.0.0 以降に追加された機能です。詳細な構文仕様は
-> `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` の Plugin Hosting 節を参照してください。
+> `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` の Plugin Hosting / Plugin Catalog / Mixer 節を、
+> 使い方の解説は VitePress user site の
+> [プラグイン音源を鳴らす](../../../sites/user/plugins/instrument.md) /
+> [エフェクトを挿す](../../../sites/user/mixing/effects.md) を参照してください。
 
-OrbitScore は CLAP / VST3 プラグインをホストして、エフェクト（master bus insert）と
-インストゥルメント（音源）として使うことができます。
+OrbitScore は CLAP / VST3 プラグインをホストして、エフェクト（master bus insert /
+per-sequence insert / sum・aux bus insert）とインストゥルメント（音源）として使うことが
+できます。カタログにインストール済みのプラグインは、パスの代わりに名前（例:
+`"TAL Reverb 4"`）で指定できます（同名衝突は `"vendor/名前"` / `"clap/名前"` /
+`"vst3/名前"` で一意化）。
 
-### エフェクト: `global.effect()`
+### エフェクト: `global.effect()` / `seq.effect()`
 
 ```orbitscore
-global.effect("~/plugins/TAL-Reverb-4.clap")
+global.effect("TAL Reverb 4")           // master bus insert（全シーケンスに掛かる）
+drums.effect("TAL Reverb 4")            // per-sequence insert（audio シーケンス専用）
 ```
 
-- master bus への単一 insert（全シーケンスに掛かります）
-- v1 では 1 基のみ。**対応フォーマットは `.clap` のみ**
+**対応フォーマットは `.clap` と `.vst3` の両方**です（`.component` は未対応）。1 つのレシーバに
+複数のプラグインを直列に挿す「チェーン」も書けます（配列で指定）:
+
+```orbitscore
+drums.effect(["TAL Reverb 4", Gain(db: -6)])
+```
+
+`Gain(db: n)` はアプリ同梱の標準プラグインです。`layer([...])`（並列合成）は記法のみ予約されて
+おり、v1 では使うとエラーになります。`sum("name")` / `aux("name")` バスにも同じ形でエフェクトを
+挿せます。`seq.effect()` は **audio シーケンス専用**（`seq.midi()`/`seq.instrument()` の note
+シーケンスには v1 では使えません）。
 
 ### インストゥルメント: `seq.instrument()`
 
 ```orbitscore
 var synth = init global.seq
-synth.instrument("~/plugins/Surge XT.clap")
-// または VST3:
+synth.instrument("Surge XT")     // カタログ名（推奨）
+// または明示パス:
 // synth.instrument("~/plugins/Surge XT.vst3")
 synth.octave(4).vel(100)
 synth.play(1, 3, 5, 0)  // 値は度数（Pitch DSL と同じ）
@@ -613,11 +629,24 @@ synth.play(1, 3, 5, 0)  // 値は度数（Pitch DSL と同じ）
 - `seq.instrument()` を宣言したシーケンスは note シーケンスになり、`play()` の値は
   度数として解釈されます（`global.key()` の設定が必須）
 - **対応フォーマットは `.clap` と `.vst3` の両方**
-- v1 ではプラグインのインスタンスは 1 つのみ
+- **シーケンスごとに独立したプラグインインスタンスを持ちます**（同じプラグインを複数の
+  シーケンスで宣言しても音色は共有されません）。第 2/第 3 引数に `.vstpreset`/`.state` で
+  終わるパスを渡すと、保存済みの音色を復元できます（VST3 のみ）
+- `seq.effect()` / sum バスへの `output()` / `send()` は note シーケンスには使えません（v1
+  制限）。instrument の音は master へ直接ミックスされますが、`global.effect()`（master
+  chain）は適用されます
+
+### プラグイン UI: `seq.ui()`
+
+```orbitscore
+synth.ui()                    // 無引数 = instrument の UI
+drums.ui("TAL Reverb 4")      // 名前が一致する insert の UI をすべて開く
+drums.ui("TAL Reverb 4", false) // 閉じる
+```
 
 ### LinkAudio との併用不可（v1 制限）
 
-`global.linkAudio()` と Plugin Hosting（effect / instrument のいずれか）は、v1 では
+`global.linkAudio()` と Plugin Hosting（effect / instrument / sum / aux のいずれか）は、v1 では
 同時に使用できません。
 
 ### 対応フォーマット表（v1 時点）
@@ -625,7 +654,7 @@ synth.play(1, 3, 5, 0)  // 値は度数（Pitch DSL と同じ）
 | Role | `.clap` | `.vst3` | `.component`（AU） |
 |---|---|---|---|
 | `seq.instrument()`（instrument） | ✅ | ✅ | 未対応（予約のみ） |
-| `global.effect()`（effect） | ✅ | 未対応（予約のみ） | 未対応（予約のみ） |
+| `global.effect()` / `seq.effect()`（effect） | ✅ | ✅ | 未対応（予約のみ） |
 
 ---
 

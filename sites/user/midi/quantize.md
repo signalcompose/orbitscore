@@ -93,5 +93,6 @@ RUN(kick)
 
 ## 次のページ
 
+- CLAP / VST3 のプラグイン音源を鳴らす → [プラグイン音源を鳴らす](../plugins/instrument.md)
 - メソッド一覧 → [リファレンス](../reference/methods.md)
 - トラブルシューティング → [困ったときは](../troubleshooting.md)

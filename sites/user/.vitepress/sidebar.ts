@@ -39,20 +39,25 @@ export const sidebarJa: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
+    text: 'プラグインを使う',
+    collapsed: false,
+    items: [{ text: '15. プラグイン音源を鳴らす', link: '/plugins/instrument' }],
+  },
+  {
     text: 'ミキシングとプロジェクト構成',
     collapsed: false,
     items: [
-      { text: '15. エフェクトを挿す', link: '/mixing/effects' },
-      { text: '16. sum と aux/send', link: '/mixing/routing' },
-      { text: '17. 複数ファイルプロジェクト', link: '/projects/import' },
+      { text: '16. エフェクトを挿す', link: '/mixing/effects' },
+      { text: '17. sum と aux/send', link: '/mixing/routing' },
+      { text: '18. 複数ファイルプロジェクト', link: '/projects/import' },
     ],
   },
   {
     text: '困ったときは',
     collapsed: false,
     items: [
-      { text: '18. リファレンス', link: '/reference/methods' },
-      { text: '19. トラブルシューティング', link: '/troubleshooting' },
+      { text: '19. リファレンス', link: '/reference/methods' },
+      { text: '20. トラブルシューティング', link: '/troubleshooting' },
     ],
   },
 ]
