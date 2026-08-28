@@ -17,6 +17,52 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.400 chore: 列挙 13 本を回し、撤回済み API の残骸を 1 件消した (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: 完了条件 Q4 項目 7（列挙）完了
+
+設計 §7 の列挙コマンド 13 本を最終コミットで再実行し、
+`docs/development/enumeration-13.md` に**コマンドと件数**を記録した。
+
+### 🔴 列挙が本物の残骸を 1 件見つけた（項目 10）
+
+`resolveCatalogMethodCandidates`（`plugin-resolver.ts`）は**撤回された SC.10.9（メソッド形）
+の残骸**で、**source 側に呼び出し元が 1 件も無かった**（dist の成果物と自身の export のみ）。
+
+🔴 **前回の記録（コミット `4a08ecd6`）では「1」と記録されたまま未処置だった。**
+件数を記録するだけで処置していなければ、列挙は機能しない。
+
+**到達不能を実行で証明してから削除した**（grep だけを根拠にしない・
+[[absence-claims-need-exhaustive-enumeration]]）:
+
+```
+削除後: npm run build 型エラー 0 / npm test 2079 passed / npm run lint 0
+```
+
+同じ grep が拾う `resolve.ts:74` の `kind: 'plugin'` は**残した** —
+**診断用の名前衝突分類器**そのもので、設計が明示的に認めている用途。
+
+### 項目 11 の 2 件は「残骸」ではなくガード本体
+
+```
+await expect(bus.ui(1 as any)).rejects.toThrow('numeric indexes are not supported')
+```
+
+**数値 index が拒否されることを検査する負のテスト**。grep が自分のガードを拾っているだけ。
+
+> **この grep を「0 件でなければ不合格」と機械的に運用すると、ガードを消す方向の圧力になる。**
+> 件数だけでなく中身を読むこと。記録にもそう明記した。
+
+### owner 判断（3 点すべて回答済み）
+
+| | 判断 |
+|---|---|
+| (i) Cmd+Click の #633 送り | **承認**（3 箇所に記録済み） |
+| (ii) WARN 分類 | **分類器に `WARN` を追加**（実機で 7 件落ちた実測を提示） |
+| (iii) `CLAUDE.md` マージ前ゲート | **恒久追加する**（実測 19〜67 秒・変異で red を確認済み） |
+
 ### 6.399 test(e2e): 赤 3 件すべてが単一の既知欠陥に帰着した (#628) (Aug 28, 2026)
 
 **Date**: 2026-08-28
