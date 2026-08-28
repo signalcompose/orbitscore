@@ -1322,13 +1322,37 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         const errorsBefore = beforeLog.split(errorPrefix).length - 1
         const run = await activeClient.call('run_selection')
         expect(run.isError, run.text).toBe(false)
-        await waitUntil(
-          async () => {
-            const log = (await activeClient.call('get_log', { lines: 500 })).text
-            return log.split(errorPrefix).length - 1 > errorsBefore
-          },
-          { intervalMs: 200, timeoutMs: 5_000, label: 'ambiguous mixer-name error in get_log' },
-        )
+        // 🔴 #628 の実機ゲートで 3 回連続タイムアウトした。手で同じ DSL を評価したところ
+        // 診断は期待どおり出る（`ERROR: [ERROR] Mixer bus name "drum" is ambiguous: …`）ので、
+        // **機構ではなく待ち時間の問題**。`run_selection` は「選択を渡した」で即座に返り、
+        // engine の評価は非同期なので、スイート後半（多数のプラグインをロード済み）では
+        // 5 秒では届かない。このスイートの他の待ちは 10〜15 秒。
+        //
+        // アサーション自体は変えていない（件数の増加を見る）。**待ちを揃え、失敗時に
+        // ログ末尾を添える**ようにしただけ — 次に落ちたときに原因が読めるように。
+        // 🔴 label のテンプレート文字列は `waitUntil` を呼ぶ**前**に一度だけ評価されるので、
+        // そこへログ末尾を埋めても常に空になる（実機ゲートで実際に空だった）。
+        // 失敗時の診断は catch 側で組み立てる。
+        let ambiguousLogTail = ''
+        let ambiguousMatchCount = -1
+        try {
+          await waitUntil(
+            async () => {
+              const log = (await activeClient.call('get_log', { lines: 500 })).text
+              ambiguousLogTail = log.slice(-2500)
+              ambiguousMatchCount = log.split(errorPrefix).length - 1
+              return ambiguousMatchCount > errorsBefore
+            },
+            { intervalMs: 200, timeoutMs: 15_000, label: 'ambiguous mixer-name error in get_log' },
+          )
+        } catch (error) {
+          throw new Error(
+            `${String(error)}\n` +
+              `errorsBefore=${errorsBefore} lastCount=${ambiguousMatchCount}\n` +
+              `--- prefix ---\n${errorPrefix}\n` +
+              `--- log tail ---\n${ambiguousLogTail}`,
+          )
+        }
 
         const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
         expect(afterLog).toContain(errorPrefix)

@@ -17,6 +17,67 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.399 test(e2e): 赤 3 件すべてが単一の既知欠陥に帰着した (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639 / #633
+**Status**: 実機ゲート 5 回。**赤は既知 1 件に起因する 3 テストのみ**
+
+### 🔴 結論: 3 件すべてが `UI_CLOSED_DONE`（#633 送り）に帰着する
+
+| テスト | 原因 |
+|---|---|
+| `drives real OrbitStudio end-to-end` | `UI_CLOSED_DONE (20000ms)` タイムアウト（直接） |
+| `#618 E1-E6` | 同上（直接） |
+| `reports an ambiguous bare mixer name` | **同欠陥のログ洪水による巻き添え** |
+
+### 3 件目の分類に 3 回かかった（記録）
+
+1. **5 秒 → 15 秒に延ばした** → 効かず。「待ち不足」という読みが外れた
+2. **診断を仕掛けたが、仕掛け自体が壊れていた** — `waitUntil` の `label` に埋めた
+   テンプレート文字列は**呼び出し前に一度だけ評価される**ので、ログ末尾は常に空だった
+   （失敗メッセージが `Log tail:  after 15000ms` になっていた）。
+   🔴 [[escalation-does-not-fix-opacity]] の「仕掛けた捕捉自体が壊れている可能性を先に疑う」
+   がそのまま当てはまった
+3. **catch 側で診断を組み立てる形に直して実測** → 原因が一目で分かった
+
+```
+errorsBefore=0 lastCount=0
+--- log tail ---
+ERROR: [daemon] … plugin UI event pump failed: plugin UI event protocol error:
+UI_CLOSED_DONE seq 2 has invalid completion Some("{\"index\":0,\"completion\":\"safepoint-completed\"}")
+（約 25ms ごとに繰り返し）
+```
+
+`errorsBefore=0 lastCount=0` は**窓の回転ではなく、そもそも一度も出ていない**ことを示す。
+原因は **`get_log` の固定 500 行窓がこの洪水で埋まり**、曖昧性エラーが出ても即座に窓の外へ
+押し出されること。**待ち時間の問題ではなかった。**
+
+手で同じ DSL を評価すると診断は期待どおり出る（機構は正しい）。
+`git diff main..HEAD` にこのテストの変更は 0 件（この PR の退行ではない）。
+
+### この発見が #633 の優先度を上げる
+
+既知欠陥は **UI close を壊すだけでなくログを溢れさせ、無関係なテストまで巻き込む**。
+`drives real OrbitStudio end-to-end` が `UI_CLOSED_DONE` で落ちると、その
+`stop_engine`（1194 行・テスト最終ステップ）に**到達しない**ため、
+エンジンが状態を保ったまま後続テストへ流れる副作用もある。
+
+### 実機ゲートの推移
+
+| 回 | 結果 | 見つけたもの |
+|---|---|---|
+| 1 | 7 failed / 3 passed | `WARN` が `ERROR:` に分類される（F-a の予測が的中） |
+| 2 | **3 failed / 7 passed** | **新規 2 ブロック green**・`#625` も復活 |
+| 3 | 3 failed | この PR が変えた文言にアンカーが追随していなかった |
+| 4 | 3 failed | 待ち延長は効かず・**診断の仕掛けが壊れていた** |
+| 5 | 3 failed | **診断が働き、3 件すべてが既知に帰着すると確定** |
+
+```
+✓ #628 R28: rack chain audio mainline                    42343ms
+✓ #628 R28: rack master + MCP standard-element error       550ms
+```
+
 ### 6.398 fix: 警告はエラーではない（実機ゲートが 7 → 3 へ） (#628) (Aug 28, 2026)
 
 **Date**: 2026-08-28
