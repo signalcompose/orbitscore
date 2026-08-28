@@ -4755,6 +4755,27 @@ impl EngineWrap {
                 stats.initial_attach_pending.store(false, Ordering::Release);
                 break;
             }
+            // Root 3-3: `CHILD_STATUS_LOAD_FAILED` is the rack child's own, more specific signal
+            // (set by `RackController::load_initial` before it exits) — checking it before
+            // falling through to the generic `child_early_exit` wait means we surface *why* the
+            // load failed (e.g. "failed index 1: <plugin>: <reason>") instead of only ever
+            // learning the process exited. The child also writes the same text into
+            // `cmd_result_detail` right after setting this status; read it back here rather than
+            // reconstructing a generic message from the exit status alone.
+            if status == orbit_audio_sandbox::transport::CHILD_STATUS_LOAD_FAILED {
+                let detail = unsafe {
+                    orbit_audio_sandbox::transport::read_cstr_field(&(*region).cmd_result_detail)
+                        .map(str::to_string)
+                }
+                .filter(|detail| !detail.is_empty())
+                .unwrap_or_else(|| "child reported a load failure without detail".into());
+                let error =
+                    retryable_attach_failure(supervisor, region, &child_slot, launch, detail);
+                *entry.chain.lock().map_err(|_| {
+                    WrapError::OutProcEffect("effect chain config mutex poisoned".into())
+                })? = previous;
+                return Err(error);
+            }
             if stats.child_early_exit.fired() {
                 let detail = stats
                     .child_early_exit

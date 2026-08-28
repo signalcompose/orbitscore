@@ -137,6 +137,29 @@ pub(crate) fn apply_plan_path(shm_path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.apply.json", shm_path.display()))
 }
 
+/// Root 3-4 (design §2.3): crash diagnostics named only the stage *index*, which cannot answer
+/// "which plugin actually crashed" without cross-referencing the currently-deployed chain by
+/// hand. Look the index up in the authoritative `ChainConfig` so the watchdog log can say
+/// `respawn: last active stage = k (<plugin name>)` directly. A poisoned mutex or an
+/// out-of-range index (both should be unreachable, but this is a diagnostic path — never let it
+/// panic the watchdog thread) degrade to a label that still carries the index.
+fn active_stage_plugin_label(chain: &Mutex<ChainConfig>, index: u32) -> String {
+    let Ok(chain) = chain.lock() else {
+        return format!("stage {index}, chain config lock poisoned");
+    };
+    match chain.get(index as usize) {
+        Some(ChainStageConfig::Catalog { path, .. }) => {
+            let name = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("<unnamed>");
+            format!("stage {index}: {name}")
+        }
+        Some(ChainStageConfig::Standard { name, .. }) => format!("stage {index}: {name}"),
+        None => format!("stage {index}, out of range"),
+    }
+}
+
 pub(crate) fn write_chain_manifest(shm_path: &Path, chain: &ChainConfig) -> io::Result<PathBuf> {
     let path = chain_manifest_path(shm_path);
     let bytes = serde_json::to_vec(&ChainManifest {
@@ -870,7 +893,8 @@ impl EffectChildSupervisor {
                                 }
                             {
                                 tracing::warn!(
-                                    "{child_name_wd} exited during initial attach ({status}, active stage {active_stage_index})"
+                                    "{child_name_wd} exited during initial attach ({status}, last active {})",
+                                    active_stage_plugin_label(&chain, active_stage_index)
                                 );
                                 stats.child_early_exit.record(status);
                                 break;
@@ -896,7 +920,8 @@ impl EffectChildSupervisor {
                                 break;
                             }
                             tracing::warn!(
-                                "{child_name_wd} が異常終了（{status}, active stage {active_stage_index}）→ respawn する"
+                                "{child_name_wd} が異常終了（{status}, respawn: last active {}）→ respawn する",
+                                active_stage_plugin_label(&chain, active_stage_index)
                             );
                             // `try_wait=Some` で旧 child の死亡を確認済み。in-flight command を
                             // failure ack で完了し、readiness/mailbox を reset してから replacement を

@@ -386,21 +386,75 @@ fn apply_outcome(error: ApplyFailure) -> CommandOutcome {
 }
 
 pub fn run() -> Result<()> {
+    // 🔴 root 3: this child has no other way to surface a diagnostic. Its stderr is inherited by
+    // the daemon (`Stdio::inherit()`), so a plain `tracing_subscriber::fmt()` here lands directly
+    // on the daemon's own stderr stream in the same timestamp+level format the daemon's own
+    // tracing uses — the extension's stderr classifier already recognizes that shape as
+    // non-error for TRACE/DEBUG/INFO (see `isDaemonNonErrorTracingLine`), so only genuine
+    // WARN/ERROR events here surface as `ERROR:` in `get_log`. `eprintln!`/`println!` would not:
+    // they carry no level token and would either drown real errors or get misclassified as one.
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+
     let args = parse_args()?;
     let mmap = open_shared(&args.shm).with_context(|| format!("open_shared({:?})", args.shm))?;
     let region = region_ptr(&mmap);
     let manifest = read_manifest(&args.chain).map_err(anyhow::Error::msg)?;
     let exchange = ChainExchange::new();
     let mut factory = ActualFactory::new(region, args.sample_rate)?;
-    let (controller, mut audio_chain) =
-        RackController::load_initial(exchange, &mut factory, &manifest.stages, unsafe {
-            &(*region).child_status
-        })
-        .map_err(|error| anyhow::anyhow!("{}", error.command_outcome().detail))?;
+    let (controller, mut audio_chain) = match RackController::load_initial(
+        exchange,
+        &mut factory,
+        &manifest.stages,
+        unsafe { &(*region).child_status },
+        |detail| unsafe {
+            if !orbit_audio_sandbox::transport::write_cstr_field(
+                &mut (*region).cmd_result_detail,
+                detail,
+            ) {
+                let _ = orbit_audio_sandbox::transport::write_cstr_field(
+                    &mut (*region).cmd_result_detail,
+                    "detail too long",
+                );
+            }
+        },
+    ) {
+        Ok(pair) => pair,
+        Err(failure) => {
+            // Root 3-3: `child_status` alone tells the daemon *that* the load failed, but the
+            // READY-wait loop that observes it (`load_outproc_effect_chain_impl`) has no way
+            // to read *why* unless we hand it the detail here. The mailbox's
+            // `cmd_result_detail` field is otherwise untouched at this point in startup (no
+            // command has been issued yet), so it is safe to reuse as the carrier — the
+            // daemon reads it only when it has just observed `CHILD_STATUS_LOAD_FAILED`.
+            //
+            // 🔴 The detail is written *before* the status, and `load_initial` deliberately no
+            // longer sets the status itself. The daemon polls the status and reads the detail
+            // the moment it sees `LOAD_FAILED`; publishing the status first leaves a window in
+            // which it reads an empty field and falls back to the generic exit-status message —
+            // exactly the silent degradation this root is meant to remove. The Release store
+            // below is what makes the detail visible to the daemon's Acquire load.
+            return Err(anyhow::anyhow!("{}", failure.command_outcome().detail));
+        }
+    };
 
     unsafe {
         orbit_audio_sandbox::transport::publish_child_ready(region, controller.has_audio_input());
     }
+
+    // Root 3-1: `AudioChain::param_apply_errors` is a counter the audio thread cannot log itself
+    // (no allocation/lock/syscall on that thread). Nothing previously read it back despite the
+    // comment on the field promising "the main thread reads and reports this" in two places —
+    // grepping the workspace found zero call sites. Take the handle before `audio_chain` moves
+    // into the audio closure below, and drain it from the service loop, which already runs
+    // repeatedly regardless of mailbox activity.
+    let param_apply_errors = audio_chain.param_apply_errors();
+    let mut last_reported_param_apply_errors = 0u64;
 
     let controller = RefCell::new(controller);
     let factory = RefCell::new(factory);
@@ -458,6 +512,15 @@ pub fn run() -> Result<()> {
             }
             controller.borrow().tick_ui();
             controller.borrow_mut().collect_retired();
+            let total = param_apply_errors.load(Relaxed);
+            if total != last_reported_param_apply_errors {
+                tracing::warn!(
+                    total,
+                    delta = total.saturating_sub(last_reported_param_apply_errors),
+                    "audio thread rejected one or more parameter updates"
+                );
+                last_reported_param_apply_errors = total;
+            }
             false
         },
         move |stop_audio| {

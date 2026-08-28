@@ -21,6 +21,11 @@ anyhow = "1"
 orbit-audio-sandbox = { path = "../orbit-audio-sandbox" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# `lib.rs` is cross-platform (only `macos` is target-gated), and root-3 diagnostics
+# (`tracing::warn!` on a swallowed UI-close failure etc.) live there, so this dependency is not
+# target-gated either. The macros are no-ops without an installed subscriber, which is fine on
+# non-macOS: no subscriber is ever installed there.
+tracing = { workspace = true }
 
 # The rack executable is a macOS plugin host. Keeping all three host/runtime dependencies in the
 # same target section prevents the macOS-only orbit-vst3-host crate from entering Linux graphs.
@@ -28,6 +33,9 @@ serde_json = { workspace = true }
 orbit-child-runtime = { path = "../orbit-child-runtime" }
 orbit-clap-host = { path = "../orbit-clap-host" }
 orbit-vst3-host = { path = "../orbit-vst3-host" }
+# Installs the subscriber that makes the `tracing` macros above actually reach stderr — only the
+# binary (`macos::run`) needs this, and only on macOS (the only platform this child ever runs on).
+tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

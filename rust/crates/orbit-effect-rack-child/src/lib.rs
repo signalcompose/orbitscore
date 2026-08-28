@@ -195,6 +195,16 @@ struct StageEntry {
 struct StageList {
     entries: Vec<StageEntry>,
     apply_params_once: bool,
+    /// The generation the audio thread adopted when it stopped using this list, written by the
+    /// audio thread while it still exclusively owns the box and read by main after the retire
+    /// pointer publication hands the box over.
+    ///
+    /// 🔴 This lives *in the retired list* rather than in a separate atomic on purpose. A separate
+    /// atomic would only be correct if its store were ordered before the retire CAS, and that
+    /// ordering is a convention no test can hold down — moving the store after the CAS left every
+    /// test green. Carrying the value inside the object the CAS publishes makes the ordering a
+    /// property of the pointer hand-off instead of a rule someone has to remember.
+    retired_at_generation: u64,
     #[cfg(test)]
     drop_threads: Option<Arc<std::sync::Mutex<Vec<std::thread::ThreadId>>>>,
 }
@@ -220,6 +230,14 @@ pub struct ChainExchange {
     pending: AtomicPtr<StageList>,
     generation: AtomicU64,
     retired: AtomicPtr<StageList>,
+    /// The generation the audio thread had just adopted at the moment it published `retired`
+    /// (root 1 fix). Written by the audio thread with `Release` ordering immediately before the
+    /// `retired` CAS below, so any thread that observes the CAS's effect via an `Acquire` load of
+    /// `retired` is guaranteed (by the release/acquire happens-before edge on `retired` itself) to
+    /// also observe this store — see [`AudioChain::adopt_at_block_boundary`] and
+    /// [`RackController::collect_retired`] for how main uses it to decide which drops are safe.
+    #[cfg(test)]
+    adopt_interlock: std::sync::Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
 }
 
 impl ChainExchange {
@@ -228,7 +246,28 @@ impl ChainExchange {
             pending: AtomicPtr::new(ptr::null_mut()),
             generation: AtomicU64::new(0),
             retired: AtomicPtr::new(ptr::null_mut()),
+            #[cfg(test)]
+            adopt_interlock: std::sync::Mutex::new(None),
         })
+    }
+
+    #[cfg(test)]
+    fn interlock_next_adopt(
+        &self,
+        reached_after_pending_swap: Arc<std::sync::Barrier>,
+        resume_before_retire: Arc<std::sync::Barrier>,
+    ) {
+        *self.adopt_interlock.lock().expect("adopt interlock") =
+            Some((reached_after_pending_swap, resume_before_retire));
+    }
+
+    #[cfg(test)]
+    fn wait_at_adopt_interlock(&self) {
+        let interlock = self.adopt_interlock.lock().expect("adopt interlock").take();
+        if let Some((reached_after_pending_swap, resume_before_retire)) = interlock {
+            reached_after_pending_swap.wait();
+            resume_before_retire.wait();
+        }
     }
 
     fn publish(&self, list: Box<StageList>) -> Result<u64, Box<StageList>> {
@@ -244,9 +283,20 @@ impl ChainExchange {
         }
     }
 
-    fn collect_retired(&self) -> Option<Box<StageList>> {
+    /// Take the retired list, if the audio thread has published one, together with the
+    /// generation that was current at the moment it did so (root 1 fix). Returns `None` when
+    /// nothing new has been retired since the last collection.
+    fn collect_retired(&self) -> Option<(u64, Box<StageList>)> {
         let raw = self.retired.swap(ptr::null_mut(), Ordering::AcqRel);
-        (!raw.is_null()).then(|| unsafe { Box::from_raw(raw) })
+        if raw.is_null() {
+            return None;
+        }
+        // The Acquire component of the swap above synchronizes-with the audio thread's Release
+        // CAS that published `raw`, so every write the audio thread made into the box before that
+        // CAS — including `retired_at_generation` — is visible here. The generation travels inside
+        // the object the CAS publishes, so there is no second store whose ordering could drift.
+        let list = unsafe { Box::from_raw(raw) };
+        Some((list.retired_at_generation, list))
     }
 
     fn has_pending(&self) -> bool {
@@ -306,8 +356,14 @@ impl AudioChain {
             return;
         }
         let next = unsafe { Box::from_raw(next) };
-        let previous = std::mem::replace(&mut self.current, next);
+        let mut previous = std::mem::replace(&mut self.current, next);
+        // Stamp the generation this thread just adopted into the box it is about to hand back.
+        // `previous` is still exclusively owned here, so a plain field write is enough — and it
+        // rides the retire CAS's Release instead of needing an ordering rule of its own.
+        previous.retired_at_generation = generation;
         let previous = Box::into_raw(previous);
+        #[cfg(test)]
+        self.exchange.wait_at_adopt_interlock();
         if self
             .exchange
             .retired
@@ -388,6 +444,16 @@ impl ApplyFailure {
     }
 }
 
+/// A stage dropped out of `self.stages` while preparing an `apply()`, tagged with the generation
+/// that `apply()` published. Root 1 invariant: a drop tagged generation `G` is only safe to
+/// destroy once the audio thread has adopted generation `G` (see [`StageList::retired_at_generation`]
+/// and [`RackController::collect_retired`]) — before that, `current` may still be the list from
+/// generation `G - 1`, which is exactly the list this stage was removed out of.
+struct PendingStageDrop {
+    publish_generation: u64,
+    stage: Box<StageInstance>,
+}
+
 enum PreparedStage {
     Keep {
         prev_index: usize,
@@ -407,7 +473,7 @@ enum PreparedStage {
 pub struct RackController {
     exchange: Arc<ChainExchange>,
     stages: Vec<Box<StageInstance>>,
-    pending_stage_drops: Vec<Box<StageInstance>>,
+    pending_stage_drops: Vec<PendingStageDrop>,
 }
 
 impl RackController {
@@ -416,35 +482,28 @@ impl RackController {
         factory: &mut impl StageFactory,
         specs: &[StageSpec],
         child_status: &AtomicU32,
+        // Root 3-3: called with the failure detail *before* `child_status` flips to
+        // `CHILD_STATUS_LOAD_FAILED`. The daemon polls that status and reads the detail the moment
+        // it sees the failure, so publishing the status first leaves a window in which it reads an
+        // empty field and falls back to a generic exit-status message. Threading the write through
+        // here — rather than leaving it to the caller after this function returns — makes the order
+        // a property of this function instead of a rule the caller has to remember.
+        publish_failure_detail: impl FnOnce(&str),
     ) -> Result<(Self, AudioChain), ApplyFailure> {
-        let mut stages = Vec::with_capacity(specs.len());
-        for (index, spec) in specs.iter().enumerate() {
-            if matches!(spec, StageSpec::Layer { .. }) {
+        // Single failure exit: every early return below funnels through here so the detail is
+        // always published before the status flips. Splitting the two writes across the call sites
+        // is what would let them drift apart again.
+        let stages = match Self::load_stages(factory, specs) {
+            Ok(stages) => stages,
+            Err(failure) => {
+                publish_failure_detail(&failure.command_outcome().detail);
                 child_status.store(
                     orbit_audio_sandbox::transport::CHILD_STATUS_LOAD_FAILED,
                     Ordering::Release,
                 );
-                return Err(ApplyFailure {
-                    kind: ApplyFailureKind::BadArgument,
-                    failed_index: Some(index),
-                    detail: "layer stages are reserved; v1 racks are serial only".into(),
-                });
+                return Err(failure);
             }
-            match factory.load(spec, index) {
-                Ok(stage) => stages.push(stage),
-                Err(detail) => {
-                    child_status.store(
-                        orbit_audio_sandbox::transport::CHILD_STATUS_LOAD_FAILED,
-                        Ordering::Release,
-                    );
-                    return Err(ApplyFailure {
-                        kind: ApplyFailureKind::Plugin,
-                        failed_index: Some(index),
-                        detail,
-                    });
-                }
-            }
-        }
+        };
         let list = Self::stage_list(&stages, specs.iter().map(StageSpec::enabled));
         let audio = AudioChain::new(exchange.clone(), list);
         Ok((
@@ -457,11 +516,39 @@ impl RackController {
         ))
     }
 
+    fn load_stages(
+        factory: &mut impl StageFactory,
+        specs: &[StageSpec],
+    ) -> Result<Vec<Box<StageInstance>>, ApplyFailure> {
+        let mut stages = Vec::with_capacity(specs.len());
+        for (index, spec) in specs.iter().enumerate() {
+            if matches!(spec, StageSpec::Layer { .. }) {
+                return Err(ApplyFailure {
+                    kind: ApplyFailureKind::BadArgument,
+                    failed_index: Some(index),
+                    detail: "layer stages are reserved; v1 racks are serial only".into(),
+                });
+            }
+            match factory.load(spec, index) {
+                Ok(stage) => stages.push(stage),
+                Err(detail) => {
+                    return Err(ApplyFailure {
+                        kind: ApplyFailureKind::Plugin,
+                        failed_index: Some(index),
+                        detail,
+                    });
+                }
+            }
+        }
+        Ok(stages)
+    }
+
     fn stage_list(
         stages: &[Box<StageInstance>],
         enabled: impl IntoIterator<Item = bool>,
     ) -> Box<StageList> {
         Box::new(StageList {
+            retired_at_generation: 0,
             entries: stages
                 .iter()
                 .zip(enabled)
@@ -492,12 +579,24 @@ impl RackController {
     }
 
     /// Main-thread retire collection. Dropped plugin instances are destroyed only here.
+    ///
+    /// Root 1 fix: collecting *a* retired list must not be treated as license to destroy *every*
+    /// pending drop. Only drops whose publish generation has actually been adopted by the audio
+    /// thread — signalled by `adopted`, which arrives paired with the retired list itself — are
+    /// safe; a drop published after that generation may still be referenced by the list that is
+    /// current *right now* (see [`PendingStageDrop`]).
     pub fn collect_retired(&mut self) -> bool {
-        let Some(retired) = self.exchange.collect_retired() else {
+        let Some((adopted, retired)) = self.exchange.collect_retired() else {
             return false;
         };
         drop(retired);
-        self.pending_stage_drops.clear();
+        // Retain only the drops whose publishing generation the audio thread has *not* adopted
+        // yet. A drop tagged `G` becomes destroyable the moment `adopted == G`, because at that
+        // point `current` is generation `G`'s list, which no longer references it. Using `>=` here
+        // keeps such a drop forever: nothing else drains the queue, so the `!is_empty()` arm of
+        // the Busy check below would reject every later apply. C7 is the discriminating test.
+        self.pending_stage_drops
+            .retain(|dropped| dropped.publish_generation > adopted);
         true
     }
 
@@ -638,6 +737,7 @@ impl RackController {
             })
             .collect();
         let next_list = Box::new(StageList {
+            retired_at_generation: 0,
             entries,
             apply_params_once: true,
             #[cfg(test)]
@@ -645,7 +745,10 @@ impl RackController {
         });
 
         // Commit is exactly one pointer publication after every fallible prepare operation.
-        self.exchange.publish(next_list).map_err(|_| ApplyFailure {
+        // Root 1 fix: every stage this apply drops below is tagged with *this* publish's
+        // generation, so `collect_retired` can tell whether the audio thread has actually
+        // adopted the list that no longer references them.
+        let publish_generation = self.exchange.publish(next_list).map_err(|_| ApplyFailure {
             kind: ApplyFailureKind::Busy,
             failed_index: None,
             detail: "chain publish slot is busy".into(),
@@ -666,9 +769,27 @@ impl RackController {
             stage.control.set_index(index as u32);
             next.push(stage);
         }
-        for dropped in previous.into_iter().flatten() {
-            let _ = dropped.control.handle_ui(false, None);
-            self.pending_stage_drops.push(dropped);
+        for (prev_index, dropped) in previous
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, stage)| stage.map(|stage| (index, stage)))
+        {
+            // Root 3-2: a failed UI close must stay audible. The stage is dropped either way —
+            // this loudness does not change that — but a silently swallowed failure here means
+            // nobody ever learns the child's UI window may still be open.
+            let outcome = dropped.control.handle_ui(false, None);
+            if outcome.result != CMD_RESULT_OK {
+                tracing::warn!(
+                    prev_index,
+                    result = outcome.result,
+                    detail = %outcome.detail,
+                    "failed to close plugin UI for a dropped stage"
+                );
+            }
+            self.pending_stage_drops.push(PendingStageDrop {
+                publish_generation,
+                stage: dropped,
+            });
         }
         self.stages = next;
         Ok(())
@@ -719,8 +840,8 @@ impl RackController {
         for stage in &self.stages {
             stage.control.tick_ui();
         }
-        for stage in &self.pending_stage_drops {
-            stage.control.tick_ui();
+        for dropped in &self.pending_stage_drops {
+            dropped.stage.control.tick_ui();
         }
     }
 }

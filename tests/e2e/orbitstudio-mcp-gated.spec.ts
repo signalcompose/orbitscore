@@ -223,9 +223,7 @@ export function latestRackChildPid(logText: string): number | null {
  *
  * daemon が spawn 時に名乗る行（`outproc_effect.rs` の `tracing::info!`）を読む。
  */
-async function effectChildPids(client: {
-  call: (name: string, args: unknown) => Promise<{ text: string }>
-}): Promise<number[]> {
+async function effectChildPids(client: McpClient): Promise<number[]> {
   const log = (await client.call('get_log', { lines: 800 })).text
   return rackChildPidsFromLog(log)
 }
@@ -2468,10 +2466,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         const failedReplace = await activeClient.call('evaluate_orbitscore', {
           code: 'cb618.instrument("/definitely/nonexistent/Issue618.vst3")',
         })
+        // The assertion below reports the log we actually settled on, so the poll writes it out
+        // instead of keeping it in the closure — a bare `const` inside the predicate left the
+        // assertion referencing an undeclared name, and nothing typechecks `tests/`.
+        let afterFailureLog = beforeFailureLog
         await waitUntil(
           async () => {
-            const log = (await activeClient.call('get_log', { lines: 500 })).text
-            return failedReplace.isError || countErrors(log) > countErrors(beforeFailureLog)
+            afterFailureLog = (await activeClient.call('get_log', { lines: 500 })).text
+            return (
+              failedReplace.isError || countErrors(afterFailureLog) > countErrors(beforeFailureLog)
+            )
           },
           { intervalMs: 200, timeoutMs: 10_000, label: '#618 failed replacement surfaced' },
         )

@@ -1,7 +1,7 @@
 use super::*;
 
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::Mutex;
+use std::sync::{Barrier, Mutex};
 use std::thread::ThreadId;
 
 use orbit_audio_sandbox::transport::{CHILD_STATUS_LOAD_FAILED, CHILD_STATUS_READY};
@@ -231,7 +231,7 @@ fn fixture(
     let mut factory = SynthFactory::new(stats.clone());
     let status = AtomicU32::new(0);
     let (controller, audio) =
-        RackController::load_initial(ChainExchange::new(), &mut factory, specs, &status)
+        RackController::load_initial(ChainExchange::new(), &mut factory, specs, &status, |_| {})
             .expect("load initial synthetic chain");
     (controller, audio, factory, stats, status)
 }
@@ -385,6 +385,46 @@ fn c07_retired_stage_destruction_runs_on_collecting_main_thread() {
 }
 
 #[test]
+fn dropped_stage_waits_for_the_generation_that_dropped_it_to_be_adopted() {
+    let (mut controller, mut audio, mut factory, stats, _status) =
+        fixture(&[catalog("add-1", true)]);
+
+    // Generation 1 keeps the stage alive. Pause its adoption after `pending` is empty but before
+    // the previous list is visible through `retired`, which is the exact window in which a second
+    // apply can pass the Busy predicate.
+    controller
+        .apply(&keep_plan(0, false, BTreeMap::new()), &mut factory)
+        .expect("publish generation 1");
+    let reached_after_pending_swap = Arc::new(Barrier::new(2));
+    let resume_before_retire = Arc::new(Barrier::new(2));
+    controller.exchange.interlock_next_adopt(
+        reached_after_pending_swap.clone(),
+        resume_before_retire.clone(),
+    );
+    let audio_thread = std::thread::spawn(move || {
+        audio.process_block(&mut [1.0], &AtomicU32::new(u32::MAX));
+        audio
+    });
+    reached_after_pending_swap.wait();
+
+    // Generation 2 drops the stage while audio still owns generation 1, which still points at it.
+    controller
+        .apply(&load_plan(Vec::new()), &mut factory)
+        .expect("publish generation 2 inside the adoption window");
+    assert_eq!(stats.live.load(Ordering::SeqCst), 1);
+
+    resume_before_retire.wait();
+    let audio = audio_thread.join().expect("audio thread");
+    assert!(controller.collect_retired());
+    assert_eq!(
+        stats.live.load(Ordering::SeqCst),
+        1,
+        "collecting generation 1 must not destroy a drop published by generation 2"
+    );
+    drop(audio);
+}
+
+#[test]
 fn c08_ready_is_not_published_when_a_later_stage_fails_to_load() {
     let stats = Arc::new(Stats::default());
     let status = AtomicU32::new(0);
@@ -406,11 +446,21 @@ fn c08_ready_is_not_published_when_a_later_stage_fails_to_load() {
         status: &status,
         observed_before_failure: u32::MAX,
     };
+    // Root 3-3: the daemon reads `cmd_result_detail` the instant it observes
+    // `CHILD_STATUS_LOAD_FAILED`, so the detail has to be published *first*. Recording the status
+    // as seen from inside the detail-publishing callback turns that ordering from a comment into a
+    // checked property: publishing the status first would make `status_when_detail_published`
+    // already equal `CHILD_STATUS_LOAD_FAILED` here.
+    let published_detail = Mutex::new(None::<(String, u32)>);
     let error = RackController::load_initial(
         ChainExchange::new(),
         &mut factory,
         &[catalog("add-1", true), catalog("fail", true)],
         &status,
+        |detail| {
+            *published_detail.lock().expect("detail slot") =
+                Some((detail.to_owned(), status.load(Ordering::Acquire)));
+        },
     )
     .err()
     .expect("second stage load failure");
@@ -418,6 +468,22 @@ fn c08_ready_is_not_published_when_a_later_stage_fails_to_load() {
     assert_ne!(factory.observed_before_failure, CHILD_STATUS_READY);
     assert_eq!(status.load(Ordering::Acquire), CHILD_STATUS_LOAD_FAILED);
     assert_ne!(status.load(Ordering::Acquire), CHILD_STATUS_READY);
+    let (detail, status_when_detail_published) = published_detail
+        .lock()
+        .expect("detail slot")
+        .clone()
+        .expect("the failure detail must be published for the daemon to read");
+    // The published text is the *indexed* form (`failed index 1: ...`), not the bare stage detail:
+    // naming the offending index is the whole point of handing this to the daemon.
+    assert_eq!(detail, error.command_outcome().detail);
+    assert!(
+        detail.contains("failed index 1") && detail.contains(&error.detail),
+        "detail={detail}"
+    );
+    assert_ne!(
+        status_when_detail_published, CHILD_STATUS_LOAD_FAILED,
+        "the detail must be published before the status flips, or the daemon can read it empty"
+    );
 }
 
 #[test]
@@ -490,6 +556,7 @@ fn c11_chain_swap_is_observed_only_at_a_block_boundary() {
             params: Vec::new(),
         }],
         apply_params_once: true,
+        retired_at_generation: 0,
         drop_threads: None,
     });
     let old_first = make(Box::new(PublishDuringProcess {
@@ -514,6 +581,7 @@ fn c11_chain_swap_is_observed_only_at_a_block_boundary() {
             },
         ],
         apply_params_once: true,
+        retired_at_generation: 0,
         drop_threads: None,
     });
     let mut audio = AudioChain::new(exchange, current);
@@ -611,11 +679,14 @@ fn actual_gain(
         params: BTreeMap::from([("db".into(), db)]),
         enabled: true,
     };
-    let (controller, audio) =
-        RackController::load_initial(ChainExchange::new(), &mut factory, &[spec], unsafe {
-            &(*fixture.region).child_status
-        })
-        .expect("load real Gain.clap");
+    let (controller, audio) = RackController::load_initial(
+        ChainExchange::new(),
+        &mut factory,
+        &[spec],
+        unsafe { &(*fixture.region).child_status },
+        |_| {},
+    )
+    .expect("load real Gain.clap");
     (controller, audio, factory, fixture)
 }
 

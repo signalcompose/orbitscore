@@ -121,9 +121,14 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-/** Poll `predicate` until it resolves truthy, or throw once `timeoutMs` elapses. */
+/**
+ * Poll `predicate` until it resolves truthy, or throw once `timeoutMs` elapses.
+ *
+ * The predicate may be synchronous: the body awaits it either way, so callers that only read
+ * already-fetched state should not have to wrap themselves in a promise to satisfy the type.
+ */
 export async function waitUntil(
-  predicate: () => Promise<boolean>,
+  predicate: () => boolean | Promise<boolean>,
   opts: { intervalMs: number; timeoutMs: number; label?: string },
 ): Promise<void> {
   const start = Date.now()
