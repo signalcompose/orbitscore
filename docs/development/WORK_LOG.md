@@ -17,6 +17,93 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.405 feat(audio): instrument をミキサーの source にした — PR-1 (#643) (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643)
+**設計正本**: `docs/design/643-mixer-foundation-design.md`
+**実装**: Codex（gpt-5.6-sol / effort xhigh）/ **検証: main（sandbox 外）**
+**差分**: 1502 insertions / 158 deletions（core 163 / native 728 / daemon 595 / protocol 128）
+
+#### instrument が master への後付けから、バスの source になった
+
+これまで instrument の音は `CompositePostProcessor` で **master バッファへ直接加算**されており、
+バスグラフの外にいた。本 PR で **`render_multi` の内側・event 混合後・gain ramp の前**へ移し、
+audio シーケンスと同じ場所で合流するようにした。
+
+**帰結: `global.gain` が instrument に効くようになった**（従来は効いていなかった＝欠陥）。
+位置の修正だけで消えるので、gain の手当ては入れていない。
+
+#### 層ごとの変更
+
+| 層 | 内容 |
+|---|---|
+| core | `render_multi_feeds` + `FeedDest`。既存 `render_multi` は `feeds=&[]` で委譲（bit 一致を固定） |
+| native | `BlockSource`（二段式 render → output）/ `BlockTransport` / `SourceSlot` / `SourceDestCell` / 二パス feed 収集 |
+| daemon 配線 | `OutProcInstrumentPostProcessor` を `BlockSource` へ改組・`CompositePostProcessor` 解体 |
+| daemon 制御 | `SetSourceRouting { source, unit, target }`・replace / teardown の**全 unit** 宛先処理 |
+| protocol | `session.rs` に parse + dispatch + 非対応 build の `UNSUPPORTED` |
+
+宛先は `SourceDest { Master, Bus(usize), Link(usize) }` + `SourceDestCell` newtype で、
+**エンコードを1箇所に閉じた**（帯域分割の生整数がコードから消えた）。
+
+#### 借用の二段式（設計最大の不確実性を最初に潰した）
+
+実装の冒頭にコンパイルスパイクを置いた。パス1で `iter_mut()` して全 source を render し、
+パス2で `iter()` から `ArrayVec<(&[f32], FeedDest)>` を収集する形が**成立することを確認**してから
+本実装に入った。`&mut` からの借用返しが不要になるため、単一 `render() -> Option<&[f32]>` より簡単。
+
+#### 🔴 main の独立検証（sandbox 外・委譲先の報告は根拠にしない）
+
+| 項目 | 結果 |
+|---|---|
+| `clippy --all-targets --features outproc-effect,outproc-instrument -- -D warnings` | exit=0 |
+| cfg 4象限ビルド（none / effect / instrument / 両方） | **4/4** |
+| `cargo test -p orbit-audio-daemon --lib` | **39 passed** |
+| `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument --lib` | **239 passed / 1 ignored** |
+| `cargo test --workspace` | exit=0・91 スイート ok・FAILED 0 |
+
+daemon は **features 有無の両方**を回した（以前 `--lib` だけの件数を報告して実際と食い違った経緯があるため）。
+
+#### 落としやすい2項目を main が差分で確認した
+
+発注時に「配線で落ちやすい」と名指しした2件。**両方とも入っていた**:
+
+- **replace の宛先移行**（`engine_wrap.rs:5706-5715`）— 全 unit を `zip` でコピーし旧 slot を
+  Master へ戻す。長さの一致を `debug_assert_eq!` で固定
+- **teardown のリセット**（`:5894-5896`）— 全 unit を Master へ。さらに **`if teardown.is_ok()` の時だけ
+  `free_slot`** するので、**失敗した slot は隔離され free list に戻らない**（ログも
+  "quarantined from free-list"）。「リセット漏れの slot を次のテナントが取る」経路は存在しない
+
+#### gain 欠陥の実行証明（red → green）
+
+```text
+left:  [1065353216, 1065353216, 1065353216, 1065353216]   ← 1.0（gain が効いていない）
+right: [1056964608, 1056964608, 1056964608, 1056964608]   ← 0.5（期待）
+test result: FAILED. 0 passed; 1 failed
+
+（修正後）
+test output::tests::global_gain_scales_instrument_contribution ... ok
+```
+
+#### 途中で起きたこと（記録）
+
+1. **Codex が2回停止して質問した** — いずれもブリーフの「sandbox で失敗したら迂回せず報告」に
+   従った正しい挙動（リポジトリ外への spike 書き込み / `.git` ロック）。迂回させていたら、
+   別の場所で通したものを「通った」と報告されていた可能性がある
+2. **32時間前の #628 ジョブが `running` のまま残ってキューを塞いでいた** — 実プロセスは不在。
+   status は自己申告なので stale になる。**ログの mtime を生存 signal にした監視**が45秒で検出
+3. **README への追記を差し戻した** — ユーザー向け機能一覧に進行中の内部リファクタを
+   「in progress」として載せていた（スコープ外）
+4. **main の検証コマンド自体が壊れていた** — `cargo build ... | tail` の後で `$?` を読み、
+   `tail` の exit を clippy の結果として表示していた。取り直して exit=101 が判明
+
+#### スコープ外（設計文書にメモとして記録・issue 化しない）
+
+子プロセスの N 出力 / 容量の撤廃 / 配線の表現力（Forward・Feedback）/ `_with_clap` の改名 /
+LinkAudio の実配線。
+
+---
+
 ### 6.404 design: ミキサーの土台と、その上に乗るオプションの責務を分けた (#643) (Aug 29, 2026)
 
 **Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643)（改題: *separate the mixer foundation from the sources that ride it*）

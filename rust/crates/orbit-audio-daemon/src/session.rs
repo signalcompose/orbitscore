@@ -234,6 +234,29 @@ fn parse_set_bus_routing_params(
     Ok((seq_bus, output, sends))
 }
 
+/// `SetSourceRouting` の wire shape を検証する。`source` は内容を解釈せず、そのまま opaque key
+/// として返す。`target: null` は Master、文字列は named insert bus を表す。
+#[cfg(any(test, all(feature = "outproc-effect", feature = "outproc-instrument")))]
+fn parse_set_source_routing_params(
+    params: &Value,
+) -> Result<(String, u32, Option<String>), &'static str> {
+    let source = match params.get("source") {
+        Some(Value::String(source)) if !source.trim().is_empty() => source.clone(),
+        _ => return Err("'source' must be a non-empty string"),
+    };
+    let unit = params
+        .get("unit")
+        .and_then(Value::as_u64)
+        .and_then(|unit| u32::try_from(unit).ok())
+        .ok_or("'unit' must be an unsigned 32-bit integer")?;
+    let target = match params.get("target") {
+        Some(Value::Null) => None,
+        Some(Value::String(target)) if !target.trim().is_empty() => Some(target.clone()),
+        _ => return Err("'target' must be a non-empty string or null"),
+    };
+    Ok((source, unit, target))
+}
+
 /// PlayAt の `bus`（per-sequence insert routing・PH.2b・#434 S3）と `channel`（LinkAudio
 /// routing・#209）の同時指定を検出する純関数。両者は core 上は同じ routing tag フィールド
 /// （`ScheduledSample.channel`）を共有するため、同時指定は意味が一意に決まらず拒否する。
@@ -2204,6 +2227,24 @@ async fn handle_command(
                 "SetBusRouting requires the outproc-effect build (mixer bus graph)",
             ),
         ),
+        #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+        "SetSourceRouting" => match parse_set_source_routing_params(&params) {
+            Ok((source, unit, target)) => {
+                match engine.set_source_routing(&source, unit, target.as_deref()) {
+                    Ok(()) => ok(&id, json!({"status": "accepted"})),
+                    Err(e) => err(&id, wrap_err_to_protocol(&e)),
+                }
+            }
+            Err(message) => err(&id, ProtocolError::new("MALFORMED_REQUEST", message)),
+        },
+        #[cfg(not(all(feature = "outproc-effect", feature = "outproc-instrument")))]
+        "SetSourceRouting" => err(
+            &id,
+            ProtocolError::new(
+                "UNSUPPORTED",
+                "SetSourceRouting requires the outproc-effect,outproc-instrument build",
+            ),
+        ),
         // gated な fault 注入（recovery floor / #300 の kill-test 専用・単一動作なので unit コマンド）。
         // ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1 のときだけ受理する（既定では出荷時に無効）。
         // daemon を panic させ、main.rs の panic hook 経由で stderr に DaemonError を出し exit(1)
@@ -2494,6 +2535,93 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_source_routing_parses_opaque_source_unit_and_nullable_target() {
+        assert_eq!(
+            parse_set_source_routing_params(&json!({
+                "source": "opaque:source/key",
+                "unit": 7,
+                "target": "seq-bus-3"
+            })),
+            Ok((
+                "opaque:source/key".to_owned(),
+                7,
+                Some("seq-bus-3".to_owned())
+            ))
+        );
+        assert_eq!(
+            parse_set_source_routing_params(&json!({
+                "source": "opaque:source/key",
+                "unit": 0,
+                "target": null
+            })),
+            Ok(("opaque:source/key".to_owned(), 0, None))
+        );
+    }
+
+    #[test]
+    fn set_source_routing_rejects_missing_or_malformed_fields() {
+        for params in [
+            json!({"unit": 0, "target": null}),
+            json!({"source": " ", "unit": 0, "target": null}),
+            json!({"source": "source", "target": null}),
+            json!({"source": "source", "unit": -1, "target": null}),
+            json!({"source": "source", "unit": 1.5, "target": null}),
+            json!({"source": "source", "unit": 4294967296_u64, "target": null}),
+            json!({"source": "source", "unit": 0}),
+            json!({"source": "source", "unit": 0, "target": " "}),
+        ] {
+            assert!(
+                parse_set_source_routing_params(&params).is_err(),
+                "malformed params must be rejected: {params}"
+            );
+        }
+    }
+
+    #[cfg(not(all(feature = "outproc-effect", feature = "outproc-instrument")))]
+    #[tokio::test]
+    async fn set_source_routing_reports_unsupported_without_both_build_features() {
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
+            .expect("stub backend starts");
+        let (tx, _rx) = mpsc::channel(1);
+        let response = handle_command(
+            Command {
+                id: "route-source".into(),
+                method: "SetSourceRouting".into(),
+                params: json!({"source": "source", "unit": 0, "target": null}),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+
+        assert_eq!(response["error"]["code"], "UNSUPPORTED");
+    }
+
+    #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+    #[tokio::test]
+    async fn set_source_routing_valid_wire_shape_reaches_the_feature_boundary() {
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
+            .expect("stub backend starts");
+        let (tx, _rx) = mpsc::channel(1);
+        let response = handle_command(
+            Command {
+                id: "route-source".into(),
+                method: "SetSourceRouting".into(),
+                params: json!({
+                    "source": "opaque:source/key",
+                    "unit": 0,
+                    "target": null
+                }),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+
+        assert_eq!(response["error"]["code"], "OUTPROC_INSTRUMENT_UNAVAILABLE");
+    }
 
     #[tokio::test]
     async fn apply_effect_chain_wire_parses_the_v03_shape_and_rejects_non_effect_role() {

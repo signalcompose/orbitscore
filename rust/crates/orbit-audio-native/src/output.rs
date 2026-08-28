@@ -9,7 +9,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use thiserror::Error;
 
-use orbit_audio_core::Engine;
+use orbit_audio_core::{Engine, FeedDest};
 
 use crate::link_audio_ring::{PostMixSink, RingTapSink};
 use crate::post_processor::{CallbackTimeStats, PostProcessor};
@@ -254,7 +254,86 @@ impl OutputStream {
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
+    sources: Vec<SourceSlot>,
+    transport: BlockTransport,
     post: Option<Box<dyn PostProcessor>>,
+}
+
+/// One callback's transport snapshot passed to block sources.
+#[derive(Debug, Clone, Copy)]
+pub struct BlockTransport {
+    pub cursor_frames: u64,
+    pub sample_rate: u32,
+}
+
+/// A callback-owned source which renders one or more interleaved output units.
+pub trait BlockSource: Send {
+    fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
+    fn output(&self, unit: usize) -> &[f32];
+}
+
+/// Destination of one source output unit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SourceDest {
+    #[default]
+    Master,
+    Bus(usize),
+    Link(usize),
+}
+
+/// Atomic routing cell shared by the callback and the control plane.
+#[derive(Clone)]
+pub struct SourceDestCell(Arc<AtomicUsize>);
+
+impl SourceDestCell {
+    const MASTER: usize = 0;
+    const BUS_BASE: usize = 1;
+    const LINK_BASE: usize = Self::BUS_BASE + MAX_INSERT_BUS_STAGES;
+    const END: usize = Self::LINK_BASE + MAX_LINK_CHANNELS;
+
+    pub fn new(dest: SourceDest) -> Self {
+        Self(Arc::new(AtomicUsize::new(Self::encode(dest))))
+    }
+
+    #[inline]
+    pub fn load(&self) -> SourceDest {
+        Self::decode(self.0.load(Ordering::Relaxed))
+    }
+
+    #[inline]
+    pub fn store(&self, dest: SourceDest) {
+        self.0.store(Self::encode(dest), Ordering::Relaxed);
+    }
+
+    fn encode(dest: SourceDest) -> usize {
+        match dest {
+            SourceDest::Master => Self::MASTER,
+            SourceDest::Bus(index) if index < MAX_INSERT_BUS_STAGES => Self::BUS_BASE + index,
+            SourceDest::Link(index) if index < MAX_LINK_CHANNELS => Self::LINK_BASE + index,
+            SourceDest::Bus(_) | SourceDest::Link(_) => Self::MASTER,
+        }
+    }
+
+    fn decode(value: usize) -> SourceDest {
+        match value {
+            Self::MASTER => SourceDest::Master,
+            value if value < Self::LINK_BASE => SourceDest::Bus(value - Self::BUS_BASE),
+            value if value < Self::END => SourceDest::Link(value - Self::LINK_BASE),
+            _ => SourceDest::Master,
+        }
+    }
+}
+
+impl Default for SourceDestCell {
+    fn default() -> Self {
+        Self::new(SourceDest::Master)
+    }
+}
+
+/// A preallocated source and the routing destination of each output unit.
+pub struct SourceSlot {
+    pub source: Box<dyn BlockSource>,
+    pub dests: Vec<SourceDestCell>,
 }
 
 /// callback が同時に egress できる LinkAudio channel の上限（A4-2b-2b）。RT callback の per-block
@@ -266,6 +345,14 @@ pub const MAX_LINK_CHANNELS: usize = 64;
 /// callback が同時に render できる insert bus 数の上限。stage は stream 構築時に固定されるため、
 /// callback では stack 上の `ArrayVec` だけで `render_multi` 引数を組み立てられる。
 pub const MAX_INSERT_BUS_STAGES: usize = 64;
+
+/// Maximum source slots owned by one callback.
+pub const MAX_SOURCE_SLOTS: usize = 32;
+
+/// Maximum independently routable output units exposed by one source.
+pub const MAX_SOURCE_UNITS: usize = 16;
+
+const MAX_SOURCE_FEEDS: usize = MAX_SOURCE_SLOTS * MAX_SOURCE_UNITS;
 
 /// mixer graph（#459/#453 MX.1-MX.5）における stage の出力先。**stages 配列内の index** で指す
 /// （配列順 = トポロジカル順という MX.4 の不変条件を、型ではなく構築時検証で担保する）。
@@ -439,6 +526,24 @@ fn validate_bus_topology(stages: &[InsertBusStage]) -> Result<(), OutputError> {
     Ok(())
 }
 
+fn validate_source_slots(sources: &[SourceSlot]) -> Result<(), OutputError> {
+    if sources.len() > MAX_SOURCE_SLOTS {
+        return Err(OutputError::NoConfig(format!(
+            "too many source slots: {} (max {MAX_SOURCE_SLOTS})",
+            sources.len()
+        )));
+    }
+    for (slot, source) in sources.iter().enumerate() {
+        if source.dests.len() > MAX_SOURCE_UNITS {
+            return Err(OutputError::NoConfig(format!(
+                "source slot {slot} has too many output units: {} (max {MAX_SOURCE_UNITS})",
+                source.dests.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// LinkAudio channel を RT callback に届けるための activation メッセージ（A4-2b-2）。
 /// control thread が ring 生成・scratch 事前確保まで行い、本構造体を reg-ring 経由で callback へ
 /// 渡す（callback は受け取って pool へ追加するだけ＝RT alloc を避ける）。`sink` は対になる
@@ -489,12 +594,16 @@ fn render_shared_block(
             let RenderState {
                 link,
                 insert_buses,
+                sources,
+                transport,
                 post,
             } = &mut *state;
-            render_block(
+            render_block_with_sources(
                 engine,
                 link,
                 insert_buses,
+                sources,
+                transport,
                 post,
                 capture,
                 cb_stats,
@@ -517,11 +626,45 @@ fn render_shared_block(
 /// 各々独立の opt-in 分岐で、すべて None なら従来経路とビット同一。`capture` は `hw` を読むだけ
 /// なので有効でも出力サンプルは不変（tap であって mutation ではない）。
 #[inline]
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)] // callback state is kept as independent opt-in seams.
 fn render_block(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     insert_buses: &mut [InsertBusStage],
+    post: &mut Option<Box<dyn PostProcessor>>,
+    capture: &mut Option<RingTapSink>,
+    cb_stats: &Option<Arc<CallbackTimeStats>>,
+    output_channels: usize,
+    hw: &mut [f32],
+) {
+    let mut sources = [];
+    let mut transport = BlockTransport {
+        cursor_frames: 0,
+        sample_rate: 0,
+    };
+    render_block_with_sources(
+        engine,
+        link,
+        insert_buses,
+        &mut sources,
+        &mut transport,
+        post,
+        capture,
+        cb_stats,
+        output_channels,
+        hw,
+    );
+}
+
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn render_block_with_sources(
+    engine: &Engine,
+    link: &mut Option<LinkEgress>,
+    insert_buses: &mut [InsertBusStage],
+    sources: &mut [SourceSlot],
+    transport: &mut BlockTransport,
     post: &mut Option<Box<dyn PostProcessor>>,
     capture: &mut Option<RingTapSink>,
     cb_stats: &Option<Arc<CallbackTimeStats>>,
@@ -535,14 +678,15 @@ fn render_block(
     // active な bus が 1 つも無ければ既存の呼び出し列をそのまま維持する（bit-identical）。
     // 既定 bus プール（全 stage inactive で起動）はここで従来経路に落ちるため、
     // `seq.effect()` 未使用セッションに RT コストを課さない。
-    if !insert_buses
-        .iter()
-        .any(|bus| bus.active.load(Ordering::Relaxed))
-    {
-        render_engine(engine, link, output_channels, hw);
-    } else {
-        render_engine_with_insert_buses(engine, link, insert_buses, output_channels, hw);
-    }
+    render_engine_with_sources(
+        engine,
+        link,
+        insert_buses,
+        sources,
+        transport,
+        output_channels,
+        hw,
+    );
 
     // master-bus post-processor（CLAP）。engine render 済みの hardware sum を in-place 変換。
     if let Some(p) = post.as_mut() {
@@ -563,10 +707,125 @@ fn render_block(
 }
 
 #[inline]
+fn render_engine_with_sources(
+    engine: &Engine,
+    link: &mut Option<LinkEgress>,
+    buses: &mut [InsertBusStage],
+    sources: &mut [SourceSlot],
+    transport: &mut BlockTransport,
+    output_channels: usize,
+    hw: &mut [f32],
+) {
+    let frames = hw.len() / output_channels;
+
+    if sources.is_empty() {
+        if buses.iter().any(|bus| bus.active.load(Ordering::Relaxed)) {
+            render_engine_with_insert_buses(engine, link, buses, output_channels, hw);
+        } else {
+            render_engine(engine, link, output_channels, hw);
+        }
+    } else {
+        let rendered_units = render_sources(sources, frames, transport);
+        if buses.iter().any(|bus| bus.active.load(Ordering::Relaxed)) {
+            render_engine_with_insert_buses_and_source_outputs(
+                engine,
+                link,
+                buses,
+                sources,
+                &rendered_units,
+                output_channels,
+                hw,
+            );
+        } else {
+            render_engine_with_source_outputs(
+                engine,
+                link,
+                sources,
+                &rendered_units,
+                output_channels,
+                hw,
+            );
+        }
+    }
+
+    transport.cursor_frames = transport.cursor_frames.saturating_add(frames as u64);
+}
+
+fn render_sources(
+    sources: &mut [SourceSlot],
+    frames: usize,
+    transport: &BlockTransport,
+) -> arrayvec::ArrayVec<usize, MAX_SOURCE_SLOTS> {
+    use arrayvec::ArrayVec;
+
+    debug_assert!(sources.len() <= MAX_SOURCE_SLOTS);
+    let mut rendered_units = ArrayVec::new();
+    for slot in sources.iter_mut().take(MAX_SOURCE_SLOTS) {
+        let reported = slot.source.render(frames, transport);
+        debug_assert!(reported <= MAX_SOURCE_UNITS);
+        debug_assert!(reported <= slot.dests.len());
+        rendered_units.push(reported.min(MAX_SOURCE_UNITS).min(slot.dests.len()));
+    }
+    rendered_units
+}
+
+fn collect_source_feeds<'a>(
+    sources: &'a [SourceSlot],
+    rendered_units: &[usize],
+    bus_positions: &[Option<usize>],
+    block_samples: usize,
+) -> arrayvec::ArrayVec<(&'a [f32], FeedDest), MAX_SOURCE_FEEDS> {
+    use arrayvec::ArrayVec;
+
+    let mut feeds = ArrayVec::new();
+    for (slot, &unit_count) in sources.iter().zip(rendered_units) {
+        for unit in 0..unit_count {
+            let Some(output) = slot.source.output(unit).get(..block_samples) else {
+                debug_assert!(false, "source output shorter than the callback block");
+                continue;
+            };
+            let dest = match slot.dests[unit].load() {
+                SourceDest::Master => FeedDest::Hardware,
+                SourceDest::Bus(index) => bus_positions
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .map_or(FeedDest::Hardware, FeedDest::Channel),
+                // Link source routing is wired in PR-3. Until then it is a total hardware fallback.
+                SourceDest::Link(_) => FeedDest::Hardware,
+            };
+            feeds.push((output, dest));
+        }
+    }
+    feeds
+}
+
+#[inline]
 fn render_engine_with_insert_buses(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     buses: &mut [InsertBusStage],
+    output_channels: usize,
+    hw: &mut [f32],
+) {
+    render_engine_with_insert_buses_and_source_outputs(
+        engine,
+        link,
+        buses,
+        &[],
+        &[],
+        output_channels,
+        hw,
+    );
+}
+
+#[inline]
+fn render_engine_with_insert_buses_and_source_outputs(
+    engine: &Engine,
+    link: &mut Option<LinkEgress>,
+    buses: &mut [InsertBusStage],
+    sources: &[SourceSlot],
+    rendered_units: &[usize],
     output_channels: usize,
     hw: &mut [f32],
 ) {
@@ -629,6 +888,8 @@ fn render_engine_with_insert_buses(
     }
 
     let mut targets: ArrayVec<(&str, &mut [f32]), MAX_TARGETS> = ArrayVec::new();
+    let mut bus_positions: ArrayVec<Option<usize>, MAX_INSERT_BUS_STAGES> =
+        buses.iter().map(|_| None).collect();
     for (i, bus) in buses.iter_mut().enumerate() {
         if !active_flags[i] {
             // inactive stage は render_multi のタグ対象外（コストゼロ・event tag 契約は変えない・
@@ -644,9 +905,11 @@ fn render_engine_with_insert_buses(
             "insert bus '{}' buffer too short",
             bus.name
         );
+        let position = targets.len();
         targets
             .try_push((bus.name.as_str(), &mut bus.buffer[..bs]))
             .expect("bounded bus count");
+        bus_positions[i] = Some(position);
     }
 
     if let Some(le) = link {
@@ -666,7 +929,12 @@ fn render_engine_with_insert_buses(
             }
         }
     }
-    engine.render_multi(hw, &mut targets);
+    if sources.is_empty() {
+        engine.render_multi(hw, &mut targets);
+    } else {
+        let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
+        engine.render_multi_feeds(hw, &mut targets, &feeds);
+    }
     drop(targets);
 
     // post-loop: 配列順（= トポロジカル順・MX.4）で is_render_target な stage を処理する。
@@ -807,6 +1075,65 @@ fn render_engine(
     }
 }
 
+#[inline]
+fn render_engine_with_source_outputs(
+    engine: &Engine,
+    link: &mut Option<LinkEgress>,
+    sources: &[SourceSlot],
+    rendered_units: &[usize],
+    output_channels: usize,
+    hw: &mut [f32],
+) {
+    use arrayvec::ArrayVec;
+
+    let bs = (hw.len() / output_channels) * output_channels;
+    let Some(le) = link else {
+        let mut channels: [(&str, &mut [f32]); 0] = [];
+        let feeds = collect_source_feeds(sources, rendered_units, &[], bs);
+        engine.render_multi_feeds(hw, &mut channels, &feeds);
+        return;
+    };
+
+    while let Ok(act) = le.reg_rx.pop() {
+        le.channels.push(act);
+    }
+
+    let egress_active = |ch: &LinkChannelActivate| {
+        channel_egress_active(ch.ready.load(Ordering::Relaxed), ch.scratch.len(), bs)
+    };
+    let mut channels: ArrayVec<(&str, &mut [f32]), MAX_LINK_CHANNELS> = ArrayVec::new();
+    for channel in le.channels.iter_mut() {
+        if !egress_active(channel) {
+            debug_assert!(
+                !channel.ready.load(Ordering::Relaxed) || channel.scratch.len() >= bs,
+                "link channel '{}' scratch ({}) < block ({bs})",
+                channel.name,
+                channel.scratch.len()
+            );
+            continue;
+        }
+        if channels
+            .try_push((channel.name.as_str(), &mut channel.scratch[..bs]))
+            .is_err()
+        {
+            debug_assert!(
+                false,
+                "link channel pool exceeded ArrayVec cap {MAX_LINK_CHANNELS} (control cap drifted)"
+            );
+            break;
+        }
+    }
+    let feeds = collect_source_feeds(sources, rendered_units, &[], bs);
+    engine.render_multi_feeds(hw, &mut channels, &feeds);
+    drop(channels);
+
+    for channel in le.channels.iter_mut() {
+        if egress_active(channel) {
+            channel.sink.commit(&channel.scratch[..bs]);
+        }
+    }
+}
+
 /// 出力起動の戻り値（Engine・stream guard・stats）。
 type OutputStart = (Engine, OutputStream, Arc<StreamStats>);
 /// LinkAudio egress 経路付き起動の戻り値（上記 + channel activation の producer）。
@@ -844,8 +1171,16 @@ pub fn start_default_output_with_device(
     capture_path: Option<PathBuf>,
     device_name: Option<String>,
 ) -> Result<OutputStart, OutputError> {
-    let (engine, stream, stats, _cb) =
-        start_output_inner(None, Vec::new(), None, None, capture_path, device_name)?;
+    let (engine, stream, stats, _cb) = start_output_inner(
+        None,
+        Vec::new(),
+        Vec::new(),
+        None,
+        false,
+        None,
+        capture_path,
+        device_name,
+    )?;
     Ok((engine, stream, stats))
 }
 
@@ -866,7 +1201,9 @@ pub fn start_default_output_with_link_egress(
     let (engine, stream, stats, _cb) = start_output_inner(
         Some(link),
         Vec::new(),
+        Vec::new(),
         None,
+        false,
         None,
         capture_path,
         device_name,
@@ -892,7 +1229,9 @@ pub fn start_default_output_with_clap(
     let (engine, stream, stats, cb) = start_output_inner(
         None,
         Vec::new(),
+        Vec::new(),
         Some(post),
+        true,
         buffer_frames,
         capture_path,
         device_name,
@@ -900,6 +1239,31 @@ pub fn start_default_output_with_clap(
     // post=Some の経路では inner が必ず CallbackTimeStats を作る。
     let cb = cb.expect("clap path always creates CallbackTimeStats");
     Ok((engine, stream, stats, cb))
+}
+
+/// Callback-owned block sources mixed through the core premaster feed path.
+pub fn start_default_output_with_sources(
+    sources: Vec<SourceSlot>,
+    buffer_frames: Option<u32>,
+    capture_path: Option<PathBuf>,
+    device_name: Option<String>,
+) -> Result<ClapHostStart, OutputError> {
+    let (engine, stream, stats, cb) = start_output_inner(
+        None,
+        Vec::new(),
+        sources,
+        None,
+        true,
+        buffer_frames,
+        capture_path,
+        device_name,
+    )?;
+    Ok((
+        engine,
+        stream,
+        stats,
+        cb.expect("source path always creates CallbackTimeStats"),
+    ))
 }
 
 /// per-bus insert stage 付きで出力を起動する。stage の buffer は device config 確定後、callback が
@@ -919,7 +1283,9 @@ pub fn start_default_output_with_insert_buses(
     let (engine, stream, stats, _cb) = start_output_inner(
         None,
         std::mem::take(&mut insert_buses),
+        Vec::new(),
         None,
+        false,
         None,
         capture_path,
         device_name,
@@ -955,7 +1321,9 @@ pub fn start_default_output_with_insert_buses_and_post(
     let (engine, stream, stats, cb) = start_output_inner(
         None,
         insert_buses,
+        Vec::new(),
         Some(post),
+        true,
         buffer_frames,
         capture_path,
         device_name,
@@ -968,6 +1336,40 @@ pub fn start_default_output_with_insert_buses_and_post(
     ))
 }
 
+/// Per-bus inserts, block sources, and a master post-processor in one callback.
+pub fn start_default_output_with_insert_buses_sources_and_post(
+    insert_buses: Vec<InsertBusStage>,
+    sources: Vec<SourceSlot>,
+    post: Box<dyn PostProcessor>,
+    buffer_frames: Option<u32>,
+    capture_path: Option<PathBuf>,
+    device_name: Option<String>,
+) -> Result<ClapHostStart, OutputError> {
+    if insert_buses.len() > MAX_INSERT_BUS_STAGES {
+        return Err(OutputError::NoConfig(format!(
+            "too many insert bus stages: {} (max {MAX_INSERT_BUS_STAGES})",
+            insert_buses.len()
+        )));
+    }
+    validate_bus_topology(&insert_buses)?;
+    let (engine, stream, stats, cb) = start_output_inner(
+        None,
+        insert_buses,
+        sources,
+        Some(post),
+        true,
+        buffer_frames,
+        capture_path,
+        device_name,
+    )?;
+    Ok((
+        engine,
+        stream,
+        stats,
+        cb.expect("source + post path always creates CallbackTimeStats"),
+    ))
+}
+
 /// `start_default_output` / `_with_link_egress` / `_with_clap` の共通実装。
 /// `link` を渡すと cpal callback に egress 経路を、`post` を渡すと master-bus post-processor を
 /// 組み込む（両方 None なら hardware-only でビット同一）。`post` 有り時のみ callback-duration
@@ -975,14 +1377,18 @@ pub fn start_default_output_with_insert_buses_and_post(
 /// 計測・通常 None で device 既定）。`device_name` が `Some` かつ一致する output device が
 /// あればそれを使う（`--audio-device` honor・#484 D1）。`None`、または一致するデバイスが
 /// 見つからなければ stderr に警告して host 既定へ縮退する（起動を失敗させない）。
+#[allow(clippy::too_many_arguments)]
 fn start_output_inner(
     link: Option<LinkEgress>,
     mut insert_buses: Vec<InsertBusStage>,
+    sources: Vec<SourceSlot>,
     post: Option<Box<dyn PostProcessor>>,
+    callback_timing: bool,
     buffer_frames: Option<u32>,
     capture_path: Option<PathBuf>,
     device_name: Option<String>,
 ) -> Result<OutputInnerStart, OutputError> {
+    validate_source_slots(&sources)?;
     let host = cpal::default_host();
     let device = resolve_output_device(&host, device_name.as_deref())?;
     let supported = device
@@ -1023,11 +1429,16 @@ fn start_output_inner(
     let stats = Arc::new(StreamStats::default());
     // callback-duration 計測は post（CLAP）経路でのみ有効化する。hardware-only / link 経路は
     // 従来通り無計測（None → render_block は計測分岐を踏まずビット同一）。
-    let cb_stats = post.as_ref().map(|_| CallbackTimeStats::new());
+    let cb_stats = callback_timing.then(CallbackTimeStats::new);
     let engine = Engine::new(sample_rate, channels);
     let render_state = Arc::new(std::sync::Mutex::new(RenderState {
         link,
         insert_buses,
+        sources,
+        transport: BlockTransport {
+            cursor_frames: 0,
+            sample_rate,
+        },
         post,
     }));
     let stream = build_stream(
@@ -1242,6 +1653,241 @@ fn build_stream(
 }
 
 #[cfg(test)]
+mod source_borrow_spike {
+    use super::*;
+    use arrayvec::ArrayVec;
+
+    const MAX_FEEDS: usize = 8;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum SpikeFeedDest {
+        Hardware,
+        Channel(usize),
+    }
+
+    struct TestSource {
+        output: Vec<f32>,
+    }
+
+    impl BlockSource for TestSource {
+        fn render(&mut self, frames: usize, _transport: &BlockTransport) -> usize {
+            self.output[..frames].fill(0.5);
+            1
+        }
+
+        fn output(&self, unit: usize) -> &[f32] {
+            assert_eq!(unit, 0);
+            &self.output
+        }
+    }
+
+    #[test]
+    fn two_pass_source_render_then_shared_feed_collection_compiles() {
+        let mut sources = [SourceSlot {
+            source: Box::new(TestSource {
+                output: vec![0.0; 4],
+            }),
+            dests: vec![SourceDestCell(Arc::new(AtomicUsize::new(1)))],
+        }];
+        let transport = BlockTransport {
+            cursor_frames: 0,
+            sample_rate: 48_000,
+        };
+
+        // Pass 1: render every source without retaining a mutable borrow.
+        let mut rendered_units: ArrayVec<usize, MAX_FEEDS> = ArrayVec::new();
+        for slot in sources.iter_mut() {
+            rendered_units.push(slot.source.render(4, &transport));
+        }
+
+        // The real callback already has a position map for its target array. This spike uses the
+        // same shape and resolves encoded destination 1 to target position 0.
+        let targets = ["sum"];
+        let position_map = [Some(0_usize)];
+
+        // Pass 2: collect only shared output borrows and copyable destinations.
+        let mut feeds: ArrayVec<(&[f32], SpikeFeedDest), MAX_FEEDS> = ArrayVec::new();
+        for (slot, unit_count) in sources.iter().zip(rendered_units) {
+            for unit in 0..unit_count {
+                let encoded = slot.dests[unit].0.load(Ordering::Relaxed);
+                let dest = encoded
+                    .checked_sub(1)
+                    .and_then(|index| position_map.get(index).copied().flatten())
+                    .filter(|&index| index < targets.len())
+                    .map_or(SpikeFeedDest::Hardware, SpikeFeedDest::Channel);
+                feeds.push((slot.source.output(unit), dest));
+            }
+        }
+
+        assert_eq!(feeds.len(), 1);
+        assert_eq!(feeds[0].0, &[0.5; 4]);
+        assert_eq!(feeds[0].1, SpikeFeedDest::Channel(0));
+    }
+
+    #[test]
+    fn source_dest_cell_roundtrips_every_destination_and_defaults_invalid_values() {
+        let cell = SourceDestCell::new(SourceDest::Master);
+        assert_eq!(cell.load(), SourceDest::Master);
+
+        for dest in [
+            SourceDest::Bus(0),
+            SourceDest::Bus(MAX_INSERT_BUS_STAGES - 1),
+            SourceDest::Link(0),
+            SourceDest::Link(MAX_LINK_CHANNELS - 1),
+        ] {
+            cell.store(dest);
+            assert_eq!(cell.load(), dest);
+        }
+
+        cell.store(SourceDest::Bus(MAX_INSERT_BUS_STAGES));
+        assert_eq!(cell.load(), SourceDest::Master);
+        cell.store(SourceDest::Link(MAX_LINK_CHANNELS));
+        assert_eq!(cell.load(), SourceDest::Master);
+
+        let invalid = SourceDestCell(Arc::new(AtomicUsize::new(usize::MAX)));
+        assert_eq!(invalid.load(), SourceDest::Master);
+    }
+
+    fn fixed_source(output: Vec<f32>, dest: SourceDest) -> SourceSlot {
+        struct FixedSource {
+            output: Vec<f32>,
+        }
+
+        impl BlockSource for FixedSource {
+            fn render(&mut self, _frames: usize, _transport: &BlockTransport) -> usize {
+                1
+            }
+
+            fn output(&self, unit: usize) -> &[f32] {
+                assert_eq!(unit, 0);
+                &self.output
+            }
+        }
+
+        SourceSlot {
+            source: Box::new(FixedSource { output }),
+            dests: vec![SourceDestCell::new(dest)],
+        }
+    }
+
+    #[test]
+    fn source_feed_path_matches_post_mix_reference_at_unity_gain_bit_for_bit() {
+        let sample = orbit_audio_core::Sample::new(vec![0.25; 8], 48_000, 2);
+        let reference = Engine::new(48_000, 2);
+        reference.schedule(0.0, sample.clone()).expect("schedule");
+        let actual_engine = Engine::new(48_000, 2);
+        actual_engine.schedule(0.0, sample).expect("schedule");
+
+        let source_output = vec![0.5, -0.25, 0.75, -0.5, 1.0, -0.75, 1.25, -1.0];
+        let mut expected = vec![0.0; source_output.len()];
+        reference.render(&mut expected);
+        for (sample, source) in expected.iter_mut().zip(&source_output) {
+            *sample += *source;
+        }
+
+        let mut sources = vec![fixed_source(source_output, SourceDest::Master)];
+        let mut transport = BlockTransport {
+            cursor_frames: 0,
+            sample_rate: 48_000,
+        };
+        let mut actual = vec![0.0; expected.len()];
+        let mut link = None;
+        let mut buses = Vec::new();
+        render_engine_with_sources(
+            &actual_engine,
+            &mut link,
+            &mut buses,
+            &mut sources,
+            &mut transport,
+            2,
+            &mut actual,
+        );
+
+        assert_eq!(
+            actual
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn unregistered_source_bus_falls_back_to_hardware_for_the_whole_block() {
+        let source_output = vec![0.25, -0.5, 0.75, -1.0];
+        let mut sources = vec![fixed_source(source_output.clone(), SourceDest::Bus(7))];
+        let mut transport = BlockTransport {
+            cursor_frames: 0,
+            sample_rate: 48_000,
+        };
+        let engine = Engine::new(48_000, 2);
+        let mut actual = vec![0.0; source_output.len()];
+        render_engine_with_sources(
+            &engine,
+            &mut None,
+            &mut [],
+            &mut sources,
+            &mut transport,
+            2,
+            &mut actual,
+        );
+
+        assert_eq!(
+            actual
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            source_output
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn registered_source_bus_resolves_through_position_map_and_insert() {
+        struct Half;
+
+        impl PostProcessor for Half {
+            fn process(&mut self, data: &mut [f32]) {
+                for sample in data {
+                    *sample *= 0.5;
+                }
+            }
+        }
+
+        let mut sources = vec![fixed_source(vec![1.0; 4], SourceDest::Bus(0))];
+        let mut buses = vec![InsertBusStage::new("instrument", Some(Box::new(Half)), 4)];
+        let mut transport = BlockTransport {
+            cursor_frames: 0,
+            sample_rate: 48_000,
+        };
+        let engine = Engine::new(48_000, 2);
+        let mut actual = vec![0.0; 4];
+        render_engine_with_sources(
+            &engine,
+            &mut None,
+            &mut buses,
+            &mut sources,
+            &mut transport,
+            2,
+            &mut actual,
+        );
+
+        assert_eq!(
+            actual
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            vec![0.5_f32.to_bits(); 4]
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use cpal::BackendSpecificError;
@@ -1340,6 +1986,60 @@ mod tests {
             &mut actual,
         );
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn global_gain_scales_instrument_contribution() {
+        struct InstrumentSource {
+            output: Vec<f32>,
+        }
+
+        impl BlockSource for InstrumentSource {
+            fn render(&mut self, _frames: usize, _transport: &BlockTransport) -> usize {
+                1
+            }
+
+            fn output(&self, unit: usize) -> &[f32] {
+                assert_eq!(unit, 0);
+                &self.output
+            }
+        }
+
+        let engine = Engine::new(48_000, 2);
+        engine.set_global_gain(0.5, 0.0).expect("set gain");
+        let mut hw = vec![0.0; 4];
+        let mut link = None;
+        let mut buses = Vec::new();
+        let mut sources = vec![SourceSlot {
+            source: Box::new(InstrumentSource {
+                output: vec![1.0; 4],
+            }),
+            dests: vec![SourceDestCell::new(SourceDest::Master)],
+        }];
+        let mut transport = BlockTransport {
+            cursor_frames: 0,
+            sample_rate: 48_000,
+        };
+        let mut post = None;
+        let mut capture = None;
+        render_block_with_sources(
+            &engine,
+            &mut link,
+            &mut buses,
+            &mut sources,
+            &mut transport,
+            &mut post,
+            &mut capture,
+            &None,
+            2,
+            &mut hw,
+        );
+
+        assert_eq!(
+            hw.iter().map(|sample| sample.to_bits()).collect::<Vec<_>>(),
+            vec![0.5_f32.to_bits(); 4],
+            "instrument contribution must pass through global gain: {hw:?}"
+        );
     }
 
     #[test]
