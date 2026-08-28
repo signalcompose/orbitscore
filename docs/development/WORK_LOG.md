@@ -17,6 +17,137 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.393 fix: コメントが支えていた順序を、コンパイラに支えさせた (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: 根1・根3 完了。根2・根4 は継続
+
+レビューラウンド1（`/code:pr-review-team` フル編成4名 + Fable 監査を**並行**）で
+**Critical 8 / Important 10**。全件を main が実コードに当たって裏取りした。
+指摘は18件だが**根は4つ**。本エントリはそのうち **根1と根3**を閉じた記録。
+
+🔴 **指摘単位のローカルパッチは当てていない。** 根ごとに不変条件を1つ導入し、
+全該当箇所をそれで揃えた（指摘単位のパッチは振動の主因）。
+
+### 根1 — audio がまだ使っている stage が破棄されていた
+
+`collect_retired()` が retired を1つ回収しただけで `pending_stage_drops` を**全部** clear し、
+**世代の対応を検査していなかった**。
+
+adopt は `pending.swap(null)` → `retired.compare_exchange` の**2步**で、その間は pending も
+retired も null。この窓で `apply` が Busy 判定を通過し、新たに積まれた drop が直後の retired
+回収の巻き添えで破棄される。audio は次のブロック境界まで（最大 ~10.7ms）その stage を指す
+リストで `process_block` を続ける。`AudioCell` の SAFETY コメントが宣言した不変条件そのものが
+破れていた。
+
+**机上解析で確定させず、先に実行で証明した**:
+
+```
+collecting generation 1 must not destroy a drop published by generation 2
+  left: 0    right: 1
+```
+
+UAF を実際に起こさず live 数で検出するので、テスト自体は安全。
+
+**導入した不変条件**: apply が世代 G を publish したときに積んだ drop は、
+**audio が世代 G を adopt し終えた後にのみ**破棄してよい。
+
+### 🔴 変異が1つ生き残ったので設計を変えた（本エントリの主眼）
+
+初版は世代を `ChainExchange` の別 `AtomicU64` に置いた。ところが変異
+**「store を CAS の後ろへ動かす」が全テスト green のまま生き残った** —
+順序が**誰も守らせられない規約**になっていた。
+
+**世代を retire するリスト自身（`StageList::retired_at_generation`）に持たせた**。
+ポインタの publication が世代を運ぶので、順序が型の性質になる。同じ変異はいま
+**`no field on type *mut StageList`** でコンパイルを通らない。**壊し方のクラスごと消えた。**
+
+> **教訓**: 変異検証は「テストが弱い」ことだけでなく「**設計が規約に依存している**」ことも
+> 教える。生き残った変異に対しては、テストを足す前に**その壊し方を表現できなくする**道を
+> 先に探す。
+
+### 🔴 検証中に見つけた同型の順序問題（根3-3）
+
+child が `LOAD_FAILED` を立ててから detail を書いていた。daemon は status を観測した瞬間に
+detail を読むので、**先に status を見ると診断が黙って汎用メッセージに劣化する** —
+根3が消そうとしている当のもの。
+
+失敗の出口を1つに畳み、`load_initial` の内側で「detail → status」を固定。
+**C8 がその順序を検査する**（detail を書く瞬間の status を記録し、まだ立っていないことを確認）。
+変異（順序を戻す）で red を確認済み。
+
+### 根3 — 診断を `get_log` に終端させた（4箇所）
+
+**方針**: 「後で誰かが読む」計装を作るなら**読み手を同じコミットで配線する**。
+読み手を書けないなら計装を作らない。
+
+1. **`param_apply_errors` の読み手が workspace 全体で 0 件**だった。`/simplify` で
+   `eprintln!` をカウンタに替えた際に報告側が丸ごと落ちており、しかもコメントは
+   「main スレッドが読み出して報告する」と**2箇所で宣言していた** → サービスループが
+   増分をドレインして `tracing::warn!`
+2. drop 時の UI close 失敗の `let _ =` → `tracing::warn!`（音は止めない・loud にするだけ）
+3. 初回 spawn/rebuild の **failed-index detail が消えていた**（mailbox 経由の2回目以降は
+   通るので初回限定）→ shared region 経由で daemon へ渡し RPC の message に載せる
+4. crash ログにプラグイン名を載せた（設計 §2.3 との乖離）
+
+🔴 `eprintln!` は使わない — 拡張が daemon の stderr を**全部 `ERROR:` に分類する**ため
+（同型の欠陥が4回再発している）。
+
+### 根4の一部 — `tests/` に型検査ゲートが無かった
+
+gated E2E に**実行時に必ず `ReferenceError` になる未定義変数**が出荷されていた
+（`4a08ecd6` が `waitUntil` 化の際に宣言だけ消した）。ラック側を絞って gated を11回
+回したので踏まなかった — **絞って回したことが穴になった**。
+
+原因は構造側にあった: `tsconfig.eslint.json` は `tests/**` を include するのに、
+**それに tsc を走らせる経路がどこにも無い**（build の references は packages 2つだけ・
+eslint は未定義変数のような意味論エラーを見ない）。
+
+`tsconfig.tests.json` + `npm run typecheck:e2e` + `code-review.yml` のステップを追加。
+**変異で実証**（宣言を戻すと `TS2304` で red・restore で green）。
+`tsconfig.eslint.json` を流用しないのは、あれが lint 支援用に `module: nodenext` を
+上書きしており、build では出ない解決由来のエラーを packages に 5 件出すため。
+
+### 変異検証（すべて main が実行）
+
+| 変異 | 結果 |
+|---|---|
+| `retain` → `clear`（元の欠陥を再導入） | red |
+| 不等号 `>` → `>=` | red（既存 C7 が殺す） |
+| 世代の書き込みを CAS の後ろへ | **コンパイルエラー = 表現不能** |
+| 刻む世代を `+1` | red |
+| status を detail より先に立てる | red |
+
+### 🔴 委譲で起きたこと（運用の記録）
+
+1. **Codex が使えなくなった** — メモリ安全性の修正という主題が OpenAI 側のコンテンツ
+   フィルタに引っかかる（"possible cybersecurity risk" の誤検知）。CLAUDE.md の規定どおり
+   Sonnet subagent（xhigh）へ切り替えた
+2. **発注が届いていなかった** — ジョブの `summary` が `--help`・`write=False`。
+   **発注文がフラグとして解釈され本文が失われていた**。転送役の idle を「実行中」と
+   読みかけた。→ **`--prompt-file` で本文を渡し `--write` を明示する**
+3. **二重起動** — 転送役が自分で復旧を試み、main も並行で復旧して**同一ツリーに write 権を
+   持つ Codex が2本**走った。cancel + **PID 消滅を確認**して収束
+4. **Sonnet が同じ失敗を2回** — 1回目は肝心の1行を書かず（`dead_code` 警告として出ており
+   **指示した最初の検証コマンド clippy を回していれば気づけた**）、2回目は不等号を誤り
+   **既存 C7 を落としたまま報告**。規約どおり main が引き取った
+
+> **教訓**: 「完了通知」「idle」はいずれも**終了の証拠にならない**。
+> 受け入れ検証は必ず main が sandbox 外で回す。
+
+### 検証
+
+Rust 35/86/15 passed・failed 0 / clippy `-D warnings` exit 0 / `cargo fmt --check` exit 0 /
+`npm run typecheck:e2e` exit 0 / lint クリーン / `npm test` **2069 passed 0 failed**
+
+### 残り
+
+- **根2**（「登記の無傷が確認できるか」という述語で3箇所を揃える）— ブリーフ準備済み・未着手
+- **根4**（gated E2E の実装・MCP の `chain_path` additive 化・dB 契約の CI 3経路）—
+  Fable の設計書 `docs/design/628-gated-e2e-rack-design.md`（358行）承認済み・実装未着手
+- **PR 本文の実機検証の記述は訂正済み**（配列記法・N段直列・`Gain` は実機未通過）
+
 ### 6.392 refactor: /simplify が 6 件を出し、うち 1 件は私自身の浅い修正だった (#628) (Aug 28, 2026)
 
 **Date**: 2026-08-28
