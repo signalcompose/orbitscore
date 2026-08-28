@@ -516,6 +516,9 @@ impl RackController {
         ))
     }
 
+    // Same reason as the `stages` field above: each stage needs a stable allocation because
+    // published `StageList` entries hold pointers into it while the Vec is reordered by keeps.
+    #[allow(clippy::vec_box)]
     fn load_stages(
         factory: &mut impl StageFactory,
         specs: &[StageSpec],
