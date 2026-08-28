@@ -62,12 +62,28 @@ const { StreamableHTTPServerTransport } =
       onsessionclosed?: (sessionId: string) => void | Promise<void>
     }) => TransportLike
   }
+/**
+ * `zod` の最小型スタブ。ランタイムの zod はここに宣言されているより遥かに多くを持つが、
+ * この拡張が実際に使う分だけを宣言してある。
+ *
+ * 🔴 **使う builder を増やしたらここも増やすこと。** 宣言漏れは `npm test` / `npm run lint` /
+ * `npm run typecheck:e2e` のどれにも出ず、**`npm run build` だけが落ちる**
+ * （#639 で `z.array(z.number().int())` を足した際に実際に踏んだ）。
+ */
 interface ZodTypeLike {
   describe(description: string): ZodTypeLike
   optional(): unknown
+  int(): ZodTypeLike
+  nonnegative(): ZodTypeLike
+  length(exact: number): ZodTypeLike
 }
 const { z } = require('zod') as {
-  z: { string: () => ZodTypeLike; number: () => ZodTypeLike; boolean: () => ZodTypeLike }
+  z: {
+    string: () => ZodTypeLike
+    number: () => ZodTypeLike
+    boolean: () => ZodTypeLike
+    array: (element: ZodTypeLike) => ZodTypeLike
+  }
 }
 /* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
 
@@ -268,6 +284,45 @@ export interface OrbitScoreToolHandlers {
 /** The single error-envelope shape for every tool (change here, not per tool). */
 function errorResult(error: string): ToolResult {
   return { content: [{ type: 'text', text: `error: ${error}` }], isError: true }
+}
+
+/** Bridge MCP's canonical effect path to the compatibility-only UIH.5 index API. */
+export function resolveMcpPluginUiIndex(args: {
+  chain_path?: unknown
+  index?: unknown
+}): { ok: true; index: number } | { ok: false; error: string } {
+  if (args.chain_path !== undefined) {
+    const chainPath = args.chain_path
+    if (
+      !Array.isArray(chainPath) ||
+      chainPath.length !== 1 ||
+      !Number.isSafeInteger(chainPath[0]) ||
+      Number(chainPath[0]) < 0 ||
+      Number(chainPath[0]) >= Number.MAX_SAFE_INTEGER
+    ) {
+      return { ok: false, error: 'chain_path must contain exactly one non-negative integer' }
+    }
+    // Global still accepts UIH.5 indexes and is the sole index -> chainPath mapper.
+    // MCP's spec-shaped path addresses effects directly, so bridge [n] to index n + 1.
+    const indexFromChainPath = Number(chainPath[0]) + 1
+    if (args.index !== undefined && args.index !== indexFromChainPath) {
+      return {
+        ok: false,
+        error:
+          `index ${String(args.index)} conflicts with chain_path ${JSON.stringify(chainPath)}; ` +
+          `chain_path selects compatibility index ${indexFromChainPath}`,
+      }
+    }
+    return { ok: true, index: indexFromChainPath }
+  }
+  const index = args.index
+  if (!Number.isSafeInteger(index) || Number(index) < 0) {
+    return {
+      ok: false,
+      error: 'a non-negative integer index is required when chain_path is absent',
+    }
+  }
+  return { ok: true, index: Number(index) }
 }
 
 function toToolResult(result: CommandResult): ToolResult {
@@ -869,18 +924,28 @@ function buildServer(
     const receiverSchema = z
       .string()
       .describe('Receiver: sequence name, "master", "sum:<bus-name>", or "aux:<bus-name>"')
-    const indexSchema = z.number().describe('UIH.5 chain index (instrument 0, effects 1-based)')
-
+    const chainPathSchema = z
+      .array(z.number().int().nonnegative())
+      .length(1)
+      .describe('Zero-based effect chain path; v1 requires exactly one non-negative integer')
+      .optional()
+    const indexSchema = z
+      .number()
+      .describe('Compatibility-only UIH.5 chain index (instrument 0, effects 1-based)')
+      .optional()
     server.registerTool(
       'open_plugin_ui',
       {
         title: 'Open Plugin UI',
         description:
-          'Open and attach the current plugin window addressed by receiver and chain index. ' +
+          'Open and attach the current plugin window addressed by receiver and zero-based ' +
+          'chain_path. The legacy index remains accepted for compatibility; when both are ' +
+          'provided they must identify the same effect. ' +
           'Returns only after the window exists. expectedName is an optional normalized-name ' +
           'guard that prevents opening a different plugin after chain indices shift.',
         inputSchema: {
           receiver: receiverSchema,
+          chain_path: chainPathSchema,
           index: indexSchema,
           expectedName: z
             .string()
@@ -890,12 +955,11 @@ function buildServer(
       },
       async (args) => {
         const receiver = typeof args.receiver === 'string' ? args.receiver : ''
-        const index = typeof args.index === 'number' ? args.index : NaN
         const expectedName = typeof args.expectedName === 'string' ? args.expectedName : undefined
-        if (!receiver || !Number.isInteger(index) || index < 0) {
-          return errorResult('receiver and a non-negative integer index are required')
-        }
-        const result = await openPluginUi(receiver, index, expectedName)
+        if (!receiver) return errorResult('receiver is required')
+        const address = resolveMcpPluginUiIndex(args)
+        if (!address.ok) return errorResult(address.error)
+        const result = await openPluginUi(receiver, address.index, expectedName)
         return result.ok
           ? { content: [{ type: 'text', text: JSON.stringify(result.result) }] }
           : pluginUiError(result)
@@ -907,18 +971,19 @@ function buildServer(
       {
         title: 'Close Plugin UI',
         description:
-          'Close the plugin window addressed by receiver and chain index. Returns only after ' +
+          'Close the plugin window addressed by receiver and zero-based chain_path. The legacy ' +
+          'index remains accepted for compatibility and must agree when both are provided. ' +
+          'Returns only after ' +
           'UI_CLOSED_DONE, including the close-time state-save safepoint; the command ack alone ' +
           'is not completion.',
-        inputSchema: { receiver: receiverSchema, index: indexSchema },
+        inputSchema: { receiver: receiverSchema, chain_path: chainPathSchema, index: indexSchema },
       },
       async (args) => {
         const receiver = typeof args.receiver === 'string' ? args.receiver : ''
-        const index = typeof args.index === 'number' ? args.index : NaN
-        if (!receiver || !Number.isInteger(index) || index < 0) {
-          return errorResult('receiver and a non-negative integer index are required')
-        }
-        const result = await closePluginUi(receiver, index)
+        if (!receiver) return errorResult('receiver is required')
+        const address = resolveMcpPluginUiIndex(args)
+        if (!address.ok) return errorResult(address.error)
+        const result = await closePluginUi(receiver, address.index)
         return result.ok
           ? { content: [{ type: 'text', text: JSON.stringify(result.result) }] }
           : pluginUiError(result)

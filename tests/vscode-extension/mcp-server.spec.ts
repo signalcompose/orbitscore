@@ -4,6 +4,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 
 import {
   startOrbitScoreMcpServer,
+  resolveMcpPluginUiIndex,
   type OrbitScoreToolHandlers,
   type McpServerHandle,
   type CommandResult,
@@ -339,6 +340,20 @@ type ToolCallResult = { content: Array<{ type: 'text'; text: string }>; isError?
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
+describe('MCP plugin UI address resolver', () => {
+  it('prefers a valid chain_path and maps it to the compatibility effect index', () => {
+    expect(resolveMcpPluginUiIndex({ chain_path: [1] })).toEqual({ ok: true, index: 2 })
+    expect(resolveMcpPluginUiIndex({ chain_path: [1], index: 2 })).toEqual({ ok: true, index: 2 })
+  })
+
+  it('rejects conflicting chain_path and index loudly', () => {
+    expect(resolveMcpPluginUiIndex({ chain_path: [1], index: 1 })).toEqual({
+      ok: false,
+      error: 'index 1 conflicts with chain_path [1]; chain_path selects compatibility index 2',
+    })
+  })
+})
+
 describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
   let handle: McpServerHandle | undefined
 
@@ -528,6 +543,65 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect(closePluginUi).toHaveBeenCalledWith('lead', 0)
   })
 
+  it('maps spec-shaped chain_path to the compatibility index for open and close', async () => {
+    const openPluginUi = vi.fn().mockResolvedValue({
+      ok: true,
+      result: { receiver: 'master', index: 2, normalizedName: 'Echo' },
+    })
+    const closePluginUi = vi.fn().mockResolvedValue({
+      ok: true,
+      result: { receiver: 'master', index: 2, completion: 'safepoint-completed' },
+    })
+    const { handlers } = createStubHandlers({ openPluginUi, closePluginUi })
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const opened = await client.toolsCall('open_plugin_ui', {
+      receiver: 'master',
+      chain_path: [1],
+      index: 2,
+      expectedName: 'Echo',
+    })
+    const closed = await client.toolsCall('close_plugin_ui', {
+      receiver: 'master',
+      chain_path: [1],
+    })
+
+    expect((opened.json as JsonRpcOk<ToolCallResult>).result.isError).toBeFalsy()
+    expect((closed.json as JsonRpcOk<ToolCallResult>).result.isError).toBeFalsy()
+    expect(openPluginUi).toHaveBeenCalledTimes(1)
+    expect(openPluginUi).toHaveBeenCalledWith('master', 2, 'Echo')
+    expect(closePluginUi).toHaveBeenCalledTimes(1)
+    expect(closePluginUi).toHaveBeenCalledWith('master', 2)
+  })
+
+  it.each(['open_plugin_ui', 'close_plugin_ui'] as const)(
+    '%s rejects conflicting chain_path and index loudly before dispatch',
+    async (toolName) => {
+      const openPluginUi = vi.fn()
+      const closePluginUi = vi.fn()
+      const { handlers } = createStubHandlers({ openPluginUi, closePluginUi })
+      handle = await startTestServer(handlers)
+      const client = new McpTestClient(handle.port)
+      await client.connect()
+
+      const response = await client.toolsCall(toolName, {
+        receiver: 'master',
+        chain_path: [1],
+        index: 1,
+      })
+      const body = response.json as JsonRpcOk<ToolCallResult>
+
+      expect(body.result.isError).toBe(true)
+      expect(body.result.content[0]!.text).toContain(
+        'index 1 conflicts with chain_path [1]; chain_path selects compatibility index 2',
+      )
+      expect(openPluginUi).toHaveBeenCalledTimes(0)
+      expect(closePluginUi).toHaveBeenCalledTimes(0)
+    },
+  )
+
   it('surfaces expectedName refusal and the role/name valid-index explanation as a loud error', async () => {
     const openPluginUi = vi.fn().mockResolvedValue({
       ok: false,
@@ -583,8 +657,8 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
       for (const response of [opened, closed]) {
         const body = response.json as JsonRpcOk<ToolCallResult>
         expect(body.result.isError).toBe(true)
-        expect(body.result.content[0]!.text).toContain(
-          'receiver and a non-negative integer index are required',
+        expect(body.result.content[0]!.text).toMatch(
+          /receiver is required|non-negative integer index is required/,
         )
       }
       expect(openPluginUi).toHaveBeenCalledTimes(0)

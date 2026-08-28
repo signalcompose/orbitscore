@@ -659,7 +659,10 @@ impl Drop for ActualFixture {
 
 #[cfg(target_os = "macos")]
 fn gain_bundle_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/std-plugins")
+    std::env::var_os("ORBIT_STD_PLUGIN_DIR").map_or_else(
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/std-plugins"),
+        PathBuf::from,
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -693,7 +696,7 @@ fn actual_gain(
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "requires bash crates/orbit-std-gain/bundle-macos.sh"]
-fn c05_real_gain_keep_updates_db_without_reconstruction() {
+fn c16_real_gain_keep_updates_db_without_reconstruction() {
     let (mut controller, mut audio, mut factory, fixture) = actual_gain(0.0);
     let generation = controller.construction_generation(0);
     let mut before = [1.0, 1.0];
@@ -717,7 +720,7 @@ fn c05_real_gain_keep_updates_db_without_reconstruction() {
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "requires bash crates/orbit-std-gain/bundle-macos.sh"]
-fn c13_real_gain_resolves_the_db_parameter_by_name() {
+fn c17_real_gain_resolves_the_db_parameter_by_name() {
     let (mut controller, mut audio, mut factory, fixture) = actual_gain(0.0);
     controller
         .apply(
@@ -742,7 +745,7 @@ fn c13_real_gain_resolves_the_db_parameter_by_name() {
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "requires bash crates/orbit-std-gain/bundle-macos.sh"]
-fn c14_real_gain_obeys_the_decibel_contract() {
+fn c18_real_gain_obeys_the_decibel_contract() {
     let (_controller, mut audio, _factory, fixture) = actual_gain(-20.0);
     let mut quiet = [1.0, -1.0];
     audio.process_block(&mut quiet, unsafe { &(*fixture.region).active_stage_index });

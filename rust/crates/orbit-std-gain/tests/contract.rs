@@ -16,7 +16,9 @@ use clack_extensions::audio_ports::PluginAudioPorts;
 use clack_extensions::gui::PluginGui;
 use clack_extensions::params::{ParamInfoBuffer, PluginParams};
 use clack_extensions::state::PluginState;
+use clack_host::events::event_types::ParamValueEvent;
 use clack_host::prelude::*;
+use clack_host::utils::Cookie;
 use orbit_std_gain::*;
 
 // ──────────────────────────────────────────────────────────
@@ -152,4 +154,88 @@ fn the_plugin_identifies_itself_as_gain() {
         .plugin_handle()
         .get_extension::<PluginParams>()
         .is_some());
+}
+
+#[test]
+fn processes_real_audio_at_minus_six_and_zero_db() {
+    const FRAMES: u32 = 4;
+    let mut instance = instantiate();
+    let processor = instance
+        .activate(
+            |_, _| (),
+            PluginAudioConfiguration {
+                sample_rate: 48_000.0,
+                min_frames_count: FRAMES,
+                max_frames_count: FRAMES,
+            },
+        )
+        .expect("Gain の activate に失敗");
+    let mut processor = processor
+        .start_processing()
+        .expect("Gain の start_processing に失敗");
+
+    for (db, expected_gain) in [(-6.0, db_to_linear(-6.0)), (0.0, 1.0)] {
+        let mut input_events = EventBuffer::with_capacity(1);
+        let mut output_events = EventBuffer::new();
+        input_events.push(&ParamValueEvent::new(
+            0,
+            ClapId::new(PARAM_DB_ID),
+            Pckn::match_all(),
+            db,
+            Cookie::empty(),
+        ));
+
+        let mut input = [[1.0_f32, -0.5, 0.25, -0.125]; 2];
+        let expected_input = input;
+        let mut output = [[0.0_f32; FRAMES as usize]; 2];
+        let mut input_ports = AudioPorts::with_capacity(2, 1);
+        let mut output_ports = AudioPorts::with_capacity(2, 1);
+
+        {
+            let input_audio = input_ports.with_input_buffers([AudioPortBuffer {
+                channels: AudioPortBufferType::f32_input_only(
+                    input.iter_mut().map(InputChannel::variable),
+                ),
+                latency: 0,
+            }]);
+            let mut output_audio = output_ports.with_output_buffers([AudioPortBuffer {
+                channels: AudioPortBufferType::f32_output_only(
+                    output.iter_mut().map(|channel| channel.as_mut_slice()),
+                ),
+                latency: 0,
+            }]);
+
+            processor
+                .process(
+                    &input_audio,
+                    &mut output_audio,
+                    &input_events.as_input(),
+                    &mut output_events.as_output(),
+                    None,
+                    None,
+                )
+                .expect("Gain の 1 block process に失敗");
+        }
+
+        for (input_channel, output_channel) in expected_input.iter().zip(output.iter()) {
+            for (input_sample, output_sample) in input_channel.iter().zip(output_channel.iter()) {
+                let expected = input_sample * expected_gain;
+                assert!(
+                    (output_sample - expected).abs() < 1e-6,
+                    "db={db}: input={input_sample}, output={output_sample}, expected={expected}"
+                );
+            }
+        }
+        if db == -6.0 {
+            assert!(
+                (output[0][0] - 0.5).abs() < 0.002,
+                "-6 dB should be approximately half amplitude: {}",
+                output[0][0]
+            );
+        } else {
+            assert_eq!(output, expected_input, "0 dB must be exact identity");
+        }
+    }
+
+    instance.deactivate(processor.stop_processing());
 }

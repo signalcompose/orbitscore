@@ -17,6 +17,85 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.396 feat: MCP を chain_path 対応にし、Gain の dB 契約を CI で守る経路を作った (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: 発注 A 完了。**配列記法が実機で初めて動いた**
+
+計画 `628-plan-reset.md` の**発注 A**（実機を起動せずヘッドレスで検収できる項目）。
+
+### 実装 5 件
+
+1. **MCP `open_plugin_ui` / `close_plugin_ui` の `chain_path` 対応**（完了条件 15(b)）。
+   🔴 **additive** — `index` を削除せず、`chain_path` を優先し、**両方来て食い違えば loud 拒否**。
+   `index` の撤去は表面の削除なので **owner 判断で #633 へ送済み**
+2. `gain_bundle_dir()` が **`ORBIT_STD_PLUGIN_DIR` を尊重**（release ビルドの bundle を指せる）
+3. **`release.yml`（macos-14 既設）に実 Gain テストの step**。`--lib` は load-bearing（#629）
+4. **`orbit-std-gain/tests/contract.rs` に in-process 処理契約テスト** —
+   activate → 実バッファ 1 block process → -6dB で半振幅 / 0dB で恒等。
+   clack-host の in-process instance で audio processor まで進められた（**残余ギャップなし**）
+5. 小修正 3 件 — テスト ID `c13` の重複解消（`c16`〜`c18` へ）/ `.any()` を回数検査へ /
+   未使用の `unsafe impl Sync for AudioCell` を削除
+
+### 🔴 起動前ゲートが型エラーを 1 件捕まえた（main のブリーフの穴）
+
+`z.array(z.number().int())` を足したが、この拡張の **zod 型スタブには
+`string`/`number`/`boolean` しか宣言が無く**、**`npm run build` だけが落ちる**状態だった。
+
+**私の発注ブリーフの検証コマンドに `npm run build` が入っていなかった。**
+`npm test` / `npm run lint` / `npm run typecheck:e2e` は**どれも
+`packages/vscode-extension/src` を型検査しない**。スタブを使用実態に合わせ、
+「使う builder を増やしたらここも増やす。漏れは build だけが落ちる」と理由をコメントに残した。
+
+> **教訓**: 検証コマンドの一覧は「何を通せば安心か」ではなく
+> **「どのゲートが何を見ていないか」**から作る。
+
+### 🔴 CP2 — 配列記法が実機で初めて動いた
+
+`bundle-macos.sh` + `npm run build:clean` → OrbitStudio をクリーン起動 → MCP 経由で評価:
+
+```
+kick.effect(["CLAP Test Effect", Gain(db: -6)])   → ok / ERROR 増加なし（1 → 1）
+```
+
+**child プロセスは 1 つだけ**で、`--chain <manifest>` で起動していた（旧 `--plugin <パス>` ではない）:
+
+```
+46309 orbit-effect-rack-child --shm ... --chain ...chain.json --sample-rate 48000
+```
+
+manifest の中身:
+
+```json
+{"version":1,"stages":[
+  {"kind":"catalog","path":".../CLAPTestEffect.clap",
+   "plugin_id":"com.signalcompose.clap-test-effect","state":null,"enabled":true},
+  {"kind":"standard","name":"Gain","params":{"db":-6.0},"enabled":true}]}
+```
+
+**この PR の中心的な主張が実機で裏付けられた**: 1 レシーバに複数 insert /
+1 child がチェーン全体を持つ / **3 カテゴリを構文で分ける**（文字列 → `catalog`・
+大文字呼び出し → `standard`）/ `Gain(db: -6)` の引数が `params.db = -6.0` まで届く。
+
+### 手で回す実機トライアルの手順に欠陥があった（owner 指摘）
+
+**`LOOP` を張ったまま止め忘れ、音が鳴り続けた。** gated テストなら `afterAll` が
+面倒を見る部分で、手で回したから抜けた。以後は
+**起動 → 評価 → 観測 → `stop_engine` → プロセス消滅確認 → アプリ終了**を一組にする。
+
+### 実機で 1 件観測（判断材料）
+
+エンジン起動が一度 `DaemonStartupError: daemon ready line timeout after 10000ms` で落ちた。
+daemon 単体では ready 行（`{"ready":true,"port":59760,...}`）を即座に出すことを確認済みで、
+cargo のテストとビルドが並走していた時間帯だったため**負荷による超過**と見ている。
+
+### 検証
+
+`npm run build` **型エラー 0** / `npm test` **2076 passed** / lint 0 / `typecheck:e2e` 0 /
+clippy default・両 feature とも通過 / `cargo test --workspace` **477 passed** /
+daemon 両 feature **229 passed** / child-runtime 29 / std-gain 8+5 / `cargo fmt --check` exit 0
+
 ### 6.395 docs: 計画を立て直し、Cmd+Click を #633 へ移管した (#628) (Aug 28, 2026)
 
 **Date**: 2026-08-28

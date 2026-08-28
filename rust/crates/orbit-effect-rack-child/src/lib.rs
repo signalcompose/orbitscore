@@ -138,11 +138,6 @@ pub trait ControlStage {
 
 struct AudioCell(UnsafeCell<Box<dyn AudioStage>>);
 
-// SAFETY: only the dedicated audio thread dereferences the cell. The main thread owns and moves
-// the surrounding Box but never accesses its interior after publication; retirement proves the
-// audio thread has stopped using a dropped cell before main destroys it.
-unsafe impl Sync for AudioCell {}
-
 pub struct StageInstance {
     audio: Box<AudioCell>,
     control: Box<dyn ControlStage>,

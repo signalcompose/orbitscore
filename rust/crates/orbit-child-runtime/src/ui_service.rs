@@ -1122,8 +1122,23 @@ mod tests {
             CMD_RESULT_OK,
             "an indexed re-open is an idempotent no-op"
         );
-        assert!(trace0.borrow().iter().any(|call| call == "window.create"));
-        assert!(trace2.borrow().iter().any(|call| call == "window.create"));
+        assert_eq!(
+            trace0
+                .borrow()
+                .iter()
+                .filter(|call| call.as_str() == "window.create")
+                .count(),
+            1,
+            "re-opening index 0 must not create a second window"
+        );
+        assert_eq!(
+            trace2
+                .borrow()
+                .iter()
+                .filter(|call| call.as_str() == "window.create")
+                .count(),
+            1
+        );
         assert!(!trace0.borrow().iter().any(|call| call == "window.close"));
         assert!(!trace2.borrow().iter().any(|call| call == "window.close"));
 

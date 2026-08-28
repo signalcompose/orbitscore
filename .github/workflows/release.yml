@@ -92,6 +92,11 @@ jobs:
           # 標準プラグイン（#628 / SC.10.8）。cdylib をビルドして .clap bundle に組む。
           bash rust/crates/orbit-std-gain/bundle-macos.sh --release
 
+      - name: Test rack child against the bundled Gain.clap
+        # `--lib` is load-bearing: `--ignored` must not pick up future gated integration tests
+        # that require a real audio device (#629).
+        run: ORBIT_STD_PLUGIN_DIR="$PWD/rust/target/release/std-plugins" cargo test --release -p orbit-effect-rack-child --lib --manifest-path rust/Cargo.toml -- --ignored
+
       - name: Build engine + extension TypeScript
         working-directory: packages/vscode-extension
         run: npm run build
