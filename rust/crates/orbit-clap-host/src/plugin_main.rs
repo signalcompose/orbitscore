@@ -1,4 +1,5 @@
 use clack_extensions::gui::PluginGui;
+use clack_extensions::params::{ParamInfoBuffer, PluginParams};
 use clack_host::prelude::PluginInstance;
 use orbit_child_ui::UiSize;
 
@@ -26,6 +27,17 @@ impl ClapPluginMain {
     /// 保存済み state を適用する（契約は [`crate::state::apply_state_bytes`]）。
     pub fn apply_state_bytes(&mut self, bytes: &[u8]) -> Result<(), ClapHostError> {
         crate::state::apply_state_bytes(&mut self.instance, bytes)
+    }
+
+    /// Resolve a CLAP parameter by its public UTF-8 name on the plugin home thread.
+    pub fn parameter_id_by_name(&mut self, name: &str) -> Option<u32> {
+        let mut plugin = self.instance.plugin_handle();
+        let params = plugin.get_extension::<PluginParams>()?;
+        let mut buffer = ParamInfoBuffer::new();
+        (0..params.count(&mut plugin)).find_map(|index| {
+            let info = params.get_info(&mut plugin, index, &mut buffer)?;
+            (info.name == name.as_bytes()).then_some(info.id.get())
+        })
     }
 
     /// Consume the most recent thread-safe CLAP `closed(was_destroyed)` callback.

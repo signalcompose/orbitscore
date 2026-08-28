@@ -1,0 +1,20 @@
+{
+  // `tests/` は build にも lint にも型検査されていなかった。`npm run build` の references は
+  // packages 2 つだけで、eslint は未定義変数の参照のような意味論エラーを見ない。その隙間から
+  // gated E2E に **実行時に必ず ReferenceError で落ちる**未定義変数が出荷された（#639 レビュー）。
+  //
+  // `tsconfig.eslint.json` を流用しない理由: あれは lint 支援用に `module: nodenext` を
+  // 上書きしており、packages 側に build では出ない解決由来のエラーを出す。ゲートは build と
+  // 同じ土台（`tsconfig.base.json` + engine と同じ module/target）に置く。
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "module": "commonjs",
+    "target": "ES2020",
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["tests/e2e/**/*.ts"]
+}

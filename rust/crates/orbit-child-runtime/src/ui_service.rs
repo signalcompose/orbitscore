@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
@@ -12,6 +13,7 @@ use orbit_audio_sandbox::{
 };
 use orbit_child_ui::{
     CloseCompletion, PluginUiEndpoint, UiCloseStateMachine, UiEvent, UiHostActions, UiSize,
+    ALREADY_OPEN_DETAIL,
 };
 
 /// Maximum time Phase B waits for the host to complete the `UI_CLOSED` safepoint.
@@ -81,10 +83,126 @@ impl<E: PluginUiEndpoint> PluginUiEndpoint for SharedEndpoint<E> {
     }
 }
 
-struct UiActions {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct IndexedUiEvent {
+    index: Option<u32>,
+    event: UiEvent,
+}
+
+struct UiEventHubCore {
     region: *mut SharedRegion,
     event_ring: EventRingChild,
-    retained_event: Option<UiEvent>,
+    queued_in_ring: Option<IndexedUiEvent>,
+    pending: VecDeque<IndexedUiEvent>,
+    published: Vec<(IndexedUiEvent, u64)>,
+}
+
+impl UiEventHubCore {
+    fn event_arg(event: IndexedUiEvent) -> String {
+        match (event.index, event.event) {
+            (None, UiEvent::UiClosed) => String::new(),
+            (None, UiEvent::UiClosedDone(CloseCompletion::SafepointCompleted)) => {
+                "safepoint-completed".into()
+            }
+            (None, UiEvent::UiClosedDone(CloseCompletion::TimedOutWithoutSave)) => {
+                "timeout-without-save".into()
+            }
+            (Some(index), UiEvent::UiClosed) => format!(r#"{{"index":{index}}}"#),
+            (Some(index), UiEvent::UiClosedDone(CloseCompletion::SafepointCompleted)) => {
+                format!(r#"{{"index":{index},"completion":"safepoint-completed"}}"#)
+            }
+            (Some(index), UiEvent::UiClosedDone(CloseCompletion::TimedOutWithoutSave)) => {
+                format!(r#"{{"index":{index},"completion":"timeout-without-save"}}"#)
+            }
+        }
+    }
+
+    fn event_kind(event: UiEvent) -> u32 {
+        match event {
+            UiEvent::UiClosed => EVT_UI_CLOSED,
+            UiEvent::UiClosedDone(_) => EVT_UI_CLOSED_DONE,
+        }
+    }
+
+    fn try_publish(&mut self, requested: IndexedUiEvent) -> Option<u64> {
+        if let Some(position) = self
+            .published
+            .iter()
+            .position(|(event, _)| *event == requested)
+        {
+            return Some(self.published.swap_remove(position).1);
+        }
+        if self.queued_in_ring != Some(requested) && !self.pending.contains(&requested) {
+            self.pending.push_back(requested);
+        }
+
+        if self.queued_in_ring.is_none() {
+            if let Some(event) = self.pending.pop_front() {
+                let arg = Self::event_arg(event);
+                self.event_ring
+                    .queue(Self::event_kind(event.event), &arg)
+                    .expect("UiEvent always maps to a supported event-ring kind");
+                self.queued_in_ring = Some(event);
+            }
+        }
+
+        let published = match unsafe { self.event_ring.service(self.region) } {
+            Ok(published) => published,
+            Err(error) => {
+                eprintln!("[orbit-child-runtime] plugin UI event publication failed: {error}");
+                return None;
+            }
+        };
+        if published > 0 {
+            debug_assert_eq!(published, 1);
+            let event = self
+                .queued_in_ring
+                .take()
+                .expect("a published UI event must have a retained identity");
+            let seq = unsafe { (*self.region).evt_seq.load_own() };
+            self.published.push((event, seq));
+        }
+
+        self.published
+            .iter()
+            .position(|(event, _)| *event == requested)
+            .map(|position| self.published.swap_remove(position).1)
+    }
+
+    fn event_ack_seq(&self) -> u64 {
+        unsafe { (*self.region).evt_ack_seq.read() }
+    }
+
+    fn is_drained(&self) -> bool {
+        self.pending.is_empty()
+            && self.queued_in_ring.is_none()
+            && self.published.is_empty()
+            && unsafe { self.event_ring.is_drained(self.region) }
+    }
+}
+
+/// Shared event publisher for all indexed plugin UIs in one rack child.
+///
+/// Every indexed [`UiService`] in a child must use the same hub so close events retain one
+/// total order in the single shared-memory event ring.
+#[derive(Clone)]
+pub struct UiEventHub(Rc<RefCell<UiEventHubCore>>);
+
+impl UiEventHub {
+    pub fn new(region: *mut SharedRegion) -> Self {
+        Self(Rc::new(RefCell::new(UiEventHubCore {
+            region,
+            event_ring: EventRingChild::new(),
+            queued_in_ring: None,
+            pending: VecDeque::new(),
+            published: Vec::new(),
+        })))
+    }
+}
+
+struct UiActions {
+    event_hub: UiEventHub,
+    event_index: Option<Rc<Cell<u32>>>,
     endpoint: Box<dyn PluginUiEndpoint>,
     poll_callbacks: Box<dyn FnMut() -> UiCallbacks>,
     window_factory: Box<dyn WindowFactory>,
@@ -149,51 +267,19 @@ impl UiHostActions for UiActions {
     }
 
     fn try_publish_event(&mut self, event: UiEvent) -> Option<u64> {
-        match self.retained_event {
-            Some(retained) => {
-                assert_eq!(
-                    retained, event,
-                    "UI close publication must retry the retained head event"
-                );
-            }
-            None => {
-                let (kind, arg) = match event {
-                    UiEvent::UiClosed => (EVT_UI_CLOSED, ""),
-                    UiEvent::UiClosedDone(CloseCompletion::SafepointCompleted) => {
-                        (EVT_UI_CLOSED_DONE, "safepoint-completed")
-                    }
-                    UiEvent::UiClosedDone(CloseCompletion::TimedOutWithoutSave) => {
-                        (EVT_UI_CLOSED_DONE, "timeout-without-save")
-                    }
-                };
-                self.event_ring
-                    .queue(kind, arg)
-                    .expect("UiEvent always maps to a supported event-ring kind");
-                self.retained_event = Some(event);
-            }
-        }
-
-        let published = match unsafe { self.event_ring.service(self.region) } {
-            Ok(published) => published,
-            Err(error) => {
-                eprintln!("[orbit-child-runtime] plugin UI event publication failed: {error}");
-                return None;
-            }
+        let indexed = IndexedUiEvent {
+            index: self.event_index.as_ref().map(|index| index.get()),
+            event,
         };
-        if published == 0 {
-            return None;
-        }
-        debug_assert_eq!(published, 1);
-        self.retained_event = None;
-        Some(unsafe { (*self.region).evt_seq.load_own() })
+        self.event_hub.0.borrow_mut().try_publish(indexed)
     }
 
     fn event_ack_seq(&self) -> u64 {
-        unsafe { (*self.region).evt_ack_seq.read() }
+        self.event_hub.0.borrow().event_ack_seq()
     }
 
     fn is_event_ring_drained(&self) -> bool {
-        unsafe { self.event_ring.is_drained(self.region) }
+        self.event_hub.0.borrow().is_drained()
     }
 
     fn release_plugin_ui(&mut self, was_destroyed: bool) {
@@ -224,6 +310,8 @@ pub struct UiService {
     core: Rc<RefCell<UiServiceCore>>,
     pending_window_close: Rc<Cell<bool>>,
     pending_host_resize: Rc<Cell<Option<UiSize>>>,
+    event_index: Option<Rc<Cell<u32>>>,
+    idempotent_open: bool,
     started_at: Instant,
 }
 
@@ -238,8 +326,10 @@ impl UiService {
         E: PluginUiEndpoint + 'static,
         F: FnMut(&E) -> UiCallbacks + 'static,
     {
-        Self::with_window_factory(
+        Self::with_window_factory_and_events(
             region,
+            UiEventHub::new(region),
+            None,
             endpoint,
             poll_callbacks,
             Box::new(crate::window::AppKitWindowFactory),
@@ -247,8 +337,57 @@ impl UiService {
         )
     }
 
+    /// Construct one stage-indexed UI using a rack-wide shared event hub.
+    #[cfg(target_os = "macos")]
+    pub fn new_indexed<E, F>(
+        region: *mut SharedRegion,
+        index: u32,
+        event_hub: UiEventHub,
+        endpoint: E,
+        poll_callbacks: F,
+    ) -> (Self, PluginMainHandle<E>)
+    where
+        E: PluginUiEndpoint + 'static,
+        F: FnMut(&E) -> UiCallbacks + 'static,
+    {
+        Self::with_window_factory_and_events(
+            region,
+            event_hub,
+            Some(index),
+            endpoint,
+            poll_callbacks,
+            Box::new(crate::window::AppKitWindowFactory),
+            UI_CLOSE_TIMEOUT,
+        )
+    }
+
+    #[cfg(test)]
     fn with_window_factory<E, F>(
         region: *mut SharedRegion,
+        endpoint: E,
+        poll_callbacks: F,
+        window_factory: Box<dyn WindowFactory>,
+        close_timeout: Duration,
+    ) -> (Self, PluginMainHandle<E>)
+    where
+        E: PluginUiEndpoint + 'static,
+        F: FnMut(&E) -> UiCallbacks + 'static,
+    {
+        Self::with_window_factory_and_events(
+            region,
+            UiEventHub::new(region),
+            None,
+            endpoint,
+            poll_callbacks,
+            window_factory,
+            close_timeout,
+        )
+    }
+
+    fn with_window_factory_and_events<E, F>(
+        _region: *mut SharedRegion,
+        event_hub: UiEventHub,
+        index: Option<u32>,
         endpoint: E,
         mut poll_callbacks: F,
         window_factory: Box<dyn WindowFactory>,
@@ -266,6 +405,7 @@ impl UiService {
         let pending_host_resize = Rc::new(Cell::new(None));
         let pending_resize_for_callback = pending_host_resize.clone();
         let started_at = Instant::now();
+        let event_index = index.map(|index| Rc::new(Cell::new(index)));
         let weak_core: Rc<RefCell<Weak<RefCell<UiServiceCore>>>> =
             Rc::new(RefCell::new(Weak::new()));
         let weak_for_callback = weak_core.clone();
@@ -296,9 +436,8 @@ impl UiService {
         let core = Rc::new(RefCell::new(UiServiceCore {
             machine: UiCloseStateMachine::new(close_timeout),
             actions: UiActions {
-                region,
-                event_ring: EventRingChild::new(),
-                retained_event: None,
+                event_hub,
+                event_index: event_index.clone(),
                 endpoint: Box::new(SharedEndpoint {
                     endpoint: endpoint_for_ui,
                 }),
@@ -320,6 +459,8 @@ impl UiService {
                 core,
                 pending_window_close,
                 pending_host_resize,
+                event_index,
+                idempotent_open: index.is_some(),
                 started_at,
             },
             PluginMainHandle { endpoint },
@@ -329,6 +470,13 @@ impl UiService {
     /// Elapsed time from the single monotonic clock used by this service.
     pub fn now(&self) -> Duration {
         self.started_at.elapsed()
+    }
+
+    /// Update the stage index carried by future close events after a keep operation shifts it.
+    pub fn set_index(&self, index: u32) {
+        if let Some(event_index) = &self.event_index {
+            event_index.set(index);
+        }
     }
 
     /// Handle one UI mailbox command. `OPEN_UI` acks after title + attach; `CLOSE_UI` acks at
@@ -352,7 +500,7 @@ impl UiService {
             })
         };
         CommandOutcome {
-            result: if ack.success {
+            result: if ack.success || (self.idempotent_open && ack.detail == ALREADY_OPEN_DETAIL) {
                 orbit_audio_sandbox::CMD_RESULT_OK
             } else if matches!(kind, CMD_OPEN_UI | CMD_CLOSE_UI) {
                 CMD_RESULT_PLUGIN_ERROR
@@ -930,5 +1078,75 @@ mod tests {
             .iter()
             .any(|call| call == "window.resize(720x512)"));
         assert_eq!(unsafe { (*fixture.region.ptr()).evt_seq.load_own() }, 1);
+    }
+
+    /// #628 C15: indexed rack services share one event publisher while retaining independent
+    /// windows/state machines. This is the behavioral index -> window registry contract.
+    #[test]
+    fn c15_indexed_services_keep_multiple_windows_open_and_publish_the_index() {
+        let region = TestRegion::new("indexed-multiple");
+        let event_hub = UiEventHub::new(region.ptr());
+        let make = |index: u32| {
+            let trace = Rc::new(RefCell::new(Vec::new()));
+            let window = Rc::new(WindowProbe::default());
+            let (ui, _main) = UiService::with_window_factory_and_events(
+                region.ptr(),
+                event_hub.clone(),
+                Some(index),
+                MockEndpoint {
+                    trace: trace.clone(),
+                    controls: Rc::new(EndpointControls::default()),
+                },
+                |_| UiCallbacks::default(),
+                Box::new(MockWindowFactory {
+                    trace: trace.clone(),
+                    probe: window.clone(),
+                }),
+                Duration::from_secs(10),
+            );
+            (ui, trace, window)
+        };
+        let (ui0, trace0, _window0) = make(0);
+        let (ui2, trace2, _window2) = make(2);
+
+        assert_eq!(
+            ui0.handle_command(CMD_OPEN_UI, Some("zero")).result,
+            CMD_RESULT_OK
+        );
+        assert_eq!(
+            ui2.handle_command(CMD_OPEN_UI, Some("two")).result,
+            CMD_RESULT_OK
+        );
+        assert_eq!(
+            ui0.handle_command(CMD_OPEN_UI, Some("zero again")).result,
+            CMD_RESULT_OK,
+            "an indexed re-open is an idempotent no-op"
+        );
+        assert_eq!(
+            trace0
+                .borrow()
+                .iter()
+                .filter(|call| call.as_str() == "window.create")
+                .count(),
+            1,
+            "re-opening index 0 must not create a second window"
+        );
+        assert_eq!(
+            trace2
+                .borrow()
+                .iter()
+                .filter(|call| call.as_str() == "window.create")
+                .count(),
+            1
+        );
+        assert!(!trace0.borrow().iter().any(|call| call == "window.close"));
+        assert!(!trace2.borrow().iter().any(|call| call == "window.close"));
+
+        assert_eq!(ui2.handle_command(CMD_CLOSE_UI, None).result, CMD_RESULT_OK);
+        let event_index = orbit_audio_sandbox::transport::evt_slot_index(1);
+        let arg = unsafe {
+            orbit_audio_sandbox::transport::read_cstr_field(&(*region.ptr()).evt_arg[event_index])
+        };
+        assert_eq!(arg, Some(r#"{"index":2}"#));
     }
 }

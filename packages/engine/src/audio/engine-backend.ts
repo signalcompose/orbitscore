@@ -14,7 +14,7 @@
 import type { Scheduler } from '../core/global/types'
 
 import type { AudioDevice } from './supercollider/types'
-import type { PluginLoadResult } from './types'
+import type { EffectChainApplyRequest, EffectChainApplyResult, PluginLoadResult } from './types'
 
 /**
  * interpreter（`InterpreterState.audioEngine`）/ Global が依存する音声バックエンド契約。
@@ -41,6 +41,7 @@ export interface AudioEngineBackend extends Scheduler {
     instance?: string,
     statePath?: string,
   ): Promise<PluginLoadResult>
+  applyEffectChain?(request: EffectChainApplyRequest): Promise<EffectChainApplyResult>
   pluginNoteOn?(key: number, channel: number, velocity: number, instance?: string): Promise<void>
   pluginNoteOff?(key: number, channel: number, velocity?: number, instance?: string): Promise<void>
   isPluginActive?(role?: 'effect' | 'instrument', bus?: string, instance?: string): boolean

@@ -48,3 +48,14 @@ export class DaemonProtocolError extends Error {
     this.details = details
   }
 }
+
+/** ApplyEffectChain ended without proof that the daemon rack registry stayed unchanged. */
+export const OUTPROC_EFFECT_UNCERTAIN = 'OUTPROC_EFFECT_UNCERTAIN'
+
+/**
+ * The rack registry is known intact only after a definitive daemon rejection. Transport
+ * failures and the daemon's explicit uncertain result may have crossed a child/daemon lifetime.
+ */
+export function isEffectChainRegistryIntact(error: unknown): boolean {
+  return error instanceof DaemonProtocolError && error.code !== OUTPROC_EFFECT_UNCERTAIN
+}

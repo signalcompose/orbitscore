@@ -86,8 +86,16 @@ jobs:
       - name: Build OOP-both Rust daemon and CLAP child binaries
         run: |
           cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument --manifest-path rust/Cargo.toml
+          cargo build --release -p orbit-effect-rack-child --manifest-path rust/Cargo.toml
           cargo build --release -p orbit-clap-effect-child -p orbit-clap-instrument-child -p orbit-vst3-effect-child -p orbit-vst3-instrument-child --manifest-path rust/Cargo.toml
           cargo build --release -p orbit-plugin-scan --manifest-path rust/Cargo.toml
+          # 標準プラグイン（#628 / SC.10.8）。cdylib をビルドして .clap bundle に組む。
+          bash rust/crates/orbit-std-gain/bundle-macos.sh --release
+
+      - name: Test rack child against the bundled Gain.clap
+        # `--lib` is load-bearing: `--ignored` must not pick up future gated integration tests
+        # that require a real audio device (#629).
+        run: ORBIT_STD_PLUGIN_DIR="$PWD/rust/target/release/std-plugins" cargo test --release -p orbit-effect-rack-child --lib --manifest-path rust/Cargo.toml -- --ignored
 
       - name: Build engine + extension TypeScript
         working-directory: packages/vscode-extension
@@ -138,7 +146,7 @@ jobs:
           fi
           echo "orbit-audio-daemon present and executable in packaged .vsix"
 
-          for CHILD_BIN in orbit-clap-effect-child orbit-clap-instrument-child orbit-vst3-effect-child orbit-vst3-instrument-child; do
+          for CHILD_BIN in orbit-effect-rack-child orbit-clap-effect-child orbit-clap-instrument-child orbit-vst3-effect-child orbit-vst3-instrument-child; do
             CHILD_PATH="$VSIX_CHECK/extension/engine/bin/darwin-arm64/$CHILD_BIN"
             if [ ! -f "$CHILD_PATH" ]; then
               echo "::error::$CHILD_BIN missing from packaged .vsix at engine/bin/darwin-arm64/ — OOP plugin hosting cannot start its child" >&2
@@ -163,6 +171,24 @@ jobs:
             exit 1
           fi
           echo "orbit-plugin-scan present and executable in packaged .vsix"
+
+          # 標準プラグイン（#628 / SC.10.8）: child は自分の実行ファイルの隣の
+          # `std-plugins/<name>.clap` を見て解決する。同梱が落ちると DSL の
+          # `Gain(db: …)` が実行時に「解決できない」で落ちるだけで、
+          # **ビルドもテストも緑のまま**すり抜ける。ここで loud に止める。
+          for STD_PLUGIN in Gain; do
+            STD_BUNDLE="$VSIX_CHECK/extension/engine/bin/darwin-arm64/std-plugins/$STD_PLUGIN.clap"
+            STD_EXE="$STD_BUNDLE/Contents/MacOS/$STD_PLUGIN"
+            if [ ! -d "$STD_BUNDLE" ]; then
+              echo "::error::standard plugin $STD_PLUGIN.clap missing from packaged .vsix at engine/bin/darwin-arm64/std-plugins/ — DSL racks using $STD_PLUGIN(...) would fail to resolve at runtime" >&2
+              exit 1
+            fi
+            if [ ! -f "$STD_EXE" ]; then
+              echo "::error::standard plugin $STD_PLUGIN.clap is present but has no executable at Contents/MacOS/$STD_PLUGIN — the bundle is malformed" >&2
+              exit 1
+            fi
+            echo "standard plugin $STD_PLUGIN.clap present in packaged .vsix"
+          done
 
       # ─────────────────────────────────────────────────────────────────────
       # Steps below this point only run for tag pushes (not pull_request).

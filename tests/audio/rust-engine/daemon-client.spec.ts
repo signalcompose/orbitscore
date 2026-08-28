@@ -366,7 +366,10 @@ describe('DaemonClient with mock server', () => {
     await client.start({ wsUrlOverride: url })
 
     await expect(
-      client.savePluginState({ role: 'effect', bus: 'seq-bus-2' }, '/songs/states/master.state'),
+      client.savePluginState(
+        { role: 'effect', bus: 'seq-bus-2', chainPath: [1] },
+        '/songs/states/master.state',
+      ),
     ).resolves.toEqual({
       path: '/songs/states/master.state',
       bytesWritten: 123,
@@ -375,6 +378,7 @@ describe('DaemonClient with mock server', () => {
       path: '/songs/states/master.state',
       role: 'effect',
       bus: 'seq-bus-2',
+      chain_path: [1],
     })
   })
 
@@ -395,6 +399,7 @@ describe('DaemonClient with mock server', () => {
       path: '/songs/states/lead.state',
       role: 'instrument',
       instance: 'plugin:lead',
+      chain_path: [0],
     })
   })
 
@@ -420,9 +425,49 @@ describe('DaemonClient with mock server', () => {
         path: '/songs/states/lead.state',
         role: 'instrument',
         instance: 'plugin:lead',
+        chain_path: [0],
       })
     },
   )
+
+  it('sends one complete ApplyEffectChain plan and maps the dropped-state response', async () => {
+    const url = await server.start({
+      ApplyEffectChain: () => ({
+        status: 'applied',
+        child_pid: 912,
+        dropped: [{ prev_index: 1, path: '/states/B.state', bytes_written: 44 }],
+      }),
+    })
+    await client.start({ wsUrlOverride: url })
+    const request = {
+      bus: 'seq-bus-2',
+      mode: 'diff' as const,
+      chain: [
+        { op: 'keep' as const, prev_index: 0, enabled: false },
+        {
+          op: 'load' as const,
+          kind: 'standard' as const,
+          name: 'Gain',
+          params: { db: -6 },
+          enabled: true,
+        },
+      ],
+      saveDropped: [{ prev_index: 1, path: '/states/B.state' }],
+    }
+
+    await expect(client.applyEffectChain(request)).resolves.toEqual({
+      status: 'applied',
+      childPid: 912,
+      dropped: [{ prevIndex: 1, path: '/states/B.state', bytesWritten: 44 }],
+    })
+    expect(server.received.find((record) => record.method === 'ApplyEffectChain')?.params).toEqual({
+      role: 'effect',
+      bus: 'seq-bus-2',
+      mode: 'diff',
+      chain: request.chain,
+      save_dropped: request.saveDropped,
+    })
+  })
 
   it('PluginNoteOn/Off instance あり/なし: instance フィールドの含有/省略（#540 P1）', async () => {
     const url = await server.start({
@@ -945,6 +990,25 @@ describe('createDaemonStderrLineRouter (#618 chunk 境界での行分割)', () =
   })
 })
 
+describe('rack child の PID 通知が ERROR に分類されない (#628 §6)', () => {
+  // 🔴 実機 E2E の PID オラクルはこの行を `get_log` から読む（rack child は
+  // `--chain <manifest>` 起動なので `pgrep -f <pluginPath>` では捕まらない）。
+  // この行が ERROR へ倒れると、**同じ E2E が見ている「ERROR 増 0」を自分で落とす**。
+  // stderr の既定は fail-loud で ERROR なので、通ることを明示的に固定する。
+  it('daemon の tracing::info! 形式（ISO timestamp + level）が非エラーとして受理される', () => {
+    expect(
+      isDaemonNonErrorTracingLine(
+        '2026-08-28T02:31:44.123456Z  INFO orbit_audio_daemon::outproc_effect: ' +
+          '[orbit-effect-rack] child spawned pid=48732 shm=/tmp/orbit-shm-0',
+      ),
+    ).toBe(true)
+  })
+
+  it('level を名乗らない同内容の行は従来どおり ERROR 側へ倒れる（fail-loud の既定を弱めない）', () => {
+    expect(isDaemonNonErrorTracingLine('[orbit-effect-rack] child spawned pid=48732')).toBe(false)
+  })
+})
+
 describe('isDaemonNonErrorTracingLine (#605 stderr 転送の level 振り分け)', () => {
   // #618 E2E 実測: child は daemon の stderr を継承し tracing を持たないため、level を
   // 名乗らない成功行が **ERROR として記録される**（`state restored from ...` が該当し、
@@ -962,8 +1026,35 @@ describe('isDaemonNonErrorTracingLine (#605 stderr 転送の level 振り分け)
     expect(
       isDaemonNonErrorTracingLine('ERROR [orbit-vst3-instrument-child] state restore failed'),
     ).toBe(false)
-    expect(isDaemonNonErrorTracingLine('WARN [orbit-vst3-instrument-child] degraded')).toBe(false)
     expect(isDaemonNonErrorTracingLine('INFO something else entirely')).toBe(false)
+  })
+
+  // 🔴 #628 実機ゲート実測 + owner 判断（2026-08-28）で **`WARN` は非エラー側へ移した**。
+  // 以前この describe は `WARN ... toBe(false)` を assert していた。意味論が変わったので
+  // 期待値を更新している（テストを緩めたのではなく、**決定が変わった**）。
+  //
+  // 発端: rack child に tracing subscriber を入れた副作用で `orbit-clap-host` の中継が
+  // un-silence され、**プラグイン自身の正常動作の警告**が `ERROR:` として記録された。
+  // 実機ゲートで**既存テストを含む 7 件**が「ERROR 行が増えた」で落ちた（15 → 17）。
+  //
+  // 行そのものは `get_log` に残る — `console.error` ではなく `console.log` へ回るだけ。
+  it('🔴 WARN は非エラー（警告はエラーではない。行は get_log に残る）', () => {
+    // 実機で実際に踏んだ行をそのままアンカーにする（手で整えた文言を使わない）。
+    expect(
+      isDaemonNonErrorTracingLine(
+        '2026-08-28T12:19:01.534614Z  WARN orbit_clap_host::controller: ' +
+          '[orbit-clap-host] NotePortsExtension なし; port 0 を使用',
+      ),
+    ).toBe(true)
+    expect(isDaemonNonErrorTracingLine('WARN [orbit-vst3-instrument-child] degraded')).toBe(true)
+    // ERROR は従来どおりエラー側。WARN を通したことで ERROR まで緩めていないことを固定する。
+    expect(
+      isDaemonNonErrorTracingLine(
+        '2026-08-28T12:19:01.534614Z ERROR orbit_clap_host::controller: [orbit-clap-host] boom',
+      ),
+    ).toBe(false)
+    // level を名乗らない行は従来どおりエラー側（fail-loud）。
+    expect(isDaemonNonErrorTracingLine('WARN something else entirely')).toBe(false)
   })
 
   // #625 実機 E2E 実測: VST3/CLAP の host crate は **child プロセスの中にリンクされて動く**
@@ -982,13 +1073,15 @@ describe('isDaemonNonErrorTracingLine (#605 stderr 転送の level 振り分け)
         'INFO [orbit-vst3-effect-child] --plugin-id=X は Phase 1 VST3 effect では未使用',
       ),
     ).toBe(true)
-    // 🔴 タグを広げても「level を名乗らない行」「ERROR/WARN を名乗る行」は従来どおり
+    // 🔴 タグを広げても「level を名乗らない行」「ERROR を名乗る行」は従来どおり
     // エラー側に倒れること（緩めすぎて本物のエラーを飲み込んでいないことの確認）。
     expect(
       isDaemonNonErrorTracingLine('[orbit-vst3-host] IComponent::setState rejected the state'),
     ).toBe(false)
-    expect(isDaemonNonErrorTracingLine('WARN [orbit-vst3-host] degraded')).toBe(false)
     expect(isDaemonNonErrorTracingLine('ERROR [orbit-vst3-host] boom')).toBe(false)
+    // `WARN` は #628 で非エラー側へ移した（owner 判断・2026-08-28）。この行の期待値だけが
+    // 変わっており、その上下（level 無し / ERROR）は不変であることを並べて固定する。
+    expect(isDaemonNonErrorTracingLine('WARN [orbit-vst3-host] degraded')).toBe(true)
     // 自分のコンポーネントのタグでない行は、level を名乗っていても認めない。
     expect(isDaemonNonErrorTracingLine('INFO [some-plugin-vendor] chatter')).toBe(false)
   })
@@ -1008,15 +1101,18 @@ describe('isDaemonNonErrorTracingLine (#605 stderr 転送の level 振り分け)
     ).toBe(true)
   })
 
-  it('WARN/ERROR の tracing 行はエラー側に残る', () => {
+  it('ERROR の tracing 行はエラー側に残る（WARN は #628 で非エラーへ）', () => {
+    expect(isDaemonNonErrorTracingLine('2026-08-25T17:30:47Z ERROR orbit_audio_daemon: boom')).toBe(
+      false,
+    )
+    // 🔴 ANSI 色付きの WARN も非エラーとして扱う（色コードを剥がしてから level を読む）。
+    // この行は以前 `false` を期待していた。#628 の実機ゲートで、プラグイン自身の正常動作の
+    // 警告が ERROR 件数を汚し**既存テストを含む 7 件**を落としたため、owner 判断で移した。
     expect(
       isDaemonNonErrorTracingLine(
         '\x1b[2m2026-08-25T17:30:47Z\x1b[0m \x1b[33m WARN\x1b[0m outproc attach failed (retryable): x',
       ),
-    ).toBe(false)
-    expect(isDaemonNonErrorTracingLine('2026-08-25T17:30:47Z ERROR orbit_audio_daemon: boom')).toBe(
-      false,
-    )
+    ).toBe(true)
   })
 
   it('level token を読み取れない行（panic・生 print）は fail-loud にエラー側へ倒す', () => {

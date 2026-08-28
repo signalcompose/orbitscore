@@ -42,6 +42,9 @@ import { gainDbToAmplitude } from '../audio-gain-utils'
 import type { AudioEngineBackend } from '../engine-backend'
 import type { AudioDevice } from '../supercollider/types'
 import type {
+  EffectChainApplyRequest,
+  EffectChainApplyResult,
+  EffectChainStageConfig,
   PluginLoadResult,
   PluginReplaceResult,
   PluginUnloadResult,
@@ -53,7 +56,12 @@ import type {
 import { DaemonClient } from './daemon-client'
 import { wireObject } from './wire-validation'
 import type { AudioDeviceListEntry } from './daemon-client'
-import { DaemonConnectionError, DaemonProtocolError, DaemonQuitError } from './errors'
+import {
+  DaemonConnectionError,
+  DaemonProtocolError,
+  DaemonQuitError,
+  isEffectChainRegistryIntact,
+} from './errors'
 
 /**
  * boundary で明示する未対応 feature gap の種別（A4 era）。
@@ -83,7 +91,7 @@ function pluginUiTargetFromEvent(data: Record<string, unknown>): PluginUiTarget 
     return {
       role: 'effect',
       ...(target.bus === undefined ? {} : { bus: target.bus }),
-      index,
+      index: index + 1,
     }
   }
   if (target.role === 'instrument' && typeof target.instance === 'string') {
@@ -94,8 +102,12 @@ function pluginUiTargetFromEvent(data: Record<string, unknown>): PluginUiTarget 
 
 function pluginStateTarget(target: PluginUiTarget): PluginStateSaveTarget {
   return target.role === 'effect'
-    ? { role: 'effect', ...(target.bus === undefined ? {} : { bus: target.bus }) }
-    : { role: 'instrument', instance: target.instance }
+    ? {
+        role: 'effect',
+        ...(target.bus === undefined ? {} : { bus: target.bus }),
+        chainPath: [target.index - 1],
+      }
+    : { role: 'instrument', instance: target.instance, chainPath: [0] }
 }
 
 function pluginUiTargetMatches(left: PluginUiTarget, right: PluginUiTarget): boolean {
@@ -359,6 +371,11 @@ export class RustEnginePlayer implements AudioEngineBackend {
       instance?: string
       statePath?: string
     }
+  >()
+  /** Last committed effect rack per daemon bus; the empty string is the master receiver. */
+  private readonly loadedEffectRacks = new Map<
+    string,
+    { bus: string | undefined; chain: EffectChainStageConfig[] }
   >()
   /**
    * Whether `loadedPlugin` is actually loaded in the daemon right now (silent-failure
@@ -707,6 +724,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
           // エントリは ws close の reject で各自の .finally が既に delete 済み。
           this.sampleIds.clear()
           await this.reloadPluginsAfterRespawn()
+          await this.reloadEffectRacksAfterRespawn()
           await this.reapplyBusRoutingAfterRespawn()
           console.warn(
             `✅ [rust-engine] daemon respawned and session re-established (attempt ${attempt}/${MAX_RESPAWN_ATTEMPTS}).`,
@@ -1046,6 +1064,52 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
   }
 
+  async applyEffectChain(request: EffectChainApplyRequest): Promise<EffectChainApplyResult> {
+    const key = request.bus ?? ''
+    const previous = this.loadedEffectRacks.get(key)?.chain ?? []
+    const next = request.chain.map((operation): EffectChainStageConfig => {
+      if (operation.op === 'load') {
+        if (operation.kind === 'catalog') {
+          return {
+            kind: 'catalog',
+            path: operation.path,
+            ...(operation.plugin_id === undefined ? {} : { plugin_id: operation.plugin_id }),
+            ...(operation.state === undefined ? {} : { state: operation.state }),
+            enabled: operation.enabled,
+          }
+        }
+        return {
+          kind: 'standard',
+          name: operation.name,
+          params: { ...operation.params },
+          enabled: operation.enabled,
+        }
+      }
+      const kept = previous[operation.prev_index]
+      if (!kept) {
+        throw new Error(
+          `Effect rack ledger has no previous stage at index ${operation.prev_index}; rebuild is required.`,
+        )
+      }
+      return kept.kind === 'catalog'
+        ? { ...kept, enabled: operation.enabled }
+        : {
+            ...kept,
+            params: { ...(operation.params ?? kept.params) },
+            enabled: operation.enabled,
+          }
+    })
+    try {
+      const result = await this.daemon.applyEffectChain(request)
+      this.loadedEffectRacks.set(key, { bus: request.bus, chain: next })
+      this.forgetPluginLedger(RustEnginePlayer.pluginKey('effect', request.bus))
+      return result
+    } catch (error) {
+      if (!isEffectChainRegistryIntact(error)) this.loadedEffectRacks.delete(key)
+      throw error
+    }
+  }
+
   async savePluginState(
     target: import('../types').PluginStateSaveTarget,
     absolutePath: string,
@@ -1058,6 +1122,15 @@ export class RustEnginePlayer implements AudioEngineBackend {
     )
     const cached = this.loadedPlugins.get(key)
     if (cached && saved.bytesWritten > 0) cached.statePath = saved.path
+    if (target.role === 'effect' && saved.bytesWritten > 0) {
+      const rackKey = target.bus ?? ''
+      const rack = this.loadedEffectRacks.get(rackKey)
+      const index = target.chainPath?.[0] ?? 0
+      const stage = rack?.chain[index]
+      if (rack && stage?.kind === 'catalog') {
+        rack.chain[index] = { ...stage, state: saved.path }
+      }
+    }
     return saved
   }
 
@@ -1136,6 +1209,31 @@ export class RustEnginePlayer implements AudioEngineBackend {
           `❌ [rust-engine] failed to reload plugin after daemon respawn: ${filePath}` +
             (bus ? ` (bus=${bus})` : ''),
           err,
+        )
+      }
+    }
+  }
+
+  private async reloadEffectRacksAfterRespawn(): Promise<void> {
+    for (const { bus, chain } of this.loadedEffectRacks.values()) {
+      const key = RustEnginePlayer.pluginKey('effect', bus)
+      try {
+        await this.daemon.applyEffectChain({
+          ...(bus === undefined ? {} : { bus }),
+          mode: 'rebuild',
+          chain: chain.map((stage) => ({ op: 'load' as const, ...stage })),
+          saveDropped: [],
+        })
+        this.pluginActiveByKey.delete(key)
+      } catch (error) {
+        // The respawned daemon started empty, so a failed replay cannot retain the old registry.
+        // Mark this receiver inactive through the same seam used by single-plugin self-heal.
+        this.markPluginInactive(key, 'effect')
+        console.error(
+          `❌ [rust-engine] failed to restore effect rack after daemon respawn${
+            bus === undefined ? ' (master)' : ` (bus=${bus})`
+          }`,
+          error,
         )
       }
     }

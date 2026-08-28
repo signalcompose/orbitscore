@@ -90,7 +90,7 @@ describe('plugin UI safepoint conductor', () => {
     expect(request).toHaveBeenCalledTimes(1)
     expect(request).toHaveBeenCalledWith('AckUiSafepoint', {
       target: { role: 'instrument', instance: 'plugin:lead' },
-      index: 0,
+      chain_path: [0],
       generation: 37,
       evt_seq: 41,
     })
@@ -106,10 +106,10 @@ describe('plugin UI safepoint conductor', () => {
     expect(request).toHaveBeenCalledTimes(2)
     expect(request).toHaveBeenNthCalledWith(1, 'OpenPluginUI', {
       target,
-      index: 0,
+      chain_path: [0],
       windowTitle: 'OrbitScore — Massive-X (lead:0)',
     })
-    expect(request).toHaveBeenNthCalledWith(2, 'ClosePluginUI', { target, index: 0 })
+    expect(request).toHaveBeenNthCalledWith(2, 'ClosePluginUI', { target, chain_path: [0] })
   })
 
   it('times out a heavyweight OPEN_UI instead of waiting forever for attach completion', async () => {
@@ -200,11 +200,16 @@ describe('plugin UI safepoint conductor', () => {
 
     expect(saveState).toHaveBeenCalledTimes(1)
     expect(saveState).toHaveBeenCalledWith(
-      { role: 'instrument', instance: 'plugin:lead' },
+      { role: 'instrument', instance: 'plugin:lead', chainPath: [0] },
       expect.stringMatching(/\/states\/.+\.state$/),
     )
     expect(ack).toHaveBeenCalledTimes(1)
-    expect(ack).toHaveBeenCalledWith({ role: 'instrument', instance: 'plugin:lead' }, 0, 37, 41)
+    expect(ack).toHaveBeenCalledWith(
+      { role: 'instrument', instance: 'plugin:lead', chainPath: [0] },
+      0,
+      37,
+      41,
+    )
     expect(saveState.mock.invocationCallOrder[0]).toBeLessThan(ack.mock.invocationCallOrder[0])
     const manifest = parse(fs.readFileSync(path.join(directory, 'project.yaml'), 'utf8')) as {
       states: Record<string, string>

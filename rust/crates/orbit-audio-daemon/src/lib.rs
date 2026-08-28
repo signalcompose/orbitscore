@@ -44,3 +44,35 @@ pub(crate) mod outproc_stub_child;
 pub mod protocol;
 pub mod server;
 pub mod session;
+
+/// daemon が spawn しうる child 実行ファイル名の**唯一の一覧**。
+///
+/// 🔴 **新しい child を足したらここに 1 行足すこと。** 出荷ゲート
+/// （`.github/workflows/release.yml` の post-package gate）と packaging スクリプト
+/// （`scripts/copy-daemon-bin.sh`）はこの一覧と突き合わせて検査される
+/// （`tests/vscode-extension/bundled-child-binaries.spec.ts`）。
+///
+/// # なぜ定数にしたか
+///
+/// 台帳テストはもともと **Rust ソースを正規表現で読んで**一覧を再構成していた。これは
+/// **2 回続けて静かに取りこぼした**:
+///
+/// 1. 初版は `orbit-[a-z0-9-]+-child` と**綴りを決め打ち**していたため、child をリネームすると
+///    抽出が縮んでテストが pass してしまった
+/// 2. 次は `Self::Vst3 => "…"` という**分岐の形を決め打ち**していたため、format 分岐を持たない
+///    初の child（#628 の rack child = 1 child が CLAP/VST3 両方を持つ）が漏れ、
+///    **出荷ゲートと実装が食い違った**
+///
+/// どちらも「今ある形」に最適化した抽出規則が、新しい形で破れたもの。パターンを足して
+/// かわす対処は**脆さを移動させるだけ**なので、**真実を 1 箇所に明示する**形へ変えた。
+/// 新しい spawn 経路を足す開発者は、ここへの追記という明示的な行為を強制される。
+pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
+    // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
+    "orbit-effect-rack-child",
+    // effect（退役予定・#628 で到達不能になったが、退役 PR まで配布は続ける）。
+    "orbit-clap-effect-child",
+    "orbit-vst3-effect-child",
+    // instrument: format ごとに child が分かれる（1 instrument = 1 child）。
+    "orbit-clap-instrument-child",
+    "orbit-vst3-instrument-child",
+];

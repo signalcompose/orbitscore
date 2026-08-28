@@ -27,6 +27,7 @@
 // 共有メモリは生ポインタ経由でクロスプロセス参照するため unsafe FFI 同等。
 #![allow(unsafe_code)]
 
+use std::collections::{BTreeMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -44,6 +45,251 @@ use crate::engine_wrap::PluginUiWiring;
 use crate::outproc_respawn_guard::{
     advance_fast_respawn_streak, drain_ui_pump, poll_ui_pump_once, service_ui_pump_on_respawn,
 };
+
+// 🔴 `enabled` の既定値は wire と内部 config で**同じでなければならない**（片方だけ
+// 変えると「宣言では有効なのに config では無効」というずれが respawn で表面化する）。
+// 共有型のものをそのまま使い、ローカルに複製しない。
+use orbit_audio_sandbox::rack_wire::enabled_by_default;
+
+/// Control/watchdog-owned authoritative effect-rack configuration. The audio thread never reads
+/// this value; it only observes the rack child through shared memory.
+pub type ChainConfig = Vec<ChainStageConfig>;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum ChainStageConfig {
+    Catalog {
+        path: PathBuf,
+        #[serde(default)]
+        plugin_id: Option<String>,
+        #[serde(default, rename = "state")]
+        latest_state: Option<PathBuf>,
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+    },
+    Standard {
+        name: String,
+        #[serde(default)]
+        params: BTreeMap<String, f64>,
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+    },
+}
+
+// 🔴 wire の型は **共有 crate に 1 つだけ**置く（`orbit_audio_sandbox::rack_wire`）。
+//
+// 初版はここに child 側と同一の型を独立に書いていた。その結果、**同じ serde 欠陥が実機で
+// 2 回出た** — ここを直した直後に child 側で同型が出た。ユニットテストは両側とも緑で、
+// wire を跨いだ実物だけが落ちていた。詳細は `rack_wire` のモジュールコメント。
+//
+// daemon 内部の `ChainStageConfig`（respawn 用の確定済み manifest・`latest_state` を保持）は
+// **役割が違う**ので別型のまま残す — あちらは「解決済みの権威 config」、こちらは
+// 「wire を流れる宣言」。
+// stage / op / save_dropped の**要素型**は共有する。これが 2 回同じ serde 欠陥を出した本体。
+pub use orbit_audio_sandbox::rack_wire::{
+    PlanStage as EffectChainPlanStage, SaveDropped as SaveDroppedStage,
+    StageSpec as EffectChainStageSpec,
+};
+
+/// TS → daemon の `ApplyEffectChain` が運ぶ plan。
+///
+/// 🔴 **`orbit_audio_sandbox::rack_wire::ApplyPlan` とは別型**である。**ワイヤが違う**:
+///
+/// | 経路 | 要素配列のフィールド名 | 契約 |
+/// |---|---|---|
+/// | TS → daemon（JSON-RPC） | **`chain`** | `docs/research/ENGINE_DAEMON_PROTOCOL.md` に明記・変えられない |
+/// | daemon → child（`.apply.json`） | **`stages`** | 内部・`rack_wire::ApplyPlan` が持つ |
+///
+/// 要素の型（`EffectChainPlanStage` / `SaveDroppedStage`）は共有しているので、
+/// **2 回出た serde 欠陥のクラスは塞がっている**。外側の容器だけが経路ごとに違う。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EffectChainPlan {
+    pub chain: Vec<EffectChainPlanStage>,
+    #[serde(default)]
+    pub save_dropped: Vec<SaveDroppedStage>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyEffectChainMode {
+    Diff,
+    Rebuild,
+}
+
+#[derive(serde::Serialize)]
+struct ChainManifest<'a> {
+    version: u32,
+    stages: &'a ChainConfig,
+}
+
+#[derive(serde::Serialize)]
+struct ApplyPlanManifest<'a> {
+    version: u32,
+    stages: &'a [EffectChainPlanStage],
+    save_dropped: &'a [SaveDroppedStage],
+}
+
+pub(crate) fn chain_manifest_path(shm_path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.chain.json", shm_path.display()))
+}
+
+pub(crate) fn apply_plan_path(shm_path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.apply.json", shm_path.display()))
+}
+
+/// Root 3-4 (design §2.3): crash diagnostics named only the stage *index*, which cannot answer
+/// "which plugin actually crashed" without cross-referencing the currently-deployed chain by
+/// hand. Look the index up in the authoritative `ChainConfig` so the watchdog log can say
+/// `respawn: last active stage = k (<plugin name>)` directly. A poisoned mutex or an
+/// out-of-range index (both should be unreachable, but this is a diagnostic path — never let it
+/// panic the watchdog thread) degrade to a label that still carries the index.
+fn active_stage_plugin_label(chain: &Mutex<ChainConfig>, index: u32) -> String {
+    let Ok(chain) = chain.lock() else {
+        return format!("stage {index}, chain config lock poisoned");
+    };
+    match chain.get(index as usize) {
+        Some(ChainStageConfig::Catalog { path, .. }) => {
+            let name = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("<unnamed>");
+            format!("stage {index}: {name}")
+        }
+        Some(ChainStageConfig::Standard { name, .. }) => format!("stage {index}: {name}"),
+        None => format!("stage {index}, out of range"),
+    }
+}
+
+pub(crate) fn write_chain_manifest(shm_path: &Path, chain: &ChainConfig) -> io::Result<PathBuf> {
+    let path = chain_manifest_path(shm_path);
+    let bytes = serde_json::to_vec(&ChainManifest {
+        version: 1,
+        stages: chain,
+    })
+    .map_err(io::Error::other)?;
+    std::fs::write(&path, bytes)?;
+    Ok(path)
+}
+
+pub(crate) fn write_apply_plan(shm_path: &Path, plan: &EffectChainPlan) -> io::Result<PathBuf> {
+    let path = apply_plan_path(shm_path);
+    let bytes = serde_json::to_vec(&ApplyPlanManifest {
+        version: 1,
+        stages: &plan.chain,
+        save_dropped: &plan.save_dropped,
+    })
+    .map_err(io::Error::other)?;
+    std::fs::write(&path, bytes)?;
+    Ok(path)
+}
+
+pub(crate) fn desired_chain(
+    previous: &ChainConfig,
+    plan: &EffectChainPlan,
+) -> Result<ChainConfig, String> {
+    for dropped in &plan.save_dropped {
+        match previous.get(dropped.prev_index) {
+            Some(ChainStageConfig::Catalog { .. }) => {}
+            Some(ChainStageConfig::Standard { .. }) => {
+                return Err(
+                    "standard plugins have no UI/state; parameters live in the DSL (SC.10.8)"
+                        .into(),
+                )
+            }
+            None => {
+                return Err(format!(
+                    "save_dropped prev_index {} is outside the previous chain",
+                    dropped.prev_index
+                ))
+            }
+        }
+    }
+
+    let mut kept = HashSet::new();
+    let mut next = Vec::with_capacity(plan.chain.len());
+    for (new_index, operation) in plan.chain.iter().enumerate() {
+        let stage = match operation {
+            EffectChainPlanStage::Keep {
+                prev_index,
+                enabled,
+                params,
+            } => {
+                if !kept.insert(*prev_index) {
+                    return Err(format!(
+                        "effect chain apply failed at index {new_index}: prev_index {prev_index} is kept more than once; the previous chain is kept"
+                    ));
+                }
+                match previous.get(*prev_index) {
+                    Some(ChainStageConfig::Catalog {
+                        path,
+                        plugin_id,
+                        latest_state,
+                        ..
+                    }) => {
+                        if !params.is_empty() {
+                            return Err(format!(
+                                "effect chain apply failed at index {new_index}: keep params are valid only for standard stages; the previous chain is kept"
+                            ));
+                        }
+                        ChainStageConfig::Catalog {
+                            path: path.clone(),
+                            plugin_id: plugin_id.clone(),
+                            latest_state: latest_state.clone(),
+                            enabled: *enabled,
+                        }
+                    }
+                    Some(ChainStageConfig::Standard {
+                        name,
+                        params: old_params,
+                        ..
+                    }) => {
+                        let mut merged = old_params.clone();
+                        merged.extend(params.clone());
+                        ChainStageConfig::Standard {
+                            name: name.clone(),
+                            params: merged,
+                            enabled: *enabled,
+                        }
+                    }
+                    None => {
+                        return Err(format!(
+                            "effect chain apply failed at index {new_index}: prev_index {prev_index} is outside the previous chain; the previous chain is kept"
+                        ))
+                    }
+                }
+            }
+            EffectChainPlanStage::Load { stage } => match stage {
+                EffectChainStageSpec::Catalog {
+                    path,
+                    plugin_id,
+                    state,
+                    enabled,
+                } => ChainStageConfig::Catalog {
+                    path: path.clone(),
+                    plugin_id: plugin_id.clone(),
+                    latest_state: state.clone(),
+                    enabled: *enabled,
+                },
+                EffectChainStageSpec::Standard {
+                    name,
+                    params,
+                    enabled,
+                } => ChainStageConfig::Standard {
+                    name: name.clone(),
+                    params: params.clone(),
+                    enabled: *enabled,
+                },
+                EffectChainStageSpec::Layer { .. } => {
+                    return Err(format!(
+                        "effect chain apply failed at index {new_index}: layer() (parallel racks) is staged behind PDC (SC.10.11); v1 supports serial chains only; the previous chain is kept"
+                    ))
+                }
+            },
+        };
+        next.push(stage);
+    }
+    Ok(next)
+}
 
 /// watchdog が child の生存を poll する周期（非 RT・control thread）。
 const WATCHDOG_POLL: Duration = Duration::from_millis(20);
@@ -173,7 +419,7 @@ impl OutProcEffectConfig {
         let format = PluginFormat::from_env_value(std::env::var("ORBIT_EFFECT_FORMAT").ok())?;
         let child_exe = match std::env::var_os("ORBIT_EFFECT_CHILD_BIN") {
             Some(v) => PathBuf::from(v),
-            None => default_child_exe(format)?,
+            None => default_rack_child_exe()?,
         };
         let plugin = std::env::var_os("ORBIT_EFFECT_PLUGIN").map(PathBuf::from);
         let plugin_id = std::env::var("ORBIT_EFFECT_PLUGIN_ID").ok();
@@ -203,12 +449,12 @@ impl OutProcEffectConfig {
 
 /// daemon 実行ファイルと同一ディレクトリの format 対応 child を既定パスとする
 /// （spike の sibling-of-exe を踏襲・設計 §4.5）。インストール時は daemon と child が並んで置かれる前提。
-fn default_child_exe(format: PluginFormat) -> Result<PathBuf, String> {
+fn default_rack_child_exe() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     let dir = exe
         .parent()
         .ok_or_else(|| "current_exe has no parent directory".to_string())?;
-    Ok(dir.join(format.default_child_name()))
+    Ok(dir.join("orbit-effect-rack-child"))
 }
 
 /// OOP effect の観測 signal（全 atomic・lock-free）。
@@ -403,7 +649,7 @@ fn peak_bits(data: &[f32]) -> u32 {
         .unwrap_or(0)
 }
 
-/// `--shm`/`--plugin`/`--sample-rate`(/`--plugin-id`) を渡して effect child を 1 つ起動する。
+/// `--shm`/`--chain`/`--sample-rate` を渡して rack effect child を 1 つ起動する。
 /// `start_outproc_effect` の初回 spawn と watchdog の respawn が共有する。
 ///
 /// パスは `OsStr` のまま渡す（lossy 変換しない）。`stderr` は **継承**して child の eprintln（plugin
@@ -411,26 +657,33 @@ fn peak_bits(data: &[f32]) -> u32 {
 pub fn spawn_effect_child(
     child_exe: &Path,
     shm_path: &Path,
-    plugin: &Path,
-    plugin_id: Option<&str>,
+    chain_manifest: &Path,
     sample_rate: u32,
-    state: Option<&Path>,
 ) -> io::Result<Child> {
     let mut cmd = Command::new(child_exe);
     cmd.arg("--shm")
         .arg(shm_path)
-        .arg("--plugin")
-        .arg(plugin)
+        .arg("--chain")
+        .arg(chain_manifest)
         .arg("--sample-rate")
         .arg(sample_rate.to_string())
         .stderr(Stdio::inherit());
-    if let Some(id) = plugin_id {
-        cmd.arg("--plugin-id").arg(id);
-    }
-    if let Some(path) = state {
-        cmd.arg("--state").arg(path);
-    }
-    cmd.spawn()
+    let child = cmd.spawn()?;
+    // 🔴 実機 E2E の PID オラクル（#628 §6）。rack child は `--chain <manifest>` で起動するため、
+    // 既存ハーネスの `pgrep -f <pluginPath>` では**捕まらない**（旧 child は `--plugin <絶対パス>`
+    // だった）。R28-E1〜E10 はいずれも「child PID 不変 = respawn していない」を判定条件に
+    // しているので、観測経路が要る。
+    //
+    // MCP の tool 表面を増やさず `get_log` から読めるようにするため、ここで名乗る。
+    // `tracing::info!` は ISO timestamp + level 形式なので TS 側 router
+    // （`isDaemonNonErrorTracingLine`）が非エラーとして受理する — **`eprintln!` で書くと
+    // ERROR に分類され、「ERROR 増 0」を見る E2E を自分で落とす**（#618/#625 で 4 回再発した罠）。
+    tracing::info!(
+        "[orbit-effect-rack] child spawned pid={} shm={}",
+        child.id(),
+        shm_path.display()
+    );
+    Ok(child)
 }
 
 /// QUIT 済み（または crash した）child を bounded に reap する。timeout 超過で kill にフォールバック。
@@ -489,15 +742,19 @@ impl EffectChildSupervisor {
         let ui_pump = Arc::new(UiEventPump::new(shm_path.clone()));
         let ui_target = Arc::new(Mutex::new(None));
         let (ui_events, _) = tokio::sync::broadcast::channel(16);
-        Self::spawn_with_mailbox(
+        let chain = Arc::new(Mutex::new(vec![ChainStageConfig::Catalog {
+            path: plugin,
+            plugin_id,
+            latest_state: None,
+            enabled: true,
+        }]));
+        Self::spawn_chain_with_mailbox(
             first_child,
             shm_path,
             stats,
             child_exe,
-            plugin,
-            plugin_id,
             sample_rate,
-            Arc::new(Mutex::new(None)),
+            chain,
             mailbox,
             PluginUiWiring {
                 pump: ui_pump,
@@ -509,7 +766,7 @@ impl EffectChildSupervisor {
 
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn spawn_with_mailbox(
-        mut first_child: Child,
+        first_child: Child,
         shm_path: PathBuf,
         stats: Arc<OutProcEffectStats>,
         child_exe: PathBuf,
@@ -517,6 +774,38 @@ impl EffectChildSupervisor {
         plugin_id: Option<String>,
         sample_rate: u32,
         latest_state: Arc<Mutex<Option<PathBuf>>>,
+        mailbox: Arc<CommandMailboxHost>,
+        ui: PluginUiWiring,
+    ) -> io::Result<Self> {
+        let state = latest_state
+            .lock()
+            .map_err(|_| io::Error::other("effect latest-state mutex poisoned"))?
+            .clone();
+        Self::spawn_chain_with_mailbox(
+            first_child,
+            shm_path,
+            stats,
+            child_exe,
+            sample_rate,
+            Arc::new(Mutex::new(vec![ChainStageConfig::Catalog {
+                path: plugin,
+                plugin_id,
+                latest_state: state,
+                enabled: true,
+            }])),
+            mailbox,
+            ui,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn spawn_chain_with_mailbox(
+        mut first_child: Child,
+        shm_path: PathBuf,
+        stats: Arc<OutProcEffectStats>,
+        child_exe: PathBuf,
+        sample_rate: u32,
+        chain: Arc<Mutex<ChainConfig>>,
         mailbox: Arc<CommandMailboxHost>,
         ui: PluginUiWiring,
     ) -> io::Result<Self> {
@@ -590,6 +879,8 @@ impl EffectChildSupervisor {
                         Ok(Some(_)) if shutdown_thread.load(Ordering::Acquire) => break,
                         Ok(Some(status)) => {
                             try_wait_errors = 0;
+                            let active_stage_index =
+                                unsafe { (*region).active_stage_index.load(Ordering::Relaxed) };
                             // READY の publish は host が initial_attach_pending をクリアする処理と競合する:
                             // child は READY を publish した直後にその窓で crash しうる。これを attach 初期の
                             // 早期 exit として扱うと本 watchdog が停止してしまう一方、host は READY を観測して
@@ -602,7 +893,8 @@ impl EffectChildSupervisor {
                                 }
                             {
                                 tracing::warn!(
-                                    "{child_name_wd} exited during initial attach ({status})"
+                                    "{child_name_wd} exited during initial attach ({status}, last active {})",
+                                    active_stage_plugin_label(&chain, active_stage_index)
                                 );
                                 stats.child_early_exit.record(status);
                                 break;
@@ -628,7 +920,8 @@ impl EffectChildSupervisor {
                                 break;
                             }
                             tracing::warn!(
-                                "{child_name_wd} が異常終了（{status}）→ respawn する"
+                                "{child_name_wd} が異常終了（{status}, respawn: last active {}）→ respawn する",
+                                active_stage_plugin_label(&chain, active_stage_index)
                             );
                             // `try_wait=Some` で旧 child の死亡を確認済み。in-flight command を
                             // failure ack で完了し、readiness/mailbox を reset してから replacement を
@@ -643,11 +936,21 @@ impl EffectChildSupervisor {
                                 stats.measurement_invalid.store(true, Ordering::Release);
                                 break;
                             }
-                            let state = match latest_state.lock() {
-                                Ok(state) => state.clone(),
+                            let desired_chain = match chain.lock() {
+                                Ok(chain) => chain.clone(),
                                 Err(_) => {
                                     tracing::error!(
-                                        "effect latest-state mutex poisoned; measurement invalid"
+                                        "effect chain config mutex poisoned; measurement invalid"
+                                    );
+                                    stats.measurement_invalid.store(true, Ordering::Release);
+                                    break;
+                                }
+                            };
+                            let manifest = match write_chain_manifest(&shm_path_wd, &desired_chain) {
+                                Ok(path) => path,
+                                Err(error) => {
+                                    tracing::error!(
+                                        "effect child respawn manifest write failed (measurement invalid): {error}"
                                     );
                                     stats.measurement_invalid.store(true, Ordering::Release);
                                     break;
@@ -656,10 +959,8 @@ impl EffectChildSupervisor {
                             match spawn_effect_child(
                                 &child_exe,
                                 &shm_path_wd,
-                                &plugin,
-                                plugin_id.as_deref(),
+                                &manifest,
                                 sample_rate,
-                                state.as_deref(),
                             ) {
                                 Ok(c) => {
                                     // PID を先に publish（kill-test が新 child を kill できるよう）。
@@ -767,6 +1068,16 @@ impl Drop for EffectChildSupervisor {
                 tracing::warn!("OOP effect shm 削除失敗 {:?}: {e}", self.shm_path);
             }
         }
+        for sidecar in [
+            chain_manifest_path(&self.shm_path),
+            apply_plan_path(&self.shm_path),
+        ] {
+            if let Err(error) = std::fs::remove_file(&sidecar) {
+                if error.kind() != io::ErrorKind::NotFound {
+                    tracing::warn!(?sidecar, %error, "OOP effect rack manifest cleanup failed");
+                }
+            }
+        }
     }
 }
 
@@ -850,7 +1161,9 @@ impl Drop for OutProcTeardownGuard {
         let deadline = Instant::now() + TEARDOWN_TIMEOUT;
         while !self.done.load(Ordering::Acquire) {
             if Instant::now() >= deadline {
-                tracing::warn!(
+                // error!: the RT thread failed to answer within the deadline — the entry point of
+                // the unresponsive-audio-thread class #625 fought; no ticker/RPC surfaces this.
+                tracing::error!(
                     "OOP effect teardown: audio thread quiesce ack timed out ({}ms); proceeding to stop stream",
                     TEARDOWN_TIMEOUT.as_millis()
                 );
@@ -864,6 +1177,66 @@ impl Drop for OutProcTeardownGuard {
 
 #[cfg(test)]
 mod tests {
+    /// 🔴 TS が実際に wire へ載せる JSON をそのまま受理できること（#628 実機 E2E で発覚）。
+    ///
+    /// 両側の unit は緑だったのに実機だけが落ちた: `EffectChainPlanStage` に
+    /// `deny_unknown_fields` が付いており、**serde は `flatten` との併用を支持しない**ため
+    /// `Load` の中身（`kind` / `path` / `enabled`）が軒並み unknown field になっていた。
+    ///
+    /// **この文字列は TS 側 `effect-slot.ts` が組み立てる形をそのまま写したもの**で、
+    /// 手で綺麗にしないこと — wire の実物と乖離した瞬間にこのテストは無意味になる。
+    #[test]
+    fn apply_plan_accepts_the_payload_typescript_actually_sends() {
+        // catalog（state 付き / 無し）・standard・keep を 1 つの plan に混ぜる。
+        let json = r#"{
+            "chain": [
+                {"op":"load","kind":"catalog","path":"/x/CLAPTestEffect.clap","enabled":true},
+                {"op":"load","kind":"catalog","path":"/x/y.vst3","plugin_id":"com.x.y",
+                 "state":"/s/a.state","enabled":false},
+                {"op":"load","kind":"standard","name":"Gain","params":{"db":-20.0},"enabled":true},
+                {"op":"keep","prev_index":0,"enabled":true,"params":{"db":-6.0}}
+            ],
+            "save_dropped": [{"prev_index":1,"path":"/s/b.state"}]
+        }"#;
+        let plan: super::EffectChainPlan =
+            serde_json::from_str(json).expect("TS が送る plan は受理されなければならない");
+        assert_eq!(plan.chain.len(), 4);
+        assert_eq!(plan.save_dropped.len(), 1);
+
+        // enabled が **既定値に落ちず、送られた値のまま**届いていること（無視されると
+        // 「バイパスしたのに音が鳴る」という無言の故障になる）。
+        match &plan.chain[1] {
+            super::EffectChainPlanStage::Load {
+                stage: super::EffectChainStageSpec::Catalog { enabled, state, .. },
+            } => {
+                assert!(!enabled, "enabled:false が既定 true に落ちてはいけない");
+                assert!(state.is_some(), "state が落ちてはいけない");
+            }
+            other => panic!("index 1 は catalog load のはず: {other:?}"),
+        }
+        match &plan.chain[2] {
+            super::EffectChainPlanStage::Load {
+                stage: super::EffectChainStageSpec::Standard { name, params, .. },
+            } => {
+                assert_eq!(name, "Gain");
+                assert_eq!(params.get("db"), Some(&-20.0), "params が落ちてはいけない");
+            }
+            other => panic!("index 2 は standard load のはず: {other:?}"),
+        }
+    }
+
+    /// 内側（`EffectChainStageSpec`）の `deny_unknown_fields` は生きていること。
+    /// 外側から外したのは flatten の制約が理由であって、**検査を緩めたのではない**。
+    #[test]
+    fn unknown_fields_inside_a_stage_are_still_rejected() {
+        let json = r#"{"chain":[{"op":"load","kind":"catalog","path":"/x/y.clap",
+                      "enabled":true,"bogus":1}],"save_dropped":[]}"#;
+        assert!(
+            serde_json::from_str::<super::EffectChainPlan>(json).is_err(),
+            "stage の中の未知フィールドは従来どおり拒否されなければならない"
+        );
+    }
+
     use super::*;
     use std::sync::Mutex;
 
@@ -1312,20 +1685,23 @@ mod tests {
             .spawn()
             .expect("spawn initial stub child");
         let first_pid = first.id();
-        let latest_state = Arc::new(Mutex::new(None));
+        let chain = Arc::new(Mutex::new(vec![ChainStageConfig::Catalog {
+            path: PathBuf::from("/ignored-effect.clap"),
+            plugin_id: None,
+            latest_state: None,
+            enabled: true,
+        }]));
         let mailbox = Arc::new(CommandMailboxHost::new(shm.clone()));
         let ui_pump = Arc::new(UiEventPump::new(shm.clone()));
         let ui_target = Arc::new(Mutex::new(None));
         let (ui_events, _) = tokio::sync::broadcast::channel(16);
-        let sup = EffectChildSupervisor::spawn_with_mailbox(
+        let sup = EffectChildSupervisor::spawn_chain_with_mailbox(
             first,
             shm.clone(),
             stats.clone(),
             child_script,
-            PathBuf::from("/ignored-effect.clap"),
-            None,
             48_000,
-            latest_state.clone(),
+            chain.clone(),
             mailbox.clone(),
             PluginUiWiring {
                 pump: ui_pump,
@@ -1336,48 +1712,13 @@ mod tests {
         .expect("supervisor spawn");
 
         let saved_state = fixture_dir.join("saved-after-spawn.state");
-        let expected_state = b"saved state".to_vec();
-        let responder_shm = shm.clone();
-        let responder_state = expected_state.clone();
-        let responder = std::thread::spawn(move || {
-            let mmap = open_shared(&responder_shm).expect("open responder mapping");
-            let region = region_ptr(&mmap);
-            let deadline = Instant::now() + Duration::from_secs(2);
-            let seq = loop {
-                let seq = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
-                if seq != 0 {
-                    break seq;
-                }
-                assert!(Instant::now() < deadline, "host did not publish SAVE_STATE");
-                std::thread::yield_now();
-            };
-            let sidecar = unsafe {
-                orbit_audio_sandbox::transport::read_cstr_field(&(*region).cmd_arg)
-                    .expect("valid sidecar path")
-                    .to_owned()
-            };
-            std::fs::write(&sidecar, &responder_state).expect("write saved state sidecar");
-            unsafe {
-                (*region)
-                    .cmd_result_len
-                    .store(responder_state.len() as u64, Ordering::Relaxed);
-                (*region)
-                    .cmd_result
-                    .store(orbit_audio_sandbox::CMD_RESULT_OK, Ordering::Relaxed);
-                (*region).cmd_ack_seq.store(seq, Ordering::Release);
+        std::fs::write(&saved_state, b"saved state").expect("write saved state");
+        match chain.lock().expect("lock chain").get_mut(0) {
+            Some(ChainStageConfig::Catalog { latest_state, .. }) => {
+                *latest_state = Some(saved_state.clone());
             }
-        });
-        let response = mailbox
-            .issue_save_state(&saved_state)
-            .expect("mailbox state save succeeds after initial spawn");
-        responder.join().expect("state save responder");
-        assert_eq!(response.bytes_written, expected_state.len() as u64);
-        assert_eq!(
-            std::fs::read(&saved_state).expect("read successful saved state"),
-            expected_state
-        );
-        crate::engine_wrap::record_latest_state_after_save(&latest_state, saved_state.clone())
-            .expect("record latest state after successful save");
+            _ => unreachable!("fixture chain has one catalog stage"),
+        }
 
         assert!(
             Command::new("kill")
@@ -1397,14 +1738,18 @@ mod tests {
             .lines()
             .map(str::to_owned)
             .collect();
-        let state_index = args
+        let chain_index = args
             .iter()
-            .position(|argument| argument == "--state")
-            .expect("respawn must receive --state");
+            .position(|argument| argument == "--chain")
+            .expect("respawn must receive --chain");
+        let manifest_path = args.get(chain_index + 1).expect("--chain manifest path");
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(manifest_path).expect("read respawn chain manifest"),
+        )
+        .expect("parse respawn chain manifest");
         assert_eq!(
-            args.get(state_index + 1).map(String::as_str),
-            saved_state.to_str(),
-            "--state must be immediately followed by the state saved after initial spawn"
+            manifest["stages"][0]["state"].as_str(),
+            saved_state.to_str()
         );
 
         drop(sup);
@@ -1481,7 +1826,14 @@ mod tests {
         let script = fixture("variable-lifetime-child.sh");
         let slow_at = PathBuf::from("3");
         let stats = OutProcEffectStats::new();
-        let first = spawn_effect_child(&script, &shm, &slow_at, None, 48_000, None)
+        let chain = vec![ChainStageConfig::Catalog {
+            path: slow_at.clone(),
+            plugin_id: None,
+            latest_state: None,
+            enabled: true,
+        }];
+        let manifest = write_chain_manifest(&shm, &chain).expect("write chain manifest");
+        let first = spawn_effect_child(&script, &shm, &manifest, 48_000)
             .expect("spawn variable-lifetime stub (invocation 1)");
         let sup = EffectChildSupervisor::spawn(
             first,

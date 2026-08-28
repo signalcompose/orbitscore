@@ -1,19 +1,20 @@
 import type { AudioEngine } from '../../audio/types'
+import type { RackRecipe } from '../../signal-chain/rack'
 import { createStatePathFallback } from '../project-state-store'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
 import {
   EffectChainMap,
-  normalizePluginInstanceName,
-  resolveEffectSpec,
+  resolveEffectRack,
+  type ChainElement,
   type EffectChainMapOptions,
-  type PluginSlot,
+  toRackRecipe,
 } from './effect-slot'
 
-/** Owns the single v1 master-insert plugin declaration and eager load. */
+/** Owns the v1 master effect rack and applies each complete declaration eagerly. */
 export class PluginEffectManager {
-  /** v1 master insert を固定 key の chain（上限 1）に載せる。 */
+  /** Master rack bookkeeping uses one fixed receiver key. */
   private readonly slots: EffectChainMap<'master'>
   /** LinkAudio exclusion stays closed once this master insert has ever been declared. */
   private hasDeclared = false
@@ -26,6 +27,8 @@ export class PluginEffectManager {
   ) {
     this.slots = new EffectChainMap(audioEngine, () => 'master', {
       externalReceiverId: () => 'master',
+      effectBus: () => undefined,
+      projectDirectory: () => audioManager.getDocumentDirectory(),
       statePathFallback: createStatePathFallback(audioManager),
       replacement,
     })
@@ -39,33 +42,21 @@ export class PluginEffectManager {
     return this.slots.hasUncertain('master')
   }
 
-  chain(): readonly PluginSlot[] {
-    return this.slots.chainFor('master')
+  chain(): readonly ChainElement[] {
+    return this.slots.rackFor('master')
   }
 
-  async effect(spec: string, pluginId?: string): Promise<void> {
-    const resolved = resolveEffectSpec(
-      spec,
-      pluginId,
+  async effect(value: string | RackRecipe, pluginId?: string): Promise<void> {
+    const recipe = toRackRecipe(value, pluginId)
+    if (this.linkAudioManager.isEnabled()) {
+      throw new Error('global.effect() cannot be used while LinkAudio is enabled in v1.')
+    }
+    const rack = resolveEffectRack(
+      recipe,
       { audioManager: this.audioManager, linkAudioManager: this.linkAudioManager },
       'global.effect() cannot be used while LinkAudio is enabled in v1.',
     )
-    await this.slots.declare(
-      'master',
-      {
-        role: 'effect',
-        bus: undefined,
-        normalizedName: normalizePluginInstanceName(spec),
-        resolvedPath: resolved.path,
-        pluginId: resolved.pluginId,
-      },
-      () =>
-        'global.effect() supports one master insert in v1; effect chains are reserved for future support.',
-    )
+    await this.slots.applyRack('master', rack)
     this.hasDeclared = true
-  }
-
-  async remove(spec: string, occurrence = 0): Promise<void> {
-    await this.slots.remove('master', normalizePluginInstanceName(spec), occurrence)
   }
 }

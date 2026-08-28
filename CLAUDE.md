@@ -451,7 +451,23 @@ DSL 機能が実際に価値を出すのは「エディタで書く → 評価�
 
 ```bash
 npm run build          # engine/daemon に変更があれば npm run build:clean
+
+# 🔴 同梱の標準プラグインが実機で鳴ることを確かめる（owner 判断 2026-08-28・#628）
+bash rust/crates/orbit-std-gain/bundle-macos.sh
+cargo test --manifest-path rust/Cargo.toml -p orbit-effect-rack-child --lib -- --ignored
 ```
+
+**この 2 行は無条件で回す。**「rust を触った PR のみ」のような**条件分岐を付けない** —
+条件付きの手動手順は飛ばされるのがこの repo の実測クラス（列挙が一段手前で止まる型）で、
+無条件 19〜67 秒の方が条件判定の認知コストより安い。
+
+**なぜ CI に任せられないか**: `rust-ci.yml` は全ジョブ ubuntu で、この 3 件は
+`#[cfg(target_os = "macos")]` なので**存在すらしない**。`release.yml` は macos-14 だが
+`pull_request` の paths フィルタに **`rust/**` が無い**ため、**rust だけを触る PR では走らない**。
+per-PR の macOS ジョブは owner 方針（コスト）で回さない。**手元がこの 3 件の唯一の実行経路。**
+
+🔴 **`--lib` は load-bearing**（#629）。付け忘れると実機オーディオデバイスを要する
+gated テストまで対象になる。
 
 1. **起動中の OrbitStudio を必ず終了してから起動し直す** — 古い extension host が新しい daemon を
    spawn すると `DaemonStartupError: daemon exited before ready (code=null)` になる

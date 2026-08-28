@@ -19,9 +19,41 @@ export interface PluginUnloadResult {
   status: 'unloaded' | 'noop'
 }
 
+export type EffectChainStageConfig =
+  | {
+      kind: 'catalog'
+      path: string
+      plugin_id?: string
+      state?: string
+      enabled: boolean
+    }
+  | {
+      kind: 'standard'
+      name: string
+      params: Readonly<Record<string, number>>
+      enabled: boolean
+    }
+
+export type EffectChainPlanStage =
+  | { op: 'keep'; prev_index: number; enabled: boolean; params?: Readonly<Record<string, number>> }
+  | ({ op: 'load' } & EffectChainStageConfig)
+
+export interface EffectChainApplyRequest {
+  bus?: string
+  mode: 'diff' | 'rebuild'
+  chain: readonly EffectChainPlanStage[]
+  saveDropped: readonly { prev_index: number; path: string }[]
+}
+
+export interface EffectChainApplyResult {
+  status: 'applied'
+  childPid: number | null
+  dropped: Array<{ prevIndex: number; path: string; bytesWritten: number }>
+}
+
 export type PluginStateSaveTarget =
-  | { role: 'effect'; bus?: string }
-  | { role: 'instrument'; instance: string }
+  | { role: 'effect'; bus?: string; chainPath?: readonly number[] }
+  | { role: 'instrument'; instance: string; chainPath?: readonly number[] }
 
 /** daemon の plugin UI event が返す、chain index つきの解決済み宛先。 */
 export type PluginUiTarget =
@@ -122,6 +154,9 @@ export interface AudioEngine {
 
   /** Unloads one effect slot while preserving its bus allocation and routing identity. */
   unloadPlugin?(role: 'effect', bus?: string): Promise<PluginUnloadResult>
+
+  /** Atomically settle one complete effect rack; issued even when every stage is kept. */
+  applyEffectChain?(request: EffectChainApplyRequest): Promise<EffectChainApplyResult>
 
   /** 現在のOOP plugin stateを停止中に取得し、指定した絶対パスへatomicに確定する。 */
   savePluginState?(

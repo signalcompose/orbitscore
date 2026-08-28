@@ -5,7 +5,6 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
-import { EffectSlotLimitError } from '../../packages/engine/src/core/global/effect-slot'
 import { clearPluginCatalogCache } from '../../packages/engine/src/core/global/plugin-catalog'
 import { Sequence } from '../../packages/engine/src/core/sequence'
 import { processSequenceInit } from '../../packages/engine/src/interpreter/process-initialization'
@@ -168,167 +167,20 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     expect(effect).not.toHaveBeenCalled()
   })
 
-  it('dispatches normalized plugin method names across divergent per-format display names', async () => {
+  it('T24 keeps catalog lookup diagnostic-only while curated DSL methods still dispatch', async () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
-    await run('var kick = init global.seq\nvar mix = init global.mixer\nvar verb = mix.aux', state)
+    await run('var kick = init global.seq', state)
     const sequence = state.sequences.get('kick')!
     const effect = vi.spyOn(sequence, 'effect').mockResolvedValue(sequence)
-    const verb = state.mixers.nodes.get('verb')
-    const busEffect = vi
-      .spyOn((verb as Extract<typeof verb, { kind: 'aux' }>).handle, 'effect')
-      .mockResolvedValue((verb as Extract<typeof verb, { kind: 'aux' }>).handle)
-
-    await run(
-      'kick.TALReverb4()\nkick.TALReverb4(format: "vst3")\nkick.Twin(vendor: "B")\nverb.TALReverb4()',
-      state,
-    )
-
-    expect(effect.mock.calls).toEqual([['TAL Reverb 4'], ['vst3/TAL-Reverb-4'], ['B/Twin']])
-    expect(busEffect).toHaveBeenCalledWith('TAL Reverb 4')
-  })
-
-  it('requires quoted string selectors and rejects duplicate reserved arguments', async () => {
-    const global = new Global(new RecordingScheduler())
-    const state = makeState(global)
-    await run('var kick = init global.seq', state)
-    const effect = vi
-      .spyOn(state.sequences.get('kick')!, 'effect')
-      .mockResolvedValue(state.sequences.get('kick')!)
-
-    await expect(run('kick.TALReverb4(format: vst3)', state)).rejects.toThrow(
-      /format:.*string literal.*format: "vst3"/i,
-    )
-    expect(effect).not.toHaveBeenCalled()
-
-    await run('kick.TALReverb4(format: "vst3")', state)
-    expect(effect).toHaveBeenCalledWith('vst3/TAL-Reverb-4')
-
-    await expect(run('kick.TALReverb4(format: "clap", format: "vst3")', state)).rejects.toThrow(
-      /duplicate named argument "format:"/i,
-    )
-  })
-
-  it('rejects positional plugin arguments instead of silently dropping them', async () => {
-    const global = new Global(new RecordingScheduler())
-    const state = makeState(global)
-    await run('var kick = init global.seq', state)
-    const effect = vi.spyOn(state.sequences.get('kick')!, 'effect')
-
-    await expect(run('kick.TALReverb4(0.5)', state)).rejects.toThrow(
-      /positional argument.*named.*TALReverb4\(mix: 0\.5\)/i,
-    )
-    expect(effect).not.toHaveBeenCalled()
-  })
-
-  it('rejects plugin selectors passed to a string-form DSL method with the staged error', async () => {
-    const global = new Global(new RecordingScheduler())
-    const state = makeState(global)
-    await run('var kick = init global.seq', state)
-
-    await expect(run('kick.effect("TAL Reverb 4", format: "vst3")', state)).rejects.toThrow(
-      /named argument "format:".*string-form effect\(\).*Name\(format: "vst3"\)/i,
-    )
-    // `sidechain:` / `outs:` on a curated DSL method take the same route
-    // (resolveChainDispatch → callMethod → processArguments), but were only
-    // covered by a direct processArguments() unit call. Exercising them through
-    // run() catches a future resolver-wiring change that diverts named args
-    // before they reach processArguments — which the unit test cannot see.
-    await expect(run('kick.gain(sidechain: duck)', state)).rejects.toThrow(
-      /sidechain routing arrives in #409/,
-    )
-    await expect(run('kick.gain(outs: 4)', state)).rejects.toThrow(
-      /multi-output routing arrives in #409/,
-    )
-  })
-
-  it('distinguishes a missing plugin catalog from an unknown plugin method', async () => {
-    process.env.ORBIT_PLUGIN_CATALOG = path.join(directory, 'missing-catalog.json')
-    clearPluginCatalogCache()
-    const global = new Global(new RecordingScheduler())
-    const state = makeState(global)
-    await run('var kick = init global.seq', state)
 
     await expect(run('kick.TALReverb4()', state)).rejects.toThrow(
-      /Plugin catalog not found.*orbit-plugin-scan.*typo/,
+      'Catalog plugins are written as strings (SC.10.9): use effect("TAL Reverb 4")',
     )
-  })
-
-  it('dispatches an instrument-only plugin and rejects an ambiguous dual-role plugin', async () => {
-    const global = new Global(new RecordingScheduler())
-    const state = makeState(global)
-    await run('var lead = init global.seq', state)
-    const sequence = state.sequences.get('lead')!
-    const instrument = vi.spyOn(sequence, 'instrument').mockResolvedValue(sequence)
-
-    await run('lead.Synth()', state)
-    expect(instrument).toHaveBeenCalledWith('Synth')
-    await expect(run('lead.Dual()', state)).rejects.toThrow(
-      /ambiguous.*effect\("Dual"\).*instrument\("Dual"\)/i,
-    )
-  })
-
-  it('rejects instrument-only plugins on bus and Global effect receivers', async () => {
-    const global = new Global(new RecordingScheduler())
-    const state = makeState(global)
-    await run('var mix = init global.mixer\nvar bus = mix.aux', state)
-
-    await expect(run('bus.Synth()', state)).rejects.toThrow(
-      /Plugin "Synth" does not support the "effect" role/,
-    )
-    await expect(run('global.Synth()', state)).rejects.toThrow(
-      /Plugin "Synth" does not support the "effect" role/,
-    )
-  })
-
-  it('dispatches a plugin method directly on Global', async () => {
-    const global = new Global(new RecordingScheduler())
-    const state = makeState(global)
-    const effect = vi.spyOn(global, 'effect').mockResolvedValue(global)
-
-    await run('global.TALReverb4()', state)
-
-    expect(effect).toHaveBeenCalledWith('TAL Reverb 4')
-  })
-
-  it('matches string-form ambiguity when format and vendor selectors are both present', async () => {
-    const global = new Global(new RecordingScheduler())
-    const state = makeState(global)
-    await run('var lead = init global.seq', state)
-    const sequence = state.sequences.get('lead')!
-    const effect = vi.spyOn(sequence, 'effect')
-    const instrument = vi.spyOn(sequence, 'instrument')
-
-    let stringError: unknown
-    try {
-      await sequence.effect('vst3/Selector Split')
-    } catch (error) {
-      stringError = error
-    }
-
-    expect(stringError).toBeInstanceOf(Error)
-    await expect(
-      run('lead.SelectorSplit(format: "vst3", vendor: "Instrument Vendor")', state),
-    ).rejects.toThrow((stringError as Error).message)
-    expect(effect).toHaveBeenCalledOnce()
-    expect(instrument).not.toHaveBeenCalled()
-  })
-
-  it('matches string-form vendor ambiguity before inferring a role', async () => {
-    const global = new Global(new RecordingScheduler())
-    const state = makeState(global)
-    await run('var lead = init global.seq', state)
-    const sequence = state.sequences.get('lead')!
-
-    let stringError: unknown
-    try {
-      await sequence.effect('Role Split')
-    } catch (error) {
-      stringError = error
-    }
-
-    expect(stringError).toBeInstanceOf(Error)
-    await expect(run('lead.RoleSplit()', state)).rejects.toThrow((stringError as Error).message)
+    expect(effect).toHaveBeenCalledTimes(0)
+    await run('kick.effect("TAL Reverb 4")', state)
+    expect(effect).toHaveBeenCalledTimes(1)
+    expect(effect).toHaveBeenCalledWith([{ kind: 'catalog', spec: 'TAL Reverb 4', enabled: true }])
   })
 
   it('rejects an ambiguous bare mixer receiver declared by both string forms', async () => {
@@ -424,87 +276,6 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     } finally {
       warn.mockRestore()
     }
-  })
-
-  it('reports an ambiguous sidechain name before the aux-only validation error', async () => {
-    const global = new Global(new RecordingScheduler())
-    const state = makeState(global)
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    try {
-      await run('var kick = init global.seq\nglobal.sum("drum")\nglobal.aux("drum")', state)
-
-      let thrown: unknown
-      try {
-        await run('kick.TALReverb4(sidechain: drum)', state)
-      } catch (error) {
-        thrown = error
-      }
-      expect(thrown).toBeInstanceOf(Error)
-      expect((thrown as Error).message).toMatch(/global\.sum\("drum"\).*global\.aux\("drum"\)/)
-      expect((thrown as Error).message).not.toMatch(/not a declared aux/i)
-    } finally {
-      warn.mockRestore()
-    }
-  })
-
-  it('throws actionable errors for unknown names, staged args, sidechain, mixer names, and second inserts', async () => {
-    const global = new Global(new RecordingScheduler())
-    const state = makeState(global)
-    await run(
-      'var kick = init global.seq\nvar mix = init global.mixer\nvar duck = mix.aux\nvar drums = mix.sum',
-      state,
-    )
-    const sequence = state.sequences.get('kick')!
-    vi.spyOn(sequence, 'effect')
-      .mockResolvedValueOnce(sequence)
-      .mockRejectedValueOnce(new EffectSlotLimitError('one insert per bus in v1'))
-
-    await expect(run('kick.NoSuch()', state)).rejects.toThrow(/Unknown chain method "NoSuch"/)
-    await expect(run('kick.TALReverb4(mix: 0.5)', state)).rejects.toThrow(/S4/)
-    await expect(run('kick.TALReverb4(preset: "Wide")', state)).rejects.toThrow(/S4/)
-    await expect(run('kick.TALReverb4(enabled: false)', state)).rejects.toThrow(/S4/)
-    await expect(run('kick.TALReverb4(sidechain: missing)', state)).rejects.toThrow(
-      /not a declared aux/,
-    )
-    await expect(run('kick.TALReverb4(sidechain: "duck")', state)).rejects.toThrow(
-      /sidechain:.*identifier.*sidechain: duck/i,
-    )
-    // Anchored on the argument name, not just the issue number: both cite #409
-    // (it covers sidechain AND multi-out), so a bare /#409/ would still pass if
-    // the two branches' messages were swapped.
-    await expect(run('kick.TALReverb4(sidechain: duck)', state)).rejects.toThrow(
-      /^sidechain:.*#409/,
-    )
-    await expect(run('kick.TALReverb4(outs: 4)', state)).rejects.toThrow(/^outs:.*#409/)
-    await expect(run('kick.drums()', state)).rejects.toThrow(/sum.*send|send.*sum/i)
-    await run('kick.TALReverb4()', state)
-    await expect(run('kick.TALReverb4()', state)).rejects.toThrow(/S4.*multiple insert/i)
-  })
-
-  it('replaces a second real effect declaration instead of reaching the S4 limit rewrite', async () => {
-    // Stage B makes every production effect manager replacement-enabled, so a
-    // different second spec can no longer reach EffectSlotLimitError. Keep the
-    // synthetic typed-error rewrite coverage above, and pin the now-real path here.
-    const scheduler = new RecordingScheduler() as RecordingScheduler & {
-      loadPlugin: ReturnType<typeof vi.fn>
-      replacePlugin: ReturnType<typeof vi.fn>
-    }
-    scheduler.loadPlugin = vi.fn().mockResolvedValue({})
-    scheduler.replacePlugin = vi.fn().mockResolvedValue({
-      pluginId: 'replacement-id',
-      pluginName: 'Replacement',
-      notePortIndex: 0,
-      quarantinedSlot: false,
-    })
-    const global = new Global(scheduler)
-    const state = makeState(global)
-    await run('var kick = init global.seq', state)
-
-    await run('kick.TALReverb4()', state)
-    await expect(run('kick.Twin(vendor: "A")', state)).resolves.toBeUndefined()
-    expect(scheduler.loadPlugin).toHaveBeenCalledTimes(1)
-    expect(scheduler.replacePlugin).toHaveBeenCalledTimes(1)
-    expect(scheduler.replacePlugin).toHaveBeenCalledWith('/a.clap', 'a', 'effect', 'seq-bus-0')
   })
 
   it('routes bare sum/output and called aux names, awaiting the daemon result', async () => {
@@ -604,17 +375,21 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
   it('supports named send arguments and routing from a mixer bus receiver', async () => {
     const scheduler = new RecordingScheduler() as RecordingScheduler & {
       setBusRouting: ReturnType<typeof vi.fn>
-      loadPlugin: ReturnType<typeof vi.fn>
+      applyEffectChain: ReturnType<typeof vi.fn>
     }
     scheduler.setBusRouting = vi.fn().mockResolvedValue(undefined)
-    scheduler.loadPlugin = vi.fn().mockResolvedValue({})
+    scheduler.applyEffectChain = vi.fn().mockResolvedValue({
+      status: 'applied',
+      childPid: 1,
+      dropped: [],
+    })
     const global = new Global(scheduler)
     const state = makeState(global)
     await run(
       'var kick = init global.seq\nvar mix = init global.mixer\nvar master = mix.output(1, 2)\nvar drums = mix.sum\nvar verb = mix.aux',
       state,
     )
-    await run('kick.verb(amount: 0.8, enabled: false)\nverb.TALReverb4().master', state)
+    await run('kick.verb(amount: 0.8, enabled: false)\nverb.effect("TAL Reverb 4").master', state)
 
     expect(scheduler.setBusRouting).toHaveBeenNthCalledWith(1, 'seq-bus-0', undefined, [
       { bus: 'aux-bus-0', gain: 0 },
@@ -633,7 +408,9 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
 
     await run('kick.unmute', state)
     expect(unmute).toHaveBeenCalledOnce()
-    await expect(run('kick.TALReverb4', state)).rejects.toThrow(/TALReverb4\(\)/)
+    await expect(run('kick.TALReverb4', state)).rejects.toThrow(
+      /Catalog plugins are written as strings.*effect\("TAL Reverb 4"\)/,
+    )
     await expect(run('kick.verb', state)).rejects.toThrow(/aux.*parentheses|parentheses.*aux/i)
     await expect(run('kick.drums(0.3)', state)).rejects.toThrow(/sum.*send|send.*sum/i)
   })
@@ -646,7 +423,9 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     const state = makeState(global)
     const effect = vi.spyOn(global, 'effect')
 
-    await expect(run('global.TALReverb4', state)).rejects.toThrow(/TALReverb4\(\)/)
+    await expect(run('global.TALReverb4', state)).rejects.toThrow(
+      /Catalog plugins are written as strings.*effect\("TAL Reverb 4"\)/,
+    )
     expect(effect).not.toHaveBeenCalled()
   })
 
@@ -799,38 +578,36 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       expect(typeof bus[name as keyof typeof bus]).toBe('function')
   })
 
-  it('R23a dispatches global.remove through the Global DSL vocabulary', async () => {
-    const global = new Global(new RecordingScheduler())
-    const state = makeState(global)
-    const remove = vi.spyOn(global, 'remove').mockResolvedValue(global)
-
-    await run('global.remove("old")', state)
-
-    expect(remove).toHaveBeenCalledWith('old')
-  })
-
-  it('R23b dispatches kick.remove through the Sequence DSL vocabulary', async () => {
+  it('T25 removes remove() from all three vocabularies and from the implementation', async () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
     await run('var kick = init global.seq', state)
     const kick = state.sequences.get('kick')!
-    const remove = vi.spyOn(kick, 'remove').mockResolvedValue(kick)
-
-    await run('kick.remove("old")', state)
-
-    expect(remove).toHaveBeenCalledWith('old')
-  })
-
-  it('R23c dispatches sum.remove through the bus DSL vocabulary', async () => {
-    const global = new Global(new RecordingScheduler())
-    const state = makeState(global)
     const bus = global.sum('drums')
-    const remove = vi.spyOn(bus, 'remove').mockResolvedValue(bus)
     vi.spyOn(global, 'sum').mockReturnValue(bus)
 
-    await run('global.sum("drums").remove("old")', state)
+    // 語彙から消えている。
+    expect(GLOBAL_DSL_METHODS.has('remove')).toBe(false)
+    expect(SEQUENCE_DSL_METHODS.has('remove')).toBe(false)
+    expect(BUS_DSL_METHODS.has('remove')).toBe(false)
 
-    expect(remove).toHaveBeenCalledWith('old')
+    // 🔴 **実装ごと消えている。** 以前この位置は `vi.spyOn(global, 'remove')` で
+    // 「呼ばれないこと」を確認していたが、それは**実装が残っている前提**であり、
+    // spec SC.10.3c の「即時に撤去する」と食い違っていた（テストのコメントは
+    // 「host compatibility method として維持」と主張していたが、**その host は存在しなかった**
+    // — 呼び出し元は内部だけで循環し、daemon 側 `UnloadPlugin` は常にエラーを返すスタブ）。
+    // 「呼ばれない」より「**存在しない**」の方が強い保証なので格上げする。
+    expect((global as unknown as Record<string, unknown>).remove).toBeUndefined()
+    expect((kick as unknown as Record<string, unknown>).remove).toBeUndefined()
+    expect((bus as unknown as Record<string, unknown>).remove).toBeUndefined()
+
+    await expect(run('global.remove("old")', state)).rejects.toThrow(
+      'Unknown chain method "remove"',
+    )
+    await expect(run('kick.remove("old")', state)).rejects.toThrow('Unknown chain method "remove"')
+    await expect(run('global.sum("drums").remove("old")', state)).rejects.toThrow(
+      'Unknown chain method "remove"',
+    )
   })
 
   it('classifies every public receiver method as DSL vocabulary or an explicit internal API', () => {
@@ -928,6 +705,13 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'pluginUiOperationError',
       // resolvePluginStateTarget の bus 分岐（master / sum: / aux:）を担う private ヘルパー。
       'pluginStateBusChain',
+      'pluginEntriesForReceiver',
+      'resolvePluginStateEntry',
+      'currentIndexForInstance',
+      'pluginUiSessionForDaemonTarget',
+      'catalogIndicesByName',
+      'openPluginUisByName',
+      'closePluginUisByName',
       // #577 PR-A: 停止時 auto-snapshot のホスト API。どちらも `this` 経由で
       // 各 manager を読むためクラス外へ出せない（純関数の
       // `pluginStateTargetForSlot` はモジュール関数として分類対象外にしてある）。
@@ -943,6 +727,8 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'getMidiManager',
       'importChords',
       'defineChord',
+      'defineRack',
+      'getRack',
       'setChord',
       'getChordVoices',
       'definePattern',
@@ -954,6 +740,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'declareMixerRuntime',
       'sequenceEffect',
       'sequenceEffectRemove',
+      'remove',
       'ensureSequenceInsertBus',
       'resolveSumBus',
       'resolveAuxBus',

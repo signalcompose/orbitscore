@@ -17,6 +17,1410 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.402 fix: 降格した後に、各 call site のレベルを監査し直した (#628) (Aug 29, 2026)
+
+**Date**: 2026-08-29
+**Issue**: #628 / PR #639 / #633
+**Status**: ラウンド2（未レビュー分）完了
+
+**PR の約 1/4（38 ファイル・+3379）が誰のレビューも通っていなかった**ため、
+その範囲に絞った縮小レビューを回した（レビュアー 4 名 + Fable 監査）。
+**Critical 0 / Important 4**（うち 1 件は誤りと判明）。**修正は owner 指示で Fable が担当**し、
+**fix 差分の検証は main** が引き受けた（自分の修正を自分で監査させないため）。
+
+### 🔴 WARN 降格が、同じ PR 内の可視化修正 2 件を無効化していた
+
+根 3 で作った診断（`param_apply_errors` のドレイン / drop 時の UI close 失敗）が、
+後続の `569b6140` で `WARN` を非エラー化したことにより **ERROR 計数オラクルから消えていた**。
+`lib.rs` のコメントは「**a failed UI close must stay audible**」と明記しているのに、である。
+
+**自分で可視化して、自分で消していた。**
+
+### 分類器は変えない — レベルは事象の意味論で選ぶ
+
+**警告は定義上エラーではない。** 欠けていたのは分類器ではなく、
+**降格後に各 call site のレベルを再監査しなかったこと**。
+
+> ユーザーへの実害（音の中断/ずれ・データ喪失・機能不全・RT 応答不能）が確定し、
+> かつ ticker/RPC に**別表面を持たない**事象は `error!`。
+> 自己回復済み・別経路で loud・診断のみは `warn!`。
+
+**namespace で分ける案は採らない** — 騒がしかった `NotePortsExtension なし` は
+**自分たちの crate（`orbit_clap_host`）から出ている**ので、その軸では元の問題が戻る。
+
+Fable が `tracing::warn!` を **72 箇所全列挙**し、昇格は **5 件のみ**（残り約 60 箇所は
+降格が正しい）。各所に「なぜ error か」を 1 行残した。
+
+**main が分類器を実際に通して両立を実証**:
+
+```
+プラグインの雑音(WARN) → 非エラー: true      ← 雑音は黙る
+昇格した診断(ERROR)   → 非エラー: false     ← 本物の失敗は見える
+```
+
+### silent-failure-hunter の Critical は誤りだった（main が一次ソースで確認）
+
+「child crash → respawn の唯一の可観測シグナルを消した」は**成立しない**。**第 2 の表面がある**:
+1 Hz ticker → `DaemonError` event（`session.rs:878-886`）→ `onDaemonError` の `console.warn`
+→ Node では **stderr** → 拡張が**無条件に `ERROR: ` 接頭**（`extension.ts:1568`）→ countErrors。
+**3 リンクとも実ファイルで確認。**
+
+🔴 **main はこの Critical を裏取り前に owner へ報告した。** 委譲先の指摘も鵜呑みにしない、
+という原則が自分に返ってきた形。
+
+### main のコミットメッセージの事実誤認（comment-analyzer 発見）
+
+`b1afc3dd` の「timeout が `MALFORMED_REQUEST` にマップされていた」は**誤り**。
+旧実装は `WrapError::OutProcEffect` → `OUTPROC_EFFECT_RUNTIME`（`git show 08731645` で確認）。
+`MALFORMED_REQUEST` を観測したのは **serde の `flatten` × `deny_unknown_fields` という
+無関係のバグ**のログ。**実際の問題は「マップ先が違う」ではなく、timeout を含む全失敗が
+「登記は無傷」と主張していたこと** — 指摘の方がより重い問題を正しく言い当てていた。
+WORK_LOG を訂正（コミットメッセージは履歴のため据え置き）。
+
+### テスト追加（`chain_path` の形状ガード）
+
+5 条件（配列でない / 長さ≠1 / 非整数 / 負数 / `MAX_SAFE_INTEGER` 超過）を踏むテストが
+**1 件も無かった**。`length !== 1` を `< 1` に変異させても全テスト green の状態だった。
+
+**main の変異 2 種とも red**（`length 2:` / `not an integer:` とラベルが失敗理由に出る）。
+
+### 🔴 ローカルで 1 件失敗するが、この PR の退行ではない（構成による証明）
+
+`pipelined_host_with_real_child_is_gain_delayed_one_block` が macOS のこのマシンで落ちる。
+
+| 証拠 | |
+|---|---|
+| 静穏時（load 2.96） | **2.96 秒で pass** |
+| 負荷時（load 9.95） | 3 回とも fail（7.00 秒 = タイムアウト） |
+| **CI（ubuntu）** | **pass** |
+| **`orbit-audio-sandbox` への変更** | **`transport.rs` のコメント 9 行のみ・コード行ゼロ** |
+
+コメントのみの変更なので **`sandbox-effect-child` のバイナリは HEAD と同一**であり、
+**挙動が変わることは原理的にない**。テスト自身が `#520` で
+「`cargo build` 直後の child は macOS のセキュリティ評価で数秒〜24 秒止まりうる」と警告している。
+
+**負荷の出所は main の後始末漏れ**だった — Fable が起動した検証バッテリー
+（`cargo test -p orbit-audio-daemon --features …`）が生き残っていた。
+**エージェントを止めた ≠ そのプロセスが消えた。** 停止して消滅を確認した。
+
+### 検証
+
+`npm run build` 型エラー 0 / `npm test` **2080 passed** / lint 0 / `typecheck:e2e` 0 /
+`cargo fmt --check` exit 0 / clippy **default・両 feature とも通過**
+
+### 6.401 test: 変異 2 件を実機で殺し、完了条件 10 項目を照合した (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: **完了条件 Q4 の 10 項目すべて充足**。マージは owner 指示待ちで停止
+
+### 🔴 変異検証（項目 6・実機）— 2 件とも red
+
+| 変異 | 期待 | 実測 | 誤差 |
+|---|---|---|---|
+| keep op の `enabled` 差分を落とす | 0.3157 | **0.2556**（A が有効なまま） | 19.06% |
+| standard の `params` を落とす | 0.2526 | **0.5040**（Gain が 0dB） | 99.52% |
+
+2 件目は**ちょうど約 2 倍** — `Gain` が -6dB（線形 0.5011）ではなく既定の 0dB（線形 1.0）で
+動いていることを音が示している。`DB_DEFAULT = 0.0` なので偶然の一致は無い。
+
+**どちらも headless では両方 green だった。** 配線の全長
+（TS → JSON-RPC → daemon → manifest → child → プラグイン状態 → 音の振幅）
+のどこが切れても赤くなる形で、ユニットテストでは原理的に見えない。
+
+Fable の事前予測（1 件目 delta 20%）と実測 19.06% がほぼ一致した。設計の数値モデルが実機と
+合っている傍証になる。
+
+### 🔴 Fable の手順指摘が正しかった: 変異は dist に載って初めて効く
+
+> 変異は**ビルド済み配布物に載って初めて効く**。gated は実アプリ（dist）を駆動するので、
+> ビルドを挟み忘れると変異が「生き残った」ように見える（実際は走っていない）
+
+`変異 → npm run build → 再起動 → gated → restore → build → 再起動` を厳守した。
+**1 変異 = build 2 回。** [[no-stash-during-hooked-commit]] の隣のクラス。
+
+なお 1 件目は**型が `enabled` を必須にしていて単純削除がコンパイルを通らなかった**
+（型で守られている）。意味的に同じ「差分を無視して常に `true` を送る」形に変えた。
+
+### 🔴 復元が失敗した（記録）
+
+変異 2 件目の restore が **`$TMPDIR` の食い違いで失敗**した:
+
+- バックアップを取ったコマンド → **sandbox 内**の `$TMPDIR`
+- 復元したコマンド → **`dangerouslyDisableSandbox` + background** で**別の `$TMPDIR`**
+
+`cp` が `No such file or directory` で落ち、**変異が残ったまま**「green 確認」を走らせていた。
+`cmp` による復元確認を入れていたので検出できた。
+
+> **教訓**: [[mutation-backup-must-use-tmpdir]] は正しいが、**sandbox の内外で `$TMPDIR` が
+> 変わる**条件が抜けていた。**復元は `git checkout` の方が確実** — バックアップファイルの
+> 所在に依存しない。
+
+### Fable の E2E レビュー（項目 4）— 指摘 0 件
+
+§4 の false green 12 行すべてが実装で成立。特に:
+
+- **`states/` の非同期登記**（Fable 自身が予告した flaky ポイント）は固定 sleep ではなく
+  「ファイル数 +1 **かつ** manifest の B entry が旧パスと異なる **かつ** 実在」の 3 条件 poll
+- seg6 が**保存 state からの復元を音で検証**する（設計より強い）
+- アンカー 4 件とも実装原文と一致を grep で照合
+- **main が入れた診断 2 件も機能する**と確認（label 一回評価の罠を正しく回避）
+
+Fable の自己訂正 1 件: 設計書の「分離 25% ⇒ マージン 10%」は、実効マージンが**最悪 5pt**。
+実測ノイズ ≲1% なので判定は揺るがない。
+
+### 完了条件 10 項目すべて充足
+
+実測は `docs/development/evidence/628-gated-evidence.md`（全区間の RMS・窓系列・onset）と
+`docs/development/enumeration-13.md` に保存し、PR 本文から参照した。
+
+owner 判断 3 点はすべて回答取得済み — (i) Cmd+Click の #633 移管 **承認** /
+(ii) `WARN` を非エラーへ / (iii) `CLAUDE.md` マージ前ゲートに実 `Gain` テストを**恒久追加**。
+
+### 6.400 chore: 列挙 13 本を回し、撤回済み API の残骸を 1 件消した (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: 完了条件 Q4 項目 7（列挙）完了
+
+設計 §7 の列挙コマンド 13 本を最終コミットで再実行し、
+`docs/development/enumeration-13.md` に**コマンドと件数**を記録した。
+
+### 🔴 列挙が本物の残骸を 1 件見つけた（項目 10）
+
+`resolveCatalogMethodCandidates`（`plugin-resolver.ts`）は**撤回された SC.10.9（メソッド形）
+の残骸**で、**source 側に呼び出し元が 1 件も無かった**（dist の成果物と自身の export のみ）。
+
+🔴 **前回の記録（コミット `4a08ecd6`）では「1」と記録されたまま未処置だった。**
+件数を記録するだけで処置していなければ、列挙は機能しない。
+
+**到達不能を実行で証明してから削除した**（grep だけを根拠にしない・
+[[absence-claims-need-exhaustive-enumeration]]）:
+
+```
+削除後: npm run build 型エラー 0 / npm test 2079 passed / npm run lint 0
+```
+
+同じ grep が拾う `resolve.ts:74` の `kind: 'plugin'` は**残した** —
+**診断用の名前衝突分類器**そのもので、設計が明示的に認めている用途。
+
+### 項目 11 の 2 件は「残骸」ではなくガード本体
+
+```
+await expect(bus.ui(1 as any)).rejects.toThrow('numeric indexes are not supported')
+```
+
+**数値 index が拒否されることを検査する負のテスト**。grep が自分のガードを拾っているだけ。
+
+> **この grep を「0 件でなければ不合格」と機械的に運用すると、ガードを消す方向の圧力になる。**
+> 件数だけでなく中身を読むこと。記録にもそう明記した。
+
+### owner 判断（3 点すべて回答済み）
+
+| | 判断 |
+|---|---|
+| (i) Cmd+Click の #633 送り | **承認**（3 箇所に記録済み） |
+| (ii) WARN 分類 | **分類器に `WARN` を追加**（実機で 7 件落ちた実測を提示） |
+| (iii) `CLAUDE.md` マージ前ゲート | **恒久追加する**（実測 19〜67 秒・変異で red を確認済み） |
+
+### 6.399 test(e2e): 赤 3 件すべてが単一の既知欠陥に帰着した (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639 / #633
+**Status**: 実機ゲート 5 回。**赤は既知 1 件に起因する 3 テストのみ**
+
+### 🔴 結論: 3 件すべてが `UI_CLOSED_DONE`（#633 送り）に帰着する
+
+| テスト | 原因 |
+|---|---|
+| `drives real OrbitStudio end-to-end` | `UI_CLOSED_DONE (20000ms)` タイムアウト（直接） |
+| `#618 E1-E6` | 同上（直接） |
+| `reports an ambiguous bare mixer name` | **同欠陥のログ洪水による巻き添え** |
+
+### 3 件目の分類に 3 回かかった（記録）
+
+1. **5 秒 → 15 秒に延ばした** → 効かず。「待ち不足」という読みが外れた
+2. **診断を仕掛けたが、仕掛け自体が壊れていた** — `waitUntil` の `label` に埋めた
+   テンプレート文字列は**呼び出し前に一度だけ評価される**ので、ログ末尾は常に空だった
+   （失敗メッセージが `Log tail:  after 15000ms` になっていた）。
+   🔴 [[escalation-does-not-fix-opacity]] の「仕掛けた捕捉自体が壊れている可能性を先に疑う」
+   がそのまま当てはまった
+3. **catch 側で診断を組み立てる形に直して実測** → 原因が一目で分かった
+
+```
+errorsBefore=0 lastCount=0
+--- log tail ---
+ERROR: [daemon] … plugin UI event pump failed: plugin UI event protocol error:
+UI_CLOSED_DONE seq 2 has invalid completion Some("{\"index\":0,\"completion\":\"safepoint-completed\"}")
+（約 25ms ごとに繰り返し）
+```
+
+`errorsBefore=0 lastCount=0` は**窓の回転ではなく、そもそも一度も出ていない**ことを示す。
+原因は **`get_log` の固定 500 行窓がこの洪水で埋まり**、曖昧性エラーが出ても即座に窓の外へ
+押し出されること。**待ち時間の問題ではなかった。**
+
+手で同じ DSL を評価すると診断は期待どおり出る（機構は正しい）。
+`git diff main..HEAD` にこのテストの変更は 0 件（この PR の退行ではない）。
+
+### この発見が #633 の優先度を上げる
+
+既知欠陥は **UI close を壊すだけでなくログを溢れさせ、無関係なテストまで巻き込む**。
+`drives real OrbitStudio end-to-end` が `UI_CLOSED_DONE` で落ちると、その
+`stop_engine`（1194 行・テスト最終ステップ）に**到達しない**ため、
+エンジンが状態を保ったまま後続テストへ流れる副作用もある。
+
+### 実機ゲートの推移
+
+| 回 | 結果 | 見つけたもの |
+|---|---|---|
+| 1 | 7 failed / 3 passed | `WARN` が `ERROR:` に分類される（F-a の予測が的中） |
+| 2 | **3 failed / 7 passed** | **新規 2 ブロック green**・`#625` も復活 |
+| 3 | 3 failed | この PR が変えた文言にアンカーが追随していなかった |
+| 4 | 3 failed | 待ち延長は効かず・**診断の仕掛けが壊れていた** |
+| 5 | 3 failed | **診断が働き、3 件すべてが既知に帰着すると確定** |
+
+```
+✓ #628 R28: rack chain audio mainline                    42343ms
+✓ #628 R28: rack master + MCP standard-element error       550ms
+```
+
+### 6.398 fix: 警告はエラーではない（実機ゲートが 7 → 3 へ） (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: 実機ゲート 3 回実行。**新規 2 ブロックが green**。赤 3 件中 2 件は既知
+
+### 🔴 実機ゲート 1 回目: 7 failed / 3 passed — 既存テストまで落ちた
+
+原因は Fable が監査 F-a で予測し、main が「実機で測ってから決める」としていたもの:
+
+```
+ERROR: [daemon] 2026-08-28T12:19:01.534614Z  WARN orbit_clap_host::controller:
+       [orbit-clap-host] NotePortsExtension なし; port 0 を使用
+```
+
+**プラグイン自身の正常動作の警告が `ERROR:` 行として記録され**、ERROR 件数が 15 → 17 に増えた。
+根 3 で rack child に tracing subscriber を入れた副作用で、`orbit-clap-host` の中継が
+un-silence されたため。**予測が当たった。**
+
+同じログに**ラックが正しく動いている証拠**も出ていた:
+
+```
+[orbit-effect-rack] child spawned pid=62008
+[plugin-state] restoring 'fx628/effect/CLAP Test Effect/0' from .../e2e-r28-catalog-a.state
+[plugin-state] restoring 'fx628/effect/Gain Ω (Factory3 oracle)/0' from .../e2e-r28-catalog-b.state
+```
+
+**落ちていたのは音の正しさではなく診断行の分類だった。**
+
+### 対処（owner 判断）: 分類器の非エラー集合に `WARN` を追加
+
+**警告は定義上エラーではない。** 非エラー集合を `TRACE|DEBUG|INFO` →
+**`TRACE|DEBUG|INFO|WARN`** へ（2 箇所）。行そのものは `get_log` に残る —
+`console.error` ではなく `console.log` へ回るだけで、**診断が消えるわけではない**。
+
+既存の `WARN → false` を期待していた 3 箇所を更新した。
+🔴 **テストを緩めたのではなく決定が変わった**ので、その旨と発端を理由として残してある。
+新規テストのアンカーは**実機で実際に踏んだ行をそのまま**使った（手で整えた文言を使わない）。
+
+**main が変異検証**（両方向）:
+
+| 変異 | 結果 |
+|---|---|
+| `ERROR` まで非エラーに緩める | red（2 件） |
+| `WARN` を元に戻す（この修正の無効化） | red（3 件） |
+
+### 🔴 2 回目: 3 failed / 7 passed — **新規 2 ブロックが green**
+
+```
+✓ #628 R28: rack chain audio mainline                    42581ms
+✓ #628 R28: rack master + MCP standard-element error       538ms
+```
+
+**この PR の中心機能が、実機の音のアサーションまで通った。**
+`#625 R-E1-R-E7`（既存のエフェクト差し替え）も復活。
+
+### 3 回目: エラー文言のアンカーを実装に追随させた
+
+`drives real OrbitStudio end-to-end` が
+`current slot is 'X'; the UI was not opened` を期待していたが、**この PR のコミット
+`3b634850` が実装側に `re-evaluate first;` を挿入**していた。
+**文言を変えた PR がアンカーを更新し忘れていた** — 実機ゲートが捕まえた。
+
+修正後、このテストは当該 assert を通過し `UI_CLOSED_DONE` まで進んだ（= 既知の赤）。
+
+### 現在の赤 3 件
+
+| テスト | 判定 |
+|---|---|
+| `drives real OrbitStudio end-to-end` | **既知** — `UI_CLOSED_DONE (20000ms)` タイムアウト（#633） |
+| `#618 E1-E6` | **既知** — 同上 |
+| `reports an ambiguous bare mixer name` | **未分類** — 1〜3 回目とも同じ形で失敗。ログに文言も `MustNotLoad` も一度も出ない |
+
+3 件目は `-t` フィルタでの単独実行がスイート共有 boot を壊すため、その方法では切り分けられなかった
+（`main gated phase must initialize the MCP client first`）。**継続調査中。**
+
+### 検証
+
+`npm test` **2079 passed**（+1・分類器のテスト）/ `typecheck:e2e` 0 / lint 0
+
+### 6.397 test(e2e): ラックの実機テストを書き、数値設計を実機の手前で守る unit を置いた (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: 発注 B 実装完了。**実機ゲートの実行は未了**
+
+計画 `628-plan-reset.md` の**発注 B**。設計正本は `628-gated-e2e-rack-design.md`（承認済み）。
+
+### 1. ゲイン三つ組の定数 + 純 unit（設計 §2.2）
+
+E2E 設計 §4-2 の要（**A=0.8 / B=0.63 / `Gain(db: -6)`**・部分積の全ペア ≥25% 分離）は
+**値を 1 つ動かすだけで静かに崩れる**。期待比率表を `rack-chain-gain-expectations.ts` に
+**一元化**し、E2E と unit が共有する。これで**実機に行く前に `npm test` で赤になる**。
+
+🔴 **main が自分で変異 3 種を回した**（委譲先の報告は根拠にしない）:
+
+| 変異 | 実出力 |
+|---|---|
+| A を `0.81` に | `full and withoutCatalogA must remain at least 25% apart: expected 0.2345… >= 0.25` |
+| 標準を **`0dB`（unity）** に | `full and withoutStandard …: expected 0 to be >= 0.25` |
+| **設計原案の `-20dB`** | `full-chain RMS must retain the designed audible-floor margin: expected 0.0052… >= 0.01` |
+
+3 番目が効いている。**設計正本 §6 の原案 `Gain(db: -20)` を使うとこの unit が赤くなる** —
+Fable が机上で見つけた「full 積が可聴フロアを割る」問題が、いま機械で守られた。
+2 番目は「透過している」と「適用されていない」が数値で区別不能になる形を殺す。
+
+### 2. gated E2E の新規 2 ブロック（673 行追加・8 件 → 10 件）
+
+R28-E1〜E5 / E7〜E10a を実装。§4 の false green 12 行すべてに対応する assert を置いた
+（対応表は Codex の報告に行番号つきで残っている）。要点:
+
+- **`ok` 単独の assert は 1 つも無い** — 全区間を RMS 比率・PID・marker・state 副作用で判定
+- **bypass と drop は音で区別できない**ので `states/` のファイル数で捕まえる。
+  catalog drop は「**+1 かつ manifest 値更新かつ実ファイル存在**」が揃うまで poll
+  （非同期登記による flaky を防ぐ）
+- 文言アンカーは**実装からコピー**（`the previous chain is kept` 等）
+- ERROR 件数は固定 500 行窓なので**すべて `toBeLessThanOrEqual`**
+
+### 🔴 変異 2 件が headless では green だった（実機でしか殺せない）
+
+要求した「catalog enabled だけ欠落」「standard load params 欠落」の 2 変異は、
+**headless では両方 `15 passed`** だった。Codex はこれを**未達として正直に main へ引き渡した**
+（迂回もテスト緩和もしていない）。**実機ゲートで取るのは main の担当。**
+
+より広い変異（enabled 欠落全般）では既存 T9 が red になることは確認済み
+（`Expected: "enabled": false / Received: "enabled": true`）。
+
+### 設計からの逸脱 1 件（申告あり・main が中身を確認して承認）
+
+**負荷時の `daemon ready line timeout after 10000ms` を 1 回だけ retry する起動補助**を追加。
+CP2 で main が実機で踏んだ現象への対処。
+
+main が実装を読んで確認した点: **本物の失敗を隠さない** —
+新規に出たマーカー数が増えた場合だけ retry し、**別種の失敗も 2 回目の失敗も
+output channel を添えて即座に赤**にする。retry 前に `stop_engine` して状態も戻す。
+
+### 検証（main が sandbox 外で全幅）
+
+`npm run build` 型エラー 0 / **`npm test` 2078 passed・失敗 0** /
+lint 0 / `typecheck:e2e` 0 / clippy default・両 feature とも通過 / `cargo fmt --check` exit 0 /
+**gated は env 無しで 10 件 skip**（通常の `npm test` を壊していない）
+
+🔴 Codex の環境では `npm test` が **104 failed** に見えていた。原因は
+**sandbox の `listen EPERM`**（localhost を使う既存テスト 4 ファイル）で、実体ではない。
+Codex は迂回せず報告した。**sandbox の失敗を実体と混同しない。**
+
+### 残り
+
+**実機 gated の実行**（main・未了）。起動前ゲートと終了処理を含む手順は
+scratchpad の `hw-loop-runbook.md` に固定した（CP2 で `LOOP` を止め忘れた欠陥への対処を含む）。
+
+### 6.396 feat: MCP を chain_path 対応にし、Gain の dB 契約を CI で守る経路を作った (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: 発注 A 完了。**配列記法が実機で初めて動いた**
+
+計画 `628-plan-reset.md` の**発注 A**（実機を起動せずヘッドレスで検収できる項目）。
+
+### 実装 5 件
+
+1. **MCP `open_plugin_ui` / `close_plugin_ui` の `chain_path` 対応**（完了条件 15(b)）。
+   🔴 **additive** — `index` を削除せず、`chain_path` を優先し、**両方来て食い違えば loud 拒否**。
+   `index` の撤去は表面の削除なので **owner 判断で #633 へ送済み**
+2. `gain_bundle_dir()` が **`ORBIT_STD_PLUGIN_DIR` を尊重**（release ビルドの bundle を指せる）
+3. **`release.yml`（macos-14 既設）に実 Gain テストの step**。`--lib` は load-bearing（#629）
+4. **`orbit-std-gain/tests/contract.rs` に in-process 処理契約テスト** —
+   activate → 実バッファ 1 block process → -6dB で半振幅 / 0dB で恒等。
+   clack-host の in-process instance で audio processor まで進められた（**残余ギャップなし**）
+5. 小修正 3 件 — テスト ID `c13` の重複解消（`c16`〜`c18` へ）/ `.any()` を回数検査へ /
+   未使用の `unsafe impl Sync for AudioCell` を削除
+
+### 🔴 起動前ゲートが型エラーを 1 件捕まえた（main のブリーフの穴）
+
+`z.array(z.number().int())` を足したが、この拡張の **zod 型スタブには
+`string`/`number`/`boolean` しか宣言が無く**、**`npm run build` だけが落ちる**状態だった。
+
+**私の発注ブリーフの検証コマンドに `npm run build` が入っていなかった。**
+`npm test` / `npm run lint` / `npm run typecheck:e2e` は**どれも
+`packages/vscode-extension/src` を型検査しない**。スタブを使用実態に合わせ、
+「使う builder を増やしたらここも増やす。漏れは build だけが落ちる」と理由をコメントに残した。
+
+> **教訓**: 検証コマンドの一覧は「何を通せば安心か」ではなく
+> **「どのゲートが何を見ていないか」**から作る。
+
+### 🔴 CP2 — 配列記法が実機で初めて動いた
+
+`bundle-macos.sh` + `npm run build:clean` → OrbitStudio をクリーン起動 → MCP 経由で評価:
+
+```
+kick.effect(["CLAP Test Effect", Gain(db: -6)])   → ok / ERROR 増加なし（1 → 1）
+```
+
+**child プロセスは 1 つだけ**で、`--chain <manifest>` で起動していた（旧 `--plugin <パス>` ではない）:
+
+```
+46309 orbit-effect-rack-child --shm ... --chain ...chain.json --sample-rate 48000
+```
+
+manifest の中身:
+
+```json
+{"version":1,"stages":[
+  {"kind":"catalog","path":".../CLAPTestEffect.clap",
+   "plugin_id":"com.signalcompose.clap-test-effect","state":null,"enabled":true},
+  {"kind":"standard","name":"Gain","params":{"db":-6.0},"enabled":true}]}
+```
+
+**この PR の中心的な主張が実機で裏付けられた**: 1 レシーバに複数 insert /
+1 child がチェーン全体を持つ / **3 カテゴリを構文で分ける**（文字列 → `catalog`・
+大文字呼び出し → `standard`）/ `Gain(db: -6)` の引数が `params.db = -6.0` まで届く。
+
+### 手で回す実機トライアルの手順に欠陥があった（owner 指摘）
+
+**`LOOP` を張ったまま止め忘れ、音が鳴り続けた。** gated テストなら `afterAll` が
+面倒を見る部分で、手で回したから抜けた。以後は
+**起動 → 評価 → 観測 → `stop_engine` → プロセス消滅確認 → アプリ終了**を一組にする。
+
+### 実機で 1 件観測（判断材料）
+
+エンジン起動が一度 `DaemonStartupError: daemon ready line timeout after 10000ms` で落ちた。
+daemon 単体では ready 行（`{"ready":true,"port":59760,...}`）を即座に出すことを確認済みで、
+cargo のテストとビルドが並走していた時間帯だったため**負荷による超過**と見ている。
+
+### 検証
+
+`npm run build` **型エラー 0** / `npm test` **2076 passed** / lint 0 / `typecheck:e2e` 0 /
+clippy default・両 feature とも通過 / `cargo test --workspace` **477 passed** /
+daemon 両 feature **229 passed** / child-runtime 29 / std-gain 8+5 / `cargo fmt --check` exit 0
+
+### 6.395 docs: 計画を立て直し、Cmd+Click を #633 へ移管した (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639 / #633
+**Status**: 計画確定・owner 判断 2 件取得
+
+owner から「一度状況を整理して開発プランを立て直す。**必要ならゴールをクリアする**」との
+指示。main が状況を 130 行に整理し、Fable が `docs/design/628-plan-reset.md`（237 行）を起案。
+
+### 🔴 Q2 — 反復を減らす打ち手は「回数」ではなく「1 回のコストと情報量」
+
+前回の実機ゲートは **11 回反復して 6 件の欠陥**を出した。Fable がこれをクラス別に検分し、
+**6 件全部が既に構造的に閉じている**ことを表で示した（main が実コードで裏取り済み）:
+
+| 前回の欠陥 | 現在の状態 |
+|---|---|
+| serde `flatten` × `deny_unknown_fields`（2 回） | 共有型 1 箇所 + wire 実 payload の pin テスト |
+| rack child が配布物に無い | `SPAWNABLE_CHILD_BINARIES` 台帳 + release gate |
+| PID オラクル不作動（`--plugin`→`--chain`） | ログ由来オラクル + `rack-child-pid-oracle.spec.ts` |
+| ERROR 件数の厳密等価（500 行窓） | `<=` イディオムに統一 |
+| 台帳 A の漏れ | #548 ガードが捕捉 |
+| （main）E2E の実行時 `ReferenceError` | `typecheck:e2e` ゲート新設（変異実証済み） |
+
+**前回の反復を生んだクラスは再発しない。次の反復を生むのは新表面の未知だけ。**
+
+打ち手は 3 層: (1) 起動前ゲート（両 clippy・両 feature テスト・実 Gain 67 秒・
+**同梱物の `ls` 2 本**で「ビルドは通るが配布物に無い」を起動前に殺す）、
+(2) **ゲイン三つ組を定数 + 純 unit 化**（値を 1 つ動かすと分離が静かに崩れる設計なので、
+実機に行く前に `npm test` で赤にする）、(3) スコープ実行 + 全文ファイル保存。
+
+🔴 **回数は約束しない。** 約束すると品質を削る圧になる。約束するのは 1 回のコストと情報量。
+
+### owner 判断 2 件
+
+1. **Cmd+Click（完了条件 15(a)）を #633 へ移管** — 承認。
+   `SC.10.10` 規範 2 が定める**UI 起動の主経路**なので、勝手に動かさず owner 確認を取った
+   （Fable が「これは owner 確定事項」と正しく止めた）。
+   **理由**: Cmd+Click の終端である UI close 完了（`UI_CLOSED_DONE`）が #633 の既知欠陥で
+   **この branch では壊れている**ため、いま実装しても実機確認の半分が #633 待ちになる。
+   #633 が「UI 起動 3 経路の完成 PR」として E10b・`index` 撤去判断と一枚岩になる。
+2. **WARN 分類と CLAUDE.md マージ前ゲート追加は、実機ゲートの実測後に判断** — 承認。
+
+### 🔴 移管は 3 箇所に記録した（黙って落とさない）
+
+- 親設計 `628-rack-chain-implementation-design.md` §1-15(a) に移管注記
+- core spec `INSTRUCTION_ORBITSCORE_DSL.md` に**現在地 1 行**（spec が正本・乖離を作らない）
+- #633 issue に 3 項目（Cmd+Click / E10b / `index` 撤去の owner 判断）
+
+### Q4 — マージ可の定義を 10 項目、全部コマンドと観測可能条件で
+
+曖昧語なし。特に項目 9 が良い設計: owner の判断 3 件について
+**「本 PR では変えない」という回答でもマージ可。判断の所在が明示されていることが条件**。
+
+### Q5 — 境界は移管 2 件を除き正しい。#634 に決定ゲートを 1 つ
+
+#634（PDC 単独 PR）は「表面より機構が先」の既知手戻りクラスになる恐れがあるため、
+#633 完了時に「#635 へ畳むか、観測可能な表面を完了条件に含めて単独維持か」の
+**決定ゲートを 1 つ置く**（[[ux-surface-before-mechanism]] の予防）。
+
+### 委譲の順序（§6 の実測を前提に）
+
+**直列 2 発注**（並行しない — 本日同一ツリーに write 権 2 本が走った事故がある）:
+発注 A（実機不要・ヘッドレス検収可能）→ 発注 B（E2E 一式）→ main の起動前ゲート → 実機ループ。
+**実機ループ内の fix は委譲しない。**
+
+### 6.394 fix: 「確定拒否」と「不明」を分ける述語を 1 つ入れた (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: 根2 完了。根4（実機を通す経路）は継続
+
+レビューラウンド1の**根 2**。3 つの症状が**同じ 1 つの誤った前提**から出ていた:
+
+> `effect-slot.ts` は `DaemonProtocolError` を「**確定拒否 = daemon の登記は無傷**」と
+> 解釈して `uncertainRacks` に入れない。daemon 側の文言も
+> `"...; the previous chain is kept"` と言っている。
+> **この解釈が正しいのは、daemon が生きていて登記が本当に無傷なときだけ。**
+
+### 症状 3 つ
+
+| | 内容 |
+|---|---|
+| **A** | respawn 後の rack 再構築失敗が `console.error` だけで self-heal に載らない。**同じ行を何度再評価しても同じエラーが出続け、自己修復経路が存在しない**。既存の非ラック経路は `markPluginInactive` を呼んでいるのに、新設パスだけ対称のパスが無かった |
+| **B** | APPLY の mailbox timeout が state 保存と同じ **5 秒**。`OPEN_UI` は「重い plugin の `createView` は 5 秒を正当に超えうる」として専用の上限を持つのに、**N 発の load を含む APPLY が 5 秒**。超過すると child は放棄を知らず commit しうる一方 daemon は確定 Err を返し、**音 = 新チェーン / daemon 台帳 = 旧 / TS 登記 = 旧** の三者乖離が固定する。旧実装のマップ先は `WrapError::OutProcEffect` → `OUTPROC_EFFECT_RUNTIME` で、問題は「マップ先が違う」ことではなく **timeout を含む全失敗が「登記は無傷（the previous chain is kept）」と主張していた**こと（🔴 訂正 2026-08-28: 本欄は当初「timeout が `MALFORMED_REQUEST` にマップされていた」と書いたが誤り。`MALFORMED_REQUEST` を観測したのは serde の `flatten` × `deny_unknown_fields` という無関係のバグのログだった。コミット `b1afc3dd` のメッセージにも同じ誤記が残るが履歴のため書き換えない） |
+| **C** | 不健全な Active への rebuild が**死んだ mailbox に save を発行**し、5 秒 × drop 件数の末に APPLY 全体が Err。**設計が「第一級で高速化する」と謳った「クラッシュした犯人を配列から消して再評価」が、まさにその状況で失敗する** |
+
+### 導入した述語（1 つで 3 箇所を揃える）
+
+> **「daemon の登記が無傷である」と言えるのは、daemon がその要求を検分して確定的に拒否し、
+> かつその間 child も daemon も生死を跨いでいないときだけ。それ以外の失敗はすべて
+> 「不明（uncertain）」であり、次回は `rebuild` に倒す。**
+
+**この repo が既に持っていた前例に乗せた** — `session.rs` のエラーコード体系には
+`CLAP_NOT_LOADED` について「TS 層が actionable に判定できるようにする専用コード（#405）」と
+書かれている。同じ形で **`OUTPROC_EFFECT_UNCERTAIN`** を足し、
+`isEffectChainRegistryIntact()` を TS 側の単一の分岐点にした。
+
+- 「確定拒否」と認めるのは `CommandMailboxError::CommandFailed` だけ。
+  `Timeout` / `ChildExited` / `Poisoned` はすべて uncertain（**保守側に倒す**）
+- respawn 失敗は**既存の `markPluginInactive` / `isPluginActive` seam** を通す
+  （新機構を作らない。既存機構を借りるなら不変条件も継承する）
+- **`APPLY_CHAIN_MAILBOX_TIMEOUT = 60s`** を新設（spawn の READY 待ちと同じ league）。
+  `PLUGIN_STATE_MAILBOX_TIMEOUT` を流用しない
+- 不健全と検分済みの Active には save を発行せず `latest_state` で代替
+
+### 変異検証（すべて main が実行・両方向を潰した）
+
+| 変異 | 結果 |
+|---|---|
+| 述語を常に `true`（元の欠陥を再導入） | red（2 件） |
+| 述語を常に `false`（過剰に uncertain） | red（1 件） |
+| `measurement_invalid` の検分を外す | red（1 件） |
+| respawn 失敗時の `markPluginInactive` を消す | red（1 件） |
+| `applyRackBody` の catch で uncertain を立てない | red（3 件） |
+
+**緩めても厳しくしても落ちる**のが要点。過剰に uncertain へ倒すと毎回 rebuild になり
+prepare-commit の利点が消えるので、そちらも守る必要がある。
+
+### 🔴 main 自身の検証ミス（記録）
+
+最初の変異が「生き残った」と出た。原因は**実行コマンドが狭かった**こと:
+
+```
+cargo test -p orbit-audio-daemon --lib                                             →  36 件
+cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument --lib → 229 件
+```
+
+daemon のテストの大半は feature の下にあり、**当該テストがそもそも走っていなかった**。
+委譲先を「部分テストだけ回して報告した」と指摘した当人が同じことをしていた。
+**feature 付きの数字と無しの数字を混ぜない。**
+
+### あわせて直したもの（Fable 監査 F-b / F-c）
+
+main が最終 fixer として書いた根1・根3 を Fable に監査させたところ、
+**私のコメント 2 件が実装と食い違っていた**:
+
+- `adopt_interlock`（テスト用 barrier）の上に、**棄却した別 atomic 案の説明**が残っていた
+- 「`load_initial` は status を set しなくなった」「The Release store below」— どちらも事実と違う
+
+コミットタイトルが「コメントが支えていた順序をコンパイラに支えさせた」なのに、
+**残ったコメント自体が新たな嘘になっていた**。両方書き直した。
+
+### 検証
+
+clippy は **default features と feature 付きの両構成**で exit 0（default 構成は
+`pre-push` で一度止められて気づいた。**feature 付きの clippy は default 構成の証拠にならない**）/
+daemon **229 passed** / sandbox 87 / rack-child 15 / `cargo fmt --check` exit 0 /
+TS **2071 passed 0 failed** / lint クリーン / `npm run typecheck:e2e` exit 0
+
+### 残り
+
+**この PR の中心機能（配列記法・N 段直列・`Gain`）は実機を一度も通っていない。**
+根 4 の gated E2E 実装が最大の残件で、前回の実機ゲートは 11 回反復して 6 件の欠陥を出した。
+owner の指示で Fable に開発プランを立て直させている（`docs/design/628-plan-reset.md` を起案中）。
+
+### 6.393 fix: コメントが支えていた順序を、コンパイラに支えさせた (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: 根1・根3 完了。根2・根4 は継続
+
+レビューラウンド1（`/code:pr-review-team` フル編成4名 + Fable 監査を**並行**）で
+**Critical 8 / Important 10**。全件を main が実コードに当たって裏取りした。
+指摘は18件だが**根は4つ**。本エントリはそのうち **根1と根3**を閉じた記録。
+
+🔴 **指摘単位のローカルパッチは当てていない。** 根ごとに不変条件を1つ導入し、
+全該当箇所をそれで揃えた（指摘単位のパッチは振動の主因）。
+
+### 根1 — audio がまだ使っている stage が破棄されていた
+
+`collect_retired()` が retired を1つ回収しただけで `pending_stage_drops` を**全部** clear し、
+**世代の対応を検査していなかった**。
+
+adopt は `pending.swap(null)` → `retired.compare_exchange` の**2步**で、その間は pending も
+retired も null。この窓で `apply` が Busy 判定を通過し、新たに積まれた drop が直後の retired
+回収の巻き添えで破棄される。audio は次のブロック境界まで（最大 ~10.7ms）その stage を指す
+リストで `process_block` を続ける。`AudioCell` の SAFETY コメントが宣言した不変条件そのものが
+破れていた。
+
+**机上解析で確定させず、先に実行で証明した**:
+
+```
+collecting generation 1 must not destroy a drop published by generation 2
+  left: 0    right: 1
+```
+
+UAF を実際に起こさず live 数で検出するので、テスト自体は安全。
+
+**導入した不変条件**: apply が世代 G を publish したときに積んだ drop は、
+**audio が世代 G を adopt し終えた後にのみ**破棄してよい。
+
+### 🔴 変異が1つ生き残ったので設計を変えた（本エントリの主眼）
+
+初版は世代を `ChainExchange` の別 `AtomicU64` に置いた。ところが変異
+**「store を CAS の後ろへ動かす」が全テスト green のまま生き残った** —
+順序が**誰も守らせられない規約**になっていた。
+
+**世代を retire するリスト自身（`StageList::retired_at_generation`）に持たせた**。
+ポインタの publication が世代を運ぶので、順序が型の性質になる。同じ変異はいま
+**`no field on type *mut StageList`** でコンパイルを通らない。**壊し方のクラスごと消えた。**
+
+> **教訓**: 変異検証は「テストが弱い」ことだけでなく「**設計が規約に依存している**」ことも
+> 教える。生き残った変異に対しては、テストを足す前に**その壊し方を表現できなくする**道を
+> 先に探す。
+
+### 🔴 検証中に見つけた同型の順序問題（根3-3）
+
+child が `LOAD_FAILED` を立ててから detail を書いていた。daemon は status を観測した瞬間に
+detail を読むので、**先に status を見ると診断が黙って汎用メッセージに劣化する** —
+根3が消そうとしている当のもの。
+
+失敗の出口を1つに畳み、`load_initial` の内側で「detail → status」を固定。
+**C8 がその順序を検査する**（detail を書く瞬間の status を記録し、まだ立っていないことを確認）。
+変異（順序を戻す）で red を確認済み。
+
+### 根3 — 診断を `get_log` に終端させた（4箇所）
+
+**方針**: 「後で誰かが読む」計装を作るなら**読み手を同じコミットで配線する**。
+読み手を書けないなら計装を作らない。
+
+1. **`param_apply_errors` の読み手が workspace 全体で 0 件**だった。`/simplify` で
+   `eprintln!` をカウンタに替えた際に報告側が丸ごと落ちており、しかもコメントは
+   「main スレッドが読み出して報告する」と**2箇所で宣言していた** → サービスループが
+   増分をドレインして `tracing::warn!`
+2. drop 時の UI close 失敗の `let _ =` → `tracing::warn!`（音は止めない・loud にするだけ）
+3. 初回 spawn/rebuild の **failed-index detail が消えていた**（mailbox 経由の2回目以降は
+   通るので初回限定）→ shared region 経由で daemon へ渡し RPC の message に載せる
+4. crash ログにプラグイン名を載せた（設計 §2.3 との乖離）
+
+🔴 `eprintln!` は使わない — 拡張が daemon の stderr を**全部 `ERROR:` に分類する**ため
+（同型の欠陥が4回再発している）。
+
+### 根4の一部 — `tests/` に型検査ゲートが無かった
+
+gated E2E に**実行時に必ず `ReferenceError` になる未定義変数**が出荷されていた
+（`4a08ecd6` が `waitUntil` 化の際に宣言だけ消した）。ラック側を絞って gated を11回
+回したので踏まなかった — **絞って回したことが穴になった**。
+
+原因は構造側にあった: `tsconfig.eslint.json` は `tests/**` を include するのに、
+**それに tsc を走らせる経路がどこにも無い**（build の references は packages 2つだけ・
+eslint は未定義変数のような意味論エラーを見ない）。
+
+`tsconfig.tests.json` + `npm run typecheck:e2e` + `code-review.yml` のステップを追加。
+**変異で実証**（宣言を戻すと `TS2304` で red・restore で green）。
+`tsconfig.eslint.json` を流用しないのは、あれが lint 支援用に `module: nodenext` を
+上書きしており、build では出ない解決由来のエラーを packages に 5 件出すため。
+
+### 変異検証（すべて main が実行）
+
+| 変異 | 結果 |
+|---|---|
+| `retain` → `clear`（元の欠陥を再導入） | red |
+| 不等号 `>` → `>=` | red（既存 C7 が殺す） |
+| 世代の書き込みを CAS の後ろへ | **コンパイルエラー = 表現不能** |
+| 刻む世代を `+1` | red |
+| status を detail より先に立てる | red |
+
+### 🔴 委譲で起きたこと（運用の記録）
+
+1. **Codex が使えなくなった** — メモリ安全性の修正という主題が OpenAI 側のコンテンツ
+   フィルタに引っかかる（"possible cybersecurity risk" の誤検知）。CLAUDE.md の規定どおり
+   Sonnet subagent（xhigh）へ切り替えた
+2. **発注が届いていなかった** — ジョブの `summary` が `--help`・`write=False`。
+   **発注文がフラグとして解釈され本文が失われていた**。転送役の idle を「実行中」と
+   読みかけた。→ **`--prompt-file` で本文を渡し `--write` を明示する**
+3. **二重起動** — 転送役が自分で復旧を試み、main も並行で復旧して**同一ツリーに write 権を
+   持つ Codex が2本**走った。cancel + **PID 消滅を確認**して収束
+4. **Sonnet が同じ失敗を2回** — 1回目は肝心の1行を書かず（`dead_code` 警告として出ており
+   **指示した最初の検証コマンド clippy を回していれば気づけた**）、2回目は不等号を誤り
+   **既存 C7 を落としたまま報告**。規約どおり main が引き取った
+
+> **教訓**: 「完了通知」「idle」はいずれも**終了の証拠にならない**。
+> 受け入れ検証は必ず main が sandbox 外で回す。
+
+### 検証
+
+Rust 35/86/15 passed・failed 0 / clippy `-D warnings` exit 0 / `cargo fmt --check` exit 0 /
+`npm run typecheck:e2e` exit 0 / lint クリーン / `npm test` **2069 passed 0 failed**
+
+### 残り
+
+- **根2**（「登記の無傷が確認できるか」という述語で3箇所を揃える）— ブリーフ準備済み・未着手
+- **根4**（gated E2E の実装・MCP の `chain_path` additive 化・dB 契約の CI 3経路）—
+  Fable の設計書 `docs/design/628-gated-e2e-rack-design.md`（358行）承認済み・実装未着手
+- **PR 本文の実機検証の記述は訂正済み**（配列記法・N段直列・`Gain` は実機未通過）
+
+### 6.392 refactor: /simplify が 6 件を出し、うち 1 件は私自身の浅い修正だった (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: 6 件すべて適用
+
+`/simplify` の 4 エージェント（Reuse / Simplification / Efficiency / Altitude）を並行起動。
+
+## 🔴 根本原因: wire 型が daemon / child で二重定義されていた
+
+**Reuse と Altitude が独立に同じ結論へ到達**した。実機で**同じ serde 欠陥が 2 回出た**のは、
+同じ型を 2 箇所に書いていたため。ユニットテストは両側とも緑で、**各々が自分の型を自分で
+テストしていた**ので wire を跨いだ実物だけが落ちていた。
+
+`orbit-audio-sandbox::rack_wire` に集約した。この crate を選んだ理由:
+
+- **daemon と child の両方が既に依存**している
+- **clack-free**（コードは memmap2 のみ）なので daemon の不変条件を壊さない
+- 🔴 **本 PR は既に `CMD_APPLY_CHAIN` 等の定数をここに置いていた** — JSON の型だけが
+  その原則から外れていた
+
+集約の結果、`StageSpec` / `PlanStage` / `SaveDropped` / `enabled_by_default` は**各 1 箇所**に。
+`flatten` × `deny_unknown_fields` の併用は**全 crate で 0 件**。
+
+**外側の容器は経路ごとに分けた**（統合しかけて型エラーで気づいた）:
+
+| 経路 | 要素配列のフィールド名 | 契約 |
+|---|---|---|
+| TS → daemon（JSON-RPC） | **`chain`** | protocol doc に明記・変えられない |
+| daemon → child（`.apply.json`） | **`stages`** | 内部 |
+
+**別のワイヤなので容器は別型が正しい。** 要素型を共有すれば欠陥のクラスは塞がる。
+
+**副作用**: `serde_json` が sandbox 経由で可視になり、`u64: PartialEq<serde_json::Value>` の
+impl が増えて既存テストの型推論が曖昧になった（`orbit-clap-instrument-child`）。型注釈で解消。
+
+## 🔴 私自身の浅い修正への指摘（Altitude）
+
+コミット 7 で台帳テストに `dir.join(...)` の抽出パターンを足したが、これは
+**決め打ちの対象を変えただけ**だった:
+
+| 版 | 決め打ちの対象 | 破れ方 |
+|---|---|---|
+| 初版 | **綴り**（`orbit-*-child`） | リネームで漏れた |
+| その次 | **分岐の形**（match アーム） | 分岐なしの child で漏れた |
+| **私の修正** | **解決の形**（`dir.join`） | 次の新しい形でまた漏れる |
+
+ファイル自身のコメントが「初版は綴りを決め打ちして取りこぼした」と警告しているのを
+**読んだ上で**同型を書いていた。
+
+daemon に **`SPAWNABLE_CHILD_BINARIES`** を置き、**真実源を 1 つ**にした。新しい child を
+足す開発者は配列への追記を強制され、正規表現の網をすり抜けられない。台帳テストが守る性質も
+「抽出が縮んでいないか」から「**定数と実装が乖離していないか**」へ入れ替えた。
+**この新しいガードが導入直後に偽陽性を 1 件出し**（`exe_label` の fallback 文字列 —
+存在しない crate 名）、spawn 文脈に絞った。
+
+## RT 違反（Efficiency）
+
+`AudioChain::process_block`（**audio スレッド**）に `eprintln!` が入っていた
+— 確保 + stderr ロック + write syscall。**atomic カウンタ**へ置換し、ログ出力は main
+スレッドが行う形にした。エラー時にしか起きないパスで、**テストで踏まないぶん緩みやすい**。
+
+## 有界性の無効化（Efficiency）
+
+補完プロバイダが**文書の先頭から全行を materialize**してから 50 行の後方スキャナを
+呼んでいた。**自分で設計した有界性を呼び出し側で台無しにしていた** — 数千行のファイルで
+`"` を打つたびに全行をコピーする。読む範囲だけ切り出す形に。
+
+## `remove()` の死骸撤去（Simplification）
+
+DSL 語彙からは消えていたが、**実装チェーン全体（TS 11 箇所 + Rust）が到達不能なまま
+残っていた**。
+
+🔴 **「到達不能」を実行で実証してから消した**（peer の助言 —「机上推論だけで確定させない」）:
+
+| 確認 | 結果 |
+|---|---|
+| DSL からの到達 | **3 レシーバすべてで dispatch が拒否**（実行して確認） |
+| MCP tool | **0 件** |
+| Rust `unload_outproc_effect_plugin` | **定義と自分のユニットテスト 2 件からのみ** |
+| daemon の `UnloadPlugin` | **常にエラーを返すスタブ** |
+
+**テストの主張と spec の矛盾**も解消した。テストは「host compatibility method として維持」と
+書いていたが**その host は存在せず**、spec SC.10.3c は「即時に撤去する」と定めている。
+T25 を「**呼ばれない**」から「**存在しない**」へ格上げ — 前者は実装の存在を許すが後者は許さない。
+
+## コピペの一本化
+
+`sameCatalogSpec` / `sameCatalogElement` → `sameCatalogIdentity` /
+3 manager に複製されていた脱糖 → `toRackRecipe`（`effect-slot.ts` は「manager の複製を
+一本化する」ために作られたファイルなのに、新規追加分だけが逆行していた）。
+
+## 検証
+
+`npm run lint` exit 0 / `npm test` **2069 passed 0 failed** /
+clippy exit 0 / `cargo fmt` clean / 該当 crate **326 passed 0 failed**
+（sandbox は 83 → 86 で共有型のテスト 3 件が加算）。
+
+### 6.391 test: 列挙13本が E2E の取り残しを出した (#628 コミット8) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628
+**Status**: 完了（列挙13本を実行・記録）
+
+完了条件 §1-12 の**列挙コマンド13本を全実行**し、件数を記録した（PR 本文へ添付）。
+
+🔴 **列挙は「最後の確認」ではなく発見の道具だった。** 11 番（`.ui(数値 index)` は 0 件で
+あるべき）が **6 件**残っており、うち 4 件は **E2E が旧構文 `drum.ui(1)` を使ったまま**
+だった。実機ゲートを 4 回回しても見つからなかったものが grep 1 本で出た。
+
+名前形（`drum.ui("CLAP Test Effect")`）へ移行し、**6 件 → 2 件**。残る 2 件は
+「**撤回した形が拒否されることを検証するテスト**」で、これは残すのが正しい —
+機能を消すだけだと**黙って無視される形に劣化する**ため、拒否を明示的に固定している。
+
+## 列挙13本の結果（コミット `4a08ecd6` 時点）
+
+設計が「0 件であるべき」とした項目:
+
+| # | 項目 | 期待 | 実測 |
+|---|---|---|---|
+| 6 | DSL 語彙の `remove` | 0 | **0** |
+| 10 | メソッド形解決の残骸 | 診断用のみ | **1**（§3.5-(5) が残すとした誘導診断） |
+| 11 | `.ui(数値)` | 0 | **6 → 2**（撤回形の拒否テストのみ） |
+| 13 | 旧補完 regex | 0 | **0** |
+
+その他: OutProcControl 10 / 旧 child 参照 150 / `--plugin` 21 / mailbox 定数 31 /
+wire メソッド名 87 / `chain_path` 24 / state manifest 6（全て `project-state-store.ts` 内）/
+`EffectSlotLimitError` 11 / 標準プラグイン 37。
+
+## 実機ゲートの最終状態
+
+**3 failed / 5 passed。#625 の R-E1〜R-E7 は全通過。**
+
+残る 3 件は**すべて `UI_CLOSED_DONE` のタイムアウトに起因**し、**#633（UI pump の
+per-index 化）の範囲**。Fable が設計調査で予告した欠陥が実機で再現したもので、
+PR-B として設計（711 行）が完成している。
+
+### 6.390 fix: 実機ゲートが 5 件の欠陥を出した (#628 コミット7) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628
+**Status**: #625 の R-E1〜R-E7 が実機で全通過（残る失敗は #633 の範囲）
+
+**ユニットテスト 2069 件 + 348 件がすべて緑のまま、実機では動かなかった。**
+実機 gated E2E を 11 回反復し、毎回 1 つ深く進みながら欠陥を剥がした。
+
+## 検出・修正した欠陥（5 件）
+
+**1. serde の `flatten` × `deny_unknown_fields`（daemon 側）**
+
+```text
+[MALFORMED_REQUEST] effect chain apply failed at index 0 (CLAP Test Effect):
+invalid ApplyEffectChain chain: unknown field `enabled`; the previous chain is kept
+```
+
+`EffectChainPlanStage` に `deny_unknown_fields` が付いており、`Load` は
+`#[serde(flatten)]` で内側を展開している。**serde はこの併用を支持しない** — 外側の
+deserializer は内側のフィールド名を知らないため `kind` / `path` / `enabled` が軒並み
+unknown field になる。**全 effect 宣言が失敗していた。**
+
+**2. 同（child 側）** — daemon 側を直した直後に同型が出た:
+
+```text
+parse …/apply.json: unknown field `kind` at line 1 column 302
+```
+
+**同じ設計を 2 箇所に写したため**。全 crate を走査して残りが無いことを確認した
+（`flatten` を含む型で `deny_unknown_fields` を持つものは他に 0 件）。
+
+**3. 🔴 `orbit-effect-rack-child` が配布物に入っていなかった**
+
+daemon は自分の隣の `orbit-effect-rack-child` を探す（`outproc_effect.rs:454`）が、
+`copy-daemon-bin.sh` が配っていなかった。**実機で effect 宣言が起動に失敗する。**
+コミット 1 で「同梱経路」を作ったとき、標準プラグインだけを足して **child 本体を
+足さなかった**（列挙が一段手前で止まった形）。release.yml の post-package gate にも追加。
+
+**4. PID オラクルが rack child に効かない** — 13 箇所を移行（詳細は 6.389）
+
+**5. ERROR 件数の厳密等価** — `get_log` は固定 500 行の窓なので、非エラー行が 1 行増えると
+古い ERROR が押し出されて**件数が減る**。判定の意図は「新しい ERROR を出していない」なので
+13 箇所を `toBeLessThanOrEqual` へ。
+
+## 意味論の変化に合わせて更新した E2E（#625 R-E1〜R-E7）
+
+旧テストが期待していた挙動は、**#628 が解消しようとした挙動そのもの**だった:
+
+| 旧（#625 in-place 型） | 新（#628 prepare-commit） |
+|---|---|
+| 差し替え = プロセス交換（旧 child が消える） | **PID 不変**（in-child 編集 = dry 窓が消えた） |
+| 失敗 = dry へ縮退 | **旧チェーンが無傷で鳴り続ける** |
+| `remove("名前")` で外す | **`effect([])`**（配列から消す・SC.10.3c） |
+
+🔴 **音での実測が決定的だった**: 失敗後の RMS が B と **0.08% 差**で一致
+（`failedDry=0.049822` / `B=0.049780`）。**旧チェーンが本当に鳴り続けている**証拠であり、
+prepare-commit が音として機能していることの実機証明。
+
+区間名 `failedDry` は「失敗したら dry になる」という**旧仕様を名前に埋め込んでいた**ため、
+意味論変更でラベルが嘘になった。名前は仕様を固定する。
+
+## 検証
+
+| 回 | 結果 |
+|---|---|
+| 1 | 6 failed / 2 passed（effect 宣言が全滅） |
+| 2-10 | 4 failed / 4 passed（毎回別の欠陥） |
+| **11** | **3 failed / 5 passed（#625 R-E1〜R-E7 全通過）** |
+
+残る 3 件のうち 2 件は **#633（UI pump per-index 化）**の範囲で、
+Fable が設計調査で予告した「rack child の close が daemon の DONE 腕に受理されず ring が
+詰まる」が**実機で予告どおり再現**した:
+
+```text
+timed out waiting for UI_CLOSED_DONE (20000ms)
+```
+
+clippy exit 0 / daemon 226 passed / rack child 14 passed（回帰テスト 4 件追加）。
+
+### 6.389 feat: ラックを DSL から書けるようにする (#628 コミット5〜6) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628
+**Status**: 完了（TS 層 = Codex / 拡張 = main / 検証 = main）
+
+`kick.effect(["A", Gain(db: -6)])` と書けるようになった。編集は LCS で対応づき、
+**対応した要素は音を止めずに生き続ける**。
+
+## TS 層（Codex・T1〜T28）
+
+- **配列リテラルの汎用化**: `var x = [...]` の chord 確定パースをやめ、汎用配列 AST を保持する
+  束縛へ。**chord か rack かの分類は interpreter が行う**。既存 chord テストは無変更 green
+- **3 カテゴリ解決**: `"文字列"` = カタログ / **大文字呼び出し** `Gain(db:n)` = 標準（静的
+  レジストリのみ・**カタログを引かない**）/ **小文字呼び出し** `layer(...)` = 構造。
+  カテゴリが構文で先に決まるため、**標準とカタログの名前衝突は構造的に存在しない**
+- **`applyRack` + LCS 差分**: 識別子トークンは**カテゴリ付き**（`catalog:` / `standard:`）で、
+  カテゴリ違いの同名は決して対応しない。**diff が空でも `ApplyEffectChain` を必ず発行する**
+  （TS で短絡すると #626 の解消が TS 層で潰れる）
+- **occurrence はロード時に割り当てて以後不変**（テキスト位置から数え直さない）
+- **撤去**: `remove()`（SC.10.3c）/ メソッド形カタログ解決（SC.10.9）/ `ui(数値 index)`
+  （SC.10.10.1）。撤回した形は**loud に拒否**する（黙って無視しない）
+- **`ui()` 名前形**: 一致する insert を**すべて**開く（T27）
+- **instrument ラック**: `instrument(layer([...]))` をパース・型付けまで受理・
+  **裸配列に複数 instrument = 明示エラー**（T17）・単要素は単発形と等価
+
+## 拡張（main・コミット6）
+
+- 🔴 **ラック対応の補完スキャナ**: 現行は単一行 regex（`.effect("` 直後限定）で、
+  **ラック配列・複数行・`layer` 入れ子では発火しない = 移行と同時に退行する**。
+  有界の後方スキャナ（既定 50 行）へ置き換え、role は外側の動詞が決める形にした。
+  **旧 regex は撤去**（列挙13番が 0 件）
+- **E2E の PID オラクル**: 後述
+
+## 🔴 設計 §6 の見落としを 1 件手当て
+
+**既存 E2E の PID オラクルが rack child に効かない。**
+
+| | 旧 child | rack child |
+|---|---|---|
+| 起動 | `--plugin <絶対パス>` | **`--chain <manifest.json>`** |
+| 観測 | `pgrep -f <pluginPath>` | **捕まらない**（manifest は一時ファイル） |
+
+R28-E1〜E10 は**すべて「child PID 不変 = respawn していない」を判定条件にしている**ので、
+**10 シナリオが揃って成立しなくなる**ところだった。設計 §6 は「既存ハーネスを再利用」と
+書いていたが、機構 B（`--plugin` → `--chain`）がその前提を壊していた。
+
+daemon の `spawn_effect_child` に `tracing::info!` で PID を名乗らせ、`get_log` から読む
+経路を作った。**MCP の tool 表面は増やしていない**（ERROR 計数・`[plugin-state]` 行と
+同じ経路に揃う）。
+
+🔴 **`eprintln!` で書くと ERROR に分類され、同じ E2E が見る「ERROR 増 0」を自分で落とす**
+（#618/#625 で 4 回再発した罠）。`tracing::info!` は ISO timestamp + level 形式なので TS 側
+router が非エラーとして受理する — これをテストで固定した。
+
+## 検証（main が sandbox 外で実行）
+
+| 検証 | 結果 |
+|---|---|
+| `npm run lint` | exit 0 |
+| `npm test` | **2069 passed / 0 failed / 44 skipped**（145 files） |
+| ワークスペース clippy（`-D warnings`） | exit 0 |
+| 該当 4 crate の lib テスト | **348 passed / 0 failed** |
+
+🔴 **Codex は sandbox で socket テスト（43 件）が走らず、迂回せず報告して停止した。**
+「Codex は sandbox で daemon protocol が原理的に走らない = だから検証は main」の分担どおりで、
+**main が回したら全件 green** だった。
+
+**passed が 2075 → 2069 に減っている**が、これは撤去された機能のテストが消えたため
+（`remove()` -24 / `ui(数値)` -23 / メソッド形解決 -16 / 旧補完 regex -5）。いずれも設計が
+「撤回する」と明記した機能で、**撤回した形が loud に拒否されるテストは残っている**ことを確認した。
+
+## main が追加したテストと変異検証（4 種横断・全 RED）
+
+| 対象 | テスト | 変異 |
+|---|---|---|
+| ラック補完スキャナ | 17 | 分岐反転 11 / 回数 1 / 引数 4 / 構成 2 件 red |
+| PID 通知の分類 | 2 | 分岐反転 2 / **受理を緩める** 6 件 red |
+| PID オラクルの解析 | 7 | 引数・順序・分岐反転 各 1 件 red |
+
+**「緩める方向の変異」を混ぜた**のが要点 — 判定を厳しくする変異は簡単に red になるが、
+`return true` のような緩和は「テストが通りやすくなる」ので、それを検出できるかが本当の強度。
+
+E2E 本体は gated で普段走らないため、**ログ解析部分だけを切り出して常時テストする**構成に
+した（R28-E1〜E10 が揃ってこの関数に依存するため）。
+
+### 6.388 feat: effect rack の daemon 配線 (#628 コミット4) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628
+**Status**: 実装・D1〜D15 変異検証完了（sandbox 制約による integration / Linux cross check の環境停止あり）
+**Branch**: `628-rack-impl`
+
+`EffectSlotEntry` に control/watchdog 所有の `ChainConfig` を追加し、master / named bus 共通の
+`apply_outproc_effect_chain` を実装した。健全な Active+diff は rack mailbox の
+`CMD_APPLY_CHAIN`、rebuild・抜け殻 Active は #625 の teardown → `--chain` manifest spawn、
+空 chain は teardown → Empty を通る。`bus_actives` の単調 true、shutdown latch、quiesce の
+SeqCst ペアは維持した。
+
+wire に `ApplyEffectChain` を追加し、effect の `ReplacePlugin` / `UnloadPlugin` を明示退役。
+state/UI の `chain_path` を flat stage index として `CMD_SAVE_STATE_AT` / `CMD_OPEN_UI_AT` /
+`CMD_CLOSE_UI_AT` へ渡し、standard stage と nested path を明示拒否する。watchdog は respawn
+時点の権威 chain（per-stage latest state を含む）から manifest を毎回書き直す。
+
+検証: 指定 clippy は warning 0。daemon 224 passed / 0 failed / 1 ignored、sandbox 83 passed、
+rack child 12 passed / 3 ignored。D1〜D15 は各表の不変条件を production 側で一時的に壊して
+全件 red、復元後 green を確認した。workspace `cargo test` の protocol integration 28 件は
+sandbox が loopback bind を `Operation not permitted` で拒否して停止。Linux cross check は
+`alsa-sys` が cross `pkg-config` sysroot 未設定で停止し、いずれも権限・環境回避は行っていない。
+
+**main の検収（sandbox 外で実行）**:
+
+| 検証 | 結果 |
+|---|---|
+| ワークスペース clippy（`-D warnings`） | exit 0 |
+| 該当 4 crate の lib テスト | **348 passed / 0 failed**（daemon 224 / sandbox 83 / child-runtime 29 / rack child 12） |
+| **D1〜D15 変異ログの実物検分** | **15 件すべてに `test result: FAILED. 0 passed; 1 failed` + panic トレース**。各変異が対応する 1 件だけを殺しており §5.2 の 1:1 対応どおり |
+
+Codex は sandbox 制約（`tests/common/mod.rs:44` の loopback bind 拒否）に当たった際、
+**迂回せず報告して止まった**。ブリーフの指示どおりで、これは「Codex は sandbox で
+daemon protocol が原理的に走らない = だから検証は main」という分担の根拠そのもの。
+
+🔴 **委譲の監視について**: Codex への発注中、**監視の設計が壊れていて 64 分間停止に
+気づかなかった**（companion の自己申告 `status` は kill 後も `running` のまま残るため、
+待機ループが永久に発火しない）。ログの mtime を生存signal にした `watch-codex.sh` を作成し、
+以後は 7 分沈黙で通知される。詳細は memory `watch-liveness-not-self-reported-status`。
+この監視は claude-tools へ横展開した（ISSUE #292 / PR #293・`/utils:watch-codex`）。
+
+---
+
+### 6.387b 🔴 コミット2〜3 に欠陥が見つかった — UI close が daemon に届かない (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628
+**Status**: 検出・裏取り済み（修正は per-index pump 設計とセットで後続）
+
+**6.387 で「検証済み」として確定させたコミット `12676814` に、実機で必ず踏む欠陥がある。**
+
+- **child が送る**（`orbit-child-runtime/src/ui_service.rs:111-115`）:
+  `{"index":0,"completion":"safepoint-completed"}`（rack 経路 = index あり）
+- **daemon が受ける**（`orbit-audio-sandbox/src/transport.rs:1398-1409`）:
+  `Some("safepoint-completed")` / `Some("timeout-without-save")` の**完全一致のみ**。
+  それ以外は Protocol error
+
+→ **rack child の UI を閉じると 1 枚目ですら Protocol error になり、event ring の先頭が
+永久に詰まる。**
+
+**なぜ全テストを通過したか**: child 側の多重化は unit で証明され、daemon 側の受理も unit で
+証明されていて、**その 2 つを繋ぐ層だけが誰にも触られていなかった**。699 tests green・
+clippy exit 0・変異 6 種 RED をすべて通っている。core spec の
+「壊れるのは配線であり、配線は E2E でしか見えない」の実例がまた 1 つ増えた。
+
+**発見経路**: Codex がコミット 4 の実装中に「設計が『自然対応』とする前提と現コードが
+一致しない」と報告して停止 → Fable の per-index 設計調査が具体化 → main が実コードで裏取り。
+
+**あわせて判明した 2 件**:
+
+1. **TS が wire に `chain_path` を送っていない**（`packages/` の grep 0 件）。daemon 側は
+   読んで省略時 0 に倒す（`session.rs:323-345`）ので、**index≠0 が黙って 0 に化ける**
+2. 多重 close × timeout 放棄で **ring がデッドロックする**可能性（Fable の机上解析・
+   確信度「中〜高」。実装冒頭に再現 fixture を書いて反証する手順つき）
+
+---
+
+### 6.387c design: `UiEventPump` を per-index 化する設計（owner 決定 A）(#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628
+**Status**: 設計完了（起案 = Fable / 実装は後続）
+**成果物**: `docs/design/628-ui-pump-per-index-design.md`（619 行）
+
+**問題**: child 側だけ多重ウィンドウ化され、daemon の `UiEventPump` は **child 単位の単一
+`UiPumpState`** のまま（`generation` / `pending_safepoint` / `abandoned_safepoint` /
+`lifecycle` が各 1 つ）。`begin_open` は `lifecycle != Closed` を loud に拒否するので、
+**1 child につき UI 1 枚しか開けない**。
+
+実装設計書 §3.1-(6) の「daemon の UI pump は instanceId キーなので**多重に自然対応する**」
+という記述は誤りで、決定表 #12 で確信度「**高**」とされていた項目だった。
+
+**owner 判断（2026-08-28）: 案 A（pump を per-index 化）を採用。** v1 を 1 枚に制限する案 B は
+spec SC.10.10.1（`ui("名前")` = 一致するもの全部を開く）を後退させるため不採用。
+
+**設計の要点**:
+
+- **`generation` は child 単位のまま。** ring は child につき 1 本なので、per-index 化は
+  「1 つの事実の N 重複製」で**今回の事故と同型の乖離可能状態**を作る。index は別次元で持つ
+- **ack 照合キーは `(generation, index, evt_seq)` の三つ組。** seq 単独でも現状は足りるが、
+  **その十分性が他所の実装詳細に依存する**ため index を照合へ加え、取り違えを loud にする
+- **`lifecycle` と `abandoned_safepoint` は per-index map。** 単一 `Option` だと 2 件目の放棄が
+  1 件目を上書きし、遅着 ack が誤拒否される
+- **冪等 open は pump に置かない。** PH.2c は「DSL は冪等 / MCP は非冪等」を要求しており、
+  経路の知識は TS 層が持つ
+- **TS ↔ daemon の写像は TS session 簿記が open 時に確定して保持**（§3.4-(5) の instanceId
+  キー化は撤回）。「open 中 UI の index 不変」を不変条件として導入する
+
+**確認済み事実 20 件（F1-F20・全行番号つき）と未確認 3 件（U1-U3）を分離**して記述されている。
+前回の穴が「検証していない前提を書いた」ことから生まれたため、起案時に
+「確認した項目には行番号を、していない項目には未確認と明記」を条件として課した。
+失敗モード↔テスト対応表は 24 行（全行に変異つき・4 種横断）。
+
+**owner 確認事項が 1 件残っている**: 「open 中の UI がある stage より前を drop/insert すると、
+その UI は保存つきで自動 close される（自動 re-open なし）」を v1 挙動として受容するか。
+
+### 6.387 feat: 1 つの child が N プラグインを直列に回す (#628 コミット2〜3) (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #628
+**Status**: 完了（実装 = Codex / 検証 = main）
+
+ラック実装の心臓部。**1 bus = 1 child = 1 プラグイン**だった構造を、**1 child が N プラグインを
+直列に回す**形へ変える。これができるとチェーン編集が child の respawn を伴わなくなり、
+#625 の差し替え dry 窓が消える。
+
+**`transport.rs`（`orbit-audio-sandbox`）**:
+
+- `SharedRegion` の**末尾**に `active_stage_index: AtomicU32` を追加（既存 field のオフセット不変）。
+  crash 時に watchdog がこれを読んで「どの stage で落ちたか」を stderr に出せる
+- mailbox 定数 `CMD_APPLY_CHAIN=4` / `CMD_SAVE_STATE_AT=5` / `CMD_OPEN_UI_AT=6` /
+  `CMD_CLOSE_UI_AT=7`。既存 1〜3 は instrument child と共有のため**番号温存**
+
+**新 crate `orbit-effect-rack-child`（2014 行）**:
+
+- CLAP / VST3 の両ホストを 1 binary にリンクし、stage list を直列に走査する。
+  format は **path の拡張子だけ**で判定（manifest に `format` という語を持たせない = CAP.6-1）
+- `standard` stage は **自 exe の隣の `std-plugins/<name>.clap`**（`ORBIT_STD_PLUGIN_DIR` で
+  上書き可）へ解決。実体が CLAP であることは child 内部の知識に閉じる
+- stage list の差し替えは **generation 付き `AtomicPtr` の 1 回 swap**。旧リストは
+  **retire スロット経由で main スレッドが破棄**する（プラグイン破棄を audio 側で走らせない）
+- `CMD_APPLY_CHAIN` は **prepare-commit**: load を全部済ませてから block 境界で 1 回 swap。
+  途中失敗は旧チェーン無傷で abort し、failed index と原因を返す
+- `UiService` を **index → window の多重レジストリ**へ一般化（同一 child 内で複数ウィンドウ）。
+  同 index への再 open は冪等 no-op（`ui()` は楽譜に残り再評価のたびに走るため必須）
+
+🔴 **Linux CI の罠に正面から対処されている**: 3 つのホスト/ランタイム依存をすべて
+`[target.'cfg(target_os = "macos")'.dependencies]` に置き、**macOS 限定の `orbit-vst3-host` が
+Linux の依存グラフに入らない**ようにしてある。#622 と PR #632 で 2 回踏んだクラス。
+
+## 委譲と検証の経緯（記録）
+
+実装は Codex（`--effort xhigh`）に発注した。**Codex は検証の途中で外部から kill され、
+報告を返さないまま消えた。** 変異検証はその手前で止まっていた。
+
+🔴 **私の監視が壊れており、64 分気づかなかった。** companion の自己申告 `status` を見ていたが、
+kill されると `"running"` のまま残る（stale）ため、`until status != running` のループは
+**永久に発火しない**設計だった。owner 指摘を受けて `watch-codex.sh` を作成 —
+**生存signal をログの mtime にし、7 分沈黙で通知**する。memory
+`watch-liveness-not-self-reported-status` に保存。
+
+死因の切り分け: 最後に走っていた `cargo test -p orbit-child-runtime -p orbit-clap-host
+-p orbit-audio-sandbox` を私が回したら **exit 0・数秒**で完了。**ハングではなく外部 kill**
+と確定した（「1 時間応答なし」を即ハングと断定しないこと）。
+
+**成果物は使える状態だったので、検証を main が引き継いだ**（もともと検証は main の担当）。
+
+## 検証（すべて main が sandbox 外で実行）
+
+| 検証 | 結果 |
+|---|---|
+| ワークスペース clippy（`-D warnings`） | exit 0 |
+| ワークスペース全テスト | **699 passed / 0 failed / 36 ignored** |
+| rack child のテスト | 12 passed + `#[ignore]` 3 件（実機 `Gain.clap` 使用）も pass |
+| Linux ターゲット確認 | rack child / sandbox / child-runtime **OK** |
+
+`orbit-clap-host` の Linux クロスだけは `alsa-sys` のビルドで落ちるが、これは
+`orbit-audio-native → cpal → alsa` という**通常の依存**が ALSA ヘッダを要求するためで、
+本 PR とは無関係（Codex は `orbit-clap-host/Cargo.toml` を触っていない）。CI は Linux
+ランナーで見る。
+
+## 変異検証（main 実施・4 種横断・全 RED）
+
+| # | C 行 | 種別 | 変異 | 捕捉したテスト |
+|---|---|---|---|---|
+| M1 | C1 | 順序入替 | stage 走査を逆順 | C1 / C9 / C11 の 3 件 |
+| M2 | C4 | 分岐反転 | `enabled` 判定を反転 | C1 / C2 / C4 / C6 / C11 の 5 件 |
+| M3 | C9 | 呼び出し削除 | `active_stage.store` を削除 | C9 |
+| M4 | C10 | 引数差し替え | `save_state_at` を常に index 0 へ | C10 |
+| M5 | C12 | 引数差し替え | `.clap` を VST3 ホストへ誤配線 | C12 |
+| M6 | C13 | 分岐削除 | `ORBIT_STD_PLUGIN_DIR` の上書きを無視 | C13 |
+
+restore は `cmp` で完全一致を確認し、変異なしで green 復帰も確認。
+**`#[ignore]` の 3 件（C5 / C13 実物 / C14）は実機 `Gain.clap` で pass** — コミット 1 で作った
+標準プラグインが rack の中で実際に動き、**param 名 `db` が DSL 契約どおり引ける**ことの証明。
+
+## レビューへの申し送り
+
+`AudioChain::adopt_at_block_boundary` に **audio スレッドでの `panic!`** がある
+（retire スロットが未回収なら panic）。`apply` 経路は publish 前に必ず `collect_retired()` を
+呼び、`has_pending()` と `pending_stage_drops` の二重ガードがあるので設計上は到達しないが、
+**踏めば child が落ちて音が止まる**。RT パスに panic を置く判断はレビューで問う価値がある。
+
+### 6.386 feat: 標準プラグイン `Gain` — 同梱 CLAP としての初号 (#628) (Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #628
+**Status**: 完了（crate + bundle + アプリ同梱 + 出荷ゲート）
+
+ラック実装（Stage 1）のコミット 1。**同梱経路が通っていないと後段が標準プラグインを解決
+できない**ため、ここが先頭になる。
+
+**設計上の位置づけ**（SC.10.8 / 設計 §2.5）: 標準プラグインは「engine に DSP を抱えない」
+という確定原則に沿って、**普通の CLAP プラグイン**として作る。rack child から見れば
+カタログのプラグインと同じ 1 stage であり、特別な処理経路を持たない。違いは 3 点だけ:
+**アプリに同梱される** / **UI を持たない** / **state ファイルを持たない**。
+
+**新規 crate `orbit-std-gain`**:
+
+- CLAP effect（stereo in/out）。param は `db` の 1 本のみ。範囲 -96〜+24 dB、既定 0（素通し）
+- 🔴 **CLAP param 名 = DSL の名前付き引数名**（SC.10.8 規範 5-6）。`Gain(db: -6)` の `db` が
+  そのまま CLAP param `db` へ写る。破っても**型エラーにならず無言で効かなくなる**
+- `gui` / `state` 拡張を**宣言しない**。これが daemon 側の「標準要素への UI open / state save は
+  明示エラー」の根拠になる
+- 下限 -96 dB は**完全な 0.0** に落とす（微小な残響が「無音にした」stage から漏れないように）
+- 非有限値は乗算の手前で潰す（RT スレッドに NaN の判断を残さない）
+
+**bundle と同梱**:
+
+- `bundle-macos.sh` が cdylib を `.clap` bundle へ組む。**plugin 名は手打ちせず `lib.rs` の
+  定数から読み出す**（片方だけ直し忘れる形を作らない）
+- `scripts/copy-daemon-bin.sh` が `std-plugins/Gain.clap` を **child 実行ファイルの隣**へ配置。
+  child が `std-plugins/<name>.clap` で解決するため、置くだけで配線は不要。
+  bundle はディレクトリなので #540 の code-signing キャッシュ問題を避けて毎回作り直す
+- 🔴 **release.yml の post-package gate にも追加した**。packaging スクリプトのヘッダが述べる
+  とおり、出荷物を実際に保証しているのはこの gate である。**同梱が落ちても
+  ビルドもテストも緑のまま**で、DSL の `Gain(db: …)` が実行時に解決できずに落ちるだけなので、
+  gate を足さずに packaging だけ足すのは「一段手前で列挙を止める」形になる
+
+**検証**:
+
+- ユニット 8 件 + contract 4 件 = **12 件 green**
+- 🔴 **contract テストは in-process でプラグインを起こす**（`load_from_clack`）。dylib を
+  dlopen しないのでビルド順に依存せず、`#[ignore]` も要らない
+- **実ローダーでの確認**: `orbit-plugin-scan probe-artifact` が bundle を読み、
+  `name: "Gain"` / `category: clap.plugin` / `audio-effect|utility|stereo` を返す。
+  **`nm` で `clap_entry` が見えることはロードできる証明にならない**ので、
+  ビルド直後と**同梱先の両方**で実ローダーに通した
+- `cargo clippy --all-targets --features outproc-effect,outproc-instrument -- -D warnings`
+  をワークスペース全体で green。Linux ターゲットは `-p orbit-std-gain` で green
+  （ワークスペース全体の Linux クロスは `alsa-sys` がホストに ALSA ヘッダを要求するため
+  ローカルでは不可。CI が Linux ランナーで見る）
+
+**変異検証（壊し方 4 種を横断）**:
+
+| 変異 | 結果 |
+|---|---|
+| (a) 分岐反転: 無音フロアの判定 `<=` → `<` | `the_floor_is_exact_silence_not_merely_quiet` **red** |
+| (b) 引数差し替え: param 名 `db` → `gain` | ユニット + contract の**両方** red |
+| (c) 呼び出し回数: params の `count` 1 → 2 | `the_only_param_is_named_exactly_as_the_dsl_argument` **red** |
+| (d) 構成変更: `PluginGui` を登録 | **コンパイルエラー**（`PluginGuiImpl` 未実装）= 型が捕まえた |
+| (e) 構成変更: 最小 GUI 実装を書いて登録 | `declares_neither_ui_nor_state` **red** |
+
+🔴 **(b) が最初は contract テストを red にしなかった。** `info.name` を定数
+`PARAM_DB_NAME` と比べていたため、**定数を書き換えると両辺が一緒に動いて緑のまま通る**
+トートロジーだった。リテラル `b"db"` との比較を足して修正し、再実行で両方 red を確認。
+(d) は型が先に捕まえたためテストが実行されず、テストが空回りしていないことを (e) で別途確認した。
+
+restore 後は `cmp` でバックアップとの完全一致を確認し、全 12 件の green 復帰も確認済み。
+
+### 6.385 spec: 実装より先に spec を #628 の到達点へ揃える（Stage 0）(Aug 27, 2026)
+
+**Date**: 2026-08-27
+**Issue**: #628
+**Status**: 完了（設計書 §3.8 の 5 点すべて）
+
+ラック形チェーンの実装（#628 Stage 1）に着手する前に、**設計書の完了条件 §1-9 が要求する
+「spec 更新が実装より先」**を満たす工程。PR #632 は SC.10 の制定と core spec への移行注記
+までで、**§3.8 が挙げる 5 点は手つかずで残っていた**。
+
+🔴 **着手時に実ファイルで現況を照合したところ、PR #632 の本文が「core spec の誤りを訂正」と
+宣言していた当の文が未訂正で残っていた** — PH.2b の「チェーンは将来拡張（エンジン内部は
+順序付きリストで実装済み・DSL 側のガード解放のみ）」。宣言と実体のずれであり、grep 一発で
+照合できる形だった。この文を信じて #522 を見積もると誤る（順序付きリストを持っていたのは
+**TS 側の帳簿だけ**で長さは常に 1、daemon は 1 bus = 1 child なので**ガードを外しても
+複数 insert は持てない**）。
+
+**変更内容**（§3.8 の項番に対応）:
+
+1. `INSTRUCTION_ORBITSCORE_DSL.md` PH.2 / PH.2b — 「チェーンは将来拡張」を SC.10 のラック形へ
+   訂正。PH.2b には**何が誤りだったかを明示した訂正注記**を残した（同じ誤解を再生産しないため）。
+   PH.2d に SC.10 の要点（後勝ち・LCS・削除は配列から・`enabled` は単位元・ラックは値・
+   標準プラグイン）を要約として追加し、旧記述は「#625 時点の記述」として区切った。
+2. 同 PH.2c — `ui([index][, open])` を **SC.10.10.1 の名前形**（無引数 = instrument /
+   文字列 = 一致する insert をすべて開く）へ書き換え。主経路が Cmd+Click であること、
+   DSL に残す理由が **LLM から駆動できること**である点も明記。PC.3 にラック配列内・
+   複数行・`layer` 入れ子での補完発火（SC.10.10 規範 1）を追記。
+3. `SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.5 — **effect チェーンの編集が (i) prepare-commit 型へ
+   昇格**し、**差し替えの dry 窓が消える**ことを明記。(ii) in-place 型が残るのは
+   「チェーン → 空」の teardown・stream 停止・crash respawn の 3 経路だけ。`remove()` が
+   #628 で撤去されたことへの相互参照も付けた。
+4. `ENGINE_DAEMON_PROTOCOL.md` — **`ApplyEffectChain` を新設**（目標状態の全体を 1 コマンドで
+   運ぶ・`keep`/`load` op・`catalog`/`standard`/`layer` の kind・`save_dropped`・
+   `mode: diff|rebuild`）。`ReplacePlugin(role="effect")` と `UnloadPlugin` に**退役注記**。
+   `GetPluginState` ほかに **`chain_path`（0 始まりの整数配列）** を追加。MCP
+   `open_plugin_ui` も index から `chain_path` へ改めることを §8 に記載。
+5. 同 core spec の plugin 経路 note-off 規定 — **instrument ブランチの無効化・削除**を強制
+   note-off の発火ケースとして追記。**仕様の追記のみで runtime 実装は Stage 2**（#606 が作る
+   flush 機構を発火点から呼ぶ・note-off 配送機構を二重に作らない）。
+
+**副次的な注意**: 訂正注記に旧構文のリテラルをそのまま書くと、完了条件 §1-12 の列挙コマンド
+（`.ui(` の数値形が 0 件であること）が**自分の注記に引っかかって偽陽性を出す**。リテラルを
+含まない書き方へ直した。列挙で完全性を担保する設計では、**説明文もその列挙の対象になる**。
+
+**検証**: 未完了を発見したときと同じ grep を再実行し、5 点すべてが解消したことを確認。
+実装側に残る `.ui(数値)` は engine/src 3 件・tests 13 件で、これは Stage 1 のコミット 5 で処置する。
+
 ### 6.384 fix: spike テストが Linux で壊れていた（#622 と同じクラスを踏んだ）(Aug 27, 2026)
 
 **Date**: 2026-08-27

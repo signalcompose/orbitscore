@@ -9,6 +9,7 @@ members = [
   "crates/orbit-clap-spike",
   "crates/orbit-clap-host",
   "crates/orbit-clap-effect-child",
+  "crates/orbit-effect-rack-child",
   "crates/orbit-clap-instrument-child",
   "crates/orbit-child-ui",
   "crates/orbit-child-runtime",
@@ -20,6 +21,7 @@ members = [
   "crates/orbit-vst3-gain-oracle",
   "crates/orbit-vst3-synth-oracle",
   "crates/orbit-plugin-scan",
+  "crates/orbit-std-gain",
 ]
 # 🔴 orbit-link-audio(GPL 隔離 crate)は **member にしない**。
 # member にすると default の `cargo build` / cargo-deny がこの GPL crate を root として

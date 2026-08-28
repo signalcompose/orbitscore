@@ -19,7 +19,6 @@ import {
   MixerInit,
   MixerNodeDecl,
   NamedArg,
-  PlayStack,
   PlayElement,
 } from './types'
 import { ParserUtils } from './parser-utils'
@@ -176,12 +175,17 @@ export class StatementParser {
    */
   private parseChordBinding(variableName: string): { statement: ChordBinding; newPos: number } {
     const ep = new ExpressionParser(this.tokens, this.pos)
-    const stackResult = ep.parseArgument()
+    const stackResult = ep.parseValueArray()
     this.pos = stackResult.newPos
-    const stack = stackResult.value as PlayStack
+    const stack = stackResult.value
 
     return {
-      statement: { type: 'chord_binding', variableName, voices: stack.voices },
+      statement: {
+        type: 'chord_binding',
+        variableName,
+        voices: stack.elements,
+        value: stack,
+      },
       newPos: this.pos,
     }
   }
@@ -582,7 +586,7 @@ export class StatementParser {
     target: string,
     method: string,
   ): { statement: Statement; newPos: number } {
-    const argsResult = this.parseArguments()
+    const argsResult = this.parseArguments(method)
     this.pos = argsResult.newPos
 
     // Check if this is a transport command
@@ -669,7 +673,7 @@ export class StatementParser {
       // Check if chained method has arguments
       this.pos = ParserUtils.skipNewlines(this.tokens, this.pos)
       if (ParserUtils.current(this.tokens, this.pos).type === 'LPAREN') {
-        const chainArgsResult = this.parseArguments()
+        const chainArgsResult = this.parseArguments(chainMethod)
         this.pos = chainArgsResult.newPos
         chain.push({ method: chainMethod, args: chainArgsResult.args })
       } else {
@@ -766,7 +770,7 @@ export class StatementParser {
   /**
    * Parse method arguments
    */
-  private parseArguments(): { args: any[]; newPos: number } {
+  private parseArguments(valueAwareMethod?: string): { args: any[]; newPos: number } {
     const lparenResult = ParserUtils.expect(this.tokens, this.pos, 'LPAREN')
     this.pos = lparenResult.newPos
     const args: any[] = []
@@ -810,7 +814,10 @@ export class StatementParser {
         )
       }
       const expressionParser = new ExpressionParser(this.tokens, this.pos)
-      const argResult = expressionParser.parseArgument()
+      const argResult =
+        (valueAwareMethod === 'effect' || valueAwareMethod === 'instrument') && args.length === 0
+          ? expressionParser.parseValueExpression()
+          : expressionParser.parseArgument()
       this.pos = argResult.newPos
       // A scope chain (PlayScoped) applies to the whole juxtaposition run: pull
       // the preceding sibling groups (since the last comma) into its groups so

@@ -30,3 +30,10 @@ jobs:
 
     - name: Lint code
       run: npm run lint
+
+    # `tests/` は build の references にも入っておらず、eslint は未定義変数の参照のような
+    # 意味論エラーを見ない。その隙間から gated E2E に**実行時に必ず ReferenceError で落ちる**
+    # 未定義変数が出荷された（#639 レビュー）。実機ゲートは手動起動なので、CI で型が通ることを
+    # 確かめておかないと「走らせた瞬間に落ちる」状態に気づけない。
+    - name: Typecheck gated E2E
+      run: npm run typecheck:e2e

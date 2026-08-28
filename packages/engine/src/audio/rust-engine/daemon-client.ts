@@ -22,6 +22,8 @@ import { v4 as uuidv4 } from 'uuid'
 import WebSocket from 'ws'
 
 import type {
+  EffectChainApplyRequest,
+  EffectChainApplyResult,
   PluginLoadResult,
   PluginReplaceResult,
   PluginUnloadResult,
@@ -132,7 +134,15 @@ export function isDaemonNonErrorTracingLine(line: string): boolean {
   // tracing 既定形式の「ISO timestamp + level token」だけを non-error と認める。
   // 判定を緩めて本文中の "INFO" を拾うと本物のエラーが log から消える側に倒れるので、
   // 迷ったら error 側（従来挙動）へ。
-  if (/^\s*\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO)\s/.test(plain)) return true
+  //
+  // 🔴 `WARN` を非エラー側に入れているのは意図的（owner 判断・2026-08-28）。**警告は定義上
+  // エラーではない。** #628 で rack child に tracing subscriber を入れたところ、副作用で
+  // `orbit-clap-host` の中継が un-silence され、**プラグイン自身の正常動作の警告**
+  // （`NotePortsExtension なし; port 0 を使用` 等）が `ERROR:` として記録された。
+  // 実機ゲートで**既存テストを含む 7 件**が「ERROR 行が増えた」で落ちたのがこれ
+  // （15 → 17）。行そのものは `get_log` に残る — `console.error` ではなく
+  // `console.log` へ回るだけで、**診断が消えるわけではない**。
+  if (/^\s*\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO|WARN)\s/.test(plain)) return true
   // child プロセスは daemon の stderr を継承し、tracing を持たない(依存を足していない)。
   // level トークンを自分で名乗った行だけを非エラーとして認める(例: "plugin.process() failed")。
   //
@@ -142,7 +152,7 @@ export function isDaemonNonErrorTracingLine(line: string): boolean {
   // **state 復元のたびに正常動作が ERROR として記録されていた**(実機 E2E で発覚)。
   // 判定に load-bearing なのは (1) 自分のコンポーネントのタグであること (2) 非エラーの
   // level を名乗っていること の 2 点で、接尾辞ではない。
-  return /^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+\]\s/.test(plain)
+  return /^\s*(TRACE|DEBUG|INFO|WARN)\s+\[orbit-[a-z0-9-]+\]\s/.test(plain)
 }
 
 /**
@@ -501,6 +511,46 @@ export class DaemonClient extends EventEmitter {
     }
   }
 
+  async applyEffectChain(request: EffectChainApplyRequest): Promise<EffectChainApplyResult> {
+    const result = await this.request('ApplyEffectChain', {
+      role: 'effect',
+      ...(request.bus ? { bus: request.bus } : {}),
+      mode: request.mode,
+      chain: request.chain,
+      save_dropped: request.saveDropped,
+    })
+    if (result.status !== 'applied') {
+      throw new Error(`ApplyEffectChain returned an invalid status: ${String(result.status)}.`)
+    }
+    const dropped = Array.isArray(result.dropped) ? result.dropped : []
+    return {
+      status: 'applied',
+      childPid:
+        typeof result.child_pid === 'number' && Number.isSafeInteger(result.child_pid)
+          ? result.child_pid
+          : null,
+      dropped: dropped.map((entry, index) => {
+        if (!entry || typeof entry !== 'object') {
+          throw new Error(`ApplyEffectChain dropped[${index}] is not an object.`)
+        }
+        const value = entry as Record<string, unknown>
+        if (
+          !Number.isSafeInteger(value.prev_index) ||
+          typeof value.path !== 'string' ||
+          typeof value.bytes_written !== 'number' ||
+          !Number.isFinite(value.bytes_written)
+        ) {
+          throw new Error(`ApplyEffectChain dropped[${index}] has an invalid result shape.`)
+        }
+        return {
+          prevIndex: Number(value.prev_index),
+          path: value.path,
+          bytesWritten: value.bytes_written,
+        }
+      }),
+    }
+  }
+
   /** Unloads an effect slot without releasing or deactivating its bus. */
   async unloadPlugin(role: 'effect', bus?: string): Promise<PluginUnloadResult> {
     const result = await this.request('UnloadPlugin', {
@@ -523,6 +573,7 @@ export class DaemonClient extends EventEmitter {
       role: target.role,
       ...(target.role === 'effect' && target.bus ? { bus: target.bus } : {}),
       ...(target.role === 'instrument' ? { instance: target.instance } : {}),
+      chain_path: this.pluginChainPath(target),
     })
     const bytesWritten = result.bytes_written
     if (typeof bytesWritten !== 'number' || !Number.isFinite(bytesWritten)) {
@@ -549,15 +600,18 @@ export class DaemonClient extends EventEmitter {
     windowTitle: string,
   ): Promise<void> {
     await this.request('OpenPluginUI', {
-      target,
-      index,
+      target: this.wirePluginTarget(target),
+      chain_path: this.pluginChainPath(target, index),
       windowTitle,
     })
   }
 
   /** この Promise は Phase A の受理 ack。close 完了は player が DONE event で判定する。 */
   async acceptClosePluginUi(target: PluginStateSaveTarget, index: number): Promise<void> {
-    await this.request('ClosePluginUI', { target, index })
+    await this.request('ClosePluginUI', {
+      target: this.wirePluginTarget(target),
+      chain_path: this.pluginChainPath(target, index),
+    })
   }
 
   async ackUiSafepoint(
@@ -567,11 +621,30 @@ export class DaemonClient extends EventEmitter {
     evtSeq: number,
   ): Promise<void> {
     await this.request('AckUiSafepoint', {
-      target,
-      index,
+      target: this.wirePluginTarget(target),
+      chain_path: this.pluginChainPath(target, index),
       generation,
       evt_seq: evtSeq,
     })
+  }
+
+  /** The sole legacy UI-index → wire chain_path mapping (effects are 1-based in TS). */
+  private pluginChainPath(target: PluginStateSaveTarget, legacyIndex?: number): readonly number[] {
+    const path =
+      target.chainPath ??
+      (legacyIndex === undefined ? [0] : [target.role === 'effect' ? legacyIndex - 1 : legacyIndex])
+    if (path.length !== 1 || !Number.isSafeInteger(path[0]) || Number(path[0]) < 0) {
+      throw new Error(
+        `plugin chain_path must contain one non-negative integer: ${JSON.stringify(path)}.`,
+      )
+    }
+    return [Number(path[0])]
+  }
+
+  private wirePluginTarget(target: PluginStateSaveTarget): Record<string, unknown> {
+    return target.role === 'effect'
+      ? { role: 'effect', ...(target.bus ? { bus: target.bus } : {}) }
+      : { role: 'instrument', instance: target.instance }
   }
 
   /**

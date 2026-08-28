@@ -37,6 +37,14 @@ pub use events::{
 pub use instrument::{ClapInstrumentAudio, ClapInstrumentProcessor};
 pub use orbit_audio_native::PostProcessor;
 pub use plugin_main::ClapPluginMain;
+
+/// One resolved CLAP parameter update. Names are resolved on the plugin home thread; the compact
+/// id/value pair is then flushed by the audio half at a block boundary.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClapParamValue {
+    pub id: u32,
+    pub value: f64,
+}
 pub use processor::{ClapPostProcessor, ClapProcessorStats, InstallMsg};
 pub use state::EMPTY_STATE_FROM_PLUGIN;
 

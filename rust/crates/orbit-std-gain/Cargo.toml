@@ -1,0 +1,45 @@
+# orbit-std-gain — 標準プラグイン `Gain`（SC.10.8）
+#
+# OrbitScore の「標準プラグイン」の初号。カタログのプラグインと違い、**アプリに同梱**され、
+# **UI も state ファイルも持たない**。パラメータは DSL が唯一の真実である。
+#
+# 🔴 CLAP の param 名は **DSL の名前付き引数名と一致していなければならない**（SC.10.8 規範 5-6）。
+#    `Gain(db: -6)` の `db` が、そのまま CLAP param `db` に写る。両端とも 1st-party なので
+#    この契約が成立する。破ると DSL から値が届かなくなる（`param_name_matches_the_dsl_argument`
+#    がこれを守る）。
+[package]
+name = "orbit-std-gain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Bundled standard CLAP gain plugin for OrbitScore racks (SC.10.8)"
+publish = false
+
+[lib]
+# cdylib = .clap bundle 本体 / rlib = ユニットテストと将来のホスト側検証用
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+clack-plugin = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744" }
+clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744", features = [
+  "clack-plugin",
+  "audio-ports",
+  "params",
+] }
+
+[dev-dependencies]
+# host 側から自分自身を in-process で起こし、SC.10.8「UI も state も持たない」を
+# 実行可能な形で検証するために使う（dlobj を dlopen しないのでビルド順に依存しない）。
+clack-host = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744", features = [
+  "clack-plugin",
+] }
+clack-extensions = { git = "https://github.com/prokopyl/clack", rev = "f874e858ad576c601367b3038af5088a4e671744", features = [
+  "clack-host",
+  "clack-plugin",
+  "audio-ports",
+  "params",
+  "state",
+  "gui",
+] }

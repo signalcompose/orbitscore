@@ -2,6 +2,8 @@
  * global.sum() / global.aux() — mixer group/return bus declarations (MX.2/MX.3, #459/#453 M3).
  */
 
+import * as fs from 'node:fs'
+import * as os from 'node:os'
 import path from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -9,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Global } from '../../packages/engine/src/core/global'
 import { MIXER_BUS_POOL_SIZE } from '../../packages/engine/src/core/global/mixer-manager'
 import { ProjectStateStore } from '../../packages/engine/src/core/project-state-store'
+import { installEffectChainMock } from '../helpers/effect-chain-mock'
 
 const REPLACE_RESULT = {
   pluginId: 'replacement-id',
@@ -16,8 +19,11 @@ const REPLACE_RESULT = {
   notePortIndex: 0,
   quarantinedSlot: false,
 }
+const temporaryDirectories: string[] = []
 
 function makeGlobal(loadPlugin = vi.fn().mockResolvedValue({})) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-mixer-effect-'))
+  temporaryDirectories.push(directory)
   const replacePlugin = vi.fn().mockResolvedValue(REPLACE_RESULT)
   const engine = {
     loadPlugin,
@@ -26,12 +32,18 @@ function makeGlobal(loadPlugin = vi.fn().mockResolvedValue({})) {
     quit: vi.fn(),
     isRunning: true,
   } as any
+  installEffectChainMock(engine)
   const global = new Global(engine)
-  global.setDocumentDirectory('/songs/session')
-  return { global, loadPlugin, replacePlugin }
+  global.setDocumentDirectory(directory)
+  return { global, loadPlugin, replacePlugin, directory }
 }
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  for (const directory of temporaryDirectories.splice(0)) {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
 
 describe('Global.sum() / Global.aux()', () => {
   it('allocates the first pool bus per kind, in declaration order', () => {
@@ -110,11 +122,11 @@ describe('Global.sum() / Global.aux()', () => {
   })
 
   it('handle.effect() loads via LoadPlugin(role=effect, bus=<sum/aux bus>)', async () => {
-    const { global, loadPlugin } = makeGlobal()
+    const { global, loadPlugin, directory } = makeGlobal()
     const handle = global.sum('drum')
     await handle.effect('./GlueComp.clap')
     expect(loadPlugin).toHaveBeenCalledWith(
-      path.resolve('/songs/session', 'GlueComp.clap'),
+      path.resolve(directory, 'GlueComp.clap'),
       undefined,
       'effect',
       'sum-bus-0',
@@ -130,7 +142,7 @@ describe('Global.sum() / Global.aux()', () => {
 
   it('handle.effect() replaces a different path on the allocated bus without another load', async () => {
     vi.spyOn(ProjectStateStore.prototype, 'save').mockResolvedValue({} as any)
-    const { global, loadPlugin, replacePlugin } = makeGlobal()
+    const { global, loadPlugin, replacePlugin, directory } = makeGlobal()
     await global.sum('drum').effect('./GlueComp.clap')
 
     await expect(global.sum('drum').effect('./OtherComp.clap')).resolves.toBeDefined()
@@ -138,7 +150,7 @@ describe('Global.sum() / Global.aux()', () => {
     expect(loadPlugin).toHaveBeenCalledTimes(1)
     expect(replacePlugin).toHaveBeenCalledTimes(1)
     expect(replacePlugin).toHaveBeenCalledWith(
-      path.resolve('/songs/session', 'OtherComp.clap'),
+      path.resolve(directory, 'OtherComp.clap'),
       undefined,
       'effect',
       'sum-bus-0',
@@ -146,10 +158,10 @@ describe('Global.sum() / Global.aux()', () => {
   })
 
   it('handle.effect() accepts .vst3 specs', async () => {
-    const { global, loadPlugin } = makeGlobal()
+    const { global, loadPlugin, directory } = makeGlobal()
     await expect(global.sum('drum').effect('Reverb.vst3')).resolves.toBeDefined()
     expect(loadPlugin).toHaveBeenCalledWith(
-      path.resolve('/songs/session', 'Reverb.vst3'),
+      path.resolve(directory, 'Reverb.vst3'),
       undefined,
       'effect',
       'sum-bus-0',

@@ -41,8 +41,11 @@
 
 use std::path::Path;
 
-use clack_host::events::io::InputEvents;
-use clack_host::prelude::{PluginInstance, StartedPluginAudioProcessor};
+use clack_extensions::params::PluginParams;
+use clack_host::events::event_types::ParamValueEvent;
+use clack_host::events::io::{EventBuffer, InputEvents};
+use clack_host::prelude::{Pckn, PluginInstance, StartedPluginAudioProcessor};
+use clack_host::utils::{ClapId, Cookie};
 
 use crate::buffers::HostAudioBuffers;
 use crate::controller::{
@@ -50,7 +53,7 @@ use crate::controller::{
 };
 use crate::host::OrbitClapHost;
 use crate::processor::process_block_core;
-use crate::ClapPluginMain;
+use crate::{ClapParamValue, ClapPluginMain};
 
 /// 単一スレッドで load / process / drop する effect-only CLAP プロセッサ。
 ///
@@ -197,6 +200,8 @@ impl ClapEffectProcessor {
                 plugin: Some(plugin),
                 buffers,
                 steady,
+                param_input: EventBuffer::with_capacity(16),
+                param_output: EventBuffer::with_capacity(16),
             },
             ClapPluginMain {
                 instance: _instance,
@@ -217,9 +222,44 @@ pub struct ClapEffectAudio {
     plugin: Option<StartedPluginAudioProcessor<OrbitClapHost>>,
     buffers: HostAudioBuffers,
     steady: u64,
+    param_input: EventBuffer,
+    param_output: EventBuffer,
 }
 
 impl ClapEffectAudio {
+    /// Flush resolved parameter values on the audio thread at a rack block boundary.
+    /// The event buffers are preallocated during `split`, so the standard-plugin path does not
+    /// allocate in the realtime loop.
+    pub fn apply_param_values(&mut self, values: &[ClapParamValue]) -> Result<(), String> {
+        self.param_input.clear();
+        self.param_output.clear();
+        for value in values {
+            let id = ClapId::from_raw(value.id)
+                .ok_or_else(|| format!("invalid CLAP parameter id {}", value.id))?;
+            self.param_input.push(&ParamValueEvent::new(
+                0,
+                id,
+                Pckn::match_all(),
+                value.value,
+                Cookie::empty(),
+            ));
+        }
+        let plugin = self
+            .plugin
+            .as_mut()
+            .expect("CLAP effect audio remains started until teardown");
+        let mut handle = plugin.plugin_handle();
+        let params = handle
+            .get_extension::<PluginParams>()
+            .ok_or_else(|| "plugin has no CLAP params extension".to_owned())?;
+        params.flush_active(
+            &mut handle,
+            &self.param_input.as_input(),
+            &mut self.param_output.as_output(),
+        );
+        Ok(())
+    }
+
     /// [`ClapEffectProcessor::process_block`] と同一の音響処理（audio スレッド側）。
     #[must_use]
     pub fn process_block(&mut self, data: &mut [f32]) -> bool {

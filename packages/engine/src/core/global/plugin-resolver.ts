@@ -199,29 +199,6 @@ function resolveCatalogCandidates(
 }
 
 /**
- * Resolves a method-form plugin against candidates already matched by normalized
- * method name. Qualification, ambiguity, role, and format precedence stay in the
- * same implementation used by string-form catalog resolution.
- */
-export function resolveCatalogMethodCandidates(
-  methodName: string,
-  candidates: readonly PluginCatalogEntry[],
-  format: string | undefined,
-  vendor: string | undefined,
-  role: PluginRole | undefined,
-  catalogPathOverride?: string,
-): ResolvedCatalogPlugin {
-  const displayName = candidates[0]?.name ?? methodName
-  const spec =
-    format !== undefined
-      ? `${format}/${displayName}`
-      : vendor !== undefined
-        ? `${vendor}/${displayName}`
-        : displayName
-  return resolveCatalogCandidates(spec, candidates, role, resolveCatalogPath(catalogPathOverride))
-}
-
-/**
  * Resolves a catalog (non-path) spec to its path, plugin ID, and matching catalog
  * entries per PC.2: exact name match (case-insensitive/trim/NFC), optional
  * `"vendor/name"` or `"format/name"` qualification, conditional role check, then

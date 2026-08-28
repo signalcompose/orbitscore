@@ -25,7 +25,7 @@ mod ui_service;
 pub mod window;
 
 #[cfg(any(target_os = "macos", test))]
-pub use ui_service::{PluginMainHandle, UiCallbacks, UiService, UI_CLOSE_TIMEOUT};
+pub use ui_service::{PluginMainHandle, UiCallbacks, UiEventHub, UiService, UI_CLOSE_TIMEOUT};
 
 /// Why the child is shutting down. Distinguishing the two is the whole point of returning
 /// an enum instead of `bool`: they look identical from the outside (the process exits) but

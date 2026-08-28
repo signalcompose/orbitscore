@@ -1,9 +1,12 @@
+import * as fs from 'node:fs'
+import * as os from 'node:os'
 import path from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
 import { ProjectStateStore } from '../../packages/engine/src/core/project-state-store'
+import { installEffectChainMock } from '../helpers/effect-chain-mock'
 
 const REPLACE_RESULT = {
   pluginId: 'replacement-id',
@@ -12,7 +15,11 @@ const REPLACE_RESULT = {
   quarantinedSlot: false,
 }
 
+const temporaryDirectories: string[] = []
+
 function makeGlobal(loadPlugin = vi.fn().mockResolvedValue({})) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-global-effect-'))
+  temporaryDirectories.push(directory)
   const replacePlugin = vi.fn().mockResolvedValue(REPLACE_RESULT)
   const engine = {
     loadPlugin,
@@ -21,12 +28,18 @@ function makeGlobal(loadPlugin = vi.fn().mockResolvedValue({})) {
     quit: vi.fn(),
     isRunning: true,
   } as any
+  const applyEffectChain = installEffectChainMock(engine)
   const global = new Global(engine)
-  global.setDocumentDirectory('/songs/session')
-  return { global, loadPlugin, replacePlugin }
+  global.setDocumentDirectory(directory)
+  return { global, loadPlugin, replacePlugin, applyEffectChain, directory }
 }
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  for (const directory of temporaryDirectories.splice(0)) {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
+})
 
 describe('Global.effect()', () => {
   it.each(['synth.component'])('rejects reserved format %s', async (spec) => {
@@ -63,12 +76,12 @@ describe('Global.effect()', () => {
   })
 
   it('eagerly loads once and treats the same resolved path and plugin id as idempotent', async () => {
-    const { global, loadPlugin } = makeGlobal()
+    const { global, loadPlugin, directory } = makeGlobal()
     await expect(global.effect('./echo.clap', 'echo-id')).resolves.toBe(global)
     await global.effect('./echo.clap', 'echo-id')
     expect(loadPlugin).toHaveBeenCalledTimes(1)
     expect(loadPlugin).toHaveBeenCalledWith(
-      path.resolve('/songs/session', 'echo.clap'),
+      path.resolve(directory, 'echo.clap'),
       'echo-id',
       'effect',
     )
@@ -86,7 +99,7 @@ describe('Global.effect()', () => {
 
   it('replaces a second effect with a different path without issuing another load', async () => {
     vi.spyOn(ProjectStateStore.prototype, 'save').mockResolvedValue({} as any)
-    const { global, loadPlugin, replacePlugin } = makeGlobal()
+    const { global, loadPlugin, replacePlugin, directory } = makeGlobal()
     await global.effect('echo.clap')
 
     await expect(global.effect('reverb.clap')).resolves.toBe(global)
@@ -94,7 +107,7 @@ describe('Global.effect()', () => {
     expect(loadPlugin).toHaveBeenCalledTimes(1)
     expect(replacePlugin).toHaveBeenCalledTimes(1)
     expect(replacePlugin).toHaveBeenCalledWith(
-      path.resolve('/songs/session', 'reverb.clap'),
+      path.resolve(directory, 'reverb.clap'),
       undefined,
       'effect',
     )
@@ -102,7 +115,7 @@ describe('Global.effect()', () => {
 
   it('replaces the same path with a different plugin id without issuing another load', async () => {
     vi.spyOn(ProjectStateStore.prototype, 'save').mockResolvedValue({} as any)
-    const { global, loadPlugin, replacePlugin } = makeGlobal()
+    const { global, loadPlugin, replacePlugin, directory } = makeGlobal()
     await global.effect('bundle.clap', 'first-id')
 
     await expect(global.effect('bundle.clap', 'second-id')).resolves.toBe(global)
@@ -110,9 +123,12 @@ describe('Global.effect()', () => {
     expect(loadPlugin).toHaveBeenCalledTimes(1)
     expect(replacePlugin).toHaveBeenCalledTimes(1)
     expect(replacePlugin).toHaveBeenCalledWith(
-      path.resolve('/songs/session', 'bundle.clap'),
+      path.resolve(directory, 'bundle.clap'),
       'second-id',
       'effect',
+      undefined,
+      undefined,
+      expect.stringMatching(/\/states\/.*\.state$/),
     )
   })
 
@@ -121,7 +137,7 @@ describe('Global.effect()', () => {
     const global = new Global(engine)
     global.setDocumentDirectory('/songs/session')
     await expect(global.effect('echo.clap')).rejects.toThrow(
-      'Plugin hosting requires the Rust engine backend',
+      'Effect rack hosting requires the Rust engine backend',
     )
   })
 
@@ -150,62 +166,11 @@ describe('Global.effect()', () => {
     await expect(global.effect('rel.clap')).rejects.toThrow('LinkAudio')
   })
 
-  describe('self-heal after a stale idempotent cache', () => {
-    function makeSelfHealingGlobal(loadPlugin: ReturnType<typeof vi.fn>, isPluginActive: boolean) {
-      const engine = {
-        loadPlugin,
-        isPluginActive: vi.fn().mockReturnValue(isPluginActive),
-        boot: vi.fn(),
-        quit: vi.fn(),
-        isRunning: true,
-      } as any
-      const global = new Global(engine)
-      global.setDocumentDirectory('/songs/session')
-      return global
-    }
-
-    it('re-issues the load when the engine reports the plugin inactive', async () => {
-      const loadPlugin = vi.fn().mockResolvedValue({})
-      const global = makeSelfHealingGlobal(loadPlugin, false)
-
-      await global.effect('./echo.clap', 'echo-id')
-      await expect(global.effect('./echo.clap', 'echo-id')).resolves.toBe(global)
-
-      expect(loadPlugin).toHaveBeenCalledTimes(2)
-      expect(loadPlugin).toHaveBeenNthCalledWith(
-        2,
-        path.resolve('/songs/session', 'echo.clap'),
-        'echo-id',
-        'effect',
-      )
-    })
-
-    it('throws and clears the declaration when the re-issue itself fails, permitting a further retry', async () => {
-      const failure = new Error('daemon rejected the reissue')
-      const loadPlugin = vi
-        .fn()
-        .mockResolvedValueOnce({})
-        .mockRejectedValueOnce(failure)
-        .mockResolvedValueOnce({})
-      const global = makeSelfHealingGlobal(loadPlugin, false)
-
-      await global.effect('echo.clap', 'echo-id')
-      await expect(global.effect('echo.clap', 'echo-id')).rejects.toBe(failure)
-      // Declaration was cleared on failure, so a further call retries the load
-      // (same semantics as an initial-load failure) rather than being treated
-      // as a "different declaration" conflict.
-      await expect(global.effect('echo.clap', 'echo-id')).resolves.toBe(global)
-      expect(loadPlugin).toHaveBeenCalledTimes(3)
-    })
-
-    it('stays a no-op idempotent cache hit when isPluginActive is undefined (back-compat)', async () => {
-      // Covered structurally by the existing "eagerly loads once..." test above
-      // (its mock engine has no isPluginActive), asserted again here to make the
-      // back-compat guarantee explicit for this describe block.
-      const { global, loadPlugin } = makeGlobal()
-      await global.effect('./echo.clap', 'echo-id')
-      await global.effect('./echo.clap', 'echo-id')
-      expect(loadPlugin).toHaveBeenCalledTimes(1)
-    })
+  it('re-evaluates an identical rack through ApplyEffectChain without reloading it', async () => {
+    const { global, loadPlugin, applyEffectChain } = makeGlobal()
+    await global.effect('./echo.clap', 'echo-id')
+    await global.effect('./echo.clap', 'echo-id')
+    expect(applyEffectChain).toHaveBeenCalledTimes(2)
+    expect(loadPlugin).toHaveBeenCalledTimes(1)
   })
 })

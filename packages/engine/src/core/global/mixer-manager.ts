@@ -1,14 +1,16 @@
 import type { AudioEngine } from '../../audio/types'
+import type { RackRecipe } from '../../signal-chain/rack'
 import { createStatePathFallback } from '../project-state-store'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
 import {
   BusPool,
+  type ChainElement,
   EffectChainMap,
-  normalizePluginInstanceName,
-  resolveEffectSpec,
+  resolveEffectRack,
   type PluginSlot,
+  toRackRecipe,
 } from './effect-slot'
 
 /**
@@ -72,13 +74,11 @@ export interface MixerBusHandle {
   readonly bus: string
   readonly kind: MixerKind
   /** Declares (or idempotently re-declares) the bus's own insert (MX.2/MX.3: v1 one insert). */
-  effect(path: string, pluginId?: string): Promise<MixerBusHandle>
-  remove(name: string, occurrence?: number): Promise<MixerBusHandle>
+  effect(value: string | RackRecipe, pluginId?: string): Promise<MixerBusHandle>
   /**
-   * このバスの insert のプラグイン UI を開く / 閉じる（`sum("x").ui(1)` — #617）。
-   * index はチェーン位置（bus の insert は 1 以降）。`open=false` で閉じる。
+   * Open/close every catalog insert matching `name`. A bus has no no-argument instrument UI.
    */
-  ui(index?: number, open?: boolean): Promise<MixerBusHandle>
+  ui(name?: string, open?: boolean): Promise<MixerBusHandle>
   routeOutput(output: string): Promise<MixerBusHandle>
   routeSend(bus: string, amount: number): Promise<MixerBusHandle>
 }
@@ -122,11 +122,11 @@ export class MixerManager {
    * `MixerManager` は `Global` を知らない（循環参照を避けるため）ので、`Global` 側から
    * 注入する。未注入のまま `ui()` が呼ばれたら **loud に失敗する**（黙って no-op しない）。
    */
-  private pluginUiHandler?: (receiverId: string, index: number, open: boolean) => Promise<void>
+  private pluginUiHandler?: (receiverId: string, name: string, open: boolean) => Promise<void>
 
   /** `Global` が構築時に配線する。 */
   setPluginUiHandler(
-    handler: (receiverId: string, index: number, open: boolean) => Promise<void>,
+    handler: (receiverId: string, name: string, open: boolean) => Promise<void>,
   ): void {
     this.pluginUiHandler = handler
   }
@@ -143,6 +143,8 @@ export class MixerManager {
         buses: new Map(),
         inserts: new EffectChainMap(audioEngine, receiverId, {
           externalReceiverId: receiverId,
+          effectBus: (name) => this.kinds?.[kind]?.buses.get(name),
+          projectDirectory: () => audioManager.getDocumentDirectory(),
           statePathFallback: createStatePathFallback(audioManager),
           replacement: {
             beforeReplace: (name, oldSlot) => replacement(receiverId(name), oldSlot),
@@ -217,8 +219,8 @@ export class MixerManager {
   }
 
   /** Current insert chain for an explicitly selected mixer receiver. */
-  chainFor(kind: MixerKind, name: string): readonly PluginSlot[] {
-    return this.kinds[kind].inserts.chainFor(name)
+  chainFor(kind: MixerKind, name: string): readonly ChainElement[] {
+    return this.kinds[kind].inserts.rackFor(name)
   }
 
   /** #579: 曖昧な裸名の診断文言。throw（resolveNode）と warn（declareBus）で同一文言を使う。 */
@@ -285,16 +287,24 @@ export class MixerManager {
       [MIXER_BUS_HANDLE]: true,
       bus,
       kind,
-      effect: (path: string, pluginId?: string) => this.effectFor(kind, name, bus, path, pluginId),
-      remove: (spec: string, occurrence = 0) => this.removeFor(kind, name, bus, spec, occurrence),
-      ui: async (index = 1, open = true) => {
+      effect: (value: string | RackRecipe, pluginId?: string) =>
+        this.effectFor(kind, name, bus, value, pluginId),
+      ui: async (catalogName?: string, open = true) => {
+        if (catalogName === undefined) {
+          throw new Error(`Mixer bus '${formatReceiverId(kind, name)}' has no instrument UI.`)
+        }
+        if (typeof catalogName !== 'string') {
+          throw new Error(
+            'ui() expects a catalog plugin name string; numeric indexes are not supported.',
+          )
+        }
         if (!this.pluginUiHandler) {
           throw new Error(
             `Mixer bus '${formatReceiverId(kind, name)}': plugin UI is not available ` +
               '(no UI handler is wired to this engine)',
           )
         }
-        await this.pluginUiHandler(formatReceiverId(kind, name), index, open)
+        await this.pluginUiHandler(formatReceiverId(kind, name), catalogName, open)
         return this.makeHandle(kind, name, bus)
       },
       routeOutput: async (output: string) => {
@@ -338,41 +348,23 @@ export class MixerManager {
     kind: MixerKind,
     name: string,
     bus: string,
-    spec: string,
+    value: string | RackRecipe,
     pluginId: string | undefined,
   ): Promise<MixerBusHandle> {
     // LinkAudio gate は declareBus() 済みでも維持する（respawn/reload 経路で effect() 単独が
     // 再実行され得るため — resolveEffectSpec が spec 検証 → gate → 解決の順序を保証する）。
-    const resolved = resolveEffectSpec(
-      spec,
-      pluginId,
+    const recipe = toRackRecipe(value, pluginId)
+    if (this.linkAudioManager.isEnabled()) {
+      throw new Error(
+        `${kind}("${name}").effect() cannot be used while LinkAudio is enabled in v1.`,
+      )
+    }
+    const rack = resolveEffectRack(
+      recipe,
       { audioManager: this.audioManager, linkAudioManager: this.linkAudioManager },
       `${kind}("${name}").effect() cannot be used while LinkAudio is enabled in v1.`,
     )
-    await this.kinds[kind].inserts.declare(
-      name,
-      {
-        role: 'effect',
-        bus,
-        normalizedName: normalizePluginInstanceName(spec),
-        resolvedPath: resolved.path,
-        pluginId: resolved.pluginId,
-      },
-      () =>
-        `${kind}("${name}").effect() supports one insert per bus in v1; chains (multiple ` +
-        `inserts) are reserved for future support.`,
-    )
-    return this.makeHandle(kind, name, bus)
-  }
-
-  private async removeFor(
-    kind: MixerKind,
-    name: string,
-    bus: string,
-    spec: string,
-    occurrence: number,
-  ): Promise<MixerBusHandle> {
-    await this.kinds[kind].inserts.remove(name, normalizePluginInstanceName(spec), occurrence)
+    await this.kinds[kind].inserts.applyRack(name, rack)
     return this.makeHandle(kind, name, bus)
   }
 }

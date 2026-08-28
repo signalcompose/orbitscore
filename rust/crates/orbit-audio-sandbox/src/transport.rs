@@ -275,6 +275,10 @@ pub struct SharedRegion {
     pub evt_ack_seq: ReleaseAcquireSeq,
     /// child -> host: plugin dirty 通知の累積回数。respawn ではリセットしない。
     pub dirty_epoch: MonotoneEpoch,
+    /// child -> host: rack child が現在処理している stage の 0 始まり index。
+    ///
+    /// 既存 field の offset を維持するため、SharedRegion の末尾にだけ追加する。
+    pub active_stage_index: AtomicU32,
 }
 
 /// `cmd_arg` のバイト長。command 固有文字列を収める（state sidecar の絶対パスは macOS の
@@ -306,6 +310,14 @@ pub const CMD_SAVE_STATE: u32 = 1;
 pub const CMD_OPEN_UI: u32 = 2;
 /// コマンド種別: plugin UI の非同期 close handshake を開始する（#474 P3）。
 pub const CMD_CLOSE_UI: u32 = 3;
+/// コマンド種別: 構築済み effect chain を block 境界で適用する（#628）。
+pub const CMD_APPLY_CHAIN: u32 = 4;
+/// コマンド種別: 指定 stage の plugin state を保存する（#628）。
+pub const CMD_SAVE_STATE_AT: u32 = 5;
+/// コマンド種別: 指定 stage の plugin UI を開く（#628）。
+pub const CMD_OPEN_UI_AT: u32 = 6;
+/// コマンド種別: 指定 stage の plugin UI を閉じる（#628）。
+pub const CMD_CLOSE_UI_AT: u32 = 7;
 
 /// イベント種別: 未発行（`evt_seq == 0` と対）。
 pub const EVT_NONE: u32 = 0;
@@ -443,10 +455,11 @@ impl EventRingChild {
     /// 呼び出し元が `Result` を読み捨てると MCP `close_plugin_ui` の完了判定が永遠に閉じない。
     ///
     /// **差し替えの可視化は `evt_arg` の文言自体が担う**（host は poll で読める）。
-    /// `tracing::warn!` も併発するが、これは best-effort — 本メソッドが走る child バイナリ
-    /// （`orbit-vst3-*-child` / `orbit-clap-*-child`）は tracing subscriber を初期化しない
-    /// ため、production では何も出力されない（`tracing` は global subscriber 未設定なら
-    /// 黙って no-op）。warn が観測されるのは subscriber を持つ in-process 利用・テストのみ。
+    /// `tracing::warn!` も併発するが、これは best-effort — 出力の有無は呼び出し元プロセスが
+    /// subscriber を持つかで決まる: `orbit-vst3-*-child` / `orbit-clap-*-child` は初期化しない
+    /// ので無音（`tracing` は global subscriber 未設定なら黙って no-op）、**rack child
+    /// （`orbit-effect-rack-child`・#628）は `macos::run()` が初期化するので stderr に出る**。
+    /// in-process 利用・テストも subscriber 次第。
     ///
     /// `Err` は [`EventRingChildError::UnknownKind`] のみ（enum doc 参照）。
     pub fn queue(&mut self, kind: u32, arg: &str) -> Result<(), EventRingChildError> {
@@ -738,6 +751,12 @@ pub const CMD_RESULT_CHILD_EXITED: u32 = 5;
 /// 上位層を含めてこの定数を唯一の production timeout として使う。テストだけは
 /// [`CommandMailboxHost::issue_save_state_with_timeout`] へ短い値を渡して timeout 分岐を踏む。
 pub const PLUGIN_STATE_MAILBOX_TIMEOUT: Duration = Duration::from_secs(5);
+/// `APPLY_CHAIN` の完了 ack 待ち上限。
+///
+/// APPLY は単一 state 保存と違い、1 コマンド内で複数 plugin の同期 load を行う。重い plugin
+/// の連続 load は通常の state mailbox 上限 5 秒を正当に超えうるため、専用の長い上限を持つ。
+/// timeout 後も child は commit しうるので、上位層はこの失敗を registry uncertain と扱う。
+pub const APPLY_CHAIN_MAILBOX_TIMEOUT: Duration = Duration::from_secs(60);
 /// `OPEN_UI` の完了 ack 待ち上限。
 ///
 /// `OPEN_UI` は受理時でなく plugin view の生成・host window への attach が完了してから ack する。
@@ -911,6 +930,68 @@ impl CommandMailboxHost {
 
     pub fn issue_close_ui(&self) -> Result<CommandMailboxResponse, CommandMailboxError> {
         self.issue_command(CMD_CLOSE_UI, "", None, PLUGIN_STATE_MAILBOX_TIMEOUT)
+    }
+
+    /// Apply a complete effect-rack plan prepared by the daemon.
+    pub fn issue_apply_chain(
+        &self,
+        plan_path: &Path,
+    ) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        self.issue_apply_chain_with_timeout(plan_path, APPLY_CHAIN_MAILBOX_TIMEOUT)
+    }
+
+    /// `timeout` の差し替えは unit test が production の長い APPLY 上限を待たずに failure
+    /// lifecycle を実証するための seam。production caller は必ず [`Self::issue_apply_chain`] を使う。
+    #[doc(hidden)]
+    pub fn issue_apply_chain_with_timeout(
+        &self,
+        plan_path: &Path,
+        timeout: Duration,
+    ) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        let path = plan_path.to_str().ok_or_else(|| {
+            CommandMailboxError::InvalidArgument("plan path must be valid UTF-8".into())
+        })?;
+        self.issue_command(CMD_APPLY_CHAIN, path, None, timeout)
+    }
+
+    /// Save state for one flat rack stage.
+    pub fn issue_save_state_at(
+        &self,
+        argument: &str,
+        sidecar_path: &Path,
+    ) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        if !sidecar_path.is_absolute() {
+            return Err(CommandMailboxError::InvalidArgument(
+                "path must be absolute".into(),
+            ));
+        }
+        self.issue_command(
+            CMD_SAVE_STATE_AT,
+            argument,
+            Some(sidecar_path),
+            PLUGIN_STATE_MAILBOX_TIMEOUT,
+        )
+    }
+
+    /// Open the UI belonging to one flat rack stage.
+    pub fn issue_open_ui_at(
+        &self,
+        argument: &str,
+    ) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        self.issue_command(CMD_OPEN_UI_AT, argument, None, OPEN_UI_MAILBOX_TIMEOUT)
+    }
+
+    /// Close the UI belonging to one flat rack stage.
+    pub fn issue_close_ui_at(
+        &self,
+        argument: &str,
+    ) -> Result<CommandMailboxResponse, CommandMailboxError> {
+        self.issue_command(
+            CMD_CLOSE_UI_AT,
+            argument,
+            None,
+            PLUGIN_STATE_MAILBOX_TIMEOUT,
+        )
     }
 
     /// 現在の child incarnation が plugin state 復元まで終えて READY かをAcquireで確認する。
@@ -2868,6 +2949,11 @@ mod tests {
         child.join().expect("child join");
         drop(mmap);
         let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn apply_chain_has_a_dedicated_timeout_longer_than_single_state_save() {
+        assert!(APPLY_CHAIN_MAILBOX_TIMEOUT > PLUGIN_STATE_MAILBOX_TIMEOUT);
     }
 
     #[test]

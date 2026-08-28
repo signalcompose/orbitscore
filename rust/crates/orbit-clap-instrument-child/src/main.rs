@@ -501,7 +501,10 @@ mod tests {
 
     #[test]
     fn in_order_sequence_boundaries() {
-        assert_eq!(in_order_seqs(7, 7).collect::<Vec<_>>(), vec![]);
+        // 🔴 空 vec の要素型を明示する。#628 で `orbit-audio-sandbox` が `serde_json` を
+        // 引くようになり、`u64: PartialEq<serde_json::Value>` の impl が可視になったため、
+        // `vec![]` だけでは推論が曖昧になる（`Vec<u64>` か `Vec<Value>` か決まらない）。
+        assert_eq!(in_order_seqs(7, 7).collect::<Vec<_>>(), Vec::<u64>::new());
         assert_eq!(in_order_seqs(7, 8).collect::<Vec<_>>(), vec![8]);
         assert_eq!(in_order_seqs(7, 11).collect::<Vec<_>>(), vec![8, 9, 10, 11]);
     }

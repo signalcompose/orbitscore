@@ -76,6 +76,12 @@ pub enum WrapError {
     /// mutex poison 等）。TS 層は feature-gap と区別して rethrow する。
     #[error("out-of-process effect runtime error: {0}")]
     OutProcEffect(String),
+    /// ApplyEffectChain が child/daemon の生死または未完了 mailbox を跨ぎ、権威 config が
+    /// 要求前のままかを確認できない。TS 層は次評価を rebuild に倒す。
+    #[error("out-of-process effect registry is uncertain: {0}")]
+    OutProcEffectUncertain(String),
+    #[error("malformed out-of-process effect request: {0}")]
+    OutProcEffectRequest(String),
     /// out-of-process instrument がこの daemon ビルド/インスタンスで利用できない。
     #[error("out-of-process instrument unavailable: {0}")]
     OutProcInstrumentUnavailable(String),
@@ -115,6 +121,1071 @@ pub enum WrapError {
     /// の場合に返す。cpal 側の実失敗（device open 失敗等）は `Output`（`OutputError` 経由）に別れる。
     #[error("audio device switch unavailable: {0}")]
     AudioDeviceSwitchUnavailable(String),
+}
+
+#[cfg(all(test, feature = "outproc-effect"))]
+mod effect_rack_tests {
+    use super::{
+        ChildLaunch, ChildSlot, EffectRole, EffectSlotEntry, EngineWrap, OutProcControl,
+        PluginStateTarget, PluginUiWiring, WrapError,
+    };
+    use crate::backend::StubBackend;
+    use crate::outproc_effect::{
+        self, ApplyEffectChainMode, ChainStageConfig, EffectChainPlan, EffectChainPlanStage,
+        EffectChainStageSpec, OutProcEffectStats, SaveDroppedStage,
+    };
+    use orbit_audio_native::CallbackTimeStats;
+    use orbit_audio_sandbox::transport::{
+        read_cstr_field, write_cstr_field, CMD_APPLY_CHAIN, CMD_OPEN_UI_AT, CMD_RESULT_OK,
+        CMD_RESULT_PLUGIN_ERROR, CMD_SAVE_STATE_AT,
+    };
+    use std::collections::{BTreeMap, HashMap, HashSet};
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    const BUS: &str = "seq-bus-0";
+    const WAIT: Duration = Duration::from_secs(10);
+
+    struct SlotFixture {
+        slot: Arc<Mutex<ChildSlot<EffectRole>>>,
+        entry: EffectSlotEntry,
+        stats: Arc<OutProcEffectStats>,
+        old_pid: u32,
+    }
+
+    struct RackFixture {
+        wrap: Arc<EngineWrap>,
+        master: SlotFixture,
+        bus: Option<SlotFixture>,
+        bus_active: Option<Arc<AtomicBool>>,
+    }
+
+    fn fixture_script(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join(name)
+    }
+
+    fn catalog(path: &str, state: Option<PathBuf>, enabled: bool) -> ChainStageConfig {
+        ChainStageConfig::Catalog {
+            path: PathBuf::from(path),
+            plugin_id: None,
+            latest_state: state,
+            enabled,
+        }
+    }
+
+    fn load_catalog(path: &str) -> EffectChainPlanStage {
+        EffectChainPlanStage::Load {
+            stage: EffectChainStageSpec::Catalog {
+                path: PathBuf::from(path),
+                plugin_id: None,
+                state: None,
+                enabled: true,
+            },
+        }
+    }
+
+    fn keep(index: usize, enabled: bool) -> EffectChainPlanStage {
+        EffectChainPlanStage::Keep {
+            prev_index: index,
+            enabled,
+            params: BTreeMap::new(),
+        }
+    }
+
+    fn plan(chain: Vec<EffectChainPlanStage>) -> EffectChainPlan {
+        EffectChainPlan {
+            chain,
+            save_dropped: Vec::new(),
+        }
+    }
+
+    fn active_slot(chain: Vec<ChainStageConfig>, respawn_child: PathBuf) -> SlotFixture {
+        let shm_path = outproc_effect::unique_shm_path();
+        drop(orbit_audio_sandbox::create_shared(&shm_path).expect("create rack fixture shm"));
+        let engaged = Arc::new(AtomicBool::new(true));
+        let requested = Arc::new(AtomicBool::new(false));
+        let done = Arc::new(AtomicBool::new(false));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let stats = OutProcEffectStats::new();
+        let mut first = Command::new(fixture_script("slow-child.sh"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn rack fixture child");
+        assert!(first.try_wait().expect("preflight fixture child").is_none());
+        let old_pid = first.id();
+        stats.current_child_pid.store(old_pid, Ordering::Release);
+        stats.initial_attach_pending.store(false, Ordering::Release);
+        let mailbox = Arc::new(orbit_audio_sandbox::CommandMailboxHost::new(
+            shm_path.clone(),
+        ));
+        let ui_pump = Arc::new(orbit_audio_sandbox::UiEventPump::new(shm_path.clone()));
+        let ui_target = Arc::new(Mutex::new(None));
+        let (ui_events, _) = tokio::sync::broadcast::channel(16);
+        let chain = Arc::new(Mutex::new(chain));
+        let supervisor = outproc_effect::EffectChildSupervisor::spawn_chain_with_mailbox(
+            first,
+            shm_path.clone(),
+            stats.clone(),
+            respawn_child.clone(),
+            48_000,
+            chain.clone(),
+            mailbox.clone(),
+            PluginUiWiring {
+                pump: ui_pump.clone(),
+                target: ui_target.clone(),
+                events: ui_events,
+            },
+        )
+        .expect("spawn rack fixture supervisor");
+        let ready = orbit_audio_sandbox::open_shared(&shm_path).expect("open fixture ready map");
+        unsafe {
+            orbit_audio_sandbox::transport::publish_child_ready(
+                orbit_audio_sandbox::region_ptr(&ready),
+                true,
+            )
+        };
+        let slot = Arc::new(Mutex::new(ChildSlot::Active {
+            path: outproc_effect::chain_manifest_path(&shm_path),
+            plugin_id: None,
+            state: None,
+            latest_state: Arc::new(Mutex::new(None)),
+            engaged: engaged.clone(),
+            mailbox,
+            ui_pump,
+            ui_target,
+            _supervisor: supervisor,
+        }));
+        SlotFixture {
+            slot,
+            entry: EffectSlotEntry {
+                shm_path,
+                child_exe: respawn_child,
+                sample_rate: 48_000,
+                engaged,
+                quiesce_requested: requested,
+                quiesce_done: done,
+                shutdown,
+                chain,
+            },
+            stats,
+            old_pid,
+        }
+    }
+
+    fn empty_slot() -> SlotFixture {
+        let shm_path = outproc_effect::unique_shm_path();
+        drop(orbit_audio_sandbox::create_shared(&shm_path).expect("create empty rack shm"));
+        let engaged = Arc::new(AtomicBool::new(false));
+        let stats = OutProcEffectStats::new();
+        let child_exe = fixture_script("slow-child.sh");
+        let chain = Arc::new(Mutex::new(Vec::new()));
+        let slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch::<EffectRole> {
+            shm_path: shm_path.clone(),
+            child_exe: child_exe.clone(),
+            sample_rate: 48_000,
+            stats: stats.clone(),
+            engaged: engaged.clone(),
+            cleanup_shm_on_drop: true,
+        })));
+        SlotFixture {
+            slot,
+            entry: EffectSlotEntry {
+                shm_path,
+                child_exe,
+                sample_rate: 48_000,
+                engaged,
+                quiesce_requested: Arc::new(AtomicBool::new(false)),
+                quiesce_done: Arc::new(AtomicBool::new(false)),
+                shutdown: Arc::new(AtomicBool::new(false)),
+                chain,
+            },
+            stats,
+            old_pid: 0,
+        }
+    }
+
+    fn rack_fixture(master: SlotFixture, bus: Option<SlotFixture>) -> RackFixture {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend starts");
+        let mut bus_slots = HashMap::new();
+        let mut bus_entries = HashMap::new();
+        let mut bus_stats = HashMap::new();
+        let mut bus_actives = HashMap::new();
+        let bus_active = bus.as_ref().map(|fixture| {
+            bus_slots.insert(BUS.to_owned(), Arc::downgrade(&fixture.slot));
+            bus_entries.insert(BUS.to_owned(), fixture.entry.clone());
+            bus_stats.insert(BUS.to_owned(), fixture.stats.clone());
+            let active = Arc::new(AtomicBool::new(false));
+            bus_actives.insert(BUS.to_owned(), active.clone());
+            active
+        });
+        *wrap.outproc.lock().expect("lock rack fixture control") = Some(OutProcControl {
+            stats: master.stats.clone(),
+            cb_stats: CallbackTimeStats::new(),
+            child_slot: Arc::downgrade(&master.slot),
+            master_entry: master.entry.clone(),
+            bus_slots,
+            bus_entries,
+            bus_stats,
+            bus_actives,
+            bus_kinds: HashMap::new(),
+            bus_index: HashMap::new(),
+            bus_routing: HashMap::new(),
+            bus_sends: HashMap::new(),
+            replacements_in_flight: HashSet::new(),
+        });
+        RackFixture {
+            wrap,
+            master,
+            bus,
+            bus_active,
+        }
+    }
+
+    fn spawn_response(
+        shm: PathBuf,
+        expected_kind: u32,
+        result: u32,
+        detail: &'static str,
+        body: impl FnOnce(&str) -> u64 + Send + 'static,
+    ) -> std::thread::JoinHandle<String> {
+        std::thread::spawn(move || {
+            let mmap = orbit_audio_sandbox::open_shared(&shm).expect("open responder shm");
+            let region = orbit_audio_sandbox::region_ptr(&mmap);
+            let previous = unsafe { (*region).cmd_ack_seq.load(Ordering::Acquire) };
+            let deadline = Instant::now() + WAIT;
+            let seq = loop {
+                let seq = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+                if seq > previous {
+                    break seq;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "mailbox command was not published"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            assert_eq!(
+                unsafe { (*region).cmd_kind.load(Ordering::Relaxed) },
+                expected_kind,
+                "mailbox command kind"
+            );
+            let arg = unsafe {
+                read_cstr_field(&(*region).cmd_arg)
+                    .expect("valid command argument")
+                    .to_owned()
+            };
+            let bytes = body(&arg);
+            unsafe {
+                assert!(write_cstr_field(&mut (*region).cmd_result_detail, detail));
+                (*region).cmd_result_len.store(bytes, Ordering::Relaxed);
+                (*region).cmd_result.store(result, Ordering::Relaxed);
+                (*region).cmd_ack_seq.store(seq, Ordering::Release);
+            }
+            arg
+        })
+    }
+
+    fn spawn_quiesce_ack(entry: &EffectSlotEntry) -> std::thread::JoinHandle<()> {
+        let requested = entry.quiesce_requested.clone();
+        let done = entry.quiesce_done.clone();
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + WAIT;
+            while !requested.load(Ordering::Acquire) {
+                assert!(Instant::now() < deadline, "quiesce was not requested");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            done.store(true, Ordering::Release);
+        })
+    }
+
+    fn spawn_ready_after_new_pid(
+        fixture: &SlotFixture,
+        old_pid: u32,
+    ) -> std::thread::JoinHandle<u32> {
+        let stats = fixture.stats.clone();
+        let shm = fixture.entry.shm_path.clone();
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + WAIT;
+            let pid = loop {
+                let pid = stats.current_child_pid.load(Ordering::Acquire);
+                if pid != 0 && pid != old_pid {
+                    break pid;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "replacement child was not spawned"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            let mmap = orbit_audio_sandbox::open_shared(&shm).expect("open replacement ready map");
+            unsafe {
+                orbit_audio_sandbox::transport::publish_child_ready(
+                    orbit_audio_sandbox::region_ptr(&mmap),
+                    true,
+                )
+            };
+            pid
+        })
+    }
+
+    fn rebuild(fixture: &RackFixture, bus: Option<String>, plan: EffectChainPlan) -> u32 {
+        let target = match &bus {
+            Some(_) => fixture.bus.as_ref().expect("bus fixture"),
+            None => &fixture.master,
+        };
+        let old_pid = target.old_pid;
+        let ack = spawn_quiesce_ack(&target.entry);
+        let ready = spawn_ready_after_new_pid(target, old_pid);
+        let summary = fixture
+            .wrap
+            .apply_outproc_effect_chain(bus, plan, ApplyEffectChainMode::Rebuild)
+            .expect("rebuild apply succeeds");
+        ack.join().expect("quiesce ack");
+        let pid = ready.join().expect("ready publisher");
+        assert_eq!(summary.child_pid, pid);
+        pid
+    }
+
+    fn assert_active(slot: &Mutex<ChildSlot<EffectRole>>) {
+        assert!(matches!(
+            &*slot.lock().expect("lock rack slot"),
+            ChildSlot::Active { .. }
+        ));
+    }
+
+    fn process_exists(pid: u32) -> bool {
+        Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
+
+    #[test]
+    fn d1_master_and_bus_apply_resolve_distinct_slots() {
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("master.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            ),
+            Some(active_slot(
+                vec![catalog("bus.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            )),
+        );
+        let master_response = spawn_response(
+            fixture.master.entry.shm_path.clone(),
+            CMD_APPLY_CHAIN,
+            CMD_RESULT_OK,
+            "",
+            |_| 0,
+        );
+        fixture
+            .wrap
+            .apply_outproc_effect_chain(
+                None,
+                plan(vec![keep(0, false)]),
+                ApplyEffectChainMode::Diff,
+            )
+            .expect("master diff");
+        master_response.join().expect("master responder");
+        assert_eq!(
+            *fixture.master.entry.chain.lock().expect("master chain"),
+            vec![catalog("master.clap", None, false)]
+        );
+        assert_eq!(
+            *fixture
+                .bus
+                .as_ref()
+                .expect("bus")
+                .entry
+                .chain
+                .lock()
+                .expect("bus chain"),
+            vec![catalog("bus.clap", None, true)]
+        );
+
+        let bus = fixture.bus.as_ref().expect("bus");
+        let bus_response = spawn_response(
+            bus.entry.shm_path.clone(),
+            CMD_APPLY_CHAIN,
+            CMD_RESULT_OK,
+            "",
+            |_| 0,
+        );
+        fixture
+            .wrap
+            .apply_outproc_effect_chain(
+                Some(BUS.into()),
+                plan(vec![keep(0, false)]),
+                ApplyEffectChainMode::Diff,
+            )
+            .expect("bus diff");
+        bus_response.join().expect("bus responder");
+        assert_eq!(
+            *bus.entry.chain.lock().expect("bus chain"),
+            vec![catalog("bus.clap", None, false)]
+        );
+    }
+
+    #[test]
+    fn d2_diff_apply_uses_mailbox_without_respawning() {
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("a.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        let old_pid = fixture.master.old_pid;
+        let response = spawn_response(
+            fixture.master.entry.shm_path.clone(),
+            CMD_APPLY_CHAIN,
+            CMD_RESULT_OK,
+            "",
+            |_| 0,
+        );
+        let summary = fixture
+            .wrap
+            .apply_outproc_effect_chain(
+                None,
+                plan(vec![keep(0, true), load_catalog("b.clap")]),
+                ApplyEffectChainMode::Diff,
+            )
+            .expect("diff apply");
+        response.join().expect("apply responder");
+        assert_eq!(summary.child_pid, old_pid);
+        assert_eq!(
+            fixture.master.stats.respawn_count.load(Ordering::Acquire),
+            0
+        );
+        assert_active(&fixture.master.slot);
+    }
+
+    #[test]
+    fn d3_empty_apply_clears_engaged_keeps_bus_active_and_leaves_empty_slot() {
+        let bus = active_slot(
+            vec![catalog("a.clap", None, true)],
+            fixture_script("slow-child.sh"),
+        );
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("master.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            ),
+            Some(bus),
+        );
+        let bus = fixture.bus.as_ref().expect("bus");
+        let response = spawn_response(
+            bus.entry.shm_path.clone(),
+            CMD_APPLY_CHAIN,
+            CMD_RESULT_OK,
+            "",
+            |_| 0,
+        );
+        let ack = spawn_quiesce_ack(&bus.entry);
+        fixture
+            .wrap
+            .apply_outproc_effect_chain(
+                Some(BUS.into()),
+                plan(Vec::new()),
+                ApplyEffectChainMode::Diff,
+            )
+            .expect("empty apply");
+        response.join().expect("empty responder");
+        ack.join().expect("quiesce ack");
+        assert!(!bus.entry.engaged.load(Ordering::Acquire));
+        assert!(fixture
+            .bus_active
+            .as_ref()
+            .expect("bus active")
+            .load(Ordering::Acquire));
+        assert!(matches!(
+            &*bus.slot.lock().expect("bus slot"),
+            ChildSlot::Empty(_)
+        ));
+    }
+
+    #[test]
+    fn d4_empty_spawn_manifest_preserves_stage_count_and_order() {
+        let fixture = rack_fixture(empty_slot(), None);
+        let stats = fixture.master.stats.clone();
+        let shm = fixture.master.entry.shm_path.clone();
+        let observer = std::thread::spawn(move || {
+            let deadline = Instant::now() + WAIT;
+            while stats.current_child_pid.load(Ordering::Acquire) == 0 {
+                assert!(Instant::now() < deadline, "spawn did not publish a PID");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let manifest_path = outproc_effect::chain_manifest_path(&shm);
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(&manifest_path).expect("read spawn manifest"),
+            )
+            .expect("parse spawn manifest");
+            let mmap = orbit_audio_sandbox::open_shared(&shm).expect("open spawn ready map");
+            unsafe {
+                orbit_audio_sandbox::transport::publish_child_ready(
+                    orbit_audio_sandbox::region_ptr(&mmap),
+                    true,
+                )
+            };
+            manifest
+        });
+        let standard = EffectChainPlanStage::Load {
+            stage: EffectChainStageSpec::Standard {
+                name: "Gain".into(),
+                params: BTreeMap::from([("db".into(), -6.0)]),
+                enabled: true,
+            },
+        };
+        fixture
+            .wrap
+            .apply_outproc_effect_chain(
+                None,
+                plan(vec![
+                    load_catalog("a.clap"),
+                    standard,
+                    load_catalog("b.vst3"),
+                ]),
+                ApplyEffectChainMode::Diff,
+            )
+            .expect("empty spawn");
+        let manifest = observer.join().expect("manifest observer");
+        let stages = manifest["stages"].as_array().expect("manifest stages");
+        assert_eq!(stages.len(), 3);
+        assert_eq!(stages[0]["path"], "a.clap");
+        assert_eq!(stages[1]["name"], "Gain");
+        assert_eq!(stages[2]["path"], "b.vst3");
+    }
+
+    #[test]
+    fn d5_plugin_error_keeps_authoritative_chain_unchanged() {
+        let previous = vec![catalog("a.clap", None, true)];
+        let fixture = rack_fixture(
+            active_slot(previous.clone(), fixture_script("slow-child.sh")),
+            None,
+        );
+        let response = spawn_response(
+            fixture.master.entry.shm_path.clone(),
+            CMD_APPLY_CHAIN,
+            CMD_RESULT_PLUGIN_ERROR,
+            "failed index 1: injected load failure",
+            |_| 0,
+        );
+        let error = fixture
+            .wrap
+            .apply_outproc_effect_chain(
+                None,
+                plan(vec![keep(0, true), load_catalog("bad.clap")]),
+                ApplyEffectChainMode::Diff,
+            )
+            .expect_err("plugin error must propagate");
+        response.join().expect("error responder");
+        assert!(error.to_string().contains("failed index 1"));
+        assert_eq!(*fixture.master.entry.chain.lock().expect("chain"), previous);
+        assert_active(&fixture.master.slot);
+    }
+
+    #[test]
+    fn mailbox_registry_predicate_separates_definitive_rejection_from_lifecycle_failures() {
+        use orbit_audio_sandbox::CommandMailboxError;
+
+        let definitive =
+            super::effect_chain_apply_mailbox_error(CommandMailboxError::CommandFailed {
+                seq: 1,
+                result: CMD_RESULT_PLUGIN_ERROR,
+                detail: "load rejected".into(),
+            });
+        assert!(matches!(definitive, WrapError::OutProcEffect(_)));
+
+        for uncertain in [
+            CommandMailboxError::Timeout {
+                seq: 2,
+                elapsed: Duration::from_millis(15),
+            },
+            CommandMailboxError::ChildExited {
+                seq: 3,
+                detail: "watchdog reset".into(),
+            },
+            CommandMailboxError::Poisoned { seq: 4 },
+        ] {
+            assert!(matches!(
+                super::effect_chain_apply_mailbox_error(uncertain),
+                WrapError::OutProcEffectUncertain(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn d6_timeout_releases_apply_reservation_for_the_next_request() {
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("a.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        let shm = fixture.master.entry.shm_path.clone();
+        let delayed = std::thread::spawn(move || {
+            let mmap = orbit_audio_sandbox::open_shared(&shm).expect("open delayed responder");
+            let region = orbit_audio_sandbox::region_ptr(&mmap);
+            let deadline = Instant::now() + WAIT;
+            let seq = loop {
+                let seq = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+                if seq != 0 {
+                    break seq;
+                }
+                assert!(Instant::now() < deadline, "first apply was not published");
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            std::thread::sleep(Duration::from_millis(25));
+            unsafe {
+                (*region).cmd_result.store(CMD_RESULT_OK, Ordering::Relaxed);
+                (*region).cmd_ack_seq.store(seq, Ordering::Release);
+            }
+        });
+        let first = fixture.wrap.apply_outproc_effect_chain_with_timeout(
+            None,
+            plan(vec![keep(0, false)]),
+            ApplyEffectChainMode::Diff,
+            Duration::from_millis(15),
+        );
+        assert!(matches!(first, Err(WrapError::OutProcEffectUncertain(_))));
+        delayed.join().expect("delayed ack");
+        let response = spawn_response(
+            fixture.master.entry.shm_path.clone(),
+            CMD_APPLY_CHAIN,
+            CMD_RESULT_OK,
+            "",
+            |_| 0,
+        );
+        fixture
+            .wrap
+            .apply_outproc_effect_chain(
+                None,
+                plan(vec![keep(0, false)]),
+                ApplyEffectChainMode::Diff,
+            )
+            .expect("reservation must be released after timeout");
+        response.join().expect("second responder");
+    }
+
+    #[test]
+    fn d7_respawn_manifest_uses_latest_applied_chain_and_per_stage_state() {
+        let state_dir = std::env::temp_dir().join(format!(
+            "orbit-d7-state-{}-{}",
+            std::process::id(),
+            super::short_uuid()
+        ));
+        std::fs::create_dir(&state_dir).expect("create state dir");
+        let state_path = state_dir.join("b.state");
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("a.clap", None, true)],
+                fixture_script("record-respawn-args.sh"),
+            ),
+            None,
+        );
+        let apply_response = spawn_response(
+            fixture.master.entry.shm_path.clone(),
+            CMD_APPLY_CHAIN,
+            CMD_RESULT_OK,
+            "",
+            |_| 0,
+        );
+        fixture
+            .wrap
+            .apply_outproc_effect_chain(
+                None,
+                plan(vec![keep(0, true), load_catalog("b.clap")]),
+                ApplyEffectChainMode::Diff,
+            )
+            .expect("apply before respawn");
+        apply_response.join().expect("apply responder");
+
+        let saved_bytes = b"stage-b-state".to_vec();
+        let save_bytes = saved_bytes.clone();
+        let save_response = spawn_response(
+            fixture.master.entry.shm_path.clone(),
+            CMD_SAVE_STATE_AT,
+            CMD_RESULT_OK,
+            "",
+            move |arg| {
+                let arg: serde_json::Value = serde_json::from_str(arg).expect("state arg JSON");
+                assert_eq!(arg["index"], 1);
+                std::fs::write(arg["path"].as_str().expect("sidecar"), &save_bytes)
+                    .expect("write state sidecar");
+                save_bytes.len() as u64
+            },
+        );
+        fixture
+            .wrap
+            .save_outproc_plugin_state(
+                PluginStateTarget::Effect { bus: None },
+                1,
+                state_path.clone(),
+            )
+            .expect("save second stage");
+        save_response.join().expect("save responder");
+
+        let args_path = PathBuf::from(format!(
+            "{}.respawn-args",
+            fixture.master.entry.shm_path.display()
+        ));
+        let _ = std::fs::remove_file(&args_path);
+        assert!(Command::new("kill")
+            .args(["-9", &fixture.master.old_pid.to_string()])
+            .status()
+            .expect("kill old child")
+            .success());
+        let deadline = Instant::now() + WAIT;
+        while !args_path.exists() || fixture.master.stats.respawn_count.load(Ordering::Acquire) == 0
+        {
+            assert!(
+                Instant::now() < deadline,
+                "watchdog did not record respawn args"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let args: Vec<String> = std::fs::read_to_string(&args_path)
+            .expect("read respawn args")
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let chain_arg = args
+            .iter()
+            .position(|arg| arg == "--chain")
+            .and_then(|index| args.get(index + 1))
+            .expect("respawn --chain argument");
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(chain_arg).expect("read respawn manifest"))
+                .expect("parse respawn manifest");
+        assert_eq!(manifest["stages"].as_array().expect("stages").len(), 2);
+        assert_eq!(manifest["stages"][0]["path"], "a.clap");
+        assert_eq!(manifest["stages"][1]["path"], "b.clap");
+        assert_eq!(manifest["stages"][1]["state"].as_str(), state_path.to_str());
+        std::fs::remove_dir_all(state_dir).expect("remove state dir");
+    }
+
+    #[test]
+    fn d8_parallel_apply_to_the_same_slot_is_rejected() {
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("a.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        let shm = fixture.master.entry.shm_path.clone();
+        let (published_tx, published_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let responder = std::thread::spawn(move || {
+            let mmap = orbit_audio_sandbox::open_shared(&shm).expect("open held responder");
+            let region = orbit_audio_sandbox::region_ptr(&mmap);
+            let deadline = Instant::now() + WAIT;
+            let seq = loop {
+                let seq = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+                if seq != 0 {
+                    break seq;
+                }
+                assert!(Instant::now() < deadline, "first apply not published");
+                std::thread::sleep(Duration::from_millis(1));
+            };
+            published_tx.send(()).expect("signal published");
+            release_rx.recv().expect("wait release");
+            unsafe {
+                (*region).cmd_result.store(CMD_RESULT_OK, Ordering::Relaxed);
+                (*region).cmd_ack_seq.store(seq, Ordering::Release);
+            }
+        });
+        let wrap = fixture.wrap.clone();
+        let first = std::thread::spawn(move || {
+            wrap.apply_outproc_effect_chain(
+                None,
+                plan(vec![keep(0, false)]),
+                ApplyEffectChainMode::Diff,
+            )
+        });
+        published_rx.recv().expect("first apply published");
+        let second = fixture
+            .wrap
+            .apply_outproc_effect_chain(
+                None,
+                plan(vec![keep(0, false)]),
+                ApplyEffectChainMode::Diff,
+            )
+            .expect_err("second concurrent apply must fail");
+        assert!(second.to_string().contains("already in progress"));
+        release_tx.send(()).expect("release first apply");
+        responder.join().expect("held responder");
+        first.join().expect("first thread").expect("first apply");
+    }
+
+    #[test]
+    fn d9_shutdown_latch_rejects_apply_without_touching_the_slot() {
+        let previous = vec![catalog("a.clap", None, true)];
+        let fixture = rack_fixture(
+            active_slot(previous.clone(), fixture_script("slow-child.sh")),
+            None,
+        );
+        fixture.master.entry.shutdown.store(true, Ordering::Release);
+        let error = fixture
+            .wrap
+            .apply_outproc_effect_chain(
+                None,
+                plan(vec![keep(0, false)]),
+                ApplyEffectChainMode::Diff,
+            )
+            .expect_err("shutdown latch rejects apply");
+        assert!(error.to_string().contains("engine is stopping"));
+        assert_eq!(*fixture.master.entry.chain.lock().expect("chain"), previous);
+        assert_eq!(
+            fixture
+                .master
+                .stats
+                .current_child_pid
+                .load(Ordering::Acquire),
+            fixture.master.old_pid
+        );
+        assert_active(&fixture.master.slot);
+    }
+
+    #[test]
+    fn d10_get_plugin_state_sends_save_state_at_with_chain_index() {
+        let state_dir = std::env::temp_dir().join(format!(
+            "orbit-d10-state-{}-{}",
+            std::process::id(),
+            super::short_uuid()
+        ));
+        std::fs::create_dir(&state_dir).expect("create state dir");
+        let final_path = state_dir.join("stage.state");
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("a.clap", None, true), catalog("b.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        let response = spawn_response(
+            fixture.master.entry.shm_path.clone(),
+            CMD_SAVE_STATE_AT,
+            CMD_RESULT_OK,
+            "",
+            |arg| {
+                let arg: serde_json::Value = serde_json::from_str(arg).expect("state arg JSON");
+                assert_eq!(arg["index"], 1);
+                std::fs::write(arg["path"].as_str().expect("sidecar path"), b"state")
+                    .expect("write sidecar");
+                5
+            },
+        );
+        fixture
+            .wrap
+            .save_outproc_plugin_state(PluginStateTarget::Effect { bus: None }, 1, final_path)
+            .expect("save stage 1");
+        let arg = response.join().expect("state responder");
+        let arg: serde_json::Value = serde_json::from_str(&arg).expect("state arg JSON");
+        assert_eq!(arg["index"], 1);
+        std::fs::remove_dir_all(state_dir).expect("remove state dir");
+    }
+
+    #[test]
+    fn d11_open_plugin_ui_sends_open_ui_at_with_chain_index() {
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("a.clap", None, true), catalog("b.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        let response = spawn_response(
+            fixture.master.entry.shm_path.clone(),
+            CMD_OPEN_UI_AT,
+            CMD_RESULT_OK,
+            "",
+            |_| 0,
+        );
+        fixture
+            .wrap
+            .open_outproc_plugin_ui(PluginStateTarget::Effect { bus: None }, 1, "Stage B".into())
+            .expect("open stage UI");
+        let arg = response.join().expect("UI responder");
+        let arg: serde_json::Value = serde_json::from_str(&arg).expect("UI arg JSON");
+        assert_eq!(arg["index"], 1);
+        assert_eq!(arg["title"], "Stage B");
+    }
+
+    #[test]
+    fn d13_rebuild_tears_down_the_old_child_before_spawning_a_new_one() {
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("a.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        let old_pid = fixture.master.old_pid;
+        let new_pid = rebuild(&fixture, None, plan(vec![load_catalog("b.clap")]));
+        assert_ne!(new_pid, old_pid);
+        assert!(!process_exists(old_pid), "old child must be reaped");
+        assert_active(&fixture.master.slot);
+    }
+
+    #[test]
+    fn d14_unhealthy_active_diff_falls_back_to_rebuild() {
+        for invalid in [false, true] {
+            let fixture = rack_fixture(
+                active_slot(
+                    vec![catalog("a.clap", None, true)],
+                    fixture_script("slow-child.sh"),
+                ),
+                None,
+            );
+            let old_pid = fixture.master.old_pid;
+            if invalid {
+                fixture
+                    .master
+                    .stats
+                    .measurement_invalid
+                    .store(true, Ordering::Release);
+            } else {
+                fixture
+                    .master
+                    .stats
+                    .current_child_pid
+                    .store(0, Ordering::Release);
+            }
+            let ack = spawn_quiesce_ack(&fixture.master.entry);
+            let ready = spawn_ready_after_new_pid(&fixture.master, old_pid);
+            let summary = fixture
+                .wrap
+                .apply_outproc_effect_chain(
+                    None,
+                    plan(vec![keep(0, true)]),
+                    ApplyEffectChainMode::Diff,
+                )
+                .expect("unhealthy diff rebuilds");
+            ack.join().expect("quiesce ack");
+            let new_pid = ready.join().expect("ready publisher");
+            assert_eq!(summary.child_pid, new_pid);
+            assert_ne!(new_pid, old_pid);
+            assert!(!process_exists(old_pid));
+        }
+    }
+
+    #[test]
+    fn unhealthy_active_drop_uses_latest_state_without_issuing_save() {
+        let state_dir = std::env::temp_dir().join(format!(
+            "orbit-unhealthy-drop-{}-{}",
+            std::process::id(),
+            super::short_uuid()
+        ));
+        std::fs::create_dir(&state_dir).expect("create state dir");
+        let latest_state = state_dir.join("latest.state");
+        let dropped_state = state_dir.join("dropped.state");
+        std::fs::write(&latest_state, b"last-known-state").expect("write latest state");
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("crashed.clap", Some(latest_state), true)],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        fixture
+            .master
+            .stats
+            .current_child_pid
+            .store(0, Ordering::Release);
+        let mmap = orbit_audio_sandbox::open_shared(&fixture.master.entry.shm_path)
+            .expect("open command counter map");
+        let region = orbit_audio_sandbox::region_ptr(&mmap);
+        let command_seq_before = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+        let ack = spawn_quiesce_ack(&fixture.master.entry);
+
+        let summary = fixture
+            .wrap
+            .apply_outproc_effect_chain(
+                None,
+                EffectChainPlan {
+                    chain: Vec::new(),
+                    save_dropped: vec![SaveDroppedStage {
+                        prev_index: 0,
+                        path: dropped_state.clone(),
+                    }],
+                },
+                ApplyEffectChainMode::Diff,
+            )
+            .expect("unhealthy culprit can be dropped without its dead mailbox");
+
+        ack.join().expect("quiesce ack");
+        assert_eq!(
+            unsafe { (*region).cmd_seq.load(Ordering::Acquire) },
+            command_seq_before,
+            "an inspected-unhealthy Active must not receive SAVE_STATE_AT"
+        );
+        assert_eq!(summary.child_pid, 0);
+        assert_eq!(summary.dropped.len(), 1);
+        assert_eq!(summary.dropped[0].prev_index, 0);
+        assert_eq!(summary.dropped[0].path, dropped_state);
+        assert_eq!(summary.dropped[0].bytes_written, 16);
+        assert_eq!(
+            std::fs::read(&summary.dropped[0].path).expect("read recovered state"),
+            b"last-known-state"
+        );
+        std::fs::remove_dir_all(state_dir).expect("remove state dir");
+    }
+
+    #[test]
+    fn d15_standard_state_and_ui_targets_are_rejected_before_mailbox_issue() {
+        let fixture = rack_fixture(
+            active_slot(
+                vec![ChainStageConfig::Standard {
+                    name: "Gain".into(),
+                    params: BTreeMap::from([("db".into(), -6.0)]),
+                    enabled: true,
+                }],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        let mmap = orbit_audio_sandbox::open_shared(&fixture.master.entry.shm_path)
+            .expect("open command counter map");
+        let region = orbit_audio_sandbox::region_ptr(&mmap);
+        let before = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+        let state = fixture.wrap.save_outproc_plugin_state(
+            PluginStateTarget::Effect { bus: None },
+            0,
+            std::env::temp_dir().join("d15-standard.state"),
+        );
+        let ui = fixture.wrap.open_outproc_plugin_ui(
+            PluginStateTarget::Effect { bus: None },
+            0,
+            "Gain".into(),
+        );
+        for error in [
+            state.expect_err("standard state rejected"),
+            ui.expect_err("standard UI rejected"),
+        ] {
+            assert!(error
+                .to_string()
+                .contains("standard plugins have no UI/state; parameters live in the DSL"));
+        }
+        assert_eq!(
+            unsafe { (*region).cmd_seq.load(Ordering::Acquire) },
+            before,
+            "standard target rejection must happen before mailbox issue"
+        );
+    }
 }
 
 /// 共有可能なエンジン wrapper。
@@ -295,6 +1366,8 @@ struct EffectSlotEntry {
     quiesce_done: Arc<AtomicBool>,
     /// stream 停止が一度始まったことを示す control-side latch。false へ戻さない。
     shutdown: Arc<AtomicBool>,
+    /// Rack child の respawn と control command が共有する権威設定。RT は読まない。
+    chain: Arc<Mutex<crate::outproc_effect::ChainConfig>>,
 }
 
 /// RT adapter が保持する flags と control-side slot/teardown guard を一度だけ束ねる入力。
@@ -330,6 +1403,7 @@ fn install_effect_slot(parts: EffectSlotInstallParts) -> InstalledEffectSlot {
         quiesce_requested: parts.quiesce_requested.clone(),
         quiesce_done: parts.quiesce_done.clone(),
         shutdown: shutdown.clone(),
+        chain: Arc::new(Mutex::new(Vec::new())),
     };
     let child_slot = Arc::new(Mutex::new(ChildSlot::Empty(ChildLaunch::<EffectRole> {
         shm_path: parts.shm_path,
@@ -460,6 +1534,7 @@ fn test_effect_slot_entry() -> EffectSlotEntry {
         quiesce_requested: Arc::new(AtomicBool::new(false)),
         quiesce_done: Arc::new(AtomicBool::new(false)),
         shutdown: Arc::new(AtomicBool::new(false)),
+        chain: Arc::new(Mutex::new(Vec::new())),
     }
 }
 
@@ -1984,13 +3059,18 @@ impl OutProcRole for EffectRole {
         plugin_id: Option<&str>,
         state: Option<&std::path::Path>,
     ) -> std::io::Result<std::process::Child> {
+        let chain = vec![crate::outproc_effect::ChainStageConfig::Catalog {
+            path: path.to_path_buf(),
+            plugin_id: plugin_id.map(str::to_owned),
+            latest_state: state.map(PathBuf::from),
+            enabled: true,
+        }];
+        let manifest = crate::outproc_effect::write_chain_manifest(&launch.shm_path, &chain)?;
         crate::outproc_effect::spawn_effect_child(
             &launch.child_exe,
             &launch.shm_path,
-            path,
-            plugin_id,
+            &manifest,
             launch.sample_rate,
-            state,
         )
     }
     fn spawn_supervisor(
@@ -3354,24 +4434,7 @@ impl EngineWrap {
         #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
         return self.load_outproc_effect_plugin(path, plugin_id, None);
         #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
-        let child_slot = {
-            let guard = self
-                .outproc
-                .lock()
-                .map_err(|_| EffectRole::runtime_error("outproc mutex poisoned".into()))?;
-            guard
-                .as_ref()
-                .ok_or_else(|| {
-                    WrapError::OutProcEffectUnavailable(
-                        "outproc effect not initialized (test backend has no outproc path)".into(),
-                    )
-                })?
-                .child_slot
-                .upgrade()
-                .ok_or_else(|| {
-                    EffectRole::runtime_error("outproc effect stream is closed".into())
-                })?
-        };
+        return self.load_outproc_effect_plugin(path, plugin_id, None);
         #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
         let child_slot = {
             let mut guard = self.outproc_instrument.lock().map_err(|_| {
@@ -3398,9 +4461,6 @@ impl EngineWrap {
                     InstrumentRole::runtime_error("outproc instrument stream is closed".into())
                 })?
         };
-        #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
-        return self
-            .load_outproc_plugin_impl::<DefaultOutProcRole>(child_slot, path, plugin_id, None);
         #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
         return self
             .load_outproc_plugin_impl::<DefaultOutProcRole>(child_slot, path, plugin_id, None);
@@ -3425,55 +4485,467 @@ impl EngineWrap {
         bus: Option<String>,
         state: Option<PathBuf>,
     ) -> Result<LoadedPluginSummary, WrapError> {
-        // slot の解決だけを lock 下で行い、attach 本体（child spawn + READY poll）前に guard を
-        // 必ず落とす: `outproc` mutex を数百 ms 保持すると 1 Hz health ticker（try_lock）や
-        // stats アクセサと競合する（従来コードも guard は slot 解決の式で即 drop していた）。
-        let (slot, bus_active) = {
-            let control_guard = self
+        let requested = crate::outproc_effect::ChainStageConfig::Catalog {
+            path: path.clone(),
+            plugin_id: plugin_id.clone(),
+            latest_state: state.clone(),
+            enabled: true,
+        };
+        let existing = {
+            let guard = self
                 .outproc
                 .lock()
                 .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))?;
-            let control = control_guard.as_ref().ok_or_else(|| {
+            let control = guard.as_ref().ok_or_else(|| {
                 WrapError::OutProcEffectUnavailable(
                     "outproc effect not initialized (test backend has no outproc path)".into(),
                 )
             })?;
-            let (weak_slot, bus_active) = match bus {
-                Some(bus) => {
-                    let slot = control.bus_slots.get(&bus).ok_or_else(|| {
-                        WrapError::OutProcEffect(format!(
-                            "unknown effect bus '{bus}' (configured by ORBIT_EFFECT_BUSES)"
-                        ))
-                    })?;
-                    // 宣言 = activation: この store 以降、callback は当該 bus を render 対象に
-                    // 含める（attach 完了前は engaged=false の pass-through）。宣言前の bus は
-                    // render 対象外 = 既定プールのコストゼロ（InsertBusStage::active の doc 参照）。
-                    // attach 失敗時は下で false に巻き戻す（宣言が生き残らない = pool を汚さない）。
-                    let active = control.bus_actives.get(&bus).cloned();
-                    if let Some(active) = &active {
-                        active.store(true, std::sync::atomic::Ordering::Release);
-                    }
-                    (slot, active)
-                }
-                None => (&control.child_slot, None),
-            };
-            (
-                weak_slot.upgrade().ok_or_else(|| {
-                    WrapError::OutProcEffect("outproc effect stream is closed".into())
-                })?,
-                bus_active,
-            )
+            let (_, entry, _) = resolve_outproc_effect_slot(control, &bus)?;
+            let existing = entry
+                .chain
+                .lock()
+                .map_err(|_| WrapError::OutProcEffect("effect chain config mutex poisoned".into()))?
+                .clone();
+            existing
         };
-        let result =
-            self.load_outproc_plugin_impl::<DefaultOutProcRole>(slot, path, plugin_id, state);
-        if result.is_err() {
-            // ロールバック: 失敗した宣言の bus を render 対象から外す（TS 側も宣言を破棄して
-            // bus 名を free-list に返すため、Rust/TS の状態が対称に戻る）。
-            if let Some(active) = bus_active {
-                active.store(false, std::sync::atomic::Ordering::Release);
+        if existing == [requested.clone()] {
+            return Ok(outproc_plugin_summary(&path, &plugin_id));
+        }
+        if !existing.is_empty() {
+            return Err(WrapError::OutProcEffect(
+                "outproc effect chain is already loaded; use ApplyEffectChain to replace it".into(),
+            ));
+        }
+        self.apply_outproc_effect_chain(
+            bus,
+            crate::outproc_effect::EffectChainPlan {
+                chain: vec![crate::outproc_effect::EffectChainPlanStage::Load {
+                    stage: crate::outproc_effect::EffectChainStageSpec::Catalog {
+                        path: path.clone(),
+                        plugin_id: plugin_id.clone(),
+                        state,
+                        enabled: true,
+                    },
+                }],
+                save_dropped: Vec::new(),
+            },
+            crate::outproc_effect::ApplyEffectChainMode::Diff,
+        )?;
+        Ok(outproc_plugin_summary(&path, &plugin_id))
+    }
+
+    /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
+    /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
+    #[cfg(feature = "outproc-effect")]
+    pub fn apply_outproc_effect_chain(
+        &self,
+        bus: Option<String>,
+        plan: crate::outproc_effect::EffectChainPlan,
+        mode: crate::outproc_effect::ApplyEffectChainMode,
+    ) -> Result<AppliedEffectChainSummary, WrapError> {
+        self.apply_outproc_effect_chain_with_timeout(
+            bus,
+            plan,
+            mode,
+            orbit_audio_sandbox::APPLY_CHAIN_MAILBOX_TIMEOUT,
+        )
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    fn apply_outproc_effect_chain_with_timeout(
+        &self,
+        bus: Option<String>,
+        plan: crate::outproc_effect::EffectChainPlan,
+        mode: crate::outproc_effect::ApplyEffectChainMode,
+        apply_timeout: Duration,
+    ) -> Result<AppliedEffectChainSummary, WrapError> {
+        let mut reservation = EffectReplacementReservation::new(self, bus.clone());
+        let (child_slot, entry, stats, bus_active) = {
+            let mut guard = self
+                .outproc
+                .lock()
+                .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))?;
+            let control = guard.as_mut().ok_or_else(|| {
+                WrapError::OutProcEffectUnavailable(
+                    "outproc effect not initialized (test backend has no outproc path)".into(),
+                )
+            })?;
+            let (child_slot, entry, stats) = resolve_outproc_effect_slot(control, &bus)?;
+            let bus_active = bus
+                .as_ref()
+                .and_then(|name| control.bus_actives.get(name))
+                .cloned();
+            if let Some(active) = &bus_active {
+                // Declaration is monotone for the lifetime of the bus pool (#625 R25).
+                active.store(true, Ordering::Release);
+            }
+            control.replacements_in_flight.insert(bus.clone());
+            reservation.mark_in_flight();
+            (child_slot, entry, stats, bus_active)
+        };
+
+        let previous = entry
+            .chain
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("effect chain config mutex poisoned".into()))?
+            .clone();
+        let desired = crate::outproc_effect::desired_chain(&previous, &plan)
+            .map_err(WrapError::OutProcEffectRequest)?;
+
+        enum ApplyRoute {
+            Mailbox(Arc<orbit_audio_sandbox::CommandMailboxHost>),
+            Rebuild(Option<Arc<orbit_audio_sandbox::CommandMailboxHost>>),
+            Empty,
+        }
+
+        let mut route = {
+            let slot = lock_child_slot_recovering(&child_slot, "effect chain route inspection");
+            let registry_is_intact = effect_chain_registry_is_intact(&slot, &stats);
+            match &*slot {
+                ChildSlot::Active { mailbox, .. }
+                    if mode == crate::outproc_effect::ApplyEffectChainMode::Diff
+                        && registry_is_intact =>
+                {
+                    ApplyRoute::Mailbox(mailbox.clone())
+                }
+                ChildSlot::Active { mailbox, .. } => {
+                    ApplyRoute::Rebuild(registry_is_intact.then(|| mailbox.clone()))
+                }
+                ChildSlot::Empty(_) if desired.is_empty() && previous.is_empty() => {
+                    ApplyRoute::Empty
+                }
+                ChildSlot::Empty(_) => ApplyRoute::Rebuild(None),
+                ChildSlot::Loading { path } => {
+                    return Err(WrapError::OutProcEffect(format!(
+                        "effect plugin load already in progress for {path:?}"
+                    )))
+                }
+                ChildSlot::Closed => {
+                    return Err(WrapError::OutProcSlotClosed(
+                        "outproc effect slot is closed after an unrecoverable attach failure"
+                            .into(),
+                    ))
+                }
+            }
+        };
+
+        if let ApplyRoute::Mailbox(mailbox) = &route {
+            let plan_path = crate::outproc_effect::write_apply_plan(&entry.shm_path, &plan)
+                .map_err(|error| {
+                    WrapError::OutProcEffect(format!("write effect chain apply plan: {error}"))
+                })?;
+            match mailbox.issue_apply_chain_with_timeout(&plan_path, apply_timeout) {
+                Ok(_) => {
+                    let desired_is_empty = desired.is_empty();
+                    *entry.chain.lock().map_err(|_| {
+                        WrapError::OutProcEffect("effect chain config mutex poisoned".into())
+                    })? = desired;
+                    let dropped = dropped_stage_summaries(&plan.save_dropped)?;
+                    if desired_is_empty {
+                        self.teardown_outproc_effect_slot(
+                            &bus,
+                            &child_slot,
+                            &entry,
+                            stats.clone(),
+                        )?;
+                        return Ok(AppliedEffectChainSummary {
+                            child_pid: 0,
+                            dropped,
+                        });
+                    }
+                    return Ok(AppliedEffectChainSummary {
+                        child_pid: stats.current_child_pid.load(Ordering::Acquire),
+                        dropped,
+                    });
+                }
+                Err(orbit_audio_sandbox::CommandMailboxError::ChildExited { .. }) => {
+                    // The desired config was computed from the pre-crash authority. Rebuild below.
+                    route = ApplyRoute::Rebuild(None);
+                }
+                Err(error) => return Err(effect_chain_apply_mailbox_error(error)),
             }
         }
-        result
+
+        if matches!(route, ApplyRoute::Empty) {
+            entry.engaged.store(false, Ordering::Release);
+            *entry.chain.lock().map_err(|_| {
+                WrapError::OutProcEffect("effect chain config mutex poisoned".into())
+            })? = Vec::new();
+            return Ok(AppliedEffectChainSummary {
+                child_pid: 0,
+                dropped: Vec::new(),
+            });
+        }
+
+        let dropped = match &route {
+            ApplyRoute::Rebuild(Some(mailbox)) => {
+                for stage in &plan.save_dropped {
+                    let argument = serde_json::to_string(&serde_json::json!({
+                        "index": stage.prev_index,
+                        "path": stage.path,
+                    }))
+                    .map_err(|error| WrapError::OutProcEffectRequest(error.to_string()))?;
+                    mailbox
+                        .issue_save_state_at(&argument, &stage.path)
+                        .map_err(effect_chain_apply_mailbox_error)?;
+                }
+                dropped_stage_summaries(&plan.save_dropped)?
+            }
+            ApplyRoute::Rebuild(None) => {
+                dropped_stage_summaries_from_latest_state(&previous, &plan.save_dropped)?
+            }
+            ApplyRoute::Mailbox(_) | ApplyRoute::Empty => Vec::new(),
+        };
+
+        let was_active = matches!(
+            &*lock_child_slot_recovering(&child_slot, "effect rebuild state check"),
+            ChildSlot::Active { .. }
+        );
+        if was_active {
+            self.teardown_outproc_effect_slot(&bus, &child_slot, &entry, stats.clone())?;
+        }
+        if desired.is_empty() {
+            *entry.chain.lock().map_err(|_| {
+                WrapError::OutProcEffect("effect chain config mutex poisoned".into())
+            })? = Vec::new();
+            entry.engaged.store(false, Ordering::Release);
+            return Ok(AppliedEffectChainSummary {
+                child_pid: 0,
+                dropped,
+            });
+        }
+
+        self.load_outproc_effect_chain_impl(child_slot, &entry, stats.clone(), previous, desired)?;
+        // Keep the monotone activation handle alive in this scope so accidental future rollback
+        // is visible at the exact apply boundary. No false store is permitted here.
+        let _ = bus_active;
+        Ok(AppliedEffectChainSummary {
+            child_pid: stats.current_child_pid.load(Ordering::Acquire),
+            dropped,
+        })
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    fn load_outproc_effect_chain_impl(
+        &self,
+        child_slot: Arc<Mutex<ChildSlot<EffectRole>>>,
+        entry: &EffectSlotEntry,
+        stats: Arc<crate::outproc_effect::OutProcEffectStats>,
+        previous: crate::outproc_effect::ChainConfig,
+        desired: crate::outproc_effect::ChainConfig,
+    ) -> Result<(), WrapError> {
+        let marker = crate::outproc_effect::chain_manifest_path(&entry.shm_path);
+        let mut slot = lock_child_slot_recovering(&child_slot, "rack initial state check");
+        match &*slot {
+            ChildSlot::Empty(_) => {}
+            ChildSlot::Loading { path } => {
+                return Err(WrapError::OutProcEffect(format!(
+                    "effect plugin load already in progress for {path:?}"
+                )))
+            }
+            ChildSlot::Active { .. } => {
+                return Err(WrapError::OutProcEffect(
+                    "effect rack spawn requires an Empty slot".into(),
+                ))
+            }
+            ChildSlot::Closed => {
+                return Err(WrapError::OutProcSlotClosed(
+                    "outproc effect slot is closed after an unrecoverable attach failure".into(),
+                ))
+            }
+        }
+        let mut launch = match std::mem::replace(&mut *slot, ChildSlot::Closed) {
+            ChildSlot::Empty(launch) => launch,
+            _ => unreachable!("ChildSlot state was checked while holding the same mutex"),
+        };
+        *slot = ChildSlot::Loading {
+            path: marker.clone(),
+        };
+        drop(slot);
+
+        let ready_mmap = match orbit_audio_sandbox::open_shared(&launch.shm_path) {
+            Ok(mmap) => mmap,
+            Err(error) => {
+                *lock_child_slot_recovering(&child_slot, "rack open_shared failure") =
+                    ChildSlot::Closed;
+                return Err(WrapError::OutProcEffect(format!(
+                    "open child readiness mapping {:?}: {error}",
+                    launch.shm_path
+                )));
+            }
+        };
+        let region = orbit_audio_sandbox::region_ptr(&ready_mmap);
+        let mailbox = Arc::new(orbit_audio_sandbox::CommandMailboxHost::new(
+            launch.shm_path.clone(),
+        ));
+        let ui_pump = Arc::new(orbit_audio_sandbox::UiEventPump::new(
+            launch.shm_path.clone(),
+        ));
+        let ui_target = Arc::new(Mutex::new(None));
+        if let Err(error) = ui_pump.reset_after_child_exit(&mailbox) {
+            *lock_child_slot_recovering(&child_slot, "rack UI reset failure") =
+                ChildSlot::Empty(launch);
+            return Err(WrapError::OutProcEffect(format!(
+                "reset UI event pump: {error}"
+            )));
+        }
+
+        stats.initial_attach_pending.store(true, Ordering::Release);
+        stats.child_early_exit.arm_for_new_attempt();
+        let manifest = match crate::outproc_effect::write_chain_manifest(&launch.shm_path, &desired)
+        {
+            Ok(path) => path,
+            Err(error) => {
+                *lock_child_slot_recovering(&child_slot, "rack manifest failure") =
+                    ChildSlot::Empty(launch);
+                return Err(WrapError::OutProcEffect(format!(
+                    "write effect chain spawn manifest: {error}"
+                )));
+            }
+        };
+        let first_child = match crate::outproc_effect::spawn_effect_child(
+            &launch.child_exe,
+            &launch.shm_path,
+            &manifest,
+            launch.sample_rate,
+        ) {
+            Ok(child) => child,
+            Err(error) => {
+                let child_exe = launch.child_exe.clone();
+                *lock_child_slot_recovering(&child_slot, "rack child spawn failure") =
+                    ChildSlot::Empty(launch);
+                return Err(WrapError::OutProcEffect(format!(
+                    "spawn outproc child {child_exe:?}: {error}"
+                )));
+            }
+        };
+        stats
+            .current_child_pid
+            .store(first_child.id(), Ordering::Relaxed);
+        *entry
+            .chain
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("effect chain config mutex poisoned".into()))? =
+            desired;
+        let supervisor =
+            match crate::outproc_effect::EffectChildSupervisor::spawn_chain_with_mailbox(
+                first_child,
+                launch.shm_path.clone(),
+                stats.clone(),
+                launch.child_exe.clone(),
+                launch.sample_rate,
+                entry.chain.clone(),
+                mailbox.clone(),
+                PluginUiWiring {
+                    pump: ui_pump.clone(),
+                    target: ui_target.clone(),
+                    events: self.plugin_ui_events.clone(),
+                },
+            ) {
+                Ok(supervisor) => supervisor,
+                Err(error) => {
+                    launch.cleanup_shm_on_drop = false;
+                    *entry.chain.lock().map_err(|_| {
+                        WrapError::OutProcEffect("effect chain config mutex poisoned".into())
+                    })? = previous;
+                    *lock_child_slot_recovering(&child_slot, "rack supervisor spawn failure") =
+                        ChildSlot::Closed;
+                    return Err(WrapError::OutProcEffect(format!(
+                        "spawn outproc watchdog: {error}"
+                    )));
+                }
+            };
+
+        let deadline = std::time::Instant::now() + CHILD_READY_TIMEOUT;
+        loop {
+            let status = unsafe { (*region).child_status.load(Ordering::Acquire) };
+            if status == orbit_audio_sandbox::transport::CHILD_STATUS_READY {
+                let flags = unsafe { (*region).child_flags.load(Ordering::Acquire) };
+                if !EffectRole::role_matches(flags) {
+                    let error = retryable_attach_failure(
+                        supervisor,
+                        region,
+                        &child_slot,
+                        launch,
+                        format!(
+                            "loaded plugin role does not match daemon role (child_flags={flags:#x})"
+                        ),
+                    );
+                    *entry.chain.lock().map_err(|_| {
+                        WrapError::OutProcEffect("effect chain config mutex poisoned".into())
+                    })? = previous;
+                    return Err(error);
+                }
+                stats.initial_attach_pending.store(false, Ordering::Release);
+                break;
+            }
+            // Root 3-3: `CHILD_STATUS_LOAD_FAILED` is the rack child's own, more specific signal
+            // (set by `RackController::load_initial` before it exits) — checking it before
+            // falling through to the generic `child_early_exit` wait means we surface *why* the
+            // load failed (e.g. "failed index 1: <plugin>: <reason>") instead of only ever
+            // learning the process exited. The child also writes the same text into
+            // `cmd_result_detail` right after setting this status; read it back here rather than
+            // reconstructing a generic message from the exit status alone.
+            if status == orbit_audio_sandbox::transport::CHILD_STATUS_LOAD_FAILED {
+                let detail = unsafe {
+                    orbit_audio_sandbox::transport::read_cstr_field(&(*region).cmd_result_detail)
+                        .map(str::to_string)
+                }
+                .filter(|detail| !detail.is_empty())
+                .unwrap_or_else(|| "child reported a load failure without detail".into());
+                let error =
+                    retryable_attach_failure(supervisor, region, &child_slot, launch, detail);
+                *entry.chain.lock().map_err(|_| {
+                    WrapError::OutProcEffect("effect chain config mutex poisoned".into())
+                })? = previous;
+                return Err(error);
+            }
+            if stats.child_early_exit.fired() {
+                let detail = stats
+                    .child_early_exit
+                    .reason()
+                    .map(|status| format!("child exited before publishing READY ({status})"))
+                    .unwrap_or_else(|| "child exited before publishing READY".into());
+                let error =
+                    retryable_attach_failure(supervisor, region, &child_slot, launch, detail);
+                *entry.chain.lock().map_err(|_| {
+                    WrapError::OutProcEffect("effect chain config mutex poisoned".into())
+                })? = previous;
+                return Err(error);
+            }
+            if std::time::Instant::now() >= deadline {
+                let error = retryable_attach_failure(
+                    supervisor,
+                    region,
+                    &child_slot,
+                    launch,
+                    format!("timed out waiting {CHILD_READY_TIMEOUT:?} for child READY"),
+                );
+                *entry.chain.lock().map_err(|_| {
+                    WrapError::OutProcEffect("effect chain config mutex poisoned".into())
+                })? = previous;
+                return Err(error);
+            }
+            std::thread::sleep(CHILD_READY_POLL);
+        }
+
+        launch.engaged.store(true, Ordering::Release);
+        launch.cleanup_shm_on_drop = false;
+        let mut slot = lock_child_slot_recovering(&child_slot, "successful rack attach");
+        debug_assert_slot_loading(&slot);
+        *slot = ChildSlot::Active {
+            path: marker,
+            plugin_id: None,
+            state: None,
+            latest_state: Arc::new(Mutex::new(None)),
+            engaged: launch.engaged.clone(),
+            mailbox,
+            ui_pump,
+            ui_target,
+            _supervisor: supervisor,
+        };
+        Ok(())
     }
 
     /// effect plugin を固定 slot 上で目標 spec へ収束させる ensure 操作。
@@ -3650,7 +5122,10 @@ impl EngineWrap {
             if !entry.shutdown.load(Ordering::Acquire) {
                 entry.engaged.store(true, Ordering::Release);
             }
-            tracing::warn!(
+            // error!: the RT thread failed to answer the quiesce request — the entry point of
+            // the unresponsive-audio-thread class #625 fought; the RPC error below reaches the
+            // caller, but this record is what get_log keeps after the evaluation scrolls away.
+            tracing::error!(
                 slot = %effect_slot_label(target),
                 "effect replacement quiesce ack timed out; the previous effect is kept"
             );
@@ -4237,20 +5712,37 @@ impl EngineWrap {
                 let control = control_guard.as_ref().ok_or_else(|| {
                     error_kind.unavailable("outproc effect is not initialized".into())
                 })?;
-                let slot = match bus {
-                    Some(bus) => control
-                        .bus_slots
-                        .get(bus)
-                        .ok_or_else(|| error_kind.target(format!("unknown effect bus '{bus}'")))?
-                        .upgrade()
-                        .ok_or_else(|| {
-                            error_kind.target(format!("effect bus '{bus}' stream is closed"))
+                let (slot, chain) = match bus {
+                    Some(bus) => (
+                        control
+                            .bus_slots
+                            .get(bus)
+                            .ok_or_else(|| {
+                                error_kind.target(format!("unknown effect bus '{bus}'"))
+                            })?
+                            .upgrade()
+                            .ok_or_else(|| {
+                                error_kind.target(format!("effect bus '{bus}' stream is closed"))
+                            })?,
+                        control
+                            .bus_entries
+                            .get(bus)
+                            .ok_or_else(|| {
+                                error_kind.target(format!(
+                                    "effect bus '{bus}' is missing its chain config"
+                                ))
+                            })?
+                            .chain
+                            .clone(),
+                    ),
+                    None => (
+                        control.child_slot.upgrade().ok_or_else(|| {
+                            error_kind.target("master effect stream is closed".into())
                         })?,
-                    None => control.child_slot.upgrade().ok_or_else(|| {
-                        error_kind.target("master effect stream is closed".into())
-                    })?,
+                        control.master_entry.chain.clone(),
+                    ),
                 };
-                Ok(ResolvedOutProcSlot::Effect(slot))
+                Ok(ResolvedOutProcSlot::Effect { slot, chain })
             }
             #[cfg(feature = "outproc-instrument")]
             PluginStateTarget::Instrument { instance } => {
@@ -4280,9 +5772,10 @@ impl EngineWrap {
     fn plugin_ui_handles_for_target(
         &self,
         target: &PluginStateTarget,
-    ) -> Result<PluginUiHandles, WrapError> {
+        chain_index: usize,
+    ) -> Result<(PluginUiHandles, bool), WrapError> {
         self.resolve_outproc_slot(target, OutProcSlotErrorKind::Ui)?
-            .ui_handles()
+            .ui_handles(chain_index)
     }
 
     /// OPEN_UI は view attach 完了 ack を待つ。window title は mailbox `cmd_arg` で child へ渡す。
@@ -4298,7 +5791,8 @@ impl EngineWrap {
                 "windowTitle must be a non-empty string".into(),
             ));
         }
-        let (mailbox, pump, route) = self.plugin_ui_handles_for_target(&target)?;
+        let ((mailbox, pump, route), rack_target) =
+            self.plugin_ui_handles_for_target(&target, index as usize)?;
         if !mailbox.child_is_ready().map_err(plugin_ui_mailbox_error)? {
             return Err(WrapError::PluginUiUnavailable(
                 "the selected child is starting or respawning".into(),
@@ -4315,10 +5809,18 @@ impl EngineWrap {
                 ));
             }
         }
-        let result = mailbox
-            .issue_open_ui(&window_title)
-            .map(|_| ())
-            .map_err(plugin_ui_mailbox_error);
+        let result = if rack_target {
+            let argument = serde_json::to_string(&serde_json::json!({
+                "index": index,
+                "title": window_title,
+            }))
+            .map_err(|error| WrapError::PluginUiProtocol(error.to_string()))?;
+            mailbox.issue_open_ui_at(&argument)
+        } else {
+            mailbox.issue_open_ui(&window_title)
+        }
+        .map(|_| ())
+        .map_err(plugin_ui_mailbox_error);
         pump.finish_open(result.is_ok())
             .map_err(plugin_ui_pump_error)?;
         if result.is_err() {
@@ -4339,7 +5841,8 @@ impl EngineWrap {
         target: PluginStateTarget,
         index: u64,
     ) -> Result<(), WrapError> {
-        let (mailbox, _pump, route) = self.plugin_ui_handles_for_target(&target)?;
+        let ((mailbox, _pump, route), rack_target) =
+            self.plugin_ui_handles_for_target(&target, index as usize)?;
         let requested = PluginUiTarget::from_state_target(&target, index);
         let current = route
             .lock()
@@ -4352,20 +5855,27 @@ impl EngineWrap {
                 "requested UI target {requested:?} is not the currently open target {current:?}"
             )));
         }
-        mailbox
-            .issue_close_ui()
-            .map(|_| ())
-            .map_err(plugin_ui_mailbox_error)
+        if rack_target {
+            let argument = serde_json::to_string(&serde_json::json!({ "index": index }))
+                .map_err(|error| WrapError::PluginUiProtocol(error.to_string()))?;
+            mailbox.issue_close_ui_at(&argument)
+        } else {
+            mailbox.issue_close_ui()
+        }
+        .map(|_| ())
+        .map_err(plugin_ui_mailbox_error)
     }
 
     #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
     pub fn ack_outproc_ui_safepoint(
         &self,
         target: PluginStateTarget,
+        index: u64,
         generation: u64,
         evt_seq: u64,
     ) -> Result<(), WrapError> {
-        let (_mailbox, pump, route) = self.plugin_ui_handles_for_target(&target)?;
+        let ((_mailbox, pump, route), _rack_target) =
+            self.plugin_ui_handles_for_target(&target, index as usize)?;
         let current = route
             .lock()
             .map_err(|_| {
@@ -4379,13 +5889,17 @@ impl EngineWrap {
             Some(current) => match &target {
                 #[cfg(feature = "outproc-effect")]
                 PluginStateTarget::Effect { bus } => {
-                    current.role == "effect" && current.bus == *bus && current.instance.is_none()
+                    current.role == "effect"
+                        && current.bus == *bus
+                        && current.instance.is_none()
+                        && current.index == index
                 }
                 #[cfg(feature = "outproc-instrument")]
                 PluginStateTarget::Instrument { instance } => {
                     current.role == "instrument"
                         && current.instance.as_ref() == Some(instance)
                         && current.bus.is_none()
+                        && current.index == index
                 }
             },
         };
@@ -4404,6 +5918,7 @@ impl EngineWrap {
     pub fn save_outproc_plugin_state(
         &self,
         target: PluginStateTarget,
+        chain_index: usize,
         final_path: PathBuf,
     ) -> Result<SavedPluginStateSummary, WrapError> {
         if !final_path.is_absolute() {
@@ -4412,9 +5927,10 @@ impl EngineWrap {
             )));
         }
 
-        let (mailbox, latest_state) = self
+        let handles = self
             .resolve_outproc_slot(&target, OutProcSlotErrorKind::State)?
-            .state_handles()?;
+            .state_handles(chain_index)?;
+        let mailbox = handles.mailbox();
 
         if !mailbox
             .child_is_ready()
@@ -4440,7 +5956,7 @@ impl EngineWrap {
             Uuid::new_v4().simple()
         ));
 
-        let response = match mailbox.issue_save_state(&temp_path) {
+        let response = match handles.issue_save(&temp_path) {
             Ok(response) => response,
             Err(error) => {
                 if !matches!(
@@ -4492,7 +6008,7 @@ impl EngineWrap {
                     "sync state directory {parent:?} after rename: {error}"
                 ))
             })?;
-        record_latest_state_after_save(&latest_state, final_path.clone())?;
+        handles.record_latest_state(final_path.clone())?;
 
         Ok(SavedPluginStateSummary {
             path: final_path,
@@ -5866,7 +7382,7 @@ impl EngineWrap {
     }
 }
 
-#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+#[cfg(feature = "outproc-instrument")]
 pub(crate) fn record_latest_state_after_save(
     latest_state: &Arc<Mutex<Option<PathBuf>>>,
     final_path: PathBuf,
@@ -5934,29 +7450,161 @@ impl OutProcSlotErrorKind {
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 enum ResolvedOutProcSlot {
     #[cfg(feature = "outproc-effect")]
-    Effect(Arc<Mutex<ChildSlot<EffectRole>>>),
+    Effect {
+        slot: Arc<Mutex<ChildSlot<EffectRole>>>,
+        chain: Arc<Mutex<crate::outproc_effect::ChainConfig>>,
+    },
     #[cfg(feature = "outproc-instrument")]
     Instrument(Arc<Mutex<ChildSlot<InstrumentRole>>>),
 }
 
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 impl ResolvedOutProcSlot {
-    fn state_handles(&self) -> Result<PluginStateHandles, WrapError> {
+    fn state_handles(&self, chain_index: usize) -> Result<ResolvedPluginStateHandles, WrapError> {
         match self {
             #[cfg(feature = "outproc-effect")]
-            Self::Effect(slot) => active_plugin_state_handles(slot, "effect"),
+            Self::Effect { slot, chain } => {
+                validate_effect_chain_target(chain, chain_index, OutProcSlotErrorKind::State)?;
+                let (mailbox, _) = active_plugin_state_handles(slot, "effect")?;
+                Ok(ResolvedPluginStateHandles::Effect {
+                    mailbox,
+                    chain: chain.clone(),
+                    index: chain_index,
+                })
+            }
             #[cfg(feature = "outproc-instrument")]
-            Self::Instrument(slot) => active_plugin_state_handles(slot, "instrument"),
+            Self::Instrument(slot) => {
+                if chain_index != 0 {
+                    return Err(WrapError::PluginStateTarget(format!(
+                        "instrument chain_path index {chain_index} is out of range"
+                    )));
+                }
+                let (mailbox, latest_state) = active_plugin_state_handles(slot, "instrument")?;
+                Ok(ResolvedPluginStateHandles::Instrument {
+                    mailbox,
+                    latest_state,
+                })
+            }
         }
     }
 
-    fn ui_handles(&self) -> Result<PluginUiHandles, WrapError> {
+    fn ui_handles(&self, chain_index: usize) -> Result<(PluginUiHandles, bool), WrapError> {
         match self {
             #[cfg(feature = "outproc-effect")]
-            Self::Effect(slot) => active_plugin_ui_handles(slot, "effect"),
+            Self::Effect { slot, chain } => {
+                validate_effect_chain_target(chain, chain_index, OutProcSlotErrorKind::Ui)?;
+                Ok((active_plugin_ui_handles(slot, "effect")?, true))
+            }
             #[cfg(feature = "outproc-instrument")]
-            Self::Instrument(slot) => active_plugin_ui_handles(slot, "instrument"),
+            Self::Instrument(slot) => {
+                if chain_index != 0 {
+                    return Err(WrapError::PluginUiTarget(format!(
+                        "instrument chain_path index {chain_index} is out of range"
+                    )));
+                }
+                Ok((active_plugin_ui_handles(slot, "instrument")?, false))
+            }
         }
+    }
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+enum ResolvedPluginStateHandles {
+    #[cfg(feature = "outproc-effect")]
+    Effect {
+        mailbox: Arc<orbit_audio_sandbox::CommandMailboxHost>,
+        chain: Arc<Mutex<crate::outproc_effect::ChainConfig>>,
+        index: usize,
+    },
+    #[cfg(feature = "outproc-instrument")]
+    Instrument {
+        mailbox: Arc<orbit_audio_sandbox::CommandMailboxHost>,
+        latest_state: Arc<Mutex<Option<PathBuf>>>,
+    },
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+impl ResolvedPluginStateHandles {
+    fn mailbox(&self) -> &orbit_audio_sandbox::CommandMailboxHost {
+        match self {
+            #[cfg(feature = "outproc-effect")]
+            Self::Effect { mailbox, .. } => mailbox,
+            #[cfg(feature = "outproc-instrument")]
+            Self::Instrument { mailbox, .. } => mailbox,
+        }
+    }
+
+    fn issue_save(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<orbit_audio_sandbox::CommandMailboxResponse, orbit_audio_sandbox::CommandMailboxError>
+    {
+        match self {
+            #[cfg(feature = "outproc-effect")]
+            Self::Effect { mailbox, index, .. } => {
+                let argument = serde_json::to_string(&serde_json::json!({
+                    "index": index,
+                    "path": path,
+                }))
+                .map_err(|error| {
+                    orbit_audio_sandbox::CommandMailboxError::InvalidArgument(error.to_string())
+                })?;
+                mailbox.issue_save_state_at(&argument, path)
+            }
+            #[cfg(feature = "outproc-instrument")]
+            Self::Instrument { mailbox, .. } => mailbox.issue_save_state(path),
+        }
+    }
+
+    fn record_latest_state(&self, path: PathBuf) -> Result<(), WrapError> {
+        match self {
+            #[cfg(feature = "outproc-effect")]
+            Self::Effect { chain, index, .. } => {
+                let mut chain = chain.lock().map_err(|_| {
+                    WrapError::PluginStateProtocol("effect chain config mutex poisoned".into())
+                })?;
+                match chain.get_mut(*index) {
+                    Some(crate::outproc_effect::ChainStageConfig::Catalog {
+                        latest_state,
+                        ..
+                    }) => {
+                        *latest_state = Some(path);
+                        Ok(())
+                    }
+                    Some(crate::outproc_effect::ChainStageConfig::Standard { .. }) => Err(
+                        WrapError::PluginStateTarget(
+                            "standard plugins have no UI/state; parameters live in the DSL (SC.10.8)"
+                                .into(),
+                        ),
+                    ),
+                    None => Err(WrapError::PluginStateTarget(format!(
+                        "effect chain_path index {index} is out of range"
+                    ))),
+                }
+            }
+            #[cfg(feature = "outproc-instrument")]
+            Self::Instrument { latest_state, .. } => {
+                record_latest_state_after_save(latest_state, path)
+            }
+        }
+    }
+}
+
+#[cfg(feature = "outproc-effect")]
+fn validate_effect_chain_target(
+    chain: &Mutex<crate::outproc_effect::ChainConfig>,
+    index: usize,
+    error_kind: OutProcSlotErrorKind,
+) -> Result<(), WrapError> {
+    let chain = chain
+        .lock()
+        .map_err(|_| error_kind.target("effect chain config mutex poisoned".into()))?;
+    match chain.get(index) {
+        Some(crate::outproc_effect::ChainStageConfig::Catalog { .. }) => Ok(()),
+        Some(crate::outproc_effect::ChainStageConfig::Standard { .. }) => Err(error_kind.target(
+            "standard plugins have no UI/state; parameters live in the DSL (SC.10.8)".into(),
+        )),
+        None => Err(error_kind.target(format!("effect chain_path index {index} is out of range"))),
     }
 }
 
@@ -6017,6 +7665,118 @@ fn active_plugin_ui_handles<R: OutProcRole>(
         ChildSlot::Closed => Err(WrapError::PluginUiTarget(format!(
             "{role} child slot is closed"
         ))),
+    }
+}
+
+#[cfg(feature = "outproc-effect")]
+fn effect_chain_registry_is_intact(
+    slot: &ChildSlot<EffectRole>,
+    stats: &crate::outproc_effect::OutProcEffectStats,
+) -> bool {
+    matches!(slot, ChildSlot::Active { .. })
+        && stats.current_child_pid.load(Ordering::Acquire) != 0
+        && !stats.measurement_invalid.load(Ordering::Acquire)
+}
+
+#[cfg(feature = "outproc-effect")]
+fn dropped_stage_summaries(
+    dropped: &[crate::outproc_effect::SaveDroppedStage],
+) -> Result<Vec<DroppedEffectStageSummary>, WrapError> {
+    dropped
+        .iter()
+        .map(|stage| {
+            let bytes_written = std::fs::metadata(&stage.path)
+                .map_err(|error| {
+                    WrapError::OutProcEffect(format!(
+                        "stat dropped stage state {:?}: {error}",
+                        stage.path
+                    ))
+                })?
+                .len();
+            Ok(DroppedEffectStageSummary {
+                prev_index: stage.prev_index,
+                path: stage.path.clone(),
+                bytes_written,
+            })
+        })
+        .collect()
+}
+
+#[cfg(feature = "outproc-effect")]
+fn dropped_stage_summaries_from_latest_state(
+    previous: &crate::outproc_effect::ChainConfig,
+    dropped: &[crate::outproc_effect::SaveDroppedStage],
+) -> Result<Vec<DroppedEffectStageSummary>, WrapError> {
+    let mut summaries = Vec::new();
+    for stage in dropped {
+        let Some(crate::outproc_effect::ChainStageConfig::Catalog {
+            latest_state: Some(source),
+            ..
+        }) = previous.get(stage.prev_index)
+        else {
+            // A dead child cannot produce a first snapshot. Omitting the summary keeps TS from
+            // registering a nonexistent file while still allowing the crashed stage to be dropped.
+            continue;
+        };
+        if source != &stage.path {
+            std::fs::copy(source, &stage.path).map_err(|error| {
+                WrapError::OutProcEffect(format!(
+                    "recover dropped stage state from {source:?} to {:?}: {error}",
+                    stage.path
+                ))
+            })?;
+        }
+        let bytes_written = std::fs::metadata(&stage.path)
+            .map_err(|error| {
+                WrapError::OutProcEffect(format!(
+                    "stat recovered dropped stage state {:?}: {error}",
+                    stage.path
+                ))
+            })?
+            .len();
+        summaries.push(DroppedEffectStageSummary {
+            prev_index: stage.prev_index,
+            path: stage.path.clone(),
+            bytes_written,
+        });
+    }
+    Ok(summaries)
+}
+
+#[cfg(feature = "outproc-effect")]
+/// `CommandFailed` is the only definitive rejection: the child inspected the plan and refused,
+/// and its prepare-commit invariant guarantees the previous chain is untouched. Every other
+/// variant is uncertain. Five of them (`Busy` / `InvalidArgument` / `SequenceExhausted` /
+/// `Mapping` / `SidecarCleanup`) fail before the command is written and are over-conservative
+/// here, but all are dormant today — RPCs are fully serial within a connection, so `Busy` in
+/// particular only becomes reachable if a second concurrent WebSocket client is ever connected.
+fn effect_chain_registry_is_intact_after_mailbox_error(
+    error: &orbit_audio_sandbox::CommandMailboxError,
+) -> bool {
+    matches!(
+        error,
+        orbit_audio_sandbox::CommandMailboxError::CommandFailed { .. }
+    )
+}
+
+#[cfg(feature = "outproc-effect")]
+fn effect_chain_apply_mailbox_error(error: orbit_audio_sandbox::CommandMailboxError) -> WrapError {
+    use orbit_audio_sandbox::CommandMailboxError;
+    if !effect_chain_registry_is_intact_after_mailbox_error(&error) {
+        return WrapError::OutProcEffectUncertain(format!(
+            "effect chain apply ended without confirmation that the authoritative config is unchanged: {error}"
+        ));
+    }
+    match error {
+        CommandMailboxError::CommandFailed { detail, .. } => {
+            let suffix = if detail.contains("the previous chain is kept") {
+                ""
+            } else {
+                "; the previous chain is kept"
+            };
+            WrapError::OutProcEffect(format!("effect chain apply failed: {detail}{suffix}"))
+        }
+        _ => unreachable!("registry-intact mailbox failures are definitive child responses"),
     }
 }
 
@@ -6195,6 +7955,19 @@ pub struct LoadedPluginSummary {
 pub struct ReplacedPluginSummary {
     pub plugin: LoadedPluginSummary,
     pub quarantined_slot: bool,
+}
+
+#[derive(Debug)]
+pub struct DroppedEffectStageSummary {
+    pub prev_index: usize,
+    pub path: PathBuf,
+    pub bytes_written: u64,
+}
+
+#[derive(Debug)]
+pub struct AppliedEffectChainSummary {
+    pub child_pid: u32,
+    pub dropped: Vec<DroppedEffectStageSummary>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8031,14 +9804,18 @@ mod outproc_health_tests {
         let bus_slot = Arc::new(Mutex::new(ChildSlot::<EffectRole>::Closed));
         let mut bus_slots = HashMap::new();
         bus_slots.insert("fx1".to_owned(), Arc::downgrade(&bus_slot));
+        let mut bus_entries = HashMap::new();
+        bus_entries.insert("fx1".to_owned(), super::test_effect_slot_entry());
+        let mut bus_stats = HashMap::new();
+        bus_stats.insert("fx1".to_owned(), OutProcEffectStats::new());
         *wrap.outproc.lock().expect("lock outproc for injection") = Some(OutProcControl {
             stats: OutProcEffectStats::new(),
             cb_stats: CallbackTimeStats::new(),
             child_slot: Weak::new(),
             master_entry: super::test_effect_slot_entry(),
             bus_slots,
-            bus_entries: HashMap::new(),
-            bus_stats: HashMap::new(),
+            bus_entries,
+            bus_stats,
             bus_actives: HashMap::new(),
             bus_kinds: HashMap::new(),
             bus_index: HashMap::new(),
@@ -8057,9 +9834,7 @@ mod outproc_health_tests {
     }
 
     #[test]
-    fn load_outproc_effect_plugin_rolls_back_activation_on_failure() {
-        // #461 review Important: attach 失敗後に activation=true が残ると、失敗した宣言が
-        // render path を恒久占有する。失敗で flag が false に戻ることを固定する。
+    fn load_outproc_effect_plugin_keeps_bus_activation_monotone_on_failure() {
         let (wrap, _guard) =
             EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
         let bus_slot = Arc::new(Mutex::new(ChildSlot::<EffectRole>::Closed));
@@ -8068,14 +9843,18 @@ mod outproc_health_tests {
         bus_slots.insert("fx1".to_owned(), Arc::downgrade(&bus_slot));
         let mut bus_actives = HashMap::new();
         bus_actives.insert("fx1".to_owned(), active.clone());
+        let mut bus_entries = HashMap::new();
+        bus_entries.insert("fx1".to_owned(), super::test_effect_slot_entry());
+        let mut bus_stats = HashMap::new();
+        bus_stats.insert("fx1".to_owned(), OutProcEffectStats::new());
         *wrap.outproc.lock().expect("lock outproc for injection") = Some(OutProcControl {
             stats: OutProcEffectStats::new(),
             cb_stats: CallbackTimeStats::new(),
             child_slot: Weak::new(),
             master_entry: super::test_effect_slot_entry(),
             bus_slots,
-            bus_entries: HashMap::new(),
-            bus_stats: HashMap::new(),
+            bus_entries,
+            bus_stats,
             bus_actives,
             bus_kinds: HashMap::new(),
             bus_index: HashMap::new(),
@@ -8090,8 +9869,8 @@ mod outproc_health_tests {
         );
         assert!(result.is_err());
         assert!(
-            !active.load(std::sync::atomic::Ordering::Acquire),
-            "attach 失敗後は activation がロールバックされること"
+            active.load(std::sync::atomic::Ordering::Acquire),
+            "bus activation is monotone once a receiver is declared (#625)"
         );
     }
 
@@ -8103,11 +9882,23 @@ mod outproc_health_tests {
             "stateful-effect.clap",
             None,
         );
-        let latest_state = match &active {
-            ChildSlot::Active { latest_state, .. } => latest_state.clone(),
-            _ => unreachable!("fixture creates an active slot"),
-        };
         let (wrap, _child_slot) = wrap_with_child_slot(active, OutProcEffectStats::new());
+        let chain = wrap
+            .outproc
+            .lock()
+            .expect("lock effect control")
+            .as_ref()
+            .expect("effect control")
+            .master_entry
+            .chain
+            .clone();
+        *chain.lock().expect("lock authoritative chain") =
+            vec![crate::outproc_effect::ChainStageConfig::Catalog {
+                path: PathBuf::from("stateful-effect.clap"),
+                plugin_id: None,
+                latest_state: None,
+                enabled: true,
+            }];
 
         let ready_mmap = orbit_audio_sandbox::open_shared(&shm_path).expect("open ready mapping");
         let ready_region = orbit_audio_sandbox::region_ptr(&ready_mmap);
@@ -8143,12 +9934,20 @@ mod outproc_health_tests {
                     );
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 };
-                let sidecar = unsafe {
+                let arg = unsafe {
                     orbit_audio_sandbox::transport::read_cstr_field(&(*region).cmd_arg)
-                        .expect("valid sidecar path")
+                        .expect("valid rack state JSON")
                         .to_owned()
                 };
-                let mut file = std::fs::File::create(&sidecar).expect("create sidecar");
+                assert_eq!(
+                    unsafe { (*region).cmd_kind.load(Ordering::Relaxed) },
+                    orbit_audio_sandbox::transport::CMD_SAVE_STATE_AT
+                );
+                let arg: serde_json::Value =
+                    serde_json::from_str(&arg).expect("parse rack state JSON");
+                assert_eq!(arg["index"], 0);
+                let sidecar = arg["path"].as_str().expect("state sidecar path");
+                let mut file = std::fs::File::create(sidecar).expect("create sidecar");
                 std::io::Write::write_all(&mut file, &responder_state).expect("write sidecar");
                 file.sync_all().expect("sync sidecar");
                 unsafe {
@@ -8165,7 +9964,11 @@ mod outproc_health_tests {
         let responder = spawn_responder(expected_state.clone());
 
         let saved = wrap
-            .save_outproc_plugin_state(PluginStateTarget::Effect { bus: None }, final_path.clone())
+            .save_outproc_plugin_state(
+                PluginStateTarget::Effect { bus: None },
+                0,
+                final_path.clone(),
+            )
             .expect("save state");
         responder.join().expect("responder join");
         assert_eq!(saved.path, final_path);
@@ -8175,9 +9978,14 @@ mod outproc_health_tests {
             expected_state
         );
         assert_eq!(
-            *latest_state.lock().expect("latest state lock"),
-            Some(final_path.clone()),
-            "the exact Arc shared with the supervisor must advance after save"
+            *chain.lock().expect("authoritative chain lock"),
+            vec![crate::outproc_effect::ChainStageConfig::Catalog {
+                path: PathBuf::from("stateful-effect.clap"),
+                plugin_id: None,
+                latest_state: Some(final_path.clone()),
+                enabled: true,
+            }],
+            "the per-stage latest_state in ChainConfig must advance after save"
         );
         assert_eq!(
             std::fs::read_dir(&state_directory)
@@ -8204,6 +10012,7 @@ mod outproc_health_tests {
         let performing_saved = wrap
             .save_outproc_plugin_state(
                 PluginStateTarget::Effect { bus: None },
+                0,
                 performing_path.clone(),
             )
             .expect("state save must succeed while performing");
@@ -8541,6 +10350,7 @@ mod outproc_instrument_health_tests {
                 super::PluginStateTarget::Instrument {
                     instance: super::DEFAULT_INSTRUMENT_INSTANCE.to_string(),
                 },
+                0,
                 final_path.clone(),
             )
             .expect_err("STARTING child must reject state save after resolving the instance");
@@ -8956,6 +10766,14 @@ mod effect_replace_tests {
                 quiesce_requested: requested,
                 quiesce_done: done,
                 shutdown,
+                chain: Arc::new(Mutex::new(vec![
+                    crate::outproc_effect::ChainStageConfig::Catalog {
+                        path: PathBuf::from(OLD_PLUGIN),
+                        plugin_id: None,
+                        latest_state: None,
+                        enabled: true,
+                    },
+                ])),
             },
             stats,
             old_pid,

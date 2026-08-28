@@ -341,6 +341,11 @@ daemon の状態取得。
 既存の effect slot または instrument slot を daemon 再起動なしで差し替える。
 slot が空の場合は同じ command が ensure-load として動作する。
 
+> 🔴 **`role="effect"` は #628 で退役する**（`ApplyEffectChain` の部分集合になるため —
+> 単発差し替え = `chain: [{op:"load", …}]` + `save_dropped`）。退役後、`role="effect"` の
+> `ReplacePlugin` は **`superseded by ApplyEffectChain (#628)`** の明示エラーを返す。
+> **`role="instrument"` は無変更**（instrument のチェーンは v1 に無い）。
+
 ```json
 // master effect（bus 省略）
 {
@@ -397,6 +402,10 @@ slot が空の場合は同じ command が ensure-load として動作する。
 
 ### UnloadPlugin（v0.2）
 
+> 🔴 **#628 で退役する**（`ApplyEffectChain` の `chain: []` が同じことを行うため）。
+> 退役後は **`superseded by ApplyEffectChain (#628)`** の明示エラーを返す。
+> 到達不能な二重機構を残さないため、旧経路は温存しない。
+
 effect slot の現在の tenant だけを停止・detach し、同じ slot を `Empty` に戻す。
 bus の割当、active 状態、routing は保持される。既に `Empty` の場合は冪等な noop。
 v1 では instrument の unload を提供しない。
@@ -417,6 +426,65 @@ v1 では instrument の unload を提供しない。
 
 - `role` は `"effect"` のみ。欠如・`"instrument"`・その他は `MALFORMED_REQUEST`
 - `bus` は任意。省略時は master effect slot
+- `outproc-effect` のない build では `OUTPROC_EFFECT_UNAVAILABLE`
+
+### ApplyEffectChain（v0.3・#628）
+
+1 レシーバ（master / named effect bus）の **effect チェーン全体を 1 コマンドで確定させる**。
+チェーンの編集（要素の追加・削除・順序変更・差し替え・`enabled` 切替・標準プラグインの
+パラメータ更新）はすべてこの 1 コマンドで表現され、**child プロセスの respawn を伴わない**。
+
+**1 評価 = 1 コマンド = 1 コミット。** child 内で新 stage list を prepare し、block 境界で
+1 回だけ swap する（prepare-commit 型）。途中失敗では**旧チェーンが無傷のまま鳴り続ける** —
+「半分だけ編集されたチェーン」が確定することはない。
+
+```json
+{
+  "id": "u10",
+  "method": "ApplyEffectChain",
+  "params": {
+    "role": "effect",
+    "bus": "seq-bus-0",
+    "mode": "diff",
+    "chain": [
+      { "op": "keep", "prev_index": 0, "enabled": true },
+      { "op": "load", "kind": "catalog", "path": "/plugins/ValhallaRoom.vst3",
+        "plugin_id": null, "state": "/abs/project/states/…", "enabled": true },
+      { "op": "load", "kind": "standard", "name": "Gain",
+        "params": { "db": -10.0 }, "enabled": true },
+      { "op": "keep", "prev_index": 2, "enabled": true, "params": { "db": -6.0 } }
+    ],
+    "save_dropped": [ { "prev_index": 1, "path": "/abs/project/states/…" } ]
+  }
+}
+
+// Response
+{
+  "id": "u10",
+  "result": {
+    "status": "applied",
+    "child_pid": 12345,
+    "dropped": [ { "prev_index": 1, "path": "/abs/project/states/…", "bytes_written": 4096 } ]
+  }
+}
+```
+
+- `role` は **`"effect"` のみ**。欠如・`"instrument"`・その他は `MALFORMED_REQUEST`
+  （instrument のチェーンは v1 に無い — 並列 instrument は SC.10.6 / SC.10.11 で後続）
+- `bus` は任意。省略時は master effect slot（既存規約）
+- `mode` は `"diff"`（通常）または `"rebuild"`（teardown → 全段 spawn。uncertain 復旧と
+  daemon respawn replay の経路）
+- **`chain` は目標状態の全体**であり差分命令列ではない。`op` は `keep`（`prev_index` で
+  旧チェーンの要素を指す）または `load`（新規ロード）
+- `kind` は `catalog`（実ファイルを指す）/ `standard`（アプリ同梱プラグインを**記号で**指す。
+  実パス解決は child が自分の exe の隣で行う）/ `layer`（予約・v1 は stage 表記エラー）
+- **standard 要素は state を持たない**: standard を指す `save_dropped`、standard への
+  `state` 指定はいずれも `MALFORMED_REQUEST`
+- `keep` の `params` は **standard 要素のみ有効**（再ロードせずパラメータだけ更新する）
+- 失敗は既存 `ProtocolError` 形で `OUTPROC_EFFECT_RUNTIME` + **失敗した index** を本文に含む
+- **毎評価必ず発行される**（TS は空 diff でも短絡しない）。daemon は Active slot の child
+  健全性を検分し、抜け殻なら同一コマンド内で `rebuild` へ倒す — これが「同じ行の再評価で
+  必ず復旧する」保証であり、#626 の effect 側の解消にあたる
 - `outproc-effect` のない build では `OUTPROC_EFFECT_UNAVAILABLE`
 
 ### GetPluginState（v0.2）
@@ -453,6 +521,14 @@ TypeScript 層でこの wire target へ解決済みであり、daemon は chain 
 
 - `path` は絶対パス。埋め込み NUL、共有 mailbox の固定長を超える UTF-8 path は拒否する
 - `role="effect"` の `bus` は任意。省略時は master effect slot
+- 🔴 **`chain_path`（v0.3・#628）**: **0 始まりの整数配列**でチェーン内の位置を指す。
+  省略時は `[0]`。**v1 は長さ 1 のみ**を受理し、`len > 1` は stage 表記エラー
+  （`layer` の入れ子は後続）。配列型にしてあるのは、入れ子では位置が 1 次元 index で
+  指せないため — layer 実装時に wire を再設計しない。
+  **`chain_path` が standard 要素を指す場合は明示エラー**（標準プラグインは state を持たない）。
+  同じ `chain_path` を `OpenPluginUI` / `ClosePluginUI` / `AckUiSafepoint` も取る
+  （UI 系コマンドの詳細は `docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`）。
+  旧 `index`（UIH.5 の 1 始まり）との写像は **TS 側 `daemon-client` の 1 箇所に集約**する。
 - `role="instrument"` の `instance` は必須
 - sample playback、live instrument note、または上位 transport が演奏中なら保存を拒否する。
   自動停止は行わない
@@ -606,6 +682,11 @@ MCP は LLM agent とツールを繋ぐ標準プロトコル。本プロトコ�
 **結論**: 本 protocol は MCP とは別物として設計するが、**将来 LLM agent から daemon を触りたい場合は、MCP→本 protocol のブリッジ**を別途作る（Issue [#96](https://github.com/signalcompose/orbitscore/issues/96) のスコープ）。
 
 互換性を取る必要はないが、メッセージ型は **MCP 風の Command/Response/Event トリプル**に揃えることで、将来 MCP アダプタを書きやすくしておく。
+
+🔴 **`open_plugin_ui` の path 化（#628）**: MCP ツール `open_plugin_ui` は引数を数値 `index` から
+**`chain_path`（0 始まりの整数配列）** へ改める。DSL 表面から数値 index が撤回された
+（core spec PH.2c / SC.10.10）ため、**index を露出する経路は MCP にも残さない**。
+LLM は `ui("名前")` と MCP の両方から UI を開ける（人間の主経路はエディタの Cmd+Click）。
 
 ---
 
