@@ -21,8 +21,10 @@ snare.output("drum")
 You can insert an effect on a group bus too — for example, applying a single compressor after grouping several sequences together.
 
 ```text
-sum("bus").effect("./plugins/MyEffect.clap")
+sum("bus").effect("GlueComp")
 ```
+
+You can also insert effects as a chain (array). See [Inserting Effects](./effects.md) for how to chain multiple plugins in series and how to use a built-in plugin such as `Gain(db: n)`.
 
 The processing order is "per-sequence insert (`seq.effect()`) then group bus" — the same idea as "track insert then group track" in a DAW.
 
@@ -30,6 +32,7 @@ The processing order is "per-sequence insert (`seq.effect()`) then group bus" �
 
 - `sum` is a single level only — **you cannot nest a sum inside another sum**.
 - The name you pass to `output(name)` must already be declared with `global.sum(name)`. An undeclared name is an error.
+- Only **audio sequences** can be sent to a sum bus with `output(name)`. A note sequence created with `seq.midi()` / `seq.instrument()` cannot be sent to a sum bus in v1 (see [Playing a Plugin Instrument](../plugins/instrument.md) for details).
 
 ## aux / send — Send Audio Down a Separate Path
 
@@ -37,7 +40,7 @@ Declare a return bus with `global.aux(name)`, then send audio to it from each se
 
 ```text
 global.aux("rev")
-aux("rev").effect("./plugins/Reverb.clap")
+aux("rev").effect("TAL Reverb 4")
 
 kick.send("rev", 0.3)
 ```
@@ -50,6 +53,10 @@ A single sequence can send to multiple `aux` buses at once.
 kick.send("rev", 0.3)
 kick.send("delay", 0.2)
 ```
+
+::: warning send() is also audio-sequence-only
+Just like `output()`, `send()` can only be used on audio sequences. It cannot be used on a note sequence (`seq.midi()` / `seq.instrument()`) in v1.
+:::
 
 ## Honest v1 Constraints
 
@@ -72,7 +79,3 @@ If you use `global.linkAudio()`, you cannot also use mixer features (`sum` / `au
 `sum` and `aux` pair naturally with effects ([Inserting Effects](./effects.md)). Next, let us look at `import`, which lets you build a project out of multiple files.
 
 → [Multi-File Projects](../projects/import.md)
-
-::: tip Verification
-The code examples in this chapter were confirmed working in a real end-to-end test run on 2026-07-17.
-:::

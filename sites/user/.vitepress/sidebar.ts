@@ -101,20 +101,25 @@ export const sidebarEn: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
+    text: 'Using Plugins',
+    collapsed: false,
+    items: [{ text: '15. Playing a Plugin Instrument', link: '/en/plugins/instrument' }],
+  },
+  {
     text: 'Mixing and Project Structure',
     collapsed: false,
     items: [
-      { text: '15. Inserting Effects', link: '/en/mixing/effects' },
-      { text: '16. sum and aux/send', link: '/en/mixing/routing' },
-      { text: '17. Multi-File Projects', link: '/en/projects/import' },
+      { text: '16. Inserting Effects', link: '/en/mixing/effects' },
+      { text: '17. sum and aux/send', link: '/en/mixing/routing' },
+      { text: '18. Multi-File Projects', link: '/en/projects/import' },
     ],
   },
   {
     text: 'Help',
     collapsed: false,
     items: [
-      { text: '18. Reference', link: '/en/reference/methods' },
-      { text: '19. Troubleshooting', link: '/en/troubleshooting' },
+      { text: '19. Reference', link: '/en/reference/methods' },
+      { text: '20. Troubleshooting', link: '/en/troubleshooting' },
     ],
   },
 ]

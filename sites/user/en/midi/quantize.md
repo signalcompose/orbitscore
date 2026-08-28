@@ -93,5 +93,6 @@ The quantize grid is determined by the global `beat()` × `tempo()`. Sequences w
 
 ## Next Pages
 
+- Play a CLAP / VST3 plugin instrument → [Playing a Plugin Instrument](../plugins/instrument.md)
 - Method reference → [Reference](../reference/methods.md)
 - Troubleshooting → [Troubleshooting](../troubleshooting.md)
