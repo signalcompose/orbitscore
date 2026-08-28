@@ -17,6 +17,75 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.401 test: 変異 2 件を実機で殺し、完了条件 10 項目を照合した (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: **完了条件 Q4 の 10 項目すべて充足**。マージは owner 指示待ちで停止
+
+### 🔴 変異検証（項目 6・実機）— 2 件とも red
+
+| 変異 | 期待 | 実測 | 誤差 |
+|---|---|---|---|
+| keep op の `enabled` 差分を落とす | 0.3157 | **0.2556**（A が有効なまま） | 19.06% |
+| standard の `params` を落とす | 0.2526 | **0.5040**（Gain が 0dB） | 99.52% |
+
+2 件目は**ちょうど約 2 倍** — `Gain` が -6dB（線形 0.5011）ではなく既定の 0dB（線形 1.0）で
+動いていることを音が示している。`DB_DEFAULT = 0.0` なので偶然の一致は無い。
+
+**どちらも headless では両方 green だった。** 配線の全長
+（TS → JSON-RPC → daemon → manifest → child → プラグイン状態 → 音の振幅）
+のどこが切れても赤くなる形で、ユニットテストでは原理的に見えない。
+
+Fable の事前予測（1 件目 delta 20%）と実測 19.06% がほぼ一致した。設計の数値モデルが実機と
+合っている傍証になる。
+
+### 🔴 Fable の手順指摘が正しかった: 変異は dist に載って初めて効く
+
+> 変異は**ビルド済み配布物に載って初めて効く**。gated は実アプリ（dist）を駆動するので、
+> ビルドを挟み忘れると変異が「生き残った」ように見える（実際は走っていない）
+
+`変異 → npm run build → 再起動 → gated → restore → build → 再起動` を厳守した。
+**1 変異 = build 2 回。** [[no-stash-during-hooked-commit]] の隣のクラス。
+
+なお 1 件目は**型が `enabled` を必須にしていて単純削除がコンパイルを通らなかった**
+（型で守られている）。意味的に同じ「差分を無視して常に `true` を送る」形に変えた。
+
+### 🔴 復元が失敗した（記録）
+
+変異 2 件目の restore が **`$TMPDIR` の食い違いで失敗**した:
+
+- バックアップを取ったコマンド → **sandbox 内**の `$TMPDIR`
+- 復元したコマンド → **`dangerouslyDisableSandbox` + background** で**別の `$TMPDIR`**
+
+`cp` が `No such file or directory` で落ち、**変異が残ったまま**「green 確認」を走らせていた。
+`cmp` による復元確認を入れていたので検出できた。
+
+> **教訓**: [[mutation-backup-must-use-tmpdir]] は正しいが、**sandbox の内外で `$TMPDIR` が
+> 変わる**条件が抜けていた。**復元は `git checkout` の方が確実** — バックアップファイルの
+> 所在に依存しない。
+
+### Fable の E2E レビュー（項目 4）— 指摘 0 件
+
+§4 の false green 12 行すべてが実装で成立。特に:
+
+- **`states/` の非同期登記**（Fable 自身が予告した flaky ポイント）は固定 sleep ではなく
+  「ファイル数 +1 **かつ** manifest の B entry が旧パスと異なる **かつ** 実在」の 3 条件 poll
+- seg6 が**保存 state からの復元を音で検証**する（設計より強い）
+- アンカー 4 件とも実装原文と一致を grep で照合
+- **main が入れた診断 2 件も機能する**と確認（label 一回評価の罠を正しく回避）
+
+Fable の自己訂正 1 件: 設計書の「分離 25% ⇒ マージン 10%」は、実効マージンが**最悪 5pt**。
+実測ノイズ ≲1% なので判定は揺るがない。
+
+### 完了条件 10 項目すべて充足
+
+実測は `docs/development/evidence/628-gated-evidence.md`（全区間の RMS・窓系列・onset）と
+`docs/development/enumeration-13.md` に保存し、PR 本文から参照した。
+
+owner 判断 3 点はすべて回答取得済み — (i) Cmd+Click の #633 移管 **承認** /
+(ii) `WARN` を非エラーへ / (iii) `CLAUDE.md` マージ前ゲートに実 `Gain` テストを**恒久追加**。
+
 ### 6.400 chore: 列挙 13 本を回し、撤回済み API の残骸を 1 件消した (#628) (Aug 28, 2026)
 
 **Date**: 2026-08-28
