@@ -1161,7 +1161,9 @@ impl Drop for OutProcTeardownGuard {
         let deadline = Instant::now() + TEARDOWN_TIMEOUT;
         while !self.done.load(Ordering::Acquire) {
             if Instant::now() >= deadline {
-                tracing::warn!(
+                // error!: the RT thread failed to answer within the deadline — the entry point of
+                // the unresponsive-audio-thread class #625 fought; no ticker/RPC surfaces this.
+                tracing::error!(
                     "OOP effect teardown: audio thread quiesce ack timed out ({}ms); proceeding to stop stream",
                     TEARDOWN_TIMEOUT.as_millis()
                 );

@@ -455,10 +455,11 @@ impl EventRingChild {
     /// 呼び出し元が `Result` を読み捨てると MCP `close_plugin_ui` の完了判定が永遠に閉じない。
     ///
     /// **差し替えの可視化は `evt_arg` の文言自体が担う**（host は poll で読める）。
-    /// `tracing::warn!` も併発するが、これは best-effort — 本メソッドが走る child バイナリ
-    /// （`orbit-vst3-*-child` / `orbit-clap-*-child`）は tracing subscriber を初期化しない
-    /// ため、production では何も出力されない（`tracing` は global subscriber 未設定なら
-    /// 黙って no-op）。warn が観測されるのは subscriber を持つ in-process 利用・テストのみ。
+    /// `tracing::warn!` も併発するが、これは best-effort — 出力の有無は呼び出し元プロセスが
+    /// subscriber を持つかで決まる: `orbit-vst3-*-child` / `orbit-clap-*-child` は初期化しない
+    /// ので無音（`tracing` は global subscriber 未設定なら黙って no-op）、**rack child
+    /// （`orbit-effect-rack-child`・#628）は `macos::run()` が初期化するので stderr に出る**。
+    /// in-process 利用・テストも subscriber 次第。
     ///
     /// `Err` は [`EventRingChildError::UnknownKind`] のみ（enum doc 参照）。
     pub fn queue(&mut self, kind: u32, arg: &str) -> Result<(), EventRingChildError> {

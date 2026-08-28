@@ -17,6 +17,97 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.402 fix: 降格した後に、各 call site のレベルを監査し直した (#628) (Aug 29, 2026)
+
+**Date**: 2026-08-29
+**Issue**: #628 / PR #639 / #633
+**Status**: ラウンド2（未レビュー分）完了
+
+**PR の約 1/4（38 ファイル・+3379）が誰のレビューも通っていなかった**ため、
+その範囲に絞った縮小レビューを回した（レビュアー 4 名 + Fable 監査）。
+**Critical 0 / Important 4**（うち 1 件は誤りと判明）。**修正は owner 指示で Fable が担当**し、
+**fix 差分の検証は main** が引き受けた（自分の修正を自分で監査させないため）。
+
+### 🔴 WARN 降格が、同じ PR 内の可視化修正 2 件を無効化していた
+
+根 3 で作った診断（`param_apply_errors` のドレイン / drop 時の UI close 失敗）が、
+後続の `569b6140` で `WARN` を非エラー化したことにより **ERROR 計数オラクルから消えていた**。
+`lib.rs` のコメントは「**a failed UI close must stay audible**」と明記しているのに、である。
+
+**自分で可視化して、自分で消していた。**
+
+### 分類器は変えない — レベルは事象の意味論で選ぶ
+
+**警告は定義上エラーではない。** 欠けていたのは分類器ではなく、
+**降格後に各 call site のレベルを再監査しなかったこと**。
+
+> ユーザーへの実害（音の中断/ずれ・データ喪失・機能不全・RT 応答不能）が確定し、
+> かつ ticker/RPC に**別表面を持たない**事象は `error!`。
+> 自己回復済み・別経路で loud・診断のみは `warn!`。
+
+**namespace で分ける案は採らない** — 騒がしかった `NotePortsExtension なし` は
+**自分たちの crate（`orbit_clap_host`）から出ている**ので、その軸では元の問題が戻る。
+
+Fable が `tracing::warn!` を **72 箇所全列挙**し、昇格は **5 件のみ**（残り約 60 箇所は
+降格が正しい）。各所に「なぜ error か」を 1 行残した。
+
+**main が分類器を実際に通して両立を実証**:
+
+```
+プラグインの雑音(WARN) → 非エラー: true      ← 雑音は黙る
+昇格した診断(ERROR)   → 非エラー: false     ← 本物の失敗は見える
+```
+
+### silent-failure-hunter の Critical は誤りだった（main が一次ソースで確認）
+
+「child crash → respawn の唯一の可観測シグナルを消した」は**成立しない**。**第 2 の表面がある**:
+1 Hz ticker → `DaemonError` event（`session.rs:878-886`）→ `onDaemonError` の `console.warn`
+→ Node では **stderr** → 拡張が**無条件に `ERROR: ` 接頭**（`extension.ts:1568`）→ countErrors。
+**3 リンクとも実ファイルで確認。**
+
+🔴 **main はこの Critical を裏取り前に owner へ報告した。** 委譲先の指摘も鵜呑みにしない、
+という原則が自分に返ってきた形。
+
+### main のコミットメッセージの事実誤認（comment-analyzer 発見）
+
+`b1afc3dd` の「timeout が `MALFORMED_REQUEST` にマップされていた」は**誤り**。
+旧実装は `WrapError::OutProcEffect` → `OUTPROC_EFFECT_RUNTIME`（`git show 08731645` で確認）。
+`MALFORMED_REQUEST` を観測したのは **serde の `flatten` × `deny_unknown_fields` という
+無関係のバグ**のログ。**実際の問題は「マップ先が違う」ではなく、timeout を含む全失敗が
+「登記は無傷」と主張していたこと** — 指摘の方がより重い問題を正しく言い当てていた。
+WORK_LOG を訂正（コミットメッセージは履歴のため据え置き）。
+
+### テスト追加（`chain_path` の形状ガード）
+
+5 条件（配列でない / 長さ≠1 / 非整数 / 負数 / `MAX_SAFE_INTEGER` 超過）を踏むテストが
+**1 件も無かった**。`length !== 1` を `< 1` に変異させても全テスト green の状態だった。
+
+**main の変異 2 種とも red**（`length 2:` / `not an integer:` とラベルが失敗理由に出る）。
+
+### 🔴 ローカルで 1 件失敗するが、この PR の退行ではない（構成による証明）
+
+`pipelined_host_with_real_child_is_gain_delayed_one_block` が macOS のこのマシンで落ちる。
+
+| 証拠 | |
+|---|---|
+| 静穏時（load 2.96） | **2.96 秒で pass** |
+| 負荷時（load 9.95） | 3 回とも fail（7.00 秒 = タイムアウト） |
+| **CI（ubuntu）** | **pass** |
+| **`orbit-audio-sandbox` への変更** | **`transport.rs` のコメント 9 行のみ・コード行ゼロ** |
+
+コメントのみの変更なので **`sandbox-effect-child` のバイナリは HEAD と同一**であり、
+**挙動が変わることは原理的にない**。テスト自身が `#520` で
+「`cargo build` 直後の child は macOS のセキュリティ評価で数秒〜24 秒止まりうる」と警告している。
+
+**負荷の出所は main の後始末漏れ**だった — Fable が起動した検証バッテリー
+（`cargo test -p orbit-audio-daemon --features …`）が生き残っていた。
+**エージェントを止めた ≠ そのプロセスが消えた。** 停止して消滅を確認した。
+
+### 検証
+
+`npm run build` 型エラー 0 / `npm test` **2080 passed** / lint 0 / `typecheck:e2e` 0 /
+`cargo fmt --check` exit 0 / clippy **default・両 feature とも通過**
+
 ### 6.401 test: 変異 2 件を実機で殺し、完了条件 10 項目を照合した (#628) (Aug 28, 2026)
 
 **Date**: 2026-08-28
@@ -506,7 +597,7 @@ owner から「一度状況を整理して開発プランを立て直す。**必
 | | 内容 |
 |---|---|
 | **A** | respawn 後の rack 再構築失敗が `console.error` だけで self-heal に載らない。**同じ行を何度再評価しても同じエラーが出続け、自己修復経路が存在しない**。既存の非ラック経路は `markPluginInactive` を呼んでいるのに、新設パスだけ対称のパスが無かった |
-| **B** | APPLY の mailbox timeout が state 保存と同じ **5 秒**。`OPEN_UI` は「重い plugin の `createView` は 5 秒を正当に超えうる」として専用の上限を持つのに、**N 発の load を含む APPLY が 5 秒**。超過すると child は放棄を知らず commit しうる一方 daemon は確定 Err を返し、**音 = 新チェーン / daemon 台帳 = 旧 / TS 登記 = 旧** の三者乖離が固定する。さらに **timeout が `MALFORMED_REQUEST` にマップ**されていた（timeout は不正な要求ではない） |
+| **B** | APPLY の mailbox timeout が state 保存と同じ **5 秒**。`OPEN_UI` は「重い plugin の `createView` は 5 秒を正当に超えうる」として専用の上限を持つのに、**N 発の load を含む APPLY が 5 秒**。超過すると child は放棄を知らず commit しうる一方 daemon は確定 Err を返し、**音 = 新チェーン / daemon 台帳 = 旧 / TS 登記 = 旧** の三者乖離が固定する。旧実装のマップ先は `WrapError::OutProcEffect` → `OUTPROC_EFFECT_RUNTIME` で、問題は「マップ先が違う」ことではなく **timeout を含む全失敗が「登記は無傷（the previous chain is kept）」と主張していた**こと（🔴 訂正 2026-08-28: 本欄は当初「timeout が `MALFORMED_REQUEST` にマップされていた」と書いたが誤り。`MALFORMED_REQUEST` を観測したのは serde の `flatten` × `deny_unknown_fields` という無関係のバグのログだった。コミット `b1afc3dd` のメッセージにも同じ誤記が残るが履歴のため書き換えない） |
 | **C** | 不健全な Active への rebuild が**死んだ mailbox に save を発行**し、5 秒 × drop 件数の末に APPLY 全体が Err。**設計が「第一級で高速化する」と謳った「クラッシュした犯人を配列から消して再評価」が、まさにその状況で失敗する** |
 
 ### 導入した述語（1 つで 3 箇所を揃える）

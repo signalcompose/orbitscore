@@ -389,10 +389,11 @@ pub fn run() -> Result<()> {
     // 🔴 root 3: this child has no other way to surface a diagnostic. Its stderr is inherited by
     // the daemon (`Stdio::inherit()`), so a plain `tracing_subscriber::fmt()` here lands directly
     // on the daemon's own stderr stream in the same timestamp+level format the daemon's own
-    // tracing uses — the extension's stderr classifier already recognizes that shape as
-    // non-error for TRACE/DEBUG/INFO (see `isDaemonNonErrorTracingLine`), so only genuine
-    // WARN/ERROR events here surface as `ERROR:` in `get_log`. `eprintln!`/`println!` would not:
-    // they carry no level token and would either drown real errors or get misclassified as one.
+    // tracing uses — the extension's stderr classifier recognizes that shape as non-error for
+    // TRACE/DEBUG/INFO/WARN (see `isDaemonNonErrorTracingLine`; WARN joined the non-error set in
+    // #628 round 2, owner ruling), so only ERROR events here surface as `ERROR:` in `get_log`.
+    // `eprintln!`/`println!` would not: they carry no level token and would either drown real
+    // errors or get misclassified as one.
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_ansi(false)
@@ -516,7 +517,9 @@ pub fn run() -> Result<()> {
             controller.borrow_mut().collect_retired();
             let total = param_apply_errors.load(Relaxed);
             if total != last_reported_param_apply_errors {
-                tracing::warn!(
+                // error!: the audible harm is already done (the stage plays at the wrong level)
+                // and no ticker counter or RPC carries this — this line is the only surface.
+                tracing::error!(
                     total,
                     delta = total.saturating_sub(last_reported_param_apply_errors),
                     "audio thread rejected one or more parameter updates"

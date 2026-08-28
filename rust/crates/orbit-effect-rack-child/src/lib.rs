@@ -781,7 +781,9 @@ impl RackController {
             // nobody ever learns the child's UI window may still be open.
             let outcome = dropped.control.handle_ui(false, None);
             if outcome.result != CMD_RESULT_OK {
-                tracing::warn!(
+                // error!: the dropped stage's window may stay open with nothing behind it, and
+                // no ticker counter or RPC carries this — this line is the only machine surface.
+                tracing::error!(
                     prev_index,
                     result = outcome.result,
                     detail = %outcome.detail,

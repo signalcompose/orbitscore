@@ -352,6 +352,26 @@ describe('MCP plugin UI address resolver', () => {
       error: 'index 1 conflicts with chain_path [1]; chain_path selects compatibility index 2',
     })
   })
+
+  // The resolver is an exported pure function, so it owns its shape contract itself — these
+  // must hold even where zod is not in front of it. Each case hits one guard condition;
+  // review round 2 found that none of the five had a test (`length !== 1` mutated to `< 1`
+  // left every suite green).
+  it('rejects every malformed chain_path shape with the single loud shape error', () => {
+    const shapeError = {
+      ok: false,
+      error: 'chain_path must contain exactly one non-negative integer',
+    }
+    expect(resolveMcpPluginUiIndex({ chain_path: 1 }), 'not an array').toEqual(shapeError)
+    expect(resolveMcpPluginUiIndex({ chain_path: [] }), 'length 0').toEqual(shapeError)
+    expect(resolveMcpPluginUiIndex({ chain_path: [0, 1] }), 'length 2').toEqual(shapeError)
+    expect(resolveMcpPluginUiIndex({ chain_path: [1.5] }), 'not an integer').toEqual(shapeError)
+    expect(resolveMcpPluginUiIndex({ chain_path: [-1] }), 'negative').toEqual(shapeError)
+    expect(
+      resolveMcpPluginUiIndex({ chain_path: [Number.MAX_SAFE_INTEGER] }),
+      'beyond MAX_SAFE_INTEGER after the +1 bridge',
+    ).toEqual(shapeError)
+  })
 })
 
 describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {

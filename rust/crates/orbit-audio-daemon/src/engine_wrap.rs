@@ -5122,7 +5122,10 @@ impl EngineWrap {
             if !entry.shutdown.load(Ordering::Acquire) {
                 entry.engaged.store(true, Ordering::Release);
             }
-            tracing::warn!(
+            // error!: the RT thread failed to answer the quiesce request — the entry point of
+            // the unresponsive-audio-thread class #625 fought; the RPC error below reaches the
+            // caller, but this record is what get_log keeps after the evaluation scrolls away.
+            tracing::error!(
                 slot = %effect_slot_label(target),
                 "effect replacement quiesce ack timed out; the previous effect is kept"
             );
@@ -7741,6 +7744,12 @@ fn dropped_stage_summaries_from_latest_state(
 }
 
 #[cfg(feature = "outproc-effect")]
+/// `CommandFailed` is the only definitive rejection: the child inspected the plan and refused,
+/// and its prepare-commit invariant guarantees the previous chain is untouched. Every other
+/// variant is uncertain. Five of them (`Busy` / `InvalidArgument` / `SequenceExhausted` /
+/// `Mapping` / `SidecarCleanup`) fail before the command is written and are over-conservative
+/// here, but all are dormant today — RPCs are fully serial within a connection, so `Busy` in
+/// particular only becomes reachable if a second concurrent WebSocket client is ever connected.
 fn effect_chain_registry_is_intact_after_mailbox_error(
     error: &orbit_audio_sandbox::CommandMailboxError,
 ) -> bool {
