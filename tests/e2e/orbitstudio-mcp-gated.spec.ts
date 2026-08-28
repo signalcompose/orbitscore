@@ -53,6 +53,7 @@ import {
 } from '../../packages/vscode-extension/src/wav-analysis'
 
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
+import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH =
@@ -237,6 +238,13 @@ function processExists(pid: number): boolean {
   }
 }
 
+/** Catalog drops create files here; bypass and standard-stage drops must not. */
+function stateFileCount(statesDirectory: string): number {
+  if (!fs.existsSync(statesDirectory)) return 0
+  return fs.readdirSync(statesDirectory, { withFileTypes: true }).filter((entry) => entry.isFile())
+    .length
+}
+
 type CatalogPluginEntry = {
   name: string
   format: string
@@ -335,6 +343,51 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       },
       { intervalMs: 500, timeoutMs, label },
     )
+
+  /**
+   * R28 の engine start は、負荷時に実測された daemon ready-line timeout だけを 1 回 retry する。
+   * app boot は suite 共有のまま。別種の失敗や 2 回目の失敗は output channel 付きで即座に赤にする。
+   */
+  const startR28Engine = async (
+    activeClient: McpClient,
+    label: string,
+    captureWav?: string,
+  ): Promise<void> => {
+    const liveModeMarker = '🎵 Live coding mode'
+    const startupTimeoutMarker = 'daemon ready line timeout after 10000ms'
+    const markerCount = (log: string, marker: string): number => log.split(marker).length - 1
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+      const liveModeBefore = markerCount(beforeLog, liveModeMarker)
+      const startupTimeoutsBefore = markerCount(beforeLog, startupTimeoutMarker)
+      const started = await activeClient.call(
+        'start_engine',
+        captureWav === undefined ? {} : { capture_wav: captureWav },
+      )
+      if (started.isError) throw new Error(`${label} did not start: ${started.text}`)
+      try {
+        await waitUntil(
+          async () => {
+            const log = (await activeClient.call('get_log', { lines: 500 })).text
+            return markerCount(log, liveModeMarker) > liveModeBefore
+          },
+          { intervalMs: 200, timeoutMs: 30_000, label: `${label} daemon-backed REPL ready` },
+        )
+        return
+      } catch (error) {
+        const startupLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const sawFreshKnownTimeout =
+          markerCount(startupLog, startupTimeoutMarker) > startupTimeoutsBefore
+        if (attempt === 1 && sawFreshKnownTimeout) {
+          const stopped = await activeClient.call('stop_engine')
+          expect(stopped.isError, stopped.text).toBe(false)
+          await waitForEngine(false, 15_000, `${label} timed-out attempt stopped before retry`)
+          continue
+        }
+        throw new Error(`${String(error)}\n--- OrbitScore output channel ---\n${startupLog}`)
+      }
+    }
+  }
 
   afterAll(async () => {
     // Teardown: best-effort, always runs, never throws past this hook.
@@ -3113,5 +3166,625 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
     },
     TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#628 R28: rack chain audio mainline',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      expect(
+        workAudioDir,
+        'main gated phase must initialize the audio fixture directory',
+      ).toBeDefined()
+      if (!client || !tmpRoot || !workAudioDir) {
+        throw new Error('main gated phase did not initialize suite state')
+      }
+
+      const activeClient = client
+      const root = tmpRoot
+      const audioDir = workAudioDir
+      const catalog = requireCatalogFixtures()
+      const capturePath = path.join(root, 'rack-chain-r28-mainline.wav')
+      const projectFile = path.join(root, 'project.yaml')
+      const statesDirectory = path.join(root, 'states')
+      const { audible, ratios, stages } = RACK_CHAIN_GAIN_EXPECTATIONS
+      const aIdentity = `fx628/effect/${catalog.clapEffectName}/0`
+      const bIdentity = `fx628/effect/${catalog.vst3EffectName}/0`
+      const aStateRelativePath = 'states/e2e-r28-catalog-a.state'
+      const bStateRelativePath = 'states/e2e-r28-catalog-b.state'
+      const aStatePath = path.resolve(root, aStateRelativePath)
+      const bStatePath = path.resolve(root, bStateRelativePath)
+      const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
+      const countMarker = (log: string, marker: string): number => log.split(marker).length - 1
+      const readLog = async (): Promise<string> =>
+        (await activeClient.call('get_log', { lines: 500 })).text
+      const assertCurrentPid = async (expectedPid: number, label: string): Promise<void> => {
+        const pids = rackChildPidsFromLog(await readLog())
+        expect(pids[pids.length - 1], `${label}: rack child PID must stay unchanged`).toBe(
+          expectedPid,
+        )
+        expect(processExists(expectedPid), `${label}: rack child must remain alive`).toBe(true)
+      }
+
+      fs.mkdirSync(statesDirectory, { recursive: true })
+      const aState = Buffer.alloc(12)
+      aState.writeUInt32LE(0x4f52_4531, 0)
+      aState.writeDoubleLE(stages.catalogA, 4)
+      fs.writeFileSync(aStatePath, aState)
+      const bState = Buffer.alloc(12)
+      bState.writeUInt32LE(0x4f52_4531, 0)
+      bState.writeDoubleLE(stages.catalogB, 4)
+      fs.writeFileSync(bStatePath, bState)
+      const manifest = fs.existsSync(projectFile)
+        ? (parse(fs.readFileSync(projectFile, 'utf8')) as {
+            version?: number
+            states?: Record<string, string>
+          })
+        : { version: 1 }
+      fs.writeFileSync(
+        projectFile,
+        stringify({
+          ...manifest,
+          version: manifest.version ?? 1,
+          states: {
+            ...(manifest.states ?? {}),
+            [aIdentity]: aStateRelativePath,
+            [bIdentity]: bStateRelativePath,
+          },
+        }),
+      )
+
+      await startR28Engine(activeClient, '#628 R28 capture engine', capturePath)
+
+      const segments: Record<string, { from: number; to: number }> = {}
+      const captureSegment = async (name: string): Promise<void> => {
+        await sleep(750)
+        segments[name] = { from: Date.now(), to: 0 }
+        await sleep(3000)
+        segments[name]!.to = Date.now()
+      }
+      let stopWall = Date.now()
+
+      try {
+        // A previous suite block may leave a master declaration in the persistent interpreter
+        // registry. Clear it before taking the bus-dry reference so the R28 ratio oracle is local.
+        const liveRackPidsAtSetup = (await effectChildPids(activeClient)).filter(processExists)
+        const errorsBeforeSource = countErrors(await readLog())
+        await activeClient.call('evaluate_orbitscore', {
+          code: [
+            'var global = init GLOBAL',
+            'global.effect([])',
+            'global.tempo(120)',
+            'global.beat(4 by 4)',
+            `global.audioPath(${JSON.stringify(audioDir)})`,
+            'global.sum("fx628out")',
+            'global.aux("fx628send")',
+            'global.start()',
+            'var fx628 = init global.seq',
+            'fx628.audio("kick.wav").chop(1)',
+            'fx628.output("fx628out")',
+            'fx628.send("fx628send", 0.2)',
+            'fx628.play(1, 1, 1, 1)',
+            'LOOP(fx628)',
+          ].join('\n'),
+        })
+        await waitUntil(() => liveRackPidsAtSetup.every((pid) => !processExists(pid)), {
+          intervalMs: 200,
+          timeoutMs: 15_000,
+          label: '#628 R28 stale master rack teardown before dry capture',
+        })
+        const afterSourceLog = await readLog()
+        expect(
+          countErrors(afterSourceLog),
+          `R28 source setup must add no ERROR lines. Log tail: ${afterSourceLog.slice(-1200)}`,
+        ).toBeLessThanOrEqual(errorsBeforeSource)
+        await sleep(2500)
+        await captureSegment('busDry')
+
+        const stateFilesBeforeFull = stateFileCount(statesDirectory)
+        const beforeFullLog = await readLog()
+        const errorsBeforeFull = countErrors(beforeFullLog)
+        const spawnsBeforeFull = rackChildPidsFromLog(beforeFullLog)
+        const aRestoreMarker = `[plugin-state] restoring '${aIdentity}'`
+        const bRestoreMarker = `[plugin-state] restoring '${bIdentity}'`
+        const aRestoresBeforeFull = countMarker(beforeFullLog, aRestoreMarker)
+        const bRestoresBeforeFull = countMarker(beforeFullLog, bRestoreMarker)
+        await activeClient.call('evaluate_orbitscore', {
+          code: [
+            `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
+              catalog.vst3EffectName,
+            )}, Gain(db: ${stages.standardDb})]`,
+            'fx628.effect(rack628)',
+          ].join('\n'),
+        })
+        await waitUntil(
+          async () => {
+            const log = await readLog()
+            return (
+              rackChildPidsFromLog(log).length > spawnsBeforeFull.length &&
+              countMarker(log, aRestoreMarker) > aRestoresBeforeFull &&
+              countMarker(log, bRestoreMarker) > bRestoresBeforeFull
+            )
+          },
+          {
+            intervalMs: 200,
+            timeoutMs: 15_000,
+            label:
+              '#628 R28 seg2 rack child READY; verify bundled std-plugins/Gain.clap if this times out',
+          },
+        )
+        const afterFullLog = await readLog()
+        const fullPids = rackChildPidsFromLog(afterFullLog)
+        expect(fullPids.length, 'R28 seg2: three stages must spawn exactly one rack child').toBe(
+          spawnsBeforeFull.length + 1,
+        )
+        const rackPid = fullPids[fullPids.length - 1]!
+        expect(processExists(rackPid), 'R28 seg2: spawned rack child must be alive').toBe(true)
+        expect(
+          countMarker(afterFullLog, aRestoreMarker),
+          'R28 seg2: A state restore marker must increase exactly once',
+        ).toBe(aRestoresBeforeFull + 1)
+        expect(
+          countMarker(afterFullLog, bRestoreMarker),
+          'R28 seg2: B state restore marker must increase exactly once',
+        ).toBe(bRestoresBeforeFull + 1)
+        expect(
+          countErrors(afterFullLog),
+          `R28 seg2 full rack must add no ERROR lines. Log tail: ${afterFullLog.slice(-1200)}`,
+        ).toBeLessThanOrEqual(errorsBeforeFull)
+        await captureSegment('full')
+        expect(
+          stateFileCount(statesDirectory),
+          'R28 seg2: loading the full rack must not save state files',
+        ).toBe(stateFilesBeforeFull)
+
+        // enabled:false must be a bypass, not a drop+load. Audio distinguishes the bypassed
+        // level from a no-op; the state-file snapshot distinguishes bypass from drop.
+        const errorsBeforeBypass = countErrors(await readLog())
+        await activeClient.call('evaluate_orbitscore', {
+          code: `fx628.effect([plugin(${JSON.stringify(
+            catalog.clapEffectName,
+          )}, enabled: false), ${JSON.stringify(catalog.vst3EffectName)}, Gain(db: ${
+            stages.standardDb
+          })])`,
+        })
+        await assertCurrentPid(rackPid, 'R28 seg3 bypass')
+        await captureSegment('bypassA')
+        const afterBypassLog = await readLog()
+        expect(
+          countErrors(afterBypassLog),
+          `R28 seg3 bypass must add no ERROR lines. Log tail: ${afterBypassLog.slice(-1200)}`,
+        ).toBeLessThanOrEqual(errorsBeforeBypass)
+        expect(
+          stateFileCount(statesDirectory),
+          'R28 seg3: enabled:false is bypass and must not save a state file',
+        ).toBe(stateFilesBeforeFull)
+
+        const errorsBeforeReenable = countErrors(await readLog())
+        const aRestoresBeforeReenable = countMarker(await readLog(), aRestoreMarker)
+        const bRestoresBeforeReenable = countMarker(await readLog(), bRestoreMarker)
+        await activeClient.call('evaluate_orbitscore', {
+          code: `fx628.effect([${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
+            catalog.vst3EffectName,
+          )}, Gain(db: ${stages.standardDb})])`,
+        })
+        await assertCurrentPid(rackPid, 'R28 seg4 re-enable')
+        await captureSegment('reEnabled')
+        const afterReenableLog = await readLog()
+        expect(
+          countErrors(afterReenableLog),
+          `R28 seg4 re-enable must add no ERROR lines. Log tail: ${afterReenableLog.slice(-1200)}`,
+        ).toBeLessThanOrEqual(errorsBeforeReenable)
+        expect(
+          stateFileCount(statesDirectory),
+          'R28 seg4: re-enable must not save a state file',
+        ).toBe(stateFilesBeforeFull)
+        // This is only the observable shadow of keep (a reload without state restore remains C5's job).
+        expect(
+          countMarker(afterReenableLog, aRestoreMarker),
+          'R28 seg4: re-enable must not restore A again',
+        ).toBe(aRestoresBeforeReenable)
+        expect(
+          countMarker(afterReenableLog, bRestoreMarker),
+          'R28 seg4: re-enable must not restore B again',
+        ).toBe(bRestoresBeforeReenable)
+
+        // APPLY returns before its dropped-state registration is safely observable at the project
+        // boundary. Poll the exact +1 file count AND the rewritten manifest entry; a fixed sleep is
+        // the flaky shape this gate is intended to avoid.
+        const errorsBeforeDropB = countErrors(await readLog())
+        const stateFilesBeforeDropB = stateFileCount(statesDirectory)
+        const manifestBPathBeforeDrop = (
+          parse(fs.readFileSync(projectFile, 'utf8')) as { states?: Record<string, string> }
+        ).states?.[bIdentity]
+        await activeClient.call('evaluate_orbitscore', {
+          code: `fx628.effect([${JSON.stringify(catalog.clapEffectName)}, Gain(db: ${
+            stages.standardDb
+          })])`,
+        })
+        await waitUntil(
+          () => {
+            if (stateFileCount(statesDirectory) !== stateFilesBeforeDropB + 1) return false
+            const registered = (
+              parse(fs.readFileSync(projectFile, 'utf8')) as { states?: Record<string, string> }
+            ).states?.[bIdentity]
+            return (
+              typeof registered === 'string' &&
+              registered !== manifestBPathBeforeDrop &&
+              fs.existsSync(path.resolve(root, registered))
+            )
+          },
+          {
+            intervalMs: 200,
+            timeoutMs: 15_000,
+            label: '#628 R28 seg5 post-APPLY B state file + project.yaml registration',
+          },
+        )
+        await assertCurrentPid(rackPid, 'R28 seg5 drop B')
+        await captureSegment('withoutB')
+        const afterDropBLog = await readLog()
+        expect(
+          countErrors(afterDropBLog),
+          `R28 seg5 drop B must add no ERROR lines. Log tail: ${afterDropBLog.slice(-1200)}`,
+        ).toBeLessThanOrEqual(errorsBeforeDropB)
+        expect(
+          stateFileCount(statesDirectory),
+          'R28 seg5: catalog drop must save exactly one state file',
+        ).toBe(stateFilesBeforeDropB + 1)
+        const savedAfterDrop = parse(fs.readFileSync(projectFile, 'utf8')) as {
+          states?: Record<string, string>
+        }
+        const savedBRelativePath = savedAfterDrop.states?.[bIdentity]
+        expect(savedBRelativePath, 'R28 seg5: project.yaml must register B identity').toBeDefined()
+        expect(
+          fs.existsSync(path.resolve(root, savedBRelativePath!)),
+          'R28 seg5: registered B state file must exist',
+        ).toBe(true)
+
+        const errorsBeforeReaddB = countErrors(await readLog())
+        const beforeReaddBLog = await readLog()
+        const bRestoresBeforeReadd = countMarker(beforeReaddBLog, bRestoreMarker)
+        await activeClient.call('evaluate_orbitscore', {
+          code: `fx628.effect([${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
+            catalog.vst3EffectName,
+          )}, Gain(db: ${stages.standardDb})])`,
+        })
+        await waitUntil(
+          async () => countMarker(await readLog(), bRestoreMarker) > bRestoresBeforeReadd,
+          { intervalMs: 200, timeoutMs: 15_000, label: '#628 R28 seg6 B occurrence-0 restore' },
+        )
+        await assertCurrentPid(rackPid, 'R28 seg6 re-add B')
+        await captureSegment('reAddedB')
+        const afterReaddBLog = await readLog()
+        expect(
+          countMarker(afterReaddBLog, bRestoreMarker),
+          'R28 seg6: B occurrence-0 restore marker must increase exactly once',
+        ).toBe(bRestoresBeforeReadd + 1)
+        expect(
+          countErrors(afterReaddBLog),
+          `R28 seg6 re-add B must add no ERROR lines. Log tail: ${afterReaddBLog.slice(-1200)}`,
+        ).toBeLessThanOrEqual(errorsBeforeReaddB)
+        expect(
+          stateFileCount(statesDirectory),
+          'R28 seg6: re-add must reuse the registered B state without another save',
+        ).toBe(stateFilesBeforeDropB + 1)
+
+        const errorsBeforeDropGain = countErrors(await readLog())
+        const restoreCountBeforeDropGain = countMarker(await readLog(), '[plugin-state] restoring ')
+        const stateFilesBeforeDropGain = stateFileCount(statesDirectory)
+        await activeClient.call('evaluate_orbitscore', {
+          code: `fx628.effect([${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
+            catalog.vst3EffectName,
+          )}])`,
+        })
+        await assertCurrentPid(rackPid, 'R28 seg7 drop Gain')
+        await captureSegment('withoutGain')
+        const afterDropGainLog = await readLog()
+        expect(
+          countErrors(afterDropGainLog),
+          `R28 seg7 drop Gain must add no ERROR lines. Log tail: ${afterDropGainLog.slice(-1200)}`,
+        ).toBeLessThanOrEqual(errorsBeforeDropGain)
+        expect(
+          stateFileCount(statesDirectory),
+          'R28 seg7: dropping a standard stage must not save state',
+        ).toBe(stateFilesBeforeDropGain)
+        expect(
+          countMarker(afterDropGainLog, '[plugin-state] restoring '),
+          'R28 seg7: dropping a standard stage must not restore plugin state',
+        ).toBe(restoreCountBeforeDropGain)
+
+        const errorsBeforeReaddGain = countErrors(await readLog())
+        const restoreCountBeforeReaddGain = countMarker(
+          await readLog(),
+          '[plugin-state] restoring ',
+        )
+        await activeClient.call('evaluate_orbitscore', {
+          code: `fx628.effect([${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
+            catalog.vst3EffectName,
+          )}, Gain(db: ${stages.standardDb})])`,
+        })
+        await assertCurrentPid(rackPid, 'R28 seg8 re-add Gain')
+        await captureSegment('reAddedGain')
+        const afterReaddGainLog = await readLog()
+        expect(
+          countErrors(afterReaddGainLog),
+          `R28 seg8 re-add Gain must add no ERROR lines. Log tail: ${afterReaddGainLog.slice(-1200)}`,
+        ).toBeLessThanOrEqual(errorsBeforeReaddGain)
+        expect(
+          stateFileCount(statesDirectory),
+          'R28 seg8: re-adding a standard stage must not create state',
+        ).toBe(stateFilesBeforeDropGain)
+        expect(
+          countMarker(afterReaddGainLog, '[plugin-state] restoring '),
+          'R28 seg8: standard stages have no restore path',
+        ).toBe(restoreCountBeforeReaddGain)
+
+        const errorsBeforeParamEdit = countErrors(await readLog())
+        await activeClient.call('evaluate_orbitscore', {
+          code: `fx628.effect([${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
+            catalog.vst3EffectName,
+          )}, Gain(db: ${stages.standardUnityDb})])`,
+        })
+        await assertCurrentPid(rackPid, 'R28 seg9 Gain parameter edit')
+        await captureSegment('gainUnity')
+        const afterParamEditLog = await readLog()
+        expect(
+          countErrors(afterParamEditLog),
+          `R28 seg9 param edit must add no ERROR lines. Log tail: ${afterParamEditLog.slice(-1200)}`,
+        ).toBeLessThanOrEqual(errorsBeforeParamEdit)
+        expect(
+          stateFileCount(statesDirectory),
+          'R28 seg9: standard parameter edits must not create state',
+        ).toBe(stateFilesBeforeDropGain)
+
+        const failure = await activeClient.call('evaluate_orbitscore', {
+          code: `fx628.effect([${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
+            catalog.vst3EffectName,
+          )}, Gain(db: ${stages.standardUnityDb}), "/nonexistent/Issue628.vst3"])`,
+        })
+        expect(failure.isError, 'R28 seg10: partial construction failure must be loud').toBe(true)
+        // Copied verbatim from effect-slot.ts rackApplyProtocolError's intact-registry outcome.
+        expect(failure.text).toContain('the previous chain is kept')
+        await assertCurrentPid(rackPid, 'R28 seg10 failed four-stage apply')
+        await captureSegment('failedApply')
+        expect(
+          stateFileCount(statesDirectory),
+          'R28 seg10: failed prepare-commit must not save or drop state',
+        ).toBe(stateFilesBeforeDropGain)
+      } finally {
+        await activeClient.call('evaluate_orbitscore', {
+          code: 'fx628.effect([])\nfx628.stop()\nglobal.stop()',
+        })
+        const stopped = await activeClient.call('stop_engine')
+        expect(stopped.isError, stopped.text).toBe(false)
+        stopWall = Date.now()
+        await waitForEngine(false, 15_000, '#628 R28 capture engine stopped')
+        await sleep(1500)
+      }
+
+      const capture = fs.readFileSync(capturePath)
+      const analysis = analyzeWavBuffer(capture, { windowMs: 100 })
+      const SEGMENT_GUARD_SEC = 0.4
+      const audioRange = (segment: { from: number; to: number }) => ({
+        fromSec: Math.max(
+          0,
+          analysis.durationSec - (stopWall - segment.from) / 1000 + SEGMENT_GUARD_SEC,
+        ),
+        toSec: Math.min(
+          analysis.durationSec,
+          analysis.durationSec - (stopWall - segment.to) / 1000 - SEGMENT_GUARD_SEC,
+        ),
+      })
+      const rmsWindows = (name: string) => {
+        const segment = segments[name]
+        expect(segment, `${name} capture segment must exist`).toBeDefined()
+        const range = audioRange(segment!)
+        const windows = (analysis.windows ?? []).filter(
+          (window) => window.startSec >= range.fromSec && window.startSec < range.toSec,
+        )
+        expect(windows.length, `${name} must contain guarded RMS windows`).toBeGreaterThan(0)
+        return windows
+      }
+      const segmentRms = (name: string): number => {
+        const windows = rmsWindows(name)
+        return Math.sqrt(
+          windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
+        )
+      }
+      const segmentWindows = (name: string): string =>
+        rmsWindows(name)
+          .map((window) => window.rms.toFixed(3))
+          .join(',')
+      const segmentOnsets = (name: string): number => {
+        const range = audioRange(segments[name]!)
+        return (analysis.onsets ?? []).filter(
+          (onset) => onset >= range.fromSec && onset < range.toSec,
+        ).length
+      }
+      const relativeDelta = (actual: number, expected: number): number =>
+        Math.abs(actual - expected) / expected
+      const rms = {
+        busDry: segmentRms('busDry'),
+        full: segmentRms('full'),
+        bypassA: segmentRms('bypassA'),
+        reEnabled: segmentRms('reEnabled'),
+        withoutB: segmentRms('withoutB'),
+        reAddedB: segmentRms('reAddedB'),
+        withoutGain: segmentRms('withoutGain'),
+        reAddedGain: segmentRms('reAddedGain'),
+        gainUnity: segmentRms('gainUnity'),
+        failedApply: segmentRms('failedApply'),
+      }
+      const segmentNames = Object.keys(rms)
+
+      // Print every expensive observation before the first ratio assertion.
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#628 R28] segment RMS: ' +
+          JSON.stringify({
+            ...rms,
+            'full/dry': rms.full / rms.busDry,
+            'bypassA/dry': rms.bypassA / rms.busDry,
+            'withoutB/dry': rms.withoutB / rms.busDry,
+            'withoutGain/dry': rms.withoutGain / rms.busDry,
+            'gainUnity/dry': rms.gainUnity / rms.busDry,
+            'failedApply/gainUnity': rms.failedApply / rms.gainUnity,
+          }),
+      )
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#628 R28] segment windows: ' +
+          JSON.stringify(
+            Object.fromEntries(segmentNames.map((name) => [name, segmentWindows(name)])),
+          ),
+      )
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#628 R28] segment onsets/3s: ' +
+          JSON.stringify(
+            Object.fromEntries(segmentNames.map((name) => [name, segmentOnsets(name)])),
+          ),
+      )
+
+      const withinTolerance = 0.15
+      expect(rms.busDry, 'R28 seg1 routing must produce audible dry audio').toBeGreaterThan(0.01)
+      expect(
+        rms.full,
+        'R28 seg2 full rack must stay at least five times above the audible floor',
+      ).toBeGreaterThanOrEqual(audible.floorRms * audible.minimumFloorMultiple)
+      const expectedRatios = {
+        full: ratios.full,
+        bypassA: ratios.withoutCatalogA,
+        reEnabled: ratios.full,
+        withoutB: ratios.withoutCatalogB,
+        reAddedB: ratios.full,
+        withoutGain: ratios.withoutStandard,
+        reAddedGain: ratios.full,
+        gainUnity: ratios.withoutStandard,
+      }
+      for (const [name, expectedRatio] of Object.entries(expectedRatios)) {
+        const actualRatio = rms[name as keyof typeof rms] / rms.busDry
+        expect(
+          relativeDelta(actualRatio, expectedRatio),
+          `R28 ${name} must be ${expectedRatio}x bus dry (actual=${actualRatio})`,
+        ).toBeLessThanOrEqual(withinTolerance)
+      }
+      expect(
+        relativeDelta(rms.failedApply, rms.gainUnity),
+        'R28 seg10: failed partial construction must leave the previous chain audible',
+      ).toBeLessThanOrEqual(withinTolerance)
+      expect(
+        rms.failedApply,
+        'R28 seg10: failed partial construction must not stop audio',
+      ).toBeGreaterThan(audible.floorRms)
+    },
+    TEST_TIMEOUT_MS * 3,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#628 R28: rack master + MCP standard-element error',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      if (!client) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const catalog = requireCatalogFixtures()
+      const { stages } = RACK_CHAIN_GAIN_EXPECTATIONS
+      const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
+      const readLog = async (): Promise<string> =>
+        (await activeClient.call('get_log', { lines: 500 })).text
+
+      await startR28Engine(activeClient, '#628 R28 master engine')
+
+      let masterPid: number | undefined
+      try {
+        const beforeMasterLog = await readLog()
+        const errorsBeforeMaster = countErrors(beforeMasterLog)
+        const spawnsBeforeMaster = rackChildPidsFromLog(beforeMasterLog)
+        await activeClient.call('evaluate_orbitscore', {
+          code: [
+            'var global = init GLOBAL',
+            `global.effect([${JSON.stringify(catalog.clapEffectName)}, Gain(db: ${
+              stages.standardDb
+            })])`,
+          ].join('\n'),
+        })
+        await waitUntil(
+          async () => rackChildPidsFromLog(await readLog()).length > spawnsBeforeMaster.length,
+          {
+            intervalMs: 200,
+            timeoutMs: 15_000,
+            label:
+              '#628 R28 master rack child READY; verify bundled std-plugins/Gain.clap if this times out',
+          },
+        )
+        const afterMasterLog = await readLog()
+        const masterPids = rackChildPidsFromLog(afterMasterLog)
+        expect(
+          masterPids.length,
+          'R28 E8: master [catalog, Gain] must spawn exactly one rack child',
+        ).toBe(spawnsBeforeMaster.length + 1)
+        masterPid = masterPids[masterPids.length - 1]
+        expect(processExists(masterPid!), 'R28 E8: master rack child must be alive').toBe(true)
+        expect(
+          countErrors(afterMasterLog),
+          `R28 E8 master apply must add no ERROR lines. Log tail: ${afterMasterLog.slice(-1200)}`,
+        ).toBeLessThanOrEqual(errorsBeforeMaster)
+
+        const standardUi = await activeClient.call('open_plugin_ui', {
+          receiver: 'master',
+          chain_path: [1],
+        })
+        expect(
+          standardUi.isError,
+          'R28 E10a: the standard Gain stage must reject UI explicitly',
+        ).toBe(true)
+        // Copied verbatim from global.ts resolvePluginStateEntry's standard-element branch.
+        expect(standardUi.text).toContain('parameters live in the DSL')
+
+        const conflictingAddress = await activeClient.call('open_plugin_ui', {
+          receiver: 'master',
+          chain_path: [1],
+          index: 1,
+        })
+        expect(
+          conflictingAddress.isError,
+          'R28 E10a: conflicting compatibility index and chain_path must be loud',
+        ).toBe(true)
+        // Copied from mcp-server.ts resolveMcpPluginUiIndex's conflicting-address branch.
+        expect(conflictingAddress.text).toContain(
+          'index 1 conflicts with chain_path [1]; chain_path selects compatibility index 2',
+        )
+
+        const errorsBeforeMasterEdit = countErrors(await readLog())
+        await activeClient.call('evaluate_orbitscore', {
+          code: `global.effect([${JSON.stringify(catalog.clapEffectName)}])`,
+        })
+        const afterMasterEditLog = await readLog()
+        const afterMasterEditPids = rackChildPidsFromLog(afterMasterEditLog)
+        expect(
+          afterMasterEditPids[afterMasterEditPids.length - 1],
+          'R28 E8: master rack edit must not respawn its child',
+        ).toBe(masterPid)
+        expect(processExists(masterPid), 'R28 E8: edited master child must remain alive').toBe(true)
+        expect(
+          countErrors(afterMasterEditLog),
+          `R28 E8 master edit must add no ERROR lines. Log tail: ${afterMasterEditLog.slice(-1200)}`,
+        ).toBeLessThanOrEqual(errorsBeforeMasterEdit)
+      } finally {
+        await activeClient.call('evaluate_orbitscore', { code: 'global.effect([])' })
+        if (masterPid !== undefined) {
+          await waitUntil(() => !processExists(masterPid!), {
+            intervalMs: 200,
+            timeoutMs: 15_000,
+            label: '#628 R28 master rack cleanup',
+          })
+        }
+        const stopped = await activeClient.call('stop_engine')
+        expect(stopped.isError, stopped.text).toBe(false)
+        await waitForEngine(false, 15_000, '#628 R28 master engine stopped')
+      }
+    },
+    TEST_TIMEOUT_MS,
   )
 })

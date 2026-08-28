@@ -17,6 +17,77 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.397 test(e2e): ラックの実機テストを書き、数値設計を実機の手前で守る unit を置いた (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: 発注 B 実装完了。**実機ゲートの実行は未了**
+
+計画 `628-plan-reset.md` の**発注 B**。設計正本は `628-gated-e2e-rack-design.md`（承認済み）。
+
+### 1. ゲイン三つ組の定数 + 純 unit（設計 §2.2）
+
+E2E 設計 §4-2 の要（**A=0.8 / B=0.63 / `Gain(db: -6)`**・部分積の全ペア ≥25% 分離）は
+**値を 1 つ動かすだけで静かに崩れる**。期待比率表を `rack-chain-gain-expectations.ts` に
+**一元化**し、E2E と unit が共有する。これで**実機に行く前に `npm test` で赤になる**。
+
+🔴 **main が自分で変異 3 種を回した**（委譲先の報告は根拠にしない）:
+
+| 変異 | 実出力 |
+|---|---|
+| A を `0.81` に | `full and withoutCatalogA must remain at least 25% apart: expected 0.2345… >= 0.25` |
+| 標準を **`0dB`（unity）** に | `full and withoutStandard …: expected 0 to be >= 0.25` |
+| **設計原案の `-20dB`** | `full-chain RMS must retain the designed audible-floor margin: expected 0.0052… >= 0.01` |
+
+3 番目が効いている。**設計正本 §6 の原案 `Gain(db: -20)` を使うとこの unit が赤くなる** —
+Fable が机上で見つけた「full 積が可聴フロアを割る」問題が、いま機械で守られた。
+2 番目は「透過している」と「適用されていない」が数値で区別不能になる形を殺す。
+
+### 2. gated E2E の新規 2 ブロック（673 行追加・8 件 → 10 件）
+
+R28-E1〜E5 / E7〜E10a を実装。§4 の false green 12 行すべてに対応する assert を置いた
+（対応表は Codex の報告に行番号つきで残っている）。要点:
+
+- **`ok` 単独の assert は 1 つも無い** — 全区間を RMS 比率・PID・marker・state 副作用で判定
+- **bypass と drop は音で区別できない**ので `states/` のファイル数で捕まえる。
+  catalog drop は「**+1 かつ manifest 値更新かつ実ファイル存在**」が揃うまで poll
+  （非同期登記による flaky を防ぐ）
+- 文言アンカーは**実装からコピー**（`the previous chain is kept` 等）
+- ERROR 件数は固定 500 行窓なので**すべて `toBeLessThanOrEqual`**
+
+### 🔴 変異 2 件が headless では green だった（実機でしか殺せない）
+
+要求した「catalog enabled だけ欠落」「standard load params 欠落」の 2 変異は、
+**headless では両方 `15 passed`** だった。Codex はこれを**未達として正直に main へ引き渡した**
+（迂回もテスト緩和もしていない）。**実機ゲートで取るのは main の担当。**
+
+より広い変異（enabled 欠落全般）では既存 T9 が red になることは確認済み
+（`Expected: "enabled": false / Received: "enabled": true`）。
+
+### 設計からの逸脱 1 件（申告あり・main が中身を確認して承認）
+
+**負荷時の `daemon ready line timeout after 10000ms` を 1 回だけ retry する起動補助**を追加。
+CP2 で main が実機で踏んだ現象への対処。
+
+main が実装を読んで確認した点: **本物の失敗を隠さない** —
+新規に出たマーカー数が増えた場合だけ retry し、**別種の失敗も 2 回目の失敗も
+output channel を添えて即座に赤**にする。retry 前に `stop_engine` して状態も戻す。
+
+### 検証（main が sandbox 外で全幅）
+
+`npm run build` 型エラー 0 / **`npm test` 2078 passed・失敗 0** /
+lint 0 / `typecheck:e2e` 0 / clippy default・両 feature とも通過 / `cargo fmt --check` exit 0 /
+**gated は env 無しで 10 件 skip**（通常の `npm test` を壊していない）
+
+🔴 Codex の環境では `npm test` が **104 failed** に見えていた。原因は
+**sandbox の `listen EPERM`**（localhost を使う既存テスト 4 ファイル）で、実体ではない。
+Codex は迂回せず報告した。**sandbox の失敗を実体と混同しない。**
+
+### 残り
+
+**実機 gated の実行**（main・未了）。起動前ゲートと終了処理を含む手順は
+scratchpad の `hw-loop-runbook.md` に固定した（CP2 で `LOOP` を止め忘れた欠陥への対処を含む）。
+
 ### 6.396 feat: MCP を chain_path 対応にし、Gain の dB 契約を CI で守る経路を作った (#628) (Aug 28, 2026)
 
 **Date**: 2026-08-28
