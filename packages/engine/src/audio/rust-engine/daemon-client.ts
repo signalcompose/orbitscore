@@ -134,7 +134,15 @@ export function isDaemonNonErrorTracingLine(line: string): boolean {
   // tracing 既定形式の「ISO timestamp + level token」だけを non-error と認める。
   // 判定を緩めて本文中の "INFO" を拾うと本物のエラーが log から消える側に倒れるので、
   // 迷ったら error 側（従来挙動）へ。
-  if (/^\s*\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO)\s/.test(plain)) return true
+  //
+  // 🔴 `WARN` を非エラー側に入れているのは意図的（owner 判断・2026-08-28）。**警告は定義上
+  // エラーではない。** #628 で rack child に tracing subscriber を入れたところ、副作用で
+  // `orbit-clap-host` の中継が un-silence され、**プラグイン自身の正常動作の警告**
+  // （`NotePortsExtension なし; port 0 を使用` 等）が `ERROR:` として記録された。
+  // 実機ゲートで**既存テストを含む 7 件**が「ERROR 行が増えた」で落ちたのがこれ
+  // （15 → 17）。行そのものは `get_log` に残る — `console.error` ではなく
+  // `console.log` へ回るだけで、**診断が消えるわけではない**。
+  if (/^\s*\d{4}-\d{2}-\d{2}T\S+\s+(TRACE|DEBUG|INFO|WARN)\s/.test(plain)) return true
   // child プロセスは daemon の stderr を継承し、tracing を持たない(依存を足していない)。
   // level トークンを自分で名乗った行だけを非エラーとして認める(例: "plugin.process() failed")。
   //
@@ -144,7 +152,7 @@ export function isDaemonNonErrorTracingLine(line: string): boolean {
   // **state 復元のたびに正常動作が ERROR として記録されていた**(実機 E2E で発覚)。
   // 判定に load-bearing なのは (1) 自分のコンポーネントのタグであること (2) 非エラーの
   // level を名乗っていること の 2 点で、接尾辞ではない。
-  return /^\s*(TRACE|DEBUG|INFO)\s+\[orbit-[a-z0-9-]+\]\s/.test(plain)
+  return /^\s*(TRACE|DEBUG|INFO|WARN)\s+\[orbit-[a-z0-9-]+\]\s/.test(plain)
 }
 
 /**

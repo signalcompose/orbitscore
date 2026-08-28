@@ -17,6 +17,86 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.398 fix: 警告はエラーではない（実機ゲートが 7 → 3 へ） (#628) (Aug 28, 2026)
+
+**Date**: 2026-08-28
+**Issue**: #628 / PR #639
+**Status**: 実機ゲート 3 回実行。**新規 2 ブロックが green**。赤 3 件中 2 件は既知
+
+### 🔴 実機ゲート 1 回目: 7 failed / 3 passed — 既存テストまで落ちた
+
+原因は Fable が監査 F-a で予測し、main が「実機で測ってから決める」としていたもの:
+
+```
+ERROR: [daemon] 2026-08-28T12:19:01.534614Z  WARN orbit_clap_host::controller:
+       [orbit-clap-host] NotePortsExtension なし; port 0 を使用
+```
+
+**プラグイン自身の正常動作の警告が `ERROR:` 行として記録され**、ERROR 件数が 15 → 17 に増えた。
+根 3 で rack child に tracing subscriber を入れた副作用で、`orbit-clap-host` の中継が
+un-silence されたため。**予測が当たった。**
+
+同じログに**ラックが正しく動いている証拠**も出ていた:
+
+```
+[orbit-effect-rack] child spawned pid=62008
+[plugin-state] restoring 'fx628/effect/CLAP Test Effect/0' from .../e2e-r28-catalog-a.state
+[plugin-state] restoring 'fx628/effect/Gain Ω (Factory3 oracle)/0' from .../e2e-r28-catalog-b.state
+```
+
+**落ちていたのは音の正しさではなく診断行の分類だった。**
+
+### 対処（owner 判断）: 分類器の非エラー集合に `WARN` を追加
+
+**警告は定義上エラーではない。** 非エラー集合を `TRACE|DEBUG|INFO` →
+**`TRACE|DEBUG|INFO|WARN`** へ（2 箇所）。行そのものは `get_log` に残る —
+`console.error` ではなく `console.log` へ回るだけで、**診断が消えるわけではない**。
+
+既存の `WARN → false` を期待していた 3 箇所を更新した。
+🔴 **テストを緩めたのではなく決定が変わった**ので、その旨と発端を理由として残してある。
+新規テストのアンカーは**実機で実際に踏んだ行をそのまま**使った（手で整えた文言を使わない）。
+
+**main が変異検証**（両方向）:
+
+| 変異 | 結果 |
+|---|---|
+| `ERROR` まで非エラーに緩める | red（2 件） |
+| `WARN` を元に戻す（この修正の無効化） | red（3 件） |
+
+### 🔴 2 回目: 3 failed / 7 passed — **新規 2 ブロックが green**
+
+```
+✓ #628 R28: rack chain audio mainline                    42581ms
+✓ #628 R28: rack master + MCP standard-element error       538ms
+```
+
+**この PR の中心機能が、実機の音のアサーションまで通った。**
+`#625 R-E1-R-E7`（既存のエフェクト差し替え）も復活。
+
+### 3 回目: エラー文言のアンカーを実装に追随させた
+
+`drives real OrbitStudio end-to-end` が
+`current slot is 'X'; the UI was not opened` を期待していたが、**この PR のコミット
+`3b634850` が実装側に `re-evaluate first;` を挿入**していた。
+**文言を変えた PR がアンカーを更新し忘れていた** — 実機ゲートが捕まえた。
+
+修正後、このテストは当該 assert を通過し `UI_CLOSED_DONE` まで進んだ（= 既知の赤）。
+
+### 現在の赤 3 件
+
+| テスト | 判定 |
+|---|---|
+| `drives real OrbitStudio end-to-end` | **既知** — `UI_CLOSED_DONE (20000ms)` タイムアウト（#633） |
+| `#618 E1-E6` | **既知** — 同上 |
+| `reports an ambiguous bare mixer name` | **未分類** — 1〜3 回目とも同じ形で失敗。ログに文言も `MustNotLoad` も一度も出ない |
+
+3 件目は `-t` フィルタでの単独実行がスイート共有 boot を壊すため、その方法では切り分けられなかった
+（`main gated phase must initialize the MCP client first`）。**継続調査中。**
+
+### 検証
+
+`npm test` **2079 passed**（+1・分類器のテスト）/ `typecheck:e2e` 0 / lint 0
+
 ### 6.397 test(e2e): ラックの実機テストを書き、数値設計を実機の手前で守る unit を置いた (#628) (Aug 28, 2026)
 
 **Date**: 2026-08-28

@@ -961,8 +961,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           expectedName: 'NotTheCurrentPlugin',
         })
         expect(guardedUiOpen.isError, guardedUiOpen.text).toBe(true)
+        // 🔴 #628 が実装の文言に `re-evaluate first;` を挿入した（`global.ts` の
+        // `pluginUiOperationError`）。アンカーは**実装からコピーする**規約なので、ここも追随する。
+        // 実機ゲートで捕まえた — 文言を変えた PR がアンカーを更新し忘れていた。
         expect(guardedUiOpen.text).toContain(
-          `current slot is '${catalog.clapEffectName}'; the UI was not opened`,
+          `current slot is '${catalog.clapEffectName}'; re-evaluate first; the UI was not opened`,
         )
         expect(guardedUiOpen.text).toContain(`Valid indices: 1 (effect, ${catalog.clapEffectName})`)
 
