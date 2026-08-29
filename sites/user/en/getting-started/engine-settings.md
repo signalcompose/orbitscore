@@ -34,16 +34,3 @@ For now, switch the default output in macOS Sound settings to change where
 audio goes.
 :::
 
-## Advanced: the SuperCollider backend
-
-The default engine is Rust, but setting the VS Code setting **`orbitscore.engine`**
-to `"sc"` switches to the legacy SuperCollider backend (for compatibility; normally
-not needed — the setting, not the OS environment variable, is authoritative: the
-extension overwrites the env when spawning the engine). Only when SC is selected do the SC-specific commands (Select Audio
-Device / Force Kill scsynth) appear in the Command Palette.
-
-::: tip Verification
-The statements in this chapter (Rust engine by default, 48 kHz, fixed system
-default output) are based on behavior confirmed in a real-machine E2E test on
-2026-07-17.
-:::

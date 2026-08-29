@@ -75,9 +75,8 @@ The contents shown in the status bar vary depending on the situation:
 | `🎵 OrbitScore: Ready 🐛` | Running in debug mode (the trailing 🐛 marks it) |
 
 ::: info Seeing only one indicator is normal
-With the default engine, no extra indicator for the audio engine is shown. That is by
-design — nothing is displayed when there is nothing wrong. (It appears only if you have
-selected the legacy SuperCollider backend, or if the engine cannot be found.)
+No extra indicator for the audio engine is shown while everything is fine — that is by
+design. Nothing appearing is the normal state.
 :::
 
 ## Future Plans

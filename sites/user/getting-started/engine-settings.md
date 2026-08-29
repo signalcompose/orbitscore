@@ -32,15 +32,3 @@ OrbitStudio の Activity Bar にある **Audio Engine Settings** ビューから
 場合は macOS のサウンド設定でデフォルト出力を切り替えてください。
 :::
 
-## 上級者向け: SuperCollider バックエンド
-
-既定のエンジンは Rust ですが、VS Code 設定 **`orbitscore.engine`** を `"sc"` に
-すると従来の SuperCollider バックエンドに切り替えられます（レガシー互換・通常は
-不要です。環境変数ではなくこの設定が正です — 拡張が spawn 時に env を上書きします）。
-SC 選択時のみ、コマンドパレットに SC 用コマンド（Select Audio Device /
-Force Kill scsynth）が現れます。
-
-::: tip 検証について
-この章の記述（既定 Rust エンジン・48kHz・システムデフォルト出力固定）は
-2026-07-17 の実機 E2E で確認した動作に基づいています。
-:::

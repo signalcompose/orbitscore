@@ -84,36 +84,6 @@ seq.play(1, 0, 0, 0)      // play only on beat 1
 
 Depending on the default tempo and time signature, a pattern may sound slower or faster than you expected. Please write `global.tempo()` and `global.beat()` explicitly to confirm.
 
----
-
-## `❌ scsynth: not found` Is Shown in the Status Bar
-
-::: warning This only happens with the SuperCollider backend
-The default engine (Rust) does not use scsynth, so this indicator never appears.
-It applies only if you have set `orbitscore.engine` to `"sc"`.
-If you get no sound on the default engine, see [No Sound](#no-sound).
-:::
-
-You have the SuperCollider backend selected, and the bundled scsynth cannot be recognised for some reason.
-
-Please try the following in order:
-
-1. **Reinstall the extension**
-   Uninstall OrbitScore from the VS Code extensions list, download the `.vsix` file again from [GitHub Releases](https://github.com/signalcompose/orbitscore/releases), and reinstall it.
-
-2. **Check the logs**
-   Open **View → Output** from the VS Code menu and select **OrbitScore** in the dropdown to view the startup logs. Detailed error information may be shown there.
-
-3. **Specify a system scsynth (advanced)**
-   If you already have SuperCollider installed, you can specify the path to the system scsynth in the VS Code settings (`orbitscore.scsynthPath`):
-   ```json
-   {
-     "orbitscore.scsynthPath": "/Applications/SuperCollider.app/Contents/Resources/scsynth"
-   }
-   ```
-
----
-
 ## Errors Related to audioPath
 
 ### What Is the Base for a Relative Path?
@@ -129,20 +99,6 @@ var drum = init global.seq
 drum.audio("/Users/yourname/audio/kick.wav")
 drum.play(1, 1, 1, 1)
 ```
-
----
-
-## scsynth Server Will Not Start ("Server failed to start" Error)
-
-::: warning Also specific to the SuperCollider backend
-This does not apply to the default Rust engine.
-:::
-
-If port 57110 is already in use by another process, scsynth may fail to start.
-
-Please open the VS Code command palette (`Cmd+Shift+P`) and run `OrbitScore: Force Kill scsynth`. This terminates the existing scsynth process. After that, click the status bar to start the engine again.
-
----
 
 ## When None of the Above Resolves the Issue
 
