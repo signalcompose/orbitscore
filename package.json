@@ -14,6 +14,7 @@
     "docs:build": "npm -w @orbitscore/dev-site run docs:build",
     "docs:preview": "npm -w @orbitscore/dev-site run docs:preview",
     "test": "npm -w @orbitscore/engine test",
+    "pretest:e2e:gated": "cargo build --release --manifest-path rust/Cargo.toml -p orbit-audio-daemon --features outproc-effect,outproc-instrument && npm run build",
     "test:e2e:gated": "ORBIT_GATED_ORBITSTUDIO=1 npx vitest run --dir tests --config vitest.config.ts --globals --pool=forks --poolOptions.forks.singleFork=true e2e/orbitstudio-mcp-gated",
     "midi-run": "ts-node --transpile-only packages/engine/src/cli/midi-run.ts",
     "typecheck:e2e": "tsc --noEmit -p tsconfig.tests.json",

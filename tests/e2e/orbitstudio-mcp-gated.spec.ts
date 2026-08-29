@@ -94,11 +94,19 @@ const REPO_ROOT = path.resolve(__dirname, '../..')
  * 弱い分は「疑わしきは落とす」側に倒す（等しい場合は通す）。
  */
 function assertDaemonBinaryIsNotStale(): void {
-  const binary = path.join(REPO_ROOT, 'rust/target/release/orbit-audio-daemon')
+  // 🔴 見るのは **拡張が同梱しているコピー**。ここが実際に spawn される
+  // （`daemon-client.ts` の解決順で、engine が `<extension>/engine/dist/` から動くため
+  // `<extension>/engine/bin/<platform>/` が当たる）。`rust/target/release/` を見ても、
+  // 2026-08-29 の事故——cargo だけ回して `npm run build` を飛ばし、17:49 のコピーで
+  // 実機 E2E を6回走らせた——は止められない。
+  const binary = path.join(
+    REPO_ROOT,
+    `packages/vscode-extension/engine/bin/${process.platform}-${process.arch}/orbit-audio-daemon`,
+  )
   if (!fs.existsSync(binary)) {
     throw new Error(
       `gated E2E: ${binary} does not exist. Build it first:\n` +
-        '  cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument',
+        '  npm run build   # cargo build + scripts/copy-daemon-bin.sh',
     )
   }
   const builtAt = fs.statSync(binary).mtimeMs
@@ -122,8 +130,9 @@ function assertDaemonBinaryIsNotStale(): void {
         `stale code.\n  newest source: ${path.relative(REPO_ROOT, newest.file)}\n` +
         `  binary:        ${new Date(builtAt).toISOString()}\n` +
         `  source:        ${new Date(newest.at).toISOString()}\n` +
-        'Rebuild before running:\n' +
-        '  cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument',
+        'Rebuild before running (npm run test:e2e:gated does this for you):\n' +
+        '  cargo build --release --manifest-path rust/Cargo.toml -p orbit-audio-daemon \\\n' +
+        '    --features outproc-effect,outproc-instrument && npm run build',
     )
   }
 }

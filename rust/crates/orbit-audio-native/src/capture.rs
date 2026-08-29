@@ -550,6 +550,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    #[test]
     fn drop_without_finish_finalizes() {
         let path = temp_wav_path("drop-finalize");
         let (mut sink, writer) =

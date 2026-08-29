@@ -17,6 +17,75 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.417 fix(e2e): 実機テストが古い daemon で走っていた — 手順を消して自動化した (#651) (Aug 29, 2026)
+
+#### 🔴 今日の実機 E2E は、すべて 17:49 のバイナリで走っていた
+
+`#651` のヘッダ修正が実機で効かず、**仮説を4つ立てて4つとも外した**。最後に
+システム上の daemon を全列挙して確定した:
+
+```text
+probe=1  19:01  rust/target/release/orbit-audio-daemon                      ← ビルドしたもの
+probe=0  17:49  packages/vscode-extension/engine/bin/darwin-arm64/...       ← 実際に動いていたもの
+```
+
+**拡張は daemon を同梱している。** engine が `<extension>/engine/dist/` から動くため、
+`daemon-client.ts` の解決順で `<extension>/engine/bin/<platform>/` が当たる。
+同梱コピーを更新するのは **`npm run build` の `build:copy-engine`**
+（`scripts/copy-daemon-bin.sh`）で、`cargo build` では更新されない。
+
+**私は `cargo build` だけ回して `npm run build` を飛ばしていた。**
+CLAUDE.md のマージ前ゲートには `npm run build` と書いてある。**手順は存在し、私が守らなかった。**
+
+#### 🔴 owner 判断: 手順が確実なら、手順そのものを消す
+
+> これ手順が確実になったら手動ではない形にした方がいいですよね
+
+**ガードは「忘れた」と言うだけで、忘れる余地を残す。**
+
+`package.json` に **`pretest:e2e:gated`** を追加した。npm は `pre<script>` を自動で先に
+実行するので、`npm run test:e2e:gated` を打てば**必ず** cargo build + npm build が走る。
+
+```json
+"pretest:e2e:gated": "cargo build --release --manifest-path rust/Cargo.toml -p orbit-audio-daemon --features outproc-effect,outproc-instrument && npm run build"
+```
+
+**実証**: 同梱バイナリに観測文字列を残した状態から、`cargo` も `npm run build` も打たずに
+`npm run test:e2e:gated` だけを実行 → **観測文字列が 1 → 0**（pretest が作り直した）。
+
+#### stale ガードは同梱パスへ修正（保険）
+
+最初に入れたガードは `rust/target/release/` を見ており、**今日の事故を止められなかった**。
+実際に spawn される同梱パスへ変更。vitest を直接叩いた場合の保険として残す。
+
+#### #651 は直った
+
+```text
+以前:  data=0        estimated duration: 0.000000 sec
+いま:  data=2310144  estimated duration: 5.013333 sec
+```
+
+**開けて聴けるようになった。** `data` が実データよりわずかに小さいのは設計どおり
+（最後の 1 秒ぶんが次の patch を待っている状態で終了する）。
+
+#### 🔴 観測手段そのものを確かめずに結論を出した（4回）
+
+| # | 結論 | 実際 |
+|---|---|---|
+| 1 | 「`afinfo` が開けるので実害は小さい」 | 尺は **0 秒**だった |
+| 2 | 「E2E が stale なバイナリを使っていた」 | 対象を**別のバイナリと取り違えていた** |
+| 3 | 「`[capture]` 報告が無い = Drop が走っていない」 | `eprintln!` が `get_log` に**出ないだけ**だった |
+| 4 | 「観測が空 = ループに到達していない」 | 同上 / `/tmp` に書けない可能性 |
+
+**共通点: 観測手段が働いているかを確かめずに、その沈黙を事象の不在と読んだ。**
+memory `swallowed-errors-are-not-absence` は**エラーの握り潰し**について書いてあるが、
+**観測手段そのものには適用していなかった**。
+
+**対処**: 観測を仕込む時は、**まず「必ず出るはずの1回」で経路を確かめる**。
+今回は3回目（キャプチャの隣に書く）で初めて経路が保証された。
+
+---
+
 ### 6.416 fix(capture): ヘッダを定期 patch + 🔴 stale artifact ガードを機械化 (#651) (Aug 29, 2026)
 
 #### 何を直したか
