@@ -3,7 +3,7 @@
  *
  * 旧実装は `masterGainDb` を **イベントごとの gain に畳み込んで**いたため:
  *   (a) instrument の note 経路には畳み込みが無く、**マスターが一切効かなかった**
- *   (b) audio でも **バスに入る前**に掛かっていた（マスターを絞るとリバーブの掛かり方まで変わる）
+ *   (b) daemon の gain ramp（線形補間）が一度も使われていなかった。
  *
  * 現在は `Global.gain()` が daemon の mixer master へ線形 amplitude を送り、
  * `render_multi` の gain ramp が合流後に適用する。

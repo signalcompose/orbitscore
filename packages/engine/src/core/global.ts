@@ -576,9 +576,14 @@ export class Global {
    * ミキサーのマスターフェーダーであり、**各ソースへ配るものではない**。旧方式は
    * `masterGainDb` を **イベントごとの gain に畳み込んで**いたため、
    * (a) **instrument には一切効かず**（note 経路に畳み込みが無い）、
-   * (b) audio でも **バスに入る前**に掛かっていた（マスターを絞るとリバーブの掛かり方まで変わる）。
+   * (b) daemon の gain ramp（線形補間）が一度も使われていなかった。
    *
-   * daemon 未接続時は no-op（`RustEnginePlayer.setGlobalGain` が握る）。
+   * daemon 未接続時も **intent は記録される**（`RustEnginePlayer.globalGainIntent`）。
+   * daemon が respawn すると `global_gain` は unity から始まるので、
+   * `reapplyGlobalGainAfterRespawn()` が再送する。
+   *
+   * ⚠️ SC バックエンドは `setGlobalGain` を実装していないため**何も起きない**
+   * （optional chaining で `undefined`）。SC は退役方針（#502）なので許容する。
    */
   gain(valueDb?: number): number | this {
     const result = this.effectsManager.gain(valueDb)

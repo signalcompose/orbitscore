@@ -17,6 +17,85 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.410 fix: レビュー5体の指摘を適用 — Critical 2件はいずれも main の書いた部分 (#643) (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#648](https://github.com/signalcompose/orbitscore/pull/648)
+**レビュー**: `/code:pr-review-team` 3体 + **Fable 並行**（`/simplify` は E2E が過半のためスキップ）
+
+#### 🔴 Critical 2件 — 両方とも main が書いた部分
+
+**1. daemon respawn 後にマスターゲインが unity へ戻る（退行）**
+
+respawn の再適用リストは plugins / racks / busRoutings / sourceRoutings のみで、
+**global gain が無かった**。daemon は新プロセスで `global_gain: 1.0` から始まる。
+
+**この PR で畳み込みを外したので、これは本 PR が新設した退行**（旧実装はイベント側で
+効いていたので respawn の影響を受けなかった）。しかも `Global.gain()` のゲッターは
+**古い値を返し続ける**ので、「DSL 上は -6dB なのに実際は unity」が**エラーもログも無く**発生する。
+
+さらに **main が書いたコメント「次の起動時に `global.gain()` が再評価されて設定される」は
+存在しない経路の主張**だった。
+
+→ `globalGainIntent` + `reapplyGlobalGainAfterRespawn()`（既存2つの**鏡像**）+ **テスト4本**。
+変異2種（reapply 削除 / intent 記録の削除）で殺せることを確認済み。
+
+**2. Signal Chain sugar が instrument を拒否したまま**
+
+`routeOutputFromDsl` / `routeSendFromDsl`（`process-statement.ts` から呼ばれる **`output()` /
+`send()` と同じ意味の別入口**）が `isNoteSequence()` のまま残っていた。
+**「メソッドでは書けるが Signal Chain 構文では弾かれる」**状態。
+
+→ 同じガード分割 + choke point 呼び出し + **テスト3本**。
+
+#### 🔴 Fable が見つけた「差分に無いもの」3件
+
+**A. 「insert の前に掛かる問題が解消」は誤り — spec に既知制約として書いてあった**
+
+`INSTRUCTION_ORBITSCORE_DSL.md`:
+
+> master gain ramp は per-sequence insert の**前**に適用される（DAW の「fader は insert 後」と逆）
+
+実コードも `render_multi_feeds`（gain・`output.rs:936`）→ post-loop の `processor.process`
+（insert・`:949`）の順で、**本 PR は変えていない**。にもかかわらず「解消した」と
+**6箇所に複製**していた。**spec を読まずに書いた。**
+
+→ 誤記を全て訂正し、正しい説明（変えていないこと・spec の既知制約であること）を追記。
+
+**B. ガード3分岐のうち sum しか実装されていない**
+
+設計 §12 は3分岐の扱いを定めているが、**数値 render bus と LinkAudio 分岐は byte-identical で
+未変更**。`inst.output(2)` / `inst.output("LinkCh")` が**黙って記録される**（#644 の症状が
+instrument にも開いた）。
+
+→ **instrument 側の拒否を2分岐に追加**（設計で確定済み・owner 確認不要）+ テスト3本。
+**midi 側は据え置き**（受理していた入力を弾く破壊的変更なので owner 確認事項・#644）。
+
+**C. core spec が stale（規則6違反）**
+
+spec は今も「note シーケンスへの `send()` と `output()` を依然拒否する」と書いていた。
+→ **実装に合わせて更新**（3分岐の表・アドレスモデル `(instance, unit)`・#647/#611 への参照）。
+
+#### 🔴 記録: 文字列置換で3回壊した（今日通算）
+
+| # | 内容 |
+|---|---|
+| 1 | doc コメントの途中にヘルパを挿入（モジュール doc が関数に化けた） |
+| 2 | 複数行 import の途中に import を挿入（構文エラー） |
+| 3 | **変異の復元で `if (!this.daemon.isRunning()) {` が複数一致**し、別の場所（respawn ループ内）を書き換え → **型エラー507件** |
+
+**共通原因**: `replace(old, new, 1)` は「最初の1つ」を置換するので、**一意でないアンカーは
+静かに間違った場所を書き換える**。
+
+**対策**: 置換の前に **`assert s.count(anchor) == 1`** を置く。3件目の復旧後はこれを徹底し、
+以降の置換は全て一意性を確認してから実行した。
+
+#### 検証（main が sandbox 外で実行）
+
+`npm run build` **exit=0（型エラー 0）** / `npm run lint` **exit=0** /
+`npm run typecheck:e2e` **exit=0** / **2103 passed**（ラウンド1前 2093 → **+10**）
+
+---
+
 ### 6.409 test(e2e): #643 の実機検証が #633 のログ洪水に阻まれることを実測した (Aug 29, 2026)
 
 **Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) PR-2 / [#633](https://github.com/signalcompose/orbitscore/issues/633)

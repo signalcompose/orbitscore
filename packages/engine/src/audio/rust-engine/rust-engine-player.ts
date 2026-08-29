@@ -400,6 +400,12 @@ export class RustEnginePlayer implements AudioEngineBackend {
     { output: string | undefined; sends: { bus: string; gain: number }[] }
   >()
   /**
+   * 🔴 最後に設定したマスターゲイン（#643 PR-2）。daemon は respawn すると
+   * **unity から始まる**ので、再送しないとマスターが黙って効かなくなる。
+   * `Global.gain()` を再評価する経路は存在しないため、ここで覚えるしかない。
+   */
+  private globalGainIntent: { amplitude: number; rampSec: number } | undefined
+  /**
    * `(source, unit)` ごとの最後の routing intent（#643）。key は設計正本どおり
    * `${source}#${unit}`。daemon respawn 後に全 entry を再発行する。
    */
@@ -735,6 +741,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
           await this.reloadEffectRacksAfterRespawn()
           await this.reapplyBusRoutingAfterRespawn()
           await this.reapplySourceRoutingAfterRespawn()
+          await this.reapplyGlobalGainAfterRespawn()
           console.warn(
             `✅ [rust-engine] daemon respawned and session re-established (attempt ${attempt}/${MAX_RESPAWN_ATTEMPTS}).`,
           )
@@ -978,6 +985,32 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /** Restore source routes independently; one bad source must not fail daemon recovery. */
+  /**
+   * 🔴 マスターゲインを respawn 後に再適用する（#643 PR-2）。
+   *
+   * daemon は**新プロセスなので `global_gain` が unity から始まる**。この PR で
+   * `event-scheduler.ts` の畳み込みを外したため、**再送しないとマスターが完全に効かなくなる**
+   * （旧実装はイベント側で効いていたので respawn の影響を受けなかった）。
+   *
+   * さらに `Global.gain()` のゲッターは**古い値を返し続ける**ので、
+   * 「DSL 上は -6dB なのに実際は unity」というズレがエラーもログも無く発生する。
+   * `reapplyBusRoutingAfterRespawn` / `reapplySourceRoutingAfterRespawn` の鏡像。
+   */
+  private async reapplyGlobalGainAfterRespawn(): Promise<void> {
+    const intent = this.globalGainIntent
+    if (!intent) return
+    try {
+      await this.daemon.setGlobalGain(intent.amplitude, intent.rampSec)
+    } catch (err) {
+      // キャッシュは意図的に残す: 次の respawn で再試行する。
+      console.error(
+        `❌ [rust-engine] failed to restore master gain after daemon respawn ` +
+          `(amplitude=${intent.amplitude})`,
+        err,
+      )
+    }
+  }
+
   private async reapplySourceRoutingAfterRespawn(): Promise<void> {
     for (const { source, unit, target } of this.sourceRoutings.values()) {
       try {
@@ -1184,12 +1217,17 @@ export class RustEnginePlayer implements AudioEngineBackend {
    *
    * daemon は `render_multi` の gain ramp として **合流後に1回だけ**適用する。旧方式は
    * `masterGainDb` を **イベントごとの gain に畳み込んで**いたため、(a) instrument には効かず、
-   * (b) audio でも **バスに入る前**に掛かっていた（マスターを絞るとリバーブの掛かり方まで変わる）。
+   * (b) daemon の gain ramp（線形補間）が一度も使われていなかった。
    */
   async setGlobalGain(amplitude: number, rampSec = 0): Promise<void> {
+    // 🔴 daemon の状態に関わらず**先に intent を記録する**。未接続時に捨てると、
+    // 接続後に復元する手がかりが消える（`Global.gain()` を再評価する経路は存在しない）。
+    this.globalGainIntent = { amplitude, rampSec }
     if (!this.daemon.isRunning()) {
-      // daemon 未接続時は no-op。次の起動時に `global.gain()` が再評価されて設定される
-      // （既存の pluginNoteOn 等と同じ作法）。
+      // daemon 未接続時は送らない。**intent は上で記録済み**なので、respawn 後に
+      // `reapplyGlobalGainAfterRespawn()` が再送する。
+      // （旧コメントは「次の起動時に global.gain() が再評価される」と書いていたが、
+      //   そのような経路は存在しなかった — #648 レビューで指摘）
       return
     }
     await this.daemon.setGlobalGain(amplitude, rampSec)

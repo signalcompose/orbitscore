@@ -21,6 +21,7 @@ interface FakeDaemon {
   applyEffectChain: ReturnType<typeof vi.fn>
   setBusRouting: ReturnType<typeof vi.fn>
   setSourceRouting: ReturnType<typeof vi.fn>
+  setGlobalGain: ReturnType<typeof vi.fn>
   quit: ReturnType<typeof vi.fn>
 }
 
@@ -55,6 +56,7 @@ function createHarness() {
     }),
     setBusRouting: vi.fn().mockResolvedValue(undefined),
     setSourceRouting: vi.fn().mockResolvedValue(undefined),
+    setGlobalGain: vi.fn().mockResolvedValue(undefined),
     quit: vi.fn().mockResolvedValue(undefined),
   }
   Object.defineProperty(player, 'daemon', { value: daemon })
@@ -735,6 +737,72 @@ describe('RustEnginePlayer bus routing recovery after daemon respawn (MX.4 M3)',
       expect.stringContaining('failed to restore bus routing'),
       expect.any(Error),
     )
+  })
+})
+
+describe('RustEnginePlayer master gain recovery after daemon respawn (#643)', () => {
+  const players: RustEnginePlayer[] = []
+
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await Promise.all(players.splice(0).map((player) => player.quit()))
+  })
+
+  /**
+   * 🔴 daemon は respawn すると `global_gain` が **unity から始まる**。
+   * この PR で `event-scheduler.ts` の畳み込みを外したため、再送しないと
+   * **マスターが黙って効かなくなる**（旧実装はイベント側で効いていた）。
+   * さらに `Global.gain()` のゲッターは古い値を返し続けるので、ズレに気づけない。
+   */
+  it('replays the last master gain after respawn', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setGlobalGain(0.5012, 0)
+    daemon.setGlobalGain.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setGlobalGain).toHaveBeenCalledTimes(1)
+    expect(daemon.setGlobalGain).toHaveBeenCalledWith(0.5012, 0)
+  })
+
+  it('replays only the most recent value, not every call', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setGlobalGain(1.0, 0)
+    await player.setGlobalGain(0.25, 0)
+    daemon.setGlobalGain.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setGlobalGain).toHaveBeenCalledTimes(1)
+    expect(daemon.setGlobalGain).toHaveBeenCalledWith(0.25, 0)
+  })
+
+  it('sends nothing after respawn when the gain was never set', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setGlobalGain).not.toHaveBeenCalled()
+  })
+
+  it('keeps the intent when the daemon is not running, so respawn can restore it', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    daemon.isRunning.mockReturnValue(false)
+    await player.setGlobalGain(0.125, 0)
+    expect(daemon.setGlobalGain).not.toHaveBeenCalled()
+
+    daemon.isRunning.mockReturnValue(true)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await (player as any).respawnLoop()
+
+    expect(daemon.setGlobalGain).toHaveBeenCalledWith(0.125, 0)
   })
 })
 

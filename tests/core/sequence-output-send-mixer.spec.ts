@@ -243,3 +243,75 @@ describe('Sequence.send() → aux bus routing (MX.3/MX.4)', () => {
     expect(seq.send('rev', 0.5)).toBe(seq)
   })
 })
+
+/**
+ * 🔴 Signal Chain の mixer ハンドル構文は `routeOutputFromDsl` / `routeSendFromDsl` を通る
+ * **`output()` / `send()` と同じ意味の別入口**（`process-statement.ts` から呼ばれる）。
+ * ガードが片方だけ更新されると「メソッドでは書けるが構文では弾かれる」になる
+ * — #648 レビューで実際に取り残されていた（#643 PR-2）。
+ */
+describe('signal-chain routing sugar mirrors the direct methods (#643)', () => {
+  it('opens the output sugar to instruments', async () => {
+    const { global, seq, setSourceRouting } = harness()
+    global.sum('strings')
+    await seq.instrument('CLAP Test Synth')
+    setSourceRouting.mockClear()
+
+    await seq.routeOutputFromDsl('strings')
+
+    expect(setSourceRouting).toHaveBeenCalledTimes(1)
+    expect(setSourceRouting.mock.calls[0][1]).toBe(0)
+  })
+
+  it('opens the send sugar to instruments', async () => {
+    const { global, seq, setSourceRouting } = harness()
+    global.aux('rev')
+    await seq.instrument('CLAP Test Synth')
+    setSourceRouting.mockClear()
+
+    await seq.routeSendFromDsl('rev', 0.3)
+
+    expect(setSourceRouting).toHaveBeenCalledTimes(1)
+    expect(setSourceRouting.mock.calls[0][1]).toBe(0)
+  })
+
+  it('still rejects both sugar entries on a midi sequence', async () => {
+    const { global, seq } = harness()
+    global.sum('strings')
+    global.aux('rev')
+    seq.midi('IAC Bus 1', 1)
+
+    await expect(seq.routeOutputFromDsl('strings')).rejects.toThrow('cannot target a MIDI sequence')
+    await expect(seq.routeSendFromDsl('rev', 0.3)).rejects.toThrow('cannot target a MIDI sequence')
+  })
+})
+
+/**
+ * 🔴 `output()` の3分岐のうち **sum だけ**が instrument に解禁される（設計 §12・#643 PR-2）。
+ * 残り2分岐は「宛先だけ記録して音が従わない」silent failure になるので loud に拒否する。
+ * **midi 側は据え置き**（受理していた入力を弾く破壊的変更なので owner 確認事項・#644）。
+ */
+describe('output() rejects the two unsupported branches on instruments (#643)', () => {
+  it('rejects the offline render bus branch', async () => {
+    const { seq } = harness()
+    await seq.instrument('CLAP Test Synth')
+
+    expect(() => seq.output(3)).toThrow('offline render bus')
+  })
+
+  it('rejects the LinkAudio channel branch', async () => {
+    const { seq } = harness()
+    await seq.instrument('CLAP Test Synth')
+
+    expect(() => seq.output('Kick Ch')).toThrow('LinkAudio channel')
+  })
+
+  it('leaves the midi behaviour unchanged on those two branches', () => {
+    const { seq } = harness()
+    seq.midi('IAC Bus 1', 1)
+
+    // 据え置き: 例外を投げず、黙って記録する（#644 で診断を出す予定）。
+    expect(() => seq.output(3)).not.toThrow()
+    expect(() => seq.output('Kick Ch')).not.toThrow()
+  })
+})

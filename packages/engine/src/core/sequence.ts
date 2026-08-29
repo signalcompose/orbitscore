@@ -375,6 +375,15 @@ export class Sequence {
     }
 
     if (typeof channelName === 'number') {
+      // 🔴 instrument の**オフラインレンダ先**は未設計（録音経路が別）なので loud に拒否する
+      // （設計 §12・#643 PR-2）。黙って `_renderBus` に記録すると、書いた人は効いていると
+      // 誤解し続ける。**midi 側は破壊的変更になるため owner 確認待ちで据え置き**（#644）。
+      if (this.isInstrument()) {
+        throw new Error(
+          `Sequence '${name}': output(${channelName}) selects an offline render bus, ` +
+            `which is not supported for instrument sequences yet.`,
+        )
+      }
       if (!Number.isInteger(channelName) || channelName < 1 || channelName > 16) {
         throw new Error(
           `Sequence '${name}': output(renderBus) requires an integer from 1 to 16, got ${channelName}.`,
@@ -391,6 +400,14 @@ export class Sequence {
       return this
     }
 
+    // 🔴 instrument → LinkAudio は **PR-3 で配線する**まで拒否する（設計 §12・#643 PR-2）。
+    // 宛先だけ記録して音が従わない状態は silent failure。**midi 側は据え置き**（#644）。
+    if (this.isInstrument()) {
+      throw new Error(
+        `Sequence '${name}': output("${destinationName}") targets a LinkAudio channel, ` +
+          `which is not wired for instrument sequences yet.`,
+      )
+    }
     this._renderBus = undefined
     this._outputChannel = destinationName
     if (this.global.isLinkAudioEnabled()) {
@@ -466,23 +483,30 @@ export class Sequence {
   /** Awaitable routing entry used only by Signal Chain mixer-name sugar. */
   async routeOutputFromDsl(output: string): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
-    if (this.isNoteSequence()) {
+    // 🔴 `seq.output()` と**同じ意味の操作の別入口**なので、ガードも同じでなければならない
+    // （#643 PR-2）。instrument は解禁・midi は仕様として拒否（ミキサーに乗らない）。
+    // 片方だけ解禁すると「メソッドでは書けるが Signal Chain 構文では弾かれる」になる。
+    if (this.isMidi()) {
       throw new Error(
-        `Sequence '${name}': mixer output routing is only supported on audio sequences in v1.`,
+        `Sequence '${name}': mixer output routing cannot target a MIDI sequence. ` +
+          `MIDI is sent to an external device and therefore has no mixer output destination.`,
       )
     }
     this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
     this._sumOutputBus = output
     await this.pushBusRouting()
+    await this.ensureInstrumentSourceRouting()
     return this
   }
 
   /** Awaitable routing entry used only by Signal Chain aux-name sugar. */
   async routeSendFromDsl(auxBus: string, amount: number): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
-    if (this.isNoteSequence()) {
+    // `seq.send()` と同じ意味の操作の別入口（上の `routeOutputFromDsl` と同じ理由）。
+    if (this.isMidi()) {
       throw new Error(
-        `Sequence '${name}': send routing is only supported on audio sequences in v1.`,
+        `Sequence '${name}': send routing cannot target a MIDI sequence. ` +
+          `MIDI is sent to an external device and therefore has no mixer output destination.`,
       )
     }
     if (!Number.isFinite(amount)) {
@@ -491,6 +515,7 @@ export class Sequence {
     this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
     this._auxSends.set(auxBus, amount)
     await this.pushBusRouting()
+    await this.ensureInstrumentSourceRouting()
     return this
   }
 

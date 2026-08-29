@@ -1185,13 +1185,21 @@ keys.instrument("Kontakt 8.vst3", "keys.vstpreset")  // 保存済み state で�
   >
   > **v1 の現在地**: **PR-1a（#527）はまだこの移設を実装していない**。instrument の出力は
   > 引き続き master の `CompositePostProcessor`（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs`）で
-  > add-mix されており、`packages/engine/src/core/sequence.ts` は note シーケンスへの
-  > `send()` と **sum バスへの** `output()` を依然拒否する（LinkAudio チャンネル名としての
-  > `output()` は note シーケンスでも通る — 拒否されるのは sum バスへのルーティングのみ）。
-  > PR-1a が実装するのは plugin 宣言のチェーン化基盤
-  > （`EffectChainMap`）のみで、上記の合流先変更そのものはこの基盤の上に構築する別工程。
-  > **実装時期**: **#517 S4 PR-1b**（#522）。受け入れ基準は「`lead.Serum(...).TALReverb4(size: 0.6).subout`
-  > が実際に機能すること」。
+  > **✅ 実装済み（#643・2026-08-29）**。instrument の音は master への後付け加算ではなく
+  > **ミキサーの source** として `render_multi` の内側（event 混合後・gain ramp の前）で
+  > 合流する。`seq.effect()` / `seq.output(sum)` / `seq.send()` は **instrument で使える**。
+  >
+  > | メソッド | midi | instrument |
+  > |---|---|---|
+  > | `effect()` / `output(sum)` / `send()` | **拒否**（MIDI は外部機器へ送出するためミキサーの出力先を持たない） | **✅ 使える** |
+  > | `output(数値)` = オフライン render bus | 素通り（#644 で診断予定） | **拒否**（録音経路が未設計） |
+  > | `output("LinkAudio チャンネル名")` | 素通り（同上） | **拒否**（PR-3 で配線予定） |
+  >
+  > アドレスは **`(instance, unit)`**（`SetSourceRouting { source, unit, target }`）。
+  > 現在 `unit` は **0 固定** — 子プロセスが常に main 出力のみを返すため。
+  > マルチティンバー（unit ≥ 1）は **#647**、ミキサーの出口（物理チャンネル指定）は **#611**。
+  >
+  > 設計正本: `docs/design/643-mixer-foundation-design.md`
 - RUN / LOOP / MUTE / quantize の意味論は MIDI シーケンスと同一。
 
 ### PH.2 effect — `global.effect(path[, pluginId])`
