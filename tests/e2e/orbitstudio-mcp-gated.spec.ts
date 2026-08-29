@@ -1400,7 +1400,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(
         errorCountAfterMixer,
         `expected no new ERROR: lines from the mixer/routing DSL, got log tail: ${afterMixerLog.slice(-800)}`,
-      ).toBe(errorCountBeforeMixer)
+        // 🔴 `get_log` は固定 500 行窓。古い ERROR が窓から流れ出るだけで件数は減るので、
+        // 厳密等価は偽陽性を生む。増えていないことだけを見る（#625）。
+      ).toBeLessThanOrEqual(errorCountBeforeMixer)
 
       // ── 7. get_log sanity check — non-empty, evidence of engine activity ──
       const logRes = await client.call('get_log', { lines: 100 })

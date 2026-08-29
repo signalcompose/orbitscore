@@ -17,6 +17,73 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.418 test: 今日の是正を「知識」から「再現可能な仕組み」へ (Aug 29, 2026)
+
+> 今回かなりテストなどの是正が出来てると思うのですが、**これをただの知識ではなく再現可能な
+> 仕組みにする**様にしてください。（owner）
+
+**文章は読まれない時がある。** 実際この日、CLAUDE.md に書いてある規律を**私自身が3つ破った**
+（`npm run build` を飛ばす / 変異検証を最後の手段にすると書いた直後に実行 / DSL を足したら
+E2E も足す）。規律を足す時は、**同時にそれを守らせる仕組みを足す**。
+
+#### 1. DSL 網羅率のラチェット（`tests/e2e/dsl-e2e-coverage.spec.ts`）
+
+**未カバーの語が増えたら red。減る分には落ちない。**
+
+- 新しい DSL 語を足して E2E を書かなければ、**その語の名前を挙げて落ちる**
+- baseline は**減らす方向にしか編集できない**（covered になったのに baseline に残っていたら
+  「baseline を正直に保つ」検査が別途落とす）
+
+**実証**: `SEQUENCE_DSL_METHODS` に架空の語を1つ足して E2E を書かない状態を作ると、
+`expected [ 'brandNewDslVerb' ] to deeply equal []` で red。restore で green。
+
+**書いた直後に仕事をした**: `global` 側にも未カバーが **8語**あることが判明
+（`compressor` / `limiter` / `normalizer` / `linkAudio` / `audioDevice` ほか）。
+前3つは master チェーンの語で、**#649 と同じ領域**にある。
+
+#### 2. アサーション衛生（`tests/e2e/gated-assertion-hygiene.spec.ts`）
+
+gated spec の**ソースを検査**して、弱いアサーションの型を機械的に探す:
+
+- ERROR 件数の**厳密等価**（固定 500 行窓なので古い ERROR が流れ出るだけで落ちる・#625）
+- capture するのに **rms を一度も見ていない**
+- stale ガードが `resolveDaemonBinaryPath()` を**呼ばずに決め打ちへ戻る**
+
+**書いた直後に実在の1件を検出**: `orbitstudio-mcp-gated.spec.ts:1403` の
+`.toBe(errorCountBeforeMixer)`。`<=` へ修正した。
+
+#### 3. cfg 4象限スクリプト（`scripts/check-cfg-matrix.sh`）
+
+**同じ日に2回**、このループを手書きして壊した:
+
+```bash
+for F in "" "--features outproc-effect" ...; do cargo build $F; done
+```
+
+zsh は**引用されていない変数を単語分割しない**ので `--features outproc-effect` が1引数として
+渡り、cargo が拒否する。「3象限が落ちている」と報告したが**実際は全象限緑**だった。
+
+**測定手段が壊れていると、緑も赤も意味を持たない。** ループを1箇所へ閉じ込めた。
+
+#### 既に仕組みになっていたもの（この日に効いた）
+
+| 仕組み | 何回発火したか |
+|---|---|
+| `pretest:e2e:gated`（自動ビルド） | 手順そのものが消えた |
+| DSL 語彙の分類テスト | **2回**（`pluginUiSessionForInstance` / `findPluginUiSession`） |
+| pre-push の `cargo fmt` / clippy | **2回**（整形漏れ / 重複 `#[test]`） |
+| stale ガード | 触って古くした状態で発火を確認 |
+
+#### CLAUDE.md に対応表を追加
+
+「規律 ↔ それを守らせる仕組み ↔ 違反するとどうなるか」を1つの表にした。
+
+#### 検証
+
+`npm test` **2157 passed**（+8）/ typecheck:e2e / lint とも exit=0 / cfg 4象限すべて緑
+
+---
+
 ### 6.417 fix(e2e): 実機テストが古い daemon で走っていた — 手順を消して自動化した (#651) (Aug 29, 2026)
 
 #### 🔴 今日の実機 E2E は、すべて 17:49 のバイナリで走っていた
