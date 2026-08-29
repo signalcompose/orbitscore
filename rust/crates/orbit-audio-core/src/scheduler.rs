@@ -38,6 +38,13 @@ pub struct ScheduledSample {
     pub channel: Option<String>,
 }
 
+/// Destination of a premaster feed supplied alongside scheduled events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedDest {
+    Hardware,
+    Channel(usize),
+}
+
 impl ScheduledSample {
     pub fn new(start_sec: f64, sample: Sample) -> Self {
         Self {
@@ -360,6 +367,17 @@ impl Scheduler {
     /// 継承）。`channels` が空でも channel=Some の event は（無音で）出力されないため、その場合は
     /// render()（全 event 混合）とは一致しない。
     pub fn render_multi(&mut self, hardware_out: &mut [f32], channels: &mut [(&str, &mut [f32])]) {
+        self.render_multi_feeds(hardware_out, channels, &[]);
+    }
+
+    /// [`Self::render_multi`] plus borrowed premaster feeds. Feeds are added after scheduled
+    /// events and before the single per-frame master gain loop.
+    pub fn render_multi_feeds(
+        &mut self,
+        hardware_out: &mut [f32],
+        channels: &mut [(&str, &mut [f32])],
+        feeds: &[(&[f32], FeedDest)],
+    ) {
         let output_channels = self.output_channels as usize;
         let frames_to_render = hardware_out.len() / output_channels;
         let cursor = self.cursor_frames;
@@ -399,6 +417,27 @@ impl Scheduler {
                 Some(i) => &mut *channels[i].1,
             };
             Self::mix_event_into(out, active, cursor, frames_to_render, output_channels);
+        }
+
+        for (feed, dest) in feeds {
+            debug_assert_eq!(
+                feed.len(),
+                hardware_out.len(),
+                "render_multi_feeds: feed length must match hardware_out"
+            );
+            let out: &mut [f32] = match *dest {
+                FeedDest::Hardware => &mut *hardware_out,
+                FeedDest::Channel(index) => {
+                    let Some((_, buffer)) = channels.get_mut(index) else {
+                        debug_assert!(false, "render_multi_feeds: channel index out of range");
+                        continue;
+                    };
+                    buffer
+                }
+            };
+            for (dst, sample) in out.iter_mut().zip(*feed) {
+                *dst += *sample;
+            }
         }
 
         // master gain ramp を **1 回だけ**進め（next_gain_frame）、全バッファに同じ per-frame
@@ -1338,6 +1377,130 @@ mod tests {
             a_buf[2] > 0.0,
             "channel buf が gain loop でスキップ（全ゼロ）: a_buf[2]={}",
             a_buf[2]
+        );
+    }
+
+    #[test]
+    fn render_multi_feeds_adds_event_and_feed_before_gain() {
+        let make_scheduler = |gain| {
+            let mut scheduler = Scheduler::new(48_000, 2);
+            scheduler.schedule(
+                ScheduledSample::new(0.0, Sample::new(vec![1.0f32; 8], 48_000, 1))
+                    .with_pan(-1.0)
+                    .with_region(0, 8),
+            );
+            scheduler.set_global_gain(gain, 0);
+            scheduler
+        };
+
+        let mut event_only = vec![0.0; 8];
+        let mut empty_channels: [(&str, &mut [f32]); 0] = [];
+        make_scheduler(1.0).render_multi(&mut event_only, &mut empty_channels);
+
+        let feed = vec![2.0; 8];
+        let mut actual = vec![0.0; 8];
+        make_scheduler(0.5).render_multi_feeds(
+            &mut actual,
+            &mut empty_channels,
+            &[(feed.as_slice(), FeedDest::Hardware)],
+        );
+
+        let expected: Vec<f32> = event_only
+            .iter()
+            .zip(feed)
+            .map(|(event, feed)| (event + feed) * 0.5)
+            .collect();
+        assert_eq!(
+            actual
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            expected
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            "feed は event 混合後・master gain 前に加算されるべき"
+        );
+    }
+
+    #[test]
+    fn render_multi_feeds_empty_matches_render_multi_bit_for_bit() {
+        let make_scheduler = || {
+            let mut scheduler = Scheduler::new(48_000, 2);
+            scheduler.schedule(
+                ScheduledSample::new(0.0, mk_sample_mono_ramp(10))
+                    .with_pan(-1.0)
+                    .with_region(0, 10),
+            );
+            scheduler.schedule(
+                ScheduledSample::new(0.0, mk_sample_stereo(50)).with_channel(Some("fx".into())),
+            );
+            scheduler
+        };
+
+        let mut expected_hw = vec![0.0; 40];
+        let mut expected_bus = vec![0.0; 40];
+        make_scheduler().render_multi(&mut expected_hw, &mut [("fx", expected_bus.as_mut_slice())]);
+
+        let mut actual_hw = vec![0.0; 40];
+        let mut actual_bus = vec![0.0; 40];
+        make_scheduler().render_multi_feeds(
+            &mut actual_hw,
+            &mut [("fx", actual_bus.as_mut_slice())],
+            &[],
+        );
+
+        assert_eq!(
+            actual_hw
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            expected_hw
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            actual_bus
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            expected_bus
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn render_multi_feeds_advances_gain_ramp_once_per_block() {
+        let frames = 50;
+        let feed = vec![1.0; frames * 2];
+        let mut scheduler = Scheduler::new(48_000, 2);
+        scheduler.set_global_gain(0.0, 100);
+        let mut hw = vec![0.0; frames * 2];
+        let mut bus = vec![0.0; frames * 2];
+
+        scheduler.render_multi_feeds(
+            &mut hw,
+            &mut [("fx", bus.as_mut_slice())],
+            &[
+                (feed.as_slice(), FeedDest::Hardware),
+                (feed.as_slice(), FeedDest::Channel(0)),
+            ],
+        );
+
+        assert!(
+            (scheduler.global_gain() - 0.5).abs() < 0.02,
+            "feed ごと・buffer ごとではなく block あたり一度だけ ramp を進めるべき: {}",
+            scheduler.global_gain()
+        );
+        assert_eq!(
+            hw.iter().map(|sample| sample.to_bits()).collect::<Vec<_>>(),
+            bus.iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            "同一 feed は同じ frame gain を受けるべき"
         );
     }
 }

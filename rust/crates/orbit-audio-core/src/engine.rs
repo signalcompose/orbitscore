@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
 
-use super::scheduler::{ScheduledSample, Scheduler};
+use super::scheduler::{FeedDest, ScheduledSample, Scheduler};
 use super::Sample;
 
 #[derive(Error, Debug)]
@@ -197,8 +197,19 @@ impl Engine {
     /// try_lock で一括処理する）。`try_lock` 失敗理由（`WouldBlock` / `Poisoned`）の区別と RT-safety
     /// 制約は `with_scheduler` と同じ（#401）。
     pub fn render_multi(&self, hardware_out: &mut [f32], channels: &mut [(&str, &mut [f32])]) {
+        self.render_multi_feeds(hardware_out, channels, &[]);
+    }
+
+    /// [`Self::render_multi`] plus borrowed premaster feeds. RT contention zero-fills every output
+    /// buffer under the same single-lock contract as `render_multi`.
+    pub fn render_multi_feeds(
+        &self,
+        hardware_out: &mut [f32],
+        channels: &mut [(&str, &mut [f32])],
+        feeds: &[(&[f32], FeedDest)],
+    ) {
         match self.inner.try_lock() {
-            Ok(mut s) => return s.render_multi(hardware_out, channels),
+            Ok(mut s) => return s.render_multi_feeds(hardware_out, channels, feeds),
             Err(std::sync::TryLockError::WouldBlock) => {
                 self.contention_count.fetch_add(1, Ordering::Relaxed);
             }

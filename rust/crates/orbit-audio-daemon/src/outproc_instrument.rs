@@ -14,10 +14,10 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use orbit_audio_native::PostProcessor;
+use orbit_audio_native::{BlockSource, BlockTransport};
 use orbit_audio_sandbox::{
     open_shared, region_ptr, CommandMailboxHost, NeutralEvent, PipelinedInstrumentHost,
-    TransportContext, UiEventPump, VoiceKey, BUF_LEN, CONTROL_QUIT,
+    TransportContext, UiEventPump, VoiceKey, BUF_LEN, CHANNELS, CONTROL_QUIT,
 };
 
 use crate::engine_wrap::PluginUiWiring;
@@ -43,17 +43,22 @@ pub const PROBE_KEY: VoiceKey = VoiceKey {
     channel: 0,
     key: 69,
 };
-/// Placeholder transport passed to every audio block: issue #420 wires DSL/CLI note-on/off
-/// through to a real instrument, but does not yet plumb live tempo/transport state (tracked in
-/// #408). Fixed at 120 BPM / 4-4 / playing until #408 lands.
-const STUB_TRANSPORT: TransportContext = TransportContext {
-    tempo_bpm: 120.0,
-    time_sig_numerator: 4,
-    time_sig_denominator: 4,
-    is_playing: 1,
-    is_looping: 0,
-    song_position_beats: 0.0,
-};
+fn transport_context(transport: &BlockTransport) -> TransportContext {
+    const TEMPO_BPM: f64 = 120.0;
+    let song_position_beats = if transport.sample_rate == 0 {
+        0.0
+    } else {
+        transport.cursor_frames as f64 / transport.sample_rate as f64 * (TEMPO_BPM / 60.0)
+    };
+    TransportContext {
+        tempo_bpm: TEMPO_BPM,
+        time_sig_numerator: 4,
+        time_sig_denominator: 4,
+        is_playing: 1,
+        is_looping: 0,
+        song_position_beats,
+    }
+}
 
 static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -78,7 +83,7 @@ pub struct OutProcInstrumentConfig {
 }
 
 /// `ORBIT_OUTPROC_INSTRUMENT_SLOTS` の既定値。idle slot のコストは shm region と
-/// engaged=false で即 return する post processor のみ（child は LoadPlugin まで spawn しない）。
+/// engaged=false で即 return する block source のみ（child は LoadPlugin まで spawn しない）。
 pub const DEFAULT_INSTRUMENT_SLOTS: usize = 8;
 /// slot 数の上限（shm region とリングの事前確保が線形に増えるため暴走値を弾く）。
 pub const MAX_INSTRUMENT_SLOTS: usize = 32;
@@ -224,7 +229,7 @@ pub struct OutProcInstrumentStats {
     pub event_decode_error_count: AtomicU64,
     /// Gated cross-process probe: A4 (port 0 / channel 0 / key 69) の host-side live voice 数。
     pub probe_live_count: AtomicU16,
-    /// Instrument 加算後の master bus の abs peak を f32 bits で累積する。非負 f32 の bits は
+    /// Instrument source 出力の abs peak を f32 bits で累積する。非負 f32 の bits は
     /// u32 として単調なので、audio thread から `fetch_max` で lock-free に更新できる。
     pub post_peak_bits: AtomicU32,
     pub current_child_pid: AtomicU32,
@@ -283,12 +288,13 @@ pub struct OutProcInstrumentSnapshot {
     pub current_child_pid: u32,
 }
 
-pub struct OutProcInstrumentPostProcessor {
+pub struct OutProcInstrumentBlockSource {
     host: PipelinedInstrumentHost,
     event_rx: rtrb::Consumer<NeutralEvent>,
     event_scratch: Vec<NeutralEvent>,
     audio_scratch: Vec<f32>,
-    /// PR-431: child が未 attach（post-boot attach 待ち）の間は音を素通しする安全弁。
+    output_len: usize,
+    /// PR-431: child が未 attach（post-boot attach 待ち）の間は出力なしにする安全弁。
     /// **本 PR では常に true で構築される**（既存起動経路は eager attach のまま無変更）。
     /// PR-1b で post-boot attach 実装時に false スタートさせる想定（詳細は Issue #431 参照）。
     engaged: Arc<AtomicBool>,
@@ -310,7 +316,7 @@ pub struct SlotSignals {
     pub drain_done: Arc<AtomicBool>,
 }
 
-impl OutProcInstrumentPostProcessor {
+impl OutProcInstrumentBlockSource {
     /// `host` = mmap を所有する production 構築子（`PipelinedInstrumentHost::from_mmap`）で作った
     /// host、`event_rx` = note event の受け側（`event_capacity` はその scratch buffer 分の容量）、
     /// `engaged` = child の post-boot attach 完了までの安全弁（本 PR では常に `true` で渡される）、
@@ -328,6 +334,7 @@ impl OutProcInstrumentPostProcessor {
             event_rx,
             event_scratch: Vec::with_capacity(event_capacity),
             audio_scratch: vec![0.0; BUF_LEN],
+            output_len: 0,
             engaged,
             signals,
             stats,
@@ -347,21 +354,22 @@ impl OutProcInstrumentPostProcessor {
     }
 }
 
-impl PostProcessor for OutProcInstrumentPostProcessor {
-    fn process(&mut self, data: &mut [f32]) {
+impl BlockSource for OutProcInstrumentBlockSource {
+    fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize {
+        self.output_len = 0;
         if self.signals.teardown_requested.load(Ordering::Acquire) {
             self.signals.teardown_done.store(true, Ordering::Release);
-            return;
+            return 0;
         }
         // #618: tenant を切り替える slot は disengage 済みなので、旧 tenant の event を child へ
         // 渡さず全件捨てる。ack は consumer が ring を空にした後だけ publish する。
         if self.signals.drain_requested.load(Ordering::Acquire) {
             while self.event_rx.pop().is_ok() {}
             self.signals.drain_done.store(true, Ordering::Release);
-            return;
+            return 0;
         }
         if !self.engaged.load(Ordering::Acquire) {
-            return;
+            return 0;
         }
 
         let respawn_count = self.stats.respawn_count.load(Ordering::Relaxed);
@@ -379,33 +387,38 @@ impl PostProcessor for OutProcInstrumentPostProcessor {
             self.event_scratch.push(event);
         }
 
-        let process_len = data.len().min(self.audio_scratch.len());
+        let process_len = frames
+            .saturating_mul(CHANNELS)
+            .min(self.audio_scratch.len());
         let scratch = &mut self.audio_scratch[..process_len];
         // No zero-fill needed here: `process_block` unconditionally overwrites every sample of
         // `scratch` (fresh copy, stale repeat, or silence), so any prior content is fully
         // clobbered regardless of branch taken.
         self.host
-            .process_block(scratch, &self.event_scratch, STUB_TRANSPORT);
+            .process_block(scratch, &self.event_scratch, transport_context(transport));
         // `process_block` drains child output events before returning. Publish the resulting
         // host bookkeeping state for the fixed gated-test probe voice.
         self.stats
             .probe_live_count
             .store(self.host.live_count(PROBE_KEY), Ordering::Relaxed);
 
-        // `data` already contains the engine-rendered master. The instrument is parallel audio,
-        // so preserve that master and add the child output from scratch, tracking the abs peak
-        // of the summed result in the same pass instead of re-scanning `data` afterward.
-        let mut peak_bits_value = 0u32;
-        for (master, instrument) in data[..process_len].iter_mut().zip(scratch.iter()) {
-            *master += *instrument;
-            peak_bits_value = peak_bits_value.max(master.to_bits() & 0x7FFF_FFFF);
-        }
+        let peak_bits_value = crate::peak_bits(scratch);
         self.stats
             .post_peak_bits
             .fetch_max(peak_bits_value, Ordering::Relaxed);
 
         self.stats.fresh.store(self.host.fresh, Ordering::Relaxed);
         self.stats.callback_count.fetch_add(1, Ordering::Relaxed);
+        self.output_len = process_len;
+        1
+    }
+
+    fn output(&self, unit: usize) -> &[f32] {
+        if unit == 0 {
+            &self.audio_scratch[..self.output_len]
+        } else {
+            &[]
+        }
     }
 }
 
@@ -834,6 +847,7 @@ impl Drop for OutProcInstrumentTeardownGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orbit_audio_native::{BlockSource, BlockTransport};
     use orbit_audio_sandbox::{slot_index, VoiceAddr, VoiceKey, CHANNELS};
     use std::sync::Mutex;
 
@@ -857,6 +871,16 @@ mod tests {
 
     fn engaged(value: bool) -> Arc<AtomicBool> {
         Arc::new(AtomicBool::new(value))
+    }
+
+    fn render_source(source: &mut OutProcInstrumentBlockSource, frames: usize) -> usize {
+        source.render(
+            frames,
+            &BlockTransport {
+                cursor_frames: 0,
+                sample_rate: 48_000,
+            },
+        )
     }
 
     // pr-test-analyzer (item 7, PR #422 review): `OutProcInstrumentConfig::from_env`'s
@@ -908,7 +932,7 @@ mod tests {
     }
 
     #[test]
-    fn note_round_trip_adds_instrument_without_overwriting_master() {
+    fn note_round_trip_exposes_instrument_as_block_source_output() {
         let path = unique_shm_path();
         let host_mmap = orbit_audio_sandbox::create_shared(&path).expect("create shared memory");
         let ctl_mmap = open_shared(&path).expect("open control mapping");
@@ -918,7 +942,7 @@ mod tests {
         let requested = Arc::new(AtomicBool::new(false));
         let done = Arc::new(AtomicBool::new(false));
         let stats = OutProcInstrumentStats::new();
-        let mut processor = OutProcInstrumentPostProcessor::new(
+        let mut processor = OutProcInstrumentBlockSource::new(
             host,
             event_rx,
             NOTE_RING_CAPACITY,
@@ -947,9 +971,12 @@ mod tests {
         };
         event_tx.push(note).expect("push note to control ring");
 
-        let mut first = vec![0.5; 8 * CHANNELS];
-        processor.process(&mut first);
-        assert!(first.iter().all(|sample| *sample == 0.5));
+        let transport = BlockTransport {
+            cursor_frames: 0,
+            sample_rate: 48_000,
+        };
+        assert_eq!(processor.render(8, &transport), 1);
+        assert!(processor.output(0).iter().all(|sample| *sample == 0.0));
         assert_eq!(
             stats.probe_live_count.load(Ordering::Relaxed),
             1,
@@ -959,7 +986,7 @@ mod tests {
             let slot = slot_index(1);
             assert_eq!((*region).input_events[slot][0].decode(), Some(note));
             let output = std::ptr::addr_of_mut!((*region).output) as *mut f32;
-            for index in 0..first.len() {
+            for index in 0..8 * CHANNELS {
                 *output.add(slot * BUF_LEN + index) = 0.25;
             }
             (*region).output_event_count[slot].store(0, Ordering::Relaxed);
@@ -967,13 +994,12 @@ mod tests {
             (*region).seq_done.store(1, Ordering::Release);
         }
 
-        let mut second = vec![0.5; first.len()];
-        processor.process(&mut second);
-        assert!(second.iter().all(|sample| *sample == 0.75));
+        assert_eq!(processor.render(8, &transport), 1);
+        assert!(processor.output(0).iter().all(|sample| *sample == 0.25));
         assert_eq!(
             f32::from_bits(stats.post_peak_bits.load(Ordering::Relaxed)),
-            0.75,
-            "post peak must be measured from the summed master bus"
+            0.25,
+            "post peak must be measured from the source output"
         );
 
         drop(processor);
@@ -989,7 +1015,7 @@ mod tests {
         let host = PipelinedInstrumentHost::from_mmap(host_mmap);
         let (mut event_tx, event_rx) = rtrb::RingBuffer::new(NOTE_RING_CAPACITY);
         let stats = OutProcInstrumentStats::new();
-        let mut processor = OutProcInstrumentPostProcessor::new(
+        let mut processor = OutProcInstrumentBlockSource::new(
             host,
             event_rx,
             NOTE_RING_CAPACITY,
@@ -1024,15 +1050,14 @@ mod tests {
             })
             .expect("push note on");
 
-        let mut data = vec![0.0; 8 * CHANNELS];
-        processor.process(&mut data);
+        render_source(&mut processor, 8);
         assert_eq!(
             processor.host.live_count(key),
             1,
             "initial generation zero must not be misdetected as a respawn"
         );
 
-        processor.process(&mut data);
+        render_source(&mut processor, 8);
         assert_eq!(
             processor.host.live_count(key),
             1,
@@ -1040,7 +1065,7 @@ mod tests {
         );
 
         stats.respawn_count.store(1, Ordering::Relaxed);
-        processor.process(&mut data);
+        render_source(&mut processor, 8);
         assert_eq!(
             processor.host.live_count(key),
             0,
@@ -1053,7 +1078,7 @@ mod tests {
         std::fs::remove_file(path).expect("remove shared memory");
     }
 
-    // pr-test-analyzer (item 4, PR #422 review): `OutProcInstrumentPostProcessor::process()`'s
+    // pr-test-analyzer (item 4, PR #422 review): `OutProcInstrumentBlockSource::render()`'s
     // `teardown_requested` early-return branch (sets `teardown_done`, skips all stats/audio
     // updates) had no unit test.
     #[test]
@@ -1066,7 +1091,7 @@ mod tests {
         let requested = Arc::new(AtomicBool::new(true));
         let done = Arc::new(AtomicBool::new(false));
         let stats = OutProcInstrumentStats::new();
-        let mut processor = OutProcInstrumentPostProcessor::new(
+        let mut processor = OutProcInstrumentBlockSource::new(
             host,
             event_rx,
             NOTE_RING_CAPACITY,
@@ -1080,16 +1105,15 @@ mod tests {
             stats.clone(),
         );
 
-        let mut data = vec![0.42; 8 * CHANNELS];
-        processor.process(&mut data);
+        assert_eq!(render_source(&mut processor, 8), 0);
 
         assert!(
             done.load(Ordering::Acquire),
             "teardown_requested early return must set teardown_done"
         );
         assert!(
-            data.iter().all(|sample| *sample == 0.42),
-            "teardown early return must not touch the audio buffer"
+            processor.output(0).is_empty(),
+            "teardown early return must expose no source output"
         );
         assert_eq!(
             stats.callback_count.load(Ordering::Relaxed),
@@ -1130,7 +1154,7 @@ mod tests {
             length_frames: 0,
         };
         event_tx.push(note).expect("push note to control ring");
-        let mut processor = OutProcInstrumentPostProcessor::new(
+        let mut processor = OutProcInstrumentBlockSource::new(
             host,
             event_rx,
             NOTE_RING_CAPACITY,
@@ -1144,10 +1168,9 @@ mod tests {
             stats.clone(),
         );
 
-        let mut data = vec![0.42; 8 * CHANNELS];
-        processor.process(&mut data);
+        assert_eq!(render_source(&mut processor, 8), 0);
 
-        assert!(data.iter().all(|sample| *sample == 0.42));
+        assert!(processor.output(0).is_empty());
         assert_eq!(stats.callback_count.load(Ordering::Relaxed), 0);
         assert_eq!(
             processor.event_rx.pop(),
@@ -1183,7 +1206,7 @@ mod tests {
         let drain_requested = Arc::new(AtomicBool::new(true));
         let drain_done = Arc::new(AtomicBool::new(false));
         let stats = OutProcInstrumentStats::new();
-        let mut processor = OutProcInstrumentPostProcessor::new(
+        let mut processor = OutProcInstrumentBlockSource::new(
             host,
             event_rx,
             NOTE_RING_CAPACITY,
@@ -1197,15 +1220,14 @@ mod tests {
             stats.clone(),
         );
 
-        let mut data = vec![0.42; 8 * CHANNELS];
-        processor.process(&mut data);
+        assert_eq!(render_source(&mut processor, 8), 0);
 
         assert!(drain_done.load(Ordering::Acquire));
         assert!(
             processor.event_rx.pop().is_err(),
             "drain ack must only publish after every stale event is discarded"
         );
-        assert!(data.iter().all(|sample| *sample == 0.42));
+        assert!(processor.output(0).is_empty());
         assert_eq!(stats.callback_count.load(Ordering::Relaxed), 0);
 
         drop(processor);

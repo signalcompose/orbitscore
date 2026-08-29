@@ -21,8 +21,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
-#[cfg(feature = "outproc-instrument")]
-use orbit_audio_native::PostProcessor;
 use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputError, OutputStream, ResampleError, StreamStats,
     StreamStatsSnapshot,
@@ -2243,7 +2241,7 @@ mod set_bus_routing_tests {
 
     /// stage 配列 `[seq-bus-0 (Insert), sum-bus-0 (Sum), aux-bus-0 (Aux)]` を模した
     /// `OutProcControl` を注入する（native stage 自体は起動しない・routing 検証のみが対象）。
-    fn wrap_with_three_stage_topology() -> Arc<EngineWrap> {
+    pub(super) fn wrap_with_three_stage_topology() -> Arc<EngineWrap> {
         let (wrap, _guard) =
             EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
         let mut bus_index = HashMap::new();
@@ -2272,7 +2270,15 @@ mod set_bus_routing_tests {
             bus_slots: HashMap::new(),
             bus_entries: HashMap::new(),
             bus_stats: HashMap::new(),
-            bus_actives: HashMap::new(),
+            bus_actives: ["seq-bus-0", "sum-bus-0", "aux-bus-0"]
+                .into_iter()
+                .map(|name| {
+                    (
+                        name.to_owned(),
+                        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    )
+                })
+                .collect(),
             bus_kinds,
             bus_index,
             bus_routing,
@@ -2438,6 +2444,126 @@ mod set_bus_routing_tests {
     }
 }
 
+#[cfg(all(test, feature = "outproc-effect", feature = "outproc-instrument"))]
+mod set_source_routing_tests {
+    use super::{test_instrument_control, EngineWrap, InstrumentSlotEntry};
+    use orbit_audio_native::{SourceDest, SourceDestCell, MAX_SOURCE_UNITS};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Weak};
+
+    const SOURCE: &str = "opaque:source/key";
+
+    fn wrap_with_source() -> (Arc<EngineWrap>, Vec<SourceDestCell>) {
+        let wrap = super::set_bus_routing_tests::wrap_with_three_stage_topology();
+        let source_dests = super::default_source_dests();
+        let (event_tx, _event_rx) = rtrb::RingBuffer::new(4);
+        *wrap
+            .outproc_instrument
+            .lock()
+            .expect("lock instrument control") = Some(test_instrument_control(
+            vec![InstrumentSlotEntry {
+                event_tx,
+                stats: crate::outproc_instrument::OutProcInstrumentStats::new(),
+                shm_path: PathBuf::from("/tmp/unused-source-routing.shm"),
+                child_exe: PathBuf::from("unused-instrument-child"),
+                sample_rate: 48_000,
+                engaged: Arc::new(AtomicBool::new(false)),
+                drain_requested: Arc::new(AtomicBool::new(false)),
+                drain_done: Arc::new(AtomicBool::new(false)),
+                source_dests: source_dests.clone(),
+                child_slot: Weak::new(),
+            }],
+            HashMap::from([(SOURCE.to_owned(), 0)]),
+            1,
+        ));
+        (wrap, source_dests)
+    }
+
+    #[test]
+    fn insert_target_activates_bus_and_stores_the_absolute_bus_index() {
+        let (wrap, source_dests) = wrap_with_source();
+
+        wrap.set_source_routing(SOURCE, 3, Some("seq-bus-0"))
+            .expect("insert target must be accepted");
+
+        assert_eq!(source_dests[3].load(), SourceDest::Bus(0));
+        let control = wrap.outproc.lock().expect("lock effect control");
+        assert!(
+            control.as_ref().expect("effect control").bus_actives["seq-bus-0"]
+                .load(Ordering::Acquire),
+            "referenced insert bus must be activated"
+        );
+    }
+
+    #[test]
+    fn null_target_routes_the_selected_unit_back_to_master() {
+        let (wrap, source_dests) = wrap_with_source();
+        source_dests[2].store(SourceDest::Bus(0));
+
+        wrap.set_source_routing(SOURCE, 2, None)
+            .expect("null target must select Master");
+
+        assert_eq!(source_dests[2].load(), SourceDest::Master);
+    }
+
+    #[test]
+    fn unknown_source_is_rejected_as_an_exact_opaque_key() {
+        let (wrap, source_dests) = wrap_with_source();
+
+        let error = wrap
+            .set_source_routing("source/key", 0, None)
+            .expect_err("partial source match must be rejected");
+
+        assert!(format!("{error:?}").contains("unknown source"));
+        assert_eq!(source_dests[0].load(), SourceDest::Master);
+    }
+
+    #[test]
+    fn unit_outside_the_preallocated_range_is_rejected() {
+        let (wrap, source_dests) = wrap_with_source();
+
+        let error = wrap
+            .set_source_routing(
+                SOURCE,
+                u32::try_from(MAX_SOURCE_UNITS).expect("unit capacity fits u32"),
+                None,
+            )
+            .expect_err("out-of-range unit must be rejected");
+
+        assert!(format!("{error:?}").contains("unit"));
+        assert!(source_dests
+            .iter()
+            .all(|cell| cell.load() == SourceDest::Master));
+    }
+
+    #[test]
+    fn unknown_target_bus_is_rejected_without_changing_the_destination() {
+        let (wrap, source_dests) = wrap_with_source();
+
+        let error = wrap
+            .set_source_routing(SOURCE, 0, Some("not-a-bus"))
+            .expect_err("unknown target bus must be rejected");
+
+        assert!(format!("{error:?}").contains("unknown bus"));
+        assert_eq!(source_dests[0].load(), SourceDest::Master);
+    }
+
+    #[test]
+    fn sum_and_aux_targets_are_rejected_because_only_insert_is_valid() {
+        let (wrap, source_dests) = wrap_with_source();
+
+        for target in ["sum-bus-0", "aux-bus-0"] {
+            let error = wrap
+                .set_source_routing(SOURCE, 0, Some(target))
+                .expect_err("non-insert target must be rejected");
+            assert!(format!("{error:?}").contains("must be an insert bus"));
+        }
+        assert_eq!(source_dests[0].load(), SourceDest::Master);
+    }
+}
+
 #[cfg(feature = "outproc-instrument")]
 struct OutProcInstrumentControl {
     /// #540 P1: 起動時に事前確保した instrument slot 群（index = slot 番号）。audio graph /
@@ -2514,6 +2640,7 @@ struct PendingInstrumentSlot {
     done: Arc<AtomicBool>,
     drain_requested: Arc<AtomicBool>,
     drain_done: Arc<AtomicBool>,
+    source_dests: Vec<orbit_audio_native::SourceDestCell>,
 }
 
 /// instrument slot 1本分の control-side ハンドル（旧 `OutProcInstrumentControl` のフィールド群）。
@@ -2531,11 +2658,19 @@ struct InstrumentSlotEntry {
     /// tenant 間で note ring を持ち越さないための RT drain-and-discard handshake。
     drain_requested: Arc<AtomicBool>,
     drain_done: Arc<AtomicBool>,
+    source_dests: Vec<orbit_audio_native::SourceDestCell>,
     /// post-boot attach の状態。`StreamGuard` と共有し、supervisor は stream より後に drop する。
     #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
     child_slot: Weak<Mutex<ChildSlot<InstrumentRole>>>,
     #[cfg(not(all(feature = "outproc-effect", feature = "outproc-instrument")))]
     child_slot: Weak<Mutex<ChildSlot>>,
+}
+
+#[cfg(feature = "outproc-instrument")]
+fn default_source_dests() -> Vec<orbit_audio_native::SourceDestCell> {
+    (0..orbit_audio_native::MAX_SOURCE_UNITS)
+        .map(|_| orbit_audio_native::SourceDestCell::default())
+        .collect()
 }
 
 #[cfg(feature = "outproc-instrument")]
@@ -2549,6 +2684,7 @@ struct InstrumentSlotTeardownResources {
     engaged: Arc<AtomicBool>,
     drain_requested: Arc<AtomicBool>,
     drain_done: Arc<AtomicBool>,
+    source_dests: Vec<orbit_audio_native::SourceDestCell>,
 }
 
 #[cfg(feature = "outproc-instrument")]
@@ -2568,6 +2704,7 @@ impl InstrumentSlotTeardownResources {
             engaged: entry.engaged.clone(),
             drain_requested: entry.drain_requested.clone(),
             drain_done: entry.drain_done.clone(),
+            source_dests: entry.source_dests.clone(),
         }
     }
 }
@@ -2732,7 +2869,7 @@ impl Drop for InstrumentReplacementReservation<'_> {
     }
 }
 
-/// #540 P1: N slot 分の shm / note ring / post processor を確保する（stream 起動前・
+/// #540 P1: N slot 分の shm / note ring / block source を確保する（stream 起動前・
 /// both / instrument-only 両起動経路で共有 — effect 側の `install_effect_bus_slots` と同じ
 /// 「抽出 helper を両 spawn 経路が呼ぶ」型）。
 #[cfg(feature = "outproc-instrument")]
@@ -2741,15 +2878,26 @@ fn build_pending_instrument_slots(
 ) -> Result<
     (
         Vec<PendingInstrumentSlot>,
-        Vec<crate::outproc_instrument::OutProcInstrumentPostProcessor>,
+        Vec<orbit_audio_native::SourceSlot>,
     ),
     WrapError,
 > {
     use crate::outproc_instrument::{
-        OutProcInstrumentPostProcessor, OutProcInstrumentStats, SlotSignals, NOTE_RING_CAPACITY,
+        OutProcInstrumentBlockSource, OutProcInstrumentStats, SlotSignals, NOTE_RING_CAPACITY,
     };
+    use orbit_audio_native::{SourceSlot, MAX_SOURCE_SLOTS};
+    const {
+        assert!(
+            crate::outproc_instrument::MAX_INSTRUMENT_SLOTS <= MAX_SOURCE_SLOTS,
+            "daemon instrument capacity must fit native source capacity"
+        );
+    }
+    assert!(
+        slot_count <= MAX_SOURCE_SLOTS,
+        "requested instrument slots must fit native source capacity"
+    );
     let mut pending = Vec::with_capacity(slot_count);
-    let mut posts = Vec::with_capacity(slot_count);
+    let mut sources = Vec::with_capacity(slot_count);
     for _ in 0..slot_count {
         let shm_path = crate::outproc_instrument::unique_shm_path();
         let host_mmap = orbit_audio_sandbox::create_shared(&shm_path).map_err(|error| {
@@ -2764,7 +2912,8 @@ fn build_pending_instrument_slots(
         let drain_requested = Arc::new(AtomicBool::new(false));
         let drain_done = Arc::new(AtomicBool::new(false));
         let stats = OutProcInstrumentStats::new();
-        posts.push(OutProcInstrumentPostProcessor::new(
+        let source_dests = default_source_dests();
+        let source = OutProcInstrumentBlockSource::new(
             host,
             event_rx,
             NOTE_RING_CAPACITY,
@@ -2776,7 +2925,11 @@ fn build_pending_instrument_slots(
                 drain_done: drain_done.clone(),
             },
             stats.clone(),
-        ));
+        );
+        sources.push(SourceSlot {
+            source: Box::new(source),
+            dests: source_dests.clone(),
+        });
         pending.push(PendingInstrumentSlot {
             shm_path,
             cleanup,
@@ -2787,9 +2940,10 @@ fn build_pending_instrument_slots(
             done,
             drain_requested,
             drain_done,
+            source_dests,
         });
     }
-    Ok((pending, posts))
+    Ok((pending, sources))
 }
 
 /// `install_instrument_slots` の戻り値（entry / child guard / teardown guard の3列）。
@@ -2822,6 +2976,7 @@ fn install_instrument_slots(
             done,
             drain_requested,
             drain_done,
+            source_dests,
         } = pending;
         let child_slot = Arc::new(Mutex::new(ChildSlot::<InstrumentRole>::Empty(
             ChildLaunch {
@@ -2844,47 +2999,13 @@ fn install_instrument_slots(
             engaged,
             drain_requested,
             drain_done,
+            source_dests,
             child_slot: Arc::downgrade(&child_slot),
         });
         child_guards.push(child_slot);
         teardowns.push(crate::outproc_instrument::OutProcInstrumentTeardownGuard::new(stop, done));
     }
     (entries, child_guards, teardowns)
-}
-
-/// instrument の add-mix 後に effect の serial insert を適用する RT 専用の合成 processor。
-#[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
-struct CompositePostProcessor {
-    /// #540 P1: slot pool（起動時固定・Vec は起動後に伸縮しないので RT 安全）。
-    /// 未使用 slot は engaged=false で即 return するため idle コストはほぼゼロ。
-    instruments: Vec<crate::outproc_instrument::OutProcInstrumentPostProcessor>,
-    effect: crate::outproc_effect::OutProcEffectPostProcessor,
-}
-
-#[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
-impl PostProcessor for CompositePostProcessor {
-    fn process(&mut self, data: &mut [f32]) {
-        for instrument in &mut self.instruments {
-            instrument.process(data);
-        }
-        self.effect.process(data);
-    }
-}
-
-/// instrument-only build 用: slot pool の post processor を順に回す
-/// （`CompositePostProcessor` の instrument 部分のみ版・#540 P1）。
-#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-struct InstrumentPoolPostProcessor {
-    instruments: Vec<crate::outproc_instrument::OutProcInstrumentPostProcessor>,
-}
-
-#[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]
-impl PostProcessor for InstrumentPoolPostProcessor {
-    fn process(&mut self, data: &mut [f32]) {
-        for instrument in &mut self.instruments {
-            instrument.process(data);
-        }
-    }
 }
 
 /// Watchdog UI components are bundled so supervisor construction remains readable and both roles
@@ -3950,16 +4071,13 @@ impl EngineWrap {
         cfg: crate::outproc_instrument::OutProcInstrumentConfig,
     ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         // #540 P1: instrument slot pool（both build と同方式・instrument-only 版）。
-        let (pending_instrument_slots, instrument_posts) =
+        let (pending_instrument_slots, instrument_sources) =
             build_pending_instrument_slots(cfg.slots)?;
-        let processor = Box::new(InstrumentPoolPostProcessor {
-            instruments: instrument_posts,
-        });
 
         let buffer_frames = cfg.buffer_frames;
         let (engine, stream, stream_stats, cb_stats) =
-            orbit_audio_native::start_default_output_with_clap(
-                processor,
+            orbit_audio_native::start_default_output_with_sources(
+                instrument_sources,
                 buffer_frames,
                 capture_path_from_env(),
                 device_name_from_env(),
@@ -4032,28 +4150,28 @@ impl EngineWrap {
         );
         let mut effect_shm_cleanup = ShmCleanupGuard::new(effect_shm.clone());
         // #540 P1: instrument slot pool。stream 起動前に N slot 分の shm / note ring /
-        // post processor を事前確保する（audio graph は起動時固定のため）。child は
+        // block source を事前確保する（audio graph は起動時固定のため）。child は
         // LoadPlugin まで spawn しないので idle slot のコストは shm と即-return の
-        // post processor のみ。
-        let (pending_instrument_slots, instrument_posts) =
+        // block source のみ。
+        let (pending_instrument_slots, instrument_sources) =
             build_pending_instrument_slots(instrument_cfg.slots)?;
         let effect_engaged = Arc::new(AtomicBool::new(false));
         let effect_stop = Arc::new(AtomicBool::new(false));
         let effect_done = Arc::new(AtomicBool::new(false));
         let effect_stats = OutProcEffectStats::new();
-        let processor = Box::new(CompositePostProcessor {
-            instruments: instrument_posts,
-            effect: OutProcEffectPostProcessor::new(OutProcEffectPostProcessorParts {
+        let processor = Box::new(OutProcEffectPostProcessor::new(
+            OutProcEffectPostProcessorParts {
                 host: effect_host,
                 engaged: effect_engaged.clone(),
                 teardown_requested: effect_stop.clone(),
                 teardown_done: effect_done.clone(),
                 stats: effect_stats.clone(),
-            }),
-        });
+            },
+        ));
         let (engine, stream, stream_stats, effect_cb_stats) =
-            orbit_audio_native::start_default_output_with_insert_buses_and_post(
+            orbit_audio_native::start_default_output_with_insert_buses_sources_and_post(
                 insert_buses,
+                instrument_sources,
                 processor,
                 buffer_frames,
                 capture_path_from_env(),
@@ -5319,6 +5437,82 @@ impl EngineWrap {
         Ok(())
     }
 
+    /// Route one preallocated output unit of an opaque source to Master or a named insert bus.
+    /// All name/kind/range validation happens before either shared atomic is changed.
+    #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+    pub fn set_source_routing(
+        &self,
+        source: &str,
+        unit: u32,
+        target: Option<&str>,
+    ) -> Result<(), WrapError> {
+        let (resolved, active) = match target {
+            None => (orbit_audio_native::SourceDest::Master, None),
+            Some(name) => {
+                let guard = self
+                    .outproc
+                    .lock()
+                    .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))?;
+                let control = guard.as_ref().ok_or_else(|| {
+                    WrapError::OutProcEffectUnavailable(
+                        "outproc effect not initialized (test backend has no outproc path)".into(),
+                    )
+                })?;
+                let bus_index = *control.bus_index.get(name).ok_or_else(|| {
+                    WrapError::OutProcEffect(format!(
+                        "SetSourceRouting target: unknown bus '{name}'"
+                    ))
+                })?;
+                if control.bus_kinds.get(name) != Some(&BusKind::Insert) {
+                    return Err(WrapError::OutProcEffect(format!(
+                        "SetSourceRouting target '{name}' must be an insert bus"
+                    )));
+                }
+                let active = control.bus_actives.get(name).cloned().ok_or_else(|| {
+                    WrapError::OutProcEffect(format!(
+                        "SetSourceRouting target bus '{name}' has no activation handle"
+                    ))
+                })?;
+                (orbit_audio_native::SourceDest::Bus(bus_index), Some(active))
+            }
+        };
+
+        // Keep the instance mapping lock through the destination store. Replacement commits use
+        // the same lock to copy all destinations, so routing cannot land on a just-retired slot.
+        let guard = self.outproc_instrument.lock().map_err(|_| {
+            WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
+        })?;
+        let control = guard.as_ref().ok_or_else(|| {
+            WrapError::OutProcInstrumentUnavailable(
+                "outproc instrument not initialized (test backend has no outproc path)".into(),
+            )
+        })?;
+        let slot_index = *control.instance_index.get(source).ok_or_else(|| {
+            WrapError::OutProcInstrument(format!("SetSourceRouting: unknown source '{source}'"))
+        })?;
+        let slot = control.slots.get(slot_index).ok_or_else(|| {
+            WrapError::OutProcInstrument(format!(
+                "SetSourceRouting: source '{source}' resolves to missing slot {slot_index}"
+            ))
+        })?;
+        let unit_index = usize::try_from(unit).map_err(|_| {
+            WrapError::OutProcInstrument(format!(
+                "SetSourceRouting: unit {unit} is out of range for source '{source}'"
+            ))
+        })?;
+        let source_dest = slot.source_dests.get(unit_index).ok_or_else(|| {
+            WrapError::OutProcInstrument(format!(
+                "SetSourceRouting: unit {unit} is out of range for source '{source}' ({} units)",
+                slot.source_dests.len()
+            ))
+        })?;
+        if let Some(active) = active {
+            active.store(true, Ordering::Release);
+        }
+        source_dest.store(resolved);
+        Ok(())
+    }
+
     /// both build で instrument slot へ attach する。
     #[cfg(feature = "outproc-instrument")]
     pub fn load_outproc_instrument_plugin(
@@ -5505,6 +5699,39 @@ impl EngineWrap {
                 )
             })?;
             debug_assert_eq!(control.instance_index.get(&name), Some(&old_index));
+            // 🔴 長さが揃わないと `zip` が黙って切り詰め、移行漏れの unit が
+            // **リバーブごと外れたまま**新 slot に引き継がれる（設計 §7 が名指しした silent detach）。
+            // ここは制御スレッドなので `assert!` も書けるが、**採らない** — 演奏中に daemon が落ちる方が
+            // 害が大きい（owner 原則: エラーで止めない）。共通部分は移行し、差分をログに出して
+            // `get_log` から観測可能にする。両 slot とも `default_source_dests()` 由来なので
+            // 正常経路では到達しない。
+            let old_units = control.slots[old_index].source_dests.len();
+            let new_units = control.slots[spare_index].source_dests.len();
+            if old_units != new_units {
+                tracing::error!(
+                    instance = %name,
+                    old_slot = old_index,
+                    new_slot = spare_index,
+                    old_units,
+                    new_units,
+                    "instrument replacement: source destination arrays differ in length; \
+                     units beyond the shorter array are not migrated and stay at Master \
+                     on the new slot (wiring bug)"
+                );
+            }
+            // 🔴 移行とリセットを1ループに畳んでいるので、**リセットも `zip` の共通長まで**しか
+            // 及ばない。長さが揃っている（両者とも `default_source_dests()` 由来 = `MAX_SOURCE_UNITS`
+            // 固定長）ことが前提で、上のログはその前提が崩れた事実を残すためにある。
+            // **可変長にする変更が入ったら、このループも見直すこと**（リセットだけ全長に戻すか、
+            // 長さ不一致を早期に弾くか）。
+            for (old_dest, new_dest) in control.slots[old_index]
+                .source_dests
+                .iter()
+                .zip(&control.slots[spare_index].source_dests)
+            {
+                new_dest.store(old_dest.load());
+                old_dest.store(orbit_audio_native::SourceDest::Master);
+            }
             control.instance_index.insert(name.clone(), spare_index);
         }
         reservation.commit_spare();
@@ -5606,6 +5833,7 @@ impl EngineWrap {
             engaged,
             drain_requested,
             drain_done,
+            source_dests,
         } = resources;
 
         engaged.store(false, Ordering::Release);
@@ -5682,6 +5910,9 @@ impl EngineWrap {
             ChildSlot::Empty(launch);
 
         if drain_acked && reset_error.is_none() {
+            for dest in &source_dests {
+                dest.store(orbit_audio_native::SourceDest::Master);
+            }
             drain_requested.store(false, Ordering::Release);
             drain_done.store(false, Ordering::Release);
             return Ok(());
@@ -6777,7 +7008,7 @@ impl EngineWrap {
         }
     }
 
-    /// Gated kill-test の計測位相を分けるため、instrument の累積 post peak をリセットする。
+    /// Gated kill-test の計測位相を分けるため、instrument source の累積 peak をリセットする。
     #[cfg(feature = "outproc-instrument")]
     #[doc(hidden)]
     pub fn outproc_instrument_reset_post_peak(&self) {
@@ -10276,6 +10507,7 @@ mod outproc_instrument_health_tests {
                     engaged: Arc::new(AtomicBool::new(false)),
                     drain_requested: Arc::new(AtomicBool::new(false)),
                     drain_done: Arc::new(AtomicBool::new(false)),
+                    source_dests: super::default_source_dests(),
                     child_slot: Weak::new(),
                 }],
                 std::collections::HashMap::from([(
@@ -10309,6 +10541,7 @@ mod outproc_instrument_health_tests {
                     engaged: Arc::new(AtomicBool::new(false)),
                     drain_requested: Arc::new(AtomicBool::new(false)),
                     drain_done: Arc::new(AtomicBool::new(false)),
+                    source_dests: super::default_source_dests(),
                     child_slot: Arc::downgrade(&child_slot),
                 }],
                 std::collections::HashMap::from([(
@@ -11197,7 +11430,8 @@ mod effect_replace_tests {
 mod outproc_instrument_replace_tests {
     use super::{
         test_instrument_control, ChildLaunch, ChildSlot, EngineWrap, InstrumentRole,
-        InstrumentSlotEntry, OutProcRole, PluginUiWiring, WrapError,
+        InstrumentSlotEntry, InstrumentSlotTeardownResources, OutProcRole, PluginUiWiring,
+        WrapError,
     };
     use crate::backend::StubBackend;
     use crate::outproc_instrument::OutProcInstrumentStats;
@@ -11223,6 +11457,7 @@ mod outproc_instrument_replace_tests {
         engaged: Arc<AtomicBool>,
         drain_requested: Arc<AtomicBool>,
         drain_done: Arc<AtomicBool>,
+        source_dests: Vec<orbit_audio_native::SourceDestCell>,
     }
 
     fn fixture_script(name: &str) -> PathBuf {
@@ -11241,6 +11476,7 @@ mod outproc_instrument_replace_tests {
         let drain_requested = Arc::new(AtomicBool::new(false));
         let drain_done = Arc::new(AtomicBool::new(false));
         let (event_tx, event_rx) = rtrb::RingBuffer::new(16);
+        let source_dests = super::default_source_dests();
         let slot = Arc::new(Mutex::new(ChildSlot::Empty(
             ChildLaunch::<InstrumentRole> {
                 shm_path: shm_path.clone(),
@@ -11260,6 +11496,7 @@ mod outproc_instrument_replace_tests {
             engaged: engaged.clone(),
             drain_requested: drain_requested.clone(),
             drain_done: drain_done.clone(),
+            source_dests: source_dests.clone(),
             child_slot: Arc::downgrade(&slot),
         };
         (
@@ -11272,6 +11509,7 @@ mod outproc_instrument_replace_tests {
                 engaged,
                 drain_requested,
                 drain_done,
+                source_dests,
             },
         )
     }
@@ -11390,12 +11628,12 @@ mod outproc_instrument_replace_tests {
         stats: Arc<OutProcInstrumentStats>,
     ) -> std::thread::JoinHandle<rtrb::Consumer<NeutralEvent>> {
         std::thread::spawn(move || {
-            use orbit_audio_native::PostProcessor;
+            use orbit_audio_native::{BlockSource, BlockTransport};
 
             let host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(
                 orbit_audio_sandbox::open_shared(&shm_path).expect("open RT fixture shm"),
             );
-            let mut processor = crate::outproc_instrument::OutProcInstrumentPostProcessor::new(
+            let mut processor = crate::outproc_instrument::OutProcInstrumentBlockSource::new(
                 host,
                 event_rx,
                 16,
@@ -11409,19 +11647,25 @@ mod outproc_instrument_replace_tests {
                 stats,
             );
             wait_until("drain request", || requested.load(Ordering::Acquire));
-            processor.process(&mut []);
+            processor.render(
+                0,
+                &BlockTransport {
+                    cursor_frames: 0,
+                    sample_rate: 48_000,
+                },
+            );
             processor.into_event_rx_for_test()
         })
     }
 
     fn take_processor(
         fixture: &mut SlotFixture,
-    ) -> crate::outproc_instrument::OutProcInstrumentPostProcessor {
+    ) -> crate::outproc_instrument::OutProcInstrumentBlockSource {
         let host = orbit_audio_sandbox::PipelinedInstrumentHost::from_mmap(
             orbit_audio_sandbox::open_shared(&fixture.shm_path)
                 .expect("open persistent RT fixture shm"),
         );
-        crate::outproc_instrument::OutProcInstrumentPostProcessor::new(
+        crate::outproc_instrument::OutProcInstrumentBlockSource::new(
             host,
             fixture.event_rx.take().expect("fixture event consumer"),
             16,
@@ -11703,8 +11947,14 @@ mod outproc_instrument_replace_tests {
     }
 
     #[test]
-    fn r1_replace_commits_ready_spare_frees_old_and_reaps_old_child() {
+    fn r1_replace_migrates_all_unit_destinations_then_resets_every_freed_unit() {
         let (wrap, mut old, spare, old_pid) = two_slot_fixture("slow-child.sh");
+        let expected_dests = (0..orbit_audio_native::MAX_SOURCE_UNITS)
+            .map(orbit_audio_native::SourceDest::Bus)
+            .collect::<Vec<_>>();
+        for (cell, dest) in old.source_dests.iter().zip(&expected_dests) {
+            cell.store(*dest);
+        }
         let (result, _old_rx) =
             start_successful_replace(wrap.clone(), &mut old, &spare, NEW_PLUGIN);
         let result = result.expect("replacement succeeds");
@@ -11725,6 +11975,55 @@ mod outproc_instrument_replace_tests {
             ChildSlot::Active { path, .. } if path == Path::new(NEW_PLUGIN)
         ));
         assert_ne!(spare.stats.current_child_pid.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            spare
+                .source_dests
+                .iter()
+                .map(orbit_audio_native::SourceDestCell::load)
+                .collect::<Vec<_>>(),
+            expected_dests,
+            "replace must migrate every source unit destination"
+        );
+        assert!(
+            old.source_dests
+                .iter()
+                .all(|cell| cell.load() == orbit_audio_native::SourceDest::Master),
+            "a successfully freed slot must reset every source unit to Master"
+        );
+    }
+
+    #[test]
+    fn successful_teardown_resets_all_unit_destinations_before_slot_reuse() {
+        let (entry, mut fixture) = empty_slot(fixture_script("slow-child.sh"));
+        let child_pid = activate_slot(&fixture, OLD_PLUGIN);
+        for (unit, cell) in fixture.source_dests.iter().enumerate() {
+            cell.store(orbit_audio_native::SourceDest::Link(unit));
+        }
+        let resources =
+            InstrumentSlotTeardownResources::from_entry(0, &entry, fixture.slot.clone());
+        let ack = spawn_drain_ack(
+            fixture.event_rx.take().expect("fixture event consumer"),
+            fixture.shm_path.clone(),
+            fixture.engaged.clone(),
+            fixture.drain_requested.clone(),
+            fixture.drain_done.clone(),
+            fixture.stats.clone(),
+        );
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+
+        wrap.teardown_outproc_instrument_resources(OLD_INSTANCE, resources)
+            .expect("teardown with RT drain ack and valid mapping must succeed");
+        ack.join().expect("drain ack thread panicked");
+
+        assert!(
+            fixture
+                .source_dests
+                .iter()
+                .all(|cell| cell.load() == orbit_audio_native::SourceDest::Master),
+            "teardown must reset all source units before the slot can be reused"
+        );
+        assert!(!process_exists(child_pid), "teardown must reap the child");
     }
 
     #[test]
@@ -12033,7 +12332,12 @@ mod outproc_instrument_replace_tests {
 
     #[test]
     fn tenant_handoff_resets_voice_bookkeeping_and_sticky_health() {
-        use orbit_audio_native::PostProcessor;
+        use orbit_audio_native::{BlockSource, BlockTransport};
+
+        let transport = BlockTransport {
+            cursor_frames: 0,
+            sample_rate: 48_000,
+        };
 
         let (wrap, mut old, spare, _old_pid) = two_slot_fixture("slow-child.sh");
         let mut processor = take_processor(&mut old);
@@ -12045,7 +12349,7 @@ mod outproc_instrument_replace_tests {
             Some(OLD_INSTANCE.into()),
         )
         .expect("queue old tenant note");
-        processor.process(&mut []);
+        processor.render(0, &transport);
         assert_eq!(processor.probe_live_count_for_test(), 1);
         assert_eq!(old.stats.probe_live_count.load(Ordering::Relaxed), 1);
         old.stats.measurement_invalid.store(true, Ordering::Release);
@@ -12066,7 +12370,7 @@ mod outproc_instrument_replace_tests {
         wait_until("tenant handoff drain request", || {
             old.drain_requested.load(Ordering::Acquire)
         });
-        processor.process(&mut []);
+        processor.render(0, &transport);
         let result = replace
             .join()
             .expect("replace thread panicked")
@@ -12092,7 +12396,7 @@ mod outproc_instrument_replace_tests {
             .expect("next tenant load thread panicked")
             .expect("next tenant loads into freed slot");
 
-        processor.process(&mut []);
+        processor.render(0, &transport);
         assert_eq!(
             processor.probe_live_count_for_test(),
             0,
@@ -12107,7 +12411,12 @@ mod outproc_instrument_replace_tests {
 
     #[test]
     fn reset_mapping_failure_quarantines_the_old_slot_and_reports_it() {
-        use orbit_audio_native::PostProcessor;
+        use orbit_audio_native::{BlockSource, BlockTransport};
+
+        let transport = BlockTransport {
+            cursor_frames: 0,
+            sample_rate: 48_000,
+        };
 
         let (wrap, mut old, spare, _old_pid) = two_slot_fixture("slow-child.sh");
         let mut processor = take_processor(&mut old);
@@ -12128,7 +12437,7 @@ mod outproc_instrument_replace_tests {
             old.drain_requested.load(Ordering::Acquire)
         });
         std::fs::remove_file(&old.shm_path).expect("unlink old shm before teardown reset mapping");
-        processor.process(&mut []);
+        processor.render(0, &transport);
         let result = replace
             .join()
             .expect("replace thread panicked")
@@ -12254,6 +12563,7 @@ mod outproc_instrument_note_tests {
                 engaged: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 drain_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 drain_done: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                source_dests: super::default_source_dests(),
                 child_slot: std::sync::Weak::new(),
             }],
             std::collections::HashMap::from([(
@@ -12324,6 +12634,7 @@ mod outproc_instrument_note_tests {
                     engaged: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     drain_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     drain_done: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    source_dests: super::default_source_dests(),
                     child_slot: std::sync::Weak::new(),
                 },
                 super::InstrumentSlotEntry {
@@ -12335,6 +12646,7 @@ mod outproc_instrument_note_tests {
                     engaged: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     drain_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                     drain_done: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                    source_dests: super::default_source_dests(),
                     child_slot: std::sync::Weak::new(),
                 },
             ],

@@ -17,6 +17,352 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.407 fix: レビュー5体の指摘を適用し、自分が作った Critical を1件直した (#643) (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#646](https://github.com/signalcompose/orbitscore/pull/646)
+**レビュー**: `/code:pr-review-team` 4体 + **Fable 並行投入**（最後に回さない・発見クラスが直交）
+
+#### 結果
+
+| レビュアー | Critical | Important |
+|---|---|---|
+| code-reviewer | 0 | 0 |
+| silent-failure-hunter | 0 | 3（同一の横断的関心事） |
+| pr-test-analyzer | 0 | 1（テスト20本追加・**「通るだけ」0本**） |
+| comment-analyzer | **1** | 2 |
+| **Fable** | 0 | **2**（テストの穴） |
+
+#### 🔴 Critical は自分が作ったもの（doc 誤付着の3回目）
+
+`peak_bits` を削除した際に doc の1行が残り、**次の関数 `spawn_effect_child` の説明の1行目**に
+化けていた（「abs ピークを返す」）。
+
+**同じ PR で doc 誤付着は3回目**で、しかも **WORK_LOG 6.406 に「1件あった」と自己申告した
+その自己監査が、この3件目を見落としていた**。
+
+#### 制御スレッドの silent detach（silent-failure-hunter Important）
+
+replace の宛先移行で長さ一致を `debug_assert_eq!` が守っていたが、**release では `zip` が
+黙って切り詰め**、移行漏れの unit が**リバーブごと外れる**（設計 §7 が名指しした故障そのもの）。
+
+**推奨は `assert_eq!` だったが採らなかった** — 「効くようにする」は正しいが、**演奏中に daemon が
+落ちる**のは owner 原則（エラーで止めない）に反する。**`tracing::error!` + 共通部分は移行**に変更。
+
+**指摘は正しく、処方は違う**という判断が要る場面だった（#645 の「気づかせる」と「止める」の混同と同型）。
+
+#### Fable が見つけたテストの穴2件 — どちらも「この PR 自身が変えたもの」
+
+| | 生き残っていた変異 |
+|---|---|
+| **A-1** | `transport.cursor_frames = ...saturating_add(frames)` を**削除しても全 suite が通る** |
+| **A-2** | `for unit in 0..unit_count` を `0..1` に**縮めても通る** |
+
+`STUB_TRANSPORT` を実 transport に置き換えたのがこの PR の意味的変更点なのに、**前進を assert する
+テストが1本も無かった**。**変更点と検証点がずれる**のは、テストを「機能」ではなく「触ったファイル」で
+考えると起きる。
+
+**変異検証の実出力**:
+
+```text
+変異1（transport 前進を削除）  -> source_transport_cursor_advances... FAILED
+変異2（0..unit_count -> 0..1） -> every_reported_unit_contributes_a_feed FAILED
+復元後                          -> 52 passed（cmp で復元一致を確認）
+```
+
+#### 適用しなかったもの（判断の記録）
+
+| | 理由 |
+|---|---|
+| RT フォールバックの観測カウンタ（4箇所） | **ユーザーは音で気づく**（無音・途切れ）ので埋まるのは「理由」だけ。RT パスの3〜5関数にシグネチャ変更が要り、**「atomic 1本」と見積もった私が過小評価だった** |
+| RT スタックの `ArrayVec<_, 512>` | **実測 16,384 バイト**。`MaybeUninit::uninit()` なので**初期化コストは無く**スタック消費のみ（512KB 級の約3%）。「放置したら誰が困るか」が書けない |
+| Link 収集の二重実装（57行） | bit 一致の主張に関わる経路 |
+
+#### 🔴 レビューの過程で、この PR の範囲外の欠陥が2件見つかった
+
+| 内容 | issue |
+|---|---|
+| **ミキサーの出口が未設計** — `frames × output_channels > 8192`（**8ch @ 2048 など普通の構成**）で instrument が無音。バスは既にデバイス幅なので**配置だけで直る**（合流は `output.rs:957-960` の3行） | **#611**（改題: the mixer's output side） |
+| **マルチティンバー未対応** — 受け皿は本 PR で完成したが**子プロセスが常に 1 出力**。`SetSourceRouting` で unit 1〜15 は**成功応答を返すが音は出ない** | **#647**（新規） |
+
+owner 指摘で設計の欠落が判明した:
+
+> オーディオやインスト → ミキサー（バス、AUX など様々なルーティング、**柔軟なアウトプット指定**）
+
+**ミキサーは入口・内部・出口の3つを持つ。本設計が一般化したのは内部だけだった。**
+入口は `(instance, unit)` で一般化したのに、**出口を固定のまま残していた**（対称性の欠落）。
+設計文書に **§1.5** として記録。`Link` が唯一の出口として特別扱いされているのが未一般化の証拠。
+
+#### コミット前に差分を読んで、自分の取りこぼしを2件見つけた
+
+1. **やめたはずの RT カウンタが `post_processor.rs` に残っていた**（方針変更後に戻し忘れ）
+2. **ログ文言が不正確** — 「keep their old routing」と書いたが、実際は**新 slot が Master のまま**
+
+#### 検証（main が sandbox 外で実行）
+
+clippy 4象限 **4/4 exit=0** / native **52 passed** / core **51** / daemon **239・39**
+
+---
+
+### 6.406 refactor: /simplify の指摘を適用し、その過程で cfg 象限の欠陥を1件作って直した (#643) (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#646](https://github.com/signalcompose/orbitscore/pull/646)
+**差分**: 20 insertions / 87 deletions（**純減**）
+
+#### `/simplify` 4体の指摘を集約し、4件を適用
+
+| 適用 | 内容 |
+|---|---|
+| **A** | **借用スパイクの残骸を削除**（67行）— 本番の `SourceDestCell::decode` を影で再実装しており、片方だけ直しても検出できない構造だった。**reuse と simplification の2体が独立に指摘** |
+| **C** | `peak_bits` を共通化 — 一字一句同じ式が2箇所にあった |
+| **D** | `sources.is_empty()` の分岐を削除 — core が等価を保証し bit 一致テストもあるのに、呼び出し側で場合分けし直していた |
+| — | replace の宛先移行を2ループ→1ループ |
+
+**保留**（理由つき）: RT スタックの `ArrayVec<_, 512>`（**実測 16,384 バイト**）/ Link 収集の
+二重実装（57行）/ ヘルパ抽出・命名の統一（既存コードに波及）。前2件は RT パスの構造変更のため
+owner 判断を待つ。
+
+#### 🔴 C の共通化で cfg 象限を壊した（自己申告）
+
+`peak_bits` を `outproc_effect` に置いたまま instrument 側から呼んだが、同モジュールは
+**`#[cfg(feature = "outproc-effect")]` でゲート**されており、**instrument 単独ビルドが壊れた**:
+
+```text
+error[E0433]: cannot find `outproc_effect` in `crate`
+note: the item is gated behind the `outproc-effect` feature
+```
+
+**ブリーフで「落としやすい」と名指しした罠に、自分で落ちた。しかも直し方を間違えて2回落ちた**:
+
+| # | 症状 | 原因 |
+|---|---|---|
+| 1 | instrument 単独ビルドが壊れた | ヘルパを **effect ゲートの中**に置いた |
+| 2 | **default（両方 off）で dead_code** | 1 を直す時に **cfg を外しすぎた** |
+
+正解は `#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]` —
+**呼び出し元と同じ条件**でゲートする。関数の doc に両方の罠を記録した。
+
+#### 🔴 「4象限」と書きながら3つしか回していなかった
+
+2 を見逃したのは、clippy を「両 feature / instrument 単独 / effect 単独」の3通りで回して
+満足していたため。**default（feature を付けない）が列挙から落ちていた** — 組み合わせを
+数える意識が「何を足すか」に向くと、「**何も足さない**」が候補から抜ける。
+捕まえたのは pre-push フックだった。
+
+**共通化は「どの軸で共通か」を確認してから行う** — この2つは「計算式が同じ」だけで、
+「同じ条件でコンパイルされる」わけではなかった。重複を減らす変更が、より質の悪い結合
+（cfg 象限をまたぐ依存）を作った。
+
+#### 🔴 測定器が3回壊れていた
+
+この作業中、**検証コマンド自体の誤りで3回誤報告**した:
+
+| # | 誤り | 症状 |
+|---|---|---|
+| 1 | `cmd \| tail` の後で `$?` を読んだ | clippy が exit=101 なのに「exit=0」と表示 |
+| 2 | `cargo build $F`（zsh） | **zsh は bash と違い、クォートなしの変数展開で単語分割しない**。`"--features outproc-effect"` が1引数として渡り `unexpected argument` で失敗 → 「4象限のうち3つが落ちる」と誤報告 |
+| 3 | 出力を `/dev/null` へ捨てた | 失敗の原因が読めず、原因究明に往復した |
+
+**#2 が本物の欠陥（cfg 象限）を2回隠した。** 個別実行と結果が食い違ったら、**まず自分の書き方を疑う**。
+実装のバグより測定器のバグの方が発見が遅いのは、測定器を検証する仕組みが無いため。
+
+#### 検証（修正後・すべて main が sandbox 外で実行）
+
+| 項目 | 結果 |
+|---|---|
+| cfg 4象限ビルド | **4/4**（引数を明示・ループを使わない） |
+| **clippy 4象限**（default / effect / instrument / 両方） | **4/4 exit=0** |
+| daemon（両 feature） | **239 passed / 1 ignored** |
+| native | **50 passed / 2 ignored**（スパイク削除で 51→50・意図どおり） |
+
+**clippy は4象限すべてで回す** — CI（`rust-ci.yml`）は ubuntu で、単独 feature ビルドの
+欠陥を捕まえないため。**default を含めて4つ**であることに注意（3つで止まって踏んだ）。
+
+#### コミット前に差分を読んで、自分の修正の欠陥を2件見つけた
+
+1. **`outproc_effect` モジュールの doc の途中にヘルパを挿入**していた — モジュールの説明が
+   関数の doc に化けていた
+2. `outproc_effect::peak_bits` が `crate::peak_bits` を呼ぶだけの**無意味な委譲**になっていた
+
+どちらもテストでは検出できない（コンパイルも通る）。**差分を読む以外に発見手段が無い類**。
+
+---
+
+### 6.405 feat(audio): instrument をミキサーの source にした — PR-1 (#643) (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643)
+**設計正本**: `docs/design/643-mixer-foundation-design.md`
+**実装**: Codex（gpt-5.6-sol / effort xhigh）/ **検証: main（sandbox 外）**
+**差分**: 1502 insertions / 158 deletions（core 163 / native 728 / daemon 595 / protocol 128）
+
+#### instrument が master への後付けから、バスの source になった
+
+これまで instrument の音は `CompositePostProcessor` で **master バッファへ直接加算**されており、
+バスグラフの外にいた。本 PR で **`render_multi` の内側・event 混合後・gain ramp の前**へ移し、
+audio シーケンスと同じ場所で合流するようにした。
+
+**帰結: `global.gain` が instrument に効くようになった**（従来は効いていなかった＝欠陥）。
+位置の修正だけで消えるので、gain の手当ては入れていない。
+
+#### 層ごとの変更
+
+| 層 | 内容 |
+|---|---|
+| core | `render_multi_feeds` + `FeedDest`。既存 `render_multi` は `feeds=&[]` で委譲（bit 一致を固定） |
+| native | `BlockSource`（二段式 render → output）/ `BlockTransport` / `SourceSlot` / `SourceDestCell` / 二パス feed 収集 |
+| daemon 配線 | `OutProcInstrumentPostProcessor` を `BlockSource` へ改組・`CompositePostProcessor` 解体 |
+| daemon 制御 | `SetSourceRouting { source, unit, target }`・replace / teardown の**全 unit** 宛先処理 |
+| protocol | `session.rs` に parse + dispatch + 非対応 build の `UNSUPPORTED` |
+
+宛先は `SourceDest { Master, Bus(usize), Link(usize) }` + `SourceDestCell` newtype で、
+**エンコードを1箇所に閉じた**（帯域分割の生整数がコードから消えた）。
+
+#### 借用の二段式（設計最大の不確実性を最初に潰した）
+
+実装の冒頭にコンパイルスパイクを置いた。パス1で `iter_mut()` して全 source を render し、
+パス2で `iter()` から `ArrayVec<(&[f32], FeedDest)>` を収集する形が**成立することを確認**してから
+本実装に入った。`&mut` からの借用返しが不要になるため、単一 `render() -> Option<&[f32]>` より簡単。
+
+#### 🔴 main の独立検証（sandbox 外・委譲先の報告は根拠にしない）
+
+| 項目 | 結果 |
+|---|---|
+| `clippy --all-targets --features outproc-effect,outproc-instrument -- -D warnings` | exit=0 |
+| cfg 4象限ビルド（none / effect / instrument / 両方） | **4/4** |
+| `cargo test -p orbit-audio-daemon --lib` | **39 passed** |
+| `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument --lib` | **239 passed / 1 ignored** |
+| `cargo test --workspace` | exit=0・91 スイート ok・FAILED 0 |
+
+daemon は **features 有無の両方**を回した（以前 `--lib` だけの件数を報告して実際と食い違った経緯があるため）。
+
+#### 落としやすい2項目を main が差分で確認した
+
+発注時に「配線で落ちやすい」と名指しした2件。**両方とも入っていた**:
+
+- **replace の宛先移行**（`engine_wrap.rs:5706-5715`）— 全 unit を `zip` でコピーし旧 slot を
+  Master へ戻す。長さの一致を `debug_assert_eq!` で固定
+- **teardown のリセット**（`:5894-5896`）— 全 unit を Master へ。さらに **`if teardown.is_ok()` の時だけ
+  `free_slot`** するので、**失敗した slot は隔離され free list に戻らない**（ログも
+  "quarantined from free-list"）。「リセット漏れの slot を次のテナントが取る」経路は存在しない
+
+#### gain 欠陥の実行証明（red → green）
+
+```text
+left:  [1065353216, 1065353216, 1065353216, 1065353216]   ← 1.0（gain が効いていない）
+right: [1056964608, 1056964608, 1056964608, 1056964608]   ← 0.5（期待）
+test result: FAILED. 0 passed; 1 failed
+
+（修正後）
+test output::tests::global_gain_scales_instrument_contribution ... ok
+```
+
+#### 途中で起きたこと（記録）
+
+1. **Codex が2回停止して質問した** — いずれもブリーフの「sandbox で失敗したら迂回せず報告」に
+   従った正しい挙動（リポジトリ外への spike 書き込み / `.git` ロック）。迂回させていたら、
+   別の場所で通したものを「通った」と報告されていた可能性がある
+2. **32時間前の #628 ジョブが `running` のまま残ってキューを塞いでいた** — 実プロセスは不在。
+   status は自己申告なので stale になる。**ログの mtime を生存 signal にした監視**が45秒で検出
+3. **README への追記を差し戻した** — ユーザー向け機能一覧に進行中の内部リファクタを
+   「in progress」として載せていた（スコープ外）
+4. **main の検証コマンド自体が壊れていた** — `cargo build ... | tail` の後で `$?` を読み、
+   `tail` の exit を clippy の結果として表示していた。取り直して exit=101 が判明
+
+#### スコープ外（設計文書にメモとして記録・issue 化しない）
+
+子プロセスの N 出力 / 容量の撤廃 / 配線の表現力（Forward・Feedback）/ `_with_clap` の改名 /
+LinkAudio の実配線。
+
+---
+
+### 6.404 design: ミキサーの土台と、その上に乗るオプションの責務を分けた (#643) (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643)（改題: *separate the mixer foundation from the sources that ride it*）
+**成果物**: `docs/design/643-mixer-foundation-design.md`（426行）
+**Status**: 設計のみ・実装なし。Fable 起案 v1→v6・main 検収
+
+#### 発端: instrument に per-part の処理が一切できなかった
+
+`effect()` / `output()` / `send()` の3つとも note シーケンスで例外。原因は **instrument の音が
+master バッファへ直接加算され、バスグラフの外にいた**こと（`outproc_instrument.rs:396-403`）。
+
+spec は実装時期を「#517 S4 PR-1b（#522）」としていたが、**#522 の本文に instrument の insert bus
+移設は書かれていない**（grep 0件）。**宛先の無い予定**として1ヶ月宙に浮いていた。
+
+#### 設計が6回変わった — owner の押し戻しが誤った一般化を剥がした
+
+| owner 指摘 | 設計への作用 |
+|---|---|
+| audio も instrument も同じバス仕様 | gain 非対称が**現状の欠陥**と判明（`global.gain` が instrument に効かない）。注入点が `render_multi` の**内側**へ |
+| ちゃんとバスに載せれば解決では | gain の手当ては**不要**。位置を直せば自動的に消える |
+| マルチを受けられるバスを今 | アドレス `(instance, unit)` を**今確定**（protocol は後から変えられない） |
+| 土台とオプションの責務分離 | 境界表・grep 監査・`SetInstrumentBus` → **`SetSourceRouting`** |
+| UI の制限がないぶん柔軟で危険な配線 | **Forward / Feedback の2種エッジ**。焼き込み3箇所を列挙 |
+
+**設計は大きくならず、変わった**: callback → feed で core の追加は ~15 行に減り、pop 対策の機構は
+借用構造に吸収されて消え、変異テストは E2E に置き換わった。
+
+#### main の検収で確定させた事実（一次ソース）
+
+instrument は audio event を出さない（`plugin-note-output.ts` にバス引数なし）/ `process_block` は
+非ブロッキング（sleep・park・wait・recv・lock・spin が 0 件）/ `free_slots` は LIFO
+（`engine_wrap.rs:2460`）/ `get_disjoint_mut` は rustc 1.97.0 で**実コンパイル確認** /
+FTZ・DAZ は**未設定**（0 件）/ `STUB_TRANSPORT` 実在（`outproc_instrument.rs:49,388`）/
+`send_gain_overrides` の相対 index（`:1706-1707,1760`）。
+
+#### 見つかった既存欠陥
+
+1. **`global.gain` が instrument に効かない** — マスターフェーダーが効かない音がある
+2. **`output()` の3分岐のうちガードは1本だけ** — instrument の `output(1)` / `output("Kick Ch")` が
+   **黙って通り音が従わない**（silent failure 2件）
+3. `QA_2.0.0_HUMAN_RUNBOOK.md:77` が「拡張が `.orbslog` を生成する」と書いているが**拡張は
+   `enableSessionLog()` を呼ばない**（CLI も opt-in・既定 off）
+
+#### 実装計画
+
+**実装 ~900-1100 行 + テスト ~900-1100 行・2 PR**（+ follow-up 1）。切り方は**検証手段の境界**:
+PR-1 = Rust 4層（`cargo` で検証）/ PR-2 = TS + E2E（実機 OrbitStudio）。
+
+---
+
+### 6.403 docs(rules): 一律の変異検証ルールを3層方針へ置き換えた (Aug 29, 2026)
+
+**Status**: `CLAUDE.md` のみ（+67 / -25）
+
+#### 「新規テストは必ず変異検証」は owner 指示ではなかった
+
+owner の指示は**目的だけ**だった:
+
+> いくら作ってもテストが意味をなしてないと先に進めないので、テストの積み上げだけはしっかりしてください。
+
+一律ルールは過去セッションが目的を手段へ翻訳したもので、**翻訳結果が `owner 指示` の見出しを
+引き継いだため再検討されなくなっていた**。owner 本人の「指示した覚えがない」で発覚。
+
+#### 撤回の根拠
+
+旧版は #528（ハーネスが無音を出したのに警報が鳴らなかった）を**変異検証が要る根拠**として
+引いていた。しかしあれは **E2E が信号を見ていなかった**事故で、キャプチャに RMS の
+アサーションがあれば落ちた。**原因の帰属を一段間違えて、効かない規律を積んでいた。**
+
+「タイミング条件と bit 一致は E2E に届かない」も誤り — **音はデジタルで取れる**し、条件は
+DSL から駆動できる。
+
+#### 置き換えた形
+
+**大前提: 機能にはテストを書く（TDD）。型はテストの代替ではない**（軸が違う。owner 指摘の
+category error を修正）。以下は機能テストに**加えて何を足すか**:
+
+| 対象 | 追加で足すもの |
+|---|---|
+| 型が保証している誤り | **何も足さない**（型チェッカが保証することをテストで確かめない） |
+| DSL から決定論的に駆動でき信号に出る振る舞い | 機能テストそのものを**キャプチャ E2E** に |
+| 駆動できない／信号に出ない内部状態 | **変異検証** |
+
+判定軸は「聞こえるか」ではなく **「DSL から決定論的に駆動できるか」**。
+
+🔴 **指示を記録する時は、引用（owner の言葉）と解釈（手段）を見出しレベルで分けること。**
+
+---
+
 ### 6.402 fix: 降格した後に、各 call site のレベルを監査し直した (#628) (Aug 29, 2026)
 
 **Date**: 2026-08-29
