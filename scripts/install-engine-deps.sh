@@ -53,6 +53,12 @@ trap 'rm -rf "$DEPS_TMP"' EXIT
 cp "$ENGINE_DIR/package.json" "$DEPS_TMP/package.json"
 (cd "$DEPS_TMP" && npm install --omit=dev --ignore-scripts 2>&1)
 
+# 🔴 rm -rf の直前でパスを確かめる。ENGINE_DIR は絶対パスから組み立てているので
+# 実際には空にならないが、空だった場合に消しに行く先が `/node_modules` になる。
+if [ -z "$ENGINE_DIR" ] || [ ! -d "$ENGINE_DIR" ]; then
+  echo "ERROR: ENGINE_DIR が不正です: '$ENGINE_DIR'" >&2
+  exit 1
+fi
 rm -rf "$ENGINE_DIR/node_modules"
 mv "$DEPS_TMP/node_modules" "$ENGINE_DIR/node_modules"
 
