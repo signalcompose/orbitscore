@@ -17,6 +17,90 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.406 refactor: /simplify の指摘を適用し、その過程で cfg 象限の欠陥を1件作って直した (#643) (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#646](https://github.com/signalcompose/orbitscore/pull/646)
+**差分**: 20 insertions / 87 deletions（**純減**）
+
+#### `/simplify` 4体の指摘を集約し、4件を適用
+
+| 適用 | 内容 |
+|---|---|
+| **A** | **借用スパイクの残骸を削除**（67行）— 本番の `SourceDestCell::decode` を影で再実装しており、片方だけ直しても検出できない構造だった。**reuse と simplification の2体が独立に指摘** |
+| **C** | `peak_bits` を共通化 — 一字一句同じ式が2箇所にあった |
+| **D** | `sources.is_empty()` の分岐を削除 — core が等価を保証し bit 一致テストもあるのに、呼び出し側で場合分けし直していた |
+| — | replace の宛先移行を2ループ→1ループ |
+
+**保留**（理由つき）: RT スタックの `ArrayVec<_, 512>`（**実測 16,384 バイト**）/ Link 収集の
+二重実装（57行）/ ヘルパ抽出・命名の統一（既存コードに波及）。前2件は RT パスの構造変更のため
+owner 判断を待つ。
+
+#### 🔴 C の共通化で cfg 象限を壊した（自己申告）
+
+`peak_bits` を `outproc_effect` に置いたまま instrument 側から呼んだが、同モジュールは
+**`#[cfg(feature = "outproc-effect")]` でゲート**されており、**instrument 単独ビルドが壊れた**:
+
+```text
+error[E0433]: cannot find `outproc_effect` in `crate`
+note: the item is gated behind the `outproc-effect` feature
+```
+
+**ブリーフで「落としやすい」と名指しした罠に、自分で落ちた。しかも直し方を間違えて2回落ちた**:
+
+| # | 症状 | 原因 |
+|---|---|---|
+| 1 | instrument 単独ビルドが壊れた | ヘルパを **effect ゲートの中**に置いた |
+| 2 | **default（両方 off）で dead_code** | 1 を直す時に **cfg を外しすぎた** |
+
+正解は `#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]` —
+**呼び出し元と同じ条件**でゲートする。関数の doc に両方の罠を記録した。
+
+#### 🔴 「4象限」と書きながら3つしか回していなかった
+
+2 を見逃したのは、clippy を「両 feature / instrument 単独 / effect 単独」の3通りで回して
+満足していたため。**default（feature を付けない）が列挙から落ちていた** — 組み合わせを
+数える意識が「何を足すか」に向くと、「**何も足さない**」が候補から抜ける。
+捕まえたのは pre-push フックだった。
+
+**共通化は「どの軸で共通か」を確認してから行う** — この2つは「計算式が同じ」だけで、
+「同じ条件でコンパイルされる」わけではなかった。重複を減らす変更が、より質の悪い結合
+（cfg 象限をまたぐ依存）を作った。
+
+#### 🔴 測定器が3回壊れていた
+
+この作業中、**検証コマンド自体の誤りで3回誤報告**した:
+
+| # | 誤り | 症状 |
+|---|---|---|
+| 1 | `cmd \| tail` の後で `$?` を読んだ | clippy が exit=101 なのに「exit=0」と表示 |
+| 2 | `cargo build $F`（zsh） | **zsh は bash と違い、クォートなしの変数展開で単語分割しない**。`"--features outproc-effect"` が1引数として渡り `unexpected argument` で失敗 → 「4象限のうち3つが落ちる」と誤報告 |
+| 3 | 出力を `/dev/null` へ捨てた | 失敗の原因が読めず、原因究明に往復した |
+
+**#2 が本物の欠陥（cfg 象限）を2回隠した。** 個別実行と結果が食い違ったら、**まず自分の書き方を疑う**。
+実装のバグより測定器のバグの方が発見が遅いのは、測定器を検証する仕組みが無いため。
+
+#### 検証（修正後・すべて main が sandbox 外で実行）
+
+| 項目 | 結果 |
+|---|---|
+| cfg 4象限ビルド | **4/4**（引数を明示・ループを使わない） |
+| **clippy 4象限**（default / effect / instrument / 両方） | **4/4 exit=0** |
+| daemon（両 feature） | **239 passed / 1 ignored** |
+| native | **50 passed / 2 ignored**（スパイク削除で 51→50・意図どおり） |
+
+**clippy は4象限すべてで回す** — CI（`rust-ci.yml`）は ubuntu で、単独 feature ビルドの
+欠陥を捕まえないため。**default を含めて4つ**であることに注意（3つで止まって踏んだ）。
+
+#### コミット前に差分を読んで、自分の修正の欠陥を2件見つけた
+
+1. **`outproc_effect` モジュールの doc の途中にヘルパを挿入**していた — モジュールの説明が
+   関数の doc に化けていた
+2. `outproc_effect::peak_bits` が `crate::peak_bits` を呼ぶだけの**無意味な委譲**になっていた
+
+どちらもテストでは検出できない（コンパイルも通る）。**差分を読む以外に発見手段が無い類**。
+
+---
+
 ### 6.405 feat(audio): instrument をミキサーの source にした — PR-1 (#643) (Aug 29, 2026)
 
 **Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643)

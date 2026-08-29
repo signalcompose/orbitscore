@@ -5709,8 +5709,6 @@ impl EngineWrap {
                 .zip(&control.slots[spare_index].source_dests)
             {
                 new_dest.store(old_dest.load());
-            }
-            for old_dest in &control.slots[old_index].source_dests {
                 old_dest.store(orbit_audio_native::SourceDest::Master);
             }
             control.instance_index.insert(name.clone(), spare_index);

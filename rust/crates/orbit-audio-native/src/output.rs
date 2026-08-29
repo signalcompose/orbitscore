@@ -929,12 +929,11 @@ fn render_engine_with_insert_buses_and_source_outputs(
             }
         }
     }
-    if sources.is_empty() {
-        engine.render_multi(hw, &mut targets);
-    } else {
-        let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
-        engine.render_multi_feeds(hw, &mut targets, &feeds);
-    }
+    // core は `render_multi` を `render_multi_feeds(.., &[])` に委譲しており、その bit 一致は
+    // `render_multi_feeds_empty_matches_render_multi_bit_for_bit` が固定している。sources が
+    // 空なら `collect_source_feeds` は空を返すので、呼び出し側で場合分けし直す必要はない。
+    let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
+    engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
 
     // post-loop: 配列順（= トポロジカル順・MX.4）で is_render_target な stage を処理する。
@@ -1653,76 +1652,8 @@ fn build_stream(
 }
 
 #[cfg(test)]
-mod source_borrow_spike {
+mod source_feed_tests {
     use super::*;
-    use arrayvec::ArrayVec;
-
-    const MAX_FEEDS: usize = 8;
-
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum SpikeFeedDest {
-        Hardware,
-        Channel(usize),
-    }
-
-    struct TestSource {
-        output: Vec<f32>,
-    }
-
-    impl BlockSource for TestSource {
-        fn render(&mut self, frames: usize, _transport: &BlockTransport) -> usize {
-            self.output[..frames].fill(0.5);
-            1
-        }
-
-        fn output(&self, unit: usize) -> &[f32] {
-            assert_eq!(unit, 0);
-            &self.output
-        }
-    }
-
-    #[test]
-    fn two_pass_source_render_then_shared_feed_collection_compiles() {
-        let mut sources = [SourceSlot {
-            source: Box::new(TestSource {
-                output: vec![0.0; 4],
-            }),
-            dests: vec![SourceDestCell(Arc::new(AtomicUsize::new(1)))],
-        }];
-        let transport = BlockTransport {
-            cursor_frames: 0,
-            sample_rate: 48_000,
-        };
-
-        // Pass 1: render every source without retaining a mutable borrow.
-        let mut rendered_units: ArrayVec<usize, MAX_FEEDS> = ArrayVec::new();
-        for slot in sources.iter_mut() {
-            rendered_units.push(slot.source.render(4, &transport));
-        }
-
-        // The real callback already has a position map for its target array. This spike uses the
-        // same shape and resolves encoded destination 1 to target position 0.
-        let targets = ["sum"];
-        let position_map = [Some(0_usize)];
-
-        // Pass 2: collect only shared output borrows and copyable destinations.
-        let mut feeds: ArrayVec<(&[f32], SpikeFeedDest), MAX_FEEDS> = ArrayVec::new();
-        for (slot, unit_count) in sources.iter().zip(rendered_units) {
-            for unit in 0..unit_count {
-                let encoded = slot.dests[unit].0.load(Ordering::Relaxed);
-                let dest = encoded
-                    .checked_sub(1)
-                    .and_then(|index| position_map.get(index).copied().flatten())
-                    .filter(|&index| index < targets.len())
-                    .map_or(SpikeFeedDest::Hardware, SpikeFeedDest::Channel);
-                feeds.push((slot.source.output(unit), dest));
-            }
-        }
-
-        assert_eq!(feeds.len(), 1);
-        assert_eq!(feeds[0].0, &[0.5; 4]);
-        assert_eq!(feeds[0].1, SpikeFeedDest::Channel(0));
-    }
 
     #[test]
     fn source_dest_cell_roundtrips_every_destination_and_defaults_invalid_values() {

@@ -619,14 +619,14 @@ impl PostProcessor for OutProcEffectPostProcessor {
         // dry（effect 適用前）の abs ピークを記録（gated parity の baseline）。
         self.stats
             .dry_peak_bits
-            .fetch_max(peak_bits(data), Ordering::Relaxed);
+            .fetch_max(crate::peak_bits(data), Ordering::Relaxed);
 
         self.host.process_block(data);
 
         // post（effect 適用後）の abs ピークを記録（gated parity: post/dry ≈ test-effect gain）。
         self.stats
             .post_peak_bits
-            .fetch_max(peak_bits(data), Ordering::Relaxed);
+            .fetch_max(crate::peak_bits(data), Ordering::Relaxed);
         // host の plain counter を control thread が読めるよう atomic ミラー（RT 安全: store のみ）。
         self.stats.fresh.store(self.host.fresh, Ordering::Relaxed);
         self.stats.stale.store(self.host.stale, Ordering::Relaxed);
@@ -639,16 +639,6 @@ impl PostProcessor for OutProcEffectPostProcessor {
 }
 
 /// interleaved f32 の abs ピークを f32 bits で返す（非負 f32 bits は u32 として単調 = `fetch_max` 可）。
-/// `ClapPostProcessor` の post-peak と同趣旨だが、`abs()`（f32 往復）でなく符号ビットを直接マスクする
-/// （`s.to_bits() & 0x7FFF_FFFF`・非負化として等価で vectorize しやすい）。空 slice は 0。
-#[inline]
-fn peak_bits(data: &[f32]) -> u32 {
-    data.iter()
-        .map(|s| s.to_bits() & 0x7FFF_FFFF)
-        .max()
-        .unwrap_or(0)
-}
-
 /// `--shm`/`--chain`/`--sample-rate` を渡して rack effect child を 1 つ起動する。
 /// `start_outproc_effect` の初回 spawn と watchdog の respawn が共有する。
 ///

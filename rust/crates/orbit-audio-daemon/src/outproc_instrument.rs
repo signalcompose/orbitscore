@@ -402,11 +402,7 @@ impl BlockSource for OutProcInstrumentBlockSource {
             .probe_live_count
             .store(self.host.live_count(PROBE_KEY), Ordering::Relaxed);
 
-        let peak_bits_value = scratch
-            .iter()
-            .map(|sample| sample.to_bits() & 0x7FFF_FFFF)
-            .max()
-            .unwrap_or(0);
+        let peak_bits_value = crate::peak_bits(scratch);
         self.stats
             .post_peak_bits
             .fetch_max(peak_bits_value, Ordering::Relaxed);

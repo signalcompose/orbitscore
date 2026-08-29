@@ -22,6 +22,21 @@ pub mod link_audio;
 /// （規則を2箇所に持つと、片方だけ直し忘れる — #548 がまさにその形のバグだった）。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 pub(crate) mod outproc_child_exe;
+
+/// f32 サンプル列の絶対ピークを IEEE754 bits で返す（符号ビットを落として比較可能にする）。
+/// `AtomicU32::fetch_max` で published される peak 統計の共通実装。
+///
+/// 🔴 **どちらか一方の feature で有効になる位置に置くこと。** `outproc_effect` の中に置くと
+/// **instrument 単独ビルドから参照できず壊れる**。逆に cfg を付けないと、**両方 off の
+/// default build で呼び出し元が消えて dead_code になる**。この PR で両方踏んだ。
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+pub(crate) fn peak_bits(data: &[f32]) -> u32 {
+    data.iter()
+        .map(|s| s.to_bits() & 0x7FFF_FFFF)
+        .max()
+        .unwrap_or(0)
+}
+
 /// child の early-exit の「事実」と「理由」を対で持つ型。**effect と instrument で共有する**
 /// （2 つを別々に持つと片方だけ倒す/立てる余地が残る — #629 レビュー）。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
