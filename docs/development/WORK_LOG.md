@@ -17,6 +17,106 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.415 test(e2e): 実機で機能を確認し、🔴 マスターフェーダーが効いていないことを発見 (#633) (Aug 29, 2026)
+
+#### ✅ #633 の機能は実機で緑
+
+| | |
+|---|---|
+| **E2E-1** | 同一プラグイン2枚を同時に開き、**片方を閉じても他方が生存** |
+| **E2E-2** | **index シフトをまたいで UI が開いたまま**、新 index で閉じられる（owner 原則 C-A） |
+| 洪水 | **0 件**（前は 25ms 間隔で連続） |
+
+E2E の初回失敗は**すべて私のテストの作り**だった: エンジン未起動 / `var global = init GLOBAL`
+の欠落 / **UI を開く側に VST3 fixture を選んでいた**（ヘッドレスで `createView` が null）。
+
+#### 🔴 発見: `global.gain()` が instrument にまったく効いていない
+
+**キャプチャ WAV を残して自分で RMS を測った**結果（0.25秒窓）:
+
+```text
+3.50s rms=0.08660   3.75s rms=0.08860   4.00s rms=0.08864  ← この区間で gain(-6) を評価
+4.25s rms=0.08864   4.50s rms=0.08857   5.25s rms=0.08854
+```
+
+**完全にフラット。** 効いていれば 0.044 へ落ちる。
+
+##### 原因（両端に観測を仕込んで特定）
+
+```text
+[PROBE-TS]     gain() db=-6 amp=0.5011872 hasSetter=function
+[PROBE-DAEMON] SetGlobalGain received value=0.5011872 ramp_sec=0
+```
+
+**送受信は正常。問題は掛ける順序だった。**
+
+`orbit-audio-native/src/output.rs`:
+- `936`: `engine.render_multi_feeds(hw, ...)` ← **ここで master gain を掛ける**
+- `959`: post-loop の `BusTarget::Master` が **`hw` に直接加算** ← **gain の後**
+
+**ミキサーの stage から master へ合流する音は master gain を素通りする。**
+capture tap は「post 適用後の最終 hw（= device に出る実信号）」なので、**スピーカーも同じ**。
+
+##### これは #643 の設計で「未設計」と記録した箇所そのもの
+
+```text
+audio / instrument  →   ミキサー          →   出力
+    （source）        bus / AUX / insert       ？
+                      ↑ §2-§9 で設計          ↑ 未設計
+```
+
+#### 🔴 owner の指摘: シーケンスのゲインも同じ誤り
+
+> master gain を post-loop の後ろへ移すのが素直＜これはその通りだな。
+> **シーケンスのゲインだって本来はそのはずですよね。**
+
+| フェーダー | いまの位置 | あるべき位置 |
+|---|---|---|
+| `seq.gain()` | **イベント生成時**（insert より前） | **そのシーケンスの insert の後** |
+| `global.gain()` | **stage 合流より前** | **全部合流した後** |
+
+**両方とも、自分が支配すべきものより手前にある。** 帰結として
+**「リバーブを掛けたままフェーダーだけ下げる」ができない**（残響比まで変わる）。
+spec はこれを「既知の制約」と記録していたが、**制約ではなく構造の誤りだった**。
+
+#### 🔴 テスト規律の確定（owner・この日の実証つき）
+
+> MCP ツールを用意して**ユーザーと同じ動線で試験できるようにしているのは「確実な動作を確認
+> するため」**。そのためにも変異テストより本来は **DSL を網羅した E2E を充実**して、そこで
+> **実機の実行に問題がある場合で必要があって初めて**変異テストになる。
+
+| 手段 | master gain の欠陥を捕まえたか |
+|---|---|
+| 変異検証 **35件**（80分以上） | ❌ **1件も** |
+| ユニットテスト **2149件** | ❌ |
+| **ユーザーと同じ動線のキャプチャ E2E** | ✅ **これだけ** |
+
+**ログについての但し書き**: この欠陥は**異常系ではない**。各層は成功を返し ERROR は 0 行。
+**ログは E2E の代わりではなく補完**として置く。
+
+#### 🔴 DSL 網羅率を測った — seq 32語のうち 19語が実機で未評価
+
+```text
+cell comp defaultGain defaultPan density hold length loop midi
+mute octave pan quantize root run unmute vel vl voicelead
+```
+
+`mute` / `pan` / `octave` / `vel` / `root` / `loop` が実機で一度も通っていない。
+**今日 gain で起きたことが、この19語のどれでも起きうる。**
+
+#### `ORBIT_KEEP_CAPTURES` を正式化
+
+キャプチャ WAV を残す env を追加した。**これが無ければ欠陥に辿り着けなかった** —
+ハーネスのアサーションは「窓の中の1つの数」しか見せないが、欠陥は窓の外にいることがある。
+
+#### 副産物: キャプチャ WAV のヘッダが patch されない
+
+RIFF size=36 / data size=0 のまま実データ 2.29MB。`CaptureWriter::Drop` で finalize する
+設計だが、**daemon が graceful に落ちていない**ため走っていないと見られる。
+標準ツール（QuickTime / Audacity / Python `wave`）で開けない。
+
+---
+
 ### 6.414 fix(daemon): UI の宛先解決と帰属を配線する + 🔴 変異検証を PR の必須工程から外す (#633) (Aug 29, 2026)
 
 **Issue**: [#633](https://github.com/signalcompose/orbitscore/issues/633)

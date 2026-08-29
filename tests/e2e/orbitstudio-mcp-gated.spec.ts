@@ -432,7 +432,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     const activeClient = client
     const catalog = requireCatalogFixtures()
     const dslPath = path.join(tmpRoot, `643-${slug}.orbs`)
-    const capturePath = path.join(tmpRoot, `643-${slug}.wav`)
+    // 🔴 `ORBIT_KEEP_CAPTURES=<dir>` を渡すと、キャプチャ WAV を tmpRoot ではなくそこへ書く。
+    // afterAll の掃除に巻き込まれないので、**落ちたときに音を自分で聴ける / 測れる**。
+    //
+    // これが無いと「比が 0.72 だった」以上のことが分からない。2026-08-29 に master gain が
+    // instrument へ効いていない欠陥を捕まえたのは、この WAV を残して RMS を時系列で見たから。
+    // ハーネスのアサーションは「窓の中の1つの数」しか見せないが、欠陥は窓の外にいることがある。
+    const capturePath =
+      process.env.ORBIT_KEEP_CAPTURES !== undefined
+        ? path.join(process.env.ORBIT_KEEP_CAPTURES, `643-${slug}.wav`)
+        : path.join(tmpRoot, `643-${slug}.wav`)
     const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
     const readLog = async (): Promise<string> =>
       (await activeClient.call('get_log', { lines: 500 })).text
@@ -1648,6 +1657,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(client, '#633 E2E-1 must initialize the MCP client').toBeDefined()
       if (!client) throw new Error('main gated phase did not initialize suite state')
       const activeClient = client
+      // 🔴 evaluate_orbitscore は受理するだけで、engine が止まっていると
+      // 「engine is not running」でエンジン側が拒否する。DSL を駆動する前に必ず起動する。
+      await startR28Engine(activeClient, '#633 E2E-1 engine')
       const catalog = requireCatalogFixtures()
       const name = catalog.clapEffectName
       const errorPrefix = 'ERROR:'
@@ -1657,8 +1669,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // Two inserts of the SAME plugin on one receiver: SC.10.10.1 規範 2-3 says
       // `ui("名前")` opens every matching insert, so this needs two windows
       // inside one child at once — the thing the single-slot pump could not do.
+      // 🔴 `init global.seq` は `global` が宣言済みであることを前提にする。R28 と同じ作法で
+      // 先に `var global = init GLOBAL` を評価しないと `Variable not found` になる。
       const declare = await activeClient.call('evaluate_orbitscore', {
-        code: 'var uiRackSeq = init global.seq',
+        code: ['var global = init GLOBAL', 'var uiRackSeq = init global.seq'].join('\n'),
       })
       expect(declare.isError, declare.text).toBe(false)
       const rack = await activeClient.call('evaluate_orbitscore', {
@@ -1719,15 +1733,22 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(client, '#633 E2E-2 must initialize the MCP client').toBeDefined()
       if (!client) throw new Error('main gated phase did not initialize suite state')
       const activeClient = client
+      // 🔴 evaluate_orbitscore は受理するだけで、engine が止まっていると
+      // 「engine is not running」でエンジン側が拒否する。DSL を駆動する前に必ず起動する。
       const catalog = requireCatalogFixtures()
-      const first = catalog.clapEffectName
-      const kept = catalog.vst3EffectName
+      // 🔴 UI を開くのは `kept` の方なので、そこに **CLAP** を置く。VST3 のテスト fixture は
+      // ヘッドレスで `IEditController::createView("editor")` が null を返す（実機で確認）。
+      // 落とされる `first` は UI を開かないので VST3 でよい。
+      const first = catalog.vst3EffectName
+      const kept = catalog.clapEffectName
       const errorPrefix = 'ERROR:'
       const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
       const errorsBefore = beforeLog.split(errorPrefix).length - 1
 
+      // 🔴 `init global.seq` は `global` が宣言済みであることを前提にする。R28 と同じ作法で
+      // 先に `var global = init GLOBAL` を評価しないと `Variable not found` になる。
       const declare = await activeClient.call('evaluate_orbitscore', {
-        code: 'var uiShiftSeq = init global.seq',
+        code: ['var global = init GLOBAL', 'var uiShiftSeq = init global.seq'].join('\n'),
       })
       expect(declare.isError, declare.text).toBe(false)
       const rack = await activeClient.call('evaluate_orbitscore', {
