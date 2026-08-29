@@ -53,7 +53,7 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // フルパス
 drums.effect("./plugins/MyEffect.clap")       // 相対パス
 ```
 
-同名のプラグインが CLAP と VST3 の両方にある場合は CLAP が優先されます。VST3 版を明示したい場合は `"vst3/TAL Reverb 4"` のように format を接頭辞で指定してください。vendor が複数ある場合も同様に `"TAL Software/TAL Reverb 4"` のように指定して一意化できます。パス指定はカタログを一切参照しないので、カタログに登録されていないプラグインでも使えます。
+同名のプラグインが CLAP と VST3 の両方にある場合、現状は CLAP が優先されます（この挙動は #658 で見直し予定です）。VST3 版を明示したい場合は `"vst3/TAL Reverb 4"` のように format を接頭辞で指定してください。vendor が複数ある場合も同様に `"TAL Software/TAL Reverb 4"` のように指定して一意化できます。パス指定はカタログを一切参照しないので、カタログに登録されていないプラグインでも使えます。
 
 ::: tip カタログ名が候補に出ないとき
 コマンドパレットから **「OrbitScore: Rescan Plugin Catalog」** を実行すると、インストール済みのプラグインを再スキャンします。

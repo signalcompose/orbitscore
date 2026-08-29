@@ -30,7 +30,7 @@ piano.instrument("Kontakt 8")                                    // カタログ
 piano.instrument("/Library/Audio/Plug-Ins/VST3/Kontakt 8.vst3")  // フルパス
 ```
 
-カタログ名で指定すると、エディタの補完でプラグイン名の候補が出ます。同名のプラグインが CLAP と VST3 の両方にある場合は CLAP が優先されます。VST3 版を明示したい場合は `"vst3/Kontakt 8"` のように format を接頭辞で指定してください。vendor が複数ある場合も同様に `"Native Instruments/Kontakt 8"` のように指定して一意化できます。
+カタログ名で指定すると、エディタの補完でプラグイン名の候補が出ます。同名のプラグインが CLAP と VST3 の両方にある場合、現状は CLAP が優先されます（この挙動は #658 で見直し予定です）。VST3 版を明示したい場合は `"vst3/Kontakt 8"` のように format を接頭辞で指定してください。vendor が複数ある場合も同様に `"Native Instruments/Kontakt 8"` のように指定して一意化できます。
 
 ::: tip カタログ名が候補に出ないとき
 コマンドパレットから **「OrbitScore: Rescan Plugin Catalog」** を実行すると、インストール済みのプラグインを再スキャンします。新しくインストールしたプラグインが補完に出ない場合はこれを試してください。

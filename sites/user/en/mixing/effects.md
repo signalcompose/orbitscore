@@ -53,7 +53,7 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // full path
 drums.effect("./plugins/MyEffect.clap")       // relative path
 ```
 
-When a plugin with the same name exists as both CLAP and VST3, CLAP takes priority. To select the VST3 version explicitly, prefix the format, as in `"vst3/TAL Reverb 4"`. When multiple vendors share a name, disambiguate the same way with a vendor prefix, as in `"TAL Software/TAL Reverb 4"`. A path specification never consults the catalog, so it also works for a plugin that is not registered in the catalog.
+When a plugin with the same name exists as both CLAP and VST3, CLAP currently takes priority (this behaviour is under review in #658). To select the VST3 version explicitly, prefix the format, as in `"vst3/TAL Reverb 4"`. When multiple vendors share a name, disambiguate the same way with a vendor prefix, as in `"TAL Software/TAL Reverb 4"`. A path specification never consults the catalog, so it also works for a plugin that is not registered in the catalog.
 
 ::: tip When a catalog name does not show up in autocomplete
 Run **"OrbitScore: Rescan Plugin Catalog"** from the Command Palette to rescan installed plugins.
