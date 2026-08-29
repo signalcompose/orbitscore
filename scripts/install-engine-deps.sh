@@ -34,16 +34,48 @@ node -e '
 
 echo "  deps: $(node -e 'console.log(Object.keys(require(process.argv[1]).dependencies).join(", "))' "$ENGINE_DIR/package.json")"
 
-# Install production dependencies only. --ignore-scripts is safe: @julusian/midi
-# ships prebuilt native binaries (prebuildify) loaded at require-time via
-# node-gyp-build, so no postinstall/compile step is needed.
-cd "$ENGINE_DIR"
-npm install --omit=dev --ignore-scripts 2>&1
+# 🔴 Install OUTSIDE the workspace, then move the tree in.
+#
+# ENGINE_DIR lives under packages/vscode-extension, which npm treats as part of
+# this repo's workspace. Installing in place lets npm HOIST any dependency that
+# is already satisfied at the repo root — it then never lands in the bundle, and
+# the packaged extension crashes at runtime with "Cannot find module". `yaml`
+# was silently missing exactly this way (#654 real-device gate): the build was
+# green, the vsix installed fine, and the engine died on first evaluate.
+#
+# A temp dir outside the repo has no workspace root above it, so npm has nowhere
+# to hoist to and every declared dependency is written locally.
+#
+# --ignore-scripts is safe: @julusian/midi ships prebuilt native binaries
+# (prebuildify) loaded at require-time via node-gyp-build, so no compile step.
+DEPS_TMP="$(mktemp -d)"
+trap 'rm -rf "$DEPS_TMP"' EXIT
+cp "$ENGINE_DIR/package.json" "$DEPS_TMP/package.json"
+(cd "$DEPS_TMP" && npm install --omit=dev --ignore-scripts 2>&1)
+
+rm -rf "$ENGINE_DIR/node_modules"
+mv "$DEPS_TMP/node_modules" "$ENGINE_DIR/node_modules"
 
 # Apply supercolliderjs boot timeout patch
 bash "$PROJECT_ROOT/scripts/patch-supercolliderjs.sh"
 
+# 🔴 Verify every declared dependency actually landed, and fail loudly if not.
+# The failure this guards against is invisible at build time and only surfaces
+# as a runtime crash in the packaged extension, so the check has to be here.
+MISSING=""
+for DEP in $(node -e 'console.log(Object.keys(require(process.argv[1]).dependencies).join(" "))' "$ENGINE_DIR/package.json"); do
+  if [ ! -d "$ENGINE_DIR/node_modules/$DEP" ]; then
+    MISSING="$MISSING $DEP"
+  fi
+done
+
 # Clean up temporary package.json and lock file
 rm -f "$ENGINE_DIR/package.json" "$ENGINE_DIR/package-lock.json"
+
+if [ -n "$MISSING" ]; then
+  echo "ERROR: engine runtime dependencies missing from the bundle:$MISSING" >&2
+  echo "       The packaged extension would crash with \"Cannot find module\"." >&2
+  exit 1
+fi
 
 echo "Engine dependencies installed successfully"

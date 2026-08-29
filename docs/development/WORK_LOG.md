@@ -17,6 +17,39 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.422 fix: engine のランタイム依存が hoist で bundle から抜け落ちていた (Aug 30, 2026)
+
+**発見経路**: #654 の実機ゲート。拡張を焼き込んで通常起動したら
+`Cannot find module 'yaml'` でエンジンが起動しなかった。
+
+#### 何が起きていたか
+
+`scripts/install-engine-deps.sh` は `packages/vscode-extension/engine` の中で
+`npm install` していた。このディレクトリは**ワークスペースの内側**なので、
+root の `node_modules` に既にある依存を npm が「充足済み」と判断して
+**root へ hoist し、bundle には書かない**。
+
+`yaml` がまさにそれで、6つの宣言済み依存のうち 1 つだけが欠けていた:
+
+| 依存 | bundle に入っていたか |
+|---|---|
+| `@julusian/midi` / `supercolliderjs` / `uuid` / `wavefile` / `ws` | ✅ |
+| `yaml` | 🔴 **欠落** |
+
+🔴 **ビルドは緑・vsix のパッケージングも成功・インストールも成功**して、
+**エンジンの初回評価で初めて落ちる。** どの段階でも警告が出ない。
+
+#### 直し方
+
+1. **ワークスペースの外（`mktemp -d`）で `npm install` し、できた `node_modules` を移す。**
+   temp dir の上にはワークスペース root が無いので、npm に hoist 先が存在しない
+2. **宣言済み依存が全部着地したかを検証し、欠けていたら `exit 1`。**
+   この故障はビルド時に見えず実行時にしか出ないので、検査をここに置くしかない
+
+（同型の再発防止: [[green-tests-do-not-mean-it-compiles]] と同じ「緑は根拠にならない」型）
+
+---
+
 ### 6.421 fix: #654 instrument シーケンスで playhead が動かなかった (Aug 30, 2026)
 
 **Issue**: [#654](https://github.com/signalcompose/orbitscore/issues/654) / ブランチ `654-instrument-playhead`
