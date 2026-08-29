@@ -5719,6 +5719,11 @@ impl EngineWrap {
                      on the new slot (wiring bug)"
                 );
             }
+            // 🔴 移行とリセットを1ループに畳んでいるので、**リセットも `zip` の共通長まで**しか
+            // 及ばない。長さが揃っている（両者とも `default_source_dests()` 由来 = `MAX_SOURCE_UNITS`
+            // 固定長）ことが前提で、上のログはその前提が崩れた事実を残すためにある。
+            // **可変長にする変更が入ったら、このループも見直すこと**（リセットだけ全長に戻すか、
+            // 長さ不一致を早期に弾くか）。
             for (old_dest, new_dest) in control.slots[old_index]
                 .source_dests
                 .iter()
