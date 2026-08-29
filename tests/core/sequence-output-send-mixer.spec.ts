@@ -30,6 +30,7 @@ function mockMidiOutput(): MidiOutput {
 }
 
 function harness(setBusRouting = vi.fn().mockResolvedValue(undefined)) {
+  const setSourceRouting = vi.fn().mockResolvedValue(undefined)
   const audio = {
     isRunning: true,
     startTime: T0,
@@ -44,6 +45,7 @@ function harness(setBusRouting = vi.fn().mockResolvedValue(undefined)) {
     getMasterGainDb: () => 0,
     loadPlugin: vi.fn().mockResolvedValue({}),
     setBusRouting,
+    setSourceRouting,
   } as any
   installEffectChainMock(audio)
   const midiOutput = mockMidiOutput()
@@ -51,7 +53,7 @@ function harness(setBusRouting = vi.fn().mockResolvedValue(undefined)) {
   global.setDocumentDirectory('/songs')
   const seq = new Sequence(global, audio)
   seq.setName('kick')
-  return { audio, global, seq, setBusRouting }
+  return { audio, global, seq, setBusRouting, setSourceRouting }
 }
 
 describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
@@ -102,7 +104,19 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
     const { global, seq } = harness()
     global.sum('drum')
     seq.midi('iac', 1)
-    expect(() => seq.output('drum')).toThrow('only supported on audio sequences')
+    expect(() => seq.output('drum')).toThrow(
+      'MIDI is sent to an external device and therefore has no mixer output destination',
+    )
+  })
+
+  it('routes an instrument main output to the allocated sum insert bus', async () => {
+    const { global, seq, setBusRouting, setSourceRouting } = harness()
+    global.sum('drum')
+    await seq.instrument('synth.clap')
+    expect(seq.output('drum')).toBe(seq)
+    await vi.waitFor(() => expect(setBusRouting).toHaveBeenCalledTimes(1))
+    expect(setSourceRouting).toHaveBeenCalledTimes(1)
+    expect(setSourceRouting).toHaveBeenCalledWith('plugin:kick', 0, 'seq-bus-0')
   })
 
   it('logs a transient warning (not error) and does not throw when SetBusRouting fails at transport', async () => {
@@ -208,7 +222,19 @@ describe('Sequence.send() → aux bus routing (MX.3/MX.4)', () => {
     const { global, seq } = harness()
     global.aux('rev')
     seq.midi('iac', 1)
-    expect(() => seq.send('rev', 0.5)).toThrow('only supported on audio sequences')
+    expect(() => seq.send('rev', 0.5)).toThrow(
+      'MIDI is sent to an external device and therefore has no mixer output destination',
+    )
+  })
+
+  it('routes an instrument main output to the allocated aux-send insert bus', async () => {
+    const { global, seq, setBusRouting, setSourceRouting } = harness()
+    global.aux('rev')
+    await seq.instrument('synth.clap')
+    expect(seq.send('rev', 0.5)).toBe(seq)
+    await vi.waitFor(() => expect(setBusRouting).toHaveBeenCalledTimes(1))
+    expect(setSourceRouting).toHaveBeenCalledTimes(1)
+    expect(setSourceRouting).toHaveBeenCalledWith('plugin:kick', 0, 'seq-bus-0')
   })
 
   it('is method-chainable (returns this)', () => {

@@ -132,6 +132,13 @@ export class Sequence {
   private _midiPort?: string // resolved actual port name
   private _midiChannel?: number // 1..16
   private _instrumentDeclared = false
+  /**
+   * Source-routing choke point の冪等キー。bus 名は sequence lifetime 中は安定だが、宣言順
+   * (`instrument()` before/after insert allocation) は両方あるため、成功/進行中 intent をここで
+   * 共有して二重発行を防ぐ。
+   */
+  private _instrumentSourceRoutingBus?: string
+  private _instrumentSourceRoutingPromise?: Promise<void>
   private _instrumentDetuneWarned = false
   private _gate = 0.8 // default gate length (fraction of slot). spec §1
   private _vel = 96 // default velocity 1..127. spec §1
@@ -352,10 +359,10 @@ export class Sequence {
     // branch below.
     const sumBus = this.global.resolveSumBus(destinationName)
     if (sumBus) {
-      if (this.isNoteSequence()) {
+      if (this.isMidi()) {
         throw new Error(
-          `Sequence '${name}': output("${destinationName}") to a sum bus is only supported on ` +
-            `audio sequences in v1 (not midi()/instrument() sequences).`,
+          `Sequence '${name}': output("${destinationName}") cannot target a mixer bus. ` +
+            `MIDI is sent to an external device and therefore has no mixer output destination.`,
         )
       }
       // §4.4.1: live 宛先の宣言は render bus をクリアする（stale な offline 宛先を残さない）。
@@ -363,6 +370,7 @@ export class Sequence {
       this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
       this._sumOutputBus = sumBus
       this.syncBusRouting()
+      this.syncInstrumentSourceRouting()
       return this
     }
 
@@ -423,18 +431,18 @@ export class Sequence {
   /**
    * Add a send to a declared aux/return bus (MX.3, #459/#453 M3). Post-fader fixed (after
    * this sequence's own insert, if any). Multiple sends fan out (repeated calls with
-   * different `auxName` accumulate; the same `auxName` overwrites its gain). Audio
-   * sequences only (mirrors `seq.effect()` / sum-routing restriction).
+   * different `auxName` accumulate; the same `auxName` overwrites its gain). Audio and
+   * instrument sequences use the mixer; MIDI has no mixer output path.
    */
   send(auxName: string, amount: number): this {
     const name = this.stateManager.getName() || 'sequence'
     if (!auxName || !auxName.trim()) {
       throw new Error(`Sequence '${name}': send(auxName, amount) requires a non-empty aux name.`)
     }
-    if (this.isNoteSequence()) {
+    if (this.isMidi()) {
       throw new Error(
-        `Sequence '${name}': send() is only supported on audio sequences in v1 (not ` +
-          `midi()/instrument() sequences).`,
+        `Sequence '${name}': send() cannot target a mixer bus. ` +
+          `MIDI is sent to an external device and therefore has no mixer output destination.`,
       )
     }
     const auxBus = this.global.resolveAuxBus(auxName)
@@ -451,6 +459,7 @@ export class Sequence {
     this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
     this._auxSends.set(auxBus, amount)
     this.syncBusRouting()
+    this.syncInstrumentSourceRouting()
     return this
   }
 
@@ -614,6 +623,7 @@ export class Sequence {
     }
     await this.global.instrument(name, pluginPath, pluginId, statePath)
     this._instrumentDeclared = true
+    await this.ensureInstrumentSourceRouting()
     return this
   }
 
@@ -670,22 +680,66 @@ export class Sequence {
   /**
    * Declare a per-sequence insert plugin (`seq.effect()` — PH.2b / #434 S3).
    * Processed **before** the master mix / `global.effect()` (master chain
-   * semantics are unchanged). Restricted to audio sequences: note sequences
-   * (`seq.midi()` / `seq.instrument()`) play through the plugin-note path or a
-   * MIDI bus, not the audio-event PlayAt path this insert taps, so declaring it
-   * there is a v1 error rather than a silent no-op.
+   * semantics are unchanged). Audio and instrument sequences use the mixer insert path;
+   * MIDI sequences produce instructions for an external device and have no mixer output.
    */
   async effect(value: string | RackRecipe, pluginId?: string): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
-    if (this.isNoteSequence()) {
+    if (this.isMidi()) {
       throw new Error(
-        `Sequence '${name}': seq.effect() is only supported on audio sequences in v1 ` +
-          `(not midi()/instrument() sequences — their playback does not go through the ` +
-          `insert-bus audio path).`,
+        `Sequence '${name}': seq.effect() cannot target a mixer bus. ` +
+          `MIDI is sent to an external device and therefore has no mixer output destination.`,
       )
     }
     this._insertBus = await this.global.sequenceEffect(name, value, pluginId)
+    await this.ensureInstrumentSourceRouting()
     return this
+  }
+
+  /**
+   * The sole instrument → insert routing choke point (#643). Both declaration orders call
+   * here; the marker is installed before the async send so concurrent calls share one request.
+   * `unit` is deliberately fixed at 0: the current 1-sequence/1-instrument model renders only
+   * the main plugin output.
+   */
+  private ensureInstrumentSourceRouting(): Promise<void> {
+    if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
+    const bus = this._insertBus
+    if (this._instrumentSourceRoutingBus === bus) {
+      return this._instrumentSourceRoutingPromise ?? Promise.resolve()
+    }
+    if (!this.audioEngine.setSourceRouting) {
+      return Promise.reject(new Error('Instrument mixer routing requires the Rust engine backend.'))
+    }
+
+    const name = this.stateManager.getName() || 'sequence'
+    this._instrumentSourceRoutingBus = bus
+    const pending = this.audioEngine
+      .setSourceRouting(`plugin:${name}`, 0, bus)
+      .catch((error) => {
+        if (this._instrumentSourceRoutingBus === bus) {
+          this._instrumentSourceRoutingBus = undefined
+        }
+        throw error
+      })
+      .finally(() => {
+        if (this._instrumentSourceRoutingPromise === pending) {
+          this._instrumentSourceRoutingPromise = undefined
+        }
+      })
+    this._instrumentSourceRoutingPromise = pending
+    return pending
+  }
+
+  /** Fire-and-forget adapter for synchronous `output()` / `send()` chaining. */
+  private syncInstrumentSourceRouting(): void {
+    void this.ensureInstrumentSourceRouting().catch((error) => {
+      const name = this.stateManager.getName() || 'sequence'
+      console.error(
+        `❌ ${name}: SetSourceRouting(plugin:${name}, unit=0) failed — instrument routing was NOT applied.`,
+        error,
+      )
+    })
   }
 
   getInsertBus(): string | undefined {

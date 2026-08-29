@@ -17,6 +17,86 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.408 feat(dsl): instrument に effect / output / send を解禁し、マスターフェーダーを直した (#643) (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) PR-2
+**実装**: Codex（DSL 表面 + E2E）/ **main**（分類修正 + マスターフェーダー）
+**差分**: 742 insertions / 28 deletions・**テスト 2080 → 2093**
+
+#### 1. instrument の DSL 表面（Codex）
+
+`effect()` / `output(sum)` / `send()` のガードを **midi / instrument で分割**し、instrument 側だけ解禁。
+`SetSourceRouting { source, unit: 0, target }` を冪等に発行する choke point を、宣言順の両方向
+（`instrument()` → `effect()` と逆）に置いた。respawn replay も既存 `busRoutings` の鏡像で実装。
+
+**実機 E2E 7本**を `orbitstudio-mcp-gated.spec.ts` に追加（+398行）。
+
+#### 2. 🔴 マスターフェーダーが誰にも効いていなかった（main）
+
+owner 指摘:
+
+> global.gain って各オーディオバス、インストバスに届く必要があるの？
+> **だってミキサーの機能考えてみてくださいよ。**
+
+**マスターフェーダーは合流後に1回だけ掛かるもので、各ソースへ配るものではない。**
+
+調査の結果、実装は二重に誤っていた:
+
+| | 旧実装 |
+|---|---|
+| audio シーケンス | `masterGainDb` を **イベントごとの gain に畳み込む**（`sequenceGainDb + masterGainDb`） |
+| instrument | note 経路に畳み込みが**無い** → **マスターが一切効かない** |
+| Rust の `set_global_gain` | **存在するが TS が一度も呼ばない**（定義のみ・呼び出し0件） |
+
+**Rust 側には最初から正しい実装があった**（`render_multi` の gain ramp・`next_gain_frame` の
+単一前進契約つき）。TS がそれを使わず、イベントへの畳み込みで辻褄を合わせていた。
+
+**修正**: 4層に配線（`types.ts` / `engine-backend.ts` / `rust-engine-player.ts` / `global.ts`）し、
+**畳み込みを除去**。`gainDbToAmplitude` で線形化して daemon へ送る。
+
+**副次的に直ったもの**: 旧実装は **バスに入る前**に master を掛けていたため、
+**マスターを絞るとリバーブの掛かり方まで変わっていた**。合流後に移したことで解消。
+
+`-Infinity`（完全無音）だけは畳み込みを残す — daemon の gain が 0.0 になるまでの ramp 中に
+音が漏れるのを避けるため。
+
+#### 3. 分類テストが正しく発火した（main）
+
+Codex が追加した private メソッド2つ（`ensureInstrumentSourceRouting` /
+`syncInstrumentSourceRouting`）が **DSL 語彙にも内部 API 除外リストにも無い**と検出された。
+
+これは **#528 の再来を防ぐテスト**（`setDocumentDirectory` の誤分類でエディタ評価が全滅した事故の
+再発防止）。**内部 API に分類**して解決。1つ目で止めず `InstrumentSourceRouting` を含む定義を
+全 grep して2つであることを確認した。
+
+#### 🔴 変異検証: マスターゲインは守るテストが1本も無かった
+
+修正前、**配線を無効化する変異（常に 0dB を送る）が 2088件すべてを生き残った**。
+テスト5本を追加し、実出力で確認:
+
+```text
+変異1（配線を無効化）              -> 2 failed / 3 passed
+変異2（畳み込みを戻す）            -> 3 failed / 2 passed
+復元後                              -> 5 passed
+```
+
+#### 🔴 変異検証の後始末で本体を2回失いかけた（記録）
+
+| # | 誤り | 結果 |
+|---|---|---|
+| 1 | バックアップを `$TMPDIR` へ | **sandbox の内外でパスが違い、バックアップが存在しなかった**（memory 記録済みの罠を踏み直し） |
+| 2 | `git checkout <file>` で変異を復元 | **未コミットの本体変更ごと巻き戻り**、マスターゲイン修正が2ファイルとも消えた。`git status` で気づいて再投入 |
+
+**根本的な解**: 変異検証は**本体をコミットしてから**行う。ファイル単位の復元は、未コミットの
+変更がある時に使えない。文字列単位で戻すか、コミット済みの状態を前提にすること。
+
+#### 検証（main が sandbox 外で実行）
+
+`npm run build` **exit=0（型エラー 0）** / `npm run lint` **exit=0** /
+**2093 passed / 62 skipped**（PR 前 2080 → **+13**）
+
+---
+
 ### 6.407 fix: レビュー5体の指摘を適用し、自分が作った Critical を1件直した (#643) (Aug 29, 2026)
 
 **Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#646](https://github.com/signalcompose/orbitscore/pull/646)

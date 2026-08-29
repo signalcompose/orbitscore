@@ -30,6 +30,9 @@ export type CommandMethod =
   // sends(aux) を非 RT で書き換える。daemon が feature `outproc-effect` 無効ビルドなら
   // OUTPROC_EFFECT_UNAVAILABLE を返す。
   | 'SetBusRouting'
+  // premaster source の `(source, unit)` を named insert bus または master(null) へ向ける
+  // 土台 routing（#643）。source は daemon が解釈しない opaque key。
+  | 'SetSourceRouting'
   | 'PluginNoteOn'
   | 'PluginNoteOff'
   | 'UnloadSample'

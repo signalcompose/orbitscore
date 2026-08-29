@@ -47,6 +47,7 @@ import {
   type PluginStateIdentity,
   type SavedProjectPluginState,
 } from './project-state-store'
+import { gainDbToAmplitude } from '../audio/audio-gain-utils'
 
 export interface ResolvedPluginStateTarget {
   identity: PluginStateIdentity
@@ -568,11 +569,28 @@ export class Global {
   }
 
   // Master effects management
+  /**
+   * マスターゲイン（dB）。引数なしで現在値を返す。
+   *
+   * 🔴 **設定値は daemon の mixer master へ渡す**（#643 PR-2）。合流後に1回だけ適用されるのが
+   * ミキサーのマスターフェーダーであり、**各ソースへ配るものではない**。旧方式は
+   * `masterGainDb` を **イベントごとの gain に畳み込んで**いたため、
+   * (a) **instrument には一切効かず**（note 経路に畳み込みが無い）、
+   * (b) audio でも **バスに入る前**に掛かっていた（マスターを絞るとリバーブの掛かり方まで変わる）。
+   *
+   * daemon 未接続時は no-op（`RustEnginePlayer.setGlobalGain` が握る）。
+   */
   gain(valueDb?: number): number | this {
     const result = this.effectsManager.gain(valueDb)
     if (typeof result === 'number') {
       return result
     }
+    // 線形 amplitude へ変換して daemon へ。fire-and-forget（DSL 表面を async にしない）。
+    void this.audioEngine
+      .setGlobalGain?.(gainDbToAmplitude(this.effectsManager.getMasterGainDb()))
+      ?.catch((error) => {
+        console.warn(`⚠️  global.gain(): failed to apply master gain to the mixer: ${error}`)
+      })
     return this
   }
 

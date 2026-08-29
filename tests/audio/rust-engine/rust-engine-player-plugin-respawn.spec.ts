@@ -20,6 +20,7 @@ interface FakeDaemon {
   savePluginState: ReturnType<typeof vi.fn>
   applyEffectChain: ReturnType<typeof vi.fn>
   setBusRouting: ReturnType<typeof vi.fn>
+  setSourceRouting: ReturnType<typeof vi.fn>
   quit: ReturnType<typeof vi.fn>
 }
 
@@ -53,6 +54,7 @@ function createHarness() {
       dropped: [],
     }),
     setBusRouting: vi.fn().mockResolvedValue(undefined),
+    setSourceRouting: vi.fn().mockResolvedValue(undefined),
     quit: vi.fn().mockResolvedValue(undefined),
   }
   Object.defineProperty(player, 'daemon', { value: daemon })
@@ -731,6 +733,86 @@ describe('RustEnginePlayer bus routing recovery after daemon respawn (MX.4 M3)',
     expect(daemon.setBusRouting).toHaveBeenCalledTimes(2)
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('failed to restore bus routing'),
+      expect.any(Error),
+    )
+  })
+})
+
+describe('RustEnginePlayer source routing recovery after daemon respawn (#643)', () => {
+  const players: RustEnginePlayer[] = []
+
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await Promise.all(players.splice(0).map((player) => player.quit()))
+  })
+
+  it('replays the last intended SetSourceRouting per source and unit after respawn', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setSourceRouting('plugin:lead', 0, 'seq-bus-0')
+    await player.setSourceRouting('plugin:bass', 0, 'seq-bus-1')
+    daemon.setSourceRouting.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setSourceRouting).toHaveBeenCalledTimes(2)
+    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:lead', 0, 'seq-bus-0')
+    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:bass', 0, 'seq-bus-1')
+  })
+
+  it('keeps source-routing intent after a transport failure for respawn replay', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    daemon.setSourceRouting.mockRejectedValueOnce(new Error('socket closed'))
+    await expect(player.setSourceRouting('plugin:lead', 0, 'seq-bus-0')).rejects.toThrow(
+      'socket closed',
+    )
+    daemon.setSourceRouting.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setSourceRouting).toHaveBeenCalledTimes(1)
+    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:lead', 0, 'seq-bus-0')
+  })
+
+  it('reverts a definitively rejected source-routing intent before respawn replay', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setSourceRouting('plugin:lead', 0, 'seq-bus-0')
+    daemon.setSourceRouting.mockRejectedValueOnce(
+      new DaemonProtocolError('MALFORMED_REQUEST', 'target must name an insert bus'),
+    )
+    await expect(player.setSourceRouting('plugin:lead', 0, 'aux-bus-0')).rejects.toThrow(
+      'target must name an insert bus',
+    )
+    daemon.setSourceRouting.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setSourceRouting).toHaveBeenCalledTimes(1)
+    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:lead', 0, 'seq-bus-0')
+  })
+
+  it('isolates source-routing replay failures and keeps respawn successful', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setSourceRouting('plugin:lead', 0, 'seq-bus-0')
+    await player.setSourceRouting('plugin:bass', 0, 'seq-bus-1')
+    daemon.setSourceRouting.mockClear()
+    daemon.setSourceRouting
+      .mockRejectedValueOnce(new Error('replay failed'))
+      .mockResolvedValueOnce(undefined)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setSourceRouting).toHaveBeenCalledTimes(2)
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('failed to restore source routing'),
       expect.any(Error),
     )
   })

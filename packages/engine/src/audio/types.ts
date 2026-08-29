@@ -175,6 +175,13 @@ export interface AudioEngine {
   /** CLOSE_UI の受理 ack ではなく UI_CLOSED_DONE まで待つ。 */
   closePluginUi?(target: PluginStateSaveTarget, index: number): Promise<PluginUiCloseCompletion>
 
+  /**
+   * マスターゲインを daemon の mixer へ設定する（#643 PR-2）。**線形 amplitude** を渡す
+   * （`gainDbToAmplitude` で変換済みのもの）。daemon は `render_multi` の gain ramp として
+   * **合流後に1回だけ**適用する — これがミキサーのマスターフェーダーの意味論であり、
+   * イベントごとに畳み込む旧方式（audio シーケンスのみ・instrument には効かなかった）を置き換える。
+   */
+  setGlobalGain?(amplitude: number, rampSec?: number): Promise<void>
   pluginNoteOn?(key: number, channel: number, velocity: number, instance?: string): Promise<void>
   pluginNoteOff?(key: number, channel: number, velocity?: number, instance?: string): Promise<void>
 
@@ -203,6 +210,12 @@ export interface AudioEngine {
     output: string | undefined,
     sends: { bus: string; gain: number }[],
   ): Promise<void>
+
+  /**
+   * Route one premaster source output. `source` is an opaque daemon key, `unit` is the
+   * format-neutral audio-output index, and `target: null` means Master (#643).
+   */
+  setSourceRouting?(source: string, unit: number, target: string | null): Promise<void>
 }
 
 /**

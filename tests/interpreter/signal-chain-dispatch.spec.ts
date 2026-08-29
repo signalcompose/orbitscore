@@ -621,6 +621,13 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'seamlessParameterUpdate',
       'restartLoopFromCurrentTime',
       // Output, engine-mode, and audio-buffer internals.
+      // #643 PR-2: instrument の insert bus 割当が確定した時点で `SetSourceRouting` を冪等に
+      // 発行する choke point。**利用者が書く語彙ではない** — `effect()` / `output()` /
+      // `instrument()` の各 DSL 表面から呼ばれる private な配線で、宣言順が両方向あり得るため
+      // 「揃った時に発行」を両側に置いている。
+      'ensureInstrumentSourceRouting',
+      // 同上の fire-and-forget 版（同期文脈の DSL 表面から呼ぶ）。
+      'syncInstrumentSourceRouting',
       'getOutputChannel',
       // #598 P1: 数値 output(1..16) が選んだ score-mode の render bus を読む純アクセサ。
       // `output()` という DSL 語彙が書き込み、RenderScore manifest の生成側が読む

@@ -39,13 +39,22 @@ function calculateEventGain(
     sequenceGainDb = generateRandomValue(gainRandom, -60, 12)
   }
 
-  // Apply mute and master gain
+  // 🔴 master gain は **ここで畳み込まない**（#643 PR-2）。マスターフェーダーは合流後に
+  // 1回だけ掛かるもので、各ソースへ配るものではない。daemon 側の `render_multi` が
+  // gain ramp として適用する（`Global.gain()` → `setGlobalGain`）。
+  //
+  // 旧実装は `sequenceGainDb + masterGainDb` を返しており、(a) instrument の note 経路には
+  // この畳み込みが無いため **マスターが一切効かず**、(b) audio でも **バスに入る前**に
+  // 掛かっていた（マスターを絞るとリバーブの掛かり方まで変わる）。
+  //
+  // `masterGainDb === -Infinity`（完全無音）だけは残す — daemon 側の gain が 0.0 になるまでの
+  // ramp 中に音が漏れるのを避けるため、発音側でも落とす。
   if (isMuted) {
     return -Infinity
   } else if (sequenceGainDb === -Infinity || masterGainDb === -Infinity) {
     return -Infinity
   } else {
-    return sequenceGainDb + masterGainDb
+    return sequenceGainDb
   }
 }
 
