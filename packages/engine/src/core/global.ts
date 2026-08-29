@@ -4,6 +4,7 @@
  */
 
 import { AudioEngine, type PluginStateSaveTarget, type PluginUiTarget } from '../audio/types'
+import { allocatePluginUiWindowToken } from '../audio/rust-engine/plugin-ui-window-token'
 import { StackElement, PlayElement } from '../parser/types'
 import { BoundValue, ChordVoice } from '../midi/chord/types'
 import { evaluateChordDefinition } from '../midi/chord/resolve-chords'
@@ -129,8 +130,14 @@ export class Global {
    * close 完了時に破棄する。respawn 等で残った stale エントリは次の open が上書きする。
    */
   private readonly openPluginUiSessions = new Map<
-    string,
-    { receiverId: string; instanceId: string; resolved: ResolvedPluginStateTarget }
+    number,
+    {
+      window: number
+      receiverId: string
+      instanceId: string
+      indexAtOpen: number
+      resolved: ResolvedPluginStateTarget
+    }
   >()
 
   /**
@@ -218,7 +225,7 @@ export class Global {
     // 冪等ガード自身が塞いでしまうため）。
     this.audioEngine.setPluginUiClosedByRespawnListener?.((target) => {
       const session = this.pluginUiSessionForDaemonTarget(target)
-      if (session) this.openPluginUiSessions.delete(session.instanceId)
+      if (session) this.openPluginUiSessions.delete(session.window)
     })
   }
 
@@ -887,7 +894,7 @@ export class Global {
     })
     // 保存が成功したときだけ破棄する。失敗時は残し、（保存できなかった事実は上の throw で
     // loud になった上で）次の open による上書きに委ねる。
-    this.openPluginUiSessions.delete(session.instanceId)
+    this.openPluginUiSessions.delete(session.window)
   }
 
   /**
@@ -1001,7 +1008,7 @@ export class Global {
   hasOpenPluginUi(receiverId: string, index: number): boolean {
     try {
       const entry = this.resolvePluginStateEntry(receiverId, index)
-      return this.openPluginUiSessions.has(entry.instanceId)
+      return this.pluginUiSessionForInstance(receiverId, entry.instanceId) !== undefined
     } catch {
       return false
     }
@@ -1010,20 +1017,36 @@ export class Global {
   /** Remove every host-side UI ledger entry for this volatile `(receiver,index)` address. */
   private forgetPluginUiSession(receiverId: string, index: number): void {
     const entry = this.resolvePluginStateEntry(receiverId, index)
-    this.openPluginUiSessions.delete(entry.instanceId)
+    const session = this.pluginUiSessionForInstance(receiverId, entry.instanceId)
+    if (session) this.openPluginUiSessions.delete(session.window)
   }
 
   /** Record the resolved child session and preserve one-entry-per-address invariants. */
   private recordPluginUiSession(
+    window: number,
     receiverId: string,
     instanceId: string,
+    indexAtOpen: number,
     resolved: ResolvedPluginStateTarget,
   ): void {
-    this.openPluginUiSessions.set(instanceId, {
+    for (const [candidateWindow, session] of this.openPluginUiSessions) {
+      if (session.receiverId === receiverId && session.instanceId === instanceId) {
+        this.openPluginUiSessions.delete(candidateWindow)
+      }
+    }
+    this.openPluginUiSessions.set(window, {
+      window,
       receiverId,
       instanceId,
+      indexAtOpen,
       resolved,
     })
+  }
+
+  private pluginUiSessionForInstance(receiverId: string, instanceId: string) {
+    return [...this.openPluginUiSessions.values()].find(
+      (session) => session.receiverId === receiverId && session.instanceId === instanceId,
+    )
   }
 
   private currentIndexForInstance(receiverId: string, instanceId: string): number | undefined {
@@ -1032,18 +1055,32 @@ export class Global {
     )?.index
   }
 
-  private pluginUiSessionForDaemonTarget(
-    target: PluginUiTarget,
-  ): { receiverId: string; instanceId: string; resolved: ResolvedPluginStateTarget } | undefined {
-    for (const session of this.openPluginUiSessions.values()) {
-      const currentIndex = this.currentIndexForInstance(session.receiverId, session.instanceId)
-      if (currentIndex !== target.index) continue
+  private pluginUiSessionForDaemonTarget(target: PluginUiTarget):
+    | {
+        window: number
+        receiverId: string
+        instanceId: string
+        indexAtOpen: number
+        resolved: ResolvedPluginStateTarget
+      }
+    | undefined {
+    if (target.window !== undefined) {
+      const session = this.openPluginUiSessions.get(target.window)
+      if (!session) return undefined
       const daemonTarget = session.resolved.daemonTarget
       if (target.role === 'instrument') {
-        if (daemonTarget.role === 'instrument' && daemonTarget.instance === target.instance) {
-          return session
-        }
-      } else if (daemonTarget.role === 'effect' && daemonTarget.bus === target.bus) {
+        return daemonTarget.role === 'instrument' && daemonTarget.instance === target.instance
+          ? session
+          : undefined
+      }
+      return daemonTarget.role === 'effect' && daemonTarget.bus === target.bus ? session : undefined
+    }
+    // Legacy non-indexed instrument events carry no window. Match only the stable child endpoint;
+    // target.index is open-time display data and is never an attribution key.
+    if (target.role === 'effect') return undefined
+    for (const session of this.openPluginUiSessions.values()) {
+      const daemonTarget = session.resolved.daemonTarget
+      if (daemonTarget.role === 'instrument' && daemonTarget.instance === target.instance) {
         return session
       }
     }
@@ -1124,8 +1161,9 @@ export class Global {
     expectedName?: string,
   ): Promise<void> {
     if (this.hasOpenPluginUi(receiverId, index)) return
+    const window = allocatePluginUiWindowToken()
     try {
-      await this.openPluginUi(receiverId, index, expectedName)
+      await this.openPluginUi(receiverId, index, expectedName, window)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       // 成功扱いにしてよいのは「UI が既に開いている / 開きつつある」拒否だけ。
@@ -1144,7 +1182,7 @@ export class Global {
         // the recovery boundary. A missing/replaced target must remain loud;
         // registering a guessed identity would corrupt subsequent close/save.
         const entry = this.resolvePluginStateEntry(receiverId, index)
-        this.recordPluginUiSession(receiverId, entry.instanceId, entry.resolved)
+        this.recordPluginUiSession(window, receiverId, entry.instanceId, index, entry.resolved)
         return
       }
       throw error
@@ -1155,6 +1193,7 @@ export class Global {
     receiverId: string,
     index: number,
     expectedName?: string,
+    window = allocatePluginUiWindowToken(),
   ): Promise<PluginUiOperationResult> {
     const entry = this.resolvePluginStateEntry(receiverId, index)
     const resolved = entry.resolved
@@ -1179,6 +1218,7 @@ export class Global {
         resolved.daemonTarget,
         index,
         `OrbitScore — ${actualName} (${receiverId}:${index})`,
+        window,
       )
     } catch (error) {
       throw this.pluginUiOperationError(receiverId, index, error)
@@ -1190,7 +1230,7 @@ export class Global {
     // daemonTarget が変わる再 open では複合キーが別になり set では上書きされず、
     // closePluginUi の find が Map の挿入順＝stale 側を掴んでしまうため。
     // evict は daemon open 成功後に行う（open 失敗時に旧セッションを失わない）。
-    this.recordPluginUiSession(receiverId, entry.instanceId, resolved)
+    this.recordPluginUiSession(window, receiverId, entry.instanceId, index, resolved)
     return {
       receiver: receiverId,
       index,
@@ -1209,7 +1249,7 @@ export class Global {
     } catch (error) {
       throw this.pluginUiOperationError(receiverId, index, error)
     }
-    const session = this.openPluginUiSessions.get(entry.instanceId)
+    const session = this.pluginUiSessionForInstance(receiverId, entry.instanceId)
     if (!session) {
       throw this.pluginUiOperationError(
         receiverId,
@@ -1227,7 +1267,18 @@ export class Global {
     }
     let completion: Awaited<ReturnType<NonNullable<AudioEngine['closePluginUi']>>>
     try {
-      completion = await this.audioEngine.closePluginUi(entry.resolved.daemonTarget, index)
+      const currentIndex = this.currentIndexForInstance(session.receiverId, session.instanceId)
+      if (currentIndex === undefined) {
+        throw new Error(`Plugin UI instance '${session.instanceId}' is no longer present.`)
+      }
+      completion = await this.audioEngine.closePluginUi(
+        {
+          ...session.resolved.daemonTarget,
+          chainPath: [session.resolved.identity.role === 'effect' ? currentIndex - 1 : 0],
+        },
+        currentIndex,
+        session.window,
+      )
     } catch (error) {
       // ウィンドウの生死が不明（close タイムアウト等）なのでセッションは破棄しない。
       // prepareInstrumentReplacement と違い、明示 close / sum.ui(false) は従来どおり
@@ -1237,7 +1288,7 @@ export class Global {
     }
     // DONE を受けた = ウィンドウは確実に閉じた。safepoint 保存成功時は保存側が破棄済み。
     // timeout-without-save でもウィンドウは消えているので、ここで必ず破棄する。
-    this.openPluginUiSessions.delete(session.instanceId)
+    this.openPluginUiSessions.delete(session.window)
     if (completion === 'timeout-without-save') {
       throw this.pluginUiOperationError(
         receiverId,
@@ -1300,7 +1351,8 @@ export class Global {
 
   /** Close a disappearing effect UI before ApplyEffectChain performs its atomic drop/save. */
   private async prepareEffectReplacement(receiverId: string, oldSlot: PluginSlot): Promise<void> {
-    if (this.openPluginUiSessions.has(oldSlot.instanceId)) {
+    const session = this.pluginUiSessionForInstance(receiverId, oldSlot.instanceId)
+    if (session) {
       const currentIndex = this.currentIndexForInstance(receiverId, oldSlot.instanceId)
       if (currentIndex === undefined) return
       try {
@@ -1308,7 +1360,7 @@ export class Global {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         if (!message.includes('timeout-without-save')) {
-          this.openPluginUiSessions.delete(oldSlot.instanceId)
+          this.openPluginUiSessions.delete(session.window)
           throw error
         }
         effectReplaceNotice(

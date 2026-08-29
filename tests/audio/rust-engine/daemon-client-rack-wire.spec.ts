@@ -60,9 +60,9 @@ describe('#628 daemon-client rack wire without a socket', () => {
     const target = { role: 'effect' as const, bus: 'seq-bus-2', chainPath: [2] }
 
     await client.savePluginState(target, '/states/c.state')
-    await client.openPluginUi(target, 1, 'C')
-    await client.acceptClosePluginUi(target, 1)
-    await client.ackUiSafepoint(target, 1, 7, 11)
+    await client.openPluginUi(target, 1, 'C', 99)
+    await client.acceptClosePluginUi(target, 1, 99)
+    await client.ackUiSafepoint(target, 1, 99, 7, 11)
 
     expect(request).toHaveBeenCalledTimes(4)
     expect(request).toHaveBeenNthCalledWith(1, 'GetPluginState', {
@@ -74,15 +74,18 @@ describe('#628 daemon-client rack wire without a socket', () => {
     expect(request).toHaveBeenNthCalledWith(2, 'OpenPluginUI', {
       target: { role: 'effect', bus: 'seq-bus-2' },
       chain_path: [2],
+      window: 99,
       windowTitle: 'C',
     })
     expect(request).toHaveBeenNthCalledWith(3, 'ClosePluginUI', {
       target: { role: 'effect', bus: 'seq-bus-2' },
       chain_path: [2],
+      window: 99,
     })
     expect(request).toHaveBeenNthCalledWith(4, 'AckUiSafepoint', {
       target: { role: 'effect', bus: 'seq-bus-2' },
       chain_path: [2],
+      window: 99,
       generation: 7,
       evt_seq: 11,
     })

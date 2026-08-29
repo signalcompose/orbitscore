@@ -181,7 +181,11 @@ describe('PluginInstrumentManager', () => {
     await global.instrument('kick', 'other.vst3', 'new-id')
 
     expect(closePluginUi).toHaveBeenCalledTimes(1)
-    expect(closePluginUi).toHaveBeenCalledWith({ role: 'instrument', instance: 'plugin:kick' }, 0)
+    expect(closePluginUi).toHaveBeenCalledWith(
+      { role: 'instrument', instance: 'plugin:kick', chainPath: [0] },
+      0,
+      expect.any(Number),
+    )
     expect(save).toHaveBeenCalledTimes(1)
     expect(save).toHaveBeenCalledWith(
       {
@@ -234,6 +238,7 @@ describe('PluginInstrumentManager', () => {
       { role: 'instrument', instance: 'plugin:kick' },
       0,
       'OrbitScore — synth (kick:0)',
+      expect.any(Number),
     )
     expect(global.hasOpenPluginUi('kick', 0)).toBe(true)
   })

@@ -55,10 +55,10 @@ export type PluginStateSaveTarget =
   | { role: 'effect'; bus?: string; chainPath?: readonly number[] }
   | { role: 'instrument'; instance: string; chainPath?: readonly number[] }
 
-/** daemon の plugin UI event が返す、chain index つきの解決済み宛先。 */
+/** daemon の plugin UI event が返す解決済み宛先。index は open 時点の表示情報に限る。 */
 export type PluginUiTarget =
-  | { role: 'effect'; bus?: string; index: number }
-  | { role: 'instrument'; instance: string; index: number }
+  | { role: 'effect'; bus?: string; index: number; window?: number }
+  | { role: 'instrument'; instance: string; index: number; window?: number }
 
 export type PluginUiCloseCompletion = 'safepoint-completed' | 'timeout-without-save'
 
@@ -170,10 +170,19 @@ export interface AudioEngine {
   setPluginUiClosedByRespawnListener?(listener: PluginUiClosedByRespawnListener): void
 
   /** plugin view を生成・attach し、ウィンドウ実在後の完了 ack まで待つ。 */
-  openPluginUi?(target: PluginStateSaveTarget, index: number, windowTitle: string): Promise<void>
+  openPluginUi?(
+    target: PluginStateSaveTarget,
+    index: number,
+    windowTitle: string,
+    window: number,
+  ): Promise<void>
 
   /** CLOSE_UI の受理 ack ではなく UI_CLOSED_DONE まで待つ。 */
-  closePluginUi?(target: PluginStateSaveTarget, index: number): Promise<PluginUiCloseCompletion>
+  closePluginUi?(
+    target: PluginStateSaveTarget,
+    index: number,
+    window: number,
+  ): Promise<PluginUiCloseCompletion>
 
   /**
    * マスターゲインを daemon の mixer へ設定する（#643 PR-2）。**線形 amplitude** を渡す

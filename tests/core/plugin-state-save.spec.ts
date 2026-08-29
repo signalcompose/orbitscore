@@ -529,6 +529,7 @@ describe('plugin UI address guard and loud diagnostics (#474 P4c)', () => {
       { role: 'instrument', instance: 'plugin:lead' },
       0,
       'OrbitScore — Massive-X (lead:0)',
+      expect.any(Number),
     )
   })
 
@@ -553,6 +554,7 @@ describe('plugin UI address guard and loud diagnostics (#474 P4c)', () => {
       { role: 'instrument', instance: 'plugin:lead' },
       0,
       'OrbitScore — Café (lead:0)',
+      expect.any(Number),
     )
   })
 
@@ -584,6 +586,7 @@ describe('plugin UI address guard and loud diagnostics (#474 P4c)', () => {
     expect(audio.closePluginUi).toHaveBeenCalledWith(
       { role: 'effect', bus: 'sum-bus-0', chainPath: [0] },
       1,
+      expect.any(Number),
     )
   })
 
@@ -619,7 +622,8 @@ describe('plugin UI open-time identity policy (#601 I1/I2)', () => {
     expect(serumSlot).toBeDefined()
     vi.spyOn(effectManager, 'chainFor').mockReturnValue([{ ...serumSlot, normalizedName: 'Diva' }])
 
-    await safepointSaver(audio)({ role: 'effect', bus: serumSlot.bus, index: 1 })
+    const window = audio.openPluginUi.mock.calls[0]![3]
+    await safepointSaver(audio)({ role: 'effect', bus: serumSlot.bus, index: 999, window })
 
     // 実際に編集していたのは open 時の Serum。差し替え後の Diva に保存してはならない。
     expect(audio.savePluginState).toHaveBeenCalledTimes(1)
@@ -659,14 +663,11 @@ describe('plugin UI open-time identity policy (#601 I1/I2)', () => {
     expect(audio.closePluginUi).toHaveBeenCalledWith(
       { role: 'effect', bus: serumSlot.bus, chainPath: [0] },
       1,
+      expect.any(Number),
     )
   })
 
-  // 名前は実態どおり「safepoint 保存」の index 区別（`pluginUiSessionKey` 経由）。
-  // close 側の `find` の index 選別は下の
-  // 'closes the session selected by index …' が別途固定している（#597 と同型の
-  // 「テスト名が述べる性質と実際に通す経路のずれ」を避けるため明示しておく）。
-  it('resolves an ambiguous same-bus safepoint save to the open-time slot by index', async () => {
+  it('S3 resolves an ambiguous same-bus safepoint by window even when target.index is unrelated', async () => {
     const { directory, audio, global } = harness()
     await global.sequenceEffect('lead', './Echo.clap')
     const effectManager = (global as any).sequenceEffectManager
@@ -680,7 +681,13 @@ describe('plugin UI open-time identity policy (#601 I1/I2)', () => {
     await global.openPluginUi('lead', 1, 'Echo')
     await global.openPluginUi('lead', 2, 'Echo')
 
-    await safepointSaver(audio)({ role: 'effect', bus: firstEcho.bus, index: 1 })
+    const firstWindow = audio.openPluginUi.mock.calls[0]![3]
+    await safepointSaver(audio)({
+      role: 'effect',
+      bus: firstEcho.bus,
+      index: 999,
+      window: firstWindow,
+    })
 
     expect(audio.savePluginState).toHaveBeenCalledTimes(1)
     const occurrenceZero = {
@@ -705,9 +712,9 @@ describe('plugin UI open-time identity policy (#601 I1/I2)', () => {
     await global.sequenceEffect('lead', './Serum.clap')
     const bus = (global as any).sequenceEffectManager.chainFor('lead')[0].bus
 
-    await expect(safepointSaver(audio)({ role: 'effect', bus, index: 1 })).rejects.toThrow(
-      /no recorded open session; refusing to guess a save identity/,
-    )
+    await expect(
+      safepointSaver(audio)({ role: 'effect', bus, index: 1, window: 999 }),
+    ).rejects.toThrow(/no recorded open session; refusing to guess a save identity/)
     expect(audio.savePluginState).toHaveBeenCalledTimes(0)
   })
 
@@ -722,9 +729,10 @@ describe('plugin UI open-time identity policy (#601 I1/I2)', () => {
     await bare.openPluginUi('lead', 1, 'Serum')
     const bus = (bare as any).sequenceEffectManager.chainFor('lead')[0].bus
 
-    await expect(safepointSaver(audio, 1)({ role: 'effect', bus, index: 1 })).rejects.toThrow(
-      /before the document has a directory/,
-    )
+    const window = audio.openPluginUi.mock.calls.at(-1)![3]
+    await expect(
+      safepointSaver(audio, 1)({ role: 'effect', bus, index: 1, window }),
+    ).rejects.toThrow(/before the document has a directory/)
     expect(audio.savePluginState).toHaveBeenCalledTimes(0)
   })
 
@@ -752,7 +760,8 @@ describe('plugin UI open-time identity policy (#601 I1/I2)', () => {
     const bus = (global as any).sequenceEffectManager.chainFor('lead')[0].bus
 
     // ユーザーがウィンドウを手で閉じた → daemon の safepoint で保存完了
-    await safepointSaver(audio)({ role: 'effect', bus, index: 1 })
+    const window = audio.openPluginUi.mock.calls[0]![3]
+    await safepointSaver(audio)({ role: 'effect', bus, index: 1, window })
     expect(audio.savePluginState).toHaveBeenCalledTimes(1)
 
     // 窓はもう無い。保存時に破棄されていなければここが成功してしまう。
@@ -791,6 +800,7 @@ describe('plugin UI open-time identity policy (#601 I1/I2)', () => {
     expect(audio.closePluginUi).toHaveBeenCalledWith(
       { role: 'effect', bus: echoSlot.bus, chainPath: [1] },
       2,
+      expect.any(Number),
     )
 
     // index 1 のセッションは無傷で残っている（誤って選ばれ消費されていない）。
@@ -833,6 +843,7 @@ describe('plugin UI open-time identity policy (#601 I1/I2)', () => {
     expect(audio.closePluginUi).toHaveBeenCalledWith(
       { role: 'effect', bus: 'seq-bus-9-different', chainPath: [0] },
       1,
+      expect.any(Number),
     )
   })
 

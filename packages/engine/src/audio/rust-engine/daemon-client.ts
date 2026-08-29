@@ -598,31 +598,40 @@ export class DaemonClient extends EventEmitter {
     target: PluginStateSaveTarget,
     index: number,
     windowTitle: string,
+    window: number,
   ): Promise<void> {
     await this.request('OpenPluginUI', {
       target: this.wirePluginTarget(target),
       chain_path: this.pluginChainPath(target, index),
+      window,
       windowTitle,
     })
   }
 
   /** この Promise は Phase A の受理 ack。close 完了は player が DONE event で判定する。 */
-  async acceptClosePluginUi(target: PluginStateSaveTarget, index: number): Promise<void> {
+  async acceptClosePluginUi(
+    target: PluginStateSaveTarget,
+    index: number,
+    window: number,
+  ): Promise<void> {
     await this.request('ClosePluginUI', {
       target: this.wirePluginTarget(target),
       chain_path: this.pluginChainPath(target, index),
+      window,
     })
   }
 
   async ackUiSafepoint(
     target: PluginStateSaveTarget,
     index: number,
+    window: number,
     generation: number,
     evtSeq: number,
   ): Promise<void> {
     await this.request('AckUiSafepoint', {
       target: this.wirePluginTarget(target),
       chain_path: this.pluginChainPath(target, index),
+      window,
       generation,
       evt_seq: evtSeq,
     })
