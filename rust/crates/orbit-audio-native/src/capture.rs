@@ -85,12 +85,19 @@ impl RiffWavWriter {
     /// seek は BufWriter を flush してから inner を動かす（std documented）ので、
     /// 追記位置は `SeekFrom::End(0)` で正しく復元できる。
     pub fn sync_header(&mut self) -> io::Result<()> {
-        let data_bytes = u32::try_from(self.samples_written.saturating_mul(4)).unwrap_or(u32::MAX);
-        self.writer.seek(SeekFrom::Start(0))?;
-        self.writer
-            .write_all(&build_header(self.sample_rate, self.channels, data_bytes))?;
-        self.writer.seek(SeekFrom::End(0))?;
-        Ok(())
+        // 🔴 `seek` は使わない。`BufWriter::seek` は**内部バッファを強制 flush してから**
+        // inner を動かすので、毎秒それを繰り返すと本来のバッチングを乱す。`write_at` は
+        // ファイルのカーソルを動かさず flush も誘発しないため、追記は素直に進んだまま
+        // header だけを上書きできる（macOS 限定プロジェクトなので `std::os::unix` は使える）。
+        use std::os::unix::fs::FileExt;
+        let header = build_header(self.sample_rate, self.channels, self.data_bytes());
+        self.writer.get_ref().write_all_at(&header, 0)
+    }
+
+    /// `data` チャンクのバイト数。`sync_header` と [`Self::finalize`] が共有する
+    /// （saturating の意味論——4GiB 超は `u32::MAX` へ丸める既知の制限——を1箇所に置く）。
+    fn data_bytes(&self) -> u32 {
+        u32::try_from(self.samples_written.saturating_mul(4)).unwrap_or(u32::MAX)
     }
 
     /// 先頭に seek して RIFF / data チャンクの size を実値に patch し、flush する。
@@ -102,7 +109,7 @@ impl RiffWavWriter {
     /// saturating して壊れた header にはしない。
     pub fn finalize(mut self) -> io::Result<()> {
         self.writer.flush()?;
-        let data_bytes = u32::try_from(self.samples_written.saturating_mul(4)).unwrap_or(u32::MAX);
+        let data_bytes = self.data_bytes();
         // BufWriter<File>::seek は seek 前に内部バッファを flush してから inner を seek する
         // (std documented behavior)ので、直前の flush と合わせて安全に先頭へ戻れる。
         self.writer.seek(SeekFrom::Start(0))?;

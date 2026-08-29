@@ -204,7 +204,7 @@ export function filterCatalogEntries(
   })
 }
 
-function normalizeCatalogKey(value: string): string {
+export function normalizeCatalogKey(value: string): string {
   return value.trim().normalize('NFC').toLowerCase()
 }
 

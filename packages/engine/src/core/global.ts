@@ -12,6 +12,7 @@ import { PREDEFINED_CHORDS } from '../midi/chord/predefined-chords'
 import { PluginNoteOutput } from '../midi/plugin-note-output'
 import type { RackRecipe } from '../signal-chain/rack'
 import { gainDbToAmplitude } from '../audio/audio-gain-utils'
+import { pluginChainPathFor } from '../audio/rust-engine/daemon-client'
 
 import { Sequence } from './sequence'
 import { Scheduler, GlobalState } from './global/types'
@@ -49,6 +50,20 @@ import {
   type PluginStateIdentity,
   type SavedProjectPluginState,
 } from './project-state-store'
+
+/**
+ * 開いている plugin UI 1 枚ぶんの簿記（#633）。
+ *
+ * 🔴 キーは **window token**（open 時に TS が採番し close まで不変）。位置（index）は
+ * APPLY で動くので帰属には使わない — `indexAtOpen` は表示・ログ専用である。
+ */
+type PluginUiSession = {
+  window: number
+  receiverId: string
+  instanceId: string
+  indexAtOpen: number
+  resolved: ResolvedPluginStateTarget
+}
 
 export interface ResolvedPluginStateTarget {
   identity: PluginStateIdentity
@@ -129,16 +144,7 @@ export class Global {
    * 「それらしい別プラグイン」へ黙って保存される）。エントリは safepoint 保存成功時と
    * close 完了時に破棄する。respawn 等で残った stale エントリは次の open が上書きする。
    */
-  private readonly openPluginUiSessions = new Map<
-    number,
-    {
-      window: number
-      receiverId: string
-      instanceId: string
-      indexAtOpen: number
-      resolved: ResolvedPluginStateTarget
-    }
-  >()
+  private readonly openPluginUiSessions = new Map<number, PluginUiSession>()
 
   /**
    * Creates a new Global instance with all manager components
@@ -890,7 +896,7 @@ export class Global {
     }
     await this.projectStateStore(projectDirectory).save(session.resolved.identity, {
       ...session.resolved.daemonTarget,
-      chainPath: [session.resolved.identity.role === 'effect' ? currentIndex - 1 : 0],
+      chainPath: pluginChainPathFor(session.resolved.identity, currentIndex),
     })
     // 保存が成功したときだけ破棄する。失敗時は残し、（保存できなかった事実は上の throw で
     // loud になった上で）次の open による上書きに委ねる。
@@ -1043,8 +1049,18 @@ export class Global {
     })
   }
 
+  /** Map をコピーせずに session を線形探索する。同時 open 数は通常一桁。 */
+  private findPluginUiSession(
+    predicate: (session: PluginUiSession) => boolean,
+  ): PluginUiSession | undefined {
+    for (const session of this.openPluginUiSessions.values()) {
+      if (predicate(session)) return session
+    }
+    return undefined
+  }
+
   private pluginUiSessionForInstance(receiverId: string, instanceId: string) {
-    return [...this.openPluginUiSessions.values()].find(
+    return this.findPluginUiSession(
       (session) => session.receiverId === receiverId && session.instanceId === instanceId,
     )
   }
@@ -1055,15 +1071,7 @@ export class Global {
     )?.index
   }
 
-  private pluginUiSessionForDaemonTarget(target: PluginUiTarget):
-    | {
-        window: number
-        receiverId: string
-        instanceId: string
-        indexAtOpen: number
-        resolved: ResolvedPluginStateTarget
-      }
-    | undefined {
+  private pluginUiSessionForDaemonTarget(target: PluginUiTarget): PluginUiSession | undefined {
     if (target.window !== undefined) {
       const session = this.openPluginUiSessions.get(target.window)
       if (!session) return undefined
@@ -1274,7 +1282,7 @@ export class Global {
       completion = await this.audioEngine.closePluginUi(
         {
           ...session.resolved.daemonTarget,
-          chainPath: [session.resolved.identity.role === 'effect' ? currentIndex - 1 : 0],
+          chainPath: pluginChainPathFor(session.resolved.identity, currentIndex),
         },
         currentIndex,
         session.window,

@@ -20,6 +20,7 @@
  */
 
 import type { DiagnosticIssue } from './diagnostics-analysis'
+import { normalizeCatalogKey } from './plugin-catalog-completion'
 import type { PluginCatalogEntry } from './plugin-catalog-reader'
 
 /** Structural words that carry the enclosing verb's role into a nested region. */
@@ -33,11 +34,6 @@ const KNOWN_PLUGIN_EXTENSIONS = ['.clap', '.vst3', '.component']
 const KNOWN_PLUGIN_FORMATS = ['clap', 'vst3']
 /** Mirrors `acceptedFormatsForRole()` — the formats v1 can actually host. */
 const HOSTABLE_FORMATS = ['clap', 'vst3']
-
-/** Mirrors `plugin-resolver.ts` `normalizeCatalogKey`. */
-export function normalizeCatalogKey(value: string): string {
-  return value.trim().normalize('NFC').toLowerCase()
-}
 
 /** Mirrors `plugin-resolver.ts` `isPluginPathSpec` (PC.2 discriminator). */
 export function isPluginPathSpec(spec: string): boolean {
@@ -86,9 +82,10 @@ export function classifyCatalogSpec(
   const vendorKey = formatKey === undefined ? qualifierKey : undefined
   const bareName = slashIndex === -1 ? spec : spec.slice(slashIndex + 1)
 
-  let candidates = entries.filter(
-    (entry) => normalizeCatalogKey(entry.name) === normalizeCatalogKey(bareName),
-  )
+  // 🔴 `bareName` の正規化はループ不変。ここは**打鍵ごと**に走る診断経路なので、
+  // 342 件のカタログに対して毎回 `trim().normalize('NFC').toLowerCase()` を呼び直さない。
+  const normalizedBareName = normalizeCatalogKey(bareName)
+  let candidates = entries.filter((entry) => normalizeCatalogKey(entry.name) === normalizedBareName)
 
   if (formatKey !== undefined) {
     const byFormat = candidates.filter((e) => normalizeCatalogKey(e.format) === formatKey)

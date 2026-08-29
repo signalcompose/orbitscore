@@ -71,6 +71,8 @@ if (gated && !appAvailable) {
   )
 }
 
+import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
+
 const REPO_ROOT = path.resolve(__dirname, '../..')
 
 // ──────────────────────────────────────────────────────────────────────
@@ -94,15 +96,23 @@ const REPO_ROOT = path.resolve(__dirname, '../..')
  * 弱い分は「疑わしきは落とす」側に倒す（等しい場合は通す）。
  */
 function assertDaemonBinaryIsNotStale(): void {
-  // 🔴 見るのは **拡張が同梱しているコピー**。ここが実際に spawn される
-  // （`daemon-client.ts` の解決順で、engine が `<extension>/engine/dist/` から動くため
-  // `<extension>/engine/bin/<platform>/` が当たる）。`rust/target/release/` を見ても、
-  // 2026-08-29 の事故——cargo だけ回して `npm run build` を飛ばし、17:49 のコピーで
-  // 実機 E2E を6回走らせた——は止められない。
-  const binary = path.join(
-    REPO_ROOT,
-    `packages/vscode-extension/engine/bin/${process.platform}-${process.arch}/orbit-audio-daemon`,
-  )
+  // 🔴 パスを決め打ちしない。**実際に spawn される候補を決めるのは
+  // `resolveDaemonBinaryPath()` であり、それが唯一の正本**（explicit → env →
+  // monorepo-release → monorepo-debug → extension-bundle）。
+  //
+  // この PR は同じ判断を 2 回間違えている: 最初 `rust/target/release/` を見る版を書き
+  // （2f44c955）、同梱パスへ直した（8e1baa28）。**どちらも「どのパスが使われるか」の
+  // 推測**であり、env で上書きされた瞬間に崩れる。ガードが防ごうとしている事故
+  // （間違ったバイナリを測る）を、ガード自身が再導入しうる形だった。
+  let binary: string
+  try {
+    binary = resolveDaemonBinaryPath().path
+  } catch (error) {
+    throw new Error(
+      `gated E2E: could not resolve the daemon binary — ${String(error)}\n` +
+        'Build it first:\n  npm run build',
+    )
+  }
   if (!fs.existsSync(binary)) {
     throw new Error(
       `gated E2E: ${binary} does not exist. Build it first:\n` +

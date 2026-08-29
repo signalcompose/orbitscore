@@ -97,6 +97,28 @@ struct ClapControl {
     standard: bool,
 }
 
+/// UI コマンドを `UiService` へ振り分ける。
+///
+/// CLAP と VST3 の `ControlStage::handle_ui` はロジックが型に依存しないので、ここに集約する
+/// （両者とも `ui: UiService` を持つだけ）。#633 で分岐が 1 行から 10 行へ育った際、
+/// 2 箇所を同時に直す必要が生じたため切り出した。
+///
+/// `window` が `Some` なら rack（indexed）経路、`None` なら非 indexed（instrument / 旧単発
+/// effect child）経路。close は title を運ばない。
+fn dispatch_ui_command(
+    ui: &UiService,
+    open: bool,
+    title: Option<&str>,
+    window: Option<u64>,
+) -> CommandOutcome {
+    let kind = if open { CMD_OPEN_UI } else { CMD_CLOSE_UI };
+    let title = if open { title } else { None };
+    match window {
+        Some(window) => ui.handle_indexed_command(kind, title, window),
+        None => ui.handle_command(kind, title),
+    }
+}
+
 impl ControlStage for ClapControl {
     fn capture_state(&mut self) -> Result<Vec<u8>, String> {
         if self.standard {
@@ -136,16 +158,7 @@ impl ControlStage for ClapControl {
     }
 
     fn handle_ui(&self, open: bool, title: Option<&str>, window: Option<u64>) -> CommandOutcome {
-        let kind = if open { CMD_OPEN_UI } else { CMD_CLOSE_UI };
-        match window {
-            Some(window) => {
-                self.ui
-                    .handle_indexed_command(kind, if open { title } else { None }, window)
-            }
-            None => self
-                .ui
-                .handle_command(kind, if open { title } else { None }),
-        }
+        dispatch_ui_command(&self.ui, open, title, window)
     }
 
     fn tick_ui(&self) {
@@ -185,16 +198,7 @@ impl ControlStage for Vst3Control {
     }
 
     fn handle_ui(&self, open: bool, title: Option<&str>, window: Option<u64>) -> CommandOutcome {
-        let kind = if open { CMD_OPEN_UI } else { CMD_CLOSE_UI };
-        match window {
-            Some(window) => {
-                self.ui
-                    .handle_indexed_command(kind, if open { title } else { None }, window)
-            }
-            None => self
-                .ui
-                .handle_command(kind, if open { title } else { None }),
-        }
+        dispatch_ui_command(&self.ui, open, title, window)
     }
 
     fn tick_ui(&self) {

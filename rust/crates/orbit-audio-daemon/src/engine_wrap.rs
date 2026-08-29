@@ -3521,6 +3521,14 @@ pub(crate) trait OutProcRole: Sized {
     type Supervisor: Send;
     const ROLE_NAME: &'static str;
 
+    /// この role の child が **UI を index 付きで複数枚持てる**か（#633）。
+    ///
+    /// rack（effect）は 1 child に複数 stage を載せるので `index_binding` を持つ。instrument は
+    /// いま 1 child 1 UI なので持たない。**呼び出し側で `ROLE_NAME` を文字列比較しない** —
+    /// 綴りを間違えても型エラーにならず、instrument 側が静かに壊れる。マルチティンバー
+    /// （#647）で instrument も複数枚になる時は、この const を 1 箇所 true にすれば済む。
+    const SUPPORTS_INDEXED_UI: bool;
+
     /// `state` は保存済みプラグイン state ファイル。#562 以降は effect / instrument の
     /// 両 role が READY publish 前に適用する。
     fn spawn_child(
@@ -3585,6 +3593,8 @@ impl OutProcRole for EffectRole {
     type Stats = crate::outproc_effect::OutProcEffectStats;
     type Supervisor = crate::outproc_effect::EffectChildSupervisor;
     const ROLE_NAME: &'static str = "effect";
+    /// rack は 1 child に複数 stage を載せるので、UI も index ごとに開ける。
+    const SUPPORTS_INDEXED_UI: bool = true;
     fn spawn_child(
         launch: &ChildLaunch<Self>,
         path: &std::path::Path,
@@ -3675,6 +3685,8 @@ impl OutProcRole for InstrumentRole {
     type Stats = crate::outproc_instrument::OutProcInstrumentStats;
     type Supervisor = crate::outproc_instrument::InstrumentChildSupervisor;
     const ROLE_NAME: &'static str = "instrument";
+    /// instrument はいま 1 child 1 UI。マルチティンバー（#647）で複数枚になったら true へ。
+    const SUPPORTS_INDEXED_UI: bool = false;
     fn spawn_child(
         launch: &ChildLaunch<Self>,
         path: &std::path::Path,
@@ -6868,7 +6880,7 @@ impl EngineWrap {
         ));
         let ui_target = Arc::new(Mutex::new(Default::default()));
         let ui_index_binding =
-            (R::ROLE_NAME == "effect").then(|| Arc::new(Mutex::new(Default::default())));
+            R::SUPPORTS_INDEXED_UI.then(|| Arc::new(Mutex::new(Default::default())));
         // 初回 attach も同じ reset 経路を通す。まだ child は生存していないため、
         // 「旧 child の死亡確認後のみ reset」の前提を満たす。
         ui_pump
@@ -10073,7 +10085,7 @@ mod outproc_load_error_test_support {
         ));
         let ui_target = Arc::new(Mutex::new(Default::default()));
         let ui_index_binding =
-            (R::ROLE_NAME == "effect").then(|| Arc::new(Mutex::new(Default::default())));
+            R::SUPPORTS_INDEXED_UI.then(|| Arc::new(Mutex::new(Default::default())));
         let (ui_events, _) = tokio::sync::broadcast::channel(16);
         let latest_state = Arc::new(Mutex::new(None));
         let supervisor = R::spawn_supervisor(
