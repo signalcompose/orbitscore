@@ -517,9 +517,13 @@ mod tests {
     #[test]
     fn capture_writer_syncs_the_header_while_running() {
         let path = temp_wav_path("running-sync");
-        let (mut sink, writer) =
-            CaptureWriter::create(path.clone(), 48_000, 2, HEADER_SYNC_INTERVAL_SAMPLES as usize * 4)
-                .expect("create");
+        let (mut sink, writer) = CaptureWriter::create(
+            path.clone(),
+            48_000,
+            2,
+            HEADER_SYNC_INTERVAL_SAMPLES as usize * 4,
+        )
+        .expect("create");
         use crate::link_audio_ring::PostMixSink;
         // sync 間隔を必ず跨ぐ量を流す。
         let block = vec![0.1_f32; 8192];
