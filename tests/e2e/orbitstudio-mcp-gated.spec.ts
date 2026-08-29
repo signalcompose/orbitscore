@@ -1632,6 +1632,150 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     TEST_TIMEOUT_MS,
   )
 
+  // ──────────────────────────────────────────────────────────────────
+  // #633 — the UI pump must hold more than one window per child
+  // ──────────────────────────────────────────────────────────────────
+  //
+  // 🔴 The oracle in both tests is `close_plugin_ui`, not the return value of
+  // `open_plugin_ui`. A close FAILS when no session is recorded for that
+  // window ("no plugin UI opened via open_plugin_ui is recorded"), so a close
+  // that succeeds is evidence the window was genuinely open and still tracked.
+  // Asserting on the open call alone would only prove the request was accepted.
+
+  it.skipIf(!appAvailable)(
+    '#633 E2E-1 opens a UI for every matching insert, and closing one leaves the other open',
+    async () => {
+      expect(client, '#633 E2E-1 must initialize the MCP client').toBeDefined()
+      if (!client) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const catalog = requireCatalogFixtures()
+      const name = catalog.clapEffectName
+      const errorPrefix = 'ERROR:'
+      const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+      const errorsBefore = beforeLog.split(errorPrefix).length - 1
+
+      // Two inserts of the SAME plugin on one receiver: SC.10.10.1 規範 2-3 says
+      // `ui("名前")` opens every matching insert, so this needs two windows
+      // inside one child at once — the thing the single-slot pump could not do.
+      const declare = await activeClient.call('evaluate_orbitscore', {
+        code: 'var uiRackSeq = init global.seq',
+      })
+      expect(declare.isError, declare.text).toBe(false)
+      const rack = await activeClient.call('evaluate_orbitscore', {
+        code: `uiRackSeq.effect([${JSON.stringify(name)}, ${JSON.stringify(name)}])`,
+      })
+      expect(rack.isError, rack.text).toBe(false)
+      await sleep(8000) // two real child stage spawns
+
+      const opened = await activeClient.call('evaluate_orbitscore', {
+        code: `uiRackSeq.ui(${JSON.stringify(name)})`,
+      })
+      expect(opened.isError, opened.text).toBe(false)
+      await sleep(3000)
+
+      // Close the SECOND insert first. Under the old single-slot pump the
+      // second open never happened, so this close has nothing to settle.
+      const closeSecond = await activeClient.call('close_plugin_ui', {
+        receiver: 'uiRackSeq',
+        index: 2,
+        expectedName: name,
+      })
+      expect(
+        closeSecond.isError,
+        `E2E-1 the second insert must have its own open window. ${closeSecond.text}`,
+      ).toBe(false)
+      await sleep(2000)
+
+      // 完了条件 1: closing one window must not disturb the other's lifecycle.
+      const closeFirst = await activeClient.call('close_plugin_ui', {
+        receiver: 'uiRackSeq',
+        index: 1,
+        expectedName: name,
+      })
+      expect(
+        closeFirst.isError,
+        `E2E-1 closing the second window must leave the first open. ${closeFirst.text}`,
+      ).toBe(false)
+
+      // The ring-jam symptom this issue fixes shows up only in the log: the
+      // daemon rejected every indexed DONE arg and re-logged it every 25ms.
+      const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+      expect(
+        afterLog,
+        'E2E-1 the indexed close completion must be understood by the daemon',
+      ).not.toContain('has invalid completion')
+      // 固定 500 行窓なので厳密等価にしない（#625）。
+      expect(
+        afterLog.split(errorPrefix).length - 1,
+        `E2E-1 must add no ERROR lines. Log tail: ${afterLog.slice(-1600)}`,
+      ).toBeLessThanOrEqual(errorsBefore)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#633 E2E-2 keeps an open UI open when an earlier insert is dropped, and closes it at its new index',
+    async () => {
+      expect(client, '#633 E2E-2 must initialize the MCP client').toBeDefined()
+      if (!client) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const catalog = requireCatalogFixtures()
+      const first = catalog.clapEffectName
+      const kept = catalog.vst3EffectName
+      const errorPrefix = 'ERROR:'
+      const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+      const errorsBefore = beforeLog.split(errorPrefix).length - 1
+
+      const declare = await activeClient.call('evaluate_orbitscore', {
+        code: 'var uiShiftSeq = init global.seq',
+      })
+      expect(declare.isError, declare.text).toBe(false)
+      const rack = await activeClient.call('evaluate_orbitscore', {
+        code: `uiShiftSeq.effect([${JSON.stringify(first)}, ${JSON.stringify(kept)}])`,
+      })
+      expect(rack.isError, rack.text).toBe(false)
+      await sleep(8000)
+
+      const opened = await activeClient.call('open_plugin_ui', {
+        receiver: 'uiShiftSeq',
+        index: 2,
+        expectedName: kept,
+      })
+      expect(opened.isError, opened.text).toBe(false)
+      await sleep(2000)
+
+      // 🔴 owner 原則 C-A: dropping a DIFFERENT element shifts this one from
+      // index 2 to index 1, and the window must stay open. The judgement is
+      // whether the instance survived, not whether its position moved.
+      const dropped = await activeClient.call('evaluate_orbitscore', {
+        code: `uiShiftSeq.effect([${JSON.stringify(kept)}])`,
+      })
+      expect(dropped.isError, dropped.text).toBe(false)
+      await sleep(4000)
+
+      // If the shift had torn the window down, this close would fail with "no
+      // plugin UI opened ... is recorded". That it succeeds AT THE NEW INDEX
+      // proves both halves: the window survived, and attribution followed the
+      // instance rather than the position.
+      const closed = await activeClient.call('close_plugin_ui', {
+        receiver: 'uiShiftSeq',
+        index: 1,
+        expectedName: kept,
+      })
+      expect(
+        closed.isError,
+        `E2E-2 the shifted window must still be open and addressable at its new index. ${closed.text}`,
+      ).toBe(false)
+
+      const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+      expect(
+        afterLog.split(errorPrefix).length - 1,
+        `E2E-2 must add no ERROR lines. Log tail: ${afterLog.slice(-1600)}`,
+      ).toBeLessThanOrEqual(errorsBefore)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
   it.skipIf(!appAvailable)(
     'rescans catalog v2 through MCP, reports a broken bundle, and preserves a known CLAP fixture',
     async () => {

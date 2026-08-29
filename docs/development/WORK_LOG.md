@@ -17,6 +17,100 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.413 fix(daemon): UI pump を per-window 化 — 設計の「未実測」仮説が実測で確定した (#633) (Aug 29, 2026)
+
+**Issue**: [#633](https://github.com/signalcompose/orbitscore/issues/633)（#638 と1本の PR）
+**設計正本**: `docs/design/628-ui-pump-per-index-design.md`（711行・起案 Fable / owner 決定）
+**実装**: Codex（`gpt-5.6-sol` / effort xhigh）・**検証は main が sandbox 外で**
+
+#### 何が壊れていたか
+
+`UiEventPump` は **child 単位の単一 `UiPumpState`** を持ち、1 child に UI 1枚しか開けなかった。
+child 側は #628 で index → window の多重レジストリへ一般化済みで、**非対称が残っていた**。
+
+さらに実バグがあった: child は `{"index":0,"completion":"safepoint-completed"}` を送るが、
+daemon の DONE 腕は `Some("safepoint-completed")` の**完全一致でしか受けない**。
+**1枚目の close ですら Protocol error になり event ring の先頭が永久に詰まる。**
+実機ではこのエラーが **25ms 間隔で洪水**を起こし daemon を飽和させていた。
+
+#### 🔴 設計が「実測していない」と明記した仮説が、実測で再現した
+
+設計 §7 の表 1 行目は ring デッドロックを **「確信度 中〜高・机上組み立て・実測していない」**
+としていた。そこでブリーフで **「実装の前に H2 の再現 fixture を書き、再現するかを確認せよ。
+再現しなければゲートは防御実装に格下げし設計書に追記せよ」** と条件を分けて発注した。
+
+**結果: 再現した。**
+
+| 観測 | 値 |
+|---|---|
+| w1 `UI_CLOSED` | seq 1（daemon ack 停止） |
+| w2 `UI_CLOSED` | seq 2 |
+| w1 timeout 後の DONE | **publish 不能**（seq 3 には `evt_ack >= 1` が要る） |
+| ring 状態 | **`evt_seq=2 / evt_ack_seq=0`** |
+| daemon | **`Blocked { seq: 1 }` を繰り返す** |
+
+したがって **close-cycle 順序ゲートは防御実装ではなく必須**と確定した。
+
+**教訓**: 設計に「確信度」と「反証方法」の欄があると、**発注を条件分岐にできる**。
+「実装せよ」ではなく「確かめてから、結果に応じてこう実装せよ」と書けるので、
+**推論に基づく設計判断が実装フェーズで検証される。**
+
+#### 採った機構: 帰属と宛先の2レイヤ分離
+
+> 「開いているウィンドウ」は位置の性質ではなく **open という行為の産物**である。
+
+| 何を | どのキーで |
+|---|---|
+| **帰属**（イベント → session → 保存 identity） | **window token**。open から close まで不変 |
+| **宛先**（コマンド → stage） | **chain_path**。発行時点の登記チェーンから引く |
+
+位置（index）は APPLY で動く。**動く値を照合キーにすると「発行時点の index」と「ack 到着時点の
+index」の一致を別途保証する仕組みが要る**。token は不変なので、その仕組みごと不要になる。
+
+#### 変異検証 20件（P1-P14 / H1-H6）— すべて実 red 出力つき
+
+P6 が象徴的: 変異を戻すと**実機で洪水を起こしていたのと同じメッセージ**が出る。
+
+```text
+indexed DONE が invalid completion Some("{\"window\":1,...}")
+```
+
+各件 `$TMPDIR` baseline へ restore し `cmp OK` を確認。
+
+#### 🔴 main の検証が埋めた穴 — Codex が構造的に走らせられない28件
+
+Codex は sandbox で **localhost bind ができない**ため、`orbit-audio-daemon/tests/protocol.rs`
+の **28件が丸ごと実行不能**だった（迂回せず報告した — ブリーフの指示どおり）。
+
+**main が sandbox 外で実行し 28 passed / 0 failed。** ここが委譲では埋まらない。
+
+#### 本 PR に含まれない残り（工程 3-4）
+
+`engine_wrap.rs` / `outproc_respawn_guard.rs` は **`None` を渡すだけの追随変更**に留めた
+（19行）。route registry・`index_binding` の remap（§4.5）と TS の token 採番・帰属（§4.7）は
+**次の発注**。いま入っている `None` はそこで実 token に置き換わる。
+
+#### gated E2E 2本（main 担当・TDD で先に追加）
+
+🔴 **オラクルは `open_plugin_ui` の戻り値ではなく `close_plugin_ui`**。close はセッションが
+無いと失敗するので、**閉じられた = 開いていた**の証明になる。open の `ok` に assert しても
+「受理した」しか言えない。
+
+- **E2E-1**: 同一プラグインを2つ挿し `ui("名前")` → **2枚目を先に閉じ**、その後1枚目も閉じる
+  （= 片方の close が他方を壊さない・完了条件1）
+- **E2E-2**: `[A, B]` で B の UI を開き **A を落として B を index 2→1 にシフト** →
+  **新しい index で閉じられる**（= owner 原則 C-A の生存と、帰属が位置でなくインスタンスに
+  付いていること）
+
+#### 検証
+
+`cargo clippy --all-targets --features outproc-effect,outproc-instrument -- -D warnings` 緑 /
+cfg 4象限すべて緑 / `cargo fmt --all --check` 緑（main が独立に再実行）/
+daemon protocol **28 passed**（main が sandbox 外で）/ library unit: sandbox 101・
+child-runtime 35・rack-child 15
+
+---
+
 ### 6.412 feat(editor): 274個から探す入口と、名前の誤りを評価前に知る診断 (#638) (Aug 29, 2026)
 
 **Issue**: [#638](https://github.com/signalcompose/orbitscore/issues/638)（#633 と1本の PR・owner 決定）
