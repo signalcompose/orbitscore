@@ -665,6 +665,11 @@ export class DaemonClient extends EventEmitter {
     })
   }
 
+  /** Route one opaque premaster source output to a named insert bus or Master (`null`). */
+  async setSourceRouting(source: string, unit: number, target: string | null): Promise<void> {
+    await this.request('SetSourceRouting', { source, unit, target })
+  }
+
   pluginNoteOn(key: number, channel: number, velocity: number, instance?: string): Promise<void> {
     return this.request('PluginNoteOn', {
       key,

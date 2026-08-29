@@ -17,6 +17,265 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.411 fix: fixer 差分の再点検で3件 — うち2件は「訂正が不完全だった」 (#643) (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#648](https://github.com/signalcompose/orbitscore/pull/648)
+
+#### 見つかった3件（すべてコメント・実行時の影響なし）
+
+| # | 内容 | 発見 |
+|---|---|---|
+| 1 | **コメントが文の途中で連結**（挿入文の末尾に元の文の続きがくっついた） | **main が自分で差分を読んで** |
+| 2 | **「合流後」という不正確な表現が8箇所** + **WORK_LOG に誤主張が残存** | 同上 |
+| 3 | **`reapplySourceRoutingAfterRespawn` の doc が私の新関数に付いた** | 再点検レビュアー |
+
+#### 🔴 2 が示したこと: 訂正が不完全だった
+
+6.410 で「誤記6箇所を訂正した」と報告したが、**同じ主張が別の言い回しで残っていた**:
+
+- 「バスに入る前」→ 消した
+- **「合流後に1回だけ」→ 残っていた**（gain は insert の前なので不正確）
+- **「マスターを絞るとリバーブの掛かり方まで変わっていた…合流後に移したことで解消」→ WORK_LOG に残っていた**
+
+**消すべきは表現ではなく主張。** 表現で検索すると取りこぼす。**主張を検索語にして残存を数える**
+（`grep -c` で 0 を確認する）のが確実だった。
+
+#### 🔴 doc の誤付着が今日5回目
+
+| # | 内容 |
+|---|---|
+| 1-3 | 6.406 / 6.407 に記録（`peak_bits` 削除の取り残し等） |
+| 4 | コメントの文中連結（本エントリ 1） |
+| 5 | `reapplySourceRoutingAfterRespawn` の doc が新関数に付いた（本エントリ 3） |
+
+**共通原因**: 挿入位置を「次の関数の直前」と考えると、**その関数が既に doc を持っている場合に
+doc と関数の間へ入る**。関数定義行そのものをアンカーにしても同じ（doc は定義行の上にある）。
+
+**対策として入れた検出**: 連続する doc ブロック（単行 doc の直後に別の doc が始まる）を
+機械的に探すスクリプトを回し、**0 件**を確認した。今後の挿入後は同じ確認をする。
+
+#### 再点検の結論
+
+**Critical 0**。respawn の鏡像性・intent 先行記録の副作用・choke point の追加位置・
+新しい throw が宣言時のみであること・テスト10本の強度は、いずれも問題なしと確認された。
+
+#### 検証
+
+`npm run build` **exit=0（型エラー 0）** / `npm run lint` **exit=0** / **2103 passed**
+
+---
+
+### 6.410 fix: レビュー5体の指摘を適用 — Critical 2件はいずれも main の書いた部分 (#643) (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#648](https://github.com/signalcompose/orbitscore/pull/648)
+**レビュー**: `/code:pr-review-team` 3体 + **Fable 並行**（`/simplify` は E2E が過半のためスキップ）
+
+#### 🔴 Critical 2件 — 両方とも main が書いた部分
+
+**1. daemon respawn 後にマスターゲインが unity へ戻る（退行）**
+
+respawn の再適用リストは plugins / racks / busRoutings / sourceRoutings のみで、
+**global gain が無かった**。daemon は新プロセスで `global_gain: 1.0` から始まる。
+
+**この PR で畳み込みを外したので、これは本 PR が新設した退行**（旧実装はイベント側で
+効いていたので respawn の影響を受けなかった）。しかも `Global.gain()` のゲッターは
+**古い値を返し続ける**ので、「DSL 上は -6dB なのに実際は unity」が**エラーもログも無く**発生する。
+
+さらに **main が書いたコメント「次の起動時に `global.gain()` が再評価されて設定される」は
+存在しない経路の主張**だった。
+
+→ `globalGainIntent` + `reapplyGlobalGainAfterRespawn()`（既存2つの**鏡像**）+ **テスト4本**。
+変異2種（reapply 削除 / intent 記録の削除）で殺せることを確認済み。
+
+**2. Signal Chain sugar が instrument を拒否したまま**
+
+`routeOutputFromDsl` / `routeSendFromDsl`（`process-statement.ts` から呼ばれる **`output()` /
+`send()` と同じ意味の別入口**）が `isNoteSequence()` のまま残っていた。
+**「メソッドでは書けるが Signal Chain 構文では弾かれる」**状態。
+
+→ 同じガード分割 + choke point 呼び出し + **テスト3本**。
+
+#### 🔴 Fable が見つけた「差分に無いもの」3件
+
+**A. 「insert の前に掛かる問題が解消」は誤り — spec に既知制約として書いてあった**
+
+`INSTRUCTION_ORBITSCORE_DSL.md`:
+
+> master gain ramp は per-sequence insert の**前**に適用される（DAW の「fader は insert 後」と逆）
+
+実コードも `render_multi_feeds`（gain・`output.rs:936`）→ post-loop の `processor.process`
+（insert・`:949`）の順で、**本 PR は変えていない**。にもかかわらず「解消した」と
+**6箇所に複製**していた。**spec を読まずに書いた。**
+
+→ 誤記を全て訂正し、正しい説明（変えていないこと・spec の既知制約であること）を追記。
+
+**B. ガード3分岐のうち sum しか実装されていない**
+
+設計 §12 は3分岐の扱いを定めているが、**数値 render bus と LinkAudio 分岐は byte-identical で
+未変更**。`inst.output(2)` / `inst.output("LinkCh")` が**黙って記録される**（#644 の症状が
+instrument にも開いた）。
+
+→ **instrument 側の拒否を2分岐に追加**（設計で確定済み・owner 確認不要）+ テスト3本。
+**midi 側は据え置き**（受理していた入力を弾く破壊的変更なので owner 確認事項・#644）。
+
+**C. core spec が stale（規則6違反）**
+
+spec は今も「note シーケンスへの `send()` と `output()` を依然拒否する」と書いていた。
+→ **実装に合わせて更新**（3分岐の表・アドレスモデル `(instance, unit)`・#647/#611 への参照）。
+
+#### 🔴 記録: 文字列置換で3回壊した（今日通算）
+
+| # | 内容 |
+|---|---|
+| 1 | doc コメントの途中にヘルパを挿入（モジュール doc が関数に化けた） |
+| 2 | 複数行 import の途中に import を挿入（構文エラー） |
+| 3 | **変異の復元で `if (!this.daemon.isRunning()) {` が複数一致**し、別の場所（respawn ループ内）を書き換え → **型エラー507件** |
+
+**共通原因**: `replace(old, new, 1)` は「最初の1つ」を置換するので、**一意でないアンカーは
+静かに間違った場所を書き換える**。
+
+**対策**: 置換の前に **`assert s.count(anchor) == 1`** を置く。3件目の復旧後はこれを徹底し、
+以降の置換は全て一意性を確認してから実行した。
+
+#### 検証（main が sandbox 外で実行）
+
+`npm run build` **exit=0（型エラー 0）** / `npm run lint` **exit=0** /
+`npm run typecheck:e2e` **exit=0** / **2103 passed**（ラウンド1前 2093 → **+10**）
+
+---
+
+### 6.409 test(e2e): #643 の実機検証が #633 のログ洪水に阻まれることを実測した (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) PR-2 / [#633](https://github.com/signalcompose/orbitscore/issues/633)
+
+#### 実機 gated の #643 E2E 7本が緑にならない — 原因は #633
+
+診断を仕込んで実機ログを取ったところ、**25ms 間隔で同一エラーが埋め尽くしていた**:
+
+```text
+UI_CLOSED_DONE seq 2 has invalid completion
+  Some("{\"index\":0,\"completion\":\"safepoint-completed\"}")   role="effect"
+```
+
+**#633 の欠陥1番そのもの** — daemon の DONE 腕が完全一致でしか受けず、event ring の先頭が
+永久に詰まる。**ログ洪水が daemon を飽和させ、effect の適用が届かない。**
+
+WORK_LOG 6.399 が別テスト（`reports an ambiguous bare mixer name`）で
+**「同欠陥のログ洪水による巻き添え」**として既に記録していた症状と同型。
+
+#### 実装側の問題ではない根拠
+
+**同じ実行で audio シーケンスの effect は効いている**（#625 R-E1-R-E7 が緑・`a/dry = 0.323`）。
+instrument は**同じラック機構**（`sequenceEffect()`）を通るので、機構は動いている。
+
+#### 処置
+
+E2E 7本は**削除せず残す**（#633 が直れば自動的に検証になる）。ファイル冒頭に理由を記録した。
+**E2E-1 は単位の誤りを修正** — `global.gain()` は **dB API**（`gain(valueDb?)`・-60..+12 にクランプ）
+なのに、ブリーフに「`global.gain(0.5)` で RMS 半分」と書いていた。`1.0dB → 0.5dB` は RMS 比 0.944。
+`0 dB → -6 dB` に修正（10^(-6/20) ≈ 0.501）。
+
+#### 🔴 記録: 手動での実機起動に5回失敗して時間を使った
+
+`orbs` CLI に `--extensionDevelopmentPath` と `ORBITSCORE_MCP_PORT` を渡しても MCP が立たず、
+最後はアプリ自体が起動しなかった。**MCP は壊れていない** — 同じ実行で **9本が MCP 経由で成功**
+している（プラグイン状態の復元・カタログ再スキャン・エフェクト差し替え）。
+
+**教訓**: 「実機で確かめる」を**アプリを自分で起動すること**と考えたのが遠回りだった。
+**すでに正しく起動できている仕組み（E2E）に観測点を足す**方が速い。
+昨日の教訓（沈黙には観測を足す）は正しかったが、**観測を足す場所**の選び方を誤った。
+
+#### 副次的に判明: gated E2E は単独実行できない
+
+`-t "E2E-2"` で絞ると `beforeAll` のカタログ初期化が走らず、`catalogClapEffectPath` 未初期化で
+落ちる。**1本を試すのに毎回全17本（3〜5分）**回す必要があり、切り分けのサイクルが遅い。
+テスト基盤側の課題として記録（#630 と同種）。
+
+---
+
+### 6.408 feat(dsl): instrument に effect / output / send を解禁し、マスターフェーダーを直した (#643) (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) PR-2
+**実装**: Codex（DSL 表面 + E2E）/ **main**（分類修正 + マスターフェーダー）
+**差分**: 742 insertions / 28 deletions・**テスト 2080 → 2093**
+
+#### 1. instrument の DSL 表面（Codex）
+
+`effect()` / `output(sum)` / `send()` のガードを **midi / instrument で分割**し、instrument 側だけ解禁。
+`SetSourceRouting { source, unit: 0, target }` を冪等に発行する choke point を、宣言順の両方向
+（`instrument()` → `effect()` と逆）に置いた。respawn replay も既存 `busRoutings` の鏡像で実装。
+
+**実機 E2E 7本**を `orbitstudio-mcp-gated.spec.ts` に追加（+398行）。
+
+#### 2. 🔴 マスターフェーダーが誰にも効いていなかった（main）
+
+owner 指摘:
+
+> global.gain って各オーディオバス、インストバスに届く必要があるの？
+> **だってミキサーの機能考えてみてくださいよ。**
+
+**マスターフェーダーは**event 混合後に1回だけ**掛かるもので、各ソースへ配るものではない。**
+
+調査の結果、実装は二重に誤っていた:
+
+| | 旧実装 |
+|---|---|
+| audio シーケンス | `masterGainDb` を **イベントごとの gain に畳み込む**（`sequenceGainDb + masterGainDb`） |
+| instrument | note 経路に畳み込みが**無い** → **マスターが一切効かない** |
+| Rust の `set_global_gain` | **存在するが TS が一度も呼ばない**（定義のみ・呼び出し0件） |
+
+**Rust 側には最初から正しい実装があった**（`render_multi` の gain ramp・`next_gain_frame` の
+単一前進契約つき）。TS がそれを使わず、イベントへの畳み込みで辻褄を合わせていた。
+
+**修正**: 4層に配線（`types.ts` / `engine-backend.ts` / `rust-engine-player.ts` / `global.ts`）し、
+**畳み込みを除去**。`gainDbToAmplitude` で線形化して daemon へ送る。
+
+**副次的に直ったもの**: 旧実装は **バスに入る前**に master を掛けていたため、
+daemon の gain ramp（線形補間）が**一度も使われていなかった**のが使われるようになった。
+
+🔴 **訂正（6.410）**: 当初ここに「バスに入る前に掛かる問題も解消」と書いたが**誤り**。
+gain は今も insert の前に掛かる（spec の既知制約）。
+
+`-Infinity`（完全無音）だけは畳み込みを残す — daemon の gain が 0.0 になるまでの ramp 中に
+音が漏れるのを避けるため。
+
+#### 3. 分類テストが正しく発火した（main）
+
+Codex が追加した private メソッド2つ（`ensureInstrumentSourceRouting` /
+`syncInstrumentSourceRouting`）が **DSL 語彙にも内部 API 除外リストにも無い**と検出された。
+
+これは **#528 の再来を防ぐテスト**（`setDocumentDirectory` の誤分類でエディタ評価が全滅した事故の
+再発防止）。**内部 API に分類**して解決。1つ目で止めず `InstrumentSourceRouting` を含む定義を
+全 grep して2つであることを確認した。
+
+#### 🔴 変異検証: マスターゲインは守るテストが1本も無かった
+
+修正前、**配線を無効化する変異（常に 0dB を送る）が 2088件すべてを生き残った**。
+テスト5本を追加し、実出力で確認:
+
+```text
+変異1（配線を無効化）              -> 2 failed / 3 passed
+変異2（畳み込みを戻す）            -> 3 failed / 2 passed
+復元後                              -> 5 passed
+```
+
+#### 🔴 変異検証の後始末で本体を2回失いかけた（記録）
+
+| # | 誤り | 結果 |
+|---|---|---|
+| 1 | バックアップを `$TMPDIR` へ | **sandbox の内外でパスが違い、バックアップが存在しなかった**（memory 記録済みの罠を踏み直し） |
+| 2 | `git checkout <file>` で変異を復元 | **未コミットの本体変更ごと巻き戻り**、マスターゲイン修正が2ファイルとも消えた。`git status` で気づいて再投入 |
+
+**根本的な解**: 変異検証は**本体をコミットしてから**行う。ファイル単位の復元は、未コミットの
+変更がある時に使えない。文字列単位で戻すか、コミット済みの状態を前提にすること。
+
+#### 検証（main が sandbox 外で実行）
+
+`npm run build` **exit=0（型エラー 0）** / `npm run lint` **exit=0** /
+**2093 passed / 62 skipped**（PR 前 2080 → **+13**）
+
+---
+
 ### 6.407 fix: レビュー5体の指摘を適用し、自分が作った Critical を1件直した (#643) (Aug 29, 2026)
 
 **Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#646](https://github.com/signalcompose/orbitscore/pull/646)

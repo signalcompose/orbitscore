@@ -399,6 +399,20 @@ export class RustEnginePlayer implements AudioEngineBackend {
     string,
     { output: string | undefined; sends: { bus: string; gain: number }[] }
   >()
+  /**
+   * 🔴 最後に設定したマスターゲイン（#643 PR-2）。daemon は respawn すると
+   * **unity から始まる**ので、再送しないとマスターが黙って効かなくなる。
+   * `Global.gain()` を再評価する経路は存在しないため、ここで覚えるしかない。
+   */
+  private globalGainIntent: { amplitude: number; rampSec: number } | undefined
+  /**
+   * `(source, unit)` ごとの最後の routing intent（#643）。key は設計正本どおり
+   * `${source}#${unit}`。daemon respawn 後に全 entry を再発行する。
+   */
+  private readonly sourceRoutings = new Map<
+    string,
+    { source: string; unit: number; target: string | null }
+  >()
   private clockAnchor: ClockAnchor = { tsMs: 0, daemonSec: 0 }
   /**
    * 直近の StreamStats anchor サンプル列（#389 機構 B・ANCHOR_WINDOW 参照）。
@@ -726,6 +740,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
           await this.reloadPluginsAfterRespawn()
           await this.reloadEffectRacksAfterRespawn()
           await this.reapplyBusRoutingAfterRespawn()
+          await this.reapplySourceRoutingAfterRespawn()
+          await this.reapplyGlobalGainAfterRespawn()
           console.warn(
             `✅ [rust-engine] daemon respawned and session re-established (attempt ${attempt}/${MAX_RESPAWN_ATTEMPTS}).`,
           )
@@ -949,6 +965,68 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
+   * Runtime premaster-source routing (#643). Intent-first/revert-on-protocol-error mirrors
+   * `setBusRouting`: transport loss keeps the desired route for respawn replay, while a
+   * definitive daemon rejection restores the last accepted intent.
+   */
+  async setSourceRouting(source: string, unit: number, target: string | null): Promise<void> {
+    const key = `${source}#${unit}`
+    const prev = this.sourceRoutings.get(key)
+    this.sourceRoutings.set(key, { source, unit, target })
+    try {
+      await this.daemon.setSourceRouting(source, unit, target)
+    } catch (err) {
+      if (err instanceof DaemonProtocolError) {
+        if (prev) this.sourceRoutings.set(key, prev)
+        else this.sourceRoutings.delete(key)
+      }
+      throw err
+    }
+  }
+
+  /**
+   * 🔴 マスターゲインを respawn 後に再適用する（#643 PR-2）。
+   *
+   * daemon は**新プロセスなので `global_gain` が unity から始まる**。この PR で
+   * `event-scheduler.ts` の畳み込みを外したため、**再送しないとマスターが完全に効かなくなる**
+   * （旧実装はイベント側で効いていたので respawn の影響を受けなかった）。
+   *
+   * さらに `Global.gain()` のゲッターは**古い値を返し続ける**ので、
+   * 「DSL 上は -6dB なのに実際は unity」というズレがエラーもログも無く発生する。
+   * `reapplyBusRoutingAfterRespawn` / `reapplySourceRoutingAfterRespawn` の鏡像。
+   */
+  private async reapplyGlobalGainAfterRespawn(): Promise<void> {
+    const intent = this.globalGainIntent
+    if (!intent) return
+    try {
+      await this.daemon.setGlobalGain(intent.amplitude, intent.rampSec)
+    } catch (err) {
+      // キャッシュは意図的に残す: 次の respawn で再試行する。
+      console.error(
+        `❌ [rust-engine] failed to restore master gain after daemon respawn ` +
+          `(amplitude=${intent.amplitude})`,
+        err,
+      )
+    }
+  }
+
+  /** Restore source routes independently; one bad source must not fail daemon recovery. */
+  private async reapplySourceRoutingAfterRespawn(): Promise<void> {
+    for (const { source, unit, target } of this.sourceRoutings.values()) {
+      try {
+        await this.daemon.setSourceRouting(source, unit, target)
+      } catch (err) {
+        // Cache entry intentionally remains: a later daemon respawn retries restoration.
+        console.error(
+          `❌ [rust-engine] failed to restore source routing after daemon respawn ` +
+            `(source=${source}, unit=${unit})`,
+          err,
+        )
+      }
+    }
+  }
+
+  /**
    * Loads a plugin into the daemon's master effect insert. Converts daemon-side
    * `DaemonProtocolError`s into operator-actionable messages (CLAP_UNAVAILABLE →
    * build hint, other codes → generic wrap); non-protocol errors pass through
@@ -1132,6 +1210,27 @@ export class RustEnginePlayer implements AudioEngineBackend {
       }
     }
     return saved
+  }
+
+  /**
+   * マスターゲインを daemon の mixer へ設定する（#643 PR-2）。**線形 amplitude** を受ける。
+   *
+   * daemon は `render_multi` の gain ramp として **event 混合後に1回だけ**適用する（insert の前 — spec の既知制約）。旧方式は
+   * `masterGainDb` を **イベントごとの gain に畳み込んで**いたため、(a) instrument には効かず、
+   * (b) daemon の gain ramp（線形補間）が一度も使われていなかった。
+   */
+  async setGlobalGain(amplitude: number, rampSec = 0): Promise<void> {
+    // 🔴 daemon の状態に関わらず**先に intent を記録する**。未接続時に捨てると、
+    // 接続後に復元する手がかりが消える（`Global.gain()` を再評価する経路は存在しない）。
+    this.globalGainIntent = { amplitude, rampSec }
+    if (!this.daemon.isRunning()) {
+      // daemon 未接続時は送らない。**intent は上で記録済み**なので、respawn 後に
+      // `reapplyGlobalGainAfterRespawn()` が再送する。
+      // （旧コメントは「次の起動時に global.gain() が再評価される」と書いていたが、
+      //   そのような経路は存在しなかった — #648 レビューで指摘）
+      return
+    }
+    await this.daemon.setGlobalGain(amplitude, rampSec)
   }
 
   pluginNoteOn(key: number, channel: number, velocity: number, instance?: string): Promise<void> {

@@ -42,6 +42,8 @@ export interface AudioEngineBackend extends Scheduler {
     statePath?: string,
   ): Promise<PluginLoadResult>
   applyEffectChain?(request: EffectChainApplyRequest): Promise<EffectChainApplyResult>
+  /** マスターゲイン（線形 amplitude）を daemon の mixer へ。#643 PR-2。 */
+  setGlobalGain?(amplitude: number, rampSec?: number): Promise<void>
   pluginNoteOn?(key: number, channel: number, velocity: number, instance?: string): Promise<void>
   pluginNoteOff?(key: number, channel: number, velocity?: number, instance?: string): Promise<void>
   isPluginActive?(role?: 'effect' | 'instrument', bus?: string, instance?: string): boolean

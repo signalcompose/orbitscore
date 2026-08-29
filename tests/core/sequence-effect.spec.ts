@@ -46,6 +46,8 @@ function harness(loadPlugin = vi.fn().mockResolvedValue({})) {
   temporaryDirectories.push(directory)
   const audio = scheduler()
   audio.loadPlugin = loadPlugin
+  const setSourceRouting = vi.fn().mockResolvedValue(undefined)
+  audio.setSourceRouting = setSourceRouting
   const replacePlugin = vi.fn().mockResolvedValue(REPLACE_RESULT)
   audio.replacePlugin = replacePlugin
   const applyEffectChain = installEffectChainMock(audio)
@@ -64,7 +66,16 @@ function harness(loadPlugin = vi.fn().mockResolvedValue({})) {
   global.setDocumentDirectory(directory)
   const seq = new Sequence(global, audio)
   seq.setName('drum')
-  return { audio, global, seq, loadPlugin, replacePlugin, applyEffectChain, directory }
+  return {
+    audio,
+    global,
+    seq,
+    loadPlugin,
+    replacePlugin,
+    applyEffectChain,
+    setSourceRouting,
+    directory,
+  }
 }
 
 describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
@@ -145,16 +156,24 @@ describe('Sequence.effect() — per-sequence insert (PH.2b / #434 S3)', () => {
     const { seq } = harness()
     seq.midi('iac', 1)
     await expect(seq.effect('./reverb.clap')).rejects.toThrow(
-      'seq.effect() is only supported on audio sequences',
+      'MIDI is sent to an external device and therefore has no mixer output destination',
     )
   })
 
-  it('rejects on note sequences (instrument)', async () => {
-    const { seq } = harness()
+  it('allows instrument() then effect() and routes unit 0 exactly once', async () => {
+    const { seq, setSourceRouting } = harness()
     await seq.instrument('synth.clap')
-    await expect(seq.effect('./reverb.clap')).rejects.toThrow(
-      'seq.effect() is only supported on audio sequences',
-    )
+    await expect(seq.effect('./reverb.clap')).resolves.toBe(seq)
+    expect(setSourceRouting).toHaveBeenCalledTimes(1)
+    expect(setSourceRouting).toHaveBeenCalledWith('plugin:drum', 0, 'seq-bus-0')
+  })
+
+  it('allows effect() then instrument() and routes unit 0 exactly once', async () => {
+    const { seq, setSourceRouting } = harness()
+    await seq.effect('./reverb.clap')
+    await seq.instrument('synth.clap')
+    expect(setSourceRouting).toHaveBeenCalledTimes(1)
+    expect(setSourceRouting).toHaveBeenCalledWith('plugin:drum', 0, 'seq-bus-0')
   })
 
   it('rejects while LinkAudio is enabled', async () => {

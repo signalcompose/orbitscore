@@ -356,6 +356,14 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     const liveModeMarker = '🎵 Live coding mode'
     const startupTimeoutMarker = 'daemon ready line timeout after 10000ms'
     const markerCount = (log: string, marker: string): number => log.split(marker).length - 1
+    // 🔴 `capture_wav` は **spawn 専用オプション**（daemon 起動時にしか適用されない）。
+    // 既に別テストがエンジンを起動していると
+    // 「engine is already running; requested spawn-only option(s): capture_wav」で弾かれる。
+    // capture を要求する時は必ず一度落としてから起動する（#643 E2E 7本がこれで全滅した）。
+    if (captureWav !== undefined) {
+      await activeClient.call('stop_engine')
+      await waitForEngine(false, 15_000, `${label} stopped before capture start`)
+    }
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
       const liveModeBefore = markerCount(beforeLog, liveModeMarker)
@@ -387,6 +395,127 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         throw new Error(`${String(error)}\n--- OrbitScore output channel ---\n${startupLog}`)
       }
     }
+  }
+
+  type InstrumentCaptureSegment = { from: number; to: number }
+  type InstrumentCaptureContext = {
+    activeClient: McpClient
+    catalog: ReturnType<typeof requireCatalogFixtures>
+    segments: Record<string, InstrumentCaptureSegment>
+    evaluate(code: string): Promise<void>
+    captureSegment(name: string, durationMs?: number, settleMs?: number): Promise<void>
+  }
+
+  /**
+   * 🔴 **これらは #633 が直るまで緑にならない**（2026-08-29 実測）。
+   * `UI_CLOSED_DONE seq N has invalid completion` が **25ms 間隔でログを埋め尽くし**、
+   * daemon が飽和して effect の適用が届かない（WORK_LOG 6.399 が
+   * 「同欠陥のログ洪水による巻き添え」として別テストで記録済みの症状と同型）。
+   *
+   * 実装側の問題ではない根拠: **同じ実行で audio シーケンスの effect は効いている**
+   * （#625 R-E1-R-E7 が緑・`a/dry = 0.323`）。instrument は同じラック機構を通る。
+   *
+   * #633 の修正後にこの7本を回すこと。**削除しない** — 直れば自動的に検証になる。
+   *
+   * #643 の7シナリオを、同じ実 OrbitStudio → run_selection → daemon capture → get_log
+   * 経路で駆動する。`evaluate_orbitscore` の受理結果は補助的にしか使わず、成功判定は必ず
+   * capture の区間 RMS/peak と固定500行窓の ERROR 件数で行う。
+   */
+  const captureInstrumentScenario = async (
+    slug: string,
+    initialDsl: readonly string[],
+    body: (context: InstrumentCaptureContext) => Promise<void>,
+  ) => {
+    expect(client, '#643 setup must initialize the MCP client').toBeDefined()
+    expect(tmpRoot, '#643 setup must initialize the scratch root').toBeDefined()
+    if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+    const activeClient = client
+    const catalog = requireCatalogFixtures()
+    const dslPath = path.join(tmpRoot, `643-${slug}.orbs`)
+    const capturePath = path.join(tmpRoot, `643-${slug}.wav`)
+    const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
+    const readLog = async (): Promise<string> =>
+      (await activeClient.call('get_log', { lines: 500 })).text
+
+    fs.writeFileSync(dslPath, initialDsl.join('\n') + '\n')
+    await startR28Engine(activeClient, `#643 ${slug} capture engine`, capturePath)
+    await sleep(1000)
+    const errorsBefore = countErrors(await readLog())
+    const segments: Record<string, InstrumentCaptureSegment> = {}
+    let stopWall = Date.now()
+
+    const evaluate = async (code: string): Promise<void> => {
+      const result = await activeClient.call('evaluate_orbitscore', { code })
+      expect(result.isError, result.text).toBe(false)
+    }
+    const captureSegment = async (
+      name: string,
+      durationMs = 2000,
+      settleMs = 400,
+    ): Promise<void> => {
+      if (settleMs > 0) await sleep(settleMs)
+      const from = Date.now()
+      await sleep(durationMs)
+      segments[name] = { from, to: Date.now() }
+    }
+
+    try {
+      const opened = await activeClient.call('open_file', { path: dslPath })
+      expect(opened.isError, opened.text).toBe(false)
+      const selected = await activeClient.call('set_selection', {
+        start_line: 1,
+        start_char: 1,
+        end_line: initialDsl.length,
+        end_char: 999_999,
+      })
+      expect(selected.isError, selected.text).toBe(false)
+      const run = await activeClient.call('run_selection')
+      expect(run.isError, run.text).toBe(false)
+
+      await body({ activeClient, catalog, segments, evaluate, captureSegment })
+      const finalLog = await readLog()
+      expect(
+        countErrors(finalLog),
+        `#643 ${slug} must add no ERROR lines. Log tail: ${finalLog.slice(-1600)}`,
+      ).toBeLessThanOrEqual(errorsBefore)
+    } finally {
+      await activeClient.call('evaluate_orbitscore', { code: 'global.stop()' })
+      const stopped = await activeClient.call('stop_engine')
+      expect(stopped.isError, stopped.text).toBe(false)
+      stopWall = Date.now()
+      await waitForEngine(false, 15_000, `#643 ${slug} capture engine stopped`)
+      await sleep(1000)
+    }
+
+    const capture = fs.readFileSync(capturePath)
+    const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
+    const range = (segment: InstrumentCaptureSegment, guardSec = 0.15) => ({
+      fromSec: Math.max(0, analysis.durationSec - (stopWall - segment.from) / 1000 + guardSec),
+      toSec: Math.min(
+        analysis.durationSec,
+        analysis.durationSec - (stopWall - segment.to) / 1000 - guardSec,
+      ),
+    })
+    const windows = (name: string, guardSec = 0.15) => {
+      const segment = segments[name]
+      expect(segment, `#643 ${slug} segment '${name}' must exist`).toBeDefined()
+      const requested = range(segment!, guardSec)
+      const selected = (analysis.windows ?? []).filter(
+        (window) => window.startSec >= requested.fromSec && window.startSec < requested.toSec,
+      )
+      expect(
+        selected.length,
+        `#643 ${slug} segment '${name}' must contain windows`,
+      ).toBeGreaterThan(0)
+      return selected
+    }
+    const rms = (name: string, guardSec = 0.15): number => {
+      const selected = windows(name, guardSec)
+      return Math.sqrt(
+        selected.reduce((sum, window) => sum + window.rms * window.rms, 0) / selected.length,
+      )
+    }
+    return { analysis, capture, range, windows, rms, segments }
   }
 
   afterAll(async () => {
@@ -1210,6 +1339,295 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         gapsAt180bpm.length,
         `expected >=3 gaps in [0.29,0.40]s (180bpm), got onsetGaps: ${JSON.stringify(analysis.onsetGaps)}`,
       ).toBeGreaterThanOrEqual(3)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
+    async () => {
+      const catalog = requireCatalogFixtures()
+      const result = await captureInstrumentScenario(
+        'global-gain',
+        [
+          'var global = init GLOBAL',
+          'global.key("C")',
+          'global.tempo(120)',
+          'global.beat(4 by 4)',
+          'global.gain(0)',
+          'global.start()',
+          'var gain643 = init global.seq',
+          `gain643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'gain643.gate(1)',
+          'gain643.play(1, 1, 1, 1)',
+          'LOOP(gain643)',
+        ],
+        async ({ captureSegment, evaluate }) => {
+          await captureSegment('unity')
+          await evaluate('global.gain(-6)')
+          await captureSegment('half')
+        },
+      )
+      // 🔴 `global.gain()` は **dB**（`gain(valueDb?)`・-60..+12 にクランプ）。線形値ではない。
+      // 0 dB -> -6 dB で amplitude は 10^(-6/20) ≈ 0.501 = 約半分。
+      const unity = result.rms('unity')
+      const half = result.rms('half')
+      expect(unity, 'E2E-1 unity instrument must be audible').toBeGreaterThan(0.05)
+      expect(half / unity, `E2E-1 half/unity RMS ratio (${half}/${unity})`).toBeGreaterThan(0.45)
+      expect(half / unity, `E2E-1 half/unity RMS ratio (${half}/${unity})`).toBeLessThan(0.55)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#643 E2E-2 applies a -6 dB sequence rack to an instrument at about half dry RMS',
+    async () => {
+      const catalog = requireCatalogFixtures()
+      const result = await captureInstrumentScenario(
+        'sequence-effect',
+        [
+          'var global = init GLOBAL',
+          'global.key("C")',
+          'global.tempo(120)',
+          'global.beat(4 by 4)',
+          'global.start()',
+          'var dry643 = init global.seq',
+          `dry643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'dry643.gate(1)',
+          'dry643.play(1, 1, 1, 1)',
+          'var wet643 = init global.seq',
+          'wet643.effect([Gain(db: -6)])',
+          `wet643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'wet643.gate(1)',
+          'wet643.play(1, 1, 1, 1)',
+          'LOOP(dry643)',
+        ],
+        async ({ captureSegment, evaluate }) => {
+          await captureSegment('dry')
+          await evaluate('dry643.stop()\nLOOP(wet643)')
+          await captureSegment('wet')
+        },
+      )
+      const dry = result.rms('dry')
+      const wet = result.rms('wet')
+      expect(dry, 'E2E-2 dry instrument must be audible').toBeGreaterThan(0.05)
+      expect(wet / dry, `E2E-2 wet/dry RMS ratio (${wet}/${dry})`).toBeGreaterThan(0.45)
+      expect(wet / dry, `E2E-2 wet/dry RMS ratio (${wet}/${dry})`).toBeLessThan(0.56)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#643 E2E-3 attaches effect() during instrument playback without a gap or spike',
+    async () => {
+      const catalog = requireCatalogFixtures()
+      const result = await captureInstrumentScenario(
+        'live-effect-attach',
+        [
+          'var global = init GLOBAL',
+          'global.key("C")',
+          'global.tempo(120)',
+          'global.beat(4 by 4)',
+          'global.start()',
+          'var live643 = init global.seq',
+          `live643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'live643.gate(1)',
+          'live643.play(1, 1, 1, 1)',
+          'LOOP(live643)',
+        ],
+        async ({ captureSegment, evaluate, segments }) => {
+          await captureSegment('dry')
+          const from = Date.now() - 250
+          await evaluate('live643.effect([Gain(db: -6)])')
+          await sleep(500)
+          segments.transition = { from, to: Date.now() }
+          await captureSegment('wet')
+        },
+      )
+      const dry = result.rms('dry')
+      const wet = result.rms('wet')
+      const transition = result.windows('transition', 0)
+      const dryPeak = Math.max(...result.windows('dry').map((window) => window.peak))
+      const transitionPeak = Math.max(...transition.map((window) => window.peak))
+      const transitionFloor = Math.min(...transition.map((window) => window.rms))
+      expect(wet / dry, `E2E-3 post-attach wet/dry ratio (${wet}/${dry})`).toBeGreaterThan(0.45)
+      expect(wet / dry, `E2E-3 post-attach wet/dry ratio (${wet}/${dry})`).toBeLessThan(0.56)
+      expect(
+        transitionPeak,
+        `E2E-3 transition peak ${transitionPeak} must not spike above dry ${dryPeak}`,
+      ).toBeLessThanOrEqual(dryPeak * 1.15)
+      expect(
+        transitionFloor,
+        `E2E-3 transition RMS floor ${transitionFloor} must not contain a dropout`,
+      ).toBeGreaterThan(wet * 0.6)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#643 E2E-4 preserves instrument contributions through output(sum) plus send(aux, gain)',
+    async () => {
+      const catalog = requireCatalogFixtures()
+      const result = await captureInstrumentScenario(
+        'sum-and-aux',
+        [
+          'var global = init GLOBAL',
+          'global.key("C")',
+          'global.tempo(120)',
+          'global.beat(4 by 4)',
+          'global.sum("sum643")',
+          'global.aux("aux643")',
+          'global.start()',
+          'var routeDry643 = init global.seq',
+          `routeDry643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'routeDry643.gate(1)',
+          'routeDry643.play(1, 1, 1, 1)',
+          'var routeWet643 = init global.seq',
+          `routeWet643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'routeWet643.output("sum643")',
+          'routeWet643.send("aux643", 0.5)',
+          'routeWet643.gate(1)',
+          'routeWet643.play(1, 1, 1, 1)',
+          'LOOP(routeDry643)',
+        ],
+        async ({ captureSegment, evaluate }) => {
+          await captureSegment('dry')
+          await evaluate('routeDry643.stop()\nLOOP(routeWet643)')
+          await captureSegment('sumAux')
+        },
+      )
+      const dry = result.rms('dry')
+      const sumAux = result.rms('sumAux')
+      expect(dry, 'E2E-4 dry instrument must be audible').toBeGreaterThan(0.05)
+      expect(
+        sumAux / dry,
+        `E2E-4 sum+aux/dry RMS ratio (${sumAux}/${dry}) must include the 0.5 send`,
+      ).toBeGreaterThan(1.35)
+      expect(sumAux / dry).toBeLessThan(1.65)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#643 E2E-5 keeps the sequence effect applied while replacing a playing instrument',
+    async () => {
+      const catalog = requireCatalogFixtures()
+      const result = await captureInstrumentScenario(
+        'replace-with-effect',
+        [
+          'var global = init GLOBAL',
+          'global.key("C")',
+          'global.tempo(120)',
+          'global.beat(4 by 4)',
+          'global.start()',
+          'var replace643 = init global.seq',
+          'replace643.effect([Gain(db: -6)])',
+          `replace643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'replace643.gate(1)',
+          'replace643.play(1, 1, 1, 1)',
+          'LOOP(replace643)',
+        ],
+        async ({ captureSegment, evaluate, catalog: activeCatalog }) => {
+          await captureSegment('beforeReplace')
+          await evaluate(`replace643.instrument(${JSON.stringify(activeCatalog.vst3SynthName)})`)
+          await captureSegment('afterReplace')
+          await evaluate('replace643.effect([])')
+          await captureSegment('replacementDry')
+        },
+      )
+      const before = result.rms('beforeReplace')
+      const after = result.rms('afterReplace')
+      const dry = result.rms('replacementDry')
+      expect(before, 'E2E-5 pre-replacement effect output must be audible').toBeGreaterThan(0.02)
+      expect(after, 'E2E-5 replacement must remain audible').toBeGreaterThan(0.02)
+      expect(after / dry, `E2E-5 effected replacement/dry ratio (${after}/${dry})`).toBeGreaterThan(
+        0.45,
+      )
+      expect(after / dry, `E2E-5 effected replacement/dry ratio (${after}/${dry})`).toBeLessThan(
+        0.56,
+      )
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#643 E2E-6 resets a released slot so its next instrument tenant starts dry',
+    async () => {
+      const catalog = requireCatalogFixtures()
+      const result = await captureInstrumentScenario(
+        'slot-reuse-reset',
+        [
+          'var global = init GLOBAL',
+          'global.key("C")',
+          'global.tempo(120)',
+          'global.beat(4 by 4)',
+          'global.start()',
+          'var oldTenant643 = init global.seq',
+          'oldTenant643.effect([Gain(db: -6)])',
+          `oldTenant643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'oldTenant643.gate(1)',
+          'oldTenant643.play(1, 1, 1, 1)',
+          'LOOP(oldTenant643)',
+        ],
+        async ({ captureSegment, evaluate, catalog: activeCatalog }) => {
+          await captureSegment('oldWet')
+          await evaluate(
+            [
+              `oldTenant643.instrument(${JSON.stringify(activeCatalog.vst3SynthName)})`,
+              'oldTenant643.stop()',
+              'var nextTenant643 = init global.seq',
+              `nextTenant643.instrument(${JSON.stringify(activeCatalog.clapSynthName)})`,
+              'nextTenant643.gate(1)',
+              'nextTenant643.play(1, 1, 1, 1)',
+              'LOOP(nextTenant643)',
+            ].join('\n'),
+          )
+          await captureSegment('nextDry')
+          await evaluate('nextTenant643.effect([Gain(db: -6)])')
+          await captureSegment('nextWet')
+        },
+      )
+      const dry = result.rms('nextDry')
+      const wet = result.rms('nextWet')
+      expect(dry, 'E2E-6 next tenant must produce dry audio').toBeGreaterThan(0.05)
+      expect(wet / dry, `E2E-6 next-tenant wet/dry ratio (${wet}/${dry})`).toBeGreaterThan(0.45)
+      expect(wet / dry, `E2E-6 next-tenant wet/dry ratio (${wet}/${dry})`).toBeLessThan(0.56)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#643 E2E-7 keeps an instrument with no mixer declaration audible at legacy dry RMS',
+    async () => {
+      const catalog = requireCatalogFixtures()
+      const result = await captureInstrumentScenario(
+        'default-master',
+        [
+          'var global = init GLOBAL',
+          'global.key("C")',
+          'global.tempo(120)',
+          'global.beat(4 by 4)',
+          'global.start()',
+          'var default643 = init global.seq',
+          `default643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'default643.gate(1)',
+          'default643.play(1, 1, 1, 1)',
+          'LOOP(default643)',
+        ],
+        async ({ captureSegment }) => {
+          await captureSegment('dry')
+        },
+      )
+      const dry = result.rms('dry')
+      expect(result.analysis.soundDetected, JSON.stringify(result.analysis)).toBe(true)
+      expect(
+        dry,
+        'E2E-7 default-master instrument must match the oracle dry floor',
+      ).toBeGreaterThan(0.1)
+      expect(
+        dry,
+        'E2E-7 default-master instrument must remain below the 0.25-peak oracle RMS',
+      ).toBeLessThan(0.2)
     },
     TEST_TIMEOUT_MS,
   )

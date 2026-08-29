@@ -20,6 +20,8 @@ interface FakeDaemon {
   savePluginState: ReturnType<typeof vi.fn>
   applyEffectChain: ReturnType<typeof vi.fn>
   setBusRouting: ReturnType<typeof vi.fn>
+  setSourceRouting: ReturnType<typeof vi.fn>
+  setGlobalGain: ReturnType<typeof vi.fn>
   quit: ReturnType<typeof vi.fn>
 }
 
@@ -53,6 +55,8 @@ function createHarness() {
       dropped: [],
     }),
     setBusRouting: vi.fn().mockResolvedValue(undefined),
+    setSourceRouting: vi.fn().mockResolvedValue(undefined),
+    setGlobalGain: vi.fn().mockResolvedValue(undefined),
     quit: vi.fn().mockResolvedValue(undefined),
   }
   Object.defineProperty(player, 'daemon', { value: daemon })
@@ -731,6 +735,152 @@ describe('RustEnginePlayer bus routing recovery after daemon respawn (MX.4 M3)',
     expect(daemon.setBusRouting).toHaveBeenCalledTimes(2)
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('failed to restore bus routing'),
+      expect.any(Error),
+    )
+  })
+})
+
+describe('RustEnginePlayer master gain recovery after daemon respawn (#643)', () => {
+  const players: RustEnginePlayer[] = []
+
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await Promise.all(players.splice(0).map((player) => player.quit()))
+  })
+
+  /**
+   * 🔴 daemon は respawn すると `global_gain` が **unity から始まる**。
+   * この PR で `event-scheduler.ts` の畳み込みを外したため、再送しないと
+   * **マスターが黙って効かなくなる**（旧実装はイベント側で効いていた）。
+   * さらに `Global.gain()` のゲッターは古い値を返し続けるので、ズレに気づけない。
+   */
+  it('replays the last master gain after respawn', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setGlobalGain(0.5012, 0)
+    daemon.setGlobalGain.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setGlobalGain).toHaveBeenCalledTimes(1)
+    expect(daemon.setGlobalGain).toHaveBeenCalledWith(0.5012, 0)
+  })
+
+  it('replays only the most recent value, not every call', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setGlobalGain(1.0, 0)
+    await player.setGlobalGain(0.25, 0)
+    daemon.setGlobalGain.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setGlobalGain).toHaveBeenCalledTimes(1)
+    expect(daemon.setGlobalGain).toHaveBeenCalledWith(0.25, 0)
+  })
+
+  it('sends nothing after respawn when the gain was never set', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setGlobalGain).not.toHaveBeenCalled()
+  })
+
+  it('keeps the intent when the daemon is not running, so respawn can restore it', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    daemon.isRunning.mockReturnValue(false)
+    await player.setGlobalGain(0.125, 0)
+    expect(daemon.setGlobalGain).not.toHaveBeenCalled()
+
+    daemon.isRunning.mockReturnValue(true)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await (player as any).respawnLoop()
+
+    expect(daemon.setGlobalGain).toHaveBeenCalledWith(0.125, 0)
+  })
+})
+
+describe('RustEnginePlayer source routing recovery after daemon respawn (#643)', () => {
+  const players: RustEnginePlayer[] = []
+
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await Promise.all(players.splice(0).map((player) => player.quit()))
+  })
+
+  it('replays the last intended SetSourceRouting per source and unit after respawn', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setSourceRouting('plugin:lead', 0, 'seq-bus-0')
+    await player.setSourceRouting('plugin:bass', 0, 'seq-bus-1')
+    daemon.setSourceRouting.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setSourceRouting).toHaveBeenCalledTimes(2)
+    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:lead', 0, 'seq-bus-0')
+    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:bass', 0, 'seq-bus-1')
+  })
+
+  it('keeps source-routing intent after a transport failure for respawn replay', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    daemon.setSourceRouting.mockRejectedValueOnce(new Error('socket closed'))
+    await expect(player.setSourceRouting('plugin:lead', 0, 'seq-bus-0')).rejects.toThrow(
+      'socket closed',
+    )
+    daemon.setSourceRouting.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setSourceRouting).toHaveBeenCalledTimes(1)
+    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:lead', 0, 'seq-bus-0')
+  })
+
+  it('reverts a definitively rejected source-routing intent before respawn replay', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setSourceRouting('plugin:lead', 0, 'seq-bus-0')
+    daemon.setSourceRouting.mockRejectedValueOnce(
+      new DaemonProtocolError('MALFORMED_REQUEST', 'target must name an insert bus'),
+    )
+    await expect(player.setSourceRouting('plugin:lead', 0, 'aux-bus-0')).rejects.toThrow(
+      'target must name an insert bus',
+    )
+    daemon.setSourceRouting.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setSourceRouting).toHaveBeenCalledTimes(1)
+    expect(daemon.setSourceRouting).toHaveBeenCalledWith('plugin:lead', 0, 'seq-bus-0')
+  })
+
+  it('isolates source-routing replay failures and keeps respawn successful', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setSourceRouting('plugin:lead', 0, 'seq-bus-0')
+    await player.setSourceRouting('plugin:bass', 0, 'seq-bus-1')
+    daemon.setSourceRouting.mockClear()
+    daemon.setSourceRouting
+      .mockRejectedValueOnce(new Error('replay failed'))
+      .mockResolvedValueOnce(undefined)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setSourceRouting).toHaveBeenCalledTimes(2)
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('failed to restore source routing'),
       expect.any(Error),
     )
   })
