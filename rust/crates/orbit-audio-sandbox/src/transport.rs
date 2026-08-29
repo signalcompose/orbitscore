@@ -32,7 +32,7 @@
 
 #[cfg(test)]
 use std::cell::Cell;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io;
@@ -1193,6 +1193,10 @@ pub enum UiCloseCompletion {
     TimedOutWithoutSave,
 }
 
+/// Stable identity for one plugin UI window. `None` preserves the legacy non-indexed child
+/// protocol used by instruments and single-plugin effect children.
+pub type UiWindowKey = Option<u64>;
+
 impl UiCloseCompletion {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -1205,8 +1209,89 @@ impl UiCloseCompletion {
 /// [`UiEventPump::poll_step`] が daemon の非ブロッキング sink へ渡す固定通知。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiPumpNotification {
-    Safepoint { generation: u64, evt_seq: u64 },
-    CloseDone { completion: UiCloseCompletion },
+    Safepoint {
+        generation: u64,
+        evt_seq: u64,
+        window: UiWindowKey,
+    },
+    CloseDone {
+        completion: UiCloseCompletion,
+        window: UiWindowKey,
+    },
+}
+
+/// Encode the fixed `UI_CLOSED` event argument grammar shared with child runtimes.
+pub fn encode_ui_closed_arg(window: UiWindowKey) -> String {
+    match window {
+        None => String::new(),
+        Some(window) => format!(r#"{{"window":{window}}}"#),
+    }
+}
+
+/// Encode the fixed `UI_CLOSED_DONE` event argument grammar shared with child runtimes.
+pub fn encode_ui_closed_done_arg(window: UiWindowKey, completion: UiCloseCompletion) -> String {
+    match window {
+        None => completion.as_str().to_owned(),
+        Some(window) => format!(
+            r#"{{"window":{window},"completion":"{}"}}"#,
+            completion.as_str()
+        ),
+    }
+}
+
+fn decode_decimal_u64(value: &str) -> Result<u64, String> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| format!("invalid UI window token {value:?}"))?;
+    if parsed.to_string() != value {
+        return Err(format!("non-canonical UI window token {value:?}"));
+    }
+    Ok(parsed)
+}
+
+/// Decode only the fixed grammar emitted by [`encode_ui_closed_arg`].
+pub fn decode_ui_closed_arg(arg: Option<&str>) -> Result<UiWindowKey, String> {
+    match arg {
+        None | Some("") => Ok(None),
+        Some(arg) => {
+            let value = arg
+                .strip_prefix(r#"{"window":"#)
+                .and_then(|value| value.strip_suffix('}'))
+                .ok_or_else(|| format!("invalid UI_CLOSED argument {arg:?}"))?;
+            decode_decimal_u64(value).map(Some)
+        }
+    }
+}
+
+/// Decode only the fixed grammar emitted by [`encode_ui_closed_done_arg`].
+pub fn decode_ui_closed_done_arg(
+    arg: Option<&str>,
+) -> Result<(UiWindowKey, UiCloseCompletion), String> {
+    let arg = arg.ok_or_else(|| "missing UI_CLOSED_DONE argument".to_owned())?;
+    let legacy = match arg {
+        "safepoint-completed" => Some(UiCloseCompletion::SafepointCompleted),
+        "timeout-without-save" => Some(UiCloseCompletion::TimedOutWithoutSave),
+        _ => None,
+    };
+    if let Some(completion) = legacy {
+        return Ok((None, completion));
+    }
+
+    let body = arg
+        .strip_prefix(r#"{"window":"#)
+        .ok_or_else(|| format!("invalid UI_CLOSED_DONE argument {arg:?}"))?;
+    let (window, completion) = body
+        .split_once(r#","completion":""#)
+        .ok_or_else(|| format!("invalid UI_CLOSED_DONE argument {arg:?}"))?;
+    let completion = completion
+        .strip_suffix(r#""}"#)
+        .ok_or_else(|| format!("invalid UI_CLOSED_DONE argument {arg:?}"))?;
+    let completion = match completion {
+        "safepoint-completed" => UiCloseCompletion::SafepointCompleted,
+        "timeout-without-save" => UiCloseCompletion::TimedOutWithoutSave,
+        _ => return Err(format!("invalid UI close completion {completion:?}")),
+    };
+    Ok((Some(decode_decimal_u64(window)?), completion))
 }
 
 #[derive(Debug)]
@@ -1263,25 +1348,25 @@ enum UiLifecycle {
     Closing,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct UiPumpState {
     generation: u64,
     /// Engine へ通知済みで、`AckUiSafepoint` を待っている `UI_CLOSED`。
-    pending_safepoint: Option<u64>,
-    /// child timeout により放棄した safepoint。遅着 ack を warn 付きで受理するため保持する。
-    abandoned_safepoint: Option<u64>,
-    lifecycle: UiLifecycle,
+    pending_safepoint: Option<PendingSafepoint>,
+    /// Window ごとの lifecycle と、遅着 ack を warn 付きで受理するための放棄水位。
+    windows: BTreeMap<UiWindowKey, UiWindowState>,
 }
 
-impl Default for UiPumpState {
-    fn default() -> Self {
-        Self {
-            generation: 0,
-            pending_safepoint: None,
-            abandoned_safepoint: None,
-            lifecycle: UiLifecycle::Closed,
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingSafepoint {
+    window: UiWindowKey,
+    evt_seq: u64,
+}
+
+#[derive(Debug)]
+struct UiWindowState {
+    lifecycle: UiLifecycle,
+    abandoned_safepoint: Option<u64>,
 }
 
 /// child UI event ring と respawn reset を一つの排他契約へ束ねる host coordinator。
@@ -1325,9 +1410,9 @@ pub struct UiEventPump {
 }
 
 /// respawn reset が UI lifecycle に与えた結果。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UiPumpResetOutcome {
-    pub closed_visible_ui: bool,
+    pub closed_windows: Vec<UiWindowKey>,
     pub generation: u64,
 }
 
@@ -1341,33 +1426,52 @@ impl UiEventPump {
 
     /// OPEN_UI 投函直前に lifecycle を予約する。command 失敗時は [`Self::finish_open`] へ
     /// `false` を渡して戻す。すでに open/closing なら child へ投函する前に loud に拒否する。
-    pub fn begin_open(&self) -> Result<(), UiEventPumpError> {
+    pub fn begin_open(&self, window: UiWindowKey) -> Result<(), UiEventPumpError> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| UiEventPumpError::CoordinatorPoisoned)?;
-        if state.lifecycle != UiLifecycle::Closed {
+        let lifecycle = state
+            .windows
+            .get(&window)
+            .map(|window| window.lifecycle)
+            .unwrap_or(UiLifecycle::Closed);
+        if lifecycle != UiLifecycle::Closed {
             return Err(UiEventPumpError::Protocol(format!(
-                "OPEN_UI requested while lifecycle is {:?}",
-                state.lifecycle
+                "OPEN_UI requested while lifecycle is {:?} (window {window:?})",
+                lifecycle
             )));
         }
-        state.lifecycle = UiLifecycle::Opening;
+        state.windows.insert(
+            window,
+            UiWindowState {
+                lifecycle: UiLifecycle::Opening,
+                abandoned_safepoint: None,
+            },
+        );
         Ok(())
     }
 
-    pub fn finish_open(&self, succeeded: bool) -> Result<(), UiEventPumpError> {
+    pub fn finish_open(
+        &self,
+        window: UiWindowKey,
+        succeeded: bool,
+    ) -> Result<(), UiEventPumpError> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| UiEventPumpError::CoordinatorPoisoned)?;
-        if state.lifecycle == UiLifecycle::Opening {
-            state.lifecycle = if succeeded {
+        if let Some(window_state) = state.windows.get_mut(&window) {
+            if window_state.lifecycle != UiLifecycle::Opening {
+                return Ok(());
+            }
+            window_state.lifecycle = if succeeded {
                 UiLifecycle::Open
             } else {
                 UiLifecycle::Closed
             };
         }
+        remove_settled_window(&mut state, window);
         Ok(())
     }
 
@@ -1385,48 +1489,82 @@ impl UiEventPump {
         let mut handler_error = None;
         let outcome = self.ring.poll_mapped(region, |event| match event.kind {
             EVT_UI_CLOSED => {
-                state.lifecycle = UiLifecycle::Closing;
-
-                // Abandon takes precedence over notification delivery. Once the child has
-                // published timeout-without-save it has already given up, so no engine save can
-                // still happen. Retrying an undeliverable safepoint first would leave this ring
-                // head blocked forever while no editor is connected and prevent a later UI open.
-                if is_abandon_done_published(region, event.seq.saturating_add(1)) {
-                    tracing::warn!(
-                        generation = state.generation,
-                        evt_seq = event.seq,
-                        "plugin UI safepoint was abandoned after child timeout; acking the blocked head"
-                    );
-                    state.pending_safepoint = None;
-                    state.abandoned_safepoint = Some(event.seq);
-                    return true;
-                }
-
-                if state.pending_safepoint != Some(event.seq) {
-                    if !sink(UiPumpNotification::Safepoint {
-                        generation: state.generation,
-                        evt_seq: event.seq,
-                    }) {
-                        return false;
-                    }
-                    state.pending_safepoint = Some(event.seq);
-                }
-                false
-            }
-            EVT_UI_CLOSED_DONE => {
-                let completion = match event.arg() {
-                    Some("safepoint-completed") => UiCloseCompletion::SafepointCompleted,
-                    Some("timeout-without-save") => UiCloseCompletion::TimedOutWithoutSave,
-                    other => {
+                let window = match decode_ui_closed_arg(event.arg()) {
+                    Ok(window) => window,
+                    Err(detail) => {
                         handler_error = Some(UiEventPumpError::Protocol(format!(
-                            "UI_CLOSED_DONE seq {} has invalid completion {other:?}",
+                            "UI_CLOSED seq {} has invalid argument: {detail}",
                             event.seq
                         )));
                         return false;
                     }
                 };
-                if sink(UiPumpNotification::CloseDone { completion }) {
-                    state.lifecycle = UiLifecycle::Closed;
+                state
+                    .windows
+                    .entry(window)
+                    .or_insert(UiWindowState {
+                        lifecycle: UiLifecycle::Closed,
+                        abandoned_safepoint: None,
+                    })
+                    .lifecycle = UiLifecycle::Closing;
+
+                // Abandon takes precedence over notification delivery. Once the child has
+                // published timeout-without-save it has already given up, so no engine save can
+                // still happen. Retrying an undeliverable safepoint first would leave this ring
+                // head blocked forever while no editor is connected and prevent a later UI open.
+                if is_abandon_done_published(region, event.seq.saturating_add(1), window) {
+                    tracing::warn!(
+                        generation = state.generation,
+                        evt_seq = event.seq,
+                        ?window,
+                        "plugin UI safepoint was abandoned after child timeout; acking the blocked head"
+                    );
+                    state.pending_safepoint = None;
+                    state
+                        .windows
+                        .get_mut(&window)
+                        .expect("closing window entry exists")
+                        .abandoned_safepoint = Some(event.seq);
+                    return true;
+                }
+
+                let pending = PendingSafepoint {
+                    window,
+                    evt_seq: event.seq,
+                };
+                if state.pending_safepoint != Some(pending) {
+                    if !sink(UiPumpNotification::Safepoint {
+                        generation: state.generation,
+                        evt_seq: event.seq,
+                        window,
+                    }) {
+                        return false;
+                    }
+                    state.pending_safepoint = Some(pending);
+                }
+                false
+            }
+            EVT_UI_CLOSED_DONE => {
+                let (window, completion) = match decode_ui_closed_done_arg(event.arg()) {
+                    Ok(decoded) => decoded,
+                    Err(detail) => {
+                        handler_error = Some(UiEventPumpError::Protocol(format!(
+                            "UI_CLOSED_DONE seq {} has invalid argument: {detail}",
+                            event.seq
+                        )));
+                        return false;
+                    }
+                };
+                if sink(UiPumpNotification::CloseDone { completion, window }) {
+                    state
+                        .windows
+                        .entry(window)
+                        .or_insert(UiWindowState {
+                            lifecycle: UiLifecycle::Closed,
+                            abandoned_safepoint: None,
+                        })
+                        .lifecycle = UiLifecycle::Closed;
+                    remove_settled_window(&mut state, window);
                     true
                 } else {
                     false
@@ -1447,7 +1585,12 @@ impl UiEventPump {
     }
 
     /// engine が safepoint 保存・atomic rename・project 登記まで完了した時だけ ack を進める。
-    pub fn ack_safepoint(&self, generation: u64, evt_seq: u64) -> Result<(), UiEventPumpError> {
+    pub fn ack_safepoint(
+        &self,
+        generation: u64,
+        window: UiWindowKey,
+        evt_seq: u64,
+    ) -> Result<(), UiEventPumpError> {
         let mut state = self
             .state
             .lock()
@@ -1461,18 +1604,29 @@ impl UiEventPump {
         let mmap = open_shared(&self.ring.shm_path)?;
         let region = region_ptr(&mmap);
         let ack = unsafe { (*region).evt_ack_seq.load_own() };
-        if state.abandoned_safepoint == Some(evt_seq) && ack >= evt_seq {
+        let late_abandoned = state
+            .windows
+            .get(&window)
+            .is_some_and(|state| state.abandoned_safepoint == Some(evt_seq));
+        if late_abandoned && ack >= evt_seq {
             tracing::warn!(
                 generation,
                 evt_seq,
+                ?window,
                 "late plugin UI safepoint ack arrived after timeout-without-save; accepting completed save"
             );
-            state.abandoned_safepoint = None;
+            state
+                .windows
+                .get_mut(&window)
+                .expect("abandoned window entry exists")
+                .abandoned_safepoint = None;
+            remove_settled_window(&mut state, window);
             return Ok(());
         }
-        if state.pending_safepoint != Some(evt_seq) {
+        let requested = PendingSafepoint { window, evt_seq };
+        if state.pending_safepoint != Some(requested) {
             return Err(UiEventPumpError::Protocol(format!(
-                "AckUiSafepoint seq {evt_seq} does not match pending {:?}",
+                "AckUiSafepoint (window {window:?}, seq {evt_seq}) does not match pending {:?}",
                 state.pending_safepoint
             )));
         }
@@ -1496,21 +1650,27 @@ impl UiEventPump {
             .state
             .lock()
             .map_err(|_| UiEventPumpError::CoordinatorPoisoned)?;
-        let closed_visible_ui = state.lifecycle != UiLifecycle::Closed;
-        if let Some(evt_seq) = state.pending_safepoint.take() {
+        let closed_windows = state
+            .windows
+            .iter()
+            .filter_map(|(window, window_state)| {
+                (window_state.lifecycle != UiLifecycle::Closed).then_some(*window)
+            })
+            .collect();
+        if let Some(pending) = state.pending_safepoint.take() {
             tracing::error!(
                 generation = state.generation,
-                evt_seq,
+                evt_seq = pending.evt_seq,
+                window = ?pending.window,
                 "plugin child exited with a UI safepoint waiter pending"
             );
         }
         // LOCK ORDER: pump state -> command mailbox. No code may acquire these in reverse.
         mailbox.reset_after_child_exit()?;
         state.generation = state.generation.wrapping_add(1);
-        state.abandoned_safepoint = None;
-        state.lifecycle = UiLifecycle::Closed;
+        state.windows.clear();
         Ok(UiPumpResetOutcome {
-            closed_visible_ui,
+            closed_windows,
             generation: state.generation,
         })
     }
@@ -1530,10 +1690,34 @@ impl UiEventPump {
         let outcome = self.ring.poll(|event| {
             match event.kind {
                 EVT_UI_CLOSED => {
-                    if state.pending_safepoint != Some(event.seq)
+                    let window = match decode_ui_closed_arg(event.arg()) {
+                        Ok(window) => window,
+                        Err(detail) => {
+                            tracing::error!(
+                                evt_seq = event.seq,
+                                %detail,
+                                "teardown is discarding malformed UI_CLOSED"
+                            );
+                            return true;
+                        }
+                    };
+                    state
+                        .windows
+                        .entry(window)
+                        .or_insert(UiWindowState {
+                            lifecycle: UiLifecycle::Closed,
+                            abandoned_safepoint: None,
+                        })
+                        .lifecycle = UiLifecycle::Closing;
+                    let pending = PendingSafepoint {
+                        window,
+                        evt_seq: event.seq,
+                    };
+                    if state.pending_safepoint != Some(pending)
                         && !sink(UiPumpNotification::Safepoint {
                             generation: state.generation,
                             evt_seq: event.seq,
+                            window,
                         })
                     {
                         tracing::error!(
@@ -1547,22 +1731,25 @@ impl UiEventPump {
                         "teardown is abandoning an incomplete plugin UI safepoint before QUIT"
                     );
                     state.pending_safepoint = None;
-                    state.abandoned_safepoint = Some(event.seq);
+                    state
+                        .windows
+                        .get_mut(&window)
+                        .expect("closing window entry exists")
+                        .abandoned_safepoint = Some(event.seq);
                 }
                 EVT_UI_CLOSED_DONE => {
-                    let completion = match event.arg() {
-                        Some("safepoint-completed") => UiCloseCompletion::SafepointCompleted,
-                        Some("timeout-without-save") => UiCloseCompletion::TimedOutWithoutSave,
-                        other => {
+                    let (window, completion) = match decode_ui_closed_done_arg(event.arg()) {
+                        Ok(decoded) => decoded,
+                        Err(detail) => {
                             tracing::error!(
                                 evt_seq = event.seq,
-                                ?other,
+                                %detail,
                                 "teardown is discarding malformed UI_CLOSED_DONE"
                             );
                             return true;
                         }
                     };
-                    if !sink(UiPumpNotification::CloseDone { completion }) {
+                    if !sink(UiPumpNotification::CloseDone { completion, window }) {
                         tracing::error!(
                             evt_seq = event.seq,
                             "teardown could not enqueue final plugin UI close completion"
@@ -1577,21 +1764,37 @@ impl UiEventPump {
             }
             true
         })?;
-        if let Some(evt_seq) = state.pending_safepoint.take() {
+        if let Some(pending) = state.pending_safepoint.take() {
             tracing::error!(
                 generation = state.generation,
-                evt_seq,
+                evt_seq = pending.evt_seq,
+                window = ?pending.window,
                 "teardown failed a plugin UI safepoint waiter that was not present in the ring"
             );
         }
-        state.lifecycle = UiLifecycle::Closed;
+        for window in state.windows.values_mut() {
+            window.lifecycle = UiLifecycle::Closed;
+        }
         Ok(outcome)
+    }
+}
+
+fn remove_settled_window(state: &mut UiPumpState, window: UiWindowKey) {
+    let settled = state.windows.get(&window).is_some_and(|window| {
+        window.lifecycle == UiLifecycle::Closed && window.abandoned_safepoint.is_none()
+    });
+    if settled {
+        state.windows.remove(&window);
     }
 }
 
 /// A blocked safepoint may be abandoned only when the immediately following event is the child's
 /// explicit `timeout-without-save` completion. The caller owns a live mapping for `region`.
-fn is_abandon_done_published(region: *mut SharedRegion, next_seq: u64) -> bool {
+fn is_abandon_done_published(
+    region: *mut SharedRegion,
+    next_seq: u64,
+    window: UiWindowKey,
+) -> bool {
     let published = unsafe { (*region).evt_seq.read() };
     if published < next_seq {
         return false;
@@ -1599,7 +1802,9 @@ fn is_abandon_done_published(region: *mut SharedRegion, next_seq: u64) -> bool {
     let index = evt_slot_index(next_seq);
     let next_kind = unsafe { (*region).evt_kind[index].load(Ordering::Relaxed) };
     let next_arg = unsafe { read_cstr_field(&(*region).evt_arg[index]) };
-    next_kind == EVT_UI_CLOSED_DONE && next_arg == Some("timeout-without-save")
+    next_kind == EVT_UI_CLOSED_DONE
+        && decode_ui_closed_done_arg(next_arg)
+            == Ok((window, UiCloseCompletion::TimedOutWithoutSave))
 }
 
 /// timeout で見捨てたコマンドが**実は成功していた**まま破棄される時に warning を残す。
@@ -3397,6 +3602,449 @@ mod tests {
         );
     }
 
+    #[test]
+    fn p1_two_windows_can_be_open_concurrently() {
+        let pump = UiEventPump::new(mailbox_test_path("p1-two-windows"));
+        pump.begin_open(Some(1)).expect("reserve window 1");
+        pump.begin_open(Some(2)).expect("reserve window 2");
+        pump.finish_open(Some(1), true).expect("open window 1");
+        pump.finish_open(Some(2), true).expect("open window 2");
+
+        let state = pump.state.lock().expect("pump state");
+        assert_eq!(state.windows.len(), 2);
+        assert_eq!(state.windows[&Some(1)].lifecycle, UiLifecycle::Open);
+        assert_eq!(state.windows[&Some(2)].lifecycle, UiLifecycle::Open);
+    }
+
+    #[test]
+    fn p2_reusing_a_live_window_token_is_loud_and_preserves_state() {
+        let pump = UiEventPump::new(mailbox_test_path("p2-token-reuse"));
+        pump.begin_open(Some(1)).expect("first reservation");
+
+        let error = pump
+            .begin_open(Some(1))
+            .expect_err("live token reuse must fail");
+        assert!(matches!(error, UiEventPumpError::Protocol(_)));
+        let state = pump.state.lock().expect("pump state");
+        assert_eq!(state.windows.len(), 1);
+        assert_eq!(state.windows[&Some(1)].lifecycle, UiLifecycle::Opening);
+    }
+
+    #[test]
+    fn p3_ack_requires_matching_generation_window_and_event_sequence() {
+        let shm = mailbox_test_path("p3-ack-window");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mut child = EventRingChild::new();
+        publish_ui_event(
+            region,
+            &mut child,
+            EVT_UI_CLOSED,
+            &encode_ui_closed_arg(Some(2)),
+        );
+        let pump = UiEventPump::new(shm.clone());
+        pump.poll_step(|_| true).expect("publish safepoint");
+
+        assert!(matches!(
+            pump.ack_safepoint(0, Some(1), 1),
+            Err(UiEventPumpError::Protocol(_))
+        ));
+        assert_eq!(
+            pump.state.lock().expect("pump state").pending_safepoint,
+            Some(PendingSafepoint {
+                window: Some(2),
+                evt_seq: 1,
+            })
+        );
+        pump.ack_safepoint(0, Some(2), 1)
+            .expect("matching triplet advances");
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 1);
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn p4_stale_generation_is_rejected_for_an_indexed_window() {
+        let shm = mailbox_test_path("p4-generation");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let pump = UiEventPump::new(shm.clone());
+        let mailbox = CommandMailboxHost::new(shm.clone());
+        assert_eq!(
+            pump.reset_after_child_exit(&mailbox)
+                .expect("advance generation")
+                .generation,
+            1
+        );
+        let mut child = EventRingChild::new();
+        publish_ui_event(
+            region,
+            &mut child,
+            EVT_UI_CLOSED,
+            &encode_ui_closed_arg(Some(4)),
+        );
+        pump.poll_step(|_| true).expect("publish safepoint");
+
+        assert!(matches!(
+            pump.ack_safepoint(0, Some(4), 1),
+            Err(UiEventPumpError::GenerationMismatch {
+                expected: 1,
+                actual: 0,
+            })
+        ));
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 0);
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn p5_safepoint_notification_carries_the_decoded_window() {
+        let shm = mailbox_test_path("p5-notification-window");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mut child = EventRingChild::new();
+        publish_ui_event(
+            region,
+            &mut child,
+            EVT_UI_CLOSED,
+            &encode_ui_closed_arg(Some(2)),
+        );
+        let pump = UiEventPump::new(shm.clone());
+        let mut notifications = Vec::new();
+        pump.poll_step(|notification| {
+            notifications.push(notification);
+            true
+        })
+        .expect("poll indexed close");
+        assert_eq!(
+            notifications,
+            vec![UiPumpNotification::Safepoint {
+                generation: 0,
+                evt_seq: 1,
+                window: Some(2),
+            }]
+        );
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn p6_indexed_done_is_decoded_and_advances_the_ring() {
+        let shm = mailbox_test_path("p6-indexed-done");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mut child = EventRingChild::new();
+        publish_ui_event(
+            region,
+            &mut child,
+            EVT_UI_CLOSED_DONE,
+            &encode_ui_closed_done_arg(Some(1), UiCloseCompletion::SafepointCompleted),
+        );
+        let pump = UiEventPump::new(shm.clone());
+        let mut notifications = Vec::new();
+        assert_eq!(
+            pump.poll_step(|notification| {
+                notifications.push(notification);
+                true
+            })
+            .expect("poll indexed DONE"),
+            advanced(1)
+        );
+        assert_eq!(
+            notifications,
+            vec![UiPumpNotification::CloseDone {
+                completion: UiCloseCompletion::SafepointCompleted,
+                window: Some(1),
+            }]
+        );
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 1);
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn p7_non_indexed_close_arguments_preserve_the_legacy_protocol() {
+        let shm = mailbox_test_path("p7-legacy-arguments");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let mut child = EventRingChild::new();
+        publish_ui_event(region, &mut child, EVT_UI_CLOSED, "");
+        let pump = UiEventPump::new(shm.clone());
+        let mut notifications = Vec::new();
+        pump.poll_step(|notification| {
+            notifications.push(notification);
+            true
+        })
+        .expect("poll legacy close");
+        pump.ack_safepoint(0, None, 1).expect("ack legacy close");
+        publish_ui_event(
+            region,
+            &mut child,
+            EVT_UI_CLOSED_DONE,
+            "safepoint-completed",
+        );
+        assert_eq!(
+            pump.poll_step(|notification| {
+                notifications.push(notification);
+                true
+            })
+            .expect("poll legacy DONE"),
+            advanced(1)
+        );
+        assert_eq!(
+            notifications,
+            vec![
+                UiPumpNotification::Safepoint {
+                    generation: 0,
+                    evt_seq: 1,
+                    window: None,
+                },
+                UiPumpNotification::CloseDone {
+                    completion: UiCloseCompletion::SafepointCompleted,
+                    window: None,
+                },
+            ]
+        );
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn p8_respawn_reset_reports_every_visible_window_in_key_order() {
+        let shm = mailbox_test_path("p8-reset-windows");
+        let mmap = create_shared(&shm).expect("create");
+        let pump = UiEventPump::new(shm.clone());
+        let mailbox = CommandMailboxHost::new(shm.clone());
+        pump.begin_open(Some(2)).expect("reserve window 2");
+        pump.finish_open(Some(2), true).expect("open window 2");
+        pump.begin_open(Some(1)).expect("reserve window 1");
+        pump.finish_open(Some(1), true).expect("open window 1");
+        pump.state
+            .lock()
+            .expect("pump state")
+            .windows
+            .get_mut(&Some(2))
+            .expect("window 2")
+            .lifecycle = UiLifecycle::Closing;
+
+        let reset = pump
+            .reset_after_child_exit(&mailbox)
+            .expect("reset pump and mailbox");
+        assert_eq!(reset.closed_windows, vec![Some(1), Some(2)]);
+        assert_eq!(reset.generation, 1);
+        assert!(pump.state.lock().expect("pump state").windows.is_empty());
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn p9_abandoned_safepoints_are_retained_per_window() {
+        let shm = mailbox_test_path("p9-per-window-abandon");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let pump = UiEventPump::new(shm.clone());
+        let mut child = EventRingChild::new();
+        for window in [1, 2] {
+            publish_ui_event(
+                region,
+                &mut child,
+                EVT_UI_CLOSED,
+                &encode_ui_closed_arg(Some(window)),
+            );
+            publish_ui_event(
+                region,
+                &mut child,
+                EVT_UI_CLOSED_DONE,
+                &encode_ui_closed_done_arg(Some(window), UiCloseCompletion::TimedOutWithoutSave),
+            );
+            assert_eq!(
+                pump.poll_step(|_| true).expect("abandon cycle"),
+                advanced(2)
+            );
+        }
+
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 4);
+        pump.ack_safepoint(0, Some(1), 1)
+            .expect("late ack for first window");
+        pump.ack_safepoint(0, Some(2), 3)
+            .expect("late ack for second window");
+        assert!(pump.state.lock().expect("pump state").windows.is_empty());
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn p10_begin_open_rejection_preserves_the_lifecycle_anchor() {
+        let pump = UiEventPump::new(mailbox_test_path("p10-message-anchor"));
+        pump.begin_open(Some(10)).expect("reserve window");
+        pump.finish_open(Some(10), true).expect("open window");
+        let error = pump
+            .begin_open(Some(10))
+            .expect_err("duplicate open must fail")
+            .to_string();
+        assert!(
+            error.contains("OPEN_UI requested while lifecycle is Open"),
+            "stable TS anchor missing from {error:?}"
+        );
+    }
+
+    #[test]
+    fn p11_abandon_escape_requires_the_same_window() {
+        let run = |label: &str, done_window: u64| {
+            let shm = mailbox_test_path(label);
+            let mmap = create_shared(&shm).expect("create");
+            let region = region_ptr(&mmap);
+            let pump = UiEventPump::new(shm.clone());
+            let mut child = EventRingChild::new();
+            publish_ui_event(
+                region,
+                &mut child,
+                EVT_UI_CLOSED,
+                &encode_ui_closed_arg(Some(1)),
+            );
+            publish_ui_event(
+                region,
+                &mut child,
+                EVT_UI_CLOSED_DONE,
+                &encode_ui_closed_done_arg(
+                    Some(done_window),
+                    UiCloseCompletion::TimedOutWithoutSave,
+                ),
+            );
+            let outcome = pump.poll_step(|_| true).expect("poll escape candidate");
+            let ack = unsafe { (*region).evt_ack_seq.read() };
+            drop(mmap);
+            let _ = std::fs::remove_file(shm);
+            (outcome, ack)
+        };
+
+        assert!(matches!(
+            run("p11-other-window", 2),
+            (EventPollOutcome::Blocked { seq: 1, .. }, 0)
+        ));
+        assert_eq!(run("p11-same-window", 1), (advanced(2), 2));
+    }
+
+    #[test]
+    fn p12_closed_abandoned_window_survives_until_its_late_ack() {
+        let shm = mailbox_test_path("p12-late-ack-entry");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let pump = UiEventPump::new(shm.clone());
+        let mut child = EventRingChild::new();
+        publish_ui_event(
+            region,
+            &mut child,
+            EVT_UI_CLOSED,
+            &encode_ui_closed_arg(Some(12)),
+        );
+        publish_ui_event(
+            region,
+            &mut child,
+            EVT_UI_CLOSED_DONE,
+            &encode_ui_closed_done_arg(Some(12), UiCloseCompletion::TimedOutWithoutSave),
+        );
+        assert_eq!(
+            pump.poll_step(|_| true).expect("abandon close"),
+            advanced(2)
+        );
+        {
+            let state = pump.state.lock().expect("pump state");
+            let window = state.windows.get(&Some(12)).expect("retained window");
+            assert_eq!(window.lifecycle, UiLifecycle::Closed);
+            assert_eq!(window.abandoned_safepoint, Some(1));
+        }
+        pump.ack_safepoint(0, Some(12), 1)
+            .expect("late ack remains routable");
+        assert!(!pump
+            .state
+            .lock()
+            .expect("pump state")
+            .windows
+            .contains_key(&Some(12)));
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn p13_safepoint_retry_is_counted_and_deduplicated_by_window_and_sequence() {
+        let shm = mailbox_test_path("p13-dedupe");
+        let mmap = create_shared(&shm).expect("create");
+        let region = region_ptr(&mmap);
+        let pump = UiEventPump::new(shm.clone());
+        let mut child = EventRingChild::new();
+        publish_ui_event(
+            region,
+            &mut child,
+            EVT_UI_CLOSED,
+            &encode_ui_closed_arg(Some(13)),
+        );
+        let mut attempts = 0;
+        for accepted in [false, true, true] {
+            assert!(matches!(
+                pump.poll_step(|notification| {
+                    attempts += 1;
+                    assert_eq!(
+                        notification,
+                        UiPumpNotification::Safepoint {
+                            generation: 0,
+                            evt_seq: 1,
+                            window: Some(13),
+                        }
+                    );
+                    accepted
+                })
+                .expect("retry safepoint"),
+                EventPollOutcome::Blocked { seq: 1, .. }
+            ));
+        }
+        assert_eq!(
+            attempts, 2,
+            "one failed delivery plus one accepted delivery"
+        );
+        assert_eq!(
+            pump.state.lock().expect("pump state").pending_safepoint,
+            Some(PendingSafepoint {
+                window: Some(13),
+                evt_seq: 1,
+            })
+        );
+
+        drop(mmap);
+        let _ = std::fs::remove_file(shm);
+    }
+
+    #[test]
+    fn p14_ui_event_argument_codec_round_trips_every_key_and_completion_shape() {
+        let windows = [None, Some(0), Some(1), Some(u64::MAX)];
+        let completions = [
+            UiCloseCompletion::SafepointCompleted,
+            UiCloseCompletion::TimedOutWithoutSave,
+        ];
+        for window in windows {
+            assert_eq!(
+                decode_ui_closed_arg(Some(&encode_ui_closed_arg(window))),
+                Ok(window)
+            );
+            for completion in completions {
+                assert_eq!(
+                    decode_ui_closed_done_arg(Some(
+                        &encode_ui_closed_done_arg(window, completion,)
+                    )),
+                    Ok((window, completion))
+                );
+            }
+        }
+    }
+
     /// #592: poll の固定 sink が停止している間、respawn reset は pump lock の外へ出られない。
     /// raw `reset_child_starting` へ差し替える変異では `reset_done` が release 前に届いて red になる。
     #[test]
@@ -3579,13 +4227,14 @@ mod tests {
             notifications,
             vec![UiPumpNotification::Safepoint {
                 generation: 0,
-                evt_seq: 1
+                evt_seq: 1,
+                window: None,
             }],
             "command ack plus UI_CLOSED must not claim close completion"
         );
         assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 0);
 
-        pump.ack_safepoint(0, 1).expect("engine ack");
+        pump.ack_safepoint(0, None, 1).expect("engine ack");
         let deadline = Instant::now() + Duration::from_secs(1);
         while notifications.len() < 2 {
             pump.poll_step(|event| {
@@ -3602,7 +4251,8 @@ mod tests {
         assert_eq!(
             notifications[1],
             UiPumpNotification::CloseDone {
-                completion: UiCloseCompletion::SafepointCompleted
+                completion: UiCloseCompletion::SafepointCompleted,
+                window: None,
             }
         );
         child.join().expect("child join");
@@ -3661,7 +4311,7 @@ mod tests {
             1,
             "a blocked head is notified only once"
         );
-        pump.ack_safepoint(0, 1).expect("matching engine ack");
+        pump.ack_safepoint(0, None, 1).expect("matching engine ack");
         assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 1);
 
         drop(mmap);
@@ -3684,7 +4334,7 @@ mod tests {
         pump.poll_step(|_| true).expect("notify generation 1");
 
         assert!(matches!(
-            pump.ack_safepoint(0, 1),
+            pump.ack_safepoint(0, None, 1),
             Err(UiEventPumpError::GenerationMismatch {
                 expected: 1,
                 actual: 0
@@ -3695,7 +4345,8 @@ mod tests {
             0,
             "stale generation must not ack replacement child's seq 1"
         );
-        pump.ack_safepoint(1, 1).expect("current generation ack");
+        pump.ack_safepoint(1, None, 1)
+            .expect("current generation ack");
 
         drop(mmap);
         let _ = std::fs::remove_file(shm);
@@ -3737,14 +4388,16 @@ mod tests {
             vec![
                 UiPumpNotification::Safepoint {
                     generation: 0,
-                    evt_seq: 1
+                    evt_seq: 1,
+                    window: None,
                 },
                 UiPumpNotification::CloseDone {
-                    completion: UiCloseCompletion::TimedOutWithoutSave
+                    completion: UiCloseCompletion::TimedOutWithoutSave,
+                    window: None,
                 }
             ]
         );
-        pump.ack_safepoint(0, 1)
+        pump.ack_safepoint(0, None, 1)
             .expect("late completed save is accepted with warning");
 
         drop(mmap);
@@ -3809,7 +4462,8 @@ mod tests {
                 assert_eq!(
                     notification,
                     UiPumpNotification::CloseDone {
-                        completion: UiCloseCompletion::TimedOutWithoutSave
+                        completion: UiCloseCompletion::TimedOutWithoutSave,
+                        window: None,
                     }
                 );
                 true
@@ -3818,7 +4472,7 @@ mod tests {
             advanced(1)
         );
         assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 2);
-        pump.begin_open()
+        pump.begin_open(None)
             .expect("completed abandon must not permanently block a later UI open");
 
         drop(mmap);
@@ -3873,7 +4527,7 @@ mod tests {
         );
 
         // engine が本来の ack を出せば、そこで初めて進む。
-        pump.ack_safepoint(0, 1)
+        pump.ack_safepoint(0, None, 1)
             .expect("engine ack advances the head");
         assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 1);
 
@@ -3918,13 +4572,15 @@ mod tests {
             notifications,
             vec![UiPumpNotification::Safepoint {
                 generation: 0,
-                evt_seq: 1
+                evt_seq: 1,
+                window: None,
             }],
             "the already-notified safepoint must not be delivered twice during drain"
         );
-        pump.begin_open()
+        pump.begin_open(None)
             .expect("final drain returns lifecycle to Closed");
-        pump.finish_open(false).expect("release test reservation");
+        pump.finish_open(None, false)
+            .expect("release test reservation");
 
         drop(mmap);
         let _ = std::fs::remove_file(shm);

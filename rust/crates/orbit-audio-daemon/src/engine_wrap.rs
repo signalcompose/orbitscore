@@ -3046,6 +3046,7 @@ pub(crate) fn enqueue_plugin_ui_notification(
         orbit_audio_sandbox::UiPumpNotification::Safepoint {
             generation,
             evt_seq,
+            ..
         } => (
             PluginUiEvent::Closed {
                 target,
@@ -3054,7 +3055,7 @@ pub(crate) fn enqueue_plugin_ui_notification(
             },
             true,
         ),
-        orbit_audio_sandbox::UiPumpNotification::CloseDone { completion } => {
+        orbit_audio_sandbox::UiPumpNotification::CloseDone { completion, .. } => {
             let completion = match completion {
                 orbit_audio_sandbox::UiCloseCompletion::SafepointCompleted => {
                     PluginUiCompletion::SafepointCompleted
@@ -6030,11 +6031,12 @@ impl EngineWrap {
             ));
         }
         let rendered_target = PluginUiTarget::from_state_target(&target, index);
-        pump.begin_open().map_err(plugin_ui_pump_error)?;
+        pump.begin_open(None).map_err(plugin_ui_pump_error)?;
         match route.lock() {
             Ok(mut route) => *route = Some(rendered_target.clone()),
             Err(_) => {
-                pump.finish_open(false).map_err(plugin_ui_pump_error)?;
+                pump.finish_open(None, false)
+                    .map_err(plugin_ui_pump_error)?;
                 return Err(WrapError::PluginUiProtocol(
                     "plugin UI target coordinator poisoned".into(),
                 ));
@@ -6052,7 +6054,7 @@ impl EngineWrap {
         }
         .map(|_| ())
         .map_err(plugin_ui_mailbox_error);
-        pump.finish_open(result.is_ok())
+        pump.finish_open(None, result.is_ok())
             .map_err(plugin_ui_pump_error)?;
         if result.is_err() {
             if let Ok(mut route) = route.lock() {
@@ -6139,7 +6141,7 @@ impl EngineWrap {
                 "AckUiSafepoint target does not match current UI target {current:?}"
             )));
         }
-        pump.ack_safepoint(generation, evt_seq)
+        pump.ack_safepoint(generation, None, evt_seq)
             .map_err(plugin_ui_pump_error)
     }
 
@@ -8303,6 +8305,7 @@ mod plugin_ui_event_routing_tests {
             orbit_audio_sandbox::UiPumpNotification::Safepoint {
                 generation: 3,
                 evt_seq: 5,
+                window: None,
             },
         ));
         assert_eq!(*route.lock().expect("route lock"), Some(target()));
@@ -8324,6 +8327,7 @@ mod plugin_ui_event_routing_tests {
             &events,
             orbit_audio_sandbox::UiPumpNotification::CloseDone {
                 completion: orbit_audio_sandbox::UiCloseCompletion::SafepointCompleted,
+                window: None,
             },
         ));
         assert_eq!(
@@ -8389,6 +8393,7 @@ mod plugin_ui_event_routing_tests {
             &events,
             orbit_audio_sandbox::UiPumpNotification::CloseDone {
                 completion: orbit_audio_sandbox::UiCloseCompletion::SafepointCompleted,
+                window: None,
             },
         ));
         assert_eq!(*route.lock().expect("route lock"), None);
@@ -8406,6 +8411,7 @@ mod plugin_ui_event_routing_tests {
             orbit_audio_sandbox::UiPumpNotification::Safepoint {
                 generation: 3,
                 evt_seq: 5,
+                window: None,
             },
         ));
         assert!(matches!(
@@ -8434,6 +8440,7 @@ mod plugin_ui_event_routing_tests {
             orbit_audio_sandbox::UiPumpNotification::Safepoint {
                 generation: 3,
                 evt_seq: 5,
+                window: None,
             },
         ));
         assert_eq!(

@@ -129,7 +129,7 @@ pub trait ControlStage {
         params: &BTreeMap<String, f64>,
     ) -> Result<Vec<ResolvedParam>, String>;
     fn is_standard(&self) -> bool;
-    fn handle_ui(&self, _open: bool, _title: Option<&str>) -> CommandOutcome {
+    fn handle_ui(&self, _open: bool, _title: Option<&str>, _window: Option<u64>) -> CommandOutcome {
         CommandOutcome::failed(CMD_RESULT_PLUGIN_ERROR, "plugin UI is unavailable")
     }
     fn tick_ui(&self) {}
@@ -779,7 +779,7 @@ impl RackController {
             // Root 3-2: a failed UI close must stay audible. The stage is dropped either way —
             // this loudness does not change that — but a silently swallowed failure here means
             // nobody ever learns the child's UI window may still be open.
-            let outcome = dropped.control.handle_ui(false, None);
+            let outcome = dropped.control.handle_ui(false, None, None);
             if outcome.result != CMD_RESULT_OK {
                 // error!: the dropped stage's window may stay open with nothing behind it, and
                 // no ticker counter or RPC carries this — this line is the only machine surface.
@@ -824,7 +824,13 @@ impl RackController {
         }
     }
 
-    pub fn handle_ui_at(&self, index: usize, open: bool, title: Option<&str>) -> CommandOutcome {
+    pub fn handle_ui_at(
+        &self,
+        index: usize,
+        open: bool,
+        title: Option<&str>,
+        window: u64,
+    ) -> CommandOutcome {
         let Some(stage) = self.stages.get(index) else {
             return CommandOutcome::failed(
                 CMD_RESULT_BAD_ARG,
@@ -837,7 +843,7 @@ impl RackController {
                 "standard plugin parameters live in the DSL; no UI is available",
             );
         }
-        stage.control.handle_ui(open, title)
+        stage.control.handle_ui(open, title, Some(window))
     }
 
     pub fn tick_ui(&self) {

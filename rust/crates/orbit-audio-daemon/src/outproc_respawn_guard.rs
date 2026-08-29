@@ -50,7 +50,7 @@ pub(crate) fn service_ui_pump_on_respawn(
             return false;
         }
     };
-    if reset.closed_visible_ui {
+    if !reset.closed_windows.is_empty() {
         crate::engine_wrap::enqueue_plugin_ui_closed_by_respawn(target, events);
     }
     true

@@ -135,11 +135,17 @@ impl ControlStage for ClapControl {
         self.standard
     }
 
-    fn handle_ui(&self, open: bool, title: Option<&str>) -> CommandOutcome {
-        self.ui.handle_command(
-            if open { CMD_OPEN_UI } else { CMD_CLOSE_UI },
-            if open { title } else { None },
-        )
+    fn handle_ui(&self, open: bool, title: Option<&str>, window: Option<u64>) -> CommandOutcome {
+        let kind = if open { CMD_OPEN_UI } else { CMD_CLOSE_UI };
+        match window {
+            Some(window) => {
+                self.ui
+                    .handle_indexed_command(kind, if open { title } else { None }, window)
+            }
+            None => self
+                .ui
+                .handle_command(kind, if open { title } else { None }),
+        }
     }
 
     fn tick_ui(&self) {
@@ -178,11 +184,17 @@ impl ControlStage for Vst3Control {
         false
     }
 
-    fn handle_ui(&self, open: bool, title: Option<&str>) -> CommandOutcome {
-        self.ui.handle_command(
-            if open { CMD_OPEN_UI } else { CMD_CLOSE_UI },
-            if open { title } else { None },
-        )
+    fn handle_ui(&self, open: bool, title: Option<&str>, window: Option<u64>) -> CommandOutcome {
+        let kind = if open { CMD_OPEN_UI } else { CMD_CLOSE_UI };
+        match window {
+            Some(window) => {
+                self.ui
+                    .handle_indexed_command(kind, if open { title } else { None }, window)
+            }
+            None => self
+                .ui
+                .handle_command(kind, if open { title } else { None }),
+        }
     }
 
     fn tick_ui(&self) {
@@ -361,12 +373,14 @@ struct OpenUiAtArg {
     index: usize,
     #[serde(default)]
     title: Option<String>,
+    window: u64,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CloseUiAtArg {
     index: usize,
+    window: u64,
 }
 
 fn parse_command_arg<T: for<'de> Deserialize<'de>>(arg: Option<&str>) -> Result<T, CommandOutcome> {
@@ -501,11 +515,14 @@ pub fn run() -> Result<()> {
                                 arg.index,
                                 true,
                                 arg.title.as_deref(),
+                                arg.window,
                             ),
                             Err(outcome) => outcome,
                         },
                         CMD_CLOSE_UI_AT => match parse_command_arg::<CloseUiAtArg>(arg) {
-                            Ok(arg) => controller.borrow().handle_ui_at(arg.index, false, None),
+                            Ok(arg) => controller
+                                .borrow()
+                                .handle_ui_at(arg.index, false, None, arg.window),
                             Err(outcome) => outcome,
                         },
                         _ => return None,
