@@ -161,6 +161,10 @@ impl ControlStage for ClapControl {
         dispatch_ui_command(&self.ui, open, title, window)
     }
 
+    fn ui_is_settled(&self) -> bool {
+        self.ui.ui_is_settled()
+    }
+
     fn tick_ui(&self) {
         self.ui.tick(self.ui.now());
     }
@@ -199,6 +203,10 @@ impl ControlStage for Vst3Control {
 
     fn handle_ui(&self, open: bool, title: Option<&str>, window: Option<u64>) -> CommandOutcome {
         dispatch_ui_command(&self.ui, open, title, window)
+    }
+
+    fn ui_is_settled(&self) -> bool {
+        self.ui.ui_is_settled()
     }
 
     fn tick_ui(&self) {

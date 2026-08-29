@@ -161,6 +161,41 @@ describe('#628 rack UI identity and name addressing', () => {
     expect(openPluginUi).toHaveBeenCalledTimes(0)
   })
 
+  it('S7 re-syncs the session to the token the daemon already holds', async () => {
+    // 🔴 daemon の binding 検査が「その index は window w1 に束縛済み」と拒否した時、**こちらが
+    // 採番した w2 で記録してはいけない**。TS だけが w2 を信じ daemon と child は w1 のままになり、
+    // 以後 DSL からの close は binding 不一致で必ず loud に失敗する — **そのウィンドウを二度と
+    // 閉じられなくなる**（2026-08-29 Fable 監査 Finding 1）。
+    const { global, bus, openPluginUi, closePluginUi } = await (async () => {
+      const h = harness()
+      const b = h.global.sum('drums')
+      await b.effect(rack('A'))
+      return { ...h, bus: b }
+    })()
+
+    await bus.ui('A')
+    const daemonWindow = openPluginUi.mock.calls[0]?.[3] as number
+    expect(Number.isSafeInteger(daemonWindow)).toBe(true)
+
+    // TS 側の簿記だけが失われた状態を作る（daemon は w1 を保持し続けている）。
+    ;(
+      global as unknown as { openPluginUiSessions: Map<number, unknown> }
+    ).openPluginUiSessions.clear()
+
+    openPluginUi.mockRejectedValueOnce(
+      new Error(
+        `OPEN_UI requested while lifecycle is Open (chain index 0 is bound to window ${daemonWindow})`,
+      ),
+    )
+    await bus.ui('A')
+
+    // 再同期できていれば、close は **daemon が持っている token** で発行される。
+    closePluginUi.mockClear()
+    await bus.ui('A', false)
+    expect(closePluginUi).toHaveBeenCalledTimes(1)
+    expect(closePluginUi.mock.calls[0]?.[2]).toBe(daemonWindow)
+  })
+
   it('S4 keeps an already-open instance idempotent after its index shifts', async () => {
     const { global, openPluginUi } = harness()
     const bus = global.sum('drums')

@@ -1190,7 +1190,27 @@ export class Global {
         // the recovery boundary. A missing/replaced target must remain loud;
         // registering a guessed identity would corrupt subsequent close/save.
         const entry = this.resolvePluginStateEntry(receiverId, index)
-        this.recordPluginUiSession(window, receiverId, entry.instanceId, index, entry.resolved)
+        // 🔴 **daemon が既に握っている token で記録する。**
+        //
+        // daemon の binding 検査は「その index は window w1 に束縛済み」と拒否する。ここで
+        // **こちらが採番した w2 で記録すると、TS だけが w2 を信じ daemon と child は w1 のまま**に
+        // なる。以後 DSL からの close は w2 で発行され binding 不一致で必ず loud に失敗し、
+        // **そのウィンドウを二度と閉じられなくなる**（2026-08-29 Fable 監査）。
+        // ユーザーが手で閉じてもイベントは w1 を運ぶので保存も拒否される。
+        //
+        // 拒否文言は token を含むので、それを読んで**daemon の実体へ再同期する**。
+        // 読めない形（child 由来の `already-open` 等）なら、こちらの token で記録するしかない。
+        const bound = /bound to window (\d+)/.exec(message)
+        const boundWindow = bound?.[1] === undefined ? undefined : Number(bound[1])
+        const sessionWindow =
+          boundWindow !== undefined && Number.isSafeInteger(boundWindow) ? boundWindow : window
+        this.recordPluginUiSession(
+          sessionWindow,
+          receiverId,
+          entry.instanceId,
+          index,
+          entry.resolved,
+        )
         return
       }
       throw error

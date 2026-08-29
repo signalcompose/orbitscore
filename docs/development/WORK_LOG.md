@@ -17,6 +17,69 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.419 fix: レビュー5体の指摘を適用 — Critical 2件はいずれも実バグ (#652) (Aug 29, 2026)
+
+`/simplify`（4観点・別途適用済み）に続き、`/code:pr-review-team`（Sonnet 4体）と
+**Fable 監査を並行**で回した。
+
+#### 🔴 Critical 1: 全ウィンドウが永久に開閉不能になる（**2体が独立に検出**）
+
+`UiEventHub.open_cycle` は **1 child 内の全 window で共有**され、`UI_CLOSED{w}` を載せてから
+`UI_CLOSED_DONE{w}` を載せるまで他 window の publish を止める。ところが
+`RackController::collect_retired` は**世代の到達だけ**を見て stage を退役させ、
+`UiService::Drop` は**ゲートを戻さない**。
+
+**故障**: UI が開いている stage が APPLY で drop → close cycle 進行中に退役 →
+`open_cycle` が `Some(w)` のまま残る → **同じ child の他の全ウィンドウが二度と開閉できない**。
+エラーもログも出ない。
+
+**直した位置**: `Drop` で塞ぐのではなく**退役条件**へ。設計 §4.8-(3) が
+「child の防御 close が cycle を完走させる」としているので、**完走するまで退役させない**のが筋。
+
+```rust
+.retain(|dropped| dropped.publish_generation > adopted || !dropped.ui_is_settled());
+```
+
+`ControlStage::ui_is_settled()` を新設（既定 `true` = UI を持たない stage は妨げない）。
+
+#### 🔴 Critical 2: コメントと実装が逆（本日の自作コード）
+
+`sync_header` の失敗で `break Err(e)` していた。コメントは「失敗しても capture 自体は続ける」。
+**1回の一時的な失敗で以降の音声が一切録れなくなる** — capture を一次資料にするという目的を、
+その保険自身が壊していた。握り潰さず報告して継続する形へ。テストで固定。
+
+#### 2体が収束した指摘
+
+| 指摘 | 検出 | 対応 |
+|---|---|---|
+| **ヘッダが未 flush 分を過大申告**（`kill -9` で data が EOF を越える） | comment-analyzer / Fable | `flush()` を先に |
+| `UiWindowKey` の doc が**実在しない区別**（"single-plugin effect children"）を語る | comment-analyzer / Fable | 訂正（effect は常に `Some`） |
+| `pluginChainPath` が**「唯一の写像」を二重に主張** | comment-analyzer | 委譲であることを明記 |
+
+#### 🔴 Fable の主指摘（Medium）: 拒否された token で簿記していた
+
+daemon の binding 検査が「その index は window w1 に束縛済み」と拒否した時、TS は**自分が採番した
+w2 で記録**していた。結果:
+
+- DSL からの close は w2 で発行 → binding 不一致で必ず loud 失敗 → **二度と閉じられない**
+- ユーザーが手で閉じてもイベントは w1 を運ぶ → 保存も拒否
+
+拒否文言に daemon の保持 token が入っているので、**それを読んで実体へ再同期**する形にした。
+S7 で固定し、**再同期を外すと red** になることも確認。
+
+#### Fable が「実在」を確認した項目（不在証明）
+
+設計 §1 の完了条件 1-9 と §5 の失敗モード表（P1-P14 / W1-W10 / H1-H6 / S1-S6 / E2E-2）は
+**欠落行ゼロ**。`index_binding` の用途 (i)(ii) とも配線済み。
+§4.7-(3)「`target.index` を帰属に使わない」も、残存4箇所すべてが**帰属ではない**ことを確認。
+
+#### 検証
+
+cfg 4象限すべて緑 / clippy（両 feature）exit=0 / rust 全 crate 0 failed /
+lint exit=0 / **2158 passed**
+
+---
+
 ### 6.418 test: 今日の是正を「知識」から「再現可能な仕組み」へ (Aug 29, 2026)
 
 > 今回かなりテストなどの是正が出来てると思うのですが、**これをただの知識ではなく再現可能な

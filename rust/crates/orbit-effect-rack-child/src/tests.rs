@@ -53,6 +53,8 @@ struct SynthControl {
     stats: Arc<Stats>,
     state: Vec<u8>,
     standard: bool,
+    /// close cycle 進行中を模す。`false` の間は退役を止める（C16）。
+    ui_settled: Arc<AtomicBool>,
 }
 
 impl Drop for SynthControl {
@@ -68,6 +70,10 @@ impl Drop for SynthControl {
 }
 
 impl ControlStage for SynthControl {
+    fn ui_is_settled(&self) -> bool {
+        self.ui_settled.load(Ordering::SeqCst)
+    }
+
     fn capture_state(&mut self) -> Result<Vec<u8>, String> {
         Ok(self.state.clone())
     }
@@ -99,6 +105,8 @@ struct SynthFactory {
     stats: Arc<Stats>,
     next_generation: u64,
     fail_write: AtomicBool,
+    /// 生成する stage の初期 UI 状態。テストが close cycle 進行中を模すのに使う（C16）。
+    ui_settled: Arc<AtomicBool>,
 }
 
 impl SynthFactory {
@@ -107,6 +115,7 @@ impl SynthFactory {
             stats,
             next_generation: 1,
             fail_write: AtomicBool::new(false),
+            ui_settled: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -157,6 +166,7 @@ impl StageFactory for SynthFactory {
             stats: self.stats.clone(),
             state,
             standard,
+            ui_settled: self.ui_settled.clone(),
         };
         let initial_params = control.resolve_params(spec.params())?;
         Ok(Box::new(StageInstance::new(
@@ -540,6 +550,7 @@ fn c11_chain_swap_is_observed_only_at_a_block_boundary() {
                 stats: stats.clone(),
                 state: Vec::new(),
                 standard: false,
+                ui_settled: Arc::new(AtomicBool::new(true)),
             }),
             Vec::new(),
             1,

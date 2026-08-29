@@ -661,7 +661,7 @@ export class DaemonClient extends EventEmitter {
     })
   }
 
-  /** The sole legacy UI-index → wire chain_path mapping (effects are 1-based in TS). */
+  /** Delegates to {@link pluginChainPathFor} — that function is the single mapping. */
   private pluginChainPath(target: PluginStateSaveTarget, legacyIndex?: number): readonly number[] {
     return pluginChainPathFor(target, legacyIndex)
   }

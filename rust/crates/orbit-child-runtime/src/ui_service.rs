@@ -16,7 +16,7 @@ use orbit_audio_sandbox::{
 };
 use orbit_child_ui::{
     CloseCompletion, PluginUiEndpoint, UiCloseStateMachine, UiEvent, UiHostActions, UiSize,
-    ALREADY_OPEN_DETAIL,
+    UiState, ALREADY_OPEN_DETAIL,
 };
 
 /// Maximum time Phase B waits for the host to complete the `UI_CLOSED` safepoint.
@@ -605,6 +605,23 @@ impl UiService {
     }
 
     /// Advance callback marshaling, retained-event publication, and close Phase B.
+    /// この service の UI が**片付いているか** — close cycle が進行中でないか。
+    ///
+    /// 🔴 rack が stage を退役させてよいかの判定に使う。close cycle の途中で stage を破棄すると
+    /// `UiEventHub` の共有ゲート（`open_cycle`）が `Some` のまま残り、**同じ child の全
+    /// ウィンドウが永久に開閉不能**になる。`Drop` はゲートを戻さないので、破棄する前に
+    /// ここで確かめる（2026-08-29 のレビューで 2 体が独立に検出）。
+    ///
+    /// state machine が `Closed`（＝そもそも開いていない、または close 完了）で、かつ hub の
+    /// ゲートも空いていることを要求する。
+    pub fn ui_is_settled(&self) -> bool {
+        let Ok(core) = self.core.try_borrow() else {
+            // 借用できない = 他の経路が触っている最中。**安全側に倒して退役させない。**
+            return false;
+        };
+        core.machine.state() == UiState::Closed && core.actions.is_event_ring_drained()
+    }
+
     pub fn tick(&self, now: Duration) {
         let mut core = self.core.borrow_mut();
         if self.pending_window_close.replace(false) {

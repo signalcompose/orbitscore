@@ -1193,8 +1193,12 @@ pub enum UiCloseCompletion {
     TimedOutWithoutSave,
 }
 
-/// Stable identity for one plugin UI window. `None` preserves the legacy non-indexed child
-/// protocol used by instruments and single-plugin effect children.
+/// Stable identity for one plugin UI window.
+///
+/// `None` は非 indexed の child プロトコル（**instrument のみ**）。effect は #628 以降
+/// `ui_handles` が無条件に `rack_target = true` を返すので、チェーンが 1 枚でも常に
+/// `Some(token)` になる。「single-plugin effect child は `None`」という経路は**存在しない**
+/// （2026-08-29 のレビューで、この doc がそう書いていたのを訂正）。
 pub type UiWindowKey = Option<u64>;
 
 impl UiCloseCompletion {
