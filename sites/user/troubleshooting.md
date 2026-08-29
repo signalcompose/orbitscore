@@ -84,30 +84,6 @@ seq.play(1, 0, 0, 0)      // 1 拍目だけ鳴らす
 
 デフォルトのテンポや拍子の設定によって、パターンが想定よりゆっくりまたは速く聞こえることがあります。`global.tempo()` と `global.beat()` を明示的に書いて確認してください。
 
----
-
-## ステータスバーに `❌ scsynth: not found` が表示される
-
-OrbitScore の拡張機能にはオーディオエンジン（scsynth）が同梱されていますが、何らかの理由で認識できていない状態です。
-
-以下の順番で対処してください:
-
-1. **拡張機能を再インストールする**
-   VS Code の拡張機能一覧から OrbitScore をアンインストールし、[GitHub Releases](https://github.com/signalcompose/orbitscore/releases) から `.vsix` ファイルを改めてダウンロードしてインストールし直します。
-
-2. **ログを確認する**
-   VS Code のメニューから **View → Output** を開き、ドロップダウンから **OrbitScore** を選ぶと、起動時のログを確認できます。エラーの詳細が表示されていることがあります。
-
-3. **システムの scsynth を指定する（上級者向け）**
-   すでに SuperCollider をインストールしている場合は、VS Code の設定（`orbitscore.scsynthPath`）にシステムの scsynth のパスを指定することができます:
-   ```json
-   {
-     "orbitscore.scsynthPath": "/Applications/SuperCollider.app/Contents/Resources/scsynth"
-   }
-   ```
-
----
-
 ## audioPath 関連のエラーが出る
 
 ### 相対パスの基準はどこですか？
@@ -123,16 +99,6 @@ var drum = init global.seq
 drum.audio("/Users/yourname/audio/kick.wav")
 drum.play(1, 1, 1, 1)
 ```
-
----
-
-## scsynth サーバーが起動しない（"Server failed to start" エラー）
-
-ポート 57110 がすでに別のプロセスに使われている場合、scsynth が起動できないことがあります。
-
-VS Code のコマンドパレット（`Cmd+Shift+P`）を開き、`OrbitScore: Force Kill scsynth` を実行してください。これで既存の scsynth プロセスが終了します。その後、ステータスバーをクリックしてエンジンを起動し直してください。
-
----
 
 ## それでも解決しない場合
 

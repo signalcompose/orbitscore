@@ -111,7 +111,7 @@ Adding an octave number as in `global.key("D3")` lets you manage the register of
 
 ## global.midiLatency() — MIDI Latency Compensation
 
-A fixed offset for aligning the timing of SuperCollider's audio output with its MIDI output by ear.
+A fixed offset for aligning OrbitScore's audio output with the MIDI it sends out, by ear.
 
 ```text
 global.midiLatency(20)  // send MIDI 20 ms early (default 0)

@@ -21,8 +21,10 @@ snare.output("drum")
 グループバスにもエフェクトを挿せます。バスにまとめてから 1 基のコンプレッサーをかける、といった使い方ができます。
 
 ```text
-sum("bus").effect("./plugins/MyEffect.clap")
+sum("bus").effect("GlueComp")
 ```
+
+エフェクトはチェーン（配列）でも挿せます。複数プラグインの直列接続や `Gain(db: n)` のような標準プラグインの使い方は [エフェクトを挿す](./effects.md) を参照してください。
 
 処理の順番は「シーケンス個別の insert（`seq.effect()`）→ グループバス」です。DAW の「トラック insert → グループトラック」と同じ考え方です。
 
@@ -30,6 +32,7 @@ sum("bus").effect("./plugins/MyEffect.clap")
 
 - `sum` は 1 段のみで、**ネスト（sum の中に sum）はできません**。
 - `output(name)` で指定する名前は、事前に `global.sum(name)` で宣言しておく必要があります。未宣言の名前を指定するとエラーになります。
+- `output(name)` で sum バスへ送れるのは **audio シーケンスと instrument シーケンス**です。`seq.midi()` は外部機器へ送るものなので、ミキサーの出口を持たずエラーになります。
 
 ## aux / send — 別経路に音を送る
 
@@ -37,7 +40,7 @@ sum("bus").effect("./plugins/MyEffect.clap")
 
 ```text
 global.aux("rev")
-aux("rev").effect("./plugins/Reverb.clap")
+aux("rev").effect("TAL Reverb 4")
 
 kick.send("rev", 0.3)
 ```
@@ -50,6 +53,10 @@ kick.send("rev", 0.3)
 kick.send("rev", 0.3)
 kick.send("delay", 0.2)
 ```
+
+::: warning send() が使えないのは MIDI シーケンスです
+`output()` と同じく、`send()` も **audio シーケンスと instrument シーケンス**で使えます。`seq.midi()` では使えません。
+:::
 
 ## v1 の正直な制約
 
@@ -72,7 +79,3 @@ kick.send("delay", 0.2)
 sum や aux はエフェクト（[エフェクトを挿す](./effects.md)）と組み合わせて使う機能です。次は、複数ファイルでプロジェクトを構成する `import` の使い方を見てみましょう。
 
 → [複数ファイルプロジェクト](../projects/import.md)
-
-::: tip 検証について
-本章のコード例は 2026-07-17 の実機 E2E テストで動作確認済みです。
-:::

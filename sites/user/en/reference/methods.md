@@ -298,7 +298,85 @@ Methods for MIDI sequences and related global settings. See [MIDI Output](/en/mi
 
 ---
 
-## 7. Method Chains
+## 7. Plugins — instrument / effect / UI
+
+Features for hosting CLAP / VST3 plugins. For a full walkthrough, see [Playing a Plugin Instrument](../plugins/instrument.md) and [Inserting Effects](../mixing/effects.md).
+
+### Sequence — Plugin Instrument
+
+| Signature | Description | Example |
+|---|---|---|
+| `instrument(spec)` | A type-declaration verb that declares the plugin as the instrument (mutually exclusive with `.audio()`/`.midi()`). Values passed to `play()` are interpreted as degrees | `piano.instrument("Kontakt 8")` |
+| `instrument(spec, statePath)` | A second argument ending in `.vstpreset`/`.state` restores a saved state (CLAP / VST3) | `piano.instrument("Kontakt 8", "./states/piano.state")` |
+| `instrument(spec, pluginId, statePath)` | Three-argument form that specifies both a pluginId and a state | `piano.instrument("Kontakt 8.vst3", "id", "./states/piano.state")` |
+
+- Supported formats are `.clap` / `.vst3` (`.component` is not supported). Each sequence gets an independent instance; sounds are not shared.
+- `seq.effect()`, and `output()` / `send()` to a `sum` bus, work on **audio and instrument** sequences. `midi()` targets an external device, so it has no mixer output and all three raise an error.
+
+### Global / Sequence — Inserting Effects
+
+| Signature | Description | Example |
+|---|---|---|
+| `global.effect(spec)` | Insert on the master bus (applies to every sequence) | `global.effect("TAL Reverb 4")` |
+| `seq.effect(spec)` | Insert that applies only to that sequence (audio / instrument) | `drums.effect("TAL Reverb 4")` |
+| `sum("name").effect(spec)` / `aux("name").effect(spec)` | Insert on a bus (sum or aux) | `sum("bus").effect("TAL Reverb 4")` |
+
+Values you can pass as `spec`:
+
+| Notation | Meaning |
+|---|---|
+| `"name"` | A catalog plugin name (`effect("name")` means the same as `effect(["name"])` — it replaces the whole chain with this picture) |
+| `"vendor/name"` / `"clap/name"` / `"vst3/name"` | Vendor / format qualification (disambiguates a name collision) |
+| `"./path/to/plugin.clap"` | A direct path (never consults the catalog) |
+| `[...]` | A **series chain**. Plugins connect in order, top to bottom |
+| `plugin("name", enabled: false)` | Argument form. `enabled: false` disables that plugin (pass-through in a series chain) |
+| `Gain(db: n)` | A built-in plugin (bundled with the app, no UI/state, parameters written directly in the DSL) |
+| `layer([...])` | Parallel combination (**notation reserved only — using it in v1 is an error**) |
+
+```text
+drums.effect(["TAL Reverb 4", Gain(db: -6)])           // chain
+drums.effect([plugin("TAL Reverb 4", enabled: false)])  // disabled (bypass)
+drums.effect([])                                        // remove everything (removal = drop from the array and re-evaluate)
+```
+
+- Accepted formats are `.clap` / `.vst3` (`.component` is not supported).
+- There is no dedicated removal method. **Removal means dropping the element from the array and re-evaluating.**
+
+### Sequence / Bus — Plugin UI
+
+| Signature | Description | Example |
+|---|---|---|
+| `seq.ui()` | No-argument form = opens the instrument's UI | `piano.ui()` |
+| `seq.ui("name")` / `sum("name").ui("name")` / `aux("name").ui("name")` | Opens the UI of every insert matching the name | `drums.ui("TAL Reverb 4")` |
+| `seq.ui("name", false)` | Closes it | `drums.ui("TAL Reverb 4", false)` |
+
+- Built-in plugins (such as `Gain`) have no UI, so passing a name for one is an explicit error.
+- Zero matches is also an explicit error (it never silently no-ops).
+- The open form of `ui()` is idempotent (re-evaluating the same line does not open it twice). Close is not idempotent.
+
+---
+
+## 8. Mixer — sum / aux / send / output
+
+Features for grouping sequences into buses. For a full walkthrough, see [sum and aux/send](../mixing/routing.md).
+
+| Signature | Description | Example |
+|---|---|---|
+| `global.sum(name)` | Declares a group bus (idempotent) | `global.sum("drum")` |
+| `global.aux(name)` | Declares a return bus (idempotent) | `global.aux("rev")` |
+| `sum("name")` / `aux("name")` | A reference to an already-declared bus (`.effect()` / `.ui()` can be chained) | `sum("drum").effect("GlueComp")` |
+| `seq.output(name)` | Routes the sequence's output to a group bus (audio / instrument) | `kick.output("drum")` |
+| `seq.output(n)` | Numbered render bus (1–16, score mode) | `kick.output(1)` |
+| `seq.send(name, amount)` | Sets the amount sent to a return bus (fixed at post-fader; multiple sends allowed) | `kick.send("rev", 0.3)` |
+
+- `sum` is a single level only (no nesting).
+- `output(name)` / `send(name, amount)` work on **audio and instrument** sequences (not with `midi()`).
+- The second argument to `send()` is a linear gain (roughly 0.0–1.0, with no hard clamp on the upper end).
+- `global.linkAudio()` cannot be combined with mixer features (sum/aux/plugin effects in general).
+
+---
+
+## 9. Method Chains
 
 All sequence methods can be connected with `.`.
 

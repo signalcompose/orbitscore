@@ -39,20 +39,25 @@ export const sidebarJa: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
+    text: 'プラグインを使う',
+    collapsed: false,
+    items: [{ text: '15. プラグイン音源を鳴らす', link: '/plugins/instrument' }],
+  },
+  {
     text: 'ミキシングとプロジェクト構成',
     collapsed: false,
     items: [
-      { text: '15. エフェクトを挿す', link: '/mixing/effects' },
-      { text: '16. sum と aux/send', link: '/mixing/routing' },
-      { text: '17. 複数ファイルプロジェクト', link: '/projects/import' },
+      { text: '16. エフェクトを挿す', link: '/mixing/effects' },
+      { text: '17. sum と aux/send', link: '/mixing/routing' },
+      { text: '18. 複数ファイルプロジェクト', link: '/projects/import' },
     ],
   },
   {
     text: '困ったときは',
     collapsed: false,
     items: [
-      { text: '18. リファレンス', link: '/reference/methods' },
-      { text: '19. トラブルシューティング', link: '/troubleshooting' },
+      { text: '19. リファレンス', link: '/reference/methods' },
+      { text: '20. トラブルシューティング', link: '/troubleshooting' },
     ],
   },
 ]
@@ -96,20 +101,25 @@ export const sidebarEn: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
+    text: 'Using Plugins',
+    collapsed: false,
+    items: [{ text: '15. Playing a Plugin Instrument', link: '/en/plugins/instrument' }],
+  },
+  {
     text: 'Mixing and Project Structure',
     collapsed: false,
     items: [
-      { text: '15. Inserting Effects', link: '/en/mixing/effects' },
-      { text: '16. sum and aux/send', link: '/en/mixing/routing' },
-      { text: '17. Multi-File Projects', link: '/en/projects/import' },
+      { text: '16. Inserting Effects', link: '/en/mixing/effects' },
+      { text: '17. sum and aux/send', link: '/en/mixing/routing' },
+      { text: '18. Multi-File Projects', link: '/en/projects/import' },
     ],
   },
   {
     text: 'Help',
     collapsed: false,
     items: [
-      { text: '18. Reference', link: '/en/reference/methods' },
-      { text: '19. Troubleshooting', link: '/en/troubleshooting' },
+      { text: '19. Reference', link: '/en/reference/methods' },
+      { text: '20. Troubleshooting', link: '/en/troubleshooting' },
     ],
   },
 ]

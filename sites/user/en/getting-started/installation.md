@@ -18,8 +18,9 @@ Before you begin, please make sure your environment meets the following conditio
 | Windows / Linux | Not supported in v1 |
 | VS Code or Cursor (version 1.99.0 or later) | Required |
 
-::: info Installing SuperCollider is not required
-The OrbitScore extension comes with the audio engine (scsynth) bundled. You can start using it right away without installing SuperCollider separately.
+::: info Nothing else to install
+The extension bundles the audio engine (`orbit-audio-daemon`, written in Rust) along with
+the binaries that host plugins. There is nothing else you need to install.
 :::
 
 ## Installation Steps
@@ -58,21 +59,24 @@ If you are using Cursor, type `cursor` instead of `code`.
 Once the installation is complete, the OrbitScore status is displayed in the status bar (the blue bar) at the bottom of the VS Code window.
 
 ```
-🎵 OrbitScore: Ready     ✅ scsynth (bundled)
+🎵 OrbitScore: Stopped
 ```
 
-If both of these are shown, the installation has completed successfully.
+This appears first — the engine has not started yet. Click it to open the command list
+and choose **Start Engine**. Once it starts, the text changes:
 
 The contents shown in the status bar vary depending on the situation:
 
 | Display | Meaning |
 |---|---|
-| `✅ scsynth (bundled)` | The bundled audio engine is running (the normal state) |
-| `⚙️ scsynth (custom)` | A user-specified audio engine is being used |
-| `❌ scsynth: not found` | The audio engine cannot be found (see the workaround below) |
+| `🎵 OrbitScore: Stopped` | The engine is stopped (the normal state before you start it) |
+| `🎵 OrbitScore: Ready` | The engine is running and ready to evaluate |
+| `🎵 OrbitScore: ▶️ Playing` | Playback is running |
+| `🎵 OrbitScore: Ready 🐛` | Running in debug mode (the trailing 🐛 marks it) |
 
-::: warning When `❌ scsynth: not found` is displayed
-Please uninstall the extension once, download the `.vsix` file again, and reinstall it. If that does not resolve the issue, please refer to [Troubleshooting](../troubleshooting.md).
+::: info Seeing only one indicator is normal
+No extra indicator for the audio engine is shown while everything is fine — that is by
+design. Nothing appearing is the normal state.
 :::
 
 ## Future Plans

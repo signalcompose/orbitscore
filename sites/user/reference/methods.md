@@ -342,7 +342,85 @@ MIDI シーケンスと MIDI 関連のグローバル設定です。詳しくは
 
 ---
 
-## 7. メソッドチェーン
+## 7. プラグイン — instrument / effect / UI
+
+CLAP / VST3 プラグインをホストする機能です。詳しい解説は [プラグイン音源を鳴らす](../plugins/instrument.md) と [エフェクトを挿す](../mixing/effects.md) を参照してください。
+
+### シーケンス — プラグイン音源
+
+| シグネチャ | 説明 | 例 |
+|---|---|---|
+| `instrument(spec)` | プラグインを音源として宣言する種別宣言 verb（`.audio()`/`.midi()` と排他）。`play()` の値は度数として解釈される | `piano.instrument("Kontakt 8")` |
+| `instrument(spec, statePath)` | `.vstpreset`/`.state` で終わる第 2 引数は保存済み state の復元（CLAP / VST3） | `piano.instrument("Kontakt 8", "./states/piano.state")` |
+| `instrument(spec, pluginId, statePath)` | pluginId と state を両方指定する 3 引数形 | `piano.instrument("Kontakt 8.vst3", "id", "./states/piano.state")` |
+
+- 対応形式は `.clap` / `.vst3`（`.component` は未対応）。シーケンスごとに独立したインスタンスを持ち、音色は共有されません。
+- `seq.effect()` / `sum` バスへの `output()` / `send()` は **audio と instrument** で使えます。`midi()` は外部機器へ送るためミキサーの出口を持たず、いずれもエラーになります。
+
+### グローバル / シーケンス — エフェクトを挿す
+
+| シグネチャ | 説明 | 例 |
+|---|---|---|
+| `global.effect(spec)` | マスターバスへの insert（全シーケンスに掛かる） | `global.effect("TAL Reverb 4")` |
+| `seq.effect(spec)` | そのシーケンスだけに掛かる insert（audio / instrument） | `drums.effect("TAL Reverb 4")` |
+| `sum("name").effect(spec)` / `aux("name").effect(spec)` | バス（sum・aux）への insert | `sum("bus").effect("TAL Reverb 4")` |
+
+`spec` に渡せる値:
+
+| 記法 | 意味 |
+|---|---|
+| `"名前"` | カタログのプラグイン名（`effect("名前")` は `effect(["名前"])` と同じ意味 = チェーン全体をこの像に置き換える） |
+| `"vendor/名前"` / `"clap/名前"` / `"vst3/名前"` | vendor・format 修飾（同名衝突時の一意化） |
+| `"./path/to/plugin.clap"` | パス直接指定（カタログを参照しない） |
+| `[...]` | **直列チェーン**。上から順にプラグインを接続する |
+| `plugin("名前", enabled: false)` | 引数付き形。`enabled: false` はそのプラグインを無効化（直列では素通し） |
+| `Gain(db: n)` | 標準プラグイン（アプリ同梱・UI/state なし・パラメータは DSL に直接書く） |
+| `layer([...])` | 並列合成（**記法のみ予約・v1 では使うとエラー**） |
+
+```text
+drums.effect(["TAL Reverb 4", Gain(db: -6)])           // チェーン
+drums.effect([plugin("TAL Reverb 4", enabled: false)])  // 無効化（バイパス）
+drums.effect([])                                        // 全部外す（削除は配列から消して再評価）
+```
+
+- 受け付ける形式は `.clap` / `.vst3`（`.component` は未対応）。
+- 削除専用のメソッドはありません。**配列から要素を消して再評価する**のが削除です。
+
+### シーケンス / バス — プラグイン UI
+
+| シグネチャ | 説明 | 例 |
+|---|---|---|
+| `seq.ui()` | 無引数形 = instrument の UI を開く | `piano.ui()` |
+| `seq.ui("名前")` / `sum("name").ui("名前")` / `aux("name").ui("名前")` | 名前が一致する insert の UI をすべて開く | `drums.ui("TAL Reverb 4")` |
+| `seq.ui("名前", false)` | 閉じる | `drums.ui("TAL Reverb 4", false)` |
+
+- 標準プラグイン（`Gain` など）は UI を持たないため、名前を渡すと明示エラーになります。
+- 一致が 0 件の場合も明示エラーになります（黙って no-op しません）。
+- `ui()` の open 形は冪等です（同じ行を再評価しても二重に開きません）。close は冪等ではありません。
+
+---
+
+## 8. ミキサー — sum / aux / send / output
+
+複数のシーケンスをバスにまとめる機能です。詳しい解説は [sum と aux/send](../mixing/routing.md) を参照してください。
+
+| シグネチャ | 説明 | 例 |
+|---|---|---|
+| `global.sum(name)` | グループバスを宣言する（冪等） | `global.sum("drum")` |
+| `global.aux(name)` | リターンバスを宣言する（冪等） | `global.aux("rev")` |
+| `sum("name")` / `aux("name")` | 宣言済みバスへの参照（`.effect()` / `.ui()` をチェーンできる） | `sum("drum").effect("GlueComp")` |
+| `seq.output(name)` | シーケンスの出力先をグループバスに指定する（audio / instrument） |
+| `seq.output(n)` | 数値レンダーバス（1〜16・スコアモード） | `kick.output(1)` |
+| `seq.send(name, amount)` | リターンバスへ送る量を指定（post-fader 固定・複数 send 可） | `kick.send("rev", 0.3)` |
+
+- `sum` は 1 段のみ（ネスト不可）。
+- `output(name)` / `send(name, amount)` は **audio と instrument** で使えます（`midi()` では使えません）。
+- `send()` の第 2 引数は線形 gain（0.0〜1.0 目安、上限は clamp されません）。
+- `global.linkAudio()` とミキサー機能（sum/aux/プラグインエフェクト全般）は同時に使えません。
+
+---
+
+## 9. メソッドチェーン
 
 すべてのシーケンスメソッドは `.` で繋ぐことができます。
 
