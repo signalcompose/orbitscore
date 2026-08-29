@@ -51,6 +51,7 @@ import {
   analyzeWavBuffer,
   estimateFundamentalHz,
 } from '../../packages/vscode-extension/src/wav-analysis'
+import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
 
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
@@ -70,8 +71,6 @@ if (gated && !appAvailable) {
       'Set ORBITSTUDIO_APP to override the default path.',
   )
 }
-
-import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
 
 const REPO_ROOT = path.resolve(__dirname, '../..')
 
@@ -2025,6 +2024,111 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         const stop = await activeClient.call('stop_engine')
         expect(stop.isError, stop.text).toBe(false)
         await waitForEngine(false, 15_000, 'ambiguous mixer-name E2E engine stopped')
+      }
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  // #654: the live playhead (#390) was wired only into the audio backend, so
+  // `instrument()` sequences never moved the highlight — in the 840 piece only
+  // the one `audio()` layer stepped while six Kontakt layers sat frozen.
+  //
+  // `[STEP]` lines are the playhead's ONLY transport, and shouldFilterLine()
+  // keeps them out of the output channel in normal mode (they are per-slot
+  // noise for humans). Debug mode appends the raw stream instead, which is why
+  // this test starts the engine with `debug: true` — it is the one way the
+  // marker is observable end-to-end from MCP.
+  it.skipIf(!appAvailable)(
+    'steps the live playhead through an instrument() sequence, rests included',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      const catalog = requireCatalogFixtures()
+      const dslPath = path.join(tmpRoot, 'playhead-instrument.orbs')
+      // Slots 1 and 3 are rests on purpose: the marker must land on them too,
+      // otherwise the highlight hops between notes instead of keeping time.
+      const dslLines = [
+        'var global = init GLOBAL',
+        'global.tempo(120)',
+        'var ph654 = init global.seq',
+        'ph654.beat(4 by 4).length(1)',
+        `ph654.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+        'ph654.octave(4)',
+        'ph654.play(1, 0, 3, 0)',
+        'global.start()',
+        'ph654.run()',
+      ]
+      fs.writeFileSync(dslPath, dslLines.join('\n') + '\n')
+
+      const start = await activeClient.call('start_engine', { debug: true })
+      expect(start.isError, start.text).toBe(false)
+      try {
+        await waitForEngine(true, 30_000, 'playhead E2E engine running')
+        const opened = await activeClient.call('open_file', { path: dslPath })
+        expect(opened.isError, opened.text).toBe(false)
+        const selected = await activeClient.call('set_selection', {
+          start_line: 1,
+          start_char: 1,
+          end_line: dslLines.length,
+          end_char: 999_999,
+        })
+        expect(selected.isError, selected.text).toBe(false)
+
+        const errorPrefix = 'ERROR:'
+        const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const errorsBefore = beforeLog.split(errorPrefix).length - 1
+
+        const run = await activeClient.call('run_selection')
+        expect(run.isError, run.text).toBe(false)
+
+        // Collect the slot indices the engine actually marked for this sequence.
+        // Grammar: "[STEP] <seqName> <argPath> <atEpochMs>" (playhead.ts).
+        const slotsFrom = (log: string): Set<string> =>
+          new Set(
+            log
+              .split('\n')
+              .map((line) => /\[STEP\]\s+ph654\s+(\d+(?:\.\d+)*)\s+\d+/.exec(line))
+              .filter((m): m is RegExpExecArray => m !== null)
+              .map((m) => m[1]),
+          )
+
+        let seenSlots = new Set<string>()
+        let stepLogTail = ''
+        try {
+          await waitUntil(
+            async () => {
+              const log = (await activeClient.call('get_log', { lines: 500 })).text
+              stepLogTail = log.slice(-2500)
+              seenSlots = slotsFrom(log)
+              return ['0', '1', '2', '3'].every((slot) => seenSlots.has(slot))
+            },
+            { intervalMs: 200, timeoutMs: 20_000, label: '[STEP] markers for every ph654 slot' },
+          )
+        } catch (error) {
+          throw new Error(
+            `${String(error)}\n` +
+              `seen slots = ${JSON.stringify([...seenSlots].sort())}\n` +
+              '(empty = the note path emitted no markers at all; a subset = rest ' +
+              'slots are being skipped)\n' +
+              `--- log tail ---\n${stepLogTail}`,
+          )
+        }
+
+        // Slots 1 and 3 carry no note, so their presence is the whole point:
+        // this is what a note-only marker stream would fail.
+        expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
+
+        const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+        // <=, not ===: get_log is a fixed 500-line window, so older ERROR lines
+        // scroll out as the debug stream fills it.
+        expect(afterLog.split(errorPrefix).length - 1).toBeLessThanOrEqual(errorsBefore)
+      } finally {
+        await activeClient.call('evaluate_orbitscore', { code: 'global.stop()' })
+        const stop = await activeClient.call('stop_engine')
+        expect(stop.isError, stop.text).toBe(false)
+        await waitForEngine(false, 15_000, 'playhead E2E engine stopped')
       }
     },
     TEST_TIMEOUT_MS,
