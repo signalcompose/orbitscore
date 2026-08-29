@@ -17,6 +17,61 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.416 fix(capture): ヘッダを定期 patch + 🔴 stale artifact ガードを機械化 (#651) (Aug 29, 2026)
+
+#### 何を直したか
+
+キャプチャ WAV のヘッダは `finalize()` でしか patch されず、**プロセスが graceful に
+落ちなければ size=0 の placeholder のまま**残っていた。実測では RIFF size=36 / data size=0 で
+2.29MB のデータを抱えており、**macOS の `afinfo` も `estimated duration: 0.000000 sec`** と読む。
+**owner が開いても無音**になる。
+
+writer スレッドの drain ループで **約1秒ごとに header を patch** するようにした
+（`sync_header`）。**いつ落ちてもその時点まで有効な WAV** になる。
+
+#### 🔴 未解決: 実機ではまだ効かない
+
+| | |
+|---|---|
+| `RiffWavWriter::sync_header` 単体 | ✅ 動く |
+| `CaptureWriter` 経由のループ（実機と同じ経路） | ✅ **動く** |
+| 実機 E2E のキャプチャ | 🔴 **効かない・理由不明** |
+
+**2つの仮説を立てて2つとも外した**（「解析器がヘッダを無視できるから実害は小さい」→ 誤り /
+「E2E が stale なバイナリを使っていた」→ 再ビルド後も同じ）。ここで打ち切り、#651 に残す。
+
+#### 🔴 stale artifact ガード — 同じ事故を繰り返しているので機械化した
+
+> これもなんども繰り返してるよ。（owner）
+
+**「ビルドが届いていないバイナリを相手に測る」事故**を、注意ではなく**機械**で止める。
+
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` に、gated 実行の**モジュール読み込み時**に走る
+チェックを置いた: `rust/target/release/orbit-audio-daemon` が `rust/**/*.rs` |
+`Cargo.toml` より古ければ、**テストを1本も走らせずに落ちる**。原因ファイル名と両者の
+タイムスタンプ、再ビルドのコマンドを出す。
+
+**発火することを確認済み**（`touch capture.rs` → `Test Files 1 failed`・テストは0本実行）。
+
+過去の同型:
+- 2026-08-29（本件）: mtime 比較で「バイナリの方が新しい」と納得し、**再コンパイルが走るかを
+  見なかった**
+- 2026-08-01: pre-commit のビルドが **stash 退避中のソースから dist を焼き**、実機を壊した
+
+mtime 比較は「rebuild が no-op か」より弱いが、**実行前に 1ms で終わる**。
+弱い分は「疑わしきは落とす」側に倒す。
+
+#### 変異検証について（owner 指摘）
+
+> 変異必要なの？
+
+**不要だった。** `sync_header` を壊して red を見る工程は、実機で「開けるか」を見れば済む話の
+上に何も足していない。**ユニットテスト自体は機能テストなので残す**が、
+**壊して確かめた工程が余分**だった。この日確定した規律（E2E → ログ → 最後に変異）を、
+規律を書いた本人が直後に破った。
+
+---
+
 ### 6.415 test(e2e): 実機で機能を確認し、🔴 マスターフェーダーが効いていないことを発見 (#633) (Aug 29, 2026)
 
 #### ✅ #633 の機能は実機で緑

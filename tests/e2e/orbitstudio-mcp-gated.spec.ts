@@ -72,6 +72,65 @@ if (gated && !appAvailable) {
 }
 
 const REPO_ROOT = path.resolve(__dirname, '../..')
+
+// ──────────────────────────────────────────────────────────────────────
+// 🔴 stale artifact ガード（2026-08-29・同じ事故を何度も繰り返しているため機械化）
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * daemon バイナリが Rust ソースより古ければ、**テストを1本も走らせずに落とす**。
+ *
+ * この suite は「実機で本当に動くか」を確かめるためにある。ビルドが届いていない
+ * バイナリを相手に測ると、**緑も赤も意味を持たない**。
+ *
+ * 実害の記録:
+ * - 2026-08-29: capture のヘッダ修正が効かず、20分かけて別の仮説を追った。原因は
+ *   `cargo build --manifest-path ... --release --features ...` が daemon まで届いて
+ *   おらず、**E2E が修正前のバイナリを使っていた**こと。「バイナリの方が新しい」という
+ *   mtime 比較で納得してしまい、再コンパイルが走るかを見ていなかった。
+ * - 2026-08-01: pre-commit のビルドが stash 退避中のソースから dist を焼き、実機を壊した。
+ *
+ * mtime 比較は「rebuild が no-op か」より弱いが、**テスト実行前に 1ms で終わる**のが利点。
+ * 弱い分は「疑わしきは落とす」側に倒す（等しい場合は通す）。
+ */
+function assertDaemonBinaryIsNotStale(): void {
+  const binary = path.join(REPO_ROOT, 'rust/target/release/orbit-audio-daemon')
+  if (!fs.existsSync(binary)) {
+    throw new Error(
+      `gated E2E: ${binary} does not exist. Build it first:\n` +
+        '  cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument',
+    )
+  }
+  const builtAt = fs.statSync(binary).mtimeMs
+  let newest = { at: 0, file: '' }
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        if (entry.name === 'target' || entry.name === 'node_modules') continue
+        walk(full)
+      } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
+        const at = fs.statSync(full).mtimeMs
+        if (at > newest.at) newest = { at, file: full }
+      }
+    }
+  }
+  walk(path.join(REPO_ROOT, 'rust'))
+  if (newest.at > builtAt) {
+    throw new Error(
+      'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
+        `stale code.\n  newest source: ${path.relative(REPO_ROOT, newest.file)}\n` +
+        `  binary:        ${new Date(builtAt).toISOString()}\n` +
+        `  source:        ${new Date(newest.at).toISOString()}\n` +
+        'Rebuild before running:\n' +
+        '  cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument',
+    )
+  }
+}
+
+if (gated && appAvailable) {
+  assertDaemonBinaryIsNotStale()
+}
 const EXTENSION_DEV_PATH = path.join(REPO_ROOT, 'packages/vscode-extension')
 const KICK_LOOP_FIXTURE = path.join(REPO_ROOT, 'tests/fixtures/mcp-e2e/kick_loop.orbs')
 const DIAGNOSTIC_FIXTURE = path.join(REPO_ROOT, 'tests/fixtures/mcp-e2e/diagnostic_case.orbs')
