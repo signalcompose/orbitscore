@@ -307,7 +307,7 @@ Features for hosting CLAP / VST3 plugins. For a full walkthrough, see [Playing a
 | Signature | Description | Example |
 |---|---|---|
 | `instrument(spec)` | A type-declaration verb that declares the plugin as the instrument (mutually exclusive with `.audio()`/`.midi()`). Values passed to `play()` are interpreted as degrees | `piano.instrument("Kontakt 8")` |
-| `instrument(spec, statePath)` | A second argument ending in `.vstpreset`/`.state` restores a saved state (VST3 only) | `piano.instrument("Kontakt 8", "./states/piano.state")` |
+| `instrument(spec, statePath)` | A second argument ending in `.vstpreset`/`.state` restores a saved state (CLAP / VST3) | `piano.instrument("Kontakt 8", "./states/piano.state")` |
 | `instrument(spec, pluginId, statePath)` | Three-argument form that specifies both a pluginId and a state | `piano.instrument("Kontakt 8.vst3", "id", "./states/piano.state")` |
 
 - Supported formats are `.clap` / `.vst3` (`.component` is not supported). Each sequence gets an independent instance; sounds are not shared.

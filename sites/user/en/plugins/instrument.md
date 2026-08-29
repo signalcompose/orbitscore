@@ -38,7 +38,7 @@ Run **"OrbitScore: Rescan Plugin Catalog"** from the Command Palette to rescan i
 
 ## Saving and Restoring a Sound (State)
 
-You can save and restore a sound you created with a plugin by passing a path ending in `.vstpreset` or `.state` as the second argument (or the third argument, when you also specify a pluginId). **This is supported for VST3 only.**
+You can save and restore a sound you created with a plugin by passing a path ending in `.vstpreset` or `.state` as the second argument (or the third argument, when you also specify a pluginId). **This works with both CLAP and VST3** (#562).
 
 ```text
 // catalog name + state (the extension identifies it as a state path)
@@ -49,10 +49,6 @@ piano.instrument("/Library/Audio/Plug-Ins/VST3/Kontakt 8.vst3", "kontakt-8-id", 
 ```
 
 The second argument is classified by its file extension alone. Anything ending in `.vstpreset` or `.state` is treated as a state path; any other string is treated as a pluginId. Relative paths are resolved against the directory of the file being edited.
-
-::: warning CLAP does not support state restoration
-Passing a state path with a CLAP plugin is an explicit error (v1 constraint).
-:::
 
 ## Each Sequence Gets an Independent Instance
 

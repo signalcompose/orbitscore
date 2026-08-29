@@ -351,7 +351,7 @@ CLAP / VST3 プラグインをホストする機能です。詳しい解説は [
 | シグネチャ | 説明 | 例 |
 |---|---|---|
 | `instrument(spec)` | プラグインを音源として宣言する種別宣言 verb（`.audio()`/`.midi()` と排他）。`play()` の値は度数として解釈される | `piano.instrument("Kontakt 8")` |
-| `instrument(spec, statePath)` | `.vstpreset`/`.state` で終わる第 2 引数は保存済み state の復元（VST3 のみ） | `piano.instrument("Kontakt 8", "./states/piano.state")` |
+| `instrument(spec, statePath)` | `.vstpreset`/`.state` で終わる第 2 引数は保存済み state の復元（CLAP / VST3） | `piano.instrument("Kontakt 8", "./states/piano.state")` |
 | `instrument(spec, pluginId, statePath)` | pluginId と state を両方指定する 3 引数形 | `piano.instrument("Kontakt 8.vst3", "id", "./states/piano.state")` |
 
 - 対応形式は `.clap` / `.vst3`（`.component` は未対応）。シーケンスごとに独立したインスタンスを持ち、音色は共有されません。

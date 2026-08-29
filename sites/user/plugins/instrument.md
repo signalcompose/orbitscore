@@ -38,7 +38,7 @@ piano.instrument("/Library/Audio/Plug-Ins/VST3/Kontakt 8.vst3")  // フルパス
 
 ## 音色の保存と復元（state）
 
-プラグインで作った音色は、`.vstpreset` または `.state` で終わるパスを第 2 引数（pluginId を指定する場合は第 3 引数）に渡すことで保存・復元できます。**VST3 のみ対応**です。
+プラグインで作った音色は、`.vstpreset` または `.state` で終わるパスを第 2 引数（pluginId を指定する場合は第 3 引数）に渡すことで保存・復元できます。**CLAP / VST3 のどちらでも使えます**（#562）。
 
 ```text
 // カタログ名 + state（拡張子で state と判定される）
@@ -49,10 +49,6 @@ piano.instrument("/Library/Audio/Plug-Ins/VST3/Kontakt 8.vst3", "kontakt-8-id", 
 ```
 
 第 2 引数の判別は拡張子だけで行われます。`.vstpreset` / `.state` で終わるものは state パス、それ以外の文字列は pluginId として扱われます。相対パスは編集中のファイルのディレクトリを基準に解決されます。
-
-::: warning CLAP は state 復元に未対応
-CLAP プラグインで state パスを指定すると明示的にエラーになります（v1 制限）。
-:::
 
 ## シーケンスごとに独立したインスタンス
 

@@ -630,7 +630,7 @@ synth.play(1, 3, 5, 0)  // 値は度数（Pitch DSL と同じ）
 - **対応フォーマットは `.clap` と `.vst3` の両方**
 - **シーケンスごとに独立したプラグインインスタンスを持ちます**（同じプラグインを複数の
   シーケンスで宣言しても音色は共有されません）。第 2/第 3 引数に `.vstpreset`/`.state` で
-  終わるパスを渡すと、保存済みの音色を復元できます（VST3 のみ）
+  終わるパスを渡すと、保存済みの音色を復元できます（CLAP / VST3）
 - `seq.effect()` / sum バスへの `output()` / `send()` は **audio と instrument** で使えます（`midi()` は不可）。
   制限）。instrument の音は master へ直接ミックスされますが、`global.effect()`（master
   chain）は適用されます
