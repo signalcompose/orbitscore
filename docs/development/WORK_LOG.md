@@ -17,6 +17,55 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.409 test(e2e): #643 の実機検証が #633 のログ洪水に阻まれることを実測した (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) PR-2 / [#633](https://github.com/signalcompose/orbitscore/issues/633)
+
+#### 実機 gated の #643 E2E 7本が緑にならない — 原因は #633
+
+診断を仕込んで実機ログを取ったところ、**25ms 間隔で同一エラーが埋め尽くしていた**:
+
+```text
+UI_CLOSED_DONE seq 2 has invalid completion
+  Some("{\"index\":0,\"completion\":\"safepoint-completed\"}")   role="effect"
+```
+
+**#633 の欠陥1番そのもの** — daemon の DONE 腕が完全一致でしか受けず、event ring の先頭が
+永久に詰まる。**ログ洪水が daemon を飽和させ、effect の適用が届かない。**
+
+WORK_LOG 6.399 が別テスト（`reports an ambiguous bare mixer name`）で
+**「同欠陥のログ洪水による巻き添え」**として既に記録していた症状と同型。
+
+#### 実装側の問題ではない根拠
+
+**同じ実行で audio シーケンスの effect は効いている**（#625 R-E1-R-E7 が緑・`a/dry = 0.323`）。
+instrument は**同じラック機構**（`sequenceEffect()`）を通るので、機構は動いている。
+
+#### 処置
+
+E2E 7本は**削除せず残す**（#633 が直れば自動的に検証になる）。ファイル冒頭に理由を記録した。
+**E2E-1 は単位の誤りを修正** — `global.gain()` は **dB API**（`gain(valueDb?)`・-60..+12 にクランプ）
+なのに、ブリーフに「`global.gain(0.5)` で RMS 半分」と書いていた。`1.0dB → 0.5dB` は RMS 比 0.944。
+`0 dB → -6 dB` に修正（10^(-6/20) ≈ 0.501）。
+
+#### 🔴 記録: 手動での実機起動に5回失敗して時間を使った
+
+`orbs` CLI に `--extensionDevelopmentPath` と `ORBITSCORE_MCP_PORT` を渡しても MCP が立たず、
+最後はアプリ自体が起動しなかった。**MCP は壊れていない** — 同じ実行で **9本が MCP 経由で成功**
+している（プラグイン状態の復元・カタログ再スキャン・エフェクト差し替え）。
+
+**教訓**: 「実機で確かめる」を**アプリを自分で起動すること**と考えたのが遠回りだった。
+**すでに正しく起動できている仕組み（E2E）に観測点を足す**方が速い。
+昨日の教訓（沈黙には観測を足す）は正しかったが、**観測を足す場所**の選び方を誤った。
+
+#### 副次的に判明: gated E2E は単独実行できない
+
+`-t "E2E-2"` で絞ると `beforeAll` のカタログ初期化が走らず、`catalogClapEffectPath` 未初期化で
+落ちる。**1本を試すのに毎回全17本（3〜5分）**回す必要があり、切り分けのサイクルが遅い。
+テスト基盤側の課題として記録（#630 と同種）。
+
+---
+
 ### 6.408 feat(dsl): instrument に effect / output / send を解禁し、マスターフェーダーを直した (#643) (Aug 29, 2026)
 
 **Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) PR-2

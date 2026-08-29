@@ -356,6 +356,14 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     const liveModeMarker = '🎵 Live coding mode'
     const startupTimeoutMarker = 'daemon ready line timeout after 10000ms'
     const markerCount = (log: string, marker: string): number => log.split(marker).length - 1
+    // 🔴 `capture_wav` は **spawn 専用オプション**（daemon 起動時にしか適用されない）。
+    // 既に別テストがエンジンを起動していると
+    // 「engine is already running; requested spawn-only option(s): capture_wav」で弾かれる。
+    // capture を要求する時は必ず一度落としてから起動する（#643 E2E 7本がこれで全滅した）。
+    if (captureWav !== undefined) {
+      await activeClient.call('stop_engine')
+      await waitForEngine(false, 15_000, `${label} stopped before capture start`)
+    }
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
       const liveModeBefore = markerCount(beforeLog, liveModeMarker)
@@ -399,6 +407,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   }
 
   /**
+   * 🔴 **これらは #633 が直るまで緑にならない**（2026-08-29 実測）。
+   * `UI_CLOSED_DONE seq N has invalid completion` が **25ms 間隔でログを埋め尽くし**、
+   * daemon が飽和して effect の適用が届かない（WORK_LOG 6.399 が
+   * 「同欠陥のログ洪水による巻き添え」として別テストで記録済みの症状と同型）。
+   *
+   * 実装側の問題ではない根拠: **同じ実行で audio シーケンスの effect は効いている**
+   * （#625 R-E1-R-E7 が緑・`a/dry = 0.323`）。instrument は同じラック機構を通る。
+   *
+   * #633 の修正後にこの7本を回すこと。**削除しない** — 直れば自動的に検証になる。
+   *
    * #643 の7シナリオを、同じ実 OrbitStudio → run_selection → daemon capture → get_log
    * 経路で駆動する。`evaluate_orbitscore` の受理結果は補助的にしか使わず、成功判定は必ず
    * capture の区間 RMS/peak と固定500行窓の ERROR 件数で行う。
@@ -1326,7 +1344,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
-    '#643 E2E-1 applies global.gain(0.5) to a playing instrument at about half the 1.0 RMS',
+    '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
       const catalog = requireCatalogFixtures()
       const result = await captureInstrumentScenario(
@@ -1336,7 +1354,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'global.key("C")',
           'global.tempo(120)',
           'global.beat(4 by 4)',
-          'global.gain(1.0)',
+          'global.gain(0)',
           'global.start()',
           'var gain643 = init global.seq',
           `gain643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
@@ -1346,10 +1364,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         ],
         async ({ captureSegment, evaluate }) => {
           await captureSegment('unity')
-          await evaluate('global.gain(0.5)')
+          await evaluate('global.gain(-6)')
           await captureSegment('half')
         },
       )
+      // 🔴 `global.gain()` は **dB**（`gain(valueDb?)`・-60..+12 にクランプ）。線形値ではない。
+      // 0 dB -> -6 dB で amplitude は 10^(-6/20) ≈ 0.501 = 約半分。
       const unity = result.rms('unity')
       const half = result.rms('half')
       expect(unity, 'E2E-1 unity instrument must be audible').toBeGreaterThan(0.05)
