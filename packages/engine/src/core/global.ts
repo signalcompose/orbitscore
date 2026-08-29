@@ -10,6 +10,7 @@ import { evaluateChordDefinition } from '../midi/chord/resolve-chords'
 import { PREDEFINED_CHORDS } from '../midi/chord/predefined-chords'
 import { PluginNoteOutput } from '../midi/plugin-note-output'
 import type { RackRecipe } from '../signal-chain/rack'
+import { gainDbToAmplitude } from '../audio/audio-gain-utils'
 
 import { Sequence } from './sequence'
 import { Scheduler, GlobalState } from './global/types'
@@ -47,7 +48,6 @@ import {
   type PluginStateIdentity,
   type SavedProjectPluginState,
 } from './project-state-store'
-import { gainDbToAmplitude } from '../audio/audio-gain-utils'
 
 export interface ResolvedPluginStateTarget {
   identity: PluginStateIdentity

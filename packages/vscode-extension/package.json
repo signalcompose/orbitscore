@@ -114,6 +114,12 @@
         "category": "OrbitScore"
       },
       {
+        "command": "orbitscore.browsePlugins",
+        "title": "OrbitScore: Browse Plugins",
+        "icon": "$(library)",
+        "category": "OrbitScore"
+      },
+      {
         "command": "orbitscore.engineViewSelectDevice",
         "title": "OrbitScore: Select Audio Device (Engine View)",
         "category": "OrbitScore"

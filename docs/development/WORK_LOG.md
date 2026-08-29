@@ -17,6 +17,74 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.412 feat(editor): 274個から探す入口と、名前の誤りを評価前に知る診断 (#638) (Aug 29, 2026)
+
+**Issue**: [#638](https://github.com/signalcompose/orbitscore/issues/638)（#633 と1本の PR・owner 決定）
+
+#### なぜ
+
+実カタログは **342件**（effect **274** / instrument **74**・IK Multimedia だけで 130）。
+**名前を覚えている前提の補完だけでは、この規模は扱えない。**
+
+| 足りなかったもの | 入れたもの |
+|---|---|
+| 「何を挿すか**探している**」時の入口が無い | **Quick Pick**（`OrbitScore: Browse Plugins`） |
+| `effect(["存在しない名前"])` が**評価するまで分からない** | **カタログ照合の診断** |
+
+#### 1. Quick Pick
+
+カーソルが `effect(` / `instrument(` の文字列の中にあれば**そこから role を取り**、打ちかけの
+断片を置換する（**補完と同じ編集結果になる**）。文脈の外なら種別を訊いて `"名前"` を挿入する。
+
+行は `filterCatalogEntries` を再利用して作る。**補完が挿入する文字列と1文字も違わないため**、
+`format/name` / `vendor/name` の曖昧性解消がリストからの選択でも保たれる。
+
+#### 2. カタログ照合の診断
+
+エンジンの `resolveCatalogSpec` と同じ順で 4 種を分類する: **未検出 / vendor 曖昧 /
+role 不一致 / v1 でホストできない format**。
+
+🔴 **重大度は Error でなく Warning**。エンジンは実際に throw するが、**拡張の持つカタログは
+キャッシュされたスナップショット**なので、名前が**正しくてまだスキャンされていない**ことがある。
+Warning は「怪しい」と言うが、スナップショットに支えられない確信までは主張しない。
+
+#### 🔴 拡張はエンジンを import できない — 重複を「検出可能」にする
+
+拡張は **`.vsix` として単独出荷**するのでエンジンパッケージに依存できない。そこで解決規則を
+**ミラーし、合意テストで固定した**: 1つのコーパス（18ケース）を**両実装に流し、受理・拒否が
+一致することを assert** する。片方だけが変わればテストが赤くなる。
+前例は `tests/vscode-extension/dsl-method-catalog.spec.ts`。
+
+#610 が診断をエンジンパーサへ一本化したら、このミラーは**消える側**である。
+
+#### 🔴 変異検証で、自分のテストが「間違った理由で通っていた」ことが判明
+
+6変異のうち **2つが最初は生き残った**:
+
+| 変異 | なぜ生き残ったか |
+|---|---|
+| path 接頭辞の判定を殺す | テストの `./local.clap` が**パス接頭辞と拡張子の両方**に該当し、片方が死んでも他方が拾う |
+| state file 判定を殺す | `./tones/bass.vstpreset` も `./` で拾われる |
+
+**3つの除外規則を、それぞれ単独でしか救えないケースで突き直した**
+（`./racks/my-chain` / `MyPlugin.clap` / `bass.vstpreset`）。再実行で 3 件とも red。
+
+**教訓**: 除外規則が複数あるとき、**すべてに該当する例で書いたテストは規則を区別できない。**
+1規則につき1つ、その規則だけが救うケースを置く。
+
+#### 変異検証（全10件・すべて red → restore で green）
+
+診断側6件（標準プラグイン除外 / path 接頭辞 / 拡張子 / state file / vendor 曖昧 / role フィルタ）
++ Quick Pick 側4件（role フィルタ / ソート / insertText の曖昧性解消 / description の format）。
+
+#### 設計チェックで見つけた設計正本の陳腐化（#633 側）
+
+`docs/design/628-ui-pump-per-index-design.md` §4.7-(1) が「TS は `chain_path` を送っていない
+（`packages/` の grep 0件）」としていたが、**設計執筆後に #628 の `3b634850` で解消済み**
+だった（`daemon-client.ts` が `pluginChainPath()` で4経路すべてに送出）。設計書に訂正を追記。
+
+---
+
 ### 6.411 fix: fixer 差分の再点検で3件 — うち2件は「訂正が不完全だった」 (#643) (Aug 29, 2026)
 
 **Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#648](https://github.com/signalcompose/orbitscore/pull/648)
