@@ -52,9 +52,13 @@ You can run only the part of your code you select, without saving the file. This
 
 Running patterns of different time signatures simultaneously is called "polymeter," and combining different tempos is called "polyrhythm." Both are easy to express with OrbitScore's syntax. See [Polymeter and Polyrhythm](./basics/polyrhythm.md) for details.
 
-### Backed by SuperCollider
+### The sound engine ships with the extension
 
-The actual sound is produced by [SuperCollider](https://supercollider.github.io/), an audio engine with a long history. OrbitScore's VS Code extension comes with SuperCollider bundled, so you do not need to install it separately.
+The actual sound is produced by OrbitScore's own audio engine, written in Rust.
+It comes bundled with the extension, so there is nothing else to install.
+
+Plugin hosting (CLAP / VST3) is bundled too, so your own instruments and effects
+can be driven from the DSL.
 
 ## How to Read This Site
 

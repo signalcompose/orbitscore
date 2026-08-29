@@ -88,7 +88,13 @@ Depending on the default tempo and time signature, a pattern may sound slower or
 
 ## `❌ scsynth: not found` Is Shown in the Status Bar
 
-The OrbitScore extension comes with the audio engine (scsynth) bundled, but for some reason it cannot be found.
+::: warning This only happens with the SuperCollider backend
+The default engine (Rust) does not use scsynth, so this indicator never appears.
+It applies only if you have set `orbitscore.engine` to `"sc"`.
+If you get no sound on the default engine, see [No Sound](#no-sound).
+:::
+
+You have the SuperCollider backend selected, and the bundled scsynth cannot be recognised for some reason.
 
 Please try the following in order:
 
@@ -127,6 +133,10 @@ drum.play(1, 1, 1, 1)
 ---
 
 ## scsynth Server Will Not Start ("Server failed to start" Error)
+
+::: warning Also specific to the SuperCollider backend
+This does not apply to the default Rust engine.
+:::
 
 If port 57110 is already in use by another process, scsynth may fail to start.
 

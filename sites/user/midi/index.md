@@ -111,7 +111,7 @@ global.key("D3")    // D をトニックとし、度数 1 が D3 になるよう
 
 ## global.midiLatency() — MIDI 遅延補正
 
-SuperCollider のオーディオ出力と MIDI 出力のタイミングを耳で合わせるための固定オフセットです。
+OrbitScore のオーディオ出力と、外部へ送る MIDI 出力のタイミングを耳で合わせるための固定オフセットです。
 
 ```text
 global.midiLatency(20)  // 20 ms のオフセットを加えて MIDI を送信（デフォルト 0）
