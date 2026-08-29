@@ -446,7 +446,6 @@ mod tests {
         );
     }
 
-    #[test]
     /// 🔴 finalize を一度も呼ばずに捨てても、`sync_header` を通した分は開ける WAV である。
     ///
     /// 2026-08-29 の実測: E2E が残した capture は RIFF size=36 / data size=0 のまま
