@@ -178,7 +178,7 @@ export interface AudioEngine {
   /**
    * マスターゲインを daemon の mixer へ設定する（#643 PR-2）。**線形 amplitude** を渡す
    * （`gainDbToAmplitude` で変換済みのもの）。daemon は `render_multi` の gain ramp として
-   * **合流後に1回だけ**適用する — これがミキサーのマスターフェーダーの意味論であり、
+   * **event 混合後に1回だけ**適用する（insert の前 — spec の既知制約） — これがミキサーのマスターフェーダーの意味論であり、
    * イベントごとに畳み込む旧方式（audio シーケンスのみ・instrument には効かなかった）を置き換える。
    */
   setGlobalGain?(amplitude: number, rampSec?: number): Promise<void>

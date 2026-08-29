@@ -984,7 +984,6 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
   }
 
-  /** Restore source routes independently; one bad source must not fail daemon recovery. */
   /**
    * 🔴 マスターゲインを respawn 後に再適用する（#643 PR-2）。
    *
@@ -1011,6 +1010,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
   }
 
+  /** Restore source routes independently; one bad source must not fail daemon recovery. */
   private async reapplySourceRoutingAfterRespawn(): Promise<void> {
     for (const { source, unit, target } of this.sourceRoutings.values()) {
       try {
@@ -1215,7 +1215,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
   /**
    * マスターゲインを daemon の mixer へ設定する（#643 PR-2）。**線形 amplitude** を受ける。
    *
-   * daemon は `render_multi` の gain ramp として **合流後に1回だけ**適用する。旧方式は
+   * daemon は `render_multi` の gain ramp として **event 混合後に1回だけ**適用する（insert の前 — spec の既知制約）。旧方式は
    * `masterGainDb` を **イベントごとの gain に畳み込んで**いたため、(a) instrument には効かず、
    * (b) daemon の gain ramp（線形補間）が一度も使われていなかった。
    */

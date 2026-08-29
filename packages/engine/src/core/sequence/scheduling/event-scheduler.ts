@@ -45,8 +45,9 @@ function calculateEventGain(
   // post-loop の `processor.process`（insert）の順なので、**master は今も insert の前**。
   // これは spec の既知制約（`INSTRUCTION_ORBITSCORE_DSL.md`: 「master gain ramp は
   // per-sequence insert の**前**に適用される（DAW の『fader は insert 後』と逆）」）で、
-  // 本 PR のスコープ外。#648 レビューで当初「解消した」と誤記したので明記しておく。マスターフェーダーは合流後に
-  // 1回だけ掛かるもので、各ソースへ配るものではない。daemon 側の `render_multi` が
+  // 本 PR のスコープ外。#648 レビューで当初「解消した」と誤記したので明記しておく。
+  //
+  // マスターフェーダーは**event 混合後に1回だけ**掛かるもので、各ソースへ配るものではない。daemon 側の `render_multi` が
   // gain ramp として適用する（`Global.gain()` → `setGlobalGain`）。
   //
   // 旧実装は `sequenceGainDb + masterGainDb` を返しており、(a) instrument の note 経路には

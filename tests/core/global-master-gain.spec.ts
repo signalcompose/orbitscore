@@ -1,12 +1,12 @@
 /**
- * #643 PR-2 — マスターフェーダーは **合流後に1回だけ**掛かる。
+ * #643 PR-2 — マスターフェーダーは **event 混合後に1回だけ**掛かる（insert の前 — spec の既知制約）。
  *
  * 旧実装は `masterGainDb` を **イベントごとの gain に畳み込んで**いたため:
  *   (a) instrument の note 経路には畳み込みが無く、**マスターが一切効かなかった**
  *   (b) daemon の gain ramp（線形補間）が一度も使われていなかった。
  *
  * 現在は `Global.gain()` が daemon の mixer master へ線形 amplitude を送り、
- * `render_multi` の gain ramp が合流後に適用する。
+ * `render_multi` の gain ramp が event 混合後（insert の前）に適用する。
  */
 
 import { describe, expect, it, vi } from 'vitest'
