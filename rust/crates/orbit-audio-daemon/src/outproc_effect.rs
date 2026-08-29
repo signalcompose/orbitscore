@@ -638,7 +638,6 @@ impl PostProcessor for OutProcEffectPostProcessor {
     }
 }
 
-/// interleaved f32 の abs ピークを f32 bits で返す（非負 f32 bits は u32 として単調 = `fetch_max` 可）。
 /// `--shm`/`--chain`/`--sample-rate` を渡して rack effect child を 1 つ起動する。
 /// `start_outproc_effect` の初回 spawn と watchdog の respawn が共有する。
 ///

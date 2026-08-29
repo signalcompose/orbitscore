@@ -17,6 +17,92 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.407 fix: レビュー5体の指摘を適用し、自分が作った Critical を1件直した (#643) (Aug 29, 2026)
+
+**Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#646](https://github.com/signalcompose/orbitscore/pull/646)
+**レビュー**: `/code:pr-review-team` 4体 + **Fable 並行投入**（最後に回さない・発見クラスが直交）
+
+#### 結果
+
+| レビュアー | Critical | Important |
+|---|---|---|
+| code-reviewer | 0 | 0 |
+| silent-failure-hunter | 0 | 3（同一の横断的関心事） |
+| pr-test-analyzer | 0 | 1（テスト20本追加・**「通るだけ」0本**） |
+| comment-analyzer | **1** | 2 |
+| **Fable** | 0 | **2**（テストの穴） |
+
+#### 🔴 Critical は自分が作ったもの（doc 誤付着の3回目）
+
+`peak_bits` を削除した際に doc の1行が残り、**次の関数 `spawn_effect_child` の説明の1行目**に
+化けていた（「abs ピークを返す」）。
+
+**同じ PR で doc 誤付着は3回目**で、しかも **WORK_LOG 6.406 に「1件あった」と自己申告した
+その自己監査が、この3件目を見落としていた**。
+
+#### 制御スレッドの silent detach（silent-failure-hunter Important）
+
+replace の宛先移行で長さ一致を `debug_assert_eq!` が守っていたが、**release では `zip` が
+黙って切り詰め**、移行漏れの unit が**リバーブごと外れる**（設計 §7 が名指しした故障そのもの）。
+
+**推奨は `assert_eq!` だったが採らなかった** — 「効くようにする」は正しいが、**演奏中に daemon が
+落ちる**のは owner 原則（エラーで止めない）に反する。**`tracing::error!` + 共通部分は移行**に変更。
+
+**指摘は正しく、処方は違う**という判断が要る場面だった（#645 の「気づかせる」と「止める」の混同と同型）。
+
+#### Fable が見つけたテストの穴2件 — どちらも「この PR 自身が変えたもの」
+
+| | 生き残っていた変異 |
+|---|---|
+| **A-1** | `transport.cursor_frames = ...saturating_add(frames)` を**削除しても全 suite が通る** |
+| **A-2** | `for unit in 0..unit_count` を `0..1` に**縮めても通る** |
+
+`STUB_TRANSPORT` を実 transport に置き換えたのがこの PR の意味的変更点なのに、**前進を assert する
+テストが1本も無かった**。**変更点と検証点がずれる**のは、テストを「機能」ではなく「触ったファイル」で
+考えると起きる。
+
+**変異検証の実出力**:
+
+```text
+変異1（transport 前進を削除）  -> source_transport_cursor_advances... FAILED
+変異2（0..unit_count -> 0..1） -> every_reported_unit_contributes_a_feed FAILED
+復元後                          -> 52 passed（cmp で復元一致を確認）
+```
+
+#### 適用しなかったもの（判断の記録）
+
+| | 理由 |
+|---|---|
+| RT フォールバックの観測カウンタ（4箇所） | **ユーザーは音で気づく**（無音・途切れ）ので埋まるのは「理由」だけ。RT パスの3〜5関数にシグネチャ変更が要り、**「atomic 1本」と見積もった私が過小評価だった** |
+| RT スタックの `ArrayVec<_, 512>` | **実測 16,384 バイト**。`MaybeUninit::uninit()` なので**初期化コストは無く**スタック消費のみ（512KB 級の約3%）。「放置したら誰が困るか」が書けない |
+| Link 収集の二重実装（57行） | bit 一致の主張に関わる経路 |
+
+#### 🔴 レビューの過程で、この PR の範囲外の欠陥が2件見つかった
+
+| 内容 | issue |
+|---|---|
+| **ミキサーの出口が未設計** — `frames × output_channels > 8192`（**8ch @ 2048 など普通の構成**）で instrument が無音。バスは既にデバイス幅なので**配置だけで直る**（合流は `output.rs:957-960` の3行） | **#611**（改題: the mixer's output side） |
+| **マルチティンバー未対応** — 受け皿は本 PR で完成したが**子プロセスが常に 1 出力**。`SetSourceRouting` で unit 1〜15 は**成功応答を返すが音は出ない** | **#647**（新規） |
+
+owner 指摘で設計の欠落が判明した:
+
+> オーディオやインスト → ミキサー（バス、AUX など様々なルーティング、**柔軟なアウトプット指定**）
+
+**ミキサーは入口・内部・出口の3つを持つ。本設計が一般化したのは内部だけだった。**
+入口は `(instance, unit)` で一般化したのに、**出口を固定のまま残していた**（対称性の欠落）。
+設計文書に **§1.5** として記録。`Link` が唯一の出口として特別扱いされているのが未一般化の証拠。
+
+#### コミット前に差分を読んで、自分の取りこぼしを2件見つけた
+
+1. **やめたはずの RT カウンタが `post_processor.rs` に残っていた**（方針変更後に戻し忘れ）
+2. **ログ文言が不正確** — 「keep their old routing」と書いたが、実際は**新 slot が Master のまま**
+
+#### 検証（main が sandbox 外で実行）
+
+clippy 4象限 **4/4 exit=0** / native **52 passed** / core **51** / daemon **239・39**
+
+---
+
 ### 6.406 refactor: /simplify の指摘を適用し、その過程で cfg 象限の欠陥を1件作って直した (#643) (Aug 29, 2026)
 
 **Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#646](https://github.com/signalcompose/orbitscore/pull/646)

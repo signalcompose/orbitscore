@@ -5699,10 +5699,26 @@ impl EngineWrap {
                 )
             })?;
             debug_assert_eq!(control.instance_index.get(&name), Some(&old_index));
-            debug_assert_eq!(
-                control.slots[old_index].source_dests.len(),
-                control.slots[spare_index].source_dests.len()
-            );
+            // 🔴 長さが揃わないと `zip` が黙って切り詰め、移行漏れの unit が
+            // **リバーブごと外れたまま**新 slot に引き継がれる（設計 §7 が名指しした silent detach）。
+            // ここは制御スレッドなので `assert!` も書けるが、**採らない** — 演奏中に daemon が落ちる方が
+            // 害が大きい（owner 原則: エラーで止めない）。共通部分は移行し、差分をログに出して
+            // `get_log` から観測可能にする。両 slot とも `default_source_dests()` 由来なので
+            // 正常経路では到達しない。
+            let old_units = control.slots[old_index].source_dests.len();
+            let new_units = control.slots[spare_index].source_dests.len();
+            if old_units != new_units {
+                tracing::error!(
+                    instance = %name,
+                    old_slot = old_index,
+                    new_slot = spare_index,
+                    old_units,
+                    new_units,
+                    "instrument replacement: source destination arrays differ in length; \
+                     units beyond the shorter array are not migrated and stay at Master \
+                     on the new slot (wiring bug)"
+                );
+            }
             for (old_dest, new_dest) in control.slots[old_index]
                 .source_dests
                 .iter()

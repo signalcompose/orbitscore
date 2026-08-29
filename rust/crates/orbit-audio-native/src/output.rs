@@ -1679,6 +1679,100 @@ mod source_feed_tests {
         assert_eq!(invalid.load(), SourceDest::Master);
     }
 
+    /// source が **毎ブロック受け取る transport** を記録する fixture。`render_engine_with_sources` が
+    /// `cursor_frames` を前進させることの検証に使う（この PR で `STUB_TRANSPORT` を実 transport へ
+    /// 置き換えたが、前進を assert するテストが1本も無く、`saturating_add` を消しても全 suite が
+    /// 通る状態だった — Fable 監査 A-1）。
+    fn transport_recording_source(
+        log: std::sync::Arc<std::sync::Mutex<Vec<u64>>>,
+        units: usize,
+    ) -> SourceSlot {
+        struct Recorder {
+            log: std::sync::Arc<std::sync::Mutex<Vec<u64>>>,
+            units: usize,
+            output: Vec<f32>,
+        }
+
+        impl BlockSource for Recorder {
+            fn render(&mut self, _frames: usize, transport: &BlockTransport) -> usize {
+                self.log.lock().unwrap().push(transport.cursor_frames);
+                self.units
+            }
+
+            fn output(&self, unit: usize) -> &[f32] {
+                // unit ごとに異なる値を返す（多 unit の取り違えを検出可能にする）。
+                assert!(unit < self.units);
+                &self.output
+            }
+        }
+
+        SourceSlot {
+            source: Box::new(Recorder {
+                log,
+                units,
+                output: vec![0.25; 8],
+            }),
+            dests: (0..units.max(1))
+                .map(|_| SourceDestCell::new(SourceDest::Master))
+                .collect(),
+        }
+    }
+
+    /// 🔴 `render_engine_with_sources` は毎ブロック `cursor_frames` を frames だけ前進させ、
+    /// **その値を source へ渡す**。`transport.cursor_frames = ...saturating_add(frames)` を削ると
+    /// 記録が `[0, 0, 0]` になり落ちる（Fable 監査 A-1: 変異が全 suite を生き残っていた）。
+    #[test]
+    fn source_transport_cursor_advances_by_the_block_length_every_callback() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut sources = [transport_recording_source(log.clone(), 1)];
+        let engine = Engine::new(48_000, 2);
+        let mut link = None;
+        let mut buses: [InsertBusStage; 0] = [];
+        let mut transport = BlockTransport {
+            cursor_frames: 0,
+            sample_rate: 48_000,
+        };
+        let mut hw = vec![0.0f32; 8]; // 2ch × 4 frames
+
+        for _ in 0..3 {
+            render_engine_with_sources(
+                &engine,
+                &mut link,
+                &mut buses,
+                &mut sources,
+                &mut transport,
+                2,
+                &mut hw,
+            );
+        }
+
+        // 各コールバックが「そのブロック開始時点の cursor」を受け取る。
+        assert_eq!(*log.lock().unwrap(), vec![0, 4, 8]);
+        assert_eq!(transport.cursor_frames, 12);
+    }
+
+    /// 🔴 多 unit 経路を実際に通す。`collect_source_feeds` の `0..unit_count` を `0..1` に縮めると
+    /// feed が1本になり落ちる（Fable 監査 A-2: 多 unit の実行経路が未検証だった）。
+    #[test]
+    fn every_reported_unit_contributes_a_feed() {
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut sources = [transport_recording_source(log, 3)];
+        let transport = BlockTransport {
+            cursor_frames: 0,
+            sample_rate: 48_000,
+        };
+        let rendered = render_sources(&mut sources, 4, &transport);
+        assert_eq!(rendered.as_slice(), &[3]);
+
+        let feeds = collect_source_feeds(&sources, &rendered, &[], 8);
+        // 3 unit すべてが feed を出す（1本や0本ではない）。
+        assert_eq!(feeds.len(), 3);
+        for (buffer, dest) in &feeds {
+            assert_eq!(*dest, FeedDest::Hardware);
+            assert_eq!(buffer.len(), 8);
+        }
+    }
+
     fn fixed_source(output: Vec<f32>, dest: SourceDest) -> SourceSlot {
         struct FixedSource {
             output: Vec<f32>,
