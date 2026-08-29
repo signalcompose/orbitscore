@@ -2077,7 +2077,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         expect(selected.isError, selected.text).toBe(false)
 
         const errorPrefix = 'ERROR:'
-        const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const beforeLog = (await activeClient.call('get_log', { lines: 1000 })).text
         const errorsBefore = beforeLog.split(errorPrefix).length - 1
 
         const run = await activeClient.call('run_selection')
@@ -2094,14 +2094,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
               .map((m) => m[1]),
           )
 
-        let seenSlots = new Set<string>()
+        // Accumulate across polls, never overwrite: debug mode is verbose and
+        // get_log is a trailing window, so an early slot can scroll out before
+        // the last one is emitted. A fresh Set each poll would never see all four.
+        const seenSlots = new Set<string>()
         let stepLogTail = ''
         try {
           await waitUntil(
             async () => {
-              const log = (await activeClient.call('get_log', { lines: 500 })).text
+              const log = (await activeClient.call('get_log', { lines: 1000 })).text
               stepLogTail = log.slice(-2500)
-              seenSlots = slotsFrom(log)
+              for (const slot of slotsFrom(log)) seenSlots.add(slot)
               return ['0', '1', '2', '3'].every((slot) => seenSlots.has(slot))
             },
             { intervalMs: 200, timeoutMs: 20_000, label: '[STEP] markers for every ph654 slot' },
@@ -2120,7 +2123,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
 
-        const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+        const afterLog = (await activeClient.call('get_log', { lines: 1000 })).text
         // <=, not ===: get_log is a fixed 500-line window, so older ERROR lines
         // scroll out as the debug stream fills it.
         expect(afterLog.split(errorPrefix).length - 1).toBeLessThanOrEqual(errorsBefore)
