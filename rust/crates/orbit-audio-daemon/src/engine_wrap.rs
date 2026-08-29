@@ -3,6 +3,8 @@
 //! `Arc<Mutex>` ベースで制御スレッドと audio callback を共有する。
 //! audio callback 側は `try_lock` で競合時に無音 fallback する前提（lock-free 化は別 Issue）。
 
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -134,8 +136,9 @@ mod effect_rack_tests {
     };
     use orbit_audio_native::CallbackTimeStats;
     use orbit_audio_sandbox::transport::{
-        read_cstr_field, write_cstr_field, CMD_APPLY_CHAIN, CMD_OPEN_UI_AT, CMD_RESULT_OK,
-        CMD_RESULT_PLUGIN_ERROR, CMD_SAVE_STATE_AT,
+        read_cstr_field, write_cstr_field, CMD_APPLY_CHAIN, CMD_CLOSE_UI_AT, CMD_OPEN_UI_AT,
+        CMD_RESULT_OK, CMD_RESULT_PLUGIN_ERROR, CMD_SAVE_STATE_AT, EVT_UI_CLOSED,
+        EVT_UI_CLOSED_DONE,
     };
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::path::{Path, PathBuf};
@@ -203,6 +206,41 @@ mod effect_rack_tests {
         }
     }
 
+    fn rack_ui_binding(fixture: &RackFixture) -> Arc<Mutex<BTreeMap<u32, u64>>> {
+        let slot = fixture.master.slot.lock().expect("rack slot");
+        match &*slot {
+            ChildSlot::Active {
+                ui_index_binding: Some(binding),
+                ..
+            } => binding.clone(),
+            _ => panic!("rack fixture must have an active UI index binding"),
+        }
+    }
+
+    fn open_rack_ui(fixture: &RackFixture, index: u64, window: u64) {
+        let response = spawn_response(
+            fixture.master.entry.shm_path.clone(),
+            CMD_OPEN_UI_AT,
+            CMD_RESULT_OK,
+            "",
+            |_| 0,
+        );
+        fixture
+            .wrap
+            .open_outproc_plugin_ui(
+                PluginStateTarget::Effect { bus: None },
+                index,
+                format!("Stage {index}"),
+                Some(window),
+            )
+            .expect("open rack UI");
+        let argument = response.join().expect("open UI responder");
+        let argument: serde_json::Value =
+            serde_json::from_str(&argument).expect("open UI JSON argument");
+        assert_eq!(argument["index"], index);
+        assert_eq!(argument["window"], window);
+    }
+
     fn active_slot(chain: Vec<ChainStageConfig>, respawn_child: PathBuf) -> SlotFixture {
         let shm_path = outproc_effect::unique_shm_path();
         drop(orbit_audio_sandbox::create_shared(&shm_path).expect("create rack fixture shm"));
@@ -225,7 +263,8 @@ mod effect_rack_tests {
             shm_path.clone(),
         ));
         let ui_pump = Arc::new(orbit_audio_sandbox::UiEventPump::new(shm_path.clone()));
-        let ui_target = Arc::new(Mutex::new(None));
+        let ui_target = Arc::new(Mutex::new(Default::default()));
+        let ui_index_binding = Arc::new(Mutex::new(BTreeMap::new()));
         let (ui_events, _) = tokio::sync::broadcast::channel(16);
         let chain = Arc::new(Mutex::new(chain));
         let supervisor = outproc_effect::EffectChildSupervisor::spawn_chain_with_mailbox(
@@ -239,6 +278,7 @@ mod effect_rack_tests {
             PluginUiWiring {
                 pump: ui_pump.clone(),
                 target: ui_target.clone(),
+                index_binding: Some(ui_index_binding.clone()),
                 events: ui_events,
             },
         )
@@ -259,6 +299,7 @@ mod effect_rack_tests {
             mailbox,
             ui_pump,
             ui_target,
+            ui_index_binding: Some(ui_index_binding),
             _supervisor: supervisor,
         }));
         SlotFixture {
@@ -1015,12 +1056,311 @@ mod effect_rack_tests {
         );
         fixture
             .wrap
-            .open_outproc_plugin_ui(PluginStateTarget::Effect { bus: None }, 1, "Stage B".into())
+            .open_outproc_plugin_ui(
+                PluginStateTarget::Effect { bus: None },
+                1,
+                "Stage B".into(),
+                Some(101),
+            )
             .expect("open stage UI");
         let arg = response.join().expect("UI responder");
         let arg: serde_json::Value = serde_json::from_str(&arg).expect("UI arg JSON");
         assert_eq!(arg["index"], 1);
         assert_eq!(arg["title"], "Stage B");
+        assert_eq!(arg["window"], 101);
+    }
+
+    #[test]
+    fn w4_ack_forwards_the_exact_window_to_the_pump() {
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("a.clap", None, true), catalog("b.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        let window = 202;
+        open_rack_ui(&fixture, 1, window);
+        let pump = {
+            let slot = fixture.master.slot.lock().expect("rack slot");
+            match &*slot {
+                ChildSlot::Active { ui_pump, .. } => ui_pump.clone(),
+                _ => panic!("rack fixture must remain active"),
+            }
+        };
+        let mmap = orbit_audio_sandbox::open_shared(&fixture.master.entry.shm_path)
+            .expect("open UI event region");
+        let region = orbit_audio_sandbox::region_ptr(&mmap);
+        let mut child = orbit_audio_sandbox::transport::EventRingChild::new();
+        let argument = orbit_audio_sandbox::encode_ui_closed_arg(Some(window));
+        child
+            .queue(EVT_UI_CLOSED, &argument)
+            .expect("queue UI close safepoint");
+        unsafe { child.service(region) }.expect("publish UI close safepoint");
+        pump.poll_step(|notification| {
+            assert!(matches!(
+                notification,
+                orbit_audio_sandbox::UiPumpNotification::Safepoint {
+                    generation: 0,
+                    evt_seq: 1,
+                    window: Some(202),
+                }
+            ));
+            true
+        })
+        .expect("establish pending safepoint");
+        fixture
+            .wrap
+            .ack_outproc_ui_safepoint(
+                PluginStateTarget::Effect { bus: None },
+                1,
+                Some(window),
+                0,
+                1,
+            )
+            .expect("ack matching window");
+        assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 1);
+    }
+
+    #[test]
+    fn w5_apply_keep_remaps_binding_and_close_uses_the_new_index() {
+        let fixture = rack_fixture(
+            active_slot(
+                vec![
+                    catalog("a.clap", None, true),
+                    catalog("b.clap", None, true),
+                    catalog("c.clap", None, true),
+                ],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        let window = 303;
+        open_rack_ui(&fixture, 2, window);
+        let apply = spawn_response(
+            fixture.master.entry.shm_path.clone(),
+            CMD_APPLY_CHAIN,
+            CMD_RESULT_OK,
+            "",
+            |_| 0,
+        );
+        fixture
+            .wrap
+            .apply_outproc_effect_chain(
+                None,
+                plan(vec![keep(1, true), keep(2, true)]),
+                ApplyEffectChainMode::Diff,
+            )
+            .expect("apply leading drop");
+        apply.join().expect("apply responder");
+        assert_eq!(
+            *rack_ui_binding(&fixture).lock().expect("binding"),
+            BTreeMap::from([(1, window)])
+        );
+
+        let close = spawn_response(
+            fixture.master.entry.shm_path.clone(),
+            CMD_CLOSE_UI_AT,
+            CMD_RESULT_OK,
+            "",
+            |_| 0,
+        );
+        fixture
+            .wrap
+            .close_outproc_plugin_ui(PluginStateTarget::Effect { bus: None }, 1, Some(window))
+            .expect("close remapped window");
+        let argument = close.join().expect("close responder");
+        let argument: serde_json::Value =
+            serde_json::from_str(&argument).expect("close UI JSON argument");
+        assert_eq!(argument, serde_json::json!({"index": 1, "window": window}));
+    }
+
+    #[test]
+    fn w6_duplicate_open_is_loud_and_never_reaches_the_child() {
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("a.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        open_rack_ui(&fixture, 0, 404);
+        let mmap = orbit_audio_sandbox::open_shared(&fixture.master.entry.shm_path)
+            .expect("open command counter region");
+        let region = orbit_audio_sandbox::region_ptr(&mmap);
+        let before = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+
+        let error = fixture
+            .wrap
+            .open_outproc_plugin_ui(
+                PluginStateTarget::Effect { bus: None },
+                0,
+                "duplicate".into(),
+                Some(405),
+            )
+            .expect_err("duplicate open must be loud");
+        assert!(error
+            .to_string()
+            .contains("OPEN_UI requested while lifecycle is Open"));
+        assert_eq!(unsafe { (*region).cmd_seq.load(Ordering::Acquire) }, before);
+    }
+
+    #[test]
+    fn w7_stale_close_window_is_loud_and_never_reaches_the_child() {
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("a.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        open_rack_ui(&fixture, 0, 505);
+        let mmap = orbit_audio_sandbox::open_shared(&fixture.master.entry.shm_path)
+            .expect("open command counter region");
+        let region = orbit_audio_sandbox::region_ptr(&mmap);
+        let before = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+
+        let error = fixture
+            .wrap
+            .close_outproc_plugin_ui(PluginStateTarget::Effect { bus: None }, 0, Some(506))
+            .expect_err("wrong window close must be loud");
+        assert!(error.to_string().contains("does not match chain index"));
+        assert_eq!(unsafe { (*region).cmd_seq.load(Ordering::Acquire) }, before);
+    }
+
+    #[test]
+    fn w8_all_keep_shift_and_disable_issue_no_ui_close_command() {
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("a.clap", None, true), catalog("b.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        open_rack_ui(&fixture, 0, 601);
+        open_rack_ui(&fixture, 1, 602);
+        let mmap = orbit_audio_sandbox::open_shared(&fixture.master.entry.shm_path)
+            .expect("open command counter region");
+        let region = orbit_audio_sandbox::region_ptr(&mmap);
+        let before = unsafe { (*region).cmd_seq.load(Ordering::Acquire) };
+        let apply = spawn_response(
+            fixture.master.entry.shm_path.clone(),
+            CMD_APPLY_CHAIN,
+            CMD_RESULT_OK,
+            "",
+            |_| 0,
+        );
+
+        fixture
+            .wrap
+            .apply_outproc_effect_chain(
+                None,
+                plan(vec![keep(1, false), keep(0, true)]),
+                ApplyEffectChainMode::Diff,
+            )
+            .expect("apply all-keep reorder and disable");
+        apply.join().expect("apply responder");
+
+        // The shared mailbox is the spy: the one and only command after `before` is APPLY itself.
+        // Any pre-close would consume an extra sequence number (and the responder would observe
+        // CLOSE_UI_AT instead of CMD_APPLY_CHAIN).
+        assert_eq!(
+            unsafe { (*region).cmd_seq.load(Ordering::Acquire) },
+            before + 1
+        );
+        assert_eq!(
+            *rack_ui_binding(&fixture).lock().expect("binding"),
+            BTreeMap::from([(0, 602), (1, 601)])
+        );
+    }
+
+    #[test]
+    fn w9_drop_removes_its_binding_while_remapping_the_survivor() {
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("a.clap", None, true), catalog("b.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        open_rack_ui(&fixture, 0, 701);
+        open_rack_ui(&fixture, 1, 702);
+        let apply = spawn_response(
+            fixture.master.entry.shm_path.clone(),
+            CMD_APPLY_CHAIN,
+            CMD_RESULT_OK,
+            "",
+            |_| 0,
+        );
+
+        fixture
+            .wrap
+            .apply_outproc_effect_chain(None, plan(vec![keep(1, true)]), ApplyEffectChainMode::Diff)
+            .expect("drop first stage");
+        apply.join().expect("apply responder");
+
+        assert_eq!(
+            *rack_ui_binding(&fixture).lock().expect("binding"),
+            BTreeMap::from([(0, 702)])
+        );
+    }
+
+    #[test]
+    fn w10_late_abandoned_ack_reaches_pump_after_its_stage_was_dropped() {
+        let fixture = rack_fixture(
+            active_slot(
+                vec![catalog("a.clap", None, true), catalog("b.clap", None, true)],
+                fixture_script("slow-child.sh"),
+            ),
+            None,
+        );
+        let window = 801;
+        open_rack_ui(&fixture, 1, window);
+        let apply = spawn_response(
+            fixture.master.entry.shm_path.clone(),
+            CMD_APPLY_CHAIN,
+            CMD_RESULT_OK,
+            "",
+            |_| 0,
+        );
+        fixture
+            .wrap
+            .apply_outproc_effect_chain(None, plan(vec![keep(0, true)]), ApplyEffectChainMode::Diff)
+            .expect("drop UI stage");
+        apply.join().expect("apply responder");
+
+        let mmap = orbit_audio_sandbox::open_shared(&fixture.master.entry.shm_path)
+            .expect("open UI event region");
+        let region = orbit_audio_sandbox::region_ptr(&mmap);
+        let mut child = orbit_audio_sandbox::transport::EventRingChild::new();
+        let closed = orbit_audio_sandbox::encode_ui_closed_arg(Some(window));
+        let done = orbit_audio_sandbox::encode_ui_closed_done_arg(
+            Some(window),
+            orbit_audio_sandbox::UiCloseCompletion::TimedOutWithoutSave,
+        );
+        child
+            .queue(EVT_UI_CLOSED, &closed)
+            .expect("queue defensive close safepoint");
+        child
+            .queue(EVT_UI_CLOSED_DONE, &done)
+            .expect("queue defensive close timeout");
+        unsafe { child.service(region) }.expect("publish defensive close cycle");
+        let deadline = Instant::now() + WAIT;
+        while unsafe { (*region).evt_ack_seq.read() } < 2 {
+            assert!(Instant::now() < deadline, "defensive close cycle deadline");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        fixture
+            .wrap
+            .ack_outproc_ui_safepoint(
+                PluginStateTarget::Effect { bus: None },
+                1,
+                Some(window),
+                0,
+                1,
+            )
+            .expect("late abandoned ack must not require the dropped stage");
     }
 
     #[test]
@@ -1169,6 +1509,7 @@ mod effect_rack_tests {
             PluginStateTarget::Effect { bus: None },
             0,
             "Gain".into(),
+            Some(102),
         );
         for error in [
             state.expect_err("standard state rejected"),
@@ -3014,8 +3355,35 @@ fn install_instrument_slots(
 #[derive(Clone)]
 pub(crate) struct PluginUiWiring {
     pub(crate) pump: Arc<orbit_audio_sandbox::UiEventPump>,
-    pub(crate) target: Arc<Mutex<Option<PluginUiTarget>>>,
+    pub(crate) target: Arc<Mutex<PluginUiRouteRegistry>>,
+    /// Rack-only current stage index -> immutable window token binding. Instrument children keep
+    /// this as `None`; their one legacy UI continues to use the `None` pump/route key.
+    pub(crate) index_binding: Option<Arc<Mutex<PluginUiIndexBinding>>>,
     pub(crate) events: tokio::sync::broadcast::Sender<PluginUiEvent>,
+}
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+pub(crate) type PluginUiRouteRegistry = BTreeMap<orbit_audio_sandbox::UiWindowKey, PluginUiTarget>;
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+pub(crate) type PluginUiIndexBinding = BTreeMap<u32, u64>;
+
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn remove_plugin_ui_binding(
+    index_binding: &Option<Arc<Mutex<PluginUiIndexBinding>>>,
+    index: u32,
+    window: orbit_audio_sandbox::UiWindowKey,
+) {
+    let (Some(index_binding), Some(window)) = (index_binding, window) else {
+        return;
+    };
+    let mut binding = match index_binding.lock() {
+        Ok(binding) => binding,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if binding.get(&index) == Some(&window) {
+        binding.remove(&index);
+    }
 }
 
 /// Fixed watchdog sink. It never waits: target lookup uses `try_lock`, broadcast send is
@@ -3026,26 +3394,53 @@ pub(crate) struct PluginUiWiring {
 /// reports an already-completed transition and its route has already been taken.
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 pub(crate) fn enqueue_plugin_ui_notification(
-    target: &Mutex<Option<PluginUiTarget>>,
+    target: &Mutex<PluginUiRouteRegistry>,
+    index_binding: Option<&Mutex<PluginUiIndexBinding>>,
     events: &tokio::sync::broadcast::Sender<PluginUiEvent>,
     notification: orbit_audio_sandbox::UiPumpNotification,
 ) -> bool {
-    let take_target = |target: &mut Option<PluginUiTarget>| match notification {
-        orbit_audio_sandbox::UiPumpNotification::Safepoint { .. } => target.clone(),
-        orbit_audio_sandbox::UiPumpNotification::CloseDone { .. } => target.take(),
+    let window = match notification {
+        orbit_audio_sandbox::UiPumpNotification::Safepoint { window, .. }
+        | orbit_audio_sandbox::UiPumpNotification::CloseDone { window, .. } => window,
     };
-    let target = match target.try_lock() {
-        Ok(mut target) => take_target(&mut target),
+    let mut routes = match target.try_lock() {
+        Ok(target) => target,
         Err(std::sync::TryLockError::WouldBlock) => return false,
-        Err(std::sync::TryLockError::Poisoned(poisoned)) => take_target(&mut poisoned.into_inner()),
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
     };
+    // CloseDone must retire the route and its mutable destination binding as one sink decision.
+    // Acquire both with try_lock before mutating either so contention retries the same ring head.
+    let mut binding = match index_binding {
+        Some(binding) => match binding.try_lock() {
+            Ok(binding) => Some(binding),
+            Err(std::sync::TryLockError::WouldBlock) => return false,
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner()),
+        },
+        None => None,
+    };
+    let target = match notification {
+        orbit_audio_sandbox::UiPumpNotification::Safepoint { .. } => routes.get(&window).cloned(),
+        orbit_audio_sandbox::UiPumpNotification::CloseDone { .. } => {
+            if let Some(binding) = binding.as_mut() {
+                binding.retain(|_, bound_window| Some(*bound_window) != window);
+            }
+            routes.remove(&window)
+        }
+    };
+    drop(binding);
+    drop(routes);
     let Some(target) = target else {
+        tracing::warn!(
+            ?window,
+            "plugin UI notification has no correlated window route"
+        );
         return true;
     };
     let (event, retry_if_undelivered) = match notification {
         orbit_audio_sandbox::UiPumpNotification::Safepoint {
             generation,
             evt_seq,
+            ..
         } => (
             PluginUiEvent::Closed {
                 target,
@@ -3054,7 +3449,7 @@ pub(crate) fn enqueue_plugin_ui_notification(
             },
             true,
         ),
-        orbit_audio_sandbox::UiPumpNotification::CloseDone { completion } => {
+        orbit_audio_sandbox::UiPumpNotification::CloseDone { completion, .. } => {
             let completion = match completion {
                 orbit_audio_sandbox::UiCloseCompletion::SafepointCompleted => {
                     PluginUiCompletion::SafepointCompleted
@@ -3081,16 +3476,32 @@ pub(crate) fn enqueue_plugin_ui_notification(
 
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 pub(crate) fn enqueue_plugin_ui_closed_by_respawn(
-    target: &Mutex<Option<PluginUiTarget>>,
+    target: &Mutex<PluginUiRouteRegistry>,
+    index_binding: Option<&Mutex<PluginUiIndexBinding>>,
+    closed_windows: &[orbit_audio_sandbox::UiWindowKey],
     events: &tokio::sync::broadcast::Sender<PluginUiEvent>,
 ) {
     // reset_after_child_exit has already released the pump lock here. Wait for the short-lived
     // route coordinator lock instead of dropping the one-shot respawn event on contention.
-    let target = match target.lock() {
-        Ok(mut target) => target.take(),
-        Err(poisoned) => poisoned.into_inner().take(),
+    let routes = match target.lock() {
+        Ok(mut target) => std::mem::take(&mut *target),
+        Err(poisoned) => std::mem::take(&mut *poisoned.into_inner()),
     };
-    if let Some(target) = target {
+    if let Some(index_binding) = index_binding {
+        match index_binding.lock() {
+            Ok(mut binding) => binding.clear(),
+            Err(poisoned) => poisoned.into_inner().clear(),
+        }
+    }
+    let routed_windows = routes.keys().copied().collect::<Vec<_>>();
+    if routed_windows != closed_windows {
+        tracing::warn!(
+            ?closed_windows,
+            ?routed_windows,
+            "plugin UI pump/routes disagreed while resetting after child exit"
+        );
+    }
+    for (_, target) in routes {
         if let Err(error) = events.send(PluginUiEvent::ClosedByRespawn { target }) {
             tracing::warn!(
                 event = ?error.0,
@@ -3109,6 +3520,14 @@ pub(crate) trait OutProcRole: Sized {
     type Stats: Send + Sync;
     type Supervisor: Send;
     const ROLE_NAME: &'static str;
+
+    /// この role の child が **UI を index 付きで複数枚持てる**か（#633）。
+    ///
+    /// rack（effect）は 1 child に複数 stage を載せるので `index_binding` を持つ。instrument は
+    /// いま 1 child 1 UI なので持たない。**呼び出し側で `ROLE_NAME` を文字列比較しない** —
+    /// 綴りを間違えても型エラーにならず、instrument 側が静かに壊れる。マルチティンバー
+    /// （#647）で instrument も複数枚になる時は、この const を 1 箇所 true にすれば済む。
+    const SUPPORTS_INDEXED_UI: bool;
 
     /// `state` は保存済みプラグイン state ファイル。#562 以降は effect / instrument の
     /// 両 role が READY publish 前に適用する。
@@ -3174,6 +3593,8 @@ impl OutProcRole for EffectRole {
     type Stats = crate::outproc_effect::OutProcEffectStats;
     type Supervisor = crate::outproc_effect::EffectChildSupervisor;
     const ROLE_NAME: &'static str = "effect";
+    /// rack は 1 child に複数 stage を載せるので、UI も index ごとに開ける。
+    const SUPPORTS_INDEXED_UI: bool = true;
     fn spawn_child(
         launch: &ChildLaunch<Self>,
         path: &std::path::Path,
@@ -3264,6 +3685,8 @@ impl OutProcRole for InstrumentRole {
     type Stats = crate::outproc_instrument::OutProcInstrumentStats;
     type Supervisor = crate::outproc_instrument::InstrumentChildSupervisor;
     const ROLE_NAME: &'static str = "instrument";
+    /// instrument はいま 1 child 1 UI。マルチティンバー（#647）で複数枚になったら true へ。
+    const SUPPORTS_INDEXED_UI: bool = false;
     fn spawn_child(
         launch: &ChildLaunch<Self>,
         path: &std::path::Path,
@@ -3362,7 +3785,8 @@ pub(crate) enum ChildSlot<R: OutProcRole = DefaultOutProcRole> {
         engaged: Arc<AtomicBool>,
         mailbox: Arc<orbit_audio_sandbox::CommandMailboxHost>,
         ui_pump: Arc<orbit_audio_sandbox::UiEventPump>,
-        ui_target: Arc<Mutex<Option<PluginUiTarget>>>,
+        ui_target: Arc<Mutex<PluginUiRouteRegistry>>,
+        ui_index_binding: Option<Arc<Mutex<PluginUiIndexBinding>>>,
         _supervisor: R::Supervisor,
     },
     Closed,
@@ -4710,9 +5134,16 @@ impl EngineWrap {
             .clone();
         let desired = crate::outproc_effect::desired_chain(&previous, &plan)
             .map_err(WrapError::OutProcEffectRequest)?;
+        // `desired_chain` above has already rejected duplicate/out-of-range keeps. Each surviving
+        // binding therefore has exactly one possible destination: the plan position of its
+        // `Keep { prev_index }` operation.
+        let binding_remap = plugin_ui_keep_remap(&plan)?;
 
         enum ApplyRoute {
-            Mailbox(Arc<orbit_audio_sandbox::CommandMailboxHost>),
+            Mailbox {
+                mailbox: Arc<orbit_audio_sandbox::CommandMailboxHost>,
+                index_binding: Arc<Mutex<PluginUiIndexBinding>>,
+            },
             Rebuild(Option<Arc<orbit_audio_sandbox::CommandMailboxHost>>),
             Empty,
         }
@@ -4721,11 +5152,17 @@ impl EngineWrap {
             let slot = lock_child_slot_recovering(&child_slot, "effect chain route inspection");
             let registry_is_intact = effect_chain_registry_is_intact(&slot, &stats);
             match &*slot {
-                ChildSlot::Active { mailbox, .. }
-                    if mode == crate::outproc_effect::ApplyEffectChainMode::Diff
-                        && registry_is_intact =>
+                ChildSlot::Active {
+                    mailbox,
+                    ui_index_binding: Some(index_binding),
+                    ..
+                } if mode == crate::outproc_effect::ApplyEffectChainMode::Diff
+                    && registry_is_intact =>
                 {
-                    ApplyRoute::Mailbox(mailbox.clone())
+                    ApplyRoute::Mailbox {
+                        mailbox: mailbox.clone(),
+                        index_binding: index_binding.clone(),
+                    }
                 }
                 ChildSlot::Active { mailbox, .. } => {
                     ApplyRoute::Rebuild(registry_is_intact.then(|| mailbox.clone()))
@@ -4748,7 +5185,11 @@ impl EngineWrap {
             }
         };
 
-        if let ApplyRoute::Mailbox(mailbox) = &route {
+        if let ApplyRoute::Mailbox {
+            mailbox,
+            index_binding,
+        } = &route
+        {
             let plan_path = crate::outproc_effect::write_apply_plan(&entry.shm_path, &plan)
                 .map_err(|error| {
                     WrapError::OutProcEffect(format!("write effect chain apply plan: {error}"))
@@ -4756,6 +5197,7 @@ impl EngineWrap {
             match mailbox.issue_apply_chain_with_timeout(&plan_path, apply_timeout) {
                 Ok(_) => {
                     let desired_is_empty = desired.is_empty();
+                    remap_plugin_ui_index_binding(index_binding, &binding_remap);
                     *entry.chain.lock().map_err(|_| {
                         WrapError::OutProcEffect("effect chain config mutex poisoned".into())
                     })? = desired;
@@ -4813,7 +5255,7 @@ impl EngineWrap {
             ApplyRoute::Rebuild(None) => {
                 dropped_stage_summaries_from_latest_state(&previous, &plan.save_dropped)?
             }
-            ApplyRoute::Mailbox(_) | ApplyRoute::Empty => Vec::new(),
+            ApplyRoute::Mailbox { .. } | ApplyRoute::Empty => Vec::new(),
         };
 
         let was_active = matches!(
@@ -4900,7 +5342,8 @@ impl EngineWrap {
         let ui_pump = Arc::new(orbit_audio_sandbox::UiEventPump::new(
             launch.shm_path.clone(),
         ));
-        let ui_target = Arc::new(Mutex::new(None));
+        let ui_target = Arc::new(Mutex::new(Default::default()));
+        let ui_index_binding = Arc::new(Mutex::new(Default::default()));
         if let Err(error) = ui_pump.reset_after_child_exit(&mailbox) {
             *lock_child_slot_recovering(&child_slot, "rack UI reset failure") =
                 ChildSlot::Empty(launch);
@@ -4958,6 +5401,7 @@ impl EngineWrap {
                 PluginUiWiring {
                     pump: ui_pump.clone(),
                     target: ui_target.clone(),
+                    index_binding: Some(ui_index_binding.clone()),
                     events: self.plugin_ui_events.clone(),
                 },
             ) {
@@ -5061,6 +5505,7 @@ impl EngineWrap {
             mailbox,
             ui_pump,
             ui_target,
+            ui_index_binding: Some(ui_index_binding),
             _supervisor: supervisor,
         };
         Ok(())
@@ -6009,6 +6454,17 @@ impl EngineWrap {
             .ui_handles(chain_index)
     }
 
+    /// Ack correlation is entirely `(generation, window, evt_seq)`. Unlike open/close, a late ack
+    /// must still reach the child slot after the stage that originated it has been dropped.
+    #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+    fn plugin_ui_handles_for_ack(
+        &self,
+        target: &PluginStateTarget,
+    ) -> Result<(PluginUiHandles, bool), WrapError> {
+        self.resolve_outproc_slot(target, OutProcSlotErrorKind::Ui)?
+            .ui_handles_without_stage_validation()
+    }
+
     /// OPEN_UI は view attach 完了 ack を待つ。window title は mailbox `cmd_arg` で child へ渡す。
     #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
     pub fn open_outproc_plugin_ui(
@@ -6016,25 +6472,61 @@ impl EngineWrap {
         target: PluginStateTarget,
         index: u64,
         window_title: String,
+        window: Option<u64>,
     ) -> Result<(), WrapError> {
         if window_title.trim().is_empty() {
             return Err(WrapError::PluginUiProtocol(
                 "windowTitle must be a non-empty string".into(),
             ));
         }
-        let ((mailbox, pump, route), rack_target) =
+        let ((mailbox, pump, route, index_binding), rack_target) =
             self.plugin_ui_handles_for_target(&target, index as usize)?;
         if !mailbox.child_is_ready().map_err(plugin_ui_mailbox_error)? {
             return Err(WrapError::PluginUiUnavailable(
                 "the selected child is starting or respawning".into(),
             ));
         }
-        let rendered_target = PluginUiTarget::from_state_target(&target, index);
-        pump.begin_open().map_err(plugin_ui_pump_error)?;
+        let key = if rack_target {
+            Some(window.ok_or_else(|| {
+                WrapError::PluginUiProtocol("rack plugin UI requires a window token".into())
+            })?)
+        } else {
+            None
+        };
+        let binding_index = u32::try_from(index).map_err(|_| {
+            WrapError::PluginUiTarget(format!("plugin UI chain index {index} exceeds u32"))
+        })?;
+        if let (Some(window), Some(index_binding)) = (key, index_binding.as_ref()) {
+            let mut binding = index_binding.lock().map_err(|_| {
+                WrapError::PluginUiProtocol("plugin UI index binding poisoned".into())
+            })?;
+            if let Some(existing) = binding.get(&binding_index) {
+                return Err(WrapError::PluginUiProtocol(format!(
+                    "OPEN_UI requested while lifecycle is Open (chain index {index} is bound to window {existing})"
+                )));
+            }
+            // Reserve before the blocking child command so concurrent MCP opens cannot both pass
+            // the loud duplicate-open gate. Failure paths below roll this reservation back.
+            binding.insert(binding_index, window);
+        }
+        if let Err(error) = pump.begin_open(key) {
+            remove_plugin_ui_binding(&index_binding, binding_index, key);
+            return Err(plugin_ui_pump_error(error));
+        }
+        let rendered_target = PluginUiTarget::from_state_target(&target, index, key);
         match route.lock() {
-            Ok(mut route) => *route = Some(rendered_target.clone()),
+            Ok(mut route) => {
+                if route.insert(key, rendered_target.clone()).is_some() {
+                    pump.finish_open(key, false).map_err(plugin_ui_pump_error)?;
+                    remove_plugin_ui_binding(&index_binding, binding_index, key);
+                    return Err(WrapError::PluginUiProtocol(format!(
+                        "OPEN_UI requested while lifecycle is Open (window {key:?} already has a route)"
+                    )));
+                }
+            }
             Err(_) => {
-                pump.finish_open(false).map_err(plugin_ui_pump_error)?;
+                pump.finish_open(key, false).map_err(plugin_ui_pump_error)?;
+                remove_plugin_ui_binding(&index_binding, binding_index, key);
                 return Err(WrapError::PluginUiProtocol(
                     "plugin UI target coordinator poisoned".into(),
                 ));
@@ -6044,6 +6536,7 @@ impl EngineWrap {
             let argument = serde_json::to_string(&serde_json::json!({
                 "index": index,
                 "title": window_title,
+                "window": key.expect("rack window token was required above"),
             }))
             .map_err(|error| WrapError::PluginUiProtocol(error.to_string()))?;
             mailbox.issue_open_ui_at(&argument)
@@ -6052,15 +6545,18 @@ impl EngineWrap {
         }
         .map(|_| ())
         .map_err(plugin_ui_mailbox_error);
-        pump.finish_open(result.is_ok())
-            .map_err(plugin_ui_pump_error)?;
-        if result.is_err() {
+        let finish = pump
+            .finish_open(key, result.is_ok())
+            .map_err(plugin_ui_pump_error);
+        if result.is_err() || finish.is_err() {
             if let Ok(mut route) = route.lock() {
-                if route.as_ref() == Some(&rendered_target) {
-                    *route = None;
+                if route.get(&key) == Some(&rendered_target) {
+                    route.remove(&key);
                 }
             }
+            remove_plugin_ui_binding(&index_binding, binding_index, key);
         }
+        finish?;
         result
     }
 
@@ -6071,24 +6567,58 @@ impl EngineWrap {
         &self,
         target: PluginStateTarget,
         index: u64,
+        window: Option<u64>,
     ) -> Result<(), WrapError> {
-        let ((mailbox, _pump, route), rack_target) =
+        let ((mailbox, _pump, route, index_binding), rack_target) =
             self.plugin_ui_handles_for_target(&target, index as usize)?;
-        let requested = PluginUiTarget::from_state_target(&target, index);
+        let key = if rack_target {
+            Some(window.ok_or_else(|| {
+                WrapError::PluginUiProtocol("rack plugin UI requires a window token".into())
+            })?)
+        } else {
+            None
+        };
+        if rack_target {
+            let binding_index = u32::try_from(index).map_err(|_| {
+                WrapError::PluginUiTarget(format!("plugin UI chain index {index} exceeds u32"))
+            })?;
+            let binding = index_binding
+                .as_ref()
+                .ok_or_else(|| {
+                    WrapError::PluginUiProtocol("rack plugin UI index binding is missing".into())
+                })?
+                .lock()
+                .map_err(|_| {
+                    WrapError::PluginUiProtocol("plugin UI index binding poisoned".into())
+                })?;
+            if binding.get(&binding_index).copied() != key {
+                return Err(WrapError::PluginUiTarget(format!(
+                    "requested UI window {key:?} does not match chain index {index} binding {:?}",
+                    binding.get(&binding_index)
+                )));
+            }
+        }
         let current = route
             .lock()
             .map_err(|_| {
                 WrapError::PluginUiProtocol("plugin UI target coordinator poisoned".into())
             })?
-            .clone();
-        if current.as_ref() != Some(&requested) {
+            .get(&key)
+            .cloned();
+        if !current
+            .as_ref()
+            .is_some_and(|current| current.matches_state_target(&target))
+        {
             return Err(WrapError::PluginUiTarget(format!(
-                "requested UI target {requested:?} is not the currently open target {current:?}"
+                "requested UI target {target:?} window {key:?} is not the currently open target {current:?}"
             )));
         }
         if rack_target {
-            let argument = serde_json::to_string(&serde_json::json!({ "index": index }))
-                .map_err(|error| WrapError::PluginUiProtocol(error.to_string()))?;
+            let argument = serde_json::to_string(&serde_json::json!({
+                "index": index,
+                "window": key.expect("rack window token was required above"),
+            }))
+            .map_err(|error| WrapError::PluginUiProtocol(error.to_string()))?;
             mailbox.issue_close_ui_at(&argument)
         } else {
             mailbox.issue_close_ui()
@@ -6101,45 +6631,38 @@ impl EngineWrap {
     pub fn ack_outproc_ui_safepoint(
         &self,
         target: PluginStateTarget,
-        index: u64,
+        _index: u64,
+        window: Option<u64>,
         generation: u64,
         evt_seq: u64,
     ) -> Result<(), WrapError> {
-        let ((_mailbox, pump, route), _rack_target) =
-            self.plugin_ui_handles_for_target(&target, index as usize)?;
+        let ((_mailbox, pump, route, _index_binding), rack_target) =
+            self.plugin_ui_handles_for_ack(&target)?;
+        let key = if rack_target {
+            Some(window.ok_or_else(|| {
+                WrapError::PluginUiProtocol("rack plugin UI requires a window token".into())
+            })?)
+        } else {
+            None
+        };
         let current = route
             .lock()
             .map_err(|_| {
                 WrapError::PluginUiProtocol("plugin UI target coordinator poisoned".into())
             })?
-            .clone();
+            .get(&key)
+            .cloned();
         // timeout-without-save の DONE 後は route が消えるが、spec が許す遅着保存 ack は同じ
         // target の slot/pump へ届ける。別の UI が既に open なら誤配送として拒否する。
-        let matches_route = match current.as_ref() {
-            None => true,
-            Some(current) => match &target {
-                #[cfg(feature = "outproc-effect")]
-                PluginStateTarget::Effect { bus } => {
-                    current.role == "effect"
-                        && current.bus == *bus
-                        && current.instance.is_none()
-                        && current.index == index
-                }
-                #[cfg(feature = "outproc-instrument")]
-                PluginStateTarget::Instrument { instance } => {
-                    current.role == "instrument"
-                        && current.instance.as_ref() == Some(instance)
-                        && current.bus.is_none()
-                        && current.index == index
-                }
-            },
-        };
+        let matches_route = current
+            .as_ref()
+            .is_none_or(|current| current.matches_state_target(&target));
         if !matches_route {
             return Err(WrapError::PluginUiTarget(format!(
                 "AckUiSafepoint target does not match current UI target {current:?}"
             )));
         }
-        pump.ack_safepoint(generation, evt_seq)
+        pump.ack_safepoint(generation, key, evt_seq)
             .map_err(plugin_ui_pump_error)
     }
 
@@ -6355,7 +6878,9 @@ impl EngineWrap {
         let ui_pump = Arc::new(orbit_audio_sandbox::UiEventPump::new(
             launch.shm_path.clone(),
         ));
-        let ui_target = Arc::new(Mutex::new(None));
+        let ui_target = Arc::new(Mutex::new(Default::default()));
+        let ui_index_binding =
+            R::SUPPORTS_INDEXED_UI.then(|| Arc::new(Mutex::new(Default::default())));
         // 初回 attach も同じ reset 経路を通す。まだ child は生存していないため、
         // 「旧 child の死亡確認後のみ reset」の前提を満たす。
         ui_pump
@@ -6392,6 +6917,7 @@ impl EngineWrap {
             PluginUiWiring {
                 pump: ui_pump.clone(),
                 target: ui_target.clone(),
+                index_binding: ui_index_binding.clone(),
                 events: self.plugin_ui_events.clone(),
             },
         ) {
@@ -6486,6 +7012,7 @@ impl EngineWrap {
             mailbox,
             ui_pump,
             ui_target,
+            ui_index_binding,
             _supervisor: supervisor,
         };
         Ok(summary)
@@ -7737,6 +8264,15 @@ impl ResolvedOutProcSlot {
             }
         }
     }
+
+    fn ui_handles_without_stage_validation(&self) -> Result<(PluginUiHandles, bool), WrapError> {
+        match self {
+            #[cfg(feature = "outproc-effect")]
+            Self::Effect { slot, .. } => Ok((active_plugin_ui_handles(slot, "effect")?, true)),
+            #[cfg(feature = "outproc-instrument")]
+            Self::Instrument(slot) => Ok((active_plugin_ui_handles(slot, "instrument")?, false)),
+        }
+    }
 }
 
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
@@ -7843,7 +8379,8 @@ fn validate_effect_chain_target(
 type PluginUiHandles = (
     Arc<orbit_audio_sandbox::CommandMailboxHost>,
     Arc<orbit_audio_sandbox::UiEventPump>,
-    Arc<Mutex<Option<PluginUiTarget>>>,
+    Arc<Mutex<PluginUiRouteRegistry>>,
+    Option<Arc<Mutex<PluginUiIndexBinding>>>,
 );
 
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
@@ -7885,8 +8422,14 @@ fn active_plugin_ui_handles<R: OutProcRole>(
             mailbox,
             ui_pump,
             ui_target,
+            ui_index_binding,
             ..
-        } => Ok((mailbox.clone(), ui_pump.clone(), ui_target.clone())),
+        } => Ok((
+            mailbox.clone(),
+            ui_pump.clone(),
+            ui_target.clone(),
+            ui_index_binding.clone(),
+        )),
         ChildSlot::Empty(_) => Err(WrapError::PluginUiTarget(format!(
             "{role} child slot has no loaded plugin"
         ))),
@@ -7907,6 +8450,47 @@ fn effect_chain_registry_is_intact(
     matches!(slot, ChildSlot::Active { .. })
         && stats.current_child_pid.load(Ordering::Acquire) != 0
         && !stats.measurement_invalid.load(Ordering::Acquire)
+}
+
+#[cfg(feature = "outproc-effect")]
+fn plugin_ui_keep_remap(
+    plan: &crate::outproc_effect::EffectChainPlan,
+) -> Result<BTreeMap<u32, u32>, WrapError> {
+    let mut remap = BTreeMap::new();
+    for (new_index, stage) in plan.chain.iter().enumerate() {
+        let crate::outproc_effect::EffectChainPlanStage::Keep { prev_index, .. } = stage else {
+            continue;
+        };
+        let previous = u32::try_from(*prev_index).map_err(|_| {
+            WrapError::OutProcEffectRequest(format!(
+                "effect chain prev_index {prev_index} exceeds the plugin UI binding range"
+            ))
+        })?;
+        let next = u32::try_from(new_index).map_err(|_| {
+            WrapError::OutProcEffectRequest(format!(
+                "effect chain index {new_index} exceeds the plugin UI binding range"
+            ))
+        })?;
+        remap.insert(previous, next);
+    }
+    Ok(remap)
+}
+
+#[cfg(feature = "outproc-effect")]
+fn remap_plugin_ui_index_binding(
+    index_binding: &Mutex<PluginUiIndexBinding>,
+    keep_remap: &BTreeMap<u32, u32>,
+) {
+    let mut binding = match index_binding.lock() {
+        Ok(binding) => binding,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let previous = std::mem::take(&mut *binding);
+    for (old_index, window) in previous {
+        if let Some(new_index) = keep_remap.get(&old_index) {
+            binding.insert(*new_index, window);
+        }
+    }
 }
 
 #[cfg(feature = "outproc-effect")]
@@ -8223,18 +8807,27 @@ pub struct PluginUiTarget {
     pub bus: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instance: Option<String>,
+    /// Immutable open token used for event attribution. `index` below is the open-time position
+    /// retained only for display/diagnostics and must never be used as an ownership key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window: Option<u64>,
     pub index: u64,
 }
 
 impl PluginUiTarget {
     #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
-    fn from_state_target(target: &PluginStateTarget, index: u64) -> Self {
+    fn from_state_target(
+        target: &PluginStateTarget,
+        index: u64,
+        window: orbit_audio_sandbox::UiWindowKey,
+    ) -> Self {
         match target {
             #[cfg(feature = "outproc-effect")]
             PluginStateTarget::Effect { bus } => Self {
                 role: "effect",
                 bus: bus.clone(),
                 instance: None,
+                window,
                 index,
             },
             #[cfg(feature = "outproc-instrument")]
@@ -8242,8 +8835,25 @@ impl PluginUiTarget {
                 role: "instrument",
                 bus: None,
                 instance: Some(instance.clone()),
+                window,
                 index,
             },
+        }
+    }
+
+    #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+    fn matches_state_target(&self, target: &PluginStateTarget) -> bool {
+        match target {
+            #[cfg(feature = "outproc-effect")]
+            PluginStateTarget::Effect { bus } => {
+                self.role == "effect" && self.bus == *bus && self.instance.is_none()
+            }
+            #[cfg(feature = "outproc-instrument")]
+            PluginStateTarget::Instrument { instance } => {
+                self.role == "instrument"
+                    && self.instance.as_ref() == Some(instance)
+                    && self.bus.is_none()
+            }
         }
     }
 }
@@ -8288,24 +8898,38 @@ mod plugin_ui_event_routing_tests {
             role: "effect",
             bus: Some("lead".into()),
             instance: None,
+            window: None,
             index: 2,
+        }
+    }
+
+    fn route(window: orbit_audio_sandbox::UiWindowKey, index: u64) -> PluginUiTarget {
+        PluginUiTarget {
+            window,
+            index,
+            ..target()
         }
     }
 
     #[test]
     fn close_completion_is_emitted_only_for_the_done_notification() {
-        let route = Arc::new(Mutex::new(Some(target())));
+        let route = Arc::new(Mutex::new(BTreeMap::from([(None, target())])));
         let (events, mut receiver) = tokio::sync::broadcast::channel(4);
 
         assert!(enqueue_plugin_ui_notification(
             &route,
+            None,
             &events,
             orbit_audio_sandbox::UiPumpNotification::Safepoint {
                 generation: 3,
                 evt_seq: 5,
+                window: None,
             },
         ));
-        assert_eq!(*route.lock().expect("route lock"), Some(target()));
+        assert_eq!(
+            route.lock().expect("route lock").get(&None),
+            Some(&target())
+        );
         assert_eq!(
             receiver.try_recv().expect("safepoint event"),
             PluginUiEvent::Closed {
@@ -8321,9 +8945,11 @@ mod plugin_ui_event_routing_tests {
 
         assert!(enqueue_plugin_ui_notification(
             &route,
+            None,
             &events,
             orbit_audio_sandbox::UiPumpNotification::CloseDone {
                 completion: orbit_audio_sandbox::UiCloseCompletion::SafepointCompleted,
+                window: None,
             },
         ));
         assert_eq!(
@@ -8333,7 +8959,7 @@ mod plugin_ui_event_routing_tests {
                 completion: PluginUiCompletion::SafepointCompleted,
             }
         );
-        assert_eq!(*route.lock().expect("route lock"), None);
+        assert!(route.lock().expect("route lock").is_empty());
     }
 
     #[test]
@@ -8352,7 +8978,7 @@ mod plugin_ui_event_routing_tests {
         unsafe { child.service(region) }.expect("publish UI_CLOSED");
 
         let pump = orbit_audio_sandbox::UiEventPump::new(shm.clone());
-        let route = Arc::new(Mutex::new(Some(target())));
+        let route = Arc::new(Mutex::new(BTreeMap::from([(None, target())])));
         let (events, receiver) = tokio::sync::broadcast::channel(1);
         drop(receiver);
         let mut attempts = 0;
@@ -8361,7 +8987,7 @@ mod plugin_ui_event_routing_tests {
             let outcome = pump
                 .poll_step(|notification| {
                     attempts += 1;
-                    enqueue_plugin_ui_notification(&route, &events, notification)
+                    enqueue_plugin_ui_notification(&route, None, &events, notification)
                 })
                 .expect("poll undelivered safepoint");
             assert!(matches!(
@@ -8372,7 +8998,10 @@ mod plugin_ui_event_routing_tests {
 
         assert_eq!(attempts, 3, "delivery must be retried on every tick");
         assert_eq!(unsafe { (*region).evt_ack_seq.read() }, 0);
-        assert_eq!(*route.lock().expect("route lock"), Some(target()));
+        assert_eq!(
+            route.lock().expect("route lock").get(&None),
+            Some(&target())
+        );
 
         drop(mmap);
         std::fs::remove_file(shm).expect("remove shared region");
@@ -8380,32 +9009,36 @@ mod plugin_ui_event_routing_tests {
 
     #[test]
     fn undelivered_close_done_is_consumed_after_taking_its_route() {
-        let route = Arc::new(Mutex::new(Some(target())));
+        let route = Arc::new(Mutex::new(BTreeMap::from([(None, target())])));
         let (events, receiver) = tokio::sync::broadcast::channel(1);
         drop(receiver);
 
         assert!(enqueue_plugin_ui_notification(
             &route,
+            None,
             &events,
             orbit_audio_sandbox::UiPumpNotification::CloseDone {
                 completion: orbit_audio_sandbox::UiCloseCompletion::SafepointCompleted,
+                window: None,
             },
         ));
-        assert_eq!(*route.lock().expect("route lock"), None);
+        assert!(route.lock().expect("route lock").is_empty());
     }
 
     #[test]
     fn contended_target_lock_retries_notification() {
-        let route = Arc::new(Mutex::new(Some(target())));
+        let route = Arc::new(Mutex::new(BTreeMap::from([(None, target())])));
         let (events, mut receiver) = tokio::sync::broadcast::channel(1);
         let guard = route.lock().expect("hold route lock");
 
         assert!(!enqueue_plugin_ui_notification(
             &route,
+            None,
             &events,
             orbit_audio_sandbox::UiPumpNotification::Safepoint {
                 generation: 3,
                 evt_seq: 5,
+                window: None,
             },
         ));
         assert!(matches!(
@@ -8413,12 +9046,15 @@ mod plugin_ui_event_routing_tests {
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ));
         drop(guard);
-        assert_eq!(*route.lock().expect("route lock"), Some(target()));
+        assert_eq!(
+            route.lock().expect("route lock").get(&None),
+            Some(&target())
+        );
     }
 
     #[test]
     fn poisoned_target_lock_still_routes_notification() {
-        let route = Arc::new(Mutex::new(Some(target())));
+        let route = Arc::new(Mutex::new(BTreeMap::from([(None, target())])));
         let poison_route = route.clone();
         let _ = std::thread::spawn(move || {
             let _guard = poison_route.lock().expect("lock before poison");
@@ -8430,10 +9066,12 @@ mod plugin_ui_event_routing_tests {
 
         assert!(enqueue_plugin_ui_notification(
             &route,
+            None,
             &events,
             orbit_audio_sandbox::UiPumpNotification::Safepoint {
                 generation: 3,
                 evt_seq: 5,
+                window: None,
             },
         ));
         assert_eq!(
@@ -8448,15 +9086,99 @@ mod plugin_ui_event_routing_tests {
 
     #[test]
     fn respawn_event_is_loud_and_consumes_the_visible_route() {
-        let route = Arc::new(Mutex::new(Some(target())));
+        let route = Arc::new(Mutex::new(BTreeMap::from([(None, target())])));
         let (events, mut receiver) = tokio::sync::broadcast::channel(1);
-        enqueue_plugin_ui_closed_by_respawn(&route, &events);
+        enqueue_plugin_ui_closed_by_respawn(&route, None, &[None], &events);
 
         assert_eq!(
             receiver.try_recv().expect("respawn event"),
             PluginUiEvent::ClosedByRespawn { target: target() }
         );
-        assert_eq!(*route.lock().expect("route lock"), None);
+        assert!(route.lock().expect("route lock").is_empty());
+    }
+
+    #[test]
+    fn w1_close_done_removes_only_its_window_route() {
+        let w1 = Some(11);
+        let w2 = Some(22);
+        let t1 = route(w1, 0);
+        let t2 = route(w2, 2);
+        let routes = Mutex::new(BTreeMap::from([(w1, t1.clone()), (w2, t2.clone())]));
+        let binding = Mutex::new(BTreeMap::from([(0, 11), (2, 22)]));
+        let (events, mut receiver) = tokio::sync::broadcast::channel(2);
+
+        assert!(enqueue_plugin_ui_notification(
+            &routes,
+            Some(&binding),
+            &events,
+            orbit_audio_sandbox::UiPumpNotification::CloseDone {
+                completion: orbit_audio_sandbox::UiCloseCompletion::SafepointCompleted,
+                window: w2,
+            },
+        ));
+
+        assert_eq!(
+            receiver.try_recv().expect("w2 completion"),
+            PluginUiEvent::CloseDone {
+                target: t2,
+                completion: PluginUiCompletion::SafepointCompleted,
+            }
+        );
+        assert_eq!(*routes.lock().expect("routes"), BTreeMap::from([(w1, t1)]));
+        assert_eq!(*binding.lock().expect("binding"), BTreeMap::from([(0, 11)]));
+    }
+
+    #[test]
+    fn w2_safepoint_uses_the_notification_window_route() {
+        // Make w2 the first BTreeMap entry so a "first route" regression cannot accidentally pass.
+        let w1 = Some(22);
+        let w2 = Some(11);
+        let t1 = route(w1, 2);
+        let routes = Mutex::new(BTreeMap::from([(w1, t1.clone()), (w2, route(w2, 0))]));
+        let (events, mut receiver) = tokio::sync::broadcast::channel(2);
+
+        assert!(enqueue_plugin_ui_notification(
+            &routes,
+            None,
+            &events,
+            orbit_audio_sandbox::UiPumpNotification::Safepoint {
+                generation: 3,
+                evt_seq: 5,
+                window: w1,
+            },
+        ));
+
+        assert_eq!(
+            receiver.try_recv().expect("w1 safepoint"),
+            PluginUiEvent::Closed {
+                target: t1,
+                generation: 3,
+                evt_seq: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn w3_respawn_drains_every_route_and_binding() {
+        let w1 = Some(11);
+        let w2 = Some(22);
+        let t1 = route(w1, 0);
+        let t2 = route(w2, 2);
+        let routes = Mutex::new(BTreeMap::from([(w1, t1.clone()), (w2, t2.clone())]));
+        let binding = Mutex::new(BTreeMap::from([(0, 11), (2, 22)]));
+        let (events, mut receiver) = tokio::sync::broadcast::channel(2);
+
+        enqueue_plugin_ui_closed_by_respawn(&routes, Some(&binding), &[w1, w2], &events);
+
+        let received = [
+            receiver.try_recv().expect("first respawn event"),
+            receiver.try_recv().expect("second respawn event"),
+        ];
+        assert_eq!(received.len(), 2);
+        assert!(received.contains(&PluginUiEvent::ClosedByRespawn { target: t1 }));
+        assert!(received.contains(&PluginUiEvent::ClosedByRespawn { target: t2 }));
+        assert!(routes.lock().expect("routes").is_empty());
+        assert!(binding.lock().expect("binding").is_empty());
     }
 }
 
@@ -9361,7 +10083,9 @@ mod outproc_load_error_test_support {
         let ui_pump = Arc::new(orbit_audio_sandbox::UiEventPump::new(
             launch.shm_path.clone(),
         ));
-        let ui_target = Arc::new(Mutex::new(None));
+        let ui_target = Arc::new(Mutex::new(Default::default()));
+        let ui_index_binding =
+            R::SUPPORTS_INDEXED_UI.then(|| Arc::new(Mutex::new(Default::default())));
         let (ui_events, _) = tokio::sync::broadcast::channel(16);
         let latest_state = Arc::new(Mutex::new(None));
         let supervisor = R::spawn_supervisor(
@@ -9374,6 +10098,7 @@ mod outproc_load_error_test_support {
             PluginUiWiring {
                 pump: ui_pump.clone(),
                 target: ui_target.clone(),
+                index_binding: ui_index_binding.clone(),
                 events: ui_events,
             },
         )
@@ -9389,6 +10114,7 @@ mod outproc_load_error_test_support {
             mailbox,
             ui_pump,
             ui_target,
+            ui_index_binding,
             _supervisor: supervisor,
         }
     }
@@ -10960,7 +11686,8 @@ mod effect_replace_tests {
             shm_path.clone(),
         ));
         let ui_pump = Arc::new(orbit_audio_sandbox::UiEventPump::new(shm_path.clone()));
-        let ui_target = Arc::new(Mutex::new(None));
+        let ui_target = Arc::new(Mutex::new(Default::default()));
+        let ui_index_binding = Arc::new(Mutex::new(Default::default()));
         let (ui_events, _) = tokio::sync::broadcast::channel(16);
         let supervisor = EffectRole::spawn_supervisor(
             child,
@@ -10972,6 +11699,7 @@ mod effect_replace_tests {
             PluginUiWiring {
                 pump: ui_pump.clone(),
                 target: ui_target.clone(),
+                index_binding: Some(ui_index_binding.clone()),
                 events: ui_events,
             },
         )
@@ -10987,6 +11715,7 @@ mod effect_replace_tests {
             mailbox,
             ui_pump,
             ui_target,
+            ui_index_binding: Some(ui_index_binding),
             _supervisor: supervisor,
         }));
         SlotFixture {
@@ -11539,7 +12268,7 @@ mod outproc_instrument_replace_tests {
         let ui_pump = Arc::new(orbit_audio_sandbox::UiEventPump::new(
             launch.shm_path.clone(),
         ));
-        let ui_target = Arc::new(Mutex::new(None));
+        let ui_target = Arc::new(Mutex::new(Default::default()));
         let (ui_events, _) = tokio::sync::broadcast::channel(16);
         let supervisor = InstrumentRole::spawn_supervisor(
             child,
@@ -11551,6 +12280,7 @@ mod outproc_instrument_replace_tests {
             PluginUiWiring {
                 pump: ui_pump.clone(),
                 target: ui_target.clone(),
+                index_binding: None,
                 events: ui_events,
             },
         )
@@ -11566,6 +12296,7 @@ mod outproc_instrument_replace_tests {
             mailbox,
             ui_pump,
             ui_target,
+            ui_index_binding: None,
             _supervisor: supervisor,
         };
         pid

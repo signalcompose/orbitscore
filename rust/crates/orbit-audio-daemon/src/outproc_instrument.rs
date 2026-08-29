@@ -505,7 +505,7 @@ impl InstrumentChildSupervisor {
     ) -> io::Result<Self> {
         let mailbox = Arc::new(CommandMailboxHost::new(shm_path.clone()));
         let ui_pump = Arc::new(UiEventPump::new(shm_path.clone()));
-        let ui_target = Arc::new(Mutex::new(None));
+        let ui_target = Arc::new(Mutex::new(Default::default()));
         let (ui_events, _) = tokio::sync::broadcast::channel(16);
         Self::spawn_with_mailbox(
             first_child,
@@ -520,6 +520,7 @@ impl InstrumentChildSupervisor {
             PluginUiWiring {
                 pump: ui_pump,
                 target: ui_target,
+                index_binding: None,
                 events: ui_events,
             },
         )
@@ -541,8 +542,13 @@ impl InstrumentChildSupervisor {
         let PluginUiWiring {
             pump: ui_pump,
             target: ui_target,
+            index_binding,
             events: ui_events,
         } = ui;
+        debug_assert!(
+            index_binding.is_none(),
+            "instrument UI wiring has no rack binding"
+        );
         let ctl_mmap = match open_shared(&shm_path) {
             Ok(mmap) => mmap,
             Err(error) => {
@@ -674,6 +680,7 @@ impl InstrumentChildSupervisor {
                                 &ui_pump,
                                 &mailbox,
                                 &ui_target,
+                                None,
                                 &ui_events,
                             ) {
                                 stats.measurement_invalid.store(true, Ordering::Release);
@@ -722,7 +729,13 @@ impl InstrumentChildSupervisor {
                         }
                         Ok(None) => {
                             try_wait_errors = 0;
-                            poll_ui_pump_once("instrument", &ui_pump, &ui_target, &ui_events);
+                            poll_ui_pump_once(
+                                "instrument",
+                                &ui_pump,
+                                &ui_target,
+                                None,
+                                &ui_events,
+                            );
                             std::thread::sleep(WATCHDOG_POLL);
                         }
                         Err(error) => {
@@ -738,7 +751,7 @@ impl InstrumentChildSupervisor {
                         }
                     }
                 }
-                drain_ui_pump("instrument", &ui_pump, &ui_target, &ui_events);
+                drain_ui_pump("instrument", &ui_pump, &ui_target, None, &ui_events);
                 unsafe {
                     (*region).control.store(CONTROL_QUIT, Ordering::Release);
                 }
@@ -1438,7 +1451,7 @@ mod tests {
         let latest_state = Arc::new(Mutex::new(None));
         let mailbox = Arc::new(CommandMailboxHost::new(shm.clone()));
         let ui_pump = Arc::new(UiEventPump::new(shm.clone()));
-        let ui_target = Arc::new(Mutex::new(None));
+        let ui_target = Arc::new(Mutex::new(Default::default()));
         let (ui_events, _) = tokio::sync::broadcast::channel(16);
         let sup = InstrumentChildSupervisor::spawn_with_mailbox(
             first,
@@ -1453,6 +1466,7 @@ mod tests {
             PluginUiWiring {
                 pump: ui_pump,
                 target: ui_target,
+                index_binding: None,
                 events: ui_events,
             },
         )

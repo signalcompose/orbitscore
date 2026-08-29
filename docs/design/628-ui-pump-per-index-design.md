@@ -533,9 +533,14 @@ event は新 token で出る → 再構築された TS session / daemon 簿記�
 
 ### 4.7 TS 側の変更
 
-- **(1) wire の `chain_path` 送出**（F16 の穴埋め・必須）: `daemon-client.ts` の
-  `openPluginUi` / `acceptClosePluginUi`（`:546-561`）に `chain_path: [index]` を追加。
-  現状 index ≠ 0 の UI 操作は wire 層で 0 に化けている（main が裏取り済み）。
+- **(1) ~~wire の `chain_path` 送出~~ — 🔴 **実装済み・本 PR のスコープ外**（main の設計チェックで
+  判明・2026-08-29）: 設計執筆後に #628 の `3b634850`「feat(dsl): write a whole effect rack as
+  an array」が `daemon-client.ts` に `pluginChainPath()` を入れ、`openPluginUi` /
+  `acceptClosePluginUi` / `ackUiSafepoint` / save の**4 経路すべてが `chain_path` を送出**して
+  いる（`daemon-client.ts:576,604,613,625`）。**F16 の「index ≠ 0 が wire で 0 に化ける」は
+  もう起きない。** 残る作業は同メソッド群への `window` 追加のみ（次項）。
+  受け入れ基準 **S2 は「chain_path を付ける」から「chain_path と window の両方が乗る」へ
+  読み替える**（テストは残す — 退行の検出器として有効）。
 - **(2) token の採番と携行**: token は **TS（`rust-engine-player`）が採番**する（R10）。
   一意性要件は「daemon プロセスの生涯で再利用しない」— 単調カウンタに起動時刻由来の上位
   bit を併せる等（TS 再起動 × daemon 生存のケースで衝突しないため・§7-6）。

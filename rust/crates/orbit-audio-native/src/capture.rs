@@ -25,6 +25,14 @@ const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
 const BITS_PER_SAMPLE: u16 = 32;
 /// ring が空のときの poll 間隔。busy-wait しない程度に短く、capture 遅延を体感させない程度に長く。
 const DRAIN_POLL_INTERVAL: Duration = Duration::from_millis(2);
+/// header の size を patch し直す間隔（サンプル数）。48kHz stereo で約 1 秒。
+///
+/// 🔴 `finalize` だけに任せると、**プロセスが graceful に落ちなかった capture は
+/// size=0 の placeholder のまま残り、標準ツールで開けない**（2026-08-29 実測: E2E が
+/// 残した WAV は RIFF size=36 / data size=0 で 2.29MB のデータを抱えていた。
+/// `CaptureWriter::Drop` が走っていなかった）。capture は検証の一次資料なので、
+/// **いつ落ちてもその時点まで有効な WAV** になるよう定期的に patch する。
+const HEADER_SYNC_INTERVAL_SAMPLES: u64 = 48_000 * 2;
 
 /// 32-bit float(量子化なし)streaming WAV writer。`std::io` のみで実装する(外部 WAV encoder crate
 /// を増やさない方針 = owner 確定・hound 不採用)。
@@ -70,6 +78,35 @@ impl RiffWavWriter {
         Ok(())
     }
 
+    /// header の size を「いまここまで書けた」値へ patch し、書き込み位置を末尾へ戻す。
+    ///
+    /// [`Self::finalize`] と違い `self` を消費しないので、drain ループの途中から何度でも
+    /// 呼べる。目的は**プロセスが異常終了しても開ける WAV を残すこと**（[`HEADER_SYNC_INTERVAL_SAMPLES`]）。
+    /// seek は BufWriter を flush してから inner を動かす（std documented）ので、
+    /// 追記位置は `SeekFrom::End(0)` で正しく復元できる。
+    pub fn sync_header(&mut self) -> io::Result<()> {
+        // 🔴 **先に flush する。** `data_bytes()` は `samples_written` から計算するが、
+        // `write` は **BufWriter へ渡した時点で**カウンタを進める。flush しないと、header が
+        // 「ディスク上にまだ無いバイト」を指す WAV になる — `kill -9` されたとき（まさにこの
+        // 機構が対象にしている状況）に **data チャンクが EOF を越える**。厳密なリーダは拒否する。
+        // 毎秒 1 回なのでバッチングへの実害は無い。
+        self.writer.flush()?;
+
+        // 🔴 位置は `seek` で動かさない。`BufWriter::seek` は内部バッファを強制 flush してから
+        // inner を動かすので、往復するたびに書き込み位置の管理が絡む。`write_at`（pwrite 相当）は
+        // **ファイルのカーソルを動かさない**ので、追記は素直に進んだまま header だけを上書きできる
+        // （macOS 限定プロジェクトなので `std::os::unix` は使える）。
+        use std::os::unix::fs::FileExt;
+        let header = build_header(self.sample_rate, self.channels, self.data_bytes());
+        self.writer.get_ref().write_all_at(&header, 0)
+    }
+
+    /// `data` チャンクのバイト数。`sync_header` と [`Self::finalize`] が共有する
+    /// （saturating の意味論——4GiB 超は `u32::MAX` へ丸める既知の制限——を1箇所に置く）。
+    fn data_bytes(&self) -> u32 {
+        u32::try_from(self.samples_written.saturating_mul(4)).unwrap_or(u32::MAX)
+    }
+
     /// 先頭に seek して RIFF / data チャンクの size を実値に patch し、flush する。
     /// `self` を値で消費するので二重 finalize は型で防止される。
     ///
@@ -79,7 +116,7 @@ impl RiffWavWriter {
     /// saturating して壊れた header にはしない。
     pub fn finalize(mut self) -> io::Result<()> {
         self.writer.flush()?;
-        let data_bytes = u32::try_from(self.samples_written.saturating_mul(4)).unwrap_or(u32::MAX);
+        let data_bytes = self.data_bytes();
         // BufWriter<File>::seek は seek 前に内部バッファを flush してから inner を seek する
         // (std documented behavior)ので、直前の flush と合わせて安全に先頭へ戻れる。
         self.writer.seek(SeekFrom::Start(0))?;
@@ -160,6 +197,7 @@ impl CaptureWriter {
 
         let handle = thread::spawn(move || -> io::Result<u64> {
             let mut samples_written: u64 = 0;
+            let mut last_header_sync: u64 = 0;
             // drain ループ。write error は `break Err(e)` で抜け、下の finalize を必ず通す
             // (`?` で即 return すると finalize が走らず header が placeholder〈data=0〉のまま
             // 残り、壊れた WAV になる。best-effort finalize で「書けた分」を header に反映する)。
@@ -188,6 +226,24 @@ impl CaptureWriter {
                 }
                 samples_written += (a.len() + b.len()) as u64;
                 chunk.commit_all();
+                // 異常終了に備えて header を追いつかせる。
+                //
+                // 🔴 **失敗しても drain を止めない。** patch は「途中で落ちても開ける」ための
+                // best-effort であり、**音声データの正しさには影響しない**。ここで `break` すると
+                // 1 回の一時的な失敗で**以降の音声が一切録れなくなる** — capture を検証の一次資料
+                // にするという本来の目的を、その保険が壊すことになる。
+                //
+                // 失敗は握り潰さず operator へ 1 行報告する（off-thread なので RT 契約に触れない）。
+                // 最後に `finalize` が同じ patch を試みるので、一時的な失敗はそこで回復しうる。
+                if samples_written - last_header_sync >= HEADER_SYNC_INTERVAL_SAMPLES {
+                    last_header_sync = samples_written;
+                    if let Err(e) = wav.sync_header() {
+                        eprintln!(
+                            "[capture] periodic WAV header sync failed (recording continues; \
+                             the file may not open until finalize): {e}"
+                        );
+                    }
+                }
             };
             // drain の成否に関わらず header を実サイズへ patch する(best-effort)。write error が
             // あればそれを優先して返し、無ければ finalize 自体の失敗を返す。
@@ -411,6 +467,161 @@ mod tests {
             result.is_err(),
             "存在しないディレクトリ配下の path では create は Err を返すはず"
         );
+    }
+
+    /// 🔴 finalize を一度も呼ばずに捨てても、`sync_header` を通した分は開ける WAV である。
+    ///
+    /// 2026-08-29 の実測: E2E が残した capture は RIFF size=36 / data size=0 のまま
+    /// 2.29MB のデータを抱えており、QuickTime も Python の `wave` も開けなかった
+    /// （`CaptureWriter::Drop` が走らずプロセスが落ちていた）。capture は検証の一次資料なので、
+    /// **異常終了しても its header が実データを指している**ことをここで固定する。
+    #[test]
+    fn sync_header_makes_the_file_readable_without_finalize() {
+        let path = temp_wav_path("sync-header");
+        let mut wav = RiffWavWriter::new(&path, 48_000, 2).expect("create");
+        let block = vec![0.25_f32; 4096];
+        wav.write(&block).expect("write");
+        wav.sync_header().expect("sync");
+        // finalize を呼ばずに落とす（＝プロセスが死んだ状況）。
+        drop(wav);
+
+        let mut buf = Vec::new();
+        File::open(&path)
+            .expect("open")
+            .read_to_end(&mut buf)
+            .expect("read");
+        let data_bytes = read_le_u32(&buf, 40);
+        assert_eq!(
+            data_bytes as usize,
+            block.len() * 4,
+            "data chunk size must point at the samples actually written"
+        );
+        assert_eq!(
+            read_le_u32(&buf, 4) as usize,
+            36 + block.len() * 4,
+            "RIFF size must cover the header and the samples"
+        );
+        assert_eq!(
+            buf.len(),
+            WAV_HEADER_LEN + block.len() * 4,
+            "sync_header must restore the append position, not truncate or duplicate"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// `sync_header` を挟んでも、その後の追記が正しい位置へ続くこと（seek の往復が壊さない）。
+    #[test]
+    fn sync_header_does_not_disturb_subsequent_writes() {
+        let path = temp_wav_path("sync-header-append");
+        let mut wav = RiffWavWriter::new(&path, 48_000, 2).expect("create");
+        wav.write(&[0.5_f32; 8]).expect("write 1");
+        wav.sync_header().expect("sync");
+        wav.write(&[-0.5_f32; 8]).expect("write 2");
+        wav.finalize().expect("finalize");
+
+        let mut buf = Vec::new();
+        File::open(&path)
+            .expect("open")
+            .read_to_end(&mut buf)
+            .expect("read");
+        assert_eq!(read_le_u32(&buf, 40) as usize, 16 * 4);
+        assert_eq!(buf.len(), WAV_HEADER_LEN + 16 * 4);
+        // 2 ブロック目が 1 ブロック目を上書きしていないこと。
+        let first = f32::from_le_bytes(buf[44..48].try_into().expect("4 bytes"));
+        let second = f32::from_le_bytes(buf[44 + 32..44 + 36].try_into().expect("4 bytes"));
+        assert_eq!(first, 0.5, "first block must survive the header sync");
+        assert_eq!(second, -0.5, "second block must land after the first");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// writer スレッドのループが、finalize を待たずに header を追いつかせること。
+    /// `RiffWavWriter` 単体ではなく **`CaptureWriter` 経由**で確かめる（実機が通る経路）。
+    #[test]
+    fn capture_writer_syncs_the_header_while_running() {
+        let path = temp_wav_path("running-sync");
+        let (mut sink, writer) = CaptureWriter::create(
+            path.clone(),
+            48_000,
+            2,
+            HEADER_SYNC_INTERVAL_SAMPLES as usize * 4,
+        )
+        .expect("create");
+        use crate::link_audio_ring::PostMixSink;
+        // sync 間隔を必ず跨ぐ量を流す。
+        let block = vec![0.1_f32; 8192];
+        let mut pushed = 0u64;
+        while pushed < HEADER_SYNC_INTERVAL_SAMPLES * 3 {
+            sink.commit(&block);
+            pushed += block.len() as u64;
+            thread::sleep(Duration::from_millis(1));
+        }
+        // drain が追いつくのを待つ（finalize はまだ呼ばない）。
+        thread::sleep(Duration::from_millis(200));
+
+        let mut buf = Vec::new();
+        File::open(&path)
+            .expect("open")
+            .read_to_end(&mut buf)
+            .expect("read");
+        let data_bytes = read_le_u32(&buf, 40);
+        assert!(
+            data_bytes > 0,
+            "header must be patched while the capture is still running, got data size {data_bytes}"
+        );
+        drop(writer);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// 🔴 header patch が失敗しても、**音声の記録は止まらない**。
+    ///
+    /// patch は「途中で落ちても開ける WAV を残す」ための保険であって、音声データの正しさとは
+    /// 無関係である。ここで drain を止めると、**1 回の一時的な失敗で以降が一切録れなくなり**、
+    /// capture を一次資料にするという目的をその保険自身が壊す（2026-08-29 のレビュー指摘）。
+    ///
+    /// 失敗を注入するために、ファイルを**削除してから**書き込みを続ける。`write_at` の宛先は
+    /// 消えるが、既に開いている fd への追記は続く（Unix の unlink 意味論）。ここで見たいのは
+    /// 「patch の失敗が drain を殺さない」ことなので、失敗の作り方は本質ではない。
+    #[test]
+    fn a_failing_header_sync_does_not_stop_the_recording() {
+        let path = temp_wav_path("sync-failure");
+        let (mut sink, writer) = CaptureWriter::create(
+            path.clone(),
+            48_000,
+            2,
+            HEADER_SYNC_INTERVAL_SAMPLES as usize * 4,
+        )
+        .expect("create");
+        use crate::link_audio_ring::PostMixSink;
+
+        let block = vec![0.2_f32; 8192];
+        let mut pushed = 0u64;
+        while pushed < HEADER_SYNC_INTERVAL_SAMPLES * 3 {
+            sink.commit(&block);
+            pushed += block.len() as u64;
+            thread::sleep(Duration::from_millis(1));
+        }
+        thread::sleep(Duration::from_millis(200));
+
+        // ここまでで sync は少なくとも 1 回走っている。以降さらに流し、drain が生きていることを
+        // 「書けたサンプル数」で確かめる。
+        let before = pushed;
+        while pushed < before + HEADER_SYNC_INTERVAL_SAMPLES * 2 {
+            sink.commit(&block);
+            pushed += block.len() as u64;
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        let report = writer.finish().expect("finish");
+        assert_eq!(
+            report.dropped_samples, 0,
+            "the drain must keep consuming after a header sync"
+        );
+        assert_eq!(
+            report.frames_written,
+            pushed / 2,
+            "every pushed frame must reach the file"
+        );
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

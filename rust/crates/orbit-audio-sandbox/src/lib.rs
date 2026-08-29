@@ -45,12 +45,13 @@ pub use offline::{
 };
 pub use parent_watch::{ParentWatch, DEFAULT_CHECK_INTERVAL};
 pub use transport::{
-    create_shared, open_shared, region_ptr, save_state_command, service_command_mailbox,
-    slot_index, slot_offset, write_sidecar, CommandMailboxError, CommandMailboxHost,
-    CommandMailboxResponse, CommandOutcome, SharedRegion, TransportContext, UiCloseCompletion,
-    UiEventPump, UiEventPumpError, UiPumpNotification, UiPumpResetOutcome,
-    APPLY_CHAIN_MAILBOX_TIMEOUT, BUF_LEN, CHANNELS, CMD_APPLY_CHAIN, CMD_ARG_BYTES, CMD_CLOSE_UI,
-    CMD_CLOSE_UI_AT, CMD_NONE, CMD_OPEN_UI, CMD_OPEN_UI_AT, CMD_RESULT_BAD_ARG,
+    create_shared, decode_ui_closed_arg, decode_ui_closed_done_arg, encode_ui_closed_arg,
+    encode_ui_closed_done_arg, open_shared, region_ptr, save_state_command,
+    service_command_mailbox, slot_index, slot_offset, write_sidecar, CommandMailboxError,
+    CommandMailboxHost, CommandMailboxResponse, CommandOutcome, SharedRegion, TransportContext,
+    UiCloseCompletion, UiEventPump, UiEventPumpError, UiPumpNotification, UiPumpResetOutcome,
+    UiWindowKey, APPLY_CHAIN_MAILBOX_TIMEOUT, BUF_LEN, CHANNELS, CMD_APPLY_CHAIN, CMD_ARG_BYTES,
+    CMD_CLOSE_UI, CMD_CLOSE_UI_AT, CMD_NONE, CMD_OPEN_UI, CMD_OPEN_UI_AT, CMD_RESULT_BAD_ARG,
     CMD_RESULT_CHILD_EXITED, CMD_RESULT_IO_ERROR, CMD_RESULT_OK, CMD_RESULT_PLUGIN_ERROR,
     CMD_RESULT_UNKNOWN_KIND, CMD_SAVE_STATE, CMD_SAVE_STATE_AT, CONTROL_QUIT, CONTROL_RUN,
     MAX_EVENTS_PER_BLOCK, MAX_FRAMES, OPEN_UI_MAILBOX_TIMEOUT, PLUGIN_STATE_MAILBOX_TIMEOUT,

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use orbit_audio_sandbox::{CommandMailboxHost, UiEventPump};
 
-use crate::engine_wrap::{PluginUiEvent, PluginUiTarget};
+use crate::engine_wrap::{PluginUiEvent, PluginUiIndexBinding, PluginUiRouteRegistry};
 
 /// 直前の spawn からの経過時間（`elapsed_since_spawn`）が `threshold` 未満なら「速い失敗」として
 /// 連続カウンタを進め、`threshold` 以上生きていれば（単発クラッシュからの正常な復帰とみなし）
@@ -37,7 +37,8 @@ pub(crate) fn service_ui_pump_on_respawn(
     role: &'static str,
     pump: &UiEventPump,
     mailbox: &CommandMailboxHost,
-    target: &std::sync::Mutex<Option<PluginUiTarget>>,
+    target: &std::sync::Mutex<PluginUiRouteRegistry>,
+    index_binding: Option<&std::sync::Mutex<PluginUiIndexBinding>>,
     events: &tokio::sync::broadcast::Sender<PluginUiEvent>,
 ) -> bool {
     let reset = match pump.reset_after_child_exit(mailbox) {
@@ -50,9 +51,14 @@ pub(crate) fn service_ui_pump_on_respawn(
             return false;
         }
     };
-    if reset.closed_visible_ui {
-        crate::engine_wrap::enqueue_plugin_ui_closed_by_respawn(target, events);
-    }
+    // A dead child owns no live routes or destinations. Drain even when the pump reports no open
+    // windows so ledger disagreement is made loud and stale auxiliary state cannot survive.
+    crate::engine_wrap::enqueue_plugin_ui_closed_by_respawn(
+        target,
+        index_binding,
+        &reset.closed_windows,
+        events,
+    );
     true
 }
 
@@ -60,11 +66,17 @@ pub(crate) fn service_ui_pump_on_respawn(
 pub(crate) fn poll_ui_pump_once(
     role: &'static str,
     pump: &UiEventPump,
-    target: &std::sync::Mutex<Option<PluginUiTarget>>,
+    target: &std::sync::Mutex<PluginUiRouteRegistry>,
+    index_binding: Option<&std::sync::Mutex<PluginUiIndexBinding>>,
     events: &tokio::sync::broadcast::Sender<PluginUiEvent>,
 ) {
     if let Err(error) = pump.poll_step(|notification| {
-        crate::engine_wrap::enqueue_plugin_ui_notification(target, events, notification)
+        crate::engine_wrap::enqueue_plugin_ui_notification(
+            target,
+            index_binding,
+            events,
+            notification,
+        )
     }) {
         tracing::error!(role, "plugin UI event pump failed: {error}");
     }
@@ -74,11 +86,17 @@ pub(crate) fn poll_ui_pump_once(
 pub(crate) fn drain_ui_pump(
     role: &'static str,
     pump: &UiEventPump,
-    target: &std::sync::Mutex<Option<PluginUiTarget>>,
+    target: &std::sync::Mutex<PluginUiRouteRegistry>,
+    index_binding: Option<&std::sync::Mutex<PluginUiIndexBinding>>,
     events: &tokio::sync::broadcast::Sender<PluginUiEvent>,
 ) {
     if let Err(error) = pump.final_drain(|notification| {
-        crate::engine_wrap::enqueue_plugin_ui_notification(target, events, notification)
+        crate::engine_wrap::enqueue_plugin_ui_notification(
+            target,
+            index_binding,
+            events,
+            notification,
+        )
     }) {
         tracing::error!(
             role,

@@ -84,6 +84,10 @@ function eventNonNegativeInteger(value: unknown, label: string): number {
 function pluginUiTargetFromEvent(data: Record<string, unknown>): PluginUiTarget {
   const target = wireObject(data.target, 'target')
   const index = eventNonNegativeInteger(target.index, 'target.index')
+  const window =
+    target.window === undefined
+      ? undefined
+      : eventNonNegativeInteger(target.window, 'target.window')
   if (target.role === 'effect') {
     if (target.bus !== undefined && typeof target.bus !== 'string') {
       throw new Error('target.bus must be a string when present')
@@ -92,10 +96,16 @@ function pluginUiTargetFromEvent(data: Record<string, unknown>): PluginUiTarget 
       role: 'effect',
       ...(target.bus === undefined ? {} : { bus: target.bus }),
       index: index + 1,
+      ...(window === undefined ? {} : { window }),
     }
   }
   if (target.role === 'instrument' && typeof target.instance === 'string') {
-    return { role: 'instrument', instance: target.instance, index }
+    return {
+      role: 'instrument',
+      instance: target.instance,
+      index,
+      ...(window === undefined ? {} : { window }),
+    }
   }
   throw new Error("target must identify an 'effect' or 'instrument' plugin")
 }
@@ -111,7 +121,10 @@ function pluginStateTarget(target: PluginUiTarget): PluginStateSaveTarget {
 }
 
 function pluginUiTargetMatches(left: PluginUiTarget, right: PluginUiTarget): boolean {
-  if (left.role !== right.role || left.index !== right.index) return false
+  if (left.window !== undefined || right.window !== undefined) {
+    return left.window !== undefined && left.window === right.window
+  }
+  if (left.role !== right.role) return false
   if (left.role === 'effect' && right.role === 'effect') return left.bus === right.bus
   return (
     left.role === 'instrument' && right.role === 'instrument' && left.instance === right.instance
@@ -626,7 +639,13 @@ export class RustEnginePlayer implements AudioEngineBackend {
         )
         return
       }
-      await this.daemon.ackUiSafepoint(pluginStateTarget(target), target.index, generation, evtSeq)
+      await this.daemon.ackUiSafepoint(
+        pluginStateTarget(target),
+        target.index,
+        target.window ?? 0,
+        generation,
+        evtSeq,
+      )
     })
   }
 
@@ -800,10 +819,11 @@ export class RustEnginePlayer implements AudioEngineBackend {
     target: PluginStateSaveTarget,
     index: number,
     windowTitle: string,
+    window: number,
     timeoutMs = PLUGIN_UI_OPEN_TIMEOUT_MS,
   ): Promise<void> {
     await withTimeout(
-      this.daemon.openPluginUi(target, index, windowTitle),
+      this.daemon.openPluginUi(target, index, windowTitle, window),
       timeoutMs,
       `timed out waiting for plugin UI to open (${timeoutMs}ms)`,
     )
@@ -812,9 +832,14 @@ export class RustEnginePlayer implements AudioEngineBackend {
   async closePluginUi(
     target: PluginStateSaveTarget,
     index: number,
+    window: number,
     timeoutMs = PLUGIN_UI_CLOSE_TIMEOUT_MS,
   ): Promise<PluginUiCloseCompletion> {
-    const routedTarget: PluginUiTarget = { ...target, index } as PluginUiTarget
+    const routedTarget: PluginUiTarget = {
+      ...target,
+      index,
+      ...(target.role === 'effect' ? { window } : {}),
+    } as PluginUiTarget
     let pendingEntry: PendingPluginUiClose | undefined
     const done = new Promise<PluginUiCloseCompletion>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -827,7 +852,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     try {
       // Register the DONE waiter before issuing CLOSE_UI: the event pump and
       // command response use independent tasks, so DONE may race the ack.
-      const accepted = this.daemon.acceptClosePluginUi(target, index)
+      const accepted = this.daemon.acceptClosePluginUi(target, index, window)
       await Promise.race([accepted, done.then(() => undefined)])
     } catch (error) {
       if (pendingEntry) {

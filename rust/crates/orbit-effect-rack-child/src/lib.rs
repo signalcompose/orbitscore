@@ -129,11 +129,23 @@ pub trait ControlStage {
         params: &BTreeMap<String, f64>,
     ) -> Result<Vec<ResolvedParam>, String>;
     fn is_standard(&self) -> bool;
-    fn handle_ui(&self, _open: bool, _title: Option<&str>) -> CommandOutcome {
+    fn handle_ui(&self, _open: bool, _title: Option<&str>, _window: Option<u64>) -> CommandOutcome {
         CommandOutcome::failed(CMD_RESULT_PLUGIN_ERROR, "plugin UI is unavailable")
     }
     fn tick_ui(&self) {}
     fn set_index(&self, _index: u32) {}
+
+    /// この stage の UI が**片付いているか**（close cycle が進行中でないか）。
+    ///
+    /// 🔴 退役の可否に使う。`UiEventHub` の close-cycle ゲートは **1 child 内の全 window で
+    /// 共有**されており、`UI_CLOSED{w}` を載せてから `UI_CLOSED_DONE{w}` を載せるまで他の
+    /// window の publish を止める。cycle の途中で stage を破棄すると `UiService::Drop` は
+    /// ゲートを戻さないので、**同じ child の全ウィンドウが永久に開閉不能**になる。
+    ///
+    /// 既定は `true` — UI を持たない stage（標準プラグイン等）は退役を妨げない。
+    fn ui_is_settled(&self) -> bool {
+        true
+    }
 }
 
 struct AudioCell(UnsafeCell<Box<dyn AudioStage>>);
@@ -453,6 +465,13 @@ struct PendingStageDrop {
     stage: Box<StageInstance>,
 }
 
+impl PendingStageDrop {
+    /// この drop 待ちの stage の UI が片付いているか（[`ControlStage::ui_is_settled`]）。
+    fn ui_is_settled(&self) -> bool {
+        self.stage.control.ui_is_settled()
+    }
+}
+
 enum PreparedStage {
     Keep {
         prev_index: usize,
@@ -597,8 +616,13 @@ impl RackController {
         // point `current` is generation `G`'s list, which no longer references it. Using `>=` here
         // keeps such a drop forever: nothing else drains the queue, so the `!is_empty()` arm of
         // the Busy check below would reject every later apply. C7 is the discriminating test.
+        // 🔴 世代の到達だけでは退役してよい根拠にならない。**UI の close cycle が進行中の
+        // stage を破棄すると、共有ゲート（`UiEventHub.open_cycle`）が `Some` のまま残り、
+        // 同じ child の全ウィンドウが永久に開閉不能になる**（2026-08-29 のレビューで
+        // 2 体が独立に検出）。cycle が片付くまで保持する — `tick_ui` は毎 tick 走るので、
+        // child の防御 close が完走すれば次の `collect_retired` で消える。
         self.pending_stage_drops
-            .retain(|dropped| dropped.publish_generation > adopted);
+            .retain(|dropped| dropped.publish_generation > adopted || !dropped.ui_is_settled());
         true
     }
 
@@ -779,7 +803,7 @@ impl RackController {
             // Root 3-2: a failed UI close must stay audible. The stage is dropped either way —
             // this loudness does not change that — but a silently swallowed failure here means
             // nobody ever learns the child's UI window may still be open.
-            let outcome = dropped.control.handle_ui(false, None);
+            let outcome = dropped.control.handle_ui(false, None, None);
             if outcome.result != CMD_RESULT_OK {
                 // error!: the dropped stage's window may stay open with nothing behind it, and
                 // no ticker counter or RPC carries this — this line is the only machine surface.
@@ -824,7 +848,13 @@ impl RackController {
         }
     }
 
-    pub fn handle_ui_at(&self, index: usize, open: bool, title: Option<&str>) -> CommandOutcome {
+    pub fn handle_ui_at(
+        &self,
+        index: usize,
+        open: bool,
+        title: Option<&str>,
+        window: u64,
+    ) -> CommandOutcome {
         let Some(stage) = self.stages.get(index) else {
             return CommandOutcome::failed(
                 CMD_RESULT_BAD_ARG,
@@ -837,7 +867,7 @@ impl RackController {
                 "standard plugin parameters live in the DSL; no UI is available",
             );
         }
-        stage.control.handle_ui(open, title)
+        stage.control.handle_ui(open, title, Some(window))
     }
 
     pub fn tick_ui(&self) {

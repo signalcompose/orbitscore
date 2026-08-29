@@ -729,7 +729,8 @@ impl EffectChildSupervisor {
     ) -> io::Result<Self> {
         let mailbox = Arc::new(CommandMailboxHost::new(shm_path.clone()));
         let ui_pump = Arc::new(UiEventPump::new(shm_path.clone()));
-        let ui_target = Arc::new(Mutex::new(None));
+        let ui_target = Arc::new(Mutex::new(BTreeMap::new()));
+        let ui_index_binding = Arc::new(Mutex::new(BTreeMap::new()));
         let (ui_events, _) = tokio::sync::broadcast::channel(16);
         let chain = Arc::new(Mutex::new(vec![ChainStageConfig::Catalog {
             path: plugin,
@@ -748,6 +749,7 @@ impl EffectChildSupervisor {
             PluginUiWiring {
                 pump: ui_pump,
                 target: ui_target,
+                index_binding: Some(ui_index_binding),
                 events: ui_events,
             },
         )
@@ -801,8 +803,11 @@ impl EffectChildSupervisor {
         let PluginUiWiring {
             pump: ui_pump,
             target: ui_target,
+            index_binding: ui_index_binding,
             events: ui_events,
         } = ui;
+        let ui_index_binding =
+            ui_index_binding.expect("effect rack UI wiring always carries an index binding");
         // watchdog 専用の control mapping（host は from_mmap で 1st mapping を消費するので 2nd を開く）。
         // この MmapMut は closure に move され watchdog thread 終了まで生存する（region ポインタの前提）。
         // open_shared 失敗時は first_child を orphan 化させず reap し、作成済み shm を unlink する。
@@ -920,6 +925,7 @@ impl EffectChildSupervisor {
                                 &ui_pump,
                                 &mailbox,
                                 &ui_target,
+                                Some(&ui_index_binding),
                                 &ui_events,
                             ) {
                                 stats.measurement_invalid.store(true, Ordering::Release);
@@ -972,7 +978,13 @@ impl EffectChildSupervisor {
                         }
                         Ok(None) => {
                             try_wait_errors = 0;
-                            poll_ui_pump_once("effect", &ui_pump, &ui_target, &ui_events);
+                            poll_ui_pump_once(
+                                "effect",
+                                &ui_pump,
+                                &ui_target,
+                                Some(&ui_index_binding),
+                                &ui_events,
+                            );
                             std::thread::sleep(WATCHDOG_POLL);
                         }
                         Err(e) => {
@@ -990,7 +1002,13 @@ impl EffectChildSupervisor {
                         }
                     }
                 }
-                drain_ui_pump("effect", &ui_pump, &ui_target, &ui_events);
+                drain_ui_pump(
+                    "effect",
+                    &ui_pump,
+                    &ui_target,
+                    Some(&ui_index_binding),
+                    &ui_events,
+                );
                 // teardown: shutdown 済み（respawn しない）。現 child へ QUIT を送り reap する。
                 // SAFETY: region は生存 ctl_mmap を指す。QUIT は一回限りの flag（Release で publish）。
                 unsafe {
@@ -1682,7 +1700,8 @@ mod tests {
         }]));
         let mailbox = Arc::new(CommandMailboxHost::new(shm.clone()));
         let ui_pump = Arc::new(UiEventPump::new(shm.clone()));
-        let ui_target = Arc::new(Mutex::new(None));
+        let ui_target = Arc::new(Mutex::new(BTreeMap::new()));
+        let ui_index_binding = Arc::new(Mutex::new(BTreeMap::new()));
         let (ui_events, _) = tokio::sync::broadcast::channel(16);
         let sup = EffectChildSupervisor::spawn_chain_with_mailbox(
             first,
@@ -1695,6 +1714,7 @@ mod tests {
             PluginUiWiring {
                 pump: ui_pump,
                 target: ui_target,
+                index_binding: Some(ui_index_binding),
                 events: ui_events,
             },
         )

@@ -204,10 +204,49 @@ export function filterCatalogEntries(
   })
 }
 
-function normalizeCatalogKey(value: string): string {
+export function normalizeCatalogKey(value: string): string {
   return value.trim().normalize('NFC').toLowerCase()
 }
 
 function vendorAndNameKey(entry: PluginCatalogEntry): string {
   return `${normalizeCatalogKey(entry.vendor)}\u0000${normalizeCatalogKey(entry.name)}`
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Quick Pick 用の一覧（#638）
+// ──────────────────────────────────────────────────────────────────────
+
+/** One row of the "browse plugins" Quick Pick. */
+export interface PluginPickItem {
+  readonly label: string
+  /** Shown dimmed after the label, and searchable — vendor and format. */
+  readonly description: string
+  /** What to write into the document (the same disambiguated form completion inserts). */
+  readonly insertText: string
+}
+
+/**
+ * Builds the browsable plugin list for one verb.
+ *
+ * Completion only helps once you remember a fragment of the name. With 274
+ * effects and 74 instruments in a real catalog, "what could I put here" needs
+ * a list you can page through, so this deliberately takes no typed prefix.
+ *
+ * Rows reuse `filterCatalogEntries` so the label a user picks here is
+ * character-for-character the one completion would have inserted — including
+ * the `format/name` and `vendor/name` disambiguation. Sorted by label so the
+ * list is stable and scannable; vendor and format ride in `description`, which
+ * VS Code also matches when the user types.
+ */
+export function buildPluginPickItems(
+  entries: readonly PluginCatalogEntry[],
+  verb: PluginVerb,
+): PluginPickItem[] {
+  return filterCatalogEntries(entries, verb, '')
+    .map(({ entry, label, insertText }) => ({
+      label,
+      description: `${entry.vendor} · ${entry.format.toUpperCase()}`,
+      insertText,
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label) || a.description.localeCompare(b.description))
 }

@@ -97,6 +97,28 @@ struct ClapControl {
     standard: bool,
 }
 
+/// UI コマンドを `UiService` へ振り分ける。
+///
+/// CLAP と VST3 の `ControlStage::handle_ui` はロジックが型に依存しないので、ここに集約する
+/// （両者とも `ui: UiService` を持つだけ）。#633 で分岐が 1 行から 10 行へ育った際、
+/// 2 箇所を同時に直す必要が生じたため切り出した。
+///
+/// `window` が `Some` なら rack（indexed）経路、`None` なら非 indexed（instrument / 旧単発
+/// effect child）経路。close は title を運ばない。
+fn dispatch_ui_command(
+    ui: &UiService,
+    open: bool,
+    title: Option<&str>,
+    window: Option<u64>,
+) -> CommandOutcome {
+    let kind = if open { CMD_OPEN_UI } else { CMD_CLOSE_UI };
+    let title = if open { title } else { None };
+    match window {
+        Some(window) => ui.handle_indexed_command(kind, title, window),
+        None => ui.handle_command(kind, title),
+    }
+}
+
 impl ControlStage for ClapControl {
     fn capture_state(&mut self) -> Result<Vec<u8>, String> {
         if self.standard {
@@ -135,11 +157,12 @@ impl ControlStage for ClapControl {
         self.standard
     }
 
-    fn handle_ui(&self, open: bool, title: Option<&str>) -> CommandOutcome {
-        self.ui.handle_command(
-            if open { CMD_OPEN_UI } else { CMD_CLOSE_UI },
-            if open { title } else { None },
-        )
+    fn handle_ui(&self, open: bool, title: Option<&str>, window: Option<u64>) -> CommandOutcome {
+        dispatch_ui_command(&self.ui, open, title, window)
+    }
+
+    fn ui_is_settled(&self) -> bool {
+        self.ui.ui_is_settled()
     }
 
     fn tick_ui(&self) {
@@ -178,11 +201,12 @@ impl ControlStage for Vst3Control {
         false
     }
 
-    fn handle_ui(&self, open: bool, title: Option<&str>) -> CommandOutcome {
-        self.ui.handle_command(
-            if open { CMD_OPEN_UI } else { CMD_CLOSE_UI },
-            if open { title } else { None },
-        )
+    fn handle_ui(&self, open: bool, title: Option<&str>, window: Option<u64>) -> CommandOutcome {
+        dispatch_ui_command(&self.ui, open, title, window)
+    }
+
+    fn ui_is_settled(&self) -> bool {
+        self.ui.ui_is_settled()
     }
 
     fn tick_ui(&self) {
@@ -361,12 +385,14 @@ struct OpenUiAtArg {
     index: usize,
     #[serde(default)]
     title: Option<String>,
+    window: u64,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CloseUiAtArg {
     index: usize,
+    window: u64,
 }
 
 fn parse_command_arg<T: for<'de> Deserialize<'de>>(arg: Option<&str>) -> Result<T, CommandOutcome> {
@@ -501,11 +527,14 @@ pub fn run() -> Result<()> {
                                 arg.index,
                                 true,
                                 arg.title.as_deref(),
+                                arg.window,
                             ),
                             Err(outcome) => outcome,
                         },
                         CMD_CLOSE_UI_AT => match parse_command_arg::<CloseUiAtArg>(arg) {
-                            Ok(arg) => controller.borrow().handle_ui_at(arg.index, false, None),
+                            Ok(arg) => controller
+                                .borrow()
+                                .handle_ui_at(arg.index, false, None, arg.window),
                             Err(outcome) => outcome,
                         },
                         _ => return None,

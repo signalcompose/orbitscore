@@ -194,6 +194,30 @@ export function createDaemonStderrLineRouter(
  * resolveScsynthPath と同じ検査水準）。非 viable な候補は次候補へ落ちる —
  * これは従来の existsSync が「不在なら次へ」としていた意味論の自然な拡張。
  */
+/**
+ * UI index → wire の `chain_path` 変換。**これが唯一の写像**（#652 で集約）。
+ *
+ * effect は TS 側が 1 始まりなので 1 引く。instrument は 1 child 1 UI なので実質 0。
+ * 🔴 `global.ts` が同じ式を 2 箇所へインライン再実装しており、しかも instrument を
+ * 無条件 `0` に決め打ちしていて**この関数と非対称**だった。マルチティンバー（#647）で
+ * instrument が複数 index を持つ時、片方だけ直すと「保存は正しい chain へ、close は別の
+ * chain へ」という帰属ずれが静かに起きる。
+ */
+export function pluginChainPathFor(
+  target: { readonly role: 'effect' | 'instrument'; readonly chainPath?: readonly number[] },
+  legacyIndex?: number,
+): readonly number[] {
+  const path =
+    target.chainPath ??
+    (legacyIndex === undefined ? [0] : [target.role === 'effect' ? legacyIndex - 1 : legacyIndex])
+  if (path.length !== 1 || !Number.isSafeInteger(path[0]) || Number(path[0]) < 0) {
+    throw new Error(
+      `plugin chain_path must contain one non-negative integer: ${JSON.stringify(path)}.`,
+    )
+  }
+  return [Number(path[0])]
+}
+
 export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
   const searched: string[] = []
   const candidates: DaemonBinaryResolution[] = []
@@ -598,47 +622,48 @@ export class DaemonClient extends EventEmitter {
     target: PluginStateSaveTarget,
     index: number,
     windowTitle: string,
+    window: number,
   ): Promise<void> {
     await this.request('OpenPluginUI', {
       target: this.wirePluginTarget(target),
       chain_path: this.pluginChainPath(target, index),
+      window,
       windowTitle,
     })
   }
 
   /** この Promise は Phase A の受理 ack。close 完了は player が DONE event で判定する。 */
-  async acceptClosePluginUi(target: PluginStateSaveTarget, index: number): Promise<void> {
+  async acceptClosePluginUi(
+    target: PluginStateSaveTarget,
+    index: number,
+    window: number,
+  ): Promise<void> {
     await this.request('ClosePluginUI', {
       target: this.wirePluginTarget(target),
       chain_path: this.pluginChainPath(target, index),
+      window,
     })
   }
 
   async ackUiSafepoint(
     target: PluginStateSaveTarget,
     index: number,
+    window: number,
     generation: number,
     evtSeq: number,
   ): Promise<void> {
     await this.request('AckUiSafepoint', {
       target: this.wirePluginTarget(target),
       chain_path: this.pluginChainPath(target, index),
+      window,
       generation,
       evt_seq: evtSeq,
     })
   }
 
-  /** The sole legacy UI-index → wire chain_path mapping (effects are 1-based in TS). */
+  /** Delegates to {@link pluginChainPathFor} — that function is the single mapping. */
   private pluginChainPath(target: PluginStateSaveTarget, legacyIndex?: number): readonly number[] {
-    const path =
-      target.chainPath ??
-      (legacyIndex === undefined ? [0] : [target.role === 'effect' ? legacyIndex - 1 : legacyIndex])
-    if (path.length !== 1 || !Number.isSafeInteger(path[0]) || Number(path[0]) < 0) {
-      throw new Error(
-        `plugin chain_path must contain one non-negative integer: ${JSON.stringify(path)}.`,
-      )
-    }
-    return [Number(path[0])]
+    return pluginChainPathFor(target, legacyIndex)
   }
 
   private wirePluginTarget(target: PluginStateSaveTarget): Record<string, unknown> {

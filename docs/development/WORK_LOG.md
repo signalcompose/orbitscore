@@ -17,6 +17,596 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.419 fix: レビュー5体の指摘を適用 — Critical 2件はいずれも実バグ (#652) (Aug 29, 2026)
+
+`/simplify`（4観点・別途適用済み）に続き、`/code:pr-review-team`（Sonnet 4体）と
+**Fable 監査を並行**で回した。
+
+#### 🔴 Critical 1: 全ウィンドウが永久に開閉不能になる（**2体が独立に検出**）
+
+`UiEventHub.open_cycle` は **1 child 内の全 window で共有**され、`UI_CLOSED{w}` を載せてから
+`UI_CLOSED_DONE{w}` を載せるまで他 window の publish を止める。ところが
+`RackController::collect_retired` は**世代の到達だけ**を見て stage を退役させ、
+`UiService::Drop` は**ゲートを戻さない**。
+
+**故障**: UI が開いている stage が APPLY で drop → close cycle 進行中に退役 →
+`open_cycle` が `Some(w)` のまま残る → **同じ child の他の全ウィンドウが二度と開閉できない**。
+エラーもログも出ない。
+
+**直した位置**: `Drop` で塞ぐのではなく**退役条件**へ。設計 §4.8-(3) が
+「child の防御 close が cycle を完走させる」としているので、**完走するまで退役させない**のが筋。
+
+```rust
+.retain(|dropped| dropped.publish_generation > adopted || !dropped.ui_is_settled());
+```
+
+`ControlStage::ui_is_settled()` を新設（既定 `true` = UI を持たない stage は妨げない）。
+
+#### 🔴 Critical 2: コメントと実装が逆（本日の自作コード）
+
+`sync_header` の失敗で `break Err(e)` していた。コメントは「失敗しても capture 自体は続ける」。
+**1回の一時的な失敗で以降の音声が一切録れなくなる** — capture を一次資料にするという目的を、
+その保険自身が壊していた。握り潰さず報告して継続する形へ。テストで固定。
+
+#### 2体が収束した指摘
+
+| 指摘 | 検出 | 対応 |
+|---|---|---|
+| **ヘッダが未 flush 分を過大申告**（`kill -9` で data が EOF を越える） | comment-analyzer / Fable | `flush()` を先に |
+| `UiWindowKey` の doc が**実在しない区別**（"single-plugin effect children"）を語る | comment-analyzer / Fable | 訂正（effect は常に `Some`） |
+| `pluginChainPath` が**「唯一の写像」を二重に主張** | comment-analyzer | 委譲であることを明記 |
+
+#### 🔴 Fable の主指摘（Medium）: 拒否された token で簿記していた
+
+daemon の binding 検査が「その index は window w1 に束縛済み」と拒否した時、TS は**自分が採番した
+w2 で記録**していた。結果:
+
+- DSL からの close は w2 で発行 → binding 不一致で必ず loud 失敗 → **二度と閉じられない**
+- ユーザーが手で閉じてもイベントは w1 を運ぶ → 保存も拒否
+
+拒否文言に daemon の保持 token が入っているので、**それを読んで実体へ再同期**する形にした。
+S7 で固定し、**再同期を外すと red** になることも確認。
+
+#### Fable が「実在」を確認した項目（不在証明）
+
+設計 §1 の完了条件 1-9 と §5 の失敗モード表（P1-P14 / W1-W10 / H1-H6 / S1-S6 / E2E-2）は
+**欠落行ゼロ**。`index_binding` の用途 (i)(ii) とも配線済み。
+§4.7-(3)「`target.index` を帰属に使わない」も、残存4箇所すべてが**帰属ではない**ことを確認。
+
+#### 検証
+
+cfg 4象限すべて緑 / clippy（両 feature）exit=0 / rust 全 crate 0 failed /
+lint exit=0 / **2158 passed**
+
+---
+
+### 6.418 test: 今日の是正を「知識」から「再現可能な仕組み」へ (Aug 29, 2026)
+
+> 今回かなりテストなどの是正が出来てると思うのですが、**これをただの知識ではなく再現可能な
+> 仕組みにする**様にしてください。（owner）
+
+**文章は読まれない時がある。** 実際この日、CLAUDE.md に書いてある規律を**私自身が3つ破った**
+（`npm run build` を飛ばす / 変異検証を最後の手段にすると書いた直後に実行 / DSL を足したら
+E2E も足す）。規律を足す時は、**同時にそれを守らせる仕組みを足す**。
+
+#### 1. DSL 網羅率のラチェット（`tests/e2e/dsl-e2e-coverage.spec.ts`）
+
+**未カバーの語が増えたら red。減る分には落ちない。**
+
+- 新しい DSL 語を足して E2E を書かなければ、**その語の名前を挙げて落ちる**
+- baseline は**減らす方向にしか編集できない**（covered になったのに baseline に残っていたら
+  「baseline を正直に保つ」検査が別途落とす）
+
+**実証**: `SEQUENCE_DSL_METHODS` に架空の語を1つ足して E2E を書かない状態を作ると、
+`expected [ 'brandNewDslVerb' ] to deeply equal []` で red。restore で green。
+
+**書いた直後に仕事をした**: `global` 側にも未カバーが **8語**あることが判明
+（`compressor` / `limiter` / `normalizer` / `linkAudio` / `audioDevice` ほか）。
+前3つは master チェーンの語で、**#649 と同じ領域**にある。
+
+#### 2. アサーション衛生（`tests/e2e/gated-assertion-hygiene.spec.ts`）
+
+gated spec の**ソースを検査**して、弱いアサーションの型を機械的に探す:
+
+- ERROR 件数の**厳密等価**（固定 500 行窓なので古い ERROR が流れ出るだけで落ちる・#625）
+- capture するのに **rms を一度も見ていない**
+- stale ガードが `resolveDaemonBinaryPath()` を**呼ばずに決め打ちへ戻る**
+
+**書いた直後に実在の1件を検出**: `orbitstudio-mcp-gated.spec.ts:1403` の
+`.toBe(errorCountBeforeMixer)`。`<=` へ修正した。
+
+#### 3. cfg 4象限スクリプト（`scripts/check-cfg-matrix.sh`）
+
+**同じ日に2回**、このループを手書きして壊した:
+
+```bash
+for F in "" "--features outproc-effect" ...; do cargo build $F; done
+```
+
+zsh は**引用されていない変数を単語分割しない**ので `--features outproc-effect` が1引数として
+渡り、cargo が拒否する。「3象限が落ちている」と報告したが**実際は全象限緑**だった。
+
+**測定手段が壊れていると、緑も赤も意味を持たない。** ループを1箇所へ閉じ込めた。
+
+#### 既に仕組みになっていたもの（この日に効いた）
+
+| 仕組み | 何回発火したか |
+|---|---|
+| `pretest:e2e:gated`（自動ビルド） | 手順そのものが消えた |
+| DSL 語彙の分類テスト | **2回**（`pluginUiSessionForInstance` / `findPluginUiSession`） |
+| pre-push の `cargo fmt` / clippy | **2回**（整形漏れ / 重複 `#[test]`） |
+| stale ガード | 触って古くした状態で発火を確認 |
+
+#### CLAUDE.md に対応表を追加
+
+「規律 ↔ それを守らせる仕組み ↔ 違反するとどうなるか」を1つの表にした。
+
+#### 検証
+
+`npm test` **2157 passed**（+8）/ typecheck:e2e / lint とも exit=0 / cfg 4象限すべて緑
+
+---
+
+### 6.417 fix(e2e): 実機テストが古い daemon で走っていた — 手順を消して自動化した (#651) (Aug 29, 2026)
+
+#### 🔴 今日の実機 E2E は、すべて 17:49 のバイナリで走っていた
+
+`#651` のヘッダ修正が実機で効かず、**仮説を4つ立てて4つとも外した**。最後に
+システム上の daemon を全列挙して確定した:
+
+```text
+probe=1  19:01  rust/target/release/orbit-audio-daemon                      ← ビルドしたもの
+probe=0  17:49  packages/vscode-extension/engine/bin/darwin-arm64/...       ← 実際に動いていたもの
+```
+
+**拡張は daemon を同梱している。** engine が `<extension>/engine/dist/` から動くため、
+`daemon-client.ts` の解決順で `<extension>/engine/bin/<platform>/` が当たる。
+同梱コピーを更新するのは **`npm run build` の `build:copy-engine`**
+（`scripts/copy-daemon-bin.sh`）で、`cargo build` では更新されない。
+
+**私は `cargo build` だけ回して `npm run build` を飛ばしていた。**
+CLAUDE.md のマージ前ゲートには `npm run build` と書いてある。**手順は存在し、私が守らなかった。**
+
+#### 🔴 owner 判断: 手順が確実なら、手順そのものを消す
+
+> これ手順が確実になったら手動ではない形にした方がいいですよね
+
+**ガードは「忘れた」と言うだけで、忘れる余地を残す。**
+
+`package.json` に **`pretest:e2e:gated`** を追加した。npm は `pre<script>` を自動で先に
+実行するので、`npm run test:e2e:gated` を打てば**必ず** cargo build + npm build が走る。
+
+```json
+"pretest:e2e:gated": "cargo build --release --manifest-path rust/Cargo.toml -p orbit-audio-daemon --features outproc-effect,outproc-instrument && npm run build"
+```
+
+**実証**: 同梱バイナリに観測文字列を残した状態から、`cargo` も `npm run build` も打たずに
+`npm run test:e2e:gated` だけを実行 → **観測文字列が 1 → 0**（pretest が作り直した）。
+
+#### stale ガードは同梱パスへ修正（保険）
+
+最初に入れたガードは `rust/target/release/` を見ており、**今日の事故を止められなかった**。
+実際に spawn される同梱パスへ変更。vitest を直接叩いた場合の保険として残す。
+
+#### #651 は直った
+
+```text
+以前:  data=0        estimated duration: 0.000000 sec
+いま:  data=2310144  estimated duration: 5.013333 sec
+```
+
+**開けて聴けるようになった。** `data` が実データよりわずかに小さいのは設計どおり
+（最後の 1 秒ぶんが次の patch を待っている状態で終了する）。
+
+#### 🔴 観測手段そのものを確かめずに結論を出した（4回）
+
+| # | 結論 | 実際 |
+|---|---|---|
+| 1 | 「`afinfo` が開けるので実害は小さい」 | 尺は **0 秒**だった |
+| 2 | 「E2E が stale なバイナリを使っていた」 | 対象を**別のバイナリと取り違えていた** |
+| 3 | 「`[capture]` 報告が無い = Drop が走っていない」 | `eprintln!` が `get_log` に**出ないだけ**だった |
+| 4 | 「観測が空 = ループに到達していない」 | 同上 / `/tmp` に書けない可能性 |
+
+**共通点: 観測手段が働いているかを確かめずに、その沈黙を事象の不在と読んだ。**
+memory `swallowed-errors-are-not-absence` は**エラーの握り潰し**について書いてあるが、
+**観測手段そのものには適用していなかった**。
+
+**対処**: 観測を仕込む時は、**まず「必ず出るはずの1回」で経路を確かめる**。
+今回は3回目（キャプチャの隣に書く）で初めて経路が保証された。
+
+---
+
+### 6.416 fix(capture): ヘッダを定期 patch + 🔴 stale artifact ガードを機械化 (#651) (Aug 29, 2026)
+
+#### 何を直したか
+
+キャプチャ WAV のヘッダは `finalize()` でしか patch されず、**プロセスが graceful に
+落ちなければ size=0 の placeholder のまま**残っていた。実測では RIFF size=36 / data size=0 で
+2.29MB のデータを抱えており、**macOS の `afinfo` も `estimated duration: 0.000000 sec`** と読む。
+**owner が開いても無音**になる。
+
+writer スレッドの drain ループで **約1秒ごとに header を patch** するようにした
+（`sync_header`）。**いつ落ちてもその時点まで有効な WAV** になる。
+
+#### 🔴 未解決: 実機ではまだ効かない
+
+| | |
+|---|---|
+| `RiffWavWriter::sync_header` 単体 | ✅ 動く |
+| `CaptureWriter` 経由のループ（実機と同じ経路） | ✅ **動く** |
+| 実機 E2E のキャプチャ | 🔴 **効かない・理由不明** |
+
+**2つの仮説を立てて2つとも外した**（「解析器がヘッダを無視できるから実害は小さい」→ 誤り /
+「E2E が stale なバイナリを使っていた」→ 再ビルド後も同じ）。ここで打ち切り、#651 に残す。
+
+#### 🔴 stale artifact ガード — 同じ事故を繰り返しているので機械化した
+
+> これもなんども繰り返してるよ。（owner）
+
+**「ビルドが届いていないバイナリを相手に測る」事故**を、注意ではなく**機械**で止める。
+
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` に、gated 実行の**モジュール読み込み時**に走る
+チェックを置いた: `rust/target/release/orbit-audio-daemon` が `rust/**/*.rs` |
+`Cargo.toml` より古ければ、**テストを1本も走らせずに落ちる**。原因ファイル名と両者の
+タイムスタンプ、再ビルドのコマンドを出す。
+
+**発火することを確認済み**（`touch capture.rs` → `Test Files 1 failed`・テストは0本実行）。
+
+過去の同型:
+- 2026-08-29（本件）: mtime 比較で「バイナリの方が新しい」と納得し、**再コンパイルが走るかを
+  見なかった**
+- 2026-08-01: pre-commit のビルドが **stash 退避中のソースから dist を焼き**、実機を壊した
+
+mtime 比較は「rebuild が no-op か」より弱いが、**実行前に 1ms で終わる**。
+弱い分は「疑わしきは落とす」側に倒す。
+
+#### 変異検証について（owner 指摘）
+
+> 変異必要なの？
+
+**不要だった。** `sync_header` を壊して red を見る工程は、実機で「開けるか」を見れば済む話の
+上に何も足していない。**ユニットテスト自体は機能テストなので残す**が、
+**壊して確かめた工程が余分**だった。この日確定した規律（E2E → ログ → 最後に変異）を、
+規律を書いた本人が直後に破った。
+
+---
+
+### 6.415 test(e2e): 実機で機能を確認し、🔴 マスターフェーダーが効いていないことを発見 (#633) (Aug 29, 2026)
+
+#### ✅ #633 の機能は実機で緑
+
+| | |
+|---|---|
+| **E2E-1** | 同一プラグイン2枚を同時に開き、**片方を閉じても他方が生存** |
+| **E2E-2** | **index シフトをまたいで UI が開いたまま**、新 index で閉じられる（owner 原則 C-A） |
+| 洪水 | **0 件**（前は 25ms 間隔で連続） |
+
+E2E の初回失敗は**すべて私のテストの作り**だった: エンジン未起動 / `var global = init GLOBAL`
+の欠落 / **UI を開く側に VST3 fixture を選んでいた**（ヘッドレスで `createView` が null）。
+
+#### 🔴 発見: `global.gain()` が instrument にまったく効いていない
+
+**キャプチャ WAV を残して自分で RMS を測った**結果（0.25秒窓）:
+
+```text
+3.50s rms=0.08660   3.75s rms=0.08860   4.00s rms=0.08864  ← この区間で gain(-6) を評価
+4.25s rms=0.08864   4.50s rms=0.08857   5.25s rms=0.08854
+```
+
+**完全にフラット。** 効いていれば 0.044 へ落ちる。
+
+##### 原因（両端に観測を仕込んで特定）
+
+```text
+[PROBE-TS]     gain() db=-6 amp=0.5011872 hasSetter=function
+[PROBE-DAEMON] SetGlobalGain received value=0.5011872 ramp_sec=0
+```
+
+**送受信は正常。問題は掛ける順序だった。**
+
+`orbit-audio-native/src/output.rs`:
+- `936`: `engine.render_multi_feeds(hw, ...)` ← **ここで master gain を掛ける**
+- `959`: post-loop の `BusTarget::Master` が **`hw` に直接加算** ← **gain の後**
+
+**ミキサーの stage から master へ合流する音は master gain を素通りする。**
+capture tap は「post 適用後の最終 hw（= device に出る実信号）」なので、**スピーカーも同じ**。
+
+##### これは #643 の設計で「未設計」と記録した箇所そのもの
+
+```text
+audio / instrument  →   ミキサー          →   出力
+    （source）        bus / AUX / insert       ？
+                      ↑ §2-§9 で設計          ↑ 未設計
+```
+
+#### 🔴 owner の指摘: シーケンスのゲインも同じ誤り
+
+> master gain を post-loop の後ろへ移すのが素直＜これはその通りだな。
+> **シーケンスのゲインだって本来はそのはずですよね。**
+
+| フェーダー | いまの位置 | あるべき位置 |
+|---|---|---|
+| `seq.gain()` | **イベント生成時**（insert より前） | **そのシーケンスの insert の後** |
+| `global.gain()` | **stage 合流より前** | **全部合流した後** |
+
+**両方とも、自分が支配すべきものより手前にある。** 帰結として
+**「リバーブを掛けたままフェーダーだけ下げる」ができない**（残響比まで変わる）。
+spec はこれを「既知の制約」と記録していたが、**制約ではなく構造の誤りだった**。
+
+#### 🔴 テスト規律の確定（owner・この日の実証つき）
+
+> MCP ツールを用意して**ユーザーと同じ動線で試験できるようにしているのは「確実な動作を確認
+> するため」**。そのためにも変異テストより本来は **DSL を網羅した E2E を充実**して、そこで
+> **実機の実行に問題がある場合で必要があって初めて**変異テストになる。
+
+| 手段 | master gain の欠陥を捕まえたか |
+|---|---|
+| 変異検証 **35件**（80分以上） | ❌ **1件も** |
+| ユニットテスト **2149件** | ❌ |
+| **ユーザーと同じ動線のキャプチャ E2E** | ✅ **これだけ** |
+
+**ログについての但し書き**: この欠陥は**異常系ではない**。各層は成功を返し ERROR は 0 行。
+**ログは E2E の代わりではなく補完**として置く。
+
+#### 🔴 DSL 網羅率を測った — seq 32語のうち 19語が実機で未評価
+
+```text
+cell comp defaultGain defaultPan density hold length loop midi
+mute octave pan quantize root run unmute vel vl voicelead
+```
+
+`mute` / `pan` / `octave` / `vel` / `root` / `loop` が実機で一度も通っていない。
+**今日 gain で起きたことが、この19語のどれでも起きうる。**
+
+#### `ORBIT_KEEP_CAPTURES` を正式化
+
+キャプチャ WAV を残す env を追加した。**これが無ければ欠陥に辿り着けなかった** —
+ハーネスのアサーションは「窓の中の1つの数」しか見せないが、欠陥は窓の外にいることがある。
+
+#### 副産物: キャプチャ WAV のヘッダが patch されない
+
+RIFF size=36 / data size=0 のまま実データ 2.29MB。`CaptureWriter::Drop` で finalize する
+設計だが、**daemon が graceful に落ちていない**ため走っていないと見られる。
+標準ツール（QuickTime / Audacity / Python `wave`）で開けない。
+
+---
+
+### 6.414 fix(daemon): UI の宛先解決と帰属を配線する + 🔴 変異検証を PR の必須工程から外す (#633) (Aug 29, 2026)
+
+**Issue**: [#633](https://github.com/signalcompose/orbitscore/issues/633)
+
+#### 実装（工程 3-4・設計 §4.5 / §4.7）
+
+`engine_wrap.rs` の route を per-window registry にし、`index_binding`（現 index → token）を
+新設。TS 側は session 簿記を token キーへ移し、wire に `window` を足した。
+**工程1-2 が置いた `None` が実 token に置き換わった。**
+
+#### 🔴 owner 判断: 変異検証を PR のクリティカルパスから外す
+
+> 変異テストにかけている時間が開発のかなりの時間を占めていて、**開発速度がすごく下がって
+> いる**というのがとても問題だと思っています。**変異テストを入れることでの弊害の方が現状
+> すごく大きく**なっていると考えています。
+
+**実測**: この1 PR で**変異だけに 80分以上**（実装収束後: ラウンド1が43分・ラウンド2が40分超）。
+うち**3分の1は同語反復**だった — 「per-window map を単一 lifecycle に戻す」「generation 照合を
+削除」は、**機能そのものを消しているので落ちて当然**であり、何も証明していない。
+
+**判断**: 工程 3-4 の変異検証を**途中で打ち切った**。実装は完了しており、残りは変異の積み増し
+だったため。
+
+#### 🔴 なぜ E2E が上位なのか — owner が理由を明文化した
+
+> E2E テストというのは、エンドツーエンドで実行が確約されることで、**中のロジックがどういう
+> 実装になっているかに関わらず、正しく振る舞っていることを保証する**テストだからです。
+
+変異検証は「**テストが実装を見ているか**」を問い、E2E は「**振る舞いが正しいか**」を問う。
+**出荷するのは振る舞いであって、テストの厳密さではない。**
+
+#### 🔴 投資の順位（owner 確定）
+
+> テストを書きたいというのが開発の趣旨ではなく、**機能開発をしたいのが開発の趣旨**。
+> **仕様をきちっと作成し、その通りに作り、正しい振る舞いをまずは保証する**のが大事。
+
+| 順位 | 何に払うか |
+|---|---|
+| 1 | **仕様を先に固める**（#643 が実測 — 仕様を詰めたから実装が速かった） |
+| 2 | **仕様どおりの振る舞いを E2E で保証** |
+| 3 | 機能テスト（TDD） |
+| 4 | 変異検証（**クリティカルパス外**） |
+
+#### 🔴 なぜ旧方針を2ラウンドも発注したのか — 設計書が規律を上書きしていた
+
+**同日朝**に CLAUDE.md を3層へ書き換え「一律に変異検証としない」を撤回した。
+ところが `628-ui-pump-per-index-design.md`（**前日に Fable が起案**）は §5 の表で
+**35行すべてに変異を課しており**、main はそれに気づかず**撤回済みの旧方針で発注した**。
+
+**設計書は起案時点の規律を写し取る。規律を改訂すると設計書だけが旧方針のまま残る。**
+
+対処として CLAUDE.md に「**設計書は本規則を上書きできない**」節を新設した。§5 相当の表は
+**テスト対象の一覧として読み、検証手段は規律側で決め直す**。
+
+#### 併せて直したもの
+
+Codex が `Global` に足した `pluginUiSessionForInstance` が **DSL 語彙分類テストに引っかかった**
+（#528 を捕まえたテスト）。内部 API 側に登録。**private 宣言は実行時のプロトタイプには効かない。**
+
+#### 今後の手段
+
+| 目的 | 手段 |
+|---|---|
+| 「このテスト、何も見ていないのでは」 | `cargo-mutants --test-tool nextest --in-diff`（無人・差分のみ・**未導入**） |
+| 振る舞いの保証 | **キャプチャ E2E** |
+| 生成器に作れない変異（棄却案への差し戻し等） | 手書き・**PR あたり数件まで** |
+
+#### 検証
+
+`npm run build` / `lint` / `typecheck:e2e` すべて exit=0 / **2149 passed** /
+clippy（両 feature）緑 / rust lib 全 crate 0 failed
+
+---
+
+### 6.413 fix(daemon): UI pump を per-window 化 — 設計の「未実測」仮説が実測で確定した (#633) (Aug 29, 2026)
+
+**Issue**: [#633](https://github.com/signalcompose/orbitscore/issues/633)（#638 と1本の PR）
+**設計正本**: `docs/design/628-ui-pump-per-index-design.md`（711行・起案 Fable / owner 決定）
+**実装**: Codex（`gpt-5.6-sol` / effort xhigh）・**検証は main が sandbox 外で**
+
+#### 何が壊れていたか
+
+`UiEventPump` は **child 単位の単一 `UiPumpState`** を持ち、1 child に UI 1枚しか開けなかった。
+child 側は #628 で index → window の多重レジストリへ一般化済みで、**非対称が残っていた**。
+
+さらに実バグがあった: child は `{"index":0,"completion":"safepoint-completed"}` を送るが、
+daemon の DONE 腕は `Some("safepoint-completed")` の**完全一致でしか受けない**。
+**1枚目の close ですら Protocol error になり event ring の先頭が永久に詰まる。**
+実機ではこのエラーが **25ms 間隔で洪水**を起こし daemon を飽和させていた。
+
+#### 🔴 設計が「実測していない」と明記した仮説が、実測で再現した
+
+設計 §7 の表 1 行目は ring デッドロックを **「確信度 中〜高・机上組み立て・実測していない」**
+としていた。そこでブリーフで **「実装の前に H2 の再現 fixture を書き、再現するかを確認せよ。
+再現しなければゲートは防御実装に格下げし設計書に追記せよ」** と条件を分けて発注した。
+
+**結果: 再現した。**
+
+| 観測 | 値 |
+|---|---|
+| w1 `UI_CLOSED` | seq 1（daemon ack 停止） |
+| w2 `UI_CLOSED` | seq 2 |
+| w1 timeout 後の DONE | **publish 不能**（seq 3 には `evt_ack >= 1` が要る） |
+| ring 状態 | **`evt_seq=2 / evt_ack_seq=0`** |
+| daemon | **`Blocked { seq: 1 }` を繰り返す** |
+
+したがって **close-cycle 順序ゲートは防御実装ではなく必須**と確定した。
+
+**教訓**: 設計に「確信度」と「反証方法」の欄があると、**発注を条件分岐にできる**。
+「実装せよ」ではなく「確かめてから、結果に応じてこう実装せよ」と書けるので、
+**推論に基づく設計判断が実装フェーズで検証される。**
+
+#### 採った機構: 帰属と宛先の2レイヤ分離
+
+> 「開いているウィンドウ」は位置の性質ではなく **open という行為の産物**である。
+
+| 何を | どのキーで |
+|---|---|
+| **帰属**（イベント → session → 保存 identity） | **window token**。open から close まで不変 |
+| **宛先**（コマンド → stage） | **chain_path**。発行時点の登記チェーンから引く |
+
+位置（index）は APPLY で動く。**動く値を照合キーにすると「発行時点の index」と「ack 到着時点の
+index」の一致を別途保証する仕組みが要る**。token は不変なので、その仕組みごと不要になる。
+
+#### 変異検証 20件（P1-P14 / H1-H6）— すべて実 red 出力つき
+
+P6 が象徴的: 変異を戻すと**実機で洪水を起こしていたのと同じメッセージ**が出る。
+
+```text
+indexed DONE が invalid completion Some("{\"window\":1,...}")
+```
+
+各件 `$TMPDIR` baseline へ restore し `cmp OK` を確認。
+
+#### 🔴 main の検証が埋めた穴 — Codex が構造的に走らせられない28件
+
+Codex は sandbox で **localhost bind ができない**ため、`orbit-audio-daemon/tests/protocol.rs`
+の **28件が丸ごと実行不能**だった（迂回せず報告した — ブリーフの指示どおり）。
+
+**main が sandbox 外で実行し 28 passed / 0 failed。** ここが委譲では埋まらない。
+
+#### 本 PR に含まれない残り（工程 3-4）
+
+`engine_wrap.rs` / `outproc_respawn_guard.rs` は **`None` を渡すだけの追随変更**に留めた
+（19行）。route registry・`index_binding` の remap（§4.5）と TS の token 採番・帰属（§4.7）は
+**次の発注**。いま入っている `None` はそこで実 token に置き換わる。
+
+#### gated E2E 2本（main 担当・TDD で先に追加）
+
+🔴 **オラクルは `open_plugin_ui` の戻り値ではなく `close_plugin_ui`**。close はセッションが
+無いと失敗するので、**閉じられた = 開いていた**の証明になる。open の `ok` に assert しても
+「受理した」しか言えない。
+
+- **E2E-1**: 同一プラグインを2つ挿し `ui("名前")` → **2枚目を先に閉じ**、その後1枚目も閉じる
+  （= 片方の close が他方を壊さない・完了条件1）
+- **E2E-2**: `[A, B]` で B の UI を開き **A を落として B を index 2→1 にシフト** →
+  **新しい index で閉じられる**（= owner 原則 C-A の生存と、帰属が位置でなくインスタンスに
+  付いていること）
+
+#### 検証
+
+`cargo clippy --all-targets --features outproc-effect,outproc-instrument -- -D warnings` 緑 /
+cfg 4象限すべて緑 / `cargo fmt --all --check` 緑（main が独立に再実行）/
+daemon protocol **28 passed**（main が sandbox 外で）/ library unit: sandbox 101・
+child-runtime 35・rack-child 15
+
+---
+
+### 6.412 feat(editor): 274個から探す入口と、名前の誤りを評価前に知る診断 (#638) (Aug 29, 2026)
+
+**Issue**: [#638](https://github.com/signalcompose/orbitscore/issues/638)（#633 と1本の PR・owner 決定）
+
+#### なぜ
+
+実カタログは **342件**（effect **274** / instrument **74**・IK Multimedia だけで 130）。
+**名前を覚えている前提の補完だけでは、この規模は扱えない。**
+
+| 足りなかったもの | 入れたもの |
+|---|---|
+| 「何を挿すか**探している**」時の入口が無い | **Quick Pick**（`OrbitScore: Browse Plugins`） |
+| `effect(["存在しない名前"])` が**評価するまで分からない** | **カタログ照合の診断** |
+
+#### 1. Quick Pick
+
+カーソルが `effect(` / `instrument(` の文字列の中にあれば**そこから role を取り**、打ちかけの
+断片を置換する（**補完と同じ編集結果になる**）。文脈の外なら種別を訊いて `"名前"` を挿入する。
+
+行は `filterCatalogEntries` を再利用して作る。**補完が挿入する文字列と1文字も違わないため**、
+`format/name` / `vendor/name` の曖昧性解消がリストからの選択でも保たれる。
+
+#### 2. カタログ照合の診断
+
+エンジンの `resolveCatalogSpec` と同じ順で 4 種を分類する: **未検出 / vendor 曖昧 /
+role 不一致 / v1 でホストできない format**。
+
+🔴 **重大度は Error でなく Warning**。エンジンは実際に throw するが、**拡張の持つカタログは
+キャッシュされたスナップショット**なので、名前が**正しくてまだスキャンされていない**ことがある。
+Warning は「怪しい」と言うが、スナップショットに支えられない確信までは主張しない。
+
+#### 🔴 拡張はエンジンを import できない — 重複を「検出可能」にする
+
+拡張は **`.vsix` として単独出荷**するのでエンジンパッケージに依存できない。そこで解決規則を
+**ミラーし、合意テストで固定した**: 1つのコーパス（18ケース）を**両実装に流し、受理・拒否が
+一致することを assert** する。片方だけが変わればテストが赤くなる。
+前例は `tests/vscode-extension/dsl-method-catalog.spec.ts`。
+
+#610 が診断をエンジンパーサへ一本化したら、このミラーは**消える側**である。
+
+#### 🔴 変異検証で、自分のテストが「間違った理由で通っていた」ことが判明
+
+6変異のうち **2つが最初は生き残った**:
+
+| 変異 | なぜ生き残ったか |
+|---|---|
+| path 接頭辞の判定を殺す | テストの `./local.clap` が**パス接頭辞と拡張子の両方**に該当し、片方が死んでも他方が拾う |
+| state file 判定を殺す | `./tones/bass.vstpreset` も `./` で拾われる |
+
+**3つの除外規則を、それぞれ単独でしか救えないケースで突き直した**
+（`./racks/my-chain` / `MyPlugin.clap` / `bass.vstpreset`）。再実行で 3 件とも red。
+
+**教訓**: 除外規則が複数あるとき、**すべてに該当する例で書いたテストは規則を区別できない。**
+1規則につき1つ、その規則だけが救うケースを置く。
+
+#### 変異検証（全10件・すべて red → restore で green）
+
+診断側6件（標準プラグイン除外 / path 接頭辞 / 拡張子 / state file / vendor 曖昧 / role フィルタ）
++ Quick Pick 側4件（role フィルタ / ソート / insertText の曖昧性解消 / description の format）。
+
+#### 設計チェックで見つけた設計正本の陳腐化（#633 側）
+
+`docs/design/628-ui-pump-per-index-design.md` §4.7-(1) が「TS は `chain_path` を送っていない
+（`packages/` の grep 0件）」としていたが、**設計執筆後に #628 の `3b634850` で解消済み**
+だった（`daemon-client.ts` が `pluginChainPath()` で4経路すべてに送出）。設計書に訂正を追記。
+
+---
+
 ### 6.411 fix: fixer 差分の再点検で3件 — うち2件は「訂正が不完全だった」 (#643) (Aug 29, 2026)
 
 **Issue**: [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#648](https://github.com/signalcompose/orbitscore/pull/648)

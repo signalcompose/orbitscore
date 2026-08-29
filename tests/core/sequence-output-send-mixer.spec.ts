@@ -254,7 +254,7 @@ describe('signal-chain routing sugar mirrors the direct methods (#643)', () => {
   it('opens the output sugar to instruments', async () => {
     const { global, seq, setSourceRouting } = harness()
     global.sum('strings')
-    await seq.instrument('CLAP Test Synth')
+    await seq.instrument('synth.clap')
     setSourceRouting.mockClear()
 
     await seq.routeOutputFromDsl('strings')
@@ -266,7 +266,7 @@ describe('signal-chain routing sugar mirrors the direct methods (#643)', () => {
   it('opens the send sugar to instruments', async () => {
     const { global, seq, setSourceRouting } = harness()
     global.aux('rev')
-    await seq.instrument('CLAP Test Synth')
+    await seq.instrument('synth.clap')
     setSourceRouting.mockClear()
 
     await seq.routeSendFromDsl('rev', 0.3)
@@ -294,14 +294,14 @@ describe('signal-chain routing sugar mirrors the direct methods (#643)', () => {
 describe('output() rejects the two unsupported branches on instruments (#643)', () => {
   it('rejects the offline render bus branch', async () => {
     const { seq } = harness()
-    await seq.instrument('CLAP Test Synth')
+    await seq.instrument('synth.clap')
 
     expect(() => seq.output(3)).toThrow('offline render bus')
   })
 
   it('rejects the LinkAudio channel branch', async () => {
     const { seq } = harness()
-    await seq.instrument('CLAP Test Synth')
+    await seq.instrument('synth.clap')
 
     expect(() => seq.output('Kick Ch')).toThrow('LinkAudio channel')
   })

@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 
-import { filterCatalogEntries } from '../../packages/vscode-extension/src/plugin-catalog-completion'
+import {
+  buildPluginPickItems,
+  filterCatalogEntries,
+} from '../../packages/vscode-extension/src/plugin-catalog-completion'
 import type { PluginCatalogEntry } from '../../packages/vscode-extension/src/plugin-catalog-reader'
 
 const ENTRIES: PluginCatalogEntry[] = [
@@ -85,5 +88,48 @@ describe('filterCatalogEntries', () => {
   it('role mismatch excludes an entry', () => {
     const result = filterCatalogEntries(ENTRIES, 'effect', 'Scaler')
     expect(result).toHaveLength(0)
+  })
+})
+
+// ──────────────────────────────────────────────────────────────────────
+// Quick Pick 用の一覧（#638）
+// ──────────────────────────────────────────────────────────────────────
+
+describe('buildPluginPickItems', () => {
+  it('lists every entry for the verb with no typed prefix', () => {
+    // The whole point of browsing is that the user has typed nothing yet.
+    expect(buildPluginPickItems(ENTRIES, 'instrument').map((i) => i.label)).toEqual([
+      'Scaler 2',
+      'Surge XT',
+    ])
+  })
+
+  it("excludes entries that do not carry the verb's role", () => {
+    expect(buildPluginPickItems(ENTRIES, 'instrument').map((i) => i.label)).not.toContain(
+      'clap/TAL Reverb 4',
+    )
+  })
+
+  it('inserts the same disambiguated text completion would insert', () => {
+    // A same-vendor cross-format collision must survive into the pick list, or
+    // picking from the list writes an ambiguous name that completion never would.
+    const completion = filterCatalogEntries(ENTRIES, 'effect', '').find(
+      (c) => c.entry.name === 'TAL Reverb 4' && c.entry.format === 'clap',
+    )
+    const picked = buildPluginPickItems(ENTRIES, 'effect').find(
+      (i) => i.description === 'TAL Software · CLAP',
+    )
+    expect(picked?.insertText).toBe(completion?.insertText)
+    expect(picked?.insertText).toBe('clap/TAL Reverb 4')
+  })
+
+  it('carries vendor and format in the description so the picker can match on them', () => {
+    const item = buildPluginPickItems(ENTRIES, 'instrument').find((i) => i.label === 'Scaler 2')
+    expect(item?.description).toBe('Plugin Boutique · VST3')
+  })
+
+  it('sorts by label so the list is stable between invocations', () => {
+    const labels = buildPluginPickItems(ENTRIES, 'effect').map((i) => i.label)
+    expect(labels).toEqual([...labels].sort((a, b) => a.localeCompare(b)))
   })
 })

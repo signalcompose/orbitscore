@@ -368,6 +368,16 @@ fn chain_path_index(params: &Value, method: &str) -> Result<u64, ProtocolError> 
     }
 }
 
+#[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
+fn ui_window(params: &Value, method: &str) -> Result<u64, ProtocolError> {
+    params.get("window").and_then(Value::as_u64).ok_or_else(|| {
+        ProtocolError::new(
+            "MALFORMED_REQUEST",
+            format!("{method} requires integer 'window'"),
+        )
+    })
+}
+
 #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
 fn plugin_ui_unavailable(id: &str, method: &str) -> Value {
     err(
@@ -1965,9 +1975,13 @@ async fn handle_command(
                         )
                     }
                 };
+                let window = match ui_window(&params, "OpenPluginUI") {
+                    Ok(window) => window,
+                    Err(error) => return err(&id, error),
+                };
                 let engine = engine.clone();
                 match tokio::task::spawn_blocking(move || {
-                    engine.open_outproc_plugin_ui(target, index, window_title)
+                    engine.open_outproc_plugin_ui(target, index, window_title, Some(window))
                 })
                 .await
                 {
@@ -1988,9 +2002,13 @@ async fn handle_command(
                     Ok(target_and_index) => target_and_index,
                     Err(error) => return err(&id, error),
                 };
+                let window = match ui_window(&params, "ClosePluginUI") {
+                    Ok(window) => window,
+                    Err(error) => return err(&id, error),
+                };
                 let engine = engine.clone();
                 match tokio::task::spawn_blocking(move || {
-                    engine.close_outproc_plugin_ui(target, index)
+                    engine.close_outproc_plugin_ui(target, index, Some(window))
                 })
                 .await
                 {
@@ -2040,9 +2058,19 @@ async fn handle_command(
                         )
                     }
                 };
+                let window = match ui_window(&params, "AckUiSafepoint") {
+                    Ok(window) => window,
+                    Err(error) => return err(&id, error),
+                };
                 let engine = engine.clone();
                 match tokio::task::spawn_blocking(move || {
-                    engine.ack_outproc_ui_safepoint(target, index, generation, evt_seq)
+                    engine.ack_outproc_ui_safepoint(
+                        target,
+                        index,
+                        Some(window),
+                        generation,
+                        evt_seq,
+                    )
                 })
                 .await
                 {
@@ -3097,6 +3125,7 @@ mod tests {
             role: "effect",
             bus: Some("lead".into()),
             instance: None,
+            window: Some(99),
             index: 2,
         };
         let closed = serde_json::to_value(plugin_ui_protocol_event(PluginUiEvent::Closed {
@@ -3111,7 +3140,7 @@ mod tests {
                 "type": "event",
                 "event": "PluginUiClosed",
                 "data": {
-                    "target": {"role": "effect", "bus": "lead", "index": 2},
+                    "target": {"role": "effect", "bus": "lead", "window": 99, "index": 2},
                     "generation": 7,
                     "evt_seq": 11,
                 },
@@ -3148,6 +3177,7 @@ mod tests {
                     role: "instrument",
                     bus: None,
                     instance: Some("plugin:lead".into()),
+                    window: None,
                     index: 3,
                 },
             })
@@ -3621,6 +3651,7 @@ mod tests {
                 method: "AckUiSafepoint".into(),
                 params: json!({
                     "target": {"role": "effect", "bus": "lead"},
+                    "window": 1,
                     "generation": 0,
                     "evt_seq": 1
                 }),

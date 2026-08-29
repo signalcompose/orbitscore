@@ -71,7 +71,85 @@ if (gated && !appAvailable) {
   )
 }
 
+import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
+
 const REPO_ROOT = path.resolve(__dirname, '../..')
+
+// ──────────────────────────────────────────────────────────────────────
+// 🔴 stale artifact ガード（2026-08-29・同じ事故を何度も繰り返しているため機械化）
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * daemon バイナリが Rust ソースより古ければ、**テストを1本も走らせずに落とす**。
+ *
+ * この suite は「実機で本当に動くか」を確かめるためにある。ビルドが届いていない
+ * バイナリを相手に測ると、**緑も赤も意味を持たない**。
+ *
+ * 実害の記録:
+ * - 2026-08-29: capture のヘッダ修正が効かず、20分かけて別の仮説を追った。原因は
+ *   `cargo build --manifest-path ... --release --features ...` が daemon まで届いて
+ *   おらず、**E2E が修正前のバイナリを使っていた**こと。「バイナリの方が新しい」という
+ *   mtime 比較で納得してしまい、再コンパイルが走るかを見ていなかった。
+ * - 2026-08-01: pre-commit のビルドが stash 退避中のソースから dist を焼き、実機を壊した。
+ *
+ * mtime 比較は「rebuild が no-op か」より弱いが、**テスト実行前に 1ms で終わる**のが利点。
+ * 弱い分は「疑わしきは落とす」側に倒す（等しい場合は通す）。
+ */
+function assertDaemonBinaryIsNotStale(): void {
+  // 🔴 パスを決め打ちしない。**実際に spawn される候補を決めるのは
+  // `resolveDaemonBinaryPath()` であり、それが唯一の正本**（explicit → env →
+  // monorepo-release → monorepo-debug → extension-bundle）。
+  //
+  // この PR は同じ判断を 2 回間違えている: 最初 `rust/target/release/` を見る版を書き
+  // （2f44c955）、同梱パスへ直した（8e1baa28）。**どちらも「どのパスが使われるか」の
+  // 推測**であり、env で上書きされた瞬間に崩れる。ガードが防ごうとしている事故
+  // （間違ったバイナリを測る）を、ガード自身が再導入しうる形だった。
+  let binary: string
+  try {
+    binary = resolveDaemonBinaryPath().path
+  } catch (error) {
+    throw new Error(
+      `gated E2E: could not resolve the daemon binary — ${String(error)}\n` +
+        'Build it first:\n  npm run build',
+    )
+  }
+  if (!fs.existsSync(binary)) {
+    throw new Error(
+      `gated E2E: ${binary} does not exist. Build it first:\n` +
+        '  npm run build   # cargo build + scripts/copy-daemon-bin.sh',
+    )
+  }
+  const builtAt = fs.statSync(binary).mtimeMs
+  let newest = { at: 0, file: '' }
+  const walk = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        if (entry.name === 'target' || entry.name === 'node_modules') continue
+        walk(full)
+      } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
+        const at = fs.statSync(full).mtimeMs
+        if (at > newest.at) newest = { at, file: full }
+      }
+    }
+  }
+  walk(path.join(REPO_ROOT, 'rust'))
+  if (newest.at > builtAt) {
+    throw new Error(
+      'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
+        `stale code.\n  newest source: ${path.relative(REPO_ROOT, newest.file)}\n` +
+        `  binary:        ${new Date(builtAt).toISOString()}\n` +
+        `  source:        ${new Date(newest.at).toISOString()}\n` +
+        'Rebuild before running (npm run test:e2e:gated does this for you):\n' +
+        '  cargo build --release --manifest-path rust/Cargo.toml -p orbit-audio-daemon \\\n' +
+        '    --features outproc-effect,outproc-instrument && npm run build',
+    )
+  }
+}
+
+if (gated && appAvailable) {
+  assertDaemonBinaryIsNotStale()
+}
 const EXTENSION_DEV_PATH = path.join(REPO_ROOT, 'packages/vscode-extension')
 const KICK_LOOP_FIXTURE = path.join(REPO_ROOT, 'tests/fixtures/mcp-e2e/kick_loop.orbs')
 const DIAGNOSTIC_FIXTURE = path.join(REPO_ROOT, 'tests/fixtures/mcp-e2e/diagnostic_case.orbs')
@@ -432,7 +510,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     const activeClient = client
     const catalog = requireCatalogFixtures()
     const dslPath = path.join(tmpRoot, `643-${slug}.orbs`)
-    const capturePath = path.join(tmpRoot, `643-${slug}.wav`)
+    // 🔴 `ORBIT_KEEP_CAPTURES=<dir>` を渡すと、キャプチャ WAV を tmpRoot ではなくそこへ書く。
+    // afterAll の掃除に巻き込まれないので、**落ちたときに音を自分で聴ける / 測れる**。
+    //
+    // これが無いと「比が 0.72 だった」以上のことが分からない。2026-08-29 に master gain が
+    // instrument へ効いていない欠陥を捕まえたのは、この WAV を残して RMS を時系列で見たから。
+    // ハーネスのアサーションは「窓の中の1つの数」しか見せないが、欠陥は窓の外にいることがある。
+    const capturePath =
+      process.env.ORBIT_KEEP_CAPTURES !== undefined
+        ? path.join(process.env.ORBIT_KEEP_CAPTURES, `643-${slug}.wav`)
+        : path.join(tmpRoot, `643-${slug}.wav`)
     const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
     const readLog = async (): Promise<string> =>
       (await activeClient.call('get_log', { lines: 500 })).text
@@ -1313,7 +1400,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(
         errorCountAfterMixer,
         `expected no new ERROR: lines from the mixer/routing DSL, got log tail: ${afterMixerLog.slice(-800)}`,
-      ).toBe(errorCountBeforeMixer)
+        // 🔴 `get_log` は固定 500 行窓。古い ERROR が窓から流れ出るだけで件数は減るので、
+        // 厳密等価は偽陽性を生む。増えていないことだけを見る（#625）。
+      ).toBeLessThanOrEqual(errorCountBeforeMixer)
 
       // ── 7. get_log sanity check — non-empty, evidence of engine activity ──
       const logRes = await client.call('get_log', { lines: 100 })
@@ -1628,6 +1717,162 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         dry,
         'E2E-7 default-master instrument must remain below the 0.25-peak oracle RMS',
       ).toBeLessThan(0.2)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  // ──────────────────────────────────────────────────────────────────
+  // #633 — the UI pump must hold more than one window per child
+  // ──────────────────────────────────────────────────────────────────
+  //
+  // 🔴 The oracle in both tests is `close_plugin_ui`, not the return value of
+  // `open_plugin_ui`. A close FAILS when no session is recorded for that
+  // window ("no plugin UI opened via open_plugin_ui is recorded"), so a close
+  // that succeeds is evidence the window was genuinely open and still tracked.
+  // Asserting on the open call alone would only prove the request was accepted.
+
+  it.skipIf(!appAvailable)(
+    '#633 E2E-1 opens a UI for every matching insert, and closing one leaves the other open',
+    async () => {
+      expect(client, '#633 E2E-1 must initialize the MCP client').toBeDefined()
+      if (!client) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      // 🔴 evaluate_orbitscore は受理するだけで、engine が止まっていると
+      // 「engine is not running」でエンジン側が拒否する。DSL を駆動する前に必ず起動する。
+      await startR28Engine(activeClient, '#633 E2E-1 engine')
+      const catalog = requireCatalogFixtures()
+      const name = catalog.clapEffectName
+      const errorPrefix = 'ERROR:'
+      const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+      const errorsBefore = beforeLog.split(errorPrefix).length - 1
+
+      // Two inserts of the SAME plugin on one receiver: SC.10.10.1 規範 2-3 says
+      // `ui("名前")` opens every matching insert, so this needs two windows
+      // inside one child at once — the thing the single-slot pump could not do.
+      // 🔴 `init global.seq` は `global` が宣言済みであることを前提にする。R28 と同じ作法で
+      // 先に `var global = init GLOBAL` を評価しないと `Variable not found` になる。
+      const declare = await activeClient.call('evaluate_orbitscore', {
+        code: ['var global = init GLOBAL', 'var uiRackSeq = init global.seq'].join('\n'),
+      })
+      expect(declare.isError, declare.text).toBe(false)
+      const rack = await activeClient.call('evaluate_orbitscore', {
+        code: `uiRackSeq.effect([${JSON.stringify(name)}, ${JSON.stringify(name)}])`,
+      })
+      expect(rack.isError, rack.text).toBe(false)
+      await sleep(8000) // two real child stage spawns
+
+      const opened = await activeClient.call('evaluate_orbitscore', {
+        code: `uiRackSeq.ui(${JSON.stringify(name)})`,
+      })
+      expect(opened.isError, opened.text).toBe(false)
+      await sleep(3000)
+
+      // Close the SECOND insert first. Under the old single-slot pump the
+      // second open never happened, so this close has nothing to settle.
+      const closeSecond = await activeClient.call('close_plugin_ui', {
+        receiver: 'uiRackSeq',
+        index: 2,
+        expectedName: name,
+      })
+      expect(
+        closeSecond.isError,
+        `E2E-1 the second insert must have its own open window. ${closeSecond.text}`,
+      ).toBe(false)
+      await sleep(2000)
+
+      // 完了条件 1: closing one window must not disturb the other's lifecycle.
+      const closeFirst = await activeClient.call('close_plugin_ui', {
+        receiver: 'uiRackSeq',
+        index: 1,
+        expectedName: name,
+      })
+      expect(
+        closeFirst.isError,
+        `E2E-1 closing the second window must leave the first open. ${closeFirst.text}`,
+      ).toBe(false)
+
+      // The ring-jam symptom this issue fixes shows up only in the log: the
+      // daemon rejected every indexed DONE arg and re-logged it every 25ms.
+      const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+      expect(
+        afterLog,
+        'E2E-1 the indexed close completion must be understood by the daemon',
+      ).not.toContain('has invalid completion')
+      // 固定 500 行窓なので厳密等価にしない（#625）。
+      expect(
+        afterLog.split(errorPrefix).length - 1,
+        `E2E-1 must add no ERROR lines. Log tail: ${afterLog.slice(-1600)}`,
+      ).toBeLessThanOrEqual(errorsBefore)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#633 E2E-2 keeps an open UI open when an earlier insert is dropped, and closes it at its new index',
+    async () => {
+      expect(client, '#633 E2E-2 must initialize the MCP client').toBeDefined()
+      if (!client) throw new Error('main gated phase did not initialize suite state')
+      const activeClient = client
+      // 🔴 evaluate_orbitscore は受理するだけで、engine が止まっていると
+      // 「engine is not running」でエンジン側が拒否する。DSL を駆動する前に必ず起動する。
+      const catalog = requireCatalogFixtures()
+      // 🔴 UI を開くのは `kept` の方なので、そこに **CLAP** を置く。VST3 のテスト fixture は
+      // ヘッドレスで `IEditController::createView("editor")` が null を返す（実機で確認）。
+      // 落とされる `first` は UI を開かないので VST3 でよい。
+      const first = catalog.vst3EffectName
+      const kept = catalog.clapEffectName
+      const errorPrefix = 'ERROR:'
+      const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
+      const errorsBefore = beforeLog.split(errorPrefix).length - 1
+
+      // 🔴 `init global.seq` は `global` が宣言済みであることを前提にする。R28 と同じ作法で
+      // 先に `var global = init GLOBAL` を評価しないと `Variable not found` になる。
+      const declare = await activeClient.call('evaluate_orbitscore', {
+        code: ['var global = init GLOBAL', 'var uiShiftSeq = init global.seq'].join('\n'),
+      })
+      expect(declare.isError, declare.text).toBe(false)
+      const rack = await activeClient.call('evaluate_orbitscore', {
+        code: `uiShiftSeq.effect([${JSON.stringify(first)}, ${JSON.stringify(kept)}])`,
+      })
+      expect(rack.isError, rack.text).toBe(false)
+      await sleep(8000)
+
+      const opened = await activeClient.call('open_plugin_ui', {
+        receiver: 'uiShiftSeq',
+        index: 2,
+        expectedName: kept,
+      })
+      expect(opened.isError, opened.text).toBe(false)
+      await sleep(2000)
+
+      // 🔴 owner 原則 C-A: dropping a DIFFERENT element shifts this one from
+      // index 2 to index 1, and the window must stay open. The judgement is
+      // whether the instance survived, not whether its position moved.
+      const dropped = await activeClient.call('evaluate_orbitscore', {
+        code: `uiShiftSeq.effect([${JSON.stringify(kept)}])`,
+      })
+      expect(dropped.isError, dropped.text).toBe(false)
+      await sleep(4000)
+
+      // If the shift had torn the window down, this close would fail with "no
+      // plugin UI opened ... is recorded". That it succeeds AT THE NEW INDEX
+      // proves both halves: the window survived, and attribution followed the
+      // instance rather than the position.
+      const closed = await activeClient.call('close_plugin_ui', {
+        receiver: 'uiShiftSeq',
+        index: 1,
+        expectedName: kept,
+      })
+      expect(
+        closed.isError,
+        `E2E-2 the shifted window must still be open and addressable at its new index. ${closed.text}`,
+      ).toBe(false)
+
+      const afterLog = (await activeClient.call('get_log', { lines: 500 })).text
+      expect(
+        afterLog.split(errorPrefix).length - 1,
+        `E2E-2 must add no ERROR lines. Log tail: ${afterLog.slice(-1600)}`,
+      ).toBeLessThanOrEqual(errorsBefore)
     },
     TEST_TIMEOUT_MS,
   )

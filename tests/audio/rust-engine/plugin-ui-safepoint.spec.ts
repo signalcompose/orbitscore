@@ -86,11 +86,12 @@ describe('plugin UI safepoint conductor', () => {
     expect(respawn).toHaveBeenCalledWith({ marker: 3 })
 
     const request = vi.spyOn(framing as any, 'request').mockResolvedValue({ status: 'acked' })
-    await framing.ackUiSafepoint({ role: 'instrument', instance: 'plugin:lead' }, 0, 37, 41)
+    await framing.ackUiSafepoint({ role: 'instrument', instance: 'plugin:lead' }, 0, 17, 37, 41)
     expect(request).toHaveBeenCalledTimes(1)
     expect(request).toHaveBeenCalledWith('AckUiSafepoint', {
       target: { role: 'instrument', instance: 'plugin:lead' },
       chain_path: [0],
+      window: 17,
       generation: 37,
       evt_seq: 41,
     })
@@ -100,16 +101,21 @@ describe('plugin UI safepoint conductor', () => {
     const request = vi.spyOn(daemon as any, 'request').mockResolvedValue({ status: 'ok' })
     const target = { role: 'instrument' as const, instance: 'plugin:lead' }
 
-    await daemon.openPluginUi(target, 0, 'OrbitScore — Massive-X (lead:0)')
-    await daemon.acceptClosePluginUi(target, 0)
+    await daemon.openPluginUi(target, 0, 'OrbitScore — Massive-X (lead:0)', 17)
+    await daemon.acceptClosePluginUi(target, 0, 17)
 
     expect(request).toHaveBeenCalledTimes(2)
     expect(request).toHaveBeenNthCalledWith(1, 'OpenPluginUI', {
       target,
       chain_path: [0],
+      window: 17,
       windowTitle: 'OrbitScore — Massive-X (lead:0)',
     })
-    expect(request).toHaveBeenNthCalledWith(2, 'ClosePluginUI', { target, chain_path: [0] })
+    expect(request).toHaveBeenNthCalledWith(2, 'ClosePluginUI', {
+      target,
+      chain_path: [0],
+      window: 17,
+    })
   })
 
   it('times out a heavyweight OPEN_UI instead of waiting forever for attach completion', async () => {
@@ -120,6 +126,7 @@ describe('plugin UI safepoint conductor', () => {
         { role: 'instrument', instance: 'plugin:lead' },
         0,
         'OrbitScore — Massive-X (lead:0)',
+        17,
         20,
       ),
     ).rejects.toThrow('timed out waiting for plugin UI to open')
@@ -128,6 +135,7 @@ describe('plugin UI safepoint conductor', () => {
       { role: 'instrument', instance: 'plugin:lead' },
       0,
       'OrbitScore — Massive-X (lead:0)',
+      17,
     )
   })
 
@@ -136,7 +144,7 @@ describe('plugin UI safepoint conductor', () => {
     const target = { role: 'instrument' as const, instance: 'plugin:lead' }
     let settled = false
 
-    const closing = player!.closePluginUi(target, 0, 250).then((completion) => {
+    const closing = player!.closePluginUi(target, 0, 17, 250).then((completion) => {
       settled = true
       return completion
     })
@@ -144,7 +152,7 @@ describe('plugin UI safepoint conductor', () => {
     await new Promise((resolve) => setTimeout(resolve, 15))
     expect(settled).toBe(false)
     expect(accept).toHaveBeenCalledTimes(1)
-    expect(accept).toHaveBeenCalledWith(target, 0)
+    expect(accept).toHaveBeenCalledWith(target, 0, 17)
 
     daemon.emit('plugin-ui-close-done', {
       target: { role: 'instrument', instance: 'plugin:other', index: 0 },
@@ -171,16 +179,16 @@ describe('plugin UI safepoint conductor', () => {
       })
     })
 
-    await expect(player!.closePluginUi(target, 0, 100)).resolves.toBe('safepoint-completed')
+    await expect(player!.closePluginUi(target, 0, 17, 100)).resolves.toBe('safepoint-completed')
     expect(accept).toHaveBeenCalledTimes(1)
-    expect(accept).toHaveBeenCalledWith(target, 0)
+    expect(accept).toHaveBeenCalledWith(target, 0, 17)
   })
 
   it('times out loudly when CLOSE_UI is acked but UI_CLOSED_DONE never arrives', async () => {
     vi.spyOn(daemon, 'acceptClosePluginUi').mockResolvedValue()
 
     await expect(
-      player!.closePluginUi({ role: 'effect', bus: 'seq-bus-0' }, 1, 20),
+      player!.closePluginUi({ role: 'effect', bus: 'seq-bus-0' }, 1, 17, 20),
     ).rejects.toThrow('timed out waiting for UI_CLOSED_DONE')
   })
 
@@ -206,6 +214,7 @@ describe('plugin UI safepoint conductor', () => {
     expect(ack).toHaveBeenCalledTimes(1)
     expect(ack).toHaveBeenCalledWith(
       { role: 'instrument', instance: 'plugin:lead', chainPath: [0] },
+      0,
       0,
       37,
       41,
@@ -236,6 +245,34 @@ describe('plugin UI safepoint conductor', () => {
     expect(fs.existsSync(path.join(directory, 'project.yaml'))).toBe(false)
     expect(error).toHaveBeenCalledTimes(1)
     expect(error).toHaveBeenCalledWith(expect.stringContaining('AckUiSafepoint was not sent'))
+  })
+
+  it('S3 echoes the immutable effect window token without using target.index for attribution', async () => {
+    const saver = vi.fn().mockResolvedValue(undefined)
+    player!.setPluginUiSafepointSaver(saver)
+
+    daemon.emit('plugin-ui-closed', {
+      target: { role: 'effect', bus: 'seq-bus-0', index: 8, window: 4242 },
+      generation: 5,
+      evt_seq: 9,
+    })
+    await waitFor(() => ack.mock.calls.length === 1)
+
+    expect(saver).toHaveBeenCalledTimes(1)
+    expect(saver).toHaveBeenCalledWith({
+      role: 'effect',
+      bus: 'seq-bus-0',
+      index: 9,
+      window: 4242,
+    })
+    expect(ack).toHaveBeenCalledTimes(1)
+    expect(ack).toHaveBeenCalledWith(
+      { role: 'effect', bus: 'seq-bus-0', chainPath: [8] },
+      9,
+      4242,
+      5,
+      9,
+    )
   })
 
   it('reports timeout-without-save loudly exactly once', async () => {
@@ -301,7 +338,7 @@ describe('plugin UI safepoint conductor', () => {
     const accept = vi.spyOn(daemon, 'acceptClosePluginUi').mockResolvedValue()
     const target = { role: 'instrument' as const, instance: 'plugin:lead' }
 
-    const closing = player!.closePluginUi(target, 0, 250)
+    const closing = player!.closePluginUi(target, 0, 17, 250)
     await waitFor(() => accept.mock.calls.length === 1)
 
     daemon.emit('plugin-ui-closed-by-respawn', {

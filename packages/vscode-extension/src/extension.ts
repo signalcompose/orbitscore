@@ -16,6 +16,7 @@ import {
   analyzeOutputWithoutLinkAudio,
   isOrbitscoreDocument,
 } from './diagnostics-analysis'
+import { analyzeUnknownPluginNames } from './plugin-name-diagnostics'
 import { buildMcpServerUrl, mergeMcpJson } from './mcp-registration'
 import {
   startOrbitScoreMcpServer,
@@ -83,6 +84,8 @@ import {
   detectRackArgContext,
   filterCatalogEntries,
   RACK_SCAN_MAX_LINES,
+  buildPluginPickItems,
+  type PluginVerb,
 } from './plugin-catalog-completion'
 import {
   loadPluginCatalog,
@@ -375,6 +378,7 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('orbitscore.configureFlash', configureFlash),
     vscode.commands.registerCommand('orbitscore.registerMcpServer', registerMcpServer),
     vscode.commands.registerCommand('orbitscore.rescanPlugins', rescanPlugins),
+    vscode.commands.registerCommand('orbitscore.browsePlugins', browsePlugins),
     // viewsWelcome コンテンツは view に provider が登録されて初めて描画される
     // （空 TreeView で十分 — 章ツリーの本実装は #451 確定後の follow-up）。
     vscode.window.registerTreeDataProvider('orbitscore.learningView', {
@@ -2279,6 +2283,85 @@ function forceKillScsynth() {
 }
 
 /**
+ * "OrbitScore: Browse Plugins" command (#638) — palette entry that lists the
+ * catalog and writes the chosen name at the cursor.
+ *
+ * Completion covers "I remember part of the name"; this covers "what do I even
+ * have". With 274 effects and 74 instruments installed, the second question is
+ * the common one and had no entry point at all.
+ *
+ * When the cursor already sits inside an `effect(` / `instrument(` string the
+ * verb comes from there and the typed fragment is replaced, so picking from the
+ * list and completing produce the same edit. Outside that context the command
+ * asks which kind to browse and inserts a quoted name.
+ */
+async function browsePlugins(): Promise<void> {
+  const editor = vscode.window.activeTextEditor
+  if (!editor) {
+    vscode.window.showInformationMessage('OrbitScore: open an .orbs file to insert a plugin name.')
+    return
+  }
+
+  const catalog = loadPluginCatalog()
+  if (!catalog) {
+    vscode.window.showWarningMessage(
+      'OrbitScore: no plugin catalog found. Run "OrbitScore: Rescan Plugin Catalog" first.',
+    )
+    return
+  }
+
+  const position = editor.selection.active
+  const firstRow = Math.max(0, position.line - RACK_SCAN_MAX_LINES)
+  const lines: string[] = []
+  for (let row = firstRow; row <= position.line; row += 1) {
+    lines.push(editor.document.lineAt(row).text)
+  }
+  const context = detectRackArgContext(lines, position.line - firstRow, position.character)
+
+  let verb: PluginVerb
+  if (context) {
+    verb = context.verb
+  } else {
+    const picked = await vscode.window.showQuickPick(
+      [
+        { label: 'effect', description: 'insert seq.effect("...")' },
+        { label: 'instrument', description: 'insert seq.instrument("...")' },
+      ],
+      { title: 'OrbitScore: browse which kind of plugin?' },
+    )
+    if (!picked) return
+    verb = picked.label as PluginVerb
+  }
+
+  const items = buildPluginPickItems(catalog.plugins, verb)
+  if (items.length === 0) {
+    vscode.window.showWarningMessage(
+      `OrbitScore: the plugin catalog has no ${verb} plugins. Run "OrbitScore: Rescan Plugin Catalog".`,
+    )
+    return
+  }
+
+  const choice = await vscode.window.showQuickPick(items, {
+    title: `OrbitScore: ${verb} plugins (${items.length})`,
+    matchOnDescription: true,
+    placeHolder: 'Type to filter by name or vendor',
+  })
+  if (!choice) return
+
+  await editor.edit((edit) => {
+    if (context) {
+      // Replace what has been typed inside the quotes, exactly as completion would.
+      edit.replace(
+        new vscode.Range(new vscode.Position(position.line, context.quoteStartChar), position),
+        choice.insertText,
+      )
+    } else {
+      edit.insert(position, `"${choice.insertText}"`)
+    }
+  })
+}
+
+/**
  * "OrbitScore: Rescan Plugin Catalog" command (#463 C1b) — palette + editor
  * right-click menu. Spawns `orbit-plugin-scan` directly (not via the daemon:
  * the scanner is an independent crash-isolated binary — see
@@ -4005,6 +4088,25 @@ async function updateDiagnostics(
         new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
         issue.message,
         vscode.DiagnosticSeverity.Error,
+      ),
+    )
+  }
+
+  // #638: plugin names that the catalog cannot resolve. The engine throws on
+  // these at evaluation time, but with 342 catalog entries a typo is the common
+  // case and waiting until evaluation to learn about it is expensive.
+  //
+  // Severity is Warning, not Error, even though the engine throws: the
+  // extension's catalog is a cached snapshot, so a name can be *correct* and
+  // merely not scanned yet (a plugin installed since the last rescan). Warning
+  // says "this looks wrong" without asserting a certainty the snapshot cannot
+  // support; the message names the rescan command for exactly that case.
+  for (const issue of analyzeUnknownPluginNames(text, loadPluginCatalog()?.plugins)) {
+    diagnostics.push(
+      new vscode.Diagnostic(
+        new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+        issue.message,
+        vscode.DiagnosticSeverity.Warning,
       ),
     )
   }

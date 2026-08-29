@@ -4,12 +4,15 @@
  */
 
 import { AudioEngine, type PluginStateSaveTarget, type PluginUiTarget } from '../audio/types'
+import { allocatePluginUiWindowToken } from '../audio/rust-engine/plugin-ui-window-token'
 import { StackElement, PlayElement } from '../parser/types'
 import { BoundValue, ChordVoice } from '../midi/chord/types'
 import { evaluateChordDefinition } from '../midi/chord/resolve-chords'
 import { PREDEFINED_CHORDS } from '../midi/chord/predefined-chords'
 import { PluginNoteOutput } from '../midi/plugin-note-output'
 import type { RackRecipe } from '../signal-chain/rack'
+import { gainDbToAmplitude } from '../audio/audio-gain-utils'
+import { pluginChainPathFor } from '../audio/rust-engine/daemon-client'
 
 import { Sequence } from './sequence'
 import { Scheduler, GlobalState } from './global/types'
@@ -47,7 +50,20 @@ import {
   type PluginStateIdentity,
   type SavedProjectPluginState,
 } from './project-state-store'
-import { gainDbToAmplitude } from '../audio/audio-gain-utils'
+
+/**
+ * 開いている plugin UI 1 枚ぶんの簿記（#633）。
+ *
+ * 🔴 キーは **window token**（open 時に TS が採番し close まで不変）。位置（index）は
+ * APPLY で動くので帰属には使わない — `indexAtOpen` は表示・ログ専用である。
+ */
+type PluginUiSession = {
+  window: number
+  receiverId: string
+  instanceId: string
+  indexAtOpen: number
+  resolved: ResolvedPluginStateTarget
+}
 
 export interface ResolvedPluginStateTarget {
   identity: PluginStateIdentity
@@ -128,10 +144,7 @@ export class Global {
    * 「それらしい別プラグイン」へ黙って保存される）。エントリは safepoint 保存成功時と
    * close 完了時に破棄する。respawn 等で残った stale エントリは次の open が上書きする。
    */
-  private readonly openPluginUiSessions = new Map<
-    string,
-    { receiverId: string; instanceId: string; resolved: ResolvedPluginStateTarget }
-  >()
+  private readonly openPluginUiSessions = new Map<number, PluginUiSession>()
 
   /**
    * Creates a new Global instance with all manager components
@@ -218,7 +231,7 @@ export class Global {
     // 冪等ガード自身が塞いでしまうため）。
     this.audioEngine.setPluginUiClosedByRespawnListener?.((target) => {
       const session = this.pluginUiSessionForDaemonTarget(target)
-      if (session) this.openPluginUiSessions.delete(session.instanceId)
+      if (session) this.openPluginUiSessions.delete(session.window)
     })
   }
 
@@ -883,11 +896,11 @@ export class Global {
     }
     await this.projectStateStore(projectDirectory).save(session.resolved.identity, {
       ...session.resolved.daemonTarget,
-      chainPath: [session.resolved.identity.role === 'effect' ? currentIndex - 1 : 0],
+      chainPath: pluginChainPathFor(session.resolved.identity, currentIndex),
     })
     // 保存が成功したときだけ破棄する。失敗時は残し、（保存できなかった事実は上の throw で
     // loud になった上で）次の open による上書きに委ねる。
-    this.openPluginUiSessions.delete(session.instanceId)
+    this.openPluginUiSessions.delete(session.window)
   }
 
   /**
@@ -1001,7 +1014,7 @@ export class Global {
   hasOpenPluginUi(receiverId: string, index: number): boolean {
     try {
       const entry = this.resolvePluginStateEntry(receiverId, index)
-      return this.openPluginUiSessions.has(entry.instanceId)
+      return this.pluginUiSessionForInstance(receiverId, entry.instanceId) !== undefined
     } catch {
       return false
     }
@@ -1010,20 +1023,46 @@ export class Global {
   /** Remove every host-side UI ledger entry for this volatile `(receiver,index)` address. */
   private forgetPluginUiSession(receiverId: string, index: number): void {
     const entry = this.resolvePluginStateEntry(receiverId, index)
-    this.openPluginUiSessions.delete(entry.instanceId)
+    const session = this.pluginUiSessionForInstance(receiverId, entry.instanceId)
+    if (session) this.openPluginUiSessions.delete(session.window)
   }
 
   /** Record the resolved child session and preserve one-entry-per-address invariants. */
   private recordPluginUiSession(
+    window: number,
     receiverId: string,
     instanceId: string,
+    indexAtOpen: number,
     resolved: ResolvedPluginStateTarget,
   ): void {
-    this.openPluginUiSessions.set(instanceId, {
+    for (const [candidateWindow, session] of this.openPluginUiSessions) {
+      if (session.receiverId === receiverId && session.instanceId === instanceId) {
+        this.openPluginUiSessions.delete(candidateWindow)
+      }
+    }
+    this.openPluginUiSessions.set(window, {
+      window,
       receiverId,
       instanceId,
+      indexAtOpen,
       resolved,
     })
+  }
+
+  /** Map をコピーせずに session を線形探索する。同時 open 数は通常一桁。 */
+  private findPluginUiSession(
+    predicate: (session: PluginUiSession) => boolean,
+  ): PluginUiSession | undefined {
+    for (const session of this.openPluginUiSessions.values()) {
+      if (predicate(session)) return session
+    }
+    return undefined
+  }
+
+  private pluginUiSessionForInstance(receiverId: string, instanceId: string) {
+    return this.findPluginUiSession(
+      (session) => session.receiverId === receiverId && session.instanceId === instanceId,
+    )
   }
 
   private currentIndexForInstance(receiverId: string, instanceId: string): number | undefined {
@@ -1032,18 +1071,24 @@ export class Global {
     )?.index
   }
 
-  private pluginUiSessionForDaemonTarget(
-    target: PluginUiTarget,
-  ): { receiverId: string; instanceId: string; resolved: ResolvedPluginStateTarget } | undefined {
-    for (const session of this.openPluginUiSessions.values()) {
-      const currentIndex = this.currentIndexForInstance(session.receiverId, session.instanceId)
-      if (currentIndex !== target.index) continue
+  private pluginUiSessionForDaemonTarget(target: PluginUiTarget): PluginUiSession | undefined {
+    if (target.window !== undefined) {
+      const session = this.openPluginUiSessions.get(target.window)
+      if (!session) return undefined
       const daemonTarget = session.resolved.daemonTarget
       if (target.role === 'instrument') {
-        if (daemonTarget.role === 'instrument' && daemonTarget.instance === target.instance) {
-          return session
-        }
-      } else if (daemonTarget.role === 'effect' && daemonTarget.bus === target.bus) {
+        return daemonTarget.role === 'instrument' && daemonTarget.instance === target.instance
+          ? session
+          : undefined
+      }
+      return daemonTarget.role === 'effect' && daemonTarget.bus === target.bus ? session : undefined
+    }
+    // Legacy non-indexed instrument events carry no window. Match only the stable child endpoint;
+    // target.index is open-time display data and is never an attribution key.
+    if (target.role === 'effect') return undefined
+    for (const session of this.openPluginUiSessions.values()) {
+      const daemonTarget = session.resolved.daemonTarget
+      if (daemonTarget.role === 'instrument' && daemonTarget.instance === target.instance) {
         return session
       }
     }
@@ -1124,8 +1169,9 @@ export class Global {
     expectedName?: string,
   ): Promise<void> {
     if (this.hasOpenPluginUi(receiverId, index)) return
+    const window = allocatePluginUiWindowToken()
     try {
-      await this.openPluginUi(receiverId, index, expectedName)
+      await this.openPluginUi(receiverId, index, expectedName, window)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       // 成功扱いにしてよいのは「UI が既に開いている / 開きつつある」拒否だけ。
@@ -1144,7 +1190,27 @@ export class Global {
         // the recovery boundary. A missing/replaced target must remain loud;
         // registering a guessed identity would corrupt subsequent close/save.
         const entry = this.resolvePluginStateEntry(receiverId, index)
-        this.recordPluginUiSession(receiverId, entry.instanceId, entry.resolved)
+        // 🔴 **daemon が既に握っている token で記録する。**
+        //
+        // daemon の binding 検査は「その index は window w1 に束縛済み」と拒否する。ここで
+        // **こちらが採番した w2 で記録すると、TS だけが w2 を信じ daemon と child は w1 のまま**に
+        // なる。以後 DSL からの close は w2 で発行され binding 不一致で必ず loud に失敗し、
+        // **そのウィンドウを二度と閉じられなくなる**（2026-08-29 Fable 監査）。
+        // ユーザーが手で閉じてもイベントは w1 を運ぶので保存も拒否される。
+        //
+        // 拒否文言は token を含むので、それを読んで**daemon の実体へ再同期する**。
+        // 読めない形（child 由来の `already-open` 等）なら、こちらの token で記録するしかない。
+        const bound = /bound to window (\d+)/.exec(message)
+        const boundWindow = bound?.[1] === undefined ? undefined : Number(bound[1])
+        const sessionWindow =
+          boundWindow !== undefined && Number.isSafeInteger(boundWindow) ? boundWindow : window
+        this.recordPluginUiSession(
+          sessionWindow,
+          receiverId,
+          entry.instanceId,
+          index,
+          entry.resolved,
+        )
         return
       }
       throw error
@@ -1155,6 +1221,7 @@ export class Global {
     receiverId: string,
     index: number,
     expectedName?: string,
+    window = allocatePluginUiWindowToken(),
   ): Promise<PluginUiOperationResult> {
     const entry = this.resolvePluginStateEntry(receiverId, index)
     const resolved = entry.resolved
@@ -1179,6 +1246,7 @@ export class Global {
         resolved.daemonTarget,
         index,
         `OrbitScore — ${actualName} (${receiverId}:${index})`,
+        window,
       )
     } catch (error) {
       throw this.pluginUiOperationError(receiverId, index, error)
@@ -1190,7 +1258,7 @@ export class Global {
     // daemonTarget が変わる再 open では複合キーが別になり set では上書きされず、
     // closePluginUi の find が Map の挿入順＝stale 側を掴んでしまうため。
     // evict は daemon open 成功後に行う（open 失敗時に旧セッションを失わない）。
-    this.recordPluginUiSession(receiverId, entry.instanceId, resolved)
+    this.recordPluginUiSession(window, receiverId, entry.instanceId, index, resolved)
     return {
       receiver: receiverId,
       index,
@@ -1209,7 +1277,7 @@ export class Global {
     } catch (error) {
       throw this.pluginUiOperationError(receiverId, index, error)
     }
-    const session = this.openPluginUiSessions.get(entry.instanceId)
+    const session = this.pluginUiSessionForInstance(receiverId, entry.instanceId)
     if (!session) {
       throw this.pluginUiOperationError(
         receiverId,
@@ -1227,7 +1295,18 @@ export class Global {
     }
     let completion: Awaited<ReturnType<NonNullable<AudioEngine['closePluginUi']>>>
     try {
-      completion = await this.audioEngine.closePluginUi(entry.resolved.daemonTarget, index)
+      const currentIndex = this.currentIndexForInstance(session.receiverId, session.instanceId)
+      if (currentIndex === undefined) {
+        throw new Error(`Plugin UI instance '${session.instanceId}' is no longer present.`)
+      }
+      completion = await this.audioEngine.closePluginUi(
+        {
+          ...session.resolved.daemonTarget,
+          chainPath: pluginChainPathFor(session.resolved.identity, currentIndex),
+        },
+        currentIndex,
+        session.window,
+      )
     } catch (error) {
       // ウィンドウの生死が不明（close タイムアウト等）なのでセッションは破棄しない。
       // prepareInstrumentReplacement と違い、明示 close / sum.ui(false) は従来どおり
@@ -1237,7 +1316,7 @@ export class Global {
     }
     // DONE を受けた = ウィンドウは確実に閉じた。safepoint 保存成功時は保存側が破棄済み。
     // timeout-without-save でもウィンドウは消えているので、ここで必ず破棄する。
-    this.openPluginUiSessions.delete(session.instanceId)
+    this.openPluginUiSessions.delete(session.window)
     if (completion === 'timeout-without-save') {
       throw this.pluginUiOperationError(
         receiverId,
@@ -1300,7 +1379,8 @@ export class Global {
 
   /** Close a disappearing effect UI before ApplyEffectChain performs its atomic drop/save. */
   private async prepareEffectReplacement(receiverId: string, oldSlot: PluginSlot): Promise<void> {
-    if (this.openPluginUiSessions.has(oldSlot.instanceId)) {
+    const session = this.pluginUiSessionForInstance(receiverId, oldSlot.instanceId)
+    if (session) {
       const currentIndex = this.currentIndexForInstance(receiverId, oldSlot.instanceId)
       if (currentIndex === undefined) return
       try {
@@ -1308,7 +1388,7 @@ export class Global {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         if (!message.includes('timeout-without-save')) {
-          this.openPluginUiSessions.delete(oldSlot.instanceId)
+          this.openPluginUiSessions.delete(session.window)
           throw error
         }
         effectReplaceNotice(

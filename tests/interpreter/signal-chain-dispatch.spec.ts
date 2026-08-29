@@ -716,6 +716,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'resolvePluginStateEntry',
       'currentIndexForInstance',
       'pluginUiSessionForDaemonTarget',
+      // #633: the instance-keyed sibling — attribution lookup, not DSL surface.
+      'pluginUiSessionForInstance',
+      // #652: Map をコピーせず走査する内部ヘルパ。DSL 表面ではない。
+      'findPluginUiSession',
       'catalogIndicesByName',
       'openPluginUisByName',
       'closePluginUisByName',
