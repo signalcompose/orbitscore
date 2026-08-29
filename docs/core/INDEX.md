@@ -195,6 +195,12 @@ CLAUDE.md の「テストの積み上げ規律」「E2E が最重要」「マー
 | [SCSYNTH_STANDALONE.md](../research/SCSYNTH_STANDALONE.md) | ✅ Implemented (#133) | scsynth standalone 起動検証 |
 | [CODESIGN_PIPELINE.md](../research/CODESIGN_PIPELINE.md) | ✅ Implemented (#135) | macOS signing / notarize 戦略 (Apple Dev ID 不要) |
 
+配布・ホスト環境の検証:
+
+| File | Status | Description |
+|---|---|---|
+| [EDITOR_HOST_AND_APP_SIZE.md](../research/EDITOR_HOST_AND_APP_SIZE.md) | 📝 調査記録 (2026-08-30) | 自作エディタ vs VSCodium の比較と、アプリ 889→481MB のトリム実測。ソースマップが 334MB |
+
 ### WCTM 調査群（旧前提のスナップショット・凍結）
 
 `docs/research/WCTM_*`（機械の耳・作曲スキル・エージェントハーネス等 7 本）と `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` は、**旧前提（藝大 2026-08-07・Max 必須）下の調査・議論記録として意図的に凍結**する（記録改変は文脈破壊のため。抜けではない）。本番トラックの retarget（藝大不採択 → ICLC 方向・Max 脱必須。年次・提出日・形態は要確認）は統括 [#413](https://github.com/signalcompose/orbitscore/issues/413) を参照。

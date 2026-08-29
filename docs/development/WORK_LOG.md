@@ -255,6 +255,39 @@ chmod が効かないため**の環境要因。macOS の通常ユーザーでは
 
 ---
 
+### docs: エディタホストとアプリサイズの調査 (Aug 30, 2026)
+
+**Issue**: なし（調査記録）／関連 #656 #659
+**成果物**: `docs/research/EDITOR_HOST_AND_APP_SIZE.md`
+
+owner の「VSCodium は大きい。.vsix を使ってもっと軽い環境はないか」という問いへの調査。
+
+**結論**: 自作しない。VSIX 配布 + 軽量化した VSCodium を同梱（owner の判断どおり）。
+
+**根拠（実測）**:
+
+- 拡張 9131 行のうち **vscode 非依存が 4726 行**（MCP サーバ 1395 行は `vscode.` の実呼び出しゼロ）。
+  自作した場合の書き直しは 4405 行で、その中身はダイアログ・コマンドパレット・設定システム・
+  ツリービュー — **テキスト編集ではない**。加えて VS Code が無料で提供している機能が全部自前になる
+- **🔴 889MB のうち 334MB がソースマップだった**。実行時に読まれないデバッグ用ファイル。
+  `workbench.desktop.main.js.map` 87MB / `sessions.desktop.main.js.map` 86MB ほか 29 個
+- トリムして起動を実測: **889 → 555MB（マップ削除）→ 481MB（不要拡張も削除・46% 減）**。
+  MCP 応答 6 秒 / 840.orbs 評価 / ERROR 0 / `running:true, liveCoding:true`
+- **🔴 削除すると codesign が壊れる**（`code has no resources but signature indicates
+  they must be present`）。手順は「ビルド → トリム → 署名 → notarize」の順に固定が必要
+
+**検証の限界（doc §4.4 に明記）**: `debug: true` なしで起動したため `[STEP]` を確認していない。
+実音も聴いていない（ログ上 ERROR 0 と transport running までの確認）。
+
+**未確定**: 削る拡張の取捨。`typescript-language-features`（`perform/cue.ts` を編集するなら要）と
+`mermaid-markdown-features`（56MB）は owner 確認が要る。判断の余地が無いのはマップ削除のみ。
+
+**副次的な確定事項**: `.vsix` が機能の 100% を持ちアプリ側に固有実装が 1 行も無いため、
+**アプリは製品ではなく配布形式**。この位置づけを保つ限り上流追従は rebase 一発で済み、
+バージョンはアプリ版 = 拡張版で自動的に揃う。
+
+---
+
 ### 6.422 fix: engine のランタイム依存が hoist で bundle から抜け落ちていた (Aug 30, 2026)
 
 **発見経路**: #654 の実機ゲート。拡張を焼き込んで通常起動したら
