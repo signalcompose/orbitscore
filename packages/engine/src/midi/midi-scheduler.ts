@@ -153,6 +153,28 @@ export class MidiScheduler {
     }
   }
 
+  /**
+   * #654 live playhead: enqueue a marker-only action for one `play()` slot.
+   *
+   * Prints the machine-readable `[STEP] <seq> <argPath> <atEpochMs>` line the
+   * editor extension parses (vscode-extension/src/playhead.ts grammar — the
+   * timestamp must be an integer). The audio backend emits the same line from
+   * its dispatch path; this is the note-side half, which #390 never wired
+   * (so `instrument()` / `midi()` sequences never moved the highlight).
+   *
+   * `owner` is the sequence name and doubles as the marker's queue owner, so
+   * `clearOwner()` / `stop()` drop pending markers along with the notes — a
+   * playhead that keeps marching after stop is worse than one that never moved.
+   *
+   * Observational only: never affects note timing or semantics.
+   */
+  scheduleStepMarker(time: number, owner: string, argPath: string): void {
+    const atEpochMs = Math.round(time)
+    this.enqueue(time, owner, () => {
+      console.log(`[STEP] ${owner} ${argPath} ${atEpochMs}`)
+    })
+  }
+
   // -------------------------------------------------------------------------
   // Lifecycle
   // -------------------------------------------------------------------------

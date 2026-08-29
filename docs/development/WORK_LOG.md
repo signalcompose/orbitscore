@@ -17,6 +17,98 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.422 fix: engine のランタイム依存が hoist で bundle から抜け落ちていた (Aug 30, 2026)
+
+**発見経路**: #654 の実機ゲート。拡張を焼き込んで通常起動したら
+`Cannot find module 'yaml'` でエンジンが起動しなかった。
+
+#### 何が起きていたか
+
+`scripts/install-engine-deps.sh` は `packages/vscode-extension/engine` の中で
+`npm install` していた。このディレクトリは**ワークスペースの内側**なので、
+root の `node_modules` に既にある依存を npm が「充足済み」と判断して
+**root へ hoist し、bundle には書かない**。
+
+`yaml` がまさにそれで、6つの宣言済み依存のうち 1 つだけが欠けていた:
+
+| 依存 | bundle に入っていたか |
+|---|---|
+| `@julusian/midi` / `supercolliderjs` / `uuid` / `wavefile` / `ws` | ✅ |
+| `yaml` | 🔴 **欠落** |
+
+🔴 **ビルドは緑・vsix のパッケージングも成功・インストールも成功**して、
+**エンジンの初回評価で初めて落ちる。** どの段階でも警告が出ない。
+
+#### 直し方
+
+1. **ワークスペースの外（`mktemp -d`）で `npm install` し、できた `node_modules` を移す。**
+   temp dir の上にはワークスペース root が無いので、npm に hoist 先が存在しない
+2. **宣言済み依存が全部着地したかを検証し、欠けていたら `exit 1`。**
+   この故障はビルド時に見えず実行時にしか出ないので、検査をここに置くしかない
+
+（同型の再発防止: [[green-tests-do-not-mean-it-compiles]] と同じ「緑は根拠にならない」型）
+
+---
+
+### 6.421 fix: #654 instrument シーケンスで playhead が動かなかった (Aug 30, 2026)
+
+**Issue**: [#654](https://github.com/signalcompose/orbitscore/issues/654) / ブランチ `654-instrument-playhead`
+
+#### 症状
+
+840（SIGMUS 用の新曲・7層）を実機で鳴らしたところ、**`audio()` の gong 1層だけ**が
+playhead（#390 の `play()` 引数ハイライト）を刻み、**Kontakt の 6 層は静止したまま**だった。
+
+#### 原因 — 退行ではなく、最初から片翼だった
+
+playhead の唯一の情報源である `[STEP]` 行を出しているのは
+`rust-engine-player.ts:1559` の 1 箇所だけで、到達経路は**オーディオの 2 つのみ**:
+
+- `daemon.playAt()` 成功後（発音スロット）
+- `markerOnly` の休符スロット（`event-scheduler.ts` の `sliceNumber === 0` 分岐）
+
+`argPath` は `TimedEvent` に存在し（`timing/calculation/types.ts`）、audio 側は
+`event-scheduler.ts` がスケジューラへ渡している。しかし **MIDI 側は `sequence.ts` の
+Stage C で捨てていた** — `ScheduledMidiNote` は `owner / port / channel / note /
+velocity / detune / onTime / offTime` だけで、`argPath` を運ぶ場所が無い。
+
+つまり #390 は audio 経路にしか配線されていなかった。
+
+#### 変更（TS のみ・Rust 不要）
+
+| ファイル | 変更 |
+|---|---|
+| `midi/midi-scheduler.ts` | `scheduleStepMarker(time, owner, argPath)` を追加。marker-only のアクションを既存キューへ積む |
+| `core/sequence.ts` | `scheduleMidiEvents` の末尾で、`timedEvents` を 1 スロット 1 回だけ marker として積む |
+
+設計上の判断:
+
+- **`owner` を marker の queue owner に兼ねさせた** → `clearOwner()` / `stop()` で
+  ノートと一緒に取り消される。停止後も行進し続ける playhead は、動かない playhead より悪い
+- **休符 `0` とタイ `_` でも刻む** → audio 経路の marker-only 分岐と同じ。刻まないと
+  「音符の所だけ飛ぶ」中途半端な playhead になる
+- **stack は 1 スロット 1 marker にデデュープ** → `[ ]` は voice ごとに `TimedEvent` が出て
+  すべて同じ `argPath` を持つため、素直に積むと同じスロットが 3 回光る
+- **marker は `sendDelay` を足さないグリッド時刻に置く** → audio 側もグリッドを打つので、
+  ポートごとの送出補正を混ぜると**層どうしを比べられなくなる**。playhead の存在理由そのものが崩れる
+- **無名シーケンスでは出さない** → 文法の `seqName` は `\S+`。空名だと行が壊れて黙って捨てられる
+
+#### テスト
+
+`tests/core/sequence-midi-step-marker.spec.ts`（新規 7 件・実装前に red を確認）—
+実 `MidiScheduler` を通し、`Sequence.run()` から end-to-end で marker 列を検証:
+スロット順とグリッド時刻 / 休符 / タイ / stack のデデュープ / mute / stop / 無名。
+
+**実機 E2E**: `tests/e2e/orbitstudio-mcp-gated.spec.ts` に
+「`instrument()` シーケンスで playhead が休符も含めて刻む」を追加。
+`[STEP]` は `shouldFilterLine()` が通常モードで output channel から除外するので、
+**`start_engine({ debug: true })` で起動**して `get_log` から観測する（唯一の観測経路）。
+
+これにより DSL カバレッジ・ラチェットの baseline が 19 → 16 に縮んだ
+（`length` / `octave` / `run` が実機カバー済みになった）。
+
+---
+
 ### 6.420 design: #649 オーディオライン設計を v3 まで — 3回とも実装を読まずに規則を発明していた (Aug 30, 2026)
 
 **正本**: `docs/design/649-audio-line-design.md`（448行）/ 起案 Fable（3稿）・審査 main

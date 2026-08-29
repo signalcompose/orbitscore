@@ -1378,6 +1378,31 @@ export class Sequence {
       })
     }
 
+    // ── #654 live playhead: one `[STEP]` marker per play() slot ──
+    // Mirrors the audio path (event-scheduler.ts), which marks EVERY slot —
+    // sounding or not — so the highlight keeps time through rests and ties
+    // instead of hopping between notes. Muted sequences never reach here
+    // (early return above), matching the audio path's mute-skips-markers rule.
+    //
+    // The marker sits on the GRID time, deliberately without `sendDelay`: the
+    // audio path marks the grid too, so layers stay mutually comparable even
+    // when a MIDI port needs its own send compensation. A per-port shift would
+    // desynchronise the very thing the playhead exists to show.
+    //
+    // Deduped per slot: a `[ ]` stack yields one TimedEvent per voice, all
+    // carrying the stack's own argPath, and a slot must light up once.
+    if (owner) {
+      const markedSlots = new Set<string>()
+      for (const ev of timedEvents) {
+        if (ev.argPath === undefined) continue
+        const at = schedulerStartTime + baseTime + ev.startTime
+        const slot = `${ev.argPath}@${at}`
+        if (markedSlots.has(slot)) continue
+        markedSlots.add(slot)
+        scheduler.scheduleStepMarker(at, owner, ev.argPath)
+      }
+    }
+
     this.stateManager.setPlaying(true)
   }
 

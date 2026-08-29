@@ -172,6 +172,22 @@ jobs:
           fi
           echo "orbit-plugin-scan present and executable in packaged .vsix"
 
+          # 🔴 エンジンのランタイム依存（#654）: `packages/engine/package.json` の
+          # dependencies が .vsix の `engine/node_modules/` に**全部**入っているか。
+          #
+          # これが抜けても **ビルドは緑・パッケージングも成功・インストールも成功**し、
+          # エンジンの初回評価で `Cannot find module` になって初めて分かる。
+          # 実際 `yaml` が npm の hoist で抜けた（install-engine-deps.sh を修正済みだが、
+          # 出荷物そのものを見る検査をここにも置く）。
+          ENGINE_DEPS=$(node -e 'console.log(Object.keys(require("./packages/engine/package.json").dependencies).join(" "))')
+          for DEP in $ENGINE_DEPS; do
+            if [ ! -d "$VSIX_CHECK/extension/engine/node_modules/$DEP" ]; then
+              echo "::error::engine runtime dependency '$DEP' missing from packaged .vsix at engine/node_modules/ — the engine would crash with \"Cannot find module\" on first evaluate" >&2
+              exit 1
+            fi
+            echo "engine dependency $DEP present in packaged .vsix"
+          done
+
           # 標準プラグイン（#628 / SC.10.8）: child は自分の実行ファイルの隣の
           # `std-plugins/<name>.clap` を見て解決する。同梱が落ちると DSL の
           # `Gain(db: …)` が実行時に「解決できない」で落ちるだけで、
