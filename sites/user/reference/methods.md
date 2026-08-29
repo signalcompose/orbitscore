@@ -355,14 +355,14 @@ CLAP / VST3 プラグインをホストする機能です。詳しい解説は [
 | `instrument(spec, pluginId, statePath)` | pluginId と state を両方指定する 3 引数形 | `piano.instrument("Kontakt 8.vst3", "id", "./states/piano.state")` |
 
 - 対応形式は `.clap` / `.vst3`（`.component` は未対応）。シーケンスごとに独立したインスタンスを持ち、音色は共有されません。
-- `seq.effect()` / `sum` バスへの `output()` / `send()` は note シーケンス（`instrument()`/`midi()`）には**使えません**（v1 制限）。
+- `seq.effect()` / `sum` バスへの `output()` / `send()` は **audio と instrument** で使えます。`midi()` は外部機器へ送るためミキサーの出口を持たず、いずれもエラーになります。
 
 ### グローバル / シーケンス — エフェクトを挿す
 
 | シグネチャ | 説明 | 例 |
 |---|---|---|
 | `global.effect(spec)` | マスターバスへの insert（全シーケンスに掛かる） | `global.effect("TAL Reverb 4")` |
-| `seq.effect(spec)` | そのシーケンスだけに掛かる insert（audio シーケンス専用） | `drums.effect("TAL Reverb 4")` |
+| `seq.effect(spec)` | そのシーケンスだけに掛かる insert（audio / instrument） | `drums.effect("TAL Reverb 4")` |
 | `sum("name").effect(spec)` / `aux("name").effect(spec)` | バス（sum・aux）への insert | `sum("bus").effect("TAL Reverb 4")` |
 
 `spec` に渡せる値:
@@ -409,12 +409,12 @@ drums.effect([])                                        // 全部外す（削除
 | `global.sum(name)` | グループバスを宣言する（冪等） | `global.sum("drum")` |
 | `global.aux(name)` | リターンバスを宣言する（冪等） | `global.aux("rev")` |
 | `sum("name")` / `aux("name")` | 宣言済みバスへの参照（`.effect()` / `.ui()` をチェーンできる） | `sum("drum").effect("GlueComp")` |
-| `seq.output(name)` | シーケンスの出力先をグループバスに指定する（audio シーケンス専用） | `kick.output("drum")` |
+| `seq.output(name)` | シーケンスの出力先をグループバスに指定する（audio / instrument） |
 | `seq.output(n)` | 数値レンダーバス（1〜16・スコアモード） | `kick.output(1)` |
 | `seq.send(name, amount)` | リターンバスへ送る量を指定（post-fader 固定・複数 send 可） | `kick.send("rev", 0.3)` |
 
 - `sum` は 1 段のみ（ネスト不可）。
-- `output(name)` / `send(name, amount)` は **audio シーケンス専用**です（note シーケンスには v1 では使えません）。
+- `output(name)` / `send(name, amount)` は **audio と instrument** で使えます（`midi()` では使えません）。
 - `send()` の第 2 引数は線形 gain（0.0〜1.0 目安、上限は clamp されません）。
 - `global.linkAudio()` とミキサー機能（sum/aux/プラグインエフェクト全般）は同時に使えません。
 

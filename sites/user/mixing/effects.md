@@ -23,8 +23,10 @@ drums.effect("TAL Reverb 4")   // カタログ名で指定
 2. マスターミックス
 3. `global.effect()`（マスターチェーン、設定していれば）
 
-::: warning 対応しているのは audio シーケンスだけです
-`seq.effect()` は `seq.audio()` を宣言したシーケンス専用です。`seq.midi()` / `seq.instrument()` で作った note シーケンスには使えません（v1 制限。詳しくは [プラグイン音源を鳴らす](../plugins/instrument.md) を参照してください）。
+::: warning MIDI シーケンスには使えません
+`seq.effect()` は `seq.audio()` と `seq.instrument()` のシーケンスで使えます。
+`seq.midi()` で作ったシーケンスは外部機器へ送るものなので、ミキサーの出口を持たず、
+宣言するとエラーになります。
 :::
 
 ### 宣言のタイミングと失敗の扱い

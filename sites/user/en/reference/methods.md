@@ -311,14 +311,14 @@ Features for hosting CLAP / VST3 plugins. For a full walkthrough, see [Playing a
 | `instrument(spec, pluginId, statePath)` | Three-argument form that specifies both a pluginId and a state | `piano.instrument("Kontakt 8.vst3", "id", "./states/piano.state")` |
 
 - Supported formats are `.clap` / `.vst3` (`.component` is not supported). Each sequence gets an independent instance; sounds are not shared.
-- `seq.effect()`, and `output()` / `send()` to a `sum` bus, **cannot** be used on a note sequence (`instrument()`/`midi()`) (v1 constraint).
+- `seq.effect()`, and `output()` / `send()` to a `sum` bus, work on **audio and instrument** sequences. `midi()` targets an external device, so it has no mixer output and all three raise an error.
 
 ### Global / Sequence — Inserting Effects
 
 | Signature | Description | Example |
 |---|---|---|
 | `global.effect(spec)` | Insert on the master bus (applies to every sequence) | `global.effect("TAL Reverb 4")` |
-| `seq.effect(spec)` | Insert that applies only to that sequence (audio-sequence-only) | `drums.effect("TAL Reverb 4")` |
+| `seq.effect(spec)` | Insert that applies only to that sequence (audio / instrument) | `drums.effect("TAL Reverb 4")` |
 | `sum("name").effect(spec)` / `aux("name").effect(spec)` | Insert on a bus (sum or aux) | `sum("bus").effect("TAL Reverb 4")` |
 
 Values you can pass as `spec`:
@@ -365,12 +365,12 @@ Features for grouping sequences into buses. For a full walkthrough, see [sum and
 | `global.sum(name)` | Declares a group bus (idempotent) | `global.sum("drum")` |
 | `global.aux(name)` | Declares a return bus (idempotent) | `global.aux("rev")` |
 | `sum("name")` / `aux("name")` | A reference to an already-declared bus (`.effect()` / `.ui()` can be chained) | `sum("drum").effect("GlueComp")` |
-| `seq.output(name)` | Routes the sequence's output to a group bus (audio-sequence-only) | `kick.output("drum")` |
+| `seq.output(name)` | Routes the sequence's output to a group bus (audio / instrument) | `kick.output("drum")` |
 | `seq.output(n)` | Numbered render bus (1–16, score mode) | `kick.output(1)` |
 | `seq.send(name, amount)` | Sets the amount sent to a return bus (fixed at post-fader; multiple sends allowed) | `kick.send("rev", 0.3)` |
 
 - `sum` is a single level only (no nesting).
-- `output(name)` / `send(name, amount)` are **audio-sequence-only** (not usable on note sequences in v1).
+- `output(name)` / `send(name, amount)` work on **audio and instrument** sequences (not with `midi()`).
 - The second argument to `send()` is a linear gain (roughly 0.0–1.0, with no hard clamp on the upper end).
 - `global.linkAudio()` cannot be combined with mixer features (sum/aux/plugin effects in general).
 

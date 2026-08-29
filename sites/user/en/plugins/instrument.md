@@ -92,14 +92,15 @@ piano.ui()   // opens the instrument's UI (no arguments = instrument)
 
 - **The no-argument form opens the instrument's UI.** A sequence has only one instrument, so no name is needed.
 - Re-evaluating the score does not open a second copy of the UI (idempotent) — live coding assumes the same line gets re-evaluated repeatedly.
-- Currently there is no `ui("name")` form for an instrument, because it has no matching target: `seq.effect()`, as covered in the next chapter, is audio-sequence-only, and instrument sequences do not yet have a per-sequence effect chain. To close a UI you have opened, close the panel directly.
+- To close an open UI, close the panel directly.
 
 ## v1 Constraints (Honest Disclosure)
 
 - **`~` (detune) is not available.** The plugin path does not yet have pitch bend / CC, so it is skipped with a warning.
 - **CC control, per-note expression, and tempo sync** are not implemented.
-- **`seq.effect()` cannot be used on an instrument sequence** (audio-sequence-only; see [Inserting Effects](../mixing/effects.md)).
-- **`output()` to a `sum` bus also cannot be used on an instrument sequence.** An instrument's output is currently always mixed directly to master. `global.effect()` (the master chain) does apply to instrument sound, however.
+- **Offline render destinations (a numeric `output(1)`) are not supported.** Recording goes
+  through a separate path, so specifying one raises an explicit error.
+- **`output()` to a LinkAudio channel is not wired for instruments yet.**
 - **Cannot be combined with `global.linkAudio()`** (an error at declaration time).
 - Note timing has block-level precision (sample-accurate timing is future work).
 

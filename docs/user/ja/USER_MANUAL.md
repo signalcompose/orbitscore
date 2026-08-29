@@ -600,7 +600,7 @@ per-sequence insert / sum・aux bus insert）とインストゥルメント（�
 
 ```orbitscore
 global.effect("TAL Reverb 4")           // master bus insert（全シーケンスに掛かる）
-drums.effect("TAL Reverb 4")            // per-sequence insert（audio シーケンス専用）
+drums.effect("TAL Reverb 4")            // per-sequence insert（audio / instrument）
 ```
 
 **対応フォーマットは `.clap` と `.vst3` の両方**です（`.component` は未対応）。1 つのレシーバに
@@ -612,8 +612,7 @@ drums.effect(["TAL Reverb 4", Gain(db: -6)])
 
 `Gain(db: n)` はアプリ同梱の標準プラグインです。`layer([...])`（並列合成）は記法のみ予約されて
 おり、v1 では使うとエラーになります。`sum("name")` / `aux("name")` バスにも同じ形でエフェクトを
-挿せます。`seq.effect()` は **audio シーケンス専用**（`seq.midi()`/`seq.instrument()` の note
-シーケンスには v1 では使えません）。
+挿せます。`seq.effect()` は **audio と instrument** のシーケンスで使えます（`seq.midi()` は外部機器へ送るためミキサーの出口を持たず、宣言するとエラーになります）。
 
 ### インストゥルメント: `seq.instrument()`
 
@@ -632,7 +631,7 @@ synth.play(1, 3, 5, 0)  // 値は度数（Pitch DSL と同じ）
 - **シーケンスごとに独立したプラグインインスタンスを持ちます**（同じプラグインを複数の
   シーケンスで宣言しても音色は共有されません）。第 2/第 3 引数に `.vstpreset`/`.state` で
   終わるパスを渡すと、保存済みの音色を復元できます（VST3 のみ）
-- `seq.effect()` / sum バスへの `output()` / `send()` は note シーケンスには使えません（v1
+- `seq.effect()` / sum バスへの `output()` / `send()` は **audio と instrument** で使えます（`midi()` は不可）。
   制限）。instrument の音は master へ直接ミックスされますが、`global.effect()`（master
   chain）は適用されます
 

@@ -23,8 +23,10 @@ The processing order is:
 2. Master mix
 3. `global.effect()` (master chain, if configured)
 
-::: warning Only audio sequences are supported
-`seq.effect()` is only for sequences that declared `seq.audio()`. It cannot be used on a note sequence created with `seq.midi()` / `seq.instrument()` (v1 constraint; see [Playing a Plugin Instrument](../plugins/instrument.md) for details).
+::: warning Not available on MIDI sequences
+`seq.effect()` works on sequences declared with `seq.audio()` and `seq.instrument()`.
+A sequence created with `seq.midi()` sends to an external device, so it has no mixer
+output and declaring an effect raises an error.
 :::
 
 ### When the Plugin Loads, and What Happens on Failure

@@ -32,7 +32,7 @@ sum("bus").effect("GlueComp")
 
 - `sum` は 1 段のみで、**ネスト（sum の中に sum）はできません**。
 - `output(name)` で指定する名前は、事前に `global.sum(name)` で宣言しておく必要があります。未宣言の名前を指定するとエラーになります。
-- `output(name)` で sum バスへ送れるのは **audio シーケンスだけ**です。`seq.midi()` / `seq.instrument()` で作った note シーケンスは、v1 では sum バスへ送れません（詳しくは [プラグイン音源を鳴らす](../plugins/instrument.md) を参照してください）。
+- `output(name)` で sum バスへ送れるのは **audio シーケンスと instrument シーケンス**です。`seq.midi()` は外部機器へ送るものなので、ミキサーの出口を持たずエラーになります。
 
 ## aux / send — 別経路に音を送る
 
@@ -54,8 +54,8 @@ kick.send("rev", 0.3)
 kick.send("delay", 0.2)
 ```
 
-::: warning send() も audio シーケンス専用です
-`output()` と同じく、`send()` を使えるのは audio シーケンスだけです。note シーケンス（`seq.midi()` / `seq.instrument()`）では v1 では使えません。
+::: warning send() が使えないのは MIDI シーケンスです
+`output()` と同じく、`send()` も **audio シーケンスと instrument シーケンス**で使えます。`seq.midi()` では使えません。
 :::
 
 ## v1 の正直な制約
