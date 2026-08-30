@@ -199,6 +199,7 @@ CLAUDE.md の「テストの積み上げ規律」「E2E が最重要」「マー
 
 | File | Status | Description |
 |---|---|---|
+| [design/662-engine-visibility-and-limits.md](../design/662-engine-visibility-and-limits.md) | 📝 設計 (2026-08-31) | エンジンの可視化と上限の撤廃。余裕の表示・プール動的拡張・再起動要否の属性化 (#662/#663) |
 | [EDITOR_HOST_AND_APP_SIZE.md](../research/EDITOR_HOST_AND_APP_SIZE.md) | 📝 調査記録 (2026-08-30) | 自作エディタ vs VSCodium の比較と、アプリ 889→481MB のトリム実測。ソースマップが 334MB |
 
 ### WCTM 調査群（旧前提のスナップショット・凍結）
