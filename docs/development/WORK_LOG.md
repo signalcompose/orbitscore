@@ -68,6 +68,7 @@ Rust 側の関数移動）で、章の再検証が必要な状態だった（次
 - `docs/development/DEV_LEARNING_SITE.md` §3（ディレクトリの実態）・§7（決定済み / 未決）
 - `docs/development/TRANSLATION_STATUS.md`（dev 19 章 → 29 章）
 - `CONTRIBUTING.md`（integration test の対象を gated E2E へ）
+- `INSTRUCTION_ORBITSCORE_DSL.md` PH.1「v1 の現在地」: #643 反映時に旧文「PR-1a はまだ移設していない」と新文「✅ 実装済み」が同一文に継ぎ合わさっていたのを、時系列が読める形へ整理（SC-2 章執筆エージェントの指摘）
 
 #### テスト実測（2026-09-01・Linux コンテナ・root）
 

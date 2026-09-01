@@ -1184,9 +1184,9 @@ keys.instrument("Kontakt 8.vst3", "keys.vstpreset")  // 保存済み state で�
   > 出力先を指定する記述 — が原理的に成立しなかった（DSL 層も note シーケンスへの
   > `output()` / `send()` を拒否していた）。#522 の到達点「SC.0 の完全実行」には移設が必須である。
   >
-  > **v1 の現在地**: **PR-1a（#527）はまだこの移設を実装していない**。instrument の出力は
-  > 引き続き master の `CompositePostProcessor`（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs`）で
-  > **✅ 実装済み（#643・2026-08-29）**。instrument の音は master への後付け加算ではなく
+  > **v1 の現在地**: **✅ 実装済み（#643・2026-08-29）**。PR-1a（#527）時点では未移設で、
+  > instrument の出力は master の `CompositePostProcessor`（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs`）に
+  > 後付け加算されていた。#643 以降、instrument の音は master への後付け加算ではなく
   > **ミキサーの source** として `render_multi` の内側（event 混合後・gain ramp の前）で
   > 合流する。`seq.effect()` / `seq.output(sum)` / `seq.send()` は **instrument で使える**。
   >
