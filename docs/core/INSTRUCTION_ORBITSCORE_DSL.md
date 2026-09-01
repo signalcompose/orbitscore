@@ -249,9 +249,36 @@ like SuperCollider's `PlayBuf.ar(rate:)`:
   pitch-preserving time-stretch. A `rate = 2.0` slice sounds one octave up; `rate = 0.5`
   one octave down.
 
-This is the default slot-fitting behavior for **both** the SuperCollider engine and the Rust
+This is the slot-fitting behavior for **both** the SuperCollider engine and the Rust
 engine (`ORBITSCORE_ENGINE=rust`); the two stay in parity. A *pitch-preserving* fit would
 require time-stretch — see `fixpitch()` / `time()` / `stretch()` in §12.
+
+#### 🔴 This section applies to `chop(n)` with **n > 1** only
+
+**Without `chop()`, or with `chop(1)`, no slot fitting happens at all.**
+
+| declaration | path | behavior |
+|---|---|---|
+| no `chop()` / `chop(1)` | `scheduleEvent` | 🟢 the **whole file plays at its natural rate and natural pitch**. It **rings past the slot** and **overlaps the next trigger** |
+| `chop(n > 1)` | `scheduleSliceEvent` | the slice is varispeed-fitted into its slot (above) — **pitch moves** |
+
+The branch is in `core/sequence/scheduling/event-scheduler.ts` (`if (chopDivisions && chopDivisions > 1)`).
+`scheduleEvent` takes **no duration and no rate argument**, so there is nothing to scale by.
+
+**The non-chop path is a feature, not an omission.** It is how you write a one-shot that
+rings freely — a gong struck at the head of a long bar, a cymbal, a sample whose tail should
+bleed into the next event. Reach for it whenever the sample's own length is the musical value.
+
+```js
+gong.beat(21 by 4).length(1)
+gong.audio("EAF_Gong_05.wav").chop(1)   // 17.7 s, natural pitch
+gong.play(1, 0, 0, 0)                    // struck every 10.0 s -> ~7.7 s of tail overlaps
+```
+
+> 🔴 **This paragraph exists because its absence caused a real misreading.** On 2026-08-31,
+> two sessions independently concluded from this section that audio is *always* fitted to the
+> slot, and computed a 16-semitone pitch error for a piece that was in fact playing correctly.
+> The section named "chop slice" but never said what happens without one (#665).
 
 ---
 
