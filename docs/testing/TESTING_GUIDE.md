@@ -1,7 +1,12 @@
 # OrbitScore Testing Guide
 
-**Last Updated**: 2026-04-17
-**Test Status**: 220 passed | 23 skipped (243 total) = 90.5%
+**Last Updated**: 2026-09-01
+**Test Status**: `npm test` → 2162 passed | 68 skipped (2233 total、2026-09-01 実測。skip は macOS 実機・real daemon 依存)
+
+> **2026-09 の位置づけ**: 既定バックエンドは Rust `orbit-audio-daemon`（cutover #108）。本ガイドの
+> SuperCollider 節は `ORBITSCORE_ENGINE=sc` の opt-out 経路にのみ必要。実機検証の正本は
+> [E2E_HARNESS_SPEC.md](E2E_HARNESS_SPEC.md) と `npm run test:e2e:gated`（`ORBIT_GATED_ORBITSTUDIO=1`・
+> OrbitStudio.app を MCP で駆動・capture WAV アサーション）、および CLAUDE.md「マージ前ゲート」。
 
 ## 📚 Overview
 
@@ -11,11 +16,13 @@ This guide provides comprehensive testing procedures for OrbitScore's audio-base
 
 ### System Requirements
 - Node.js v22.0.0+
-- SuperCollider (audio engine)
+- Rust toolchain（`rust/rust-toolchain.toml`、daemon / child バイナリのビルド用）
+- macOS Apple Silicon（実機 gated E2E・plugin child テストは macOS 限定）
+- SuperCollider — **opt-out 経路（`ORBITSCORE_ENGINE=sc`）を試す場合のみ**
 - VS Code / Cursor / Claude Code
 - Audio device (speakers or headphones)
 
-### SuperCollider Installation
+### SuperCollider Installation (opt-out backend only)
 
 **macOS:**
 ```bash
@@ -269,7 +276,7 @@ global.stop()
 #### Method Chaining
 - [x] All methods return `this` for chaining
 
-### Audio Engine (SuperCollider Integration)
+### Audio Engine (Rust daemon default; SuperCollider opt-out)
 
 - [x] WAV file support
 - [x] Audio slicing (`chop(n)`)
@@ -295,7 +302,7 @@ global.stop()
 ### Issue: No Sound
 
 **Check**:
-1. SuperCollider is running
+1. The engine is running (`OrbitScore: Start / Stop Engine`; with `ORBITSCORE_ENGINE=sc`, that scsynth is running)
 2. Audio files exist in `test-assets/audio/`
 3. System volume is up
 4. Correct audio device selected

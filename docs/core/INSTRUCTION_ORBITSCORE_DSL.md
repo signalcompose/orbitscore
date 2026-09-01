@@ -10,8 +10,9 @@ This document defines the **OrbitScore DSL**.
 It is the **single source of truth** for the project.
 All implementation, testing, and planning must strictly follow this specification.
 
-**Last Updated**: 2026-06-14
+**Last Updated**: 2026-09-01
 **Implementation Status**: ✅ OrbitScore 2.0.0 — v3.0 audio engine + v1.1 Pitch DSL (MIDI) Phases 1/2/3/R/4 implemented and tested
+**Audio backend**: Rust `orbit-audio-daemon` is the default since cutover #108 (2026-07-03); SuperCollider (scsynth) remains as an opt-out backend via `ORBITSCORE_ENGINE=sc` (`packages/engine/src/audio/create-audio-engine.ts`). Plugin hosting (PH.*), catalog (PC.*), mixer (MX.*), import (IM.*) and the rack chain ([SIGNAL_CHAIN_DSL_SPEC_v1](../specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md) SC.10) are implemented on the Rust path only.
 
 > 🎯 **進行中の v1.1 拡張（Pitch DSL / MIDI・Session Log・WCTM）の仕様は [`docs/specs-v2/`](../specs-v2/) が正本**（進捗は GitHub Epic #224）。
 > ⚠️ 本番トラック retarget（2026-07-12・統括 [#413](https://github.com/signalcompose/orbitscore/issues/413)）: 藝大コンサート（2026-08-07）は不採択。旧「締切 2026-08-07」は失効し ICLC 提出方向へ retarget（年次・提出日・形態は要確認）。Max 必須の縛りも消滅。
@@ -31,7 +32,7 @@ var global = init GLOBAL
 
 **Implementation Details**:
 - Creates an instance of the `Global` class
-- Initializes `AudioEngine` with SuperCollider
+- Initializes the audio backend (`createAudioEngine()` — Rust `orbit-audio-daemon` by default, SuperCollider with `ORBITSCORE_ENGINE=sc`)
 - Sets up `Transport` system for scheduling
 - Default values: tempo=120, beat=4/4
 - **Variable naming**: The variable name "global" is conventional but not required - you can use any valid identifier (e.g., `var g = init GLOBAL`, `var master = init GLOBAL`)
@@ -673,7 +674,7 @@ tempo / beat / phase / Start-Stop は LinkAudio に内包された Link 機能�
 - Parser must support nested `play` structures for hierarchical timing
 - IR must represent play structures as tree-like data for timing calculation
 - Scheduler must handle independent sequence tempos (polytempo) and meters (polymeter)
-- Audio engine uses SuperCollider with 0-2ms latency
+- Audio engine is the Rust daemon by default (SuperCollider opt-out); both satisfy the `AudioEngineBackend` seam (`packages/engine/src/audio/engine-backend.ts`)
 - Global underscore methods (_tempo, _beat) must trigger seamless parameter updates for inheriting sequences
 
 **Future Additions**:
@@ -1830,10 +1831,10 @@ Epic #224 phases 1/2/3/R/4:
 - **IR Generation**: Intermediate representation for execution
 - **Error Handling**: Graceful error reporting
 
-#### Audio Engine (SuperCollider)
-- **File Loading**: WAV format support with buffer caching
+#### Audio Engine (Rust daemon default / SuperCollider opt-out)
+- **File Loading**: WAV / AIFF / MP3 / MP4 decoding (symphonia on the Rust path; buffer caching on the SC path)
 - **Slicing**: `chop(n)` divides audio into n equal parts with precise timing
-- **Playback**: 0-2ms latency via SuperCollider scsynth
+- **Playback**: sample-accurate `PlayAt` scheduling on the Rust daemon (SC path: 0-2ms latency via scsynth)
 - **Audio Control**:
   - `gain(dB)`: Real-time volume control in dB (-60 to +12, default 0) - applies immediately even during playback
   - `pan(position)`: Real-time stereo positioning (-100 to 100) - applies immediately even during playback

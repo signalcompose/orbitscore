@@ -3,11 +3,12 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
-  "description": "OrbitScore dev learning site (internal, post-ICMC for public deploy)",
+  "description": "OrbitScore dev learning site (deployed to https://signalcompose.github.io/orbitscore/dev/)",
   "scripts": {
     "docs:dev": "vitepress dev .",
     "docs:build": "vitepress build .",
-    "docs:preview": "vitepress preview ."
+    "docs:preview": "vitepress preview .",
+    "docs:check": "node scripts/check-citations.mjs"
   },
   "devDependencies": {
     "@vscode/markdown-it-katex": "^1.1.1",

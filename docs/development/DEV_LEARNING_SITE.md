@@ -1,6 +1,6 @@
 # Dev Learning Site — Project Brief & Skill Overrides
 
-**Status**: Brief 確定 (2026-05-05)、scaffold は別 issue で対応予定
+**Status**: Brief 確定 (2026-05-05)。サイトは稼働中（Part 0〜VIII・日英）。2026-09-01 に全章を commit `69dc968` へ再検証し、引用の機械検証 `npm run docs:check` を導入
 **Skill**: [`.claude/skills/vitepress-learning-site/`](../../.claude/skills/vitepress-learning-site/) (yuichkun/.claude 由来、verbatim install、作者承諾済)
 **Skill upstream pin**: [yuichkun/.claude `66e544d704cf57ee6256a4dfe7eddc8097b53381`](https://github.com/yuichkun/.claude/tree/66e544d704cf57ee6256a4dfe7eddc8097b53381/skills/vitepress-learning-site) (install 時点)
 **Related Issue**: [#160](https://github.com/signalcompose/orbitscore/issues/160) (skill install)
@@ -80,33 +80,37 @@ skill の Phase 1 (Discovery interview) では audience / scope / language 等�
 
 ## 3. Skill Phase 4 — Site Location & Structure
 
-### ディレクトリ
+### ディレクトリ（2026-09-01 時点の実態）
 
 ```
-sites/dev/                  ← VitePress project root
+sites/dev/                     ← VitePress project root（Markdown はルート直下・src/ は使わない）
 ├── .vitepress/
-│   ├── config.ts
-│   └── theme/
-└── src/
-    ├── index.md            ← landing
-    ├── parser/             ← packages/engine/src/parser/ を mirror
-    ├── audio/              ← packages/engine/src/audio/ を mirror
-    │   ├── supercollider/
-    │   └── rust-engine/    ← TODO: post-ICMC で着手 (Issue #105/#107/#108、現 v1.x stack には未統合)
-    ├── scheduler/
-    ├── dsl-runtime/
-    ├── vscode-extension/
-    └── overview/
-        ├── architecture.md ← 3 層構造図
-        ├── decisions.md    ← ADR (architectural decision records)
-        └── glossary.md
+│   ├── config.ts              ← base '/orbitscore/dev/'、ja root + en locale
+│   ├── sidebar.ts             ← Part 構成（ja / en）
+│   └── theme/                 ← custom.css, mermaid-zoom
+├── scripts/check-citations.mjs ← 引用の機械検証（`npm run docs:check`、--fix で行ずれを再アンカー）
+├── index.md                   ← landing
+├── orientation/               ← Part 0（全体像）
+├── pipeline/                  ← Part I（parser / interpreter / selective execution）
+├── scheduling/                ← Part II（時間表現・polymeter・event queue・transport）
+├── rust-engine/               ← Part III（daemon・OOP children・insert bus・capture seam）
+├── signal-chain/              ← Part IV（ラック SC.10・ミキサー / オーディオライン）
+├── plugin-hosting/            ← Part V（概観・プラグイン UI・カタログと差し替え）
+├── editor/                    ← Part VI（VS Code 拡張・インライン実行・MCP と gated E2E）
+├── audio/                     ← Part VII（SuperCollider 経路 = opt-out・歴史的読解）
+├── decisions/                 ← Part VIII ADR
+├── glossary.md
+├── en/                        ← 上記の英語ミラー（同名パス）
+├── STYLE_GUIDE.md / .translation-glossary.md / .plan/ / .audit/  ← srcExclude
+└── public/katex/              ← vendored KaTeX
 ```
 
 ### 章構造の原則
 
-- **code tree mirror**: 実装ディレクトリと章ディレクトリを 1:1 で対応させる
-- **横断章は `overview/`**: 単一モジュールに紐づかない設計判断 (ADR)、用語集、全体アーキテクチャは別建て
+- **code tree mirror（緩やかに）**: 実装ディレクトリと章ディレクトリを対応させるが、`rust/crates/` は crate 単位ではなく **機構単位**（daemon / children / bus / capture）で章にする
+- **横断章**: 設計判断 (ADR) は `decisions/`、用語集は `glossary.md`、全体アーキテクチャは `orientation/`
 - **章とファイルの粒度**: 1 章 = 1 module または 1 design unit (細かすぎる場合は section 分割で対応)
+- **旧既定経路は消さない**: SuperCollider 章は Part VII に残し、冒頭の warning で opt-out 経路であることを明記する（drift は document するが解消しない）
 
 ---
 
@@ -215,15 +219,23 @@ cross-LLM-family audit に格上げする選択肢は post-ICMC で検討:
 
 ---
 
-## 7. 未決事項 — 別 issue で順次決定し本ファイルに追記
+## 7. 決定済み / 未決事項
 
-- [ ] 章の優先順位 (parser から書く? audio から書く? small/recent な scsynth-resolver から?)
-- [ ] ADR (overview/decisions/) の format (Michael Nygard 形式準拠? 独自?)
-- [ ] **Routine 設計**: PR merge 時の sub-agent dispatch、verified-against 古い章の自動 flag、章更新の trigger 条件 (post-ICMC で着手)
+決定済み（本ファイルに反映済）:
+
+- [x] 章の優先順位 — 2026-05 に既存 5 章群、2026-07 に rust-engine / plugin-hosting、2026-09 に signal-chain / plugin UI / catalog / MCP+E2E を追加（`sites/dev/.plan/refresh-2026-07.md`）
+- [x] ADR の format — Michael Nygard 形式（Context / Decision / Consequences）。Rust cutover 後は "Consequences revisited" 節で追記
+- [x] STYLE_GUIDE.md の中身 — `sites/dev/STYLE_GUIDE.md` で確定（§5-bis verbatim 規律を含む）
+- [x] チャプター粒度 — 1 module または 1 design unit（§3）
+- [x] **verified-against の陳腐化検知** — 引用を `sites/dev/scripts/check-citations.mjs` で機械検証する（2026-09-01 導入）。行ずれは `--fix` で再アンカーし、内容の drift は red として残る
+
+未決（別 issue で順次決定し本ファイルに追記）:
+
+- [ ] **Routine 設計**: PR merge 時の sub-agent dispatch、`docs:check` red の自動 flag、章更新の trigger 条件
+- [ ] `docs:check` を CI（`deploy-sites.yml` またはレビュー workflow）に載せるか
 - [ ] 飛行機内オフライン作業時の routine 動作確認 (Anthropic API は要 net、ローカルのみで完結する task の切り分け)
-- [ ] STYLE_GUIDE.md の中身 (sempai トーンの具体化、コードブロック規則、図注規則)
-- [ ] cross-LLM-family audit の post-ICMC 導入時期と評価指標
-- [ ] チャプター粒度 — 「1 ファイル 1 章」 か 「1 module 1 章」 か (mirror 構造の解釈)
+- [ ] cross-LLM-family audit の導入時期と評価指標
+- [ ] Step-by-step "Try it" trail（§2 表の curriculum structure）と `tests/e2e/orbitstudio-mcp-gated.spec.ts` の対応表
 
 ---
 

@@ -160,26 +160,29 @@ git branch --show-current
 
 ### Project Overview
 **OrbitScore** - Audio-based live coding DSL for modern music production
-- DSL Version: v3.0 (SuperCollider Audio Engine)
-- Test Status: 1333 passed, 29 skipped (1362 total)
+- Product: OrbitScore 2.0.0 (`ENGINE_VERSION 2.0.0` / `DSL_VERSION 1.1`、拡張 2.1.0)
+- Audio Backend: Rust `orbit-audio-daemon`（既定・cutover #108）。SuperCollider は `ORBITSCORE_ENGINE=sc` で opt-out
+- Test Status: `npm test` で 2100 件超（2026-09-01: 2162 passed / 68 skipped / 2233 total。skip は macOS 実機・daemon 依存）
 - Branch Strategy: GitHub Flow (`main` + feature branches)
 
 ### Development Commands
 ```bash
 npm run build            # Build all packages (incremental)
 npm run build:clean      # Clean build (rebuild all files)
-npm test                 # Run all tests (1362 tests, 29 skipped)
+npm test                 # Run all unit / integration tests (vitest)
+npm run test:e2e:gated   # 実機 gated E2E（OrbitStudio.app + MCP、daemon を自動ビルド）
 npm run dev:engine       # Run engine in development mode
 npm run lint             # ESLint + Prettier
+npm run docs:check       # dev 学習サイトの引用 (// file:start-end) を code と突合
 ```
 
 **Note**: Use `npm run build:clean` if you encounter TypeScript incremental build issues (e.g., `cli-audio.js` not generated).
 
 ### Technology Stack Summary
-- **Frontend/DSL**: TypeScript, VS Code Extension API
-- **Audio Backend**: SuperCollider (scsynth), supercolliderjs
-- **Testing**: Vitest (Unit + Integration tests)
-- **Key Features**: Audio File Playback (WAV/AIFF/MP3/MP4), Time-stretching, Polymeter
+- **Frontend/DSL**: TypeScript, VS Code Extension API（拡張内に MCP サーバも同居）
+- **Audio Backend**: Rust `orbit-audio-daemon`（cpal / WebSocket IPC）+ out-of-process CLAP / VST3 children。SuperCollider (scsynth) は opt-out 経路
+- **Testing**: Vitest (Unit + Integration) + 実機 gated E2E（MCP 駆動・capture WAV アサーション） + cargo test
+- **Key Features**: Audio File Playback (WAV/AIFF/MP3/MP4), Polymeter, Pitch DSL / MIDI, Plugin Hosting (CLAP/VST3・UI・ラック), Mixer (sum/aux/send), LinkAudio
 
 **Details**: See [`docs/INDEX.md`](docs/INDEX.md)
 

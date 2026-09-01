@@ -1,8 +1,8 @@
 # OrbitScore
 
-**Live-coding music DSL with a SuperCollider audio engine and MIDI output**
+**Live-coding music DSL with a native Rust audio engine, plugin hosting, and MIDI output**
 
-Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives both a SuperCollider audio engine (sample playback) and MIDI output (Pitch DSL, chords, comp, Ableton Link). Version 2.0.0 is the released state.
+Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundled native audio engine (Rust `orbit-audio-daemon`: sample playback, CLAP / VST3 plugin hosting, mixer) and MIDI output (Pitch DSL, chords, comp, Ableton Link). Version 2.0.0 is the released state; the VS Code extension is at 2.1.0. SuperCollider remains available as an opt-out backend (`ORBITSCORE_ENGINE=sc`).
 
 ## Core Features (2.0.0)
 
@@ -28,11 +28,20 @@ Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives both a S
 - **Ableton Link Audio (LinkAudio)**: OrbitScore as the Link tempo leader; Ableton Live follows OrbitScore's tempo
 - **quantize**: Bar-quantized scheduling control
 
+### 🎛️ Plugin Hosting & Mixing (post-2.0, on the Rust engine)
+
+- **CLAP / VST3 hosting**: `seq.instrument("...")`, `global.effect("...")`, `seq.effect("...")` — plugins run in out-of-process children (crash isolation, auto-respawn)
+- **Plugin UI**: `seq.ui()` opens the plugin's own window; state is saved when the window closes
+- **Plugin catalog**: bare-name references (`~/.orbitscore/plugin-catalog.json`), completion and pre-evaluation diagnostics in the editor
+- **Racks**: `var rack = [ ... ]` chains written as values, bundled standard `Gain` plugin (SC.10)
+- **Mixer**: `global.sum()` / `global.aux()` buses, `seq.output()` / `send`, master gain — verified by capture-WAV E2E
+
 ### 🔧 Technical Features
 
-- **0-2ms Latency**: SuperCollider audio engine
-- **VS Code Extension**: Syntax highlighting and live execution
-- **macOS Optimized**: CoreAudio integration
+- **Native audio engine**: Rust `orbit-audio-daemon` (cpal, WebSocket IPC), bundled in the `.vsix`
+- **Realtime WAV capture** (`ORBIT_CAPTURE_WAV`) for objective verification
+- **VS Code Extension**: Syntax highlighting, live execution, engine view, live playhead, and an embedded MCP server for agent-driven E2E
+- **macOS Optimized**: CoreAudio integration (Apple Silicon only)
 
 ## Current Implementation Status
 
@@ -43,7 +52,8 @@ Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives both a S
 - **comp** — automatic accompaniment: voice-leading (C1) + comp rhythm (C2a)
 - **Ableton Link Audio (LinkAudio)** — OrbitScore as the Link tempo leader (Ableton Live follows OrbitScore's tempo)
 - **quantize** — bar-quantized scheduling control
-- **Audio foundation** — scsynth sample playback (WAV/AIFF/MP3/MP4), `.chop()` slicing, time-stretching, polymeter, `RUN()`/`LOOP()`/`MUTE()` transport, bundled scsynth
+- **Audio foundation** — native daemon sample playback (WAV/AIFF/MP3/MP4), `.chop()` slicing, polymeter, `RUN()`/`LOOP()`/`MUTE()` transport
+- **Post-2.0 (shipped on `main`, extension 2.1.0)** — Rust engine as default (#108), out-of-process CLAP/VST3 hosting (#340–#424), per-sequence inserts (#434), plugin UI (#474), catalog (#463), replacement (#618/#625), racks + standard `Gain` (#628), mixer foundation (#643), live playhead (#390/#654). See [WORK_LOG.md](docs/development/WORK_LOG.md).
 
 **Supported platforms**: macOS Apple Silicon (arm64) **only**. Intel Macs are not supported. Windows / Linux not supported currently.
 
@@ -105,12 +115,12 @@ The pre-audio MIDI-based implementation (Phases 1-5) is preserved for historical
 
 ## Technology Stack
 
-- TypeScript
+- TypeScript (DSL engine, VS Code extension, MCP server)
+- Rust (`rust/` workspace: `orbit-audio-daemon`, cpal / symphonia / rubato, CLAP / VST3 hosting, plugin children over shared memory)
 - VS Code Extension API
-- SuperCollider (scsynth + supercolliderjs)
-- OSC (Open Sound Control)
 - MIDI output (CoreMIDI / IAC virtual port)
-- Ableton Link (LinkAudio tempo sync)
+- Ableton Link (LinkAudio tempo sync, GPL-isolated crate)
+- SuperCollider (scsynth + supercolliderjs) — opt-out backend only
 
 ## Project Structure
 
@@ -122,29 +132,35 @@ orbitscore/
 │   │   │   ├── parser/       # Parser implementation
 │   │   │   ├── interpreter/  # Interpreter (v2)
 │   │   │   ├── core/         # Global & Sequence
-│   │   │   ├── audio/        # SuperCollider integration
+│   │   │   ├── audio/        # Backend seam: rust-engine/ (default) + supercollider/ (opt-out)
+│   │   │   ├── signal-chain/ # Rack recipes (SC.10)
+│   │   │   ├── midi/         # Pitch DSL / MIDI output
 │   │   │   ├── timing/       # Timing calculation
 │   │   │   └── cli/          # CLI interface
 │   │   ├── dist/             # Build output
-│   │   └── supercollider/    # SynthDef definitions
-│   └── vscode-extension/     # VS Code extension
-│       ├── src/              # Extension source
-│       ├── syntaxes/         # Syntax definition
-│       └── engine/           # Bundled engine
-├── docs/                     # Documentation
-│   ├── core/                 # Core documentation (Japanese)
-│   ├── development/          # Development documentation (Japanese)
-│   ├── testing/              # Testing documentation (Japanese)
-│   ├── planning/             # Planning documentation (Japanese)
-│   └── user/                 # User documentation (English/Japanese)
-│       ├── en/               # English user docs
-│       └── ja/               # Japanese user docs
-├── tests/                    # Test suite
-│   ├── parser/              # Parser tests
-│   ├── interpreter/         # Interpreter tests
-│   ├── audio/               # Audio processing tests
-│   ├── core/                # Global & Sequence tests
-│   └── timing/              # Timing calculation tests
+│   │   └── supercollider/    # SynthDef definitions (opt-out backend)
+│   ├── vscode-extension/     # VS Code extension (+ MCP server, engine view, playhead)
+│   │   ├── src/              # Extension source
+│   │   ├── syntaxes/         # Syntax definition
+│   │   └── engine/           # Bundled engine + daemon binaries
+│   └── sc-link-audio/        # LinkAudio shim package
+├── rust/                     # Cargo workspace (see rust/README.md)
+│   └── crates/               # orbit-audio-daemon, plugin children, hosts, scanner, std plugins
+├── sites/
+│   ├── user/                 # User learning site (VitePress, ja/en)
+│   └── dev/                  # Dev learning site (VitePress, ja/en)
+├── docs/                     # Documentation (see docs/core/INDEX.md)
+│   ├── core/                 # Rules, DSL spec (SoT), design principles
+│   ├── specs-v2/             # Pitch DSL / Session Log / WCTM / plugin / signal-chain specs
+│   ├── design/               # Per-issue implementation designs
+│   ├── development/          # WORK_LOG, plans, post-2.0 engine docs
+│   ├── testing/              # Test guides, E2E harness spec
+│   ├── research/             # Research notes
+│   ├── planning/             # Roadmaps
+│   └── user/                 # Legacy in-repo user docs
+├── tests/                    # Vitest suite (unit / integration / e2e)
+│   └── e2e/                  # Gated real-device E2E (OrbitStudio + MCP), coverage ratchet
+├── scripts/                  # Build helpers (daemon bundling, OrbitStudio app build)
 ├── examples/
 │   └── *.orbs                # Sample files
 └── README.md                # This file
@@ -223,13 +239,14 @@ In-repo USER_MANUAL files are **deprecated** (historical reference only):
 - ✅ Pattern definition (`play()`, `chop()`)
 - ✅ Method chaining syntax
 
-### Audio Engine (SuperCollider)
+### Audio Engine (Rust daemon, default)
 
 - ✅ Audio file playback (WAV, AIFF, MP3, MP4)
-- ✅ 0-2ms latency
-- ✅ Time-stretching (tempo adjustment)
-- ✅ Chop functionality (audio slicing)
-- ✅ Buffer management and preloading
+- ✅ Chop functionality (audio slicing, varispeed slice fitting)
+- ✅ Named-channel routing, sum / aux buses, master gain
+- ✅ Out-of-process CLAP / VST3 effect and instrument hosting, per-sequence inserts, racks
+- ✅ Realtime WAV capture seam for verification
+- ✅ SuperCollider (scsynth) retained as opt-out backend
 
 ### Transport & Timing
 
@@ -243,8 +260,10 @@ In-repo USER_MANUAL files are **deprecated** (historical reference only):
 
 - ✅ Syntax highlighting (2.0.0)
 - ✅ Cmd+Enter execution
-- ✅ Engine control commands
-- ✅ Real-time feedback
+- ✅ Engine control commands, engine view, audio device selection
+- ✅ Real-time feedback, live playhead on `play()` arguments
+- ✅ Plugin catalog completion / diagnostics, `Browse Plugins`
+- ✅ Embedded MCP server (`orbitscore.mcpServer.port`) for agent-driven E2E
 
 <details>
 <summary>Legacy pre-2.0 MIDI-pitch internals (historical)</summary>
@@ -279,18 +298,23 @@ In-repo USER_MANUAL files are **deprecated** (historical reference only):
 npm test
 ```
 
-**1652 passed, 29 skipped (1681 total) — post-2.0 (#517 S4 PR-1a plugin chain model)**
+**2162 passed, 68 skipped (2233 total) — 2026-09-01 on `main` (69dc968)**
 
-Run `npm test` to see the current breakdown. Skipped tests are SuperCollider / real-daemon integration tests that require a local environment.
+Run `npm test` to see the current breakdown. Skipped tests are real-daemon / macOS / SuperCollider integration tests that require a local environment. Real-device verification runs through the gated E2E harness:
+
+```bash
+npm run test:e2e:gated   # ORBIT_GATED_ORBITSTUDIO=1; builds the daemon, drives OrbitStudio.app via MCP, asserts on captured WAV
+```
 
 ## Getting Started
 
 ### Prerequisites
 
-- macOS
+- macOS (Apple Silicon)
 - Node.js v22+
-- SuperCollider
+- Rust toolchain (for the daemon and plugin children; `rust/rust-toolchain.toml`)
 - VS Code
+- SuperCollider — only if you want the `ORBITSCORE_ENGINE=sc` opt-out backend
 
 ### Installation
 

@@ -17,6 +17,54 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.423 docs: リポジトリ側ドキュメントを Rust 既定の実態へ揃え、dev サイト引用の機械検証を導入 (Sep 1, 2026)
+
+**ブランチ**: `claude/developer-site-docs-update-0obpim` / 対象 commit `69dc968`
+
+#### 何が乖離していたか
+
+| ドキュメント | 記述 | 実態 |
+|---|---|---|
+| `docs/core/INDEX.md` | 「bundled SuperCollider audio engine」、dev サイト deploy は post-ICMC、最終更新 2026-05-02 | Rust daemon が既定（cutover #108）、サイトは稼働中。`docs/design/`・`SIGNAL_CHAIN_DSL_SPEC`・POST_2.0 群・research 9 本が未掲載 |
+| `README.md` | SC エンジン前提のタグライン・技術スタック・構成図、テスト 1652 件 | Rust / plugin hosting / mixer が主機能。`rust/`・`sites/`・`tests/e2e/` が構成に無い |
+| `rust/README.md` | 「Phase 1a 完了」、crate 4 個 | crate 22 個（children / host / scanner / std-gain / link-audio） |
+| `CLAUDE.md` Quick Reference | 「v3.0 (SuperCollider Audio Engine)」、テスト 1333 件 | 2162 passed / 68 skipped（2026-09-01 実測） |
+| `INSTRUCTION_ORBITSCORE_DSL.md` §1 / §9 / Implementation Status | 「Initializes AudioEngine with SuperCollider」 | `createAudioEngine()` が既定で `RustEnginePlayer`。SC は `ORBITSCORE_ENGINE=sc` |
+| `docs/testing/TESTING_GUIDE.md` | SC を前提条件に列挙、テスト 220 件 | SC は opt-out 経路のみ。実機検証の正本は gated E2E |
+
+**方針**: 仕様（SoT）は再設計せず、**実装事実の開示部分だけ**を直した（§1 の初期化説明・§9 の実装ノート・
+Implementation Status のエンジン見出し）。設計・語彙には触れていない。
+
+#### dev 学習サイトの引用の機械検証（`sites/dev/scripts/check-citations.mjs`）
+
+STYLE_GUIDE §5-bis「`// <file>:<start>-<end>` 付きコードブロックは code と文字単位で一致」は
+これまで人手の audit（`.audit/sot-verification-2026-05-06.md`）でしか守られていなかった。
+CLAUDE.md の「規律を足す時は、同時にそれを守らせる仕組みを足す」に従い、スクリプトへ落とした:
+
+- 全 `.md` の fenced block 先頭行を header として解釈し、`// ...` を省略ワイルドカードとして
+  順序付きで突き合わせる。末尾 `// ...` の禁則（range 末尾で終わるのに置く）も検出
+- basename だけの header（`types.ts:7-26`）は候補が複数あれば **ambiguous** として red
+- `--fix`: snippet が他の行へ**そのまま移動**しただけなら header を再アンカーする（内容の drift は直さない）
+- `npm run docs:check`（root）/ `sites/dev` の `docs:check` script として登録
+
+**導入時の実測**: 50 ファイル・288 引用のうち **246 が red**（85%）。`--fix` で 71 件が行ずれとして
+再アンカーされ、残り 172 件は内容の drift（SC 経路の関数消失・`event-scheduler.ts` の分割・
+Rust 側の関数移動）で、章の再検証が必要な状態だった（次項 6.424 で対応）。
+
+#### 併せて更新
+
+- `docs/development/DEV_LEARNING_SITE.md` §3（ディレクトリの実態）・§7（決定済み / 未決）
+- `docs/development/TRANSLATION_STATUS.md`（dev 19 章 → 29 章）
+- `CONTRIBUTING.md`（integration test の対象を gated E2E へ）
+
+#### テスト実測（2026-09-01・Linux コンテナ・root）
+
+`npm test`: 2162 passed / 68 skipped / **3 failed**。失敗 3 件はいずれも「読めないファイルを EACCES として扱う」
+テスト（`tests/interpreter/file-import.spec.ts` 1 件・development docs helpers 2 件）で、**root ユーザーでは
+chmod が効かないため**の環境要因。macOS の通常ユーザーでは対象外。
+
+---
+
 ### 6.422 fix: engine のランタイム依存が hoist で bundle から抜け落ちていた (Aug 30, 2026)
 
 **発見経路**: #654 の実機ゲート。拡張を焼き込んで通常起動したら
