@@ -1,12 +1,12 @@
 ---
 title: "Glossary"
 chapter-id: "glossary"
-verified-against: 0a4b598
-verified-at: "2026-05-05"
+verified-against: 69dc968
+verified-at: "2026-09-01"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-05-05 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # Glossary
 
@@ -81,7 +81,117 @@ CLI (`playFile`) では `.orbs` ファイルパスから自動導出されます
 
 ---
 
-## オーディオ / SuperCollider 用語
+## Rust Engine / daemon 用語
+
+### orbit-audio-daemon
+
+`rust/crates/orbit-audio-daemon` の binary。WebSocket IPC（protocol v0.2）で TS engine から命令を受け、cpal で音を出します。cutover #108（2026-07-03、WORK_LOG 6.179）以降の**既定バックエンド**で、`.vsix` には `scripts/copy-daemon-bin.sh` で同梱されます。詳細は [RE-1](/rust-engine/)。
+
+### AudioEngineBackend（backend seam）
+
+`packages/engine/src/audio/engine-backend.ts` の interface。interpreter / scheduler が音声バックエンドに要求する唯一の契約面で、`SuperColliderPlayer` と `RustEnginePlayer` の両方がこれを満たします。`boot` / `quit` / `loadPlugin` / `applyEffectChain` / `setGlobalGain` / `pluginNoteOn` 等を持ちます。
+
+### ORBITSCORE_ENGINE
+
+バックエンド選択の環境変数。`sc` または `supercollider` で SuperCollider 経路に opt-out、未設定・それ以外は Rust daemon（`create-audio-engine.ts` の `resolveEngineKind()`）。VS Code 設定 `orbitscore.engine` が対応します。
+
+### RustEnginePlayer / DaemonClient
+
+TS 側の Rust 経路。`packages/engine/src/audio/rust-engine/rust-engine-player.ts` が `Scheduler` として PlayAt を組み立て、`daemon-client.ts` が WebSocket で daemon に送ります。playhead 用の `[STEP]` 行もここから出ます。
+
+### OOP child（out-of-process child）
+
+3rd-party プラグインを daemon とは別プロセスで動かす子プロセス。`orbit-clap-effect-child` / `orbit-vst3-effect-child` / `orbit-clap-instrument-child` / `orbit-vst3-instrument-child` / `orbit-effect-rack-child` があり、クラッシュ隔離と respawn を daemon（`outproc_*.rs`）が担います。詳細は [RE-2](/rust-engine/oop-children)。
+
+### shm transport（orbit-audio-sandbox）
+
+daemon と child の間の共有メモリ transport。file-backed mmap の SPSC ping-pong で audio block を受け渡し、note / UI イベントは evt リングで運びます。
+
+### insert bus（`seq-bus-<n>`）
+
+`seq.effect()` が使う per-sequence の insert bus。daemon は起動時に inactive な bus を既定 8 本プールし（`ORBIT_EFFECT_BUS_POOL`）、宣言＝activation で有効化します。prefix `seq-bus-` は TS（`sequence-effect-manager.ts`）と Rust（`engine_wrap.rs`）で一致させる契約です。詳細は [RE-3](/rust-engine/insert-bus)。
+
+### sum bus / aux bus（`sum-bus-<n>` / `aux-bus-<n>`）
+
+`global.sum()` / `global.aux()` が使うミキサーバス。TS `mixer-manager.ts` の `SUM_BUS_PREFIX` / `AUX_BUS_PREFIX` と Rust `engine_wrap.rs` の既定プール prefix が一致する契約で、v1 は同時 4 本ずつ（`MIXER_BUS_POOL_SIZE`）。詳細は [SC-2](/signal-chain/mixer-audio-line)。
+
+### receiver id（`sum:<name>` / `aux:<name>`）
+
+プラグイン state 永続化（#564）でミキサーバスを指す prefixed 識別子。`formatReceiverId()` / 対応 parser が唯一の wire format の置き場所です。
+
+### capture seam（`ORBIT_CAPTURE_WAV`）
+
+daemon の post-mix 出力を realtime で WAV に書き出す仕組み（`rust/crates/orbit-audio-native/src/capture.rs`）。gated E2E の RMS / peak アサーションの根拠で、#651 以降はヘッダを定期 patch するので異常終了でも開けます。詳細は [RE-4](/rust-engine/capture-verification)。
+
+### LinkAudio（orbit-link-audio）
+
+Ableton Link のオーディオ egress。GPL 依存を `orbit-link-audio` crate に隔離し `cargo-deny` で gate しています。OrbitScore は Link のテンポリーダーになります（#283, #333）。
+
+---
+
+## Plugin Hosting / Signal Chain 用語
+
+### CLAP / VST3
+
+OrbitScore がホストするプラグイン規格。in-process host library（`orbit-clap-host` / `orbit-vst3-host`）と、それを包む OOP child の両方があります。形式判定は拡張子（PH.3）。
+
+### plugin catalog（`~/.orbitscore/plugin-catalog.json`）
+
+`orbit-plugin-scan`（#463）が CLAP / VST3 を走査して書くカタログ。DSL からは bare name で指し（PC.2）、エディタは補完と評価前診断（#638）に使います。詳細は [PH-3](/plugin-hosting/catalog)。
+
+### rack / RackRecipe
+
+`var rack = [ ... ]` のようにチェーンを**値**として書く仕組み（SC.10、#628）。TS の `packages/engine/src/signal-chain/rack.ts` が `catalog` / `standard` / `layer` 要素からなる `RackRecipe` を組み立て、再評価では差分で対応づけます。詳細は [SC-1](/signal-chain/)。
+
+### 標準プラグイン Gain（orbit-std-gain）
+
+言語の語彙として同梱される CLAP プラグイン（SC.10.8）。dB 契約は `tests/e2e/rack-chain-gain-expectations.ts` と CI で固定されます。
+
+### orbit-effect-rack-child
+
+1 つの child プロセスが N 個のステージ（CLAP / macOS VST3）を直列に回すラック child。ラックの要素数だけ child を立てない設計です。
+
+### seq.ui()
+
+楽譜からプラグイン UI を開く DSL（PH.2c、#617 / #628 で名前形）。UI は child プロセスのメインスレッド AppKit runloop（`orbit-child-runtime`）に載り、クローズ状態機械（`orbit-child-ui`、`Closed` はドレーン条件で定義）で管理されます。詳細は [PH-2](/plugin-hosting/plugin-ui)。
+
+### evt リング / dirty_epoch
+
+child → daemon の UI / state イベントを運ぶリング（#474 P2、WORK_LOG 6.337）。`dirty` はリングから外し epoch で運び、ordering を型で封印しています。
+
+### UiEventPump（per-window）
+
+daemon 側で UI イベントを汲む pump。#633 で per-index / per-window 化され、複数ウィンドウの同時 open と宛先解決が実測で確定しました。
+
+---
+
+## MCP / E2E 用語
+
+### MCP サーバ（拡張内蔵）
+
+`packages/vscode-extension/src/mcp-server.ts`。Extension Host 内で Streamable HTTP の MCP サーバを立て、外部エージェント（Claude Code 等）が OrbitScore を操作できるようにします。`ORBITSCORE_MCP_PORT` が設定 `orbitscore.mcpServer.port` より優先し、127.0.0.1 のみに bind します。WCTM の Agent Bridge の系譜。詳細は [IV-3](/editor/mcp-and-gated-e2e)。
+
+### gated E2E（`ORBIT_GATED_ORBITSTUDIO=1`）
+
+`tests/e2e/orbitstudio-mcp-gated.spec.ts`。実 OrbitStudio.app を起動し MCP tool 呼び出しだけで駆動、capture WAV の数値で判定します。`npm run test:e2e:gated` の `pretest` が daemon を自動ビルドします。ゲート env が無ければ skip。
+
+### coverage ratchet
+
+`tests/e2e/dsl-e2e-coverage.spec.ts`。DSL 語彙のうち実機 E2E で未カバーの語の一覧を baseline として持ち、増えたら red（減る方向にしか編集できない）。
+
+### playhead / `[STEP]`
+
+`play()` の引数をエンジンの進行に合わせてハイライトする機能（#390）。engine が出す `[STEP]` 行を拡張（`playhead.ts`）が装飾に変えます。#654 で instrument（MIDI）シーケンスにも配線されました。
+
+### quantize（launch quantize）
+
+`global.quantize("bar")` / `seq.quantize(...)` で `LOOP()` の起動を小節境界まで待つ機能（#212、`quantize-manager.ts`）。`RUN()` は常に即時。
+
+---
+
+## オーディオ / SuperCollider 用語（opt-out 経路）
+
+> 以下は `ORBITSCORE_ENGINE=sc` で opt-out したときにだけ通る SuperCollider 経路の用語です。既定経路の用語は上の「Rust Engine / daemon 用語」を参照してください。
 
 ### Buffer (SC)
 
@@ -210,7 +320,8 @@ scsynth が見つからなかった時に throw される Error サブクラス�
 - 用語の相互参照の充実 — 各章から用語集へのリンクを追加
 - Polymeter / Polyrhythm 用語の詳化 — `scheduling/` 章が完成したら記法の詳細を補記
 - Transport / Scheduler 用語の追加 — `transport.ts` / `event-scheduler.ts` に関連する用語
-- Rust engine 用語の追加 — `orbit-audio-core`, `orbit-audio-daemon`, WebSocket IPC 等
+- protocol v0.2 のコマンド語彙 — RE-1 のコマンド表が安定したら 1 コマンド 1 項目に
+- Pitch DSL / MIDI 用語（度数・mode lattice・voicing・comp）— MIDI ピラーの用語が未収録
 
 ---
 
@@ -221,5 +332,12 @@ scsynth が見つからなかった時に throw される Error サブクラス�
 - `packages/vscode-extension/src/extension.ts` — activate(), flashLines(), updateDiagnostics()
 - `packages/vscode-extension/src/completion-context.ts` — MethodChainContext インターフェース
 - `packages/engine/src/audio/supercollider/scsynth-resolver.ts` — ScsynthResolution, ScsynthNotFoundError
+- `packages/engine/src/audio/engine-backend.ts`, `create-audio-engine.ts` — AudioEngineBackend seam, ORBITSCORE_ENGINE
+- `packages/engine/src/core/global/mixer-manager.ts` — SUM_BUS_PREFIX / AUX_BUS_PREFIX / MIXER_BUS_POOL_SIZE / formatReceiverId
+- `packages/engine/src/signal-chain/rack.ts` — RackRecipe
+- `packages/vscode-extension/src/mcp-server.ts`, `extension.ts` — MCP サーバ, ORBITSCORE_MCP_PORT の優先
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts`, `tests/e2e/dsl-e2e-coverage.spec.ts` — gated E2E, coverage ratchet
+- `rust/crates/*/Cargo.toml` — crate description（children / host / scanner / std-gain）
+- `docs/development/WORK_LOG.md` 6.179, 6.337, 6.413–6.421 — cutover, evt リング, per-window pump, playhead
 - `docs/research/SCSYNTH_BUNDLE_MANIFEST.md` — bundle 最小セット調査
 - [SuperCollider OSC Command Reference](https://doc.sccode.org/Reference/Server-Command-Reference.html) — `/s_new`, `/b_allocRead` 等の OSC メッセージ仕様
