@@ -1,18 +1,28 @@
 ---
 title: "ADR-002 DSL v1 (MIDI) → v3 (Audio) pivot"
 chapter-id: "adr-002"
-verified-against: 0a4b598
-verified-at: "2026-05-05"
+verified-against: 69dc968
+verified-at: "2026-09-01"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-05-05. The code is the truth; this page is merely a snapshot of understanding at that point in time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # ADR-002 DSL v1 (MIDI) → v3 (Audio) pivot
 
-The OrbitScore DSL has gone through three major versions to reach the current v3.0. These version number changes are not merely sequential — each represents an important design turning point. This chapter unpacks the flow of v0.1 → v1.0 → v2.0 → v3.0 from the DSL specification and commit history.
+The OrbitScore DSL went through three major versions to reach v3.0. These version number changes are not merely sequential — each represents an important design turning point. This chapter unpacks the flow of v0.1 → v1.0 → v2.0 → v3.0 from the DSL specification and commit history.
 
 **Important**: Although the ADR title says "v1 → v3 pivot," there are actually three stages of change. **v1 → v2 is the largest pivot (MIDI → Audio)**, and v2 → v3 is a refinement of DSL syntax. This chapter covers all three changes.
+
+Incidentally, at 69dc968 this v3.0 is maintained as the "audio engine line," with Pitch DSL v1.1 (MIDI output) stacked on top of it as a **separate axis**. The product version is 2.0.0, and `DSL_VERSION` refers to the Pitch DSL edition rather than the audio line's v3.0. This ADR is about the audio line.
+
+```typescript
+// packages/engine/src/version.ts:14-17
+export const ENGINE_VERSION = '2.0.0'
+
+/** DSL spec version (PITCH_DSL_SPEC) — a separate axis from the product version. */
+export const DSL_VERSION = '1.1'
+```
 
 ---
 
@@ -25,13 +35,13 @@ The OrbitScore DSL has gone through three major versions to reach the current v3
 5. [Alignment with the Paper](#alignment-with-the-paper)
 6. [Trade-off of Lost Features](#trade-off-of-lost-features)
 7. [Outline of the v1.0 MIDI DSL Specification](#outline-of-the-v10-midi-dsl-specification)
-8. [Comparison with v3.0 Current DSL](#comparison-with-v30-current-dsl)
+8. [Comparison with the v3.0 (Audio) DSL](#comparison-with-the-v30-audio-dsl)
 
 ---
 
 ## Overview of Version History
 
-`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` has the official record in the Versioning section:
+`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` has the official record in the Versioning section (§13):
 
 | Version | Date | Main Changes |
 |---|---|---|
@@ -40,7 +50,7 @@ The OrbitScore DSL has gone through three major versions to reach the current v3
 | v2.0 | 2025-01-06 | **SuperCollider integration, MIDI deprecated** |
 | v3.0 | 2025-01-09 | Underscore prefix pattern + unidirectional toggle |
 
-From v1.0 to v2.0 is **only 12 days**, and from v2.0 to v3.0 is **3 days** — a dense sprint.
+From v1.0 to v2.0 is **only 12 days**, and from v2.0 to v3.0 is **3 days** — a dense sprint. The same Versioning section has a line "v1.1 Pitch DSL / MIDI (2026, Epic #224)" above v3.0, showing that MIDI came back as a separate axis.
 
 > NOTE: unverified — the dates above (v1.0: 2024-12-25, v2.0: 2025-01-06, v3.0: 2025-01-09) are dates listed in the `INSTRUCTION_ORBITSCORE_DSL.md` specification, but they may not match the timestamps of the git commit history. The "version declaration date" in the spec and the "commit date" can differ; verifying directly against the commit log may reveal inconsistencies. For exact implementation timing, consult the commit log.
 
@@ -53,7 +63,7 @@ v1.0 is the version that completed as a "MIDI-output-based music DSL." The basic
 The central concepts of the v1.0 DSL are the **degree system** and the **sequence keyword**:
 
 ```
-// Example v1.0 DSL (from docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md)
+// v1.0 DSL の例 (docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md より)
 sequence kick {
   bus "IAC Driver Bus 1"
   channel 10
@@ -93,7 +103,9 @@ New features in v2.0:
 - Global mastering effects: compressor, limiter, normalizer
 - dB-based gain control (-60 to +12 dB)
 
-> NOTE: unverified — the decision-making process from v1.0 to v2.0 (why MIDI was abandoned and what discussions occurred) is not currently preserved in commit messages or PR discussions. On the timeline, the sox → SuperCollider migration (the change handled in ADR-001) and the v1.0 → v2.0 DSL update happened around the same time, suggesting that "since SuperCollider became usable, we switched to audio output" was the natural flow.
+The Migration Notes' "All audio playback now goes through SuperCollider" is a statement from the time v2.0 was declared; since cutover #108 on 2026-07-03 the default audio backend is the Rust daemon (see "Consequences revisited" in [ADR-001](/en/decisions/adr-001-supercollider)). The DSL syntax side did not change with that switch.
+
+> NOTE: unverified — the decision-making process from v1.0 to v2.0 (why MIDI was abandoned and what discussions occurred) is not preserved in commit messages or PR discussions at 69dc968. On the timeline, the sox → SuperCollider migration (the change handled in ADR-001) and the v1.0 → v2.0 DSL update happened around the same time, suggesting that "since SuperCollider became usable, we switched to audio output" was the natural flow.
 
 ---
 
@@ -125,9 +137,9 @@ This distinction is important for live coding. At setup time, you can stack sett
 v3.0 unified the semantics of multi-sequence control of `RUN()`, `LOOP()`, and `MUTE()` to "unidirectional toggle":
 
 ```js
-LOOP(seq1, seq2)    // Set seq1 and seq2 in the loop group (anything previously looping stops)
-LOOP(seq2, seq3)    // Switch to seq2 and seq3 (seq1 stops automatically)
-MUTE(seq2)          // Mute seq2 (seq1 is unmuted)
+LOOP(seq1, seq2)    // seq1 と seq2 を loop グループに設定 (それまで loop していたものは止まる)
+LOOP(seq2, seq3)    // seq2 と seq3 に切り替える (seq1 は自動停止)
+MUTE(seq2)          // seq2 をミュート (seq1 は MUTE 解除)
 ```
 
 - Each command "completely replaces the current group with this list"
@@ -144,7 +156,7 @@ DSL design changes are closely tied to the presentation at ICMC (International C
 
 The v1.0 degree system (0=rest, 1-12=chromatic) was a concept that could be written up in a paper as an original academic contribution. However, by pivoting to audio file playback in v2.0, the axis of "polyrhythm representation via the degree system" became thinner, and the axis of "high-precision scheduling of audio samples and a live coding environment" became stronger.
 
-> NOTE: unverified — the final positioning of the paper (which aspects to claim as academic contributions) cannot currently be confirmed from the publicly available documents. The status of the ICMC presentation is described in the README as "ICMC v1.1.0 release-ready."
+> NOTE: unverified — the final positioning of the paper (which aspects to claim as academic contributions) cannot be confirmed from the documents published at 69dc968. The status of the ICMC presentation is described in the README as "ICMC v1.1.0 release-ready."
 
 ---
 
@@ -154,8 +166,8 @@ There are features that disappeared in the v1.0 → v2.0 pivot:
 
 | v1.0 feature | Status | Notes |
 |---|---|---|
-| MIDI bus/channel specification | **deprecated** | replaced by audio file playback |
-| Degree system (0-12) | **deprecated** | pitch expression changed to WAV file selection |
+| MIDI bus/channel specification | **deprecated** | replaced by audio file playback (revived as `seq.midi()` on a separate axis in Pitch DSL v1.1) |
+| Degree system (0-12) | **deprecated** | pitch expression changed to WAV file selection (degrees reintroduced in Pitch DSL v1.1) |
 | Microtonal expression (`1.5`, etc.) | **deprecated** | reimplementation possible in SuperCollider but not yet implemented |
 | `meter N/D shared|independent` | **continues in changed form** | renamed to `beat(N by D)`; the polymeter concept is preserved |
 | MPE mode | **deprecated** | a MIDI-dependent feature |
@@ -167,10 +179,10 @@ On the other hand, features **newly gained** in v2.0:
 - Global mastering effects (compressor, limiter, normalizer)
 - Seamless pattern swapping during live coding
 
-Also, `updateDiagnostics()` in v3.0 has a warning implementation for remnants of v1.0 MIDI syntax. Lines containing the `sequence ` keyword are highlighted with `DiagnosticTag.Deprecated`:
+Also, `updateDiagnostics()` has a warning implementation for remnants of v1.0 MIDI syntax. Lines containing the `sequence ` keyword are highlighted with `DiagnosticTag.Deprecated`:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1244-1253
+// packages/vscode-extension/src/extension.ts:4029-4038
     // Check for deprecated syntax (old MIDI DSL)
     if (line.includes('sequence ') && !line.includes('//')) {
       const diagnostic = new vscode.Diagnostic(
@@ -189,7 +201,7 @@ A trace of implementation history that, when opening v1.0-era code, displays a w
 
 ## Outline of the v1.0 MIDI DSL Specification
 
-A quote from the archive (`docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md`). Kept for the contrast of how different the current v3.0 is.
+A quote from the archive (`docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md`). Kept for the contrast of how different v3.0 is.
 
 v1.0 global settings:
 ```
@@ -218,11 +230,11 @@ Event notation:
 
 ---
 
-## Comparison with v3.0 Current DSL
+## Comparison with the v3.0 (Audio) DSL
 
 | Aspect | v1.0 (MIDI) | v3.0 (Audio) |
 |---|---|---|
-| Output | via MIDI bus | SuperCollider + WAV files |
+| Output | via MIDI bus | audio engine (scsynth when v2.0 was declared; Rust daemon by default since cutover #108) + WAV files |
 | Sequence definition | `sequence name { ... }` | `var seq = init global.seq` |
 | Note expression | degrees 0-12 | none (pitch is determined by file selection) |
 | Rhythm expression | implicitly defined by a degree sequence | `.chop(N)` + `.play(...)` pattern |
@@ -254,8 +266,8 @@ In v3.0, "which sound to play" is determined by the file name, and "at what timi
 ## Next Exploration Candidates
 
 - Excavating the decision record of the v2.0 pivot — confirm whether detailed discussion remains in PR or commit bodies
-- Feasibility of reimplementing the degree system — whether sample playback with pitch modulation can be realized using SuperCollider SynthDefs
-- Current support status of `randseed` — whether the randomness control in v1.0 is carried over to v3.0
+- How Pitch DSL v1.1 (`docs/specs-v2/PITCH_DSL_SPEC_v1.1.md`) reinterpreted the v1.0 degree system — a mapping against the "deprecated" column of this ADR
+- Support status of `randseed` — whether the randomness control in v1.0 is carried over to v3.0 / the Pitch DSL
 - Implementation details of polymeter — whether the independent time base in `beat(N by D)` is equivalent to v1.0's `meter N/D independent`
 - Treatment of the v1.0 degree system in the paper — whether deprecated features are included as academic contributions in the paper
 
@@ -263,10 +275,11 @@ In v3.0, "which sound to play" is determined by the file name, and "at what timi
 
 ## Sources
 
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:734-769` — the Versioning section: change history of v0.1-v3.0 and Migration Notes
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:362-415` — the v3.0 underscore prefix pattern specification
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:233-257` — the unidirectional toggle specification
+- `packages/engine/src/version.ts:14-17` — `ENGINE_VERSION = '2.0.0'` / `DSL_VERSION = '1.1'` (a separate axis from the audio line v3.0)
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1933-1990` — §13 Versioning: change history of v0.1-v3.0 and v1.1 Pitch DSL, and Migration Notes
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:467-601` — §7 the v3.0 underscore prefix pattern specification
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:336-432` — §5 the unidirectional toggle specification
 - `docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md` — the v1.0 MIDI DSL specification archive (archived 2025-10-06)
-- `packages/vscode-extension/src/extension.ts:1244-1253` — implementation of the deprecation warning for the `sequence ` keyword
+- `packages/vscode-extension/src/extension.ts:4029-4038` — implementation of the deprecation warning for the `sequence ` keyword
 - commit `081a474` — the SuperCollider integration and sox abolition (the technical foundation of v2.0)
 - commit `cfa0381` — Web Audio API removal and consolidation on SuperCollider (PR #31)

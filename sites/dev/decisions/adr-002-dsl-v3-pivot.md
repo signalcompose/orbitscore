@@ -1,18 +1,28 @@
 ---
 title: "ADR-002 DSL v1 (MIDI) → v3 (Audio) pivot"
 chapter-id: "adr-002"
-verified-against: 0a4b598
-verified-at: "2026-05-05"
+verified-against: 69dc968
+verified-at: "2026-09-01"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-05-05 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # ADR-002 DSL v1 (MIDI) → v3 (Audio) pivot
 
-OrbitScore DSL は 3 回のメジャーバージョンを経て現在の v3.0 に至っています。このバージョン番号の変化は単なる通し番号ではなく、それぞれが設計上の重要な転換点を表しています。本章では v0.1 → v1.0 → v2.0 → v3.0 の流れを DSL 仕様書とコミット履歴から読み解きます。
+OrbitScore DSL は 3 回のメジャーバージョンを経て v3.0 に至りました。このバージョン番号の変化は単なる通し番号ではなく、それぞれが設計上の重要な転換点を表しています。本章では v0.1 → v1.0 → v2.0 → v3.0 の流れを DSL 仕様書とコミット履歴から読み解きます。
 
 **重要**: ADR のタイトルが "v1 → v3 pivot" と書かれていますが、実際には 3 段階の変化です。**v1 → v2 が最大の pivot (MIDI → Audio)** であり、v2 → v3 は DSL 構文の洗練です。この章では 3 つすべての変化を扱います。
+
+ちなみに 69dc968 時点では、この v3.0 は「audio engine line」として維持され、その上に Pitch DSL v1.1 (MIDI 出力) が **別軸** で積まれています。product version は 2.0.0 で、`DSL_VERSION` は audio line の v3.0 ではなく Pitch DSL の版を指します。本 ADR は audio line の話です。
+
+```typescript
+// packages/engine/src/version.ts:14-17
+export const ENGINE_VERSION = '2.0.0'
+
+/** DSL spec version (PITCH_DSL_SPEC) — a separate axis from the product version. */
+export const DSL_VERSION = '1.1'
+```
 
 ---
 
@@ -25,13 +35,13 @@ OrbitScore DSL は 3 回のメジャーバージョンを経て現在の v3.0 �
 5. [論文との整合](#論文との整合)
 6. [機能消失のトレードオフ](#機能消失のトレードオフ)
 7. [v1.0 MIDI DSL の仕様概略](#v10-midi-dsl-の仕様概略)
-8. [v3.0 現行 DSL との対比](#v30-現行-dsl-との対比)
+8. [v3.0 (Audio) DSL との対比](#v30-audio-dsl-との対比)
 
 ---
 
 ## バージョン履歴の概略
 
-`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` の Versioning セクションに公式の記録があります:
+`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` の Versioning セクション (§13) に公式の記録があります:
 
 | バージョン | 日付 | 主な変化 |
 |---|---|---|
@@ -40,7 +50,7 @@ OrbitScore DSL は 3 回のメジャーバージョンを経て現在の v3.0 �
 | v2.0 | 2025-01-06 | **SuperCollider 統合・MIDI 廃止** |
 | v3.0 | 2025-01-09 | アンダースコアプレフィックスパターン + 片記号方式 (unidirectional toggle) |
 
-v1.0 から v2.0 まで **わずか 12 日**、v2.0 から v3.0 まで **3 日** という密度の濃いスプリントです。
+v1.0 から v2.0 まで **わずか 12 日**、v2.0 から v3.0 まで **3 日** という密度の濃いスプリントです。同じ Versioning セクションには v3.0 の上に "v1.1 Pitch DSL / MIDI (2026, Epic #224)" の行が加わっていて、MIDI が別軸として戻ってきたことが分かります。
 
 > NOTE: unverified — 上記の日付 (v1.0: 2024-12-25, v2.0: 2025-01-06, v3.0: 2025-01-09) は `INSTRUCTION_ORBITSCORE_DSL.md` の仕様書に記載されている日付ですが、git コミット履歴のタイムスタンプとは一致しない場合があります。仕様書の「バージョン宣言日」と「コミット日」が異なる可能性があり、コミット履歴を直接確認した場合に矛盾が見つかることがあります。正確な実装時期はコミットログを参照してください。
 
@@ -93,7 +103,9 @@ v2.0 の新機能:
 - グローバルマスタリングエフェクト: compressor, limiter, normalizer
 - dB ベースのゲインコントロール (-60 to +12 dB)
 
-> NOTE: unverified — v1.0 から v2.0 への意思決定プロセス (なぜ MIDI を捨てたか、どのような議論があったか) は、現時点でコミットメッセージや PR ディスカッションに残っていません。タイムライン上は sox → SuperCollider 移行 (ADR-001 で扱った変化) と v1.0 → v2.0 の DSL 更新がほぼ同時期に起きており、「SuperCollider が使えるようになったのでオーディオ出力に切り替えた」という自然な流れだったと考えられます。
+Migration Notes の "All audio playback now goes through SuperCollider" は v2.0 宣言時点の記述で、2026-07-03 の cutover #108 以降は既定の音声バックエンドが Rust daemon に変わっています ([ADR-001](/decisions/adr-001-supercollider) の「Consequences revisited」を参照)。DSL 構文の側はこの切替で変わっていません。
+
+> NOTE: unverified — v1.0 から v2.0 への意思決定プロセス (なぜ MIDI を捨てたか、どのような議論があったか) は、69dc968 時点でコミットメッセージや PR ディスカッションに残っていません。タイムライン上は sox → SuperCollider 移行 (ADR-001 で扱った変化) と v1.0 → v2.0 の DSL 更新がほぼ同時期に起きており、「SuperCollider が使えるようになったのでオーディオ出力に切り替えた」という自然な流れだったと考えられます。
 
 ---
 
@@ -144,7 +156,7 @@ DSL の設計変更は ICMC (International Computer Music Conference) への発�
 
 v1.0 の度数システム (0=休符、1-12=半音階) はオリジナルの学術的貢献として論文に書ける概念でした。しかし v2.0 でオーディオファイル再生に pivot したことで、「度数システムによるポリリズム表現」という軸は薄くなり、代わりに「オーディオサンプルの高精度スケジューリングとライブコーディング環境」という軸が強くなりました。
 
-> NOTE: unverified — 論文の最終的な位置付け (どの側面を学術的貢献として主張するか) は、現時点で公開されているドキュメントからは確認できません。ICMC 発表のステータスは README に "ICMC v1.1.0 release-ready" と記載されています。
+> NOTE: unverified — 論文の最終的な位置付け (どの側面を学術的貢献として主張するか) は、69dc968 時点で公開されているドキュメントからは確認できません。ICMC 発表のステータスは README に "ICMC v1.1.0 release-ready" と記載されています。
 
 ---
 
@@ -154,8 +166,8 @@ v1.0 → v2.0 の pivot で消えた機能があります:
 
 | v1.0 機能 | 状態 | 備考 |
 |---|---|---|
-| MIDI バス/チャンネル指定 | **廃止** | オーディオファイル再生に置き換え |
-| 度数システム (0-12) | **廃止** | ピッチ表現が WAV ファイル選択に変わった |
+| MIDI バス/チャンネル指定 | **廃止** | オーディオファイル再生に置き換え (Pitch DSL v1.1 で `seq.midi()` として別軸で復活) |
+| 度数システム (0-12) | **廃止** | ピッチ表現が WAV ファイル選択に変わった (Pitch DSL v1.1 で度数が再導入) |
 | 微分音表現 (`1.5` 等) | **廃止** | SuperCollider で再実装は可能だが未実装 |
 | `meter N/D shared|independent` | **形を変えて継続** | `beat(N by D)` に改名、ポリメーター概念は保持 |
 | MPE モード | **廃止** | MIDI 依存の機能 |
@@ -167,10 +179,10 @@ v1.0 → v2.0 の pivot で消えた機能があります:
 - グローバルマスタリングエフェクト (compressor, limiter, normalizer)
 - ライブコーディング中のシームレスなパターン差し替え
 
-また、v3.0 の `updateDiagnostics()` には v1.0 MIDI 構文の残滓への警告が実装されています。`sequence ` キーワードを含む行は `DiagnosticTag.Deprecated` でハイライトされます:
+また、`updateDiagnostics()` には v1.0 MIDI 構文の残滓への警告が実装されています。`sequence ` キーワードを含む行は `DiagnosticTag.Deprecated` でハイライトされます:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1244-1253
+// packages/vscode-extension/src/extension.ts:4029-4038
     // Check for deprecated syntax (old MIDI DSL)
     if (line.includes('sequence ') && !line.includes('//')) {
       const diagnostic = new vscode.Diagnostic(
@@ -189,7 +201,7 @@ v1.0 時代のコードを開いた時に取り消し線スタイルで警告が
 
 ## v1.0 MIDI DSL の仕様概略
 
-アーカイブ (`docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md`) からの引用です。現在の v3.0 がいかに異なるかの対比のために残します。
+アーカイブ (`docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md`) からの引用です。v3.0 がいかに異なるかの対比のために残します。
 
 v1.0 のグローバル設定:
 ```
@@ -218,11 +230,11 @@ sequence kick {
 
 ---
 
-## v3.0 現行 DSL との対比
+## v3.0 (Audio) DSL との対比
 
 | 側面 | v1.0 (MIDI) | v3.0 (Audio) |
 |---|---|---|
-| 出力 | MIDI バス経由 | SuperCollider + WAV ファイル |
+| 出力 | MIDI バス経由 | オーディオエンジン (v2.0 宣言時は scsynth、cutover #108 以降は Rust daemon が既定) + WAV ファイル |
 | シーケンス定義 | `sequence name { ... }` | `var seq = init global.seq` |
 | 音符表現 | 度数 0-12 | なし (音高はファイル選択で決まる) |
 | リズム表現 | 度数列で暗黙に定義 | `.chop(N)` + `.play(...)` パターン |
@@ -254,8 +266,8 @@ v3.0 では「どの音を出すか」はファイル名で決まり、「どの
 ## 次の深掘り候補
 
 - v2.0 pivot の意思決定記録の発掘 — PR やコミット本文に詳細な議論が残っていないか確認
-- 度数システムの再実装可能性 — SuperCollider の SynthDef でピッチ変調付きサンプル再生を実現できるか
-- `randseed` の現行サポート状況 — v1.0 にあったランダム性制御が v3.0 に引き継がれているか
+- Pitch DSL v1.1 (`docs/specs-v2/PITCH_DSL_SPEC_v1.1.md`) が v1.0 の度数システムをどう再解釈したか — 本 ADR の「廃止」列との対応表
+- `randseed` のサポート状況 — v1.0 にあったランダム性制御が v3.0 / Pitch DSL に引き継がれているか
 - ポリメーターの実装詳細 — `beat(N by D)` での independent タイムベースが v1.0 の `meter N/D independent` と同等かどうか
 - 論文での v1.0 度数システムの扱い — 廃止された機能が学術的貢献として論文に含まれるか
 
@@ -263,10 +275,11 @@ v3.0 では「どの音を出すか」はファイル名で決まり、「どの
 
 ## Sources
 
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:734-769` — Versioning セクション: v0.1-v3.0 の変更履歴と Migration Notes
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:362-415` — v3.0 アンダースコアプレフィックスパターンの仕様
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:233-257` — 片記号方式 (unidirectional toggle) の仕様
+- `packages/engine/src/version.ts:14-17` — `ENGINE_VERSION = '2.0.0'` / `DSL_VERSION = '1.1'` (audio line v3.0 とは別軸)
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1933-1990` — §13 Versioning: v0.1-v3.0 と v1.1 Pitch DSL の変更履歴と Migration Notes
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:467-601` — §7 v3.0 アンダースコアプレフィックスパターンの仕様
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:336-432` — §5 片記号方式 (unidirectional toggle) の仕様
 - `docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md` — v1.0 MIDI DSL 仕様書アーカイブ (2025-10-06 アーカイブ)
-- `packages/vscode-extension/src/extension.ts:1244-1253` — `sequence ` キーワードの deprecated 警告実装
+- `packages/vscode-extension/src/extension.ts:4029-4038` — `sequence ` キーワードの deprecated 警告実装
 - commit `081a474` — SuperCollider 統合と sox 廃止 (v2.0 の技術的基盤)
 - commit `cfa0381` — Web Audio API 削除・SuperCollider 一本化 (PR #31)
