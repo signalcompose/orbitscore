@@ -17,6 +17,45 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.427 docs(planning): 機能マップへの owner コメント 9 本を設計の入力へ (Sep 2, 2026)
+
+**Issue**: #677 / **文書**: `docs/planning/2026-09-02-feature-map-comments.md`
+
+アーティファクト上のコメントは repo の外にあり、そのままでは設計の入力にならない。9 本を転記し、
+既存 issue との対応・事実確認・詰めるべき点を書いた。**issue の新規起票はしていない**（owner 判断）。
+
+#### 事実確認で判明したこと
+
+| 主張 | 確認結果 |
+|---|---|
+| Splice に MCP サーバがある | ✅ 公式リモート MCP（`https://mcp.splice.com/mcp`・beta）。検索・stack・ダウンロード |
+| `ShmKnd/Patina` | ✅ 実在・MIT。**C++17 標準ライブラリのみ**のアナログモデリング DSP |
+| `yuichkun/unworklet` | ✅ 実在・MIT。ただし **AudioWorklet / WASM / TypeScript = ブラウザ前提** |
+
+🔴 **unworklet は OrbitScore とホストが違う。** エンジンは Rust の native daemon（cpal）であって
+ブラウザではない。「採用」と言うとき実際にありうるのは (A) WASM だけ借りる（RT 安全性の保証は
+付いてこない）(B) 記法だけ借りる (C) ブラウザ面を別に作る、の 3 つで**それぞれ別物**。
+owner の狙い（ユーザーランドに DSP を解放する・楽に更新できる）は unworklet 固有の話ではなく、
+**#671 / #672 の DSL Plugin / DSP Plugin 契約と同じ問題**を見ている。比較の前に
+「ユーザーが書いた DSP はどのプロセスのどのスレッドで走るのか」を決める必要がある。
+
+#### スコープが変わるもの
+
+**#666（Splice）**: LLM は MCP から探してローカルへ落とせるので、OrbitScore はパスを受け取るだけでよい。
+「Splice を統合する」→「**ダウンロード先をプロジェクトが解決できる形にする**」へ縮む（#456 と同じ問題）。
+
+#### 未起票の 3 件
+
+リアルタイム・サンプリング（トリガー意味論が未設計）／VST3・CLAP のパラメータを DSL から動かす／
+MCP の HTTP 面を使った GUI。
+
+#### owner の手続き上の指摘
+
+機能マップの分類は issue の**タイトルから**起こしたもので、160 件の本文は読んでいない。
+棚卸し候補 64 件も更新日だけの判定なので、**閉じる前に中身を読む**必要がある。
+
+---
+
 ### 6.426 docs: レビュー指摘の反映 — 引用検証を CI へ、テスト件数を緑の実行から採り直し、`ok` の旧記述を一掃 (Sep 2, 2026)
 
 **ブランチ**: `claude/developer-site-docs-update-0obpim`（PR #673 のレビュー指摘 3 件）
