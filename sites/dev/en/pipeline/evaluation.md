@@ -21,7 +21,7 @@ The first edition of this chapter was written against the 2026-05-05 snapshot (0
 - **`processGlobalInit()` / `processSequenceInit()` check for collisions with the mixer namespace** (#517 S1)
 - **The cases in `processStatement()` grew from 3 to 11**, resolution of `'sequence'` became a three-step "globals → sequences → mixer node," and a miss now **throws** instead of `console.error`
 - **`processGlobalStatement()` / `processSequenceStatement()` centralized chain handling in `applyMethodChain()`**, where each hop lets `resolveChainDispatch()` decide "DSL method / plugin call / mixer routing" (#517 S2-S3)
-- **`callMethod()` throws when the method is undefined** (it used to `console.error` and return `obj`). `processArguments()` throws a stage-explicit error when it receives a named argument (`name: value`) (SC.3.3)
+- **`callMethod()` throws when the method is undefined** (the 2026-05 edition did `console.error` and returned `obj`). `processArguments()` throws a stage-explicit error when it receives a named argument (`name: value`) (SC.3.3)
 - `processTransportStatement()` merely moved to lines 507-550; its content is the same
 
 ## InterpreterV2 is a Thin Wrapper

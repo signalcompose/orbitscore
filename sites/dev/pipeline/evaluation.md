@@ -21,7 +21,7 @@ status: draft
 - **`processGlobalInit()` / `processSequenceInit()` がミキサー名前空間との衝突を検査する** (#517 S1)
 - **`processStatement()` の case が 3 → 11 に増え**、`'sequence'` の解決順が「globals → sequences → mixer node」の 3 段になり、見つからないときは `console.error` ではなく **throw** するようになった
 - **`processGlobalStatement()` / `processSequenceStatement()` がチェーン処理を `applyMethodChain()` に集約し**、各ホップで `resolveChainDispatch()` が「DSL メソッドか / プラグイン呼び出しか / ミキサールーティングか」を判定するようになった (#517 S2-S3)
-- **`callMethod()` はメソッド未定義で throw する** (以前は `console.error` して `obj` を返していた)。`processArguments()` は名前付き引数 (`name: value`) を受けると段階を明示したエラーを投げます (SC.3.3)
+- **`callMethod()` はメソッド未定義で throw する** (2026-05 版では `console.error` して `obj` を返していた)。`processArguments()` は名前付き引数 (`name: value`) を受けると段階を明示したエラーを投げます (SC.3.3)
 - `processTransportStatement()` は 507-550 行に移動しただけで内容は同じです
 
 ## InterpreterV2 は薄いラッパー
