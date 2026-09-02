@@ -298,7 +298,7 @@ In-repo USER_MANUAL files are **deprecated** (historical reference only):
 npm test
 ```
 
-**2162 passed, 68 skipped (2233 total) — 2026-09-01 on `main` (69dc968)**
+**2165 passed, 68 skipped (2233 total) — 2026-09-02, macOS, on `69dc968`**
 
 Run `npm test` to see the current breakdown. Skipped tests are real-daemon / macOS / SuperCollider integration tests that require a local environment. Real-device verification runs through the gated E2E harness:
 

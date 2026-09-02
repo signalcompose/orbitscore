@@ -304,7 +304,7 @@ engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setup
 
 では `#614` 後は `get_log` を見なくてよいのでしょうか。**そうではありません。** `ok` が保証するのは「マーカー到達までに engine が上げた診断が無い」ことまでです。評価が返ったあとに非同期に起きる失敗は、依然として stdout/stderr にしか現れません。gated spec 自身がその使い分けを示しています。`instSeq.instrument(...)` を `evaluate_orbitscore` で評価して `isError` が `false` であることを確認したあと、`sleep(6000)` してから `get_log` を読み、`[OUTPROC_ATTACH_FAILED]` が無いことを別途 assert しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:1019-1031`）。out-of-process の CLAP attach は spawn + IPC handshake を伴うため、評価の完了と attach の成否は別のタイムラインにあるからです。
 
-`log-ring.ts` のコメントに「`get_log` はエンジン側のエラーが現れる**唯一のチャネル**である（`evaluate_orbitscore` の `ok` は「stdin へ書けた」しか意味しない）」という `#614` より前の記述が残っているのも、この文脈で読むと矛盾ではありません。**`ok` が意味を持つ範囲は広がったが、`get_log` が唯一の観測点である領域は残っている**、というのが 2026-09-01 時点の正確な理解です。
+`log-ring.ts` のコメントには `#614` より前の記述（「`get_log` はエンジン側のエラーが現れる**唯一のチャネル**である」）が残っていましたが、本 PR で「**評価が返ったあとに非同期に起きる失敗が現れる唯一のチャネル**」へ改めました。同時に `CLAUDE.md` の 3 箇所（「`ok` に assert しても何も証明しない」）も、`#614` 後の意味へ更新しています。**`ok` が意味を持つ範囲は広がったが、`get_log` が唯一の観測点である領域は残っている** — これが 2026-09-02 時点の正確な理解です。
 
 ---
 
@@ -348,7 +348,7 @@ function pushLogRing(line: string): void {
 末尾 N 行を選ぶロジックは `#567` で純関数に切り出されました。要求がリング容量を超えたら **黙って切り詰めず、先頭に通知行を足す**のがポイントです。
 
 ```typescript
-// packages/vscode-extension/src/log-ring.ts:33-45
+// packages/vscode-extension/src/log-ring.ts:35-47
 export function selectLogLines(ring: readonly string[], requested?: number): string[] {
   const want = requested ?? DEFAULT_LOG_LINES
   const n = Math.max(1, Math.min(want, OUTPUT_LOG_RING_MAX))

@@ -1,7 +1,12 @@
 # OrbitScore Testing Guide
 
-**Last Updated**: 2026-09-01
-**Test Status**: `npm test` → 2162 passed | 68 skipped (2233 total、2026-09-01 実測。skip は macOS 実機・real daemon 依存)
+**Last Updated**: 2026-09-02
+**Test Status**: `npm test` → 2165 passed | 68 skipped (2233 total、2026-09-02 実測・macOS 通常ユーザー。skip は macOS 実機・real daemon 依存)
+
+> 🔴 **件数は「緑の実行」から採ること。** 2026-09-01 に記録された 2162 passed は
+> **3 failed を含む実行**の値だった（Linux コンテナの root では chmod が効かず、EACCES を
+> 期待する 3 件が落ちる。WORK_LOG 6.423)。passed + skipped が total に一致しない数字は、
+> 落ちた分がどこかにある。
 
 > **2026-09 の位置づけ**: 既定バックエンドは Rust `orbit-audio-daemon`（cutover #108）。本ガイドの
 > SuperCollider 節は `ORBITSCORE_ENGINE=sc` の opt-out 経路にのみ必要。実機検証の正本は

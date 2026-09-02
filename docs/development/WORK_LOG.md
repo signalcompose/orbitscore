@@ -17,6 +17,49 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.426 docs: レビュー指摘の反映 — 引用検証を CI へ、テスト件数を緑の実行から採り直し、`ok` の旧記述を一掃 (Sep 2, 2026)
+
+**ブランチ**: `claude/developer-site-docs-update-0obpim`（PR #673 のレビュー指摘 3 件）
+
+#### ① `docs:check` が誰からも呼ばれていなかった
+
+288 引用中 246 red を 0 にした検証器を入れながら、**どのワークフローからも実行していなかった**。
+次に誰かが引用をずらしても知らされない状態だったので、`code-review.yml` に
+`npm run docs:check` を追加した。
+
+実際にこの PR 内で機能した: `log-ring.ts` のコメントを 3 行増やしたところ、
+`mcp-and-gated-e2e.md:350` の引用（ja / en）が **red になった**。`--fix` で 33-45 → 35-47 へ
+再アンカーして 902 引用 0 failed に戻している。
+
+#### ② テスト件数が「3 failed だった実行」の値だった
+
+| | 記録されていた値 | 実測（2026-09-02・macOS 通常ユーザー） |
+|---|---|---|
+| `npm test` | 2162 passed / 68 skipped / 2233 total | **2165 passed / 68 skipped / 2233 total** |
+
+**2162 + 68 = 2230 で total に 3 足りない。** 差の 3 は 6.423 が正直に記録していた
+「root では chmod が効かず EACCES を期待する 3 件が落ちる」で、その**赤い実行の passed 数が
+緑の件数として** CLAUDE.md / README / TESTING_GUIDE へ転記されていた。
+
+TESTING_GUIDE に「件数は緑の実行から採る。passed + skipped が total に一致しない数字は、
+落ちた分がどこかにある」を注記として残した。
+
+#### ③ `#614` の訂正が正本へ反映されていなかった
+
+IV-3 章は `evaluate_orbitscore` の `ok` の意味が #614 で変わったことを突き止めていたのに、
+**`CLAUDE.md` には旧記述が 3 箇所（413 / 614 / 662 行）残っていた**。CLAUDE.md は毎セッション
+読まれる運用文書なので、ここが古いと実際に伝播する（本セッションで作成中だったルーチンの
+プロンプトにも旧記述が引き写されていた）。
+
+3 箇所と `packages/vscode-extension/src/log-ring.ts` の「唯一のチャネル」コメントを、
+**「`ok` は評価時の診断を捉える。評価後に非同期に起きる失敗は今も `get_log` にしか出ない」**
+へ更新。IV-3 章（ja / en）の該当段落も、旧コメントが「残っている」から「本 PR で改めた」へ改稿した。
+
+**検証**: `npm test` 2165 passed / 0 failed、`npm run docs:check` 902 引用 0 failed、
+`npm run docs:build -w @orbitscore/dev-site` 成功（dead link 0）。
+
+---
+
 ### 6.425 chore(rust): rtrb 0.3.4 → 0.3.5 — 新規 advisory RUSTSEC-2026-0274 で PR #673 の deny gate が赤に (Sep 2, 2026)
 
 **発見経路**: docs のみの PR [#673](https://github.com/signalcompose/orbitscore/pull/673) の

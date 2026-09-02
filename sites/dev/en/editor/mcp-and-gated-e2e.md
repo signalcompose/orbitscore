@@ -304,7 +304,7 @@ The engine answers with a JSON line `{"evalMark": {...}}` on stdout, and `setupS
 
 So after `#614`, is `get_log` unnecessary? **No.** What `ok` guarantees is that no diagnostics were raised by the engine up to the point the marker was reached. Failures that occur asynchronously after the evaluation returns still appear only in stdout/stderr. The gated spec itself shows the division of labour: after evaluating `instSeq.instrument(...)` with `evaluate_orbitscore` and confirming `isError` is `false`, it does `sleep(6000)`, then reads `get_log` and asserts separately that `[OUTPROC_ATTACH_FAILED]` is absent (`tests/e2e/orbitstudio-mcp-gated.spec.ts:1019-1031`). An out-of-process CLAP attach involves a spawn plus an IPC handshake, so the completion of the evaluation and the success of the attach live on different timelines.
 
-The pre-`#614` sentence that remains in `log-ring.ts` — "`get_log` はエンジン側のエラーが現れる**唯一のチャネル**である（`evaluate_orbitscore` の `ok` は「stdin へ書けた」しか意味しない）" — is not a contradiction when read in this light. **The range over which `ok` carries meaning has widened, but there is still a region where `get_log` is the only observation point** — that is the accurate understanding as of 2026-09-01.
+The comment in `log-ring.ts` still carried its pre-`#614` wording ("`get_log` is the **only channel** in which engine-side errors appear"); this PR rewords it to "the **only channel in which failures that happen asynchronously after evaluation returns** appear". The three matching passages in `CLAUDE.md` ("asserting on `ok` proves nothing") were updated to the post-`#614` meaning as well. **The range over which `ok` carries meaning has widened, but there is still a region where `get_log` is the only observation point** — that is the accurate understanding as of 2026-09-02.
 
 ---
 
@@ -348,7 +348,7 @@ In other words, what `get_log` returns is "the same content that appeared in the
 The logic that selects the last N lines was extracted into a pure function in `#567`. The point is that when the request exceeds the ring capacity, it **does not silently truncate; it prepends a notice line**.
 
 ```typescript
-// packages/vscode-extension/src/log-ring.ts:33-45
+// packages/vscode-extension/src/log-ring.ts:35-47
 export function selectLogLines(ring: readonly string[], requested?: number): string[] {
   const want = requested ?? DEFAULT_LOG_LINES
   const n = Math.max(1, Math.min(want, OUTPUT_LOG_RING_MAX))
