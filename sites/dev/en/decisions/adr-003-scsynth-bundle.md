@@ -1,12 +1,32 @@
 ---
 title: "ADR-003 scsynth bundle strict mode"
 chapter-id: "adr-003"
-verified-against: 0a4b598
-verified-at: "2026-05-05"
+verified-against: 69dc968
+verified-at: "2026-09-01"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-05-05. The code is the truth; this page is merely a snapshot of understanding at that point in time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+
+::: warning Status as of 2026-09
+The scsynth bundle and the strict resolver belong to the SuperCollider path. Since cutover #108 on 2026-07-03 (`docs/development/WORK_LOG.md` §6.179), this path is used **only when you opt out with `ORBITSCORE_ENGINE=sc`** (in VS Code, `orbitscore.engine: "sc"`); on the default Rust path scsynth is not even resolved. However, the "fail-loud resolver" pattern this ADR decided on is reused as-is for resolving `orbit-audio-daemon` (see "Consequences revisited (2026-09)" at the end). For the default path, see [RE-1. Daemon Architecture Overview](/en/rust-engine/).
+
+```typescript
+// packages/engine/src/audio/create-audio-engine.ts:17-22
+export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
+  const raw = env[ENGINE_ENV_VAR]
+  if (resolveEngineKind(raw) === 'supercollider') {
+    console.log(`🎛️ [engine] using SuperCollider backend (opt-out via ORBITSCORE_ENGINE=${raw})`)
+    return new SuperColliderPlayer()
+  }
+```
+
+```typescript
+// packages/engine/src/audio/engine-backend.ts:52-53
+/** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
+export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
+```
+:::
 
 # ADR-003 scsynth bundle strict mode
 
@@ -24,6 +44,7 @@ From v1.0, OrbitScore began bundling scsynth (SuperCollider's audio server binar
 6. [Signing / Notarize Strategy](#signing-notarize-strategy)
 7. [Use on the VS Code Extension Side](#use-on-the-vs-code-extension-side)
 8. [Impact on the dev Environment](#impact-on-the-dev-environment)
+9. [Consequences revisited (2026-09)](#consequences-revisited-2026-09)
 
 ---
 
@@ -213,7 +234,7 @@ packages/vscode-extension/engine/scsynth/
 └── Contents/
     ├── Resources/
     │   ├── scsynth           ← the binary itself
-    │   └── plugins/          ← 26 .scx files
+    │   └── plugins/          ← 26 .scx files (+ OrbitLinkAudio.scx when it has been built)
     └── Frameworks/
         └── libsndfile.dylib  ← external dependency
 ```
@@ -238,21 +259,51 @@ Because the SC project already provides binaries with Apple Developer ID + harde
 - No additional Apple Developer ID acquisition needed
 - The only secret in GitHub Actions is `VSCE_PAT` (zero Apple-related secrets)
 
-That is the situation.
+That was the situation (for the later story about the daemon, see "Consequences revisited").
 
 ---
 
 ## Use on the VS Code Extension Side
 
-As covered in [IV-1](/en/editor/vscode-architecture), the VS Code extension calls the resolver via `resolveScsynthForUI()`. The result of resolution is used to display the two status bar indicators:
+As covered in [III-3](/en/audio/scsynth-bundle) and [IV-1](/en/editor/vscode-architecture), the VS Code extension calls the resolver via `resolveScsynthForUI()`. At 69dc968, however, this call happens only when `orbitscore.engine` is `sc`. The result of resolution is used to display the status bar indicator `bundleStatusItem`:
 
-| `resolution.source` | bundleStatusItem display |
-|---|---|
-| `'bundle'` | `$(check) scsynth (bundled)` |
-| `'env'` or `'explicit'` | `$(gear) scsynth (custom)` |
-| `null` (resolution failed) | `$(error) scsynth: not found` (red background) |
+| engine kind | `resolution.source` | bundleStatusItem display |
+|---|---|---|
+| `sc` | `'bundle'` | `$(check) scsynth (bundled)` |
+| `sc` | `'env'` or `'explicit'` | `$(gear) scsynth (custom)` |
+| `sc` | `null` (resolution failed) | `$(error) scsynth: not found` (red background) |
+| `rust` | (scsynth is not resolved) | hidden if the daemon resolves; otherwise `$(error) daemon: not found` |
 
-Even in `startEngine()` that starts the engine, a design where the resolver is called before startup and **the spawn itself is not performed if scsynth is missing** (pre-check) prevents the double notification of "engine startup failure + resolver error" (from the code review comment in PR #155).
+```typescript
+// packages/vscode-extension/src/extension.ts:742-766
+  bundleStatusItem.show()
+  const resolution = resolveScsynthForUI()
+  if (!resolution) {
+    bundleStatusItem.text = '$(error) scsynth: not found'
+    bundleStatusItem.tooltip =
+      'Bundled scsynth not found. Reinstall the extension or set orbitscore.scsynthPath to a system scsynth.'
+    bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
+    return
+  }
+  bundleStatusItem.backgroundColor = undefined
+  switch (resolution.source) {
+    case 'bundle':
+      bundleStatusItem.text = '$(check) scsynth (bundled)'
+      bundleStatusItem.tooltip = `Using bundled scsynth\n${resolution.path}`
+      break
+    case 'env':
+    case 'explicit':
+      bundleStatusItem.text = '$(gear) scsynth (custom)'
+      bundleStatusItem.tooltip = `Using user-overridden scsynth\n${resolution.path}`
+      break
+    default:
+      bundleStatusItem.text = '$(question) scsynth: unknown source'
+      bundleStatusItem.tooltip = resolution.path
+  }
+}
+```
+
+Even in `startEngine()` that starts the engine, under the `sc` kind the resolver is called before startup and **the spawn itself is not performed if scsynth is missing** (pre-check), which prevents the double notification of "engine startup failure + resolver error" (from the code review comment in PR #155). Under the `rust` kind, the daemon binary is pre-checked at the same spot (`extension.ts:2053-2088`).
 
 ---
 
@@ -271,6 +322,37 @@ Two workarounds:
 1. **Via environment variable**: add `export ORBIT_SCSYNTH_PATH=/Applications/SuperCollider.app/Contents/Resources/scsynth` to `.zshenv` or similar
 2. **Bundle extraction**: run `npm run build:bundle` first to place the binary in `engine/scsynth/`
 
+Since cutover #108, in addition to this, `ORBITSCORE_ENGINE=sc` (`orbitscore.engine: "sc"` in VS Code) is needed just to select the SC path in the first place.
+
+---
+
+## Consequences revisited (2026-09)
+
+Following the ADR format, this records the consequences after the decision.
+
+### The bundle stays; the path became an opt-out
+
+Cutover #108 on 2026-07-03 (`docs/development/WORK_LOG.md` §6.179) switched the default backend to Rust, but the scsynth bundle itself remains. The engine-kind branching of #377 (`docs/development/WORK_LOG.md` §6.186) records, regarding release.yml, that "the scsynth-related steps (brew install / build:bundle / verify:bundle) are kept unchanged (interim owner decision: keep the scsynth bundle as-is in Phase 1)." Therefore, even at 69dc968, the `.vsix` ships both the SC bundle and the daemon binary.
+
+### The strict resolver pattern was inherited by the daemon
+
+The core of this ADR — "fail loud, no silent fallback, a candidate must be an executable file" — is carried over as-is into `resolveDaemonBinaryPath()`. #306 (`docs/development/WORK_LOG.md` §6.185) added the `.vsix`-bundled daemon as the last candidate, and in review Round 2 of #366 (§6.186) the finding that "it only checks `existsSync` and does not look at the exec bit — asymmetric with `isExecutableFile` on the scsynth side" led to the daemon side also requiring an executable regular file. The candidate order is `explicit → env (ORBIT_AUDIO_DAEMON_PATH) → monorepo-release → monorepo-debug → extension-bundle`.
+
+```typescript
+// packages/engine/src/audio/rust-engine/daemon-client.ts:99-99
+  source: 'explicit' | 'env' | 'monorepo-release' | 'monorepo-debug' | 'extension-bundle'
+```
+
+### The signing question moved to the daemon
+
+The "no re-signing required" conclusion in this ADR was about scsynth, which can keep the SuperCollider project's own signature. The daemon is a fresh build, so the same conclusion does not apply. §6.185 records as a follow-up that "the daemon binary has not been Apple Developer ID signed / notarized; a downloaded `.vsix` may be blocked by Gatekeeper (unverified)."
+
+> NOTE: unverified — whether the daemon's signing / notarization has been done as of 69dc968 was not checked within the scope of this chapter (only the follow-up note in WORK_LOG §6.185 is quoted).
+
+### Consequences in the UI
+
+`bundleStatusItem` is hidden under the `rust` kind as long as the daemon resolves (owner decision 2026-07-17, the comment at `extension.ts:737-739`), so the scsynth status display is now something only people who chose `sc` see. `forceKillScsynth` / `selectAudioDevice` are also gated on `config.orbitscore.engine == 'sc'` in `package.json`'s `commandPalette`.
+
 ---
 
 ## Related Terms
@@ -286,28 +368,35 @@ Two workarounds:
 
 ## Related ADRs
 
-- [ADR-001 Choosing SuperCollider as the Implementation Base](/en/decisions/adr-001-supercollider) — the reason for adopting scsynth. The bundle strategy in this ADR is a consequence of that choice
+- [ADR-001 Choosing SuperCollider as the Implementation Base](/en/decisions/adr-001-supercollider) — the reason for adopting scsynth. The bundle strategy in this ADR is a consequence of that choice; the post-cutover position is in that ADR's "Consequences revisited"
 - [ADR-002 DSL v3 Pivot](/en/decisions/adr-002-dsl-v3-pivot) — the decision that fixed the Audio DSL depending on scsynth
 
 ## Next Exploration Candidates
 
-- Implementation of the `build:bundle` script — details of the processing that extracts and places scsynth from SC.app
-- Implementation of `isExecutableFile()` — execute permission check via `stat.mode & 0o111`
-- Bundle strategies for Windows / Linux — supporting platforms beyond macOS-targeted universal binary
+- Implementation of the `build:bundle` script (`scripts/extract-scsynth-bundle.sh`) — details of the processing that extracts and places scsynth from SC.app
+- `scripts/copy-daemon-bin.sh` — the daemon-side bundling script. Why it is limited to `darwin-arm64`, and the ordering guarantee in release.yml
+- Bundle strategies for Windows / Linux — supporting platforms beyond the macOS-targeted universal binary
 - Bundle update flow for SC.app version-up — the Update policy in `SCSYNTH_BUNDLE_MANIFEST.md` (re-extract on Major/Minor bump only)
 - Handling of the GPL-3.0 license for the bundled inclusion — the detail of the issue noted in `SCSYNTH_BUNDLE_MANIFEST.md` as "strongly maintain GPL-3.0 aggregation property"
+- Status of the daemon's signing / notarization — how the §6.185 follow-up was handled afterward
 
 ---
 
 ## Sources
 
+- `packages/engine/src/audio/create-audio-engine.ts:17-22` — the branch that makes the SC path an opt-out
+- `packages/engine/src/audio/engine-backend.ts:52-53` — definition of `ENGINE_ENV_VAR` (`ORBITSCORE_ENGINE`)
 - `packages/engine/src/audio/supercollider/scsynth-resolver.ts:1-17` — file-leading comment: explanation of strict mode's intent and priority
 - `packages/engine/src/audio/supercollider/scsynth-resolver.ts:22-98` — implementation of `ScsynthNotFoundError`, `bundleCandidatePath()`, `resolveScsynthPath()`
-- `packages/vscode-extension/src/extension.ts:113-129` — `resolveScsynthForUI()`: front-end-side resolution via runtime require
-- `packages/vscode-extension/src/extension.ts:138-163` — `updateBundleStatus()`: status bar display switching by `resolution.source`
-- `packages/vscode-extension/src/extension.ts:692-695` — `startEngine()` pre-check: early return when scsynth is unresolved
+- `packages/engine/src/audio/rust-engine/daemon-client.ts:99-99` / `:221-250` — the daemon-side source kinds and `resolveDaemonBinaryPath()`
+- `packages/vscode-extension/src/extension.ts:653-669` — `getConfiguredEngineKind()`: normalization of the engine kind
+- `packages/vscode-extension/src/extension.ts:676-692` — `resolveScsynthForUI()`: front-end-side resolution via runtime require
+- `packages/vscode-extension/src/extension.ts:725-766` — `updateBundleStatus()`: engine-kind branch and status bar display switching by `resolution.source`
+- `packages/vscode-extension/src/extension.ts:2053-2088` — `startEngine()` pre-check: scsynth for `sc`, the daemon for `rust`
+- `packages/vscode-extension/package.json` — the `orbitscore.engine` setting (default `"rust"`) and the `commandPalette` `when` clauses
 - commit `1569110` — details of the SC.app/Spotlight fallback removal (motivation, change content, dev impact)
 - PR [#155](https://github.com/signalcompose/orbitscore/pull/155) — adoption of scsynth bundle strict mode
+- `docs/development/WORK_LOG.md` §6.179 / §6.185 / §6.186 — cutover #108, bundling the daemon into the `.vsix` (#306), engine-kind branching and keeping the bundle steps (#377)
 - `docs/research/SCSYNTH_BUNDLE_MANIFEST.md` — Issue #134: finalized minimum bundle set (26 plugins + libsndfile)
 - `docs/research/CODESIGN_PIPELINE.md` — Issue #135: signing/notarize investigation (conclusion that re-signing is unnecessary)
 - `docs/research/SCSYNTH_STANDALONE.md` — Issue #133: validation of standalone startup outside SC.app
