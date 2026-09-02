@@ -143,7 +143,7 @@ If your change affects:
 - **Unit tests**: Located in `tests/` directory
 - **Run tests**: `npm test`
 - **Test coverage**: Aim for 90%+ coverage
-- **Integration tests**: Test with real SuperCollider integration when applicable
+- **Integration tests**: Test against the real Rust daemon / OrbitStudio via the gated E2E harness (`npm run test:e2e:gated`) when applicable; SuperCollider integration only for the `ORBITSCORE_ENGINE=sc` opt-out path
 
 ## Project Structure
 

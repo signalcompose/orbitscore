@@ -14,12 +14,26 @@ For details, see [`docs/development/DEV_LEARNING_SITE.md`](https://github.com/si
 
 ## Structure
 
-- **Part 0. Orientation** — the OrbitScore big picture
+- **Part 0. Orientation** — the OrbitScore big picture (four tiers: extension / engine / Rust daemon / plugin children)
 - **Part I. DSL Pipeline** — text → AST → evaluation
-- **Part II. Scheduling** — time representation and polymeter
-- **Part III. Audio Rendering** — integration with SuperCollider
-- **Part IV. Editor Integration** — VS Code extension
-- **Part V. ADR / Glossary** — design decisions and glossary
+- **Part II. Scheduling** — time representation and polymeter, event queue, transport
+- **Part III. Rust Engine** — the default backend `orbit-audio-daemon` (since cutover #108), OOP children, insert buses, the capture seam
+- **Part IV. Signal Chain / Mixer** — racks (SC.10), sum / aux / send / output, master gain
+- **Part V. Plugin Hosting** — CLAP / VST3 hosting, plugin UI, the catalog and replacement
+- **Part VI. Editor Integration** — the VS Code extension, inline execution, the MCP server and gated real-device E2E
+- **Part VII. SuperCollider Path** — historical reading of the former default path, still reachable with `ORBITSCORE_ENGINE=sc`
+- **Part VIII. ADR / Glossary** — design decisions and glossary
+
+Every chapter was re-verified against commit `69dc968` on 2026-09-01. The SuperCollider chapters are
+kept rather than deleted; a warning at the top of each states that it is the opt-out path (this site
+documents drift instead of erasing it — its "artifact framing").
+
+### Mechanical citation checking
+
+Every code block that starts with `// <file>:<start>-<end>` is compared character for character
+against the code by `sites/dev/scripts/check-citations.mjs` (`npm run docs:check`). Any drift turns
+red, so a chapter's trustworthiness can be judged from its `verified-against` frontmatter and from
+whether this check is green.
 
 The `status` in each chapter's frontmatter indicates the writing stage:
 
@@ -32,7 +46,7 @@ The `status` in each chapter's frontmatter indicates the writing stage:
 
 ## Glossary
 
-DSL / scsynth / time domain terms are consolidated in the [Glossary](/en/glossary).
+DSL / daemon / plugin hosting / time domain terms are consolidated in the [Glossary](/en/glossary).
 
 ## Reading Locally / Offline
 

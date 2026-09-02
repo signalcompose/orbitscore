@@ -1,6 +1,6 @@
 # Dev Learning Site Refresh Plan — 2026-07
 
-**Status**: 計画（第一段・Issue [#451](https://github.com/signalcompose/orbitscore/issues/451)）
+**Status**: 第一段（Issue [#451](https://github.com/signalcompose/orbitscore/issues/451)）完了。2026-09-01 に第二段（下記 §8）を実施
 **非公開ディレクトリ**: `sites/dev/.plan/` は `srcExclude` 対象外なので `.vitepress/config.ts` の
 `srcExclude` に `.plan/**` を追加してから章の fan-out に着手すること（本ファイル自体が
 VitePress のビルド対象に混入しないようにするための前提条件）。
@@ -127,3 +127,22 @@ framing）。乖離が見つかっても即修正せず、まず現状を記述�
 - ローカル配信（MCP サーバ `/docs/`・OrbitStudio ワンクリック）の実装自体（Issue #450 側で対応。
   本計画は章コンテンツのみ）
 - cross-LLM-family audit への格上げ（DEV_LEARNING_SITE.md §5 Future Upgrade のまま未着手）
+
+---
+
+## 8. 2026-09-01 の到達状況（第二段）
+
+第一段（Unit A / B / C）以降、2026-07-30〜08-30 に実装が大きく動いた（#474 UI・#618/#625 差し替え・
+#628 ラック・#633 per-window pump・#643 ミキサー・#649 オーディオライン・#651 capture・#654 playhead）。
+本日の更新で以下を行った:
+
+| 作業 | 内容 |
+|---|---|
+| 機械検証の導入 | `sites/dev/scripts/check-citations.mjs`（`npm run docs:check`）。導入時点で 288 引用中 246 が red（行ずれ 71 は `--fix` で再アンカー、残りは手で再引用） |
+| 既存 19 章 + RE/PH 5 章の再検証 | 全章 `verified-against: 69dc968`。SC 経路の章（Part VII）は warning で opt-out 経路と明記 |
+| 新章（ja / en 同時） | SC-1 ラック、SC-2 ミキサーとオーディオライン、PH-2 プラグイン UI、PH-3 カタログと差し替え、IV-3 MCP と gated E2E |
+| 目次の再編 | Part III を Rust Engine に昇格、Part IV Signal Chain / Mixer を新設、SC 経路を Part VII（collapsed）へ |
+
+§2.1 の旧 RE-3（M2 IPC event wire）は独立章としては未着手のまま（RE-2 と PH-2 の evt リング節で部分的に扱う）。
+§3 の Try it trail は各新章末の「Try it」節として置いたが、`orbitstudio-mcp-gated.spec.ts` との対応表は未作成
+（DEV_LEARNING_SITE.md §7 の未決事項）。

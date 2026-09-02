@@ -1,16 +1,16 @@
 ---
 title: "IV-2. Inline Execution and Feedback"
 chapter-id: "IV-2"
-verified-against: 0a4b598
-verified-at: "2026-05-05"
+verified-against: 69dc968
+verified-at: "2026-09-01"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-05-05. The code is the truth; this page is merely a snapshot of understanding at that point in time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-2. Inline Execution and Feedback
 
-What happens when you press `Cmd+Enter`? In OrbitScore, a sequence runs of "intelligently collecting code at the cursor position, sending it to the engine, and notifying the executed range with a flash." This chapter unpacks the mechanism in order from `runSelection()` through `flashLines()` and `updateDiagnostics()`.
+What happens when you press `Cmd+Enter`? In OrbitScore, a sequence runs of "intelligently collecting code at the cursor position, sending it to the engine, and notifying the executed range with a flash." This chapter unpacks the mechanism in order from `runSelection()` through `writeCodeToEngine()`, `flashLines()`, and `updateDiagnostics()`. Since the first draft in 2026-05, two feedback paths were added: the **live playhead** (#390) driven by `[STEP]` lines coming back from the engine, and **`//#evalMark`** (#614), which returns results to evaluations made through MCP.
 
 ---
 
@@ -21,11 +21,14 @@ What happens when you press `Cmd+Enter`? In OrbitScore, a sequence runs of "inte
 3. [Path 2: No Selection, Subject Present — subject-based block evaluation](#path-2-no-selection-subject-present-subject-based-block-evaluation)
 4. [Multi-Line Tracking via parenBalance](#multi-line-tracking-via-parenbalance)
 5. [Path 3: No Selection, No Subject — Standalone Commands](#path-3-no-selection-no-subject-standalone-commands)
-6. [Auto-Injection of `setDocumentDirectory`](#auto-injection-of-setdocumentdirectory)
-7. [Sending the DSL Text](#sending-the-dsl-text)
+6. [`writeCodeToEngine()`: the Meta Line and `setDocumentDirectory` Injection](#writecodetoengine-the-meta-line-and-setdocumentdirectory-injection)
+7. [After Sending: revealRange and the Flash](#after-sending-revealrange-and-the-flash)
 8. [Flash Feedback: `flashLines()`](#flash-feedback-flashlines)
-9. [Real-Time Diagnostics: `updateDiagnostics()`](#real-time-diagnostics-updatediagnostics)
-10. [Flow Diagram](#flow-diagram)
+9. [Live Playhead: "Where is it Sounding Now" via `[STEP]` Lines](#live-playhead-where-is-it-sounding-now-via-step-lines)
+10. [Evaluation Result Feedback: `//#evalMark`](#evaluation-result-feedback-evalmark)
+11. [Real-Time Diagnostics: `updateDiagnostics()`](#real-time-diagnostics-updatediagnostics)
+12. [Flow Diagram](#flow-diagram)
+13. [Drift as of 2026-09](#drift-as-of-2026-09)
 
 ---
 
@@ -34,7 +37,7 @@ What happens when you press `Cmd+Enter`? In OrbitScore, a sequence runs of "inte
 When `Cmd+Enter` is pressed, the `orbitscore.runSelection` command fires and the `runSelection()` function is called. Two guard conditions are checked first:
 
 ```typescript
-// extension.ts:935-946
+// packages/vscode-extension/src/extension.ts:2716-2727
 async function runSelection() {
   const editor = vscode.window.activeTextEditor
   if (!editor || editor.document.languageId !== 'orbitscore') {
@@ -51,6 +54,8 @@ async function runSelection() {
 
 The check `languageId !== 'orbitscore'` is important. The keybinding in VS Code has the condition `when: editorLangId == orbitscore`, but when the command is called directly from the command palette, that `when` does not apply, so the language is also confirmed inside the function.
 
+Incidentally, the MCP `run_selection` tool calls this same function (`runSelectionForAgent()`, `extension.ts:3405`). Because the agent places a range beforehand with `set_selection`, it goes through Path 1.
+
 ---
 
 ## Path 1: When Text is Selected
@@ -58,7 +63,7 @@ The check `languageId !== 'orbitscore'` is important. The keybinding in VS Code 
 When there is a selection (`!selection.isEmpty`), it is simple. The text of the selected range is taken as is:
 
 ```typescript
-// extension.ts:953-955
+// packages/vscode-extension/src/extension.ts:2734-2736
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -73,7 +78,7 @@ When there is a selection (`!selection.isEmpty`), it is simple. The text of the 
 The case with no selection is interesting. It investigates "to which variable (subject) does the line at the cursor belong" and gathers **lines from the entire file** related to that subject:
 
 ```typescript
-// extension.ts:957-1004 (up to before setDocumentDirectory injection)
+// packages/vscode-extension/src/extension.ts:2737-2786 (setDocumentDirectory 注入前まで)
   } else {
     // No selection: subject-based block evaluation
     // Detect which variable/object the current line belongs to, then collect all related lines
@@ -126,9 +131,29 @@ The case with no selection is interesting. It investigates "to which variable (s
     } else {
 ```
 
-`getLineSubject()` is a function that looks at each line and returns "to which variable does this line belong" (we do not dive into the implementation in this chapter). For example, the line `var _kick = ...` returns `_kick`, and `_kick.play(...)` also returns `_kick`.
+`getLineSubject()` is a function that looks at each line and returns "to which variable does this line belong." The first draft did not dive into it, but the implementation is a small one with just two regular expressions.
 
-This makes it possible to gather all lines of the same subject scattered throughout the file and send them together to the engine. In a live coding session, even when the setup configuration line (`var _kick = init SEQ ...`) and the subsequent pattern change line (`_kick.play(...)`) are in distant positions, they can be re-evaluated together correctly.
+```typescript
+// packages/vscode-extension/src/extension.ts:2701-2714
+function getLineSubject(lineText: string): string | null {
+  const trimmed = lineText.trim()
+  if (!trimmed || trimmed.startsWith('//')) return null
+
+  // var <name> = init ...
+  const varMatch = trimmed.match(/^var\s+(\w+)\s*=/)
+  if (varMatch) return varMatch[1]
+
+  // <name>.method(...)
+  const dotMatch = trimmed.match(/^(\w+)\./)
+  if (dotMatch) return dotMatch[1]
+
+  return null
+}
+```
+
+For example, the line `var _kick = ...` returns `_kick`, and `_kick.play(...)` also returns `_kick`. Comment lines and blank lines return `null`.
+
+This makes it possible to gather all lines of the same subject scattered throughout the file and send them together to the engine. In a live coding session, even when the setup configuration line (`var _kick = init global.seq`) and the subsequent pattern change line (`_kick.play(...)`) are in distant positions, they can be re-evaluated together correctly.
 
 ---
 
@@ -151,10 +176,10 @@ On the line `_kick.play(`, `parenBalance = 1`. On `1, 0, 1, 0,` there is no chan
 
 ## Path 3: No Selection, No Subject — Standalone Commands
 
-When `getLineSubject()` returns `null` / falsy, it is judged a standalone command (`LOOP`, `RUN`, `MUTE`, etc.). In this case, the same `parenBalance` logic is used to follow multiple lines, but rather than scanning the entire file, the range is extended **only downward from the cursor line**:
+When `getLineSubject()` returns `null`, it is judged a standalone command (`LOOP`, `RUN`, `MUTE`, etc.). In this case, the same `parenBalance` logic is used to follow multiple lines, but rather than scanning the entire file, the range is extended **only downward from the cursor line**:
 
 ```typescript
-// extension.ts:1006-1028
+// packages/vscode-extension/src/extension.ts:2786-2809
     } else {
       // Standalone command (LOOP, RUN, MUTE, etc.) - evaluate current statement only
       let endLine = currentLine
@@ -183,59 +208,77 @@ When `getLineSubject()` returns `null` / falsy, it is judged a standalone comman
 
 ---
 
-## Auto-Injection of `setDocumentDirectory`
+## `writeCodeToEngine()`: the Meta Line and `setDocumentDirectory` Injection
 
-Just before sending the collected text to the engine, the `setDocumentDirectory` command is automatically inserted. This is a mechanism to perform the relative-path resolution of `audioPath()` and `audio()` based on the directory of the `.orbs` file.
+The job of sending the collected text to the engine was written inline at the tail of `runSelection()` as of 2026-05, but it has been carved out into `writeCodeToEngine()` so it can be shared with MCP's `evaluate_orbitscore`. There are two layers of mechanism for resolving the relative paths of `audioPath()` and `audio()` against the `.orbs` file's directory.
 
 ```typescript
-// extension.ts (behavior changed in Issue #168)
-let codeToSend = trimmedText
-const documentDir = path.dirname(editor.document.uri.fsPath)
-const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
-const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
-if (globalInitMatch) {
-  // Evaluation that initializes global: insert right after init
-  const insertPos = globalInitMatch.index! + globalInitMatch[0].length
-  codeToSend =
-    codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
-  globalInitialized = true
-} else if (globalInitialized) {
-  // Session that already has a global: prepend at the head of the code
-  codeToSend = setDirCommand + '\n' + codeToSend
+// packages/vscode-extension/src/extension.ts:3000-3032
+function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
+  if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
+    // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
+    // palette 実行では「実行したのに無反応」になるので、ここで必ず痕跡を残す。
+    outputChannel?.appendLine('⚠️ Engine stdin is not writable — code was NOT sent (engine died?)')
+    return false
+  }
+  let codeToSend = rawCode
+  if (documentDir) {
+    // I3 (#456): REPL メタ行で基準ディレクトリを帯域外で先渡しする。import 文（IM.2）は
+    // どの statement よりも先に評価されるため、下の DSL 注入（statements として実行）では
+    // 間に合わない — メタ行だけが import の基準（IM.6）を初回 eval から確定できる。
+    // DSL 注入も残す（audio() 等の既存経路の実績を変えない・同値の冪等再設定）。
+    codeToSend = `//#documentDirectory ${documentDir}\n` + codeToSend
+    const setDirCommand = `global.setDocumentDirectory("${documentDir.replace(/\\/g, '\\\\')}")`
+    const globalInitMatch = codeToSend.match(/(var\s+global\s*=\s*init\s+GLOBAL[^\n]*)/)
+    if (globalInitMatch) {
+      const insertPos = globalInitMatch.index! + globalInitMatch[0].length
+      codeToSend =
+        codeToSend.slice(0, insertPos) + '\n' + setDirCommand + codeToSend.slice(insertPos)
+      globalInitialized = true
+    } else if (globalInitialized) {
+      codeToSend = setDirCommand + '\n' + codeToSend
+    }
+  }
+
+  // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
+  if (statusBarItem?.text.includes('🐛')) {
+    outputChannel?.appendLine(`📤 Sending: ${JSON.stringify(codeToSend)}`)
+  }
+  engineProcess.stdin.write(codeToSend + '\n')
+  return true
 }
 ```
 
-Injection is performed in the following two stages:
+The two layers are:
 
-1. **On evaluating a global initialization block**: insert right after `var global = init GLOBAL` and set the `globalInitialized` flag
-2. **On any subsequent evaluation**: prepend at the head of the code. As a result, even if the user switches to a different `.orbs` file and runs partial evaluation, the current file's directory is reflected
+1. **The `//#documentDirectory` meta line** (#456 I3): always prepended. Because the REPL side processes it first as a meta line, the base directory for `import` statements (evaluated before any statement) is also settled from the very first eval
+2. **DSL injection of `global.setDocumentDirectory(...)`**: the previous path — if the evaluation contains `var global = init GLOBAL`, it is inserted right after it and the `globalInitialized` flag is set; on later evaluations it is prepended to the code. In a session where global is not initialized, nothing is injected (it would fail with `global is not defined`)
 
-The `globalInitialized` flag is bound to the engine process lifecycle (boot, stop, extension activate) and is reset accordingly.
+The `globalInitialized` flag is reset on the engine process lifecycle (start, stop, extension activate). It also includes processing to escape the Windows path separator (`\`) to `\\`.
 
-It also includes processing to escape the Windows path separator (`\`) to `\\` (`replace(/\\/g, '\\\\')`).
+In debug mode (when `🐛` is in the status bar), the send text escaped via `JSON.stringify` is also output to the Output Channel.
 
 There is no fallback to `process.cwd()` on the engine side (Issue #168). If documentDirectory is unset and a relative path is specified, an explicit error is raised.
 
 ---
 
-## Sending the DSL Text
+## After Sending: revealRange and the Flash
 
-Once collection and processing are complete, it is written to the engine's stdin:
+The tail of `runSelection()` looks like this.
 
 ```typescript
-// extension.ts:1102-1108
-  // Execute the selected command (both single line and multiline)
-  // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
-  if (statusBarItem?.text.includes('🐛')) {
-    outputChannel?.appendLine(`📤 Sending: ${JSON.stringify(codeToSend)}`)
+// packages/vscode-extension/src/extension.ts:2873-2880
+  if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
+    return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
-  engineProcess.stdin?.write(codeToSend + '\n')
+  // Scroll the executed range into view before flashing it: subject-block
+  // auto-detection (no explicit selection) never reveals, so an agent-driven run
+  // that lands on an off-screen line would otherwise flash outside the viewport.
+  editor.revealRange(executionRange, vscode.TextEditorRevealType.InCenterIfOutsideViewport)
   flashLines()
 ```
 
-In debug mode (when `🐛` is in the status bar), the send text escaped via `JSON.stringify` is also output to the Output Channel. This is a mechanism to confirm "what was sent" while debugging.
-
-`flashLines()` is called immediately after sending. Because the visual feedback runs without waiting for a response from the engine, the user can immediately get the sense that "it ran."
+A point to note here is the ordering: if sending fails, **no flash**. As of 2026-05 it called `flashLines()` right after `write`, but showing "it ran" when nothing reached stdin is false feedback. `revealRange` was added so that when an agent-driven run targets an off-screen line, the flash is not invisible (#388, `docs/development/WORK_LOG.md` §6.193).
 
 ---
 
@@ -244,7 +287,7 @@ In debug mode (when `🐛` is in the status bar), the send text escaped via `JSO
 What flashes the executed range in the editor is `flashLines()`. It is implemented using `createTextEditorDecorationType` (VS Code API):
 
 ```typescript
-// extension.ts:1033-1083
+// packages/vscode-extension/src/extension.ts:2814-2871
   // Visual feedback: flash the executed lines (configurable)
   const flashLines = () => {
     const config = vscode.workspace.getConfiguration('orbitscore')
@@ -273,16 +316,23 @@ What flashes the executed range in the editor is `flashLines()`. It is implement
         break
     }
 
-    const isWholeLine = selection.isEmpty
-    const range = executionRange
+    // Always paint the whole line(s), never just the selected characters. When a
+    // non-empty selection was executed — which is every MCP-triggered run, since
+    // the Agent Bridge always targets a precise range via set_selection before
+    // calling run_selection (#388) — a character-bounded decoration exactly
+    // overlaps the editor's native selection highlight (same range, and with the
+    // default flashColor='selection' the same background color too), so toggling
+    // it on/off is visually imperceptible: the "off" state still shows the native
+    // selection underneath. Whole-line painting extends past the selected text and
+    // stays visible regardless of selection state, color config, or trigger source.
 
     // Create flash function
     const createFlash = (flashIndex: number) => {
       const decoration = vscode.window.createTextEditorDecorationType({
         backgroundColor: backgroundColor,
-        isWholeLine: isWholeLine,
+        isWholeLine: true,
       })
-      editor.setDecorations(decoration, [range])
+      editor.setDecorations(decoration, [executionRange])
 
       setTimeout(() => {
         decoration.dispose()
@@ -305,7 +355,7 @@ The defaults are:
 - `flashDuration`: 150 ms (lit time)
 - Flash interval: `100 ms` (hard-coded)
 
-When executing without selection, `isWholeLine = true`, so the entire line is highlighted. When executing with selection, `isWholeLine = false`, and only the selected text portion is highlighted.
+`isWholeLine` is **always `true`**. As of 2026-05 it was "with a selection = only the selected characters," but because MCP's `run_selection` always places a range via `set_selection` before calling, a character-bounded decoration exactly overlapped the editor's own selection highlight and the flash became invisible (`docs/development/WORK_LOG.md` §6.193). Painting the whole line stays visible regardless of selection state, color config, or trigger source.
 
 The kinds of colors that can be set:
 
@@ -319,12 +369,97 @@ The kinds of colors that can be set:
 
 ---
 
-## Real-Time Diagnostics: `updateDiagnostics()`
+## Live Playhead: "Where is it Sounding Now" via `[STEP]` Lines
 
-Separately from `Cmd+Enter`, `updateDiagnostics()` runs on every keystroke. It is driven by the `onDidChangeTextDocument` event registered by `activate()`.
+The flash is feedback that "it was sent"; #390 added feedback that "it is sounding." The engine (`rust-engine-player.ts` on the Rust daemon path) prints one machine-readable line to stdout for each dispatched play event.
 
 ```typescript
-// extension.ts:1180-1257
+// packages/vscode-extension/src/playhead.ts:39-54
+// Grammar: "[STEP] <seqName> <argPath> <atEpochMs>". seqName is a DSL
+// identifier (no whitespace); argPath is dot-joined non-negative integers;
+// atEpochMs is an integer (the engine rounds fractional bar subdivisions).
+const STEP_LINE_RE = /^\s*\[STEP\]\s+(\S+)\s+(\d+(?:\.\d+)*)\s+(\d+)\s*$/
+
+/**
+ * Parse one stdout line as a `[STEP]` marker. Returns null for anything that
+ * does not match the grammar exactly (the stdout stream is mostly human logs).
+ */
+export function parseStepLine(line: string): StepEvent | null {
+  const m = line.match(STEP_LINE_RE)
+  if (!m) return null
+  const atEpochMs = Number(m[3])
+  if (!Number.isSafeInteger(atEpochMs)) return null
+  return { seqName: m[1], argPath: m[2], atEpochMs }
+}
+```
+
+`argPath` is an index into the argument tree of `play()`; `"1.0"` means "the first element inside the second argument." `atEpochMs` is the event's **grid time**; because the engine dispatches ahead with lookahead, the line arrives early. The extension delays the decoration until that time.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:235-246
+function handleStepLine(step: StepEvent): void {
+  const delayMs = step.atEpochMs - Date.now()
+  if (delayMs < -1000) return
+  const timeout = setTimeout(
+    () => {
+      playheadTimeouts.delete(timeout)
+      showPlayheadStep(step)
+    },
+    Math.max(0, delayMs),
+  )
+  playheadTimeouts.add(timeout)
+}
+```
+
+`showPlayheadStep()` uses `findPlayArgRangeForPath()` (`playhead.ts:509-534`) to locate the character range of the matching argument of `<seqName>.play(...)` in the document text, and replaces the single active range per seq. The color is decided by `colorForSeq()` from `orbitscore.playheadPalette` (32 colors, a first-come assignment based on Tokyo subway line colors), and it is cleared by `⏹ <seq>` lines, the `✅ Global stopped` line, and engine stop. The `[STEP]` lines themselves are hidden from the Output Channel by `shouldFilterLine()`.
+
+For deep nesting of the argument tree (group runs like `(A)(B).root(X)` or stacks `[ ... ]`), the comment on `findPlayArgRangeForPath()` says it settles for "the deepest resolvable ancestor." Lighting a range one level shallower is less misleading than lighting a wrong argument.
+
+---
+
+## Evaluation Result Feedback: `//#evalMark`
+
+A human user notices errors via the editor's red squiggles and the Output Channel, but an LLM going through MCP receives only the `ok` of `evaluate_orbitscore`. And the `true` of `writeCodeToEngine()` only means "it reached stdin." #614 added a mechanism that sends `//#evalMark {"requestId":...}` right after the code, and when the engine reaches it in FIFO order, returns the diagnostics accumulated during the preceding evaluation as JSON.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:3059-3068
+  const result = await evalMarkBridge.send((line, onError) => {
+    // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
+    stdin.write(line, (error) => {
+      if (error) {
+        outputChannel?.appendLine(`⚠️ failed to write //#evalMark to stdin: ${error.message}`)
+        onError(error)
+      }
+    })
+  }, randomUUID())
+  if (result.ok) return { ok: true }
+```
+
+The reception on the stdout side is placed as an **independent branch** in `setupStdoutHandler()`. The comment records that at first it was piggybacked on the `{"pluginUi"` branch and never dispatched; all unit tests were green and only the real-device E2E caught it.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1501-1509
+        } else if (trimmedLine.startsWith('{"evalMark"')) {
+          // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
+          // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
+          // dispatch されなかった（ユニットテストは全て緑・実機 E2E だけが捕まえた）。
+          const parsed = isCurrent && evalMarkBridge.handleLine(rawLine)
+          if (!parsed && isCurrent) {
+            outputChannel?.appendLine(`⚠️ received a malformed //#evalMark result line: ${rawLine}`)
+          }
+        }
+```
+
+The editor's `Cmd+Enter` does not send this marker. For a human, the flash + diagnostics + Output Channel suffice; evalMark is dedicated to MCP evaluate. The full set of MCP tools is covered in [IV-3. MCP Server and Gated Real-Device E2E](/en/editor/mcp-and-gated-e2e).
+
+---
+
+## Real-Time Diagnostics: `updateDiagnostics()`
+
+Separately from `Cmd+Enter`, `updateDiagnostics()` runs on document open / change / activation (#384, [IV-1](/en/editor/vscode-architecture#intellisense-and-diagnostics-registration)). The first half is the same three per-line checks as of 2026-05.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:3965-4039
 async function updateDiagnostics(
   document: vscode.TextDocument,
   collection: vscode.DiagnosticCollection,
@@ -400,12 +535,39 @@ async function updateDiagnostics(
       diagnostics.push(diagnostic)
     }
   }
-
-  collection.set(document.uri, diagnostics)
-}
 ```
 
-There are five kinds of diagnostic checks:
+The second half consists of **cross-line analyses**, which merely map the `DiagnosticIssue`s returned by pure functions (`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts`) to `vscode.Diagnostic`.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:4041-4052
+  // === Cross-line analyses (pure functions, unit-testable) ===
+  // Pure logic は `diagnostics-analysis.ts` に分離し、ここでは
+  // VS Code Diagnostic オブジェクトに変換するだけにする。
+  for (const issue of analyzeGlobalOncePerFile(text)) {
+    diagnostics.push(
+      new vscode.Diagnostic(
+        new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+        issue.message,
+        vscode.DiagnosticSeverity.Warning,
+      ),
+    )
+  }
+```
+
+There are 9 kinds of diagnostic checks in total:
+
+| # | Check | Implementation | Severity |
+|---|---|---|---|
+| 1 | Parenthesis matching (single line only) | `extension.ts:4002-4012` | Error |
+| 2 | tempo range (20-999) | `extension.ts:4014-4027` | Warning |
+| 3 | Deprecated `sequence ` keyword | `extension.ts:4029-4038` | Warning + `Deprecated` tag |
+| 4 | `global` state-setter once-per-file | `analyzeGlobalOncePerFile` | Warning |
+| 5 | `audioPath` ordering | `analyzeAudioPathOrdering` | Warning |
+| 6 | `.output()` before / without `global.linkAudio()` | `analyzeOutputWithoutLinkAudio` | Warning |
+| 7 | Sounding sequence without `.output()` in a LinkAudio file | `analyzeLinkAudioMissingOutput` | **Error** |
+| 8 | Empty argument `.output("")` | `analyzeEmptyOutputArg` | **Error** |
+| 9 | Plugin name absent from the catalog (#638) | `analyzeUnknownPluginNames` | Warning |
 
 ### 1. Parenthesis Matching Check (Error)
 
@@ -427,9 +589,28 @@ The background of the `sequence ` detection being a "remnant of the old MIDI DSL
 
 ### 4. global state-setter once-per-file (Warning)
 
-`global` state-setting methods (tempo / beat / audioPath / start / stop / gain / key / normalizer / limiter / compressor) should be written only once per file; if violated, raises `DiagnosticSeverity.Warning`.
+`global` state-setting methods should be written only once per file; if violated, raises `DiagnosticSeverity.Warning`. The target methods are enumerated in `GLOBAL_ONCE_METHODS`, and `linkAudio` was added since 2026-05.
 
-It loops over all document lines again, extracts calls with `\bglobal\s*\.\s*(\w+)\s*\(/g`, aggregates the appearance positions per target method into a Map, and attaches a Diagnostic to the second and later occurrences.
+```typescript
+// packages/vscode-extension/src/diagnostics-analysis.ts:44-58
+export const GLOBAL_ONCE_METHODS = new Set([
+  'tempo',
+  'beat',
+  'audioPath',
+  'start',
+  'stop',
+  'gain',
+  'key',
+  'normalizer',
+  'limiter',
+  'compressor',
+  // LinkAudio mode declaration is a state setter (see DSL spec §8.1.1) and
+  // therefore once-per-file like the other globals.
+  'linkAudio',
+])
+```
+
+It loops over all document lines again, extracts calls with `\bglobal\s*\.\s*(\w+)\s*\(/g`, aggregates the appearance positions per target method into a Map, and attaches a Diagnostic to the second and later occurrences. Trailing comments are stripped by `stripLineComment()`, with a simple quote tracker so that `//` inside a string literal is not misdetected.
 
 Excluded:
 - `init global.seq` (sequence declaration; multiple are needed)
@@ -450,13 +631,45 @@ The message branches into "audioPath absent" and "order reversed." In the latter
 
 The background of when this rule was introduced relates to "environment-independent path resolution" handled in [Issue #168 / PR #169](https://github.com/signalcompose/orbitscore/pull/169). It is a UX improvement to prevent runtime errors in the editor.
 
+### 6-8. The Edit-Time Counterpart of LinkAudio Strict Mode
+
+The contract in DSL spec §8.1.2 — "in a LinkAudio file every sounding sequence declares `.output()`; hardware and LinkAudio cannot mix within one file" — shows up at runtime as a throw in `Sequence.resolveDispatchChannel()`. Diagnostics 6-8 are its edit-time counterpart. 7 and 8 are **Error** because the runtime always throws. 7 excludes sequences that have `.midi()` / `.instrument()`, and the comment cites decision #14 (MIDI and SC audio may run side by side).
+
+### 9. Unknown Plugin Name (Warning)
+
+A warning when the name in `effect("...")` / `instrument("...")` is not in the plugin catalog (#638). The engine throws at evaluation time, but with 342 catalog entries a typo is common, so it is reported before evaluation. It **stays at Warning** because the catalog is a cached snapshot, and a name may be "correct but not scanned yet."
+
+```typescript
+// packages/vscode-extension/src/extension.ts:4095-4112
+  // #638: plugin names that the catalog cannot resolve. The engine throws on
+  // these at evaluation time, but with 342 catalog entries a typo is the common
+  // case and waiting until evaluation to learn about it is expensive.
+  //
+  // Severity is Warning, not Error, even though the engine throws: the
+  // extension's catalog is a cached snapshot, so a name can be *correct* and
+  // merely not scanned yet (a plugin installed since the last rescan). Warning
+  // says "this looks wrong" without asserting a certainty the snapshot cannot
+  // support; the message names the rescan command for exactly that case.
+  for (const issue of analyzeUnknownPluginNames(text, loadPluginCatalog()?.plugins)) {
+    diagnostics.push(
+      new vscode.Diagnostic(
+        new vscode.Range(issue.line, issue.startCol, issue.line, issue.endCol),
+        issue.message,
+        vscode.DiagnosticSeverity.Warning,
+      ),
+    )
+  }
+```
+
+The catalog mechanism is left to [PH-3. The Plugin Catalog and Replacement](/en/plugin-hosting/catalog).
+
 ---
 
 ## Flow Diagram
 
 ```mermaid
 flowchart TD
-    A["Cmd+Enter"] --> B["runSelection()"]
+    A["Cmd+Enter / MCP run_selection"] --> B["runSelection()"]
     B --> C{language is orbitscore?}
     C -->|No| D["error notification, return"]
     C -->|Yes| E{engine running?}
@@ -474,34 +687,51 @@ flowchart TD
     K --> M
     L --> M
 
-    M --> N{global block?}
-    N -->|Yes| O["inject setDocumentDirectory"]
-    N -->|No| P["use as codeToSend"]
-    O --> P
+    M --> W["writeCodeToEngine()\n//#documentDirectory + setDocumentDirectory injection"]
+    W -->|"stdin unreachable"| WX["return (no flash)"]
+    W -->|"sent"| RV["editor.revealRange()"]
+    RV --> R["flashLines()"]
 
-    P --> Q["engineProcess.stdin.write(codeToSend + 'newline')"]
-    P --> R["flashLines()"]
-
-    R --> S["createTextEditorDecorationType"]
-    S --> T["editor.setDecorations(range)"]
+    R --> S["createTextEditorDecorationType\n(isWholeLine: true)"]
+    S --> T["editor.setDecorations(executionRange)"]
     T --> U["setTimeout(flashDuration)"]
     U --> V["decoration.dispose()"]
-    V --> W{flashIndex < flashCount-1?}
-    W -->|Yes| X["setTimeout(100)\n→ createFlash(index+1)"]
-    X --> S
-    W -->|No| Y["done"]
+    V --> X{flashIndex < flashCount-1?}
+    X -->|Yes| Y["setTimeout(100)\n→ createFlash(index+1)"]
+    Y --> S
+    X -->|No| Z["done"]
+
+    W -.->|"engine stdout: [STEP] seq argPath atEpochMs"| PH["handleStepLine()\n→ wait until atEpochMs, then move the playhead"]
 ```
+
+---
+
+## Drift as of 2026-09
+
+The main changes since the first draft on 2026-05-05 (0a4b598).
+
+| Change | Issue | Source |
+|---|---|---|
+| Carve the send part out into `writeCodeToEngine()`, shared with MCP `evaluate_orbitscore` | #388 | `docs/development/WORK_LOG.md` §6.188 (2026-07-07), `extension.ts:3000-3032` |
+| Always flash whole-line, `revealRange` before flashing | #388 | §6.193 (2026-07-07), `extension.ts:2842-2857` / `2876-2880` |
+| Live playhead via `[STEP]` lines (per-seq colors, nested argPath) | #390 | §6.194-6.197 (2026-07-07), `playhead.ts`, `extension.ts:150-284` |
+| Run diagnostics on open / close / activation too | #384 | §6.187 (2026-07-07), `extension.ts:414-443` |
+| The `//#documentDirectory` meta line (base directory for import) | #456 | §6.266 (2026-07-17), `extension.ts:3009-3013` |
+| `linkAudio` added to `GLOBAL_ONCE_METHODS`, LinkAudio diagnostics 6-8 | (LinkAudio #209 family) | `diagnostics-analysis.ts:44-58` / `:194-391` |
+| No flash when sending fails | — | the comment at `extension.ts:2873-2875` |
+| Correlating evaluation results via `//#evalMark` (MCP only) | #614 | `eval-mark-bridge.ts:1-23`, `extension.ts:3048-3077` / `:1501-1509` |
+| Unknown plugin name diagnostic (Warning) | #638 | §6.412 (2026-08-29), `extension.ts:4095-4112` |
 
 ---
 
 ## Related Terms
 
 - [subject-based block evaluation](/en/glossary#subject-based-block-evaluation) — the operating mode of Path 2 in `runSelection()`. Collects related lines from the entire file based on the cursor line's subject
-- [flashLines()](/en/glossary#flashlines) — the visual feedback function that flashes the executed line range in the editor
-- [DiagnosticCollection](/en/glossary#diagnosticcollection) — the diagnostic collection that `updateDiagnostics()` writes to. Updated on every keystroke
+- [flashLines()](/en/glossary#flashlines) — the visual feedback function that flashes the executed line range in the editor (always whole-line)
+- [DiagnosticCollection](/en/glossary#diagnosticcollection) — the diagnostic collection that `updateDiagnostics()` writes to. Updated on open / change / close
 - [DiagnosticTag.Deprecated](/en/glossary#diagnostictagdeprecated) — the tag attached when the `sequence ` keyword is detected. Displayed in strikethrough style
 - [Extension Host](/en/glossary#extension-host) — the process where `runSelection()` and `flashLines()` run. The stdin send to the engine also happens here
-- [setDocumentDirectory](/en/glossary#setdocumentdirectory) — the relative-path resolution command auto-injected on global block evaluation
+- [setDocumentDirectory](/en/glossary#setdocumentdirectory) — the relative-path resolution command auto-injected on global block evaluation. Doubled with the `//#documentDirectory` meta line
 - [language ID (orbitscore)](/en/glossary#language-id-orbitscore) — the guard condition `runSelection()` checks first. Does not run on anything other than `.orbs` files
 - [DSL (Domain-Specific Language)](/en/glossary#dsl) — the text sent to the engine's stdin. In the form `codeToSend + '\n'`
 
@@ -511,21 +741,32 @@ flowchart TD
 
 ## Next Exploration Candidates
 
-- Implementation details of `getLineSubject()` — what regular expressions and rules determine the line's subject
-- `setupStdoutHandler()` — analysis of responses returned from the engine and display in the Output Channel
+- The degradation of `findPlayArgRangeForPath()` to "the deepest resolvable ancestor" — what lights up in each case of stacks `[ ... ]`, group runs, and legato `{ ... }`
+- Engine-side `[STEP]` generation (`rust-engine-player.ts`) and argPath tagging — the relationship between lookahead and `atEpochMs` (`docs/development/WORK_LOG.md` §6.194 / §6.196)
 - `configureFlash` command — a mechanism that interactively sets flashCount / flashDuration / flashColor via a Quick Pick UI
-- Candidates for improving diagnostic accuracy — parenthesis matching that follows entire multi-line statements (currently single-line only)
-- Enumeration of deprecated syntax other than `sequence ` — exhaustive survey of v1 DSL remnants
+- Candidates for improving diagnostic accuracy — parenthesis matching that follows entire multi-line statements (single-line only)
+- The precompiled per-sequence regexes in `analyzeLinkAudioMissingOutput` — the design that avoids recompiling on every keystroke, and the word boundary that keeps `kicker.output()` from matching `kick`
+- The REPL-side `//#evalMark` handling (`packages/engine/src/cli/repl-mode.ts`) — how diagnostics are accumulated and returned, and the relationship to the #608 stall reporter
 
 ---
 
 ## Sources
 
-- `packages/vscode-extension/src/extension.ts:935-1109` — entire `runSelection()`: guards, subject-based collection, injection, sending, flash
-- `packages/vscode-extension/src/extension.ts:953-955` — Path 1: when there is a selection
-- `packages/vscode-extension/src/extension.ts:957-1004` — Path 2: subject-based block evaluation
-- `packages/vscode-extension/src/extension.ts:1006-1028` — Path 3: standalone command
-- `packages/vscode-extension/src/extension.ts:1033-1083` — `flashLines()`: flash feedback implementation
-- `packages/vscode-extension/src/extension.ts:1085-1100` — `setDocumentDirectory` auto-injection
-- `packages/vscode-extension/src/extension.ts:1107` — `engineProcess.stdin?.write(codeToSend + '\n')`: send
-- `packages/vscode-extension/src/extension.ts:1180-1257` — `updateDiagnostics()`: parenthesis, tempo, deprecated detection
+- `packages/vscode-extension/src/extension.ts:2701-2714` — `getLineSubject()`: the two patterns `var <name> =` and `<name>.`
+- `packages/vscode-extension/src/extension.ts:2716-2880` — entire `runSelection()`: guards, subject-based collection, `flashLines`, sending, `revealRange`
+- `packages/vscode-extension/src/extension.ts:2734-2736` — Path 1: when there is a selection
+- `packages/vscode-extension/src/extension.ts:2737-2786` — Path 2: subject-based block evaluation
+- `packages/vscode-extension/src/extension.ts:2786-2809` — Path 3: standalone command
+- `packages/vscode-extension/src/extension.ts:2814-2871` — `flashLines()`: flash feedback implementation (whole-line)
+- `packages/vscode-extension/src/extension.ts:3000-3032` — `writeCodeToEngine()`: the `//#documentDirectory` meta line and `setDocumentDirectory` injection
+- `packages/vscode-extension/src/extension.ts:3040-3077` — `evaluateForAgent()`: MCP evaluate and `//#evalMark`
+- `packages/vscode-extension/src/extension.ts:1501-1509` — the independent `{"evalMark"` branch on stdout
+- `packages/vscode-extension/src/extension.ts:150-284` — playhead decoration management and `handleStepLine()`
+- `packages/vscode-extension/src/extension.ts:3965-4115` — `updateDiagnostics()`: 3 per-line + 6 cross-line
+- `packages/vscode-extension/src/playhead.ts:39-54` — the `[STEP]` line grammar and `parseStepLine()`
+- `packages/vscode-extension/src/playhead.ts:483-534` — `findPlayArgRanges()` / `findPlayArgRangeForPath()`
+- `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
+- `packages/vscode-extension/src/diagnostics-analysis.ts:108-391` — the 5 cross-line analysis functions
+- `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — the design rationale of `//#evalMark`
+- `docs/development/WORK_LOG.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266, §6.412 — sources of the drift table
+- [Issue #168 / PR #169](https://github.com/signalcompose/orbitscore/pull/169) — background of the audioPath ordering diagnostic

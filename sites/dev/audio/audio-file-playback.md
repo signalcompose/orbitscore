@@ -1,16 +1,36 @@
 ---
 title: "III-2. オーディオファイル再生"
 chapter-id: "III-2"
-verified-against: 0a4b598
-verified-at: "2026-05-05"
+verified-against: 69dc968
+verified-at: "2026-09-01"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-05-05 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+
+::: warning 2026-09 時点の位置づけ
+本章の `BufferManager` / `orbitPlayBuf` / `EventScheduler`（`packages/engine/src/audio/supercollider/`）は SuperCollider 経路のコードで、2026-07-03 の cutover #108（`docs/development/WORK_LOG.md` §6.179）以降は **既定ではなく `ORBITSCORE_ENGINE=sc` で opt-out したときだけ**使われます。既定の Rust daemon 経路ではファイルのデコードとスライス再生を daemon 側が担います（[RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照）。本章の引用は 69dc968 時点の実コードと一致しますが、歴史的読解として読んでください。
+
+```typescript
+// packages/engine/src/audio/create-audio-engine.ts:17-22
+export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
+  const raw = env[ENGINE_ENV_VAR]
+  if (resolveEngineKind(raw) === 'supercollider') {
+    console.log(`🎛️ [engine] using SuperCollider backend (opt-out via ORBITSCORE_ENGINE=${raw})`)
+    return new SuperColliderPlayer()
+  }
+```
+
+```typescript
+// packages/engine/src/audio/engine-backend.ts:52-53
+/** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
+export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
+```
+:::
 
 # III-2. オーディオファイル再生
 
-OrbitScore が音声ファイルを再生するとき、「ファイルをそのまま SuperCollider に渡す」ことはできません。scsynth は再生前にファイルを自分のバッファ空間に読み込む必要があります。本章では **BufferManager によるキャッシュ管理**、**soxi を使った尺取得**、**`/b_allocRead` での読み込み**、そして **`orbitPlayBuf` SynthDef のスライス再生ロジック** を順に見ていきます。
+SC 経路で OrbitScore が音声ファイルを再生するとき、「ファイルをそのまま SuperCollider に渡す」ことはできません。scsynth は再生前にファイルを自分のバッファ空間に読み込む必要があります。本章では **BufferManager によるキャッシュ管理**、**soxi を使った尺取得**、**`/b_allocRead` での読み込み**、そして **`orbitPlayBuf` SynthDef のスライス再生ロジック** を順に見ていきます。
 
 ## バッファとは何か
 
@@ -21,7 +41,7 @@ scsynth は内部にバッファ空間を持っています。バッファは整
 `BufferManager` はシンプルな設計です。フィールドを見てみましょう。
 
 ```typescript
-// buffer-manager.ts:11-15
+// packages/engine/src/audio/supercollider/buffer-manager.ts:11-14
 export class BufferManager {
   private bufferCache: Map<string, BufferInfo> = new Map()
   private bufferDurations: Map<number, number> = new Map()
@@ -37,7 +57,7 @@ export class BufferManager {
 `BufferInfo` 型は次のとおりです。
 
 ```typescript
-// types.ts:5-8
+// packages/engine/src/audio/supercollider/types.ts:5-8
 export interface BufferInfo {
   bufnum: number
   duration: number
@@ -49,8 +69,8 @@ export interface BufferInfo {
 `loadBuffer()` は最初にキャッシュを確認します。
 
 ```typescript
-// buffer-manager.ts:21-46
-async loadBuffer(filepath: string): Promise<BufferInfo> {
+// packages/engine/src/audio/supercollider/buffer-manager.ts:21-46
+  async loadBuffer(filepath: string): Promise<BufferInfo> {
     if (this.bufferCache.has(filepath)) {
       return this.bufferCache.get(filepath)!
     }
@@ -84,7 +104,7 @@ async loadBuffer(filepath: string): Promise<BufferInfo> {
 
 ### フォーマット対応
 
-OrbitScore が対応する音声フォーマットは、scsynth がバッファ読み込みに使う libsndfile に依存します。`.vsix` に同梱される `libsndfile.dylib` のサポート範囲が事実上の対応フォーマットになります。
+SC 経路で対応する音声フォーマットは、scsynth がバッファ読み込みに使う libsndfile に依存します。`.vsix` に同梱される `libsndfile.dylib` のサポート範囲が事実上の対応フォーマットになります。
 
 > NOTE: unverified — WAV / AIFF については libsndfile の標準サポートで確認できますが、MP3 / MP4 は libsndfile のビルドオプションと version に依存します。同梱 `libsndfile.dylib` (約 4.9 MB) の具体的な version と MP3 サポート有無は別途確認が必要です。
 
@@ -93,8 +113,8 @@ OrbitScore が対応する音声フォーマットは、scsynth がバッファ�
 尺取得は SuperCollider を介さず、`soxi` コマンド (sox ツールチェインの一部) を直接呼びます。
 
 ```typescript
-// buffer-manager.ts:52-74
-private getAudioFileDuration(filepath: string): number {
+// packages/engine/src/audio/supercollider/buffer-manager.ts:52-74
+  private getAudioFileDuration(filepath: string): number {
     try {
       // Use execFileSync with separate arguments to prevent command injection
       // Suppress soxi warnings by redirecting stderr to /dev/null
@@ -152,7 +172,7 @@ sequenceDiagram
 scsynth でバッファを再生する音声処理の定義が `orbitPlayBuf` SynthDef です。`setup.scd` の sclang コードを読むと、その構造が分かります。
 
 ```supercollider
-// packages/engine/supercollider/setup.scd:16-58 (writeDefFile 行を省略)
+// packages/engine/supercollider/setup.scd:22-64 (writeDefFile 行を省略)
 SynthDef(\orbitPlayBuf, {
     arg out = 0, bufnum = 0, rate = 1, amp = 0.5, pan = 0, 
         startPos = 0,      // 開始位置（秒）
@@ -228,8 +248,8 @@ $$\text{fadeOut} = \min(0.008, \text{actualDuration} \times 0.04)$$
 ### スライス位置の計算
 
 ```typescript
-// event-scheduler.ts:53-71
-private calculateSlicePosition(
+// packages/engine/src/audio/supercollider/event-scheduler.ts:263-281
+  private calculateSlicePosition(
     filepath: string,
     sliceIndex: number,
     totalSlices: number,
@@ -255,8 +275,8 @@ private calculateSlicePosition(
 ### 再生レートの計算
 
 ```typescript
-// event-scheduler.ts:77-86
-private calculatePlaybackRate(
+// packages/engine/src/audio/supercollider/event-scheduler.ts:288-296
+  private calculatePlaybackRate(
     sliceDurationSec: number,
     eventDurationMs: number | undefined,
   ): number {
@@ -276,8 +296,8 @@ $$\text{rate} = \frac{\text{sliceDuration(ms)}}{\text{eventDuration(ms)}}$$
 ### scheduleSliceEvent でのパラメータ組み立て
 
 ```typescript
-// event-scheduler.ts:107-138
-scheduleSliceEvent(
+// packages/engine/src/audio/supercollider/event-scheduler.ts:317-350
+  scheduleSliceEvent(
     filepath: string,
     startTimeMs: number,
     sliceIndex: number,
@@ -286,6 +306,7 @@ scheduleSliceEvent(
     gainDb = 0,
     pan = 0,
     sequenceName = '',
+    outputChannel?: string,
   ): void {
     const { sliceDuration, startPos } = this.calculateSlicePosition(
       filepath,
@@ -303,6 +324,7 @@ scheduleSliceEvent(
         startPos,
         duration: sliceDuration,
         rate,
+        outputChannel,
       },
       sequenceName,
     }
@@ -311,7 +333,7 @@ scheduleSliceEvent(
   }
 ```
 
-計算された `startPos`, `duration`, `rate` が `ScheduledPlay.options` に格納され、タイムライン上でディスパッチされると `sendPlaybackMessage()` 経由で `/s_new` の引数として scsynth に届きます。
+計算された `startPos`, `duration`, `rate` が `ScheduledPlay.options` に格納され、タイムライン上でディスパッチされると `sendPlaybackMessage()` 経由で `/s_new` の引数として scsynth に届きます。`outputChannel` は LinkAudio (#209) で `seq.output()` が指定されたときだけ埋まる追加フィールドで、hardware 経路では `undefined` のままです。
 
 ### スライス再生の全体フロー
 
@@ -353,11 +375,12 @@ sequenceDiagram
 
 ## 関連 ADR
 
-- [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) — Buffer + SynthDef + `/s_new` による再生アーキテクチャの採用経緯
+- [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) — Buffer + SynthDef + `/s_new` による再生アーキテクチャの採用経緯と、cutover #108 後の位置づけ
 - [ADR-003 scsynth bundle strict mode](/decisions/adr-003-scsynth-bundle) — `libsndfile.dylib` を bundle に含める判断 (フォーマット対応の根拠)
 
 ## 次の深掘り候補
 
+- **Rust daemon 経路のスライス再生**: `calculateSlicePosition()` / `calculatePlaybackRate()` と同じ数式が daemon 側でどう表現されているか。slice varispeed parity (`docs/development/WORK_LOG.md` §6.159) を起点に読む
 - **フォーマット対応の確認**: 同梱 `libsndfile.dylib` の version と実際にデコードできるフォーマット (特に MP3/MP4) の確認
 - **soxi の依存管理**: soxi が存在しない環境での fallback 戦略。duration = 0.3s のデフォルト値で動くが、chop の精度に影響する
 - **バッファキャッシュの lifetime**: キャッシュはプロセス終了まで保持され、`clearCache()` や `removeBuffer()` が呼ばれないと解放されない。セッション長によるメモリ増大の影響
@@ -366,15 +389,18 @@ sequenceDiagram
 
 ## Sources
 
+- `packages/engine/src/audio/create-audio-engine.ts:17-22` — SC 経路が opt-out になる分岐
+- `packages/engine/src/audio/engine-backend.ts:52-53` — `ENGINE_ENV_VAR` (`ORBITSCORE_ENGINE`) の定義
 - `packages/engine/src/audio/supercollider/buffer-manager.ts:11-46` — `BufferManager` クラス定義、`loadBuffer()` キャッシュロジックと処理順序
 - `packages/engine/src/audio/supercollider/buffer-manager.ts:52-74` — `getAudioFileDuration()`: soxi 呼び出しとフォールバック値
 - `packages/engine/src/audio/supercollider/buffer-manager.ts:79-86` — `getAudioDuration()`: キャッシュからの尺取得
 - `packages/engine/src/audio/supercollider/types.ts:5-8` — `BufferInfo` 型定義
-- `packages/engine/src/audio/supercollider/types.ts:10-21` — `ScheduledPlay` 型: options フィールドの gainDb / pan / startPos / duration / rate
-- `packages/engine/src/audio/supercollider/event-scheduler.ts:53-71` — `calculateSlicePosition()`: 1-based → 0-based 変換と startPos 計算
-- `packages/engine/src/audio/supercollider/event-scheduler.ts:77-86` — `calculatePlaybackRate()`: スライスをイベント尺に収めるレート計算
-- `packages/engine/src/audio/supercollider/event-scheduler.ts:107-138` — `scheduleSliceEvent()`: スライスパラメータ組み立てとキューへの追加
-- `packages/engine/src/audio/supercollider/osc-client.ts:65-74` — `sendBufferLoad()`: `/b_allocRead` と callAndResponse
-- `packages/engine/supercollider/setup.scd:16-58` — `orbitPlayBuf` SynthDef 全体: PlayBuf, BufRateScale, startPos 単位変換, エンベロープ, doneAction (writeDefFile 行を省略)
-- `packages/vscode-extension/BUILD_GUIDE.md:71-82` — bundle に含まれる `libsndfile.dylib` のサイズと構成
+- `packages/engine/src/audio/supercollider/types.ts:10-25` — `ScheduledPlay` 型: options フィールドの gainDb / pan / startPos / duration / rate / outputChannel
+- `packages/engine/src/audio/supercollider/event-scheduler.ts:263-281` — `calculateSlicePosition()`: 1-based → 0-based 変換と startPos 計算
+- `packages/engine/src/audio/supercollider/event-scheduler.ts:288-296` — `calculatePlaybackRate()`: スライスをイベント尺に収めるレート計算
+- `packages/engine/src/audio/supercollider/event-scheduler.ts:317-350` — `scheduleSliceEvent()`: スライスパラメータ組み立てとキューへの追加
+- `packages/engine/src/audio/supercollider/osc-client.ts:79-88` — `sendBufferLoad()`: `/b_allocRead` と callAndResponse
+- `packages/engine/supercollider/setup.scd:22-65` — `orbitPlayBuf` SynthDef 全体: PlayBuf, BufRateScale, startPos 単位変換, エンベロープ, doneAction
+- `packages/vscode-extension/BUILD_GUIDE.md:83-97` — bundle に含まれる `libsndfile.dylib` のサイズと構成
+- `docs/development/WORK_LOG.md` §6.179 — cutover #108 (2026-07-03): SC 経路が opt-out になった記録
 - [SuperCollider Server Command Reference](https://doc.sccode.org/Reference/Server-Command-Reference.html) §Buffer Commands — `/b_allocRead` の引数定義

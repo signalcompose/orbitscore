@@ -1,12 +1,32 @@
 ---
 title: "ADR-003 scsynth bundle strict mode"
 chapter-id: "adr-003"
-verified-against: 0a4b598
-verified-at: "2026-05-05"
+verified-against: 69dc968
+verified-at: "2026-09-01"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-05-05 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+
+::: warning 2026-09 時点の位置づけ
+scsynth の bundle と strict resolver は SuperCollider 経路のものです。2026-07-03 の cutover #108（`docs/development/WORK_LOG.md` §6.179）以降、この経路は **`ORBITSCORE_ENGINE=sc`（VS Code では `orbitscore.engine: "sc"`）で opt-out したときだけ**使われ、既定の Rust 経路では scsynth は解決すらされません。ただし本 ADR が決めた「fail loud の resolver」というパターン自体は `orbit-audio-daemon` の解決にそのまま流用されています（末尾の「Consequences revisited (2026-09)」）。既定経路は [RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照してください。
+
+```typescript
+// packages/engine/src/audio/create-audio-engine.ts:17-22
+export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
+  const raw = env[ENGINE_ENV_VAR]
+  if (resolveEngineKind(raw) === 'supercollider') {
+    console.log(`🎛️ [engine] using SuperCollider backend (opt-out via ORBITSCORE_ENGINE=${raw})`)
+    return new SuperColliderPlayer()
+  }
+```
+
+```typescript
+// packages/engine/src/audio/engine-backend.ts:52-53
+/** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
+export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
+```
+:::
 
 # ADR-003 scsynth bundle strict mode
 
@@ -24,6 +44,7 @@ OrbitScore は v1.0 から scsynth (SuperCollider のオーディオサーバー
 6. [署名 / Notarize 戦略](#署名--notarize-戦略)
 7. [VS Code 拡張側での使用](#vs-code-拡張側での使用)
 8. [dev 環境への影響](#dev-環境への影響)
+9. [Consequences revisited (2026-09)](#consequences-revisited-2026-09)
 
 ---
 
@@ -213,7 +234,7 @@ packages/vscode-extension/engine/scsynth/
 └── Contents/
     ├── Resources/
     │   ├── scsynth           ← バイナリ本体
-    │   └── plugins/          ← 26 .scx ファイル
+    │   └── plugins/          ← 26 .scx ファイル (+ OrbitLinkAudio.scx が build 済みなら同梱)
     └── Frameworks/
         └── libsndfile.dylib  ← 外部依存
 ```
@@ -238,21 +259,51 @@ SC プロジェクトが既に Apple Developer ID + hardened runtime + notarize 
 - 追加の Apple Developer ID 取得不要
 - GitHub Actions の secrets は `VSCE_PAT` のみ (Apple 関連 secret ゼロ)
 
-という状況です。
+という状況でした (daemon についての後日談は「Consequences revisited」を参照)。
 
 ---
 
 ## VS Code 拡張側での使用
 
-[IV-1](/editor/vscode-architecture) で扱ったように、VS Code 拡張は `resolveScsynthForUI()` で resolver を呼び出します。resolution の結果は 2 本の status bar インジケータの表示に使われます:
+[III-3](/audio/scsynth-bundle) と [IV-1](/editor/vscode-architecture) で扱ったように、VS Code 拡張は `resolveScsynthForUI()` で resolver を呼び出します。ただし 69dc968 時点では、この呼び出しは `orbitscore.engine` が `sc` のときだけ行われます。resolution の結果は status bar インジケータ `bundleStatusItem` の表示に使われます:
 
-| `resolution.source` | bundleStatusItem 表示 |
-|---|---|
-| `'bundle'` | `$(check) scsynth (bundled)` |
-| `'env'` または `'explicit'` | `$(gear) scsynth (custom)` |
-| `null` (解決失敗) | `$(error) scsynth: not found` (赤背景) |
+| engine kind | `resolution.source` | bundleStatusItem 表示 |
+|---|---|---|
+| `sc` | `'bundle'` | `$(check) scsynth (bundled)` |
+| `sc` | `'env'` または `'explicit'` | `$(gear) scsynth (custom)` |
+| `sc` | `null` (解決失敗) | `$(error) scsynth: not found` (赤背景) |
+| `rust` | (scsynth は解決しない) | daemon 解決可なら非表示、不可なら `$(error) daemon: not found` |
 
-engine を起動する `startEngine()` でも、起動前に resolver を呼んで scsynth がないなら **spawn 自体を行わない** (事前チェック) という設計になっています。これにより「engine 起動失敗 + resolver エラー」という二重通知を防いでいます (PR #155 のコードレビューコメントより)。
+```typescript
+// packages/vscode-extension/src/extension.ts:742-766
+  bundleStatusItem.show()
+  const resolution = resolveScsynthForUI()
+  if (!resolution) {
+    bundleStatusItem.text = '$(error) scsynth: not found'
+    bundleStatusItem.tooltip =
+      'Bundled scsynth not found. Reinstall the extension or set orbitscore.scsynthPath to a system scsynth.'
+    bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
+    return
+  }
+  bundleStatusItem.backgroundColor = undefined
+  switch (resolution.source) {
+    case 'bundle':
+      bundleStatusItem.text = '$(check) scsynth (bundled)'
+      bundleStatusItem.tooltip = `Using bundled scsynth\n${resolution.path}`
+      break
+    case 'env':
+    case 'explicit':
+      bundleStatusItem.text = '$(gear) scsynth (custom)'
+      bundleStatusItem.tooltip = `Using user-overridden scsynth\n${resolution.path}`
+      break
+    default:
+      bundleStatusItem.text = '$(question) scsynth: unknown source'
+      bundleStatusItem.tooltip = resolution.path
+  }
+}
+```
+
+engine を起動する `startEngine()` でも、`sc` kind では起動前に resolver を呼んで scsynth がないなら **spawn 自体を行わない** (事前チェック) という設計になっています。これにより「engine 起動失敗 + resolver エラー」という二重通知を防いでいます (PR #155 のコードレビューコメントより)。`rust` kind では同じ位置で daemon バイナリを事前チェックします (`extension.ts:2053-2088`)。
 
 ---
 
@@ -271,6 +322,37 @@ commit `1569110` の "Dev workflow への影響" セクション:
 1. **環境変数経由**: `.zshenv` 等に `export ORBIT_SCSYNTH_PATH=/Applications/SuperCollider.app/Contents/Resources/scsynth` を追加
 2. **bundle 抽出**: `npm run build:bundle` を先に実行して `engine/scsynth/` にバイナリを置く
 
+cutover #108 以降はこれに加えて、そもそも SC 経路を選ぶために `ORBITSCORE_ENGINE=sc` (VS Code なら `orbitscore.engine: "sc"`) が必要です。
+
+---
+
+## Consequences revisited (2026-09)
+
+ADR の形式にならって、決定後の帰結を記録します。
+
+### bundle は据え置き、経路は opt-out に
+
+2026-07-03 の cutover #108 (`docs/development/WORK_LOG.md` §6.179) で既定バックエンドが Rust に切り替わりましたが、scsynth の bundle そのものは残っています。#377 の engine-kind 分岐 (`docs/development/WORK_LOG.md` §6.186) は release.yml について「scsynth 関連ステップ (brew install / build:bundle / verify:bundle) は無改変で維持 (owner 暫定判断: scsynth 同梱は Phase 1 据え置き)」と記録しています。したがって `.vsix` は 69dc968 時点でも SC bundle と daemon バイナリの両方を同梱する構成です。
+
+### strict resolver のパターンは daemon に継承された
+
+本 ADR の中核だった「fail loud・silent fallback を持たない・候補は実行可能ファイルであること」は、`resolveDaemonBinaryPath()` にそのまま引き継がれています。#306 (`docs/development/WORK_LOG.md` §6.185) で `.vsix` 同梱 daemon を最後の候補として追加し、#366 のレビュー Round 2 (§6.186) で「`existsSync` のみで exec bit を見ていない = scsynth 側 `isExecutableFile` と非対称」という指摘を受けて、daemon 側も executable regular file を要求するよう揃えられました。候補の並びは `explicit → env (ORBIT_AUDIO_DAEMON_PATH) → monorepo-release → monorepo-debug → extension-bundle` です。
+
+```typescript
+// packages/engine/src/audio/rust-engine/daemon-client.ts:99-99
+  source: 'explicit' | 'env' | 'monorepo-release' | 'monorepo-debug' | 'extension-bundle'
+```
+
+### 署名の問いは daemon に移った
+
+本 ADR で「再署名不要」と結論したのは SuperCollider 本家の署名を保持できる scsynth の話でした。daemon は新規ビルドなので同じ結論は使えません。§6.185 は「daemon バイナリは Apple Developer ID 署名・notarize 未実施。ダウンロードされた `.vsix` では Gatekeeper に阻まれる可能性がある (未検証)」をフォローアップとして記録しています。
+
+> NOTE: unverified — daemon の署名 / notarize が 69dc968 時点で実施済みかどうかは、本章の範囲では確認していません (WORK_LOG §6.185 のフォローアップ記述を引いているだけです)。
+
+### UI 上の帰結
+
+`bundleStatusItem` は `rust` kind で daemon が解決できる限り非表示 (owner 判断 2026-07-17、`extension.ts:737-739` のコメント) になり、scsynth の状態表示は `sc` を選んだ人だけが見るものになりました。`forceKillScsynth` / `selectAudioDevice` も `package.json` の `commandPalette` で `config.orbitscore.engine == 'sc'` に gate されています。
+
 ---
 
 ## 関連用語
@@ -286,28 +368,35 @@ commit `1569110` の "Dev workflow への影響" セクション:
 
 ## 関連 ADR
 
-- [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) — scsynth を採用した理由。本 ADR の bundle 戦略はこの選択の帰結
+- [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) — scsynth を採用した理由。本 ADR の bundle 戦略はこの選択の帰結。cutover 後の位置づけも同 ADR の「Consequences revisited」に
 - [ADR-002 DSL v3 Pivot](/decisions/adr-002-dsl-v3-pivot) — scsynth に依存する Audio DSL が確定した意思決定
 
 ## 次の深掘り候補
 
-- `build:bundle` スクリプトの実装 — scsynth を SC.app から抽出・配置する処理の詳細
-- `isExecutableFile()` の実装 — `stat.mode & 0o111` による実行権限チェック
+- `build:bundle` スクリプト (`scripts/extract-scsynth-bundle.sh`) の実装 — scsynth を SC.app から抽出・配置する処理の詳細
+- `scripts/copy-daemon-bin.sh` — daemon 側の同梱スクリプト。`darwin-arm64` 限定の理由と release.yml での順序保証
 - Windows / Linux での bundle 戦略 — macOS 向け universal binary 以外のプラットフォーム対応
 - SC.app バージョン up 時の bundle 更新フロー — `SCSYNTH_BUNDLE_MANIFEST.md` の Update policy (Major/Minor bump のみ re-extract)
 - bundle 同梱の GPL-3.0 ライセンス対応 — `SCSYNTH_BUNDLE_MANIFEST.md` に「GPL-3.0 aggregation 性を強く保つ」と記録されている問題の詳細
+- daemon の署名 / notarize の実施状況 — §6.185 のフォローアップがその後どう扱われたか
 
 ---
 
 ## Sources
 
+- `packages/engine/src/audio/create-audio-engine.ts:17-22` — SC 経路が opt-out になる分岐
+- `packages/engine/src/audio/engine-backend.ts:52-53` — `ENGINE_ENV_VAR` (`ORBITSCORE_ENGINE`) の定義
 - `packages/engine/src/audio/supercollider/scsynth-resolver.ts:1-17` — ファイル冒頭コメント: strict mode の意図と優先順位の説明
 - `packages/engine/src/audio/supercollider/scsynth-resolver.ts:22-98` — `ScsynthNotFoundError`, `bundleCandidatePath()`, `resolveScsynthPath()` の実装
-- `packages/vscode-extension/src/extension.ts:113-129` — `resolveScsynthForUI()`: runtime require によるフロントエンド側解決
-- `packages/vscode-extension/src/extension.ts:138-163` — `updateBundleStatus()`: resolution.source による status bar 表示切り替え
-- `packages/vscode-extension/src/extension.ts:692-695` — `startEngine()` の事前チェック: scsynth 未解決時の early return
+- `packages/engine/src/audio/rust-engine/daemon-client.ts:99-99` / `:221-250` — daemon 側の source 種別と `resolveDaemonBinaryPath()`
+- `packages/vscode-extension/src/extension.ts:653-669` — `getConfiguredEngineKind()`: engine kind の正規化
+- `packages/vscode-extension/src/extension.ts:676-692` — `resolveScsynthForUI()`: runtime require によるフロントエンド側解決
+- `packages/vscode-extension/src/extension.ts:725-766` — `updateBundleStatus()`: engine kind 分岐と resolution.source による status bar 表示切り替え
+- `packages/vscode-extension/src/extension.ts:2053-2088` — `startEngine()` の事前チェック: `sc` は scsynth、`rust` は daemon
+- `packages/vscode-extension/package.json` — `orbitscore.engine` 設定 (既定 `"rust"`) と `commandPalette` の `when` 句
 - commit `1569110` — SC.app/Spotlight fallback 削除の詳細 (動機・変更内容・dev 影響)
 - PR [#155](https://github.com/signalcompose/orbitscore/pull/155) — scsynth bundle strict mode 採用
+- `docs/development/WORK_LOG.md` §6.179 / §6.185 / §6.186 — cutover #108、daemon の `.vsix` 同梱 (#306)、engine-kind 分岐と bundle 手順の据え置き (#377)
 - `docs/research/SCSYNTH_BUNDLE_MANIFEST.md` — Issue #134: bundle 最小セット確定 (26 plugins + libsndfile)
 - `docs/research/CODESIGN_PIPELINE.md` — Issue #135: 署名 Notarize 調査 (再署名不要の結論)
 - `docs/research/SCSYNTH_STANDALONE.md` — Issue #133: SC.app 外でのスタンドアロン起動検証

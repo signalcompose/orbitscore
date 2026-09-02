@@ -37,3 +37,9 @@ jobs:
     # 確かめておかないと「走らせた瞬間に落ちる」状態に気づけない。
     - name: Typecheck gated E2E
       run: npm run typecheck:e2e
+
+    # dev 学習サイトの `// FILE:START-END` 引用を実ファイルと突合する（#673 で導入）。
+    # 引用の腐りは build では検出できない（リンク切れではなく、内容のずれだから）。
+    # 検証器を足しただけでは次の行ずれを誰も知らされないので、ここで回す。
+    - name: Check doc citations
+      run: npm run docs:check

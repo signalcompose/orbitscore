@@ -14,12 +14,25 @@ LLM (Claude Code 等) を主要な実装担当として運用している現状�
 
 ## 構成
 
-- **Part 0. Orientation** — OrbitScore 全体像
+- **Part 0. Orientation** — OrbitScore 全体像（extension / engine / Rust daemon / plugin children の 4 層）
 - **Part I. DSL Pipeline** — text → AST → 評価
-- **Part II. Scheduling** — 時間表現と polymeter
-- **Part III. Audio Rendering** — SuperCollider との連携
-- **Part IV. Editor Integration** — VS Code 拡張
-- **Part V. ADR / Glossary** — 設計判断と用語集
+- **Part II. Scheduling** — 時間表現と polymeter、event queue、transport
+- **Part III. Rust Engine** — 既定バックエンド `orbit-audio-daemon`（cutover #108 以降）、OOP children、insert bus、capture seam
+- **Part IV. Signal Chain / Mixer** — ラック（SC.10）、sum / aux / send / output、master gain
+- **Part V. Plugin Hosting** — CLAP / VST3 hosting、プラグイン UI、カタログと差し替え
+- **Part VI. Editor Integration** — VS Code 拡張、インライン実行、MCP サーバと実機 gated E2E
+- **Part VII. SuperCollider 経路** — `ORBITSCORE_ENGINE=sc` で opt-out できる旧既定経路の歴史的読解
+- **Part VIII. ADR / Glossary** — 設計判断と用語集
+
+2026-09-01 に全章を commit `69dc968` に対して再検証しました。SuperCollider 経路の章は消さずに残し、
+各章冒頭の warning で「opt-out 経路である」ことを明記しています（drift は document するが解消しない、
+という本サイトの artifact framing）。
+
+### 引用の機械検証
+
+本文中の `// <file>:<start>-<end>` 付きコードブロックは、`sites/dev/scripts/check-citations.mjs` で
+code と文字単位で突き合わせています（`npm run docs:check`）。乖離があれば red になるので、
+章の信頼度は frontmatter の `verified-against` と、このチェックが緑かどうかで判断できます。
 
 各章 frontmatter の `status` で執筆段階が分かる:
 
@@ -32,7 +45,7 @@ LLM (Claude Code 等) を主要な実装担当として運用している現状�
 
 ## 用語
 
-DSL / scsynth / time domain 等の用語は [Glossary](/glossary) に集約。
+DSL / daemon / plugin hosting / time domain 等の用語は [Glossary](/glossary) に集約。
 
 ## ローカル / オフラインで読む
 

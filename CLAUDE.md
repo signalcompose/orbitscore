@@ -160,26 +160,29 @@ git branch --show-current
 
 ### Project Overview
 **OrbitScore** - Audio-based live coding DSL for modern music production
-- DSL Version: v3.0 (SuperCollider Audio Engine)
-- Test Status: 1333 passed, 29 skipped (1362 total)
+- Product: OrbitScore 2.0.0 (`ENGINE_VERSION 2.0.0` / `DSL_VERSION 1.1`、拡張 2.1.0)
+- Audio Backend: Rust `orbit-audio-daemon`（既定・cutover #108）。SuperCollider は `ORBITSCORE_ENGINE=sc` で opt-out
+- Test Status: `npm test` で 2100 件超（2026-09-02 実測・macOS: 2165 passed / 68 skipped / 2233 total。skip は macOS 実機・daemon 依存）
 - Branch Strategy: GitHub Flow (`main` + feature branches)
 
 ### Development Commands
 ```bash
 npm run build            # Build all packages (incremental)
 npm run build:clean      # Clean build (rebuild all files)
-npm test                 # Run all tests (1362 tests, 29 skipped)
+npm test                 # Run all unit / integration tests (vitest)
+npm run test:e2e:gated   # 実機 gated E2E（OrbitStudio.app + MCP、daemon を自動ビルド）
 npm run dev:engine       # Run engine in development mode
 npm run lint             # ESLint + Prettier
+npm run docs:check       # dev 学習サイトの引用 (// file:start-end) を code と突合
 ```
 
 **Note**: Use `npm run build:clean` if you encounter TypeScript incremental build issues (e.g., `cli-audio.js` not generated).
 
 ### Technology Stack Summary
-- **Frontend/DSL**: TypeScript, VS Code Extension API
-- **Audio Backend**: SuperCollider (scsynth), supercolliderjs
-- **Testing**: Vitest (Unit + Integration tests)
-- **Key Features**: Audio File Playback (WAV/AIFF/MP3/MP4), Time-stretching, Polymeter
+- **Frontend/DSL**: TypeScript, VS Code Extension API（拡張内に MCP サーバも同居）
+- **Audio Backend**: Rust `orbit-audio-daemon`（cpal / WebSocket IPC）+ out-of-process CLAP / VST3 children。SuperCollider (scsynth) は opt-out 経路
+- **Testing**: Vitest (Unit + Integration) + 実機 gated E2E（MCP 駆動・capture WAV アサーション） + cargo test
+- **Key Features**: Audio File Playback (WAV/AIFF/MP3/MP4), Polymeter, Pitch DSL / MIDI, Plugin Hosting (CLAP/VST3・UI・ラック), Mixer (sum/aux/send), LinkAudio
 
 **Details**: See [`docs/INDEX.md`](docs/INDEX.md)
 
@@ -407,8 +410,10 @@ WAV のアサーションで判定できる。タイミング条件も **DSL か
 - **実装前に書いて red を確認する**（TDD をそのまま E2E に適用）。これで「アサーションが
   信号を見ていない」ハーネス不備が最初に落ちる — #528 の無音ハーネス事故はこれで防げた
 - ここでの E2E は**機能テストそのもの**であって、機能テストへの追加ではない
-- ❌ **`evaluate_orbitscore` の `ok` に assert しても何も証明しない**（エンジン側のエラーは
-  `get_log` にしか出ない）
+- ⚠️ **`ok` だけで満足しない。** #614 以降 `evaluate_orbitscore` は engine の評価結果まで待ち、
+  診断があれば `ok: false` を返す（`packages/vscode-extension/src/mcp-server.ts:92-101`）。
+  **`ok` が保証するのは「評価完了までに診断が無かった」ことまで**で、評価後に非同期に起きる
+  失敗（プラグインの attach 失敗など）は依然 `get_log` にしか出ない
 - ERROR 件数は `get_log` の固定 500 行窓なので**厳密等価にしない**（`<=` を使う）
 
 ##### 3. 変異検証（🔴 **最後の手段**・owner 確定 2026-08-29 夕）
@@ -608,8 +613,10 @@ DSL 機能が実際に価値を出すのは「エディタで書く → 評価�
 - #528 がまさにこの怠りの帰結: `setDocumentDirectory` の配線が S2 マージ以降ずっと壊れていたのに、
   ユニットテストは全件緑・レビュー2周も通過し、E2E の音アサーションだけが唯一気づける位置に
   いた（そしてその E2E 自身がハーネス不備で無音になっており、警報が鳴らなかった）
-- ❌ **`evaluate_orbitscore` の `ok` に assert しても何も証明しない** — 「受理して書き込んだ」を
-  返すだけで、**エンジン側のエラーは `get_log` にしか出ない**。この罠が上表1件目の原因
+- ⚠️ **`ok` だけで判断しない。** 上表1件目が起きた当時、`ok` は「受理して書き込んだ」しか
+  意味していなかった。#614 でそこは直り、いまは診断があれば `ok: false` になる。だが
+  **評価後に非同期に起きる失敗は今も `get_log` にしか出ない**ので、`ok` は必要条件であって
+  十分条件ではない
 
 **弱いアサーションの典型**（いずれも本プロジェクトで実際に出荷された）:
 部分一致が偶然マッチし続ける／エラー文言の**説明部分でなく引数名**をアンカーにしている
@@ -656,8 +663,9 @@ gated テストまで対象になる。
 4. **その PR で追加/変更した DSL 機能を `mcp__orbitscore__evaluate_orbitscore` で実際に評価する**
 5. **`mcp__orbitscore__get_log` で ERROR が出ていないことを確認する**
 
-❌ **`evaluate_orbitscore` の `ok` だけで判断しない。** これは「受理して書き込んだ」を返すだけで、
-エンジン側のエラーは `get_log` にしか現れない。
+⚠️ **`evaluate_orbitscore` の `ok` だけで判断しない。** #614 以降 `ok: false` は評価時の診断を
+捉えるが、**評価が返ったあとに非同期に起きる失敗**（out-of-process プラグインの attach 失敗など）は
+`get_log` にしか現れない。手順 5 を省略しないこと。
 
 **理由（PR #523 で実証）**: 全 suite 1632 緑・`/simplify` 通過・`/code:pr-review-team` 2ラウンド
 （4レビュアー）通過の状態で、実機で動かしたら **S2 マージ以降エディタ評価が全滅していた**

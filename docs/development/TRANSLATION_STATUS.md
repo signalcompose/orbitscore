@@ -26,7 +26,7 @@ ja 元が更新されたら該当章を `outdated` に切り替え、再翻訳�
 
 ---
 
-## sites/dev/ (19 章)
+## sites/dev/ (29 章)
 
 | # | パス | Status | Last translated against (ja commit) | PR |
 |---|---|---|---|---|
@@ -49,6 +49,19 @@ ja 元が更新されたら該当章を `outdated` に切り替え、再翻訳�
 | ADR | `decisions/adr-002-dsl-v3-pivot.md` | done | 8ba937f | - |
 | ADR | `decisions/adr-003-scsynth-bundle.md` | done | 8ba937f | - |
 | - | `glossary.md` | done | 8ba937f | - |
+| RE-1 | `rust-engine/index.md` | done (同時執筆) | 3983828 → 69dc968 再検証 | #451 |
+| RE-2 | `rust-engine/oop-children.md` | done (同時執筆) | 3983828 → 69dc968 再検証 | #451 |
+| RE-3 | `rust-engine/insert-bus.md` | done (同時執筆) | 3983828 → 69dc968 再検証 | #451 |
+| RE-4 | `rust-engine/capture-verification.md` | done (同時執筆) | 3983828 → 69dc968 再検証 | #451 |
+| PH-1 | `plugin-hosting/index.md` | done (同時執筆) | 5b227da → 69dc968 再検証 | #451 |
+| PH-2 | `plugin-hosting/plugin-ui.md` | done (同時執筆) | 69dc968 | - |
+| PH-3 | `plugin-hosting/catalog.md` | done (同時執筆) | 69dc968 | - |
+| SC-1 | `signal-chain/index.md` | done (同時執筆) | 69dc968 | - |
+| SC-2 | `signal-chain/mixer-audio-line.md` | done (同時執筆) | 69dc968 | - |
+| IV-3 | `editor/mcp-and-gated-e2e.md` | done (同時執筆) | 69dc968 | - |
+
+2026-07-17 以降はバイリンガル必須（DEV_LEARNING_SITE.md §2）のため、新章は ja / en を同一ターンで執筆する。
+既存 19 章は 2026-09-01 に ja / en とも commit `69dc968` へ再検証済（引用は `npm run docs:check` で機械検証）。
 
 **残り**: 0 章
 
@@ -56,7 +69,7 @@ ja 元が更新されたら該当章を `outdated` に切り替え、再翻訳�
 
 ## 全体進捗
 
-- **完了**: 29 章 (user 10 + dev 19)
+- **完了**: 39 章 (user 10 + dev 29)
 - **未着手**: 0 章
 - **総章数**: 29 章
 

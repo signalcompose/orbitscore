@@ -1,16 +1,36 @@
 ---
 title: "III-2. Audio File Playback"
 chapter-id: "III-2"
-verified-against: 0a4b598
-verified-at: "2026-05-05"
+verified-against: 69dc968
+verified-at: "2026-09-01"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-05-05. The code is the truth; this page is merely a snapshot of understanding at that point in time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+
+::: warning Status as of 2026-09
+The `BufferManager` / `orbitPlayBuf` / `EventScheduler` in this chapter (`packages/engine/src/audio/supercollider/`) belong to the SuperCollider path, which since cutover #108 on 2026-07-03 (`docs/development/WORK_LOG.md` §6.179) is **not the default and is used only when you opt out with `ORBITSCORE_ENGINE=sc`**. On the default Rust daemon path, file decoding and slice playback are handled on the daemon side (see [RE-1. Daemon Architecture Overview](/en/rust-engine/)). The citations in this chapter match the real code at 69dc968, but read it as historical reading.
+
+```typescript
+// packages/engine/src/audio/create-audio-engine.ts:17-22
+export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
+  const raw = env[ENGINE_ENV_VAR]
+  if (resolveEngineKind(raw) === 'supercollider') {
+    console.log(`🎛️ [engine] using SuperCollider backend (opt-out via ORBITSCORE_ENGINE=${raw})`)
+    return new SuperColliderPlayer()
+  }
+```
+
+```typescript
+// packages/engine/src/audio/engine-backend.ts:52-53
+/** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
+export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
+```
+:::
 
 # III-2. Audio File Playback
 
-When OrbitScore plays an audio file, it cannot just "hand the file as-is to SuperCollider." scsynth needs to load the file into its own buffer space before playback. This chapter looks in order at **buffer cache management by BufferManager**, **duration retrieval using soxi**, **loading via `/b_allocRead`**, and **the slice playback logic of the `orbitPlayBuf` SynthDef**.
+When OrbitScore plays an audio file on the SC path, it cannot just "hand the file as-is to SuperCollider." scsynth needs to load the file into its own buffer space before playback. This chapter looks in order at **buffer cache management by BufferManager**, **duration retrieval using soxi**, **loading via `/b_allocRead`**, and **the slice playback logic of the `orbitPlayBuf` SynthDef**.
 
 ## What is a Buffer
 
@@ -21,7 +41,7 @@ scsynth has an internal buffer space. A buffer is identified by an integer `bufn
 `BufferManager` is a simple design. Let's look at its fields.
 
 ```typescript
-// buffer-manager.ts:11-15
+// packages/engine/src/audio/supercollider/buffer-manager.ts:11-14
 export class BufferManager {
   private bufferCache: Map<string, BufferInfo> = new Map()
   private bufferDurations: Map<number, number> = new Map()
@@ -37,7 +57,7 @@ There are three fields.
 The `BufferInfo` type is as follows.
 
 ```typescript
-// types.ts:5-8
+// packages/engine/src/audio/supercollider/types.ts:5-8
 export interface BufferInfo {
   bufnum: number
   duration: number
@@ -49,8 +69,8 @@ export interface BufferInfo {
 `loadBuffer()` first checks the cache.
 
 ```typescript
-// buffer-manager.ts:21-46
-async loadBuffer(filepath: string): Promise<BufferInfo> {
+// packages/engine/src/audio/supercollider/buffer-manager.ts:21-46
+  async loadBuffer(filepath: string): Promise<BufferInfo> {
     if (this.bufferCache.has(filepath)) {
       return this.bufferCache.get(filepath)!
     }
@@ -84,7 +104,7 @@ What is worth noting is the order of duration retrieval (`getAudioFileDuration`)
 
 ### Format Support
 
-The audio formats OrbitScore supports depend on libsndfile, which scsynth uses for buffer loading. The support range of `libsndfile.dylib` bundled in the `.vsix` becomes the de facto supported format list.
+The audio formats supported on the SC path depend on libsndfile, which scsynth uses for buffer loading. The support range of `libsndfile.dylib` bundled in the `.vsix` becomes the de facto supported format list.
 
 > NOTE: unverified — for WAV / AIFF, libsndfile's standard support can be confirmed, but MP3 / MP4 depend on libsndfile's build options and version. The specific version of the bundled `libsndfile.dylib` (about 4.9 MB) and whether it includes MP3 support need separate confirmation.
 
@@ -93,8 +113,8 @@ The audio formats OrbitScore supports depend on libsndfile, which scsynth uses f
 Duration retrieval does not go through SuperCollider; it directly invokes the `soxi` command (part of the sox toolchain).
 
 ```typescript
-// buffer-manager.ts:52-74
-private getAudioFileDuration(filepath: string): number {
+// packages/engine/src/audio/supercollider/buffer-manager.ts:52-74
+  private getAudioFileDuration(filepath: string): number {
     try {
       // Use execFileSync with separate arguments to prevent command injection
       // Suppress soxi warnings by redirecting stderr to /dev/null
@@ -152,7 +172,7 @@ sequenceDiagram
 The audio processing definition that plays back a buffer in scsynth is the `orbitPlayBuf` SynthDef. Reading the sclang code in `setup.scd` reveals its structure.
 
 ```supercollider
-// packages/engine/supercollider/setup.scd:16-58 (writeDefFile line omitted)
+// packages/engine/supercollider/setup.scd:22-64 (writeDefFile 行を省略)
 SynthDef(\orbitPlayBuf, {
     arg out = 0, bufnum = 0, rate = 1, amp = 0.5, pan = 0, 
         startPos = 0,      // 開始位置（秒）
@@ -228,8 +248,8 @@ The `chop` DSL method splits the audio file equally and plays slices. Supporting
 ### Slice Position Calculation
 
 ```typescript
-// event-scheduler.ts:53-71
-private calculateSlicePosition(
+// packages/engine/src/audio/supercollider/event-scheduler.ts:263-281
+  private calculateSlicePosition(
     filepath: string,
     sliceIndex: number,
     totalSlices: number,
@@ -255,8 +275,8 @@ Because `sliceIndex` is passed 1-based from the DSL side, it is converted to 0-b
 ### Playback Rate Calculation
 
 ```typescript
-// event-scheduler.ts:77-86
-private calculatePlaybackRate(
+// packages/engine/src/audio/supercollider/event-scheduler.ts:288-296
+  private calculatePlaybackRate(
     sliceDurationSec: number,
     eventDurationMs: number | undefined,
   ): number {
@@ -276,8 +296,8 @@ If a slice is 500 ms and the event duration is 250 ms, then `rate = 2.0` (double
 ### Parameter Assembly in scheduleSliceEvent
 
 ```typescript
-// event-scheduler.ts:107-138
-scheduleSliceEvent(
+// packages/engine/src/audio/supercollider/event-scheduler.ts:317-350
+  scheduleSliceEvent(
     filepath: string,
     startTimeMs: number,
     sliceIndex: number,
@@ -286,6 +306,7 @@ scheduleSliceEvent(
     gainDb = 0,
     pan = 0,
     sequenceName = '',
+    outputChannel?: string,
   ): void {
     const { sliceDuration, startPos } = this.calculateSlicePosition(
       filepath,
@@ -303,6 +324,7 @@ scheduleSliceEvent(
         startPos,
         duration: sliceDuration,
         rate,
+        outputChannel,
       },
       sequenceName,
     }
@@ -311,7 +333,7 @@ scheduleSliceEvent(
   }
 ```
 
-The computed `startPos`, `duration`, and `rate` are stored in `ScheduledPlay.options`, and when dispatched on the timeline, they reach scsynth as arguments to `/s_new` via `sendPlaybackMessage()`.
+The computed `startPos`, `duration`, and `rate` are stored in `ScheduledPlay.options`, and when dispatched on the timeline, they reach scsynth as arguments to `/s_new` via `sendPlaybackMessage()`. `outputChannel` is an additional field that is filled only when `seq.output()` is specified for LinkAudio (#209); on the hardware path it stays `undefined`.
 
 ### The Big Picture of Slice Playback
 
@@ -353,11 +375,12 @@ sequenceDiagram
 
 ## Related ADRs
 
-- [ADR-001 Choosing SuperCollider as the Implementation Base](/en/decisions/adr-001-supercollider) — the background of adopting the playback architecture of Buffer + SynthDef + `/s_new`
+- [ADR-001 Choosing SuperCollider as the Implementation Base](/en/decisions/adr-001-supercollider) — the background of adopting the playback architecture of Buffer + SynthDef + `/s_new`, and its position after cutover #108
 - [ADR-003 scsynth Bundle Strict Mode](/en/decisions/adr-003-scsynth-bundle) — the decision to include `libsndfile.dylib` in the bundle (the basis for format support)
 
 ## Next Exploration Candidates
 
+- **Slice playback on the Rust daemon path**: how the same math as `calculateSlicePosition()` / `calculatePlaybackRate()` is expressed on the daemon side. Start from slice varispeed parity (`docs/development/WORK_LOG.md` §6.159)
 - **Confirming format support**: the version of the bundled `libsndfile.dylib` and the formats it can actually decode (especially MP3/MP4)
 - **soxi dependency management**: a fallback strategy in environments where soxi is missing. It works with the default duration of 0.3 s, but this affects the precision of chop
 - **Buffer cache lifetime**: the cache is held until process termination and is not released unless `clearCache()` or `removeBuffer()` is called. The impact of memory growth depending on session length
@@ -366,15 +389,18 @@ sequenceDiagram
 
 ## Sources
 
+- `packages/engine/src/audio/create-audio-engine.ts:17-22` — the branch that makes the SC path an opt-out
+- `packages/engine/src/audio/engine-backend.ts:52-53` — definition of `ENGINE_ENV_VAR` (`ORBITSCORE_ENGINE`)
 - `packages/engine/src/audio/supercollider/buffer-manager.ts:11-46` — `BufferManager` class definition, `loadBuffer()` cache logic and processing order
 - `packages/engine/src/audio/supercollider/buffer-manager.ts:52-74` — `getAudioFileDuration()`: soxi invocation and fallback value
 - `packages/engine/src/audio/supercollider/buffer-manager.ts:79-86` — `getAudioDuration()`: duration retrieval from cache
 - `packages/engine/src/audio/supercollider/types.ts:5-8` — `BufferInfo` type definition
-- `packages/engine/src/audio/supercollider/types.ts:10-21` — `ScheduledPlay` type: gainDb / pan / startPos / duration / rate fields of options
-- `packages/engine/src/audio/supercollider/event-scheduler.ts:53-71` — `calculateSlicePosition()`: 1-based → 0-based conversion and startPos calculation
-- `packages/engine/src/audio/supercollider/event-scheduler.ts:77-86` — `calculatePlaybackRate()`: rate calculation to fit a slice into the event duration
-- `packages/engine/src/audio/supercollider/event-scheduler.ts:107-138` — `scheduleSliceEvent()`: assembling slice parameters and adding to the queue
-- `packages/engine/src/audio/supercollider/osc-client.ts:65-74` — `sendBufferLoad()`: `/b_allocRead` and callAndResponse
-- `packages/engine/supercollider/setup.scd:16-58` — entire `orbitPlayBuf` SynthDef: PlayBuf, BufRateScale, startPos unit conversion, envelope, doneAction (writeDefFile line omitted)
-- `packages/vscode-extension/BUILD_GUIDE.md:71-82` — size and composition of `libsndfile.dylib` included in the bundle
+- `packages/engine/src/audio/supercollider/types.ts:10-25` — `ScheduledPlay` type: gainDb / pan / startPos / duration / rate / outputChannel fields of options
+- `packages/engine/src/audio/supercollider/event-scheduler.ts:263-281` — `calculateSlicePosition()`: 1-based → 0-based conversion and startPos calculation
+- `packages/engine/src/audio/supercollider/event-scheduler.ts:288-296` — `calculatePlaybackRate()`: rate calculation to fit a slice into the event duration
+- `packages/engine/src/audio/supercollider/event-scheduler.ts:317-350` — `scheduleSliceEvent()`: assembling slice parameters and adding to the queue
+- `packages/engine/src/audio/supercollider/osc-client.ts:79-88` — `sendBufferLoad()`: `/b_allocRead` and callAndResponse
+- `packages/engine/supercollider/setup.scd:22-65` — entire `orbitPlayBuf` SynthDef: PlayBuf, BufRateScale, startPos unit conversion, envelope, doneAction
+- `packages/vscode-extension/BUILD_GUIDE.md:83-97` — size and composition of `libsndfile.dylib` included in the bundle
+- `docs/development/WORK_LOG.md` §6.179 — cutover #108 (2026-07-03): the record of the SC path becoming an opt-out
 - [SuperCollider Server Command Reference](https://doc.sccode.org/Reference/Server-Command-Reference.html) §Buffer Commands — argument definitions for `/b_allocRead`

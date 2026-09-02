@@ -1,16 +1,59 @@
 ---
 title: "III-1. Communication with SuperCollider"
 chapter-id: "III-1"
-verified-against: 0a4b598
-verified-at: "2026-05-05"
+verified-against: 69dc968
+verified-at: "2026-09-01"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-05-05. The code is the truth; this page is merely a snapshot of understanding at that point in time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+
+::: warning Status as of 2026-09
+The SuperCollider (scsynth / OSC) path this chapter follows is **no longer the default audio backend** since cutover #108 on 2026-07-03 (`docs/development/WORK_LOG.md` §6.179). `createAudioEngine()` returns `SuperColliderPlayer` only when `ORBITSCORE_ENGINE=sc` (or `supercollider`) is set explicitly; when unset it picks the Rust `orbit-audio-daemon` (`RustEnginePlayer`). In other words, this chapter describes the **opt-out path**. The code still lives under `packages/engine/src/audio/supercollider/`, and every citation in this chapter matches the real code at 69dc968, but read it as historical reading. For the default path, see [RE-1. Daemon Architecture Overview](/en/rust-engine/).
+
+```typescript
+// packages/engine/src/audio/create-audio-engine.ts:17-36
+export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
+  const raw = env[ENGINE_ENV_VAR]
+  if (resolveEngineKind(raw) === 'supercollider') {
+    console.log(`🎛️ [engine] using SuperCollider backend (opt-out via ORBITSCORE_ENGINE=${raw})`)
+    return new SuperColliderPlayer()
+  }
+  // ...
+  const source = normalized === '' ? 'default since cutover #108' : `ORBITSCORE_ENGINE=${raw}`
+  console.log(`🦀 [engine] using rust orbit-audio-daemon backend (${source})`)
+  return new RustEnginePlayer()
+}
+```
+
+```typescript
+// packages/engine/src/audio/engine-backend.ts:65-68
+export function resolveEngineKind(raw: string | undefined): EngineKind {
+  const v = raw?.trim().toLowerCase()
+  return v === 'sc' || v === 'supercollider' ? 'supercollider' : 'rust'
+}
+```
+:::
 
 # III-1. Communication with SuperCollider
 
-In [0-2. Architecture Overview](/en/orientation/architecture-overview), we surveyed the fact that the engine and scsynth communicate over OSC over UDP, and that `EventScheduler` sends `/s_new`. This chapter goes one level deeper to follow in detail the three phases of "from boot to producing sound." In particular, it focuses on the paths not covered in the spike chapter: SynthDef loading via `/d_recv`, the callAndResponse pattern of `/b_allocRead`, and effect control via `/n_set` / `/n_free`.
+In [0-2. Architecture Overview](/en/orientation/architecture-overview), we surveyed the fact that, when the SC path is selected, the engine and scsynth communicate over OSC over UDP, and that `EventScheduler` sends `/s_new`. This chapter goes one level deeper to follow in detail the three phases of "from boot to producing sound." In particular, it focuses on the paths not covered in the spike chapter: SynthDef loading via `/d_recv`, the callAndResponse pattern of `/b_allocRead`, and effect control via `/n_set` / `/n_free`.
+
+Both backends share a single contract surface called `AudioEngineBackend`. `SuperColliderPlayer` is one implementation of it, positioned as the sibling of `RustEnginePlayer`.
+
+```typescript
+// packages/engine/src/audio/supercollider-player.ts:14-23
+/**
+ * SuperCollider audio player with low-latency scheduling.
+ *
+ * `AudioEngineBackend`（Scheduler + AudioEngine 面）を満たす音声バックエンド。
+ * `RustEnginePlayer` の sibling。cutover #108 以降、`createAudioEngine()` は
+ * `ORBITSCORE_ENGINE=sc`（または `supercollider`）で opt-out したときのみこれを選ぶ
+ * （既定は Rust）。`implements` 宣言は契約を型でロックする（interface 変更時に差分を
+ * コンパイラが報告する）。
+ */
+export class SuperColliderPlayer implements AudioEngineBackend {
+```
 
 ## What is the OSC Protocol
 
@@ -20,11 +63,11 @@ OrbitScore uses the `supercolliderjs` library as an intermediary, leaving raw OS
 
 ## Boot Phase: From scsynth Startup to SynthDef Loading
 
-When the engine starts up, `SuperColliderPlayer.boot()` does two things: **starting the scsynth process** and **loading SynthDefs**.
+When the engine starts up on the SC path, `SuperColliderPlayer.boot()` does two things: **starting the scsynth process** and **loading SynthDefs**.
 
 ```typescript
-// supercollider-player.ts:38-50
-async boot(outputDevice?: string, options?: BootOptions): Promise<void> {
+// packages/engine/src/audio/supercollider-player.ts:45-79 (LinkAudio SynthDef の best-effort ロード部を省略)
+  async boot(outputDevice?: string, options?: BootOptions): Promise<void> {
     const mergedOptions: BootOptions = { ...options }
     if (!mergedOptions.scsynth) {
       const resolution = resolveScsynthPath()
@@ -36,18 +79,19 @@ async boot(outputDevice?: string, options?: BootOptions): Promise<void> {
     await this.oscClient.boot(outputDevice, mergedOptions)
     await this.synthDefLoader.loadMainSynthDef()
     await this.synthDefLoader.loadMasteringEffectSynthDefs()
+    // ...
   }
 ```
 
-`resolveScsynthPath()` only resolves the path of the scsynth binary; what actually starts scsynth is `this.oscClient.boot()` (the details of path resolution are covered in [III-3. scsynth Bundle and Path Resolution](/en/audio/scsynth-bundle)).
+`resolveScsynthPath()` only resolves the path of the scsynth binary; what actually starts scsynth is `this.oscClient.boot()` (the details of path resolution are covered in [III-3. scsynth Bundle and Path Resolution](/en/audio/scsynth-bundle)). The omitted second half loads the `orbitPlayBufLink` SynthDef for LinkAudio (#209) on a best-effort basis; if the `.scsyndef` is absent it sets `setLinkAudioPluginAvailable(false)` and continues hardware-only. This chapter sticks to the hardware path.
 
 ### Inside OSCClient.boot()
 
 `OSCClient.boot()` starts scsynth. Let's look at the implementation.
 
 ```typescript
-// osc-client.ts:21-50
-async boot(outputDevice?: string, options?: BootOptions): Promise<void> {
+// packages/engine/src/audio/supercollider/osc-client.ts:35-64
+  async boot(outputDevice?: string, options?: BootOptions): Promise<void> {
     console.log('🎵 Booting SuperCollider server...')
 
     const bootOptions: any = {
@@ -92,8 +136,8 @@ Once scsynth has started, the next step is to load SynthDefs. A SynthDef (Synthe
 `SynthDefLoader.loadMainSynthDef()` reads this `.scsyndef` file and sends it to scsynth via the `/d_recv` OSC command.
 
 ```typescript
-// synthdef-loader.ts:27-39
-async loadMainSynthDef(): Promise<void> {
+// packages/engine/src/audio/supercollider/synthdef-loader.ts:45-57
+  async loadMainSynthDef(): Promise<void> {
     if (!this.oscClient.isRunning()) {
       throw new Error('SuperCollider server not running')
     }
@@ -102,7 +146,7 @@ async loadMainSynthDef(): Promise<void> {
     await this.oscClient.sendMessage(['/d_recv', synthDefData])
 
     // Wait for SynthDef to be ready
-    await new Promise((resolve) => setTimeout(resolve, 200))
+    await this.sleep(200)
 
     console.log('✅ SynthDef loaded')
   }
@@ -110,15 +154,26 @@ async loadMainSynthDef(): Promise<void> {
 
 `sendMessage(['/d_recv', synthDefData])` corresponds to the `/d_recv` command in the SuperCollider Server Command Reference. The argument is binary data (Buffer).
 
-What is interesting here is that a 200 ms wait of `setTimeout(resolve, 200)` is inserted after `/d_recv`. While `/b_allocRead` (buffer load) waits for `/done` via `callAndResponse` (described later), `/d_recv` is harder to use with asynchronous completion notifications, so a fixed 200 ms sleep is used as a substitute.
+What is interesting here is that a 200 ms wait of `this.sleep(200)` is inserted after `/d_recv`. While `/b_allocRead` (buffer load) waits for `/done` via `callAndResponse` (described later), `/d_recv` is harder to use with asynchronous completion notifications, so a fixed 200 ms sleep is used as a substitute. This `sleep` is a small helper inside the class, and its comment explains the design trade-off as is.
 
-> NOTE: unverified — whether `/d_recv` returns a `/done` response may depend on the SuperCollider version. The current implementation handles it with a fixed sleep; whether it can be migrated to callAndResponse needs to be confirmed.
+```typescript
+// packages/engine/src/audio/supercollider/synthdef-loader.ts:34-40
+  /**
+   * `/d_recv` 後にサーバへの SynthDef 反映を待つ固定ディレイ（best-effort）。
+   * `d_recv` の完了 OSC を待たない簡易方式のため、各ロード箇所で共有する。
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+```
+
+> NOTE: unverified — whether `/d_recv` returns a `/done` response may depend on the SuperCollider version. The implementation at 69dc968 handles it with a fixed sleep; whether it can be migrated to callAndResponse needs to be confirmed.
 
 Mastering effect SynthDefs are loaded with the same flow.
 
 ```typescript
-// synthdef-loader.ts:44-61
-async loadMasteringEffectSynthDefs(): Promise<void> {
+// packages/engine/src/audio/supercollider/synthdef-loader.ts:105-123
+  async loadMasteringEffectSynthDefs(): Promise<void> {
     if (!this.oscClient.isRunning()) {
       return
     }
@@ -131,7 +186,7 @@ async loadMasteringEffectSynthDefs(): Promise<void> {
       if (fs.existsSync(synthDefPath)) {
         const synthDefData = fs.readFileSync(synthDefPath)
         await this.oscClient.sendMessage(['/d_recv', synthDefData])
-        await new Promise((resolve) => setTimeout(resolve, 50))
+        await this.sleep(50)
       }
     }
 
@@ -171,15 +226,23 @@ sequenceDiagram
     Note over SDL: 50ms sleep
   end
   SDL-->>SP: effect SynthDefs load complete
+
+  SP->>SDL: loadLinkAudioSynthDef() (best-effort, omitted in this chapter)
 ```
 
 ## Playback Phase: Creating a Synth with `/s_new`
 
-Against scsynth that already has a SynthDef loaded, a synth instance is created with the `/s_new` command on each playback. `EventScheduler.sendPlaybackMessage()` handles this.
+Against scsynth that already has a SynthDef loaded, a synth instance is created with the `/s_new` command on each playback. `EventScheduler.sendPlaybackMessage()` handles this. The SynthDef names are kept as constants to prevent typos.
 
 ```typescript
-// event-scheduler.ts:307-335
-private async sendPlaybackMessage(
+// packages/engine/src/audio/supercollider/event-scheduler.ts:17-18
+const SYNTHDEF_HARDWARE = 'orbitPlayBuf'
+const SYNTHDEF_LINK = 'orbitPlayBufLink'
+```
+
+```typescript
+// packages/engine/src/audio/supercollider/event-scheduler.ts:537-605 (outputChannel 指定時の LinkAudio 分岐を省略)
+  private async sendPlaybackMessage(
     bufnum: number,
     amplitude: number,
     options: PlaybackOptions,
@@ -189,9 +252,10 @@ private async sendPlaybackMessage(
     const duration = options.duration ?? 0
     const rate = options.rate ?? 1.0
 
+    // ...
     await this.oscClient.sendMessage([
       '/s_new',
-      'orbitPlayBuf',
+      SYNTHDEF_HARDWARE,
       -1,
       0,
       0,
@@ -213,7 +277,7 @@ private async sendPlaybackMessage(
 
 The argument layout for `/s_new` is defined in the SuperCollider Server Command Reference, in the form `['/s_new', defName, nodeID, addAction, targetNodeID, ...controls]`.
 
-- **`defName`**: `'orbitPlayBuf'` — the name of the loaded SynthDef
+- **`defName`**: `SYNTHDEF_HARDWARE` (`'orbitPlayBuf'`) — the name of the loaded SynthDef
 - **`nodeID`**: `-1` — let scsynth auto-assign a node ID
 - **`addAction`**: `0` — add to head (`addToHead`)
 - **`targetNodeID`**: `0` — place into the root group (group 0)
@@ -221,11 +285,13 @@ The argument layout for `/s_new` is defined in the SuperCollider Server Command 
 
 When `nodeID = -1` is specified, scsynth assigns and manages a unique node ID. Because the synth is automatically released by scsynth on playback completion via `doneAction: 2` inside the SynthDef, there is no need for the engine to send `/n_free` (which is different from effect control described later).
 
+The omitted branch sends `SYNTHDEF_LINK` with `'channel', channelId` when `options.outputChannel` is set; if the OrbitLinkAudio plugin is absent it warns once and falls through to the hardware path.
+
 ### sendMessage Implementation
 
 ```typescript
-// osc-client.ts:55-60
-async sendMessage(message: any[]): Promise<void> {
+// packages/engine/src/audio/supercollider/osc-client.ts:69-74
+  async sendMessage(message: any[]): Promise<void> {
     if (!this.server) {
       throw new Error('SuperCollider server not running')
     }
@@ -246,8 +312,8 @@ Mastering effects (Compressor / Limiter / Normalizer), unlike playback nodes, **
 If the effect already exists, only the parameters are changed.
 
 ```typescript
-// synthdef-loader.ts:102-111
-if (existingSynthId !== undefined) {
+// packages/engine/src/audio/supercollider/synthdef-loader.ts:163-172
+      if (existingSynthId !== undefined) {
         // Update existing effect parameters
         const setParams: any[] = ['/n_set', existingSynthId]
 
@@ -257,7 +323,6 @@ if (existingSynthId !== undefined) {
 
         await this.oscClient.sendMessage(setParams)
         console.log(`✅ ${effectType} updated`)
-      }
 ```
 
 `/n_set` changes the control parameters of an existing node. Arguments are passed in the form `['/n_set', nodeID, key1, value1, key2, value2, ...]`.
@@ -267,8 +332,8 @@ if (existingSynthId !== undefined) {
 If the effect does not exist, it is newly created with `/s_new`.
 
 ```typescript
-// synthdef-loader.ts:112-133
-} else {
+// packages/engine/src/audio/supercollider/synthdef-loader.ts:173-194
+      } else {
         // Create new effect synth with monotonically increasing ID
         const synthId = this.nextSynthId++
         const createParams: any[] = [
@@ -293,7 +358,6 @@ If the effect does not exist, it is newly created with `/s_new`.
 ```
 
 Notice the differences from the playback node. Effect nodes:
-
 - **`nodeID`**: `this.nextSynthId++` — an explicit ID that monotonically increases from 2000 (`private nextSynthId = 2000`)
 - **`addAction`**: `1` — `addToTail` (added to the tail of the group, i.e., processed after playback)
 - The ID is stored in the `effectSynths` Map, retained for updates and removals
@@ -301,7 +365,7 @@ Notice the differences from the playback node. Effect nodes:
 ### Removing an Effect: `/n_free`
 
 ```typescript
-// synthdef-loader.ts:152-160 (catch block and outer if/closing brace omitted)
+// packages/engine/src/audio/supercollider/synthdef-loader.ts:213-221 (catch ブロックと外側の if/閉じ括弧を省略)
           await this.oscClient.sendMessage(['/n_free', synthId])
           targetEffects.delete(effectType)
           console.log(`✅ ${effectType} removed (ID: ${synthId})`)
@@ -331,8 +395,8 @@ flowchart LR
 Most OSC messages are fire-and-forget, but buffer loading is different. Let's look at `OSCClient.sendBufferLoad()`.
 
 ```typescript
-// osc-client.ts:65-74
-async sendBufferLoad(bufnum: number, filepath: string): Promise<void> {
+// packages/engine/src/audio/supercollider/osc-client.ts:79-88
+  async sendBufferLoad(bufnum: number, filepath: string): Promise<void> {
     if (!this.server) {
       throw new Error('SuperCollider server not running')
     }
@@ -350,11 +414,13 @@ The arguments of `/b_allocRead` are `[bufnum, path, startFrame, numFrames]`; `st
 
 This callAndResponse pattern is important because **if `/s_new` is sent before buffer loading completes, scsynth cannot find the buffer and produces silence**. By doing `await this.oscClient.sendBufferLoad(...)` in `BufferManager.loadBuffer()`, completion is guaranteed before proceeding to playback.
 
+Incidentally, the same `callAndResponse` is also used for LinkAudio channel registration (`/cmd /orbit/registerLinkAudioChannel`), where a separate 2000 ms timeout is layered on with `Promise.race` so that "no reply because the plugin is absent" can be detected (`osc-client.ts:109-141`).
+
 ## Related Terms
 
-- [scsynth](/en/glossary#scsynth) — the protagonist of this chapter. The audio server binary that OrbitScore starts via `child_process.spawn`
+- [scsynth](/en/glossary#scsynth) — the protagonist of this chapter. The audio server binary that OrbitScore starts via `child_process.spawn` on the SC path
 - [OSC (Open Sound Control)](/en/glossary#osc-open-sound-control) — the communication protocol between engine and scsynth. `/d_recv` / `/s_new` / `/n_set` / `/n_free` / `/b_allocRead` are all OSC
-- [SynthDef (SC)](/en/glossary#synthdef-sc) — the audio processing definition loaded with `/d_recv`. The four are `orbitPlayBuf` / `fxCompressor` / `fxLimiter` / `fxNormalizer`
+- [SynthDef (SC)](/en/glossary#synthdef-sc) — the audio processing definition loaded with `/d_recv`. `orbitPlayBuf` / `fxCompressor` / `fxLimiter` / `fxNormalizer`, plus `orbitPlayBufLink` / `orbitLinkAudioKeepalive` for LinkAudio
 - [orbitPlayBuf](/en/glossary#orbitplaybuf) — OrbitScore's dedicated SynthDef. Instantiated and played via `/s_new`
 - [UGen (Unit Generator)](/en/glossary#ugen-unit-generator) — the basic processing unit that composes a SynthDef. `PlayBuf` / `Pan2` / `EnvGen`, etc.
 - [Buffer (SC)](/en/glossary#buffer-sc) — the audio memory area on scsynth loaded by `/b_allocRead`
@@ -362,28 +428,36 @@ This callAndResponse pattern is important because **if `/s_new` is sent before b
 
 ## Related ADRs
 
-- [ADR-001 Choosing SuperCollider as the Implementation Base](/en/decisions/adr-001-supercollider) — the decision behind why scsynth was adopted (sox 140-150ms → 0-8ms achieved)
+- [ADR-001 Choosing SuperCollider as the Implementation Base](/en/decisions/adr-001-supercollider) — the decision behind why scsynth was adopted (sox 140-150ms → 0-8ms achieved) and its position after cutover #108
 - [ADR-003 scsynth Bundle Strict Mode](/en/decisions/adr-003-scsynth-bundle) — the background of bundling into the `.vsix` and removing the SC.app fallback
 
 ## Next Exploration Candidates
 
 - **supercolliderjs internals**: how does `sc.server.boot()` spawn scsynth and verify `/status`? Trace the supercolliderjs source
-- **`/d_recv` completion notification**: the SuperCollider docs say `/done` is returned for `/d_recv`, but the current implementation uses a 200 ms fixed sleep. Confirm whether migration to callAndResponse is possible
+- **`/d_recv` completion notification**: the SuperCollider docs say `/done` is returned for `/d_recv`, but the implementation at 69dc968 uses a 200 ms fixed sleep. Confirm whether migration to callAndResponse is possible
 - **The precision of `setInterval(1ms)`**: Node.js's `setInterval` does not guarantee 1 ms. The impact of actual drift characteristics on sound timing precision
 - **`addToTail` vs `addToHead`**: the structural meaning of effects being `addToTail` while playback nodes are `addToHead`. The relationship to scsynth's signal graph
 - **`/n_free` vs `doneAction: 2`**: playback nodes are auto-released via `doneAction: 2` inside the SynthDef, while effect nodes are explicitly released via `/n_free` from the engine. The design rationale for this asymmetry
+- **The whole LinkAudio branch**: read the tri-state of `resolveLinkAudioChannel()` (`null` / `false` / `true`) and the keepalive synth (`KEEPALIVE_NODE_BASE = 800000`) side by side with the Rust daemon's `orbit-link-audio` crate
 
 ## Sources
 
-- `packages/engine/src/audio/supercollider/osc-client.ts:21-50` — `OSCClient.boot()`: bootOptions assembly and `sc.server.boot()` call
-- `packages/engine/src/audio/supercollider/osc-client.ts:55-60` — `sendMessage()`: OSC send via `this.server.send.msg(message)`
-- `packages/engine/src/audio/supercollider/osc-client.ts:65-74` — `sendBufferLoad()`: pattern of waiting `/done` with `callAndResponse`
-- `packages/engine/src/audio/supercollider-player.ts:38-50` — `SuperColliderPlayer.boot()`: three steps of scsynth resolution → boot → SynthDef loading
-- `packages/engine/src/audio/supercollider/synthdef-loader.ts:27-39` — `loadMainSynthDef()`: `/d_recv` + 200 ms sleep
-- `packages/engine/src/audio/supercollider/synthdef-loader.ts:44-61` — `loadMasteringEffectSynthDefs()`: load effect SynthDefs at 50 ms intervals
-- `packages/engine/src/audio/supercollider/synthdef-loader.ts:102-133` — `addEffect()`: branch between `/n_set` (update) and `/s_new` addToTail (new)
-- `packages/engine/src/audio/supercollider/synthdef-loader.ts:152-160` — `removeEffect()`: release node with `/n_free`
-- `packages/engine/src/audio/supercollider/event-scheduler.ts:307-335` — `sendPlaybackMessage()`: argument layout of `/s_new orbitPlayBuf`
-- `packages/engine/src/audio/supercollider/types.ts:42-46` — `BootOptions` type: `scsynth`, `debug`, `device` fields
-- `packages/engine/supercollider/setup.scd:16-59` — sclang definition of the `orbitPlayBuf` SynthDef (auto-release via doneAction: 2)
+- `packages/engine/src/audio/create-audio-engine.ts:17-36` — `createAudioEngine()`: the opt-out branch that returns `SuperColliderPlayer` only when `ORBITSCORE_ENGINE=sc`
+- `packages/engine/src/audio/engine-backend.ts:52-68` — `ENGINE_ENV_VAR` and `resolveEngineKind()`: default `rust`
+- `packages/engine/src/audio/supercollider-player.ts:14-23` — `SuperColliderPlayer implements AudioEngineBackend` and the post-cutover positioning comment
+- `packages/engine/src/audio/supercollider-player.ts:45-79` — `SuperColliderPlayer.boot()`: scsynth resolution → boot → SynthDef loading → best-effort LinkAudio SynthDef loading
+- `packages/engine/src/audio/supercollider/osc-client.ts:35-64` — `OSCClient.boot()`: bootOptions assembly and `sc.server.boot()` call
+- `packages/engine/src/audio/supercollider/osc-client.ts:69-74` — `sendMessage()`: OSC send via `this.server.send.msg(message)`
+- `packages/engine/src/audio/supercollider/osc-client.ts:79-88` — `sendBufferLoad()`: pattern of waiting `/done` with `callAndResponse`
+- `packages/engine/src/audio/supercollider/osc-client.ts:109-141` — `registerLinkAudioChannel()`: callAndResponse + own timeout for plugin-absence detection
+- `packages/engine/src/audio/supercollider/synthdef-loader.ts:34-40` — `sleep()`: the fixed-delay helper after `/d_recv`
+- `packages/engine/src/audio/supercollider/synthdef-loader.ts:45-57` — `loadMainSynthDef()`: `/d_recv` + 200 ms sleep
+- `packages/engine/src/audio/supercollider/synthdef-loader.ts:105-123` — `loadMasteringEffectSynthDefs()`: load effect SynthDefs at 50 ms intervals
+- `packages/engine/src/audio/supercollider/synthdef-loader.ts:163-194` — `addEffect()`: branch between `/n_set` (update) and `/s_new` addToTail (new)
+- `packages/engine/src/audio/supercollider/synthdef-loader.ts:203-221` — `removeEffect()`: release node with `/n_free`
+- `packages/engine/src/audio/supercollider/event-scheduler.ts:17-18` — the `SYNTHDEF_HARDWARE` / `SYNTHDEF_LINK` constants
+- `packages/engine/src/audio/supercollider/event-scheduler.ts:537-605` — `sendPlaybackMessage()`: argument layout of `/s_new orbitPlayBuf` and the LinkAudio branch
+- `packages/engine/src/audio/supercollider/types.ts:48-52` — `BootOptions` type: `scsynth`, `debug`, `device` fields
+- `packages/engine/supercollider/setup.scd:22-65` — sclang definition of the `orbitPlayBuf` SynthDef (auto-release via doneAction: 2)
+- `docs/development/WORK_LOG.md` §6.179 — cutover #108 (2026-07-03): default backend switched to Rust, SC path retained via `ORBITSCORE_ENGINE=sc`
 - [SuperCollider Server Command Reference](https://doc.sccode.org/Reference/Server-Command-Reference.html) §Synth Commands — specification of `/s_new`, `/n_set`, `/n_free`, `/d_recv`, `/b_allocRead`

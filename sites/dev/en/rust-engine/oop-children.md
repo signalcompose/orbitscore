@@ -1,25 +1,25 @@
 ---
 title: "RE-2. OOP Children and the Shared-Memory Transport"
 chapter-id: "RE-2"
-verified-against: 3983828
-verified-at: "2026-07-17"
+verified-against: 69dc968
+verified-at: "2026-09-01"
 status: draft
 ---
 
-> **Note**: This page is a snapshot of the author's reading as of 2026-07-17. The code is the
-> source of truth; this page is only a snapshot of that understanding at that point in time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-2. OOP Children and the Shared-Memory Transport
 
-The daemon we saw in RE-1 doesn't host any 3rd-party plugin's (CLAP/VST3) implementation in its
-own process. Instruments (sampler / audio DSL) are in-process, but effects and 3rd-party plugins
-are split off as out-of-process (OOP) sandbox child processes. This chapter covers why that
-split exists, how the shared-memory (shm) transport in the `orbit-audio-sandbox` crate works,
-the READY handshake, watchdog/respawn behavior, and parent-liveness monitoring (`ParentWatch`).
-The plugin-hosting DSL surface (`global.effect()` / `seq.instrument()`) and the child-binary
-selection logic (`child_exe_for_attach`) are already covered in the PH-2/PH-3 chapters and are
-not repeated here — this chapter focuses on the **shared substrate** both effect and instrument
-children use: the transport mechanism itself.
+The daemon we saw in [RE-1](/en/rust-engine/) does not host any 3rd-party plugin's (CLAP/VST3)
+implementation in its own process. Instruments (sampler / audio DSL) are in-process, but effects
+and 3rd-party plugins are split off as out-of-process (OOP) sandbox child processes. This chapter
+covers why that split exists, the list of child binaries, how the shared-memory (shm) transport
+in the `orbit-audio-sandbox` crate works, the READY handshake, watchdog/respawn behavior, and
+parent-liveness monitoring (`ParentWatch`). The plugin-hosting DSL surface (`global.effect()` /
+`seq.instrument()`) and the child-binary selection logic (`child_exe_for_attach`) belong to the
+[PH-1](/en/plugin-hosting/) chapter, and the plugin UI window wiring to
+[PH-2](/en/plugin-hosting/plugin-ui); this chapter focuses on the **shared substrate** both
+effect and instrument children use: the transport mechanism itself.
 
 ## Why in-process vs. out-of-process
 
@@ -38,17 +38,48 @@ Per the confirmed architecture recorded in `docs/development/POST_2.0_MASTER_PLA
 In short, the criterion is whether the DSL needs fine-grained per-note/per-slice control (→
 instrument side, in-process) or is a pure audio→audio transformation (→ plugin side, OOP).
 3rd-party CLAP/VST3 plugins are untrusted code, so they are isolated behind a process boundary
-so a crash doesn't take the host (the daemon itself) down with it. `orbit-audio-sandbox`
+so a crash does not take the host (the daemon itself) down with it. `orbit-audio-sandbox`
 implements that isolation.
+
+## The list of child binaries
+
+The child binaries the daemon may spawn are spelled out in `orbit-audio-daemon`'s
+`SPAWNABLE_CHILD_BINARIES`. The constant exists so that the shipping gate (whether
+`scripts/copy-daemon-bin.sh` bundled every child) and the implementation cannot disagree — the
+truth is kept in one place.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/lib.rs:84-93
+pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
+    // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
+    "orbit-effect-rack-child",
+    // effect（退役予定・#628 で到達不能になったが、退役 PR まで配布は続ける）。
+    "orbit-clap-effect-child",
+    "orbit-vst3-effect-child",
+    // instrument: format ごとに child が分かれる（1 instrument = 1 child）。
+    "orbit-clap-instrument-child",
+    "orbit-vst3-instrument-child",
+];
+```
+
+| child binary | role | state as of 2026-09-01 |
+|---|---|---|
+| `orbit-effect-rack-child` | runs a whole effect chain (rack) serially in one child; CLAP and VST3 live in the same child | the only reachable effect path since #628 |
+| `orbit-clap-effect-child` / `orbit-vst3-effect-child` | per-format single-effect children (1 bus = 1 child) | unreachable since #628; still distributed until the retirement PR |
+| `orbit-clap-instrument-child` / `orbit-vst3-instrument-child` | per-format instrument children (1 instrument = 1 child) | active; the extension-based selection rule is in PH-1 |
+
+On 2026-07-17 there were "four kinds: CLAP/VST3 × effect/instrument"; the effect rack of #628
+added a rack child in which one child runs N plugins serially. The module comment of
+`parent_watch.rs` still says "four child binaries" because that text dates from that time.
 
 ## The shm transport: `SharedRegion`
 
-The host (daemon) and the child (`orbit-clap-effect-child`, etc.) both open the same mmap file
-as shared memory and overlay a `#[repr(C, align(64))]` `SharedRegion` struct on top of it. Field
-order is fixed, and the 64-byte alignment lands on a cache-line boundary.
+The host (daemon) and the child open one mmap file as shared memory and overlay a
+`#[repr(C, align(64))]` `SharedRegion` struct on it. The field order is fixed, and the 64-byte
+alignment lands on a cache-line boundary. Let us first look at the audio and handshake substrate.
 
 ```rust
-// transport.rs:137-171
+// rust/crates/orbit-audio-sandbox/src/transport.rs:170-204
 #[repr(C, align(64))]
 pub struct SharedRegion {
     /// host が input/n_frames 書き込み後に進める。child はこれが前回値より進むのを待つ。
@@ -86,13 +117,13 @@ pub struct SharedRegion {
     pub output: [f32; BUF_LEN * SLOTS],
 ```
 
-With `SLOTS = 2`, a ping-pong buffer scheme is used, where the host submits the current block
-while reading the previous block's output — the "pipelined" approach described below. This
-avoids a synchronous round-trip wait (tail latency) on every block, making small buffer sizes
-(32/64 frames) practically feasible.
+It is a `SLOTS = 2` ping-pong buffer in a "pipelined" arrangement: the host submits the current
+block while reading the previous block's output (see below). This avoids a synchronous
+round-trip wait (tail latency) on every block, making small buffers (32/64 frames) practically
+feasible.
 
 ```rust
-// host.rs:1-13
+// rust/crates/orbit-audio-sandbox/src/host.rs:1-12
 //! pipelined(候補B) effect host — RT callback ごとに 1 block を境界越しに処理する状態機械。
 //!
 //! γ latency fork spike(#351)が採用した候補B: host は **spin しない**。callback K で
@@ -107,12 +138,12 @@ avoids a synchronous round-trip wait (tail latency) on every block, making small
 //! daemon 側(native がある所)に薄く置く。本 host の `process_block` を RT callback から呼ぶ。
 ```
 
-`PipelinedEffectHost::process_block` upholds the RT contract (no alloc/lock/syscall), as stated
+`PipelinedEffectHost::process_block` honors the RT contract (no alloc/lock/syscall), stated
 explicitly in both its type and its comment, and rewrites `data` in-place in submit-then-read
 order (submit the current block to the child, then read the previous block's output).
 
 ```rust
-// host.rs:86-98
+// rust/crates/orbit-audio-sandbox/src/host.rs:86-98
     /// 1 callback ぶんを処理する。`data` は interleaved f32(stereo)で in-place 上書きされる。
     ///
     /// RT-safe: alloc/lock/syscall なし。submit(data を input slot へ)→ read(前ブロックの output を
@@ -132,17 +163,62 @@ The instrument-side host (`PipelinedInstrumentHost` in `instrument_host.rs`) lay
 voice management (`VoiceTable`) on top of the same shm substrate, reusing the same transport
 (`seq_request`/`seq_done`/slot mechanism) as the effect host. `SharedRegion` also holds the
 event-transfer windows for M2 instrument IPC (`input_events`/`output_events`, etc.), but the
-wire format itself (`NeutralEvent`) is out of scope for this chapter
-(a dedicated M2 IPC wire chapter is planned; the primary sources today are `orbit-audio-sandbox/src/events.rs` and Issue #398).
+wire format itself (`NeutralEvent`) is out of scope for this chapter (the primary sources are
+`orbit-audio-sandbox/src/events.rs` and Issue #398).
+
+### Regions appended to the tail of `SharedRegion` (#555 / #474 P2 / #628)
+
+Since 2026-07-17, three "non-audio" communication paths were appended to the tail of
+`SharedRegion`. Additions always go at the end to keep the offsets of existing fields intact.
+
+1. **Command mailbox** (#555): host → child commands (save state, open UI, …). The host writes
+   `cmd_seq` / `cmd_kind` / `cmd_arg`; the child answers through `cmd_ack_seq` / `cmd_result`.
+   It is kept separate from the existing `control` (RUN/QUIT) because the teardown path resets
+   `control` to RUN, so putting command semantics on the same field would race with teardown.
+2. **Event ring** (#474 P2): child → host "must not be lost" events (a UI window closed, etc.).
+   The child writes `evt_seq` / `evt_kind` / `evt_arg`, and the host publishes completion through
+   `evt_ack_seq`. `dirty_epoch` is the cumulative watermark of plugin dirty notifications and is
+   **not reset on respawn** by design.
+3. **`active_stage_index`** (#628): the stage the rack child is processing right now.
+
+```rust
+// rust/crates/orbit-audio-sandbox/src/transport.rs:265-285
+    // ── #474 P2: child → host の取りこぼし不可イベントリング（UIH.2a）。
+    /// child -> host: 新規イベント投函時に単調増加。0 = 未発行。
+    pub evt_seq: ReleaseAcquireSeq,
+    /// child -> host: per-slot イベント種別（[`EVT_UI_CLOSED`] / [`EVT_UI_CLOSED_DONE`]）。
+    pub evt_kind: [AtomicU32; EVT_SLOTS],
+    /// child -> host: per-slot 固定長引数域（NUL 終端 UTF-8）。
+    pub evt_arg: [[u8; EVT_ARG_BYTES]; EVT_SLOTS],
+    /// host -> child: host 側処理が完結した最新の `evt_seq`。
+    ///
+    /// `s` は「`s` 以下の全イベントが完結済み」を意味するため、host は seq 順にのみ進める。
+    pub evt_ack_seq: ReleaseAcquireSeq,
+    /// child -> host: plugin dirty 通知の累積回数。respawn ではリセットしない。
+    pub dirty_epoch: MonotoneEpoch,
+    /// child -> host: rack child が現在処理している stage の 0 始まり index。
+    ///
+    /// 既存 field の offset を維持するため、SharedRegion の末尾にだけ追加する。
+    pub active_stage_index: AtomicU32,
+}
+
+/// `cmd_arg` のバイト長。command 固有文字列を収める（state sidecar の絶対パスは macOS の
+/// PATH_MAX = 1024、UI command では window title）。
+```
+
+`ReleaseAcquireSeq` / `MonotoneEpoch` are thin wrappers around `AtomicU64` whose purpose is to
+enforce, in the type system, the rule "the child publishes `evt_seq` with Release and the host
+reads it with Acquire" (the `evt_sync` module from `transport.rs:351` on). A deviation such as
+`evt_seq.store(seq, Ordering::Relaxed)` does not compile.
 
 ## The child-side READY handshake
 
-A child doesn't enter its process loop the moment it starts; it only flips `child_status` to
+A child does not enter its process loop the moment it starts; it only flips `child_status` to
 `CHILD_STATUS_READY` once the plugin has finished loading. The host polls this flag and only
 starts submitting blocks after it sees READY.
 
 ```rust
-// transport.rs:85-102
+// rust/crates/orbit-audio-sandbox/src/transport.rs:113-135
 /// `control` の値: child は spin を続ける。
 pub const CONTROL_RUN: u32 = 0;
 /// `control` の値: host が child に spin loop を抜けて正常終了するよう要求する。
@@ -175,36 +251,102 @@ READY, `child_status` does not fall back to STARTING — the previous incarnatio
 lingers. The fix for this is the discipline of always calling `reset_child_starting` to force
 STARTING right before every spawn.
 
+READY is paired with a bit-flags field, `child_flags`. It tells the host what kind of plugin the
+child loaded (bit0 = has an audio input); the child Release-stores `child_flags` first and only
+then sets `child_status` to READY.
+
+```rust
+// rust/crates/orbit-audio-sandbox/src/transport.rs:137-140
+/// child のロード結果を表す bit flags（PR-431）。bit0 = has_audio_input
+/// （`orbit_clap_host::buffers::HostAudioBuffers::has_audio_input()` 相当）。effect/instrument の
+/// 実体判定に使い、PR-1b で role 不一致検証に使う予定（本 PR では書き込みのみ）。
+pub const CHILD_FLAG_HAS_AUDIO_INPUT: u32 = 1 << 0;
+```
+
 ## Watchdog and respawn
 
 On the daemon side, `InstrumentChildSupervisor` (for instruments; `EffectChildSupervisor` for
 effects) runs a dedicated thread that monitors the child's liveness and automatically respawns
-it on an unexpected exit.
+it on an unexpected exit. The respawn loop of 2026-07-17 had no upper bound, leaving room for a
+tight loop that kept respawning a child that died right after starting. #573 added the guard
+"give up once `MAX_CONSECUTIVE_FAST_RESPAWNS` (5) consecutive respawns die within
+`FAST_RESPAWN_THRESHOLD` (2 seconds)".
 
 ```rust
-// outproc_instrument.rs:493-519 (excerpted)
-"orbit-clap-instrument-child exited ({status}); respawning"
-// SAFETY: region は watchdog が所有する生存 ctl_mmap を指す。
-// ...
-stats.respawn_count.fetch_add(1, Ordering::Relaxed);
-// ...
-"instrument child respawn failed; measurement invalid: {error}"
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:32-37
+/// 「速い失敗」とみなす生存時間の閾値（#573）。`outproc_effect::FAST_RESPAWN_THRESHOLD` と同値・
+/// 同じ理由（`CHILD_READY_TIMEOUT` より十分短く `WATCHDOG_POLL` よりずっと長い）。effect 側の
+/// doc comment を参照。
+const FAST_RESPAWN_THRESHOLD: Duration = Duration::from_secs(2);
+/// 連続 fast-fail の上限（#573）。`outproc_effect::MAX_CONSECUTIVE_FAST_RESPAWNS` と同値・同じ理由。
+const MAX_CONSECUTIVE_FAST_RESPAWNS: u32 = 5;
 ```
 
-If respawns repeatedly fail, the supervisor sets a `measurement_invalid` flag exactly once
-(fire-once). This is a WARNING-severity state meaning "the daemon/engine itself stays alive and
-other audio keeps flowing, but that instrument's (or effect's) path is permanently stuck
-repeating its last good block" — surfaced to the client through the same 1 Hz `StreamStats`
-ticker path seen in RE-1, as `ERROR_CODE_OUTPROC_INSTRUMENT_INVALID` /
-`ERROR_CODE_OUTPROC_EFFECT_INVALID`.
+```rust
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:662-687
+                            if consecutive_fast_fails >= MAX_CONSECUTIVE_FAST_RESPAWNS {
+                                tracing::error!(
+                                    plugin = ?plugin,
+                                    "{child_name_wd} exited {consecutive_fast_fails} times in a row \
+                                     within less than {FAST_RESPAWN_THRESHOLD:?} of being spawned \
+                                     (last exit status: {status}); giving up on the respawn loop \
+                                     (measurement invalid)"
+                                );
+                                stats.measurement_invalid.store(true, Ordering::Release);
+                                break;
+                            }
+                            tracing::warn!(
+                                plugin = ?plugin,
+                                "{child_name_wd} exited ({status}); respawning"
+                            );
+                            // 旧 child の死亡確認後にだけ command failure/reset を行う。
+                            if !service_ui_pump_on_respawn(
+                                "instrument",
+                                &ui_pump,
+                                &mailbox,
+                                &ui_target,
+                                None,
+                                &ui_events,
+                            ) {
+                                stats.measurement_invalid.store(true, Ordering::Release);
+                                break;
+```
 
-Child-process teardown (graceful shutdown) itself is consolidated into an RAII guard,
-`SandboxChildGuard`. On drop it stores `CONTROL_QUIT`, waits up to a fixed timeout (2 seconds)
-for the child to reap, falls back to `kill` if that fails, and finally removes the shm file —
-the same procedure shared by the daemon, an offline driver, and integration tests.
+When it gives up, the supervisor sets a `measurement_invalid` flag exactly once (fire-once). This
+is a WARNING-severity state meaning "the daemon/engine itself stays alive and other audio keeps
+flowing, but that instrument's (or effect's) path is permanently stuck repeating its last good
+block" — surfaced to the client through the same 1 Hz `StreamStats` ticker path seen in RE-1, as
+`ERROR_CODE_OUTPROC_INSTRUMENT_INVALID` / `ERROR_CODE_OUTPROC_EFFECT_INVALID`.
+
+The call to `service_ui_pump_on_respawn` right before the respawn in the snippet above is the
+#474 / #633 wiring. It folds the bookkeeping of plugin UI windows that were open when the old
+child died and lets a `PluginUiClosedByRespawn` event flow to the client (details in
+[PH-2](/en/plugin-hosting/plugin-ui)).
+
+Separately from respawn, the instrument replacement of #618 (`ReplacePlugin`) needs cooperation
+flags with the audio thread. So that note events addressed to the old tenant never reach the new
+one, the control thread asks "discard every remaining event in the ring", and the audio thread
+acks only after it has emptied it.
 
 ```rust
-// child.rs:44-84
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:310-317
+pub struct SlotSignals {
+    pub teardown_requested: Arc<AtomicBool>,
+    pub teardown_done: Arc<AtomicBool>,
+    /// #618: slot tenant 差し替え時、control thread が event ring の全残渣破棄を要求する。
+    pub drain_requested: Arc<AtomicBool>,
+    /// #618: `event_rx` を空にした後に audio thread が publish する決定論的 ack。
+    pub drain_done: Arc<AtomicBool>,
+}
+```
+
+Child-process teardown (graceful shutdown) itself is consolidated into an RAII guard,
+`SandboxChildGuard`. On drop it stores `CONTROL_QUIT` → waits a bounded time (2 seconds) for the
+reap → kills if that fails → removes the shm file, a sequence shared by the daemon, the offline
+driver and the integration tests.
+
+```rust
+// rust/crates/orbit-audio-sandbox/src/child.rs:44-84
 impl Drop for SandboxChildGuard {
     fn drop(&mut self) {
         // child に正常終了を要求 → 一定時間待って、ダメなら kill。
@@ -256,7 +398,7 @@ the daemon dies without going through `Drop` (`SIGKILL`, or a panic's `process::
 `ParentWatch` fills this gap from the child side.
 
 ```rust
-// parent_watch.rs:1-16
+// rust/crates/orbit-audio-sandbox/src/parent_watch.rs:1-15
 //! orphan child 対策(Issue #448): child プロセスの親死活監視。
 //!
 //! host(daemon)が `CONTROL_QUIT` を書かずに死ぬ経路(プロセス exit・SIGKILL・crash)では、
@@ -274,17 +416,21 @@ the daemon dies without going through `Drop` (`SIGKILL`, or a panic's `process::
 //! transport とは独立した薄いモジュール(既存の「child main はミラー」方針と両立)。
 ```
 
-The implementation is a simple state machine: it records `getppid()` at startup and re-fetches
-it every 250ms to compare. It relies on standard Unix reparenting semantics (when a parent dies,
-its children get reparented to launchd/PID1/etc. and `getppid()`'s value changes).
+The implementation is a simple state machine: record `getppid()` at startup, re-read it every
+250ms and compare. It relies on the Unix reparenting rule (when the parent dies, the child is
+reparented to launchd/PID 1 etc., so the value of `getppid()` changes). Compared with
+2026-07-17, `should_exit` now takes `&self`: `last_check` moved into a `Cell<Instant>` so the
+method no longer demands `&mut self` (easier to call from a closure). A test helper,
+`orphaned_for_tests()`, was added as well.
 
 ```rust
-// parent_watch.rs:24-63
+// rust/crates/orbit-audio-sandbox/src/parent_watch.rs:24-82
+
 /// child プロセスが起動時の親 PID を記録し、reparent(親死亡)を低頻度で検知する状態機械。
 pub struct ParentWatch {
     original_ppid: libc::pid_t,
     check_interval: Duration,
-    last_check: Instant,
+    last_check: Cell<Instant>,
 }
 
 impl ParentWatch {
@@ -301,7 +447,9 @@ impl ParentWatch {
         Self {
             original_ppid,
             check_interval,
-            last_check: Instant::now(),
+            last_check: Cell::new(Instant::now()),
+        }
+// ...
         }
     }
 
@@ -309,24 +457,42 @@ impl ParentWatch {
     ///
     /// rate-limit: 前回チェックから `check_interval` 未満なら syscall を発行せず false を返す
     /// (spin loop 内で毎回呼んでも system call 頻度は interval に収まる)。
-    pub fn should_exit(&mut self) -> bool {
+    pub fn should_exit(&self) -> bool {
         let now = Instant::now();
-        if now.duration_since(self.last_check) < self.check_interval {
+        if now.duration_since(self.last_check.get()) < self.check_interval {
             return false;
         }
-        self.last_check = now;
+        self.last_check.set(now);
         // SAFETY: 同上。
         let current_ppid = unsafe { libc::getppid() };
         current_ppid != self.original_ppid
     }
-}
 ```
 
-`ParentWatch` is implemented as a single thin helper shared across all four child binaries
-(CLAP/VST3 × effect/instrument) — each child's main function just calls `should_exit()` inside
-its spin loop, independent of the transport module. Per git history, this module was added in a
-single commit: `a0449b8 fix(sandbox): add parent-liveness watchdog to VST3/CLAP child
-processes`.
+On the child side, "we received QUIT" and "the parent died" are folded into one predicate,
+`child_should_quit` in the `orbit-child-runtime` crate. All five child binaries (including the
+rack child) call this function from their spin loops. It leaves one line on stderr saying which
+reason ended the loop, because the two are indistinguishable from the logs otherwise (the
+comment records that this line had been dropped and was restored in the review of #474 P3b).
+
+```rust
+// rust/crates/orbit-child-runtime/src/lib.rs:61-72
+pub unsafe fn child_should_quit(
+    region: *const orbit_audio_sandbox::SharedRegion,
+    parent_watch: &orbit_audio_sandbox::ParentWatch,
+) -> bool {
+    let reason = quit_reason(
+        (unsafe { (*region).control.load(Ordering::Relaxed) }) == orbit_audio_sandbox::CONTROL_QUIT,
+        || parent_watch.should_exit(),
+    );
+    if reason == Some(QuitReason::ParentDied) {
+        eprintln!("[orbit-child-runtime] 親プロセス死亡を検知、終了する");
+    }
+    reason.is_some()
+```
+
+Per git history, `parent_watch.rs` was added in a single commit (`a0449b8 fix(sandbox): add
+parent-liveness watchdog to VST3/CLAP child processes`).
 
 ## Try it: verify a child self-exits when its parent dies
 
@@ -340,7 +506,8 @@ runs in CI without an `#[ignore]` tag.
 cargo test -p orbit-audio-sandbox --test parent_watch_integration
 ```
 
-**Expected output** (actually run and confirmed by this agent in this sandboxed environment):
+**Expected output** (run and confirmed in this sandboxed environment on 2026-07-17; not re-run
+during the 2026-09-01 re-read):
 
 ```
 running 1 test
@@ -349,19 +516,34 @@ test orphaned_child_exits_after_parent_is_killed ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
 ```
 
-These run with feature flags (verified on real hardware, 2026-07-17):
-`cargo test -p orbit-audio-daemon --features outproc-instrument --lib` runs the instrument-side
-units (measured the same day: 38 passed under the instrument filter). Effect-side units need
-`--features outproc-effect`, and both roles together use
-`--features outproc-effect,outproc-instrument`.
+The respawn/watchdog state machine itself (child crash → respawn → `measurement_invalid`) is
+implemented as `#[test]`s inside `orbit-audio-daemon`'s `outproc_instrument.rs` /
+`outproc_effect.rs` (for example `supervisor_stops_respawning_after_consecutive_fast_failures`).
+They are unit tests using a stub child that needs neither a real device nor a real CLAP plugin,
+and carry no `#[ignore]` tag. They run with feature flags:
+`cargo test -p orbit-audio-daemon --features outproc-instrument --lib` for the instrument side,
+`--features outproc-effect` for the effect side, and `--features outproc-effect,outproc-instrument`
+for both roles.
+
+## Next exploration candidates
+
+- Stage switching in the rack child (`orbit-effect-rack-child`) — how `ApplyEffectChain`'s prepare-commit relates to `active_stage_index`
+- The state-save path through the command mailbox (#555): `GetPluginState` → sidecar path in `cmd_arg` → the child's write
+- What `evt_sync` (`ReleaseAcquireSeq` / `MonotoneEpoch`) forbids in the type system, and why `reset_child_starting` resets `evt_seq`
+- Generation management in `outproc_respawn_guard.rs` (rejecting acks that cross a respawn generation)
 
 ## Sources
 
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:80-211` — `SharedRegion` layout, `CONTROL_RUN`/`CONTROL_QUIT`, `CHILD_STATUS_*` readiness constants and the respawn gotcha
+- `rust/crates/orbit-audio-daemon/src/lib.rs:84-93` — `SPAWNABLE_CHILD_BINARIES` (the source of truth for spawnable children)
+- `rust/crates/orbit-audio-sandbox/src/transport.rs:113-140,170-285` — `CONTROL_*` / `CHILD_STATUS_*` / `CHILD_FLAG_*`, the `SharedRegion` layout (audio, M2 event windows, command mailbox, event ring, `dirty_epoch`, `active_stage_index`)
 - `rust/crates/orbit-audio-sandbox/src/host.rs:1-98` — `PipelinedEffectHost` (pipelined submit/read state machine, RT-safe `process_block`)
-- `rust/crates/orbit-audio-sandbox/src/child.rs:1-84` — `SandboxChildGuard` (child-teardown RAII guard: QUIT → reap → kill fallback → shm removal)
-- `rust/crates/orbit-audio-sandbox/src/parent_watch.rs:1-104` (full file) — `ParentWatch` (`getppid()`-based parent-liveness monitoring, rate-limited)
-- `rust/crates/orbit-audio-sandbox/tests/parent_watch_integration.rs:1-20` — real-process-hierarchy test of `ParentWatch` (run by this agent, confirmed passing)
-- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:386-605` — `InstrumentChildSupervisor` (watchdog thread, respawn logic, `measurement_invalid` fire-once)
+- `rust/crates/orbit-audio-sandbox/src/child.rs:44-84` — `SandboxChildGuard` (child-teardown RAII guard: QUIT → reap → kill fallback → shm removal)
+- `rust/crates/orbit-audio-sandbox/src/parent_watch.rs:1-124` (full file) — `ParentWatch` (`getppid()`-based parent-liveness monitoring, rate-limited, `orphaned_for_tests`)
+- `rust/crates/orbit-child-runtime/src/lib.rs:61-72` — `child_should_quit` (folds QUIT and parent death into one predicate)
+- `rust/crates/orbit-audio-sandbox/tests/parent_watch_integration.rs` — real-process-hierarchy test of `ParentWatch`
+- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:32-37,310-317,487-760` — `InstrumentChildSupervisor` (watchdog thread, #573 fast-fail guard, respawn, `measurement_invalid` fire-once, #618 `SlotSignals`)
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — confirmed in-process/OOP architecture split
 - Issue [#448](https://github.com/signalcompose/orbitscore/issues/448) — daemon graceful-shutdown gap and the `ParentWatch` countermeasure (PR: `a0449b8`)
+- Issue [#573](https://github.com/signalcompose/orbitscore/issues/573) — giving up the respawn loop after consecutive fast failures
+- Issue [#618](https://github.com/signalcompose/orbitscore/issues/618) — instrument replacement and draining the event ring
+- Issue [#628](https://github.com/signalcompose/orbitscore/issues/628) — the effect rack child

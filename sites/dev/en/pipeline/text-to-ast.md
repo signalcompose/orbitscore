@@ -1,16 +1,41 @@
 ---
 title: "I-1. Text to AST"
 chapter-id: "I-1"
-verified-against: 0a4b598
-verified-at: "2026-05-05"
+verified-against: 69dc968
+verified-at: "2026-09-01"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-05-05. The code is the truth; this page is merely a snapshot of understanding at that point in time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # I-1. Text to AST
 
 The first gateway between DSL text and actual execution is "parsing." Rather than executing the text directly, it is first converted into structured data (an AST) and then evaluated. This chapter traces, with `parseAudioDSL()` as the entry point, how the two steps of lexical analysis and syntactic analysis collaborate.
+
+## Drift as of 2026-09
+
+The first edition of this chapter was written against the 2026-05-05 snapshot (0a4b598). Compared with the code as of 2026-09-01 (69dc968), the skeleton of the pipeline (tokenizer → `StatementParser` → `AudioIR`) is unchanged, but the vocabulary has grown considerably. Since this chapter reads that skeleton, the new vocabulary is only enumerated below, and each item is left to the exploration candidates at the end.
+
+- **Token kinds grew from 19 to 32**: `ACCIDENTAL` / `CARET` / `TILDE` / `AT` / `PLUS` for the pitch DSL, `LBRACKET` / `RBRACKET` for stacks, `LBRACE` / `RBRACE` for legato, `UNDERSCORE` for ties, `IMPORT` / `ASTERISK` for `import`, and `COLON` for named arguments (`packages/engine/src/parser/types.ts:7-39`). The first edition's "18 kinds" was a miscount; the listing at the time already had 19
+- **`KEYWORDS` gained `import`** (`packages/engine/src/parser/tokenizer.ts:17-28`)
+- **`AudioIR` gained `fileImports?`** (#456 on 2026-07-17, `types.ts:49-59`). `import { kick } from "./drums.orbs"` is held in a bucket separate from statements, and the interpreter processes it before `globalInit`
+- **The `Statement` union grew from 3 to 11 members** (`types.ts:72-83`): `ChordBinding` / `PatternBinding` / `ModeBinding` (pitch-DSL bindings such as `var m7 = [...]`), `ImportStatement` / `FileImportStatement`, and `MixerHandleStatement` / `MixerInit` / `MixerNodeDecl` (Signal Chain DSL, #517 S1)
+- **`parseStatement()` gained an `IMPORT` branch**, and `parseVarDeclaration()` now discriminates the kind of declaration by the first token of the right-hand side (`[`, `(`, `mode(`, `<id>.output|sum|aux`) (`parse-statement.ts:58-85`, `108-149`)
+- **`AudioParser.parse()` enforces IM.1, "imports only in the file's head region"** (`audio-parser.ts:74-109`)
+- **`GlobalStatement` / `SequenceStatement` / `MethodChain` gained `invocation?: 'bare' | 'call'`**, so the interpreter can tell `.drums` (no parentheses) from `.TALReverb4()` (with parentheses) (`types.ts:252-274`)
+- **`collapseScopedRun()` was extracted into `parse-expression.ts`**. The rule that folds a pitch-scope chain onto a run of juxtaposed groups such as `(A)(B).root(X)` is shared by both the statement-level and the nested-level parse loops
+
+```typescript
+// packages/engine/src/parser/parse-expression.ts:71-78
+export function collapseScopedRun(list: PlayElement[], runStart: number): void {
+  const lastIdx = list.length - 1
+  const last = list[lastIdx]
+  if (last && typeof last === 'object' && last.type === 'scoped' && runStart < lastIdx) {
+    const preceding = list.splice(runStart, lastIdx - runStart)
+    last.groups = [...preceding, ...last.groups]
+  }
+}
+```
 
 ## The Pipeline at a Glance
 
@@ -30,7 +55,7 @@ flowchart LR
 The entry point is the `parseAudioDSL()` function, a simple piece of code that just calls these two stages in order.
 
 ```typescript
-// audio-parser.ts:88-93
+// packages/engine/src/parser/audio-parser.ts:121-126
 export function parseAudioDSL(source: string): AudioIR {
   const tokenizer = new AudioTokenizer(source)
   const tokens = tokenizer.tokenize()
@@ -47,10 +72,10 @@ Lexical analysis is the process of slicing a sequence of characters into "meanin
 
 ### Token Kinds
 
-The DSL defines 18 token types.
+The DSL defines 32 token types.
 
 ```typescript
-// types.ts:7-26
+// packages/engine/src/parser/types.ts:7-39
 export type AudioTokenType =
   | 'VAR' // var keyword
   | 'INIT' // init keyword
@@ -59,6 +84,7 @@ export type AudioTokenType =
   | 'RUN' // RUN reserved keyword
   | 'LOOP' // LOOP reserved keyword
   | 'MUTE' // MUTE reserved keyword
+  | 'IMPORT' // import keyword (e.g. `import chords`, §6)
   | 'IDENTIFIER' // variable names, method names
   | 'NUMBER' // numeric values
   | 'STRING' // string literals
@@ -68,17 +94,29 @@ export type AudioTokenType =
   | 'COMMA' // ,
   | 'EQUALS' // =
   | 'MINUS' // - (for negative numbers)
+  | 'PLUS' // + (for octave shift / detune sign, e.g. 3^+1)
   | 'PERCENT' // % (for random range)
+  | 'ASTERISK' // * (for x*n repetition §6.5 / `import * from` SC.2.2)
+  | 'COLON' // : (named argument separator, SC.3)
+  | 'ACCIDENTAL' // pitch alteration prefix: b, bb, #, ## (degree b/# notation)
+  | 'CARET' // ^ (octave shift modifier, e.g. 3^+1)
+  | 'TILDE' // ~ (detune modifier, e.g. b7~-0.25)
+  | 'AT' // @ (expression modifier: @v velocity / @g articulation, §10.3 E5)
+  | 'LBRACKET' // [ (stack — reserved, not yet supported in v1.1)
+  | 'RBRACKET' // ] (stack — reserved, not yet supported in v1.1)
+  | 'LBRACE' // { (legato group, §4/§5.4)
+  | 'RBRACE' // } (legato group, §4/§5.4)
+  | 'UNDERSCORE' // _ (tie token: §5.1 event tie / §5.2 voice-tie prefix)
   | 'NEWLINE' // line break
   | 'EOF' // end of file
 ```
 
-Keywords such as `VAR`, `INIT`, `GLOBAL`, `RUN`, `LOOP`, and `MUTE` are distinguished from `IDENTIFIER` (general identifier) and have dedicated types. `IDENTIFIER` is used for all non-reserved names, including variable names and method names.
+Keywords such as `VAR`, `INIT`, `GLOBAL`, `RUN`, `LOOP`, `MUTE`, and `IMPORT` are distinguished from `IDENTIFIER` (general identifier) and have dedicated types. `IDENTIFIER` is used for all non-reserved names, including variable names and method names. The symbol tokens from `ACCIDENTAL` onward exist for the pitch DSL (`b3`, `3^+1`, `[1, 3, 5]`) and never appear in an audio sequence's `play()`.
 
 Each token carries not only a type but also positional information from the source.
 
 ```typescript
-// types.ts:28-33
+// packages/engine/src/parser/types.ts:41-46
 export type AudioToken = {
   type: AudioTokenType
   value: string
@@ -94,7 +132,7 @@ The reason `line` and `column` are attached is to accurately report to the user 
 When `AudioTokenizer` reads through the characters and finds a string starting with a letter, it reads it as an identifier. It then checks whether it is a reserved keyword by looking it up in the `KEYWORDS` Set.
 
 ```typescript
-// tokenizer.ts:17-27
+// packages/engine/src/parser/tokenizer.ts:17-28
   // Keywords that should be recognized
   private static readonly KEYWORDS = new Set([
     'var',
@@ -105,6 +143,7 @@ When `AudioTokenizer` reads through the characters and finds a string starting w
     'RUN',
     'LOOP',
     'MUTE',
+    'import',
   ])
 ```
 
@@ -115,7 +154,7 @@ Set lookups are `O(1)`, so the speed does not change as the number of keywords g
 The `tokenize()` method reads the input string one character at a time and generates all tokens in a single pass.
 
 ```typescript
-// tokenizer.ts:111-135
+// packages/engine/src/parser/tokenizer.ts:135-159
   public tokenize(): AudioToken[] {
     const tokens: AudioToken[] = []
 
@@ -156,21 +195,28 @@ Once the token sequence is ready, the next step is syntactic analysis. `AudioPar
 AudioIR (Audio Intermediate Representation) is the structure that holds the result of parsing the DSL text.
 
 ```typescript
-// types.ts:36-40
+// packages/engine/src/parser/types.ts:49-59
 export type AudioIR = {
   globalInit?: GlobalInit
   sequenceInits: SequenceInit[]
   statements: Statement[]
+  /**
+   * ファイル import（IM.1-IM.2, #456）。評価順序の規範（imports が entry 自身の宣言より
+   * 先・ソース記載順）を守るため statements とは別バケットで保持し、interpreter が
+   * globalInit より前に処理する。ファイル先頭領域のみ（AudioParser.parse が検査）。
+   */
+  fileImports?: FileImportStatement[]
 }
 ```
 
-The meanings of the three fields, summarized:
+The meanings of the four fields, summarized:
 
 | Field | Meaning | Example |
 |---|---|---|
 | `globalInit?` | The `var global = init GLOBAL` declaration (optional) | `{ type: 'global_init', variableName: 'global' }` |
 | `sequenceInits[]` | An array of `var seq1 = init global.seq` declarations | `[{ type: 'seq_init', variableName: 'seq1', ... }]` |
-| `statements[]` | Tempo settings, playback, transport commands, etc. | `[{ type: 'sequence', target: 'seq1', method: 'play', ... }]` |
+| `statements[]` | Tempo settings, playback, transport commands, the various bindings, etc. | `[{ type: 'sequence', target: 'seq1', method: 'play', ... }]` |
+| `fileImports?[]` | An array of `import { ... } from "./x.orbs"` (head region of the file only) | `[{ type: 'file_import', names: ['kick'], path: './drums.orbs' }]` |
 
 ```mermaid
 classDiagram
@@ -178,6 +224,7 @@ classDiagram
     globalInit?: GlobalInit
     sequenceInits: SequenceInit[]
     statements: Statement[]
+    fileImports?: FileImportStatement[]
   }
   class GlobalInit {
     type: "global_init"
@@ -191,30 +238,82 @@ classDiagram
   class Statement {
     <<union>>
     GlobalStatement | SequenceStatement | TransportStatement
+    ChordBinding | PatternBinding | ModeBinding
+    ImportStatement | FileImportStatement
+    MixerHandleStatement | MixerInit | MixerNodeDecl
   }
   AudioIR --> GlobalInit
   AudioIR --> SequenceInit
   AudioIR --> Statement
 ```
 
+The full member list of the `Statement` union is as follows.
+
+```typescript
+// packages/engine/src/parser/types.ts:72-83
+export type Statement =
+  | GlobalStatement
+  | SequenceStatement
+  | TransportStatement
+  | ChordBinding
+  | PatternBinding
+  | ModeBinding
+  | ImportStatement
+  | FileImportStatement
+  | MixerHandleStatement
+  | MixerInit
+  | MixerNodeDecl
+```
+
 ### AudioParser is a Thin Wrapper
 
 The `AudioParser` class itself is marked `@deprecated` and described as "a thin wrapper around the parser modules." The actual syntactic analysis is handled by the `StatementParser` class.
 
-The processing of `parse()` is just to read the token sequence from the start, repeatedly call `StatementParser`, and dispatch the returned statement to the appropriate field of `globalInit` / `sequenceInits` / `statements` (see audio-parser.ts:51-82).
+The processing of `parse()` is to read the token sequence from the start, repeatedly call `StatementParser`, and dispatch the returned statement to the appropriate field among `globalInit` / `sequenceInits` / `fileImports` / `statements`. Exactly one rule check is built in: it upholds the invariant that **file imports may only appear in the head region of the file (before the first non-import statement)** (IM.1).
+
+```typescript
+// packages/engine/src/parser/audio-parser.ts:88-109
+      if (stmtResult.statement) {
+        // Handle different statement types
+        if (stmtResult.statement.type === 'global_init') {
+          result.globalInit = stmtResult.statement as GlobalInit
+        } else if (stmtResult.statement.type === 'seq_init') {
+          result.sequenceInits.push(stmtResult.statement as SequenceInit)
+        } else if (stmtResult.statement.type === 'file_import') {
+          if (seenNonImport) {
+            throw new Error(
+              `import "${(stmtResult.statement as FileImportStatement).path}": ` +
+                `import statements must appear before any other statement (IM.1).`,
+            )
+          }
+          result.fileImports!.push(stmtResult.statement as FileImportStatement)
+        } else {
+          result.statements.push(stmtResult.statement as Statement)
+        }
+        // import 文（stdlib / file の両方）だけが先頭領域を延長する — 不変条件はこの1行。
+        if (stmtResult.statement.type !== 'import' && stmtResult.statement.type !== 'file_import') {
+          seenNonImport = true
+        }
+      }
+```
 
 ### StatementParser: Identifying Statements
 
 Now let's look inside `StatementParser.parseStatement()`.
 
 ```typescript
-// parse-statement.ts:25-47
+// packages/engine/src/parser/parse-statement.ts:58-85
   parseStatement(): { statement: any; newPos: number } {
     const token = ParserUtils.current(this.tokens, this.pos)
 
-    // Variable declaration: var x = init GLOBAL
+    // Variable declaration: var x = init GLOBAL  /  var m7 = [...]
     if (token.type === 'VAR') {
       return this.parseVarDeclaration()
+    }
+
+    // Module import: import chords (§6)
+    if (token.type === 'IMPORT') {
+      return this.parseImport()
     }
 
     // Reserved keywords: RUN(), LOOP(), MUTE()
@@ -234,14 +333,26 @@ Now let's look inside `StatementParser.parseStatement()`.
   }
 ```
 
-Dispatch happens by the kind of the leading token. `VAR` means a variable declaration, `RUN` / `LOOP` / `MUTE` mean a transport command, and `IDENTIFIER` means a method call (a tempo setting or playback instruction).
+Dispatch happens by the kind of the leading token. `VAR` means a variable declaration, `IMPORT` means an import statement (`import chords` / `import { ... } from "..."` / `import * from "..."`), `RUN` / `LOOP` / `MUTE` mean a transport command, and `IDENTIFIER` means a method call (a tempo setting or playback instruction).
+
+Beyond `VAR`, `parseVarDeclaration()` decides the kind of declaration by looking at the first token of the right-hand side.
+
+```typescript
+// packages/engine/src/parser/parse-statement.ts:108-111
+    // Type discriminant by the RHS opening token (§6 / §6.5, decision #48):
+    //   `[ ... ]` → chord value (vertical), `( ... )` → pattern variable (horizontal),
+    //   `init ...` → global / sequence initializer (below).
+    const rhs = ParserUtils.current(this.tokens, this.pos)
+```
+
+`init ...` is the global / sequence initializer that is the subject of this chapter; `[ ... ]` is a chord (or rack) value, `( ... )` a pattern variable, `mode(...)` a user-defined pitch lattice, and `<id>.output|sum|aux` a mixer-node derivation. The bodies of these branches are left to the exploration candidates.
 
 ### The Parser Does Not Distinguish global from sequence
 
 What is interesting is that when parsing a statement of the form `<identifier>.method(args)`, **the parser always returns `type: 'sequence'`**.
 
 ```typescript
-// parse-statement.ts:245-253
+// packages/engine/src/parser/parse-statement.ts:610-618
     // Note: We cannot determine if target is global or sequence at parse time
     // since variable names are arbitrary. Use 'sequence' type and let the interpreter
     // determine the actual type by checking state.globals and state.sequences.
@@ -253,14 +364,28 @@ What is interesting is that when parsing a statement of the form `<identifier>.m
     }
 ```
 
-As the comment in the code explains, at parse time there is no way to determine whether a variable name refers to a global or a sequence. Both `global.tempo(140)` and `seq1.play(0)` are, from the parser's perspective, the same pattern of `IDENTIFIER.IDENTIFIER(...)`. Determining which it belongs to is the interpreter's job, and is only known at runtime by referring to state (`state.globals` / `state.sequences`). The mechanism for this decision is covered in detail in [I-2. AST Evaluation Model](/en/pipeline/evaluation).
+As the comment in the code explains, at parse time there is no way to determine whether a variable name refers to a global or a sequence. Both `global.tempo(140)` and `seq1.play(0)` are, from the parser's perspective, the same pattern of `IDENTIFIER.IDENTIFIER(...)`. Determining which it belongs to is the interpreter's job, and is only known at runtime by referring to state (`state.globals` / `state.sequences`, and since #517 the mixer-node registry as well). The mechanism for this decision is covered in detail in [I-2. AST Evaluation Model](/en/pipeline/evaluation).
+
+For the same reason, a statement carries an `invocation` field recording "was it called with parentheses." The parser records `seq.drums` (an output routing to the mixer) and `seq.TALReverb4()` (a plugin call) only as a difference in shape, leaving the resolution of meaning to the interpreter.
+
+```typescript
+// packages/engine/src/parser/types.ts:261-268
+export type SequenceStatement = {
+  type: 'sequence'
+  target: string
+  method: string
+  args: any[]
+  invocation?: 'bare' | 'call'
+  chain?: MethodChain[]
+}
+```
 
 ## Error Position Information: ParserUtils.expect()
 
 The role of `ParserUtils.expect()` is to tell the user where the problem occurred when parsing fails.
 
 ```typescript
-// parser-utils.ts:45-57
+// packages/engine/src/parser/parser-utils.ts:45-57
   static expect(
     tokens: AudioToken[],
     pos: number,
@@ -276,16 +401,16 @@ The role of `ParserUtils.expect()` is to tell the user where the problem occurre
   }
 ```
 
-This is why `line` / `column` are embedded in `AudioToken`. When a syntax error occurs, a message like "Expected RPAREN but got EOF at line 3, column 12" is produced. The strings `'EOF'` and `'Expected RPAREN'` also play an important role in the downstream REPL buffering process. Details are covered in [I-3. Selective Execution](/en/pipeline/selective-execution).
+This is why `line` / `column` are embedded in `AudioToken`. When a syntax error occurs, a message like "Expected RPAREN but got EOF at line 3, column 12" is produced. The word `EOF` in it is the one and only cue the downstream REPL uses to decide "is the input still incomplete" (`Expected RPAREN` was dropped from that decision in #607, 2026-08). Details are covered in [I-3. Selective Execution](/en/pipeline/selective-execution).
 
 ## Summary: Separation of Responsibilities in the Pipeline
 
 To summarize what we have seen in this chapter:
 
 - `AudioTokenizer` — converts a string to `AudioToken[]`. Responsible for recording position information
-- `AudioParser` / `StatementParser` — converts a token sequence to `AudioIR`. Identifies and dispatches statement kinds
-- `AudioIR` — an intermediate representation with the three fields `globalInit`, `sequenceInits`, and `statements`
-- The parser does not distinguish global from sequence — the interpreter decides at runtime
+- `AudioParser` / `StatementParser` — converts a token sequence to `AudioIR`. Identifies and dispatches statement kinds, and upholds the import placement rule (IM.1)
+- `AudioIR` — an intermediate representation with the four fields `globalInit`, `sequenceInits`, `statements`, and `fileImports`
+- The parser does not distinguish global from sequence — the interpreter decides at runtime. `invocation` follows the same idea, recording only the "shape"
 
 This intermediate representation is passed to the interpreter in the next chapter.
 
@@ -296,7 +421,7 @@ This intermediate representation is passed to the interpreter in the next chapte
 - [init](/en/glossary#init) — the `init global` / `init sequenceName` syntax. A DSL keyword for variable declarations
 - [global](/en/glossary#global) — an identifier representing the global scope. The parser does not distinguish it but records it in the AST
 - [Underscore Prefix Pattern](/en/glossary#underscore-prefix-pattern) — the toggle notation introduced in v3.0 (`_sequenceName`). Identified by the tokenizer
-- [sequence (legacy keyword)](/en/glossary#sequence-legacy-keyword) — the `sequence` declaration keyword used in v1.0. Now unified to `init`
+- [sequence (legacy keyword)](/en/glossary#sequence-legacy-keyword) — the `sequence` declaration keyword used in v1.0. Unified to `init` in v3.0
 
 ## Related ADRs
 
@@ -304,23 +429,34 @@ This intermediate representation is passed to the interpreter in the next chapte
 
 ## Next Exploration Candidates
 
-- Details of the regular expressions used inside `AudioTokenizer` (summarize the entire tokenize loop in tabular form)
+- The reading rules of the symbol tokens in `AudioTokenizer` (`ACCIDENTAL` / `CARET` / `TILDE` / `AT` / `UNDERSCORE`) — how `b` is decided to be an identifier or an accidental (`tokenizer.ts:162-170`)
 - Numeric literal reading (`readNumber()`) and the special handling of `-Infinity` / `-inf`
-- All branches of `parseVarDeclaration()` — the distinction between `init GLOBAL` and `init global.seq`
-- The structure of method chaining (`.audio(...).chop(...)` etc.) via `parseMethodChain()`
-- Argument analysis in `ExpressionParser` — the details of `beat(n by m)` and the random `r` / `rN%M` syntax
-- Error recovery strategy — currently throws immediately on error; room to consider stack rewinding
+- All branches of `parseVarDeclaration()` — `init GLOBAL` / `init global.seq` / `init global.mixer` / `[ ... ]` / `( ... )` / `mode(...)` / `mix.output|sum|aux`
+- The three forms of `parseImport()` (`import chords` / `import { a, b } from` / `import * from`) and the IM.1 check (`parse-statement.ts:253-320`)
+- `ValueArray` / `ValueCall` / `ValueRef` — the context-neutral `[ ... ]` whose "chord or rack" classification the parser defers to the interpreter (`types.ts:136-174`)
+- Method chaining (`.audio(...).chop(...)` etc.) via `parseMethodChain()` and how `invocation` is attached
+- Argument analysis in `ExpressionParser` — `beat(n by m)`, the random `r` / `rN%M` syntax, and named arguments `name: value` (SC.3)
+- Why `collapseScopedRun()` is called from three places (statement / nested / pattern binding) and the pitch-scope folding rule (§3)
+- Error recovery strategy — throws immediately on error; room to consider stack rewinding
 
 ## Sources
 
-- `packages/engine/src/parser/types.ts:7-26` — the definition of all 18 `AudioTokenType` variants
-- `packages/engine/src/parser/types.ts:28-33` — `AudioToken` (token with positional info)
-- `packages/engine/src/parser/types.ts:36-40` — `AudioIR` (intermediate representation of parse results)
-- `packages/engine/src/parser/types.ts:53` — `Statement` union type definition
-- `packages/engine/src/parser/tokenizer.ts:11-27` — the `AudioTokenizer` class and `KEYWORDS` Set
-- `packages/engine/src/parser/tokenizer.ts:111-135` — the start of the `tokenize()` main loop
-- `packages/engine/src/parser/audio-parser.ts:51-83` — the loop and dispatch in `AudioParser.parse()`
-- `packages/engine/src/parser/audio-parser.ts:88-93` — the `parseAudioDSL()` entry function
-- `packages/engine/src/parser/parse-statement.ts:25-47` — `parseStatement()` dispatch
-- `packages/engine/src/parser/parse-statement.ts:245-253` — design that always returns `type: 'sequence'`, with the explanatory comment
+- `packages/engine/src/parser/types.ts:7-39` — the definition of all 32 `AudioTokenType` variants
+- `packages/engine/src/parser/types.ts:41-46` — `AudioToken` (token with positional info)
+- `packages/engine/src/parser/types.ts:49-59` — `AudioIR` (including `fileImports`)
+- `packages/engine/src/parser/types.ts:72-83` — `Statement` union type definition (11 members)
+- `packages/engine/src/parser/types.ts:136-174` — `ValueRef` / `ValueCall` / `ValueArray` / `ValueExpression`
+- `packages/engine/src/parser/types.ts:203-219` — `ImportStatement` / `FileImportStatement`
+- `packages/engine/src/parser/types.ts:252-274` — `GlobalStatement` / `SequenceStatement` / `MethodChain` and `invocation`
+- `packages/engine/src/parser/tokenizer.ts:11-32` — the `AudioTokenizer` class and `KEYWORDS` Set
+- `packages/engine/src/parser/tokenizer.ts:135-170` — the start of the `tokenize()` main loop and the accidental decision
+- `packages/engine/src/parser/audio-parser.ts:68-115` — the loop, dispatch, and IM.1 check in `AudioParser.parse()`
+- `packages/engine/src/parser/audio-parser.ts:121-126` — the `parseAudioDSL()` entry function
+- `packages/engine/src/parser/parse-statement.ts:58-85` — `parseStatement()` dispatch
+- `packages/engine/src/parser/parse-statement.ts:90-149` — RHS discrimination in `parseVarDeclaration()`
+- `packages/engine/src/parser/parse-statement.ts:253-320` — `parseImport()` / `parseFileImport()` / `parseImportFromPath()`
+- `packages/engine/src/parser/parse-statement.ts:610-618` — design that always returns `type: 'sequence'`, with the explanatory comment
+- `packages/engine/src/parser/parse-expression.ts:62-78` — `collapseScopedRun()`
 - `packages/engine/src/parser/parser-utils.ts:45-57` — error position reporting via `expect()`
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §IM.1-IM.6 — the import declaration specification
+- `docs/development/WORK_LOG.md` §6.265 (file import parser + interpreter #456, 2026-07-17), §6.291 (Signal Chain mixer declarations #517 S1, 2026-07-26)
