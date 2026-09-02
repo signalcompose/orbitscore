@@ -17,6 +17,45 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.428 docs: chop(1) の訂正をユーザー向け 3 面と dev サイトへ波及させた (Sep 2, 2026)
+
+**追従元**: PR [#683](https://github.com/signalcompose/orbitscore/pull/683)（マージコミット `8157d3d`）/ 関連 #665
+
+#683 は core spec (`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §3) に
+**「スロット合わせが起きるのは `chop(n>1)` の時だけ」**を明記したが、
+**同じ誤読を生む記述が下流のドキュメントに残っていた**ので、そこだけを揃えた。
+コード・テストは変更していない。
+
+#### 直した箇所
+
+| ファイル | 直前の記述 | 問題 |
+|---|---|---|
+| `sites/user/basics/audio-manipulation.md`（+ en） | 「`length()` は再生速度を変えるため、音程も連動して変わります」 | 無条件。`chop(1)` では起きない |
+| `sites/user/reference/methods.md`（+ en） | `length(N)` …（再生速度・音程が変わる） | 同上 |
+| `docs/user/ja/USER_MANUAL.md` | 「`length()`は各イベントの時間を変更し、結果として音程も変化します」「ネストで時間が短くなると…音程が高くなります」 | 同上。例自体は `chop(4)` なので正しいが、地の文が無条件 |
+| `sites/dev/scheduling/event-queue.md`（+ en） | `slice` が optional である理由を書いていなかった | 分岐そのものが未記載 |
+
+dev サイトには分岐の実コード
+（`packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138`）を引用した節を足した。
+**`scheduleEvent` が尺もレートも受け取らない**ことが、非 chop 経路で速度を変えられない理由である。
+
+`sites/user/basics/patterns.md:113-114` は**すでに `chop()` で条件付けされていた**ため変更なし。
+`docs/user/en/USER_MANUAL.md` は簡約版で該当する主張を持たない。
+
+#### spec 側の参照パスをフルパスにした
+
+#683 が書いた `core/sequence/scheduling/event-scheduler.ts` は basename が一意でない
+（`packages/engine/src/audio/supercollider/event-scheduler.ts` が別に存在する）ため、
+`packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138` へ直した。
+この 3 行の挿入で後続行がずれるので、`check-citations.mjs --fix` で
+`sites/dev{,/en}/signal-chain/mixer-audio-line.md` の spec 引用 4 本を再アンカーしている
+（1658-1662 → 1660-1664 / 1710-1712 → 1712-1714。**行ずれのみで内容は不変**）。
+
+#### 確認済み: `docs/specs-v2/` との食い違いは無い
+
+`specs-v2` 側（PITCH_DSL / SIGNAL_CHAIN / DESIGN_DISCUSSION_RECORD）に
+スロット合わせの意味論を述べた記述は無く、core spec の訂正と競合しない。
+
 ### 6.427 docs(planning): 機能マップへの owner コメント 9 本を設計の入力へ (Sep 2, 2026)
 
 **Issue**: #677 / **文書**: `docs/planning/2026-09-02-feature-map-comments.md`

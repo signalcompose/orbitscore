@@ -76,6 +76,18 @@ kick.play(1, 0, 1, 0)
 LOOP(kick)
 ```
 
+::: tip chop(1) cannot be squeezed into the slot
+With `chop(1)` (and with no `chop()` at all), the file sounds at **its own length and its own pitch**. If the file is longer than the slot — the span of time assigned to one note — it simply keeps ringing and overlaps the next note.
+
+This is not a defect; it is what the path is for. One-shots whose **own length carries the musical meaning** — a gong or a cymbal struck at the head of a long bar — are written this way.
+
+```text
+gong.beat(21 by 4).length(1)
+gong.audio("EAF_Gong_05.wav").chop(1)   // 17.7 seconds, at its own pitch
+gong.play(1, 0, 0, 0)                    // struck every 10.0 seconds -> about 7.7 seconds overlap the next
+```
+:::
+
 ---
 
 ## length() — Change the Overall Pattern Length
@@ -100,8 +112,10 @@ phrase.length(4)   // play 4 slices over 4 bars (slower still)
 LOOP(phrase)
 ```
 
-::: warning The pitch changes
+::: warning The pitch changes (only with `chop(2)` or more)
 Because `length()` changes the playback speed, the pitch shifts along with it. Setting `length(2)` makes the result sound about one octave lower. This is by design, not a bug. You can also use the resulting pitch change as part of an intentional musical effect.
+
+This only happens while the file is **split into slices with `chop(2)` or more**, though. With `chop(1)` or no `chop()`, no slice is ever fitted into a slot, so changing `length()` leaves the file at its own length and its own pitch — only the interval between strikes changes.
 :::
 
 ---
@@ -237,9 +251,9 @@ Here is a summary of the methods covered in this chapter.
 
 | Method | Description |
 |---|---|
-| `chop(N)` | Splits the audio file into N slices |
+| `chop(N)` | Splits the audio file into N slices (`chop(1)` does not split, and sounds at its own length and pitch) |
 | `play(1, 2, …)` | Specifies the playback order by slice number (0 is a rest) |
-| `length(N)` | Changes the loop length to N bars (speed and pitch change as well) |
+| `length(N)` | Changes the loop length to N bars (with `chop(2)` or more, speed and pitch change as well) |
 | `gain(dB)` | Adjusts the volume in dB (0 is the default; takes effect immediately) |
 | `pan(value)` | Adjusts the stereo position from -100 to 100 (takes effect immediately) |
 

@@ -113,6 +113,48 @@ export interface ScheduledPlay {
 
 `time` はスケジューラー起動時点を 0 とした相対時刻 (ms) です。「daemon へ `PlayAt` を送出すべき時刻」を表します。`gainDb` は dB のまま持ち、発火時に amplitude へ変換します。`outputChannel` (LinkAudio) と `insertBus` (`seq.effect()`) はルーティングのタグで、`argPath` / `markerOnly` は #390 の live playhead 用です。
 
+### slice を積むかどうかは chop の値で決まる
+
+`slice` が optional なのはなぜでしょうか。答えは sequence 層の分岐にあります。chop の指定によって、そもそも呼ぶメソッドが変わるのです。
+
+```typescript
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138
+      // Schedule event (argPath = #390 live playhead marker, observational only)
+      if (chopDivisions && chopDivisions > 1) {
+        const eventDuration = event.duration && event.duration > 0 ? event.duration : undefined
+        scheduler.scheduleSliceEvent(
+          resolvedFilePath,
+          startTimeMs,
+          event.sliceNumber,
+          chopDivisions,
+          eventDuration,
+          finalGainDb,
+          eventPan,
+          sequenceName,
+          outputChannel,
+          event.argPath,
+          insertBus,
+        )
+      } else {
+        scheduler.scheduleEvent(
+          resolvedFilePath,
+          startTimeMs,
+          finalGainDb,
+          eventPan,
+          sequenceName,
+          outputChannel,
+          event.argPath,
+          insertBus,
+        )
+      }
+```
+
+条件は `chopDivisions > 1` です。`chop()` を書かない場合と `chop(1)` の場合は `scheduleEvent` を通り、`chop(n > 1)` の場合だけ `scheduleSliceEvent` を通ります。
+
+ここで注目したいのは引数の違いです。`scheduleSliceEvent` は `event.duration` を `eventDuration` として渡していますが、`scheduleEvent` は尺もレートも受け取りません。スロットの長さが渡らないので、**スロットに合わせて再生速度を変える余地がそもそも無い**わけです。その結果、非 chop 経路ではファイルが自然な尺・自然な音程のまま鳴り、スロットを越えて次のトリガーに重なります。
+
+この区別は仕様側にも明記されています (`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §3 "Slice-to-Slot Fitting")。仕様のこの節が chop 有りの挙動しか書いていなかったため、2026-08-31 に「オーディオは常にスロットへ詰められる」という誤読が 2 つのセッションで独立に起きています (#665)。
+
 参考までに、SC 経路の `ScheduledPlay` は次の形です。`options` の入れ子の中に `startPos` / `duration` / `rate` (chop 用) を平たく持っています。
 
 ```typescript
@@ -628,6 +670,7 @@ flowchart TB
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:414-445` — `DaemonClient.playAt()`: `PlayAt` リクエストの組み立て
 - `packages/engine/src/audio/audio-gain-utils.ts:1-16` — `gainDbToAmplitude()`: 両バックエンド共通の dB → amplitude
 - `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:70-153` — `scheduleEvents()`: 小節内イベントの一括 push と休符の marker-only 積み込み
+- `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138` — `chopDivisions > 1` による `scheduleSliceEvent` / `scheduleEvent` の分岐 (#665)
 - `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:30-65` — `calculateEventGain()`: master gain を event に畳み込まない (#643)
 - `packages/engine/src/core/sequence/playback/loop-sequence.ts:3-14` — `LOOP_TIMER_LEAD_MS` (look-ahead 第 2 段)
 - `packages/engine/src/midi/midi-scheduler.ts:157-176` — MIDI 側の `scheduleStepMarker()` (#654)

@@ -113,6 +113,48 @@ export interface ScheduledPlay {
 
 `time` is a relative time (ms) with the scheduler's start time as 0. It represents "the time at which `PlayAt` should be sent to the daemon." `gainDb` is kept in dB and converted to amplitude at firing. `outputChannel` (LinkAudio) and `insertBus` (`seq.effect()`) are routing tags, and `argPath` / `markerOnly` are for the #390 live playhead.
 
+### Whether a slice is queued at all is decided by the chop value
+
+Why is `slice` optional? The answer is a branch in the sequence layer. Depending on the chop declaration, the method being called changes entirely.
+
+```typescript
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138
+      // Schedule event (argPath = #390 live playhead marker, observational only)
+      if (chopDivisions && chopDivisions > 1) {
+        const eventDuration = event.duration && event.duration > 0 ? event.duration : undefined
+        scheduler.scheduleSliceEvent(
+          resolvedFilePath,
+          startTimeMs,
+          event.sliceNumber,
+          chopDivisions,
+          eventDuration,
+          finalGainDb,
+          eventPan,
+          sequenceName,
+          outputChannel,
+          event.argPath,
+          insertBus,
+        )
+      } else {
+        scheduler.scheduleEvent(
+          resolvedFilePath,
+          startTimeMs,
+          finalGainDb,
+          eventPan,
+          sequenceName,
+          outputChannel,
+          event.argPath,
+          insertBus,
+        )
+      }
+```
+
+The condition is `chopDivisions > 1`. Writing no `chop()` at all, or `chop(1)`, goes through `scheduleEvent`; only `chop(n > 1)` goes through `scheduleSliceEvent`.
+
+What deserves attention here is the difference in arguments. `scheduleSliceEvent` passes `event.duration` as `eventDuration`, but `scheduleEvent` receives neither a duration nor a rate. Since the slot length never reaches it, **there is simply no room to change the playback speed to fit the slot**. As a result, on the non-chop path the file sounds at its natural length and natural pitch, rings past the slot, and overlaps the next trigger.
+
+This distinction is stated in the spec as well (`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §3 "Slice-to-Slot Fitting"). Because that section of the spec described only the behavior with chop, on 2026-08-31 two sessions independently misread it as "audio is always fitted into the slot" (#665).
+
 For reference, the SC path's `ScheduledPlay` looks like this. Inside the nested `options` it holds `startPos` / `duration` / `rate` (for chop) flat.
 
 ```typescript
@@ -628,6 +670,7 @@ There are three key design decisions.
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:414-445` — `DaemonClient.playAt()`: assembling the `PlayAt` request
 - `packages/engine/src/audio/audio-gain-utils.ts:1-16` — `gainDbToAmplitude()`: dB → amplitude shared by both backends
 - `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:70-153` — `scheduleEvents()`: bulk push of events within a bar and marker-only push for rests
+- `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138` — the `chopDivisions > 1` branch between `scheduleSliceEvent` and `scheduleEvent` (#665)
 - `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:30-65` — `calculateEventGain()`: master gain is not folded into the event (#643)
 - `packages/engine/src/core/sequence/playback/loop-sequence.ts:3-14` — `LOOP_TIMER_LEAD_MS` (look-ahead stage 2)
 - `packages/engine/src/midi/midi-scheduler.ts:157-176` — the MIDI-side `scheduleStepMarker()` (#654)
