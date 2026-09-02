@@ -152,6 +152,8 @@ user 向け学習サイト本体（VitePress、日英）。同 workflow で http
 | 2026-04 | [WORK_LOG_2026-04.md](../archive/WORK_LOG_2026-04.md) |
 | 2026-05 | [WORK_LOG_2026-05.md](../archive/WORK_LOG_2026-05.md) |
 | 2026-06 | [WORK_LOG_2026-06.md](../archive/WORK_LOG_2026-06.md) |
+| 2026-07 | [WORK_LOG_2026-07.md](../archive/WORK_LOG_2026-07.md) |
+| 2026-08 | [WORK_LOG_2026-08.md](../archive/WORK_LOG_2026-08.md) |
 
 ---
 

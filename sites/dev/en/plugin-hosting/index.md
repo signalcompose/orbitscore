@@ -440,7 +440,7 @@ The E2E that goes through the user's own path (OrbitStudio + MCP) is accumulated
 - `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:451-458` — `default_rack_child_exe`
 - [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/core/INSTRUCTION_ORBITSCORE_DSL.md) PH.1–PH.6 / PC.1–PC.5 — DSL spec for plugin hosting and the catalog
 - [`docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md) SC.10 — source of truth for the rack form
-- [`docs/development/WORK_LOG.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/WORK_LOG.md) 6.258 — VST3 instrument production real-hardware E2E record (capture peak 0.25000)
+- [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 — VST3 instrument production real-hardware E2E record (capture peak 0.25000)
 - Epic [#424](https://github.com/signalcompose/orbitscore/issues/424) — plugin hosting DoD overview
 - Issue [#421](https://github.com/signalcompose/orbitscore/issues/421) — VST3 instrument production
 - Issue [#463](https://github.com/signalcompose/orbitscore/issues/463) — plugin catalog and name resolution

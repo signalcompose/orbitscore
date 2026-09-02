@@ -17,6 +17,41 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: アーカイブで切れた WORK_LOG への相互参照を移動先へ張り替えた (Sep 2, 2026)
+
+**追従元**: PR [#687](https://github.com/signalcompose/orbitscore/pull/687)（merge commit `9ee375b`）/ **Issue**: #686
+
+#### 何が切れていたか
+
+#687 が 6〜8 月の **299 セクション**を `docs/archive/WORK_LOG_2026-0{6,7,8}.md` へ移した結果、
+他文書が `docs/development/WORK_LOG.md` §6.xxx と**ファイル名まで名指し**で引いていた箇所が、
+**そのファイルにもう存在しない節**を指すようになった。番号は保存されているので、壊れたのは
+番号ではなく**パス**である。
+
+#### やったこと
+
+1. **相互参照の張り替え（96 行 / 40 ファイル）**: 行内の節番号がすべて同じアーカイブへ移った 84 行は
+   機械置換。07 と 08 にまたがる 12 行（`sites/dev/{,en/}` の glossary / catalog / plugin-ui /
+   rust-engine/index / execution-feedback / vscode-architecture）は、境界（07 は 6.347 まで・
+   08 は 6.348 から）で分けて手で書き分けた。ja / en 両方
+2. **`docs/core/INDEX.md`**: 「Archived WORK_LOG」表に 2026-07 / 2026-08 の行が無かったので追加。
+   本体末尾の索引には両方あり、**INDEX.md だけが取り残されていた**
+3. **`docs/core/PROJECT_RULES.md` §1a**: アーカイブ手順に「INDEX.md の表も更新する」「名指しの
+   相互参照を張り替える」の 2 項を追加。あわせて `docs/WORK_LOG.md` という誤ったパスを
+   `docs/development/WORK_LOG.md` へ修正
+
+#### 仕組みの穴（次のアーカイブで同じことが起きる）
+
+`tests/docs/worklog-size.spec.ts` が突合するのは **WORK_LOG.md 末尾の索引と `docs/archive/` の実体**
+だけで、`docs/core/INDEX.md` の表も、他文書からの名指し参照も見ていない。今回はどちらも
+取り残されていた。§1a に手順として書いたが、**強制はされていない**。
+
+#### 実装・テストは 1 行も触っていない
+
+`packages/` `rust/` `tests/` は無変更（`tests/e2e/orbitstudio-mcp-gated.spec.ts` と
+`tests/vscode-extension/mcp-server.spec.ts` の `WORK_LOG 6.189` 等はコメント内の番号のみの
+言及で、ファイル名を名指ししていないため対象外）。
+
 ### chore(docs): WORK_LOG をアーカイブし、番号を廃止し、閾値をテストで強制した (Sep 2, 2026)
 
 **Issue**: #686 / **このエントリから番号を振らない**（本作業で決めた規則の最初の適用）

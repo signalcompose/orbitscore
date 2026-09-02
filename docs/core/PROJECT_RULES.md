@@ -33,10 +33,15 @@
 
 **When WORK_LOG.md exceeds ~2,000 lines or ~100KB, archive older sections:**
 
-- **Keep recent work** (latest 15-20 sections) in main `docs/WORK_LOG.md`
+- **Keep recent work** (latest 15-20 sections) in main `docs/development/WORK_LOG.md`
 - **Archive older sections** to `docs/archive/WORK_LOG_YYYY-MM.md` by month
   - Example: `docs/archive/WORK_LOG_2025-09.md` for September 2025 work
 - **Add reference link** at the end of main WORK_LOG.md pointing to archived files
+- **Update the archive table** in [`docs/core/INDEX.md`](INDEX.md)（「Archived WORK_LOG」節）
+  - 🔴 `worklog-size.spec.ts` が突合するのは本体末尾の索引だけで、**INDEX.md は検査していない**。
+    2026-09-02 のアーカイブでは実際にここが取り残された
+- **Repoint cross-references**: 他文書が `docs/development/WORK_LOG.md` §N.M と**ファイル名まで名指し**で
+  引いている箇所を、移動先の `docs/archive/WORK_LOG_YYYY-MM.md` へ書き換える（番号は残るがファイルが変わる）
 - **Add header to archived file** with:
   - Archive period (start date - end date)
   - Link back to main WORK_LOG.md

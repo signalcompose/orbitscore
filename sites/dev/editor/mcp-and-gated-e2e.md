@@ -1010,7 +1010,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — OrbitStudio.app のビルド
 - `docs/testing/E2E_HARNESS_SPEC.md` — DSL 網羅 E2E ハーネス仕様（#543）
 - `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md` §3 — Agent Bridge の原設計
-- `docs/development/WORK_LOG.md` 6.348 / 6.409 / 6.415 / 6.416 / 6.417 / 6.418 / 6.421 — MCP ツール追加・実機検証・stale ガード・仕組み化・#654
+- `docs/archive/WORK_LOG_2026-08.md` 6.348 / 6.409 / 6.415 / 6.416 / 6.417 / 6.418 / 6.421 — MCP ツール追加・実機検証・stale ガード・仕組み化・#654
 - `CLAUDE.md` 「E2E が最重要」「これらは仕組みで強制されている」「マージ前ゲート」
 - Issue [#388](https://github.com/signalcompose/orbitscore/issues/388) — Agent Bridge / MCP サーバ
 - Issue [#390](https://github.com/signalcompose/orbitscore/issues/390) — ライブ playhead

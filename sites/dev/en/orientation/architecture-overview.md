@@ -690,4 +690,4 @@ Topics worth reading one level deeper from here. Each is expected to be filed as
 - `scripts/copy-daemon-bin.sh:1-47,121-132` — bundling policy for daemon / children / standard plugins
 - `package.json:9-11` — `build:copy-engine` calls `copy-daemon-bin.sh`
 - `docs/research/ENGINE_DAEMON_PROTOCOL.md` — the SoT of the wire protocol
-- `docs/development/WORK_LOG.md` §6.179 (cutover #108, 2026-07-03), §6.185 (daemon bundling #306, 2026-07-03), §6.188-6.192 (MCP server #388, 2026-07-07)
+- `docs/archive/WORK_LOG_2026-07.md` §6.179 (cutover #108, 2026-07-03), §6.185 (daemon bundling #306, 2026-07-03), §6.188-6.192 (MCP server #388, 2026-07-07)

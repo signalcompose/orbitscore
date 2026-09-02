@@ -9,7 +9,7 @@ status: draft
 > **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 ::: warning 2026-09 時点の位置づけ
-scsynth の bundle と strict resolver は SuperCollider 経路のものです。2026-07-03 の cutover #108（`docs/development/WORK_LOG.md` §6.179）以降、この経路は **`ORBITSCORE_ENGINE=sc`（VS Code では `orbitscore.engine: "sc"`）で opt-out したときだけ**使われ、既定の Rust 経路では scsynth は解決すらされません。ただし本 ADR が決めた「fail loud の resolver」というパターン自体は `orbit-audio-daemon` の解決にそのまま流用されています（末尾の「Consequences revisited (2026-09)」）。既定経路は [RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照してください。
+scsynth の bundle と strict resolver は SuperCollider 経路のものです。2026-07-03 の cutover #108（`docs/archive/WORK_LOG_2026-07.md` §6.179）以降、この経路は **`ORBITSCORE_ENGINE=sc`（VS Code では `orbitscore.engine: "sc"`）で opt-out したときだけ**使われ、既定の Rust 経路では scsynth は解決すらされません。ただし本 ADR が決めた「fail loud の resolver」というパターン自体は `orbit-audio-daemon` の解決にそのまま流用されています（末尾の「Consequences revisited (2026-09)」）。既定経路は [RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照してください。
 
 ```typescript
 // packages/engine/src/audio/create-audio-engine.ts:17-22
@@ -332,11 +332,11 @@ ADR の形式にならって、決定後の帰結を記録します。
 
 ### bundle は据え置き、経路は opt-out に
 
-2026-07-03 の cutover #108 (`docs/development/WORK_LOG.md` §6.179) で既定バックエンドが Rust に切り替わりましたが、scsynth の bundle そのものは残っています。#377 の engine-kind 分岐 (`docs/development/WORK_LOG.md` §6.186) は release.yml について「scsynth 関連ステップ (brew install / build:bundle / verify:bundle) は無改変で維持 (owner 暫定判断: scsynth 同梱は Phase 1 据え置き)」と記録しています。したがって `.vsix` は 69dc968 時点でも SC bundle と daemon バイナリの両方を同梱する構成です。
+2026-07-03 の cutover #108 (`docs/archive/WORK_LOG_2026-07.md` §6.179) で既定バックエンドが Rust に切り替わりましたが、scsynth の bundle そのものは残っています。#377 の engine-kind 分岐 (`docs/archive/WORK_LOG_2026-07.md` §6.186) は release.yml について「scsynth 関連ステップ (brew install / build:bundle / verify:bundle) は無改変で維持 (owner 暫定判断: scsynth 同梱は Phase 1 据え置き)」と記録しています。したがって `.vsix` は 69dc968 時点でも SC bundle と daemon バイナリの両方を同梱する構成です。
 
 ### strict resolver のパターンは daemon に継承された
 
-本 ADR の中核だった「fail loud・silent fallback を持たない・候補は実行可能ファイルであること」は、`resolveDaemonBinaryPath()` にそのまま引き継がれています。#306 (`docs/development/WORK_LOG.md` §6.185) で `.vsix` 同梱 daemon を最後の候補として追加し、#366 のレビュー Round 2 (§6.186) で「`existsSync` のみで exec bit を見ていない = scsynth 側 `isExecutableFile` と非対称」という指摘を受けて、daemon 側も executable regular file を要求するよう揃えられました。候補の並びは `explicit → env (ORBIT_AUDIO_DAEMON_PATH) → monorepo-release → monorepo-debug → extension-bundle` です。
+本 ADR の中核だった「fail loud・silent fallback を持たない・候補は実行可能ファイルであること」は、`resolveDaemonBinaryPath()` にそのまま引き継がれています。#306 (`docs/archive/WORK_LOG_2026-07.md` §6.185) で `.vsix` 同梱 daemon を最後の候補として追加し、#366 のレビュー Round 2 (§6.186) で「`existsSync` のみで exec bit を見ていない = scsynth 側 `isExecutableFile` と非対称」という指摘を受けて、daemon 側も executable regular file を要求するよう揃えられました。候補の並びは `explicit → env (ORBIT_AUDIO_DAEMON_PATH) → monorepo-release → monorepo-debug → extension-bundle` です。
 
 ```typescript
 // packages/engine/src/audio/rust-engine/daemon-client.ts:99-99
@@ -396,7 +396,7 @@ ADR の形式にならって、決定後の帰結を記録します。
 - `packages/vscode-extension/package.json` — `orbitscore.engine` 設定 (既定 `"rust"`) と `commandPalette` の `when` 句
 - commit `1569110` — SC.app/Spotlight fallback 削除の詳細 (動機・変更内容・dev 影響)
 - PR [#155](https://github.com/signalcompose/orbitscore/pull/155) — scsynth bundle strict mode 採用
-- `docs/development/WORK_LOG.md` §6.179 / §6.185 / §6.186 — cutover #108、daemon の `.vsix` 同梱 (#306)、engine-kind 分岐と bundle 手順の据え置き (#377)
+- `docs/archive/WORK_LOG_2026-07.md` §6.179 / §6.185 / §6.186 — cutover #108、daemon の `.vsix` 同梱 (#306)、engine-kind 分岐と bundle 手順の据え置き (#377)
 - `docs/research/SCSYNTH_BUNDLE_MANIFEST.md` — Issue #134: bundle 最小セット確定 (26 plugins + libsndfile)
 - `docs/research/CODESIGN_PIPELINE.md` — Issue #135: 署名 Notarize 調査 (再署名不要の結論)
 - `docs/research/SCSYNTH_STANDALONE.md` — Issue #133: SC.app 外でのスタンドアロン起動検証

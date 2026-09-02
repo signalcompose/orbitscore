@@ -484,6 +484,6 @@ post-peak accessors observe the same signal. These figures were not re-measured 
 - `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:232-234` — `post_peak_bits` (lock-free peak accumulation implementation)
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:78-152` — the stale artifact guard (`assertDaemonBinaryIsNotStale`)
 - `package.json:17-18` — `pretest:e2e:gated` / `test:e2e:gated`
-- [`docs/development/WORK_LOG.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/WORK_LOG.md) 6.415 / 6.416 / 6.417 — discovery of the #643 master fader defect, the #651 header patch and stale guard, pretest automation
+- [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 / 6.416 / 6.417 — discovery of the #643 master fader defect, the #651 header patch and stale guard, pretest automation
 - Issue [#307](https://github.com/signalcompose/orbitscore/issues/307) — capture seam realtime wiring
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — capture WAV that opens after an abnormal exit, and the stale-binary countermeasure

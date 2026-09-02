@@ -637,4 +637,4 @@ flowchart LR
 - `packages/engine/src/interpreter/evaluate-method.ts:58-107` — `processArguments()` の named_arg / beat / play 特殊ケース
 - `packages/engine/src/interpreter/process-file-import.ts` — `createImportContext()` / `processFileImports()` (#456)
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` §SC.3 — 名前付き引数と「黙って無視しない」規則 (SC.3.3)
-- `docs/development/WORK_LOG.md` §6.265 (file import #456, 2026-07-17)、§6.291-6.293 (Signal Chain S1-S3 #517, 2026-07-26)
+- `docs/archive/WORK_LOG_2026-07.md` §6.265 (file import #456, 2026-07-17)、§6.291-6.293 (Signal Chain S1-S3 #517, 2026-07-26)

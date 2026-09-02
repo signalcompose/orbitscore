@@ -1010,7 +1010,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — building OrbitStudio.app
 - `docs/testing/E2E_HARNESS_SPEC.md` — DSL coverage E2E harness spec (#543)
 - `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md` §3 — original design of the Agent Bridge
-- `docs/development/WORK_LOG.md` 6.348 / 6.409 / 6.415 / 6.416 / 6.417 / 6.418 / 6.421 — MCP tool additions, real-device verification, stale guard, mechanisation, #654
+- `docs/archive/WORK_LOG_2026-08.md` 6.348 / 6.409 / 6.415 / 6.416 / 6.417 / 6.418 / 6.421 — MCP tool additions, real-device verification, stale guard, mechanisation, #654
 - `CLAUDE.md` "E2E が最重要", "これらは仕組みで強制されている", "マージ前ゲート"
 - Issue [#388](https://github.com/signalcompose/orbitscore/issues/388) — Agent Bridge / MCP server
 - Issue [#390](https://github.com/signalcompose/orbitscore/issues/390) — live playhead

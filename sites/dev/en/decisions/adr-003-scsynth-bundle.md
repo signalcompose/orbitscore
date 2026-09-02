@@ -9,7 +9,7 @@ status: draft
 > **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
 
 ::: warning Status as of 2026-09
-The scsynth bundle and the strict resolver belong to the SuperCollider path. Since cutover #108 on 2026-07-03 (`docs/development/WORK_LOG.md` §6.179), this path is used **only when you opt out with `ORBITSCORE_ENGINE=sc`** (in VS Code, `orbitscore.engine: "sc"`); on the default Rust path scsynth is not even resolved. However, the "fail-loud resolver" pattern this ADR decided on is reused as-is for resolving `orbit-audio-daemon` (see "Consequences revisited (2026-09)" at the end). For the default path, see [RE-1. Daemon Architecture Overview](/en/rust-engine/).
+The scsynth bundle and the strict resolver belong to the SuperCollider path. Since cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179), this path is used **only when you opt out with `ORBITSCORE_ENGINE=sc`** (in VS Code, `orbitscore.engine: "sc"`); on the default Rust path scsynth is not even resolved. However, the "fail-loud resolver" pattern this ADR decided on is reused as-is for resolving `orbit-audio-daemon` (see "Consequences revisited (2026-09)" at the end). For the default path, see [RE-1. Daemon Architecture Overview](/en/rust-engine/).
 
 ```typescript
 // packages/engine/src/audio/create-audio-engine.ts:17-22
@@ -332,11 +332,11 @@ Following the ADR format, this records the consequences after the decision.
 
 ### The bundle stays; the path became an opt-out
 
-Cutover #108 on 2026-07-03 (`docs/development/WORK_LOG.md` §6.179) switched the default backend to Rust, but the scsynth bundle itself remains. The engine-kind branching of #377 (`docs/development/WORK_LOG.md` §6.186) records, regarding release.yml, that "the scsynth-related steps (brew install / build:bundle / verify:bundle) are kept unchanged (interim owner decision: keep the scsynth bundle as-is in Phase 1)." Therefore, even at 69dc968, the `.vsix` ships both the SC bundle and the daemon binary.
+Cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179) switched the default backend to Rust, but the scsynth bundle itself remains. The engine-kind branching of #377 (`docs/archive/WORK_LOG_2026-07.md` §6.186) records, regarding release.yml, that "the scsynth-related steps (brew install / build:bundle / verify:bundle) are kept unchanged (interim owner decision: keep the scsynth bundle as-is in Phase 1)." Therefore, even at 69dc968, the `.vsix` ships both the SC bundle and the daemon binary.
 
 ### The strict resolver pattern was inherited by the daemon
 
-The core of this ADR — "fail loud, no silent fallback, a candidate must be an executable file" — is carried over as-is into `resolveDaemonBinaryPath()`. #306 (`docs/development/WORK_LOG.md` §6.185) added the `.vsix`-bundled daemon as the last candidate, and in review Round 2 of #366 (§6.186) the finding that "it only checks `existsSync` and does not look at the exec bit — asymmetric with `isExecutableFile` on the scsynth side" led to the daemon side also requiring an executable regular file. The candidate order is `explicit → env (ORBIT_AUDIO_DAEMON_PATH) → monorepo-release → monorepo-debug → extension-bundle`.
+The core of this ADR — "fail loud, no silent fallback, a candidate must be an executable file" — is carried over as-is into `resolveDaemonBinaryPath()`. #306 (`docs/archive/WORK_LOG_2026-07.md` §6.185) added the `.vsix`-bundled daemon as the last candidate, and in review Round 2 of #366 (§6.186) the finding that "it only checks `existsSync` and does not look at the exec bit — asymmetric with `isExecutableFile` on the scsynth side" led to the daemon side also requiring an executable regular file. The candidate order is `explicit → env (ORBIT_AUDIO_DAEMON_PATH) → monorepo-release → monorepo-debug → extension-bundle`.
 
 ```typescript
 // packages/engine/src/audio/rust-engine/daemon-client.ts:99-99
@@ -396,7 +396,7 @@ The "no re-signing required" conclusion in this ADR was about scsynth, which can
 - `packages/vscode-extension/package.json` — the `orbitscore.engine` setting (default `"rust"`) and the `commandPalette` `when` clauses
 - commit `1569110` — details of the SC.app/Spotlight fallback removal (motivation, change content, dev impact)
 - PR [#155](https://github.com/signalcompose/orbitscore/pull/155) — adoption of scsynth bundle strict mode
-- `docs/development/WORK_LOG.md` §6.179 / §6.185 / §6.186 — cutover #108, bundling the daemon into the `.vsix` (#306), engine-kind branching and keeping the bundle steps (#377)
+- `docs/archive/WORK_LOG_2026-07.md` §6.179 / §6.185 / §6.186 — cutover #108, bundling the daemon into the `.vsix` (#306), engine-kind branching and keeping the bundle steps (#377)
 - `docs/research/SCSYNTH_BUNDLE_MANIFEST.md` — Issue #134: finalized minimum bundle set (26 plugins + libsndfile)
 - `docs/research/CODESIGN_PIPELINE.md` — Issue #135: signing/notarize investigation (conclusion that re-signing is unnecessary)
 - `docs/research/SCSYNTH_STANDALONE.md` — Issue #133: validation of standalone startup outside SC.app

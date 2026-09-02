@@ -9,7 +9,7 @@ status: draft
 > **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
 
 ::: warning Status as of 2026-09
-The decision this ADR records — "choose SuperCollider (scsynth) as the audio backend" — was **overridden as the default** by cutover #108 on 2026-07-03 (`docs/development/WORK_LOG.md` §6.179). `createAudioEngine()` returns `SuperColliderPlayer` only when `ORBITSCORE_ENGINE=sc` is set explicitly; the default is the Rust `orbit-audio-daemon`. This ADR is historical reading that preserves the circumstances at the time of the decision, and "Consequences revisited (2026-09)" at the end summarizes what followed the cutover. For the default path, see [RE-1. Daemon Architecture Overview](/en/rust-engine/).
+The decision this ADR records — "choose SuperCollider (scsynth) as the audio backend" — was **overridden as the default** by cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179). `createAudioEngine()` returns `SuperColliderPlayer` only when `ORBITSCORE_ENGINE=sc` is set explicitly; the default is the Rust `orbit-audio-daemon`. This ADR is historical reading that preserves the circumstances at the time of the decision, and "Consequences revisited (2026-09)" at the end summarizes what followed the cutover. For the default path, see [RE-1. Daemon Architecture Overview](/en/rust-engine/).
 
 ```typescript
 // packages/engine/src/audio/create-audio-engine.ts:17-22
@@ -200,7 +200,7 @@ In particular, `fixpitch()` and `time()` (time stretching) remain planned featur
       // - time(): Time stretch factor (planned)
 ```
 
-The cutover #108 record (`docs/development/WORK_LOG.md` §6.179) also files `.time()` / `.fixpitch()` as "not a cutover blocker, out of scope → #213." The original question of whether to implement granular synthesis in SuperCollider or in Rust became a Rust-daemon-side task once the default moved to Rust.
+The cutover #108 record (`docs/archive/WORK_LOG_2026-07.md` §6.179) also files `.time()` / `.fixpitch()` as "not a cutover blocker, out of scope → #213." The original question of whether to implement granular synthesis in SuperCollider or in Rust became a Rust-daemon-side task once the default moved to Rust.
 
 ---
 
@@ -239,7 +239,7 @@ Following the ADR format, this records the consequences roughly a year and a hal
 
 ### The default backend switched to Rust (cutover #108, 2026-07-03)
 
-`docs/development/WORK_LOG.md` §6.179 is the record of the cutover. There are three key points.
+`docs/archive/WORK_LOG_2026-07.md` §6.179 is the record of the cutover. There are three key points.
 
 - **Parity is backed by measurement**: 22 offline tests across 3 layers (interpreter schedule / core render / daemon render) PASS, and the coverage matrix over 22 examples shows "no genuine gap" in audio features. The gated `real-daemon-timing` was measured at default/64f/32f: all ahead-of-cursor, xruns=0, polymeter parity. Anchor drift tightens monotonically as the buffer shrinks (6.7→2.4→0.7 ms)
 - **Scope is the engine-level default only**: the VS Code UI default (`orbitscore.engine`) and the `.vsix` rebuild were split off as post-cutover finishing in #366. Full retirement of scsynth is "a separate later stage"
@@ -270,7 +270,7 @@ On the code side, the factory's header comment is itself a summary of the decisi
 
 - The whole of `packages/engine/src/audio/supercollider/` and `SuperColliderPlayer` (retained as a sibling that `implements` `AudioEngineBackend`)
 - The SC plugin for LinkAudio (`packages/sc-link-audio`) and the `orbitPlayBufLink` / `orbitLinkAudioKeepalive` SynthDefs
-- The scsynth bundle steps in the release pipeline (`docs/development/WORK_LOG.md` §6.186: "scsynth-related steps kept unchanged," an interim owner decision)
+- The scsynth bundle steps in the release pipeline (`docs/archive/WORK_LOG_2026-07.md` §6.186: "scsynth-related steps kept unchanged," an interim owner decision)
 - The VS Code extension's `orbitscore.engine: "sc"` and the `forceKillScsynth` / `selectAudioDevice` commands gated on it (`when` clauses in `package.json`'s `commandPalette`)
 
 The accurate reading is not that this ADR's decision "was wrong," but that "it served its purpose and was demoted to an opt-out."
@@ -296,7 +296,7 @@ The accurate reading is not that this ADR's decision "was wrong," but that "it s
 
 - Contents of the `orbitPlayBuf` SynthDef — what UGen graph realizes the slice playback for `chop()`
 - Role of the `supercolliderjs` package — details of where it is used as the OSC client
-- Actually read the parity verification of cutover #108 (the 22 offline tests and gated timing cited in `docs/development/WORK_LOG.md` §6.179) and organize the difference in dispatch models between SC and the daemon (fire-now vs schedule-ahead)
+- Actually read the parity verification of cutover #108 (the 22 offline tests and gated timing cited in `docs/archive/WORK_LOG_2026-07.md` §6.179) and organize the difference in dispatch models between SC and the daemon (fire-now vs schedule-ahead)
 - How to implement `.time()` / `.fixpitch()` (#213) on the Rust daemon side
 - Conditions for fully retiring scsynth — what can be dropped from the `AudioEngineBackend` contract when `SuperColliderPlayer` is deleted
 
@@ -309,8 +309,8 @@ The accurate reading is not that this ADR's decision "was wrong," but that "it s
 - `packages/engine/src/audio/supercollider/` — the SuperColliderPlayer implementation directory (retained)
 - `packages/vscode-extension/src/completion-context.ts:222-224` — comment that `fixpitch()` / `time()` are planned (#213)
 - `rust/crates/` — the 22 crates at 69dc968 (table in Consequences revisited)
-- `docs/development/WORK_LOG.md` §6.179 — cutover #108 (2026-07-03): parity evidence, scope boundary, reversibility
-- `docs/development/WORK_LOG.md` §6.186 — engine-kind branching (#377) and keeping the scsynth bundle steps
+- `docs/archive/WORK_LOG_2026-07.md` §6.179 — cutover #108 (2026-07-03): parity evidence, scope boundary, reversibility
+- `docs/archive/WORK_LOG_2026-07.md` §6.186 — engine-kind branching (#377) and keeping the scsynth bundle steps
 - `CLAUDE.md` — the ICLC retarget of the production track (#413, 2026-07-12)
 - commit `f2de9133` — initial implementation of the Web Audio API engine (`node-web-audio-api` + `wavefile`)
 - commit `081a474` — completion of the SuperCollider integration: record of achieving the sox 140-150 ms drift → 0-8 ms

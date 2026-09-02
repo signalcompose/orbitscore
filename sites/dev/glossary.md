@@ -338,6 +338,6 @@ scsynth が見つからなかった時に throw される Error サブクラス�
 - `packages/vscode-extension/src/mcp-server.ts`, `extension.ts` — MCP サーバ, ORBITSCORE_MCP_PORT の優先
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts`, `tests/e2e/dsl-e2e-coverage.spec.ts` — gated E2E, coverage ratchet
 - `rust/crates/*/Cargo.toml` — crate description（children / host / scanner / std-gain）
-- `docs/development/WORK_LOG.md` 6.179, 6.337, 6.413–6.421 — cutover, evt リング, per-window pump, playhead
+- `docs/archive/WORK_LOG_2026-07.md` 6.179, 6.337 / `docs/archive/WORK_LOG_2026-08.md` 6.413–6.421 — cutover, evt リング, per-window pump, playhead
 - `docs/research/SCSYNTH_BUNDLE_MANIFEST.md` — bundle 最小セット調査
 - [SuperCollider OSC Command Reference](https://doc.sccode.org/Reference/Server-Command-Reference.html) — `/s_new`, `/b_allocRead` 等の OSC メッセージ仕様
