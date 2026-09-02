@@ -60,7 +60,7 @@ snare」と列挙するのではなく、kick と snare がそれぞれ `output(
 仕様の DSL サンプルも引用しておきます（spec の Markdown から逐語）。
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1658-1662
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1660-1664
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")
@@ -69,7 +69,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1710-1712
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1712-1714
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send("rev", 0.3)                 // send（copy・原音は継続して master/sum へ）

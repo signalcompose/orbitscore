@@ -48,9 +48,9 @@ var kick = init global.seq
 | Signature | Description | Example |
 |---|---|---|
 | `audio("file.wav")` | Specifies the audio file to play. When `audioPath` is set, a relative path can be used | `kick.audio("kick.wav")` |
-| `chop(N)` | Splits the audio file into N equal slices | `arp.chop(8)` |
+| `chop(N)` | Splits the audio file into N equal slices. `chop(1)` and omitting it do not split: the file sounds at its own length and pitch and rings past the slot | `arp.chop(8)` |
 | `play(...)` | Defines the rhythm pattern using slice numbers (0 is a rest) | `kick.play(1, 0, 1, 0)` |
-| `length(N)` | Sets the loop length to N bars (changes playback speed and pitch) | `seq.length(2)` |
+| `length(N)` | Sets the loop length to N bars (with `chop(2)` or more, playback speed and pitch change as well) | `seq.length(2)` |
 | `beat(N by M)` | Sets a per-sequence time signature (inherits from the global if omitted) | `seq.beat(3 by 4)` |
 | `tempo(N)` | Sets a per-sequence tempo (inherits from the global if omitted) | `seq.tempo(90)` |
 
