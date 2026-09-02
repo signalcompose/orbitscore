@@ -100,7 +100,8 @@ stub の段階では `verified-against` `verified-at` は省略可、`status: st
 
 ## 5. `## Sources` の最低要件
 
-- ファイル参照は `<file-path>:<start>-<end>` の line range 付き
+- ファイル参照は `<file-path>:<start>-<end>` の line range 付き。**path はリポジトリルートからの相対パス**
+  (`packages/engine/src/parser/types.ts`)。basename だけ (`types.ts`) は同名ファイルが複数あるため不可
 - 外部仕様 (SuperCollider OSC protocol 等) は URL + 章/節指定
 - 例:
   - `packages/engine/src/audio/supercollider/scsynth-resolver.ts:76-99` — `resolveScsynthPath()` の優先順位ロジック
@@ -120,7 +121,7 @@ SoT との対応を破ると、サイト全体の信頼性が失われます。�
 
 OK の例 (verbatim):
 ```typescript
-// repl-mode.ts:27-38
+// packages/engine/src/cli/repl-mode.ts:30-53
 export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
   console.log('🎵 OrbitScore Audio Engine')
   console.log('✅ Initialized')
@@ -188,7 +189,17 @@ SoT が壊れる。verbatim を貫くか、省略するなら `// ...` で明示
 
 `// <file>:<start>-<end>` の range は **content と一致させる**。range が
 27-38 なら、コードブロックの先頭が 27 行目、末尾が 38 行目に対応すること。
-off-by-one は NG。
+off-by-one は NG。header の path は §5 と同じくリポジトリルートからの相対パスで書く。
+
+### 機械検証 (`npm run docs:check`)
+
+本節の規律は `sites/dev/scripts/check-citations.mjs` が機械的に検証する (2026-09-01 導入)。
+header 付きコードブロックを実ファイルと突き合わせ、`// ...` を省略ワイルドカードとして扱い、
+末尾 `// ...` の禁則・off-by-one・basename の曖昧さを red にする。
+
+- 章を書いたら **必ず** `node sites/dev/scripts/check-citations.mjs <file>` で 0 failed を確認する
+- コードが動いて行番号だけずれた場合は `--fix` が header を再アンカーする。内容が変わった場合は
+  red のまま残るので、実ファイルを読み直して再引用する (`verified-against` も更新)
 
 ### writing agent への送信 prompt にこの規律を必ず含める
 
@@ -272,9 +283,12 @@ import MyDemo from '../.vitepress/theme/components/<part>/MyDemo.vue'
 
 ## 10. 言語
 
-**日本語のみ** (現 phase)。英語は post-ICMC で i18n 検討時に追加。
+**日英バイリンガル必須** (2026-07-17 owner 指示、`docs/development/DEV_LEARNING_SITE.md` §2)。
+ja の章 `sites/dev/<part>/<name>.md` と en の章 `sites/dev/en/<part>/<name>.md` を**同一ターンで**書く。
+en は要約ではなく忠実な翻訳で、コードブロックは byte-identical (コード内の日本語コメントも訳さない)。
+詳細は `.translation-glossary.md`。
 
-技術用語 (parser, AST, OSC, scsynth 等) はオリジナル形のまま使用、無理に和訳しない。
+技術用語 (parser, AST, daemon, CLAP 等) はオリジナル形のまま使用、無理に和訳しない。
 
 ## 11. status flag のライフサイクル
 
