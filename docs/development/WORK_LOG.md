@@ -32,12 +32,21 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 | `ShmKnd/Patina` | ✅ 実在・MIT。**C++17 標準ライブラリのみ**のアナログモデリング DSP |
 | `yuichkun/unworklet` | ✅ 実在・MIT。ただし **AudioWorklet / WASM / TypeScript = ブラウザ前提** |
 
-🔴 **unworklet は OrbitScore とホストが違う。** エンジンは Rust の native daemon（cpal）であって
-ブラウザではない。「採用」と言うとき実際にありうるのは (A) WASM だけ借りる（RT 安全性の保証は
-付いてこない）(B) 記法だけ借りる (C) ブラウザ面を別に作る、の 3 つで**それぞれ別物**。
-owner の狙い（ユーザーランドに DSP を解放する・楽に更新できる）は unworklet 固有の話ではなく、
-**#671 / #672 の DSL Plugin / DSP Plugin 契約と同じ問題**を見ている。比較の前に
-「ユーザーが書いた DSP はどのプロセスのどのスレッドで走るのか」を決める必要がある。
+🔴 **unworklet について main が最初に書いた反論は誤りだった**（owner の指摘で撤回）。
+「AudioWorklet 前提なのでホストが違う・WASM だけ借りても RT 安全性は付いてこない」と書いたが、
+`packages/core/src/compile/emit.ts` を読むと **生成 WASM は何も import せず**
+（`addFunctionImport` はリポジトリ全体で 0 件）、export は `process` 1 本と成長しない線形メモリだけ。
+README 冒頭も "for any audio thread: browser, **server**, or microcontroller"、
+`@unworklet/offline` は "pure JS over `WebAssembly.instantiate`"。**RT 安全性はコンパイル時に
+証明される WASM 自体の性質**なのでホストを替えても失われない。
+
+→ **Rust ホストからは wasmtime で instantiate してメモリに書き `process` を呼ぶだけ。**
+残る作業は `compile/layout.ts` が決める `Layout`（バッファ／パラメータ／state のオフセット）を
+**ビルド時に JSON で吐いて `.wasm` と対にする**契約決め。instantiate は RT スレッド外で行い、
+sample rate が焼き込まれる点（48kHz）を考慮する。
+
+**unworklet と Patina は競合しない**: 前者は「ユーザーランドに DSP を解放する実行系」、
+後者は「同梱する標準プラグインの中身」（#669）。owner の当初の整理どおり。
 
 #### スコープが変わるもの
 

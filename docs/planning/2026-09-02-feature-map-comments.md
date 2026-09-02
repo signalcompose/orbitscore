@@ -101,7 +101,7 @@ Splice 連携を自前で実装する必要がない。
 
 ---
 
-## 5. 専用シンセに unworklet を検討 — 🔴 ホストが違う
+## 5. 専用シンセに unworklet — WASM ラッパーで載る（owner が正しかった）
 
 > unworklet を採用して orbitscore に専用シンセを組み込む。標準エフェクターにも使えるのかも含めて
 > レイテンシーなどの計測をして実用できるかどうか検討したい。12EDO 以外の音程とか初期にあった
@@ -112,36 +112,79 @@ Splice 連携を自前で実装する必要がない。
 > unworklet はユーザーランドにエフェクターを解放するための仕組みにしておくといいかも。
 > シンセもフィックスしちゃうなら Patina でいいかもなんけど、unworklet だと楽に更新できるという
 > 良さがあるよね。この辺は比較したい。
+>
+> （main の「ホストが違う」という反論に対して）
+> **unworklet は WASM を吐き出すことが出来るはずなのでラッパーを用意すれば良くないですか？**
 
-**事実確認**（2026-09-02）: `yuichkun/unworklet` は実在・**MIT**。説明は
-"A declarative framework for writing **Audio Worklet**-based DSP in **TypeScript**, compiled to
-**WebAssembly** with realtime-safety guarantees."
+### 🔴 main の当初の反論は誤りだった
 
-🔴 **ここに前提の食い違いがある。** unworklet は **AudioWorklet = ブラウザの WebAudio** を
-ホストとする枠組みで、そのリアルタイム安全性の保証も AudioWorklet スレッドについてのもの。
-OrbitScore のエンジンは **Rust の native daemon（cpal）**であり、ブラウザではない。
+main は当初「unworklet は AudioWorklet 前提なので Rust native daemon とはホストが違う。
+WASM だけ借りても**リアルタイム安全性の保証は付いてこない**」と書いた。**これは誤り。**
+README の説明文だけを読んで一般化しており、生成物を見ていなかった。
 
-したがって「unworklet を採用する」と言うとき、実際にありうる形は次のどれかで、**それぞれ別物**:
+### 実際に確かめたこと（2026-09-02・`packages/core/src/compile/emit.ts`）
 
-| 形 | 内容 | 代償 |
+```
+mod.setMemory(pages, pages, "memory", ...)   ← memory を export。initial == maximum（成長しない）
+mod.addFunctionExport("process", "process")  ← export はこの 1 本
+addFunctionImport                            ← リポジトリ全体で 0 件
+```
+
+**生成される WASM は何も import しない。** export は `process` 関数と線形メモリだけ。
+ホストは instantiate して、メモリへ入力とパラメータを書き、`process` を呼び、出力を読むだけでよい。
+**AudioWorklet も JS グルーも要らない。**
+
+裏付け:
+
+| 事実 | 出典 |
+|---|---|
+| ブラウザ限定ではない | README 冒頭 "for any audio thread: **browser, server, or microcontroller**" |
+| ブラウザ非依存の実行経路が既にある | `@unworklet/offline` = "**pure JS over `WebAssembly.instantiate`**"（Node / Bun / Deno） |
+| **RT 安全性は WASM 自体の性質** | "The compiler **proves** it's allocation-free, GC-free, and bounded **before it ever runs**" |
+| トラップを出さない設計 | `emit.ts` の "no-trap invariant: integer conversion uses `trunc_s_sat`" |
+
+RT 安全性が**コンパイル時に証明される**以上、その保証はホストを替えても失われない。
+これが main の反論の中核だったので、反論はここで崩れている。
+
+### 残る作業 — メモリレイアウトの受け渡し
+
+入出力バッファ・パラメータ・state のオフセットは `packages/core/src/compile/layout.ts` が
+**コンパイル時に**決め、`Layout` 型として JS 側のオブジェクトに乗る。Rust ホストはこれを
+知らないと書き込み先が分からない。
+
+**ビルド時に `Layout` を JSON で吐いて `.wasm` と対にする**のが実装作業の本体になる。
+ラッパーのコードより、この受け渡しの契約を決める方が仕事。
+
+実装上の注意:
+
+- **instantiate は RT スレッドの外で行う**（JIT が走る）。RT では作り置きしたインスタンスの
+  `process` を呼ぶだけにする
+- **sample rate が焼き込まれる**（README: 48kHz で係数を焼く）。デバイスレートとの整合を決める
+- 計測は owner の要望どおり必要（レイテンシ・1 ブロックあたりのコスト）。ただし**可否の判断ではなく
+  実用域の確認**として行う
+
+### unworklet と Patina は競合しない
+
+| | 何か | OrbitScore での役割 |
 |---|---|---|
-| A. WASM だけ借りる | unworklet が吐く WASM を daemon 側で `wasmtime` 等で回す | AudioWorklet 由来の RT 安全性の保証は**付いてこない**。実行系を自前で書く |
-| B. 記法だけ借りる | 宣言的な DSP 記述の設計を参考に、Rust 側で同等を作る | 実装コストは全部こちら持ち。更新の容易さも得られない |
-| C. ブラウザ面を作る | WebAudio 版の実行面を別に持つ | 二重のエンジン。#670（エンジンを別 repo へ）とは逆方向 |
+| **unworklet** | DSP の**記述と実行系**（TypeScript → WASM・RT 安全性を証明） | **ユーザーランドに DSP を解放する**経路。更新が楽 |
+| **Patina** | C++17 標準ライブラリのみの**DSP ライブラリ** | **同梱する標準プラグイン**の中身（#669） |
 
-**owner の狙いは「ユーザーランドにエフェクターを解放する」「楽に更新できる」**なので、
-本質は **DSP をユーザーが書いて差し込める仕組み**であって、unworklet 固有の話ではない。
-これは **#671 / #672（OrbitScore DSL Plugin と DSP Plugin の契約）と同じ問題**を見ている。
+owner の整理（「unworklet はユーザーランドにエフェクターを解放するための仕組み、
+標準エフェクターは Patina」）がそのまま成り立つ。**どちらかを選ぶ問題ではない。**
 
-**比較の前に決めるべき問い**: 「ユーザーが書いた DSP は、どのプロセスの、どのスレッドで走るのか」。
-ここが決まらないと、unworklet と Patina は**同じ土俵に乗らない**（前者は実行系の話、
-後者は DSP ライブラリの話）。
+### 音律の動機
 
-**音律の動機**: 12EDO 以外・「15 半音を十二分割」を表現したいという要求は
-[[orbitscore-synth-dsl-vision]]（#497）と同じ。**MIDI では表現しにくい**ので自前シンセが要る、
-という筋は一貫している。前例の調査は未実施。
+12EDO 以外・「15 半音を十二分割」を表現したいという要求は #497（シンセ DSL 構想）と同じ。
+**MIDI では表現しにくい**ので自前シンセが要る、という筋は一貫している。前例の調査は未実施。
 
----
+### #671 / #672 との関係
+
+「ユーザーが書いた DSP をどう受け入れるか」は #671 / #672（DSL Plugin / DSP Plugin の契約）
+そのもの。unworklet はその**実行系の有力候補**として具体性を与える。
+決めるべきは「ユーザーが書いた DSP は、どのプロセスの、どのスレッドで走るのか」で、
+unworklet を採るなら答えは「daemon の RT スレッドで、作り置きした WASM インスタンスとして」になる。
+
 
 ## 6. GUI — MCP の HTTP サーバを GUI にも使う
 
@@ -206,7 +249,7 @@ OrbitScore のエンジンは **Rust の native daemon（cpal）**であり、�
 | 2 | リアルタイム・サンプリング | **未起票** |
 | 3 | VST3 / CLAP を CC で変更 | **未起票**（#672 / #644 と隣接） |
 | 4 | 標準プラグインに Patina | **#669** |
-| 5 | 専用シンセ / ユーザー DSP | **#671 / #672**（#497 の音律動機） |
+| 5 | 専用シンセ / ユーザー DSP（unworklet + Patina は競合しない） | **#671 / #672**（#497 の音律動機） |
 | 6 | GUI | **未起票**（#662 が先行事例） |
 | 7 | 出力チャンネルとスルー | **#611** |
 | 8 | 棚卸しの手順 | 起票不要（進め方の話） |
