@@ -76,7 +76,7 @@
 | ミキサー三条 | バス仕様は audio と instrument で同一 / midi だけがバスと無関係 / 例外は LinkAudio が出力先の時だけ | #643 設計（owner 2026-08-29） |
 | Pitch DSL の決定 | `IMPLEMENTATION_INSTRUCTIONS.md` §7 の 19 項目（ハーモニーのレキシカルスコープ・root 基底・`*n`・audio の `[ ]` 予約・記録は因果・リプレイは音楽時間駆動 ほか） | §7 Known Decisions |
 | 投資の順位 | 1 仕様 → 2 仕様どおりの E2E → 3 機能テスト → 4 変異検証（PR のクリティカルパスに置かない） | CLAUDE.md |
-| **出口の一般化（owner 裁定 2026-09-03）** | `output(宛先, スルー, レベル)` はライン上の 1 要素。**① スルーの既定は `false`** / **② レベルの単位は dB** / **③ `output` は aux を指せる** / **④ フェーダーは `output` の level で持つ。ただし `gain` は残す**。フラグ名・`send` の扱い・線形 amount の移行は未決（§4.A.1・§9）。**spec への反映は §6.2 の改訂候補（owner 裁定で行う）** | §4.A.1 |
+| **出口の一般化（owner 裁定 2026-09-03）** | `output(宛先, スルー, レベル)` はライン上の 1 要素。**① スルーの既定は `false`** / **② レベルの単位は dB** / **③ `output` は aux を指せる** / **④ フェーダーは `output` の level で持つ。ただし `gain` は残す**。**A `send` は残す（糖衣・名前が直感的）** / **B `send` も dB に揃える** / **C master は `output` の出力先の 1 つ**。フラグ名（⑤）と B の移行の手当ては未決（§4.A.1・§9）。**spec への反映は §6.2 の改訂候補（owner 裁定で行う）** | §4.A.1 |
 
 ---
 
@@ -134,8 +134,8 @@
 ```
                     ┌──────────────────────── 基礎（foundation） ────────────────────────┐
                     │                                                                     │
-  [A] ミキサー      #643 PR-1/2 ✅ ─→ #645(PR-3) ─→ #649 フェーダー位置 📐 ─→ #611 出口 ─→ #647 ─→ #409 ─→ #598
-                    │                                        │                              (multi-timbral) (sidechain) (offline stems)
+  [A] ミキサー      #643 PR-1/2 ✅ ─→ #645(PR-3) ─→ #649 フェーダー位置 📐 ─→ #611 出口 ─→ #647 ─→ #409 ─→ #598 P2 ─→ #241 replay ─→ #598 P3
+                    │                                        │                              (multi-timbral) (sidechain) (offline stems)  (log → render)
                     │                                        └─→ #524 → #525 → #526（MIDI サミング → 部 → voice）
                     │
   [B] ラック        #628 ✅ ─→ #634 PDC 🔴 ─→ #635 layer 🚪 ─→ #636 instrument rack 🚪
@@ -169,7 +169,7 @@
                     │
   [L] audio DSL     #92 🔴 → #213 fixpitch/time ; #238 / #239 ; #665(B') ; #679 サンプリング ; #631 alias
                     │
-  [M] 研究トラック  #413 / #374 / #241（本地図の順序に乗せない・受け皿）
+  [M] 研究トラック  #413 / #374（本地図の順序に乗せない・受け皿。#241 は [A] へ移動）
                     │
   [N] GUI          #649 モデル ✅設計 ─→ #681 設計（落とし方）─→ #664 = 最初の実例 ─→ 段階的に面を足す（#662-E と同じ HTTP 面）
 ```
@@ -256,7 +256,8 @@
 | 出口 | **#611** 🔴 | ○ realtime 未実装（オフライン `output(n)` は ✅ `render-score.ts`） | #611 本文の実測表・`output.rs:957-960` 合流 3 行 |
 | マルチティンバー | **#647** | ✅ 受け皿（アドレス `(instance, unit)`・protocol）/ ○ 子プロセスの N 出力・shm | #647 本文（`transport.rs:60` `BUF_LEN = MAX_FRAMES * CHANNELS`） |
 | sidechain / multi-out 搬送 | **#409** | ○ | #409 本文（#611 が決まらないと形が決められない・triage） |
-| オフライン per-bus レンダ | **#598** | 📐 P0 完了・P1 実装仕様（`MULTICHANNEL_RENDERING_DESIGN_598.md` status `p1-implementation`）/ 実装 ❓（P1 の着手有無を WORK_LOG で未確認） | 同文書ヘッダ |
+| オフライン per-bus レンダ | **#598** | ✅ P1（DSL/wire/manifest・PR #612 `10f3594c`）/ ○ P2（stem WAV 書き出し）/ ○ P3（プラグイン・instrument の offline 駆動）。**出口の一般化との関係は 4.A.3** | `session.rs:555-562` / 設計 §5 / `git log` |
+| `.orbslog` リプレイ（ライブ → オフラインの橋） | **#241** | ✅ L1 記録（#229・`session-log-writer.ts`）/ ○ L2 replay（`cli/` に無し）。**§4.M から移した**（4.A.3） | `SESSION_LOG_SPEC_v1.md` §4 / `ls packages/engine/src/cli` |
 | MIDI サミング → 部 → voice | **#524 → #525 → #526** | ○（#525 本文の「S4 で用意済み」は**確認できず** — `session.rs` に `GetPluginParams` / `SetPluginPreset` ハンドラは**無い**。§4.D 参照） | `session.rs:1298-2372` のハンドラ列挙 |
 
 **前提の順序**: #645（PR-3）→ #649 → #611 → {#647, #409} → #598 の realtime 側。#524-#526 は #611 と独立だが、
@@ -375,9 +376,17 @@ part 指定の DSL は #647（unit）と同じ語彙になるため **#647 と�
 |---|---|---|---|
 | ① | スルーの既定 | **`false`** | 書かなければ従来どおり「後ろへ届かない」。**既存譜面の意味は変わらない**（上の確認 (3)） |
 | ② | レベルの単位 | **dB**（`gain(db:)` / `Gain(db:)` と揃える） | **`send` の線形 amount（`send("rev", 0.3)`）が例外になる** — 0.3 は線形で約 -10.5 dB だが dB として読むと +0.3 dB でほぼ原音のまま = 静かに壊れる典型。**移行の扱いは未決**（§9） |
-| ③ | `output` が aux を指せるか | **指せる** | `send` と `output` の差 4 点（送り先の種類 / レベル / 原音の継続 / 個数）の**最後の 1 つが消える**。したがって **`send(name, amount)` ≡ `output(name, <スルー>: true, db: …)` の糖衣になる**。🔴 ただし **`send` を実際に畳むか**（(i) 糖衣として残す / (ii) 非推奨 / (iii) 消す）は**未裁定**（§9） |
+| ③ | `output` が aux を指せるか | **指せる** | `send` と `output` の差 4 点（送り先の種類 / レベル / 原音の継続 / 個数）の**最後の 1 つが消える**。したがって **`send(name, …)` ≡ `output(name, <スルー>: true, db: …)` の糖衣**。→ **裁定 A で確定**（下表） |
 | ④ | フェーダーの持ち方 | **`output` の level で持つ。ただし `gain` は必要** | 役割が分かれる（下表）。#649 実装 B の「native スカラー」は**出口の属性**として作る（§4.A.1 の検証 (1)） |
 | ⑤ | フラグの名前 | **`through` ではなく短い語**（owner 指示）。main の推奨 `thru` | **owner 確認待ち**（§9） |
+
+**追加の裁定（owner 2026-09-03・同日）**:
+
+| # | 裁定 | 帰結 |
+|---|---|---|
+| **A** | **`send` は残す**（機能的には `output` と同じ意味論だが、**名前が send と書ける方が直感的**） | §9 の「畳むか」は **(i) 糖衣として残す**で確定。`send` はライン要素のまま（#649 §7.2 と整合）、意味は `output(name, <スルー>: true, db: …)` |
+| **B** | **`send` も dB に揃える** | 🔴 **既存譜面の `send("rev", 0.3)` は静かに壊れる**（線形 0.3 ≈ -10.5 dB が dB として +0.3 に読まれる）。**移行の手当て（一括変換 / 警告 / 期間）は別途必要 — 未決**（§9） |
+| **C** | **master は `output` の出力先の 1 つにする** | 到達点の 1 文どおり。SC.2.1 決定 #78（`master` = 出力エンドポイントの予約名）と一致。文字列形 `output("master")` の解決は spec 改訂（§6.2 MX.2 行） |
 
 **④ の役割分担（裁定済み）**:
 
@@ -416,6 +425,79 @@ part 指定の DSL は #647（unit）と同じ語彙になるため **#647 と�
 
 **順序への影響**: 4.A.1 の順序に従う。#611 で「Link を出口の一種として同じ軸へ」か「Link はライン要素（CLAP）で出口ではない」かを決め、#672 で **egress / tap 型**を規定し、その後に LinkAudio の CLAP 化。
 **三条 3 の扱い**: 例外が消えるかどうかは #611 の決定に従う。**本地図は「消える可能性がある」までしか言わない**（設計は #611）。
+
+#### 4.A.3 書き出し — `output(<ファイル>)` × `replay --render` × capture（正本は #598 / #241・本節は「効き方」だけ）
+
+> レンダリングのことを考えた時に、その辺どうしようかなと思っていて、**アウトプットの音は全てレンダリングできるように**。
+> **各トラックパラでレンダリングしたり、マスターをレンダリングしたり**とかっていうのがしたいんですよね。（owner 2026-09-03・逐語）
+
+**確認した事実**:
+
+| 問い | 答え | 根拠 |
+|---|---|---|
+| (1) MX.2.1 の数値 render bus は何をするか | **記録するだけ（今日）。** `output(n)` は `_renderBus` に `"1"`〜`"16"` を記録し、`RenderScore` manifest（`sample_rate / duration_sec / block_frames / samples / buses / master / events / out_dir`）を daemon が**受理・検証**する。**WAV 書き出しは無い** — spec 自身が「P1 では記録のみ・WAV 書き出しは #598 P2」と書く。#598 の対応: **P1 = ✅ PR #612**（DSL/wire/manifest・VST3 offline process mode）/ **P2（`render_block` 再利用の OfflineRenderSession・per-bus WAV + master）= ○** / **P3（プラグインチェーン・instrument child の offline 駆動）= ○**（`git log` に P2/P3 の commit 無し） | MX.2.1 / `session.rs:555-562` / `MULTICHANNEL_RENDERING_DESIGN_598.md` §5 / merge `10f3594c` |
+| (2) instrument が render bus へ出せない理由 | **出口の問題ではなく、オフライン駆動の問題。** spec:1225「拒否（録音経路が未設計）」・`sequence.ts:378-384`「オフラインレンダ先は未設計（録音経路が別）」。#598 設計では、オフラインは TS の **score-mode ドライバ**が `[0, T]` のイベント列を作り（P2）、**instrument child は「イベント転記を本番 backing ring 経路に揃える」P3** で駆動する。つまり **instrument の音をオフラインで作る経路が P3 まで無い**から拒否している。**出口を一般化しても消えない**（DSL 表面は一様になるが、P3 が入るまで instrument の `output(n)` は「受理して無音」になる）。#598 P3 の仕事 | spec:1225 / `sequence.ts:376-384` / #598 設計 §5 P0-3・P3 |
+| (3) オフライン（render）とリアルタイム（capture）の関係 | **別機構で、役割も別（今日）。** capture = `ORBIT_CAPTURE_WAV` で **master の post-mix を 1 本**の WAV へ off-thread で書く（`capture.rs` 冒頭「master 出力を WAV へ録る」・producer は `RingTapSink`）。render = `render_block` を実時間より速く block ループで回し、**各 bus buffer をそのまま stem** として書く（#598 設計 §4.2「stem の取り出しにエンジン変更は不要」）。**違いは「時計」（実時間 / 高速）であって「宛先」ではない。** owner の「各トラックパラ」は #598 P2 の per-bus stem そのもの。**「演奏しながら stem を書く」（`thru` の文脈）は今日どちらにも無い** — capture は master 1 本、render はオフライン | `capture.rs:1-9` / `output.rs:227-246` / #598 設計 §1・§4.2 |
+| (4) 宛先の書き方 | **数値のみ**（`output(1..16)`）。ファイル名は DSL に無く、manifest の `out_dir` + バス名で決まる。SC.2.1 との整合: 数値 render bus は**宣言されないノード**（MX.2.1「別の render bus 宣言は不要」）で、SC.2.1 (6) の**暗黙 master と同じ扱い**。`global.render(...)` のような宣言は**存在しない**（grep）。ファイル名を DSL に書くか、`mix.output(...)` のようにエンドポイントとして宣言するかは**未決** | MX.2.1 / `session.rs:562` `out_dir` / SC.2.1 (6) |
+
+**main の読みの検証**: 「レンダリングは宛先の一種なので、出口の一般化がそのまま答えになる」は **DSL 側では成り立つ**
+（MX.2 が既に sum / render bus / LinkAudio を同じ `output(destination)` に並べており、到達点 C で master も同じ軸に入った）。
+**engine 側は 2 つに分かれる**:
+
+| owner の要求 | 出口の一般化で得られるもの | 別に要るもの（正本） |
+|---|---|---|
+| マスターをレンダリング | `output("master")` が宛先の 1 つ（裁定 C） | オフライン: #598 P2 の master WAV / リアルタイム: capture（✅ 既存） |
+| 各トラックをパラで | `output(n)` = per-bus の宛先（✅ P1） | オフライン: **#598 P2**（stem 書き出し）・**P3**（instrument・プラグイン）/ リアルタイム: **per-bus capture（今日は無い・新規）** |
+| アウトプットの音は全て | 宛先が一様なら「どの出口も書ける」が DSL の規則になる | **file を宛先の一種として持つ**（`RingTapSink` を bus ごとに置けば capture の producer は再利用できる — `capture.rs` の producer は既存資産）。**同じ宛先を実時間で書くか高速で書くかは driver（時計）の差**にできる可能性がある（❓ 設計判断・#598 の §4 と capture の統合は未検討） |
+
+**`thru` がここで効く**（main の読み・支持）: file を宛先にした `output(<file>, thru: true)` は「stem を書きつつ演奏は続く」、`thru: false`（既定）は
+「書くだけで鳴らさない」= レンダ専用。**専用の録音モードは要らない。** ただしこれは**リアルタイム per-bus capture が要る**（上表）ので、
+**#598 P2（オフライン）とは別の実装**になる。どちらを先にするかは owner（#598 は「オフラインで実時間より速く」が目的なので P2 が本線）。
+
+**順序への影響**: #598 P2 → P3 は既定どおり。**リアルタイム per-bus stem（`thru` 付き file 出口）は #598 のスコープ外**（設計 §4.6「realtime >2ch モニタリング」とも別）なので、
+やるなら **#611（出口）に「file を出口の一種として持つか」を加える**か、新規 issue（§7 (7)）。
+
+**owner の続き（2026-09-03・要点）**: (1) `output` にファイル名を指定して書き出すのは 1 つの方法 (2) **ファイル名にプレースホルダ（`%…`）を付けて一部が動的に変わり、上書きせず複数バージョンが残る**とよい (3) **オフラインレンダリングは `output` とは別の軸ではないか — ライブコーディングだとタイミングの問題で合わない**気がする (4) でもオフラインが無いとつらい (5) **「順番ごとに実行する」をどうオフラインレンダリングに繋ぐか** (6) ケース: **ライブコーディングで作ったものを録音する時にオフラインが要る（例: 840 / 1260）**。
+
+**🔴 答えは既に設計にある — `.orbslog` のリプレイ（`SESSION_LOG_SPEC_v1.md` §4・#241）**:
+
+```
+orbitscore replay <log>                    # 忠実リプレイ（実時間）
+orbitscore replay <log> --until 57:1       # 分岐リプレイ: bar 57 頭まで畳み込み、ライブに引き継ぐ
+orbitscore replay <log> --render out.wav   # オフラインレンダー（faster-than-realtime）
+```
+
+> リプレイヤーはエンジンから見て**もう一人の評価送信者**（VS Code 拡張と同じ口）。エンジン側に専用経路を作らない。駆動は `transport` 時刻。（§4）
+
+**筋**: `.orbslog`（L1 記録・#229 ✅）→ **replay**（L2・#241 ○）→ `--render`（オフライン driver = #598 P2）。
+「もう一人の評価送信者・専用経路を作らない」は、**ライブと違う実行系を作らない**という設計であり、owner 方針「MCP はユーザーと同じ動線を通すための装置」（§1）と同じ思想。
+リプレイで鳴る音は、ライブで鳴った音と**同じ経路**（同じ interpreter・同じ engine）を通る。
+
+**確認した事実**:
+
+| 問い | 答え | 根拠 |
+|---|---|---|
+| (a) owner の懸念 (3)「タイミングが合わない」 | **原理的に解けている。** Known Decision「**リプレイは音楽時間駆動（三重スタンプ）**。棄却案: 壁時計駆動 / エディタ復元」。各レコードは wall + `bar:beat`（transport）+ effect を持ち、replay は **transport 時刻で駆動して再 quantize する**（§3.1「replay は `transport` 駆動で再 quantize するため再現性に影響せず」）。**壁時計の遅れやライブの手癖は再生に持ち込まれない**。owner の (5)「順番ごとに実行する」= **transport 時刻順に評価を投入する**こと、そのもの | `IMPLEMENTATION_INSTRUCTIONS.md:138` / `SESSION_LOG_SPEC_v1.md` §3.1・§4 |
+| (b) `replay --render` と #598 の関係 | **別のものではなく、積。** `--render` は「**何を**流すか」（ログ = セッション全体の評価列）、#598 は「**どこへ**書くか + **誰が**駆動するか」（per-bus manifest + `render_block` を高速で回す OfflineRenderSession・P2）。#598 設計 §1-3 は入力を「TS の score-mode ドライバが `.orbs` から `[0, T]` のイベント列を作る」と置くが、リプレイヤーは同じ口（もう一人の評価送信者）から**時刻順の評価**を投入するので、**score-mode ドライバの入力を `.orbs` 1 本から「transport 順の評価列」へ広げれば噛み合う**。spec の `--render out.wav`（1 ファイル）は #598 の `buses` + `master` で **per-bus に拡張**できる（spec は 1 ファイルしか書いていない = 拡張の余地・要改訂） | #598 設計 §1・§4.3 / `SESSION_LOG_SPEC` §4 / `session.rs:555-562` `buses` `master` `out_dir` |
+| (c) `.orbslog` の現在地 | **L1（記録）= ✅**（#229 CLOSED・`packages/engine/src/core/session-log/session-log-writer.ts`・`cli/session-log-gate.ts`）。**L2（replay）= ○**（#241 OPEN・`cli/` に replay 無し）。**v1 の割り切り**（§3.1）: editor 経路は `untitled.<timestamp>.orbslog`（ファイル名がエンジンへ渡らない）/ `code` 粒度は `execute()` 単位 / `effect` は LOOP 起動のみ / 単一 GLOBAL 前提。**`--render` が動くのに要るもの**: ① replayer（transport 順に評価を投入する送信者・#241）② オフライン駆動（**#598 P2**）③ per-bus（#598 manifest）④ editor 経路のファイル名伝達（§3.1 follow-up・840 / 1260 は editor 経路なので `untitled.*` になる） | `ls packages/engine/src/cli` / spec §3.1 |
+| (d) capture との関係 | `output(<file>)` を**宛先**として設計すれば **3 つ目の経路にはならない**: リアルタイムは capture の producer（`RingTapSink`）を bus ごとに置く形の拡張、オフラインは #598 P2 の driver が同じ宛先へ書く。**宛先は 1 つ・driver（時計）が 2 つ**。逆に `output(<file>)` を独立実装すると 3 経路目になる | `capture.rs:1-9` / #598 設計 §4.2 |
+| (e) ファイル名プレースホルダの前例 | **spec に構文としては無い。** ただし `.orbslog` の命名 `<basename>.<YYYYMMDD-HHMMSS>.orbslog` は「**上書きせず複数セッションをタイムスタンプで弁別**」という**同じ目的**を固定規則で満たしている（§2）。owner の `%…` はそれを**ユーザーが書ける形**にするもの = **新規**（§7 (8)）。命名規則を `.orbslog` と揃える（basename 継承 + セッション開始時刻）のが自然 | `SESSION_LOG_SPEC` §2 |
+
+**2 つの軸は直交する**（main の読み・支持）:
+
+| | 何を書き出すか | 誰が駆動するか |
+|---|---|---|
+| `output(<ファイル>, thru:, db:)` | **どの出口の音か**（stem / master） | ライブの演奏（実時間）— 上の per-bus capture |
+| `replay --render` | **セッション全体**（`.orbslog` の評価列） | ログ（faster-than-realtime）— #598 P2 の driver |
+
+**積 = 「ログを再生して、各出口を別ファイルへ、実時間より速く」= パラ出し**。owner のケース (6)（840 / 1260 をあとから録る）は
+**#241 + #598 P2/P3 で満たされ、どちらも新設ではない**。ただし ④（editor 経路のファイル名）と、instrument（P3）が要る。
+
+**#241 の位置づけ（訂正）**: 初版は #241 を §4.M「研究トラック」に置いたが、**誤り**。#241 はライブとオフラインの**橋**であり、
+§4.A（出口）と #598 に直結する。**§4.A に移す**（§4.M には WCTM の事後分析という文脈だけが残り、それは #413 の話）。
+
+**順序**: #598 P2（driver・per-bus）→ **#241（replayer = 評価送信者・transport 順）** → #598 P3（instrument・プラグイン）。
+#241 は P2 の driver が「時刻順の評価列」を受け取れる形になっていることが前提（§9）。
 
 **統合**:
 - **#588**（`host.rs` の「+1 block 均一」doc が誤り）は #634 PDC の設計に吸収（doc 訂正は #634 の PR で）。閉じ先: #634
@@ -732,7 +814,7 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 |---|---|
 | #413 | WCTM / ICLC の受け皿（stub）。ICLC の年次・提出形態は**要確認**のまま |
 | #374 | LLM 作曲スキルのサーヴェイ |
-| #241 | L2 replayer CLI（本番後） |
+| ~~#241~~ | **§4.A へ移動**（4.A.3: ライブ → オフラインの橋。研究トラックではない） |
 | #292 | Post-2.0 Epic → **閉じてよい**（triage の判断・owner 待ち）。トラック A の実系譜は本地図 §4.A-§4.C が引き継ぐ |
 
 ### 4.N GUI — スコアテキストのもう一つの編集面
@@ -797,6 +879,9 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 | **#672** | DSP Plugin Spec の実行クラスに **(3) in-process WASM（unworklet）** と **(4) egress / tap 型（RT でオーディオを外へ流し信号は素通し。LinkAudio の CLAP 化の契約）** を足す。「engine に DSP を抱えない」との整合を §0 に書く。**#497 は本 issue に塞がれている**と書く |
 | **#649**（設計文書） | owner 2026-09-03 の判断を転記: (a) `output` にスルー属性（§7.3「後ろに届かない」を既定に降格）(b) `output` の同一性を単一から宛先キーへ（`gain.output.output`）(c) 逐語 2 例 (d) owner のスケッチ `output(bus, 次にも渡すフラグ, bus におくる音量)` と、それに伴う `send` の扱い（§7.2 を維持するか吸収するか）(e) フェーダーを「位置を持つ要素」で作るか「出口の属性」で作るか（実装 B の形。§4.A.1 の検証 (1)〜(4)）(f) master ラインの終端（デバイス / `mix.output(1,2)` エンドポイント）を要素として書くか暗黙にするか。**①〜④ は owner 裁定済み（2026-09-03・§4.A.1）だが spec 本文への反映はまだ** — #649 §7.3（スルー既定 `false` として保持）/ §10.1（`output` を宛先キーへ）/ §10-§12（フェーダー = 出口の属性で実装）を改訂する。フラグ名 ⑤・`send` の扱い・線形 amount の移行が決まってから 1 回で反映する |
 | **core spec MX.2 / SC.2.1・SC.4** | `output("master")` の文字列形が今日は LinkAudio チャンネル名に落ちる（§4.A.1 確認 (3)）。スケッチが確定するなら、**予約語 `master` を文字列形の宛先としても解決する**規範を MX.2 に足し、SC.4 `.master`（チェーン形）と同じ意味にする。SC.2.1 の `mix.output(1,2)`（出力エンドポイント）は既にスケッチと同じ軸なので改訂不要（実装が未着手なだけ） |
+| **#241** | 「本番後に実施」「Blocked by L1」を更新: L1 は ✅。**前提は #598 P2（オフライン driver）**であり、replayer は「transport 順の評価列」を P2 の driver へ投入する送信者。§4.A.3 を参照させ、§4.M から §4.A へ移す |
+| **`SESSION_LOG_SPEC_v1.md` §4** | `--render out.wav`（1 ファイル）を **#598 の manifest（`buses` + `master` + `out_dir`）による per-bus** へ拡張できることを書く（spec 改訂・owner 裁定） |
+| **core spec MX.3** | 裁定 B: `send` の `amount` を**線形から dB へ**（`gain(db:)` / `Gain(db:)` と揃える）。**移行の手当てが決まってから**反映する（§9） |
 | **#611** | owner コメント「スルーする／しない」（`feature-map-comments.md` §7）を**要求 3 として本文に転記**（現状は本文に無い）。あわせて「`Link` を出口の一種として同じ軸へ載せるか、ライン要素（CLAP）として出口から外すか」を設計の問いに加える（`643-mixer-foundation-design.md:121` の指示・§4.A 帰結表） |
 | **#428** | `foundation` を付ける。**#680 の engine 側が同じ queue に乗る**と書く |
 | **#680** | 前提に **#428** を書く。DSL 表面は #674 と揃える（owner 確認） |
@@ -834,6 +919,8 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 | (4) `INDEX.md` の planning 節の更新 | `ROADMAP_2026.md` を「歴史的」と明記し本地図を先頭に置く | §0.3 |
 | **(5) Link テンポ同期の DSL Plugin 化** | #671 本文は「段階 4 で Link のテンポ側が engine の外へ出せる」と書くが、**それを行う issue が無い**（#321 PR3 は in-process 隔離 crate への実装計画）。#672 の実行形態（A4）が決まった後に、#321 を改題するか新規にするか | §4.E / §4.J |
 | **(6) LinkAudio egress の CLAP 化** | 同上。#671 本文「CLAP プラグイン化 🟢 できる」に対応する issue が無い。DSP Plugin Spec が egress（tap）型を許すかが先 | §4.E |
+| **(8) 書き出しファイル名のプレースホルダ（`%…`）** | owner 要望（2026-09-03）。上書きせず複数バージョンを残す。`.orbslog` の `<basename>.<YYYYMMDD-HHMMSS>` 規則と揃えるのが自然。spec に構文は無い = 新規 | §4.A.3 (e) |
+| **(7) リアルタイム per-bus stem（file を出口の一種として持つ・`thru` 付き）** | owner「アウトプットの音は全てレンダリングできるように」のうち、**演奏しながら書く**側。capture は master 1 本、#598 はオフライン専用で、どちらにも無い。#611 に足すか新規か | §4.A.3 |
 
 **新規起票が不要と判断したもの**: owner コメント §7「スルーする／しない」（**#611 本文へ転記する**・§6.2）/ Patina（#669 の中身）/ unworklet（#672 の実行クラス）/ 棚卸しの手順（運用の話）。
 
@@ -856,7 +943,7 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 
 | 項目 | 何を確認すれば確定するか |
 |---|---|
-| #598 P1 の実装着手有無 | `docs/archive/WORK_LOG_2026-08.md` で #598 / `RenderScore` の実装記録を探す（`session.rs:1941` `"RenderScore"` は存在する — これが P1 の成果物かどうか） |
+| ~~#598 P1 の実装着手有無~~ → ✅ PR #612（`10f3594c`）で P1 完了。P2/P3 は未着手（`git log`） | — |
 | #546 Phase 3「明示 `save_plugin_state` 無しの通し E2E」の有無 | `tests/e2e/orbitstudio-mcp-gated.spec.ts` を `save_plugin_state` で grep し、無い経路の E2E があるか読む |
 | #546 Phase 5「`.vstpreset` DSL 表面の降格」「instrument slot 非解放」 | 前者は `sequence.ts` の `instrument()` の引数処理 / 後者は #618 の spare slot 実装で live rename が枯渇するか実機 |
 | #592 の排他契約が #474 P4 でどう固定されたか | `orbit-audio-sandbox/src/transport.rs` の `reset_child_starting` と daemon 側の watchdog 配線を読む |
@@ -868,8 +955,12 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 | ~~スルーの既定~~ → **裁定 ①: `false`**（既存譜面の意味は不変） | — |
 | `output` の同一性を宛先キーにした時、同じ宛先へ 2 回 `output` した場合の意味（合算か上書きか） | #649 §10.5 の既存リセットイディオム（`output("master")` 上書き）との整合。owner |
 | **⑤ スルーのフラグ名**（owner「`through` ではなく短い語」・main 推奨 `thru`） | owner 確認 |
-| **`send` の扱い**: (i) 糖衣として残す / (ii) 非推奨 / (iii) 消す（裁定 ③ で `send(name, amount)` ≡ `output(name, <スルー>: true, db: …)`） | owner。既存譜面・MX.3・#649 §7.2 が `send` を持つ |
-| **② の移行**: `send` の線形 amount を dB に揃えると既存譜面の意味が変わる（0.3 → 約 -10.5 dB が +0.3 dB に読まれる） | owner。案: `send` は線形のまま維持し `output` の `db:` と併存 / `send` に `db:` を足して amount を非推奨 / 一括変換 |
+| ~~`send` の扱い~~ → **裁定 A: 残す（糖衣）** | — |
+| **B の移行の手当て**: `send` を dB に揃える裁定は出たが、**既存譜面の `send("rev", 0.3)` をどう移行するか**（一括変換 / 評価時の警告 / 移行期間）は未決 | owner。0.3 は線形で約 -10.5 dB・dB として読むと +0.3 dB（静かに壊れる） |
+| #598 P2 の score-mode ドライバが「`.orbs` 1 本の `[0,T]` 列挙」だけでなく「**transport 順の評価列**（`.orbslog`）」を受け取れる形にできるか（#241 の前提） | #598 設計 §4.3 の driver の入力面を読む。P0-1 の停止条件「列挙の切り出し不成立」と同じ場所 |
+| editor 経路の `.orbslog` が `untitled.<timestamp>` になる件（840 / 1260 は editor 経路）— ファイル名伝達の follow-up は起票済みか | `gh issue list` で SESSION_LOG §3.1 の follow-up を探す（未確認） |
+| render と capture を「同じ file 宛先・違う driver（時計）」として統合できるか | #598 設計 §4 と `capture.rs` の producer（`RingTapSink`）の突き合わせ。未検討 |
+| render bus の宛先を DSL でどう書くか（数値のまま / ファイル名 / `mix.output(...)` 型のエンドポイント宣言） | owner。SC.2.1 (6) の暗黙ノードとの整合 |
 | SC.4 のチェーン形 `.master` がルーティングまで通っているか（`runtime.ts:285-300` は暗黙 output ノードに解決するが「receiver surface を持たない」とコメント） | `routeOutputFromDsl` に何が渡るかを読む / 実機で `.master` を評価して `SetBusRouting output:"master"` が出るか |
 | master ラインの終端の書き方（`global.effect([...]).gain()` の先を `output(<device>)` と書くか、SC.2.1 の `mix.output(1,2)` エンドポイントが暗黙に受けるか） | owner（#649 改訂 (f)） |
 | 出口レベルを `AtomicU32` 差し替え（`send_gain_overrides` と同型）で作った時にクリックが出ないか | 実機キャプチャで確認。master と同じ per-frame ramp を stage 側に持つ設計が要るか |
@@ -884,6 +975,8 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 |---|---|
 | 2026-09-03 | 初版。open 121 件（#689 は CLOSED を含む）を §4 の 13 節に配置。統合 14 件・改訂 15 件・新規候補 4 件 |
 | 2026-09-03 | 検収反映: §4.N GUI（#681）を追加 / §4.E に「engine 本体から切り出せる機能」表（LinkAudio → CLAP・Link テンポ → DSL Plugin）を追加 / §4.J の LinkAudio 行を #329 CLOSED と #671 の線で更新 / §7 に新規候補 (5)(6) |
+| 2026-09-03 | owner のレンダリング続き（プレースホルダ・オフラインとの繋ぎ・840/1260 を録る）を反映。**#241 を §4.M から §4.A へ移動**（初版の分類誤り）。§4.A.3 を「書き出し」に改題し、`replay --render`（transport 駆動・Known Decision「音楽時間駆動」で owner のタイミング懸念は原理的に解けている）と #598 の関係を「積」として記録。L1 ✅ / L2 ○ を確認。§7 に (8) プレースホルダ、§6.2 に #241 と SESSION_LOG §4 の改訂候補 |
+| 2026-09-03 | **owner 裁定 A/B/C を反映**（`send` は残す・`send` も dB・master は出力先の 1 つ）。B の移行の手当ては未決のまま §9。**§4.A.3 レンダリング**を新設: #598 P1 は ✅（PR #612）で render bus は記録のみ・WAV は P2、instrument の拒否は出口ではなく offline 駆動（P3）の問題、capture（master 1 本・実時間）と render（per-bus・高速）は driver の差で宛先は同じにできる可能性、`thru` 付き file 出口 = リアルタイム stem は今日どこにも無い（§7 (7)） |
 | 2026-09-03 | **owner 裁定を反映**: ① スルー既定 `false` / ② レベルは dB / ③ `output` は aux を指せる / ④ フェーダーは `output` の level・`gain` は残す。§4.A.1 の到達点を「裁定済み」へ格上げし、§1 に 1 行追加。未決として残したもの: ⑤ フラグ名（main 推奨 `thru`）/ `send` の扱い (i)(ii)(iii) / `send` 線形 amount の移行。spec 本文（#649 / #643 / SC.10 / MX）は未改訂（§6.2） |
 | 2026-09-03 | owner「master も `output(master, …)` で同じ機能」を §4.A.1 に記録し、3 つのスケッチを 1 つの到達点（ラインは要素の列・宛先は同じ軸・フェーダーは出口のレベル）にまとめた。#649 §2.3 は master をライン + 受け皿として扱い、SC.2.1 決定 #78 は既に master を出力エンドポイントの予約名としている（同じ方向）。`output("master")` の文字列形は今日 LinkAudio 名に落ちる（wire には予約語あり）。**DSL 側は 1 つの規則で解けるが、engine 側にトポロジ固定順・ステレオ固定・LinkAudio 排他・PDC の 4 件が残り、それは #611 のスコープ** |
 | 2026-09-03 | owner「output の送り音量がフェーダーの役目もする」を §4.A.1 に記録。#649 のバグ（`scheduler.rs:444-455` で core が master gain を掛けた後に `output.rs:958` が stage を素のまま加算）に対し、level を出口の属性にすれば乗算が合流点に固定され位置ずれがクラスとして消えることを確認（`send.gain` が `:965` で既に同じ形）。**#649 実装 B の形に関わるため §8 ではなく §4.A の未決に置いた**。`seq.gain()` は発音点でイベントに畳み込まれており output level の別名ではない |

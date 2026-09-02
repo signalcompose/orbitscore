@@ -17,6 +17,68 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(planning): 書き出しの筋 — replay がライブとオフラインの橋である (Sep 3, 2026)
+
+**Issue**: #692 / **正本**: `docs/planning/DEVELOPMENT_MAP.md` §4.A.3
+
+owner の問い: 「**アウトプットの音は全てレンダリングできるように。各トラックパラでレンダリングしたり、
+マスターをレンダリングしたり**」「**順番ごとに実行するのをどうオフラインレンダリングに繋ぐか**」
+「ライブコーディングで作ったものを録音する時にオフラインが要る（例: **840 / 1260**）」。
+
+#### 🔴 答えは既に設計にあった
+
+`SESSION_LOG_SPEC_v1.md` §4:
+
+```
+orbitscore replay <log> --render out.wav   # オフラインレンダー（faster-than-realtime）
+```
+
+> リプレイヤーはエンジンから見て**もう一人の評価送信者**（VS Code 拡張と同じ口）。
+> **エンジン側に専用経路を作らない。** 駆動は **`transport` 時刻**。
+
+**owner の「タイミングが合わない」懸念は、Known Decision で原理的に解けている** —
+「リプレイは**音楽時間駆動**（三重スタンプ）」（棄却案: 壁時計駆動・`IMPLEMENTATION_INSTRUCTIONS.md:138`）。
+
+#### 地図の分類ミスを訂正
+
+🔴 **#241（L2 replayer CLI）を §4.M「研究トラック・本番後に実施」に置いていたのは誤り。**
+WCTM の文脈でそう書かれていたのを写しただけで、**実際にはライブ → オフラインの橋**である。
+**§4.A へ移した**（§2 の全体図も `#598 P2 → #241 replay → #598 P3`）。
+
+#### 書き出しの経路は 3 つあり、違いは「時計」であって「宛先」ではない
+
+| 経路 | 何を書くか | 時計 | 状態 |
+|---|---|---|---|
+| capture（`ORBIT_CAPTURE_WAV`） | **master 1 本**（`render_block` の post 後 `hw`） | 実時間 | ✅ 実装済み |
+| #598 render | per-bus stem | 高速 | **P1 のみ ✅**（`10f3594c`・PR #612）/ P2・P3 ○ |
+| `replay --render` | セッション全体（評価列） | 高速 | spec のみ（#241 ○） |
+
+**`replay --render` と #598 は別ではなく積** — `--render` = 何を流すか（ログ = transport 順の評価列）、
+#598 P2 = どこへ書くか + 誰が駆動するか。**順序: #598 P2 → #241 → #598 P3。**
+
+🔴 **owner の要求のうち「演奏しながら各トラックをパラで」は今日どこにも無い**（capture は master 1 本、
+#598 はオフライン）。`thru: true` が効く場所であり、§7 に新規候補として立てた。
+
+#### 840 / 1260 を録るのに足りないもの
+
+① replayer（#241）② オフライン driver（#598 P2）③ per-bus（P1 ✅）
+④ 🔴 **editor 経路のファイル名伝達** — `SESSION_LOG_SPEC_v1.md:80`「editor 経路は現状エンジンへ
+ファイル名を渡さない（`setDocumentDirectory` はディレクトリのみ）ため v1 は
+**`untitled.<timestamp>.orbslog`** フォールバック。**follow-up**」。
+**840 / 1260 はエディタ経路なので、ログの名前が付かず後から特定できない。④ だけ issue が無い。**
+
+#### instrument が render bus を拒否している理由
+
+**出口の問題ではない。** #598 P3（instrument child のオフライン駆動）が要るため。
+**出口を一般化しても消えない**（P3 まで `output(n)` は「受理して無音」）。
+
+#### 追加の裁定（owner 2026-09-03）
+
+**A** `send` は残す（機能は `output` と同じ意味論だが名前が直感的）/ **B** `send` も dB へ統一
+（🔴 移行の手当ては未決）/ **C** master は `output` の出力先の 1 つ。
+
+---
+
 ### docs(planning): 出口の一般化 — owner 裁定 4 件と、機能の持ち方の原理 (Sep 3, 2026)
 
 **Issue**: #692 / **正本**: `docs/planning/DEVELOPMENT_MAP.md` §1b・§4.A.1・§4.N
