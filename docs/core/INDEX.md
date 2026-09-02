@@ -214,6 +214,7 @@ CLAUDE.md の「テストの積み上げ規律」「E2E が最重要」「マー
 |---|---|
 | [ROADMAP_2026.md](../planning/ROADMAP_2026.md) | 2026 ロードマップ (ICMC Hamburg 2026-05-10 〜 16 を含む) |
 | [IMPROVEMENT_RECOMMENDATIONS.md](../planning/IMPROVEMENT_RECOMMENDATIONS.md) | 優先度付き改善提案 |
+| [2026-09-03-issue-triage.md](../planning/2026-09-03-issue-triage.md) | issue 棚卸し 164→120 の結果と判断根拠、および 6 つのクラスタ C1〜C6（診断の整合／プラグインの生存管理／daemon 起動の失敗面／時間の粒度／配布／ミキサーの出力側）。ラベル運用は [PROJECT_RULES.md](PROJECT_RULES.md) §1b (#689/#690) |
 
 ### Post-ICMC（起案時の計画・多くは実装済）
 

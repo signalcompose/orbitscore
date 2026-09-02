@@ -17,6 +17,21 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(index): 棚卸し記録を INDEX の Planning 表に載せる (Sep 3, 2026)
+
+**追従元**: PR #690（マージコミット `84a2e95`）/ **Issue**: #689
+
+PR #690 が追加した `docs/planning/2026-09-03-issue-triage.md` が
+`docs/core/INDEX.md` の Planning 表（`docs/core/INDEX.md:213-217`）に載っておらず、
+**目次から辿れない**状態だった。INDEX は CLAUDE.md が「すべてのドキュメントの目次（必読）」と
+位置づけている入口なので、そこに無い文書は次の棚卸しで**もう一度同じ調査をやり直すことになる**。
+
+行を 1 本足し、クラスタ C1〜C6 の見出しとラベル運用（`PROJECT_RULES.md` §1b）への導線を書いた。
+
+**追従不要と判断したもの**: PR #690 は `packages/` / `rust/` を 1 行も触っていないため、
+DSL 仕様（`docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`）・ユーザー向け語彙
+（`sites/user/`）・内部構造（`sites/dev/`）はいずれも変化していない。
+
 ### chore(meta): issue 棚卸し 164→120 とラベル運用の制定 (Sep 3, 2026)
 
 **Issue**: #689 / **記録**: `docs/planning/2026-09-03-issue-triage.md`
