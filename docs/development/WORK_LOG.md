@@ -17,6 +17,67 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### 6.427 docs(planning): 機能マップへの owner コメント 9 本を設計の入力へ (Sep 2, 2026)
+
+**Issue**: #677 / **文書**: `docs/planning/2026-09-02-feature-map-comments.md`
+
+アーティファクト上のコメントは repo の外にあり、そのままでは設計の入力にならない。9 本を転記し、
+既存 issue との対応・事実確認・詰めるべき点を書いた。**issue の新規起票はしていない**（owner 判断）。
+
+#### 事実確認で判明したこと
+
+| 主張 | 確認結果 |
+|---|---|
+| Splice に MCP サーバがある | ✅ 公式リモート MCP（`https://mcp.splice.com/mcp`・beta）。検索・stack・ダウンロード |
+| `ShmKnd/Patina` | ✅ 実在・MIT。**C++17 標準ライブラリのみ**のアナログモデリング DSP |
+| `yuichkun/unworklet` | ✅ 実在・MIT。ただし **AudioWorklet / WASM / TypeScript = ブラウザ前提** |
+
+🔴 **unworklet について main が最初に書いた反論は誤りだった**（owner の指摘で撤回）。
+「AudioWorklet 前提なのでホストが違う・WASM だけ借りても RT 安全性は付いてこない」と書いたが、
+`packages/core/src/compile/emit.ts` を読むと **生成 WASM は何も import せず**
+（`addFunctionImport` はリポジトリ全体で 0 件）、export は `process` 1 本と成長しない線形メモリだけ。
+README 冒頭も "for any audio thread: browser, **server**, or microcontroller"、
+`@unworklet/offline` は "pure JS over `WebAssembly.instantiate`"。**RT 安全性はコンパイル時に
+証明される WASM 自体の性質**なのでホストを替えても失われない。
+
+→ **Rust ホストからは wasmtime で instantiate してメモリに書き `process` を呼ぶだけ。**
+残る作業は `compile/layout.ts` が決める `Layout`（バッファ／パラメータ／state のオフセット）を
+**ビルド時に JSON で吐いて `.wasm` と対にする**契約決め。instantiate は RT スレッド外で行い、
+sample rate が焼き込まれる点（48kHz）を考慮する。
+
+**unworklet と Patina は競合しない**: 前者は「ユーザーランドに DSP を解放する実行系」、
+後者は「同梱する標準プラグインの中身」（#669）。owner の当初の整理どおり。
+
+#### スコープが変わるもの
+
+**#666（Splice）**: LLM は MCP から探してローカルへ落とせるので、OrbitScore はパスを受け取るだけでよい。
+「Splice を統合する」→「**ダウンロード先をプロジェクトが解決できる形にする**」へ縮む（#456 と同じ問題）。
+
+#### 起票した 3 件（#679 / #680 / #681）
+
+| issue | 内容 | 状態 |
+|---|---|---|
+| **#679** | リアルタイム・サンプリング | **設計 issue**。オーディオ入力の経路が現在無い（`capture.rs` は出力方向）。トリガー意味論・録音物の同一性・保存先・位相・分割単位を決めてから実装 |
+| **#680** | プラグインのパラメータを DSL から動かす | **CC は不要と判明。** API は両形式にあり、経路も既に通っている（CLAP `effect.rs:239` / VST3 `lib.rs:2534`）。**DSL はプレーン値（案 B）を owner が決定** |
+| **#681** | MCP の HTTP 面を使った GUI | **設計 issue**。🔴 **「GUI の操作結果が必ず DSL テキストに落ちる」を owner が前提として明言** |
+
+#### #680 の調査結果
+
+両形式ともパラメータは**サンプル精度**で送れ、**名前・単位・既定値も取れる**
+（CLAP `ParamInfo` は `name` / `module`（階層パス）/ `min_value` / `max_value`、
+VST3 `ParameterInfo` は `title` / `units` / `stepCount` / `defaultNormalizedValue`）。
+
+🔴 **VST3 には数値としての min/max が無い**（正規化 0..1 のみ）。CAP.6-1 を守るため
+DSL をプレーン値に統一し、VST3 側は `getParamValueByString("-6 dB")` で変換する。
+書式のプラグイン依存は、`orbit-plugin-scan` のカタログ作成時に両端を引いて範囲を記録して軽減する。
+
+#### owner の手続き上の指摘
+
+機能マップの分類は issue の**タイトルから**起こしたもので、160 件の本文は読んでいない。
+棚卸し候補 64 件も更新日だけの判定なので、**閉じる前に中身を読む**必要がある。
+
+---
+
 ### 6.426 docs: レビュー指摘の反映 — 引用検証を CI へ、テスト件数を緑の実行から採り直し、`ok` の旧記述を一掃 (Sep 2, 2026)
 
 **ブランチ**: `claude/developer-site-docs-update-0obpim`（PR #673 のレビュー指摘 3 件）
