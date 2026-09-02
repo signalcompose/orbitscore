@@ -17,7 +17,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### 6.428 docs: chop(1) の訂正をユーザー向け 3 面と dev サイトへ波及させた (Sep 2, 2026)
+### 6.429 docs: chop(1) の訂正をユーザー向け 3 面と dev サイトへ波及させた (Sep 2, 2026)
 
 **追従元**: PR [#683](https://github.com/signalcompose/orbitscore/pull/683)（マージコミット `8157d3d`）/ 関連 #665
 
@@ -55,6 +55,31 @@ dev サイトには分岐の実コード
 
 `specs-v2` 側（PITCH_DSL / SIGNAL_CHAIN / DESIGN_DISCUSSION_RECORD）に
 スロット合わせの意味論を述べた記述は無く、core spec の訂正と競合しない。
+### 6.428 docs: 6.427 の事実確認表が同じ節の撤回と矛盾していたのを修正 (Sep 2, 2026)
+
+**追従元**: PR #678（マージコミット `70818ad`）/ **ブランチ**: `claude/docs-sync-pr678`
+
+PR #678 の途中コミット `215af35` は unworklet の評価を撤回したが、**撤回したのは
+`docs/planning/2026-09-02-feature-map-comments.md` だけ**で、WORK_LOG 6.427 の
+「事実確認で判明したこと」表（`docs/development/WORK_LOG.md:33`）は
+**撤回前の「ブラウザ前提」を残したまま**マージされた。表の 3 行下（同 :35-41）が
+その主張を明示的に誤りと書いているので、**同じ節の中で表と本文が矛盾**していた。
+
+表の行を、撤回後の事実（生成 WASM は何も import しない＝ブラウザ前提ではない）に合わせた。
+**評価の内容そのものは 6.427 の本文と `docs/planning/` の記述に従っただけで、新しい判断はしていない。**
+
+#### 追従不要と判断した層
+
+PR #678 の差分は `docs/development/WORK_LOG.md` と `docs/planning/2026-09-02-feature-map-comments.md`
+の 2 ファイルのみ。`packages/` `rust/` `sites/` を 1 行も触っていないため、
+DSL 仕様・MCP の表面・OrbitStudio の評価フローはいずれも変わっておらず、
+`docs/specs-v2/` `docs/core/` `sites/user/` `sites/dev/` の追従先は無い。
+
+🔴 planning 文書が記録した決定（#680 の「DSL はプレーン値」など）は**未実装の設計入力**であり、
+`sites/dev/decisions/` の ADR（実装済みのアーキテクチャ決定を記録する場所）へは**書かない**。
+実装が入った時点で書く。
+
+---
 
 ### 6.427 docs(planning): 機能マップへの owner コメント 9 本を設計の入力へ (Sep 2, 2026)
 
@@ -69,7 +94,7 @@ dev サイトには分岐の実コード
 |---|---|
 | Splice に MCP サーバがある | ✅ 公式リモート MCP（`https://mcp.splice.com/mcp`・beta）。検索・stack・ダウンロード |
 | `ShmKnd/Patina` | ✅ 実在・MIT。**C++17 標準ライブラリのみ**のアナログモデリング DSP |
-| `yuichkun/unworklet` | ✅ 実在・MIT。ただし **AudioWorklet / WASM / TypeScript = ブラウザ前提** |
+| `yuichkun/unworklet` | ✅ 実在・MIT。TypeScript → WASM。**ブラウザ前提ではない**（生成 WASM は何も import しない。下記の撤回を参照） |
 
 🔴 **unworklet について main が最初に書いた反論は誤りだった**（owner の指摘で撤回）。
 「AudioWorklet 前提なのでホストが違う・WASM だけ借りても RT 安全性は付いてこない」と書いたが、
