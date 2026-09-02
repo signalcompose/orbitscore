@@ -1,16 +1,24 @@
 ---
 title: "II-1. Time Representation"
 chapter-id: "II-1"
-verified-against: 0a4b598
-verified-at: "2026-05-05"
+verified-against: 69dc968
+verified-at: "2026-09-01"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-05-05. The code is the truth; this page is merely a snapshot of understanding at that point in time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # II-1. Time Representation
 
 OrbitScore operates by answering the question "when should sound be produced." To produce that answer, the concepts of **tempo, beat, and bar** must be converted into a computable form. This chapter follows the implementation to see how DSL descriptions like `global.tempo(120)` and `global.beat(4 by 4)` are converted internally into time (ms).
+
+## Re-verification Notes of 2026-09-01
+
+This chapter was originally written on 2026-05-05 (0a4b598) and re-checked against the code at 2026-09-01 (69dc968). The core of the time representation (the `Meter` type, the `calculateBarDuration()` formula, `convertToAbsoluteTiming()`, `formatTiming()`) did not change at all in those four months. What changed is the surroundings:
+
+- `TimedEvent` gained optional fields for MIDI (`pitch` / `scope` / `tie` and so on) and `argPath` for the live playhead (#390)
+- A #390 comment was added at the tail of `TempoManager.calculateEventTiming()`, shifting line numbers
+- The default audio backend switched from SuperCollider to the Rust daemon (`orbit-audio-daemon`) (cutover #108, 2026-07-03). The "conversion to ms" covered in this chapter, however, stays on the TS side, so the backend difference does not affect it
 
 ## Basic Units of Time
 
@@ -40,7 +48,7 @@ It holds `numerator` and `denominator` as integers. For example, a 4/4 time sign
 
 What is worth noting is that the `Meter` type is purely a "structured container for the DSL's `beat(n1 by n2)`," and **OrbitScore does not use a rational number type**. There is no dedicated `Fraction` or `Rational` class; numerator and denominator are kept as integers, and they are immediately converted to floating-point ms.
 
-> NOTE: unverified — whether there is a plan in a future version to introduce a rational-number library has not been confirmed in the docs. BEAT_METER_SPECIFICATION.md presents all calculation examples as floats, suggesting the current design does not use a rational type.
+> NOTE: unverified — whether there is a plan in a future version to introduce a rational-number library has not been confirmed in the docs. BEAT_METER_SPECIFICATION.md presents all calculation examples as floats, suggesting that the design as of 2026-09-01 does not use a rational type.
 
 ## Tempo Management on Global
 
@@ -141,16 +149,45 @@ barDuration = 500 × (7 / 8 × 4) = 500 × 3.5 = 1750ms
 
 The `× 4` in the formula means "the reference is the quarter note." If the denominator is 4, divide by quarter notes; if the denominator is 8, divide by eighth notes — the formula directly encodes the musical meaning of time signatures.
 
+### The Same Formula Is Used for the Quantize Grid
+
+An interesting point is that this "quarter note × (numerator/denominator × 4)" formula is written independently not only in `Sequence`'s `TempoManager` but also in the grid computation for launch quantize (`global.quantize("bar")` and friends, covered in [II-4. Transport](/en/scheduling/transport)).
+
+```typescript
+// packages/engine/src/core/global/quantize-manager.ts:36-54
+export function quantizeDurationMs(value: QuantizeValue, tempo: number, beat: Meter): number {
+  if (value === 'off') return 0
+
+  const quarterNoteMs = 60_000 / tempo
+  const barMs = quarterNoteMs * ((beat.numerator / beat.denominator) * 4)
+
+  switch (value) {
+    case 'beat':
+      return quarterNoteMs
+    case 'bar':
+      return barMs
+    case '2bar':
+      return barMs * 2
+    case '4bar':
+      return barMs * 4
+    case '8bar':
+      return barMs * 8
+  }
+}
+```
+
+The `barMs` line is literally the same formula as `calculateBarDuration()`. This is a classic "duplicated constant" — fixing one side alone would make it drift from the other — so whenever you touch this formula you need to look at both. Note that `"beat"` returns `quarterNoteMs` (a quarter note), so even in a denominator-8 meter such as 7/8, "one beat" is treated as a quarter note. The core spec (INSTRUCTION_ORBITSCORE_DSL.md §5) defines `"beat"` as "1 beat (= `60_000 / tempo` ms)," so the implementation matches the spec.
+
 ## Generalized Calculation Flow
 
 ```mermaid
 flowchart LR
   DSL["DSL text\nglobal.tempo(120)\nglobal.beat(4 by 4)"] --> TM["TempoManager\n_tempo=120\n_beat={4,4}"]
   TM --> CALC["calculateBarDuration()\n60000/120 × (4/4×4)\n= 2000ms"]
-  CALC --> SCHED["EventScheduler\nscheduled time (ms)"]
+  CALC --> SCHED["Scheduler\n(RustEnginePlayer / EventScheduler)\nscheduled time (ms)"]
 ```
 
-From DSL to EventScheduler, time is never converted into units like "beat count" or "tick count." It flows consistently as **floating-point numbers in ms**.
+From the DSL to the scheduler (`RustEnginePlayer` on the Rust daemon path, `EventScheduler` on the SC path), time is never converted into units like "beat count" or "tick count." It flows consistently as **floating-point numbers in ms**. On the Rust daemon path it is converted to seconds (`time_sec`) only at the very last moment, when `PlayAt` is sent to the daemon — that is covered in [II-3. Event Queue and Look-Ahead](/en/scheduling/event-queue).
 
 ## Bar Offset: Conversion to Absolute Time
 
@@ -176,19 +213,25 @@ It just adds `barOffset = barNumber × barDuration` to each event's `startTime`.
 
 ## TimedEvent: The Scheduler's Basic Unit
 
-The intermediate result of the timing calculation is represented by a type called `TimedEvent`.
+The intermediate result of the timing calculation is represented by a type called `TimedEvent`. As of 2026-05 it was a small type with only four fields, but the Pitch DSL (v1.1) and live playhead (#390) implementations added many optional fields. The ones relevant to time representation are the first four and `argPath` at the end.
 
 ```typescript
-// packages/engine/src/timing/calculation/types.ts:8-13
+// packages/engine/src/timing/calculation/types.ts:31-89 (MIDI 用の optional フィールド群を // ... で省略)
 export interface TimedEvent {
-  sliceNumber: number // 0 for silence, 1-n for slice
+  sliceNumber: number // 0 for silence, 1-n for slice (audio); = degree as a fallback for pitched MIDI events
   startTime: number // Start time in milliseconds relative to bar start
   duration: number // Duration in milliseconds
   depth: number // Nesting depth (for debugging)
+  // ...
+  argPath?: string
 }
 ```
 
-Both `startTime` and `duration` are in ms. `sliceNumber` indicates "which audio slice to play," and `0` means a rest. `depth` is a debugging field for nested patterns (such as the nesting structure of `seq.play(1, [2, 3], 4)`).
+Both `startTime` and `duration` are in ms. `sliceNumber` indicates "which audio slice to play," and `0` means a rest (for MIDI sequences it also serves as a fallback for the degree). `depth` is a debugging field for nested patterns (such as the nesting structure of `seq.play(1, [2, 3], 4)`).
+
+The omitted optional fields are `pitch` (the MIDI symbolic pitch), `scope` (the lexical scope of `.root()` / `.mode()` / `.oct()`), `tie` / `legato` / `voiceTie` (articulation), `random` / `randomOctave`, and `velocity` / `velocityDelta` / `articulation`; **none of them take part in time calculation**. According to the type comment, the rhythm-tree walk that decides `startTime` / `duration` is shared by audio and MIDI, and only the meaning of the value (slice number vs. degree) differs by domain.
+
+`argPath` is an observation-only field added by #390 (2026-07-07). It holds, as a dot-joined index such as `"2"` or `"1.0"`, which position in the `play()` argument tree the event came from, and is used only so that the backend can print a `[STEP]` marker to stdout on dispatch. As the type comment states, "Never read by timing / scheduling logic," so this too has no effect on time representation.
 
 ## Debugging Aid: formatTiming
 
@@ -260,14 +303,19 @@ The core of the conversion is the two-line formula in `calculateBarDuration()`. 
 - The numerical precision impact of computing `numerator / denominator × 4` in this order in `calculateBarDuration()` (how things would change if integer arithmetic were done first before floating point)
 - If the Phase 2 proposal in BEAT_METER_SPECIFICATION.md (restricting denominators to powers of 2) is implemented, the cost of validation on the parser side and the impact on the scheduler
 - The mechanism by which the `length()` modifier multiplies into `effectiveBarDuration` via the `_length` field (`tempo-manager.ts:99`)
+- Whether the bar-length formula duplicated in `calculateBarDuration()` and `quantizeDurationMs()` could be consolidated in one place (`Global.msToBarBeat()` also has a formula of the same kind, `(60_000 / tempo) * 4 / denominator`)
+- How the MIDI optional fields of `TimedEvent` are resolved at the output stage (`pitch` → MIDI note number, `scope` → RootContext)
 
 ## Sources
 
 - `packages/engine/src/core/global/types.ts:5-8` — definition of the `Meter` interface (integer fields `numerator`, `denominator`)
 - `packages/engine/src/core/global/tempo-manager.ts:1-36` — `TempoManager`: default `_tempo` 120, default `_beat` 4/4
 - `packages/engine/src/core/sequence/parameters/tempo-manager.ts:64-68` — `calculateBarDuration()`: bar duration formula
-- `packages/engine/src/core/sequence/parameters/tempo-manager.ts:73-101` — `calculatePatternDuration()` / `calculateEventTiming()`: application of the length modifier
-- `packages/engine/src/timing/calculation/types.ts:8-13` — the `TimedEvent` interface (`startTime`, `duration` in ms)
+- `packages/engine/src/core/sequence/parameters/tempo-manager.ts:73-105` — `calculatePatternDuration()` / `calculateEventTiming()`: application of the length modifier (including the #390 comment)
+- `packages/engine/src/core/global/quantize-manager.ts:36-54` — `quantizeDurationMs()`: the second copy of the bar-length formula (quantize grid)
+- `packages/engine/src/timing/calculation/types.ts:31-89` — the `TimedEvent` interface (`startTime`, `duration` in ms; MIDI optional fields and `argPath`)
 - `packages/engine/src/timing/calculation/convert-to-absolute-timing.ts:18-29` — `convertToAbsoluteTiming()`: offset calculation by `barNumber × barDuration`
 - `packages/engine/src/timing/calculation/format-timing.ts:17-38` — `formatTiming()`: ms → beat count inverse conversion (for debugging)
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §5 "Launch Quantize" — the definition `"beat"` = `60_000 / tempo` ms
 - [BEAT_METER_SPECIFICATION.md](https://github.com/signalcompose/orbitscore/blob/main/docs/development/BEAT_METER_SPECIFICATION.md) — bar-length formula specification and future denominator restriction proposal
+- Issue [#390](https://github.com/signalcompose/orbitscore/issues/390) — live playhead (the reason `argPath` was added)
