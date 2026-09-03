@@ -1038,3 +1038,31 @@ owner 指示:
   必要な機能は**そこから機能要望として降りてくる** → 降りてきたら**普通の機能 issue** として
   扱う（「研究トラック」という別枠に入れない）。地図 §4.M の見出しを
   「研究・作品トラック（🔴 このリポジトリでは進めない）」へ変更
+
+## 2026-09-03: 死んだ `.env.example` を削除（#708）
+
+**実害**: sandbox 内でフック付きコミットが**必ず失敗**していた。
+
+```
+[FAILED] error: lstat(".env.example"): Operation not permitted
+  ✖ lint-staged failed due to a git error.
+```
+
+Claude Code の sandbox は `./.env*` の読み取りを拒否する（秘密の保護）。`lint-staged` は
+コミット前に `git stash` するので、`.env.example` を lstat した時点で落ちる。
+🔴 **エラーが「git error」としか出ないため lint の失敗と紛らわしく**、本日の PR-E1 でも
+原因調査に時間を使った。
+
+**なぜあったか**: `9a7a7bae`（2025-10-26）で BFG により `.env` を履歴から削除した際、
+テンプレートとして作られた。**その後、参照する仕組みが消えていた**:
+
+| 確認 | 結果 |
+|---|---|
+| 中身 | Slack 通知用 env 4 個 |
+| その env を読むコード | **0 件** |
+| `.env` を読み込む仕組み | **`dotenv` 依存なし。何も読んでいない** |
+| Slack 連携の実体 | **無い**（`slack` のヒットは SuperCollider の vendor と英単語のみ） |
+
+**残した注意点**: `.gitignore` の `!.env.example` / `!.env.sample` / `!.env.template` は
+**外部ツール管理ブロック**（`[code:security-patterns:fbe2794b]`・生成元はリポジトリ内に無い）
+なので触っていない。したがって**将来 `.env.example` を再び置くと同じ問題が再発する**。
