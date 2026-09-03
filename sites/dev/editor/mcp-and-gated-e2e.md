@@ -1,8 +1,8 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: f006a51
+verified-at: "2026-09-03"
 status: draft
 ---
 
@@ -436,6 +436,17 @@ suite の読み込み時、テストを 1 本も走らせる前に daemon バイ
 
 どのバイナリを見るかは決め打ちせず、engine が実際に spawn 候補を決める `resolveDaemonBinaryPath()` に聞きます。WORK_LOG 6.416 / 6.417 によると、このガードは 2026-08-29 に **2 回パスを間違えて**います（最初は `rust/target/release/` を見ていて、実際に動いていたのは拡張に同梱された `packages/vscode-extension/engine/bin/<platform>/` のコピーだった）。そこで「ガードが守ろうとしている事故を、ガード自身が再導入しうる」形を避けるため、正本の解決関数を呼ぶ形に落ち着きました。
 
+**何を「ソース」と数えるか**にも一手が入っています（#713）。`rust/` 配下の `.rs` を無条件に拾うと、別の cargo ターゲットである統合テスト（実測では `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs`）が「最新のソース」に選ばれてしまいます。それらは `orbit-audio-daemon` のバイナリの依存グラフに入らないので、cargo は依存関係を正しく読んで何もビルドせず、バイナリの mtime も更新されません。つまりガードのメッセージが指示する `npm run test:e2e:gated` を何度打っても消えない、**解消不能な赤**になります。引き金は mtime の性質で、`git checkout` はファイルの mtime をチェックアウトした時刻へ更新するため、ブランチを行き来しただけで内容の変わっていない統合テストが「最新のソース」に化けます。#713 ではこれで実機 gated が起動段階から 1 本も走らなくなりました。
+
+```typescript
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:140-142
+        if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
+          continue
+        }
+```
+
+`src/` は外していません。daemon が依存するコードが新しければ、ガードは本来の役目どおり赤になるべきだからです。この線引き自体も次節のアサーション衛生の検査 2 本（除外が消えたら赤 / `src` まで除外したら赤）で両側から留められています。
+
 そしてガードより一段強い手当てとして、**手順そのものを消す**選択がされています。
 
 ```jsonc
@@ -697,7 +708,20 @@ gated spec の中に `.<name>(` が現れるかどうかだけを見ます。語
   })
 ```
 
-残り 2 本は「capture を使う spec に `rms(` / `peak(` / `.rms` のアサーションが実在するか」と「stale ガードが `resolveDaemonBinaryPath()` を呼んでいるか」です。書いた直後に実在の違反を 1 件検出した（`.toBe(errorCountBeforeMixer)` を `<=` へ修正）と 6.418 は記録しています。
+残り 4 本は「capture を使う spec に `rms(` / `peak(` / `.rms` のアサーションが実在するか」「stale ガードが `resolveDaemonBinaryPath()` を呼んでいるか」、そして #713 で足された 2 本、「stale ガードが `tests` / `benches` / `examples` を除外しているか」と「`src` まで除外していないか」です。書いた直後に実在の違反を 1 件検出した（`.toBe(errorCountBeforeMixer)` を `<=` へ修正）と 6.418 は記録しています。
+
+後半 2 本は**片方向ずつ**を留めるペアになっています。前者だけなら「除外を消す」退行を捕まえられますが、後者が無いと「行きすぎて `src` まで除外する」方向は素通りします。ガードの目的（古いバイナリで測らない）は `src` を見ていることに依存するので、両方向を留めて初めて線引きが固定されます。
+
+```typescript
+// tests/e2e/gated-assertion-hygiene.spec.ts:89-93
+    expect(
+      /entry\.name === 'src'/.test(source),
+      'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +
+        'binary pass, which is exactly what the guard exists to prevent.',
+    ).toBe(false)
+```
+
+ただし 5 本すべてが gated spec の**ソース文字列**を走査するだけなので、保証するのは「そう書いてある」ことまでです。ガード本体の `assertDaemonBinaryIsNotStale()` は `gated && appAvailable` のときだけ呼ばれるので、通常の `npm test` では 1 行も実行されません。この節の検査は「実行された振る舞い」ではなく「書かれた形」を留めるもの、という位置づけで読むのが正確です。
 
 ちなみにコメントの「固定 500 行窓」は `#567` で 1000 行に拡張される前の数字ですが、有限窓であることに変わりはないので規律そのものは有効です。
 
@@ -998,13 +1022,13 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio 経路の `[STEP]` 発生源
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()`（#654）
 - `packages/engine/src/core/sequence.ts:1381-1404` — note 経路の marker 積み込みとデデュープ（#654）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-151` — env contract・stale artifact ガード
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:358-635` — describe のセットアップ・`captureInstrumentScenario` の RMS ヘルパ・teardown
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:637-1432` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2032-2138` — #654 playhead E2E
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-166` — env contract・stale artifact ガード
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:373-650` — describe のセットアップ・`captureInstrumentScenario` の RMS ヘルパ・teardown
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:652-1447` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2047-2153` — #654 playhead E2E
 - `tests/e2e/helpers/mcp-client.ts:1-174` — 生 JSON-RPC クライアント
 - `tests/e2e/dsl-e2e-coverage.spec.ts:1-146` — DSL 網羅率ラチェット
-- `tests/e2e/gated-assertion-hygiene.spec.ts:1-66` — アサーション衛生
+- `tests/e2e/gated-assertion-hygiene.spec.ts:1-95` — アサーション衛生
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixture
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — OrbitStudio.app のビルド
@@ -1020,3 +1044,4 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - Issue [#643](https://github.com/signalcompose/orbitscore/issues/643) — instrument のミキサー統合（E2E-1〜7）
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — capture ヘッダの定期 patch と stale ガード
 - Issue [#654](https://github.com/signalcompose/orbitscore/issues/654) — instrument シーケンスで playhead が動かない
+- Issue [#713](https://github.com/signalcompose/orbitscore/issues/713) — 再ビルド不能な cargo ターゲットで stale ガードが発火していた
