@@ -89,6 +89,18 @@ Q-694-9 プラグイン状態は start/stop で `orbslog/<log>.states/` へ写�
 1 行ずつ、見え方（🎵 音・操作 30 / 👀 見える 25 / 🧱 土台 31 / 📄 仕様 12）と段を添えて記載。
 「何も変わらない」PR はそのまま書く（土台の PR が続く週はそれが正しい状態）。
 
+**同日・束ブランチ運用の採用**（owner「PR-O のような纏まりで stacked PR を積んで、纏まりが終わってから
+レビューチームを走らせるのはどうか」→ 相談の結果、統合ブランチ方式で合意）:
+`docs/development/BUNDLE_BRANCH_WORKFLOW.md` を追加。束ごとに統合ブランチを置き、小 PR は
+CI + その PR の E2E 実機 + 目視の軽いゲートで入れ、統合ブランチ → main の束 PR で
+`/simplify` → レビューチーム + Fable → 実機全件を 1 回だけ回す。束は 1,500 行以下で継ぎ目で切る
+（OrbitScore は 7 束・フルレビュー 27 回 → 7 回）。純 stacked PR を採らない理由は squash との相性
+（下の層が main に入るたび上の層の rebase が要る）。GitHub の stacked pull requests
+（2026-07-30 公開プレビュー）は「層ごとにレビューを増やす」道具で目的が逆、プレビュー中は併用しない。
+参照 17 件は URL の実在を確認（docs.github.com 等はプロキシで本文取得不可のため検索要約で確認）。
+🔴 未実施: `CLAUDE.md` / `PROJECT_RULES.md` の「単位 = 束」への書き換えと bot ワークフローの
+`if: github.base_ref == 'main'` は owner 了承後に別 PR。
+
 ---
 
 ### chore(meta): critical path の 27 issue に実装チェックリストを入れた (Sep 3, 2026)

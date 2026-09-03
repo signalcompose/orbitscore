@@ -228,6 +228,7 @@ CLAUDE.md の「テストの積み上げ規律」「E2E が最重要」「マー
 | **[DEVELOPMENT_MAP.md](../planning/DEVELOPMENT_MAP.md)** | 🔴 **現在の正本**: 全 open issue の地図・リリースまでの筋（§3）・未決一覧（§9）（2026-09-03） |
 | [IMPLEMENTATION_PLAN_2026-09.md](../planning/IMPLEMENTATION_PLAN_2026-09.md) | 設計文書 11 本の PR 戦略（一方通行の判断・PR 一覧・順序の根拠・段）（2026-09-03） |
 | [`USER_OUTCOMES_2026-09.md`](../planning/USER_OUTCOMES_2026-09.md) | 各 PR が完了するとユーザーは何ができるか（plan §1 の PR ごとに 1 行・見え方の凡例つき） |
+| [`BUNDLE_BRANCH_WORKFLOW.md`](../development/BUNDLE_BRANCH_WORKFLOW.md) | 束ブランチ運用: 小 PR は統合ブランチへ軽いゲートで、フルレビューと実機検証は束 PR で 1 回（他リポジトリへの導入手順・GitHub stacked PR との違い・参照つき） |
 | [2026-09-03-issue-triage.md](../planning/2026-09-03-issue-triage.md) | issue 棚卸し（地図の前段） |
 
 ### Post-ICMC（起案時の計画・多くは実装済）
