@@ -199,7 +199,7 @@ Status: 正本（specs-v2）/ 2026-07-18 制定 / 受け皿 issue: \#506 / 決�
 
 > **制定**: 2026-08-27 / owner との設計議論（#628）で確定。DAW リサーチ（Bitwig / Live）を
 > 踏まえ、**削除・バイパス・チェーンを 1 つのモデル**として定める。
-> 経緯と棄却案は `docs/design/628-effect-chain-model.md`。
+> 経緯と棄却案は `docs/archive/design/628-effect-chain-model.md`。
 
 ### SC.10.1 形
 

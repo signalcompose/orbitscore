@@ -1049,7 +1049,7 @@ rejected earlier by the TS resolution of §2).
 
 ### 5.1 The instrument mechanism cannot be reused
 
-The #625 design doc (`docs/design/625-effect-replacement-design.md`) first confirms that the
+The #625 design doc (`docs/archive/design/625-effect-replacement-design.md`) first confirms that the
 instrument's spare-slot approach does not work for effects. An effect slot is **positionally fixed
 by bus name**, and the render side's `InsertBusStage` holds the processor directly, so there is no
 "name → slot" indirection. With nowhere to re-point, the adopted mechanism was an **in-place
@@ -1415,7 +1415,7 @@ LOOP(drums)
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — PH.2d / PH.3 / PH.4 / PC.1–PC.5
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` — SC.3.2 / SC.10.3 / SC.10.3b / SC.10.3c / SC.10.5 / SC.10.9
 - `docs/research/PLUGIN_CATALOG_SCANNING.md` — the 23.2% measurement and the basis of the three-state model
-- `docs/design/625-effect-replacement-design.md` — adopted mechanism, rejected options, 8 decisions, Stage 0–D
+- `docs/archive/design/625-effect-replacement-design.md` — adopted mechanism, rejected options, 8 decisions, Stage 0–D
 - `docs/research/ENGINE_DAEMON_PROTOCOL.md` — `ReplacePlugin` / `UnloadPlugin` (retired in #628) / `ApplyEffectChain`
 - `docs/development/WORK_LOG.md` 6.268 / 6.269 / 6.278 / 6.279 (#463 C1–C3), 6.321 (#549 B1), 6.360–6.363 (#618), 6.364–6.369 (#625), 6.412 (#638)
 - Issue [#463](https://github.com/signalcompose/orbitscore/issues/463) / [#549](https://github.com/signalcompose/orbitscore/issues/549) / [#618](https://github.com/signalcompose/orbitscore/issues/618) / [#623](https://github.com/signalcompose/orbitscore/issues/623) / [#625](https://github.com/signalcompose/orbitscore/issues/625) / [#628](https://github.com/signalcompose/orbitscore/issues/628) / [#638](https://github.com/signalcompose/orbitscore/issues/638)

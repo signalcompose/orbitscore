@@ -49,11 +49,11 @@
 
 | 文書 | 扱い |
 |---|---|
-| `docs/planning/ROADMAP_2026.md`（2026-04-20・ICMC 前提） | **歴史的スナップショット。** 現在の順序の根拠にしない。`INDEX.md` の説明文の更新は別途 |
-| `docs/planning/IMPROVEMENT_RECOMMENDATIONS.md` | 同上（SC 時代） |
+| `docs/archive/planning/ROADMAP_2026.md`（2026-04-20・ICMC 前提） | **歴史的スナップショット。** 現在の順序の根拠にしない。`INDEX.md` の説明文の更新は別途 |
+| `docs/archive/planning/IMPROVEMENT_RECOMMENDATIONS.md` | 同上（SC 時代） |
 | `docs/development/POST_2.0_MASTER_PLAN.html` ほか POST_2.0_* | engine-first の**意思決定記録**。トラック構成の現在地は本地図が引き継ぐ |
 | `docs/planning/2026-09-03-issue-triage.md` | 本地図の**入力**。クラスタ C1〜C6 は §4 の節に対応づけた（対応表は §6.3） |
-| `docs/planning/2026-09-02-feature-map-comments.md` | owner コメントの転記。§4 の各節から参照 |
+| `docs/archive/planning/2026-09-02-feature-map-comments.md` | owner コメントの転記。§4 の各節から参照 |
 | `docs/design/*.md` / `docs/specs-v2/*.md` | 各節の「設計」の正本。地図は**指すだけ**で中身を写さない |
 
 ---

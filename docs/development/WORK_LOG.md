@@ -17,6 +17,51 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### chore(docs): 正本が別にできた設計・計画文書を 9 本アーカイブ (Sep 3, 2026)
+
+**Issue**: #696 / **MAP §0.3**
+
+owner: 「仕様検討したドキュメントは、イシューになって地図に書かれたものは**アーカイブ**しておこうか。**紛らわしいから**。」
+
+#### なぜ
+
+同じ主題の文書が複数あると誤読が起きる。**実例**: 本日 main が **#506（plugin-as-method）を読まずに
+#680 を重複起票**した。#506 の看板（メソッド形）は **SC.10.9 で撤回済み**だったが、
+撤回が spec 側にしかなく issue 本文が古いままだった。
+
+#### 基準 —「正本が別にできたもの」
+
+| 移した文書 | 現在の正本 |
+|---|---|
+| `628-effect-chain-model.md` | **spec SC.10**（文書自身が「確定・SC.10 として制定済み」と明記） |
+| `628-plan-reset` / `628-rack-chain-implementation-design` / `628-gated-e2e-rack-design` / `628-ui-pump-per-index-design` | **#628 / #633 CLOSED**（PR #639 / #652 で出荷済み） |
+| `625-effect-replacement-design.md` | **#625 CLOSED**（PR #627） |
+| `ROADMAP_2026.md` / `IMPROVEMENT_RECOMMENDATIONS.md` | **`DEVELOPMENT_MAP.md`**（地図 §0.3 が「歴史的スナップショット」と明記） |
+| `2026-09-02-feature-map-comments.md` | **地図 §4 各節 + #679 / #680 / #681** |
+
+**残したもの**（issue が OPEN・**正本がまだ他に無い**）: `643-mixer-foundation-design.md`（PR-3 = #645 が残る）/
+`649-audio-line-design.md`（設計のみ・実装なし）/ `662-engine-visibility-and-limits.md`（未着手）/
+`2026-09-03-issue-triage.md`（地図の入力として現役）。
+
+#### 🔴 参照を全部直した — ここが本体
+
+**移動して参照が切れると、探せなくなって同じ重複が起きる。**
+
+現役ファイル 12 本の参照を書き換え（`INDEX.md` / `INSTRUCTION_ORBITSCORE_DSL.md` / `WORK_LOG.md` /
+`DEVELOPMENT_MAP.md` / `SIGNAL_CHAIN_DSL_SPEC_v1.md` / `spike_s_concurrent_load.rs` /
+dev サイト 6 本）+ **アーカイブ同士の相互参照 5 本**。
+
+各文書の冒頭に「**アーカイブ。現在の正本は〜。新しい判断の根拠にしないこと**」を付けた。
+
+#### 検証
+
+- **現役ファイルから移動前のパスを指す参照: 0 件**（`grep`）
+- `npm run docs:check` **904 引用 / 0 failed**
+- `npm run docs:build` dev / user とも成功
+- `git diff -M` で**リネームとして検出**（内容は移動・参照のみ書き換え）
+
+---
+
 ### docs(planning): 入力の DSL 表面と、入力が入ると変わる性能の性質 (Sep 3, 2026)
 
 **Issue**: #692 / **正本**: `docs/planning/DEVELOPMENT_MAP.md` §4.O.1・§4.P.1
@@ -510,7 +555,7 @@ dev サイトには分岐の実コード
 **追従元**: PR #678（マージコミット `70818ad`）/ **ブランチ**: `claude/docs-sync-pr678`
 
 PR #678 の途中コミット `215af35` は unworklet の評価を撤回したが、**撤回したのは
-`docs/planning/2026-09-02-feature-map-comments.md` だけ**で、WORK_LOG 6.427 の
+`docs/archive/planning/2026-09-02-feature-map-comments.md` だけ**で、WORK_LOG 6.427 の
 「事実確認で判明したこと」表（`docs/development/WORK_LOG.md:33`）は
 **撤回前の「ブラウザ前提」を残したまま**マージされた。表の 3 行下（同 :35-41）が
 その主張を明示的に誤りと書いているので、**同じ節の中で表と本文が矛盾**していた。
@@ -520,7 +565,7 @@ PR #678 の途中コミット `215af35` は unworklet の評価を撤回した�
 
 #### 追従不要と判断した層
 
-PR #678 の差分は `docs/development/WORK_LOG.md` と `docs/planning/2026-09-02-feature-map-comments.md`
+PR #678 の差分は `docs/development/WORK_LOG.md` と `docs/archive/planning/2026-09-02-feature-map-comments.md`
 の 2 ファイルのみ。`packages/` `rust/` `sites/` を 1 行も触っていないため、
 DSL 仕様・MCP の表面・OrbitStudio の評価フローはいずれも変わっておらず、
 `docs/specs-v2/` `docs/core/` `sites/user/` `sites/dev/` の追従先は無い。
@@ -533,7 +578,7 @@ DSL 仕様・MCP の表面・OrbitStudio の評価フローはいずれも変わ
 
 ### 6.427 docs(planning): 機能マップへの owner コメント 9 本を設計の入力へ (Sep 2, 2026)
 
-**Issue**: #677 / **文書**: `docs/planning/2026-09-02-feature-map-comments.md`
+**Issue**: #677 / **文書**: `docs/archive/planning/2026-09-02-feature-map-comments.md`
 
 アーティファクト上のコメントは repo の外にあり、そのままでは設計の入力にならない。9 本を転記し、
 既存 issue との対応・事実確認・詰めるべき点を書いた。**issue の新規起票はしていない**（owner 判断）。
