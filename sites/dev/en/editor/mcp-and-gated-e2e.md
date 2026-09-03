@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: 8bc65cf
+verified-against: affdf69
 verified-at: "2026-09-03"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -302,7 +302,7 @@ The engine answers with a JSON line `{"evalMark": {...}}` on stdout, and `setupS
 
 "Every unit test was green; only the real-device E2E caught it" — a miniature of this chapter's whole theme.
 
-So after `#614`, is `get_log` unnecessary? **No.** What `ok` guarantees is that no diagnostics were raised by the engine up to the point the marker was reached. Failures that occur asynchronously after the evaluation returns still appear only in stdout/stderr. The gated spec itself shows the division of labour: after evaluating `instSeq.instrument(...)` with `evaluate_orbitscore` and confirming `isError` is `false`, it does `sleep(6000)`, then reads `get_log` and asserts separately that `[OUTPROC_ATTACH_FAILED]` is absent (`tests/e2e/orbitstudio-mcp-gated.spec.ts:1019-1031`). An out-of-process CLAP attach involves a spawn plus an IPC handshake, so the completion of the evaluation and the success of the attach live on different timelines.
+So after `#614`, is `get_log` unnecessary? **No.** What `ok` guarantees is that no diagnostics were raised by the engine up to the point the marker was reached. Failures that occur asynchronously after the evaluation returns still appear only in stdout/stderr. The gated spec itself shows the division of labour: after evaluating `instSeq.instrument(...)` with `evaluate_orbitscore` and confirming `isError` is `false`, it does `sleep(6000)`, then reads `get_log` and asserts separately that `[OUTPROC_ATTACH_FAILED]` is absent (`tests/e2e/orbitstudio-mcp-gated.spec.ts:1017-1029`). An out-of-process CLAP attach involves a spawn plus an IPC handshake, so the completion of the evaluation and the success of the attach live on different timelines.
 
 The comment in `log-ring.ts` still carried its pre-`#614` wording ("`get_log` is the **only channel** in which engine-side errors appear"); this PR rewords it to "the **only channel in which failures that happen asynchronously after evaluation returns** appear". The three matching passages in `CLAUDE.md` ("asserting on `ok` proves nothing") were updated to the post-`#614` meaning as well. **The range over which `ok` carries meaning has widened, but there is still a region where `get_log` is the only observation point** — that is the accurate understanding as of 2026-09-02.
 
@@ -532,7 +532,7 @@ export function decideStartEngineForAgent(
 }
 ```
 
-The old implementation returned `ok: true, 'engine already running'` here and silently dropped `captureWav`. The caller believed it was recording and only discovered `ENOENT` when it tried to read `capture.wav`. As the regression pin for `#528`, the gated spec asserts both "it is rejected" and "the rejection does not tear the engine down" (`tests/e2e/orbitstudio-mcp-gated.spec.ts:846-855`).
+The old implementation returned `ok: true, 'engine already running'` here and silently dropped `captureWav`. The caller believed it was recording and only discovered `ENOENT` when it tried to read `capture.wav`. As the regression pin for `#528`, the gated spec asserts both "it is rejected" and "the rejection does not tear the engine down" (`tests/e2e/orbitstudio-mcp-gated.spec.ts:844-853`).
 
 ### Test list
 
@@ -540,15 +540,78 @@ As of 2026-09-01 the describe holds 20 `it`s. The first one launches the app, in
 
 | Line | Test name (summary) | Main oracle |
 |---|---|---|
-| 638 | The real OrbitStudio end-to-end: diagnostics-on-open, `run_selection`, live edit, capture verification | Onset gaps (120 → 180 bpm) |
-| 1435–1689 | #643 E2E-1 to 7: `global.gain(-6)` / sequence rack / gap during attach / `output(sum)` + `send(aux)` / instrument replacement / slot release / instrument without a mixer declaration | Segment RMS ratios |
-| 1734, 1810 | #633 E2E-1 to 2: UI open/close on multiple identical inserts; close after an index shift | `open_plugin_ui` / `close_plugin_ui` responses |
-| 1880 | Catalogue v2 rescan, reporting a broken bundle | `rescan_plugins` failures |
-| 1951 | Reporting an ambiguous bare mixer name via `run_selection` + `get_log` | Log wording |
-| 2042 | The playhead steps through an `instrument()` sequence, rests included (#654) | The set of `[STEP]` slots |
-| 2141, 2386, 2607 | Plugin state restore across restart (instrument / sum-bus insert / auto-record of five receiver kinds) | Measured pitch, RMS |
-| 3163, 3428 | Replacing a playing instrument / effect (#618 / #625) | Audio, state, process, failure, UI |
-| 3969, 4483 | #628 R28: rack chain audio mainline / master + standard-element error | RMS, child PID |
+| 636 | The real OrbitStudio end-to-end: diagnostics-on-open, `run_selection`, live edit, capture verification | Onset gaps (120 → 180 bpm) |
+| 1433–1687 | #643 E2E-1 to 7: `global.gain(-6)` / sequence rack / gap during attach / `output(sum)` + `send(aux)` / instrument replacement / slot release / instrument without a mixer declaration | Segment RMS ratios |
+| 1732, 1808 | #633 E2E-1 to 2: UI open/close on multiple identical inserts; close after an index shift | `open_plugin_ui` / `close_plugin_ui` responses |
+| 1878 | Catalogue v2 rescan, reporting a broken bundle | `rescan_plugins` failures |
+| 1949 | Reporting an ambiguous bare mixer name via `run_selection` + `get_log` | Log wording |
+| 2040 | The playhead steps through an `instrument()` sequence, rests included (#654) | The set of `[STEP]` slots |
+| 2139, 2381, 2602 | Plugin state restore across restart (instrument / sum-bus insert / auto-record of five receiver kinds) | Measured pitch, RMS |
+| 3157, 3421 | Replacing a playing instrument / effect (#618 / #625) | Audio, state, process, failure, UI |
+| 3961, 4473 | #628 R28: rack chain audio mainline / master + standard-element error | RMS, child PID |
+
+---
+
+### The shared harness layer — `tests/e2e/helpers/`
+
+On 2026-09-03 (#668 PR-E2) the small tools each scenario had been keeping locally were collected into five modules under `tests/e2e/helpers/`. **The 20 existing scenarios themselves were not rewritten** — only duplicated definitions and path construction were swapped out.
+
+| Module | What it holds |
+|---|---|
+| `engine-log.ts` | `LOG_WINDOW_LINES` / `countLogMarker` / `countErrors` / `errorBaseline` / `expectNoNewErrors` / `expectLogMarkerAtLeast` |
+| `gated-session.ts` | `GatedCatalog` / `GatedSession` / `captureWavPath` / `createGatedSession` |
+| `run-score.ts` | `ScoreSource` / `CaptureWindows` / `ScoreRunContext` / `runScore` |
+| `wait-for-file.ts` | `waitForFile` / `waitForMatchingFile` |
+| `run-cli.ts` | `CliResult` / `runOrbitscoreCli` |
+
+`countErrors` had **seven** independent definitions inside the gated spec (at pre-change lines `:496 / 2144 / 2722 / 3155 / 3461 / 3969 / 4464`). The same single line was written seven times, so changing how ERROR lines are counted meant editing seven places — and a missed one stays silently behind. They now converge on `expectNoNewErrors`, which pins the comparison to `<=` in one place.
+
+```typescript
+// tests/e2e/helpers/engine-log.ts:51-62
+export async function expectNoNewErrors(
+  client: McpClient,
+  baseline: number,
+  label: string,
+): Promise<void> {
+  const log = (await client.call('get_log', { lines: LOG_WINDOW_LINES })).text
+  const current = countErrors(log)
+  expect(
+    current,
+    `${label} must add no ERROR lines. Log tail: ${log.slice(-1600)}`,
+  ).toBeLessThanOrEqual(baseline)
+}
+```
+
+Capture WAV paths were scattered the same way. The spec builds a capture path in **13 places**, but **only one of them — inside `captureInstrumentScenario` — looked at `ORBIT_KEEP_CAPTURES`** (pre-change `:501-509`); the other twelve were a bare `path.join(tmpRoot, ...)`. So when one of those scenarios failed, the WAV that was supposed to be the evidence was deleted along with `tmpRoot` in `afterAll`. All 13 now go through `captureWavPath()`, so the environment variable behaves uniformly.
+
+```typescript
+// tests/e2e/helpers/gated-session.ts:47-51
+export function captureWavPath(tmpRoot: string, slug: string): string {
+  const dir =
+    process.env.ORBIT_KEEP_CAPTURES !== undefined ? process.env.ORBIT_KEEP_CAPTURES : tmpRoot
+  return path.join(dir, `${slug}.wav`)
+}
+```
+
+`runScore` folds "copy the score into a work copy, evaluate it through the editor path (`open_file` → `set_selection` → `run_selection`), and if asked, analyse the capture and return segment RMS" into one function. Its `evaluate` deliberately does not assert on `ok` / `isError`, for the reason given in [the `ok` section](#what-ok-from-evaluate-orbitscore-means) of this chapter.
+
+```typescript
+// tests/e2e/helpers/run-score.ts:187-196
+  const evaluate = async (code: string): Promise<void> => {
+    // 🔴 **`ok` / `isError` に assert しない**（設計 §4.2）。診断は `engine-log.ts` の
+    // `expectNoNewErrors` / `expectLogMarkerAtLeast` で見る。
+    //
+    // なぜ assert しないか: **診断が出ることを確かめる E2E がある**（doc 610 の異常系は
+    // 「この譜面は診断を出す」が判定条件）。ここで弾くと、そちらが `runScore` を使えない。
+    // 逆に #614 以降 `ok` は「評価完了までに診断が無かった」までしか保証しないので、
+    // 正常系でも `ok` は十分条件にならない（評価後に非同期で起きる失敗は `get_log` だけに出る）。
+    await client.call('evaluate_orbitscore', { code })
+  }
+```
+
+As of PR-E2 no scenario calls `runScore` yet (the policy was not to rewrite the existing 20). Its first consumer is planned for PR-E3.
+
+⚠️ `tests/e2e/helpers/` is **not** part of `GATED_SOURCE_GLOBS` in `gated-sources.ts` (`orbitstudio-mcp-gated.spec.ts` and `gated/**`). The ratchet and the assertion hygiene test described below both read only the string returned by `readGatedSources()`, so helper sources are outside what they scan.
 
 ---
 
@@ -632,7 +695,7 @@ E2E-1, for example, compares `rms('unity')` and `rms('half')` to confirm that `g
 
 What this assertion caught is recorded in WORK_LOG 6.415. On 2026-08-29, when this E2E was written and run on the real device, it turned out that **`global.gain()` had no effect at all on instruments**. The cause was in `output.rs`: audio joining the master from the mixer stages **was added after the master gain had been applied**. Every layer returned success, not a single ERROR line appeared, and neither 35 mutation checks nor 2149 unit tests had caught it. CLAUDE.md cites this case as the grounds for "E2E matters most" because it was the only layer able to catch "**looks correct, but the composition is wrong**".
 
-`ORBIT_KEEP_CAPTURES=<dir>` was formalised the same day. When set, capture WAVs are written to that directory instead of tmpRoot — because "the harness's assertions show only one number inside the window, but the defect may be outside it" (6.415).
+`ORBIT_KEEP_CAPTURES=<dir>` was formalised the same day. When set, capture WAVs are written to that directory instead of tmpRoot — because "the harness's assertions show only one number inside the window, but the defect may be outside it" (6.415). It only started taking effect across the whole spec with #668 PR-E2, though: before that, one of the 13 capture-path sites honoured it ([the shared harness layer](#the-shared-harness-layer-—-tests-e2e-helpers)).
 
 ---
 
@@ -1047,13 +1110,18 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio-path `[STEP]` source
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()` (#654)
 - `packages/engine/src/core/sequence.ts:1381-1404` — note-path marker enqueueing and dedup (#654)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-152` — env contract, stale-artifact guard
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:332-609` — describe setup, the RMS helper of `captureInstrumentScenario`, teardown
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:611-1406` — the first test (launch, catalogue, capture, run_selection, onset verification)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2006-2112` — the #654 playhead E2E
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-153` — env contract, stale-artifact guard
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:360-633` — describe setup, the RMS helper of `captureInstrumentScenario`, teardown
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:635-1430` — the first test (launch, catalogue, capture, run_selection, onset verification)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2030-2136` — the #654 playhead E2E
 - `tests/e2e/helpers/mcp-client.ts:1-174` — raw JSON-RPC client
+- `tests/e2e/gated-sources.ts:1-106` — the list of gated sources the ratchet and hygiene test read (#668 PR-E1)
+- `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` assertions (where the seven `countErrors` definitions converged, #668 PR-E2)
+- `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` and `captureWavPath()`
+- `tests/e2e/helpers/run-score.ts:1-272` — one function that copies a score and evaluates it on real hardware
+- `tests/e2e/helpers/wait-for-file.ts:1-57` — waiting for generated artefacts (with `minBytes`)
+- `tests/e2e/helpers/run-cli.ts:1-62` — child-process runs of `orbitscore replay` / `render` (the only path that bypasses MCP)
 - `tests/e2e/helpers/rack-child-pid.ts:1-38` — the rack child PID oracle (log-derived; moved out of the spec in #668 PR-E1)
-- `tests/e2e/gated-sources.ts:1-106` — the gated E2E source list shared by the ratchet and assertion hygiene (#668 PR-E1)
 - `tests/e2e/dsl-e2e-coverage.spec.ts:1-146` — DSL coverage ratchet
 - `tests/e2e/gated-assertion-hygiene.spec.ts:1-68` — assertion hygiene
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixtures
@@ -1071,3 +1139,4 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - Issue [#643](https://github.com/signalcompose/orbitscore/issues/643) — mixer integration of instruments (E2E-1 to 7)
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — periodic capture header patch and stale guard
 - Issue [#654](https://github.com/signalcompose/orbitscore/issues/654) — playhead not moving for instrument sequences
+- Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E foundation (PR-E1 `gated-sources.ts` / PR-E2 the shared harness layer)

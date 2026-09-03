@@ -1378,8 +1378,8 @@ LOOP(drums)
 - `packages/vscode-extension/package.json:110-121` — `Rescan Plugin Catalog` / `Browse Plugins` コマンド
 - `packages/vscode-extension/src/mcp-server.ts:1022-1032` — MCP `list_plugins`
 - `tests/vscode-extension/plugin-name-diagnostics.spec.ts:192-225` — engine resolver との合意テスト
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3387-3395` — #618 E1-E6 の周波数オラクル
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3539-3552` / `:3681-3687` / `:3899-3914` — #625 R-E2 / R-E6 / R-E3（#628 で反転した期待）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3406-3414` — #618 E1-E6 の周波数オラクル
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3557-3570` / `:3699-3705` / `:3917-3932` — #625 R-E2 / R-E6 / R-E3（#628 で反転した期待）
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — PH.2d / PH.3 / PH.4 / PC.1〜PC.5
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` — SC.3.2 / SC.10.3 / SC.10.3b / SC.10.3c / SC.10.5 / SC.10.9
 - `docs/research/PLUGIN_CATALOG_SCANNING.md` — 23.2% の実測と三段階モデルの根拠

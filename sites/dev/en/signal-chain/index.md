@@ -1586,7 +1586,7 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - `scripts/copy-daemon-bin.sh:131-132` — bundling `std-plugins/Gain.clap`
 - `.github/workflows/release.yml:86-98,191-200` — the real Gain test and the bundling gate inside the `.vsix`
 - `tests/e2e/rack-chain-gain-expectations.ts:1-34` / `tests/e2e/rack-chain-gain-expectations.spec.ts:1-30` — the E2E numeric design and its pure unit
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:4064-4094` — the full-rack segment of the `#628 R28` hardware block
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:4081-4111` — the full-rack segment of the `#628 R28` hardware block
 - `tests/core/rack-chain.spec.ts:105-414` — T3–T23 (LCS, occurrence, keep updates, uncertain recovery)
 - `tests/interpreter/rack-value-resolution.spec.ts:62-188` — T1–T19 (array classification, three categories, layer rejection)
 - `tests/interpreter/signal-chain-dispatch.spec.ts:170-184,581-611` — T24 (method-form diagnostic), T25 (`remove()` removal)

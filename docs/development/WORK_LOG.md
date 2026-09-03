@@ -1133,6 +1133,31 @@ E2E-2 / E2E-3 の dry RMS が **ちょうど 0**、E2E-1 の比が **1.27**（ga
 [`docs/planning/IMPLEMENTATION_PLAN_2026-09.md`](../planning/IMPLEMENTATION_PLAN_2026-09.md) §1.10。
 束ブランチ運用（[`BUNDLE_BRANCH_WORKFLOW.md`](BUNDLE_BRANCH_WORKFLOW.md)）の最初の束。
 
+### PR-E2 追従: dev サイトを共有ハーネス層まで追従させる（docs のみ）
+
+PR #712（merge `affdf69`）に対するドキュメント追従。**実装・テストは一切変更していない。**
+
+**追加**（`sites/dev/editor/mcp-and-gated-e2e.md` と `sites/dev/en/` の同パス）:
+
+- 新節「共有ハーネス層 — `tests/e2e/helpers/`」。5 モジュールの一覧と、
+  `expectNoNewErrors`（`engine-log.ts:51-62`）/ `captureWavPath`（`gated-session.ts:47-51`）/
+  `runScore` の `evaluate`（`run-score.ts:187-196`）を verbatim 引用
+- 🔴 **capture パスの実測値は 13 箇所**（`grep -c "captureWavPath(" tests/e2e/orbitstudio-mcp-gated.spec.ts`）。
+  PR #712 の本文と上の PR-E2 節は「11 箇所」と書いているが、実ファイルは 13。
+  `ORBIT_KEEP_CAPTURES` を見ていたのが 1 箇所だけだった点は変わらない
+- `ORBIT_KEEP_CAPTURES` の既存段落に「spec 全体で効くようになったのは PR-E2 以降」を追記
+- `tests/e2e/helpers/` が `GATED_SOURCE_GLOBS`（`tests/e2e/gated-sources.ts:29-35`）に**含まれない**ことを明記
+
+**行番号の再アンカー**（PR #712 は fenced code block の引用ヘッダだけを直したので、
+散文中の行参照が残っていた）:
+
+- 「テスト一覧」表の 20 本の行番号（`638→636` 〜 `4483→4473`）
+- `plugin-ui.md` / `catalog.md` / `mixer-audio-line.md` / `signal-chain/index.md` /
+  `capture-verification.md` の Sources 節の行範囲（ja / en 各 5 ファイル）
+- 対応は old/new のテキスト一致で 1 行ずつ照合済み（推定ではない）
+
+**検証**: `npm run docs:build`（user / dev）と `npm run docs:check` はすべて緑。
+
 ### PR-E2: 共通 helper を切り出す
 
 正本: 設計 §4.1〜4.5。**実装は Codex**（`gpt-5.6-sol` / effort high）、**検証は main**。
