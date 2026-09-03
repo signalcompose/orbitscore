@@ -540,6 +540,21 @@ owner 判断: **注意力の問題ではなく、121 件を並列に並べたま
 
 ---
 
+### docs(index): 棚卸し記録を INDEX の Planning 表に載せる (Sep 3, 2026)
+
+**追従元**: PR #690（マージコミット `84a2e95`）/ **Issue**: #689
+
+PR #690 が追加した `docs/planning/2026-09-03-issue-triage.md` が
+`docs/core/INDEX.md` の Planning 表（`docs/core/INDEX.md:213-217`）に載っておらず、
+**目次から辿れない**状態だった。INDEX は CLAUDE.md が「すべてのドキュメントの目次（必読）」と
+位置づけている入口なので、そこに無い文書は次の棚卸しで**もう一度同じ調査をやり直すことになる**。
+
+行を 1 本足し、クラスタ C1〜C6 の見出しとラベル運用（`PROJECT_RULES.md` §1b）への導線を書いた。
+
+**追従不要と判断したもの**: PR #690 は `packages/` / `rust/` を 1 行も触っていないため、
+DSL 仕様（`docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`）・ユーザー向け語彙
+（`sites/user/`）・内部構造（`sites/dev/`）はいずれも変化していない。
+
 ### chore(meta): issue 棚卸し 164→120 とラベル運用の制定 (Sep 3, 2026)
 
 **Issue**: #689 / **記録**: `docs/planning/2026-09-03-issue-triage.md`
@@ -959,6 +974,33 @@ Older entries have been archived by month for readability:
 GitHub 設定で自動削除・履歴は merge commit から辿る」に訂正。統合ブランチも束 PR のマージ後に
 消えてよい（自動削除はマージ後にしか動かないので、小 PR の base が途中で消えることはない）。
 
+## 2026-09-03: PR #704 の追従監査（ドキュメント変更なし・指摘 3 件）
+
+ルーチン「マージ済み PR にドキュメントとサイトを追従させる」を PR #704（`703-bundle-branch-workflow`
+→ main・merge commit `3fa1150`）に対して実行。**追従すべきドキュメント変更は 0 件**。
+
+- 差分 6 ファイルはすべて規約文書と CI 定義（`CLAUDE.md` / `docs/core/PROJECT_RULES.md` /
+  `docs/development/BUNDLE_BRANCH_WORKFLOW.md` / `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` /
+  `docs/development/WORK_LOG.md` / `.github/workflows/claude-code-review.yml`）で、
+  `packages/engine/` `rust/` `packages/vscode-extension/` に変更が無い。DSL の構文・意味論、
+  MCP ツールの契約、OrbitStudio の評価経路のいずれも変わっていないので、
+  `docs/specs-v2/` `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` `sites/user/` `sites/dev/` は追従不要
+- `squash` → `merge commit` の訂正は差分内で完結している（リポジトリ全体を grep して、
+  規約文書に旧記述の残りは無い。`sites/dev/en/signal-chain/index.md:1230` の "squashed" は
+  信号処理の記述で無関係）
+
+**追従できていない点として PR で報告した 3 件**（本ルーチンでは直さない）:
+
+1. `CLAUDE.md:301` と `docs/development/BUNDLE_BRANCH_WORKFLOW.md:70` が小 PR のゲートで
+   `ORBIT_GATED_ONLY` を既存の仕組みとして参照しているが、実装が無い。
+   実在するのは `ORBIT_GATED_ORBITSTUDIO`（`tests/e2e/orbitstudio-mcp-gated.spec.ts:59`）で
+   suite 全体の on/off。`ORBIT_GATED_ONLY` は `docs/design/668-e2e-foundation-design.md:891`
+   の決定 D-4（未実装）
+2. `.github/workflows/claude-code-review.yml` の最終実行は 2026-06-17（run #278）。
+   今回足した `if: github.base_ref == 'main'` の効果を Actions で観測できない
+3. PR #704 は最終 head `7f53a5d` の CI 完了を待たずにマージされている
+   （CI 開始 10:29:37Z / マージ 10:29:39Z）。赤ではないが、マージ時点では未検証
+
 ## 2026-09-03: 束ブランチ運用の採用（#703）
 
 owner との相談（PR #702 セッション）で、レビューの単位を PR から**束**へ変更。小 PR は束の
@@ -1167,6 +1209,32 @@ ja / en 両方（STYLE_GUIDE のバイリンガル必須）。
 3. `assertDaemonBinaryIsNotStale()` は `tests/e2e/orbitstudio-mcp-gated.spec.ts:164-166` の
    `gated && appAvailable` の下でしか呼ばれない。CI は全ジョブ非 gated なので、
    #713 で足した 15 行は**どこでも 1 行も実行されていない**
+
+## 2026-09-03: PR #700 のドキュメント追従（ICLC 取り下げ / WCTM の持ち先 / §10 の表崩れ）
+
+**追従元**: PR [#700](https://github.com/signalcompose/orbitscore/pull/700)（マージコミット `ca176f0`・head `f5b16d8`）。
+docs のみの変更で、`CLAUDE.md` の本番トラック注記・`docs/planning/DEVELOPMENT_MAP.md`・本 WORK_LOG を更新していた。
+
+**#700 が `CLAUDE.md` にしか書かなかったため、同じ注記を持つ他のドキュメントが古いまま残っていた:**
+
+| ファイル | 何が古かったか |
+|---|---|
+| `docs/core/INDEX.md:39` | 「本番トラックは ICLC への proposal 提出方向へ retarget（年次・提出日・提出形態はいずれも要確認）」 |
+| `docs/core/INDEX.md:207` | 同じ retarget 注記（WCTM 調査群の凍結セクション） |
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:18` | 「ICLC 提出方向へ retarget（年次・提出日・形態は要確認）」 |
+| `sites/dev/decisions/adr-001-supercollider.md:267` / `:314`（+ `en` 対訳） | 「Consequences revisited」の 3. 学術的文脈が ICLC retarget で止まっていた |
+
+いずれも **ICLC 取り下げ（owner 2026-09-03）・本番トラックに締切が無い・WCTM 本体の開発は本リポジトリで進めない**
+の 3 点へ書き換えた。`sites/dev` は日英両方を更新（STYLE_GUIDE のバイリンガル必須）。
+
+**#700 が入れた表崩れも直した**: `DEVELOPMENT_MAP.md` §10 で、追記の箇条書きと更新履歴テーブルのヘッダ行の間に
+空行が無く、GFM ではテーブルがリスト項目の遅延継続として吸われて**描画されない**状態だった
+（`docs/planning/DEVELOPMENT_MAP.md:1463-1464`）。空行を 1 行入れただけで、本文は変えていない。
+
+**追従しなかったもの**: #700 が記録した出口・レンダ宛先・`%n` テンプレートの裁定は、地図自身が
+「spec への反映は §6.2 の改訂候補（owner 裁定で行う）」と書いているため `docs/specs-v2/` と
+`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` へは**反映していない**（実装も未着手で、DSL 表面は変わっていない）。
+
 
 ## 2026-09-03: PR #709 追従 — 失効した landmine 記述を更新
 
