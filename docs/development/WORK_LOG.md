@@ -1289,3 +1289,26 @@ docs のみの変更で、`CLAUDE.md` の本番トラック注記・`docs/planni
 「spec への反映は §6.2 の改訂候補（owner 裁定で行う）」と書いているため `docs/specs-v2/` と
 `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` へは**反映していない**（実装も未着手で、DSL 表面は変わっていない）。
 
+
+## 2026-09-03: PR #709 追従 — 失効した landmine 記述を更新
+
+PR #709（`7d2df31`・上記 #708）で `.env.example` を削除した結果、
+`docs/development/POST_2.0_VST3_HOSTING_PLAN.md:256` の landmine 記述が**失効した**。
+
+| | 内容 |
+|---|---|
+| 旧記述 | 「`.env.example` は sandbox read-deny → `git diff` が誤って削除表示。`git status --short` が権威」 |
+| なぜ失効か | ファイルが実在しなくなったため、この誤検知は起きない |
+| 🔴 なぜ放置できないか | **実際に削除された今、この記述は「`.env.example` の削除表示は無視してよい」と読める** — 真の削除を sandbox の誤検知と取り違えさせる |
+
+取り消し線で旧記述を残したうえで、解消済みであることと、`.gitignore:55-57` の
+un-ignore 行が残っているため**再設置すると再発する**ことを追記した。
+
+**追従不要と判断した層**（PR #709 の差分は `.env.example` 削除と WORK_LOG 追記のみ）:
+
+| 層 | 判断 |
+|---|---|
+| DSL/言語仕様（`packages/engine/`） | 差分に含まれない。構文・意味論・`.orbslog` 形式に変化なし |
+| ランタイム/MCP（`rust/`） | 差分に含まれない。MCP ツールの引数・返り値・エラー挙動に変化なし |
+| OrbitStudio（`packages/vscode-extension/`） | 差分に含まれない。評価フロー・診断・補完に変化なし |
+| `sites/user/` `sites/dev/` | 削除したファイルを参照する記述は 0 件（repo 全体 grep で確認） |
