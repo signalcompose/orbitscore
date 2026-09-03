@@ -25,7 +25,7 @@ immediately point at something concrete.
 ## Why "racks" — Placing the DAW insert chain as an isomorph
 
 The starting point of #628 was the owner's observation that "deletion, bypass and chaining are
-not three decisions but one model". The design memo `docs/design/628-effect-chain-model.md`
+not three decisions but one model". The design memo `docs/archive/design/628-effect-chain-model.md`
 takes Bitwig and Live as its reference DAWs and confirms that a DAW slot is designed with
 **four states** (empty slot / active / bypass / deactivated), not two ("present / absent").
 
@@ -1561,9 +1561,9 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:36-47` — SC.1 two-layer semantics (declaration layer / signal layer)
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:151-170` — SC.5 live-coding semantics and the note on failure models (i)/(ii)
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:198-415` — SC.10 racks (shape, disabling, deletion, values, LCS, standard plugins, v1 staging)
-- `docs/design/628-effect-chain-model.md:17-31,53-69,188-232` — DAW research (four states, mechanism B) and the settled model
-- `docs/design/628-rack-chain-implementation-design.md:127-291,751-774` — adopted mechanism, rejected options, the 20 decisions
-- `docs/design/628-plan-reset.md:57-120` — early detection ahead of the hardware gate (the pure unit for the gain constants)
+- `docs/archive/design/628-effect-chain-model.md:17-31,53-69,188-232` — DAW research (four states, mechanism B) and the settled model
+- `docs/archive/design/628-rack-chain-implementation-design.md:127-291,751-774` — adopted mechanism, rejected options, the 20 decisions
+- `docs/archive/design/628-plan-reset.md:57-120` — early detection ahead of the hardware gate (the pure unit for the gain constants)
 - `packages/engine/src/signal-chain/rack.ts:12-34,124-203,223-277` — `RackRecipe` types, three-category resolution, chord/rack classification, desugaring `effect()` arguments
 - `packages/engine/src/signal-chain/dispatch.ts:42-53` — diagnostic-only matching of the withdrawn method form (SC.10.9)
 - `packages/engine/src/parser/types.ts:144-159` — `ValueCall` / `ValueArray` AST

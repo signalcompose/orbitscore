@@ -24,7 +24,7 @@ watchdog）を先に読んでおくと、本章で「bus」「child」「mailbox
 ## なぜ「ラック」なのか — DAW の insert チェーンと同型に置く
 
 #628 の出発点は「削除・バイパス・チェーンは 3 つの決定ではなく 1 つのモデルである」という
-owner の指摘でした。設計メモ `docs/design/628-effect-chain-model.md` は Bitwig と Live を
+owner の指摘でした。設計メモ `docs/archive/design/628-effect-chain-model.md` は Bitwig と Live を
 参照 DAW に置いて、DAW のスロットが「有る / 無い」の 2 状態ではなく **4 状態**
 （空スロット / 有効 / バイパス / 無効化）で設計されていることを確認しています。
 
@@ -1527,9 +1527,9 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:36-47` — SC.1 二層意味論（宣言層 / 信号層）
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:151-170` — SC.5 ライブコーディング意味論と失敗モデル (i)/(ii) の注記
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:198-415` — SC.10 ラック（形・無効化・削除・値・LCS・標準プラグイン・v1 の段階）
-- `docs/design/628-effect-chain-model.md:17-31,53-69,188-232` — DAW リサーチ（4 状態・機構 B）と確定モデル
-- `docs/design/628-rack-chain-implementation-design.md:127-291,751-774` — 採用機構と却下案・決定事項 20 項目
-- `docs/design/628-plan-reset.md:57-120` — 実機ゲートの前倒し検出（ゲイン定数の純 unit）
+- `docs/archive/design/628-effect-chain-model.md:17-31,53-69,188-232` — DAW リサーチ（4 状態・機構 B）と確定モデル
+- `docs/archive/design/628-rack-chain-implementation-design.md:127-291,751-774` — 採用機構と却下案・決定事項 20 項目
+- `docs/archive/design/628-plan-reset.md:57-120` — 実機ゲートの前倒し検出（ゲイン定数の純 unit）
 - `packages/engine/src/signal-chain/rack.ts:12-34,124-203,223-277` — `RackRecipe` 型・3 カテゴリ解決・chord/rack 分類・`effect()` 引数の脱糖
 - `packages/engine/src/signal-chain/dispatch.ts:42-53` — 撤回されたメソッド形の診断専用照合（SC.10.9）
 - `packages/engine/src/parser/types.ts:144-159` — `ValueCall` / `ValueArray` AST

@@ -1,10 +1,15 @@
+> 🗄️ **アーカイブ（2026-09-03・#696）。** 本文書は記録として残すが、**現在の正本ではない**。
+> **現在の正本**: `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` **SC.10**（本文書自身が「確定・spec SC.10 として制定済み」と書いている）
+>
+> 内容は移動時のまま。**新しい判断の根拠にしないこと**（[[check-the-date-before-trusting-a-doc]]）。
+
 # エフェクトチェーンと DSL — DAW リサーチと設計の論点
 
 **Date**: 2026-08-27 / **Issue**: #628（削除の DSL）・#522（複数 insert）/ **Status**: **確定**（spec SC.10 として制定済み）
 
 > **この文書の役割**: DAW リサーチと、owner との議論で**なぜその形になったか**を残す。
 > **確定した意味論の正本は `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.10**、
-> **実装設計は `docs/design/628-rack-chain-implementation-design.md`**。
+> **実装設計は `docs/archive/design/628-rack-chain-implementation-design.md`**。
 
 > **前提**: 削除・バイパス・チェーンは **3 つの決定ではなく 1 つのモデル**である（owner 指摘
 > 2026-08-27）。DAW を調べると、この 3 つは実際に 1 つのスロット状態モデルとして設計されている。

@@ -1292,7 +1292,7 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
 > 🔴 **#628 でモデルが確定した。** 以下は #625 時点の v1 実装（1 insert・`remove()`）の記述で
 > あり、**ラック形（複数 insert・`layer`・配列からの削除）へ移行する**。正本は
 > `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` **SC.10**、経緯は
-> `docs/design/628-effect-chain-model.md`。移行後は `remove()` は撤回される。
+> `docs/archive/design/628-effect-chain-model.md`。移行後は `remove()` は撤回される。
 
 ```js
 sum("drum").effect("TAL-Reverb-4")   // 挿す

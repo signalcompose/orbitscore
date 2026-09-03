@@ -78,12 +78,12 @@ Issue 単位の実装設計（起案 Fable / 審査 main。**owner 確定事項�
 
 | File | Issue | Purpose |
 |---|---|---|
-| [625-effect-replacement-design.md](../design/625-effect-replacement-design.md) | #625 | effect insert の差し替え・削除（同一スロットで建て直す） |
-| [628-effect-chain-model.md](../design/628-effect-chain-model.md) | #628 | エフェクトチェーンモデル（現在地の実測と到達点） |
-| [628-rack-chain-implementation-design.md](../design/628-rack-chain-implementation-design.md) | #628 | ラックチェーンの実装設計 |
-| [628-plan-reset.md](../design/628-plan-reset.md) | #628 | 計画の立て直し（Cmd+Click を #633 へ移管） |
-| [628-gated-e2e-rack-design.md](../design/628-gated-e2e-rack-design.md) | #628 | ラックの実機 gated E2E 設計 |
-| [628-ui-pump-per-index-design.md](../design/628-ui-pump-per-index-design.md) | #628/#633 | `UiEventPump` の per-index / per-window 化 |
+| [625-effect-replacement-design.md](../archive/design/625-effect-replacement-design.md) | #625 | effect insert の差し替え・削除（同一スロットで建て直す） |
+| [628-effect-chain-model.md](../archive/design/628-effect-chain-model.md) | #628 | エフェクトチェーンモデル（現在地の実測と到達点） |
+| [628-rack-chain-implementation-design.md](../archive/design/628-rack-chain-implementation-design.md) | #628 | ラックチェーンの実装設計 |
+| [628-plan-reset.md](../archive/design/628-plan-reset.md) | #628 | 計画の立て直し（Cmd+Click を #633 へ移管） |
+| [628-gated-e2e-rack-design.md](../archive/design/628-gated-e2e-rack-design.md) | #628 | ラックの実機 gated E2E 設計 |
+| [628-ui-pump-per-index-design.md](../archive/design/628-ui-pump-per-index-design.md) | #628/#633 | `UiEventPump` の per-index / per-window 化 |
 | [643-mixer-foundation-design.md](../design/643-mixer-foundation-design.md) | #643 | ミキサーの土台と、その上に乗るオプションの責務分離（instrument を source に） |
 | [649-audio-line-design.md](../design/649-audio-line-design.md) | #649 | オーディオライン設計 v3（メソッドチェーン順序 = 決定論） |
 
@@ -212,8 +212,8 @@ CLAUDE.md の「テストの積み上げ規律」「E2E が最重要」「マー
 
 | File | Purpose |
 |---|---|
-| [ROADMAP_2026.md](../planning/ROADMAP_2026.md) | 2026 ロードマップ (ICMC Hamburg 2026-05-10 〜 16 を含む) |
-| [IMPROVEMENT_RECOMMENDATIONS.md](../planning/IMPROVEMENT_RECOMMENDATIONS.md) | 優先度付き改善提案 |
+| [ROADMAP_2026.md](../archive/planning/ROADMAP_2026.md) | 2026 ロードマップ (ICMC Hamburg 2026-05-10 〜 16 を含む) |
+| [IMPROVEMENT_RECOMMENDATIONS.md](../archive/planning/IMPROVEMENT_RECOMMENDATIONS.md) | 優先度付き改善提案 |
 
 ### Post-ICMC（起案時の計画・多くは実装済）
 

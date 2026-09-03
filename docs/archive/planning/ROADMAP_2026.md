@@ -1,3 +1,8 @@
+> 🗄️ **アーカイブ（2026-09-03・#696）。** 本文書は記録として残すが、**現在の正本ではない**。
+> **現在の正本**: **`docs/planning/DEVELOPMENT_MAP.md`**（地図 §0.3: 本文書は歴史的スナップショットであり、現在の順序の根拠にしない）
+>
+> 内容は移動時のまま。**新しい判断の根拠にしないこと**（[[check-the-date-before-trusting-a-doc]]）。
+
 # OrbitScore Roadmap 2026
 
 **Last updated**: 2026-04-20

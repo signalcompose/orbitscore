@@ -1,9 +1,14 @@
+> 🗄️ **アーカイブ（2026-09-03・#696）。** 本文書は記録として残すが、**現在の正本ではない**。
+> **現在の正本**: **#628 CLOSED** / E2E の現在地は `DEVELOPMENT_MAP.md` §4.G
+>
+> 内容は移動時のまま。**新しい判断の根拠にしないこと**（[[check-the-date-before-trusting-a-doc]]）。
+
 # 設計書: ラック形チェーンの gated E2E（#628 監査 F9 の充填）
 
 - 起案: Fable（設計担当・2026-08-28）
 - 対象: PR #639 の gated E2E 欠落 — **配列記法・N≥2 直列・標準 `Gain` が実機で一度も評価されていない**
   （実測: `orbitstudio-mcp-gated.spec.ts` 内の配列形は `fx625.effect([])` の 1 箇所のみ・`Gain(db` は 0 件）
-- 正本: `docs/design/628-rack-chain-implementation-design.md` §6（R28-E1〜E10）と §1 完了条件 1 / 13 / 15
+- 正本: `docs/archive/design/628-rack-chain-implementation-design.md` §6（R28-E1〜E10）と §1 完了条件 1 / 13 / 15
 - 実装担当への注意: **本書はテスト設計のみ。並行機構を新設しない。** 積み先は既存の
   `tests/e2e/orbitstudio-mcp-gated.spec.ts`（`describe.skipIf(!gated)` 配下 = `ORBIT_GATED_ORBITSTUDIO=1`
   未設定なら自動 skip）。実装が本書から逸脱する必要が生じたら本書を先に更新する。
