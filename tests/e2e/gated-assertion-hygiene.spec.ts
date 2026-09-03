@@ -10,21 +10,23 @@
  * ここでは gated spec 自身のソースを検査して、**弱いアサーションの型を機械的に**探す。
  * 完全ではないが、「書いた本人が気づかなかった」を CI が拾える位置に置く価値はある。
  */
-import fs from 'node:fs'
-import path from 'node:path'
-
 import { describe, expect, it } from 'vitest'
 
-const GATED_SPEC = path.resolve(__dirname, 'orbitstudio-mcp-gated.spec.ts')
-const source = fs.readFileSync(GATED_SPEC, 'utf8')
-const lines = source.split('\n')
+import { readGatedSourceEntries } from './gated-sources'
 
-/** 行番号つきで、条件に合う行を集める。 */
+// 🔴 走査先は `gated-sources.ts` が持つ（#668 §3.4・PR-E1）。ここで 1 ファイルを決め打ちすると、
+// シナリオを別ファイルへ出した時に**検査が新ファイルを見ず、黙って弱くなる**。
+const entries = readGatedSourceEntries()
+const source = entries.map(({ source: text }) => text).join('\n')
+const lines = entries.flatMap(({ file, source: text }) =>
+  text.split('\n').map((line, i) => ({ file, line, n: i + 1 })),
+)
+
+/** ファイル名つき・行番号つきで、条件に合う行を集める。 */
 const linesMatching = (predicate: (line: string) => boolean): string[] =>
   lines
-    .map((line, i) => ({ line, n: i + 1 }))
     .filter(({ line }) => predicate(line))
-    .map(({ line, n }) => `${n}: ${line.trim()}`)
+    .map(({ file, line, n }) => `${file}:${n}: ${line.trim()}`)
 
 describe('gated E2E assertion hygiene', () => {
   it('never asserts on a bare ERROR count equality', () => {

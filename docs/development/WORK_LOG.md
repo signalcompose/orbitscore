@@ -1038,3 +1038,40 @@ owner 指示:
   必要な機能は**そこから機能要望として降りてくる** → 降りてきたら**普通の機能 issue** として
   扱う（「研究トラック」という別枠に入れない）。地図 §4.M の見出しを
   「研究・作品トラック（🔴 このリポジトリでは進めない）」へ変更
+
+## 束 668-e2e-foundation — E2E 基盤（段 0・安全網）
+
+正本: [`docs/design/668-e2e-foundation-design.md`](../design/668-e2e-foundation-design.md) /
+[`docs/planning/IMPLEMENTATION_PLAN_2026-09.md`](../planning/IMPLEMENTATION_PLAN_2026-09.md) §1.10。
+束ブランチ運用（[`BUNDLE_BRANCH_WORKFLOW.md`](BUNDLE_BRANCH_WORKFLOW.md)）の最初の束。
+
+### PR-E1: gated E2E の走査先を 1 箇所にする
+
+**なぜ先に入れるか**（設計 §3.4・§11 F-9）。ラチェット（`dsl-e2e-coverage.spec.ts:39`）と
+衛生検査（`gated-assertion-hygiene.spec.ts:18`）が**それぞれ 1 ファイルを決め打ち**していたため、
+シナリオを別ファイルへ出した瞬間に
+
+- **(a)** カバー済みの語が未カバー扱いになってラチェットが red
+- **(b)** 衛生検査が新ファイルを見ず、**黙って弱くなる**
+
+が同時に起きる。🔴 **(b) は red にならないぶん危険**で、検査が効いていないことに気づけない。
+分割（PR-E2 以降）の前提として、走査先を `tests/e2e/gated-sources.ts` に集約した。
+
+**変更**:
+
+- `tests/e2e/gated-sources.ts`（新規）— `GATED_SOURCE_FILES` / `readGatedSources()` /
+  `readGatedSourceEntries()` / `gatedItTitles()`。`gated/` 配下は**まだ存在しない**が、
+  作られた時点で自動的に走査対象に入る（`.spec.ts` にしないので vitest の発見単位は 1 本のまま）
+- **ソースが 0 本なら throw する。** 入口 spec の改名やディレクトリ移動で空になると、両検査が
+  「何も見つからなかった」を「違反ゼロ」と読んで**全件 green のまま無意味になる**
+- 衛生検査の違反報告を **`file:line`** 形式にした（連結後の行番号では追えないため）
+- `tests/e2e/helpers/rack-child-pid.ts`（新規）— `rackChildPidsFromLog` /
+  `latestRackChildPid` を gated spec から移した。`rack-child-pid-oracle.spec.ts` が
+  **`.spec.ts` から import していた**のを解消（spec 分割で import 元が消えるため）
+
+**検証**:
+
+- `npm test` → **2167 passed / 48 skipped**（挙動不変）
+- 🔴 **層が効いていることを実行で確認した。** `tests/e2e/gated/__probe.ts` に ERROR 件数の
+  厳密等価を置くと衛生検査が **red** になり、**`gated/__probe.ts:7`** と報告した。
+  この PR 以前ならこのファイルは走査されず、検査は黙って通っていた。確認後に削除し、緑に戻した

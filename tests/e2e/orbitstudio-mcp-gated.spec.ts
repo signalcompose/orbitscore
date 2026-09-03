@@ -54,6 +54,7 @@ import {
 import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
 
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
+import { rackChildPidsFromLog } from './helpers/rack-child-pid'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
@@ -261,35 +262,8 @@ function pluginChildPids(pluginPath: string): number[] {
   }
 }
 
-/**
- * rack effect child（#628）の PID を **daemon のログから**読む。
- *
- * 🔴 なぜ `pluginChildPids` を使えないか: あれは child のコマンドラインに
- * `--plugin <絶対パス>` が現れることを前提に `pgrep -f` する。rack child は
- * **`--chain <manifest.json>`** で起動するので、プラグインのパスはコマンドラインに
- * 出ない（manifest はテンポラリファイル）。#628 §6 の R28-E1〜E10 はいずれも
- * 「child PID 不変 = respawn していない」を判定条件にしているため、別経路が要る。
- *
- * daemon は spawn 時に `[orbit-effect-rack] child spawned pid=<n> shm=<path>` を
- * `tracing::info!` で名乗る（`outproc_effect.rs`）。**MCP の tool 表面を増やさず**、
- * ERROR 計数や `[plugin-state]` 行と同じ `get_log` 経路で読めるようにしてある。
- *
- * @returns ログに現れた順の PID 配列（最後の要素が最新の spawn）
- */
-export function rackChildPidsFromLog(logText: string): number[] {
-  const pids: number[] = []
-  for (const match of logText.matchAll(/\[orbit-effect-rack\] child spawned pid=(\d+)/g)) {
-    const pid = Number(match[1])
-    if (Number.isSafeInteger(pid) && pid > 0) pids.push(pid)
-  }
-  return pids
-}
-
-/** rack child の最新 PID。spawn がまだならnull。 */
-export function latestRackChildPid(logText: string): number | null {
-  const pids = rackChildPidsFromLog(logText)
-  return pids.length > 0 ? pids[pids.length - 1] : null
-}
+// rack child の PID オラクルは `helpers/rack-child-pid.ts` に移した（#668 §3.4・PR-E1）。
+// テストファイルを他のテストが import する形をやめ、spec 分割で import 元が消えないようにする。
 
 /**
  * **effect** child の PID を観測する（#628 で rack 化された経路）。
