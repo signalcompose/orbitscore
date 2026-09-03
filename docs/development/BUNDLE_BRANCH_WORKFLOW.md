@@ -73,7 +73,7 @@ main ──●──────────────────────
 
 ### 5.4 束 PR のフルゲート
 
-`/simplify` → レビューチーム + 設計監査（Fable）を並行 → fixer 3 回まで → ビルド + 実機 E2E 全件 → squash merge。監査には**設計文書と束の差分**を渡す。設計監査の 3 問（不在証明・外部 API の意味論・横断的関心事）は設計文書に対する問いなので、差分単位より束単位の方が精度が上がる。
+`/simplify` → レビューチーム + 設計監査（Fable）を並行 → fixer 3 回まで → ビルド + 実機 E2E 全件 → merge。監査には**設計文書と束の差分**を渡す。設計監査の 3 問（不在証明・外部 API の意味論・横断的関心事）は設計文書に対する問いなので、差分単位より束単位の方が精度が上がる。
 
 ### 5.5 bot と CI の発火条件
 
@@ -117,7 +117,7 @@ GitHub は 2026-07-30 に stacked pull requests を公開プレビューにし�
 ## 8. 他リポジトリへの導入チェックリスト
 
 1. **merge 方式**を確認する（リポジトリ設定で何が許可されているかを API か Settings で見る。OrbitScore は squash 禁止で merge commit のみ、と 2026-09-03 に実測）。merge commit でも squash でも本書は成立する。違いは main に残る粒度だけ
-2. **branch protection**: main は保護のまま。統合ブランチは保護しない（main の merge と小 PR の squash を自由に入れるため）
+2. **branch protection**: main は保護のまま。統合ブランチは保護しない（main の merge と小 PR の merge を自由に入れるため）
 3. **bot の発火条件**: 自動レビュー bot のワークフローに `if: github.base_ref == 'main'` を足す
 4. **命名**: 統合ブランチ `<先頭 issue>-<英語>`、小 PR `<issue>-<英語>-<部分>`
 5. **軽いゲートの道具**: 「その PR の E2E だけ回す」仕組み（環境変数で対象を絞る等）を用意する
@@ -179,5 +179,5 @@ main 直行: PR-O1 / L0 / R0（仕様）、PR-O2 / D0 / V4 / K-A1 / K-A2 / S-T1�
 
 **OrbitScore 側の一次情報**
 15. `CLAUDE.md`「PR レビューワークフロー」「検証を委譲先に任せない」（PR #527 / #633 の実測）
-16. `docs/core/PROJECT_RULES.md`（squash merge・ブランチを消さない・命名規約）
+16. `docs/core/PROJECT_RULES.md`（merge commit・ブランチを消さない・命名規約）
 17. `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` §1〜§3（PR 一覧・順序の根拠・段）

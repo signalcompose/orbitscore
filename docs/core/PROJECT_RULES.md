@@ -364,7 +364,7 @@ Windows / Linux は v1.x では非対応。
 
 6. 【マージ: ユーザー】
    - "all check passed"を確認
-   - マージ実行（squash）
+   - マージ実行（merge commit・squash はリポジトリ設定で不可）
    ↓
 
 7. 【次フェーズ準備: Claude 4.5 Sonnet】
@@ -744,7 +744,7 @@ When you see these patterns, **refactor immediately**:
 4. **NEVER** skip tests for new features
 5. **NEVER** use magic numbers - use constants
 6. **NEVER** leave TODO comments without tracking
-7. **NEVER** delete branches after merging (use `--squash` without `--delete-branch`)
+7. **NEVER** delete branches after merging (use `--merge` without `--delete-branch`)
 
 ## ✅ Checklist Before Committing
 
