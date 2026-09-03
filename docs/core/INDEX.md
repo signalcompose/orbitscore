@@ -80,6 +80,17 @@ Issue 単位の実装設計（起案 Fable / 審査 main。**owner 確定事項�
 |---|---|---|
 | [643-mixer-foundation-design.md](../design/643-mixer-foundation-design.md) | #643 | ミキサーの土台と、その上に乗るオプションの責務分離（instrument を source に） |
 | [649-audio-line-design.md](../design/649-audio-line-design.md) | #649 | オーディオライン設計 v3（メソッドチェーン順序 = 決定論） |
+| [611-output-line-design.md](../design/611-output-line-design.md) | #611/#649/#543-a/#409/#647 | 出口の一般化 — `output(dest, thru, db)` がライン要素・`SetBusLine`・master ライン（2026-09-03） |
+| [694-session-log-editor-path-design.md](../design/694-session-log-editor-path-design.md) | #694/#695/#241 | セッションログをエディタ経路で出し、フレームで 1 選択 1 レコード、`orbitscore replay` で確認 |
+| [598-render-endpoint-design.md](../design/598-render-endpoint-design.md) | #598/#241 | render エンドポイント `mix.render(<path>)` × 実時間 stem × オフライン driver（評価列 × 仮想クロック） |
+| [672-plugin-boundaries-design.md](../design/672-plugin-boundaries-design.md) | #672/#671/#674/#321/#497 | プラグインの境界 5 本と、残りとしてのコア。DSL Plugin / DSP Plugin 契約の草案 |
+| [634-pdc-layer-instrument-rack-design.md](../design/634-pdc-layer-instrument-rack-design.md) | #606/#634/#635/#636/#669 | リリースゲート連鎖: note-off flush → PDC → layer → instrument rack → 標準プラグイン |
+| [428-timed-event-queue-design.md](../design/428-timed-event-queue-design.md) | #428/#680/#674/#460 | 時刻付き非オーディオイベントの共通 queue（note / param / 種 B の consumer） |
+| [610-diagnostics-applicability-design.md](../design/610-diagnostics-applicability-design.md) | #610/#644/#645 ほか | 「何が書けて何が書けないか」の単一表・演奏中の throw 封じ込め |
+| [662-performance-and-visibility-design.md](../design/662-performance-and-visibility-design.md) | #662 A-E/#661/#667/#663/#156 | 可視化・設定一覧・性能（何を測るか）— `662-engine-visibility-and-limits.md` の差分 |
+| [656-release-design.md](../design/656-release-design.md) | #659/#656/#385/#138 | 配布: ローカルリリース → 署名・公証 → cold-install smoke |
+| [668-e2e-foundation-design.md](../design/668-e2e-foundation-design.md) | #668/#650/#630/#543-b/#624/#640/#684 | E2E 基盤: 共通 helper・二重台帳・決定論 |
+| [679-input-consistency-check.md](../design/679-input-consistency-check.md) | #679 | 入力（レコーディング）の整合確認のみ（着手しない） |
 
 #### アーカイブ済み（`docs/archive/design/`）
 
@@ -221,6 +232,9 @@ CLAUDE.md の「テストの積み上げ規律」「E2E が最重要」「マー
 | File | Purpose |
 |---|---|
 | [DEVELOPMENT_MAP.md](../planning/DEVELOPMENT_MAP.md) | 🔴 **開発計画の正本**（2026-09-03 制定）。open issue はこの地図に**合わせる**。§0 使い方と運用規則 / §1 再設計しない確定事項 / §1b 機能の持ち方 / §2 全体図 / §3 リリースまでの筋 / §4 領域ごとの地図 / §5 Epic の裁定 / §6 統合一覧 / §7 新規に必要な issue / §8 提案 / §9 未確認 |
+| [IMPLEMENTATION_PLAN_2026-09.md](../planning/IMPLEMENTATION_PLAN_2026-09.md) | 設計文書 11 本の PR 戦略（一方通行の判断・PR 一覧・順序の根拠・段）（2026-09-03） |
+| [`USER_OUTCOMES_2026-09.md`](../planning/USER_OUTCOMES_2026-09.md) | 各 PR が完了するとユーザーは何ができるか（plan §1 の PR ごとに 1 行・見え方の凡例つき） |
+| [`BUNDLE_BRANCH_WORKFLOW.md`](../development/BUNDLE_BRANCH_WORKFLOW.md) | 束ブランチ運用: 小 PR は統合ブランチへ軽いゲートで、フルレビューと実機検証は束 PR で 1 回（他リポジトリへの導入手順・GitHub stacked PR との違い・参照つき） |
 | [2026-09-03-issue-triage.md](../planning/2026-09-03-issue-triage.md) | issue 棚卸し 164→120 とラベル運用の記録（#689）。**地図の入力として現役** |
 
 > 🔴 **新規起票の前に地図の該当節を探す**（地図 §0.2）。**番号の検索ではなく、地図の見出しで探す** —

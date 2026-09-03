@@ -1027,7 +1027,7 @@ RMS is nearly identical and "RMS differs significantly" would be a false asserti
 Instead the VST3 side carries a +7 semitone state and the two are told apart by frequency.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3413-3421
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3428-3436
       const e4Hz = estimateFundamentalHz(capture, audioRange(segments.e4!))
       const e5Hz = estimateFundamentalHz(capture, audioRange(segments.e5!))
       expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
@@ -1266,7 +1266,7 @@ applied (the `engaged` wiring is cut)" can be distinguished numerically.
 Removal is `effect([])`.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3707-3713
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3722-3728
         // 空のラックを適用するのが「外す」の表現になった。
         const removeA = await activeClient.call('evaluate_orbitscore', {
           code: 'fx625.effect([])',
@@ -1284,7 +1284,7 @@ PID appeared" at the time of #625; with the rack, **the PID not changing** is th
 of "no respawn = the dry window is gone".
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3565-3578
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3580-3593
         // ここは「旧 child が消えた」を待っていた。#628 のラック化では **1 child が
         // チェーン全体を持つ**ため、差し替えは同じ child の中で prepare-commit される。
         // **PID が変わらないことこそが「respawn していない = dry 窓が消えた」の実機証明**で、
@@ -1305,7 +1305,7 @@ R-E3 (replacement with a nonexistent path) asserted "dry — neither A nor B" un
 is prepare-commit, it pins by audio that **B keeps playing even after the failure**.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3925-3940
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3940-3955
 
       // 🔴 R-E3: #628 で**期待が反転した**。失敗後は **B のまま鳴り続ける**。
       //
@@ -1410,8 +1410,8 @@ LOOP(drums)
 - `packages/vscode-extension/package.json:110-121` — the `Rescan Plugin Catalog` / `Browse Plugins` commands
 - `packages/vscode-extension/src/mcp-server.ts:1022-1032` — MCP `list_plugins`
 - `tests/vscode-extension/plugin-name-diagnostics.spec.ts:192-225` — agreement test with the engine resolver
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3413-3421` — #618 E1-E6 frequency oracle
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3565-3578` / `:3707-3713` / `:3925-3940` — #625 R-E2 / R-E6 / R-E3 (expectations flipped in #628)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3428-3436` — #618 E1-E6 frequency oracle
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3580-3593` / `:3722-3728` / `:3940-3955` — #625 R-E2 / R-E6 / R-E3 (expectations flipped in #628)
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — PH.2d / PH.3 / PH.4 / PC.1–PC.5
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` — SC.3.2 / SC.10.3 / SC.10.3b / SC.10.3c / SC.10.5 / SC.10.9
 - `docs/research/PLUGIN_CATALOG_SCANNING.md` — the 23.2% measurement and the basis of the three-state model

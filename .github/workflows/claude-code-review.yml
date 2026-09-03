@@ -6,7 +6,9 @@ on:
 
 jobs:
   claude-review:
-
+    # #703 束ブランチ運用: bot レビューは束 PR（base = main）だけ。統合ブランチ向けの小 PR では走らせない。
+    # code-review.yml はテスト CI 本体なので条件を付けない。
+    if: github.base_ref == 'main'
     runs-on: ubuntu-latest
     permissions:
       contents: read

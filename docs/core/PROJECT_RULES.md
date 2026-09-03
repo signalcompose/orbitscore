@@ -37,6 +37,41 @@ open issue 164 件のうち **162 件がタイトルに Conventional Commits の
 設計の発注順がそのまま決まる。**期限や現在の関心事を名前にしない**（それが `icmc-blocker` を
 腐らせた原因）。
 
+### 1d. Issue の実装チェックリスト（2026-09-03 制定）
+
+**地図（`docs/planning/DEVELOPMENT_MAP.md`）が参照する issue は、実装内容のチェックリストを持つ。**
+
+🔴 **要点は「終わらなかった理由が残ること」。** チェックが外れたまま消える／黙って削られると、
+**なぜやらなかったのかが次の人に分からない**。2026-09-03 にそれで実害が出た — #506 の看板
+（メソッド形の DSL）は **SC.10.9 で撤回済み**だったのに、撤回が spec 側にしかなく issue 本文が
+古いままで、main が **#680 を重複起票**した。
+
+```markdown
+## 実装チェックリスト（MAP §4.X）
+
+- [ ] 未着手の項目
+- [x] 完了した項目 — PR #NNN / commit `abc1234`
+- [x] ~~やらなくなった項目~~ — 🔴 **不要**: 理由（出どころ: MAP §4.X / #NNN / owner YYYY-MM-DD）
+- [x] ~~形が変わった項目~~ — 🔴 **変更**: 何にどう変わったか（同上）
+```
+
+**規律**:
+
+1. 🔴 **項目を削除しない。** やらないと決めたら `~~取り消し線~~` + **理由** + **決定の出どころ**
+2. **完了には PR か commit を書く**（「やった」の自己申告は根拠にならない）
+3. **チェックボックスは「解決済み」を意味する** — 完了も「やらない」も `[x]`。
+   **未解決だけが `[ ]`** なので、**残数がそのまま残作業**になる
+4. **理由には必ず出どころを書く**（MAP の節 / issue 番号 / owner の日付）。
+   出どころの無い「不要」は後から検証できない
+5. 🔴 **未決事項をチェックリスト化しない。** 地図が未決としているものは `[ ]` のまま
+   「**未決（MAP §9）**」と書く。**決めていないものを「やること」にしない**
+
+**対象**: まず地図の critical path のみ（`release-gate` / `must-fix` / `foundation` と、
+その前提）。地図が参照する OPEN issue は 117 件あるが、全件に入れると
+**更新されないチェックリストが 117 個できる**。
+
+---
+
 ### 1c. 棚卸しの作法（2026-09-03 制定）
 
 🔴 **更新日で判定しない。中身を読む。**
@@ -235,7 +270,7 @@ open issue 164 件のうち **162 件がタイトルに Conventional Commits の
   - AIエージェントはマージの準備（PR作成、レビュー対応）までを行い、マージ実行はユーザーに委ねます
   - 理由: テスト結果、ビルド結果、BugBotのコメントなど、最終的な品質確認はユーザーが行うべき
   - **例外**: ユーザーが明示的に「マージしてください」「マージをお願いします」と依頼した場合は実行可能
-- **ブランチの削除** - `git branch -d` や `gh pr merge --delete-branch` は原則として実行しない
+- **ブランチの削除** - `git branch -d` や `gh pr merge --delete-branch` は原則として実行しない（マージ後の head ブランチは GitHub のリポジトリ設定で自動削除される・owner 2026-09-03。手で消す必要はない）
   - ブランチは履歴追跡のため保持します
   - **例外**: ユーザーが明示的に「ブランチを削除してください」と依頼した場合は実行可能
 
@@ -329,7 +364,7 @@ Windows / Linux は v1.x では非対応。
 
 6. 【マージ: ユーザー】
    - "all check passed"を確認
-   - マージ実行（squash）
+   - マージ実行（merge commit・squash はリポジトリ設定で不可）
    ↓
 
 7. 【次フェーズ準備: Claude 4.5 Sonnet】
@@ -459,6 +494,7 @@ alias review-get='gh pr view --comments | grep -A 100 "bugbot"'
 **Branch Structure (GitHub Flow):**
 - `main` - Production-ready code (protected, base for PRs)
 - `<issue-number>-description` - Feature/fix/refactor branches
+- `<issue-number>-<bundle>` - 束の統合ブランチ（束ブランチ運用・下記）
 
 **Branch Protection Rules (main):**
 - ✅ Pull Request required before merging
@@ -491,6 +527,22 @@ git checkout -b <issue-number>-descriptive-name
 7. Merge to main after approval
 ```
 
+**束ブランチ運用（2026-09-03 制定・#703・手引きは [`BUNDLE_BRANCH_WORKFLOW.md`](../development/BUNDLE_BRANCH_WORKFLOW.md)）:**
+
+レビューの単位は PR ではなく**束**（1 つの設計文書に対応する PR の集合・差分 1,500 行以下）。
+
+| 段階 | やること | コマンド |
+|---|---|---|
+| 束を開く | main から統合ブランチを切って push | `git checkout -b 611-output-line main && git push -u origin 611-output-line` |
+| 小 PR | 統合ブランチから切り、base を統合ブランチにして **draft** で開く。本文は `Part of #N` | `git checkout -b 611-o4-audio-line 611-output-line` → `gh pr create --base 611-output-line --draft` |
+| 小 PR を閉じる | CI 緑 + その PR が足した E2E を実機で + main が差分を読む → 統合ブランチへ merge | `gh pr merge <n> --merge` |
+| main に追従 | 他の束が main に入ったら統合ブランチへ merge | `git merge origin/main` |
+| 束を閉じる | 統合ブランチ → main の PR（束 PR）を開き、`CLAUDE.md` の PR レビューワークフロー（1〜8）+ マージ前ゲート → merge commit。本文に `Closes #…` を集約 | `gh pr create --base main --head 611-output-line` |
+
+- 統合ブランチは保護しない。束 PR のマージ後は他の head ブランチと同じく自動削除される。main には束 1 つの merge commit が入り、小 PR の履歴はその下にぶら下がる
+- 仕様だけの PR と must-fix は束を通さず main 直行（従来どおり）
+- 自動レビュー bot（`claude-code-review.yml`）は base が main の PR だけで走る（小 PR では走らない）
+
 **Creating PRs:**
 ```bash
 # Push branch to GitHub
@@ -504,6 +556,7 @@ detailed description"
 
 **Automatic Issue Closing:**
 - **ALWAYS include `Closes #<issue-number>` in PR body** to automatically close the related Issue when PR is merged
+- 束の小 PR は `Part of #<issue-number>`（閉じない）。`Closes` は束 PR に集約する
 - Keywords that work: `Closes`, `Fixes`, `Resolves` (case-insensitive)
 - Example: `Closes #14` will automatically close Issue #14 when PR is merged
 - **Benefits**:
@@ -514,11 +567,13 @@ detailed description"
 
 **Merging PRs:**
 ```bash
-# Merge with squash (DO NOT delete branch)
-gh pr merge <number> --squash
+# Merge commit
+# 🔴 squash はリポジトリ設定で禁止されている（2026-09-03 に API が 405 "Squash merges are not allowed" を返すことを実測。
+#    main の履歴も "Merge pull request #N" の merge commit）。--squash と書いた旧記述は誤り。
+gh pr merge <number> --merge
 
-# ❌ NEVER use --delete-branch flag
-# ✅ Keep branches for historical reference
+# head ブランチはマージ後に GitHub 設定で自動削除される（owner 2026-09-03: 増えすぎるし後からでも追える）。
+# 履歴は merge commit から辿る。--delete-branch を付ける必要も、消さないよう気を配る必要もない。
 ```
 
 **Important:**
@@ -528,10 +583,10 @@ gh pr merge <number> --squash
   - ✅ Good: `11-refactor-audio-slicer-phase-2-1`
   - ❌ Bad: `11-refactor-audio-slicertsをモジュール分割phase-2-1`
   - Reason: Japanese characters in branch names can cause issues with some tools and environments
-- **Branches are kept for history** - do not delete after merge
+- **Merged head branches are auto-deleted by the repository setting**（owner 2026-09-03）。履歴は merge commit から辿る
 - **Cursor BugBot** automatically provides change summaries on PRs (not actual code reviews)
 - User typically handles merging, but agent may assist with complex implementations
-- Always use `--squash` for clean commit history on main branch
+- Merge method は **merge commit**（`--squash` はリポジトリ設定で不可・2026-09-03 実測）
 - **Branch protection prevents accidental direct pushes** to main
 
 ### Commit Message Format:
@@ -689,7 +744,7 @@ When you see these patterns, **refactor immediately**:
 4. **NEVER** skip tests for new features
 5. **NEVER** use magic numbers - use constants
 6. **NEVER** leave TODO comments without tracking
-7. **NEVER** delete branches after merging (use `--squash` without `--delete-branch`)
+7. Merge with `--merge`（squash 不可）。head ブランチはマージ後に自動削除される
 
 ## ✅ Checklist Before Committing
 
