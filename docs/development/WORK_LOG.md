@@ -865,6 +865,19 @@ Older entries have been archived by month for readability:
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
 
+## 2026-09-03: 束ブランチ運用の採用（#703）
+
+owner との相談（PR #702 セッション）で、レビューの単位を PR から**束**へ変更。小 PR は束の
+統合ブランチへ軽いゲート（CI + その PR が足した E2E を実機で + 目視）で入れ、統合ブランチ → main の
+束 PR で `/simplify` → `/code:pr-review-team` + Fable → 実機 E2E 全件を 1 回だけ回す。
+手引きは `docs/development/BUNDLE_BRANCH_WORKFLOW.md`（PR #702）。
+
+| ファイル | 変更 |
+|---|---|
+| `CLAUDE.md` | 「PR レビューワークフロー」に「レビューの単位は束」節を追加。マージ前ゲートの対象・禁止事項 2 件・Branch Structure・Quick Workflow |
+| `docs/core/PROJECT_RULES.md` | 「Git Workflow and Branch Protection」に統合ブランチと束の手順表・`Part of #N` / `Closes #N` の使い分け |
+| `.github/workflows/claude-code-review.yml` | ジョブに `if: github.base_ref == 'main'`。bot レビューは束 PR だけ。`code-review.yml`（テスト CI）は触らない |
+
 ## 2026-09-03: 出口・レンダ宛先・コア境界の裁定を地図と issue に同期
 
 **背景**: 地図 §9 の未決約 40 件を「owner が決めるもの / 調べれば分かるもの」に分けたところ、

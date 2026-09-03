@@ -494,6 +494,7 @@ alias review-get='gh pr view --comments | grep -A 100 "bugbot"'
 **Branch Structure (GitHub Flow):**
 - `main` - Production-ready code (protected, base for PRs)
 - `<issue-number>-description` - Feature/fix/refactor branches
+- `<issue-number>-<bundle>` - 束の統合ブランチ（束ブランチ運用・下記）
 
 **Branch Protection Rules (main):**
 - ✅ Pull Request required before merging
@@ -526,6 +527,22 @@ git checkout -b <issue-number>-descriptive-name
 7. Merge to main after approval
 ```
 
+**束ブランチ運用（2026-09-03 制定・#703・手引きは [`BUNDLE_BRANCH_WORKFLOW.md`](../development/BUNDLE_BRANCH_WORKFLOW.md)）:**
+
+レビューの単位は PR ではなく**束**（1 つの設計文書に対応する PR の集合・差分 1,500 行以下）。
+
+| 段階 | やること | コマンド |
+|---|---|---|
+| 束を開く | main から統合ブランチを切って push | `git checkout -b 611-output-line main && git push -u origin 611-output-line` |
+| 小 PR | 統合ブランチから切り、base を統合ブランチにして **draft** で開く。本文は `Part of #N` | `git checkout -b 611-o4-audio-line 611-output-line` → `gh pr create --base 611-output-line --draft` |
+| 小 PR を閉じる | CI 緑 + その PR が足した E2E を実機で + main が差分を読む → 統合ブランチへ squash | `gh pr merge <n> --squash` |
+| main に追従 | 他の束が main に入ったら統合ブランチへ merge | `git merge origin/main` |
+| 束を閉じる | 統合ブランチ → main の PR（束 PR）を開き、`CLAUDE.md` の PR レビューワークフロー（1〜8）+ マージ前ゲート → squash。本文に `Closes #…` を集約 | `gh pr create --base main --head 611-output-line` |
+
+- 統合ブランチは保護しない・消さない（小 PR の履歴はそこに残る。main には束 1 コミット）
+- 仕様だけの PR と must-fix は束を通さず main 直行（従来どおり）
+- 自動レビュー bot（`claude-code-review.yml`）は base が main の PR だけで走る（小 PR では走らない）
+
 **Creating PRs:**
 ```bash
 # Push branch to GitHub
@@ -539,6 +556,7 @@ detailed description"
 
 **Automatic Issue Closing:**
 - **ALWAYS include `Closes #<issue-number>` in PR body** to automatically close the related Issue when PR is merged
+- 束の小 PR は `Part of #<issue-number>`（閉じない）。`Closes` は束 PR に集約する
 - Keywords that work: `Closes`, `Fixes`, `Resolves` (case-insensitive)
 - Example: `Closes #14` will automatically close Issue #14 when PR is merged
 - **Benefits**:
