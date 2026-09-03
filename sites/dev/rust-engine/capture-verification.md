@@ -367,7 +367,7 @@ daemon を `<extension>/engine/bin/<platform>/` に同梱しており、これ�
 `Cargo.toml` より古ければ、テストを 1 本も走らせずに落とす」チェックを持ちます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:128-142
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:143-157
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
