@@ -98,8 +98,8 @@ CI + その PR の E2E 実機 + 目視の軽いゲートで入れ、統合ブラ
 （下の層が main に入るたび上の層の rebase が要る）。GitHub の stacked pull requests
 （2026-07-30 公開プレビュー）は「層ごとにレビューを増やす」道具で目的が逆、プレビュー中は併用しない。
 参照 17 件は URL の実在を確認（docs.github.com 等はプロキシで本文取得不可のため検索要約で確認）。
-🔴 未実施: `CLAUDE.md` / `PROJECT_RULES.md` の「単位 = 束」への書き換えと bot ワークフローの
-`if: github.base_ref == 'main'` は owner 了承後に別 PR。
+→ owner 了承（同日）で **#703** として別 PR に。bot の `if` は `claude-code-review.yml` **だけ**
+（`code-review.yml` はジョブ名が `code-review` だがテスト CI 本体なので触らない）。plan §2.5 に束の割り当て表を追加。
 
 ---
 
