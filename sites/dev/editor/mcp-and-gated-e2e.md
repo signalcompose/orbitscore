@@ -403,7 +403,7 @@ flowchart LR
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:59-65
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:60-66
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH =
   '/Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app'
@@ -420,7 +420,7 @@ const appAvailable = fs.existsSync(appPath)
 suite の読み込み時、テストを 1 本も走らせる前に daemon バイナリの鮮度を検査します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:136-146
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:137-147
   if (newest.at > builtAt) {
     throw new Error(
       'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
@@ -449,7 +449,7 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 ### アプリの起動 — `orbs` CLI と Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:736-757
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:710-731
       const orbsBin = path.join(appPath, 'Contents/Resources/app/bin/orbs')
       child = spawn(
         orbsBin,
@@ -479,7 +479,7 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 teardown は「安全性」の注意書きが繰り返されています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:229-235
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:230-236
 function killOrbitStudio(): void {
   try {
     execFileSync('pkill', ['-f', 'OrbitStudio.app/Contents/MacOS'], { stdio: 'ignore' })
@@ -496,7 +496,7 @@ function killOrbitStudio(): void {
 キャプチャの有効化は daemon の spawn 時に `ORBIT_CAPTURE_WAV` 環境変数で渡すしかありません。拡張は `activate()` 時に engine を自動起動するので、gated spec は **自動起動した engine を一度止めてから** capture 付きで起動し直します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:874-879
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:848-853
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -596,7 +596,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 先頭テストの最後の assert は、この onset 間隔をテンポの証拠に使います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1415-1429
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1389-1403
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavPath)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -619,7 +619,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 `#643` 系のテストはもう一歩踏み込み、時間区間ごとの RMS を比べます。各操作の壁時計時刻をセグメントとして記録し、capture 終了時刻から逆算して WAV 上の区間に写像し、その区間の 20 ms 窓 RMS を二乗平均します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:598-603
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:572-577
     const rms = (name: string, guardSec = 0.15): number => {
       const selected = windows(name, guardSec)
       return Math.sqrt(
@@ -643,9 +643,11 @@ WORK_LOG 6.418 のタイトルは「今日の是正を『知識』から『再�
 ### DSL 網羅率のラチェット
 
 ```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:46-54
+// tests/e2e/dsl-e2e-coverage.spec.ts:44-54
 function methodsExercisedByGatedE2E(): ReadonlySet<string> {
-  const source = fs.readFileSync(GATED_SPEC, 'utf8')
+  // 🔴 走査先は `gated-sources.ts` が持つ（#668 §3.4・PR-E1）。ここで 1 ファイルを決め打ちすると、
+  // シナリオを別ファイルへ出した時に**カバー済みの語が未カバー扱いになって red** になる。
+  const source = readGatedSources()
   const found = new Set<string>()
   for (const match of source.matchAll(/\.([a-zA-Z][a-zA-Z0-9]*)\s*\(/g)) {
     const name = match[1]
@@ -679,7 +681,7 @@ gated spec の中に `.<name>(` が現れるかどうかだけを見ます。語
 ### アサーション衛生
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:30-44
+// tests/e2e/gated-assertion-hygiene.spec.ts:32-46
   it('never asserts on a bare ERROR count equality', () => {
     // `get_log` は固定 500 行窓なので、ERROR 件数の**厳密等価**は窓の外へ流れた瞬間に
     // 嘘になる（#625）。`<=` / `toBeLessThanOrEqual` を使うこと。
@@ -900,7 +902,7 @@ function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2052-2062
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2026-2036
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -915,13 +917,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2065-2066
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2039-2040
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2122-2124
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2096-2098
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
