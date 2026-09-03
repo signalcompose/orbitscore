@@ -420,7 +420,7 @@ const appAvailable = fs.existsSync(appPath)
 When the suite is loaded, before a single test runs, it checks the freshness of the daemon binary.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:139-149
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:154-164
   if (newest.at > builtAt) {
     throw new Error(
       'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
@@ -449,7 +449,7 @@ npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` a
 ### Launching the app — the `orbs` CLI and the Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:708-729
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:723-744
       const orbsBin = path.join(appPath, 'Contents/Resources/app/bin/orbs')
       child = spawn(
         orbsBin,
@@ -479,7 +479,7 @@ npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` a
 The teardown repeats a safety warning.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:232-238
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:247-253
 function killOrbitStudio(): void {
   try {
     execFileSync('pkill', ['-f', 'OrbitStudio.app/Contents/MacOS'], { stdio: 'ignore' })
@@ -496,7 +496,7 @@ The pattern must never be widened to `Code` or `Electron`, it says in two places
 Capture can only be enabled by passing the `ORBIT_CAPTURE_WAV` environment variable at daemon spawn time. The extension auto-starts the engine during `activate()`, so the gated spec **stops the auto-started engine first**, then starts it again with capture.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:846-851
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:861-866
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -596,7 +596,7 @@ The onset threshold is the larger of "median window RMS × 4" and the absolute f
 The last assertion of the first test uses these onset gaps as evidence of tempo.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1387-1401
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1402-1416
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -619,7 +619,7 @@ The last assertion of the first test uses these onset gaps as evidence of tempo.
 The `#643` tests go one step further and compare RMS per time segment. The wall-clock time of each operation is recorded as a segment, mapped back onto the WAV from the capture end time, and the 20 ms-window RMS values in that interval are combined as a root mean square.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:570-575
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:585-590
     const rms = (name: string, guardSec = 0.15): number => {
       const selected = windows(name, guardSec)
       return Math.sqrt(
@@ -902,7 +902,7 @@ function shouldFilterLine(line: string): boolean {
 The playhead reads from the raw stream, and `[STEP]` never reaches the output channel (= `get_log`). This means **the only way to observe the playhead from MCP is debug mode**. In debug mode `transcribeLog` appends `output` as-is, so `[STEP]` lines appear in `get_log`. The `#654` E2E takes exactly that shape.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2024-2034
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2039-2049
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -917,13 +917,13 @@ The playhead reads from the raw stream, and `[STEP]` never reaches the output ch
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2037-2038
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2052-2053
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2094-2096
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2109-2111
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
