@@ -1233,7 +1233,7 @@ must be CLAP.
 - `rust/crates/orbit-audio-daemon/src/session.rs:2015-2016` — `ClosePluginUI` is Phase A acceptance only
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6470-6560` — `open_outproc_plugin_ui` (binding check → `begin_open` → route → mailbox)
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8802-8815` — `PluginUiTarget` (`window` = attribution, `index` = display-only)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1769-1791` — #633 E2E-1 (using close as the oracle)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1767-1789` — #633 E2E-1 (using close as the oracle)
 - [`docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md) UIH.0–UIH.8 — the normative spec
 - [`docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md) — the #474 P0–P6 implementation design and owner decisions Q1–Q8
 - [`docs/archive/design/628-ui-pump-per-index-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/design/628-ui-pump-per-index-design.md) — the per-window pump design (C-A / C-B, two-layer separation, rejected alternatives)
