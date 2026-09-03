@@ -29,20 +29,26 @@
 | W-1 | wire `SetBusLine`（全置換・`line[]`）と `SetBusRouting` の退役 | PR-O3 / PR-O6 | daemon と TS の契約。旧 daemon × 新 TS が動かなくなる（同梱なので実害は小） | 設計済み（doc 611 §4）|
 | W-2 | `OutputDest` の宛先集合（master / bus / device / render / link → tap）| PR-O4 / PR-P5 | DSL 表面と wire の両方 | 設計済み・`Tap` 統合は doc 672 §18 (6) |
 | W-3 | `output(dest, thru: false, db: 0)` の**既定** = `thru:false`・`send` は dB | PR-O4 | 既存譜面の意味（`send` の線形 amount → dB は**破壊的**・MX.3 改訂）| 🔴 裁定済み（①②）。**golden（PR-O0）で差分ゼロを先に固定** |
-| W-4 | 数値 `output(n)` の退役と §4.4.1 の失効 | PR-R1（PR-O4 と同 PR でも可） | DSL 表面 | doc 611 §14 (1) 推奨 A・**owner 裁定待ち** |
-| W-5 | `mix.render("<path>")` 宣言・`%n` テンプレート・合算 = 解決後パス | PR-R1 | DSL 表面 | 裁定済み。**プレースホルダの語彙（`%v`/`%d`）は未決**（doc 598 §16 (1)）|
+| W-4 | 数値 `output(n)` の退役と §4.4.1 の失効 | PR-R1（PR-O4 と同 PR でも可） | DSL 表面 | ✅ **裁定 A 撤回（owner 2026-09-03）**。糖衣として復活できる形は保つ |
+| W-5 | `mix.render("<path>")` 宣言・`%n` `%v` `%d`・合算 = 解決後パス | PR-R1 | DSL 表面 | ✅ 裁定済み（語彙も 2026-09-03 に確定）|
 | W-6 | `.orbslog` **v2**（`logVersion: 2`・相対 `sourceFile`・`transport.global`・`code` 純度）| PR-L1 | ファイル形式。ただし**今日 `.orbslog` は 0 本**なので実害なし | 設計済み（doc 694 §6）|
-| W-7 | ログの置き場 `<DIR>/`（譜面の隣） | PR-L1 | ディレクトリ名は後から変えにくい | 🔴 **owner 裁定待ち**（doc 694 §13 (1)・推奨 `orbslog/`）。**定数 1 箇所**なので裁定を待たずに実装は進む |
+| W-7 | ログの置き場 `orbslog/`（譜面の隣） | PR-L1 | ディレクトリ名は後から変えにくい | ✅ **裁定 `orbslog/`（owner 2026-09-03）** |
 | W-8 | フレーム `//#evalBegin/End` = **1 選択 1 execute**（構文エラーで全体棄却）| PR-L2 | 評価の意味論 | 設計済み（doc 694 §4.2）|
 | W-9 | `orbitscore replay` / `render` の CLI 引数 | PR-L4 / PR-R7 | ユーザーの手順 | 設計済み |
 | W-10 | `RenderScore` v2（`renders[]`・bus 名の数値廃止・`out_dir` 廃止）| PR-R6 | wire。**P1 の消費者は 0** | 設計済み（doc 598 §6.2）|
 | W-11 | render / arm の wire（`DeclareRender` / `ArmRenders` / `DisarmRenders`）と stem の命名 | PR-R2 / PR-R3 | wire + ファイル名 | 設計済み・語彙のみ未決 |
-| W-12 | 時刻付きイベント queue の wire（`ScheduleEvents[]` + `CancelScheduledEvents`・`PluginNoteAt` 案は棄却）| PR-Q-A / Q-D / Q-F | wire | 設計済み（doc 428 §3.1）。`PluginNoteOn/Off` の去就は未決（§11 (2)）|
-| W-13 | `ORBITSCORE_*` / `ORBIT_*` の prefix 統一（#156）| PR-V（A の前）| env の名前 = ユーザーの設定 | doc 662 |
-| W-14 | 署名 identity・bundle id・バージョン番号・成果物名 | PR-S | 配布物 | doc 656 |
-| W-15 | DSL Plugin 登録 API（`DslModule` / `HostContext`）| PR-P1 / PR-P4 | 拡張 API（外部公開後は変えにくい）| 設計済み・A4 形態は未決（doc 672 §18 (1)）。**first-party のみの間は変えられる** |
+| W-12 | 時刻付きイベント queue の wire（`ScheduleEvents[]` + `CancelScheduledEvents`）| PR-Q-A / Q-D / Q-F | wire | ✅ 設計済み。`PluginNoteOn/Off` は残す（owner 2026-09-03: Rust engine を単体公開するため）|
+| W-13 | env prefix の境界規則（TS = `ORBITSCORE_` / daemon = `ORBIT_`）+ 例外 3 個の改名（#156）| PR-V2（PR-V7 の前）| env の名前 = ユーザーの設定 | ✅ **裁定 C（owner 2026-09-03）**: 改名は 3 個だけ |
+| W-14 | 配布物 = dmg・bundle id は VSCodium 既定・バージョンの正本 = 拡張の `version`（tag と一致を強制）| PR-S-R3 / R4 / R5 | 配布物 | ✅ **裁定（owner 2026-09-03）**。署名 identity は手元の Developer ID |
+| W-15 | DSL Plugin 登録 API（`DslModule` / `HostContext`）| PR-P1 / PR-P4 | 拡張 API（外部公開後は変えにくい）| ✅ A4 = 混在（owner 2026-09-03）。公開は段階的（first-party のみで出す版から）|
 | W-16 | `TapSink` クラスと `OutputDest::Tap` | PR-P5 | wire | doc 672 §5 |
-| W-17 | `orbitscore.sessionLog` 設定（既定 on）| PR-L1 | ユーザー設定 | 設計済み・CLI 既定は未決（doc 694 §13 (2)）|
+| W-17 | `orbitscore.sessionLog` 設定（既定 on）・CLI は opt-in のまま | PR-L1 | ユーザー設定 | ✅ 裁定（owner 2026-09-03）|
+
+| W-18 | `pan` をライン要素に（`LineOp::Pan`）・同一宛先の複数 `output` は 2 要素・mono 宛先は L+R マージ | PR-O4 / PR-O3 | DSL 意味論 + wire（`pan` op）| ✅ **裁定（owner 2026-09-03 Q-611-3/4/5）**。`pan` を含む譜面の golden は再ベースライン |
+| W-19 | OSC = メッセージ値 `var flash = osc(...)` を `play()` に置く | PR-P6 | DSL 表面 | ✅ 裁定（owner 2026-09-03 Q-672-3）|
+| W-20 | `seq.root()` が note-name を受ける・`[...]@v` per-voice 分配・`chop(n>1)` の tie が伸ばす | PR-D7 / PR-D5 / #665 | DSL 表面（加算）| ✅ 裁定（owner 2026-09-03 Q-610-2/6/7）|
+| W-21 | replay `--verify` の sidecar `<log>.events.jsonl` + `meta.assets` の sha256 | PR-L6 | ファイル形式 | ✅ 裁定（owner 2026-09-03 Q-694-4）|
+| W-22 | node を `.app` に同梱 | PR-S-C2 | 署名対象 +1 | ✅ 裁定（owner 2026-09-03 Q-656-8）|
 
 **方針**: 一方通行のものは **(a) golden で現状を固定してから**（W-3/W-4）、**(b) 消費者が 0 のうちに**（W-6/W-10）、**(c) 定数 1 箇所で裁定を吸収して**（W-7）進める。裁定待ちの項目は**その PR だけ**が止まる形に分割してある。
 
@@ -60,7 +66,7 @@
 | PR-O1 ⟂ | `docs(spec): output as a line element — MX.2/2.1/3/4/5, SC.2.1/4, #649 §10` | #611 spec 改訂項目・#649 §7.3/§10-12・#643 §1.5/§12 | core spec（±120）・`SIGNAL_CHAIN_DSL_SPEC`（±40）・`649-audio-line-design.md`（±30）| — | docs のみ（advisor レビュー）| — |
 | PR-O2 | `fix(engine): stereo-internal engine + master line (fader position, 8ch@2048 silence)` | **#649 must-fix**・#611 本文の 8ch 無音・E2E-0/1/8/11 | `output.rs`（±200: `MasterLine`・post-loop 置換・`Engine::new(sr,2)`）・`engine_wrap.rs`（±40）・`session.rs` `SetGlobalGain`（±20）| PR-O0（golden で bit 一致を確認するため）・PR-O1 | E2E-0 bit 一致・E2E-1 **red-first**・E2E-8・E2E-11。実機: `global.gain(-6)` + instrument で RMS 半減 | — |
 | PR-O3 🔴 | `feat(daemon): LineProgram + SetBusLine (full-replacement bus line wire)` | #611 wire・#647 shm 拡張 | `output.rs`（+350: `OutputDest`/`LineOp`/`LineSlot`・RT 実行）・`session.rs`（+180 検証）・`protocol-types.ts` `daemon-client.ts`（+60）・cargo test（+200）| PR-O2 | cargo: forward-only 検証・thru:false で break・ramp。実機: 既存譜面が `SetBusRouting` 経路のまま同音（両 wire 併存）| W-1 |
-| PR-O4 🔴 | `feat(dsl): output(dest, thru, db) / send in dB — AudioLine on Sequence and master` | #611 DSL・#649 実装 B・**#543-a 差分ゼロ** | `core/sequence/audio-line.ts`（新 +220）・`sequence.ts`（±120）・`global.ts`（+40）・`mixer-manager.ts`（±60）・`runtime.ts`（±30）・`evaluate-method.ts`（+40）・`repl-mode.ts`（フレーム消費 +20）・tests（+300）| PR-O3・**PR-L2（フレーム）**・PR-O1 | E2E-2〜7・E2E-10。実機: `kick.output(verb, thru:true, db:-12).output(master)` を評価して aux の RMS 比 | W-2 / W-3 |
+| PR-O4 🔴 | `feat(dsl): output(dest, thru, db) / send in dB / pan as a line element — AudioLine on Sequence and master` | #611 DSL・#649 実装 B・**#543-a 差分ゼロ（`pan` 譜面は再ベースライン）**・同一宛先の複数 `output`（2 要素）・mono 宛先 | `core/sequence/audio-line.ts`（新 +240）・`sequence.ts`（±130）・`global.ts`（+40）・`mixer-manager.ts`（±60）・`runtime.ts`（±30）・`evaluate-method.ts`（+40）・`repl-mode.ts`（+20）・tests（+320）| PR-O3・**PR-L2（フレーム）**・PR-O1 | E2E-2〜7・E2E-10 + `pan` の L/R（PR-E3 の後）。実機: `kick.output(verb, thru:true, db:-12).output(master)` を評価して aux の RMS 比 | W-2 / W-3 / W-18 |
 | PR-O5 | `feat(engine): instrument outs: — per-unit passthrough stages` | #409 `outs:`・#647 | `sequence.ts` `instrument()`（+60）・`engine_wrap.rs` `SetSourceRouting` 緩和（+40）・`outproc_instrument.rs` shm（+30）| PR-O4 | E2E-9。実機: `outs: {"kick": bd}` で bd バスの RMS > 0 | — |
 | PR-O6 | `refactor(daemon): retire SetBusRouting / routing_override / send_gain_overrides` | #611 cleanup | `output.rs`（−150）・`session.rs`（−80）・TS（−60）| PR-O4 | 既存全件 + gated 全件 | W-1 |
 
@@ -74,7 +80,8 @@
 | PR-L2 🔴 | `feat(repl): //#evalBegin / //#evalEnd frame — one selection, one execute` | **#695 (1)**・doc 611 §3.9 の前提 | `repl-mode.ts`（+90）・`extension.ts` `writeCodeToEngine`（+6）・unit（+80）・gated E2E-S3（+40）| PR-L1a | E2E-S3（1 選択 = 1 レコード）・unit `execute` 1 回 | W-8 |
 | PR-L3 ⟂ | `feat(session-log): hook every GLOBAL; transport.global` | #695 (2) | `interpreter-v2.ts`（±40）・`session-log-writer.ts`（±40）・integration（+60）| PR-L1a | integration（2 GLOBAL・開閉規則）| 形式（加算）|
 | PR-L4 | `feat(cli): orbitscore replay <log> — faithful, transport-driven` | **#241 忠実リプレイ**・**#694 (B) の実測** | `cli/replay-mode.ts`（新 +200）・`parse-arguments.ts` `execute-command.ts`（+40）・`global.ts` `msUntilTransportPosition`（+25）・gated E2E-R1/R2/R3（+200）| PR-L2（フレーム粒度のログ）| **E2E-R1**（ライブ capture と replay capture の窓 RMS 一致 ±15%）。実機: `orbitscore replay <log>` を `ORBIT_CAPTURE_WAV` 付きで | W-9 |
-| PR-L5 | `feat(cli): replay --until — hand over to the REPL` | #241 `--until` v1 | `replay-mode.ts`（+40）| PR-L4 | unit（停止位置）+ 実機 | — |
+| PR-L5 | `feat(cli): replay --until — fast-forward fold, then hand over to the REPL` | #241 `--until`（2 相: 仮想畳み込み → 宣言の再生 + `Global.startAt(until)` + LOOP 再発行・doc 694 §7.4）| `replay-mode.ts`（+120）・`global.ts` `startAt`（+30）・`transport-clock.ts`（+10）| PR-L4・**PR-R4（Clock DI）・PR-R5（評価列 driver）** | unit（`until` 時点の状態が Phase A と一致）+ E2E: `--until 3:1` から続けた capture の 3 小節目以降がライブと一致 | ログに `at`（加算）|
+| PR-L6 | `feat(session-log): event sidecar + assets hash for replay --verify` | #241 `--verify`（doc 694 §7.5）| `session-log/event-sidecar.ts`（新 +120）・`session-log-writer.ts`（+40・assets 非同期）・`replay-mode.ts`（+60）| PR-L4 | E2E-R4: 同一セッションの replay で `--verify` 差分 0 | sidecar 形式 |
 
 ### 1.3 render — PR-R（doc 598 §14）
 
@@ -101,7 +108,7 @@
 | PR-P3 ⟂ | `feat(test): derive DSL E2E coverage from registered modules` | #671 段階 3・#668 A | `dsl-e2e-coverage.spec.ts`（±80）| PR-P1 | ラチェット red の再現 | — |
 | PR-P4 | `feat(dsl): HostContext extension points (transport read, events.intercept, line.registerElement, timedEvents)` | #671 段階 4・#408 統合 | `dsl-plugin/host-context.ts`（新 +150）・`global.ts`（+40）| PR-P1・PR-Q（queue）・PR-O4 | unit + E2E-P3（`list_dsl_vocabulary`）| W-15 |
 | PR-P5 🔴 | `feat(daemon): TapSink class — OutputDest::Tap and tap placement for out-of-process CLAP` | doc 672 §5・LinkAudio CLAP 化の土台 | `output.rs`（+80）・`engine_wrap.rs`（+120）・fixture tap CLAP（+150）| PR-O3・PR-R2 | E2E-P4 | W-16 |
-| PR-P6 | `feat(dsl-plugin): OSC output as the first kind-B module` | **#674** | `dsl-plugin/modules/osc.ts`（新 +200）・UDP スタブ E2E（+120）| PR-P4・**#674 表面の裁定** | E2E-P2（UDP で時刻・アドレス・値）| DSL |
+| PR-P6 | `feat(dsl-plugin): OSC output as the first kind-B module (message values in play())` | #674（doc 672 §7.1b: `global.oscTarget` / `var flash = osc(...)` / `seq.osc(target)` / `play(flash, 0, (dim, flash))`）| `parse-statement.ts`（message 束縛 +40）・`dsl-plugin/modules/osc.ts`（新 +220）・UDP スタブ E2E（+120）| PR-P4・PR-Q-E | E2E-P2（UDP で時刻・アドレス・値・ネストの時刻差）| DSL |
 | PR-P7 | `feat(dsl-plugin): Link tempo as a kind-B module (engine knows no Link)` | #321 PR3 の行き先・#670 | `dsl-plugin/modules/link-tempo.ts`（新）・`orbit-link-audio` の依存移動 | PR-P4・**transport write の裁定** | E2E-P6（headless readback）| — |
 
 ### 1.5 リリースゲート連鎖 — PR-K（doc 634 §13・番号は同文書の A/C/D/G/I に対応）
@@ -118,8 +125,8 @@
 | PR-K-D1 🔴 | `feat(dsl): run layer() branches in parallel` | **#635 全項** | `rack.ts` `effect-slot.ts` `rack_wire.rs` rack-child `session.rs` `daemon-client.ts`（+700）| PR-K-C1・PR-K-D0 | T4・cfg 4 象限 | wire（`StageSpec::Layer`・`chain_path` ネスト）|
 | PR-K-G0 ⟂ | `docs(spec): state that standard plugins never appear in the catalog` | #669 段階 2 | `SIGNAL_CHAIN_DSL_SPEC_v1.md`（+15）| — | docs | — |
 | PR-K-G1 🔴 | `refactor(dsl): drop compressor/limiter/normalizer from the vocabulary` | #669 段階 1（実使用は `test-all-features.orbs` の 6 行のみ・core spec `:1873-1876` の記載も削除）| `runtime.ts` `global.ts` `effects-manager.ts` `rust-engine-player.ts` `dsl-e2e-coverage.spec.ts` core spec（−250）| — | T5 | DSL 表面（削除）|
-| PR-K-G2 | `feat(engine): add the standard compressor/limiter/normalizer CLAP plugins` | #669 段階 2 機構（中身 = Patina か Rust 自作かは裁定待ち）| `rust/crates/orbit-std-{compressor,limiter,normalizer}/`（+900）・同梱スクリプト・CLAUDE.md ゲート | PR-K-G1 | T6 + contract テスト | — |
-| PR-K-G3 🔴 | `feat(dsl): expose the standard dynamics plugins` | #669 段階 2 表面 | `rack.ts`（+40）| **#669 表面の裁定**（doc 634 §15 (1)・推奨 A `effect([Compressor(...)])`）| 表面に応じた E2E | DSL 表面 |
+| PR-K-G2 | `feat(engine): add the standard compressor/limiter/normalizer plugins` | #669 段階 2 機構。🔴 **owner 2026-09-03: 実装形式は in-process WASM（unworklet）のスパイク結果を見てから**（使えるなら標準プラグインは全部 WASM）。Patina は汎用 VST/CLAP として別導入 | 形式確定後に見積もる | PR-K-G1・**PR-P8（スパイク）** | T6 + contract テスト | — |
+| PR-K-G3 🔴 | `feat(dsl): expose the standard dynamics plugins` | #669 段階 2 表面 = `effect([Compressor(...)])`（好きな位置に挿せる・owner 2026-09-03）| `rack.ts`（+40）| PR-K-G2 | 表面に応じた E2E | DSL 表面 |
 | PR-K-I1 | `feat(dsl): instrument racks driven by one pattern` | **#636 全項**（1 ブランチ = 1 insert bus・doc 634 §15 (3)）| `rack.ts` `plugin-instrument-manager.ts` `sequence.ts` `plugin-note-output.ts`（+500）| PR-K-A2・PR-K-D1 | T7/T8・cfg 4 象限 | — |
 
 🔴 doc 428 との接点: `PluginAllNotesOff`（PR-K-A2・**鳴っている**ノートを落とす）と `CancelScheduledEvents`（PR-Q-F・**まだ渡していない未来**を取り消す）は別の仕事。PR-Q-E/F が先に入ると RUN 終端の flush は「未来の取り消し + 鳴っているノートの all-notes-off」の 2 段になる。両方とも #606 のチェック項目に紐づける。
@@ -148,7 +155,8 @@
 | PR-D2 | `fix(diagnostics): run the engine parser behind the editor diagnostics` | **#610**（`ParseError` に span・文言不変・拡張が engine の `analyze-source` を require）| `parser/parse-error.ts`（新 20）・`parser-utils.ts`（+10）・`diagnostics/analyze-source.ts`（新 60）・`extension.ts`（+40）| PR-D1 | E2E-D1/D2 | 診断の増加 |
 | PR-D3 | `feat(diagnostics): applicability table drives the editor warnings` | #644 全項・#665 (A)（`diagnostics/applicability.ts` 受け手 9 種 × メソッド・4 値・`render-node`/`master-line` 行を先置き）| `parser/types.ts` + `parse-statement.ts` 4 箇所（span）・`applicability.ts`（新 200）・`analyze-source.ts`（+90）・`signal-chain-dispatch.spec.ts`（+120）| PR-D2 | E2E-D3/D4/D5・全数照合テスト | 診断の増加 |
 | PR-D4 | `fix(interpreter): loud diagnostics for name collisions and aux output` | #583 | `global.ts` `mixer-manager.ts` `sequence.ts`（+37）・`analyze-source.ts`（+20）| PR-D3・doc 610 §15 (5) | E2E-D6 | 挙動変更 |
-| PR-D5 ⟂ | `fix(diagnostics): empty pattern binding and stack-@v guidance` | #255-2・#609（誘導文言）| `parse-expression.ts`（+12）・`analyze-source.ts`（+15）| PR-D3 | E2E-D1 に相乗り | — |
+| PR-D5 | `feat(dsl): distribute stack-level @v to voices; empty pattern binding guidance` | #255-2・**#609（owner 2026-09-03: 足す）**| `parse-expression.ts`（+50）・`analyze-source.ts`（+15）・`PITCH_DSL_SPEC` §2.5 | PR-D3 | E2E: `[1,5,9]@v+10` と per-voice 展開の capture RMS 一致 | DSL（加算）|
+| PR-D7 | `feat(dsl): accept note names in seq.root()` | **#280（owner 2026-09-03: 実装を spec に）** | `sequence.ts:906-920`（+20）・core spec `:953-955` | PR-D1 | E2E: `seq.root(C)` / `seq.root(b6)` で `estimateFundamentalHz` が期待値 | DSL（加算）|
 | PR-D6 | `fix(engine): attribute diagnostics to the submission that caused them` | #620（先に E2E-620-A で再現）| `repl-mode.ts` `extension.ts` | **PR-L2（フレーム）** | E2E-620-A | — |
 
 🔴 doc 611 との接点: `seq.gain`/`pan` が midi・instrument で効かない事実は表で `warn`（doc 610 §15 (3) 推奨 A）。PR-O4 で `LineOp::Gain` が入ったら表の行を `ok` に更新する（PR-O4 のチェック項目に含める）。
@@ -165,7 +173,7 @@
 | PR-V6 | `feat(orbitstudio): show device, headroom, dropouts and children in the Engine view` | バッチ B 本体（closes #483・%CPU/RSS は拡張の `ps`・identity は `GetStatus.children`）| `engine-view.ts` `extension.ts`・user docs 日英（+450/−60）| PR-V5 | E-4（MCP で同値）| — |
 | PR-V7 | `feat(orbitstudio): list engine settings with their scope` | 32 変数表（`ORBITSCORE_DSL` は env ではないので 33 → 32）| `engine-settings-table.ts`（新・単一の表）（+300）| PR-V6・**§17 (1) の裁定**（推奨 A 全部出す・テスト用 6 個は折りたたみ）| 表と `GetStatus.config` の不一致で red | — |
 | PR-V8a ⟂ | `perf(spike): measure cross-process wake latency for the child audio loop` | #667 の計測だけ | `orbit-sandbox-spike`（+200）| — | 実測を doc 662 §9.4 へ | — |
-| PR-V8b | `perf(child): replace the busy-wait with a hybrid park` | **#667**（5 child の待ちを `orbit-audio-sandbox` の共有ヘルパ 1 本に・waiters フラグ + タイムアウト安全網）| `transport.rs` + 5 child（+250/−50）| PR-V8a・PR-V3 | **E-6** + `ps` 実測 5 種 | — |
+| PR-V8b | `perf(child): replace the busy-wait with a hybrid park; raise audio thread to TIME_CONSTRAINT` | **#667**（共有ヘルパ 1 本・waiters フラグ + タイムアウト安全網・**QoS を TIME_CONSTRAINT へ**〔owner 2026-09-03〕。上げる前後で CPU / wake / daemon callback p99 を測る）| `transport.rs` + 5 child + `orbit-child-runtime`（+280/−50）| PR-V8a・PR-V3 | **E-6** + `ps` 実測 5 種 | — |
 | PR-V9 | `docs(perf): record the measured thread and memory breakdown` | 地図 §7 (12) の答え（`ps -M`）| doc 662 §10 追記 | PR-V6・PR-V8b | 出力を貼る | — |
 | PR-V10 | `feat(orbitstudio): wire MIDI panic and live device selection` | バッチ C（closes #484 のデバイス部分・`panic()` は実装済み・配線のみ）| `extension.ts` `mcp-server.ts`（+200）| PR-V5 | E-8/E-9 | — |
 | PR-V11 | `feat(engine): grow the slot pools off-thread` | **#663**（バッチ D・さらに分割）| `output.rs` `outproc_instrument.rs`（+600/−200）| PR-V6・PR-V8b | E-7 + #663 受け入れ 5 項目 | 🔴 設定項目の消滅 |
@@ -185,7 +193,7 @@
 | PR-S-R4 | `feat(release): sign and notarize OrbitStudio.app` | **#656** 署名・公証（entitlements は実測後・`disable-library-validation` の記述は repo に無い）| `make-local-release.sh` +90・plist・`CODESIGN_PIPELINE.md` | PR-S-R3 | E2E-D4（署名済み `.app` で 3rd-party が鳴る）・停止条件あり | 🔴 W-14 |
 | PR-S-R5 | `ci(release): publish the signed app on tag push` | #656 CI（app ジョブを足す）| `release.yml`（+45）| PR-S-R4・裁定 (3) | tag で 1 回通す | 配布物名 |
 | PR-S-C1 | `test(e2e): run the gated suite against the release artifact` | **#138**（`ORBIT_GATED_EXT_MODE=installed`・既存アサーションをそのまま成果物へ）| gated spec（+80）| PR-S-R3 | E2E-D3（PATH を絞って落ちるか）| — |
-| PR-S-C2 | `fix(studio): pre-check the node runtime before spawning the engine` | 🔴 #138 の新規基準（`extension.ts:2159` は PATH の `node` を spawn・同梱していない）| `extension.ts`（+30）| PR-S-C1 | E2E-D3 | A（Electron を node に）なら 🔴 |
+| PR-S-C2 | `feat(studio): bundle node with the app and spawn the engine with it` | #138 の新規基準（owner 2026-09-03: **node を同梱**。PATH の node にはフォールバック + 警告）| `extension.ts`（+40）・`make-local-release.sh`（同梱 + 署名対象 +1）| PR-S-R3 | E2E-D3（PATH を絞っても起動する）| W-22 |
 
 **先に着手できる**: PR-S-T1 / R1 / R2（裁定待ち 0）。
 
@@ -311,22 +319,29 @@
 
 ---
 
-## 4. 裁定待ちが止める PR（一覧）
+## 4. 裁定待ちが止める PR（一覧）— 2026-09-03 owner 回答後
 
-| 裁定 | 止まる PR | 進む PR |
+| 裁定 | 状態 | 止まる PR |
 |---|---|---|
-| W-4 数値 `output(n)` の退役 | PR-R1 | PR-R2/R4/R5/R6（wire・Clock・driver）|
-| W-7 `<DIR>/` の名前 | なし（定数）| すべて |
-| プレースホルダ語彙（doc 598 §16 (1)）| PR-R3 の `%v`/`%d` 展開行のみ | PR-R3 の `%n` |
-| CLI の既定 on（doc 694 §13 (2)）| `session-log-gate.ts` 1 行 | PR-L1 全部 |
-| A4 実行形態（doc 672 §18 (1)）| 段階 5（外部ロード・PR 未起票）| PR-P0〜P7 |
-| transport write 競合（doc 672 §18 (2)）| PR-P4 の `write` / PR-P7 | PR-P4 の read / intercept / line |
-| #674 表面（doc 672 §18 (3)）| PR-P6 | PR-P4 |
-| #669 表面（doc 634 §裁定待ち）| PR-K の #669 実装 PR | 配布・カタログ・E2E の土台 |
-| #138 吸収先 / #197・#184（doc 656 §16 (2)(6)）| PR-S-C1 の閉じ先の記述のみ / Marketplace 経路 | PR-S-T1/R1/R2/R3/R4/C1 |
-| 32 変数のユーザー / 開発の線・#156 の方向（doc 662 §17 (1)(3)）| PR-V7 / PR-V2 | PR-V1/V3/V4/V5/V6/V8 |
-| #680 の DSL 表面・`PluginNoteOn/Off` の去就（doc 428 §11 (1)(2)）| PR-Q-G | PR-Q-A〜F |
-| `untrustedWorkspaces.supported` の値・bundle id・バージョン付け（doc 656 §16 (1)(5)(7)）| PR-S-T1 の 1 値 / PR-S-R4 | 他 |
+| W-4 数値 `output(n)` の退役 | ✅ A 撤回 | なし |
+| W-7 `<DIR>/` の名前 | ✅ `orbslog/` | なし |
+| プレースホルダ語彙 | ✅ `%n` `%v` `%d` | なし |
+| CLI の既定 on | ✅ opt-in のまま | なし |
+| A4 実行形態 | ✅ 混在 | なし（段階 5 は「段階的に公開」）|
+| transport write 競合 | ✅ 単一 leader | なし |
+| #674 表面 | ✅ メッセージ値を `play()` に | なし |
+| #669 表面 / 中身 | ✅ `effect([...])` に統一・**実装は WASM スパイク後** | **PR-K-G2 / G3 は PR-P8 の後** |
+| #138 吸収先 | 🔴 相談中（owner: リリースは別ライン）→ 独立のまま | なし（issue の開閉のみ）|
+| 32 変数の線 / #156 の方向 | ✅ 全部出す / 境界規則 + 例外 3 個 | なし |
+| #680 表面 / `PluginNoteOn/Off` | ✅ B / 残す | なし |
+| `untrustedWorkspaces.supported` | 🔴 相談中（`"limited"` を推す）| PR-S-T1 の 1 値（`"limited"` で先行可）|
+| bundle id・バージョン付け | ✅ VSCodium 既定 / 拡張の `version` | なし |
+| `--until` 境界ちょうど（doc 694 §13 (3)）| 🔴 相談中（「effect ≤ until は適用済み」を提示）| PR-L5 の 1 分岐 |
+| #583 (i) 同名衝突（doc 610 §15 (5)）| 🔴 相談中（赤線 + その文だけスキップを提示）| PR-D4 |
+| 3ch 以上を 1 ファイル（doc 598 §16 (2)）| 🔴 相談中（サラウンドの話・宛先 = チャンネル集合案を提示）| なし |
+| #694 dormant の根拠（doc 694 §13 (7)）| 🔴 説明待ち | なし |
+
+**残りの相談 6 件はいずれも PR を止めない**（`"limited"` は先行可・他は 1 分岐か issue 運用）。
 
 ---
 
@@ -335,3 +350,4 @@
 | 日付 | 内容 |
 |---|---|
 | 2026-09-03 | 初版（設計文書 11 本の PR を統合・一方通行 17 件・段 0〜8）|
+| 2026-09-03 | owner 回答（裁定シート 66 問中 50 問）を反映: W-4/5/7/12/13/14/15/17 確定・W-18〜22 追加・PR-O4 に `pan` と 2 要素 / PR-L5 を高速畳み込みへ・PR-L6 / PR-D7 追加・PR-K-G2 を WASM スパイク後へ・PR-P6 をメッセージ値へ・PR-V8b に QoS・PR-S-C2 を node 同梱へ。§4 を「相談中 6 件」に更新 |

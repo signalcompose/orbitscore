@@ -83,7 +83,7 @@ SC.10.8 規範 (1)-(6) をそのまま契約にする。追加は **同梱と検
 | UI / state | 持たない。パラメータは DSL が正 |
 | 🔴 検証の義務 | `bundle-macos.sh` で同梱され、`orbit-effect-rack-child --lib -- --ignored` の実機テストに**無条件で**登録される（CLAUDE.md「マージ前ゲート」）。新しい標準プラグインは**そのテストに 1 行足さないとマージしない** |
 | DSL Plugin との関係 | 標準プラグイン = **種 C の実体 + 種 A の語彙（`Gain(...)` の呼び出し形と引数型）を 1 モジュールで登録**する（§7.2 `DslModule.rackElements`）。#669 が最初の適用先（表面は doc 634 §16 で裁定待ち）|
-| 実装ライブラリ | 中身は permissive（例: Patina MIT・地図 §4.E）。engine には入れない（裁定 5）|
+| 実装ライブラリ | 中身は permissive。engine には入れない（裁定 5）。🔴 **owner 2026-09-03（Q-672-4 / Q-634-1・2）: in-process WASM（unworklet）が実用域なら標準プラグインは全部その形にする**。したがって #669 の標準 CLAP crate（doc 634 PR-K-G2）は **PR-P8 のスパイク結果を待つ**。Patina を使う場合は VST3 / CLAP など汎用プラグインとして作って導入する（標準の中身にはしない）|
 
 ---
 
@@ -169,6 +169,34 @@ WASM モジュールの契約（unworklet 由来・地図 §4.E）:
 | 実行の場所 | engine（TS の interpreter → daemon wire）。RT 安全性を損なわない | プラグイン側の非 RT thread / プロセス |
 | 実例 | mixer 語彙（`gain` `pan` `send` `output` `effect`）・記譜（`voicelead` `density`）・**標準プラグインの呼び出し形**（§4）| **MIDI 出力（`midi()` + `midi-scheduler.ts` の 5ms poll = 既存の種 B の原型）**・OSC 送信（#674）・Link テンポ同期（#321 → 段階 4）|
 | イベントの受け取り | — | doc 428 の **時刻付きイベント queue の consumer**（非 RT）。MIDI がそうであるように、`play()` の出力を音楽時間で受け取る |
+
+### 7.1b 種 B の 1 例目 = OSC（owner 2026-09-03 Q-672-3・**メッセージ値を `play()` に置く**）
+
+owner の形:「`var osc1 = …` のように送る内容を決めておき、`play(osc1, osc2, (osc3, osc4), osc5)` と書ける」。**OSC メッセージを値として束縛し、`play()` のスロットで指す**。音符の写像ではなく、**パターンの語彙そのものを使い回す**（chord 束縛 `var x = [...]`・パターン束縛 `var p = (...)` と同じ型の束縛）。
+
+```orbs
+global.oscTarget("stage", "192.168.1.20:9000")          // 宛先は名前で宣言（midi(port) と同じ流儀）
+
+var flash = osc("/light/1", 1.0)                         // メッセージ値: address + 引数（number / string / boolean）
+var dim   = osc("/light/1", 0.2)
+var pan   = osc("/video/pan", 0.5, "ease")
+
+var lights = init global.seq
+lights.osc("stage")                                      // この seq は OSC を送る（ミキサーバスには乗らない）
+lights.beat(4 by 4).length(1)
+lights.play(flash, 0, (dim, flash), pan)                 // 0 = rest。ネスト分割・`_` も play() と同じ
+LOOP(lights)
+```
+
+| 要素 | 設計 |
+|---|---|
+| パーサ | `var NAME = osc(<string>, args...)` = **message 束縛**（`parse-statement.ts:130-139` の chord / pattern 束縛の隣に 1 分岐）。`play()` の引数に識別子が来た時、message 束縛なら `PlayMessage` トークンとして IR に載せる（`PlayPitch` と同じ位置）|
+| 実行 | 種 B モジュール `orbit.osc`: `seq.osc(target)` で受け手を OSC モードに（`midi()` と同じく `instrument()` / `audio()` とは**排他**）。スケジューラは `play()` のスロットごとに `TimedEvent { kind: 'message', payload }` を作り、`HostContext.timedEvents.subscribe` で非 RT thread が UDP 送信（doc 428 の queue の consumer）|
+| 型 | `osc()` の引数は number / string / boolean。型タグは値から決める（`f` / `s` / `T`/`F`・int が要るなら `int(3)`）— 引数型の語彙は E2E-P2 で固定 |
+| 数値スロット | OSC seq の `play(1, 0)` のような**数値**は診断 `error`（メッセージ束縛のみ受ける）。`0` と `_` は rest / tie と同じ |
+| 時刻 | `midiLatency` と同じ補正を `oscLatency`（seq 単位）で持つか、`leadMs` 定数（doc 428 §11 (4)）に揃えるか — 実装時に `midi()` と同じ扱いに寄せる |
+
+**E2E-P2**: UDP スタブが `t / address / args` を受ける。`(dim, flash)` のネストが半拍で 2 通到着することを時刻差で判定。
 
 ### 7.2 登録 API（段階 1〜3・外部ロード無し・A4 に依存しない）
 
@@ -438,10 +466,10 @@ orbit-link-audio/src/lib.rs:53-55  orbit_link_set_tempo / orbit_link_session_tem
 
 | # | 問い | 選択肢 | 推奨 | 影響 |
 |---|---|---|---|---|
-| (1) | A4 実行形態 | A 同一プロセス / B 別プロセス + IPC / **C 混在** | **C**（first-party = 同一プロセス・外部 / GPL = 別プロセス）。段階 1〜4 は形態非依存に設計済み | PR 段階 5 のみ |
-| (2) | transport **書き**の競合規則 | A 単一 writer（`leader` を宣言した 1 モジュールだけ・DSL `global.tempo()` は leader 時に拒否 / follower 時に通す）/ B 最後の書きが勝つ + ログ / C 優先度 | **A**（Link の leader / follower の意味そのもの・競合を構造で消す）| PR-P4 の `write` |
-| (3) | #674 OSC の DSL 表面 | 宛先: `seq.osc("host:port")` / 名前参照 + `global.oscTarget(...)`。送るもの: A 音符写像 / B `address()` + 値 / C 両方 | **名前参照 + C**（インスタレーション用途に B が要る・既存譜面は A で動く）| PR-P6 |
-| (4) | #669 標準プラグインの表面 | doc 634 §16 | 同左 | — |
-| (5) | WASM ランタイム採用の可否 | PR-P8 の実測後 | 測ってから | 実行クラス (3) |
-| (6) | `OutputDest::Link` / `Render` を `Tap(slot)` に統合するか | A 統合 / B 別列挙子のまま | **B を先に出し、PR-P5 で統合**（doc 598 の実装順を止めない）| doc 1 §5.1 |
-| (7) | 第三者への公開（段階 5）の時期 | first-party のみ / 公開 | first-party のみで 1 リリース | — |
+| (1) ✅ **C 混在（owner 2026-09-03）**。owner 補足: first-party は同一プロセスで最適化されている方がよい | A4 実行形態 | A 同一プロセス / B 別プロセス + IPC / **C 混在** | **C**（first-party = 同一プロセス・外部 / GPL = 別プロセス）。段階 1〜4 は形態非依存に設計済み | PR 段階 5 のみ |
+| (2) ✅ **A 単一 writer（owner 2026-09-03）** | transport **書き**の競合規則 | A 単一 writer（`leader` を宣言した 1 モジュールだけ・DSL `global.tempo()` は leader 時に拒否 / follower 時に通す）/ B 最後の書きが勝つ + ログ / C 優先度 | **A**（Link の leader / follower の意味そのもの・競合を構造で消す）| PR-P4 の `write` |
+| (3) ✅ **C 別の形（owner 2026-09-03）: メッセージ値 `var flash = osc(...)` を `play()` のスロットに置く** → §7.1b | #674 OSC の DSL 表面 | 宛先: `seq.osc("host:port")` / 名前参照 + `global.oscTarget(...)`。送るもの: A 音符写像 / B `address()` + 値 / C 両方 | **名前参照 + C**（インスタレーション用途に B が要る・既存譜面は A で動く）| PR-P6 |
+| (4) → doc 634 §15 (1)。owner 2026-09-03: **標準プラグインは好きな位置に置ける**こと・実装は WASM スパイクの後 | #669 標準プラグインの表面 | doc 634 §16 | 同左 | — |
+| (5) ✅ **A スパイク後（owner 2026-09-03）。使えるなら標準プラグインは全部 WASM に** → §4 | WASM ランタイム採用の可否 | PR-P8 の実測後 | 測ってから | 実行クラス (3) |
+| (6) ✅ **A 別列挙子で先に出し PR-P5 で統合（owner 2026-09-03）** | `OutputDest::Link` / `Render` を `Tap(slot)` に統合するか | A 統合 / B 別列挙子のまま | **B を先に出し、PR-P5 で統合**（doc 598 の実装順を止めない）| doc 1 §5.1 |
+| (7) ✅ **段階的に公開（owner 2026-09-03: 今の版もそれなりに使えるので都度リリースしてバージョンアップ）** = first-party のみで出し、外部ロードは後続の版で | 第三者への公開（段階 5）の時期 | first-party のみ / 公開 | first-party のみで 1 リリース | — |

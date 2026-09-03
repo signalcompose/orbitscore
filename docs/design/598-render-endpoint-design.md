@@ -167,7 +167,9 @@ export class RenderEndpointManager {
 
 **arm の時機**: `Global.start()`（`global.ts:655-670`・transport 開始）の中で `renders.arm(refs)` を **await せずに**発行し（RT には影響なし・ファイルが開くまで数 ms は書かれない = 記録の先頭が欠けうる）… ではなく、**`start()` を async 化しない**ため、arm は `AudioLine.program()` が render を含むラインを**インストールした時点**（`SetBusLine` 送信時）に行う（§5.3）。transport 未走行の間にファイルが開いても書き込みは 0 フレーム（RT は transport 停止中に render しない…ではない — `render_block` は常に回る。**無音を書き続ける**ことになる）。
 
-→ 決定: **arm = transport start / disarm = transport stop** に固定する。`Global.start()` は同期だが、`_onTransportStart` フック（`global.ts:669`）の直後に `void this.renders.arm(refs)` を発行し、arm 完了までの遅延は **`SetBusLine` の `Render` op が「未 arm なら no-op」**であることで吸収する（§5.2）。先頭の欠けは「arm の RTT（実測 1-3 ms・localhost WebSocket）」で、`%v` ごとのファイルの先頭で起きる。許容できない場合は §16 (4)。
+→ 当初案は「arm = transport start」だったが、**owner 裁定（Q-598-4・C）で「予告 arm」**にする: **ラインのインストール（`SetBusLine` に render 宛先が含まれた時）で arm**（ファイルを開く）し、**RT は `transport.running` が真の間だけ commit**（停止中は無音を書かない）。disarm = transport stop。版（`%v`）は「transport start → stop の 1 区間 = 1 版」のまま（停止中に開いたままのファイルは次の start で書き始める）。以下の段落は旧案の記録:
+
+→ 旧案: **arm = transport start / disarm = transport stop** に固定する。`Global.start()` は同期だが、`_onTransportStart` フック（`global.ts:669`）の直後に `void this.renders.arm(refs)` を発行し、arm 完了までの遅延は **`SetBusLine` の `Render` op が「未 arm なら no-op」**であることで吸収する（§5.2）。先頭の欠けは「arm の RTT（実測 1-3 ms・localhost WebSocket）」で、`%v` ごとのファイルの先頭で起きる。許容できない場合は §16 (4)。
 
 ### 4.4 wire（daemon protocol）— 🔴 一方通行
 
@@ -210,11 +212,16 @@ pub struct RenderInstance {
     pub ready: Arc<AtomicBool>,
 }
 
-/// callback が保持する render プール（`LinkEgress` と同型）。`reg_rx` から install、`retire_rx` で retire。
+/// callback が保持する render プール。🔴 **固定上限を持たない**（owner 2026-09-03 Q-598-5: Ableton / Bitwig のように
+/// マシンの上限まで使えるのが理想）。新規コードなので最初から #663 の形にする:
+/// - `instances` は control が作った `Box<[Option<RenderInstance>]>` を **AtomicPtr で丸ごと差し替え**（install ring）。
+///   足りなくなったら control が 2 倍の配列を作り、旧配列は世代番号で退役（#628 の retire 規律）。RT は alloc しない。
+/// - env `ORBIT_RENDER_INSTANCES` は**初期確保数**（既定 16）であって上限ではない。
 struct RenderPool {
-    reg_rx: rtrb::Consumer<RenderInstance>,
+    live: AtomicPtr<RenderTable>,              // RenderTable { instances: Box<[Option<RenderInstance>]>, generation: u64 }
+    retired: Mutex<Vec<Box<RenderTable>>>,     // control 側が世代で回収
+    reg_rx: rtrb::Consumer<RenderInstance>,    // 空き slot への install（配列内に空きがある間）
     retire_rx: rtrb::Consumer<usize>,          // slot index
-    instances: Vec<Option<RenderInstance>>,    // slot 固定。retire で None。容量は MAX_RENDER_INSTANCES（§16 (5)）
 }
 ```
 
@@ -521,12 +528,12 @@ parse-statement.ts:140-149（lookahead）/ :453-487（parseMixerNodeDecl）/ par
 
 | # | 問い | 選択肢 | 推奨 | 影響 |
 |---|---|---|---|---|
-| (1) | プレースホルダの語彙 | `%v`（版・3 桁）/ `%d`（日時 `YYYYMMDD-HHMMSS`・`.orbslog` と同じ `formatLogStamp`）/ 他 | **`%n` `%v` `%d` の 3 つ**。`.orbslog` の stamp 関数を流用 | `PLACEHOLDERS` 表の行（§3.3）|
-| (2) | 3ch 以上を 1 ファイルに | `quad.pair(3,4)` / `output(quad, ch:[3,4])` / **作らない** | **作らない**（stem 用途に要求が無い・main 推奨に同意）| — |
-| (3) | 実時間 per-bus stem（§5）の優先順位と置き場 | A #598 に含める / B 新規 issue（地図 §7 (7)(11)）/ C #611 に足す | **B（新規・「書き出しの操作面」）**。ただし機構は本書で確定済みなので、順序だけの問題。オフライン（PR-R5-R7）を先に出すのが owner の目的（840 / 1260 を録る）に沿う | PR-R2/R3 の順番 |
-| (4) | arm の RTT で版の先頭が欠ける（§4.3）を許容するか | A 許容 / B `global.start()` を async にして arm を await / C transport start の前に「予告 arm」（ラインのインストール時に開く・transport 停止中は commit しない） | **C**（RT は `transport.running` を見て commit を gate・無音を書かない）| §5.2 に 1 分岐 |
-| (5) | `MAX_RENDER_INSTANCES`（RT pool の容量） | 上限を決めない（owner）が RT pool は固定長 | 既定 16・env `ORBIT_RENDER_INSTANCES`・**#663 の off-thread 拡張で撤廃** | 定数 1 つ |
-| (6) | `render_score` / `arm_renders` を MCP tool にするか | A する / B CLI のみ | **A**（LLM 第一級・「書き出しの操作面」(i) の MCP 面）| 新規 PR |
-| (7) | `replay --until` の高速畳み込み（仮想クロックで `until` まで進めて**実エンジンへ状態を写す**） | 状態の写し方（ラインは `SetBusLine` 再送で写せる・**走行中 LOOP の位相**は transport の再開位置で決まる）| 設計は別書（doc 2 §7.4）| — |
-| (8) | P3 の instrument offline は #636（instrument rack）の後か | 598 設計 P0-D は簡易 publish 昇格 | **#636 の後**（rack が変わると経路が 2 度変わる）| PR-R8 の位置 |
-| (9) | `T` 無しの `render <orbs>` | A 必須 / B LOOP 無しなら最長パターン長 | **A（必須）**（裁定 8「要求のパラメータ」）| CLI 引数 |
+| (1) ✅ **A `%n` `%v` `%d`（owner 2026-09-03）** | プレースホルダの語彙 | `%v`（版・3 桁）/ `%d`（日時 `YYYYMMDD-HHMMSS`・`.orbslog` と同じ `formatLogStamp`）/ 他 | **`%n` `%v` `%d` の 3 つ**。`.orbslog` の stamp 関数を流用 | `PLACEHOLDERS` 表の行（§3.3）|
+| (2) 🔴 **相談中**（owner「サラウンドミックスの話か？」→ そのとおり。多 ch WAV 1 本〔quad / 5.1〕にどう書くか。Q-611-5 の「チャンネルは独立」の見方なら宛先を**チャンネル集合**にする一般化がある — チャットで選択肢を提示）| 3ch 以上を 1 ファイルに | `quad.pair(3,4)` / `output(quad, ch:[3,4])` / **作らない** | **作らない**（stem 用途に要求が無い・main 推奨に同意）| — |
+| (3) ✅ **B 新規 issue「書き出しの操作面」（owner 2026-09-03）** | 実時間 per-bus stem（§5）の優先順位と置き場 | A #598 に含める / B 新規 issue（地図 §7 (7)(11)）/ C #611 に足す | **B（新規・「書き出しの操作面」）**。ただし機構は本書で確定済みなので、順序だけの問題。オフライン（PR-R5-R7）を先に出すのが owner の目的（840 / 1260 を録る）に沿う | PR-R2/R3 の順番 |
+| (4) ✅ **C 予告 arm（owner 2026-09-03「一旦これで」）** → §4.3 の arm はラインのインストール時・RT は `transport.running` で commit を gate | arm の RTT で版の先頭が欠ける（§4.3）を許容するか | A 許容 / B `global.start()` を async にして arm を await / C transport start の前に「予告 arm」（ラインのインストール時に開く・transport 停止中は commit しない） | **C**（RT は `transport.running` を見て commit を gate・無音を書かない）| §5.2 に 1 分岐 |
+| (5) ✅ **上限を持たない（owner 2026-09-03: マシンの上限まで使える。最適化で応える）** → §5.1 を改訂（AtomicPtr 差し替え・env は初期確保数）| ~~`MAX_RENDER_INSTANCES`（RT pool の容量）~~ | 上限を決めない（owner）が RT pool は固定長 | 既定 16・env `ORBIT_RENDER_INSTANCES`・**#663 の off-thread 拡張で撤廃** | 定数 1 つ |
+| (6) ✅ **A する（owner 2026-09-03）** | `render_score` / `arm_renders` を MCP tool にするか | A する / B CLI のみ | **A**（LLM 第一級・「書き出しの操作面」(i) の MCP 面）| 新規 PR |
+| (7) ✅ **B 今の設計に含める（owner 2026-09-03）** → `694-…` §7.4 に 2 相設計を追加（PR-L5 は PR-R4/R5 の後）| `replay --until` の高速畳み込み | 状態の写し方（ラインは `SetBusLine` 再送で写せる・**走行中 LOOP の位相**は transport の再開位置で決まる）| 設計は別書（doc 2 §7.4）| — |
+| (8) ✅ **A #636 の後（owner 2026-09-03）** | P3 の instrument offline は #636（instrument rack）の後か | 598 設計 P0-D は簡易 publish 昇格 | **#636 の後**（rack が変わると経路が 2 度変わる）| PR-R8 の位置 |
+| (9) ✅ **A 必須（owner 2026-09-03）** | `T` 無しの `render <orbs>` | A 必須 / B LOOP 無しなら最長パターン長 | **A（必須）**（裁定 8「要求のパラメータ」）| CLI 引数 |

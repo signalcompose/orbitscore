@@ -677,6 +677,11 @@ rust/crates/orbit-audio-daemon/src/session.rs:359     chain_path のネスト
 
 ## 15. 🔴 owner 裁定待ち（本文はこれに依存せず着手できる）
 
+> **2026-09-03 owner 回答（裁定シート Q-634-1〜3）**
+> - (1) 表面: 「標準プラグインは好きなところに挿せないとダメ」= 専用メソッドに戻さない（**案 A の方向**）。**実装は unworklet（in-process WASM）のスパイク結果を見てから**（doc 672 §4・PR-P8）。→ **PR-K-G2（標準 CLAP crate 3 本）は保留**。PR-K-G1（語彙の削除）は進める
+> - (2) 中身: Patina を使うなら **VST / CLAP など汎用プラグインとして作って導入**する。OrbitScore / OrbitStudio の**標準は unworklet を検討**
+> - (3) 「1 ブランチ = 1 insert bus」への owner の指摘「また制限を付けようとしていないか。DAW のバスで insert が 1 つしか挿せないなどありえない」→ **誤解を解く必要がある**: 本項は **insert の個数の話ではない**。各 insert bus には既にラック（複数 insert）が挿せる。問いは「layer のブランチごとにバスを 1 本ずつ消費してよいか（`MAX_INSERT_BUS_STAGES = 64` の消費）」だった。owner の方針（上限を決めない・Q-598-5）に従い、**A のまま・bus プールは #663 の off-thread 拡張で上限を撤廃**する。制限は設けない
+
 ### (1) #669 の DSL 表面 — 3 案（#669 本文）
 
 | 案 | 形 | 得るもの | 失うもの |

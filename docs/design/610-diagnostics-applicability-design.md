@@ -421,8 +421,14 @@ function resolveAudioFilePath(audioFilePath: string, sequenceName: string): stri
 | 🔴 core spec 自身の例 `seq.root(b6)` も**動かない**（§3.3 (b)） | `parse-expression.ts:478-488` → `sequence.ts:911` |
 
 **#280 は「どちらに倒すか owner 判断」（地図 §4.F）だが、core spec は既に片方へ倒れている。**
-本書は **spec を 1 本にする**ことだけを提案し、倒す向きは §15 (2) に隔離する。
-どちらに倒しても、**表の 1 行**（`root × seq-undeclared/audio/midi/instrument` の引数型）になる。
+
+✅ **owner 裁定（2026-09-03 Q-610-2）: B「実装を spec に」— `seq.root()` は note-name（`C` / `b6` 等）も受ける。**
+owner:「既に実装されているならそれを使ってよい。キーと関係なく矯正できる」。帰結:
+- `sequence.ts:906-920` の signature を `root(value: number | PlayPitch)` に広げ、note-name は**絶対ピッチ**として解決（`key` と無関係に root を固定できる = owner の「矯正」）
+- `parse-statement` の引数解釈は既に `PlayPitch` を作る（`parse-expression.ts:478-488`）ので、runtime 拒否（`:911`）を外す側の変更
+- core spec `:953-955` を「numeric-degree-only」から「数値 = 度数・note-name = 絶対ピッチ」へ**戻す**（specs-v2 `:160` はそのまま正）
+- 表: `root × seq-*` は `ok`。引数型の検査は表ではなく引数スキーマ（§14 の予想どおり「引数スキーマ欄」が要る）
+- PR: **PR-D7** `feat(dsl): accept note names in seq.root()`（PR-D1 の後・E2E: `seq.root(C)` と `seq.root(b6)` で capture の基本周波数が変わる = `estimateFundamentalHz`）
 
 ### 7.2 #255 — リゾルバ端（🔴 1 は**既に実装済み**）
 
@@ -465,16 +471,19 @@ throw するようになる）。ただし **その譜面は今日すでに壊�
   誘導になっていない
 - 誘導文言を出すには `parseStack` の `]` 後に **AT を明示的に検出して専用の `ParseError`** を投げる
   （数行）。「per-voice に展開してください」を出す。**仕様に足すかどうかとは独立に実装できる**
-- 仕様に足すか（`@v` を各 voice へ分配するか）は **owner 判断**（#609 本文・地図 §4.F）→ §15 (6)。
-  足す場合も足さない場合も、**誘導文言だけは先に出せる**
+- ✅ **owner 裁定（2026-09-03 Q-610-6）: A 足す** — `[...]@v` は各 voice へ分配し、voice 側の `@v` が勝つ。`parseStack`（`parse-expression.ts:1059-1092`）の `]` 後に AT を受けて stack 全体の velocity を各 `PlayPitch` に写す + spec §2.5 に規範を足す。**PR-D5 の範囲が「誘導文言」から「実装」へ広がる**（+40 行程度・E2E: `[1,5,9]@v+10` と `[1@v+10,5@v+10,9@v+10]` の capture RMS が一致）
 
 ### 7.5 #665 (A) — audio の tie
 
 表の最終行（§3.3）。`code: 'applicability/tie-on-audio'` の Warning。
 文言は「audio シーケンスの `_` は **`0`（休符）と同じ**で、直前の音を伸ばさない。
 非 chop / `chop(1)` はファイル全体が自然尺で鳴り、`chop(n>1)` はスロット尺へ詰められる
-（core spec §3）」。**意味を与えるか**（`chop(n>1)` で tie がスロットを繋ぐか）は
-#665 コメント 2 のとおり owner 確認 → §15 (7)。
+（core spec §3）」。
+
+✅ **owner 裁定（2026-09-03 Q-610-7）: B 与える**（「表現として面白い。両方できるとよい」）。帰結:
+- `chop(n>1)` の `_` は**直前スロットを伸ばす**（`event-scheduler.ts` の `eventSlotDuration` を tie の個数ぶん加算）。#665 の varispeed のとおり**時間が伸びればピッチは下がる**
+- 「両方」= ピッチを保ったまま伸ばす方は **#213 の `time()` / `fixpitch()`（Signalsmith）** の領分。tie の意味論は本書、伸ばし方の選択は #213 が担う（表現を 2 種類持てる）
+- 表の行は `warn` → `ok`（`chop(1)` / 非 chop は従来どおり `_` = 休符と同義のまま `warn`）。PR-D3 の 1 行 + `event-scheduler.ts` の変更は #665 側の PR
 
 ---
 
@@ -648,7 +657,8 @@ $ grep -n "isMidi()\|isInstrument()\|isNoteSequence()" packages/engine/src/core/
 | **PR-D2** `fix(diagnostics): run the engine parser behind the editor diagnostics` | §4.1 / §4.2 / §4.4 PR-D1 段 | #610 の 2 項 | `parser/parse-error.ts`（新規 20）/ `parser-utils.ts`（+10）/ `diagnostics/analyze-source.ts`（新規 60・まだパースのみ）/ `extension.ts`（+40）/ unit | PR-D1（spec が先） | **E2E-D1 / E2E-D2** | 診断の増加（今まで通っていた譜面に赤線が出る） |
 | **PR-D3** `feat(diagnostics): applicability table drives the editor warnings` | §3 全部 + §4.3 | #644 の全項 / #665 (A) | `parser/types.ts` + `parse-statement.ts` 4 箇所（span）/ `diagnostics/applicability.ts`（新規 200）/ `analyze-source.ts`（+90）/ `signal-chain-dispatch.spec.ts`（+120） | PR-D2 | **E2E-D3 / -D4 / -D5**・全数テスト・照合テスト | 診断の増加 |
 | **PR-D4** `fix(interpreter): loud diagnostics for name collisions and aux output` | §7.3 (i)(ii) | #583 の受け入れ 2 項 | `global.ts`（+15）/ `mixer-manager.ts`（+10）/ `sequence.ts`（+12）/ `analyze-source.ts`（+20） | PR-D3（表が要る） | **E2E-D6** | (i) は挙動変更（§15 (5)） |
-| **PR-D5** `fix(diagnostics): empty pattern binding and stack-@v guidance` | §7.2-2 / §7.4 の誘導文言 | #255-2 / #609 の「採らない場合」 | `parse-expression.ts`（+12）/ `analyze-source.ts`（+15） | PR-D3 | E2E は D1 に相乗り（fixture 追加） | — |
+| **PR-D5** `feat(dsl): distribute stack-level @v to voices; empty pattern binding guidance` | §7.2-2 / §7.4（**owner 裁定 A: 実装**） | #255-2 / #609 | `parse-expression.ts`（+50）/ `analyze-source.ts`（+15）/ `PITCH_DSL_SPEC` §2.5 | PR-D3 | E2E: `[1,5,9]@v+10` と per-voice 展開の capture RMS 一致 | DSL 表面（加算） |
+| **PR-D7** `feat(dsl): accept note names in seq.root()` | §7.1（**owner 裁定 B**） | #280 | `sequence.ts:906-920`（+20）/ core spec `:953-955` / 表の引数スキーマ欄 | PR-D1 | E2E: `seq.root(C)` / `seq.root(b6)` で `estimateFundamentalHz` が期待値 | DSL 表面（加算） |
 | **PR-D6** `fix(engine): attribute diagnostics to the submission that caused them` | §6 | #620 | `repl-mode.ts` / `extension.ts` | **#694 PR-L2 または #611 PR**（フレーム） | **E2E-620-A**（先に再現） | — |
 
 **PR-D3 の後**に、正規表現アナライザの整理（§4.4 PR-D3 段）を別 PR で行う。E2E-D1〜D6 が
@@ -674,14 +684,14 @@ $ grep -n "isMidi()\|isInstrument()\|isNoteSequence()" packages/engine/src/core/
 
 | # | 問い | 選択肢 | 推奨 | 影響範囲 |
 |---|---|---|---|---|
-| (1) | 🔴 **midi の `output(数値)` / `output("名前")` を拒否するか**（`sequence.ts:378-384` / `:402-404` のコメントが「破壊的変更になるため owner 確認待ちで据え置き」と明記） | A 据え置き（表は `warn` = 黄線のみ）/ B 拒否（`error` + throw・instrument と対称） | **A**。裁定 2「エンジンは触らない」と整合し、#644 の受け入れ（赤線が出て実行は止まらない）も満たす。B は既存譜面が落ちる | 表の 2 行 + `sequence.ts` 2 箇所。**この裁定が出るまで PR-D3 は A で実装できる**（表の値を変えるだけ） |
-| (2) | #280 をどちらに倒すか | A spec を実装に（core spec `:953` は既にこれ。`seq.root()` は数値のみ）/ B 実装を spec に（note-name と `b6` を受ける） | **A**。ただし core spec `:953` の `seq.root(b6)` は**どちらでも直す必要がある**（§3.3 (b)） | A なら docs 2 ファイル。B なら `sequence.ts:906-920` の signature 変更 + `parse-statement` の引数解釈 |
-| (3) | `gain` / `pan` が note シーケンスで効かないのを **診断で言う**か、**効くようにする**か | A 表で `warn`（本書）/ B #611 §2.4 の `LineOp::Gain` を待つ（効くようになる） | **A を今・B が来たら表の行を `ok` に**。#611 は大きく、`must-fix` の診断を待たせる理由が無い | 表の 4 行。#611 側に「本書の表を更新する」と 1 行 |
-| (4) | `seq.ui()` の引数無し形を audio シーケンスで `warn` にするか | A する（instrument 前提なので）/ B しない（catalog effect の UI は audio でも開く） | **A**（引数無しのみ）。引数ありは `ok` のまま。`sequence.ts:678-693` の分岐と一致する | 表の 1 セル |
-| (5) | #583 (i) の「同名 seq と sum/aux の併存を throw にする」は破壊的変更か | A 破壊的として扱い据え置き / B 「今日すでに壊れている」ので loud 化してよい | **B**。node-decl 形は既に throw する（`runtime.ts:196-206`）ので、文字列形だけ黙っているのが非対称 | `global.ts` / `mixer-manager.ts` 各 1 箇所 |
-| (6) | #609 を仕様に足すか | A 足す（`[...]@v` を per-voice に分配・per-voice が勝つ）/ B 足さない（誘導エラーのみ） | 本書は**判断しない**。ただし **B は #610 の副産物として今すぐ得られる**ので、A の裁定を待たずに誘導文言だけ出す（§7.4） | A なら `parseStack` + spec §2.5。B なら `parse-expression.ts` に数行 |
-| (7) | #665 の `chop(n>1)` で tie に意味を与えるか（スロットを繋ぐ = **ピッチも下がる**） | A 与えない（`warn` のまま）/ B 与える | 本書は**判断しない**（#665 コメント 2 の未確認項目のまま）。A は今すぐ実装できる | A なら表の 1 行。B なら `event-scheduler.ts` の `eventSlotDuration` |
-| (8) | `analyzeSource` を **打鍵ごと**に走らせるか、保存時 / 一定時間後にするか | A 打鍵ごと（今と同じ頻度）/ B デバウンス / C 保存時のみ | **B**。今の正規表現は軽いが `parseAudioDSL` は全文パース。**閾値は書かない** — 測るのは「1000 行の `.orbs` で `analyzeSource` が 1 回にかかる時間」と「打鍵中の入力遅延」 | `extension.ts:426` の change ハンドラ |
+| (1) ✅ **A 据え置き（owner 2026-09-03）** | 🔴 **midi の `output(数値)` / `output("名前")` を拒否するか**（`sequence.ts:378-384` / `:402-404` のコメントが「破壊的変更になるため owner 確認待ちで据え置き」と明記） | A 据え置き（表は `warn` = 黄線のみ）/ B 拒否（`error` + throw・instrument と対称） | **A**。裁定 2「エンジンは触らない」と整合し、#644 の受け入れ（赤線が出て実行は止まらない）も満たす。B は既存譜面が落ちる | 表の 2 行 + `sequence.ts` 2 箇所。**この裁定が出るまで PR-D3 は A で実装できる**（表の値を変えるだけ） |
+| (2) ✅ **B 実装を spec に（owner 2026-09-03・推奨から変更）** → §7.1 改訂・PR-D7 | #280 をどちらに倒すか | A spec を実装に（core spec `:953` は既にこれ。`seq.root()` は数値のみ）/ B 実装を spec に（note-name と `b6` を受ける） | **A**。ただし core spec `:953` の `seq.root(b6)` は**どちらでも直す必要がある**（§3.3 (b)） | A なら docs 2 ファイル。B なら `sequence.ts:906-920` の signature 変更 + `parse-statement` の引数解釈 |
+| (3) ✅ **A（owner 2026-09-03:「オーディオ機能はオーディオのラインで動かす」）** | `gain` / `pan` が note シーケンスで効かないのを **診断で言う**か、**効くようにする**か | A 表で `warn`（本書）/ B #611 §2.4 の `LineOp::Gain` を待つ（効くようになる） | **A を今・B が来たら表の行を `ok` に**。#611 は大きく、`must-fix` の診断を待たせる理由が無い | 表の 4 行。#611 側に「本書の表を更新する」と 1 行 |
+| (4) ✅ **A（owner 2026-09-03）** | `seq.ui()` の引数無し形を audio シーケンスで `warn` にするか | A する（instrument 前提なので）/ B しない（catalog effect の UI は audio でも開く） | **A**（引数無しのみ）。引数ありは `ok` のまま。`sequence.ts:678-693` の分岐と一致する | 表の 1 セル |
+| (5) 🔴 **相談中**（owner「ライブコーディングという側面で考えて」）。提案: 演奏中に throw で全体を止めない = **赤線（`error`）+ 評価時はその文だけ `[ERROR]` でスキップし既存の名前が勝つ**（フレームの残りは実行する）。black-hole にしないため `get_log` に必ず出す | #583 (i) の「同名 seq と sum/aux の併存を throw にする」は破壊的変更か | A 破壊的として扱い据え置き / B 「今日すでに壊れている」ので loud 化してよい | **B**。node-decl 形は既に throw する（`runtime.ts:196-206`）ので、文字列形だけ黙っているのが非対称 | `global.ts` / `mixer-manager.ts` 各 1 箇所 |
+| (6) ✅ **A 足す（owner 2026-09-03）** → §7.4 改訂・PR-D5 | #609 を仕様に足すか | A 足す（`[...]@v` を per-voice に分配・per-voice が勝つ）/ B 足さない（誘導エラーのみ） | 本書は**判断しない**。ただし **B は #610 の副産物として今すぐ得られる**ので、A の裁定を待たずに誘導文言だけ出す（§7.4） | A なら `parseStack` + spec §2.5。B なら `parse-expression.ts` に数行 |
+| (7) ✅ **B 与える（owner 2026-09-03・「両方できるといい」→ ピッチ保持は #213）** → §7.5 改訂 | #665 の `chop(n>1)` で tie に意味を与えるか | A 与えない（`warn` のまま）/ B 与える | 本書は**判断しない**（#665 コメント 2 の未確認項目のまま）。A は今すぐ実装できる | A なら表の 1 行。B なら `event-scheduler.ts` の `eventSlotDuration` |
+| (8) ✅ **B デバウンス（owner 2026-09-03）** | `analyzeSource` を **打鍵ごと**に走らせるか、保存時 / 一定時間後にするか | A 打鍵ごと（今と同じ頻度）/ B デバウンス / C 保存時のみ | **B**。今の正規表現は軽いが `parseAudioDSL` は全文パース。**閾値は書かない** — 測るのは「1000 行の `.orbs` で `analyzeSource` が 1 回にかかる時間」と「打鍵中の入力遅延」 | `extension.ts:426` の change ハンドラ |
 
 ---
 

@@ -288,14 +288,52 @@ execute(rec) = interpreter.execute(parseAudioDSL(rec.code), { source: rec.code, 
 
 `sourceFile` は相対（§6）。既定の基準 `dirname(dirname(logPath))` はログを動かしていない限り正しい。動かしたら明示する。`audio()` の相対解決は `documentDirectory = scoreDir` で従来経路（`interpreter-v2.ts:215-217`）。
 
-### 7.4 `--until <bar:beat>`（裁定 6）
+### 7.4 `--until <bar:beat>`（裁定 6）— 高速畳み込みを最初から設計する（owner 2026-09-03 Q-598-7・B）
 
-v1 = **忠実リプレイを `until` で止めて REPL に引き継ぐ**（`shouldStartREPL: true` → `startREPL(interpreter)`・`execute-command.ts:70-72` と同型）。エンジン状態は引き継ぎ、エディタには何も書かない。
-「`until` まで**高速で**畳み込む」変種は、quantize を正しく解くのに仮想クロック（#598 P2 の driver）が要るので**本書の範囲外**（doc 3 §8）。spec §8 Open Question 3（境界ちょうど）は §13 (3)。
+v1 の「忠実リプレイを `until` で止めて REPL へ」は**残す**（`--until <pos> --realtime`）が、既定は**高速畳み込み**にする。owner:「先にやったほうが後から変えるところが増えない」。
 
-### 7.5 `--verify`（裁定 7）— v1 は capture で行う
+**設計 = 宣言の再生 + 位置指定の transport 開始**（2 相）:
 
-spec §5「スケジュール済み TimedEvent の比較」は**ライブ側のイベント列が記録されていない**ので実行不能（`.orbslog` は原因のみ・原則 1）。v1 の検証は **E2E-R1（§9）の capture 比較**で行い、イベント列比較は §13 (4)。
+```
+Phase A（仮想）: doc 598 §6.3 の driver（Clock DI + CollectingEngine）で、`transport < until` の eval を
+                 仮想時刻どおりに畳み込む。得るのは「until 時点の状態」= 宣言（seq / line / plugin / quantize / tempo）と
+                 「until 時点で LOOP 中のシーケンス集合」と「until 時点で quantize 待ちだった差し替えのうち effect <= until のもの」
+Phase B（実機）: 実エンジン（REPL と同じ InterpreterV2）に対して
+                 (1) 宣言系の eval を**即時に**再評価する（transport 命令・play/LOOP 起動を除く。effect <= until の差し替えは
+                     Phase A の結果を反映した状態で評価するので「適用済み」になる）
+                 (2) `global.start({ at: until })` — transport の原点を `now - ms(until)` に置いて開始する（新設・§7.4.1）
+                 (3) Phase A で LOOP 中だった seq に LOOP を発行する。ループ機構は `currentTime = now - startTime`（`prepare-playback.ts:74`）
+                     で次の小節境界を計算するので、位相は `until` から自然に続く
+                 (4) `startREPL(interpreter)` へ引き継ぐ（エディタには何も書かない・Known Decision #25）
+```
+
+**spec §8 (3)「境界ちょうど」への答え（Q-694-3 の推奨）**: ライブでは 57:1 に到達した瞬間に、57:1 で効く差し替えは**もう効いている**。
+したがって `--until 57:1` の状態 = **effect <= until の差し替えを適用済み**とする（Phase A は仮想クロックを `until` まで**含めて**進める）。
+「まだ効いていない状態で止めたい」なら `--until 56:4.999` のように手前を指す。**この解釈で owner 確認をとる（§13 (3)）。**
+
+#### 7.4.1 `Global.start({ at })`（新設・`global.ts:655` の隣）
+
+```ts
+/** transport を `at`（bar:beat）の位置から開始する。原点 = now - msOf(at)。stopped → running の遷移のみ（既存 start() と同じ冪等性）。 */
+startAt(at: string): this
+```
+
+`TransportClock.start()`（`transport-clock.ts:26-30`）に `startTime` を外から与える経路（`startAtOrigin(originMs)`）を足す。`_onTransportStart` フックはそのまま発火し、ログには `{"type":"transport","event":"start","at":"57:1"}` を残す（v2 形式に `at` を**任意**で追加）。
+
+**依存**: Clock DI（doc 598 PR-R4）と評価列 driver（PR-R5）。よって PR-L5 は PR-R5 の後。
+
+### 7.5 `--verify`（裁定 7）— イベント列の sidecar を最初から持つ（owner 2026-09-03 Q-694-4）
+
+owner:「後回しにすると負債が増える。きちんと比較ができる仕組みづくりをしておく」。capture 比較（E2E-R1）に加えて、**spec §5 の構造比較を実行可能にする**:
+
+| 何を | どこへ | 形 |
+|---|---|---|
+| ライブ側のスケジュール済みイベント列（audio: `scheduleEvent` / `scheduleSliceEvent` の引数・note: `scheduleNote` の `onTime/offTime/key/velocity`）| **sidecar** `<log>.events.jsonl`（`.orbslog` と同じディレクトリ・同じ stem）。`.orbslog` 本体は原因のみ（原則 1）を守る | 1 行 = 1 イベント `{ "t": <transport ms>, "seq": "kick", "kind": "audio"\|"note", "slot": 3, "gain": -6, "pan": 0, "key": 60, ... }`（値は記録するが、比較は原則 2 のとおり**構造のみ**）|
+| アセットの同一性 | `.orbslog` の meta `assets: [{ path, sha256 }]`（spec §3 の例のとおり）| `global.start()` 時に **worker thread で非同期にハッシュ**し、`{"type":"assets", ...}` レコードとして**後追いで追記**（start を待たせない）|
+
+- 記録は `AudioEngineBackend` の手前（`Scheduler` interface `core/global/types.ts:11` の呼び出しを **decorator** で包む）に置く。engine には触らない
+- `replay --verify` は同じ decorator で replay 側のイベント列を集め、**構造比較**（seq / kind / slot / 順序 / transport 時刻の許容差）を出す。ランダム由来（`^r` 等・`event-scheduler.ts:39,94`）は値を比較しない（Known Decision #21）
+- 実装は **PR-L6**（PR-L4 の後）。E2E-R4: 同じセッションの replay で `--verify` が差分 0 を報告する
 
 ---
 
@@ -351,7 +389,8 @@ spec §5「スケジュール済み TimedEvent の比較」は**ライブ側の�
 | PR-L2 `feat(repl): //#evalBegin/End frame — one selection, one execute` | §4 + E2E-S3。**doc 1 PR-O4 の前提** | PR-L1 | 意味論（§4.2） |
 | PR-L3 `feat(session-log): hook every GLOBAL; transport.global` | §5 + integration test | PR-L1 | 形式（加算のみ）|
 | PR-L4 `feat(cli): orbitscore replay <log> — faithful, transport-driven` | §7.1-7.3 + `msUntilTransportPosition` + E2E-R1・R2・R3 | PR-L2（フレーム粒度で記録されたログが要る）| — |
-| PR-L5 `feat(cli): replay --until — hand over to the REPL` | §7.4 | PR-L4 | — |
+| PR-L5 `feat(cli): replay --until — fast-forward fold, then hand over to the REPL` | §7.4（2 相・`Global.startAt`・`--realtime` で忠実停止も残す）| PR-L4・**doc 598 PR-R4（Clock DI）・PR-R5（評価列 driver）** | ログ形式に `at`（任意・加算）|
+| PR-L6 `feat(session-log): event sidecar + assets hash for replay --verify` | §7.5 | PR-L4 | sidecar ファイル形式 |
 
 PR-L1 が大きければ **L1a（engine: writer/REPL/interpreter + unit/integration）/ L1b（extension: 設定・env・メタ行 + gated E2E）** に割る。L1a 単独では E2E-S1 は書けない（拡張が env を渡さない）ので、**L1a のマージゲートは integration test、L1b のゲートが E2E**。
 
@@ -383,13 +422,13 @@ PR-L1 が大きければ **L1a（engine: writer/REPL/interpreter + unit/integrat
 
 | # | 問い | 選択肢 | 推奨 | 影響範囲 |
 |---|---|---|---|---|
-| (1) | `<DIR>/` の名前 | A `orbslog/`（拡張子と同じ語・見える）/ B `.orbslog/`（隠す）/ C `sessions/` | **A**。spec §1「命名・選別は事後の操作」= ユーザーが Finder で見つける前提なので隠さない。`.orbslog` 拡張子と同じ語で検索性が高い | 定数 `SESSION_LOG_DIRNAME` 1 箇所（§3.4）|
-| (2) | CLI（`play` / `repl`）も既定 on にするか | A on（gate を `!== '0'` に）/ B opt-in のまま | **B（現状維持）**。拡張は値を明示するので editor 側は独立（§3.1）。CLI は開発・テストで多用され、譜面の隣にログが増えるのを望まない場面がある | `session-log-gate.ts:13` の 1 行 + core spec `:63` |
-| (3) | `--until` が境界ちょうどの時、待機中の quantize 差し替えを適用してから引き継ぐか | spec §8 (3) | v1 は忠実リプレイの停止点なので**問いが立たない**（境界に着く前に止めれば未適用、着けば適用）。高速畳み込み版で再燃 | PR-L5 以降 |
-| (4) | `--verify` の実体 | A capture 比較のみ（v1）/ B ライブ側にイベント列 sidecar（`type:'event'` を**別ファイル**に）を足して構造比較 / C `meta.assets` の sha256（start 時に非同期で） | **A を v1**。B/C は「原因のみ記録」（原則 1）との整合を owner が判断 | PR-L4 の範囲 |
-| (5) | replay を MCP tool（`replay_session_log`）として露出するか | A 露出（LLM 第一級）/ B CLI のみ | **A を後続**（#241 チェックリストに無い。E2E-R1 は CLI 動線で成立） | 新規 PR |
-| (6) | POST_2.0 覚書の「LinkAudio トラックを捕捉しない」（`POST_2.0_ROADMAP_NOTES.md:60`）は本書で扱うか | LinkAudio の出力は**現象**（録音）で因果の記録の外（原則 1）| **扱わない**（Ableton 側が録る分業・spec §6）| — |
-| (7) | dormant の根拠「file-scoped mismatch」は #694 の欠落と同一か | owner 確認（#694 コメント 1「未確認」）| 本書は「同一」と読む（§2 最終行）| §3.1 の既定 on の根拠の一部 |
+| (1) ✅ **A `orbslog/`（owner 2026-09-03）** | `<DIR>/` の名前 | A `orbslog/`（拡張子と同じ語・見える）/ B `.orbslog/`（隠す）/ C `sessions/` | **A**。spec §1「命名・選別は事後の操作」= ユーザーが Finder で見つける前提なので隠さない。`.orbslog` 拡張子と同じ語で検索性が高い | 定数 `SESSION_LOG_DIRNAME` 1 箇所（§3.4）|
+| (2) ✅ **B opt-in のまま（owner 2026-09-03）** | CLI（`play` / `repl`）も既定 on にするか | A on（gate を `!== '0'` に）/ B opt-in のまま | **B（現状維持）**。拡張は値を明示するので editor 側は独立（§3.1）。CLI は開発・テストで多用され、譜面の隣にログが増えるのを望まない場面がある | `session-log-gate.ts:13` の 1 行 + core spec `:63` |
+| (3) 🔴 **相談中**（owner「決めきれない」）。§7.4 の答え「effect <= until は適用済み」を提示し確認をとる | `--until` が境界ちょうどの時、待機中の quantize 差し替えを適用してから引き継ぐか | spec §8 (3) | v1 は忠実リプレイの停止点なので**問いが立たない**（境界に着く前に止めれば未適用、着けば適用）。高速畳み込み版で再燃 | PR-L5 以降 |
+| (4) ✅ **B + C（owner 2026-09-03: 比較の仕組みを最初から）** → §7.5 に反映・PR-L6 | `--verify` の実体 | A capture 比較のみ（v1）/ B ライブ側にイベント列 sidecar（`type:'event'` を**別ファイル**に）を足して構造比較 / C `meta.assets` の sha256（start 時に非同期で） | **A を v1**。B/C は「原因のみ記録」（原則 1）との整合を owner が判断 | PR-L4 の範囲 |
+| (5) ✅ **A 露出する（owner 2026-09-03）** | replay を MCP tool（`replay_session_log`）として露出するか | A 露出（LLM 第一級）/ B CLI のみ | **A を後続**（#241 チェックリストに無い。E2E-R1 は CLI 動線で成立） | 新規 PR |
+| (6) ✅ **A 扱わない（owner 2026-09-03: ログに残るのは DSL と実行内容。Ableton 側で受けられるかは Ableton の設定）** | POST_2.0 覚書の「LinkAudio トラックを捕捉しない」（`POST_2.0_ROADMAP_NOTES.md:60`）は本書で扱うか | LinkAudio の出力は**現象**（録音）で因果の記録の外（原則 1）| **扱わない**（Ableton 側が録る分業・spec §6）| — |
+| (7) 🔴 **説明待ち**（owner「何を言っているのか分からない」→ チャットで説明済み: 2.0.0 で「複数ファイルをまたぐライブでログが生成されない」と記録された症状は、拡張が env を渡していない #694 の欠落そのものだと読んでいる。別の症状の記憶があれば教えてほしい）| dormant の根拠「file-scoped mismatch」は #694 の欠落と同一か | owner 確認（#694 コメント 1「未確認」）| 本書は「同一」と読む（§2 最終行）| §3.1 の既定 on の根拠の一部 |
 
 ---
 

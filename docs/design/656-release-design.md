@@ -401,6 +401,8 @@ const extArgs = EXT_MODE === 'dev' ? [`--extensionDevelopmentPath=${EXTENSION_DE
 
 **まず測る**（設計で決め打たない）: E2E-D3（§12）で PATH を launchd 既定相当（`/usr/bin:/bin:/usr/sbin:/sbin`）に絞って起動し、engine が起動するかを見る。
 
+✅ **owner 裁定（2026-09-03 Q-656-8）: B node を同梱する**（サイズ + 署名対象 +1）。E2E-D3 は「同梱 node で起動する」ことの確認に読み替え、PATH の node には依存しない。同梱先は `.app/Contents/Resources/app/extensions/orbitscore/engine/bin/node`（`enginePath` の隣・§4.3 の成果物一覧に追加）、`extension.ts:2159` の `spawn('node', …)` を同梱パスへ（無ければ PATH へフォールバックし警告）。署名は §5.1 の内側リストに +1。以下の表は裁定前の分岐の記録:
+
 | 結果 | 取る手 |
 |---|---|
 | 起動する | VS Code / VSCodium の shell env 解決が効いている。**ユーザーが node を持っていない場合**を別途 E2E で作る（PATH から node を外す） |
@@ -621,6 +623,16 @@ packages/vscode-extension/src/extension.ts:2159:    engineProcess = child_proces
 ---
 
 ## 16. 🔴 owner 裁定待ち（これ以外は着手できる）
+
+> **2026-09-03 owner 回答（裁定シート Q-656-1〜8）**
+> - (1) 🔴 **相談中**（owner「相談したい」）。チャットで提示: `"limited"` を推す理由 = `instrument(path)` が任意 dylib を読む・untrusted では engine を起動せず「信頼してください」を 1 クリックで出す。`true` にすると信頼ダイアログは出ないが、untrusted フォルダの譜面が任意コードを走らせる
+> - (2) 🔴 **相談中**（owner「リリースの話は別ラインとして扱いたい」）→ #138 は**独立のまま（C）**で、リリース系 issue（#659 / #656 / #138 / #498）を `IMPLEMENTATION_PLAN` 段 8 = 別ラインとして扱う
+> - (3) **C**（`.app` は手元・CI は upload だけ → B へ）
+> - (4) **A 提案どおり**
+> - (5) **A dmg・bundle id は VSCodium 既定**（一方通行・確定）
+> - (6) **B GitHub Releases だけ（一旦）**
+> - (7) **A 拡張の `version` を正本**（一方通行・確定）
+> - (8) **B node を同梱**（推奨「測ってから」から変更）→ §6.3 改訂・PR-C2 は「同梱 + フォールバック警告」
 
 | # | 問い | 選択肢 | 推奨 | 影響範囲 |
 |---|---|---|---|---|

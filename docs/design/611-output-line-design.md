@@ -86,7 +86,7 @@ drums.effect(["Glue"]).output(master, thru: true).output(cue, db: -20)
 |---|---|---|---|
 | master | `master`（暗黙ノード）/ `"master"` | `{ kind: 'master' }` | 裁定 C。文字列形は今日 LinkAudio 名に落ちる（`sequence.ts:411-412`）→ 本書で予約語に |
 | sum / aux | `drums` / `"drums"` | `{ kind: 'bus', bus: 'sum-bus-0' }` | 裁定 ③ で aux も可。`resolveMixerBus`（`global.ts:502-504`）で kind 込みに解決 |
-| 物理アウト | `cue`（`mix.output(3, 4)`）/ `"3,4"` | `{ kind: 'device', channels: [3, 4] }` | 裁定 3。1 始まり・**対のみ**（単 ch は §14）|
+| 物理アウト | `cue`（`mix.output(3, 4)`）/ `"3,4"` / **`mix.output(3)`（mono）** | `{ kind: 'device', channels: [3, 4] }` / `{ kind: 'device', channels: [3] }` | 裁定 3。1 始まり。**mono 宛ては L+R をマージ**（片側を捨てない・owner 2026-09-03 Q-611-5）。マージ係数は `(L + R) * 0.5`（相関信号でクリップしない・§5.3）|
 | render | `stems`（`mix.render(...)`）| `{ kind: 'render', id }` | `docs/design/598-render-endpoint-design.md` |
 | LinkAudio ch | `"Kick Ch"`（`global.linkAudio()` 時のみ）| `{ kind: 'link', channel }` | 既存の意味を保つ（§3.3 の解決順の**最後**）|
 
@@ -114,6 +114,14 @@ kick.send(verb, -12, enabled: false)   // ≡ db: -Infinity（送らない・要
 
 🔴 **`seq.gain(固定)` の適用点が発音側 → ライン上へ移る**（#649 §14 の判断 5「高確度で音が変わる」）。
 effect 併用の譜面では今日「ラック前」だったものが**既定位置ではラック後**になる。§9 の golden で差分を明示する。
+
+### 2.4b `pan(value)` もライン要素（owner 2026-09-03 Q-611-4・B）
+
+`seq.pan(固定値)` は**バス上の L/R バランス**として `LineElement { kind: 'pan' }` になり、ラック・`gain` と同じくチェーン上の位置に置ける（instrument にも効く）。
+**発音側に残るもの**: `play()` 内の per-event / ランダム pan（`panRandom`・`event-scheduler.ts:39,94`）は**イベント固有**なのでそのまま。
+⚠️ 既存 audio 譜面で `seq.pan(x)` を書いているものは、**イベント側の mono 配置 → バス側のステレオ・バランス**へ変わるため bit 一致しない。golden（PR-O0）で `pan` を含む譜面は**再ベースライン**し、その理由を expectations の式に残す（owner が受け入れ済み）。RT: `Pan(p)` op = `buf[L] *= gL(p); buf[R] *= gR(p)`（等パワー・`scheduler.rs` の 2ch 分岐と同じ法則を使い、法則の二重定義を避ける）。
+
+**位置の自由（Q-611-8・owner）**: `gain` / `pan` / 標準プラグイン（`Gain(db:)` 等）はラック内でもライン上でも**好きな位置に置ける**。既定位置（チェーンを書かずに `seq.gain()` だけ呼んだ時）はラック後だが、**DSL の表現を狭める制限は設けない**。
 
 ### 2.5 合算の規則（裁定 1）
 
@@ -145,7 +153,7 @@ import type { MixerKind } from '../global/mixer-manager'
 export type OutputDest =
   | { readonly kind: 'master' }
   | { readonly kind: 'bus'; readonly bus: string }                 // daemon bus 名（sum-bus-n / aux-bus-n）
-  | { readonly kind: 'device'; readonly channels: readonly [number, number] }  // 1 始まり
+  | { readonly kind: 'device'; readonly channels: readonly [number, number] | readonly [number] }  // 1 始まり。長さ 1 = mono（L+R マージ・Q-611-5）
   | { readonly kind: 'render'; readonly id: string }               // 598 設計 §3（宣言ノード id）
   | { readonly kind: 'link'; readonly channel: string }
 
@@ -153,7 +161,7 @@ export function destKey(d: OutputDest): string {
   switch (d.kind) {
     case 'master': return 'master'
     case 'bus': return `bus:${d.bus}`
-    case 'device': return `device:${d.channels[0]},${d.channels[1]}`
+    case 'device': return `device:${d.channels.join(',')}`
     case 'render': return `render:${d.id}`
     case 'link': return `link:${d.channel}`
   }
@@ -162,6 +170,7 @@ export function destKey(d: OutputDest): string {
 export type LineElement =
   | { readonly kind: 'rack' }                                   // effect([...])。ライン上の位置だけを持つ（値は EffectChainMap）
   | { readonly kind: 'gain'; readonly db: number }              // seq.gain(固定値) / global.gain()
+  | { readonly kind: 'pan'; readonly pan: number }              // seq.pan(固定値): バス上の L/R バランス（-1..1・owner 2026-09-03 Q-611-4 でライン要素に）
   | {
       readonly kind: 'output'
       readonly dest: OutputDest
@@ -171,9 +180,15 @@ export type LineElement =
       readonly sugar: 'output' | 'send'
     }
 
-/** 要素の同一性キー（#649 §10.1 の順列キー）。 */
-export function elementKey(e: LineElement): string {
-  return e.kind === 'output' ? `output:${destKey(e.dest)}` : e.kind
+/**
+ * 要素の同一性キー（#649 §10.1 の順列キー）。
+ * 🔴 owner 裁定（2026-09-03 Q-611-3）: 同じ宛先への `output` を 2 回書いたら **2 要素として両方加算**する
+ * （自由度を落とさない）。したがって output のキーは宛先ではなく **チェーン内の出現序数**
+ * （`ordinal` = その宛先の何回目か）を含む。`send` も同じ。
+ * 「同じ宛先が 2 回ある」ことを知らせたければ **DSL の診断（doc 610 の表・`info`）**で出す。engine は制限しない。
+ */
+export function elementKey(e: LineElement, ordinal = 0): string {
+  return e.kind === 'output' ? `output:${destKey(e.dest)}#${ordinal}` : e.kind
 }
 
 /**
@@ -217,6 +232,10 @@ upsert(e):
 
 規則 4（バッチ内に要素が 1 つしか現れなければ動かない）は、`beginBatch` 直後の 1 回目の `upsert` が
 「`i >= 0` かつ `i >= cursor(=0)`」で規則 1 に落ちることで自動的に成立する。
+
+**同一宛先の複数 `output`（Q-611-3・B）**: バッチ内では `ordinal` を「このバッチで同じ宛先を見た回数」で振るので、
+`kick.output(verb, thru: true).effect(x).output(verb)` は 2 要素（pre と post を両方 verb へ）になる。
+バッチ外（生 stdin の単文）は `ordinal = 0` = **最初の要素だけを値更新**する（後方互換）。engine 側（§4.1 検証）は同一宛先の重複を**拒否しない**。
 
 ### 3.3 `Sequence` の変更（`packages/engine/src/core/sequence.ts`）
 
@@ -407,7 +426,7 @@ core の `Engine::set_global_gain`（`engine.rs:143-152`）は **production で�
 pub enum OutputDest {
     Master,
     Bus(usize),                    // stages 配列内の絶対 index（forward-only は構築時検証）
-    Device { left: usize, right: usize },   // 0 始まりの interleaved ch index
+    Device { left: usize, right: Option<usize> },   // 0 始まりの interleaved ch index。right=None = mono（L+R を 0.5 でマージ・Q-611-5）
     Render(usize),                 // render tap の slot index（598 設計 §5）
     Link(usize),                   // LinkEgress.channels の index
 }
@@ -416,7 +435,7 @@ pub enum OutputDest {
 pub struct LineOutput { pub dest: OutputDest, pub thru: bool, pub gain: f32 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum LineOp { Rack, Gain(f32), Output(LineOutput) }
+pub enum LineOp { Rack, Gain(f32), Pan(f32), Output(LineOutput) }   // Pan: バス上の L/R バランス（Q-611-4）
 
 /// 1 stage のライン。**RT では読むだけ**。構築は control 側（alloc 可）。
 pub struct LineProgram {
@@ -463,11 +482,13 @@ for i in 0..stages.len():                             # 配列順 = トポロジ
         match op:
           Rack        => if let Some(p) = stages[i].processor { p.process(buf) }
           Gain(g)     => g_now = ramp(prog.current_gain[k], g); buf *= g_now
+          Pan(p)      => (gl, gr) = equal_power(p); buf[L] *= gl; buf[R] *= gr        # Q-611-4
           Output(o)   => g_now = ramp(prog.current_gain[k], o.gain)
                          match o.dest:
                            Master           => master.buffer += buf * g_now
                            Bus(j)           => stages[j].buffer += buf * g_now      # j > i（構築時検証・split_at_mut 継続）
-                           Device{l, r}     => hw[frame*ch + l] += buf[frame*2]*g_now; hw[frame*ch + r] += buf[frame*2+1]*g_now
+                           Device{l, Some(r)} => hw[frame*ch + l] += buf[frame*2]*g_now; hw[frame*ch + r] += buf[frame*2+1]*g_now
+                           Device{l, None}    => hw[frame*ch + l] += (buf[frame*2] + buf[frame*2+1]) * 0.5 * g_now   # mono = マージ（Q-611-5）
                            Render(s)        => render_taps[s].commit(buf * g_now)   # RingTapSink（598 設計 §5）
                            Link(c)          => link.channels[c].scratch += buf * g_now
                          if !o.thru { break }
@@ -749,13 +770,13 @@ rust/crates/orbit-audio-native/src/output.rs:588 :638 :671 :716-745 :808 :829 :8
 
 | # | 未決 | 分岐 | 推奨 |
 |---|---|---|---|
-| (1) | **数値 render bus `output(n)`（MX.2.1）を撤回するか糖衣で残すか** | A 撤回: §3.3 手順 5 を削除し MX.2.1 を「#598 P1 の暫定形・`mix.render` へ移行」と書く / B 糖衣: `output(n)` ≡ 暗黙の `mix.render("<out_dir>/<n>.wav")` | **A**（P2 未出荷・宛先はすべて宣言ノードという裁定と整合）|
-| (2) | `send` の名前付き引数名 | `amount:`（SC.4 現行）のまま単位だけ dB / `db:` に改名 | **`db:`**（`output(db:)` / `Gain(db:)` と揃う）|
-| (3) | 同じラインに同じ宛先の `output` を 2 回書いた時 | A 同一要素（後勝ち・位置は最後）/ B 2 要素として両方加算 | **A**（`elementKey` = 宛先キー。`send` の aux 名キーと同じ）|
-| (4) | `pan` をライン要素にするか（#649 Q1）| 発音側のまま / ライン要素（バス上の L/R バランス）| **本書では発音側のまま**（bit 一致を守る・別 PR）|
-| (5) | 単一チャンネル宛て（`mix.output(3)` / mono）| 作らない / `Device{left, right: None}` | **作らない**（stem 用途に要求なし・地図 §9）|
-| (6) | LinkAudio が not-ready の時に master へ漏らすか捨てるか（#643）| | §5.3 の `Link(c)` は「ready でなければ加算しない = 捨てる」を仮置き |
-| (7) | forward-only の中で sum→sum / aux→sum をどこまで許すか | 本書は **kind を問わず forward-only** | そのまま（順序分離は #643 §9 の後段）|
-| (8) | `seq.gain(固定)` の既定位置をラック後にすることで effect 併用譜面の音が変わる件 | 受け入れる / 既定をラック前にする | **ラック後**（DAW の fader = insert 後・#649 §14 判断 5 のとおり owner に音で提示）|
+| (1) ✅ **A（owner 2026-09-03）**。ただし「必要になった時に糖衣として実装できる形」を保つ: `OutputDest` は閉じた union のまま、`output(n)` の分岐を**パーサ側で** `mix.render` の暗黙宣言に落とせるよう `RenderEndpointManager.declare` を再利用可能にしておく | **数値 render bus `output(n)`（MX.2.1）を撤回するか糖衣で残すか** | A 撤回: §3.3 手順 5 を削除し MX.2.1 を「#598 P1 の暫定形・`mix.render` へ移行」と書く / B 糖衣: `output(n)` ≡ 暗黙の `mix.render("<out_dir>/<n>.wav")` | **A**（P2 未出荷・宛先はすべて宣言ノードという裁定と整合）|
+| (2) ✅ **A `db:`（owner 2026-09-03）** | `send` の名前付き引数名 | `amount:`（SC.4 現行）のまま単位だけ dB / `db:` に改名 | **`db:`**（`output(db:)` / `Gain(db:)` と揃う）|
+| (3) ✅ **B 2 要素として両方加算（owner 2026-09-03・推奨から変更）**。制限は engine ではなく DSL の診断で（§3.1 `elementKey` 改訂） | 同じラインに同じ宛先の `output` を 2 回書いた時 | A 同一要素（後勝ち・位置は最後）/ B 2 要素として両方加算 | **A**（`elementKey` = 宛先キー。`send` の aux 名キーと同じ）|
+| (4) ✅ **B ライン要素（owner 2026-09-03・推奨から変更・§2.4b）** | `pan` をライン要素にするか（#649 Q1）| 発音側のまま / ライン要素（バス上の L/R バランス）| **本書では発音側のまま**（bit 一致を守る・別 PR）|
+| (5) ✅ **B 作る。ただし stereo→mono は片側を捨てず L+R をマージ（owner 2026-09-03）** | 単一チャンネル宛て（`mix.output(3)` / mono）| 作らない / `Device{left, right: None}` | **作らない**（stem 用途に要求なし・地図 §9）|
+| (6) ✅ **DSL に書いてあるとおり（owner 2026-09-03）**: 漏らすか否かは `thru` で決まる。not-ready の channel は commit しないだけ（= 仮置きどおり・自動で master へ漏らさない）| LinkAudio が not-ready の時に master へ漏らすか捨てるか（#643）| | §5.3 の `Link(c)` は「ready でなければ加算しない = 捨てる」を仮置き |
+| (7) ✅ **DSL に書いてあるとおり（owner 2026-09-03）**: kind による制限は設けない。cycle（後方参照）だけを **DSL の診断**で拒否し、engine の検証は安全網 | forward-only の中で sum→sum / aux→sum をどこまで許すか | 本書は **kind を問わず forward-only** | そのまま（順序分離は #643 §9 の後段）|
+| (8) ✅ **ラック後を既定（owner 2026-09-03）。ただし位置は自由（§2.4b「表現を狭めない」）** | `seq.gain(固定)` の既定位置をラック後にすることで effect 併用譜面の音が変わる件 | 受け入れる / 既定をラック前にする | **ラック後**（DAW の fader = insert 後・#649 §14 判断 5 のとおり owner に音で提示）|
 
-(1)(2)(3) は **PR-O4 の着手前**に要る。(4)〜(8) は着手を止めない。
+**2026-09-03 owner 裁定で 8 件すべて解消**（裁定シート Q-611-1〜8）。(3)(4)(5) は推奨から変更されたため §2.2 / §2.4b / §3.1 / §5.1 / §5.3 を改訂した。PR-O4 は着手可能。
