@@ -1,3 +1,8 @@
+> 🗄️ **アーカイブ（2026-09-03・#696）。** 本文書は記録として残すが、**現在の正本ではない**。
+> **現在の正本**: **`docs/planning/DEVELOPMENT_MAP.md`**（SC 時代の文書）
+>
+> 内容は移動時のまま。**新しい判断の根拠にしないこと**（[[check-the-date-before-trusting-a-doc]]）。
+
 # OrbitScore 改善提案書
 
 ## 概要

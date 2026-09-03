@@ -1,10 +1,15 @@
+> 🗄️ **アーカイブ（2026-09-03・#696）。** 本文書は記録として残すが、**現在の正本ではない**。
+> **現在の正本**: **#628 CLOSED**（出荷済み・PR #639）/ 意味論の正本は SC.10
+>
+> 内容は移動時のまま。**新しい判断の根拠にしないこと**（[[check-the-date-before-trusting-a-doc]]）。
+
 # 設計書: ラック形エフェクトチェーンの実装（issue #628）
 
 - 起案: Fable（設計担当・2026-08-27）
 - 対象 issue: #628（ラック形チェーン: 削除・バイパス・複数 insert の統合モデル）
 - 意味論の正本: `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` **SC.10**（2026-08-27 制定）
-- 経緯・棄却案: `docs/design/628-effect-chain-model.md`（DAW リサーチ）
-- 前提設計: `docs/design/625-effect-replacement-design.md`（差し替え・削除の機構。本書はその上に建てる）
+- 経緯・棄却案: `docs/archive/design/628-effect-chain-model.md`（DAW リサーチ）
+- 前提設計: `docs/archive/design/625-effect-replacement-design.md`（差し替え・削除の機構。本書はその上に建てる）
 - 実装担当への注意: **§4 決定事項は確定済みとして扱い、再設計しないこと。** 仕様から逸脱する
   必要が生じたら spec 側を先に更新する（§7 Stage 0）。§10 の owner 確認事項は**確認が取れるまで
   実装しない**（DSL 表面は owner 確認が要る — #625 の教訓）。
@@ -1110,5 +1115,5 @@ E2E で実証。
   `diagnostics-analysis.ts:1-40`
 - 仕様（2026-08-27 改訂後）: `SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.10.1-10.11（3b/3c/8/9/10 を
   全読）/ `INSTRUCTION_ORBITSCORE_DSL.md` PH.2c（L1284-）
-- 設計: `docs/design/625-effect-replacement-design.md`（全読）/
-  `docs/design/628-effect-chain-model.md`（全読・確定モデル §6-7）
+- 設計: `docs/archive/design/625-effect-replacement-design.md`（全読）/
+  `docs/archive/design/628-effect-chain-model.md`（全読・確定モデル §6-7）

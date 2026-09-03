@@ -901,7 +901,7 @@ more instance of CLAUDE.md's "what breaks is the wiring, and wiring is visible o
 
 ### Two-layer separation of attribution and destination
 
-Revision 1 of the fix design (`docs/design/628-ui-pump-per-index-design.md`, drafted by Fable)
+Revision 1 of the fix design (`docs/archive/design/628-ui-pump-per-index-design.md`, drafted by Fable)
 took "the index of an open UI is invariant" as an invariant and had TS automatically close, before
 APPLY, the UI of any stage whose index would shift. The owner sent it back.
 
@@ -1094,7 +1094,7 @@ E2E-1 of #633 inserts the same plugin twice, opens two windows with `ui("name")`
 second one first**, and then closes the first.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1769-1791
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1784-1806
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {
@@ -1233,10 +1233,10 @@ must be CLAP.
 - `rust/crates/orbit-audio-daemon/src/session.rs:2015-2016` — `ClosePluginUI` is Phase A acceptance only
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6470-6560` — `open_outproc_plugin_ui` (binding check → `begin_open` → route → mailbox)
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8802-8815` — `PluginUiTarget` (`window` = attribution, `index` = display-only)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1769-1791` — #633 E2E-1 (using close as the oracle)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1784-1806` — #633 E2E-1 (using close as the oracle)
 - [`docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md) UIH.0–UIH.8 — the normative spec
 - [`docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md) — the #474 P0–P6 implementation design and owner decisions Q1–Q8
-- [`docs/design/628-ui-pump-per-index-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/design/628-ui-pump-per-index-design.md) — the per-window pump design (C-A / C-B, two-layer separation, rejected alternatives)
+- [`docs/archive/design/628-ui-pump-per-index-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/design/628-ui-pump-per-index-design.md) — the per-window pump design (C-A / C-B, two-layer separation, rejected alternatives)
 - [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/core/INSTRUCTION_ORBITSCORE_DSL.md) PH.2c — the DSL rules for `seq.ui([name][, open])`
 - [`docs/development/WORK_LOG.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/WORK_LOG.md) 6.335–6.348 (#474 P0–P4c), 6.358 (#617), 6.387b / 6.387c (the #628 defect and design), 6.413 / 6.414 (#633)
 - Issue [#474](https://github.com/signalcompose/orbitscore/issues/474) — plugin UI open/close

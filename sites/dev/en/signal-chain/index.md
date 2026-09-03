@@ -25,7 +25,7 @@ immediately point at something concrete.
 ## Why "racks" — Placing the DAW insert chain as an isomorph
 
 The starting point of #628 was the owner's observation that "deletion, bypass and chaining are
-not three decisions but one model". The design memo `docs/design/628-effect-chain-model.md`
+not three decisions but one model". The design memo `docs/archive/design/628-effect-chain-model.md`
 takes Bitwig and Live as its reference DAWs and confirms that a DAW slot is designed with
 **four states** (empty slot / active / bypass / deactivated), not two ("present / absent").
 
@@ -1449,7 +1449,7 @@ rack on the gated side is below; it runs the SC.10.4 shape — a `var` binding f
 `effect(variable)` — on real hardware as is.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4090-4097
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4105-4112
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
@@ -1561,9 +1561,9 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:36-47` — SC.1 two-layer semantics (declaration layer / signal layer)
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:151-170` — SC.5 live-coding semantics and the note on failure models (i)/(ii)
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:198-415` — SC.10 racks (shape, disabling, deletion, values, LCS, standard plugins, v1 staging)
-- `docs/design/628-effect-chain-model.md:17-31,53-69,188-232` — DAW research (four states, mechanism B) and the settled model
-- `docs/design/628-rack-chain-implementation-design.md:127-291,751-774` — adopted mechanism, rejected options, the 20 decisions
-- `docs/design/628-plan-reset.md:57-120` — early detection ahead of the hardware gate (the pure unit for the gain constants)
+- `docs/archive/design/628-effect-chain-model.md:17-31,53-69,188-232` — DAW research (four states, mechanism B) and the settled model
+- `docs/archive/design/628-rack-chain-implementation-design.md:127-291,751-774` — adopted mechanism, rejected options, the 20 decisions
+- `docs/archive/design/628-plan-reset.md:57-120` — early detection ahead of the hardware gate (the pure unit for the gain constants)
 - `packages/engine/src/signal-chain/rack.ts:12-34,124-203,223-277` — `RackRecipe` types, three-category resolution, chord/rack classification, desugaring `effect()` arguments
 - `packages/engine/src/signal-chain/dispatch.ts:42-53` — diagnostic-only matching of the withdrawn method form (SC.10.9)
 - `packages/engine/src/parser/types.ts:144-159` — `ValueCall` / `ValueArray` AST
@@ -1586,7 +1586,7 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - `scripts/copy-daemon-bin.sh:131-132` — bundling `std-plugins/Gain.clap`
 - `.github/workflows/release.yml:86-98,191-200` — the real Gain test and the bundling gate inside the `.vsix`
 - `tests/e2e/rack-chain-gain-expectations.ts:1-34` / `tests/e2e/rack-chain-gain-expectations.spec.ts:1-30` — the E2E numeric design and its pure unit
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:4090-4120` — the full-rack segment of the `#628 R28` hardware block
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:4105-4135` — the full-rack segment of the `#628 R28` hardware block
 - `tests/core/rack-chain.spec.ts:105-414` — T3–T23 (LCS, occurrence, keep updates, uncertain recovery)
 - `tests/interpreter/rack-value-resolution.spec.ts:62-188` — T1–T19 (array classification, three categories, layer rejection)
 - `tests/interpreter/signal-chain-dispatch.spec.ts:170-184,581-611` — T24 (method-form diagnostic), T25 (`remove()` removal)

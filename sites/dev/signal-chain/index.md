@@ -24,7 +24,7 @@ watchdog）を先に読んでおくと、本章で「bus」「child」「mailbox
 ## なぜ「ラック」なのか — DAW の insert チェーンと同型に置く
 
 #628 の出発点は「削除・バイパス・チェーンは 3 つの決定ではなく 1 つのモデルである」という
-owner の指摘でした。設計メモ `docs/design/628-effect-chain-model.md` は Bitwig と Live を
+owner の指摘でした。設計メモ `docs/archive/design/628-effect-chain-model.md` は Bitwig と Live を
 参照 DAW に置いて、DAW のスロットが「有る / 無い」の 2 状態ではなく **4 状態**
 （空スロット / 有効 / バイパス / 無効化）で設計されていることを確認しています。
 
@@ -1418,7 +1418,7 @@ WORK_LOG 6.397 には、設計原案の `Gain(db: -20)` を入れるとこの un
 という SC.10.4 の形をそのまま実機で通しています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4090-4097
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4105-4112
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
@@ -1527,9 +1527,9 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:36-47` — SC.1 二層意味論（宣言層 / 信号層）
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:151-170` — SC.5 ライブコーディング意味論と失敗モデル (i)/(ii) の注記
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md:198-415` — SC.10 ラック（形・無効化・削除・値・LCS・標準プラグイン・v1 の段階）
-- `docs/design/628-effect-chain-model.md:17-31,53-69,188-232` — DAW リサーチ（4 状態・機構 B）と確定モデル
-- `docs/design/628-rack-chain-implementation-design.md:127-291,751-774` — 採用機構と却下案・決定事項 20 項目
-- `docs/design/628-plan-reset.md:57-120` — 実機ゲートの前倒し検出（ゲイン定数の純 unit）
+- `docs/archive/design/628-effect-chain-model.md:17-31,53-69,188-232` — DAW リサーチ（4 状態・機構 B）と確定モデル
+- `docs/archive/design/628-rack-chain-implementation-design.md:127-291,751-774` — 採用機構と却下案・決定事項 20 項目
+- `docs/archive/design/628-plan-reset.md:57-120` — 実機ゲートの前倒し検出（ゲイン定数の純 unit）
 - `packages/engine/src/signal-chain/rack.ts:12-34,124-203,223-277` — `RackRecipe` 型・3 カテゴリ解決・chord/rack 分類・`effect()` 引数の脱糖
 - `packages/engine/src/signal-chain/dispatch.ts:42-53` — 撤回されたメソッド形の診断専用照合（SC.10.9）
 - `packages/engine/src/parser/types.ts:144-159` — `ValueCall` / `ValueArray` AST
@@ -1552,7 +1552,7 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 - `scripts/copy-daemon-bin.sh:131-132` — `std-plugins/Gain.clap` の同梱
 - `.github/workflows/release.yml:86-98,191-200` — 実 Gain テストと `.vsix` 内の同梱ゲート
 - `tests/e2e/rack-chain-gain-expectations.ts:1-34` / `tests/e2e/rack-chain-gain-expectations.spec.ts:1-30` — E2E の数値設計とその純 unit
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:4090-4120` — `#628 R28` 実機ブロックの full rack 区間
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:4105-4135` — `#628 R28` 実機ブロックの full rack 区間
 - `tests/core/rack-chain.spec.ts:105-414` — T3〜T23（LCS・occurrence・keep 更新・uncertain 復旧）
 - `tests/interpreter/rack-value-resolution.spec.ts:62-188` — T1〜T19（配列分類・3 カテゴリ・layer 拒否）
 - `tests/interpreter/signal-chain-dispatch.spec.ts:170-184,581-611` — T24（メソッド形の診断）・T25（`remove()` 撤去）
