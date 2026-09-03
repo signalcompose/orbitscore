@@ -677,7 +677,7 @@ MCP 経由で駆動し、daemon の capture WAV を区間ごとに RMS 測定し
 0.15 秒）を取って遷移の影響を除きます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:572-577
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:587-592
     const rms = (name: string, guardSec = 0.15): number => {
       const selected = windows(name, guardSec)
       return Math.sqrt(
@@ -690,7 +690,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1408-1442
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1423-1457
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -733,7 +733,7 @@ E2E-4 は sum + aux の経路です。dry（bus 無し）と、`output("sum643")
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1535-1554
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1550-1569
         [
           'var global = init GLOBAL',
           'global.key("C")',
