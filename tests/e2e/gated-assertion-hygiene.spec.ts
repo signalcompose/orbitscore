@@ -65,4 +65,33 @@ describe('gated E2E assertion hygiene', () => {
         'be spawned. Hardcoding a path reintroduces the very failure the guard exists to stop.',
     ).toBe(true)
   })
+
+  it('keeps the stale guard off cargo targets it can never rebuild', () => {
+    // 🔴 #713: ガードが `rust/**/tests/*.rs` まで mtime 比較の対象にしていたため、
+    // **解消不能な赤**になり実機 gated が全部落ちた。統合テストは別 cargo ターゲットで
+    // daemon バイナリに入らないので、cargo は正しく何もビルドせず（`Finished in 0.21s`）、
+    // バイナリの mtime は永久に更新されない。mtime は `git checkout` で動くので、
+    // ブランチを行き来しただけで発火する。
+    //
+    // ⚠️ この検査は「除外していること」だけを見る。**`src/` の除外は別の話**で、
+    // そちらを除外したらガードの目的自体が失われる（下の逆方向の検査）。
+    expect(
+      /entry\.name === 'tests' \|\| entry\.name === 'benches' \|\| entry\.name === 'examples'/.test(
+        source,
+      ),
+      'The stale-binary guard must skip tests/benches/examples: they are separate cargo ' +
+        'targets that never enter the daemon binary, so cargo will not rebuild for them and ' +
+        'the guard can never be satisfied (#713).',
+    ).toBe(true)
+  })
+
+  it('still lets the stale guard see the sources the daemon is built from', () => {
+    // 逆方向: #713 の修正が行きすぎて `src` まで除外したら、ガードは**古いバイナリを
+    // 見逃す**ようになる。それは CLAUDE.md「実機テストは最新ビルドで走る」に反する。
+    expect(
+      /entry\.name === 'src'/.test(source),
+      'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +
+        'binary pass, which is exactly what the guard exists to prevent.',
+    ).toBe(false)
+  })
 })

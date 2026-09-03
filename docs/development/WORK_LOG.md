@@ -1039,11 +1039,144 @@ owner 指示:
   扱う（「研究トラック」という別枠に入れない）。地図 §4.M の見出しを
   「研究・作品トラック（🔴 このリポジトリでは進めない）」へ変更
 
+## 2026-09-03: 死んだ `.env.example` を削除（#708）
+
+**実害**: sandbox 内でフック付きコミットが**必ず失敗**していた。
+
+```
+[FAILED] error: lstat(".env.example"): Operation not permitted
+  ✖ lint-staged failed due to a git error.
+```
+
+Claude Code の sandbox は `./.env*` の読み取りを拒否する（秘密の保護）。`lint-staged` は
+コミット前に `git stash` するので、`.env.example` を lstat した時点で落ちる。
+🔴 **エラーが「git error」としか出ないため lint の失敗と紛らわしく**、本日の PR-E1 でも
+原因調査に時間を使った。
+
+**なぜあったか**: `9a7a7bae`（2025-10-26）で BFG により `.env` を履歴から削除した際、
+テンプレートとして作られた。**その後、参照する仕組みが消えていた**:
+
+| 確認 | 結果 |
+|---|---|
+| 中身 | Slack 通知用 env 4 個 |
+| その env を読むコード | **0 件** |
+| `.env` を読み込む仕組み | **`dotenv` 依存なし。何も読んでいない** |
+| Slack 連携の実体 | **無い**（`slack` のヒットは SuperCollider の vendor と英単語のみ） |
+
+**残した注意点**: `.gitignore` の `!.env.example` / `!.env.sample` / `!.env.template` は
+**外部ツール管理ブロック**（`[code:security-patterns:fbe2794b]`・生成元はリポジトリ内に無い）
+なので触っていない。したがって**将来 `.env.example` を再び置くと同じ問題が再発する**。
+
+## 2026-09-03: stale ガードが再ビルド不能なファイルで発火していた（#713）
+
+**実害**: 🔴 **実機 gated E2E が起動段階で全部落ちる。しかもガードが指示する対処では解消しない。**
+
+```
+Error: gated E2E: the daemon binary is older than the Rust sources, so this run would measure stale code.
+  newest source: rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs
+  binary:        2026-09-02T02:05:35.862Z
+  source:        2026-09-03T00:53:01.573Z
+```
+
+指示どおり `npm run test:e2e:gated` を回しても `pretest` の cargo は
+`Finished release profile in 0.21s` で**何もビルドしない**。当然で、そのファイルは
+`orbit-vst3-host` の**統合テストターゲット**であり、`orbit-audio-daemon` のバイナリの
+依存グラフに入っていない。**バイナリの mtime は永久に更新されず、ガードは永久に赤。**
+
+**なぜ今まで出なかったか**: mtime は **`git checkout` で現在時刻に更新される**。
+ブランチを行き来すると無関係な Rust ファイルが「最新のソース」になる。
+
+**修正**（`assertDaemonBinaryIsNotStale`）: 走査から **`tests` / `benches` / `examples`** を除外。
+別の cargo ターゲットなので daemon バイナリに入らない。⚠️ **`src/` は除外しない** —
+daemon が依存するコードが新しければ、ガードは本来の役目どおり赤くなるべきである。
+
+**仕組みで守る**（規律を文章で持たない）: `gated-assertion-hygiene.spec.ts` に検査 2 本。
+
+| 検査 | red になる条件 |
+|---|---|
+| 除外の維持 | `tests` / `benches` / `examples` の除外が消えたら |
+| **行きすぎの防止** | **`src` まで除外したら**（ガードの目的自体が失われる） |
+
+**変異で両方向を確認した**（実出力）:
+
+```
+変異A: 除外を消す        → × keeps the stale guard off cargo targets it can never rebuild
+変異B: src も除外する    → × still lets the stale guard see the sources the daemon is built from
+restore 後              → Tests  5 passed (5)   ／ cmp で復元一致を確認
+```
+
+### 🔴 副産物: 実機 gated は現在 main で 11 件が意図的に red
+
+ガードを直して初めて中身が走り、**20 件中 9 passed / 11 failed** だと分かった。
+これは**退行ではなく、修正より先に書かれたテスト**である（一次情報:
+`docs/design/649-audio-line-design.md` §B-0「**E2E-1 を先に書いて red 固定**」)。
+修正は**段 1**（PR-O2 / #649・plan §3「段 1 の結果: `global.gain(-6)` が instrument に効く」）。
+
+**したがって段 0 の小 PR のゲートは「実機 gated 全通し」にできない。**
+正しい判定は **「失敗集合が before/after で同一」**（新しい失敗を作っていない）。
+baseline（main + 本修正・2026-09-03 実測）:
+
+```
+#643 E2E-1〜E2E-7（7 件）
+auto-records and restores all five plugin receiver kinds across a restart without explicit saves
+drives real OrbitStudio end-to-end: diagnostics-on-open, run_selection, live edit, capture verification
+replaces a playing instrument across CLAP/VST3 ... (#618 E1-E6)
+steps the live playhead through an instrument() sequence, rests included
+```
+
+E2E-2 / E2E-3 の dry RMS が **ちょうど 0**、E2E-1 の比が **1.27**（gain が効いていない値）
+という内容も、段 1 が直す欠陥と一致している。
+
 ## 束 668-e2e-foundation — E2E 基盤（段 0・安全網）
 
 正本: [`docs/design/668-e2e-foundation-design.md`](../design/668-e2e-foundation-design.md) /
 [`docs/planning/IMPLEMENTATION_PLAN_2026-09.md`](../planning/IMPLEMENTATION_PLAN_2026-09.md) §1.10。
 束ブランチ運用（[`BUNDLE_BRANCH_WORKFLOW.md`](BUNDLE_BRANCH_WORKFLOW.md)）の最初の束。
+
+### PR-E2: 共通 helper を切り出す
+
+正本: 設計 §4.1〜4.5。**実装は Codex**（`gpt-5.6-sol` / effort high）、**検証は main**。
+
+**追加**（`tests/e2e/helpers/`・計 524 行）:
+
+| モジュール | 中身 |
+|---|---|
+| `engine-log.ts` | `LOG_WINDOW_LINES` / `countLogMarker` / `countErrors` / `errorBaseline` / `expectNoNewErrors`（`toBeLessThanOrEqual`）/ `expectLogMarkerAtLeast` |
+| `gated-session.ts` | `GatedCatalog` / `GatedSession` / `captureWavPath` / `createGatedSession` |
+| `run-score.ts` | `ScoreSource` / `CaptureWindows` / `ScoreRunContext` / `runScore` |
+| `wait-for-file.ts` | `waitForFile` / `waitForMatchingFile`（`minBytes` つき — 生成と書き込みが別なので存在だけ見ると 0 バイトを掴む） |
+| `run-cli.ts` | `CliResult` / `runOrbitscoreCli`（`replay` / `render` の E2E 用。MCP を通らない唯一の例外） |
+
+**gated spec の変更は機械的置換のみ**（+18/−28）。シナリオのロジック・アサーション順序は無変更:
+
+- 🔴 **`countErrors` の 7 重定義が 1 本になった。** 変更前の定義位置は
+  `496 / 2144 / 2722 / 3155 / 3461 / 3969 / 4464` 行（発注時の実測と完全一致）。
+  変更後 `grep -c "const countErrors = (log"` = **0**
+- 🔴 **capture WAV のパス構築 11 箇所を `captureWavPath` に統一。** 変更前は
+  `ORBIT_KEEP_CAPTURES` を見るのが **492 行の 1 箇所だけ**で、残りは素の `path.join` だったため
+  **落ちた瞬間に証拠の WAV が消えていた**。`ORBIT_KEEP_CAPTURES` 未設定時のパスが
+  変更前と同一であることを実測で確認（接頭辞 `643-` は元から両分岐に付いていた）
+- 636 行のローカル変数 `captureWavPath` が import した関数名と衝突するため
+  `captureWavFile` にリネーム（参照 3 箇所も追随）
+
+**main の受け入れ監査で 1 件直した**（Codex は「食い違いなし」と報告していた）:
+
+> 🔴 `runScore` の `evaluate` が **設計 §4.2 に反して `isError` を assert していた**。
+> コメントには設計の文言（「`ok` に assert しない」）が書いてあるのに、コードが逆をしていた。
+> **診断が出ることを確かめる E2E**（doc 610 の異常系は「この譜面は診断を出す」が判定条件）で
+> `runScore` が使えなくなるため、設計どおり assert しない形に直した。
+> 診断の判定は `engine-log.ts` の `expectNoNewErrors` / `expectLogMarkerAtLeast` が担う。
+
+**検証**（main が sandbox 外で回した実測）:
+
+- `npx tsc --noEmit` / `npx eslint tests/e2e` → 0
+- `npm test` → **2167 passed / 48 skipped**（gated は 20 tests / 20 skipped = `it(` を増減させていない）
+- `node sites/dev/scripts/check-citations.mjs` → **904 verified / 0 failed**
+  （gated spec の行が動いたので 44 件ずれ、40 件は `--fix`、4 件は `captureWavFile` の
+  リネームで本文が変わったため手で修正）
+
+**残る注意**: `runScore` は本 PR ではどのシナリオからも使われていない（設計どおり「既存 20 本は
+書き換えない」）。**最初の消費者は PR-E3**（`channelRms` を足す）なので、実行での検証はそこで付く。
 
 ### PR-E1: gated E2E の走査先を 1 箇所にする
 

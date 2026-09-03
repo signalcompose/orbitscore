@@ -386,7 +386,7 @@ check at **module load time** of a gated run: if the daemon binary that will act
 `Cargo.toml`, it fails before running a single test.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:129-143
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:146-160
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
