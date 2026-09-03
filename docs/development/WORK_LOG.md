@@ -1067,6 +1067,107 @@ Claude Code の sandbox は `./.env*` の読み取りを拒否する（秘密の
 **外部ツール管理ブロック**（`[code:security-patterns:fbe2794b]`・生成元はリポジトリ内に無い）
 なので触っていない。したがって**将来 `.env.example` を再び置くと同じ問題が再発する**。
 
+## 2026-09-03: stale ガードが再ビルド不能なファイルで発火していた（#713）
+
+**実害**: 🔴 **実機 gated E2E が起動段階で全部落ちる。しかもガードが指示する対処では解消しない。**
+
+```
+Error: gated E2E: the daemon binary is older than the Rust sources, so this run would measure stale code.
+  newest source: rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs
+  binary:        2026-09-02T02:05:35.862Z
+  source:        2026-09-03T00:53:01.573Z
+```
+
+指示どおり `npm run test:e2e:gated` を回しても `pretest` の cargo は
+`Finished release profile in 0.21s` で**何もビルドしない**。当然で、そのファイルは
+`orbit-vst3-host` の**統合テストターゲット**であり、`orbit-audio-daemon` のバイナリの
+依存グラフに入っていない。**バイナリの mtime は永久に更新されず、ガードは永久に赤。**
+
+**なぜ今まで出なかったか**: mtime は **`git checkout` で現在時刻に更新される**。
+ブランチを行き来すると無関係な Rust ファイルが「最新のソース」になる。
+
+**修正**（`assertDaemonBinaryIsNotStale`）: 走査から **`tests` / `benches` / `examples`** を除外。
+別の cargo ターゲットなので daemon バイナリに入らない。⚠️ **`src/` は除外しない** —
+daemon が依存するコードが新しければ、ガードは本来の役目どおり赤くなるべきである。
+
+**仕組みで守る**（規律を文章で持たない）: `gated-assertion-hygiene.spec.ts` に検査 2 本。
+
+| 検査 | red になる条件 |
+|---|---|
+| 除外の維持 | `tests` / `benches` / `examples` の除外が消えたら |
+| **行きすぎの防止** | **`src` まで除外したら**（ガードの目的自体が失われる） |
+
+**変異で両方向を確認した**（実出力）:
+
+```
+変異A: 除外を消す        → × keeps the stale guard off cargo targets it can never rebuild
+変異B: src も除外する    → × still lets the stale guard see the sources the daemon is built from
+restore 後              → Tests  5 passed (5)   ／ cmp で復元一致を確認
+```
+
+### 🔴 副産物: 実機 gated は現在 main で 11 件が意図的に red
+
+ガードを直して初めて中身が走り、**20 件中 9 passed / 11 failed** だと分かった。
+これは**退行ではなく、修正より先に書かれたテスト**である（一次情報:
+`docs/design/649-audio-line-design.md` §B-0「**E2E-1 を先に書いて red 固定**」)。
+修正は**段 1**（PR-O2 / #649・plan §3「段 1 の結果: `global.gain(-6)` が instrument に効く」）。
+
+**したがって段 0 の小 PR のゲートは「実機 gated 全通し」にできない。**
+正しい判定は **「失敗集合が before/after で同一」**（新しい失敗を作っていない）。
+baseline（main + 本修正・2026-09-03 実測）:
+
+```
+#643 E2E-1〜E2E-7（7 件）
+auto-records and restores all five plugin receiver kinds across a restart without explicit saves
+drives real OrbitStudio end-to-end: diagnostics-on-open, run_selection, live edit, capture verification
+replaces a playing instrument across CLAP/VST3 ... (#618 E1-E6)
+steps the live playhead through an instrument() sequence, rests included
+```
+
+E2E-2 / E2E-3 の dry RMS が **ちょうど 0**、E2E-1 の比が **1.27**（gain が効いていない値）
+という内容も、段 1 が直す欠陥と一致している。
+
+## 2026-09-03: #713 のガード変更に dev 学習サイトを追従させた（docs のみ）
+
+**対象**: PR [#714](https://github.com/signalcompose/orbitscore/pull/714)（merge commit `f006a51`）。
+コード・テストは一切変更していない。
+
+PR #714 は引用のアンカー（`// FILE:START-END` 形式の見出し行）を直したが、**引用を囲む本文**と
+`## Sources` の行範囲は旧状態のままだった。`docs:check` は前者しか検査しないので、後者は
+red にならずに残った。この 2 種を追従させた。
+
+**本文の乖離 2 件**（どちらも #714 で挙動が変わった箇所を古い説明のまま記述していた）:
+
+| 場所 | 旧記述 | 実態 |
+|---|---|---|
+| `sites/dev/rust-engine/capture-verification.md` / `sites/dev/editor/mcp-and-gated-e2e.md` | ガードは `rust/**/*.rs` \| `Cargo.toml` を走査 | `tests` / `benches` / `examples` を除外する（#713） |
+| `sites/dev/editor/mcp-and-gated-e2e.md` | 「残り **2 本**」（アサーション衛生は 3 本） | #713 で 2 本増えて **5 本** |
+
+両章に #713 の節を足した。走査除外の理由（別 cargo ターゲットなので daemon バイナリに入らない・
+`git checkout` が mtime を動かすので解消不能な赤になる）と、`src/` を除外しない理由、
+`gated-assertion-hygiene.spec.ts` の 2 本が両方向を留めていることを書いた。
+ja / en 両方（STYLE_GUIDE のバイリンガル必須）。
+
+**`## Sources` の行範囲**: ガードが 15 行伸びたので、`orbitstudio-mcp-gated.spec.ts` の
+128 行目以降を指す参照はすべて +15 ずれていた。6 章 × ja/en で 12 ファイル分を直した
+（`78-152` → `78-166`、`1434-1468` → `1449-1483` など）。境界行は実ファイルで確認済み。
+
+**frontmatter**: 本文を実質的に足した 2 章（RE-4 / IV-3）の `verified-against` を
+`69dc968` → `f006a51`、`verified-at` を `2026-09-03` に更新した（STYLE_GUIDE
+「章本文を実質的に書き直したとき: 必ず最新 commit に更新する」）。
+
+### 追従の過程で見えた、直していない点
+
+このセッションでは**指摘のみ**（テスト・実装は変更しない方針のため）。詳細は PR 本文。
+
+1. `tests/e2e/gated-assertion-hygiene.spec.ts:76-83` / `:89-93` は gated spec の**ソース文字列**を
+   正規表現で見るだけなので、「除外ブロックを `walk(full)` の**後ろ**へ動かす」変異
+   （除外が到達不能になり #713 の赤が戻る）で **2 本とも緑のまま**になる
+2. 同 `:77` は式の**字面**に依存するので、`Set` へ畳む等の挙動不変なリファクタで red になる
+3. `assertDaemonBinaryIsNotStale()` は `tests/e2e/orbitstudio-mcp-gated.spec.ts:164-166` の
+   `gated && appAvailable` の下でしか呼ばれない。CI は全ジョブ非 gated なので、
+   #713 で足した 15 行は**どこでも 1 行も実行されていない**
+
 ## 2026-09-03: PR #709 追従 — 失効した landmine 記述を更新
 
 PR #709（`7d2df31`・上記 #708）で `.env.example` を削除した結果、

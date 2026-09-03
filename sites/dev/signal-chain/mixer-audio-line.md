@@ -677,7 +677,7 @@ MCP 経由で駆動し、daemon の capture WAV を区間ごとに RMS 測定し
 0.15 秒）を取って遷移の影響を除きます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:598-603
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:613-618
     const rms = (name: string, guardSec = 0.15): number => {
       const selected = windows(name, guardSec)
       return Math.sqrt(
@@ -690,7 +690,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1434-1468
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1449-1483
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -733,7 +733,7 @@ E2E-4 は sum + aux の経路です。dry（bus 無し）と、`output("sum643")
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1561-1580
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1576-1595
         [
           'var global = init GLOBAL',
           'global.key("C")',
@@ -910,9 +910,9 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - `rust/crates/orbit-audio-native/src/output.rs:1078-1094` — bus 無し経路 `render_engine_with_source_outputs`
 - `rust/crates/orbit-audio-native/src/output.rs:2017-2060` — unit test `global_gain_scales_instrument_contribution`
 - `rust/crates/orbit-audio-core/src/scheduler.rs:375-460` — `render_multi_feeds`（feed 加算と gain ramp）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:501-605` — `captureInstrumentScenario` / `rms()`
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1434-1468` — E2E-1（`global.gain(-6)`）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1555-1597` — E2E-4（`output(sum)` + `send(aux, 0.5)`）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:516-620` — `captureInstrumentScenario` / `rms()`
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1449-1483` — E2E-1（`global.gain(-6)`）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1570-1612` — E2E-4（`output(sum)` + `send(aux, 0.5)`）
 - Issue [#453](https://github.com/signalcompose/orbitscore/issues/453) / [#459](https://github.com/signalcompose/orbitscore/issues/459) — ミキサー DSL（sum / aux / send）
 - Issue [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#648](https://github.com/signalcompose/orbitscore/pull/648) — ミキサーの土台と instrument source 化・マスターフェーダー配線
 - Issue [#649](https://github.com/signalcompose/orbitscore/issues/649) — オーディオライン設計
