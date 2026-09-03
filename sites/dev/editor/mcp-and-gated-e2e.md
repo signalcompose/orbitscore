@@ -1,12 +1,12 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: affdf69
+verified-at: "2026-09-03"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -306,7 +306,7 @@ engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setup
 
 「ユニットテストは全て緑・実機 E2E だけが捕まえた」— これは本章全体のテーマの縮図です。
 
-では `#614` 後は `get_log` を見なくてよいのでしょうか。**そうではありません。** `ok` が保証するのは「マーカー到達までに engine が上げた診断が無い」ことまでです。評価が返ったあとに非同期に起きる失敗は、依然として stdout/stderr にしか現れません。gated spec 自身がその使い分けを示しています。`instSeq.instrument(...)` を `evaluate_orbitscore` で評価して `isError` が `false` であることを確認したあと、`sleep(6000)` してから `get_log` を読み、`[OUTPROC_ATTACH_FAILED]` が無いことを別途 assert しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:1019-1031`）。out-of-process の CLAP attach は spawn + IPC handshake を伴うため、評価の完了と attach の成否は別のタイムラインにあるからです。
+では `#614` 後は `get_log` を見なくてよいのでしょうか。**そうではありません。** `ok` が保証するのは「マーカー到達までに engine が上げた診断が無い」ことまでです。評価が返ったあとに非同期に起きる失敗は、依然として stdout/stderr にしか現れません。gated spec 自身がその使い分けを示しています。`instSeq.instrument(...)` を `evaluate_orbitscore` で評価して `isError` が `false` であることを確認したあと、`sleep(6000)` してから `get_log` を読み、`[OUTPROC_ATTACH_FAILED]` が無いことを別途 assert しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:1017-1029`）。out-of-process の CLAP attach は spawn + IPC handshake を伴うため、評価の完了と attach の成否は別のタイムラインにあるからです。
 
 `log-ring.ts` のコメントには `#614` より前の記述（「`get_log` はエンジン側のエラーが現れる**唯一のチャネル**である」）が残っていましたが、本 PR で「**評価が返ったあとに非同期に起きる失敗が現れる唯一のチャネル**」へ改めました。同時に `CLAUDE.md` の 3 箇所（「`ok` に assert しても何も証明しない」）も、`#614` 後の意味へ更新しています。**`ok` が意味を持つ範囲は広がったが、`get_log` が唯一の観測点である領域は残っている** — これが 2026-09-02 時点の正確な理解です。
 
@@ -536,7 +536,7 @@ export function decideStartEngineForAgent(
 }
 ```
 
-旧実装はここで `ok: true, 'engine already running'` を返して `captureWav` を黙って捨てていました。呼び出し側は録れていると信じ、`capture.wav` を読む段で初めて `ENOENT` に気づく — `#528` の回帰ピンとして、gated spec は「拒否されること」と「拒否しても engine が落ちないこと」の両方を assert しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:846-855`）。
+旧実装はここで `ok: true, 'engine already running'` を返して `captureWav` を黙って捨てていました。呼び出し側は録れていると信じ、`capture.wav` を読む段で初めて `ENOENT` に気づく — `#528` の回帰ピンとして、gated spec は「拒否されること」と「拒否しても engine が落ちないこと」の両方を assert しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:844-853`）。
 
 ### テスト一覧
 
@@ -544,15 +544,78 @@ export function decideStartEngineForAgent(
 
 | 行 | テスト名（要約） | 主な oracle |
 |---|---|---|
-| 638 | 実 OrbitStudio を端から端まで: diagnostics-on-open・`run_selection`・live edit・capture 検証 | onset 間隔（120 → 180 bpm） |
-| 1435–1689 | #643 E2E-1〜7: `global.gain(-6)` / seq rack / attach 中のギャップ / `output(sum)` + `send(aux)` / instrument 差し替え / slot 解放 / 宣言なし instrument | 区間 RMS 比 |
-| 1734, 1810 | #633 E2E-1〜2: 同一 insert 複数の UI 開閉・index シフト後の close | `open_plugin_ui` / `close_plugin_ui` 応答 |
-| 1880 | カタログ v2 再スキャン・壊れたバンドルの報告 | `rescan_plugins` の failures |
-| 1951 | 曖昧な bare mixer 名を `run_selection` + `get_log` で報告 | ログ文言 |
-| 2042 | `instrument()` シーケンスで playhead が休符も含めて刻む（#654） | `[STEP]` 行の slot 集合 |
-| 2141, 2386, 2607 | plugin state の再起動復元（instrument / sum-bus insert / 5 種 receiver 自動記録） | 測定ピッチ・RMS |
-| 3163, 3428 | 再生中の instrument / effect 差し替え（#618 / #625） | 音・state・プロセス・失敗・UI |
-| 3969, 4483 | #628 R28: rack chain の音のメインライン / master + 標準要素のエラー | RMS・child PID |
+| 636 | 実 OrbitStudio を端から端まで: diagnostics-on-open・`run_selection`・live edit・capture 検証 | onset 間隔（120 → 180 bpm） |
+| 1433–1687 | #643 E2E-1〜7: `global.gain(-6)` / seq rack / attach 中のギャップ / `output(sum)` + `send(aux)` / instrument 差し替え / slot 解放 / 宣言なし instrument | 区間 RMS 比 |
+| 1732, 1808 | #633 E2E-1〜2: 同一 insert 複数の UI 開閉・index シフト後の close | `open_plugin_ui` / `close_plugin_ui` 応答 |
+| 1878 | カタログ v2 再スキャン・壊れたバンドルの報告 | `rescan_plugins` の failures |
+| 1949 | 曖昧な bare mixer 名を `run_selection` + `get_log` で報告 | ログ文言 |
+| 2040 | `instrument()` シーケンスで playhead が休符も含めて刻む（#654） | `[STEP]` 行の slot 集合 |
+| 2139, 2381, 2602 | plugin state の再起動復元（instrument / sum-bus insert / 5 種 receiver 自動記録） | 測定ピッチ・RMS |
+| 3157, 3421 | 再生中の instrument / effect 差し替え（#618 / #625） | 音・state・プロセス・失敗・UI |
+| 3961, 4473 | #628 R28: rack chain の音のメインライン / master + 標準要素のエラー | RMS・child PID |
+
+---
+
+### 共有ハーネス層 — `tests/e2e/helpers/`
+
+2026-09-03（#668 PR-E2）に、シナリオがそれぞれ手元で持っていた小さな道具が `tests/e2e/helpers/` の 5 モジュールへ集約されました。**既存 20 本のシナリオそのものは書き換えられていません** — 差し替えられたのは重複していた定義とパス組み立てだけです。
+
+| モジュール | 何を持つか |
+|---|---|
+| `engine-log.ts` | `LOG_WINDOW_LINES` / `countLogMarker` / `countErrors` / `errorBaseline` / `expectNoNewErrors` / `expectLogMarkerAtLeast` |
+| `gated-session.ts` | `GatedCatalog` / `GatedSession` / `captureWavPath` / `createGatedSession` |
+| `run-score.ts` | `ScoreSource` / `CaptureWindows` / `ScoreRunContext` / `runScore` |
+| `wait-for-file.ts` | `waitForFile` / `waitForMatchingFile` |
+| `run-cli.ts` | `CliResult` / `runOrbitscoreCli` |
+
+`countErrors` は gated spec の中に **7 箇所**、それぞれ独立に定義されていました（変更前の行番号で `:496 / 2144 / 2722 / 3155 / 3461 / 3969 / 4464`）。同じ 1 行が 7 回書かれていたので、ERROR 件数の数え方を変えたければ 7 箇所直さねばならず、直し漏れは静かに残ります。統合先は `expectNoNewErrors` で、比較が `<=` であることがここで 1 箇所に固定されます。
+
+```typescript
+// tests/e2e/helpers/engine-log.ts:51-62
+export async function expectNoNewErrors(
+  client: McpClient,
+  baseline: number,
+  label: string,
+): Promise<void> {
+  const log = (await client.call('get_log', { lines: LOG_WINDOW_LINES })).text
+  const current = countErrors(log)
+  expect(
+    current,
+    `${label} must add no ERROR lines. Log tail: ${log.slice(-1600)}`,
+  ).toBeLessThanOrEqual(baseline)
+}
+```
+
+capture WAV のパス組み立ても同じように散っていました。spec の中でパスを組む箇所は **13 箇所**ありますが、**`ORBIT_KEEP_CAPTURES` を見ていたのは `captureInstrumentScenario` の 1 箇所だけ**で（変更前 `:501-509`）、残り 12 箇所は素の `path.join(tmpRoot, ...)` でした。つまりそのシナリオが落ちると、証拠になるはずの WAV も `afterAll` の `tmpRoot` 削除で一緒に消えていました。13 箇所すべてが `captureWavPath()` を通るようになり、環境変数の効き方が揃います。
+
+```typescript
+// tests/e2e/helpers/gated-session.ts:47-51
+export function captureWavPath(tmpRoot: string, slug: string): string {
+  const dir =
+    process.env.ORBIT_KEEP_CAPTURES !== undefined ? process.env.ORBIT_KEEP_CAPTURES : tmpRoot
+  return path.join(dir, `${slug}.wav`)
+}
+```
+
+`runScore` は「譜面を work copy にして、エディタ経路（`open_file` → `set_selection` → `run_selection`）で評価し、要求されれば capture を解析して区間 RMS を返す」までを 1 関数にしたものです。そこにある `evaluate` が `ok` / `isError` に assert しないのは意図した設計で、理由は本章の [`ok` の節](#evaluate-orbitscore-の-ok-は何を意味するか)と同じところにあります。
+
+```typescript
+// tests/e2e/helpers/run-score.ts:187-196
+  const evaluate = async (code: string): Promise<void> => {
+    // 🔴 **`ok` / `isError` に assert しない**（設計 §4.2）。診断は `engine-log.ts` の
+    // `expectNoNewErrors` / `expectLogMarkerAtLeast` で見る。
+    //
+    // なぜ assert しないか: **診断が出ることを確かめる E2E がある**（doc 610 の異常系は
+    // 「この譜面は診断を出す」が判定条件）。ここで弾くと、そちらが `runScore` を使えない。
+    // 逆に #614 以降 `ok` は「評価完了までに診断が無かった」までしか保証しないので、
+    // 正常系でも `ok` は十分条件にならない（評価後に非同期で起きる失敗は `get_log` だけに出る）。
+    await client.call('evaluate_orbitscore', { code })
+  }
+```
+
+PR-E2 の時点で `runScore` を呼ぶシナリオはまだ 1 本もありません（既存 20 本を書き換えない方針のため）。最初の利用者は PR-E3 の予定です。
+
+⚠️ `tests/e2e/helpers/` は `gated-sources.ts` の `GATED_SOURCE_GLOBS`（`orbitstudio-mcp-gated.spec.ts` と `gated/**`）に**含まれません**。後述のラチェットとアサーション衛生はどちらも `readGatedSources()` の返す文字列だけを読むので、helper 側のソースは走査対象外です。
 
 ---
 
@@ -637,7 +700,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 
 このアサーションが何を捕まえたかは、WORK_LOG 6.415 に記録されています。2026-08-29、この E2E を書いて実機で走らせたところ、**`global.gain()` が instrument にまったく効いていない**ことが分かりました。原因は `output.rs` でミキサーの stage から master へ合流する音が **master gain を掛けた後に加算されていた**ことです。各層は成功を返し、ERROR は 1 行も出ず、変異検証 35 件もユニットテスト 2149 件も捕まえていませんでした。CLAUDE.md がこの事例を「E2E が最重要」の根拠として引くのは、それが「**正しく見えるが合成が違う**」を捕まえられる唯一の層だったからです。
 
-同じ日に `ORBIT_KEEP_CAPTURES=<dir>` が正式化されました。指定するとキャプチャ WAV を tmpRoot ではなくそのディレクトリに残します。「ハーネスのアサーションは窓の中の 1 つの数しか見せないが、欠陥は窓の外にいることがある」（6.415）ためです。
+同じ日に `ORBIT_KEEP_CAPTURES=<dir>` が正式化されました。指定するとキャプチャ WAV を tmpRoot ではなくそのディレクトリに残します。「ハーネスのアサーションは窓の中の 1 つの数しか見せないが、欠陥は窓の外にいることがある」（6.415）ためです。ただしこの環境変数が spec 全体で効くようになったのは #668 PR-E2 以降です — それまでは 13 箇所のパス組み立てのうち 1 箇所しか見ていませんでした（[共有ハーネス層](#共有ハーネス層-—-tests-e2e-helpers)）。
 
 ---
 
@@ -648,7 +711,7 @@ WORK_LOG 6.418 のタイトルは「今日の是正を『知識』から『再�
 ### DSL 網羅率のラチェット
 
 ```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:44-54
+// tests/e2e/dsl-e2e-coverage.spec.ts:47-57
 function methodsExercisedByGatedE2E(): ReadonlySet<string> {
   // 🔴 走査先は `gated-sources.ts` が持つ（#668 §3.4・PR-E1）。ここで 1 ファイルを決め打ちすると、
   // シナリオを別ファイルへ出した時に**カバー済みの語が未カバー扱いになって red** になる。
@@ -665,8 +728,8 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 gated spec の中に `.<name>(` が現れるかどうかだけを見ます。語彙側は `packages/engine/src/signal-chain/runtime` の `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` — インタプリタの dispatch テーブルそのものです。
 
 ```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:106-116
-  it('does not leave a new sequence method untested on real hardware', () => {
+// tests/e2e/dsl-e2e-coverage.spec.ts:150-160
+  it('A-1 does not leave a new sequence method untested on real hardware', () => {
     const now = uncovered(SEQUENCE_DSL_METHODS)
     const baseline = new Set(SEQUENCE_UNCOVERED_BASELINE)
     const regressions = now.filter((name) => !baseline.has(name))
@@ -1005,11 +1068,17 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio 経路の `[STEP]` 発生源
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()`（#654）
 - `packages/engine/src/core/sequence.ts:1381-1404` — note 経路の marker 積み込みとデデュープ（#654）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-151` — env contract・stale artifact ガード
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:358-635` — describe のセットアップ・`captureInstrumentScenario` の RMS ヘルパ・teardown
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:637-1432` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2032-2138` — #654 playhead E2E
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-153` — env contract・stale artifact ガード
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:360-633` — describe のセットアップ・`captureInstrumentScenario` の RMS ヘルパ・teardown
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:635-1430` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2030-2136` — #654 playhead E2E
 - `tests/e2e/helpers/mcp-client.ts:1-174` — 生 JSON-RPC クライアント
+- `tests/e2e/gated-sources.ts:1-106` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）
+- `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` の判定（`countErrors` 7 重定義の統合先・#668 PR-E2）
+- `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` と `captureWavPath()`
+- `tests/e2e/helpers/run-score.ts:1-272` — 譜面を work copy にして実機で評価する 1 関数
+- `tests/e2e/helpers/wait-for-file.ts:1-57` — 生成物の待ち合わせ（`minBytes` つき）
+- `tests/e2e/helpers/run-cli.ts:1-62` — `orbitscore replay` / `render` の子プロセス実行（MCP を通らない唯一の例外）
 - `tests/e2e/dsl-e2e-coverage.spec.ts:1-146` — DSL 網羅率ラチェット
 - `tests/e2e/gated-assertion-hygiene.spec.ts:1-66` — アサーション衛生
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixture
@@ -1027,3 +1096,4 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - Issue [#643](https://github.com/signalcompose/orbitscore/issues/643) — instrument のミキサー統合（E2E-1〜7）
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — capture ヘッダの定期 patch と stale ガード
 - Issue [#654](https://github.com/signalcompose/orbitscore/issues/654) — instrument シーケンスで playhead が動かない
+- Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E の基盤（PR-E1 `gated-sources.ts` / PR-E2 共有ハーネス層）

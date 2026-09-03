@@ -15,7 +15,7 @@ export class AudioTokenizer {
   private column: number = 1
 
   // Keywords that should be recognized
-  private static readonly KEYWORDS = new Set([
+  static readonly KEYWORDS: ReadonlySet<string> = new Set([
     'var',
     'init',
     'by',
@@ -284,3 +284,6 @@ export class AudioTokenizer {
     return tokens
   }
 }
+
+/** パーサの構文表面と tokenizer の予約語を照合するための公開 view。 */
+export const KEYWORDS = AudioTokenizer.KEYWORDS

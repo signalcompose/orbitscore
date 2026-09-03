@@ -457,7 +457,7 @@ DSL E2E の capture WAV 実測 peak = **0.25000**（WORK_LOG 6.258）— 独立�
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:99-111` — WAV header/物理サイズ突き合わせ（silent-failure ガード）
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:206-217` — `drops == 0` assert（teardown 前の silent-failure ガード）
 - `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:232-234` — `post_peak_bits`（lock-free peak 累積の実装）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:78-152` — stale artifact ガード（`assertDaemonBinaryIsNotStale`）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:80-154` — stale artifact ガード（`assertDaemonBinaryIsNotStale`）
 - `package.json:17-18` — `pretest:e2e:gated` / `test:e2e:gated`
 - [`docs/development/WORK_LOG.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/WORK_LOG.md) 6.415 / 6.416 / 6.417 — #643 master fader の発見、#651 の header patch と stale ガード、pretest 自動化
 - Issue [#307](https://github.com/signalcompose/orbitscore/issues/307) — capture seam realtime 配線

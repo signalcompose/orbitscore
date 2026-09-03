@@ -1133,6 +1133,31 @@ E2E-2 / E2E-3 の dry RMS が **ちょうど 0**、E2E-1 の比が **1.27**（ga
 [`docs/planning/IMPLEMENTATION_PLAN_2026-09.md`](../planning/IMPLEMENTATION_PLAN_2026-09.md) §1.10。
 束ブランチ運用（[`BUNDLE_BRANCH_WORKFLOW.md`](BUNDLE_BRANCH_WORKFLOW.md)）の最初の束。
 
+### PR-E2 追従: dev サイトを共有ハーネス層まで追従させる（docs のみ）
+
+PR #712（merge `affdf69`）に対するドキュメント追従。**実装・テストは一切変更していない。**
+
+**追加**（`sites/dev/editor/mcp-and-gated-e2e.md` と `sites/dev/en/` の同パス）:
+
+- 新節「共有ハーネス層 — `tests/e2e/helpers/`」。5 モジュールの一覧と、
+  `expectNoNewErrors`（`engine-log.ts:51-62`）/ `captureWavPath`（`gated-session.ts:47-51`）/
+  `runScore` の `evaluate`（`run-score.ts:187-196`）を verbatim 引用
+- 🔴 **capture パスの実測値は 13 箇所**（`grep -c "captureWavPath(" tests/e2e/orbitstudio-mcp-gated.spec.ts`）。
+  PR #712 の本文と上の PR-E2 節は「11 箇所」と書いているが、実ファイルは 13。
+  `ORBIT_KEEP_CAPTURES` を見ていたのが 1 箇所だけだった点は変わらない
+- `ORBIT_KEEP_CAPTURES` の既存段落に「spec 全体で効くようになったのは PR-E2 以降」を追記
+- `tests/e2e/helpers/` が `GATED_SOURCE_GLOBS`（`tests/e2e/gated-sources.ts:29-35`）に**含まれない**ことを明記
+
+**行番号の再アンカー**（PR #712 は fenced code block の引用ヘッダだけを直したので、
+散文中の行参照が残っていた）:
+
+- 「テスト一覧」表の 20 本の行番号（`638→636` 〜 `4483→4473`）
+- `plugin-ui.md` / `catalog.md` / `mixer-audio-line.md` / `signal-chain/index.md` /
+  `capture-verification.md` の Sources 節の行範囲（ja / en 各 5 ファイル）
+- 対応は old/new のテキスト一致で 1 行ずつ照合済み（推定ではない）
+
+**検証**: `npm run docs:build`（user / dev）と `npm run docs:check` はすべて緑。
+
 ### PR-E2: 共通 helper を切り出す
 
 正本: 設計 §4.1〜4.5。**実装は Codex**（`gpt-5.6-sol` / effort high）、**検証は main**。
@@ -1208,6 +1233,98 @@ E2E-2 / E2E-3 の dry RMS が **ちょうど 0**、E2E-1 の比が **1.27**（ga
 - 🔴 **層が効いていることを実行で確認した。** `tests/e2e/gated/__probe.ts` に ERROR 件数の
   厳密等価を置くと衛生検査が **red** になり、**`gated/__probe.ts:7`** と報告した。
   この PR 以前ならこのファイルは走査されず、検査は黙って通っていた。確認後に削除し、緑に戻した
+
+### PR-E4: DSL 構文表面の正本と網羅ラチェット
+
+**なぜ入れるか**（設計 §3.1〜3.3）。従来のラチェットは `.name(` だけを走査するため、
+`play` のネスト、event modifier、tie、複数行 chain のような**メソッド呼び出しでない構文**を
+増やして E2E を書き忘れても green のままだった。production に 13 構文の正本を置き、語彙・
+構文・tokenizer keyword・台帳・観測タイプの退行を A-1〜A-5 で止める。
+
+**変更**:
+
+- `packages/engine/src/parser/dsl-surface.ts`（新規）— 設計 §3.1 の `DslSyntaxId` 13 個と
+  `DSL_SYNTAX_SURFACE`。推測による追加はしない
+- `tokenizer.ts` — `AudioTokenizer.KEYWORDS` を `static readonly` にし、読み取り専用の
+  `KEYWORDS` 名前付き export を追加。既存の `.has(id)` 呼び出しは不変
+- `tests/e2e/dsl-coverage-ledger.ts`（新規）— `ObservationKind` / `CoverageEntry` /
+  `DSL_COVERAGE_LEDGER`。E4 は E2E を増やさないため、台帳と smoke baseline は 0 から開始
+- `dsl-e2e-coverage.spec.ts` — A-1〜A-5。走査は `readGatedSources()` / `gatedItTitles()` を通し、
+  構文 baseline 13 個は減らす方向だけ、smoke baseline は増やさない
+
+**ラチェットの実効性**:
+
+- A-1: `SEQUENCE_DSL_METHODS` に `__a1_probe` → `expected [ '__a1_probe' ] to deeply equal []`
+- A-2: 構文正本に `a2-probe` → `expected [ 'a2-probe' ] to deeply equal []`
+- A-3: tokenizer に `A3_PROBE` → `unmappedKeywords: [ "A3_PROBE" ]`
+- A-4: 台帳に存在しないシナリオ → `missing gated scenario` を含む行を列挙して red
+- A-5: smoke 行を 1 件追加 → `expected 1 to be less than or equal to 0`
+
+各 probe は個別の red 確認直後に逆パッチで戻し、対象 spec は **9 passed** に復帰した。
+
+**検証**:
+
+- `npx tsc --noEmit -p tsconfig.json` → exit 0（出力なし）
+- `npx eslint packages/engine/src/parser tests/e2e` → exit 0（出力なし）
+- `npm test` → sandbox の `listen EPERM: operation not permitted 127.0.0.1` により
+  **105 failed / 2066 passed / 48 skipped**。権限回避は行わず実出力を記録
+- `cd sites/dev && node scripts/check-citations.mjs` → **904 citations verified / 0 failed**
+  （初回 6 件 red → `--fix` と引用本文の手修正で再アンカー）
+
+**設計との差分として残す事項**:
+
+- 現行 `gatedItTitles()` は curried な `it.skipIf(...)(title, ...)` 20 件を抽出できず 0 件を返す。
+  ブリーフどおり helper と gated spec は変更せず、E4 の台帳は空から開始した
+- tokenizer の `force` は `parse-statement.ts` で transport の `.force` modifier として受理されるが、
+  設計 §3.1 の 13 構文には独立 id が無い。正本は増やさず、A-3 では transport 3 id に対応づけた
+
+#### main の受け入れ監査で 1 件直した — `gatedItTitles()` が題名を 1 件も拾えていなかった
+
+🔴 **PR-E1 で main（私）が入れた `gatedItTitles()` のバグ。** gated suite は 20 箇所すべて
+
+```ts
+it.skipIf(!appAvailable)(
+  'drives real OrbitStudio end-to-end: …',
+```
+
+という**カリー化された呼び出し**で書かれており、題名は**2 つ目の呼び出しの第 1 引数**にある。
+PR-E1 の正規表現は `it(` の直後に文字列が来る前提だったので、**題名を 1 件も拾えていなかった。**
+
+**なぜ PR-E1 では気づけなかったか**: `gatedItTitles()` に**テストが無く、消費者もいなかった**。
+拾えなくても「照合対象が無い」だけで誰も困らない。**検査 A-4（台帳のシナリオが実在するか）が
+消費し始めた瞬間に、空振りで緑 → 正当な台帳エントリで誤 red、という壊れ方をする。**
+
+**修正**:
+
+- 正規表現を `it.skipIf(<cond>)(` のカリー形に対応させた（直呼びも引き続き拾う）
+- 🔴 **題名が 0 件なら throw する。** `readGatedSources()` には同じガードを入れていたのに、
+  題名側に入れ忘れていた。**黙って空を返す層は、消費者が現れるまで壊れていることが分からない**
+- `tests/e2e/gated-sources.spec.ts`（新規）— **走査の層に初めてテストを付けた**
+
+**変異で確認した（実出力）**:
+
+```
+旧正規表現に戻す + 台帳に実在シナリオを入れる
+  → × picks up titles from the curried it.skipIf(...) form the suite actually uses
+  → × returns titles that the coverage ledger can anchor to
+  → × A-4 keeps every coverage-ledger scenario anchored to a gated it title
+  → Error: gated E2E の it( 題名が 1 件も見つからない。…
+復元後 → Tests  13 passed (13)   ／ cmp で 2 ファイルの復元一致を確認
+```
+
+**A-1〜A-5 も 1 本ずつ変異で確認した**（main の実測）:
+
+| 変異 | red になった検査 |
+|---|---|
+| 構文 id を足して台帳に入れない | A-2 |
+| tokenizer に予約語を足す | A-3 |
+| 台帳に存在しないシナリオを書く | A-4 |
+| 台帳に `smoke` 行を足す | A-5（+ A-4） |
+
+いずれも restore 後に緑へ戻り、`cmp` で 3 ファイルの復元一致を確認した。
+
+**検証**（main が sandbox 外で回した実測）: `tsc` 0 / `eslint` 0 /
+`npm test` **2171 passed / 48 skipped**（+4 = A-2〜A-5）/ `check-citations.mjs` **904 verified / 0 failed**。
 
 ### PR-E3: capture の解析を per-channel でも取れるようにする
 

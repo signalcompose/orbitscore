@@ -94,13 +94,32 @@ export function readGatedSourceEntries(): readonly {
   }))
 }
 
-/** gated E2E の `it(...)` の題名。 */
+/**
+ * gated E2E の `it(...)` の題名。
+ *
+ * 🔴 **カリー化された呼び出しに対応すること。** この suite は
+ * `it.skipIf(!appAvailable)('title', ...)` の形で書かれており（`orbitstudio-mcp-gated.spec.ts:611`
+ * ほか 20 箇所）、題名は**2 つ目の呼び出しの第 1 引数**にある。
+ * `it(` の直後に文字列が来る前提の正規表現では **1 件も拾えない**。
+ *
+ * 実害（2026-09-03 実測）: 拾えないと #668-A の検査 A-4（台帳のシナリオが実在するか）が
+ * **空振りで緑になり、正当な台帳エントリを足した瞬間に誤って red になる**。
+ *
+ * @throws 題名が 1 件も見つからない場合（照合が黙って無意味になるのを防ぐ）
+ */
 export function gatedItTitles(): readonly string[] {
   const titles: string[] = []
+  // `it` / `it.only` / `it.skip` の直呼びと、`it.skipIf(<cond>)(` のカリー形の両方を拾う。
   for (const match of readGatedSources().matchAll(
-    /\bit(?:\.\w+)?\(\s*(['"`])((?:\\.|(?!\1).)*)\1/g,
+    /\bit(?:\.\w+)?(?:\([^)]*\))?\(\s*(['"`])((?:\\.|(?!\1).)*)\1/g,
   )) {
     titles.push(match[2])
+  }
+  if (titles.length === 0) {
+    throw new Error(
+      'gated E2E の it( 題名が 1 件も見つからない。' +
+        '照合（#668-A の A-4）が黙って無意味になるので、呼び出しの書き方を確認すること。',
+    )
   }
   return titles
 }
