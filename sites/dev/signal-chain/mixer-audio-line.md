@@ -910,9 +910,9 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - `rust/crates/orbit-audio-native/src/output.rs:1078-1094` — bus 無し経路 `render_engine_with_source_outputs`
 - `rust/crates/orbit-audio-native/src/output.rs:2017-2060` — unit test `global_gain_scales_instrument_contribution`
 - `rust/crates/orbit-audio-core/src/scheduler.rs:375-460` — `render_multi_feeds`（feed 加算と gain ramp）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:501-605` — `captureInstrumentScenario` / `rms()`
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1434-1468` — E2E-1（`global.gain(-6)`）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1555-1597` — E2E-4（`output(sum)` + `send(aux, 0.5)`）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:475-579` — `captureInstrumentScenario` / `rms()`
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1408-1442` — E2E-1（`global.gain(-6)`）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1529-1571` — E2E-4（`output(sum)` + `send(aux, 0.5)`）
 - Issue [#453](https://github.com/signalcompose/orbitscore/issues/453) / [#459](https://github.com/signalcompose/orbitscore/issues/459) — ミキサー DSL（sum / aux / send）
 - Issue [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#648](https://github.com/signalcompose/orbitscore/pull/648) — ミキサーの土台と instrument source 化・マスターフェーダー配線
 - Issue [#649](https://github.com/signalcompose/orbitscore/issues/649) — オーディオライン設計

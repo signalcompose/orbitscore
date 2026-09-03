@@ -1,8 +1,8 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 8bc65cf
+verified-at: "2026-09-03"
 status: draft
 ---
 
@@ -196,7 +196,7 @@ export function buildMcpServerUrl(port: number): string {
 
 `save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` / `register_mcp_server` はハンドラが optional で、無いホストでは登録されません。WCTM の pi ハーネスのような「別ホスト」がこの seam を再利用するときに、既存のスタブ suite を壊さないための配慮です。
 
-面白いのは、このカタログの大半が「人間がコマンドパレットや設定から到達できる操作」の写しであることです。`start_engine` は "Start Engine" コマンド、`configure_flash` は "Configure Flash"、`rescan_plugins` は "Rescan Plugin Catalog" — 各 description が対応するコマンド名を明示しています。**新しい観測手段を増やすときも MCP のツール面を増やさない**、という方針が gated spec の側にも見えます（`rackChildPidsFromLog` のコメント: 「**MCP の tool 表面を増やさず**、ERROR 計数や `[plugin-state]` 行と同じ `get_log` 経路で読めるようにしてある」）。
+面白いのは、このカタログの大半が「人間がコマンドパレットや設定から到達できる操作」の写しであることです。`start_engine` は "Start Engine" コマンド、`configure_flash` は "Configure Flash"、`rescan_plugins` は "Rescan Plugin Catalog" — 各 description が対応するコマンド名を明示しています。**新しい観測手段を増やすときも MCP のツール面を増やさない**、という方針が E2E 側のヘルパにも見えます（`tests/e2e/helpers/rack-child-pid.ts` の `rackChildPidsFromLog` に付いたコメント: 「**MCP の tool 表面を増やさず**、ERROR 計数や `[plugin-state]` 行と同じ `get_log` 経路で読めるようにしてある」）。
 
 ---
 
@@ -638,7 +638,54 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 
 ## 規律を仕組みに変えるテスト — ラチェットとアサーション衛生
 
-WORK_LOG 6.418 のタイトルは「今日の是正を『知識』から『再現可能な仕組み』へ」です。CLAUDE.md には「DSL の機能を追加したら必ず E2E テストを追加する」と書いてあったのに、実測すると `seq` の 32 語のうち 19 語が実機で一度も評価されていませんでした。文章は読まれない時があります。そこで 2 本のテストが gated spec の **ソースそのもの**を検査します。
+WORK_LOG 6.418 のタイトルは「今日の是正を『知識』から『再現可能な仕組み』へ」です。CLAUDE.md には「DSL の機能を追加したら必ず E2E テストを追加する」と書いてあったのに、実測すると `seq` の 32 語のうち 19 語が実機で一度も評価されていませんでした。文章は読まれない時があります。そこで 2 本のテストが gated E2E の **ソースそのもの**を検査します。
+
+### 走査先は 1 箇所が持つ
+
+2 本の検査はどちらも「gated E2E のソースを読んで判定する」という作りなので、**どのファイルを読むか**を各自が抱えると具合が悪くなります。シナリオを別ファイルへ切り出した瞬間に、ラチェットは「カバー済みだった語が消えた」と読んで red になり、衛生検査のほうは新しいファイルを見ないまま **黙って通ってしまう**からです。後者は red にならないぶん厄介で、検査が効いていないことに気づけません。そこで走査先は `tests/e2e/gated-sources.ts` が 1 箇所で持ちます。
+
+```typescript
+// tests/e2e/gated-sources.ts:29-35
+const GATED_SOURCE_GLOBS: readonly {
+  readonly dir: string
+  readonly match: (name: string) => boolean
+}[] = [
+  { dir: E2E_DIR, match: (name) => name === 'orbitstudio-mcp-gated.spec.ts' },
+  { dir: path.join(E2E_DIR, 'gated'), match: (name) => name.endsWith('.ts') },
+]
+```
+
+入口の `orbitstudio-mcp-gated.spec.ts` は vitest が発見する唯一の spec で、アプリの起動を 1 回に保つ役目を持ちます。`gated/` 配下はシナリオ本体の置き場として空けてある枠で、拡張子を `.spec.ts` にしないので vitest は発見しません。つまり **検査からは見えるが、テストランナーからは 1 本に見える**という形になっています。
+
+もう 1 つ、一覧が空になったときの扱いが決めてあります。
+
+```typescript
+// tests/e2e/gated-sources.ts:68-78
+export function readGatedSources(): string {
+  if (GATED_SOURCE_FILES.length === 0) {
+    throw new Error(
+      'gated E2E のソースが 1 本も見つからない。' +
+        'ラチェットと衛生検査が黙って無意味になるので、GATED_SOURCE_GLOBS を確認すること。',
+    )
+  }
+  return GATED_SOURCE_FILES.map(
+    (file) => `// ===== ${path.relative(E2E_DIR, file)} =====\n${fs.readFileSync(file, 'utf8')}`,
+  ).join('\n')
+}
+```
+
+入口 spec の改名やディレクトリの移動で一覧が空になると、両検査は「何も見つからなかった」を「違反ゼロ」と読んでしまいます。全件 green のまま無意味になる状態なので、ソースが 1 本も無ければ throw する、という決めです。
+
+読み方は 2 通り用意されています。ラチェットは「どのファイルの何行目か」を問わないので、全ソースを連結した文字列を返す `readGatedSources()` を使います。行番号つきで違反を名指ししたい衛生検査のほうは、ファイルごとに「相対パス + 中身」を返す `readGatedSourceEntries()` を使い、`ファイル名:行番号` の形で報告します。
+
+```typescript
+// tests/e2e/gated-assertion-hygiene.spec.ts:25-29
+/** ファイル名つき・行番号つきで、条件に合う行を集める。 */
+const linesMatching = (predicate: (line: string) => boolean): string[] =>
+  lines
+    .filter(({ line }) => predicate(line))
+    .map(({ file, line, n }) => `${file}:${n}: ${line.trim()}`)
+```
 
 ### DSL 網羅率のラチェット
 
@@ -657,7 +704,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 }
 ```
 
-gated spec の中に `.<name>(` が現れるかどうかだけを見ます。語彙側は `packages/engine/src/signal-chain/runtime` の `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` — インタプリタの dispatch テーブルそのものです。
+`readGatedSources()` が返す gated E2E のソース全体に `.<name>(` が現れるかどうかだけを見ます。語彙側は `packages/engine/src/signal-chain/runtime` の `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` — インタプリタの dispatch テーブルそのものです。
 
 ```typescript
 // tests/e2e/dsl-e2e-coverage.spec.ts:106-116
@@ -1000,13 +1047,15 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio 経路の `[STEP]` 発生源
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()`（#654）
 - `packages/engine/src/core/sequence.ts:1381-1404` — note 経路の marker 積み込みとデデュープ（#654）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-151` — env contract・stale artifact ガード
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:358-635` — describe のセットアップ・`captureInstrumentScenario` の RMS ヘルパ・teardown
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:637-1432` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2032-2138` — #654 playhead E2E
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-152` — env contract・stale artifact ガード
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:332-609` — describe のセットアップ・`captureInstrumentScenario` の RMS ヘルパ・teardown
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:611-1406` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2006-2112` — #654 playhead E2E
 - `tests/e2e/helpers/mcp-client.ts:1-174` — 生 JSON-RPC クライアント
+- `tests/e2e/helpers/rack-child-pid.ts:1-38` — rack child の PID オラクル（ログ由来・#668 PR-E1 で spec から移動）
+- `tests/e2e/gated-sources.ts:1-106` — ラチェットと衛生検査が共有する gated E2E ソース一覧（#668 PR-E1）
 - `tests/e2e/dsl-e2e-coverage.spec.ts:1-146` — DSL 網羅率ラチェット
-- `tests/e2e/gated-assertion-hygiene.spec.ts:1-66` — アサーション衛生
+- `tests/e2e/gated-assertion-hygiene.spec.ts:1-68` — アサーション衛生
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixture
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — OrbitStudio.app のビルド
