@@ -1,8 +1,8 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: f006a51
+verified-at: "2026-09-03"
 status: draft
 ---
 
@@ -436,6 +436,17 @@ When the suite is loaded, before a single test runs, it checks the freshness of 
 
 Which binary to inspect is not hardcoded; the guard asks `resolveDaemonBinaryPath()`, the function the engine actually uses to pick its spawn candidate. According to WORK_LOG 6.416 / 6.417, this guard **got the path wrong twice** on 2026-08-29 (it first looked at `rust/target/release/`, while the binary actually running was the copy bundled into the extension at `packages/vscode-extension/engine/bin/<platform>/`). To avoid a shape where "the guard itself can reintroduce the very accident it exists to stop", it settled on calling the canonical resolver.
 
+**What counts as a "source"** took a second pass as well (#713). Picking up every `.rs` under `rust/` unconditionally lets an integration test — a separate cargo target, in practice `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs` — be selected as the "newest source". Such a file never enters the dependency graph of the `orbit-audio-daemon` binary, so cargo correctly reads its dependencies, builds nothing, and the binary's mtime is never refreshed. The result is an **unfixable red**: running `npm run test:e2e:gated`, exactly what the guard's message instructs, cannot clear it. The trigger is a property of mtime — `git checkout` sets a file's mtime to the checkout time, so merely moving between branches turns an integration test whose content never changed into the "newest source". In #713 this stopped the gated suite from running a single test.
+
+```typescript
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:140-142
+        if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
+          continue
+        }
+```
+
+`src/` is *not* excluded. If code the daemon depends on is newer, the guard should go red, which is its whole job. That line is itself pinned from both sides by two of the assertion-hygiene checks in the next section (red if the exclusion disappears / red if `src` gets excluded too).
+
 And as a remedy one step stronger than the guard, the choice was made to **remove the manual step altogether**.
 
 ```jsonc
@@ -697,7 +708,20 @@ Its limits are stated honestly too. Since it only scans the source as text, it d
   })
 ```
 
-The remaining two check "does a spec that uses capture actually contain an `rms(` / `peak(` / `.rms` assertion" and "does the stale guard call `resolveDaemonBinaryPath()`". 6.418 records that it detected one real violation immediately after being written (`.toBe(errorCountBeforeMixer)`, corrected to `<=`).
+The remaining four check "does a spec that uses capture actually contain an `rms(` / `peak(` / `.rms` assertion", "does the stale guard call `resolveDaemonBinaryPath()`", and the two added in #713: "does the stale guard exclude `tests` / `benches` / `examples`" and "does it stop short of excluding `src`". 6.418 records that it detected one real violation immediately after being written (`.toBe(errorCountBeforeMixer)`, corrected to `<=`).
+
+Those last two form a pair that pins **one direction each**. The first alone catches the regression "the exclusion was deleted", but without the second, going too far and excluding `src` as well would pass unnoticed. The guard's purpose — never measure a stale binary — depends on it still looking at `src`, so only both directions together fix the line.
+
+```typescript
+// tests/e2e/gated-assertion-hygiene.spec.ts:89-93
+    expect(
+      /entry\.name === 'src'/.test(source),
+      'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +
+        'binary pass, which is exactly what the guard exists to prevent.',
+    ).toBe(false)
+```
+
+All five, though, only scan the **source text** of the gated spec, so what they guarantee stops at "it is written that way". The guard itself, `assertDaemonBinaryIsNotStale()`, is called only when `gated && appAvailable`, so an ordinary `npm test` never executes a line of it. It is accurate to read this section's checks as pinning the *written shape*, not an *executed behaviour*.
 
 Incidentally, the "fixed 500-line window" in the comment is the number from before `#567` widened it to 1000 lines; the window is still finite, so the rule itself stands.
 
@@ -998,13 +1022,13 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio-path `[STEP]` source
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()` (#654)
 - `packages/engine/src/core/sequence.ts:1381-1404` — note-path marker enqueueing and dedup (#654)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-151` — env contract, stale-artifact guard
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:358-635` — describe setup, the RMS helper of `captureInstrumentScenario`, teardown
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:637-1432` — the first test (launch, catalogue, capture, run_selection, onset verification)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2032-2138` — the #654 playhead E2E
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-166` — env contract, stale-artifact guard
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:373-650` — describe setup, the RMS helper of `captureInstrumentScenario`, teardown
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:652-1447` — the first test (launch, catalogue, capture, run_selection, onset verification)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2047-2153` — the #654 playhead E2E
 - `tests/e2e/helpers/mcp-client.ts:1-174` — raw JSON-RPC client
 - `tests/e2e/dsl-e2e-coverage.spec.ts:1-146` — DSL coverage ratchet
-- `tests/e2e/gated-assertion-hygiene.spec.ts:1-66` — assertion hygiene
+- `tests/e2e/gated-assertion-hygiene.spec.ts:1-95` — assertion hygiene
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixtures
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — building OrbitStudio.app
@@ -1020,3 +1044,4 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - Issue [#643](https://github.com/signalcompose/orbitscore/issues/643) — mixer integration of instruments (E2E-1 to 7)
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — periodic capture header patch and stale guard
 - Issue [#654](https://github.com/signalcompose/orbitscore/issues/654) — playhead not moving for instrument sequences
+- Issue [#713](https://github.com/signalcompose/orbitscore/issues/713) — the stale guard firing on a cargo target it can never rebuild

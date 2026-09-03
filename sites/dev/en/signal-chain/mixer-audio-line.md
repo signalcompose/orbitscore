@@ -935,9 +935,9 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 - `rust/crates/orbit-audio-native/src/output.rs:1078-1094` — the no-bus path `render_engine_with_source_outputs`
 - `rust/crates/orbit-audio-native/src/output.rs:2017-2060` — unit test `global_gain_scales_instrument_contribution`
 - `rust/crates/orbit-audio-core/src/scheduler.rs:375-460` — `render_multi_feeds` (feed addition and gain ramp)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:501-605` — `captureInstrumentScenario` / `rms()`
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1434-1468` — E2E-1 (`global.gain(-6)`)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1555-1597` — E2E-4 (`output(sum)` + `send(aux, 0.5)`)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:516-620` — `captureInstrumentScenario` / `rms()`
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1449-1483` — E2E-1 (`global.gain(-6)`)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1570-1612` — E2E-4 (`output(sum)` + `send(aux, 0.5)`)
 - Issue [#453](https://github.com/signalcompose/orbitscore/issues/453) / [#459](https://github.com/signalcompose/orbitscore/issues/459) — mixer DSL (sum / aux / send)
 - Issue [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#648](https://github.com/signalcompose/orbitscore/pull/648) — mixer foundation, instrument as source, master fader wiring
 - Issue [#649](https://github.com/signalcompose/orbitscore/issues/649) — audio-line design
