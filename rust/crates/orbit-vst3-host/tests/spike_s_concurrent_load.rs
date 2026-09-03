@@ -12,7 +12,7 @@
 //! load するのは **READY を publish する前**（= audio がまだ回っていない時）だけだった。
 //! DAW の in-process ホスティングでは常套だが、ここでは未検証である。
 //!
-//! 設計書 `docs/design/628-rack-chain-implementation-design.md` §9-1 が指定した spike。
+//! 設計書 `docs/archive/design/628-rack-chain-implementation-design.md` §9-1 が指定した spike。
 //!
 //! ## 測り方
 //!

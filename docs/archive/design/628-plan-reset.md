@@ -1,10 +1,15 @@
+> 🗄️ **アーカイブ（2026-09-03・#696）。** 本文書は記録として残すが、**現在の正本ではない**。
+> **現在の正本**: **#628 CLOSED**（出荷済み・PR #639）/ 現在の計画は `docs/planning/DEVELOPMENT_MAP.md` §4.B
+>
+> 内容は移動時のまま。**新しい判断の根拠にしないこと**（[[check-the-date-before-trusting-a-doc]]）。
+
 # 計画立て直し: PR #639 の畳み方とスタック境界（#628）
 
 - 起案: Fable（計画・設計担当・2026-08-28）
 - 契機: owner 指示「状況を整理して開発プランを立て直す。必要ならゴールをクリアする」
 - 入力: `scratchpad/situation-2026-08-28.md`（main の実測）/
-  `docs/design/628-rack-chain-implementation-design.md`（§7 Known Decisions は再議論しない）/
-  `docs/design/628-gated-e2e-rack-design.md`（承認済み・再議論しない）/
+  `docs/archive/design/628-rack-chain-implementation-design.md`（§7 Known Decisions は再議論しない）/
+  `docs/archive/design/628-gated-e2e-rack-design.md`（承認済み・再議論しない）/
   監査結果（F1〜F11・根 1/3 監査・F-a）
 - 本書が出すのは**作業の形と順序**。日程・可否の宣言はしない（owner の領分）。
   品質を薄くする打ち手は 1 つも含めない — 反復を減らす手段はすべて「欠陥クラスの前倒し検出」。

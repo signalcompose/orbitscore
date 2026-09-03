@@ -888,7 +888,7 @@ WORK_LOG 6.387b（2026-08-28）の記録が生々しいです。child は
 
 ### 帰属と宛先の 2 レイヤ分離
 
-修正の設計（`docs/design/628-ui-pump-per-index-design.md`・Fable 起案）は改訂 1 で
+修正の設計（`docs/archive/design/628-ui-pump-per-index-design.md`・Fable 起案）は改訂 1 で
 「open 中 UI の index は不変」を不変条件とし、index がシフトする stage の UI を TS が
 APPLY 前に自動 close する案でした。これは owner に差し戻されます。
 
@@ -1075,7 +1075,7 @@ recorded` で失敗するので、「DSL で open → MCP の close が成功す
 その後 1 枚目も閉じます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1769-1791
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1784-1806
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {
@@ -1213,10 +1213,10 @@ CLAP を使う必要があります。
 - `rust/crates/orbit-audio-daemon/src/session.rs:2015-2016` — `ClosePluginUI` はフェーズ A 受理のみ
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6470-6560` — `open_outproc_plugin_ui`（binding 検査 → `begin_open` → route → mailbox）
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8802-8815` — `PluginUiTarget`（`window` = 帰属・`index` = 表示専用）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1769-1791` — #633 E2E-1（close をオラクルにする）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1784-1806` — #633 E2E-1（close をオラクルにする）
 - [`docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md) UIH.0〜UIH.8 — 仕様正本
 - [`docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md) — #474 の P0〜P6 実装設計と owner 裁定 Q1〜Q8
-- [`docs/design/628-ui-pump-per-index-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/design/628-ui-pump-per-index-design.md) — per-window pump の設計（C-A / C-B・2 レイヤ分離・却下案）
+- [`docs/archive/design/628-ui-pump-per-index-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/design/628-ui-pump-per-index-design.md) — per-window pump の設計（C-A / C-B・2 レイヤ分離・却下案）
 - [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/core/INSTRUCTION_ORBITSCORE_DSL.md) PH.2c — `seq.ui([名前][, open])` の DSL 規範
 - [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.335〜6.347（#474 P0〜P4b）
 - [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.348（#474 P4c）、6.358（#617）、6.387b / 6.387c（#628 の欠陥と設計）、6.413 / 6.414（#633）

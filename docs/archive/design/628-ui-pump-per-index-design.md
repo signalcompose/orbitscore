@@ -1,8 +1,13 @@
+> 🗄️ **アーカイブ（2026-09-03・#696）。** 本文書は記録として残すが、**現在の正本ではない**。
+> **現在の正本**: **#633 CLOSED**（出荷済み・PR #652）/ 現在地は `DEVELOPMENT_MAP.md` §4.B・§4.C
+>
+> 内容は移動時のまま。**新しい判断の根拠にしないこと**（[[check-the-date-before-trusting-a-doc]]）。
+
 # 設計書: `UiEventPump` の多重ウィンドウ化 — 位置指定から window token へ（issue #628・owner 決定 A・改訂 2）
 
 > 起案: Fable subagent（2026-08-28）。改訂 2（同日）: owner 原則による差し戻しを受けた
 > 全面改訂（経緯は §0.5）。実装は含まない。
-> 本書は `docs/design/628-rack-chain-implementation-design.md`（以下「実装設計書」）の
+> 本書は `docs/archive/design/628-rack-chain-implementation-design.md`（以下「実装設計書」）の
 > **§3.1-(6) の 2 番目の bullet・§3.4-(5)・決定表 #12 を置き換える**。差し替えの明細は §0.2。
 >
 > 🔴 本書の前提事実はすべて実ファイルで確認し、ファイル名と行番号を添えた。

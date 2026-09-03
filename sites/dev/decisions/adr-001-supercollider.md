@@ -264,7 +264,7 @@ ADR の形式にならって、決定から約 1 年半後の帰結を記録し�
 |---|---|
 | 1. 測定可能な低レイテンシ | Rust daemon が parity を実測で示し (§6.179)、既定を引き継いだ。SC の 0-8ms は「置き換え可能な水準」であることが確認された |
 | 2. 実装工数の低さ | Rust ワークスペースは 69dc968 時点で 22 crates (`rust/crates/`: `orbit-audio-core` / `orbit-audio-daemon` / `orbit-audio-native` / `orbit-audio-sandbox` / `orbit-audio-verify` / `orbit-audio-wasm` / `orbit-child-runtime` / `orbit-child-ui` / `orbit-clap-effect-child` / `orbit-clap-host` / `orbit-clap-instrument-child` / `orbit-clap-spike` / `orbit-effect-rack-child` / `orbit-link-audio` / `orbit-plugin-scan` / `orbit-sandbox-spike` / `orbit-std-gain` / `orbit-vst3-effect-child` / `orbit-vst3-gain-oracle` / `orbit-vst3-host` / `orbit-vst3-instrument-child` / `orbit-vst3-synth-oracle`) まで育った。「工数が低い」は当初の判断として正しく、その後の投資が別の選択肢を開いた |
-| 3. 学術的文脈 | 本番トラックは 2026-07-12 に ICLC 提出方向へ retarget (`CLAUDE.md`・統括 #413)。SuperCollider 依存であることが要件ではなくなった |
+| 3. 学術的文脈 | 本番トラックは 2026-07-12 に ICLC 提出方向へ retarget され、その ICLC 提出も 2026-09-03 に取り下げになった (`CLAUDE.md`・統括 #413)。本番トラックに締切は無くなり、SuperCollider 依存であることが要件ではなくなった |
 
 ### SC 経路に残っているもの
 
@@ -311,7 +311,7 @@ ADR の形式にならって、決定から約 1 年半後の帰結を記録し�
 - `rust/crates/` — 69dc968 時点の 22 crates (Consequences revisited の表)
 - `docs/archive/WORK_LOG_2026-07.md` §6.179 — cutover #108 (2026-07-03): parity 根拠・スコープ境界・リバーシビリティ
 - `docs/archive/WORK_LOG_2026-07.md` §6.186 — engine-kind 分岐 (#377) と scsynth bundle 手順の据え置き
-- `CLAUDE.md` — 本番トラックの ICLC retarget (#413・2026-07-12)
+- `CLAUDE.md` — 本番トラックの ICLC retarget (#413・2026-07-12) と、その ICLC 提出の取り下げ (2026-09-03・PR #700)
 - commit `f2de9133` — Web Audio API エンジン初実装 (`node-web-audio-api` + `wavefile`)
 - commit `081a474` — SuperCollider 統合完成: sox 140-150ms ドリフト → 0-8ms 達成の記録
 - commit `cfa0381` — PR #31: Web Audio API 実装 ~1,085 行の削除

@@ -1,8 +1,8 @@
 ---
 title: "RE-4. capture seam と客観検証（ORBIT_CAPTURE_WAV）"
 chapter-id: "RE-4"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: f006a51
+verified-at: "2026-09-03"
 status: draft
 ---
 
@@ -363,11 +363,12 @@ daemon を `<extension>/engine/bin/<platform>/` に同梱しており、これ�
 の `build:copy-engine` であって `cargo build` ではありません。
 
 対策は 2 段です。まず `tests/e2e/orbitstudio-mcp-gated.spec.ts` が、gated 実行の**モジュール読み込み時**
-に「実際に spawn される daemon バイナリ（`resolveDaemonBinaryPath()` が正本）が `rust/**/*.rs` |
-`Cargo.toml` より古ければ、テストを 1 本も走らせずに落とす」チェックを持ちます。
+に「実際に spawn される daemon バイナリ（`resolveDaemonBinaryPath()` が正本）が `rust/` 配下の
+`.rs` | `Cargo.toml` より古ければ、テストを 1 本も走らせずに落とす」チェックを持ちます。ただし
+走査から外すディレクトリがあり、それは後述します（#713）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:128-142
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:143-157
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -396,6 +397,40 @@ daemon を `<extension>/engine/bin/<platform>/` に同梱しており、これ�
 
 mtime 比較は「rebuild が no-op か」より弱い判定ですが、テスト実行前に 1ms で終わるのが利点で、
 弱い分は「疑わしきは落とす」側に倒しています（等しい場合は通す）。
+
+### 走査から外すもの — 再ビルドできないターゲットを見ない（#713）
+
+この「疑わしきは落とす」には落とし穴がありました。走査が `rust/` 配下の `.rs` を無条件に拾うので、
+`rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs` のような**統合テスト**が「最新の
+ソース」に選ばれることがあるのです。統合テストは別の cargo ターゲットで、`orbit-audio-daemon` の
+バイナリの依存グラフには入りません。ですから cargo は依存関係を正しく読んで何もビルドせず
+（`Finished release profile in 0.21s`）、バイナリの mtime は更新されないままになります。ガードの
+メッセージが指示する `npm run test:e2e:gated` を何度打っても消えない、**解消不能な赤**でした。
+
+引き金は mtime の性質です。`git checkout` はファイルの mtime をチェックアウトした時刻へ更新するので、
+ブランチを行き来しただけで、内容の変わっていない無関係な統合テストが「最新のソース」に化けます。
+#713 の実測では、実機 gated が起動段階から 1 本も走らなくなりました。
+
+そこで走査から `tests` / `benches` / `examples` の 3 ディレクトリを外しました。
+
+```typescript
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:138-142
+        // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
+        // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
+        if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
+          continue
+        }
+```
+
+外してよい根拠は「別ターゲットなので daemon バイナリに入らない」の一点だけで、`src/` を外す根拠には
+なりません。daemon が依存するコードが新しければ、ガードは本来の役目どおり赤くなるべきだからです。
+この線引きは `tests/e2e/gated-assertion-hygiene.spec.ts` の検査 2 本で両側から留められています。
+除外が消えたら赤、`src` まで除外したら赤、という組み合わせです。
+
+ただしどちらの検査も gated spec の**ソース文字列**を走査するだけなので、保証するのは「そう書いてある」
+ことまでです。ガード本体の `assertDaemonBinaryIsNotStale()` は `gated && appAvailable` のときだけ
+呼ばれるため、通常の `npm test` では 1 行も実行されません。ここは「実行された振る舞い」ではなく
+「書かれた形」を留める仕掛け、という位置づけで読むのが正確です。
 
 ## エンジン自身の peak ログ: `post_peak_bits`
 
@@ -457,8 +492,10 @@ DSL E2E の capture WAV 実測 peak = **0.25000**（WORK_LOG 6.258）— 独立�
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:99-111` — WAV header/物理サイズ突き合わせ（silent-failure ガード）
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:206-217` — `drops == 0` assert（teardown 前の silent-failure ガード）
 - `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:232-234` — `post_peak_bits`（lock-free peak 累積の実装）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:78-152` — stale artifact ガード（`assertDaemonBinaryIsNotStale`）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:78-166` — stale artifact ガード（`assertDaemonBinaryIsNotStale`・#713 の走査除外を含む）
+- `tests/e2e/gated-assertion-hygiene.spec.ts:67-94` — 走査除外を両方向から留める検査 2 本（#713）
 - `package.json:17-18` — `pretest:e2e:gated` / `test:e2e:gated`
 - [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 / 6.416 / 6.417 — #643 master fader の発見、#651 の header patch と stale ガード、pretest 自動化
 - Issue [#307](https://github.com/signalcompose/orbitscore/issues/307) — capture seam realtime 配線
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — 異常終了でも開ける capture WAV と stale バイナリ対策
+- Issue [#713](https://github.com/signalcompose/orbitscore/issues/713) — 再ビルド不能な cargo ターゲットを走査から外す

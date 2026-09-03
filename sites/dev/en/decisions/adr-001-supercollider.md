@@ -264,7 +264,7 @@ On the code side, the factory's header comment is itself a summary of the decisi
 |---|---|
 | 1. Measurable low latency | The Rust daemon demonstrated parity by measurement (§6.179) and took over the default. SC's 0-8 ms was confirmed to be "a level that can be replaced" |
 | 2. Low implementation effort | The Rust workspace grew to 22 crates at 69dc968 (`rust/crates/`: `orbit-audio-core` / `orbit-audio-daemon` / `orbit-audio-native` / `orbit-audio-sandbox` / `orbit-audio-verify` / `orbit-audio-wasm` / `orbit-child-runtime` / `orbit-child-ui` / `orbit-clap-effect-child` / `orbit-clap-host` / `orbit-clap-instrument-child` / `orbit-clap-spike` / `orbit-effect-rack-child` / `orbit-link-audio` / `orbit-plugin-scan` / `orbit-sandbox-spike` / `orbit-std-gain` / `orbit-vst3-effect-child` / `orbit-vst3-gain-oracle` / `orbit-vst3-host` / `orbit-vst3-instrument-child` / `orbit-vst3-synth-oracle`). "Low effort" was correct as the initial judgment, and the later investment opened a different option |
-| 3. Academic context | The production track was retargeted toward an ICLC submission on 2026-07-12 (`CLAUDE.md`, tracked in #413). Depending on SuperCollider is no longer a requirement |
+| 3. Academic context | The production track was retargeted toward an ICLC submission on 2026-07-12, and that ICLC submission was itself withdrawn on 2026-09-03 (`CLAUDE.md`, tracked in #413). The production track no longer has a deadline, and depending on SuperCollider is no longer a requirement |
 
 ### What remains on the SC path
 
@@ -311,7 +311,7 @@ The accurate reading is not that this ADR's decision "was wrong," but that "it s
 - `rust/crates/` — the 22 crates at 69dc968 (table in Consequences revisited)
 - `docs/archive/WORK_LOG_2026-07.md` §6.179 — cutover #108 (2026-07-03): parity evidence, scope boundary, reversibility
 - `docs/archive/WORK_LOG_2026-07.md` §6.186 — engine-kind branching (#377) and keeping the scsynth bundle steps
-- `CLAUDE.md` — the ICLC retarget of the production track (#413, 2026-07-12)
+- `CLAUDE.md` — the ICLC retarget of the production track (#413, 2026-07-12) and the withdrawal of that ICLC submission (2026-09-03, PR #700)
 - commit `f2de9133` — initial implementation of the Web Audio API engine (`node-web-audio-api` + `wavefile`)
 - commit `081a474` — completion of the SuperCollider integration: record of achieving the sox 140-150 ms drift → 0-8 ms
 - commit `cfa0381` — PR #31: removal of ~1,085 lines of the Web Audio API implementation
