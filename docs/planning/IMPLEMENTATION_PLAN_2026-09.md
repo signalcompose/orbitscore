@@ -264,7 +264,7 @@
 
 ### 2.5 束の割り当て（束ブランチ運用・owner 合意 2026-09-03・#703）
 
-レビューの単位は PR ではなく**束**。小 PR は束の統合ブランチへ軽いゲート（CI + その PR が足した E2E を実機で + 目視）で入れ、統合ブランチ → main の束 PR で `/simplify` → `/code:pr-review-team` + Fable → 実機 E2E 全件を 1 回だけ回す。手引きは [`BUNDLE_BRANCH_WORKFLOW.md`](../development/BUNDLE_BRANCH_WORKFLOW.md)。束は差分 1,500 行以下で継ぎ目（wire / DSL・記録 / 再生・実時間 / オフライン）で切る。
+レビューの単位は PR ではなく**束**。小 PR は束の統合ブランチへ軽いゲート（CI + その PR が足した E2E を実機で + 目視）で入れ、統合ブランチ → main の束 PR で `/simplify` → `/code:pr-review-team` + Fable → 実機 E2E 全件を 1 回だけ回す（マージは merge commit・squash はリポジトリ設定で不可）。手引きは [`BUNDLE_BRANCH_WORKFLOW.md`](../development/BUNDLE_BRANCH_WORKFLOW.md)。束は差分 1,500 行以下で継ぎ目（wire / DSL・記録 / 再生・実時間 / オフライン）で切る。
 
 | 束 | 統合ブランチ | 中身 | 概算 |
 |---|---|---|---|

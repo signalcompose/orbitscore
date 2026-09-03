@@ -305,6 +305,7 @@ Codex は sandbox で **daemon protocol（localhost bind）・MCP 系・実機 E
 - 束は差分 **1,500 行以下**で、設計上の継ぎ目（wire / DSL・記録 / 再生・実時間 / オフライン）で切る。割り当ては plan §2.5
 - 小 PR の「その PR が足した E2E を実機で」は**省かない**。委譲先（Codex）の緑は実機の緑ではなく、ここを省くと束の締めで一度に露見して fix 3 回で収束しない
 - レビューの指摘への fix は統合ブランチの**先頭に積む**（小 PR は既に入っているので rebase は発生しない）
+- マージ方式は **merge commit**（squash はリポジトリ設定で不可・2026-09-03 実測）。`PROJECT_RULES.md`「Merging PRs」参照
 
 1. **`/simplify`** — reuse / simplification / efficiency / altitude の cleanup を適用。
 2. **`/code:pr-review-team` ラウンド1（フル編成）と Fable 監査を並行起動する。**
