@@ -28,15 +28,15 @@ OrbitScore のレビュー手順は 1 PR あたり「`/simplify` → レビュ�
 
 ```
 main ──●────────────────────────────────────────────●──▶
-        \                                          / 束 PR（squash 1 回・フルレビュー・実機全件）
+        \                                          / 束 PR（merge commit 1 回・フルレビュー・実機全件）
          611-output-line（統合ブランチ）●──●──●──●──●
                                        ↑  ↑  ↑  ↑  ↑
                             小 PR（軽いゲート）: O3  O4  O5  O6  fix
 ```
 
 - 統合ブランチは main から切る。名前は束の先頭 issue 番号で `<issue>-<英語>`（リポジトリの命名規約に従う）
-- 小 PR は統合ブランチから切り、統合ブランチへ squash で戻す（統合ブランチには「小 PR 1 = 1 コミット」が残る）
-- 束 PR を squash で main へ入れる（main には「束 1 = 1 コミット」）。統合ブランチは消さないので細かい履歴はそこに残る
+- 小 PR は統合ブランチから切り、統合ブランチへ merge で戻す（OrbitScore はリポジトリ設定で squash が禁止。squash が使えるリポジトリなら小 PR 1 = 1 コミットにできる）
+- 束 PR を merge で main へ入れる（main には束 1 つの merge commit。小 PR の履歴はその下にぶら下がる）。統合ブランチは消さない
 - レビューの指摘への fix は統合ブランチの**先頭に積む**。小 PR は既に統合ブランチへ入っているので rebase は発生しない
 
 ## 4. 手順（1 束の一生）
@@ -45,10 +45,10 @@ main ──●──────────────────────
 |---|---|---|
 | 束を開く | main から統合ブランチを切って push | `git checkout -b 611-output-line main && git push -u origin 611-output-line` |
 | 小 PR を作る | 統合ブランチから切る。base を統合ブランチにして draft で開く | `git checkout -b 611-o4-audio-line 611-output-line` → `gh pr create --base 611-output-line --draft` |
-| 小 PR を閉じる | CI 緑 + その PR の E2E を実機で + main が差分を読む → 統合ブランチへ squash | `gh pr merge <n> --squash` |
+| 小 PR を閉じる | CI 緑 + その PR の E2E を実機で + main が差分を読む → 統合ブランチへ merge | `gh pr merge <n> --merge`（squash 可のリポジトリなら `--squash`）|
 | 次の小 PR | 統合ブランチを pull してから切る | `git checkout 611-output-line && git pull` |
 | main に追従 | 他の束が main に入ったら統合ブランチへ merge。衝突はここで 1 回だけ解く | `git merge origin/main` |
-| 束を閉じる | 統合ブランチ → main の PR を開き、フルレビュー → fix → ビルド + 実機全件 → squash | `gh pr create --base main --head 611-output-line` |
+| 束を閉じる | 統合ブランチ → main の PR を開き、フルレビュー → fix → ビルド + 実機全件 → merge | `gh pr create --base main --head 611-output-line` |
 
 ## 5. 規則
 
@@ -73,7 +73,7 @@ main ──●──────────────────────
 
 ### 5.4 束 PR のフルゲート
 
-`/simplify` → レビューチーム + 設計監査（Fable）を並行 → fixer 3 回まで → ビルド + 実機 E2E 全件 → squash merge。監査には**設計文書と束の差分**を渡す。設計監査の 3 問（不在証明・外部 API の意味論・横断的関心事）は設計文書に対する問いなので、差分単位より束単位の方が精度が上がる。
+`/simplify` → レビューチーム + 設計監査（Fable）を並行 → fixer 3 回まで → ビルド + 実機 E2E 全件 → merge。監査には**設計文書と束の差分**を渡す。設計監査の 3 問（不在証明・外部 API の意味論・横断的関心事）は設計文書に対する問いなので、差分単位より束単位の方が精度が上がる。
 
 ### 5.5 bot と CI の発火条件
 
@@ -92,7 +92,7 @@ main ──●──────────────────────
 | PR ごとにフルレビュー | PR | 無し | 常に緑 | PR が少ない・1 PR が大きい |
 | 純 stacked PR（手動） | PR（層） | **毎回**（下の層が変わるたび上を rebase）| 層ごとに入る | 1 人の大きな変更を層に割る |
 | GitHub stacked PR（2026-07 公開プレビュー・§7）| PR（層） | 自動 cascading rebase（線形履歴が必須）| 層ごとに入る | 同上。ツールが rebase を肩代わり |
-| **束ブランチ（本書）** | **束** | **無し**（fix は先頭に積む）| 束ごとに入る・常に緑 | **PR は多いが、重いレビューの回数を絞りたい** |
+| **束ブランチ（本書）** | **束** | **無し**（fix は先頭に積む）| 束ごとに入る（merge commit 1 つ）・常に緑 | **PR は多いが、重いレビューの回数を絞りたい** |
 
 OrbitScore の見積り: PR ごとなら 27 回のフルレビューが、束ブランチなら 7 回。
 
@@ -105,7 +105,7 @@ GitHub は 2026-07-30 に stacked pull requests を公開プレビューにし�
 | 構造 | 下の PR の**ブランチ**を上の PR の base にする鎖。一番下だけが trunk（main）を向く | 束の統合ブランチ 1 本に小 PR が**並列**に入る。統合ブランチだけが main を向く |
 | レビューの粒度 | **層ごと**に独立してレビューする（各層は自分の差分だけを見せる）| **束ごと**に 1 回。小 PR は軽いゲートだけ |
 | 目的 | 1 つの大きな変更を、待たずに積み上げながら**層ごとにレビューしてもらう**（レビューを増やす方向）| 多数の小 PR に対して**重いレビューの回数を減らす** |
-| マージ | 下から順。「一番上の ready な PR をマージすると下の未マージ層もまとめて入る」。squash なら **n 個の squash コミット**が main に入る | 束 PR を 1 回 squash。main には束 1 コミット |
+| マージ | 下から順。「一番上の ready な PR をマージすると下の未マージ層もまとめて入る」。squash なら **n 個の squash コミット**が main に入る | 束 PR を 1 回 merge。main には束 1 つの merge commit |
 | 履歴 | **線形履歴が必須**。下の層が変わるか trunk が進むたびに cascading rebase（サーバ側 or `gh stack rebase`）| 書き換えない。fix は統合ブランチの先頭へ |
 | CI | 層ごとに全ワークフローが走る（公式 docs は stack のメタデータで「一番下の層だけ重いジョブ」等の条件分岐を推奨）| 小 PR は安い CI だけ、束 PR で全部 |
 | 制約 | 同一リポジトリ内のみ（fork 不可）。プレビュー中。コミュニティで squash 時の見かけ上の衝突・rebase 後に署名が外れる報告あり | Git と `gh` の標準機能だけ。プレビュー依存なし |
@@ -116,8 +116,8 @@ GitHub は 2026-07-30 に stacked pull requests を公開プレビューにし�
 
 ## 8. 他リポジトリへの導入チェックリスト
 
-1. **merge 方式**を確認する。squash 運用なら本書がそのまま使える。merge commit 運用でも成立する（統合ブランチの履歴がそのまま main に入る）
-2. **branch protection**: main は保護のまま。統合ブランチは保護しない（main の merge と小 PR の squash を自由に入れるため）
+1. **merge 方式**を確認する（リポジトリ設定で何が許可されているかを API か Settings で見る。OrbitScore は squash 禁止で merge commit のみ、と 2026-09-03 に実測）。merge commit でも squash でも本書は成立する。違いは main に残る粒度だけ
+2. **branch protection**: main は保護のまま。統合ブランチは保護しない（main の merge と小 PR の merge を自由に入れるため）
 3. **bot の発火条件**: 自動レビュー bot のワークフローに `if: github.base_ref == 'main'` を足す
 4. **命名**: 統合ブランチ `<先頭 issue>-<英語>`、小 PR `<issue>-<英語>-<部分>`
 5. **軽いゲートの道具**: 「その PR の E2E だけ回す」仕組み（環境変数で対象を絞る等）を用意する
@@ -137,7 +137,7 @@ GitHub は 2026-07-30 に stacked pull requests を公開プレビューにし�
 | 同じファイルを触る小 PR が並行 | 統合ブランチで衝突 | plan の順で直列 |
 | 束をまたぐ PR を束に入れる | 片方の束が閉じるまで main に入らない | main 直行（§5.2）|
 | must-fix を束に入れる | 修正が束の締めまで出荷されない | main 直行（§5.2）|
-| 統合ブランチを消す | 小 PR の履歴が消える（main は束 1 コミット）| 消さない（リポジトリ規則）|
+| 統合ブランチを消す | 小 PR を後から辿りにくくなる | 消さない（リポジトリ規則）|
 
 ## 10. OrbitScore での割り当て（2026-09 プラン）
 
@@ -179,5 +179,5 @@ main 直行: PR-O1 / L0 / R0（仕様）、PR-O2 / D0 / V4 / K-A1 / K-A2 / S-T1�
 
 **OrbitScore 側の一次情報**
 15. `CLAUDE.md`「PR レビューワークフロー」「検証を委譲先に任せない」（PR #527 / #633 の実測）
-16. `docs/core/PROJECT_RULES.md`（squash merge・ブランチを消さない・命名規約）
+16. `docs/core/PROJECT_RULES.md`（merge commit・ブランチを消さない・命名規約）
 17. `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` §1〜§3（PR 一覧・順序の根拠・段）

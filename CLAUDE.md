@@ -292,6 +292,21 @@ Codex は sandbox で **daemon protocol（localhost bind）・MCP 系・実機 E
 
 **コード変更を含む PR をレビューするときは、以下を必ずスラッシュコマンド（Skill tool）で実行する。Agent tool でのハンドロール代用・反復ループの手動組み立ては禁止。**
 
+### 🔴 レビューの単位は「束」（owner 合意 2026-09-03・#703）
+
+以下の 1〜8 は **束 PR（統合ブランチ → main）と main 直行 PR** に対して回す。**小 PR（統合ブランチ向け）では回さない。** 手引きは [`docs/development/BUNDLE_BRANCH_WORKFLOW.md`](docs/development/BUNDLE_BRANCH_WORKFLOW.md)。
+
+| 単位 | ゲート |
+|---|---|
+| 小 PR（base = 束の統合ブランチ・draft） | CI（unit / lint / cargo）+ **その PR が足した E2E だけを実機で**（`ORBIT_GATED_ONLY`）+ main が差分を読む。レビューチーム・Fable・bot は呼ばない |
+| 束 PR（統合ブランチ → main） | 下の 1〜8 をすべて + マージ前ゲート（ビルド + 実機 E2E 全件）。監査には設計文書と束の差分を渡す |
+| main 直行 PR | 仕様だけの PR（advisor 相談の軽いレビュー）と must-fix（従来どおり 1〜8）。束をまたぐ PR も単独 |
+
+- 束は差分 **1,500 行以下**で、設計上の継ぎ目（wire / DSL・記録 / 再生・実時間 / オフライン）で切る。割り当ては plan §2.5
+- 小 PR の「その PR が足した E2E を実機で」は**省かない**。委譲先（Codex）の緑は実機の緑ではなく、ここを省くと束の締めで一度に露見して fix 3 回で収束しない
+- レビューの指摘への fix は統合ブランチの**先頭に積む**（小 PR は既に入っているので rebase は発生しない）
+- マージ方式は **merge commit**（squash はリポジトリ設定で不可・2026-09-03 実測）。`PROJECT_RULES.md`「Merging PRs」参照
+
 1. **`/simplify`** — reuse / simplification / efficiency / altitude の cleanup を適用。
 2. **`/code:pr-review-team` ラウンド1（フル編成）と Fable 監査を並行起動する。**
    - **Fable は最後に回さない。** PR #527 で Fable が見つけた既存バグ2件は**ラウンド1の時点から
@@ -635,6 +650,7 @@ DSL 機能が実際に価値を出すのは「エディタで書く → 評価�
 
 **マージ指示を仰ぐ前に、必ずビルドして実機で動かし、その PR の機能が動くことを確認する。**
 ユニットテストが全部緑でも実機が壊れていることがある。
+（#703: このゲートの対象は **束 PR と main 直行 PR**。小 PR は「その PR が足した E2E だけ」を実機で回す）
 
 手順:
 
@@ -686,6 +702,8 @@ gated テストまで対象になる。
 - ❌ `/code:pr-review-team` の反復ループを自分で round 分割して手動実行する（スキルに収束まで委ねる）
 - ❌ 内部レビュー通過の判定を自己判断で済ませる（独立した再レビュー or bot で裏付ける）
 - ❌ **ビルド + 実機 E2E を省いてマージ指示を仰ぐ**（コード変更を含む PR の場合）
+- ❌ 小 PR（統合ブランチ向け）でレビューチーム・Fable・bot を起動する（束の締めまで待つ）
+- ❌ 小 PR で「その PR が足した E2E を実機で」を省く
 
 ### 理由
 
@@ -696,6 +714,7 @@ gated テストまで対象になる。
 ### Branch Structure
 - `main` - Production (protected, base for PRs)
 - `<issue-number>-description` - Feature branches (English only)
+- `<issue-number>-<bundle>` - 束の統合ブランチ（main から切る・小 PR の base・束 PR で main へ・消さない）。#703
 
 ### Quick Workflow
 ```bash
@@ -713,6 +732,9 @@ npm test
 
 # 5. Create PR
 gh pr create --base main --body "Closes #N"
+
+# 束の小 PR は base を統合ブランチにして draft で（本文は "Part of #N"・Closes は束 PR に集約）
+gh pr create --base <issue>-<bundle> --draft --body "Part of #N"
 ```
 
 **Details**: See [`docs/PROJECT_RULES.md`](docs/PROJECT_RULES.md) Section 2
