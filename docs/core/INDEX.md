@@ -78,12 +78,6 @@ Issue 単位の実装設計（起案 Fable / 審査 main。**owner 確定事項�
 
 | File | Issue | Purpose |
 |---|---|---|
-| [625-effect-replacement-design.md](../archive/design/625-effect-replacement-design.md) | #625 | effect insert の差し替え・削除（同一スロットで建て直す） |
-| [628-effect-chain-model.md](../archive/design/628-effect-chain-model.md) | #628 | エフェクトチェーンモデル（現在地の実測と到達点） |
-| [628-rack-chain-implementation-design.md](../archive/design/628-rack-chain-implementation-design.md) | #628 | ラックチェーンの実装設計 |
-| [628-plan-reset.md](../archive/design/628-plan-reset.md) | #628 | 計画の立て直し（Cmd+Click を #633 へ移管） |
-| [628-gated-e2e-rack-design.md](../archive/design/628-gated-e2e-rack-design.md) | #628 | ラックの実機 gated E2E 設計 |
-| [628-ui-pump-per-index-design.md](../archive/design/628-ui-pump-per-index-design.md) | #628/#633 | `UiEventPump` の per-index / per-window 化 |
 | [643-mixer-foundation-design.md](../design/643-mixer-foundation-design.md) | #643 | ミキサーの土台と、その上に乗るオプションの責務分離（instrument を source に） |
 | [649-audio-line-design.md](../design/649-audio-line-design.md) | #649 | オーディオライン設計 v3（メソッドチェーン順序 = 決定論） |
 | [611-output-line-design.md](../design/611-output-line-design.md) | #611/#649/#543-a/#409/#647 | 出口の一般化 — `output(dest, thru, db)` がライン要素・`SetBusLine`・master ライン（2026-09-03） |
@@ -97,6 +91,20 @@ Issue 単位の実装設計（起案 Fable / 審査 main。**owner 確定事項�
 | [656-release-design.md](../design/656-release-design.md) | #659/#656/#385/#138 | 配布: ローカルリリース → 署名・公証 → cold-install smoke |
 | [668-e2e-foundation-design.md](../design/668-e2e-foundation-design.md) | #668/#650/#630/#543-b/#624/#640/#684 | E2E 基盤: 共通 helper・二重台帳・決定論 |
 | [679-input-consistency-check.md](../design/679-input-consistency-check.md) | #679 | 入力（レコーディング）の整合確認のみ（着手しない） |
+
+#### アーカイブ済み（`docs/archive/design/`）
+
+**正本が別にできたもの**を #696 で移動した（PR [#693](https://github.com/signalcompose/orbitscore/pull/693)）。
+記録としては残るが**現在の正本ではない**ので、**新しい判断の根拠にしないこと**:
+
+| File | Issue | 現在の正本 |
+|---|---|---|
+| [625-effect-replacement-design.md](../archive/design/625-effect-replacement-design.md) | #625 | **#625 CLOSED**（出荷済み・PR #627）/ 意味論は SC.10 |
+| [628-effect-chain-model.md](../archive/design/628-effect-chain-model.md) | #628 | `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` **SC.10** |
+| [628-rack-chain-implementation-design.md](../archive/design/628-rack-chain-implementation-design.md) | #628 | **#628 CLOSED**（出荷済み・PR #639）/ 意味論は SC.10 |
+| [628-plan-reset.md](../archive/design/628-plan-reset.md) | #628 | **#628 CLOSED**（PR #639）/ 現在の計画は `DEVELOPMENT_MAP.md` §4.B |
+| [628-gated-e2e-rack-design.md](../archive/design/628-gated-e2e-rack-design.md) | #628 | **#628 CLOSED** / E2E の現在地は `DEVELOPMENT_MAP.md` §4.G |
+| [628-ui-pump-per-index-design.md](../archive/design/628-ui-pump-per-index-design.md) | #628/#633 | **#633 CLOSED**（出荷済み・PR #652）/ 現在地は `DEVELOPMENT_MAP.md` §4.B・§4.C |
 
 > ⚠️ 設計書の「失敗モード ↔ テスト対応表」は**テスト対象の一覧**として読み、検証手段は CLAUDE.md の
 > 「テストの積み上げ規律」で決め直す（設計書は本規則を上書きできない）。
@@ -223,13 +231,27 @@ CLAUDE.md の「テストの積み上げ規律」「E2E が最重要」「マー
 
 | File | Purpose |
 |---|---|
-| [ROADMAP_2026.md](../archive/planning/ROADMAP_2026.md) | 2026 ロードマップ (ICMC Hamburg 2026-05-10 〜 16 を含む) |
-| [IMPROVEMENT_RECOMMENDATIONS.md](../archive/planning/IMPROVEMENT_RECOMMENDATIONS.md) | 優先度付き改善提案 |
-| **[DEVELOPMENT_MAP.md](../planning/DEVELOPMENT_MAP.md)** | 🔴 **現在の正本**: 全 open issue の地図・リリースまでの筋（§3）・未決一覧（§9）（2026-09-03） |
+| [DEVELOPMENT_MAP.md](../planning/DEVELOPMENT_MAP.md) | 🔴 **開発計画の正本**（2026-09-03 制定）。open issue はこの地図に**合わせる**。§0 使い方と運用規則 / §1 再設計しない確定事項 / §1b 機能の持ち方 / §2 全体図 / §3 リリースまでの筋 / §4 領域ごとの地図 / §5 Epic の裁定 / §6 統合一覧 / §7 新規に必要な issue / §8 提案 / §9 未確認 |
 | [IMPLEMENTATION_PLAN_2026-09.md](../planning/IMPLEMENTATION_PLAN_2026-09.md) | 設計文書 11 本の PR 戦略（一方通行の判断・PR 一覧・順序の根拠・段）（2026-09-03） |
 | [`USER_OUTCOMES_2026-09.md`](../planning/USER_OUTCOMES_2026-09.md) | 各 PR が完了するとユーザーは何ができるか（plan §1 の PR ごとに 1 行・見え方の凡例つき） |
 | [`BUNDLE_BRANCH_WORKFLOW.md`](../development/BUNDLE_BRANCH_WORKFLOW.md) | 束ブランチ運用: 小 PR は統合ブランチへ軽いゲートで、フルレビューと実機検証は束 PR で 1 回（他リポジトリへの導入手順・GitHub stacked PR との違い・参照つき） |
 | [2026-09-03-issue-triage.md](../planning/2026-09-03-issue-triage.md) | issue 棚卸し 164→120 の結果と判断根拠、および 6 つのクラスタ C1〜C6（診断の整合／プラグインの生存管理／daemon 起動の失敗面／時間の粒度／配布／ミキサーの出力側）。ラベル運用は [PROJECT_RULES.md](PROJECT_RULES.md) §1b (#689/#690) |
+
+| [2026-09-03-issue-triage.md](../planning/2026-09-03-issue-triage.md) | issue 棚卸し 164→120 とラベル運用の記録（#689）。**地図の入力として現役** |
+
+> 🔴 **新規起票の前に地図の該当節を探す**（地図 §0.2）。**番号の検索ではなく、地図の見出しで探す** —
+> `gh issue list` だけでは重複を防げなかった（2026-09-03 に #686→#218 / #680→#506+#522 の 2 件が同日に発生）。
+> 地図に該当する節が無い作業は、**まず地図を更新する PR を出す**。
+
+#### アーカイブ済み（`docs/archive/planning/`）
+
+#696 で移動（PR [#693](https://github.com/signalcompose/orbitscore/pull/693)）。**新しい判断の根拠にしないこと**:
+
+| File | 現在の正本 |
+|---|---|
+| [ROADMAP_2026.md](../archive/planning/ROADMAP_2026.md) | **`DEVELOPMENT_MAP.md`**（地図 §0.3: 本文書は歴史的スナップショットであり、現在の順序の根拠にしない） |
+| [IMPROVEMENT_RECOMMENDATIONS.md](../archive/planning/IMPROVEMENT_RECOMMENDATIONS.md) | **`DEVELOPMENT_MAP.md`**（SC 時代の文書） |
+| [2026-09-02-feature-map-comments.md](../archive/planning/2026-09-02-feature-map-comments.md) | **`DEVELOPMENT_MAP.md`** §4 各節 + **#679 / #680 / #681**（9 コメントは地図と issue へ転記済み） |
 
 ### Post-ICMC（起案時の計画・多くは実装済）
 
