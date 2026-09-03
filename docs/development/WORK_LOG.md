@@ -951,6 +951,33 @@ Older entries have been archived by month for readability:
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
 
+## 2026-09-03: PR #704 の追従監査（ドキュメント変更なし・指摘 3 件）
+
+ルーチン「マージ済み PR にドキュメントとサイトを追従させる」を PR #704（`703-bundle-branch-workflow`
+→ main・merge commit `3fa1150`）に対して実行。**追従すべきドキュメント変更は 0 件**。
+
+- 差分 6 ファイルはすべて規約文書と CI 定義（`CLAUDE.md` / `docs/core/PROJECT_RULES.md` /
+  `docs/development/BUNDLE_BRANCH_WORKFLOW.md` / `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` /
+  `docs/development/WORK_LOG.md` / `.github/workflows/claude-code-review.yml`）で、
+  `packages/engine/` `rust/` `packages/vscode-extension/` に変更が無い。DSL の構文・意味論、
+  MCP ツールの契約、OrbitStudio の評価経路のいずれも変わっていないので、
+  `docs/specs-v2/` `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` `sites/user/` `sites/dev/` は追従不要
+- `squash` → `merge commit` の訂正は差分内で完結している（リポジトリ全体を grep して、
+  規約文書に旧記述の残りは無い。`sites/dev/en/signal-chain/index.md:1230` の "squashed" は
+  信号処理の記述で無関係）
+
+**追従できていない点として PR で報告した 3 件**（本ルーチンでは直さない）:
+
+1. `CLAUDE.md:301` と `docs/development/BUNDLE_BRANCH_WORKFLOW.md:70` が小 PR のゲートで
+   `ORBIT_GATED_ONLY` を既存の仕組みとして参照しているが、実装が無い。
+   実在するのは `ORBIT_GATED_ORBITSTUDIO`（`tests/e2e/orbitstudio-mcp-gated.spec.ts:59`）で
+   suite 全体の on/off。`ORBIT_GATED_ONLY` は `docs/design/668-e2e-foundation-design.md:891`
+   の決定 D-4（未実装）
+2. `.github/workflows/claude-code-review.yml` の最終実行は 2026-06-17（run #278）。
+   今回足した `if: github.base_ref == 'main'` の効果を Actions で観測できない
+3. PR #704 は最終 head `7f53a5d` の CI 完了を待たずにマージされている
+   （CI 開始 10:29:37Z / マージ 10:29:39Z）。赤ではないが、マージ時点では未検証
+
 ## 2026-09-03: 束ブランチ運用の採用（#703）
 
 owner との相談（PR #702 セッション）で、レビューの単位を PR から**束**へ変更。小 PR は束の
