@@ -117,6 +117,29 @@ instanceKey = path.resolve(scoreDir, expandRenderTemplate(template, ctx))
 
 ---
 
+### 3.6 多チャンネル render（B-lite・owner 2026-09-03 Q-598-2）— N ch の WAV に stereo pair / mono を置く
+
+**やること**: render エンドポイントに**幅**を持たせ、`output` で**どのチャンネルに置くか**を指定できるようにする。エンコード（5.1 の LFE・ダウンミックス・panner）は**作らない**。owner の運用は「マルチアウトとモノラルと個別レンダリングがあれば Logic でサラウンドを作る」なので、必要なのは**チャンネルを持った器**だけ。
+
+```
+var quad = mix.render("bounce/%n_quad.wav", channels: 4)     // 4 ch WAV（既定 channels: 2 = 今までどおり）
+kick.output(quad)                 // 既定: ch 1-2（stereo pair）
+pad.output(quad, at: 3)           // ch 3-4 に stereo pair を置く（at は pair の先頭・1 始まり）
+sub.output(quad, at: 4, mono: true)   // ch 4 に (L+R)*0.5 を置く（doc 611 §2.4 の mono 合成と同じ式）
+```
+
+| 項目 | 内容 |
+|---|---|
+| DSL | `mix.render(path, channels?: 2..64)`・`output(dest, thru?, db?, at?: number, mono?: boolean)`。`at` は render 宛先でだけ有効（device / bus / master に付けたら診断 `at: is only valid for render destinations`）。`at + (mono ? 1 : 2) - 1 > channels` は診断 |
+| TS 型 | `RenderDeclaration.channels: number`（§4.3 に 1 フィールド）/ `OutputDest` の `render` 枝に `at: number`・`mono: boolean`（doc 611 §2.2 の union に加算）|
+| wire | `DeclareRender { id, path_template, channels }`・`ArmRenders.instances[].channels`・`SetBusLine` の `output.render` に `at` / `mono`（§4.4 の表に 3 列・**加算のみ**。`channels` 省略 = 2）|
+| Rust | `RenderInstance.scratch` を `channels × block` に（今 2 × block）。`LineOp::Output(Render { slot, at, mono })`: `mono` なら `(L+R)*0.5` を `scratch[at]` へ、でなければ L→`at`・R→`at+1`。`CaptureWriter::create(path, sr, channels, …)` は**既に N ch**（`capture.rs:186`）なので writer は無変更 |
+| E2E | **E2E-R10**: `channels: 4` に kick を ch 1-2・pad を `at: 3` で置いて 4 ch WAV を実在確認 → **チャンネル別 RMS**（ch 1-2 に kick・ch 3-4 に pad・交差 < -40 dB）。`analyzeWavBuffer` の mono 畳み込み（doc 668）があるので **PR-E3（per-channel 解析）の後** |
+| 見積り | Rust `output.rs` +60 / `engine_wrap.rs` +30 / TS パーサ・runtime +50 / `render-endpoint-manager.ts` +20 / E2E +80。**難易度: 中**（新しい概念は「幅」と「位置」だけ・RT は index 計算が増えるのみ）|
+| やらないこと | panner（`pan` は stereo pair 内の L/R のみ・doc 611 §2.4b）/ 5.1 レイアウト名（`L R C LFE Ls Rs` の順序は Logic 側で決める）/ device 出力の 3 ch 以上（device は pair / mono のまま・doc 611 §2.2）|
+
+**順序**: PR-R3（実時間 stem・2 ch）の後に **PR-R9** として足す。P2 offline（PR-R6）の `RenderScore` v2 `renders[]` にも `channels` を 1 フィールド足す（同じ PR）。
+
 ## 4. TS の型と signature
 
 ### 4.1 パーサ（`parse-statement.ts`）
@@ -176,7 +199,7 @@ export class RenderEndpointManager {
 | コマンド | params | 戻り | 意味 |
 |---|---|---|---|
 | `DeclareRender` | `{ id: string, path_template: string }` | `{}` | 宣言の登録（ファイルは開かない）。同 id は差し替え |
-| `ArmRenders` | `{ sample_rate?: u32, instances: [{ key: string, path: string, render_id: string }] }` | `{ slots: [{ key, slot: usize }] }` | 各 `path` を `CaptureWriter::create`（mkdir -p 込み）で開き、`RenderInstance` を RT へ install。`sample_rate` 省略 = stream の rate |
+| `ArmRenders` | `{ sample_rate?: u32, instances: [{ key: string, path: string, render_id: string, channels?: u16 }] }` | `{ slots: [{ key, slot: usize }] }` | 各 `path` を `CaptureWriter::create`（mkdir -p 込み）で開き、`RenderInstance` を RT へ install。`sample_rate` 省略 = stream の rate |
 | `DisarmRenders` | `{}` | `{ files: [{ key, path, frames_written: u64, dropped_samples: u64 }] }` | RT から retire → writer `finish()` → レポート。**`dropped_samples > 0` は結果に載せる**（黙らない） |
 | `SetBusLine` `dest` | `{ kind: 'render', key: string }` | — | doc 1 §4.1 の `WireDest` に `render` を足す。**`key` = 解決後パス**（slot は daemon が引く。未 arm の key は受理して no-op・arm 時に結線）|
 | `RenderScore` v2 | §6.2 | §6.2 | オフライン |
@@ -507,6 +530,7 @@ parse-statement.ts:140-149（lookahead）/ :453-487（parseMixerNodeDecl）/ par
 | PR-R6 `feat(daemon): OfflineRenderSession (P2) — RenderScore v2 renders stems` | §6.1-6.2 + fixture v2 + cargo test（bit 一致）| PR-R2 | wire |
 | PR-R7 `feat(cli): orbitscore render / replay --render` | §6.4・§8 + E2E-R5/R6 | PR-R5・PR-R6 | — |
 | PR-R8 `feat(render): P3 plugins + instruments offline` | §7 + E2E-R8 | PR-R6・#634/#636 の instrument rack（§16 (8)）| — |
+| PR-R9 `feat(render): N-channel render endpoints — mix.render(path, channels) and output(at:, mono:)` | §3.6（B-lite・owner Q-598-2）| PR-R3・PR-E3（チャンネル別解析）| **E2E-R10**（4 ch WAV のチャンネル別 RMS）| wire（加算）・DSL 表面 |
 
 **並行可能**: PR-R4（Clock DI）は他と独立で最初に出せる。PR-R2 と PR-R1 は独立（wire と DSL）。PR-R6 は PR-R3 と独立。
 
@@ -529,7 +553,7 @@ parse-statement.ts:140-149（lookahead）/ :453-487（parseMixerNodeDecl）/ par
 | # | 問い | 選択肢 | 推奨 | 影響 |
 |---|---|---|---|---|
 | (1) ✅ **A `%n` `%v` `%d`（owner 2026-09-03）** | プレースホルダの語彙 | `%v`（版・3 桁）/ `%d`（日時 `YYYYMMDD-HHMMSS`・`.orbslog` と同じ `formatLogStamp`）/ 他 | **`%n` `%v` `%d` の 3 つ**。`.orbslog` の stamp 関数を流用 | `PLACEHOLDERS` 表の行（§3.3）|
-| (2) 🔴 **相談中**（owner「サラウンドミックスの話か？」→ そのとおり。多 ch WAV 1 本〔quad / 5.1〕にどう書くか。Q-611-5 の「チャンネルは独立」の見方なら宛先を**チャンネル集合**にする一般化がある — チャットで選択肢を提示）| 3ch 以上を 1 ファイルに | `quad.pair(3,4)` / `output(quad, ch:[3,4])` / **作らない** | **作らない**（stem 用途に要求が無い・main 推奨に同意）| — |
+| (2) ✅ **B-lite: N チャンネルの render エンドポイント + `at:` 配置（owner 2026-09-03「サラウンド対応が出来るならこのタイミングで。難易度による。マルチアウトとモノラルが出来て個別レンダリングが出来てれば Logic でサラウンドは作ってもいい」）** → §3.6・PR-R9 | 3ch 以上を 1 ファイルに | A 作らない / B エンコーダ込みのサラウンド（panner・5.1 ダウンミックス）/ **B-lite** N ch の WAV に stereo pair / mono を**置くだけ**（エンコードは Logic 等）| **B-lite**。難易度は中（§3.6 に見積り）。B（エンコーダ）は作らない — owner の運用（Logic でサラウンド化）で不要 | `RenderDeclaration.channels`・`ArmRenders.instances[].channels`・`LineOp::Output(Render{slot, at})`・scratch 幅 |
 | (3) ✅ **B 新規 issue「書き出しの操作面」（owner 2026-09-03）** | 実時間 per-bus stem（§5）の優先順位と置き場 | A #598 に含める / B 新規 issue（地図 §7 (7)(11)）/ C #611 に足す | **B（新規・「書き出しの操作面」）**。ただし機構は本書で確定済みなので、順序だけの問題。オフライン（PR-R5-R7）を先に出すのが owner の目的（840 / 1260 を録る）に沿う | PR-R2/R3 の順番 |
 | (4) ✅ **C 予告 arm（owner 2026-09-03「一旦これで」）** → §4.3 の arm はラインのインストール時・RT は `transport.running` で commit を gate | arm の RTT で版の先頭が欠ける（§4.3）を許容するか | A 許容 / B `global.start()` を async にして arm を await / C transport start の前に「予告 arm」（ラインのインストール時に開く・transport 停止中は commit しない） | **C**（RT は `transport.running` を見て commit を gate・無音を書かない）| §5.2 に 1 分岐 |
 | (5) ✅ **上限を持たない（owner 2026-09-03: マシンの上限まで使える。最適化で応える）** → §5.1 を改訂（AtomicPtr 差し替え・env は初期確保数）| ~~`MAX_RENDER_INSTANCES`（RT pool の容量）~~ | 上限を決めない（owner）が RT pool は固定長 | 既定 16・env `ORBIT_RENDER_INSTANCES`・**#663 の off-thread 拡張で撤廃** | 定数 1 つ |

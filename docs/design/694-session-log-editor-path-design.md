@@ -47,6 +47,68 @@
 
 ---
 
+## 2b. B の実測 — 今日のログでリプレイできるか（owner 指示 2026-09-03・実装を実走して確認）
+
+owner: 「そもそもログが出ていた時に再現に使える形になっている様に中身が見えなかったという記憶。実装を調べてちゃんとリプレイできるのか？それがないとオフラインレンダリングができない」
+
+**結論: 今日の writer が書くログは、そのままでは再現に使えない。** 欠けているのは 3 層で、(a) **記録の中身**（何が書かれているか）、(b) **時刻の意味**（`transport` が音楽時間になっていない）、(c) **ログの外にある原因**（プラグイン状態・import）。(a) は §3–§4 で設計済み、(b)(c) は本節で新たに設計に足す（§7.2 改訂・§10 PR-L7〜L9・§13 (8)(9)）。
+
+### 2b.1 実走の方法（再現可能）
+
+mock backend の `InterpreterV2`（`tests/session-log/session-log-integration.spec.ts:24-33` と同じ差し替え）に、拡張が実際に stdin へ書く形（`extension.ts:3013-3022` の注入込み）を `createReplSession(interpreter).pushLine`（`repl-mode.ts:300`）で 1 行ずつ流し、`Date.now` を `vi.spyOn` で進めた。`ORBITSCORE_SESSION_LOG` は `enableSessionLog` で直接 on。生成された `.orbslog` の全レコードが下の根拠。probe は `tests/` に残していない（scratch。同じ手順で E2E-S6 / E2E-R1 を書く）。
+
+### 2b.2 生成されたログ（抜粋・`wall` は `Date.now` を差し替えたため負値 = probe の artefact）
+
+```jsonl
+{"type":"meta","logVersion":1,"engineVersion":"2.0.0","dslVersion":"1.1","startedAt":"2026-09-03T07:52:34.227Z","sourceFile":null}
+{"type":"eval","transport":null,"effect":null,"code":"//#documentDirectory /tmp/orbslog-probe-u00VrW","sourceFile":null,"evalSource":"human"}
+{"type":"eval","transport":null,"effect":null,"code":"var global = init GLOBAL","sourceFile":null,"evalSource":"human"}
+{"type":"eval","transport":null,"effect":null,"code":"global.setDocumentDirectory(\"/tmp/orbslog-probe-u00VrW\")","sourceFile":null,"evalSource":"human"}
+{"type":"eval","transport":null,"effect":null,"code":"global.tempo(120)", ...}
+{"type":"eval","transport":null,"effect":null,"code":"global.beat(4 by 4)", ...}
+{"type":"eval","transport":null,"effect":null,"code":"var kick = init global.seq", ...}
+{"type":"eval","transport":null,"effect":null,"code":"global.start()", ...}
+{"type":"transport","event":"start"}
+{"type":"eval","transport":"1:3.000","effect":null,"code":"global.tempo(60)", ...}            ← 1000 ms 後（120 BPM で 2 拍 = 正しい）
+{"type":"eval","transport":"1:2.010","effect":"2:1.000","code":"LOOP(kick)", ...}            ← その 10 ms 後。位置が**逆行**（1:3.000 → 1:2.010）
+{"type":"eval","transport":"1:2.210","effect":null,"code":"kick.play(1, 0, 1, 0)", ...}
+{"type":"eval","transport":"1:2.210","effect":null,"code":".gain(-6)", ...}                  ← チェーンが行で割れて 2 レコード
+{"type":"eval","transport":"1:2.310","effect":null,"code":"global.stop()", ...}
+{"type":"transport","transport":"1:2.310","event":"stop"}
+```
+
+ファイル名は `untitled.20260903-075234.orbslog`（cwd 直下）。
+
+### 2b.3 欠落の一覧（`path:line` は main `ca176f0`）
+
+| # | 欠落 | 根拠（コード） | 根拠（ログ） | replay への影響 | 手当 |
+|---|---|---|---|---|---|
+| G1 | `code` に拡張の注入（`//#documentDirectory` 行・`global.setDocumentDirectory(...)`）が混じり、**メタ行だけの eval レコード**まで出る | `extension.ts:3013-3022` / `repl-mode.ts:371-376`（`source: code` をそのまま渡す）| 上の 1・3 行目 | 再生機の cwd に依存した絶対パスを再評価する。譜面を動かすと壊れる | §3.3（PR-L1a）|
+| G2 | `sourceFile` が常に null → `untitled` / cwd 直下 | `repl-mode.ts:371-376`（`sourceFile` を渡さない）/ `session-log-writer.ts:124-127` | meta `sourceFile:null`・ファイル名 | `--score-dir` 無しでは `audio()` の相対解決先が無い | §3.2（PR-L1b）|
+| G3 | **1 行 = 1 eval**。選択 1 回が N レコードになり、チェーン継続行（`.gain(-6)`）が単独の eval として実行・記録される | `repl-mode.ts:510-513` | `kick.play` / `.gain` の 2 行 | 記録粒度と提出粒度が違う。replay は行単位で再投入すれば**同じ結果**にはなるが、構文エラーの途中実行（§4.2）まで忠実に再現することになる | §4（PR-L2）|
+| G4 | `evalSource` が常に `'human'`。MCP（`evaluate_orbitscore`）の eval に印が無い | `repl-mode.ts:375` 固定 / `extension.ts` `evaluateForAgent` → `writeCodeToEngine`（同じ stdin・印なし）| 全行 `"human"` | 再現性には影響しない。spec §3 の `agent` 識別（コンサートシステムの介助 / 自律の区別）が**成立していない** | フレームに属性を持たせる（§4.1 改訂・PR-L2）|
+| G5 | **評価の結果が記録されない**。`recordEval` は `execute()` の**先頭**（`interpreter-v2.ts:156-167`）で、成功 / 失敗 / 診断は書かれない。REPL は `//#evalMark` で `ok` + `diagnostics` を**既に計算している**（`repl-mode.ts:402-417`）のに捨てている | 同左 | `kick.audio("does-not-exist.wav")` が成功と区別つかない | replay は「同じ失敗を再現する」のが正しい（因果の対称）。だが**検証**（`--verify`）と人間の読解に結果が要る | `type:'result'` レコード（§6 改訂・PR-L7）|
+| G6 🔴 | **`transport` が音楽時間ではない**。`msToBarBeat` は「start からの経過 ms を**今の** tempo/beat で割る」（`global.ts:755-768`）ので、走行中に tempo/beat を変えると**過去まで書き換わる**（1:3.000 の 10 ms 後が 1:2.010）。`effect` と LOOP の quantize も同じ式（`quantize-manager.ts:61-72`・origin からの境界数 × 今の周期）で、tempo(60) の直後の LOOP は「+2990 ms」待った | `global.ts:726-745` / `transport-clock.ts:28`（origin は start 時に 1 回だけ・tempo 変更で再基準化しない）/ `global.ts:239-255`（`tempo()` は clock に触れない）| `1:3.000` → `1:2.010` の逆行・`effect:"2:1.000"` | (i) replayer が「記録時と同じ式の逆関数」を使えば**時刻としては自己整合**する（`wall` と同じ情報なので再現はできる）。(ii) しかし **`--until 57:1` の「57 小節目」が実際に鳴った 57 小節目と一致しない**・人間にもログが読めない・`effect` が嘘になる。(iii) LOOP の quantize 自体が tempo 変更後に**境界を飛ばす**（今日の挙動・replay とは独立のバグ）| **`TransportTimeline`**（§7.2 改訂・PR-L8）。quantize を同じ timeline に乗せるかは 🔴 §13 (8) |
+| G7 🔴 | **プラグインの状態がログの外**。`instrument()` / `effect()` は `statePath` 省略時に `project.yaml` の `states[key]`（`project-state-store.ts:122`）を読み、`global.stop()` の auto-snapshot（`global.ts:700-711` → `:1409`）と `//#savePluginState` が**同じ相対パスへ上書き**する（`project-state-store.ts:234-235`・`:290`・版なし）。UI のつまみ操作（`//#pluginUi`・`repl-mode.ts:386-400`）は `execute()` を通らないので eval にならない | 同左 | probe は plugin 無し（mock）| replay の `instrument("x")` は**その後の別セッションで上書きされた状態**を読む → 同じ DSL で違う音。**オフラインレンダの再現性が成立しない**（#598 P3 の前提）| セッション開始時に状態を `orbslog/` へ写す（PR-L9・🔴 §13 (9)）|
+| G8 | **import した module の中身がログに無い**。`processFileImports` は eval 時にディスクを読む（`process-file-import.ts:117`）。`code` は entry の文だけ | 同左 | — | module を編集した後の replay が別の曲になる | `type:'import'` レコード（path・sha256・本文。PR-L7）|
+| G9 | **音声資産の同一性が無い**（`audio()` の wav は path のみ） | — | — | `--verify` で検出するしかない | `meta.assets` sha256（§7.5・PR-L6・裁定済み）|
+| G10 | 乱数（`r` 等）は再抽選 | `sequence.ts:1322` / `:1327`・`random-utils.ts:19-22` | — | **仕様どおり**（原則 2「原因として記録し再度引く」）| なし |
+| G11 | `midi-run.ts`（MIDI 単独実行）と `//#selectAudioDevice` / LinkAudio は記録外 | `interpreter-v2.ts:150-151` / `repl-mode.ts:441-445` | — | device 選択はハードウェアで再現に無関係。LinkAudio は裁定 (6) で扱わない | なし |
+
+**owner の記憶と一致する箇所**: G1（`code` が注入で汚れて読めない）・G2（`untitled` が cwd に落ちる）・G3（1 行ずつ割れて選択の形が残らない）が「中身が見えなかった」の実体。**それに加えて** G6 / G7 は「見えていても再現できない」欠落で、オフラインレンダ（#598 P2/P3）が `.orbslog` を入力にする以上、**PR-R5 の前に塞ぐ**（§10・plan §1.2）。
+
+### 2b.4 「再現できる」の定義（本書が保証する範囲・spec §2 原則 1–2 に従う）
+
+| 再現する | 再現しない（設計上） |
+|---|---|
+| DSL の評価列と各評価の transport 位置（ms 精度・G6 の手当後は音楽時間）| 乱数の実現値（G10）|
+| LOOP / RUN / 差し替えが効いた小節（transport 駆動 + 同じ quantize）| 外部入力（LinkAudio / MIDI in / OSC in）|
+| セッション開始時点のプラグイン状態（G7 の手当後）| セッション**中**の UI 操作（つまみ）— `--verify` が start≠stop の差で警告する |
+| import した module の本文（G8 の手当後）| 音声資産の中身（hash で**検出**だけ・G9）|
+| 評価の成功 / 失敗（G5 の手当後・検証用）| — |
+
+---
+
 ## 3. #694 — エディタ経路で出す（A）
 
 ### 3.1 有効化の経路: VS Code 設定 → env（設定面 = 拡張の既存パターン）
@@ -180,11 +242,13 @@ const EVAL_BEGIN_META_RE = /^\s*\/\/#evalBegin\s*$/
 const EVAL_END_META_RE = /^\s*\/\/#evalEnd\s*$/
 ```
 
-`createReplSession` に `let frame: string[] | null = null` を足す。`handleLine`:
+フレームは**属性**を持てる（G4 の手当）: `//#evalBegin {"evalSource":"agent"}`（JSON は任意・省略時 `human`）。`evaluateForAgent`（`extension.ts` MCP 経路）だけが `agent` を付け、`run_selection` は付けない。`execute()` の `evalSource` はこの属性から決める（`repl-mode.ts:375` の固定値を廃止）。
+
+`createReplSession` に `let frame: { lines: string[]; evalSource: EvalSource } | null = null` を足す。`handleLine`:
 
 | 行 | 動作 |
 |---|---|
-| `//#evalBegin` | `frame !== null` なら `[ERROR] //#evalBegin while a frame is open — previous frame discarded`（診断に積む）。`frame = []` |
+| `//#evalBegin [json]` | `frame !== null` なら `[ERROR] //#evalBegin while a frame is open — previous frame discarded`（診断に積む）。`frame = { lines: [], evalSource: json?.evalSource ?? 'human' }` |
 | `//#evalEnd` | `frame === null` なら `[ERROR] //#evalEnd without //#evalBegin`（診断に積む・無視）。それ以外は `code = frame.join('\n'); frame = null; await executeFrame(code)` |
 | `//#evalMark` | **開いたフレームがあれば閉じて実行してから**報告（`:407-427` の「未完のまま残った入力を放置しない」と同じ理由）|
 | その他のメタ行 | フレーム中でも即時処理（`selectAudioDevice` 等は帯域外・`:493-498`）|
@@ -201,6 +265,8 @@ const EVAL_END_META_RE = /^\s*\/\/#evalEnd\s*$/
 | `play-mode`（ファイル全体） | 1 `execute()` | 不変（フレーム相当）|
 
 「1 選択は 1 まとまり」は `play` と同じ意味論に**揃う**方向。これは仕様変更なので spec §3.1 を改訂する（§11）。
+
+実測（§2b.2）: 6 行の選択が 6 レコードになり、`kick.play(1, 0, 1, 0)` と継続行 `.gain(-6)` が**別々の eval** として実行・記録された。行単位の記録でも replay は同じ行単位で再投入すれば同じ結果になるが、「選択の形」がログに残らない（owner の記憶「中身が見えなかった」の一部）。
 
 ### 4.3 リプレイとの整合
 
@@ -238,6 +304,16 @@ replayer は `logVersion !== 2` を**拒否**する（`unsupported logVersion`�
 
 ---
 
+### 6b. v2 で足すレコード（G5 / G8 の手当・PR-L7）
+
+| type | いつ | フィールド | 用途 |
+|---|---|---|---|
+| `result` | フレームの `execute()` が返った直後（`//#evalMark` の `ok` / `diagnostics` と**同じ値**・`repl-mode.ts:402-417` を 1 箇所に寄せる）| `{ "type":"result", "wall", "ok": boolean, "diagnostics": [{kind, message}], "effect": string \| null }` — `effect` はここで**実行後**に確定した値（LOOP に限らず quantize 待ちの差し替えも）| `--verify` の比較・人間の読解。**replay の投入判断には使わない**（失敗も再現する = 因果の対称）|
+| `import` | `processFileImports` が module を**初めて**読んだ時（セッション内で 1 回・`process-file-import.ts:117` の直後）| `{ "type":"import", "wall", "path": <ログ基準の相対>, "sha256", "code": <本文> }` | replay は `code` を**ディスクより優先**して評価する（module を編集しても同じ曲）。sha256 は `--verify` で今のディスクと照合 |
+| `pluginState` | `start`（ログを開いた時）と `stop` の直後（PR-L9・§13 (9)）| `{ "type":"pluginState", "at": "start" \| "stop", "states": [{ "key", "path": <ログ基準の相対> }] }` | replay は `at:"start"` の path を `statePath` として渡す（`effect-slot.ts:617-621` の解決順の**先頭**に入れる）。`--verify` は start≠stop（bytes）なら「セッション中に状態が変わった」と警告 |
+
+`eval` レコード自体のフィールドは変えない（§6 の表）。`transport` の**意味**だけ §7.2 で音楽時間に直す。
+
 ## 7. #241 — `orbitscore replay <log>`（忠実リプレイ・実時間）
 
 ### 7.1 口: `play` と同じ in-process（同じ interpreter・同じ engine）
@@ -258,11 +334,35 @@ export async function replayLog(opts: ReplayOptions): Promise<{ interpreter: Int
 - `parse-arguments.ts:33-44` に `--until <pos>` / `--score-dir <dir>` を足す（`--render` は #598・doc 3 §8）
 - `execute-command.ts:56` に `case 'replay'`。`printUsage` に 1 行
 
-### 7.2 駆動: transport 時刻（裁定 4）
+### 7.2 駆動: transport 時刻（裁定 4）— 🔴 まず `transport` を音楽時間にする（G6・PR-L8）
+
+**今日の `bar:beat` は音楽時間ではない**（§2b.3 G6）。`msToBarBeat`（`global.ts:755-768`）は start からの経過 ms を**現在の** tempo/beat で割るので、走行中の `global.tempo()` / `global.beat()` で過去の位置まで動く。replay の目標時刻・`--until`・`effect`・人間の読解のすべてがこの値に乗るので、replayer より先に直す。
 
 ```ts
-// global.ts（新設・pure・:755 msToBarBeat の逆関数）
-/** 現在の tempo / beat で `"bar:beat"` に到達するまでの ms（負なら過去 = 即時）。transport 未走行なら null。 */
+// packages/engine/src/core/global/transport-timeline.ts（新設・pure・約 80 行）
+export interface TimelineSegment {
+  readonly fromMs: number            // transport 原点からの ms（この区間の開始）
+  readonly fromBeatUnits: number     // 開始時点の累積拍（meter 拍単位）
+  readonly tempo: number
+  readonly beat: { numerator: number; denominator: number }
+}
+export class TransportTimeline {
+  constructor(initial: { tempo: number; beat: Meter })          // start() で生成
+  /** 走行中に tempo / beat が変わった瞬間に呼ぶ。区間を閉じて新区間を開く（origin は動かさない）。 */
+  change(atMs: number, next: { tempo?: number; beat?: Meter }): void
+  msToBarBeat(elapsedMs: number): string                          // 区間ごとに積算
+  barBeatToMs(pos: string): number                                // 逆関数（同じ区間表を逆に辿る）
+  nextBoundaryMs(elapsedMs: number, q: QuantizeValue): number     // §13 (8) が A なら nextQuantizedTime の置き換え
+}
+```
+
+`Global` は `TransportClock.start()` で timeline を作り、`tempo(value)` / `beat(...)` の中で `transportClock.running` なら `timeline.change(now - startTime, …)` を呼ぶ（`global.ts:239-255` に 1 行）。`getTransportPosition` / `getQuantizedEffectPosition` / 新設 `msUntilTransportPosition` はすべて timeline 経由。**stop で破棄**（transport 停止中は null のまま・不変）。
+
+**quantize（LOOP 起動・差し替え）を同じ timeline に乗せるか**は挙動変更なので 🔴 §13 (8)。乗せない（B）場合、記録の `transport` は正しい音楽時間になるが、LOOP が実際に効く境界は今日のまま（tempo 変更後に飛ぶ）なので、replay は**その飛びも同じに再現する**（同じ関数を使うため）。乗せる（A）場合、境界の飛びが直り、`effect` と実際が一致する。
+
+```ts
+// global.ts（新設・pure・timeline の逆関数）
+/** 現在の timeline で `"bar:beat"` に到達するまでの ms（負なら過去 = 即時）。transport 未走行なら null。 */
 msUntilTransportPosition(pos: string): number | null
 ```
 
@@ -271,18 +371,22 @@ replayer のループ:
 ```
 records = readOrbsLog(logPath)            // tests/session-log/helpers.ts:4 と同じ読み方
 assert meta.logVersion === 2
+imports = records.filter(type === 'import')            // path → code（ディスクより優先・§6b）
+states  = records.find(type === 'pluginState' && at === 'start')   // key → statePath（§6b）
 for rec of records:
   eval  (transport === null)  → execute(rec) 即時（プリアンブル。global.start() を含む eval がここに来る）
   transport start             → 何もしない（start は直前の eval が起こした結果。到達確認だけ: global.getTransportPosition() !== null を assert）
   eval  (transport !== null)  → ms = g.msUntilTransportPosition(rec.transport); await sleep(max(0, ms)); execute(rec)
+  result / import / pluginState → 投入しない（--verify だけが読む。import は上で先読み済み）
   transport stop              → 同上（到達確認）。until 無しならここで終了
-execute(rec) = interpreter.execute(parseAudioDSL(rec.code), { source: rec.code, sourceFile: resolve(scoreDir, rec.sourceFile), documentDirectory: scoreDir, evalSource: 'replay' })
+execute(rec) = interpreter.execute(parseAudioDSL(rec.code), { source: rec.code, sourceFile: resolve(scoreDir, rec.sourceFile), documentDirectory: scoreDir, evalSource: 'replay', importOverride: imports, pluginStateOverride: states })
 ```
 
-- **tempo 変更**はそれ自体が eval なので、次の目標時刻は「その eval を実行した後」に現在パラメータで計算する（記録時と同じ前提。DDR `:182`「参照系はログ内で自己完結」）
+- **tempo 変更**はそれ自体が eval なので、次の目標時刻は「その eval を実行した後」の timeline で計算する（記録側と同じ timeline なので一致する。DDR `:182`「参照系はログ内で自己完結」）
 - **quantize** は engine が音楽時間で再解決する（`effect` は使わない・spec §3.1）
-- 評価失敗はそのまま診断に出して**続行**（記録も成功／失敗を区別せず `recordEval` は実行前 `:156`。因果の記録として対称）
+- 評価失敗はそのまま診断に出して**続行**（記録側も `result.ok:false` を残すだけで止まらない。因果の記録として対称）
 - replayer 自身のログ: CLI の gate に従う（`ORBITSCORE_SESSION_LOG=1` の時だけ）。既定 off にする理由: 再生のたびに `evalSource: "replay"` のログが増える
+- **`wall` は使わない**が捨てない: G6 の手当前に書かれた v1 ログは 0 本なので互換分岐は作らない（§2 最終行）
 
 ### 7.3 `--score-dir`
 
@@ -307,7 +411,9 @@ Phase B（実機）: 実エンジン（REPL と同じ InterpreterV2）に対し�
                  (4) `startREPL(interpreter)` へ引き継ぐ（エディタには何も書かない・Known Decision #25）
 ```
 
-**spec §8 (3)「境界ちょうど」への答え（Q-694-3 の推奨）**: ライブでは 57:1 に到達した瞬間に、57:1 で効く差し替えは**もう効いている**。
+**spec §8 (3)「境界ちょうど」の状況（owner Q-694-3「どういうシチュか」）**: quantize = bar。ライブで **56:3** に `kick.play(1,0,0,1)` を評価した。差し替えは次の小節頭 **57:1** で効く（ログには `transport:"56:3.000"`、`result.effect:"57:1.000"`）。後日 `replay --until 57:1` で 57 小節目の頭まで畳み込んでライブへ引き継ぐとき、**引き継いだ瞬間の kick は新パターンか旧パターンか**、という問い。境界より手前（`--until 56:4`）なら明らかに旧、境界より後（`--until 57:2`）なら明らかに新で、**ちょうど 57:1** だけが両方に読める。
+
+**答え（推奨）**: ライブでは 57:1 に到達した瞬間に、57:1 で効く差し替えは**もう効いている**。
 したがって `--until 57:1` の状態 = **effect <= until の差し替えを適用済み**とする（Phase A は仮想クロックを `until` まで**含めて**進める）。
 「まだ効いていない状態で止めたい」なら `--until 56:4.999` のように手前を指す。**この解釈で owner 確認をとる（§13 (3)）。**
 
@@ -391,6 +497,11 @@ owner:「後回しにすると負債が増える。きちんと比較ができ�
 | PR-L4 `feat(cli): orbitscore replay <log> — faithful, transport-driven` | §7.1-7.3 + `msUntilTransportPosition` + E2E-R1・R2・R3 | PR-L2（フレーム粒度で記録されたログが要る）| — |
 | PR-L5 `feat(cli): replay --until — fast-forward fold, then hand over to the REPL` | §7.4（2 相・`Global.startAt`・`--realtime` で忠実停止も残す）| PR-L4・**doc 598 PR-R4（Clock DI）・PR-R5（評価列 driver）** | ログ形式に `at`（任意・加算）|
 | PR-L6 `feat(session-log): event sidecar + assets hash for replay --verify` | §7.5 | PR-L4 | sidecar ファイル形式 |
+| PR-L7 `feat(session-log): result / import records; agent provenance from the MCP path` | §6b（`result` / `import`）+ §4.1 フレーム属性（G4 / G5 / G8）| PR-L2 | 形式（加算のみ）|
+| PR-L8 `feat(core): TransportTimeline — bar:beat as musical time across tempo/beat changes` | §7.2 前半（G6）。`getTransportPosition` / `getQuantizedEffectPosition` / `msUntilTransportPosition` を timeline へ。quantize を乗せるかは §13 (8) | PR-L1a（integration test が要る）。**PR-L4 と PR-R5 の前提** | `transport` の**意味**（v1 ログ 0 本なので実害なし）・(8)=A なら LOOP quantize の挙動 |
+| PR-L9 `feat(session-log): snapshot plugin states into orbslog/ at start and stop` | §6b `pluginState`（G7）。`orbslog/<log>.states/<key>.state` へ daemon `savePluginState`（auto-snapshot と同じ経路 `global.ts:1409`）。replay は start 側を `statePath` に渡す | PR-L1a・**#598 P3（PR-R8）の前提** | 🔴 §13 (9) |
+
+**順序の要点（§2b の帰結）**: PR-L4（replayer）は **L2 + L7 + L8 の後**、#598 の PR-R5（評価列 driver）も **L8 の後**、PR-R8（P3 instrument offline）は **L9 の後**。「ログを読んで再生する」側を先に作ると、読める形になっていないログを相手にすることになる。
 
 PR-L1 が大きければ **L1a（engine: writer/REPL/interpreter + unit/integration）/ L1b（extension: 設定・env・メタ行 + gated E2E）** に割る。L1a 単独では E2E-S1 は書けない（拡張が env を渡さない）ので、**L1a のマージゲートは integration test、L1b のゲートが E2E**。
 
@@ -424,11 +535,13 @@ PR-L1 が大きければ **L1a（engine: writer/REPL/interpreter + unit/integrat
 |---|---|---|---|---|
 | (1) ✅ **A `orbslog/`（owner 2026-09-03）** | `<DIR>/` の名前 | A `orbslog/`（拡張子と同じ語・見える）/ B `.orbslog/`（隠す）/ C `sessions/` | **A**。spec §1「命名・選別は事後の操作」= ユーザーが Finder で見つける前提なので隠さない。`.orbslog` 拡張子と同じ語で検索性が高い | 定数 `SESSION_LOG_DIRNAME` 1 箇所（§3.4）|
 | (2) ✅ **B opt-in のまま（owner 2026-09-03）** | CLI（`play` / `repl`）も既定 on にするか | A on（gate を `!== '0'` に）/ B opt-in のまま | **B（現状維持）**。拡張は値を明示するので editor 側は独立（§3.1）。CLI は開発・テストで多用され、譜面の隣にログが増えるのを望まない場面がある | `session-log-gate.ts:13` の 1 行 + core spec `:63` |
-| (3) 🔴 **相談中**（owner「決めきれない」）。§7.4 の答え「effect <= until は適用済み」を提示し確認をとる | `--until` が境界ちょうどの時、待機中の quantize 差し替えを適用してから引き継ぐか | spec §8 (3) | v1 は忠実リプレイの停止点なので**問いが立たない**（境界に着く前に止めれば未適用、着けば適用）。高速畳み込み版で再燃 | PR-L5 以降 |
+| (3) 🔴 **相談中**（owner「理解がまだできない。どういうシチュなの？」→ §7.4 に具体例〔56:3 で評価した差し替えが 57:1 で効く時の `--until 57:1`〕を書いた。チャットでも説明・確認待ち）| `--until` が境界ちょうどの時、待機中の quantize 差し替えを適用してから引き継ぐか | spec §8 (3) | v1 は忠実リプレイの停止点なので**問いが立たない**（境界に着く前に止めれば未適用、着けば適用）。高速畳み込み版で再燃 | PR-L5 以降 |
 | (4) ✅ **B + C（owner 2026-09-03: 比較の仕組みを最初から）** → §7.5 に反映・PR-L6 | `--verify` の実体 | A capture 比較のみ（v1）/ B ライブ側にイベント列 sidecar（`type:'event'` を**別ファイル**に）を足して構造比較 / C `meta.assets` の sha256（start 時に非同期で） | **A を v1**。B/C は「原因のみ記録」（原則 1）との整合を owner が判断 | PR-L4 の範囲 |
 | (5) ✅ **A 露出する（owner 2026-09-03）** | replay を MCP tool（`replay_session_log`）として露出するか | A 露出（LLM 第一級）/ B CLI のみ | **A を後続**（#241 チェックリストに無い。E2E-R1 は CLI 動線で成立） | 新規 PR |
 | (6) ✅ **A 扱わない（owner 2026-09-03: ログに残るのは DSL と実行内容。Ableton 側で受けられるかは Ableton の設定）** | POST_2.0 覚書の「LinkAudio トラックを捕捉しない」（`POST_2.0_ROADMAP_NOTES.md:60`）は本書で扱うか | LinkAudio の出力は**現象**（録音）で因果の記録の外（原則 1）| **扱わない**（Ableton 側が録る分業・spec §6）| — |
-| (7) 🔴 **説明待ち**（owner「何を言っているのか分からない」→ チャットで説明済み: 2.0.0 で「複数ファイルをまたぐライブでログが生成されない」と記録された症状は、拡張が env を渡していない #694 の欠落そのものだと読んでいる。別の症状の記憶があれば教えてほしい）| dormant の根拠「file-scoped mismatch」は #694 の欠落と同一か | owner 確認（#694 コメント 1「未確認」）| 本書は「同一」と読む（§2 最終行）| §3.1 の既定 on の根拠の一部 |
+| (7) ✅ **実測で確定（owner 2026-09-03「ログが出ていた時に再現に使える形になっていなかった」→ §2b で実走）** | dormant の根拠は何か | — | **「env が渡っていない」に加えて、出ていたログ自体が再現に使えない形**（§2b.3 G1/G2/G3 = 見えない、G6/G7 = 見えても再現できない）。手当は PR-L1〜L9 | §2b |
+| (8) 🔴 **新規**（G6）| LOOP / 差し替えの **quantize を `TransportTimeline` に乗せるか** | A 乗せる（tempo 変更後も境界が連続・`effect` と実際が一致・**LOOP 起動タイミングの挙動変更**）/ B 乗せない（記録だけ音楽時間・LOOP は今日どおり tempo 変更後に境界が飛ぶ・replay はその飛びも再現）| **A**。今日の飛びは「経過 ms を新周期で割り直す」実装の副作用で、誰も意図していない（`quantize-manager.ts:61-72` に設計意図の記述なし）。ただし `play()` の意味論ではなく **transport の意味論**なので owner 裁定 | PR-L8 の 1 分岐（`nextQuantizedTime` の呼び手 = `prepare-playback.ts` / LOOP 起動）|
+| (9) 🔴 **新規**（G7）| プラグイン状態の写し方 | A `orbslog/<log>.states/` へ **start と stop でファイルを写す**（daemon `savePluginState`・plugin 1 個あたり数 ms〜数十 ms・非同期・auto-snapshot と同経路）/ B start 時に **sha256 だけ**記録し replay で不一致を警告 / C 何もしない（replay は「今の」状態を読む）| **A**。B/C はオフラインレンダ（#598 P3）が「同じ DSL で違う音」になり、owner の目的（840 / 1260 を後日レンダ）に反する。UI のつまみ操作はどのみち残らないので、`--verify` が start≠stop で警告する | PR-L9 |
 
 ---
 
@@ -487,6 +600,10 @@ $ grep -n "_onTransportStart\|_onTransportStop\|setTransportHooks" packages/engi
 | replay: 目標 transport が過去（tempo 変更で逆転） | 即時投入（`max(0, ms)`）| stderr に 1 行 `late by N ms` |
 | replay: eval 失敗（asset 欠落等） | 診断を出して続行（記録側と対称）| stderr `[ERROR]` |
 | replay: `sourceFile` の解決先が無い | `documentDirectory` は `scoreDir` なので `audio()` が従来のエラーを出す | 同上 |
+| replay: `import` レコードの `code` と今のディスクの sha256 が違う | `code` を使って評価（再現優先）・stderr に 1 行 `import <path> differs from disk` | stderr |
+| replay: `pluginState` の `path` が無い（`orbslog/` を動かした） | 従来の解決順（`project.yaml`）へ**落とさない**。停止（exit 2・「state snapshot missing」）— 黙って別の音で鳴らさない | stderr |
+| 記録: start 時の状態写しに失敗（daemon エラー） | `pluginState` レコードに `{ key, error }` を残して**再生継続**（flight recorder） | `console.warn` + `get_log` |
+| 記録: 走行中の `tempo()` / `beat()` で timeline が区間を切る | 位置は連続（逆行しない）。integration test: 120→60 の 10 ms 後が `1:3.010` | — |
 
 ---
 
@@ -498,3 +615,6 @@ $ grep -n "_onTransportStart\|_onTransportStop\|setTransportHooks" packages/engi
 | フレーム化で `play` と同じ意味論になる | 高 | `play-mode.ts:70` は 1 `execute()`。unit: 3 文のフレームで `execute` が 1 回・`recordEval` が 1 回（`toHaveBeenCalledTimes(1)`）|
 | transport 駆動でライブと同じ小節に quantize される | 中〜高 | E2E-R1。落ちるなら `msUntilTransportPosition` と `msToBarBeat` の不一致か、`Date.now()` 基準と audio clock の乖離 → その時は replay の目標時刻を `audioEngine.getCurrentTime()` 基準へ寄せる（`getTransportPosition` も同じ基準に揃える必要があるので spec 変更） |
 | 既定 on が既存 E2E を壊さない | 高 | 既存 gated suite 全件（ログが tmpRoot に増えるだけ）|
+| 今日の `transport` は tempo 変更で逆行する（G6） | **実測済み**（§2b.2: `1:3.000` → `1:2.010`）| — |
+| `TransportTimeline` で replay の目標時刻がライブと一致する | 高 | integration: 記録側 timeline と replay 側 timeline に同じ tempo 列を与えて `barBeatToMs(msToBarBeat(x)) === x`（区間境界の前後 1 ms を含む）|
+| 状態写し（PR-L9）でオフラインレンダが再現する | 中 | E2E-R8（doc 598）: つまみを動かして stop → 別の状態で replay --render → start 側の状態で鳴る（RMS がライブ capture と一致）|

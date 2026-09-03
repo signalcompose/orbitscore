@@ -49,6 +49,9 @@
 | W-20 | `seq.root()` が note-name を受ける・`[...]@v` per-voice 分配・`chop(n>1)` の tie が伸ばす | PR-D7 / PR-D5 / #665 | DSL 表面（加算）| ✅ 裁定（owner 2026-09-03 Q-610-2/6/7）|
 | W-21 | replay `--verify` の sidecar `<log>.events.jsonl` + `meta.assets` の sha256 | PR-L6 | ファイル形式 | ✅ 裁定（owner 2026-09-03 Q-694-4）|
 | W-22 | node を `.app` に同梱 | PR-S-C2 | 署名対象 +1 | ✅ 裁定（owner 2026-09-03 Q-656-8）|
+| W-23 | `.orbslog` の `transport` を**音楽時間**にする（`TransportTimeline`・tempo/beat 変更で逆行しない）| PR-L8 | ログの `transport` の意味。**今日 `.orbslog` は 0 本**なので実害なし。LOOP quantize を乗せるかは 🔴 doc 694 §13 (8) | 設計済み（doc 694 §7.2）・実測で必要性を確認（§2b）|
+| W-24 | プラグイン状態を `orbslog/<log>.states/` へ start / stop で写す | PR-L9 | ファイル配置・セッションごとに状態ファイルが増える | 🔴 doc 694 §13 (9)（A 推奨）|
+| W-25 | N ch render（`mix.render(path, channels)`・`output(at:, mono:)`）| PR-R9 | DSL 表面 + wire（加算）| ✅ **裁定 B-lite（owner 2026-09-03 Q-598-2）** |
 
 **方針**: 一方通行のものは **(a) golden で現状を固定してから**（W-3/W-4）、**(b) 消費者が 0 のうちに**（W-6/W-10）、**(c) 定数 1 箇所で裁定を吸収して**（W-7）進める。裁定待ちの項目は**その PR だけ**が止まる形に分割してある。
 
@@ -79,9 +82,12 @@
 | PR-L1b | `feat(extension): enable the session log from OrbitStudio (setting + env + //#sourceFile)` | **#694 (A) 受け入れ** | `package.json`（+8）・`extension.ts`（±40: env・`writeCodeToEngine` の 3 引数・注入廃止）・gated E2E（+180: S1/S2/S4/S5/S6）| PR-L1a | **E2E-S1**（ファイル実在 + 中身）・S4（off）・S5（untitled）・S6（純度）。実機: `open_file` → `run_selection` → `<DIR>/` を `ls` | W-17 |
 | PR-L2 🔴 | `feat(repl): //#evalBegin / //#evalEnd frame — one selection, one execute` | **#695 (1)**・doc 611 §3.9 の前提 | `repl-mode.ts`（+90）・`extension.ts` `writeCodeToEngine`（+6）・unit（+80）・gated E2E-S3（+40）| PR-L1a | E2E-S3（1 選択 = 1 レコード）・unit `execute` 1 回 | W-8 |
 | PR-L3 ⟂ | `feat(session-log): hook every GLOBAL; transport.global` | #695 (2) | `interpreter-v2.ts`（±40）・`session-log-writer.ts`（±40）・integration（+60）| PR-L1a | integration（2 GLOBAL・開閉規則）| 形式（加算）|
-| PR-L4 | `feat(cli): orbitscore replay <log> — faithful, transport-driven` | **#241 忠実リプレイ**・**#694 (B) の実測** | `cli/replay-mode.ts`（新 +200）・`parse-arguments.ts` `execute-command.ts`（+40）・`global.ts` `msUntilTransportPosition`（+25）・gated E2E-R1/R2/R3（+200）| PR-L2（フレーム粒度のログ）| **E2E-R1**（ライブ capture と replay capture の窓 RMS 一致 ±15%）。実機: `orbitscore replay <log>` を `ORBIT_CAPTURE_WAV` 付きで | W-9 |
+| PR-L4 | `feat(cli): orbitscore replay <log> — faithful, transport-driven` | **#241 忠実リプレイ**・**#694 (B) の実測**（doc 694 §2b: 今日のログは再現に使えない → L7/L8 の後）| `cli/replay-mode.ts`（新 +200）・`parse-arguments.ts` `execute-command.ts`（+40）・`global.ts` `msUntilTransportPosition`（+25）・gated E2E-R1/R2/R3（+200）| PR-L2（フレーム粒度）・**PR-L7（result/import）・PR-L8（timeline）**| **E2E-R1**（ライブ capture と replay capture の窓 RMS 一致 ±15%）。実機: `orbitscore replay <log>` を `ORBIT_CAPTURE_WAV` 付きで | W-9 |
 | PR-L5 | `feat(cli): replay --until — fast-forward fold, then hand over to the REPL` | #241 `--until`（2 相: 仮想畳み込み → 宣言の再生 + `Global.startAt(until)` + LOOP 再発行・doc 694 §7.4）| `replay-mode.ts`（+120）・`global.ts` `startAt`（+30）・`transport-clock.ts`（+10）| PR-L4・**PR-R4（Clock DI）・PR-R5（評価列 driver）** | unit（`until` 時点の状態が Phase A と一致）+ E2E: `--until 3:1` から続けた capture の 3 小節目以降がライブと一致 | ログに `at`（加算）|
 | PR-L6 | `feat(session-log): event sidecar + assets hash for replay --verify` | #241 `--verify`（doc 694 §7.5）| `session-log/event-sidecar.ts`（新 +120）・`session-log-writer.ts`（+40・assets 非同期）・`replay-mode.ts`（+60）| PR-L4 | E2E-R4: 同一セッションの replay で `--verify` 差分 0 | sidecar 形式 |
+| PR-L7 | `feat(session-log): result / import records; agent provenance from the MCP path` | doc 694 §2b G4/G5/G8・§6b | `session-log-writer.ts`（+40）・`repl-mode.ts`（+30: `//#evalMark` の `ok`/`diagnostics` を `result` へ・フレーム属性）・`process-file-import.ts`（+20）・`extension.ts` `evaluateForAgent`（+3）・integration（+80）| PR-L2 | integration: 失敗 eval に `result.ok:false`・MCP 経路の eval が `evalSource:"agent"`・import 本文がログにある。E2E-S7（MCP で評価 → `orbslog/` の `evalSource`）| 形式（加算）|
+| PR-L8 🔴 | `feat(core): TransportTimeline — bar:beat as musical time across tempo/beat changes` | doc 694 §2b **G6**（実測: `1:3.000` の 10 ms 後が `1:2.010`）・§7.2 | `core/global/transport-timeline.ts`（新 +80 pure）・`global.ts`（±40: `getTransportPosition` / `getQuantizedEffectPosition` / `msUntilTransportPosition`・`tempo()`/`beat()` で `change`）・unit（+100）・integration（+40）| PR-L1a | unit: 120→60 の 10 ms 後が `1:3.010`・`barBeatToMs(msToBarBeat(x)) === x`。**(8)=A なら** E2E-L8: tempo 変更直後の LOOP が次の小節頭で入る（capture で onset 位置）| W-23・🔴 doc 694 §13 (8) |
+| PR-L9 🔴 | `feat(session-log): snapshot plugin states into orbslog/ at start and stop` | doc 694 §2b **G7**・§6b `pluginState` | `session-log-writer.ts`（+40）・`global.ts`（+40: start/stop hook から `savePluginState` を `orbslog/<log>.states/` へ）・`effect-slot.ts`（+10: 解決順の先頭に override）・`replay-mode.ts`（+20）・integration（+60）・gated E2E（+80）| PR-L1a・**PR-R8 の前提** | E2E-L9: instrument を載せて start → `orbslog/<log>.states/` に state 実在 → stop 後に別状態で replay → RMS がライブ capture と一致 | W-24・🔴 doc 694 §13 (9) |
 
 ### 1.3 render — PR-R（doc 598 §14）
 
@@ -92,10 +98,11 @@
 | PR-R1 🔴 | `feat(dsl): mix.render(<path>) endpoint declaration + %n template; retire output(n)` | #598 チェックリスト「エンドポイント宣言」「`%n`」「合算」「相対」・W-4 | `parse-statement.ts`（+30）・`parser/types.ts`（+5）・`runtime.ts`（+30）・`core/global/render-endpoint-manager.ts`（新 +150）・`render-endpoint.ts`（新 +60 pure）・`sequence.ts`（−40）・unit（+150）| PR-O4・**W-4 の裁定** | unit（展開・合算 key）。DSL 表面は E2E-R1（PR-R3）で押さえる | W-4 / W-5 |
 | PR-R2 🔴 | `feat(daemon): DeclareRender / ArmRenders / DisarmRenders + RenderInstance pool` | #598 実時間 stem の wire・地図 §7 (7)(11) | `output.rs`（+200）・`engine_wrap.rs`（+150）・`session.rs`（+120）・`protocol-types.ts` `daemon-client.ts`（+50）・cargo test（+150）| PR-O3 | cargo: no-op 未 arm / commit / retire / drop 計上 | W-11 |
 | PR-R3 | `feat(render): realtime stems end-to-end (arm on start, disarm on stop)` | #598「MCP 経由 E2E で render 宣言を評価しファイル生成」 | `global.ts`（+40）・`render-endpoint-manager.ts`（+60）・gated E2E-R1/R2/R3/R4/R7/R9（+300）| PR-R1・PR-R2 | **E2E-R1**（stem 実在・RMS・`dropped_samples: 0`）・R3（pre/post）・R4（版）。実機: `mix.render("stems/%n_%v.wav")` → `global.start()` → `ls stems/` | 命名 |
-| PR-R5 | `feat(render): score driver — evals × virtual clock → RenderScore v2` | #598 P2 TS driver・#241 前提「transport 順の評価列」 | `render/score-driver.ts`（新 +300）・`CollectingEngine`（新 +120）・`render-score.ts` v2（±100）・unit（+200）| PR-R4・PR-L4（`.orbslog` 読み）・PR-R1 | unit: `.orbs` 1 本と同内容の 1 eval ログが**同一 manifest** | W-10（TS 側）|
+| PR-R5 | `feat(render): score driver — evals × virtual clock → RenderScore v2` | #598 P2 TS driver・#241 前提「transport 順の評価列」 | `render/score-driver.ts`（新 +300）・`CollectingEngine`（新 +120）・`render-score.ts` v2（±100）・unit（+200）| PR-R4・PR-L4（`.orbslog` 読み）・**PR-L8（音楽時間）**・PR-R1 | unit: `.orbs` 1 本と同内容の 1 eval ログが**同一 manifest** | W-10（TS 側）|
 | PR-R6 🔴 | `feat(daemon): OfflineRenderSession (P2) — RenderScore v2 renders stems + master` | **#598 P2**（driver・per-bus WAV + master・`load_with_process_mode` 配線・#606 と同じ終端）| `engine_wrap.rs`（+250）・`session.rs`（±150）・`tests/fixtures/render-score-manifest.json` v2・cargo（+200）| PR-R2 | cargo: 同一 manifest 2 回で bit 一致・8 バス bleed 無し | W-10 |
 | PR-R7 | `feat(cli): orbitscore render <orbs> --duration / replay --render` | #598 P2 CLI・**#241 `--render`** | `execute-command.ts` `parse-arguments.ts`（+60）・`replay-mode.ts`（+30）・gated E2E-R5/R6（+150）| PR-R5・PR-R6 | **E2E-R5**（bit 一致・実時間比を記録）・**E2E-R6**（ライブ capture と一致）。実機: `orbitscore replay <log> --render` | W-9 |
-| PR-R8 | `feat(render): P3 — plugins + instruments offline (offline process mode, sync adapter)` | **#598 P3**（必須） | `engine_wrap.rs`（+300）・`orbit-audio-sandbox` adapter（+150）・manifest `instruments[]`（+60）・E2E-R8 | PR-R6・PR-K4（#636 instrument rack・doc 598 §16 (8)）| **E2E-R8**（streaming instrument で realtime capture と一致・`process_errors == 0`）| wire（加算）|
+| PR-R8 | `feat(render): P3 — plugins + instruments offline (offline process mode, sync adapter)` | **#598 P3**（必須） | `engine_wrap.rs`（+300）・`orbit-audio-sandbox` adapter（+150）・manifest `instruments[]`（+60）・E2E-R8 | PR-R6・PR-K4（#636 instrument rack・doc 598 §16 (8)）・**PR-L9（状態の写し）**| **E2E-R8**（streaming instrument で realtime capture と一致・`process_errors == 0`）| wire（加算）|
+| PR-R9 | `feat(render): N-channel render endpoints — mix.render(path, channels) and output(at:, mono:)` | **#598 サラウンド B-lite**（doc 598 §3.6・owner Q-598-2）| `output.rs`（+60）・`engine_wrap.rs`（+30）・`parse-statement.ts` `runtime.ts`（+50）・`render-endpoint-manager.ts`（+20）・`render-score.ts` `channels`（+10）・gated E2E-R10（+80）| PR-R3・PR-E3（チャンネル別解析）| **E2E-R10**（4 ch WAV・ch 1-2 に kick・ch 3-4 に pad・交差 < -40 dB）| W-25 |
 
 ### 1.4 プラグイン境界 — PR-P（doc 672 §16）
 
@@ -277,13 +284,13 @@
 - **確認**: E2E-2〜10 の手順を `evaluate_orbitscore` で再現し capture の RMS 比を見る。daemon respawn 後に routing が復元（E2E-10）。
 - **閉じる**: #611 / #409 / #647 / #649 残り / #543 (a) の差分ゼロ確認。
 
-### 段 3 — ログ → リプレイ（PR-L1a/L1b/L2/L3/L4/L5）
+### 段 3 — ログ → リプレイ（PR-L1a/L1b/L2/L3/L7/L8/L9 → L4/L5/L6）
 
 - **結果**: OrbitStudio で演奏すると `<DIR>/<basename>.<stamp>.orbslog` が出て、`orbitscore replay <log>` が**同じ音**を鳴らす（840 / 1260 型の演奏を後から再生できる）。
 - **確認**: `open_file` → `run_selection`（`global.start()`）→ `ls <scoreDir>/<DIR>/` → `readOrbsLog` で meta/eval/transport → `stop_engine` → `orbitscore replay <log>` を capture 付きで → 窓 RMS がライブと一致（E2E-R1）。
 - **閉じる**: #694 全項目（B 含む）/ #695 (1)(2) / #241 忠実リプレイ・`--until` v1。
 
-### 段 4 — render（PR-R1〜R7・P2）
+### 段 4 — render（PR-R1〜R7・P2・R9）
 
 - **結果**: `var stems = mix.render("stems/%n_%v.wav")` で**演奏しながら stem が書け**、`orbitscore replay <log> --render` / `render <orbs> --duration T` が実時間より速く同じファイル群を作る。
 - **確認**: E2E-R1（実時間 stem）・R5（offline bit 一致・実時間比を記録）・R6（replay --render がライブ capture と一致）。
@@ -334,14 +341,16 @@
 | #138 吸収先 | 🔴 相談中（owner: リリースは別ライン）→ 独立のまま | なし（issue の開閉のみ）|
 | 32 変数の線 / #156 の方向 | ✅ 全部出す / 境界規則 + 例外 3 個 | なし |
 | #680 表面 / `PluginNoteOn/Off` | ✅ B / 残す | なし |
-| `untrustedWorkspaces.supported` | 🔴 相談中（`"limited"` を推す）| PR-S-T1 の 1 値（`"limited"` で先行可）|
+| `untrustedWorkspaces.supported` | ✅ `true`（DAW の挙動に合わせる）| なし |
 | bundle id・バージョン付け | ✅ VSCodium 既定 / 拡張の `version` | なし |
-| `--until` 境界ちょうど（doc 694 §13 (3)）| 🔴 相談中（「effect ≤ until は適用済み」を提示）| PR-L5 の 1 分岐 |
-| #583 (i) 同名衝突（doc 610 §15 (5)）| 🔴 相談中（赤線 + その文だけスキップを提示）| PR-D4 |
-| 3ch 以上を 1 ファイル（doc 598 §16 (2)）| 🔴 相談中（サラウンドの話・宛先 = チャンネル集合案を提示）| なし |
-| #694 dormant の根拠（doc 694 §13 (7)）| 🔴 説明待ち | なし |
+| `--until` 境界ちょうど（doc 694 §13 (3)）| 🔴 相談中（具体例で説明・doc 694 §7.4）| PR-L5 の 1 分岐 |
+| #583 (i) 同名衝突（doc 610 §15 (5)）| ✅ 赤線 + その文だけスキップ | なし |
+| 3ch 以上を 1 ファイル（doc 598 §16 (2)）| ✅ B-lite（N ch の器 + `at:` 配置・エンコードは Logic）→ PR-R9 | なし |
+| #694 dormant の根拠（doc 694 §13 (7)）| ✅ 実測で確定（ログが出ていても再現に使えない形・§2b）| なし |
+| LOOP quantize を `TransportTimeline` に乗せるか（doc 694 §13 (8)・**新規**）| 🔴 相談中（A 乗せる を推す）| PR-L8 の 1 分岐（記録側は先行可）|
+| プラグイン状態の写し方（doc 694 §13 (9)・**新規**）| 🔴 相談中（A ファイルを写す を推す）| PR-L9（PR-R8 の前提）|
 
-**残りの相談 6 件はいずれも PR を止めない**（`"limited"` は先行可・他は 1 分岐か issue 運用）。
+**残りの相談 4 件のうち PR を止めるのは (9) だけ**（PR-L9 → PR-R8 = #598 P3）。(3)(8) は 1 分岐・#138 は issue 運用。
 
 ---
 
@@ -350,4 +359,5 @@
 | 日付 | 内容 |
 |---|---|
 | 2026-09-03 | 初版（設計文書 11 本の PR を統合・一方通行 17 件・段 0〜8）|
+| 2026-09-03 | Q-694-7 の実測（doc 694 §2b: 今日のログは再現に使えない）→ PR-L7/L8/L9 追加・PR-L4/R5/R8 の依存を更新・W-23/24/25。Q-598-2 → B-lite（PR-R9）。Q-610-5 / Q-656-1 / Q-656-2 確定。§4 を「相談中 4 件」に更新 |
 | 2026-09-03 | owner 回答（裁定シート 66 問中 50 問）を反映: W-4/5/7/12/13/14/15/17 確定・W-18〜22 追加・PR-O4 に `pan` と 2 要素 / PR-L5 を高速畳み込みへ・PR-L6 / PR-D7 追加・PR-K-G2 を WASM スパイク後へ・PR-P6 をメッセージ値へ・PR-V8b に QoS・PR-S-C2 を node 同梱へ。§4 を「相談中 6 件」に更新 |
