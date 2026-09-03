@@ -1133,6 +1133,51 @@ E2E-2 / E2E-3 の dry RMS が **ちょうど 0**、E2E-1 の比が **1.27**（ga
 [`docs/planning/IMPLEMENTATION_PLAN_2026-09.md`](../planning/IMPLEMENTATION_PLAN_2026-09.md) §1.10。
 束ブランチ運用（[`BUNDLE_BRANCH_WORKFLOW.md`](BUNDLE_BRANCH_WORKFLOW.md)）の最初の束。
 
+### PR-E2: 共通 helper を切り出す
+
+正本: 設計 §4.1〜4.5。**実装は Codex**（`gpt-5.6-sol` / effort high）、**検証は main**。
+
+**追加**（`tests/e2e/helpers/`・計 524 行）:
+
+| モジュール | 中身 |
+|---|---|
+| `engine-log.ts` | `LOG_WINDOW_LINES` / `countLogMarker` / `countErrors` / `errorBaseline` / `expectNoNewErrors`（`toBeLessThanOrEqual`）/ `expectLogMarkerAtLeast` |
+| `gated-session.ts` | `GatedCatalog` / `GatedSession` / `captureWavPath` / `createGatedSession` |
+| `run-score.ts` | `ScoreSource` / `CaptureWindows` / `ScoreRunContext` / `runScore` |
+| `wait-for-file.ts` | `waitForFile` / `waitForMatchingFile`（`minBytes` つき — 生成と書き込みが別なので存在だけ見ると 0 バイトを掴む） |
+| `run-cli.ts` | `CliResult` / `runOrbitscoreCli`（`replay` / `render` の E2E 用。MCP を通らない唯一の例外） |
+
+**gated spec の変更は機械的置換のみ**（+18/−28）。シナリオのロジック・アサーション順序は無変更:
+
+- 🔴 **`countErrors` の 7 重定義が 1 本になった。** 変更前の定義位置は
+  `496 / 2144 / 2722 / 3155 / 3461 / 3969 / 4464` 行（発注時の実測と完全一致）。
+  変更後 `grep -c "const countErrors = (log"` = **0**
+- 🔴 **capture WAV のパス構築 11 箇所を `captureWavPath` に統一。** 変更前は
+  `ORBIT_KEEP_CAPTURES` を見るのが **492 行の 1 箇所だけ**で、残りは素の `path.join` だったため
+  **落ちた瞬間に証拠の WAV が消えていた**。`ORBIT_KEEP_CAPTURES` 未設定時のパスが
+  変更前と同一であることを実測で確認（接頭辞 `643-` は元から両分岐に付いていた）
+- 636 行のローカル変数 `captureWavPath` が import した関数名と衝突するため
+  `captureWavFile` にリネーム（参照 3 箇所も追随）
+
+**main の受け入れ監査で 1 件直した**（Codex は「食い違いなし」と報告していた）:
+
+> 🔴 `runScore` の `evaluate` が **設計 §4.2 に反して `isError` を assert していた**。
+> コメントには設計の文言（「`ok` に assert しない」）が書いてあるのに、コードが逆をしていた。
+> **診断が出ることを確かめる E2E**（doc 610 の異常系は「この譜面は診断を出す」が判定条件）で
+> `runScore` が使えなくなるため、設計どおり assert しない形に直した。
+> 診断の判定は `engine-log.ts` の `expectNoNewErrors` / `expectLogMarkerAtLeast` が担う。
+
+**検証**（main が sandbox 外で回した実測）:
+
+- `npx tsc --noEmit` / `npx eslint tests/e2e` → 0
+- `npm test` → **2167 passed / 48 skipped**（gated は 20 tests / 20 skipped = `it(` を増減させていない）
+- `node sites/dev/scripts/check-citations.mjs` → **904 verified / 0 failed**
+  （gated spec の行が動いたので 44 件ずれ、40 件は `--fix`、4 件は `captureWavFile` の
+  リネームで本文が変わったため手で修正）
+
+**残る注意**: `runScore` は本 PR ではどのシナリオからも使われていない（設計どおり「既存 20 本は
+書き換えない」）。**最初の消費者は PR-E3**（`channelRms` を足す）なので、実行での検証はそこで付く。
+
 ### PR-E1: gated E2E の走査先を 1 箇所にする
 
 **なぜ先に入れるか**（設計 §3.4・§11 F-9）。ラチェット（`dsl-e2e-coverage.spec.ts:39`）と
