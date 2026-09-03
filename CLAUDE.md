@@ -31,9 +31,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 > **⚠️ 本番トラック retarget（2026-07-12・統括 [#413](https://github.com/signalcompose/orbitscore/issues/413)）**:
 > 藝大コンサート（Max サマースクール・イン・藝大 2026 / 2026-08-07）は **不採択**。旧「ハード締切 2026-08-07・逆算で全工程が決まる」の前提は失効。
-> 本番トラックは **ICLC への proposal 提出方向へ retarget**（年次・提出日 ≈8/15・提出形態 work / work+paper はいずれも **要確認**）。
+> 🔴 **ICLC には出さない**（owner 2026-09-03）。retarget 先だった ICLC への proposal 提出は**取り下げ**。
+> **これで本番トラックに締切が無くなった** — 開発の順序はコンサートからの逆算ではなく、
+> **リリースまでの道筋**（`docs/planning/DEVELOPMENT_MAP.md` §3）で決まる。
 > 藝大の参加条件だった **Max 縛りも消滅**（Max は選択肢の一つで必須ではない。使わないという意味ではない）。
-> WCTM 関連作業の切り出し・ICLC/ICMC 提出物・private レポ接続・orbitstudio 集約は **[#413](https://github.com/signalcompose/orbitscore/issues/413)** で追跡。
+> WCTM 関連作業の切り出し・private レポ接続・orbitstudio 集約は **[#413](https://github.com/signalcompose/orbitscore/issues/413)** で追跡（**この Epic に何を残すかは owner 裁定待ち**）。
 > Pitch DSL (Phase 1→2→3) は締切と独立に実装済み。
 
 ### 正本仕様（`docs/specs-v2/`）を必ずこの順で読む
