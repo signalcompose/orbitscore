@@ -951,6 +951,14 @@ Older entries have been archived by month for readability:
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
 
+## 2026-09-03: マージ後の head ブランチは自動削除（規則を owner の決定に合わせる）
+
+#702 / #704 のマージで head ブランチが消えているのに気づき owner に確認 → 「増えすぎるし後からでも
+追えるので自動で消すようにした」（owner 2026-09-03）。PROJECT_RULES の「ブランチは消さない」
+（4 箇所）・CLAUDE.md の Branch Structure・BUNDLE_BRANCH_WORKFLOW（3 箇所）を「マージ後は
+GitHub 設定で自動削除・履歴は merge commit から辿る」に訂正。統合ブランチも束 PR のマージ後に
+消えてよい（自動削除はマージ後にしか動かないので、小 PR の base が途中で消えることはない）。
+
 ## 2026-09-03: 束ブランチ運用の採用（#703）
 
 owner との相談（PR #702 セッション）で、レビューの単位を PR から**束**へ変更。小 PR は束の
