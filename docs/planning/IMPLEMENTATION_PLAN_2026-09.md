@@ -49,8 +49,8 @@
 | W-20 | `seq.root()` が note-name を受ける・`[...]@v` per-voice 分配・`chop(n>1)` の tie が伸ばす | PR-D7 / PR-D5 / #665 | DSL 表面（加算）| ✅ 裁定（owner 2026-09-03 Q-610-2/6/7）|
 | W-21 | replay `--verify` の sidecar `<log>.events.jsonl` + `meta.assets` の sha256 | PR-L6 | ファイル形式 | ✅ 裁定（owner 2026-09-03 Q-694-4）|
 | W-22 | node を `.app` に同梱 | PR-S-C2 | 署名対象 +1 | ✅ 裁定（owner 2026-09-03 Q-656-8）|
-| W-23 | `.orbslog` の `transport` を**音楽時間**にする（`TransportTimeline`・tempo/beat 変更で逆行しない）| PR-L8 | ログの `transport` の意味。**今日 `.orbslog` は 0 本**なので実害なし。LOOP quantize を乗せるかは 🔴 doc 694 §13 (8) | 設計済み（doc 694 §7.2）・実測で必要性を確認（§2b）|
-| W-24 | プラグイン状態を `orbslog/<log>.states/` へ start / stop で写す | PR-L9 | ファイル配置・セッションごとに状態ファイルが増える | 🔴 doc 694 §13 (9)（A 推奨）|
+| W-23 | `.orbslog` の `transport` を**音楽時間**にする（`TransportTimeline`・tempo/beat 変更で逆行しない）| PR-L8 | ログの `transport` の意味。**今日 `.orbslog` は 0 本**なので実害なし。LOOP quantize も乗せる | ✅ **裁定 A（owner 2026-09-03 夕 Q-694-8）**・実測で必要性を確認（doc 694 §2b）|
+| W-24 | プラグイン状態を `orbslog/<log>.states/` へ start / stop で写す | PR-L9 | ファイル配置・セッションごとに状態ファイルが増える | ✅ **裁定 A（owner 2026-09-03 夕 Q-694-9）**|
 | W-25 | N ch render（`mix.render(path, channels)`・`output(at:, mono:)`）| PR-R9 | DSL 表面 + wire（加算）| ✅ **裁定 B-lite（owner 2026-09-03 Q-598-2）** |
 
 **方針**: 一方通行のものは **(a) golden で現状を固定してから**（W-3/W-4）、**(b) 消費者が 0 のうちに**（W-6/W-10）、**(c) 定数 1 箇所で裁定を吸収して**（W-7）進める。裁定待ちの項目は**その PR だけ**が止まる形に分割してある。
@@ -86,8 +86,8 @@
 | PR-L5 | `feat(cli): replay --until — fast-forward fold, then hand over to the REPL` | #241 `--until`（2 相: 仮想畳み込み → 宣言の再生 + `Global.startAt(until)` + LOOP 再発行・doc 694 §7.4）| `replay-mode.ts`（+120）・`global.ts` `startAt`（+30）・`transport-clock.ts`（+10）| PR-L4・**PR-R4（Clock DI）・PR-R5（評価列 driver）** | unit（`until` 時点の状態が Phase A と一致）+ E2E: `--until 3:1` から続けた capture の 3 小節目以降がライブと一致 | ログに `at`（加算）|
 | PR-L6 | `feat(session-log): event sidecar + assets hash for replay --verify` | #241 `--verify`（doc 694 §7.5）| `session-log/event-sidecar.ts`（新 +120）・`session-log-writer.ts`（+40・assets 非同期）・`replay-mode.ts`（+60）| PR-L4 | E2E-R4: 同一セッションの replay で `--verify` 差分 0 | sidecar 形式 |
 | PR-L7 | `feat(session-log): result / import records; agent provenance from the MCP path` | doc 694 §2b G4/G5/G8・§6b | `session-log-writer.ts`（+40）・`repl-mode.ts`（+30: `//#evalMark` の `ok`/`diagnostics` を `result` へ・フレーム属性）・`process-file-import.ts`（+20）・`extension.ts` `evaluateForAgent`（+3）・integration（+80）| PR-L2 | integration: 失敗 eval に `result.ok:false`・MCP 経路の eval が `evalSource:"agent"`・import 本文がログにある。E2E-S7（MCP で評価 → `orbslog/` の `evalSource`）| 形式（加算）|
-| PR-L8 🔴 | `feat(core): TransportTimeline — bar:beat as musical time across tempo/beat changes` | doc 694 §2b **G6**（実測: `1:3.000` の 10 ms 後が `1:2.010`）・§7.2 | `core/global/transport-timeline.ts`（新 +80 pure）・`global.ts`（±40: `getTransportPosition` / `getQuantizedEffectPosition` / `msUntilTransportPosition`・`tempo()`/`beat()` で `change`）・unit（+100）・integration（+40）| PR-L1a | unit: 120→60 の 10 ms 後が `1:3.010`・`barBeatToMs(msToBarBeat(x)) === x`。**(8)=A なら** E2E-L8: tempo 変更直後の LOOP が次の小節頭で入る（capture で onset 位置）| W-23・🔴 doc 694 §13 (8) |
-| PR-L9 🔴 | `feat(session-log): snapshot plugin states into orbslog/ at start and stop` | doc 694 §2b **G7**・§6b `pluginState` | `session-log-writer.ts`（+40）・`global.ts`（+40: start/stop hook から `savePluginState` を `orbslog/<log>.states/` へ）・`effect-slot.ts`（+10: 解決順の先頭に override）・`replay-mode.ts`（+20）・integration（+60）・gated E2E（+80）| PR-L1a・**PR-R8 の前提** | E2E-L9: instrument を載せて start → `orbslog/<log>.states/` に state 実在 → stop 後に別状態で replay → RMS がライブ capture と一致 | W-24・🔴 doc 694 §13 (9) |
+| PR-L8 | `feat(core): TransportTimeline — bar:beat as musical time across tempo/beat changes` | doc 694 §2b **G6**（実測: `1:3.000` の 10 ms 後が `1:2.010`）・§7.2 | `core/global/transport-timeline.ts`（新 +80 pure）・`global.ts`（±40: `getTransportPosition` / `getQuantizedEffectPosition` / `msUntilTransportPosition`・`tempo()`/`beat()` で `change`）・unit（+100）・integration（+40）| PR-L1a | unit: 120→60 の 10 ms 後が `1:3.010`・`barBeatToMs(msToBarBeat(x)) === x`。**E2E-L8**: tempo 変更直後の LOOP が次の小節頭で入る（capture で onset 位置）| W-23（裁定 A）|
+| PR-L9 | `feat(session-log): snapshot plugin states into orbslog/ at start and stop` | doc 694 §2b **G7**・§6b `pluginState` | `session-log-writer.ts`（+40）・`global.ts`（+40: start/stop hook から `savePluginState` を `orbslog/<log>.states/` へ）・`effect-slot.ts`（+10: 解決順の先頭に override）・`replay-mode.ts`（+20）・integration（+60）・gated E2E（+80）| PR-L1a・**PR-R8 の前提** | E2E-L9: instrument を載せて start → `orbslog/<log>.states/` に state 実在 → stop 後に別状態で replay → RMS がライブ capture と一致 | W-24（裁定 A）|
 
 ### 1.3 render — PR-R（doc 598 §14）
 
@@ -343,14 +343,14 @@
 | #680 表面 / `PluginNoteOn/Off` | ✅ B / 残す | なし |
 | `untrustedWorkspaces.supported` | ✅ `true`（DAW の挙動に合わせる）| なし |
 | bundle id・バージョン付け | ✅ VSCodium 既定 / 拡張の `version` | なし |
-| `--until` 境界ちょうど（doc 694 §13 (3)）| 🔴 相談中（具体例で説明・doc 694 §7.4）| PR-L5 の 1 分岐 |
+| `--until` 境界ちょうど（doc 694 §13 (3)）| ✅ A 適用済み（owner 2026-09-03 夕）| なし |
 | #583 (i) 同名衝突（doc 610 §15 (5)）| ✅ 赤線 + その文だけスキップ | なし |
 | 3ch 以上を 1 ファイル（doc 598 §16 (2)）| ✅ B-lite（N ch の器 + `at:` 配置・エンコードは Logic）→ PR-R9 | なし |
 | #694 dormant の根拠（doc 694 §13 (7)）| ✅ 実測で確定（ログが出ていても再現に使えない形・§2b）| なし |
-| LOOP quantize を `TransportTimeline` に乗せるか（doc 694 §13 (8)・**新規**）| 🔴 相談中（A 乗せる を推す）| PR-L8 の 1 分岐（記録側は先行可）|
-| プラグイン状態の写し方（doc 694 §13 (9)・**新規**）| 🔴 相談中（A ファイルを写す を推す）| PR-L9（PR-R8 の前提）|
+| LOOP quantize を `TransportTimeline` に乗せるか（doc 694 §13 (8)）| ✅ A 乗せる（owner 2026-09-03 夕）| なし |
+| プラグイン状態の写し方（doc 694 §13 (9)）| ✅ A ファイルを写す（owner 2026-09-03 夕）| なし |
 
-**残りの相談 3 件のうち PR を止めるのは (9) だけ**（PR-L9 → PR-R8 = #598 P3）。(3)(8) は 1 分岐。owner 未回答の間は各項の推奨（(3) 適用済み / (8) A / (9) A）を仮置きとして設計を読む。
+**裁定待ちは 0 件**（2026-09-03 夕・66 問すべて回答済み）。以後の未決は新しい issue / 設計文書の §13 相当に足す。
 
 ---
 
@@ -359,5 +359,6 @@
 | 日付 | 内容 |
 |---|---|
 | 2026-09-03 | 初版（設計文書 11 本の PR を統合・一方通行 17 件・段 0〜8）|
+| 2026-09-03 | 残り 3 問（Q-694-3/8/9）が **A** で確定 → W-23/24 ✅・PR-L8/L9 の 🔴 を外す・§4「裁定待ち 0 件」|
 | 2026-09-03 | Q-694-7 の実測（doc 694 §2b: 今日のログは再現に使えない）→ PR-L7/L8/L9 追加・PR-L4/R5/R8 の依存を更新・W-23/24/25。Q-598-2 → B-lite（PR-R9）。Q-610-5 / Q-656-1 / Q-656-2 確定。§4 を「相談中 4 件」に更新 |
 | 2026-09-03 | owner 回答（裁定シート 66 問中 50 問）を反映: W-4/5/7/12/13/14/15/17 確定・W-18〜22 追加・PR-O4 に `pan` と 2 要素 / PR-L5 を高速畳み込みへ・PR-L6 / PR-D7 追加・PR-K-G2 を WASM スパイク後へ・PR-P6 をメッセージ値へ・PR-V8b に QoS・PR-S-C2 を node 同梱へ。§4 を「相談中 6 件」に更新 |
