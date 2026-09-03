@@ -706,7 +706,7 @@ The title of WORK_LOG 6.418 is "turning today's corrections from 'knowledge' int
 ### The DSL coverage ratchet
 
 ```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:44-54
+// tests/e2e/dsl-e2e-coverage.spec.ts:47-57
 function methodsExercisedByGatedE2E(): ReadonlySet<string> {
   // 🔴 走査先は `gated-sources.ts` が持つ（#668 §3.4・PR-E1）。ここで 1 ファイルを決め打ちすると、
   // シナリオを別ファイルへ出した時に**カバー済みの語が未カバー扱いになって red** になる。
@@ -723,8 +723,8 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 It only checks whether `.<name>(` appears in the gated spec. The vocabulary side is `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` from `packages/engine/src/signal-chain/runtime` — the interpreter's dispatch table itself.
 
 ```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:106-116
-  it('does not leave a new sequence method untested on real hardware', () => {
+// tests/e2e/dsl-e2e-coverage.spec.ts:150-160
+  it('A-1 does not leave a new sequence method untested on real hardware', () => {
     const now = uncovered(SEQUENCE_DSL_METHODS)
     const baseline = new Set(SEQUENCE_UNCOVERED_BASELINE)
     const regressions = now.filter((name) => !baseline.has(name))
