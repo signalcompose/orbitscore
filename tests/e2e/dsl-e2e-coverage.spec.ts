@@ -33,8 +33,11 @@ import {
   GLOBAL_DSL_METHODS,
   SEQUENCE_DSL_METHODS,
 } from '../../packages/engine/src/signal-chain/runtime'
+import { DSL_SYNTAX_SURFACE, type DslSyntaxId } from '../../packages/engine/src/parser/dsl-surface'
+import { KEYWORDS } from '../../packages/engine/src/parser/tokenizer'
 
-import { readGatedSources } from './gated-sources'
+import { DSL_COVERAGE_LEDGER } from './dsl-coverage-ledger'
+import { gatedItTitles, readGatedSources } from './gated-sources'
 
 /**
  * 実機 gated spec が「その語を呼ぶ DSL を評価している」か。
@@ -97,13 +100,54 @@ const GLOBAL_UNCOVERED_BASELINE: readonly string[] = [
   'quantize',
 ]
 
+/**
+ * 実機 E2E の台帳がまだ触っていない構文表面（2026-09-03 実測）。
+ *
+ * **この配列も減らす方向にしか編集してはいけない。** 構文を E2E で押さえ、台帳に
+ * シナリオを登録したらここから消す。新しい構文 id をここへ足してはいけない。
+ */
+const SYNTAX_UNCOVERED_BASELINE: readonly DslSyntaxId[] = [
+  'var-init-global',
+  'var-init-seq',
+  'import',
+  'file-import',
+  'transport-run',
+  'transport-loop',
+  'transport-mute',
+  'beat-by',
+  'play-nested',
+  'event-modifier',
+  'tie',
+  'underscore-method',
+  'chain-multiline',
+]
+
+/**
+ * tokenizer の予約語が、どの構文表面として受理されるか。
+ * `force` は RUN / LOOP / MUTE の `.force` 修飾なので transport 3 構文が受け持つ。
+ */
+const KEYWORD_SYNTAX_IDS: Readonly<Record<string, readonly DslSyntaxId[]>> = {
+  var: ['var-init-global', 'var-init-seq'],
+  init: ['var-init-global', 'var-init-seq'],
+  by: ['beat-by'],
+  GLOBAL: ['var-init-global'],
+  force: ['transport-run', 'transport-loop', 'transport-mute'],
+  RUN: ['transport-run'],
+  LOOP: ['transport-loop'],
+  MUTE: ['transport-mute'],
+  import: ['import'],
+}
+
+/** 2026-09-03 現在、台帳に smoke 行は無い。増やさず、減らす方向だけを許す。 */
+const SMOKE_OBSERVATION_BASELINE = 0
+
 describe('DSL coverage of the real-device E2E suite', () => {
   const exercised = methodsExercisedByGatedE2E()
 
   const uncovered = (vocabulary: ReadonlySet<string>): string[] =>
     [...vocabulary].filter((name) => !exercised.has(name)).sort()
 
-  it('does not leave a new sequence method untested on real hardware', () => {
+  it('A-1 does not leave a new sequence method untested on real hardware', () => {
     const now = uncovered(SEQUENCE_DSL_METHODS)
     const baseline = new Set(SEQUENCE_UNCOVERED_BASELINE)
     const regressions = now.filter((name) => !baseline.has(name))
@@ -115,10 +159,59 @@ describe('DSL coverage of the real-device E2E suite', () => {
     ).toEqual([])
   })
 
-  it('does not leave a new global method untested on real hardware', () => {
+  it('A-1 does not leave a new global method untested on real hardware', () => {
     const now = uncovered(GLOBAL_DSL_METHODS)
     const baseline = new Set(GLOBAL_UNCOVERED_BASELINE)
     expect(now.filter((name) => !baseline.has(name))).toEqual([])
+  })
+
+  it('A-2 does not leave a new syntax surface untested on real hardware', () => {
+    const covered = new Set(DSL_COVERAGE_LEDGER.map(({ surface }) => surface))
+    const baseline = new Set<string>(SYNTAX_UNCOVERED_BASELINE)
+    const regressions = DSL_SYNTAX_SURFACE.filter(
+      (syntaxId) => !covered.has(syntaxId) && !baseline.has(syntaxId),
+    )
+    expect(
+      regressions,
+      'A parser syntax surface was added without a ledger entry for a gated E2E scenario. ' +
+        'Add a real-device scenario and ledger entry; do not grow SYNTAX_UNCOVERED_BASELINE.',
+    ).toEqual([])
+  })
+
+  it('A-3 keeps every tokenizer keyword represented by the syntax surface', () => {
+    const syntaxIds = new Set<string>(DSL_SYNTAX_SURFACE)
+    const unmappedKeywords = [...KEYWORDS].filter(
+      (keyword) => KEYWORD_SYNTAX_IDS[keyword] === undefined,
+    )
+    const missingSyntaxIds = [...KEYWORDS].flatMap((keyword) =>
+      (KEYWORD_SYNTAX_IDS[keyword] ?? []).filter((syntaxId) => !syntaxIds.has(syntaxId)),
+    )
+    expect(
+      { unmappedKeywords, missingSyntaxIds },
+      'A tokenizer keyword was added without mapping it to a canonical DSL syntax surface.',
+    ).toEqual({ unmappedKeywords: [], missingSyntaxIds: [] })
+  })
+
+  it('A-4 keeps every coverage-ledger scenario anchored to a gated it title', () => {
+    const titles = gatedItTitles()
+    const missingScenarios = DSL_COVERAGE_LEDGER.filter(
+      ({ scenario }) => !titles.some((title) => title.includes(scenario)),
+    ).map(({ surface, scenario }) => ({ surface, scenario }))
+    expect(
+      missingScenarios,
+      'A coverage-ledger scenario does not partially match any gated `it(` title.',
+    ).toEqual([])
+  })
+
+  it('A-5 does not increase smoke-only observations', () => {
+    const smokeCount = DSL_COVERAGE_LEDGER.filter(
+      ({ observation }) => observation === 'smoke',
+    ).length
+    expect(
+      smokeCount,
+      'A smoke-only ledger entry was added. Use a semantic observation, or reduce the baseline; ' +
+        'never increase it.',
+    ).toBeLessThanOrEqual(SMOKE_OBSERVATION_BASELINE)
   })
 
   it('keeps the baseline honest — no entry that is already covered', () => {
