@@ -697,7 +697,7 @@ is the root of the mean of the squared RMS of each window inside it, with a guar
 seconds) trimmed from both ends of the segment to exclude transitions.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:572-577
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:570-575
     const rms = (name: string, guardSec = 0.15): number => {
       const selected = windows(name, guardSec)
       return Math.sqrt(
@@ -710,7 +710,7 @@ E2E-1 takes one segment at `global.gain(0)`, evaluates `global.gain(-6)`, takes 
 requires the ratio to fall within 0.45–0.55 ($10^{-6/20} \approx 0.501$).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1408-1442
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1406-1440
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -753,7 +753,7 @@ E2E-4 is the sum + aux path. It switches between dry (no bus) and an instrument 
 (theoretical 1.5) (`1587-1594`). The DSL part is quoted.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1535-1554
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1533-1552
         [
           'var global = init GLOBAL',
           'global.key("C")',
