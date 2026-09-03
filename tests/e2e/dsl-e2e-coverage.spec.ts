@@ -26,8 +26,6 @@
  * キャプチャの数値で判定すること（CLAUDE.md の「キャプチャ E2E」節）。
  * それでも「一度も書かれていない」を「書かれている」より下に置く価値はある。
  */
-import fs from 'node:fs'
-import path from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
@@ -36,7 +34,7 @@ import {
   SEQUENCE_DSL_METHODS,
 } from '../../packages/engine/src/signal-chain/runtime'
 
-const GATED_SPEC = path.resolve(__dirname, 'orbitstudio-mcp-gated.spec.ts')
+import { readGatedSources } from './gated-sources'
 
 /**
  * 実機 gated spec が「その語を呼ぶ DSL を評価している」か。
@@ -44,7 +42,9 @@ const GATED_SPEC = path.resolve(__dirname, 'orbitstudio-mcp-gated.spec.ts')
  * `.<name>(` の出現を見る。E2E は DSL をテンプレート文字列で書くので、この形で拾える。
  */
 function methodsExercisedByGatedE2E(): ReadonlySet<string> {
-  const source = fs.readFileSync(GATED_SPEC, 'utf8')
+  // 🔴 走査先は `gated-sources.ts` が持つ（#668 §3.4・PR-E1）。ここで 1 ファイルを決め打ちすると、
+  // シナリオを別ファイルへ出した時に**カバー済みの語が未カバー扱いになって red** になる。
+  const source = readGatedSources()
   const found = new Set<string>()
   for (const match of source.matchAll(/\.([a-zA-Z][a-zA-Z0-9]*)\s*\(/g)) {
     const name = match[1]
