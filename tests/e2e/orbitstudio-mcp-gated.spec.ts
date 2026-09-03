@@ -125,6 +125,21 @@ function assertDaemonBinaryIsNotStale(): void {
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) {
         if (entry.name === 'target' || entry.name === 'node_modules') continue
+        // 🔴 `tests` / `benches` / `examples` は**別の cargo ターゲット**で、
+        // `orbit-audio-daemon` の release バイナリには一切入らない（#713）。
+        //
+        // これらを比較対象に入れると**解消不能な赤**になる: mtime は `git checkout` で
+        // 現在時刻に更新されるので、ブランチを行き来しただけで無関係な統合テストが
+        // 「最新のソース」になる。だが cargo は依存グラフを正しく見て何もビルドしないため
+        // （`Finished in 0.21s`）、バイナリの mtime は永久に更新されない。
+        // 実測（2026-09-03）: `orbit-vst3-host/tests/spike_s_concurrent_load.rs` が
+        // これを引き起こし、実機 gated が起動段階で全部落ちた。
+        //
+        // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
+        // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
+        if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
+          continue
+        }
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs

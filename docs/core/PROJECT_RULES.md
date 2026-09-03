@@ -270,7 +270,7 @@ open issue 164 件のうち **162 件がタイトルに Conventional Commits の
   - AIエージェントはマージの準備（PR作成、レビュー対応）までを行い、マージ実行はユーザーに委ねます
   - 理由: テスト結果、ビルド結果、BugBotのコメントなど、最終的な品質確認はユーザーが行うべき
   - **例外**: ユーザーが明示的に「マージしてください」「マージをお願いします」と依頼した場合は実行可能
-- **ブランチの削除** - `git branch -d` や `gh pr merge --delete-branch` は原則として実行しない
+- **ブランチの削除** - `git branch -d` や `gh pr merge --delete-branch` は原則として実行しない（マージ後の head ブランチは GitHub のリポジトリ設定で自動削除される・owner 2026-09-03。手で消す必要はない）
   - ブランチは履歴追跡のため保持します
   - **例外**: ユーザーが明示的に「ブランチを削除してください」と依頼した場合は実行可能
 
@@ -539,7 +539,7 @@ git checkout -b <issue-number>-descriptive-name
 | main に追従 | 他の束が main に入ったら統合ブランチへ merge | `git merge origin/main` |
 | 束を閉じる | 統合ブランチ → main の PR（束 PR）を開き、`CLAUDE.md` の PR レビューワークフロー（1〜8）+ マージ前ゲート → merge commit。本文に `Closes #…` を集約 | `gh pr create --base main --head 611-output-line` |
 
-- 統合ブランチは保護しない・消さない。main には束 1 つの merge commit が入り、小 PR の履歴はその下にぶら下がる
+- 統合ブランチは保護しない。束 PR のマージ後は他の head ブランチと同じく自動削除される。main には束 1 つの merge commit が入り、小 PR の履歴はその下にぶら下がる
 - 仕様だけの PR と must-fix は束を通さず main 直行（従来どおり）
 - 自動レビュー bot（`claude-code-review.yml`）は base が main の PR だけで走る（小 PR では走らない）
 
@@ -567,13 +567,13 @@ detailed description"
 
 **Merging PRs:**
 ```bash
-# Merge commit（DO NOT delete branch）
+# Merge commit
 # 🔴 squash はリポジトリ設定で禁止されている（2026-09-03 に API が 405 "Squash merges are not allowed" を返すことを実測。
 #    main の履歴も "Merge pull request #N" の merge commit）。--squash と書いた旧記述は誤り。
 gh pr merge <number> --merge
 
-# ❌ NEVER use --delete-branch flag
-# ✅ Keep branches for historical reference
+# head ブランチはマージ後に GitHub 設定で自動削除される（owner 2026-09-03: 増えすぎるし後からでも追える）。
+# 履歴は merge commit から辿る。--delete-branch を付ける必要も、消さないよう気を配る必要もない。
 ```
 
 **Important:**
@@ -583,7 +583,7 @@ gh pr merge <number> --merge
   - ✅ Good: `11-refactor-audio-slicer-phase-2-1`
   - ❌ Bad: `11-refactor-audio-slicertsをモジュール分割phase-2-1`
   - Reason: Japanese characters in branch names can cause issues with some tools and environments
-- **Branches are kept for history** - do not delete after merge
+- **Merged head branches are auto-deleted by the repository setting**（owner 2026-09-03）。履歴は merge commit から辿る
 - **Cursor BugBot** automatically provides change summaries on PRs (not actual code reviews)
 - User typically handles merging, but agent may assist with complex implementations
 - Merge method は **merge commit**（`--squash` はリポジトリ設定で不可・2026-09-03 実測）
@@ -744,7 +744,7 @@ When you see these patterns, **refactor immediately**:
 4. **NEVER** skip tests for new features
 5. **NEVER** use magic numbers - use constants
 6. **NEVER** leave TODO comments without tracking
-7. **NEVER** delete branches after merging (use `--merge` without `--delete-branch`)
+7. Merge with `--merge`（squash 不可）。head ブランチはマージ後に自動削除される
 
 ## ✅ Checklist Before Committing
 
