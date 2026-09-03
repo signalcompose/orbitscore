@@ -1,12 +1,12 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: affdf69
+verified-against: cdbb8d3
 verified-at: "2026-09-03"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）と PR-E4（構文表面の正本とラチェット A-2 〜 A-5）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -741,6 +741,135 @@ gated spec の中に `.<name>(` が現れるかどうかだけを見ます。語
 
 限界も正直に書かれています。ソースを文字列走査するだけなので「その E2E が意味のある検証をしているか」は見ません。「音に出る語はキャプチャの数値で判定すること」という規律は、次のテストと組み合わせて初めて効きます。
 
+### メソッド名では測れない構文表面 — A-2 〜 A-5
+
+A-1 が見ているのは `.<name>(` という **メソッド呼び出しの形** だけです。ところが DSL には、その形をとらない表面がいくつもあります。`var g = init GLOBAL` の宣言、`RUN(x)` / `LOOP(x)` / `MUTE(x)` のトランスポート、`n by 4` の拍指定、`play(1, (1,1), 1)` のネスト、`1@v+10` のようなイベント修飾、タイの `_`、複数行にまたがるチェーン — どれもメソッド名としては現れないので、こうした構文を増やして E2E を書き忘れても、ラチェットは緑のままでした。しかも構文表面の一覧はどこにも無く、`tokenizer.ts` の `KEYWORDS` は `private static` で外から読めない状態でした。
+
+そこで #668 PR-E4 は、その一覧を production 側に正本として置きます。
+
+```typescript
+// packages/engine/src/parser/dsl-surface.ts:1-18
+/**
+ * パーサが受理する「メソッド呼び出しでない」DSL 表面。
+ * tokenizer / parse-statement の分岐と 1:1 に保つ。
+ */
+export type DslSyntaxId =
+  | 'var-init-global' // var g = init GLOBAL              tokenizer.ts:19-20, parse-statement.ts:62
+  | 'var-init-seq' // var s = init global.seq          parse-statement.ts:385
+  | 'import' // import { x } from "./a.orbs"     tokenizer.ts:26, parse-statement.ts:67
+  | 'file-import' // file_import 文                    audio-parser.ts:94,106
+  | 'transport-run' // RUN(x)                           parse-statement.ts:72
+  | 'transport-loop' // LOOP(x)                          parse-statement.ts:72
+  | 'transport-mute' // MUTE(x)                          parse-statement.ts:72
+  | 'beat-by' // n by 4                           tokenizer.ts:21
+  | 'play-nested' // play(1, (1,1), 1)
+  | 'event-modifier' // 1@v+10 / ^2 / ~ / @g
+  | 'tie' // _                                audio では無視・#665
+  | 'underscore-method' // _gain(...) 等（適用形・spec §7）
+  | 'chain-multiline' // 複数行にまたがるチェーン（spec §3 Multiline）
+```
+
+各 id のコメントに参照元（`tokenizer.ts:19-20`、`parse-statement.ts:62` など）が残っているのは、この一覧を「パーサの分岐と 1:1 に保つ」ためです。同じ並びが `DSL_SYNTAX_SURFACE`（`dsl-surface.ts:21-35`）に配列として置かれていて、テスト側はこちらを読みます。
+
+もう 1 つ、**表面からシナリオへの台帳**が入ります。
+
+```typescript
+// tests/e2e/dsl-coverage-ledger.ts:1-19
+/** §5 の判定の型と 1:1。`smoke`（評価が通っただけ）は件数をラチェットで減らす。 */
+export type ObservationKind =
+  | 'capture-rms'
+  | 'capture-onset'
+  | 'capture-pitch'
+  | 'capture-bits'
+  | 'log-text'
+  | 'file'
+  | 'smoke'
+
+export interface CoverageEntry {
+  /** DSL 語（`runtime.ts` の Set の要素）または構文 id（`DslSyntaxId`）。 */
+  readonly surface: string
+  /** gated spec の `it(` タイトルに実在する文字列（部分一致で照合する）。 */
+  readonly scenario: string
+  readonly observation: ObservationKind
+  /** 仕様セクション ID（台帳 1・§9）。無い表面は明示的に null。 */
+  readonly specSection: string | null
+}
+```
+
+要点は `observation` です。「その表面を何で観測したか」を型として持たせておくと、`smoke`（評価が通っただけ）の行を機械的に数えられます。
+
+この 2 つの上に検査が 4 本乗ります。
+
+| 検査 | 落ちる条件 |
+|---|---|
+| **A-2** | `DSL_SYNTAX_SURFACE` に id を足したのに、台帳にも `SYNTAX_UNCOVERED_BASELINE` にも無い（A-1 の構文版） |
+| **A-3** | `KEYWORDS` の予約語が `KEYWORD_SYNTAX_IDS` で構文 id に対応づけられていない |
+| **A-4** | 台帳の `scenario` が gated spec の `it(` 題名のどれにも部分一致しない |
+| **A-5** | 台帳の `smoke` 行が `SMOKE_OBSERVATION_BASELINE`（0）を超えた |
+
+A-3 だけ向きが少し違うので、実物を見ておきましょう。
+
+```typescript
+// tests/e2e/dsl-e2e-coverage.spec.ts:181-193
+  it('A-3 keeps every tokenizer keyword represented by the syntax surface', () => {
+    const syntaxIds = new Set<string>(DSL_SYNTAX_SURFACE)
+    const unmappedKeywords = [...KEYWORDS].filter(
+      (keyword) => KEYWORD_SYNTAX_IDS[keyword] === undefined,
+    )
+    const missingSyntaxIds = [...KEYWORDS].flatMap((keyword) =>
+      (KEYWORD_SYNTAX_IDS[keyword] ?? []).filter((syntaxId) => !syntaxIds.has(syntaxId)),
+    )
+    expect(
+      { unmappedKeywords, missingSyntaxIds },
+      'A tokenizer keyword was added without mapping it to a canonical DSL syntax surface.',
+    ).toEqual({ unmappedKeywords: [], missingSyntaxIds: [] })
+  })
+```
+
+tokenizer に予約語を足して正本を更新し忘れると `unmappedKeywords` に名前が出て red になります。逆に正本から id を消せば `missingSyntaxIds` 側が落ちます。対応表（`dsl-e2e-coverage.spec.ts:129-139`）で `force` が `transport-run` / `transport-loop` / `transport-mute` の 3 つに割り当てられているのは、`force` が単独の文ではなく RUN / LOOP / MUTE の `.force` 修飾だからです。
+
+この検査が成立するのは、`tokenizer.ts` の末尾に公開 view が足されたからです。
+
+```typescript
+// packages/engine/src/parser/tokenizer.ts:288-289
+/** パーサの構文表面と tokenizer の予約語を照合するための公開 view。 */
+export const KEYWORDS = AudioTokenizer.KEYWORDS
+```
+
+PR-E4 は E2E を 1 本も増やしていません。ですから台帳は空、`SMOKE_OBSERVATION_BASELINE` は 0、`SYNTAX_UNCOVERED_BASELINE`（`dsl-e2e-coverage.spec.ts:109-123`）は 13 個すべてが未カバーの状態から始まります。**構文 baseline も語の baseline と同じく、減らす方向にしか編集してはいけません。** ここで足したのは網羅そのものではなく、「これ以上悪くならない」という床です。
+
+さきほどの「限界も正直に」に戻ると、A-5 はその限界に半分だけ手をかけています。`observation` が `smoke` のままの行を増やせないので、「評価が通ったことしか見ていない E2E」が積み上がる方向へは進めません。ただし `capture-rms` と書いた行が本当に RMS を見ているかまでは検査しません — そこは次のアサーション衛生の担当です。
+
+### 走査の層に初めてテストが付いた
+
+PR-E4 の受け入れ監査で、`gatedItTitles()` のバグが 1 件見つかりました。gated suite の `it` は 20 箇所すべて `it.skipIf(!appAvailable)('title', …)` というカリー化された呼び出しで書かれていて、題名は **2 つ目の呼び出しの第 1 引数** にあります。PR-E1 の正規表現は `it(` の直後に文字列が来る前提だったので、**題名を 1 件も拾えていませんでした。**
+
+それでも当時は緑でした。拾えなくても「照合対象が無い」だけで、誰も困らなかったからです。ところが A-4 が台帳と題名を突き合わせ始めると、**空振りで緑 → 正当な台帳エントリを足した瞬間に誤って red**、という壊れ方をします。
+
+```typescript
+// tests/e2e/gated-sources.ts:110-125
+export function gatedItTitles(): readonly string[] {
+  const titles: string[] = []
+  // `it` / `it.only` / `it.skip` の直呼びと、`it.skipIf(<cond>)(` のカリー形の両方を拾う。
+  for (const match of readGatedSources().matchAll(
+    /\bit(?:\.\w+)?(?:\([^)]*\))?\(\s*(['"`])((?:\\.|(?!\1).)*)\1/g,
+  )) {
+    titles.push(match[2])
+  }
+  if (titles.length === 0) {
+    throw new Error(
+      'gated E2E の it( 題名が 1 件も見つからない。' +
+        '照合（#668-A の A-4）が黙って無意味になるので、呼び出しの書き方を確認すること。',
+    )
+  }
+  return titles
+}
+```
+
+入っているのは 2 つです。正規表現を `it.skipIf(<cond>)(` のカリー形に対応させたことと、**題名が 0 件なら throw する**ことです。`readGatedSources()` には同じガードが元からありましたが、題名側には入っていませんでした。黙って空を返す層は、消費者が現れるまで壊れていることが分かりません。
+
+同じ PR で `tests/e2e/gated-sources.spec.ts` が加わり、走査の層に初めて自分自身のテストが付きました。`GATED_SOURCE_FILES` が 1 件以上あること、読み込んだソースが gated suite の describe 名を含むこと、カリー形の題名を拾えること、そして台帳がアンカーできる題名が返ることの 4 本です。
+
 ### アサーション衛生
 
 ```typescript
@@ -1010,7 +1139,7 @@ npm run test:e2e:gated
 ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm run test:e2e:gated
 ```
 
-実行すると GUI アプリが起動して実際に音が鳴るので、CLAUDE.md の指示どおり **無人・無断で回さない**ことになっています。ゲート env が無い通常の `npm test` では describe ごと skip され、ラチェットと hygiene の 2 テストだけが常時走ります。
+実行すると GUI アプリが起動して実際に音が鳴るので、CLAUDE.md の指示どおり **無人・無断で回さない**ことになっています。ゲート env が無い通常の `npm test` では describe ごと skip され、gated spec の**ソースを読む側**（ラチェット `dsl-e2e-coverage.spec.ts`、アサーション衛生 `gated-assertion-hygiene.spec.ts`、走査層の `gated-sources.spec.ts`）だけが常時走ります。
 
 エージェント（Claude Code）から対話的に触りたい場合は、`ORBITSCORE_MCP_PORT=39123` を付けて OrbitStudio を起動し、`register_mcp_server` ツールか "Register Claude Code MCP Server" コマンドで `.mcp.json` に登録します。CLAUDE.md の「マージ前ゲート」節が定める手順は、`get_engine_state` で起動確認 → `evaluate_orbitscore` で当該 PR の DSL を評価 → **`get_log` で ERROR を確認**、の 3 段です。「起動中の OrbitStudio を必ず終了してから起動し直す」（古い extension host が新しい daemon を spawn すると `DaemonStartupError` になる）という注意も同じ節にあります。
 
@@ -1020,7 +1149,9 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 
 - **Agent Bridge**: WCTM 仕様 §3 の「脳のない MCP サーバー」。本章の MCP サーバはその実装
 - **capture seam**: daemon がマスター出力を WAV に書き出す機構（`ORBIT_CAPTURE_WAV`）。spawn 時にしか有効化できない
-- **ラチェット**: 未カバー DSL 語の baseline を「減らす方向にしか編集できない」テスト
+- **ラチェット**: 未カバー DSL 語・構文表面の baseline を「減らす方向にしか編集できない」テスト
+- **構文表面 (syntax surface)**: メソッド呼び出しの形をとらない DSL の受理形（`var ... init`、`RUN(x)`、`n by 4`、`play` のネスト等）。正本は `packages/engine/src/parser/dsl-surface.ts`
+- **台帳 (coverage ledger)**: 表面 → gated シナリオ → 観測方法の対応表（`tests/e2e/dsl-coverage-ledger.ts`）
 - **`[STEP]`**: engine が stdout に出す playhead 用の機械可読行
 
 ## 関連 ADR
@@ -1068,13 +1199,17 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:635-1430` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:2030-2136` — #654 playhead E2E
 - `tests/e2e/helpers/mcp-client.ts:1-174` — 生 JSON-RPC クライアント
-- `tests/e2e/gated-sources.ts:1-106` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）
+- `tests/e2e/gated-sources.ts:1-125` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）と `gatedItTitles()`（カリー形対応・0 件 throw は #668 PR-E4）
+- `tests/e2e/gated-sources.spec.ts:1-52` — 走査層そのものの検査（#668 PR-E4）
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` の判定（`countErrors` 7 重定義の統合先・#668 PR-E2）
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` と `captureWavPath()`
 - `tests/e2e/helpers/run-score.ts:1-272` — 譜面を work copy にして実機で評価する 1 関数
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — 生成物の待ち合わせ（`minBytes` つき）
 - `tests/e2e/helpers/run-cli.ts:1-62` — `orbitscore replay` / `render` の子プロセス実行（MCP を通らない唯一の例外）
-- `tests/e2e/dsl-e2e-coverage.spec.ts:1-146` — DSL 網羅率ラチェット
+- `tests/e2e/dsl-e2e-coverage.spec.ts:1-239` — DSL 網羅率ラチェット（A-1 語彙 / A-2 構文表面 / A-3 予約語 / A-4 台帳アンカー / A-5 smoke）
+- `packages/engine/src/parser/dsl-surface.ts:1-35` — メソッド呼び出しでない DSL 構文表面の正本（#668 PR-E4）
+- `packages/engine/src/parser/tokenizer.ts:288-289` — `KEYWORDS` の公開 view（A-3 の照合元）
+- `tests/e2e/dsl-coverage-ledger.ts:1-27` — 表面 → シナリオ → 観測方法の台帳
 - `tests/e2e/gated-assertion-hygiene.spec.ts:1-66` — アサーション衛生
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixture
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
@@ -1091,4 +1226,5 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - Issue [#643](https://github.com/signalcompose/orbitscore/issues/643) — instrument のミキサー統合（E2E-1〜7）
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — capture ヘッダの定期 patch と stale ガード
 - Issue [#654](https://github.com/signalcompose/orbitscore/issues/654) — instrument シーケンスで playhead が動かない
-- Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E の基盤（PR-E1 `gated-sources.ts` / PR-E2 共有ハーネス層）
+- Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E の基盤（PR-E1 `gated-sources.ts` / PR-E2 共有ハーネス層 / PR-E4 構文表面の正本とラチェット）
+- PR [#715](https://github.com/signalcompose/orbitscore/pull/715) — 構文表面の正本と網羅ラチェット（A-2 〜 A-5・`gatedItTitles()` のカリー形バグ修正）

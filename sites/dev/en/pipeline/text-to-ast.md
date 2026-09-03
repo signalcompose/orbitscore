@@ -149,6 +149,16 @@ When `AudioTokenizer` reads through the characters and finds a string starting w
 
 Set lookups are `O(1)`, so the speed does not change as the number of keywords grows. Reading the implementation reveals an unexpectedly simple mechanism.
 
+This `KEYWORDS` is also exposed as a named export at the end of the file.
+
+```typescript
+// packages/engine/src/parser/tokenizer.ts:288-289
+/** パーサの構文表面と tokenizer の予約語を照合するための公開 view。 */
+export const KEYWORDS = AudioTokenizer.KEYWORDS
+```
+
+The read-only view is exported so that tests can cross-check the keyword list (#668 PR-E4). Check A-3 fails the state "a keyword was added but no syntax that accepts it exists in the DSL surface source of truth". See the section "The syntax surfaces a method name cannot measure" in [IV-3](/en/editor/mcp-and-gated-e2e) for the details.
+
 ### Single-Pass Scan
 
 The `tokenize()` method reads the input string one character at a time and generates all tokens in a single pass.
@@ -449,6 +459,7 @@ This intermediate representation is passed to the interpreter in the next chapte
 - `packages/engine/src/parser/types.ts:203-219` — `ImportStatement` / `FileImportStatement`
 - `packages/engine/src/parser/types.ts:252-274` — `GlobalStatement` / `SequenceStatement` / `MethodChain` and `invocation`
 - `packages/engine/src/parser/tokenizer.ts:11-32` — the `AudioTokenizer` class and `KEYWORDS` Set
+- `packages/engine/src/parser/tokenizer.ts:288-289` — the named `KEYWORDS` export (#668 PR-E4, what check A-3 reads)
 - `packages/engine/src/parser/tokenizer.ts:135-170` — the start of the `tokenize()` main loop and the accidental decision
 - `packages/engine/src/parser/audio-parser.ts:68-115` — the loop, dispatch, and IM.1 check in `AudioParser.parse()`
 - `packages/engine/src/parser/audio-parser.ts:121-126` — the `parseAudioDSL()` entry function

@@ -149,6 +149,16 @@ export type AudioToken = {
 
 Set を使ったルックアップは `O(1)` なので、キーワードの数が増えても速度は変わりません。実装を読むと、意外とシンプルな仕組みで動いていることがわかります。
 
+この `KEYWORDS` は、ファイル末尾で名前付き export としても公開されています。
+
+```typescript
+// packages/engine/src/parser/tokenizer.ts:288-289
+/** パーサの構文表面と tokenizer の予約語を照合するための公開 view。 */
+export const KEYWORDS = AudioTokenizer.KEYWORDS
+```
+
+読み取り専用の view を外に出しているのは、テスト側から予約語の一覧を突き合わせるためです（#668 PR-E4）。「予約語を足したのに、それを受理する構文が DSL 表面の正本に無い」という状態を検査 A-3 が落とします。詳しくは [IV-3](/editor/mcp-and-gated-e2e) の「メソッド名では測れない構文表面」節を参照してください。
+
 ### シングルパススキャン
 
 `tokenize()` メソッドは入力文字列をひとつずつ読み進めながら、一度のパスで全トークンを生成します (シングルパス)。
@@ -449,6 +459,7 @@ export type SequenceStatement = {
 - `packages/engine/src/parser/types.ts:203-219` — `ImportStatement` / `FileImportStatement`
 - `packages/engine/src/parser/types.ts:252-274` — `GlobalStatement` / `SequenceStatement` / `MethodChain` と `invocation`
 - `packages/engine/src/parser/tokenizer.ts:11-32` — `AudioTokenizer` クラスと `KEYWORDS` Set
+- `packages/engine/src/parser/tokenizer.ts:288-289` — `KEYWORDS` の名前付き export（#668 PR-E4・検査 A-3 の照合元）
 - `packages/engine/src/parser/tokenizer.ts:135-170` — `tokenize()` メインループ冒頭と accidental の判定
 - `packages/engine/src/parser/audio-parser.ts:68-115` — `AudioParser.parse()` のループ・振り分け・IM.1 検査
 - `packages/engine/src/parser/audio-parser.ts:121-126` — `parseAudioDSL()` エントリ関数

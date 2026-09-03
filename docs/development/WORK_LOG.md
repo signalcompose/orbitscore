@@ -1325,3 +1325,41 @@ PR-E1 の正規表現は `it(` の直後に文字列が来る前提だったの�
 
 **検証**（main が sandbox 外で回した実測）: `tsc` 0 / `eslint` 0 /
 `npm test` **2171 passed / 48 skipped**（+4 = A-2〜A-5）/ `check-citations.mjs` **904 verified / 0 failed**。
+
+### PR-E4 追従: dev サイトを構文表面の正本とラチェット A-2 〜 A-5 まで追従させる（docs のみ）
+
+PR [#715](https://github.com/signalcompose/orbitscore/pull/715)（merge `cdbb8d3`・base は束の統合ブランチ
+`668-e2e-foundation`）に対するドキュメント追従。**実装・テストは一切変更していない。**
+
+**追加**（`sites/dev/editor/mcp-and-gated-e2e.md` と `sites/dev/en/` の同パス）:
+
+- 新節「メソッド名では測れない構文表面 — A-2 〜 A-5」。`packages/engine/src/parser/dsl-surface.ts:1-18`
+  （`DslSyntaxId` 13 個）と `tests/e2e/dsl-coverage-ledger.ts:1-19`（`ObservationKind` / `CoverageEntry`）を
+  verbatim 引用し、A-2 〜 A-5 の落ちる条件を表にした。A-3 だけ向きが違う（正本 → 予約語ではなく
+  予約語 → 正本）ので `dsl-e2e-coverage.spec.ts:181-193` を引用
+- `packages/engine/src/parser/tokenizer.ts:288-289` の `KEYWORDS` 公開 view を引用。A-3 が成立する前提
+- 新節「走査の層に初めてテストが付いた」。`gatedItTitles()` がカリー形の題名を 1 件も拾えていなかった
+  こと、空振りで緑 → 正当な台帳エントリで誤 red という壊れ方、`tests/e2e/gated-sources.ts:110-125` の
+  カリー形対応と 0 件 throw、`tests/e2e/gated-sources.spec.ts` の 4 本
+- 「ゲート env が無い通常の `npm test`」の説明を 2 テスト → 3 spec（ラチェット / アサーション衛生 /
+  走査層）に修正
+- 関連用語に「構文表面」「台帳」を追加。Sources に `dsl-surface.ts` / `dsl-coverage-ledger.ts` /
+  `gated-sources.spec.ts` を追加し、`gated-sources.ts:1-106 → 1-125` /
+  `dsl-e2e-coverage.spec.ts:1-146 → 1-239` に更新
+- frontmatter の `verified-against` を `affdf69 → cdbb8d3` に更新
+
+**追加**（`sites/dev/pipeline/text-to-ast.md` と en 同パス）:
+
+- 「キーワード認識」節に `KEYWORDS` の名前付き export（`tokenizer.ts:288-289`）を追記。
+  PR #715 は引用ヘッダの `private static` → `static readonly` だけを直しており、**なぜ公開したか**は
+  どちらの言語版にも書かれていなかった。frontmatter は 1 段落の追記なので更新しない（STYLE_GUIDE
+  「小規模 cross-link / 体裁修正のみは更新しない」）
+
+**追従不要と判断した層**:
+
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — DSL の構文も意味論も変わっていない。
+  `dsl-surface.ts` は**既存の受理形を列挙した正本**であって、新しい構文を足してはいない
+- `sites/user/` / `docs/user/ja/USER_MANUAL.md` — ユーザーが書く語は 1 つも増減していない
+- `docs/design/668-e2e-foundation-design.md` — 起案時点のスナップショットなので書き換えない
+
+**検証**: `npm run docs:build`（user / dev）と `npm run docs:check` はすべて緑。
