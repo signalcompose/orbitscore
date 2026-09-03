@@ -162,7 +162,7 @@ export async function activate(context: vscode.ExtensionContext) {
 最後の 2 つはこう書かれています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:445-498 (MCP ツールのハンドラ表を省略)
+// packages/vscode-extension/src/extension.ts:445-499 (MCP ツールのハンドラ表を省略)
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -198,7 +198,7 @@ Status bar インジケータは **2 本** あります。priority の値が違�
 `bundleStatusItem` の表示は `updateBundleStatus()` が決めますが、その最初の分岐が **engine kind** です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:725-741
+// packages/vscode-extension/src/extension.ts:726-742
 function updateBundleStatus(): void {
   if (!bundleStatusItem) return
   if (getConfiguredEngineKind() === 'rust') {
@@ -414,7 +414,7 @@ interface MethodChainContext {
 engine を spawn する前に、拡張は「音声プロセスの実行ファイルが本当にあるか」を事前チェックします。ここに面白い実装パターンがあります。**Extension Host の JS (TypeScript にコンパイル済) が、engine パッケージの compiled JS を `require` でランタイムロードする** という構造で、scsynth と daemon の両方に同じ形の wrapper があります。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:676-710
+// packages/vscode-extension/src/extension.ts:677-711
 function resolveScsynthForUI(): { path: string; source: string } | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
@@ -480,7 +480,7 @@ scsynth の resolver は `explicit > env > bundle > throw`、daemon の resolver
 事前チェックは [III-3](/audio/scsynth-bundle#engine-kind-で呼び出しそのものが-gate-される) に引用したので、ここでは引数と env の組み立てから spawn までを読みます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2111-2124
+// packages/vscode-extension/src/extension.ts:2112-2125
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -500,7 +500,7 @@ scsynth の resolver は `explicit > env > bundle > throw`、daemon の resolver
 engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動され、出力デバイスは `--audio-device` 引数で渡されます (`orbitscore.audioDevice` 設定が優先、無ければ `.orbitscore.json`)。`__default__` は「OS の既定出力」を意味する番兵です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2142-2164
+// packages/vscode-extension/src/extension.ts:2143-2165
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
@@ -531,7 +531,7 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
 `stdio: ['pipe', 'pipe', 'pipe']` が重要です。stdin/stdout/stderr をすべて pipe にすることで、Extension Host から直接 write/read できます。spawn 直後にはハンドラを 5 本付け、`process.nextTick` を 1 回またいでから「まだ同じプロセスが生きているか」を確認します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2179-2190
+// packages/vscode-extension/src/extension.ts:2180-2191
   // Setup handlers
   setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
@@ -564,7 +564,7 @@ Extension Host と engine プロセスの通信は **stdin/stdout パイプ** �
 送信部分は editor の Run Selection と MCP の `evaluate_orbitscore` が共有する `writeCodeToEngine()` に集約されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3000-3032
+// packages/vscode-extension/src/extension.ts:3001-3033
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -633,7 +633,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1512-1548 (effects の中身を一部省略)
+// packages/vscode-extension/src/extension.ts:1513-1549 (effects の中身を一部省略)
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
         clearSequence: clearPlayheadForSequence,
@@ -674,7 +674,7 @@ export function transportStatusText(state: TransportState, debugMode: boolean): 
 `stopEngine()` は SIGTERM → (2 秒後) SIGKILL という 2 段階のシャットダウンを行います。2026-05 と比べると、bridge の drain と playhead のクリアが増え、SIGKILL の条件が直っています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2204-2252
+// packages/vscode-extension/src/extension.ts:2205-2253
 export function stopEngine(): boolean {
   engineGeneration += 1
   if (engineProcess && !engineProcess.killed) {

@@ -656,7 +656,7 @@ fresh catalog.
 MCP's `list_plugins` / `rescan_plugins` share the same `loadPluginCatalog()` / `runPluginScan()`.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1022-1032
+// packages/vscode-extension/src/mcp-server.ts:1037-1047
   server.registerTool(
     'list_plugins',
     {
@@ -773,7 +773,7 @@ after the opening quote to the cursor). When there is no catalog it returns no c
 shows a one-time hint to rescan (the `pluginCatalogHintShown` flag prevents nagging).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3716-3726
+// packages/vscode-extension/src/extension.ts:3721-3731
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -876,7 +876,7 @@ When there is no catalog, **nothing is reported**: "not scanned yet" is not evid
 wrong. And the severity is **Warning**, not Error.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4096-4112
+// packages/vscode-extension/src/extension.ts:4101-4117
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //

@@ -1208,3 +1208,45 @@ E2E-2 / E2E-3 の dry RMS が **ちょうど 0**、E2E-1 の比が **1.27**（ga
 - 🔴 **層が効いていることを実行で確認した。** `tests/e2e/gated/__probe.ts` に ERROR 件数の
   厳密等価を置くと衛生検査が **red** になり、**`gated/__probe.ts:7`** と報告した。
   この PR 以前ならこのファイルは走査されず、検査は黙って通っていた。確認後に削除し、緑に戻した
+
+### PR-E3: capture の解析を per-channel でも取れるようにする
+
+**なぜ入れるか**（設計 §10）。`analyzeWavBuffer` は `wav-analysis.ts:127-132` で**全チャンネルを
+加算平均してモノラルにしてから**窓 RMS を取る。`WavAnalysis` にチャンネル別の系列は無く、
+MCP の `analyze_audio` もその形しか返さない（gated spec に `readFloatLE` は **0 件**）。
+チャンネル別 RMS は Rust 側（`orbit-audio-verify`）にしか無く、**MCP 経由の gated E2E からは届かない**。
+
+🔴 **このままでは書けない E2E が 4 件あり、いずれも mono に潰れて常に緑になる**:
+`pan` / `defaultPan` の L/R 差（#650）／ ch3-4 が無音・ch1-2 は有音（doc 611 E2E-4・5）／
+8ch で bleed 無し（doc 598 E2E-R5）。
+
+**変更**（実装は Codex・検証は main）:
+
+- `wav-analysis.ts` — `ChannelWindow` 型 / `WavAnalysis.channelWindows` / `channelRms` /
+  `analyzeWavBuffer(buf, { perChannel })`。**既定は mono のまま**（spread で、指定時だけ増える）
+- `mcp-server.ts` / `extension.ts` — `analyze_audio` に `per_channel` を追加。
+  設計の要求どおり**エージェントも同じ動線で見られる**ようにした（MCP は裏口ではない）
+- `tests/e2e/helpers/run-score.ts` — `CaptureWindows.channelRms(segment, channel, guardSec?)`
+
+**ユニットテスト 4 本**（既存 14 本は無変更）。決定的なのは 3 本目 —
+**片チャンネルだけに信号がある WAV** で `channelRms[1] === 0` かつ **`mono rms === channelRms[0] / 2`**
+を検証する。**mono 潰しの欠陥そのものを数値で固定**している。
+
+#### 🔴 実機の capture で mono と突き合わせた（main の実測）
+
+実機 gated が生成した**44.1 秒・ステレオ**の capture を、同じ関数で両方の呼び方で解析した:
+
+```
+ch数        : 2
+durationSec : 44.117
+mono rms    : 0.061970
+channelRms  : 0.061970  0.061970
+L/R 比       : 1.0000
+既定の不変性 : {}            ← perChannel 無指定では両フィールドとも undefined
+```
+
+**3 つの値が小数 6 桁まで一致。** 合成データの hard-pan テストが「**分離できる**」ことを、
+この実機値が「**mono と矛盾しない**」ことを示す。片方だけでは足りない。
+
+**検証**: `tsc` 0 / `eslint` 0 / `npm test` **2173 passed / 48 skipped**（+4）/
+`check-citations.mjs` **904 verified / 0 failed**。

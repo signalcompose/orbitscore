@@ -66,7 +66,7 @@ MCP は「テスト用の裏口」ではなく、**ユーザーと同じ動線�
 ツール実装が VS Code に直接触らず `OrbitScoreToolHandlers` というインターフェイス越しに呼ばれているのも、同じ思想の延長です。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:233-282
+// packages/vscode-extension/src/mcp-server.ts:233-286
 /**
  * VSCode-agnostic handler seam. Keeping the tool implementations behind this
  * interface (rather than reaching into the extension directly) means the same
@@ -93,7 +93,11 @@ export interface OrbitScoreToolHandlers {
   getDocumentText(): DocumentText
   getDiagnostics(path?: string): FileDiagnostics[]
   getLog(lines?: number): string[]
-  analyzeAudio(wavPath: string, windowMs?: number): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
+  analyzeAudio(
+    wavPath: string,
+    windowMs?: number,
+    perChannel?: boolean,
+  ): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
   // ...
 }
 ```
@@ -127,7 +131,7 @@ export interface OrbitScoreToolHandlers {
 HTTP 層は Node 標準の `http` モジュールで `127.0.0.1:<port>/mcp` を listen します。MCP の Streamable HTTP トランスポートは **stateful** で、`initialize` ごとにセッションを作ります。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1170-1175
+// packages/vscode-extension/src/mcp-server.ts:1185-1190
  * Sessions are created **per initialize request** and routed by the
  * `mcp-session-id` header. A single shared transport would permanently consume
  * its one session slot on the first client — any later client (or a Claude Code
@@ -141,7 +145,7 @@ HTTP 層は Node 標準の `http` モジュールで `127.0.0.1:<port>/mcp` を 
 ローカル bind だけでは足りない、という判断も入っています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1189-1196
+// packages/vscode-extension/src/mcp-server.ts:1204-1211
   // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
   // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
   // same-origin — reaching this port from a browser with full response access.
@@ -205,7 +209,7 @@ export function buildMcpServerUrl(port: number): string {
 ここが本章で最も気をつけて読むべき箇所です。ツール説明はこう約束しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:538-555
+// packages/vscode-extension/src/mcp-server.ts:542-559
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -229,7 +233,7 @@ export function buildMcpServerUrl(port: number): string {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3040-3077
+// packages/vscode-extension/src/extension.ts:3041-3078
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -288,7 +292,7 @@ async function evaluateForAgent(code: string): Promise<EvaluateResult> {
 engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setupStdoutHandler` がそれを `evalMarkBridge.handleLine()` へ渡します。この分岐は **独立していなければならない**、と強調されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1501-1509
+// packages/vscode-extension/src/extension.ts:1502-1510
         } else if (trimmedLine.startsWith('{"evalMark"')) {
           // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
           // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -557,7 +561,7 @@ export function decideStartEngineForAgent(
 「音はデジタルなので観測できる」— CLAUDE.md の言い回しです。gated spec は聴かずに判定します。解析器は `packages/vscode-extension/src/wav-analysis.ts` で、daemon の capture 形式（RIFF/WAVE・IEEE float32）を読み、mono mixdown に対して 20 ms 窓の RMS・peak・onset を計算します。
 
 ```typescript
-// packages/vscode-extension/src/wav-analysis.ts:140-170
+// packages/vscode-extension/src/wav-analysis.ts:158-197
   const rms = Math.sqrt(sumSq / Math.max(1, frames))
 
   // Onsets: window RMS rises past threshold from below, with a minimum gap.
@@ -588,6 +592,7 @@ export function decideStartEngineForAgent(
     ...(opts?.windowMs && opts.windowMs > 0
       ? { windows: windowSeries(buf, dataOff, frames, format, opts.windowMs / 1000) }
       : {}),
+    // ...
   }
 ```
 
@@ -871,7 +876,7 @@ function showPlayheadStep(step: StepEvent): void {
 ### `[STEP]` は通常モードでは見えない
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1153-1177
+// packages/vscode-extension/src/extension.ts:1154-1178
 function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
@@ -979,7 +984,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 ## Sources
 
 - `packages/vscode-extension/src/mcp-server.ts:9-28` — ファイルヘッダ（Agent Bridge の出自・SDK を `require` で読む理由）
-- `packages/vscode-extension/src/mcp-server.ts:233-282` — `OrbitScoreToolHandlers` seam
+- `packages/vscode-extension/src/mcp-server.ts:233-286` — `OrbitScoreToolHandlers` seam
 - `packages/vscode-extension/src/mcp-server.ts:538-1147` — `buildServer()` の `registerTool` 群（ツールカタログの出典）
 - `packages/vscode-extension/src/mcp-server.ts:1158-1368` — `startOrbitScoreMcpServer()`（セッション管理・Host allowlist・docs 配信・`/mcp` ルーティング）
 - `packages/vscode-extension/src/mcp-registration.ts:1-62` — `.mcp.json` マージと URL 組み立て
