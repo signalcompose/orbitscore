@@ -86,6 +86,17 @@ Issue 単位の実装設計（起案 Fable / 審査 main。**owner 確定事項�
 | [628-ui-pump-per-index-design.md](../archive/design/628-ui-pump-per-index-design.md) | #628/#633 | `UiEventPump` の per-index / per-window 化 |
 | [643-mixer-foundation-design.md](../design/643-mixer-foundation-design.md) | #643 | ミキサーの土台と、その上に乗るオプションの責務分離（instrument を source に） |
 | [649-audio-line-design.md](../design/649-audio-line-design.md) | #649 | オーディオライン設計 v3（メソッドチェーン順序 = 決定論） |
+| [611-output-line-design.md](../design/611-output-line-design.md) | #611/#649/#543-a/#409/#647 | 出口の一般化 — `output(dest, thru, db)` がライン要素・`SetBusLine`・master ライン（2026-09-03） |
+| [694-session-log-editor-path-design.md](../design/694-session-log-editor-path-design.md) | #694/#695/#241 | セッションログをエディタ経路で出し、フレームで 1 選択 1 レコード、`orbitscore replay` で確認 |
+| [598-render-endpoint-design.md](../design/598-render-endpoint-design.md) | #598/#241 | render エンドポイント `mix.render(<path>)` × 実時間 stem × オフライン driver（評価列 × 仮想クロック） |
+| [672-plugin-boundaries-design.md](../design/672-plugin-boundaries-design.md) | #672/#671/#674/#321/#497 | プラグインの境界 5 本と、残りとしてのコア。DSL Plugin / DSP Plugin 契約の草案 |
+| [634-pdc-layer-instrument-rack-design.md](../design/634-pdc-layer-instrument-rack-design.md) | #606/#634/#635/#636/#669 | リリースゲート連鎖: note-off flush → PDC → layer → instrument rack → 標準プラグイン |
+| [428-timed-event-queue-design.md](../design/428-timed-event-queue-design.md) | #428/#680/#674/#460 | 時刻付き非オーディオイベントの共通 queue（note / param / 種 B の consumer） |
+| [610-diagnostics-applicability-design.md](../design/610-diagnostics-applicability-design.md) | #610/#644/#645 ほか | 「何が書けて何が書けないか」の単一表・演奏中の throw 封じ込め |
+| [662-performance-and-visibility-design.md](../design/662-performance-and-visibility-design.md) | #662 A-E/#661/#667/#663/#156 | 可視化・設定一覧・性能（何を測るか）— `662-engine-visibility-and-limits.md` の差分 |
+| [656-release-design.md](../design/656-release-design.md) | #659/#656/#385/#138 | 配布: ローカルリリース → 署名・公証 → cold-install smoke |
+| [668-e2e-foundation-design.md](../design/668-e2e-foundation-design.md) | #668/#650/#630/#543-b/#624/#640/#684 | E2E 基盤: 共通 helper・二重台帳・決定論 |
+| [679-input-consistency-check.md](../design/679-input-consistency-check.md) | #679 | 入力（レコーディング）の整合確認のみ（着手しない） |
 
 > ⚠️ 設計書の「失敗モード ↔ テスト対応表」は**テスト対象の一覧**として読み、検証手段は CLAUDE.md の
 > 「テストの積み上げ規律」で決め直す（設計書は本規則を上書きできない）。
@@ -214,6 +225,9 @@ CLAUDE.md の「テストの積み上げ規律」「E2E が最重要」「マー
 |---|---|
 | [ROADMAP_2026.md](../archive/planning/ROADMAP_2026.md) | 2026 ロードマップ (ICMC Hamburg 2026-05-10 〜 16 を含む) |
 | [IMPROVEMENT_RECOMMENDATIONS.md](../archive/planning/IMPROVEMENT_RECOMMENDATIONS.md) | 優先度付き改善提案 |
+| **[DEVELOPMENT_MAP.md](../planning/DEVELOPMENT_MAP.md)** | 🔴 **現在の正本**: 全 open issue の地図・リリースまでの筋（§3）・未決一覧（§9）（2026-09-03） |
+| [IMPLEMENTATION_PLAN_2026-09.md](../planning/IMPLEMENTATION_PLAN_2026-09.md) | 設計文書 11 本の PR 戦略（一方通行の判断・PR 一覧・順序の根拠・段）（2026-09-03） |
+| [2026-09-03-issue-triage.md](../planning/2026-09-03-issue-triage.md) | issue 棚卸し（地図の前段） |
 
 ### Post-ICMC（起案時の計画・多くは実装済）
 
