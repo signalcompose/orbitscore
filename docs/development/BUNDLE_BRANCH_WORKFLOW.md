@@ -36,7 +36,7 @@ main ──●──────────────────────
 
 - 統合ブランチは main から切る。名前は束の先頭 issue 番号で `<issue>-<英語>`（リポジトリの命名規約に従う）
 - 小 PR は統合ブランチから切り、統合ブランチへ merge で戻す（OrbitScore はリポジトリ設定で squash が禁止。squash が使えるリポジトリなら小 PR 1 = 1 コミットにできる）
-- 束 PR を merge で main へ入れる（main には束 1 つの merge commit。小 PR の履歴はその下にぶら下がる）。統合ブランチは消さない
+- 束 PR を merge で main へ入れる（main には束 1 つの merge commit。小 PR の履歴はその下にぶら下がる）。統合ブランチはマージ後に自動削除されてよい（履歴は merge commit から辿れる）
 - レビューの指摘への fix は統合ブランチの**先頭に積む**。小 PR は既に統合ブランチへ入っているので rebase は発生しない
 
 ## 4. 手順（1 束の一生）
@@ -137,7 +137,7 @@ GitHub は 2026-07-30 に stacked pull requests を公開プレビューにし�
 | 同じファイルを触る小 PR が並行 | 統合ブランチで衝突 | plan の順で直列 |
 | 束をまたぐ PR を束に入れる | 片方の束が閉じるまで main に入らない | main 直行（§5.2）|
 | must-fix を束に入れる | 修正が束の締めまで出荷されない | main 直行（§5.2）|
-| 統合ブランチを消す | 小 PR を後から辿りにくくなる | 消さない（リポジトリ規則）|
+| 束 PR のマージ前に統合ブランチを消す | 小 PR の base が無くなる | 消すのはマージ後だけ（GitHub の自動削除はマージ後にしか動かないので、手で消さなければ起きない）|
 
 ## 10. OrbitScore での割り当て（2026-09 プラン）
 
@@ -179,5 +179,5 @@ main 直行: PR-O1 / L0 / R0（仕様）、PR-O2 / D0 / V4 / K-A1 / K-A2 / S-T1�
 
 **OrbitScore 側の一次情報**
 15. `CLAUDE.md`「PR レビューワークフロー」「検証を委譲先に任せない」（PR #527 / #633 の実測）
-16. `docs/core/PROJECT_RULES.md`（merge commit・ブランチを消さない・命名規約）
+16. `docs/core/PROJECT_RULES.md`（merge commit・head ブランチはマージ後に自動削除・命名規約）
 17. `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` §1〜§3（PR 一覧・順序の根拠・段）

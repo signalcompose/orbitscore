@@ -714,7 +714,7 @@ gated テストまで対象になる。
 ### Branch Structure
 - `main` - Production (protected, base for PRs)
 - `<issue-number>-description` - Feature branches (English only)
-- `<issue-number>-<bundle>` - 束の統合ブランチ（main から切る・小 PR の base・束 PR で main へ・消さない）。#703
+- `<issue-number>-<bundle>` - 束の統合ブランチ（main から切る・小 PR の base・束 PR で main へ）。#703。マージ後の head ブランチは GitHub 設定で自動削除（owner 2026-09-03）
 
 ### Quick Workflow
 ```bash
