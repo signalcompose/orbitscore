@@ -36,7 +36,7 @@ v1.1（Pitch DSL / MIDI 出力）・Session Log・WCTM コンサートシステ�
 **Markdown が正本**（#507 で HTML から移行。埋め込み SVG のアーキテクチャ図も仕様の一部）。進捗管理は **GitHub Epic #224**。
 読み順は下表の番号通り（指示書 → Pitch DSL → Session Log → WCTM → 議論記録）:
 
-> **⚠️ 本番トラック retarget（2026-07-12・統括 [#413](https://github.com/signalcompose/orbitscore/issues/413)）**: 藝大コンサート（2026-08-07）は不採択。旧「締切 2026-08-07」の前提は失効し、本番トラックは ICLC への proposal 提出方向へ retarget（年次・提出日・提出形態はいずれも要確認）。Max 必須の縛りも消滅。WCTM 各仕様（下表 #4）・議論記録（#5）は**藝大版のスナップショットとして凍結**（入口ノート参照）。
+> **⚠️ 本番トラック（統括 [#413](https://github.com/signalcompose/orbitscore/issues/413)）**: 藝大コンサート（2026-08-07）は不採択で、旧「締切 2026-08-07」の前提は失効。retarget 先だった **ICLC への proposal 提出も取り下げ**（owner 2026-09-03・[CLAUDE.md](../../CLAUDE.md)）。🔴 **本番トラックに締切は無く、開発の順序は [`DEVELOPMENT_MAP.md`](../planning/DEVELOPMENT_MAP.md) §3「リリースまでの筋」で決まる。** Max 必須の縛りも消滅。🔴 **WCTM 本体の開発は本リポジトリでは進めない**（作品開発は WCTM 側セッションが持ち、必要な機能は普通の機能 issue として降りてくる。同・地図 §4.M）。WCTM 各仕様（下表 #4）・議論記録（#5）は**藝大版のスナップショットとして凍結**（入口ノート参照）。
 
 | # | File | Purpose |
 |---|---|---|
@@ -204,7 +204,7 @@ CLAUDE.md の「テストの積み上げ規律」「E2E が最重要」「マー
 
 ### WCTM 調査群（旧前提のスナップショット・凍結）
 
-`docs/research/WCTM_*`（機械の耳・作曲スキル・エージェントハーネス等 7 本）と `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` は、**旧前提（藝大 2026-08-07・Max 必須）下の調査・議論記録として意図的に凍結**する（記録改変は文脈破壊のため。抜けではない）。本番トラックの retarget（藝大不採択 → ICLC 方向・Max 脱必須。年次・提出日・形態は要確認）は統括 [#413](https://github.com/signalcompose/orbitscore/issues/413) を参照。
+`docs/research/WCTM_*`（機械の耳・作曲スキル・エージェントハーネス等 7 本）と `docs/specs-v2/DESIGN_DISCUSSION_RECORD.md` は、**旧前提（藝大 2026-08-07・Max 必須）下の調査・議論記録として意図的に凍結**する（記録改変は文脈破壊のため。抜けではない）。本番トラックの現況（藝大不採択 → **ICLC も取り下げ**・Max 脱必須・締切なし。**WCTM 本体の開発は本リポジトリで進めない**。いずれも owner 2026-09-03）は統括 [#413](https://github.com/signalcompose/orbitscore/issues/413) と [`DEVELOPMENT_MAP.md`](../planning/DEVELOPMENT_MAP.md) §4.M を参照。
 
 ---
 

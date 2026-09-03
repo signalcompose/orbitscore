@@ -15,7 +15,7 @@ All implementation, testing, and planning must strictly follow this specificatio
 **Audio backend**: Rust `orbit-audio-daemon` is the default since cutover #108 (2026-07-03); SuperCollider (scsynth) remains as an opt-out backend via `ORBITSCORE_ENGINE=sc` (`packages/engine/src/audio/create-audio-engine.ts`). Plugin hosting (PH.*), catalog (PC.*), mixer (MX.*), import (IM.*) and the rack chain ([SIGNAL_CHAIN_DSL_SPEC_v1](../specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md) SC.10) are implemented on the Rust path only.
 
 > 🎯 **進行中の v1.1 拡張（Pitch DSL / MIDI・Session Log・WCTM）の仕様は [`docs/specs-v2/`](../specs-v2/) が正本**（進捗は GitHub Epic #224）。
-> ⚠️ 本番トラック retarget（2026-07-12・統括 [#413](https://github.com/signalcompose/orbitscore/issues/413)）: 藝大コンサート（2026-08-07）は不採択。旧「締切 2026-08-07」は失効し ICLC 提出方向へ retarget（年次・提出日・形態は要確認）。Max 必須の縛りも消滅。
+> ⚠️ 本番トラック（統括 [#413](https://github.com/signalcompose/orbitscore/issues/413)）: 藝大コンサート（2026-08-07）は不採択で旧「締切 2026-08-07」は失効。retarget 先だった **ICLC 提出も取り下げ**（owner 2026-09-03）。**本番トラックに締切は無く**、開発の順序は [`DEVELOPMENT_MAP.md`](../planning/DEVELOPMENT_MAP.md) §3 で決まる。Max 必須の縛りも消滅。**WCTM 本体の開発は本リポジトリでは進めない**（同・地図 §4.M）。
 > 各フェーズのゲート時に、当該機能のセクションを本ドキュメント（SoT）へ反映し、specs-v2 との乖離を作らないこと（指示書 §8.1-1）。
 > 読み順: [IMPLEMENTATION_INSTRUCTIONS](../specs-v2/IMPLEMENTATION_INSTRUCTIONS.md) → [PITCH_DSL_SPEC_v1.1](../specs-v2/PITCH_DSL_SPEC_v1.1.md) → [SESSION_LOG_SPEC_v1](../specs-v2/SESSION_LOG_SPEC_v1.md) → [WCTM_SYSTEM_SPEC_v1](../specs-v2/WCTM_SYSTEM_SPEC_v1.md) → [DESIGN_DISCUSSION_RECORD](../specs-v2/DESIGN_DISCUSSION_RECORD.md)。
 
