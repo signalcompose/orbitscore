@@ -84,6 +84,11 @@ Q-694-8 LOOP quantize も `TransportTimeline` に乗せる（tempo 変更後の�
 Q-694-9 プラグイン状態は start/stop で `orbslog/<log>.states/` へ写す。これで裁定シート 66 問は
 すべて回答済み。doc 694 §0 に裁定 9〜11 を追加・plan §4 は「裁定待ち 0 件」。
 
+**同日・ユーザー視点の到達点**（owner「各 PR が完了すると何が出来るのかユーザー視点で纏めて」）:
+`docs/planning/USER_OUTCOMES_2026-09.md` を追加。plan §1 の 98 PR すべてに「完了するとできること」を
+1 行ずつ、見え方（🎵 音・操作 30 / 👀 見える 25 / 🧱 土台 31 / 📄 仕様 12）と段を添えて記載。
+「何も変わらない」PR はそのまま書く（土台の PR が続く週はそれが正しい状態）。
+
 ---
 
 ### chore(meta): critical path の 27 issue に実装チェックリストを入れた (Sep 3, 2026)
