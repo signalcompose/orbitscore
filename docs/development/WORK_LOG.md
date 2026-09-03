@@ -1325,3 +1325,32 @@ PR-E1 の正規表現は `it(` の直後に文字列が来る前提だったの�
 
 **検証**（main が sandbox 外で回した実測）: `tsc` 0 / `eslint` 0 /
 `npm test` **2171 passed / 48 skipped**（+4 = A-2〜A-5）/ `check-citations.mjs` **904 verified / 0 failed**。
+
+### PR-E1 の docs 追従（dev 学習サイト IV-3）
+
+PR [#707](https://github.com/signalcompose/orbitscore/pull/707)（マージコミット `8bc65cf`）に
+dev 学習サイトを追従させた。コード・テストは触っていない。
+
+**なぜ必要か**: #707 は「ラチェットと衛生検査の走査先を `gated-sources.ts` に集約する」という
+**構造の変更**で、IV-3 章はその 2 検査を「gated spec のソースを読む」と説明していた。
+引用の再アンカー（#707 の 2 コミット目）はコードブロックの行番号だけを直すので、
+**本文と `## Sources` の行範囲は古いまま残っていた**。
+
+**変更**:
+
+- `sites/dev/editor/mcp-and-gated-e2e.md` / `sites/dev/en/editor/mcp-and-gated-e2e.md`
+  - §8 に「走査先は 1 箇所が持つ」節を追加（`GATED_SOURCE_GLOBS` / 空なら throw /
+    `readGatedSources()` と `readGatedSourceEntries()` の使い分け / `file:line` 報告）
+  - ラチェットの説明を「gated spec の中に」から「`readGatedSources()` が返す
+    gated E2E のソース全体に」へ
+  - §3 の `rackChildPidsFromLog` の出典を `tests/e2e/helpers/rack-child-pid.ts` へ
+  - `## Sources` に `gated-sources.ts` / `helpers/rack-child-pid.ts` を追加、
+    `orbitstudio-mcp-gated.spec.ts` の行範囲を再アンカー（import +1 / PID オラクル移動 -27）
+  - `verified-against` を `8bc65cf`・`verified-at` を 2026-09-03 へ
+- `sites/dev/{,en/}plugin-hosting/{catalog,plugin-ui}.md` /
+  `{,en/}signal-chain/{index,mixer-audio-line}.md` / `{,en/}rust-engine/capture-verification.md`
+  — `## Sources` の `orbitstudio-mcp-gated.spec.ts` 行範囲を同じ規則で再アンカー。
+  本文の対応関係は変わらないので `verified-against` は据え置き（STYLE_GUIDE §4）
+
+**検証**: `npm ci` / `npm run docs:build -w @orbitscore/user-site` /
+`npm run docs:build -w @orbitscore/dev-site` / `npm run docs:check`（910 citations / 0 failed）

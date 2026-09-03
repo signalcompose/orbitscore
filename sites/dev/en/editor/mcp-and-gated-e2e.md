@@ -196,7 +196,7 @@ The tools registered by `buildServer()` via `registerTool`, grouped by role (the
 
 `save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` / `register_mcp_server` have optional handlers and are not registered on hosts that lack them. This keeps existing stub suites valid when a "different host" such as the WCTM pi harness reuses the seam.
 
-What is interesting is that most of this catalogue mirrors "operations a human can reach from the command palette or settings". `start_engine` is the "Start Engine" command, `configure_flash` is "Configure Flash", `rescan_plugins` is "Rescan Plugin Catalog" — each description names its counterpart command. The policy of **not widening the MCP tool surface even when a new observation is needed** is visible on the gated spec side too (the comment on `rackChildPidsFromLog`: "**MCP の tool 表面を増やさず**、ERROR 計数や `[plugin-state]` 行と同じ `get_log` 経路で読めるようにしてある").
+What is interesting is that most of this catalogue mirrors "operations a human can reach from the command palette or settings". `start_engine` is the "Start Engine" command, `configure_flash` is "Configure Flash", `rescan_plugins` is "Rescan Plugin Catalog" — each description names its counterpart command. The policy of **not widening the MCP tool surface even when a new observation is needed** is visible on the E2E helper side too (the comment on `rackChildPidsFromLog` in `tests/e2e/helpers/rack-child-pid.ts`: "**MCP の tool 表面を増やさず**、ERROR 計数や `[plugin-state]` 行と同じ `get_log` 経路で読めるようにしてある").
 
 ---
 
@@ -701,7 +701,54 @@ What this assertion caught is recorded in WORK_LOG 6.415. On 2026-08-29, when th
 
 ## Turning discipline into mechanism — the ratchet and assertion hygiene
 
-The title of WORK_LOG 6.418 is "turning today's corrections from 'knowledge' into a 'reproducible mechanism'". CLAUDE.md said "when you add a DSL feature, always add an E2E test", yet measurement showed that 19 of the 32 `seq` words had never been evaluated on the real device. Prose is sometimes not read. So two tests inspect the **source of the gated spec itself**.
+The title of WORK_LOG 6.418 is "turning today's corrections from 'knowledge' into a 'reproducible mechanism'". CLAUDE.md said "when you add a DSL feature, always add an E2E test", yet measurement showed that 19 of the 32 `seq` words had never been evaluated on the real device. Prose is sometimes not read. So two tests inspect the **source of the gated E2E itself**.
+
+### One place owns the list of files to scan
+
+Both checks work by reading the source of the gated E2E, so letting each of them hard-code **which files to read** goes badly. The moment a scenario is moved out into another file, the ratchet reads it as "words that used to be covered have disappeared" and turns red, while assertion hygiene never sees the new file and **silently keeps passing**. The second one is the nastier of the two, precisely because it does not go red: nothing tells you the check has stopped biting. So the scan list lives in one place, `tests/e2e/gated-sources.ts`.
+
+```typescript
+// tests/e2e/gated-sources.ts:29-35
+const GATED_SOURCE_GLOBS: readonly {
+  readonly dir: string
+  readonly match: (name: string) => boolean
+}[] = [
+  { dir: E2E_DIR, match: (name) => name === 'orbitstudio-mcp-gated.spec.ts' },
+  { dir: path.join(E2E_DIR, 'gated'), match: (name) => name.endsWith('.ts') },
+]
+```
+
+The entry point `orbitstudio-mcp-gated.spec.ts` is the only spec vitest discovers, which is what keeps the app launch down to one. The `gated/` directory is the slot left open for the scenario bodies themselves; since those files are not named `.spec.ts`, vitest does not discover them. In other words they are **visible to the checks, but look like a single file to the test runner**.
+
+One more thing is settled here: what happens when the list comes out empty.
+
+```typescript
+// tests/e2e/gated-sources.ts:68-78
+export function readGatedSources(): string {
+  if (GATED_SOURCE_FILES.length === 0) {
+    throw new Error(
+      'gated E2E のソースが 1 本も見つからない。' +
+        'ラチェットと衛生検査が黙って無意味になるので、GATED_SOURCE_GLOBS を確認すること。',
+    )
+  }
+  return GATED_SOURCE_FILES.map(
+    (file) => `// ===== ${path.relative(E2E_DIR, file)} =====\n${fs.readFileSync(file, 'utf8')}`,
+  ).join('\n')
+}
+```
+
+If the entry spec is renamed or a directory is moved and the list empties out, both checks would read "found nothing" as "zero violations" — every test green and both checks meaningless. So when not a single source file is found, it throws.
+
+There are two ways to read the list. The ratchet does not care which file or which line a match came from, so it uses `readGatedSources()`, which returns all sources concatenated into one string. Assertion hygiene, which wants to name the offending line, uses `readGatedSourceEntries()` — relative path plus contents, per file — and reports in `file:line` form.
+
+```typescript
+// tests/e2e/gated-assertion-hygiene.spec.ts:25-29
+/** ファイル名つき・行番号つきで、条件に合う行を集める。 */
+const linesMatching = (predicate: (line: string) => boolean): string[] =>
+  lines
+    .filter(({ line }) => predicate(line))
+    .map(({ file, line, n }) => `${file}:${n}: ${line.trim()}`)
+```
 
 ### The DSL coverage ratchet
 
@@ -720,7 +767,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 }
 ```
 
-It only checks whether `.<name>(` appears in the gated spec. The vocabulary side is `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` from `packages/engine/src/signal-chain/runtime` — the interpreter's dispatch table itself.
+It only checks whether `.<name>(` appears anywhere in the gated E2E sources returned by `readGatedSources()`. The vocabulary side is `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` from `packages/engine/src/signal-chain/runtime` — the interpreter's dispatch table itself.
 
 ```typescript
 // tests/e2e/dsl-e2e-coverage.spec.ts:150-160
@@ -1074,8 +1121,9 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `tests/e2e/helpers/run-score.ts:1-272` — one function that copies a score and evaluates it on real hardware
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — waiting for generated artefacts (with `minBytes`)
 - `tests/e2e/helpers/run-cli.ts:1-62` — child-process runs of `orbitscore replay` / `render` (the only path that bypasses MCP)
+- `tests/e2e/helpers/rack-child-pid.ts:1-38` — the rack child PID oracle (log-derived; moved out of the spec in #668 PR-E1)
 - `tests/e2e/dsl-e2e-coverage.spec.ts:1-146` — DSL coverage ratchet
-- `tests/e2e/gated-assertion-hygiene.spec.ts:1-66` — assertion hygiene
+- `tests/e2e/gated-assertion-hygiene.spec.ts:1-68` — assertion hygiene
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixtures
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — building OrbitStudio.app
