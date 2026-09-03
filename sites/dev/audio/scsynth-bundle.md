@@ -9,7 +9,7 @@ status: draft
 > **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 ::: warning 2026-09 時点の位置づけ
-scsynth の bundle と path resolution は SuperCollider 経路の話で、2026-07-03 の cutover #108（`docs/development/WORK_LOG.md` §6.179）以降は **`ORBITSCORE_ENGINE=sc`（VS Code 設定では `orbitscore.engine: "sc"`）で opt-out したときだけ**通る経路です。既定の Rust 経路では、拡張は scsynth を解決せず `orbit-audio-daemon` バイナリを同じ strict パターンで解決します（本章末尾の「daemon 側の対応物」を参照）。既定経路の全体像は [RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照してください。
+scsynth の bundle と path resolution は SuperCollider 経路の話で、2026-07-03 の cutover #108（`docs/archive/WORK_LOG_2026-07.md` §6.179）以降は **`ORBITSCORE_ENGINE=sc`（VS Code 設定では `orbitscore.engine: "sc"`）で opt-out したときだけ**通る経路です。既定の Rust 経路では、拡張は scsynth を解決せず `orbit-audio-daemon` バイナリを同じ strict パターンで解決します（本章末尾の「daemon 側の対応物」を参照）。既定経路の全体像は [RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照してください。
 
 ```typescript
 // packages/engine/src/audio/create-audio-engine.ts:17-22
@@ -222,7 +222,7 @@ VS Code の設定 `orbitscore.scsynthPath` が非空ならば `explicit` とし�
 
 ### engine kind で呼び出しそのものが gate される
 
-ここが 2026-05 時点との大きな違いです。`resolveScsynthForUI()` を **呼ぶかどうか**を、`orbitscore.engine` 設定を正規化した `getConfiguredEngineKind()` が決めます (#377、`docs/development/WORK_LOG.md` §6.186)。正規化は engine 側の `resolveEngineKind()` を runtime `require` して行い、UI と engine で判定がズレないようにしています。
+ここが 2026-05 時点との大きな違いです。`resolveScsynthForUI()` を **呼ぶかどうか**を、`orbitscore.engine` 設定を正規化した `getConfiguredEngineKind()` が決めます (#377、`docs/archive/WORK_LOG_2026-07.md` §6.186)。正規化は engine 側の `resolveEngineKind()` を runtime `require` して行い、UI と engine で判定がズレないようにしています。
 
 ```typescript
 // packages/vscode-extension/src/extension.ts:653-669
@@ -318,7 +318,7 @@ SC.app fallback がないため、「一見動いているように見えて実�
 
 ## daemon 側の対応物: `resolveDaemonBinaryPath()`
 
-`scsynth-resolver.ts` の先頭コメントが「パターンは `daemon-client.ts` の `resolveDaemonBinary()` を流用」と書いているとおり、Rust daemon にも同型の resolver があります。候補は 5 つで、`.vsix` 同梱の daemon (#306、`docs/development/WORK_LOG.md` §6.185) が最後に来ます。
+`scsynth-resolver.ts` の先頭コメントが「パターンは `daemon-client.ts` の `resolveDaemonBinary()` を流用」と書いているとおり、Rust daemon にも同型の resolver があります。候補は 5 つで、`.vsix` 同梱の daemon (#306、`docs/archive/WORK_LOG_2026-07.md` §6.185) が最後に来ます。
 
 ```typescript
 // packages/engine/src/audio/rust-engine/daemon-client.ts:221-250 (extension-bundle 候補の説明コメントを省略)
@@ -370,7 +370,7 @@ scsynth 版との違いは、monorepo の `rust/target/{release,debug}` を挟�
 - **`scripts/copy-daemon-bin.sh` と `resolveDaemonBinaryPath()`**: daemon 側の bundle が `darwin-arm64` 限定である理由と、他 platform への展開
 - **`__dirname` の vscode-extension vs engine 単独での違い**: コンパイル後の `__dirname` がどう変わり、bundle パスがどう変わるか。map で整理する
 - **Windows / Linux 対応の見通し**: bundle は macOS Mach-O。将来 Windows / Linux に対応する場合の bundle 戦略 (per-platform vsix? system install 必須?)
-- **bundle の codesign**: macOS Gatekeeper と notarization。scsynth は SuperCollider 本家の署名を保持するが、daemon は新規ビルド (`docs/development/WORK_LOG.md` §6.185 のフォローアップ②)
+- **bundle の codesign**: macOS Gatekeeper と notarization。scsynth は SuperCollider 本家の署名を保持するが、daemon は新規ビルド (`docs/archive/WORK_LOG_2026-07.md` §6.185 のフォローアップ②)
 - **`ORBIT_SCSYNTH_PATH` の型安全性**: 文字列で受け取り、パスの存在確認は resolver 側。extension の設定 UI で path picker を提供できるか
 
 ## Sources
@@ -390,6 +390,6 @@ scsynth 版との違いは、monorepo の `rust/target/{release,debug}` を挟�
 - `packages/vscode-extension/src/extension.ts:2053-2069` — `startEngine()` の事前チェック: `sc` kind でのみ scsynth を解決
 - `packages/vscode-extension/BUILD_GUIDE.md:39-97` — strict mode の説明、抽出手順、bundle 構造
 - `.gitignore:47` / `packages/vscode-extension/.vscodeignore:36` — bundle は git 管理外だが `.vsix` には同梱される
-- `docs/development/WORK_LOG.md` §6.179 / §6.185 / §6.186 — cutover #108、daemon の `.vsix` 同梱 (#306)、engine-kind 分岐 (#377)
+- `docs/archive/WORK_LOG_2026-07.md` §6.179 / §6.185 / §6.186 — cutover #108、daemon の `.vsix` 同梱 (#306)、engine-kind 分岐 (#377)
 - PR [#155](https://github.com/signalcompose/orbitscore/pull/155) — strict mode 採用の経緯 (SC.app / Spotlight fallback の廃止)
 - Issue [#136](https://github.com/signalcompose/orbitscore/issues/136) — "SC 不要で動く" 要件と strict mode 方針の策定

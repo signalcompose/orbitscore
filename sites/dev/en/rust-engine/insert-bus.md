@@ -449,7 +449,7 @@ The E2E that goes through the user's own path (OrbitStudio + MCP) is accumulated
 - `rust/crates/orbit-audio-daemon/tests/outproc_effect_bus_gated.rs` — gated real-hardware test (`EFFECT_GAIN=0.5`, ratio assertion `0.4..=0.6`)
 - [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/core/INSTRUCTION_ORBITSCORE_DSL.md) PH.2b / PH.2d — `seq.effect()` DSL spec (processing order, accepted formats, cap of 8, replacement)
 - [`docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md) SC.10 — source of truth for the rack form
-- [`docs/development/WORK_LOG.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/WORK_LOG.md) 6.262 — #434 S1-S3 implementation record (real-hardware ratio 0.50000)
+- [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.262 — #434 S1-S3 implementation record (real-hardware ratio 0.50000)
 - Issue [#434](https://github.com/signalcompose/orbitscore/issues/434) — per-sequence effect insert
 - PR [#461](https://github.com/signalcompose/orbitscore/pull/461) — merged implementation (includes free-list addition)
 - Issue [#625](https://github.com/signalcompose/orbitscore/issues/625) / [#628](https://github.com/signalcompose/orbitscore/issues/628) — insert replacement/removal / effect rack

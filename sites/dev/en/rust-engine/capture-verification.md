@@ -524,7 +524,7 @@ post-peak accessors observe the same signal. These figures were not re-measured 
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:78-166` — the stale artifact guard (`assertDaemonBinaryIsNotStale`, including the #713 walk exclusion)
 - `tests/e2e/gated-assertion-hygiene.spec.ts:67-94` — the two checks that pin the walk exclusion from both directions (#713)
 - `package.json:17-18` — `pretest:e2e:gated` / `test:e2e:gated`
-- [`docs/development/WORK_LOG.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/WORK_LOG.md) 6.415 / 6.416 / 6.417 — discovery of the #643 master fader defect, the #651 header patch and stale guard, pretest automation
+- [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 / 6.416 / 6.417 — discovery of the #643 master fader defect, the #651 header patch and stale guard, pretest automation
 - Issue [#307](https://github.com/signalcompose/orbitscore/issues/307) — capture seam realtime wiring
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — capture WAV that opens after an abnormal exit, and the stale-binary countermeasure
 - Issue [#713](https://github.com/signalcompose/orbitscore/issues/713) — excluding cargo targets that can never be rebuilt from the walk

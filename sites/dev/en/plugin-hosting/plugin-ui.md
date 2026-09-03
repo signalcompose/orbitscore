@@ -1238,7 +1238,8 @@ must be CLAP.
 - [`docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md) — the #474 P0–P6 implementation design and owner decisions Q1–Q8
 - [`docs/archive/design/628-ui-pump-per-index-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/design/628-ui-pump-per-index-design.md) — the per-window pump design (C-A / C-B, two-layer separation, rejected alternatives)
 - [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/core/INSTRUCTION_ORBITSCORE_DSL.md) PH.2c — the DSL rules for `seq.ui([name][, open])`
-- [`docs/development/WORK_LOG.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/WORK_LOG.md) 6.335–6.348 (#474 P0–P4c), 6.358 (#617), 6.387b / 6.387c (the #628 defect and design), 6.413 / 6.414 (#633)
+- [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.335–6.347 (#474 P0–P4b)
+- [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.348 (#474 P4c), 6.358 (#617), 6.387b / 6.387c (the #628 defect and design), 6.413 / 6.414 (#633)
 - Issue [#474](https://github.com/signalcompose/orbitscore/issues/474) — plugin UI open/close
 - Issue [#617](https://github.com/signalcompose/orbitscore/issues/617) — the DSL surface `seq.ui()`
 - Issue [#628](https://github.com/signalcompose/orbitscore/issues/628) — rack-shaped effect chains

@@ -431,7 +431,7 @@ DSL → `LoadPlugin(role=instrument, instance="plugin:synth")` → 拡張子ベ�
 - `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:451-458` — `default_rack_child_exe`
 - [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/core/INSTRUCTION_ORBITSCORE_DSL.md) PH.1〜PH.6 / PC.1〜PC.5 — plugin hosting と catalog の DSL 規範
 - [`docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md) SC.10 — ラック形の正本
-- [`docs/development/WORK_LOG.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/WORK_LOG.md) 6.258 — VST3 instrument production の実機 E2E 記録（capture peak 0.25000）
+- [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 — VST3 instrument production の実機 E2E 記録（capture peak 0.25000）
 - Epic [#424](https://github.com/signalcompose/orbitscore/issues/424) — plugin hosting DoD 全体像
 - Issue [#421](https://github.com/signalcompose/orbitscore/issues/421) — VST3 instrument production
 - Issue [#463](https://github.com/signalcompose/orbitscore/issues/463) — plugin catalog と名前指し

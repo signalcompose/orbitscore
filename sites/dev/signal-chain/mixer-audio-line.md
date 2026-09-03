@@ -633,7 +633,7 @@ Fable 監査が spec の既知制約を指して誤りだと指摘しました�
 > **E2E-1 を説明しない**（E2E-1 の instrument はバスを経由せず `FeedDest::Hardware` で
 > gain ループの前に加算される）。**Fable が「特定し切れていない」と正直に書いたことで発覚。**
 >
-> — `docs/development/WORK_LOG.md` 6.420
+> — `docs/archive/WORK_LOG_2026-08.md` 6.420
 
 実際、E2E-1 の DSL は sum も aux も宣言しないので、instrument の feed は
 `render_engine_with_source_outputs`（`output.rs:1078`）から `render_multi_feeds` に渡り、
@@ -886,7 +886,7 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1247-1249` — master gain ramp が insert の前に掛かる既知制約
 - `docs/design/643-mixer-foundation-design.md` — #643 設計（owner 三条・責務境界・feed 注入点 §5.1・`output()` 3 分岐 §12）
 - `docs/design/649-audio-line-design.md` — #649 オーディオライン設計（§7 確定事項・§8 未決・§9-§14 実装設計 v3）
-- `docs/development/WORK_LOG.md` 6.404 / 6.405 / 6.408 / 6.410 / 6.415 / 6.420 — #643 設計〜PR-1〜PR-2〜レビュー訂正〜実機発見〜#649 設計 v3
+- `docs/archive/WORK_LOG_2026-08.md` 6.404 / 6.405 / 6.408 / 6.410 / 6.415 / 6.420 — #643 設計〜PR-1〜PR-2〜レビュー訂正〜実機発見〜#649 設計 v3
 - `packages/engine/src/core/global/mixer-manager.ts:16-29` — `SUM_BUS_PREFIX` / `AUX_BUS_PREFIX` / `MIXER_BUS_POOL_SIZE`
 - `packages/engine/src/core/global/mixer-manager.ts:251-283` — `declareBus`（`"master"` 予約・LinkAudio 排他・pool 確保）
 - `packages/engine/src/core/global.ts:481-489` — `Global.sum()` / `Global.aux()`

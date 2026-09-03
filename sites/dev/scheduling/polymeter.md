@@ -390,7 +390,7 @@ flowchart LR
 - `packages/engine/src/timing/calculation/calculate-event-timing.ts:104-105` — `barDuration / elements.length` による均等分割
 - `packages/engine/src/core/global/types.ts:5-8` — `Meter` interface
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §5 "Launch Quantize" — 「ポリメーター時の挙動」(グローバル小節境界が起動の基準)
-- `docs/development/WORK_LOG.md` 6.198 — #389 の実測 (fix 前 +0.19ms/小節の蓄積、fix 後 mean|dev| 0.52ms)
+- `docs/archive/WORK_LOG_2026-07.md` 6.198 — #389 の実測 (fix 前 +0.19ms/小節の蓄積、fix 後 mean|dev| 0.52ms)
 - Issue [#389](https://github.com/signalcompose/orbitscore/issues/389) — sawtooth timing jitter (グリッドアンカー化の経緯)
 - Issue [#212](https://github.com/signalcompose/orbitscore/issues/212) / PR [#215](https://github.com/signalcompose/orbitscore/pull/215) — launch quantize
 - [BEAT_METER_SPECIFICATION.md](https://github.com/signalcompose/orbitscore/blob/main/docs/development/BEAT_METER_SPECIFICATION.md) — Phase 1/2 の仕様と将来の分母制約計画、ICMC 実績の polymeter 例 (4/4 vs 5/4)

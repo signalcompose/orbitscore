@@ -495,7 +495,7 @@ DSL E2E の capture WAV 実測 peak = **0.25000**（WORK_LOG 6.258）— 独立�
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:78-166` — stale artifact ガード（`assertDaemonBinaryIsNotStale`・#713 の走査除外を含む）
 - `tests/e2e/gated-assertion-hygiene.spec.ts:67-94` — 走査除外を両方向から留める検査 2 本（#713）
 - `package.json:17-18` — `pretest:e2e:gated` / `test:e2e:gated`
-- [`docs/development/WORK_LOG.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/WORK_LOG.md) 6.415 / 6.416 / 6.417 — #643 master fader の発見、#651 の header patch と stale ガード、pretest 自動化
+- [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 / 6.416 / 6.417 — #643 master fader の発見、#651 の header patch と stale ガード、pretest 自動化
 - Issue [#307](https://github.com/signalcompose/orbitscore/issues/307) — capture seam realtime 配線
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — 異常終了でも開ける capture WAV と stale バイナリ対策
 - Issue [#713](https://github.com/signalcompose/orbitscore/issues/713) — 再ビルド不能な cargo ターゲットを走査から外す

@@ -526,7 +526,7 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
   } catch (err) {
 ```
 
-ここで気をつけたいのは、`ORBITSCORE_ENGINE` を **両方の分岐で明示的に set** している点です。cutover #108 で「未設定 = rust」に既定が反転したため、`delete env.ORBITSCORE_ENGINE` で SC を守る旧ロジックは常に rust になってしまう landmine でした (`docs/development/WORK_LOG.md` §6.186 の I1)。`sc` 分岐では事前チェックで解決済みの scsynth パスを `ORBIT_SCSYNTH_PATH` で engine に渡し、二重の `fs.statSync` と解決結果のズレを避けています。
+ここで気をつけたいのは、`ORBITSCORE_ENGINE` を **両方の分岐で明示的に set** している点です。cutover #108 で「未設定 = rust」に既定が反転したため、`delete env.ORBITSCORE_ENGINE` で SC を守る旧ロジックは常に rust になってしまう landmine でした (`docs/archive/WORK_LOG_2026-07.md` §6.186 の I1)。`sc` 分岐では事前チェックで解決済みの scsynth パスを `ORBIT_SCSYNTH_PATH` で engine に渡し、二重の `fs.statSync` と解決結果のズレを避けています。
 
 `stdio: ['pipe', 'pipe', 'pipe']` が重要です。stdin/stdout/stderr をすべて pipe にすることで、Extension Host から直接 write/read できます。spawn 直後にはハンドラを 5 本付け、`process.nextTick` を 1 回またいでから「まだ同じプロセスが生きているか」を確認します。
 
@@ -794,7 +794,7 @@ flowchart TD
 
 | 変更 | Issue | 出典 |
 |---|---|---|
-| `.vsix` に `orbit-audio-daemon` を同梱し、`resolveDaemonBinaryPath()` の最終候補に追加 | #306 | `docs/development/WORK_LOG.md` §6.185 (2026-07-03) |
+| `.vsix` に `orbit-audio-daemon` を同梱し、`resolveDaemonBinaryPath()` の最終候補に追加 | #306 | `docs/archive/WORK_LOG_2026-07.md` §6.185 (2026-07-03) |
 | `orbitscore.engine` 設定 (既定 `rust`) と `getConfiguredEngineKind()` による 4 サイトの分岐、`ORBITSCORE_ENGINE` の明示 set | #377 / #366 | §6.186 (2026-07-07)、`extension.ts:653-669` |
 | 診断を open / close / activation 時にも実行 | #384 | §6.187 (2026-07-07)、`extension.ts:414-443` |
 | MCP control server (Agent Bridge)、`evaluate_orbitscore` から始まり 25 ハンドラへ、`get_log` 用 log ring、`.mcp.json` 登録コマンド | #388 | §6.188-6.192 (2026-07-07)、`extension.ts:445-495`、`log-ring.ts` → [IV-3](/editor/mcp-and-gated-e2e) |
@@ -867,5 +867,5 @@ flowchart TD
 - `packages/vscode-extension/src/log-ring.ts:20-24` — `OUTPUT_LOG_RING_MAX = 1000` / `DEFAULT_LOG_LINES = 50`
 - `packages/engine/src/audio/supercollider/scsynth-resolver.ts:91-98` — `explicit > env > bundle > throw` 優先順位チェーン
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:221-250` — daemon 側の 5 候補チェーン
-- `docs/development/WORK_LOG.md` §6.185-6.187, §6.188-6.192, §6.194-6.197, §6.260-6.261, §6.266, §6.271, §6.279-6.283, §6.295-6.301, §6.412 — drift 表の出典
+- `docs/archive/WORK_LOG_2026-07.md` §6.185-6.187, §6.188-6.192, §6.194-6.197, §6.260-6.261, §6.266, §6.271, §6.279-6.283, §6.295-6.301 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — drift 表の出典
 - PR [#155](https://github.com/signalcompose/orbitscore/pull/155) — scsynth strict mode 採用・二重通知防止のコードレビューコメント

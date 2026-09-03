@@ -1385,5 +1385,6 @@ LOOP(drums)
 - `docs/research/PLUGIN_CATALOG_SCANNING.md` — 23.2% の実測と三段階モデルの根拠
 - `docs/archive/design/625-effect-replacement-design.md` — 採用機構・却下案・決定 8 項目・Stage 0〜D
 - `docs/research/ENGINE_DAEMON_PROTOCOL.md` — `ReplacePlugin` / `UnloadPlugin`（#628 で退役）/ `ApplyEffectChain`
-- `docs/development/WORK_LOG.md` 6.268 / 6.269 / 6.278 / 6.279（#463 C1〜C3）・6.321（#549 B1）・6.360〜6.363（#618）・6.364〜6.369（#625）・6.412（#638）
+- `docs/archive/WORK_LOG_2026-07.md` 6.268 / 6.269 / 6.278 / 6.279（#463 C1〜C3）・6.321（#549 B1）
+- `docs/archive/WORK_LOG_2026-08.md` 6.360〜6.363（#618）・6.364〜6.369（#625）・6.412（#638）
 - Issue [#463](https://github.com/signalcompose/orbitscore/issues/463) / [#549](https://github.com/signalcompose/orbitscore/issues/549) / [#618](https://github.com/signalcompose/orbitscore/issues/618) / [#623](https://github.com/signalcompose/orbitscore/issues/623) / [#625](https://github.com/signalcompose/orbitscore/issues/625) / [#628](https://github.com/signalcompose/orbitscore/issues/628) / [#638](https://github.com/signalcompose/orbitscore/issues/638)

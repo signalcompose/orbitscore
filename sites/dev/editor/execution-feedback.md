@@ -278,7 +278,7 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
   flashLines()
 ```
 
-ここで気をつけたいのは、送信に失敗したら **フラッシュしない** という順序です。2026-05 時点は `write` してすぐ `flashLines()` を呼んでいましたが、stdin に届いていないのに「実行した」と見せるのは誤ったフィードバックです。`revealRange` はエージェント経由の実行で画面外の行が対象になったときに、フラッシュが見えないのを防ぐために足されました (#388、`docs/development/WORK_LOG.md` §6.193)。
+ここで気をつけたいのは、送信に失敗したら **フラッシュしない** という順序です。2026-05 時点は `write` してすぐ `flashLines()` を呼んでいましたが、stdin に届いていないのに「実行した」と見せるのは誤ったフィードバックです。`revealRange` はエージェント経由の実行で画面外の行が対象になったときに、フラッシュが見えないのを防ぐために足されました (#388、`docs/archive/WORK_LOG_2026-07.md` §6.193)。
 
 ---
 
@@ -355,7 +355,7 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
 - `flashDuration`: 150ms (点灯時間)
 - フラッシュ間隔: `100ms` (ハードコード)
 
-`isWholeLine` は **常に `true`** です。2026-05 時点は「選択あり = 選択文字だけ」でしたが、MCP の `run_selection` は必ず `set_selection` で範囲を置いてから呼ぶため、文字範囲の decoration がエディタ自身の選択ハイライトと完全に重なって、点滅が見えなくなっていました (`docs/development/WORK_LOG.md` §6.193)。行全体を塗れば選択状態・色設定・トリガ元に関係なく見えます。
+`isWholeLine` は **常に `true`** です。2026-05 時点は「選択あり = 選択文字だけ」でしたが、MCP の `run_selection` は必ず `set_selection` で範囲を置いてから呼ぶため、文字範囲の decoration がエディタ自身の選択ハイライトと完全に重なって、点滅が見えなくなっていました (`docs/archive/WORK_LOG_2026-07.md` §6.193)。行全体を塗れば選択状態・色設定・トリガ元に関係なく見えます。
 
 設定できる色の種類:
 
@@ -712,7 +712,7 @@ flowchart TD
 
 | 変更 | Issue | 出典 |
 |---|---|---|
-| 送信部を `writeCodeToEngine()` に切り出し、MCP `evaluate_orbitscore` と共有 | #388 | `docs/development/WORK_LOG.md` §6.188 (2026-07-07)、`extension.ts:3000-3032` |
+| 送信部を `writeCodeToEngine()` に切り出し、MCP `evaluate_orbitscore` と共有 | #388 | `docs/archive/WORK_LOG_2026-07.md` §6.188 (2026-07-07)、`extension.ts:3000-3032` |
 | フラッシュを常に whole-line に、送信前に `revealRange` | #388 | §6.193 (2026-07-07)、`extension.ts:2842-2857` / `2876-2880` |
 | `[STEP]` 行による live playhead (per-seq 色、nested argPath) | #390 | §6.194-6.197 (2026-07-07)、`playhead.ts`、`extension.ts:150-284` |
 | 診断を open / close / activation 時にも実行 | #384 | §6.187 (2026-07-07)、`extension.ts:414-443` |
@@ -742,7 +742,7 @@ flowchart TD
 ## 次の深掘り候補
 
 - `findPlayArgRangeForPath()` の「最深の解決可能な祖先」への劣化 — stack `[ ... ]` / group run / legato `{ ... }` の各ケースでどこが光るか
-- engine 側の `[STEP]` 生成 (`rust-engine-player.ts`) と argPath の付与 — lookahead と `atEpochMs` の関係 (`docs/development/WORK_LOG.md` §6.194 / §6.196)
+- engine 側の `[STEP]` 生成 (`rust-engine-player.ts`) と argPath の付与 — lookahead と `atEpochMs` の関係 (`docs/archive/WORK_LOG_2026-07.md` §6.194 / §6.196)
 - `configureFlash` コマンド — Quick Pick UI で flashCount / flashDuration / flashColor をインタラクティブに設定する仕組み
 - 診断の精度向上候補 — 複数行全体を追いかけた括弧対応チェック (単一行のみ)
 - `analyzeLinkAudioMissingOutput` の per-sequence 正規表現の事前コンパイル — keystroke ごとの再コンパイルを避ける設計と、`kicker.output()` が `kick` にマッチしない word boundary
@@ -768,5 +768,5 @@ flowchart TD
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:108-391` — 横断解析 5 関数
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — `//#evalMark` の設計理由
-- `docs/development/WORK_LOG.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266, §6.412 — drift 表の出典
+- `docs/archive/WORK_LOG_2026-07.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — drift 表の出典
 - [Issue #168 / PR #169](https://github.com/signalcompose/orbitscore/pull/169) — audioPath ordering 診断の背景

@@ -9,7 +9,7 @@ status: draft
 > **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 ::: warning 2026-09 時点の位置づけ
-本 ADR が記録する「SuperCollider (scsynth) を音声バックエンドに選ぶ」という決定は、2026-07-03 の cutover #108（`docs/development/WORK_LOG.md` §6.179）で **既定としては上書きされました**。`createAudioEngine()` は `ORBITSCORE_ENGINE=sc` を明示したときだけ `SuperColliderPlayer` を返し、既定は Rust の `orbit-audio-daemon` です。本 ADR は決定当時の経緯を残す歴史的読解で、末尾の「Consequences revisited (2026-09)」に cutover 後の帰結をまとめます。既定経路は [RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照してください。
+本 ADR が記録する「SuperCollider (scsynth) を音声バックエンドに選ぶ」という決定は、2026-07-03 の cutover #108（`docs/archive/WORK_LOG_2026-07.md` §6.179）で **既定としては上書きされました**。`createAudioEngine()` は `ORBITSCORE_ENGINE=sc` を明示したときだけ `SuperColliderPlayer` を返し、既定は Rust の `orbit-audio-daemon` です。本 ADR は決定当時の経緯を残す歴史的読解で、末尾の「Consequences revisited (2026-09)」に cutover 後の帰結をまとめます。既定経路は [RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照してください。
 
 ```typescript
 // packages/engine/src/audio/create-audio-engine.ts:17-22
@@ -200,7 +200,7 @@ SuperCollider 採用には以下のトレードオフがあります:
       // - time(): Time stretch factor (planned)
 ```
 
-cutover #108 の記録 (`docs/development/WORK_LOG.md` §6.179) でも `.time()` / `.fixpitch()` は「cutover blocker ではない out-of-scope → #213」と整理されています。granular synthesis を SuperCollider で実装するか Rust で実装するかという当初の問いは、既定が Rust に移ったことで Rust daemon 側の課題になりました。
+cutover #108 の記録 (`docs/archive/WORK_LOG_2026-07.md` §6.179) でも `.time()` / `.fixpitch()` は「cutover blocker ではない out-of-scope → #213」と整理されています。granular synthesis を SuperCollider で実装するか Rust で実装するかという当初の問いは、既定が Rust に移ったことで Rust daemon 側の課題になりました。
 
 ---
 
@@ -239,7 +239,7 @@ ADR の形式にならって、決定から約 1 年半後の帰結を記録し�
 
 ### 既定バックエンドは Rust に切り替わった (cutover #108・2026-07-03)
 
-`docs/development/WORK_LOG.md` §6.179 が cutover の記録です。要点は 3 つあります。
+`docs/archive/WORK_LOG_2026-07.md` §6.179 が cutover の記録です。要点は 3 つあります。
 
 - **parity の根拠は実測**: offline 3 層 22 テスト (interpreter schedule / core render / daemon render) が PASS し、22 examples の coverage matrix で audio 機能に "genuine gap なし"。gated `real-daemon-timing` で default/64f/32f を実測し、すべて ahead-of-cursor・xruns=0・polymeter parity。anchor drift は buffer 縮小で 6.7→2.4→0.7ms と単調に締まる
 - **スコープは engine-level default のみ**: VS Code UI 既定 (`orbitscore.engine`) と `.vsix` 再ビルドは #366 の post-cutover 仕上げとして分離。scsynth の完全退役は「別後段」
@@ -270,7 +270,7 @@ ADR の形式にならって、決定から約 1 年半後の帰結を記録し�
 
 - `packages/engine/src/audio/supercollider/` 一式と `SuperColliderPlayer` (`AudioEngineBackend` を `implements` する sibling として温存)
 - LinkAudio 用 SC plugin (`packages/sc-link-audio`) と `orbitPlayBufLink` / `orbitLinkAudioKeepalive` SynthDef
-- release pipeline の scsynth bundle 手順 (`docs/development/WORK_LOG.md` §6.186: "scsynth 関連ステップは無改変で維持"、owner 暫定判断)
+- release pipeline の scsynth bundle 手順 (`docs/archive/WORK_LOG_2026-07.md` §6.186: "scsynth 関連ステップは無改変で維持"、owner 暫定判断)
 - VS Code 拡張の `orbitscore.engine: "sc"` と、それに gate された `forceKillScsynth` / `selectAudioDevice` コマンド (`package.json` の `commandPalette` when 句)
 
 本 ADR の決定は「間違っていた」のではなく、「役目を終えて opt-out に降格した」と読むのが正確です。
@@ -296,7 +296,7 @@ ADR の形式にならって、決定から約 1 年半後の帰結を記録し�
 
 - `orbitPlayBuf` SynthDef の内容 — どのような UGen グラフで `chop()` の slice 再生を実現しているか
 - `supercolliderjs` パッケージの役割 — OSC クライアントとして使っている箇所の詳細
-- cutover #108 の parity 検証 (`docs/development/WORK_LOG.md` §6.179 が挙げる offline 22 テストと gated timing) を実際に読み、SC と daemon の dispatch モデル (fire-now vs schedule-ahead) の差を整理する
+- cutover #108 の parity 検証 (`docs/archive/WORK_LOG_2026-07.md` §6.179 が挙げる offline 22 テストと gated timing) を実際に読み、SC と daemon の dispatch モデル (fire-now vs schedule-ahead) の差を整理する
 - `.time()` / `.fixpitch()` (#213) を Rust daemon 側でどう実装するか
 - scsynth 完全退役の条件 — `SuperColliderPlayer` を消すときに `AudioEngineBackend` 契約から何が落とせるか
 
@@ -309,8 +309,8 @@ ADR の形式にならって、決定から約 1 年半後の帰結を記録し�
 - `packages/engine/src/audio/supercollider/` — SuperColliderPlayer 実装ディレクトリ (温存)
 - `packages/vscode-extension/src/completion-context.ts:222-224` — `fixpitch()` / `time()` が planned (#213) であるコメント
 - `rust/crates/` — 69dc968 時点の 22 crates (Consequences revisited の表)
-- `docs/development/WORK_LOG.md` §6.179 — cutover #108 (2026-07-03): parity 根拠・スコープ境界・リバーシビリティ
-- `docs/development/WORK_LOG.md` §6.186 — engine-kind 分岐 (#377) と scsynth bundle 手順の据え置き
+- `docs/archive/WORK_LOG_2026-07.md` §6.179 — cutover #108 (2026-07-03): parity 根拠・スコープ境界・リバーシビリティ
+- `docs/archive/WORK_LOG_2026-07.md` §6.186 — engine-kind 分岐 (#377) と scsynth bundle 手順の据え置き
 - `CLAUDE.md` — 本番トラックの ICLC retarget (#413・2026-07-12) と、その ICLC 提出の取り下げ (2026-09-03・PR #700)
 - commit `f2de9133` — Web Audio API エンジン初実装 (`node-web-audio-api` + `wavefile`)
 - commit `081a474` — SuperCollider 統合完成: sox 140-150ms ドリフト → 0-8ms 達成の記録
