@@ -21,12 +21,63 @@ import {
 } from '../../../packages/vscode-extension/src/wav-analysis'
 
 import type { GatedSession } from './gated-session'
-import { countLogMarker } from './engine-log'
 import { sleep, waitUntil, type McpClient } from './mcp-client'
 
 const REPO_ROOT = path.resolve(__dirname, '../../..')
 const LIVE_MODE_MARKER = '🎵 Live coding mode'
 const STARTUP_TIMEOUT_MARKER = 'daemon ready line timeout after 10000ms'
+
+/**
+ * 起動判定の錨に使う `get_log` 末尾の長さ（文字）。
+ *
+ * daemon の起動で増えるのは十数行なので、この長さがあれば錨は 500 行窓に残る。
+ */
+const LOG_ANCHOR_CHARS = 400
+
+/**
+ * 🔴 `get_log` は**固定 500 行の窓**なので、「マーカーの件数が増えたか」では再起動を判定できない。
+ *
+ * 窓が飽和すると、新しい `🎵 Live coding mode` を 1 行足しても**古いマーカーが同時に押し出される**ため
+ * 件数が増えない（減ることさえある）。#611 PR-O0 の実測: 既存 20 本を走らせた後の O0-3 / O0-4 が
+ * 「daemon-backed REPL ready after 30000ms」で必ずタイムアウトした。engine 自体は起動していた。
+ * ERROR 件数を厳密等価で見ない規律（`gated-assertion-hygiene.spec.ts`）と**同じ理由**である。
+ *
+ * 代わりに **`start_engine` の直前のログ末尾を錨**にして、その後ろに現れた分だけを新しい出力と見る。
+ *
+ * 🔴 **錨が見つからないときはログ全体が新しい出力である。** 錨は前の窓の**末尾**から取り、
+ * 窓は**先頭から**落ちる。したがって末尾が消えているなら、それより古い行はすべて消えている —
+ * 今の窓に残っているのは起動後に出た分だけ、ということになる。だから全体を返すのが正しく、
+ * 「判定できない」として待つのは**誤り**である。
+ *
+ * ⚠️ 一度 `undefined` を返す実装にしたところ、`#628 R28` が
+ * 「daemon-backed REPL ready after 30000ms」で落ちた（2026-09-04 実機・PR-O0）。
+ * ラック child の起動で 500 行以上が流れ、錨が窓から出ただけだったのに、
+ * 「まだ起動していない」と判定して待ち続けていた。
+ */
+export function logAppendedSince(anchor: string, log: string): string {
+  if (anchor.length === 0) return log
+  const index = log.lastIndexOf(anchor)
+  return index === -1 ? log : log.slice(index + anchor.length)
+}
+
+/** `logAppendedSince` に渡す錨を作る（末尾 `LOG_ANCHOR_CHARS` 文字）。 */
+export function logAnchor(log: string): string {
+  return log.slice(-LOG_ANCHOR_CHARS)
+}
+
+/**
+ * 相対差（`|actual - expected| / |expected|`）。capture の窓 RMS を golden と突き合わせる時の唯一の正本。
+ *
+ * gated spec に同名のローカル定義が **2 つ**あり（式はどちらも `… / expected` で同一）、
+ * ここへ 1 本化した。ついでに分母を `Math.abs(expected)` にして期待値が負の場面にも耐えるようにした
+ * — 今の期待値はすべて正なので**挙動は変わらない**。
+ *
+ * ⚠️ 「3 つあって式が食い違っていた」と書いていたのは**誤り**だった（レビューで判明）。
+ * 3 つ目の食い違う定義は、この共通化で新しく作った**この関数自身**である。
+ */
+export function relativeDelta(actual: number, expected: number): number {
+  return Math.abs(actual - expected) / Math.abs(expected)
+}
 
 export interface ScoreSource {
   /** 一時ファイル名の元。capture / work copy の basename に使う。 */
@@ -118,8 +169,7 @@ export async function startEngineForRun(
   }
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const beforeLog = (await client.call('get_log', { lines: 500 })).text
-    const liveModeBefore = countLogMarker(beforeLog, LIVE_MODE_MARKER)
-    const startupTimeoutsBefore = countLogMarker(beforeLog, STARTUP_TIMEOUT_MARKER)
+    const anchor = logAnchor(beforeLog)
     const started = await client.call(
       'start_engine',
       captureWav === undefined ? {} : { capture_wav: captureWav },
@@ -129,15 +179,18 @@ export async function startEngineForRun(
       await waitUntil(
         async () => {
           const log = (await client.call('get_log', { lines: 500 })).text
-          return countLogMarker(log, LIVE_MODE_MARKER) > liveModeBefore
+          // 🔴 件数比較ではなく「錨より後ろに出たか」を見る（`logAppendedSince` の注記）。
+          return logAppendedSince(anchor, log).includes(LIVE_MODE_MARKER)
         },
         { intervalMs: 200, timeoutMs: 30_000, label: `${label} daemon-backed REPL ready` },
       )
       return
     } catch (error) {
       const startupLog = (await client.call('get_log', { lines: 500 })).text
-      const sawFreshKnownTimeout =
-        countLogMarker(startupLog, STARTUP_TIMEOUT_MARKER) > startupTimeoutsBefore
+      // retry するかの判定も同じ窓の問題を持つので、同じ錨方式で見る。
+      const sawFreshKnownTimeout = logAppendedSince(anchor, startupLog).includes(
+        STARTUP_TIMEOUT_MARKER,
+      )
       if (attempt === 1 && sawFreshKnownTimeout) {
         const stopped = await client.call('stop_engine')
         expect(stopped.isError, stopped.text).toBe(false)
