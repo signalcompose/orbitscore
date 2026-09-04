@@ -682,7 +682,9 @@ s.audio("snare.wav").output("drums")               // kick と snare が同 chan
 
 `global.linkAudio()` 未宣言で `seq.output()` を呼んだ場合は別経路: channel name は記録されるが hardware path に流れ、 `.output()` 呼び出しのたびに console に警告が出る (LinkAudio mode を有効化し忘れたケースのフェイルセーフ。警告は dedup されず毎回発火する)。 編集時の order-violation 検出は §11 参照。
 
-🔴 **`output("master")` は LinkAudio channel 名にならない**: `"master"` は予約語であり、名前解決の最初に master へ確定する (MX.2.1)。したがって `global.linkAudio()` 宣言下でも `"master"` という名前の egress channel は作れない。LinkAudio 側でその名前が要る場合は別名を使う。同様に、宣言済みの sum / aux 名・`"3,4"` 形式の物理アウト対も LinkAudio channel より先に解決される — **LinkAudio channel は解決順の最後**である (MX.2.1)。
+🔴 **`output("master")` は LinkAudio channel 名にならない**（規範・MX.2.1）: `"master"` は予約語であり、名前解決の最初に master へ確定する。したがって `global.linkAudio()` 宣言下でも `"master"` という名前の egress channel は作れない。LinkAudio 側でその名前が要る場合は別名を使う。同様に、宣言済みの sum / aux 名・`"3,4"` 形式の物理アウト対も LinkAudio channel より先に解決される — **LinkAudio channel は解決順の最後**である。
+
+⚠️ **v1 の現在地**: この規範は**まだ実装されていない**。今日の `seq.output("master")` は sum にも render bus にも一致しないため **LinkAudio channel 名として記録される**（`sequence.ts:405-413`・既存契約は `tests/core/sequence-output.spec.ts:167-179`）。予約語として wire に届くのは `.master` 糖衣だけである。解決順の実装は PR-O4（MX.2.1 の注記も参照）。
 
 #### 8.1.3 Plugin lifecycle
 
@@ -1304,7 +1306,8 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
   bus を起動時にプールとして確保し、宣言時にプールから割り当てる）。上限超過の
   `seq.effect()` 宣言は明示エラー。
 - LinkAudio との併用不可は PH.5 に従う（`global.effect()` と同じ v1 排他）。
-- **将来予約（非規範）**: aux バス / send-return（pre/post-fader tap・fan-out）は同じ
+- **将来予約（非規範）**: aux バス / send-return（**タップ位置は `output` を置いた位置が決める**
+  — pre / post fader というフラグは設けない・MX.1 / MX.3・fan-out）は同じ
   insert bus 基盤の上に実装する（#453・正本 = `POST_2.0_MIXER_DSL_DESIGN.html`）。
 
 ### PH.2d insert の差し替え・削除（#625）
@@ -1688,6 +1691,11 @@ reconciliation key は名前（同名 = 同一 node・再評価は再束縛）�
 宛先に特別なものは無い — master・sum・aux・render・物理アウト・LinkAudio channel は
 すべて同じ軸の宛先であり、master も「終端」ではなく単なる宛先の 1 つである（MX.2.1）。
 
+> ⚠️ **`gain` / `pan` の既存節はまだ本節に追従していない。** 本ファイル内の `seq.gain()` /
+> `seq.pan()` の記述は「即時に効くリアルタイム制御」としてのみ書かれており、
+> ライン要素としての位置（既定はラック後・位置は自由）・`pan` がバス上の L/R バランスになって
+> **既存譜面の音が変わる**ことに触れていない。追従は **PR-O4**（doc 611 §2.4 / §2.4b）。
+
 ### MX.2 出口 — `seq.output(destination, thru:, db:)`
 
 > **Status**: 仕様確定（2026-09-03 owner 裁定・設計正本は
@@ -1720,7 +1728,7 @@ drums.effect(["Glue"]).output(master, thru: true).output(cue, db: -20)
 | `thru:` | boolean | `false` | `true` = この出口の**後ろへも信号を流す**。`false` ならここで終端 |
 | `db:` | number | `0` | **その宛先へ行く分だけ**の減衰（dB）。ラインの後続には影響しない |
 
-`_line` に `output` が 1 つも無い sequence は、評価時に暗黙の
+ラインに `output` が 1 つも無い sequence は、評価時に暗黙の
 `output(master, thru: false, db: 0)` を**末尾**に持つ（従来の既定出力と同じ音）。
 
 宛先は**文字列形でも宣言できる**（ノード変数を作らない素朴な 1 ファイル経路の保護）:
@@ -1739,13 +1747,22 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 |---|---|---|
 | master | `master`（`mix.output(1,2)` の宣言名）/ `"master"` | 予約語。下記参照 |
 | sum / aux | `drums` / `"drums"` | **aux も `output` で指せる**（`send` は糖衣・MX.3） |
-| 物理アウト | `cue`（`mix.output(3, 4)`）/ `"3,4"` / `mix.output(3)`（mono） | チャンネルは **1 始まり**。mono 宛ては片側を捨てず `(L + R) * 0.5` でマージする |
+| 物理アウト | `cue`（`mix.output(3, 4)`）/ `"3,4"` / `mix.output(3)`（mono） | チャンネルは **1 始まり**。mono 宛ては**片側を捨てず L + R をマージする**（マージ係数は実装の裁量・設計は [`611-output-line-design.md`](../design/611-output-line-design.md) §5.3） |
 | render | `stems`（`mix.render(...)`） | [`598-render-endpoint-design.md`](../design/598-render-endpoint-design.md) |
 | LinkAudio ch | `"Kick Ch"`（`global.linkAudio()` 宣言時のみ） | 解決順の**最後**（§8.1.2） |
 
-**`"master"` は予約語**である。文字列形 `output("master")` は sum への出力先指定を解除して
-master へ戻す意味に固定され、**LinkAudio channel 名としては解決されない**（§8.1.2）。
+**`"master"` は予約語**である。文字列形 `output("master")` は**宛先 master へ解決**し、
+**LinkAudio channel 名としては解決されない**（§8.1.2）。
 sum / aux に `master` と名付けることは SC.2.1 規範 (7) で明示エラー。
+
+> **v1 の現在地（🔴 予約語はまだ DSL 表面に無い）**: 予約語 `"master"` が実在するのは
+> **wire（`SetBusRouting`）** で、そこでは「sum への出力先指定を**解除**して hardware/master へ
+> 戻す」という部分適用の意味を持つ（`engine_wrap.rs:5766-5768` / `:5799`・#517 S3）。
+> DSL 側でその wire 値に届くのは **`.master` 糖衣だけ**であり、
+> **`seq.output("master")` は今日 LinkAudio channel 名として記録される**
+> （`sequence.ts:405-413`。既存契約は `tests/core/sequence-output.spec.ts:167-179`）。
+> 本節の規範（予約語として master へ解決する）と、「解除」ではなくラインの 1 要素として
+> 扱う意味論は、いずれも **PR-O4 で実装される**。
 
 **名前解決の順序**（既存 2 用途を保護するため順序も規範）:
 
@@ -1764,13 +1781,24 @@ sum / aux に `master` と名付けることは SC.2.1 規範 (7) で明示エ�
   render の展開後パス / LinkAudio 名）。複数の sequence から同じ sum へ出した場合と同じ規則。
 - 同じラインに**同じ宛先の `output` を 2 回**書いた場合は **2 要素として両方が加算**される。
   意図しない二重送出は engine ではなく**エディタの診断**で警告する。
-- sum の**ネストは v1 不可**（1 段・将来拡張として予約）。
 - sum bus・aux bus 自身もレシーバであり、insert と出力先指定を持てる（SC.2.1 規範 (4)）。
   seq が per-seq insert を持つ場合の処理順は **per-seq insert → 出力先**。
+- 🔴 **バスの kind による宛先の制限は設けない**（MX.4）。sum が別の sum へ出す形も、
+  順序が前向きなら規範上は許される。禁じるのは**循環（後方参照）だけ**。
 
-> **v1 の現在地**: `output(name)`（sum 名 / LinkAudio 名 / `"master"` 予約語）と
-> `mix.output(1, 2)` による物理アウト宣言は**実装済み**。`thru:` / `db:` / aux 宛て /
-> `"3,4"` 形式 / mono 宛て / 同一ラインでの複数 `output` は **PR-O3 / PR-O4 で入る**（#611）。
+> **v1 の現在地**（一次ソースで確認した実装事実）:
+>
+> | 本節の規範 | 今日 |
+> |---|---|
+> | `output(name)`（sum 名）・`mix.output(1, 2)` の物理アウト宣言 | ✅ **実装済み** |
+> | `output` の宛先は kind を問わない | ❌ **sum kind に限られる** — `SetBusRouting` が
+>   `output '<name>' must be a sum bus` で拒否する（`engine_wrap.rs:5809-5813`）。
+>   `send` 先も **aux kind に限られる**（同 `:5828` 付近） |
+> | forward-only（順序が前向きなら許す） | ✅ 実装済み（同 `:5802-5806` が index 比較で拒否） |
+> | sum が別の sum へ出せる | ⚠️ wire の kind 検証は通るが、**DSL 側の経路は未整備**。
+>   旧 MX.5 は「sum ネスト不可」を v1 制約として挙げていた |
+> | `thru:` / `db:` / aux 宛て / `"3,4"` 形式 / mono 宛て / 同一ラインでの複数 `output` | ❌ **未実装**（PR-O3 → PR-O4） |
+> | `"master"` を `seq.output()` の文字列宛先として使う | ❌ **未実装**（上記の予約語の注記） |
 
 #### MX.2.3 数値 render bus `seq.output(n)` — **撤回**
 
@@ -1786,6 +1814,16 @@ kick.output(stems)                 // ← 新: 宣言したノードが宛先
 
 ⚠️ `mix.output(3)` は**物理アウト 3 番の mono 宛て**であって render bus ではない（MX.2.1）。
 P2 が未出荷のため撤回に伴う移行対象の譜面は無い。
+
+> **v1 の現在地**: 撤回は**仕様の決定であって、まだコードに入っていない**。今日の実装は
+> `kick.output(1)` を**受理して `_renderBus` に記録する**（`sequence.ts:373-400`）。
+> 一方 `mix.output(3)` は「requires a channel pair」で throw する（`runtime.ts:245-250`）ので、
+> mono 宛ての受理も未実装である。撤回の実装は #598 の PR-R 系で行う。
+>
+> 🔴 **同じ撤回に追従していない文書が 2 つ残っている**（本 PR のスコープ外・**PR-R0** で追従）:
+> 本ファイル PH 節の instrument 適用表（`output(数値)` = オフライン render bus）と
+> [`MULTICHANNEL_RENDERING_DESIGN_598.md`](../specs-v2/MULTICHANNEL_RENDERING_DESIGN_598.md) §4.4
+> の解決順・再宣言表。
 
 ### MX.3 aux / send — `global.aux(name)` / `seq.send(name, db)`
 
@@ -1822,11 +1860,23 @@ kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要�
 - bus は起動時プールから確保（kind: insert/sum/aux）。宣言 = activation・失敗ロールバック・
   per-bus health・UNROUTABLE_EVENTS 観測は PH.2b の機構を共有
 
+> **v1 の現在地**: 🔴 **kind 制約は今日も生きている。** `SetBusRouting` は
+> 「output は sum のみ・send 先は aux のみ」を検証して拒否する
+> （`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5809-5813` ほか。コード側のコメントは
+> 本節 MX.4 を出典として引用している）。本節が「kind で制限しない」と規定するのは
+> **到達点**であり、制約が外れるのは `SetBusLine` を入れる **PR-O3** である。
+> forward-only は今日も同じ規則で効いている（同 `:5802-5806`）。
+
 ### MX.5 v1 制約（実装事実の開示）
 
 - PDC（plugin latency 補償）なし — 並列経路（aux・group 間）の位相整合は保証しない
-- sum ネスト不可・LinkAudio と相互排他（PH.5）
+- **sum ネスト不可**・LinkAudio と相互排他（PH.5）
 - 受理フォーマットは effect 系 = `.clap` のみ（PH.3）
+- **宛先の kind 制約**（output は sum のみ・send 先は aux のみ）— MX.4 の現在地注記を見ること
+
+> 🔴 上 2 項は**今日の制約であって到達点ではない**。owner 裁定（2026-09-03・doc 611 §14 (7)）は
+> 「kind による制限は設けない。循環だけを診断で拒否する」であり、MX.4 がその規範を書いている。
+> 本節は「実装事実の開示」なので、**制約が外れる（PR-O3）まで両方を併記する**。
 
 ---
 
