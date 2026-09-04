@@ -11,6 +11,7 @@ export interface RunSequenceOptions {
   scheduleEventsFn: (scheduler: Scheduler, offset: number, baseTime: number) => void
   getPatternDurationFn: () => number
   clearSequenceEventsFn: (sequenceName: string) => void
+  setRunTimerFn: (timer: NodeJS.Timeout | undefined) => void
 }
 
 /**
@@ -41,6 +42,7 @@ export function runSequence(options: RunSequenceOptions): RunSequenceResult {
     scheduleEventsFn,
     getPatternDurationFn,
     clearSequenceEventsFn,
+    setRunTimerFn,
   } = options
 
   // RUN() is imperative: always execute immediately, even if already playing
@@ -57,10 +59,13 @@ export function runSequence(options: RunSequenceOptions): RunSequenceResult {
 
   // Auto-stop after pattern duration
   const patternDuration = getPatternDurationFn()
-  setTimeout(() => {
+  const tailDelay = patternDuration + (scheduleTime - currentTime)
+  const runTimer = setTimeout(() => {
+    setRunTimerFn(undefined)
     clearSequenceEventsFn(sequenceName)
     console.log(`⏹ ${sequenceName} (finished)`)
-  }, patternDuration)
+  }, tailDelay)
+  setRunTimerFn(runTimer)
 
   return { isPlaying: true, isLooping: false }
 }

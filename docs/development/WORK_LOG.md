@@ -17,6 +17,68 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(engine): hold the RUN tail timer and align its origin (#606 PR-K-A1) (Sep 4, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR-K-A1**（修正部分）
+
+同ブランチの守りのテスト（`run-termination-noteoff.spec.ts`）に続けて、
+計画 `IMPLEMENTATION_PLAN_2026-09.md:126` が定める **H1 / H2 の修正**を入れた。
+守りのテストだけでは #606 の must-fix は閉じない（鎖は既にあったが、
+その鎖を駆動するタイマ自体が 2 つの欠陥を持っていた）。
+
+## 直した 2 つの欠陥
+
+### H2 — 終端タイマの原点が 100 ms ずれていた
+
+イベントは `scheduleTime = currentTime + 100` を原点に積むのに、自動停止タイマは
+**「今」から `patternDuration`** で測っていた（`run-sequence.ts`）。停止が約 100 ms 早く来るので、
+パターン末尾の note が鳴り切る前に `clearSequenceEventsFn` が走る。
+
+`tailDelay = patternDuration + (scheduleTime - currentTime)` に揃えた。
+🔴 **マジックナンバー 100 を 2 箇所に書かない** — `scheduleTime` から導いている。
+
+### H1 — `setTimeout` のハンドルを捨てていた
+
+キャンセルできないので、`RUN()` を再度呼ぶ / `LOOP()` へ切り替える / `global.stop()` すると、
+**古いタイマが後から発火して新しく始まった再生を消す**（stale timer）。
+
+ハンドルを既存の per-sequence `StateManager` に保持し（新機構を作らない）、
+`run()` / `loop()` / `stop()` の 3 経路でキャンセルする。`setRunTimerFn` は**必須引数**にして、
+将来の呼び出し元がハンドルを取り落とすことを型で防いだ。
+
+## テスト
+
+TDD で先に書いて red を確認してから直した（実出力は PR 本文）。
+
+| 検査 | 内容 |
+|---|---|
+| H2 | `patternDuration` ちょうどでは clear されず、原点ぶんを足した時刻で clear される |
+| H1 | 2 回目の `RUN()` / `LOOP()` 切替 / `global.stop()` のいずれでも、1 回目のタイマが
+新しい再生を消さない。**`toHaveBeenCalledTimes` と引数まで検証**する |
+
+## 🔴 `clearRunTimer` の分類（main が追加）
+
+`private clearRunTimer()` を足したところ `signal-chain-dispatch.spec.ts` が red になった。
+**TypeScript の `private` は実行時に残らない**ので、公開メソッド分類器からは未分類に見える。
+内部 API リストへ追加した。
+
+ただし **除外リストへの追加は「主張」にすぎない**（CLAUDE.md が #528 で名指しした事故は
+「DSL 語彙であるべきものを除外リストへ誤分類し、テストは緑・実行時だけ壊れる」型）。
+そこで**逆向きの実証**を 1 本足した — `kick.clearRunTimer()` が
+`Unknown chain method` で弾かれること。**変異検証済み**:
+`SEQUENCE_DSL_METHODS` に `clearRunTimer` を足すとこのテストが red になる。
+
+## 検証
+
+`npm test` **2220 passed / 52 skipped / 0 failed**（sandbox 外・main が実行）。
+lint / `tsc --noEmit` ともに exit 0。
+
+⚠️ 委譲先（Codex）は sandbox で全件を回せず `tests/core` の緑までしか確認できていなかった。
+**上記 1 件の red は main が sandbox 外で回して初めて出た** — CLAUDE.md
+「委譲先の green 報告は必ず main が回し直す」の実例がまた 1 件増えた。
+
+---
+
 ### test(engine): pin the RUN-termination note-off release (#606 PR-K-A1) (Sep 4, 2026)
 
 **Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR-K-A1**
