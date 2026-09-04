@@ -600,18 +600,27 @@ export function captureWavPath(tmpRoot: string, slug: string): string {
 `runScore` は「譜面を work copy にして、エディタ経路（`open_file` → `set_selection` → `run_selection`）で評価し、要求されれば capture を解析して区間 RMS を返す」までを 1 関数にしたものです。そこにある `evaluate` が `ok` / `isError` に assert しないのは意図した設計で、理由は本章の [`ok` の節](#evaluate-orbitscore-の-ok-は何を意味するか)と同じところにあります。
 
 ```typescript
-// tests/e2e/helpers/run-score.ts:196-205
-  const evaluate = async (code: string): Promise<void> => {
-    // 🔴 **`ok` / `isError` に assert しない**（設計 §4.2）。診断は `engine-log.ts` の
-    // `expectNoNewErrors` / `expectLogMarkerAtLeast` で見る。
-    //
-    // なぜ assert しないか: **診断が出ることを確かめる E2E がある**（doc 610 の異常系は
-    // 「この譜面は診断を出す」が判定条件）。ここで弾くと、そちらが `runScore` を使えない。
-    // 逆に #614 以降 `ok` は「評価完了までに診断が無かった」までしか保証しないので、
-    // 正常系でも `ok` は十分条件にならない（評価後に非同期で起きる失敗は `get_log` だけに出る）。
-    await client.call('evaluate_orbitscore', { code })
-  }
+// tests/e2e/helpers/run-score.ts:205-217
+    // 🔴 **ただし「assert しない」は「握り潰す」ではない**（silent-failure レビュー 2026-09-04）。
+    // `ok` は**必要条件**で、`ok: false` は `get_log` を漁らずその場で取れる一次シグナルである
+    // （パース / 実行時診断・`mcp-server.ts` の tool 説明）。捨てると、セットアップの typo が
+    // **後段の「音が鳴っていない」というアサーション失敗として現れる** — 書いた本人は
+    // オーディオの不具合を疑って延々探すことになる。**assert はせず、見えるようにする。**
+    const result = await client.call('evaluate_orbitscore', { code })
+    if (result.isError) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[runScore ${source.slug}] evaluate_orbitscore reported a diagnostic (not asserted — ` +
+          `a test may be verifying it on purpose):\n${result.text}`,
+      )
+    }
 ```
+
+🔴 **「assert しない」は「握り潰す」ではありません。** `ok` は**必要条件**であって、
+十分条件でないことは何も見ない理由になりません。捨ててしまうと、セットアップの typo が
+**後段の「音が鳴っていない」というアサーション失敗**として現れ、書いた本人はオーディオの
+不具合を疑って延々と探すことになります。診断が出ることを確かめる E2E を妨げないよう
+assert はしませんが、**見えるようにはします**。
 
 PR-E2 の時点で `runScore` を呼ぶシナリオはまだ 1 本もありません（既存 20 本を書き換えない方針のため）。最初の利用者は PR-E3 の予定です。
 

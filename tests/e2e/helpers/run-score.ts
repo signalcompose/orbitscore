@@ -201,7 +201,20 @@ export async function runScore(
     // 「この譜面は診断を出す」が判定条件）。ここで弾くと、そちらが `runScore` を使えない。
     // 逆に #614 以降 `ok` は「評価完了までに診断が無かった」までしか保証しないので、
     // 正常系でも `ok` は十分条件にならない（評価後に非同期で起きる失敗は `get_log` だけに出る）。
-    await client.call('evaluate_orbitscore', { code })
+    //
+    // 🔴 **ただし「assert しない」は「握り潰す」ではない**（silent-failure レビュー 2026-09-04）。
+    // `ok` は**必要条件**で、`ok: false` は `get_log` を漁らずその場で取れる一次シグナルである
+    // （パース / 実行時診断・`mcp-server.ts` の tool 説明）。捨てると、セットアップの typo が
+    // **後段の「音が鳴っていない」というアサーション失敗として現れる** — 書いた本人は
+    // オーディオの不具合を疑って延々探すことになる。**assert はせず、見えるようにする。**
+    const result = await client.call('evaluate_orbitscore', { code })
+    if (result.isError) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[runScore ${source.slug}] evaluate_orbitscore reported a diagnostic (not asserted — ` +
+          `a test may be verifying it on purpose):\n${result.text}`,
+      )
+    }
   }
   const captureSegment = async (name: string, durationMs = 2000, settleMs = 400): Promise<void> => {
     if (settleMs > 0) await sleep(settleMs)
@@ -210,6 +223,8 @@ export async function runScore(
     segments[name] = { from, to: Date.now() }
   }
 
+  let bodyError: unknown
+  let cleanupFailure: unknown
   try {
     const opened = await client.call('open_file', { path: workPath })
     expect(opened.isError, opened.text).toBe(false)
@@ -227,14 +242,37 @@ export async function runScore(
     expect(run.isError, run.text).toBe(false)
 
     if (body) await body({ session, evaluate, captureSegment })
+  } catch (error) {
+    bodyError = error
+    throw error
   } finally {
-    await client.call('evaluate_orbitscore', { code: 'global.stop()' })
-    const stopped = await client.call('stop_engine')
-    expect(stopped.isError, stopped.text).toBe(false)
-    stopWall = Date.now()
-    await waitForEngineState(client, false, 15_000, `runScore ${source.slug} engine stopped`)
-    await sleep(1000)
+    // 🔴 **cleanup の失敗が本来の失敗を隠さないようにする**（silent-failure レビュー 2026-09-04）。
+    // JS では `finally` が投げると `try` 側の例外を**完全に置き換える**。よりによって
+    // 「エンジンが落ちる」ことを検証するテストほど `stop_engine` / 停止待ちも一緒に転ぶので、
+    // 書いた本人に見えるのが本質と無関係な「停止待ちタイムアウト」だけ、という事故が起きる。
+    try {
+      await client.call('evaluate_orbitscore', { code: 'global.stop()' })
+      const stopped = await client.call('stop_engine')
+      expect(stopped.isError, stopped.text).toBe(false)
+      stopWall = Date.now()
+      await waitForEngineState(client, false, 15_000, `runScore ${source.slug} engine stopped`)
+      await sleep(1000)
+    } catch (cleanupError) {
+      if (bodyError === undefined) {
+        // 本体は通ったのに片付けだけ失敗した — これは本物の失敗なので後で投げる。
+        cleanupFailure = cleanupError
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[runScore ${source.slug}] cleanup also failed; reporting the original failure instead:` +
+            `\n${String(cleanupError)}`,
+        )
+      }
+    }
   }
+  // 🔴 `finally` の中で throw すると `try` の例外を**置き換えてしまう**（lint の
+  // `no-unsafe-finally` が指すとおり）。片付けだけが失敗した場合は、ブロックを抜けてから投げる。
+  if (cleanupFailure !== undefined) throw cleanupFailure
 
   if (!wantsCapture || capturePath === undefined) return undefined
 
