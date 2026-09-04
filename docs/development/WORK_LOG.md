@@ -33,42 +33,33 @@ production code は 1 行も変更していない。
 ##### 1. ハーネスの起動判定が 500 行窓で壊れていた（helper の潜在不具合）
 
 O0-3 / O0-4 が `daemon-backed REPL ready after 30000ms` で落ちた。engine は起動していた。
-
 原因は `run-score.ts` が **`get_log` の固定 500 行窓の中でマーカー件数の増加**を見ていたこと。
-窓が飽和すると、新しい `🎵 Live coding mode` を 1 行足しても**古いマーカーが同時に押し出される**
-ので件数が増えない。**ERROR 件数を厳密等価で見ない規律と同じ理由**である。
-段 0 で入った helper に消費者が付いて初めて露見した。
+窓が飽和すると新しい行を足しても**古いマーカーが同時に押し出される**ので件数が増えない。
+**ERROR 件数を厳密等価で見ない規律と同じ理由**である。段 0 の helper に消費者が付いて初めて露見した。
 
 修正: **`start_engine` 直前のログ末尾を錨**にし、その後ろに出た分だけを見る。
 
-🔴 **一度「錨が流れたら判定できない（`undefined`）として待つ」形にしたのは誤りで、
-`#628 R28` を壊した**（ラック child の起動で 500 行以上が流れ、錨が窓から出ただけなのに
-30 秒待ってタイムアウト）。錨は前の窓の**末尾**から取り、窓は**先頭から**落ちるので、
-**末尾が消えているならそれより古い行はすべて消えている** — つまり今の窓は全部が新しい出力である。
-訂正して全体を返す形にした。**実機に出さなければ気づかなかった。**
+🔴 **一度「錨が流れたら判定できないとして待つ」形にしたのは誤りで `#628 R28` を壊した。**
+錨は前の窓の**末尾**から取り、窓は**先頭から**落ちるので、末尾が消えているならそれより古い行は
+すべて消えている — つまり今の窓は全部が新しい出力である。**実機に出さなければ気づかなかった。**
 `helpers.spec.ts` にテスト 6 本。「錨を完全に無視する」変異で 2 本 red・restore 一致を確認した。
 
 ##### 2. fixture のバス名が既存テストと衝突していた
 
-gated スイートは**同じ engine セッションを使い回す**ので、`output_line_sum.orbs` の
-`global.sum("drum")` が `orbitstudio-mcp-gated.spec.ts:1950-1951`（`drum` を **sum と aux の両方**で
-宣言）と衝突して「ambiguous」になる。**衝突したまま録ると、音が意図した宛先へ行かないのに
-golden が録れてしまう。** `o0sum611` / `o0rev611` へ改名し、理由を fixture のヘッダに書いた。
+gated スイートは**同じ engine セッションを使い回す**ので、`global.sum("drum")` が既存テスト
+（`drum` を **sum と aux の両方**で宣言）と衝突して「ambiguous」になる。**衝突したまま録ると、
+音が意図した宛先へ行かないのに golden が録れてしまう。** `o0sum611` / `o0rev611` へ改名した。
 
 ##### 3. 🔴 設計 §9 の期待式が実機と合わなかった — 実測を採った
 
-| §9 の見積もり | 実測（2026-09-04） |
-|---|---|
-| aux の寄与 = `0.3 × dry` | **aux/dry = 0.678** |
-| ラック併用 = `effectOnly × 10^(-6/20)` = 1.577 | **combined/dry = 1.415**（10% 違う） |
-| バス無しは **bit 一致** | 2 セッションの PCM は**一致しない**（録音開始位相が毎回違う） |
-| sum は**許容 0** | 2 回の測定が 1e-10 ゆれる |
+実測との食い違い（2026-09-04）: aux の寄与は `0.3 × dry` ではなく **aux/dry = 0.678** /
+ラック併用は乗算モデル 1.577 ではなく **1.415**（10% 違う）/ バス無しの PCM は 2 セッションで
+**一致しない**（録音開始位相が毎回違う）/ sum の 2 回の測定が 1e-10 ゆれ「許容 0」では固定できない。
 
 **golden は測ったものを固定する道具**なので、**未検証のモデルを assert しない**方針に変えた。
 実測比を固定し、後継 PR の期待値は「**実測 × 係数の変化分**」という**相対**の形で持つ。
-「許容 0」は**相対 1e-6**（ゆれの 4 桁上・可聴閾よりはるかに下。緩めたのではなく、
-文字どおりの 0 では固定できない）。バス無しは**決定性のガード**へ変えた —
-設計 §9 の「bit 一致」の本体は Rust 側の `capture_realtime_gated.rs` にあり、PR-O2 はそちらでも見る。
+「許容 0」は**相対 1e-6**（緩めたのではなく、文字どおりの 0 では固定できない）。
+バス無しは**決定性のガード**へ — 設計の「bit 一致」の本体は Rust 側の `capture_realtime_gated.rs`。
 
 🔴 **O0-4 は大きさのガードであって順序のガードではない。** カタログのエフェクト fixture は
 固定 gain の乗算だけで（`rust-spike/clap-test-effect/src/lib.rs:314` の `*o = i * gain`）、
@@ -88,22 +79,29 @@ golden が録れてしまう。** `o0sum611` / `o0rev611` へ改名し、理由�
 
 #### 追加したもの
 
-| ファイル | 内容 |
-|---|---|
-| `tests/fixtures/mcp-e2e/output_line_sum.orbs` / `_send.orbs` / `_gain_effect.orbs` | 3 譜面（バス無しは既存 `kick_loop.orbs` を使う・**変更しない**） |
-| `tests/e2e/output-line-expectations.ts` | 実測 golden と後継 PR の相対式（`rack-chain-gain-expectations.ts` と同じ「式で持つ」規律） |
-| `tests/e2e/orbitstudio-mcp-gated.spec.ts` | O0-1〜O0-4（**末尾に追加**。既存 20 本は先頭 4565 行が SHA-256 一致で無傷） |
-| `tests/e2e/helpers/run-score.ts` / `helpers.spec.ts` | 起動判定の修正とその検査 6 本 |
+fixture 3 譜面（バス無しは既存 `kick_loop.orbs` を使い**変更しない**）/
+`output-line-expectations.ts`（実測 golden と後継 PR の相対式）/ gated spec に O0-1〜O0-4
+（**末尾に追加**・既存 20 本は先頭 4565 行が SHA-256 一致で無傷）/ `run-score.ts` の起動判定修正と検査 6 本。
+
+#### `/simplify`（4 観点のレビュー → 適用）
+
+🔴 **reuse / altitude**: `startR28Engine`（gated spec）が**同じ壊れた件数比較をローカルに再実装**して
+おり、**既存 20 本すべてがこの経路を使う**。判定を錨方式へ統一し `markerCount` を削除した。
+**simplification / efficiency**: 動的 `import()` → 静的 import・harness を同期 4 行へ縮小 /
+`relativeDelta` を `run-score.ts` へ 1 本化（**同名で式が違うローカル定義が 3 つ**あった）/
+fixture の言い換えフィールドを削除し後継の式は**実測 1 つから導出**。
+⏭️ **スキップ**: engine 再起動 3→1 の統合。**golden をテスト単位で独立させる**価値を優先。
+
+🔴 **`startR28Engine` はレビューの推奨と逆の判断をした。** altitude は「前セッションが理由付きで
+見送り済み」として現状維持を支持したが、その理由は「**最初の消費者が付く時に寄せる**」であり、
+**その消費者が本 PR で付いた**。加えて当時は**両方とも壊れていた**のに、いまは**片方だけ直っている**。
+見送られたのは「約 60 行の統合」で、ここで直したのは**判定ロジックだけ**（構造は動かしていない）。
 
 #### 検証（すべて main が実機で）
 
-| ゲート | 結果 |
-|---|---|
-| `npm test` | **2202 passed** / 52 skipped（helper 検査 6 本ぶん増・gated 4 本は skip） |
-| `npm run typecheck:e2e` | エラー 0 |
-| `npm run lint` | エラー 0 |
-| `check-citations.mjs` | **922 verified / 0 failed** |
-| **実機 `npm run test:e2e:gated`** | **24 件中 14 passed / 10 failed** |
+`npm test` **2202 passed** / 52 skipped ・ `typecheck:e2e` 0 ・ `lint` 0 ・
+`check-citations.mjs` **922 verified / 0 failed** ・
+**実機 `npm run test:e2e:gated` 24 件中 14 passed / 10 failed**。
 
 🔴 **失敗 10 件は baseline と完全に同一**（`drives real OrbitStudio end-to-end` /
 `#643 E2E-1〜E2E-7` / `steps the live playhead` / `#618 E1-E6`）。**新しい失敗は 1 件も作っていない。**

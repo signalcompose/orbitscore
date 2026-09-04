@@ -53,10 +53,12 @@ import {
 } from '../../packages/vscode-extension/src/wav-analysis'
 import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
 
-import { countErrors, countLogMarker } from './helpers/engine-log'
-import { captureWavPath, type GatedCatalog } from './helpers/gated-session'
+import { countErrors, countLogMarker, errorBaseline, expectNoNewErrors } from './helpers/engine-log'
+import { captureWavPath, createGatedSession, type GatedCatalog } from './helpers/gated-session'
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
 import { rackChildPidsFromLog } from './helpers/rack-child-pid'
+import { logAnchor, logAppendedSince, relativeDelta, runScore } from './helpers/run-score'
+import { OUTPUT_LINE_GOLDENS } from './output-line-expectations'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
@@ -426,7 +428,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   ): Promise<void> => {
     const liveModeMarker = '🎵 Live coding mode'
     const startupTimeoutMarker = 'daemon ready line timeout after 10000ms'
-    const markerCount = (log: string, marker: string): number => log.split(marker).length - 1
     // 🔴 `capture_wav` は **spawn 専用オプション**（daemon 起動時にしか適用されない）。
     // 既に別テストがエンジンを起動していると
     // 「engine is already running; requested spawn-only option(s): capture_wav」で弾かれる。
@@ -437,8 +438,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     }
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
-      const liveModeBefore = markerCount(beforeLog, liveModeMarker)
-      const startupTimeoutsBefore = markerCount(beforeLog, startupTimeoutMarker)
+      // 🔴 件数の増加では再起動を判定できない（`get_log` は固定 500 行窓なので、飽和すると
+      // 新しいマーカーを 1 行足しても古いマーカーが同時に押し出されて件数が増えない）。
+      // #611 PR-O0 の実機でここと同じロジックが `#628 R28` をタイムアウトさせた。
+      // 判定は `run-score.ts` の錨方式に揃える（実装と根拠はそちらの注記）。
+      const anchor = logAnchor(beforeLog)
       const started = await activeClient.call(
         'start_engine',
         captureWav === undefined ? {} : { capture_wav: captureWav },
@@ -448,15 +452,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         await waitUntil(
           async () => {
             const log = (await activeClient.call('get_log', { lines: 500 })).text
-            return markerCount(log, liveModeMarker) > liveModeBefore
+            return logAppendedSince(anchor, log).includes(liveModeMarker)
           },
           { intervalMs: 200, timeoutMs: 30_000, label: `${label} daemon-backed REPL ready` },
         )
         return
       } catch (error) {
         const startupLog = (await activeClient.call('get_log', { lines: 500 })).text
-        const sawFreshKnownTimeout =
-          markerCount(startupLog, startupTimeoutMarker) > startupTimeoutsBefore
+        const sawFreshKnownTimeout = logAppendedSince(anchor, startupLog).includes(
+          startupTimeoutMarker,
+        )
         if (attempt === 1 && sawFreshKnownTimeout) {
           const stopped = await activeClient.call('stop_engine')
           expect(stopped.isError, stopped.text).toBe(false)
@@ -3793,8 +3798,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
         )
       }
-      const relativeDelta = (actual: number, expected: number): number =>
-        Math.abs(actual - expected) / expected
 
       const dryRms = segmentRms('dryBaseline')
       const aRms = segmentRms('a')
@@ -4382,8 +4385,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           (onset) => onset >= range.fromSec && onset < range.toSec,
         ).length
       }
-      const relativeDelta = (actual: number, expected: number): number =>
-        Math.abs(actual - expected) / expected
       const rms = {
         busDry: segmentRms('busDry'),
         full: segmentRms('full'),
@@ -4571,36 +4572,22 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   // #611 §9 / #543-a — capture today's output-line sound before engine changes
   // ─────────────────────────────────────────────────────────────────
 
-  const requireOutputLineHarness = async () => {
+  /** #611 O0-* が共有する gated セッション。suite の状態が揃っていることも併せて確かめる。 */
+  const requireOutputLineSession = () => {
     expect(client, '#611 output-line setup must initialize the MCP client').toBeDefined()
     expect(tmpRoot, '#611 output-line setup must initialize the scratch root').toBeDefined()
     if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
-    const [sessionHelpers, scoreHelpers, logHelpers, expectations] = await Promise.all([
-      import('./helpers/gated-session'),
-      import('./helpers/run-score'),
-      import('./helpers/engine-log'),
-      import('./output-line-expectations'),
-    ])
-    return {
-      session: sessionHelpers.createGatedSession(client, tmpRoot, requireCatalogFixtures()),
-      runScore: scoreHelpers.runScore,
-      errorBaseline: logHelpers.errorBaseline,
-      expectNoNewErrors: logHelpers.expectNoNewErrors,
-      goldens: expectations.OUTPUT_LINE_GOLDENS,
-    }
+    return createGatedSession(client, tmpRoot, requireCatalogFixtures())
   }
-
-  const relativeDelta = (actual: number, expected: number): number =>
-    Math.abs(actual - expected) / Math.abs(expected)
 
   it.skipIf(!appAvailable)(
     '#611 O0-1 keeps the no-bus kick_loop RMS deterministic across two capture sessions',
     async () => {
-      const harness = await requireOutputLineHarness()
-      const errorsBefore = await harness.errorBaseline(harness.session.client)
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
       const captureOnce = async (slug: string) => {
-        const result = await harness.runScore(
-          harness.session,
+        const result = await runScore(
+          session,
           { slug, fixturePath: 'tests/fixtures/mcp-e2e/kick_loop.orbs' },
           async ({ captureSegment }) => captureSegment('steady', 2500, 500),
           { capture: true },
@@ -4617,28 +4604,28 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // eslint-disable-next-line no-console
       console.log('[#611 O0-1] no-bus RMS:', JSON.stringify({ firstRms, secondRms }))
       expect(first.analysis.format.channels, 'O0-1 requires a 2ch device').toBe(
-        harness.goldens.noBus.channels,
+        OUTPUT_LINE_GOLDENS.noBus.channels,
       )
       expect(second.analysis.format.channels, 'O0-1 requires a 2ch device').toBe(
-        harness.goldens.noBus.channels,
+        OUTPUT_LINE_GOLDENS.noBus.channels,
       )
       expect(firstRms, 'O0-1 first no-bus capture must be audible').toBeGreaterThan(
-        harness.goldens.noBus.audibleFloorRms,
+        OUTPUT_LINE_GOLDENS.noBus.audibleFloorRms,
       )
       expect(secondRms, 'O0-1 second no-bus capture must be audible').toBeGreaterThan(
-        harness.goldens.noBus.audibleFloorRms,
+        OUTPUT_LINE_GOLDENS.noBus.audibleFloorRms,
       )
       // 🔴 サンプル単位の一致は取れない（録音開始位相がセッションごとに違う・goldens の注記）。
       //    2 セッションが同じ値に落ちることと、その値が golden から動かないことを見る。
       expect(
         relativeDelta(secondRms, firstRms),
         `O0-1 two no-bus captures must agree; first=${firstRms} second=${secondRms}`,
-      ).toBeLessThanOrEqual(harness.goldens.noBus.tolerance)
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.noBus.tolerance)
       expect(
-        relativeDelta(firstRms, harness.goldens.noBus.rms),
-        `O0-1 no-bus RMS must stay at ${harness.goldens.noBus.rms}; actual=${firstRms}`,
-      ).toBeLessThanOrEqual(harness.goldens.noBus.tolerance)
-      await harness.expectNoNewErrors(harness.session.client, errorsBefore, '#611 O0-1')
+        relativeDelta(firstRms, OUTPUT_LINE_GOLDENS.noBus.rms),
+        `O0-1 no-bus RMS must stay at ${OUTPUT_LINE_GOLDENS.noBus.rms}; actual=${firstRms}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.noBus.tolerance)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 O0-1')
     },
     TEST_TIMEOUT_MS * 2,
   )
@@ -4646,10 +4633,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   it.skipIf(!appAvailable)(
     '#611 O0-2 pins the explicit sum-output RMS so PR-O2 cannot move it',
     async () => {
-      const harness = await requireOutputLineHarness()
-      const errorsBefore = await harness.errorBaseline(harness.session.client)
-      const result = await harness.runScore(
-        harness.session,
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
         {
           slug: '611-o0-sum-output',
           fixturePath: 'tests/fixtures/mcp-e2e/output_line_sum.orbs',
@@ -4663,13 +4650,13 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // eslint-disable-next-line no-console
       console.log('[#611 O0-2] TODO_MEASURED sumOutput.rms:', sumRms)
       expect(sumRms, 'O0-2 sum output must be audible').toBeGreaterThan(
-        harness.goldens.sumOutput.audibleFloorRms,
+        OUTPUT_LINE_GOLDENS.sumOutput.audibleFloorRms,
       )
       expect(
-        relativeDelta(sumRms, harness.goldens.sumOutput.rms),
-        `O0-2 sum RMS must stay at ${harness.goldens.sumOutput.rms}; actual=${sumRms}`,
-      ).toBeLessThanOrEqual(harness.goldens.sumOutput.tolerance)
-      await harness.expectNoNewErrors(harness.session.client, errorsBefore, '#611 O0-2')
+        relativeDelta(sumRms, OUTPUT_LINE_GOLDENS.sumOutput.rms),
+        `O0-2 sum RMS must stay at ${OUTPUT_LINE_GOLDENS.sumOutput.rms}; actual=${sumRms}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.sumOutput.tolerance)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 O0-2')
     },
     TEST_TIMEOUT_MS,
   )
@@ -4677,10 +4664,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   it.skipIf(!appAvailable)(
     "#611 O0-3 pins today's measured aux/dry ratio for send(0.3)",
     async () => {
-      const harness = await requireOutputLineHarness()
-      const errorsBefore = await harness.errorBaseline(harness.session.client)
-      const result = await harness.runScore(
-        harness.session,
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
         {
           slug: '611-o0-linear-send',
           fixturePath: 'tests/fixtures/mcp-e2e/output_line_send.orbs',
@@ -4703,22 +4690,22 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         JSON.stringify({ dryRms, auxRms, totalRms, auxOverDry: auxRms / dryRms }),
       )
       expect(dryRms, 'O0-3 dry path must be audible').toBeGreaterThan(
-        harness.goldens.send.audibleFloorRms,
+        OUTPUT_LINE_GOLDENS.send.audibleFloorRms,
       )
       expect(auxRms, 'O0-3 aux path must contribute audible signal').toBeGreaterThan(
-        harness.goldens.send.audibleFloorRms,
+        OUTPUT_LINE_GOLDENS.send.audibleFloorRms,
       )
       expect(
-        relativeDelta(dryRms, harness.goldens.send.dryRms),
-        `O0-3 dry RMS must match ${harness.goldens.send.dryRms}; actual=${dryRms}`,
-      ).toBeLessThanOrEqual(harness.goldens.send.tolerance)
+        relativeDelta(dryRms, OUTPUT_LINE_GOLDENS.send.dryRms),
+        `O0-3 dry RMS must match ${OUTPUT_LINE_GOLDENS.send.dryRms}; actual=${dryRms}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.send.tolerance)
       // 🔴 「aux = 0.3 × dry」は実機と合わなかったので assert しない（goldens の注記）。
       //    測った比をそのまま固定し、PR-O4 は係数の変化分だけ動かす。
       expect(
-        relativeDelta(auxRms / dryRms, harness.goldens.send.measuredAuxOverDry),
-        `O0-3 aux/dry must stay at ${harness.goldens.send.measuredAuxOverDry}; actual=${auxRms / dryRms}`,
-      ).toBeLessThanOrEqual(harness.goldens.send.tolerance)
-      await harness.expectNoNewErrors(harness.session.client, errorsBefore, '#611 O0-3')
+        relativeDelta(auxRms / dryRms, OUTPUT_LINE_GOLDENS.send.measuredAuxOverDry),
+        `O0-3 aux/dry must stay at ${OUTPUT_LINE_GOLDENS.send.measuredAuxOverDry}; actual=${auxRms / dryRms}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.send.tolerance)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 O0-3')
     },
     TEST_TIMEOUT_MS,
   )
@@ -4726,10 +4713,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   it.skipIf(!appAvailable)(
     "#611 O0-4 pins the magnitude of today's effect([...]).gain(-6) (a linear rack cannot show order)",
     async () => {
-      const harness = await requireOutputLineHarness()
-      const errorsBefore = await harness.errorBaseline(harness.session.client)
-      const result = await harness.runScore(
-        harness.session,
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
         {
           slug: '611-o0-sequence-gain-effect',
           fixturePath: 'tests/fixtures/mcp-e2e/output_line_gain_effect.orbs',
@@ -4762,27 +4749,30 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         }),
       )
       expect(dryRms, 'O0-4 dry path must be audible').toBeGreaterThan(
-        harness.goldens.sequenceGainWithEffect.audibleFloorRms,
+        OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.audibleFloorRms,
       )
       expect(effectOnlyRms, 'O0-4 rack path must be audible').toBeGreaterThan(
-        harness.goldens.sequenceGainWithEffect.audibleFloorRms,
+        OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.audibleFloorRms,
       )
       expect(
-        relativeDelta(dryRms, harness.goldens.sequenceGainWithEffect.dryRms),
-        `O0-4 dry RMS must match ${harness.goldens.sequenceGainWithEffect.dryRms}; actual=${dryRms}`,
-      ).toBeLessThanOrEqual(harness.goldens.sequenceGainWithEffect.tolerance)
+        relativeDelta(dryRms, OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.dryRms),
+        `O0-4 dry RMS must match ${OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.dryRms}; actual=${dryRms}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.tolerance)
       expect(
-        relativeDelta(effectOnlyOverDry, harness.goldens.sequenceGainWithEffect.effectOnlyOverDry),
-        `O0-4 effect-only/dry must match ${harness.goldens.sequenceGainWithEffect.effectOnlyOverDry}; actual=${effectOnlyOverDry}`,
-      ).toBeLessThanOrEqual(harness.goldens.sequenceGainWithEffect.tolerance)
+        relativeDelta(
+          effectOnlyOverDry,
+          OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.effectOnlyOverDry,
+        ),
+        `O0-4 effect-only/dry must match ${OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.effectOnlyOverDry}; actual=${effectOnlyOverDry}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.tolerance)
       expect(
         relativeDelta(
           combinedOverDry,
-          harness.goldens.sequenceGainWithEffect.legacyCombinedOverDry,
+          OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.legacyCombinedOverDry,
         ),
-        `O0-4 legacy combined/dry must match ${harness.goldens.sequenceGainWithEffect.legacyCombinedOverDry}; actual=${combinedOverDry}`,
-      ).toBeLessThanOrEqual(harness.goldens.sequenceGainWithEffect.tolerance)
-      await harness.expectNoNewErrors(harness.session.client, errorsBefore, '#611 O0-4')
+        `O0-4 legacy combined/dry must match ${OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.legacyCombinedOverDry}; actual=${combinedOverDry}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.tolerance)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 O0-4')
     },
     TEST_TIMEOUT_MS,
   )

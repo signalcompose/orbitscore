@@ -29,6 +29,12 @@ const EXACT_TOLERANCE = 1e-6
 /** 音が出ていることの下限（無音ハーネスを緑にしないためのガード・#528）。 */
 const AUDIBLE_FLOOR_RMS = 0.01
 
+/** 譜面 3 の `send(aux, 0.3)` に書いてある係数。 */
+const SEND_AMOUNT_AS_WRITTEN = 0.3
+
+/** 譜面 3 の実測 `(total - dry) / dry`（2026-09-04）。後継の式もこの 1 つから導く。 */
+const MEASURED_AUX_OVER_DRY = 0.6783737720154158
+
 export const OUTPUT_LINE_GOLDENS = {
   /**
    * 譜面 1: バス無し（`kick_loop.orbs`）。PR-O2 の変更 1 / 2 / 6 が通っても動いてはいけない。
@@ -70,13 +76,17 @@ export const OUTPUT_LINE_GOLDENS = {
    * この形なら、比の絶対値がどうであれ PR-O4 の差分は式で検証できる。
    */
   send: {
-    amountAsWritten: 0.3,
     /** 2026-09-04 実機。 */
     dryRms: 0.0648583690575014,
     /** 2026-09-04 実機。`(total - dry) / dry`。 */
-    measuredAuxOverDry: 0.6783737720154158,
-    /** PR-O4: 係数が線形 0.3 → `10^(0.3/20)` に変わる分だけ動く。 */
-    dbAuxOverDry: 0.6783737720154158 * (dbToLinear(0.3) / 0.3),
+    measuredAuxOverDry: MEASURED_AUX_OVER_DRY,
+    /**
+     * PR-O4 の期待値: 係数が線形 `0.3` → `10^(0.3/20)` に変わる分だけ動く。
+     * ⚠️ **今はどのテストも読んでいない**（PR-O4 が最初の消費者）。実測から式で導いているので
+     * `measuredAuxOverDry` が更新されれば追随する — 独立した数を置いていない。
+     */
+    dbAuxOverDry:
+      MEASURED_AUX_OVER_DRY * (dbToLinear(SEND_AMOUNT_AS_WRITTEN) / SEND_AMOUNT_AS_WRITTEN),
     tolerance: 0.15,
     audibleFloorRms: AUDIBLE_FLOOR_RMS,
   },
@@ -103,9 +113,6 @@ export const OUTPUT_LINE_GOLDENS = {
    * **aux タップ**で判定する）が担う。タップ位置が違えば線形ラックでも分離できる。E2E-6 は PR-O4。
    */
   sequenceGainWithEffect: {
-    gainDb: -6,
-    gainLinear: dbToLinear(-6),
-    effectGainDb: 6,
     /** 2026-09-04 実機。 */
     dryRms: 0.05295663658915745,
     /** 2026-09-04 実機。ラックのみ（seq gain なし）/ dry。 */
@@ -139,7 +146,6 @@ export const OUTPUT_LINE_GOLDENS = {
    * （`docs/design/649-audio-line-design.md` §13）で行う。
    */
   globalGainInstrument: {
-    gainDb: -6,
     /** 2026-09-04 実機で観測した「今日の」比の幅（減衰が掛かっていない状態）。 */
     legacyHalfOverUnityRange: [1.2, 1.4] as const,
     /** PR-O2 後の受け入れ: half/unity が `10^(-6/20)`。 */

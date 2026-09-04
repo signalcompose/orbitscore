@@ -65,6 +65,17 @@ export function logAnchor(log: string): string {
   return log.slice(-LOG_ANCHOR_CHARS)
 }
 
+/**
+ * 相対差（`|actual - expected| / |expected|`）。capture の窓 RMS を golden と突き合わせる時の唯一の正本。
+ *
+ * 🔴 gated spec には同名のローカル定義が **3 つ**あり、しかも**式が食い違っていた**
+ * （2 つは分母が `expected`、1 つは `Math.abs(expected)`）。今の期待値はすべて正なので
+ * 挙動は同じだが、**同じ名前で違う式**が並ぶのは、許容の計算を直す時に片方だけ直る形である。
+ */
+export function relativeDelta(actual: number, expected: number): number {
+  return Math.abs(actual - expected) / Math.abs(expected)
+}
+
 export interface ScoreSource {
   /** 一時ファイル名の元。capture / work copy の basename に使う。 */
   readonly slug: string
