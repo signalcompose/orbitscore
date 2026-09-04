@@ -1,8 +1,8 @@
 ---
 title: "IV-2. インライン実行とフィードバック"
 chapter-id: "IV-2"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: ef140b1
+verified-at: "2026-09-04"
 status: draft
 ---
 
@@ -633,7 +633,25 @@ export const GLOBAL_ONCE_METHODS = new Set([
 
 ### 6-8. LinkAudio strict mode の編集時カウンターパート
 
-DSL 仕様 §8.1.2 の「LinkAudio ファイルでは発音 sequence すべてが `.output()` を宣言する。hardware と LinkAudio は 1 ファイル内で混在できない」という契約は、runtime では `Sequence.resolveDispatchChannel()` の throw として現れます。診断 6-8 はその編集時カウンターパートです。7 と 8 が **Error** なのは、runtime で必ず throw するからです。7 は `.midi()` / `.instrument()` を持つ sequence を対象外にしていて、コメントが decision #14 (MIDI と SC オーディオは併走可) を引いています。
+DSL 仕様 §8.1.2 の「LinkAudio ファイルでは発音 sequence すべてが `.output()` を宣言する。hardware と LinkAudio は 1 ファイル内で混在できない」という契約は、runtime では `Sequence.resolveDispatchChannel()` が返す dispatch 先として現れます。診断 6-8 はその編集時カウンターパートです。7 は `.midi()` / `.instrument()` を持つ sequence を対象外にしていて、コメントが decision #14 (MIDI と SC オーディオは併走可) を引いています。
+
+runtime 側の扱いは #645 (PR-D0) で変わりました。以前は `.output()` の無い発音 sequence に対して `resolveDispatchChannel()` が例外を投げていたのですが、**このメソッドは演奏中の schedule 経路からも呼ばれます** — loop timer が小節ごとに叩く `scheduleEventsFromTime()` や、演奏中の `.gain()` が通る `seamlessParameterUpdate()` がそれです。そこで throw すると await 連鎖が切れて、**同じ評価ブロックに書いた他の sequence まで巻き添えで止まります**。ライブコーディング中に kick が止まる、という壊れ方です。
+
+そこで戻り値を tagged union にして、throw をやめました。以下が新しい契約の型です。
+
+```typescript
+// packages/engine/src/core/sequence.ts:103-106
+export type DispatchTarget =
+  | { readonly kind: 'hardware' } // LinkAudio off (or a MIDI sequence, which is exempt) — the pre-#645 `undefined`
+  | { readonly kind: 'link'; readonly channel: string } // LinkAudio on + `.output()` set
+  | { readonly kind: 'skip'; readonly reason: string } // LinkAudio on + `.output()` unset → silent skip (design 610 §0 裁定 6)
+```
+
+面白いのは `undefined` を意図的に union から外している点です。変更前の signature は `string | undefined` で、`undefined` が「hardware バスへ流す」を意味していました。もし throw を素朴に `catch { return undefined }` へ書き換えていたら、エラー経路が**黙って hardware へ音を流す**ことになります。`hardware` と `skip` を別の variant にしておくと、その取り違えは型検査を通りません。
+
+スキップは黙って消えるわけではなく、`logSkipOnce()` が `[ERROR] Sequence '<name>': … このシーケンスは無音でスキップします。` を出します。ループしている sequence は小節ごとに dispatch 先を解決し直すので、同じ理由のログは 1 回だけに dedup されます (`_dispatchSkipLoggedFor` が直前の reason を持ち、`.output()` が channel を設定したときにリセットされます)。
+
+診断 7 と 8 が **Error** 相当のままなのは、runtime が throw するからではなく、**LinkAudio セッションでその sequence が鳴らないから**です。編集時に気づけないと、無音の理由をログから探すことになります。
 
 ### 9. 未知の plugin 名 (Warning)
 
@@ -721,6 +739,7 @@ flowchart TD
 | 送信失敗時はフラッシュしない | — | `extension.ts:2873-2875` のコメント |
 | `//#evalMark` による評価結果の相関 (MCP 専用) | #614 | `eval-mark-bridge.ts:1-23`、`extension.ts:3048-3077` / `:1501-1509` |
 | 未知 plugin 名の診断 (Warning) | #638 | §6.412 (2026-08-29)、`extension.ts:4095-4112` |
+| 診断 6-8 の runtime カウンターパートが throw から**無音スキップ + ログ**へ (`DispatchTarget` tagged union) | #645 | `sequence.ts:103-106` / `:1580-1587`（PR [#737](https://github.com/signalcompose/orbitscore/pull/737)） |
 
 ---
 

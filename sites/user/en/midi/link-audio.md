@@ -59,7 +59,9 @@ kick.audio("kick.wav").output("kick")      // received in Live as "kick"
 snare.audio("snare.wav").output("snare")   // received in Live as "snare"
 ```
 
-An audio sequence without `output()` causes a runtime error when `global.linkAudio()` is active (strict mode to prevent mixing).
+An audio sequence without `output()` is **skipped silently** while `global.linkAudio()` is active, and the reason is written to the log (strict mode to prevent mixing). It never falls back to hardware output on its own.
+
+This used to raise a runtime error. During live coding an exception would take down **every other sequence in the same evaluation block** as well, so it became a skip plus a log line instead (#645). The editor still reports a missing `output()` as an error diagnostic before evaluation.
 
 ### Summing to the Same Channel
 

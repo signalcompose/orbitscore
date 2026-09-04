@@ -1,8 +1,8 @@
 ---
 title: "IV-2. Inline Execution and Feedback"
 chapter-id: "IV-2"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: ef140b1
+verified-at: "2026-09-04"
 status: draft
 ---
 
@@ -633,7 +633,25 @@ The background of when this rule was introduced relates to "environment-independ
 
 ### 6-8. The Edit-Time Counterpart of LinkAudio Strict Mode
 
-The contract in DSL spec §8.1.2 — "in a LinkAudio file every sounding sequence declares `.output()`; hardware and LinkAudio cannot mix within one file" — shows up at runtime as a throw in `Sequence.resolveDispatchChannel()`. Diagnostics 6-8 are its edit-time counterpart. 7 and 8 are **Error** because the runtime always throws. 7 excludes sequences that have `.midi()` / `.instrument()`, and the comment cites decision #14 (MIDI and SC audio may run side by side).
+The contract in DSL spec §8.1.2 — "in a LinkAudio file every sounding sequence declares `.output()`; hardware and LinkAudio cannot mix within one file" — shows up at runtime as the dispatch target that `Sequence.resolveDispatchChannel()` returns. Diagnostics 6-8 are its edit-time counterpart. 7 excludes sequences that have `.midi()` / `.instrument()`, and the comment cites decision #14 (MIDI and SC audio may run side by side).
+
+The runtime side of this changed in #645 (PR-D0). It used to throw for a sounding sequence with no `.output()`, but **this method is also called from the playback scheduling path** — `scheduleEventsFromTime()`, which the loop timer drives once per bar, and `seamlessParameterUpdate()`, which a mid-loop `.gain()` goes through. A throw there breaks the awaited call chain, so **every other sequence written in the same evaluation block stops as well**. In practice that means the kick stops during a live-coding set.
+
+So the return value became a tagged union and the throw was removed. Here is the new contract:
+
+```typescript
+// packages/engine/src/core/sequence.ts:103-106
+export type DispatchTarget =
+  | { readonly kind: 'hardware' } // LinkAudio off (or a MIDI sequence, which is exempt) — the pre-#645 `undefined`
+  | { readonly kind: 'link'; readonly channel: string } // LinkAudio on + `.output()` set
+  | { readonly kind: 'skip'; readonly reason: string } // LinkAudio on + `.output()` unset → silent skip (design 610 §0 裁定 6)
+```
+
+What is interesting is that `undefined` is deliberately left out of this union. The previous signature was `string | undefined`, where `undefined` meant "route through the hardware bus." Had the throw been rewritten naively as `catch { return undefined }`, the error path would **silently send audio to hardware**. Keeping `hardware` and `skip` as distinct variants means that mix-up does not type-check.
+
+A skip does not vanish quietly either: `logSkipOnce()` prints `[ERROR] Sequence '<name>': … このシーケンスは無音でスキップします。`. A looping sequence re-resolves its dispatch target every bar, so the same reason is deduped to a single line (`_dispatchSkipLoggedFor` holds the previous reason and is reset when `.output()` sets a channel).
+
+Diagnostics 7 and 8 stay at **Error** severity, not because the runtime throws, but because **that sequence will not sound at all in a LinkAudio session**. Missing it at edit time means hunting for the reason for the silence in the log.
 
 ### 9. Unknown Plugin Name (Warning)
 
@@ -721,6 +739,7 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 | No flash when sending fails | — | the comment at `extension.ts:2873-2875` |
 | Correlating evaluation results via `//#evalMark` (MCP only) | #614 | `eval-mark-bridge.ts:1-23`, `extension.ts:3048-3077` / `:1501-1509` |
 | Unknown plugin name diagnostic (Warning) | #638 | §6.412 (2026-08-29), `extension.ts:4095-4112` |
+| The runtime counterpart of diagnostics 6-8 became a **silent skip plus a log line** instead of a throw (`DispatchTarget` tagged union) | #645 | `sequence.ts:103-106` / `:1580-1587` (PR [#737](https://github.com/signalcompose/orbitscore/pull/737)) |
 
 ---
 

@@ -17,6 +17,44 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #737's dispatch-skip contract into the specs and both sites (Sep 4, 2026)
+
+**追従元**: PR [#737](https://github.com/signalcompose/orbitscore/pull/737)（`645-contain-playback-throws` → main・マージコミット `ef140b1`）/ **ブランチ**: `claude/docs-sync-pr737`
+
+#737 は `Sequence.resolveDispatchChannel()` の **throw を撤去**し、戻り値を
+`DispatchTarget = { kind: 'hardware' } | { kind: 'link'; channel } | { kind: 'skip'; reason }`
+の tagged union にした（`sequence.ts:103-106`）。LinkAudio セッションで `.output()` を持たない
+発音 sequence は、**runtime error ではなく無音スキップ + `logSkipOnce()` のログ 1 行**になる。
+**この意味論の変更が 4 つの文書に追従していなかった。**
+
+#### 直したもの
+
+| 場所 | 追従した内容 |
+|---|---|
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §8.1.2 | 「`.play()` した時点で **runtime error** を投げる」を削除し、無音スキップ + dedup ログ + `DispatchTarget` の説明に置換。**hardware への silent fallback を行わない**点は不変 |
+| `docs/specs-v2/MULTICHANNEL_RENDERING_DESIGN_598.md` §4.4.1 | 「`resolveDispatchChannel()` が throw し、ライブ中に kick が**停止**する」→「skip 判定に落ち、**無音になる**」。非対称の理由（オフライン宣言が live routing を壊さない）は変わらない |
+| `sites/dev/editor/execution-feedback.md`（日英）§6-8 | 「runtime では throw として現れる」「7 と 8 が Error なのは runtime で必ず throw するから」を訂正。`DispatchTarget` の引用と、`undefined` を union から外した理由（`catch { return undefined }` が黙って hardware へ流す事故を型で潰す）を追加。drift 表に #645 行 |
+| `sites/user/midi/link-audio.md`（日英） | 「ランタイムエラーを発生させます」→「無音でスキップされ、理由がログに出ます」。巻き添え停止を避けるための変更である旨を 1 段落 |
+
+🔴 **ユーザーから見た壊れ方が変わった**: 以前は例外が出て気づけたが、いまは**音が出ないだけ**である。
+気づく手段はログ（`[ERROR] Sequence '<name>': … このシーケンスは無音でスキップします。`）と
+編集時診断 `analyzeLinkAudioMissingOutput` の 2 つになる。user site にその旨を書いた。
+
+#### 追従しなかったもの
+
+- `docs/design/610-diagnostics-applicability-design.md` — 起案時点のスナップショット（本 PR の設計正本そのもの）
+- `sites/user/reference/methods.md` の `output("name")` 行 — 「`global.linkAudio()` 宣言時**必須**」は今も正しい（要件は不変・違反時の挙動だけが変わった）
+
+#### 手順 3 の指摘（直さず PR 本文へ）
+
+- `tests/e2e/dsl-e2e-coverage.spec.ts:86-96` — `GLOBAL_UNCOVERED_BASELINE` から `linkAudio` が
+  削除されたが、gated sources 内の `.linkAudio(` は
+  `tests/e2e/orbitstudio-mcp-gated.spec.ts:4583` / `:4593` の **コメント 2 箇所だけ**である。
+  同 PR で gated E2E 本体（`it(...)`）は #736 へ切り出されて存在しない。ラチェットの走査は
+  ソース文字列 `/\.([a-zA-Z][a-zA-Z0-9]*)\s*\(/g` なのでコメントでも満たされる
+
+---
+
 ### docs(site): follow PR #727's output-line spec revision into the user site and SC-2 (Sep 4, 2026)
 
 **追従元**: PR [#727](https://github.com/signalcompose/orbitscore/pull/727)（`611-output-line-spec` → main・マージコミット `d8191d1`）/ **ブランチ**: `claude/docs-sync-pr727`
