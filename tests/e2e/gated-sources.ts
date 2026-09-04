@@ -71,21 +71,36 @@ export function readGatedSources(): string {
     .join('\n')
 }
 
+/**
+ * 読み込み結果のメモ化。
+ *
+ * 🔴 **同じ 220KB のソースを 1 テストファイルの中で 3 回読んでいた**（実測 2026-09-04）。
+ * `gatedItTitles()` は内部で全ソースを読み直すので、呼ぶたびに再読み込み + 4500 行に対する
+ * `matchAll` の再実行が起きる。`gated-assertion-hygiene.spec.ts` は既にモジュール先頭で
+ * 1 回だけ読んで保持しており、そちらが正しい形だった。
+ *
+ * ⚠️ **前提**: `GATED_SOURCE_FILES` は実行中に変わらない（モジュール読み込み時に確定する）。
+ * キャッシュはプロセス内なので、ファイルを足して**別プロセスで**回す分には効かない。
+ */
+let cachedEntries: readonly { readonly file: string; readonly source: string }[] | undefined
+
 /** 各ソースを「相対パス + 中身」で返す。行番号つきで報告したい検査はこちらを使う。 */
 export function readGatedSourceEntries(): readonly {
   readonly file: string
   readonly source: string
 }[] {
+  if (cachedEntries !== undefined) return cachedEntries
   if (GATED_SOURCE_FILES.length === 0) {
     throw new Error(
       'gated E2E のソースが 1 本も見つからない。' +
         'ラチェットと衛生検査が黙って無意味になるので、GATED_SOURCE_GLOBS を確認すること。',
     )
   }
-  return GATED_SOURCE_FILES.map((file) => ({
+  cachedEntries = GATED_SOURCE_FILES.map((file) => ({
     file: path.relative(E2E_DIR, file),
     source: fs.readFileSync(file, 'utf8'),
   }))
+  return cachedEntries
 }
 
 /**

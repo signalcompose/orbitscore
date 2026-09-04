@@ -1427,6 +1427,35 @@ ch別 RMS の平均  : 0.580297
 しか見ていない**。採用していれば**全件緑のまま通り、実際の音楽素材でだけ静かに壊れた**。
 per-channel を入れた動機（「mono に潰すと分離が測れない」）と同じ構図が、逆向きに出た形である。
 
+#### efficiency / altitude 班の指摘
+
+| 指摘 | 判断 |
+|---|---|
+| `readGatedSources()` / `gatedItTitles()` に**メモ化が無く、220KB のソースを読み直す** | ✅ **適用** |
+| `perChannel` + `windowMs` 併用時に**同じバッファを 3 回全走査** | 🔶 **follow-up**（下記） |
+| `windowsFor()` が区間ごとに filter する | ❌ 指摘に当たらず（高々 2200 要素の配列走査） |
+| `GATED_SOURCE_GLOBS` のファイル名決め打ち | ❌ **今のままでよい** — `gated/` を `.spec.ts` にしないのは**意図的**（vitest に発見させず、実 GUI の並列起動を避ける）。制約から導かれた形 |
+| 台帳が空で A-4 / A-5 が空振り | ❌ **設計どおり**（§3.5「台帳は空から開始する」）。箱を先に作り、中身は後続 PR |
+
+**メモ化の実測**（2026-09-04）: 対象は 220KB・4566 行の gated spec 1 本。
+`gated-sources.spec.ts` だけで**同じファイルを 3 回**、`dsl-e2e-coverage.spec.ts` で**2 回**読んでいた
+（`gatedItTitles()` が内部で `readGatedSources()` を呼ぶため）。合計 **+4 回の冗長読み込み**と、
+4566 行に対する `matchAll` の再実行。対照的に `gated-assertion-hygiene.spec.ts` は
+**モジュール先頭で 1 回だけ読んで保持**しており、そちらが正しい形だった。
+
+#### 🔶 follow-up: `wav-analysis.ts` の窓ループが 3 箇所に手書き
+
+`analyzeWavBuffer` 本体の窓ループ / `windowSeries` / `channelSeries` が同型で、
+`MIN_WINDOW_MS` / `MAX_WINDOW_SERIES` の cap チェックまで一字一句同じ。
+`{ windowMs, perChannel }` 併用時は**同じバッファを 3 回全走査**する
+（44 秒・48kHz・ステレオで `readFloatLE` が約 1267 万回 = 最小構成の 3 倍）。
+
+🔴 **ただし「per-channel から mono を導出する」形では直せない**（上記のとおり数値が変わる）。
+正しい形は**窓イテレーション自体を共有関数にし、1 パスで mono と per-channel の
+アキュムレータを同時に更新する**こと。**この束では直さない** — 既存 20 本の capture 値を
+変えないことが最優先で、いま `run-score` に消費者がいないため実害もゼロ。
+**次に窓ロジックを触る時の踏み台**として記録する。
+
 #### 🔶 follow-up: `startR28Engine` の重複
 
 `run-score.ts:989-1044` が gated spec の `startR28Engine` / `waitForEngine`（`:406-466`）を

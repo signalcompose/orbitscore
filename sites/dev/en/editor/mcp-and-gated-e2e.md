@@ -728,22 +728,24 @@ The entry point `orbitstudio-mcp-gated.spec.ts` is the only spec vitest discover
 One more thing is settled here: what happens when the list comes out empty.
 
 ```typescript
-// tests/e2e/gated-sources.ts:74-89
+// tests/e2e/gated-sources.ts:87-104
 /** 各ソースを「相対パス + 中身」で返す。行番号つきで報告したい検査はこちらを使う。 */
 export function readGatedSourceEntries(): readonly {
   readonly file: string
   readonly source: string
 }[] {
+  if (cachedEntries !== undefined) return cachedEntries
   if (GATED_SOURCE_FILES.length === 0) {
     throw new Error(
       'gated E2E のソースが 1 本も見つからない。' +
         'ラチェットと衛生検査が黙って無意味になるので、GATED_SOURCE_GLOBS を確認すること。',
     )
   }
-  return GATED_SOURCE_FILES.map((file) => ({
+  cachedEntries = GATED_SOURCE_FILES.map((file) => ({
     file: path.relative(E2E_DIR, file),
     source: fs.readFileSync(file, 'utf8'),
   }))
+  return cachedEntries
 }
 ```
 
