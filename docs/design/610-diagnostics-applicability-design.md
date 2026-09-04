@@ -452,7 +452,7 @@ owner:「既に実装されているならそれを使ってよい。キーと�
 | 穴 | 根拠 | 直し方 |
 |---|---|---|
 | (i) 同名の seq と sum/aux が併存すると `drum.effect(X)` が黙ってシーケンス側 | `process-statement.ts:69-86` の順（globals > sequences > mixer nodes） | **文字列形の宣言側で塞ぐ**: `global.sum(name)` / `aux(name)` が同名 seq/global を見つけたら throw。node-decl 形（`runtime.ts:196-206`）が**既にやっている**ことを文字列形にも入れるだけで、非対称が消える。文言は `global.ts:919-927` に揃える |
-| (ii) `seq.output("drum")` で `drum` が aux のみ宣言済みだと LinkAudio 名として解釈され、無関係な warn | `sequence.ts:354-374` が `resolveSumBus` しか見ない → `:425-430` の「without 'global.linkAudio()'」warn | `resolveMixerBus`（`global.ts:502-504`・kind 込み）へ変える。aux ヒット時は「aux は `send()` の宛先。`output()` は sum を指す」と**実状に即した**エラー |
+| (ii) `seq.output("drum")` で `drum` が aux のみ宣言済みだと LinkAudio 名として解釈され、無関係な warn | `sequence.ts:354-374` が `resolveSumBus` しか見ない → `:425-430` の「without 'global.linkAudio()'」warn | `resolveMixerBus`（`global.ts:502-504`・kind 込み）へ変える。🔴 **aux ヒットはエラーにしない** — 後述の改訂を参照 |
 
 (i) は**破壊的になり得る**（今日 `global.sum("kick")` と `var kick = init global.seq` が同居する譜面は
 throw するようになる）。ただし **その譜面は今日すでに壊れている**（`drum.effect` がバスへ行かない）ので、
@@ -460,7 +460,14 @@ throw するようになる）。ただし **その譜面は今日すでに壊�
 
 (ii) は表の行にならない（**引数の値**に依存する診断）。`analyzeSource` は
 `global.sum("…")` / `global.aux("…")` / `mix.sum` / `mix.aux` の宣言を集めるので、
-**静的にも判定できる** — `output(<aux 名>)` は `code: 'routing/output-targets-aux'` の Error。
+**静的にも判定できる**。
+
+> 🔴 **2026-09-04 改訂（#611 / PR-O1・owner 裁定 ③）**: 起案時は
+> 「`output(<aux 名>)` は `code: 'routing/output-targets-aux'` の Error」と書いていたが、
+> **これは失効した**。新しい規範 MX.2.1 では **aux も `output` で指せる**（`output` と `send` の
+> 違いは宛先の種類ではなく `thru:` である — `send` は `output(aux, thru: true, db:)` の糖衣）。
+> したがって (ii) の直しは「**aux を LinkAudio 名と誤読しない**」までで、
+> **aux 宛て `output` 自体は正当**である。`routing/output-targets-aux` という診断コードは作らない。
 
 ### 7.4 #609 — スタック全体 `@v`
 
@@ -608,7 +615,7 @@ $ grep -n "isMidi()\|isInstrument()\|isNoteSequence()" packages/engine/src/core/
 | **E2E-D3**（#644 warn） | `kick.audio("…").hold().voicelead().octave(2)` の fixture → `open_file` → `get_diagnostics` | `severity === 'warning'` が 3 件以上・`message` に `hold` / `voicelead` / `octave` が現れる。**同じファイルを `run_selection` して音が出る**（capture RMS > 0）= 裁定 2「実行時の挙動は変わらない」の証明 |
 | **E2E-D4**（#644 error / midi） | `melody.midi("…", 1).send("verb", -6)` | `severity === 'error'` が 1 件。`run_selection` すると `get_log` に `[ERROR]` が現れる（表の `runtime:'throws'` と一致） |
 | **E2E-D5**（#665 A） | `gong.audio("…").chop(1).play(1, _, 0, 0)` を録り、続けて `play(1, 0, 0, 0)` を録る | tie の Warning が 1 件。**2 つの capture の窓 RMS 列が一致**（`_` が休符と同義であることの数値証明・§3.3 最終行の `sliceNumber: 0` 経路） |
-| **E2E-D6**（#583 (ii)） | `global.aux("verb")` + `kick.output("verb")` | `severity === 'error'`（`output` は sum を指す）。`run_selection` の `get_log` に **LinkAudio の warn が出ない** |
+| **E2E-D6**（#583 (ii)・🔴 **2026-09-04 に期待値を反転**） | `global.aux("verb")` + `kick.output("verb")` | **診断は出ない**（MX.2.1 で aux 宛て `output` は正当・owner 裁定 ③）。`run_selection` の `get_log` に **LinkAudio の warn が出ない**ことだけを見る（誤読していないことの証明）。旧版は `severity === 'error'` を期待していたが、**仕様と逆のテストになるため撤回**した |
 | **E2E-645-A**（#645 受け入れ） | `global.linkAudio()` + `.output()` 無しの `kick` を `run_selection` で LOOP → **その後**別の選択で `snare` を LOOP | capture WAV の窓 RMS で **snare が鳴っている**（> 0）。`get_log` に `無音でスキップ` を含む行が **1 件以上**。ERROR 総数は `<=` |
 | **E2E-645-B**（#645 経路 2・§5.2） | 645-A の状態で `kick.gain(-6)` だけを `run_selection` | 続く `evaluate_orbitscore('snare.gain(-3)')` の `diagnostics` に kick 由来の文言が**含まれない**、かつ capture RMS で snare の音量が変わる（= 評価ブロックが落ちていない） |
 | **E2E-620-A**（#620 再現・🔴 まずこれ） | `run_selection` で構文エラーを出す → 続けて `evaluate_orbitscore('global.tempo(120)')` | **再現テスト**: `result.diagnostics` に前の選択のエラー文言が含まれたら #620 は実在。修正後は含まれない |

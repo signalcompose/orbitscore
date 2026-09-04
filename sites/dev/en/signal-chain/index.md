@@ -52,14 +52,20 @@ SC.1 splits DSL statements into a **declaration layer** (commutative, last-write
 
 | Layer | Belongs here | Meaning of order |
 |----|----|----|
-| **Declaration layer** | audio / chop / play / gain / pan / output-node names / instrument-role plugin calls / mixer declarations | **Commutative**. Re-declaring the same item is last-write-wins |
-| **Signal layer** | effect-role plugin calls / sends | **Only the relative order within this layer** becomes the connection order |
+| **Declaration layer** | audio / chop / play / instrument-role plugin calls / mixer declarations | **Commutative**. Re-declaring the same item is last-write-wins |
+| **Signal layer** | effect-role plugin calls / **gain** / **pan** / **sends** / **destinations (`output`)** | **Only the relative order within this layer** becomes the connection order |
 
-A rack is a way to write the contents of the signal layer as one value. The element order of
-the array is the connection order, and a single `effect()` declaration carries the **complete
-image of the chain**. As SC.1 norm (2) states, the topology is fixed as **pattern (play) →
-instrument → effect sequence → destination**, and the only thing the user controls by ordering
-is the contents of the effect sequence. Racks cover exactly that part.
+🔴 **gain, pan and destinations are signal-layer elements** (revised 2026-09-04, #611). This
+table used to place all three in the declaration layer. Once sound exists, **where you write an
+element is where it sits in the signal**. So there is no fixed "fader" stage: write `gain`
+before an effect and it is the level going into that effect; write it after and it is the level
+coming out.
+
+A rack is a way to write part of the signal layer as one value. The element order of the array
+is the connection order, and a single `effect()` declaration carries the **complete image of
+the chain**. The topology is **pattern (play) → instrument → line (effects, gain, pan, sends
+and outputs in written order)**, and what the user controls by ordering is the **whole line**.
+A rack bundles part of it under a name.
 
 ## The DSL shape (SC.10.1 / SC.10.3b / SC.10.4)
 
@@ -1449,7 +1455,7 @@ rack on the gated side is below; it runs the SC.10.4 shape — a `var` binding f
 `effect(variable)` — on real hardware as is.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4073-4080
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4076-4083
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
