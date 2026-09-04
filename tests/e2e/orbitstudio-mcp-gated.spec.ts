@@ -315,11 +315,19 @@ function processExists(pid: number): boolean {
   }
 }
 
-/** Resolve only daemons launched from the binary this worktree would package. */
+/**
+ * Find daemon processes without assuming which checkout supplied the binary.
+ *
+ * SAFETY: keep both executable-name boundaries. A broad `daemon` / `audio`
+ * pattern could include unrelated user processes. K3 never signals this whole
+ * list: it snapshots the list before starting its engine and may signal only
+ * the single PID added by that successful start.
+ */
 function orbitAudioDaemonPids(): number[] {
-  const binary = resolveDaemonBinaryPath().path
   try {
-    return execFileSync('pgrep', ['-f', binary], { encoding: 'utf8' })
+    return execFileSync('pgrep', ['-f', '(^|/)orbit-audio-daemon([[:space:]]|$)'], {
+      encoding: 'utf8',
+    })
       .trim()
       .split(/\s+/)
       .filter(Boolean)
@@ -4871,8 +4879,19 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   // ──────────────────────────────────────────────────────────────────
-  // #606 PR-K-A2 — plugin all-notes-off (T1 / T2 / E2E-K3)
+  // #606 PR-K-A2 — plugin all-notes-off (T1 / E2E-K3)
   // ──────────────────────────────────────────────────────────────────
+
+  // There is deliberately no standalone T2 `stop_engine` audio/log assertion.
+  // `stop_engine` terminates the daemon that writes the capture, so even a healthy
+  // run ends with the still-sounding window and cannot record a silent tail. The
+  // daemon's tracing output is relayed by the engine, which is already dead when
+  // disconnect cleanup runs, so absence of a `released=` line cannot prove an
+  // empty ledger either. Restarting into a fresh daemon/plugin process would be
+  // silent regardless of whether the old process released its notes and is also
+  // non-discriminating. T1 covers the observable engine-side release path; E2E-K3
+  // keeps the old daemon alive after engine SIGKILL and directly observes its
+  // disconnect fallback as a sounding-to-silent capture transition.
 
   const pluginNoteScore = (receiver: string, instrumentName: string, run: 'RUN' | 'LOOP') => [
     'var global = init GLOBAL',
@@ -4913,41 +4932,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
-    '#606 T2 stop_engine leaves a silent capture tail without RPC release logging',
-    async () => {
-      const session = requireOutputLineSession()
-      const capturePath = session.captureWavPath('606-stop-engine-note-off')
-      await startEngineForRun(session.client, '#606 T2', capturePath)
-      await session.client.call('evaluate_orbitscore', {
-        code: pluginNoteScore('stop606', session.catalog.clapSynthName, 'LOOP').join('\n'),
-      })
-      await sleep(3500)
-      const logBefore = (await session.client.call('get_log', { lines: 500 })).text
-      const anchor = logAnchor(logBefore)
-
-      const stopped = await session.client.call('stop_engine')
-      expect(stopped.isError, stopped.text).toBe(false)
-      await waitForEngineState(session.client, false, 15_000, '#606 T2 engine stopped')
-      await sleep(1000)
-
-      const logAfter = (await session.client.call('get_log', { lines: 500 })).text
-      expect(logAppendedSince(anchor, logAfter)).not.toContain('plugin all-notes-off: released=')
-      const analysis = analyzeWavBuffer(fs.readFileSync(capturePath), { windowMs: 20 })
-      expect(
-        Math.max(...(analysis.windows ?? []).map((window) => window.rms)),
-        'T2 must prove the LOOP instrument sounded before stop_engine',
-      ).toBeGreaterThan(0.01)
-      expect(analysisTailRms(analysis, 0.2)).toBeLessThan(0.01)
-    },
-    TEST_TIMEOUT_MS,
-  )
-
-  it.skipIf(!appAvailable)(
     '#606 E2E-K3 releases notes when SIGKILL disconnects engine but daemon survives',
     async () => {
       const session = requireOutputLineSession()
       const capturePath = session.captureWavPath('606-engine-sigkill-note-off')
       let daemonPid: number | undefined
+      const daemonPidsBeforeStart = new Set(orbitAudioDaemonPids())
       try {
         await startEngineForRun(session.client, '#606 E2E-K3', capturePath)
         await session.client.call('evaluate_orbitscore', {
@@ -4955,13 +4945,21 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         })
         await sleep(3500)
 
-        const daemonPids = orbitAudioDaemonPids()
-        expect(daemonPids, 'E2E-K3 requires exactly one worktree daemon').toHaveLength(1)
-        daemonPid = daemonPids[0]
+        const startedDaemonPids = orbitAudioDaemonPids().filter(
+          (pid) => !daemonPidsBeforeStart.has(pid),
+        )
+        expect(
+          startedDaemonPids,
+          'E2E-K3 requires exactly one daemon added by its own engine start',
+        ).toHaveLength(1)
+        daemonPid = startedDaemonPids[0]
         const enginePid = parentPid(daemonPid!)
         expect(processCommand(enginePid)).toContain('cli-audio.js')
 
-        // SAFETY: kill only the parent PID proven above to be the OrbitScore cli-audio engine.
+        // SAFETY: the PID delta excludes every daemon that existed before this test's
+        // start. If a concurrent start makes the delta ambiguous, the length assertion
+        // fails before this signal. Kill only the parent proven to be this daemon's
+        // OrbitScore cli-audio engine.
         process.kill(enginePid, 'SIGKILL')
         await waitForEngineState(session.client, false, 15_000, '#606 E2E-K3 engine SIGKILL')
         await sleep(1000)
