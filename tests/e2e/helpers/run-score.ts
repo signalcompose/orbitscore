@@ -81,7 +81,13 @@ function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): num
   return Math.sqrt(windows.reduce((sum, w) => sum + w.rms * w.rms, 0) / windows.length)
 }
 
-async function waitForEngineState(
+// #645 PR-D0 (post-hoc fix): exported so a caller that needs staged run_selection
+// calls at specific line ranges — not the whole-file-at-once flow `runScore()`
+// provides — can still get the SAME hardened engine-(re)start (guaranteed clean
+// process for `capture_wav`, retry-once on the known daemon-ready timeout, and a
+// "🎵 Live coding mode" marker wait instead of a bare `get_engine_state.running`
+// check) without duplicating it.
+export async function waitForEngineState(
   client: McpClient,
   running: boolean,
   timeoutMs: number,
@@ -101,7 +107,7 @@ async function waitForEngineState(
  * `capture_wav` は spawn 専用オプションなので弾かれる — capture を要求する時は必ず
  * 一度落としてから起動する（#643 の教訓）。
  */
-async function startEngineForRun(
+export async function startEngineForRun(
   client: McpClient,
   label: string,
   captureWav: string | undefined,

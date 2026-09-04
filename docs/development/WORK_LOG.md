@@ -53,6 +53,30 @@ owner 指示（2026-08-29）: 「ライブコーディングなのでエラー�
 
 `npm test`（2199 passed / 49 skipped）・`npm run typecheck:e2e`・`npm run lint`・`npm run build`・`sites/dev` の `check-citations.mjs --fix`（`sequence.ts`/`event-scheduler.ts`/`loop-sequence.ts`/`dsl-e2e-coverage.spec.ts` の行番号シフトで 26 件の引用が機械的にずれたため再アンカーのみ実施・本文の書き換えなし）はすべて green。
 
+#### 追記（実機 gated E2E が落ちた・main 実測 2026-09-04・修正済み）
+
+main の実機実行で E2E-645 が `timed out waiting for #645 dispatch-skip log line` で failed
+（他 10 件は baseline と同一の pre-existing 失敗で無関係）。**実装本体は問題なし**、テスト
+ハーネスの前提検証不足が原因:
+
+- `run_selection`（`evaluate_orbitscore` と違い）は評価完了を待たず、`isError` は
+  「アクティブなエディタが無い」等の**機械的失敗**しか捉えない — 提出コードの実行時 throw
+  （`global.linkAudio()` の v1 相互排他 throw 等・`global.ts:411-422`）は `get_log` にしか
+  出ない。既存の `expect(run.isError).toBe(false)` はこの throw を素通りさせていた
+- 修正: `global.linkAudio()` を単独の `run_selection` に分離し、直後に `get_log` で throw
+  文言の有無を明示チェック（見つかれば「①linkAudio 自体が失敗」と名指しして即座に fail）。
+  最終の skip ログ待ち `waitUntil` も try/catch で包み、タイムアウト時に「①は否定済みなので
+  ②skip が起きなかった/③ログが窓外に流れた」の切り分けと `get_log` 末尾をエラーに含める
+- `tests/e2e/helpers/run-score.ts` の `startEngineForRun`/`waitForEngineState`（`runScore()`
+  が内部で使っていた既存の堅牢な起動処理）を export し、engine の (再) 起動をそちらへ委譲
+  （`capture_wav` 要求時は必ず stop_engine→wait-false→start_engine、daemon ready timeout の
+  retry-once、`🎵 Live coding mode` マーカー確認まで待つ — 単なる `get_engine_state.running`
+  より確実）
+
+検証（再実施）: `npm test`（2199 passed / 49 skipped・変化なし）・`typecheck:e2e`・`lint`・
+`build`・`check-citations.mjs`（import 追加による行番号シフトで 46 件が再びずれたため
+`--fix` で再アンカー）すべて green。実機 gated E2E は未実施（main が別途実施）。
+
 ---
 
 ### docs(design): 詳細設計 11 本と実装プラン 2026-09 を起草 (Sep 3, 2026)

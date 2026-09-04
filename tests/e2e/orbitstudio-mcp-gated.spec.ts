@@ -57,6 +57,7 @@ import { countErrors, countLogMarker } from './helpers/engine-log'
 import { captureWavPath, type GatedCatalog } from './helpers/gated-session'
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
 import { rackChildPidsFromLog } from './helpers/rack-child-pid'
+import { startEngineForRun, waitForEngineState } from './helpers/run-score'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
@@ -4603,6 +4604,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const readLog = async (): Promise<string> =>
         (await activeClient.call('get_log', { lines: 500 })).text
 
+      // #645 PR-D0 (post-hoc fix, coordinator-diagnosed 2026-09-04): the throw
+      // `global.linkAudio()` guards against (`global.ts:411-422`, "cannot be used after
+      // plugin hosting has been declared in v1" — the v1 mutual-exclusion rule) is a
+      // DIFFERENT failure from the one this test exists to exercise: if `linkAudio()`
+      // itself fails, LinkAudio strict mode never actually turns on, so `d645Skip`
+      // resolves to `hardware` (not `skip`) and the "無音でスキップ" log NEVER fires —
+      // the test would then time out with no way to tell "linkAudio() failed" from
+      // "the skip genuinely didn't happen" apart. This marker lets the test say which.
+      const LINK_AUDIO_MIXER_CONFLICT_MARKER =
+        'cannot be used after plugin hosting has been declared'
+
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -4626,13 +4638,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // 1-based line numbers derived from the script so a future edit cannot silently
       // desynchronize the run_selection ranges below (same discipline as the sum-bus
       // restart test above).
+      const linkAudioLine = dslLines.indexOf('global.linkAudio()') + 1
       const setupEndLine = dslLines.indexOf('global.start()') + 1
       const loopSkipLine = dslLines.indexOf('LOOP(d645Skip)') + 1
       const loopLiveLine = dslLines.indexOf('LOOP(d645Live)') + 1
       const midLoopGainLine = dslLines.indexOf('d645Skip.gain(-6)') + 1
       const stopStartLine = dslLines.indexOf('d645Skip.stop()') + 1
       const stopEndLine = dslLines.indexOf('global.stop()') + 1
-      expect(setupEndLine).toBeGreaterThan(0)
+      expect(linkAudioLine).toBeGreaterThan(0)
+      expect(setupEndLine).toBeGreaterThan(linkAudioLine)
       expect(loopSkipLine).toBe(setupEndLine + 1)
       expect(loopLiveLine).toBe(loopSkipLine + 1)
       expect(midLoopGainLine).toBe(loopLiveLine + 1)
@@ -4648,6 +4662,13 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           end_char: 999_999,
         })
         expect(selected.isError, selected.text).toBe(false)
+        // 🔴 `run_selection` (unlike `evaluate_orbitscore`) does NOT wait for the engine
+        // to finish evaluating and does NOT surface a runtime throw from the submitted
+        // code via `isError` — `runSelectionForAgent()` (extension.ts) fires the VS Code
+        // command and returns immediately. `run.isError` only catches MECHANICAL
+        // failures (no active editor, engine not running). A thrown `global.linkAudio()`
+        // is invisible here; only `get_log` sees it (checked explicitly below for that
+        // specific line).
         const run = await activeClient.call('run_selection')
         expect(run.isError, run.text).toBe(false)
       }
@@ -4655,10 +4676,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const opened = await activeClient.call('open_file', { path: dslPath })
       expect(opened.isError, opened.text).toBe(false)
 
-      const started = await activeClient.call('start_engine', { capture_wav: capturePath })
-      expect(started.isError, started.text).toBe(false)
-      await waitForEngine(true, 15_000, '#645 dispatch-skip engine started')
-      await sleep(1000)
+      // #645 PR-D0 (post-hoc fix): guaranteed clean engine (re)start, reusing
+      // `runScore`'s hardened `startEngineForRun` — `capture_wav` forces a
+      // stop_engine + wait-false BEFORE start_engine (never silently reuses a
+      // possibly-stale process left running by an earlier test's cleanup), retries
+      // once on the known daemon-ready timeout, and waits for the "🎵 Live coding
+      // mode" marker instead of a bare `get_engine_state.running` flag (the daemon
+      // process existing is not the same as the REPL being ready to accept code).
+      await startEngineForRun(activeClient, '#645 dispatch-skip engine', capturePath)
+      await sleep(500)
 
       const errorsBefore = countErrors(await readLog())
       let stopWall = Date.now()
@@ -4668,18 +4694,50 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       let liveAfterGainToWall = 0
 
       try {
-        // ── setup: declare both sequences, start the transport ──
-        await runLines(1, setupEndLine)
+        // ── transport config + global.linkAudio() alone, verified explicitly before
+        // proceeding (see LINK_AUDIO_MIXER_CONFLICT_MARKER above) ──
+        await runLines(1, linkAudioLine)
+        await sleep(500) // settle for the (synchronous, fire-and-forget) call to land
+        const afterLinkAudioLog = await readLog()
+        if (afterLinkAudioLog.includes(LINK_AUDIO_MIXER_CONFLICT_MARKER)) {
+          throw new Error(
+            `#645 dispatch-skip: global.linkAudio() itself failed — the engine still had ` +
+              `a mixer/plugin-hosting declaration from BEFORE this test's own setup ran ` +
+              `(Global.linkAudio()'s v1 mutual-exclusion guard, global.ts:411-422). The ` +
+              `rest of the script never actually entered LinkAudio strict mode, so the ` +
+              `skip could never fire — this is NOT "the skip didn't happen" or "the log ` +
+              `scrolled out of the window". Log tail: ${afterLinkAudioLog.slice(-1600)}`,
+          )
+        }
+
+        // ── declare both sequences, start the transport ──
+        await runLines(linkAudioLine + 1, setupEndLine)
 
         // ── path 1 (run()/loop() eager `resolveDispatchChannel`): LOOP a sequence with
         // NO .output() under strict-mode LinkAudio. Pre-#645 this threw and killed the
         // evaluation block. ──
         await runLines(loopSkipLine, loopSkipLine)
-        await waitUntil(async () => (await readLog()).includes('無音でスキップ'), {
-          intervalMs: 200,
-          timeoutMs: 5_000,
-          label: '#645 dispatch-skip log line',
-        })
+        try {
+          await waitUntil(async () => (await readLog()).includes('無音でスキップ'), {
+            intervalMs: 200,
+            timeoutMs: 5_000,
+            label: '#645 dispatch-skip log line',
+          })
+        } catch (waitError) {
+          const timeoutLog = await readLog()
+          // global.linkAudio() itself was verified above to NOT have thrown, so a
+          // timeout here means either the skip genuinely didn't fire (a real
+          // regression) or the line scrolled out of get_log's fixed window before this
+          // poll caught it — dump the tail so which one it is can be told apart from
+          // "linkAudio() failed" without re-running.
+          throw new Error(
+            `${String(waitError)}\n` +
+              `#645 dispatch-skip: global.linkAudio() was verified above to have ` +
+              `succeeded (no mixer-conflict marker in the log), so LinkAudio strict ` +
+              `mode WAS active when LOOP(d645Skip) ran. --- get_log tail at timeout ---\n` +
+              `${timeoutLog.slice(-2000)}`,
+          )
+        }
 
         // Let the skipped LOOP run for several bars (2s/bar at 120bpm・4/4) with the SAME
         // stuck skip reason, unobserved by anything else — the dedup regression proof:
@@ -4732,7 +4790,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         const stopped = await activeClient.call('stop_engine')
         expect(stopped.isError, stopped.text).toBe(false)
         stopWall = Date.now()
-        await waitForEngine(false, 15_000, '#645 dispatch-skip engine stopped')
+        await waitForEngineState(activeClient, false, 15_000, '#645 dispatch-skip engine stopped')
         await sleep(1000)
       }
 
