@@ -129,17 +129,29 @@ push の検証（#742）は「済んだことを見えるようにする」の�
 gh pr comment <n> --body 'review-gate: passed — simplify / pr-review-team / Fable / 実機 E2E'
 ```
 
-**検証済み**（3 方向とも実際に確認）:
+**検証済み**（背景セキュリティレビューの指摘 3 件を直した後・全 7 パターン）:
 
-| 状況 | 結果 |
+| コマンド / 状況 | 結果 |
 |---|---|
-| code を含む PR・マーカー無し | **ブロック**・`exit 2` |
-| docs のみの PR | 通す・`exit 0` |
+| `gh pr merge 744 --merge --admin`（code） | **ブロック**・`exit 2` |
+| `gh pr merge --admin --merge 744`（**フラグが先**） | **ブロック**・`exit 2` |
+| `cd /tmp && gh pr merge 744 --merge`（**前置あり**） | **ブロック**・`exit 2` |
+| `gh pr merge --squash 744` | **ブロック**・`exit 2` |
+| `gh pr merge 740 --merge`（docs のみ） | 通す・`exit 0` |
+| `gh pr merge --admin 740`（docs のみ） | 通す・`exit 0` |
+| 存在しない PR（**判定不能**） | **ブロック**・`exit 2` |
 | code を含む PR・マーカー有り | 通す・`exit 0` |
-| マーカーを削除し直すと | **再びブロック**・`exit 2` |
 
-**既知の穴**: `gh pr merge`（番号省略）は判定できないので通す。
-誤ブロックより取りこぼしを選んだ。**番号を明示する運用にすればこの穴は閉じる。**
+🔴 **背景セキュリティレビューが初版の穴を 3 件指摘した**（いずれも実証して直した）:
+
+| 指摘 | 初版の問題 | 直し方 |
+|---|---|---|
+| parser differential | `gh pr merge --admin 744` は「`merge` の直後の数字」を見る正規表現に当たらず**素通り**（実証: exit 0） | `merge` 以降のトークンを走査し**最初の裸の整数**を拾う |
+| fail-open | `gh pr view` が失敗すると `exit 0` = **マージ許可** | **fail-closed**。判定できなければブロックする（判定を壊せば必ず通るゲートは機能しない） |
+| matcher bypass | `Bash:gh pr merge.*` は**先頭一致**なので `cd x && gh pr merge …` に当たらない | matcher を `Bash:.*gh pr merge.*` に |
+
+番号省略（`gh pr merge` のみ）は `gh pr view --json number` で**ブランチから引く**。
+それでも取れなければブロックする。
 
 ---
 

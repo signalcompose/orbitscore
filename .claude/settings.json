@@ -62,7 +62,7 @@
         ]
       },
       {
-        "matcher": "Bash:gh pr merge.*",
+        "matcher": "Bash:.*gh pr merge.*",
         "hooks": [
           {
             "type": "command",

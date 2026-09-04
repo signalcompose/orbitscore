@@ -52,14 +52,55 @@ print(ti.get('command') or '')
 
 [ -z "$cmd" ] && exit 0
 
-pr=$(printf '%s' "$cmd" | sed -n 's/.*gh pr merge[[:space:]]\{1,\}\([0-9]\{1,\}\).*/\1/p')
-# 番号省略（カレントブランチの PR）は判定できないので通す — 誤ブロックより取りこぼしを選ぶ。
-# 🔴 番号を明示する運用にすればこの穴は閉じる。
-[ -z "$pr" ] && exit 0
+# 🔴 **フラグの位置に依存しない**取り方（背景セキュリティレビュー指摘 1）。
+# `gh pr merge --admin --merge 744` のようにフラグが先だと、
+# 「`gh pr merge` の直後の数字」を見る素朴な正規表現は**素通りする**（実証済み）。
+# `gh pr merge` 以降のトークンを走査し、**最初の裸の整数**を PR 番号として拾う。
+pr=$(printf '%s' "$cmd" | python3 -c "
+import re, sys
+cmd = sys.stdin.read()
+m = re.search(r'gh\s+pr\s+merge\b(.*)', cmd, re.S)
+if not m:
+    sys.exit(0)
+for tok in m.group(1).split():
+    if tok in ('--', '&&', '||', ';', '|'):
+        break
+    if tok.startswith('-'):
+        continue
+    if tok.isdigit():
+        print(tok)
+        break
+" 2>/dev/null)
+
+# 番号省略（カレントブランチの PR）は番号から辿れないので、**ブランチから引く**。
+if [ -z "$pr" ]; then
+  pr=$(gh pr view --json number --jq .number 2>/dev/null)
+fi
+
+# それでも取れなければ **ブロックする**（fail-closed・指摘 2）。
+# 「判定できないから通す」は、判定を壊せば必ず通るという意味になる。
+if [ -z "$pr" ]; then
+  cat <<'EOJ'
+{
+  "error": "🚫 **マージ対象の PR 番号を特定できませんでした（#745）**\n\nレビューゲートが判定できないため、安全側に倒してブロックします。\n\n**対処**: PR 番号を明示してください。\n\n  gh pr merge <番号> --merge"
+}
+EOJ
+  exit 2
+fi
 
 # --- 2. docs のみか code を含むか -------------------------------------------
+# 🔴 **取得できなければブロックする**（fail-closed・指摘 2）。
+# 旧版は「ネットワーク断で運用を止めない」として通していたが、
+# **判定を失敗させれば必ず通る**ゲートは、ゲートとして機能しない。
 files=$(gh pr view "$pr" --json files --jq '.files[].path' 2>/dev/null)
-[ -z "$files" ] && exit 0   # 取得できなければ通す（ネットワーク断で運用を止めない）
+if [ -z "$files" ]; then
+  cat <<EOJ
+{
+  "error": "🚫 **PR #$pr のファイル一覧を取得できませんでした（#745）**\n\nレビューゲートが docs / code を判定できないため、安全側に倒してブロックします。\n\n**対処**: \`gh pr view $pr --json files\` が通ることを確認してから再実行してください（認証・ネットワーク）。"
+}
+EOJ
+  exit 2
+fi
 
 code=$(printf '%s\n' "$files" | grep -vE '^(docs/|sites/|\.github/)' | grep -vE '\.md$' | head -1)
 [ -z "$code" ] && exit 0    # docs のみ → 通す（CLAUDE.md: フル編成はオーバーエンジニアリング）
