@@ -119,21 +119,33 @@ export const OUTPUT_LINE_GOLDENS = {
   /**
    * 既存 #643 E2E-1 の観測を記録する（**そのテスト自体は PR-O0 では触らない**）。
    *
-   * 🔴 **2026-09-04 実機では E2E-1 は「gain が効かない」より手前で落ちている** —
-   * `E2E-1 unity instrument must be audible: expected 0 to be greater than 0.05`、
-   * すなわち **instrument の音が一切出ていない**（既定出力は 2ch の Apple デバイスなので、
-   * #611 本文の「8ch@2048 で無音」とは別の事象）。
+   * 🔴 **E2E-1 の落ち方は実行ごとに変わる。** 2026-09-04 に 3 回まわした実測:
    *
-   * したがって「今日の half/unity 比」は**測れない**（unity が 0 なので比が定義できない）。
-   * ここに旧記録の 1.27 を書き写すのは**測っていない数を測ったように見せる**ことになるので置かない。
-   * 原因の特定は PR-O2 の測定ラダー（`docs/design/649-audio-line-design.md` §13）で行う。
+   * | 実行 | unity RMS | half RMS | half/unity |
+   * |---|---|---|---|
+   * | 1 | **0**（instrument が鳴っていない） | — | 測れない |
+   * | 2 | 0.0632 | 0.0858 | **1.356** |
+   * | 3 | 0.0706 | 0.0858 | **1.216** |
+   *
+   * つまり **3 回中 2 回は「gain が効かない」で落ち**（比が 1 前後 = 減衰していない）、
+   * 1 回は**その手前の可聴チェック**で落ちた。**instrument の可聴性そのものが不安定**である。
+   * `half` はほぼ動かない（0.08576 / 0.08579）のに `unity` が 11% 動くのも、
+   * 不安定なのが unity 側の測定であることを示している。
+   *
+   * ⚠️ **1 回だけの観測から「instrument が鳴っていない」と一般化しないこと**
+   * （本 PR の作業中に一度その誤りを書いた）。
+   *
+   * したがって golden は**幅**で持ち、原因の特定は PR-O2 の測定ラダー
+   * （`docs/design/649-audio-line-design.md` §13）で行う。
    */
   globalGainInstrument: {
     gainDb: -6,
+    /** 2026-09-04 実機で観測した「今日の」比の幅（減衰が掛かっていない状態）。 */
+    legacyHalfOverUnityRange: [1.2, 1.4] as const,
     /** PR-O2 後の受け入れ: half/unity が `10^(-6/20)`。 */
     prO2HalfOverUnity: dbToLinear(-6),
     ratioTolerance: 0.05,
-    /** E2E-1 が比を測れる前提。今日はここで落ちている。 */
+    /** E2E-1 が比を測れる前提。3 回に 1 回はここで落ちた。 */
     audibleFloorRms: 0.05,
   },
 } as const
