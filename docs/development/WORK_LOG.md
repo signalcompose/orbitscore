@@ -17,54 +17,40 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### test(engine): pin the RUN-termination note-off release (#606 PR-K-A1) (Sep 4, 2026)
+### docs(site): follow PR #727's output-line spec revision into the user site and SC-2 (Sep 4, 2026)
 
-**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR-K-A1**
+**追従元**: PR [#727](https://github.com/signalcompose/orbitscore/pull/727)（`611-output-line-spec` → main・マージコミット `d8191d1`）/ **ブランチ**: `claude/docs-sync-pr727`
 
-#### 🔴 実装は既にあった。足したのは「守り」である
+#727 は spec だけを動かした docs-only PR で、`sites/dev/signal-chain/` の 2 章（日英）は
+同じ PR の中で追従済みだった。**追従が漏れていたのは「ユーザーが書く語」の側**である。
 
-着手前に実装を読んだところ、**発火点も配送機構も揃っていた**
-（[[invent-rules-only-after-reading-the-code]] のとおり、規則を発明する前に読む）:
+#### 直したもの
 
-| 層 | 場所 |
+| 場所 | 追従した規範 |
 |---|---|
-| RUN 終端の発火 | `run-sequence.ts:60-63` の `setTimeout(… clearSequenceEventsFn(name) …, patternDuration)` |
-| 経路の振り分け | `sequence.ts:1015-1023` `clearEvents()` → MIDI / instrument なら `clearOwner(name)` |
-| 実際の note-off | `midi-scheduler.ts:211-214` `clearOwner()` が **`output.releaseOwner(owner)` を呼ぶ** |
+| `sites/user/mixing/routing.md`（日英） | MX.3: `send()` の第 2 引数が **dB になる**（`0.3` → +0.3 dB のサイレント変更）/ MX.5 から「post-fader 固定」が**削除**され、タップ位置は「書いた位置」になった |
+| `sites/user/reference/methods.md`（日英） | 同上 + MX.2.3: **数値レンダーバス `seq.output(n)` は撤回**された |
+| `sites/dev/signal-chain/mixer-audio-line.md`（日英） | 「`seq.output()` の 3 分岐」節に MX.2.3（数値分岐の撤回）と MX.2.1（LinkAudio は解決順の**最後**）の注記 |
+| `sites/dev/decisions/adr-002-dsl-v3-pivot.md`（日英） | core spec への行番号引用 2 件を再アンカー（`1933-1990` → `2112-2164`・`467-601` → `496-631`） |
 
-つまり #606 の PR-K-A1 は「flush 機構を作る」仕事ではなかった。
-地図に「配送機構は既にある・欠けているのは発火点だけ」と書いた（#731）が、
-**発火点も既にあった** — さらに一段浅く見積もっていた。
+🔴 **実装は 1 行も変わっていない**ので、user site の表と本文は**今日の書き方のまま**にして、
+「仕様は変わったが未実装」という注記を足す形にした。表を到達点で書き換えると、
+読者が今日書けないコードを読むことになる。
 
-#### ところが、この鎖を検査するテストが 1 本も無かった
+🔴 **`send` の単位変更はエラーにならず音だけが変わる**（線形 0.3 → +0.3 dB ≒ 素通し）。
+user site の両言語に `danger` ブロックで明示した。
 
-`clearOwner()` から `releaseOwner()` の **1 行を落としても既存 2205 件は全部通る**。
-**鳴りっぱなしは音にしか出ない**ので、ユニットで守らないと誰も気づけない
-（[[consumerless-code-is-unprotected]]）。テスト 4 本を追加した。
+#### 再アンカーについての但し書き
 
-#### 🔴 変異検証で穴が 1 つ見つかった（3 本 → 4 本）
+adr-002 の 2 件は **#727 以前から既にずれていた**（§13 Versioning は #727 前も 1983 行目で、
+引用は 1933-1990 だった）。#727 が core spec を +63 行伸ばしてずれが広がったので、
+この機会に両方を現在の節境界へ合わせた。3 件目の `336-432`（§5 = 315-468）は
+節の内側の抜粋なので触っていない。
 
-| 変異 | 結果 |
-|---|---|
-| `releaseOwner()` の呼び出しを削除 | **2 件 red** |
-| `clearOwner()` の queue フィルタを `this.queue = []`（wildcard 全消し）へ | 🔴 **当初は 3 件とも green（生き残り）** |
-| queue のクリアを削除 | **1 件 red** |
+#### 検証
 
-**解放（`releaseOwner`）の側は owner を見ていたが、予定（queue）の側は見ていなかった。**
-片翼だけ守っていたことになる（[[enumeration-stops-one-level-too-early]]）。
-「終端したシーケンスの予定だけが落ちる」を検査する 1 本を足したところ、この変異も red になった。
-
-restore 後 4 件 green・`midi-scheduler.ts` は `cmp` で復元一致。
-
-🔴 **1 種類の変異が red になっただけで結論してはいけない**という規律が、そのまま効いた実例。
-
-#### 粒度（#729 で明文化した条文の実装側）
-
-守っているのは **owner 単位の解放**である。daemon 側の「最後の砦」は
-**instance 単位（全 owner）**で、`global.stop()` / shutdown / engine 異常終了の 3 場面だけ。
-混同すると他シーケンスの発音を巻き込むので、テストのコメントに書き分けた。
-
----
+`npm ci` / `npm run docs:build -w @orbitscore/user-site` / `npm run docs:build -w @orbitscore/dev-site` /
+`npm run docs:check` の 4 本すべて green（citation 922 件検証・0 failed）。
 
 ### docs(spec): fix the implicit-master condition found by the independent re-audit (Sep 4, 2026)
 
@@ -1926,3 +1912,42 @@ lint の `no-unsafe-finally` が「別の形の同じ問題」を指摘した** 
   すべて素通りし、キャプチャの RMS 実測だけが捕まえた**
 
 **仕様の方が実装より古いまま置かれていた**ので、正本を現状に追いつかせた。
+
+## 2026-09-04: PR #724 追従 — dev 学習サイトをハーネス仕様の改訂に合わせる
+
+**#724（#668 PR-E0）が `docs/testing/E2E_HARNESS_SPEC.md` を改訂した結果、dev 学習サイトの
+記述と参照行が古くなった**ので、doc 側だけを追従させた。コード・テストは変更していない。
+
+### 1. IV-3 章の「配線 smoke を置き換える計画」が失効した
+
+`sites/dev/editor/mcp-and-gated-e2e.md` の「次の深掘り候補」に
+「2 層構造が gated spec の『配線 smoke』をどう置き換える計画か」という項目が残っていた。
+#724 はまさにその記述を削り、**2 層の役割を入れ替えた**（オフライン層 = 回帰の固定 /
+実機層 = 語彙・構文表面の網羅）ので、この項目は問いとして成立しなくなった。
+
+- ラチェットの節の末尾に `### ハーネス仕様が実装に追いついた（2026-09-04・#724）` を追加し、
+  新旧の役割分担を表で示した。根拠は同章が既に書いていること — **ラチェットが数えているのは
+  `readGatedSources()` 経由の実機 spec の語**である
+- 「次の深掘り候補」は、#724 §2.1 が残した未決（台帳 2 が #671 段階 3 で導出に変わったあと
+  手書き行とラチェットがどうなるか）へ差し替えた
+- ja / en 両方を更新。frontmatter の `verified-against` を `c2010db`・`verified-at` を
+  `2026-09-04` へ
+
+### 2. 核仕様の行番号が +21 ずれた
+
+#724 は `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §10 に 21 行を挿入した（`### 🔴 DSL を足したら
+E2E も足す`）。`// FILE:START-END` 形式の引用は #724 自身が再アンカーしているが、
+**Sources 節の散文の行参照は機械検査の対象外**なので取り残されていた。
+
+| 参照元 | 旧 | 新 | 備考 |
+|---|---|---|---|
+| `sites/dev/signal-chain/mixer-audio-line.md:885` / en:910 | `1616-1706` | `1667-1757` | Mixer / Routing（MX.1〜MX.5） |
+| 同 `:886` / en:911 | `1247-1249` | `1298-1300` | master gain ramp が insert の前 |
+| `sites/dev/decisions/adr-002-dsl-v3-pivot.md:279` / en:279 | `1933-1990` | `1983-2035` | §13 Versioning + Migration Notes |
+| 同 `:280` / en:280 | `467-601` | `496-631` | §7 underscore prefix |
+| 同 `:281` / en:281 | `336-432` | `365-462` | §5 片記号方式 |
+
+🔴 **上表のうち #724 起因のずれは +21 のみ。** 実測すると 5 件とも #724 以前から
+31〜35 行ずれており（base `89d6e26` で `1616` は Mixer 節ではなく PC 節の中だった）、
+**散文の行参照には機械検査が無い**ことがそのまま残存していた。今回は行番号を足すのではなく、
+各行の説明文が名指ししている節の実位置へ**再アンカー**した。

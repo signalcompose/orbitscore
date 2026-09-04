@@ -47,6 +47,12 @@ kick.send("rev", 0.3)
 
 Inserting something like a reverb on a return bus (`aux`) is a typical use case. The second argument to `send()` controls how much signal is sent (roughly 0.0–1.0, with no hard clamp on the upper end).
 
+::: danger The unit of the second argument will change to dB (decided, not yet implemented)
+The 2026-09-03 specification revision (#611 / #649) **decided that the second argument to `send()` changes from a linear amount to dB** (core spec MX.3). The implementation has not landed yet, so **what you write today is still linear**.
+
+Once it switches, `kick.send("rev", 0.3)` will be read as "**+0.3 dB**" (essentially unattenuated) rather than "linear 0.3 (about −10 dB)". **It will not raise an error — only the sound changes, silently.** If your existing scores use sends, wait for the switch to be announced.
+:::
+
 A single sequence can send to multiple `aux` buses at once.
 
 ```text
@@ -66,8 +72,10 @@ This feature is still evolving. Here are the constraints worth knowing before yo
 If parallel paths (different `sum` or `aux` buses) each have effects with different latency, a small timing (phase) offset can appear between them. OrbitScore does not currently compensate for this automatically.
 :::
 
-::: warning send is fixed at post-fader
+::: warning send is fixed at post-fader (an implementation constraint)
 `send()` always sends the signal **after** the per-sequence insert (`seq.effect()`) has been applied — what a DAW would call post-fader. Switching to pre-fader (sending the signal before the insert) is not currently supported.
+
+This is now **a constraint of the current implementation, not a decision of the specification**. The 2026-09-03 revision (#611 / #649) removed "sends fixed post-fader" from the constraint list in core spec MX.5 and replaced it with: **where you write the send on the chain is where it taps** (before an effect = pre, after it = post). Position starts to matter once the implementation catches up.
 :::
 
 ::: warning Cannot be combined with LinkAudio
