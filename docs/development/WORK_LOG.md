@@ -365,6 +365,55 @@ owner の境界を持たないので、これは wildcard 禁止の**例外で�
 
 `npm test` 2199 passed / 49 skipped（docs のみなので不変）・
 `check-citations.mjs` 922 verified / 0 failed（行番号のずれを再アンカー）。
+### docs(planning): record the VST3 / CLAP conventions the scanner does not follow (Sep 4, 2026)
+
+**地図**: `docs/planning/DEVELOPMENT_MAP.md` **§4.C** / **ブランチ**: `546-plugin-spec-conventions`
+/ owner 2026-09-04・**バグではなく機能改善**
+
+#### 🔴 最初、DAW の「振る舞い」を写して規格を読んでいなかった
+
+owner:
+
+> オービットスタジオで今 **dylib を名指ししているという状態自体が、ちょっと異常**。
+> VST も CLAP も基本的には**作法があるはず**なので、その作法を地図のどこかに入れていく。
+> 他のものが使えているので、**他を実装した後でも全然いい**。**バグではなくて機能改善・改修。**
+
+> 僕が言ってるのが VST や CLAP の作法ではないというか、**作法をちゃんと調べてやりましょう**。
+
+初稿はフォーラム・製品ドキュメントから **Ableton / Bitwig の振る舞い**を写しただけだった。
+owner の指摘で規格を読み直したところ、**振る舞いの観察からは出てこない義務**が見つかった。
+
+#### 規格が定める作法と現在地
+
+| # | 規格（一次情報・**強度**） | 現在地 |
+|---|---|---|
+| 1 | **CLAP: `CLAP_PATH` を問い合わせる — `must`**（`clap/include/clap/entry.h` 逐語 "a CLAP host **must** query the environment for a CLAP_PATH variable"） | 🔴 `CLAP_PATH` は見ていない。ただし **`ORBIT_PLUGIN_PATH`（`:` 区切り）は既に読んでいる**（`lib.rs:200-211` `extra_scan_dirs_from_env`）ので、**同じ関数に 1 本並べるだけ** |
+| 2 | **CLAP: 各ディレクトリを再帰的に探索 — `should`**（同上。1 と違い義務ではない） | 🔴 **非再帰**（`list_bundle_candidates` の doc・同 `:228`。テスト `:2197` が非再帰を固定） |
+| 3 | **CLAP: 1 `.clap` に複数プラグイン。factory で descriptor 列挙 → plugin ID で生成** | ✅ **実装済み**（`orbit-clap-host/src/discovery.rs:105-120` 全列挙 / `lib.rs:540-566` 1 バンドル→複数エントリ / `discovery.rs:125-137` ID で選択）。同一性は `(format, path, pluginId)` の複合キー（`lib.rs:1028-1034`） |
+| 4 | **VST3: `moduleinfo.json` は 3.7.5 で導入、3.7.8 で `Contents/` → `Contents/Resources/`**（cmake の `SMTG_MODULEINFO_PATH_INSIDE_BUNDLE` で版差を確認） | ○ 参照している（`lib.rs:110`）。⚠️ **`Contents/Resources/` しか見ない**（`lib.rs:842`）ので **3.7.5〜3.7.7 のバンドルは ProbePending 送り** |
+| 5 | **同一性は ID（CLAP=plugin ID / VST3=CID）、path は「所在」。ID → ファイルの対応表は規格に無く、所在の解決はホストの責務** | 🔴 `instrument(path)` が生パス（`plugin-resolver.ts:76-80`） |
+| 6 | 検証を走らせるタイミング | 🔴 手動のみ（起動時はカタログ JSON を読むだけ・`plugin-catalog-reader.ts:132-150`） |
+
+**1 は既存関数への 1 行追加。2 も小さい。5 は作り直しの規模**なので他の実装の後（owner）。
+
+🔴 **初稿は 3 を「❓ 未確認」、5 を「規格はパスを同一性にしない」と書いていた。**
+前者は**実装を読めば分かることを読まずに未確認と書いた**（[[invent-rules-only-after-reading-the-code]] の再発）。
+後者は**言い過ぎ** — 規格は path を禁じているのではなく、同一性の担い手が ID だというだけである。
+「作法を調べる」は規格側だけでなく**自分の現在地も一次情報で確かめる**ことを含む。
+
+#### 保証のタイミングについての整理
+
+owner: 「Logic や Studio One も**読み込めるということを確認するだけ**で、起動時に全てのプラグインが
+メモリに読み込まれているわけではない。**インサートした時だけメモリ空間に出てくる。**
+なので起動時のチェックは**品質保証的なもの**」。
+
+調査でも一致した — Ableton は VST3 を常時スキャンにし、**AU は Apple の `auval` に外注**している。
+Bitwig は**保証しきれないことを認めて隔離で解く**（ホスティングモード 5 段階）。
+**OrbitScore は既に Bitwig 型の out-of-process + crash isolation を採っている。**
+
+🔴 **これは [[live-coding-forbids-workflow-interruptions]] と対になる。** 保証を起動時に寄せるからこそ、
+**演奏時に確認を挟む必要が無い**。「評価時に trust を問う」設計は DAW と**二重に**違っていた
+（① 確認を挟む ② 判断を実行時に置く）。
 
 ---
 
