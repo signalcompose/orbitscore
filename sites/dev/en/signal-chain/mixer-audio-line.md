@@ -1,12 +1,12 @@
 ---
 title: "SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: b22698a
+verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain
 
@@ -759,6 +759,23 @@ requires the ratio to fall within 0.45–0.55 ($10^{-6/20} \approx 0.501$).
   )
 ```
 
+The measurement inside this E2E-1 has itself come under suspicion. While recording the
+output-line goldens, #611 PR-O0 found that taking a `captureSegment` immediately after
+`run_selection` fills most of the window with pre-onset silence, because `LOOP()` waits for the
+next bar boundary before it starts playing. When the number of hits inside the window varies from
+run to run, the RMS measures the hit count rather than the loudness
+([IV-3, "Segment RMS means loudness only when the number of hits inside the window is
+fixed"](/en/editor/mcp-and-gated-e2e#segment-rms-means-loudness-only-when-the-number-of-hits-inside-the-window-is-fixed)).
+
+E2E-1's `unity` segment is taken with a settle of 400 ms, which is exactly that shape. Across
+three runs on 2026-09-04, `half` barely moved (0.08576 / 0.08579) while `unity` moved by 11% and
+was 0 once. The unstable side is `unity`.
+
+Today's half/unity ratio therefore cannot be held as a golden. `globalGainInstrument` in
+`tests/e2e/output-line-expectations.ts:166-182` records only the post-PR-O2 acceptance value
+($10^{-6/20}$), with the condition that **before turning E2E-1 green, one must first confirm that
+E2E-1 is looking at a steady state**.
+
 E2E-4 is the sum + aux path. It switches between dry (no bus) and an instrument holding
 `output("sum643")` + `send("aux643", 0.5)`, and checks that the ratio falls within 1.35–1.65
 (theoretical 1.5) (`1585-1592`). The DSL part is quoted.
@@ -946,9 +963,10 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 - `rust/crates/orbit-audio-native/src/output.rs:1078-1094` — the no-bus path `render_engine_with_source_outputs`
 - `rust/crates/orbit-audio-native/src/output.rs:2017-2060` — unit test `global_gain_scales_instrument_contribution`
 - `rust/crates/orbit-audio-core/src/scheduler.rs:375-460` — `render_multi_feeds` (feed addition and gain ramp)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:503-603` — `captureInstrumentScenario` / `rms()`
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1432-1466` — E2E-1 (`global.gain(-6)`)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1553-1595` — E2E-4 (`output(sum)` + `send(aux, 0.5)`)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:500-600` — `captureInstrumentScenario` / `rms()`
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1429-1463` — E2E-1 (`global.gain(-6)`)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1550-1592` — E2E-4 (`output(sum)` + `send(aux, 0.5)`)
+- `tests/e2e/output-line-expectations.ts:166-182` — `globalGainInstrument` (the doubt cast on E2E-1's measurement and the post-PR-O2 acceptance value, #611 PR-O0)
 - Issue [#453](https://github.com/signalcompose/orbitscore/issues/453) / [#459](https://github.com/signalcompose/orbitscore/issues/459) — mixer DSL (sum / aux / send)
 - Issue [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#648](https://github.com/signalcompose/orbitscore/pull/648) — mixer foundation, instrument as source, master fader wiring
 - Issue [#649](https://github.com/signalcompose/orbitscore/issues/649) — audio-line design

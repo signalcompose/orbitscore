@@ -17,6 +17,37 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(dev-site): follow PR #728 — ready detection, steady-state capture (Sep 4, 2026)
+
+**追従元**: PR [#728](https://github.com/signalcompose/orbitscore/pull/728)（`543-output-line-goldens` → `main`・マージコミット `b22698a`） / **ブランチ**: `claude/docs-sync-pr728`
+
+docs-sync ルーチンによる追従。**`packages/` `rust/` `tests/` は 1 行も変更していない。**
+
+#### PR #728 が dev サイトに対して残していたもの
+
+#728 は production code を変更しない test-only の PR だが、**dev サイトが記述している対象そのもの**
+（`tests/e2e/helpers/` の共有ハーネスと gated spec）の振る舞いを変えていた。#728 自身が触った
+サイト側の差分は**引用の行番号の再アンカーだけ**で、本文は 1 文も追従していなかった。
+
+| 追従した内容 | 直した先 |
+|---|---|
+| `run-score.ts` の起動判定が「マーカー件数の増加」から「錨より後ろに出たか」へ変わった | `sites/dev/editor/mcp-and-gated-e2e.md`（+ en） |
+| `logAnchor` / `logAppendedSince` / `relativeDelta` が helper の公開面に加わった | 同・共有ハーネス層の表 |
+| 「`runScore` の利用者はまだ 1 本も無い（最初は PR-E3 の予定）」が古くなった | 同・最初の利用者は #611 O0-1〜O0-4 |
+| `it` が 20 本 → 24 本。テスト一覧の行番号も PR で全体にずれた | 同・テスト一覧 |
+| 区間 RMS は窓のヒット数を固定して初めて音量を意味する（`LOOP()` の bar クオンタイズ） | 同・新規節 |
+| #643 E2E-1 の `unity` 区間が同じ測り方の問題を抱えている | `sites/dev/signal-chain/mixer-audio-line.md`（+ en） |
+
+引用は `// FILE:START-END` 形式で追加し、`check-citations.mjs` で突合した。
+
+#### 追従不要と判断したもの
+
+- **DSL / 言語仕様**: 構文・意味論・`.orbslog` 形式のいずれも変わっていないので
+  `docs/specs-v2/` と `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` は対象外
+- **ユーザーが書く語**: 新しい fixture は既存の語だけで書かれているので
+  `sites/user/` と `docs/user/ja/USER_MANUAL.md` は対象外
+- **ランタイム / MCP**: `rust/` に差分が無く、MCP ツールの引数・返り値・エラー挙動は変わっていない
+
 ### docs(spec): fix the implicit-master condition found by the independent re-audit (Sep 4, 2026)
 
 **Issue**: #611 / **ブランチ**: `611-output-line-spec` / **PR-O1**（段 1 の縦依存 1 本目）

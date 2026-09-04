@@ -1,12 +1,12 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: affdf69
-verified-at: "2026-09-03"
+verified-against: b22698a
+verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)・出口の golden と起動判定の修正）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -551,19 +551,20 @@ export function decideStartEngineForAgent(
 
 ### テスト一覧
 
-2026-09-01 時点で describe には 20 本の `it` があります。先頭の 1 本がアプリ起動・カタログ初期化・capture 付き engine 起動を担い、残りはその状態を前提にします（WORK_LOG 6.409 が「1 本だけを `-t` で絞ると `catalogClapEffectPath` 未初期化で落ちる」と記録しているのはこのためです）。
+2026-09-04 時点で describe には 24 本の `it` があります。先頭の 1 本がアプリ起動・カタログ初期化・capture 付き engine 起動を担い、残りはその状態を前提にします（WORK_LOG 6.409 が「1 本だけを `-t` で絞ると `catalogClapEffectPath` 未初期化で落ちる」と記録しているのはこのためです）。
 
 | 行 | テスト名（要約） | 主な oracle |
 |---|---|---|
-| 636 | 実 OrbitStudio を端から端まで: diagnostics-on-open・`run_selection`・live edit・capture 検証 | onset 間隔（120 → 180 bpm） |
-| 1433–1687 | #643 E2E-1〜7: `global.gain(-6)` / seq rack / attach 中のギャップ / `output(sum)` + `send(aux)` / instrument 差し替え / slot 解放 / 宣言なし instrument | 区間 RMS 比 |
-| 1732, 1808 | #633 E2E-1〜2: 同一 insert 複数の UI 開閉・index シフト後の close | `open_plugin_ui` / `close_plugin_ui` 応答 |
-| 1878 | カタログ v2 再スキャン・壊れたバンドルの報告 | `rescan_plugins` の failures |
-| 1949 | 曖昧な bare mixer 名を `run_selection` + `get_log` で報告 | ログ文言 |
-| 2040 | `instrument()` シーケンスで playhead が休符も含めて刻む（#654） | `[STEP]` 行の slot 集合 |
-| 2139, 2381, 2602 | plugin state の再起動復元（instrument / sum-bus insert / 5 種 receiver 自動記録） | 測定ピッチ・RMS |
-| 3157, 3421 | 再生中の instrument / effect 差し替え（#618 / #625） | 音・state・プロセス・失敗・UI |
-| 3961, 4473 | #628 R28: rack chain の音のメインライン / master + 標準要素のエラー | RMS・child PID |
+| 632 | 実 OrbitStudio を端から端まで: diagnostics-on-open・`run_selection`・live edit・capture 検証 | onset 間隔（120 → 180 bpm） |
+| 1429–1682 | #643 E2E-1〜7: `global.gain(-6)` / seq rack / attach 中のギャップ / `output(sum)` + `send(aux)` / instrument 差し替え / slot 解放 / 宣言なし instrument | 区間 RMS 比 |
+| 1728, 1804 | #633 E2E-1〜2: 同一 insert 複数の UI 開閉・index シフト後の close | `open_plugin_ui` / `close_plugin_ui` 応答 |
+| 1874 | カタログ v2 再スキャン・壊れたバンドルの報告 | `rescan_plugins` の failures |
+| 1945 | 曖昧な bare mixer 名を `run_selection` + `get_log` で報告 | ログ文言 |
+| 2036 | `instrument()` シーケンスで playhead が休符も含めて刻む（#654） | `[STEP]` 行の slot 集合 |
+| 2135, 2377, 2598 | plugin state の再起動復元（instrument / sum-bus insert / 5 種 receiver 自動記録） | 測定ピッチ・RMS |
+| 3153, 3417 | 再生中の instrument / effect 差し替え（#618 / #625） | 音・state・プロセス・失敗・UI |
+| 3955, 4466 | #628 R28: rack chain の音のメインライン / master + 標準要素のエラー | RMS・child PID |
+| 4620, 4662, 4687, 4722 | #611 O0-1〜4: 出口の一般化に入る前の音を固定する golden（bus 無しの決定性 / `sum` 出力 / `send(0.3)` / `effect([Gain(db: 6)]).gain(-6)`） | 定常区間の RMS と比 |
 
 ---
 
@@ -575,7 +576,7 @@ export function decideStartEngineForAgent(
 |---|---|
 | `engine-log.ts` | `LOG_WINDOW_LINES` / `countLogMarker` / `countErrors` / `errorBaseline` / `expectNoNewErrors` / `expectLogMarkerAtLeast` |
 | `gated-session.ts` | `GatedCatalog` / `GatedSession` / `captureWavPath` / `createGatedSession` |
-| `run-score.ts` | `ScoreSource` / `CaptureWindows` / `ScoreRunContext` / `runScore` |
+| `run-score.ts` | `ScoreSource` / `CaptureWindows` / `ScoreRunContext` / `runScore` / `logAnchor` / `logAppendedSince` / `relativeDelta` |
 | `wait-for-file.ts` | `waitForFile` / `waitForMatchingFile` |
 | `run-cli.ts` | `CliResult` / `runOrbitscoreCli` |
 
@@ -633,7 +634,26 @@ export function captureWavPath(tmpRoot: string, slug: string): string {
 不具合を疑って延々と探すことになります。診断が出ることを確かめる E2E を妨げないよう
 assert はしませんが、**見えるようにはします**。
 
-PR-E2 の時点で `runScore` を呼ぶシナリオはまだ 1 本もありません（既存 20 本を書き換えない方針のため）。最初の利用者は PR-E3 の予定です。
+PR-E2 の時点で `runScore` を呼ぶシナリオは 1 本もありませんでした（既存 20 本を書き換えない方針のため）。最初の利用者になったのは PR-E3 ではなく、#611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）で足された O0-1〜O0-4 の 4 本です。そして消費者が付いた途端に、helper が抱えていた起動判定の不具合が表に出ました。
+
+### 有限窓は ERROR 件数だけでなく起動判定も壊す
+
+`runScore` が engine を起動するとき、`start_engine` を呼んだあとに `get_log` へ `🎵 Live coding mode` が現れるのを待って「daemon-backed REPL が立った」と判定します。この判定は当初、**マーカーの件数が増えたか**という形で書かれていました。ところが `get_log` は有限窓です。窓が飽和していると、新しいマーカーが 1 行増えるのと同時に**古いマーカーが窓から押し出される**ので、件数は増えません（減ることさえあります）。既存 20 本を走らせたあとに O0-3 / O0-4 を走らせると、engine 自体は起動しているのに `daemon-backed REPL ready after 30000ms` で必ずタイムアウトしました。[アサーション衛生](#アサーション衛生)が ERROR 件数の厳密等価を禁じているのと**同じ理由**が、まったく別の場所に出ていたことになります。
+
+置き換えたのは「`start_engine` を呼ぶ直前のログ末尾を錨にして、その後ろに出た分だけを新しい出力と見る」という形です。
+
+```typescript
+// tests/e2e/helpers/run-score.ts:57-61
+export function logAppendedSince(anchor: string, log: string): string {
+  if (anchor.length === 0) return log
+  const index = log.lastIndexOf(anchor)
+  return index === -1 ? log : log.slice(index + anchor.length)
+}
+```
+
+勘所は、錨が見つからなかったときに何を返すかです。「判定できないので待つ」という実装を一度置いたところ、今度は `#628 R28` が同じ 30 秒タイムアウトで落ちました。ラック child の起動でログが大量に流れ、錨が窓から出ただけだったのに、「まだ起動していない」と読んでしまったのです。錨は前の窓の**末尾**から取り、窓は**先頭から**落ちていきます。したがって末尾が消えているなら、それより古い行はすべて消えている — つまり錨が見つからない窓は**全体が起動後の出力**であり、`log` をそのまま返すのが正しい答えでした。この訂正は実機に出して初めて分かったことです。
+
+`orbitstudio-mcp-gated.spec.ts` の中にも同じ件数比較を持つローカルな起動ヘルパがあり、そちらも同じ錨方式へ揃えられました（`tests/e2e/orbitstudio-mcp-gated.spec.ts:441-465`）。同じ PR で `relativeDelta`（`|actual − expected| / |expected|`）も helper へ 1 本化されています。gated spec の中に同名のローカル定義が 2 つあり、式はどちらも同一でした。
 
 ⚠️ `tests/e2e/helpers/` は `gated-sources.ts` の `GATED_SOURCE_GLOBS`（`orbitstudio-mcp-gated.spec.ts` と `gated/**`）に**含まれません**。後述のラチェットとアサーション衛生はどちらも `readGatedSources()` の返す文字列だけを読むので、helper 側のソースは走査対象外です。
 
@@ -721,6 +741,54 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 このアサーションが何を捕まえたかは、WORK_LOG 6.415 に記録されています。2026-08-29、この E2E を書いて実機で走らせたところ、**`global.gain()` が instrument にまったく効いていない**ことが分かりました。原因は `output.rs` でミキサーの stage から master へ合流する音が **master gain を掛けた後に加算されていた**ことです。各層は成功を返し、ERROR は 1 行も出ず、変異検証 35 件もユニットテスト 2149 件も捕まえていませんでした。CLAUDE.md がこの事例を「E2E が最重要」の根拠として引くのは、それが「**正しく見えるが合成が違う**」を捕まえられる唯一の層だったからです。
 
 同じ日に `ORBIT_KEEP_CAPTURES=<dir>` が正式化されました。指定するとキャプチャ WAV を tmpRoot ではなくそのディレクトリに残します。「ハーネスのアサーションは窓の中の 1 つの数しか見せないが、欠陥は窓の外にいることがある」（6.415）ためです。ただしこの環境変数が spec 全体で効くようになったのは #668 PR-E2 以降です — それまでは 13 箇所のパス組み立てのうち 1 箇所しか見ていませんでした（[共有ハーネス層](#共有ハーネス層-—-tests-e2e-helpers)）。
+
+### 区間 RMS が音量を意味するのは窓に入るヒット数を固定したときだけ
+
+ここまでの `rms(name)` は、区間の 20 ms 窓を二乗平均した 1 つの数です。この数を 2 区間で割り算すれば係数が出る、と考えたくなりますが、それが成り立つのは**両方の区間に同じ数のヒットが入っているとき**だけです。ヒットが 3 発の窓と 5 発の窓を比べれば、音量が同じでも比は 1 になりません。
+
+#611 PR-O0 が出口の音を golden として録ろうとして、まさにここでつまずきました。`LOOP()` は既定で**次の小節境界まで待ってから**再生を始めます。境界の計算は `nextQuantizedTime()` で、既定値は `'bar'` です。
+
+```typescript
+// packages/engine/src/core/global/quantize-manager.ts:67-72
+  const durationMs = quantizeDurationMs(value, tempo, beat)
+  if (durationMs <= 0) return currentTime
+  if (currentTime <= 0) return durationMs
+
+  const boundaries = Math.ceil(currentTime / durationMs)
+  return boundaries * durationMs
+```
+
+120 BPM の 4/4 なら 1 小節は 2000 ms です。ところが最初の版は `run_selection` の 500 ms 後に録り始めていたので、**窓の大半が発音前の無音**で埋まり、入るヒット数が窓ごとに違っていました。その結果、設計 §9 の期待式と実測が食い違って見えます。「`send(0.3)` の寄与が 0.3 でなく 0.678 になる」「ラック併用が乗算モデルと 10% ずれる」— どちらも engine の性質のように見えましたが、**食い違いは測り方の側にありました**。dry の窓に 3 発、total の窓に 5 発入っていただけで、`send(0.3)` は線形 0.3 ちょうどだったのです。
+
+直し方は 3 つ組です。**録り始める前に 1 小節ぶん待つ**、**窓長をヒット周期の整数倍にする**（整数倍なら開始位相に依らずヒット数とエネルギーが一定になります）、そして**オンセット数を明示的に assert する**。
+
+```typescript
+// tests/e2e/output-line-expectations.ts:41-48
+/** 譜面の 1 ヒット周期（120 BPM 4/4・`play(1,1,1,1)` なので 1 拍 = 500 ms）。 */
+const HIT_PERIOD_MS = 500
+
+/** 録り始める前に待つ時間。🔴 `LOOP()` が待つ 1 小節（2000 ms）＋余裕。 */
+const STEADY_SETTLE_MS = 2600
+
+/** 録る長さ。🔴 **ヒット周期の整数倍**（8 発）。位相に依らずヒット数が一定になる。 */
+const STEADY_WINDOW_MS = HIT_PERIOD_MS * 8
+```
+
+```typescript
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4610-4617
+    expect(
+      result.onsets(name).length,
+      `${name}: 定常状態なら窓に ${STEADY_CAPTURE.expectedOnsets} 発入るはず（入らないなら ` +
+        `録り始めが早すぎるか、譜面が鳴っていない）`,
+    ).toBe(STEADY_CAPTURE.expectedOnsets)
+    const value = result.rms(name)
+    expect(value, `${name} must be audible`).toBeGreaterThan(STEADY_CAPTURE.audibleFloorRms)
+    return value
+```
+
+オンセット数を固定して測り直すと、`Gain(db: 6)` は理論値と有効 9 桁まで一致しました。**測定手法の欠陥を engine の性質だと結論しない** — これがこの一件の教訓として `output-line-expectations.ts` の冒頭に書き残されています。
+
+ただし取り切れていない揺れが残っています。定常状態で録っても値が二峰的に跳ぶことがあり、跳ぶときの比はいつも $\sqrt{8/7} \approx 1.069$ でした。オンセット数は 8 に固定できているので、ずれているのは**エネルギーを割る時間幅**の側です。区間を `Date.now()` で決めて capture 時刻へ写す写像に、1 ヒットぶんの量子化が残っているとみられます。この段階で実測値をベタ書きすると**アーチファクトを engine の性質として固定**してしまうので、golden は理論式のまま置き、許容（相対 0.12）でアーチファクトを吸収する形になっています。窓をさらに長く取れば端の寄与が下がるはずで、それは follow-up として残されています。
 
 ---
 
@@ -859,7 +927,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 
 ただし 5 本すべてが gated spec の**ソース文字列**を走査するだけなので、保証するのは「そう書いてある」ことまでです。ガード本体の `assertDaemonBinaryIsNotStale()` は `gated && appAvailable` のときだけ呼ばれるので、通常の `npm test` では 1 行も実行されません。この節の検査は「実行された振る舞い」ではなく「書かれた形」を留めるもの、という位置づけで読むのが正確です。
 
-ちなみにコメントの「固定 500 行窓」は `#567` で 1000 行に拡張される前の数字ですが、有限窓であることに変わりはないので規律そのものは有効です。
+ちなみにコメントの「固定 500 行窓」は `#567` で 1000 行に拡張される前の数字ですが、有限窓であることに変わりはないので規律そのものは有効です。そして有限窓が壊すのは ERROR 件数だけではありません。この検査は「ERROR 件数の厳密等価」という書き方だけを見ているので、同じ理由で壊れる**起動判定のマーカー件数**（[有限窓は ERROR 件数だけでなく起動判定も壊す](#有限窓は-error-件数だけでなく起動判定も壊す)）は素通りします。
 
 ---
 
@@ -1166,7 +1234,13 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `tests/e2e/gated-sources.ts:1-106` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` の判定（`countErrors` 7 重定義の統合先・#668 PR-E2）
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` と `captureWavPath()`
-- `tests/e2e/helpers/run-score.ts:1-272` — 譜面を work copy にして実機で評価する 1 関数
+- `tests/e2e/helpers/run-score.ts:1-387` — 譜面を work copy にして実機で評価する 1 関数
+- `tests/e2e/helpers/run-score.ts:30-80` — 起動判定の錨（`logAnchor` / `logAppendedSince`）と `relativeDelta`（#611 PR-O0）
+- `tests/e2e/output-line-expectations.ts:1-183` — #611 PR-O0 の golden と定常状態の録り方（settle / 窓長 / 許容の根拠）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:4572-4769` — #611 O0-1〜O0-4（`runScore` の最初の利用者）
+- `packages/engine/src/core/global/quantize-manager.ts:56-76` — `nextQuantizedTime()` と既定 `'bar'`（`LOOP()` が小節境界まで待つ根拠）
+- `tests/fixtures/mcp-e2e/output_line_sum.orbs` / `output_line_send.orbs` / `output_line_gain_effect.orbs` — #611 PR-O0 の譜面
+- PR [#728](https://github.com/signalcompose/orbitscore/pull/728) — #611 PR-O0（golden の追加と起動判定の修正）
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — 生成物の待ち合わせ（`minBytes` つき）
 - `tests/e2e/helpers/run-cli.ts:1-62` — `orbitscore replay` / `render` の子プロセス実行（MCP を通らない唯一の例外）
 - `tests/e2e/helpers/rack-child-pid.ts:1-38` — rack child の PID オラクル（ログ由来・#668 PR-E1 で spec から移動）
