@@ -17,6 +17,65 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### chore(hooks): block merging a code PR that skipped the review flow (#745) (Sep 4, 2026)
+
+**Issue**: #745 / owner 指摘「**同じことを繰り返さないように対策してくださいね**」
+
+#### 🔴 何をしたか（監査結果）
+
+main 直行 PR のゲートは 5 段階（CLAUDE.md）:
+① ブランチ ② CI 緑 ③ **`/simplify` → `/code:pr-review-team` + Fable** ④ **実機 E2E** ⑤ owner 指示。
+
+実際:
+
+| PR | 種別 | simplify | pr-review-team | Fable | 判定 |
+|---|---|---|---|---|---|
+| #727 | docs | — | — | ✅ ×2 | ✅ |
+| #728 | code | ✅ | ✅ | ✅ | ✅ |
+| #729 / #731 | docs | — | — | ✅ | ✅ |
+| **#737** | **code** | ❌ | ❌ | ❌ | 🔴 **無審査でマージ** |
+| **#730** | **code** | ✅ | ❌ | ❌ | 🔴 **不完全なままマージ** |
+| **#738 / #744** | **code** | ❌ | ❌ | ❌ | 🔴 未レビュー（オープン） |
+
+**#737 は `sequence.ts` / `event-scheduler.ts` を触るコード変更**で、レビューを一切通さず main に入った。
+
+**原因**: 「**CI が緑ならマージしてよい**」と扱い、**ゲート ③ と ④ を頭から落としていた**。
+owner からマージ承認をもらった時点で、承認 = 全ゲート通過と読み替えていた。
+
+🔴 **同じ指摘をこのセッションの冒頭でも受けている。口頭の注意では再発した。**
+
+#### 仕組み
+
+`PreToolUse` / matcher `Bash:gh pr merge.*` で、マージ前に
+**docs のみか code を含むか**を判定し、code なら `review-gate: passed` マーカーを要求して
+無ければ **ブロック**する。
+
+🔴 **これは weak-form にしない。** push の検証（#742）は「済んだことを見えるようにする」ので
+警告で足りたが、**マージは戻せない**うえ、**無審査のコードが main に入る**実害が既に出ている。
+
+**マーカーの限界**: hook は「フローが本当に走ったか」までは検証できない。
+だが**黙って飛ばせなくなる**ことに意味がある。
+
+#### 3 方向とも実際に検証した
+
+| 状況 | 結果 |
+|---|---|
+| code を含む PR・マーカー無し | **ブロック**・`exit 2` |
+| docs のみの PR | 通す・`exit 0` |
+| code を含む PR・マーカー有り | 通す・`exit 0` |
+| マーカーを削除し直すと | **再びブロック**・`exit 2` |
+
+検証用に貼ったマーカーは**削除済み**（残すと嘘のマーカーになる）。
+
+**既知の穴**: `gh pr merge`（番号省略）は判定できないので通す。誤ブロックより取りこぼしを選んだ。
+
+#### 事後対応
+
+- **#738 / #744** はマージ前にフルで回す
+- **#737 / #730** はマージ済みで取り消せないので、**事後にレビューを回し**、指摘が出たら追従 PR で直す
+
+---
+
 ### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
 
 **Issue**: #385 / **ブランチ**: `385-untrusted-workspace-capability` / **PR-S-T1**

@@ -99,6 +99,50 @@ Claude Code Hooksは、特定のイベント（セッション開始、コミッ
 
 **理由**: PROJECT_RULESでは、すべてのコミットでWORK_LOG.mdの更新が必須
 
+### 6. PreMerge Review Gate (`pre-merge-review-gate.sh`) 🔴 NEW（#745）
+
+**発火**: `PreToolUse` / matcher `Bash:gh pr merge.*`
+
+**やること**: `gh pr merge <n>` の前に
+
+1. PR 番号を取る
+2. `gh pr view --json files` で **docs のみか code を含むか**を判定
+3. code を含むなら、PR に **`review-gate: passed`** のコメントがあるか確認
+4. 無ければ **ブロック**（`exit 2`）してゲート 5 段階のチェックリストを出す
+
+🔴 **これは weak-form にしない。ブロックする。**
+push の検証（#742）は「済んだことを見えるようにする」ので警告で足りたが、
+**マージは戻せない**うえ、**無審査のコードが main に入る**実害が既に出ている。
+
+**なぜ要るか**（2026-09-04 に実際にやった）: main 直行 PR のゲート 3
+（`/simplify` → `/code:pr-review-team` + Fable）と 4（実機 E2E）を頭から落とし、
+**code PR を 2 本 main に入れた**。#737 は `sequence.ts` / `event-scheduler.ts` を
+触る変更で、レビューを一切通していない。
+🔴 **同じ指摘を同じセッションの冒頭でも受けており、口頭の注意では再発した。**
+
+**マーカーの限界**: hook は「フローが本当に走ったか」までは検証できない。
+だが**黙って飛ばせなくなる**ことに意味がある（マーカーを貼る = 意図的な宣言になる）。
+
+**通す手順**:
+
+```bash
+gh pr comment <n> --body 'review-gate: passed — simplify / pr-review-team / Fable / 実機 E2E'
+```
+
+**検証済み**（3 方向とも実際に確認）:
+
+| 状況 | 結果 |
+|---|---|
+| code を含む PR・マーカー無し | **ブロック**・`exit 2` |
+| docs のみの PR | 通す・`exit 0` |
+| code を含む PR・マーカー有り | 通す・`exit 0` |
+| マーカーを削除し直すと | **再びブロック**・`exit 2` |
+
+**既知の穴**: `gh pr merge`（番号省略）は判定できないので通す。
+誤ブロックより取りこぼしを選んだ。**番号を明示する運用にすればこの穴は閉じる。**
+
+---
+
 ### 3. PreBranch Hook (`pre-branch-check.sh`)
 
 **実行タイミング**: `git checkout -b`実行前
