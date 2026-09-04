@@ -17,6 +17,43 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(dev-site): PR #722 の PR-E3 / PR-E4 を dev サイトへ追従 (Sep 4, 2026)
+
+**追従元**: PR [#722](https://github.com/signalcompose/orbitscore/pull/722)（束 `668-e2e-foundation` → main、マージコミット `89d6e26`）/ **ブランチ**: `claude/docs-sync-pr722`
+
+束 #722 は小 PR 4 本のうち **PR-E2（共有ハーネス層）までしか dev サイトへ追従していなかった**（#717 / #711）。
+残りの 2 本 — **PR-E3（per-channel WAV 解析）と PR-E4（DSL 構文表面のラチェット）** — が
+サイトに載っていない状態だったので、ここで追従させる。**ドキュメントのみの変更で、実装とテストは触っていない。**
+
+#### 追従したもの
+
+| 変わったコード | 直した章 |
+|---|---|
+| `analyze_audio` に `per_channel` が加わった（`packages/vscode-extension/src/mcp-server.ts:1016-1029`）| IV-3 ツールカタログの行 |
+| `WavAnalysis.channelWindows` / `channelRms` / `channelSeries()`（`wav-analysis.ts:52-59`, `295-338`）| IV-3 に「チャンネル別の解析」節を新設 |
+| `analyzeWavBuffer` の返り値に `perChannel` の spread が増えた（`wav-analysis.ts:188-196`）| IV-3 の引用が `// ...` で省略していた箇所を実物へ差し替え |
+| `dsl-surface.ts` の新設（13 構文表面）と `KEYWORDS` の公開（`tokenizer.ts:288-289`）| IV-3 に「メソッドで測れない構文表面」節、I-1 のキーワード節と drift 一覧 |
+| `dsl-coverage-ledger.ts` と A-2〜A-5 / A-10（`dsl-e2e-coverage.spec.ts:168-243`）| IV-3 に「台帳」節 |
+| `gated-assertion-hygiene.spec.ts:49-56` の capture 判定に `capture:\s*true` が加わった | IV-3 アサーション衛生節 |
+
+`sites/dev/` と `sites/dev/en/` の両方を書いた（STYLE_GUIDE のバイリンガル必須）。
+frontmatter の `verified-against` / `verified-at` を `89d6e26` / 2026-09-04 へ更新。
+Sources の行範囲のうち、この束でずれていた 4 件（`extension.ts` の 2 件・`wav-analysis.ts`・`gated-sources.ts`）も直した。
+
+#### 追従不要と判断したもの
+
+- **DSL の構文・意味論は変わっていない。** `dsl-surface.ts` は**既存の**構文表面を id で数え上げた台帳で、
+  パーサの実行経路には入らない。`tokenizer.ts` の差分も可視性の変更のみ。よって
+  `docs/specs-v2/` と `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` は変更しない
+- **ユーザーが書く語は増えていない。** `analyze_audio` は MCP（エージェント向け）の表面で、
+  `sites/user/reference/methods.md` と `docs/user/ja/USER_MANUAL.md` は `analyze_audio` に言及していない（実測 0 件）
+- `tests/` と `packages/` / `rust/` は変更しない（本作業の範囲外）
+
+#### 検証
+
+`npm ci` / `npm run docs:build -w @orbitscore/user-site` / `npm run docs:build -w @orbitscore/dev-site` /
+`npm run docs:check` の 4 本すべて green。引用は **940 verified / 0 failed / 58 files**（追従前は 916）。
+
 ### docs(design): 詳細設計 11 本と実装プラン 2026-09 を起草 (Sep 3, 2026)
 
 **Issue**: #611 / #694 / #598 / #672 / #634 / #428 / #610 / #662 / #656 / #668 / #679（設計のみ・実装なし）/ **ブランチ**: `claude/elegant-pasteur-l9gdrl`

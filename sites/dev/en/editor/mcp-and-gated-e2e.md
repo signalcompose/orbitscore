@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: affdf69
-verified-at: "2026-09-03"
+verified-against: 89d6e26
+verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the whole #668 bundle (PR-E1 through PR-E4) on 2026-09-04. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -191,7 +191,7 @@ The tools registered by `buildServer()` via `registerTool`, grouped by role (the
 | | `configure_flash` | Flash count, duration, colour |
 | **Observation** | `get_diagnostics` | The result of `vscode.languages.getDiagnostics` |
 | | `get_log` | The last N lines of the output channel (default 50, cap 1000) |
-| | `analyze_audio` | Parse a WAV and return peak / RMS / onsets (`window_ms` adds a time series) |
+| | `analyze_audio` | Parse a WAV and return peak / RMS / onsets (`window_ms` adds a time series, `per_channel` adds per-channel values) |
 | **Plugins** | `list_plugins` / `rescan_plugins` | Read / rescan the plugin catalogue (#463) |
 | | `save_plugin_state` | Save a running plugin's state (only while the transport is stopped) |
 | | `open_plugin_ui` / `close_plugin_ui` | Open / close a plugin UI; close waits for `UI_CLOSED_DONE` (#474 P4c) |
@@ -675,7 +675,15 @@ As of PR-E2 no scenario calls `runScore` yet (the policy was not to rewrite the 
     ...(opts?.windowMs && opts.windowMs > 0
       ? { windows: windowSeries(buf, dataOff, frames, format, opts.windowMs / 1000) }
       : {}),
-    // ...
+    ...(opts?.perChannel
+      ? channelSeries(
+          buf,
+          dataOff,
+          frames,
+          format,
+          opts.windowMs && opts.windowMs > 0 ? opts.windowMs / 1000 : WINDOW_SEC,
+        )
+      : {}),
   }
 ```
 
@@ -721,6 +729,55 @@ E2E-1, for example, compares `rms('unity')` and `rms('half')` to confirm that `g
 What this assertion caught is recorded in WORK_LOG 6.415. On 2026-08-29, when this E2E was written and run on the real device, it turned out that **`global.gain()` had no effect at all on instruments**. The cause was in `output.rs`: audio joining the master from the mixer stages **was added after the master gain had been applied**. Every layer returned success, not a single ERROR line appeared, and neither 35 mutation checks nor 2149 unit tests had caught it. CLAUDE.md cites this case as the grounds for "E2E matters most" because it was the only layer able to catch "**looks correct, but the composition is wrong**".
 
 `ORBIT_KEEP_CAPTURES=<dir>` was formalised the same day. When set, capture WAVs are written to that directory instead of tmpRoot — because "the harness's assertions show only one number inside the window, but the defect may be outside it" (6.415). It only started taking effect across the whole spec with #668 PR-E2, though: before that, one of the 13 capture-path sites honoured it ([the shared harness layer](#the-shared-harness-layer-—-tests-e2e-helpers)).
+
+### Per-channel analysis — what a mono mixdown cannot measure
+
+Everything above is computed over the **mono mixdown**. `peak`, `rms` and `onsets` all come from a single series obtained by summing and averaging every channel. That is enough to ask "did sound come out?" and "is the tempo right?", but it **cannot reach any question about the differences between channels**. Did `pan` push the signal to L or R? Are ch3-4 silent as intended? Is there bleed in an 8-channel output? Summing destroys all of that: if the sum is the same, "everything in L" and "evenly spread across L and R" are indistinguishable, so tests of this kind are **always green**.
+
+#668 PR-E3 added a `perChannel` option to `analyzeWavBuffer`, keeping a separate series that does not collapse the channels.
+
+```typescript
+// packages/vscode-extension/src/wav-analysis.ts:52-59
+  /**
+   * チャンネル別の窓系列（`opts.perChannel` 指定時のみ・#668 §10）。index = チャンネル番号。
+   * `analysis.windows` はチャンネル加算平均のモノラルのままで、こちらは各チャンネルを
+   * 別々に保持する — pan / チャンネル分離 / bleed の判定はこちらでしか測れない。
+   */
+  channelWindows?: ReadonlyArray<ReadonlyArray<ChannelWindow>>
+  /** チャンネル別の全体 RMS（同上）。index = チャンネル番号。 */
+  channelRms?: readonly number[]
+```
+
+The computation itself lives in `channelSeries()`, the counterpart of `windowSeries()`. The windowing (how `winFrames` is derived, the `MAX_WINDOW_SERIES` cap, the `MIN_WINDOW_MS` floor) is identical to the mono side; the only difference is that each channel keeps its own accumulator.
+
+```typescript
+// packages/vscode-extension/src/wav-analysis.ts:295-301
+function channelSeries(
+  buf: Buffer,
+  dataOff: number,
+  frames: number,
+  format: WavFormat,
+  windowSec: number,
+): { channelWindows: ChannelWindow[][]; channelRms: number[] } {
+```
+
+The design point worth holding on to is that **the two series are computed independently**. The shortcut "we already have per-channel values, so derive mono by averaging them and scan the buffer only once" does not hold: the RMS of a summed waveform and the average of the per-channel RMS values do not agree in general (they agree only when L = R, or when one channel is silent). WORK_LOG 6.421 records a measured ratio of **0.7021** ($\approx 1/\sqrt{2}$) for uncorrelated L/R of equal power, so the shortcut would **change the default numbers and thereby change what the existing assertions mean**. The double scan is deliberately kept as the price of preserving that meaning.
+
+The MCP side is opened up the same way. `per_channel` on `analyze_audio` is optional, so existing clients that do not send it receive the mono values exactly as before.
+
+```typescript
+// packages/vscode-extension/src/mcp-server.ts:1016-1023
+        per_channel: z
+          .boolean()
+          .describe(
+            'Optional: also return channelWindows / channelRms (per-channel peak/RMS) ' +
+              'instead of only the mono mixdown',
+          )
+          .optional(),
+      },
+```
+
+The extension-side handler (`analyzeAudioForAgent`) just passes the boolean straight through into the `opts` of `analyzeWavBuffer`. The MCP principle holds here too: **an agent can see the same numbers through the same path as the tests**.
 
 ---
 
@@ -823,6 +880,71 @@ It only checks whether `.<name>(` appears anywhere in the gated E2E sources retu
 
 Its limits are stated honestly too. Since it only scans the source as text, it does not see "whether that E2E verifies anything meaningful". The rule "anything audible must be judged by capture numbers" only bites in combination with the next test.
 
+### Syntax surfaces a method scan cannot measure — `DSL_SYNTAX_SURFACE`
+
+There was one more structural hole in the ratchet. The scan only picks up the shape `.<name>(`, so **DSL that is not shaped like a method call** was never in view at all. `var g = init GLOBAL`, `RUN(x)`, `n by 4`, `1@v+10` — none of them ever match that regular expression, so forgetting the E2E left the suite green.
+
+So #668 PR-E4 introduced a canonical list of the "not a method call" surfaces the parser accepts.
+
+```typescript
+// packages/engine/src/parser/dsl-surface.ts:5-18
+export type DslSyntaxId =
+  | 'var-init-global' // var g = init GLOBAL              tokenizer.ts:19-20, parse-statement.ts:62
+  | 'var-init-seq' // var s = init global.seq          parse-statement.ts:385
+  | 'import' // import { x } from "./a.orbs"     tokenizer.ts:27, parse-statement.ts:67
+  | 'file-import' // file_import 文                    audio-parser.ts:94,106
+  | 'transport-run' // RUN(x)                           parse-statement.ts:72
+  | 'transport-loop' // LOOP(x)                          parse-statement.ts:72
+  | 'transport-mute' // MUTE(x)                          parse-statement.ts:72
+  | 'beat-by' // n by 4                           tokenizer.ts:21
+  | 'play-nested' // play(1, (1,1), 1)
+  | 'event-modifier' // 1@v+10 / ^2 / ~ / @g
+  | 'tie' // _                                audio では無視・#665
+  | 'underscore-method' // _gain(...) 等（適用形・spec §7）
+  | 'chain-multiline' // 複数行にまたがるチェーン（spec §3 Multiline）
+```
+
+The point is that each id carries a comment naming **which tokenizer / parse-statement branch it corresponds to**. To keep that list from drifting away from the implementation, `A-3` cross-checks it against the tokenizer's reserved words. `KEYWORDS` used to be a private static on `AudioTokenizer`; it became a public static typed `ReadonlySet<string>`, with a view exported at the end of the module for this comparison (`packages/engine/src/parser/tokenizer.ts:288-289`). Add a reserved word without mapping it to a syntax surface and `A-3` names the unmapped keyword.
+
+What is interesting is that the check first confirms **it is not passing vacuously**.
+
+```typescript
+// tests/e2e/dsl-e2e-coverage.spec.ts:181-186
+  it('A-3 keeps every tokenizer keyword represented by the syntax surface', () => {
+    // 🔴 空集合に対しては何を照合しても通る。`KEYWORDS` の import が壊れたら
+    // **この検査ごと真空で緑になる**ので、まず中身があることを確かめる。
+    expect(KEYWORDS.size, 'KEYWORDS is empty — A-3 would pass vacuously').toBeGreaterThan(0)
+    const syntaxIds = new Set<string>(DSL_SYNTAX_SURFACE)
+    const unmappedKeywords = [...KEYWORDS].filter(
+```
+
+The same worry applies to `gatedItTitles()`. The `it(` calls in the gated spec are written in the curried form `it.skipIf(!appAvailable)('title', ...)`, so a regular expression that assumes "a string follows `it(` directly" picks up **not a single one**. That is exactly what happened once, and the comparison went green on nothing. It now throws when zero titles are found (`tests/e2e/gated-sources.ts:118-127`) — the same construction that runs through this whole section: **never let a check that has become meaningless read as green**.
+
+### The ledger — which scenario covered it, and what it measured
+
+On the syntax side there is no automatic equivalent of `.<name>(`. So a hand-written ledger maps "surface → scenario → observation", and the ledger itself is checked.
+
+```typescript
+// tests/e2e/dsl-coverage-ledger.ts:2-9
+export type ObservationKind =
+  | 'capture-rms'
+  | 'capture-onset'
+  | 'capture-pitch'
+  | 'capture-bits'
+  | 'log-text'
+  | 'file'
+  | 'smoke'
+```
+
+`ObservationKind` types "on what grounds do we call this covered". Only `smoke` (the evaluation merely went through) is treated specially: `A-5` makes its count **impossible to edit upwards**. "The evaluation passed" is precisely the weak assertion CLAUDE.md keeps rejecting, so the design permits it in the ledger while pinning the count with a ratchet.
+
+- **A-2** — red if a syntax surface is added with neither a ledger entry nor a `SYNTAX_UNCOVERED_BASELINE` entry
+- **A-4** — does each ledger `scenario` partially match an `it(` title in the gated spec? You cannot name a scenario that does not exist
+- **A-5** — red if the number of `smoke` observations exceeds `SMOKE_OBSERVATION_BASELINE` (currently 0)
+- **A-10** — checks the baselines themselves: surfaces that made it into the ledger but are still listed in `SYNTAX_UNCOVERED_BASELINE` (**a stale entry lets the next addition slip through**), and a `SMOKE_OBSERVATION_BASELINE` looser than the actual smoke count
+
+As of PR-E4, `DSL_COVERAGE_LEDGER` is **empty**. The policy is to place the ratchet first without adding E2E tests, so all 13 syntax surfaces sit in `SYNTAX_UNCOVERED_BASELINE`. Like `SEQUENCE_UNCOVERED_BASELINE`, that array **may only be edited in the shrinking direction**.
+
 ### Assertion hygiene
 
 ```typescript
@@ -845,6 +967,22 @@ Its limits are stated honestly too. Since it only scans the source as text, it d
 ```
 
 The remaining four check "does a spec that uses capture actually contain an `rms(` / `peak(` / `.rms` assertion", "does the stale guard call `resolveDaemonBinaryPath()`", and the two added in #713: "does the stale guard exclude `tests` / `benches` / `examples`" and "does it stop short of excluding `src`". 6.418 records that it detected one real violation immediately after being written (`.toBe(errorCountBeforeMixer)`, corrected to `<=`).
+
+The first of those four — "is capture being used?" — had to be rewritten once the shared harness layer arrived. `runScore(..., { capture: true })` is also a capture path, and missing that spelling would let **a new scenario pass the check while measuring nothing**.
+
+```typescript
+// tests/e2e/gated-assertion-hygiene.spec.ts:49-56
+    // 音に出る機能は**キャプチャの数値**で判定する。ここでは「capture を使う spec に
+    // rms/peak のアサーションが実在するか」だけを確かめる（個々のテストの強さは見ない）。
+    // 🔴 `runScore(..., { capture: true })` も capture 経路（#668 §17 F-1）。
+    // これを入れ忘れると、新しいシナリオが**何も測らなくても検査が通る**。
+    const usesCapture = /captureInstrumentScenario|capture_wav|capturePath|capture:\s*true/.test(
+      source,
+    )
+    if (!usesCapture) return
+```
+
+Having to add a spelling to this regular expression every time a helper is added is itself a weakness. The scan list now lives in one place (`gated-sources.ts`), but **the vocabulary of "what counts as a signal that capture is in use" is still scattered across the checks** — that is the accurate reading.
 
 Those last two form a pair that pins **one direction each**. The first alone catches the regression "the exclusion was deleted", but without the second, going too far and excluding `src` as well would pass unnoticed. The guard's purpose — never measure a stale binary — depends on it still looking at `src`, so only both directions together fix the line.
 
@@ -1146,14 +1284,19 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `packages/vscode-extension/src/extension.ts:445-495` — MCP server startup gate and handler wiring
 - `packages/vscode-extension/src/extension.ts:1153-1177` — `shouldFilterLine()` (exclusion of `[STEP]` and bridge envelopes)
 - `packages/vscode-extension/src/extension.ts:1473-1553` — `setupStdoutHandler()`
-- `packages/vscode-extension/src/extension.ts:3040-3077` — `evaluateForAgent()` (#614)
-- `packages/vscode-extension/src/extension.ts:3585-3597` — `getLogForAgent()` / `analyzeAudioForAgent()`
+- `packages/vscode-extension/src/extension.ts:3041-3078` — `evaluateForAgent()` (#614)
+- `packages/vscode-extension/src/extension.ts:3586-3602` — `getLogForAgent()` / `analyzeAudioForAgent()`
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-142` — the `//#evalMark` requestId correlation bridge
 - `packages/vscode-extension/src/log-ring.ts:1-45` — `selectLogLines()` (#567)
 - `packages/vscode-extension/src/engine-lifecycle.ts:76-152` — stdout line classification and application (`isCurrent` partitioning)
 - `packages/vscode-extension/src/engine-lifecycle.ts:264-291` — `decideStartEngineForAgent()` (spawn-only options)
 - `packages/vscode-extension/src/playhead.ts:1-273` — `[STEP]` grammar, palette, `findPlayArgRangeForPath()`
-- `packages/vscode-extension/src/wav-analysis.ts:1-171` — WAV analysis (peak / RMS / onsets / `soundDetected`)
+- `packages/vscode-extension/src/wav-analysis.ts:1-198` — WAV analysis (peak / RMS / onsets / `soundDetected`)
+- `packages/vscode-extension/src/wav-analysis.ts:22-59` — `ChannelWindow` / `channelWindows` / `channelRms` (#668 PR-E3)
+- `packages/vscode-extension/src/wav-analysis.ts:291-338` — `channelSeries()` (per-channel peak/RMS)
+- `packages/vscode-extension/src/mcp-server.ts:998-1035` — the `analyze_audio` registration and `per_channel`
+- `packages/engine/src/parser/dsl-surface.ts:1-35` — `DslSyntaxId` / `DSL_SYNTAX_SURFACE` (#668 PR-E4)
+- `packages/engine/src/parser/tokenizer.ts:288-289` — the `KEYWORDS` view exported for cross-checking
 - `packages/vscode-extension/package.json:400-407` — the `orbitscore.mcpServer.port` setting
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio-path `[STEP]` source
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()` (#654)
@@ -1163,15 +1306,16 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:635-1430` — the first test (launch, catalogue, capture, run_selection, onset verification)
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:2030-2136` — the #654 playhead E2E
 - `tests/e2e/helpers/mcp-client.ts:1-174` — raw JSON-RPC client
-- `tests/e2e/gated-sources.ts:1-106` — the list of gated sources the ratchet and hygiene test read (#668 PR-E1)
+- `tests/e2e/gated-sources.ts:1-134` — the list of gated sources the ratchet and hygiene test read (#668 PR-E1)
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` assertions (where the seven `countErrors` definitions converged, #668 PR-E2)
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` and `captureWavPath()`
 - `tests/e2e/helpers/run-score.ts:1-272` — one function that copies a score and evaluates it on real hardware
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — waiting for generated artefacts (with `minBytes`)
 - `tests/e2e/helpers/run-cli.ts:1-62` — child-process runs of `orbitscore replay` / `render` (the only path that bypasses MCP)
 - `tests/e2e/helpers/rack-child-pid.ts:1-38` — the rack child PID oracle (log-derived; moved out of the spec in #668 PR-E1)
-- `tests/e2e/dsl-e2e-coverage.spec.ts:1-146` — DSL coverage ratchet
-- `tests/e2e/gated-assertion-hygiene.spec.ts:1-68` — assertion hygiene
+- `tests/e2e/dsl-e2e-coverage.spec.ts:1-264` — DSL coverage ratchet (A-1 methods / A-2, A-3 syntax surfaces / A-4, A-5, A-10 ledger)
+- `tests/e2e/dsl-coverage-ledger.ts:1-27` — `ObservationKind` and `DSL_COVERAGE_LEDGER` (#668 PR-E4)
+- `tests/e2e/gated-assertion-hygiene.spec.ts:1-101` — assertion hygiene
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixtures
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — building OrbitStudio.app
@@ -1187,4 +1331,4 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - Issue [#643](https://github.com/signalcompose/orbitscore/issues/643) — mixer integration of instruments (E2E-1 to 7)
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — periodic capture header patch and stale guard
 - Issue [#654](https://github.com/signalcompose/orbitscore/issues/654) — playhead not moving for instrument sequences
-- Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E foundation (PR-E1 `gated-sources.ts` / PR-E2 the shared harness layer)
+- Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E foundation (PR-E1 `gated-sources.ts` / PR-E2 the shared harness layer / PR-E3 per-channel analysis / PR-E4 the syntax ratchet)
