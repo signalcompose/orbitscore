@@ -27,6 +27,58 @@ const REPO_ROOT = path.resolve(__dirname, '../../..')
 const LIVE_MODE_MARKER = '🎵 Live coding mode'
 const STARTUP_TIMEOUT_MARKER = 'daemon ready line timeout after 10000ms'
 
+/**
+ * 起動判定の錨に使う `get_log` 末尾の長さ（文字）。
+ *
+ * daemon の起動で増えるのは十数行なので、この長さがあれば錨は 500 行窓に残る。
+ */
+const LOG_ANCHOR_CHARS = 400
+
+/**
+ * 🔴 `get_log` は**固定 500 行の窓**なので、「マーカーの件数が増えたか」では再起動を判定できない。
+ *
+ * 窓が飽和すると、新しい `🎵 Live coding mode` を 1 行足しても**古いマーカーが同時に押し出される**ため
+ * 件数が増えない（減ることさえある）。#611 PR-O0 の実測: 既存 20 本を走らせた後の O0-3 / O0-4 が
+ * 「daemon-backed REPL ready after 30000ms」で必ずタイムアウトした。engine 自体は起動していた。
+ * ERROR 件数を厳密等価で見ない規律（`gated-assertion-hygiene.spec.ts`）と**同じ理由**である。
+ *
+ * 代わりに **`start_engine` の直前のログ末尾を錨**にして、その後ろに現れた分だけを新しい出力と見る。
+ *
+ * 🔴 **錨が見つからないときはログ全体が新しい出力である。** 錨は前の窓の**末尾**から取り、
+ * 窓は**先頭から**落ちる。したがって末尾が消えているなら、それより古い行はすべて消えている —
+ * 今の窓に残っているのは起動後に出た分だけ、ということになる。だから全体を返すのが正しく、
+ * 「判定できない」として待つのは**誤り**である。
+ *
+ * ⚠️ 一度 `undefined` を返す実装にしたところ、`#628 R28` が
+ * 「daemon-backed REPL ready after 30000ms」で落ちた（2026-09-04 実機・PR-O0）。
+ * ラック child の起動で 500 行以上が流れ、錨が窓から出ただけだったのに、
+ * 「まだ起動していない」と判定して待ち続けていた。
+ */
+export function logAppendedSince(anchor: string, log: string): string {
+  if (anchor.length === 0) return log
+  const index = log.lastIndexOf(anchor)
+  return index === -1 ? log : log.slice(index + anchor.length)
+}
+
+/** `logAppendedSince` に渡す錨を作る（末尾 `LOG_ANCHOR_CHARS` 文字）。 */
+export function logAnchor(log: string): string {
+  return log.slice(-LOG_ANCHOR_CHARS)
+}
+
+/**
+ * 相対差（`|actual - expected| / |expected|`）。capture の窓 RMS を golden と突き合わせる時の唯一の正本。
+ *
+ * gated spec に同名のローカル定義が **2 つ**あり（式はどちらも `… / expected` で同一）、
+ * ここへ 1 本化した。ついでに分母を `Math.abs(expected)` にして期待値が負の場面にも耐えるようにした
+ * — 今の期待値はすべて正なので**挙動は変わらない**。
+ *
+ * ⚠️ 「3 つあって式が食い違っていた」と書いていたのは**誤り**だった（レビューで判明）。
+ * 3 つ目の食い違う定義は、この共通化で新しく作った**この関数自身**である。
+ */
+export function relativeDelta(actual: number, expected: number): number {
+  return Math.abs(actual - expected) / Math.abs(expected)
+}
+
 export interface ScoreSource {
   /** 一時ファイル名の元。capture / work copy の basename に使う。 */
   readonly slug: string
@@ -58,6 +110,8 @@ export interface CaptureWindows {
   ): ReadonlyArray<{ startSec: number; peak: number; rms: number }>
   /** 区間内のオンセット時刻（時間構造）。`analysis.onsets` の絞り込み。 */
   onsets(segment: string): readonly number[]
+  /** 区間 × チャンネルの RMS。pan / 分離 / stem の判定はここを使う（#668 §10）。 */
+  channelRms(segment: string, channel: number, guardSec?: number): number
 }
 
 export interface ScoreRunContext {
@@ -68,8 +122,14 @@ export interface ScoreRunContext {
   captureSegment(name: string, durationMs?: number, settleMs?: number): Promise<void>
 }
 
-function markerCount(log: string, marker: string): number {
-  return log.split(marker).length - 1
+/**
+ * 窓ごとの RMS を二乗平均して 1 つの値にする。
+ *
+ * 🔴 **`captureInstrumentScenario`（gated spec）と同一の計算**であること。ここがずれると、
+ * 既存 7 本の #643 シナリオと新しい E2E が**違う数を見ながら同じ名前で語る**ことになる。
+ */
+function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
+  return Math.sqrt(windows.reduce((sum, w) => sum + w.rms * w.rms, 0) / windows.length)
 }
 
 async function waitForEngineState(
@@ -103,8 +163,7 @@ async function startEngineForRun(
   }
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const beforeLog = (await client.call('get_log', { lines: 500 })).text
-    const liveModeBefore = markerCount(beforeLog, LIVE_MODE_MARKER)
-    const startupTimeoutsBefore = markerCount(beforeLog, STARTUP_TIMEOUT_MARKER)
+    const anchor = logAnchor(beforeLog)
     const started = await client.call(
       'start_engine',
       captureWav === undefined ? {} : { capture_wav: captureWav },
@@ -114,15 +173,18 @@ async function startEngineForRun(
       await waitUntil(
         async () => {
           const log = (await client.call('get_log', { lines: 500 })).text
-          return markerCount(log, LIVE_MODE_MARKER) > liveModeBefore
+          // 🔴 件数比較ではなく「錨より後ろに出たか」を見る（`logAppendedSince` の注記）。
+          return logAppendedSince(anchor, log).includes(LIVE_MODE_MARKER)
         },
         { intervalMs: 200, timeoutMs: 30_000, label: `${label} daemon-backed REPL ready` },
       )
       return
     } catch (error) {
       const startupLog = (await client.call('get_log', { lines: 500 })).text
-      const sawFreshKnownTimeout =
-        markerCount(startupLog, STARTUP_TIMEOUT_MARKER) > startupTimeoutsBefore
+      // retry するかの判定も同じ窓の問題を持つので、同じ錨方式で見る。
+      const sawFreshKnownTimeout = logAppendedSince(anchor, startupLog).includes(
+        STARTUP_TIMEOUT_MARKER,
+      )
       if (attempt === 1 && sawFreshKnownTimeout) {
         const stopped = await client.call('stop_engine')
         expect(stopped.isError, stopped.text).toBe(false)
@@ -192,7 +254,20 @@ export async function runScore(
     // 「この譜面は診断を出す」が判定条件）。ここで弾くと、そちらが `runScore` を使えない。
     // 逆に #614 以降 `ok` は「評価完了までに診断が無かった」までしか保証しないので、
     // 正常系でも `ok` は十分条件にならない（評価後に非同期で起きる失敗は `get_log` だけに出る）。
-    await client.call('evaluate_orbitscore', { code })
+    //
+    // 🔴 **ただし「assert しない」は「握り潰す」ではない**（silent-failure レビュー 2026-09-04）。
+    // `ok` は**必要条件**で、`ok: false` は `get_log` を漁らずその場で取れる一次シグナルである
+    // （パース / 実行時診断・`mcp-server.ts` の tool 説明）。捨てると、セットアップの typo が
+    // **後段の「音が鳴っていない」というアサーション失敗として現れる** — 書いた本人は
+    // オーディオの不具合を疑って延々探すことになる。**assert はせず、見えるようにする。**
+    const result = await client.call('evaluate_orbitscore', { code })
+    if (result.isError) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[runScore ${source.slug}] evaluate_orbitscore reported a diagnostic (not asserted — ` +
+          `a test may be verifying it on purpose):\n${result.text}`,
+      )
+    }
   }
   const captureSegment = async (name: string, durationMs = 2000, settleMs = 400): Promise<void> => {
     if (settleMs > 0) await sleep(settleMs)
@@ -201,6 +276,8 @@ export async function runScore(
     segments[name] = { from, to: Date.now() }
   }
 
+  let bodyError: unknown
+  let cleanupFailure: unknown
   try {
     const opened = await client.call('open_file', { path: workPath })
     expect(opened.isError, opened.text).toBe(false)
@@ -218,19 +295,42 @@ export async function runScore(
     expect(run.isError, run.text).toBe(false)
 
     if (body) await body({ session, evaluate, captureSegment })
+  } catch (error) {
+    bodyError = error
+    throw error
   } finally {
-    await client.call('evaluate_orbitscore', { code: 'global.stop()' })
-    const stopped = await client.call('stop_engine')
-    expect(stopped.isError, stopped.text).toBe(false)
-    stopWall = Date.now()
-    await waitForEngineState(client, false, 15_000, `runScore ${source.slug} engine stopped`)
-    await sleep(1000)
+    // 🔴 **cleanup の失敗が本来の失敗を隠さないようにする**（silent-failure レビュー 2026-09-04）。
+    // JS では `finally` が投げると `try` 側の例外を**完全に置き換える**。よりによって
+    // 「エンジンが落ちる」ことを検証するテストほど `stop_engine` / 停止待ちも一緒に転ぶので、
+    // 書いた本人に見えるのが本質と無関係な「停止待ちタイムアウト」だけ、という事故が起きる。
+    try {
+      await client.call('evaluate_orbitscore', { code: 'global.stop()' })
+      const stopped = await client.call('stop_engine')
+      expect(stopped.isError, stopped.text).toBe(false)
+      stopWall = Date.now()
+      await waitForEngineState(client, false, 15_000, `runScore ${source.slug} engine stopped`)
+      await sleep(1000)
+    } catch (cleanupError) {
+      if (bodyError === undefined) {
+        // 本体は通ったのに片付けだけ失敗した — これは本物の失敗なので後で投げる。
+        cleanupFailure = cleanupError
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[runScore ${source.slug}] cleanup also failed; reporting the original failure instead:` +
+            `\n${String(cleanupError)}`,
+        )
+      }
+    }
   }
+  // 🔴 `finally` の中で throw すると `try` の例外を**置き換えてしまう**（lint の
+  // `no-unsafe-finally` が指すとおり）。片付けだけが失敗した場合は、ブロックを抜けてから投げる。
+  if (cleanupFailure !== undefined) throw cleanupFailure
 
   if (!wantsCapture || capturePath === undefined) return undefined
 
   const capture = fs.readFileSync(capturePath)
-  const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
+  const analysis = analyzeWavBuffer(capture, { windowMs: 20, perChannel: true })
   const range = (segment: CaptureSegment, guardSec: number) => ({
     fromSec: Math.max(0, analysis.durationSec - (stopWall - segment.from) / 1000 + guardSec),
     toSec: Math.min(
@@ -259,14 +359,29 @@ export async function runScore(
   }
   const rms = (name: string, guardSec = 0.15): number => {
     const selected = windowsFor(name, guardSec)
-    return Math.sqrt(
-      selected.reduce((sum, window) => sum + window.rms * window.rms, 0) / selected.length,
-    )
+    return quadraticMeanRms(selected)
   }
   const onsets = (name: string): readonly number[] => {
     const requested = range(requireSegment(name), 0)
     return analysis.onsets.filter((t) => t >= requested.fromSec && t < requested.toSec)
   }
+  const channelRms = (name: string, channel: number, guardSec = 0.15): number => {
+    const perChannel = analysis.channelWindows?.[channel]
+    expect(
+      perChannel,
+      `runScore ${source.slug} channelWindows must exist for channel ${channel} ` +
+        `(analysis.format.channels=${analysis.format.channels})`,
+    ).toBeDefined()
+    const requested = range(requireSegment(name), guardSec)
+    const selected = (perChannel ?? []).filter(
+      (window) => window.startSec >= requested.fromSec && window.startSec < requested.toSec,
+    )
+    expect(
+      selected.length,
+      `runScore ${source.slug} segment '${name}' channel ${channel} must contain windows`,
+    ).toBeGreaterThan(0)
+    return quadraticMeanRms(selected)
+  }
 
-  return { analysis, capturePath, rms, windows: windowsFor, onsets }
+  return { analysis, capturePath, rms, windows: windowsFor, onsets, channelRms }
 }

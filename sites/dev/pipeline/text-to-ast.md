@@ -470,4 +470,4 @@ export type SequenceStatement = {
 - `packages/engine/src/parser/parse-expression.ts:62-78` — `collapseScopedRun()`
 - `packages/engine/src/parser/parser-utils.ts:45-57` — `expect()` によるエラー位置報告
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §IM.1-IM.6 — import 宣言の仕様
-- `docs/development/WORK_LOG.md` §6.265 (file import parser + interpreter #456, 2026-07-17)、§6.291 (Signal Chain ミキサー宣言 #517 S1, 2026-07-26)
+- `docs/archive/WORK_LOG_2026-07.md` §6.265 (file import parser + interpreter #456, 2026-07-17)、§6.291 (Signal Chain ミキサー宣言 #517 S1, 2026-07-26)

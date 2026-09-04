@@ -37,7 +37,7 @@ What happens when you press `Cmd+Enter`? In OrbitScore, a sequence runs of "inte
 When `Cmd+Enter` is pressed, the `orbitscore.runSelection` command fires and the `runSelection()` function is called. Two guard conditions are checked first:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2716-2727
+// packages/vscode-extension/src/extension.ts:2717-2728
 async function runSelection() {
   const editor = vscode.window.activeTextEditor
   if (!editor || editor.document.languageId !== 'orbitscore') {
@@ -63,7 +63,7 @@ Incidentally, the MCP `run_selection` tool calls this same function (`runSelecti
 When there is a selection (`!selection.isEmpty`), it is simple. The text of the selected range is taken as is:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2734-2736
+// packages/vscode-extension/src/extension.ts:2735-2737
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -78,7 +78,7 @@ When there is a selection (`!selection.isEmpty`), it is simple. The text of the 
 The case with no selection is interesting. It investigates "to which variable (subject) does the line at the cursor belong" and gathers **lines from the entire file** related to that subject:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2737-2786 (setDocumentDirectory 注入前まで)
+// packages/vscode-extension/src/extension.ts:2738-2787 (setDocumentDirectory 注入前まで)
   } else {
     // No selection: subject-based block evaluation
     // Detect which variable/object the current line belongs to, then collect all related lines
@@ -134,7 +134,7 @@ The case with no selection is interesting. It investigates "to which variable (s
 `getLineSubject()` is a function that looks at each line and returns "to which variable does this line belong." The first draft did not dive into it, but the implementation is a small one with just two regular expressions.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2701-2714
+// packages/vscode-extension/src/extension.ts:2702-2715
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -179,7 +179,7 @@ On the line `_kick.play(`, `parenBalance = 1`. On `1, 0, 1, 0,` there is no chan
 When `getLineSubject()` returns `null`, it is judged a standalone command (`LOOP`, `RUN`, `MUTE`, etc.). In this case, the same `parenBalance` logic is used to follow multiple lines, but rather than scanning the entire file, the range is extended **only downward from the cursor line**:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2786-2809
+// packages/vscode-extension/src/extension.ts:2787-2810
     } else {
       // Standalone command (LOOP, RUN, MUTE, etc.) - evaluate current statement only
       let endLine = currentLine
@@ -213,7 +213,7 @@ When `getLineSubject()` returns `null`, it is judged a standalone command (`LOOP
 The job of sending the collected text to the engine was written inline at the tail of `runSelection()` as of 2026-05, but it has been carved out into `writeCodeToEngine()` so it can be shared with MCP's `evaluate_orbitscore`. There are two layers of mechanism for resolving the relative paths of `audioPath()` and `audio()` against the `.orbs` file's directory.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3000-3032
+// packages/vscode-extension/src/extension.ts:3001-3033
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -267,7 +267,7 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 The tail of `runSelection()` looks like this.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2873-2880
+// packages/vscode-extension/src/extension.ts:2874-2881
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
@@ -278,7 +278,7 @@ The tail of `runSelection()` looks like this.
   flashLines()
 ```
 
-A point to note here is the ordering: if sending fails, **no flash**. As of 2026-05 it called `flashLines()` right after `write`, but showing "it ran" when nothing reached stdin is false feedback. `revealRange` was added so that when an agent-driven run targets an off-screen line, the flash is not invisible (#388, `docs/development/WORK_LOG.md` §6.193).
+A point to note here is the ordering: if sending fails, **no flash**. As of 2026-05 it called `flashLines()` right after `write`, but showing "it ran" when nothing reached stdin is false feedback. `revealRange` was added so that when an agent-driven run targets an off-screen line, the flash is not invisible (#388, `docs/archive/WORK_LOG_2026-07.md` §6.193).
 
 ---
 
@@ -287,7 +287,7 @@ A point to note here is the ordering: if sending fails, **no flash**. As of 2026
 What flashes the executed range in the editor is `flashLines()`. It is implemented using `createTextEditorDecorationType` (VS Code API):
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2814-2871
+// packages/vscode-extension/src/extension.ts:2815-2872
   // Visual feedback: flash the executed lines (configurable)
   const flashLines = () => {
     const config = vscode.workspace.getConfiguration('orbitscore')
@@ -355,7 +355,7 @@ The defaults are:
 - `flashDuration`: 150 ms (lit time)
 - Flash interval: `100 ms` (hard-coded)
 
-`isWholeLine` is **always `true`**. As of 2026-05 it was "with a selection = only the selected characters," but because MCP's `run_selection` always places a range via `set_selection` before calling, a character-bounded decoration exactly overlapped the editor's own selection highlight and the flash became invisible (`docs/development/WORK_LOG.md` §6.193). Painting the whole line stays visible regardless of selection state, color config, or trigger source.
+`isWholeLine` is **always `true`**. As of 2026-05 it was "with a selection = only the selected characters," but because MCP's `run_selection` always places a range via `set_selection` before calling, a character-bounded decoration exactly overlapped the editor's own selection highlight and the flash became invisible (`docs/archive/WORK_LOG_2026-07.md` §6.193). Painting the whole line stays visible regardless of selection state, color config, or trigger source.
 
 The kinds of colors that can be set:
 
@@ -422,7 +422,7 @@ For deep nesting of the argument tree (group runs like `(A)(B).root(X)` or stack
 A human user notices errors via the editor's red squiggles and the Output Channel, but an LLM going through MCP receives only the `ok` of `evaluate_orbitscore`. And the `true` of `writeCodeToEngine()` only means "it reached stdin." #614 added a mechanism that sends `//#evalMark {"requestId":...}` right after the code, and when the engine reaches it in FIFO order, returns the diagnostics accumulated during the preceding evaluation as JSON.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3059-3068
+// packages/vscode-extension/src/extension.ts:3060-3069
   const result = await evalMarkBridge.send((line, onError) => {
     // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
     stdin.write(line, (error) => {
@@ -438,7 +438,7 @@ A human user notices errors via the editor's red squiggles and the Output Channe
 The reception on the stdout side is placed as an **independent branch** in `setupStdoutHandler()`. The comment records that at first it was piggybacked on the `{"pluginUi"` branch and never dispatched; all unit tests were green and only the real-device E2E caught it.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1501-1509
+// packages/vscode-extension/src/extension.ts:1502-1510
         } else if (trimmedLine.startsWith('{"evalMark"')) {
           // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
           // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -459,7 +459,7 @@ The editor's `Cmd+Enter` does not send this marker. For a human, the flash + dia
 Separately from `Cmd+Enter`, `updateDiagnostics()` runs on document open / change / activation (#384, [IV-1](/en/editor/vscode-architecture#intellisense-and-diagnostics-registration)). The first half is the same three per-line checks as of 2026-05.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3965-4039
+// packages/vscode-extension/src/extension.ts:3970-4044
 async function updateDiagnostics(
   document: vscode.TextDocument,
   collection: vscode.DiagnosticCollection,
@@ -540,7 +540,7 @@ async function updateDiagnostics(
 The second half consists of **cross-line analyses**, which merely map the `DiagnosticIssue`s returned by pure functions (`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts`) to `vscode.Diagnostic`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4041-4052
+// packages/vscode-extension/src/extension.ts:4046-4057
   // === Cross-line analyses (pure functions, unit-testable) ===
   // Pure logic は `diagnostics-analysis.ts` に分離し、ここでは
   // VS Code Diagnostic オブジェクトに変換するだけにする。
@@ -640,7 +640,7 @@ The contract in DSL spec §8.1.2 — "in a LinkAudio file every sounding sequenc
 A warning when the name in `effect("...")` / `instrument("...")` is not in the plugin catalog (#638). The engine throws at evaluation time, but with 342 catalog entries a typo is common, so it is reported before evaluation. It **stays at Warning** because the catalog is a cached snapshot, and a name may be "correct but not scanned yet."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4095-4112
+// packages/vscode-extension/src/extension.ts:4100-4117
   // #638: plugin names that the catalog cannot resolve. The engine throws on
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
@@ -712,7 +712,7 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 
 | Change | Issue | Source |
 |---|---|---|
-| Carve the send part out into `writeCodeToEngine()`, shared with MCP `evaluate_orbitscore` | #388 | `docs/development/WORK_LOG.md` §6.188 (2026-07-07), `extension.ts:3000-3032` |
+| Carve the send part out into `writeCodeToEngine()`, shared with MCP `evaluate_orbitscore` | #388 | `docs/archive/WORK_LOG_2026-07.md` §6.188 (2026-07-07), `extension.ts:3000-3032` |
 | Always flash whole-line, `revealRange` before flashing | #388 | §6.193 (2026-07-07), `extension.ts:2842-2857` / `2876-2880` |
 | Live playhead via `[STEP]` lines (per-seq colors, nested argPath) | #390 | §6.194-6.197 (2026-07-07), `playhead.ts`, `extension.ts:150-284` |
 | Run diagnostics on open / close / activation too | #384 | §6.187 (2026-07-07), `extension.ts:414-443` |
@@ -742,7 +742,7 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 ## Next Exploration Candidates
 
 - The degradation of `findPlayArgRangeForPath()` to "the deepest resolvable ancestor" — what lights up in each case of stacks `[ ... ]`, group runs, and legato `{ ... }`
-- Engine-side `[STEP]` generation (`rust-engine-player.ts`) and argPath tagging — the relationship between lookahead and `atEpochMs` (`docs/development/WORK_LOG.md` §6.194 / §6.196)
+- Engine-side `[STEP]` generation (`rust-engine-player.ts`) and argPath tagging — the relationship between lookahead and `atEpochMs` (`docs/archive/WORK_LOG_2026-07.md` §6.194 / §6.196)
 - `configureFlash` command — a mechanism that interactively sets flashCount / flashDuration / flashColor via a Quick Pick UI
 - Candidates for improving diagnostic accuracy — parenthesis matching that follows entire multi-line statements (single-line only)
 - The precompiled per-sequence regexes in `analyzeLinkAudioMissingOutput` — the design that avoids recompiling on every keystroke, and the word boundary that keeps `kicker.output()` from matching `kick`
@@ -768,5 +768,5 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:108-391` — the 5 cross-line analysis functions
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — the design rationale of `//#evalMark`
-- `docs/development/WORK_LOG.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266, §6.412 — sources of the drift table
+- `docs/archive/WORK_LOG_2026-07.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — sources of the drift table
 - [Issue #168 / PR #169](https://github.com/signalcompose/orbitscore/pull/169) — background of the audioPath ordering diagnostic

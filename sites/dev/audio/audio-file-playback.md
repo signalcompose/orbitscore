@@ -9,7 +9,7 @@ status: draft
 > **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 ::: warning 2026-09 時点の位置づけ
-本章の `BufferManager` / `orbitPlayBuf` / `EventScheduler`（`packages/engine/src/audio/supercollider/`）は SuperCollider 経路のコードで、2026-07-03 の cutover #108（`docs/development/WORK_LOG.md` §6.179）以降は **既定ではなく `ORBITSCORE_ENGINE=sc` で opt-out したときだけ**使われます。既定の Rust daemon 経路ではファイルのデコードとスライス再生を daemon 側が担います（[RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照）。本章の引用は 69dc968 時点の実コードと一致しますが、歴史的読解として読んでください。
+本章の `BufferManager` / `orbitPlayBuf` / `EventScheduler`（`packages/engine/src/audio/supercollider/`）は SuperCollider 経路のコードで、2026-07-03 の cutover #108（`docs/archive/WORK_LOG_2026-07.md` §6.179）以降は **既定ではなく `ORBITSCORE_ENGINE=sc` で opt-out したときだけ**使われます。既定の Rust daemon 経路ではファイルのデコードとスライス再生を daemon 側が担います（[RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照）。本章の引用は 69dc968 時点の実コードと一致しますが、歴史的読解として読んでください。
 
 ```typescript
 // packages/engine/src/audio/create-audio-engine.ts:17-22
@@ -380,7 +380,7 @@ sequenceDiagram
 
 ## 次の深掘り候補
 
-- **Rust daemon 経路のスライス再生**: `calculateSlicePosition()` / `calculatePlaybackRate()` と同じ数式が daemon 側でどう表現されているか。slice varispeed parity (`docs/development/WORK_LOG.md` §6.159) を起点に読む
+- **Rust daemon 経路のスライス再生**: `calculateSlicePosition()` / `calculatePlaybackRate()` と同じ数式が daemon 側でどう表現されているか。slice varispeed parity (`docs/archive/WORK_LOG_2026-06.md` §6.159) を起点に読む
 - **フォーマット対応の確認**: 同梱 `libsndfile.dylib` の version と実際にデコードできるフォーマット (特に MP3/MP4) の確認
 - **soxi の依存管理**: soxi が存在しない環境での fallback 戦略。duration = 0.3s のデフォルト値で動くが、chop の精度に影響する
 - **バッファキャッシュの lifetime**: キャッシュはプロセス終了まで保持され、`clearCache()` や `removeBuffer()` が呼ばれないと解放されない。セッション長によるメモリ増大の影響
@@ -402,5 +402,5 @@ sequenceDiagram
 - `packages/engine/src/audio/supercollider/osc-client.ts:79-88` — `sendBufferLoad()`: `/b_allocRead` と callAndResponse
 - `packages/engine/supercollider/setup.scd:22-65` — `orbitPlayBuf` SynthDef 全体: PlayBuf, BufRateScale, startPos 単位変換, エンベロープ, doneAction
 - `packages/vscode-extension/BUILD_GUIDE.md:83-97` — bundle に含まれる `libsndfile.dylib` のサイズと構成
-- `docs/development/WORK_LOG.md` §6.179 — cutover #108 (2026-07-03): SC 経路が opt-out になった記録
+- `docs/archive/WORK_LOG_2026-07.md` §6.179 — cutover #108 (2026-07-03): SC 経路が opt-out になった記録
 - [SuperCollider Server Command Reference](https://doc.sccode.org/Reference/Server-Command-Reference.html) §Buffer Commands — `/b_allocRead` の引数定義

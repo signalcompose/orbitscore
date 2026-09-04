@@ -678,8 +678,8 @@ There are three key design decisions.
 - `packages/engine/src/audio/supercollider/event-scheduler.ts:440-462` — the SC `clearSequenceEvents()`
 - `packages/engine/src/audio/supercollider/event-scheduler.ts:476-509` — the SC `executePlayback()` (fire-now)
 - `packages/engine/src/audio/supercollider/types.ts:10-25` — the SC `ScheduledPlay`
-- `docs/development/WORK_LOG.md` 6.179 — cutover #108 (2026-07-03)
-- `docs/development/WORK_LOG.md` 6.194 / 6.198 — the #390 `[STEP]` marker / the two mechanisms and measurements of #389 timing jitter
-- `docs/development/WORK_LOG.md` 6.421 — the #654 MIDI-side playhead
+- `docs/archive/WORK_LOG_2026-07.md` 6.179 — cutover #108 (2026-07-03)
+- `docs/archive/WORK_LOG_2026-07.md` 6.194 / 6.198 — the #390 `[STEP]` marker / the two mechanisms and measurements of #389 timing jitter
+- `docs/archive/WORK_LOG_2026-08.md` 6.421 — the #654 MIDI-side playhead
 - Issue [#108](https://github.com/signalcompose/orbitscore/issues/108) / [#389](https://github.com/signalcompose/orbitscore/issues/389) / [#390](https://github.com/signalcompose/orbitscore/issues/390) / [#654](https://github.com/signalcompose/orbitscore/issues/654)
 - `sites/dev/orientation/architecture-overview.md` — sequence diagram (the full play() → sound flow)

@@ -9,7 +9,7 @@ status: draft
 > **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
 
 ::: warning Status as of 2026-09
-The SuperCollider (scsynth / OSC) path this chapter follows is **no longer the default audio backend** since cutover #108 on 2026-07-03 (`docs/development/WORK_LOG.md` §6.179). `createAudioEngine()` returns `SuperColliderPlayer` only when `ORBITSCORE_ENGINE=sc` (or `supercollider`) is set explicitly; when unset it picks the Rust `orbit-audio-daemon` (`RustEnginePlayer`). In other words, this chapter describes the **opt-out path**. The code still lives under `packages/engine/src/audio/supercollider/`, and every citation in this chapter matches the real code at 69dc968, but read it as historical reading. For the default path, see [RE-1. Daemon Architecture Overview](/en/rust-engine/).
+The SuperCollider (scsynth / OSC) path this chapter follows is **no longer the default audio backend** since cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179). `createAudioEngine()` returns `SuperColliderPlayer` only when `ORBITSCORE_ENGINE=sc` (or `supercollider`) is set explicitly; when unset it picks the Rust `orbit-audio-daemon` (`RustEnginePlayer`). In other words, this chapter describes the **opt-out path**. The code still lives under `packages/engine/src/audio/supercollider/`, and every citation in this chapter matches the real code at 69dc968, but read it as historical reading. For the default path, see [RE-1. Daemon Architecture Overview](/en/rust-engine/).
 
 ```typescript
 // packages/engine/src/audio/create-audio-engine.ts:17-36
@@ -459,5 +459,5 @@ Incidentally, the same `callAndResponse` is also used for LinkAudio channel regi
 - `packages/engine/src/audio/supercollider/event-scheduler.ts:537-605` — `sendPlaybackMessage()`: argument layout of `/s_new orbitPlayBuf` and the LinkAudio branch
 - `packages/engine/src/audio/supercollider/types.ts:48-52` — `BootOptions` type: `scsynth`, `debug`, `device` fields
 - `packages/engine/supercollider/setup.scd:22-65` — sclang definition of the `orbitPlayBuf` SynthDef (auto-release via doneAction: 2)
-- `docs/development/WORK_LOG.md` §6.179 — cutover #108 (2026-07-03): default backend switched to Rust, SC path retained via `ORBITSCORE_ENGINE=sc`
+- `docs/archive/WORK_LOG_2026-07.md` §6.179 — cutover #108 (2026-07-03): default backend switched to Rust, SC path retained via `ORBITSCORE_ENGINE=sc`
 - [SuperCollider Server Command Reference](https://doc.sccode.org/Reference/Server-Command-Reference.html) §Synth Commands — specification of `/s_new`, `/n_set`, `/n_free`, `/d_recv`, `/b_allocRead`

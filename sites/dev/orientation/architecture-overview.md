@@ -103,7 +103,7 @@ graph TD
 engine の起動は `startEngine()` が担います。最初にやるのは「どのバックエンドを使うか」の決定で、`orbitscore.engine` 設定を engine 側の `resolveEngineKind` (compiled JS を runtime require) で正規化します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2053-2056
+// packages/vscode-extension/src/extension.ts:2054-2057
   // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
   // 'rust' (default since cutover #369), skip the scsynth pre-check entirely —
   // the native daemon doesn't need scsynth to be resolvable.
@@ -113,7 +113,7 @@ engine の起動は `startEngine()` が担います。最初にやるのは「�
 ここで気をつけたいのは、**engine を spawn する前にバックエンドのバイナリ解決を先行させる** という点です。既定の `rust` kind では daemon バイナリを pre-check します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2078-2087
+// packages/vscode-extension/src/extension.ts:2079-2088
     const daemonResolution = resolveDaemonForUI()
     if (!daemonResolution) {
       outputChannel?.appendLine(
@@ -146,7 +146,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 バックエンドの種別は `ORBITSCORE_ENGINE` env で **必ず明示的に** engine に伝えます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2142-2155
+// packages/vscode-extension/src/extension.ts:2143-2156
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
@@ -166,7 +166,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 そして engine プロセス本体は `child_process.spawn` で Node.js を起動します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2157-2163
+// packages/vscode-extension/src/extension.ts:2158-2164
   // Spawn engine process
   try {
     engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -179,7 +179,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3030-3031
+// packages/vscode-extension/src/extension.ts:3031-3032
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -219,7 +219,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 サーバーは loopback にしか bind しません。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1343-1347
+// packages/vscode-extension/src/mcp-server.ts:1358-1362
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject)
     httpServer.listen(port, '127.0.0.1', () => resolve())
@@ -690,4 +690,4 @@ export const DSL_VERSION = '1.1'
 - `scripts/copy-daemon-bin.sh:1-47,121-132` — daemon / child / 標準プラグインの同梱方針
 - `package.json:9-11` — `build:copy-engine` が `copy-daemon-bin.sh` を呼ぶ
 - `docs/research/ENGINE_DAEMON_PROTOCOL.md` — wire protocol の正本
-- `docs/development/WORK_LOG.md` §6.179 (cutover #108, 2026-07-03)、§6.185 (daemon 同梱 #306, 2026-07-03)、§6.188-6.192 (MCP サーバー #388, 2026-07-07)
+- `docs/archive/WORK_LOG_2026-07.md` §6.179 (cutover #108, 2026-07-03)、§6.185 (daemon 同梱 #306, 2026-07-03)、§6.188-6.192 (MCP サーバー #388, 2026-07-07)

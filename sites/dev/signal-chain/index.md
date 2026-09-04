@@ -49,13 +49,18 @@ SC.1 は DSL の文を **宣言層**（可換・後勝ち）と **信号層**（
 
 | 層 | 属するもの | 順序の意味 |
 |----|----|----|
-| **宣言層** | audio / chop / play / gain / pan / 出力先ノード名 / instrument 役のプラグイン呼び出し / ミキサー宣言 | **可換**。同一項目の再宣言は後勝ち |
-| **信号層** | effect 役のプラグイン呼び出し / send | **この層内の相対順序だけ**が接続順になる |
+| **宣言層** | audio / chop / play / instrument 役のプラグイン呼び出し / ミキサー宣言 | **可換**。同一項目の再宣言は後勝ち |
+| **信号層** | effect 役のプラグイン呼び出し / **gain** / **pan** / **send** / **出力先（`output`）** | **この層内の相対順序だけ**が接続順になる |
+
+🔴 **gain / pan / 出力先は信号層です**（2026-09-04 改訂・#611）。以前この表は 3 つを宣言層に
+置いていましたが、**音が生まれた後の要素は書いた位置がそのまま信号の順序**になります。
+だから「フェーダー」という固定の段は存在せず、`gain` をエフェクトの前に書けばエフェクトへ
+入る前の音量、後に書けば出た後の音量になります。
 
 ラックは信号層の中身を「1 つの値」として書く方法です。配列の要素順がそのまま接続順になり、
-`effect()` という 1 つの宣言が **チェーン全体の像** を運びます。SC.1 の規範 (2) が言うとおり、
-トポロジーは **パターン(play) → instrument → エフェクト列 → 出力先** で固定されていて、
-利用者が順序で制御できるのは「エフェクト列の中身」だけです。ラックはまさにその部分を担います。
+`effect()` という 1 つの宣言が **チェーン全体の像** を運びます。トポロジーは
+**パターン(play) → instrument → ライン（エフェクト・gain・pan・send・output が書いた順）** で、
+利用者が順序で制御できるのは**ライン全体**です。ラックはその一部を束ねて名前を付ける道具です。
 
 ## DSL の形（SC.10.1 / SC.10.3b / SC.10.4）
 
@@ -1418,7 +1423,7 @@ WORK_LOG 6.397 には、設計原案の `Gain(db: -20)` を入れるとこの un
 という SC.10.4 の形をそのまま実機で通しています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4070-4077
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4076-4083
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
@@ -1556,7 +1561,7 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 - `tests/core/rack-chain.spec.ts:105-414` — T3〜T23（LCS・occurrence・keep 更新・uncertain 復旧）
 - `tests/interpreter/rack-value-resolution.spec.ts:62-188` — T1〜T19（配列分類・3 カテゴリ・layer 拒否）
 - `tests/interpreter/signal-chain-dispatch.spec.ts:170-184,581-611` — T24（メソッド形の診断）・T25（`remove()` 撤去）
-- `docs/development/WORK_LOG.md:1726-1876,2379-2509,2582-2736,3046-3075` — 6.379 / 6.386〜6.389 / 6.396〜6.397（制定・Gain・rack child・daemon 配線・DSL・実機）
+- `docs/archive/WORK_LOG_2026-08.md:1726-1876,2379-2509,2582-2736,3046-3075` — 6.379 / 6.386〜6.389 / 6.396〜6.397（制定・Gain・rack child・daemon 配線・DSL・実機）
 - `docs/user/ja/USER_MANUAL.md:599-615` — ユーザー向けのラック記法の説明
 - Issue [#628](https://github.com/signalcompose/orbitscore/issues/628) — ラック形チェーン（削除・バイパス・複数 insert の統合モデル）
 - Issue [#625](https://github.com/signalcompose/orbitscore/issues/625) — 差し替え・削除の前提機構

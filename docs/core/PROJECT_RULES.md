@@ -109,10 +109,15 @@ open issue 164 件のうち **162 件がタイトルに Conventional Commits の
 
 **When WORK_LOG.md exceeds ~2,000 lines or ~100KB, archive older sections:**
 
-- **Keep recent work** (latest 15-20 sections) in main `docs/WORK_LOG.md`
+- **Keep recent work** (latest 15-20 sections) in main `docs/development/WORK_LOG.md`
 - **Archive older sections** to `docs/archive/WORK_LOG_YYYY-MM.md` by month
   - Example: `docs/archive/WORK_LOG_2025-09.md` for September 2025 work
 - **Add reference link** at the end of main WORK_LOG.md pointing to archived files
+- **Update the archive table** in [`docs/core/INDEX.md`](INDEX.md)（「Archived WORK_LOG」節）
+  - 🔴 `worklog-size.spec.ts` が突合するのは本体末尾の索引だけで、**INDEX.md は検査していない**。
+    2026-09-02 のアーカイブでは実際にここが取り残された
+- **Repoint cross-references**: 他文書が `docs/development/WORK_LOG.md` §N.M と**ファイル名まで名指し**で
+  引いている箇所を、移動先の `docs/archive/WORK_LOG_YYYY-MM.md` へ書き換える（番号は残るがファイルが変わる）
 - **Add header to archived file** with:
   - Archive period (start date - end date)
   - Link back to main WORK_LOG.md
@@ -575,6 +580,32 @@ gh pr merge <number> --merge
 # head ブランチはマージ後に GitHub 設定で自動削除される（owner 2026-09-03: 増えすぎるし後からでも追える）。
 # 履歴は merge commit から辿る。--delete-branch を付ける必要も、消さないよう気を配る必要もない。
 ```
+
+### 🔴 ルーティンのドキュメント追従 PR は溜めない（owner 合意 2026-09-04・#718）
+
+ルーティンは main へのマージごとに**ドキュメント追従 PR** を出す。**溜めると必ず衝突する。**
+
+| いつ入れるか | |
+|---|---|
+| **1** | main に何かをマージしたら、**ルーティン PR が出た時点でその場で入れる** |
+| **2** | 遅くとも **統合ブランチを main から切る前**に全部消化する |
+
+**なぜ**（2026-09-03/04 実測）: ルーティン PR の差分は**「追従した時点の main」に対して計算されている**
+ので、その後 main に入る 1 コミットごとに陳腐化する。**9 本中 8 本が衝突した** — 出してすぐ入れた
+2 本（#716 / #717）だけが clean だった。ずれるのは `WORK_LOG` の追記位置・`INDEX` の項目・
+各ドキュメントの **`## Sources` の行範囲**と**引用のアンカー**で、しかも**両側に固有の内容がある**ため
+片側を捨てると情報が落ちる（実例: #688 の archive パス修正 × main の ICLC 取り下げ追記）。
+
+🔴 **base の選び方**: 追従先のファイルが**束の統合ブランチにしか無い**なら、base は main ではなく
+**統合ブランチ**にする。main を base にすると引用が実ファイルを指せず `docs:check` が落ちる
+（#711 が実際にその状態だった。#717 はルーティン自身が正しく束を base にしていた）。
+
+**自動マージにはしない。** #688 の本文には事実誤認があった（「vitest を回す CI チェックは 1 本も
+存在しない」— 実際は `code-review.yml` が `npm test` を実行している）。**人が読む前提は変えない。**
+
+⚠️ **ルーティンは機械が見ていない層を見ている。** `docs:check` は**引用のアンカーしか検査せず**、
+引用を囲む**本文**と **`## Sources` の行範囲**は検査しない。#716 はまさにそこ（#714 でガードの
+走査範囲を変えたのに本文が古いまま）を検出した。だから生成を止めてはいけない。
 
 **Important:**
 - **ALWAYS create a branch before starting work** - never commit directly to main

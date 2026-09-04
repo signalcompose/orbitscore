@@ -17,6 +17,367 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(spec): fix the implicit-master condition found by the independent re-audit (Sep 4, 2026)
+
+**Issue**: #611 / **ブランチ**: `611-output-line-spec` / **PR-O1**（段 1 の縦依存 1 本目）
+
+修正コミット後の最終状態だけを**独立に**再監査させた（前回の監査結果は渡していない）。
+**Critical が 1 件出た** — 1 回目の監査が見ていなかったものである。
+
+#### 🔴 Critical: send を書くと本流が master へ届かない条件になっていた
+
+仕様の 2 箇所が、単独では正しいのに**組み合わせると壊れる**形になっていた:
+
+| 場所 | 記述 |
+|---|---|
+| MX.2 | ラインに **`output` が 1 つも無い** sequence に暗黙の `output(master, thru:false, db:0)` を付ける |
+| MX.3 | **`send` は `output(aux, thru: true, db:)` の糖衣**である |
+
+`kick.send(verb, -12)` **だけ**を書いた行は、後者により「`output` が 1 つ存在する」ので
+**暗黙 master が付かない**。`thru: true` の出口は分岐であって終端ではないから、
+**dry がどこにも行き着かない** — センドを挿した瞬間に本流が消える。
+MX.3 の実例そのものがこの 1 行だった。
+
+正しい条件は「**`thru: false` の `output`（＝終端）が 1 つも無い**」。
+設計 611 §2.6 の既定ストリップが
+`[ラック → gain → pan → sends(=output thru) → output(master)]` と
+**sends と終端を別々に並べている**のが意図の正本で、条件の側が書き間違っていた。
+core spec MX.2 / 設計 611 §2.1 / 同 §3.4 の 3 箇所を揃えた。
+
+🔴 **糖衣を定義したら、その糖衣が既存の条件式に何を代入するかを確かめる。**
+「`send` は `output` の糖衣」と「`output` が無ければ master」は、
+どちらも単独では正しく、**並べた時にだけ壊れる**。
+
+#### 併せて直した 4 件（いずれも「規範を変えたのに写しが古い」型）
+
+| # | 場所 | 内容 |
+|---|---|---|
+| 1 | `SIGNAL_CHAIN_DSL_SPEC_v1.md:30,144-145` | **同一ファイル内**のコード例が「宣言層・後勝ち」のまま。直下の規範 (2) は「信号層・2 要素として加算」に書き換え済みで、例と規範が逆を言っていた |
+| 2 | `sites/dev/signal-chain/index.md`（日英） | 二層意味論の表が旧版のまま（gain / pan / 出力先を宣言層に置いていた）。`mixer-audio-line.md` は両言語で直したのに、**同じ章の index が漏れた**。🔴 `check-citations` はコードフェンス引用しか見ないので、**散文の陳腐化は機械では捕まらない** |
+| 3 | `docs/design/610-diagnostics-applicability-design.md:455,463,611` | 「`output(<aux 名>)` は Error」と owner 裁定 ③（**aux も `output` で指せる**）が**正反対**。特に **E2E-D6 は期待値が仕様と逆**で、そのまま実装すると誤ったテストが資産に積まれるところだった |
+| 4 | `docs/design/611-output-line-design.md:248,276` | §14 (1) で「数値 render bus は撤回」と裁定したのに、§3.3 手順 5 が「裁定まで現状の `_renderBus` 互換」のまま残っていた（自分の裁定に自分が追従していない） |
+
+#### 独立再監査の価値（記録）
+
+1 回目の監査後に修正を入れ、**その結果だけを見せて**別個体に監査させたところ、
+1 回目が見ていなかった Critical が出た。**同じ差分を 2 回見るのではなく、
+修正後の状態を新しい目で見る**ことに意味があった。
+
+#### 検証
+
+`check-citations.mjs` 922 verified / 0 failed（行番号のずれを `--fix` で再アンカー・4 件）。
+
+---
+
+### docs(spec): output as a line element — MX.1/2/2.1/2.2/2.3/3/4/5, SC.2.1/4, #649 §10-12 (Sep 4, 2026)
+
+**Issue**: #611（+ #649 / #643 の設計文書追従）/ **ブランチ**: `611-output-line-spec` / **PR-O1**（段 1 の前提・docs のみ）
+
+段 1（must-fix）の縦依存 `PR-O1（spec）→ PR-O0（golden）→ PR-O2（engine）` の 1 本目。
+**仕様を先に確定させてから golden を取り、その後にエンジンの内部を変える**という順序を守るための PR。
+コード・テストは 1 行も変更していない。
+
+#### 改訂（`docs/design/611-output-line-design.md` §11 の表がスコープ）
+
+| 文書 | 箇所 | 内容 |
+|---|---|---|
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | 節ヘッダ / MX.1 | 固定トポロジ（source → insert → sum → master ＋ send → aux の並列タップ）を撤回し、**ラインは 4 種の要素の列**（ラック / ゲイン / パン / 出口）と定義。「フェーダーという段は存在しない」を明記 |
+| 同 | **MX.2**（全面改稿）| `output(destination, thru:, db:)`。`thru:` 既定 `false`・`db:` は dB・出口はラインの 1 要素であって終端ではない |
+| 同 | **MX.2.1**（新）| 宛先の集合（master / sum / aux / 物理 ch 対 / render / LinkAudio）と**名前解決の順序**。`"master"` 予約語 |
+| 同 | **MX.2.2**（新）| 複数 `output` と合算規則（解決後の宛先が同じなら加算・同一宛先 2 回は 2 要素） |
+| 同 | **MX.2.3**（旧 MX.2.1 を置換）| 数値 render bus `output(n)` の**撤回**（裁定 611 §14 (1) = A）。宛先は `mix.render(...)` の宣言ノード。`mix.output(3)` は物理アウト mono 宛て |
+| 同 | MX.3 | `send(name, db)`。**単位を線形 `amount` から dB へ**・`output(aux, thru: true, db:)` の糖衣であることを明記・「post-fader 固定」を削除 |
+| 同 | MX.4 | 固定トポロジの記述を **forward-only + 配列順 = トポロジカル順**へ。kind による制限（sum→sum 等）を設けない |
+| 同 | MX.5 | v1 制約から「send は post-fader 固定」を削除 |
+| 同 | §8.1.2 | 🔴 `output("master")` は **LinkAudio channel 名にならない**（予約語が解決順の先頭）ことを追記 |
+| `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` | SC.2.1 規範 (4)(7) | **出力エンドポイントと master もレシーバ**（`master.output(cue, thru: true)`）。`master` 予約が `output()` の文字列宛先にも及ぶ |
+| 同 | SC.4 規範 (1) + staging 注記 | aux 名メソッドの値は **dB**。`send` は `thru: true` の出口の糖衣。「v1 は post-insert 固定」注記を #611 PR-O3/O4 の staging へ差し替え |
+| `docs/design/649-audio-line-design.md` | §7.3 / §10 / §10.1 / §10.4 / §11 / §12 | **§10〜§12 は 611 設計へ移管**（バナー）。各項に「611 での扱い（正本）」を併記 |
+| `docs/design/643-mixer-foundation-design.md` | §1.5 / §12 | 出口の欠落が #611 で埋まったことを追記。`output()` 3 分岐は解決順 1 本に統合された |
+
+#### 🔴 設計文書の内部矛盾を 1 件解消（doc 611）
+
+§1 と §2.6 が「`pan` は発音側のまま」と書いたままだったが、**§2.4b と §14 (4) の owner 裁定（Q-611-4 = B）で
+`pan` はライン要素に覆っていた**。起案時の記述が裁定に追従していなかったもので、裁定側に揃えた
+（ライン要素は 3 種ではなく **4 種**）。PR-O4 の実装者がここを読んで誤るのを防ぐため。
+
+#### dev 学習サイトの追従（同 PR に畳んだ）
+
+`sites/dev/signal-chain/mixer-audio-line.md` と `sites/dev/en/signal-chain/mixer-audio-line.md` が
+**core spec の実例ブロックを逐語引用**していたため、`check-citations.mjs` が 4 件 red になった。
+
+- 引用の再アンカー（`:1681-1685` → `:1729-1733` / `:1733-1735` → `:1793-1795`）
+- **中身が変わった引用は手で直した**: `kick.send("rev", 0.3)` → `kick.send(verb, -12)`
+- 散文の事実誤りを訂正: 「MX.5 は send は post-fader 固定を明記しています」は**もう spec に無い**。
+  ⚠️ **実装は今も post-insert 固定**なので、「spec は変わったが実装は PR-O4 まで変わらない」ことを
+  両ページに明示した（引用検査は散文を見ないので、ここは人が見るしかない）
+
+**spec 側で宣言形の実例を復元**した（改稿で `global.sum("drum")` の例が落ちていた）。
+素朴な 1 ファイル経路（ノード変数を作らない書き方）の保護は恒久方針なので、実例は仕様に要る。
+
+#### user 学習サイトは変更しない
+
+`sites/user/mixing/routing.md` の「send は post-fader 固定です」は**現在の実装の事実**であり、
+挙動が変わるのは PR-O4。user docs は「今できること」を書く場所なので、そこで追従させる。
+
+#### Fable 監査（独立第二意見）で Important 4 件・Medium 2 件を修正
+
+監査は「① §11 改訂表の不在証明 ② owner 裁定との整合 ③ 実装との乖離の表示」の 3 問。
+**指摘はすべて main が一次ソースで裏取りしてから直した**（エージェントの報告を鵜呑みにしない）。
+
+| # | 指摘 | 裏取り | 対処 |
+|---|---|---|---|
+| 1 | 「sum ネスト不可」（MX.2.2 / MX.5）が MX.4「kind で制限しない」と真逆 | `engine_wrap.rs:5809-5813` に kind 検証が実在し、**コメントが MX.4 を出典として引用**していた | 規範（到達点）と v1 制約（今日）を**併記**。MX.4 に現在地注記を追加 |
+| 2 | **SC.1 の二層意味論が MX.1 と正反対**（`gain` / `pan` / 出力先が宣言層・可換・後勝ち）。SC.4 (2) も「後勝ち」 | 差分を読んで確認。doc 611 §11 の改訂表に **SC.1 が入っていなかった**（列挙漏れ） | SC.1 の表と規範 (2) を書き換え、`gain` / `pan` / 出口を**信号層**へ。SC.4 (2) も追従 |
+| 3 | 🔴 「`output("master")` は実装済み」という現在地注記が**誤り** | `sequence.ts:405-413` は sum にも render にも一致しない名前を **LinkAudio channel として記録**する。既存契約 `tests/core/sequence-output.spec.ts:167-179` を実行して確認（27 passed） | 予約語が実在するのは **wire（`SetBusRouting`）だけ**で、DSL 側で届くのは `.master` 糖衣のみ、と書き直した |
+| 4 | MX.2.1 の「sum への出力先指定を**解除**して master へ戻す」は旧 `SetBusRouting` の部分適用の意味論で、MX.2.2「2 要素として両方加算」と矛盾 | `engine_wrap.rs:5766-5771` が部分適用（三状態）の出典 | 規範は「宛先 master へ解決」に統一し、「解除」は v1 の現在地へ隔離 |
+| 5 | mono マージ係数 `(L + R) * 0.5` は **owner 裁定に無い**（裁定は「片側を捨てずマージ」まで） | doc 611 §14 (5) の原文を確認 | 規範表から係数を外し、設計文書（611 §5.3）へ委ねた |
+| 6 | MX.2.3「撤回」に現在地注記が無く「今は数値形が拒否される」と誤読しうる | `sequence.ts:373-400` は `output(1)` を**受理して記録**する。`runtime.ts:245-250` は `mix.output(3)` を throw | 現在地注記を追加。追従していない 2 文書（PH 節の表・`MULTICHANNEL_RENDERING_DESIGN_598.md` §4.4）は **PR-R0** の担当として明記 |
+
+Low の指摘（`gain` / `pan` 節が未追従・`_line` という TS の private 識別子が規範文に露出・
+SC.0 の `.verb(0.3)` が dB 化後は「+0.3 dB ≒ 素通し」の例になる・SC.7 の「send の amount」・
+`:1309` の「pre/post-fader tap」・doc 611 §0 裁定 4 の参照先誤記）も同時に処理した。
+
+**レビュー方法**: 監査の推奨に従い `/code:pr-review-team` のフル編成は回さない
+（差分にコードが無く、Sonnet チームの強み = 変異実走・実行接地が**実行対象を持たない**。
+本 PR の失敗クラスは「spec と spec の不整合」「現在地注記の誤り」で、いずれも**差分に無いもの**を
+読んで初めて見える）。plan §1.1 も PR-O1 の検証を「docs のみ（advisor レビュー）」と定めている。
+
+#### 実機 gated baseline を実測（段 1 の受け入れ判定の起点）
+
+**`npm run test:e2e:gated` → 10 failed / 10 passed (20)**・355.89s。
+
+🔴 **WORK_LOG #713 の baseline（11 failed）から 1 件減っている** —
+`auto-records and restores all five plugin receiver kinds across a restart without explicit saves`
+が段 0 の束（#722）のマージで **failed → passed** になった。
+したがって**本セッションの baseline は 10 failed** であり、#713 の値をそのまま使ってはいけない。
+
+失敗 10 件（段 1 が減らす対象）: `drives real OrbitStudio end-to-end` /
+**#643 E2E-1〜E2E-7**（7 件）/ `steps the live playhead through an instrument() sequence` /
+`replaces a playing instrument across CLAP/VST3 (#618 E1-E6)`。
+
+**この PR は docs のみなので、この 10 件を 1 件も動かさない**（動かすのは PR-O2 から）。
+
+#### WORK_LOG のローテーション（本 PR の副産物）
+
+本節を足したことで WORK_LOG が **2009 行**になり、`tests/docs/worklog-size.spec.ts`
+（PROJECT_RULES §1a・上限 2000 行）が red になった。**閾値は上げずにアーカイブした**:
+2026-09-01〜09-02 の 9 節（389 行）を `docs/archive/WORK_LOG_2026-09.md` へ移し、
+本体末尾の索引と `docs/core/INDEX.md` の「Archived WORK_LOG」表の**両方**を更新した
+（§1a の注記どおり、テストが突合するのは本体末尾の索引だけで INDEX.md は検査されない）。
+番号付きの節（`6.423`〜`6.429`）は他文書からの参照を壊さないよう**番号のまま**移した。
+
+#### 検証
+
+| ゲート | 結果 |
+|---|---|
+| `npm test` | **2196 passed** / 48 skipped（main と同数・docs のみなので不変が期待値） |
+| `npm run typecheck:e2e` | エラー 0 |
+| `check-citations.mjs` | **922 verified / 0 failed**（監査対応で行番号が再び動いたので再アンカー） |
+
+実機 E2E は**このPRの対象外**（コード変更が無く、DSL の観測可能な表面を 1 つも足していない）。
+段 1 で実機の判定が変わるのは PR-O2 から。
+
+---
+### test(e2e): capture goldens for existing scores (#543-a) (Sep 4, 2026)
+
+**Issue**: #543 (a) / **ブランチ**: `543-output-line-goldens` / **PR-O0**（段 1 の縦依存 2 本目）
+
+PR-O2 が engine の内部幅と master gain の位置を変える**前**に、
+`docs/design/611-output-line-design.md` §9 の「今日の音」を実機 capture で固定する。
+production code は 1 行も変更していない。
+
+実装は Codex（`gpt-5.6-sol` / effort high）に委譲し、**測定と検証は main が実機で**行った
+（sandbox では daemon・MCP・実機 E2E が原理的に走らないため）。
+
+#### 🔴 実機で 3 件の問題が出て、いずれも「主張をテストの実力に合わせる」方向で解決した
+
+##### 1. ハーネスの起動判定が 500 行窓で壊れていた（helper の潜在不具合）
+
+O0-3 / O0-4 が `daemon-backed REPL ready after 30000ms` で落ちた。engine は起動していた。
+原因は `run-score.ts` が **`get_log` の固定 500 行窓の中でマーカー件数の増加**を見ていたこと。
+窓が飽和すると新しい行を足しても**古いマーカーが同時に押し出される**ので件数が増えない。
+**ERROR 件数を厳密等価で見ない規律と同じ理由**である。段 0 の helper に消費者が付いて初めて露見した。
+
+修正: **`start_engine` 直前のログ末尾を錨**にし、その後ろに出た分だけを見る。
+
+🔴 **一度「錨が流れたら判定できないとして待つ」形にしたのは誤りで `#628 R28` を壊した。**
+錨は前の窓の**末尾**から取り、窓は**先頭から**落ちるので、末尾が消えているならそれより古い行は
+すべて消えている — つまり今の窓は全部が新しい出力である。**実機に出さなければ気づかなかった。**
+`helpers.spec.ts` にテスト 6 本。「錨を完全に無視する」変異で 2 本 red・restore 一致を確認した。
+
+##### 2. fixture のバス名が既存テストと衝突していた
+
+gated スイートは**同じ engine セッションを使い回す**ので、`global.sum("drum")` が既存テスト
+（`:1955-1956` が `drum` を **sum と aux の両方**で宣言）と衝突して「ambiguous」になる。
+**衝突したまま録ると、音が意図した宛先へ行かないのに golden が録れてしまう。**
+`o0sum611` / `o0rev611` へ改名した。
+
+##### 3. 🔴 最初の測定は「音量」ではなく「窓に入ったヒット数」を測っていた
+
+**当初「設計 §9 の期待式が実機と合わなかった」と結論したが、誤りだった**（Fable 監査で判明）。
+`LOOP()` は既定で**次の小節境界まで待つ**（`quantize-manager.ts:70`・120 BPM 4/4 で 2000 ms）のに、
+録り始めが `run_selection` の **500 ms 後**だったので、**窓の大半が発音前の無音**だった。
+入るヒット数が窓ごとに違い（dry 3 発 / total 5 発）、その差を engine の性質だと読み違えた。
+検算: `kick.wav`（エネルギー 0.00757189）から、当初の 4 つの golden はすべて
+`sqrt(整数ヒット数 × 0.00378595 / 窓長)` と**有効 7 桁で一致**する。`send(0.3)` は線形 0.3、
+`Gain(db:6)` は理論と 9 桁一致で、**どちらの式も成立していた**。
+
+🔴 **測定手法の欠陥を engine の性質だと結論した。** 「未検証のモデルを assert しない」という方針は
+正しいが、適用を誤ると**検証済みの一次ソースを「未検証」と呼ぶ**ことになる。
+
+**直した形**: settle を 1 小節 + 余裕（2600 ms）にして定常状態で録る / 窓長を**ヒット周期の
+整数倍**（500 ms × 8）にして位相依存を消す / 🔴 **`onsets(name).length` を assert** して
+ヒット数を固定する（これで初めて RMS が「1 ヒットあたりの音量」になる）。
+
+##### 4. 🔴 同じ誤りを 2 度した — 窓長のゆらぎを「`seq.gain` の系統差」と読んだ
+
+測り方を直した後、`Gain(db: 6)` は理論と**有効 9 桁で一致**したのに `combined/dry` だけが
+**1.069**（理論 1.0 から 6.9%）で、**2 回の実行が 5 桁一致**した。これを
+「`seq.gain(-6)` は実は −5.42 dB」と結論しかけたが、**3 回目を回して全行の比を並べたら撤回した**。
+
+**同じ 1.069 = √(8/7) が `noBus` にも `sumOutput` にも `effectOnly/dry` にも出る。**
+窓の実効長が 1 ヒット分（500 ms / 4000 ms = 1/8）ゆらぐ測定アーチファクトで、
+セグメントごとに独立に乗る。**系統差とは区別できない。**
+
+🔴 **再現性は系統差の証拠にならない** — 測定系の量子化も再現する。系統差だと言うには
+「**同じアーチファクトが他の行に出ていないこと**」の確認が要る。期待値は理論式のままにし、
+許容をアーチファクトの幅（12%）に合わせた。**実測値をベタ書きすると、アーチファクトを
+engine の性質として固定してしまう。** follow-up（本 PR の範囲外）: 窓を 16 発へ伸ばすか、
+`runScore` の区間→capture 時刻の写像から量子化を取る。
+
+#### `/simplify`（4 観点のレビュー → 適用）
+
+🔴 **reuse / altitude**: `startR28Engine`（gated spec）が**同じ壊れた件数比較をローカルに再実装**して
+おり、**既存 20 本すべてがこの経路を使う**。判定を錨方式へ統一し `markerCount` を削除した。
+**simplification**: 動的 `import()` → 静的 import・harness を縮小 / `relativeDelta` を 1 本化。
+⏭️ **スキップ**: engine 再起動 3→1 の統合（テスト単位の独立を優先）。
+
+🔴 **`startR28Engine` はレビューの推奨と逆の判断をした。** altitude は現状維持を支持したが、
+その理由は「**最初の消費者が付く時に寄せる**」であり、**その消費者が本 PR で付いた**。
+当時は両方とも壊れていたが、いまは**片方だけ直っている**。見送られたのは「約 60 行の統合」で、
+ここで直したのは**判定ロジックだけ**（構造は動かしていない）。
+
+#### 検証（すべて main が実機で）
+
+`npm test` **2202 passed** / 52 skipped ・ `typecheck:e2e` 0 ・ `lint` 0 ・
+`check-citations.mjs` **922 verified / 0 failed** ・ **実機 gated 24 件中 13 passed / 11 failed**
+（**O0-1〜O0-4 は 4 本とも green**）。
+
+失敗 11 件 = 🔴 **baseline 10 件**（`drives real OrbitStudio end-to-end` / `#643 E2E-1〜E2E-7` /
+`steps the live playhead` / `#618 E1-E6`）**+ plugin-state restore 系 1 件**。restore 系は実行ごとに
+**別のテストが落ちる**（5 回の実行で `auto-records…` と `restores a non-default sum-bus insert…`
+が入れ替わった）。本 PR は restore を触っていないので既存の不安定さと考えるが、**裏取りはしていない**。
+途中、起動判定の誤った修正で `#628 R28` を落としたが、訂正後は baseline どおり passed に戻っている。
+
+### docs(spec): add RUN termination and offline render to the note-off firing cases (Sep 4, 2026)
+
+**Issue**: #606（`must-fix`）/ **ブランチ**: `606-noteoff-firing-spec` / **PR-K-A0**（spec 先行）
+
+`docs/design/634-pdc-layer-instrument-rack-design.md` §3 の実装（PR-K-A1 / A2）に入る前に、
+**note-off の発火点**を仕様側で確定させる。コードは 1 行も変更していない。
+
+#### 🔴 「flush が無い」は誤り — 配送機構は在る
+
+地図 §4.B の記述は誤りで、`run-sequence.ts → sequence.ts → midi-scheduler.ts → plugin-note-output.ts`
+の経路は**実在する**。壊れているのは**その周り**である（設計 §3.1 の穴 4 つ）。
+したがって本 spec 改訂も「機構を足す」話ではなく、**発火点の列挙に 2 つ足す**話である。
+
+#### 改訂
+
+| 文書 | 箇所 | 追加 |
+|---|---|---|
+| `PITCH_DSL_SPEC_v1.1.md` | §7-2 realization rule 2（Active note tracking） | **一発 `RUN()` の終端** / **オフラインレンダの終端** |
+| `INSTRUCTION_ORBITSCORE_DSL.md` | Note lifecycle の Active-note tracking | 同上（英語側） |
+| 同 | **PH.4 All Notes Off** | 同じ発火点 2 つ + 🔴 **daemon 側の「最後の砦」** |
+
+#### 🔴 発火点が増えても配送機構は 1 本
+
+3 箇所すべてに同じ注記を置いた。**場面ごとに別の flush を作らない。**
+設計 §3.2 の責務 3 層（TS scheduler = owner ごとの解放 / daemon = instance ごとの最後の砦 /
+child = 触らない）を仕様の言葉に落とした形である。
+
+**child に flush を置かない理由**も設計から引いた: child は自分が受けた note の簿記を持たず、
+持たせると `(port_index, channel, key)` 参照カウント（PH.4）の**正本が割れる**。
+
+#### daemon の「最後の砦」を仕様に書いた理由
+
+engine が保留 note を解放し切る前に死ぬと、**daemon は active note を追跡しているのに読み手が
+いない**（設計 §3.1 の穴 H4・読み手 0 箇所）。これは
+「**鳴りっぱなしを検出できるのに止められない**」状態なので、仕様の側で義務として書いた。
+実装は PR-K-A2（wire に新 RPC を足す = 一方通行）。
+
+##### 🔴 粒度を書き足した（Fable 監査の指摘）
+
+初稿は「daemon が自身の追跡集合から note-off を送れること」までしか書いておらず、**粒度が
+無かった**。2 行上には「**1 シーケンスの停止に wildcard な解放を使わない**」という規範があるので、
+**サミング（複数シーケンス → 1 インスタンス）が入った時点で両者が衝突して読める。**
+
+書き足した内容: 最後の砦は **instance 単位（そのインスタンスの全 owner）**である。daemon は
+owner の境界を持たないので、これは wildcard 禁止の**例外ではなく適用外** — 通常の owner 単位の
+解放経路から呼んではならない。発火してよいのは **`global.stop()` / shutdown / engine 異常終了**の
+3 場面だけで、いずれも「そのインスタンスで鳴ってよいものが 1 つも無い」場面である。だから
+サミングが入っても**巻き込む相手が存在せず**、参照カウント判定が不要になる。
+
+粒度を書かない仕様は、実装時に「便利な flush」として owner 単位の経路から呼ばれる。
+**義務だけ書いて適用範囲を書かないと、規範どうしが後で衝突する。**
+
+#### 検証
+
+`npm test` 2199 passed / 49 skipped（docs のみなので不変）・
+`check-citations.mjs` 922 verified / 0 failed（行番号のずれを再アンカー）。
+### docs(planning): record the VST3 / CLAP conventions the scanner does not follow (Sep 4, 2026)
+
+**地図**: `docs/planning/DEVELOPMENT_MAP.md` **§4.C** / **ブランチ**: `546-plugin-spec-conventions`
+/ owner 2026-09-04・**バグではなく機能改善**
+
+#### 🔴 最初、DAW の「振る舞い」を写して規格を読んでいなかった
+
+owner:
+
+> オービットスタジオで今 **dylib を名指ししているという状態自体が、ちょっと異常**。
+> VST も CLAP も基本的には**作法があるはず**なので、その作法を地図のどこかに入れていく。
+> 他のものが使えているので、**他を実装した後でも全然いい**。**バグではなくて機能改善・改修。**
+
+> 僕が言ってるのが VST や CLAP の作法ではないというか、**作法をちゃんと調べてやりましょう**。
+
+初稿はフォーラム・製品ドキュメントから **Ableton / Bitwig の振る舞い**を写しただけだった。
+owner の指摘で規格を読み直したところ、**振る舞いの観察からは出てこない義務**が見つかった。
+
+#### 規格が定める作法と現在地
+
+| # | 規格（一次情報・**強度**） | 現在地 |
+|---|---|---|
+| 1 | **CLAP: `CLAP_PATH` を問い合わせる — `must`**（`clap/include/clap/entry.h` 逐語 "a CLAP host **must** query the environment for a CLAP_PATH variable"） | 🔴 `CLAP_PATH` は見ていない。ただし **`ORBIT_PLUGIN_PATH`（`:` 区切り）は既に読んでいる**（`lib.rs:200-211` `extra_scan_dirs_from_env`）ので、**同じ関数に 1 本並べるだけ** |
+| 2 | **CLAP: 各ディレクトリを再帰的に探索 — `should`**（同上。1 と違い義務ではない） | 🔴 **非再帰**（`list_bundle_candidates` の doc・同 `:228`。テスト `:2197` が非再帰を固定） |
+| 3 | **CLAP: 1 `.clap` に複数プラグイン。factory で descriptor 列挙 → plugin ID で生成** | ✅ **実装済み**（`orbit-clap-host/src/discovery.rs:105-120` 全列挙 / `lib.rs:540-566` 1 バンドル→複数エントリ / `discovery.rs:125-137` ID で選択）。同一性は `(format, path, pluginId)` の複合キー（`lib.rs:1028-1034`） |
+| 4 | **VST3: `moduleinfo.json` は 3.7.5 で導入、3.7.8 で `Contents/` → `Contents/Resources/`**（cmake の `SMTG_MODULEINFO_PATH_INSIDE_BUNDLE` で版差を確認） | ○ 参照している（`lib.rs:110`）。⚠️ **`Contents/Resources/` しか見ない**（`lib.rs:842`）ので **3.7.5〜3.7.7 のバンドルは ProbePending 送り** |
+| 5 | **同一性は ID（CLAP=plugin ID / VST3=CID）、path は「所在」。ID → ファイルの対応表は規格に無く、所在の解決はホストの責務** | 🔴 `instrument(path)` が生パス（`plugin-resolver.ts:76-80`） |
+| 6 | 検証を走らせるタイミング | 🔴 手動のみ（起動時はカタログ JSON を読むだけ・`plugin-catalog-reader.ts:132-150`） |
+
+**1 は既存関数への 1 行追加。2 も小さい。5 は作り直しの規模**なので他の実装の後（owner）。
+
+🔴 **初稿は 3 を「❓ 未確認」、5 を「規格はパスを同一性にしない」と書いていた。**
+前者は**実装を読めば分かることを読まずに未確認と書いた**（[[invent-rules-only-after-reading-the-code]] の再発）。
+後者は**言い過ぎ** — 規格は path を禁じているのではなく、同一性の担い手が ID だというだけである。
+「作法を調べる」は規格側だけでなく**自分の現在地も一次情報で確かめる**ことを含む。
+
+#### 保証のタイミングについての整理
+
+owner: 「Logic や Studio One も**読み込めるということを確認するだけ**で、起動時に全てのプラグインが
+メモリに読み込まれているわけではない。**インサートした時だけメモリ空間に出てくる。**
+なので起動時のチェックは**品質保証的なもの**」。
+
+調査でも一致した — Ableton は VST3 を常時スキャンにし、**AU は Apple の `auval` に外注**している。
+Bitwig は**保証しきれないことを認めて隔離で解く**（ホスティングモード 5 段階）。
+**OrbitScore は既に Bitwig 型の out-of-process + crash isolation を採っている。**
+
+🔴 **これは [[live-coding-forbids-workflow-interruptions]] と対になる。** 保証を起動時に寄せるからこそ、
+**演奏時に確認を挟む必要が無い**。「評価時に trust を問う」設計は DAW と**二重に**違っていた
+（① 確認を挟む ② 判断を実行時に置く）。
+
+---
+
 ### docs(design): 詳細設計 11 本と実装プラン 2026-09 を起草 (Sep 3, 2026)
 
 **Issue**: #611 / #694 / #598 / #672 / #634 / #428 / #610 / #662 / #656 / #668 / #679（設計のみ・実装なし）/ **ブランチ**: `claude/elegant-pasteur-l9gdrl`
@@ -138,6 +499,60 @@ issue 本文が古いままで、main が **#680 を重複起票**した。
 
 項目は**地図と issue 本文から導いた**。受け入れ基準は可能な限り**実測値**にした
 （例: #649 は「`global.gain(-6)` で instrument の RMS が 0.08864 → 0.044」= #649 本文の実測）。
+
+### docs(index): アーカイブ後の INDEX を追従させ、地図を目次に登録 (Sep 3, 2026)
+
+**追従元**: PR #693（マージコミット `b9fad48`）/ **ブランチ**: `claude/docs-sync-pr693`
+
+PR #693 は 9 本を `docs/archive/` へ移し、**現役ファイルからの参照リンクは全部直した**
+（`INDEX.md` のリンク先も `../archive/...` に書き換わっている）。追従できていなかったのは
+**目次の構造とラベル**の方で、2 点あった。
+
+#### ① 移動した 8 本が「現役」の見出しの下に残っていた
+
+`docs/core/INDEX.md:75-88`（追従前）は、見出し「設計ノート (`docs/design/`)」/
+「Planning (`docs/planning/`)」の表に、リンク先だけ `../archive/` へ変わった行が
+**現役の行と混在**していた。読者は見出しを信じて表を読むので、**アーカイブ済み文書を
+現在の設計として読める**状態が残っていた — #696 が消そうとした「紛らわしいから」
+そのものである。
+
+現役（`643` / `649`）と分け、**アーカイブ済みの表を別に立てて「現在の正本」列**を持たせた。
+列の値は移動時に各文書へ付けたバナー（例: `docs/archive/design/628-effect-chain-model.md:2`
+「**現在の正本**: `SIGNAL_CHAIN_DSL_SPEC_v1.md` **SC.10**」）から採っており、新しい判断はしていない。
+
+#### ② 🔴 `DEVELOPMENT_MAP.md` が目次に無かった
+
+PR #693 が追加した本体（1388 行・**開発計画の正本**）が `INDEX.md` に**1 行も無く**、
+Planning 節は**移動済みの 2 本だけ**を挙げていた。`grep` で確認した地図への参照は
+リポジトリ全体で `PROJECT_RULES.md:34` の 1 箇所のみ。
+
+地図 §0.2 は「**番号の検索ではなく、地図の見出しで探す**」を運用規則にしているが、
+**その地図に目次から辿り着けない**。CLAUDE.md がセッション開始時の必読に挙げるのは
+`INDEX.md` なので、ここに無いと運用規則が起動しない。地図と
+`2026-09-03-issue-triage.md`（#696 が「現役」と明記）を Planning 節へ登録し、
+§0.2 の起票規則を引用で添えた。
+
+#### ③ 棚卸し記録が、同じ PR で覆されたラベル状態を載せたままだった
+
+`docs/planning/2026-09-03-issue-triage.md:115` は「`foundation` と `release-gate` の **2 枚のみ**」と
+書き、C5 の表（同 `:96`）は **#197 に `release-gate`** を付けている。PR #693 はこの両方を覆した —
+**`must-fix` を新設して 3 枚**にし、**#197 のラベルは外した**（WORK_LOG 上の記述: 「🔴 3 件目は
+main の誤り — #197 に `release-gate` を付けたとき #656 と突き合わせていなかった。ラベルを外した」）。
+
+この文書は #696 が「**地図の入力として現役**」と明記して残したものなので、放置すると
+現役の文書が古いラベル状態を主張し続ける。**表の行は棚卸し時点の記録として保存**し、
+§5 に**追記**として 2 点の変更と「ラベルの現在の状態は地図を見る」を書いた
+（`docs/design/` の設計書と同じく、記録の書き換えはしない）。
+
+#### 追従不要と判断した層
+
+- **DSL/言語仕様・ランタイム/MCP・OrbitStudio**: PR #693 の差分 22 ファイルは
+  `docs/` と `sites/dev/` のみ。`packages/` の実装は 1 行も無い。唯一の `rust/` の変更は
+  `spike_s_concurrent_load.rs:15` の**行コメント内のパス文字列**で、コードではない
+- **`sites/dev/`**: 参照パス 6 箇所が ja / en 対で既に直っている（`sites/dev/signal-chain/index.md:27`
+  と `sites/dev/en/signal-chain/index.md:28` など）。地図の裁定（出口の一般化・`send` の dB 化）は
+  **未実装の決定**であり、dev サイトは実装の解説なので、書くと「実装されていない挙動」の記述になる
+- **`sites/user/` / `docs/user/`**: ユーザーが書く語は 1 つも増減していない
 
 ---
 
@@ -540,6 +955,21 @@ owner 判断: **注意力の問題ではなく、121 件を並列に並べたま
 
 ---
 
+### docs(index): 棚卸し記録を INDEX の Planning 表に載せる (Sep 3, 2026)
+
+**追従元**: PR #690（マージコミット `84a2e95`）/ **Issue**: #689
+
+PR #690 が追加した `docs/planning/2026-09-03-issue-triage.md` が
+`docs/core/INDEX.md` の Planning 表（`docs/core/INDEX.md:213-217`）に載っておらず、
+**目次から辿れない**状態だった。INDEX は CLAUDE.md が「すべてのドキュメントの目次（必読）」と
+位置づけている入口なので、そこに無い文書は次の棚卸しで**もう一度同じ調査をやり直すことになる**。
+
+行を 1 本足し、クラスタ C1〜C6 の見出しとラベル運用（`PROJECT_RULES.md` §1b）への導線を書いた。
+
+**追従不要と判断したもの**: PR #690 は `packages/` / `rust/` を 1 行も触っていないため、
+DSL 仕様（`docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`）・ユーザー向け語彙
+（`sites/user/`）・内部構造（`sites/dev/`）はいずれも変化していない。
+
 ### chore(meta): issue 棚卸し 164→120 とラベル運用の制定 (Sep 3, 2026)
 
 **Issue**: #689 / **記録**: `docs/planning/2026-09-03-issue-triage.md`
@@ -582,360 +1012,6 @@ open issue が 164 件まで溜まり、タイトルだけでは生死が判別�
 
 ---
 
-### chore(docs): WORK_LOG をアーカイブし、番号を廃止し、閾値をテストで強制した (Sep 2, 2026)
-
-**Issue**: #686 / **このエントリから番号を振らない**（本作業で決めた規則の最初の適用）
-
-#### 何が壊れていたか
-
-`PROJECT_RULES.md` §1a のアーカイブ規則が **7.5 倍破られていた**。
-
-| 規則 | 実測（2026-09-02） |
-|---|---|
-| 2,000 行 / 100KB を超えたらアーカイブ | **14,926 行 / 1,221 KB** |
-| 最新 15-20 セクションを残す | **403 セクション**（うちエントリ 311） |
-| 月ごとに `docs/archive/` へ | 最後のアーカイブは **2026-06**。本体が 6/18〜今日を抱えていた |
-
-規則自体は 2025-09 から存在し、`docs/archive/` に 2025-09〜2026-06 の実績もある。
-**仕組みが無いまま人の記憶に頼ったため、6 月以降だけ止まっていた。**
-
-#### やったこと
-
-1. **アーカイブ**: 6 月 56 件 / 7 月 168 件 / 8 月 80 件を `docs/archive/WORK_LOG_2026-0{6,7,8}.md` へ。
-   本体は 9 月分 7 件のみ（**14,926 → 333 行**）
-2. **番号の廃止**: 新規エントリは `### <type>: <要約> (Mon D, YYYY)`。
-   🔴 **既存 311 件の番号は消していない**（`WORK_LOG 6.131` 等の既存参照を壊さないため）
-3. **閾値の強制**: `tests/docs/worklog-size.spec.ts`
-
-#### なぜ番号をやめたか
-
-**並行作業で衝突する。** 2026-09-02 の 1 日で 3 回発生し、うち 1 回は PR #685 と #682 が
-両方 `6.428` を名乗ってマージコンフリクトになり、**`pull_request` のワークフローが
-マージコミットを作れず CI が 1 本も起動しなかった**。エラーもチェックも出ないので、
-外からは Actions の障害に見えた（実際 6 時間そう疑った）。
-
-**番号を消しても衝突自体は無くならない**（git は挿入位置で判定する）。ただし
-「どちらが 6.428 か」を考える必要が消え、両方残して日付順に並べるだけになる。
-
-`.gitattributes` の `merge=union` は**採らなかった** — 既存エントリの編集と追記が重なると
-**衝突を報告せずに両方の行を残す**ため（静かに重複が入る）。
-
-**分割案（1 エントリ 1 ファイル）も却下。** この log は「grep で入って周辺を読む」使われ方を
-しており（本日 6.423 の「3 failed」を追ったのがまさにそれ）、分割すると周辺が失われる。
-
-#### 検証
-
-- **移動の完全性**: 旧本体のエントリ見出し 311 件が、移動後に**欠落 0・重複 0**
-- **変異検証（2 種・実出力を確認）**:
-  - 1,800 行を追記 → `stays under 2000 lines` **のみ** red
-  - 索引から `2026-07` のリンクを削除 → `keeps the archive index in step` **のみ** red
-    （`expected [ 'WORK_LOG_2026-07.md' ] to deeply equal []`）
-  - いずれも restore して `cmp` で一致を確認
-- `npm test` 2167 passed / 68 skipped / **0 failed**
-- `npm run docs:check` 904 引用 0 failed、`npm run lint` 成功
-
----
-
-### 6.429 docs: chop(1) の訂正をユーザー向け 3 面と dev サイトへ波及させた (Sep 2, 2026)
-
-**追従元**: PR [#683](https://github.com/signalcompose/orbitscore/pull/683)（マージコミット `8157d3d`）/ 関連 #665
-
-#683 は core spec (`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §3) に
-**「スロット合わせが起きるのは `chop(n>1)` の時だけ」**を明記したが、
-**同じ誤読を生む記述が下流のドキュメントに残っていた**ので、そこだけを揃えた。
-コード・テストは変更していない。
-
-#### 直した箇所
-
-| ファイル | 直前の記述 | 問題 |
-|---|---|---|
-| `sites/user/basics/audio-manipulation.md`（+ en） | 「`length()` は再生速度を変えるため、音程も連動して変わります」 | 無条件。`chop(1)` では起きない |
-| `sites/user/reference/methods.md`（+ en） | `length(N)` …（再生速度・音程が変わる） | 同上 |
-| `docs/user/ja/USER_MANUAL.md` | 「`length()`は各イベントの時間を変更し、結果として音程も変化します」「ネストで時間が短くなると…音程が高くなります」 | 同上。例自体は `chop(4)` なので正しいが、地の文が無条件 |
-| `sites/dev/scheduling/event-queue.md`（+ en） | `slice` が optional である理由を書いていなかった | 分岐そのものが未記載 |
-
-dev サイトには分岐の実コード
-（`packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138`）を引用した節を足した。
-**`scheduleEvent` が尺もレートも受け取らない**ことが、非 chop 経路で速度を変えられない理由である。
-
-`sites/user/basics/patterns.md:113-114` は**すでに `chop()` で条件付けされていた**ため変更なし。
-`docs/user/en/USER_MANUAL.md` は簡約版で該当する主張を持たない。
-
-#### spec 側の参照パスをフルパスにした
-
-#683 が書いた `core/sequence/scheduling/event-scheduler.ts` は basename が一意でない
-（`packages/engine/src/audio/supercollider/event-scheduler.ts` が別に存在する）ため、
-`packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138` へ直した。
-この 3 行の挿入で後続行がずれるので、`check-citations.mjs --fix` で
-`sites/dev{,/en}/signal-chain/mixer-audio-line.md` の spec 引用 4 本を再アンカーしている
-（1658-1662 → 1660-1664 / 1710-1712 → 1712-1714。**行ずれのみで内容は不変**）。
-
-#### 確認済み: `docs/specs-v2/` との食い違いは無い
-
-`specs-v2` 側（PITCH_DSL / SIGNAL_CHAIN / DESIGN_DISCUSSION_RECORD）に
-スロット合わせの意味論を述べた記述は無く、core spec の訂正と競合しない。
-### 6.428 docs: 6.427 の事実確認表が同じ節の撤回と矛盾していたのを修正 (Sep 2, 2026)
-
-**追従元**: PR #678（マージコミット `70818ad`）/ **ブランチ**: `claude/docs-sync-pr678`
-
-PR #678 の途中コミット `215af35` は unworklet の評価を撤回したが、**撤回したのは
-`docs/archive/planning/2026-09-02-feature-map-comments.md` だけ**で、WORK_LOG 6.427 の
-「事実確認で判明したこと」表（`docs/development/WORK_LOG.md:33`）は
-**撤回前の「ブラウザ前提」を残したまま**マージされた。表の 3 行下（同 :35-41）が
-その主張を明示的に誤りと書いているので、**同じ節の中で表と本文が矛盾**していた。
-
-表の行を、撤回後の事実（生成 WASM は何も import しない＝ブラウザ前提ではない）に合わせた。
-**評価の内容そのものは 6.427 の本文と `docs/planning/` の記述に従っただけで、新しい判断はしていない。**
-
-#### 追従不要と判断した層
-
-PR #678 の差分は `docs/development/WORK_LOG.md` と `docs/archive/planning/2026-09-02-feature-map-comments.md`
-の 2 ファイルのみ。`packages/` `rust/` `sites/` を 1 行も触っていないため、
-DSL 仕様・MCP の表面・OrbitStudio の評価フローはいずれも変わっておらず、
-`docs/specs-v2/` `docs/core/` `sites/user/` `sites/dev/` の追従先は無い。
-
-🔴 planning 文書が記録した決定（#680 の「DSL はプレーン値」など）は**未実装の設計入力**であり、
-`sites/dev/decisions/` の ADR（実装済みのアーキテクチャ決定を記録する場所）へは**書かない**。
-実装が入った時点で書く。
-
----
-
-### 6.427 docs(planning): 機能マップへの owner コメント 9 本を設計の入力へ (Sep 2, 2026)
-
-**Issue**: #677 / **文書**: `docs/archive/planning/2026-09-02-feature-map-comments.md`
-
-アーティファクト上のコメントは repo の外にあり、そのままでは設計の入力にならない。9 本を転記し、
-既存 issue との対応・事実確認・詰めるべき点を書いた。**issue の新規起票はしていない**（owner 判断）。
-
-#### 事実確認で判明したこと
-
-| 主張 | 確認結果 |
-|---|---|
-| Splice に MCP サーバがある | ✅ 公式リモート MCP（`https://mcp.splice.com/mcp`・beta）。検索・stack・ダウンロード |
-| `ShmKnd/Patina` | ✅ 実在・MIT。**C++17 標準ライブラリのみ**のアナログモデリング DSP |
-| `yuichkun/unworklet` | ✅ 実在・MIT。TypeScript → WASM。**ブラウザ前提ではない**（生成 WASM は何も import しない。下記の撤回を参照） |
-
-🔴 **unworklet について main が最初に書いた反論は誤りだった**（owner の指摘で撤回）。
-「AudioWorklet 前提なのでホストが違う・WASM だけ借りても RT 安全性は付いてこない」と書いたが、
-`packages/core/src/compile/emit.ts` を読むと **生成 WASM は何も import せず**
-（`addFunctionImport` はリポジトリ全体で 0 件）、export は `process` 1 本と成長しない線形メモリだけ。
-README 冒頭も "for any audio thread: browser, **server**, or microcontroller"、
-`@unworklet/offline` は "pure JS over `WebAssembly.instantiate`"。**RT 安全性はコンパイル時に
-証明される WASM 自体の性質**なのでホストを替えても失われない。
-
-→ **Rust ホストからは wasmtime で instantiate してメモリに書き `process` を呼ぶだけ。**
-残る作業は `compile/layout.ts` が決める `Layout`（バッファ／パラメータ／state のオフセット）を
-**ビルド時に JSON で吐いて `.wasm` と対にする**契約決め。instantiate は RT スレッド外で行い、
-sample rate が焼き込まれる点（48kHz）を考慮する。
-
-**unworklet と Patina は競合しない**: 前者は「ユーザーランドに DSP を解放する実行系」、
-後者は「同梱する標準プラグインの中身」（#669）。owner の当初の整理どおり。
-
-#### スコープが変わるもの
-
-**#666（Splice）**: LLM は MCP から探してローカルへ落とせるので、OrbitScore はパスを受け取るだけでよい。
-「Splice を統合する」→「**ダウンロード先をプロジェクトが解決できる形にする**」へ縮む（#456 と同じ問題）。
-
-#### 起票した 3 件（#679 / #680 / #681）
-
-| issue | 内容 | 状態 |
-|---|---|---|
-| **#679** | リアルタイム・サンプリング | **設計 issue**。オーディオ入力の経路が現在無い（`capture.rs` は出力方向）。トリガー意味論・録音物の同一性・保存先・位相・分割単位を決めてから実装 |
-| **#680** | プラグインのパラメータを DSL から動かす | **CC は不要と判明。** API は両形式にあり、経路も既に通っている（CLAP `effect.rs:239` / VST3 `lib.rs:2534`）。**DSL はプレーン値（案 B）を owner が決定** |
-| **#681** | MCP の HTTP 面を使った GUI | **設計 issue**。🔴 **「GUI の操作結果が必ず DSL テキストに落ちる」を owner が前提として明言** |
-
-#### #680 の調査結果
-
-両形式ともパラメータは**サンプル精度**で送れ、**名前・単位・既定値も取れる**
-（CLAP `ParamInfo` は `name` / `module`（階層パス）/ `min_value` / `max_value`、
-VST3 `ParameterInfo` は `title` / `units` / `stepCount` / `defaultNormalizedValue`）。
-
-🔴 **VST3 には数値としての min/max が無い**（正規化 0..1 のみ）。CAP.6-1 を守るため
-DSL をプレーン値に統一し、VST3 側は `getParamValueByString("-6 dB")` で変換する。
-書式のプラグイン依存は、`orbit-plugin-scan` のカタログ作成時に両端を引いて範囲を記録して軽減する。
-
-#### owner の手続き上の指摘
-
-機能マップの分類は issue の**タイトルから**起こしたもので、160 件の本文は読んでいない。
-棚卸し候補 64 件も更新日だけの判定なので、**閉じる前に中身を読む**必要がある。
-
----
-
-### 6.426 docs: レビュー指摘の反映 — 引用検証を CI へ、テスト件数を緑の実行から採り直し、`ok` の旧記述を一掃 (Sep 2, 2026)
-
-**ブランチ**: `claude/developer-site-docs-update-0obpim`（PR #673 のレビュー指摘 3 件）
-
-#### ① `docs:check` が誰からも呼ばれていなかった
-
-288 引用中 246 red を 0 にした検証器を入れながら、**どのワークフローからも実行していなかった**。
-次に誰かが引用をずらしても知らされない状態だったので、`code-review.yml` に
-`npm run docs:check` を追加した。
-
-実際にこの PR 内で機能した: `log-ring.ts` のコメントを 3 行増やしたところ、
-`mcp-and-gated-e2e.md:350` の引用（ja / en）が **red になった**。`--fix` で 33-45 → 35-47 へ
-再アンカーして 902 引用 0 failed に戻している。
-
-#### ② テスト件数が「3 failed だった実行」の値だった
-
-| | 記録されていた値 | 実測（2026-09-02・macOS 通常ユーザー） |
-|---|---|---|
-| `npm test` | 2162 passed / 68 skipped / 2233 total | **2165 passed / 68 skipped / 2233 total** |
-
-**2162 + 68 = 2230 で total に 3 足りない。** 差の 3 は 6.423 が正直に記録していた
-「root では chmod が効かず EACCES を期待する 3 件が落ちる」で、その**赤い実行の passed 数が
-緑の件数として** CLAUDE.md / README / TESTING_GUIDE へ転記されていた。
-
-TESTING_GUIDE に「件数は緑の実行から採る。passed + skipped が total に一致しない数字は、
-落ちた分がどこかにある」を注記として残した。
-
-#### ③ `#614` の訂正が正本へ反映されていなかった
-
-IV-3 章は `evaluate_orbitscore` の `ok` の意味が #614 で変わったことを突き止めていたのに、
-**`CLAUDE.md` には旧記述が 3 箇所（413 / 614 / 662 行）残っていた**。CLAUDE.md は毎セッション
-読まれる運用文書なので、ここが古いと実際に伝播する（本セッションで作成中だったルーチンの
-プロンプトにも旧記述が引き写されていた）。
-
-3 箇所と `packages/vscode-extension/src/log-ring.ts` の「唯一のチャネル」コメントを、
-**「`ok` は評価時の診断を捉える。評価後に非同期に起きる失敗は今も `get_log` にしか出ない」**
-へ更新。IV-3 章（ja / en）の該当段落も、旧コメントが「残っている」から「本 PR で改めた」へ改稿した。
-
-**検証**: `npm test` 2165 passed / 0 failed、`npm run docs:check` 902 引用 0 failed、
-`npm run docs:build -w @orbitscore/dev-site` 成功（dead link 0）。
-
----
-
-### 6.425 chore(rust): rtrb 0.3.4 → 0.3.5 — 新規 advisory RUSTSEC-2026-0274 で PR #673 の deny gate が赤に (Sep 2, 2026)
-
-**発見経路**: docs のみの PR [#673](https://github.com/signalcompose/orbitscore/pull/673) の
-「license / dependency gate」（`cargo deny check`）。`rust/README.md` を触ったため `rust/**` の
-paths フィルタに掛かって走った。
-
-#### 何が赤だったか
-
-`rtrb 0.3.4` に対する advisory **RUSTSEC-2026-0274**（`ReadChunk::commit` で要素の `Drop` が panic すると
-head が進まず double free / use-after-free）。**本 PR の差分とは無関係**（advisory の公開が原因で、
-2026-08-29 の直前 PR 群は同じ lockfile で緑だった）。main には push トリガの Rust CI が無いため
-「main でも赤」を run で示すことはできないが、同じ `Cargo.lock` である以上 main も同条件。
-
-#### 直し方
-
-advisory の Solution どおり patch bump（`cargo update -p rtrb --precise 0.3.5`）。`Cargo.lock` の 2 行だけ。
-0.3.5 は「fix のみ」（0.4.0 は `is_abandoned()` の挙動が変わるため採らない）。
-
-**検証**（Linux コンテナ）: 0.3.4 と 0.3.5 の `src/` を diff して差分が内部の `Drop` ガード追加のみ
-（公開 API 不変）であることを確認。ALSA ヘッダを入れて `cargo check -p orbit-audio-native -p orbit-clap-host`
-（rtrb の呼び出し側）が成功。`cargo deny` は本環境に無いため、gate の緑は CI で確認する。
-
----
-
-### 6.424 docs(dev-site): 2026-09 リフレッシュ — 全章を 69dc968 へ再検証し、post-July の 5 章を新設 (Sep 1, 2026)
-
-**ブランチ**: `claude/developer-site-docs-update-0obpim`（6.423 の続き）。各章の ja / en を同一ターンで執筆・
-再検証し、`npm run docs:check` が 0 failed であることをコミット条件にした。本エントリは章ごとのコミットで追記する。
-
-#### 総括（2026-09-02 締め）
-
-| 指標 | 導入前（6.423 時点） | 締め |
-|---|---|---|
-| 章数（ja） | 24 | **29**（新章 SC-1 / SC-2 / PH-2 / PH-3 / IV-3） |
-| 引用（header 付きコードブロック・ja + en） | 288 件中 **246 red** | **902 件・0 failed**（58 ファイル） |
-| `verified-against` | 0a4b598（2026-05）/ 3983828（2026-07） | 全章 **69dc968**（stub の 0-1 を除く） |
-| `npm run docs:build -w @orbitscore/dev-site` | — | 成功（dead link 0） |
-
-**進め方**: 章ごとに 1 サブエージェント（ja / en 同時・引用は `sed -n` で読んでから貼る・チェッカー 0 failed で完了）を
-9 体並列に投入し、main は目次・landing・用語集・リポジトリ側ドキュメントを担当。各エージェントの報告から
-「既存テキストの誤り」を拾い、spec 側の実装事実開示（PH.1 の段落）だけ本セッションで直した。
-
-**2026-05 版に含まれていた事実誤認（再検証で判明・各章で訂正済み）**: I-1 のトークン数「18」/ II-2 のループ機構
-（`setTimeout(patternDuration)`）/ II-4「loop timer は `global.stop()` を生き延びる」/ III-3 の `.gitignore:36` /
-IV-2 の `flashLines` 引数。**いずれも通るテストでは見えない種類の誤り**で、引用の機械検証が入ったことで
-以後は「行ずれ」として red になる。
-
-**エージェント報告で拾った、コード / 他ドキュメント側の未修正事項（本 PR のスコープ外・要 Issue 化）**:
-- `engine-backend.ts:62` が parity の内訳を「WORK_LOG 6.181」と指すが、実体は 6.179（6.181 は WCTM 研究）
-- `extension.ts` は cutover を「#369」、engine / WORK_LOG は「#108」と呼んでいる
-- `docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md` UIH.5 の数値 index 形 `seq.ui(1)` は PH.2c（#628）で撤回済み。
-  `PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md` の `EVT_SLOTS = 3` は出荷値 2 と不一致
-- `INSTRUCTION_ORBITSCORE_DSL.md` PH.4 / SC.3.1 の「effect チェーンの後勝ちは未実装」は #625 / #628 で失効
-- `docs/research/ENGINE_DAEMON_PROTOCOL.md` の `ScanPlugins` コマンドは実装では拡張が scanner を spawn する形に変更済み
-- `log-ring.ts` / `gated-assertion-hygiene.spec.ts` / CLAUDE.md の「`ok` は stdin へ書けただけ」は #614 以前の文言
-  （評価後の非同期失敗が `get_log` にしか出ない点は今も真）
-- `parent_watch.rs` の「4 つの child バイナリ」コメント（rack child で 5 つ目）、`output.rs:619` の doc comment 断片、
-  `interpreter-v2.ts:171` の "Ensure SuperCollider is booted"
-- `EventRingHost::observe_dirty_epoch` の consumer（#577 PR-C debounce）は未配線に見える（`#[allow(dead_code)]`）
-
-**新章の長さ**: SC-1 1564 行 / PH-3 1389 行 / PH-2 1226 行 / IV-3 1022 行 / SC-2 919 行（ja）。STYLE_GUIDE §3 の
-400〜800 行目安を超えるが、半分前後が逐語引用で、削ると根拠が落ちるため `status: draft` のまま Phase C で判断する。
-
-**未実行**: 各新章の "Try it" は本セッション（Linux コンテナ・OrbitStudio 無し）では実行しておらず、
-`unverified` として明記してある。実機での確認は macOS 側で `npm run test:e2e:gated` と併せて行う。
-
-#### 章ごとのコミット
-
-| コミット | 内容 |
-|---|---|
-| STYLE_GUIDE | §5 に「path はリポジトリルートからの相対パス（basename 不可）」、§5-bis に機械検証節（`npm run docs:check` / `--fix`）、§10 を「日英バイリンガル必須」へ（2026-07-17 決定の反映漏れ） |
-| 0-2 / I-1〜3 再検証 | 0-2 アーキテクチャ全景を**全面書き直し**: 3 プロセス（extension / engine / scsynth）→ 4 種（Extension Host / engine / `orbit-audio-daemon` / plugin children）、`startEngine()` の daemon 事前チェックと `ORBITSCORE_ENGINE` 明示、MCP 節、`resolveDaemonBinaryPath` の探索順、Rust 経路のシーケンス図、version landmarks（DSL v3.0 は構文世代ラベルで `DSL_VERSION 1.1` とは別物）。I-1: トークン 19 → 32（旧版の「18」も誤り）、`import` / `fileImports` / Statement 11 種 / `collapseScopedRun`、`expect()` の REPL 未完判定は `EOF` のみ（#607）。I-2: `AudioEngineBackend`・`execute()` の 6 段順序・mixer namespace ガード・`resolveChainDispatch`。I-3: `writeCodeToEngine()` を MCP と共有、`//#documentDirectory` / `//#evalMark` メタ行、`createReplSession` FIFO（#476）、`\bEOF\b` のみの未完判定（#607 / #612）。引用 132 件 0 failed |
-| III-1〜3 / ADR-001〜003 再検証 | SuperCollider 経路 3 章と ADR-001 / 003 は冒頭 `::: warning` で opt-out 経路（`ORBITSCORE_ENGINE=sc`）と明記し、`create-audio-engine.ts` / `engine-backend.ts` を短く引用。III-3: `.gitignore:36` の主張は誤りで `.gitignore:47` + `.vscodeignore:36` へ訂正、engine kind で呼び出し自体が gate される節と `resolveDaemonBinaryPath()` が同じ strict パターンを継承した節を追加。ADR-001 / 003: "Consequences revisited (2026-09)" 節（cutover の parity 根拠 = WORK_LOG 6.179、bundle 温存 = 6.186、daemon の署名は unverified）。ADR-002: `ENGINE_VERSION 2.0.0` / `DSL_VERSION 1.1` を別軸と明記。May 版の snippet は先頭行のインデントが落ちていたため `--fix` が効かず、48 件を手で再引用 |
-| IV-1 / IV-2 再検証 | IV-1 をほぼ書き直し: プロセスツリー（daemon / scsynth の分岐）、4 bridge、`activate()` の log-ring monkey-patch と MCP / auto-start、コマンド表（contributed 17 + internal 2、`when` gating）、Activity Bar view、補完 3 系統、`startEngine` の env / spawn / handler、`//#` メタ行と `writeCodeToEngine`、`engine-lifecycle.ts`、#532 SIGKILL 修正、drift 表 15 行。IV-2: `writeCodeToEngine()` + `//#documentDirectory`、`flashLines` の `isWholeLine: true`（旧記述を訂正）、live playhead（`playhead.ts`）、`//#evalMark`、診断 9 種の表と #638 unknown-plugin warning。引用 176 件 0 failed |
-| II-1〜4 再検証 | scheduling 4 章（ja / en）を 0a4b598 → 69dc968 へ。II-2: 2026-05 版の「`setTimeout(patternDuration)`」は #389 以降誤りで、`LOOP_TIMER_LEAD_MS`（100 ms 前に発火・絶対グリッドから再計算）と launch quantize × polymeter（`seq.loop()` は**グローバル**小節境界で開始）へ書き換え。II-3: 主線を Rust 経路（`rust-engine-player.ts` の `ScheduledPlay` / 8 段ガード / `[STEP]`・3 段 look-ahead 表）にし、SC 経路は opt-out として残置。`convertGainToAmplitude()` は消失 → `audio-gain-utils.ts`。II-4: `TransportClock` を唯一の時刻原点として記述、launch quantize 節を追加、旧版の「シーケンスの loop timer は `global.stop()` を生き延びる」は**誤り**（`TransportControl.stop()` が先に `sequence.stop()` で `clearTimeout`）と訂正。引用 106 件 0 failed |
-| RE-1〜4 + PH-1 再検証 | 2026-07-17 版（3983828 / 5b227da）を 69dc968 へ。RE-1: protocol v0.2 のコマンド表を `match` の腕から再構築（`Command` は enum ではなく `method: String` の struct）、audio owner thread（#484）、`render_shared_block` の `try_lock`。RE-2: `SPAWNABLE_CHILD_BINARIES`（rack child が唯一の到達可能 effect 経路）、`SharedRegion` 末尾（mailbox / evt リング / `active_stage_index`）。RE-3: 「1 seq = 1 insert・.clap のみ」を PH.2b / PH.2d / SC.10 の before / after 表へ、`BusPool` + `EffectChainMap`。RE-4: #651 ヘッダ定期 patch・stale binary ガード・#643。PH-1: DSL 表と format 表（`.vst3` 両ロール可）を再構築。全 10 ファイルをですます調へ。引用 114 件 0 failed |
-| PH-3 + 用語集 | `plugin-hosting/catalog.md`（ja 1389 行 / en 1421 行・引用 42 件）。`orbit-plugin-scan` のクラッシュ隔離と atomic write、PC.2 の名前解決（NFC・vendor / format 修飾・CLAP > VST3）、エディタ側 reader / 補完 / 評価前診断（#638）、instrument 差し替え #618（spare slot）、effect 差し替え #625 → #628（in-place rebuild → `ApplyEffectChain` prepare-commit）。用語集 ja / en に Rust Engine / Plugin Hosting・Signal Chain / MCP・E2E の 3 節（23 語）を追加し SC 節を opt-out 経路と明記 |
-| 目次・landing | `sidebar.ts`（Part III を Rust Engine に昇格、Part IV Signal Chain / Mixer 新設、SC 経路を Part VII collapsed へ）、`index.md` ja / en、`sites/dev/README.md`、`.plan/refresh-2026-07.md` §8 |
-| PH-2 | `plugin-hosting/plugin-ui.md`（ja 1226 行 / en 1245 行・引用 34 件）。`seq.ui()` → TS → daemon → child の配線、Cocoa main-thread 制約と `orbit-child-runtime`、evt リング（`EVT_SLOTS = 2`）と `dirty_epoch`、クローズ状態機械（`Closed` = ドレーン条件）、safepoint (b)、#633 per-window pump。unverified 3 件（timeout 値の根拠・CGWindowList 経路の撤去記録・Try it 未実行）を明記 |
-| IV-3 | `editor/mcp-and-gated-e2e.md`（ja / en 各 1022 行・引用 40 件）。拡張内 MCP サーバ（WCTM Agent Bridge の系譜・`ORBITSCORE_MCP_PORT` 優先・25 tool の一覧）、gated E2E ハーネス（stale binary ガード・capture WAV の RMS 判定・ratchet と hygiene）、playhead `[STEP]`。#614 以降 `evaluate_orbitscore.ok` は eval mark を待つが、評価後の非同期失敗は依然 `get_log` にしか出ないことを整理 |
-| SC-1 | `signal-chain/index.md`（ja 1564 行 / en 1598 行・引用 51 件）。ラック `[ ]` の値意味論、`RackRecipe`、LCS 差分による再評価、`ApplyEffectChain` wire、`orbit-effect-rack-child` の prepare-commit、標準 `Gain` の dB 契約と CI ゲート。コードの逐語引用が約 900 行を占めるため 800 行目安を超過（draft のまま） |
-| SC-2 | `signal-chain/mixer-audio-line.md`（ja 919 行 / en 944 行・引用 40 件）。sum / aux / send / output / master gain。#643 の「master gain が instrument に効かない」は**原因未特定**（WORK_LOG 6.420 が仮説を撤回）として記述し、#649 オーディオラインは設計のみ（HEAD に実装なし）と明記 |
-
----
-
-### 6.423 docs: リポジトリ側ドキュメントを Rust 既定の実態へ揃え、dev サイト引用の機械検証を導入 (Sep 1, 2026)
-
-**ブランチ**: `claude/developer-site-docs-update-0obpim` / 対象 commit `69dc968`
-
-#### 何が乖離していたか
-
-| ドキュメント | 記述 | 実態 |
-|---|---|---|
-| `docs/core/INDEX.md` | 「bundled SuperCollider audio engine」、dev サイト deploy は post-ICMC、最終更新 2026-05-02 | Rust daemon が既定（cutover #108）、サイトは稼働中。`docs/design/`・`SIGNAL_CHAIN_DSL_SPEC`・POST_2.0 群・research 9 本が未掲載 |
-| `README.md` | SC エンジン前提のタグライン・技術スタック・構成図、テスト 1652 件 | Rust / plugin hosting / mixer が主機能。`rust/`・`sites/`・`tests/e2e/` が構成に無い |
-| `rust/README.md` | 「Phase 1a 完了」、crate 4 個 | crate 22 個（children / host / scanner / std-gain / link-audio） |
-| `CLAUDE.md` Quick Reference | 「v3.0 (SuperCollider Audio Engine)」、テスト 1333 件 | 2162 passed / 68 skipped（2026-09-01 実測） |
-| `INSTRUCTION_ORBITSCORE_DSL.md` §1 / §9 / Implementation Status | 「Initializes AudioEngine with SuperCollider」 | `createAudioEngine()` が既定で `RustEnginePlayer`。SC は `ORBITSCORE_ENGINE=sc` |
-| `docs/testing/TESTING_GUIDE.md` | SC を前提条件に列挙、テスト 220 件 | SC は opt-out 経路のみ。実機検証の正本は gated E2E |
-
-**方針**: 仕様（SoT）は再設計せず、**実装事実の開示部分だけ**を直した（§1 の初期化説明・§9 の実装ノート・
-Implementation Status のエンジン見出し）。設計・語彙には触れていない。
-
-#### dev 学習サイトの引用の機械検証（`sites/dev/scripts/check-citations.mjs`）
-
-STYLE_GUIDE §5-bis「`// <file>:<start>-<end>` 付きコードブロックは code と文字単位で一致」は
-これまで人手の audit（`.audit/sot-verification-2026-05-06.md`）でしか守られていなかった。
-CLAUDE.md の「規律を足す時は、同時にそれを守らせる仕組みを足す」に従い、スクリプトへ落とした:
-
-- 全 `.md` の fenced block 先頭行を header として解釈し、`// ...` を省略ワイルドカードとして
-  順序付きで突き合わせる。末尾 `// ...` の禁則（range 末尾で終わるのに置く）も検出
-- basename だけの header（`types.ts:7-26`）は候補が複数あれば **ambiguous** として red
-- `--fix`: snippet が他の行へ**そのまま移動**しただけなら header を再アンカーする（内容の drift は直さない）
-- `npm run docs:check`（root）/ `sites/dev` の `docs:check` script として登録
-
-**導入時の実測**: 50 ファイル・288 引用のうち **246 が red**（85%）。`--fix` で 71 件が行ずれとして
-再アンカーされ、残り 172 件は内容の drift（SC 経路の関数消失・`event-scheduler.ts` の分割・
-Rust 側の関数移動）で、章の再検証が必要な状態だった（次項 6.424 で対応）。
-
-#### 併せて更新
-
-- `docs/development/DEV_LEARNING_SITE.md` §3（ディレクトリの実態）・§7（決定済み / 未決）
-- `docs/development/TRANSLATION_STATUS.md`（dev 19 章 → 29 章）
-- `CONTRIBUTING.md`（integration test の対象を gated E2E へ）
-- `INSTRUCTION_ORBITSCORE_DSL.md` PH.1「v1 の現在地」: #643 反映時に旧文「PR-1a はまだ移設していない」と新文「✅ 実装済み」が同一文に継ぎ合わさっていたのを、時系列が読める形へ整理（SC-2 章執筆エージェントの指摘）
-
-#### テスト実測（2026-09-01・Linux コンテナ・root）
-
-`npm test`: 2162 passed / 68 skipped / **3 failed**。失敗 3 件はいずれも「読めないファイルを EACCES として扱う」
-テスト（`tests/interpreter/file-import.spec.ts` 1 件・development docs helpers 2 件）で、**root ユーザーでは
-chmod が効かないため**の環境要因。macOS の通常ユーザーでは対象外。
-
 ---
 
 ## Archived sections
@@ -950,6 +1026,7 @@ Older entries have been archived by month for readability:
 - [2026-06](../archive/WORK_LOG_2026-06.md)
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
+- [2026-09（前半・09-01〜09-02）](../archive/WORK_LOG_2026-09.md)
 
 ## 2026-09-03: マージ後の head ブランチは自動削除（規則を owner の決定に合わせる）
 
@@ -958,6 +1035,33 @@ Older entries have been archived by month for readability:
 （4 箇所）・CLAUDE.md の Branch Structure・BUNDLE_BRANCH_WORKFLOW（3 箇所）を「マージ後は
 GitHub 設定で自動削除・履歴は merge commit から辿る」に訂正。統合ブランチも束 PR のマージ後に
 消えてよい（自動削除はマージ後にしか動かないので、小 PR の base が途中で消えることはない）。
+
+## 2026-09-03: PR #704 の追従監査（ドキュメント変更なし・指摘 3 件）
+
+ルーチン「マージ済み PR にドキュメントとサイトを追従させる」を PR #704（`703-bundle-branch-workflow`
+→ main・merge commit `3fa1150`）に対して実行。**追従すべきドキュメント変更は 0 件**。
+
+- 差分 6 ファイルはすべて規約文書と CI 定義（`CLAUDE.md` / `docs/core/PROJECT_RULES.md` /
+  `docs/development/BUNDLE_BRANCH_WORKFLOW.md` / `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` /
+  `docs/development/WORK_LOG.md` / `.github/workflows/claude-code-review.yml`）で、
+  `packages/engine/` `rust/` `packages/vscode-extension/` に変更が無い。DSL の構文・意味論、
+  MCP ツールの契約、OrbitStudio の評価経路のいずれも変わっていないので、
+  `docs/specs-v2/` `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` `sites/user/` `sites/dev/` は追従不要
+- `squash` → `merge commit` の訂正は差分内で完結している（リポジトリ全体を grep して、
+  規約文書に旧記述の残りは無い。`sites/dev/en/signal-chain/index.md:1230` の "squashed" は
+  信号処理の記述で無関係）
+
+**追従できていない点として PR で報告した 3 件**（本ルーチンでは直さない）:
+
+1. `CLAUDE.md:301` と `docs/development/BUNDLE_BRANCH_WORKFLOW.md:70` が小 PR のゲートで
+   `ORBIT_GATED_ONLY` を既存の仕組みとして参照しているが、実装が無い。
+   実在するのは `ORBIT_GATED_ORBITSTUDIO`（`tests/e2e/orbitstudio-mcp-gated.spec.ts:59`）で
+   suite 全体の on/off。`ORBIT_GATED_ONLY` は `docs/design/668-e2e-foundation-design.md:891`
+   の決定 D-4（未実装）
+2. `.github/workflows/claude-code-review.yml` の最終実行は 2026-06-17（run #278）。
+   今回足した `if: github.base_ref == 'main'` の効果を Actions で観測できない
+3. PR #704 は最終 head `7f53a5d` の CI 完了を待たずにマージされている
+   （CI 開始 10:29:37Z / マージ 10:29:39Z）。赤ではないが、マージ時点では未検証
 
 ## 2026-09-03: 束ブランチ運用の採用（#703）
 
@@ -1127,6 +1231,131 @@ steps the live playhead through an instrument() sequence, rests included
 E2E-2 / E2E-3 の dry RMS が **ちょうど 0**、E2E-1 の比が **1.27**（gain が効いていない値）
 という内容も、段 1 が直す欠陥と一致している。
 
+## 2026-09-03: #713 のガード変更に dev 学習サイトを追従させた（docs のみ）
+
+**対象**: PR [#714](https://github.com/signalcompose/orbitscore/pull/714)（merge commit `f006a51`）。
+コード・テストは一切変更していない。
+
+PR #714 は引用のアンカー（`// FILE:START-END` 形式の見出し行）を直したが、**引用を囲む本文**と
+`## Sources` の行範囲は旧状態のままだった。`docs:check` は前者しか検査しないので、後者は
+red にならずに残った。この 2 種を追従させた。
+
+**本文の乖離 2 件**（どちらも #714 で挙動が変わった箇所を古い説明のまま記述していた）:
+
+| 場所 | 旧記述 | 実態 |
+|---|---|---|
+| `sites/dev/rust-engine/capture-verification.md` / `sites/dev/editor/mcp-and-gated-e2e.md` | ガードは `rust/**/*.rs` \| `Cargo.toml` を走査 | `tests` / `benches` / `examples` を除外する（#713） |
+| `sites/dev/editor/mcp-and-gated-e2e.md` | 「残り **2 本**」（アサーション衛生は 3 本） | #713 で 2 本増えて **5 本** |
+
+両章に #713 の節を足した。走査除外の理由（別 cargo ターゲットなので daemon バイナリに入らない・
+`git checkout` が mtime を動かすので解消不能な赤になる）と、`src/` を除外しない理由、
+`gated-assertion-hygiene.spec.ts` の 2 本が両方向を留めていることを書いた。
+ja / en 両方（STYLE_GUIDE のバイリンガル必須）。
+
+**`## Sources` の行範囲**: ガードが 15 行伸びたので、`orbitstudio-mcp-gated.spec.ts` の
+128 行目以降を指す参照はすべて +15 ずれていた。6 章 × ja/en で 12 ファイル分を直した
+（`78-152` → `78-166`、`1434-1468` → `1449-1483` など）。境界行は実ファイルで確認済み。
+
+**frontmatter**: 本文を実質的に足した 2 章（RE-4 / IV-3）の `verified-against` を
+`69dc968` → `f006a51`、`verified-at` を `2026-09-03` に更新した（STYLE_GUIDE
+「章本文を実質的に書き直したとき: 必ず最新 commit に更新する」）。
+
+### 追従の過程で見えた、直していない点
+
+このセッションでは**指摘のみ**（テスト・実装は変更しない方針のため）。詳細は PR 本文。
+
+1. `tests/e2e/gated-assertion-hygiene.spec.ts:76-83` / `:89-93` は gated spec の**ソース文字列**を
+   正規表現で見るだけなので、「除外ブロックを `walk(full)` の**後ろ**へ動かす」変異
+   （除外が到達不能になり #713 の赤が戻る）で **2 本とも緑のまま**になる
+2. 同 `:77` は式の**字面**に依存するので、`Set` へ畳む等の挙動不変なリファクタで red になる
+3. `assertDaemonBinaryIsNotStale()` は `tests/e2e/orbitstudio-mcp-gated.spec.ts:164-166` の
+   `gated && appAvailable` の下でしか呼ばれない。CI は全ジョブ非 gated なので、
+   #713 で足した 15 行は**どこでも 1 行も実行されていない**
+
+## 2026-09-03: PR #700 のドキュメント追従（ICLC 取り下げ / WCTM の持ち先 / §10 の表崩れ）
+
+**追従元**: PR [#700](https://github.com/signalcompose/orbitscore/pull/700)（マージコミット `ca176f0`・head `f5b16d8`）。
+docs のみの変更で、`CLAUDE.md` の本番トラック注記・`docs/planning/DEVELOPMENT_MAP.md`・本 WORK_LOG を更新していた。
+
+**#700 が `CLAUDE.md` にしか書かなかったため、同じ注記を持つ他のドキュメントが古いまま残っていた:**
+
+| ファイル | 何が古かったか |
+|---|---|
+| `docs/core/INDEX.md:39` | 「本番トラックは ICLC への proposal 提出方向へ retarget（年次・提出日・提出形態はいずれも要確認）」 |
+| `docs/core/INDEX.md:207` | 同じ retarget 注記（WCTM 調査群の凍結セクション） |
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:18` | 「ICLC 提出方向へ retarget（年次・提出日・形態は要確認）」 |
+| `sites/dev/decisions/adr-001-supercollider.md:267` / `:314`（+ `en` 対訳） | 「Consequences revisited」の 3. 学術的文脈が ICLC retarget で止まっていた |
+
+いずれも **ICLC 取り下げ（owner 2026-09-03）・本番トラックに締切が無い・WCTM 本体の開発は本リポジトリで進めない**
+の 3 点へ書き換えた。`sites/dev` は日英両方を更新（STYLE_GUIDE のバイリンガル必須）。
+
+**#700 が入れた表崩れも直した**: `DEVELOPMENT_MAP.md` §10 で、追記の箇条書きと更新履歴テーブルのヘッダ行の間に
+空行が無く、GFM ではテーブルがリスト項目の遅延継続として吸われて**描画されない**状態だった
+（`docs/planning/DEVELOPMENT_MAP.md:1463-1464`）。空行を 1 行入れただけで、本文は変えていない。
+
+**追従しなかったもの**: #700 が記録した出口・レンダ宛先・`%n` テンプレートの裁定は、地図自身が
+「spec への反映は §6.2 の改訂候補（owner 裁定で行う）」と書いているため `docs/specs-v2/` と
+`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` へは**反映していない**（実装も未着手で、DSL 表面は変わっていない）。
+
+
+## 2026-09-03: PR #709 追従 — 失効した landmine 記述を更新
+
+PR #709（`7d2df31`・上記 #708）で `.env.example` を削除した結果、
+`docs/development/POST_2.0_VST3_HOSTING_PLAN.md:256` の landmine 記述が**失効した**。
+
+| | 内容 |
+|---|---|
+| 旧記述 | 「`.env.example` は sandbox read-deny → `git diff` が誤って削除表示。`git status --short` が権威」 |
+| なぜ失効か | ファイルが実在しなくなったため、この誤検知は起きない |
+| 🔴 なぜ放置できないか | **実際に削除された今、この記述は「`.env.example` の削除表示は無視してよい」と読める** — 真の削除を sandbox の誤検知と取り違えさせる |
+
+取り消し線で旧記述を残したうえで、解消済みであることと、`.gitignore:55-57` の
+un-ignore 行が残っているため**再設置すると再発する**ことを追記した。
+
+**追従不要と判断した層**（PR #709 の差分は `.env.example` 削除と WORK_LOG 追記のみ）:
+
+| 層 | 判断 |
+|---|---|
+| DSL/言語仕様（`packages/engine/`） | 差分に含まれない。構文・意味論・`.orbslog` 形式に変化なし |
+| ランタイム/MCP（`rust/`） | 差分に含まれない。MCP ツールの引数・返り値・エラー挙動に変化なし |
+| OrbitStudio（`packages/vscode-extension/`） | 差分に含まれない。評価フロー・診断・補完に変化なし |
+| `sites/user/` `sites/dev/` | 削除したファイルを参照する記述は 0 件（repo 全体 grep で確認） |
+
+## 2026-09-04: ルーティンのドキュメント追従 PR を溜めない規則（#718）
+
+**実害**: ルーティンが出したドキュメント追従 PR **9 本のうち 8 本が衝突**し、1 本ずつ手で解決した。
+
+| PR | 結果 |
+|---|---|
+| #716 / #717 | **出てすぐ入れた → clean** |
+| #688 / #691 / #698 / #701 / #705 / #710 / #711 | **溜めた → 全部衝突** |
+
+**原因**: ルーティン PR の差分は**「追従した時点の main」に対して計算されている**。その後 main に
+入る 1 コミットごとに陳腐化する。待たせている間に #709 / #714 / #716 と束の追従が入り、
+`WORK_LOG` の追記位置・`INDEX` の項目・各ドキュメントの **`## Sources` の行範囲**と
+**引用のアンカー**が全部ずれた。
+
+🔴 **片側を捨てると情報が落ちる**ので、機械的な解決ができない。実例:
+
+- **#688**: 「archive パスへの修正」（PR 側）と「ICLC 取り下げの追記」（main 側）が**同じ行**で衝突。
+  両方が正しいので、パスは PR 側・文末は main 側を採った
+- **#711**: `## Sources` は束側が最新だったが、`helpers/rack-child-pid.ts` の行は PR 側にしか無かった
+
+**規則**（owner 合意）:
+
+1. main に何かをマージしたら、**ルーティン PR が出た時点でその場で入れる**
+2. 遅くとも **統合ブランチを main から切る前**に全部消化する
+3. 🔴 **base の選び方**: 追従先のファイルが**束にしか無い**なら base は **統合ブランチ**にする。
+   main を base にすると引用が実ファイルを指せず `docs:check` が落ちる（#711 が実際その状態だった。
+   #717 はルーティン自身が正しく束を base にしていた）
+
+**止めない理由**: 🔴 **ルーティンは機械が見ていない層を見ている。** `docs:check` は**引用のアンカー
+しか検査せず**、引用を囲む**本文**と **`## Sources` の行範囲**は検査しない。#716 はまさにそこを
+検出した（#714 でガードの走査範囲を変えたのに、本文は「`rust/**/*.rs` を走査」のまま）。
+
+**自動マージにもしない**: #688 の本文には事実誤認があった（「vitest を回す CI チェックは 1 本も
+存在しない」— 実際は `code-review.yml:26` が `npm test` を実行している）。人が読む前提は変えない。
+
 ## 束 668-e2e-foundation — E2E 基盤（段 0・安全網）
 
 正本: [`docs/design/668-e2e-foundation-design.md`](../design/668-e2e-foundation-design.md) /
@@ -1177,11 +1406,11 @@ PR #712（merge `affdf69`）に対するドキュメント追従。**実装・�
 - 🔴 **`countErrors` の 7 重定義が 1 本になった。** 変更前の定義位置は
   `496 / 2144 / 2722 / 3155 / 3461 / 3969 / 4464` 行（発注時の実測と完全一致）。
   変更後 `grep -c "const countErrors = (log"` = **0**
-- 🔴 **capture WAV のパス構築 11 箇所を `captureWavPath` に統一。** 変更前は
+- 🔴 **capture WAV のパス構築 13 箇所を `captureWavPath` に統一。** 変更前は
   `ORBIT_KEEP_CAPTURES` を見るのが **492 行の 1 箇所だけ**で、残りは素の `path.join` だったため
   **落ちた瞬間に証拠の WAV が消えていた**。`ORBIT_KEEP_CAPTURES` 未設定時のパスが
   変更前と同一であることを実測で確認（接頭辞 `643-` は元から両分岐に付いていた）
-- 636 行のローカル変数 `captureWavPath` が import した関数名と衝突するため
+- 638 行のローカル変数 `captureWavPath` が import した関数名と衝突するため
   `captureWavFile` にリネーム（参照 3 箇所も追随）
 
 **main の受け入れ監査で 1 件直した**（Codex は「食い違いなし」と報告していた）:
@@ -1326,6 +1555,328 @@ PR-E1 の正規表現は `it(` の直後に文字列が来る前提だったの�
 **検証**（main が sandbox 外で回した実測）: `tsc` 0 / `eslint` 0 /
 `npm test` **2171 passed / 48 skipped**（+4 = A-2〜A-5）/ `check-citations.mjs` **904 verified / 0 failed**。
 
+### PR-E1 の docs 追従（dev 学習サイト IV-3）
+
+PR [#707](https://github.com/signalcompose/orbitscore/pull/707)（マージコミット `8bc65cf`）に
+dev 学習サイトを追従させた。コード・テストは触っていない。
+
+**なぜ必要か**: #707 は「ラチェットと衛生検査の走査先を `gated-sources.ts` に集約する」という
+**構造の変更**で、IV-3 章はその 2 検査を「gated spec のソースを読む」と説明していた。
+引用の再アンカー（#707 の 2 コミット目）はコードブロックの行番号だけを直すので、
+**本文と `## Sources` の行範囲は古いまま残っていた**。
+
+**変更**:
+
+- `sites/dev/editor/mcp-and-gated-e2e.md` / `sites/dev/en/editor/mcp-and-gated-e2e.md`
+  - §8 に「走査先は 1 箇所が持つ」節を追加（`GATED_SOURCE_GLOBS` / 空なら throw /
+    `readGatedSources()` と `readGatedSourceEntries()` の使い分け / `file:line` 報告）
+  - ラチェットの説明を「gated spec の中に」から「`readGatedSources()` が返す
+    gated E2E のソース全体に」へ
+  - §3 の `rackChildPidsFromLog` の出典を `tests/e2e/helpers/rack-child-pid.ts` へ
+  - `## Sources` に `gated-sources.ts` / `helpers/rack-child-pid.ts` を追加、
+    `orbitstudio-mcp-gated.spec.ts` の行範囲を再アンカー（import +1 / PID オラクル移動 -27）
+  - `verified-against` を `8bc65cf`・`verified-at` を 2026-09-03 へ
+- `sites/dev/{,en/}plugin-hosting/{catalog,plugin-ui}.md` /
+  `{,en/}signal-chain/{index,mixer-audio-line}.md` / `{,en/}rust-engine/capture-verification.md`
+  — `## Sources` の `orbitstudio-mcp-gated.spec.ts` 行範囲を同じ規則で再アンカー。
+  本文の対応関係は変わらないので `verified-against` は据え置き（STYLE_GUIDE §4）
+
+**検証**: `npm ci` / `npm run docs:build -w @orbitscore/user-site` /
+`npm run docs:build -w @orbitscore/dev-site` / `npm run docs:check`（910 citations / 0 failed）
+
+### PR-E3: capture の解析を per-channel でも取れるようにする
+
+**なぜ入れるか**（設計 §10）。`analyzeWavBuffer` は `wav-analysis.ts:127-132` で**全チャンネルを
+加算平均してモノラルにしてから**窓 RMS を取る。`WavAnalysis` にチャンネル別の系列は無く、
+MCP の `analyze_audio` もその形しか返さない（gated spec に `readFloatLE` は **0 件**）。
+チャンネル別 RMS は Rust 側（`orbit-audio-verify`）にしか無く、**MCP 経由の gated E2E からは届かない**。
+
+🔴 **このままでは書けない E2E が 4 件あり、いずれも mono に潰れて常に緑になる**:
+`pan` / `defaultPan` の L/R 差（#650）／ ch3-4 が無音・ch1-2 は有音（doc 611 E2E-4・5）／
+8ch で bleed 無し（doc 598 E2E-R5）。
+
+**変更**（実装は Codex・検証は main）:
+
+- `wav-analysis.ts` — `ChannelWindow` 型 / `WavAnalysis.channelWindows` / `channelRms` /
+  `analyzeWavBuffer(buf, { perChannel })`。**既定は mono のまま**（spread で、指定時だけ増える）
+- `mcp-server.ts` / `extension.ts` — `analyze_audio` に `per_channel` を追加。
+  設計の要求どおり**エージェントも同じ動線で見られる**ようにした（MCP は裏口ではない）
+- `tests/e2e/helpers/run-score.ts` — `CaptureWindows.channelRms(segment, channel, guardSec?)`
+
+**ユニットテスト 4 本**（既存 14 本は無変更）。決定的なのは 3 本目 —
+**片チャンネルだけに信号がある WAV** で `channelRms[1] === 0` かつ **`mono rms === channelRms[0] / 2`**
+を検証する。**mono 潰しの欠陥そのものを数値で固定**している。
+
+#### 🔴 実機の capture で mono と突き合わせた（main の実測）
+
+実機 gated が生成した**44.1 秒・ステレオ**の capture を、同じ関数で両方の呼び方で解析した:
+
+```
+ch数        : 2
+durationSec : 44.117
+mono rms    : 0.061970
+channelRms  : 0.061970  0.061970
+L/R 比       : 1.0000
+既定の不変性 : {}            ← perChannel 無指定では両フィールドとも undefined
+```
+
+**3 つの値が小数 6 桁まで一致。** 合成データの hard-pan テストが「**分離できる**」ことを、
+この実機値が「**mono と矛盾しない**」ことを示す。片方だけでは足りない。
+
+**検証**: `tsc` 0 / `eslint` 0 / `npm test` **2173 passed / 48 skipped**（+4）/
+`check-citations.mjs` **904 verified / 0 failed**。
+
+### 束の締め: `/simplify` の適用
+
+4 観点（reuse / simplification / efficiency / altitude）を並行で回した結果。
+
+| 指摘 | 判断 |
+|---|---|
+| `readGatedSources()` と `readGatedSourceEntries()` が**同じ throw ガードを 2 箇所**に持つ | ✅ 前者を後者から導出。**ガードが 1 箇所に** |
+| 二乗平均の式が `rms()` と `channelRms()` に重複 | ✅ `quadraticMeanRms()` に集約 |
+| `run-score.ts` の `markerCount` が `engine-log.ts` の `countLogMarker` と**完全に同一実装** | ✅ 寄せた |
+| `run-score.ts` が gated spec の `startR28Engine` を**約 60 行コピー**している | 🔶 **follow-up**（下記） |
+| per-channel から mono を導出して二重走査を避ける | ❌ **却下 — 数値が変わる**（下記） |
+
+#### 🔴 却下: per-channel から mono を導出する案
+
+「`channelRms` の平均で mono の `rms` / `windows` を導出すれば、バッファを 1 回しか走査しなくて済む」
+という提案。**これは既定の数値を変える。**
+
+mono の RMS は `sqrt(mean(((L+R)/2)²))`、チャンネル別 RMS の平均は `(rms_L + rms_R)/2` で、
+**別物**である。無相関・同電力の L/R で実測:
+
+```
+mono の RMS      : 0.407428
+ch別 RMS の平均  : 0.580297
+比               : 0.7021      ← 理論値 1/√2 ≈ 0.7071
+```
+
+🔴 **一致するのは L=R か片チャンネル無音のときだけ**で、**既存 14 本のテストはまさにその特殊ケース
+しか見ていない**。採用していれば**全件緑のまま通り、実際の音楽素材でだけ静かに壊れた**。
+per-channel を入れた動機（「mono に潰すと分離が測れない」）と同じ構図が、逆向きに出た形である。
+
+#### efficiency / altitude 班の指摘
+
+| 指摘 | 判断 |
+|---|---|
+| `readGatedSources()` / `gatedItTitles()` に**メモ化が無く、220KB のソースを読み直す** | ✅ **適用** |
+| `perChannel` + `windowMs` 併用時に**同じバッファを 3 回全走査** | 🔶 **follow-up**（下記） |
+| `windowsFor()` が区間ごとに filter する | ❌ 指摘に当たらず（高々 2200 要素の配列走査） |
+| `GATED_SOURCE_GLOBS` のファイル名決め打ち | ❌ **今のままでよい** — `gated/` を `.spec.ts` にしないのは**意図的**（vitest に発見させず、実 GUI の並列起動を避ける）。制約から導かれた形 |
+| 台帳が空で A-4 / A-5 が空振り | ❌ **設計どおり**（§3.5「台帳は空から開始する」）。箱を先に作り、中身は後続 PR |
+
+**メモ化の実測**（2026-09-04）: 対象は 220KB・4566 行の gated spec 1 本。
+`gated-sources.spec.ts` だけで**同じファイルを 3 回**、`dsl-e2e-coverage.spec.ts` で**2 回**読んでいた
+（`gatedItTitles()` が内部で `readGatedSources()` を呼ぶため）。合計 **+4 回の冗長読み込み**と、
+4566 行に対する `matchAll` の再実行。対照的に `gated-assertion-hygiene.spec.ts` は
+**モジュール先頭で 1 回だけ読んで保持**しており、そちらが正しい形だった。
+
+#### 🔶 follow-up: `wav-analysis.ts` の窓ループが 3 箇所に手書き
+
+`analyzeWavBuffer` 本体の窓ループ / `windowSeries` / `channelSeries` が同型で、
+`MIN_WINDOW_MS` / `MAX_WINDOW_SERIES` の cap チェックまで一字一句同じ。
+`{ windowMs, perChannel }` 併用時は**同じバッファを 3 回全走査**する
+（44 秒・48kHz・ステレオで `readFloatLE` が約 1267 万回 = 最小構成の 3 倍）。
+
+🔴 **ただし「per-channel から mono を導出する」形では直せない**（上記のとおり数値が変わる）。
+正しい形は**窓イテレーション自体を共有関数にし、1 パスで mono と per-channel の
+アキュムレータを同時に更新する**こと。**この束では直さない** — 既存 20 本の capture 値を
+変えないことが最優先で、いま `run-score` に消費者がいないため実害もゼロ。
+**次に窓ロジックを触る時の踏み台**として記録する。
+
+#### 🔶 follow-up: `startR28Engine` の重複
+
+`run-score.ts:989-1044` が gated spec の `startR28Engine` / `waitForEngine`（`:406-466`）を
+マーカー文字列・retry 構造・エラー整形まで含めてほぼ丸ごと再実装している。指摘は正しい。
+
+**この束では寄せない**: 解消には gated spec から helper を切り出す必要があり、**20 シナリオが依存する
+構造を束の締め直前に動かす**ことになる。設計 §4 も「本設計では寄せない — 既存 7 本の意味を変えない
+ことを優先する」と明記している。**リスクゼロの部分（`markerCount`）だけ取った。**
+
+**最初の消費者が付く時に寄せる**のが安全（今は `run-score` にも `startR28Engine` にも
+新しい消費者がいないので、形が確定していない）。
+
+### 束の締め: Fable 監査の結果
+
+🔴 **監査が私（main）の壊したビルドを捕まえた。**
+
+#### 0. `/simplify` の適用でビルドを壊していた（main の誤り）
+
+`quadraticMeanRms` を `function waitForEngineState(` の前に挿入したつもりが、実際のコードは
+**`async function waitForEngineState(`** で、**`async` と `function` の間**に入っていた:
+
+```ts
+async /** ... */
+function quadraticMeanRms(...) { ... }
+
+function waitForEngineState(...) { await ... }   // ← async が剥がれた
+```
+
+`tsc --noEmit -p tsconfig.tests.json` が **TS2304 / TS2355 / TS1308** で落ちる状態。
+
+🔴 **なぜ気づかなかったか、が本質**:
+
+| | |
+|---|---|
+| `npm test` が緑だった | **`run-score.ts` をどの spec も import していない**（gated spec が取るのは `captureWavPath` だけ） |
+| 私が回した `tsc -p tsconfig.json` が 0 だった | 🔴 **こちらは `tests/` を見ない**。**正本のゲートは `npm run typecheck:e2e`（`tsconfig.tests.json`）** |
+
+**消費者のいないコードは、テストでもデフォルトの型チェックでも守られない。**
+以後 `tests/` を触ったら **`npm run typecheck:e2e`** を回す。
+
+#### 1〜3. 適用した指摘
+
+| 指摘 | 対処 |
+|---|---|
+| 🔴 **hygiene が `runScore(..., { capture: true })` を capture 経路と認識しない**（設計 §17 F-1 の配線漏れ） | 検出条件に `capture:\s*true` を追加。**入れ忘れると新シナリオが何も測らなくても通る** |
+| **A-3 は `KEYWORDS` が空なら真空で通る** | `expect(KEYWORDS.size).toBeGreaterThan(0)` を先頭に |
+| **構文 / smoke の baseline の誠実さ検査が PR 分割の隙間に落ちている**（§3.3 は「両方」、§20 は A-10 を PR-E5 = `reference-coverage.spec.ts` のみに割当） | **A-10 をこの束に追加**（台帳に載った構文が baseline に残っていたら red / smoke baseline が実数より緩ければ red） |
+| **`GatedCatalog` が手写しで、片方に field を足すと黙ってずれる** | gated spec の return に **`satisfies GatedCatalog`** を付けて機械で結んだ |
+
+**`satisfies` が効くことを実行で確認した**: `GatedCatalog` に field を 1 つ足すと
+`orbitstudio-mcp-gated.spec.ts(406,7): error TS1360` で落ち、復元すると exit 0 に戻る。
+
+#### 4. 監査が「指摘無し」とした項目（一次ソースで確認済み）
+
+- **`analyzeWavBuffer` の既定戻り値**: main 版と束版を cjs 化し、合成 WAV 3 種 × opts 3 種の
+  **9 通りすべてで `JSON.stringify` が byte 一致**
+- **`gatedItTitles()` の正規表現**: gated spec の 20 箇所すべてを回収。括弧入りの題名も正しく閉じる
+- **`z.boolean().optional()`**: `required` に入らないので、`per_channel` を送らない既存クライアントは
+  既定経路。戻り値も素通しで `channelWindows` は削られない
+
+#### 5. 🔴 残る不在: PR-E0（spec 改訂）が束にも main にも無い
+
+`docs/testing/E2E_HARNESS_SPEC.md` の main 最終更新は 2026-07-28 で、`ObservationKind` /
+smoke 件数ラチェット / 「§3 網羅は実機層で取る」の改訂が入っていない。設計は
+**「実装より先・運用規則 6」**と明記している。**いま台帳の `ObservationKind` は
+正本より先にコードが確定した状態**。→ 束 PR の本文に明記し、owner 判断を仰ぐ。
+
+### 束の締め: レビューチーム 4 名の結果
+
+🔴 **3 名が独立に同じ Critical を検出**（`/simplify` の async 剥がれ）。既に修正済みだったが、
+**3 系統が別々に同じ結論に着いた**ことは記録に値する。
+
+#### ポリシー: 消費者のいない層は、テストでも型チェックでも守られない
+
+この束はその壊れ方を **2 回**踏んだ:
+
+1. `gatedItTitles()` がカリー形を **1 件も拾えず、空振りで緑**だった
+2. `/simplify` で `waitForEngineState` から **`async` が剥がれた** — `npm test` は緑
+   （`run-score.ts` に消費者がいない）、`tsc -p tsconfig.json` も 0（**`tests/` を見ない**）
+
+したがって **helper には消費者が現れる前に直接テストを付ける**。対象は
+**① コメントに書かれた受け入れ条件**と **② 壊れても黙って通る箇所**に絞る（網羅ではない）。
+
+`tests/e2e/helpers/helpers.spec.ts`（新規・12 件）を追加。**変異で 3 件を確認**:
+
+```
+captureWavPath が env を無視     → × redirects to ORBIT_KEEP_CAPTURES ...
+countLogMarker が g を補わない   → × counts a regex marker whether or not ...
+waitForFile が minBytes を無視   → × does not settle for a file that is still being written
+復元後                           → Tests  12 passed (12)   ／ cmp で 3 ファイル一致
+```
+
+#### 🔴 自分のテストが何も証明していなかった件（変異で発覚）
+
+`waitForMatchingFile` の「`g` 付き正規表現の `lastIndex` 持ち越し」を Minor 指摘として受け、
+リセットを入れてテストを書いた。**変異でリセットを外しても緑のままだった。**
+
+理由: `test()` は `lastIndex` が末尾を超えると **false を返すと同時に 0 へ戻す**ので、
+**次のポーリングで見つかる** — ループが吸収する。**観測可能な欠陥ではなかった。**
+
+対処: リセットの 1 行は残す（呼び出し元の regex の状態に依存しない方が読みやすい）が、
+**コメントとテスト名を「何を証明していないか」まで書く形に直した**。
+主張をテストの実力に合わせないと、次に読む人が守られていると誤解する。
+
+#### 事実の誤りを 3 件直した（comment-analyzer の指摘・すべて一次ソースで確認）
+
+| 誤り | 実際 |
+|---|---|
+| WORK_LOG「capture パス **11 箇所**」 | **13 箇所**（`grep -c "captureWavPath("` = 13） |
+| `dsl-surface.ts` の `import` → `tokenizer.ts:26` | **`:27`**（`:26` は `'MUTE'`） |
+| WORK_LOG「**636 行**のローカル変数」 | **638 行** |
+
+#### 残した指摘
+
+- **`run-cli.ts` が timeout の signal を握り潰す** / **`collect()` が symlink を辿らない** —
+  いずれも**現時点で消費者ゼロ**。最初の消費者が付く時に形が決まるので、そこで対処する
+- **`analyze_audio(per_channel)` の MCP 配線に E2E が無い**（設計 §20 PR-E3 の受け入れ基準）—
+  下記のとおり束 PR に明記して owner 判断を仰ぐ
+
+### 束の締め: silent-failure レビューの結果（helper 3 件を直した）
+
+いずれも**消費者ゼロの helper** — 最初の利用者が付く前が、直す最も安いタイミングだった。
+
+#### 1. 🔴 `evaluate()` が `ok: false` を完全に握り潰していた
+
+設計 §4.2 は「`ok` に assert しない」と言っているが、**「握り潰せ」とは言っていない。**
+
+> `ok` は**必要条件**であって、十分条件でないことは**何も見ない理由にならない**（レビュー指摘）
+
+**具体的な故障**: セットアップ用 `evaluate("...")` に typo があると、その場で `ok: false` が
+返るのに捨てられ、**後段の capture/RMS アサーションが「音が鳴っていない」という形で落ちる**。
+書いた本人はオーディオの不具合を疑って延々探すことになる。
+
+→ **assert はせず、`console.warn` で見えるようにした**（診断が出ることを確かめる E2E を妨げない）。
+
+#### 2. `run-cli.ts` の `stderr: ''` は「何も出なかった」ではなく「出ても見えない」だった
+
+`execFileSync` は**成功時に stdout の文字列しか返さない**。exit 0 のまま警告だけ stderr に出す
+CLI の検証が**原理的に書けなかった**。→ `spawnSync` に変更し、**`signal` も返す**
+（タイムアウトで殺されたのと非ゼロ終了は別の失敗で、区別できないと調査が空回りする）。
+
+#### 3. `try/finally` の cleanup 失敗が本来の失敗を隠していた
+
+JS では `finally` が投げると `try` の例外を**完全に置き換える**。よりによって
+「エンジンが落ちる」ことを検証するテストほど停止処理も一緒に転ぶので、見えるのが
+本質と無関係な「停止待ちタイムアウト」だけ、という事故になる。
+
+→ 元の例外を優先して投げる形に。⚠️ **最初の修正は `finally` 内で throw していて、
+lint の `no-unsafe-finally` が「別の形の同じ問題」を指摘した** — ブロックを抜けてから投げる形に直した。
+
+#### 🔴 自分のテストが 2 回続けて何も証明していなかった
+
+| 回 | 書いたテスト | 変異の結果 |
+|---|---|---|
+| 1 | `waitForMatchingFile` の `lastIndex` リセット | **リセットを外しても緑**（ポーリングが吸収する） |
+| 2 | `run-cli` の stderr 回収 | **stderr を捨てても緑**（`typeof x === 'string'` は `''` でも通る） |
+
+**共通する誤り: 形（type / 存在）を検査して、区別できる振る舞いを検査していない。**
+
+2 件目は**前提そのものを実行で固定する**形に書き直した — `execFileSync` と `spawnSync` に
+同じ子プロセス（stderr へ書いて exit 0）を流し、**前者は `''`・後者は `'warned'`** を返すことを
+示す。これは変異で red になることを確認済み（`'warned'` を `''` にすると落ちる）。
+1 件目は**証明できないと明記する**形にした。
+
+## 2026-09-04: PR-E0 — ハーネス仕様を現状に合わせる（#668 §19）
+
+**Fable 監査が「設計要求の不在」として見つけたもの。** 設計 §19 は spec 改訂を
+**「実装より先・運用規則 6」**と明記しているが、`docs/testing/E2E_HARNESS_SPEC.md` の
+最終更新は **2026-07-28** のままで、**台帳の `ObservationKind` は正本より先にコードが
+確定した状態**だった。
+
+### 改訂した 6 項目（設計 §19 の表どおり）
+
+| 節 | 改訂 |
+|---|---|
+| 冒頭の但し書き | 「現行 gated は配線 smoke であり暫定」→ **現状に更新**。`it(` 20 件・capture の数値判定・ラチェット/衛生の 2 検査が既にある |
+| §2.1（新設） | **台帳の置き場と寿命**。台帳 1（仕様 ↔ テスト）は**残る**（コードから導出できない唯一の軸）／台帳 2 は **#671 段階 3 で導出に変わる** |
+| §3 | 🔴 **網羅は実機層で取る**（旧版は逆だった）。オフライン層は**回帰の固定**（bit 一致）に絞る |
+| §4.1（新設） | **観測タイプを列挙で固定**（`ObservationKind`）。`smoke` は「監査で警告」ではなく**件数ラチェット**（警告は読まれないが red は止まる） |
+| §6.3 | 🔴 **変異スイープを PR のクリティカルパス外に**。`cargo-mutants --in-diff` を名指す |
+| core spec §10 | 三者一致の仕組みと「**DSL を足したら E2E も足す**」を参照（運用規則 7・乖離を作らない） |
+
+### §3 の改訂がいちばん大きい
+
+旧版は網羅を**オフライン層**に、実機層を「代表構文のみ」に割り当てていた。**現状と逆だった。**
+
+- **ラチェットが数えているのは gated spec の語**である（実機層のソースを走査している）
+- owner 確定（2026-09-03）:「**MCP 経由、つまりユーザーと同じ形でテストするのが重要**」
+- 実害: `global.gain()` が instrument に効いていなかった欠陥は、**変異 35 件・ユニット 2149 件が
+  すべて素通りし、キャプチャの RMS 実測だけが捕まえた**
+
+**仕様の方が実装より古いまま置かれていた**ので、正本を現状に追いつかせた。
 ### PR-E4 追従: dev サイトを構文表面の正本とラチェット A-2 〜 A-5 まで追従させる（docs のみ）
 
 PR [#715](https://github.com/signalcompose/orbitscore/pull/715)（merge `cdbb8d3`・base は束の統合ブランチ

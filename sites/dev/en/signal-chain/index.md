@@ -52,14 +52,20 @@ SC.1 splits DSL statements into a **declaration layer** (commutative, last-write
 
 | Layer | Belongs here | Meaning of order |
 |----|----|----|
-| **Declaration layer** | audio / chop / play / gain / pan / output-node names / instrument-role plugin calls / mixer declarations | **Commutative**. Re-declaring the same item is last-write-wins |
-| **Signal layer** | effect-role plugin calls / sends | **Only the relative order within this layer** becomes the connection order |
+| **Declaration layer** | audio / chop / play / instrument-role plugin calls / mixer declarations | **Commutative**. Re-declaring the same item is last-write-wins |
+| **Signal layer** | effect-role plugin calls / **gain** / **pan** / **sends** / **destinations (`output`)** | **Only the relative order within this layer** becomes the connection order |
 
-A rack is a way to write the contents of the signal layer as one value. The element order of
-the array is the connection order, and a single `effect()` declaration carries the **complete
-image of the chain**. As SC.1 norm (2) states, the topology is fixed as **pattern (play) →
-instrument → effect sequence → destination**, and the only thing the user controls by ordering
-is the contents of the effect sequence. Racks cover exactly that part.
+🔴 **gain, pan and destinations are signal-layer elements** (revised 2026-09-04, #611). This
+table used to place all three in the declaration layer. Once sound exists, **where you write an
+element is where it sits in the signal**. So there is no fixed "fader" stage: write `gain`
+before an effect and it is the level going into that effect; write it after and it is the level
+coming out.
+
+A rack is a way to write part of the signal layer as one value. The element order of the array
+is the connection order, and a single `effect()` declaration carries the **complete image of
+the chain**. The topology is **pattern (play) → instrument → line (effects, gain, pan, sends
+and outputs in written order)**, and what the user controls by ordering is the **whole line**.
+A rack bundles part of it under a name.
 
 ## The DSL shape (SC.10.1 / SC.10.3b / SC.10.4)
 
@@ -1449,7 +1455,7 @@ rack on the gated side is below; it runs the SC.10.4 shape — a `var` binding f
 `effect(variable)` — on real hardware as is.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4070-4077
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4076-4083
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
@@ -1590,7 +1596,7 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - `tests/core/rack-chain.spec.ts:105-414` — T3–T23 (LCS, occurrence, keep updates, uncertain recovery)
 - `tests/interpreter/rack-value-resolution.spec.ts:62-188` — T1–T19 (array classification, three categories, layer rejection)
 - `tests/interpreter/signal-chain-dispatch.spec.ts:170-184,581-611` — T24 (method-form diagnostic), T25 (`remove()` removal)
-- `docs/development/WORK_LOG.md:1726-1876,2379-2509,2582-2736,3046-3075` — 6.379 / 6.386–6.389 / 6.396–6.397 (establishment, Gain, rack child, daemon wiring, DSL, hardware)
+- `docs/archive/WORK_LOG_2026-08.md:1726-1876,2379-2509,2582-2736,3046-3075` — 6.379 / 6.386–6.389 / 6.396–6.397 (establishment, Gain, rack child, daemon wiring, DSL, hardware)
 - `docs/user/ja/USER_MANUAL.md:599-615` — the user-facing description of the rack notation
 - Issue [#628](https://github.com/signalcompose/orbitscore/issues/628) — rack-form chains (the unified model for deletion, bypass, multiple inserts)
 - Issue [#625](https://github.com/signalcompose/orbitscore/issues/625) — the replacement/deletion mechanism this builds on

@@ -678,8 +678,8 @@ flowchart TB
 - `packages/engine/src/audio/supercollider/event-scheduler.ts:440-462` — SC 版 `clearSequenceEvents()`
 - `packages/engine/src/audio/supercollider/event-scheduler.ts:476-509` — SC 版 `executePlayback()` (fire-now)
 - `packages/engine/src/audio/supercollider/types.ts:10-25` — SC 版 `ScheduledPlay`
-- `docs/development/WORK_LOG.md` 6.179 — cutover #108 (2026-07-03)
-- `docs/development/WORK_LOG.md` 6.194 / 6.198 — #390 `[STEP]` マーカー / #389 timing jitter の 2 機構と実測
-- `docs/development/WORK_LOG.md` 6.421 — #654 MIDI 側 playhead
+- `docs/archive/WORK_LOG_2026-07.md` 6.179 — cutover #108 (2026-07-03)
+- `docs/archive/WORK_LOG_2026-07.md` 6.194 / 6.198 — #390 `[STEP]` マーカー / #389 timing jitter の 2 機構と実測
+- `docs/archive/WORK_LOG_2026-08.md` 6.421 — #654 MIDI 側 playhead
 - Issue [#108](https://github.com/signalcompose/orbitscore/issues/108) / [#389](https://github.com/signalcompose/orbitscore/issues/389) / [#390](https://github.com/signalcompose/orbitscore/issues/390) / [#654](https://github.com/signalcompose/orbitscore/issues/654)
 - `sites/dev/orientation/architecture-overview.md` — sequence diagram (play() → 音の全体フロー)

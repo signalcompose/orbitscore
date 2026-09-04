@@ -66,39 +66,48 @@ export const GATED_SOURCE_FILES: readonly string[] = GATED_SOURCE_GLOBS.flatMap(
  * @throws ソースが 1 本も見つからない場合（検査が黙って無意味になるのを防ぐ）
  */
 export function readGatedSources(): string {
-  if (GATED_SOURCE_FILES.length === 0) {
-    throw new Error(
-      'gated E2E のソースが 1 本も見つからない。' +
-        'ラチェットと衛生検査が黙って無意味になるので、GATED_SOURCE_GLOBS を確認すること。',
-    )
-  }
-  return GATED_SOURCE_FILES.map(
-    (file) => `// ===== ${path.relative(E2E_DIR, file)} =====\n${fs.readFileSync(file, 'utf8')}`,
-  ).join('\n')
+  return readGatedSourceEntries()
+    .map(({ file, source }) => `// ===== ${file} =====\n${source}`)
+    .join('\n')
 }
+
+/**
+ * 読み込み結果のメモ化。
+ *
+ * 🔴 **同じ 220KB のソースを 1 テストファイルの中で 3 回読んでいた**（実測 2026-09-04）。
+ * `gatedItTitles()` は内部で全ソースを読み直すので、呼ぶたびに再読み込み + 4500 行に対する
+ * `matchAll` の再実行が起きる。`gated-assertion-hygiene.spec.ts` は既にモジュール先頭で
+ * 1 回だけ読んで保持しており、そちらが正しい形だった。
+ *
+ * ⚠️ **前提**: `GATED_SOURCE_FILES` は実行中に変わらない（モジュール読み込み時に確定する）。
+ * キャッシュはプロセス内なので、ファイルを足して**別プロセスで**回す分には効かない。
+ */
+let cachedEntries: readonly { readonly file: string; readonly source: string }[] | undefined
 
 /** 各ソースを「相対パス + 中身」で返す。行番号つきで報告したい検査はこちらを使う。 */
 export function readGatedSourceEntries(): readonly {
   readonly file: string
   readonly source: string
 }[] {
+  if (cachedEntries !== undefined) return cachedEntries
   if (GATED_SOURCE_FILES.length === 0) {
     throw new Error(
       'gated E2E のソースが 1 本も見つからない。' +
         'ラチェットと衛生検査が黙って無意味になるので、GATED_SOURCE_GLOBS を確認すること。',
     )
   }
-  return GATED_SOURCE_FILES.map((file) => ({
+  cachedEntries = GATED_SOURCE_FILES.map((file) => ({
     file: path.relative(E2E_DIR, file),
     source: fs.readFileSync(file, 'utf8'),
   }))
+  return cachedEntries
 }
 
 /**
  * gated E2E の `it(...)` の題名。
  *
  * 🔴 **カリー化された呼び出しに対応すること。** この suite は
- * `it.skipIf(!appAvailable)('title', ...)` の形で書かれており（`orbitstudio-mcp-gated.spec.ts:611`
+ * `it.skipIf(!appAvailable)('title', ...)` の形で書かれており（`orbitstudio-mcp-gated.spec.ts:627`
  * ほか 20 箇所）、題名は**2 つ目の呼び出しの第 1 引数**にある。
  * `it(` の直後に文字列が来る前提の正規表現では **1 件も拾えない**。
  *

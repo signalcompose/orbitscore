@@ -470,4 +470,4 @@ This intermediate representation is passed to the interpreter in the next chapte
 - `packages/engine/src/parser/parse-expression.ts:62-78` — `collapseScopedRun()`
 - `packages/engine/src/parser/parser-utils.ts:45-57` — error position reporting via `expect()`
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §IM.1-IM.6 — the import declaration specification
-- `docs/development/WORK_LOG.md` §6.265 (file import parser + interpreter #456, 2026-07-17), §6.291 (Signal Chain mixer declarations #517 S1, 2026-07-26)
+- `docs/archive/WORK_LOG_2026-07.md` §6.265 (file import parser + interpreter #456, 2026-07-17), §6.291 (Signal Chain mixer declarations #517 S1, 2026-07-26)

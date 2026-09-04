@@ -1045,7 +1045,7 @@ struct UiEventHubCore {
 `extension.ts` の stdout ルータはこの結果行を `{"pluginUi"` の前方一致で拾います。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1496-1500
+// packages/vscode-extension/src/extension.ts:1497-1501
         } else if (trimmedLine.startsWith('{"pluginUi"')) {
           const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
           if (!parsed && isCurrent) {
@@ -1075,7 +1075,7 @@ recorded` で失敗するので、「DSL で open → MCP の close が成功す
 その後 1 枚目も閉じます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1756-1778
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1764-1786
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {
@@ -1218,7 +1218,8 @@ CLAP を使う必要があります。
 - [`docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md) — #474 の P0〜P6 実装設計と owner 裁定 Q1〜Q8
 - [`docs/archive/design/628-ui-pump-per-index-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/design/628-ui-pump-per-index-design.md) — per-window pump の設計（C-A / C-B・2 レイヤ分離・却下案）
 - [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/core/INSTRUCTION_ORBITSCORE_DSL.md) PH.2c — `seq.ui([名前][, open])` の DSL 規範
-- [`docs/development/WORK_LOG.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/WORK_LOG.md) 6.335〜6.348（#474 P0〜P4c）、6.358（#617）、6.387b / 6.387c（#628 の欠陥と設計）、6.413 / 6.414（#633）
+- [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.335〜6.347（#474 P0〜P4b）
+- [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.348（#474 P4c）、6.358（#617）、6.387b / 6.387c（#628 の欠陥と設計）、6.413 / 6.414（#633）
 - Issue [#474](https://github.com/signalcompose/orbitscore/issues/474) — プラグイン UI open/close
 - Issue [#617](https://github.com/signalcompose/orbitscore/issues/617) — DSL 面 `seq.ui()`
 - Issue [#628](https://github.com/signalcompose/orbitscore/issues/628) — ラック形エフェクトチェーン

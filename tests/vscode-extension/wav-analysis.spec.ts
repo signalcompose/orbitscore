@@ -107,6 +107,79 @@ function buildFloat32Wav(opts: BuildWavOptions): Buffer {
   return buf
 }
 
+/**
+ * Same shape as `buildFloat32Wav`, but each channel gets its own gain applied to the
+ * shared mono waveform — for testing that per-channel analysis can tell channels apart
+ * (e.g. a hard-panned signal) where the mono mixdown cannot (#668 §10).
+ */
+function buildPannedFloat32Wav(
+  opts: Omit<BuildWavOptions, 'channels'> & { channelGains: number[] },
+): Buffer {
+  const sampleRate = opts.sampleRate ?? 48000
+  const channels = opts.channelGains.length
+  const clickAmp = opts.clickAmp ?? 0.9
+  const clicks = opts.clicks ?? []
+
+  const frames = Math.floor(sampleRate * opts.seconds)
+  const bytesPerFrame = 4 * channels
+  const dataSize = frames * bytesPerFrame
+
+  const samples = new Float32Array(frames)
+  const clickFrames = Math.max(1, Math.floor(sampleRate * CLICK_DURATION_SEC))
+  for (const t of clicks) {
+    const start = Math.floor(t * sampleRate)
+    for (let i = 0; i < clickFrames; i++) {
+      const idx = start + i
+      if (idx >= 0 && idx < frames) samples[idx] = clickAmp
+    }
+  }
+
+  const fmtChunkSize = 16
+  const headerSize = 12 + (8 + fmtChunkSize) + 8
+  const buf = Buffer.alloc(headerSize + dataSize)
+
+  let off = 0
+  buf.write('RIFF', off, 'ascii')
+  off += 4
+  buf.writeUInt32LE(4 + (8 + fmtChunkSize) + (8 + dataSize), off)
+  off += 4
+  buf.write('WAVE', off, 'ascii')
+  off += 4
+
+  buf.write('fmt ', off, 'ascii')
+  off += 4
+  buf.writeUInt32LE(fmtChunkSize, off)
+  off += 4
+  buf.writeUInt16LE(3, off) // audioFormat: IEEE float
+  off += 2
+  buf.writeUInt16LE(channels, off)
+  off += 2
+  buf.writeUInt32LE(sampleRate, off)
+  off += 4
+  const byteRate = sampleRate * bytesPerFrame
+  buf.writeUInt32LE(byteRate, off)
+  off += 4
+  buf.writeUInt16LE(bytesPerFrame, off)
+  off += 2
+  buf.writeUInt16LE(32, off)
+  off += 2
+
+  buf.write('data', off, 'ascii')
+  off += 4
+  buf.writeUInt32LE(dataSize, off)
+  off += 4
+
+  const dataOff = off
+  for (let i = 0; i < frames; i++) {
+    const mono = samples[i]!
+    for (let c = 0; c < channels; c++) {
+      buf.writeFloatLE(mono * opts.channelGains[c]!, dataOff + (i * channels + c) * 4)
+    }
+  }
+
+  return buf
+}
+
 /** Minimal int16 PCM (format 1) header — used to verify the analyzer rejects non-float32 captures. */
 function buildInt16Wav(opts: { sampleRate?: number; channels?: number; frames: number }): Buffer {
   const sampleRate = opts.sampleRate ?? 48000
@@ -256,5 +329,50 @@ describe('analyzeWavBuffer — #478 fixes', () => {
   it('omits the windows series when windowMs is not passed', () => {
     const buf = buildFloat32Wav({ seconds: 1 })
     expect(analyzeWavBuffer(buf).windows).toBeUndefined()
+  })
+})
+
+describe('analyzeWavBuffer — perChannel (#668 §10)', () => {
+  it('omits channelWindows/channelRms by default (mono behaviour is unchanged)', () => {
+    const buf = buildFloat32Wav({ seconds: 1, clicks: [0.5] })
+    const analysis = analyzeWavBuffer(buf)
+    expect(analysis.channelWindows).toBeUndefined()
+    expect(analysis.channelRms).toBeUndefined()
+  })
+
+  it('omits channelWindows/channelRms when only windowMs is passed (no perChannel)', () => {
+    const buf = buildFloat32Wav({ seconds: 1, clicks: [0.5] })
+    const analysis = analyzeWavBuffer(buf, { windowMs: 10 })
+    expect(analysis.channelWindows).toBeUndefined()
+    expect(analysis.channelRms).toBeUndefined()
+  })
+
+  it('separates a hard-panned signal that the mono mixdown cannot distinguish', () => {
+    // Left at full gain, right silent — mono mixdown averages them into a single
+    // (halved) series, which is exactly the #650/#611/#598 problem this PR fixes.
+    const buf = buildPannedFloat32Wav({ seconds: 1, clicks: [0.3], channelGains: [1, 0] })
+    const analysis = analyzeWavBuffer(buf, { perChannel: true })
+
+    expect(analysis.channelRms).toHaveLength(2)
+    const [leftRms, rightRms] = analysis.channelRms!
+    expect(leftRms!).toBeGreaterThan(0)
+    expect(rightRms!).toBe(0)
+    // Mono mixdown is (left + right) / 2 = left / 2 here — same scaling for RMS.
+    expect(analysis.rms).toBeCloseTo(leftRms! / 2, 6)
+
+    expect(analysis.channelWindows).toHaveLength(2)
+    const loudestLeft = analysis.channelWindows![0]!.reduce((a, b) => (b.peak > a.peak ? b : a))
+    const loudestRight = analysis.channelWindows![1]!.reduce((a, b) => (b.peak > a.peak ? b : a))
+    expect(loudestLeft.peak).toBeCloseTo(0.9, 5)
+    expect(loudestRight.peak).toBe(0)
+  })
+
+  it('uses windowMs for channelWindows resolution when both options are passed', () => {
+    const buf = buildPannedFloat32Wav({ seconds: 1, clicks: [0.5], channelGains: [1, 1] })
+    const analysis = analyzeWavBuffer(buf, { windowMs: 10, perChannel: true })
+
+    // 10ms windows over 1s ≈ 100 windows per channel (same resolution as `windows`).
+    expect(analysis.windows).toHaveLength(analysis.channelWindows![0]!.length)
+    expect(analysis.channelWindows![1]!.length).toBe(analysis.channelWindows![0]!.length)
   })
 })

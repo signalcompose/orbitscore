@@ -103,7 +103,7 @@ graph TD
 `startEngine()` is responsible for starting the engine. The first thing it does is decide "which backend to use," normalizing the `orbitscore.engine` setting with the engine-side `resolveEngineKind` (loaded from compiled JS via a runtime require).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2053-2056
+// packages/vscode-extension/src/extension.ts:2054-2057
   // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
   // 'rust' (default since cutover #369), skip the scsynth pre-check entirely —
   // the native daemon doesn't need scsynth to be resolvable.
@@ -113,7 +113,7 @@ graph TD
 A point to note here is that **backend binary resolution always precedes spawning the engine**. Under the default `rust` kind it pre-checks the daemon binary.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2078-2087
+// packages/vscode-extension/src/extension.ts:2079-2088
     const daemonResolution = resolveDaemonForUI()
     if (!daemonResolution) {
       outputChannel?.appendLine(
@@ -146,7 +146,7 @@ What is interesting is that the resolved path is not handed to the engine via en
 The backend kind is **always set explicitly** on the engine through the `ORBITSCORE_ENGINE` env var.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2142-2155
+// packages/vscode-extension/src/extension.ts:2143-2156
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
@@ -166,7 +166,7 @@ The backend kind is **always set explicitly** on the engine through the `ORBITSC
 The engine process itself is then started with `child_process.spawn` running Node.js.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2157-2163
+// packages/vscode-extension/src/extension.ts:2158-2164
   // Spawn engine process
   try {
     engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -179,7 +179,7 @@ The engine process itself is then started with `child_process.spawn` running Nod
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3030-3031
+// packages/vscode-extension/src/extension.ts:3031-3032
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -219,7 +219,7 @@ The start condition lives in `activate()`. The env var takes precedence over the
 The server binds only to loopback.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1343-1347
+// packages/vscode-extension/src/mcp-server.ts:1358-1362
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject)
     httpServer.listen(port, '127.0.0.1', () => resolve())
@@ -690,4 +690,4 @@ Topics worth reading one level deeper from here. Each is expected to be filed as
 - `scripts/copy-daemon-bin.sh:1-47,121-132` — bundling policy for daemon / children / standard plugins
 - `package.json:9-11` — `build:copy-engine` calls `copy-daemon-bin.sh`
 - `docs/research/ENGINE_DAEMON_PROTOCOL.md` — the SoT of the wire protocol
-- `docs/development/WORK_LOG.md` §6.179 (cutover #108, 2026-07-03), §6.185 (daemon bundling #306, 2026-07-03), §6.188-6.192 (MCP server #388, 2026-07-07)
+- `docs/archive/WORK_LOG_2026-07.md` §6.179 (cutover #108, 2026-07-03), §6.185 (daemon bundling #306, 2026-07-03), §6.188-6.192 (MCP server #388, 2026-07-07)

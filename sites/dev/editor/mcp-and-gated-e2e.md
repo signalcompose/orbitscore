@@ -1,12 +1,12 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: cdbb8d3
+verified-against: affdf69
 verified-at: "2026-09-03"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）と PR-E4（構文表面の正本とラチェット A-2 〜 A-5）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -66,7 +66,7 @@ MCP は「テスト用の裏口」ではなく、**ユーザーと同じ動線�
 ツール実装が VS Code に直接触らず `OrbitScoreToolHandlers` というインターフェイス越しに呼ばれているのも、同じ思想の延長です。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:233-282
+// packages/vscode-extension/src/mcp-server.ts:233-286
 /**
  * VSCode-agnostic handler seam. Keeping the tool implementations behind this
  * interface (rather than reaching into the extension directly) means the same
@@ -93,7 +93,11 @@ export interface OrbitScoreToolHandlers {
   getDocumentText(): DocumentText
   getDiagnostics(path?: string): FileDiagnostics[]
   getLog(lines?: number): string[]
-  analyzeAudio(wavPath: string, windowMs?: number): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
+  analyzeAudio(
+    wavPath: string,
+    windowMs?: number,
+    perChannel?: boolean,
+  ): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
   // ...
 }
 ```
@@ -127,7 +131,7 @@ export interface OrbitScoreToolHandlers {
 HTTP 層は Node 標準の `http` モジュールで `127.0.0.1:<port>/mcp` を listen します。MCP の Streamable HTTP トランスポートは **stateful** で、`initialize` ごとにセッションを作ります。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1170-1175
+// packages/vscode-extension/src/mcp-server.ts:1185-1190
  * Sessions are created **per initialize request** and routed by the
  * `mcp-session-id` header. A single shared transport would permanently consume
  * its one session slot on the first client — any later client (or a Claude Code
@@ -141,7 +145,7 @@ HTTP 層は Node 標準の `http` モジュールで `127.0.0.1:<port>/mcp` を 
 ローカル bind だけでは足りない、という判断も入っています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1189-1196
+// packages/vscode-extension/src/mcp-server.ts:1204-1211
   // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
   // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
   // same-origin — reaching this port from a browser with full response access.
@@ -196,7 +200,7 @@ export function buildMcpServerUrl(port: number): string {
 
 `save_plugin_state` / `open_plugin_ui` / `close_plugin_ui` / `register_mcp_server` はハンドラが optional で、無いホストでは登録されません。WCTM の pi ハーネスのような「別ホスト」がこの seam を再利用するときに、既存のスタブ suite を壊さないための配慮です。
 
-面白いのは、このカタログの大半が「人間がコマンドパレットや設定から到達できる操作」の写しであることです。`start_engine` は "Start Engine" コマンド、`configure_flash` は "Configure Flash"、`rescan_plugins` は "Rescan Plugin Catalog" — 各 description が対応するコマンド名を明示しています。**新しい観測手段を増やすときも MCP のツール面を増やさない**、という方針が gated spec の側にも見えます（`rackChildPidsFromLog` のコメント: 「**MCP の tool 表面を増やさず**、ERROR 計数や `[plugin-state]` 行と同じ `get_log` 経路で読めるようにしてある」）。
+面白いのは、このカタログの大半が「人間がコマンドパレットや設定から到達できる操作」の写しであることです。`start_engine` は "Start Engine" コマンド、`configure_flash` は "Configure Flash"、`rescan_plugins` は "Rescan Plugin Catalog" — 各 description が対応するコマンド名を明示しています。**新しい観測手段を増やすときも MCP のツール面を増やさない**、という方針が E2E 側のヘルパにも見えます（`tests/e2e/helpers/rack-child-pid.ts` の `rackChildPidsFromLog` に付いたコメント: 「**MCP の tool 表面を増やさず**、ERROR 計数や `[plugin-state]` 行と同じ `get_log` 経路で読めるようにしてある」）。
 
 ---
 
@@ -205,7 +209,7 @@ export function buildMcpServerUrl(port: number): string {
 ここが本章で最も気をつけて読むべき箇所です。ツール説明はこう約束しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:538-555
+// packages/vscode-extension/src/mcp-server.ts:542-559
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -229,7 +233,7 @@ export function buildMcpServerUrl(port: number): string {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3040-3077
+// packages/vscode-extension/src/extension.ts:3041-3078
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -288,7 +292,7 @@ async function evaluateForAgent(code: string): Promise<EvaluateResult> {
 engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setupStdoutHandler` がそれを `evalMarkBridge.handleLine()` へ渡します。この分岐は **独立していなければならない**、と強調されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1501-1509
+// packages/vscode-extension/src/extension.ts:1502-1510
         } else if (trimmedLine.startsWith('{"evalMark"')) {
           // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
           // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -403,7 +407,7 @@ flowchart LR
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:62-68
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:64-70
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH =
   '/Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app'
@@ -420,7 +424,7 @@ const appAvailable = fs.existsSync(appPath)
 suite の読み込み時、テストを 1 本も走らせる前に daemon バイナリの鮮度を検査します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:154-164
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:156-166
   if (newest.at > builtAt) {
     throw new Error(
       'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
@@ -436,6 +440,17 @@ suite の読み込み時、テストを 1 本も走らせる前に daemon バイ
 
 どのバイナリを見るかは決め打ちせず、engine が実際に spawn 候補を決める `resolveDaemonBinaryPath()` に聞きます。WORK_LOG 6.416 / 6.417 によると、このガードは 2026-08-29 に **2 回パスを間違えて**います（最初は `rust/target/release/` を見ていて、実際に動いていたのは拡張に同梱された `packages/vscode-extension/engine/bin/<platform>/` のコピーだった）。そこで「ガードが守ろうとしている事故を、ガード自身が再導入しうる」形を避けるため、正本の解決関数を呼ぶ形に落ち着きました。
 
+**何を「ソース」と数えるか**にも一手が入っています（#713）。`rust/` 配下の `.rs` を無条件に拾うと、別の cargo ターゲットである統合テスト（実測では `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs`）が「最新のソース」に選ばれてしまいます。それらは `orbit-audio-daemon` のバイナリの依存グラフに入らないので、cargo は依存関係を正しく読んで何もビルドせず、バイナリの mtime も更新されません。つまりガードのメッセージが指示する `npm run test:e2e:gated` を何度打っても消えない、**解消不能な赤**になります。引き金は mtime の性質で、`git checkout` はファイルの mtime をチェックアウトした時刻へ更新するため、ブランチを行き来しただけで内容の変わっていない統合テストが「最新のソース」に化けます。#713 ではこれで実機 gated が起動段階から 1 本も走らなくなりました。
+
+```typescript
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:145-147
+        if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
+          continue
+        }
+```
+
+`src/` は外していません。daemon が依存するコードが新しければ、ガードは本来の役目どおり赤になるべきだからです。この線引き自体も次節のアサーション衛生の検査 2 本（除外が消えたら赤 / `src` まで除外したら赤）で両側から留められています。
+
 そしてガードより一段強い手当てとして、**手順そのものを消す**選択がされています。
 
 ```jsonc
@@ -449,7 +464,7 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 ### アプリの起動 — `orbs` CLI と Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:723-744
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:731-752
       const orbsBin = path.join(appPath, 'Contents/Resources/app/bin/orbs')
       child = spawn(
         orbsBin,
@@ -479,7 +494,7 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 teardown は「安全性」の注意書きが繰り返されています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:247-253
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:249-255
 function killOrbitStudio(): void {
   try {
     execFileSync('pkill', ['-f', 'OrbitStudio.app/Contents/MacOS'], { stdio: 'ignore' })
@@ -496,7 +511,7 @@ function killOrbitStudio(): void {
 キャプチャの有効化は daemon の spawn 時に `ORBIT_CAPTURE_WAV` 環境変数で渡すしかありません。拡張は `activate()` 時に engine を自動起動するので、gated spec は **自動起動した engine を一度止めてから** capture 付きで起動し直します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:861-866
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:869-874
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -596,18 +611,27 @@ export function captureWavPath(tmpRoot: string, slug: string): string {
 `runScore` は「譜面を work copy にして、エディタ経路（`open_file` → `set_selection` → `run_selection`）で評価し、要求されれば capture を解析して区間 RMS を返す」までを 1 関数にしたものです。そこにある `evaluate` が `ok` / `isError` に assert しないのは意図した設計で、理由は本章の [`ok` の節](#evaluate-orbitscore-の-ok-は何を意味するか)と同じところにあります。
 
 ```typescript
-// tests/e2e/helpers/run-score.ts:187-196
-  const evaluate = async (code: string): Promise<void> => {
-    // 🔴 **`ok` / `isError` に assert しない**（設計 §4.2）。診断は `engine-log.ts` の
-    // `expectNoNewErrors` / `expectLogMarkerAtLeast` で見る。
-    //
-    // なぜ assert しないか: **診断が出ることを確かめる E2E がある**（doc 610 の異常系は
-    // 「この譜面は診断を出す」が判定条件）。ここで弾くと、そちらが `runScore` を使えない。
-    // 逆に #614 以降 `ok` は「評価完了までに診断が無かった」までしか保証しないので、
-    // 正常系でも `ok` は十分条件にならない（評価後に非同期で起きる失敗は `get_log` だけに出る）。
-    await client.call('evaluate_orbitscore', { code })
-  }
+// tests/e2e/helpers/run-score.ts:258-270
+    // 🔴 **ただし「assert しない」は「握り潰す」ではない**（silent-failure レビュー 2026-09-04）。
+    // `ok` は**必要条件**で、`ok: false` は `get_log` を漁らずその場で取れる一次シグナルである
+    // （パース / 実行時診断・`mcp-server.ts` の tool 説明）。捨てると、セットアップの typo が
+    // **後段の「音が鳴っていない」というアサーション失敗として現れる** — 書いた本人は
+    // オーディオの不具合を疑って延々探すことになる。**assert はせず、見えるようにする。**
+    const result = await client.call('evaluate_orbitscore', { code })
+    if (result.isError) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[runScore ${source.slug}] evaluate_orbitscore reported a diagnostic (not asserted — ` +
+          `a test may be verifying it on purpose):\n${result.text}`,
+      )
+    }
 ```
+
+🔴 **「assert しない」は「握り潰す」ではありません。** `ok` は**必要条件**であって、
+十分条件でないことは何も見ない理由になりません。捨ててしまうと、セットアップの typo が
+**後段の「音が鳴っていない」というアサーション失敗**として現れ、書いた本人はオーディオの
+不具合を疑って延々と探すことになります。診断が出ることを確かめる E2E を妨げないよう
+assert はしませんが、**見えるようにはします**。
 
 PR-E2 の時点で `runScore` を呼ぶシナリオはまだ 1 本もありません（既存 20 本を書き換えない方針のため）。最初の利用者は PR-E3 の予定です。
 
@@ -620,7 +644,7 @@ PR-E2 の時点で `runScore` を呼ぶシナリオはまだ 1 本もありま�
 「音はデジタルなので観測できる」— CLAUDE.md の言い回しです。gated spec は聴かずに判定します。解析器は `packages/vscode-extension/src/wav-analysis.ts` で、daemon の capture 形式（RIFF/WAVE・IEEE float32）を読み、mono mixdown に対して 20 ms 窓の RMS・peak・onset を計算します。
 
 ```typescript
-// packages/vscode-extension/src/wav-analysis.ts:140-170
+// packages/vscode-extension/src/wav-analysis.ts:158-197
   const rms = Math.sqrt(sumSq / Math.max(1, frames))
 
   // Onsets: window RMS rises past threshold from below, with a minimum gap.
@@ -651,6 +675,7 @@ PR-E2 の時点で `runScore` を呼ぶシナリオはまだ 1 本もありま�
     ...(opts?.windowMs && opts.windowMs > 0
       ? { windows: windowSeries(buf, dataOff, frames, format, opts.windowMs / 1000) }
       : {}),
+    // ...
   }
 ```
 
@@ -659,7 +684,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 先頭テストの最後の assert は、この onset 間隔をテンポの証拠に使います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1402-1416
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1410-1424
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -682,7 +707,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 `#643` 系のテストはもう一歩踏み込み、時間区間ごとの RMS を比べます。各操作の壁時計時刻をセグメントとして記録し、capture 終了時刻から逆算して WAV 上の区間に写像し、その区間の 20 ms 窓 RMS を二乗平均します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:585-590
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:593-598
     const rms = (name: string, guardSec = 0.15): number => {
       const selected = windows(name, guardSec)
       return Math.sqrt(
@@ -701,7 +726,64 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 
 ## 規律を仕組みに変えるテスト — ラチェットとアサーション衛生
 
-WORK_LOG 6.418 のタイトルは「今日の是正を『知識』から『再現可能な仕組み』へ」です。CLAUDE.md には「DSL の機能を追加したら必ず E2E テストを追加する」と書いてあったのに、実測すると `seq` の 32 語のうち 19 語が実機で一度も評価されていませんでした。文章は読まれない時があります。そこで 2 本のテストが gated spec の **ソースそのもの**を検査します。
+WORK_LOG 6.418 のタイトルは「今日の是正を『知識』から『再現可能な仕組み』へ」です。CLAUDE.md には「DSL の機能を追加したら必ず E2E テストを追加する」と書いてあったのに、実測すると `seq` の 32 語のうち 19 語が実機で一度も評価されていませんでした。文章は読まれない時があります。そこで 2 本のテストが gated E2E の **ソースそのもの**を検査します。
+
+### 走査先は 1 箇所が持つ
+
+2 本の検査はどちらも「gated E2E のソースを読んで判定する」という作りなので、**どのファイルを読むか**を各自が抱えると具合が悪くなります。シナリオを別ファイルへ切り出した瞬間に、ラチェットは「カバー済みだった語が消えた」と読んで red になり、衛生検査のほうは新しいファイルを見ないまま **黙って通ってしまう**からです。後者は red にならないぶん厄介で、検査が効いていないことに気づけません。そこで走査先は `tests/e2e/gated-sources.ts` が 1 箇所で持ちます。
+
+```typescript
+// tests/e2e/gated-sources.ts:29-35
+const GATED_SOURCE_GLOBS: readonly {
+  readonly dir: string
+  readonly match: (name: string) => boolean
+}[] = [
+  { dir: E2E_DIR, match: (name) => name === 'orbitstudio-mcp-gated.spec.ts' },
+  { dir: path.join(E2E_DIR, 'gated'), match: (name) => name.endsWith('.ts') },
+]
+```
+
+入口の `orbitstudio-mcp-gated.spec.ts` は vitest が発見する唯一の spec で、アプリの起動を 1 回に保つ役目を持ちます。`gated/` 配下はシナリオ本体の置き場として空けてある枠で、拡張子を `.spec.ts` にしないので vitest は発見しません。つまり **検査からは見えるが、テストランナーからは 1 本に見える**という形になっています。
+
+もう 1 つ、一覧が空になったときの扱いが決めてあります。
+
+```typescript
+// tests/e2e/gated-sources.ts:87-104
+/** 各ソースを「相対パス + 中身」で返す。行番号つきで報告したい検査はこちらを使う。 */
+export function readGatedSourceEntries(): readonly {
+  readonly file: string
+  readonly source: string
+}[] {
+  if (cachedEntries !== undefined) return cachedEntries
+  if (GATED_SOURCE_FILES.length === 0) {
+    throw new Error(
+      'gated E2E のソースが 1 本も見つからない。' +
+        'ラチェットと衛生検査が黙って無意味になるので、GATED_SOURCE_GLOBS を確認すること。',
+    )
+  }
+  cachedEntries = GATED_SOURCE_FILES.map((file) => ({
+    file: path.relative(E2E_DIR, file),
+    source: fs.readFileSync(file, 'utf8'),
+  }))
+  return cachedEntries
+}
+```
+
+連結して返す `readGatedSources()` は、この関数の結果をファイル境界のマーカーで繋ぐだけです。
+読み取りとガードが 1 箇所にあるので、**片方だけ直して他方を直し忘れる**ということが起きません。
+
+入口 spec の改名やディレクトリの移動で一覧が空になると、両検査は「何も見つからなかった」を「違反ゼロ」と読んでしまいます。全件 green のまま無意味になる状態なので、ソースが 1 本も無ければ throw する、という決めです。
+
+読み方は 2 通り用意されています。ラチェットは「どのファイルの何行目か」を問わないので、全ソースを連結した文字列を返す `readGatedSources()` を使います。行番号つきで違反を名指ししたい衛生検査のほうは、ファイルごとに「相対パス + 中身」を返す `readGatedSourceEntries()` を使い、`ファイル名:行番号` の形で報告します。
+
+```typescript
+// tests/e2e/gated-assertion-hygiene.spec.ts:25-29
+/** ファイル名つき・行番号つきで、条件に合う行を集める。 */
+const linesMatching = (predicate: (line: string) => boolean): string[] =>
+  lines
+    .filter(({ line }) => predicate(line))
+    .map(({ file, line, n }) => `${file}:${n}: ${line.trim()}`)
+```
 
 ### DSL 網羅率のラチェット
 
@@ -720,7 +802,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 }
 ```
 
-gated spec の中に `.<name>(` が現れるかどうかだけを見ます。語彙側は `packages/engine/src/signal-chain/runtime` の `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` — インタプリタの dispatch テーブルそのものです。
+`readGatedSources()` が返す gated E2E のソース全体に `.<name>(` が現れるかどうかだけを見ます。語彙側は `packages/engine/src/signal-chain/runtime` の `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` — インタプリタの dispatch テーブルそのものです。
 
 ```typescript
 // tests/e2e/dsl-e2e-coverage.spec.ts:150-160
@@ -740,135 +822,6 @@ gated spec の中に `.<name>(` が現れるかどうかだけを見ます。語
 「未カバーの語が増えたら red、減る分には落ちない」— これがラチェットです。baseline（`SEQUENCE_UNCOVERED_BASELINE` / `GLOBAL_UNCOVERED_BASELINE`）は減らす方向にしか編集してはいけません。さらに「baseline に残っているが実は covered」という状態も別の `it` が落とします（次に誰かが同名の語を足したときにラチェットがすり抜けるため）。`#654` で playhead の E2E が加わったとき、baseline は 19 → 16 に縮みました（`length` / `octave` / `run` がカバー済みになった）。2026-09-01 時点の `seq` 側 baseline は 16 語です。
 
 限界も正直に書かれています。ソースを文字列走査するだけなので「その E2E が意味のある検証をしているか」は見ません。「音に出る語はキャプチャの数値で判定すること」という規律は、次のテストと組み合わせて初めて効きます。
-
-### メソッド名では測れない構文表面 — A-2 〜 A-5
-
-A-1 が見ているのは `.<name>(` という **メソッド呼び出しの形** だけです。ところが DSL には、その形をとらない表面がいくつもあります。`var g = init GLOBAL` の宣言、`RUN(x)` / `LOOP(x)` / `MUTE(x)` のトランスポート、`n by 4` の拍指定、`play(1, (1,1), 1)` のネスト、`1@v+10` のようなイベント修飾、タイの `_`、複数行にまたがるチェーン — どれもメソッド名としては現れないので、こうした構文を増やして E2E を書き忘れても、ラチェットは緑のままでした。しかも構文表面の一覧はどこにも無く、`tokenizer.ts` の `KEYWORDS` は `private static` で外から読めない状態でした。
-
-そこで #668 PR-E4 は、その一覧を production 側に正本として置きます。
-
-```typescript
-// packages/engine/src/parser/dsl-surface.ts:1-18
-/**
- * パーサが受理する「メソッド呼び出しでない」DSL 表面。
- * tokenizer / parse-statement の分岐と 1:1 に保つ。
- */
-export type DslSyntaxId =
-  | 'var-init-global' // var g = init GLOBAL              tokenizer.ts:19-20, parse-statement.ts:62
-  | 'var-init-seq' // var s = init global.seq          parse-statement.ts:385
-  | 'import' // import { x } from "./a.orbs"     tokenizer.ts:26, parse-statement.ts:67
-  | 'file-import' // file_import 文                    audio-parser.ts:94,106
-  | 'transport-run' // RUN(x)                           parse-statement.ts:72
-  | 'transport-loop' // LOOP(x)                          parse-statement.ts:72
-  | 'transport-mute' // MUTE(x)                          parse-statement.ts:72
-  | 'beat-by' // n by 4                           tokenizer.ts:21
-  | 'play-nested' // play(1, (1,1), 1)
-  | 'event-modifier' // 1@v+10 / ^2 / ~ / @g
-  | 'tie' // _                                audio では無視・#665
-  | 'underscore-method' // _gain(...) 等（適用形・spec §7）
-  | 'chain-multiline' // 複数行にまたがるチェーン（spec §3 Multiline）
-```
-
-各 id のコメントに参照元（`tokenizer.ts:19-20`、`parse-statement.ts:62` など）が残っているのは、この一覧を「パーサの分岐と 1:1 に保つ」ためです。同じ並びが `DSL_SYNTAX_SURFACE`（`dsl-surface.ts:21-35`）に配列として置かれていて、テスト側はこちらを読みます。
-
-もう 1 つ、**表面からシナリオへの台帳**が入ります。
-
-```typescript
-// tests/e2e/dsl-coverage-ledger.ts:1-19
-/** §5 の判定の型と 1:1。`smoke`（評価が通っただけ）は件数をラチェットで減らす。 */
-export type ObservationKind =
-  | 'capture-rms'
-  | 'capture-onset'
-  | 'capture-pitch'
-  | 'capture-bits'
-  | 'log-text'
-  | 'file'
-  | 'smoke'
-
-export interface CoverageEntry {
-  /** DSL 語（`runtime.ts` の Set の要素）または構文 id（`DslSyntaxId`）。 */
-  readonly surface: string
-  /** gated spec の `it(` タイトルに実在する文字列（部分一致で照合する）。 */
-  readonly scenario: string
-  readonly observation: ObservationKind
-  /** 仕様セクション ID（台帳 1・§9）。無い表面は明示的に null。 */
-  readonly specSection: string | null
-}
-```
-
-要点は `observation` です。「その表面を何で観測したか」を型として持たせておくと、`smoke`（評価が通っただけ）の行を機械的に数えられます。
-
-この 2 つの上に検査が 4 本乗ります。
-
-| 検査 | 落ちる条件 |
-|---|---|
-| **A-2** | `DSL_SYNTAX_SURFACE` に id を足したのに、台帳にも `SYNTAX_UNCOVERED_BASELINE` にも無い（A-1 の構文版） |
-| **A-3** | `KEYWORDS` の予約語が `KEYWORD_SYNTAX_IDS` で構文 id に対応づけられていない |
-| **A-4** | 台帳の `scenario` が gated spec の `it(` 題名のどれにも部分一致しない |
-| **A-5** | 台帳の `smoke` 行が `SMOKE_OBSERVATION_BASELINE`（0）を超えた |
-
-A-3 だけ向きが少し違うので、実物を見ておきましょう。
-
-```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:181-193
-  it('A-3 keeps every tokenizer keyword represented by the syntax surface', () => {
-    const syntaxIds = new Set<string>(DSL_SYNTAX_SURFACE)
-    const unmappedKeywords = [...KEYWORDS].filter(
-      (keyword) => KEYWORD_SYNTAX_IDS[keyword] === undefined,
-    )
-    const missingSyntaxIds = [...KEYWORDS].flatMap((keyword) =>
-      (KEYWORD_SYNTAX_IDS[keyword] ?? []).filter((syntaxId) => !syntaxIds.has(syntaxId)),
-    )
-    expect(
-      { unmappedKeywords, missingSyntaxIds },
-      'A tokenizer keyword was added without mapping it to a canonical DSL syntax surface.',
-    ).toEqual({ unmappedKeywords: [], missingSyntaxIds: [] })
-  })
-```
-
-tokenizer に予約語を足して正本を更新し忘れると `unmappedKeywords` に名前が出て red になります。逆に正本から id を消せば `missingSyntaxIds` 側が落ちます。対応表（`dsl-e2e-coverage.spec.ts:129-139`）で `force` が `transport-run` / `transport-loop` / `transport-mute` の 3 つに割り当てられているのは、`force` が単独の文ではなく RUN / LOOP / MUTE の `.force` 修飾だからです。
-
-この検査が成立するのは、`tokenizer.ts` の末尾に公開 view が足されたからです。
-
-```typescript
-// packages/engine/src/parser/tokenizer.ts:288-289
-/** パーサの構文表面と tokenizer の予約語を照合するための公開 view。 */
-export const KEYWORDS = AudioTokenizer.KEYWORDS
-```
-
-PR-E4 は E2E を 1 本も増やしていません。ですから台帳は空、`SMOKE_OBSERVATION_BASELINE` は 0、`SYNTAX_UNCOVERED_BASELINE`（`dsl-e2e-coverage.spec.ts:109-123`）は 13 個すべてが未カバーの状態から始まります。**構文 baseline も語の baseline と同じく、減らす方向にしか編集してはいけません。** ここで足したのは網羅そのものではなく、「これ以上悪くならない」という床です。
-
-さきほどの「限界も正直に」に戻ると、A-5 はその限界に半分だけ手をかけています。`observation` が `smoke` のままの行を増やせないので、「評価が通ったことしか見ていない E2E」が積み上がる方向へは進めません。ただし `capture-rms` と書いた行が本当に RMS を見ているかまでは検査しません — そこは次のアサーション衛生の担当です。
-
-### 走査の層に初めてテストが付いた
-
-PR-E4 の受け入れ監査で、`gatedItTitles()` のバグが 1 件見つかりました。gated suite の `it` は 20 箇所すべて `it.skipIf(!appAvailable)('title', …)` というカリー化された呼び出しで書かれていて、題名は **2 つ目の呼び出しの第 1 引数** にあります。PR-E1 の正規表現は `it(` の直後に文字列が来る前提だったので、**題名を 1 件も拾えていませんでした。**
-
-それでも当時は緑でした。拾えなくても「照合対象が無い」だけで、誰も困らなかったからです。ところが A-4 が台帳と題名を突き合わせ始めると、**空振りで緑 → 正当な台帳エントリを足した瞬間に誤って red**、という壊れ方をします。
-
-```typescript
-// tests/e2e/gated-sources.ts:110-125
-export function gatedItTitles(): readonly string[] {
-  const titles: string[] = []
-  // `it` / `it.only` / `it.skip` の直呼びと、`it.skipIf(<cond>)(` のカリー形の両方を拾う。
-  for (const match of readGatedSources().matchAll(
-    /\bit(?:\.\w+)?(?:\([^)]*\))?\(\s*(['"`])((?:\\.|(?!\1).)*)\1/g,
-  )) {
-    titles.push(match[2])
-  }
-  if (titles.length === 0) {
-    throw new Error(
-      'gated E2E の it( 題名が 1 件も見つからない。' +
-        '照合（#668-A の A-4）が黙って無意味になるので、呼び出しの書き方を確認すること。',
-    )
-  }
-  return titles
-}
-```
-
-入っているのは 2 つです。正規表現を `it.skipIf(<cond>)(` のカリー形に対応させたことと、**題名が 0 件なら throw する**ことです。`readGatedSources()` には同じガードが元からありましたが、題名側には入っていませんでした。黙って空を返す層は、消費者が現れるまで壊れていることが分かりません。
-
-同じ PR で `tests/e2e/gated-sources.spec.ts` が加わり、走査の層に初めて自分自身のテストが付きました。`GATED_SOURCE_FILES` が 1 件以上あること、読み込んだソースが gated suite の describe 名を含むこと、カリー形の題名を拾えること、そして台帳がアンカーできる題名が返ることの 4 本です。
 
 ### アサーション衛生
 
@@ -891,7 +844,20 @@ export function gatedItTitles(): readonly string[] {
   })
 ```
 
-残り 2 本は「capture を使う spec に `rms(` / `peak(` / `.rms` のアサーションが実在するか」と「stale ガードが `resolveDaemonBinaryPath()` を呼んでいるか」です。書いた直後に実在の違反を 1 件検出した（`.toBe(errorCountBeforeMixer)` を `<=` へ修正）と 6.418 は記録しています。
+残り 4 本は「capture を使う spec に `rms(` / `peak(` / `.rms` のアサーションが実在するか」「stale ガードが `resolveDaemonBinaryPath()` を呼んでいるか」、そして #713 で足された 2 本、「stale ガードが `tests` / `benches` / `examples` を除外しているか」と「`src` まで除外していないか」です。書いた直後に実在の違反を 1 件検出した（`.toBe(errorCountBeforeMixer)` を `<=` へ修正）と 6.418 は記録しています。
+
+後半 2 本は**片方向ずつ**を留めるペアになっています。前者だけなら「除外を消す」退行を捕まえられますが、後者が無いと「行きすぎて `src` まで除外する」方向は素通りします。ガードの目的（古いバイナリで測らない）は `src` を見ていることに依存するので、両方向を留めて初めて線引きが固定されます。
+
+```typescript
+// tests/e2e/gated-assertion-hygiene.spec.ts:95-99
+    expect(
+      /entry\.name === 'src'/.test(source),
+      'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +
+        'binary pass, which is exactly what the guard exists to prevent.',
+    ).toBe(false)
+```
+
+ただし 5 本すべてが gated spec の**ソース文字列**を走査するだけなので、保証するのは「そう書いてある」ことまでです。ガード本体の `assertDaemonBinaryIsNotStale()` は `gated && appAvailable` のときだけ呼ばれるので、通常の `npm test` では 1 行も実行されません。この節の検査は「実行された振る舞い」ではなく「書かれた形」を留めるもの、という位置づけで読むのが正確です。
 
 ちなみにコメントの「固定 500 行窓」は `#567` で 1000 行に拡張される前の数字ですが、有限窓であることに変わりはないので規律そのものは有効です。
 
@@ -1063,7 +1029,7 @@ function showPlayheadStep(step: StepEvent): void {
 ### `[STEP]` は通常モードでは見えない
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1153-1177
+// packages/vscode-extension/src/extension.ts:1154-1178
 function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
@@ -1094,7 +1060,7 @@ function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2039-2049
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2047-2057
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1109,13 +1075,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2052-2053
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2060-2061
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2109-2111
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2117-2119
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
@@ -1139,7 +1105,7 @@ npm run test:e2e:gated
 ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm run test:e2e:gated
 ```
 
-実行すると GUI アプリが起動して実際に音が鳴るので、CLAUDE.md の指示どおり **無人・無断で回さない**ことになっています。ゲート env が無い通常の `npm test` では describe ごと skip され、gated spec の**ソースを読む側**（ラチェット `dsl-e2e-coverage.spec.ts`、アサーション衛生 `gated-assertion-hygiene.spec.ts`、走査層の `gated-sources.spec.ts`）だけが常時走ります。
+実行すると GUI アプリが起動して実際に音が鳴るので、CLAUDE.md の指示どおり **無人・無断で回さない**ことになっています。ゲート env が無い通常の `npm test` では describe ごと skip され、ラチェットと hygiene の 2 テストだけが常時走ります。
 
 エージェント（Claude Code）から対話的に触りたい場合は、`ORBITSCORE_MCP_PORT=39123` を付けて OrbitStudio を起動し、`register_mcp_server` ツールか "Register Claude Code MCP Server" コマンドで `.mcp.json` に登録します。CLAUDE.md の「マージ前ゲート」節が定める手順は、`get_engine_state` で起動確認 → `evaluate_orbitscore` で当該 PR の DSL を評価 → **`get_log` で ERROR を確認**、の 3 段です。「起動中の OrbitStudio を必ず終了してから起動し直す」（古い extension host が新しい daemon を spawn すると `DaemonStartupError` になる）という注意も同じ節にあります。
 
@@ -1149,9 +1115,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 
 - **Agent Bridge**: WCTM 仕様 §3 の「脳のない MCP サーバー」。本章の MCP サーバはその実装
 - **capture seam**: daemon がマスター出力を WAV に書き出す機構（`ORBIT_CAPTURE_WAV`）。spawn 時にしか有効化できない
-- **ラチェット**: 未カバー DSL 語・構文表面の baseline を「減らす方向にしか編集できない」テスト
-- **構文表面 (syntax surface)**: メソッド呼び出しの形をとらない DSL の受理形（`var ... init`、`RUN(x)`、`n by 4`、`play` のネスト等）。正本は `packages/engine/src/parser/dsl-surface.ts`
-- **台帳 (coverage ledger)**: 表面 → gated シナリオ → 観測方法の対応表（`tests/e2e/dsl-coverage-ledger.ts`）
+- **ラチェット**: 未カバー DSL 語の baseline を「減らす方向にしか編集できない」テスト
 - **`[STEP]`**: engine が stdout に出す playhead 用の機械可読行
 
 ## 関連 ADR
@@ -1173,7 +1137,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 ## Sources
 
 - `packages/vscode-extension/src/mcp-server.ts:9-28` — ファイルヘッダ（Agent Bridge の出自・SDK を `require` で読む理由）
-- `packages/vscode-extension/src/mcp-server.ts:233-282` — `OrbitScoreToolHandlers` seam
+- `packages/vscode-extension/src/mcp-server.ts:233-286` — `OrbitScoreToolHandlers` seam
 - `packages/vscode-extension/src/mcp-server.ts:538-1147` — `buildServer()` の `registerTool` 群（ツールカタログの出典）
 - `packages/vscode-extension/src/mcp-server.ts:1158-1368` — `startOrbitScoreMcpServer()`（セッション管理・Host allowlist・docs 配信・`/mcp` ルーティング）
 - `packages/vscode-extension/src/mcp-registration.ts:1-62` — `.mcp.json` マージと URL 組み立て
@@ -1199,24 +1163,21 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:635-1430` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:2030-2136` — #654 playhead E2E
 - `tests/e2e/helpers/mcp-client.ts:1-174` — 生 JSON-RPC クライアント
-- `tests/e2e/gated-sources.ts:1-125` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）と `gatedItTitles()`（カリー形対応・0 件 throw は #668 PR-E4）
-- `tests/e2e/gated-sources.spec.ts:1-52` — 走査層そのものの検査（#668 PR-E4）
+- `tests/e2e/gated-sources.ts:1-106` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` の判定（`countErrors` 7 重定義の統合先・#668 PR-E2）
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` と `captureWavPath()`
 - `tests/e2e/helpers/run-score.ts:1-272` — 譜面を work copy にして実機で評価する 1 関数
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — 生成物の待ち合わせ（`minBytes` つき）
 - `tests/e2e/helpers/run-cli.ts:1-62` — `orbitscore replay` / `render` の子プロセス実行（MCP を通らない唯一の例外）
-- `tests/e2e/dsl-e2e-coverage.spec.ts:1-239` — DSL 網羅率ラチェット（A-1 語彙 / A-2 構文表面 / A-3 予約語 / A-4 台帳アンカー / A-5 smoke）
-- `packages/engine/src/parser/dsl-surface.ts:1-35` — メソッド呼び出しでない DSL 構文表面の正本（#668 PR-E4）
-- `packages/engine/src/parser/tokenizer.ts:288-289` — `KEYWORDS` の公開 view（A-3 の照合元）
-- `tests/e2e/dsl-coverage-ledger.ts:1-27` — 表面 → シナリオ → 観測方法の台帳
-- `tests/e2e/gated-assertion-hygiene.spec.ts:1-66` — アサーション衛生
+- `tests/e2e/helpers/rack-child-pid.ts:1-38` — rack child の PID オラクル（ログ由来・#668 PR-E1 で spec から移動）
+- `tests/e2e/dsl-e2e-coverage.spec.ts:1-146` — DSL 網羅率ラチェット
+- `tests/e2e/gated-assertion-hygiene.spec.ts:1-68` — アサーション衛生
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixture
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — OrbitStudio.app のビルド
 - `docs/testing/E2E_HARNESS_SPEC.md` — DSL 網羅 E2E ハーネス仕様（#543）
 - `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md` §3 — Agent Bridge の原設計
-- `docs/development/WORK_LOG.md` 6.348 / 6.409 / 6.415 / 6.416 / 6.417 / 6.418 / 6.421 — MCP ツール追加・実機検証・stale ガード・仕組み化・#654
+- `docs/archive/WORK_LOG_2026-08.md` 6.348 / 6.409 / 6.415 / 6.416 / 6.417 / 6.418 / 6.421 — MCP ツール追加・実機検証・stale ガード・仕組み化・#654
 - `CLAUDE.md` 「E2E が最重要」「これらは仕組みで強制されている」「マージ前ゲート」
 - Issue [#388](https://github.com/signalcompose/orbitscore/issues/388) — Agent Bridge / MCP サーバ
 - Issue [#390](https://github.com/signalcompose/orbitscore/issues/390) — ライブ playhead
@@ -1226,5 +1187,4 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - Issue [#643](https://github.com/signalcompose/orbitscore/issues/643) — instrument のミキサー統合（E2E-1〜7）
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — capture ヘッダの定期 patch と stale ガード
 - Issue [#654](https://github.com/signalcompose/orbitscore/issues/654) — instrument シーケンスで playhead が動かない
-- Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E の基盤（PR-E1 `gated-sources.ts` / PR-E2 共有ハーネス層 / PR-E4 構文表面の正本とラチェット）
-- PR [#715](https://github.com/signalcompose/orbitscore/pull/715) — 構文表面の正本と網羅ラチェット（A-2 〜 A-5・`gatedItTitles()` のカリー形バグ修正）
+- Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E の基盤（PR-E1 `gated-sources.ts` / PR-E2 共有ハーネス層）

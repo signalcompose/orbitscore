@@ -162,7 +162,7 @@ export async function activate(context: vscode.ExtensionContext) {
 最後の 2 つはこう書かれています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:445-498 (MCP ツールのハンドラ表を省略)
+// packages/vscode-extension/src/extension.ts:445-499 (MCP ツールのハンドラ表を省略)
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -198,7 +198,7 @@ Status bar インジケータは **2 本** あります。priority の値が違�
 `bundleStatusItem` の表示は `updateBundleStatus()` が決めますが、その最初の分岐が **engine kind** です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:725-741
+// packages/vscode-extension/src/extension.ts:726-742
 function updateBundleStatus(): void {
   if (!bundleStatusItem) return
   if (getConfiguredEngineKind() === 'rust') {
@@ -414,7 +414,7 @@ interface MethodChainContext {
 engine を spawn する前に、拡張は「音声プロセスの実行ファイルが本当にあるか」を事前チェックします。ここに面白い実装パターンがあります。**Extension Host の JS (TypeScript にコンパイル済) が、engine パッケージの compiled JS を `require` でランタイムロードする** という構造で、scsynth と daemon の両方に同じ形の wrapper があります。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:676-710
+// packages/vscode-extension/src/extension.ts:677-711
 function resolveScsynthForUI(): { path: string; source: string } | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
@@ -480,7 +480,7 @@ scsynth の resolver は `explicit > env > bundle > throw`、daemon の resolver
 事前チェックは [III-3](/audio/scsynth-bundle#engine-kind-で呼び出しそのものが-gate-される) に引用したので、ここでは引数と env の組み立てから spawn までを読みます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2111-2124
+// packages/vscode-extension/src/extension.ts:2112-2125
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -500,7 +500,7 @@ scsynth の resolver は `explicit > env > bundle > throw`、daemon の resolver
 engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動され、出力デバイスは `--audio-device` 引数で渡されます (`orbitscore.audioDevice` 設定が優先、無ければ `.orbitscore.json`)。`__default__` は「OS の既定出力」を意味する番兵です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2142-2164
+// packages/vscode-extension/src/extension.ts:2143-2165
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
@@ -526,12 +526,12 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
   } catch (err) {
 ```
 
-ここで気をつけたいのは、`ORBITSCORE_ENGINE` を **両方の分岐で明示的に set** している点です。cutover #108 で「未設定 = rust」に既定が反転したため、`delete env.ORBITSCORE_ENGINE` で SC を守る旧ロジックは常に rust になってしまう landmine でした (`docs/development/WORK_LOG.md` §6.186 の I1)。`sc` 分岐では事前チェックで解決済みの scsynth パスを `ORBIT_SCSYNTH_PATH` で engine に渡し、二重の `fs.statSync` と解決結果のズレを避けています。
+ここで気をつけたいのは、`ORBITSCORE_ENGINE` を **両方の分岐で明示的に set** している点です。cutover #108 で「未設定 = rust」に既定が反転したため、`delete env.ORBITSCORE_ENGINE` で SC を守る旧ロジックは常に rust になってしまう landmine でした (`docs/archive/WORK_LOG_2026-07.md` §6.186 の I1)。`sc` 分岐では事前チェックで解決済みの scsynth パスを `ORBIT_SCSYNTH_PATH` で engine に渡し、二重の `fs.statSync` と解決結果のズレを避けています。
 
 `stdio: ['pipe', 'pipe', 'pipe']` が重要です。stdin/stdout/stderr をすべて pipe にすることで、Extension Host から直接 write/read できます。spawn 直後にはハンドラを 5 本付け、`process.nextTick` を 1 回またいでから「まだ同じプロセスが生きているか」を確認します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2179-2190
+// packages/vscode-extension/src/extension.ts:2180-2191
   // Setup handlers
   setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
@@ -564,7 +564,7 @@ Extension Host と engine プロセスの通信は **stdin/stdout パイプ** �
 送信部分は editor の Run Selection と MCP の `evaluate_orbitscore` が共有する `writeCodeToEngine()` に集約されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3000-3032
+// packages/vscode-extension/src/extension.ts:3001-3033
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -633,7 +633,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1512-1548 (effects の中身を一部省略)
+// packages/vscode-extension/src/extension.ts:1513-1549 (effects の中身を一部省略)
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
         clearSequence: clearPlayheadForSequence,
@@ -674,7 +674,7 @@ export function transportStatusText(state: TransportState, debugMode: boolean): 
 `stopEngine()` は SIGTERM → (2 秒後) SIGKILL という 2 段階のシャットダウンを行います。2026-05 と比べると、bridge の drain と playhead のクリアが増え、SIGKILL の条件が直っています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2204-2252
+// packages/vscode-extension/src/extension.ts:2205-2253
 export function stopEngine(): boolean {
   engineGeneration += 1
   if (engineProcess && !engineProcess.killed) {
@@ -794,7 +794,7 @@ flowchart TD
 
 | 変更 | Issue | 出典 |
 |---|---|---|
-| `.vsix` に `orbit-audio-daemon` を同梱し、`resolveDaemonBinaryPath()` の最終候補に追加 | #306 | `docs/development/WORK_LOG.md` §6.185 (2026-07-03) |
+| `.vsix` に `orbit-audio-daemon` を同梱し、`resolveDaemonBinaryPath()` の最終候補に追加 | #306 | `docs/archive/WORK_LOG_2026-07.md` §6.185 (2026-07-03) |
 | `orbitscore.engine` 設定 (既定 `rust`) と `getConfiguredEngineKind()` による 4 サイトの分岐、`ORBITSCORE_ENGINE` の明示 set | #377 / #366 | §6.186 (2026-07-07)、`extension.ts:653-669` |
 | 診断を open / close / activation 時にも実行 | #384 | §6.187 (2026-07-07)、`extension.ts:414-443` |
 | MCP control server (Agent Bridge)、`evaluate_orbitscore` から始まり 25 ハンドラへ、`get_log` 用 log ring、`.mcp.json` 登録コマンド | #388 | §6.188-6.192 (2026-07-07)、`extension.ts:445-495`、`log-ring.ts` → [IV-3](/editor/mcp-and-gated-e2e) |
@@ -867,5 +867,5 @@ flowchart TD
 - `packages/vscode-extension/src/log-ring.ts:20-24` — `OUTPUT_LOG_RING_MAX = 1000` / `DEFAULT_LOG_LINES = 50`
 - `packages/engine/src/audio/supercollider/scsynth-resolver.ts:91-98` — `explicit > env > bundle > throw` 優先順位チェーン
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:221-250` — daemon 側の 5 候補チェーン
-- `docs/development/WORK_LOG.md` §6.185-6.187, §6.188-6.192, §6.194-6.197, §6.260-6.261, §6.266, §6.271, §6.279-6.283, §6.295-6.301, §6.412 — drift 表の出典
+- `docs/archive/WORK_LOG_2026-07.md` §6.185-6.187, §6.188-6.192, §6.194-6.197, §6.260-6.261, §6.266, §6.271, §6.279-6.283, §6.295-6.301 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — drift 表の出典
 - PR [#155](https://github.com/signalcompose/orbitscore/pull/155) — scsynth strict mode 採用・二重通知防止のコードレビューコメント

@@ -53,10 +53,12 @@ import {
 } from '../../packages/vscode-extension/src/wav-analysis'
 import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
 
-import { countErrors, countLogMarker } from './helpers/engine-log'
-import { captureWavPath } from './helpers/gated-session'
+import { countErrors, countLogMarker, errorBaseline, expectNoNewErrors } from './helpers/engine-log'
+import { captureWavPath, createGatedSession, type GatedCatalog } from './helpers/gated-session'
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
 import { rackChildPidsFromLog } from './helpers/rack-child-pid'
+import { logAnchor, logAppendedSince, relativeDelta, runScore } from './helpers/run-score'
+import { OUTPUT_LINE_GOLDENS, STEADY_CAPTURE } from './output-line-expectations'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
@@ -400,7 +402,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       clapEffectName: catalogClapEffectName,
       vst3SynthName: catalogVst3SynthName,
       vst3EffectName: catalogVst3EffectName,
-    }
+      // 🔴 `helpers/gated-session.ts` の `GatedCatalog` と**機械で結ぶ**（Fable 監査 2026-09-04）。
+      // あちらはこの closure を export できないので形を手写ししている。`satisfies` が無いと、
+      // 片方に field を足した時に**黙ってずれる**。
+    } satisfies GatedCatalog
   }
 
   const waitForEngine = (running: boolean, timeoutMs: number, label: string) =>
@@ -423,7 +428,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   ): Promise<void> => {
     const liveModeMarker = '🎵 Live coding mode'
     const startupTimeoutMarker = 'daemon ready line timeout after 10000ms'
-    const markerCount = (log: string, marker: string): number => log.split(marker).length - 1
     // 🔴 `capture_wav` は **spawn 専用オプション**（daemon 起動時にしか適用されない）。
     // 既に別テストがエンジンを起動していると
     // 「engine is already running; requested spawn-only option(s): capture_wav」で弾かれる。
@@ -434,8 +438,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     }
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       const beforeLog = (await activeClient.call('get_log', { lines: 500 })).text
-      const liveModeBefore = markerCount(beforeLog, liveModeMarker)
-      const startupTimeoutsBefore = markerCount(beforeLog, startupTimeoutMarker)
+      // 🔴 件数の増加では再起動を判定できない（`get_log` は固定 500 行窓なので、飽和すると
+      // 新しいマーカーを 1 行足しても古いマーカーが同時に押し出されて件数が増えない）。
+      // #611 PR-O0 の実機でここと同じロジックが `#628 R28` をタイムアウトさせた。
+      // 判定は `run-score.ts` の錨方式に揃える（実装と根拠はそちらの注記）。
+      const anchor = logAnchor(beforeLog)
       const started = await activeClient.call(
         'start_engine',
         captureWav === undefined ? {} : { capture_wav: captureWav },
@@ -445,15 +452,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         await waitUntil(
           async () => {
             const log = (await activeClient.call('get_log', { lines: 500 })).text
-            return markerCount(log, liveModeMarker) > liveModeBefore
+            return logAppendedSince(anchor, log).includes(liveModeMarker)
           },
           { intervalMs: 200, timeoutMs: 30_000, label: `${label} daemon-backed REPL ready` },
         )
         return
       } catch (error) {
         const startupLog = (await activeClient.call('get_log', { lines: 500 })).text
-        const sawFreshKnownTimeout =
-          markerCount(startupLog, startupTimeoutMarker) > startupTimeoutsBefore
+        const sawFreshKnownTimeout = logAppendedSince(anchor, startupLog).includes(
+          startupTimeoutMarker,
+        )
         if (attempt === 1 && sawFreshKnownTimeout) {
           const stopped = await activeClient.call('stop_engine')
           expect(stopped.isError, stopped.text).toBe(false)
@@ -3790,8 +3798,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
         )
       }
-      const relativeDelta = (actual: number, expected: number): number =>
-        Math.abs(actual - expected) / expected
 
       const dryRms = segmentRms('dryBaseline')
       const aRms = segmentRms('a')
@@ -4379,8 +4385,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           (onset) => onset >= range.fromSec && onset < range.toSec,
         ).length
       }
-      const relativeDelta = (actual: number, expected: number): number =>
-        Math.abs(actual - expected) / expected
       const rms = {
         busDry: segmentRms('busDry'),
         full: segmentRms('full'),
@@ -4560,6 +4564,205 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         expect(stopped.isError, stopped.text).toBe(false)
         await waitForEngine(false, 15_000, '#628 R28 master engine stopped')
       }
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  // ──────────────────────────────────────────────────────────────────
+  // #611 §9 / #543-a — capture today's output-line sound before engine changes
+  // ─────────────────────────────────────────────────────────────────
+
+  /** #611 O0-* が共有する gated セッション。suite の状態が揃っていることも併せて確かめる。 */
+  const requireOutputLineSession = () => {
+    expect(client, '#611 output-line setup must initialize the MCP client').toBeDefined()
+    expect(tmpRoot, '#611 output-line setup must initialize the scratch root').toBeDefined()
+    if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+    return createGatedSession(client, tmpRoot, requireCatalogFixtures())
+  }
+
+  /**
+   * 定常状態の 1 区間を録る（#611 PR-O0）。
+   *
+   * 🔴 **`LOOP()` は既定で次の小節境界まで待つ**（`quantize-manager.ts:70`・既定 `'bar'`）。
+   * 120 BPM 4/4 なら 1 小節 = 2000 ms なので、`run_selection` 直後に録ると**窓の大半が
+   * 発音前の無音**になり、測っているのは音量ではなく「窓に入ったヒット数」になる。
+   * 監査で実際にそれが起きていた（`output-line-expectations.ts` 冒頭の注記）。
+   */
+  const captureSteady = async (
+    ctx: {
+      captureSegment: (name: string, durationMs?: number, settleMs?: number) => Promise<void>
+    },
+    name: string,
+  ): Promise<void> => {
+    await ctx.captureSegment(name, STEADY_CAPTURE.windowMs, STEADY_CAPTURE.settleMs)
+  }
+
+  /**
+   * 区間が定常状態であることを確かめてから RMS を返す。
+   *
+   * 🔴 **オンセット数を固定しないと RMS は音量の指標にならない**（ヒット数が変われば RMS も変わる）。
+   * ここで数を固定して初めて、RMS の差が「1 ヒットあたりの音量の差」を意味する。
+   */
+  const steadyRms = (
+    result: { rms: (s: string) => number; onsets: (s: string) => readonly number[] },
+    name: string,
+  ): number => {
+    expect(
+      result.onsets(name).length,
+      `${name}: 定常状態なら窓に ${STEADY_CAPTURE.expectedOnsets} 発入るはず（入らないなら ` +
+        `録り始めが早すぎるか、譜面が鳴っていない）`,
+    ).toBe(STEADY_CAPTURE.expectedOnsets)
+    const value = result.rms(name)
+    expect(value, `${name} must be audible`).toBeGreaterThan(STEADY_CAPTURE.audibleFloorRms)
+    return value
+  }
+
+  it.skipIf(!appAvailable)(
+    '#611 O0-1 keeps the no-bus kick_loop RMS deterministic across two capture sessions',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const captureOnce = async (slug: string) => {
+        const result = await runScore(
+          session,
+          { slug, fixturePath: 'tests/fixtures/mcp-e2e/kick_loop.orbs' },
+          async (ctx) => captureSteady(ctx, 'steady'),
+          { capture: true },
+        )
+        expect(result, `${slug} must return captured windows`).toBeDefined()
+        if (!result) throw new Error(`${slug} did not return captured windows`)
+        return result
+      }
+
+      const first = await captureOnce('611-o0-no-bus-first')
+      const second = await captureOnce('611-o0-no-bus-second')
+      const firstRms = steadyRms(first, 'steady')
+      const secondRms = steadyRms(second, 'steady')
+      // eslint-disable-next-line no-console
+      console.log('[#611 O0-1] no-bus RMS:', JSON.stringify({ firstRms, secondRms }))
+      expect(first.analysis.format.channels, 'O0-1 requires a 2ch device').toBe(
+        OUTPUT_LINE_GOLDENS.noBus.channels,
+      )
+      expect(second.analysis.format.channels, 'O0-1 requires a 2ch device').toBe(
+        OUTPUT_LINE_GOLDENS.noBus.channels,
+      )
+      expect(
+        relativeDelta(secondRms, firstRms),
+        `O0-1 two no-bus captures must agree; first=${firstRms} second=${secondRms}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.noBus.tolerance)
+      expect(
+        relativeDelta(firstRms, OUTPUT_LINE_GOLDENS.noBus.rms),
+        `O0-1 no-bus RMS must stay at ${OUTPUT_LINE_GOLDENS.noBus.rms}; actual=${firstRms}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.noBus.tolerance)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 O0-1')
+    },
+    TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 O0-2 pins the explicit sum-output RMS so PR-O2 cannot move it',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        { slug: '611-o0-sum-output', fixturePath: 'tests/fixtures/mcp-e2e/output_line_sum.orbs' },
+        async (ctx) => captureSteady(ctx, 'sum'),
+        { capture: true },
+      )
+      expect(result, 'O0-2 must return captured windows').toBeDefined()
+      if (!result) throw new Error('O0-2 did not return captured windows')
+      const sumRms = steadyRms(result, 'sum')
+      // eslint-disable-next-line no-console
+      console.log('[#611 O0-2] sumOutput.rms:', sumRms)
+      expect(
+        relativeDelta(sumRms, OUTPUT_LINE_GOLDENS.sumOutput.rms),
+        `O0-2 sum RMS must stay at ${OUTPUT_LINE_GOLDENS.sumOutput.rms}; actual=${sumRms}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.sumOutput.tolerance)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 O0-2')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 O0-3 pins send(0.3) as a linear coefficient: total/dry = 1 + 0.3',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        { slug: '611-o0-linear-send', fixturePath: 'tests/fixtures/mcp-e2e/output_line_send.orbs' },
+        async (ctx) => {
+          await captureSteady(ctx, 'dry')
+          await ctx.evaluate('dry.stop()\nLOOP(kick)')
+          await captureSteady(ctx, 'dryPlusAux')
+        },
+        { capture: true },
+      )
+      expect(result, 'O0-3 must return captured windows').toBeDefined()
+      if (!result) throw new Error('O0-3 did not return captured windows')
+      const dryRms = steadyRms(result, 'dry')
+      const totalRms = steadyRms(result, 'dryPlusAux')
+      const totalOverDry = totalRms / dryRms
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 O0-3] send dry/total RMS:',
+        JSON.stringify({ dryRms, totalRms, totalOverDry }),
+      )
+      // 🔴 両区間のオンセット数は steadyRms が固定済みなので、この比は係数だけを表す。
+      expect(
+        relativeDelta(totalOverDry, OUTPUT_LINE_GOLDENS.send.legacyTotalOverDry),
+        `O0-3 total/dry must be 1 + ${OUTPUT_LINE_GOLDENS.send.amountAsWritten} (linear today); actual=${totalOverDry}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.send.tolerance)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 O0-3')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    "#611 O0-4 pins the magnitude of today's effect([...]).gain(-6) (a linear rack cannot show order)",
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        {
+          slug: '611-o0-sequence-gain-effect',
+          fixturePath: 'tests/fixtures/mcp-e2e/output_line_gain_effect.orbs',
+        },
+        async (ctx) => {
+          await captureSteady(ctx, 'dry')
+          await ctx.evaluate('dry.stop()\nLOOP(effectOnly)')
+          await captureSteady(ctx, 'effectOnly')
+          await ctx.evaluate('effectOnly.stop()\nLOOP(kick)')
+          await captureSteady(ctx, 'combined')
+        },
+        { capture: true },
+      )
+      expect(result, 'O0-4 must return captured windows').toBeDefined()
+      if (!result) throw new Error('O0-4 did not return captured windows')
+      const dryRms = steadyRms(result, 'dry')
+      const effectOnlyRms = steadyRms(result, 'effectOnly')
+      const combinedRms = steadyRms(result, 'combined')
+      const effectOnlyOverDry = effectOnlyRms / dryRms
+      const combinedOverDry = combinedRms / dryRms
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 O0-4] seq gain + effect:',
+        JSON.stringify({ dryRms, effectOnlyOverDry, combinedOverDry }),
+      )
+      expect(
+        relativeDelta(
+          effectOnlyOverDry,
+          OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.effectOnlyOverDry,
+        ),
+        `O0-4 effect-only/dry must be 10^(6/20); actual=${effectOnlyOverDry}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.effectOnlyTolerance)
+      expect(
+        relativeDelta(combinedOverDry, OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.combinedOverDry),
+        `O0-4 combined/dry must be unity (Gain(+6) x gain(-6)); actual=${combinedOverDry}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.combinedTolerance)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 O0-4')
     },
     TEST_TIMEOUT_MS,
   )

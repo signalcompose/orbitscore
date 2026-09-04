@@ -37,7 +37,7 @@ status: draft
 `Cmd+Enter` が押されると `orbitscore.runSelection` コマンドが発火し、`runSelection()` 関数が呼ばれます。まず 2 つのガード条件を確認します:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2716-2727
+// packages/vscode-extension/src/extension.ts:2717-2728
 async function runSelection() {
   const editor = vscode.window.activeTextEditor
   if (!editor || editor.document.languageId !== 'orbitscore') {
@@ -63,7 +63,7 @@ async function runSelection() {
 選択がある場合 (`!selection.isEmpty`) は単純です。選択範囲のテキストをそのまま取得します:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2734-2736
+// packages/vscode-extension/src/extension.ts:2735-2737
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -78,7 +78,7 @@ async function runSelection() {
 選択がない場合が面白いです。「カーソルがいる行はどの変数 (subject) に属しているか」を調べて、そのsubject に関わる **ファイル全体の行** をかき集めます:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2737-2786 (setDocumentDirectory 注入前まで)
+// packages/vscode-extension/src/extension.ts:2738-2787 (setDocumentDirectory 注入前まで)
   } else {
     // No selection: subject-based block evaluation
     // Detect which variable/object the current line belongs to, then collect all related lines
@@ -134,7 +134,7 @@ async function runSelection() {
 `getLineSubject()` は各行を見て「この行はどの変数に属するか」を返す関数です。初稿では深掘りしませんでしたが、実装は 2 本の正規表現だけの小さなものです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2701-2714
+// packages/vscode-extension/src/extension.ts:2702-2715
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -179,7 +179,7 @@ _kick.play(
 `getLineSubject()` が `null` を返した場合は、スタンドアロンコマンド (`LOOP`, `RUN`, `MUTE` 等) と判断します。この場合も同じ `parenBalance` ロジックで複数行を追いかけますが、ファイル全体を走査するのではなく**カーソル行から下方向のみ**に範囲を拡張します:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2786-2809
+// packages/vscode-extension/src/extension.ts:2787-2810
     } else {
       // Standalone command (LOOP, RUN, MUTE, etc.) - evaluate current statement only
       let endLine = currentLine
@@ -213,7 +213,7 @@ _kick.play(
 収集したテキストを engine に送る役目は、2026-05 時点では `runSelection()` の末尾に直書きされていましたが、MCP の `evaluate_orbitscore` と共有するために `writeCodeToEngine()` に切り出されています。`audioPath()` や `audio()` の相対パス解決を `.orbs` ファイルのディレクトリ基準で行うための仕掛けが 2 層あります。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3000-3032
+// packages/vscode-extension/src/extension.ts:3001-3033
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -267,7 +267,7 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
 `runSelection()` の末尾はこうなっています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2873-2880
+// packages/vscode-extension/src/extension.ts:2874-2881
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
@@ -278,7 +278,7 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
   flashLines()
 ```
 
-ここで気をつけたいのは、送信に失敗したら **フラッシュしない** という順序です。2026-05 時点は `write` してすぐ `flashLines()` を呼んでいましたが、stdin に届いていないのに「実行した」と見せるのは誤ったフィードバックです。`revealRange` はエージェント経由の実行で画面外の行が対象になったときに、フラッシュが見えないのを防ぐために足されました (#388、`docs/development/WORK_LOG.md` §6.193)。
+ここで気をつけたいのは、送信に失敗したら **フラッシュしない** という順序です。2026-05 時点は `write` してすぐ `flashLines()` を呼んでいましたが、stdin に届いていないのに「実行した」と見せるのは誤ったフィードバックです。`revealRange` はエージェント経由の実行で画面外の行が対象になったときに、フラッシュが見えないのを防ぐために足されました (#388、`docs/archive/WORK_LOG_2026-07.md` §6.193)。
 
 ---
 
@@ -287,7 +287,7 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
 実行した範囲をエディタ上で点滅させるのが `flashLines()` です。`createTextEditorDecorationType` (VS Code API) を使って実装されています:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2814-2871
+// packages/vscode-extension/src/extension.ts:2815-2872
   // Visual feedback: flash the executed lines (configurable)
   const flashLines = () => {
     const config = vscode.workspace.getConfiguration('orbitscore')
@@ -355,7 +355,7 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
 - `flashDuration`: 150ms (点灯時間)
 - フラッシュ間隔: `100ms` (ハードコード)
 
-`isWholeLine` は **常に `true`** です。2026-05 時点は「選択あり = 選択文字だけ」でしたが、MCP の `run_selection` は必ず `set_selection` で範囲を置いてから呼ぶため、文字範囲の decoration がエディタ自身の選択ハイライトと完全に重なって、点滅が見えなくなっていました (`docs/development/WORK_LOG.md` §6.193)。行全体を塗れば選択状態・色設定・トリガ元に関係なく見えます。
+`isWholeLine` は **常に `true`** です。2026-05 時点は「選択あり = 選択文字だけ」でしたが、MCP の `run_selection` は必ず `set_selection` で範囲を置いてから呼ぶため、文字範囲の decoration がエディタ自身の選択ハイライトと完全に重なって、点滅が見えなくなっていました (`docs/archive/WORK_LOG_2026-07.md` §6.193)。行全体を塗れば選択状態・色設定・トリガ元に関係なく見えます。
 
 設定できる色の種類:
 
@@ -422,7 +422,7 @@ function handleStepLine(step: StepEvent): void {
 人間のユーザーはエディタの赤線と Output Channel でエラーに気づけますが、MCP 経由の LLM には `evaluate_orbitscore` の `ok` しか届きません。そして `writeCodeToEngine()` の `true` は「stdin に届いた」までしか意味しません。#614 は、コードの直後に `//#evalMark {"requestId":...}` を送り、engine が FIFO でそこに到達したときに、直前の評価で溜まった診断を JSON で返す仕組みを足しました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3059-3068
+// packages/vscode-extension/src/extension.ts:3060-3069
   const result = await evalMarkBridge.send((line, onError) => {
     // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
     stdin.write(line, (error) => {
@@ -438,7 +438,7 @@ function handleStepLine(step: StepEvent): void {
 stdout 側の受信は `setupStdoutHandler()` に **独立した分岐** として置かれています。コメントが、最初は `{"pluginUi"` 分岐に相乗りさせて一度も dispatch されず、ユニットテストは全部緑で実機 E2E だけが捕まえた、と記録しています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1501-1509
+// packages/vscode-extension/src/extension.ts:1502-1510
         } else if (trimmedLine.startsWith('{"evalMark"')) {
           // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
           // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -459,7 +459,7 @@ editor の `Cmd+Enter` はこのマーカーを送りません。人間にはフ
 `Cmd+Enter` とは別に、ドキュメントの open / change / activation 時に `updateDiagnostics()` が走ります (#384、[IV-1](/editor/vscode-architecture#intellisense-と診断の登録))。前半は 2026-05 時点と同じ行内チェック 3 種です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3965-4039
+// packages/vscode-extension/src/extension.ts:3970-4044
 async function updateDiagnostics(
   document: vscode.TextDocument,
   collection: vscode.DiagnosticCollection,
@@ -540,7 +540,7 @@ async function updateDiagnostics(
 後半は **横断解析** で、純関数 (`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts`) が返す `DiagnosticIssue` を `vscode.Diagnostic` に写すだけです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4041-4052
+// packages/vscode-extension/src/extension.ts:4046-4057
   // === Cross-line analyses (pure functions, unit-testable) ===
   // Pure logic は `diagnostics-analysis.ts` に分離し、ここでは
   // VS Code Diagnostic オブジェクトに変換するだけにする。
@@ -640,7 +640,7 @@ DSL 仕様 §8.1.2 の「LinkAudio ファイルでは発音 sequence すべて�
 `effect("...")` / `instrument("...")` の名前が plugin catalog に無いときの警告です (#638)。engine は評価時に throw しますが、342 件の catalog では typo が普通に起きるので、評価前に知らせます。**Warning に留めている**のは、catalog がキャッシュされたスナップショットで、「正しい名前だがまだスキャンしていない」場合があるからです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4095-4112
+// packages/vscode-extension/src/extension.ts:4100-4117
   // #638: plugin names that the catalog cannot resolve. The engine throws on
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
@@ -712,7 +712,7 @@ flowchart TD
 
 | 変更 | Issue | 出典 |
 |---|---|---|
-| 送信部を `writeCodeToEngine()` に切り出し、MCP `evaluate_orbitscore` と共有 | #388 | `docs/development/WORK_LOG.md` §6.188 (2026-07-07)、`extension.ts:3000-3032` |
+| 送信部を `writeCodeToEngine()` に切り出し、MCP `evaluate_orbitscore` と共有 | #388 | `docs/archive/WORK_LOG_2026-07.md` §6.188 (2026-07-07)、`extension.ts:3000-3032` |
 | フラッシュを常に whole-line に、送信前に `revealRange` | #388 | §6.193 (2026-07-07)、`extension.ts:2842-2857` / `2876-2880` |
 | `[STEP]` 行による live playhead (per-seq 色、nested argPath) | #390 | §6.194-6.197 (2026-07-07)、`playhead.ts`、`extension.ts:150-284` |
 | 診断を open / close / activation 時にも実行 | #384 | §6.187 (2026-07-07)、`extension.ts:414-443` |
@@ -742,7 +742,7 @@ flowchart TD
 ## 次の深掘り候補
 
 - `findPlayArgRangeForPath()` の「最深の解決可能な祖先」への劣化 — stack `[ ... ]` / group run / legato `{ ... }` の各ケースでどこが光るか
-- engine 側の `[STEP]` 生成 (`rust-engine-player.ts`) と argPath の付与 — lookahead と `atEpochMs` の関係 (`docs/development/WORK_LOG.md` §6.194 / §6.196)
+- engine 側の `[STEP]` 生成 (`rust-engine-player.ts`) と argPath の付与 — lookahead と `atEpochMs` の関係 (`docs/archive/WORK_LOG_2026-07.md` §6.194 / §6.196)
 - `configureFlash` コマンド — Quick Pick UI で flashCount / flashDuration / flashColor をインタラクティブに設定する仕組み
 - 診断の精度向上候補 — 複数行全体を追いかけた括弧対応チェック (単一行のみ)
 - `analyzeLinkAudioMissingOutput` の per-sequence 正規表現の事前コンパイル — keystroke ごとの再コンパイルを避ける設計と、`kicker.output()` が `kick` にマッチしない word boundary
@@ -768,5 +768,5 @@ flowchart TD
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:108-391` — 横断解析 5 関数
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — `//#evalMark` の設計理由
-- `docs/development/WORK_LOG.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266, §6.412 — drift 表の出典
+- `docs/archive/WORK_LOG_2026-07.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — drift 表の出典
 - [Issue #168 / PR #169](https://github.com/signalcompose/orbitscore/pull/169) — audioPath ordering 診断の背景

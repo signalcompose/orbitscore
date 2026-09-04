@@ -9,7 +9,7 @@ status: draft
 > **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
 
 ::: warning Status as of 2026-09
-The scsynth bundle and its path resolution belong to the SuperCollider path, which since cutover #108 on 2026-07-03 (`docs/development/WORK_LOG.md` §6.179) is taken **only when you opt out with `ORBITSCORE_ENGINE=sc`** (in VS Code settings, `orbitscore.engine: "sc"`). On the default Rust path the extension does not resolve scsynth at all; it resolves the `orbit-audio-daemon` binary with the same strict pattern (see "The daemon-side counterpart" at the end of this chapter). For the big picture of the default path, see [RE-1. Daemon Architecture Overview](/en/rust-engine/).
+The scsynth bundle and its path resolution belong to the SuperCollider path, which since cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179) is taken **only when you opt out with `ORBITSCORE_ENGINE=sc`** (in VS Code settings, `orbitscore.engine: "sc"`). On the default Rust path the extension does not resolve scsynth at all; it resolves the `orbit-audio-daemon` binary with the same strict pattern (see "The daemon-side counterpart" at the end of this chapter). For the big picture of the default path, see [RE-1. Daemon Architecture Overview](/en/rust-engine/).
 
 ```typescript
 // packages/engine/src/audio/create-audio-engine.ts:17-22
@@ -196,7 +196,7 @@ The error message includes the list of searched paths, so "where it looked and d
 The VS Code extension uses the resolver by `require()`-ing the engine's compiled JS.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:676-692
+// packages/vscode-extension/src/extension.ts:677-693
 function resolveScsynthForUI(): { path: string; source: string } | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
@@ -222,10 +222,10 @@ If VS Code's setting `orbitscore.scsynthPath` is non-empty, it is passed as `exp
 
 ### The Call Itself is Gated by the Engine Kind
 
-This is the big difference from the 2026-05 reading. **Whether** `resolveScsynthForUI()` is called at all is decided by `getConfiguredEngineKind()`, which normalizes the `orbitscore.engine` setting (#377, `docs/development/WORK_LOG.md` §6.186). The normalization runtime-`require`s the engine's `resolveEngineKind()` so that the UI and the engine never disagree.
+This is the big difference from the 2026-05 reading. **Whether** `resolveScsynthForUI()` is called at all is decided by `getConfiguredEngineKind()`, which normalizes the `orbitscore.engine` setting (#377, `docs/archive/WORK_LOG_2026-07.md` §6.186). The normalization runtime-`require`s the engine's `resolveEngineKind()` so that the UI and the engine never disagree.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:653-669
+// packages/vscode-extension/src/extension.ts:654-670
 function getConfiguredEngineKind(): 'rust' | 'sc' {
   const raw = vscode.workspace.getConfiguration('orbitscore').get<string>('engine', 'rust')
   try {
@@ -248,7 +248,7 @@ function getConfiguredEngineKind(): 'rust' | 'sc' {
 The pre-check in `startEngine()` resolves scsynth only under the `sc` kind; under the `rust` kind it resolves the daemon binary instead.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2053-2069
+// packages/vscode-extension/src/extension.ts:2054-2070
   // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
   // 'rust' (default since cutover #369), skip the scsynth pre-check entirely —
   // the native daemon doesn't need scsynth to be resolvable.
@@ -294,7 +294,7 @@ Each path is verified by `isExecutableFile()` (existence + execute permission). 
 The extension calls `updateBundleStatus()` at startup and on configuration change (`orbitscore.scsynthPath` / `orbitscore.engine`). Under the `sc` kind it shows the resolver result on the status bar: one of `'bundle'`, `'env'`, or `'explicit'` is shown as the source, and if unresolved, `$(error) scsynth: not found` is shown emphasized. Under the `rust` kind, on the other hand, **the indicator itself is hidden as long as the daemon resolves**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:725-741
+// packages/vscode-extension/src/extension.ts:726-742
 function updateBundleStatus(): void {
   if (!bundleStatusItem) return
   if (getConfiguredEngineKind() === 'rust') {
@@ -318,7 +318,7 @@ Because there is no SC.app fallback, the situation of "appears to be working but
 
 ## The Daemon-Side Counterpart: `resolveDaemonBinaryPath()`
 
-As the leading comment of `scsynth-resolver.ts` says ("the pattern is borrowed from `resolveDaemonBinary()` in `daemon-client.ts`"), the Rust daemon has a resolver of the same shape. There are five candidates, and the daemon bundled in the `.vsix` (#306, `docs/development/WORK_LOG.md` §6.185) comes last.
+As the leading comment of `scsynth-resolver.ts` says ("the pattern is borrowed from `resolveDaemonBinary()` in `daemon-client.ts`"), the Rust daemon has a resolver of the same shape. There are five candidates, and the daemon bundled in the `.vsix` (#306, `docs/archive/WORK_LOG_2026-07.md` §6.185) comes last.
 
 ```typescript
 // packages/engine/src/audio/rust-engine/daemon-client.ts:221-250 (extension-bundle 候補の説明コメントを省略)
@@ -370,7 +370,7 @@ The differences from the scsynth version are that the monorepo's `rust/target/{r
 - **`scripts/copy-daemon-bin.sh` and `resolveDaemonBinaryPath()`**: why the daemon-side bundle is limited to `darwin-arm64`, and expansion to other platforms
 - **Difference of `__dirname` between vscode-extension and engine standalone**: how `__dirname` changes after compilation, and how the bundle path changes. Organize as a map
 - **Outlook for Windows / Linux support**: the bundle is macOS Mach-O. The bundle strategy when supporting Windows / Linux in the future (per-platform vsix? system install required?)
-- **Bundle code signing**: macOS Gatekeeper and notarization. scsynth keeps the SuperCollider project's own signature, but the daemon is a fresh build (follow-up ② in `docs/development/WORK_LOG.md` §6.185)
+- **Bundle code signing**: macOS Gatekeeper and notarization. scsynth keeps the SuperCollider project's own signature, but the daemon is a fresh build (follow-up ② in `docs/archive/WORK_LOG_2026-07.md` §6.185)
 - **Type safety of `ORBIT_SCSYNTH_PATH`**: received as a string, with path existence checked on the resolver side. Whether the extension settings UI can offer a path picker
 
 ## Sources
@@ -390,6 +390,6 @@ The differences from the scsynth version are that the monorepo's `rust/target/{r
 - `packages/vscode-extension/src/extension.ts:2053-2069` — `startEngine()` pre-check: scsynth is resolved only under the `sc` kind
 - `packages/vscode-extension/BUILD_GUIDE.md:39-97` — explanation of strict mode, extraction procedure, and bundle structure
 - `.gitignore:47` / `packages/vscode-extension/.vscodeignore:36` — the bundle is outside git but shipped in the `.vsix`
-- `docs/development/WORK_LOG.md` §6.179 / §6.185 / §6.186 — cutover #108, bundling the daemon into the `.vsix` (#306), engine-kind branching (#377)
+- `docs/archive/WORK_LOG_2026-07.md` §6.179 / §6.185 / §6.186 — cutover #108, bundling the daemon into the `.vsix` (#306), engine-kind branching (#377)
 - PR [#155](https://github.com/signalcompose/orbitscore/pull/155) — the background of adopting strict mode (removal of SC.app / Spotlight fallback)
 - Issue [#136](https://github.com/signalcompose/orbitscore/issues/136) — the "works without SC" requirement and the formulation of the strict mode policy

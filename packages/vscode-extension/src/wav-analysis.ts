@@ -19,6 +19,13 @@ export interface WavFormat {
   bitsPerSample: number
 }
 
+/** One window of a single channel's peak/RMS series (#668 §10 — pan / channel separation). */
+export interface ChannelWindow {
+  readonly startSec: number
+  readonly peak: number
+  readonly rms: number
+}
+
 export interface WavAnalysis {
   format: WavFormat
   frames: number
@@ -42,6 +49,14 @@ export interface WavAnalysis {
    * MX.5 の「dry 先行 → 干渉定常」のような時間構造の検証を可能にする。
    */
   windows?: Array<{ startSec: number; peak: number; rms: number }>
+  /**
+   * チャンネル別の窓系列（`opts.perChannel` 指定時のみ・#668 §10）。index = チャンネル番号。
+   * `analysis.windows` はチャンネル加算平均のモノラルのままで、こちらは各チャンネルを
+   * 別々に保持する — pan / チャンネル分離 / bleed の判定はこちらでしか測れない。
+   */
+  channelWindows?: ReadonlyArray<ReadonlyArray<ChannelWindow>>
+  /** チャンネル別の全体 RMS（同上）。index = チャンネル番号。 */
+  channelRms?: readonly number[]
 }
 
 /** RMS window size in seconds (20ms — fine enough to separate 0.5s beats). */
@@ -112,7 +127,10 @@ function parseFloat32Wav(buf: Buffer): ParsedFloat32Wav {
   return { format, dataOff, frames, durationSec }
 }
 
-export function analyzeWavBuffer(buf: Buffer, opts?: { windowMs?: number }): WavAnalysis {
+export function analyzeWavBuffer(
+  buf: Buffer,
+  opts?: { windowMs?: number; perChannel?: boolean },
+): WavAnalysis {
   const { format, dataOff, frames, durationSec } = parseFloat32Wav(buf)
 
   // Per-window RMS over the mono mixdown.
@@ -166,6 +184,15 @@ export function analyzeWavBuffer(buf: Buffer, opts?: { windowMs?: number }): Wav
     soundDetected: onsets.length >= 1 && peak > 0.05,
     ...(opts?.windowMs && opts.windowMs > 0
       ? { windows: windowSeries(buf, dataOff, frames, format, opts.windowMs / 1000) }
+      : {}),
+    ...(opts?.perChannel
+      ? channelSeries(
+          buf,
+          dataOff,
+          frames,
+          format,
+          opts.windowMs && opts.windowMs > 0 ? opts.windowMs / 1000 : WINDOW_SEC,
+        )
       : {}),
   }
 }
@@ -260,6 +287,55 @@ export function estimateFundamentalHz(
 const MAX_WINDOW_SERIES = 20_000
 /** window_ms の下限（極小値で winFrames=1 に floor され窓数が爆発するのを防ぐ）。 */
 const MIN_WINDOW_MS = 1
+
+/**
+ * チャンネル別の per-window peak/RMS 系列 + チャンネル別の全体 RMS（#668 §10）。
+ * `windowSeries` と対をなすが、チャンネルごとに加算平均せず別々に保持する。
+ */
+function channelSeries(
+  buf: Buffer,
+  dataOff: number,
+  frames: number,
+  format: WavFormat,
+  windowSec: number,
+): { channelWindows: ChannelWindow[][]; channelRms: number[] } {
+  const effectiveSec = Math.max(windowSec, MIN_WINDOW_MS / 1000)
+  const winFrames = Math.max(1, Math.floor(format.sampleRate * effectiveSec))
+  const windowCount = Math.ceil(frames / winFrames)
+  if (windowCount > MAX_WINDOW_SERIES) {
+    throw new Error(
+      `window_ms too small for this capture: ${windowCount} windows would be produced ` +
+        `(cap ${MAX_WINDOW_SERIES}). Use a larger window_ms.`,
+    )
+  }
+  const channelWindows: ChannelWindow[][] = Array.from({ length: format.channels }, () => [])
+  const totalSumSq = new Array<number>(format.channels).fill(0)
+  for (let w = 0; w * winFrames < frames; w++) {
+    const start = w * winFrames
+    const end = Math.min(start + winFrames, frames)
+    const startSec = start / format.sampleRate
+    const winPeak = new Array<number>(format.channels).fill(0)
+    const winSumSq = new Array<number>(format.channels).fill(0)
+    for (let i = start; i < end; i++) {
+      for (let c = 0; c < format.channels; c++) {
+        const sample = buf.readFloatLE(dataOff + (i * format.channels + c) * 4)
+        const a = Math.abs(sample)
+        if (a > winPeak[c]!) winPeak[c] = a
+        winSumSq[c] = winSumSq[c]! + sample * sample
+      }
+    }
+    for (let c = 0; c < format.channels; c++) {
+      totalSumSq[c] = totalSumSq[c]! + winSumSq[c]!
+      channelWindows[c]!.push({
+        startSec,
+        peak: winPeak[c]!,
+        rms: Math.sqrt(winSumSq[c]! / Math.max(1, end - start)),
+      })
+    }
+  }
+  const channelRms = totalSumSq.map((sumSq) => Math.sqrt(sumSq / Math.max(1, frames)))
+  return { channelWindows, channelRms }
+}
 
 /** 指定解像度の per-window peak/RMS 系列（mono mixdown・#478）。 */
 function windowSeries(

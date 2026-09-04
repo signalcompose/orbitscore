@@ -55,7 +55,7 @@ The VS Code extension side "decides what code to send," and the engine side "rec
 First, let's confirm how the engine boots. `startEngine()` spawns a Node process with `'repl'` as an argument.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2111-2163 (env の組み立てを省略)
+// packages/vscode-extension/src/extension.ts:2112-2164 (env の組み立てを省略)
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -115,7 +115,7 @@ The function triggered by Cmd+Enter is `runSelection()`. Let's first look at the
 If the selected text is non-empty, its content is used as-is.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2734-2737
+// packages/vscode-extension/src/extension.ts:2735-2738
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -129,7 +129,7 @@ When there is no selection, the "subject" of the cursor line is identified, and 
 The function that determines the subject is `getLineSubject()`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2701-2714
+// packages/vscode-extension/src/extension.ts:2702-2715
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -157,7 +157,7 @@ When the subject is `null` — that is, a stand-alone command like `RUN(kick, sn
 After the code to send is determined, `writeCodeToEngine()` tells the engine the document's directory path in two ways. It is used to resolve relative paths in `audioPath()` / `audio()` and as the base directory for `import` (IM.6).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3000-3032
+// packages/vscode-extension/src/extension.ts:3001-3033
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -209,7 +209,7 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 `runSelection()` looks at the return value of `writeCodeToEngine()` and gives visual feedback only when the code was actually sent.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2873-2880
+// packages/vscode-extension/src/extension.ts:2874-2881
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
@@ -543,4 +543,4 @@ sequenceDiagram
 - `packages/engine/src/cli/repl-mode.ts:386-470` — `handleLine()`: meta-line dispatch and the DSL buffer
 - `packages/engine/src/cli/repl-mode.ts:472-516` — `runWithStallReport()` and the FIFO chain in `pushLine()`
 - `packages/engine/src/cli/repl-mode.ts:519-539` — `startREPL()`: readline → `pushLine` and `await new Promise(() => {})`
-- `docs/development/WORK_LOG.md` §6.266 (meta line #456, 2026-07-17), §6.271 (FIFO serialization #476, 2026-07-17)
+- `docs/archive/WORK_LOG_2026-07.md` §6.266 (meta line #456, 2026-07-17), §6.271 (FIFO serialization #476, 2026-07-17)

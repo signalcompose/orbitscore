@@ -338,6 +338,6 @@ The stages of a chapter's status. `stub` is table of contents and headings only,
 - `packages/vscode-extension/src/mcp-server.ts`, `extension.ts` — MCP server, ORBITSCORE_MCP_PORT precedence
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts`, `tests/e2e/dsl-e2e-coverage.spec.ts` — gated E2E, coverage ratchet
 - `rust/crates/*/Cargo.toml` — crate descriptions (children, hosts, scanner, std-gain)
-- `docs/development/WORK_LOG.md` 6.179, 6.337, 6.413–6.421 — cutover, evt ring, per-window pump, playhead
+- `docs/archive/WORK_LOG_2026-07.md` 6.179, 6.337 / `docs/archive/WORK_LOG_2026-08.md` 6.413–6.421 — cutover, evt ring, per-window pump, playhead
 - `docs/research/SCSYNTH_BUNDLE_MANIFEST.md` — survey of the bundle minimum set
 - [SuperCollider OSC Command Reference](https://doc.sccode.org/Reference/Server-Command-Reference.html) — OSC message specifications such as `/s_new` and `/b_allocRead`

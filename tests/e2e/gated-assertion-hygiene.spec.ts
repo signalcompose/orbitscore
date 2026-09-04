@@ -48,7 +48,11 @@ describe('gated E2E assertion hygiene', () => {
   it('does not use the engine log as the only oracle for audible behaviour', () => {
     // 音に出る機能は**キャプチャの数値**で判定する。ここでは「capture を使う spec に
     // rms/peak のアサーションが実在するか」だけを確かめる（個々のテストの強さは見ない）。
-    const usesCapture = /captureInstrumentScenario|capture_wav|capturePath/.test(source)
+    // 🔴 `runScore(..., { capture: true })` も capture 経路（#668 §17 F-1）。
+    // これを入れ忘れると、新しいシナリオが**何も測らなくても検査が通る**。
+    const usesCapture = /captureInstrumentScenario|capture_wav|capturePath|capture:\s*true/.test(
+      source,
+    )
     if (!usesCapture) return
     expect(
       /\brms\(|\bpeak\(|\.rms\b/.test(source),
