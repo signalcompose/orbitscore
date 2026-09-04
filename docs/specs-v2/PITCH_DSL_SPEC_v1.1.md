@@ -383,6 +383,9 @@ seq.play(A, A, B, A)                  // AABA の楽曲フォームを書く
     plugin 経路では CC が使えないため、All Notes Off は **active note の列挙 → note-off の逐次送出**に
     置き換わる（本節末尾「出力アダプタへの適用」）。engine が異常終了した場合に備え、
     **daemon 側が自身の追跡集合から note-off を送る最後の砦**を持つ（core spec PH.4）。
+    🔴 **最後の砦の粒度は instance 単位**（daemon は owner の境界を持たない）なので、
+    上の owner 単位の解放経路からは呼ばない。発火するのは
+    **`global.stop()` / shutdown / engine 異常終了**の 3 場面のみである。
 3.  **Quantize との関係**: 既存仕様(§5 quantize)に従う。`play()` 差し替えが quantize 待機する間も現行パターンのノートは正常に off される。
 4.  **Scheduling**: TS 側 lookahead スケジューラ(RtMidi は即時送信のみのため)。推奨 lookahead 50-100ms、タイマー駆動 + ドリフト補正。`global.midiLatency()` を送出時刻に加算。
 5.  **Detune `~`**: ピッチベンドで実現。同チャンネル同時発音中の異デチューンは不可(warning)。本格対応は MPE(スコープ外)。
