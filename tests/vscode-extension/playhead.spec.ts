@@ -9,6 +9,7 @@ import {
   parseStepLine,
   PLAYHEAD_PALETTE,
 } from '../../packages/vscode-extension/src/playhead'
+import { readExtensionManifest } from '../helpers/vscode-extension-manifest'
 
 // #390 live playhead — pure helpers (no vscode dependency, so no mock needed).
 
@@ -204,16 +205,10 @@ describe('PLAYHEAD_PALETTE', () => {
     expect(new Set(PLAYHEAD_PALETTE).size).toBe(PLAYHEAD_PALETTE.length)
   })
 
-  it('matches the orbitscore.playheadPalette default in package.json', async () => {
-    const fs = await import('node:fs')
-    const packageJson = JSON.parse(
-      fs.readFileSync(
-        new URL('../../packages/vscode-extension/package.json', import.meta.url),
-        'utf8',
-      ),
-    )
-    const configured =
-      packageJson.contributes.configuration.properties['orbitscore.playheadPalette'].default
+  it('matches the orbitscore.playheadPalette default in package.json', () => {
+    const properties = readExtensionManifest().contributes?.configuration?.properties
+    const configured = (properties?.['orbitscore.playheadPalette'] as { default?: unknown })
+      ?.default
     expect(configured).toEqual([...PLAYHEAD_PALETTE])
   })
 })

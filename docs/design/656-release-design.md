@@ -556,8 +556,8 @@ packages/vscode-extension/src/extension.ts:2159:    engineProcess = child_proces
 
 | # | シナリオ | 起動条件 | 判定 |
 |---|---|---|---|
-| **E2E-D1**（#385） | 拡張を **installed** で入れ、`<user-data-dir>/User/settings.json` に `{"security.workspace.trust.enabled": true}` を書き、**フォルダを開かず** `.orbs` を 1 本だけ引数に渡して起動 → `open_file` → `set_selection` → `run_selection` | `ORBIT_GATED_EXT_MODE=installed` | ① `pollInitialize` が 60s 以内に応答する（= **activate した**。`extension.ts:451-456` は activate 中に bind するので、応答＝活性化の直接証拠）② `get_log` に `Workspace is not trusted` を含む行が **1 行以上** ③ `get_engine_state` の `running` が `false` ④ ERROR 件数 `toBeLessThanOrEqual(errorsBefore + 1)` |
-| **E2E-D2**（#385 の裏） | 同じ起動を `{"security.workspace.trust.enabled": false}` で | 同上 | `start_engine({capture_wav})` → kick fixture を `run_selection` → capture WAV の窓 RMS が**無音でない**（既存 `captureInstrumentScenario` の `rms()`・`:501-604` と同じ計算）・`get_log` に `not trusted` が **0 行** |
+| **E2E-D1**（#385 → **実装は #735**・🔴 **2026-09-04 に期待値を反転**） | 拡張を **installed** で入れ、`<user-data-dir>/User/settings.json` に `{"security.workspace.trust.enabled": true}` を書き、**フォルダを開かず** `.orbs` を 1 本だけ引数に渡して起動 → `open_file` → `set_selection` → `run_selection` | `ORBIT_GATED_EXT_MODE=installed` | ① `pollInitialize` が 60s 以内に応答する（= **activate した**。`extension.ts:451-456` は activate 中に bind するので、応答＝活性化の直接証拠）② `get_engine_state` の `running` が **`true`** ③ kick fixture の capture 窓 RMS が **無音でない**（> 0.05）④ `get_log` に `Workspace is not trusted` が **0 行** ⑤ ERROR 件数 `toBeLessThanOrEqual(errorsBefore + 1)` |
+| ~~**E2E-D2**（#385 の裏）~~ | ~~同じ起動を `{"security.workspace.trust.enabled": false}` で~~ | — | 🔴 **不要**（裁定 (1) で trust の有無が挙動を変えなくなったため、D1 と同じ判定になる。出どころ: §16 (1) owner 2026-09-03） |
 | **E2E-D3**（#138 cold-install） | **リリース成果物の `.app`** を新しい場所へ `ditto` し `xattr -w com.apple.quarantine "0181;0;OrbitScoreE2E;"` を付ける → 新規 `--user-data-dir` / `--extensions-dir` → `env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin` 相当で起動 | `ORBITSTUDIO_APP=<成果物> ORBIT_GATED_EXT_MODE=installed` | ① 起動して MCP が応答 ② `start_engine({capture_wav})` → `get_engine_state.running === true` ③ kick fixture の capture RMS > 無音床 ④ ERROR 件数 `<=` before ⑤ 🔴 **ここで落ちたら §6.3 の分岐へ**（PATH に node が無い環境の再現がこの項目の主眼） |
 | **E2E-D4**（署名後の 3rd-party ロード） | E2E-D3 の続きで、既存の rack 期待値表（`rack-chain-gain-expectations.ts`）と同じ譜面を評価 | 同上 | ラックの RMS 比が既存の期待値表と一致（**署名が child の dlopen を妨げていないことの直接証拠**）。#656 本文「署名後に実機で音を鳴らし直す」の自動化 |
 | **E2E-D5**（成果物の同一性） | `verify-vsix.sh` を `.app` に焼かれた拡張ディレクトリ（`Contents/Resources/app/extensions/orbitscore/`）に対して実行 | — | exit 0。**vitest からではなく `make-local-release.sh` 段 10 の一部**（`.app` の中身も vsix と同じ検査を通る） |
@@ -570,7 +570,36 @@ packages/vscode-extension/src/extension.ts:2159:    engineProcess = child_proces
 
 **ハーネスに要る変更は 2 点だけ**（§3.5・§6.2）: `ORBIT_GATED_EXT_MODE` の分岐（`:737-745`）と、`<user-data-dir>/User/settings.json` を書く 3 行（`:642-645` の直後）。**並行機構は作らない。**
 
-🔴 **E2E-D3 / D4 はリリース成果物が要る**ので、`make-local-release.sh` が出来るまで書けない。**先に書いて red を確認する**のは D1 / D2（trust）で、これは成果物なしで成立する。
+🔴 **E2E-D3 / D4 はリリース成果物が要る**ので、`make-local-release.sh` が出来るまで書けない。
+
+### 🔴 12.1 2026-09-04 の実測でこの節の見積もりが 2 点変わった（#385 PR-S-T1 で実機 6 回）
+
+起案時は「**先に書いて red を確認するのは D1 / D2（trust）で、これは成果物なしで成立する**」と
+書いていた。実機で書いて回した結果、**半分だけ正しかった**:
+
+| 実験 | 結果 |
+|---|---|
+| dev モード（`--extensionDevelopmentPath`）+ trust 有効 | ✅ 緑（activate・engine 起動・音） |
+| 🔴 dev モードで `capabilities` を**丸ごと削除** | ✅ **緑のまま** |
+| installed モード（vsix を焼いて `--install-extension`） | ❌ activate せず 60s タイムアウト |
+| installed モード + trust 無効 | ❌ 同じく赤（**trust は原因ではない**） |
+| vsix の中身 / 導入 | ✅ `dist/extension.js`・`capabilities`・`main` すべて正・`local.orbitscore-2.1.0` が展開される |
+
+**(1) `ORBIT_GATED_EXT_MODE=installed` は必須である**（この節の要求は正しかった）。
+`--extensionDevelopmentPath` は **workspace trust の制限を迂回する**ので、dev モードで書いた D1 は
+**宣言を消しても緑**になり、何も検証しない。
+
+**(2) ただし「成果物なしで成立する」は言い過ぎだった。** installed モードには **vsix が要る**
+（`vsce package` で焼ける = `.app` の署名は不要なので D3/D4 よりは軽いが、ゼロではない）。
+そして焼いて入れても **activate しない**という未解決の問題が残っている。
+順序としては **#659（`make-local-release.sh`）が `--install-extension` の作法を固めた後**の方が安い。
+
+🔴 **`orbs --install-extension` は失敗しても exit 0 を返す**（壊れた vsix に対して
+`Failed Installing Extensions` を出しながら 0）。**展開されたディレクトリの実在**で判定すること。
+exit code を信じると、拡張が入らないまま起動して **60 秒の `pollInitialize` タイムアウト**として
+現れ、原因が読めない。
+
+**追跡先**: #735（地図 §4.J）。
 
 ---
 
