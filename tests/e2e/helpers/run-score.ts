@@ -58,6 +58,8 @@ export interface CaptureWindows {
   ): ReadonlyArray<{ startSec: number; peak: number; rms: number }>
   /** 区間内のオンセット時刻（時間構造）。`analysis.onsets` の絞り込み。 */
   onsets(segment: string): readonly number[]
+  /** 区間 × チャンネルの RMS。pan / 分離 / stem の判定はここを使う（#668 §10）。 */
+  channelRms(segment: string, channel: number, guardSec?: number): number
 }
 
 export interface ScoreRunContext {
@@ -230,7 +232,7 @@ export async function runScore(
   if (!wantsCapture || capturePath === undefined) return undefined
 
   const capture = fs.readFileSync(capturePath)
-  const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
+  const analysis = analyzeWavBuffer(capture, { windowMs: 20, perChannel: true })
   const range = (segment: CaptureSegment, guardSec: number) => ({
     fromSec: Math.max(0, analysis.durationSec - (stopWall - segment.from) / 1000 + guardSec),
     toSec: Math.min(
@@ -267,6 +269,25 @@ export async function runScore(
     const requested = range(requireSegment(name), 0)
     return analysis.onsets.filter((t) => t >= requested.fromSec && t < requested.toSec)
   }
+  const channelRms = (name: string, channel: number, guardSec = 0.15): number => {
+    const perChannel = analysis.channelWindows?.[channel]
+    expect(
+      perChannel,
+      `runScore ${source.slug} channelWindows must exist for channel ${channel} ` +
+        `(analysis.format.channels=${analysis.format.channels})`,
+    ).toBeDefined()
+    const requested = range(requireSegment(name), guardSec)
+    const selected = (perChannel ?? []).filter(
+      (window) => window.startSec >= requested.fromSec && window.startSec < requested.toSec,
+    )
+    expect(
+      selected.length,
+      `runScore ${source.slug} segment '${name}' channel ${channel} must contain windows`,
+    ).toBeGreaterThan(0)
+    return Math.sqrt(
+      selected.reduce((sum, window) => sum + window.rms * window.rms, 0) / selected.length,
+    )
+  }
 
-  return { analysis, capturePath, rms, windows: windowsFor, onsets }
+  return { analysis, capturePath, rms, windows: windowsFor, onsets, channelRms }
 }
