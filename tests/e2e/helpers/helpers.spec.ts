@@ -24,6 +24,7 @@ import * as path from 'path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { countErrors, countLogMarker, LOG_WINDOW_LINES } from './engine-log'
+import { logAnchor, logAppendedSince } from './run-score'
 import { captureWavPath } from './gated-session'
 import { runOrbitscoreCli } from './run-cli'
 import { waitForFile, waitForMatchingFile } from './wait-for-file'
@@ -182,5 +183,79 @@ describe('run-cli', () => {
     expect(result.signal).toBeNull()
     expect(typeof result.status).toBe('number')
     expect(result.durationMs).toBeGreaterThanOrEqual(0)
+  })
+})
+
+describe('run-score: engine restart detection in a bounded log window', () => {
+  const MARKER = '🎵 Live coding mode'
+
+  /**
+   * 🔴 これが本命。**#611 PR-O0 の実機で実際に起きた壊れ方**を再現する。
+   *
+   * `get_log` は固定 500 行の窓なので、窓が飽和した状態で 1 行足すと **古い行が同時に落ちる**。
+   * 「マーカーの件数が増えたか」で再起動を判定していた旧実装は、engine が実際に起動しても
+   * 件数が増えず、`daemon-backed REPL ready after 30000ms` で必ずタイムアウトした。
+   *
+   * 錨方式はこの状況で**新しいマーカーを検出できる**。件数方式は検出できない。
+   * 両方を同じ入力に当てて、**区別できる**ことを示す。
+   */
+  it('detects a fresh marker that the old count comparison misses when the window scrolls', () => {
+    const window = 500
+    // 飽和した窓: 先頭にマーカーが 1 つあり、残りは埋め草。
+    const before = [MARKER, ...Array.from({ length: window - 1 }, (_, i) => `noise ${i}`)].join(
+      '\n',
+    )
+    const anchor = logAnchor(before)
+
+    // 再起動: マーカー 1 行を足し、窓の上限を守るため先頭を 1 行落とす（= 古いマーカーが消える）。
+    const after = [...before.split('\n').slice(1), MARKER].join('\n')
+
+    expect(
+      countLogMarker(after, MARKER),
+      '窓がスクロールしたので件数は増えていない — 旧実装が待ち続けた理由',
+    ).toBe(countLogMarker(before, MARKER))
+
+    expect(
+      logAppendedSince(anchor, after).includes(MARKER),
+      '錨より後ろに出た新しいマーカーを検出できること',
+    ).toBe(true)
+  })
+
+  it('returns only the text appended after the anchor', () => {
+    const before = 'line a\nline b\n'
+    expect(logAppendedSince(logAnchor(before), `${before}line c\n`)).toBe('line c\n')
+  })
+
+  it('does not report a stale marker that sits before the anchor', () => {
+    const before = `${MARKER}\nline a\n`
+    // 起動しなかった: 錨より後ろには何も出ていない。
+    expect(logAppendedSince(logAnchor(before), before)).toBe('')
+    expect(logAppendedSince(logAnchor(before), before).includes(MARKER)).toBe(false)
+  })
+
+  /**
+   * 🔴 錨が窓から流れたら **ログ全体が新しい出力**である。錨は前の窓の**末尾**から取り、
+   * 窓は**先頭から**落ちるので、末尾が消えているならそれより古い行はすべて消えている。
+   *
+   * ⚠️ ここを「判定できない」として待つ実装にしたところ、`#628 R28` が
+   * 「daemon-backed REPL ready after 30000ms」で落ちた（2026-09-04 実機）。
+   * ラック child の起動で 500 行以上が流れ、錨が窓から出ただけだった。
+   */
+  it('treats the whole window as new when the anchor has scrolled out', () => {
+    const before = 'old content that will be gone\n'
+    const after = `${MARKER}\nentirely different content\n`
+    expect(logAppendedSince(logAnchor(before), after)).toBe(after)
+  })
+
+  it('treats an empty anchor as "everything is new" (fresh session)', () => {
+    expect(logAppendedSince(logAnchor(''), `${MARKER}\n`)).toBe(`${MARKER}\n`)
+  })
+
+  it('keeps the anchor short enough to survive a daemon restart inside the window', () => {
+    // 起動で増えるのは十数行。錨がそれより長いと毎回流れてしまう。
+    const anchor = logAnchor(
+      Array.from({ length: LOG_WINDOW_LINES }, (_, i) => `line ${i}`).join('\n'),
+    )
+    expect(anchor.split('\n').length).toBeLessThan(60)
   })
 })

@@ -26,7 +26,7 @@
 | 1 | **解決後の宛先**が同じなら合算 | §2.5 |
 | 2 | master は終端ではなく単にアウト先の 1 つ（`output(master, thru: true).output("3,4")`）| §2.2 / §5.6 |
 | 3 | デバイスのチャンネル対も宛先（`mix.output(3, 4)` / 省略形 `output("3,4")`）| §2.2 |
-| 4 | `outs:` の値は宣言されたノードを一様に受ける（バス / 物理アウト / render）| §11 |
+| 4 | `outs:` の値は宣言されたノードを一様に受ける（バス / 物理アウト / render）| §5.6（spec 側の着地は **PR-R0**。§11 の改訂表に `outs:` の行は無い）|
 | 5 | pre / post fader はオプションにしない。タップの位置がそのまま答え | §2.1 |
 | — | #649 確定事項（順序が信号順・フェーダーという段を作らない・`send` はチェーン要素・評価は主語ごとの全行）は不変 | §1 |
 
@@ -47,8 +47,11 @@
 | **ラック** | `effect([...])` | プラグイン列（SC.10・#628 出荷済み・**変えない**） |
 | **ゲイン** | `gain(db)` | その位置以降のライン信号を減衰（線形スカラー・ramp 付き） |
 | **出口** | `output(宛先, thru:, db:)` / `send(aux, db)` | その位置の信号を宛先へ加算。`thru: false` ならその先へ流さない |
+| **パン** | `pan(value)` | その位置以降のライン信号の L/R バランス（等パワー） |
 
-`pan` は本書では**発音側のまま**（#649 Q1 は未決 → §14）。
+🔴 **`pan` はライン要素である**（owner 2026-09-03 Q-611-4 = B・§2.4b・§14 (4)）。
+起案時は「発音側のまま」としていたが**裁定で覆った**ので、要素は 3 種ではなく **4 種**。
+per-event / ランダム pan（`panRandom`）だけが発音側に残る。
 
 ---
 
@@ -77,8 +80,11 @@ drums.effect(["Glue"]).output(master, thru: true).output(cue, db: -20)
 | `thru:` | boolean | `false`（裁定 ①）| `true` = この出口の**後ろへも信号を流す** |
 | `db:` | number | `0` | **その宛先へ行く分だけ**の減衰（裁定 ④）。ラインには影響しない |
 
-**書かない時の既定**: `_line` に `output` が 1 つも無ければ、評価時に暗黙の `output(master, thru: false, db: 0)` を**末尾**に置く
-（今日の `BusTarget::Master` 既定と同じ音・§9 の互換要件）。
+**書かない時の既定**: `_line` に **`thru: false` の `output`（＝終端）が 1 つも無ければ**、評価時に暗黙の
+`output(master, thru: false, db: 0)` を**末尾**に置く（今日の `BusTarget::Master` 既定と同じ音・§9 の互換要件）。
+🔴 **「`output` が 1 つも無ければ」ではない** — `send` は `output(thru: true)` の糖衣（§3.1）なので、
+send だけの行にも output は存在する。そちらを条件にすると **send を書いた行の dry が master へ届かなくなる**。
+§2.6 の既定ストリップが `sends(=output thru)` と `output(master)` を別々に並べているのが正本である。
 
 ### 2.2 宛先の集合（裁定 ②③ C 2 3）
 
@@ -137,7 +143,7 @@ effect 併用の譜面では今日「ラック前」だったものが**既定�
 |---|---|
 | `_lineOrder` は**キーの順列**で、値は各スライスに残る | `_line: LineElement[]` に**値も同居**（§3.1）。スライス（`_sumOutputBus` / `_auxSends` / `_renderBus`）は廃止 |
 | output の同一性 = 単一 | 同一性 = **宛先キー**（send と同じ・§4.A.1 の帰結）|
-| §10.4 既定ストリップ `[ラック → gain → pan → sends → output]` | `[ラック → gain → sends(=output thru) → output(master)]`（pan は発音側のまま）|
+| §10.4 既定ストリップ `[ラック → gain → pan → sends → output]` | `[ラック → gain → pan → sends(=output thru) → output(master)]`（**pan はライン要素**・§2.4b / §14 (4)。位置は自由）|
 | フェーダー = `gain_override` スカラー | フェーダー = `output` の `gain`（裁定 ④）。`gain` 要素は別に残る |
 
 ---
@@ -242,7 +248,7 @@ upsert(e):
 | 行 | 今 | 変更 |
 |---|---|---|
 | `:108` `_outputChannel?: string` | LinkAudio 名 | **残す**（`resolveDispatchChannel` `:1592-1618` が読む）。`output()` の link 分岐が `_line` にも `{kind:'link'}` を置く |
-| `:113` `_renderBus?: string` | 数値 render bus | **廃止**（§14 (1) の裁定次第で互換読み替え）|
+| `:113` `_renderBus?: string` | 数値 render bus | **廃止**（§14 (1) で撤回が確定。互換読み替えは作らない — 宛先は宣言ノードのみ）|
 | `:117` `_insertBus?: string` | 割当 stage | 残す |
 | `:122` `_sumOutputBus?: string` / `:123` `_auxSends` | 単一 output / aux 名キー | **廃止 → `private readonly _line = new AudioLine()`** |
 | `:88` `buildRoutingSends()` | sends 配列 | 廃止 |
@@ -270,8 +276,8 @@ send(aux: string | OutputDest, db: number, opts: { enabled?: boolean } = {}): th
 2. 文字列 `"master"` → `{kind:'master'}`（**予約語**。今日の LinkAudio 名フォールバック `:411-412` を止める）
 3. 文字列が `resolveMixerBus`（`global.ts:502`）で sum/aux に解決 → `{kind:'bus'}`（曖昧なら既存の throw）
 4. 文字列が `/^\d+,\d+$/` → `{kind:'device'}`（裁定 3 の省略形）
-5. number → §14 (1) の裁定まで**現状の `_renderBus` 互換**（`1..16` を `{kind:'render', id:'legacy:<n>'}` に写像。598 設計 §2.4）
-6. それ以外の文字列 → `{kind:'link', channel}`（今日の LinkAudio 分岐 `:404-431` と同じ警告・eager 登録）
+5. それ以外の文字列 → `{kind:'link', channel}`（今日の LinkAudio 分岐 `:404-431` と同じ警告・eager 登録）
+   🔴 **number は解決順に現れない**（§14 (1) で数値 render bus は撤回済み。`sequence.ts:376-386` の数値拒否をそのまま残す）
 
 midi シーケンスの拒否（`:361-366` / `:459-464`）と instrument の `link` 拒否（`:403-409`・PR-3 = #645 まで）は**そのまま**。
 instrument の数値 render 拒否（`:376-386`）は §14 (1) と 598 設計 P3 に従う。
@@ -279,7 +285,8 @@ instrument の数値 render 拒否（`:376-386`）は §14 (1) と 598 設計 P3
 ### 3.4 `program()` — wire へ出す順列
 
 ```
-elements に output が 1 つも無い → elements + [output(master, thru:false, db:0)]（末尾）
+elements に thru:false の output（終端）が 1 つも無い → elements + [output(master, thru:false, db:0)]（末尾）
+  # 🔴 send（=output thru:true）は終端ではないので、この条件を満たしうる（§2.1）
 elements に rack が無い          → 先頭に rack（stage の processor は None なら素通し）
 ```
 
