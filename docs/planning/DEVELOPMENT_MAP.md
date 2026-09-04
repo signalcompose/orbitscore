@@ -1083,6 +1083,7 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 | ローカルリリースのスクリプト化 | **#659** | ○（`scripts/orbitstudio/make-local-release.sh` が **untracked** で作業中・`git status`） | — |
 | 署名・公証・リリース経路 | **#656** 🚪 | ○（証明書と ASC API キーは手元にある・`CODESIGN_PIPELINE.md` は SC 前提で古い） | #659 |
 | workspace trust（宣言） | **#385** 🚪候補 | ✅ **宣言は入った**（`packages/vscode-extension/package.json` の `capabilities.untrustedWorkspaces`・`supported: true`・裁定 656 §16 (1)）。ユニット 6 本が変異 3 種で red を確認 | — |
+| workspace trust（**ビルド既定**・層 2） | **#385** 🚪候補 / **PR-S-T2**（plan 段 8）| 🔴 **未着手**。OrbitStudio ビルドで trust を既定 off（`product.overrides.json` 新 +8・`build_orbitstudio.sh` +3・設計は `656-release-design.md` §3.4）。🔴 **層 1（宣言）では救えない** — `anthropic.claude-code` は `untrustedWorkspaces.supported: false` を宣言しており Anthropic 管理なのでこちらから足せない。loose-file 起動では **LLM 側が黙って activate しない**ままで、LLM を第一級ユーザーに置く方針では出荷ブロッカー。**段 1（must-fix の音の経路）では触らない**（owner 2026-09-05）— #656 出荷の前に必ず入れる | #659（焼く経路）→ #656 の前 |
 | workspace trust（**実機検証**） | **#735** | 🔴 **未着手**。🔴 **dev モード（`--extensionDevelopmentPath`）は trust の制限を迂回するので、そこで書いた E2E は宣言を消しても緑になる**（2026-09-04 実測）。installed モード（vsix 導入）が要るが、**導入は成功するのに拡張が activate しない**（trust 無効でも同じ = trust は原因でない）。まず `exthost.log` を取る観測手段から | #385（宣言）/ #659（vsix を焼く経路） |
 | Marketplace | #197 🚪 / #184 | ○（**#656 の方針と矛盾** → §3 要裁定） | — |
 | LinkAudio on Rust（GPL 隔離） | #321 / Epic #187 | 部分 ✅（A4-2 egress = #329 CLOSED・`orbit-link-audio` 隔離 crate・default off）/ A4-3 テンポリーダー・A4-4 e2e ❓（PR の有無未確認） | **配布形態は #671 の拡張点で変わる**: LinkAudio は CLAP へ・Link テンポは DSL Plugin へ出せば engine 本体から GPL が消える（§4.E「切り出し」表）。**A4-3 は #671 段階 4 の判断を待つ**（engine 内に作ると二重になる）。**#187 は SC 前提** |
@@ -1092,7 +1093,7 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 | FUNDING.yml | #291 | ○（方針未決） | — |
 | env prefix 統一 | #156 | ○ | **§4.H.1 の一覧化の前提**（一覧を作ってから改名すると 2 度手間） |
 
-**順序**: #659 → #656 → #498。#385（宣言）は独立で先にできる — **済**。
+**順序**: #659 → #656 → #498。#385 の**層 1（宣言）は独立で先にできる — 済**（PR #730）。🔴 **#385 はこれで完了ではない** — 層 2（PR-S-T2・ビルドで trust 既定 off）が未了で、**#656 出荷の前**に入れる（段 1 では触らない・owner 2026-09-05）。
 🔴 **#735（実機検証）は #659 の後**。vsix を焼く経路が固まってから着手する方が安い
 （`make-local-release.sh` が `--install-extension` の作法を確定させる）。
 **`orbs --install-extension` は失敗しても exit 0 を返す**ので、#659 側でも
