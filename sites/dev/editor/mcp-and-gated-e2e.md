@@ -1,12 +1,12 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: 89d6e26
+verified-against: c2010db
 verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #668 の束全体（PR-E1〜E4）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -191,7 +191,7 @@ export function buildMcpServerUrl(port: number): string {
 | | `configure_flash` | flash の回数・長さ・色 |
 | **観測** | `get_diagnostics` | `vscode.languages.getDiagnostics` の結果 |
 | | `get_log` | 出力チャネルの末尾 N 行（既定 50・上限 1000） |
-| | `analyze_audio` | WAV を解析して peak / RMS / onset を返す（`window_ms` で時系列も、`per_channel` でチャンネル別も） |
+| | `analyze_audio` | WAV を解析して peak / RMS / onset を返す（`window_ms` で時系列も） |
 | **プラグイン** | `list_plugins` / `rescan_plugins` | プラグインカタログの読み出し / 再スキャン（#463） |
 | | `save_plugin_state` | 実行中プラグインの state を保存（transport 停止中のみ） |
 | | `open_plugin_ui` / `close_plugin_ui` | プラグイン UI の開閉。close は `UI_CLOSED_DONE` 受信まで待つ（#474 P4c） |
@@ -675,15 +675,7 @@ PR-E2 の時点で `runScore` を呼ぶシナリオはまだ 1 本もありま�
     ...(opts?.windowMs && opts.windowMs > 0
       ? { windows: windowSeries(buf, dataOff, frames, format, opts.windowMs / 1000) }
       : {}),
-    ...(opts?.perChannel
-      ? channelSeries(
-          buf,
-          dataOff,
-          frames,
-          format,
-          opts.windowMs && opts.windowMs > 0 ? opts.windowMs / 1000 : WINDOW_SEC,
-        )
-      : {}),
+    // ...
   }
 ```
 
@@ -729,55 +721,6 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 このアサーションが何を捕まえたかは、WORK_LOG 6.415 に記録されています。2026-08-29、この E2E を書いて実機で走らせたところ、**`global.gain()` が instrument にまったく効いていない**ことが分かりました。原因は `output.rs` でミキサーの stage から master へ合流する音が **master gain を掛けた後に加算されていた**ことです。各層は成功を返し、ERROR は 1 行も出ず、変異検証 35 件もユニットテスト 2149 件も捕まえていませんでした。CLAUDE.md がこの事例を「E2E が最重要」の根拠として引くのは、それが「**正しく見えるが合成が違う**」を捕まえられる唯一の層だったからです。
 
 同じ日に `ORBIT_KEEP_CAPTURES=<dir>` が正式化されました。指定するとキャプチャ WAV を tmpRoot ではなくそのディレクトリに残します。「ハーネスのアサーションは窓の中の 1 つの数しか見せないが、欠陥は窓の外にいることがある」（6.415）ためです。ただしこの環境変数が spec 全体で効くようになったのは #668 PR-E2 以降です — それまでは 13 箇所のパス組み立てのうち 1 箇所しか見ていませんでした（[共有ハーネス層](#共有ハーネス層-—-tests-e2e-helpers)）。
-
-### チャンネル別の解析 — mono に潰すと測れないもの
-
-ここまでの解析はすべて **mono mixdown** の上で行われていました。`peak` も `rms` も `onsets` も、全チャンネルを加算平均した 1 本の系列から計算されます。これは「音が出たか」「テンポは合っているか」を見るには十分ですが、**チャンネルの違いそのものを問う判定には原理的に届きません**。`pan` で L/R に振り分けたか、ch3-4 が意図どおり無音か、8ch 出力に bleed が無いか — どれも加算平均した瞬間に情報が消えます。加算平均の結果が同じであれば、L に全部入っていても L/R に均等に入っていても区別が付かないので、この種のテストは **常に緑**になります。
-
-#668 PR-E3 で `analyzeWavBuffer` に `perChannel` オプションが加わり、チャンネルを潰さない系列を別に持てるようになりました。
-
-```typescript
-// packages/vscode-extension/src/wav-analysis.ts:52-59
-  /**
-   * チャンネル別の窓系列（`opts.perChannel` 指定時のみ・#668 §10）。index = チャンネル番号。
-   * `analysis.windows` はチャンネル加算平均のモノラルのままで、こちらは各チャンネルを
-   * 別々に保持する — pan / チャンネル分離 / bleed の判定はこちらでしか測れない。
-   */
-  channelWindows?: ReadonlyArray<ReadonlyArray<ChannelWindow>>
-  /** チャンネル別の全体 RMS（同上）。index = チャンネル番号。 */
-  channelRms?: readonly number[]
-```
-
-計算そのものは `windowSeries()` と対になる `channelSeries()` が受け持ちます。窓の切り方（`winFrames` の求め方、`MAX_WINDOW_SERIES` の上限、`MIN_WINDOW_MS` の下限）は mono 側と同じで、違うのは「チャンネルごとに別の累積を持つ」ところだけです。
-
-```typescript
-// packages/vscode-extension/src/wav-analysis.ts:295-301
-function channelSeries(
-  buf: Buffer,
-  dataOff: number,
-  frames: number,
-  format: WavFormat,
-  windowSec: number,
-): { channelWindows: ChannelWindow[][]; channelRms: number[] } {
-```
-
-設計として押さえておきたいのは **2 つの系列が独立に計算される**という点です。「チャンネル別の値が既にあるのだから、その平均から mono を導けばバッファを 1 回走査するだけで済むのでは」という短縮は成立しません。加算平均した波形の RMS と、各チャンネルの RMS を平均した値は、一般には一致しないからです（一致するのは L = R か片チャンネルが無音のときだけ）。WORK_LOG 6.421 は無相関・同電力の L/R で **比 0.7021**（$\approx 1/\sqrt{2}$）という実測を記録しており、短縮すると **既定の数値が変わって既存のアサーションの意味が変わる**ことになります。二重走査は、その意味を保つための対価として意図的に残されています。
-
-MCP 側も同じ形で開いています。`analyze_audio` の `per_channel` は optional なので、送らない既存クライアントは従来どおり mono だけを受け取ります。
-
-```typescript
-// packages/vscode-extension/src/mcp-server.ts:1016-1023
-        per_channel: z
-          .boolean()
-          .describe(
-            'Optional: also return channelWindows / channelRms (per-channel peak/RMS) ' +
-              'instead of only the mono mixdown',
-          )
-          .optional(),
-      },
-```
-
-拡張側のハンドラ（`analyzeAudioForAgent`）はこの真偽値を `analyzeWavBuffer` の `opts` へ素通しするだけです。**エージェントもテストと同じ動線で同じ数値を見られる**、という MCP の原則がここでも保たれています。
 
 ---
 
@@ -880,71 +823,6 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 
 限界も正直に書かれています。ソースを文字列走査するだけなので「その E2E が意味のある検証をしているか」は見ません。「音に出る語はキャプチャの数値で判定すること」という規律は、次のテストと組み合わせて初めて効きます。
 
-### メソッドで測れない構文表面 — `DSL_SYNTAX_SURFACE`
-
-もう 1 つ、ラチェットには構造的な穴がありました。走査が拾うのは `.<name>(` という形だけなので、**メソッド呼び出しの形をしていない DSL** は最初から視野に入りません。`var g = init GLOBAL` も `RUN(x)` も `n by 4` も `1@v+10` も、この正規表現には一度も引っかからないので、E2E を書き忘れても green のままでした。
-
-そこで #668 PR-E4 で、パーサが受理する「メソッド呼び出しでない」表面を列挙した正本が置かれました。
-
-```typescript
-// packages/engine/src/parser/dsl-surface.ts:5-18
-export type DslSyntaxId =
-  | 'var-init-global' // var g = init GLOBAL              tokenizer.ts:19-20, parse-statement.ts:62
-  | 'var-init-seq' // var s = init global.seq          parse-statement.ts:385
-  | 'import' // import { x } from "./a.orbs"     tokenizer.ts:27, parse-statement.ts:67
-  | 'file-import' // file_import 文                    audio-parser.ts:94,106
-  | 'transport-run' // RUN(x)                           parse-statement.ts:72
-  | 'transport-loop' // LOOP(x)                          parse-statement.ts:72
-  | 'transport-mute' // MUTE(x)                          parse-statement.ts:72
-  | 'beat-by' // n by 4                           tokenizer.ts:21
-  | 'play-nested' // play(1, (1,1), 1)
-  | 'event-modifier' // 1@v+10 / ^2 / ~ / @g
-  | 'tie' // _                                audio では無視・#665
-  | 'underscore-method' // _gain(...) 等（適用形・spec §7）
-  | 'chain-multiline' // 複数行にまたがるチェーン（spec §3 Multiline）
-```
-
-各 id にコメントで **tokenizer / parse-statement のどの分岐と対応するか**が書いてあるのが要点です。この列挙が実装から乖離しないよう、`A-3` が tokenizer の予約語と突き合わせます。`KEYWORDS` は `AudioTokenizer` の private static だったものが `ReadonlySet<string>` の public static になり、モジュール末尾に照合用の view が export されました（`packages/engine/src/parser/tokenizer.ts:288-289`）。予約語を足したのに構文表面へ写像しなければ、`A-3` が「どの予約語が未対応か」を名指しで落とします。
-
-面白いのは、この検査が**自分が空振りしないこと**を先に確かめている点です。
-
-```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:181-186
-  it('A-3 keeps every tokenizer keyword represented by the syntax surface', () => {
-    // 🔴 空集合に対しては何を照合しても通る。`KEYWORDS` の import が壊れたら
-    // **この検査ごと真空で緑になる**ので、まず中身があることを確かめる。
-    expect(KEYWORDS.size, 'KEYWORDS is empty — A-3 would pass vacuously').toBeGreaterThan(0)
-    const syntaxIds = new Set<string>(DSL_SYNTAX_SURFACE)
-    const unmappedKeywords = [...KEYWORDS].filter(
-```
-
-同じ心配は `gatedItTitles()` にもあります。gated spec の `it(` は `it.skipIf(!appAvailable)('title', ...)` というカリー化された形で書かれているので、「`it(` の直後に文字列が来る」前提の正規表現では **1 件も拾えません**。実際に一度そうなり、照合が空振りで緑になっていました。いまは題名が 0 件なら throw します（`tests/e2e/gated-sources.ts:118-127`）。**検査が無意味になった状態を green と読ませない**という、この節に共通する作り方です。
-
-### 台帳 — 「どのシナリオが、何を測って」カバーしたか
-
-構文表面の側には `.<name>(` に相当する自動判定がありません。そこで「表面 → シナリオ → 観測方法」を人が書く台帳を置き、その台帳自体を検査します。
-
-```typescript
-// tests/e2e/dsl-coverage-ledger.ts:2-9
-export type ObservationKind =
-  | 'capture-rms'
-  | 'capture-onset'
-  | 'capture-pitch'
-  | 'capture-bits'
-  | 'log-text'
-  | 'file'
-  | 'smoke'
-```
-
-`ObservationKind` は「何を根拠にカバー済みと言うか」の型です。`smoke`（評価が通っただけ）だけが別扱いで、`A-5` がその件数を **増やす方向に編集できない**ようにしています。「評価が通った」は CLAUDE.md が繰り返し否定している弱いアサーションそのものなので、台帳に入れること自体は許しつつ、件数はラチェットで押さえる、という設計です。
-
-- **A-2** — 構文表面が増えたのに台帳にも `SYNTAX_UNCOVERED_BASELINE` にも無ければ red
-- **A-4** — 台帳の `scenario` が gated spec の `it(` 題名に部分一致するか。存在しないシナリオ名を書けない
-- **A-5** — `smoke` 観測の件数が `SMOKE_OBSERVATION_BASELINE`（現状 0）を超えたら red
-- **A-10** — baseline の側を検査する。台帳に載ったのに `SYNTAX_UNCOVERED_BASELINE` に残り続けている表面（**stale なエントリは次の追加を素通しさせます**）と、実際の smoke 件数より緩い `SMOKE_OBSERVATION_BASELINE` を落とします
-
-PR-E4 の時点で `DSL_COVERAGE_LEDGER` は **空**です。既存 E2E を増やさずラチェットだけを先に置く、という方針なので、13 個の構文表面はすべて `SYNTAX_UNCOVERED_BASELINE` に載っています。この配列も `SEQUENCE_UNCOVERED_BASELINE` と同じく **減らす方向にしか編集してはいけません**。
-
 ### アサーション衛生
 
 ```typescript
@@ -968,22 +846,6 @@ PR-E4 の時点で `DSL_COVERAGE_LEDGER` は **空**です。既存 E2E を増�
 
 残り 4 本は「capture を使う spec に `rms(` / `peak(` / `.rms` のアサーションが実在するか」「stale ガードが `resolveDaemonBinaryPath()` を呼んでいるか」、そして #713 で足された 2 本、「stale ガードが `tests` / `benches` / `examples` を除外しているか」と「`src` まで除外していないか」です。書いた直後に実在の違反を 1 件検出した（`.toBe(errorCountBeforeMixer)` を `<=` へ修正）と 6.418 は記録しています。
 
-1 本目の「capture を使っているか」の判定は、共有ハーネス層ができたことで書き換わりました。`runScore(..., { capture: true })` も capture 経路なので、そちらの綴りを見落とすと **新しいシナリオが何も測らなくても検査を通過してしまいます**。
-
-```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:49-56
-    // 音に出る機能は**キャプチャの数値**で判定する。ここでは「capture を使う spec に
-    // rms/peak のアサーションが実在するか」だけを確かめる（個々のテストの強さは見ない）。
-    // 🔴 `runScore(..., { capture: true })` も capture 経路（#668 §17 F-1）。
-    // これを入れ忘れると、新しいシナリオが**何も測らなくても検査が通る**。
-    const usesCapture = /captureInstrumentScenario|capture_wav|capturePath|capture:\s*true/.test(
-      source,
-    )
-    if (!usesCapture) return
-```
-
-ヘルパを足すたびにこの正規表現へ綴りを足す必要がある、というのは弱点でもあります。走査先そのものは `gated-sources.ts` が 1 箇所で持つようになりましたが、**「何を capture の合図とみなすか」の語彙はまだ検査側に散っている**、と読むのが正確です。
-
 後半 2 本は**片方向ずつ**を留めるペアになっています。前者だけなら「除外を消す」退行を捕まえられますが、後者が無いと「行きすぎて `src` まで除外する」方向は素通りします。ガードの目的（古いバイナリで測らない）は `src` を見ていることに依存するので、両方向を留めて初めて線引きが固定されます。
 
 ```typescript
@@ -998,6 +860,19 @@ PR-E4 の時点で `DSL_COVERAGE_LEDGER` は **空**です。既存 E2E を増�
 ただし 5 本すべてが gated spec の**ソース文字列**を走査するだけなので、保証するのは「そう書いてある」ことまでです。ガード本体の `assertDaemonBinaryIsNotStale()` は `gated && appAvailable` のときだけ呼ばれるので、通常の `npm test` では 1 行も実行されません。この節の検査は「実行された振る舞い」ではなく「書かれた形」を留めるもの、という位置づけで読むのが正確です。
 
 ちなみにコメントの「固定 500 行窓」は `#567` で 1000 行に拡張される前の数字ですが、有限窓であることに変わりはないので規律そのものは有効です。
+
+### ハーネス仕様が実装に追いついた（2026-09-04・#724）
+
+ここまで読んできた形は、長らく正本の側に書かれていませんでした。`docs/testing/E2E_HARNESS_SPEC.md` は 2026-07-28 版のまま「現行の gated E2E は配線 smoke であり、本仕様の網羅ハーネスが完成するまでの暫定である」と述べていて、実機 spec が既に `it(` 20 件とキャプチャの数値判定を持っている状態と食い違っていたのです。#724（#668 PR-E0）はその記述を改訂し、2 層の役割分担を入れ替えました。
+
+| 層 | 旧版（2026-07-28） | 改訂版（2026-09-04・#724） |
+|---|---|---|
+| オフライン決定論層 | DSL 意味論の**網羅** | **回帰の固定**（同一 `.orbs` → bit 一致 PCM） |
+| 実機層 | 配線検証（**代表構文のみ**） | **語彙・構文表面の網羅** |
+
+改訂の根拠は、前節がそのまま示しています。網羅を数えているラチェットは `readGatedSources()` 経由で**実機 spec のソース**を走査するので、網羅の圧力は実機層にかかっていました。仕様の方が実装より古いまま置かれていた、というのが #724 の説明です。
+
+同じ改訂で、観測タイプ（`ObservationKind`）が `tests/e2e/dsl-coverage-ledger.ts` の列挙を正本として仕様側に固定されました。`smoke`（評価が通っただけ）の扱いも「監査で警告」から**件数ラチェット**へ書き換えられています（`E2E_HARNESS_SPEC.md` §4.1）。「警告は読まれないが red は止まる」という理由づけは、この節のラチェットとまったく同じ考え方です。
 
 ---
 
@@ -1267,7 +1142,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `mcp-server.ts` の docs 配信部（`/orbitscore/dev/` / `isDocsDistStale`）と `get_dev_doc` / `search_dev_docs` — 学習サイトがエージェントの文脈に乗るまでの経路
 - `EvalMarkBridge` の timeout（120 秒）と `#608` stall reporter の連携 — 詰まったキューが「塞いでいる行」を名指しするまで
 - `findPlayArgRangeForPath()` のネスト解決（`"1.0"` の descend 条件と group run の扱い）と、`#391` で予定されている `seq.color()` の seam（`PlayheadColorConfig.seqColors`）
-- `docs/testing/E2E_HARNESS_SPEC.md` の 2 層構造（オフライン決定論層 + 実機配線層）が gated spec の「配線 smoke」をどう置き換える計画か
+- `tests/e2e/dsl-coverage-ledger.ts` の台帳 2（実装 ↔ テスト）が #671 段階 3 で生成器による導出に変わったあと、手書きの行とラチェットの関係がどうなるか（`E2E_HARNESS_SPEC.md` §2.1）
 - `analyze_audio` の `estimateFundamentalHz()` — plugin state 復元テストが「同じ測定ピッチ」をどう assert しているか
 - `killOrbitStudio()` / `replaceGatedPluginFixtureSymlink()` の安全域（allowlist）— ハーネスがユーザー環境を壊さないための境界
 - gated spec が 1 本ずつ実行できない構造（WORK_LOG 6.409）の改善案
@@ -1284,19 +1159,14 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `packages/vscode-extension/src/extension.ts:445-495` — MCP サーバの起動ゲートとハンドラ配線
 - `packages/vscode-extension/src/extension.ts:1153-1177` — `shouldFilterLine()`（`[STEP]` と bridge envelope の除外）
 - `packages/vscode-extension/src/extension.ts:1473-1553` — `setupStdoutHandler()`
-- `packages/vscode-extension/src/extension.ts:3041-3078` — `evaluateForAgent()`（#614）
-- `packages/vscode-extension/src/extension.ts:3586-3602` — `getLogForAgent()` / `analyzeAudioForAgent()`
+- `packages/vscode-extension/src/extension.ts:3040-3077` — `evaluateForAgent()`（#614）
+- `packages/vscode-extension/src/extension.ts:3585-3597` — `getLogForAgent()` / `analyzeAudioForAgent()`
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-142` — `//#evalMark` の requestId 相関ブリッジ
 - `packages/vscode-extension/src/log-ring.ts:1-45` — `selectLogLines()`（#567）
 - `packages/vscode-extension/src/engine-lifecycle.ts:76-152` — stdout 行の分類と適用（`isCurrent` 分割）
 - `packages/vscode-extension/src/engine-lifecycle.ts:264-291` — `decideStartEngineForAgent()`（spawn 専用オプション）
 - `packages/vscode-extension/src/playhead.ts:1-273` — `[STEP]` 文法・パレット・`findPlayArgRangeForPath()`
-- `packages/vscode-extension/src/wav-analysis.ts:1-198` — WAV 解析（peak / RMS / onset / `soundDetected`）
-- `packages/vscode-extension/src/wav-analysis.ts:22-59` — `ChannelWindow` / `channelWindows` / `channelRms`（#668 PR-E3）
-- `packages/vscode-extension/src/wav-analysis.ts:291-338` — `channelSeries()`（チャンネル別 peak/RMS）
-- `packages/vscode-extension/src/mcp-server.ts:998-1035` — `analyze_audio` の登録と `per_channel`
-- `packages/engine/src/parser/dsl-surface.ts:1-35` — `DslSyntaxId` / `DSL_SYNTAX_SURFACE`（#668 PR-E4）
-- `packages/engine/src/parser/tokenizer.ts:288-289` — 照合用に export された `KEYWORDS` view
+- `packages/vscode-extension/src/wav-analysis.ts:1-171` — WAV 解析（peak / RMS / onset / `soundDetected`）
 - `packages/vscode-extension/package.json:400-407` — `orbitscore.mcpServer.port` 設定
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio 経路の `[STEP]` 発生源
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()`（#654）
@@ -1306,20 +1176,19 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:635-1430` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:2030-2136` — #654 playhead E2E
 - `tests/e2e/helpers/mcp-client.ts:1-174` — 生 JSON-RPC クライアント
-- `tests/e2e/gated-sources.ts:1-134` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）
+- `tests/e2e/gated-sources.ts:1-106` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` の判定（`countErrors` 7 重定義の統合先・#668 PR-E2）
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` と `captureWavPath()`
 - `tests/e2e/helpers/run-score.ts:1-272` — 譜面を work copy にして実機で評価する 1 関数
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — 生成物の待ち合わせ（`minBytes` つき）
 - `tests/e2e/helpers/run-cli.ts:1-62` — `orbitscore replay` / `render` の子プロセス実行（MCP を通らない唯一の例外）
 - `tests/e2e/helpers/rack-child-pid.ts:1-38` — rack child の PID オラクル（ログ由来・#668 PR-E1 で spec から移動）
-- `tests/e2e/dsl-e2e-coverage.spec.ts:1-264` — DSL 網羅率ラチェット（A-1 メソッド / A-2・A-3 構文表面 / A-4・A-5・A-10 台帳）
-- `tests/e2e/dsl-coverage-ledger.ts:1-27` — `ObservationKind` と `DSL_COVERAGE_LEDGER`（#668 PR-E4）
-- `tests/e2e/gated-assertion-hygiene.spec.ts:1-101` — アサーション衛生
+- `tests/e2e/dsl-e2e-coverage.spec.ts:1-146` — DSL 網羅率ラチェット
+- `tests/e2e/gated-assertion-hygiene.spec.ts:1-68` — アサーション衛生
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixture
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — OrbitStudio.app のビルド
-- `docs/testing/E2E_HARNESS_SPEC.md` — DSL 網羅 E2E ハーネス仕様（#543）
+- `docs/testing/E2E_HARNESS_SPEC.md` — DSL 網羅 E2E ハーネス仕様（#543・2026-09-04 に #724 = #668 PR-E0 で §2.1 / §3 / §4.1 / §6.3 を改訂）
 - `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md` §3 — Agent Bridge の原設計
 - `docs/archive/WORK_LOG_2026-08.md` 6.348 / 6.409 / 6.415 / 6.416 / 6.417 / 6.418 / 6.421 — MCP ツール追加・実機検証・stale ガード・仕組み化・#654
 - `CLAUDE.md` 「E2E が最重要」「これらは仕組みで強制されている」「マージ前ゲート」
@@ -1331,4 +1200,4 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - Issue [#643](https://github.com/signalcompose/orbitscore/issues/643) — instrument のミキサー統合（E2E-1〜7）
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — capture ヘッダの定期 patch と stale ガード
 - Issue [#654](https://github.com/signalcompose/orbitscore/issues/654) — instrument シーケンスで playhead が動かない
-- Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E の基盤（PR-E1 `gated-sources.ts` / PR-E2 共有ハーネス層 / PR-E3 per-channel 解析 / PR-E4 構文ラチェット）
+- Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E の基盤（PR-E1 `gated-sources.ts` / PR-E2 共有ハーネス層）
