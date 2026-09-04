@@ -1077,8 +1077,16 @@ seq.play(A, A, B, A)           // song form (AABA) — sections spliced and reus
 - **Note lifecycle**: each event → note-on(vel), note-off after `slotDuration * gate`; a tie
   suppresses the note-off/on pair, legato delays the note-off.
 - **Active-note tracking / cleanup**: per-sequence sounding notes are released on LOOP
-  exclusion, MUTE, and `play()` swap (note-off the held notes); `global.stop()` / engine
-  shutdown / crash sends CC123 (All Notes Off) + CC120 (All Sound Off) on all channels.
+  exclusion, MUTE, `play()` swap, **the end of a one-shot `RUN()`**, and **the end of an
+  offline render** (note-off the held notes); `global.stop()` / engine shutdown / crash
+  sends CC123 (All Notes Off) + CC120 (All Sound Off) on all channels.
+  🔴 **Adding a firing point never adds a delivery mechanism** (#606): every case above
+  calls the same "release this owner's held notes" path. On the plugin path CC is not
+  available, so All Notes Off becomes an enumeration of active notes followed by
+  individual note-offs (PH.4), and the daemon keeps a last-resort flush of its own
+  tracking set for the case where the engine dies before it can release them — that flush
+  is **instance-wide**, so it fires only for `global.stop()` / shutdown / abnormal engine
+  exit, never on the per-sequence release path.
 - **Scheduling**: a TS-side lookahead scheduler (RtMidi sends immediately); `midiLatency()`
   is added to the send time. Detune is realized by pitch bend; bend is per-channel, so
   different detunes sounding on one channel at once collide (last bend wins) — the canonical
@@ -1527,6 +1535,20 @@ UIH.5.1。
   終了が全声部を落とす**（1 シーケンスの停止に wildcard な解放を使わないという規範は変わらない —
   他シーケンスの発音を巻き込むため）。
   child crash で声部が消滅した後の stale な note-off は無害（受信側に該当声部が無い）。
+  🔴 **発火ケースの追加（#606 / オフライン側は #598）**: **一発 `RUN()` の終端**と
+  **オフラインレンダの終端**も保留 note の解放義務を持つ（Pitch DSL §7-2 と同一）。
+  発火点が増えても**配送機構は 1 本**で、場面ごとに別の flush を作らない。
+  🔴 **最後の砦（#606）**: engine が保留 note を解放し切る前に死んだ場合に備え、**daemon は
+  自身が追跡している active note から note-off を送れる**こと。追跡集合を持ちながら読み手が
+  いない状態は「鳴りっぱなしを検出できるのに止められない」ことを意味する。二重の note-off は
+  無害である（受信側に該当声部が無いだけ）。
+  🔴 **その粒度は instance 単位（＝そのインスタンスの全 owner）であり、owner 単位ではない。**
+  daemon は owner の境界を持たないので、これは**上段の「1 シーケンスの停止に wildcard な解放を
+  使わない」規範の例外ではなく、適用外**である — 通常のシーケンス単位の解放経路から呼んではならない。
+  発火してよいのは **`global.stop()` / shutdown / engine の異常終了**の 3 つだけで、
+  いずれも「そのインスタンスで鳴ってよいものが 1 つも無い」場面である。
+  サミング（複数シーケンス → 1 インスタンス）が入っても、この 3 場面では**巻き込む相手が
+  存在しない**ため参照カウント判定は不要になる。
   🔴 **発火ケースの追加（#628・SC.10.6 規範 2）**: **instrument ブランチの無効化
   （`enabled: false`）・削除**も強制 note-off の対象である。ブランチを無効化すると
   **その音源で発音中のノートの発生源が止まる**ため、保留 note を解放しないと鳴りっぱなしになる。
