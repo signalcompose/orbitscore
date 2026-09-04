@@ -83,17 +83,16 @@ const SEQUENCE_UNCOVERED_BASELINE: readonly string[] = [
 ]
 
 /**
- * 同上・`global` 側（2026-08-29 実測）。
+ * 同上・`global` 側（2026-08-29 実測・`linkAudio` は #645 PR-D0 の gated E2E で除去・2026-09-04）。
  *
  * `compressor` / `limiter` / `normalizer` は **master チェーンの語**で、#649（フェーダーが
- * 支配すべきものより手前にある）と同じ領域にある。`linkAudio` は外部オーディオ出力、
- * `audioDevice` はデバイス切替で、いずれも実機でしか意味を持たない。
+ * 支配すべきものより手前にある）と同じ領域にある。`audioDevice` はデバイス切替で、
+ * 実機でしか意味を持たない。
  */
 const GLOBAL_UNCOVERED_BASELINE: readonly string[] = [
   'audioDevice',
   'compressor',
   'limiter',
-  'linkAudio',
   'loop',
   'midiLatency',
   'normalizer',

@@ -272,6 +272,8 @@
 | 段 | 正本 | 現在地 | 証拠 |
 |---|---|---|---|
 | 土台（入口・内部） | **#643** | ✅ PR-1（Rust 4 層・`SetSourceRouting`）/ ✅ PR-2（TS 表面の解禁・unit 0 固定）/ ○ PR-3 = **#645**（LinkAudio の実配線は not-ready 方針が owner 判断待ちで別） | `session.rs:2259` `"SetSourceRouting"` / merge `0a6502f7`・`637a6262` / `sequence.ts:376-412` が instrument の `output(n)`・LinkAudio を「PR-3 まで拒否」 |
+| 演奏中の throw 封じ（実装） | **#645** | ○ **実装済み・ユニット 13 本**。2026-09-04 の実機で 3 点確認: ① skip がログに出る ② throw しない ③ 兄弟シーケンスを巻き添えにしない | `sequence.ts` の `DispatchTarget` / `resolveDispatchChannel()` / `logSkipOnce` |
+| 同（**実機 E2E の主張**） | **#736** | 🔴 未解決。**実装ではなくテストの主張が実装の契約を超えていた** — 停止中のシーケンスに `(seamless)` を要求 / dedup を **ERROR 総数**で数えていた（skip は stderr → ERROR に分類されるので他が混ざる） | `sequence.ts:278-281`（`seamlessParameterUpdate` の発火条件） |
 | フェーダー位置 | **#649** | 📐 **設計のみ**（PR #653 は設計文書だけ。実装なし） | `docs/design/649-audio-line-design.md` / `output.rs:936` `render_multi_feeds`（master gain）の**後**で `:957` `BusTarget::Master` が `hw` へ加算 |
 | 出口 | **#611** 🔴 | ○ realtime 未実装（オフライン `output(n)` は ✅ `render-score.ts`） | #611 本文の実測表・`output.rs:957-960` 合流 3 行 |
 | マルチティンバー | **#647** | ✅ 受け皿（アドレス `(instance, unit)`・protocol）/ ○ 子プロセスの N 出力・shm | #647 本文（`transport.rs:60` `BUF_LEN = MAX_FRAMES * CHANNELS`） |

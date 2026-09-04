@@ -118,7 +118,7 @@ export interface ScheduledPlay {
 Why is `slice` optional? The answer is a branch in the sequence layer. Depending on the chop declaration, the method being called changes entirely.
 
 ```typescript
-// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:127-154
       // Schedule event (argPath = #390 live playhead marker, observational only)
       if (chopDivisions && chopDivisions > 1) {
         const eventDuration = event.duration && event.duration > 0 ? event.duration : undefined
@@ -275,7 +275,7 @@ The `while` loop, as long as `scheduledPlays[0].time <= now` is true, takes even
 The events of one bar are pushed onto the queue in bulk by `scheduleEvents()` at the start of the loop. This function lives in the sequence layer (`packages/engine/src/core/sequence/scheduling/event-scheduler.ts`) and does not depend on the backend.
 
 ```typescript
-// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:97-153 (gain/pan の計算と scheduleSliceEvent / scheduleEvent の引数列を // ... で省略)
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:113-169 (gain/pan の計算と scheduleSliceEvent / scheduleEvent の引数列を // ... で省略)
   // Schedule events for current iteration
   const loopOffset = loopIteration * patternDuration
 

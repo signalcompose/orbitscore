@@ -4568,6 +4568,66 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     TEST_TIMEOUT_MS,
   )
 
+  // #645 PR-D0: the two playback-path throws (resolveDispatchChannel's missing-.output()
+  // throw / event-scheduler's non-absolute-path throw) are now contained — the affected
+  // sequence is silently skipped and logged, not thrown, so it cannot stop every OTHER
+  // sequence in the same evaluation block (owner: "ライブコーディングなのでエラー出して
+  // 止まるのは基本よくない"). E2E-645-A/B (design 610 §11) drive both:
+  //   - path 1 (run()/loop() eager, `resolveDispatchChannel`): LOOP-ing a sequence with
+  //     LinkAudio enabled but no .output().
+  //   - path 2 (`seamlessParameterUpdate` → `scheduleEventsFromTime`, mid-loop): calling
+  //     .gain() on that SAME sequence while it is actively looping.
+  //
+  // #645 PR-D0 (post-hoc fix #2, coordinator-diagnosed 2026-09-04): the FIRST fix here
+  // tried to prove "does not stop a sibling sequence" with a captured RMS window on
+  // `d645Live` (a `.output()`-declared sibling under the SAME `global.linkAudio()`). That
+  // relied on rust-engine-player.ts's COMMENT claiming the daemon's documented A0
+  // LinkAudio feature-gap falls back to audible hardware playback when the `link-audio`
+  // Cargo feature isn't compiled in (it isn't, in the gated build —
+  // `orbit-audio-daemon/Cargo.toml`'s `link-audio` is default-off and
+  // `pretest:e2e:gated`'s `--features outproc-effect,outproc-instrument` doesn't add it).
+  // **A comment is not evidence of implementation behavior** — main's real run found
+  // capture RMS = 0 for `d645Live` and NO `LINK_AUDIO_UNAVAILABLE`/gap-warning marker in
+  // get_log at all, meaning the assumed fallback does not actually happen (or does not
+  // happen the way the comment describes). Capture-based proof was DROPPED for this
+  // reason — under `global.linkAudio()`, EVERY audio sequence's dispatch is either
+  // `skip` or `link` (never a real, capturable `hardware` dispatch — mixing is
+  // disallowed by design), so there is no way to hear `d645Live` here without
+  // depending on the SAME unverified LinkAudio-egress behavior.
+  //
+  // The replacement proof uses TS-engine-side `console.log` markers instead of audio —
+  // these fire from `loopSequence()` / `seamlessParameterUpdate()` in `sequence.ts` and
+  // `loop-sequence.ts` BEFORE any daemon RPC happens, so they do not depend on whether
+  // the Rust daemon has `link-audio` compiled in or whether its egress actually reaches
+  // hardware:
+  //   - `🔄 <name> (loop started/queued)` — `loopSequence()`, unconditional (fires
+  //     regardless of dispatch target; only the ACTUAL schedule call downstream checks
+  //     `resolveDispatchChannel()`).
+  //   - `🎚️ <name>: gain=<x> dB (seamless)` — `seamlessParameterUpdate()`, also
+  //     unconditional (it logs AFTER calling the private `scheduleEventsFromTime`
+  //     wrapper, which returns early on `skip` WITHOUT throwing per this PR's fix, so
+  //     the caller's own log statement is still reached).
+  // `LOOP(d645Skip)` + `LOOP(d645Live)` (path 1) and `d645Skip.gain(-6)` +
+  // `d645Live.gain(-3)` (path 2) are each submitted as ONE `run_selection` (one
+  // evaluation block) — pre-#645, a throw on the FIRST statement would prevent the
+  // SECOND from ever running in that same block ("その評価ブロックの以降の文が実行
+  // されない", design 610 §5.2); post-#645, both markers must appear.
+  // 🔴 **#645 の実機 gated E2E は #736 へ切り出した**（owner 裁定 2026-09-04）。
+  //
+  // 実装（PR-D0 本体・`sequence.ts` の `DispatchTarget` / `resolveDispatchChannel()` /
+  // `logSkipOnce`）は**動いている**。2026-09-04 の実機で確認した 3 点:
+  //   ① skip が黙って消えない（「無音でスキップします」がログに出る）
+  //   ② throw しない（同一ブロックの兄弟が自分の `(seamless)` を出している）
+  //   ③ 兄弟シーケンスを巻き添えにしない（同上）
+  //
+  // 外した理由は**テストの主張が実装の契約を超えていた**こと:
+  //   - 停止中のシーケンスに `(seamless)` を要求していた。`seamlessParameterUpdate()` は
+  //     `isLooping() || isPlaying()` かつ `scheduler.isRunning` の時だけ出す（`sequence.ts:278-281`）
+  //   - dedup の検査に **ERROR 総数**を使っていた。skip は stderr → ERROR に分類されるので
+  //     他の ERROR が混ざり、**dedup の証明にならない**
+  //
+  // 検証は 13 本のユニットテストが担う。#736 で主張を直してから実機へ戻す。
+
   // ──────────────────────────────────────────────────────────────────
   // #611 §9 / #543-a — capture today's output-line sound before engine changes
   // ─────────────────────────────────────────────────────────────────
