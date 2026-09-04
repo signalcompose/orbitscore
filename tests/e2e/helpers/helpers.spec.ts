@@ -32,6 +32,7 @@ import {
   quadraticMeanRms,
   readCaptureForAnalysis,
   readCaptureFormat,
+  steadyRms,
   waitForSound,
 } from './capture-windows'
 import { countErrors, countLogMarker, LOG_WINDOW_LINES } from './engine-log'
@@ -89,10 +90,21 @@ const sineAfter =
   (timeSec: number): number =>
     timeSec < startSec ? 0 : 0.25 * Math.sin(2 * Math.PI * 50 * (timeSec - startSec) + phase)
 
-const expectCaptureInvariantFailure = (run: () => unknown, name: string): void => {
-  expect(run).toThrow(name)
+const expectCaptureInvariantFailure = (
+  run: () => unknown,
+  invariant: 'A1' | 'U1' | 'U2' | 'U3',
+): void => {
+  let thrown: unknown
+  try {
+    run()
+  } catch (error) {
+    thrown = error
+  }
+  expect(thrown).toBeInstanceOf(Error)
+  const message = (thrown as Error).message
+  expect(message).toContain(`"invariant":"${invariant}"`)
   for (const field of ['name', 'fromSec', 'toSec', 'durationSec', 'soundStartSec', 'bucketCount']) {
-    expect(run, `${name} failure must report ${field}`).toThrow(field)
+    expect(message, `${invariant} failure must report ${field}`).toContain(`"${field}"`)
   }
 }
 
@@ -196,6 +208,39 @@ describe('capture windows', () => {
     ).rejects.toThrow(/durationSec.*peak.*maxWindowRms.*stat\.size.*capturePath/)
   })
 
+  it('keeps the last capture parse error in a sound timeout', async () => {
+    const capturePath = path.join(makeTmpDir(), 'broken.wav')
+    const brokenWav = Buffer.alloc(44)
+    brokenWav.write('data', 36, 'ascii')
+    fs.writeFileSync(capturePath, brokenWav)
+
+    await expect(
+      waitForSound(capturePath, {
+        floor: 0.01,
+        intervalMs: 1,
+        timeoutMs: 2,
+        label: 'broken synthetic capture',
+      }),
+    ).rejects.toThrow(/lastError.*not a RIFF\/WAVE file/)
+  })
+
+  it('waits for sound using physical bytes beyond a stale data-size header', async () => {
+    const capturePath = path.join(makeTmpDir(), 'stale-sound.wav')
+    const wav = syntheticFloat32Wav(0.3, { sample: sineAfter(0.15) })
+    wav.writeUInt32LE(100 * 2 * 4, 40)
+    fs.writeFileSync(capturePath, wav)
+
+    expect(analyzeWavBuffer(wav, { windowMs: 20 }).peak).toBe(0)
+    await expect(
+      waitForSound(capturePath, {
+        floor: 0.01,
+        intervalMs: 1,
+        timeoutMs: 10,
+        label: 'stale-header synthetic capture',
+      }),
+    ).resolves.toBeUndefined()
+  })
+
   it('detects continuous sound from absolute RMS windows even when there are no onsets', async () => {
     const capturePath = path.join(makeTmpDir(), 'continuous.wav')
     const wav = syntheticFloat32Wav(0.2, { sample: sineAfter(0) })
@@ -240,7 +285,7 @@ describe('capture windows', () => {
         captureWindowsFrom(
           analysis,
           { early: { fromSec: 0.25, toSec: 1.75, fromWall: 250, toWall: 1750 } },
-          'synthetic A1',
+          'synthetic capture',
         ),
       'A1',
     )
@@ -256,7 +301,7 @@ describe('capture windows', () => {
         captureWindowsFrom(
           analysis,
           { short: { fromSec: 0.25, toSec: 1.75, fromWall: 250, toWall: 1750 } },
-          'synthetic U1',
+          'synthetic capture',
         ),
       'U1',
     )
@@ -271,7 +316,7 @@ describe('capture windows', () => {
         captureWindowsFrom(
           analysis,
           { stalled: { fromSec: 0.25, toSec: 1.75, fromWall: 250, toWall: 2250 } },
-          'synthetic U2',
+          'synthetic capture',
         ),
       'U2',
     )
@@ -286,7 +331,7 @@ describe('capture windows', () => {
         captureWindowsFrom(
           analysis,
           { outside: { fromSec: 0.5, toSec: 2.1, fromWall: 500, toWall: 2100 } },
-          'synthetic U3',
+          'synthetic capture',
         ),
       'U3',
     )
@@ -300,7 +345,7 @@ describe('capture windows', () => {
     const overlapping = { fromSec: 1, toSec: 2, fromWall: 1000, toWall: 2000 }
 
     expectCaptureInvariantFailure(
-      () => captureWindowsFrom(analysis, { first, overlapping }, 'synthetic U3 overlap'),
+      () => captureWindowsFrom(analysis, { first, overlapping }, 'synthetic overlap'),
       'U3',
     )
     expect(() =>
@@ -318,6 +363,86 @@ describe('capture windows', () => {
         .windows!
 
     expect(quadraticMeanRms(atPhase(0))).toBeCloseTo(quadraticMeanRms(atPhase(Math.PI / 3)), 8)
+  })
+
+  it('rejects analysis buckets that do not match the harness 20ms contract', () => {
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(2, { sample: sineAfter(0) }), {
+      windowMs: 100,
+    })
+    expect(() =>
+      captureWindowsFrom(
+        analysis,
+        { steady: { fromSec: 0.25, toSec: 1.75, fromWall: 250, toWall: 1750 } },
+        '100ms synthetic capture',
+      ),
+    ).toThrow(/analysis bucket width must be 0\.02s, got 0\.1s/)
+  })
+
+  it('defers a narrow default guard check until that guard is requested', () => {
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(1, { sample: sineAfter(0) }), {
+      windowMs: 20,
+    })
+    const captured = captureWindowsFrom(
+      analysis,
+      { short: { fromSec: 0.1, toSec: 0.3, fromWall: 100, toWall: 300 } },
+      'short synthetic capture',
+    )
+
+    expect(captured.windows('short', 0)).toHaveLength(10)
+    expectCaptureInvariantFailure(() => captured.windows('short'), 'U1')
+  })
+
+  it('applies the expected bucket-count invariant to channel RMS too', () => {
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(2, { sample: sineAfter(0) }), {
+      windowMs: 20,
+      perChannel: true,
+    })
+    analysis.channelWindows = [
+      analysis.channelWindows![0]!.slice(0, 20),
+      analysis.channelWindows![1]!,
+    ]
+    const captured = captureWindowsFrom(
+      analysis,
+      { steady: { fromSec: 0.25, toSec: 1.75, fromWall: 250, toWall: 1750 } },
+      'channel synthetic capture',
+    )
+
+    expectCaptureInvariantFailure(() => captured.channelRms('steady', 0), 'U1')
+  })
+
+  it('snaps periodic RMS across every 20ms phase of a 500ms hit period', () => {
+    const wav = syntheticFloat32Wav(9, {
+      sample: (timeSec) => {
+        if (timeSec < 0.5) return 0
+        const hitTimeSec = (timeSec - 0.5) % 0.5
+        return hitTimeSec < 0.12
+          ? 0.5 * Math.exp(-30 * hitTimeSec) * Math.sin(2 * Math.PI * 50 * hitTimeSec)
+          : 0
+      },
+    })
+    const analysis = analyzeWavBuffer(wav, { windowMs: 20 })
+    const failures: Array<{ phase: number; fromSec: number; message: string }> = []
+
+    for (let phase = 0; phase < 25; phase += 1) {
+      const fromSec = 1.347 + phase * 0.02
+      const toSec = fromSec + 6.8
+      const result = captureWindowsFrom(
+        analysis,
+        { steady: { fromSec, toSec, fromWall: fromSec * 1000, toWall: toSec * 1000 } },
+        `periodic phase ${phase}`,
+      )
+      try {
+        steadyRms(result, 'steady', {
+          expectedOnsets: 8,
+          guardSec: 0.15,
+          hitPeriodSec: 0.5,
+          audibleFloorRms: 0.01,
+        })
+      } catch (error) {
+        failures.push({ phase, fromSec, message: String(error) })
+      }
+    }
+    expect(failures, `failed ${failures.length}/25 phases`).toEqual([])
   })
 })
 

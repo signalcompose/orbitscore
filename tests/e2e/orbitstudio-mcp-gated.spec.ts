@@ -58,8 +58,8 @@ import {
   captureWindowsFrom,
   createCaptureClock,
   prepareCapturePath,
-  quadraticMeanRms,
   readCaptureForAnalysis,
+  steadyRms,
   waitForSound,
   type CaptureSegment,
 } from './helpers/capture-windows'
@@ -441,6 +441,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     // 既に別テストがエンジンを起動していると
     // 「engine is already running; requested spawn-only option(s): capture_wav」で弾かれる。
     // capture を要求する時は必ず一度落としてから起動する（#643 E2E 7本がこれで全滅した）。
+    // 🔴 この停止は SIGTERM で、daemon には signal handler が無いため capture の Drop/finalize は
+    // 通常停止でも走らない。解析側の `readCaptureForAnalysis` による data-size 零化が必須である。
     if (captureWav !== undefined) {
       await activeClient.call('stop_engine')
       await waitForEngine(false, 15_000, `${label} stopped before capture start`)
@@ -564,6 +566,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       segments[name] = { fromSec, toSec, fromWall, toWall }
     }
 
+    let bodyError: unknown
+    let cleanupFailure: unknown
     try {
       const opened = await activeClient.call('open_file', { path: dslPath })
       expect(opened.isError, opened.text).toBe(false)
@@ -583,13 +587,29 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         countErrors(finalLog),
         `#643 ${slug} must add no ERROR lines. Log tail: ${finalLog.slice(-1600)}`,
       ).toBeLessThanOrEqual(errorsBefore)
+    } catch (error) {
+      bodyError = error
+      throw error
     } finally {
-      await activeClient.call('evaluate_orbitscore', { code: 'global.stop()' })
-      const stopped = await activeClient.call('stop_engine')
-      expect(stopped.isError, stopped.text).toBe(false)
-      await waitForEngine(false, 15_000, `#643 ${slug} capture engine stopped`)
-      await sleep(1000)
+      try {
+        await activeClient.call('evaluate_orbitscore', { code: 'global.stop()' })
+        const stopped = await activeClient.call('stop_engine')
+        expect(stopped.isError, stopped.text).toBe(false)
+        await waitForEngine(false, 15_000, `#643 ${slug} capture engine stopped`)
+        await sleep(1000)
+      } catch (cleanupError) {
+        if (bodyError === undefined) {
+          cleanupFailure = cleanupError
+        } else {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[#643 ${slug}] cleanup also failed; reporting the original failure instead:` +
+              `\n${String(cleanupError)}`,
+          )
+        }
+      }
     }
+    if (cleanupFailure !== undefined) throw cleanupFailure
 
     const capture = readCaptureForAnalysis(capturePath)
     const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
@@ -3208,6 +3228,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       await sleep(2500)
       const clock = createCaptureClock(capturePath)
       const segments: Record<string, CaptureSegment> = {}
+      let bodyError: unknown
+      let cleanupFailure: unknown
       try {
         const baselineLog = (await activeClient.call('get_log', { lines: 500 })).text
         const errorsBefore = countErrors(baselineLog)
@@ -3400,15 +3422,31 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         const finalLog = (await activeClient.call('get_log', { lines: 500 })).text
         // The deliberate E4 error is the only new error in this scenario.
         expect(countErrors(finalLog)).toBeGreaterThanOrEqual(errorsBefore + 1)
+      } catch (error) {
+        bodyError = error
+        throw error
       } finally {
-        await activeClient.call('evaluate_orbitscore', {
-          code: 'cb618.stop()\nglobal.stop()',
-        })
-        const stopped = await activeClient.call('stop_engine')
-        expect(stopped.isError, stopped.text).toBe(false)
-        await waitForEngine(false, 15_000, '#618 E1-E6 engine stopped')
-        await sleep(1500)
+        try {
+          await activeClient.call('evaluate_orbitscore', {
+            code: 'cb618.stop()\nglobal.stop()',
+          })
+          const stopped = await activeClient.call('stop_engine')
+          expect(stopped.isError, stopped.text).toBe(false)
+          await waitForEngine(false, 15_000, '#618 E1-E6 engine stopped')
+          await sleep(1500)
+        } catch (cleanupError) {
+          if (bodyError === undefined) {
+            cleanupFailure = cleanupError
+          } else {
+            // eslint-disable-next-line no-console
+            console.warn(
+              '[#618 E1-E6] cleanup also failed; reporting the original failure instead:' +
+                `\n${String(cleanupError)}`,
+            )
+          }
+        }
       }
+      if (cleanupFailure !== undefined) throw cleanupFailure
 
       const capture = readCaptureForAnalysis(capturePath)
       const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
@@ -3525,6 +3563,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         await sleep(3000)
         segments[name] = { fromSec, toSec: clock(), fromWall, toWall: Date.now() }
       }
+      let bodyError: unknown
+      let cleanupFailure: unknown
       try {
         // A dry segment with the final sum/aux routing already in place is the
         // reference for both failed replacement (R-E3) and remove (R-E6).
@@ -3793,15 +3833,31 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           countErrors(afterMasterLog),
           `R-E7 master replacement must add no ERROR lines. Log tail: ${afterMasterLog.slice(-1200)}`,
         ).toBeLessThanOrEqual(errorsBeforeMaster)
+      } catch (error) {
+        bodyError = error
+        throw error
       } finally {
-        await activeClient.call('evaluate_orbitscore', {
-          code: 'fx625.stop()\nglobal.stop()',
-        })
-        const stopped = await activeClient.call('stop_engine')
-        expect(stopped.isError, stopped.text).toBe(false)
-        await waitForEngine(false, 15_000, '#625 R-E1-R-E7 engine stopped')
-        await sleep(1500)
+        try {
+          await activeClient.call('evaluate_orbitscore', {
+            code: 'fx625.stop()\nglobal.stop()',
+          })
+          const stopped = await activeClient.call('stop_engine')
+          expect(stopped.isError, stopped.text).toBe(false)
+          await waitForEngine(false, 15_000, '#625 R-E1-R-E7 engine stopped')
+          await sleep(1500)
+        } catch (cleanupError) {
+          if (bodyError === undefined) {
+            cleanupFailure = cleanupError
+          } else {
+            // eslint-disable-next-line no-console
+            console.warn(
+              '[#625 R-E1-R-E7] cleanup also failed; reporting the original failure instead:' +
+                `\n${String(cleanupError)}`,
+            )
+          }
+        }
       }
+      if (cleanupFailure !== undefined) throw cleanupFailure
 
       const capture = readCaptureForAnalysis(capturePath)
       const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
@@ -4060,6 +4116,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         segments[name] = { fromSec, toSec: clock(), fromWall, toWall: Date.now() }
       }
 
+      let bodyError: unknown
+      let cleanupFailure: unknown
       try {
         // A previous suite block may leave a master declaration in the persistent interpreter
         // registry. Clear it before taking the bus-dry reference so the R28 ratio oracle is local.
@@ -4366,15 +4424,31 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           stateFileCount(statesDirectory),
           'R28 seg10: failed prepare-commit must not save or drop state',
         ).toBe(stateFilesBeforeDropGain)
+      } catch (error) {
+        bodyError = error
+        throw error
       } finally {
-        await activeClient.call('evaluate_orbitscore', {
-          code: 'fx628.effect([])\nfx628.stop()\nglobal.stop()',
-        })
-        const stopped = await activeClient.call('stop_engine')
-        expect(stopped.isError, stopped.text).toBe(false)
-        await waitForEngine(false, 15_000, '#628 R28 capture engine stopped')
-        await sleep(1500)
+        try {
+          await activeClient.call('evaluate_orbitscore', {
+            code: 'fx628.effect([])\nfx628.stop()\nglobal.stop()',
+          })
+          const stopped = await activeClient.call('stop_engine')
+          expect(stopped.isError, stopped.text).toBe(false)
+          await waitForEngine(false, 15_000, '#628 R28 capture engine stopped')
+          await sleep(1500)
+        } catch (cleanupError) {
+          if (bodyError === undefined) {
+            cleanupFailure = cleanupError
+          } else {
+            // eslint-disable-next-line no-console
+            console.warn(
+              '[#628 R28] cleanup also failed; reporting the original failure instead:' +
+                `\n${String(cleanupError)}`,
+            )
+          }
+        }
       }
+      if (cleanupFailure !== undefined) throw cleanupFailure
 
       const capture = readCaptureForAnalysis(capturePath)
       const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
@@ -4654,7 +4728,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   /**
    * 定常状態の 1 区間を録る（#611 PR-O0）。
    *
-   * `captureSegment` が初回だけ絶対 RMS 床で発音を待つ。その後 4.8 秒を確保し、`steadyRms` が
+   * `captureSegment` が初回だけ絶対 RMS 床で発音を待つ。その後 6.84 秒を確保し、`steadyRms` が
    * guard 内の最初の onset から 8 周期へスナップする。
    */
   const captureSteady = async (
@@ -4664,56 +4738,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     name: string,
   ): Promise<void> => {
     await ctx.captureSegment(name, STEADY_CAPTURE.captureMs)
-  }
-
-  /**
-   * 区間が定常状態であることを確かめてから RMS を返す。
-   *
-   * 🔴 **オンセット数を固定しないと RMS は音量の指標にならない**（ヒット数が変われば RMS も変わる）。
-   * ここで数を固定して初めて、RMS の差が「1 ヒットあたりの音量の差」を意味する。
-   */
-  const steadyRms = (
-    result: {
-      windows: (s: string, guardSec?: number) => ReadonlyArray<{ startSec: number; rms: number }>
-      onsets: (s: string) => readonly number[]
-    },
-    name: string,
-  ): number => {
-    const search = result.windows(name, STEADY_CAPTURE.guardSec)
-    const searchFrom = search[0]!.startSec
-    const searchTo = search[search.length - 1]!.startSec + 0.02
-    const firstOnset = result.onsets(name).find((onset) => onset >= searchFrom)
-    expect(
-      firstOnset,
-      `${name}: guarded search must contain an onset to snap the measurement window`,
-    ).toBeDefined()
-    const measureFrom = firstOnset! - 0.02
-    const measureTo = measureFrom + STEADY_CAPTURE.expectedOnsets * STEADY_CAPTURE.hitPeriodSec
-    expect(
-      measureFrom >= searchFrom && measureTo <= searchTo,
-      `${name}: guarded search is too short for ${STEADY_CAPTURE.expectedOnsets} hits; ` +
-        `search=[${searchFrom}, ${searchTo}) measure=[${measureFrom}, ${measureTo})`,
-    ).toBe(true)
-    const measuredOnsets = result
-      .onsets(name)
-      .filter((onset) => onset >= measureFrom && onset < measureTo)
-    expect(
-      measuredOnsets.length,
-      `${name}: snapped range must contain exactly ${STEADY_CAPTURE.expectedOnsets} onsets`,
-    ).toBe(STEADY_CAPTURE.expectedOnsets)
-    const gaps = measuredOnsets.slice(1).map((onset, index) => onset - measuredOnsets[index]!)
-    const sortedGaps = [...gaps].sort((a, b) => a - b)
-    const medianGap = sortedGaps[Math.floor(sortedGaps.length / 2)]!
-    expect(
-      Math.abs(medianGap - STEADY_CAPTURE.hitPeriodSec) / STEADY_CAPTURE.hitPeriodSec,
-      `${name}: median onset gap ${medianGap}s must match ${STEADY_CAPTURE.hitPeriodSec}s`,
-    ).toBeLessThanOrEqual(0.1)
-    const measuredWindows = search.filter(
-      (window) => window.startSec >= measureFrom && window.startSec < measureTo,
-    )
-    const value = quadraticMeanRms(measuredWindows)
-    expect(value, `${name} must be audible`).toBeGreaterThan(STEADY_CAPTURE.audibleFloorRms)
-    return value
   }
 
   it.skipIf(!appAvailable)(
@@ -4735,8 +4759,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
 
       const first = await captureOnce('611-o0-no-bus-first')
       const second = await captureOnce('611-o0-no-bus-second')
-      const firstRms = steadyRms(first, 'steady')
-      const secondRms = steadyRms(second, 'steady')
+      const firstRms = steadyRms(first, 'steady', STEADY_CAPTURE)
+      const secondRms = steadyRms(second, 'steady', STEADY_CAPTURE)
       // eslint-disable-next-line no-console
       console.log('[#611 O0-1] no-bus RMS:', JSON.stringify({ firstRms, secondRms }))
       expect(first.analysis.format.channels, 'O0-1 requires a 2ch device').toBe(
@@ -4771,7 +4795,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       expect(result, 'O0-2 must return captured windows').toBeDefined()
       if (!result) throw new Error('O0-2 did not return captured windows')
-      const sumRms = steadyRms(result, 'sum')
+      const sumRms = steadyRms(result, 'sum', STEADY_CAPTURE)
       // eslint-disable-next-line no-console
       console.log('[#611 O0-2] sumOutput.rms:', sumRms)
       expect(
@@ -4800,8 +4824,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       expect(result, 'O0-3 must return captured windows').toBeDefined()
       if (!result) throw new Error('O0-3 did not return captured windows')
-      const dryRms = steadyRms(result, 'dry')
-      const totalRms = steadyRms(result, 'dryPlusAux')
+      const dryRms = steadyRms(result, 'dry', STEADY_CAPTURE)
+      const totalRms = steadyRms(result, 'dryPlusAux', STEADY_CAPTURE)
       const totalOverDry = totalRms / dryRms
       // eslint-disable-next-line no-console
       console.log(
@@ -4840,9 +4864,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       expect(result, 'O0-4 must return captured windows').toBeDefined()
       if (!result) throw new Error('O0-4 did not return captured windows')
-      const dryRms = steadyRms(result, 'dry')
-      const effectOnlyRms = steadyRms(result, 'effectOnly')
-      const combinedRms = steadyRms(result, 'combined')
+      const dryRms = steadyRms(result, 'dry', STEADY_CAPTURE)
+      const effectOnlyRms = steadyRms(result, 'effectOnly', STEADY_CAPTURE)
+      const combinedRms = steadyRms(result, 'combined', STEADY_CAPTURE)
       const effectOnlyOverDry = effectOnlyRms / dryRms
       const combinedOverDry = combinedRms / dryRms
       // eslint-disable-next-line no-console

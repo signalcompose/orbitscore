@@ -34,6 +34,8 @@
  * 3. onset 数と gap 中央値を assert してから二乗平均 RMS を返す
  */
 
+import { ANALYSIS_BUCKET_MS } from './helpers/capture-windows'
+
 /** dB → 線形。 */
 const dbToLinear = (db: number): number => 10 ** (db / 20)
 
@@ -110,9 +112,12 @@ const SEND_AMOUNT_AS_WRITTEN = 0.3
 /** 全 golden 共通の録り方。オンセット数まで含めて 1 箇所で決める。 */
 export const STEADY_CAPTURE = {
   // 幅の内訳: 小節量子化（最大 1 小節）+ 位相 1 周期 + 測る 8 発 + guard 両側。
+  // snap はアタック直前の 1 バケットも測定へ含めるため、境界丸めを含む 2 バケット分を
+  // 余裕へ足す。ここが無いと最悪位相では必要幅と録り幅が同値になり、1 バケット不足する。
   // 🔴 録り幅を伸ばしても **golden の値は動かない** — snap は最初の onset から厳密に
   // `EXPECTED_ONSETS × HIT_PERIOD_MS` だけを測るので、余った尻尾は測定範囲に入らない。
-  captureMs: HIT_PERIOD_MS * (REQUANTIZE_SLOTS + 1 + EXPECTED_ONSETS) + 300,
+  captureMs:
+    HIT_PERIOD_MS * (REQUANTIZE_SLOTS + 1 + EXPECTED_ONSETS) + 300 + ANALYSIS_BUCKET_MS * 2,
   expectedOnsets: EXPECTED_ONSETS,
   guardSec: 0.15,
   hitPeriodSec: HIT_PERIOD_MS / 1000,

@@ -86,7 +86,7 @@ captureClockSec = (size − 44) / (channels × 4) / sampleRate
 
 | 案 | 却下理由 |
 |---|---|
-| **A: header をポーリングして (壁時計, header 長) をアンカーにする** | `sync_header` は 96,000 サンプル（48 kHz stereo で 1 s）ごと（`rust/crates/orbit-audio-native/src/capture.rs:38`, `:229-232`）。検出した瞬間の対は「その長さが書かれたのは 0〜1 s 前のどこか」という不定性を持ち、**全区間が同じ量（実行ごとに違う）だけずれる系統誤差**になる。2 s 窓に対し最大 50% |
+| **A: header をポーリングして (壁時計, header 長) をアンカーにする** | `sync_header` は 96,000 interleaved samples ごと（`rust/crates/orbit-audio-native/src/capture.rs:35`, 判定は `:238`）。48 kHz stereo なら約 1 s、mono なら約 2 s なので、検出した瞬間の対は「その長さが書かれたのは最大 1〜2 s 前」という不定性を持ち、**全区間が同じ量（実行ごとに違う）だけずれる系統誤差**になる |
 | **B: PR-V3 の `GetStatus.callback.count × last_frames`** | daemon には出るが **MCP の `get_engine_state` は `{running, liveCoding}` しか返さない**（`packages/vscode-extension/src/mcp-server.ts` の `EngineState`）。daemon → engine TS → 拡張 → MCP の **4 層配線**が要り、測定器 PR に PR-V3 依存の横棒が入る。`last_frames` は「直近 1 回」の値で厳密な時計でもない。さらに render 側の時計なので ring → drain → BufWriter の遅れを別途取る必要があり、案 C より情報が増えない |
 
 ### 3.2 残差誤差（一次ソース）
@@ -95,7 +95,7 @@ captureClockSec = (size − 44) / (channels × 4) / sampleRate
 |---|---|---|
 | ring → drain の poll | ≤ 2 ms | `capture.rs:27` `DRAIN_POLL_INTERVAL` |
 | RT callback 1 ブロック | 5〜11 ms（256〜512 f） | ring は callback 単位で push |
-| BufWriter のバッファ | 0〜21 ms（8 KiB = 1024 stereo f @48k） | `capture.rs:55` `BufWriter::new`（std 既定 8 KiB）。1 s ごとの `sync_header` の `flush()`（`:87`）で位相がリセット |
+| BufWriter のバッファ | 0〜21 ms（8 KiB = 1024 stereo f @48k） | `capture.rs:55` `BufWriter::new`（std 既定 8 KiB）。48 kHz stereo では約 1 s ごとの `sync_header` の `flush()`（`:87`）で位相がリセット |
 | **合計** | **遅れ L ∈ [約 5, 約 35] ms・一方向**（ファイルは render より遅れる） | |
 
 **区間ごとに独立**（各境界で読むので系統オフセットではなく境界ごとの ±15 ms 程度のジッタ）。
@@ -139,11 +139,11 @@ P_ms = (60000 / bpm) × beatsPerBar / slotsPerBar = (60000/120) × 4/4 = 500
 
 （既存 `HIT_PERIOD_MS = 500`（`tests/e2e/output-line-expectations.ts`）がこれ。上式を脇にコメントで置く）
 
-### 5.1 打楽器系（kick.wav）の測定範囲 — PR-O0 の `steadyRms` に置く（ハーネス API は増やさない）
+### 5.1 打楽器系（kick.wav）の測定範囲 — capture helper の `steadyRms` に置く
 
 ```
 search  = [from + g, to − g)                   // g = guard 0.15
-o₁      = min{ t ∈ onsets : t ≥ from + g }     // 無ければ fail
+o₁      = min{ t ∈ onsets : t − 0.02 ≥ from + g } // 直前バケットを含められなければ次へ
 measure = [o₁ − 0.02, o₁ − 0.02 + n·P)         // 0.02 = 1 バケット（アタックを含める）
 require measure ⊂ search                        // 短ければ fail「n 発に足りない」
 assert  |onsets ∩ measure| === n
@@ -151,9 +151,10 @@ assert  median(gaps in measure) ≈ P (±10%)      // テンポの取り違え�
 rms     = quadraticMean(windows ∩ measure)      // 幅が厳密に n·P なので位相非依存
 ```
 
-必要な録り幅: `durationMs ≥ 2g + P + n·P`。n=8 なら **4800 ms 以上**（現在の 4000 では足りない）。
-`STEADY_CAPTURE` を `{ captureMs: HIT_PERIOD_MS × (expectedOnsets + 1) + 300, expectedOnsets: 8 }`
-の形にする。**golden の値は変えない**（整数周期なら RMS = √(E_hit / P) で n に依らない）。
+必要な録り幅は、小節量子化 + 位相 + n·P + guard に加え、snap がアタック前の 1 バケットを
+要求する分と境界丸めの余裕を持たせる。現在は **6840 ms**（300 ms の guard 余裕 +
+20 ms の解析バケット 2 個）。**golden の値は変えない**（整数周期なら RMS = √(E_hit / P) で
+n に依らない）。
 
 ### 5.2 正弦系（CLAPTestSynth・E2E-1〜7）
 
@@ -206,15 +207,24 @@ rms     = quadraticMean(windows ∩ measure)      // 幅が厳密に n·P なの
 
 | export | 役割 |
 |---|---|
-| `readCaptureFormat(path)` | 44 byte header から `{sampleRate, channels}`（`capture.rs:21` の固定 44 が前提。最終 `analysis` と `stat.size` の整合を assert して前提を毎回検証する） |
+| `readCaptureFormat(path)` | 固定 44 byte IEEE float32 header を検証し、`{sampleRate, channels}` を返す |
 | `captureClockSec(path, fmt)` | `(stat.size − 44) / bytesPerFrame / sampleRate` |
 | `waitForSound(path, {floor, intervalMs, timeoutMs, label})` | §4 |
-| `captureWindowsFrom(analysis, segments, label)` | 既存 `CaptureWindows` インターフェース（`run-score.ts:99-115` からここへ移動）を返す。`rms / windows / onsets / channelRms` の計算は現行と同一 |
+| `captureWindowsFrom(analysis, segments, label)` | 20 ms バケット幅と A1/U1/U2/U3 を検証し、既存 `CaptureWindows` インターフェースを返す |
 | `quadraticMeanRms` | export（O0 の snap が使う） |
+| `steadyRms` | アタック前バケットを含められる最初の onset へ snap し、整数周期の RMS を返す |
 
 `segments` の型を `{fromSec, toSec, fromWall, toWall}` にする。壁時計は **U2 の整合検査にだけ**使う。
 
-### 7.1 既存 20 本を壊さない保証
+### 7.1 通常停止でも header finalize に依存しない
+
+client の通常停止は `daemon-client.ts` の `killChildGracefully` が送る SIGTERM だが、daemon には
+SIGTERM handler が無い（`orbit-audio-daemon/src/main.rs:21-28`）。そのため通常停止でも
+`CaptureWriter::Drop` → `finalize` は走らず、header は最後の定期同期時点のまま残る。
+`readCaptureForAnalysis` の data-size 零化は異常終了時だけの保険ではなく、物理 EOF と区間時計を
+一致させるための **load-bearing な解析前処理**である。
+
+### 7.2 既存 20 本を壊さない保証
 
 1. **意味の不変**: `captureSegment(name, durationMs, settleMs)` のシグネチャと、各テストの
    sleep / guard / 閾値 / 比の assert は変更なし。変わるのは (a) 初回区間が「音が出てから」開く
@@ -223,7 +233,7 @@ rms     = quadraticMean(windows ∩ measure)      // 幅が厳密に n·P なの
    バケット集合を返す性質）＋ hygiene 規則
 3. **実機**: `npm run test:e2e:gated` 全件（**main の担当**）
 
-### 7.2 main が事前に検査したリスク（実害なしを確認）
+### 7.3 main が事前に検査したリスク（実害なしを確認）
 
 - 🔴 **「初回区間が無音を期待するテスト」があると A1 が誤爆する** → **今日は存在しない**。
   `#618 E3`（`rest pattern must be silent`）は **3 番目**の区間。

@@ -8,11 +8,13 @@ import {
 
 const CAPTURE_HEADER_BYTES = 44
 const BYTES_PER_SAMPLE = 4
-const ANALYSIS_BUCKET_SEC = 0.02
+export const ANALYSIS_BUCKET_MS = 20
+const ANALYSIS_BUCKET_SEC = ANALYSIS_BUCKET_MS / 1000
 const DEFAULT_GUARD_SEC = 0.15
 const AUDIBLE_FLOOR_RMS = 0.01
 const CLOCK_WALL_TOLERANCE_SEC = 0.12
 const BUCKET_COUNT_TOLERANCE = 2
+const BUCKET_WIDTH_TOLERANCE_SEC = 1e-9
 
 export interface CaptureSegment {
   fromSec: number
@@ -61,9 +63,14 @@ export function prepareCapturePath(capturePath: string): void {
 /**
  * 解析が「header が申告する長さ」ではなく **実バイト全体** を見るようにする。
  *
- * capture writer は約 1 秒ごとにしか header を patch しない（capture.rs の sync_header）ので、
- * 申告サイズは実バイト数より最大 1 秒ぶん遅れる。区間はバイト長で刻んでいるため、
- * ここを揃えないと **末尾の区間が解析範囲の外に落ちる**（#739 実機で 6 件が誤検知した）。
+ * capture writer が header を patch する間隔は固定 96,000 interleaved samples
+ * （48 kHz stereo なら約 1 秒、mono なら約 2 秒）。区間はバイト長で刻んでいるため、
+ * 申告サイズを物理バイトへ揃えないと **末尾の区間が解析範囲の外に落ちる**
+ * （#739 実機で 6 件が誤検知した）。
+ *
+ * 🔴 これは単なる異常終了時の保険ではない。通常の client 停止も SIGTERM だが daemon には
+ * signal handler が無く、`CaptureWriter::Drop` → `finalize` は走らない。そのため capture を
+ * 区間解析する全経路でこの零化が必要になる（#448 の graceful-shutdown は別 issue）。
  */
 export function readCaptureForAnalysis(capturePath: string): Buffer {
   const capture = fs.readFileSync(capturePath)
@@ -146,11 +153,12 @@ export async function waitForSound(
   let peak = 0
   let maxWindowRms = 0
   let size = -1
+  let lastError: unknown
   while (Date.now() <= deadline) {
     try {
       size = fs.statSync(capturePath).size
       if (size >= CAPTURE_HEADER_BYTES) {
-        const analysis = analyzeWavBuffer(fs.readFileSync(capturePath), { windowMs: 20 })
+        const analysis = analyzeWavBuffer(readCaptureForAnalysis(capturePath), { windowMs: 20 })
         durationSec = analysis.durationSec
         peak = analysis.peak
         maxWindowRms = (analysis.windows ?? []).reduce(
@@ -159,14 +167,22 @@ export async function waitForSound(
         )
         if ((analysis.windows ?? []).some((window) => window.rms >= opts.floor)) return
       }
-    } catch {
+    } catch (error) {
+      lastError = error
       // The writer may not have created or completed the fixed header yet. Retry until timeout.
     }
     await delay(opts.intervalMs)
   }
   throw new Error(
     `${opts.label}: timed out waiting for capture sound ` +
-      JSON.stringify({ durationSec, peak, maxWindowRms, 'stat.size': size, capturePath }),
+      JSON.stringify({
+        durationSec,
+        peak,
+        maxWindowRms,
+        'stat.size': size,
+        capturePath,
+        lastError: lastError === undefined ? undefined : String(lastError),
+      }),
   )
 }
 
@@ -178,6 +194,61 @@ export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }
   )
 }
 
+export interface SteadyRmsRequirements {
+  readonly expectedOnsets: number
+  readonly guardSec: number
+  readonly hitPeriodSec: number
+  readonly audibleFloorRms: number
+}
+
+/** Snap a periodic capture to a whole number of hits, then return its RMS. */
+export function steadyRms(
+  result: Pick<CaptureWindows, 'windows' | 'onsets'>,
+  name: string,
+  requirements: SteadyRmsRequirements,
+): number {
+  const search = result.windows(name, requirements.guardSec)
+  const searchFrom = search[0]!.startSec
+  const searchTo = search[search.length - 1]!.startSec + ANALYSIS_BUCKET_SEC
+  const firstOnset = result.onsets(name).find((onset) => onset - ANALYSIS_BUCKET_SEC >= searchFrom)
+  if (firstOnset === undefined) {
+    throw new Error(`${name}: guarded search must contain an onset to snap the measurement window`)
+  }
+  const measureFrom = firstOnset - ANALYSIS_BUCKET_SEC
+  const measureTo = measureFrom + requirements.expectedOnsets * requirements.hitPeriodSec
+  if (measureFrom < searchFrom || measureTo > searchTo) {
+    throw new Error(
+      `${name}: guarded search is too short for ${requirements.expectedOnsets} hits; ` +
+        `search=[${searchFrom}, ${searchTo}) measure=[${measureFrom}, ${measureTo})`,
+    )
+  }
+  const measuredOnsets = result
+    .onsets(name)
+    .filter((onset) => onset >= measureFrom && onset < measureTo)
+  if (measuredOnsets.length !== requirements.expectedOnsets) {
+    throw new Error(
+      `${name}: snapped range must contain exactly ${requirements.expectedOnsets} onsets; ` +
+        `got ${measuredOnsets.length}`,
+    )
+  }
+  const gaps = measuredOnsets.slice(1).map((onset, index) => onset - measuredOnsets[index]!)
+  const sortedGaps = [...gaps].sort((a, b) => a - b)
+  const medianGap = sortedGaps[Math.floor(sortedGaps.length / 2)]!
+  if (Math.abs(medianGap - requirements.hitPeriodSec) / requirements.hitPeriodSec > 0.1) {
+    throw new Error(
+      `${name}: median onset gap ${medianGap}s must match ${requirements.hitPeriodSec}s`,
+    )
+  }
+  const measuredWindows = search.filter(
+    (window) => window.startSec >= measureFrom && window.startSec < measureTo,
+  )
+  const value = quadraticMeanRms(measuredWindows)
+  if (value <= requirements.audibleFloorRms) {
+    throw new Error(`${name} must be audible; rms=${value}`)
+  }
+  return value
+}
+
 /** Map capture-clock segments to analysis buckets and enforce A1/U1/U2/U3. */
 export function captureWindowsFrom(
   analysis: WavAnalysis,
@@ -186,6 +257,15 @@ export function captureWindowsFrom(
   capturePath?: string,
 ): CaptureWindows {
   const analysisWindows = analysis.windows ?? []
+  // 0/1 bucket では幅を実測できないため検証を飛ばす。区間側の U1 は引き続き適用する。
+  if (analysisWindows.length >= 2) {
+    const actualBucketSec = analysisWindows[1]!.startSec - analysisWindows[0]!.startSec
+    if (Math.abs(actualBucketSec - ANALYSIS_BUCKET_SEC) > BUCKET_WIDTH_TOLERANCE_SEC) {
+      throw new Error(
+        `${label}: analysis bucket width must be ${ANALYSIS_BUCKET_SEC}s, got ${actualBucketSec}s`,
+      )
+    }
+  }
   const soundStartSec =
     analysisWindows.find((window) => window.rms >= AUDIBLE_FLOOR_RMS)?.startSec ?? null
   const entries = Object.entries(segments)
@@ -206,6 +286,7 @@ export function captureWindowsFrom(
     new Error(
       `${label} ${id}: ${detail} ` +
         JSON.stringify({
+          invariant: id,
           name,
           fromSec: segment.fromSec,
           toSec: segment.toSec,
@@ -221,11 +302,16 @@ export function captureWindowsFrom(
     return segment
   }
 
-  const selectedWindows = (name: string, guardSec: number) => {
+  const selectAndValidateWindows = <T extends { readonly startSec: number; readonly rms: number }>(
+    windows: readonly T[],
+    name: string,
+    guardSec: number,
+    source = 'analysis',
+  ): readonly T[] => {
     const segment = requireSegment(name)
     const fromSec = segment.fromSec + guardSec
     const toSec = segment.toSec - guardSec
-    const selected = analysisWindows.filter(
+    const selected = windows.filter(
       (window) => window.startSec >= fromSec && window.startSec < toSec,
     )
     const expected = Math.round(
@@ -237,7 +323,7 @@ export function captureWindowsFrom(
         name,
         segment,
         selected.length,
-        `expected ${expected}±${BUCKET_COUNT_TOLERANCE} buckets for guardSec=${guardSec}`,
+        `${source} expected ${expected}±${BUCKET_COUNT_TOLERANCE} buckets for guardSec=${guardSec}`,
       )
     }
     if (selected.length === 0) {
@@ -246,11 +332,14 @@ export function captureWindowsFrom(
         name,
         segment,
         selected.length,
-        `segment contains no buckets for guardSec=${guardSec}`,
+        `${source} contains no buckets for guardSec=${guardSec}`,
       )
     }
     return selected
   }
+
+  const selectedWindows = (name: string, guardSec: number) =>
+    selectAndValidateWindows(analysisWindows, name, guardSec)
 
   let previous: [string, CaptureSegment] | undefined
   entries.forEach(([name, segment], index) => {
@@ -299,7 +388,8 @@ export function captureWindowsFrom(
           `capture=${captureDurationSec}s wall=${wallDurationSec}s`,
       )
     }
-    selectedWindows(name, DEFAULT_GUARD_SEC)
+    // 構築時は最も広い guard=0 だけを検証する。狭める guard は各呼び出し時に U1 で検証する。
+    selectedWindows(name, 0)
     previous = [name, segment]
   })
 
@@ -320,21 +410,7 @@ export function captureWindowsFrom(
             `(analysis.format.channels=${analysis.format.channels})`,
         )
       }
-      const segment = requireSegment(name)
-      const fromSec = segment.fromSec + guardSec
-      const toSec = segment.toSec - guardSec
-      const selected = perChannel.filter(
-        (window) => window.startSec >= fromSec && window.startSec < toSec,
-      )
-      if (selected.length === 0) {
-        throw invariantError(
-          'U1',
-          name,
-          segment,
-          selected.length,
-          `channel ${channel} contains no buckets for guardSec=${guardSec}`,
-        )
-      }
+      const selected = selectAndValidateWindows(perChannel, name, guardSec, `channel ${channel}`)
       return quadraticMeanRms(selected)
     },
   }

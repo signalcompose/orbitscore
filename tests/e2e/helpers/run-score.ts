@@ -134,6 +134,9 @@ export async function waitForEngineState(
  * capture 付きで engine を (再) 起動する。既に別テストがエンジンを起動していると
  * `capture_wav` は spawn 専用オプションなので弾かれる — capture を要求する時は必ず
  * 一度落としてから起動する（#643 の教訓）。
+ *
+ * 🔴 client の停止は SIGTERM だが daemon に signal handler が無いため、通常停止でも
+ * `CaptureWriter::Drop` → finalize は走らない。解析時の `readCaptureForAnalysis` は必須である。
  */
 export async function startEngineForRun(
   client: McpClient,
