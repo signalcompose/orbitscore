@@ -366,13 +366,20 @@ Features for grouping sequences into buses. For a full walkthrough, see [sum and
 | `global.aux(name)` | Declares a return bus (idempotent) | `global.aux("rev")` |
 | `sum("name")` / `aux("name")` | A reference to an already-declared bus (`.effect()` / `.ui()` can be chained) | `sum("drum").effect("GlueComp")` |
 | `seq.output(name)` | Routes the sequence's output to a group bus (audio / instrument) | `kick.output("drum")` |
-| `seq.output(n)` | Numbered render bus (1–16, score mode) | `kick.output(1)` |
+| `seq.output(n)` | Numbered render bus (1–16, score mode) 🔴 **retracted in the specification** | `kick.output(1)` |
 | `seq.send(name, amount)` | Sets the amount sent to a return bus (fixed at post-fader; multiple sends allowed) | `kick.send("rev", 0.3)` |
 
 - `sum` is a single level only (no nesting).
 - `output(name)` / `send(name, amount)` work on **audio and instrument** sequences (not with `midi()`).
 - The second argument to `send()` is a linear gain (roughly 0.0–1.0, with no hard clamp on the upper end).
 - `global.linkAudio()` cannot be combined with mixer features (sum/aux/plugin effects in general).
+
+::: warning Two rows in this table changed in the specification (the implementation has not followed yet)
+The 2026-09-03 revision (#611 / #649) decided the following two points. **Neither is implemented yet**, so what you write today is exactly what the table above says.
+
+- **`seq.output(n)` (the numbered render bus) has been retracted** (core spec MX.2.3), because it does not fit the ruling that every destination is a *declared node*. Writing stems will instead take a node declared with `mix.render(...)` as the destination. Today's implementation keeps accepting `kick.output(1)`.
+- **The unit of the second argument to `send()` becomes dB** (core spec MX.3). `send("rev", 0.3)` will be re-read from "linear 0.3" to "**+0.3 dB**", **with no error — only the sound changes**. See [sum and aux/send](../mixing/routing.md) for details.
+:::
 
 ---
 

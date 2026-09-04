@@ -1,12 +1,12 @@
 ---
 title: "SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: b22698a
+verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）の測定に関する発見まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain
 
@@ -196,6 +196,15 @@ TS が `"drum" → "sum-bus-0"` と束縛し、daemon へは常に `sum-bus-0` �
 次に、sequence 側から bus へ「行き先を指す」入口を読みます。`Sequence.output()` は引数が
 sum 名なのか、数値の render bus なのか、LinkAudio channel 名なのかで **3 分岐** します。
 解決順は仕様（#598 §4.4）で固定されていて、コード上もその順で並んでいます。
+
+> ⚠️ **この 3 分岐のうち 2 つは、2026-09-03 の spec 改訂で行き先が変わりました**（#611 / #649）。
+> **数値 render bus の分岐（`kick.output(1)`）は撤回**されました（core spec MX.2.3）— 宛先はすべて
+> 「宣言されたノード」であるという裁定と整合しないためで、stem への書き出しは `mix.render(...)` の
+> ノードを宛先に取る形へ移ります。**LinkAudio channel の分岐は解決順の最後**へ後退し、その手前に
+> 予約語 `"master"`・宣言済み sum / aux 名・`"3,4"` 形式の物理アウト対が入ります（core spec MX.2.1）。
+> 🔴 **以下で読むコードはどちらの改訂にも追従していません** — `kick.output(1)` は今日も受理されて
+> `_renderBus` に記録され、`kick.output("master")` は今日も LinkAudio channel 名として記録されます。
+> 追従は #598 の PR-R 系（撤回）と #611 の PR-O4（解決順）です。
 
 ```typescript
 // packages/engine/src/core/sequence.ts:350-375
@@ -740,6 +749,12 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
   )
 ```
 
+ただしこの E2E-1 の測定そのものに疑いが向けられています。#611 PR-O0 が出口の golden を録る過程で、`captureSegment` を `run_selection` の直後に取ると窓の大半が発音前の無音になる、という問題が見つかりました。`LOOP()` は既定で次の小節境界まで待ってから鳴り始めるからです。窓に入るヒット数が実行ごとに変われば、RMS は音量ではなくヒット数を測ってしまいます（[IV-3 の「区間 RMS が音量を意味するのは窓に入るヒット数を固定したときだけ」](/editor/mcp-and-gated-e2e#区間-rms-が音量を意味するのは窓に入るヒット数を固定したときだけ)）。
+
+E2E-1 の `unity` 区間は settle 400 ms で取るので、まさにこの形にあたります。2026-09-04 の 3 回の実測でも、`half` はほとんど動かない（0.08576 / 0.08579）のに `unity` は 11% 動き、1 回は 0 でした。不安定なのは `unity` 側です。
+
+したがって「今日の half/unity 比」を golden として持つことはできません。`tests/e2e/output-line-expectations.ts:166-182` の `globalGainInstrument` は PR-O2 後の受け入れ値（$10^{-6/20}$）だけを置き、**E2E-1 を green にする前に、まず E2E-1 が定常状態を見ているかを確かめること**という条件を添えています。
+
 E2E-4 は sum + aux の経路です。dry（bus 無し）と、`output("sum643")` + `send("aux643", 0.5)` を
 持つ instrument を切り替え、比が 1.35〜1.65（理論値 1.5）に入ることを見ます（`1585-1592`）。
 DSL 部分を引用します。
@@ -922,9 +937,10 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - `rust/crates/orbit-audio-native/src/output.rs:1078-1094` — bus 無し経路 `render_engine_with_source_outputs`
 - `rust/crates/orbit-audio-native/src/output.rs:2017-2060` — unit test `global_gain_scales_instrument_contribution`
 - `rust/crates/orbit-audio-core/src/scheduler.rs:375-460` — `render_multi_feeds`（feed 加算と gain ramp）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:503-603` — `captureInstrumentScenario` / `rms()`
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1432-1466` — E2E-1（`global.gain(-6)`）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1553-1595` — E2E-4（`output(sum)` + `send(aux, 0.5)`）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:500-600` — `captureInstrumentScenario` / `rms()`
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1429-1463` — E2E-1（`global.gain(-6)`）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1550-1592` — E2E-4（`output(sum)` + `send(aux, 0.5)`）
+- `tests/e2e/output-line-expectations.ts:166-182` — `globalGainInstrument`（E2E-1 の測定への疑いと PR-O2 の受け入れ値・#611 PR-O0）
 - Issue [#453](https://github.com/signalcompose/orbitscore/issues/453) / [#459](https://github.com/signalcompose/orbitscore/issues/459) — ミキサー DSL（sum / aux / send）
 - Issue [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#648](https://github.com/signalcompose/orbitscore/pull/648) — ミキサーの土台と instrument source 化・マスターフェーダー配線
 - Issue [#649](https://github.com/signalcompose/orbitscore/issues/649) — オーディオライン設計

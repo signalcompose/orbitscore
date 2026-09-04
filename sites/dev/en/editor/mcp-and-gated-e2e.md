@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: affdf69
-verified-at: "2026-09-03"
+verified-against: c2010db
+verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 and to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -861,6 +861,19 @@ All five, though, only scan the **source text** of the gated spec, so what they 
 
 Incidentally, the "fixed 500-line window" in the comment is the number from before `#567` widened it to 1000 lines; the window is still finite, so the rule itself stands.
 
+### The harness spec catches up with the implementation (2026-09-04, #724)
+
+The shape we have been reading was, for a long time, not the shape written in the normative document. `docs/testing/E2E_HARNESS_SPEC.md` still carried its 2026-07-28 wording — "the current gated E2E is a wiring smoke, an interim measure until this spec's coverage harness is finished" — which no longer matched a real-device spec that already had 20 `it(` blocks and numeric capture assertions. #724 (#668 PR-E0) revised that text and swapped the roles of the two layers.
+
+| Layer | Old (2026-07-28) | Revised (2026-09-04, #724) |
+|---|---|---|
+| Offline deterministic layer | **Coverage** of DSL semantics | **Pinning regressions** (same `.orbs` → bit-identical PCM) |
+| Real-device layer | Wiring checks (**representative syntax only**) | **Coverage of the vocabulary and the syntax surface** |
+
+The reason for the revision is what the previous section already showed. The ratchet that counts coverage scans the **source of the real-device spec** through `readGatedSources()`, so the pressure for coverage was landing on the real-device layer all along. The spec, as #724 puts it, had simply been left older than the implementation.
+
+The same revision pins the observation kinds (`ObservationKind`) into the spec, with the enum in `tests/e2e/dsl-coverage-ledger.ts` as the normative source, and rewrites the treatment of `smoke` (an evaluation that merely went through) from "warn during the audit" to a **count ratchet** (`E2E_HARNESS_SPEC.md` §4.1). The reasoning — a warning may go unread, but a red test stops you — is exactly the thinking behind the ratchet in this section.
+
 ---
 
 ## The live playhead — from `[STEP]` lines to decorations
@@ -1129,7 +1142,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - The docs-serving part of `mcp-server.ts` (`/orbitscore/dev/`, `isDocsDistStale`) and `get_dev_doc` / `search_dev_docs` — the route by which the learning site enters an agent's context
 - The `EvalMarkBridge` timeout (120 seconds) and its coordination with the `#608` stall reporter — how a blocked queue gets its "blocking line" named
 - Nested resolution in `findPlayArgRangeForPath()` (the descend condition for `"1.0"` and the handling of group runs), and the seam for the planned `seq.color()` in `#391` (`PlayheadColorConfig.seqColors`)
-- How the two-layer structure of `docs/testing/E2E_HARNESS_SPEC.md` (offline deterministic layer + real-device wiring layer) plans to replace the gated spec's "wiring smoke"
+- What happens to the hand-written rows of ledger 2 (implementation ↔ test) in `tests/e2e/dsl-coverage-ledger.ts`, and to the ratchet, once #671 stage 3 turns that ledger into something a generator derives (`E2E_HARNESS_SPEC.md` §2.1)
 - `estimateFundamentalHz()` in `analyze_audio` — how the plugin-state restore tests assert "the same measured pitch"
 - The safety envelope of `killOrbitStudio()` / `replaceGatedPluginFixtureSymlink()` (allowlists) — the boundary that keeps the harness from damaging the user's environment
 - Improving the structure that prevents gated tests from running one at a time (WORK_LOG 6.409)
@@ -1175,7 +1188,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixtures
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — building OrbitStudio.app
-- `docs/testing/E2E_HARNESS_SPEC.md` — DSL coverage E2E harness spec (#543)
+- `docs/testing/E2E_HARNESS_SPEC.md` — DSL coverage E2E harness spec (#543; §2.1 / §3 / §4.1 / §6.3 revised on 2026-09-04 by #724 = #668 PR-E0)
 - `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md` §3 — original design of the Agent Bridge
 - `docs/archive/WORK_LOG_2026-08.md` 6.348 / 6.409 / 6.415 / 6.416 / 6.417 / 6.418 / 6.421 — MCP tool additions, real-device verification, stale guard, mechanisation, #654
 - `CLAUDE.md` "E2E が最重要", "これらは仕組みで強制されている", "マージ前ゲート"
