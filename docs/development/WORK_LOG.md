@@ -17,6 +17,74 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(studio): declare untrusted-workspace capability so a loose-file launch activates (Sep 4, 2026)
+
+**Issue**: #385（`must-fix`）/ **ブランチ**: `385-untrusted-workspace-capability` / **PR-S-T1**
+
+フォルダ無しの loose-file 起動（`orbs file.orbs` — ライブコーディングの典型動線）は**未信頼の
+ad-hoc workspace** を作る。`capabilities.untrustedWorkspaces` を宣言していない拡張はそこで
+**制限付き**になり **activate されない**。利用者には「何も起きない」ようにしか見えない。
+🔴 **実害は拒否ではなく沈黙である。**
+
+#### 🔴 `supported: true` — ガードは置かない（owner 裁定 + 2026-09-04 の再確認）
+
+裁定（`docs/design/656-release-design.md` §16 (1)）は **`true`**、理由は「一般的な DAW の挙動に
+併せて」。DAW はプロジェクトを開く時に信頼を問わずプラグインを読む。`"limited"` は**撤回済み**、
+`false` は今日の挙動を宣言するだけで症状が直らない。
+
+⚠️ **設計 §3.3 は撤回された `limited` 前提のまま `startEngine()` にガードを置く形で残っており、
+plan の PR 名も "refuse loudly"（大声で断る）のままだった。** そのまま実装すると
+**#385 の症状を大声にしただけ**になる。裁定表が「B ならガードが不要になる」と明記しているので、
+**ガードは置かない**。
+
+🔴 **さらに owner 確認（2026-09-04）: 確認ダイアログも足さない。**
+
+> 一般的な DAW と同じ形にしないと、ライブコーディング中に毎回読み込みが走る時に、
+> 何かが止まったり確認が入ったりすると、**とてもライブコーディングのライブ感が失われます**。
+> 音楽制作として使っている時も、**通常の DAW と違うワークフローが顔を出してしまう**。
+
+一度「拒否しないが黙らない」として `instrument(path)` に確認を出す案を出したが、**否定された**。
+ライブコーディングは評価を繰り返す行為なので、1 回の確認が「毎回の中断」になる。
+**このリポジトリの「沈黙は危険」という規律は失敗が見えないことに対するもので、
+成功時の告知にまで拡張してはいけない。** 成功時は既に
+`[orbit-effect-rack] child spawned …`（`outproc_effect.rs:671`）、失敗時は
+`OUTPROC_ATTACH_FAILED`（`session.rs:2523`）が `get_log` に出ており、**足すものは無かった**。
+
+#### `restrictedConfigurations` は 2 つだけ
+
+基準は「**workspace が値を決めると別の実行ファイルが動く**」もの。`orbitscore.scsynthPath` は
+実行ファイルのパスそのもの、`orbitscore.engine` は `sc` に倒すと `scsynthPath` を有効化する。
+これは `supported` の値と独立に効く保護で、**ワークフローには一切現れない**。
+
+🔴 `orbitscore.audioDevice` は**入れない** — デバイス名は実行対象を選ばないうえ、
+**gated E2E のハーネスが workspace 設定に書く**ので入れると壊れる（設計 §3.2）。
+
+#### 宣言そのものが成果物なので、それを検査するテストを付けた
+
+`tests/vscode-extension/untrusted-workspace-capability.spec.ts`（5 本）。
+**4 種類の変異がすべて別々のテストで捕まる**ことを確認した（実出力）:
+
+```
+変異A supported=false        → × supports untrusted workspaces …
+変異B audioDevice を restrict → × restricts exactly … / × does not restrict settings that name a device …
+変異C キーを綴り間違い        → × restricts exactly … / × only restricts settings this extension actually contributes
+変異D description から根拠削除 → × explains why evaluation is allowed …
+restore 後                    → cmp 一致
+```
+
+#### 検証
+
+`npm test` **2201 passed** / 48 skipped ・ `typecheck:e2e` 0 ・ `lint` 0 ・
+`check-citations.mjs` **922 verified / 0 failed**（`package.json` に 11 行足したので再アンカー）。
+
+**実機 gated は対象外**。この PR が変えるのは**マニフェストの宣言**で、gated harness は
+毎回新しい `--user-data-dir` を作り `--extensionDevelopmentPath` で起動するため、
+**untrusted workspace の経路を今の harness では通らない**（設計 §3.5 が「trust の状態を
+誰も固定していない」と書いているとおり）。層 2（product.json override・PR-S-T2）と
+インストール済み拡張での E2E（§12・E2E-D1）が要る。
+
+---
+
 ### docs(design): 詳細設計 11 本と実装プラン 2026-09 を起草 (Sep 3, 2026)
 
 **Issue**: #611 / #694 / #598 / #672 / #634 / #428 / #610 / #662 / #656 / #668 / #679（設計のみ・実装なし）/ **ブランチ**: `claude/elegant-pasteur-l9gdrl`

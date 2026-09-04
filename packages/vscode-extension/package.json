@@ -31,6 +31,16 @@
   "engines": {
     "vscode": "^1.99.0"
   },
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "OrbitScore starts a native audio engine and loads the audio plugins named by the score, the same way a DAW opens a project. Evaluation works in untrusted workspaces; only the settings that choose which executable runs are restricted.",
+      "restrictedConfigurations": [
+        "orbitscore.scsynthPath",
+        "orbitscore.engine"
+      ]
+    }
+  },
   "main": "./dist/extension.js",
   "activationEvents": [
     "onStartupFinished",
