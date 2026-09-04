@@ -368,7 +368,7 @@ daemon を `<extension>/engine/bin/<platform>/` に同梱しており、これ�
 走査から外すディレクトリがあり、それは後述します（#713）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:146-160
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:148-162
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -414,7 +414,7 @@ mtime 比較は「rebuild が no-op か」より弱い判定ですが、テス�
 そこで走査から `tests` / `benches` / `examples` の 3 ディレクトリを外しました。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:141-145
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:143-147
         // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
         // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
