@@ -17,6 +17,40 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(site): follow PR #727's output-line spec revision into the user site and SC-2 (Sep 4, 2026)
+
+**追従元**: PR [#727](https://github.com/signalcompose/orbitscore/pull/727)（`611-output-line-spec` → main・マージコミット `d8191d1`）/ **ブランチ**: `claude/docs-sync-pr727`
+
+#727 は spec だけを動かした docs-only PR で、`sites/dev/signal-chain/` の 2 章（日英）は
+同じ PR の中で追従済みだった。**追従が漏れていたのは「ユーザーが書く語」の側**である。
+
+#### 直したもの
+
+| 場所 | 追従した規範 |
+|---|---|
+| `sites/user/mixing/routing.md`（日英） | MX.3: `send()` の第 2 引数が **dB になる**（`0.3` → +0.3 dB のサイレント変更）/ MX.5 から「post-fader 固定」が**削除**され、タップ位置は「書いた位置」になった |
+| `sites/user/reference/methods.md`（日英） | 同上 + MX.2.3: **数値レンダーバス `seq.output(n)` は撤回**された |
+| `sites/dev/signal-chain/mixer-audio-line.md`（日英） | 「`seq.output()` の 3 分岐」節に MX.2.3（数値分岐の撤回）と MX.2.1（LinkAudio は解決順の**最後**）の注記 |
+| `sites/dev/decisions/adr-002-dsl-v3-pivot.md`（日英） | core spec への行番号引用 2 件を再アンカー（`1933-1990` → `2112-2164`・`467-601` → `496-631`） |
+
+🔴 **実装は 1 行も変わっていない**ので、user site の表と本文は**今日の書き方のまま**にして、
+「仕様は変わったが未実装」という注記を足す形にした。表を到達点で書き換えると、
+読者が今日書けないコードを読むことになる。
+
+🔴 **`send` の単位変更はエラーにならず音だけが変わる**（線形 0.3 → +0.3 dB ≒ 素通し）。
+user site の両言語に `danger` ブロックで明示した。
+
+#### 再アンカーについての但し書き
+
+adr-002 の 2 件は **#727 以前から既にずれていた**（§13 Versioning は #727 前も 1983 行目で、
+引用は 1933-1990 だった）。#727 が core spec を +63 行伸ばしてずれが広がったので、
+この機会に両方を現在の節境界へ合わせた。3 件目の `336-432`（§5 = 315-468）は
+節の内側の抜粋なので触っていない。
+
+#### 検証
+
+`npm ci` / `npm run docs:build -w @orbitscore/user-site` / `npm run docs:build -w @orbitscore/dev-site` /
+`npm run docs:check` の 4 本すべて green（citation 922 件検証・0 failed）。
 ### fix(engine): contain the two playback-path throws (#645 PR-D0) (Sep 4, 2026)
 
 **Issue**: #645 / **ブランチ**: `645-contain-playback-throws` / **PR-D0**
