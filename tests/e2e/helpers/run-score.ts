@@ -71,7 +71,7 @@ export interface ScoreRunContext {
   captureSegment(name: string, durationMs?: number, settleMs?: number): Promise<void>
 }
 
-async /**
+/**
  * 窓ごとの RMS を二乗平均して 1 つの値にする。
  *
  * 🔴 **`captureInstrumentScenario`（gated spec）と同一の計算**であること。ここがずれると、
@@ -81,7 +81,7 @@ function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): num
   return Math.sqrt(windows.reduce((sum, w) => sum + w.rms * w.rms, 0) / windows.length)
 }
 
-function waitForEngineState(
+async function waitForEngineState(
   client: McpClient,
   running: boolean,
   timeoutMs: number,

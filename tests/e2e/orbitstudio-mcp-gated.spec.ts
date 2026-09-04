@@ -54,7 +54,7 @@ import {
 import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
 
 import { countErrors, countLogMarker } from './helpers/engine-log'
-import { captureWavPath } from './helpers/gated-session'
+import { captureWavPath, type GatedCatalog } from './helpers/gated-session'
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
 import { rackChildPidsFromLog } from './helpers/rack-child-pid'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
@@ -400,7 +400,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       clapEffectName: catalogClapEffectName,
       vst3SynthName: catalogVst3SynthName,
       vst3EffectName: catalogVst3EffectName,
-    }
+      // 🔴 `helpers/gated-session.ts` の `GatedCatalog` と**機械で結ぶ**（Fable 監査 2026-09-04）。
+      // あちらはこの closure を export できないので形を手写ししている。`satisfies` が無いと、
+      // 片方に field を足した時に**黙ってずれる**。
+    } satisfies GatedCatalog
   }
 
   const waitForEngine = (running: boolean, timeoutMs: number, label: string) =>

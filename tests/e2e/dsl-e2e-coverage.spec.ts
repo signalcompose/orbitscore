@@ -179,6 +179,9 @@ describe('DSL coverage of the real-device E2E suite', () => {
   })
 
   it('A-3 keeps every tokenizer keyword represented by the syntax surface', () => {
+    // 🔴 空集合に対しては何を照合しても通る。`KEYWORDS` の import が壊れたら
+    // **この検査ごと真空で緑になる**ので、まず中身があることを確かめる。
+    expect(KEYWORDS.size, 'KEYWORDS is empty — A-3 would pass vacuously').toBeGreaterThan(0)
     const syntaxIds = new Set<string>(DSL_SYNTAX_SURFACE)
     const unmappedKeywords = [...KEYWORDS].filter(
       (keyword) => KEYWORD_SYNTAX_IDS[keyword] === undefined,
@@ -212,6 +215,28 @@ describe('DSL coverage of the real-device E2E suite', () => {
       'A smoke-only ledger entry was added. Use a semantic observation, or reduce the baseline; ' +
         'never increase it.',
     ).toBeLessThanOrEqual(SMOKE_OBSERVATION_BASELINE)
+  })
+
+  it('A-10 keeps the syntax and smoke baselines honest', () => {
+    // 🔴 設計 §3.3 は A-10 の置き場を「両方」としているが、§20 は A-10 を PR-E5
+    // （`reference-coverage.spec.ts` のみ）に割り当てている。**構文 / smoke の
+    // baseline はその分割の隙間に落ちる**ので、ここで塞ぐ（Fable 監査 2026-09-04）。
+    const ledgerSurfaces = new Set(DSL_COVERAGE_LEDGER.map(({ surface }) => surface))
+    const staleSyntax = SYNTAX_UNCOVERED_BASELINE.filter((id) => ledgerSurfaces.has(id))
+    expect(
+      staleSyntax,
+      'A syntax surface is in the ledger but still listed as uncovered. Remove it from ' +
+        'SYNTAX_UNCOVERED_BASELINE — a stale entry lets the next addition slip through.',
+    ).toEqual([])
+
+    const smokeCount = DSL_COVERAGE_LEDGER.filter(
+      ({ observation }) => observation === 'smoke',
+    ).length
+    expect(
+      SMOKE_OBSERVATION_BASELINE,
+      'SMOKE_OBSERVATION_BASELINE is above the actual smoke count. Lower it — a slack ' +
+        'baseline silently permits new smoke-only entries.',
+    ).toBeLessThanOrEqual(smokeCount === 0 ? 0 : smokeCount)
   })
 
   it('keeps the baseline honest — no entry that is already covered', () => {

@@ -1467,3 +1467,58 @@ per-channel を入れた動機（「mono に潰すと分離が測れない」）
 
 **最初の消費者が付く時に寄せる**のが安全（今は `run-score` にも `startR28Engine` にも
 新しい消費者がいないので、形が確定していない）。
+
+### 束の締め: Fable 監査の結果
+
+🔴 **監査が私（main）の壊したビルドを捕まえた。**
+
+#### 0. `/simplify` の適用でビルドを壊していた（main の誤り）
+
+`quadraticMeanRms` を `function waitForEngineState(` の前に挿入したつもりが、実際のコードは
+**`async function waitForEngineState(`** で、**`async` と `function` の間**に入っていた:
+
+```ts
+async /** ... */
+function quadraticMeanRms(...) { ... }
+
+function waitForEngineState(...) { await ... }   // ← async が剥がれた
+```
+
+`tsc --noEmit -p tsconfig.tests.json` が **TS2304 / TS2355 / TS1308** で落ちる状態。
+
+🔴 **なぜ気づかなかったか、が本質**:
+
+| | |
+|---|---|
+| `npm test` が緑だった | **`run-score.ts` をどの spec も import していない**（gated spec が取るのは `captureWavPath` だけ） |
+| 私が回した `tsc -p tsconfig.json` が 0 だった | 🔴 **こちらは `tests/` を見ない**。**正本のゲートは `npm run typecheck:e2e`（`tsconfig.tests.json`）** |
+
+**消費者のいないコードは、テストでもデフォルトの型チェックでも守られない。**
+以後 `tests/` を触ったら **`npm run typecheck:e2e`** を回す。
+
+#### 1〜3. 適用した指摘
+
+| 指摘 | 対処 |
+|---|---|
+| 🔴 **hygiene が `runScore(..., { capture: true })` を capture 経路と認識しない**（設計 §17 F-1 の配線漏れ） | 検出条件に `capture:\s*true` を追加。**入れ忘れると新シナリオが何も測らなくても通る** |
+| **A-3 は `KEYWORDS` が空なら真空で通る** | `expect(KEYWORDS.size).toBeGreaterThan(0)` を先頭に |
+| **構文 / smoke の baseline の誠実さ検査が PR 分割の隙間に落ちている**（§3.3 は「両方」、§20 は A-10 を PR-E5 = `reference-coverage.spec.ts` のみに割当） | **A-10 をこの束に追加**（台帳に載った構文が baseline に残っていたら red / smoke baseline が実数より緩ければ red） |
+| **`GatedCatalog` が手写しで、片方に field を足すと黙ってずれる** | gated spec の return に **`satisfies GatedCatalog`** を付けて機械で結んだ |
+
+**`satisfies` が効くことを実行で確認した**: `GatedCatalog` に field を 1 つ足すと
+`orbitstudio-mcp-gated.spec.ts(406,7): error TS1360` で落ち、復元すると exit 0 に戻る。
+
+#### 4. 監査が「指摘無し」とした項目（一次ソースで確認済み）
+
+- **`analyzeWavBuffer` の既定戻り値**: main 版と束版を cjs 化し、合成 WAV 3 種 × opts 3 種の
+  **9 通りすべてで `JSON.stringify` が byte 一致**
+- **`gatedItTitles()` の正規表現**: gated spec の 20 箇所すべてを回収。括弧入りの題名も正しく閉じる
+- **`z.boolean().optional()`**: `required` に入らないので、`per_channel` を送らない既存クライアントは
+  既定経路。戻り値も素通しで `channelWindows` は削られない
+
+#### 5. 🔴 残る不在: PR-E0（spec 改訂）が束にも main にも無い
+
+`docs/testing/E2E_HARNESS_SPEC.md` の main 最終更新は 2026-07-28 で、`ObservationKind` /
+smoke 件数ラチェット / 「§3 網羅は実機層で取る」の改訂が入っていない。設計は
+**「実装より先・運用規則 6」**と明記している。**いま台帳の `ObservationKind` は
+正本より先にコードが確定した状態**。→ 束 PR の本文に明記し、owner 判断を仰ぐ。
