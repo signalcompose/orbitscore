@@ -1,12 +1,12 @@
 ---
 title: "IV-1. VS Code Extension Architecture"
 chapter-id: "IV-1"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 4f2ebd5
+verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730), the `capabilities.untrustedWorkspaces` declaration) on 2026-09-04. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-1. VS Code Extension Architecture
 
@@ -18,17 +18,18 @@ How does OrbitScore's VS Code extension (`packages/vscode-extension`, package ve
 
 1. [Extension Host Basics](#extension-host-basics)
 2. [activation and activationEvents](#activation-and-activationevents)
-3. [Module-Level State](#module-level-state)
-4. [The Big Picture of the `activate()` Function](#the-big-picture-of-the-activate-function)
-5. [Status Bar: Two Indicators and the Engine Kind](#status-bar-two-indicators-and-the-engine-kind)
-6. [Command Registration](#command-registration)
-7. [IntelliSense and Diagnostics Registration](#intellisense-and-diagnostics-registration)
-8. [Binary Resolution: scsynth and the Daemon](#binary-resolution-scsynth-and-the-daemon)
-9. [Spawning the Engine Process](#spawning-the-engine-process)
-10. [Communication Protocol with the Engine](#communication-protocol-with-the-engine)
-11. [Stopping the Engine and the Lifecycle Identity Guard](#stopping-the-engine-and-the-lifecycle-identity-guard)
-12. [Architecture Overview Diagram](#architecture-overview-diagram)
-13. [Drift as of 2026-09](#drift-as-of-2026-09)
+3. [Workspace Trust and untrustedWorkspaces](#workspace-trust-and-untrustedworkspaces)
+4. [Module-Level State](#module-level-state)
+5. [The Big Picture of the `activate()` Function](#the-big-picture-of-the-activate-function)
+6. [Status Bar: Two Indicators and the Engine Kind](#status-bar-two-indicators-and-the-engine-kind)
+7. [Command Registration](#command-registration)
+8. [IntelliSense and Diagnostics Registration](#intellisense-and-diagnostics-registration)
+9. [Binary Resolution: scsynth and the Daemon](#binary-resolution-scsynth-and-the-daemon)
+10. [Spawning the Engine Process](#spawning-the-engine-process)
+11. [Communication Protocol with the Engine](#communication-protocol-with-the-engine)
+12. [Stopping the Engine and the Lifecycle Identity Guard](#stopping-the-engine-and-the-lifecycle-identity-guard)
+13. [Architecture Overview Diagram](#architecture-overview-diagram)
+14. [Drift as of 2026-09](#drift-as-of-2026-09)
 
 ---
 
@@ -58,6 +59,45 @@ OrbitScore uses two kinds:
 - `"onLanguage:orbitscore"`: activates the moment an `.orbs` file (language ID: `orbitscore`) is opened
 
 Because of `onStartupFinished`, the extension is always loaded even if no OrbitScore file is open. That is why the status bar indicators are always visible.
+
+---
+
+## Workspace Trust and untrustedWorkspaces
+
+What `activationEvents` decides is "when the extension activates." So who decides whether it may activate at all? That is VS Code's **workspace trust**. In a workspace that is not trusted, an extension is restricted by default and `activate()` itself is never called.
+
+The case where this bites is a launch that opens no folder and passes a single `.orbs` file (`orbs file.orbs`). VS Code treats that shape as an **ad-hoc untrusted workspace**, so an extension that does not declare `capabilities.untrustedWorkspaces` will not activate there. To the user it simply looks like "nothing happens," which means **the real damage is not a refusal but silence** (#385).
+
+The declaration sits in `package.json` between `engines` and `main`.
+
+```json
+// packages/vscode-extension/package.json:34-43
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "OrbitScore starts a native audio engine and loads the audio plugins named by the score, the same way a DAW opens a project. Evaluation works in untrusted workspaces; only the settings that choose which executable runs are restricted.",
+      "restrictedConfigurations": [
+        "orbitscore.scsynthPath",
+        "orbitscore.engine"
+      ]
+    }
+  },
+```
+
+`supported: true` declares "do not restrict me even when untrusted." The rationale of the ruling is "to match the behaviour of a typical DAW" (`docs/design/656-release-design.md` §16 (1)): a DAW loads the plugins of a project when it opens it, without asking about trust. OrbitScore likewise starts the engine in an untrusted workspace and loads the `instrument(path)` entries of the score. That is why no trust-checking guard is placed in `startEngine()`. Live coding is the act of evaluating over and over, so a single confirmation dialog turns into "an interruption every time."
+
+`restrictedConfigurations`, on the other hand, takes effect independently of the `supported` value. For the setting keys listed there, **the workspace-side value is ignored in an untrusted workspace and the user-level value is used instead**. The criterion is a single one: only settings where "the workspace deciding the value makes a different executable run."
+
+| Setting | Why it is listed |
+|---|---|
+| `orbitscore.scsynthPath` | The path of the executable itself |
+| `orbitscore.engine` | Tipping it to `"sc"` activates `scsynthPath` |
+
+`orbitscore.audioDevice` does not meet that criterion. A device name does not choose what runs, and the gated E2E harness writes it into the workspace settings, so restricting it would break the real-device tests.
+
+What is interesting is that this declaration is never read from code. Left alone it would become "a setting nobody reads," so the 6 tests in `tests/vscode-extension/untrusted-workspace-capability.spec.ts` read the manifest directly and inspect it. They are written to fail on the spot when `restrictedConfigurations` cannot be taken out as an array, because falling back to `?? []` would let `for...of` iterate zero times and go green the moment the declaration disappears entirely.
+
+That said, **what this layer guarantees stops at the content of the declaration**. Whether the extension really activates in an untrusted workspace, and moreover produces sound as usual, is meant to be pinned down by the gated real-device E2E (`E2E-D1`), which was split out into #735. Development mode launched with `--extensionDevelopmentPath` bypasses the workspace-trust restriction, so an E2E written there stays green even when the whole `capabilities` block is deleted — that is what was measured on 2026-09-04.
 
 ---
 
@@ -809,6 +849,7 @@ The main changes that entered the extension between the first draft on 2026-05-0
 | Stop `get_log`'s silent truncation; raise the cap to the ring capacity of 1000 | #567 | `log-ring.ts:1-18` |
 | Correlating evaluation results via `//#evalMark` (`EvalMarkBridge`), an independent stdout branch | #614 | `eval-mark-bridge.ts:1-23`, `extension.ts:1501-1509` |
 | The `browsePlugins` command and the unknown-plugin-name diagnostic | #638 | §6.412 (2026-08-29), `extension.ts:2285-2298`, `extension.ts:4095-4112` → [PH-3](/en/plugin-hosting/catalog) |
+| The `capabilities.untrustedWorkspaces` declaration (`supported: true`, 2 `restrictedConfigurations`). A folder-less loose-file launch activates too | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/development/WORK_LOG.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)", `package.json:34-43` |
 
 The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEngine` is synchronous and requires scsynth" no longer hold at 69dc968.
 
@@ -818,6 +859,7 @@ The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEn
 
 - [activate() / deactivate()](/en/glossary#activate--deactivate) — VS Code extension lifecycle functions. The `activate()` covered in detail in this chapter does all the registration
 - [activationEvents](/en/glossary#activationevents) — the two kinds `"onStartupFinished"` and `"onLanguage:orbitscore"` realize always-on activation
+- [workspace trust (untrustedWorkspaces)](/en/glossary#workspace-trust-untrustedworkspaces) — the declaration of whether the extension may activate in an untrusted workspace. `supported: true` plus 2 `restrictedConfigurations`
 - [Extension Host](/en/glossary#extension-host) — the Node.js process where extension code runs. The parent process of the engine process
 - [StatusBarItem](/en/glossary#statusbaritem) — manages the two: `statusBarItem` (priority 100) and `bundleStatusItem` (priority 99)
 - [language ID (orbitscore)](/en/glossary#language-id-orbitscore) — the language ID assigned to `.orbs` files. IntelliSense, diagnostics, and key bindings all filter by this ID
@@ -845,6 +887,9 @@ The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEn
 ## Sources
 
 - `packages/vscode-extension/package.json` — version 2.1.0, `activationEvents`, `contributes.commands` (17), `viewsContainers` / `views` / `viewsWelcome`, `walkthroughs`, `menus`, `keybindings`, `configuration` (`orbitscore.engine` / `mcpServer.port` / `playheadPalette`, etc.)
+- `packages/vscode-extension/package.json:34-43` — the `capabilities.untrustedWorkspaces` declaration (#385)
+- `tests/vscode-extension/untrusted-workspace-capability.spec.ts:1-125` — the 6 tests that inspect the declaration (including why `restrictedConfigurations` must not fall back to `?? []`)
+- `tests/helpers/vscode-extension-manifest.ts:1-53` — the shared helper for reading the manifest (`readExtensionManifest()` / `declaredConfigurationKeys()`)
 - `packages/vscode-extension/src/extension.ts:104-134` — module-level state and the 4 bridges
 - `packages/vscode-extension/src/extension.ts:150-284` — live playhead decoration management (#390)
 - `packages/vscode-extension/src/extension.ts:286-498` — entire `activate()`: log-ring monkey-patch, status bar, config listeners, command / TreeView registration, diagnostics, MCP server, auto-start

@@ -126,7 +126,7 @@ The server does not start by default. Near the end of `activate()`, the port is 
   if (mcpPort && mcpPort > 0) {
 ```
 
-The default of `orbitscore.mcpServer.port` is `0` (= disabled) (`packages/vscode-extension/package.json:400-407`). The `ORBITSCORE_MCP_PORT` environment variable takes precedence so that the gated E2E, which launches the app **from the CLI**, does not have to touch settings files. The "pre-merge gate" section of CLAUDE.md, which says to launch with `ORBITSCORE_MCP_PORT=39123` ("without this environment variable the MCP server does not come up"), uses the same route.
+The default of `orbitscore.mcpServer.port` is `0` (= disabled) (`packages/vscode-extension/package.json:410-417`). The `ORBITSCORE_MCP_PORT` environment variable takes precedence so that the gated E2E, which launches the app **from the CLI**, does not have to touch settings files. The "pre-merge gate" section of CLAUDE.md, which says to launch with `ORBITSCORE_MCP_PORT=39123` ("without this environment variable the MCP server does not come up"), uses the same route.
 
 The HTTP layer listens on `127.0.0.1:<port>/mcp` using Node's standard `http` module. The MCP Streamable HTTP transport is **stateful**, and a session is created per `initialize`.
 
@@ -1167,7 +1167,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `packages/vscode-extension/src/engine-lifecycle.ts:264-291` — `decideStartEngineForAgent()` (spawn-only options)
 - `packages/vscode-extension/src/playhead.ts:1-273` — `[STEP]` grammar, palette, `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/wav-analysis.ts:1-171` — WAV analysis (peak / RMS / onsets / `soundDetected`)
-- `packages/vscode-extension/package.json:400-407` — the `orbitscore.mcpServer.port` setting
+- `packages/vscode-extension/package.json:410-417` — the `orbitscore.mcpServer.port` setting
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio-path `[STEP]` source
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()` (#654)
 - `packages/engine/src/core/sequence.ts:1381-1404` — note-path marker enqueueing and dedup (#654)

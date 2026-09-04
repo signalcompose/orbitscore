@@ -257,6 +257,10 @@ An interface in `completion-context.ts`. Represents the state of the method chai
 
 A VS Code API. Items displayed in the status bar at the bottom of the editor. OrbitScore uses two: engine state (priority 100) and scsynth resolution state (priority 99).
 
+### workspace trust (untrustedWorkspaces)
+
+VS Code's trust model. In an untrusted workspace an extension is restricted by default and `activate()` is never called. OrbitScore declares `supported: true` under `capabilities.untrustedWorkspaces` in `package.json` (#385), so it activates even in a folder-less loose-file launch. `restrictedConfigurations` lists only the 2 settings where "the workspace deciding the value makes a different executable run" (`orbitscore.scsynthPath` / `orbitscore.engine`).
+
 ---
 
 ## scsynth Resolver / Bundle Terms

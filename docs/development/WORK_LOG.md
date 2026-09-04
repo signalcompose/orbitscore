@@ -17,6 +17,47 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(site): follow PR #730's untrusted-workspace capability into the dev site (Sep 4, 2026)
+
+**追従元**: PR [#730](https://github.com/signalcompose/orbitscore/pull/730)（`385-untrusted-workspace-capability` → main・マージコミット `4f2ebd5`）/ **ブランチ**: `claude/docs-sync-pr730`
+
+#730 は `packages/vscode-extension/package.json` に `capabilities.untrustedWorkspaces` を宣言した。
+**マニフェストの宣言が振る舞いを決める**変更なので、拡張アーキテクチャの章に対応する節が必要だった。
+コードとテストは変更していない。
+
+#### 1. IV-1 章に「workspace trust と untrustedWorkspaces」を追加
+
+`sites/dev/editor/vscode-architecture.md` は `activationEvents`（いつ起動するか）を書いていたが、
+**「そもそも起動してよいか」を決める workspace trust** に触れていなかった。
+`activation と activationEvents` の直後に節を足し、差分から確定できることだけを書いた:
+
+- loose-file 起動（`orbs file.orbs`）は ad-hoc な未信頼 workspace になる（#385 の症状は沈黙）
+- `supported: true` の根拠は `docs/design/656-release-design.md` §16 (1)（DAW に併せる）。
+  `startEngine()` にガードは無い
+- `restrictedConfigurations` は `supported` と独立に効き、基準は
+  「workspace が値を決めると別の実行ファイルが動く」もの 2 件だけ。`audioDevice` が入らない理由も
+- 実機の確認（`E2E-D1`）は **#735 へ分離済み**であり、この層が保証するのは宣言の内容まで
+
+引用は `packages/vscode-extension/package.json:34-43` を verbatim で置いた。
+目次・drift 表・関連用語・Sources と、`sites/dev/glossary.md` の
+`workspace trust (untrustedWorkspaces)` 項も足した。ja / en 両方。
+frontmatter の `verified-against` を `4f2ebd5`・`verified-at` を `2026-09-04` へ。
+
+#### 2. `package.json` に 10 行入ったので、散文の行参照が +10 ずれた
+
+#730 は `// FILE:START-END` 形式の引用（`catalog.md` のコードブロック）を再アンカーしているが、
+**Sources 節や本文中の散文の行参照は `check-citations.mjs` の対象外**なので取り残されていた。
+前回（#724 追従）と同じ型である。
+
+| 参照元 | 旧 | 新 | 対象 |
+|---|---|---|---|
+| `sites/dev/plugin-hosting/catalog.md:1378` / en:1410 | `110-121` | `120-131` | `rescanPlugins` / `browsePlugins` コマンド |
+| `sites/dev/editor/mcp-and-gated-e2e.md:129,1170` / en:129,1170 | `400-407` | `410-417` | `orbitscore.mcpServer.port` 設定 |
+
+いずれも実ファイルで対象ブロックの位置を確かめてから書き換えた（コマンドは 120-131、
+`mcpServer.port` は 410-417）。行参照の修正だけなので、この 2 章の `verified-against` は動かしていない。
+
+---
 ### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
 
 **Issue**: #385 / **ブランチ**: `385-untrusted-workspace-capability` / **PR-S-T1**
