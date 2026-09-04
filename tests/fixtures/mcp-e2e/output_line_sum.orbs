@@ -1,0 +1,21 @@
+// #611 §9 golden: explicit sum output must keep today's captured RMS.
+//
+// 🔴 バス名は一意にする。gated スイートは同じ engine セッションを使い回すので、
+//    既存テストが宣言した名前と衝突すると「ambiguous」エラーになる（`drum` は
+//    `orbitstudio-mcp-gated.spec.ts` が sum と aux の**両方**で宣言している）。
+//    衝突したまま録ると、音が意図した宛先へ行かないのに golden が録れてしまう。
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.sum("o0sum611")
+global.start()
+
+var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio("kick.wav").chop(1)
+kick.output("o0sum611")
+kick.play(1, 1, 1, 1)
+
+LOOP(kick)

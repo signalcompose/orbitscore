@@ -34,12 +34,19 @@ see [RE-4](/en/rust-engine/capture-verification).
 Let me start with the picture the specification draws. Core spec MX.1 defines the model in a
 single paragraph (author's translation):
 
-> The graph consists of the serial path **source (seq) → optional per-seq insert (PH.2b) → sum
-> (group bus) → master** and the parallel tap **send → aux (return bus) → master**. An edge is
-> always **the source pointing at its destination**. The reconciliation key is the name (same
-> name = same node; re-evaluation rebinds).
+> Every source (seq) and every bus owns one **audio line**. A line is a sequence of elements,
+> and there are only four kinds: a **rack** (`effect([...])`, SC.10), a **gain** (`gain(db)`),
+> a **pan** (`pan(v)`), and an **outlet** (`output(dest, thru:, db:)`, or its sugar `send`).
+> The signal travels the line **from front to back**, and the signal at the position an outlet
+> sits at is summed into that outlet's destination.
 >
 > — `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.1
+
+> ⚠️ **This paragraph was rewritten on 2026-09-03** (#611 / #649). The earlier MX.1 prescribed a
+> **fixed topology**: "source → insert → sum → master in series, with send → aux → master as a
+> parallel tap". The implementation read below **still has that fixed topology**; the
+> generalisation into lines arrives with PR-O3 (wire) and PR-O4 (DSL). This chapter therefore
+> covers **both what is there today and where it is heading**.
 
 As a diagram:
 
@@ -63,24 +70,28 @@ bus carries its own output target and send targets).
 The DSL samples from the spec, quoted verbatim from its Markdown:
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1681-1685
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1766-1770
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
-snare.output("drum")
-sum("drum").effect("GlueComp.clap")   // group bus 自身の insert（v1 は 1 基・PH.2b と同規則）
+snare.output("drum")                  // 同じ宛先なので加算される
+sum("drum").effect("GlueComp.clap")   // group bus 自身の insert（PH.2b と同規則）
 sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d）
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1733-1735
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1860-1862
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
-kick.send("rev", 0.3)                 // send（copy・原音は継続して master/sum へ）
+kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
 ```
 
-As v1 constraints, MX.5 states **no PDC (plugin latency compensation), no sum nesting, sends
-fixed post-fader, and mutual exclusion with LinkAudio**. "Fixed post-fader" is the item #649 is
-set to overturn, so we return to it in the second half.
+As v1 constraints, MX.5 states **no PDC (plugin latency compensation), no sum nesting, and
+mutual exclusion with LinkAudio**.
+
+"**Sends fixed post-fader**" used to sit in that list too. The 2026-09-03 spec revision
+**removed** it: once the fader stops being a stage, where a send taps from is decided by where
+you placed the `output` on the line (MX.1 / MX.3). The implementation, however, is **still
+fixed post-insert**; PR-O4 closes that gap. We return to it in the second half.
 
 ## The DSL entry point: `global.sum()` / `global.aux()` → `MixerManager`
 
@@ -697,7 +708,7 @@ is the root of the mean of the squared RMS of each window inside it, with a guar
 seconds) trimmed from both ends of the segment to exclude transitions.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:588-593
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:593-598
     const rms = (name: string, guardSec = 0.15): number => {
       const selected = windows(name, guardSec)
       return Math.sqrt(
@@ -710,7 +721,7 @@ E2E-1 takes one segment at `global.gain(0)`, evaluates `global.gain(-6)`, takes 
 requires the ratio to fall within 0.45–0.55 ($10^{-6/20} \approx 0.501$).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1424-1458
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1429-1463
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -753,7 +764,7 @@ E2E-4 is the sum + aux path. It switches between dry (no bus) and an instrument 
 (theoretical 1.5) (`1585-1592`). The DSL part is quoted.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1551-1570
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1556-1575
         [
           'var global = init GLOBAL',
           'global.key("C")',
@@ -907,7 +918,7 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 
 ## Sources
 
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1616-1706` — Mixer / Routing (MX.1–MX.5) normative text
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` Mixer / Routing (MX.1–MX.5) normative text
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1247-1249` — known constraint: master gain ramp applied before the insert
 - `docs/design/643-mixer-foundation-design.md` — #643 design (owner's three articles, responsibility boundary, feed injection point §5.1, `output()` three branches §12)
 - `docs/design/649-audio-line-design.md` — #649 audio-line design (§7 decisions, §8 open items, §9–§14 implementation design v3)
