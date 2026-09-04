@@ -735,7 +735,7 @@ The title of WORK_LOG 6.418 is "turning today's corrections from 'knowledge' int
 Both checks work by reading the source of the gated E2E, so letting each of them hard-code **which files to read** goes badly. The moment a scenario is moved out into another file, the ratchet reads it as "words that used to be covered have disappeared" and turns red, while assertion hygiene never sees the new file and **silently keeps passing**. The second one is the nastier of the two, precisely because it does not go red: nothing tells you the check has stopped biting. So the scan list lives in one place, `tests/e2e/gated-sources.ts`.
 
 ```typescript
-// tests/e2e/gated-sources.ts:31-41
+// tests/e2e/gated-sources.ts:37-47
 const GATED_SOURCE_GLOBS: readonly {
   readonly dir: string
   readonly match: (name: string) => boolean
@@ -754,7 +754,7 @@ The entry point `orbitstudio-mcp-gated.spec.ts` is the only spec vitest discover
 One more thing is settled here: what happens when the list comes out empty.
 
 ```typescript
-// tests/e2e/gated-sources.ts:93-110
+// tests/e2e/gated-sources.ts:99-116
 /** 各ソースを「相対パス + 中身」で返す。行番号つきで報告したい検査はこちらを使う。 */
 export function readGatedSourceEntries(): readonly {
   readonly file: string

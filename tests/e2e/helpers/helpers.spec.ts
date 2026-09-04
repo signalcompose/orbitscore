@@ -26,8 +26,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { analyzeWavBuffer } from '../../../packages/vscode-extension/src/wav-analysis'
 
 import {
+  ANALYSIS_BUCKET_MS,
   captureClockSec,
   captureWindowsFrom,
+  measuredBucketCountForSteadyRms,
   prepareCapturePath,
   quadraticMeanRms,
   readCaptureForAnalysis,
@@ -195,17 +197,33 @@ describe('capture windows', () => {
   })
 
   it('reports capture diagnostics when sound never starts', async () => {
+    // #746 D-3: the old assertion only checked that the four field names appeared in
+    // order (`/durationSec.*peak.*maxWindowRms.*stat\.size.*capturePath/`), so a mutant that
+    // always fills the values with the same wrong constants would still pass. Check the
+    // actual measured values instead — durationSec/peak/maxWindowRms/stat.size must be the
+    // ones this specific 0.1s silent capture actually produces.
     const capturePath = path.join(makeTmpDir(), 'silent.wav')
     fs.writeFileSync(capturePath, syntheticFloat32Wav(0.1))
+    const expectedSize = fs.statSync(capturePath).size
 
-    await expect(
-      waitForSound(capturePath, {
+    let thrown: unknown
+    try {
+      await waitForSound(capturePath, {
         floor: 0.01,
         intervalMs: 1,
         timeoutMs: 2,
         label: 'silent synthetic capture',
-      }),
-    ).rejects.toThrow(/durationSec.*peak.*maxWindowRms.*stat\.size.*capturePath/)
+      })
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(Error)
+    const message = (thrown as Error).message
+    expect(message).toContain('"durationSec":0.1')
+    expect(message).toContain('"peak":0')
+    expect(message).toContain('"maxWindowRms":0')
+    expect(message).toContain(`"stat.size":${expectedSize}`)
+    expect(message).toContain(`"capturePath":"${capturePath}"`)
   })
 
   it('keeps the last capture parse error in a sound timeout', async () => {
@@ -274,6 +292,34 @@ describe('capture windows', () => {
     expect(
       captureWindowsFrom(analysis, { steady: segment }, 'zero-offset').windows('steady'),
     ).toEqual(oldBuckets)
+  })
+
+  it('diverges from the old reverse-map range once there is clock drift (#739 the actual bug)', () => {
+    // #746 D-4: the zero-offset test above only proves equivalence in the case that never
+    // exhibited the bug. The real #739 failure was drift between the wall-clock stop time and
+    // the capture file's actual duration, which silently shifted the old reverse-mapped range
+    // toward the start of the file. Reproduce that with a non-zero offset.
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(3, { sample: sineAfter(0) }), {
+      windowMs: 20,
+    })
+    const segment = { fromSec: 0.5, toSec: 2.5, fromWall: 500, toWall: 2500 }
+    const driftSec = 0.2 // e.g. the capture writer's file lagged 200ms behind the wall clock
+    const stopWall = analysis.durationSec * 1000 + driftSec * 1000
+    const oldRange = {
+      fromSec: analysis.durationSec - (stopWall - segment.fromWall) / 1000 + 0.15,
+      toSec: analysis.durationSec - (stopWall - segment.toWall) / 1000 - 0.15,
+    }
+    const oldBuckets = analysis.windows!.filter(
+      (window) => window.startSec >= oldRange.fromSec && window.startSec < oldRange.toSec,
+    )
+    const newBuckets = captureWindowsFrom(analysis, { steady: segment }, 'drifted-offset').windows(
+      'steady',
+    )
+
+    // The reverse-map silently shifts its whole range earlier — toward the start of the file —
+    // by exactly the drift, instead of failing loudly.
+    expect(oldRange.fromSec).toBeCloseTo(segment.fromSec + 0.15 - driftSec, 10)
+    expect(oldBuckets).not.toEqual(newBuckets)
   })
 
   it('fails A1 when the first segment opens before sound', () => {
@@ -365,6 +411,20 @@ describe('capture windows', () => {
     expect(quadraticMeanRms(atPhase(0))).toBeCloseTo(quadraticMeanRms(atPhase(Math.PI / 3)), 8)
   })
 
+  it('distinguishes quadratic-mean RMS from a plain arithmetic mean', () => {
+    // #746 D-2: the phase-independence test above (and the phase sweep below) use a single
+    // steady tone, so every window has the same RMS and quadratic mean equals arithmetic
+    // mean there — a mutant swapping sqrt(mean(x^2)) for mean(x) would still pass both.
+    // Give windows with different RMS so the two formulas actually disagree.
+    const windows = [{ rms: 0.1 }, { rms: 0.3 }]
+    const quadraticMean = quadraticMeanRms(windows)
+    const arithmeticMean = windows.reduce((sum, window) => sum + window.rms, 0) / windows.length
+
+    expect(quadraticMean).toBeCloseTo(Math.sqrt((0.1 ** 2 + 0.3 ** 2) / 2), 10)
+    expect(arithmeticMean).toBeCloseTo(0.2, 10)
+    expect(quadraticMean).not.toBeCloseTo(arithmeticMean, 2)
+  })
+
   it('rejects analysis buckets that do not match the harness 20ms contract', () => {
     const analysis = analyzeWavBuffer(syntheticFloat32Wav(2, { sample: sineAfter(0) }), {
       windowMs: 100,
@@ -408,6 +468,83 @@ describe('capture windows', () => {
     )
 
     expectCaptureInvariantFailure(() => captured.channelRms('steady', 0), 'U1')
+  })
+
+  it('rejects expectedOnsets < 2 instead of silently no-op-ing periodicity checking', () => {
+    // #746 D-1: expectedOnsets <= 1 makes `gaps` empty inside steadyRms, so
+    // `sortedGaps[Math.floor(sortedGaps.length / 2)]` used to read `undefined`,
+    // `Math.abs(undefined - hitPeriodSec)` silently evaluated to NaN, and `NaN > 0.1` is
+    // always false — the median-gap periodicity check passed no matter what the data was.
+    // The `!` non-null assertion masked the type checker instead of catching this.
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(2, { sample: sineAfter(0) }), {
+      windowMs: 20,
+    })
+    const result = captureWindowsFrom(
+      analysis,
+      { steady: { fromSec: 0.25, toSec: 1.75, fromWall: 250, toWall: 1750 } },
+      'single-onset synthetic capture',
+    )
+
+    expect(() =>
+      steadyRms(result, 'steady', {
+        expectedOnsets: 1,
+        guardSec: 0.15,
+        hitPeriodSec: 0.5,
+        audibleFloorRms: 0.01,
+      }),
+    ).toThrow(/expectedOnsets >= 2/)
+  })
+
+  it('measures the same bucket count across a 500-phase sweep at 48kHz (#746 C-2)', () => {
+    // 🔴 The 25-phase sweep below only asserts that steadyRms does not throw — that is exactly
+    // what let the phase-dependent bucket count through review undetected. `onsets` (from
+    // `w * WINDOW_SEC`) and `windows[].startSec` (from `start / sampleRate`) are two
+    // independent float derivations of the same nominal bucket boundary; at the sweep's
+    // default 1000 Hz sampleRate they happen not to show the drift Fable measured against the
+    // real capture rate. Use 48000 Hz (the daemon's actual capture rate) and assert the
+    // measured bucket count is identical across every phase, not just that nothing throws.
+    const sampleRate = 48000
+    const wav = syntheticFloat32Wav(9, {
+      sampleRate,
+      sample: (timeSec) => {
+        if (timeSec < 0.5) return 0
+        const hitTimeSec = (timeSec - 0.5) % 0.5
+        return hitTimeSec < 0.12
+          ? 0.5 * Math.exp(-30 * hitTimeSec) * Math.sin(2 * Math.PI * 50 * hitTimeSec)
+          : 0
+      },
+    })
+    const analysis = analyzeWavBuffer(wav, { windowMs: 20 })
+    const requirements = {
+      expectedOnsets: 8,
+      guardSec: 0.15,
+      hitPeriodSec: 0.5,
+      audibleFloorRms: 0.01,
+    }
+    const bucketSec = ANALYSIS_BUCKET_MS / 1000
+    const phaseCount = 500
+    const bucketCounts = new Set<number>()
+    const failures: Array<{ phase: number; message: string }> = []
+
+    for (let phase = 0; phase < phaseCount; phase += 1) {
+      const fromSec = 1.347 + (phase / phaseCount) * bucketSec
+      const toSec = fromSec + 6.8
+      const result = captureWindowsFrom(
+        analysis,
+        { steady: { fromSec, toSec, fromWall: fromSec * 1000, toWall: toSec * 1000 } },
+        `48kHz phase ${phase}`,
+      )
+      try {
+        bucketCounts.add(measuredBucketCountForSteadyRms(result, 'steady', requirements))
+      } catch (error) {
+        failures.push({ phase, message: String(error) })
+      }
+    }
+
+    expect(failures, `failed ${failures.length}/${phaseCount} phases`).toEqual([])
+    expect([...bucketCounts], 'measured bucket count must not depend on capture phase').toEqual([
+      200,
+    ])
   })
 
   it('snaps periodic RMS across every 20ms phase of a 500ms hit period', () => {

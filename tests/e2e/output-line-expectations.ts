@@ -116,6 +116,9 @@ export const STEADY_CAPTURE = {
   // 余裕へ足す。ここが無いと最悪位相では必要幅と録り幅が同値になり、1 バケット不足する。
   // 🔴 録り幅を伸ばしても **golden の値は動かない** — snap は最初の onset から厳密に
   // `EXPECTED_ONSETS × HIT_PERIOD_MS` だけを測るので、余った尻尾は測定範囲に入らない。
+  // この厳密さを保証しているのは `capture-windows.ts` の `steadyRms` が onset とバケットの
+  // 比較を整数の解析バケット index で行っていること（#746 C-1）。float のまま `>=`/`<` で
+  // 比較すると 2 つの独立した浮動小数の族の丸め誤差で位相ごとに 199/200/201 バケットへ揺れる。
   captureMs:
     HIT_PERIOD_MS * (REQUANTIZE_SLOTS + 1 + EXPECTED_ONSETS) + 300 + ANALYSIS_BUCKET_MS * 2,
   expectedOnsets: EXPECTED_ONSETS,

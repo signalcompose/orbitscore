@@ -735,7 +735,7 @@ WORK_LOG 6.418 のタイトルは「今日の是正を『知識』から『再�
 2 本の検査はどちらも「gated E2E のソースを読んで判定する」という作りなので、**どのファイルを読むか**を各自が抱えると具合が悪くなります。シナリオを別ファイルへ切り出した瞬間に、ラチェットは「カバー済みだった語が消えた」と読んで red になり、衛生検査のほうは新しいファイルを見ないまま **黙って通ってしまう**からです。後者は red にならないぶん厄介で、検査が効いていないことに気づけません。そこで走査先は `tests/e2e/gated-sources.ts` が 1 箇所で持ちます。
 
 ```typescript
-// tests/e2e/gated-sources.ts:31-41
+// tests/e2e/gated-sources.ts:37-47
 const GATED_SOURCE_GLOBS: readonly {
   readonly dir: string
   readonly match: (name: string) => boolean
@@ -754,7 +754,7 @@ const GATED_SOURCE_GLOBS: readonly {
 もう 1 つ、一覧が空になったときの扱いが決めてあります。
 
 ```typescript
-// tests/e2e/gated-sources.ts:93-110
+// tests/e2e/gated-sources.ts:99-116
 /** 各ソースを「相対パス + 中身」で返す。行番号つきで報告したい検査はこちらを使う。 */
 export function readGatedSourceEntries(): readonly {
   readonly file: string

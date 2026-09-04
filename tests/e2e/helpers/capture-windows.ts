@@ -201,30 +201,82 @@ export interface SteadyRmsRequirements {
   readonly audibleFloorRms: number
 }
 
+/**
+ * Nominal analysis-bucket index for a time value from either float family (#746 C-1).
+ *
+ * `analysis.onsets` (`wav-analysis.ts`'s `w * WINDOW_SEC`) and `analysis.windows[].startSec`
+ * (`wav-analysis.ts`'s `start / format.sampleRate`) are two independent floating-point
+ * derivations of the same nominal `index * 20ms` value. Their rounding errors differ by a
+ * handful of ULPs, which is invisible on its own but flips `>=`/`<` boundary comparisons
+ * depending on capture phase. Rounding each time back to its bucket index before comparing
+ * removes the float family entirely from the comparison.
+ */
+function toBucketIndex(sec: number): number {
+  return Math.round(sec / ANALYSIS_BUCKET_SEC)
+}
+
+interface MeasuredRange {
+  readonly measureFromIdx: number
+  readonly measureToIdx: number
+  readonly measuredOnsets: readonly number[]
+  readonly measuredWindows: ReadonlyArray<{ readonly startSec: number; readonly rms: number }>
+}
+
+/**
+ * Resolve the snapped measurement window as integer bucket indices, shared by `steadyRms`
+ * and `measuredBucketCountForSteadyRms` (test-only diagnostic, #746 C-2) so both operate on
+ * the exact same selection logic instead of a re-implementation that could silently diverge.
+ */
+function resolveMeasuredRange(
+  result: Pick<CaptureWindows, 'windows' | 'onsets'>,
+  name: string,
+  requirements: SteadyRmsRequirements,
+): MeasuredRange {
+  const search = result.windows(name, requirements.guardSec)
+  const searchFromIdx = toBucketIndex(search[0]!.startSec)
+  const searchToIdx = toBucketIndex(search[search.length - 1]!.startSec) + 1
+  const firstOnset = result.onsets(name).find((onset) => toBucketIndex(onset) - 1 >= searchFromIdx)
+  if (firstOnset === undefined) {
+    throw new Error(`${name}: guarded search must contain an onset to snap the measurement window`)
+  }
+  const measureFromIdx = toBucketIndex(firstOnset) - 1
+  const widthBuckets = Math.round(
+    (requirements.expectedOnsets * requirements.hitPeriodSec) / ANALYSIS_BUCKET_SEC,
+  )
+  const measureToIdx = measureFromIdx + widthBuckets
+  if (measureFromIdx < searchFromIdx || measureToIdx > searchToIdx) {
+    throw new Error(
+      `${name}: guarded search is too short for ${requirements.expectedOnsets} hits; ` +
+        `search bucket=[${searchFromIdx}, ${searchToIdx}) measure bucket=[${measureFromIdx}, ${measureToIdx})`,
+    )
+  }
+  const measuredOnsets = result.onsets(name).filter((onset) => {
+    const idx = toBucketIndex(onset)
+    return idx >= measureFromIdx && idx < measureToIdx
+  })
+  const measuredWindows = search.filter((window) => {
+    const idx = toBucketIndex(window.startSec)
+    return idx >= measureFromIdx && idx < measureToIdx
+  })
+  return { measureFromIdx, measureToIdx, measuredOnsets, measuredWindows }
+}
+
 /** Snap a periodic capture to a whole number of hits, then return its RMS. */
 export function steadyRms(
   result: Pick<CaptureWindows, 'windows' | 'onsets'>,
   name: string,
   requirements: SteadyRmsRequirements,
 ): number {
-  const search = result.windows(name, requirements.guardSec)
-  const searchFrom = search[0]!.startSec
-  const searchTo = search[search.length - 1]!.startSec + ANALYSIS_BUCKET_SEC
-  const firstOnset = result.onsets(name).find((onset) => onset - ANALYSIS_BUCKET_SEC >= searchFrom)
-  if (firstOnset === undefined) {
-    throw new Error(`${name}: guarded search must contain an onset to snap the measurement window`)
-  }
-  const measureFrom = firstOnset - ANALYSIS_BUCKET_SEC
-  const measureTo = measureFrom + requirements.expectedOnsets * requirements.hitPeriodSec
-  if (measureFrom < searchFrom || measureTo > searchTo) {
+  // #746 D-1: expectedOnsets < 2 leaves `gaps` empty, so `sortedGaps[...]` below is undefined
+  // and `Math.abs(undefined - x)` silently evaluates to NaN (always < the threshold). Refuse
+  // the contract violation instead of letting periodicity checking quietly no-op.
+  if (requirements.expectedOnsets < 2) {
     throw new Error(
-      `${name}: guarded search is too short for ${requirements.expectedOnsets} hits; ` +
-        `search=[${searchFrom}, ${searchTo}) measure=[${measureFrom}, ${measureTo})`,
+      `${name}: steadyRms requires expectedOnsets >= 2 to measure periodicity, ` +
+        `got ${requirements.expectedOnsets}`,
     )
   }
-  const measuredOnsets = result
-    .onsets(name)
-    .filter((onset) => onset >= measureFrom && onset < measureTo)
+  const { measuredOnsets, measuredWindows } = resolveMeasuredRange(result, name, requirements)
   if (measuredOnsets.length !== requirements.expectedOnsets) {
     throw new Error(
       `${name}: snapped range must contain exactly ${requirements.expectedOnsets} onsets; ` +
@@ -239,14 +291,24 @@ export function steadyRms(
       `${name}: median onset gap ${medianGap}s must match ${requirements.hitPeriodSec}s`,
     )
   }
-  const measuredWindows = search.filter(
-    (window) => window.startSec >= measureFrom && window.startSec < measureTo,
-  )
   const value = quadraticMeanRms(measuredWindows)
   if (value <= requirements.audibleFloorRms) {
     throw new Error(`${name} must be audible; rms=${value}`)
   }
   return value
+}
+
+/**
+ * Test-only diagnostic (#746 C-2): the bucket count `steadyRms` would measure, without the
+ * RMS/onset/gap assertions. Lets a phase sweep assert the count is phase-independent instead
+ * of only checking that `steadyRms` does not throw (which let the 199/200/201 drift through).
+ */
+export function measuredBucketCountForSteadyRms(
+  result: Pick<CaptureWindows, 'windows' | 'onsets'>,
+  name: string,
+  requirements: SteadyRmsRequirements,
+): number {
+  return resolveMeasuredRange(result, name, requirements).measuredWindows.length
 }
 
 /** Map capture-clock segments to analysis buckets and enforce A1/U1/U2/U3. */

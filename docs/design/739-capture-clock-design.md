@@ -95,7 +95,7 @@ captureClockSec = (size − 44) / (channels × 4) / sampleRate
 |---|---|---|
 | ring → drain の poll | ≤ 2 ms | `capture.rs:27` `DRAIN_POLL_INTERVAL` |
 | RT callback 1 ブロック | 5〜11 ms（256〜512 f） | ring は callback 単位で push |
-| BufWriter のバッファ | 0〜21 ms（8 KiB = 1024 stereo f @48k） | `capture.rs:55` `BufWriter::new`（std 既定 8 KiB）。48 kHz stereo では約 1 s ごとの `sync_header` の `flush()`（`:87`）で位相がリセット |
+| BufWriter のバッファ | 0〜21 ms（8 KiB = 1024 stereo f @48k） | `capture.rs:55` `BufWriter::new`（std 既定 8 KiB）。48 kHz stereo では約 1 s ごとの `sync_header` の `flush()`（`:93`。`:87` は関数頭）で位相がリセット |
 | **合計** | **遅れ L ∈ [約 5, 約 35] ms・一方向**（ファイルは render より遅れる） | |
 
 **区間ごとに独立**（各境界で読むので系統オフセットではなく境界ごとの ±15 ms 程度のジッタ）。
@@ -150,6 +150,12 @@ assert  |onsets ∩ measure| === n
 assert  median(gaps in measure) ≈ P (±10%)      // テンポの取り違えを別に検出
 rms     = quadraticMean(windows ∩ measure)      // 幅が厳密に n·P なので位相非依存
 ```
+
+🔴 **この位相非依存は float の境界比較では成立しない**（#746 C-1）。`onsets` の時刻
+（`wav-analysis.ts` の `w * WINDOW_SEC`）と `windows` の時刻（同ファイルの `start / sampleRate`）は
+別の浮動小数の族なので、`>=`/`<` で直接比較すると測定バケット数が位相で 199/200/201 に揺れる。
+実装（`tests/e2e/helpers/capture-windows.ts` の `steadyRms`）は比較をすべて整数の解析バケット
+index に落としてから行うことで、この式が主張する厳密さを実際に保証する。
 
 必要な録り幅は、小節量子化 + 位相 + n·P + guard に加え、snap がアタック前の 1 バケットを
 要求する分と境界丸めの余裕を持たせる。現在は **6840 ms**（300 ms の guard 余裕 +
@@ -223,6 +229,11 @@ SIGTERM handler が無い（`orbit-audio-daemon/src/main.rs:21-28`）。その�
 `CaptureWriter::Drop` → `finalize` は走らず、header は最後の定期同期時点のまま残る。
 `readCaptureForAnalysis` の data-size 零化は異常終了時だけの保険ではなく、物理 EOF と区間時計を
 一致させるための **load-bearing な解析前処理**である。
+
+🔴 **物理 EOF も kill 時点の render 位置と一致しない**（#746 nit）。SIGTERM 時点で `BufWriter`
+（8 KiB、stereo 約 21 ms 分・§3.2）に未 flush のバイトが残っていれば、それは失われる。
+「物理 EOF = kill 時点の render 位置」ではなく、「物理 EOF = 直近の定期 `sync_header` 時点まで」
+である。
 
 ### 7.2 既存 20 本を壊さない保証
 

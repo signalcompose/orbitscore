@@ -25,8 +25,14 @@ const E2E_DIR = __dirname
  * - `orbitstudio-mcp-gated.spec.ts` — vitest が発見する唯一の入口（起動を 1 回に保つ）
  * - `gated/` 配下 — シナリオ本体の置き場（PR-E2 以降。**`.spec.ts` にしない**ので
  *   vitest は発見せず、起動は 1 回のまま）
- * - `helpers/` 配下 — capture 区間写像など gated E2E の実装も衛生検査へ含める。
- *   `.spec.ts` は旧写像との等価性を示すテストで旧式を引用するため除外する
+ * - `helpers/` 配下 — **`.spec.ts` 以外の全ファイル**（capture 区間写像だけでなく
+ *   `run-score.ts` / `mcp-client.ts` / `engine-log.ts` / `gated-session.ts` /
+ *   `rack-child-pid.ts` … gated E2E が実際に使う実装のすべて）を衛生検査へ含める。
+ *   狭めているのではなく、意図して広い — helper を1本足したのに衛生検査だけ黙って
+ *   対象外になる事故を防ぐため、既定を「除外リストでなく `.spec.ts` だけを除く」にしている。
+ *   `.spec.ts` を除くのは、旧写像との等価性を示すテストが旧式（reverse-map 等）を
+ *   意図的に引用するため。この広さゆえに、将来ここへ足す helper 名が DSL 語と衝突すると
+ *   `dsl-e2e-coverage.spec.ts` の A-1 ラチェットを黙って無効化しうる点に注意する。
  */
 const GATED_SOURCE_GLOBS: readonly {
   readonly dir: string
