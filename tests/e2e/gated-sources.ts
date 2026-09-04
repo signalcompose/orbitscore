@@ -66,15 +66,9 @@ export const GATED_SOURCE_FILES: readonly string[] = GATED_SOURCE_GLOBS.flatMap(
  * @throws ソースが 1 本も見つからない場合（検査が黙って無意味になるのを防ぐ）
  */
 export function readGatedSources(): string {
-  if (GATED_SOURCE_FILES.length === 0) {
-    throw new Error(
-      'gated E2E のソースが 1 本も見つからない。' +
-        'ラチェットと衛生検査が黙って無意味になるので、GATED_SOURCE_GLOBS を確認すること。',
-    )
-  }
-  return GATED_SOURCE_FILES.map(
-    (file) => `// ===== ${path.relative(E2E_DIR, file)} =====\n${fs.readFileSync(file, 'utf8')}`,
-  ).join('\n')
+  return readGatedSourceEntries()
+    .map(({ file, source }) => `// ===== ${file} =====\n${source}`)
+    .join('\n')
 }
 
 /** 各ソースを「相対パス + 中身」で返す。行番号つきで報告したい検査はこちらを使う。 */

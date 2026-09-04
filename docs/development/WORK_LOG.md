@@ -1396,3 +1396,45 @@ L/R 比       : 1.0000
 
 **検証**: `tsc` 0 / `eslint` 0 / `npm test` **2173 passed / 48 skipped**（+4）/
 `check-citations.mjs` **904 verified / 0 failed**。
+
+### 束の締め: `/simplify` の適用
+
+4 観点（reuse / simplification / efficiency / altitude）を並行で回した結果。
+
+| 指摘 | 判断 |
+|---|---|
+| `readGatedSources()` と `readGatedSourceEntries()` が**同じ throw ガードを 2 箇所**に持つ | ✅ 前者を後者から導出。**ガードが 1 箇所に** |
+| 二乗平均の式が `rms()` と `channelRms()` に重複 | ✅ `quadraticMeanRms()` に集約 |
+| `run-score.ts` の `markerCount` が `engine-log.ts` の `countLogMarker` と**完全に同一実装** | ✅ 寄せた |
+| `run-score.ts` が gated spec の `startR28Engine` を**約 60 行コピー**している | 🔶 **follow-up**（下記） |
+| per-channel から mono を導出して二重走査を避ける | ❌ **却下 — 数値が変わる**（下記） |
+
+#### 🔴 却下: per-channel から mono を導出する案
+
+「`channelRms` の平均で mono の `rms` / `windows` を導出すれば、バッファを 1 回しか走査しなくて済む」
+という提案。**これは既定の数値を変える。**
+
+mono の RMS は `sqrt(mean(((L+R)/2)²))`、チャンネル別 RMS の平均は `(rms_L + rms_R)/2` で、
+**別物**である。無相関・同電力の L/R で実測:
+
+```
+mono の RMS      : 0.407428
+ch別 RMS の平均  : 0.580297
+比               : 0.7021      ← 理論値 1/√2 ≈ 0.7071
+```
+
+🔴 **一致するのは L=R か片チャンネル無音のときだけ**で、**既存 14 本のテストはまさにその特殊ケース
+しか見ていない**。採用していれば**全件緑のまま通り、実際の音楽素材でだけ静かに壊れた**。
+per-channel を入れた動機（「mono に潰すと分離が測れない」）と同じ構図が、逆向きに出た形である。
+
+#### 🔶 follow-up: `startR28Engine` の重複
+
+`run-score.ts:989-1044` が gated spec の `startR28Engine` / `waitForEngine`（`:406-466`）を
+マーカー文字列・retry 構造・エラー整形まで含めてほぼ丸ごと再実装している。指摘は正しい。
+
+**この束では寄せない**: 解消には gated spec から helper を切り出す必要があり、**20 シナリオが依存する
+構造を束の締め直前に動かす**ことになる。設計 §4 も「本設計では寄せない — 既存 7 本の意味を変えない
+ことを優先する」と明記している。**リスクゼロの部分（`markerCount`）だけ取った。**
+
+**最初の消費者が付く時に寄せる**のが安全（今は `run-score` にも `startR28Engine` にも
+新しい消費者がいないので、形が確定していない）。

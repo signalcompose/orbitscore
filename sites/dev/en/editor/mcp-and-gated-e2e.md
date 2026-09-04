@@ -600,7 +600,7 @@ export function captureWavPath(tmpRoot: string, slug: string): string {
 `runScore` folds "copy the score into a work copy, evaluate it through the editor path (`open_file` → `set_selection` → `run_selection`), and if asked, analyse the capture and return segment RMS" into one function. Its `evaluate` deliberately does not assert on `ok` / `isError`, for the reason given in [the `ok` section](#what-ok-from-evaluate-orbitscore-means) of this chapter.
 
 ```typescript
-// tests/e2e/helpers/run-score.ts:189-198
+// tests/e2e/helpers/run-score.ts:196-205
   const evaluate = async (code: string): Promise<void> => {
     // 🔴 **`ok` / `isError` に assert しない**（設計 §4.2）。診断は `engine-log.ts` の
     // `expectNoNewErrors` / `expectLogMarkerAtLeast` で見る。
@@ -728,19 +728,27 @@ The entry point `orbitstudio-mcp-gated.spec.ts` is the only spec vitest discover
 One more thing is settled here: what happens when the list comes out empty.
 
 ```typescript
-// tests/e2e/gated-sources.ts:68-78
-export function readGatedSources(): string {
+// tests/e2e/gated-sources.ts:74-89
+/** 各ソースを「相対パス + 中身」で返す。行番号つきで報告したい検査はこちらを使う。 */
+export function readGatedSourceEntries(): readonly {
+  readonly file: string
+  readonly source: string
+}[] {
   if (GATED_SOURCE_FILES.length === 0) {
     throw new Error(
       'gated E2E のソースが 1 本も見つからない。' +
         'ラチェットと衛生検査が黙って無意味になるので、GATED_SOURCE_GLOBS を確認すること。',
     )
   }
-  return GATED_SOURCE_FILES.map(
-    (file) => `// ===== ${path.relative(E2E_DIR, file)} =====\n${fs.readFileSync(file, 'utf8')}`,
-  ).join('\n')
+  return GATED_SOURCE_FILES.map((file) => ({
+    file: path.relative(E2E_DIR, file),
+    source: fs.readFileSync(file, 'utf8'),
+  }))
 }
 ```
+
+連結して返す `readGatedSources()` は、この関数の結果をファイル境界のマーカーで繋ぐだけです。
+読み取りとガードが 1 箇所にあるので、**片方だけ直して他方を直し忘れる**ということが起きません。
 
 If the entry spec is renamed or a directory is moved and the list empties out, both checks would read "found nothing" as "zero violations" — every test green and both checks meaningless. So when not a single source file is found, it throws.
 

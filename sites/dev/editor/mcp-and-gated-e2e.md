@@ -600,7 +600,7 @@ export function captureWavPath(tmpRoot: string, slug: string): string {
 `runScore` は「譜面を work copy にして、エディタ経路（`open_file` → `set_selection` → `run_selection`）で評価し、要求されれば capture を解析して区間 RMS を返す」までを 1 関数にしたものです。そこにある `evaluate` が `ok` / `isError` に assert しないのは意図した設計で、理由は本章の [`ok` の節](#evaluate-orbitscore-の-ok-は何を意味するか)と同じところにあります。
 
 ```typescript
-// tests/e2e/helpers/run-score.ts:189-198
+// tests/e2e/helpers/run-score.ts:196-205
   const evaluate = async (code: string): Promise<void> => {
     // 🔴 **`ok` / `isError` に assert しない**（設計 §4.2）。診断は `engine-log.ts` の
     // `expectNoNewErrors` / `expectLogMarkerAtLeast` で見る。
@@ -728,19 +728,27 @@ const GATED_SOURCE_GLOBS: readonly {
 もう 1 つ、一覧が空になったときの扱いが決めてあります。
 
 ```typescript
-// tests/e2e/gated-sources.ts:68-78
-export function readGatedSources(): string {
+// tests/e2e/gated-sources.ts:74-89
+/** 各ソースを「相対パス + 中身」で返す。行番号つきで報告したい検査はこちらを使う。 */
+export function readGatedSourceEntries(): readonly {
+  readonly file: string
+  readonly source: string
+}[] {
   if (GATED_SOURCE_FILES.length === 0) {
     throw new Error(
       'gated E2E のソースが 1 本も見つからない。' +
         'ラチェットと衛生検査が黙って無意味になるので、GATED_SOURCE_GLOBS を確認すること。',
     )
   }
-  return GATED_SOURCE_FILES.map(
-    (file) => `// ===== ${path.relative(E2E_DIR, file)} =====\n${fs.readFileSync(file, 'utf8')}`,
-  ).join('\n')
+  return GATED_SOURCE_FILES.map((file) => ({
+    file: path.relative(E2E_DIR, file),
+    source: fs.readFileSync(file, 'utf8'),
+  }))
 }
 ```
+
+連結して返す `readGatedSources()` は、この関数の結果をファイル境界のマーカーで繋ぐだけです。
+読み取りとガードが 1 箇所にあるので、**片方だけ直して他方を直し忘れる**ということが起きません。
 
 入口 spec の改名やディレクトリの移動で一覧が空になると、両検査は「何も見つからなかった」を「違反ゼロ」と読んでしまいます。全件 green のまま無意味になる状態なので、ソースが 1 本も無ければ throw する、という決めです。
 

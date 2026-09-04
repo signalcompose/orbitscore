@@ -21,6 +21,7 @@ import {
 } from '../../../packages/vscode-extension/src/wav-analysis'
 
 import type { GatedSession } from './gated-session'
+import { countLogMarker } from './engine-log'
 import { sleep, waitUntil, type McpClient } from './mcp-client'
 
 const REPO_ROOT = path.resolve(__dirname, '../../..')
@@ -70,11 +71,17 @@ export interface ScoreRunContext {
   captureSegment(name: string, durationMs?: number, settleMs?: number): Promise<void>
 }
 
-function markerCount(log: string, marker: string): number {
-  return log.split(marker).length - 1
+async /**
+ * 窓ごとの RMS を二乗平均して 1 つの値にする。
+ *
+ * 🔴 **`captureInstrumentScenario`（gated spec）と同一の計算**であること。ここがずれると、
+ * 既存 7 本の #643 シナリオと新しい E2E が**違う数を見ながら同じ名前で語る**ことになる。
+ */
+function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
+  return Math.sqrt(windows.reduce((sum, w) => sum + w.rms * w.rms, 0) / windows.length)
 }
 
-async function waitForEngineState(
+function waitForEngineState(
   client: McpClient,
   running: boolean,
   timeoutMs: number,
@@ -105,8 +112,8 @@ async function startEngineForRun(
   }
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const beforeLog = (await client.call('get_log', { lines: 500 })).text
-    const liveModeBefore = markerCount(beforeLog, LIVE_MODE_MARKER)
-    const startupTimeoutsBefore = markerCount(beforeLog, STARTUP_TIMEOUT_MARKER)
+    const liveModeBefore = countLogMarker(beforeLog, LIVE_MODE_MARKER)
+    const startupTimeoutsBefore = countLogMarker(beforeLog, STARTUP_TIMEOUT_MARKER)
     const started = await client.call(
       'start_engine',
       captureWav === undefined ? {} : { capture_wav: captureWav },
@@ -116,7 +123,7 @@ async function startEngineForRun(
       await waitUntil(
         async () => {
           const log = (await client.call('get_log', { lines: 500 })).text
-          return markerCount(log, LIVE_MODE_MARKER) > liveModeBefore
+          return countLogMarker(log, LIVE_MODE_MARKER) > liveModeBefore
         },
         { intervalMs: 200, timeoutMs: 30_000, label: `${label} daemon-backed REPL ready` },
       )
@@ -124,7 +131,7 @@ async function startEngineForRun(
     } catch (error) {
       const startupLog = (await client.call('get_log', { lines: 500 })).text
       const sawFreshKnownTimeout =
-        markerCount(startupLog, STARTUP_TIMEOUT_MARKER) > startupTimeoutsBefore
+        countLogMarker(startupLog, STARTUP_TIMEOUT_MARKER) > startupTimeoutsBefore
       if (attempt === 1 && sawFreshKnownTimeout) {
         const stopped = await client.call('stop_engine')
         expect(stopped.isError, stopped.text).toBe(false)
@@ -261,9 +268,7 @@ export async function runScore(
   }
   const rms = (name: string, guardSec = 0.15): number => {
     const selected = windowsFor(name, guardSec)
-    return Math.sqrt(
-      selected.reduce((sum, window) => sum + window.rms * window.rms, 0) / selected.length,
-    )
+    return quadraticMeanRms(selected)
   }
   const onsets = (name: string): readonly number[] => {
     const requested = range(requireSegment(name), 0)
@@ -284,9 +289,7 @@ export async function runScore(
       selected.length,
       `runScore ${source.slug} segment '${name}' channel ${channel} must contain windows`,
     ).toBeGreaterThan(0)
-    return Math.sqrt(
-      selected.reduce((sum, window) => sum + window.rms * window.rms, 0) / selected.length,
-    )
+    return quadraticMeanRms(selected)
   }
 
   return { analysis, capturePath, rms, windows: windowsFor, onsets, channelRms }
