@@ -80,8 +80,11 @@ drums.effect(["Glue"]).output(master, thru: true).output(cue, db: -20)
 | `thru:` | boolean | `false`（裁定 ①）| `true` = この出口の**後ろへも信号を流す** |
 | `db:` | number | `0` | **その宛先へ行く分だけ**の減衰（裁定 ④）。ラインには影響しない |
 
-**書かない時の既定**: `_line` に `output` が 1 つも無ければ、評価時に暗黙の `output(master, thru: false, db: 0)` を**末尾**に置く
-（今日の `BusTarget::Master` 既定と同じ音・§9 の互換要件）。
+**書かない時の既定**: `_line` に **`thru: false` の `output`（＝終端）が 1 つも無ければ**、評価時に暗黙の
+`output(master, thru: false, db: 0)` を**末尾**に置く（今日の `BusTarget::Master` 既定と同じ音・§9 の互換要件）。
+🔴 **「`output` が 1 つも無ければ」ではない** — `send` は `output(thru: true)` の糖衣（§3.1）なので、
+send だけの行にも output は存在する。そちらを条件にすると **send を書いた行の dry が master へ届かなくなる**。
+§2.6 の既定ストリップが `sends(=output thru)` と `output(master)` を別々に並べているのが正本である。
 
 ### 2.2 宛先の集合（裁定 ②③ C 2 3）
 
@@ -245,7 +248,7 @@ upsert(e):
 | 行 | 今 | 変更 |
 |---|---|---|
 | `:108` `_outputChannel?: string` | LinkAudio 名 | **残す**（`resolveDispatchChannel` `:1592-1618` が読む）。`output()` の link 分岐が `_line` にも `{kind:'link'}` を置く |
-| `:113` `_renderBus?: string` | 数値 render bus | **廃止**（§14 (1) の裁定次第で互換読み替え）|
+| `:113` `_renderBus?: string` | 数値 render bus | **廃止**（§14 (1) で撤回が確定。互換読み替えは作らない — 宛先は宣言ノードのみ）|
 | `:117` `_insertBus?: string` | 割当 stage | 残す |
 | `:122` `_sumOutputBus?: string` / `:123` `_auxSends` | 単一 output / aux 名キー | **廃止 → `private readonly _line = new AudioLine()`** |
 | `:88` `buildRoutingSends()` | sends 配列 | 廃止 |
@@ -273,8 +276,8 @@ send(aux: string | OutputDest, db: number, opts: { enabled?: boolean } = {}): th
 2. 文字列 `"master"` → `{kind:'master'}`（**予約語**。今日の LinkAudio 名フォールバック `:411-412` を止める）
 3. 文字列が `resolveMixerBus`（`global.ts:502`）で sum/aux に解決 → `{kind:'bus'}`（曖昧なら既存の throw）
 4. 文字列が `/^\d+,\d+$/` → `{kind:'device'}`（裁定 3 の省略形）
-5. number → §14 (1) の裁定まで**現状の `_renderBus` 互換**（`1..16` を `{kind:'render', id:'legacy:<n>'}` に写像。598 設計 §2.4）
-6. それ以外の文字列 → `{kind:'link', channel}`（今日の LinkAudio 分岐 `:404-431` と同じ警告・eager 登録）
+5. それ以外の文字列 → `{kind:'link', channel}`（今日の LinkAudio 分岐 `:404-431` と同じ警告・eager 登録）
+   🔴 **number は解決順に現れない**（§14 (1) で数値 render bus は撤回済み。`sequence.ts:376-386` の数値拒否をそのまま残す）
 
 midi シーケンスの拒否（`:361-366` / `:459-464`）と instrument の `link` 拒否（`:403-409`・PR-3 = #645 まで）は**そのまま**。
 instrument の数値 render 拒否（`:376-386`）は §14 (1) と 598 設計 P3 に従う。
@@ -282,7 +285,8 @@ instrument の数値 render 拒否（`:376-386`）は §14 (1) と 598 設計 P3
 ### 3.4 `program()` — wire へ出す順列
 
 ```
-elements に output が 1 つも無い → elements + [output(master, thru:false, db:0)]（末尾）
+elements に thru:false の output（終端）が 1 つも無い → elements + [output(master, thru:false, db:0)]（末尾）
+  # 🔴 send（=output thru:true）は終端ではないので、この条件を満たしうる（§2.1）
 elements に rack が無い          → 先頭に rack（stage の processor は None なら素通し）
 ```
 

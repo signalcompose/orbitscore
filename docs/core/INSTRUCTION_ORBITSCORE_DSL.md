@@ -1728,8 +1728,15 @@ drums.effect(["Glue"]).output(master, thru: true).output(cue, db: -20)
 | `thru:` | boolean | `false` | `true` = この出口の**後ろへも信号を流す**。`false` ならここで終端 |
 | `db:` | number | `0` | **その宛先へ行く分だけ**の減衰（dB）。ラインの後続には影響しない |
 
-ラインに `output` が 1 つも無い sequence は、評価時に暗黙の
+ラインに **`thru: false` の `output`（＝終端）が 1 つも無い** sequence は、評価時に暗黙の
 `output(master, thru: false, db: 0)` を**末尾**に持つ（従来の既定出力と同じ音）。
+🔴 **条件は「`output` が 1 つも無い」ではない。** `send` は `output(aux, thru: true, db:)` の
+糖衣（MX.3）なので、`kick.send(verb, -12)` **だけ**を書いた行にも `output` は 1 つ存在する。
+そこで「1 つも無い」を条件にすると、**センドを挿した瞬間に本流が master へ届かなくなる** —
+`thru: true` の出口は分岐であって終端ではないためである。既定ストリップが
+`[ラック → gain → pan → sends(=output thru) → output(master)]`（設計 611 §2.6）と
+**sends と終端を別々に並べている**のは、この意味である。SC.4 規範 (3)「send は分岐であり
+本流を変えない」とも一致する。
 
 宛先は**文字列形でも宣言できる**（ノード変数を作らない素朴な 1 ファイル経路の保護）:
 

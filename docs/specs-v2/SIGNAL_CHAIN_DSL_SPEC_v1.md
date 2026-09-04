@@ -27,7 +27,7 @@ Status: 正本（specs-v2）/ 2026-07-18 制定 / 受け皿 issue: \#506 / 決�
         .HogeComp(threshold: -18, sidechain: duck)
         .verb(-12)                        // aux 名 → send（位置 = プリ/ポスト）
         .FugaEQ(low: 2)
-        .drums                            // sum 名 → 本流の出力先（宣言層・括弧なし）
+        .drums                            // sum 名 → 本流の出力先（信号層・括弧なし・位置が意味を持つ）
 
     bass.audio("bass.wav").play(1, 9).duck(1.0).drums
     drums.GlueComp(ratio: 2).master
@@ -141,8 +141,8 @@ Status: 正本（specs-v2）/ 2026-07-18 制定 / 受け皿 issue: \#506 / 決�
 ## SC.4 ルーティング — ノードの型がメソッドの意味を決める
 
     .verb(-12)      // aux 名（dB を取る）       → send（信号層・位置が意味を持つ）
-    .drums          // sum 名（括弧なし）        → 本流の出力先（宣言層・後勝ち）
-    .master         // output 名（括弧なし）     → 本流の出力先（宣言層・後勝ち）
+    .drums          // sum 名（括弧なし）        → 本流の出力先（信号層・同じ宛先 2 回は加算）
+    .master         // output 名（括弧なし）     → 本流の出力先（信号層・同じ宛先 2 回は加算）
 
 <div class="norm">
 

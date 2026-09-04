@@ -17,6 +17,58 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(spec): fix the implicit-master condition found by the independent re-audit (Sep 4, 2026)
+
+**Issue**: #611 / **ブランチ**: `611-output-line-spec` / **PR-O1**（段 1 の縦依存 1 本目）
+
+修正コミット後の最終状態だけを**独立に**再監査させた（前回の監査結果は渡していない）。
+**Critical が 1 件出た** — 1 回目の監査が見ていなかったものである。
+
+#### 🔴 Critical: send を書くと本流が master へ届かない条件になっていた
+
+仕様の 2 箇所が、単独では正しいのに**組み合わせると壊れる**形になっていた:
+
+| 場所 | 記述 |
+|---|---|
+| MX.2 | ラインに **`output` が 1 つも無い** sequence に暗黙の `output(master, thru:false, db:0)` を付ける |
+| MX.3 | **`send` は `output(aux, thru: true, db:)` の糖衣**である |
+
+`kick.send(verb, -12)` **だけ**を書いた行は、後者により「`output` が 1 つ存在する」ので
+**暗黙 master が付かない**。`thru: true` の出口は分岐であって終端ではないから、
+**dry がどこにも行き着かない** — センドを挿した瞬間に本流が消える。
+MX.3 の実例そのものがこの 1 行だった。
+
+正しい条件は「**`thru: false` の `output`（＝終端）が 1 つも無い**」。
+設計 611 §2.6 の既定ストリップが
+`[ラック → gain → pan → sends(=output thru) → output(master)]` と
+**sends と終端を別々に並べている**のが意図の正本で、条件の側が書き間違っていた。
+core spec MX.2 / 設計 611 §2.1 / 同 §3.4 の 3 箇所を揃えた。
+
+🔴 **糖衣を定義したら、その糖衣が既存の条件式に何を代入するかを確かめる。**
+「`send` は `output` の糖衣」と「`output` が無ければ master」は、
+どちらも単独では正しく、**並べた時にだけ壊れる**。
+
+#### 併せて直した 4 件（いずれも「規範を変えたのに写しが古い」型）
+
+| # | 場所 | 内容 |
+|---|---|---|
+| 1 | `SIGNAL_CHAIN_DSL_SPEC_v1.md:30,144-145` | **同一ファイル内**のコード例が「宣言層・後勝ち」のまま。直下の規範 (2) は「信号層・2 要素として加算」に書き換え済みで、例と規範が逆を言っていた |
+| 2 | `sites/dev/signal-chain/index.md`（日英） | 二層意味論の表が旧版のまま（gain / pan / 出力先を宣言層に置いていた）。`mixer-audio-line.md` は両言語で直したのに、**同じ章の index が漏れた**。🔴 `check-citations` はコードフェンス引用しか見ないので、**散文の陳腐化は機械では捕まらない** |
+| 3 | `docs/design/610-diagnostics-applicability-design.md:455,463,611` | 「`output(<aux 名>)` は Error」と owner 裁定 ③（**aux も `output` で指せる**）が**正反対**。特に **E2E-D6 は期待値が仕様と逆**で、そのまま実装すると誤ったテストが資産に積まれるところだった |
+| 4 | `docs/design/611-output-line-design.md:248,276` | §14 (1) で「数値 render bus は撤回」と裁定したのに、§3.3 手順 5 が「裁定まで現状の `_renderBus` 互換」のまま残っていた（自分の裁定に自分が追従していない） |
+
+#### 独立再監査の価値（記録）
+
+1 回目の監査後に修正を入れ、**その結果だけを見せて**別個体に監査させたところ、
+1 回目が見ていなかった Critical が出た。**同じ差分を 2 回見るのではなく、
+修正後の状態を新しい目で見る**ことに意味があった。
+
+#### 検証
+
+`check-citations.mjs` 922 verified / 0 failed（行番号のずれを `--fix` で再アンカー・4 件）。
+
+---
+
 ### docs(spec): output as a line element — MX.1/2/2.1/2.2/2.3/3/4/5, SC.2.1/4, #649 §10-12 (Sep 4, 2026)
 
 **Issue**: #611（+ #649 / #643 の設計文書追従）/ **ブランチ**: `611-output-line-spec` / **PR-O1**（段 1 の前提・docs のみ）
