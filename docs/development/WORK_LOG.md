@@ -17,6 +17,44 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(engine): contain the two playback-path throws and log the skip (Sep 4, 2026)
+
+**Issue**: #645（must-fix）/ **設計正本**: `docs/design/610-diagnostics-applicability-design.md` §5 / **PR**: PR-D0（Sonnet フォールバック実装・Codex が sandbox 制約で2回起動失敗）
+
+owner 指示（2026-08-29）: 「ライブコーディングなのでエラー出して止まるのは基本よくない。内部的にちゃんと掴んでログに出すとかして実行に影響を出さない、とかにすれば別に普通に E2E テストでカバーできますよね」。
+
+#### 対象の 2 throw と到達経路（5 経路・すべて main で行番号を取り直し済み）
+
+| # | 場所 | 経路 | 直したか |
+|---|---|---|---|
+| 1 | `sequence.ts` `resolveDispatchChannel()` | `run()` `:1744` / `loop()` `:1791`（eager・await 連鎖） | ✅ throw→`DispatchTarget`（`skip`）+ `logSkipOnce()` |
+| 2 | 同上 | 🔴 `seamlessParameterUpdate` `:273` → `scheduleEventsFromTime` `:1584`。`gain`/`pan`/`audio`/`chop`/`tempo`/`beat`/`length`/`play` から同期で入る（issue 本文が書いていない経路・再現条件として最有力） | ✅ 同上 |
+| 3 | 同上 | `unmute()` `:1865` → 同上 | ✅ 同上（呼び出し元のみで解決） |
+| 4 | `loop-sequence.ts` `safeSchedule`（`:113-129`） | 既に catch 済み。文言のみ `[ERROR] Sequence '<name>': loop scheduling error:` へ揃える | ✅ 文言合わせのみ |
+| 5 | `loop-sequence.ts:104` / `run-sequence.ts` 初回 schedule | 1 と同じ経路で解決済み | ✅ 追加対応不要 |
+| 6 | `event-scheduler.ts` `resolveAudioFilePath()`（定義 `:16` 改・呼び出し元 `:106`/`:193`） | パス非絶対（内部エラー自称） | ✅ throw→`undefined` を返しログ、呼び出し元が `return` |
+
+#### 直し方（設計 §5.3 が確定）
+
+- `resolveDispatchChannel(): DispatchTarget`（`{kind:'hardware'} | {kind:'link',channel} | {kind:'skip',reason}`）を新設。**`undefined` は使わない** — 旧 `undefined`（hardware 経路）とエラー時の `undefined` が同じ値になると黙ってハードウェアから音が出る（#645 が名指しした「別種の驚き」）
+- `scheduleEvents`/`scheduleEventsFromTime`（sequence.ts 側の private ラッパー）は `kind === 'skip'` で **スケジュールせず return**（そのシーケンスだけ無音、他は継続）
+- `run()`/`loop()` の eager 呼び出しは throw ではなく `logSkipOnce()` を呼ぶだけに変更（早期検知は残す）
+- `logSkipOnce()`: `_dispatchSkipLoggedFor` で理由文字列をキーに重複抑止。**理由が変わった時**と **`.output()` が新しいチャンネルを設定した時**にリセット。ループは毎小節この経路を通るので、抑止が無いと `get_log` の 500 行窓を 1 シーケンスが埋め尽くす
+- `event-scheduler.ts`: `resolveAudioFilePath(audioFilePath, sequenceName): string | undefined` へ変更。呼び出し元 2 箇所で `if (!resolvedFilePath) return`
+
+#### テスト
+
+- ユニット 13 本追加（`tests/core/sequence-link-audio-integration.spec.ts`）: run()/loop() が reject でなく resolve すること・`DispatchTarget` の3 kind・`logSkipOnce` のインスタンス単位 dedup（同一理由の連続呼び出しは1回だけログ）・`.output()` 呼び出しでの dedup キー reset（white-box。公開 API では2回目の skip を再現できないため）
+- 既存ユニット 3 ファイル改修（throw 前提のテストを `DispatchTarget` 前提へ書き換え）
+- gated E2E 1 本追加（`tests/e2e/orbitstudio-mcp-gated.spec.ts` 末尾）: `global.linkAudio()` 下で `.output()` 無しの LOOP が無音スキップ + ログされ、**別の（`.output()` 済みの）sequence の LOOP を止めない**ことを capture RMS で確認。続けて path 2（`.gain()` mid-loop）が同じ evaluation block を落とさないことを、**別の** `evaluate_orbitscore` 呼び出しでの gain 変化（RMS 差分）で確認。ERROR 件数はループ4秒超（2小節超）でも高々 +4 に収まることを assert（dedup の回帰証跡）
+- `tests/e2e/dsl-e2e-coverage.spec.ts`: 新 E2E が `global.linkAudio()` を実機で評価するため `GLOBAL_UNCOVERED_BASELINE` から `linkAudio` を除去（ラチェットは減る方向のみ許可）
+
+#### 検証（sandbox 内・実機 E2E は main が別途実施）
+
+`npm test`（2199 passed / 49 skipped）・`npm run typecheck:e2e`・`npm run lint`・`npm run build`・`sites/dev` の `check-citations.mjs --fix`（`sequence.ts`/`event-scheduler.ts`/`loop-sequence.ts`/`dsl-e2e-coverage.spec.ts` の行番号シフトで 26 件の引用が機械的にずれたため再アンカーのみ実施・本文の書き換えなし）はすべて green。
+
+---
+
 ### docs(design): 詳細設計 11 本と実装プラン 2026-09 を起草 (Sep 3, 2026)
 
 **Issue**: #611 / #694 / #598 / #672 / #634 / #428 / #610 / #662 / #656 / #668 / #679（設計のみ・実装なし）/ **ブランチ**: `claude/elegant-pasteur-l9gdrl`

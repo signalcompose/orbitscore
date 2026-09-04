@@ -4566,4 +4566,215 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     },
     TEST_TIMEOUT_MS,
   )
+
+  // #645 PR-D0: the two playback-path throws (resolveDispatchChannel's missing-.output()
+  // throw / event-scheduler's non-absolute-path throw) are now contained — the affected
+  // sequence is silently skipped and logged, not thrown, so it cannot stop every OTHER
+  // sequence in the same evaluation block (owner: "ライブコーディングなのでエラー出して
+  // 止まるのは基本よくない"). E2E-645-A/B (design 610 §11) drive both:
+  //   - path 1 (run()/loop() eager, `resolveDispatchChannel`): LOOP-ing a sequence with
+  //     LinkAudio enabled but no .output().
+  //   - path 2 (`seamlessParameterUpdate` → `scheduleEventsFromTime`, mid-loop): calling
+  //     .gain() on that SAME sequence while it is actively looping.
+  // and prove the claim with signal — a captured RMS window (the sibling sequence keeps
+  // sounding, and its OWN gain change still takes effect) and a get_log line (the skip is
+  // observable) — not just "no throw". `d645Live` declares .output() under linkAudio: the
+  // daemon backend's documented A0 LinkAudio feature-gap (rust-engine-player.ts's
+  // GapKind 'outputChannel') falls back to hardware playback with a warn-once, so it is
+  // audible & captured exactly like a normal hardware sequence — this is what makes an
+  // RMS assertion possible here without a real Ableton Link peer.
+  it.skipIf(!appAvailable)(
+    '#645 PR-D0: a dispatch-skip sequence is silently skipped + logged and does not stop a sibling sequence (LOOP-eager + mid-loop paths)',
+    async () => {
+      expect(client, 'main gated phase must initialize the MCP client first').toBeDefined()
+      expect(tmpRoot, 'main gated phase must initialize the scratch root first').toBeDefined()
+      expect(
+        workAudioDir,
+        'main gated phase must initialize the audio fixture directory',
+      ).toBeDefined()
+      if (!client || !tmpRoot || !workAudioDir) {
+        throw new Error('main gated phase did not initialize suite state')
+      }
+      const activeClient = client
+      const root = tmpRoot
+      const dslPath = path.join(root, '645-dispatch-skip.orbs')
+      const audioSearchPath = path.relative(path.dirname(dslPath), workAudioDir)
+      const capturePath = captureWavPath(root, '645-dispatch-skip')
+      const readLog = async (): Promise<string> =>
+        (await activeClient.call('get_log', { lines: 500 })).text
+
+      const dslLines = [
+        'var global = init GLOBAL',
+        'global.tempo(120)',
+        'global.beat(4 by 4)',
+        `global.audioPath(${JSON.stringify(audioSearchPath)})`,
+        'global.linkAudio()',
+        'var d645Skip = init global.seq',
+        'd645Skip.audio("kick.wav").chop(1)',
+        'd645Skip.play(1, 1, 1, 1)',
+        'var d645Live = init global.seq',
+        'd645Live.audio("kick.wav").chop(1).output("d645LiveCh")',
+        'd645Live.play(1, 1, 1, 1)',
+        'global.start()',
+        'LOOP(d645Skip)',
+        'LOOP(d645Live)',
+        'd645Skip.gain(-6)',
+        'd645Skip.stop()',
+        'd645Live.stop()',
+        'global.stop()',
+      ]
+      // 1-based line numbers derived from the script so a future edit cannot silently
+      // desynchronize the run_selection ranges below (same discipline as the sum-bus
+      // restart test above).
+      const setupEndLine = dslLines.indexOf('global.start()') + 1
+      const loopSkipLine = dslLines.indexOf('LOOP(d645Skip)') + 1
+      const loopLiveLine = dslLines.indexOf('LOOP(d645Live)') + 1
+      const midLoopGainLine = dslLines.indexOf('d645Skip.gain(-6)') + 1
+      const stopStartLine = dslLines.indexOf('d645Skip.stop()') + 1
+      const stopEndLine = dslLines.indexOf('global.stop()') + 1
+      expect(setupEndLine).toBeGreaterThan(0)
+      expect(loopSkipLine).toBe(setupEndLine + 1)
+      expect(loopLiveLine).toBe(loopSkipLine + 1)
+      expect(midLoopGainLine).toBe(loopLiveLine + 1)
+      expect(stopStartLine).toBe(midLoopGainLine + 1)
+      expect(stopEndLine).toBe(stopStartLine + 2)
+      fs.writeFileSync(dslPath, dslLines.join('\n') + '\n')
+
+      const runLines = async (startLine: number, endLine: number): Promise<void> => {
+        const selected = await activeClient.call('set_selection', {
+          start_line: startLine,
+          start_char: 1,
+          end_line: endLine,
+          end_char: 999_999,
+        })
+        expect(selected.isError, selected.text).toBe(false)
+        const run = await activeClient.call('run_selection')
+        expect(run.isError, run.text).toBe(false)
+      }
+
+      const opened = await activeClient.call('open_file', { path: dslPath })
+      expect(opened.isError, opened.text).toBe(false)
+
+      const started = await activeClient.call('start_engine', { capture_wav: capturePath })
+      expect(started.isError, started.text).toBe(false)
+      await waitForEngine(true, 15_000, '#645 dispatch-skip engine started')
+      await sleep(1000)
+
+      const errorsBefore = countErrors(await readLog())
+      let stopWall = Date.now()
+      let liveBeforeGainFromWall = 0
+      let liveBeforeGainToWall = 0
+      let liveAfterGainFromWall = 0
+      let liveAfterGainToWall = 0
+
+      try {
+        // ── setup: declare both sequences, start the transport ──
+        await runLines(1, setupEndLine)
+
+        // ── path 1 (run()/loop() eager `resolveDispatchChannel`): LOOP a sequence with
+        // NO .output() under strict-mode LinkAudio. Pre-#645 this threw and killed the
+        // evaluation block. ──
+        await runLines(loopSkipLine, loopSkipLine)
+        await waitUntil(async () => (await readLog()).includes('無音でスキップ'), {
+          intervalMs: 200,
+          timeoutMs: 5_000,
+          label: '#645 dispatch-skip log line',
+        })
+
+        // Let the skipped LOOP run for several bars (2s/bar at 120bpm・4/4) with the SAME
+        // stuck skip reason, unobserved by anything else — the dedup regression proof:
+        // if logSkipOnce()'s dedup were broken, this alone floods get_log with 1 line
+        // per bar (checked below via errorsAfterSkipWait).
+        await sleep(4200)
+        const errorsAfterSkipWait = countErrors(await readLog())
+
+        // ── the sibling sequence: LOOP(d645Live) declares .output(), so it dispatches
+        // (kind: 'link', which falls back to audible hardware playback per the A0 gap
+        // above). Proves the skip did NOT kill the evaluation block: a wholly separate
+        // run_selection for a DIFFERENT sequence still schedules and sounds. ──
+        await runLines(loopLiveLine, loopLiveLine)
+        await sleep(2500) // settle past quantized loop-start + a few hits
+        liveBeforeGainFromWall = Date.now()
+        await sleep(2200)
+        liveBeforeGainToWall = Date.now()
+
+        // ── path 2 (`seamlessParameterUpdate` → `scheduleEventsFromTime`, mid-loop):
+        // .gain() on the SKIPPED sequence while it is actively looping. Pre-#645 this
+        // threw INSIDE the awaited call chain of the evaluation block. ──
+        await runLines(midLoopGainLine, midLoopGainLine)
+
+        // ── a SEPARATE evaluate_orbitscore call (not run_selection) for the LIVE
+        // sequence, immediately after path 2 fired for the skipped one — proves the skip
+        // did not contaminate a later, unrelated evaluation. ──
+        const liveGainResult = await activeClient.call('evaluate_orbitscore', {
+          code: 'd645Live.gain(-3)',
+        })
+        expect(liveGainResult.isError, liveGainResult.text).toBe(false)
+        expect(liveGainResult.text).not.toContain('d645Skip')
+        await sleep(300) // seamless mid-loop update settle (no quantize wait, unlike LOOP-start)
+        liveAfterGainFromWall = Date.now()
+        await sleep(2200)
+        liveAfterGainToWall = Date.now()
+
+        const finalLog = await readLog()
+        expect(
+          finalLog,
+          `#645 dispatch-skip get_log must contain the skip reason. Log tail: ${finalLog.slice(-1600)}`,
+        ).toContain('無音でスキップ')
+        expect(
+          errorsAfterSkipWait - errorsBefore,
+          `#645 dispatch-skip must log the missing-.output() skip a bounded number of ` +
+            `times over 4+ seconds of looping (≥2 bars), not once per bar — see ` +
+            `sequence.ts's logSkipOnce()/_dispatchSkipLoggedFor. Log tail: ${finalLog.slice(-1600)}`,
+        ).toBeLessThanOrEqual(4)
+      } finally {
+        await runLines(stopStartLine, stopEndLine)
+        const stopped = await activeClient.call('stop_engine')
+        expect(stopped.isError, stopped.text).toBe(false)
+        stopWall = Date.now()
+        await waitForEngine(false, 15_000, '#645 dispatch-skip engine stopped')
+        await sleep(1000)
+      }
+
+      const capture = fs.readFileSync(capturePath)
+      const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
+      const GUARD_SEC = 0.15
+      const windowsBetween = (fromWall: number, toWall: number) => {
+        const fromSec = Math.max(0, analysis.durationSec - (stopWall - fromWall) / 1000 + GUARD_SEC)
+        const toSec = Math.min(
+          analysis.durationSec,
+          analysis.durationSec - (stopWall - toWall) / 1000 - GUARD_SEC,
+        )
+        const selected = (analysis.windows ?? []).filter(
+          (window) => window.startSec >= fromSec && window.startSec < toSec,
+        )
+        expect(
+          selected.length,
+          `#645 dispatch-skip capture window [${fromSec.toFixed(2)}s, ${toSec.toFixed(2)}s) must be non-empty`,
+        ).toBeGreaterThan(0)
+        return selected
+      }
+      const rmsOf = (fromWall: number, toWall: number): number => {
+        const selected = windowsBetween(fromWall, toWall)
+        return Math.sqrt(
+          selected.reduce((sum, window) => sum + window.rms * window.rms, 0) / selected.length,
+        )
+      }
+
+      const liveBeforeGainRms = rmsOf(liveBeforeGainFromWall, liveBeforeGainToWall)
+      const liveAfterGainRms = rmsOf(liveAfterGainFromWall, liveAfterGainToWall)
+
+      expect(
+        liveBeforeGainRms,
+        '#645 dispatch-skip: the sibling (non-skipped) sequence must be audible — the ' +
+          'skip must not have silenced it too',
+      ).toBeGreaterThan(0.01)
+      expect(
+        liveAfterGainRms,
+        '#645 dispatch-skip: gain(-3) on the sibling AFTER path 2 fired for the skipped ' +
+          'sequence must still take effect — proves path 2 did not kill the evaluation block',
+      ).toBeLessThan(liveBeforeGainRms * 0.95)
+    },
+    TEST_TIMEOUT_MS,
+  )
 })

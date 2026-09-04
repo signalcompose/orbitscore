@@ -805,7 +805,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 `readGatedSources()` が返す gated E2E のソース全体に `.<name>(` が現れるかどうかだけを見ます。語彙側は `packages/engine/src/signal-chain/runtime` の `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` — インタプリタの dispatch テーブルそのものです。
 
 ```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:150-160
+// tests/e2e/dsl-e2e-coverage.spec.ts:149-159
   it('A-1 does not leave a new sequence method untested on real hardware', () => {
     const now = uncovered(SEQUENCE_DSL_METHODS)
     const baseline = new Set(SEQUENCE_UNCOVERED_BASELINE)
@@ -933,7 +933,7 @@ audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1394-1404
+// packages/engine/src/core/sequence.ts:1421-1431
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {

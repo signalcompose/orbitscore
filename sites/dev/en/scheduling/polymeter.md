@@ -160,7 +160,7 @@ The key property is that "`setTimeout` never fires early." If you aim a timer ex
 So #389 made the timer fire **100 ms before** the boundary, enqueueing the next bar's events as "future." The delay computation is consolidated in `armDelay()`.
 
 ```typescript
-// packages/engine/src/core/sequence/playback/loop-sequence.ts:145-155
+// packages/engine/src/core/sequence/playback/loop-sequence.ts:152-162
   const armDelay = (boundary: number): number => {
     const leadMs = Math.min(LOOP_TIMER_LEAD_MS, patternDuration / 2)
     const raw = boundary + patternDuration - leadMs - (Date.now() - scheduler.startTime)
@@ -179,7 +179,7 @@ The essence is the formula `raw = (next boundary) − lead − (current relative
 `scheduleNextIteration()` is what recurses using that `armDelay()`.
 
 ```typescript
-// packages/engine/src/core/sequence/playback/loop-sequence.ts:157-218 (mute->unmute 分岐の内部を // ... で省略)
+// packages/engine/src/core/sequence/playback/loop-sequence.ts:164-225 (mute->unmute 分岐の内部を // ... で省略)
   const scheduleNextIteration = (delayMs: number) => {
     loopTimer = setTimeout(() => {
       const isMuted = getIsMutedFn()
@@ -268,7 +268,7 @@ With launch quantize (`global.quantize("bar")` is the default), the **start time
 It is `Sequence.loop()` that passes `startTime`, the result of `nextQuantizedTime()` (computed from the global tempo and beat).
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1747-1755
+// packages/engine/src/core/sequence.ts:1816-1824
     // Quantize the loop start to the next bar boundary on the master grid so
     // newly-started LOOPs slot in cleanly with whatever is already running.
     const startTime = this.nextQuantizedTime(currentTime)

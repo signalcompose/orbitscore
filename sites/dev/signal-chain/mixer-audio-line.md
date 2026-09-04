@@ -186,7 +186,7 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
 解決順は仕様（#598 §4.4）で固定されていて、コード上もその順で並んでいます。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:350-375
+// packages/engine/src/core/sequence.ts:372-397
   output(channelName: string | number): this {
     const name = this.stateManager.getName() || 'sequence'
     const destinationName = typeof channelName === 'number' ? String(channelName) : channelName
@@ -249,7 +249,7 @@ midi だけがミキサーと無関係・例外は LinkAudio が出力先の時�
 fan-out、同じ aux 名なら上書きです。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:454-481
+// packages/engine/src/core/sequence.ts:481-508
   send(auxName: string, amount: number): this {
     const name = this.stateManager.getName() || 'sequence'
     if (!auxName || !auxName.trim()) {
@@ -482,7 +482,7 @@ PR-2（TS 側）は、instrument sequence が insert bus を持った時点で
 1 箇所に集約しました。`instrument()` → `effect()` の順でも逆でも、ここを通ります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:730-757
+// packages/engine/src/core/sequence.ts:757-784
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
     const bus = this._insertBus
@@ -589,7 +589,7 @@ masterGainDb` を返していたこと、**insert との順序は変わってい
 残す理由をこう書いています。
 
 ```typescript
-// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:56-65
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:67-76
   // `masterGainDb === -Infinity`（完全無音）だけは残す — daemon 側の gain が 0.0 になるまでの
   // ramp 中に音が漏れるのを避けるため、発音側でも落とす。
   if (isMuted) {

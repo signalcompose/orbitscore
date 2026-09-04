@@ -160,7 +160,7 @@ export const LOOP_TIMER_LEAD_MS = 100
 そこで #389 は、境界の **100ms 前**にタイマーを発火させ、次の小節のイベントを「未来」として enqueue するようにしました。delay の計算は `armDelay()` に集約されています。
 
 ```typescript
-// packages/engine/src/core/sequence/playback/loop-sequence.ts:145-155
+// packages/engine/src/core/sequence/playback/loop-sequence.ts:152-162
   const armDelay = (boundary: number): number => {
     const leadMs = Math.min(LOOP_TIMER_LEAD_MS, patternDuration / 2)
     const raw = boundary + patternDuration - leadMs - (Date.now() - scheduler.startTime)
@@ -179,7 +179,7 @@ export const LOOP_TIMER_LEAD_MS = 100
 その `armDelay()` を使って自己再帰するのが `scheduleNextIteration()` です。
 
 ```typescript
-// packages/engine/src/core/sequence/playback/loop-sequence.ts:157-218 (mute->unmute 分岐の内部を // ... で省略)
+// packages/engine/src/core/sequence/playback/loop-sequence.ts:164-225 (mute->unmute 分岐の内部を // ... で省略)
   const scheduleNextIteration = (delayMs: number) => {
     loopTimer = setTimeout(() => {
       const isMuted = getIsMutedFn()
@@ -268,7 +268,7 @@ launch quantize (`global.quantize("bar")` が既定) が入ったことで、`se
 `startTime` を渡しているのは `Sequence.loop()` で、`nextQuantizedTime()` (グローバルの tempo と beat から計算) の結果です。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1747-1755
+// packages/engine/src/core/sequence.ts:1816-1824
     // Quantize the loop start to the next bar boundary on the master grid so
     // newly-started LOOPs slot in cleanly with whatever is already running.
     const startTime = this.nextQuantizedTime(currentTime)

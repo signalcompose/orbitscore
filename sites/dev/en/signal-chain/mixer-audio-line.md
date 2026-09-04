@@ -192,7 +192,7 @@ numeric render bus, or a LinkAudio channel name. The resolution order is fixed b
 §4.4), and the code is laid out in that order.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:350-375
+// packages/engine/src/core/sequence.ts:372-397
   output(channelName: string | number): this {
     const name = this.stateManager.getName() || 'sequence'
     const destinationName = typeof channelName === 'number' ? String(channelName) : channelName
@@ -257,7 +257,7 @@ the output** — appear here directly as the split in the guards.
 calls fan out, and the same aux name overwrites.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:454-481
+// packages/engine/src/core/sequence.ts:481-508
   send(auxName: string, amount: number): this {
     const name = this.stateManager.getName() || 'sequence'
     if (!auxName || !auxName.trim()) {
@@ -492,7 +492,7 @@ sequence holds an insert bus. Whether the order is `instrument()` → `effect()`
 passes through here.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:730-757
+// packages/engine/src/core/sequence.ts:757-784
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
     const bus = this._insertBus
@@ -600,7 +600,7 @@ on `calculateEventGain` (`event-scheduler.ts:30-65`) states that the old impleme
 (next section), and then gives the reason for keeping it:
 
 ```typescript
-// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:56-65
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:67-76
   // `masterGainDb === -Infinity`（完全無音）だけは残す — daemon 側の gain が 0.0 になるまでの
   // ramp 中に音が漏れるのを避けるため、発音側でも落とす。
   if (isMuted) {

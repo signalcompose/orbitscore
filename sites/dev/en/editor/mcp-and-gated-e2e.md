@@ -805,7 +805,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 It only checks whether `.<name>(` appears anywhere in the gated E2E sources returned by `readGatedSources()`. The vocabulary side is `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` from `packages/engine/src/signal-chain/runtime` — the interpreter's dispatch table itself.
 
 ```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:150-160
+// tests/e2e/dsl-e2e-coverage.spec.ts:149-159
   it('A-1 does not leave a new sequence method untested on real hardware', () => {
     const now = uncovered(SEQUENCE_DSL_METHODS)
     const baseline = new Set(SEQUENCE_UNCOVERED_BASELINE)
@@ -933,7 +933,7 @@ This is where `#654` enters. According to WORK_LOG 6.421, when a new seven-layer
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1394-1404
+// packages/engine/src/core/sequence.ts:1421-1431
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {
