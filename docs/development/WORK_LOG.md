@@ -17,36 +17,40 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### docs(dev-site): follow PR #728 — ready detection, steady-state capture (Sep 4, 2026)
+### docs(site): follow PR #727's output-line spec revision into the user site and SC-2 (Sep 4, 2026)
 
-**追従元**: PR [#728](https://github.com/signalcompose/orbitscore/pull/728)（`543-output-line-goldens` → `main`・マージコミット `b22698a`） / **ブランチ**: `claude/docs-sync-pr728`
+**追従元**: PR [#727](https://github.com/signalcompose/orbitscore/pull/727)（`611-output-line-spec` → main・マージコミット `d8191d1`）/ **ブランチ**: `claude/docs-sync-pr727`
 
-docs-sync ルーチンによる追従。**`packages/` `rust/` `tests/` は 1 行も変更していない。**
+#727 は spec だけを動かした docs-only PR で、`sites/dev/signal-chain/` の 2 章（日英）は
+同じ PR の中で追従済みだった。**追従が漏れていたのは「ユーザーが書く語」の側**である。
 
-#### PR #728 が dev サイトに対して残していたもの
+#### 直したもの
 
-#728 は production code を変更しない test-only の PR だが、**dev サイトが記述している対象そのもの**
-（`tests/e2e/helpers/` の共有ハーネスと gated spec）の振る舞いを変えていた。#728 自身が触った
-サイト側の差分は**引用の行番号の再アンカーだけ**で、本文は 1 文も追従していなかった。
-
-| 追従した内容 | 直した先 |
+| 場所 | 追従した規範 |
 |---|---|
-| `run-score.ts` の起動判定が「マーカー件数の増加」から「錨より後ろに出たか」へ変わった | `sites/dev/editor/mcp-and-gated-e2e.md`（+ en） |
-| `logAnchor` / `logAppendedSince` / `relativeDelta` が helper の公開面に加わった | 同・共有ハーネス層の表 |
-| 「`runScore` の利用者はまだ 1 本も無い（最初は PR-E3 の予定）」が古くなった | 同・最初の利用者は #611 O0-1〜O0-4 |
-| `it` が 20 本 → 24 本。テスト一覧の行番号も PR で全体にずれた | 同・テスト一覧 |
-| 区間 RMS は窓のヒット数を固定して初めて音量を意味する（`LOOP()` の bar クオンタイズ） | 同・新規節 |
-| #643 E2E-1 の `unity` 区間が同じ測り方の問題を抱えている | `sites/dev/signal-chain/mixer-audio-line.md`（+ en） |
+| `sites/user/mixing/routing.md`（日英） | MX.3: `send()` の第 2 引数が **dB になる**（`0.3` → +0.3 dB のサイレント変更）/ MX.5 から「post-fader 固定」が**削除**され、タップ位置は「書いた位置」になった |
+| `sites/user/reference/methods.md`（日英） | 同上 + MX.2.3: **数値レンダーバス `seq.output(n)` は撤回**された |
+| `sites/dev/signal-chain/mixer-audio-line.md`（日英） | 「`seq.output()` の 3 分岐」節に MX.2.3（数値分岐の撤回）と MX.2.1（LinkAudio は解決順の**最後**）の注記 |
+| `sites/dev/decisions/adr-002-dsl-v3-pivot.md`（日英） | core spec への行番号引用 2 件を再アンカー（`1933-1990` → `2112-2164`・`467-601` → `496-631`） |
 
-引用は `// FILE:START-END` 形式で追加し、`check-citations.mjs` で突合した。
+🔴 **実装は 1 行も変わっていない**ので、user site の表と本文は**今日の書き方のまま**にして、
+「仕様は変わったが未実装」という注記を足す形にした。表を到達点で書き換えると、
+読者が今日書けないコードを読むことになる。
 
-#### 追従不要と判断したもの
+🔴 **`send` の単位変更はエラーにならず音だけが変わる**（線形 0.3 → +0.3 dB ≒ 素通し）。
+user site の両言語に `danger` ブロックで明示した。
 
-- **DSL / 言語仕様**: 構文・意味論・`.orbslog` 形式のいずれも変わっていないので
-  `docs/specs-v2/` と `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` は対象外
-- **ユーザーが書く語**: 新しい fixture は既存の語だけで書かれているので
-  `sites/user/` と `docs/user/ja/USER_MANUAL.md` は対象外
-- **ランタイム / MCP**: `rust/` に差分が無く、MCP ツールの引数・返り値・エラー挙動は変わっていない
+#### 再アンカーについての但し書き
+
+adr-002 の 2 件は **#727 以前から既にずれていた**（§13 Versioning は #727 前も 1983 行目で、
+引用は 1933-1990 だった）。#727 が core spec を +63 行伸ばしてずれが広がったので、
+この機会に両方を現在の節境界へ合わせた。3 件目の `336-432`（§5 = 315-468）は
+節の内側の抜粋なので触っていない。
+
+#### 検証
+
+`npm ci` / `npm run docs:build -w @orbitscore/user-site` / `npm run docs:build -w @orbitscore/dev-site` /
+`npm run docs:check` の 4 本すべて green（citation 922 件検証・0 failed）。
 
 ### docs(spec): fix the implicit-master condition found by the independent re-audit (Sep 4, 2026)
 
@@ -1908,3 +1912,42 @@ lint の `no-unsafe-finally` が「別の形の同じ問題」を指摘した** 
   すべて素通りし、キャプチャの RMS 実測だけが捕まえた**
 
 **仕様の方が実装より古いまま置かれていた**ので、正本を現状に追いつかせた。
+
+## 2026-09-04: PR #724 追従 — dev 学習サイトをハーネス仕様の改訂に合わせる
+
+**#724（#668 PR-E0）が `docs/testing/E2E_HARNESS_SPEC.md` を改訂した結果、dev 学習サイトの
+記述と参照行が古くなった**ので、doc 側だけを追従させた。コード・テストは変更していない。
+
+### 1. IV-3 章の「配線 smoke を置き換える計画」が失効した
+
+`sites/dev/editor/mcp-and-gated-e2e.md` の「次の深掘り候補」に
+「2 層構造が gated spec の『配線 smoke』をどう置き換える計画か」という項目が残っていた。
+#724 はまさにその記述を削り、**2 層の役割を入れ替えた**（オフライン層 = 回帰の固定 /
+実機層 = 語彙・構文表面の網羅）ので、この項目は問いとして成立しなくなった。
+
+- ラチェットの節の末尾に `### ハーネス仕様が実装に追いついた（2026-09-04・#724）` を追加し、
+  新旧の役割分担を表で示した。根拠は同章が既に書いていること — **ラチェットが数えているのは
+  `readGatedSources()` 経由の実機 spec の語**である
+- 「次の深掘り候補」は、#724 §2.1 が残した未決（台帳 2 が #671 段階 3 で導出に変わったあと
+  手書き行とラチェットがどうなるか）へ差し替えた
+- ja / en 両方を更新。frontmatter の `verified-against` を `c2010db`・`verified-at` を
+  `2026-09-04` へ
+
+### 2. 核仕様の行番号が +21 ずれた
+
+#724 は `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §10 に 21 行を挿入した（`### 🔴 DSL を足したら
+E2E も足す`）。`// FILE:START-END` 形式の引用は #724 自身が再アンカーしているが、
+**Sources 節の散文の行参照は機械検査の対象外**なので取り残されていた。
+
+| 参照元 | 旧 | 新 | 備考 |
+|---|---|---|---|
+| `sites/dev/signal-chain/mixer-audio-line.md:885` / en:910 | `1616-1706` | `1667-1757` | Mixer / Routing（MX.1〜MX.5） |
+| 同 `:886` / en:911 | `1247-1249` | `1298-1300` | master gain ramp が insert の前 |
+| `sites/dev/decisions/adr-002-dsl-v3-pivot.md:279` / en:279 | `1933-1990` | `1983-2035` | §13 Versioning + Migration Notes |
+| 同 `:280` / en:280 | `467-601` | `496-631` | §7 underscore prefix |
+| 同 `:281` / en:281 | `336-432` | `365-462` | §5 片記号方式 |
+
+🔴 **上表のうち #724 起因のずれは +21 のみ。** 実測すると 5 件とも #724 以前から
+31〜35 行ずれており（base `89d6e26` で `1616` は Mixer 節ではなく PC 節の中だった）、
+**散文の行参照には機械検査が無い**ことがそのまま残存していた。今回は行番号を足すのではなく、
+各行の説明文が名指ししている節の実位置へ**再アンカー**した。

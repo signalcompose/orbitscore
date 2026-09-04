@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: b22698a
+verified-against: c2010db
 verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728) — the output-line goldens and the ready-detection fix) on 2026-09-04. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 and to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -551,20 +551,19 @@ The old implementation returned `ok: true, 'engine already running'` here and si
 
 ### Test list
 
-As of 2026-09-04 the describe holds 24 `it`s. The first one launches the app, initialises the catalogue and starts the engine with capture; the rest assume that state (which is why WORK_LOG 6.409 records that narrowing to one test with `-t` fails with `catalogClapEffectPath` uninitialised).
+As of 2026-09-01 the describe holds 20 `it`s. The first one launches the app, initialises the catalogue and starts the engine with capture; the rest assume that state (which is why WORK_LOG 6.409 records that narrowing to one test with `-t` fails with `catalogClapEffectPath` uninitialised).
 
 | Line | Test name (summary) | Main oracle |
 |---|---|---|
-| 632 | The real OrbitStudio end-to-end: diagnostics-on-open, `run_selection`, live edit, capture verification | Onset gaps (120 → 180 bpm) |
-| 1429–1682 | #643 E2E-1 to 7: `global.gain(-6)` / sequence rack / gap during attach / `output(sum)` + `send(aux)` / instrument replacement / slot release / instrument without a mixer declaration | Segment RMS ratios |
-| 1728, 1804 | #633 E2E-1 to 2: UI open/close on multiple identical inserts; close after an index shift | `open_plugin_ui` / `close_plugin_ui` responses |
-| 1874 | Catalogue v2 rescan, reporting a broken bundle | `rescan_plugins` failures |
-| 1945 | Reporting an ambiguous bare mixer name via `run_selection` + `get_log` | Log wording |
-| 2036 | The playhead steps through an `instrument()` sequence, rests included (#654) | The set of `[STEP]` slots |
-| 2135, 2377, 2598 | Plugin state restore across restart (instrument / sum-bus insert / auto-record of five receiver kinds) | Measured pitch, RMS |
-| 3153, 3417 | Replacing a playing instrument / effect (#618 / #625) | Audio, state, process, failure, UI |
-| 3955, 4466 | #628 R28: rack chain audio mainline / master + standard-element error | RMS, child PID |
-| 4620, 4662, 4687, 4722 | #611 O0-1 to 4: goldens that pin today's output-line sound before the generalisation lands (determinism with no bus / `sum` output / `send(0.3)` / `effect([Gain(db: 6)]).gain(-6)`) | Steady-segment RMS and ratios |
+| 636 | The real OrbitStudio end-to-end: diagnostics-on-open, `run_selection`, live edit, capture verification | Onset gaps (120 → 180 bpm) |
+| 1433–1687 | #643 E2E-1 to 7: `global.gain(-6)` / sequence rack / gap during attach / `output(sum)` + `send(aux)` / instrument replacement / slot release / instrument without a mixer declaration | Segment RMS ratios |
+| 1732, 1808 | #633 E2E-1 to 2: UI open/close on multiple identical inserts; close after an index shift | `open_plugin_ui` / `close_plugin_ui` responses |
+| 1878 | Catalogue v2 rescan, reporting a broken bundle | `rescan_plugins` failures |
+| 1949 | Reporting an ambiguous bare mixer name via `run_selection` + `get_log` | Log wording |
+| 2040 | The playhead steps through an `instrument()` sequence, rests included (#654) | The set of `[STEP]` slots |
+| 2139, 2381, 2602 | Plugin state restore across restart (instrument / sum-bus insert / auto-record of five receiver kinds) | Measured pitch, RMS |
+| 3157, 3421 | Replacing a playing instrument / effect (#618 / #625) | Audio, state, process, failure, UI |
+| 3961, 4473 | #628 R28: rack chain audio mainline / master + standard-element error | RMS, child PID |
 
 ---
 
@@ -576,7 +575,7 @@ On 2026-09-03 (#668 PR-E2) the small tools each scenario had been keeping locall
 |---|---|
 | `engine-log.ts` | `LOG_WINDOW_LINES` / `countLogMarker` / `countErrors` / `errorBaseline` / `expectNoNewErrors` / `expectLogMarkerAtLeast` |
 | `gated-session.ts` | `GatedCatalog` / `GatedSession` / `captureWavPath` / `createGatedSession` |
-| `run-score.ts` | `ScoreSource` / `CaptureWindows` / `ScoreRunContext` / `runScore` / `logAnchor` / `logAppendedSince` / `relativeDelta` |
+| `run-score.ts` | `ScoreSource` / `CaptureWindows` / `ScoreRunContext` / `runScore` |
 | `wait-for-file.ts` | `waitForFile` / `waitForMatchingFile` |
 | `run-cli.ts` | `CliResult` / `runOrbitscoreCli` |
 
@@ -634,26 +633,7 @@ export function captureWavPath(tmpRoot: string, slug: string): string {
 不具合を疑って延々と探すことになります。診断が出ることを確かめる E2E を妨げないよう
 assert はしませんが、**見えるようにはします**。
 
-As of PR-E2 no scenario called `runScore` (the policy was not to rewrite the existing 20). Its first consumers turned out to be not PR-E3 but the four tests O0-1 to O0-4 added by #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)). And the moment a consumer appeared, a ready-detection defect that had been sitting in the helper came to the surface.
-
-### A finite window breaks more than ERROR counts — it breaks ready detection
-
-When `runScore` starts the engine, it calls `start_engine` and then waits for `🎵 Live coding mode` to appear in `get_log` before declaring "the daemon-backed REPL is up". That check was originally written as **has the marker count gone up**. But `get_log` is a finite window. When the window is saturated, a new marker scrolling in pushes an old marker out at the same moment, so the count does not rise (it can even fall). Running O0-3 / O0-4 after the existing 20 tests, the engine was in fact up, yet the wait always timed out with `daemon-backed REPL ready after 30000ms`. The very reason [assertion hygiene](#assertion-hygiene) forbids strict equality on ERROR counts had shown up in a completely different place.
-
-The replacement takes the tail of the log just before `start_engine` as an anchor, and looks only at what appears after it.
-
-```typescript
-// tests/e2e/helpers/run-score.ts:57-61
-export function logAppendedSince(anchor: string, log: string): string {
-  if (anchor.length === 0) return log
-  const index = log.lastIndexOf(anchor)
-  return index === -1 ? log : log.slice(index + anchor.length)
-}
-```
-
-The crux is what to return when the anchor is *not* found. An implementation that said "cannot tell, so keep waiting" was tried once, and it made `#628 R28` fail with the same 30-second timeout: starting the rack child flushed a large amount of log, the anchor merely fell out of the window, and the code read that as "not started yet". The anchor is taken from the **tail** of the previous window, and the window drops lines from the **head**. So if the tail is gone, every line older than it is gone too — a window without the anchor is **entirely post-start output**, and returning `log` as-is is the correct answer. That correction only became visible by running on the real device.
-
-`orbitstudio-mcp-gated.spec.ts` has its own local start helper carrying the same count comparison, and it was moved to the same anchor scheme (`tests/e2e/orbitstudio-mcp-gated.spec.ts:441-465`). The same PR also folded `relativeDelta` (`|actual − expected| / |expected|`) into the helper: the gated spec held two local definitions of that name, with identical formulas.
+As of PR-E2 no scenario calls `runScore` yet (the policy was not to rewrite the existing 20). Its first consumer is planned for PR-E3.
 
 ⚠️ `tests/e2e/helpers/` is **not** part of `GATED_SOURCE_GLOBS` in `gated-sources.ts` (`orbitstudio-mcp-gated.spec.ts` and `gated/**`). The ratchet and the assertion hygiene test described below both read only the string returned by `readGatedSources()`, so helper sources are outside what they scan.
 
@@ -741,54 +721,6 @@ E2E-1, for example, compares `rms('unity')` and `rms('half')` to confirm that `g
 What this assertion caught is recorded in WORK_LOG 6.415. On 2026-08-29, when this E2E was written and run on the real device, it turned out that **`global.gain()` had no effect at all on instruments**. The cause was in `output.rs`: audio joining the master from the mixer stages **was added after the master gain had been applied**. Every layer returned success, not a single ERROR line appeared, and neither 35 mutation checks nor 2149 unit tests had caught it. CLAUDE.md cites this case as the grounds for "E2E matters most" because it was the only layer able to catch "**looks correct, but the composition is wrong**".
 
 `ORBIT_KEEP_CAPTURES=<dir>` was formalised the same day. When set, capture WAVs are written to that directory instead of tmpRoot — because "the harness's assertions show only one number inside the window, but the defect may be outside it" (6.415). It only started taking effect across the whole spec with #668 PR-E2, though: before that, one of the 13 capture-path sites honoured it ([the shared harness layer](#the-shared-harness-layer-—-tests-e2e-helpers)).
-
-### Segment RMS means loudness only when the number of hits inside the window is fixed
-
-The `rms(name)` above is a single number: the root mean square of the 20 ms windows in a segment. It is tempting to divide two of those numbers and read off a coefficient, but that only works when **both segments contain the same number of hits**. Compare a window holding three hits against one holding five and the ratio will not be 1 even at identical loudness.
-
-This is exactly where #611 PR-O0 stumbled while trying to record the output-line goldens. `LOOP()` waits by default **until the next bar boundary** before it starts playing. The boundary is computed by `nextQuantizedTime()`, and the default value is `'bar'`.
-
-```typescript
-// packages/engine/src/core/global/quantize-manager.ts:67-72
-  const durationMs = quantizeDurationMs(value, tempo, beat)
-  if (durationMs <= 0) return currentTime
-  if (currentTime <= 0) return durationMs
-
-  const boundaries = Math.ceil(currentTime / durationMs)
-  return boundaries * durationMs
-```
-
-At 120 BPM in 4/4 a bar is 2000 ms. The first version, however, began recording 500 ms after `run_selection`, so **most of the window was pre-onset silence** and the number of hits inside it varied from window to window. The measurements then appeared to contradict the estimates in design §9: "the contribution of `send(0.3)` comes out as 0.678, not 0.3", "the rack combination is 10% off the multiplicative model". Both looked like properties of the engine, but **the discrepancy was on the measurement side**. The dry window held three hits and the total window five; `send(0.3)` was linear 0.3 exactly.
-
-The fix is a set of three: **wait one bar before recording**, **make the window an integer multiple of the hit period** (an integer multiple keeps the hit count and the energy constant regardless of the starting phase), and **assert the onset count explicitly**.
-
-```typescript
-// tests/e2e/output-line-expectations.ts:41-48
-/** 譜面の 1 ヒット周期（120 BPM 4/4・`play(1,1,1,1)` なので 1 拍 = 500 ms）。 */
-const HIT_PERIOD_MS = 500
-
-/** 録り始める前に待つ時間。🔴 `LOOP()` が待つ 1 小節（2000 ms）＋余裕。 */
-const STEADY_SETTLE_MS = 2600
-
-/** 録る長さ。🔴 **ヒット周期の整数倍**（8 発）。位相に依らずヒット数が一定になる。 */
-const STEADY_WINDOW_MS = HIT_PERIOD_MS * 8
-```
-
-```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4610-4617
-    expect(
-      result.onsets(name).length,
-      `${name}: 定常状態なら窓に ${STEADY_CAPTURE.expectedOnsets} 発入るはず（入らないなら ` +
-        `録り始めが早すぎるか、譜面が鳴っていない）`,
-    ).toBe(STEADY_CAPTURE.expectedOnsets)
-    const value = result.rms(name)
-    expect(value, `${name} must be audible`).toBeGreaterThan(STEADY_CAPTURE.audibleFloorRms)
-    return value
-```
-
-Measured again with the onset count pinned, `Gain(db: 6)` agreed with the theoretical value to nine significant figures. **Do not conclude that a flaw in the measurement method is a property of the engine** — that is the lesson recorded at the top of `output-line-expectations.ts`.
-
-Some jitter is still unaccounted for. Even recorded in steady state the values sometimes jump bimodally, and when they do the ratio is always $\sqrt{8/7} \approx 1.069$. The onset count is pinned at 8, so what moves is the **time span the energy is divided by**: the mapping from a segment decided with `Date.now()` onto capture time appears to retain a quantisation of one hit. Hardcoding the measured values at this stage would **freeze the artefact as a property of the engine**, so the goldens keep the theoretical formulas and absorb the artefact in the tolerance (relative 0.12). Taking a longer window should reduce the contribution of the edges, and that is left as a follow-up.
 
 ---
 
@@ -927,7 +859,20 @@ Those last two form a pair that pins **one direction each**. The first alone cat
 
 All five, though, only scan the **source text** of the gated spec, so what they guarantee stops at "it is written that way". The guard itself, `assertDaemonBinaryIsNotStale()`, is called only when `gated && appAvailable`, so an ordinary `npm test` never executes a line of it. It is accurate to read this section's checks as pinning the *written shape*, not an *executed behaviour*.
 
-Incidentally, the "fixed 500-line window" in the comment is the number from before `#567` widened it to 1000 lines; the window is still finite, so the rule itself stands. And ERROR counts are not the only thing a finite window breaks. This check only looks for the *wording* "strict equality on an ERROR count", so the **marker counts used for ready detection**, which break for exactly the same reason, pass straight through ([A finite window breaks more than ERROR counts](#a-finite-window-breaks-more-than-error-counts-—-it-breaks-ready-detection)).
+Incidentally, the "fixed 500-line window" in the comment is the number from before `#567` widened it to 1000 lines; the window is still finite, so the rule itself stands.
+
+### The harness spec catches up with the implementation (2026-09-04, #724)
+
+The shape we have been reading was, for a long time, not the shape written in the normative document. `docs/testing/E2E_HARNESS_SPEC.md` still carried its 2026-07-28 wording — "the current gated E2E is a wiring smoke, an interim measure until this spec's coverage harness is finished" — which no longer matched a real-device spec that already had 20 `it(` blocks and numeric capture assertions. #724 (#668 PR-E0) revised that text and swapped the roles of the two layers.
+
+| Layer | Old (2026-07-28) | Revised (2026-09-04, #724) |
+|---|---|---|
+| Offline deterministic layer | **Coverage** of DSL semantics | **Pinning regressions** (same `.orbs` → bit-identical PCM) |
+| Real-device layer | Wiring checks (**representative syntax only**) | **Coverage of the vocabulary and the syntax surface** |
+
+The reason for the revision is what the previous section already showed. The ratchet that counts coverage scans the **source of the real-device spec** through `readGatedSources()`, so the pressure for coverage was landing on the real-device layer all along. The spec, as #724 puts it, had simply been left older than the implementation.
+
+The same revision pins the observation kinds (`ObservationKind`) into the spec, with the enum in `tests/e2e/dsl-coverage-ledger.ts` as the normative source, and rewrites the treatment of `smoke` (an evaluation that merely went through) from "warn during the audit" to a **count ratchet** (`E2E_HARNESS_SPEC.md` §4.1). The reasoning — a warning may go unread, but a red test stops you — is exactly the thinking behind the ratchet in this section.
 
 ---
 
@@ -1197,7 +1142,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - The docs-serving part of `mcp-server.ts` (`/orbitscore/dev/`, `isDocsDistStale`) and `get_dev_doc` / `search_dev_docs` — the route by which the learning site enters an agent's context
 - The `EvalMarkBridge` timeout (120 seconds) and its coordination with the `#608` stall reporter — how a blocked queue gets its "blocking line" named
 - Nested resolution in `findPlayArgRangeForPath()` (the descend condition for `"1.0"` and the handling of group runs), and the seam for the planned `seq.color()` in `#391` (`PlayheadColorConfig.seqColors`)
-- How the two-layer structure of `docs/testing/E2E_HARNESS_SPEC.md` (offline deterministic layer + real-device wiring layer) plans to replace the gated spec's "wiring smoke"
+- What happens to the hand-written rows of ledger 2 (implementation ↔ test) in `tests/e2e/dsl-coverage-ledger.ts`, and to the ratchet, once #671 stage 3 turns that ledger into something a generator derives (`E2E_HARNESS_SPEC.md` §2.1)
 - `estimateFundamentalHz()` in `analyze_audio` — how the plugin-state restore tests assert "the same measured pitch"
 - The safety envelope of `killOrbitStudio()` / `replaceGatedPluginFixtureSymlink()` (allowlists) — the boundary that keeps the harness from damaging the user's environment
 - Improving the structure that prevents gated tests from running one at a time (WORK_LOG 6.409)
@@ -1234,13 +1179,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `tests/e2e/gated-sources.ts:1-106` — the list of gated sources the ratchet and hygiene test read (#668 PR-E1)
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` assertions (where the seven `countErrors` definitions converged, #668 PR-E2)
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` and `captureWavPath()`
-- `tests/e2e/helpers/run-score.ts:1-387` — one function that copies a score and evaluates it on real hardware
-- `tests/e2e/helpers/run-score.ts:30-80` — the ready-detection anchor (`logAnchor` / `logAppendedSince`) and `relativeDelta` (#611 PR-O0)
-- `tests/e2e/output-line-expectations.ts:1-183` — the #611 PR-O0 goldens and how they are recorded (settle, window length, the basis for the tolerances)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:4572-4769` — #611 O0-1 to O0-4 (the first consumers of `runScore`)
-- `packages/engine/src/core/global/quantize-manager.ts:56-76` — `nextQuantizedTime()` and the `'bar'` default (why `LOOP()` waits for a bar boundary)
-- `tests/fixtures/mcp-e2e/output_line_sum.orbs` / `output_line_send.orbs` / `output_line_gain_effect.orbs` — the #611 PR-O0 scores
-- PR [#728](https://github.com/signalcompose/orbitscore/pull/728) — #611 PR-O0 (the goldens and the ready-detection fix)
+- `tests/e2e/helpers/run-score.ts:1-272` — one function that copies a score and evaluates it on real hardware
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — waiting for generated artefacts (with `minBytes`)
 - `tests/e2e/helpers/run-cli.ts:1-62` — child-process runs of `orbitscore replay` / `render` (the only path that bypasses MCP)
 - `tests/e2e/helpers/rack-child-pid.ts:1-38` — the rack child PID oracle (log-derived; moved out of the spec in #668 PR-E1)
@@ -1249,7 +1188,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixtures
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — building OrbitStudio.app
-- `docs/testing/E2E_HARNESS_SPEC.md` — DSL coverage E2E harness spec (#543)
+- `docs/testing/E2E_HARNESS_SPEC.md` — DSL coverage E2E harness spec (#543; §2.1 / §3 / §4.1 / §6.3 revised on 2026-09-04 by #724 = #668 PR-E0)
 - `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md` §3 — original design of the Agent Bridge
 - `docs/archive/WORK_LOG_2026-08.md` 6.348 / 6.409 / 6.415 / 6.416 / 6.417 / 6.418 / 6.421 — MCP tool additions, real-device verification, stale guard, mechanisation, #654
 - `CLAUDE.md` "E2E が最重要", "これらは仕組みで強制されている", "マージ前ゲート"
