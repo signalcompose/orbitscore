@@ -272,6 +272,7 @@
 | 段 | 正本 | 現在地 | 証拠 |
 |---|---|---|---|
 | 土台（入口・内部） | **#643** | ✅ PR-1（Rust 4 層・`SetSourceRouting`）/ ✅ PR-2（TS 表面の解禁・unit 0 固定）/ ○ PR-3 = **#645**（LinkAudio の実配線は not-ready 方針が owner 判断待ちで別） | `session.rs:2259` `"SetSourceRouting"` / merge `0a6502f7`・`637a6262` / `sequence.ts:376-412` が instrument の `output(n)`・LinkAudio を「PR-3 まで拒否」 |
+| 🔴 **測定器**（gated capture の窓） | **#739** | 🔴 **未着手・PR-O2 の直前に入れる**。`captureSegment` が固定 settle 400 ms で窓を開けるが、`LOOP()` の小節量子化（2000 ms）+ プラグイン attach で**音が出るのは約 3 秒後**。**E2E-1 は「0 dB の音」を一度も測っていなかった**（実測 half/unity = 1.36 — 下げたのに大きい）。固定値で追いかけると再発する（settle を 2600 ms にしたら unity が 0 に**悪化**した — 区間がキャプチャ末尾からの逆算なので、窓を後ろへ動かすと逆に前を測る）| PR-O0（`STEADY_CAPTURE` に既に正しい形がある） |
 | フェーダー位置 | **#649** | 📐 **設計のみ**（PR #653 は設計文書だけ。実装なし） | `docs/design/649-audio-line-design.md` / `output.rs:936` `render_multi_feeds`（master gain）の**後**で `:957` `BusTarget::Master` が `hw` へ加算 |
 | 出口 | **#611** 🔴 | ○ realtime 未実装（オフライン `output(n)` は ✅ `render-score.ts`） | #611 本文の実測表・`output.rs:957-960` 合流 3 行 |
 | マルチティンバー | **#647** | ✅ 受け皿（アドレス `(instance, unit)`・protocol）/ ○ 子プロセスの N 出力・shm | #647 本文（`transport.rs:60` `BUF_LEN = MAX_FRAMES * CHANNELS`） |
