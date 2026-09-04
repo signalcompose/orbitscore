@@ -646,7 +646,7 @@ MCP の `list_plugins` / `rescan_plugins` も同じ `loadPluginCatalog()` / `run
 共有しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1022-1032
+// packages/vscode-extension/src/mcp-server.ts:1037-1047
   server.registerTool(
     'list_plugins',
     {
@@ -761,7 +761,7 @@ export function filterCatalogEntries(
 促す案内を出します（`pluginCatalogHintShown` フラグで nag を防いでいます）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3716-3726
+// packages/vscode-extension/src/extension.ts:3721-3731
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -861,7 +861,7 @@ export function analyzeUnknownPluginNames(
 証拠にならないからです。そして重大度は Error でなく **Warning** です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4096-4112
+// packages/vscode-extension/src/extension.ts:4101-4117
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //
@@ -1008,7 +1008,7 @@ project.yaml 配下へ保存してから差し替え要求を出します。spec
 代わりに VST3 側に +7 半音の state を持たせ、周波数で識別します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3428-3436
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3398-3406
       const e4Hz = estimateFundamentalHz(capture, audioRange(segments.e4!))
       const e5Hz = estimateFundamentalHz(capture, audioRange(segments.e5!))
       expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
@@ -1238,7 +1238,7 @@ R-E1〜R-E7 は同一 WAV 内に `dry → A → B → 失敗 → 復旧 B → �
 削除は `effect([])` です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3722-3728
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3691-3697
         // 空のラックを適用するのが「外す」の表現になった。
         const removeA = await activeClient.call('evaluate_orbitscore', {
           code: 'fx625.effect([])',
@@ -1256,7 +1256,7 @@ R-E1〜R-E7 は同一 WAV 内に `dry → A → B → 失敗 → 復旧 B → �
 実機証明になります。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3580-3593
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3549-3562
         // ここは「旧 child が消えた」を待っていた。#628 のラック化では **1 child が
         // チェーン全体を持つ**ため、差し替えは同じ child の中で prepare-commit される。
         // **PID が変わらないことこそが「respawn していない = dry 窓が消えた」の実機証明**で、
@@ -1277,7 +1277,7 @@ R-E3（存在しないパスへの差し替え）は、#625 では「dry であ�
 いました。#628 で prepare-commit になってからは、**失敗しても B のまま鳴り続ける**ことを音で pin します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3940-3955
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3909-3924
 
       // 🔴 R-E3: #628 で**期待が反転した**。失敗後は **B のまま鳴り続ける**。
       //
@@ -1378,8 +1378,8 @@ LOOP(drums)
 - `packages/vscode-extension/package.json:110-121` — `Rescan Plugin Catalog` / `Browse Plugins` コマンド
 - `packages/vscode-extension/src/mcp-server.ts:1022-1032` — MCP `list_plugins`
 - `tests/vscode-extension/plugin-name-diagnostics.spec.ts:192-225` — engine resolver との合意テスト
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3428-3436` — #618 E1-E6 の周波数オラクル
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3580-3593` / `:3722-3728` / `:3940-3955` — #625 R-E2 / R-E6 / R-E3（#628 で反転した期待）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3406-3414` — #618 E1-E6 の周波数オラクル
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:3557-3570` / `:3699-3705` / `:3917-3932` — #625 R-E2 / R-E6 / R-E3（#628 で反転した期待）
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — PH.2d / PH.3 / PH.4 / PC.1〜PC.5
 - `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` — SC.3.2 / SC.10.3 / SC.10.3b / SC.10.3c / SC.10.5 / SC.10.9
 - `docs/research/PLUGIN_CATALOG_SCANNING.md` — 23.2% の実測と三段階モデルの根拠

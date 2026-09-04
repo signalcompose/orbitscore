@@ -1045,7 +1045,7 @@ struct UiEventHubCore {
 `extension.ts` の stdout ルータはこの結果行を `{"pluginUi"` の前方一致で拾います。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1496-1500
+// packages/vscode-extension/src/extension.ts:1497-1501
         } else if (trimmedLine.startsWith('{"pluginUi"')) {
           const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
           if (!parsed && isCurrent) {
@@ -1075,7 +1075,7 @@ recorded` で失敗するので、「DSL で open → MCP の close が成功す
 その後 1 枚目も閉じます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1784-1806
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1759-1781
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {
@@ -1213,7 +1213,7 @@ CLAP を使う必要があります。
 - `rust/crates/orbit-audio-daemon/src/session.rs:2015-2016` — `ClosePluginUI` はフェーズ A 受理のみ
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6470-6560` — `open_outproc_plugin_ui`（binding 検査 → `begin_open` → route → mailbox）
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8802-8815` — `PluginUiTarget`（`window` = 帰属・`index` = 表示専用）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1784-1806` — #633 E2E-1（close をオラクルにする）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1767-1789` — #633 E2E-1（close をオラクルにする）
 - [`docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_HOSTING_SPEC_v1.md) UIH.0〜UIH.8 — 仕様正本
 - [`docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/PLUGIN_UI_IMPLEMENTATION_DESIGN_474.md) — #474 の P0〜P6 実装設計と owner 裁定 Q1〜Q8
 - [`docs/archive/design/628-ui-pump-per-index-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/design/628-ui-pump-per-index-design.md) — per-window pump の設計（C-A / C-B・2 レイヤ分離・却下案）

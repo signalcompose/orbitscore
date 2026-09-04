@@ -387,7 +387,7 @@ under `rust/`, it fails before running a single test. Some directories are exclu
 walk, which the next subsection covers (#713).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:143-157
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:146-160
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -437,7 +437,7 @@ test at startup.
 So three directories, `tests` / `benches` / `examples`, were dropped from the walk.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:138-142
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:141-145
         // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
         // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
@@ -521,8 +521,7 @@ post-peak accessors observe the same signal. These figures were not re-measured 
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:99-111` — WAV header vs. physical size cross-check (silent-failure guard)
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:206-217` — `drops == 0` assertion (pre-teardown silent-failure guard)
 - `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:232-234` — `post_peak_bits` (lock-free peak accumulation implementation)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:78-166` — the stale artifact guard (`assertDaemonBinaryIsNotStale`, including the #713 walk exclusion)
-- `tests/e2e/gated-assertion-hygiene.spec.ts:67-94` — the two checks that pin the walk exclusion from both directions (#713)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:80-154` — the stale artifact guard (`assertDaemonBinaryIsNotStale`)
 - `package.json:17-18` — `pretest:e2e:gated` / `test:e2e:gated`
 - [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 / 6.416 / 6.417 — discovery of the #643 master fader defect, the #651 header patch and stale guard, pretest automation
 - Issue [#307](https://github.com/signalcompose/orbitscore/issues/307) — capture seam realtime wiring

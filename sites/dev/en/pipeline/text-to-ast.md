@@ -134,7 +134,7 @@ When `AudioTokenizer` reads through the characters and finds a string starting w
 ```typescript
 // packages/engine/src/parser/tokenizer.ts:17-28
   // Keywords that should be recognized
-  private static readonly KEYWORDS = new Set([
+  static readonly KEYWORDS: ReadonlySet<string> = new Set([
     'var',
     'init',
     'by',
