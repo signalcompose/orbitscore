@@ -1027,7 +1027,7 @@ RMS is nearly identical and "RMS differs significantly" would be a false asserti
 Instead the VST3 side carries a +7 semitone state and the two are told apart by frequency.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3410-3418
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3403-3411
       const e4Hz = estimateFundamentalHz(capture, audioRange(segments.e4!))
       const e5Hz = estimateFundamentalHz(capture, audioRange(segments.e5!))
       expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
@@ -1266,7 +1266,7 @@ applied (the `engaged` wiring is cut)" can be distinguished numerically.
 Removal is `effect([])`.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3703-3709
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3696-3702
         // 空のラックを適用するのが「外す」の表現になった。
         const removeA = await activeClient.call('evaluate_orbitscore', {
           code: 'fx625.effect([])',
@@ -1284,7 +1284,7 @@ PID appeared" at the time of #625; with the rack, **the PID not changing** is th
 of "no respawn = the dry window is gone".
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3561-3574
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3554-3567
         // ここは「旧 child が消えた」を待っていた。#628 のラック化では **1 child が
         // チェーン全体を持つ**ため、差し替えは同じ child の中で prepare-commit される。
         // **PID が変わらないことこそが「respawn していない = dry 窓が消えた」の実機証明**で、
@@ -1305,7 +1305,7 @@ R-E3 (replacement with a nonexistent path) asserted "dry — neither A nor B" un
 is prepare-commit, it pins by audio that **B keeps playing even after the failure**.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3919-3934
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3912-3927
 
       // 🔴 R-E3: #628 で**期待が反転した**。失敗後は **B のまま鳴り続ける**。
       //
