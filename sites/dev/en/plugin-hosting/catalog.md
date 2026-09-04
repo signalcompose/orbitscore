@@ -924,7 +924,7 @@ identical slots plus `instance_index` (an indirection from name to slot)**. The 
 comment states the mechanism in one line.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6010-6022
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6066-6078
     /// #618: instrument plugin を目標 spec へ収束させる ensure 操作。
     ///
     /// 未割当/Empty は通常 load、同一 Active は no-op、異 spec Active は spare へ prepare して
@@ -1056,7 +1056,7 @@ by bus name**, and the render side's `InsertBusStage` holds the processor direct
 rebuild of the same ChildSlot**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5514-5522
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5570-5578
     /// effect plugin を固定 slot 上で目標 spec へ収束させる ensure 操作。
     /// Active の異 spec だけを quiesce ack 後に同じ shm 上で建て直す。
     #[cfg(feature = "outproc-effect")]
@@ -1144,7 +1144,7 @@ mechanism was unified onto `ApplyEffectChain`, and the protocol doc marks
 `superseded by ApplyEffectChain (#628)`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5080-5088
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5136-5144
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]

@@ -406,18 +406,23 @@ the callback body was a single function, `render_block`; as of 2026-09-01 it has
 `OutputStream::render_state`).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:254-260
+// rust/crates/orbit-audio-native/src/output.rs:331-337
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
     sources: Vec<SourceSlot>,
     transport: BlockTransport,
-    post: Option<Box<dyn PostProcessor>>,
+    master: MasterLine,
 }
 ```
 
+🔴 **As of #649 PR-O2 (2026-09), `post: Option<Box<dyn PostProcessor>>` was replaced by
+`master: MasterLine`.** `MasterLine` bundles the master 2ch buffer, the master rack (the old
+`post`), and the single master-gain application point
+(`docs/design/611-output-line-design.md` §5.2).
+
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:581-618
+// rust/crates/orbit-audio-native/src/output.rs:658-695
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -436,7 +441,7 @@ fn render_shared_block(
                 insert_buses,
                 sources,
                 transport,
-                post,
+                master,
             } = &mut *state;
             render_block_with_sources(
                 engine,
@@ -444,7 +449,7 @@ fn render_shared_block(
                 insert_buses,
                 sources,
                 transport,
-                post,
+                master,
                 capture,
                 cb_stats,
                 output_channels,
@@ -462,20 +467,22 @@ The number of failed `try_lock`s accumulates in `StreamStats` and can be read as
 `render_contentions` from `GetStatus`. "No lock means one dropped block" is a deliberate design
 choice, and the contention is self-healing (the next block recovers).
 
-The body, `render_block_with_sources`, proceeds in order: engine render → master post-processor →
-capture tap → record the callback duration. `post`/`capture`/`cb_stats` are each independent
-opt-ins, and the invariant that the path is bit-identical to the legacy path when all are `None`
-still stands.
+The body, `render_block_with_sources`, proceeds in order: engine render (always 2ch, into
+`master.buffer`) → the master line (rack → gain, the single application point) → placing
+`master.buffer` into the device-width `hw` → capture tap → record the callback duration.
+`master.post`/`capture`/`cb_stats` are each independent opt-ins, and the invariant that the path
+is bit-identical to the legacy path when `master.post` is `None` and gain stays at its default
+1.0 (a 2ch device) still stands.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:662-707
+// rust/crates/orbit-audio-native/src/output.rs:742-814
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     insert_buses: &mut [InsertBusStage],
     sources: &mut [SourceSlot],
     transport: &mut BlockTransport,
-    post: &mut Option<Box<dyn PostProcessor>>,
+    master: &mut MasterLine,
     capture: &mut Option<RingTapSink>,
     cb_stats: &Option<Arc<CallbackTimeStats>>,
     output_channels: usize,
@@ -485,23 +492,50 @@ fn render_block_with_sources(
     // production RT 監視を callback-duration ベースにするための計測（cb_stats 有り時のみ）。
     let t0 = cb_stats.as_ref().map(|_| Instant::now());
 
-    // active な bus が 1 つも無ければ既存の呼び出し列をそのまま維持する（bit-identical）。
-    // 既定 bus プール（全 stage inactive で起動）はここで従来経路に落ちるため、
-    // `seq.effect()` 未使用セッションに RT コストを課さない。
+    // engine（+ bus graph）は常に 2ch で完結する（設計 §5.5 row 1・3）。`master.buffer` が core の
+    // 「hardware_out」を受ける — デバイス幅（`output_channels`／`hw`）とは無関係。buffer は起動時に
+    // 事前確保済み（`start_output_inner`）なので RT では resize しない。
+    let frames = hw.len() / output_channels;
+    let bs = frames * 2;
+    debug_assert!(
+        master.buffer.len() >= bs,
+        "master buffer too short: {} < {bs}",
+        master.buffer.len()
+    );
     render_engine_with_sources(
         engine,
         link,
         insert_buses,
         sources,
         transport,
-        output_channels,
-        hw,
+        2,
+        &mut master.buffer[..bs],
     );
 
-    // master-bus post-processor（CLAP）。engine render 済みの hardware sum を in-place 変換。
-    if let Some(p) = post.as_mut() {
-        p.process(hw);
+    // master ライン（設計 §5.3）: ラック → gain（single 適用点・§5.4）。core の
+    // `global_gain` は production では 1.0 固定のまま呼ばれない（乗算経路はここ 1 本）。
+    if let Some(p) = master.post.as_mut() {
+        p.process(&mut master.buffer[..bs]);
     }
+    let g = master.advance_gain(frames);
+    // g == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
+    // 「未使用 gain 経路に per-sample 乗算コストを払わない」ための最適化であり、O0 golden の
+    // bit 一致は乗算そのものではなく `gain_current` が初期値 1.0 のまま変化しないことに由来する
+    // （`SetGlobalGain` を一度も呼ばない譜面では target=current=1.0 が恒常的に成立する）。
+    if g != 1.0 {
+        for s in master.buffer[..bs].iter_mut() {
+            *s *= g;
+        }
+    }
+
+    // デバイス配置（設計 §5.3・row 6）: master.buffer（2ch）を hw（デバイス幅）の ch{0,1} へ置く。
+    // 2ch デバイスなら memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。3ch 以上は ch2 以降が
+    // 無音のまま（zero-fill 済み）残る — Device 出口はまだ master 固定 program の 1 本のみ
+    // （さらなる出口は PR-O3/O4）。
+    for s in hw.iter_mut() {
+        *s = 0.0;
+    }
+    place_master_into_device(&master.buffer[..bs], frames, output_channels, hw);
 
     // capture seam（#307 realtime）: post 適用後の最終 hw（= device に出る実信号）を WAV へ逃がす
     // 読み取り専用 tap。`RingTapSink::commit` は wait-free / no-alloc（満杯時はあふれを drop カウント）
@@ -523,7 +557,7 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:709-750
+// rust/crates/orbit-audio-native/src/output.rs:836-877
 #[inline]
 fn render_engine_with_sources(
     engine: &Engine,
@@ -574,7 +608,7 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1539-1556
+// rust/crates/orbit-audio-native/src/output.rs:1674-1691
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

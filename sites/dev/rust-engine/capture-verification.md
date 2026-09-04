@@ -29,15 +29,20 @@ capture は `render_block_with_sources`（[RE-1](/rust-engine/) 参照）の中�
 これは「実際にデバイスへ出る最終信号」を録ることを意味し、capture の有無で出力サンプル自体は
 変わりません（読むだけで mutation ではない）。
 
+🔴 **#649 PR-O2（2026-09）で `post` 引数は `master: &mut MasterLine` に変わった。** master ラック
+（旧 `post`）の適用は `master.buffer`（常に 2ch）に対して行われ、その後 gain を適用してから
+device 幅の `hw` へ配置する（`docs/design/611-output-line-design.md` §5.3）。capture がタップする
+`hw` は依然として「配置後・device に送る直前」の最終信号のまま。
+
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:662-707
+// rust/crates/orbit-audio-native/src/output.rs:742-814
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     insert_buses: &mut [InsertBusStage],
     sources: &mut [SourceSlot],
     transport: &mut BlockTransport,
-    post: &mut Option<Box<dyn PostProcessor>>,
+    master: &mut MasterLine,
     capture: &mut Option<RingTapSink>,
     cb_stats: &Option<Arc<CallbackTimeStats>>,
     output_channels: usize,

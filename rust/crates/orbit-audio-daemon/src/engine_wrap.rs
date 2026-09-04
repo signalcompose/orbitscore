@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 #[cfg(feature = "outproc-effect")]
-use std::sync::atomic::{AtomicU32, AtomicUsize};
+use std::sync::atomic::AtomicUsize;
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 use std::sync::MutexGuard;
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
@@ -1650,6 +1650,13 @@ pub struct EngineWrap {
     /// out-of-process instrument の note-ring producer（control side）。
     #[cfg(feature = "outproc-instrument")]
     outproc_instrument: Mutex<Option<OutProcInstrumentControl>>,
+    /// master line（native `MasterLine`・#649 PR-O2）の gain 書き込みハンドル。`SetGlobalGain` は
+    /// これへ atomic store するだけで、`orbit_audio_core::Engine::set_global_gain`（core の
+    /// scheduler ramp）は production では呼ばない — production の乗算経路を master line 1 本に
+    /// する（`docs/design/611-output-line-design.md` §5.4/§5.5 row 4）。`start_with`（test backend）
+    /// 経路は実 stream を持たないため、どこにも接続されないオーファン Arc を持つ（wire レベルの
+    /// accept/reject 検証のみが対象で、実音は無い）。
+    master_gain: Arc<AtomicU32>,
 }
 
 /// out-of-process effect の control-side ハンドル一式（feature `outproc-effect` 専用）。
@@ -4202,7 +4209,14 @@ impl EngineWrap {
             capture_path_from_env(),
             device_name_from_env(),
         )?;
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let master_gain = stream.master_gain();
+        let wrap = Self::build(
+            engine,
+            stream.sample_rate,
+            stream.channels,
+            stream_stats,
+            master_gain,
+        );
         let guard = StreamGuard { stream };
         wrap.record_stream_config(None, None);
         Ok((wrap, guard))
@@ -4230,7 +4244,14 @@ impl EngineWrap {
             stream.channels as usize,
         )
         .map_err(|e| WrapError::LinkAudio(e.to_string()))?;
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let master_gain = stream.master_gain();
+        let wrap = Self::build(
+            engine,
+            stream.sample_rate,
+            stream.channels,
+            stream_stats,
+            master_gain,
+        );
         *wrap
             .link
             .lock()
@@ -4271,7 +4292,14 @@ impl EngineWrap {
             parts.resize_count,
             parts.install_tx,
         );
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let master_gain = stream.master_gain();
+        let wrap = Self::build(
+            engine,
+            stream.sample_rate,
+            stream.channels,
+            stream_stats,
+            master_gain,
+        );
         *wrap
             .clap
             .lock()
@@ -4390,7 +4418,14 @@ impl EngineWrap {
         shm_cleanup.disarm();
 
         // 6. wrap 構築 + control 注入。
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let master_gain = stream.master_gain();
+        let wrap = Self::build(
+            engine,
+            stream.sample_rate,
+            stream.channels,
+            stream_stats,
+            master_gain,
+        );
         *wrap
             .outproc
             .lock()
@@ -4513,7 +4548,14 @@ impl EngineWrap {
         let (instrument_slot_entries, instrument_child_guards, instrument_teardowns) =
             install_instrument_slots(pending_instrument_slots, &cfg.child_exe, sample_rate);
 
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let master_gain = stream.master_gain();
+        let wrap = Self::build(
+            engine,
+            stream.sample_rate,
+            stream.channels,
+            stream_stats,
+            master_gain,
+        );
         *wrap.outproc_instrument.lock().map_err(|_| {
             WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
         })? = Some(OutProcInstrumentControl {
@@ -4623,7 +4665,14 @@ impl EngineWrap {
                 &instrument_cfg.child_exe,
                 stream.sample_rate,
             );
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let master_gain = stream.master_gain();
+        let wrap = Self::build(
+            engine,
+            stream.sample_rate,
+            stream.channels,
+            stream_stats,
+            master_gain,
+        );
         *wrap
             .outproc
             .lock()
@@ -4716,11 +4765,16 @@ impl EngineWrap {
         backend: B,
     ) -> Result<(Arc<Self>, Box<dyn std::any::Any + Send>), WrapError> {
         let started = backend.start()?;
+        // test backend は実 `OutputStream`/`MasterLine` を持たない。`SetGlobalGain` の
+        // 受理/拒否検証だけが対象なので、どこにも接続されないオーファン Arc で足りる
+        // （実音は無い＝値は誰も読まない）。
+        let master_gain = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
         let wrap = Self::build(
             started.engine,
             started.sample_rate,
             started.channels,
             started.stats,
+            master_gain,
         );
         Ok((wrap, started.guard))
     }
@@ -4732,6 +4786,7 @@ impl EngineWrap {
         sample_rate: u32,
         channels: u16,
         stream_stats: Arc<StreamStats>,
+        master_gain: Arc<AtomicU32>,
     ) -> Arc<Self> {
         let (plugin_ui_events, _) = tokio::sync::broadcast::channel(128);
         Arc::new(Self {
@@ -4770,6 +4825,7 @@ impl EngineWrap {
             // outproc-instrument: production start injects the NeutralEvent ring producer.
             #[cfg(feature = "outproc-instrument")]
             outproc_instrument: Mutex::new(None),
+            master_gain,
         })
     }
 
@@ -8117,11 +8173,15 @@ impl EngineWrap {
         })
     }
 
-    /// マスターゲインを設定する。`ramp_sec` が 0 以下なら即時。
-    pub fn set_global_gain(&self, value: f32, ramp_sec: f64) -> Result<(), WrapError> {
-        self.engine
-            .set_global_gain(value, ramp_sec)
-            .map_err(|e| WrapError::Scheduler(e.to_string()))
+    /// マスターゲインを設定する。**production では単一の適用点（native master line・#649
+    /// PR-O2）へ atomic store するだけ**——`orbit_audio_core::Engine::set_global_gain`（core の
+    /// scheduler ramp）は production から呼ばない（`docs/design/611-output-line-design.md`
+    /// §5.4/§5.5 row 4・乗算経路を master line 1 本にする）。`ramp_sec` は wire 互換のため受け
+    /// 続けるが、native 側は構築時に確定した固定 ~5ms/block のランプ（`MasterLine::advance_gain`）
+    /// を使う（可変長ランプは持たない）。
+    pub fn set_global_gain(&self, value: f32, _ramp_sec: f64) -> Result<(), WrapError> {
+        self.master_gain.store(value.to_bits(), Ordering::Relaxed);
+        Ok(())
     }
 
     /// audio stream の稼働統計スナップショット（StreamStats event 用）。

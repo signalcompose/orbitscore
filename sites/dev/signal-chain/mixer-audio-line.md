@@ -149,7 +149,7 @@ export const MIXER_BUS_POOL_SIZE = 4
 対応する Rust 側の定数は daemon の `engine_wrap.rs` にあります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1963-1976
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1970-1983
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
 /// （M3 で配線予定）。
 #[cfg(feature = "outproc-effect")]
@@ -305,7 +305,7 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 という規則が読み取れます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5797-5817
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5853-5873
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -341,7 +341,7 @@ daemon が atomic に書いた routing を、native の render callback はど�
 **post-loop** がその場所です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:935-961
+// rust/crates/orbit-audio-native/src/output.rs:1062-1088
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -401,7 +401,7 @@ instrument が何かを知らず、「render すると N 本の block をくれ�
 持ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:269-282
+// rust/crates/orbit-audio-native/src/output.rs:346-359
 /// A callback-owned source which renders one or more interleaved output units.
 pub trait BlockSource: Send {
     fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
@@ -427,7 +427,7 @@ feed の収集は `collect_source_feeds`（`output.rs:772-801`）が行い、uni
 core の `FeedDest` に写します。写像の部分だけ引用します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:787-797
+// rust/crates/orbit-audio-native/src/output.rs:914-924
             let dest = match slot.dests[unit].load() {
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
@@ -451,7 +451,7 @@ feed 加算（`422-441`・`FeedDest::Hardware` なら `hardware_out`、`Channel(
 `*dst += *sample`）→ gain ramp、の順になっています。gain ramp の部分を引用します。
 
 ```rust
-// rust/crates/orbit-audio-core/src/scheduler.rs:443-456
+// rust/crates/orbit-audio-core/src/scheduler.rs:447-460
         // master gain ramp を **1 回だけ**進め（next_gain_frame）、全バッファに同じ per-frame
         // gain を適用する（バッファごとに進めると ramp が多重に進み desync するため frame ループは 1 つ）。
         for frame in 0..frames_to_render {

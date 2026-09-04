@@ -33,15 +33,20 @@ but right before it is sent to the device, inside `render_block_with_sources` (s
 device"; the presence of capture does not change the output samples themselves (it only reads —
 it does not mutate).
 
+🔴 **As of #649 PR-O2 (2026-09), the `post` argument became `master: &mut MasterLine`.** The
+master rack (the old `post`) is applied to `master.buffer` (always 2ch), gain is applied next, and
+the result is placed into the device-width `hw` (`docs/design/611-output-line-design.md` §5.3).
+Capture still taps `hw` — the final signal after placement, right before the device.
+
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:662-707
+// rust/crates/orbit-audio-native/src/output.rs:742-814
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     insert_buses: &mut [InsertBusStage],
     sources: &mut [SourceSlot],
     transport: &mut BlockTransport,
-    post: &mut Option<Box<dyn PostProcessor>>,
+    master: &mut MasterLine,
     capture: &mut Option<RingTapSink>,
     cb_stats: &Option<Arc<CallbackTimeStats>>,
     output_channels: usize,

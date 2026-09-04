@@ -531,6 +531,14 @@ capture.commit(hw)   # #307 の capture は「デバイスへ出る実信号」=
 
 **前提の明記（#679 の整合確認 `docs/design/679-input-consistency-check.md` §2）**: 本書は **1 サンプルレート前提**（engine はデバイスの出力レートで構築）。入力（#679・未着手）が別レートのデバイスを掴む場合はリサンプルか aggregate device が要り、それは #679 の設計で決める（本書は変えない）。
 
+**前提の明記（PR-O2 実装時に判明・オフラインレンダとの整合）**: master gain の適用点が native の
+`MasterLine::advance_gain`（実時間 RT callback 内）1 本になったため、`orbit_audio_core::Engine`
+単体のオフライン render（`render_offline` 等・`#[doc(hidden)]` の test-only API）は master gain を
+**通らない**。今日これは無害（production のオフラインレンダは存在せず、呼び出し元は
+`verify_schedule_pcm.rs` / `export_verify_pcm.rs` のみ）。**#598 / #729 が production のオフライン
+終端を実装する時は、master line（rack → gain → 配置）を通さないと実時間レンダと音が食い違う**
+ことを設計に織り込むこと。
+
 ### 5.6 `outs:` / マルチティンバー（#409 / #647）との接続
 
 - `SetSourceRouting(source, unit, target)`（`session.rs:2259`・`engine_wrap.rs:5897-5960`）は**そのまま**。unit の宛先は「insert bus」限定（`:5921-5924` の `BusKind::Insert` 検査）を **sum / aux も可**に緩める（feeds は stage の前に加算されるので順序制約なし）。

@@ -908,7 +908,7 @@ spec PH.4 は同一シーケンスへの再宣言についてこう定めてい�
 機構を一文で言い切っています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6010-6022
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6066-6078
     /// #618: instrument plugin を目標 spec へ収束させる ensure 操作。
     ///
     /// 未割当/Empty は通常 load、同一 Active は no-op、異 spec Active は spare へ prepare して
@@ -1035,7 +1035,7 @@ render 側の `InsertBusStage` が processor を直接抱えるため、「名�
 張り替え先が無いので、採用されたのは**同一 ChildSlot の in-place 建て直し**でした。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5514-5522
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5570-5578
     /// effect plugin を固定 slot 上で目標 spec へ収束させる ensure 操作。
     /// Active の異 spec だけを quiesce ack 後に同じ shm 上で建て直す。
     #[cfg(feature = "outproc-effect")]
@@ -1119,7 +1119,7 @@ Stage A では Codex の変異 8 種（すべて「削除」型）が全部 red 
 の明示エラーを返す」と記しています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5080-5088
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5136-5144
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]

@@ -957,7 +957,7 @@ The ack matching key became the triple `(generation, window, evt_seq)`; an ack c
 window is rejected loudly. The event frame's `PluginUiTarget` also gained `window`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8802-8815
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8862-8875
 /// WS event frame に載せる、解決済み plugin UI 宛先。
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PluginUiTarget {
