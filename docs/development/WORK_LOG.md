@@ -77,6 +77,37 @@ main の実機実行で E2E-645 が `timed out waiting for #645 dispatch-skip lo
 `build`・`check-citations.mjs`（import 追加による行番号シフトで 46 件が再びずれたため
 `--fix` で再アンカー）すべて green。実機 gated E2E は未実施（main が別途実施）。
 
+#### 追記2（capture RMS の前提が崩れていた・main 実測 2026-09-04 の2回目・修正済み）
+
+上の修正で前提診断は効き、skip はログに出ることが確認された。しかし別の assert
+（`d645Live` の capture RMS）が `expected 0 to be greater than 0.01` で failed。main の一次
+情報調査: `rust/crates/orbit-audio-daemon/Cargo.toml` の `link-audio` feature は default off・
+gated ビルド（`pretest:e2e:gated`）も `--features outproc-effect,outproc-instrument` で
+link-audio を含まない。「LinkAudio でも hardware にフォールバックして鳴る」という前提は
+`rust-engine-player.ts` の**コメント**に書いてあっただけで、実機ログに
+`LINK_AUDIO_UNAVAILABLE`/gap warning が1件も出ておらず、**裏取りできていなかった**。
+
+- 修正: capture RMS への依存を全廃。証明手段を TS engine 側の `console.log` マーカーへ
+  切替 — `🔄 <name> (loop started/queued)`（`loopSequence()`、dispatch 結果によらず無条件で
+  発火）と `🎚️ <name>: gain=<x> dB (seamless)`（`seamlessParameterUpdate()`、
+  `scheduleEventsFromTime` の private wrapper が skip で早期 return しても、呼び出し元自身の
+  ログ行は必ず届く）。いずれも daemon RPC より手前の TS 側イベントなので、LinkAudio が
+  daemon にコンパイルされているかに依存しない
+- `LOOP(d645Skip)` + `LOOP(d645Live)`（経路1）・`d645Skip.gain(-6)` + `d645Live.gain(-3)`
+  （経路2）を**それぞれ1つの `run_selection`（= 1評価ブロック）**にまとめ、後続の sibling
+  マーカーが実際に出ることを確認 — pre-#645 なら先頭の throw が同ブロック内の後続文の実行を
+  止めていたはず、というこの PR の主張そのものを検証する構造にした
+- 別の `evaluate_orbitscore` 呼び出し（`d645Live.gain(-1)`、ブロックをまたぐ後続評価が汚染
+  されないことの確認）は `pan` ではなく `gain` を再利用 —
+  `dsl-e2e-coverage.spec.ts` の `SEQUENCE_UNCOVERED_BASELINE` に `pan` が残っており、新規に
+  `.pan(` を書くとラチェットの「baseline は減らす方向のみ」に抵触するため
+- テスト名から誤解を招く要素は無いため維持（「sibling を止めない」という主張は log マーカーで
+  引き続き証明できている）。実行時間もこの変更で短縮（audio 用の settle sleep 群を削除）
+
+検証（再実施）: `npm test`（2199 passed / 49 skipped・変化なし）・`typecheck:e2e`・`lint`・
+`build`・`check-citations.mjs`（今回は行番号シフト無し・0 failed）すべて green。実機 gated
+E2E は未実施（main が別途実施）。
+
 ---
 
 ### docs(design): 詳細設計 11 本と実装プラン 2026-09 を起草 (Sep 3, 2026)
