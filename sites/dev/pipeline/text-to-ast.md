@@ -1,12 +1,12 @@
 ---
 title: "I-1. テキスト → AST"
 chapter-id: "I-1"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 89d6e26
+verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #668 PR-E4（`KEYWORDS` の公開と `dsl-surface.ts`）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # I-1. テキスト → AST
 
@@ -17,7 +17,8 @@ DSL のテキストが実際に実行されるまでの最初の関門が「パ�
 本章の初版は 2026-05-05 の snapshot (0a4b598) に対して書かれました。2026-09-01 (69dc968) のコードと突き合わせると、パイプラインの骨格 (tokenizer → `StatementParser` → `AudioIR`) は変わっていませんが、語彙がかなり増えています。本章はその骨格を読む章なので、増えた語彙は以下に列挙するにとどめ、それぞれの深掘りは末尾の候補に回します。
 
 - **トークンの種類が 19 → 32 に増加**: pitch DSL 用の `ACCIDENTAL` / `CARET` / `TILDE` / `AT` / `PLUS`、スタック用の `LBRACKET` / `RBRACKET`、レガート用の `LBRACE` / `RBRACE`、タイ用の `UNDERSCORE`、`import` 用の `IMPORT` / `ASTERISK`、名前付き引数用の `COLON` (`packages/engine/src/parser/types.ts:7-39`)。初版が「18 種類」と書いていたのは数え間違いで、当時の列挙も 19 個ありました
-- **`KEYWORDS` に `import` が加わった** (`packages/engine/src/parser/tokenizer.ts:17-28`)
+- **`KEYWORDS` に `import` が加わった** (`packages/engine/src/parser/tokenizer.ts:17-28`)。さらに #668 PR-E4 で private static から public static (`ReadonlySet<string>`) になり、照合用の view が module から export された (`tokenizer.ts:288-289`)
+- **`dsl-surface.ts` が加わった** (#668 PR-E4、`packages/engine/src/parser/dsl-surface.ts:1-35`)。メソッド呼び出しの形をしていない構文表面 13 個を id で列挙する正本で、パーサの実行には使わず E2E ラチェットの照合先になる
 - **`AudioIR` に `fileImports?` が加わった** (2026-07-17 の #456、`types.ts:49-59`)。`import { kick } from "./drums.orbs"` を statements とは別バケットで持ち、interpreter が `globalInit` より前に処理します
 - **`Statement` union が 3 → 11 メンバーに増えた** (`types.ts:72-83`)。`ChordBinding` / `PatternBinding` / `ModeBinding` (pitch DSL の `var m7 = [...]` 等)、`ImportStatement` / `FileImportStatement`、`MixerHandleStatement` / `MixerInit` / `MixerNodeDecl` (Signal Chain DSL、#517 S1)
 - **`parseStatement()` に `IMPORT` の分岐が加わり**、`parseVarDeclaration()` は右辺の先頭トークン (`[`、`(`、`mode(`、`<id>.output|sum|aux`) で宣言の種類を判別するようになった (`parse-statement.ts:58-85`, `108-149`)
@@ -148,6 +149,30 @@ export type AudioToken = {
 ```
 
 Set を使ったルックアップは `O(1)` なので、キーワードの数が増えても速度は変わりません。実装を読むと、意外とシンプルな仕組みで動いていることがわかります。
+
+この `KEYWORDS` は元々 private static でしたが、#668 PR-E4 で `ReadonlySet<string>` の public static になり、モジュール末尾に照合用の view が export されました。
+
+```typescript
+// packages/engine/src/parser/tokenizer.ts:288-289
+/** パーサの構文表面と tokenizer の予約語を照合するための公開 view。 */
+export const KEYWORDS = AudioTokenizer.KEYWORDS
+```
+
+読み手は誰でしょうか。同じ `parser/` ディレクトリに置かれた `dsl-surface.ts` です。ここには「**メソッド呼び出しの形をしていない DSL 表面**」— `var g = init GLOBAL`、`RUN(x)`、`n by 4`、`1@v+10` など — が id として列挙されており、各 id に「tokenizer / parse-statement のどの分岐と対応するか」がコメントで書いてあります。
+
+```typescript
+// packages/engine/src/parser/dsl-surface.ts:1-8
+/**
+ * パーサが受理する「メソッド呼び出しでない」DSL 表面。
+ * tokenizer / parse-statement の分岐と 1:1 に保つ。
+ */
+export type DslSyntaxId =
+  | 'var-init-global' // var g = init GLOBAL              tokenizer.ts:19-20, parse-statement.ts:62
+  | 'var-init-seq' // var s = init global.seq          parse-statement.ts:385
+  | 'import' // import { x } from "./a.orbs"     tokenizer.ts:27, parse-statement.ts:67
+```
+
+この列挙はパーサの実行には使われません。実機 E2E のラチェットが「予約語を足したのに構文表面へ写像していない」「構文表面を足したのに E2E が無い」を検出するための正本です（詳細は [IV-3](/editor/mcp-and-gated-e2e)）。パーサ側から見ると、**分岐を増やしたらここにも 1 行増やす**という約束が 1 つ増えた、ということになります。
 
 ### シングルパススキャン
 
@@ -449,6 +474,8 @@ export type SequenceStatement = {
 - `packages/engine/src/parser/types.ts:203-219` — `ImportStatement` / `FileImportStatement`
 - `packages/engine/src/parser/types.ts:252-274` — `GlobalStatement` / `SequenceStatement` / `MethodChain` と `invocation`
 - `packages/engine/src/parser/tokenizer.ts:11-32` — `AudioTokenizer` クラスと `KEYWORDS` Set
+- `packages/engine/src/parser/tokenizer.ts:288-289` — 照合用に export された `KEYWORDS` view (#668 PR-E4)
+- `packages/engine/src/parser/dsl-surface.ts:1-35` — `DslSyntaxId` / `DSL_SYNTAX_SURFACE` (#668 PR-E4)
 - `packages/engine/src/parser/tokenizer.ts:135-170` — `tokenize()` メインループ冒頭と accidental の判定
 - `packages/engine/src/parser/audio-parser.ts:68-115` — `AudioParser.parse()` のループ・振り分け・IM.1 検査
 - `packages/engine/src/parser/audio-parser.ts:121-126` — `parseAudioDSL()` エントリ関数

@@ -276,9 +276,9 @@ v3.0 では「どの音を出すか」はファイル名で決まり、「どの
 ## Sources
 
 - `packages/engine/src/version.ts:14-17` — `ENGINE_VERSION = '2.0.0'` / `DSL_VERSION = '1.1'` (audio line v3.0 とは別軸)
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1933-1990` — §13 Versioning: v0.1-v3.0 と v1.1 Pitch DSL の変更履歴と Migration Notes
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:467-601` — §7 v3.0 アンダースコアプレフィックスパターンの仕様
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:336-432` — §5 片記号方式 (unidirectional toggle) の仕様
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1983-2035` — §13 Versioning: v0.1-v3.0 と v1.1 Pitch DSL の変更履歴と Migration Notes
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:496-631` — §7 v3.0 アンダースコアプレフィックスパターンの仕様
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:365-462` — §5 片記号方式 (unidirectional toggle) の仕様
 - `docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md` — v1.0 MIDI DSL 仕様書アーカイブ (2025-10-06 アーカイブ)
 - `packages/vscode-extension/src/extension.ts:4029-4038` — `sequence ` キーワードの deprecated 警告実装
 - commit `081a474` — SuperCollider 統合と sox 廃止 (v2.0 の技術的基盤)

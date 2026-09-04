@@ -82,6 +82,40 @@ installed モード（vsix を焼いて `--install-extension`）に切り替え�
 `npm run typecheck:e2e` 0 / `tests/vscode-extension/` **430 passed** / lint 0。
 
 ---
+### docs(site): follow PR #727's output-line spec revision into the user site and SC-2 (Sep 4, 2026)
+
+**追従元**: PR [#727](https://github.com/signalcompose/orbitscore/pull/727)（`611-output-line-spec` → main・マージコミット `d8191d1`）/ **ブランチ**: `claude/docs-sync-pr727`
+
+#727 は spec だけを動かした docs-only PR で、`sites/dev/signal-chain/` の 2 章（日英）は
+同じ PR の中で追従済みだった。**追従が漏れていたのは「ユーザーが書く語」の側**である。
+
+#### 直したもの
+
+| 場所 | 追従した規範 |
+|---|---|
+| `sites/user/mixing/routing.md`（日英） | MX.3: `send()` の第 2 引数が **dB になる**（`0.3` → +0.3 dB のサイレント変更）/ MX.5 から「post-fader 固定」が**削除**され、タップ位置は「書いた位置」になった |
+| `sites/user/reference/methods.md`（日英） | 同上 + MX.2.3: **数値レンダーバス `seq.output(n)` は撤回**された |
+| `sites/dev/signal-chain/mixer-audio-line.md`（日英） | 「`seq.output()` の 3 分岐」節に MX.2.3（数値分岐の撤回）と MX.2.1（LinkAudio は解決順の**最後**）の注記 |
+| `sites/dev/decisions/adr-002-dsl-v3-pivot.md`（日英） | core spec への行番号引用 2 件を再アンカー（`1933-1990` → `2112-2164`・`467-601` → `496-631`） |
+
+🔴 **実装は 1 行も変わっていない**ので、user site の表と本文は**今日の書き方のまま**にして、
+「仕様は変わったが未実装」という注記を足す形にした。表を到達点で書き換えると、
+読者が今日書けないコードを読むことになる。
+
+🔴 **`send` の単位変更はエラーにならず音だけが変わる**（線形 0.3 → +0.3 dB ≒ 素通し）。
+user site の両言語に `danger` ブロックで明示した。
+
+#### 再アンカーについての但し書き
+
+adr-002 の 2 件は **#727 以前から既にずれていた**（§13 Versioning は #727 前も 1983 行目で、
+引用は 1933-1990 だった）。#727 が core spec を +63 行伸ばしてずれが広がったので、
+この機会に両方を現在の節境界へ合わせた。3 件目の `336-432`（§5 = 315-468）は
+節の内側の抜粋なので触っていない。
+
+#### 検証
+
+`npm ci` / `npm run docs:build -w @orbitscore/user-site` / `npm run docs:build -w @orbitscore/dev-site` /
+`npm run docs:check` の 4 本すべて green（citation 922 件検証・0 failed）。
 
 ### docs(spec): fix the implicit-master condition found by the independent re-audit (Sep 4, 2026)
 
@@ -336,71 +370,111 @@ engine の性質として固定してしまう。** follow-up（本 PR の範囲
 が入れ替わった）。本 PR は restore を触っていないので既存の不安定さと考えるが、**裏取りはしていない**。
 途中、起動判定の誤った修正で `#628 R28` を落としたが、訂正後は baseline どおり passed に戻っている。
 
-### fix(studio): declare untrusted-workspace capability so a loose-file launch activates (Sep 4, 2026)
+### docs(spec): add RUN termination and offline render to the note-off firing cases (Sep 4, 2026)
 
-**Issue**: #385（`must-fix`）/ **ブランチ**: `385-untrusted-workspace-capability` / **PR-S-T1**
+**Issue**: #606（`must-fix`）/ **ブランチ**: `606-noteoff-firing-spec` / **PR-K-A0**（spec 先行）
 
-フォルダ無しの loose-file 起動（`orbs file.orbs` — ライブコーディングの典型動線）は**未信頼の
-ad-hoc workspace** を作る。`capabilities.untrustedWorkspaces` を宣言していない拡張はそこで
-**制限付き**になり **activate されない**。利用者には「何も起きない」ようにしか見えない。
-🔴 **実害は拒否ではなく沈黙である。**
+`docs/design/634-pdc-layer-instrument-rack-design.md` §3 の実装（PR-K-A1 / A2）に入る前に、
+**note-off の発火点**を仕様側で確定させる。コードは 1 行も変更していない。
 
-#### 🔴 `supported: true` — ガードは置かない（owner 裁定 + 2026-09-04 の再確認）
+#### 🔴 「flush が無い」は誤り — 配送機構は在る
 
-裁定（`docs/design/656-release-design.md` §16 (1)）は **`true`**、理由は「一般的な DAW の挙動に
-併せて」。DAW はプロジェクトを開く時に信頼を問わずプラグインを読む。`"limited"` は**撤回済み**、
-`false` は今日の挙動を宣言するだけで症状が直らない。
+地図 §4.B の記述は誤りで、`run-sequence.ts → sequence.ts → midi-scheduler.ts → plugin-note-output.ts`
+の経路は**実在する**。壊れているのは**その周り**である（設計 §3.1 の穴 4 つ）。
+したがって本 spec 改訂も「機構を足す」話ではなく、**発火点の列挙に 2 つ足す**話である。
 
-⚠️ **設計 §3.3 は撤回された `limited` 前提のまま `startEngine()` にガードを置く形で残っており、
-plan の PR 名も "refuse loudly"（大声で断る）のままだった。** そのまま実装すると
-**#385 の症状を大声にしただけ**になる。裁定表が「B ならガードが不要になる」と明記しているので、
-**ガードは置かない**。
+#### 改訂
 
-🔴 **さらに owner 確認（2026-09-04）: 確認ダイアログも足さない。**
+| 文書 | 箇所 | 追加 |
+|---|---|---|
+| `PITCH_DSL_SPEC_v1.1.md` | §7-2 realization rule 2（Active note tracking） | **一発 `RUN()` の終端** / **オフラインレンダの終端** |
+| `INSTRUCTION_ORBITSCORE_DSL.md` | Note lifecycle の Active-note tracking | 同上（英語側） |
+| 同 | **PH.4 All Notes Off** | 同じ発火点 2 つ + 🔴 **daemon 側の「最後の砦」** |
 
-> 一般的な DAW と同じ形にしないと、ライブコーディング中に毎回読み込みが走る時に、
-> 何かが止まったり確認が入ったりすると、**とてもライブコーディングのライブ感が失われます**。
-> 音楽制作として使っている時も、**通常の DAW と違うワークフローが顔を出してしまう**。
+#### 🔴 発火点が増えても配送機構は 1 本
 
-一度「拒否しないが黙らない」として `instrument(path)` に確認を出す案を出したが、**否定された**。
-ライブコーディングは評価を繰り返す行為なので、1 回の確認が「毎回の中断」になる。
-**このリポジトリの「沈黙は危険」という規律は失敗が見えないことに対するもので、
-成功時の告知にまで拡張してはいけない。** 成功時は既に
-`[orbit-effect-rack] child spawned …`（`outproc_effect.rs:671`）、失敗時は
-`OUTPROC_ATTACH_FAILED`（`session.rs:2523`）が `get_log` に出ており、**足すものは無かった**。
+3 箇所すべてに同じ注記を置いた。**場面ごとに別の flush を作らない。**
+設計 §3.2 の責務 3 層（TS scheduler = owner ごとの解放 / daemon = instance ごとの最後の砦 /
+child = 触らない）を仕様の言葉に落とした形である。
 
-#### `restrictedConfigurations` は 2 つだけ
+**child に flush を置かない理由**も設計から引いた: child は自分が受けた note の簿記を持たず、
+持たせると `(port_index, channel, key)` 参照カウント（PH.4）の**正本が割れる**。
 
-基準は「**workspace が値を決めると別の実行ファイルが動く**」もの。`orbitscore.scsynthPath` は
-実行ファイルのパスそのもの、`orbitscore.engine` は `sc` に倒すと `scsynthPath` を有効化する。
-これは `supported` の値と独立に効く保護で、**ワークフローには一切現れない**。
+#### daemon の「最後の砦」を仕様に書いた理由
 
-🔴 `orbitscore.audioDevice` は**入れない** — デバイス名は実行対象を選ばないうえ、
-**gated E2E のハーネスが workspace 設定に書く**ので入れると壊れる（設計 §3.2）。
+engine が保留 note を解放し切る前に死ぬと、**daemon は active note を追跡しているのに読み手が
+いない**（設計 §3.1 の穴 H4・読み手 0 箇所）。これは
+「**鳴りっぱなしを検出できるのに止められない**」状態なので、仕様の側で義務として書いた。
+実装は PR-K-A2（wire に新 RPC を足す = 一方通行）。
 
-#### 宣言そのものが成果物なので、それを検査するテストを付けた
+##### 🔴 粒度を書き足した（Fable 監査の指摘）
 
-`tests/vscode-extension/untrusted-workspace-capability.spec.ts`（5 本）。
-**4 種類の変異がすべて別々のテストで捕まる**ことを確認した（実出力）:
+初稿は「daemon が自身の追跡集合から note-off を送れること」までしか書いておらず、**粒度が
+無かった**。2 行上には「**1 シーケンスの停止に wildcard な解放を使わない**」という規範があるので、
+**サミング（複数シーケンス → 1 インスタンス）が入った時点で両者が衝突して読める。**
 
-```
-変異A supported=false        → × supports untrusted workspaces …
-変異B audioDevice を restrict → × restricts exactly … / × does not restrict settings that name a device …
-変異C キーを綴り間違い        → × restricts exactly … / × only restricts settings this extension actually contributes
-変異D description から根拠削除 → × explains why evaluation is allowed …
-restore 後                    → cmp 一致
-```
+書き足した内容: 最後の砦は **instance 単位（そのインスタンスの全 owner）**である。daemon は
+owner の境界を持たないので、これは wildcard 禁止の**例外ではなく適用外** — 通常の owner 単位の
+解放経路から呼んではならない。発火してよいのは **`global.stop()` / shutdown / engine 異常終了**の
+3 場面だけで、いずれも「そのインスタンスで鳴ってよいものが 1 つも無い」場面である。だから
+サミングが入っても**巻き込む相手が存在せず**、参照カウント判定が不要になる。
+
+粒度を書かない仕様は、実装時に「便利な flush」として owner 単位の経路から呼ばれる。
+**義務だけ書いて適用範囲を書かないと、規範どうしが後で衝突する。**
 
 #### 検証
 
-`npm test` **2201 passed** / 48 skipped ・ `typecheck:e2e` 0 ・ `lint` 0 ・
-`check-citations.mjs` **922 verified / 0 failed**（`package.json` に 11 行足したので再アンカー）。
+`npm test` 2199 passed / 49 skipped（docs のみなので不変）・
+`check-citations.mjs` 922 verified / 0 failed（行番号のずれを再アンカー）。
+### docs(planning): record the VST3 / CLAP conventions the scanner does not follow (Sep 4, 2026)
 
-**実機 gated は対象外**。この PR が変えるのは**マニフェストの宣言**で、gated harness は
-毎回新しい `--user-data-dir` を作り `--extensionDevelopmentPath` で起動するため、
-**untrusted workspace の経路を今の harness では通らない**（設計 §3.5 が「trust の状態を
-誰も固定していない」と書いているとおり）。層 2（product.json override・PR-S-T2）と
-インストール済み拡張での E2E（§12・E2E-D1）が要る。
+**地図**: `docs/planning/DEVELOPMENT_MAP.md` **§4.C** / **ブランチ**: `546-plugin-spec-conventions`
+/ owner 2026-09-04・**バグではなく機能改善**
+
+#### 🔴 最初、DAW の「振る舞い」を写して規格を読んでいなかった
+
+owner:
+
+> オービットスタジオで今 **dylib を名指ししているという状態自体が、ちょっと異常**。
+> VST も CLAP も基本的には**作法があるはず**なので、その作法を地図のどこかに入れていく。
+> 他のものが使えているので、**他を実装した後でも全然いい**。**バグではなくて機能改善・改修。**
+
+> 僕が言ってるのが VST や CLAP の作法ではないというか、**作法をちゃんと調べてやりましょう**。
+
+初稿はフォーラム・製品ドキュメントから **Ableton / Bitwig の振る舞い**を写しただけだった。
+owner の指摘で規格を読み直したところ、**振る舞いの観察からは出てこない義務**が見つかった。
+
+#### 規格が定める作法と現在地
+
+| # | 規格（一次情報・**強度**） | 現在地 |
+|---|---|---|
+| 1 | **CLAP: `CLAP_PATH` を問い合わせる — `must`**（`clap/include/clap/entry.h` 逐語 "a CLAP host **must** query the environment for a CLAP_PATH variable"） | 🔴 `CLAP_PATH` は見ていない。ただし **`ORBIT_PLUGIN_PATH`（`:` 区切り）は既に読んでいる**（`lib.rs:200-211` `extra_scan_dirs_from_env`）ので、**同じ関数に 1 本並べるだけ** |
+| 2 | **CLAP: 各ディレクトリを再帰的に探索 — `should`**（同上。1 と違い義務ではない） | 🔴 **非再帰**（`list_bundle_candidates` の doc・同 `:228`。テスト `:2197` が非再帰を固定） |
+| 3 | **CLAP: 1 `.clap` に複数プラグイン。factory で descriptor 列挙 → plugin ID で生成** | ✅ **実装済み**（`orbit-clap-host/src/discovery.rs:105-120` 全列挙 / `lib.rs:540-566` 1 バンドル→複数エントリ / `discovery.rs:125-137` ID で選択）。同一性は `(format, path, pluginId)` の複合キー（`lib.rs:1028-1034`） |
+| 4 | **VST3: `moduleinfo.json` は 3.7.5 で導入、3.7.8 で `Contents/` → `Contents/Resources/`**（cmake の `SMTG_MODULEINFO_PATH_INSIDE_BUNDLE` で版差を確認） | ○ 参照している（`lib.rs:110`）。⚠️ **`Contents/Resources/` しか見ない**（`lib.rs:842`）ので **3.7.5〜3.7.7 のバンドルは ProbePending 送り** |
+| 5 | **同一性は ID（CLAP=plugin ID / VST3=CID）、path は「所在」。ID → ファイルの対応表は規格に無く、所在の解決はホストの責務** | 🔴 `instrument(path)` が生パス（`plugin-resolver.ts:76-80`） |
+| 6 | 検証を走らせるタイミング | 🔴 手動のみ（起動時はカタログ JSON を読むだけ・`plugin-catalog-reader.ts:132-150`） |
+
+**1 は既存関数への 1 行追加。2 も小さい。5 は作り直しの規模**なので他の実装の後（owner）。
+
+🔴 **初稿は 3 を「❓ 未確認」、5 を「規格はパスを同一性にしない」と書いていた。**
+前者は**実装を読めば分かることを読まずに未確認と書いた**（[[invent-rules-only-after-reading-the-code]] の再発）。
+後者は**言い過ぎ** — 規格は path を禁じているのではなく、同一性の担い手が ID だというだけである。
+「作法を調べる」は規格側だけでなく**自分の現在地も一次情報で確かめる**ことを含む。
+
+#### 保証のタイミングについての整理
+
+owner: 「Logic や Studio One も**読み込めるということを確認するだけ**で、起動時に全てのプラグインが
+メモリに読み込まれているわけではない。**インサートした時だけメモリ空間に出てくる。**
+なので起動時のチェックは**品質保証的なもの**」。
+
+調査でも一致した — Ableton は VST3 を常時スキャンにし、**AU は Apple の `auval` に外注**している。
+Bitwig は**保証しきれないことを認めて隔離で解く**（ホスティングモード 5 段階）。
+**OrbitScore は既に Bitwig 型の out-of-process + crash isolation を採っている。**
+
+🔴 **これは [[live-coding-forbids-workflow-interruptions]] と対になる。** 保証を起動時に寄せるからこそ、
+**演奏時に確認を挟む必要が無い**。「評価時に trust を問う」設計は DAW と**二重に**違っていた
+（① 確認を挟む ② 判断を実行時に置く）。
 
 ---
 
@@ -1381,525 +1455,3 @@ un-ignore 行が残っているため**再設置すると再発する**ことを
 
 **自動マージにもしない**: #688 の本文には事実誤認があった（「vitest を回す CI チェックは 1 本も
 存在しない」— 実際は `code-review.yml:26` が `npm test` を実行している）。人が読む前提は変えない。
-
-## 束 668-e2e-foundation — E2E 基盤（段 0・安全網）
-
-正本: [`docs/design/668-e2e-foundation-design.md`](../design/668-e2e-foundation-design.md) /
-[`docs/planning/IMPLEMENTATION_PLAN_2026-09.md`](../planning/IMPLEMENTATION_PLAN_2026-09.md) §1.10。
-束ブランチ運用（[`BUNDLE_BRANCH_WORKFLOW.md`](BUNDLE_BRANCH_WORKFLOW.md)）の最初の束。
-
-### PR-E2 追従: dev サイトを共有ハーネス層まで追従させる（docs のみ）
-
-PR #712（merge `affdf69`）に対するドキュメント追従。**実装・テストは一切変更していない。**
-
-**追加**（`sites/dev/editor/mcp-and-gated-e2e.md` と `sites/dev/en/` の同パス）:
-
-- 新節「共有ハーネス層 — `tests/e2e/helpers/`」。5 モジュールの一覧と、
-  `expectNoNewErrors`（`engine-log.ts:51-62`）/ `captureWavPath`（`gated-session.ts:47-51`）/
-  `runScore` の `evaluate`（`run-score.ts:187-196`）を verbatim 引用
-- 🔴 **capture パスの実測値は 13 箇所**（`grep -c "captureWavPath(" tests/e2e/orbitstudio-mcp-gated.spec.ts`）。
-  PR #712 の本文と上の PR-E2 節は「11 箇所」と書いているが、実ファイルは 13。
-  `ORBIT_KEEP_CAPTURES` を見ていたのが 1 箇所だけだった点は変わらない
-- `ORBIT_KEEP_CAPTURES` の既存段落に「spec 全体で効くようになったのは PR-E2 以降」を追記
-- `tests/e2e/helpers/` が `GATED_SOURCE_GLOBS`（`tests/e2e/gated-sources.ts:29-35`）に**含まれない**ことを明記
-
-**行番号の再アンカー**（PR #712 は fenced code block の引用ヘッダだけを直したので、
-散文中の行参照が残っていた）:
-
-- 「テスト一覧」表の 20 本の行番号（`638→636` 〜 `4483→4473`）
-- `plugin-ui.md` / `catalog.md` / `mixer-audio-line.md` / `signal-chain/index.md` /
-  `capture-verification.md` の Sources 節の行範囲（ja / en 各 5 ファイル）
-- 対応は old/new のテキスト一致で 1 行ずつ照合済み（推定ではない）
-
-**検証**: `npm run docs:build`（user / dev）と `npm run docs:check` はすべて緑。
-
-### PR-E2: 共通 helper を切り出す
-
-正本: 設計 §4.1〜4.5。**実装は Codex**（`gpt-5.6-sol` / effort high）、**検証は main**。
-
-**追加**（`tests/e2e/helpers/`・計 524 行）:
-
-| モジュール | 中身 |
-|---|---|
-| `engine-log.ts` | `LOG_WINDOW_LINES` / `countLogMarker` / `countErrors` / `errorBaseline` / `expectNoNewErrors`（`toBeLessThanOrEqual`）/ `expectLogMarkerAtLeast` |
-| `gated-session.ts` | `GatedCatalog` / `GatedSession` / `captureWavPath` / `createGatedSession` |
-| `run-score.ts` | `ScoreSource` / `CaptureWindows` / `ScoreRunContext` / `runScore` |
-| `wait-for-file.ts` | `waitForFile` / `waitForMatchingFile`（`minBytes` つき — 生成と書き込みが別なので存在だけ見ると 0 バイトを掴む） |
-| `run-cli.ts` | `CliResult` / `runOrbitscoreCli`（`replay` / `render` の E2E 用。MCP を通らない唯一の例外） |
-
-**gated spec の変更は機械的置換のみ**（+18/−28）。シナリオのロジック・アサーション順序は無変更:
-
-- 🔴 **`countErrors` の 7 重定義が 1 本になった。** 変更前の定義位置は
-  `496 / 2144 / 2722 / 3155 / 3461 / 3969 / 4464` 行（発注時の実測と完全一致）。
-  変更後 `grep -c "const countErrors = (log"` = **0**
-- 🔴 **capture WAV のパス構築 13 箇所を `captureWavPath` に統一。** 変更前は
-  `ORBIT_KEEP_CAPTURES` を見るのが **492 行の 1 箇所だけ**で、残りは素の `path.join` だったため
-  **落ちた瞬間に証拠の WAV が消えていた**。`ORBIT_KEEP_CAPTURES` 未設定時のパスが
-  変更前と同一であることを実測で確認（接頭辞 `643-` は元から両分岐に付いていた）
-- 638 行のローカル変数 `captureWavPath` が import した関数名と衝突するため
-  `captureWavFile` にリネーム（参照 3 箇所も追随）
-
-**main の受け入れ監査で 1 件直した**（Codex は「食い違いなし」と報告していた）:
-
-> 🔴 `runScore` の `evaluate` が **設計 §4.2 に反して `isError` を assert していた**。
-> コメントには設計の文言（「`ok` に assert しない」）が書いてあるのに、コードが逆をしていた。
-> **診断が出ることを確かめる E2E**（doc 610 の異常系は「この譜面は診断を出す」が判定条件）で
-> `runScore` が使えなくなるため、設計どおり assert しない形に直した。
-> 診断の判定は `engine-log.ts` の `expectNoNewErrors` / `expectLogMarkerAtLeast` が担う。
-
-**検証**（main が sandbox 外で回した実測）:
-
-- `npx tsc --noEmit` / `npx eslint tests/e2e` → 0
-- `npm test` → **2167 passed / 48 skipped**（gated は 20 tests / 20 skipped = `it(` を増減させていない）
-- `node sites/dev/scripts/check-citations.mjs` → **904 verified / 0 failed**
-  （gated spec の行が動いたので 44 件ずれ、40 件は `--fix`、4 件は `captureWavFile` の
-  リネームで本文が変わったため手で修正）
-
-**残る注意**: `runScore` は本 PR ではどのシナリオからも使われていない（設計どおり「既存 20 本は
-書き換えない」）。**最初の消費者は PR-E3**（`channelRms` を足す）なので、実行での検証はそこで付く。
-
-### PR-E1: gated E2E の走査先を 1 箇所にする
-
-**なぜ先に入れるか**（設計 §3.4・§11 F-9）。ラチェット（`dsl-e2e-coverage.spec.ts:39`）と
-衛生検査（`gated-assertion-hygiene.spec.ts:18`）が**それぞれ 1 ファイルを決め打ち**していたため、
-シナリオを別ファイルへ出した瞬間に
-
-- **(a)** カバー済みの語が未カバー扱いになってラチェットが red
-- **(b)** 衛生検査が新ファイルを見ず、**黙って弱くなる**
-
-が同時に起きる。🔴 **(b) は red にならないぶん危険**で、検査が効いていないことに気づけない。
-分割（PR-E2 以降）の前提として、走査先を `tests/e2e/gated-sources.ts` に集約した。
-
-**変更**:
-
-- `tests/e2e/gated-sources.ts`（新規）— `GATED_SOURCE_FILES` / `readGatedSources()` /
-  `readGatedSourceEntries()` / `gatedItTitles()`。`gated/` 配下は**まだ存在しない**が、
-  作られた時点で自動的に走査対象に入る（`.spec.ts` にしないので vitest の発見単位は 1 本のまま）
-- **ソースが 0 本なら throw する。** 入口 spec の改名やディレクトリ移動で空になると、両検査が
-  「何も見つからなかった」を「違反ゼロ」と読んで**全件 green のまま無意味になる**
-- 衛生検査の違反報告を **`file:line`** 形式にした（連結後の行番号では追えないため）
-- `tests/e2e/helpers/rack-child-pid.ts`（新規）— `rackChildPidsFromLog` /
-  `latestRackChildPid` を gated spec から移した。`rack-child-pid-oracle.spec.ts` が
-  **`.spec.ts` から import していた**のを解消（spec 分割で import 元が消えるため）
-
-**検証**:
-
-- `npm test` → **2167 passed / 48 skipped**（挙動不変）
-- 🔴 **層が効いていることを実行で確認した。** `tests/e2e/gated/__probe.ts` に ERROR 件数の
-  厳密等価を置くと衛生検査が **red** になり、**`gated/__probe.ts:7`** と報告した。
-  この PR 以前ならこのファイルは走査されず、検査は黙って通っていた。確認後に削除し、緑に戻した
-
-### PR-E4: DSL 構文表面の正本と網羅ラチェット
-
-**なぜ入れるか**（設計 §3.1〜3.3）。従来のラチェットは `.name(` だけを走査するため、
-`play` のネスト、event modifier、tie、複数行 chain のような**メソッド呼び出しでない構文**を
-増やして E2E を書き忘れても green のままだった。production に 13 構文の正本を置き、語彙・
-構文・tokenizer keyword・台帳・観測タイプの退行を A-1〜A-5 で止める。
-
-**変更**:
-
-- `packages/engine/src/parser/dsl-surface.ts`（新規）— 設計 §3.1 の `DslSyntaxId` 13 個と
-  `DSL_SYNTAX_SURFACE`。推測による追加はしない
-- `tokenizer.ts` — `AudioTokenizer.KEYWORDS` を `static readonly` にし、読み取り専用の
-  `KEYWORDS` 名前付き export を追加。既存の `.has(id)` 呼び出しは不変
-- `tests/e2e/dsl-coverage-ledger.ts`（新規）— `ObservationKind` / `CoverageEntry` /
-  `DSL_COVERAGE_LEDGER`。E4 は E2E を増やさないため、台帳と smoke baseline は 0 から開始
-- `dsl-e2e-coverage.spec.ts` — A-1〜A-5。走査は `readGatedSources()` / `gatedItTitles()` を通し、
-  構文 baseline 13 個は減らす方向だけ、smoke baseline は増やさない
-
-**ラチェットの実効性**:
-
-- A-1: `SEQUENCE_DSL_METHODS` に `__a1_probe` → `expected [ '__a1_probe' ] to deeply equal []`
-- A-2: 構文正本に `a2-probe` → `expected [ 'a2-probe' ] to deeply equal []`
-- A-3: tokenizer に `A3_PROBE` → `unmappedKeywords: [ "A3_PROBE" ]`
-- A-4: 台帳に存在しないシナリオ → `missing gated scenario` を含む行を列挙して red
-- A-5: smoke 行を 1 件追加 → `expected 1 to be less than or equal to 0`
-
-各 probe は個別の red 確認直後に逆パッチで戻し、対象 spec は **9 passed** に復帰した。
-
-**検証**:
-
-- `npx tsc --noEmit -p tsconfig.json` → exit 0（出力なし）
-- `npx eslint packages/engine/src/parser tests/e2e` → exit 0（出力なし）
-- `npm test` → sandbox の `listen EPERM: operation not permitted 127.0.0.1` により
-  **105 failed / 2066 passed / 48 skipped**。権限回避は行わず実出力を記録
-- `cd sites/dev && node scripts/check-citations.mjs` → **904 citations verified / 0 failed**
-  （初回 6 件 red → `--fix` と引用本文の手修正で再アンカー）
-
-**設計との差分として残す事項**:
-
-- 現行 `gatedItTitles()` は curried な `it.skipIf(...)(title, ...)` 20 件を抽出できず 0 件を返す。
-  ブリーフどおり helper と gated spec は変更せず、E4 の台帳は空から開始した
-- tokenizer の `force` は `parse-statement.ts` で transport の `.force` modifier として受理されるが、
-  設計 §3.1 の 13 構文には独立 id が無い。正本は増やさず、A-3 では transport 3 id に対応づけた
-
-#### main の受け入れ監査で 1 件直した — `gatedItTitles()` が題名を 1 件も拾えていなかった
-
-🔴 **PR-E1 で main（私）が入れた `gatedItTitles()` のバグ。** gated suite は 20 箇所すべて
-
-```ts
-it.skipIf(!appAvailable)(
-  'drives real OrbitStudio end-to-end: …',
-```
-
-という**カリー化された呼び出し**で書かれており、題名は**2 つ目の呼び出しの第 1 引数**にある。
-PR-E1 の正規表現は `it(` の直後に文字列が来る前提だったので、**題名を 1 件も拾えていなかった。**
-
-**なぜ PR-E1 では気づけなかったか**: `gatedItTitles()` に**テストが無く、消費者もいなかった**。
-拾えなくても「照合対象が無い」だけで誰も困らない。**検査 A-4（台帳のシナリオが実在するか）が
-消費し始めた瞬間に、空振りで緑 → 正当な台帳エントリで誤 red、という壊れ方をする。**
-
-**修正**:
-
-- 正規表現を `it.skipIf(<cond>)(` のカリー形に対応させた（直呼びも引き続き拾う）
-- 🔴 **題名が 0 件なら throw する。** `readGatedSources()` には同じガードを入れていたのに、
-  題名側に入れ忘れていた。**黙って空を返す層は、消費者が現れるまで壊れていることが分からない**
-- `tests/e2e/gated-sources.spec.ts`（新規）— **走査の層に初めてテストを付けた**
-
-**変異で確認した（実出力）**:
-
-```
-旧正規表現に戻す + 台帳に実在シナリオを入れる
-  → × picks up titles from the curried it.skipIf(...) form the suite actually uses
-  → × returns titles that the coverage ledger can anchor to
-  → × A-4 keeps every coverage-ledger scenario anchored to a gated it title
-  → Error: gated E2E の it( 題名が 1 件も見つからない。…
-復元後 → Tests  13 passed (13)   ／ cmp で 2 ファイルの復元一致を確認
-```
-
-**A-1〜A-5 も 1 本ずつ変異で確認した**（main の実測）:
-
-| 変異 | red になった検査 |
-|---|---|
-| 構文 id を足して台帳に入れない | A-2 |
-| tokenizer に予約語を足す | A-3 |
-| 台帳に存在しないシナリオを書く | A-4 |
-| 台帳に `smoke` 行を足す | A-5（+ A-4） |
-
-いずれも restore 後に緑へ戻り、`cmp` で 3 ファイルの復元一致を確認した。
-
-**検証**（main が sandbox 外で回した実測）: `tsc` 0 / `eslint` 0 /
-`npm test` **2171 passed / 48 skipped**（+4 = A-2〜A-5）/ `check-citations.mjs` **904 verified / 0 failed**。
-
-### PR-E1 の docs 追従（dev 学習サイト IV-3）
-
-PR [#707](https://github.com/signalcompose/orbitscore/pull/707)（マージコミット `8bc65cf`）に
-dev 学習サイトを追従させた。コード・テストは触っていない。
-
-**なぜ必要か**: #707 は「ラチェットと衛生検査の走査先を `gated-sources.ts` に集約する」という
-**構造の変更**で、IV-3 章はその 2 検査を「gated spec のソースを読む」と説明していた。
-引用の再アンカー（#707 の 2 コミット目）はコードブロックの行番号だけを直すので、
-**本文と `## Sources` の行範囲は古いまま残っていた**。
-
-**変更**:
-
-- `sites/dev/editor/mcp-and-gated-e2e.md` / `sites/dev/en/editor/mcp-and-gated-e2e.md`
-  - §8 に「走査先は 1 箇所が持つ」節を追加（`GATED_SOURCE_GLOBS` / 空なら throw /
-    `readGatedSources()` と `readGatedSourceEntries()` の使い分け / `file:line` 報告）
-  - ラチェットの説明を「gated spec の中に」から「`readGatedSources()` が返す
-    gated E2E のソース全体に」へ
-  - §3 の `rackChildPidsFromLog` の出典を `tests/e2e/helpers/rack-child-pid.ts` へ
-  - `## Sources` に `gated-sources.ts` / `helpers/rack-child-pid.ts` を追加、
-    `orbitstudio-mcp-gated.spec.ts` の行範囲を再アンカー（import +1 / PID オラクル移動 -27）
-  - `verified-against` を `8bc65cf`・`verified-at` を 2026-09-03 へ
-- `sites/dev/{,en/}plugin-hosting/{catalog,plugin-ui}.md` /
-  `{,en/}signal-chain/{index,mixer-audio-line}.md` / `{,en/}rust-engine/capture-verification.md`
-  — `## Sources` の `orbitstudio-mcp-gated.spec.ts` 行範囲を同じ規則で再アンカー。
-  本文の対応関係は変わらないので `verified-against` は据え置き（STYLE_GUIDE §4）
-
-**検証**: `npm ci` / `npm run docs:build -w @orbitscore/user-site` /
-`npm run docs:build -w @orbitscore/dev-site` / `npm run docs:check`（910 citations / 0 failed）
-
-### PR-E3: capture の解析を per-channel でも取れるようにする
-
-**なぜ入れるか**（設計 §10）。`analyzeWavBuffer` は `wav-analysis.ts:127-132` で**全チャンネルを
-加算平均してモノラルにしてから**窓 RMS を取る。`WavAnalysis` にチャンネル別の系列は無く、
-MCP の `analyze_audio` もその形しか返さない（gated spec に `readFloatLE` は **0 件**）。
-チャンネル別 RMS は Rust 側（`orbit-audio-verify`）にしか無く、**MCP 経由の gated E2E からは届かない**。
-
-🔴 **このままでは書けない E2E が 4 件あり、いずれも mono に潰れて常に緑になる**:
-`pan` / `defaultPan` の L/R 差（#650）／ ch3-4 が無音・ch1-2 は有音（doc 611 E2E-4・5）／
-8ch で bleed 無し（doc 598 E2E-R5）。
-
-**変更**（実装は Codex・検証は main）:
-
-- `wav-analysis.ts` — `ChannelWindow` 型 / `WavAnalysis.channelWindows` / `channelRms` /
-  `analyzeWavBuffer(buf, { perChannel })`。**既定は mono のまま**（spread で、指定時だけ増える）
-- `mcp-server.ts` / `extension.ts` — `analyze_audio` に `per_channel` を追加。
-  設計の要求どおり**エージェントも同じ動線で見られる**ようにした（MCP は裏口ではない）
-- `tests/e2e/helpers/run-score.ts` — `CaptureWindows.channelRms(segment, channel, guardSec?)`
-
-**ユニットテスト 4 本**（既存 14 本は無変更）。決定的なのは 3 本目 —
-**片チャンネルだけに信号がある WAV** で `channelRms[1] === 0` かつ **`mono rms === channelRms[0] / 2`**
-を検証する。**mono 潰しの欠陥そのものを数値で固定**している。
-
-#### 🔴 実機の capture で mono と突き合わせた（main の実測）
-
-実機 gated が生成した**44.1 秒・ステレオ**の capture を、同じ関数で両方の呼び方で解析した:
-
-```
-ch数        : 2
-durationSec : 44.117
-mono rms    : 0.061970
-channelRms  : 0.061970  0.061970
-L/R 比       : 1.0000
-既定の不変性 : {}            ← perChannel 無指定では両フィールドとも undefined
-```
-
-**3 つの値が小数 6 桁まで一致。** 合成データの hard-pan テストが「**分離できる**」ことを、
-この実機値が「**mono と矛盾しない**」ことを示す。片方だけでは足りない。
-
-**検証**: `tsc` 0 / `eslint` 0 / `npm test` **2173 passed / 48 skipped**（+4）/
-`check-citations.mjs` **904 verified / 0 failed**。
-
-### 束の締め: `/simplify` の適用
-
-4 観点（reuse / simplification / efficiency / altitude）を並行で回した結果。
-
-| 指摘 | 判断 |
-|---|---|
-| `readGatedSources()` と `readGatedSourceEntries()` が**同じ throw ガードを 2 箇所**に持つ | ✅ 前者を後者から導出。**ガードが 1 箇所に** |
-| 二乗平均の式が `rms()` と `channelRms()` に重複 | ✅ `quadraticMeanRms()` に集約 |
-| `run-score.ts` の `markerCount` が `engine-log.ts` の `countLogMarker` と**完全に同一実装** | ✅ 寄せた |
-| `run-score.ts` が gated spec の `startR28Engine` を**約 60 行コピー**している | 🔶 **follow-up**（下記） |
-| per-channel から mono を導出して二重走査を避ける | ❌ **却下 — 数値が変わる**（下記） |
-
-#### 🔴 却下: per-channel から mono を導出する案
-
-「`channelRms` の平均で mono の `rms` / `windows` を導出すれば、バッファを 1 回しか走査しなくて済む」
-という提案。**これは既定の数値を変える。**
-
-mono の RMS は `sqrt(mean(((L+R)/2)²))`、チャンネル別 RMS の平均は `(rms_L + rms_R)/2` で、
-**別物**である。無相関・同電力の L/R で実測:
-
-```
-mono の RMS      : 0.407428
-ch別 RMS の平均  : 0.580297
-比               : 0.7021      ← 理論値 1/√2 ≈ 0.7071
-```
-
-🔴 **一致するのは L=R か片チャンネル無音のときだけ**で、**既存 14 本のテストはまさにその特殊ケース
-しか見ていない**。採用していれば**全件緑のまま通り、実際の音楽素材でだけ静かに壊れた**。
-per-channel を入れた動機（「mono に潰すと分離が測れない」）と同じ構図が、逆向きに出た形である。
-
-#### efficiency / altitude 班の指摘
-
-| 指摘 | 判断 |
-|---|---|
-| `readGatedSources()` / `gatedItTitles()` に**メモ化が無く、220KB のソースを読み直す** | ✅ **適用** |
-| `perChannel` + `windowMs` 併用時に**同じバッファを 3 回全走査** | 🔶 **follow-up**（下記） |
-| `windowsFor()` が区間ごとに filter する | ❌ 指摘に当たらず（高々 2200 要素の配列走査） |
-| `GATED_SOURCE_GLOBS` のファイル名決め打ち | ❌ **今のままでよい** — `gated/` を `.spec.ts` にしないのは**意図的**（vitest に発見させず、実 GUI の並列起動を避ける）。制約から導かれた形 |
-| 台帳が空で A-4 / A-5 が空振り | ❌ **設計どおり**（§3.5「台帳は空から開始する」）。箱を先に作り、中身は後続 PR |
-
-**メモ化の実測**（2026-09-04）: 対象は 220KB・4566 行の gated spec 1 本。
-`gated-sources.spec.ts` だけで**同じファイルを 3 回**、`dsl-e2e-coverage.spec.ts` で**2 回**読んでいた
-（`gatedItTitles()` が内部で `readGatedSources()` を呼ぶため）。合計 **+4 回の冗長読み込み**と、
-4566 行に対する `matchAll` の再実行。対照的に `gated-assertion-hygiene.spec.ts` は
-**モジュール先頭で 1 回だけ読んで保持**しており、そちらが正しい形だった。
-
-#### 🔶 follow-up: `wav-analysis.ts` の窓ループが 3 箇所に手書き
-
-`analyzeWavBuffer` 本体の窓ループ / `windowSeries` / `channelSeries` が同型で、
-`MIN_WINDOW_MS` / `MAX_WINDOW_SERIES` の cap チェックまで一字一句同じ。
-`{ windowMs, perChannel }` 併用時は**同じバッファを 3 回全走査**する
-（44 秒・48kHz・ステレオで `readFloatLE` が約 1267 万回 = 最小構成の 3 倍）。
-
-🔴 **ただし「per-channel から mono を導出する」形では直せない**（上記のとおり数値が変わる）。
-正しい形は**窓イテレーション自体を共有関数にし、1 パスで mono と per-channel の
-アキュムレータを同時に更新する**こと。**この束では直さない** — 既存 20 本の capture 値を
-変えないことが最優先で、いま `run-score` に消費者がいないため実害もゼロ。
-**次に窓ロジックを触る時の踏み台**として記録する。
-
-#### 🔶 follow-up: `startR28Engine` の重複
-
-`run-score.ts:989-1044` が gated spec の `startR28Engine` / `waitForEngine`（`:406-466`）を
-マーカー文字列・retry 構造・エラー整形まで含めてほぼ丸ごと再実装している。指摘は正しい。
-
-**この束では寄せない**: 解消には gated spec から helper を切り出す必要があり、**20 シナリオが依存する
-構造を束の締め直前に動かす**ことになる。設計 §4 も「本設計では寄せない — 既存 7 本の意味を変えない
-ことを優先する」と明記している。**リスクゼロの部分（`markerCount`）だけ取った。**
-
-**最初の消費者が付く時に寄せる**のが安全（今は `run-score` にも `startR28Engine` にも
-新しい消費者がいないので、形が確定していない）。
-
-### 束の締め: Fable 監査の結果
-
-🔴 **監査が私（main）の壊したビルドを捕まえた。**
-
-#### 0. `/simplify` の適用でビルドを壊していた（main の誤り）
-
-`quadraticMeanRms` を `function waitForEngineState(` の前に挿入したつもりが、実際のコードは
-**`async function waitForEngineState(`** で、**`async` と `function` の間**に入っていた:
-
-```ts
-async /** ... */
-function quadraticMeanRms(...) { ... }
-
-function waitForEngineState(...) { await ... }   // ← async が剥がれた
-```
-
-`tsc --noEmit -p tsconfig.tests.json` が **TS2304 / TS2355 / TS1308** で落ちる状態。
-
-🔴 **なぜ気づかなかったか、が本質**:
-
-| | |
-|---|---|
-| `npm test` が緑だった | **`run-score.ts` をどの spec も import していない**（gated spec が取るのは `captureWavPath` だけ） |
-| 私が回した `tsc -p tsconfig.json` が 0 だった | 🔴 **こちらは `tests/` を見ない**。**正本のゲートは `npm run typecheck:e2e`（`tsconfig.tests.json`）** |
-
-**消費者のいないコードは、テストでもデフォルトの型チェックでも守られない。**
-以後 `tests/` を触ったら **`npm run typecheck:e2e`** を回す。
-
-#### 1〜3. 適用した指摘
-
-| 指摘 | 対処 |
-|---|---|
-| 🔴 **hygiene が `runScore(..., { capture: true })` を capture 経路と認識しない**（設計 §17 F-1 の配線漏れ） | 検出条件に `capture:\s*true` を追加。**入れ忘れると新シナリオが何も測らなくても通る** |
-| **A-3 は `KEYWORDS` が空なら真空で通る** | `expect(KEYWORDS.size).toBeGreaterThan(0)` を先頭に |
-| **構文 / smoke の baseline の誠実さ検査が PR 分割の隙間に落ちている**（§3.3 は「両方」、§20 は A-10 を PR-E5 = `reference-coverage.spec.ts` のみに割当） | **A-10 をこの束に追加**（台帳に載った構文が baseline に残っていたら red / smoke baseline が実数より緩ければ red） |
-| **`GatedCatalog` が手写しで、片方に field を足すと黙ってずれる** | gated spec の return に **`satisfies GatedCatalog`** を付けて機械で結んだ |
-
-**`satisfies` が効くことを実行で確認した**: `GatedCatalog` に field を 1 つ足すと
-`orbitstudio-mcp-gated.spec.ts(406,7): error TS1360` で落ち、復元すると exit 0 に戻る。
-
-#### 4. 監査が「指摘無し」とした項目（一次ソースで確認済み）
-
-- **`analyzeWavBuffer` の既定戻り値**: main 版と束版を cjs 化し、合成 WAV 3 種 × opts 3 種の
-  **9 通りすべてで `JSON.stringify` が byte 一致**
-- **`gatedItTitles()` の正規表現**: gated spec の 20 箇所すべてを回収。括弧入りの題名も正しく閉じる
-- **`z.boolean().optional()`**: `required` に入らないので、`per_channel` を送らない既存クライアントは
-  既定経路。戻り値も素通しで `channelWindows` は削られない
-
-#### 5. 🔴 残る不在: PR-E0（spec 改訂）が束にも main にも無い
-
-`docs/testing/E2E_HARNESS_SPEC.md` の main 最終更新は 2026-07-28 で、`ObservationKind` /
-smoke 件数ラチェット / 「§3 網羅は実機層で取る」の改訂が入っていない。設計は
-**「実装より先・運用規則 6」**と明記している。**いま台帳の `ObservationKind` は
-正本より先にコードが確定した状態**。→ 束 PR の本文に明記し、owner 判断を仰ぐ。
-
-### 束の締め: レビューチーム 4 名の結果
-
-🔴 **3 名が独立に同じ Critical を検出**（`/simplify` の async 剥がれ）。既に修正済みだったが、
-**3 系統が別々に同じ結論に着いた**ことは記録に値する。
-
-#### ポリシー: 消費者のいない層は、テストでも型チェックでも守られない
-
-この束はその壊れ方を **2 回**踏んだ:
-
-1. `gatedItTitles()` がカリー形を **1 件も拾えず、空振りで緑**だった
-2. `/simplify` で `waitForEngineState` から **`async` が剥がれた** — `npm test` は緑
-   （`run-score.ts` に消費者がいない）、`tsc -p tsconfig.json` も 0（**`tests/` を見ない**）
-
-したがって **helper には消費者が現れる前に直接テストを付ける**。対象は
-**① コメントに書かれた受け入れ条件**と **② 壊れても黙って通る箇所**に絞る（網羅ではない）。
-
-`tests/e2e/helpers/helpers.spec.ts`（新規・12 件）を追加。**変異で 3 件を確認**:
-
-```
-captureWavPath が env を無視     → × redirects to ORBIT_KEEP_CAPTURES ...
-countLogMarker が g を補わない   → × counts a regex marker whether or not ...
-waitForFile が minBytes を無視   → × does not settle for a file that is still being written
-復元後                           → Tests  12 passed (12)   ／ cmp で 3 ファイル一致
-```
-
-#### 🔴 自分のテストが何も証明していなかった件（変異で発覚）
-
-`waitForMatchingFile` の「`g` 付き正規表現の `lastIndex` 持ち越し」を Minor 指摘として受け、
-リセットを入れてテストを書いた。**変異でリセットを外しても緑のままだった。**
-
-理由: `test()` は `lastIndex` が末尾を超えると **false を返すと同時に 0 へ戻す**ので、
-**次のポーリングで見つかる** — ループが吸収する。**観測可能な欠陥ではなかった。**
-
-対処: リセットの 1 行は残す（呼び出し元の regex の状態に依存しない方が読みやすい）が、
-**コメントとテスト名を「何を証明していないか」まで書く形に直した**。
-主張をテストの実力に合わせないと、次に読む人が守られていると誤解する。
-
-#### 事実の誤りを 3 件直した（comment-analyzer の指摘・すべて一次ソースで確認）
-
-| 誤り | 実際 |
-|---|---|
-| WORK_LOG「capture パス **11 箇所**」 | **13 箇所**（`grep -c "captureWavPath("` = 13） |
-| `dsl-surface.ts` の `import` → `tokenizer.ts:26` | **`:27`**（`:26` は `'MUTE'`） |
-| WORK_LOG「**636 行**のローカル変数」 | **638 行** |
-
-#### 残した指摘
-
-- **`run-cli.ts` が timeout の signal を握り潰す** / **`collect()` が symlink を辿らない** —
-  いずれも**現時点で消費者ゼロ**。最初の消費者が付く時に形が決まるので、そこで対処する
-- **`analyze_audio(per_channel)` の MCP 配線に E2E が無い**（設計 §20 PR-E3 の受け入れ基準）—
-  下記のとおり束 PR に明記して owner 判断を仰ぐ
-
-### 束の締め: silent-failure レビューの結果（helper 3 件を直した）
-
-いずれも**消費者ゼロの helper** — 最初の利用者が付く前が、直す最も安いタイミングだった。
-
-#### 1. 🔴 `evaluate()` が `ok: false` を完全に握り潰していた
-
-設計 §4.2 は「`ok` に assert しない」と言っているが、**「握り潰せ」とは言っていない。**
-
-> `ok` は**必要条件**であって、十分条件でないことは**何も見ない理由にならない**（レビュー指摘）
-
-**具体的な故障**: セットアップ用 `evaluate("...")` に typo があると、その場で `ok: false` が
-返るのに捨てられ、**後段の capture/RMS アサーションが「音が鳴っていない」という形で落ちる**。
-書いた本人はオーディオの不具合を疑って延々探すことになる。
-
-→ **assert はせず、`console.warn` で見えるようにした**（診断が出ることを確かめる E2E を妨げない）。
-
-#### 2. `run-cli.ts` の `stderr: ''` は「何も出なかった」ではなく「出ても見えない」だった
-
-`execFileSync` は**成功時に stdout の文字列しか返さない**。exit 0 のまま警告だけ stderr に出す
-CLI の検証が**原理的に書けなかった**。→ `spawnSync` に変更し、**`signal` も返す**
-（タイムアウトで殺されたのと非ゼロ終了は別の失敗で、区別できないと調査が空回りする）。
-
-#### 3. `try/finally` の cleanup 失敗が本来の失敗を隠していた
-
-JS では `finally` が投げると `try` の例外を**完全に置き換える**。よりによって
-「エンジンが落ちる」ことを検証するテストほど停止処理も一緒に転ぶので、見えるのが
-本質と無関係な「停止待ちタイムアウト」だけ、という事故になる。
-
-→ 元の例外を優先して投げる形に。⚠️ **最初の修正は `finally` 内で throw していて、
-lint の `no-unsafe-finally` が「別の形の同じ問題」を指摘した** — ブロックを抜けてから投げる形に直した。
-
-#### 🔴 自分のテストが 2 回続けて何も証明していなかった
-
-| 回 | 書いたテスト | 変異の結果 |
-|---|---|---|
-| 1 | `waitForMatchingFile` の `lastIndex` リセット | **リセットを外しても緑**（ポーリングが吸収する） |
-| 2 | `run-cli` の stderr 回収 | **stderr を捨てても緑**（`typeof x === 'string'` は `''` でも通る） |
-
-**共通する誤り: 形（type / 存在）を検査して、区別できる振る舞いを検査していない。**
-
-2 件目は**前提そのものを実行で固定する**形に書き直した — `execFileSync` と `spawnSync` に
-同じ子プロセス（stderr へ書いて exit 0）を流し、**前者は `''`・後者は `'warned'`** を返すことを
-示す。これは変異で red になることを確認済み（`'warned'` を `''` にすると落ちる）。
-1 件目は**証明できないと明記する**形にした。
-
-## 2026-09-04: PR-E0 — ハーネス仕様を現状に合わせる（#668 §19）
-
-**Fable 監査が「設計要求の不在」として見つけたもの。** 設計 §19 は spec 改訂を
-**「実装より先・運用規則 6」**と明記しているが、`docs/testing/E2E_HARNESS_SPEC.md` の
-最終更新は **2026-07-28** のままで、**台帳の `ObservationKind` は正本より先にコードが
-確定した状態**だった。
-
-### 改訂した 6 項目（設計 §19 の表どおり）
-
-| 節 | 改訂 |
-|---|---|
-| 冒頭の但し書き | 「現行 gated は配線 smoke であり暫定」→ **現状に更新**。`it(` 20 件・capture の数値判定・ラチェット/衛生の 2 検査が既にある |
-| §2.1（新設） | **台帳の置き場と寿命**。台帳 1（仕様 ↔ テスト）は**残る**（コードから導出できない唯一の軸）／台帳 2 は **#671 段階 3 で導出に変わる** |
-| §3 | 🔴 **網羅は実機層で取る**（旧版は逆だった）。オフライン層は**回帰の固定**（bit 一致）に絞る |
-| §4.1（新設） | **観測タイプを列挙で固定**（`ObservationKind`）。`smoke` は「監査で警告」ではなく**件数ラチェット**（警告は読まれないが red は止まる） |
-| §6.3 | 🔴 **変異スイープを PR のクリティカルパス外に**。`cargo-mutants --in-diff` を名指す |
-| core spec §10 | 三者一致の仕組みと「**DSL を足したら E2E も足す**」を参照（運用規則 7・乖離を作らない） |
-
-### §3 の改訂がいちばん大きい
-
-旧版は網羅を**オフライン層**に、実機層を「代表構文のみ」に割り当てていた。**現状と逆だった。**
-
-- **ラチェットが数えているのは gated spec の語**である（実機層のソースを走査している）
-- owner 確定（2026-09-03）:「**MCP 経由、つまりユーザーと同じ形でテストするのが重要**」
-- 実害: `global.gain()` が instrument に効いていなかった欠陥は、**変異 35 件・ユニット 2149 件が
-  すべて素通りし、キャプチャの RMS 実測だけが捕まえた**
-
-**仕様の方が実装より古いまま置かれていた**ので、正本を現状に追いつかせた。

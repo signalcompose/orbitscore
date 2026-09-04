@@ -640,7 +640,7 @@ owner は「**実行ファイルに対してディレクトリを作って保存
 | **PDC** | **#634** 🔴 | ○（`orbit-audio-native` / `orbit-audio-daemon` の src に `latency` を扱うファイル無し） | grep 実測 |
 | `layer()` 適用 | **#635** 🚪 | ○ staged エラー | `effect-slot.ts:140,147` / `rack.ts:289` |
 | instrument ラック | **#636** 🚪 | ○（パース・型付けまで ✅・適用は staged） | #636 本文 |
-| RUN 終端の note-off flush | **#606** 🔴 | ○（`packages/engine/src/core` に run 終端の flush 無し・マージ済み PR 無し） | grep 実測・`git log` |
+| RUN 終端の note-off flush | **#606** 🔴 | ○ **配送機構は既にある**（`releaseOwner(owner)`・`rtmidi-output.ts:227` / `plugin-note-output.ts:75` / `midi-scheduler.ts:206`）。LOOP 除外・MUTE・`play()` 差し替えは既に呼んでいる（`sequence.ts:1778,1808,1831`）。**欠けているのは発火点だけ** — 一発 `RUN()` の終端とオフラインレンダの終端（#729 で仕様化・PH.4）。daemon 側の最後の砦は `engine_wrap.rs` に追跡集合はあるが**読み手が 0** | grep 実測・`git log` |
 | 標準プラグイン群 | **#669** 🚪 | ○（`rust/crates` の std は `orbit-std-gain` のみ。compressor/limiter/normalizer は TS で warn + no-op） | `ls rust/crates` / #669 本文 `rust-engine-player.ts:38` |
 | `preset:` | （#522 のスコープ 3） | ○（`rack.ts:102` の許可引数は `enabled` / `format` / `vendor` のみ） | `rack.ts:102-107` |
 
@@ -696,6 +696,40 @@ owner は「**実行ファイルに対してディレクトリを作って保存
 - **#546 → 本地図 §4.C に吸収して閉じる**（Epic の役割は地図の節が持つ。残項目の行き先は上表）
 - **#658 → #623 に統合**（「曖昧な名前を黙って解決する」の format 版と path 版。同じ resolver・同じ spec 節・同じ PR で直す方が非対称を残さない）
 - #666 は本文のスコープを feature-map-comments §1 の結論で**更新**（起票済みなので閉じない）
+
+#### 🔴 プラグインの参照と保証を DAW の作法に寄せる（owner 2026-09-04・**バグではなく機能改善**）
+
+> **オービットスタジオで今 dylib を名指ししているという状態自体が、ちょっと異常といえば異常な状態。
+> VST も CLAP も基本的には作法があるはずなので、その作法を地図のどこかに入れていく。**
+> 他のものが使えているので、他を実装した後でも全然いい。バグではなくて機能改善・改修。（owner）
+
+🔴 **これは「DAW がこう振る舞うから」ではなく、VST3 / CLAP の規格が定める作法の話である。**
+下表の「規格」列は仕様の一次情報（`clap/include/clap/entry.h` / VST3 Developer Portal）から取った。
+
+| # | 規格が定める作法（**強度に注意**） | 現在地 |
+|---|---|---|
+| **1** | 🔴 **CLAP: `CLAP_PATH` 環境変数を問い合わせる — `must`。** OS 既定パスに加え、`CLAP_PATH`（PATH と同じ形式・`:` / `;` 区切り）を見る**義務**（`clap/include/clap/entry.h` 逐語: "a CLAP host **must** query the environment for a CLAP_PATH variable"） | 🔴 **`CLAP_PATH` は見ていない**。ただし **`ORBIT_PLUGIN_PATH`（`:` 区切り）は既に読んでいる**（`orbit-plugin-scan/src/lib.rs:200-211` `extra_scan_dirs_from_env`）。**修正は「同じ関数に `CLAP_PATH` を並べる」だけ**で、新規実装ではない |
+| **2** | **CLAP: 各ディレクトリを再帰的に探索 — `should`**（同 `entry.h`: "Each directory **should** be recursively searched"）。1 と違い義務ではない | 🔴 **非再帰**（`list_bundle_candidates` の doc「1 ディレクトリ直下（非再帰）」・同 `:228`。テスト `:2197` が非再帰を固定している） |
+| **3** | **CLAP: 1 つの `.clap` に複数プラグインが入りうる。** `CLAP_PLUGIN_FACTORY_ID` で factory を取り、`get_plugin_count` / `get_plugin_descriptor(index)` で列挙し、`create_plugin(…, plugin_id)` で生成する | ✅ **列挙は実装済み**（`orbit-clap-host/src/discovery.rs:105-120` が descriptor を全列挙・`lib.rs:540-566` が 1 バンドル→複数エントリ化・`discovery.rs:125-137` が ID で選ぶ）。**カタログの同一性は `(format, path, pluginId)` の複合キー**（`lib.rs:1028-1034`） |
+| **4** | **VST3: `moduleinfo.json` は 3.7.5 で導入、3.7.8 で `Contents/` → `Contents/Resources/` へ移動**（cmake の `SMTG_MODULEINFO_PATH_INSIDE_BUNDLE` で版差を確認）。CID / Category / Name / Vendor / Version を持つ | ○ 参照している（`lib.rs:110`）。⚠️ ただし scanner は **`Contents/Resources/moduleinfo.json` のみ**を見る（`lib.rs:842`）ので、**3.7.5〜3.7.7 でビルドされたバンドルは `moduleinfoMissing` → ProbePending** になる（probe で回収されるので致命ではない） |
+| **5** | **同一性は ID（CLAP=plugin ID / VST3=CID）、path は「所在」。** ID → ファイルの対応表は規格に無く、**所在の解決はホストの責務**である | 🔴 譜面が **`instrument(path)` で生パスを名指す**系統が残っている（`plugin-resolver.ts:76-80` `isPluginPathSpec`） |
+| **6** | 保証（検証）を走らせるタイミング | 🔴 **手動のみ** — `rescanPlugins` / 右クリック / MCP。起動時はカタログ JSON を**読むだけ**（`plugin-catalog-reader.ts:132-150` `loadPluginCatalog`） |
+
+🔴 **1 と 2 は「起動時に全部メモリへ載せる」話ではない。** 起動時に走るのは**検証**（ロードできるか・
+自己記述を返すか）であり、**実体のインスタンス化は insert 時**である（そうでなければメモリがもたない）。
+
+**既にある資産**: 走査・probe の機構は実装済み（`orbit-plugin-scan --probe-artifacts` が
+success / pending / failure を記録・#463）。**足りないのは発火点**（論点 1）。
+隔離は Bitwig 型（out-of-process child + crash isolation）を**既に採っている** —
+Bitwig はホスティングモードを 5 段階でユーザーに選ばせ、**保証しきれないことを認めて隔離で解いている**。
+
+**順序**（owner 2026-09-04）: **1・2 は規格違反に近く小さい**（`CLAP_PATH` を読む・再帰にする）。
+3・4 は確認が先。**5（path 参照の扱い）は作り直しの規模になりうる**ので、**他の領域を実装した後でよい**。
+6（発火点）は 1・2 と同時でよい。起票は §0.2 に従い owner 判断。
+
+🔴 **調べずに「DAW はこうだから」で決めない。** 本節の初稿はフォーラム・製品ドキュメントから
+DAW の**振る舞い**を写しただけで、**規格の条文を読んでいなかった**（owner 指摘で差し替え）。
+`CLAP_PATH` と再帰探索は、振る舞いの観察からは出てこない — **仕様に書いてある義務**である。
 
 ### 4.D プラグインのパラメータと時間の粒度 — 5 つの issue は同じものの別の側面（triage C4・論点 2・3）
 
