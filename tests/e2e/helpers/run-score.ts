@@ -68,9 +68,12 @@ export function logAnchor(log: string): string {
 /**
  * 相対差（`|actual - expected| / |expected|`）。capture の窓 RMS を golden と突き合わせる時の唯一の正本。
  *
- * 🔴 gated spec には同名のローカル定義が **3 つ**あり、しかも**式が食い違っていた**
- * （2 つは分母が `expected`、1 つは `Math.abs(expected)`）。今の期待値はすべて正なので
- * 挙動は同じだが、**同じ名前で違う式**が並ぶのは、許容の計算を直す時に片方だけ直る形である。
+ * gated spec に同名のローカル定義が **2 つ**あり（式はどちらも `… / expected` で同一）、
+ * ここへ 1 本化した。ついでに分母を `Math.abs(expected)` にして期待値が負の場面にも耐えるようにした
+ * — 今の期待値はすべて正なので**挙動は変わらない**。
+ *
+ * ⚠️ 「3 つあって式が食い違っていた」と書いていたのは**誤り**だった（レビューで判明）。
+ * 3 つ目の食い違う定義は、この共通化で新しく作った**この関数自身**である。
  */
 export function relativeDelta(actual: number, expected: number): number {
   return Math.abs(actual - expected) / Math.abs(expected)

@@ -58,7 +58,7 @@ import { captureWavPath, createGatedSession, type GatedCatalog } from './helpers
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
 import { rackChildPidsFromLog } from './helpers/rack-child-pid'
 import { logAnchor, logAppendedSince, relativeDelta, runScore } from './helpers/run-score'
-import { OUTPUT_LINE_GOLDENS } from './output-line-expectations'
+import { OUTPUT_LINE_GOLDENS, STEADY_CAPTURE } from './output-line-expectations'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
@@ -4580,6 +4580,43 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     return createGatedSession(client, tmpRoot, requireCatalogFixtures())
   }
 
+  /**
+   * 定常状態の 1 区間を録る（#611 PR-O0）。
+   *
+   * 🔴 **`LOOP()` は既定で次の小節境界まで待つ**（`quantize-manager.ts:70`・既定 `'bar'`）。
+   * 120 BPM 4/4 なら 1 小節 = 2000 ms なので、`run_selection` 直後に録ると**窓の大半が
+   * 発音前の無音**になり、測っているのは音量ではなく「窓に入ったヒット数」になる。
+   * 監査で実際にそれが起きていた（`output-line-expectations.ts` 冒頭の注記）。
+   */
+  const captureSteady = async (
+    ctx: {
+      captureSegment: (name: string, durationMs?: number, settleMs?: number) => Promise<void>
+    },
+    name: string,
+  ): Promise<void> => {
+    await ctx.captureSegment(name, STEADY_CAPTURE.windowMs, STEADY_CAPTURE.settleMs)
+  }
+
+  /**
+   * 区間が定常状態であることを確かめてから RMS を返す。
+   *
+   * 🔴 **オンセット数を固定しないと RMS は音量の指標にならない**（ヒット数が変われば RMS も変わる）。
+   * ここで数を固定して初めて、RMS の差が「1 ヒットあたりの音量の差」を意味する。
+   */
+  const steadyRms = (
+    result: { rms: (s: string) => number; onsets: (s: string) => readonly number[] },
+    name: string,
+  ): number => {
+    expect(
+      result.onsets(name).length,
+      `${name}: 定常状態なら窓に ${STEADY_CAPTURE.expectedOnsets} 発入るはず（入らないなら ` +
+        `録り始めが早すぎるか、譜面が鳴っていない）`,
+    ).toBe(STEADY_CAPTURE.expectedOnsets)
+    const value = result.rms(name)
+    expect(value, `${name} must be audible`).toBeGreaterThan(STEADY_CAPTURE.audibleFloorRms)
+    return value
+  }
+
   it.skipIf(!appAvailable)(
     '#611 O0-1 keeps the no-bus kick_loop RMS deterministic across two capture sessions',
     async () => {
@@ -4589,7 +4626,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         const result = await runScore(
           session,
           { slug, fixturePath: 'tests/fixtures/mcp-e2e/kick_loop.orbs' },
-          async ({ captureSegment }) => captureSegment('steady', 2500, 500),
+          async (ctx) => captureSteady(ctx, 'steady'),
           { capture: true },
         )
         expect(result, `${slug} must return captured windows`).toBeDefined()
@@ -4599,8 +4636,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
 
       const first = await captureOnce('611-o0-no-bus-first')
       const second = await captureOnce('611-o0-no-bus-second')
-      const firstRms = first.rms('steady')
-      const secondRms = second.rms('steady')
+      const firstRms = steadyRms(first, 'steady')
+      const secondRms = steadyRms(second, 'steady')
       // eslint-disable-next-line no-console
       console.log('[#611 O0-1] no-bus RMS:', JSON.stringify({ firstRms, secondRms }))
       expect(first.analysis.format.channels, 'O0-1 requires a 2ch device').toBe(
@@ -4609,14 +4646,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(second.analysis.format.channels, 'O0-1 requires a 2ch device').toBe(
         OUTPUT_LINE_GOLDENS.noBus.channels,
       )
-      expect(firstRms, 'O0-1 first no-bus capture must be audible').toBeGreaterThan(
-        OUTPUT_LINE_GOLDENS.noBus.audibleFloorRms,
-      )
-      expect(secondRms, 'O0-1 second no-bus capture must be audible').toBeGreaterThan(
-        OUTPUT_LINE_GOLDENS.noBus.audibleFloorRms,
-      )
-      // 🔴 サンプル単位の一致は取れない（録音開始位相がセッションごとに違う・goldens の注記）。
-      //    2 セッションが同じ値に落ちることと、その値が golden から動かないことを見る。
       expect(
         relativeDelta(secondRms, firstRms),
         `O0-1 two no-bus captures must agree; first=${firstRms} second=${secondRms}`,
@@ -4637,21 +4666,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const errorsBefore = await errorBaseline(session.client)
       const result = await runScore(
         session,
-        {
-          slug: '611-o0-sum-output',
-          fixturePath: 'tests/fixtures/mcp-e2e/output_line_sum.orbs',
-        },
-        async ({ captureSegment }) => captureSegment('sum', 3000, 500),
+        { slug: '611-o0-sum-output', fixturePath: 'tests/fixtures/mcp-e2e/output_line_sum.orbs' },
+        async (ctx) => captureSteady(ctx, 'sum'),
         { capture: true },
       )
       expect(result, 'O0-2 must return captured windows').toBeDefined()
       if (!result) throw new Error('O0-2 did not return captured windows')
-      const sumRms = result.rms('sum')
+      const sumRms = steadyRms(result, 'sum')
       // eslint-disable-next-line no-console
-      console.log('[#611 O0-2] TODO_MEASURED sumOutput.rms:', sumRms)
-      expect(sumRms, 'O0-2 sum output must be audible').toBeGreaterThan(
-        OUTPUT_LINE_GOLDENS.sumOutput.audibleFloorRms,
-      )
+      console.log('[#611 O0-2] sumOutput.rms:', sumRms)
       expect(
         relativeDelta(sumRms, OUTPUT_LINE_GOLDENS.sumOutput.rms),
         `O0-2 sum RMS must stay at ${OUTPUT_LINE_GOLDENS.sumOutput.rms}; actual=${sumRms}`,
@@ -4662,48 +4685,34 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
-    "#611 O0-3 pins today's measured aux/dry ratio for send(0.3)",
+    '#611 O0-3 pins send(0.3) as a linear coefficient: total/dry = 1 + 0.3',
     async () => {
       const session = requireOutputLineSession()
       const errorsBefore = await errorBaseline(session.client)
       const result = await runScore(
         session,
-        {
-          slug: '611-o0-linear-send',
-          fixturePath: 'tests/fixtures/mcp-e2e/output_line_send.orbs',
-        },
-        async ({ captureSegment, evaluate }) => {
-          await captureSegment('dry', 3000, 500)
-          await evaluate('dry.stop()\nLOOP(kick)')
-          await captureSegment('dryPlusAux', 3000, 500)
+        { slug: '611-o0-linear-send', fixturePath: 'tests/fixtures/mcp-e2e/output_line_send.orbs' },
+        async (ctx) => {
+          await captureSteady(ctx, 'dry')
+          await ctx.evaluate('dry.stop()\nLOOP(kick)')
+          await captureSteady(ctx, 'dryPlusAux')
         },
         { capture: true },
       )
       expect(result, 'O0-3 must return captured windows').toBeDefined()
       if (!result) throw new Error('O0-3 did not return captured windows')
-      const dryRms = result.rms('dry')
-      const totalRms = result.rms('dryPlusAux')
-      const auxRms = totalRms - dryRms
+      const dryRms = steadyRms(result, 'dry')
+      const totalRms = steadyRms(result, 'dryPlusAux')
+      const totalOverDry = totalRms / dryRms
       // eslint-disable-next-line no-console
       console.log(
-        '[#611 O0-3] TODO_MEASURED send dry/aux/total RMS:',
-        JSON.stringify({ dryRms, auxRms, totalRms, auxOverDry: auxRms / dryRms }),
+        '[#611 O0-3] send dry/total RMS:',
+        JSON.stringify({ dryRms, totalRms, totalOverDry }),
       )
-      expect(dryRms, 'O0-3 dry path must be audible').toBeGreaterThan(
-        OUTPUT_LINE_GOLDENS.send.audibleFloorRms,
-      )
-      expect(auxRms, 'O0-3 aux path must contribute audible signal').toBeGreaterThan(
-        OUTPUT_LINE_GOLDENS.send.audibleFloorRms,
-      )
+      // 🔴 両区間のオンセット数は steadyRms が固定済みなので、この比は係数だけを表す。
       expect(
-        relativeDelta(dryRms, OUTPUT_LINE_GOLDENS.send.dryRms),
-        `O0-3 dry RMS must match ${OUTPUT_LINE_GOLDENS.send.dryRms}; actual=${dryRms}`,
-      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.send.tolerance)
-      // 🔴 「aux = 0.3 × dry」は実機と合わなかったので assert しない（goldens の注記）。
-      //    測った比をそのまま固定し、PR-O4 は係数の変化分だけ動かす。
-      expect(
-        relativeDelta(auxRms / dryRms, OUTPUT_LINE_GOLDENS.send.measuredAuxOverDry),
-        `O0-3 aux/dry must stay at ${OUTPUT_LINE_GOLDENS.send.measuredAuxOverDry}; actual=${auxRms / dryRms}`,
+        relativeDelta(totalOverDry, OUTPUT_LINE_GOLDENS.send.legacyTotalOverDry),
+        `O0-3 total/dry must be 1 + ${OUTPUT_LINE_GOLDENS.send.amountAsWritten} (linear today); actual=${totalOverDry}`,
       ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.send.tolerance)
       await expectNoNewErrors(session.client, errorsBefore, '#611 O0-3')
     },
@@ -4721,57 +4730,38 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           slug: '611-o0-sequence-gain-effect',
           fixturePath: 'tests/fixtures/mcp-e2e/output_line_gain_effect.orbs',
         },
-        async ({ captureSegment, evaluate }) => {
-          await captureSegment('dry', 3000, 500)
-          await evaluate('dry.stop()\nLOOP(effectOnly)')
-          await captureSegment('effectOnly', 3000, 500)
-          await evaluate('effectOnly.stop()\nLOOP(kick)')
-          await captureSegment('combined', 3000, 500)
+        async (ctx) => {
+          await captureSteady(ctx, 'dry')
+          await ctx.evaluate('dry.stop()\nLOOP(effectOnly)')
+          await captureSteady(ctx, 'effectOnly')
+          await ctx.evaluate('effectOnly.stop()\nLOOP(kick)')
+          await captureSteady(ctx, 'combined')
         },
         { capture: true },
       )
       expect(result, 'O0-4 must return captured windows').toBeDefined()
       if (!result) throw new Error('O0-4 did not return captured windows')
-      const dryRms = result.rms('dry')
-      const effectOnlyRms = result.rms('effectOnly')
-      const combinedRms = result.rms('combined')
+      const dryRms = steadyRms(result, 'dry')
+      const effectOnlyRms = steadyRms(result, 'effectOnly')
+      const combinedRms = steadyRms(result, 'combined')
       const effectOnlyOverDry = effectOnlyRms / dryRms
       const combinedOverDry = combinedRms / dryRms
       // eslint-disable-next-line no-console
       console.log(
-        '[#611 O0-4] TODO_MEASURED seq gain + effect RMS:',
-        JSON.stringify({
-          dryRms,
-          effectOnlyRms,
-          combinedRms,
-          effectOnlyOverDry,
-          legacyCombinedOverDry: combinedOverDry,
-        }),
+        '[#611 O0-4] seq gain + effect:',
+        JSON.stringify({ dryRms, effectOnlyOverDry, combinedOverDry }),
       )
-      expect(dryRms, 'O0-4 dry path must be audible').toBeGreaterThan(
-        OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.audibleFloorRms,
-      )
-      expect(effectOnlyRms, 'O0-4 rack path must be audible').toBeGreaterThan(
-        OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.audibleFloorRms,
-      )
-      expect(
-        relativeDelta(dryRms, OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.dryRms),
-        `O0-4 dry RMS must match ${OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.dryRms}; actual=${dryRms}`,
-      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.tolerance)
       expect(
         relativeDelta(
           effectOnlyOverDry,
           OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.effectOnlyOverDry,
         ),
-        `O0-4 effect-only/dry must match ${OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.effectOnlyOverDry}; actual=${effectOnlyOverDry}`,
-      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.tolerance)
+        `O0-4 effect-only/dry must be 10^(6/20); actual=${effectOnlyOverDry}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.effectOnlyTolerance)
       expect(
-        relativeDelta(
-          combinedOverDry,
-          OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.legacyCombinedOverDry,
-        ),
-        `O0-4 legacy combined/dry must match ${OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.legacyCombinedOverDry}; actual=${combinedOverDry}`,
-      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.tolerance)
+        relativeDelta(combinedOverDry, OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.combinedOverDry),
+        `O0-4 combined/dry must be unity (Gain(+6) x gain(-6)); actual=${combinedOverDry}`,
+      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.combinedTolerance)
       await expectNoNewErrors(session.client, errorsBefore, '#611 O0-4')
     },
     TEST_TIMEOUT_MS,
