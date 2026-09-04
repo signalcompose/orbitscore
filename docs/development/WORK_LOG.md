@@ -17,6 +17,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(planning): record the #385 layer-2 deferral on the map (Sep 5, 2026)
+
+**Issue**: #385 / **ブランチ**: `385-map-record-trust-layer-2`
+
+owner 判断（2026-09-05）で **#385 は段 1（must-fix の音の経路）では触らない**ことにした。
+段 1 の対象は #649 / #661 / #606 の 3 件に限定する。
+
+問題は「後にずらしたものが地図から落ちる」ことだった。`DEVELOPMENT_MAP.md` §4.J は
+**層 1（宣言）と実機検証（#735）の 2 行しか持たず、層 2（ビルドで trust 既定 off）の行が無い**。
+さらに「順序」の行が「#385（宣言）は独立で先にできる — **済**」とだけ書いてあり、
+**#385 全体が終わったように読める**状態だった。
+
+- §4.J に **層 2 の行**を追加（PR-S-T2・`product.overrides.json` + `build_orbitstudio.sh`・
+  設計は `656-release-design.md` §3.4）
+- 🔴 **層 1 では救えない理由**を明記 — `anthropic.claude-code` は
+  `untrustedWorkspaces.supported: false` を宣言しており Anthropic 管理なのでこちらから足せない。
+  loose-file 起動では **LLM 側が黙って activate しない**。LLM を第一級ユーザーに置く方針では
+  出荷ブロッカーなので **#656 出荷の前**に入れる
+- 「順序」の行を「層 1 は済 / **#385 はこれで完了ではない**」に書き替え
+
+計画側（`IMPLEMENTATION_PLAN_2026-09.md` の PR-S-T2 行・`USER_OUTCOMES_2026-09.md` の段 8）と
+設計側（`656-release-design.md` §3.4）は既に層 2 を持っていたので変更なし。**欠けていたのは地図だけ**。
+
 ### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
 
 **Issue**: #385 / **ブランチ**: `385-untrusted-workspace-capability` / **PR-S-T1**
