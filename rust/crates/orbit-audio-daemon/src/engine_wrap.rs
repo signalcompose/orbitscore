@@ -9334,7 +9334,13 @@ mod plugin_load_gate_tests {
     // ClapControl 無しで plugin_loaded ガードだけを検証できる（#405）。
     fn unstarted_engine() -> Arc<EngineWrap> {
         let engine = orbit_audio_core::Engine::new(48_000, 2);
-        EngineWrap::build(engine, 48_000, 2, Arc::new(StreamStats::default()))
+        EngineWrap::build(
+            engine,
+            "test-device".to_string(),
+            48_000,
+            2,
+            Arc::new(StreamStats::default()),
+        )
     }
 
     /// plugin 未ロード時に `f` が **専用の** `WrapError::ClapNotLoaded` を返すことを検証する共通
