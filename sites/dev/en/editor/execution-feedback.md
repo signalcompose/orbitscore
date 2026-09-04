@@ -278,7 +278,7 @@ The tail of `runSelection()` looks like this.
   flashLines()
 ```
 
-A point to note here is the ordering: if sending fails, **no flash**. As of 2026-05 it called `flashLines()` right after `write`, but showing "it ran" when nothing reached stdin is false feedback. `revealRange` was added so that when an agent-driven run targets an off-screen line, the flash is not invisible (#388, `docs/development/WORK_LOG.md` §6.193).
+A point to note here is the ordering: if sending fails, **no flash**. As of 2026-05 it called `flashLines()` right after `write`, but showing "it ran" when nothing reached stdin is false feedback. `revealRange` was added so that when an agent-driven run targets an off-screen line, the flash is not invisible (#388, `docs/archive/WORK_LOG_2026-07.md` §6.193).
 
 ---
 
@@ -355,7 +355,7 @@ The defaults are:
 - `flashDuration`: 150 ms (lit time)
 - Flash interval: `100 ms` (hard-coded)
 
-`isWholeLine` is **always `true`**. As of 2026-05 it was "with a selection = only the selected characters," but because MCP's `run_selection` always places a range via `set_selection` before calling, a character-bounded decoration exactly overlapped the editor's own selection highlight and the flash became invisible (`docs/development/WORK_LOG.md` §6.193). Painting the whole line stays visible regardless of selection state, color config, or trigger source.
+`isWholeLine` is **always `true`**. As of 2026-05 it was "with a selection = only the selected characters," but because MCP's `run_selection` always places a range via `set_selection` before calling, a character-bounded decoration exactly overlapped the editor's own selection highlight and the flash became invisible (`docs/archive/WORK_LOG_2026-07.md` §6.193). Painting the whole line stays visible regardless of selection state, color config, or trigger source.
 
 The kinds of colors that can be set:
 
@@ -712,7 +712,7 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 
 | Change | Issue | Source |
 |---|---|---|
-| Carve the send part out into `writeCodeToEngine()`, shared with MCP `evaluate_orbitscore` | #388 | `docs/development/WORK_LOG.md` §6.188 (2026-07-07), `extension.ts:3000-3032` |
+| Carve the send part out into `writeCodeToEngine()`, shared with MCP `evaluate_orbitscore` | #388 | `docs/archive/WORK_LOG_2026-07.md` §6.188 (2026-07-07), `extension.ts:3000-3032` |
 | Always flash whole-line, `revealRange` before flashing | #388 | §6.193 (2026-07-07), `extension.ts:2842-2857` / `2876-2880` |
 | Live playhead via `[STEP]` lines (per-seq colors, nested argPath) | #390 | §6.194-6.197 (2026-07-07), `playhead.ts`, `extension.ts:150-284` |
 | Run diagnostics on open / close / activation too | #384 | §6.187 (2026-07-07), `extension.ts:414-443` |
@@ -742,7 +742,7 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 ## Next Exploration Candidates
 
 - The degradation of `findPlayArgRangeForPath()` to "the deepest resolvable ancestor" — what lights up in each case of stacks `[ ... ]`, group runs, and legato `{ ... }`
-- Engine-side `[STEP]` generation (`rust-engine-player.ts`) and argPath tagging — the relationship between lookahead and `atEpochMs` (`docs/development/WORK_LOG.md` §6.194 / §6.196)
+- Engine-side `[STEP]` generation (`rust-engine-player.ts`) and argPath tagging — the relationship between lookahead and `atEpochMs` (`docs/archive/WORK_LOG_2026-07.md` §6.194 / §6.196)
 - `configureFlash` command — a mechanism that interactively sets flashCount / flashDuration / flashColor via a Quick Pick UI
 - Candidates for improving diagnostic accuracy — parenthesis matching that follows entire multi-line statements (single-line only)
 - The precompiled per-sequence regexes in `analyzeLinkAudioMissingOutput` — the design that avoids recompiling on every keystroke, and the word boundary that keeps `kicker.output()` from matching `kick`
@@ -768,5 +768,5 @@ The main changes since the first draft on 2026-05-05 (0a4b598).
 - `packages/vscode-extension/src/diagnostics-analysis.ts:44-58` — `GLOBAL_ONCE_METHODS`
 - `packages/vscode-extension/src/diagnostics-analysis.ts:108-391` — the 5 cross-line analysis functions
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — the design rationale of `//#evalMark`
-- `docs/development/WORK_LOG.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266, §6.412 — sources of the drift table
+- `docs/archive/WORK_LOG_2026-07.md` §6.187, §6.188, §6.193, §6.194-6.197, §6.266 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — sources of the drift table
 - [Issue #168 / PR #169](https://github.com/signalcompose/orbitscore/pull/169) — background of the audioPath ordering diagnostic

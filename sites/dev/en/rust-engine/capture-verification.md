@@ -1,8 +1,8 @@
 ---
 title: "RE-4. Capture Seam and Objective Verification (ORBIT_CAPTURE_WAV)"
 chapter-id: "RE-4"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: f006a51
+verified-at: "2026-09-03"
 status: draft
 ---
 
@@ -382,8 +382,9 @@ old daemon built at 17:49** (WORK_LOG 6.417). The extension bundles the daemon u
 
 The countermeasure has two stages. First, `tests/e2e/orbitstudio-mcp-gated.spec.ts` carries a
 check at **module load time** of a gated run: if the daemon binary that will actually be spawned
-(`resolveDaemonBinaryPath()` is the source of truth) is older than `rust/**/*.rs` |
-`Cargo.toml`, it fails before running a single test.
+(`resolveDaemonBinaryPath()` is the source of truth) is older than the `.rs` | `Cargo.toml` files
+under `rust/`, it fails before running a single test. Some directories are excluded from that
+walk, which the next subsection covers (#713).
 
 ```typescript
 // tests/e2e/orbitstudio-mcp-gated.spec.ts:146-160
@@ -416,6 +417,44 @@ is reliable, make it not manual").
 The mtime comparison is a weaker judgment than "is the rebuild a no-op", but it finishes in 1ms
 before the tests start; the weakness is tilted toward "when in doubt, fail" (equal timestamps
 pass).
+
+### What the walk leaves out — never look at a target it cannot rebuild (#713)
+
+That "when in doubt, fail" had a pitfall. Because the walk picked up every `.rs` under `rust/`
+unconditionally, an **integration test** such as
+`rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs` could be selected as the "newest
+source". An integration test is a separate cargo target and never enters the dependency graph of
+the `orbit-audio-daemon` binary. So cargo correctly reads its dependencies, builds nothing
+(`Finished release profile in 0.21s`), and the binary's mtime is never refreshed. The result was
+an **unfixable red**: running `npm run test:e2e:gated`, precisely what the guard's own message
+instructs, could not clear it.
+
+The trigger is a property of mtime. `git checkout` sets a file's mtime to the checkout time, so
+merely moving between branches turns an unrelated integration test — one whose content never
+changed — into the "newest source". As measured in #713, the gated suite stopped running a single
+test at startup.
+
+So three directories, `tests` / `benches` / `examples`, were dropped from the walk.
+
+```typescript
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:141-145
+        // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
+        // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
+        if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
+          continue
+        }
+```
+
+The one reason they may be dropped — "a separate target, so it never enters the daemon binary" —
+is not a reason to drop `src/`. If code the daemon depends on is newer, the guard should go red;
+that is its job. The line is pinned from both sides by two checks in
+`tests/e2e/gated-assertion-hygiene.spec.ts`: red if the exclusion disappears, red if `src` gets
+excluded too.
+
+Both checks, however, only scan the **source text** of the gated spec, so what they guarantee
+stops at "it is written that way". The guard itself, `assertDaemonBinaryIsNotStale()`, runs only
+when `gated && appAvailable`, so an ordinary `npm test` never executes a line of it. It is
+accurate to read this as a device that pins the *written shape*, not an *executed behaviour*.
 
 ## The engine's own peak log: `post_peak_bits`
 
@@ -484,6 +523,7 @@ post-peak accessors observe the same signal. These figures were not re-measured 
 - `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:232-234` — `post_peak_bits` (lock-free peak accumulation implementation)
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:80-154` — the stale artifact guard (`assertDaemonBinaryIsNotStale`)
 - `package.json:17-18` — `pretest:e2e:gated` / `test:e2e:gated`
-- [`docs/development/WORK_LOG.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/WORK_LOG.md) 6.415 / 6.416 / 6.417 — discovery of the #643 master fader defect, the #651 header patch and stale guard, pretest automation
+- [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 / 6.416 / 6.417 — discovery of the #643 master fader defect, the #651 header patch and stale guard, pretest automation
 - Issue [#307](https://github.com/signalcompose/orbitscore/issues/307) — capture seam realtime wiring
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — capture WAV that opens after an abnormal exit, and the stale-binary countermeasure
+- Issue [#713](https://github.com/signalcompose/orbitscore/issues/713) — excluding cargo targets that can never be rebuilt from the walk

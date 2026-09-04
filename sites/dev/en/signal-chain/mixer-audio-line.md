@@ -649,7 +649,7 @@ But the #649 design v3 the following day (WORK_LOG 6.420) **corrects that explan
 > `FeedDest::Hardware` before the gain loop). **It came to light because Fable honestly wrote
 > "not fully identified".**
 >
-> — `docs/development/WORK_LOG.md` 6.420
+> — `docs/archive/WORK_LOG_2026-08.md` 6.420
 
 Indeed, E2E-1's DSL declares neither sum nor aux, so the instrument's feed goes from
 `render_engine_with_source_outputs` (`output.rs:1078`) into `render_multi_feeds` and is added to
@@ -911,7 +911,7 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1247-1249` — known constraint: master gain ramp applied before the insert
 - `docs/design/643-mixer-foundation-design.md` — #643 design (owner's three articles, responsibility boundary, feed injection point §5.1, `output()` three branches §12)
 - `docs/design/649-audio-line-design.md` — #649 audio-line design (§7 decisions, §8 open items, §9–§14 implementation design v3)
-- `docs/development/WORK_LOG.md` 6.404 / 6.405 / 6.408 / 6.410 / 6.415 / 6.420 — #643 design → PR-1 → PR-2 → review correction → real-machine discovery → #649 design v3
+- `docs/archive/WORK_LOG_2026-08.md` 6.404 / 6.405 / 6.408 / 6.410 / 6.415 / 6.420 — #643 design → PR-1 → PR-2 → review correction → real-machine discovery → #649 design v3
 - `packages/engine/src/core/global/mixer-manager.ts:16-29` — `SUM_BUS_PREFIX` / `AUX_BUS_PREFIX` / `MIXER_BUS_POOL_SIZE`
 - `packages/engine/src/core/global/mixer-manager.ts:251-283` — `declareBus` (`"master"` reserved, LinkAudio exclusion, pool acquisition)
 - `packages/engine/src/core/global.ts:481-489` — `Global.sum()` / `Global.aux()`

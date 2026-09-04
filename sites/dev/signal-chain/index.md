@@ -1556,7 +1556,7 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 - `tests/core/rack-chain.spec.ts:105-414` — T3〜T23（LCS・occurrence・keep 更新・uncertain 復旧）
 - `tests/interpreter/rack-value-resolution.spec.ts:62-188` — T1〜T19（配列分類・3 カテゴリ・layer 拒否）
 - `tests/interpreter/signal-chain-dispatch.spec.ts:170-184,581-611` — T24（メソッド形の診断）・T25（`remove()` 撤去）
-- `docs/development/WORK_LOG.md:1726-1876,2379-2509,2582-2736,3046-3075` — 6.379 / 6.386〜6.389 / 6.396〜6.397（制定・Gain・rack child・daemon 配線・DSL・実機）
+- `docs/archive/WORK_LOG_2026-08.md:1726-1876,2379-2509,2582-2736,3046-3075` — 6.379 / 6.386〜6.389 / 6.396〜6.397（制定・Gain・rack child・daemon 配線・DSL・実機）
 - `docs/user/ja/USER_MANUAL.md:599-615` — ユーザー向けのラック記法の説明
 - Issue [#628](https://github.com/signalcompose/orbitscore/issues/628) — ラック形チェーン（削除・バイパス・複数 insert の統合モデル）
 - Issue [#625](https://github.com/signalcompose/orbitscore/issues/625) — 差し替え・削除の前提機構

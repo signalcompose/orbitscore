@@ -108,7 +108,7 @@ framing）。乖離が見つかっても即修正せず、まず現状を記述�
 ## 6. Sources 候補
 
 - `docs/development/POST_2.0_MASTER_PLAN.html`（rust-engine アーキテクチャの正本）
-- `docs/development/WORK_LOG.md` 6.24x 台（capture seam realtime 配線）〜 6.258（VST3 instrument
+- `docs/archive/WORK_LOG_2026-07.md` 6.24x 台（capture seam realtime 配線）〜 6.258（VST3 instrument
   production）— 特に 6.256（OOP effect × instrument 共存）・6.257（DoD 配線）・6.258（VST3 横展開）
 - `rust/crates/orbit-audio-daemon/src/`（daemon 本体）
 - `rust/crates/orbit-audio-sandbox/src/`（shm transport、M2 IPC event wire 実装）

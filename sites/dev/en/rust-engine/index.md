@@ -643,7 +643,8 @@ i.e. two independent measurement paths agreeing at the same tap point). These fi
 - `rust/crates/orbit-audio-daemon/src/session.rs:691-718,1272-2372` — `session::run` (handshake, writer task, UI event forwarding) and the `handle_command` match arms (source of the command table)
 - `rust/crates/orbit-audio-native/src/output.rs:254-260,581-618,662-750,1513-1556` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — engine-first roadmap and architecture decision (instruments = in-process / effects + 3rd-party = out-of-process sandbox)
-- [`docs/development/WORK_LOG.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/WORK_LOG.md) 6.258 / 6.262 / 6.415 — capture peak measurements, the master fader defect (#643)
+- [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 / 6.262 — capture peak measurements
+- [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 — the master fader defect (#643)
 - Issue [#448](https://github.com/signalcompose/orbitscore/issues/448) — daemon graceful-shutdown gap and the `ParentWatch` countermeasure
 - Issue [#484](https://github.com/signalcompose/orbitscore/issues/484) — audio device enumeration, selection and runtime switching (D1 / D2 / D3)
 - Issue [#605](https://github.com/signalcompose/orbitscore/issues/605) — best-effort stderr in the panic hook

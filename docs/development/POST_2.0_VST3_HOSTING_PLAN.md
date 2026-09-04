@@ -253,7 +253,12 @@ cargo test -p orbit-audio-daemon --test outproc_effect_gated -- --ignored --noca
 
 ### landmines（このリポジトリ固有・serena memory 由来）
 - build は sandbox で EPERM（listen 不可）→ `dangerouslyDisableSandbox: true` で実行。
-- `.env.example` は sandbox read-deny → `git diff` が誤って削除表示。`git status --short` が権威。
+- ~~`.env.example` は sandbox read-deny → `git diff` が誤って削除表示。`git status --short` が権威。~~
+  **#708（`7d2df31`）で `.env.example` を削除したため、この landmine は解消済み。**
+  ただし `.gitignore:55-57` の `!.env.example` / `!.env.sample` / `!.env.template` は外部ツール管理ブロック
+  （`[code:security-patterns:fbe2794b]`）として残っている。**これらのファイルを再び置くと同じ問題が再発する**
+  （sandbox は `./.env*` の読み取りを拒否し、`lint-staged` がコミット前に走らせる `git stash` が
+  `lstat(".env.example"): Operation not permitted` で落ちる）。
 - daemon 再ビルド直後の初回 `start_engine` は ready timeout（10s）で落ちることがある → リトライ 1 回で回復。
 - 両 OOP feature（`clap-host`/`outproc-effect`）は `link-audio` と相互排他（`compile_error!` ガード）。VST3 を feature 化する場合もこの排他規律に合わせる。
 - **CI は Rust gated を実行しない** → offline test + ローカル cargo + owner 同席 gated RUN が唯一の根拠。offline で証明できるものは offline で（closed-form oracle）。

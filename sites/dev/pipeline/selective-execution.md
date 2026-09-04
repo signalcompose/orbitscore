@@ -543,4 +543,4 @@ sequenceDiagram
 - `packages/engine/src/cli/repl-mode.ts:386-470` — `handleLine()`: メタ行の振り分けと DSL バッファ
 - `packages/engine/src/cli/repl-mode.ts:472-516` — `runWithStallReport()` と `pushLine()` の FIFO チェーン
 - `packages/engine/src/cli/repl-mode.ts:519-539` — `startREPL()`: readline → `pushLine` と `await new Promise(() => {})`
-- `docs/development/WORK_LOG.md` §6.266 (メタ行 #456, 2026-07-17)、§6.271 (FIFO 直列化 #476, 2026-07-17)
+- `docs/archive/WORK_LOG_2026-07.md` §6.266 (メタ行 #456, 2026-07-17)、§6.271 (FIFO 直列化 #476, 2026-07-17)

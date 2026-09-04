@@ -43,6 +43,7 @@ main ──●──────────────────────
 
 | 段階 | やること | コマンド |
 |---|---|---|
+| **束を開く前** | 🔴 **ルーティンのドキュメント追従 PR を全部消化する**（溜めると main が動くたび陳腐化し、9 本中 8 本が衝突した実測がある・#718） | — |
 | 束を開く | main から統合ブランチを切って push | `git checkout -b 611-output-line main && git push -u origin 611-output-line` |
 | 小 PR を作る | 統合ブランチから切る。base を統合ブランチにして draft で開く | `git checkout -b 611-o4-audio-line 611-output-line` → `gh pr create --base 611-output-line --draft` |
 | 小 PR を閉じる | CI 緑 + その PR の E2E を実機で + main が差分を読む → 統合ブランチへ merge | `gh pr merge <n> --merge`（squash 可のリポジトリなら `--squash`）|

@@ -139,6 +139,60 @@ issue 本文が古いままで、main が **#680 を重複起票**した。
 項目は**地図と issue 本文から導いた**。受け入れ基準は可能な限り**実測値**にした
 （例: #649 は「`global.gain(-6)` で instrument の RMS が 0.08864 → 0.044」= #649 本文の実測）。
 
+### docs(index): アーカイブ後の INDEX を追従させ、地図を目次に登録 (Sep 3, 2026)
+
+**追従元**: PR #693（マージコミット `b9fad48`）/ **ブランチ**: `claude/docs-sync-pr693`
+
+PR #693 は 9 本を `docs/archive/` へ移し、**現役ファイルからの参照リンクは全部直した**
+（`INDEX.md` のリンク先も `../archive/...` に書き換わっている）。追従できていなかったのは
+**目次の構造とラベル**の方で、2 点あった。
+
+#### ① 移動した 8 本が「現役」の見出しの下に残っていた
+
+`docs/core/INDEX.md:75-88`（追従前）は、見出し「設計ノート (`docs/design/`)」/
+「Planning (`docs/planning/`)」の表に、リンク先だけ `../archive/` へ変わった行が
+**現役の行と混在**していた。読者は見出しを信じて表を読むので、**アーカイブ済み文書を
+現在の設計として読める**状態が残っていた — #696 が消そうとした「紛らわしいから」
+そのものである。
+
+現役（`643` / `649`）と分け、**アーカイブ済みの表を別に立てて「現在の正本」列**を持たせた。
+列の値は移動時に各文書へ付けたバナー（例: `docs/archive/design/628-effect-chain-model.md:2`
+「**現在の正本**: `SIGNAL_CHAIN_DSL_SPEC_v1.md` **SC.10**」）から採っており、新しい判断はしていない。
+
+#### ② 🔴 `DEVELOPMENT_MAP.md` が目次に無かった
+
+PR #693 が追加した本体（1388 行・**開発計画の正本**）が `INDEX.md` に**1 行も無く**、
+Planning 節は**移動済みの 2 本だけ**を挙げていた。`grep` で確認した地図への参照は
+リポジトリ全体で `PROJECT_RULES.md:34` の 1 箇所のみ。
+
+地図 §0.2 は「**番号の検索ではなく、地図の見出しで探す**」を運用規則にしているが、
+**その地図に目次から辿り着けない**。CLAUDE.md がセッション開始時の必読に挙げるのは
+`INDEX.md` なので、ここに無いと運用規則が起動しない。地図と
+`2026-09-03-issue-triage.md`（#696 が「現役」と明記）を Planning 節へ登録し、
+§0.2 の起票規則を引用で添えた。
+
+#### ③ 棚卸し記録が、同じ PR で覆されたラベル状態を載せたままだった
+
+`docs/planning/2026-09-03-issue-triage.md:115` は「`foundation` と `release-gate` の **2 枚のみ**」と
+書き、C5 の表（同 `:96`）は **#197 に `release-gate`** を付けている。PR #693 はこの両方を覆した —
+**`must-fix` を新設して 3 枚**にし、**#197 のラベルは外した**（WORK_LOG 上の記述: 「🔴 3 件目は
+main の誤り — #197 に `release-gate` を付けたとき #656 と突き合わせていなかった。ラベルを外した」）。
+
+この文書は #696 が「**地図の入力として現役**」と明記して残したものなので、放置すると
+現役の文書が古いラベル状態を主張し続ける。**表の行は棚卸し時点の記録として保存**し、
+§5 に**追記**として 2 点の変更と「ラベルの現在の状態は地図を見る」を書いた
+（`docs/design/` の設計書と同じく、記録の書き換えはしない）。
+
+#### 追従不要と判断した層
+
+- **DSL/言語仕様・ランタイム/MCP・OrbitStudio**: PR #693 の差分 22 ファイルは
+  `docs/` と `sites/dev/` のみ。`packages/` の実装は 1 行も無い。唯一の `rust/` の変更は
+  `spike_s_concurrent_load.rs:15` の**行コメント内のパス文字列**で、コードではない
+- **`sites/dev/`**: 参照パス 6 箇所が ja / en 対で既に直っている（`sites/dev/signal-chain/index.md:27`
+  と `sites/dev/en/signal-chain/index.md:28` など）。地図の裁定（出口の一般化・`send` の dB 化）は
+  **未実装の決定**であり、dev サイトは実装の解説なので、書くと「実装されていない挙動」の記述になる
+- **`sites/user/` / `docs/user/`**: ユーザーが書く語は 1 つも増減していない
+
 ---
 
 ### chore(docs): 正本が別にできた設計・計画文書を 9 本アーカイブ (Sep 3, 2026)
@@ -540,6 +594,21 @@ owner 判断: **注意力の問題ではなく、121 件を並列に並べたま
 
 ---
 
+### docs(index): 棚卸し記録を INDEX の Planning 表に載せる (Sep 3, 2026)
+
+**追従元**: PR #690（マージコミット `84a2e95`）/ **Issue**: #689
+
+PR #690 が追加した `docs/planning/2026-09-03-issue-triage.md` が
+`docs/core/INDEX.md` の Planning 表（`docs/core/INDEX.md:213-217`）に載っておらず、
+**目次から辿れない**状態だった。INDEX は CLAUDE.md が「すべてのドキュメントの目次（必読）」と
+位置づけている入口なので、そこに無い文書は次の棚卸しで**もう一度同じ調査をやり直すことになる**。
+
+行を 1 本足し、クラスタ C1〜C6 の見出しとラベル運用（`PROJECT_RULES.md` §1b）への導線を書いた。
+
+**追従不要と判断したもの**: PR #690 は `packages/` / `rust/` を 1 行も触っていないため、
+DSL 仕様（`docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`）・ユーザー向け語彙
+（`sites/user/`）・内部構造（`sites/dev/`）はいずれも変化していない。
+
 ### chore(meta): issue 棚卸し 164→120 とラベル運用の制定 (Sep 3, 2026)
 
 **Issue**: #689 / **記録**: `docs/planning/2026-09-03-issue-triage.md`
@@ -581,6 +650,41 @@ open issue が 164 件まで溜まり、タイトルだけでは生死が判別�
 ノートは今も即時メソッド（`engine_wrap.rs:4455` に明記）。
 
 ---
+
+### docs: アーカイブで切れた WORK_LOG への相互参照を移動先へ張り替えた (Sep 2, 2026)
+
+**追従元**: PR [#687](https://github.com/signalcompose/orbitscore/pull/687)（merge commit `9ee375b`）/ **Issue**: #686
+
+#### 何が切れていたか
+
+#687 が 6〜8 月の **299 セクション**を `docs/archive/WORK_LOG_2026-0{6,7,8}.md` へ移した結果、
+他文書が `docs/development/WORK_LOG.md` §6.xxx と**ファイル名まで名指し**で引いていた箇所が、
+**そのファイルにもう存在しない節**を指すようになった。番号は保存されているので、壊れたのは
+番号ではなく**パス**である。
+
+#### やったこと
+
+1. **相互参照の張り替え（96 行 / 40 ファイル）**: 行内の節番号がすべて同じアーカイブへ移った 84 行は
+   機械置換。07 と 08 にまたがる 12 行（`sites/dev/{,en/}` の glossary / catalog / plugin-ui /
+   rust-engine/index / execution-feedback / vscode-architecture）は、境界（07 は 6.347 まで・
+   08 は 6.348 から）で分けて手で書き分けた。ja / en 両方
+2. **`docs/core/INDEX.md`**: 「Archived WORK_LOG」表に 2026-07 / 2026-08 の行が無かったので追加。
+   本体末尾の索引には両方あり、**INDEX.md だけが取り残されていた**
+3. **`docs/core/PROJECT_RULES.md` §1a**: アーカイブ手順に「INDEX.md の表も更新する」「名指しの
+   相互参照を張り替える」の 2 項を追加。あわせて `docs/WORK_LOG.md` という誤ったパスを
+   `docs/development/WORK_LOG.md` へ修正
+
+#### 仕組みの穴（次のアーカイブで同じことが起きる）
+
+`tests/docs/worklog-size.spec.ts` が突合するのは **WORK_LOG.md 末尾の索引と `docs/archive/` の実体**
+だけで、`docs/core/INDEX.md` の表も、他文書からの名指し参照も見ていない。今回はどちらも
+取り残されていた。§1a に手順として書いたが、**強制はされていない**。
+
+#### 実装・テストは 1 行も触っていない
+
+`packages/` `rust/` `tests/` は無変更（`tests/e2e/orbitstudio-mcp-gated.spec.ts` と
+`tests/vscode-extension/mcp-server.spec.ts` の `WORK_LOG 6.189` 等はコメント内の番号のみの
+言及で、ファイル名を名指ししていないため対象外）。
 
 ### chore(docs): WORK_LOG をアーカイブし、番号を廃止し、閾値をテストで強制した (Sep 2, 2026)
 
@@ -959,6 +1063,33 @@ Older entries have been archived by month for readability:
 GitHub 設定で自動削除・履歴は merge commit から辿る」に訂正。統合ブランチも束 PR のマージ後に
 消えてよい（自動削除はマージ後にしか動かないので、小 PR の base が途中で消えることはない）。
 
+## 2026-09-03: PR #704 の追従監査（ドキュメント変更なし・指摘 3 件）
+
+ルーチン「マージ済み PR にドキュメントとサイトを追従させる」を PR #704（`703-bundle-branch-workflow`
+→ main・merge commit `3fa1150`）に対して実行。**追従すべきドキュメント変更は 0 件**。
+
+- 差分 6 ファイルはすべて規約文書と CI 定義（`CLAUDE.md` / `docs/core/PROJECT_RULES.md` /
+  `docs/development/BUNDLE_BRANCH_WORKFLOW.md` / `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` /
+  `docs/development/WORK_LOG.md` / `.github/workflows/claude-code-review.yml`）で、
+  `packages/engine/` `rust/` `packages/vscode-extension/` に変更が無い。DSL の構文・意味論、
+  MCP ツールの契約、OrbitStudio の評価経路のいずれも変わっていないので、
+  `docs/specs-v2/` `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` `sites/user/` `sites/dev/` は追従不要
+- `squash` → `merge commit` の訂正は差分内で完結している（リポジトリ全体を grep して、
+  規約文書に旧記述の残りは無い。`sites/dev/en/signal-chain/index.md:1230` の "squashed" は
+  信号処理の記述で無関係）
+
+**追従できていない点として PR で報告した 3 件**（本ルーチンでは直さない）:
+
+1. `CLAUDE.md:301` と `docs/development/BUNDLE_BRANCH_WORKFLOW.md:70` が小 PR のゲートで
+   `ORBIT_GATED_ONLY` を既存の仕組みとして参照しているが、実装が無い。
+   実在するのは `ORBIT_GATED_ORBITSTUDIO`（`tests/e2e/orbitstudio-mcp-gated.spec.ts:59`）で
+   suite 全体の on/off。`ORBIT_GATED_ONLY` は `docs/design/668-e2e-foundation-design.md:891`
+   の決定 D-4（未実装）
+2. `.github/workflows/claude-code-review.yml` の最終実行は 2026-06-17（run #278）。
+   今回足した `if: github.base_ref == 'main'` の効果を Actions で観測できない
+3. PR #704 は最終 head `7f53a5d` の CI 完了を待たずにマージされている
+   （CI 開始 10:29:37Z / マージ 10:29:39Z）。赤ではないが、マージ時点では未検証
+
 ## 2026-09-03: 束ブランチ運用の採用（#703）
 
 owner との相談（PR #702 セッション）で、レビューの単位を PR から**束**へ変更。小 PR は束の
@@ -1126,6 +1257,131 @@ steps the live playhead through an instrument() sequence, rests included
 
 E2E-2 / E2E-3 の dry RMS が **ちょうど 0**、E2E-1 の比が **1.27**（gain が効いていない値）
 という内容も、段 1 が直す欠陥と一致している。
+
+## 2026-09-03: #713 のガード変更に dev 学習サイトを追従させた（docs のみ）
+
+**対象**: PR [#714](https://github.com/signalcompose/orbitscore/pull/714)（merge commit `f006a51`）。
+コード・テストは一切変更していない。
+
+PR #714 は引用のアンカー（`// FILE:START-END` 形式の見出し行）を直したが、**引用を囲む本文**と
+`## Sources` の行範囲は旧状態のままだった。`docs:check` は前者しか検査しないので、後者は
+red にならずに残った。この 2 種を追従させた。
+
+**本文の乖離 2 件**（どちらも #714 で挙動が変わった箇所を古い説明のまま記述していた）:
+
+| 場所 | 旧記述 | 実態 |
+|---|---|---|
+| `sites/dev/rust-engine/capture-verification.md` / `sites/dev/editor/mcp-and-gated-e2e.md` | ガードは `rust/**/*.rs` \| `Cargo.toml` を走査 | `tests` / `benches` / `examples` を除外する（#713） |
+| `sites/dev/editor/mcp-and-gated-e2e.md` | 「残り **2 本**」（アサーション衛生は 3 本） | #713 で 2 本増えて **5 本** |
+
+両章に #713 の節を足した。走査除外の理由（別 cargo ターゲットなので daemon バイナリに入らない・
+`git checkout` が mtime を動かすので解消不能な赤になる）と、`src/` を除外しない理由、
+`gated-assertion-hygiene.spec.ts` の 2 本が両方向を留めていることを書いた。
+ja / en 両方（STYLE_GUIDE のバイリンガル必須）。
+
+**`## Sources` の行範囲**: ガードが 15 行伸びたので、`orbitstudio-mcp-gated.spec.ts` の
+128 行目以降を指す参照はすべて +15 ずれていた。6 章 × ja/en で 12 ファイル分を直した
+（`78-152` → `78-166`、`1434-1468` → `1449-1483` など）。境界行は実ファイルで確認済み。
+
+**frontmatter**: 本文を実質的に足した 2 章（RE-4 / IV-3）の `verified-against` を
+`69dc968` → `f006a51`、`verified-at` を `2026-09-03` に更新した（STYLE_GUIDE
+「章本文を実質的に書き直したとき: 必ず最新 commit に更新する」）。
+
+### 追従の過程で見えた、直していない点
+
+このセッションでは**指摘のみ**（テスト・実装は変更しない方針のため）。詳細は PR 本文。
+
+1. `tests/e2e/gated-assertion-hygiene.spec.ts:76-83` / `:89-93` は gated spec の**ソース文字列**を
+   正規表現で見るだけなので、「除外ブロックを `walk(full)` の**後ろ**へ動かす」変異
+   （除外が到達不能になり #713 の赤が戻る）で **2 本とも緑のまま**になる
+2. 同 `:77` は式の**字面**に依存するので、`Set` へ畳む等の挙動不変なリファクタで red になる
+3. `assertDaemonBinaryIsNotStale()` は `tests/e2e/orbitstudio-mcp-gated.spec.ts:164-166` の
+   `gated && appAvailable` の下でしか呼ばれない。CI は全ジョブ非 gated なので、
+   #713 で足した 15 行は**どこでも 1 行も実行されていない**
+
+## 2026-09-03: PR #700 のドキュメント追従（ICLC 取り下げ / WCTM の持ち先 / §10 の表崩れ）
+
+**追従元**: PR [#700](https://github.com/signalcompose/orbitscore/pull/700)（マージコミット `ca176f0`・head `f5b16d8`）。
+docs のみの変更で、`CLAUDE.md` の本番トラック注記・`docs/planning/DEVELOPMENT_MAP.md`・本 WORK_LOG を更新していた。
+
+**#700 が `CLAUDE.md` にしか書かなかったため、同じ注記を持つ他のドキュメントが古いまま残っていた:**
+
+| ファイル | 何が古かったか |
+|---|---|
+| `docs/core/INDEX.md:39` | 「本番トラックは ICLC への proposal 提出方向へ retarget（年次・提出日・提出形態はいずれも要確認）」 |
+| `docs/core/INDEX.md:207` | 同じ retarget 注記（WCTM 調査群の凍結セクション） |
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:18` | 「ICLC 提出方向へ retarget（年次・提出日・形態は要確認）」 |
+| `sites/dev/decisions/adr-001-supercollider.md:267` / `:314`（+ `en` 対訳） | 「Consequences revisited」の 3. 学術的文脈が ICLC retarget で止まっていた |
+
+いずれも **ICLC 取り下げ（owner 2026-09-03）・本番トラックに締切が無い・WCTM 本体の開発は本リポジトリで進めない**
+の 3 点へ書き換えた。`sites/dev` は日英両方を更新（STYLE_GUIDE のバイリンガル必須）。
+
+**#700 が入れた表崩れも直した**: `DEVELOPMENT_MAP.md` §10 で、追記の箇条書きと更新履歴テーブルのヘッダ行の間に
+空行が無く、GFM ではテーブルがリスト項目の遅延継続として吸われて**描画されない**状態だった
+（`docs/planning/DEVELOPMENT_MAP.md:1463-1464`）。空行を 1 行入れただけで、本文は変えていない。
+
+**追従しなかったもの**: #700 が記録した出口・レンダ宛先・`%n` テンプレートの裁定は、地図自身が
+「spec への反映は §6.2 の改訂候補（owner 裁定で行う）」と書いているため `docs/specs-v2/` と
+`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` へは**反映していない**（実装も未着手で、DSL 表面は変わっていない）。
+
+
+## 2026-09-03: PR #709 追従 — 失効した landmine 記述を更新
+
+PR #709（`7d2df31`・上記 #708）で `.env.example` を削除した結果、
+`docs/development/POST_2.0_VST3_HOSTING_PLAN.md:256` の landmine 記述が**失効した**。
+
+| | 内容 |
+|---|---|
+| 旧記述 | 「`.env.example` は sandbox read-deny → `git diff` が誤って削除表示。`git status --short` が権威」 |
+| なぜ失効か | ファイルが実在しなくなったため、この誤検知は起きない |
+| 🔴 なぜ放置できないか | **実際に削除された今、この記述は「`.env.example` の削除表示は無視してよい」と読める** — 真の削除を sandbox の誤検知と取り違えさせる |
+
+取り消し線で旧記述を残したうえで、解消済みであることと、`.gitignore:55-57` の
+un-ignore 行が残っているため**再設置すると再発する**ことを追記した。
+
+**追従不要と判断した層**（PR #709 の差分は `.env.example` 削除と WORK_LOG 追記のみ）:
+
+| 層 | 判断 |
+|---|---|
+| DSL/言語仕様（`packages/engine/`） | 差分に含まれない。構文・意味論・`.orbslog` 形式に変化なし |
+| ランタイム/MCP（`rust/`） | 差分に含まれない。MCP ツールの引数・返り値・エラー挙動に変化なし |
+| OrbitStudio（`packages/vscode-extension/`） | 差分に含まれない。評価フロー・診断・補完に変化なし |
+| `sites/user/` `sites/dev/` | 削除したファイルを参照する記述は 0 件（repo 全体 grep で確認） |
+
+## 2026-09-04: ルーティンのドキュメント追従 PR を溜めない規則（#718）
+
+**実害**: ルーティンが出したドキュメント追従 PR **9 本のうち 8 本が衝突**し、1 本ずつ手で解決した。
+
+| PR | 結果 |
+|---|---|
+| #716 / #717 | **出てすぐ入れた → clean** |
+| #688 / #691 / #698 / #701 / #705 / #710 / #711 | **溜めた → 全部衝突** |
+
+**原因**: ルーティン PR の差分は**「追従した時点の main」に対して計算されている**。その後 main に
+入る 1 コミットごとに陳腐化する。待たせている間に #709 / #714 / #716 と束の追従が入り、
+`WORK_LOG` の追記位置・`INDEX` の項目・各ドキュメントの **`## Sources` の行範囲**と
+**引用のアンカー**が全部ずれた。
+
+🔴 **片側を捨てると情報が落ちる**ので、機械的な解決ができない。実例:
+
+- **#688**: 「archive パスへの修正」（PR 側）と「ICLC 取り下げの追記」（main 側）が**同じ行**で衝突。
+  両方が正しいので、パスは PR 側・文末は main 側を採った
+- **#711**: `## Sources` は束側が最新だったが、`helpers/rack-child-pid.ts` の行は PR 側にしか無かった
+
+**規則**（owner 合意）:
+
+1. main に何かをマージしたら、**ルーティン PR が出た時点でその場で入れる**
+2. 遅くとも **統合ブランチを main から切る前**に全部消化する
+3. 🔴 **base の選び方**: 追従先のファイルが**束にしか無い**なら base は **統合ブランチ**にする。
+   main を base にすると引用が実ファイルを指せず `docs:check` が落ちる（#711 が実際その状態だった。
+   #717 はルーティン自身が正しく束を base にしていた）
+
+**止めない理由**: 🔴 **ルーティンは機械が見ていない層を見ている。** `docs:check` は**引用のアンカー
+しか検査せず**、引用を囲む**本文**と **`## Sources` の行範囲**は検査しない。#716 はまさにそこを
+検出した（#714 でガードの走査範囲を変えたのに、本文は「`rust/**/*.rs` を走査」のまま）。
+
+**自動マージにもしない**: #688 の本文には事実誤認があった（「vitest を回す CI チェックは 1 本も
+存在しない」— 実際は `code-review.yml:26` が `npm test` を実行している）。人が読む前提は変えない。
 
 ## 束 668-e2e-foundation — E2E 基盤（段 0・安全網）
 

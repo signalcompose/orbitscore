@@ -622,7 +622,8 @@ ORBIT_CAPTURE_WAV=/tmp/orbit-capture-test.wav node cli-audio.js path/to/single-n
 - `rust/crates/orbit-audio-daemon/src/session.rs:691-718,1272-2372` — `session::run`（handshake・writer task・UI event 転送）と `handle_command` の match arm（コマンド表の出典）
 - `rust/crates/orbit-audio-native/src/output.rs:254-260,581-618,662-750,1513-1556` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — engine-first ロードマップとアーキ確定（楽器=in-process／effects+3rd-party=out-of-process sandbox）
-- [`docs/development/WORK_LOG.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/WORK_LOG.md) 6.258 / 6.262 / 6.415 — capture peak の実測記録、master fader 不具合（#643）
+- [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 / 6.262 — capture peak の実測記録
+- [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 — master fader 不具合（#643）
 - Issue [#448](https://github.com/signalcompose/orbitscore/issues/448) — daemon の graceful-shutdown ギャップと `ParentWatch` 対策
 - Issue [#484](https://github.com/signalcompose/orbitscore/issues/484) — audio device の列挙・選択・ランタイム切替（D1 / D2 / D3）
 - Issue [#605](https://github.com/signalcompose/orbitscore/issues/605) — panic hook の best-effort stderr 化

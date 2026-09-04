@@ -526,7 +526,7 @@ The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcomman
   } catch (err) {
 ```
 
-A point to note here is that `ORBITSCORE_ENGINE` is **set explicitly in both branches**. Because cutover #108 flipped the default to "unset = rust," the old logic of protecting SC with `delete env.ORBITSCORE_ENGINE` was a landmine that always produced rust (I1 in `docs/development/WORK_LOG.md` §6.186). In the `sc` branch, the scsynth path resolved by the pre-check is passed to the engine via `ORBIT_SCSYNTH_PATH`, avoiding a double `fs.statSync` and any mismatch in resolution results.
+A point to note here is that `ORBITSCORE_ENGINE` is **set explicitly in both branches**. Because cutover #108 flipped the default to "unset = rust," the old logic of protecting SC with `delete env.ORBITSCORE_ENGINE` was a landmine that always produced rust (I1 in `docs/archive/WORK_LOG_2026-07.md` §6.186). In the `sc` branch, the scsynth path resolved by the pre-check is passed to the engine via `ORBIT_SCSYNTH_PATH`, avoiding a double `fs.statSync` and any mismatch in resolution results.
 
 `stdio: ['pipe', 'pipe', 'pipe']` is important. By making stdin/stdout/stderr all pipes, the Extension Host can directly write/read them. Right after spawn, five handlers are attached, and after one `process.nextTick` it checks "is the same process still alive?"
 
@@ -794,7 +794,7 @@ The main changes that entered the extension between the first draft on 2026-05-0
 
 | Change | Issue | Source |
 |---|---|---|
-| Bundle `orbit-audio-daemon` into the `.vsix` and add it as the last candidate of `resolveDaemonBinaryPath()` | #306 | `docs/development/WORK_LOG.md` §6.185 (2026-07-03) |
+| Bundle `orbit-audio-daemon` into the `.vsix` and add it as the last candidate of `resolveDaemonBinaryPath()` | #306 | `docs/archive/WORK_LOG_2026-07.md` §6.185 (2026-07-03) |
 | The `orbitscore.engine` setting (default `rust`), branching at 4 sites via `getConfiguredEngineKind()`, explicit setting of `ORBITSCORE_ENGINE` | #377 / #366 | §6.186 (2026-07-07), `extension.ts:653-669` |
 | Run diagnostics on open / close / activation too | #384 | §6.187 (2026-07-07), `extension.ts:414-443` |
 | MCP control server (Agent Bridge), from `evaluate_orbitscore` to 25 handlers, log ring for `get_log`, `.mcp.json` registration command | #388 | §6.188-6.192 (2026-07-07), `extension.ts:445-495`, `log-ring.ts` → [IV-3](/en/editor/mcp-and-gated-e2e) |
@@ -867,5 +867,5 @@ The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEn
 - `packages/vscode-extension/src/log-ring.ts:20-24` — `OUTPUT_LOG_RING_MAX = 1000` / `DEFAULT_LOG_LINES = 50`
 - `packages/engine/src/audio/supercollider/scsynth-resolver.ts:91-98` — `explicit > env > bundle > throw` priority chain
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:221-250` — the daemon-side 5-candidate chain
-- `docs/development/WORK_LOG.md` §6.185-6.187, §6.188-6.192, §6.194-6.197, §6.260-6.261, §6.266, §6.271, §6.279-6.283, §6.295-6.301, §6.412 — sources of the drift table
+- `docs/archive/WORK_LOG_2026-07.md` §6.185-6.187, §6.188-6.192, §6.194-6.197, §6.260-6.261, §6.266, §6.271, §6.279-6.283, §6.295-6.301 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — sources of the drift table
 - PR [#155](https://github.com/signalcompose/orbitscore/pull/155) — code review comments on adopting scsynth strict mode and preventing double notification

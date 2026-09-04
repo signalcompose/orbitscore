@@ -9,7 +9,7 @@ status: draft
 > **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
 
 ::: warning Status as of 2026-09
-The `BufferManager` / `orbitPlayBuf` / `EventScheduler` in this chapter (`packages/engine/src/audio/supercollider/`) belong to the SuperCollider path, which since cutover #108 on 2026-07-03 (`docs/development/WORK_LOG.md` §6.179) is **not the default and is used only when you opt out with `ORBITSCORE_ENGINE=sc`**. On the default Rust daemon path, file decoding and slice playback are handled on the daemon side (see [RE-1. Daemon Architecture Overview](/en/rust-engine/)). The citations in this chapter match the real code at 69dc968, but read it as historical reading.
+The `BufferManager` / `orbitPlayBuf` / `EventScheduler` in this chapter (`packages/engine/src/audio/supercollider/`) belong to the SuperCollider path, which since cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179) is **not the default and is used only when you opt out with `ORBITSCORE_ENGINE=sc`**. On the default Rust daemon path, file decoding and slice playback are handled on the daemon side (see [RE-1. Daemon Architecture Overview](/en/rust-engine/)). The citations in this chapter match the real code at 69dc968, but read it as historical reading.
 
 ```typescript
 // packages/engine/src/audio/create-audio-engine.ts:17-22
@@ -380,7 +380,7 @@ sequenceDiagram
 
 ## Next Exploration Candidates
 
-- **Slice playback on the Rust daemon path**: how the same math as `calculateSlicePosition()` / `calculatePlaybackRate()` is expressed on the daemon side. Start from slice varispeed parity (`docs/development/WORK_LOG.md` §6.159)
+- **Slice playback on the Rust daemon path**: how the same math as `calculateSlicePosition()` / `calculatePlaybackRate()` is expressed on the daemon side. Start from slice varispeed parity (`docs/archive/WORK_LOG_2026-06.md` §6.159)
 - **Confirming format support**: the version of the bundled `libsndfile.dylib` and the formats it can actually decode (especially MP3/MP4)
 - **soxi dependency management**: a fallback strategy in environments where soxi is missing. It works with the default duration of 0.3 s, but this affects the precision of chop
 - **Buffer cache lifetime**: the cache is held until process termination and is not released unless `clearCache()` or `removeBuffer()` is called. The impact of memory growth depending on session length
@@ -402,5 +402,5 @@ sequenceDiagram
 - `packages/engine/src/audio/supercollider/osc-client.ts:79-88` — `sendBufferLoad()`: `/b_allocRead` and callAndResponse
 - `packages/engine/supercollider/setup.scd:22-65` — entire `orbitPlayBuf` SynthDef: PlayBuf, BufRateScale, startPos unit conversion, envelope, doneAction
 - `packages/vscode-extension/BUILD_GUIDE.md:83-97` — size and composition of `libsndfile.dylib` included in the bundle
-- `docs/development/WORK_LOG.md` §6.179 — cutover #108 (2026-07-03): the record of the SC path becoming an opt-out
+- `docs/archive/WORK_LOG_2026-07.md` §6.179 — cutover #108 (2026-07-03): the record of the SC path becoming an opt-out
 - [SuperCollider Server Command Reference](https://doc.sccode.org/Reference/Server-Command-Reference.html) §Buffer Commands — argument definitions for `/b_allocRead`

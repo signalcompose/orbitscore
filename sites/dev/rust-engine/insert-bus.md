@@ -437,7 +437,7 @@ WORK_LOG の記述であり、本ページの再読（2026-09-01）でも `outpr
 - `rust/crates/orbit-audio-daemon/tests/outproc_effect_bus_gated.rs` — gated 実機テスト（`EFFECT_GAIN=0.5`・ratio assert `0.4..=0.6`）
 - [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/core/INSTRUCTION_ORBITSCORE_DSL.md) PH.2b / PH.2d — `seq.effect()` の DSL 規範（処理順・受理フォーマット・上限 8・差し替え）
 - [`docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md) SC.10 — ラック形の正本
-- [`docs/development/WORK_LOG.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/WORK_LOG.md) 6.262 — #434 S1〜S3 実装記録（ratio 0.50000 実機記録）
+- [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.262 — #434 S1〜S3 実装記録（ratio 0.50000 実機記録）
 - Issue [#434](https://github.com/signalcompose/orbitscore/issues/434) — per-sequence effect insert
 - PR [#461](https://github.com/signalcompose/orbitscore/pull/461) — マージ済み実装（free-list 追加を含む）
 - Issue [#625](https://github.com/signalcompose/orbitscore/issues/625) / [#628](https://github.com/signalcompose/orbitscore/issues/628) — insert の差し替え・削除 / effect rack

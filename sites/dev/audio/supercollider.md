@@ -9,7 +9,7 @@ status: draft
 > **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 ::: warning 2026-09 時点の位置づけ
-本章が追う SuperCollider (scsynth / OSC) 経路は、2026-07-03 の cutover #108（`docs/development/WORK_LOG.md` §6.179）以降、**既定の音声バックエンドではありません**。`createAudioEngine()` は `ORBITSCORE_ENGINE=sc`（または `supercollider`）を明示したときだけ `SuperColliderPlayer` を返し、未設定なら Rust の `orbit-audio-daemon`（`RustEnginePlayer`）を選びます。つまり本章は **opt-out 経路の解説**です。コードは `packages/engine/src/audio/supercollider/` 配下に残っていて、本章の引用はすべて 69dc968 時点の実コードと一致しますが、歴史的読解として読んでください。既定経路は [RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照してください。
+本章が追う SuperCollider (scsynth / OSC) 経路は、2026-07-03 の cutover #108（`docs/archive/WORK_LOG_2026-07.md` §6.179）以降、**既定の音声バックエンドではありません**。`createAudioEngine()` は `ORBITSCORE_ENGINE=sc`（または `supercollider`）を明示したときだけ `SuperColliderPlayer` を返し、未設定なら Rust の `orbit-audio-daemon`（`RustEnginePlayer`）を選びます。つまり本章は **opt-out 経路の解説**です。コードは `packages/engine/src/audio/supercollider/` 配下に残っていて、本章の引用はすべて 69dc968 時点の実コードと一致しますが、歴史的読解として読んでください。既定経路は [RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照してください。
 
 ```typescript
 // packages/engine/src/audio/create-audio-engine.ts:17-36
@@ -459,5 +459,5 @@ OSC メッセージのほとんどは fire-and-forget ですが、バッファ�
 - `packages/engine/src/audio/supercollider/event-scheduler.ts:537-605` — `sendPlaybackMessage()`: `/s_new orbitPlayBuf` の引数レイアウトと LinkAudio 分岐
 - `packages/engine/src/audio/supercollider/types.ts:48-52` — `BootOptions` 型: `scsynth`, `debug`, `device` フィールド
 - `packages/engine/supercollider/setup.scd:22-65` — `orbitPlayBuf` SynthDef の sclang 定義 (doneAction: 2 による自動解放)
-- `docs/development/WORK_LOG.md` §6.179 — cutover #108 (2026-07-03): 既定バックエンドを Rust に切替、SC 経路は `ORBITSCORE_ENGINE=sc` で温存
+- `docs/archive/WORK_LOG_2026-07.md` §6.179 — cutover #108 (2026-07-03): 既定バックエンドを Rust に切替、SC 経路は `ORBITSCORE_ENGINE=sc` で温存
 - [SuperCollider Server Command Reference](https://doc.sccode.org/Reference/Server-Command-Reference.html) §Synth Commands — `/s_new`, `/n_set`, `/n_free`, `/d_recv`, `/b_allocRead` の仕様

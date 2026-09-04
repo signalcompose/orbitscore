@@ -543,4 +543,4 @@ sequenceDiagram
 - `packages/engine/src/cli/repl-mode.ts:386-470` — `handleLine()`: meta-line dispatch and the DSL buffer
 - `packages/engine/src/cli/repl-mode.ts:472-516` — `runWithStallReport()` and the FIFO chain in `pushLine()`
 - `packages/engine/src/cli/repl-mode.ts:519-539` — `startREPL()`: readline → `pushLine` and `await new Promise(() => {})`
-- `docs/development/WORK_LOG.md` §6.266 (meta line #456, 2026-07-17), §6.271 (FIFO serialization #476, 2026-07-17)
+- `docs/archive/WORK_LOG_2026-07.md` §6.266 (meta line #456, 2026-07-17), §6.271 (FIFO serialization #476, 2026-07-17)

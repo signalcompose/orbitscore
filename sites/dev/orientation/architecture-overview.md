@@ -690,4 +690,4 @@ export const DSL_VERSION = '1.1'
 - `scripts/copy-daemon-bin.sh:1-47,121-132` — daemon / child / 標準プラグインの同梱方針
 - `package.json:9-11` — `build:copy-engine` が `copy-daemon-bin.sh` を呼ぶ
 - `docs/research/ENGINE_DAEMON_PROTOCOL.md` — wire protocol の正本
-- `docs/development/WORK_LOG.md` §6.179 (cutover #108, 2026-07-03)、§6.185 (daemon 同梱 #306, 2026-07-03)、§6.188-6.192 (MCP サーバー #388, 2026-07-07)
+- `docs/archive/WORK_LOG_2026-07.md` §6.179 (cutover #108, 2026-07-03)、§6.185 (daemon 同梱 #306, 2026-07-03)、§6.188-6.192 (MCP サーバー #388, 2026-07-07)

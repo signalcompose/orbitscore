@@ -1590,7 +1590,7 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - `tests/core/rack-chain.spec.ts:105-414` — T3–T23 (LCS, occurrence, keep updates, uncertain recovery)
 - `tests/interpreter/rack-value-resolution.spec.ts:62-188` — T1–T19 (array classification, three categories, layer rejection)
 - `tests/interpreter/signal-chain-dispatch.spec.ts:170-184,581-611` — T24 (method-form diagnostic), T25 (`remove()` removal)
-- `docs/development/WORK_LOG.md:1726-1876,2379-2509,2582-2736,3046-3075` — 6.379 / 6.386–6.389 / 6.396–6.397 (establishment, Gain, rack child, daemon wiring, DSL, hardware)
+- `docs/archive/WORK_LOG_2026-08.md:1726-1876,2379-2509,2582-2736,3046-3075` — 6.379 / 6.386–6.389 / 6.396–6.397 (establishment, Gain, rack child, daemon wiring, DSL, hardware)
 - `docs/user/ja/USER_MANUAL.md:599-615` — the user-facing description of the rack notation
 - Issue [#628](https://github.com/signalcompose/orbitscore/issues/628) — rack-form chains (the unified model for deletion, bypass, multiple inserts)
 - Issue [#625](https://github.com/signalcompose/orbitscore/issues/625) — the replacement/deletion mechanism this builds on

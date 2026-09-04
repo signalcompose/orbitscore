@@ -390,7 +390,7 @@ The simple design that "each sequence computes its own barDuration, advances its
 - `packages/engine/src/timing/calculation/calculate-event-timing.ts:104-105` — even subdivision via `barDuration / elements.length`
 - `packages/engine/src/core/global/types.ts:5-8` — the `Meter` interface
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §5 "Launch Quantize" — "behavior under polymeter" (the global bar boundary is the launch reference)
-- `docs/development/WORK_LOG.md` 6.198 — measurements for #389 (+0.19 ms/bar accumulation before the fix, mean|dev| 0.52 ms after)
+- `docs/archive/WORK_LOG_2026-07.md` 6.198 — measurements for #389 (+0.19 ms/bar accumulation before the fix, mean|dev| 0.52 ms after)
 - Issue [#389](https://github.com/signalcompose/orbitscore/issues/389) — sawtooth timing jitter (the background of grid anchoring)
 - Issue [#212](https://github.com/signalcompose/orbitscore/issues/212) / PR [#215](https://github.com/signalcompose/orbitscore/pull/215) — launch quantize
 - [BEAT_METER_SPECIFICATION.md](https://github.com/signalcompose/orbitscore/blob/main/docs/development/BEAT_METER_SPECIFICATION.md) — Phase 1/2 specification, future denominator restriction plan, and the polymeter example proven at ICMC (4/4 vs 5/4)
