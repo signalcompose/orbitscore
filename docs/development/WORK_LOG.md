@@ -37,16 +37,21 @@ owner の指摘で規格を読み直したところ、**振る舞いの観察か
 
 #### 規格が定める作法と現在地
 
-| # | 規格（一次情報） | 現在地 |
+| # | 規格（一次情報・**強度**） | 現在地 |
 |---|---|---|
-| 1 | **CLAP: `CLAP_PATH` 環境変数を問い合わせる義務**（`clap/include/clap/entry.h`・PATH と同形式） | 🔴 **見ていない**（固定 2 パス・`orbit-plugin-scan/src/lib.rs:192-195`） |
-| 2 | **CLAP: 各ディレクトリを再帰的に探索**（同上） | 🔴 **非再帰**（`list_bundle_candidates` の doc・同 `:228`） |
-| 3 | **CLAP: 1 `.clap` に複数プラグイン。`clap_plugin_factory` で descriptor 列挙 → plugin ID で同定** | ❓ 未確認 |
-| 4 | **VST3: `moduleinfo.json`（3.7.8 で `Contents/Resources`）が Class ID / Category / Name / Vendor / Version** | ○ 参照している（`lib.rs:110`） |
-| 5 | **同一性は CLAP=plugin ID / VST3=Class ID。規格はパスを同一性にしない** | 🔴 `instrument(path)` が生パス |
-| 6 | 検証を走らせるタイミング | 🔴 手動のみ（起動時はカタログ JSON を読むだけ） |
+| 1 | **CLAP: `CLAP_PATH` を問い合わせる — `must`**（`clap/include/clap/entry.h` 逐語 "a CLAP host **must** query the environment for a CLAP_PATH variable"） | 🔴 `CLAP_PATH` は見ていない。ただし **`ORBIT_PLUGIN_PATH`（`:` 区切り）は既に読んでいる**（`lib.rs:200-211` `extra_scan_dirs_from_env`）ので、**同じ関数に 1 本並べるだけ** |
+| 2 | **CLAP: 各ディレクトリを再帰的に探索 — `should`**（同上。1 と違い義務ではない） | 🔴 **非再帰**（`list_bundle_candidates` の doc・同 `:228`。テスト `:2197` が非再帰を固定） |
+| 3 | **CLAP: 1 `.clap` に複数プラグイン。factory で descriptor 列挙 → plugin ID で生成** | ✅ **実装済み**（`orbit-clap-host/src/discovery.rs:105-120` 全列挙 / `lib.rs:540-566` 1 バンドル→複数エントリ / `discovery.rs:125-137` ID で選択）。同一性は `(format, path, pluginId)` の複合キー（`lib.rs:1028-1034`） |
+| 4 | **VST3: `moduleinfo.json` は 3.7.5 で導入、3.7.8 で `Contents/` → `Contents/Resources/`**（cmake の `SMTG_MODULEINFO_PATH_INSIDE_BUNDLE` で版差を確認） | ○ 参照している（`lib.rs:110`）。⚠️ **`Contents/Resources/` しか見ない**（`lib.rs:842`）ので **3.7.5〜3.7.7 のバンドルは ProbePending 送り** |
+| 5 | **同一性は ID（CLAP=plugin ID / VST3=CID）、path は「所在」。ID → ファイルの対応表は規格に無く、所在の解決はホストの責務** | 🔴 `instrument(path)` が生パス（`plugin-resolver.ts:76-80`） |
+| 6 | 検証を走らせるタイミング | 🔴 手動のみ（起動時はカタログ JSON を読むだけ・`plugin-catalog-reader.ts:132-150`） |
 
-**1・2 は規格違反に近く小さい。5 は作り直しの規模**なので他の実装の後（owner）。
+**1 は既存関数への 1 行追加。2 も小さい。5 は作り直しの規模**なので他の実装の後（owner）。
+
+🔴 **初稿は 3 を「❓ 未確認」、5 を「規格はパスを同一性にしない」と書いていた。**
+前者は**実装を読めば分かることを読まずに未確認と書いた**（[[invent-rules-only-after-reading-the-code]] の再発）。
+後者は**言い過ぎ** — 規格は path を禁じているのではなく、同一性の担い手が ID だというだけである。
+「作法を調べる」は規格側だけでなく**自分の現在地も一次情報で確かめる**ことを含む。
 
 #### 保証のタイミングについての整理
 
