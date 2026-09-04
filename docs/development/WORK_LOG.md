@@ -17,6 +17,50 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(spec): add RUN termination and offline render to the note-off firing cases (Sep 4, 2026)
+
+**Issue**: #606（`must-fix`）/ **ブランチ**: `606-noteoff-firing-spec` / **PR-K-A0**（spec 先行）
+
+`docs/design/634-pdc-layer-instrument-rack-design.md` §3 の実装（PR-K-A1 / A2）に入る前に、
+**note-off の発火点**を仕様側で確定させる。コードは 1 行も変更していない。
+
+#### 🔴 「flush が無い」は誤り — 配送機構は在る
+
+地図 §4.B の記述は誤りで、`run-sequence.ts → sequence.ts → midi-scheduler.ts → plugin-note-output.ts`
+の経路は**実在する**。壊れているのは**その周り**である（設計 §3.1 の穴 4 つ）。
+したがって本 spec 改訂も「機構を足す」話ではなく、**発火点の列挙に 2 つ足す**話である。
+
+#### 改訂
+
+| 文書 | 箇所 | 追加 |
+|---|---|---|
+| `PITCH_DSL_SPEC_v1.1.md` | §7-2 realization rule 2（Active note tracking） | **一発 `RUN()` の終端** / **オフラインレンダの終端** |
+| `INSTRUCTION_ORBITSCORE_DSL.md` | Note lifecycle の Active-note tracking | 同上（英語側） |
+| 同 | **PH.4 All Notes Off** | 同じ発火点 2 つ + 🔴 **daemon 側の「最後の砦」** |
+
+#### 🔴 発火点が増えても配送機構は 1 本
+
+3 箇所すべてに同じ注記を置いた。**場面ごとに別の flush を作らない。**
+設計 §3.2 の責務 3 層（TS scheduler = owner ごとの解放 / daemon = instance ごとの最後の砦 /
+child = 触らない）を仕様の言葉に落とした形である。
+
+**child に flush を置かない理由**も設計から引いた: child は自分が受けた note の簿記を持たず、
+持たせると `(port_index, channel, key)` 参照カウント（PH.4）の**正本が割れる**。
+
+#### daemon の「最後の砦」を仕様に書いた理由
+
+engine が保留 note を解放し切る前に死ぬと、**daemon は active note を追跡しているのに読み手が
+いない**（設計 §3.1 の穴 H4・読み手 0 箇所）。これは
+「**鳴りっぱなしを検出できるのに止められない**」状態なので、仕様の側で義務として書いた。
+実装は PR-K-A2（wire に新 RPC を足す = 一方通行）。
+
+#### 検証
+
+`npm test` 2199 passed / 49 skipped（docs のみなので不変）・
+`check-citations.mjs` 922 verified / 0 failed（行番号のずれを再アンカー）。
+
+---
+
 ### docs(design): 詳細設計 11 本と実装プラン 2026-09 を起草 (Sep 3, 2026)
 
 **Issue**: #611 / #694 / #598 / #672 / #634 / #428 / #610 / #662 / #656 / #668 / #679（設計のみ・実装なし）/ **ブランチ**: `claude/elegant-pasteur-l9gdrl`
