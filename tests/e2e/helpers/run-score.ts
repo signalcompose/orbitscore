@@ -20,6 +20,8 @@ import { analyzeWavBuffer } from '../../../packages/vscode-extension/src/wav-ana
 import {
   captureClockSec,
   captureWindowsFrom,
+  prepareCapturePath,
+  readCaptureForAnalysis,
   readCaptureFormat,
   waitForSound,
   type CaptureFormat,
@@ -224,7 +226,7 @@ export async function runScore(
 
   const { path: workPath, lineCount } = prepareWorkCopy(tmpRoot, source)
 
-  if (capturePath !== undefined) fs.rmSync(capturePath, { force: true })
+  if (capturePath !== undefined) prepareCapturePath(capturePath)
   await startEngineForRun(client, `runScore ${source.slug}`, capturePath)
 
   const segments: Record<string, CaptureSegment> = {}
@@ -329,7 +331,7 @@ export async function runScore(
 
   if (!wantsCapture || capturePath === undefined) return undefined
 
-  const capture = fs.readFileSync(capturePath)
+  const capture = readCaptureForAnalysis(capturePath)
   const analysis = analyzeWavBuffer(capture, { windowMs: 20, perChannel: true })
   return captureWindowsFrom(analysis, segments, `runScore ${source.slug}`, capturePath)
 }

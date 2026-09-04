@@ -57,7 +57,9 @@ import { countErrors, countLogMarker, errorBaseline, expectNoNewErrors } from '.
 import {
   captureClockSec,
   captureWindowsFrom,
+  prepareCapturePath,
   quadraticMeanRms,
+  readCaptureForAnalysis,
   readCaptureFormat,
   waitForSound,
   type CaptureFormat,
@@ -528,7 +530,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       (await activeClient.call('get_log', { lines: 500 })).text
 
     fs.writeFileSync(dslPath, initialDsl.join('\n') + '\n')
-    fs.rmSync(capturePath, { force: true })
+    prepareCapturePath(capturePath)
     await startR28Engine(activeClient, `#643 ${slug} capture engine`, capturePath)
     await sleep(1000)
     const errorsBefore = countErrors(await readLog())
@@ -595,7 +597,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       await sleep(1000)
     }
 
-    const capture = fs.readFileSync(capturePath)
+    const capture = readCaptureForAnalysis(capturePath)
     const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
     return {
       ...captureWindowsFrom(analysis, segments, `#643 ${slug}`, capturePath),
@@ -3205,7 +3207,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       vst3State.writeInt32LE(7, 4)
       fs.writeFileSync(vst3StatePath, vst3State)
 
-      fs.rmSync(capturePath, { force: true })
+      prepareCapturePath(capturePath)
       const start = await activeClient.call('start_engine', { capture_wav: capturePath })
       expect(start.isError, start.text).toBe(false)
       await waitForEngine(true, 15_000, '#618 E1-E6 engine running')
@@ -3418,7 +3420,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         await sleep(1500)
       }
 
-      const capture = fs.readFileSync(capturePath)
+      const capture = readCaptureForAnalysis(capturePath)
       const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
       const captured = captureWindowsFrom(analysis, segments, '#618 E1-E6', capturePath)
       const audioRange = (segment: CaptureSegment) => ({
@@ -3512,7 +3514,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         }),
       )
 
-      fs.rmSync(capturePath, { force: true })
+      prepareCapturePath(capturePath)
       const start = await activeClient.call('start_engine', { capture_wav: capturePath })
       expect(start.isError, start.text).toBe(false)
       await waitForEngine(true, 15_000, '#625 R-E1-R-E7 engine running')
@@ -3819,7 +3821,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         await sleep(1500)
       }
 
-      const capture = fs.readFileSync(capturePath)
+      const capture = readCaptureForAnalysis(capturePath)
       const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
       // 🔴 区間の両端に 400ms のガードを入れる。capture 時計の境界にも drain/buffer の遅れが
       // あり、**次の操作の効果が窓の末尾に食い込む**。実測: b 区間の最後の 1 窓だけが
@@ -4053,7 +4055,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         }),
       )
 
-      fs.rmSync(capturePath, { force: true })
+      prepareCapturePath(capturePath)
       await startR28Engine(activeClient, '#628 R28 capture engine', capturePath)
 
       let captureFormat: CaptureFormat | undefined
@@ -4396,7 +4398,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         await sleep(1500)
       }
 
-      const capture = fs.readFileSync(capturePath)
+      const capture = readCaptureForAnalysis(capturePath)
       const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
       const SEGMENT_GUARD_SEC = 0.4
       const captured = captureWindowsFrom(analysis, segments, '#628 R28', capturePath)

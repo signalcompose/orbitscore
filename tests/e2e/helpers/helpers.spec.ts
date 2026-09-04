@@ -28,7 +28,9 @@ import { analyzeWavBuffer } from '../../../packages/vscode-extension/src/wav-ana
 import {
   captureClockSec,
   captureWindowsFrom,
+  prepareCapturePath,
   quadraticMeanRms,
+  readCaptureForAnalysis,
   readCaptureFormat,
   waitForSound,
 } from './capture-windows'
@@ -122,6 +124,34 @@ describe('captureWavPath', () => {
   })
 })
 
+describe('prepareCapturePath', () => {
+  it('creates a missing capture directory so the daemon can open the file', () => {
+    // 🔴 ディレクトリが無いと daemon の capture writer（`File::create`）が失敗し、
+    // **エンジンの起動そのものが落ちる**。テスト側にはそれが
+    // 「daemon-backed REPL ready after 30000ms」という無関係に見える形で現れる
+    // （2026-09-05 に実機 gated 1 回分を失った）。
+    const root = makeTmpDir()
+    const capturePath = path.join(root, 'nested', 'deeper', 'take.wav')
+    expect(fs.existsSync(path.dirname(capturePath))).toBe(false)
+
+    prepareCapturePath(capturePath)
+
+    expect(fs.existsSync(path.dirname(capturePath))).toBe(true)
+    // ディレクトリを作るだけで、ファイルは作らない（daemon が作る）。
+    expect(fs.existsSync(capturePath)).toBe(false)
+  })
+
+  it('removes a stale capture so a failed run cannot be measured as this one', () => {
+    const root = makeTmpDir()
+    const capturePath = path.join(root, 'take.wav')
+    fs.writeFileSync(capturePath, 'stale bytes from a previous run')
+
+    prepareCapturePath(capturePath)
+
+    expect(fs.existsSync(capturePath)).toBe(false)
+  })
+})
+
 describe('capture windows', () => {
   it('reads the fixed 44-byte float32 capture header', () => {
     const capturePath = path.join(makeTmpDir(), 'header.wav')
@@ -136,6 +166,20 @@ describe('capture windows', () => {
     const format = readCaptureFormat(capturePath)
 
     expect(captureClockSec(capturePath, format)).toBe(1.25)
+  })
+
+  it('analyzes all capture bytes when the data header trails the writer', () => {
+    const capturePath = path.join(makeTmpDir(), 'stale-header.wav')
+    const wav = syntheticFloat32Wav(1.25, { sampleRate: 2000, channels: 2 })
+    wav.writeUInt32LE(2000 * 2 * 4, 40)
+    fs.writeFileSync(capturePath, wav)
+
+    const staleHeaderCapture = fs.readFileSync(capturePath)
+    expect(analyzeWavBuffer(staleHeaderCapture, { windowMs: 20 }).durationSec).toBe(1)
+
+    const fullCapture = readCaptureForAnalysis(capturePath)
+    expect(fullCapture.readUInt32LE(40)).toBe(0)
+    expect(analyzeWavBuffer(fullCapture, { windowMs: 20 }).durationSec).toBe(1.25)
   })
 
   it('reports capture diagnostics when sound never starts', async () => {

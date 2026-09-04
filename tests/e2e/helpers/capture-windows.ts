@@ -1,4 +1,5 @@
 import * as fs from 'fs'
+import * as path from 'path'
 
 import {
   analyzeWavBuffer,
@@ -37,6 +38,40 @@ export interface CaptureWindows {
 export interface CaptureFormat {
   readonly sampleRate: number
   readonly channels: number
+}
+
+/**
+ * capture を書き出す直前の準備 — **ディレクトリを作り、前回の残骸を消す**。
+ *
+ * 🔴 ディレクトリが無いと daemon の capture writer（`File::create`）が失敗し、
+ * **エンジンの起動そのものが落ちる**:
+ *   `DEVICE_CONFIG_ERROR "audio output init failed: capture writer error: No such file or directory"`
+ * テスト側にはこれが「daemon-backed REPL ready after 30000ms」という**無関係に見える
+ * タイムアウト**として現れる。2026-09-05 に `ORBIT_KEEP_CAPTURES` へ未作成のディレクトリを
+ * 渡して実機 gated 1 回分（約 8 分）を失った。
+ *
+ * 🔴 `captureWavPath` 側では作らない。あちらは純粋なパス解決で、ユニットテストが
+ * リテラルパスを渡すので、副作用を持たせると実ディレクトリを作ってしまう。
+ */
+export function prepareCapturePath(capturePath: string): void {
+  fs.mkdirSync(path.dirname(capturePath), { recursive: true })
+  fs.rmSync(capturePath, { force: true })
+}
+
+/**
+ * 解析が「header が申告する長さ」ではなく **実バイト全体** を見るようにする。
+ *
+ * capture writer は約 1 秒ごとにしか header を patch しない（capture.rs の sync_header）ので、
+ * 申告サイズは実バイト数より最大 1 秒ぶん遅れる。区間はバイト長で刻んでいるため、
+ * ここを揃えないと **末尾の区間が解析範囲の外に落ちる**（#739 実機で 6 件が誤検知した）。
+ */
+export function readCaptureForAnalysis(capturePath: string): Buffer {
+  const capture = fs.readFileSync(capturePath)
+  if (capture.toString('ascii', 36, 40) !== 'data') {
+    throw new Error(`${capturePath}: expected fixed 44-byte capture WAV data chunk at byte 36`)
+  }
+  capture.writeUInt32LE(0, 40)
+  return capture
 }
 
 /** Read and validate the daemon capture seam's fixed 44-byte float32 WAV header. */
@@ -159,18 +194,6 @@ export function captureWindowsFrom(
   const soundStartSec =
     analysisWindows.find((window) => window.rms >= AUDIBLE_FLOOR_RMS)?.startSec ?? null
   const entries = Object.entries(segments)
-
-  if (capturePath !== undefined) {
-    const format = readCaptureFormat(capturePath)
-    const fileDurationSec = captureClockSec(capturePath, format)
-    const frameToleranceSec = 1 / format.sampleRate
-    if (Math.abs(fileDurationSec - analysis.durationSec) > frameToleranceSec) {
-      throw new Error(
-        `${label}: capture analysis/file length mismatch ` +
-          JSON.stringify({ fileDurationSec, durationSec: analysis.durationSec, capturePath }),
-      )
-    }
-  }
 
   const selectedWindows = (name: string, guardSec: number) => {
     const segment = segments[name]

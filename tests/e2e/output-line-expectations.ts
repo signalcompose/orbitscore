@@ -43,6 +43,20 @@ const HIT_PERIOD_MS = 500
 const EXPECTED_ONSETS = 8
 
 /**
+ * 演奏中に譜面を足したとき、新しいフレーズが始まるまでの最大待ち（1 小節）。
+ *
+ * 🔴 `LOOP()` は**小節量子化**する（120 BPM 4/4 = 2000 ms = 4 スロット）。O0-3 / O0-4 は
+ * 鳴っている最中に `send` / `effect` を足すので、区間の頭に**まるまる 1 小節の無音**が入る。
+ *
+ * 2026-09-05 の実機で実測した O0-3 のキャプチャ:
+ *   onsets 8.06 →（**2.000 s ちょうどの無音**）→ 10.06 10.56 11.06 … 13.06
+ *
+ * これを勘定に入れないと、8 発ぶんを測る範囲が録り幅からはみ出して落ちる
+ * （`guarded search is too short for 8 hits`）。
+ */
+const REQUANTIZE_SLOTS = 4
+
+/**
  * 実機層の許容。**実測したノイズ床から決めた**（推測値ではない）。
  *
  * 🔴 **この層に bit 一致相当（1e-6）を置かない。** `docs/testing/E2E_HARNESS_SPEC.md` は
@@ -95,7 +109,10 @@ const SEND_AMOUNT_AS_WRITTEN = 0.3
 
 /** 全 golden 共通の録り方。オンセット数まで含めて 1 箇所で決める。 */
 export const STEADY_CAPTURE = {
-  captureMs: HIT_PERIOD_MS * (EXPECTED_ONSETS + 1) + 300,
+  // 幅の内訳: 小節量子化（最大 1 小節）+ 位相 1 周期 + 測る 8 発 + guard 両側。
+  // 🔴 録り幅を伸ばしても **golden の値は動かない** — snap は最初の onset から厳密に
+  // `EXPECTED_ONSETS × HIT_PERIOD_MS` だけを測るので、余った尻尾は測定範囲に入らない。
+  captureMs: HIT_PERIOD_MS * (REQUANTIZE_SLOTS + 1 + EXPECTED_ONSETS) + 300,
   expectedOnsets: EXPECTED_ONSETS,
   guardSec: 0.15,
   hitPeriodSec: HIT_PERIOD_MS / 1000,
