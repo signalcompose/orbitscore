@@ -1533,8 +1533,13 @@ mod effect_rack_tests {
 /// [`start`] が返す [`StreamGuard`] を main 側で alive に保つ責務。
 pub struct EngineWrap {
     engine: Engine,
+    // Engine 自体の構成値。device switch は PR-V4 の再構築対象であり、この PR では変えない。
     sample_rate: u32,
     channels: u16,
+    /// 現在 cpal が掴んでいる stream の実効構成。GetStatus は固定 engine 値でなくこちらを読む。
+    stream_config: Mutex<StreamConfigSnapshot>,
+    /// 直近 1 Hz ticker 区間で callback count が前進したか。
+    callback_alive: AtomicBool,
     samples: Mutex<HashMap<String, Sample>>,
     started_at: std::time::Instant,
     stream_stats: Arc<StreamStats>,
@@ -4116,6 +4121,24 @@ pub struct StreamGuard {
     _child_guards: Vec<Arc<Mutex<ChildSlot>>>,
 }
 
+/// 現在の出力 stream から得た実効構成。device switch 成功時に一括で差し替える。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StreamConfigSnapshot {
+    pub device_name: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
+impl StreamConfigSnapshot {
+    fn from_output_stream(stream: &OutputStream) -> Self {
+        Self {
+            device_name: stream.device_name.clone(),
+            sample_rate: stream.sample_rate,
+            channels: stream.channels,
+        }
+    }
+}
+
 impl StreamGuard {
     /// capture seam（#307 realtime）: capture 有効時のみ producer-side drop 累積を返す（無効は `None`）。
     /// `Some(0)` は録音健全・`> 0` は録音破損（検証 invalid）。gated 検証ハーネスが teardown 前に
@@ -4202,9 +4225,19 @@ impl EngineWrap {
             capture_path_from_env(),
             device_name_from_env(),
         )?;
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let wrap = Self::build(
+            engine,
+            stream.device_name.clone(),
+            stream.sample_rate,
+            stream.channels,
+            stream_stats,
+        );
         let guard = StreamGuard { stream };
-        wrap.record_stream_config(None, None);
+        wrap.record_stream_config(
+            StreamConfigSnapshot::from_output_stream(&guard.stream),
+            None,
+            None,
+        );
         Ok((wrap, guard))
     }
 
@@ -4230,7 +4263,13 @@ impl EngineWrap {
             stream.channels as usize,
         )
         .map_err(|e| WrapError::LinkAudio(e.to_string()))?;
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let wrap = Self::build(
+            engine,
+            stream.device_name.clone(),
+            stream.sample_rate,
+            stream.channels,
+            stream_stats,
+        );
         *wrap
             .link
             .lock()
@@ -4239,7 +4278,11 @@ impl EngineWrap {
             stream,
             _link: Some(link_guard),
         };
-        wrap.record_stream_config(None, None);
+        wrap.record_stream_config(
+            StreamConfigSnapshot::from_output_stream(&guard.stream),
+            None,
+            None,
+        );
         Ok((wrap, guard))
     }
 
@@ -4271,7 +4314,13 @@ impl EngineWrap {
             parts.resize_count,
             parts.install_tx,
         );
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let wrap = Self::build(
+            engine,
+            stream.device_name.clone(),
+            stream.sample_rate,
+            stream.channels,
+            stream_stats,
+        );
         *wrap
             .clap
             .lock()
@@ -4290,7 +4339,11 @@ impl EngineWrap {
             stream,
             _clap_thread: thread_guard,
         };
-        wrap.record_stream_config(None, Some(cb_stats));
+        wrap.record_stream_config(
+            StreamConfigSnapshot::from_output_stream(&guard.stream),
+            None,
+            Some(cb_stats),
+        );
         Ok((wrap, guard))
     }
 
@@ -4390,7 +4443,13 @@ impl EngineWrap {
         shm_cleanup.disarm();
 
         // 6. wrap 構築 + control 注入。
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let wrap = Self::build(
+            engine,
+            stream.device_name.clone(),
+            stream.sample_rate,
+            stream.channels,
+            stream_stats,
+        );
         *wrap
             .outproc
             .lock()
@@ -4447,7 +4506,11 @@ impl EngineWrap {
             _child_guard: child_slot,
             _bus_child_guards: bus_child_guards,
         };
-        wrap.record_stream_config(cfg.buffer_frames, Some(cb_stats));
+        wrap.record_stream_config(
+            StreamConfigSnapshot::from_output_stream(&guard.stream),
+            cfg.buffer_frames,
+            Some(cb_stats),
+        );
         Ok((wrap, guard))
     }
 
@@ -4513,7 +4576,13 @@ impl EngineWrap {
         let (instrument_slot_entries, instrument_child_guards, instrument_teardowns) =
             install_instrument_slots(pending_instrument_slots, &cfg.child_exe, sample_rate);
 
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let wrap = Self::build(
+            engine,
+            stream.device_name.clone(),
+            stream.sample_rate,
+            stream.channels,
+            stream_stats,
+        );
         *wrap.outproc_instrument.lock().map_err(|_| {
             WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
         })? = Some(OutProcInstrumentControl {
@@ -4529,7 +4598,11 @@ impl EngineWrap {
             stream,
             _child_guards: instrument_child_guards,
         };
-        wrap.record_stream_config(buffer_frames, Some(cb_stats));
+        wrap.record_stream_config(
+            StreamConfigSnapshot::from_output_stream(&guard.stream),
+            buffer_frames,
+            Some(cb_stats),
+        );
         Ok((wrap, guard))
     }
 
@@ -4623,7 +4696,13 @@ impl EngineWrap {
                 &instrument_cfg.child_exe,
                 stream.sample_rate,
             );
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let wrap = Self::build(
+            engine,
+            stream.device_name.clone(),
+            stream.sample_rate,
+            stream.channels,
+            stream_stats,
+        );
         *wrap
             .outproc
             .lock()
@@ -4690,7 +4769,11 @@ impl EngineWrap {
             _bus_child_guards: bus_child_guards,
             _instrument_child_guards: instrument_child_guards,
         };
-        wrap.record_stream_config(buffer_frames, Some(effect_cb_stats));
+        wrap.record_stream_config(
+            StreamConfigSnapshot::from_output_stream(&guard.stream),
+            buffer_frames,
+            Some(effect_cb_stats),
+        );
         Ok((wrap, guard))
     }
 
@@ -4718,6 +4801,7 @@ impl EngineWrap {
         let started = backend.start()?;
         let wrap = Self::build(
             started.engine,
+            "test audio backend".to_string(),
             started.sample_rate,
             started.channels,
             started.stats,
@@ -4729,6 +4813,7 @@ impl EngineWrap {
     /// 追加された際、両経路で初期化漏れが起きないよう一箇所に集約する。
     fn build(
         engine: Engine,
+        device_name: String,
         sample_rate: u32,
         channels: u16,
         stream_stats: Arc<StreamStats>,
@@ -4738,6 +4823,12 @@ impl EngineWrap {
             engine,
             sample_rate,
             channels,
+            stream_config: Mutex::new(StreamConfigSnapshot {
+                device_name,
+                sample_rate,
+                channels,
+            }),
+            callback_alive: AtomicBool::new(false),
             samples: Mutex::new(HashMap::new()),
             started_at: std::time::Instant::now(),
             stream_stats,
@@ -4782,10 +4873,20 @@ impl EngineWrap {
     /// callback-duration 計測の連続性を保つ）。`StreamGuard` 自体の所有権はこれまでどおり呼び出し側
     /// （`main.rs` の audio owner thread ローカル変数）が持つ — ここでは触らない。
     fn record_stream_config(
-        self: &Arc<Self>,
+        &self,
+        stream_config: StreamConfigSnapshot,
         buffer_frames: Option<u32>,
         cb_stats: Option<Arc<orbit_audio_native::CallbackTimeStats>>,
     ) {
+        match self.stream_config.lock() {
+            Ok(mut slot) => *slot = stream_config,
+            Err(poisoned) => {
+                tracing::warn!(
+                    "stream config mutex poisoned; replacing the stored stream configuration"
+                );
+                *poisoned.into_inner() = stream_config;
+            }
+        }
         if let Ok(mut slot) = self.output_buffer_frames.lock() {
             *slot = buffer_frames;
         }
@@ -4871,14 +4972,16 @@ impl EngineWrap {
             render_state,
             self.engine.clone(),
             self.stream_stats.clone(),
-            cb_stats,
+            cb_stats.clone(),
             buffer_frames,
             device,
         )?;
+        let stream_config = StreamConfigSnapshot::from_output_stream(&new_stream);
         // 新 stream が再生開始した後にだけ古い stream を差し替える（`rebuild_output_stream` は
         // 内部で `stream.play()` 済みを返す）。切替が失敗した場合はこの代入に到達せず、古い stream が
         // そのまま生き続ける＝無音のまま失敗しない。
         guard.stream = new_stream;
+        self.record_stream_config(stream_config, buffer_frames, cb_stats);
         Ok(device_label)
     }
 
@@ -7863,7 +7966,7 @@ impl EngineWrap {
     }
 
     pub fn output_sample_rate(&self) -> u32 {
-        self.sample_rate
+        self.stream_config_snapshot().sample_rate
     }
 
     /// 現在の出力ストリーム時刻（scheduler transport 秒）。`play_at` の `time_sec` と同一座標系。
@@ -7901,7 +8004,7 @@ impl EngineWrap {
     }
 
     pub fn output_channels(&self) -> u16 {
-        self.channels
+        self.stream_config_snapshot().channels
     }
 
     /// ファイルをロードし sample_id を返す。
@@ -8127,6 +8230,29 @@ impl EngineWrap {
     /// audio stream の稼働統計スナップショット（StreamStats event 用）。
     pub fn stream_stats_snapshot(&self) -> StreamStatsSnapshot {
         self.stream_stats.snapshot()
+    }
+
+    /// GetStatus 用の現在の実効 stream 構成。1 回の lock で3フィールドを整合したまま複製する。
+    pub fn stream_config_snapshot(&self) -> StreamConfigSnapshot {
+        match self.stream_config.lock() {
+            Ok(snapshot) => snapshot.clone(),
+            Err(poisoned) => {
+                tracing::warn!(
+                    "stream config mutex poisoned; reporting the last stored stream configuration"
+                );
+                poisoned.into_inner().clone()
+            }
+        }
+    }
+
+    /// 1 Hz ticker が直近区間の callback 前進有無を書き込む。
+    pub(crate) fn set_callback_alive(&self, alive: bool) {
+        self.callback_alive.store(alive, Ordering::Relaxed);
+    }
+
+    /// GetStatus は時間窓を作らず、1 Hz ticker が確定した値だけを読む。
+    pub fn callback_alive(&self) -> bool {
+        self.callback_alive.load(Ordering::Relaxed)
     }
 
     /// `samples` Mutex を poisoned-safe に取得する。
@@ -9805,7 +9931,7 @@ mod capture_path_tests {
 /// 領域（unit test では検証不能）。
 #[cfg(test)]
 mod select_audio_device_tests {
-    use super::EngineWrap;
+    use super::{EngineWrap, StreamConfigSnapshot};
     use crate::backend::StubBackend;
 
     /// capture-active（`ORBIT_CAPTURE_WAV`）拒否と、audio owner thread 未登録（`start_with` /
@@ -9841,6 +9967,38 @@ mod select_audio_device_tests {
             format!("{no_owner_error}").contains("no audio owner thread"),
             "{no_owner_error}"
         );
+    }
+
+    #[test]
+    fn stream_config_snapshot_replaces_all_effective_fields_together() {
+        let (wrap, _guard) = EngineWrap::start_with(StubBackend {
+            sample_rate: 44_100,
+            channels: 1,
+        })
+        .expect("stub backend start");
+        assert_eq!(
+            wrap.stream_config_snapshot(),
+            StreamConfigSnapshot {
+                device_name: "test audio backend".to_string(),
+                sample_rate: 44_100,
+                channels: 1,
+            }
+        );
+
+        wrap.record_stream_config(
+            StreamConfigSnapshot {
+                device_name: "switched output".to_string(),
+                sample_rate: 96_000,
+                channels: 6,
+            },
+            None,
+            None,
+        );
+
+        let switched = wrap.stream_config_snapshot();
+        assert_eq!(switched.device_name, "switched output");
+        assert_eq!(wrap.output_sample_rate(), 96_000);
+        assert_eq!(wrap.output_channels(), 6);
     }
 }
 

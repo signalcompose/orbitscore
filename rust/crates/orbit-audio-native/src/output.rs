@@ -30,6 +30,10 @@ pub struct StreamStats {
     buffer_underruns: AtomicU64,
     device_lost: AtomicBool,
     render_contentions: AtomicU64,
+    /// コールバックが 1 回回るごとに +1 する生存カウンタ。
+    callbacks: AtomicU64,
+    /// 直近コールバックで受け取った 1 channel あたりの frame 数。
+    last_frames: AtomicU32,
 }
 
 impl StreamStats {
@@ -39,7 +43,17 @@ impl StreamStats {
             buffer_underruns: self.buffer_underruns.load(Ordering::Relaxed),
             device_lost: self.device_lost.load(Ordering::Relaxed),
             render_contentions: self.render_contentions.load(Ordering::Relaxed),
+            callbacks: self.callbacks.load(Ordering::Relaxed),
+            last_frames: self.last_frames.load(Ordering::Relaxed),
         }
+    }
+
+    /// RT callback の入口で生存回数と実効 frame 数を記録する。
+    /// 実装は Relaxed atomic 2 回だけで、確保・ロック・syscall を行わない。
+    #[doc(hidden)]
+    pub fn record_callback(&self, frames: u32) {
+        self.callbacks.fetch_add(1, Ordering::Relaxed);
+        self.last_frames.store(frames, Ordering::Relaxed);
     }
 
     /// xrun カウンタを 1 増やす。
@@ -84,6 +98,8 @@ pub struct StreamStatsSnapshot {
     pub buffer_underruns: u64,
     pub device_lost: bool,
     pub render_contentions: u64,
+    pub callbacks: u64,
+    pub last_frames: u32,
 }
 
 #[derive(Error, Debug)]
@@ -96,6 +112,8 @@ pub enum OutputError {
     BuildStream(String),
     #[error("cpal play stream error: {0}")]
     PlayStream(String),
+    #[error("failed to read output device name: {0}")]
+    DeviceName(String),
     #[error("capture writer error: {0}")]
     Capture(String),
 }
@@ -168,9 +186,13 @@ pub fn resolve_requested_device_name(
 fn resolve_output_device(
     host: &cpal::Host,
     requested: Option<&str>,
-) -> Result<Device, OutputError> {
+) -> Result<(Device, String), OutputError> {
     let Some(requested) = requested else {
-        return host.default_output_device().ok_or(OutputError::NoDevice);
+        let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
+        let name = device
+            .name()
+            .map_err(|e| OutputError::DeviceName(e.to_string()))?;
+        return Ok((device, name));
     };
 
     // 【重要・確認 E2E での P0 再発防止】ここで `host.output_devices()` を使ってはいけない。
@@ -179,13 +201,13 @@ fn resolve_output_device(
     // ブロック（実測: 起動が ready line 前に無限ハング・スタックで確定）。起動クリティカル
     // パスでは probe なしの `devices()` 名前照合のみ行い、config 検証は選択後の通常の
     // stream 構築（そのデバイス 1 台に対してのみ）に任せる。
-    let mut matched: Option<Device> = None;
+    let mut matched: Option<(Device, String)> = None;
     let mut available_names = Vec::new();
     if let Ok(devices) = host.devices() {
         for device in devices {
             if let Ok(name) = device.name() {
                 if name == requested {
-                    matched = Some(device);
+                    matched = Some((device, name));
                     break;
                 }
                 available_names.push(name);
@@ -197,21 +219,29 @@ fn resolve_output_device(
         // `devices()` は入力専用デバイスも含む（probe 回避の代償）。マッチした 1 台だけ
         // default_output_config で出力可否を確認し、出力不可なら旧挙動どおり警告 + 既定へ
         // 縮退する（起動失敗にしない）。probe はユーザーが明示指定した 1 台に限定される。
-        Some(device) => {
+        Some((device, name)) => {
             if device.default_output_config().is_ok() {
-                Ok(device)
+                Ok((device, name))
             } else {
                 eprintln!(
                     "[audio-device] requested device \"{requested}\" is not an output device — falling back to system default output"
                 );
-                host.default_output_device().ok_or(OutputError::NoDevice)
+                let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
+                let name = device
+                    .name()
+                    .map_err(|e| OutputError::DeviceName(e.to_string()))?;
+                Ok((device, name))
             }
         }
         None => {
             eprintln!(
                 "[audio-device] requested device \"{requested}\" not found (available: {available_names:?}) — falling back to system default output"
             );
-            host.default_output_device().ok_or(OutputError::NoDevice)
+            let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
+            let name = device
+                .name()
+                .map_err(|e| OutputError::DeviceName(e.to_string()))?;
+            Ok((device, name))
         }
     }
 }
@@ -229,6 +259,7 @@ pub struct OutputStream {
     /// 残りを drain して WAV を finalize」に固定する（Rust は struct field を宣言順に drop する）。
     _capture: Option<crate::capture::CaptureWriter>,
     render_state: Arc<std::sync::Mutex<RenderState>>,
+    pub device_name: String,
     pub sample_rate: u32,
     pub channels: u16,
 }
@@ -589,6 +620,7 @@ fn render_shared_block(
     hw: &mut [f32],
     stats: &StreamStats,
 ) {
+    stats.record_callback((hw.len() / output_channels) as u32);
     match state.try_lock() {
         Ok(mut state) => {
             let RenderState {
@@ -1389,7 +1421,7 @@ fn start_output_inner(
 ) -> Result<OutputInnerStart, OutputError> {
     validate_source_slots(&sources)?;
     let host = cpal::default_host();
-    let device = resolve_output_device(&host, device_name.as_deref())?;
+    let (device, device_name) = resolve_output_device(&host, device_name.as_deref())?;
     let supported = device
         .default_output_config()
         .map_err(|e| OutputError::NoConfig(e.to_string()))?;
@@ -1460,6 +1492,7 @@ fn start_output_inner(
             _stream: stream,
             _capture: capture_writer,
             render_state,
+            device_name,
             sample_rate,
             channels,
         },
@@ -1479,7 +1512,7 @@ pub fn rebuild_output_stream(
     device_name: Option<String>,
 ) -> Result<OutputStream, OutputError> {
     let host = cpal::default_host();
-    let device = resolve_output_device(&host, device_name.as_deref())?;
+    let (device, device_name) = resolve_output_device(&host, device_name.as_deref())?;
     let supported = device
         .default_output_config()
         .map_err(|e| OutputError::NoConfig(e.to_string()))?;
@@ -1505,6 +1538,7 @@ pub fn rebuild_output_stream(
         _stream: stream,
         _capture: None,
         render_state,
+        device_name,
         sample_rate: config.sample_rate.0,
         channels: config.channels,
     })
@@ -2466,6 +2500,54 @@ mod tests {
         assert_eq!(snap.xruns, 0);
         assert_eq!(snap.buffer_underruns, 0);
         assert!(!snap.device_lost);
+        assert_eq!(snap.callbacks, 0);
+        assert_eq!(snap.last_frames, 0);
+    }
+
+    #[test]
+    fn render_callback_records_count_and_last_frames_without_timing_stats() {
+        let engine = Engine::new(48_000, 2);
+        let state = Arc::new(std::sync::Mutex::new(RenderState {
+            link: None,
+            insert_buses: Vec::new(),
+            sources: Vec::new(),
+            transport: BlockTransport {
+                cursor_frames: 0,
+                sample_rate: 48_000,
+            },
+            post: None,
+        }));
+        let stats = StreamStats::default();
+        let mut capture = None;
+        let cb_stats = None;
+
+        let mut first = vec![0.0; 8];
+        render_shared_block(
+            &engine,
+            &state,
+            &mut capture,
+            &cb_stats,
+            2,
+            &mut first,
+            &stats,
+        );
+        let first_snapshot = stats.snapshot();
+        assert_eq!(first_snapshot.callbacks, 1);
+        assert_eq!(first_snapshot.last_frames, 4);
+
+        let mut second = vec![0.0; 12];
+        render_shared_block(
+            &engine,
+            &state,
+            &mut capture,
+            &cb_stats,
+            2,
+            &mut second,
+            &stats,
+        );
+        let second_snapshot = stats.snapshot();
+        assert_eq!(second_snapshot.callbacks, 2);
+        assert_eq!(second_snapshot.last_frames, 6);
     }
 
     #[test]

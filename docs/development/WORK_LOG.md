@@ -17,6 +17,119 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
+
+**Issue**: #385 / **ブランチ**: `385-untrusted-workspace-capability` / **PR-S-T1**
+
+フォルダ無しの loose-file 起動（`orbs file.orbs`）は**未信頼の ad-hoc workspace** を作る。
+`capabilities.untrustedWorkspaces` を宣言していない拡張はそこで activate されず、
+利用者には「何も起きない」ようにしか見える。**実害は拒否ではなく沈黙**である。
+
+owner 裁定（`docs/design/656-release-design.md` §16 (1)・2026-09-03）は **`supported: true`**
+「一般的な DAW の挙動に併せて」。`"limited"` は撤回済みなので `startEngine()` に trust ガードは置かない。
+
+#### 🔴 レビューで自分のテストが「何も証明していない」と分かった（2 段階）
+
+**① ユニット側**: `restrictedConfigurations` を `?? []` でフォールバックしていたため、
+**宣言が丸ごと消えても `for...of []` が 0 周して green** になっていた。
+フォールバックを外し、取り出せない形なら**その場で落とす**ようにした。変異で実証:
+
+| 変異 | 旧 | 新 |
+|---|---|---|
+| `restrictedConfigurations` を削除 | 2 件**素通り** | **3 件 red** |
+| `audioDevice` を restricted に追加 | — | **2 件 red** |
+| `supported: false` | — | **1 件 red** |
+
+restore 後 6 件 green・`package.json` は `cmp` で復元一致。
+
+**② E2E 側（本 PR では出さない・**#735** へ切り出し）**: 正本計画は PR-S-T1 に
+**E2E-D1（実機）**を課している。書いて実機で回したところ **dev モードでは緑になったが、
+`capabilities` ブロックを丸ごと削除しても緑のまま**だった。
+🔴 **`--extensionDevelopmentPath` は workspace trust の制限を迂回する**ためで、
+設計が `ORBIT_GATED_EXT_MODE=installed` を要求していた理由が実験で裏付けられた。
+
+installed モード（vsix を焼いて `--install-extension`）に切り替えると、
+**導入は成功するのに拡張が activate しない**（trust を無効にしても同じなので trust は原因ではない）。
+ここは #385 の症状とは別の観測性の問題なので **#735** へ切り出した。6 実験の結果はそちらに残してある。
+
+**副産物**: `orbs --install-extension` は**失敗しても exit 0 を返す**（壊れた vsix で
+「Failed Installing Extensions」を出しながら 0）。exit code で判定してはいけない。
+
+#### 🔴 地図だけでなく設計と実装プランにも反映した（owner 指摘）
+
+> 地図だけでなく設計と実装プランにも反映してあるかな？？
+
+最初は `DEVELOPMENT_MAP.md` §4.J しか直しておらず、**この PR 自身が #727 で直したばかりの型**
+（規範を変えたのに写しが古い）を繰り返すところだった。3 文書を揃えた:
+
+| 文書 | 直した内容 |
+|---|---|
+| `DEVELOPMENT_MAP.md` §4.J | #385（宣言・✅ 済）と **#735（実機検証・未着手）**の 2 行に分離。#735 は **#659 の後** |
+| `656-release-design.md` §12 | **E2E-D1 の期待値を反転**（`running: true` / 音が出る / `not trusted` は 0 行）。**E2E-D2 は取り消し線 + 理由**（裁定 (1) で trust の有無が挙動を変えなくなり D1 と同判定になるため）。**§12.1 を新設**して 6 実験の結果と「成果物なしで成立する」の訂正を記録 |
+| `IMPLEMENTATION_PLAN_2026-09.md` §1.9 | PR-S-T1 の件名から **`and refuse loudly` を削除**・`extension.ts` を触るファイルから除外（裁定 (1) で trust ガードが不要になり「断る」対象が無い）。実機 E2E を **PR-S-T3（#735）**として新規行に分離 |
+
+**「issue を立てた」だけでは追跡されない。** 地図は所在、設計は判定条件、計画は工数と順序を持つので、
+1 つでも古いままだと次の起案者がそこを読んで誤る。
+
+#### reuse: マニフェスト読み取りを共有ヘルパーへ
+
+`playhead.spec.ts:211` が既に同じ `package.json` を**別の書き方**（`new URL(…, import.meta.url)`）で
+読んでいた。`tests/helpers/vscode-extension-manifest.ts` を新設し、**両方をそこへ寄せた**
+（新設だけして重複を残すと 1 箇所が 3 箇所になる）。`playhead.spec.ts` 33 件は通ったまま。
+
+#### 検証
+
+`npm run typecheck:e2e` 0 / `tests/vscode-extension/` **430 passed** / lint 0。
+
+---
+### docs(planning): schedule the capture-window fix as PR-O2a (#739) (Sep 4, 2026)
+
+**Issue**: #739 / owner 相談 2026-09-04「**忘れてしまうことだけは避けたい**」
+
+PR-O2 の実機検証で見つけた**測定器そのものの欠陥**を、予定に組み込んだ。
+
+#### 何が壊れていたか
+
+`captureSegment` の既定は **settle 400 ms**（`run-score.ts:272`）。ところが
+`LOOP()` の**小節量子化**（120 BPM 4/4 = 2000 ms）＋ **プラグインの attach 時間**で、
+**音が出るのは約 3 秒後**。キャプチャの時系列 RMS を直接見て確定した:
+
+```
+0.00–3.00s  0.0000   ← 完全な無音
+3.00s       0.1195   ← ここで初めて音が出る
+3.75–5.00s  0.0886   ← 定常
+```
+
+🔴 **`global.gain(-6)` は楽器が一度も音を出す前に適用されていた。**
+`unity` 窓は丸ごと無音・`half` 窓だけが実音 → **E2E-1 は「0 dB の音」を一度も測っていない**。
+比が 1.36（下げたのに大きい）になり、**engine の欠陥に見えていた**。
+
+#### 🔴 固定値で追いかける修正は反証済み
+
+settle を 400 → 2600 ms にしたら unity が **0.0632 → 0** と**悪化**した。
+区間が**キャプチャ末尾からの逆算**なので、実長が壁時計より短いと `fromSec` が負 → 0 クランプ →
+**ファイル先頭（まだ鳴っていない区間）**を指す。**窓を後ろへ動かすと逆に前を測る。**
+
+#### いつやるか — **PR-O2 の直前**（縦依存を伸ばす）
+
+`PR-O1 → PR-O0 → **PR-O2a（#739）** → PR-O2`
+
+| 理由 | |
+|---|---|
+| **循環しない** | 受け入れを「**窓に入るオンセット数**」にすれば、instrument が鳴っていなくても判定できる。「E2E-1 が緑」を受け入れにしない |
+| **PR-O0 → PR-O2 と同じ規律** | 段 1 は「golden で固定してから engine を変える」。今回も**測定器を直してから測る** |
+| **段 2 前でないと高くつく** | 影響は gated spec の **34 箇所**。段 2 の束は全部この窓で assert するので、計器が不確かなまま始めると全測定を疑い直すことになる |
+
+#### 記録先
+
+| 文書 | 内容 |
+|---|---|
+| **#739** | 実測データ・反証した修正・実装チェックリスト |
+| `DEVELOPMENT_MAP.md` §4.A | 「測定器」の行を #649 の**上**に置いた（順序が読める形） |
+| `IMPLEMENTATION_PLAN_2026-09.md` §1.1 | **PR-O2a** を PR-O2 の直前に挿入 |
+
+---
+
 ### docs(site): follow PR #727's output-line spec revision into the user site and SC-2 (Sep 4, 2026)
 
 **追従元**: PR [#727](https://github.com/signalcompose/orbitscore/pull/727)（`611-output-line-spec` → main・マージコミット `d8191d1`）/ **ブランチ**: `claude/docs-sync-pr727`

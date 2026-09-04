@@ -41,6 +41,66 @@ const EVENT_CHANNEL_CAPACITY: usize = 128;
 
 /// StreamStats の送出間隔。protocol 仕様で 1 Hz 固定。
 const STREAM_STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+const ERROR_CODE_STREAM_CALLBACK_DEAD: &str = "STREAM_CALLBACK_DEAD";
+const ERROR_CODE_STREAM_CALLBACK_STALLED: &str = "STREAM_CALLBACK_STALLED";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CallbackHealthEvent {
+    Dead,
+    StalledWarning,
+    StalledFatal,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CallbackHealthUpdate {
+    alive: bool,
+    event: Option<CallbackHealthEvent>,
+}
+
+/// 1 Hz ticker 専用の callback 生存状態。GetStatus 呼び出しごとの時間窓は作らない。
+struct CallbackLiveness {
+    previous_count: u64,
+    ever_ran: bool,
+    dead_reported: bool,
+    consecutive_stalled_ticks: u8,
+}
+
+impl CallbackLiveness {
+    fn new(initial_count: u64) -> Self {
+        Self {
+            previous_count: initial_count,
+            ever_ran: initial_count > 0,
+            dead_reported: false,
+            consecutive_stalled_ticks: 0,
+        }
+    }
+
+    fn observe(&mut self, count: u64) -> CallbackHealthUpdate {
+        let alive = count != self.previous_count;
+        self.previous_count = count;
+        if alive {
+            self.ever_ran = true;
+            self.consecutive_stalled_ticks = 0;
+            return CallbackHealthUpdate { alive, event: None };
+        }
+        let event = if !self.ever_ran {
+            if self.dead_reported {
+                None
+            } else {
+                self.dead_reported = true;
+                Some(CallbackHealthEvent::Dead)
+            }
+        } else {
+            self.consecutive_stalled_ticks = self.consecutive_stalled_ticks.saturating_add(1);
+            match self.consecutive_stalled_ticks {
+                1 => Some(CallbackHealthEvent::StalledWarning),
+                2 => Some(CallbackHealthEvent::StalledFatal),
+                _ => None,
+            }
+        };
+        CallbackHealthUpdate { alive, event }
+    }
+}
 
 /// `EVENT_DAEMON_ERROR` を共通形（severity / code / message の3フィールド）で構築する。
 /// 1 Hz ticker の fatal(device_lost) / warning(xrun) / warning(link egress drop) が共有する。
@@ -756,10 +816,14 @@ pub async fn run(
             let mut outproc_instrument_invalid_reported = false;
             let mut device_lost_reported = false;
             let mut engine_lock_poisoned_reported = false;
+            let initial_callbacks = engine.stream_stats_snapshot().callbacks;
+            let mut callback_liveness = CallbackLiveness::new(initial_callbacks);
             loop {
                 ticker.tick().await;
                 let snapshot = engine.stream_stats_snapshot();
                 let now_sec = engine.transport_or_uptime_sec();
+                let callback_health = callback_liveness.observe(snapshot.callbacks);
+                engine.set_callback_alive(callback_health.alive);
 
                 // fatal を warning より先に送り、client が最終イベントとして確実に観測できる順序にする。
                 if snapshot.device_lost && !device_lost_reported {
@@ -791,6 +855,18 @@ pub async fn run(
                         break;
                     }
                     engine_lock_poisoned_reported = true;
+                }
+
+                if let Some(health_event) = callback_health.event {
+                    let (severity, code, message) = match health_event {
+                        CallbackHealthEvent::Dead => (ERROR_SEVERITY_FATAL, ERROR_CODE_STREAM_CALLBACK_DEAD, "audio stream callback has never run since stream start".to_string()),
+                        CallbackHealthEvent::StalledWarning => (ERROR_SEVERITY_WARNING, ERROR_CODE_STREAM_CALLBACK_STALLED, format!("audio stream callback did not advance during the last tick ({} callbacks total)", snapshot.callbacks)),
+                        CallbackHealthEvent::StalledFatal => (ERROR_SEVERITY_FATAL, ERROR_CODE_STREAM_CALLBACK_STALLED, format!("audio stream callback remained stalled for consecutive ticks ({} callbacks total)", snapshot.callbacks)),
+                    };
+                    let callback_evt = daemon_error_event(severity, code, message);
+                    if tx.send(to_json_or_fallback(&callback_evt)).await.is_err() {
+                        break;
+                    }
                 }
 
                 if snapshot.xruns > last_xruns {
@@ -1347,15 +1423,19 @@ async fn handle_command(
             }
         }
         "GetStatus" => {
+            let stream_config = engine.stream_config_snapshot();
+            let stream_stats = engine.stream_stats_snapshot();
             let status = json!({
                 "daemon_version": env!("CARGO_PKG_VERSION"),
                 "protocol_version": crate::protocol::PROTOCOL_VERSION,
-                "output_sample_rate": engine.output_sample_rate(),
-                "output_channels": engine.output_channels(),
+                "output_sample_rate": stream_config.sample_rate,
+                "output_channels": stream_config.channels,
                 "loaded_samples": engine.loaded_sample_count(),
                 "active_plays": engine.active_play_count(),
                 "uptime_sec": engine.uptime_sec(),
-                "render_contentions": engine.stream_stats_snapshot().render_contentions,
+                "render_contentions": stream_stats.render_contentions,
+                "output": { "device_name": stream_config.device_name, "sample_rate": stream_config.sample_rate, "channels": stream_config.channels },
+                "callback": { "count": stream_stats.callbacks, "alive": engine.callback_alive(), "last_frames": stream_stats.last_frames },
             });
             ok(&id, status)
         }
@@ -2563,6 +2643,110 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn callback_liveness_uses_tick_deltas_and_escalates_a_continuous_stall() {
+        let mut health = CallbackLiveness::new(10);
+        assert_eq!(
+            health.observe(11),
+            CallbackHealthUpdate {
+                alive: true,
+                event: None
+            }
+        );
+        assert_eq!(
+            health.observe(11),
+            CallbackHealthUpdate {
+                alive: false,
+                event: Some(CallbackHealthEvent::StalledWarning)
+            }
+        );
+        assert_eq!(
+            health.observe(11),
+            CallbackHealthUpdate {
+                alive: false,
+                event: Some(CallbackHealthEvent::StalledFatal)
+            }
+        );
+        assert_eq!(
+            health.observe(11),
+            CallbackHealthUpdate {
+                alive: false,
+                event: None
+            }
+        );
+        assert_eq!(
+            health.observe(12),
+            CallbackHealthUpdate {
+                alive: true,
+                event: None
+            }
+        );
+        assert_eq!(
+            health.observe(12),
+            CallbackHealthUpdate {
+                alive: false,
+                event: Some(CallbackHealthEvent::StalledWarning)
+            }
+        );
+    }
+
+    #[test]
+    fn callback_liveness_reports_never_started_once_as_fatal() {
+        let mut health = CallbackLiveness::new(0);
+        assert_eq!(
+            health.observe(0),
+            CallbackHealthUpdate {
+                alive: false,
+                event: Some(CallbackHealthEvent::Dead)
+            }
+        );
+        assert_eq!(
+            health.observe(0),
+            CallbackHealthUpdate {
+                alive: false,
+                event: None
+            }
+        );
+        assert_eq!(
+            health.observe(1),
+            CallbackHealthUpdate {
+                alive: true,
+                event: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn get_status_adds_effective_output_and_ticker_owned_callback_state() {
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend {
+            sample_rate: 96_000,
+            channels: 6,
+        })
+        .expect("stub backend starts");
+        engine.stream_stats_arc().record_callback(384);
+        engine.set_callback_alive(true);
+        let (tx, _rx) = mpsc::channel(1);
+        let response = handle_command(
+            Command {
+                id: "status".into(),
+                method: "GetStatus".into(),
+                params: json!({}),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+        let result = &response["result"];
+        assert_eq!(result["output_sample_rate"], 96_000);
+        assert_eq!(result["output_channels"], 6);
+        assert_eq!(result["output"]["device_name"], "test audio backend");
+        assert_eq!(result["output"]["sample_rate"], 96_000);
+        assert_eq!(result["output"]["channels"], 6);
+        assert_eq!(result["callback"]["count"], 1);
+        assert_eq!(result["callback"]["alive"], true);
+        assert_eq!(result["callback"]["last_frames"], 384);
+    }
 
     #[test]
     fn set_source_routing_parses_opaque_source_unit_and_nullable_target() {
