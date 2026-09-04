@@ -17,6 +17,56 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### chore(hooks): verify a push actually landed (#742) (Sep 4, 2026)
+
+**Issue**: #742 / owner 指摘「**繰り返さない様に仕組みでカバー出来るところはやりましょう**」
+
+#### 同じ型の取りこぼしを 2 回踏んだ
+
+**1. commit が落ちているのに push して「pushed」と報告した**
+
+```bash
+git commit -q -F - <<'EOF' ... EOF
+git push -q origin <branch> && echo pushed
+```
+
+`git commit` が **husky の pre-commit で失敗**（WORK_LOG が 2000 行超過）しても、
+**次の `git push` は走る**。リモートは既に最新なので「Everything up-to-date」で
+**exit 0 = 成功**になり `echo pushed` が出る。
+結果、**ブランチに何も入っていないのに「push した」と報告**していた。
+
+**2. 自分の記録を上書きして消しかけた**
+
+衝突解消中に `git checkout origin/main -- docs/development/WORK_LOG.md` を実行し、
+**その PR の記録 49 行を丸ごと消した**まま commit しかけた。
+
+どちらも **「やったつもり」と「実際」のずれ**。owner の
+「先に進めることを優先して取りこぼして後で大変にならないように」で気づいた。
+
+#### 仕組み
+
+`PostToolUse` / matcher `Bash:git push.*` で、push 直後に
+**ローカル HEAD とリモート追跡ブランチの SHA を突き合わせる**。
+
+🔴 **ブロックはしない。** push 自体は済んでいるので止めても意味がなく、
+**「入っていない」ことを見えるようにする**のが目的（既存の weak-form 方針）。
+
+#### 意図的に不一致を作って確認した
+
+| 状況 | 結果 |
+|---|---|
+| ローカルとリモートが一致 | 無言・`exit 0` |
+| リモート未作成（初回 push 前） | 無言・`exit 0`（対象外） |
+| コミットせずに HEAD だけ進んだ状態 | **鳴る**・`exit 2` |
+
+#### 🔴 記録: フックは既に仕事をしていた
+
+同じ日に **pre-commit フックが 2 回正しく止めてくれた**（WORK_LOG のローテーション超過）。
+**仕組みは効いていて、出力を読まずに次へ行った私が問題だった。**
+だから今回足したのは「止める」ものではなく「**見えるようにする**」ものにした。
+
+---
+
 ### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
 
 **Issue**: #385 / **ブランチ**: `385-untrusted-workspace-capability` / **PR-S-T1**
