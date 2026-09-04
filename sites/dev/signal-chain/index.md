@@ -1418,7 +1418,7 @@ WORK_LOG 6.397 には、設計原案の `Gain(db: -20)` を入れるとこの un
 という SC.10.4 の形をそのまま実機で通しています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4105-4112
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4073-4080
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
@@ -1552,7 +1552,7 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 - `scripts/copy-daemon-bin.sh:131-132` — `std-plugins/Gain.clap` の同梱
 - `.github/workflows/release.yml:86-98,191-200` — 実 Gain テストと `.vsix` 内の同梱ゲート
 - `tests/e2e/rack-chain-gain-expectations.ts:1-34` / `tests/e2e/rack-chain-gain-expectations.spec.ts:1-30` — E2E の数値設計とその純 unit
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:4105-4135` — `#628 R28` 実機ブロックの full rack 区間
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:4081-4111` — `#628 R28` 実機ブロックの full rack 区間
 - `tests/core/rack-chain.spec.ts:105-414` — T3〜T23（LCS・occurrence・keep 更新・uncertain 復旧）
 - `tests/interpreter/rack-value-resolution.spec.ts:62-188` — T1〜T19（配列分類・3 カテゴリ・layer 拒否）
 - `tests/interpreter/signal-chain-dispatch.spec.ts:170-184,581-611` — T24（メソッド形の診断）・T25（`remove()` 撤去）

@@ -476,7 +476,8 @@ export async function activate(context: vscode.ExtensionContext) {
           getDocumentText: () => getDocumentTextForAgent(),
           getDiagnostics: (filePath) => getDiagnosticsForAgent(filePath),
           getLog: (lines) => getLogForAgent(lines),
-          analyzeAudio: (wavPath, windowMs) => analyzeAudioForAgent(wavPath, windowMs),
+          analyzeAudio: (wavPath, windowMs, perChannel) =>
+            analyzeAudioForAgent(wavPath, windowMs, perChannel),
           listPlugins: () => listPluginsForAgent(),
           rescanPlugins: () => rescanPluginsForAgent(),
           savePluginState: (sequence, index) => savePluginStateForAgent(sequence, index),
@@ -3587,10 +3588,14 @@ function getLogForAgent(lines?: number): string[] {
 }
 
 /** Parse a captured WAV for the MCP `analyze_audio` tool. */
-function analyzeAudioForAgent(wavPath: string, windowMs?: number): AnalyzeAudioResult {
+function analyzeAudioForAgent(
+  wavPath: string,
+  windowMs?: number,
+  perChannel?: boolean,
+): AnalyzeAudioResult {
   try {
     const buf = fs.readFileSync(wavPath)
-    return { ok: true, analysis: analyzeWavBuffer(buf, { windowMs }) }
+    return { ok: true, analysis: analyzeWavBuffer(buf, { windowMs, perChannel }) }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }

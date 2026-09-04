@@ -368,7 +368,7 @@ daemon を `<extension>/engine/bin/<platform>/` に同梱しており、これ�
 走査から外すディレクトリがあり、それは後述します（#713）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:143-157
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:146-160
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -414,7 +414,7 @@ mtime 比較は「rebuild が no-op か」より弱い判定ですが、テス�
 そこで走査から `tests` / `benches` / `examples` の 3 ディレクトリを外しました。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:138-142
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:141-145
         // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
         // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
@@ -492,8 +492,7 @@ DSL E2E の capture WAV 実測 peak = **0.25000**（WORK_LOG 6.258）— 独立�
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:99-111` — WAV header/物理サイズ突き合わせ（silent-failure ガード）
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:206-217` — `drops == 0` assert（teardown 前の silent-failure ガード）
 - `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:232-234` — `post_peak_bits`（lock-free peak 累積の実装）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:78-166` — stale artifact ガード（`assertDaemonBinaryIsNotStale`・#713 の走査除外を含む）
-- `tests/e2e/gated-assertion-hygiene.spec.ts:67-94` — 走査除外を両方向から留める検査 2 本（#713）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:80-154` — stale artifact ガード（`assertDaemonBinaryIsNotStale`）
 - `package.json:17-18` — `pretest:e2e:gated` / `test:e2e:gated`
 - [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 / 6.416 / 6.417 — #643 master fader の発見、#651 の header patch と stale ガード、pretest 自動化
 - Issue [#307](https://github.com/signalcompose/orbitscore/issues/307) — capture seam realtime 配線

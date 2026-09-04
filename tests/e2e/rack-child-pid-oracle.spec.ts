@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { latestRackChildPid, rackChildPidsFromLog } from './orbitstudio-mcp-gated.spec'
+import { latestRackChildPid, rackChildPidsFromLog } from './helpers/rack-child-pid'
 
 const SPAWN = (pid: number, shm = '/tmp/orbit-shm-0') =>
   `2026-08-28T02:31:44.123456Z  INFO orbit_audio_daemon::outproc_effect: ` +

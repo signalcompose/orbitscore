@@ -256,7 +256,11 @@ export interface OrbitScoreToolHandlers {
   getDocumentText(): DocumentText
   getDiagnostics(path?: string): FileDiagnostics[]
   getLog(lines?: number): string[]
-  analyzeAudio(wavPath: string, windowMs?: number): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
+  analyzeAudio(
+    wavPath: string,
+    windowMs?: number,
+    perChannel?: boolean,
+  ): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
   /** list_plugins (#463 PC.4): return the plugin catalog as-is. */
   listPlugins(): Promise<ListPluginsResult> | ListPluginsResult
   /** rescan_plugins (#463 PC.4/C1b): run the scanner and return its summary. */
@@ -999,19 +1003,30 @@ function buildServer(
         'Parse a WAV file (e.g. a capture_wav produced by start_engine) and report ' +
         'peak, RMS, and onset timing so audio can be verified objectively without ' +
         'listening. Pass window_ms to also get a per-window peak/RMS time series ' +
-        '(for verifying temporal structure such as dry-first / steady-state).',
+        '(for verifying temporal structure such as dry-first / steady-state). Pass ' +
+        'per_channel to also get per-channel peak/RMS (for verifying pan / channel ' +
+        'separation / bleed — the default analysis sums channels down to mono, which ' +
+        'cannot distinguish them).',
       inputSchema: {
         wav_path: z.string().describe('Absolute path to the WAV file to analyze'),
         window_ms: z
           .number()
           .describe('Optional window size in ms for a per-window peak/RMS series (e.g. 10)')
           .optional(),
+        per_channel: z
+          .boolean()
+          .describe(
+            'Optional: also return channelWindows / channelRms (per-channel peak/RMS) ' +
+              'instead of only the mono mixdown',
+          )
+          .optional(),
       },
     },
     async (args) => {
       const wavPath = typeof args.wav_path === 'string' ? args.wav_path : ''
       const windowMs = typeof args.window_ms === 'number' ? args.window_ms : undefined
-      const result = await handlers.analyzeAudio(wavPath, windowMs)
+      const perChannel = typeof args.per_channel === 'boolean' ? args.per_channel : undefined
+      const result = await handlers.analyzeAudio(wavPath, windowMs, perChannel)
       if (!result.ok) {
         return errorResult(result.error)
       }

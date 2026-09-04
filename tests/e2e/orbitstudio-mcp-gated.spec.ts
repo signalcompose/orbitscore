@@ -53,7 +53,10 @@ import {
 } from '../../packages/vscode-extension/src/wav-analysis'
 import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
 
+import { countErrors, countLogMarker } from './helpers/engine-log'
+import { captureWavPath, type GatedCatalog } from './helpers/gated-session'
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
+import { rackChildPidsFromLog } from './helpers/rack-child-pid'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
@@ -276,35 +279,8 @@ function pluginChildPids(pluginPath: string): number[] {
   }
 }
 
-/**
- * rack effect child（#628）の PID を **daemon のログから**読む。
- *
- * 🔴 なぜ `pluginChildPids` を使えないか: あれは child のコマンドラインに
- * `--plugin <絶対パス>` が現れることを前提に `pgrep -f` する。rack child は
- * **`--chain <manifest.json>`** で起動するので、プラグインのパスはコマンドラインに
- * 出ない（manifest はテンポラリファイル）。#628 §6 の R28-E1〜E10 はいずれも
- * 「child PID 不変 = respawn していない」を判定条件にしているため、別経路が要る。
- *
- * daemon は spawn 時に `[orbit-effect-rack] child spawned pid=<n> shm=<path>` を
- * `tracing::info!` で名乗る（`outproc_effect.rs`）。**MCP の tool 表面を増やさず**、
- * ERROR 計数や `[plugin-state]` 行と同じ `get_log` 経路で読めるようにしてある。
- *
- * @returns ログに現れた順の PID 配列（最後の要素が最新の spawn）
- */
-export function rackChildPidsFromLog(logText: string): number[] {
-  const pids: number[] = []
-  for (const match of logText.matchAll(/\[orbit-effect-rack\] child spawned pid=(\d+)/g)) {
-    const pid = Number(match[1])
-    if (Number.isSafeInteger(pid) && pid > 0) pids.push(pid)
-  }
-  return pids
-}
-
-/** rack child の最新 PID。spawn がまだならnull。 */
-export function latestRackChildPid(logText: string): number | null {
-  const pids = rackChildPidsFromLog(logText)
-  return pids.length > 0 ? pids[pids.length - 1] : null
-}
+// rack child の PID オラクルは `helpers/rack-child-pid.ts` に移した（#668 §3.4・PR-E1）。
+// テストファイルを他のテストが import する形をやめ、spec 分割で import 元が消えないようにする。
 
 /**
  * **effect** child の PID を観測する（#628 で rack 化された経路）。
@@ -424,7 +400,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       clapEffectName: catalogClapEffectName,
       vst3SynthName: catalogVst3SynthName,
       vst3EffectName: catalogVst3EffectName,
-    }
+      // 🔴 `helpers/gated-session.ts` の `GatedCatalog` と**機械で結ぶ**（Fable 監査 2026-09-04）。
+      // あちらはこの closure を export できないので形を手写ししている。`satisfies` が無いと、
+      // 片方に field を足した時に**黙ってずれる**。
+    } satisfies GatedCatalog
   }
 
   const waitForEngine = (running: boolean, timeoutMs: number, label: string) =>
@@ -530,11 +509,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     // これが無いと「比が 0.72 だった」以上のことが分からない。2026-08-29 に master gain が
     // instrument へ効いていない欠陥を捕まえたのは、この WAV を残して RMS を時系列で見たから。
     // ハーネスのアサーションは「窓の中の1つの数」しか見せないが、欠陥は窓の外にいることがある。
-    const capturePath =
-      process.env.ORBIT_KEEP_CAPTURES !== undefined
-        ? path.join(process.env.ORBIT_KEEP_CAPTURES, `643-${slug}.wav`)
-        : path.join(tmpRoot, `643-${slug}.wav`)
-    const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
+    const capturePath = captureWavPath(tmpRoot, `643-${slug}`)
     const readLog = async (): Promise<string> =>
       (await activeClient.call('get_log', { lines: 500 })).text
 
@@ -676,7 +651,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           2,
         ) + '\n',
       )
-      const captureWavPath = path.join(tmpRoot, 'capture.wav')
+      const captureWavFile = captureWavPath(tmpRoot, 'capture')
       // Scratch copy of the kick-loop fixture (basename preserved so the
       // languageId/path assertions below still hold): save_file writes here,
       // inside the tmpRoot that afterAll removes, instead of the tracked fixture.
@@ -859,7 +834,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // 黙って捨てていた — 呼び出し側は録れていると信じ、capture.wav を読む段で
       // 初めて ENOENT に気づく（agent からは原因の分からない失敗になる）。
       const captureWhileRunning = await client.call('start_engine', {
-        capture_wav: captureWavPath,
+        capture_wav: captureWavFile,
       })
       expect(captureWhileRunning.isError, captureWhileRunning.text).toBe(true)
       expect(captureWhileRunning.text).toContain('stop_engine')
@@ -890,7 +865,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
 
-      const startRes = await client.call('start_engine', { capture_wav: captureWavPath })
+      const startRes = await client.call('start_engine', { capture_wav: captureWavFile })
       expect(startRes.isError, startRes.text).toBe(false)
 
       try {
@@ -1428,7 +1403,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       await sleep(1500)
 
       // ── 9. Objective audio verification (no listening required) ──
-      const wavBuf = fs.readFileSync(captureWavPath)
+      const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
       expect(analysis.soundDetected, JSON.stringify(analysis)).toBe(true)
 
@@ -2178,11 +2153,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // loudly, and a false pass is structurally impossible.
       fs.writeFileSync(handStatePath, handState)
 
-      const shiftedWav = path.join(root, 'shifted.wav')
-      const restoredWav = path.join(root, 'restored.wav')
-      const countLogMarker = (log: string, marker: RegExp): number =>
-        (log.match(marker) ?? []).length
-      const countErrors = (log: string): number => countLogMarker(log, /ERROR:/g)
+      const shiftedWav = captureWavPath(root, 'shifted')
+      const restoredWav = captureWavPath(root, 'restored')
       const countAttachFailures = (log: string): number =>
         countLogMarker(log, /\[OUTPROC_ATTACH_FAILED\]/g)
       const countGlobalStops = (log: string): number =>
@@ -2414,9 +2386,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const projectFile = path.join(root, 'project.yaml')
       const dslPath = path.join(root, 'sum-bus-state.orbs')
       const audioSearchPath = path.relative(path.dirname(dslPath), workAudioDir)
-      const defaultWav = path.join(root, 'sum-bus-default.wav')
-      const changedWav = path.join(root, 'sum-bus-changed.wav')
-      const restoredWav = path.join(root, 'sum-bus-restored.wav')
+      const defaultWav = captureWavPath(root, 'sum-bus-default')
+      const changedWav = captureWavPath(root, 'sum-bus-changed')
+      const restoredWav = captureWavPath(root, 'sum-bus-restored')
       const receiverKey = `sum:drum/effect/${catalog.clapEffectName}/0`
       const unprefixedDecoyKey = `drum/effect/${catalog.clapEffectName}/0`
       const wrongKindDecoyKey = `aux:drum/effect/${catalog.clapEffectName}/0`
@@ -2635,9 +2607,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const projectFile = path.join(root, 'project.yaml')
       const dslPath = path.join(root, 'all-receiver-auto-snapshot.orbs')
       const audioSearchPath = path.relative(path.dirname(dslPath), workAudioDir)
-      const defaultWav = path.join(root, 'all-receiver-default.wav')
-      const preRestartWav = path.join(root, 'all-receiver-pre-restart.wav')
-      const restoredWav = path.join(root, 'all-receiver-restored.wav')
+      const defaultWav = captureWavPath(root, 'all-receiver-default')
+      const preRestartWav = captureWavPath(root, 'all-receiver-pre-restart')
+      const restoredWav = captureWavPath(root, 'all-receiver-restored')
       const receiverKeys = [
         `master/effect/${catalog.clapEffectName}/0`,
         `sum:autoSnapshotSum/effect/${catalog.clapEffectName}/0`,
@@ -2760,7 +2732,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         fs.mkdirSync(path.dirname(absolutePath), { recursive: true })
         fs.writeFileSync(absolutePath, bytes)
       }
-      const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
       // ProjectStateStore.stateFileNameForIdentity: the identity tuple as
       // JSON, base64url-encoded. Restated here so the test pins the on-disk
       // contract instead of importing the implementation it verifies.
@@ -3185,7 +3156,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const activeClient = client
       const root = tmpRoot
       const catalog = requireCatalogFixtures()
-      const capturePath = path.join(root, 'instrument-replace-e1-e6.wav')
+      const capturePath = captureWavPath(root, 'instrument-replace-e1-e6')
       const vst3StatePath = path.join(root, 'fixtures', 'synth-oracle-plus7.state')
       fs.mkdirSync(path.dirname(vst3StatePath), { recursive: true })
       const vst3State = Buffer.alloc(8)
@@ -3193,7 +3164,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       vst3State.writeInt32LE(7, 4)
       fs.writeFileSync(vst3StatePath, vst3State)
 
-      const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
       const start = await activeClient.call('start_engine', { capture_wav: capturePath })
       expect(start.isError, start.text).toBe(false)
       await waitForEngine(true, 15_000, '#618 E1-E6 engine running')
@@ -3455,7 +3425,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const root = tmpRoot
       const audioDir = workAudioDir
       const catalog = requireCatalogFixtures()
-      const capturePath = path.join(root, 'effect-replace-remove-r-e1-r-e7.wav')
+      const capturePath = captureWavPath(root, 'effect-replace-remove-r-e1-r-e7')
       const projectFile = path.join(root, 'project.yaml')
       const aIdentity = `fx625/effect/${catalog.clapEffectName}/0`
       const aStateRelativePath = 'states/e2e-effect-gain-025.state'
@@ -3499,7 +3469,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         }),
       )
 
-      const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
       const start = await activeClient.call('start_engine', { capture_wav: capturePath })
       expect(start.isError, start.text).toBe(false)
       await waitForEngine(true, 15_000, '#625 R-E1-R-E7 engine running')
@@ -3997,7 +3966,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const root = tmpRoot
       const audioDir = workAudioDir
       const catalog = requireCatalogFixtures()
-      const capturePath = path.join(root, 'rack-chain-r28-mainline.wav')
+      const capturePath = captureWavPath(root, 'rack-chain-r28-mainline')
       const projectFile = path.join(root, 'project.yaml')
       const statesDirectory = path.join(root, 'states')
       const { audible, ratios, stages } = RACK_CHAIN_GAIN_EXPECTATIONS
@@ -4007,7 +3976,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const bStateRelativePath = 'states/e2e-r28-catalog-b.state'
       const aStatePath = path.resolve(root, aStateRelativePath)
       const bStatePath = path.resolve(root, bStateRelativePath)
-      const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
       const countMarker = (log: string, marker: string): number => log.split(marker).length - 1
       const readLog = async (): Promise<string> =>
         (await activeClient.call('get_log', { lines: 500 })).text
@@ -4502,7 +4470,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const activeClient = client
       const catalog = requireCatalogFixtures()
       const { stages } = RACK_CHAIN_GAIN_EXPECTATIONS
-      const countErrors = (log: string): number => (log.match(/ERROR:/g) ?? []).length
       const readLog = async (): Promise<string> =>
         (await activeClient.call('get_log', { lines: 500 })).text
 
