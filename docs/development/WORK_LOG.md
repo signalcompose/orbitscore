@@ -1877,40 +1877,42 @@ lint の `no-unsafe-finally` が「別の形の同じ問題」を指摘した** 
   すべて素通りし、キャプチャの RMS 実測だけが捕まえた**
 
 **仕様の方が実装より古いまま置かれていた**ので、正本を現状に追いつかせた。
-### PR-E4 追従: dev サイトを構文表面の正本とラチェット A-2 〜 A-5 まで追従させる（docs のみ）
 
-PR [#715](https://github.com/signalcompose/orbitscore/pull/715)（merge `cdbb8d3`・base は束の統合ブランチ
-`668-e2e-foundation`）に対するドキュメント追従。**実装・テストは一切変更していない。**
+## 2026-09-04: PR #724 追従 — dev 学習サイトをハーネス仕様の改訂に合わせる
 
-**追加**（`sites/dev/editor/mcp-and-gated-e2e.md` と `sites/dev/en/` の同パス）:
+**#724（#668 PR-E0）が `docs/testing/E2E_HARNESS_SPEC.md` を改訂した結果、dev 学習サイトの
+記述と参照行が古くなった**ので、doc 側だけを追従させた。コード・テストは変更していない。
 
-- 新節「メソッド名では測れない構文表面 — A-2 〜 A-5」。`packages/engine/src/parser/dsl-surface.ts:1-18`
-  （`DslSyntaxId` 13 個）と `tests/e2e/dsl-coverage-ledger.ts:1-19`（`ObservationKind` / `CoverageEntry`）を
-  verbatim 引用し、A-2 〜 A-5 の落ちる条件を表にした。A-3 だけ向きが違う（正本 → 予約語ではなく
-  予約語 → 正本）ので `dsl-e2e-coverage.spec.ts:181-193` を引用
-- `packages/engine/src/parser/tokenizer.ts:288-289` の `KEYWORDS` 公開 view を引用。A-3 が成立する前提
-- 新節「走査の層に初めてテストが付いた」。`gatedItTitles()` がカリー形の題名を 1 件も拾えていなかった
-  こと、空振りで緑 → 正当な台帳エントリで誤 red という壊れ方、`tests/e2e/gated-sources.ts:110-125` の
-  カリー形対応と 0 件 throw、`tests/e2e/gated-sources.spec.ts` の 4 本
-- 「ゲート env が無い通常の `npm test`」の説明を 2 テスト → 3 spec（ラチェット / アサーション衛生 /
-  走査層）に修正
-- 関連用語に「構文表面」「台帳」を追加。Sources に `dsl-surface.ts` / `dsl-coverage-ledger.ts` /
-  `gated-sources.spec.ts` を追加し、`gated-sources.ts:1-106 → 1-125` /
-  `dsl-e2e-coverage.spec.ts:1-146 → 1-239` に更新
-- frontmatter の `verified-against` を `affdf69 → cdbb8d3` に更新
+### 1. IV-3 章の「配線 smoke を置き換える計画」が失効した
 
-**追加**（`sites/dev/pipeline/text-to-ast.md` と en 同パス）:
+`sites/dev/editor/mcp-and-gated-e2e.md` の「次の深掘り候補」に
+「2 層構造が gated spec の『配線 smoke』をどう置き換える計画か」という項目が残っていた。
+#724 はまさにその記述を削り、**2 層の役割を入れ替えた**（オフライン層 = 回帰の固定 /
+実機層 = 語彙・構文表面の網羅）ので、この項目は問いとして成立しなくなった。
 
-- 「キーワード認識」節に `KEYWORDS` の名前付き export（`tokenizer.ts:288-289`）を追記。
-  PR #715 は引用ヘッダの `private static` → `static readonly` だけを直しており、**なぜ公開したか**は
-  どちらの言語版にも書かれていなかった。frontmatter は 1 段落の追記なので更新しない（STYLE_GUIDE
-  「小規模 cross-link / 体裁修正のみは更新しない」）
+- ラチェットの節の末尾に `### ハーネス仕様が実装に追いついた（2026-09-04・#724）` を追加し、
+  新旧の役割分担を表で示した。根拠は同章が既に書いていること — **ラチェットが数えているのは
+  `readGatedSources()` 経由の実機 spec の語**である
+- 「次の深掘り候補」は、#724 §2.1 が残した未決（台帳 2 が #671 段階 3 で導出に変わったあと
+  手書き行とラチェットがどうなるか）へ差し替えた
+- ja / en 両方を更新。frontmatter の `verified-against` を `c2010db`・`verified-at` を
+  `2026-09-04` へ
 
-**追従不要と判断した層**:
+### 2. 核仕様の行番号が +21 ずれた
 
-- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — DSL の構文も意味論も変わっていない。
-  `dsl-surface.ts` は**既存の受理形を列挙した正本**であって、新しい構文を足してはいない
-- `sites/user/` / `docs/user/ja/USER_MANUAL.md` — ユーザーが書く語は 1 つも増減していない
-- `docs/design/668-e2e-foundation-design.md` — 起案時点のスナップショットなので書き換えない
+#724 は `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §10 に 21 行を挿入した（`### 🔴 DSL を足したら
+E2E も足す`）。`// FILE:START-END` 形式の引用は #724 自身が再アンカーしているが、
+**Sources 節の散文の行参照は機械検査の対象外**なので取り残されていた。
 
-**検証**: `npm run docs:build`（user / dev）と `npm run docs:check` はすべて緑。
+| 参照元 | 旧 | 新 | 備考 |
+|---|---|---|---|
+| `sites/dev/signal-chain/mixer-audio-line.md:885` / en:910 | `1616-1706` | `1667-1757` | Mixer / Routing（MX.1〜MX.5） |
+| 同 `:886` / en:911 | `1247-1249` | `1298-1300` | master gain ramp が insert の前 |
+| `sites/dev/decisions/adr-002-dsl-v3-pivot.md:279` / en:279 | `1933-1990` | `1983-2035` | §13 Versioning + Migration Notes |
+| 同 `:280` / en:280 | `467-601` | `496-631` | §7 underscore prefix |
+| 同 `:281` / en:281 | `336-432` | `365-462` | §5 片記号方式 |
+
+🔴 **上表のうち #724 起因のずれは +21 のみ。** 実測すると 5 件とも #724 以前から
+31〜35 行ずれており（base `89d6e26` で `1616` は Mixer 節ではなく PC 節の中だった）、
+**散文の行参照には機械検査が無い**ことがそのまま残存していた。今回は行番号を足すのではなく、
+各行の説明文が名指ししている節の実位置へ**再アンカー**した。

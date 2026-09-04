@@ -1,12 +1,12 @@
 ---
 title: "I-1. Text to AST"
 chapter-id: "I-1"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 89d6e26
+verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E4 (the public `KEYWORDS` and `dsl-surface.ts`) on 2026-09-04. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # I-1. Text to AST
 
@@ -17,7 +17,8 @@ The first gateway between DSL text and actual execution is "parsing." Rather tha
 The first edition of this chapter was written against the 2026-05-05 snapshot (0a4b598). Compared with the code as of 2026-09-01 (69dc968), the skeleton of the pipeline (tokenizer → `StatementParser` → `AudioIR`) is unchanged, but the vocabulary has grown considerably. Since this chapter reads that skeleton, the new vocabulary is only enumerated below, and each item is left to the exploration candidates at the end.
 
 - **Token kinds grew from 19 to 32**: `ACCIDENTAL` / `CARET` / `TILDE` / `AT` / `PLUS` for the pitch DSL, `LBRACKET` / `RBRACKET` for stacks, `LBRACE` / `RBRACE` for legato, `UNDERSCORE` for ties, `IMPORT` / `ASTERISK` for `import`, and `COLON` for named arguments (`packages/engine/src/parser/types.ts:7-39`). The first edition's "18 kinds" was a miscount; the listing at the time already had 19
-- **`KEYWORDS` gained `import`** (`packages/engine/src/parser/tokenizer.ts:17-28`)
+- **`KEYWORDS` gained `import`** (`packages/engine/src/parser/tokenizer.ts:17-28`). In #668 PR-E4 it also went from a private static to a public static typed `ReadonlySet<string>`, with a view exported from the module for cross-checking (`tokenizer.ts:288-289`)
+- **`dsl-surface.ts` was added** (#668 PR-E4, `packages/engine/src/parser/dsl-surface.ts:1-35`). It is the canonical enumeration, as ids, of the 13 syntax surfaces that are not shaped like a method call; the parser never reads it, the E2E ratchet does
 - **`AudioIR` gained `fileImports?`** (#456 on 2026-07-17, `types.ts:49-59`). `import { kick } from "./drums.orbs"` is held in a bucket separate from statements, and the interpreter processes it before `globalInit`
 - **The `Statement` union grew from 3 to 11 members** (`types.ts:72-83`): `ChordBinding` / `PatternBinding` / `ModeBinding` (pitch-DSL bindings such as `var m7 = [...]`), `ImportStatement` / `FileImportStatement`, and `MixerHandleStatement` / `MixerInit` / `MixerNodeDecl` (Signal Chain DSL, #517 S1)
 - **`parseStatement()` gained an `IMPORT` branch**, and `parseVarDeclaration()` now discriminates the kind of declaration by the first token of the right-hand side (`[`, `(`, `mode(`, `<id>.output|sum|aux`) (`parse-statement.ts:58-85`, `108-149`)
@@ -149,7 +150,7 @@ When `AudioTokenizer` reads through the characters and finds a string starting w
 
 Set lookups are `O(1)`, so the speed does not change as the number of keywords grows. Reading the implementation reveals an unexpectedly simple mechanism.
 
-This `KEYWORDS` is also exposed as a named export at the end of the file.
+`KEYWORDS` was originally a private static. In #668 PR-E4 it became a public static typed `ReadonlySet<string>`, with a view exported at the end of the module for cross-checking.
 
 ```typescript
 // packages/engine/src/parser/tokenizer.ts:288-289
@@ -157,7 +158,21 @@ This `KEYWORDS` is also exposed as a named export at the end of the file.
 export const KEYWORDS = AudioTokenizer.KEYWORDS
 ```
 
-The read-only view is exported so that tests can cross-check the keyword list (#668 PR-E4). Check A-3 fails the state "a keyword was added but no syntax that accepts it exists in the DSL surface source of truth". See the section "The syntax surfaces a method name cannot measure" in [IV-3](/en/editor/mcp-and-gated-e2e) for the details.
+Who reads it? `dsl-surface.ts`, placed in the same `parser/` directory. It enumerates, as ids, the **DSL surfaces that are not shaped like a method call** — `var g = init GLOBAL`, `RUN(x)`, `n by 4`, `1@v+10` and so on — and each id carries a comment naming which tokenizer / parse-statement branch it corresponds to.
+
+```typescript
+// packages/engine/src/parser/dsl-surface.ts:1-8
+/**
+ * パーサが受理する「メソッド呼び出しでない」DSL 表面。
+ * tokenizer / parse-statement の分岐と 1:1 に保つ。
+ */
+export type DslSyntaxId =
+  | 'var-init-global' // var g = init GLOBAL              tokenizer.ts:19-20, parse-statement.ts:62
+  | 'var-init-seq' // var s = init global.seq          parse-statement.ts:385
+  | 'import' // import { x } from "./a.orbs"     tokenizer.ts:27, parse-statement.ts:67
+```
+
+This list is not used when the parser runs. It is the canonical source for a real-device E2E ratchet that detects "a reserved word was added without mapping it to a syntax surface" and "a syntax surface was added without an E2E" (see [IV-3](/en/editor/mcp-and-gated-e2e) for the details). Seen from the parser side, it means one more promise: **when you add a branch, add a line here too**.
 
 ### Single-Pass Scan
 
@@ -459,7 +474,8 @@ This intermediate representation is passed to the interpreter in the next chapte
 - `packages/engine/src/parser/types.ts:203-219` — `ImportStatement` / `FileImportStatement`
 - `packages/engine/src/parser/types.ts:252-274` — `GlobalStatement` / `SequenceStatement` / `MethodChain` and `invocation`
 - `packages/engine/src/parser/tokenizer.ts:11-32` — the `AudioTokenizer` class and `KEYWORDS` Set
-- `packages/engine/src/parser/tokenizer.ts:288-289` — the named `KEYWORDS` export (#668 PR-E4, what check A-3 reads)
+- `packages/engine/src/parser/tokenizer.ts:288-289` — the `KEYWORDS` view exported for cross-checking (#668 PR-E4)
+- `packages/engine/src/parser/dsl-surface.ts:1-35` — `DslSyntaxId` / `DSL_SYNTAX_SURFACE` (#668 PR-E4)
 - `packages/engine/src/parser/tokenizer.ts:135-170` — the start of the `tokenize()` main loop and the accidental decision
 - `packages/engine/src/parser/audio-parser.ts:68-115` — the loop, dispatch, and IM.1 check in `AudioParser.parse()`
 - `packages/engine/src/parser/audio-parser.ts:121-126` — the `parseAudioDSL()` entry function
