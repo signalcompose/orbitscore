@@ -1509,6 +1509,17 @@ export class RustEnginePlayer implements AudioEngineBackend {
         if (err instanceof DaemonConnectionError || err instanceof DaemonQuitError) return
         console.warn('⚠️  [rust-engine] stopAll() failed unexpectedly:', err)
       })
+      void this.daemon
+        .pluginAllNotesOff()
+        .then(({ released, stale }) => {
+          if (released > 0 || stale > 0) {
+            console.log(`[rust-engine] plugin all-notes-off: released=${released} stale=${stale}`)
+          }
+        })
+        .catch((err) => {
+          if (err instanceof DaemonConnectionError || err instanceof DaemonQuitError) return
+          console.warn('⚠️  [rust-engine] pluginAllNotesOff() failed unexpectedly:', err)
+        })
     }
   }
 

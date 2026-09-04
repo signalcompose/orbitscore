@@ -88,6 +88,11 @@ pub enum WrapError {
     /// out-of-process instrument の runtime failure。
     #[error("out-of-process instrument runtime error: {0}")]
     OutProcInstrument(String),
+    /// active-note 台帳が指す instrument instance が既に退役している。通常の note RPC では
+    /// OUTPROC_INSTRUMENT_RUNTIME に写像するが、PluginAllNotesOff は文字列比較せずこの variant を
+    /// stale として数える。
+    #[error("out-of-process instrument instance is stale: {0}")]
+    OutProcInstrumentStale(String),
     /// child launch 後の attach が失敗したが、shm slot は復元済みで再試行可能。
     #[error("out-of-process attach failed: {0}")]
     OutProcAttachFailed(String),
@@ -121,6 +126,15 @@ pub enum WrapError {
     /// の場合に返す。cpal 側の実失敗（device open 失敗等）は `Output`（`OutputError` 経由）に別れる。
     #[error("audio device switch unavailable: {0}")]
     AudioDeviceSwitchUnavailable(String),
+}
+
+/// daemon が追跡していた plugin note の一括解放結果（#606）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PluginAllNotesOffSummary {
+    /// NoteOff の ring push に成功した件数。
+    pub released: usize,
+    /// 台帳にはあったが送り先 instance が既に無かった件数。
+    pub stale: usize,
 }
 
 #[cfg(all(test, feature = "outproc-effect"))]
@@ -6191,6 +6205,21 @@ impl EngineWrap {
                 "instrument replacement completed with old slot quarantined from free-list"
             );
         }
+        // teardown 成功時だけ旧 tenant の台帳を捨てる。失敗時は旧 child がまだ鳴っている可能性が
+        // あるため、最後の砦 PluginAllNotesOff が拾えるよう entry を保持する。
+        let note_cleanup_error = if teardown.is_ok() {
+            match self.active_plugin_notes.lock() {
+                Ok(mut active) => {
+                    active.retain(|(instance, _, _)| instance != &name);
+                    None
+                }
+                Err(_) => Some(WrapError::OutProcInstrument(
+                    "active plugin note tracker mutex poisoned".into(),
+                )),
+            }
+        } else {
+            None
+        };
         let mut guard = self.outproc_instrument.lock().map_err(|_| {
             WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
         })?;
@@ -6204,6 +6233,9 @@ impl EngineWrap {
             // （fix 前は1つのロック区間で両方やっていた）。`HashSet::remove` は冪等なので、
             // Drop 側は失敗・パニック時の安全網として残したままでよい。
             control.replacements_in_flight.remove(&name);
+        }
+        if let Some(error) = note_cleanup_error {
+            return Err(error);
         }
         Ok(ReplacedPluginSummary {
             plugin: summary,
@@ -7130,6 +7162,14 @@ impl EngineWrap {
         })
     }
 
+    /// in-process CLAP は instance ごとの active-note 台帳を持たないため利用不可。
+    #[cfg(all(feature = "clap-host", not(feature = "outproc-instrument")))]
+    pub fn plugin_all_notes_off(&self) -> Result<PluginAllNotesOffSummary, WrapError> {
+        Err(WrapError::ClapUnavailable(
+            "PluginAllNotesOff requires an outproc-instrument daemon build".into(),
+        ))
+    }
+
     /// Out-of-process instrument NoteOn. Conversion to the format-neutral wire event happens on
     /// this control-side method; the audio thread only pops already-converted events.
     #[cfg(all(feature = "outproc-instrument", not(feature = "clap-host")))]
@@ -7149,7 +7189,8 @@ impl EngineWrap {
                 length_frames: 0,
             },
             instance.as_deref(),
-        )?;
+        )
+        .map_err(Self::public_plugin_note_error)?;
         let name = instance
             .as_deref()
             .unwrap_or(DEFAULT_INSTRUMENT_INSTANCE)
@@ -7179,7 +7220,8 @@ impl EngineWrap {
                 velocity,
             },
             instance.as_deref(),
-        )?;
+        )
+        .map_err(Self::public_plugin_note_error)?;
         let name = instance
             .as_deref()
             .unwrap_or(DEFAULT_INSTRUMENT_INSTANCE)
@@ -7193,6 +7235,80 @@ impl EngineWrap {
         Ok(())
     }
 
+    /// 追跡中の全 OOP instrument note を解放する。台帳 lock は drain の間だけ保持し、
+    /// ring push 前に必ず解放する（control lock との循環と他 note RPC の足止めを防ぐ）。
+    #[cfg(all(feature = "outproc-instrument", not(feature = "clap-host")))]
+    pub fn plugin_all_notes_off(&self) -> Result<PluginAllNotesOffSummary, WrapError> {
+        let notes = {
+            let mut active = self.active_plugin_notes.lock().map_err(|_| {
+                WrapError::OutProcInstrument("active plugin note tracker mutex poisoned".into())
+            })?;
+            active.drain().collect::<Vec<_>>()
+        };
+
+        let mut summary = PluginAllNotesOffSummary::default();
+        let mut failed_notes = Vec::new();
+        let mut first_error = None;
+        for (instance, channel, key) in notes {
+            let event = orbit_audio_sandbox::NeutralEvent::NoteOff {
+                sample_offset: 0,
+                addr: Self::outproc_instrument_voice_addr(channel, key),
+                velocity: 0.0,
+            };
+            match self.push_outproc_instrument_event(event, Some(&instance)) {
+                Ok(()) => summary.released += 1,
+                Err(
+                    WrapError::OutProcInstrumentStale(_)
+                    | WrapError::OutProcInstrumentUnavailable(_),
+                ) => summary.stale += 1,
+                Err(error) => {
+                    failed_notes.push((instance, channel, key));
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+            }
+        }
+        if !failed_notes.is_empty() {
+            self.active_plugin_notes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .extend(failed_notes);
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(summary),
+        }
+    }
+
+    /// integration test seam: active-note 台帳の現在件数。
+    #[cfg(feature = "outproc-instrument")]
+    #[doc(hidden)]
+    pub fn active_plugin_note_count(&self) -> usize {
+        self.active_plugin_notes
+            .lock()
+            .map(|active| active.len())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().len())
+    }
+
+    /// integration test seam: 実 child を鳴らさず active-note 台帳へ 1 件注入する。
+    #[cfg(feature = "outproc-instrument")]
+    #[doc(hidden)]
+    pub fn inject_active_plugin_note(
+        &self,
+        instance: &str,
+        channel: u8,
+        key: u8,
+    ) -> Result<(), WrapError> {
+        self.active_plugin_notes
+            .lock()
+            .map_err(|_| {
+                WrapError::OutProcInstrument("active plugin note tracker mutex poisoned".into())
+            })?
+            .insert((instance.to_owned(), channel, key));
+        Ok(())
+    }
+
     /// Builds the `VoiceAddr` shared by `plugin_note_on`/`plugin_note_off` for the
     /// out-of-process instrument path (single-port, note-id-less MIDI addressing).
     #[cfg(all(feature = "outproc-instrument", not(feature = "clap-host")))]
@@ -7203,6 +7319,16 @@ impl EngineWrap {
             channel: channel as i16,
             key: key as i16,
             _pad: 0,
+        }
+    }
+
+    /// 通常の PluginNoteOn/Off wire 契約では unknown instance も従来どおり runtime error。
+    /// PluginAllNotesOff だけが内部 variant を直接読み、stale 集計へ変換する。
+    #[cfg(all(feature = "outproc-instrument", not(feature = "clap-host")))]
+    fn public_plugin_note_error(error: WrapError) -> WrapError {
+        match error {
+            WrapError::OutProcInstrumentStale(message) => WrapError::OutProcInstrument(message),
+            other => other,
         }
     }
 
@@ -7224,7 +7350,7 @@ impl EngineWrap {
         // なので明示エラーにする（旧単数時代は ring へ積んで黙って捨てられていた — 診断の改善）。
         let name = instance.unwrap_or(DEFAULT_INSTRUMENT_INSTANCE);
         let Some(&index) = control.instance_index.get(name) else {
-            return Err(WrapError::OutProcInstrument(format!(
+            return Err(WrapError::OutProcInstrumentStale(format!(
                 "unknown instrument instance '{name}' (LoadPlugin has not assigned it a slot)"
             )));
         };
@@ -7322,6 +7448,12 @@ impl EngineWrap {
         Err(WrapError::ClapUnavailable(
             "engine built without 'clap-host' or 'outproc-instrument' feature".into(),
         ))
+    }
+
+    /// plugin hosting feature が無い build には発音経路も台帳も無いため、空の成功を返す。
+    #[cfg(not(any(feature = "clap-host", feature = "outproc-instrument")))]
+    pub fn plugin_all_notes_off(&self) -> Result<PluginAllNotesOffSummary, WrapError> {
+        Ok(PluginAllNotesOffSummary::default())
     }
 
     /// test harness 用: CLAP post-mix peak（plugin add-mix 後の絶対値ピーク）。発音検証に使う。
@@ -13505,6 +13637,35 @@ mod outproc_instrument_note_tests {
             wrap.plugin_event_ring_overflow_count(),
             before + 1,
             "ring-full push must increment the overflow counter exactly once"
+        );
+    }
+
+    #[test]
+    fn plugin_all_notes_off_restores_every_ring_full_entry_and_continues() {
+        let (wrap, _event_rx) = wrap_with_note_consumer(1);
+        wrap.plugin_note_on(60, 0, 0.8, None)
+            .expect("first note fills the ring");
+        wrap.inject_active_plugin_note(super::DEFAULT_INSTRUMENT_INSTANCE, 0, 61)
+            .expect("inject second tracked note");
+        let before = wrap.plugin_event_ring_overflow_count();
+
+        let err = wrap
+            .plugin_all_notes_off()
+            .expect_err("the full ring must reject both NoteOff events");
+
+        assert!(
+            matches!(err, WrapError::OutProcInstrument(_)),
+            "the first ring-full error must be returned, got {err:?}"
+        );
+        assert_eq!(
+            wrap.active_plugin_note_count(),
+            2,
+            "every failed entry must be restored to the active-note ledger"
+        );
+        assert_eq!(
+            wrap.plugin_event_ring_overflow_count(),
+            before + 2,
+            "a failure must not prevent the remaining ledger entry from being attempted"
         );
     }
 

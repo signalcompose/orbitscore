@@ -1216,6 +1216,15 @@ pub async fn run(
         }
     }
 
+    // engine が異常終了すると RPC は原理的に届かない。read loop の終了そのものを第二 trigger
+    // とし、RPC handler と同じ単一配送関数で daemon 台帳を解放する（#606）。
+    let release_engine = engine.clone();
+    match tokio::task::spawn_blocking(move || release_engine.plugin_all_notes_off()).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => warn!("plugin all-notes-off after session disconnect failed: {error}"),
+        Err(error) => warn!("plugin all-notes-off task after session disconnect failed: {error}"),
+    }
+
     // stats_task は自身の tx clone を保持するため、drop(tx) では exit しない。
     // abort してから join を待ち、cancelled 以外の終了（panic 等）があれば warn する。
     stats_task.abort();
@@ -2211,6 +2220,17 @@ async fn handle_command(
             Ok(n) => ok(&id, json!({"stopped": n})),
             Err(e) => err(&id, wrap_err_to_protocol(&e)),
         },
+        "PluginAllNotesOff" => {
+            let engine = engine.clone();
+            match tokio::task::spawn_blocking(move || engine.plugin_all_notes_off()).await {
+                Ok(Ok(summary)) => ok(
+                    &id,
+                    json!({"released": summary.released, "stale": summary.stale}),
+                ),
+                Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
+                Err(error) => err(&id, ProtocolError::new("INTERNAL_ERROR", error.to_string())),
+            }
+        }
         "SetGlobalGain" => {
             let value = params.get("value").and_then(|v| v.as_f64()).unwrap_or(1.0);
             let ramp_sec = params
@@ -2517,6 +2537,9 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
             ProtocolError::new("OUTPROC_INSTRUMENT_UNAVAILABLE", msg.clone())
         }
         WrapError::OutProcInstrument(msg) => {
+            ProtocolError::new("OUTPROC_INSTRUMENT_RUNTIME", msg.clone())
+        }
+        WrapError::OutProcInstrumentStale(msg) => {
             ProtocolError::new("OUTPROC_INSTRUMENT_RUNTIME", msg.clone())
         }
         WrapError::OutProcAttachFailed(msg) => {

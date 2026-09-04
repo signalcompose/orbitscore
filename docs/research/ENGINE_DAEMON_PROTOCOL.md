@@ -1,7 +1,7 @@
 # Engine Daemon IPC Protocol Specification (v0.2 draft)
 
 **ステータス**: Draft（Issue #93 の初期設計）
-**最終更新**: 2026-08-27
+**最終更新**: 2026-09-05
 **対象バージョン**: protocol v0.2
 **関連 Issue**: [#93](https://github.com/signalcompose/orbitscore/issues/93), [#107](https://github.com/signalcompose/orbitscore/issues/107), [#108](https://github.com/signalcompose/orbitscore/issues/108)
 
@@ -288,6 +288,34 @@ JSON-RPC 2.0 の影響を受けた独自形式:
 ```
 
 - `stopped`: 停止した voice 数（空でも 0 を返す冪等動作）
+
+### PluginAllNotesOff
+
+daemon が追跡する全 instrument instance の active note を drain し、個別の NoteOff を逐次送出する
+（#606・冪等）。`NoteChoke` は使わない。engine 側の `global.stop()` / shutdown に加え、engine が
+異常終了して RPC を送れない場合にも止められるよう、daemon は WebSocket session の切断時にも同じ
+配送関数を呼ぶ。protocol version は `0.2` のままとする。
+
+```json
+// Request
+{
+  "id": "u5b",
+  "method": "PluginAllNotesOff",
+  "params": {}
+}
+
+// Response
+{
+  "id": "u5b",
+  "result": { "released": 3, "stale": 0 }
+}
+```
+
+- `released`: NoteOff の ring push に成功した件数
+- `stale`: 台帳には残っていたが、対応する instance が既に無かった件数
+- mutex poison / ring 枯渇は `OUTPROC_INSTRUMENT_RUNTIME`、join 失敗は `INTERNAL_ERROR`
+- `clap-host` 単独 build は `CLAP_UNAVAILABLE`、plugin hosting feature の無い build は
+  `{ "released": 0, "stale": 0 }` を返す
 
 ### SetGlobalGain
 

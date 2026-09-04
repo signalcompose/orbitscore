@@ -17,6 +17,33 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(audio): add daemon-side plugin all-notes-off fallback (#606 PR-K-A2) (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR-K-A2**
+
+OOP instrument の active-note 台帳を drain して個別 `NoteOff` を送る
+`EngineWrap::plugin_all_notes_off()` を追加した。配送関数はこの 1 本に集約し、明示
+`PluginAllNotesOff` RPC と WebSocket session 切断直後の 2 箇所から起動する。これにより、
+engine が異常終了して RPC を送れず daemon と instrument child だけが残る経路でも解放できる。
+台帳 lock は drain 中だけ保持し、ring push 前に解放する。`ReplacePlugin` の旧 tenant entry は
+teardown 成功時だけ除去し、quarantine 時は最後の砦が拾えるよう保持する。
+
+TS は `RustEnginePlayer.stopAll()` の既存 `StopAll` の直後だけに flush を配線した。
+空の要約は無言とし、`released` または `stale` が非 0 の時だけ stdout に要約を出す。
+protocol/core spec に wire 契約と 2 trigger を記録した。
+
+protocol / gated / TS テストは実装ファイルと分離して先に追加し、未実装状態で Rust は新 API
+不在の E0599、Vitest は `pluginAllNotesOff is not a function` の red を確認した。sandbox の bind
+制限下でも本体を実行できる socket 非依存 integration を実装後に補助追加した。実装後は Rust lib
+（default: 39 passed、outproc-instrument: 131 passed / 1 ignored）、同 integration、対象 Vitest、
+cfg 4 象限 clippy、E2E typecheck、lint が green。WebSocket integration は sandbox の loopback
+bind が `EPERM`、実機 gated E2E は指示どおり未実行。全 `npm test` は 153 files / 2118 tests が
+pass した一方、loopback 使用箇所が同じ `listen EPERM: operation not permitted 127.0.0.1` により
+4 files / 106 tests fail（55 skipped）した。git metadata が親 worktree 配下にあるため sandbox が
+`index.lock` を拒否し、要求された test-only / implementation の 2 commit は作成できなかった。
+
+---
+
 ### fix(engine): hold the RUN tail timer and align its origin (#606 PR-K-A1) (Sep 4, 2026)
 
 **Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR-K-A1**（修正部分）
