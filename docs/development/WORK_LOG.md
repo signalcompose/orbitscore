@@ -17,6 +17,45 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(site): re-anchor the core-spec Sources line ranges after #729 (Sep 4, 2026)
+
+**追従元**: PR [#729](https://github.com/signalcompose/orbitscore/pull/729)（マージコミット `d4a1c3c`）/
+**ブランチ**: `claude/docs-sync-pr729`（docs 追従ルーチン）
+
+#729 は `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` に 2 つの hunk（`+8` 行 / `+14` 行 = 計 `+22` 行）を
+足したため、**それより後ろを指す行参照がすべてずれた**。#729 自身は
+`sites/dev/signal-chain/mixer-audio-line.md` の**コードブロック引用 2 本**（ja / en）を再アンカーしたが、
+`## Sources` の**散文の行参照は取り残されていた**。
+
+#### 🔴 なぜ取り残されたか — `docs:check` の検査範囲外だから
+
+`sites/dev/scripts/check-citations.mjs` が突合するのは `// <file>:<start>-<end>` という
+**ヘッダ行を持つコードブロックだけ**である。STYLE_GUIDE §5 が要求する `## Sources` の
+`` `<file-path>:<start>-<end>` `` 形式（散文・インラインコード）は**検査されない**。
+そのため #729 の作業者は 922 件 verified / 0 failed を見て完了と判断できてしまい、
+散文側のずれは緑のまま通過した。
+
+| 参照元 | 旧 | 新 | 指しているもの |
+|---|---|---|---|
+| `sites/dev/signal-chain/mixer-audio-line.md:898` | `1247-1249` | `1310-1312` | master gain ramp が insert の前に掛かる既知制約 |
+| `sites/dev/en/signal-chain/mixer-audio-line.md:922` | 同上 | 同上 | 同上（en） |
+| `sites/dev/decisions/adr-002-dsl-v3-pivot.md:279` | `1933-1990` | `2134-2186` | §13 Versioning |
+| `sites/dev/en/decisions/adr-002-dsl-v3-pivot.md:279` | 同上 | 同上 | 同上（en） |
+
+#### 🔴 但し書き: 2 件は #729 より前から既にずれていた
+
+`git show b22698a`（#729 のベース）で確認したところ、`1247-1249` は当時すでに
+「midi / instrument のメソッド表」を、`1933-1990` は「IM.2 import の意味論」を指しており、
+**どちらも #729 が壊したものではない**。#729 の `+22` 行はそのずれを**さらに広げた**だけである。
+本 PR は現在の内容に合わせて張り直した。
+
+#### 仕様側の追従は不要（分類の理由）
+
+#729 は spec のみの改訂で、コードも DSL 語彙も変えていない。追加された note-off 発火点
+（一発 `RUN()` の終端 / オフラインレンダの終端 / daemon の最後の砦）は**実装が PR-K-A1 / A2 待ち**
+なので、`sites/dev` へ挙動として書けば「code が真実」（STYLE_GUIDE §1）に反する。
+`sites/user` / `docs/user` もユーザーが書く語が増えていないため対象外。
+
 ### docs(spec): fix the implicit-master condition found by the independent re-audit (Sep 4, 2026)
 
 **Issue**: #611 / **ブランチ**: `611-output-line-spec` / **PR-O1**（段 1 の縦依存 1 本目）
