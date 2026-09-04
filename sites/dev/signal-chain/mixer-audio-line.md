@@ -882,8 +882,8 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 
 ## Sources
 
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1616-1706` — Mixer / Routing（MX.1〜MX.5）規範
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1247-1249` — master gain ramp が insert の前に掛かる既知制約
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1667-1757` — Mixer / Routing（MX.1〜MX.5）規範
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1298-1300` — master gain ramp が insert の前に掛かる既知制約
 - `docs/design/643-mixer-foundation-design.md` — #643 設計（owner 三条・責務境界・feed 注入点 §5.1・`output()` 3 分岐 §12）
 - `docs/design/649-audio-line-design.md` — #649 オーディオライン設計（§7 確定事項・§8 未決・§9-§14 実装設計 v3）
 - `docs/archive/WORK_LOG_2026-08.md` 6.404 / 6.405 / 6.408 / 6.410 / 6.415 / 6.420 — #643 設計〜PR-1〜PR-2〜レビュー訂正〜実機発見〜#649 設計 v3

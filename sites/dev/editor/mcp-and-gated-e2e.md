@@ -1,12 +1,12 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: affdf69
-verified-at: "2026-09-03"
+verified-against: c2010db
+verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -861,6 +861,19 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 
 ちなみにコメントの「固定 500 行窓」は `#567` で 1000 行に拡張される前の数字ですが、有限窓であることに変わりはないので規律そのものは有効です。
 
+### ハーネス仕様が実装に追いついた（2026-09-04・#724）
+
+ここまで読んできた形は、長らく正本の側に書かれていませんでした。`docs/testing/E2E_HARNESS_SPEC.md` は 2026-07-28 版のまま「現行の gated E2E は配線 smoke であり、本仕様の網羅ハーネスが完成するまでの暫定である」と述べていて、実機 spec が既に `it(` 20 件とキャプチャの数値判定を持っている状態と食い違っていたのです。#724（#668 PR-E0）はその記述を改訂し、2 層の役割分担を入れ替えました。
+
+| 層 | 旧版（2026-07-28） | 改訂版（2026-09-04・#724） |
+|---|---|---|
+| オフライン決定論層 | DSL 意味論の**網羅** | **回帰の固定**（同一 `.orbs` → bit 一致 PCM） |
+| 実機層 | 配線検証（**代表構文のみ**） | **語彙・構文表面の網羅** |
+
+改訂の根拠は、前節がそのまま示しています。網羅を数えているラチェットは `readGatedSources()` 経由で**実機 spec のソース**を走査するので、網羅の圧力は実機層にかかっていました。仕様の方が実装より古いまま置かれていた、というのが #724 の説明です。
+
+同じ改訂で、観測タイプ（`ObservationKind`）が `tests/e2e/dsl-coverage-ledger.ts` の列挙を正本として仕様側に固定されました。`smoke`（評価が通っただけ）の扱いも「監査で警告」から**件数ラチェット**へ書き換えられています（`E2E_HARNESS_SPEC.md` §4.1）。「警告は読まれないが red は止まる」という理由づけは、この節のラチェットとまったく同じ考え方です。
+
 ---
 
 ## ライブ playhead — `[STEP]` 行から decoration まで
@@ -1129,7 +1142,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `mcp-server.ts` の docs 配信部（`/orbitscore/dev/` / `isDocsDistStale`）と `get_dev_doc` / `search_dev_docs` — 学習サイトがエージェントの文脈に乗るまでの経路
 - `EvalMarkBridge` の timeout（120 秒）と `#608` stall reporter の連携 — 詰まったキューが「塞いでいる行」を名指しするまで
 - `findPlayArgRangeForPath()` のネスト解決（`"1.0"` の descend 条件と group run の扱い）と、`#391` で予定されている `seq.color()` の seam（`PlayheadColorConfig.seqColors`）
-- `docs/testing/E2E_HARNESS_SPEC.md` の 2 層構造（オフライン決定論層 + 実機配線層）が gated spec の「配線 smoke」をどう置き換える計画か
+- `tests/e2e/dsl-coverage-ledger.ts` の台帳 2（実装 ↔ テスト）が #671 段階 3 で生成器による導出に変わったあと、手書きの行とラチェットの関係がどうなるか（`E2E_HARNESS_SPEC.md` §2.1）
 - `analyze_audio` の `estimateFundamentalHz()` — plugin state 復元テストが「同じ測定ピッチ」をどう assert しているか
 - `killOrbitStudio()` / `replaceGatedPluginFixtureSymlink()` の安全域（allowlist）— ハーネスがユーザー環境を壊さないための境界
 - gated spec が 1 本ずつ実行できない構造（WORK_LOG 6.409）の改善案
@@ -1175,7 +1188,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixture
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — OrbitStudio.app のビルド
-- `docs/testing/E2E_HARNESS_SPEC.md` — DSL 網羅 E2E ハーネス仕様（#543）
+- `docs/testing/E2E_HARNESS_SPEC.md` — DSL 網羅 E2E ハーネス仕様（#543・2026-09-04 に #724 = #668 PR-E0 で §2.1 / §3 / §4.1 / §6.3 を改訂）
 - `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md` §3 — Agent Bridge の原設計
 - `docs/archive/WORK_LOG_2026-08.md` 6.348 / 6.409 / 6.415 / 6.416 / 6.417 / 6.418 / 6.421 — MCP ツール追加・実機検証・stale ガード・仕組み化・#654
 - `CLAUDE.md` 「E2E が最重要」「これらは仕組みで強制されている」「マージ前ゲート」
