@@ -197,6 +197,15 @@ TS が `"drum" → "sum-bus-0"` と束縛し、daemon へは常に `sum-bus-0` �
 sum 名なのか、数値の render bus なのか、LinkAudio channel 名なのかで **3 分岐** します。
 解決順は仕様（#598 §4.4）で固定されていて、コード上もその順で並んでいます。
 
+> ⚠️ **この 3 分岐のうち 2 つは、2026-09-03 の spec 改訂で行き先が変わりました**（#611 / #649）。
+> **数値 render bus の分岐（`kick.output(1)`）は撤回**されました（core spec MX.2.3）— 宛先はすべて
+> 「宣言されたノード」であるという裁定と整合しないためで、stem への書き出しは `mix.render(...)` の
+> ノードを宛先に取る形へ移ります。**LinkAudio channel の分岐は解決順の最後**へ後退し、その手前に
+> 予約語 `"master"`・宣言済み sum / aux 名・`"3,4"` 形式の物理アウト対が入ります（core spec MX.2.1）。
+> 🔴 **以下で読むコードはどちらの改訂にも追従していません** — `kick.output(1)` は今日も受理されて
+> `_renderBus` に記録され、`kick.output("master")` は今日も LinkAudio channel 名として記録されます。
+> 追従は #598 の PR-R 系（撤回）と #611 の PR-O4（解決順）です。
+
 ```typescript
 // packages/engine/src/core/sequence.ts:350-375
   output(channelName: string | number): this {

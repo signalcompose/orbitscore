@@ -202,6 +202,17 @@ Next, the entry point on the sequence side, where a sequence "points at its dest
 numeric render bus, or a LinkAudio channel name. The resolution order is fixed by the spec (#598
 §4.4), and the code is laid out in that order.
 
+> ⚠️ **Two of these three branches were redirected by the 2026-09-03 spec revision** (#611 / #649).
+> The **numeric render-bus branch (`kick.output(1)`) has been retracted** (core spec MX.2.3) — it
+> does not fit the ruling that every destination is a *declared node*, so writing stems moves to
+> taking a node declared with `mix.render(...)`. The **LinkAudio-channel branch drops to last** in
+> the resolution order, with the reserved word `"master"`, declared sum / aux names, and `"3,4"`
+> physical-output pairs resolving ahead of it (core spec MX.2.1).
+> 🔴 **The code read below follows neither revision** — `kick.output(1)` is still accepted and
+> recorded into `_renderBus` today, and `kick.output("master")` is still recorded as a LinkAudio
+> channel name. The catch-up is #598's PR-R series (the retraction) and #611's PR-O4 (the
+> resolution order).
+
 ```typescript
 // packages/engine/src/core/sequence.ts:350-375
   output(channelName: string | number): this {
