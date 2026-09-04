@@ -117,23 +117,55 @@ fn c5_failed_switch_resumes_the_old_stream() {
 
 #[test]
 #[ignore = "needs a real audio output device"]
+// 🔴 この検査が捕まえるのは「**古いストリームを止める防御が全部消えたこと**」である。
+//
+// 止める経路は 2 つあり、**互いに冗長**:
+//   (a) `EngineWrap::apply_device_switch` の `guard.stream.pause()?`
+//   (b) `OutputStream` の `impl Drop` の `pause()`
+//
+// main が実機で測った（2026-09-05・`--audio-device <既定の名前>` → host 既定へ切替）:
+//
+// | 変異 | callbacks/s | 本テスト |
+// |---|---|---|
+// | 変異なし | 94（= sample_rate / last_frames） | ok |
+// | (a) だけ削除 | 94（(b) が効く） | ok ← **正しい** |
+// | (b) だけ削除 | 94（(a) が効く） | ok ← **正しい** |
+// | **(a)(b) 両方削除** | **190** | **FAILED** ✅ |
+//
+// つまり **片方を消してもここは緑のまま**。「C-6 が (a) を守っている」と読んではいけない。
+//
+// 二重になる理由は cpal 0.15.3 の参照循環（`macos/mod.rs` の `add_disconnect_listener` が
+// `stream.clone()` を closure に move し、その listener を同じ `StreamInner` に格納する）で、
+// **`Drop` だけではコールバックが止まらない**。listener が付くのは `!is_default` のときだけで、
+// `host.devices()` 由来の Device は**既定デバイスであっても `is_default: false`**。
+//
+// 🔴 期待値を `sample_rate / last_frames` から導いてはいけない（初版がそうだった）。
+// `last_frames` は最後に走ったコールバックが書くので、分子と分母が同じ方向へ動いて
+// **自己相殺**し、両方削除しても緑のままだった。切替の**前**に実測した率と比べること。
 fn c6_successful_named_to_default_switch_has_one_callback_rate() {
     let named = named_default_output();
     let (engine, mut guard) =
         EngineWrap::start_with_options(options(Some(named), OutputFault::None))
             .expect("named stream must start");
+
+    std::thread::sleep(Duration::from_millis(250));
+    let before_start = engine.stream_stats_snapshot().callbacks;
+    std::thread::sleep(Duration::from_secs(1));
+    let before_end = engine.stream_stats_snapshot().callbacks;
+    let before_rate = before_end - before_start;
+    assert!(before_rate > 0, "named stream produced no callbacks");
+
     engine
         .apply_device_switch(&mut guard, None)
         .expect("switch to host default must succeed");
-    let output = engine.stream_config_snapshot();
-    let before = engine.stream_stats_snapshot().callbacks;
+    let after_start = engine.stream_stats_snapshot().callbacks;
     std::thread::sleep(Duration::from_secs(1));
     let after = engine.stream_stats_snapshot();
     assert!(after.last_frames > 0, "no callback frame size recorded");
-    let expected = output.sample_rate as f64 / after.last_frames as f64;
-    let actual = (after.callbacks - before) as f64;
+    let after_rate = after.callbacks - after_start;
     assert!(
-        actual >= expected * 0.70 && actual <= expected * 1.30,
-        "callback rate must be single-stream: actual={actual}, expected={expected}, stats={after:?}"
+        after_rate as f64 >= before_rate as f64 * 0.70
+            && after_rate as f64 <= before_rate as f64 * 1.30,
+        "callback rate changed after device switch: before_rate={before_rate}, after_rate={after_rate}, stats={after:?}"
     );
 }
