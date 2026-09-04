@@ -17,6 +17,53 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(planning): record the VST3 / CLAP conventions the scanner does not follow (Sep 4, 2026)
+
+**地図**: `docs/planning/DEVELOPMENT_MAP.md` **§4.C** / **ブランチ**: `546-plugin-spec-conventions`
+/ owner 2026-09-04・**バグではなく機能改善**
+
+#### 🔴 最初、DAW の「振る舞い」を写して規格を読んでいなかった
+
+owner:
+
+> オービットスタジオで今 **dylib を名指ししているという状態自体が、ちょっと異常**。
+> VST も CLAP も基本的には**作法があるはず**なので、その作法を地図のどこかに入れていく。
+> 他のものが使えているので、**他を実装した後でも全然いい**。**バグではなくて機能改善・改修。**
+
+> 僕が言ってるのが VST や CLAP の作法ではないというか、**作法をちゃんと調べてやりましょう**。
+
+初稿はフォーラム・製品ドキュメントから **Ableton / Bitwig の振る舞い**を写しただけだった。
+owner の指摘で規格を読み直したところ、**振る舞いの観察からは出てこない義務**が見つかった。
+
+#### 規格が定める作法と現在地
+
+| # | 規格（一次情報） | 現在地 |
+|---|---|---|
+| 1 | **CLAP: `CLAP_PATH` 環境変数を問い合わせる義務**（`clap/include/clap/entry.h`・PATH と同形式） | 🔴 **見ていない**（固定 2 パス・`orbit-plugin-scan/src/lib.rs:192-195`） |
+| 2 | **CLAP: 各ディレクトリを再帰的に探索**（同上） | 🔴 **非再帰**（`list_bundle_candidates` の doc・同 `:228`） |
+| 3 | **CLAP: 1 `.clap` に複数プラグイン。`clap_plugin_factory` で descriptor 列挙 → plugin ID で同定** | ❓ 未確認 |
+| 4 | **VST3: `moduleinfo.json`（3.7.8 で `Contents/Resources`）が Class ID / Category / Name / Vendor / Version** | ○ 参照している（`lib.rs:110`） |
+| 5 | **同一性は CLAP=plugin ID / VST3=Class ID。規格はパスを同一性にしない** | 🔴 `instrument(path)` が生パス |
+| 6 | 検証を走らせるタイミング | 🔴 手動のみ（起動時はカタログ JSON を読むだけ） |
+
+**1・2 は規格違反に近く小さい。5 は作り直しの規模**なので他の実装の後（owner）。
+
+#### 保証のタイミングについての整理
+
+owner: 「Logic や Studio One も**読み込めるということを確認するだけ**で、起動時に全てのプラグインが
+メモリに読み込まれているわけではない。**インサートした時だけメモリ空間に出てくる。**
+なので起動時のチェックは**品質保証的なもの**」。
+
+調査でも一致した — Ableton は VST3 を常時スキャンにし、**AU は Apple の `auval` に外注**している。
+Bitwig は**保証しきれないことを認めて隔離で解く**（ホスティングモード 5 段階）。
+**OrbitScore は既に Bitwig 型の out-of-process + crash isolation を採っている。**
+
+🔴 **これは [[live-coding-forbids-workflow-interruptions]] と対になる。** 保証を起動時に寄せるからこそ、
+**演奏時に確認を挟む必要が無い**。「評価時に trust を問う」設計は DAW と**二重に**違っていた
+（① 確認を挟む ② 判断を実行時に置く）。
+
+---
+
 ### docs(design): 詳細設計 11 本と実装プラン 2026-09 を起草 (Sep 3, 2026)
 
 **Issue**: #611 / #694 / #598 / #672 / #634 / #428 / #610 / #662 / #656 / #668 / #679（設計のみ・実装なし）/ **ブランチ**: `claude/elegant-pasteur-l9gdrl`

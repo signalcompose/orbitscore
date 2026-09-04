@@ -697,6 +697,40 @@ owner は「**実行ファイルに対してディレクトリを作って保存
 - **#658 → #623 に統合**（「曖昧な名前を黙って解決する」の format 版と path 版。同じ resolver・同じ spec 節・同じ PR で直す方が非対称を残さない）
 - #666 は本文のスコープを feature-map-comments §1 の結論で**更新**（起票済みなので閉じない）
 
+#### 🔴 プラグインの参照と保証を DAW の作法に寄せる（owner 2026-09-04・**バグではなく機能改善**）
+
+> **オービットスタジオで今 dylib を名指ししているという状態自体が、ちょっと異常といえば異常な状態。
+> VST も CLAP も基本的には作法があるはずなので、その作法を地図のどこかに入れていく。**
+> 他のものが使えているので、他を実装した後でも全然いい。バグではなくて機能改善・改修。（owner）
+
+🔴 **これは「DAW がこう振る舞うから」ではなく、VST3 / CLAP の規格が定める作法の話である。**
+下表の「規格」列は仕様の一次情報（`clap/include/clap/entry.h` / VST3 Developer Portal）から取った。
+
+| # | 規格が定める作法 | 現在地 |
+|---|---|---|
+| **1** | **CLAP: `CLAP_PATH` 環境変数を必ず見る。** ホストは OS 既定パスに加え、`CLAP_PATH`（PATH と同じ形式・`:` / `;` 区切り）を**問い合わせる義務**がある（`entry.h`） | 🔴 **見ていない**。`~/Library/Audio/Plug-Ins/CLAP` と `/Library/Audio/Plug-Ins/CLAP` の**固定 2 つだけ**（`orbit-plugin-scan/src/lib.rs:192-195`） |
+| **2** | **CLAP: 各ディレクトリを再帰的に探索する**（"Each directory should be **recursively** searched"・`entry.h`） | 🔴 **非再帰**（`list_bundle_candidates` の doc: 「1 ディレクトリ直下（非再帰）」・同 `:228`） |
+| **3** | **CLAP: 1 つの `.clap` に複数プラグインが入りうる。** `clap_plugin_factory` を `CLAP_PLUGIN_FACTORY_ID` で取り、**descriptor を列挙**して **plugin ID** で同定・生成する | ❓ 未確認（factory 列挙をしているか。**カタログの同一性が path なのか plugin ID なのか**） |
+| **4** | **VST3: `moduleinfo.json`（3.7.5〜・3.7.8 で `Contents/Resources` へ移動）が Class ID・Category・Name・Vendor・Version を持つ。** ホストは ModuleInfoLib で読む | ○ 参照はしている（`lib.rs:110` が `moduleinfo.json` 無しを `ProbePending` として扱う） |
+| **5** | **参照の同一性**: CLAP は **plugin ID**、VST3 は **Class ID (CID)**。**規格はパスを同一性にしていない** | 🔴 譜面が **`instrument(path)` で生パスを名指す**系統が残っている |
+| **6** | 保証（検証）を走らせるタイミング | 🔴 **手動のみ** — `rescanPlugins` / 右クリック / MCP。起動時はカタログ JSON を**読むだけ**（`plugin-catalog-reader.ts` `loadPluginCatalog`） |
+
+🔴 **1 と 2 は「起動時に全部メモリへ載せる」話ではない。** 起動時に走るのは**検証**（ロードできるか・
+自己記述を返すか）であり、**実体のインスタンス化は insert 時**である（そうでなければメモリがもたない）。
+
+**既にある資産**: 走査・probe の機構は実装済み（`orbit-plugin-scan --probe-artifacts` が
+success / pending / failure を記録・#463）。**足りないのは発火点**（論点 1）。
+隔離は Bitwig 型（out-of-process child + crash isolation）を**既に採っている** —
+Bitwig はホスティングモードを 5 段階でユーザーに選ばせ、**保証しきれないことを認めて隔離で解いている**。
+
+**順序**（owner 2026-09-04）: **1・2 は規格違反に近く小さい**（`CLAP_PATH` を読む・再帰にする）。
+3・4 は確認が先。**5（path 参照の扱い）は作り直しの規模になりうる**ので、**他の領域を実装した後でよい**。
+6（発火点）は 1・2 と同時でよい。起票は §0.2 に従い owner 判断。
+
+🔴 **調べずに「DAW はこうだから」で決めない。** 本節の初稿はフォーラム・製品ドキュメントから
+DAW の**振る舞い**を写しただけで、**規格の条文を読んでいなかった**（owner 指摘で差し替え）。
+`CLAP_PATH` と再帰探索は、振る舞いの観察からは出てこない — **仕様に書いてある義務**である。
+
 ### 4.D プラグインのパラメータと時間の粒度 — 5 つの issue は同じものの別の側面（triage C4・論点 2・3）
 
 **正本 = #680**（owner 決定 2026-09-02: DSL はプレーン値）。
