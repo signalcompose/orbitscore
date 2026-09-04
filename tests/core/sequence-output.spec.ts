@@ -239,9 +239,10 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
 /**
  * #282 — MIDI sequences must be exempt from the LinkAudio strict-mode
  * `.output()` requirement. `resolveDispatchChannel()` is the eager guard that
- * run()/loop() call FIRST (sequence.ts:1205/1249) — it is the exact line that
- * threw for the user's `LOOP(piano, inner, bass)` of a `.midi()` Pavane in a
- * `global.linkAudio()` file. Decision #14: "MIDI と SC オーディオは併走可 / 排他に
+ * run()/loop() call FIRST — it is the exact call that threw for the user's
+ * `LOOP(piano, inner, bass)` of a `.midi()` Pavane in a `global.linkAudio()`
+ * file (pre-#645; it returns `{ kind: 'skip', reason }` instead of throwing
+ * now — see #645 PR-D0). Decision #14: "MIDI と SC オーディオは併走可 / 排他に
  * する技術的理由がない"; spec §8.1.2 scopes the requirement to "発音 sequences".
  */
 describe('Sequence.resolveDispatchChannel() — MIDI exemption under linkAudio (#282)', () => {
@@ -261,29 +262,32 @@ describe('Sequence.resolveDispatchChannel() — MIDI exemption under linkAudio (
     global = new Global(mockPlayer, new MidiManager(() => midiOut))
   })
 
-  it('returns undefined for a MIDI sequence even when linkAudio is on and no .output() is set', () => {
+  it('returns hardware for a MIDI sequence even when linkAudio is on and no .output() is set', () => {
     global.linkAudio()
     const seq = new Sequence(global, mockPlayer)
     seq.midi('IAC', 1)
     expect(seq.isMidi()).toBe(true)
-    // The user's exact failure: this call threw "has no .output() channel set".
+    // The user's exact failure (pre-#645): this call threw "has no .output() channel set".
     expect(() => seq.resolveDispatchChannel()).not.toThrow()
-    expect(seq.resolveDispatchChannel()).toBeUndefined()
+    expect(seq.resolveDispatchChannel()).toEqual({ kind: 'hardware' })
   })
 
-  it('still throws for an AUDIO sequence with linkAudio on and no .output() (strict mode preserved)', () => {
+  it('still resolves to skip for an AUDIO sequence with linkAudio on and no .output() (strict mode preserved, no longer a throw)', () => {
     global.linkAudio()
     const seq = new Sequence(global, mockPlayer)
     // Absolute path → no document-directory resolution needed at construction.
     seq.audio('/abs/kick.wav')
     expect(seq.isMidi()).toBe(false)
-    expect(() => seq.resolveDispatchChannel()).toThrow(/no .output\(\) channel set/)
+    expect(() => seq.resolveDispatchChannel()).not.toThrow()
+    const target = seq.resolveDispatchChannel()
+    expect(target.kind).toBe('skip')
+    expect(target.kind === 'skip' && target.reason).toMatch(/no .output\(\) channel set/)
   })
 
-  it('returns the channel name for an AUDIO sequence that declares .output()', () => {
+  it('returns the channel name (kind: link) for an AUDIO sequence that declares .output()', () => {
     global.linkAudio()
     const seq = new Sequence(global, mockPlayer)
     seq.audio('/abs/kick.wav').output('kick')
-    expect(seq.resolveDispatchChannel()).toBe('kick')
+    expect(seq.resolveDispatchChannel()).toEqual({ kind: 'link', channel: 'kick' })
   })
 })

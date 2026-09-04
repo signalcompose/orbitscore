@@ -669,6 +669,9 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'applyVoiceTiesAndHold',
       'scheduleEventsFromTime',
       'resolveDispatchChannel',
+      // #645 PR-D0: dedup logger for the `skip` dispatch target (private helper called
+      // from run()/loop()/scheduleEvents()/scheduleEventsFromTime()). Not DSL vocabulary.
+      'logSkipOnce',
       'scheduleEvents',
       // Runtime timing notifications and state inspection.
       'getPatternDuration',

@@ -158,7 +158,8 @@
 
 | PR | 件名 | 対象 | 触るファイル（概算行） | 依存 | 検証 | 一方通行 |
 |---|---|---|---|---|---|---|
-| PR-D0 ⟂ | `fix(engine): contain the two playback-path throws and log the skip` | **#645 must-fix**（`resolveDispatchChannel` を `DispatchTarget = hardware \| link \| skip` の tagged union に・throw を無音スキップ + `[ERROR]`）| `sequence.ts`（+60/−20）・`event-scheduler.ts`（+20/−8）・unit | なし | E2E-645-A/B（linkAudio 譜面 → `run_selection` → `get_log`）| 内部 API |
+| PR-D0 ⟂ | `fix(engine): contain the two playback-path throws and log the skip` | **#645 must-fix**（`resolveDispatchChannel` を `DispatchTarget = hardware \| link \| skip` の tagged union に・throw を無音スキップ + `[ERROR]`）| `sequence.ts`（+60/−20）・`event-scheduler.ts`（+20/−8）・unit **13 本** | なし | ユニット 13 本。🔴 **実機 E2E-645-A/B は #736 へ分離** | 内部 API |
+| PR-D1 | `test(e2e): align the #645 gated assertions with a skipped sequence` | **#736**（PR-D0 から分離）| gated spec（+300 復活・主張の修正） | PR-D0 | 実機 E2E-645-A/B。🔴 **dedup は ERROR 総数でなく skip メッセージの出現回数で数える** | — |
 | PR-D1 ⟂ | `docs(spec): one applicability table for receivers and methods` | #644 表の仕様側・#280 の spec 1 本化・#255-1 の明記 | core spec・`PITCH_DSL_SPEC_v1.1.md` | — | docs | — |
 | PR-D2 | `fix(diagnostics): run the engine parser behind the editor diagnostics` | **#610**（`ParseError` に span・文言不変・拡張が engine の `analyze-source` を require）| `parser/parse-error.ts`（新 20）・`parser-utils.ts`（+10）・`diagnostics/analyze-source.ts`（新 60）・`extension.ts`（+40）| PR-D1 | E2E-D1/D2 | 診断の増加 |
 | PR-D3 | `feat(diagnostics): applicability table drives the editor warnings` | #644 全項・#665 (A)（`diagnostics/applicability.ts` 受け手 9 種 × メソッド・4 値・`render-node`/`master-line` 行を先置き）| `parser/types.ts` + `parse-statement.ts` 4 箇所（span）・`applicability.ts`（新 200）・`analyze-source.ts`（+90）・`signal-chain-dispatch.spec.ts`（+120）| PR-D2 | E2E-D3/D4/D5・全数照合テスト | 診断の増加 |
@@ -191,10 +192,18 @@
 
 ### 1.9 配布 — PR-S（doc 656 §14・番号は同文書の PR-T/R/C に対応）
 
+> 🔴 **2026-09-04 改訂**: PR-S-T1 の件名から `and refuse loudly` を落とし、`extension.ts` を
+> 触るファイルから外した。裁定 (1)（`supported: true`・「一般的な DAW の挙動に併せて」）で
+> **trust ガードそのものが不要になった**ため、「大声で断る」対象が無い
+> （断らずに普通に動くのが正しい）。実機 E2E は **#735 = PR-S-T3** へ分離
+> （理由は doc 656 §12.1: dev モードでは宣言を消しても緑になるので検証にならず、
+> installed モードには vsix が要る）。
+
 | PR | 件名 | 対象 | 触るファイル（概算行） | 依存 | 検証 | 一方通行 |
 |---|---|---|---|---|---|---|
-| PR-S-T1 ⟂ | `fix(studio): declare untrusted-workspace capability and refuse loudly` | **#385 must-fix** | `package.json`（+12）・`extension.ts`（+25）・gated spec（+60）| なし | E2E-D1/D2・実機: 新しいフォルダを初めて開いて評価 | `supported` の値（裁定 (1)）|
+| PR-S-T1 ⟂ | `fix(studio): declare untrusted-workspace capability` | **#385 must-fix** | `package.json`（+12）・テスト（+140: マニフェスト検査 6 本 + 共有ヘルパー）| なし | ユニット（変異 3 種で red を確認）。🔴 **実機 E2E-D1 は #735 へ分離** | `supported` の値（裁定 (1)）|
 | PR-S-T2 | `feat(studio): default workspace trust off in the OrbitStudio build` | #385 層 2 | `product.overrides.json`（新 +8）・`build_orbitstudio.sh`（+3）| PR-S-T1 | 実機: 焼き直して loose-file 起動 | product.json キー |
+| PR-S-T3 | `test(e2e): verify untrusted activation with an installed extension` | **#735**（PR-S-T1 から分離）| gated spec（+160）・vsix を焼く導線 | **#659**（`--install-extension` の作法が固まってから）| 実機 E2E-D1・🔴 **`capabilities` を消して red になることまで** | — |
 | PR-S-R1 ⟂ | `refactor(release): extract the vsix content gate into a shared script` | #659 ③（`verify-vsix.sh`・`release.yml:116-207` のインライン shell を共有化）| 新 +90・`release.yml` −75+2 | なし | CI の PR smoke 緑 | — |
 | PR-S-R2 | `ci(release): run the smoke lane for rust and scripts changes` | `release.yml` の `paths` に `rust/**` `scripts/**` | `release.yml`（+2）| PR-S-R1 | 自分で発火する | — |
 | PR-S-R3 | `feat(build): script the local release end to end` | **#659**（🔴 `make-local-release.sh` は repo に存在しない — 新規に書く・12 段・成果物・preflight）| 新 +260・`README.md` +30 | PR-S-R1 | 手元で 1 回通す + 成果物に E2E-D3 | 🔴 成果物の名前・退避先 |

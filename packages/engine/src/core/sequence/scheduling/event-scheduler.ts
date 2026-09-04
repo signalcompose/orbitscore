@@ -10,15 +10,26 @@ import { ScheduleEventsOptions, ScheduleEventsFromTimeOptions } from '../types'
 import { generateRandomValue } from '../parameters/random-utils'
 
 /**
- * Assert that audio file path is absolute.
- * audioFilePath should always be absolute since sequence.audio() resolves at set time.
+ * Verify that an audio file path is absolute, logging and returning `undefined` if not
+ * instead of throwing (#645 PR-D0).
+ *
+ * `audioFilePath` should always be absolute since `sequence.audio()` absolutizes it at
+ * set time — reaching here with a relative path is an internal invariant violation, not
+ * something a DSL author can trigger. It used to throw, but this function runs on the
+ * live playback path (`scheduleEvents` / `scheduleEventsFromTime`, called from every bar
+ * of a running loop): a throw here killed the awaited call chain for every OTHER
+ * sequence scheduled in the same pass too, not just this one (live coding — a stopped
+ * performance is worse than one silently-skipped sequence with a logged reason). The
+ * caller is responsible for treating `undefined` as "skip this sequence, keep going".
  */
-function resolveAudioFilePath(audioFilePath: string): string {
+function resolveAudioFilePath(audioFilePath: string, sequenceName: string): string | undefined {
   if (!path.isAbsolute(audioFilePath)) {
-    throw new Error(
-      `Audio file path is not absolute: "${audioFilePath}". ` +
-        `This is an internal error — sequence.audio() should have absolutized the path.`,
+    console.error(
+      `[ERROR] Sequence '${sequenceName}': audio file path is not absolute: "${audioFilePath}". ` +
+        `This is an internal error — sequence.audio() should have absolutized the path. ` +
+        `このシーケンスは無音でスキップします。`,
     )
+    return undefined
   }
   return audioFilePath
 }
@@ -91,8 +102,13 @@ export async function scheduleEvents(options: ScheduleEventsOptions): Promise<vo
     return
   }
 
-  // Resolve the audio file path to an absolute path
-  const resolvedFilePath = resolveAudioFilePath(audioFilePath)
+  // Resolve the audio file path to an absolute path. #645 PR-D0: `undefined` means the
+  // invariant was violated — skip this sequence's events rather than throw (which would
+  // also kill every other sequence scheduled in the same awaited call chain).
+  const resolvedFilePath = resolveAudioFilePath(audioFilePath, sequenceName)
+  if (!resolvedFilePath) {
+    return
+  }
 
   // Schedule events for current iteration
   const loopOffset = loopIteration * patternDuration
@@ -179,7 +195,11 @@ export function scheduleEventsFromTime(options: ScheduleEventsFromTimeOptions): 
     return
   }
 
-  const resolvedFilePath = resolveAudioFilePath(audioFilePath)
+  // #645 PR-D0: same skip-not-throw contract as scheduleEvents() above.
+  const resolvedFilePath = resolveAudioFilePath(audioFilePath, sequenceName)
+  if (!resolvedFilePath) {
+    return
+  }
 
   // Calculate which loop iteration we're in
   const elapsedTime = fromTime - (loopStartTime || 0)
