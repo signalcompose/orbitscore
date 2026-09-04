@@ -112,16 +112,23 @@ export function loopSequence(options: LoopSequenceOptions): LoopSequenceResult {
   // i.e. a process crash on Node>=22. Surface it as a logged error and keep the
   // loop alive (with the last good schedule) instead. run() / loop() ENTRY
   // still validates eagerly, so entry errors reach the caller as before.
+  //
+  // #645 PR-D0: this catch is a general safety net for scheduling failures that are
+  // NOT the dispatch-skip case — resolveDispatchChannel() / resolveAudioFilePath() no
+  // longer throw (they return a `skip` target / `undefined` and log via their own
+  // callers instead), so this only fires for genuinely unexpected bugs. `[ERROR]`
+  // prefix aligned with the rest of the engine's error-log convention (repl-mode.ts,
+  // sequence.ts's logSkipOnce) so `get_log` readers see one consistent marker.
   const safeSchedule = (run: () => void): void => {
     try {
       const r = run() as unknown as void | Promise<void>
       if (r && typeof (r as Promise<void>).catch === 'function') {
         ;(r as Promise<void>).catch((e) =>
-          console.error(`${sequenceName}: loop scheduling error:`, e),
+          console.error(`[ERROR] Sequence '${sequenceName}': loop scheduling error:`, e),
         )
       }
     } catch (e) {
-      console.error(`${sequenceName}: loop scheduling error:`, e)
+      console.error(`[ERROR] Sequence '${sequenceName}': loop scheduling error:`, e)
     }
   }
 

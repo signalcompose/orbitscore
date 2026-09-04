@@ -611,7 +611,7 @@ export function captureWavPath(tmpRoot: string, slug: string): string {
 `runScore` folds "copy the score into a work copy, evaluate it through the editor path (`open_file` → `set_selection` → `run_selection`), and if asked, analyse the capture and return segment RMS" into one function. Its `evaluate` deliberately does not assert on `ok` / `isError`, for the reason given in [the `ok` section](#what-ok-from-evaluate-orbitscore-means) of this chapter.
 
 ```typescript
-// tests/e2e/helpers/run-score.ts:258-270
+// tests/e2e/helpers/run-score.ts:264-276
     // 🔴 **ただし「assert しない」は「握り潰す」ではない**（silent-failure レビュー 2026-09-04）。
     // `ok` は**必要条件**で、`ok: false` は `get_log` を漁らずその場で取れる一次シグナルである
     // （パース / 実行時診断・`mcp-server.ts` の tool 説明）。捨てると、セットアップの typo が
@@ -805,7 +805,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 It only checks whether `.<name>(` appears anywhere in the gated E2E sources returned by `readGatedSources()`. The vocabulary side is `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` from `packages/engine/src/signal-chain/runtime` — the interpreter's dispatch table itself.
 
 ```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:150-160
+// tests/e2e/dsl-e2e-coverage.spec.ts:149-159
   it('A-1 does not leave a new sequence method untested on real hardware', () => {
     const now = uncovered(SEQUENCE_DSL_METHODS)
     const baseline = new Set(SEQUENCE_UNCOVERED_BASELINE)
@@ -946,7 +946,7 @@ This is where `#654` enters. According to WORK_LOG 6.421, when a new seven-layer
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1394-1404
+// packages/engine/src/core/sequence.ts:1421-1431
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {
