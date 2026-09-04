@@ -1,0 +1,23 @@
+// #611 §9 golden: send(aux, 0.3) uses today's linear amount.
+//
+// 🔴 バス名は一意にする（output_line_sum.orbs の注記と同じ理由）。
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.aux("o0rev611")
+global.start()
+
+var dry = init global.seq
+dry.beat(4 by 4).length(1)
+dry.audio("kick.wav").chop(1)
+dry.play(1, 1, 1, 1)
+
+var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio("kick.wav").chop(1)
+kick.send("o0rev611", 0.3)
+kick.play(1, 1, 1, 1)
+
+LOOP(dry)

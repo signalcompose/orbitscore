@@ -4566,4 +4566,224 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     },
     TEST_TIMEOUT_MS,
   )
+
+  // ──────────────────────────────────────────────────────────────────
+  // #611 §9 / #543-a — capture today's output-line sound before engine changes
+  // ─────────────────────────────────────────────────────────────────
+
+  const requireOutputLineHarness = async () => {
+    expect(client, '#611 output-line setup must initialize the MCP client').toBeDefined()
+    expect(tmpRoot, '#611 output-line setup must initialize the scratch root').toBeDefined()
+    if (!client || !tmpRoot) throw new Error('main gated phase did not initialize suite state')
+    const [sessionHelpers, scoreHelpers, logHelpers, expectations] = await Promise.all([
+      import('./helpers/gated-session'),
+      import('./helpers/run-score'),
+      import('./helpers/engine-log'),
+      import('./output-line-expectations'),
+    ])
+    return {
+      session: sessionHelpers.createGatedSession(client, tmpRoot, requireCatalogFixtures()),
+      runScore: scoreHelpers.runScore,
+      errorBaseline: logHelpers.errorBaseline,
+      expectNoNewErrors: logHelpers.expectNoNewErrors,
+      goldens: expectations.OUTPUT_LINE_GOLDENS,
+    }
+  }
+
+  const relativeDelta = (actual: number, expected: number): number =>
+    Math.abs(actual - expected) / Math.abs(expected)
+
+  it.skipIf(!appAvailable)(
+    '#611 O0-1 keeps the no-bus kick_loop RMS deterministic across two capture sessions',
+    async () => {
+      const harness = await requireOutputLineHarness()
+      const errorsBefore = await harness.errorBaseline(harness.session.client)
+      const captureOnce = async (slug: string) => {
+        const result = await harness.runScore(
+          harness.session,
+          { slug, fixturePath: 'tests/fixtures/mcp-e2e/kick_loop.orbs' },
+          async ({ captureSegment }) => captureSegment('steady', 2500, 500),
+          { capture: true },
+        )
+        expect(result, `${slug} must return captured windows`).toBeDefined()
+        if (!result) throw new Error(`${slug} did not return captured windows`)
+        return result
+      }
+
+      const first = await captureOnce('611-o0-no-bus-first')
+      const second = await captureOnce('611-o0-no-bus-second')
+      const firstRms = first.rms('steady')
+      const secondRms = second.rms('steady')
+      // eslint-disable-next-line no-console
+      console.log('[#611 O0-1] no-bus RMS:', JSON.stringify({ firstRms, secondRms }))
+      expect(first.analysis.format.channels, 'O0-1 requires a 2ch device').toBe(
+        harness.goldens.noBus.channels,
+      )
+      expect(second.analysis.format.channels, 'O0-1 requires a 2ch device').toBe(
+        harness.goldens.noBus.channels,
+      )
+      expect(firstRms, 'O0-1 first no-bus capture must be audible').toBeGreaterThan(
+        harness.goldens.noBus.audibleFloorRms,
+      )
+      expect(secondRms, 'O0-1 second no-bus capture must be audible').toBeGreaterThan(
+        harness.goldens.noBus.audibleFloorRms,
+      )
+      // 🔴 サンプル単位の一致は取れない（録音開始位相がセッションごとに違う・goldens の注記）。
+      //    2 セッションが同じ値に落ちることと、その値が golden から動かないことを見る。
+      expect(
+        relativeDelta(secondRms, firstRms),
+        `O0-1 two no-bus captures must agree; first=${firstRms} second=${secondRms}`,
+      ).toBeLessThanOrEqual(harness.goldens.noBus.tolerance)
+      expect(
+        relativeDelta(firstRms, harness.goldens.noBus.rms),
+        `O0-1 no-bus RMS must stay at ${harness.goldens.noBus.rms}; actual=${firstRms}`,
+      ).toBeLessThanOrEqual(harness.goldens.noBus.tolerance)
+      await harness.expectNoNewErrors(harness.session.client, errorsBefore, '#611 O0-1')
+    },
+    TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 O0-2 pins the explicit sum-output RMS so PR-O2 cannot move it',
+    async () => {
+      const harness = await requireOutputLineHarness()
+      const errorsBefore = await harness.errorBaseline(harness.session.client)
+      const result = await harness.runScore(
+        harness.session,
+        {
+          slug: '611-o0-sum-output',
+          fixturePath: 'tests/fixtures/mcp-e2e/output_line_sum.orbs',
+        },
+        async ({ captureSegment }) => captureSegment('sum', 3000, 500),
+        { capture: true },
+      )
+      expect(result, 'O0-2 must return captured windows').toBeDefined()
+      if (!result) throw new Error('O0-2 did not return captured windows')
+      const sumRms = result.rms('sum')
+      // eslint-disable-next-line no-console
+      console.log('[#611 O0-2] TODO_MEASURED sumOutput.rms:', sumRms)
+      expect(sumRms, 'O0-2 sum output must be audible').toBeGreaterThan(
+        harness.goldens.sumOutput.audibleFloorRms,
+      )
+      expect(
+        relativeDelta(sumRms, harness.goldens.sumOutput.rms),
+        `O0-2 sum RMS must stay at ${harness.goldens.sumOutput.rms}; actual=${sumRms}`,
+      ).toBeLessThanOrEqual(harness.goldens.sumOutput.tolerance)
+      await harness.expectNoNewErrors(harness.session.client, errorsBefore, '#611 O0-2')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    "#611 O0-3 pins today's measured aux/dry ratio for send(0.3)",
+    async () => {
+      const harness = await requireOutputLineHarness()
+      const errorsBefore = await harness.errorBaseline(harness.session.client)
+      const result = await harness.runScore(
+        harness.session,
+        {
+          slug: '611-o0-linear-send',
+          fixturePath: 'tests/fixtures/mcp-e2e/output_line_send.orbs',
+        },
+        async ({ captureSegment, evaluate }) => {
+          await captureSegment('dry', 3000, 500)
+          await evaluate('dry.stop()\nLOOP(kick)')
+          await captureSegment('dryPlusAux', 3000, 500)
+        },
+        { capture: true },
+      )
+      expect(result, 'O0-3 must return captured windows').toBeDefined()
+      if (!result) throw new Error('O0-3 did not return captured windows')
+      const dryRms = result.rms('dry')
+      const totalRms = result.rms('dryPlusAux')
+      const auxRms = totalRms - dryRms
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 O0-3] TODO_MEASURED send dry/aux/total RMS:',
+        JSON.stringify({ dryRms, auxRms, totalRms, auxOverDry: auxRms / dryRms }),
+      )
+      expect(dryRms, 'O0-3 dry path must be audible').toBeGreaterThan(
+        harness.goldens.send.audibleFloorRms,
+      )
+      expect(auxRms, 'O0-3 aux path must contribute audible signal').toBeGreaterThan(
+        harness.goldens.send.audibleFloorRms,
+      )
+      expect(
+        relativeDelta(dryRms, harness.goldens.send.dryRms),
+        `O0-3 dry RMS must match ${harness.goldens.send.dryRms}; actual=${dryRms}`,
+      ).toBeLessThanOrEqual(harness.goldens.send.tolerance)
+      // 🔴 「aux = 0.3 × dry」は実機と合わなかったので assert しない（goldens の注記）。
+      //    測った比をそのまま固定し、PR-O4 は係数の変化分だけ動かす。
+      expect(
+        relativeDelta(auxRms / dryRms, harness.goldens.send.measuredAuxOverDry),
+        `O0-3 aux/dry must stay at ${harness.goldens.send.measuredAuxOverDry}; actual=${auxRms / dryRms}`,
+      ).toBeLessThanOrEqual(harness.goldens.send.tolerance)
+      await harness.expectNoNewErrors(harness.session.client, errorsBefore, '#611 O0-3')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    "#611 O0-4 pins the magnitude of today's effect([...]).gain(-6) (a linear rack cannot show order)",
+    async () => {
+      const harness = await requireOutputLineHarness()
+      const errorsBefore = await harness.errorBaseline(harness.session.client)
+      const result = await harness.runScore(
+        harness.session,
+        {
+          slug: '611-o0-sequence-gain-effect',
+          fixturePath: 'tests/fixtures/mcp-e2e/output_line_gain_effect.orbs',
+        },
+        async ({ captureSegment, evaluate }) => {
+          await captureSegment('dry', 3000, 500)
+          await evaluate('dry.stop()\nLOOP(effectOnly)')
+          await captureSegment('effectOnly', 3000, 500)
+          await evaluate('effectOnly.stop()\nLOOP(kick)')
+          await captureSegment('combined', 3000, 500)
+        },
+        { capture: true },
+      )
+      expect(result, 'O0-4 must return captured windows').toBeDefined()
+      if (!result) throw new Error('O0-4 did not return captured windows')
+      const dryRms = result.rms('dry')
+      const effectOnlyRms = result.rms('effectOnly')
+      const combinedRms = result.rms('combined')
+      const effectOnlyOverDry = effectOnlyRms / dryRms
+      const combinedOverDry = combinedRms / dryRms
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 O0-4] TODO_MEASURED seq gain + effect RMS:',
+        JSON.stringify({
+          dryRms,
+          effectOnlyRms,
+          combinedRms,
+          effectOnlyOverDry,
+          legacyCombinedOverDry: combinedOverDry,
+        }),
+      )
+      expect(dryRms, 'O0-4 dry path must be audible').toBeGreaterThan(
+        harness.goldens.sequenceGainWithEffect.audibleFloorRms,
+      )
+      expect(effectOnlyRms, 'O0-4 rack path must be audible').toBeGreaterThan(
+        harness.goldens.sequenceGainWithEffect.audibleFloorRms,
+      )
+      expect(
+        relativeDelta(dryRms, harness.goldens.sequenceGainWithEffect.dryRms),
+        `O0-4 dry RMS must match ${harness.goldens.sequenceGainWithEffect.dryRms}; actual=${dryRms}`,
+      ).toBeLessThanOrEqual(harness.goldens.sequenceGainWithEffect.tolerance)
+      expect(
+        relativeDelta(effectOnlyOverDry, harness.goldens.sequenceGainWithEffect.effectOnlyOverDry),
+        `O0-4 effect-only/dry must match ${harness.goldens.sequenceGainWithEffect.effectOnlyOverDry}; actual=${effectOnlyOverDry}`,
+      ).toBeLessThanOrEqual(harness.goldens.sequenceGainWithEffect.tolerance)
+      expect(
+        relativeDelta(
+          combinedOverDry,
+          harness.goldens.sequenceGainWithEffect.legacyCombinedOverDry,
+        ),
+        `O0-4 legacy combined/dry must match ${harness.goldens.sequenceGainWithEffect.legacyCombinedOverDry}; actual=${combinedOverDry}`,
+      ).toBeLessThanOrEqual(harness.goldens.sequenceGainWithEffect.tolerance)
+      await harness.expectNoNewErrors(harness.session.client, errorsBefore, '#611 O0-4')
+    },
+    TEST_TIMEOUT_MS,
+  )
 })
