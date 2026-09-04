@@ -1410,11 +1410,27 @@ async fn handle_command(
                 .and_then(|d| d.as_str())
                 .map(|s| s.to_string())
                 .filter(|s| !s.trim().is_empty());
-            let engine = engine.clone();
+            let engine_for_switch = engine.clone();
             let switched =
-                tokio::task::spawn_blocking(move || engine.select_audio_device(device)).await;
+                tokio::task::spawn_blocking(move || engine_for_switch.select_audio_device(device))
+                    .await;
             match switched {
-                Ok(Ok(device)) => ok(&id, json!({ "ok": true, "device": device })),
+                Ok(Ok(device)) => {
+                    let output = engine.stream_config_snapshot();
+                    ok(
+                        &id,
+                        json!({
+                            "ok": true,
+                            "device": device,
+                            "device_requested": output.device_requested,
+                            "device_fell_back": output.device_fell_back,
+                            "fallback_reason": output.fallback_reason,
+                            "first_callback_ms": output.first_callback_ms,
+                            "sample_rate": output.sample_rate,
+                            "channels": output.channels,
+                        }),
+                    )
+                }
                 Ok(Err(e)) => err(&id, wrap_err_to_protocol(&e)),
                 Err(join_err) => err(
                     &id,
@@ -1434,7 +1450,15 @@ async fn handle_command(
                 "active_plays": engine.active_play_count(),
                 "uptime_sec": engine.uptime_sec(),
                 "render_contentions": stream_stats.render_contentions,
-                "output": { "device_name": stream_config.device_name, "sample_rate": stream_config.sample_rate, "channels": stream_config.channels },
+                "output": {
+                    "device_name": stream_config.device_name,
+                    "sample_rate": stream_config.sample_rate,
+                    "channels": stream_config.channels,
+                    "device_requested": stream_config.device_requested,
+                    "device_fell_back": stream_config.device_fell_back,
+                    "fallback_reason": stream_config.fallback_reason,
+                    "first_callback_ms": stream_config.first_callback_ms,
+                },
                 "callback": { "count": stream_stats.callbacks, "alive": engine.callback_alive(), "last_frames": stream_stats.last_frames },
             });
             ok(&id, status)
@@ -2550,6 +2574,7 @@ fn err(id: &str, error: ProtocolError) -> Value {
 
 fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
     use orbit_audio_native::LoaderError as L;
+    use orbit_audio_native::OutputError as O;
     match e {
         WrapError::SampleNotFound(sid) => {
             ProtocolError::new("SAMPLE_NOT_FOUND", format!("sample_id not found: {sid}"))
@@ -2564,6 +2589,14 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         WrapError::Loader(L::Io(io)) => ProtocolError::new("INTERNAL_ERROR", io.to_string()),
         WrapError::Loader(L::Resample(r)) => ProtocolError::new("RESAMPLE_ERROR", r.to_string()),
         WrapError::Resample(r) => ProtocolError::new("RESAMPLE_ERROR", r.to_string()),
+        WrapError::Output(O::StreamDead { .. }) => ProtocolError::new(
+            crate::protocol::ERROR_CODE_AUDIO_DEVICE_STREAM_DEAD,
+            e.to_string(),
+        ),
+        WrapError::Output(O::SampleRateMismatch { .. }) => ProtocolError::new(
+            crate::protocol::ERROR_CODE_AUDIO_DEVICE_RATE_MISMATCH,
+            e.to_string(),
+        ),
         WrapError::Output(o) => ProtocolError::new("DEVICE_CONFIG_ERROR", o.to_string()),
         WrapError::Scheduler(msg) => ProtocolError::new("INTERNAL_ERROR", msg.clone()),
         // feature-gap（TS は warn-once で握り潰す）と runtime 失敗（TS は rethrow）を別コードにする。
@@ -2743,6 +2776,10 @@ mod tests {
         assert_eq!(result["output"]["device_name"], "test audio backend");
         assert_eq!(result["output"]["sample_rate"], 96_000);
         assert_eq!(result["output"]["channels"], 6);
+        assert_eq!(result["output"]["device_requested"], Value::Null);
+        assert_eq!(result["output"]["device_fell_back"], false);
+        assert_eq!(result["output"]["fallback_reason"], Value::Null);
+        assert_eq!(result["output"]["first_callback_ms"], 0);
         assert_eq!(result["callback"]["count"], 1);
         assert_eq!(result["callback"]["alive"], true);
         assert_eq!(result["callback"]["last_frames"], 384);
@@ -3538,6 +3575,27 @@ mod tests {
     fn link_audio_runtime_maps_to_runtime_code() {
         let e = WrapError::LinkAudio("channel limit reached".into());
         assert_eq!(wrap_err_to_protocol(&e).code, "LINK_AUDIO_RUNTIME");
+    }
+
+    #[test]
+    fn audio_device_liveness_errors_map_to_actionable_codes() {
+        let dead = WrapError::Output(orbit_audio_native::OutputError::StreamDead {
+            device: "USB Audio".into(),
+            waited_ms: 3_000,
+        });
+        assert_eq!(
+            wrap_err_to_protocol(&dead).code,
+            crate::protocol::ERROR_CODE_AUDIO_DEVICE_STREAM_DEAD
+        );
+        let mismatch = WrapError::Output(orbit_audio_native::OutputError::SampleRateMismatch {
+            device: "USB Audio".into(),
+            device_rate: 44_100,
+            engine_rate: 48_000,
+        });
+        assert_eq!(
+            wrap_err_to_protocol(&mismatch).code,
+            crate::protocol::ERROR_CODE_AUDIO_DEVICE_RATE_MISMATCH
+        );
     }
 
     // CLAP エラーの protocol code 分割を pin（LinkAudio と同様: feature-gap=UNAVAILABLE /

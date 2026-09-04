@@ -282,7 +282,9 @@ async function executeSelectAudioDeviceMeta(
       result = { ok: true, device: await audioEngine.selectAudioDevice(device) }
     }
   } catch (error: any) {
-    result = { ok: false, error: error?.message ?? String(error) }
+    const message = error?.message ?? String(error)
+    console.error(`❌ live device switch to "${device}" failed: ${message}`)
+    result = { ok: false, error: message }
   }
   console.log(JSON.stringify({ selectAudioDevice: result }))
 }

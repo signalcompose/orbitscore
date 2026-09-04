@@ -211,6 +211,12 @@ issue にあるのは**観測**（daemon CPU 0.0% / 縮退警告なし / child �
 
 ### 5.2 直すもの（原因が C1/C2/C3 のどれでも要る）
 
+> **#661 PR-V4 追補（2026-09-05）**: 実装の正本は
+> [`661-audio-device-liveness-design.md`](661-audio-device-liveness-design.md) §4。callback 判定は
+> `play()` 後だけでなく、**Engine / RenderState を作る前の probe**で候補を確定する。これにより
+> 名指し stream の cpal 参照循環があっても、dead 判定後に callback-owned state を回収せず
+> host 既定へ縮退できる。probe は専用 counter を使い、`StreamStats.callbacks` を増やさない。
+
 1. **起動時に掴んだ構成をログへ**（issue の直すべきこと 2・正本 §4 最終行）。現在 `[daemon]` は `listening` と `accepted connection` の 2 行だけ（`main.rs:128` 付近）。
    出す: `requested` / `resolved` / `fell_back` / `sample_rate` / `channels` / `sample_format` / `buffer_size` / **最初のコールバックまでの実測 ms**。
    🔴 **これは診断であると同時に §5.1 の実験そのもの**。原因調査のために別の一時コードを書かない。
@@ -223,18 +229,16 @@ issue にあるのは**観測**（daemon CPU 0.0% / 縮退警告なし / child �
 
 ### 5.3 切替後の確認（正本 §6.2 の実装範囲）
 
-`apply_device_switch`（`engine_wrap.rs:4857-4882`）に**確認とロールバック**を足す。
+`apply_device_switch` の確定手順は
+[`661-audio-device-liveness-design.md`](661-audio-device-liveness-design.md) §4.3–§4.4 とする。
+**旧 stream を `pause()` → 新候補を専用 stream で probe → 実 stream を build/play → callback
+事後確認 → 成功時だけ差し替え**の順で、失敗時は新 stream を `pause()` して捨て、旧 stream を
+`play()` で再開する。`OutputStream::drop` 自身も先に `pause()` するため、cpal 0.15.3 の名指し
+stream 参照循環が残っても二重レンダを継続させない。
 
-🔴 **「確認してから差し替える」は採れない。** `rebuild_output_stream` は `render_state` と `engine` を**新旧ストリームで共有**する（`output.rs:1473-1479`）。新ストリームを play したまま確認のために待つと、**2 つのコールバックが同じ engine を進める**（トランスポートが 2 倍速・音が 2 デバイスへ分裂）。現在この窓が極小なのは、play の直後に代入しているから。
-
-| 案 | 手順 | 判断 |
-|---|---|---|
-| **A（推奨）** | 旧 stream を `pause()` → 新 stream を build + play → `callbacks` の前進を確認 → 成功なら旧を drop / 失敗なら**新を捨てて旧を `play()` 再開** | 二重レンダの窓が無い。cpal の `Stream::pause()` / `play()` を使う |
-| B | 代入してから確認 → 失敗なら**直前のデバイス名**で再構築 | `previous_device` の保持が要る。復帰も失敗したら FATAL event（`session.rs:765` と同じ形）を出す |
-
-**どちらでも `output.sample_rate` / `channels` / `device_name` を wrap へ書き戻す**（§4.1）。書き戻さないと `GetStatus` が嘘をつく。
-
-🔴 **切替後にレート / チャンネル数が変わる場合の未検証点**: `rebuild_output_stream` は `Engine` を作り直さず、insert bus の `ensure_buffer_len`（`output.rs:1404-1409`）も呼ばない。**レートが上がる / チャンネルが増えるデバイスへ切り替えたときの挙動は未確認**。§13 の失敗モード表に置き、**バッチ D で実測して属性を確定させる**（正本 §6「未検証は未検証と書く」）。
+ライブ切替で sample rate が現在の Engine と異なる候補は
+`AUDIO_DEVICE_RATE_MISMATCH` で拒否し、再起動へ誘導する。切替成功時は `device_name` / rate /
+channels に加え、requested / fallback reason / first callback ms を同じ snapshot へ書き戻す。
 
 ---
 

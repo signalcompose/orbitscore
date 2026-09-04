@@ -246,6 +246,8 @@ export function parseSelectAudioDeviceResultLine(
  * (a)). Shared between `translateSelectAudioDeviceError` and `extension.ts`'s
  * restart-prompt branch so the two checks can't drift out of sync. */
 export const AUDIO_DEVICE_SWITCH_UNAVAILABLE = 'AUDIO_DEVICE_SWITCH_UNAVAILABLE'
+export const AUDIO_DEVICE_STREAM_DEAD = 'AUDIO_DEVICE_STREAM_DEAD'
+export const AUDIO_DEVICE_RATE_MISMATCH = 'AUDIO_DEVICE_RATE_MISMATCH'
 
 /**
  * User-facing translation for the daemon's `AUDIO_DEVICE_SWITCH_UNAVAILABLE` error
@@ -256,6 +258,12 @@ export const AUDIO_DEVICE_SWITCH_UNAVAILABLE = 'AUDIO_DEVICE_SWITCH_UNAVAILABLE'
 export function translateSelectAudioDeviceError(error: string | undefined): string {
   if (error && error.includes(AUDIO_DEVICE_SWITCH_UNAVAILABLE)) {
     return '録音中は切替できません — エンジンを再起動してください'
+  }
+  if (error && error.includes(AUDIO_DEVICE_STREAM_DEAD)) {
+    return `デバイスから音声コールバックが届きません — 元の出力を継続します (${error})`
+  }
+  if (error && error.includes(AUDIO_DEVICE_RATE_MISMATCH)) {
+    return `サンプルレートが異なるため切替できません — エンジンを再起動してください (${error})`
   }
   return error ?? 'live audio device switch failed'
 }

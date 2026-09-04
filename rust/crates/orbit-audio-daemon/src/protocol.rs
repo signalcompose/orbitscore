@@ -86,6 +86,8 @@ pub const ERROR_SEVERITY_FATAL: &str = "fatal";
 pub const ERROR_CODE_STREAM_XRUN: &str = "STREAM_XRUN";
 pub const ERROR_CODE_DEVICE_LOST: &str = "DEVICE_LOST";
 pub const ERROR_CODE_FATAL_PANIC: &str = "FATAL_PANIC";
+pub const ERROR_CODE_AUDIO_DEVICE_STREAM_DEAD: &str = "AUDIO_DEVICE_STREAM_DEAD";
+pub const ERROR_CODE_AUDIO_DEVICE_RATE_MISMATCH: &str = "AUDIO_DEVICE_RATE_MISMATCH";
 /// LinkAudio egress の ring overflow drop（消費が追いつかず音が落ちた）。WARNING severity。
 /// daemon が 1 Hz ticker で aggregate drop 数の増加を検知して発火する（A4-2b-2b）。
 pub const ERROR_CODE_LINK_EGRESS_DROP: &str = "LINK_EGRESS_DROP";

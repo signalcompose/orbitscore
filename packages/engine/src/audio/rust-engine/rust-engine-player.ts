@@ -573,6 +573,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       const status = await this.daemon.getStatus()
       const uptime = Number(status.uptime_sec)
       this.clockAnchor = { tsMs: Date.now(), daemonSec: Number.isFinite(uptime) ? uptime : 0 }
+      this.reportAudioOutput(status)
     } catch (err) {
       // anchor=0 は初回 StreamStats（≤約1s）で自己修復するが、その間 onset clip しうるので
       // 無言にせず通知する（空 catch を避ける）。
@@ -895,7 +896,37 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * @returns 実際に適用されたデバイス名。
    */
   async selectAudioDevice(device: string): Promise<string> {
-    return this.daemon.selectAudioDevice(device)
+    const selected = await this.daemon.selectAudioDevice(device)
+    this.reportAudioOutput(await this.daemon.getStatus())
+    return selected
+  }
+
+  private reportAudioOutput(status: Record<string, unknown>): void {
+    const output = status.output as
+      | {
+          device_name?: unknown
+          sample_rate?: unknown
+          channels?: unknown
+          device_requested?: unknown
+          device_fell_back?: unknown
+          fallback_reason?: unknown
+          first_callback_ms?: unknown
+        }
+      | undefined
+    if (!output || typeof output.device_name !== 'string') return
+    if (
+      output.device_fell_back === true &&
+      typeof output.device_requested === 'string' &&
+      typeof output.fallback_reason === 'string'
+    ) {
+      console.error(
+        `❌ audio device fallback: requested "${output.device_requested}" → using "${output.device_name}": ${output.fallback_reason}`,
+      )
+    }
+    console.log(
+      `🔊 output: "${output.device_name}" @ ${Number(output.sample_rate)} Hz × ${Number(output.channels)}ch ` +
+        `(first callback ${Number(output.first_callback_ms)} ms)`,
+    )
   }
 
   /**

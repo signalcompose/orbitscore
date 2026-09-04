@@ -40,6 +40,7 @@
  */
 
 import { spawn, execFileSync, type ChildProcess } from 'child_process'
+import { randomUUID } from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -865,6 +866,34 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // proves the rejection message mentions "debug" rather than being
       // hardcoded to the capture wording (see the unit-level equivalent in
       // engine-lifecycle.spec.ts's `decideStartEngineForAgent` describe).
+
+      // ── #661 D-1: a missing named device falls back loudly ──
+      // This runs before capture is enabled because live device switching is intentionally
+      // rejected while ORBIT_CAPTURE_WAV is active.
+      const missingAudioDevice = `NoSuchDevice-${randomUUID()}`
+      const beforeDeviceFallbackLog = (await client.call('get_log', { lines: 500 })).text
+      const errorsBeforeDeviceFallback = countErrors(beforeDeviceFallbackLog)
+      const selectMissingDevice = await client.call('select_audio_device', {
+        device: missingAudioDevice,
+      })
+      expect(selectMissingDevice.isError, selectMissingDevice.text).toBe(false)
+      await waitUntil(
+        async () => {
+          const log = (await client!.call('get_log', { lines: 500 })).text
+          return countErrors(log) >= errorsBeforeDeviceFallback + 1
+        },
+        { intervalMs: 250, timeoutMs: 10_000, label: '#661 D-1 device fallback log' },
+      )
+      const afterDeviceFallbackLog = (await client.call('get_log', { lines: 500 })).text
+      expect(
+        countErrors(afterDeviceFallbackLog),
+        `#661 D-1 must add a fallback ERROR. Log tail: ${afterDeviceFallbackLog.slice(-1600)}`,
+      ).toBeGreaterThanOrEqual(errorsBeforeDeviceFallback + 1)
+      expect(afterDeviceFallbackLog).toContain(
+        `❌ audio device fallback: requested "${missingAudioDevice}"`,
+      )
+      expect(afterDeviceFallbackLog).toContain('not found')
+      expect(afterDeviceFallbackLog).toContain('🔊 output: "')
 
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
@@ -4825,5 +4854,135 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       await expectNoNewErrors(session.client, errorsBefore, '#611 O0-4')
     },
     TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#661 D-2/D-3 keeps audio live across requested-device liveness failures',
+    async () => {
+      // This is a dedicated app process because startup fault injection is immutable typed state;
+      // changing it in the shared long-running suite would invalidate all following scenarios.
+      killOrbitStudio()
+      const faultTmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orbitstudio-device-gate-'))
+      const faultUserData = path.join(faultTmpRoot, 'user-data')
+      const faultExtensions = path.join(faultTmpRoot, 'extensions')
+      fs.mkdirSync(path.join(faultTmpRoot, '.vscode'), { recursive: true })
+      fs.mkdirSync(faultUserData, { recursive: true })
+      fs.mkdirSync(faultExtensions, { recursive: true })
+      fs.mkdirSync(path.join(faultTmpRoot, 'test-assets/audio'), { recursive: true })
+      fs.copyFileSync(
+        path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
+        path.join(faultTmpRoot, 'test-assets/audio/kick.wav'),
+      )
+
+      const daemonBinary = resolveDaemonBinaryPath().path
+      const listed = JSON.parse(
+        execFileSync(daemonBinary, ['--list-audio-devices'], { encoding: 'utf8' }),
+      ) as { devices: Array<{ name: string; isDefault: boolean }> }
+      const requested = listed.devices.find((device) => device.isDefault) ?? listed.devices[0]
+      expect(requested, '#661 D-2/D-3 require an output device').toBeDefined()
+      fs.writeFileSync(
+        path.join(faultTmpRoot, '.vscode/settings.json'),
+        JSON.stringify(
+          {
+            'orbitscore.audioDevice': requested!.name,
+            'orbitscore.engineDebug': false,
+          },
+          null,
+          2,
+        ) + '\n',
+      )
+
+      const faultPort = 39600 + Math.floor(Math.random() * 200)
+      const faultChild = spawn(
+        path.join(appPath, 'Contents/Resources/app/bin/orbs'),
+        [
+          '--new-window',
+          `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
+          `--user-data-dir=${faultUserData}`,
+          `--extensions-dir=${faultExtensions}`,
+          faultTmpRoot,
+        ],
+        {
+          env: {
+            ...process.env,
+            ORBITSCORE_MCP_PORT: String(faultPort),
+            ORBIT_DAEMON_ALLOW_FAULT_INJECTION: '1',
+            ORBIT_AUDIO_OUTPUT_FAULT: 'dead-probe-requested',
+          },
+          stdio: 'ignore',
+          detached: false,
+        },
+      )
+
+      let faultClient: McpClient | undefined
+      try {
+        faultClient = await pollInitialize(faultPort, { intervalMs: 2000, timeoutMs: 60_000 })
+        await waitUntil(
+          async () => {
+            const state = await faultClient!.call('get_engine_state')
+            return (JSON.parse(state.text) as { running: boolean }).running
+          },
+          { intervalMs: 500, timeoutMs: 30_000, label: '#661 fault engine running' },
+        )
+
+        const emptyCatalog: GatedCatalog = {
+          clapSynthPath: '',
+          clapEffectPath: '',
+          vst3SynthPath: '',
+          vst3EffectPath: '',
+          clapSynthName: '',
+          clapEffectName: '',
+          vst3SynthName: '',
+          vst3EffectName: '',
+        }
+        const faultSession = createGatedSession(faultClient, faultTmpRoot, emptyCatalog)
+
+        // D-2: the injected-dead named unit falls back, and the user's score is still audible.
+        const captured = await runScore(
+          faultSession,
+          { slug: '661-d2-dead-device', fixturePath: KICK_LOOP_FIXTURE },
+          async (ctx) => ctx.captureSegment('playing', 1800, 500),
+          { capture: true },
+        )
+        expect(captured, '#661 D-2 must return capture analysis').toBeDefined()
+        expect(
+          captured!.rms('playing'),
+          '#661 D-2 fallback output must be audible',
+        ).toBeGreaterThan(0)
+
+        // D-3: while the score is sounding, a dead live-switch candidate fails and the old
+        // stream resumes. The one expected failure is allowed; no asynchronous ERROR follows it.
+        await runScore(
+          faultSession,
+          { slug: '661-d3-switch-failure', fixturePath: KICK_LOOP_FIXTURE },
+          async (ctx) => {
+            await ctx.captureSegment('sounding-before-switch', 500, 300)
+            const failed = await faultClient!.call('select_audio_device', {
+              device: `NoSuchDevice-${randomUUID()}`,
+            })
+            expect(failed.isError, failed.text).toBe(true)
+            expect(failed.text).toContain('callback')
+            const errorsAfterExpectedFailure = await errorBaseline(faultClient!)
+            await sleep(1000)
+            await expectNoNewErrors(
+              faultClient!,
+              errorsAfterExpectedFailure,
+              '#661 D-3 after expected switch failure',
+            )
+          },
+        )
+      } finally {
+        if (faultClient) {
+          try {
+            await faultClient.call('stop_engine')
+          } catch {
+            // best-effort cleanup
+          }
+        }
+        if (!faultChild.killed) faultChild.kill()
+        fs.rmSync(faultTmpRoot, { recursive: true, force: true })
+      }
+    },
+    TEST_TIMEOUT_MS * 2,
   )
 })

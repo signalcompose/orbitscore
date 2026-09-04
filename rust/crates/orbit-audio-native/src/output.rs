@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
@@ -112,10 +112,94 @@ pub enum OutputError {
     BuildStream(String),
     #[error("cpal play stream error: {0}")]
     PlayStream(String),
+    #[error("cpal pause stream error: {0}")]
+    PauseStream(String),
     #[error("failed to read output device name: {0}")]
     DeviceName(String),
     #[error("capture writer error: {0}")]
     Capture(String),
+    #[error("audio output device \"{device}\" produced no callback within {waited_ms} ms")]
+    StreamDead { device: String, waited_ms: u64 },
+    #[error(
+        "audio output device \"{device}\" uses {device_rate} Hz, but the running engine uses {engine_rate} Hz; restart the engine to change sample rate"
+    )]
+    SampleRateMismatch {
+        device: String,
+        device_rate: u32,
+        engine_rate: u32,
+    },
+}
+
+/// Test-only liveness failure selected by the daemon's typed startup options.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub enum OutputFault {
+    #[default]
+    None,
+    DeadProbeRequested,
+    DeadAllProbes,
+    DeadRealStream,
+}
+
+/// A requested output device and optional gated fault injection.
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct OutputDeviceRequest {
+    pub name: Option<String>,
+    pub fault: OutputFault,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct DeviceFallback {
+    pub requested: String,
+    pub reason: String,
+}
+
+struct ResolvedOutputDevice {
+    device: Device,
+    name: String,
+    fallback: Option<DeviceFallback>,
+}
+
+/// The sole callback-liveness deadline used by both the preflight probe and the real stream.
+pub const FIRST_CALLBACK_DEADLINE: Duration = Duration::from_millis(3_000);
+const FIRST_CALLBACK_POLL: Duration = Duration::from_millis(10);
+
+/// A device may reach the rendering path only after its standalone preflight stream produced a
+/// callback. All fields remain private so callers cannot bypass the gate when building a stream.
+pub struct LiveOutputDevice {
+    device: Device,
+    name: String,
+    config: StreamConfig,
+    sample_format: SampleFormat,
+    requested: Option<String>,
+    fallback: Option<DeviceFallback>,
+    probe_ms: u64,
+    fault: OutputFault,
+}
+
+impl LiveOutputDevice {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn sample_rate(&self) -> u32 {
+        self.config.sample_rate.0
+    }
+
+    pub fn channels(&self) -> u16 {
+        self.config.channels
+    }
+
+    pub fn requested(&self) -> Option<&str> {
+        self.requested.as_deref()
+    }
+
+    pub fn fallback(&self) -> Option<&DeviceFallback> {
+        self.fallback.as_ref()
+    }
+
+    pub fn probe_ms(&self) -> u64 {
+        self.probe_ms
+    }
 }
 
 /// `ListAudioDevices`（#484 D1）の 1 デバイス分。cpal の output device 列挙結果を wire 用に
@@ -182,17 +266,21 @@ pub fn resolve_requested_device_name(
 /// `start_output_inner` から呼ばれる cpal I/O 込みの device 解決（#484 D1）。`resolve_requested_device_name`
 /// （pure）に実際の host 列挙を組み合わせる。`requested` が `None` なら常に host 既定を使う
 /// （列挙コストを払わない・従来経路とビット同一）。一致するデバイスが見つからない場合は
-/// stderr に警告して host 既定へ縮退する（daemon 起動を失敗させない）。
+/// fallback metadata を付けて host 既定へ縮退する（daemon 起動を失敗させない）。
 fn resolve_output_device(
     host: &cpal::Host,
     requested: Option<&str>,
-) -> Result<(Device, String), OutputError> {
+) -> Result<ResolvedOutputDevice, OutputError> {
     let Some(requested) = requested else {
         let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
         let name = device
             .name()
             .map_err(|e| OutputError::DeviceName(e.to_string()))?;
-        return Ok((device, name));
+        return Ok(ResolvedOutputDevice {
+            device,
+            name,
+            fallback: None,
+        });
     };
 
     // 【重要・確認 E2E での P0 再発防止】ここで `host.output_devices()` を使ってはいけない。
@@ -221,29 +309,208 @@ fn resolve_output_device(
         // 縮退する（起動失敗にしない）。probe はユーザーが明示指定した 1 台に限定される。
         Some((device, name)) => {
             if device.default_output_config().is_ok() {
-                Ok((device, name))
+                Ok(ResolvedOutputDevice {
+                    device,
+                    name,
+                    fallback: None,
+                })
             } else {
-                eprintln!(
-                    "[audio-device] requested device \"{requested}\" is not an output device — falling back to system default output"
+                let reason = format!(
+                    "requested device \"{requested}\" is not an output device — falling back to system default output"
                 );
                 let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
                 let name = device
                     .name()
                     .map_err(|e| OutputError::DeviceName(e.to_string()))?;
-                Ok((device, name))
+                Ok(ResolvedOutputDevice {
+                    device,
+                    name,
+                    fallback: Some(DeviceFallback {
+                        requested: requested.to_string(),
+                        reason,
+                    }),
+                })
             }
         }
         None => {
-            eprintln!(
-                "[audio-device] requested device \"{requested}\" not found (available: {available_names:?}) — falling back to system default output"
+            let reason = format!(
+                "requested device \"{requested}\" not found (available: {available_names:?}) — falling back to system default output"
             );
             let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
             let name = device
                 .name()
                 .map_err(|e| OutputError::DeviceName(e.to_string()))?;
-            Ok((device, name))
+            Ok(ResolvedOutputDevice {
+                device,
+                name,
+                fallback: Some(DeviceFallback {
+                    requested: requested.to_string(),
+                    reason,
+                }),
+            })
         }
     }
+}
+
+fn output_config(
+    resolved: ResolvedOutputDevice,
+    buffer_frames: Option<u32>,
+    expected_sample_rate: Option<u32>,
+    request: &OutputDeviceRequest,
+) -> Result<LiveOutputDevice, OutputError> {
+    let supported = resolved
+        .device
+        .default_output_config()
+        .map_err(|e| OutputError::NoConfig(e.to_string()))?;
+    let sample_format = supported.sample_format();
+    let mut config = supported.config();
+    if let Some(frames) = buffer_frames {
+        config.buffer_size = cpal::BufferSize::Fixed(frames);
+    }
+    validate_expected_sample_rate(&resolved.name, config.sample_rate.0, expected_sample_rate)?;
+    Ok(LiveOutputDevice {
+        device: resolved.device,
+        name: resolved.name,
+        config,
+        sample_format,
+        requested: request.name.clone(),
+        fallback: resolved.fallback,
+        probe_ms: 0,
+        fault: request.fault,
+    })
+}
+
+fn validate_expected_sample_rate(
+    device: &str,
+    device_rate: u32,
+    expected_sample_rate: Option<u32>,
+) -> Result<(), OutputError> {
+    if let Some(engine_rate) = expected_sample_rate {
+        if device_rate != engine_rate {
+            return Err(OutputError::SampleRateMismatch {
+                device: device.to_string(),
+                device_rate,
+                engine_rate,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn confirm_callback_counter(
+    callbacks: &AtomicU64,
+    baseline: u64,
+    deadline: Duration,
+) -> Option<u64> {
+    let started = Instant::now();
+    loop {
+        if callbacks.load(Ordering::Relaxed) > baseline {
+            return Some(started.elapsed().as_millis() as u64);
+        }
+        if started.elapsed() >= deadline {
+            return None;
+        }
+        std::thread::sleep(FIRST_CALLBACK_POLL.min(deadline.saturating_sub(started.elapsed())));
+    }
+}
+
+fn probe_output_device(
+    live: &LiveOutputDevice,
+    suppress_callback: bool,
+) -> Result<Option<u64>, OutputError> {
+    // This counter is deliberately probe-local. Reusing StreamStats would inflate the ticker's
+    // callback count before the real stream exists.
+    let callbacks = Arc::new(AtomicU64::new(0));
+    let callback_counter = callbacks.clone();
+    let stream = live
+        .device
+        .build_output_stream_raw(
+            &live.config,
+            live.sample_format,
+            move |data, _| {
+                data.bytes_mut().fill(0);
+                if !suppress_callback {
+                    callback_counter.fetch_add(1, Ordering::Relaxed);
+                }
+            },
+            |_| {},
+            None,
+        )
+        .map_err(|e| OutputError::BuildStream(e.to_string()))?;
+    if let Err(error) = stream.play() {
+        let _ = stream.pause();
+        drop(stream);
+        return Err(OutputError::PlayStream(error.to_string()));
+    }
+    let result = confirm_callback_counter(&callbacks, 0, FIRST_CALLBACK_DEADLINE);
+    // cpal 0.15.3 can retain named streams through a reference cycle. Explicit pause is therefore
+    // required before every probe stream is dropped.
+    let _ = stream.pause();
+    drop(stream);
+    Ok(result)
+}
+
+fn probe_candidate(
+    mut live: LiveOutputDevice,
+    requested_candidate: bool,
+) -> Result<Option<LiveOutputDevice>, OutputError> {
+    let suppress = live.fault == OutputFault::DeadAllProbes
+        || (requested_candidate && live.fault == OutputFault::DeadProbeRequested);
+    match probe_output_device(&live, suppress)? {
+        Some(probe_ms) => {
+            live.probe_ms = probe_ms;
+            Ok(Some(live))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Resolve and preflight the finite startup/switch candidate list before engine-owned state is
+/// constructed or moved into a real callback.
+pub fn select_live_output_device(
+    request: OutputDeviceRequest,
+    buffer_frames: Option<u32>,
+    expected_sample_rate: Option<u32>,
+    allow_dead_fallback: bool,
+) -> Result<LiveOutputDevice, OutputError> {
+    let host = cpal::default_host();
+    let first = output_config(
+        resolve_output_device(&host, request.name.as_deref())?,
+        buffer_frames,
+        expected_sample_rate,
+        &request,
+    )?;
+    let first_name = first.name.clone();
+    if let Some(live) = probe_candidate(first, request.name.is_some())? {
+        return Ok(live);
+    }
+
+    let Some(requested) = request.name.clone().filter(|_| allow_dead_fallback) else {
+        return Err(OutputError::StreamDead {
+            device: first_name,
+            waited_ms: FIRST_CALLBACK_DEADLINE.as_millis() as u64,
+        });
+    };
+
+    let fallback_reason = format!(
+        "requested device \"{requested}\" produced no callback within {} ms — falling back to system default output",
+        FIRST_CALLBACK_DEADLINE.as_millis()
+    );
+    let mut fallback = output_config(
+        resolve_output_device(&host, None)?,
+        buffer_frames,
+        expected_sample_rate,
+        &request,
+    )?;
+    fallback.fallback = Some(DeviceFallback {
+        requested,
+        reason: fallback_reason,
+    });
+    let fallback_name = fallback.name.clone();
+    probe_candidate(fallback, false)?.ok_or(OutputError::StreamDead {
+        device: fallback_name,
+        waited_ms: FIRST_CALLBACK_DEADLINE.as_millis() as u64,
+    })
 }
 
 /// capture ring の秒数（`sample_rate * channels * 秒`）。off-thread writer が瞬間的な disk
@@ -262,6 +529,10 @@ pub struct OutputStream {
     pub device_name: String,
     pub sample_rate: u32,
     pub channels: u16,
+    pub device_requested: Option<String>,
+    pub device_fallback: Option<DeviceFallback>,
+    pub first_callback_ms: u64,
+    fault: OutputFault,
 }
 
 impl OutputStream {
@@ -275,6 +546,30 @@ impl OutputStream {
     /// （検証ハーネス/オペレータが assert・監視する silent-failure ガード）。
     pub fn capture_drops(&self) -> Option<u64> {
         self._capture.as_ref().map(|w| w.dropped_samples())
+    }
+
+    pub fn pause(&self) -> Result<(), OutputError> {
+        self._stream
+            .pause()
+            .map_err(|e| OutputError::PauseStream(e.to_string()))
+    }
+
+    pub fn play(&self) -> Result<(), OutputError> {
+        self._stream
+            .play()
+            .map_err(|e| OutputError::PlayStream(e.to_string()))
+    }
+
+    pub fn fault(&self) -> OutputFault {
+        self.fault
+    }
+}
+
+impl Drop for OutputStream {
+    fn drop(&mut self) {
+        // cpal 0.15.3 retains named CoreAudio streams through a reference cycle. Dropping the
+        // wrapper alone does not stop callbacks; pause must happen before field destruction.
+        let _ = self._stream.pause();
     }
 }
 
@@ -1192,15 +1487,15 @@ type OutputInnerStart = (
 /// 既定の出力デバイスを使い、デバイス config に合う [`Engine`] とストリームを
 /// 同時に初期化する（hardware-only）。呼び出し側は config ミスマッチを意識しなくてよい。
 pub fn start_default_output(capture_path: Option<PathBuf>) -> Result<OutputStart, OutputError> {
-    start_default_output_with_device(capture_path, None)
+    start_default_output_with_device(capture_path, OutputDeviceRequest::default())
 }
 
 /// [`start_default_output`] の device 指定版（#484 D1）。`device_name` が `Some` かつ一致する出力
 /// device が見つかれば起動時にそれを honor する。`None`、または一致しない場合は host 既定へ
-/// warn 付きで縮退する（`start_output_inner` 側の共通ロジック）。
+/// fallback metadata 付きで縮退する（`start_output_inner` 側の共通ロジック）。
 pub fn start_default_output_with_device(
     capture_path: Option<PathBuf>,
-    device_name: Option<String>,
+    device_request: OutputDeviceRequest,
 ) -> Result<OutputStart, OutputError> {
     let (engine, stream, stats, _cb) = start_output_inner(
         None,
@@ -1210,7 +1505,7 @@ pub fn start_default_output_with_device(
         false,
         None,
         capture_path,
-        device_name,
+        device_request,
     )?;
     Ok((engine, stream, stats))
 }
@@ -1221,7 +1516,7 @@ pub fn start_default_output_with_device(
 pub fn start_default_output_with_link_egress(
     reg_capacity: usize,
     capture_path: Option<PathBuf>,
-    device_name: Option<String>,
+    device_request: OutputDeviceRequest,
 ) -> Result<LinkEgressStart, OutputError> {
     let (reg_tx, reg_rx) = rtrb::RingBuffer::new(reg_capacity);
     let link = LinkEgress {
@@ -1237,7 +1532,7 @@ pub fn start_default_output_with_link_egress(
         false,
         None,
         capture_path,
-        device_name,
+        device_request,
     )?;
     Ok((engine, stream, stats, reg_tx))
 }
@@ -1255,7 +1550,7 @@ pub fn start_default_output_with_clap(
     post: Box<dyn PostProcessor>,
     buffer_frames: Option<u32>,
     capture_path: Option<PathBuf>,
-    device_name: Option<String>,
+    device_request: OutputDeviceRequest,
 ) -> Result<ClapHostStart, OutputError> {
     let (engine, stream, stats, cb) = start_output_inner(
         None,
@@ -1265,7 +1560,7 @@ pub fn start_default_output_with_clap(
         true,
         buffer_frames,
         capture_path,
-        device_name,
+        device_request,
     )?;
     // post=Some の経路では inner が必ず CallbackTimeStats を作る。
     let cb = cb.expect("clap path always creates CallbackTimeStats");
@@ -1277,7 +1572,7 @@ pub fn start_default_output_with_sources(
     sources: Vec<SourceSlot>,
     buffer_frames: Option<u32>,
     capture_path: Option<PathBuf>,
-    device_name: Option<String>,
+    device_request: OutputDeviceRequest,
 ) -> Result<ClapHostStart, OutputError> {
     let (engine, stream, stats, cb) = start_output_inner(
         None,
@@ -1287,7 +1582,7 @@ pub fn start_default_output_with_sources(
         true,
         buffer_frames,
         capture_path,
-        device_name,
+        device_request,
     )?;
     Ok((
         engine,
@@ -1302,7 +1597,7 @@ pub fn start_default_output_with_sources(
 pub fn start_default_output_with_insert_buses(
     mut insert_buses: Vec<InsertBusStage>,
     capture_path: Option<PathBuf>,
-    device_name: Option<String>,
+    device_request: OutputDeviceRequest,
 ) -> Result<OutputStart, OutputError> {
     if insert_buses.len() > MAX_INSERT_BUS_STAGES {
         return Err(OutputError::NoConfig(format!(
@@ -1319,7 +1614,7 @@ pub fn start_default_output_with_insert_buses(
         false,
         None,
         capture_path,
-        device_name,
+        device_request,
     )?;
     Ok((engine, stream, stats))
 }
@@ -1332,7 +1627,7 @@ pub fn start_default_output_with_insert_buses_and_post(
     post: Box<dyn PostProcessor>,
     buffer_frames: Option<u32>,
     capture_path: Option<PathBuf>,
-    device_name: Option<String>,
+    device_request: OutputDeviceRequest,
 ) -> Result<
     (
         Engine,
@@ -1357,7 +1652,7 @@ pub fn start_default_output_with_insert_buses_and_post(
         true,
         buffer_frames,
         capture_path,
-        device_name,
+        device_request,
     )?;
     Ok((
         engine,
@@ -1374,7 +1669,7 @@ pub fn start_default_output_with_insert_buses_sources_and_post(
     post: Box<dyn PostProcessor>,
     buffer_frames: Option<u32>,
     capture_path: Option<PathBuf>,
-    device_name: Option<String>,
+    device_request: OutputDeviceRequest,
 ) -> Result<ClapHostStart, OutputError> {
     if insert_buses.len() > MAX_INSERT_BUS_STAGES {
         return Err(OutputError::NoConfig(format!(
@@ -1391,7 +1686,7 @@ pub fn start_default_output_with_insert_buses_sources_and_post(
         true,
         buffer_frames,
         capture_path,
-        device_name,
+        device_request,
     )?;
     Ok((
         engine,
@@ -1407,7 +1702,7 @@ pub fn start_default_output_with_insert_buses_sources_and_post(
 /// 計測 stats を作って返す。`buffer_frames` が `Some` なら `BufferSize::Fixed` を要求する（小バッファ
 /// 計測・通常 None で device 既定）。`device_name` が `Some` かつ一致する output device が
 /// あればそれを使う（`--audio-device` honor・#484 D1）。`None`、または一致するデバイスが
-/// 見つからなければ stderr に警告して host 既定へ縮退する（起動を失敗させない）。
+/// 見つからなければ fallback metadata を付けて host 既定へ縮退する（起動を失敗させない）。
 #[allow(clippy::too_many_arguments)]
 fn start_output_inner(
     link: Option<LinkEgress>,
@@ -1417,24 +1712,15 @@ fn start_output_inner(
     callback_timing: bool,
     buffer_frames: Option<u32>,
     capture_path: Option<PathBuf>,
-    device_name: Option<String>,
+    device_request: OutputDeviceRequest,
 ) -> Result<OutputInnerStart, OutputError> {
     validate_source_slots(&sources)?;
-    let host = cpal::default_host();
-    let (device, device_name) = resolve_output_device(&host, device_name.as_deref())?;
-    let supported = device
-        .default_output_config()
-        .map_err(|e| OutputError::NoConfig(e.to_string()))?;
-
-    let sample_format = supported.sample_format();
-    let mut config: StreamConfig = supported.config();
-    // 小バッファ計測（gated stale-rate harness）では Fixed を要求する。None は device 既定（Default）で
-    // 既存経路とビット同一。spike(orbit-sandbox-spike) が実証した cpal の Fixed 指定と同じ idiom。
-    if let Some(frames) = buffer_frames {
-        config.buffer_size = cpal::BufferSize::Fixed(frames);
-    }
-    let sample_rate = config.sample_rate.0;
-    let channels = config.channels;
+    // The liveness gate runs before Engine creation and before insert buses/sources are moved into
+    // RenderState. A dead named device can therefore fall back without recovering callback-owned
+    // state from a cpal stream that may retain itself.
+    let live = select_live_output_device(device_request, buffer_frames, None, true)?;
+    let sample_rate = live.sample_rate();
+    let channels = live.channels();
     for bus in &mut insert_buses {
         // callback block は通常これより遥かに短い。RT hot path の resize を構造的に排除する。
         bus.ensure_buffer_len(sample_rate as usize * channels as usize);
@@ -1473,32 +1759,36 @@ fn start_output_inner(
         post,
     }));
     let stream = build_stream(
-        &device,
-        &config,
-        sample_format,
+        &live,
         engine.clone(),
         stats.clone(),
         render_state.clone(),
         capture_sink,
         cb_stats.clone(),
     )?;
-    stream
-        .play()
-        .map_err(|e| OutputError::PlayStream(e.to_string()))?;
+    let output_stream = OutputStream {
+        _stream: stream,
+        _capture: capture_writer,
+        render_state,
+        device_name: live.name().to_string(),
+        sample_rate,
+        channels,
+        device_requested: live.requested().map(str::to_string),
+        device_fallback: live.fallback().cloned(),
+        first_callback_ms: 0,
+        fault: live.fault,
+    };
+    let baseline = stats.snapshot().callbacks;
+    output_stream.play()?;
+    let first_callback_ms =
+        confirm_first_callback(&stats, baseline).ok_or_else(|| OutputError::StreamDead {
+            device: live.name().to_string(),
+            waited_ms: FIRST_CALLBACK_DEADLINE.as_millis() as u64,
+        })?;
+    let mut output_stream = output_stream;
+    output_stream.first_callback_ms = first_callback_ms;
 
-    Ok((
-        engine,
-        OutputStream {
-            _stream: stream,
-            _capture: capture_writer,
-            render_state,
-            device_name,
-            sample_rate,
-            channels,
-        },
-        stats,
-        cb_stats,
-    ))
+    Ok((engine, output_stream, stats, cb_stats))
 }
 
 /// Rebuild only the cpal device/stream while preserving the engine, callback
@@ -1509,52 +1799,62 @@ pub fn rebuild_output_stream(
     stats: Arc<StreamStats>,
     cb_stats: Option<Arc<CallbackTimeStats>>,
     buffer_frames: Option<u32>,
-    device_name: Option<String>,
+    expected_sample_rate: u32,
+    device_request: OutputDeviceRequest,
 ) -> Result<OutputStream, OutputError> {
-    let host = cpal::default_host();
-    let (device, device_name) = resolve_output_device(&host, device_name.as_deref())?;
-    let supported = device
-        .default_output_config()
-        .map_err(|e| OutputError::NoConfig(e.to_string()))?;
-    let sample_format = supported.sample_format();
-    let mut config = supported.config();
-    if let Some(frames) = buffer_frames {
-        config.buffer_size = cpal::BufferSize::Fixed(frames);
-    }
+    let live = select_live_output_device(
+        device_request,
+        buffer_frames,
+        Some(expected_sample_rate),
+        false,
+    )?;
     let stream = build_stream(
-        &device,
-        &config,
-        sample_format,
+        &live,
         engine,
-        stats,
+        stats.clone(),
         render_state.clone(),
         None,
         cb_stats,
     )?;
-    stream
-        .play()
-        .map_err(|e| OutputError::PlayStream(e.to_string()))?;
-    Ok(OutputStream {
+    let mut output_stream = OutputStream {
         _stream: stream,
         _capture: None,
         render_state,
-        device_name,
-        sample_rate: config.sample_rate.0,
-        channels: config.channels,
-    })
+        device_name: live.name().to_string(),
+        sample_rate: live.sample_rate(),
+        channels: live.channels(),
+        device_requested: live.requested().map(str::to_string),
+        device_fallback: live.fallback().cloned(),
+        first_callback_ms: 0,
+        fault: live.fault,
+    };
+    let baseline = stats.snapshot().callbacks;
+    output_stream.play()?;
+    output_stream.first_callback_ms =
+        confirm_first_callback(&stats, baseline).ok_or_else(|| OutputError::StreamDead {
+            device: live.name().to_string(),
+            waited_ms: FIRST_CALLBACK_DEADLINE.as_millis() as u64,
+        })?;
+    Ok(output_stream)
+}
+
+fn confirm_first_callback(stats: &StreamStats, baseline: u64) -> Option<u64> {
+    confirm_callback_counter(&stats.callbacks, baseline, FIRST_CALLBACK_DEADLINE)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn build_stream(
-    device: &Device,
-    config: &StreamConfig,
-    sample_format: SampleFormat,
+    live: &LiveOutputDevice,
     engine: Engine,
     stats: Arc<StreamStats>,
     render_state: Arc<std::sync::Mutex<RenderState>>,
     mut capture: Option<RingTapSink>,
     cb_stats: Option<Arc<CallbackTimeStats>>,
 ) -> Result<Stream, OutputError> {
+    let device = &live.device;
+    let config = &live.config;
+    let sample_format = live.sample_format;
+    let suppress_callback = live.fault == OutputFault::DeadRealStream;
     let make_err_fn = |stats: Arc<StreamStats>| {
         // 上位 (daemon session) が StreamStats / DaemonError 経由で可視化する責務を持つ。
         move |err: cpal::StreamError| stats.record_error(&err)
@@ -1575,6 +1875,10 @@ fn build_stream(
             .build_output_stream(
                 config,
                 move |data: &mut [f32], _| {
+                    if suppress_callback {
+                        data.fill(0.0);
+                        return;
+                    }
                     render_shared_block(
                         &engine,
                         &render_state,
@@ -1596,6 +1900,10 @@ fn build_stream(
                 .build_output_stream(
                     config,
                     move |data: &mut [i16], _| {
+                        if suppress_callback {
+                            data.fill(0);
+                            return;
+                        }
                         if scratch.len() < data.len() {
                             scratch.resize(data.len(), 0.0);
                         }
@@ -1625,6 +1933,10 @@ fn build_stream(
                 .build_output_stream(
                     config,
                     move |data: &mut [i32], _| {
+                        if suppress_callback {
+                            data.fill(0);
+                            return;
+                        }
                         if scratch.len() < data.len() {
                             scratch.resize(data.len(), 0.0);
                         }
@@ -1653,6 +1965,10 @@ fn build_stream(
                 .build_output_stream(
                     config,
                     move |data: &mut [u16], _| {
+                        if suppress_callback {
+                            data.fill(u16::MAX / 2);
+                            return;
+                        }
                         if scratch.len() < data.len() {
                             scratch.resize(data.len(), 0.0);
                         }
@@ -1983,6 +2299,39 @@ mod tests {
         assert_eq!(
             resolve_requested_device_name(Some("usb audio"), &available),
             None
+        );
+    }
+
+    #[test]
+    fn sample_rate_mismatch_reports_device_and_both_rates() {
+        let error = validate_expected_sample_rate("USB Audio", 44_100, Some(48_000))
+            .expect_err("a live switch must reject a different nominal rate");
+        assert!(matches!(
+            error,
+            OutputError::SampleRateMismatch {
+                ref device,
+                device_rate: 44_100,
+                engine_rate: 48_000,
+            } if device == "USB Audio"
+        ));
+        validate_expected_sample_rate("USB Audio", 48_000, Some(48_000))
+            .expect("equal rates are accepted");
+        validate_expected_sample_rate("USB Audio", 44_100, None)
+            .expect("startup accepts the selected device rate");
+    }
+
+    #[test]
+    fn first_callback_confirmation_observes_baseline_and_deadline_boundaries() {
+        let callbacks = AtomicU64::new(7);
+        assert_eq!(
+            confirm_callback_counter(&callbacks, 6, Duration::ZERO),
+            Some(0),
+            "an already-observed callback wins even at the deadline"
+        );
+        assert_eq!(
+            confirm_callback_counter(&callbacks, 7, Duration::ZERO),
+            None,
+            "an unchanged counter is dead at the deadline"
         );
     }
 

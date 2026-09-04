@@ -17,6 +17,30 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(audio): gate output devices on callback liveness (#661 PR-V4) (Sep 5, 2026)
+
+`--audio-device` で stream の build/play が成功しても callback が一度も来ず、無音のまま
+daemon が起動成功していた問題に対し、`Engine` と callback-owned `RenderState` の生成前に
+probe stream を開く liveness gate を追加した。probe は専用 `AtomicU64` を使うため、実 stream の
+`StreamStats.callbacks` を汚さない。3 秒以内に callback が来ない名指し候補は起動時だけ host
+既定へ 1 回縮退し、全候補 dead または実 stream の事後確認 dead は起動を失敗させる。
+
+cpal 0.15.3 の名指し stream 参照循環に対して、`OutputStream::drop` は必ず内部 stream を
+`pause()` してから field を破棄する。ライブ切替も旧 stream を先に pause し、新 stream の probe /
+事後確認が失敗したら新 stream を pause+drop して旧 stream を再開する。異なる sample rate は
+`AUDIO_DEVICE_RATE_MISMATCH` で拒否し、Engine の作り直しは行わない。
+
+`GetStatus.output` に requested / fallback / reason / first callback ms を追加し、engine は正常時の
+出力構成を INFO、縮退時だけ `❌ audio device fallback` を ERROR としてユーザーの `get_log` へ出す。
+実機 gated Rust C-1〜C-6 と MCP D-1〜D-3 を追加した。
+
+検証: Rust lib 105 passed / 2 ignored、daemon bin 7 passed、gated Rust はコンパイル成功、clippy
+`--all-targets -D warnings` 成功、cfg 4 象限成功、`clap-host` build 成功、E2E hygiene 15 passed、
+`typecheck:e2e` 成功。`link-audio` / `link-audio-verification` は worktree に Ableton Link submodule が
+無く build.rs で失敗。実機 gated と C-6 の pause 除去変異は sandbox では実行しない。
+
+---
+
 ### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
 
 **Issue**: #385 / **ブランチ**: `385-untrusted-workspace-capability` / **PR-S-T1**
