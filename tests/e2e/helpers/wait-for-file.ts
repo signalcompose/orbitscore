@@ -43,7 +43,17 @@ export async function waitForMatchingFile(
   await waitUntil(
     () => {
       if (!fs.existsSync(dir)) return false
-      const match = fs.readdirSync(dir).find((name) => pattern.test(name))
+      const match = fs.readdirSync(dir).find((name) => {
+        // `g` / `y` 付きの正規表現は `lastIndex` を持ち越すので、呼び出し元の regex の
+        // 状態に結果が依存する。
+        //
+        // ⚠️ **これは観測可能な欠陥ではない**（2026-09-04 に変異で確認）。`test()` は
+        // `lastIndex` が末尾を超えると false を返すと同時に 0 へ戻すので、**次のポーリングで
+        // 見つかる** — ループが吸収する。リセットを外しても既存テストは緑のままだった。
+        // それでも 1 行残すのは、**呼び出し元の regex の状態に依存しない**方が読みやすいから。
+        pattern.lastIndex = 0
+        return pattern.test(name)
+      })
       if (match === undefined) return false
       found = path.join(dir, match)
       return true

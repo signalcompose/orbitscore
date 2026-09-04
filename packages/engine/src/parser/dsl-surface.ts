@@ -5,7 +5,7 @@
 export type DslSyntaxId =
   | 'var-init-global' // var g = init GLOBAL              tokenizer.ts:19-20, parse-statement.ts:62
   | 'var-init-seq' // var s = init global.seq          parse-statement.ts:385
-  | 'import' // import { x } from "./a.orbs"     tokenizer.ts:26, parse-statement.ts:67
+  | 'import' // import { x } from "./a.orbs"     tokenizer.ts:27, parse-statement.ts:67
   | 'file-import' // file_import 文                    audio-parser.ts:94,106
   | 'transport-run' // RUN(x)                           parse-statement.ts:72
   | 'transport-loop' // LOOP(x)                          parse-statement.ts:72

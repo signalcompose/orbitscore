@@ -107,7 +107,7 @@ export function readGatedSourceEntries(): readonly {
  * gated E2E の `it(...)` の題名。
  *
  * 🔴 **カリー化された呼び出しに対応すること。** この suite は
- * `it.skipIf(!appAvailable)('title', ...)` の形で書かれており（`orbitstudio-mcp-gated.spec.ts:611`
+ * `it.skipIf(!appAvailable)('title', ...)` の形で書かれており（`orbitstudio-mcp-gated.spec.ts:627`
  * ほか 20 箇所）、題名は**2 つ目の呼び出しの第 1 引数**にある。
  * `it(` の直後に文字列が来る前提の正規表現では **1 件も拾えない**。
  *

@@ -1177,11 +1177,11 @@ PR #712（merge `affdf69`）に対するドキュメント追従。**実装・�
 - 🔴 **`countErrors` の 7 重定義が 1 本になった。** 変更前の定義位置は
   `496 / 2144 / 2722 / 3155 / 3461 / 3969 / 4464` 行（発注時の実測と完全一致）。
   変更後 `grep -c "const countErrors = (log"` = **0**
-- 🔴 **capture WAV のパス構築 11 箇所を `captureWavPath` に統一。** 変更前は
+- 🔴 **capture WAV のパス構築 13 箇所を `captureWavPath` に統一。** 変更前は
   `ORBIT_KEEP_CAPTURES` を見るのが **492 行の 1 箇所だけ**で、残りは素の `path.join` だったため
   **落ちた瞬間に証拠の WAV が消えていた**。`ORBIT_KEEP_CAPTURES` 未設定時のパスが
   変更前と同一であることを実測で確認（接頭辞 `643-` は元から両分岐に付いていた）
-- 636 行のローカル変数 `captureWavPath` が import した関数名と衝突するため
+- 638 行のローカル変数 `captureWavPath` が import した関数名と衝突するため
   `captureWavFile` にリネーム（参照 3 箇所も追随）
 
 **main の受け入れ監査で 1 件直した**（Codex は「食い違いなし」と報告していた）:
@@ -1522,3 +1522,55 @@ function waitForEngineState(...) { await ... }   // ← async が剥がれた
 smoke 件数ラチェット / 「§3 網羅は実機層で取る」の改訂が入っていない。設計は
 **「実装より先・運用規則 6」**と明記している。**いま台帳の `ObservationKind` は
 正本より先にコードが確定した状態**。→ 束 PR の本文に明記し、owner 判断を仰ぐ。
+
+### 束の締め: レビューチーム 4 名の結果
+
+🔴 **3 名が独立に同じ Critical を検出**（`/simplify` の async 剥がれ）。既に修正済みだったが、
+**3 系統が別々に同じ結論に着いた**ことは記録に値する。
+
+#### ポリシー: 消費者のいない層は、テストでも型チェックでも守られない
+
+この束はその壊れ方を **2 回**踏んだ:
+
+1. `gatedItTitles()` がカリー形を **1 件も拾えず、空振りで緑**だった
+2. `/simplify` で `waitForEngineState` から **`async` が剥がれた** — `npm test` は緑
+   （`run-score.ts` に消費者がいない）、`tsc -p tsconfig.json` も 0（**`tests/` を見ない**）
+
+したがって **helper には消費者が現れる前に直接テストを付ける**。対象は
+**① コメントに書かれた受け入れ条件**と **② 壊れても黙って通る箇所**に絞る（網羅ではない）。
+
+`tests/e2e/helpers/helpers.spec.ts`（新規・12 件）を追加。**変異で 3 件を確認**:
+
+```
+captureWavPath が env を無視     → × redirects to ORBIT_KEEP_CAPTURES ...
+countLogMarker が g を補わない   → × counts a regex marker whether or not ...
+waitForFile が minBytes を無視   → × does not settle for a file that is still being written
+復元後                           → Tests  12 passed (12)   ／ cmp で 3 ファイル一致
+```
+
+#### 🔴 自分のテストが何も証明していなかった件（変異で発覚）
+
+`waitForMatchingFile` の「`g` 付き正規表現の `lastIndex` 持ち越し」を Minor 指摘として受け、
+リセットを入れてテストを書いた。**変異でリセットを外しても緑のままだった。**
+
+理由: `test()` は `lastIndex` が末尾を超えると **false を返すと同時に 0 へ戻す**ので、
+**次のポーリングで見つかる** — ループが吸収する。**観測可能な欠陥ではなかった。**
+
+対処: リセットの 1 行は残す（呼び出し元の regex の状態に依存しない方が読みやすい）が、
+**コメントとテスト名を「何を証明していないか」まで書く形に直した**。
+主張をテストの実力に合わせないと、次に読む人が守られていると誤解する。
+
+#### 事実の誤りを 3 件直した（comment-analyzer の指摘・すべて一次ソースで確認）
+
+| 誤り | 実際 |
+|---|---|
+| WORK_LOG「capture パス **11 箇所**」 | **13 箇所**（`grep -c "captureWavPath("` = 13） |
+| `dsl-surface.ts` の `import` → `tokenizer.ts:26` | **`:27`**（`:26` は `'MUTE'`） |
+| WORK_LOG「**636 行**のローカル変数」 | **638 行** |
+
+#### 残した指摘
+
+- **`run-cli.ts` が timeout の signal を握り潰す** / **`collect()` が symlink を辿らない** —
+  いずれも**現時点で消費者ゼロ**。最初の消費者が付く時に形が決まるので、そこで対処する
+- **`analyze_audio(per_channel)` の MCP 配線に E2E が無い**（設計 §20 PR-E3 の受け入れ基準）—
+  下記のとおり束 PR に明記して owner 判断を仰ぐ
