@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: affdf69
-verified-at: "2026-09-03"
+verified-against: f90db6e
+verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E3 (per-channel analysis) on 2026-09-04. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -191,7 +191,7 @@ The tools registered by `buildServer()` via `registerTool`, grouped by role (the
 | | `configure_flash` | Flash count, duration, colour |
 | **Observation** | `get_diagnostics` | The result of `vscode.languages.getDiagnostics` |
 | | `get_log` | The last N lines of the output channel (default 50, cap 1000) |
-| | `analyze_audio` | Parse a WAV and return peak / RMS / onsets (`window_ms` adds a time series) |
+| | `analyze_audio` | Parse a WAV and return peak / RMS / onsets (`window_ms` adds a time series; `per_channel` adds per-channel values) |
 | **Plugins** | `list_plugins` / `rescan_plugins` | Read / rescan the plugin catalogue (#463) |
 | | `save_plugin_state` | Save a running plugin's state (only while the transport is stopped) |
 | | `open_plugin_ui` / `close_plugin_ui` | Open / close a plugin UI; close waits for `UI_CLOSED_DONE` (#474 P4c) |
@@ -613,7 +613,7 @@ export function captureWavPath(tmpRoot: string, slug: string): string {
   }
 ```
 
-As of PR-E2 no scenario calls `runScore` yet (the policy was not to rewrite the existing 20). Its first consumer is planned for PR-E3.
+No scenario calls `runScore` yet (the policy was not to rewrite the existing 20). PR-E3 added `channelRms` to `CaptureWindows` ([measuring per channel](#measuring-per-channel-perchannel)), and no scenario calls that either.
 
 ⚠️ `tests/e2e/helpers/` is **not** part of `GATED_SOURCE_GLOBS` in `gated-sources.ts` (`orbitstudio-mcp-gated.spec.ts` and `gated/**`). The ratchet and the assertion hygiene test described below both read only the string returned by `readGatedSources()`, so helper sources are outside what they scan.
 
@@ -621,7 +621,7 @@ As of PR-E2 no scenario calls `runScore` yet (the policy was not to rewrite the 
 
 ## Capture WAV and RMS assertions
 
-"Audio is digital, so it can be observed" — the phrase from CLAUDE.md. The gated spec judges without listening. The analyser is `packages/vscode-extension/src/wav-analysis.ts`, which reads the daemon's capture format (RIFF/WAVE, IEEE float32) and computes 20 ms-window RMS, peak and onsets over the mono mixdown.
+"Audio is digital, so it can be observed" — the phrase from CLAUDE.md. The gated spec judges without listening. The analyser is `packages/vscode-extension/src/wav-analysis.ts`, which reads the daemon's capture format (RIFF/WAVE, IEEE float32) and computes 20 ms-window RMS, peak and onsets over the mono mixdown. Only when the channels have to be told apart do you pass `perChannel` (see [the next section](#measuring-per-channel-perchannel)).
 
 ```typescript
 // packages/vscode-extension/src/wav-analysis.ts:158-197
@@ -655,7 +655,15 @@ As of PR-E2 no scenario calls `runScore` yet (the policy was not to rewrite the 
     ...(opts?.windowMs && opts.windowMs > 0
       ? { windows: windowSeries(buf, dataOff, frames, format, opts.windowMs / 1000) }
       : {}),
-    // ...
+    ...(opts?.perChannel
+      ? channelSeries(
+          buf,
+          dataOff,
+          frames,
+          format,
+          opts.windowMs && opts.windowMs > 0 ? opts.windowMs / 1000 : WINDOW_SEC,
+        )
+      : {}),
   }
 ```
 
@@ -701,6 +709,62 @@ E2E-1, for example, compares `rms('unity')` and `rms('half')` to confirm that `g
 What this assertion caught is recorded in WORK_LOG 6.415. On 2026-08-29, when this E2E was written and run on the real device, it turned out that **`global.gain()` had no effect at all on instruments**. The cause was in `output.rs`: audio joining the master from the mixer stages **was added after the master gain had been applied**. Every layer returned success, not a single ERROR line appeared, and neither 35 mutation checks nor 2149 unit tests had caught it. CLAUDE.md cites this case as the grounds for "E2E matters most" because it was the only layer able to catch "**looks correct, but the composition is wrong**".
 
 `ORBIT_KEEP_CAPTURES=<dir>` was formalised the same day. When set, capture WAVs are written to that directory instead of tmpRoot — because "the harness's assertions show only one number inside the window, but the defect may be outside it" (6.415). It only started taking effect across the whole spec with #668 PR-E2, though: before that, one of the 13 capture-path sites honoured it ([the shared harness layer](#the-shared-harness-layer-—-tests-e2e-helpers)).
+
+### Measuring per channel `perChannel`
+
+Every analysis so far has been over the **mono mixdown** — a single waveform obtained by summing and averaging all channels. That is enough for loudness and temporal structure, but it cannot express a judgement about **which channel the sound comes out of**. The L/R difference of a panned sound, or the fact that ch1/2 are sounding while ch3/4 are silent, both vanish the moment the channels are collapsed, and the test stays green forever. The design of #668 §10 lists four such cases: the L/R difference of `pan` / `defaultPan` (#650), silence on ch3/4 (E2E-4 and E2E-5 of doc 611), and the absence of bleed on 8 channels (E2E-R5 of doc 598).
+
+So `analyzeWavBuffer` gained a `perChannel` option. Two fields are added to the result, and only when the option is passed.
+
+```typescript
+// packages/vscode-extension/src/wav-analysis.ts:52-59
+  /**
+   * チャンネル別の窓系列（`opts.perChannel` 指定時のみ・#668 §10）。index = チャンネル番号。
+   * `analysis.windows` はチャンネル加算平均のモノラルのままで、こちらは各チャンネルを
+   * 別々に保持する — pan / チャンネル分離 / bleed の判定はこちらでしか測れない。
+   */
+  channelWindows?: ReadonlyArray<ReadonlyArray<ChannelWindow>>
+  /** チャンネル別の全体 RMS（同上）。index = チャンネル番号。 */
+  channelRms?: readonly number[]
+```
+
+The default result is unchanged. Without the option neither `channelWindows` nor `channelRms` **exists as a key at all** (the return shown above adds them through a spread), so code reading the existing analysis is unaffected. The window width is whatever `windowMs` says, or the same 20 ms as the mono series when it is omitted. The cap on the number of windows and the floor on `window_ms` use the same constants as `windowSeries`, and exceeding them throws the same `window_ms too small for this capture`.
+
+The surface visible through MCP grew in the same way.
+
+```typescript
+// packages/vscode-extension/src/mcp-server.ts:1016-1022
+        per_channel: z
+          .boolean()
+          .describe(
+            'Optional: also return channelWindows / channelRms (per-channel peak/RMS) ' +
+              'instead of only the mono mixdown',
+          )
+          .optional(),
+```
+
+The policy stated at the top of this chapter — that MCP is not a back door for tests — applies here too. Whether an agent checks by hand or the gated E2E checks automatically, both go through the same argument of the same tool.
+
+On the E2E side, [`runScore`](#the-shared-harness-layer-—-tests-e2e-helpers) now always analyses with `perChannel: true`, and `CaptureWindows` gained an "RMS per segment and channel".
+
+```typescript
+// tests/e2e/helpers/run-score.ts:272-282
+  const channelRms = (name: string, channel: number, guardSec = 0.15): number => {
+    const perChannel = analysis.channelWindows?.[channel]
+    expect(
+      perChannel,
+      `runScore ${source.slug} channelWindows must exist for channel ${channel} ` +
+        `(analysis.format.channels=${analysis.format.channels})`,
+    ).toBeDefined()
+    const requested = range(requireSegment(name), guardSec)
+    const selected = (perChannel ?? []).filter(
+      (window) => window.startSec >= requested.fromSec && window.startSec < requested.toSec,
+    )
+```
+
+When the channel number is out of range and `channelWindows[channel]` cannot be taken, `toBeDefined()` fails and the message carries the actual channel count. Selecting the segment and taking the root mean square is exactly the same computation as `rms()`, and the default guard is the same 0.15 seconds.
+
+No gated scenario calls it yet, though: grepping `tests/e2e/` for `channelRms` finds only the definition in the helper itself. The measuring instrument was prepared first, and the tests that actually measure remain for a later PR.
 
 ---
 
@@ -1110,7 +1174,8 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `packages/vscode-extension/src/engine-lifecycle.ts:76-152` — stdout line classification and application (`isCurrent` partitioning)
 - `packages/vscode-extension/src/engine-lifecycle.ts:264-291` — `decideStartEngineForAgent()` (spawn-only options)
 - `packages/vscode-extension/src/playhead.ts:1-273` — `[STEP]` grammar, palette, `findPlayArgRangeForPath()`
-- `packages/vscode-extension/src/wav-analysis.ts:1-171` — WAV analysis (peak / RMS / onsets / `soundDetected`)
+- `packages/vscode-extension/src/wav-analysis.ts:1-198` — WAV analysis (peak / RMS / onsets / `soundDetected`)
+- `packages/vscode-extension/src/wav-analysis.ts:291-338` — `channelSeries()` (per-channel peak/RMS behind `perChannel`)
 - `packages/vscode-extension/package.json:400-407` — the `orbitscore.mcpServer.port` setting
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio-path `[STEP]` source
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()` (#654)
@@ -1123,7 +1188,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `tests/e2e/gated-sources.ts:1-106` — the list of gated sources the ratchet and hygiene test read (#668 PR-E1)
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` assertions (where the seven `countErrors` definitions converged, #668 PR-E2)
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` and `captureWavPath()`
-- `tests/e2e/helpers/run-score.ts:1-272` — one function that copies a score and evaluates it on real hardware
+- `tests/e2e/helpers/run-score.ts:1-293` — one function that copies a score and evaluates it on real hardware (including `channelRms`)
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — waiting for generated artefacts (with `minBytes`)
 - `tests/e2e/helpers/run-cli.ts:1-62` — child-process runs of `orbitscore replay` / `render` (the only path that bypasses MCP)
 - `tests/e2e/helpers/rack-child-pid.ts:1-38` — the rack child PID oracle (log-derived; moved out of the spec in #668 PR-E1)

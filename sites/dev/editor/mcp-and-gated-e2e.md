@@ -1,12 +1,12 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: affdf69
-verified-at: "2026-09-03"
+verified-against: f90db6e
+verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #668 PR-E3（per-channel 解析）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -191,7 +191,7 @@ export function buildMcpServerUrl(port: number): string {
 | | `configure_flash` | flash の回数・長さ・色 |
 | **観測** | `get_diagnostics` | `vscode.languages.getDiagnostics` の結果 |
 | | `get_log` | 出力チャネルの末尾 N 行（既定 50・上限 1000） |
-| | `analyze_audio` | WAV を解析して peak / RMS / onset を返す（`window_ms` で時系列も） |
+| | `analyze_audio` | WAV を解析して peak / RMS / onset を返す（`window_ms` で時系列も・`per_channel` でチャンネル別も） |
 | **プラグイン** | `list_plugins` / `rescan_plugins` | プラグインカタログの読み出し / 再スキャン（#463） |
 | | `save_plugin_state` | 実行中プラグインの state を保存（transport 停止中のみ） |
 | | `open_plugin_ui` / `close_plugin_ui` | プラグイン UI の開閉。close は `UI_CLOSED_DONE` 受信まで待つ（#474 P4c） |
@@ -613,7 +613,7 @@ export function captureWavPath(tmpRoot: string, slug: string): string {
   }
 ```
 
-PR-E2 の時点で `runScore` を呼ぶシナリオはまだ 1 本もありません（既存 20 本を書き換えない方針のため）。最初の利用者は PR-E3 の予定です。
+`runScore` を呼ぶシナリオはまだ 1 本もありません（既存 20 本を書き換えない方針のため）。PR-E3 が `CaptureWindows` に `channelRms` を足しましたが（[チャンネル別に測る](#チャンネル別に測る-perchannel)）、それを呼ぶシナリオも同じくまだありません。
 
 ⚠️ `tests/e2e/helpers/` は `gated-sources.ts` の `GATED_SOURCE_GLOBS`（`orbitstudio-mcp-gated.spec.ts` と `gated/**`）に**含まれません**。後述のラチェットとアサーション衛生はどちらも `readGatedSources()` の返す文字列だけを読むので、helper 側のソースは走査対象外です。
 
@@ -621,7 +621,7 @@ PR-E2 の時点で `runScore` を呼ぶシナリオはまだ 1 本もありま�
 
 ## キャプチャ WAV と RMS アサーション
 
-「音はデジタルなので観測できる」— CLAUDE.md の言い回しです。gated spec は聴かずに判定します。解析器は `packages/vscode-extension/src/wav-analysis.ts` で、daemon の capture 形式（RIFF/WAVE・IEEE float32）を読み、mono mixdown に対して 20 ms 窓の RMS・peak・onset を計算します。
+「音はデジタルなので観測できる」— CLAUDE.md の言い回しです。gated spec は聴かずに判定します。解析器は `packages/vscode-extension/src/wav-analysis.ts` で、daemon の capture 形式（RIFF/WAVE・IEEE float32）を読み、mono mixdown に対して 20 ms 窓の RMS・peak・onset を計算します。チャンネルを分けて測りたいときだけ `perChannel` を渡します（[次節](#チャンネル別に測る-perchannel)）。
 
 ```typescript
 // packages/vscode-extension/src/wav-analysis.ts:158-197
@@ -655,7 +655,15 @@ PR-E2 の時点で `runScore` を呼ぶシナリオはまだ 1 本もありま�
     ...(opts?.windowMs && opts.windowMs > 0
       ? { windows: windowSeries(buf, dataOff, frames, format, opts.windowMs / 1000) }
       : {}),
-    // ...
+    ...(opts?.perChannel
+      ? channelSeries(
+          buf,
+          dataOff,
+          frames,
+          format,
+          opts.windowMs && opts.windowMs > 0 ? opts.windowMs / 1000 : WINDOW_SEC,
+        )
+      : {}),
   }
 ```
 
@@ -701,6 +709,62 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 このアサーションが何を捕まえたかは、WORK_LOG 6.415 に記録されています。2026-08-29、この E2E を書いて実機で走らせたところ、**`global.gain()` が instrument にまったく効いていない**ことが分かりました。原因は `output.rs` でミキサーの stage から master へ合流する音が **master gain を掛けた後に加算されていた**ことです。各層は成功を返し、ERROR は 1 行も出ず、変異検証 35 件もユニットテスト 2149 件も捕まえていませんでした。CLAUDE.md がこの事例を「E2E が最重要」の根拠として引くのは、それが「**正しく見えるが合成が違う**」を捕まえられる唯一の層だったからです。
 
 同じ日に `ORBIT_KEEP_CAPTURES=<dir>` が正式化されました。指定するとキャプチャ WAV を tmpRoot ではなくそのディレクトリに残します。「ハーネスのアサーションは窓の中の 1 つの数しか見せないが、欠陥は窓の外にいることがある」（6.415）ためです。ただしこの環境変数が spec 全体で効くようになったのは #668 PR-E2 以降です — それまでは 13 箇所のパス組み立てのうち 1 箇所しか見ていませんでした（[共有ハーネス層](#共有ハーネス層-—-tests-e2e-helpers)）。
+
+### チャンネル別に測る `perChannel`
+
+ここまでの解析はすべて **mono mixdown**、つまり全チャンネルを加算平均した 1 本の波形に対するものでした。音量や時間構造を見るだけならそれで足りるのですが、「**どのチャンネルから出ているか**」を問う判定はこの形では書けません。左右に振った音の L/R 差も、ch1/2 だけが鳴っていて ch3/4 は無音だという事実も、mono に潰した瞬間に区別が消えてしまい、テストは常に緑になります。#668 の設計 §10 が挙げているのはその 4 件で、`pan` / `defaultPan` の L/R 差（#650）、ch3/4 が無音（doc 611 の E2E-4・E2E-5）、8 ch で bleed が無いこと（doc 598 の E2E-R5）が該当します。
+
+そこで `analyzeWavBuffer` に `perChannel` オプションが足されました。指定したときだけ、返り値に 2 つのフィールドが増えます。
+
+```typescript
+// packages/vscode-extension/src/wav-analysis.ts:52-59
+  /**
+   * チャンネル別の窓系列（`opts.perChannel` 指定時のみ・#668 §10）。index = チャンネル番号。
+   * `analysis.windows` はチャンネル加算平均のモノラルのままで、こちらは各チャンネルを
+   * 別々に保持する — pan / チャンネル分離 / bleed の判定はこちらでしか測れない。
+   */
+  channelWindows?: ReadonlyArray<ReadonlyArray<ChannelWindow>>
+  /** チャンネル別の全体 RMS（同上）。index = チャンネル番号。 */
+  channelRms?: readonly number[]
+```
+
+既定の返り値は変わりません。オプションを渡さなければ `channelWindows` も `channelRms` も **キーごと生えない**（前掲の return が spread で足しているため）ので、既存の解析を読んでいるコードは影響を受けません。窓の幅は `windowMs` を渡していればその値、渡していなければ mono 側と同じ 20 ms です。窓数の上限と `window_ms` の下限は `windowSeries` と共通の定数を使い、超えたときは同じ `window_ms too small for this capture` で throw します。
+
+MCP から見える形も同じように増えました。
+
+```typescript
+// packages/vscode-extension/src/mcp-server.ts:1016-1022
+        per_channel: z
+          .boolean()
+          .describe(
+            'Optional: also return channelWindows / channelRms (per-channel peak/RMS) ' +
+              'instead of only the mono mixdown',
+          )
+          .optional(),
+```
+
+本章の冒頭に置いた「MCP はテスト用の裏口ではない」という方針が、ここにも効いています。エージェントが手で確かめるときも、gated E2E が自動で確かめるときも、同じツールの同じ引数を通ります。
+
+E2E 側では [`runScore`](#共有ハーネス層-—-tests-e2e-helpers) が常に `perChannel: true` で解析するようになり、`CaptureWindows` に「区間 × チャンネルの RMS」が生えました。
+
+```typescript
+// tests/e2e/helpers/run-score.ts:272-282
+  const channelRms = (name: string, channel: number, guardSec = 0.15): number => {
+    const perChannel = analysis.channelWindows?.[channel]
+    expect(
+      perChannel,
+      `runScore ${source.slug} channelWindows must exist for channel ${channel} ` +
+        `(analysis.format.channels=${analysis.format.channels})`,
+    ).toBeDefined()
+    const requested = range(requireSegment(name), guardSec)
+    const selected = (perChannel ?? []).filter(
+      (window) => window.startSec >= requested.fromSec && window.startSec < requested.toSec,
+    )
+```
+
+チャンネル番号が範囲外で `channelWindows[channel]` が取れないときは `toBeDefined()` で落ち、メッセージに実際のチャンネル数が入ります。区間の切り出しと二乗平均は `rms()` とまったく同じ計算で、既定のガードも 0.15 秒で揃えてあります。
+
+ただし、これを呼ぶ gated シナリオは 1 本もありません（`tests/e2e/` を `channelRms` で grep すると helper 自身の定義しか出てきません）。測る道具が先に用意された状態で、実際に測るテストは後続の PR に残っています。
 
 ---
 
@@ -1110,7 +1174,8 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `packages/vscode-extension/src/engine-lifecycle.ts:76-152` — stdout 行の分類と適用（`isCurrent` 分割）
 - `packages/vscode-extension/src/engine-lifecycle.ts:264-291` — `decideStartEngineForAgent()`（spawn 専用オプション）
 - `packages/vscode-extension/src/playhead.ts:1-273` — `[STEP]` 文法・パレット・`findPlayArgRangeForPath()`
-- `packages/vscode-extension/src/wav-analysis.ts:1-171` — WAV 解析（peak / RMS / onset / `soundDetected`）
+- `packages/vscode-extension/src/wav-analysis.ts:1-198` — WAV 解析（peak / RMS / onset / `soundDetected`）
+- `packages/vscode-extension/src/wav-analysis.ts:291-338` — `channelSeries()`（`perChannel` のチャンネル別 peak/RMS）
 - `packages/vscode-extension/package.json:400-407` — `orbitscore.mcpServer.port` 設定
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio 経路の `[STEP]` 発生源
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()`（#654）
@@ -1123,7 +1188,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `tests/e2e/gated-sources.ts:1-106` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` の判定（`countErrors` 7 重定義の統合先・#668 PR-E2）
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` と `captureWavPath()`
-- `tests/e2e/helpers/run-score.ts:1-272` — 譜面を work copy にして実機で評価する 1 関数
+- `tests/e2e/helpers/run-score.ts:1-293` — 譜面を work copy にして実機で評価する 1 関数（`channelRms` を含む）
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — 生成物の待ち合わせ（`minBytes` つき）
 - `tests/e2e/helpers/run-cli.ts:1-62` — `orbitscore replay` / `render` の子プロセス実行（MCP を通らない唯一の例外）
 - `tests/e2e/helpers/rack-child-pid.ts:1-38` — rack child の PID オラクル（ログ由来・#668 PR-E1 で spec から移動）

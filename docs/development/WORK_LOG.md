@@ -1396,3 +1396,39 @@ L/R 比       : 1.0000
 
 **検証**: `tsc` 0 / `eslint` 0 / `npm test` **2173 passed / 48 skipped**（+4）/
 `check-citations.mjs` **904 verified / 0 failed**。
+
+## 2026-09-04: dev 学習サイトを PR #720（per-channel WAV 解析）に追従（ルーティン）
+
+**追従元**: PR #720 `feat(mcp): per-channel WAV analysis`（head `668-e3-per-channel` →
+base `668-e2e-foundation`・merge commit `f90db6e`）。CI は 4 チェックすべて success。
+
+**base の選び方**: 追従先のファイル（`wav-analysis.ts` の `channelSeries` ほか）は束
+`668-e2e-foundation` にしか無いため、PROJECT_RULES「ルーティンのドキュメント追従 PR は溜めない」§3 に
+従い base を統合ブランチにした（main を base にすると引用が実ファイルを指せず `docs:check` が落ちる）。
+
+**直した箇所**（`sites/dev/editor/mcp-and-gated-e2e.md` と `sites/dev/en/` の同名ファイル）:
+
+- ツールカタログの `analyze_audio` 行に `per_channel` を追記
+- 「mono mixdown に対して計算します」の本文に、チャンネルを分けるときだけ `perChannel` を渡す旨を追記
+- `analyzeWavBuffer` の return 引用に入っていた `// ...` の省略を実コードに展開
+  （`perChannel` の spread が読めない状態だった）
+- 新節「チャンネル別に測る `perChannel`」を追加。`WavAnalysis.channelWindows` / `channelRms`・
+  MCP の `per_channel`・`CaptureWindows.channelRms` の 3 つを引用付きで置いた
+- 共有ハーネス層の「最初の利用者は PR-E3 の予定」を実態（PR-E3 は helper を足したが呼ぶシナリオは
+  まだ 0 本）に更新
+- `## Sources` の行範囲を更新（`wav-analysis.ts:1-171` → `1-198` + `channelSeries` の項を追加、
+  `run-score.ts:1-272` → `1-293`）。`docs:check` はこの行範囲を検査しないので手で直す必要がある
+- frontmatter を `verified-against: f90db6e` / `verified-at: 2026-09-04` に更新
+
+**追従不要と判断したもの**: `docs/specs-v2/` と `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`
+（DSL 構文・意味論・`.orbslog` に変化なし）／`sites/user/` と `docs/user/`
+（`analyze_audio` はエージェント向け MCP ツールでユーザーが書く語ではない）／`rust/`（差分に含まれない）。
+
+**指摘（直していない）**: `pan` / `defaultPan` は `SEQUENCE_UNCOVERED_BASELINE` に残ったまま
+（`tests/e2e/dsl-e2e-coverage.spec.ts:70,76`）で、PR #720 はそれを測る道具を用意しただけ。
+また `tests/e2e/gated-assertion-hygiene.spec.ts:54` の正規表現 `/\brms\(|\bpeak\(|\.rms\b/` は
+`channelRms(` に一致しないので、`channelRms` だけで判定する spec を将来足すと衛生検査が
+「capture しているのに RMS を見ていない」と誤検出する。詳細は PR 本文。
+
+**検証**: `npm ci` / `npm run docs:build -w @orbitscore/user-site` /
+`npm run docs:build -w @orbitscore/dev-site` / `npm run docs:check`
