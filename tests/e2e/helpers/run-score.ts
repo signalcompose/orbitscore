@@ -18,13 +18,11 @@ import { expect } from 'vitest'
 import { analyzeWavBuffer } from '../../../packages/vscode-extension/src/wav-analysis'
 
 import {
-  captureClockSec,
   captureWindowsFrom,
+  createCaptureClock,
   prepareCapturePath,
   readCaptureForAnalysis,
-  readCaptureFormat,
   waitForSound,
-  type CaptureFormat,
   type CaptureSegment,
   type CaptureWindows,
 } from './capture-windows'
@@ -230,7 +228,7 @@ export async function runScore(
   await startEngineForRun(client, `runScore ${source.slug}`, capturePath)
 
   const segments: Record<string, CaptureSegment> = {}
-  let captureFormat: CaptureFormat | undefined
+  let captureClock: (() => number) | undefined
   let soundReady = false
 
   const evaluate = async (code: string): Promise<void> => {
@@ -260,6 +258,7 @@ export async function runScore(
     if (capturePath === undefined) {
       throw new Error(`runScore ${source.slug}: captureSegment requires { capture: true }`)
     }
+    const clock = (captureClock ??= createCaptureClock(capturePath))
     if (!soundReady) {
       await waitForSound(capturePath, {
         floor: 0.01,
@@ -267,14 +266,13 @@ export async function runScore(
         timeoutMs: 20_000,
         label: `runScore ${source.slug}`,
       })
-      captureFormat = readCaptureFormat(capturePath)
       soundReady = true
     }
     if (settleMs > 0) await sleep(settleMs)
     const fromWall = Date.now()
-    const fromSec = captureClockSec(capturePath, captureFormat!)
+    const fromSec = clock()
     await sleep(durationMs)
-    const toSec = captureClockSec(capturePath, captureFormat!)
+    const toSec = clock()
     const toWall = Date.now()
     segments[name] = { fromSec, toSec, fromWall, toWall }
   }

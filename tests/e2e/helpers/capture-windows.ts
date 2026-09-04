@@ -117,6 +117,23 @@ export function captureClockSec(capturePath: string, format: CaptureFormat): num
   return (size - CAPTURE_HEADER_BYTES) / (format.channels * BYTES_PER_SAMPLE) / format.sampleRate
 }
 
+/**
+ * capture のバイト長を秒として読む時計。**format は 1 回だけ読んで使い回す。**
+ *
+ * 同じ 4 行のクロージャが 5 箇所に写されていた（`runScore` と gated spec の 4 シナリオ）。
+ * 待ち方（初回の区間で遅延して待つ / シナリオ上の特定の時点で待つ）は場所ごとに本当に違うので
+ * そこは畳まないが、**この時計だけは完全に同一**なのでここに置く。
+ *
+ * 副作用として `runScore` の `captureFormat!`（非 null アサーション 2 箇所）が消える。
+ */
+export function createCaptureClock(capturePath: string): () => number {
+  let format: CaptureFormat | undefined
+  return (): number => {
+    format ??= readCaptureFormat(capturePath)
+    return captureClockSec(capturePath, format)
+  }
+}
+
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** Wait until an absolute-RMS bucket proves that the capture has started producing sound. */
@@ -161,28 +178,6 @@ export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }
   )
 }
 
-const invariantError = (
-  id: 'A1' | 'U1' | 'U2' | 'U3',
-  label: string,
-  name: string,
-  segment: CaptureSegment,
-  analysis: WavAnalysis,
-  soundStartSec: number | null,
-  bucketCount: number,
-  detail: string,
-): Error =>
-  new Error(
-    `${label} ${id}: ${detail} ` +
-      JSON.stringify({
-        name,
-        fromSec: segment.fromSec,
-        toSec: segment.toSec,
-        durationSec: analysis.durationSec,
-        soundStartSec,
-        bucketCount,
-      }),
-  )
-
 /** Map capture-clock segments to analysis buckets and enforce A1/U1/U2/U3. */
 export function captureWindowsFrom(
   analysis: WavAnalysis,
@@ -195,9 +190,39 @@ export function captureWindowsFrom(
     analysisWindows.find((window) => window.rms >= AUDIBLE_FLOOR_RMS)?.startSec ?? null
   const entries = Object.entries(segments)
 
-  const selectedWindows = (name: string, guardSec: number) => {
+  /**
+   * 不変条件の違反を、原因を追える形の Error にする。
+   *
+   * `label` / `analysis` / `soundStartSec` は全呼び出しで同じなのでここで閉じ込める
+   * （モジュール関数にすると 6 箇所すべてが同じ 3 引数を書き写すことになる）。
+   */
+  const invariantError = (
+    id: 'A1' | 'U1' | 'U2' | 'U3',
+    name: string,
+    segment: CaptureSegment,
+    bucketCount: number,
+    detail: string,
+  ): Error =>
+    new Error(
+      `${label} ${id}: ${detail} ` +
+        JSON.stringify({
+          name,
+          fromSec: segment.fromSec,
+          toSec: segment.toSec,
+          durationSec: analysis.durationSec,
+          soundStartSec,
+          bucketCount,
+        }),
+    )
+
+  const requireSegment = (name: string): CaptureSegment => {
     const segment = segments[name]
     if (segment === undefined) throw new Error(`${label}: capture segment '${name}' must exist`)
+    return segment
+  }
+
+  const selectedWindows = (name: string, guardSec: number) => {
+    const segment = requireSegment(name)
     const fromSec = segment.fromSec + guardSec
     const toSec = segment.toSec - guardSec
     const selected = analysisWindows.filter(
@@ -209,11 +234,8 @@ export function captureWindowsFrom(
     if (Math.abs(selected.length - expected) > BUCKET_COUNT_TOLERANCE) {
       throw invariantError(
         'U1',
-        label,
         name,
         segment,
-        analysis,
-        soundStartSec,
         selected.length,
         `expected ${expected}±${BUCKET_COUNT_TOLERANCE} buckets for guardSec=${guardSec}`,
       )
@@ -221,11 +243,8 @@ export function captureWindowsFrom(
     if (selected.length === 0) {
       throw invariantError(
         'U1',
-        label,
         name,
         segment,
-        analysis,
-        soundStartSec,
         selected.length,
         `segment contains no buckets for guardSec=${guardSec}`,
       )
@@ -252,11 +271,8 @@ export function captureWindowsFrom(
     ) {
       throw invariantError(
         'U3',
-        label,
         name,
         segment,
-        analysis,
-        soundStartSec,
         bucketCount,
         `segments must be finite, in capture time, monotonic, and non-overlapping` +
           (previous === undefined ? '' : `; previous=${previous[0]}`),
@@ -265,11 +281,8 @@ export function captureWindowsFrom(
     if (index === 0 && (soundStartSec === null || segment.fromSec < soundStartSec)) {
       throw invariantError(
         'A1',
-        label,
         name,
         segment,
-        analysis,
-        soundStartSec,
         bucketCount,
         'the first segment must not open before sound starts',
       )
@@ -279,11 +292,8 @@ export function captureWindowsFrom(
     if (Math.abs(captureDurationSec - wallDurationSec) > CLOCK_WALL_TOLERANCE_SEC) {
       throw invariantError(
         'U2',
-        label,
         name,
         segment,
-        analysis,
-        soundStartSec,
         bucketCount,
         `capture/wall duration delta must be <= ${CLOCK_WALL_TOLERANCE_SEC}s; ` +
           `capture=${captureDurationSec}s wall=${wallDurationSec}s`,
@@ -292,12 +302,6 @@ export function captureWindowsFrom(
     selectedWindows(name, DEFAULT_GUARD_SEC)
     previous = [name, segment]
   })
-
-  const requireSegment = (name: string): CaptureSegment => {
-    const segment = segments[name]
-    if (segment === undefined) throw new Error(`${label}: capture segment '${name}' must exist`)
-    return segment
-  }
 
   return {
     analysis,
@@ -325,11 +329,8 @@ export function captureWindowsFrom(
       if (selected.length === 0) {
         throw invariantError(
           'U1',
-          label,
           name,
           segment,
-          analysis,
-          soundStartSec,
           selected.length,
           `channel ${channel} contains no buckets for guardSec=${guardSec}`,
         )

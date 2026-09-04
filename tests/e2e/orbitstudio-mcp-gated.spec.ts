@@ -55,14 +55,12 @@ import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-en
 
 import { countErrors, countLogMarker, errorBaseline, expectNoNewErrors } from './helpers/engine-log'
 import {
-  captureClockSec,
   captureWindowsFrom,
+  createCaptureClock,
   prepareCapturePath,
   quadraticMeanRms,
   readCaptureForAnalysis,
-  readCaptureFormat,
   waitForSound,
-  type CaptureFormat,
   type CaptureSegment,
 } from './helpers/capture-windows'
 import { captureWavPath, createGatedSession, type GatedCatalog } from './helpers/gated-session'
@@ -535,13 +533,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     await sleep(1000)
     const errorsBefore = countErrors(await readLog())
     const segments: Record<string, CaptureSegment> = {}
-    let captureFormat: CaptureFormat | undefined
     let soundReady = false
 
-    const clock = (): number => {
-      captureFormat ??= readCaptureFormat(capturePath)
-      return captureClockSec(capturePath, captureFormat)
-    }
+    const clock = createCaptureClock(capturePath)
 
     const evaluate = async (code: string): Promise<void> => {
       const result = await activeClient.call('evaluate_orbitscore', { code })
@@ -3212,11 +3206,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(start.isError, start.text).toBe(false)
       await waitForEngine(true, 15_000, '#618 E1-E6 engine running')
       await sleep(2500)
-      let captureFormat: CaptureFormat | undefined
-      const clock = (): number => {
-        captureFormat ??= readCaptureFormat(capturePath)
-        return captureClockSec(capturePath, captureFormat)
-      }
+      const clock = createCaptureClock(capturePath)
       const segments: Record<string, CaptureSegment> = {}
       try {
         const baselineLog = (await activeClient.call('get_log', { lines: 500 })).text
@@ -3423,10 +3413,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const capture = readCaptureForAnalysis(capturePath)
       const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
       const captured = captureWindowsFrom(analysis, segments, '#618 E1-E6', capturePath)
-      const audioRange = (segment: CaptureSegment) => ({
-        fromSec: segment.fromSec,
-        toSec: segment.toSec,
-      })
       const e1Rms = captured.rms('e1', 0)
       const e2Rms = captured.rms('e2', 0)
       const e3Rms = captured.rms('e3', 0)
@@ -3438,10 +3424,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(e4Rms, 'E4 failed replacement must leave B sounding').toBeGreaterThan(0.03)
       expect(e5Rms, 'E5 restored A must be non-silent').toBeGreaterThan(0.03)
 
-      const e1Hz = estimateFundamentalHz(capture, audioRange(segments.e1!))
-      const e2Hz = estimateFundamentalHz(capture, audioRange(segments.e2!))
-      const e4Hz = estimateFundamentalHz(capture, audioRange(segments.e4!))
-      const e5Hz = estimateFundamentalHz(capture, audioRange(segments.e5!))
+      const e1Hz = estimateFundamentalHz(capture, segments.e1!)
+      const e2Hz = estimateFundamentalHz(capture, segments.e2!)
+      const e4Hz = estimateFundamentalHz(capture, segments.e4!)
+      const e5Hz = estimateFundamentalHz(capture, segments.e5!)
       expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
       expect(e2Hz, 'E2 VST3 replacement needs a measurable fundamental').toBeDefined()
       expect(e4Hz, 'E4 surviving VST3 needs a measurable fundamental').toBeDefined()
@@ -3520,12 +3506,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       await waitForEngine(true, 15_000, '#625 R-E1-R-E7 engine running')
       await sleep(2500)
 
-      let captureFormat: CaptureFormat | undefined
       let soundReady = false
-      const clock = (): number => {
-        captureFormat ??= readCaptureFormat(capturePath)
-        return captureClockSec(capturePath, captureFormat)
-      }
+      const clock = createCaptureClock(capturePath)
       const segments: Record<string, CaptureSegment> = {}
       const captureSegment = async (name: string): Promise<void> => {
         if (!soundReady) {
@@ -4058,12 +4040,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       prepareCapturePath(capturePath)
       await startR28Engine(activeClient, '#628 R28 capture engine', capturePath)
 
-      let captureFormat: CaptureFormat | undefined
       let soundReady = false
-      const clock = (): number => {
-        captureFormat ??= readCaptureFormat(capturePath)
-        return captureClockSec(capturePath, captureFormat)
-      }
+      const clock = createCaptureClock(capturePath)
       const segments: Record<string, CaptureSegment> = {}
       const captureSegment = async (name: string): Promise<void> => {
         if (!soundReady) {
@@ -4405,12 +4383,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const rmsWindows = (name: string) => {
         return captured.windows(name, SEGMENT_GUARD_SEC)
       }
-      const segmentRms = (name: string): number => {
-        const windows = rmsWindows(name)
-        return Math.sqrt(
-          windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
-        )
-      }
+      const segmentRms = (name: string): number => captured.rms(name, SEGMENT_GUARD_SEC)
       const segmentWindows = (name: string): string =>
         rmsWindows(name)
           .map((window) => window.rms.toFixed(3))
