@@ -17,6 +17,55 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(engine): pin the RUN-termination note-off release (#606 PR-K-A1) (Sep 4, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR-K-A1**
+
+#### 🔴 実装は既にあった。足したのは「守り」である
+
+着手前に実装を読んだところ、**発火点も配送機構も揃っていた**
+（[[invent-rules-only-after-reading-the-code]] のとおり、規則を発明する前に読む）:
+
+| 層 | 場所 |
+|---|---|
+| RUN 終端の発火 | `run-sequence.ts:60-63` の `setTimeout(… clearSequenceEventsFn(name) …, patternDuration)` |
+| 経路の振り分け | `sequence.ts:1015-1023` `clearEvents()` → MIDI / instrument なら `clearOwner(name)` |
+| 実際の note-off | `midi-scheduler.ts:211-214` `clearOwner()` が **`output.releaseOwner(owner)` を呼ぶ** |
+
+つまり #606 の PR-K-A1 は「flush 機構を作る」仕事ではなかった。
+地図に「配送機構は既にある・欠けているのは発火点だけ」と書いた（#731）が、
+**発火点も既にあった** — さらに一段浅く見積もっていた。
+
+#### ところが、この鎖を検査するテストが 1 本も無かった
+
+`clearOwner()` から `releaseOwner()` の **1 行を落としても既存 2205 件は全部通る**。
+**鳴りっぱなしは音にしか出ない**ので、ユニットで守らないと誰も気づけない
+（[[consumerless-code-is-unprotected]]）。テスト 4 本を追加した。
+
+#### 🔴 変異検証で穴が 1 つ見つかった（3 本 → 4 本）
+
+| 変異 | 結果 |
+|---|---|
+| `releaseOwner()` の呼び出しを削除 | **2 件 red** |
+| `clearOwner()` の queue フィルタを `this.queue = []`（wildcard 全消し）へ | 🔴 **当初は 3 件とも green（生き残り）** |
+| queue のクリアを削除 | **1 件 red** |
+
+**解放（`releaseOwner`）の側は owner を見ていたが、予定（queue）の側は見ていなかった。**
+片翼だけ守っていたことになる（[[enumeration-stops-one-level-too-early]]）。
+「終端したシーケンスの予定だけが落ちる」を検査する 1 本を足したところ、この変異も red になった。
+
+restore 後 4 件 green・`midi-scheduler.ts` は `cmp` で復元一致。
+
+🔴 **1 種類の変異が red になっただけで結論してはいけない**という規律が、そのまま効いた実例。
+
+#### 粒度（#729 で明文化した条文の実装側）
+
+守っているのは **owner 単位の解放**である。daemon 側の「最後の砦」は
+**instance 単位（全 owner）**で、`global.stop()` / shutdown / engine 異常終了の 3 場面だけ。
+混同すると他シーケンスの発音を巻き込むので、テストのコメントに書き分けた。
+
+---
+
 ### docs(spec): fix the implicit-master condition found by the independent re-audit (Sep 4, 2026)
 
 **Issue**: #611 / **ブランチ**: `611-output-line-spec` / **PR-O1**（段 1 の縦依存 1 本目）
