@@ -1,0 +1,26 @@
+// #611 §9 golden: fixed seq gain currently reaches the signal before the rack.
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.start()
+
+var dry = init global.seq
+dry.beat(4 by 4).length(1)
+dry.audio("kick.wav").chop(1)
+dry.play(1, 1, 1, 1)
+
+var effectOnly = init global.seq
+effectOnly.beat(4 by 4).length(1)
+effectOnly.audio("kick.wav").chop(1)
+effectOnly.effect([Gain(db: 6)])
+effectOnly.play(1, 1, 1, 1)
+
+var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio("kick.wav").chop(1)
+kick.effect([Gain(db: 6)]).gain(-6)
+kick.play(1, 1, 1, 1)
+
+LOOP(dry)

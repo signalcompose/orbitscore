@@ -214,6 +214,204 @@ SC.0 の `.verb(0.3)` が dB 化後は「+0.3 dB ≒ 素通し」の例になる
 段 1 で実機の判定が変わるのは PR-O2 から。
 
 ---
+### test(e2e): capture goldens for existing scores (#543-a) (Sep 4, 2026)
+
+**Issue**: #543 (a) / **ブランチ**: `543-output-line-goldens` / **PR-O0**（段 1 の縦依存 2 本目）
+
+PR-O2 が engine の内部幅と master gain の位置を変える**前**に、
+`docs/design/611-output-line-design.md` §9 の「今日の音」を実機 capture で固定する。
+production code は 1 行も変更していない。
+
+実装は Codex（`gpt-5.6-sol` / effort high）に委譲し、**測定と検証は main が実機で**行った
+（sandbox では daemon・MCP・実機 E2E が原理的に走らないため）。
+
+#### 🔴 実機で 3 件の問題が出て、いずれも「主張をテストの実力に合わせる」方向で解決した
+
+##### 1. ハーネスの起動判定が 500 行窓で壊れていた（helper の潜在不具合）
+
+O0-3 / O0-4 が `daemon-backed REPL ready after 30000ms` で落ちた。engine は起動していた。
+原因は `run-score.ts` が **`get_log` の固定 500 行窓の中でマーカー件数の増加**を見ていたこと。
+窓が飽和すると新しい行を足しても**古いマーカーが同時に押し出される**ので件数が増えない。
+**ERROR 件数を厳密等価で見ない規律と同じ理由**である。段 0 の helper に消費者が付いて初めて露見した。
+
+修正: **`start_engine` 直前のログ末尾を錨**にし、その後ろに出た分だけを見る。
+
+🔴 **一度「錨が流れたら判定できないとして待つ」形にしたのは誤りで `#628 R28` を壊した。**
+錨は前の窓の**末尾**から取り、窓は**先頭から**落ちるので、末尾が消えているならそれより古い行は
+すべて消えている — つまり今の窓は全部が新しい出力である。**実機に出さなければ気づかなかった。**
+`helpers.spec.ts` にテスト 6 本。「錨を完全に無視する」変異で 2 本 red・restore 一致を確認した。
+
+##### 2. fixture のバス名が既存テストと衝突していた
+
+gated スイートは**同じ engine セッションを使い回す**ので、`global.sum("drum")` が既存テスト
+（`:1955-1956` が `drum` を **sum と aux の両方**で宣言）と衝突して「ambiguous」になる。
+**衝突したまま録ると、音が意図した宛先へ行かないのに golden が録れてしまう。**
+`o0sum611` / `o0rev611` へ改名した。
+
+##### 3. 🔴 最初の測定は「音量」ではなく「窓に入ったヒット数」を測っていた
+
+**当初「設計 §9 の期待式が実機と合わなかった」と結論したが、誤りだった**（Fable 監査で判明）。
+`LOOP()` は既定で**次の小節境界まで待つ**（`quantize-manager.ts:70`・120 BPM 4/4 で 2000 ms）のに、
+録り始めが `run_selection` の **500 ms 後**だったので、**窓の大半が発音前の無音**だった。
+入るヒット数が窓ごとに違い（dry 3 発 / total 5 発）、その差を engine の性質だと読み違えた。
+検算: `kick.wav`（エネルギー 0.00757189）から、当初の 4 つの golden はすべて
+`sqrt(整数ヒット数 × 0.00378595 / 窓長)` と**有効 7 桁で一致**する。`send(0.3)` は線形 0.3、
+`Gain(db:6)` は理論と 9 桁一致で、**どちらの式も成立していた**。
+
+🔴 **測定手法の欠陥を engine の性質だと結論した。** 「未検証のモデルを assert しない」という方針は
+正しいが、適用を誤ると**検証済みの一次ソースを「未検証」と呼ぶ**ことになる。
+
+**直した形**: settle を 1 小節 + 余裕（2600 ms）にして定常状態で録る / 窓長を**ヒット周期の
+整数倍**（500 ms × 8）にして位相依存を消す / 🔴 **`onsets(name).length` を assert** して
+ヒット数を固定する（これで初めて RMS が「1 ヒットあたりの音量」になる）。
+
+##### 4. 🔴 同じ誤りを 2 度した — 窓長のゆらぎを「`seq.gain` の系統差」と読んだ
+
+測り方を直した後、`Gain(db: 6)` は理論と**有効 9 桁で一致**したのに `combined/dry` だけが
+**1.069**（理論 1.0 から 6.9%）で、**2 回の実行が 5 桁一致**した。これを
+「`seq.gain(-6)` は実は −5.42 dB」と結論しかけたが、**3 回目を回して全行の比を並べたら撤回した**。
+
+**同じ 1.069 = √(8/7) が `noBus` にも `sumOutput` にも `effectOnly/dry` にも出る。**
+窓の実効長が 1 ヒット分（500 ms / 4000 ms = 1/8）ゆらぐ測定アーチファクトで、
+セグメントごとに独立に乗る。**系統差とは区別できない。**
+
+🔴 **再現性は系統差の証拠にならない** — 測定系の量子化も再現する。系統差だと言うには
+「**同じアーチファクトが他の行に出ていないこと**」の確認が要る。期待値は理論式のままにし、
+許容をアーチファクトの幅（12%）に合わせた。**実測値をベタ書きすると、アーチファクトを
+engine の性質として固定してしまう。** follow-up（本 PR の範囲外）: 窓を 16 発へ伸ばすか、
+`runScore` の区間→capture 時刻の写像から量子化を取る。
+
+#### `/simplify`（4 観点のレビュー → 適用）
+
+🔴 **reuse / altitude**: `startR28Engine`（gated spec）が**同じ壊れた件数比較をローカルに再実装**して
+おり、**既存 20 本すべてがこの経路を使う**。判定を錨方式へ統一し `markerCount` を削除した。
+**simplification**: 動的 `import()` → 静的 import・harness を縮小 / `relativeDelta` を 1 本化。
+⏭️ **スキップ**: engine 再起動 3→1 の統合（テスト単位の独立を優先）。
+
+🔴 **`startR28Engine` はレビューの推奨と逆の判断をした。** altitude は現状維持を支持したが、
+その理由は「**最初の消費者が付く時に寄せる**」であり、**その消費者が本 PR で付いた**。
+当時は両方とも壊れていたが、いまは**片方だけ直っている**。見送られたのは「約 60 行の統合」で、
+ここで直したのは**判定ロジックだけ**（構造は動かしていない）。
+
+#### 検証（すべて main が実機で）
+
+`npm test` **2202 passed** / 52 skipped ・ `typecheck:e2e` 0 ・ `lint` 0 ・
+`check-citations.mjs` **922 verified / 0 failed** ・ **実機 gated 24 件中 13 passed / 11 failed**
+（**O0-1〜O0-4 は 4 本とも green**）。
+
+失敗 11 件 = 🔴 **baseline 10 件**（`drives real OrbitStudio end-to-end` / `#643 E2E-1〜E2E-7` /
+`steps the live playhead` / `#618 E1-E6`）**+ plugin-state restore 系 1 件**。restore 系は実行ごとに
+**別のテストが落ちる**（5 回の実行で `auto-records…` と `restores a non-default sum-bus insert…`
+が入れ替わった）。本 PR は restore を触っていないので既存の不安定さと考えるが、**裏取りはしていない**。
+途中、起動判定の誤った修正で `#628 R28` を落としたが、訂正後は baseline どおり passed に戻っている。
+
+### docs(spec): add RUN termination and offline render to the note-off firing cases (Sep 4, 2026)
+
+**Issue**: #606（`must-fix`）/ **ブランチ**: `606-noteoff-firing-spec` / **PR-K-A0**（spec 先行）
+
+`docs/design/634-pdc-layer-instrument-rack-design.md` §3 の実装（PR-K-A1 / A2）に入る前に、
+**note-off の発火点**を仕様側で確定させる。コードは 1 行も変更していない。
+
+#### 🔴 「flush が無い」は誤り — 配送機構は在る
+
+地図 §4.B の記述は誤りで、`run-sequence.ts → sequence.ts → midi-scheduler.ts → plugin-note-output.ts`
+の経路は**実在する**。壊れているのは**その周り**である（設計 §3.1 の穴 4 つ）。
+したがって本 spec 改訂も「機構を足す」話ではなく、**発火点の列挙に 2 つ足す**話である。
+
+#### 改訂
+
+| 文書 | 箇所 | 追加 |
+|---|---|---|
+| `PITCH_DSL_SPEC_v1.1.md` | §7-2 realization rule 2（Active note tracking） | **一発 `RUN()` の終端** / **オフラインレンダの終端** |
+| `INSTRUCTION_ORBITSCORE_DSL.md` | Note lifecycle の Active-note tracking | 同上（英語側） |
+| 同 | **PH.4 All Notes Off** | 同じ発火点 2 つ + 🔴 **daemon 側の「最後の砦」** |
+
+#### 🔴 発火点が増えても配送機構は 1 本
+
+3 箇所すべてに同じ注記を置いた。**場面ごとに別の flush を作らない。**
+設計 §3.2 の責務 3 層（TS scheduler = owner ごとの解放 / daemon = instance ごとの最後の砦 /
+child = 触らない）を仕様の言葉に落とした形である。
+
+**child に flush を置かない理由**も設計から引いた: child は自分が受けた note の簿記を持たず、
+持たせると `(port_index, channel, key)` 参照カウント（PH.4）の**正本が割れる**。
+
+#### daemon の「最後の砦」を仕様に書いた理由
+
+engine が保留 note を解放し切る前に死ぬと、**daemon は active note を追跡しているのに読み手が
+いない**（設計 §3.1 の穴 H4・読み手 0 箇所）。これは
+「**鳴りっぱなしを検出できるのに止められない**」状態なので、仕様の側で義務として書いた。
+実装は PR-K-A2（wire に新 RPC を足す = 一方通行）。
+
+##### 🔴 粒度を書き足した（Fable 監査の指摘）
+
+初稿は「daemon が自身の追跡集合から note-off を送れること」までしか書いておらず、**粒度が
+無かった**。2 行上には「**1 シーケンスの停止に wildcard な解放を使わない**」という規範があるので、
+**サミング（複数シーケンス → 1 インスタンス）が入った時点で両者が衝突して読める。**
+
+書き足した内容: 最後の砦は **instance 単位（そのインスタンスの全 owner）**である。daemon は
+owner の境界を持たないので、これは wildcard 禁止の**例外ではなく適用外** — 通常の owner 単位の
+解放経路から呼んではならない。発火してよいのは **`global.stop()` / shutdown / engine 異常終了**の
+3 場面だけで、いずれも「そのインスタンスで鳴ってよいものが 1 つも無い」場面である。だから
+サミングが入っても**巻き込む相手が存在せず**、参照カウント判定が不要になる。
+
+粒度を書かない仕様は、実装時に「便利な flush」として owner 単位の経路から呼ばれる。
+**義務だけ書いて適用範囲を書かないと、規範どうしが後で衝突する。**
+
+#### 検証
+
+`npm test` 2199 passed / 49 skipped（docs のみなので不変）・
+`check-citations.mjs` 922 verified / 0 failed（行番号のずれを再アンカー）。
+### docs(planning): record the VST3 / CLAP conventions the scanner does not follow (Sep 4, 2026)
+
+**地図**: `docs/planning/DEVELOPMENT_MAP.md` **§4.C** / **ブランチ**: `546-plugin-spec-conventions`
+/ owner 2026-09-04・**バグではなく機能改善**
+
+#### 🔴 最初、DAW の「振る舞い」を写して規格を読んでいなかった
+
+owner:
+
+> オービットスタジオで今 **dylib を名指ししているという状態自体が、ちょっと異常**。
+> VST も CLAP も基本的には**作法があるはず**なので、その作法を地図のどこかに入れていく。
+> 他のものが使えているので、**他を実装した後でも全然いい**。**バグではなくて機能改善・改修。**
+
+> 僕が言ってるのが VST や CLAP の作法ではないというか、**作法をちゃんと調べてやりましょう**。
+
+初稿はフォーラム・製品ドキュメントから **Ableton / Bitwig の振る舞い**を写しただけだった。
+owner の指摘で規格を読み直したところ、**振る舞いの観察からは出てこない義務**が見つかった。
+
+#### 規格が定める作法と現在地
+
+| # | 規格（一次情報・**強度**） | 現在地 |
+|---|---|---|
+| 1 | **CLAP: `CLAP_PATH` を問い合わせる — `must`**（`clap/include/clap/entry.h` 逐語 "a CLAP host **must** query the environment for a CLAP_PATH variable"） | 🔴 `CLAP_PATH` は見ていない。ただし **`ORBIT_PLUGIN_PATH`（`:` 区切り）は既に読んでいる**（`lib.rs:200-211` `extra_scan_dirs_from_env`）ので、**同じ関数に 1 本並べるだけ** |
+| 2 | **CLAP: 各ディレクトリを再帰的に探索 — `should`**（同上。1 と違い義務ではない） | 🔴 **非再帰**（`list_bundle_candidates` の doc・同 `:228`。テスト `:2197` が非再帰を固定） |
+| 3 | **CLAP: 1 `.clap` に複数プラグイン。factory で descriptor 列挙 → plugin ID で生成** | ✅ **実装済み**（`orbit-clap-host/src/discovery.rs:105-120` 全列挙 / `lib.rs:540-566` 1 バンドル→複数エントリ / `discovery.rs:125-137` ID で選択）。同一性は `(format, path, pluginId)` の複合キー（`lib.rs:1028-1034`） |
+| 4 | **VST3: `moduleinfo.json` は 3.7.5 で導入、3.7.8 で `Contents/` → `Contents/Resources/`**（cmake の `SMTG_MODULEINFO_PATH_INSIDE_BUNDLE` で版差を確認） | ○ 参照している（`lib.rs:110`）。⚠️ **`Contents/Resources/` しか見ない**（`lib.rs:842`）ので **3.7.5〜3.7.7 のバンドルは ProbePending 送り** |
+| 5 | **同一性は ID（CLAP=plugin ID / VST3=CID）、path は「所在」。ID → ファイルの対応表は規格に無く、所在の解決はホストの責務** | 🔴 `instrument(path)` が生パス（`plugin-resolver.ts:76-80`） |
+| 6 | 検証を走らせるタイミング | 🔴 手動のみ（起動時はカタログ JSON を読むだけ・`plugin-catalog-reader.ts:132-150`） |
+
+**1 は既存関数への 1 行追加。2 も小さい。5 は作り直しの規模**なので他の実装の後（owner）。
+
+🔴 **初稿は 3 を「❓ 未確認」、5 を「規格はパスを同一性にしない」と書いていた。**
+前者は**実装を読めば分かることを読まずに未確認と書いた**（[[invent-rules-only-after-reading-the-code]] の再発）。
+後者は**言い過ぎ** — 規格は path を禁じているのではなく、同一性の担い手が ID だというだけである。
+「作法を調べる」は規格側だけでなく**自分の現在地も一次情報で確かめる**ことを含む。
+
+#### 保証のタイミングについての整理
+
+owner: 「Logic や Studio One も**読み込めるということを確認するだけ**で、起動時に全てのプラグインが
+メモリに読み込まれているわけではない。**インサートした時だけメモリ空間に出てくる。**
+なので起動時のチェックは**品質保証的なもの**」。
+
+調査でも一致した — Ableton は VST3 を常時スキャンにし、**AU は Apple の `auval` に外注**している。
+Bitwig は**保証しきれないことを認めて隔離で解く**（ホスティングモード 5 段階）。
+**OrbitScore は既に Bitwig 型の out-of-process + crash isolation を採っている。**
+
+🔴 **これは [[live-coding-forbids-workflow-interruptions]] と対になる。** 保証を起動時に寄せるからこそ、
+**演奏時に確認を挟む必要が無い**。「評価時に trust を問う」設計は DAW と**二重に**違っていた
+（① 確認を挟む ② 判断を実行時に置く）。
+
+---
 
 ### docs(design): 詳細設計 11 本と実装プラン 2026-09 を起草 (Sep 3, 2026)
 

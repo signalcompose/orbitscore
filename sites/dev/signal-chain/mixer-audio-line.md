@@ -67,7 +67,7 @@ snare」と列挙するのではなく、kick と snare がそれぞれ `output(
 仕様の DSL サンプルも引用しておきます（spec の Markdown から逐語）。
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1744-1748
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1766-1770
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")                  // 同じ宛先なので加算される
@@ -76,7 +76,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1838-1840
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1860-1862
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
@@ -698,7 +698,7 @@ MCP 経由で駆動し、daemon の capture WAV を区間ごとに RMS 測定し
 0.15 秒）を取って遷移の影響を除きます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:588-593
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:593-598
     const rms = (name: string, guardSec = 0.15): number => {
       const selected = windows(name, guardSec)
       return Math.sqrt(
@@ -711,7 +711,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1424-1458
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1429-1463
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -754,7 +754,7 @@ E2E-4 は sum + aux の経路です。dry（bus 無し）と、`output("sum643")
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1551-1570
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1556-1575
         [
           'var global = init GLOBAL',
           'global.key("C")',
