@@ -47,8 +47,11 @@
 | **ラック** | `effect([...])` | プラグイン列（SC.10・#628 出荷済み・**変えない**） |
 | **ゲイン** | `gain(db)` | その位置以降のライン信号を減衰（線形スカラー・ramp 付き） |
 | **出口** | `output(宛先, thru:, db:)` / `send(aux, db)` | その位置の信号を宛先へ加算。`thru: false` ならその先へ流さない |
+| **パン** | `pan(value)` | その位置以降のライン信号の L/R バランス（等パワー） |
 
-`pan` は本書では**発音側のまま**（#649 Q1 は未決 → §14）。
+🔴 **`pan` はライン要素である**（owner 2026-09-03 Q-611-4 = B・§2.4b・§14 (4)）。
+起案時は「発音側のまま」としていたが**裁定で覆った**ので、要素は 3 種ではなく **4 種**。
+per-event / ランダム pan（`panRandom`）だけが発音側に残る。
 
 ---
 
@@ -137,7 +140,7 @@ effect 併用の譜面では今日「ラック前」だったものが**既定�
 |---|---|
 | `_lineOrder` は**キーの順列**で、値は各スライスに残る | `_line: LineElement[]` に**値も同居**（§3.1）。スライス（`_sumOutputBus` / `_auxSends` / `_renderBus`）は廃止 |
 | output の同一性 = 単一 | 同一性 = **宛先キー**（send と同じ・§4.A.1 の帰結）|
-| §10.4 既定ストリップ `[ラック → gain → pan → sends → output]` | `[ラック → gain → sends(=output thru) → output(master)]`（pan は発音側のまま）|
+| §10.4 既定ストリップ `[ラック → gain → pan → sends → output]` | `[ラック → gain → pan → sends(=output thru) → output(master)]`（**pan はライン要素**・§2.4b / §14 (4)。位置は自由）|
 | フェーダー = `gain_override` スカラー | フェーダー = `output` の `gain`（裁定 ④）。`gain` 要素は別に残る |
 
 ---

@@ -17,6 +17,70 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(spec): output as a line element — MX.1/2/2.1/2.2/2.3/3/4/5, SC.2.1/4, #649 §10-12 (Sep 4, 2026)
+
+**Issue**: #611（+ #649 / #643 の設計文書追従）/ **ブランチ**: `611-output-line-spec` / **PR-O1**（段 1 の前提・docs のみ）
+
+段 1（must-fix）の縦依存 `PR-O1（spec）→ PR-O0（golden）→ PR-O2（engine）` の 1 本目。
+**仕様を先に確定させてから golden を取り、その後にエンジンの内部を変える**という順序を守るための PR。
+コード・テストは 1 行も変更していない。
+
+#### 改訂（`docs/design/611-output-line-design.md` §11 の表がスコープ）
+
+| 文書 | 箇所 | 内容 |
+|---|---|---|
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | 節ヘッダ / MX.1 | 固定トポロジ（source → insert → sum → master ＋ send → aux の並列タップ）を撤回し、**ラインは 4 種の要素の列**（ラック / ゲイン / パン / 出口）と定義。「フェーダーという段は存在しない」を明記 |
+| 同 | **MX.2**（全面改稿）| `output(destination, thru:, db:)`。`thru:` 既定 `false`・`db:` は dB・出口はラインの 1 要素であって終端ではない |
+| 同 | **MX.2.1**（新）| 宛先の集合（master / sum / aux / 物理 ch 対 / render / LinkAudio）と**名前解決の順序**。`"master"` 予約語 |
+| 同 | **MX.2.2**（新）| 複数 `output` と合算規則（解決後の宛先が同じなら加算・同一宛先 2 回は 2 要素） |
+| 同 | **MX.2.3**（旧 MX.2.1 を置換）| 数値 render bus `output(n)` の**撤回**（裁定 611 §14 (1) = A）。宛先は `mix.render(...)` の宣言ノード。`mix.output(3)` は物理アウト mono 宛て |
+| 同 | MX.3 | `send(name, db)`。**単位を線形 `amount` から dB へ**・`output(aux, thru: true, db:)` の糖衣であることを明記・「post-fader 固定」を削除 |
+| 同 | MX.4 | 固定トポロジの記述を **forward-only + 配列順 = トポロジカル順**へ。kind による制限（sum→sum 等）を設けない |
+| 同 | MX.5 | v1 制約から「send は post-fader 固定」を削除 |
+| 同 | §8.1.2 | 🔴 `output("master")` は **LinkAudio channel 名にならない**（予約語が解決順の先頭）ことを追記 |
+| `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md` | SC.2.1 規範 (4)(7) | **出力エンドポイントと master もレシーバ**（`master.output(cue, thru: true)`）。`master` 予約が `output()` の文字列宛先にも及ぶ |
+| 同 | SC.4 規範 (1) + staging 注記 | aux 名メソッドの値は **dB**。`send` は `thru: true` の出口の糖衣。「v1 は post-insert 固定」注記を #611 PR-O3/O4 の staging へ差し替え |
+| `docs/design/649-audio-line-design.md` | §7.3 / §10 / §10.1 / §10.4 / §11 / §12 | **§10〜§12 は 611 設計へ移管**（バナー）。各項に「611 での扱い（正本）」を併記 |
+| `docs/design/643-mixer-foundation-design.md` | §1.5 / §12 | 出口の欠落が #611 で埋まったことを追記。`output()` 3 分岐は解決順 1 本に統合された |
+
+#### 🔴 設計文書の内部矛盾を 1 件解消（doc 611）
+
+§1 と §2.6 が「`pan` は発音側のまま」と書いたままだったが、**§2.4b と §14 (4) の owner 裁定（Q-611-4 = B）で
+`pan` はライン要素に覆っていた**。起案時の記述が裁定に追従していなかったもので、裁定側に揃えた
+（ライン要素は 3 種ではなく **4 種**）。PR-O4 の実装者がここを読んで誤るのを防ぐため。
+
+#### dev 学習サイトの追従（同 PR に畳んだ）
+
+`sites/dev/signal-chain/mixer-audio-line.md` と `sites/dev/en/signal-chain/mixer-audio-line.md` が
+**core spec の実例ブロックを逐語引用**していたため、`check-citations.mjs` が 4 件 red になった。
+
+- 引用の再アンカー（`:1681-1685` → `:1729-1733` / `:1733-1735` → `:1793-1795`）
+- **中身が変わった引用は手で直した**: `kick.send("rev", 0.3)` → `kick.send(verb, -12)`
+- 散文の事実誤りを訂正: 「MX.5 は send は post-fader 固定を明記しています」は**もう spec に無い**。
+  ⚠️ **実装は今も post-insert 固定**なので、「spec は変わったが実装は PR-O4 まで変わらない」ことを
+  両ページに明示した（引用検査は散文を見ないので、ここは人が見るしかない）
+
+**spec 側で宣言形の実例を復元**した（改稿で `global.sum("drum")` の例が落ちていた）。
+素朴な 1 ファイル経路（ノード変数を作らない書き方）の保護は恒久方針なので、実例は仕様に要る。
+
+#### user 学習サイトは変更しない
+
+`sites/user/mixing/routing.md` の「send は post-fader 固定です」は**現在の実装の事実**であり、
+挙動が変わるのは PR-O4。user docs は「今できること」を書く場所なので、そこで追従させる。
+
+#### 検証
+
+| ゲート | 結果 |
+|---|---|
+| `npm test` | **2196 passed** / 48 skipped（main と同数・docs のみなので不変が期待値） |
+| `npm run typecheck:e2e` | エラー 0 |
+| `check-citations.mjs` | **922 verified / 0 failed**（修正前は 4 failed） |
+
+実機 E2E は**このPRの対象外**（コード変更が無く、DSL の観測可能な表面を 1 つも足していない）。
+段 1 で実機の判定が変わるのは PR-O2 から。
+
+---
+
 ### docs(design): 詳細設計 11 本と実装プラン 2026-09 を起草 (Sep 3, 2026)
 
 **Issue**: #611 / #694 / #598 / #672 / #634 / #428 / #610 / #662 / #656 / #668 / #679（設計のみ・実装なし）/ **ブランチ**: `claude/elegant-pasteur-l9gdrl`

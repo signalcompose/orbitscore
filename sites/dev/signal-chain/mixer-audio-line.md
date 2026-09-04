@@ -33,11 +33,18 @@ capture E2E の仕組みは [RE-4](/rust-engine/capture-verification) を参照�
 
 まず仕様の絵を頭に入れましょう。core spec MX.1 は次の一文でモデルを定義しています。
 
-> グラフは **source（seq）→ 任意の per-seq insert（PH.2b）→ sum（group bus）→ master** の直列と、
-> **send → aux（return bus）→ master** の並列タップで構成する。エッジは常に **source が行き先を指す**。
-> reconciliation key は名前（同名 = 同一 node・再評価は再束縛）。
+> 各 source（seq）・各バスは **オーディオライン**を 1 本持つ。ラインは要素の列であり、要素は
+> **ラック**（`effect([...])`・SC.10）・**ゲイン**（`gain(db)`）・**パン**（`pan(v)`）・
+> **出口**（`output(dest, thru:, db:)` / その糖衣の `send`）の 4 種だけである。
+> 信号はラインを**先頭から順に**通り、出口に達した位置の信号が宛先へ加算される。
 >
 > — `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.1
+
+> ⚠️ **この一文は 2026-09-03 に書き換わりました**（#611 / #649）。それ以前の MX.1 は
+> 「source → insert → sum → master の直列と send → aux → master の並列タップ」という
+> **固定トポロジ**を規定していました。以下で読む**実装は今もその固定トポロジのまま**で、
+> ラインへの一般化は PR-O3（wire）→ PR-O4（DSL）で入ります。本章は
+> **「今の実装」と「これから向かう先」の両方**を扱います。
 
 図にするとこうなります。
 
@@ -60,24 +67,29 @@ snare」と列挙するのではなく、kick と snare がそれぞれ `output(
 仕様の DSL サンプルも引用しておきます（spec の Markdown から逐語）。
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1681-1685
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1729-1733
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
-snare.output("drum")
-sum("drum").effect("GlueComp.clap")   // group bus 自身の insert（v1 は 1 基・PH.2b と同規則）
+snare.output("drum")                  // 同じ宛先なので加算される
+sum("drum").effect("GlueComp.clap")   // group bus 自身の insert（PH.2b と同規則）
 sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d）
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1733-1735
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1793-1795
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
-kick.send("rev", 0.3)                 // send（copy・原音は継続して master/sum へ）
+kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
 ```
 
-v1 の制約として、MX.5 は **PDC（plugin latency 補償）なし・sum のネスト不可・send は
-post-fader 固定・LinkAudio と相互排他** を明記しています。「post-fader 固定」は #649 で
-覆される予定の項目なので、後半でもう一度触れます。
+v1 の制約として、MX.5 は **PDC（plugin latency 補償）なし・sum のネスト不可・
+LinkAudio と相互排他** を明記しています。
+
+かつてここには「**send は post-fader 固定**」も並んでいました。この項目は 2026-09-03 の
+spec 改訂で MX.5 から**削除**されています — フェーダーという段が無くなり、送りの位置は
+「ラインのどこに `output` を置いたか」で決まるようになったためです（MX.1 / MX.3）。
+ただし**実装は今も post-insert 固定**で、この乖離は PR-O4 で解消されます。
+後半でもう一度触れます。
 
 ## DSL の入口: `global.sum()` / `global.aux()` → `MixerManager`
 
@@ -882,7 +894,7 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 
 ## Sources
 
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1616-1706` — Mixer / Routing（MX.1〜MX.5）規範
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` Mixer / Routing（MX.1〜MX.5）規範
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1247-1249` — master gain ramp が insert の前に掛かる既知制約
 - `docs/design/643-mixer-foundation-design.md` — #643 設計（owner 三条・責務境界・feed 注入点 §5.1・`output()` 3 分岐 §12）
 - `docs/design/649-audio-line-design.md` — #649 オーディオライン設計（§7 確定事項・§8 未決・§9-§14 実装設計 v3）
