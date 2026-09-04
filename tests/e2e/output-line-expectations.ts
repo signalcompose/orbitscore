@@ -27,25 +27,20 @@
  * 🔴 **測定手法の欠陥を engine の性質だと結論しない。** 「未検証のモデルを assert しない」という
  * 方針自体は正しいが、その適用を誤ると**検証済みの一次ソースを「未検証」と呼ぶ**ことになる。
  *
- * ## 直した形
+ * ## 現在の測り方（#739）
  *
- * 1. **settle を 1 小節 + 余裕**にして、**定常状態でだけ録る**
- * 2. **窓長をヒット周期の整数倍**にする。信号は 500 ms 周期なので、整数倍の窓なら
- *    **開始位相に依らずヒット数とエネルギーが一定**になる
- * 3. 🔴 **オンセット数を明示的に assert する**。これで初めて RMS が「1 ヒットあたりの音量」を意味する
+ * 1. 絶対 RMS 床で発音を待ってから capture のバイト長を時計にする
+ * 2. guard 内の最初の onset に測定範囲をスナップし、8 × 500 ms を測る
+ * 3. onset 数と gap 中央値を assert してから二乗平均 RMS を返す
  */
 
 /** dB → 線形。 */
 const dbToLinear = (db: number): number => 10 ** (db / 20)
 
-/** 譜面の 1 ヒット周期（120 BPM 4/4・`play(1,1,1,1)` なので 1 拍 = 500 ms）。 */
+/** 譜面の 1 ヒット周期。(60000 / 120 BPM) × 4 beats/bar / 4 slots/bar = 500 ms。 */
 const HIT_PERIOD_MS = 500
 
-/** 録り始める前に待つ時間。🔴 `LOOP()` が待つ 1 小節（2000 ms）＋余裕。 */
-const STEADY_SETTLE_MS = 2600
-
-/** 録る長さ。🔴 **ヒット周期の整数倍**（8 発）。位相に依らずヒット数が一定になる。 */
-const STEADY_WINDOW_MS = HIT_PERIOD_MS * 8
+const EXPECTED_ONSETS = 8
 
 /**
  * 実機層の許容。**実測したノイズ床から決めた**（推測値ではない）。
@@ -76,20 +71,20 @@ const STEADY_WINDOW_MS = HIT_PERIOD_MS * 8
  * 🔴 **したがって期待値は理論式のままにし、許容をアーチファクトの幅に合わせる。**
  * 実測値をベタ書きすると、**アーチファクトを engine の性質として固定**してしまう。
  *
- * **follow-up**: 窓を 500 ms 周期の整数倍で長く取る（16 発 = 8000 ms なら端の寄与は半分）か、
- * `runScore` の区間→capture 時刻の写像から量子化を取る。どちらもこの PR の範囲外。
+ * #739 で区間写像を capture のバイト時計へ移し、最初の onset に 8 周期の範囲をスナップした。
+ * golden と既存の意味論許容はそのまま残し、2 セッションの再現性だけを 2% で別に固定する。
  */
 
-/** RMS の絶対値。🔴 上記アーチファクト（±6.9%）を含む幅。 */
+/** RMS の絶対値。既存 golden の実機意味論許容。 */
 const RMS_TOLERANCE = 0.12
 
 /** aux との合算比（2 回で ±6%・部分的にコヒーレントな合流のため）。 */
 const SEND_RATIO_TOLERANCE = 0.12
 
-/** ラック単体の比。理論と 9 桁一致する回もあるが、アーチファクトが乗る回もある。 */
+/** ラック単体の比。理論値に対する既存の実機意味論許容。 */
 const RACK_RATIO_TOLERANCE = 0.12
 
-/** ゲイン積の比。同じアーチファクトが乗る。 */
+/** ゲイン積の比に対する既存の実機意味論許容。 */
 const GAIN_PRODUCT_TOLERANCE = 0.12
 
 /** 音が出ていることの下限（無音ハーネスを緑にしないためのガード・#528）。 */
@@ -100,9 +95,10 @@ const SEND_AMOUNT_AS_WRITTEN = 0.3
 
 /** 全 golden 共通の録り方。オンセット数まで含めて 1 箇所で決める。 */
 export const STEADY_CAPTURE = {
-  settleMs: STEADY_SETTLE_MS,
-  windowMs: STEADY_WINDOW_MS,
-  expectedOnsets: STEADY_WINDOW_MS / HIT_PERIOD_MS,
+  captureMs: HIT_PERIOD_MS * (EXPECTED_ONSETS + 1) + 300,
+  expectedOnsets: EXPECTED_ONSETS,
+  guardSec: 0.15,
+  hitPeriodSec: HIT_PERIOD_MS / 1000,
   audibleFloorRms: AUDIBLE_FLOOR_RMS,
 } as const
 

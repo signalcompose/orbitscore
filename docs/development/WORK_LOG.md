@@ -17,6 +17,70 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(e2e): clock capture segments off the capture file and open them on sound (#739 PR-O2a) (Sep 4, 2026)
+
+**Issue**: #739 / **ブランチ**: `739-capture-windows-follow-sound` / **PR-O2a**
+**設計**: `docs/design/739-capture-clock-design.md`（起案 Fable / 審査 main）
+
+実機 gated E2E の「名前つき区間 RMS」測定器が、**楽器が鳴る前に窓を開けていた**。
+#649 PR-O2 の受け入れ（E2E-1）が緑にならない原因は engine ではなく**測定器**だった。
+
+## 直した 2 つの欠陥
+
+1. **固定 settle 400 ms が音より早い。** `LOOP()` の小節量子化（120 BPM 4/4 = 2000 ms）＋
+   プラグイン attach で音は約 3 秒後に出る。`unity` 窓は丸ごと無音で、
+   **`global.gain(-6)` は楽器が一度も鳴る前に適用されていた**（実測 half/unity = 1.36）
+2. **区間マッピングが壁時計からの逆算で、黙ってクランプする。**
+   `Math.max(0, durationSec - (stopWall - from)/1000)` は実長が壁時計より短いと
+   **ファイル先頭を指す**。settle を 2600 ms にしたら unity が 0.0632 → **0** と悪化した
+   （窓を後ろへ動かすと逆に前を測る）
+
+## 採った形
+
+**キャプチャファイルのバイト長を時計にする** — `(stat.size - 44) / (channels × 4) / sampleRate`。
+`stopWall` からの逆算を捨てた。「音が出たか」の待ちは**いつ窓を開けてよいか**を決めるだけで、
+時計には使わない（header の flush 間隔 1 秒ぶんの不定性を時計に持ち込まないため）。
+
+新規 `tests/e2e/helpers/capture-windows.ts` に A1 / U1 / U2 / U3 を内蔵し、
+**5 箇所に複製されていた逆算式**（`run-score.ts` / gated spec の 4 箇所）をすべて置き換えた。
+
+## 🔴 前提の訂正 3 件（一次ソースで確認）
+
+| 当初の想定 | 事実 |
+|---|---|
+| 複製は 2 箇所 | **5 箇所**。E2E-1 は `run-score.ts` ではなく gated spec 内の別実装を使う |
+| 受け入れは「各窓のオンセット数」 | **正弦系（CLAPTestSynth）にオンセットは出ない**。`gate(1)` は note-off が次の note-on と同時刻で連続音。オンセット数は**打楽器 fixture にだけ**意味を持つ |
+| √(8/7) は写像の量子化 | **guard の非対称**（`rms` は guard 0.15・`onsets` は guard 0） |
+
+## 🔴 レビューで塞いだ穴（変異で実証）
+
+新しい衛生規則を足したが、**走査対象が写像の新しい住所を含んでいなかった**。
+`gated-sources.ts` は `orbitstudio-mcp-gated.spec.ts` と `gated/**` しか見ておらず、
+本 PR が写像を移した `helpers/` は対象外だった。
+
+| 実験 | 結果 |
+|---|---|
+| `capture-windows.ts` に旧逆算式を植える | **green**（見逃す） |
+| 対照: 走査対象のファイルに同じ変異 | **red**（規則自体は機能する） |
+| `helpers/` を走査範囲に足して再実行 | **red**・違反行を名指し |
+| 変異なしで hygiene + coverage | 16 件 green（巻き添えなし） |
+
+🔴 **`gated-sources.ts` 自身の冒頭がこの失敗モードを予告していた** —
+「シナリオを別ファイルへ出した瞬間に**衛生検査が新ファイルを見ず、黙って弱くなる**。
+red にならないぶん危険で、検査が効いていないことに気づけない」。本 PR がまさにそれをやった。
+
+あわせて、U3（区間の単調・非重複）の例外が**区間名の文字列 `'transition'`** で
+表現されていたのを `CaptureSegment.overlapsPrevious` へ移した
+（汎用ヘルパーが特定テストの語彙を知っている層の逆転を解消。CLAUDE.md
+「不変条件をデータの配置で強制する」）。
+
+## 検証
+
+`npm test` **2223 passed / 52 skipped / 0 failed**（sandbox 外・main が実行）。
+`typecheck:e2e` / lint ともに exit 0。実機 gated E2E は別途。
+
+---
+
 ### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
 
 **Issue**: #385 / **ブランチ**: `385-untrusted-workspace-capability` / **PR-S-T1**

@@ -25,6 +25,8 @@ const E2E_DIR = __dirname
  * - `orbitstudio-mcp-gated.spec.ts` — vitest が発見する唯一の入口（起動を 1 回に保つ）
  * - `gated/` 配下 — シナリオ本体の置き場（PR-E2 以降。**`.spec.ts` にしない**ので
  *   vitest は発見せず、起動は 1 回のまま）
+ * - `helpers/` 配下 — capture 区間写像など gated E2E の実装も衛生検査へ含める。
+ *   `.spec.ts` は旧写像との等価性を示すテストで旧式を引用するため除外する
  */
 const GATED_SOURCE_GLOBS: readonly {
   readonly dir: string
@@ -32,6 +34,10 @@ const GATED_SOURCE_GLOBS: readonly {
 }[] = [
   { dir: E2E_DIR, match: (name) => name === 'orbitstudio-mcp-gated.spec.ts' },
   { dir: path.join(E2E_DIR, 'gated'), match: (name) => name.endsWith('.ts') },
+  {
+    dir: path.join(E2E_DIR, 'helpers'),
+    match: (name) => name.endsWith('.ts') && !name.endsWith('.spec.ts'),
+  },
 ]
 
 /** ディレクトリ配下の `.ts` を再帰で集める。ディレクトリが無ければ空。 */

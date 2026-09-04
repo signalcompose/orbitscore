@@ -15,13 +15,21 @@ import * as path from 'path'
 
 import { expect } from 'vitest'
 
-import {
-  analyzeWavBuffer,
-  type WavAnalysis,
-} from '../../../packages/vscode-extension/src/wav-analysis'
+import { analyzeWavBuffer } from '../../../packages/vscode-extension/src/wav-analysis'
 
+import {
+  captureClockSec,
+  captureWindowsFrom,
+  readCaptureFormat,
+  waitForSound,
+  type CaptureFormat,
+  type CaptureSegment,
+  type CaptureWindows,
+} from './capture-windows'
 import type { GatedSession } from './gated-session'
 import { sleep, waitUntil, type McpClient } from './mcp-client'
+
+export type { CaptureWindows } from './capture-windows'
 
 const REPO_ROOT = path.resolve(__dirname, '../../..')
 const LIVE_MODE_MARKER = '🎵 Live coding mode'
@@ -93,43 +101,12 @@ export interface ScoreSource {
   readonly preserveDepth?: boolean
 }
 
-interface CaptureSegment {
-  readonly from: number
-  readonly to: number
-}
-
-export interface CaptureWindows {
-  readonly analysis: WavAnalysis
-  readonly capturePath: string
-  /** 区間名 → その区間の窓を二乗平均した RMS。`captureInstrumentScenario` と同一計算。 */
-  rms(segment: string, guardSec?: number): number
-  /** 区間の窓列（peak を見たい時・不連続の検査）。 */
-  windows(
-    segment: string,
-    guardSec?: number,
-  ): ReadonlyArray<{ startSec: number; peak: number; rms: number }>
-  /** 区間内のオンセット時刻（時間構造）。`analysis.onsets` の絞り込み。 */
-  onsets(segment: string): readonly number[]
-  /** 区間 × チャンネルの RMS。pan / 分離 / stem の判定はここを使う（#668 §10）。 */
-  channelRms(segment: string, channel: number, guardSec?: number): number
-}
-
 export interface ScoreRunContext {
   readonly session: GatedSession
   /** 追加評価（`evaluate_orbitscore`）。`ok` に assert しない — 診断は engine-log helper で見る。 */
   evaluate(code: string): Promise<void>
-  /** 名前つき区間を録る（settle → duration）。`captureInstrumentScenario` の同名関数と同型。 */
+  /** 名前つき区間を録る（初回だけ発音待ち → settle → duration）。 */
   captureSegment(name: string, durationMs?: number, settleMs?: number): Promise<void>
-}
-
-/**
- * 窓ごとの RMS を二乗平均して 1 つの値にする。
- *
- * 🔴 **`captureInstrumentScenario`（gated spec）と同一の計算**であること。ここがずれると、
- * 既存 7 本の #643 シナリオと新しい E2E が**違う数を見ながら同じ名前で語る**ことになる。
- */
-function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
-  return Math.sqrt(windows.reduce((sum, w) => sum + w.rms * w.rms, 0) / windows.length)
 }
 
 // #645 PR-D0 (post-hoc fix): exported so a caller that needs staged run_selection
@@ -247,10 +224,12 @@ export async function runScore(
 
   const { path: workPath, lineCount } = prepareWorkCopy(tmpRoot, source)
 
+  if (capturePath !== undefined) fs.rmSync(capturePath, { force: true })
   await startEngineForRun(client, `runScore ${source.slug}`, capturePath)
 
   const segments: Record<string, CaptureSegment> = {}
-  let stopWall = Date.now()
+  let captureFormat: CaptureFormat | undefined
+  let soundReady = false
 
   const evaluate = async (code: string): Promise<void> => {
     // 🔴 **`ok` / `isError` に assert しない**（設計 §4.2）。診断は `engine-log.ts` の
@@ -276,10 +255,26 @@ export async function runScore(
     }
   }
   const captureSegment = async (name: string, durationMs = 2000, settleMs = 400): Promise<void> => {
+    if (capturePath === undefined) {
+      throw new Error(`runScore ${source.slug}: captureSegment requires { capture: true }`)
+    }
+    if (!soundReady) {
+      await waitForSound(capturePath, {
+        floor: 0.01,
+        intervalMs: 250,
+        timeoutMs: 20_000,
+        label: `runScore ${source.slug}`,
+      })
+      captureFormat = readCaptureFormat(capturePath)
+      soundReady = true
+    }
     if (settleMs > 0) await sleep(settleMs)
-    const from = Date.now()
+    const fromWall = Date.now()
+    const fromSec = captureClockSec(capturePath, captureFormat!)
     await sleep(durationMs)
-    segments[name] = { from, to: Date.now() }
+    const toSec = captureClockSec(capturePath, captureFormat!)
+    const toWall = Date.now()
+    segments[name] = { fromSec, toSec, fromWall, toWall }
   }
 
   let bodyError: unknown
@@ -313,7 +308,6 @@ export async function runScore(
       await client.call('evaluate_orbitscore', { code: 'global.stop()' })
       const stopped = await client.call('stop_engine')
       expect(stopped.isError, stopped.text).toBe(false)
-      stopWall = Date.now()
       await waitForEngineState(client, false, 15_000, `runScore ${source.slug} engine stopped`)
       await sleep(1000)
     } catch (cleanupError) {
@@ -337,57 +331,5 @@ export async function runScore(
 
   const capture = fs.readFileSync(capturePath)
   const analysis = analyzeWavBuffer(capture, { windowMs: 20, perChannel: true })
-  const range = (segment: CaptureSegment, guardSec: number) => ({
-    fromSec: Math.max(0, analysis.durationSec - (stopWall - segment.from) / 1000 + guardSec),
-    toSec: Math.min(
-      analysis.durationSec,
-      analysis.durationSec - (stopWall - segment.to) / 1000 - guardSec,
-    ),
-  })
-  const requireSegment = (name: string): CaptureSegment => {
-    const segment = segments[name]
-    expect(segment, `runScore ${source.slug} segment '${name}' must exist`).toBeDefined()
-    return segment as CaptureSegment
-  }
-  const windowsFor = (
-    name: string,
-    guardSec = 0.15,
-  ): ReadonlyArray<{ startSec: number; peak: number; rms: number }> => {
-    const requested = range(requireSegment(name), guardSec)
-    const selected = (analysis.windows ?? []).filter(
-      (window) => window.startSec >= requested.fromSec && window.startSec < requested.toSec,
-    )
-    expect(
-      selected.length,
-      `runScore ${source.slug} segment '${name}' must contain windows`,
-    ).toBeGreaterThan(0)
-    return selected
-  }
-  const rms = (name: string, guardSec = 0.15): number => {
-    const selected = windowsFor(name, guardSec)
-    return quadraticMeanRms(selected)
-  }
-  const onsets = (name: string): readonly number[] => {
-    const requested = range(requireSegment(name), 0)
-    return analysis.onsets.filter((t) => t >= requested.fromSec && t < requested.toSec)
-  }
-  const channelRms = (name: string, channel: number, guardSec = 0.15): number => {
-    const perChannel = analysis.channelWindows?.[channel]
-    expect(
-      perChannel,
-      `runScore ${source.slug} channelWindows must exist for channel ${channel} ` +
-        `(analysis.format.channels=${analysis.format.channels})`,
-    ).toBeDefined()
-    const requested = range(requireSegment(name), guardSec)
-    const selected = (perChannel ?? []).filter(
-      (window) => window.startSec >= requested.fromSec && window.startSec < requested.toSec,
-    )
-    expect(
-      selected.length,
-      `runScore ${source.slug} segment '${name}' channel ${channel} must contain windows`,
-    ).toBeGreaterThan(0)
-    return quadraticMeanRms(selected)
-  }
-
-  return { analysis, capturePath, rms, windows: windowsFor, onsets, channelRms }
+  return captureWindowsFrom(analysis, segments, `runScore ${source.slug}`, capturePath)
 }
