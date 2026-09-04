@@ -118,7 +118,7 @@ export interface ScheduledPlay {
 `slice` が optional なのはなぜでしょうか。答えは sequence 層の分岐にあります。chop の指定によって、そもそも呼ぶメソッドが変わるのです。
 
 ```typescript
-// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:127-154
       // Schedule event (argPath = #390 live playhead marker, observational only)
       if (chopDivisions && chopDivisions > 1) {
         const eventDuration = event.duration && event.duration > 0 ? event.duration : undefined
@@ -275,7 +275,7 @@ const MAX_DRIFT_MS = 1000
 1 小節分のイベントは、ループ開始時に `scheduleEvents()` がまとめてキューへ push します。この関数は sequence 層 (`packages/engine/src/core/sequence/scheduling/event-scheduler.ts`) にあり、バックエンドに依存しません。
 
 ```typescript
-// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:97-153 (gain/pan の計算と scheduleSliceEvent / scheduleEvent の引数列を // ... で省略)
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:113-169 (gain/pan の計算と scheduleSliceEvent / scheduleEvent の引数列を // ... で省略)
   // Schedule events for current iteration
   const loopOffset = loopIteration * patternDuration
 

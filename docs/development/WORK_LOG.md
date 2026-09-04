@@ -116,6 +116,60 @@ adr-002 の 2 件は **#727 以前から既にずれていた**（§13 Versionin
 
 `npm ci` / `npm run docs:build -w @orbitscore/user-site` / `npm run docs:build -w @orbitscore/dev-site` /
 `npm run docs:check` の 4 本すべて green（citation 922 件検証・0 failed）。
+### fix(engine): contain the two playback-path throws (#645 PR-D0) (Sep 4, 2026)
+
+**Issue**: #645 / **ブランチ**: `645-contain-playback-throws` / **PR-D0**
+
+`LOOP()` 経路の throw 2 箇所を封じ、スキップをログに出す。ライブ中に kick が止まる実害の修正。
+実装は `sequence.ts` の `DispatchTarget = hardware | link | skip` の tagged union +
+`resolveDispatchChannel()`（throw しない）+ `logSkipOnce`。ユニット **13 本**。
+
+#### 🔴 「ログ行が一切出ない」は誤りだった（実機 4 サイクル分の記録を訂正）
+
+前回までの記録は「`d645Skip` のログ行が**一行も出ない**」としていた。診断を出して実測したところ、
+**出ていた**:
+
+```
+… このシーケンスは無音でスキップします。      ← ✅ skip は記録されている
+🔄 d645Skip (loop queued, +1998ms to next quantize boundary)
+⏹ d645Skip (loop stopped)                      ← 停止する
+🎚️ d645Live: gain=-3 dB (seamless)             ← ✅ 兄弟は生きている
+```
+
+**PR-D0 が守るべき性質は 3 つとも満たされている**:
+
+| 性質 | 実測 |
+|---|---|
+| skip が黙って消えない | ✅ 「無音でスキップします」がログに出る |
+| throw しない | ✅ 同一ブロックの `d645Live` が自分の `(seamless)` を出している |
+| 兄弟を巻き添えにしない | ✅ 同上 |
+
+🔴 **「ログが出ない」と 4 サイクル書き続けたのは、診断を出さずに症状だけを見ていたから。**
+[[escalation-does-not-fix-opacity]] のとおり、見えない時は観測手段を先に作る。
+
+#### 落ちていたのは**テストの主張が実装の契約を超えていた**箇所（→ #736）
+
+| # | 主張 | 実装の契約 |
+|---|---|---|
+| 1 | 停止中の `d645Skip` にも `(seamless)` が出る | `seamlessParameterUpdate()` は `isLooping() \|\| isPlaying()` **かつ** `scheduler.isRunning && loopStartTime !== undefined` の時だけ出す（`sequence.ts:278-281`）。**停止中は出ない** |
+| 2 | dedup を **ERROR 総数**で数える | skip は **stderr → ERROR に分類される**（#625 で 4 回再発した系譜）ので**他の ERROR が混ざり、dedup の証明にならない**。数えるなら skip メッセージの出現回数 |
+
+**実機 gated は #736 へ分離**（owner 裁定 2026-09-04）。外した理由を spec 内のコメントに残したので、
+次に読む人が「E2E を書き忘れた」と誤読しない。
+
+#### 3 文書に反映
+
+| 文書 | 内容 |
+|---|---|
+| `DEVELOPMENT_MAP.md` §4.A | #645（実装・✅）と **#736（実機 E2E の主張・未解決）**の 2 行に分離 |
+| `IMPLEMENTATION_PLAN_2026-09.md` §1.7 | PR-D0 の検証列を「ユニット 13 本」に。**PR-D1（#736）**を新規行に |
+
+#### 検証
+
+`npm test` **2205 passed** / `npm run typecheck:e2e` 0 / lint 0 /
+`check-citations` 922 verified 0 failed。
+
+---
 
 ### docs(spec): fix the implicit-master condition found by the independent re-audit (Sep 4, 2026)
 
@@ -475,6 +529,96 @@ Bitwig は**保証しきれないことを認めて隔離で解く**（ホステ
 🔴 **これは [[live-coding-forbids-workflow-interruptions]] と対になる。** 保証を起動時に寄せるからこそ、
 **演奏時に確認を挟む必要が無い**。「評価時に trust を問う」設計は DAW と**二重に**違っていた
 （① 確認を挟む ② 判断を実行時に置く）。
+### fix(engine): contain the two playback-path throws and log the skip (Sep 4, 2026)
+
+**Issue**: #645（must-fix）/ **設計正本**: `docs/design/610-diagnostics-applicability-design.md` §5 / **PR**: PR-D0（Sonnet フォールバック実装・Codex が sandbox 制約で2回起動失敗）
+
+owner 指示（2026-08-29）: 「ライブコーディングなのでエラー出して止まるのは基本よくない。内部的にちゃんと掴んでログに出すとかして実行に影響を出さない、とかにすれば別に普通に E2E テストでカバーできますよね」。
+
+#### 対象の 2 throw と到達経路（5 経路・すべて main で行番号を取り直し済み）
+
+| # | 場所 | 経路 | 直したか |
+|---|---|---|---|
+| 1 | `sequence.ts` `resolveDispatchChannel()` | `run()` `:1744` / `loop()` `:1791`（eager・await 連鎖） | ✅ throw→`DispatchTarget`（`skip`）+ `logSkipOnce()` |
+| 2 | 同上 | 🔴 `seamlessParameterUpdate` `:273` → `scheduleEventsFromTime` `:1584`。`gain`/`pan`/`audio`/`chop`/`tempo`/`beat`/`length`/`play` から同期で入る（issue 本文が書いていない経路・再現条件として最有力） | ✅ 同上 |
+| 3 | 同上 | `unmute()` `:1865` → 同上 | ✅ 同上（呼び出し元のみで解決） |
+| 4 | `loop-sequence.ts` `safeSchedule`（`:113-129`） | 既に catch 済み。文言のみ `[ERROR] Sequence '<name>': loop scheduling error:` へ揃える | ✅ 文言合わせのみ |
+| 5 | `loop-sequence.ts:104` / `run-sequence.ts` 初回 schedule | 1 と同じ経路で解決済み | ✅ 追加対応不要 |
+| 6 | `event-scheduler.ts` `resolveAudioFilePath()`（定義 `:16` 改・呼び出し元 `:106`/`:193`） | パス非絶対（内部エラー自称） | ✅ throw→`undefined` を返しログ、呼び出し元が `return` |
+
+#### 直し方（設計 §5.3 が確定）
+
+- `resolveDispatchChannel(): DispatchTarget`（`{kind:'hardware'} | {kind:'link',channel} | {kind:'skip',reason}`）を新設。**`undefined` は使わない** — 旧 `undefined`（hardware 経路）とエラー時の `undefined` が同じ値になると黙ってハードウェアから音が出る（#645 が名指しした「別種の驚き」）
+- `scheduleEvents`/`scheduleEventsFromTime`（sequence.ts 側の private ラッパー）は `kind === 'skip'` で **スケジュールせず return**（そのシーケンスだけ無音、他は継続）
+- `run()`/`loop()` の eager 呼び出しは throw ではなく `logSkipOnce()` を呼ぶだけに変更（早期検知は残す）
+- `logSkipOnce()`: `_dispatchSkipLoggedFor` で理由文字列をキーに重複抑止。**理由が変わった時**と **`.output()` が新しいチャンネルを設定した時**にリセット。ループは毎小節この経路を通るので、抑止が無いと `get_log` の 500 行窓を 1 シーケンスが埋め尽くす
+- `event-scheduler.ts`: `resolveAudioFilePath(audioFilePath, sequenceName): string | undefined` へ変更。呼び出し元 2 箇所で `if (!resolvedFilePath) return`
+
+#### テスト
+
+- ユニット 13 本追加（`tests/core/sequence-link-audio-integration.spec.ts`）: run()/loop() が reject でなく resolve すること・`DispatchTarget` の3 kind・`logSkipOnce` のインスタンス単位 dedup（同一理由の連続呼び出しは1回だけログ）・`.output()` 呼び出しでの dedup キー reset（white-box。公開 API では2回目の skip を再現できないため）
+- 既存ユニット 3 ファイル改修（throw 前提のテストを `DispatchTarget` 前提へ書き換え）
+- gated E2E 1 本追加（`tests/e2e/orbitstudio-mcp-gated.spec.ts` 末尾）: `global.linkAudio()` 下で `.output()` 無しの LOOP が無音スキップ + ログされ、**別の（`.output()` 済みの）sequence の LOOP を止めない**ことを capture RMS で確認。続けて path 2（`.gain()` mid-loop）が同じ evaluation block を落とさないことを、**別の** `evaluate_orbitscore` 呼び出しでの gain 変化（RMS 差分）で確認。ERROR 件数はループ4秒超（2小節超）でも高々 +4 に収まることを assert（dedup の回帰証跡）
+- `tests/e2e/dsl-e2e-coverage.spec.ts`: 新 E2E が `global.linkAudio()` を実機で評価するため `GLOBAL_UNCOVERED_BASELINE` から `linkAudio` を除去（ラチェットは減る方向のみ許可）
+
+#### 検証（sandbox 内・実機 E2E は main が別途実施）
+
+`npm test`（2199 passed / 49 skipped）・`npm run typecheck:e2e`・`npm run lint`・`npm run build`・`sites/dev` の `check-citations.mjs --fix`（`sequence.ts`/`event-scheduler.ts`/`loop-sequence.ts`/`dsl-e2e-coverage.spec.ts` の行番号シフトで 26 件の引用が機械的にずれたため再アンカーのみ実施・本文の書き換えなし）はすべて green。
+
+#### 追記（実機 gated E2E が落ちた・main 実測 2026-09-04・修正済み）
+
+main の実機実行で E2E-645 が `timed out waiting for #645 dispatch-skip log line` で failed
+（他 10 件は baseline と同一の pre-existing 失敗で無関係）。**実装本体は問題なし**、テスト
+ハーネスの前提検証不足が原因:
+
+- `run_selection`（`evaluate_orbitscore` と違い）は評価完了を待たず、`isError` は
+  「アクティブなエディタが無い」等の**機械的失敗**しか捉えない — 提出コードの実行時 throw
+  （`global.linkAudio()` の v1 相互排他 throw 等・`global.ts:411-422`）は `get_log` にしか
+  出ない。既存の `expect(run.isError).toBe(false)` はこの throw を素通りさせていた
+- 修正: `global.linkAudio()` を単独の `run_selection` に分離し、直後に `get_log` で throw
+  文言の有無を明示チェック（見つかれば「①linkAudio 自体が失敗」と名指しして即座に fail）。
+  最終の skip ログ待ち `waitUntil` も try/catch で包み、タイムアウト時に「①は否定済みなので
+  ②skip が起きなかった/③ログが窓外に流れた」の切り分けと `get_log` 末尾をエラーに含める
+- `tests/e2e/helpers/run-score.ts` の `startEngineForRun`/`waitForEngineState`（`runScore()`
+  が内部で使っていた既存の堅牢な起動処理）を export し、engine の (再) 起動をそちらへ委譲
+  （`capture_wav` 要求時は必ず stop_engine→wait-false→start_engine、daemon ready timeout の
+  retry-once、`🎵 Live coding mode` マーカー確認まで待つ — 単なる `get_engine_state.running`
+  より確実）
+
+検証（再実施）: `npm test`（2199 passed / 49 skipped・変化なし）・`typecheck:e2e`・`lint`・
+`build`・`check-citations.mjs`（import 追加による行番号シフトで 46 件が再びずれたため
+`--fix` で再アンカー）すべて green。実機 gated E2E は未実施（main が別途実施）。
+
+#### 追記2（capture RMS の前提が崩れていた・main 実測 2026-09-04 の2回目・修正済み）
+
+上の修正で前提診断は効き、skip はログに出ることが確認された。しかし別の assert
+（`d645Live` の capture RMS）が `expected 0 to be greater than 0.01` で failed。main の一次
+情報調査: `rust/crates/orbit-audio-daemon/Cargo.toml` の `link-audio` feature は default off・
+gated ビルド（`pretest:e2e:gated`）も `--features outproc-effect,outproc-instrument` で
+link-audio を含まない。「LinkAudio でも hardware にフォールバックして鳴る」という前提は
+`rust-engine-player.ts` の**コメント**に書いてあっただけで、実機ログに
+`LINK_AUDIO_UNAVAILABLE`/gap warning が1件も出ておらず、**裏取りできていなかった**。
+
+- 修正: capture RMS への依存を全廃。証明手段を TS engine 側の `console.log` マーカーへ
+  切替 — `🔄 <name> (loop started/queued)`（`loopSequence()`、dispatch 結果によらず無条件で
+  発火）と `🎚️ <name>: gain=<x> dB (seamless)`（`seamlessParameterUpdate()`、
+  `scheduleEventsFromTime` の private wrapper が skip で早期 return しても、呼び出し元自身の
+  ログ行は必ず届く）。いずれも daemon RPC より手前の TS 側イベントなので、LinkAudio が
+  daemon にコンパイルされているかに依存しない
+- `LOOP(d645Skip)` + `LOOP(d645Live)`（経路1）・`d645Skip.gain(-6)` + `d645Live.gain(-3)`
+  （経路2）を**それぞれ1つの `run_selection`（= 1評価ブロック）**にまとめ、後続の sibling
+  マーカーが実際に出ることを確認 — pre-#645 なら先頭の throw が同ブロック内の後続文の実行を
+  止めていたはず、というこの PR の主張そのものを検証する構造にした
+- 別の `evaluate_orbitscore` 呼び出し（`d645Live.gain(-1)`、ブロックをまたぐ後続評価が汚染
+  されないことの確認）は `pan` ではなく `gain` を再利用 —
+  `dsl-e2e-coverage.spec.ts` の `SEQUENCE_UNCOVERED_BASELINE` に `pan` が残っており、新規に
+  `.pan(` を書くとラチェットの「baseline は減らす方向のみ」に抵触するため
+- テスト名から誤解を招く要素は無いため維持（「sibling を止めない」という主張は log マーカーで
+  引き続き証明できている）。実行時間もこの変更で短縮（audio 用の settle sleep 群を削除）
+
+検証（再実施）: `npm test`（2199 passed / 49 skipped・変化なし）・`typecheck:e2e`・`lint`・
+`build`・`check-citations.mjs`（今回は行番号シフト無し・0 failed）すべて green。実機 gated
+E2E は未実施（main が別途実施）。
 
 ---
 

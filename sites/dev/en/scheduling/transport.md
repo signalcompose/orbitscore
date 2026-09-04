@@ -496,7 +496,7 @@ The sequence side also has `run()`, `loop()`, and `stop()`. From the DSL they ar
 - `seq.stop()` → clears events and cancels the loop timer
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1774-1799
+// packages/engine/src/core/sequence.ts:1843-1868
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()

@@ -611,7 +611,7 @@ export function captureWavPath(tmpRoot: string, slug: string): string {
 `runScore` は「譜面を work copy にして、エディタ経路（`open_file` → `set_selection` → `run_selection`）で評価し、要求されれば capture を解析して区間 RMS を返す」までを 1 関数にしたものです。そこにある `evaluate` が `ok` / `isError` に assert しないのは意図した設計で、理由は本章の [`ok` の節](#evaluate-orbitscore-の-ok-は何を意味するか)と同じところにあります。
 
 ```typescript
-// tests/e2e/helpers/run-score.ts:258-270
+// tests/e2e/helpers/run-score.ts:264-276
     // 🔴 **ただし「assert しない」は「握り潰す」ではない**（silent-failure レビュー 2026-09-04）。
     // `ok` は**必要条件**で、`ok: false` は `get_log` を漁らずその場で取れる一次シグナルである
     // （パース / 実行時診断・`mcp-server.ts` の tool 説明）。捨てると、セットアップの typo が
@@ -805,7 +805,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 `readGatedSources()` が返す gated E2E のソース全体に `.<name>(` が現れるかどうかだけを見ます。語彙側は `packages/engine/src/signal-chain/runtime` の `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` — インタプリタの dispatch テーブルそのものです。
 
 ```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:150-160
+// tests/e2e/dsl-e2e-coverage.spec.ts:149-159
   it('A-1 does not leave a new sequence method untested on real hardware', () => {
     const now = uncovered(SEQUENCE_DSL_METHODS)
     const baseline = new Set(SEQUENCE_UNCOVERED_BASELINE)
@@ -946,7 +946,7 @@ audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1394-1404
+// packages/engine/src/core/sequence.ts:1421-1431
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {

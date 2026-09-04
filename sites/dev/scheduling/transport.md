@@ -496,7 +496,7 @@ stateDiagram-v2
 - `seq.stop()` → イベントをクリアし、ループタイマーをキャンセルする
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1774-1799
+// packages/engine/src/core/sequence.ts:1843-1868
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()

@@ -114,7 +114,9 @@ describe('Sequence instrument dispatch', () => {
     expect(seq.isInstrument()).toBe(true)
     expect(seq.isMidi()).toBe(false)
     expect(seq.isNoteSequence()).toBe(true)
-    expect(seq.resolveDispatchChannel()).toBeUndefined()
+    // #645 PR-D0: note sequences resolve to hardware (the pre-#645 `undefined`), never
+    // `skip` — the LinkAudio `.output()` requirement is scoped to sounding sequences.
+    expect(seq.resolveDispatchChannel()).toEqual({ kind: 'hardware' })
 
     global.start()
     seq.play(1, 0, 3)

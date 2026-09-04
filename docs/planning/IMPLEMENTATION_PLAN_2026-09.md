@@ -157,7 +157,8 @@
 
 | PR | 件名 | 対象 | 触るファイル（概算行） | 依存 | 検証 | 一方通行 |
 |---|---|---|---|---|---|---|
-| PR-D0 ⟂ | `fix(engine): contain the two playback-path throws and log the skip` | **#645 must-fix**（`resolveDispatchChannel` を `DispatchTarget = hardware \| link \| skip` の tagged union に・throw を無音スキップ + `[ERROR]`）| `sequence.ts`（+60/−20）・`event-scheduler.ts`（+20/−8）・unit | なし | E2E-645-A/B（linkAudio 譜面 → `run_selection` → `get_log`）| 内部 API |
+| PR-D0 ⟂ | `fix(engine): contain the two playback-path throws and log the skip` | **#645 must-fix**（`resolveDispatchChannel` を `DispatchTarget = hardware \| link \| skip` の tagged union に・throw を無音スキップ + `[ERROR]`）| `sequence.ts`（+60/−20）・`event-scheduler.ts`（+20/−8）・unit **13 本** | なし | ユニット 13 本。🔴 **実機 E2E-645-A/B は #736 へ分離** | 内部 API |
+| PR-D1 | `test(e2e): align the #645 gated assertions with a skipped sequence` | **#736**（PR-D0 から分離）| gated spec（+300 復活・主張の修正） | PR-D0 | 実機 E2E-645-A/B。🔴 **dedup は ERROR 総数でなく skip メッセージの出現回数で数える** | — |
 | PR-D1 ⟂ | `docs(spec): one applicability table for receivers and methods` | #644 表の仕様側・#280 の spec 1 本化・#255-1 の明記 | core spec・`PITCH_DSL_SPEC_v1.1.md` | — | docs | — |
 | PR-D2 | `fix(diagnostics): run the engine parser behind the editor diagnostics` | **#610**（`ParseError` に span・文言不変・拡張が engine の `analyze-source` を require）| `parser/parse-error.ts`（新 20）・`parser-utils.ts`（+10）・`diagnostics/analyze-source.ts`（新 60）・`extension.ts`（+40）| PR-D1 | E2E-D1/D2 | 診断の増加 |
 | PR-D3 | `feat(diagnostics): applicability table drives the editor warnings` | #644 全項・#665 (A)（`diagnostics/applicability.ts` 受け手 9 種 × メソッド・4 値・`render-node`/`master-line` 行を先置き）| `parser/types.ts` + `parse-statement.ts` 4 箇所（span）・`applicability.ts`（新 200）・`analyze-source.ts`（+90）・`signal-chain-dispatch.spec.ts`（+120）| PR-D2 | E2E-D3/D4/D5・全数照合テスト | 診断の増加 |
