@@ -1,8 +1,10 @@
 /**
  * #385 PR-S-T1 — untrusted workspace で拡張が activate されることを、マニフェストの宣言で保証する。
  *
- * 🔴 **この PR の成果物はマニフェストの 1 ブロックだけ**なので、それを検査するテストが無いと
- * 「誰も読まない宣言」になる（[[consumerless-code-is-unprotected]] の型）。
+ * 🔴 **この層が検査するのはマニフェストの宣言だけ**である。「実際に untrusted workspace で
+ * activate され、しかも普通に音が出る」ことは **gated E2E の `E2E-D1`** が実機で押さえる
+ * （`tests/e2e/orbitstudio-mcp-gated.spec.ts`・設計 `656-release-design.md` §12）。
+ * 宣言の検査だけで済ませると「誰も読まない宣言」になる（[[consumerless-code-is-unprotected]]）。
  *
  * ## 何が壊れていたか（#385）
  *
@@ -28,53 +30,50 @@
  * 「**workspace が値を決めると別の実行ファイルが動く**」ものだけを入れる。これは
  * `supported` の値と独立に効く保護であり、**ワークフローには一切現れない**（評価も再生も止まらない）。
  */
-import * as fs from 'fs'
-import * as path from 'path'
-
 import { describe, expect, it } from 'vitest'
 
-const MANIFEST_PATH = path.resolve(__dirname, '../../packages/vscode-extension/package.json')
+import {
+  declaredConfigurationKeys,
+  readExtensionManifest,
+} from '../helpers/vscode-extension-manifest'
 
-interface UntrustedWorkspacesCapability {
-  readonly supported?: unknown
-  readonly description?: unknown
-  readonly restrictedConfigurations?: unknown
-}
+const capability = readExtensionManifest().capabilities?.untrustedWorkspaces
 
-function readCapability(): UntrustedWorkspacesCapability {
-  const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8')) as {
-    capabilities?: { untrustedWorkspaces?: UntrustedWorkspacesCapability }
-  }
-  const capability = manifest.capabilities?.untrustedWorkspaces
+/**
+ * `restrictedConfigurations` を **string[] として取り出す**。
+ *
+ * 🔴 ここで `?? []` に落とさないのが load-bearing である。空配列へフォールバックすると、
+ * 宣言が丸ごと消えた時に `for...of` が 0 周して**何も検査せず green** になる
+ * （[[test-assertions-must-discriminate]]）。取り出せない形なら**ここで落とす**。
+ */
+function restrictedConfigurations(): readonly string[] {
+  const restricted = capability?.restrictedConfigurations
   expect(
-    capability,
-    '#385: capabilities.untrustedWorkspaces を宣言しないと、loose-file 起動で拡張が activate されず ' +
-      '「何も起きない」ようにしか見えない',
-  ).toBeDefined()
-  return capability as UntrustedWorkspacesCapability
-}
-
-/** マニフェストが宣言する設定キーを全部集める（`restrictedConfigurations` の実在確認に使う）。 */
-function declaredConfigurationKeys(): ReadonlySet<string> {
-  const manifest = JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf8')) as {
-    contributes?: { configuration?: { properties?: Record<string, unknown> } }
-  }
-  return new Set(Object.keys(manifest.contributes?.configuration?.properties ?? {}))
+    Array.isArray(restricted),
+    'restrictedConfigurations が配列でない（宣言が消えると以降の検査が素通りになるため、ここで止める）',
+  ).toBe(true)
+  return restricted as readonly string[]
 }
 
 describe('#385 untrusted workspace capability', () => {
+  it('declares the untrustedWorkspaces capability at all', () => {
+    expect(
+      capability,
+      '#385: capabilities.untrustedWorkspaces を宣言しないと、loose-file 起動で拡張が activate されず ' +
+        '「何も起きない」ようにしか見えない',
+    ).toBeDefined()
+  })
+
   it('supports untrusted workspaces so a loose-file launch activates the extension', () => {
     expect(
-      readCapability().supported,
+      capability?.supported,
       '🔴 owner 裁定（656 §16 (1)）は `true`。"limited" は撤回済み、`false` は症状が直らない',
     ).toBe(true)
   })
 
   it('restricts exactly the settings that choose which executable runs', () => {
-    const restricted = readCapability().restrictedConfigurations
-    expect(Array.isArray(restricted), 'restrictedConfigurations は配列').toBe(true)
     expect(
-      [...(restricted as string[])].sort(),
+      [...restrictedConfigurations()].sort(),
       '「workspace が値を決めると別の実行ファイルが動く」ものだけを入れる',
     ).toEqual(['orbitscore.engine', 'orbitscore.scsynthPath'])
   })
@@ -84,14 +83,20 @@ describe('#385 untrusted workspace capability', () => {
    * harness は workspace の `.vscode/settings.json` に `orbitscore.audioDevice` を書く
    * （`docs/design/656-release-design.md` §3.2）。デバイス名は実行対象を選ばないので、
    * 基準からしても対象外である。
+   *
+   * `flash*` / `playheadPalette`（色）も同じ理由で対象外。**マニフェストが宣言する設定を
+   * 全件走査**して、基準に合わないものが混ざっていないことを見る — 名指しの 3 件だけを
+   * 否定すると、後から足された設定が漏れる（[[enumeration-stops-one-level-too-early]]）。
    */
-  it('does not restrict settings that name a device, a port, or a colour', () => {
-    const restricted = new Set((readCapability().restrictedConfigurations as string[]) ?? [])
-    for (const key of [
-      'orbitscore.audioDevice',
-      'orbitscore.engineDebug',
-      'orbitscore.mcpServer.port',
-    ]) {
+  it('restricts nothing that merely names a device, a port, or a colour', () => {
+    const restricted = new Set(restrictedConfigurations())
+    const executableChoosing = new Set(['orbitscore.scsynthPath', 'orbitscore.engine'])
+    const declared = [...declaredConfigurationKeys()]
+    expect(declared.length, 'contributes.configuration が空なら走査が無意味になる').toBeGreaterThan(
+      0,
+    )
+    for (const key of declared) {
+      if (executableChoosing.has(key)) continue
       expect(
         restricted.has(key),
         `${key} は実行対象を選ばないので restrict しない（audioDevice は gated harness が書く）`,
@@ -101,7 +106,7 @@ describe('#385 untrusted workspace capability', () => {
 
   it('only restricts settings this extension actually contributes', () => {
     const declared = declaredConfigurationKeys()
-    for (const key of (readCapability().restrictedConfigurations as string[]) ?? []) {
+    for (const key of restrictedConfigurations()) {
       expect(declared.has(key), `${key} が contributes.configuration に無い（綴り間違い）`).toBe(
         true,
       )
@@ -109,7 +114,7 @@ describe('#385 untrusted workspace capability', () => {
   })
 
   it('explains why evaluation is allowed, so the reason survives the next reader', () => {
-    const description = readCapability().description
+    const description = capability?.description
     expect(typeof description, 'description は文字列').toBe('string')
     // DAW と同じ挙動である、という裁定の根拠が読めること。
     expect(

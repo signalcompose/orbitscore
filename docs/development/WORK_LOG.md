@@ -17,6 +17,56 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
+
+**Issue**: #385 / **ブランチ**: `385-untrusted-workspace-capability` / **PR-S-T1**
+
+フォルダ無しの loose-file 起動（`orbs file.orbs`）は**未信頼の ad-hoc workspace** を作る。
+`capabilities.untrustedWorkspaces` を宣言していない拡張はそこで activate されず、
+利用者には「何も起きない」ようにしか見える。**実害は拒否ではなく沈黙**である。
+
+owner 裁定（`docs/design/656-release-design.md` §16 (1)・2026-09-03）は **`supported: true`**
+「一般的な DAW の挙動に併せて」。`"limited"` は撤回済みなので `startEngine()` に trust ガードは置かない。
+
+#### 🔴 レビューで自分のテストが「何も証明していない」と分かった（2 段階）
+
+**① ユニット側**: `restrictedConfigurations` を `?? []` でフォールバックしていたため、
+**宣言が丸ごと消えても `for...of []` が 0 周して green** になっていた。
+フォールバックを外し、取り出せない形なら**その場で落とす**ようにした。変異で実証:
+
+| 変異 | 旧 | 新 |
+|---|---|---|
+| `restrictedConfigurations` を削除 | 2 件**素通り** | **3 件 red** |
+| `audioDevice` を restricted に追加 | — | **2 件 red** |
+| `supported: false` | — | **1 件 red** |
+
+restore 後 6 件 green・`package.json` は `cmp` で復元一致。
+
+**② E2E 側（本 PR では出さない・**#735** へ切り出し）**: 正本計画は PR-S-T1 に
+**E2E-D1（実機）**を課している。書いて実機で回したところ **dev モードでは緑になったが、
+`capabilities` ブロックを丸ごと削除しても緑のまま**だった。
+🔴 **`--extensionDevelopmentPath` は workspace trust の制限を迂回する**ためで、
+設計が `ORBIT_GATED_EXT_MODE=installed` を要求していた理由が実験で裏付けられた。
+
+installed モード（vsix を焼いて `--install-extension`）に切り替えると、
+**導入は成功するのに拡張が activate しない**（trust を無効にしても同じなので trust は原因ではない）。
+ここは #385 の症状とは別の観測性の問題なので **#735** へ切り出した。6 実験の結果はそちらに残してある。
+
+**副産物**: `orbs --install-extension` は**失敗しても exit 0 を返す**（壊れた vsix で
+「Failed Installing Extensions」を出しながら 0）。exit code で判定してはいけない。
+
+#### reuse: マニフェスト読み取りを共有ヘルパーへ
+
+`playhead.spec.ts:211` が既に同じ `package.json` を**別の書き方**（`new URL(…, import.meta.url)`）で
+読んでいた。`tests/helpers/vscode-extension-manifest.ts` を新設し、**両方をそこへ寄せた**
+（新設だけして重複を残すと 1 箇所が 3 箇所になる）。`playhead.spec.ts` 33 件は通ったまま。
+
+#### 検証
+
+`npm run typecheck:e2e` 0 / `tests/vscode-extension/` **430 passed** / lint 0。
+
+---
+
 ### docs(spec): fix the implicit-master condition found by the independent re-audit (Sep 4, 2026)
 
 **Issue**: #611 / **ブランチ**: `611-output-line-spec` / **PR-O1**（段 1 の縦依存 1 本目）
