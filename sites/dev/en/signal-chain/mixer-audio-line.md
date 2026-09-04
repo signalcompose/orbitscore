@@ -63,7 +63,7 @@ bus carries its own output target and send targets).
 The DSL samples from the spec, quoted verbatim from its Markdown:
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1660-1664
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1681-1685
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")
@@ -72,7 +72,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1712-1714
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1733-1735
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send("rev", 0.3)                 // send（copy・原音は継続して master/sum へ）

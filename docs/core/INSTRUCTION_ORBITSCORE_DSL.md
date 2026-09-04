@@ -722,6 +722,27 @@ tempo / beat / phase / Start-Stop は LinkAudio に内包された Link 機能�
 - **Underscore Methods**: Verify immediate application behavior for all _method() calls
 - **Inheritance**: Test that sequences inherit global parameters correctly and seamless updates work
 
+### 🔴 DSL を足したら E2E も足す（2026-09-04・#668）
+
+**DSL の表面**（新しい構文・チェーンメソッド・宣言形式）を追加する変更は、その表面を
+**実機で評価する E2E なしにマージしない**。ユニットテストはパーサやリゾルバという**部品**しか
+見ない。DSL が価値を出すのは「エディタで書く → 評価される → 音が出る」という**配線の全長**で、
+そこはユニットテストの視野の外にある。
+
+これは**仕組みで強制されている**（文章は読まれない時があるため）:
+
+| 正本 | 何が red になるか |
+|---|---|
+| `packages/engine/src/signal-chain/runtime.ts` の `GLOBAL_DSL_METHODS` / `SEQUENCE_DSL_METHODS` | 語を足して実機 E2E を書かないと `tests/e2e/dsl-e2e-coverage.spec.ts` のラチェットが red |
+| `packages/engine/src/parser/dsl-surface.ts` の `DSL_SYNTAX_SURFACE` | **`.name(` では測れない構文**（`play` のネスト・event modifier・tie・複数行 chain 等）を足して台帳に登録しないと red |
+| `tests/e2e/gated-assertion-hygiene.spec.ts` | ERROR 件数の厳密等価・capture したのに数値を見ない等の**弱いアサーション**を書くと red |
+
+**baseline は減らす方向にしか編集してはいけない。** 増やす編集は「DSL を足して E2E を
+書かなかった」ことなので、レビューで止める。
+
+詳細は [`../testing/E2E_HARNESS_SPEC.md`](../testing/E2E_HARNESS_SPEC.md)
+（特に §2.1 台帳の置き場と寿命・§3 どちらの層が網羅を取るか・§4.1 観測タイプ）。
+
 ---
 
 ## 11. VS Code Extension Features
