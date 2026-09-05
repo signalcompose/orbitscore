@@ -406,7 +406,7 @@ the callback body was a single function, `render_block`; as of 2026-09-01 it has
 `OutputStream::render_state`).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:580-586
+// rust/crates/orbit-audio-native/src/output.rs:570-576
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
@@ -417,7 +417,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:907-944
+// rust/crates/orbit-audio-native/src/output.rs:897-934
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -468,7 +468,7 @@ opt-ins, and the invariant that the path is bit-identical to the legacy path whe
 still stands.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:989-1034
+// rust/crates/orbit-audio-native/src/output.rs:979-1024
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -523,7 +523,7 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1036-1077
+// rust/crates/orbit-audio-native/src/output.rs:1026-1067
 #[inline]
 fn render_engine_with_sources(
     engine: &Engine,
@@ -574,7 +574,7 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1873-1890
+// rust/crates/orbit-audio-native/src/output.rs:1863-1880
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

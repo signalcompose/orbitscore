@@ -1525,6 +1525,7 @@ async fn handle_command(
                     "device_fell_back": stream_config.device_fell_back,
                     "fallback_reason": stream_config.fallback_reason,
                     "first_callback_ms": stream_config.first_callback_ms,
+                    "last_switch_failure": stream_config.last_switch_failure,
                 },
                 "callback": { "count": stream_stats.callbacks, "alive": engine.callback_alive(), "last_frames": stream_stats.last_frames },
             });
@@ -2876,7 +2877,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_status_adds_effective_output_and_ticker_owned_callback_state() {
+    async fn get_status_adds_effective_output_callback_state_and_last_switch_failure() {
         let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend {
             sample_rate: 96_000,
             channels: 6,
@@ -2884,6 +2885,8 @@ mod tests {
         .expect("stub backend starts");
         engine.stream_stats_arc().record_callback(384);
         engine.set_callback_alive(true);
+        engine
+            .record_device_switch_failure_for_test("Rejected Output", "simulated callback timeout");
         let (tx, _rx) = mpsc::channel(1);
         let response = handle_command(
             Command {
@@ -2905,6 +2908,10 @@ mod tests {
         assert_eq!(result["output"]["device_fell_back"], false);
         assert_eq!(result["output"]["fallback_reason"], Value::Null);
         assert_eq!(result["output"]["first_callback_ms"], 0);
+        assert_eq!(
+            result["output"]["last_switch_failure"],
+            "audio device switch unavailable: simulated callback timeout"
+        );
         assert_eq!(result["callback"]["count"], 1);
         assert_eq!(result["callback"]["alive"], true);
         assert_eq!(result["callback"]["last_frames"], 384);

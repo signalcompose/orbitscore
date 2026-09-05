@@ -93,8 +93,8 @@ PR-V3 の計器で 4 パターンを測った（起動 → 2 s と 5 s で `GetS
 resolve_output_device(request)                     -- 既存（eprintln! を撤去し理由を値で返す）
   → probe_output_device(device, config, deadline)  -- 新規: 最小 stream を build → 最初の callback を待つ → pause → drop
        dead → 起動時: host 既定を同じ手順で probe（1 回だけ）
-              切替時: Err（旧 stream は無傷・pause すらしない）
-  → LiveOutputDevice { device, name, config, sample_format, requested, fallback, probe_ms }
+              切替時: Err（呼び出し側が旧 stream を再開）
+  → LiveOutputDevice { device, name, config, sample_format, requested, fallback }
   → Engine::new / ensure_buffer_len / capture ring -- 既存（確定済み rate で作る）
   → build_stream(&live, ...) → play()
   → confirm_first_callback(stats, deadline)        -- 事後条件。dead → StreamDead（再縮退しない）
@@ -142,6 +142,11 @@ resolve_output_device(request)                     -- 既存（eprintln! を撤�
 
 `impl Drop for OutputStream { let _ = self._stream.pause(); }` を置き、
 `apply_device_switch` は **旧を pause → 新を build/probe → 成功なら差し替え / 失敗なら旧を `play()`** とする。
+その処理全体の `Result` は成功・失敗とも `record_device_switch_result` へ合流させる。この関数だけが
+切替結果のログと状態を記録し、成功時は実効構成を一括差し替えて `last_switch_failure` を消去、失敗時は
+実効構成を保持したまま `StreamConfigSnapshot.last_switch_failure` に理由を残して `tracing::error!` を出す。
+したがって RPC の一過性エラーを見逃しても、その後の `GetStatus.output.last_switch_failure` で直近の失敗を
+観測できる。
 
 ### 4.5 ログの層
 
@@ -150,7 +155,7 @@ resolve_output_device(request)                     -- 既存（eprintln! を撤�
 | 起動成功（縮退なし） | `tracing::info!` | `establishSession()` の `getStatus()` 後に `🔊 output: "N" @ 48000 Hz × 2ch (first callback 12 ms)` | INFO 1 行。**正常系で ERROR は増えない** |
 | 起動時の縮退 | `tracing::warn!` | `❌ audio device fallback: requested "X" → using "N": <reason>` | **ERROR 1 行**（縮退時のみ） |
 | 起動全滅 | `tracing::error!` + `ready:false` | `DaemonStartupError` に stderr 全文 | 既存経路 |
-| 切替失敗 | RPC error（`AUDIO_DEVICE_STREAM_DEAD` / `AUDIO_DEVICE_RATE_MISMATCH`） | `❌ live device switch to "X" failed: …` | ERROR 1 行 |
+| 切替失敗 | `tracing::error!` + RPC error（`AUDIO_DEVICE_STREAM_DEAD` / `AUDIO_DEVICE_RATE_MISMATCH`） | `❌ live device switch to "X" failed: …` | ERROR 1 行。理由は以後も `GetStatus.output.last_switch_failure` に残る |
 
 🔴 **native（`output.rs`）は一切 print しない。** `eprintln!` を撤去し、縮退理由を
 `DeviceFallback { reason }` として値で返す。理由: (1) §2.3 で起動時は無意味
@@ -186,9 +191,10 @@ gated spec / WORK_LOG。**`Engine` / `Scheduler` / audio `play()` 意味論 / DS
    **`impl Drop { pause() }`**。`rebuild_output_stream` は `expected_sample_rate` を受け取りレート不一致を拒否
 4. **`engine_wrap.rs`** — `StartupOptions { device_name, fault }` と `from_env()`
    （fault は `ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1` のときだけ解釈。既存 `InjectFault` と同じ型）。
-   `StreamConfigSnapshot` に `device_requested` / `device_fell_back` / `fallback_reason` / `first_callback_ms`。
-   `apply_device_switch` を §4.4 の順序に
-5. **`session.rs` / `protocol.rs`** — `GetStatus.output` に 4 フィールド追加（既存は不変）。
+   `StreamConfigSnapshot` に `device_requested` / `device_fell_back` / `fallback_reason` /
+   `first_callback_ms` / `last_switch_failure`。`apply_device_switch` を §4.4 の順序にし、成否を
+   `record_device_switch_result` で一括記録する
+5. **`session.rs` / `protocol.rs`** — `GetStatus.output` に上記 5 フィールド追加（既存は不変）。
    エラーコード 2 つを追加
 6. **`main.rs`** — `set_var("ORBIT_AUDIO_DEVICE")` を撤去し `StartupOptions` を typed で渡す
 7. **TS 3 ファイル（各 1〜3 行）** — §4.5 のログ
@@ -221,7 +227,7 @@ fault は **env ではなく `StartupOptions` に typed で**渡す。
 | C-2 | `DeadProbeRequested` → `device_fell_back == true`・reason に "no callback"・**縮退先が生きている** |
 | C-3 | `DeadAllProbes` → `Err(StreamDead)` |
 | C-4 | `DeadRealStream`（起動）→ `Err(StreamDead)`（**再縮退しない**） |
-| C-5 | 切替失敗で**旧が止まらない**: `apply_device_switch` の前後で `callbacks` が途切れず前進 |
+| C-5 | 切替失敗で**旧が止まらない**: `apply_device_switch` の前後で `callbacks` が途切れず前進し、`last_switch_failure` に理由が残る |
 | **C-6** 🔴 | **切替成功で二重レンダにならない**: 名指し起動 → `apply_device_switch(None)` → 1 s の Δcallbacks が `sample_rate / last_frames` の **±30 % 以内**（2 倍なら旧 stream が生きている）。**`Drop` の `pause()` を外すと red になること**を main が 1 回手で確認し、実出力を貼る |
 
 ### gated MCP E2E（ユーザー動線・`orbitstudio-mcp-gated.spec.ts`）
@@ -230,7 +236,7 @@ fault は **env ではなく `StartupOptions` に typed で**渡す。
 |---|---|
 | D-1 | **縮退の報告（注入なし）**: `select_audio_device("NoSuchDevice-<uuid>")` → `get_log` に `❌ … fallback … not found` が**増える**（`toBeGreaterThanOrEqual(before+1)`）→ `🔊 … output:` が出る |
 | D-2 | **dead device を指定しても音が出る（注入あり）**: 縮退後に `runScore(.., {capture:true})` で **RMS > 0** |
-| D-3 | **切替失敗で音が止まらない**: 鳴っている状態で失敗する切替 → `ok:false` + reason → その後 ERROR が増えない |
+| D-3 | **切替失敗で音が止まらない**: 鳴っている状態で失敗する切替 → `ok:false` + reason → 要求名と理由を持つ ERROR が 1 行増え、その後は増えない |
 
 🔴 **D-1 は実装前に書いて red を確認する**（§2.3 の実証を兼ねる）。
 

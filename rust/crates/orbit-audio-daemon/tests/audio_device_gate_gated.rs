@@ -22,6 +22,17 @@ fn options(device_name: Option<String>, fault: OutputFault) -> StartupOptions {
     StartupOptions { device_name, fault }
 }
 
+fn assert_startup_fails_with_stream_dead(fault: OutputFault, panic_message: &str) {
+    let error = match EngineWrap::start_with_options(options(Some(named_default_output()), fault)) {
+        Err(error) => error,
+        Ok(_) => panic!("{panic_message}"),
+    };
+    assert!(matches!(
+        error,
+        WrapError::Output(OutputError::StreamDead { .. })
+    ));
+}
+
 #[test]
 #[ignore = "needs a real audio output device"]
 fn c1_normal_device_is_live_without_fallback() {
@@ -65,33 +76,19 @@ fn c2_dead_requested_probe_falls_back_to_a_live_default() {
 #[test]
 #[ignore = "needs a real audio output device"]
 fn c3_all_dead_probes_fail_startup() {
-    let error = match EngineWrap::start_with_options(options(
-        Some(named_default_output()),
+    assert_startup_fails_with_stream_dead(
         OutputFault::DeadAllProbes,
-    )) {
-        Err(error) => error,
-        Ok(_) => panic!("all dead probes must fail startup"),
-    };
-    assert!(matches!(
-        error,
-        WrapError::Output(OutputError::StreamDead { .. })
-    ));
+        "all dead probes must fail startup",
+    );
 }
 
 #[test]
 #[ignore = "needs a real audio output device"]
 fn c4_dead_real_stream_fails_without_a_second_fallback() {
-    let error = match EngineWrap::start_with_options(options(
-        Some(named_default_output()),
+    assert_startup_fails_with_stream_dead(
         OutputFault::DeadRealStream,
-    )) {
-        Err(error) => error,
-        Ok(_) => panic!("a dead real stream must fail its postcondition"),
-    };
-    assert!(matches!(
-        error,
-        WrapError::Output(OutputError::StreamDead { .. })
-    ));
+        "a dead real stream must fail its postcondition",
+    );
 }
 
 #[test]
@@ -108,6 +105,14 @@ fn c5_failed_switch_resumes_the_old_stream() {
         error,
         WrapError::Output(OutputError::StreamDead { .. })
     ));
+    let output = engine.stream_config_snapshot();
+    assert!(
+        output
+            .last_switch_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("produced no callback")),
+        "failed switch reason was not retained: {output:?}"
+    );
     std::thread::sleep(Duration::from_millis(250));
     assert!(
         engine.stream_stats_snapshot().callbacks > before,

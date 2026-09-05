@@ -351,11 +351,30 @@ daemon の状態取得。
     "output_channels": 2,
     "loaded_samples": 12,
     "active_plays": 3,
-    "active_plugin_notes": 0
+    "active_plugin_notes": 0,
+    "render_contentions": 0,
+    "output": {
+      "device_name": "Built-in Output",
+      "sample_rate": 48000,
+      "channels": 2,
+      "device_requested": "USB Audio",
+      "device_fell_back": false,
+      "fallback_reason": null,
+      "first_callback_ms": 11,
+      "last_switch_failure": "audio output init failed: audio output device \"Rejected Output\" produced no callback within 3000 ms"
+    },
+    "callback": {
+      "count": 11531,
+      "alive": true,
+      "last_frames": 512
+    }
   }
 }
 ```
 
+- `output.last_switch_failure`: 直近のライブ出力デバイス切替が失敗した理由。失敗前から鳴っている
+  `output` の実効構成は変えず、この項目だけを更新する。起動直後および直近の切替成功後は `null`。
+  切替失敗時は要求デバイス名と理由を含む daemon `ERROR` ログも同時に 1 行出る。
 - `active_plugin_notes`: daemon の OOP instrument active-note 台帳の現在件数
   （`outproc-instrument` feature build でのみ含まれる）。
   🔴 台帳が読めない（mutex poisoned）場合は **`null`** になり、理由は daemon の `ERROR` ログに出る。

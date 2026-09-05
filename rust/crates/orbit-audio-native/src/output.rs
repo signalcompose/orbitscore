@@ -159,6 +159,20 @@ struct ResolvedOutputDevice {
     fallback: Option<DeviceFallback>,
 }
 
+fn resolved(
+    device: Device,
+    fallback: Option<DeviceFallback>,
+) -> Result<ResolvedOutputDevice, OutputError> {
+    let name = device
+        .name()
+        .map_err(|e| OutputError::DeviceName(e.to_string()))?;
+    Ok(ResolvedOutputDevice {
+        device,
+        name,
+        fallback,
+    })
+}
+
 /// The sole callback-liveness deadline used by both the preflight probe and the real stream.
 pub const FIRST_CALLBACK_DEADLINE: Duration = Duration::from_millis(3_000);
 const FIRST_CALLBACK_POLL: Duration = Duration::from_millis(10);
@@ -172,7 +186,6 @@ pub struct LiveOutputDevice {
     sample_format: SampleFormat,
     requested: Option<String>,
     fallback: Option<DeviceFallback>,
-    probe_ms: u64,
     fault: OutputFault,
 }
 
@@ -195,10 +208,6 @@ impl LiveOutputDevice {
 
     pub fn fallback(&self) -> Option<&DeviceFallback> {
         self.fallback.as_ref()
-    }
-
-    pub fn probe_ms(&self) -> u64 {
-        self.probe_ms
     }
 }
 
@@ -273,14 +282,7 @@ fn resolve_output_device(
 ) -> Result<ResolvedOutputDevice, OutputError> {
     let Some(requested) = requested else {
         let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
-        let name = device
-            .name()
-            .map_err(|e| OutputError::DeviceName(e.to_string()))?;
-        return Ok(ResolvedOutputDevice {
-            device,
-            name,
-            fallback: None,
-        });
+        return resolved(device, None);
     };
 
     // 【重要・確認 E2E での P0 再発防止】ここで `host.output_devices()` を使ってはいけない。
@@ -319,17 +321,13 @@ fn resolve_output_device(
                     "requested device \"{requested}\" is not an output device — falling back to system default output"
                 );
                 let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
-                let name = device
-                    .name()
-                    .map_err(|e| OutputError::DeviceName(e.to_string()))?;
-                Ok(ResolvedOutputDevice {
+                resolved(
                     device,
-                    name,
-                    fallback: Some(DeviceFallback {
+                    Some(DeviceFallback {
                         requested: requested.to_string(),
                         reason,
                     }),
-                })
+                )
             }
         }
         None => {
@@ -337,17 +335,13 @@ fn resolve_output_device(
                 "requested device \"{requested}\" not found (available: {available_names:?}) — falling back to system default output"
             );
             let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
-            let name = device
-                .name()
-                .map_err(|e| OutputError::DeviceName(e.to_string()))?;
-            Ok(ResolvedOutputDevice {
+            resolved(
                 device,
-                name,
-                fallback: Some(DeviceFallback {
+                Some(DeviceFallback {
                     requested: requested.to_string(),
                     reason,
                 }),
-            })
+            )
         }
     }
 }
@@ -375,7 +369,6 @@ fn output_config(
         sample_format,
         requested: request.name.clone(),
         fallback: resolved.fallback,
-        probe_ms: 0,
         fault: request.fault,
     })
 }
@@ -451,16 +444,13 @@ fn probe_output_device(
 }
 
 fn probe_candidate(
-    mut live: LiveOutputDevice,
+    live: LiveOutputDevice,
     requested_candidate: bool,
 ) -> Result<Option<LiveOutputDevice>, OutputError> {
     let suppress = live.fault == OutputFault::DeadAllProbes
         || (requested_candidate && live.fault == OutputFault::DeadProbeRequested);
     match probe_output_device(&live, suppress)? {
-        Some(probe_ms) => {
-            live.probe_ms = probe_ms;
-            Ok(Some(live))
-        }
+        Some(_) => Ok(Some(live)),
         None => Ok(None),
     }
 }
@@ -1766,7 +1756,7 @@ fn start_output_inner(
         capture_sink,
         cb_stats.clone(),
     )?;
-    let output_stream = OutputStream {
+    let mut output_stream = OutputStream {
         _stream: stream,
         _capture: capture_writer,
         render_state,
@@ -1778,15 +1768,7 @@ fn start_output_inner(
         first_callback_ms: 0,
         fault: live.fault,
     };
-    let baseline = stats.snapshot().callbacks;
-    output_stream.play()?;
-    let first_callback_ms =
-        confirm_first_callback(&stats, baseline).ok_or_else(|| OutputError::StreamDead {
-            device: live.name().to_string(),
-            waited_ms: FIRST_CALLBACK_DEADLINE.as_millis() as u64,
-        })?;
-    let mut output_stream = output_stream;
-    output_stream.first_callback_ms = first_callback_ms;
+    play_and_confirm(&mut output_stream, &stats)?;
 
     Ok((engine, output_stream, stats, cb_stats))
 }
@@ -1828,14 +1810,22 @@ pub fn rebuild_output_stream(
         first_callback_ms: 0,
         fault: live.fault,
     };
+    play_and_confirm(&mut output_stream, &stats)?;
+    Ok(output_stream)
+}
+
+fn play_and_confirm(
+    output_stream: &mut OutputStream,
+    stats: &StreamStats,
+) -> Result<(), OutputError> {
     let baseline = stats.snapshot().callbacks;
     output_stream.play()?;
     output_stream.first_callback_ms =
-        confirm_first_callback(&stats, baseline).ok_or_else(|| OutputError::StreamDead {
-            device: live.name().to_string(),
+        confirm_first_callback(stats, baseline).ok_or_else(|| OutputError::StreamDead {
+            device: output_stream.device_name.clone(),
             waited_ms: FIRST_CALLBACK_DEADLINE.as_millis() as u64,
         })?;
-    Ok(output_stream)
+    Ok(())
 }
 
 fn confirm_first_callback(stats: &StreamStats, baseline: u64) -> Option<u64> {

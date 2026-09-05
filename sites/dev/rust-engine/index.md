@@ -393,7 +393,7 @@ SIGABRT を見てしまう — そのため `write_line_best_effort` を使う�
 callback 側の状態を引き継ぐためです（`OutputStream::render_state` のコメント参照）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:580-586
+// rust/crates/orbit-audio-native/src/output.rs:570-576
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
@@ -404,7 +404,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:907-944
+// rust/crates/orbit-audio-native/src/output.rs:897-934
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -454,7 +454,7 @@ callback 所要時間の記録、という順に進みます。`post`/`capture`/
 opt-in で、すべて `None` なら従来経路とビット同一、という不変条件はそのまま残っています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:989-1034
+// rust/crates/orbit-audio-native/src/output.rs:979-1024
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -508,7 +508,7 @@ engine render 部分の `render_engine_with_sources` は、instrument source（O
 4 通りに分かれます。source も active bus も無ければ、従来の `render_engine` に落ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1036-1077
+// rust/crates/orbit-audio-native/src/output.rs:1026-1067
 #[inline]
 fn render_engine_with_sources(
     engine: &Engine,
@@ -559,7 +559,7 @@ fn render_engine_with_sources(
 避けるため、scratch buffer は 1 秒分をあらかじめ確保しています）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1873-1890
+// rust/crates/orbit-audio-native/src/output.rs:1863-1880
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

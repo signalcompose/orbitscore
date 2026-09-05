@@ -17,6 +17,61 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(daemon): apply the /simplify pass to the device-liveness branch (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+ゲート③の `/simplify`（4 体並行）。再利用観点は指摘ゼロで、`StreamConfigSnapshot` が既に
+`device_requested` / `device_fell_back` / `fallback_reason` / `first_callback_ms` を持っており、
+owner 裁定（縮退して鳴らし続ける + 理由を `GetStatus` に記録）の形が型に入っていることが確認できた。
+
+#### 🔴 最重要 — owner 裁定が半分しか実装されていなかった（2 体が独立に指摘）
+
+設計 §3 の確定事項は「起動時 = host 既定へ縮退／**ライブ切替 = 元のデバイスへ復帰**。
+**どちらも ERROR ログ + `GetStatus` に理由**」。しかし**起動時の縮退だけ**が `GetStatus` に残り、
+**ライブ切替の失敗は `apply_device_switch` の Err 腕で `record_stream_config` も `tracing::error!` も
+呼んでいなかった**。理由は RPC のエラー応答と CLI の `console.error` 一回きりにしか存在せず、
+**`GetStatus` をポーリングする MCP 経路（LLM / UI の主経路）からは切替失敗が見えない**状態だった。
+
+- 成功・失敗を **`record_device_switch_result` 1 本**へ合流。失敗時は要求デバイス名と理由を
+  `tracing::error!` に出し、`StreamConfigSnapshot.last_switch_failure` へ保存する
+- `record_stream_config` は snapshot を丸ごと差し替え、コンストラクタが `last_switch_failure: None`
+  を置くので、**成功した切替が古い失敗理由を確実に消す**（main が実装を読んで確認）
+- 🔴 E2E の D-3 は「ERROR が増えないこと」ではなく「**ちょうど 1 行増えること**」
+  （`countErrors(log) >= errorsBeforeExpectedFailure + 1`）へ更新された。
+  **ログを出さない方向で辻褄を合わせていない**
+
+#### 却下した指摘（理由を残す）
+
+効率観点が「前置き probe が二重 open を生んでいるので、実ストリームの初回コールバックだけを
+ゲートにせよ」と提案したが、**設計で一度検討して却下済み**だった。設計 §4.1:
+
+> `play()` 直後だけに置いてはいけない。`start_output_inner` は `insert_buses` / `sources` を
+> `RenderState` に **move** するので、dead 判定後に作り直すには回収が要る。参照循環により
+> **名指しデバイスでは `Arc::try_unwrap` が永遠に失敗し、回収できない**。
+
+コストも実測済みで **probe + 事後確認で +20〜40 ms**、`FIRST_CALLBACK_DEADLINE = 3000 ms` は
+**失敗時にしか効かない**。読まずに発注していたら直せない状態を作っていた。
+
+#### そのほか適用
+
+未使用の `probe_ms` を削除／`resolved` / `play_and_confirm` / `finish_start` へ重複を集約／
+gated テストと E2E の起動ボイラープレートをヘルパー化。
+
+#### 🔴 main が直したもの — リファクタが持ち込んだ型退行
+
+`prepareWorkspace` コールバック経由の代入になったことで、`catalogClapSynthPath` 等 4 件と
+`kickLoopWorkPath` が `string | undefined` のままになり `typecheck:e2e` が 6 件の error を出した。
+`npm test` は vitest が型を見ないので**緑のまま**で、[[consumerless-code-is-unprotected]] と同じ形。
+既存の `requireCatalogFixtures()` を使う形へ寄せ、`requireKickLoopWorkPath()` を足した。
+
+#### 検証（main が sandbox 外で実測）
+
+- 🔴 **clippy を全 5 象限で実行**（default / clap-host / outproc-effect / outproc-instrument /
+  outproc 両方）— **すべて green**。`check-cfg-matrix.sh` は 4 象限しか見ないので `clap-host` が漏れる
+- `cargo test --features outproc-effect,outproc-instrument` — lib **267 passed**
+- `npm test` **2251 passed / 0 failed** / `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified 0 failed**
+
 ### fix(audio): gate output devices on callback liveness (#661 PR-V4) (Sep 5, 2026)
 
 `--audio-device` で stream の build/play が成功しても callback が一度も来ず、無音のまま

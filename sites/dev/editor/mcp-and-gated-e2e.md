@@ -464,30 +464,33 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 ### アプリの起動 — `orbs` CLI と Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:804-825
-      const orbsBin = path.join(appPath, 'Contents/Resources/app/bin/orbs')
-      child = spawn(
-        orbsBin,
-        [
-          '--new-window',
-          `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
-          `--user-data-dir=${userDataDir}`,
-          `--extensions-dir=${extensionsDir}`,
-          // `evaluate_orbitscore` は workspace root を documentDirectory として渡すので、
-          // プロジェクト（project.yaml / states/）を置く tmpRoot を workspace として開く。
-          // これはユーザーが曲フォルダを開く実際の使い方とも一致する。
-          tmpRoot,
-        ],
-        {
-          env: {
-            ...appEnv,
-            ORBITSCORE_MCP_PORT: String(port),
-          },
-          stdio: 'ignore',
-          detached: false,
-        },
-      )
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:449-470
+  const port = portBase + Math.floor(Math.random() * 200)
+  const child = spawn(
+    path.join(appPath, 'Contents/Resources/app/bin/orbs'),
+    [
+      '--new-window',
+      `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
+      `--user-data-dir=${userDataDir}`,
+      `--extensions-dir=${extensionsDir}`,
+      tmpRoot,
+    ],
+    {
+      env: { ...env, ORBITSCORE_MCP_PORT: String(port) },
+      stdio: 'ignore',
+      detached: false,
+    },
+  )
+
+  try {
+    const client = await pollInitialize(port, { intervalMs: 2000, timeoutMs: 60_000 })
+    return { child, client, tmpRoot }
+  } catch (error) {
+    if (!child.killed) child.kill()
 ```
+
+> 🔴 2026-09-05: この起動手順は `launchIsolatedOrbitStudio()` へ切り出されました（#661 の `/simplify`）。隔離した user-data / extensions / workspace 設定を作り、`orbs` を `--extensionDevelopmentPath` 付きで起動して `pollInitialize` するまでが 1 関数です。
+
 
 `--extensionDevelopmentPath` でリポジトリ内の拡張ソースをそのまま読ませ、`--user-data-dir` / `--extensions-dir` を一時ディレクトリに向けて手元の設定から隔離します。ポートは `39400 + Math.floor(Math.random() * 200)` で選び、`pollInitialize()` が `initialize` を 2 秒間隔で最大 60 秒叩いて接続を待ちます。クライアント（`tests/e2e/helpers/mcp-client.ts`）は MCP SDK を使わない生の JSON-RPC で、`tools/call` の `content[0].text` と `isError` を取り出すだけの薄い層です。
 
@@ -511,7 +514,7 @@ function killOrbitStudio(): void {
 キャプチャの有効化は daemon の spawn 時に `ORBIT_CAPTURE_WAV` 環境変数で渡すしかありません。拡張は `activate()` 時に engine を自動起動するので、gated spec は **自動起動した engine を一度止めてから** capture 付きで起動し直します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:970-975
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1027-1032
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -684,7 +687,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 先頭テストの最後の assert は、この onset 間隔をテンポの証拠に使います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1511-1525
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1568-1582
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -1079,7 +1082,7 @@ function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2179-2189
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2236-2246
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1094,13 +1097,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2192-2193
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2249-2250
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2249-2251
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2306-2308
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

@@ -409,6 +409,70 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+type IsolatedOrbitStudioOptions = {
+  tmpPrefix: string
+  settings: Record<string, unknown> | ((tmpRoot: string) => Record<string, unknown>)
+  env: NodeJS.ProcessEnv
+  portBase: number
+  prepareWorkspace?: (tmpRoot: string) => void | Promise<void>
+}
+
+type IsolatedOrbitStudio = {
+  child: ChildProcess
+  client: McpClient
+  tmpRoot: string
+}
+
+/** Launch one clean OrbitStudio process with the same directory/settings/MCP bootstrap contract. */
+async function launchIsolatedOrbitStudio({
+  tmpPrefix,
+  settings,
+  env,
+  portBase,
+  prepareWorkspace,
+}: IsolatedOrbitStudioOptions): Promise<IsolatedOrbitStudio> {
+  killOrbitStudio()
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), tmpPrefix))
+  const userDataDir = path.join(tmpRoot, 'user-data')
+  const extensionsDir = path.join(tmpRoot, 'extensions')
+  const workspaceSettingsDir = path.join(tmpRoot, '.vscode')
+  fs.mkdirSync(userDataDir, { recursive: true })
+  fs.mkdirSync(extensionsDir, { recursive: true })
+  fs.mkdirSync(workspaceSettingsDir, { recursive: true })
+  const resolvedSettings = typeof settings === 'function' ? settings(tmpRoot) : settings
+  fs.writeFileSync(
+    path.join(workspaceSettingsDir, 'settings.json'),
+    JSON.stringify(resolvedSettings, null, 2) + '\n',
+  )
+  await prepareWorkspace?.(tmpRoot)
+
+  const port = portBase + Math.floor(Math.random() * 200)
+  const child = spawn(
+    path.join(appPath, 'Contents/Resources/app/bin/orbs'),
+    [
+      '--new-window',
+      `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
+      `--user-data-dir=${userDataDir}`,
+      `--extensions-dir=${extensionsDir}`,
+      tmpRoot,
+    ],
+    {
+      env: { ...env, ORBITSCORE_MCP_PORT: String(port) },
+      stdio: 'ignore',
+      detached: false,
+    },
+  )
+
+  try {
+    const client = await pollInitialize(port, { intervalMs: 2000, timeoutMs: 60_000 })
+    return { child, client, tmpRoot }
+  } catch (error) {
+    if (!child.killed) child.kill()
+    fs.rmSync(tmpRoot, { recursive: true, force: true })
+    throw error
+  }
+}
+
 describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', () => {
   let child: ChildProcess | undefined
   let client: McpClient | undefined
@@ -432,6 +496,13 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   let catalogErrorsBefore: number | undefined
   let catalogErrorsAfter: number | undefined
   let brokenCatalogPath: string | undefined
+
+  /** `prepareWorkspace` コールバック経由の代入は TS が narrowing できないので、明示的に弾く。 */
+  const requireKickLoopWorkPath = (): string => {
+    expect(kickLoopWorkPath, 'kick_loop work path must be initialized').toBeDefined()
+    if (!kickLoopWorkPath) throw new Error('main gated phase did not initialize kickLoopWorkPath')
+    return kickLoopWorkPath
+  }
 
   const requireCatalogFixtures = () => {
     expect(catalogClapSynthPath, 'catalog CLAP synth path must be initialized').toBeDefined()
@@ -706,125 +777,98 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     'drives real OrbitStudio end-to-end: diagnostics-on-open, run_selection, live edit, capture verification',
     async () => {
       // ── 1. Setup: clear stray instances, fresh isolated dirs, pick a port ──
-      killOrbitStudio()
-      tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orbitstudio-mcp-e2e-'))
-      const userDataDir = path.join(tmpRoot, 'user-data')
-      const extensionsDir = path.join(tmpRoot, 'extensions')
-      fs.mkdirSync(userDataDir, { recursive: true })
-      fs.mkdirSync(extensionsDir, { recursive: true })
-      // tmpRoot を workspace にしたため、リポジトリの .vscode/settings.json は効かない。
-      // autoStartConfiguredRustEngine は保存済み audioDevice が無いと即 return するので、
-      // デバイス名の存在確認をスキップするセンチネル __default__ を設定し、
-      // マシン固有のデバイス名に依存せず拡張の auto-start を有効化する。
-      const workspaceSettingsDir = path.join(tmpRoot, '.vscode')
-      fs.mkdirSync(workspaceSettingsDir, { recursive: true })
-      fs.writeFileSync(
-        path.join(workspaceSettingsDir, 'settings.json'),
-        JSON.stringify(
-          {
-            'orbitscore.audioDevice': '__default__',
-            'orbitscore.engineDebug': false,
-          },
-          null,
-          2,
-        ) + '\n',
-      )
-      const captureWavFile = captureWavPath(tmpRoot, 'capture')
-      // Scratch copy of the kick-loop fixture (basename preserved so the
-      // languageId/path assertions below still hold): save_file writes here,
-      // inside the tmpRoot that afterAll removes, instead of the tracked fixture.
-      //
-      // #528: the copy MUST reproduce the fixture's directory depth. The fixture
-      // deliberately uses `audioPath("../../../test-assets/audio")` to prove that
-      // `setDocumentDirectory` resolves relative paths against the edited file's
-      // own directory — that relative form is the assertion, not an accident.
-      // Copying it to a flat tmpRoot (the #392 behaviour) made `../../../` climb
-      // out to `/var/folders/<x>/test-assets/audio`, so kick.wav was never found
-      // (`[SAMPLE_NOT_FOUND]`) and the capture came back silent — the suite's most
-      // valuable assertion was failing for a harness reason, unnoticed.
-      //
-      // Recreating `tests/fixtures/mcp-e2e/` under tmpRoot keeps the relative
-      // resolution genuinely exercised (now rooted at tmpRoot instead of the repo).
-      // 実プラグインを attach する前に CLAP oracle を release でビルドし直す
-      // （定数の doc を参照 — 古いバンドルを検証してしまう事故が実際に起きた）。
-      for (const script of [CLAP_TEST_SYNTH_BUNDLE_SCRIPT, CLAP_TEST_EFFECT_BUNDLE_SCRIPT]) {
-        execFileSync('/bin/bash', [script, '--release'], {
-          cwd: path.dirname(script),
-          encoding: 'utf8',
-        })
-      }
-      const vst3SynthPath = execFileSync(
-        '/bin/bash',
-        [VST3_SYNTH_PACKAGE_SCRIPT, 'release', 'mcp-e2e'],
-        { encoding: 'utf8' },
-      ).trim()
-      const vst3EffectPath = execFileSync('/bin/bash', [VST3_EFFECT_PACKAGE_SCRIPT, 'release'], {
-        encoding: 'utf8',
-      }).trim()
-      fs.mkdirSync(USER_CLAP_PLUGIN_DIR, { recursive: true })
-      fs.mkdirSync(USER_VST3_PLUGIN_DIR, { recursive: true })
-      catalogClapSynthPath = GATED_PLUGIN_FIXTURE_PATHS.clapSynth
-      catalogClapEffectPath = GATED_PLUGIN_FIXTURE_PATHS.clapEffect
-      catalogVst3SynthPath = GATED_PLUGIN_FIXTURE_PATHS.vst3Synth
-      catalogVst3EffectPath = GATED_PLUGIN_FIXTURE_PATHS.vst3Effect
-      brokenCatalogPath = GATED_PLUGIN_FIXTURE_PATHS.brokenClap
-      // 🔴 symlink 先を tmp に置かない: 実行後に tmp が消えると標準ディレクトリに
-      // **壊れたリンクが残り**、次回以降のスキャンに出続ける（今回直した stale bundle と
-      // 同じ性質）。リポジトリ内のチェックイン済み fixture を指せば、リンクは常に有効な
-      // まま「ロードできないバンドル」であり続ける — scanner に見せたい失敗は
-      // 「ロード不能」であって「リンク切れ」ではない。
-      const brokenCatalogSourcePath = BROKEN_CATALOG_FIXTURE_SOURCE
-      replaceGatedPluginFixtureSymlink(CLAP_TEST_SYNTH_PATH, catalogClapSynthPath)
-      replaceGatedPluginFixtureSymlink(CLAP_TEST_EFFECT_PATH, catalogClapEffectPath)
-      replaceGatedPluginFixtureSymlink(vst3SynthPath, catalogVst3SynthPath)
-      replaceGatedPluginFixtureSymlink(vst3EffectPath, catalogVst3EffectPath)
-      replaceGatedPluginFixtureSymlink(brokenCatalogSourcePath, brokenCatalogPath)
-
-      const fixtureRelDir = path.dirname(path.relative(REPO_ROOT, KICK_LOOP_FIXTURE))
-      const workFixtureDir = path.join(tmpRoot, fixtureRelDir)
-      fs.mkdirSync(workFixtureDir, { recursive: true })
-      kickLoopWorkPath = path.join(workFixtureDir, path.basename(KICK_LOOP_FIXTURE))
-      fs.copyFileSync(KICK_LOOP_FIXTURE, kickLoopWorkPath)
-      // The audio the fixture's relative path must land on, mirrored at the same
-      // depth from tmpRoot as it sits from REPO_ROOT.
-      workAudioDir = path.join(tmpRoot, 'test-assets/audio')
-      fs.mkdirSync(workAudioDir, { recursive: true })
-      fs.copyFileSync(
-        path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
-        path.join(workAudioDir, 'kick.wav'),
-      )
-      const port = 39400 + Math.floor(Math.random() * 200)
       // Fixtures now live in the standard per-user plugin directories. Remove
       // ORBIT_PLUGIN_PATH even when inherited from the invoking shell so this E2E
       // cannot silently fall back to OrbitScore's extra scan-path escape hatch.
       const appEnv = { ...process.env }
       delete appEnv.ORBIT_PLUGIN_PATH
 
-      // ── 2. Launch: `orbs` CLI with the extension in dev mode ──
-      const orbsBin = path.join(appPath, 'Contents/Resources/app/bin/orbs')
-      child = spawn(
-        orbsBin,
-        [
-          '--new-window',
-          `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
-          `--user-data-dir=${userDataDir}`,
-          `--extensions-dir=${extensionsDir}`,
-          // `evaluate_orbitscore` は workspace root を documentDirectory として渡すので、
-          // プロジェクト（project.yaml / states/）を置く tmpRoot を workspace として開く。
-          // これはユーザーが曲フォルダを開く実際の使い方とも一致する。
-          tmpRoot,
-        ],
-        {
-          env: {
-            ...appEnv,
-            ORBITSCORE_MCP_PORT: String(port),
-          },
-          stdio: 'ignore',
-          detached: false,
+      // tmpRoot を workspace にしたため、リポジトリの .vscode/settings.json は効かない。
+      // autoStartConfiguredRustEngine は保存済み audioDevice が無いと即 return するので、
+      // デバイス名の存在確認をスキップするセンチネル __default__ を設定し、
+      // マシン固有のデバイス名に依存せず拡張の auto-start を有効化する。
+      const launched = await launchIsolatedOrbitStudio({
+        tmpPrefix: 'orbitstudio-mcp-e2e-',
+        settings: {
+          'orbitscore.audioDevice': '__default__',
+          'orbitscore.engineDebug': false,
         },
-      )
+        env: appEnv,
+        portBase: 39400,
+        prepareWorkspace: (isolatedRoot) => {
+          // Scratch copy of the kick-loop fixture (basename preserved so the
+          // languageId/path assertions below still hold): save_file writes here,
+          // inside the tmpRoot that afterAll removes, instead of the tracked fixture.
+          //
+          // #528: the copy MUST reproduce the fixture's directory depth. The fixture
+          // deliberately uses `audioPath("../../../test-assets/audio")` to prove that
+          // `setDocumentDirectory` resolves relative paths against the edited file's
+          // own directory — that relative form is the assertion, not an accident.
+          // Copying it to a flat tmpRoot (the #392 behaviour) made `../../../` climb
+          // out to `/var/folders/<x>/test-assets/audio`, so kick.wav was never found
+          // (`[SAMPLE_NOT_FOUND]`) and the capture came back silent — the suite's most
+          // valuable assertion was failing for a harness reason, unnoticed.
+          //
+          // Recreating `tests/fixtures/mcp-e2e/` under tmpRoot keeps the relative
+          // resolution genuinely exercised (now rooted at tmpRoot instead of the repo).
+          // 実プラグインを attach する前に CLAP oracle を release でビルドし直す
+          // （定数の doc を参照 — 古いバンドルを検証してしまう事故が実際に起きた）。
+          for (const script of [CLAP_TEST_SYNTH_BUNDLE_SCRIPT, CLAP_TEST_EFFECT_BUNDLE_SCRIPT]) {
+            execFileSync('/bin/bash', [script, '--release'], {
+              cwd: path.dirname(script),
+              encoding: 'utf8',
+            })
+          }
+          const vst3SynthPath = execFileSync(
+            '/bin/bash',
+            [VST3_SYNTH_PACKAGE_SCRIPT, 'release', 'mcp-e2e'],
+            { encoding: 'utf8' },
+          ).trim()
+          const vst3EffectPath = execFileSync(
+            '/bin/bash',
+            [VST3_EFFECT_PACKAGE_SCRIPT, 'release'],
+            {
+              encoding: 'utf8',
+            },
+          ).trim()
+          fs.mkdirSync(USER_CLAP_PLUGIN_DIR, { recursive: true })
+          fs.mkdirSync(USER_VST3_PLUGIN_DIR, { recursive: true })
+          catalogClapSynthPath = GATED_PLUGIN_FIXTURE_PATHS.clapSynth
+          catalogClapEffectPath = GATED_PLUGIN_FIXTURE_PATHS.clapEffect
+          catalogVst3SynthPath = GATED_PLUGIN_FIXTURE_PATHS.vst3Synth
+          catalogVst3EffectPath = GATED_PLUGIN_FIXTURE_PATHS.vst3Effect
+          brokenCatalogPath = GATED_PLUGIN_FIXTURE_PATHS.brokenClap
+          // 🔴 symlink 先を tmp に置かない: 実行後に tmp が消えると標準ディレクトリに
+          // **壊れたリンクが残り**、次回以降のスキャンに出続ける（今回直した stale bundle と
+          // 同じ性質）。リポジトリ内のチェックイン済み fixture を指せば、リンクは常に有効な
+          // まま「ロードできないバンドル」であり続ける — scanner に見せたい失敗は
+          // 「ロード不能」であって「リンク切れ」ではない。
+          const brokenCatalogSourcePath = BROKEN_CATALOG_FIXTURE_SOURCE
+          replaceGatedPluginFixtureSymlink(CLAP_TEST_SYNTH_PATH, catalogClapSynthPath)
+          replaceGatedPluginFixtureSymlink(CLAP_TEST_EFFECT_PATH, catalogClapEffectPath)
+          replaceGatedPluginFixtureSymlink(vst3SynthPath, catalogVst3SynthPath)
+          replaceGatedPluginFixtureSymlink(vst3EffectPath, catalogVst3EffectPath)
+          replaceGatedPluginFixtureSymlink(brokenCatalogSourcePath, brokenCatalogPath)
 
-      client = await pollInitialize(port, { intervalMs: 2000, timeoutMs: 60_000 })
+          const fixtureRelDir = path.dirname(path.relative(REPO_ROOT, KICK_LOOP_FIXTURE))
+          const workFixtureDir = path.join(isolatedRoot, fixtureRelDir)
+          fs.mkdirSync(workFixtureDir, { recursive: true })
+          kickLoopWorkPath = path.join(workFixtureDir, path.basename(KICK_LOOP_FIXTURE))
+          fs.copyFileSync(KICK_LOOP_FIXTURE, kickLoopWorkPath)
+          // The audio the fixture's relative path must land on, mirrored at the same
+          // depth from tmpRoot as it sits from REPO_ROOT.
+          workAudioDir = path.join(isolatedRoot, 'test-assets/audio')
+          fs.mkdirSync(workAudioDir, { recursive: true })
+          fs.copyFileSync(
+            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
+            path.join(workAudioDir, 'kick.wav'),
+          )
+        },
+      })
+      tmpRoot = launched.tmpRoot
+      child = launched.child
+      client = launched.client
+      const captureWavFile = captureWavPath(tmpRoot, 'capture')
 
       // Every plugin declaration in this gated suite follows the human/LLM path:
       // scan the four real fixtures once, then use the scanner's actual display
@@ -838,11 +882,24 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const listedCatalog = await client.call('list_plugins')
       expect(listedCatalog.isError, listedCatalog.text).toBe(false)
       catalogPlugins = JSON.parse(listedCatalog.text) as CatalogPluginEntry[]
+      // 🔴 `prepareWorkspace` コールバック経由の代入になったので TS は narrowing できない。
+      // 既存の `requireCatalogFixtures()` が `undefined` を弾いた値を使う。
+      const fixturePaths = requireCatalogFixtures()
       const fixtureEntries = {
-        clapSynth: catalogPluginsAt(catalogPlugins, catalogClapSynthPath, 'clap', 'instrument'),
-        clapEffect: catalogPluginsAt(catalogPlugins, catalogClapEffectPath, 'clap', 'effect'),
-        vst3Synth: catalogPluginsAt(catalogPlugins, catalogVst3SynthPath, 'vst3', 'instrument'),
-        vst3Effect: catalogPluginsAt(catalogPlugins, catalogVst3EffectPath, 'vst3', 'effect'),
+        clapSynth: catalogPluginsAt(
+          catalogPlugins,
+          fixturePaths.clapSynthPath,
+          'clap',
+          'instrument',
+        ),
+        clapEffect: catalogPluginsAt(catalogPlugins, fixturePaths.clapEffectPath, 'clap', 'effect'),
+        vst3Synth: catalogPluginsAt(
+          catalogPlugins,
+          fixturePaths.vst3SynthPath,
+          'vst3',
+          'instrument',
+        ),
+        vst3Effect: catalogPluginsAt(catalogPlugins, fixturePaths.vst3EffectPath, 'vst3', 'effect'),
       }
       expect(fixtureEntries.clapSynth, 'catalog must contain exactly one CLAP synth').toHaveLength(
         1,
@@ -1030,7 +1087,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // (not diagnostic_case.orbs, opened just before it) is the active document.
       expect(editorState.path?.endsWith('kick_loop.orbs')).toBe(true)
 
-      const kickLoopContent = fs.readFileSync(kickLoopWorkPath, 'utf8')
+      const kickLoopContent = fs.readFileSync(requireKickLoopWorkPath(), 'utf8')
       const kickLoopLines = kickLoopContent.split('\n')
       const totalLines = kickLoopLines.length
 
@@ -1065,7 +1122,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const saveRes = await client.call('save_file')
       expect(saveRes.isError, saveRes.text).toBe(false)
 
-      const savedFixtureContent = fs.readFileSync(kickLoopWorkPath, 'utf8')
+      const savedFixtureContent = fs.readFileSync(requireKickLoopWorkPath(), 'utf8')
       expect(
         savedFixtureContent.includes('global.tempo(180)'),
         'save_file did not persist the edit_replace change to disk',
@@ -5088,62 +5145,38 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     async () => {
       // This is a dedicated app process because startup fault injection is immutable typed state;
       // changing it in the shared long-running suite would invalidate all following scenarios.
-      killOrbitStudio()
-      const faultTmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orbitstudio-device-gate-'))
-      const faultUserData = path.join(faultTmpRoot, 'user-data')
-      const faultExtensions = path.join(faultTmpRoot, 'extensions')
-      fs.mkdirSync(path.join(faultTmpRoot, '.vscode'), { recursive: true })
-      fs.mkdirSync(faultUserData, { recursive: true })
-      fs.mkdirSync(faultExtensions, { recursive: true })
-      fs.mkdirSync(path.join(faultTmpRoot, 'test-assets/audio'), { recursive: true })
-      fs.copyFileSync(
-        path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
-        path.join(faultTmpRoot, 'test-assets/audio/kick.wav'),
-      )
-
-      const daemonBinary = resolveDaemonBinaryPath().path
-      const listed = JSON.parse(
-        execFileSync(daemonBinary, ['--list-audio-devices'], { encoding: 'utf8' }),
-      ) as { devices: Array<{ name: string; isDefault: boolean }> }
-      const requested = listed.devices.find((device) => device.isDefault) ?? listed.devices[0]
-      expect(requested, '#661 D-2/D-3 require an output device').toBeDefined()
-      fs.writeFileSync(
-        path.join(faultTmpRoot, '.vscode/settings.json'),
-        JSON.stringify(
-          {
+      const launched = await launchIsolatedOrbitStudio({
+        tmpPrefix: 'orbitstudio-device-gate-',
+        settings: () => {
+          const daemonBinary = resolveDaemonBinaryPath().path
+          const listed = JSON.parse(
+            execFileSync(daemonBinary, ['--list-audio-devices'], { encoding: 'utf8' }),
+          ) as { devices: Array<{ name: string; isDefault: boolean }> }
+          const requested = listed.devices.find((device) => device.isDefault) ?? listed.devices[0]
+          expect(requested, '#661 D-2/D-3 require an output device').toBeDefined()
+          return {
             'orbitscore.audioDevice': requested!.name,
             'orbitscore.engineDebug': false,
-          },
-          null,
-          2,
-        ) + '\n',
-      )
-
-      const faultPort = 39600 + Math.floor(Math.random() * 200)
-      const faultChild = spawn(
-        path.join(appPath, 'Contents/Resources/app/bin/orbs'),
-        [
-          '--new-window',
-          `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
-          `--user-data-dir=${faultUserData}`,
-          `--extensions-dir=${faultExtensions}`,
-          faultTmpRoot,
-        ],
-        {
-          env: {
-            ...process.env,
-            ORBITSCORE_MCP_PORT: String(faultPort),
-            ORBIT_DAEMON_ALLOW_FAULT_INJECTION: '1',
-            ORBIT_AUDIO_OUTPUT_FAULT: 'dead-probe-requested',
-          },
-          stdio: 'ignore',
-          detached: false,
+          }
         },
-      )
+        env: {
+          ...process.env,
+          ORBIT_DAEMON_ALLOW_FAULT_INJECTION: '1',
+          ORBIT_AUDIO_OUTPUT_FAULT: 'dead-probe-requested',
+        },
+        portBase: 39600,
+        prepareWorkspace: (faultTmpRoot) => {
+          fs.mkdirSync(path.join(faultTmpRoot, 'test-assets/audio'), { recursive: true })
+          fs.copyFileSync(
+            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
+            path.join(faultTmpRoot, 'test-assets/audio/kick.wav'),
+          )
+        },
+      })
+      const { child: faultChild, tmpRoot: faultTmpRoot } = launched
 
-      let faultClient: McpClient | undefined
+      const faultClient = launched.client
       try {
-        faultClient = await pollInitialize(faultPort, { intervalMs: 2000, timeoutMs: 60_000 })
         await waitUntil(
           async () => {
             const state = await faultClient!.call('get_engine_state')
@@ -5178,17 +5211,31 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         ).toBeGreaterThan(0)
 
         // D-3: while the score is sounding, a dead live-switch candidate fails and the old
-        // stream resumes. The one expected failure is allowed; no asynchronous ERROR follows it.
+        // stream resumes. Exactly that expected failure is logged; no asynchronous ERROR follows it.
         await runScore(
           faultSession,
           { slug: '661-d3-switch-failure', fixturePath: KICK_LOOP_FIXTURE },
           async (ctx) => {
             await ctx.captureSegment('sounding-before-switch', 500, 300)
+            const rejectedDevice = `NoSuchDevice-${randomUUID()}`
+            const errorsBeforeExpectedFailure = await errorBaseline(faultClient!)
             const failed = await faultClient!.call('select_audio_device', {
-              device: `NoSuchDevice-${randomUUID()}`,
+              device: rejectedDevice,
             })
             expect(failed.isError, failed.text).toBe(true)
             expect(failed.text).toContain('callback')
+            await waitUntil(
+              async () => {
+                const log = (await faultClient!.call('get_log', { lines: 500 })).text
+                return countErrors(log) >= errorsBeforeExpectedFailure + 1
+              },
+              { intervalMs: 250, timeoutMs: 10_000, label: '#661 D-3 switch failure log' },
+            )
+            const afterFailureLog = (await faultClient!.call('get_log', { lines: 500 })).text
+            expect(afterFailureLog).toContain(
+              `audio output device switch to "${rejectedDevice}" failed`,
+            )
+            expect(afterFailureLog).toContain('produced no callback')
             const errorsAfterExpectedFailure = await errorBaseline(faultClient!)
             await sleep(1000)
             await expectNoNewErrors(
@@ -5199,12 +5246,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           },
         )
       } finally {
-        if (faultClient) {
-          try {
-            await faultClient.call('stop_engine')
-          } catch {
-            // best-effort cleanup
-          }
+        try {
+          await faultClient.call('stop_engine')
+        } catch {
+          // best-effort cleanup
         }
         if (!faultChild.killed) faultChild.kill()
         fs.rmSync(faultTmpRoot, { recursive: true, force: true })

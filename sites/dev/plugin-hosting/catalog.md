@@ -908,7 +908,7 @@ spec PH.4 は同一シーケンスへの再宣言についてこう定めてい�
 機構を一文で言い切っています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6335-6347
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6373-6385
     /// #618: instrument plugin を目標 spec へ収束させる ensure 操作。
     ///
     /// 未割当/Empty は通常 load、同一 Active は no-op、異 spec Active は spare へ prepare して
@@ -1008,7 +1008,7 @@ project.yaml 配下へ保存してから差し替え要求を出します。spec
 代わりに VST3 側に +7 半音の state を持たせ、周波数で識別します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3547-3555
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3604-3612
       const e4Hz = estimateFundamentalHz(capture, segments.e4!)
       const e5Hz = estimateFundamentalHz(capture, segments.e5!)
       expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
@@ -1035,7 +1035,7 @@ render 側の `InsertBusStage` が processor を直接抱えるため、「名�
 張り替え先が無いので、採用されたのは**同一 ChildSlot の in-place 建て直し**でした。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5839-5847
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5877-5885
     /// effect plugin を固定 slot 上で目標 spec へ収束させる ensure 操作。
     /// Active の異 spec だけを quiesce ack 後に同じ shm 上で建て直す。
     #[cfg(feature = "outproc-effect")]
@@ -1119,7 +1119,7 @@ Stage A では Codex の変異 8 種（すべて「削除」型）が全部 red 
 の明示エラーを返す」と記しています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5405-5413
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5443-5451
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -1238,7 +1238,7 @@ R-E1〜R-E7 は同一 WAV 内に `dry → A → B → 失敗 → 復旧 B → �
 削除は `effect([])` です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3854-3860
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3911-3917
         // 空のラックを適用するのが「外す」の表現になった。
         const removeA = await activeClient.call('evaluate_orbitscore', {
           code: 'fx625.effect([])',
@@ -1256,7 +1256,7 @@ R-E1〜R-E7 は同一 WAV 内に `dry → A → B → 失敗 → 復旧 B → �
 実機証明になります。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3712-3725
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3769-3782
         // ここは「旧 child が消えた」を待っていた。#628 のラック化では **1 child が
         // チェーン全体を持つ**ため、差し替えは同じ child の中で prepare-commit される。
         // **PID が変わらないことこそが「respawn していない = dry 窓が消えた」の実機証明**で、
@@ -1277,7 +1277,7 @@ R-E3（存在しないパスへの差し替え）は、#625 では「dry であ�
 いました。#628 で prepare-commit になってからは、**失敗しても B のまま鳴り続ける**ことを音で pin します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4067-4082
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4124-4139
 
       // 🔴 R-E3: #628 で**期待が反転した**。失敗後は **B のまま鳴り続ける**。
       //
