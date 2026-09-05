@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: f2dadd9
+verified-at: "2026-09-05"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-1. Daemon Architecture Overview
 
@@ -395,7 +395,7 @@ The actual sound comes from the cpal callback in the `orbit-audio-native` crate.
 the callback body was a single function, `render_block`; as of 2026-09-01 it has two layers.
 
 1. `render_shared_block` — the entry point called directly from the cpal closure. It takes the
-   `RenderState` (insert buses, instrument sources, the master post-processor, …) through a
+   `RenderState` (insert buses, instrument sources, the master line, …) through a
    `Mutex` `try_lock`; if the lock is unavailable it **zero-fills the block and counts a
    `record_render_contention`** (so the RT thread never blocks).
 2. `render_block_with_sources` — the body that runs once the lock is held. The old `render_block`
@@ -462,10 +462,14 @@ The number of failed `try_lock`s accumulates in `StreamStats` and can be read as
 `render_contentions` from `GetStatus`. "No lock means one dropped block" is a deliberate design
 choice, and the contention is self-healing (the next block recovers).
 
-The body, `render_block_with_sources`, proceeds in order: engine render → master post-processor →
-capture tap → record the callback duration. `post`/`capture`/`cb_stats` are each independent
-opt-ins, and the invariant that the path is bit-identical to the legacy path when all are `None`
-still stands.
+The body, `render_block_with_sources`, proceeds in order: engine render → **the master line (rack
+→ gain)** → **device placement** → capture tap → record the callback duration. The two middle
+stages arrived with #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754));
+before that the sequence was the three stages "engine render → master post-processor → capture
+tap". `master.post`/`capture`/`cb_stats` are still each independent opt-ins, but the
+bit-identical condition now reads **"no rack, master gain still at its default of 1.0, and a 2ch
+device"** — with the placement stage added, anything other than 2ch always pays for the
+placement.
 
 ```rust
 // rust/crates/orbit-audio-native/src/output.rs:1170-1243
@@ -544,6 +548,108 @@ fn render_block_with_sources(
     }
 }
 ```
+
+### The master line — the engine is always 2ch inside
+
+The striking detail in the code above is that the width handed to
+`render_engine_with_sources` is the literal `2`, not `output_channels`. Since #649 PR-O2,
+everything from the engine through the bus graph runs at **exactly two channels no matter how
+many the device has**. That width is published as a named constant.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:682-688
+/// engine 内部のチャンネル幅。**デバイス幅とは無関係に常に 2**（設計 §5.5）。
+///
+/// events / feeds / stages / master.buffer はすべてこの幅で扱い、デバイス幅への変換は
+/// `place_master_into_device` の 1 箇所だけで行う。デバイス幅（`StreamConfig.channels`）を
+/// engine バッファの解釈に使うと、8ch デバイスで frame 数が 1/4 になって音が化ける
+/// （#611 本文の実害がこれ）。
+pub const ENGINE_CHANNELS: usize = 2;
+```
+
+The device width appears in exactly one place: `place_master_into_device`, which maps the 2ch
+`master.buffer` onto the device-width `hw`.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1253-1277
+fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
+    match device_channels {
+        0 => {}
+        // mono デバイス: L+R を 0.5 でマージ（相関信号でクリップしない・設計 §2.2 Q-611-5 と同じ法則）。
+        1 => {
+            for frame in 0..frames {
+                hw[frame] = (buf[frame * 2] + buf[frame * 2 + 1]) * 0.5;
+            }
+        }
+        // 2ch は幅が一致するので memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。
+        2 => hw[..frames * 2].copy_from_slice(&buf[..frames * 2]),
+        // 3ch 以上: ch0/1 に置き、**余剰チャンネルはここで 0 にする**（Device 出口は master の
+        // 1 本だけなので、残りは無音が正しい）。
+        _ => {
+            for frame in 0..frames {
+                let base = frame * device_channels;
+                hw[base] = buf[frame * 2];
+                hw[base + 1] = buf[frame * 2 + 1];
+                for extra in &mut hw[base + 2..base + device_channels] {
+                    *extra = 0.0;
+                }
+            }
+        }
+    }
+}
+```
+
+Each of the three arms carries its own meaning. Mono merges L+R at 0.5 (so correlated signals
+do not clip); 2ch matches in width and becomes a `copy_from_slice`; three or more channels place
+ch0/1 and **let this function zero the surplus channels**. The caller deliberately does not
+pre-zero `hw`, because this function writes every element of it — filling zeros first would mean
+storing twice per block in the RT callback.
+
+The other change is where the master gain is applied. `MasterLine` groups the master rack (the
+old `post`) and the gain into one struct and fixes the order as **rack → gain**. The gain moves
+toward the target the control side (`SetGlobalGain`) wrote atomically, one block at a time.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:744-754
+    /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
+    /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
+    /// 算術のみ（alloc/lock/syscall なし）。
+    #[inline]
+    fn advance_gain(&mut self, frames: usize) -> f32 {
+        let target = f32::from_bits(self.gain_target.load(Ordering::Relaxed));
+        let frac = (frames as f32 / self.ramp_frames as f32).min(1.0);
+        self.gain_current += (target - self.gain_current) * frac;
+        self.gain_current
+    }
+}
+```
+
+`ramp_frames` is the frame count for 5 ms, computed **at construction time** by
+`MasterLine::new` from the sample rate (the RT path only uses it as a divisor). When a block is
+longer than the ramp, `frac` saturates at 1.0 and the target is reached in one step; when it is
+shorter, the value approaches the target over several blocks.
+
+The point worth holding onto is that **production now has exactly one multiplication path**.
+`orbit_audio_core::Engine::set_global_gain` (the core scheduler ramp) is no longer called from
+the daemon, and `EngineWrap::set_global_gain` only stores into the `MasterLine` target.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8724-8733
+    /// マスターゲインを設定する。**production では単一の適用点（native master line・#649
+    /// PR-O2）へ atomic store するだけ**——`orbit_audio_core::Engine::set_global_gain`（core の
+    /// scheduler ramp）は production から呼ばない（`docs/design/611-output-line-design.md`
+    /// §5.4/§5.5 row 4・乗算経路を master line 1 本にする）。`ramp_sec` は wire 互換のため受け
+    /// 続けるが、native 側は構築時に確定した固定 ~5ms/block のランプ（`MasterLine::advance_gain`）
+    /// を使う（可変長ランプは持たない）。
+    pub fn set_global_gain(&self, value: f32, _ramp_sec: f64) -> Result<(), WrapError> {
+        self.master_gain.store(value.to_bits(), Ordering::Relaxed);
+        Ok(())
+    }
+```
+
+The wire still accepts `ramp_sec` on `SetGlobalGain` for compatibility, but the native side only
+has the fixed ~5 ms ramp, so **the value is not used**. How this reordering looks from the signal
+chain side is covered in [SC-2](/en/signal-chain/mixer-audio-line).
 
 The engine-render part, `render_engine_with_sources`, splits four ways depending on whether there
 are instrument sources (`SourceSlot`s that hold an OOP instrument's output as a `BlockSource`)
@@ -670,6 +776,9 @@ i.e. two independent measurement paths agreeing at the same tap point). These fi
 - `rust/crates/orbit-audio-daemon/src/protocol.rs:1-195` — wire protocol type definitions (`Handshake` / `Command` / `OkResponse` / `ErrorResponse` / `Event` / error code constants). Contract source of truth: `docs/research/ENGINE_DAEMON_PROTOCOL.md`
 - `rust/crates/orbit-audio-daemon/src/session.rs:691-718,1272-2372` — `session::run` (handshake, writer task, UI event forwarding) and the `handle_command` match arms (source of the command table)
 - `rust/crates/orbit-audio-native/src/output.rs:254-260,581-618,662-750,1513-1556` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
+- `rust/crates/orbit-audio-native/src/output.rs:682-688,700-754,1253-1277` — `ENGINE_CHANNELS` / `MasterLine` (rack → gain) / `place_master_into_device` (#649 PR-O2)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8724-8733` — `EngineWrap::set_global_gain` (atomic store into the master line; `ramp_sec` kept for wire compatibility only)
+- [`docs/design/611-output-line-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/design/611-output-line-design.md) §5.2-5.5 — design source of truth for the master line, the 2ch internal width, and taking the core master gain out of production
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — engine-first roadmap and architecture decision (instruments = in-process / effects + 3rd-party = out-of-process sandbox)
 - [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 / 6.262 — capture peak measurements
 - [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 — the master fader defect (#643)

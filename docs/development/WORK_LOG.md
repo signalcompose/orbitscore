@@ -17,6 +17,58 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(649): follow the master line up in the spec and the dev site (Sep 5, 2026)
+
+**Issue**: #649 / **ブランチ**: `claude/docs-sync-pr754` / **追従元 PR** [#754](https://github.com/signalcompose/orbitscore/pull/754)（merge commit `f2dadd9`）
+
+マージ済み PR #754（#649 PR-O2・stereo 内部化 + master ライン）に、ドキュメントを追従させた。
+**実装・テストは一切変更していない。**
+
+#### 仕様（`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`）
+
+🔴 **PH.2b の既知の v1 制約が 1 つ解消され、順序が入れ替わった。**
+
+| 変更前 | 変更後 |
+|---|---|
+| master gain ramp は per-sequence insert の**前**（DAW の「fader は insert 後」と逆） | master gain は **master ラック（PH.2）の後**。per-sequence insert も `global.effect()` も master gain の**手前**に来る（DAW と同じ並び） |
+
+根拠は PR #754 の差分そのもの（`EngineWrap::set_global_gain` が core の scheduler ramp を
+呼ばなくなり、`MasterLine`（rack → gain → デバイス配置）へ atomic store するだけになった）と、
+設計正本 `docs/design/611-output-line-design.md` §5.2/§5.4「master のゲインは master ラインの
+op としてラックの**後**に必ず来る」。
+
+あわせて PH.4（instrument）の「`render_multi` の内側（event 混合後・**gain ramp の前**）で
+合流する」から、production に存在しなくなった gain ramp への参照を外した。
+
+#### dev 学習サイト（ja / en 両方）
+
+- `sites/dev/rust-engine/index.md` — 「master ライン — engine の内部幅は常に 2ch」節を新設。
+  `ENGINE_CHANNELS` / `place_master_into_device`（mono マージ・2ch memcpy・3ch 以上の 0 埋め）/
+  `MasterLine::advance_gain`（構築時に確定する 5 ms ランプ）/ `EngineWrap::set_global_gain` を引用。
+  `render_block_with_sources` の段数が 3 → 5 になったこと、ビット同一の条件が
+  「ラック無し + gain 1.0 + 2ch デバイス」に変わったことを本文に反映
+- `sites/dev/signal-chain/mixer-audio-line.md` — 「master gain の適用点が移った」節と
+  「(5) 4 度目の読み直し」節を追加。(3)「master gain は今も insert の前」に解消の注記。
+  E2E-1 が赤かったのは**オラクル**（`every(rms >= 0.01)` は LOOP の 80 ms の切れ目で
+  原理的に満たせない）であって実装ではなかったこと、症状自体は `374e8b2d` で消えていたこと、
+  PR-O2 が塞いだのは「ラックが生成した音が `global.gain()` を逃れる」残り半分であることを記載
+
+両章とも `verified-against` を `f2dadd9` / `verified-at` を 2026-09-05 に更新した。
+
+#### 追従不要と判断したもの
+
+| 対象 | 理由 |
+|---|---|
+| `docs/specs-v2/` | master gain の適用位置に言及している箇所が無い（`grep "gain ramp\|master gain\|マスターゲイン\|global gain"` で 0 件）。SC.10 は順序ではなくラックの形を規定している |
+| `sites/user/` / `docs/user/ja/USER_MANUAL.md` | `global.gain()` の適用位置を書いている箇所が無い。`sites/user/reference/methods.md` の `gain(dB)` は seq のフェーダーで、本 PR は触っていない |
+| `docs/design/611-output-line-design.md` | PR #754 が §5.5 にオフラインレンダの注記を追加済み |
+
+#### 検証
+
+`npm ci` / `docs:build`（user・dev）/ `docs:check` — PR 本文に出力を貼付。
+
+---
+
 ### fix(649): correct the attribution and add the test that actually guards the master line (Sep 5, 2026)
 
 **Issue**: #649 / **ブランチ**: `649-stereo-internal-master-line` / **PR** #754

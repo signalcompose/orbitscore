@@ -1249,8 +1249,10 @@ keys.instrument("Kontakt 8.vst3", "keys.vstpreset")  // 保存済み state で�
   > **v1 の現在地**: **✅ 実装済み（#643・2026-08-29）**。PR-1a（#527）時点では未移設で、
   > instrument の出力は master の `CompositePostProcessor`（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs`）に
   > 後付け加算されていた。#643 以降、instrument の音は master への後付け加算ではなく
-  > **ミキサーの source** として `render_multi` の内側（event 混合後・gain ramp の前）で
+  > **ミキサーの source** として `render_multi` の内側（event 混合後）で
   > 合流する。`seq.effect()` / `seq.output(sum)` / `seq.send()` は **instrument で使える**。
+  > （#643 時点では「gain ramp の前」と書いていたが、#649 PR-O2 で master gain は core の
+  > scheduler ramp から native の master ラインへ移り、合流の後段になった。PH.2b の注記を参照）
   >
   > | メソッド | midi | instrument |
   > |---|---|---|
@@ -1291,8 +1293,9 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
 ```
 
 - **シーケンス個別の insert**（DAW の per-track insert と同型）。処理順は
-  **per-sequence insert → master mix → `global.effect()`（master chain）** — 既存の
-  master 経路の意味論は不変。
+  **per-sequence insert → master mix → `global.effect()`（master chain）→ master gain
+  （`global.gain()`）→ デバイス配置** — master gain が末尾に来るのは #649 PR-O2 以降
+  （下の「既知の v1 制約」の注記を参照）。
 - v1 は **1 seq = 1 insert**。同一 path + pluginId の再宣言は冪等（no-op・PH.2 と同じ
   ライブ再評価保護）。**異なる path / pluginId での再宣言は差し替え**（#625・意味論は
   PH.2d）。**チェーン（複数 insert）は #628 のラック形で入る**（PH.2 と同じ・正本 SC.10）。
@@ -1308,11 +1311,18 @@ drums.effect("~/plugins/TAL-Reverb-4.clap")   // この seq だけに掛かる i
   登録され、**plugin の attach 完了前でも音は素通しで master に届く**（宣言 → attach の
   間に音が消えたり詰まったりしない）。plugin ロード失敗時も bus は pass-through で残る。
 - **既知の v1 制約（非目標）**: plugin latency 補償（PDC）なし — 複数 seq に latency の
-  異なる insert を掛けると bus 間で位相がずれる。master gain ramp は per-sequence insert の
-  **前**に適用される（DAW の「fader は insert 後」と逆・master unity なら影響なし）。
+  異なる insert を掛けると bus 間で位相がずれる。
   insert を同時に持てるシーケンス数には上限がある（既定 8・エンジンは RT 安全のため
   bus を起動時にプールとして確保し、宣言時にプールから割り当てる）。上限超過の
   `seq.effect()` 宣言は明示エラー。
+  > 🔴 **解消（#649 PR-O2・2026-09-05）**: ここには以前「master gain ramp は per-sequence
+  > insert の**前**に適用される（DAW の「fader は insert 後」と逆・master unity なら影響なし）」
+  > と書かれていた。**PR-O2 でこの順序は入れ替わった。** master gain の適用点が core の
+  > scheduler ramp から native の master ライン（`orbit_audio_native::output::MasterLine`）へ
+  > 移り、**全 stage が master へ合流し master ラック（PH.2）を通った後**に掛かる。
+  > per-sequence insert も `global.effect()` のラックも master gain の**手前**に来る
+  > （＝ DAW の「fader は insert の後」と同じ並び）。正本は
+  > `docs/design/611-output-line-design.md` §5.2/§5.4。
 - LinkAudio との併用不可は PH.5 に従う（`global.effect()` と同じ v1 排他）。
 - **将来予約（非規範）**: aux バス / send-return（**タップ位置は `output` を置いた位置が決める**
   — pre / post fader というフラグは設けない・MX.1 / MX.3・fan-out）は同じ

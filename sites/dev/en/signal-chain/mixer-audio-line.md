@@ -1,12 +1,12 @@
 ---
 title: "SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: b22698a
-verified-at: "2026-09-04"
+verified-against: f2dadd9
+verified-at: "2026-09-05"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04 and to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain
 
@@ -70,7 +70,7 @@ bus carries its own output target and send targets).
 The DSL samples from the spec, quoted verbatim from its Markdown:
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1768-1772
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1778-1782
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")                  // 同じ宛先なので加算される
@@ -79,7 +79,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1862-1864
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1872-1874
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
@@ -405,7 +405,10 @@ Read it like this.
 
 1. In `engine.render_multi_feeds(hw, &mut targets, &feeds)` the scheduler mixes events into each
    bus buffer (`targets`) and into `hw`, adds the feeds (instrument output), and applies the
-   **master gain ramp once to every buffer** (the core-side implementation is in the next section)
+   **master gain ramp once to every buffer** (the core-side implementation is in the next
+   section). Since #649 PR-O2, though, this `hw` is **the 2ch `master.buffer`, not the device
+   buffer**, and the core gain is pinned at 1.0 in production (see "Where the master gain is
+   applied moved" below)
 2. The post-loop walks the stages in array order (= topological order, MX.4), runs
    `processor.process` if there is an insert, and adds into `hw` (Master) or a later bus
    (`Bus(j)`) according to `effective_targets[i]`
@@ -505,6 +508,33 @@ fix only; no separate treatment needed)". The native unit test
 `global_gain_scales_instrument_contribution` (`output.rs:2017`) sets `set_global_gain(0.5, 0.0)`,
 pushes a `SourceDest::Master` feed through, and pins the output at 0.5× (WORK_LOG 6.405 keeps the
 actual red → green output).
+
+### Where the master gain is applied moved (#649 PR-O2)
+
+This reading needs one update as of 2026-09-05. With #649 PR-O2
+([#754](https://github.com/signalcompose/orbitscore/pull/754)), **the production master gain no
+longer goes through this core ramp**. The daemon does not call
+`orbit_audio_core::Engine::set_global_gain` at all; it only stores atomically into the target of
+the native `MasterLine` (master rack → gain → device placement). How to read the implementation is
+written up in the "master line" section of [RE-1](/en/rust-engine/).
+
+That move **swaps one ordering**. The core ramp took effect right after the feed addition and
+before the post-loop, so the master gain was applied **before** the per-sequence insert — the
+reverse of a DAW's "fader after insert", which `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` PH.2b
+recorded as a known v1 constraint. The `MasterLine` gain is applied **after** every stage has
+merged into master and passed through the master rack, so both the per-sequence insert and the
+`global.effect()` rack now sit **ahead of** the master gain.
+
+The design document (`docs/design/611-output-line-design.md` §5.4) states this ordering as "the
+master gain always comes **after** the rack, as an op of the master line". Removing the freedom of
+*where* to multiply is what makes misplacement bugs disappear as a class.
+
+The core-side gain ramp quoted above has not been deleted; it stays as a **core unit-test and
+offline verification harness only** path (`render_offline` / `verify_schedule_pcm.rs` /
+`export_verify_pcm.rs`). `global_gain_scales_instrument_contribution` reads the same way: it pins
+the core feed-merge position, not the production multiplication path. Design document §5.5 adds
+the caveat that when an offline render lands in production, it has to go through the master line
+or its sound will diverge from the real-time render.
 
 ### The TS side: the `SetSourceRouting` choke point
 
@@ -650,6 +680,9 @@ Re-reading the post-loop above, the order is indeed `render_multi_feeds` (gain r
 `processor.process` (insert), and #643 did not change it. "Put the fader after the insert" is
 carried over as the subject of #649.
 
+> "Still before the insert" is the reading as of 6.410. #649 PR-O2 swapped the order — see
+> "(5) The fourth re-reading" below.
+
 ### (4) 6.415: the capture E2E caught "it has no effect" on the real machine
 
 Here is the climax of the chapter. During the real-machine verification for #633 (WORK_LOG
@@ -710,6 +743,50 @@ One more point 6.415 leaves as a caveat matters too. This defect is **not an err
 layer returned success and not a single ERROR line was written. Logs are the device for "noticing
 when something breaks"; the only thing that catches "looks correct but the summation is wrong" is
 the capture E2E.
+
+### (5) The fourth re-reading: the oracle was red, and what remained was behind the rack
+
+#649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754), 2026-09-05) settled two
+things about this wiring. Both came out of **keeping the capture WAV and measuring it**, not out
+of reasoning.
+
+The first is a **correction of attribution**. E2E-1 was red because of the **oracle**, not the
+mixer. Its precondition was `windows(name).every((w) => w.rms >= 0.01)` — "no window in the
+segment is ever silent". At 120 BPM a bar is 2 seconds, and the LOOP wrap inserts a **gap of
+80 ms**, so any 2-second segment necessarily contains one of those boundaries: the condition is
+**unsatisfiable in principle**. What the test wants to know is whether sound is coming out, so it
+was replaced with `expectSegmentsSounding`, which requires most windows (90% by default) to be
+audible. The measurement from the retained WAV was `0.0899 / 0.1794 = 0.501` — exactly the -6 dB
+figure, i.e. **the implementation had been correct all along**.
+
+Moreover, the symptom itself — `global.gain()` not affecting an instrument — had already gone
+away with `374e8b2d` (2026-08-29, on main), which made the instrument a mixer source. Putting
+only this branch's tests on main's Rust makes E2E-1 green. In other words, the "no effect" read in
+(4) was resolved before PR-O2, and E2E-1 guards nothing in PR-O2's Rust diff.
+
+The second is **the other half of the same class**. The master rack (`global.effect()`, the old
+`post`) ran **after** the core gain ramp, so **whatever the rack generated or transformed escaped
+`global.gain()`**. `MasterLine` closes that by fixing the order as `rack → gain`. The same change
+resolves (3): both the per-sequence insert and the master rack now sit **ahead of** the master
+gain.
+
+The awkward part is that **a linear rack such as `Gain` cannot reveal the order** (multiplication
+commutes, so either order yields the same value). The invariant is therefore unmeasurable through
+a DSL-level E2E, and the sole guard is a unit test whose rack stub **generates** sound.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:3316-3321
+        // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
+        // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
+        assert!(
+            hw.iter().all(|&s| (s - 0.375).abs() < 1e-6),
+            "master gain must attenuate what the master rack produced: {hw:?}"
+        );
+```
+
+The engine's schedule is empty, so the render is silent (0.0); `FillPost(0.75)` writes 0.75 as the
+rack, and the master gain of 0.5 brings it to 0.375. Mutating the order back to main's shape
+leaves `hw` at 0.75 (the gain merely scales silence) and the test fails.
 
 ## How the capture E2E measures
 
@@ -949,7 +1026,10 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 ## Sources
 
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` Mixer / Routing (MX.1–MX.5) normative text
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1310-1312` — known constraint: master gain ramp applied before the insert
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1313-1325` — PH.2b known v1 constraints, plus the note that the master gain ordering was swapped (#649 PR-O2)
+- `rust/crates/orbit-audio-native/src/output.rs:700-754,1253-1277` — `MasterLine` (rack → gain) / `place_master_into_device`
+- `rust/crates/orbit-audio-native/src/output.rs:3290-3322` — unit test `master_gain_applies_after_the_master_rack_generates_sound` (the only guard on the ordering)
+- `docs/design/611-output-line-design.md` §5.2 / §5.4 / §5.5 — design source of truth for the master line and the single multiplication path
 - `docs/design/643-mixer-foundation-design.md` — #643 design (owner's three articles, responsibility boundary, feed injection point §5.1, `output()` three branches §12)
 - `docs/design/649-audio-line-design.md` — #649 audio-line design (§7 decisions, §8 open items, §9–§14 implementation design v3)
 - `docs/archive/WORK_LOG_2026-08.md` 6.404 / 6.405 / 6.408 / 6.410 / 6.415 / 6.420 — #643 design → PR-1 → PR-2 → review correction → real-machine discovery → #649 design v3

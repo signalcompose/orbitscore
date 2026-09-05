@@ -1,12 +1,12 @@
 ---
 title: "SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: b22698a
-verified-at: "2026-09-04"
+verified-against: f2dadd9
+verified-at: "2026-09-05"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）の測定に関する発見まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）の測定に関する発見、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain
 
@@ -67,7 +67,7 @@ snare」と列挙するのではなく、kick と snare がそれぞれ `output(
 仕様の DSL サンプルも引用しておきます（spec の Markdown から逐語）。
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1768-1772
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1778-1782
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")                  // 同じ宛先なので加算される
@@ -76,7 +76,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1862-1864
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1872-1874
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
@@ -396,7 +396,9 @@ daemon が atomic に書いた routing を、native の render callback はど�
 
 1. `engine.render_multi_feeds(hw, &mut targets, &feeds)` で、scheduler が event を各 bus buffer
    （`targets`）と `hw` に混合し、feed（instrument の出力）も加算し、**master gain ramp を
-   全 buffer に 1 回だけ**適用します（core 側の実装は次節）
+   全 buffer に 1 回だけ**適用します（core 側の実装は次節）。ただし #649 PR-O2 以降、この
+   `hw` は**デバイスのバッファではなく 2ch の `master.buffer`** で、core の gain も production では
+   1.0 に固定されています（後述の「master gain の適用点が移った」を参照）
 2. post-loop は stage を配列順（= トポロジカル順・MX.4）に回し、insert があれば
    `processor.process` を通し、`effective_targets[i]` に従って `hw`（Master）か後ろの bus
    （`Bus(j)`）に加算します
@@ -495,6 +497,32 @@ feed 加算（`422-441`・`FeedDest::Hardware` なら `hardware_out`、`Channel(
 `global_gain_scales_instrument_contribution`（`output.rs:2017`）は、`set_global_gain(0.5, 0.0)` を
 設定した状態で `SourceDest::Master` の feed を流し、出力が 0.5 倍になることを固定しています
 （WORK_LOG 6.405 に red → green の実出力が残っています）。
+
+### master gain の適用点が移った（#649 PR-O2）
+
+ここまでの読みは 2026-09-05 に一度更新が要ります。#649 PR-O2
+（[#754](https://github.com/signalcompose/orbitscore/pull/754)）で、**production の master gain は
+この core の ramp を通らなくなりました**。daemon は `orbit_audio_core::Engine::set_global_gain` を
+呼ばず、native 側の `MasterLine`（master ラック → gain → デバイス配置）の目標値へ atomic store
+するだけになっています。実装の読み方は [RE-1](/rust-engine/) の「master ライン」節に
+まとめました。
+
+この移動で**順序が 1 つ入れ替わります**。core の ramp は「feed 加算の直後・post-loop の前」に
+効いていたので、per-sequence insert の**前**に master gain が掛かっていました（DAW の
+「fader は insert の後」と逆で、`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` の PH.2b が
+v1 の既知の制約として明記していた点です）。`MasterLine` の gain は全 stage が master へ合流し、
+master ラックを通った**後**に掛かるので、per-sequence insert も `global.effect()` のラックも
+master gain の**手前**に来ます。
+
+設計文書（`docs/design/611-output-line-design.md` §5.4）はこの並びを「master のゲインは
+master ラインの op としてラックの**後**に必ず来る」と書いています。掛ける位置という自由度を
+無くすことで、位置ずれのバグをクラスとして消す、というのがこの並びの狙いです。
+
+引用した core 側の gain ramp は消えたわけではなく、**core 単体テストとオフライン検証ハーネス
+専用**として残っています（`render_offline` / `verify_schedule_pcm.rs` / `export_verify_pcm.rs`）。
+`global_gain_scales_instrument_contribution` も同じ立場で、production の乗算経路ではなく core の
+feed 合流位置を固定するテストとして読みます。オフラインレンダを production に載せる時は
+master ラインを通さないと実時間レンダと音が食い違う、という注意が設計文書 §5.5 に追記されています。
 
 ### TS 側: `SetSourceRouting` の choke point
 
@@ -636,6 +664,9 @@ Fable 監査が spec の既知制約を指して誤りだと指摘しました�
 `processor.process`（insert）の順であり、#643 はこの順序を変えていません。「insert 後に
 フェーダーを置く」は #649 の主題として持ち越されます。
 
+> この節の「今も insert の前」は 6.410 時点の読みです。#649 PR-O2 で順序は入れ替わりました
+> — 下の「(5) 4 度目の読み直し」を参照。
+
 ### (4) 6.415: capture E2E が「効いていない」を実機で捕まえた
 
 ここからが本章の山場です。#633 の実機検証（WORK_LOG 6.415・2026-08-29）で、
@@ -689,6 +720,49 @@ instrument child の attach タイミング・複数の消費者が同じ状態�
 もう 1 つ、6.415 が但し書きとして残している点も重要です。この欠陥は**異常系ではない**。
 各層は成功を返し、ERROR は 1 行も出ていません。ログは「壊れた時に気づく」ための装置で、
 「正しく見えるが合成が違う」を捕まえるのは capture E2E だけだ、という整理です。
+
+### (5) 4 度目の読み直し: 赤かったのはオラクル、残っていたのはラックの後ろ
+
+2026-09-05 の #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）で、
+この配線に 2 つの決着がつきました。どちらも、**推測ではなく capture WAV を残して測った**
+結果として出ています。
+
+1 つめは**帰属の訂正**です。E2E-1 が赤かった原因はミキサーではなく**判定側**でした。
+前提条件が `windows(name).every((w) => w.rms >= 0.01)`、つまり「区間の窓が一度も途切れない」
+になっていたのですが、120 BPM の 1 小節は 2 秒なので LOOP の折り返しに **80 ms の切れ目**が
+必ず入ります。区間が 2 秒あればその境界を必ず 1 つ含むので、この条件は**原理的に満たせません**。
+測りたいのは「音が出ているか」なので、大半の窓（既定 90%）が可聴であることを見る
+`expectSegmentsSounding` へ置き換えられました。残した WAV での実測は
+`0.0899 / 0.1794 = 0.501` — -6 dB の理論値そのままで、**実装は最初から正しかった**という結論です。
+
+さらに、`global.gain()` が instrument に効かない症状そのものは、instrument をミキサーの
+source へ移した `374e8b2d`（2026-08-29・main）で既に消えていました。main の Rust に
+このブランチのテストだけを載せても E2E-1 は緑になります。つまり (4) で読んだ「効いていない」は
+PR-O2 以前に解決済みで、E2E-1 は PR-O2 の Rust 差分を何も守っていません。
+
+2 つめが、**同じクラスの残り半分**です。master ラック（`global.effect()` = 旧 `post`）は
+core の gain ramp の**後**に走っていたので、**ラックが生成・変形した音は `global.gain()` を
+逃れていました**。`MasterLine` が `rack → gain` の順を固定してこれを塞ぎます。あわせて (3) の
+「master gain は今も insert の前」も解消され、per-sequence insert も master ラックも
+master gain の**手前**に来ます。
+
+ここで厄介なのは、**`Gain` のような線形ラックでは順序を区別できない**ことです（乗算は可換なので
+どちらの順でも同じ値になります）。DSL 経由の E2E ではこの不変条件を測れないため、
+ラックが**音を生成する**スタブを使うユニットテストが唯一の守り手になっています。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:3316-3321
+        // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
+        // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
+        assert!(
+            hw.iter().all(|&s| (s - 0.375).abs() < 1e-6),
+            "master gain must attenuate what the master rack produced: {hw:?}"
+        );
+```
+
+engine の schedule は空なので render は無音（0.0）、そこへ `FillPost(0.75)` がラックとして
+0.75 を書き込み、master gain 0.5 が掛かって 0.375 になります。順序を main の形へ戻す変異を
+入れると `hw` は 0.75 のまま（gain が無音に掛かるだけ）になって落ちます。
 
 ## capture E2E がどう測っているか
 
@@ -912,7 +986,10 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 ## Sources
 
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` Mixer / Routing（MX.1〜MX.5）規範
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1310-1312` — master gain ramp が insert の前に掛かる既知制約
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1313-1325` — PH.2b 既知の v1 制約と、master gain の順序が入れ替わった注記（#649 PR-O2）
+- `rust/crates/orbit-audio-native/src/output.rs:700-754,1253-1277` — `MasterLine`（ラック → gain）/ `place_master_into_device`
+- `rust/crates/orbit-audio-native/src/output.rs:3290-3322` — unit test `master_gain_applies_after_the_master_rack_generates_sound`（順序を守る唯一のテスト）
+- `docs/design/611-output-line-design.md` §5.2 / §5.4 / §5.5 — master ライン・乗算経路を 1 本にする設計正本
 - `docs/design/643-mixer-foundation-design.md` — #643 設計（owner 三条・責務境界・feed 注入点 §5.1・`output()` 3 分岐 §12）
 - `docs/design/649-audio-line-design.md` — #649 オーディオライン設計（§7 確定事項・§8 未決・§9-§14 実装設計 v3）
 - `docs/archive/WORK_LOG_2026-08.md` 6.404 / 6.405 / 6.408 / 6.410 / 6.415 / 6.420 — #643 設計〜PR-1〜PR-2〜レビュー訂正〜実機発見〜#649 設計 v3
