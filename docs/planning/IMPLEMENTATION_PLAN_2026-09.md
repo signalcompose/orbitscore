@@ -67,6 +67,7 @@
 |---|---|---|---|---|---|---|
 | PR-O0 ⟂ | `test(e2e): capture goldens for existing scores (#543-a)` | #543 (a) 回帰の固定 | `tests/e2e/orbitstudio-mcp-gated.spec.ts`（+150）・`tests/e2e/rack-chain-gain-expectations.ts`（+40）・fixture 4 譜面 | PR-E0（helper） | 4 譜面の窓 RMS を式で固定。実機: `npm run test:e2e:gated` | — |
 | PR-O1 ⟂ | `docs(spec): output as a line element — MX.2/2.1/3/4/5, SC.2.1/4, #649 §10` | #611 spec 改訂項目・#649 §7.3/§10-12・#643 §1.5/§12 | core spec（±120）・`SIGNAL_CHAIN_DSL_SPEC`（±40）・`649-audio-line-design.md`（±30）| — | docs のみ（advisor レビュー）| — |
+| PR-O2a 🔴 | `test(e2e): make capture windows follow the sound` | **#739**（`captureSegment` が固定 settle 400 ms で窓を開けるが、`LOOP()` の小節量子化 + attach で**音は約 3 秒後**。E2E-1 は「0 dB の音」を一度も測っていなかった）| `tests/e2e/helpers/run-score.ts`・gated spec の呼び出し **34 箇所** | PR-O0 | **各窓のオンセット数**（`onsets(name).length`）。🔴 **E2E-1 が緑になることは受け入れ基準にしない** — それは PR-O2 の仕事 | — |
 | PR-O2 | `fix(engine): stereo-internal engine + master line (fader position, 8ch@2048 silence)` | **#649 must-fix**・#611 本文の 8ch 無音・E2E-0/1/8/11 | `output.rs`（±200: `MasterLine`・post-loop 置換・`Engine::new(sr,2)`）・`engine_wrap.rs`（±40）・`session.rs` `SetGlobalGain`（±20）| PR-O0（golden で bit 一致を確認するため）・PR-O1 | E2E-0 bit 一致・E2E-1 **red-first**・E2E-8・E2E-11。実機: `global.gain(-6)` + instrument で RMS 半減 | — |
 | PR-O3 🔴 | `feat(daemon): LineProgram + SetBusLine (full-replacement bus line wire)` | #611 wire・#647 shm 拡張 | `output.rs`（+350: `OutputDest`/`LineOp`/`LineSlot`・RT 実行）・`session.rs`（+180 検証）・`protocol-types.ts` `daemon-client.ts`（+60）・cargo test（+200）| PR-O2 | cargo: forward-only 検証・thru:false で break・ramp。実機: 既存譜面が `SetBusRouting` 経路のまま同音（両 wire 併存）| W-1 |
 | PR-O4 🔴 | `feat(dsl): output(dest, thru, db) / send in dB / pan as a line element — AudioLine on Sequence and master` | #611 DSL・#649 実装 B・**#543-a 差分ゼロ（`pan` 譜面は再ベースライン）**・同一宛先の複数 `output`（2 要素）・mono 宛先 | `core/sequence/audio-line.ts`（新 +240）・`sequence.ts`（±130）・`global.ts`（+40）・`mixer-manager.ts`（±60）・`runtime.ts`（±30）・`evaluate-method.ts`（+40）・`repl-mode.ts`（+20）・tests（+320）| PR-O3・**PR-L2（フレーム）**・PR-O1 | E2E-2〜7・E2E-10 + `pan` の L/R（PR-E3 の後）。実機: `kick.output(verb, thru:true, db:-12).output(master)` を評価して aux の RMS 比 | W-2 / W-3 / W-18 |
@@ -157,7 +158,8 @@
 
 | PR | 件名 | 対象 | 触るファイル（概算行） | 依存 | 検証 | 一方通行 |
 |---|---|---|---|---|---|---|
-| PR-D0 ⟂ | `fix(engine): contain the two playback-path throws and log the skip` | **#645 must-fix**（`resolveDispatchChannel` を `DispatchTarget = hardware \| link \| skip` の tagged union に・throw を無音スキップ + `[ERROR]`）| `sequence.ts`（+60/−20）・`event-scheduler.ts`（+20/−8）・unit | なし | E2E-645-A/B（linkAudio 譜面 → `run_selection` → `get_log`）| 内部 API |
+| PR-D0 ⟂ | `fix(engine): contain the two playback-path throws and log the skip` | **#645 must-fix**（`resolveDispatchChannel` を `DispatchTarget = hardware \| link \| skip` の tagged union に・throw を無音スキップ + `[ERROR]`）| `sequence.ts`（+60/−20）・`event-scheduler.ts`（+20/−8）・unit **13 本** | なし | ユニット 13 本。🔴 **実機 E2E-645-A/B は #736 へ分離** | 内部 API |
+| PR-D1 | `test(e2e): align the #645 gated assertions with a skipped sequence` | **#736**（PR-D0 から分離）| gated spec（+300 復活・主張の修正） | PR-D0 | 実機 E2E-645-A/B。🔴 **dedup は ERROR 総数でなく skip メッセージの出現回数で数える** | — |
 | PR-D1 ⟂ | `docs(spec): one applicability table for receivers and methods` | #644 表の仕様側・#280 の spec 1 本化・#255-1 の明記 | core spec・`PITCH_DSL_SPEC_v1.1.md` | — | docs | — |
 | PR-D2 | `fix(diagnostics): run the engine parser behind the editor diagnostics` | **#610**（`ParseError` に span・文言不変・拡張が engine の `analyze-source` を require）| `parser/parse-error.ts`（新 20）・`parser-utils.ts`（+10）・`diagnostics/analyze-source.ts`（新 60）・`extension.ts`（+40）| PR-D1 | E2E-D1/D2 | 診断の増加 |
 | PR-D3 | `feat(diagnostics): applicability table drives the editor warnings` | #644 全項・#665 (A)（`diagnostics/applicability.ts` 受け手 9 種 × メソッド・4 値・`render-node`/`master-line` 行を先置き）| `parser/types.ts` + `parse-statement.ts` 4 箇所（span）・`applicability.ts`（新 200）・`analyze-source.ts`（+90）・`signal-chain-dispatch.spec.ts`（+120）| PR-D2 | E2E-D3/D4/D5・全数照合テスト | 診断の増加 |
@@ -190,10 +192,18 @@
 
 ### 1.9 配布 — PR-S（doc 656 §14・番号は同文書の PR-T/R/C に対応）
 
+> 🔴 **2026-09-04 改訂**: PR-S-T1 の件名から `and refuse loudly` を落とし、`extension.ts` を
+> 触るファイルから外した。裁定 (1)（`supported: true`・「一般的な DAW の挙動に併せて」）で
+> **trust ガードそのものが不要になった**ため、「大声で断る」対象が無い
+> （断らずに普通に動くのが正しい）。実機 E2E は **#735 = PR-S-T3** へ分離
+> （理由は doc 656 §12.1: dev モードでは宣言を消しても緑になるので検証にならず、
+> installed モードには vsix が要る）。
+
 | PR | 件名 | 対象 | 触るファイル（概算行） | 依存 | 検証 | 一方通行 |
 |---|---|---|---|---|---|---|
-| PR-S-T1 ⟂ | `fix(studio): declare untrusted-workspace capability and refuse loudly` | **#385 must-fix** | `package.json`（+12）・`extension.ts`（+25）・gated spec（+60）| なし | E2E-D1/D2・実機: 新しいフォルダを初めて開いて評価 | `supported` の値（裁定 (1)）|
+| PR-S-T1 ⟂ | `fix(studio): declare untrusted-workspace capability` | **#385 must-fix** | `package.json`（+12）・テスト（+140: マニフェスト検査 6 本 + 共有ヘルパー）| なし | ユニット（変異 3 種で red を確認）。🔴 **実機 E2E-D1 は #735 へ分離** | `supported` の値（裁定 (1)）|
 | PR-S-T2 | `feat(studio): default workspace trust off in the OrbitStudio build` | #385 層 2 | `product.overrides.json`（新 +8）・`build_orbitstudio.sh`（+3）| PR-S-T1 | 実機: 焼き直して loose-file 起動 | product.json キー |
+| PR-S-T3 | `test(e2e): verify untrusted activation with an installed extension` | **#735**（PR-S-T1 から分離）| gated spec（+160）・vsix を焼く導線 | **#659**（`--install-extension` の作法が固まってから）| 実機 E2E-D1・🔴 **`capabilities` を消して red になることまで** | — |
 | PR-S-R1 ⟂ | `refactor(release): extract the vsix content gate into a shared script` | #659 ③（`verify-vsix.sh`・`release.yml:116-207` のインライン shell を共有化）| 新 +90・`release.yml` −75+2 | なし | CI の PR smoke 緑 | — |
 | PR-S-R2 | `ci(release): run the smoke lane for rust and scripts changes` | `release.yml` の `paths` に `rust/**` `scripts/**` | `release.yml`（+2）| PR-S-R1 | 自分で発火する | — |
 | PR-S-R3 | `feat(build): script the local release end to end` | **#659**（🔴 `make-local-release.sh` は repo に存在しない — 新規に書く・12 段・成果物・preflight）| 新 +260・`README.md` +30 | PR-S-R1 | 手元で 1 回通す + 成果物に E2E-D3 | 🔴 成果物の名前・退避先 |

@@ -410,13 +410,20 @@ drums.effect([])                                        // 全部外す（削除
 | `global.aux(name)` | リターンバスを宣言する（冪等） | `global.aux("rev")` |
 | `sum("name")` / `aux("name")` | 宣言済みバスへの参照（`.effect()` / `.ui()` をチェーンできる） | `sum("drum").effect("GlueComp")` |
 | `seq.output(name)` | シーケンスの出力先をグループバスに指定する（audio / instrument） |
-| `seq.output(n)` | 数値レンダーバス（1〜16・スコアモード） | `kick.output(1)` |
+| `seq.output(n)` | 数値レンダーバス（1〜16・スコアモード）🔴 **仕様上は撤回済み** | `kick.output(1)` |
 | `seq.send(name, amount)` | リターンバスへ送る量を指定（post-fader 固定・複数 send 可） | `kick.send("rev", 0.3)` |
 
 - `sum` は 1 段のみ（ネスト不可）。
 - `output(name)` / `send(name, amount)` は **audio と instrument** で使えます（`midi()` では使えません）。
 - `send()` の第 2 引数は線形 gain（0.0〜1.0 目安、上限は clamp されません）。
 - `global.linkAudio()` とミキサー機能（sum/aux/プラグインエフェクト全般）は同時に使えません。
+
+::: warning この表の 2 行は仕様が変わりました（実装は未追従）
+2026-09-03 の仕様改訂（#611 / #649）で次の 2 点が決まりました。**どちらもまだ実装されていない**ので、今日のコードの書き方は上の表のとおりです。
+
+- **`seq.output(n)`（数値レンダーバス）は撤回されました**（core spec MX.2.3）。宛先は「宣言されたノード」であるという裁定と合わないためです。stem への書き出しは `mix.render(...)` で宣言したノードを宛先に取る形になります。今日の実装は `kick.output(1)` を受理し続けます。
+- **`send()` の第 2 引数の単位は dB になります**（core spec MX.3）。`send("rev", 0.3)` は「線形 0.3」から「**+0.3 dB**」へ読み替えられ、**エラーにならず音だけが変わります**。詳しくは [sum と aux/send](../mixing/routing.md) を参照してください。
+:::
 
 ---
 

@@ -1,12 +1,12 @@
 ---
 title: "SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: b22698a
+verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）の測定に関する発見まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain
 
@@ -67,7 +67,7 @@ snare」と列挙するのではなく、kick と snare がそれぞれ `output(
 仕様の DSL サンプルも引用しておきます（spec の Markdown から逐語）。
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1766-1770
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1768-1772
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")                  // 同じ宛先なので加算される
@@ -76,7 +76,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1860-1862
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1862-1864
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
@@ -161,7 +161,7 @@ export const MIXER_BUS_POOL_SIZE = 4
 対応する Rust 側の定数は daemon の `engine_wrap.rs` にあります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1970-1983
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1987-2000
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
 /// （M3 で配線予定）。
 #[cfg(feature = "outproc-effect")]
@@ -197,8 +197,17 @@ TS が `"drum" → "sum-bus-0"` と束縛し、daemon へは常に `sum-bus-0` �
 sum 名なのか、数値の render bus なのか、LinkAudio channel 名なのかで **3 分岐** します。
 解決順は仕様（#598 §4.4）で固定されていて、コード上もその順で並んでいます。
 
+> ⚠️ **この 3 分岐のうち 2 つは、2026-09-03 の spec 改訂で行き先が変わりました**（#611 / #649）。
+> **数値 render bus の分岐（`kick.output(1)`）は撤回**されました（core spec MX.2.3）— 宛先はすべて
+> 「宣言されたノード」であるという裁定と整合しないためで、stem への書き出しは `mix.render(...)` の
+> ノードを宛先に取る形へ移ります。**LinkAudio channel の分岐は解決順の最後**へ後退し、その手前に
+> 予約語 `"master"`・宣言済み sum / aux 名・`"3,4"` 形式の物理アウト対が入ります（core spec MX.2.1）。
+> 🔴 **以下で読むコードはどちらの改訂にも追従していません** — `kick.output(1)` は今日も受理されて
+> `_renderBus` に記録され、`kick.output("master")` は今日も LinkAudio channel 名として記録されます。
+> 追従は #598 の PR-R 系（撤回）と #611 の PR-O4（解決順）です。
+
 ```typescript
-// packages/engine/src/core/sequence.ts:350-375
+// packages/engine/src/core/sequence.ts:381-406
   output(channelName: string | number): this {
     const name = this.stateManager.getName() || 'sequence'
     const destinationName = typeof channelName === 'number' ? String(channelName) : channelName
@@ -261,7 +270,7 @@ midi だけがミキサーと無関係・例外は LinkAudio が出力先の時�
 fan-out、同じ aux 名なら上書きです。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:454-481
+// packages/engine/src/core/sequence.ts:490-517
   send(auxName: string, amount: number): this {
     const name = this.stateManager.getName() || 'sequence'
     if (!auxName || !auxName.trim()) {
@@ -317,7 +326,7 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 という規則が読み取れます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5853-5873
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5838-5858
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -353,7 +362,7 @@ daemon が atomic に書いた routing を、native の render callback はど�
 **post-loop** がその場所です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1062-1088
+// rust/crates/orbit-audio-native/src/output.rs:935-961
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -413,7 +422,7 @@ instrument が何かを知らず、「render すると N 本の block をくれ�
 持ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:346-359
+// rust/crates/orbit-audio-native/src/output.rs:269-282
 /// A callback-owned source which renders one or more interleaved output units.
 pub trait BlockSource: Send {
     fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
@@ -439,7 +448,7 @@ feed の収集は `collect_source_feeds`（`output.rs:772-801`）が行い、uni
 core の `FeedDest` に写します。写像の部分だけ引用します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:914-924
+// rust/crates/orbit-audio-native/src/output.rs:787-797
             let dest = match slot.dests[unit].load() {
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
@@ -463,7 +472,7 @@ feed 加算（`422-441`・`FeedDest::Hardware` なら `hardware_out`、`Channel(
 `*dst += *sample`）→ gain ramp、の順になっています。gain ramp の部分を引用します。
 
 ```rust
-// rust/crates/orbit-audio-core/src/scheduler.rs:447-460
+// rust/crates/orbit-audio-core/src/scheduler.rs:443-456
         // master gain ramp を **1 回だけ**進め（next_gain_frame）、全バッファに同じ per-frame
         // gain を適用する（バッファごとに進めると ramp が多重に進み desync するため frame ループは 1 つ）。
         for frame in 0..frames_to_render {
@@ -494,7 +503,7 @@ PR-2（TS 側）は、instrument sequence が insert bus を持った時点で
 1 箇所に集約しました。`instrument()` → `effect()` の順でも逆でも、ここを通ります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:730-757
+// packages/engine/src/core/sequence.ts:766-793
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
     const bus = this._insertBus
@@ -601,7 +610,7 @@ masterGainDb` を返していたこと、**insert との順序は変わってい
 残す理由をこう書いています。
 
 ```typescript
-// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:56-65
+// packages/engine/src/core/sequence/scheduling/event-scheduler.ts:67-76
   // `masterGainDb === -Infinity`（完全無音）だけは残す — daemon 側の gain が 0.0 になるまでの
   // ramp 中に音が漏れるのを避けるため、発音側でも落とす。
   if (isMuted) {
@@ -689,20 +698,20 @@ MCP 経由で駆動し、daemon の capture WAV を区間ごとに RMS 測定し
 0.15 秒）を取って遷移の影響を除きます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:593-598
-    const rms = (name: string, guardSec = 0.15): number => {
-      const selected = windows(name, guardSec)
-      return Math.sqrt(
-        selected.reduce((sum, window) => sum + window.rms * window.rms, 0) / selected.length,
-      )
-    }
+// tests/e2e/helpers/capture-windows.ts:190-195
+export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
+  if (windows.length === 0) throw new Error('quadraticMeanRms requires at least one window')
+  return Math.sqrt(
+    windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
+  )
+}
 ```
 
 E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価してもう 1 区間を取り、
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1429-1463
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1501-1539
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -732,6 +741,10 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
       // 0 dB -> -6 dB で amplitude は 10^(-6/20) ≈ 0.501 = 約半分。
       const unity = result.rms('unity')
       const half = result.rms('half')
+      expect(
+        ['unity', 'half'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
+      ).toBe(true)
+      expect(unity, 'E2E-1 unity must measure the 0 dB instrument').toBeGreaterThan(0.15)
       expect(unity, 'E2E-1 unity instrument must be audible').toBeGreaterThan(0.05)
       expect(half / unity, `E2E-1 half/unity RMS ratio (${half}/${unity})`).toBeGreaterThan(0.45)
       expect(half / unity, `E2E-1 half/unity RMS ratio (${half}/${unity})`).toBeLessThan(0.55)
@@ -740,12 +753,18 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
   )
 ```
 
+ただしこの E2E-1 の測定そのものに疑いが向けられています。#611 PR-O0 が出口の golden を録る過程で、`captureSegment` を `run_selection` の直後に取ると窓の大半が発音前の無音になる、という問題が見つかりました。`LOOP()` は既定で次の小節境界まで待ってから鳴り始めるからです。窓に入るヒット数が実行ごとに変われば、RMS は音量ではなくヒット数を測ってしまいます（[IV-3 の「区間 RMS が音量を意味するのは窓に入るヒット数を固定したときだけ」](/editor/mcp-and-gated-e2e#区間-rms-が音量を意味するのは窓に入るヒット数を固定したときだけ)）。
+
+E2E-1 の `unity` 区間は settle 400 ms で取るので、まさにこの形にあたります。2026-09-04 の 3 回の実測でも、`half` はほとんど動かない（0.08576 / 0.08579）のに `unity` は 11% 動き、1 回は 0 でした。不安定なのは `unity` 側です。
+
+したがって「今日の half/unity 比」を golden として持つことはできません。`tests/e2e/output-line-expectations.ts:166-182` の `globalGainInstrument` は PR-O2 後の受け入れ値（$10^{-6/20}$）だけを置き、**E2E-1 を green にする前に、まず E2E-1 が定常状態を見ているかを確かめること**という条件を添えています。
+
 E2E-4 は sum + aux の経路です。dry（bus 無し）と、`output("sum643")` + `send("aux643", 0.5)` を
 持つ instrument を切り替え、比が 1.35〜1.65（理論値 1.5）に入ることを見ます（`1585-1592`）。
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1556-1575
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1645-1664
         [
           'var global = init GLOBAL',
           'global.key("C")',
@@ -895,7 +914,7 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 ## Sources
 
 - `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` Mixer / Routing（MX.1〜MX.5）規範
-- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1247-1249` — master gain ramp が insert の前に掛かる既知制約
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1310-1312` — master gain ramp が insert の前に掛かる既知制約
 - `docs/design/643-mixer-foundation-design.md` — #643 設計（owner 三条・責務境界・feed 注入点 §5.1・`output()` 3 分岐 §12）
 - `docs/design/649-audio-line-design.md` — #649 オーディオライン設計（§7 確定事項・§8 未決・§9-§14 実装設計 v3）
 - `docs/archive/WORK_LOG_2026-08.md` 6.404 / 6.405 / 6.408 / 6.410 / 6.415 / 6.420 — #643 設計〜PR-1〜PR-2〜レビュー訂正〜実機発見〜#649 設計 v3
@@ -922,9 +941,10 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - `rust/crates/orbit-audio-native/src/output.rs:1078-1094` — bus 無し経路 `render_engine_with_source_outputs`
 - `rust/crates/orbit-audio-native/src/output.rs:2017-2060` — unit test `global_gain_scales_instrument_contribution`
 - `rust/crates/orbit-audio-core/src/scheduler.rs:375-460` — `render_multi_feeds`（feed 加算と gain ramp）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:503-603` — `captureInstrumentScenario` / `rms()`
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1432-1466` — E2E-1（`global.gain(-6)`）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1553-1595` — E2E-4（`output(sum)` + `send(aux, 0.5)`）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:500-600` — `captureInstrumentScenario` / `rms()`
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1429-1463` — E2E-1（`global.gain(-6)`）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1550-1592` — E2E-4（`output(sum)` + `send(aux, 0.5)`）
+- `tests/e2e/output-line-expectations.ts:166-182` — `globalGainInstrument`（E2E-1 の測定への疑いと PR-O2 の受け入れ値・#611 PR-O0）
 - Issue [#453](https://github.com/signalcompose/orbitscore/issues/453) / [#459](https://github.com/signalcompose/orbitscore/issues/459) — ミキサー DSL（sum / aux / send）
 - Issue [#643](https://github.com/signalcompose/orbitscore/issues/643) / PR [#648](https://github.com/signalcompose/orbitscore/pull/648) — ミキサーの土台と instrument source 化・マスターフェーダー配線
 - Issue [#649](https://github.com/signalcompose/orbitscore/issues/649) — オーディオライン設計

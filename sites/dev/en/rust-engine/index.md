@@ -203,7 +203,7 @@ that drains an `mpsc` channel. Since #474 there is one more task: it bridges the
 (`PluginUiClosed` and friends) broadcast by the watchdog threads into the session's writer queue.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:691-718
+// rust/crates/orbit-audio-daemon/src/session.rs:739-766
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -215,6 +215,7 @@ pub async fn run(
     write
         .send(Message::Text(to_json_or_fallback(&Handshake::current())))
         .await?;
+    let session = SessionRegistration::new(engine.clone());
 
     let writer_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -231,7 +232,6 @@ pub async fn run(
         let tx = tx.clone();
         let events = engine.subscribe_plugin_ui_events();
         tokio::spawn(forward_plugin_ui_events(events, tx))
-    };
 ```
 
 `method` dispatch is handled by `handle_command`. Plugin-note methods such as
@@ -240,7 +240,7 @@ kept as the single point of truth, before falling through to the match — refle
 learned that keeping the same string set in two independently-maintained places drifts.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1272-1299
+// rust/crates/orbit-audio-daemon/src/session.rs:1339-1366
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,

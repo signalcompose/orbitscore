@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: affdf69
-verified-at: "2026-09-03"
+verified-against: c2010db
+verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 and to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -407,7 +407,7 @@ flowchart LR
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:64-70
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:81-87
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH =
   '/Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app'
@@ -424,7 +424,7 @@ const appAvailable = fs.existsSync(appPath)
 When the suite is loaded, before a single test runs, it checks the freshness of the daemon binary.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:156-166
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:173-183
   if (newest.at > builtAt) {
     throw new Error(
       'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
@@ -443,7 +443,7 @@ Which binary to inspect is not hardcoded; the guard asks `resolveDaemonBinaryPat
 **What counts as a "source"** took a second pass as well (#713). Picking up every `.rs` under `rust/` unconditionally lets an integration test — a separate cargo target, in practice `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs` — be selected as the "newest source". Such a file never enters the dependency graph of the `orbit-audio-daemon` binary, so cargo correctly reads its dependencies, builds nothing, and the binary's mtime is never refreshed. The result is an **unfixable red**: running `npm run test:e2e:gated`, exactly what the guard's message instructs, cannot clear it. The trigger is a property of mtime — `git checkout` sets a file's mtime to the checkout time, so merely moving between branches turns an integration test whose content never changed into the "newest source". In #713 this stopped the gated suite from running a single test.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:145-147
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:162-164
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
           continue
         }
@@ -464,7 +464,7 @@ npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` a
 ### Launching the app — the `orbs` CLI and the Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:731-752
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:803-824
       const orbsBin = path.join(appPath, 'Contents/Resources/app/bin/orbs')
       child = spawn(
         orbsBin,
@@ -494,7 +494,7 @@ npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` a
 The teardown repeats a safety warning.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:249-255
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:266-272
 function killOrbitStudio(): void {
   try {
     execFileSync('pkill', ['-f', 'OrbitStudio.app/Contents/MacOS'], { stdio: 'ignore' })
@@ -511,7 +511,7 @@ The pattern must never be widened to `Code` or `Electron`, it says in two places
 Capture can only be enabled by passing the `ORBIT_CAPTURE_WAV` environment variable at daemon spawn time. The extension auto-starts the engine during `activate()`, so the gated spec **stops the auto-started engine first**, then starts it again with capture.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:869-874
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:941-946
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -611,7 +611,7 @@ export function captureWavPath(tmpRoot: string, slug: string): string {
 `runScore` folds "copy the score into a work copy, evaluate it through the editor path (`open_file` → `set_selection` → `run_selection`), and if asked, analyse the capture and return segment RMS" into one function. Its `evaluate` deliberately does not assert on `ok` / `isError`, for the reason given in [the `ok` section](#what-ok-from-evaluate-orbitscore-means) of this chapter.
 
 ```typescript
-// tests/e2e/helpers/run-score.ts:258-270
+// tests/e2e/helpers/run-score.ts:246-258
     // 🔴 **ただし「assert しない」は「握り潰す」ではない**（silent-failure レビュー 2026-09-04）。
     // `ok` は**必要条件**で、`ok: false` は `get_log` を漁らずその場で取れる一次シグナルである
     // （パース / 実行時診断・`mcp-server.ts` の tool 説明）。捨てると、セットアップの typo が
@@ -684,7 +684,7 @@ The onset threshold is the larger of "median window RMS × 4" and the absolute f
 The last assertion of the first test uses these onset gaps as evidence of tempo.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1410-1424
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1482-1496
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -704,16 +704,18 @@ The last assertion of the first test uses these onset gaps as evidence of tempo.
 
 `kick_loop.orbs` plays a kick on every quarter note at 120 bpm; midway, `edit_replace` rewrites it to `global.tempo(180)` and re-evaluates. If there are at least three onset gaps at 0.5 s **and** at least three at 0.333 s, then "run_selection worked", "edit_replace + run_selection changed it live", and "sound came out" are proven together.
 
-The `#643` tests go one step further and compare RMS per time segment. The wall-clock time of each operation is recorded as a segment, mapped back onto the WAV from the capture end time, and the 20 ms-window RMS values in that interval are combined as a root mean square.
+The `#643` tests go one step further and compare RMS per time segment. Segment boundaries are read straight off the **byte length of the capture file** (`(stat.size - 44) / (channels x 4) / sampleRate`), and the first segment only opens **once sound has been detected**. The 20 ms-window RMS values in that interval are combined as a root mean square.
+
+This used to work the other way around: each operation's wall-clock time was recorded and mapped back onto the WAV from the capture end time. #739 removed that. The reverse mapping goes negative whenever the capture is shorter than the wall clock, and `Math.max(0, ...)` then **silently clamped it to the start of the file** — moving a window later made it measure earlier.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:593-598
-    const rms = (name: string, guardSec = 0.15): number => {
-      const selected = windows(name, guardSec)
-      return Math.sqrt(
-        selected.reduce((sum, window) => sum + window.rms * window.rms, 0) / selected.length,
-      )
-    }
+// tests/e2e/helpers/capture-windows.ts:190-195
+export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
+  if (windows.length === 0) throw new Error('quadraticMeanRms requires at least one window')
+  return Math.sqrt(
+    windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
+  )
+}
 ```
 
 E2E-1, for example, compares `rms('unity')` and `rms('half')` to confirm that `global.gain(-6)` roughly halves the RMS ($10^{-6/20} \approx 0.501$).
@@ -733,13 +735,17 @@ The title of WORK_LOG 6.418 is "turning today's corrections from 'knowledge' int
 Both checks work by reading the source of the gated E2E, so letting each of them hard-code **which files to read** goes badly. The moment a scenario is moved out into another file, the ratchet reads it as "words that used to be covered have disappeared" and turns red, while assertion hygiene never sees the new file and **silently keeps passing**. The second one is the nastier of the two, precisely because it does not go red: nothing tells you the check has stopped biting. So the scan list lives in one place, `tests/e2e/gated-sources.ts`.
 
 ```typescript
-// tests/e2e/gated-sources.ts:29-35
+// tests/e2e/gated-sources.ts:37-47
 const GATED_SOURCE_GLOBS: readonly {
   readonly dir: string
   readonly match: (name: string) => boolean
 }[] = [
   { dir: E2E_DIR, match: (name) => name === 'orbitstudio-mcp-gated.spec.ts' },
   { dir: path.join(E2E_DIR, 'gated'), match: (name) => name.endsWith('.ts') },
+  {
+    dir: path.join(E2E_DIR, 'helpers'),
+    match: (name) => name.endsWith('.ts') && !name.endsWith('.spec.ts'),
+  },
 ]
 ```
 
@@ -748,7 +754,7 @@ The entry point `orbitstudio-mcp-gated.spec.ts` is the only spec vitest discover
 One more thing is settled here: what happens when the list comes out empty.
 
 ```typescript
-// tests/e2e/gated-sources.ts:87-104
+// tests/e2e/gated-sources.ts:99-116
 /** 各ソースを「相対パス + 中身」で返す。行番号つきで報告したい検査はこちらを使う。 */
 export function readGatedSourceEntries(): readonly {
   readonly file: string
@@ -805,7 +811,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 It only checks whether `.<name>(` appears anywhere in the gated E2E sources returned by `readGatedSources()`. The vocabulary side is `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` from `packages/engine/src/signal-chain/runtime` — the interpreter's dispatch table itself.
 
 ```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:150-160
+// tests/e2e/dsl-e2e-coverage.spec.ts:149-159
   it('A-1 does not leave a new sequence method untested on real hardware', () => {
     const now = uncovered(SEQUENCE_DSL_METHODS)
     const baseline = new Set(SEQUENCE_UNCOVERED_BASELINE)
@@ -849,7 +855,7 @@ The remaining four check "does a spec that uses capture actually contain an `rms
 Those last two form a pair that pins **one direction each**. The first alone catches the regression "the exclusion was deleted", but without the second, going too far and excluding `src` as well would pass unnoticed. The guard's purpose — never measure a stale binary — depends on it still looking at `src`, so only both directions together fix the line.
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:95-99
+// tests/e2e/gated-assertion-hygiene.spec.ts:104-108
     expect(
       /entry\.name === 'src'/.test(source),
       'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +
@@ -860,6 +866,19 @@ Those last two form a pair that pins **one direction each**. The first alone cat
 All five, though, only scan the **source text** of the gated spec, so what they guarantee stops at "it is written that way". The guard itself, `assertDaemonBinaryIsNotStale()`, is called only when `gated && appAvailable`, so an ordinary `npm test` never executes a line of it. It is accurate to read this section's checks as pinning the *written shape*, not an *executed behaviour*.
 
 Incidentally, the "fixed 500-line window" in the comment is the number from before `#567` widened it to 1000 lines; the window is still finite, so the rule itself stands.
+
+### The harness spec catches up with the implementation (2026-09-04, #724)
+
+The shape we have been reading was, for a long time, not the shape written in the normative document. `docs/testing/E2E_HARNESS_SPEC.md` still carried its 2026-07-28 wording — "the current gated E2E is a wiring smoke, an interim measure until this spec's coverage harness is finished" — which no longer matched a real-device spec that already had 20 `it(` blocks and numeric capture assertions. #724 (#668 PR-E0) revised that text and swapped the roles of the two layers.
+
+| Layer | Old (2026-07-28) | Revised (2026-09-04, #724) |
+|---|---|---|
+| Offline deterministic layer | **Coverage** of DSL semantics | **Pinning regressions** (same `.orbs` → bit-identical PCM) |
+| Real-device layer | Wiring checks (**representative syntax only**) | **Coverage of the vocabulary and the syntax surface** |
+
+The reason for the revision is what the previous section already showed. The ratchet that counts coverage scans the **source of the real-device spec** through `readGatedSources()`, so the pressure for coverage was landing on the real-device layer all along. The spec, as #724 puts it, had simply been left older than the implementation.
+
+The same revision pins the observation kinds (`ObservationKind`) into the spec, with the enum in `tests/e2e/dsl-coverage-ledger.ts` as the normative source, and rewrites the treatment of `smoke` (an evaluation that merely went through) from "warn during the audit" to a **count ratchet** (`E2E_HARNESS_SPEC.md` §4.1). The reasoning — a warning may go unread, but a red test stops you — is exactly the thinking behind the ratchet in this section.
 
 ---
 
@@ -910,7 +929,7 @@ export function parseStepLine(line: string): StepEvent | null {
 The audio-side source is a single place in `rust-engine-player.ts`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1556-1562
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1572-1578
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
       console.log(
@@ -933,7 +952,7 @@ This is where `#654` enters. According to WORK_LOG 6.421, when a new seven-layer
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1394-1404
+// packages/engine/src/core/sequence.ts:1430-1440
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {
@@ -1060,7 +1079,7 @@ function shouldFilterLine(line: string): boolean {
 The playhead reads from the raw stream, and `[STEP]` never reaches the output channel (= `get_log`). This means **the only way to observe the playhead from MCP is debug mode**. In debug mode `transcribeLog` appends `output` as-is, so `[STEP]` lines appear in `get_log`. The `#654` E2E takes exactly that shape.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2047-2057
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2150-2160
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1075,13 +1094,13 @@ The playhead reads from the raw stream, and `[STEP]` never reaches the output ch
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2060-2061
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2163-2164
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2117-2119
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2220-2222
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
@@ -1129,7 +1148,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - The docs-serving part of `mcp-server.ts` (`/orbitscore/dev/`, `isDocsDistStale`) and `get_dev_doc` / `search_dev_docs` — the route by which the learning site enters an agent's context
 - The `EvalMarkBridge` timeout (120 seconds) and its coordination with the `#608` stall reporter — how a blocked queue gets its "blocking line" named
 - Nested resolution in `findPlayArgRangeForPath()` (the descend condition for `"1.0"` and the handling of group runs), and the seam for the planned `seq.color()` in `#391` (`PlayheadColorConfig.seqColors`)
-- How the two-layer structure of `docs/testing/E2E_HARNESS_SPEC.md` (offline deterministic layer + real-device wiring layer) plans to replace the gated spec's "wiring smoke"
+- What happens to the hand-written rows of ledger 2 (implementation ↔ test) in `tests/e2e/dsl-coverage-ledger.ts`, and to the ratchet, once #671 stage 3 turns that ledger into something a generator derives (`E2E_HARNESS_SPEC.md` §2.1)
 - `estimateFundamentalHz()` in `analyze_audio` — how the plugin-state restore tests assert "the same measured pitch"
 - The safety envelope of `killOrbitStudio()` / `replaceGatedPluginFixtureSymlink()` (allowlists) — the boundary that keeps the harness from damaging the user's environment
 - Improving the structure that prevents gated tests from running one at a time (WORK_LOG 6.409)
@@ -1175,7 +1194,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixtures
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — building OrbitStudio.app
-- `docs/testing/E2E_HARNESS_SPEC.md` — DSL coverage E2E harness spec (#543)
+- `docs/testing/E2E_HARNESS_SPEC.md` — DSL coverage E2E harness spec (#543; §2.1 / §3 / §4.1 / §6.3 revised on 2026-09-04 by #724 = #668 PR-E0)
 - `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md` §3 — original design of the Agent Bridge
 - `docs/archive/WORK_LOG_2026-08.md` 6.348 / 6.409 / 6.415 / 6.416 / 6.417 / 6.418 / 6.421 — MCP tool additions, real-device verification, stale guard, mechanisation, #654
 - `CLAUDE.md` "E2E が最重要", "これらは仕組みで強制されている", "マージ前ゲート"

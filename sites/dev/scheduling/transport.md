@@ -496,13 +496,16 @@ stateDiagram-v2
 - `seq.stop()` → イベントをクリアし、ループタイマーをキャンセルする
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1774-1799
+// packages/engine/src/core/sequence.ts:1855-1880
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()
 
     // Clear scheduled events (MIDI: also releases sounding notes, §7-2)
     this.clearEvents(sequenceName)
+
+    // Cancel a pending one-shot completion so it cannot clear later playback.
+    this.clearRunTimer()
 
     // Clear loop timer (only exists if loop() was called, not run())
     // Note: run() sets loopTimer to undefined, so this check prevents redundant clearInterval
@@ -520,9 +523,6 @@ stateDiagram-v2
     if (wasLooping) {
       console.log(`⏹ ${sequenceName} (loop stopped)`)
     }
-
-    return this
-  }
 ```
 
 ここで 2026-05 版の記述を 1 つ訂正しておきます。2026-05 版は「global が止まっても各シーケンスの loop タイマー自体は動き続け、再度 `global.start()` したとき各シーケンスは自分の次のイテレーションで再び音を出す」と書いていましたが、`TransportControl.stop()` は**全シーケンスの `stop()` を先に呼ぶ**ので、ループタイマーはそこで `clearTimeout` されます。`global.stop()` → `global.start()` のあとにシーケンスを鳴らすには、`LOOP()` / `RUN()` を再評価する必要があります。2026-05 時点の `transport-control.ts:43-59` も同じ code だったので、これは drift ではなく元の読み違いです。

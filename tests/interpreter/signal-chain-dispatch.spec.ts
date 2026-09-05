@@ -620,6 +620,11 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'recalculateTiming',
       'seamlessParameterUpdate',
       'restartLoopFromCurrentTime',
+      // #606 PR-K-A1: 一発 `RUN()` の終端タイマを取り消す private な配線。
+      // TypeScript の `private` は実行時には残らないので、この分類器からは公開メソッドに見える。
+      // **利用者が書く語彙ではない** — `run()` / `loop()` / `stop()` の 3 経路から呼ばれ、
+      // 古いタイマが新しい再生を消す stale timer を防ぐためだけに存在する。
+      'clearRunTimer',
       // Output, engine-mode, and audio-buffer internals.
       // #643 PR-2: instrument の insert bus 割当が確定した時点で `SetSourceRouting` を冪等に
       // 発行する choke point。**利用者が書く語彙ではない** — `effect()` / `output()` /
@@ -669,6 +674,9 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'applyVoiceTiesAndHold',
       'scheduleEventsFromTime',
       'resolveDispatchChannel',
+      // #645 PR-D0: dedup logger for the `skip` dispatch target (private helper called
+      // from run()/loop()/scheduleEvents()/scheduleEventsFromTime()). Not DSL vocabulary.
+      'logSkipOnce',
       'scheduleEvents',
       // Runtime timing notifications and state inspection.
       'getPatternDuration',
@@ -797,6 +805,22 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       [...GLOBAL_DSL_METHODS].filter((name) => globalInternalMethods.has(name)),
       'Global DSL vocabulary and internal-only API classifications must be disjoint',
     ).toEqual([])
+  })
+
+  it('keeps the RUN tail-timer internal unreachable from the DSL (#606 PR-K-A1)', async () => {
+    // 🔴 除外リストへの追加は**主張**にすぎない。CLAUDE.md が #528 で名指しした事故は
+    // 「DSL 語彙であるべきものを除外リストへ誤分類し、テストは緑・実行時だけ壊れる」型だった。
+    // ここで逆向きに実証して、主張を証明に変える。
+    //
+    // `clearRunTimer` は `run()` / `loop()` / `stop()` から呼ばれる private な配線で、
+    // 利用者が書ける語彙になってはいけない（呼べると再生中の終端タイマを外から消せる）。
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var kick = init global.seq', state)
+
+    await expect(run('kick.clearRunTimer()', state)).rejects.toThrow(
+      /Unknown chain method "clearRunTimer"/,
+    )
   })
 
   it('keeps plugin-state host APIs out of the Global DSL vocabulary', () => {

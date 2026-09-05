@@ -54,10 +54,27 @@ import {
 import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
 
 import { countErrors, countLogMarker, errorBaseline, expectNoNewErrors } from './helpers/engine-log'
+import {
+  captureWindowsFrom,
+  createCaptureClock,
+  prepareCapturePath,
+  quadraticMeanRms,
+  readCaptureForAnalysis,
+  steadyRms,
+  waitForSound,
+  type CaptureSegment,
+} from './helpers/capture-windows'
 import { captureWavPath, createGatedSession, type GatedCatalog } from './helpers/gated-session'
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
 import { rackChildPidsFromLog } from './helpers/rack-child-pid'
-import { logAnchor, logAppendedSince, relativeDelta, runScore } from './helpers/run-score'
+import {
+  logAnchor,
+  logAppendedSince,
+  relativeDelta,
+  runScore,
+  startEngineForRun,
+  waitForEngineState,
+} from './helpers/run-score'
 import { OUTPUT_LINE_GOLDENS, STEADY_CAPTURE } from './output-line-expectations'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
@@ -308,6 +325,49 @@ function processExists(pid: number): boolean {
   }
 }
 
+/**
+ * Find daemon processes without assuming which checkout supplied the binary.
+ *
+ * SAFETY: keep both executable-name boundaries. A broad `daemon` / `audio`
+ * pattern could include unrelated user processes. K3 never signals this whole
+ * list: it snapshots the list before starting its engine and may signal only
+ * the single PID added by that successful start.
+ */
+function orbitAudioDaemonPids(): number[] {
+  try {
+    return execFileSync('pgrep', ['-f', '(^|/)orbit-audio-daemon([[:space:]]|$)'], {
+      encoding: 'utf8',
+    })
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(Number)
+      .filter((pid) => Number.isSafeInteger(pid) && pid > 0)
+  } catch {
+    return []
+  }
+}
+
+function parentPid(pid: number): number {
+  return Number(execFileSync('ps', ['-p', String(pid), '-o', 'ppid='], { encoding: 'utf8' }).trim())
+}
+
+function processCommand(pid: number): string {
+  return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).trim()
+}
+
+function analysisTailRms(
+  analysis: ReturnType<typeof analyzeWavBuffer>,
+  durationSec: number,
+): number {
+  const windows = (analysis.windows ?? []).filter(
+    (window) => window.startSec >= Math.max(0, analysis.durationSec - durationSec),
+  )
+  expect(windows.length, `capture tail ${durationSec}s must contain RMS windows`).toBeGreaterThan(0)
+  // 二乗平均の式は正本を 1 つに保つ（`run-score.ts:127-130` が drift しやすいと警告している式）。
+  return quadraticMeanRms(windows)
+}
+
 /** Catalog drops create files here; bypass and standard-stage drops must not. */
 function stateFileCount(statesDirectory: string): number {
   if (!fs.existsSync(statesDirectory)) return 0
@@ -432,6 +492,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     // 既に別テストがエンジンを起動していると
     // 「engine is already running; requested spawn-only option(s): capture_wav」で弾かれる。
     // capture を要求する時は必ず一度落としてから起動する（#643 E2E 7本がこれで全滅した）。
+    // 🔴 この停止は SIGTERM で、daemon には signal handler が無いため capture の Drop/finalize は
+    // 通常停止でも走らない。解析側の `readCaptureForAnalysis` による data-size 零化が必須である。
     if (captureWav !== undefined) {
       await activeClient.call('stop_engine')
       await waitForEngine(false, 15_000, `${label} stopped before capture start`)
@@ -473,11 +535,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     }
   }
 
-  type InstrumentCaptureSegment = { from: number; to: number }
   type InstrumentCaptureContext = {
     activeClient: McpClient
     catalog: ReturnType<typeof requireCatalogFixtures>
-    segments: Record<string, InstrumentCaptureSegment>
+    segments: Record<string, CaptureSegment>
+    clock(): number
     evaluate(code: string): Promise<void>
     captureSegment(name: string, durationMs?: number, settleMs?: number): Promise<void>
   }
@@ -519,11 +581,14 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       (await activeClient.call('get_log', { lines: 500 })).text
 
     fs.writeFileSync(dslPath, initialDsl.join('\n') + '\n')
+    prepareCapturePath(capturePath)
     await startR28Engine(activeClient, `#643 ${slug} capture engine`, capturePath)
     await sleep(1000)
     const errorsBefore = countErrors(await readLog())
-    const segments: Record<string, InstrumentCaptureSegment> = {}
-    let stopWall = Date.now()
+    const segments: Record<string, CaptureSegment> = {}
+    let soundReady = false
+
+    const clock = createCaptureClock(capturePath)
 
     const evaluate = async (code: string): Promise<void> => {
       const result = await activeClient.call('evaluate_orbitscore', { code })
@@ -534,12 +599,26 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       durationMs = 2000,
       settleMs = 400,
     ): Promise<void> => {
+      if (!soundReady) {
+        await waitForSound(capturePath, {
+          floor: 0.01,
+          intervalMs: 250,
+          timeoutMs: 20_000,
+          label: `#643 ${slug}`,
+        })
+        soundReady = true
+      }
       if (settleMs > 0) await sleep(settleMs)
-      const from = Date.now()
+      const fromWall = Date.now()
+      const fromSec = clock()
       await sleep(durationMs)
-      segments[name] = { from, to: Date.now() }
+      const toSec = clock()
+      const toWall = Date.now()
+      segments[name] = { fromSec, toSec, fromWall, toWall }
     }
 
+    let bodyError: unknown
+    let cleanupFailure: unknown
     try {
       const opened = await activeClient.call('open_file', { path: dslPath })
       expect(opened.isError, opened.text).toBe(false)
@@ -553,50 +632,43 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const run = await activeClient.call('run_selection')
       expect(run.isError, run.text).toBe(false)
 
-      await body({ activeClient, catalog, segments, evaluate, captureSegment })
+      await body({ activeClient, catalog, segments, clock, evaluate, captureSegment })
       const finalLog = await readLog()
       expect(
         countErrors(finalLog),
         `#643 ${slug} must add no ERROR lines. Log tail: ${finalLog.slice(-1600)}`,
       ).toBeLessThanOrEqual(errorsBefore)
+    } catch (error) {
+      bodyError = error
+      throw error
     } finally {
-      await activeClient.call('evaluate_orbitscore', { code: 'global.stop()' })
-      const stopped = await activeClient.call('stop_engine')
-      expect(stopped.isError, stopped.text).toBe(false)
-      stopWall = Date.now()
-      await waitForEngine(false, 15_000, `#643 ${slug} capture engine stopped`)
-      await sleep(1000)
+      try {
+        await activeClient.call('evaluate_orbitscore', { code: 'global.stop()' })
+        const stopped = await activeClient.call('stop_engine')
+        expect(stopped.isError, stopped.text).toBe(false)
+        await waitForEngine(false, 15_000, `#643 ${slug} capture engine stopped`)
+        await sleep(1000)
+      } catch (cleanupError) {
+        if (bodyError === undefined) {
+          cleanupFailure = cleanupError
+        } else {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[#643 ${slug}] cleanup also failed; reporting the original failure instead:` +
+              `\n${String(cleanupError)}`,
+          )
+        }
+      }
     }
+    if (cleanupFailure !== undefined) throw cleanupFailure
 
-    const capture = fs.readFileSync(capturePath)
+    const capture = readCaptureForAnalysis(capturePath)
     const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
-    const range = (segment: InstrumentCaptureSegment, guardSec = 0.15) => ({
-      fromSec: Math.max(0, analysis.durationSec - (stopWall - segment.from) / 1000 + guardSec),
-      toSec: Math.min(
-        analysis.durationSec,
-        analysis.durationSec - (stopWall - segment.to) / 1000 - guardSec,
-      ),
-    })
-    const windows = (name: string, guardSec = 0.15) => {
-      const segment = segments[name]
-      expect(segment, `#643 ${slug} segment '${name}' must exist`).toBeDefined()
-      const requested = range(segment!, guardSec)
-      const selected = (analysis.windows ?? []).filter(
-        (window) => window.startSec >= requested.fromSec && window.startSec < requested.toSec,
-      )
-      expect(
-        selected.length,
-        `#643 ${slug} segment '${name}' must contain windows`,
-      ).toBeGreaterThan(0)
-      return selected
+    return {
+      ...captureWindowsFrom(analysis, segments, `#643 ${slug}`, capturePath),
+      capture,
+      segments,
     }
-    const rms = (name: string, guardSec = 0.15): number => {
-      const selected = windows(name, guardSec)
-      return Math.sqrt(
-        selected.reduce((sum, window) => sum + window.rms * window.rms, 0) / selected.length,
-      )
-    }
-    return { analysis, capture, range, windows, rms, segments }
   }
 
   afterAll(async () => {
@@ -1455,6 +1527,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // 0 dB -> -6 dB で amplitude は 10^(-6/20) ≈ 0.501 = 約半分。
       const unity = result.rms('unity')
       const half = result.rms('half')
+      expect(
+        ['unity', 'half'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
+      ).toBe(true)
+      expect(unity, 'E2E-1 unity must measure the 0 dB instrument').toBeGreaterThan(0.15)
       expect(unity, 'E2E-1 unity instrument must be audible').toBeGreaterThan(0.05)
       expect(half / unity, `E2E-1 half/unity RMS ratio (${half}/${unity})`).toBeGreaterThan(0.45)
       expect(half / unity, `E2E-1 half/unity RMS ratio (${half}/${unity})`).toBeLessThan(0.55)
@@ -1493,6 +1569,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       const dry = result.rms('dry')
       const wet = result.rms('wet')
+      expect(
+        ['dry', 'wet'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
+      ).toBe(true)
       expect(dry, 'E2E-2 dry instrument must be audible').toBeGreaterThan(0.05)
       expect(wet / dry, `E2E-2 wet/dry RMS ratio (${wet}/${dry})`).toBeGreaterThan(0.45)
       expect(wet / dry, `E2E-2 wet/dry RMS ratio (${wet}/${dry})`).toBeLessThan(0.56)
@@ -1518,12 +1597,19 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'live643.play(1, 1, 1, 1)',
           'LOOP(live643)',
         ],
-        async ({ captureSegment, evaluate, segments }) => {
+        async ({ captureSegment, clock, evaluate, segments }) => {
           await captureSegment('dry')
-          const from = Date.now() - 250
+          const fromSec = clock() - 0.25
+          const fromWall = Date.now() - 250
           await evaluate('live643.effect([Gain(db: -6)])')
           await sleep(500)
-          segments.transition = { from, to: Date.now() }
+          segments.transition = {
+            fromSec,
+            toSec: clock(),
+            fromWall,
+            toWall: Date.now(),
+            overlapsPrevious: true,
+          }
           await captureSegment('wet')
         },
       )
@@ -1533,6 +1619,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const dryPeak = Math.max(...result.windows('dry').map((window) => window.peak))
       const transitionPeak = Math.max(...transition.map((window) => window.peak))
       const transitionFloor = Math.min(...transition.map((window) => window.rms))
+      expect(
+        ['dry', 'wet'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
+      ).toBe(true)
       expect(wet / dry, `E2E-3 post-attach wet/dry ratio (${wet}/${dry})`).toBeGreaterThan(0.45)
       expect(wet / dry, `E2E-3 post-attach wet/dry ratio (${wet}/${dry})`).toBeLessThan(0.56)
       expect(
@@ -1581,6 +1670,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       const dry = result.rms('dry')
       const sumAux = result.rms('sumAux')
+      expect(
+        ['dry', 'sumAux'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
+      ).toBe(true)
       expect(dry, 'E2E-4 dry instrument must be audible').toBeGreaterThan(0.05)
       expect(
         sumAux / dry,
@@ -1621,6 +1713,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const before = result.rms('beforeReplace')
       const after = result.rms('afterReplace')
       const dry = result.rms('replacementDry')
+      expect(
+        ['beforeReplace', 'afterReplace', 'replacementDry']
+          .flatMap((name) => result.windows(name))
+          .every((w) => w.rms >= 0.01),
+      ).toBe(true)
       expect(before, 'E2E-5 pre-replacement effect output must be audible').toBeGreaterThan(0.02)
       expect(after, 'E2E-5 replacement must remain audible').toBeGreaterThan(0.02)
       expect(after / dry, `E2E-5 effected replacement/dry ratio (${after}/${dry})`).toBeGreaterThan(
@@ -1672,6 +1769,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       const dry = result.rms('nextDry')
       const wet = result.rms('nextWet')
+      expect(
+        ['oldWet', 'nextDry', 'nextWet']
+          .flatMap((name) => result.windows(name))
+          .every((w) => w.rms >= 0.01),
+      ).toBe(true)
       expect(dry, 'E2E-6 next tenant must produce dry audio').toBeGreaterThan(0.05)
       expect(wet / dry, `E2E-6 next-tenant wet/dry ratio (${wet}/${dry})`).toBeGreaterThan(0.45)
       expect(wet / dry, `E2E-6 next-tenant wet/dry ratio (${wet}/${dry})`).toBeLessThan(0.56)
@@ -1702,6 +1804,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         },
       )
       const dry = result.rms('dry')
+      expect(result.windows('dry').every((window) => window.rms >= 0.01)).toBe(true)
       expect(result.analysis.soundDetected, JSON.stringify(result.analysis)).toBe(true)
       expect(
         dry,
@@ -3169,13 +3272,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       vst3State.writeInt32LE(7, 4)
       fs.writeFileSync(vst3StatePath, vst3State)
 
+      prepareCapturePath(capturePath)
       const start = await activeClient.call('start_engine', { capture_wav: capturePath })
       expect(start.isError, start.text).toBe(false)
       await waitForEngine(true, 15_000, '#618 E1-E6 engine running')
       await sleep(2500)
-      const captureWallStart = Date.now()
-      let stopWall = captureWallStart
-      const segments: Record<string, { from: number; to: number }> = {}
+      const clock = createCaptureClock(capturePath)
+      const segments: Record<string, CaptureSegment> = {}
+      let bodyError: unknown
+      let cleanupFailure: unknown
       try {
         const baselineLog = (await activeClient.call('get_log', { lines: 500 })).text
         const errorsBefore = countErrors(baselineLog)
@@ -3201,9 +3306,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         })
         const oldChildPids = pluginChildPids(catalog.clapSynthPath)
         expect(oldChildPids.length, 'E1 must observe the old CLAP child PID').toBeGreaterThan(0)
-        segments.e1 = { from: Date.now(), to: 0 }
+        await waitForSound(capturePath, {
+          floor: 0.01,
+          intervalMs: 250,
+          timeoutMs: 20_000,
+          label: '#618 E1-E6',
+        })
+        segments.e1 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
         await sleep(3000)
-        segments.e1.to = Date.now()
+        segments.e1.toSec = clock()
+        segments.e1.toWall = Date.now()
 
         // E2: replace while the LOOP is actively playing. The VST3 state shifts pitch by +7,
         // giving an independent spectral oracle in addition to non-silent RMS.
@@ -3230,9 +3342,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           countErrors(afterReplaceLog),
           `E2 replacement must add no ERROR lines. Log tail: ${afterReplaceLog.slice(-1200)}`,
         ).toBeLessThanOrEqual(errorsBeforeReplace)
-        segments.e2 = { from: Date.now(), to: 0 }
+        segments.e2 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
         await sleep(3000)
-        segments.e2.to = Date.now()
+        segments.e2.toSec = clock()
+        segments.e2.toWall = Date.now()
 
         // E6: the post-replace UI must be the VST3 tenant, not stale bookkeeping for A.
         const errorsBeforeUi = countErrors(afterReplaceLog)
@@ -3293,9 +3406,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // E3: a rest-only pattern must be silent; the old tenant PIDs remain gone.
         await activeClient.call('evaluate_orbitscore', { code: 'cb618.play(0, 0, 0, 0)' })
         await sleep(1000)
-        segments.e3 = { from: Date.now(), to: 0 }
+        segments.e3 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
         await sleep(2500)
-        segments.e3.to = Date.now()
+        segments.e3.toSec = clock()
+        segments.e3.toWall = Date.now()
         expect(oldChildPids.every((pid) => !processExists(pid))).toBe(true)
         expect(pluginChildPids(catalog.clapSynthPath)).toEqual([])
 
@@ -3325,9 +3439,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         ).toBe(true)
         await activeClient.call('evaluate_orbitscore', { code: 'cb618.play(1, 1, 1, 1)' })
         await sleep(1000)
-        segments.e4 = { from: Date.now(), to: 0 }
+        segments.e4 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
         await sleep(3000)
-        segments.e4.to = Date.now()
+        segments.e4.toSec = clock()
+        segments.e4.toWall = Date.now()
 
         // E5: A was automatically registered before A→B; switching back uses that state.
         const projectFile = path.join(root, 'project.yaml')
@@ -3350,58 +3465,58 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           },
           { intervalMs: 200, timeoutMs: 15_000, label: '#618 old state restore log' },
         )
-        segments.e5 = { from: Date.now(), to: 0 }
+        segments.e5 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
         await sleep(3000)
-        segments.e5.to = Date.now()
+        segments.e5.toSec = clock()
+        segments.e5.toWall = Date.now()
 
         const finalLog = (await activeClient.call('get_log', { lines: 500 })).text
         // The deliberate E4 error is the only new error in this scenario.
         expect(countErrors(finalLog)).toBeGreaterThanOrEqual(errorsBefore + 1)
+      } catch (error) {
+        bodyError = error
+        throw error
       } finally {
-        await activeClient.call('evaluate_orbitscore', {
-          code: 'cb618.stop()\nglobal.stop()',
-        })
-        const stopped = await activeClient.call('stop_engine')
-        expect(stopped.isError, stopped.text).toBe(false)
-        stopWall = Date.now()
-        await waitForEngine(false, 15_000, '#618 E1-E6 engine stopped')
-        await sleep(1500)
+        try {
+          await activeClient.call('evaluate_orbitscore', {
+            code: 'cb618.stop()\nglobal.stop()',
+          })
+          const stopped = await activeClient.call('stop_engine')
+          expect(stopped.isError, stopped.text).toBe(false)
+          await waitForEngine(false, 15_000, '#618 E1-E6 engine stopped')
+          await sleep(1500)
+        } catch (cleanupError) {
+          if (bodyError === undefined) {
+            cleanupFailure = cleanupError
+          } else {
+            // eslint-disable-next-line no-console
+            console.warn(
+              '[#618 E1-E6] cleanup also failed; reporting the original failure instead:' +
+                `\n${String(cleanupError)}`,
+            )
+          }
+        }
       }
+      if (cleanupFailure !== undefined) throw cleanupFailure
 
-      const capture = fs.readFileSync(capturePath)
-      const analysis = analyzeWavBuffer(capture, { windowMs: 100 })
-      const audioRange = (segment: { from: number; to: number }) => ({
-        fromSec: Math.max(0, analysis.durationSec - (stopWall - segment.from) / 1000),
-        toSec: Math.min(
-          analysis.durationSec,
-          analysis.durationSec - (stopWall - segment.to) / 1000,
-        ),
-      })
-      const segmentRms = (segment: { from: number; to: number }): number => {
-        const range = audioRange(segment)
-        const windows = (analysis.windows ?? []).filter(
-          (window) => window.startSec >= range.fromSec && window.startSec < range.toSec,
-        )
-        return Math.sqrt(
-          windows.reduce((sum, window) => sum + window.rms * window.rms, 0) /
-            Math.max(1, windows.length),
-        )
-      }
-      const e1Rms = segmentRms(segments.e1!)
-      const e2Rms = segmentRms(segments.e2!)
-      const e3Rms = segmentRms(segments.e3!)
-      const e4Rms = segmentRms(segments.e4!)
-      const e5Rms = segmentRms(segments.e5!)
+      const capture = readCaptureForAnalysis(capturePath)
+      const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
+      const captured = captureWindowsFrom(analysis, segments, '#618 E1-E6', capturePath)
+      const e1Rms = captured.rms('e1', 0)
+      const e2Rms = captured.rms('e2', 0)
+      const e3Rms = captured.rms('e3', 0)
+      const e4Rms = captured.rms('e4', 0)
+      const e5Rms = captured.rms('e5', 0)
       expect(e1Rms, 'E1 CLAP baseline must be non-silent').toBeGreaterThan(0.03)
       expect(e2Rms, 'E2 VST3 replacement must be non-silent').toBeGreaterThan(0.03)
       expect(e3Rms, 'E3 rest pattern must be silent').toBeLessThan(0.005)
       expect(e4Rms, 'E4 failed replacement must leave B sounding').toBeGreaterThan(0.03)
       expect(e5Rms, 'E5 restored A must be non-silent').toBeGreaterThan(0.03)
 
-      const e1Hz = estimateFundamentalHz(capture, audioRange(segments.e1!))
-      const e2Hz = estimateFundamentalHz(capture, audioRange(segments.e2!))
-      const e4Hz = estimateFundamentalHz(capture, audioRange(segments.e4!))
-      const e5Hz = estimateFundamentalHz(capture, audioRange(segments.e5!))
+      const e1Hz = estimateFundamentalHz(capture, segments.e1!)
+      const e2Hz = estimateFundamentalHz(capture, segments.e2!)
+      const e4Hz = estimateFundamentalHz(capture, segments.e4!)
+      const e5Hz = estimateFundamentalHz(capture, segments.e5!)
       expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
       expect(e2Hz, 'E2 VST3 replacement needs a measurable fundamental').toBeDefined()
       expect(e4Hz, 'E4 surviving VST3 needs a measurable fundamental').toBeDefined()
@@ -3474,19 +3589,33 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         }),
       )
 
+      prepareCapturePath(capturePath)
       const start = await activeClient.call('start_engine', { capture_wav: capturePath })
       expect(start.isError, start.text).toBe(false)
       await waitForEngine(true, 15_000, '#625 R-E1-R-E7 engine running')
       await sleep(2500)
 
-      const segments: Record<string, { from: number; to: number }> = {}
+      let soundReady = false
+      const clock = createCaptureClock(capturePath)
+      const segments: Record<string, CaptureSegment> = {}
       const captureSegment = async (name: string): Promise<void> => {
+        if (!soundReady) {
+          await waitForSound(capturePath, {
+            floor: 0.01,
+            intervalMs: 250,
+            timeoutMs: 20_000,
+            label: '#625 R-E1-R-E7',
+          })
+          soundReady = true
+        }
         await sleep(750)
-        segments[name] = { from: Date.now(), to: 0 }
+        const fromWall = Date.now()
+        const fromSec = clock()
         await sleep(3000)
-        segments[name]!.to = Date.now()
+        segments[name] = { fromSec, toSec: clock(), fromWall, toWall: Date.now() }
       }
-      let stopWall = Date.now()
+      let bodyError: unknown
+      let cleanupFailure: unknown
       try {
         // A dry segment with the final sum/aux routing already in place is the
         // reference for both failed replacement (R-E3) and remove (R-E6).
@@ -3755,48 +3884,43 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           countErrors(afterMasterLog),
           `R-E7 master replacement must add no ERROR lines. Log tail: ${afterMasterLog.slice(-1200)}`,
         ).toBeLessThanOrEqual(errorsBeforeMaster)
+      } catch (error) {
+        bodyError = error
+        throw error
       } finally {
-        await activeClient.call('evaluate_orbitscore', {
-          code: 'fx625.stop()\nglobal.stop()',
-        })
-        const stopped = await activeClient.call('stop_engine')
-        expect(stopped.isError, stopped.text).toBe(false)
-        stopWall = Date.now()
-        await waitForEngine(false, 15_000, '#625 R-E1-R-E7 engine stopped')
-        await sleep(1500)
+        try {
+          await activeClient.call('evaluate_orbitscore', {
+            code: 'fx625.stop()\nglobal.stop()',
+          })
+          const stopped = await activeClient.call('stop_engine')
+          expect(stopped.isError, stopped.text).toBe(false)
+          await waitForEngine(false, 15_000, '#625 R-E1-R-E7 engine stopped')
+          await sleep(1500)
+        } catch (cleanupError) {
+          if (bodyError === undefined) {
+            cleanupFailure = cleanupError
+          } else {
+            // eslint-disable-next-line no-console
+            console.warn(
+              '[#625 R-E1-R-E7] cleanup also failed; reporting the original failure instead:' +
+                `\n${String(cleanupError)}`,
+            )
+          }
+        }
       }
+      if (cleanupFailure !== undefined) throw cleanupFailure
 
-      const capture = fs.readFileSync(capturePath)
-      const analysis = analyzeWavBuffer(capture, { windowMs: 100 })
-      // 🔴 区間の両端に 400ms のガードを入れる。壁時計と録音タイムラインの間にはスキューが
+      const capture = readCaptureForAnalysis(capturePath)
+      const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
+      // 🔴 区間の両端に 400ms のガードを入れる。capture 時計の境界にも drain/buffer の遅れが
       // あり、**次の操作の効果が窓の末尾に食い込む**。実測: b 区間の最後の 1 窓だけが
       // 0.232（= dry の打点レベル 0.115/0.5）を拾い、それだけで区間 RMS が 1.5 倍に見えた
       // （他の 5 窓は recoveredB と同じ 0.115 で、機構は正しく効いていた）。
       // ガードは「遷移ではなく定常状態を測る」ためのもので、主張そのものは緩めていない。
       const SEGMENT_GUARD_SEC = 0.4
-      const audioRange = (segment: { from: number; to: number }) => ({
-        fromSec: Math.max(
-          0,
-          analysis.durationSec - (stopWall - segment.from) / 1000 + SEGMENT_GUARD_SEC,
-        ),
-        toSec: Math.min(
-          analysis.durationSec,
-          analysis.durationSec - (stopWall - segment.to) / 1000 - SEGMENT_GUARD_SEC,
-        ),
-      })
+      const captured = captureWindowsFrom(analysis, segments, '#625 R-E1-R-E7', capturePath)
       const segmentRms = (name: string): number => {
-        const segment = segments[name]
-        expect(segment, `${name} capture segment must exist`).toBeDefined()
-        const range = audioRange(segment!)
-        const windows = (analysis.windows ?? []).filter(
-          (window) => window.startSec >= range.fromSec && window.startSec < range.toSec,
-        )
-        expect(windows.length, `${name} capture segment must contain RMS windows`).toBeGreaterThan(
-          0,
-        )
-        return Math.sqrt(
-          windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
-        )
+        return captured.rms(name, SEGMENT_GUARD_SEC)
       }
 
       const dryRms = segmentRms('dryBaseline')
@@ -3833,35 +3957,38 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // 🔴 窓ごとの生系列。区間 RMS が 1.5 倍でも、(a) 全窓が一様に高い＝定常的な増幅 と
       // (b) 一部の窓だけ dry(1.0x) で残りが 0.5x ＝混在 は同じ集計値になる。原因の探索先が
       // まったく違うので、集計だけで判断しない。
-      const segmentWindows = (segment: { from: number; to: number }): string => {
-        const range = audioRange(segment)
-        return (analysis.windows ?? [])
-          .filter((w) => w.startSec >= range.fromSec && w.startSec < range.toSec)
+      const segmentWindows = (name: string): string => {
+        return captured
+          .windows(name, SEGMENT_GUARD_SEC)
           .map((w) => w.rms.toFixed(3))
           .join(',')
       }
       // eslint-disable-next-line no-console
-      console.log('[#625 R-E1-R-E7] b windows: ' + segmentWindows(segments.b!))
+      console.log('[#625 R-E1-R-E7] b windows: ' + segmentWindows('b'))
       // eslint-disable-next-line no-console
-      console.log('[#625 R-E1-R-E7] recoveredB windows: ' + segmentWindows(segments.recoveredB!))
+      console.log('[#625 R-E1-R-E7] recoveredB windows: ' + segmentWindows('recoveredB'))
 
       // 🔴 決着させる観測: 区間ごとの onset 数。b が 9/3s なら「余剰イベント」、
       // 6/3s のままなら「1 発あたりのエネルギー増」で、原因の探索先が変わる。
-      const segmentOnsets = (segment: { from: number; to: number }): number => {
-        const range = audioRange(segment)
-        return (analysis.onsets ?? []).filter((t) => t >= range.fromSec && t < range.toSec).length
+      const segmentOnsets = (name: string): number => {
+        const segment = segments[name]!
+        return (analysis.onsets ?? []).filter(
+          (onset) =>
+            onset >= segment.fromSec + SEGMENT_GUARD_SEC &&
+            onset < segment.toSec - SEGMENT_GUARD_SEC,
+        ).length
       }
       // eslint-disable-next-line no-console
       console.log(
         '[#625 R-E1-R-E7] segment onsets/3s: ' +
           JSON.stringify({
-            dryBaseline: segmentOnsets(segments.dryBaseline!),
-            a: segmentOnsets(segments.a!),
-            b: segmentOnsets(segments.b!),
-            failedDry: segmentOnsets(segments.failedDry!),
-            recoveredB: segmentOnsets(segments.recoveredB!),
-            restoredA: segmentOnsets(segments.restoredA!),
-            removedDry: segmentOnsets(segments.removedDry!),
+            dryBaseline: segmentOnsets('dryBaseline'),
+            a: segmentOnsets('a'),
+            b: segmentOnsets('b'),
+            failedDry: segmentOnsets('failedDry'),
+            recoveredB: segmentOnsets('recoveredB'),
+            restoredA: segmentOnsets('restoredA'),
+            removedDry: segmentOnsets('removedDry'),
           }),
       )
       // 🔴 比較の基準は **bus がアクティブな dry**（= failedDry / removedDry）であって、
@@ -3871,9 +3998,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // だった。実測を完全グラフモデルと突き合わせると、busDry は
       // `kick.wav の RMS 0.1230601 × 等パワーパン(1/√2) × (sum 1.0 + send 0.2) = 0.1044211`
       // と **6 桁一致**する（実測 0.1044200）。つまり busDry の方が理論値どおりで、
-      // `dryBaseline` が低いのは **3 秒窓の先頭 1 秒が LOOP 開始レイテンシで無音**なため
-      // （エネルギーがきっかり 2/3 = 振幅 √(2/3)）。経路の違いではない。
-      // dryBaseline の待ちを 1 バー分足せば busDry と一致するはずである。
+      // 旧 `dryBaseline` が低かったのは **3 秒窓の先頭 1 秒が LOOP 開始レイテンシで無音**だった
+      // ため（エネルギーがきっかり 2/3 = 振幅 √(2/3)）。#739 は初回発音待ちでこの無音を除く。
       // 🔴 #628 で `failedDry` は **dry ではなくなった**。
       //
       // #625 は in-place 型だったので、差し替えの失敗は dry 縮退を意味し、`failedDry` は
@@ -4018,17 +4144,31 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         }),
       )
 
+      prepareCapturePath(capturePath)
       await startR28Engine(activeClient, '#628 R28 capture engine', capturePath)
 
-      const segments: Record<string, { from: number; to: number }> = {}
+      let soundReady = false
+      const clock = createCaptureClock(capturePath)
+      const segments: Record<string, CaptureSegment> = {}
       const captureSegment = async (name: string): Promise<void> => {
+        if (!soundReady) {
+          await waitForSound(capturePath, {
+            floor: 0.01,
+            intervalMs: 250,
+            timeoutMs: 20_000,
+            label: '#628 R28',
+          })
+          soundReady = true
+        }
         await sleep(750)
-        segments[name] = { from: Date.now(), to: 0 }
+        const fromWall = Date.now()
+        const fromSec = clock()
         await sleep(3000)
-        segments[name]!.to = Date.now()
+        segments[name] = { fromSec, toSec: clock(), fromWall, toWall: Date.now() }
       }
-      let stopWall = Date.now()
 
+      let bodyError: unknown
+      let cleanupFailure: unknown
       try {
         // A previous suite block may leave a master declaration in the persistent interpreter
         // registry. Clear it before taking the bus-dry reference so the R28 ratio oracle is local.
@@ -4335,54 +4475,50 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           stateFileCount(statesDirectory),
           'R28 seg10: failed prepare-commit must not save or drop state',
         ).toBe(stateFilesBeforeDropGain)
+      } catch (error) {
+        bodyError = error
+        throw error
       } finally {
-        await activeClient.call('evaluate_orbitscore', {
-          code: 'fx628.effect([])\nfx628.stop()\nglobal.stop()',
-        })
-        const stopped = await activeClient.call('stop_engine')
-        expect(stopped.isError, stopped.text).toBe(false)
-        stopWall = Date.now()
-        await waitForEngine(false, 15_000, '#628 R28 capture engine stopped')
-        await sleep(1500)
+        try {
+          await activeClient.call('evaluate_orbitscore', {
+            code: 'fx628.effect([])\nfx628.stop()\nglobal.stop()',
+          })
+          const stopped = await activeClient.call('stop_engine')
+          expect(stopped.isError, stopped.text).toBe(false)
+          await waitForEngine(false, 15_000, '#628 R28 capture engine stopped')
+          await sleep(1500)
+        } catch (cleanupError) {
+          if (bodyError === undefined) {
+            cleanupFailure = cleanupError
+          } else {
+            // eslint-disable-next-line no-console
+            console.warn(
+              '[#628 R28] cleanup also failed; reporting the original failure instead:' +
+                `\n${String(cleanupError)}`,
+            )
+          }
+        }
       }
+      if (cleanupFailure !== undefined) throw cleanupFailure
 
-      const capture = fs.readFileSync(capturePath)
-      const analysis = analyzeWavBuffer(capture, { windowMs: 100 })
+      const capture = readCaptureForAnalysis(capturePath)
+      const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
       const SEGMENT_GUARD_SEC = 0.4
-      const audioRange = (segment: { from: number; to: number }) => ({
-        fromSec: Math.max(
-          0,
-          analysis.durationSec - (stopWall - segment.from) / 1000 + SEGMENT_GUARD_SEC,
-        ),
-        toSec: Math.min(
-          analysis.durationSec,
-          analysis.durationSec - (stopWall - segment.to) / 1000 - SEGMENT_GUARD_SEC,
-        ),
-      })
+      const captured = captureWindowsFrom(analysis, segments, '#628 R28', capturePath)
       const rmsWindows = (name: string) => {
-        const segment = segments[name]
-        expect(segment, `${name} capture segment must exist`).toBeDefined()
-        const range = audioRange(segment!)
-        const windows = (analysis.windows ?? []).filter(
-          (window) => window.startSec >= range.fromSec && window.startSec < range.toSec,
-        )
-        expect(windows.length, `${name} must contain guarded RMS windows`).toBeGreaterThan(0)
-        return windows
+        return captured.windows(name, SEGMENT_GUARD_SEC)
       }
-      const segmentRms = (name: string): number => {
-        const windows = rmsWindows(name)
-        return Math.sqrt(
-          windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
-        )
-      }
+      const segmentRms = (name: string): number => captured.rms(name, SEGMENT_GUARD_SEC)
       const segmentWindows = (name: string): string =>
         rmsWindows(name)
           .map((window) => window.rms.toFixed(3))
           .join(',')
       const segmentOnsets = (name: string): number => {
-        const range = audioRange(segments[name]!)
+        const segment = segments[name]!
         return (analysis.onsets ?? []).filter(
-          (onset) => onset >= range.fromSec && onset < range.toSec,
+          (onset) =>
+            onset >= segment.fromSec + SEGMENT_GUARD_SEC &&
+            onset < segment.toSec - SEGMENT_GUARD_SEC,
         ).length
       }
       const rms = {
@@ -4568,6 +4704,66 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     TEST_TIMEOUT_MS,
   )
 
+  // #645 PR-D0: the two playback-path throws (resolveDispatchChannel's missing-.output()
+  // throw / event-scheduler's non-absolute-path throw) are now contained — the affected
+  // sequence is silently skipped and logged, not thrown, so it cannot stop every OTHER
+  // sequence in the same evaluation block (owner: "ライブコーディングなのでエラー出して
+  // 止まるのは基本よくない"). E2E-645-A/B (design 610 §11) drive both:
+  //   - path 1 (run()/loop() eager, `resolveDispatchChannel`): LOOP-ing a sequence with
+  //     LinkAudio enabled but no .output().
+  //   - path 2 (`seamlessParameterUpdate` → `scheduleEventsFromTime`, mid-loop): calling
+  //     .gain() on that SAME sequence while it is actively looping.
+  //
+  // #645 PR-D0 (post-hoc fix #2, coordinator-diagnosed 2026-09-04): the FIRST fix here
+  // tried to prove "does not stop a sibling sequence" with a captured RMS window on
+  // `d645Live` (a `.output()`-declared sibling under the SAME `global.linkAudio()`). That
+  // relied on rust-engine-player.ts's COMMENT claiming the daemon's documented A0
+  // LinkAudio feature-gap falls back to audible hardware playback when the `link-audio`
+  // Cargo feature isn't compiled in (it isn't, in the gated build —
+  // `orbit-audio-daemon/Cargo.toml`'s `link-audio` is default-off and
+  // `pretest:e2e:gated`'s `--features outproc-effect,outproc-instrument` doesn't add it).
+  // **A comment is not evidence of implementation behavior** — main's real run found
+  // capture RMS = 0 for `d645Live` and NO `LINK_AUDIO_UNAVAILABLE`/gap-warning marker in
+  // get_log at all, meaning the assumed fallback does not actually happen (or does not
+  // happen the way the comment describes). Capture-based proof was DROPPED for this
+  // reason — under `global.linkAudio()`, EVERY audio sequence's dispatch is either
+  // `skip` or `link` (never a real, capturable `hardware` dispatch — mixing is
+  // disallowed by design), so there is no way to hear `d645Live` here without
+  // depending on the SAME unverified LinkAudio-egress behavior.
+  //
+  // The replacement proof uses TS-engine-side `console.log` markers instead of audio —
+  // these fire from `loopSequence()` / `seamlessParameterUpdate()` in `sequence.ts` and
+  // `loop-sequence.ts` BEFORE any daemon RPC happens, so they do not depend on whether
+  // the Rust daemon has `link-audio` compiled in or whether its egress actually reaches
+  // hardware:
+  //   - `🔄 <name> (loop started/queued)` — `loopSequence()`, unconditional (fires
+  //     regardless of dispatch target; only the ACTUAL schedule call downstream checks
+  //     `resolveDispatchChannel()`).
+  //   - `🎚️ <name>: gain=<x> dB (seamless)` — `seamlessParameterUpdate()`, also
+  //     unconditional (it logs AFTER calling the private `scheduleEventsFromTime`
+  //     wrapper, which returns early on `skip` WITHOUT throwing per this PR's fix, so
+  //     the caller's own log statement is still reached).
+  // `LOOP(d645Skip)` + `LOOP(d645Live)` (path 1) and `d645Skip.gain(-6)` +
+  // `d645Live.gain(-3)` (path 2) are each submitted as ONE `run_selection` (one
+  // evaluation block) — pre-#645, a throw on the FIRST statement would prevent the
+  // SECOND from ever running in that same block ("その評価ブロックの以降の文が実行
+  // されない", design 610 §5.2); post-#645, both markers must appear.
+  // 🔴 **#645 の実機 gated E2E は #736 へ切り出した**（owner 裁定 2026-09-04）。
+  //
+  // 実装（PR-D0 本体・`sequence.ts` の `DispatchTarget` / `resolveDispatchChannel()` /
+  // `logSkipOnce`）は**動いている**。2026-09-04 の実機で確認した 3 点:
+  //   ① skip が黙って消えない（「無音でスキップします」がログに出る）
+  //   ② throw しない（同一ブロックの兄弟が自分の `(seamless)` を出している）
+  //   ③ 兄弟シーケンスを巻き添えにしない（同上）
+  //
+  // 外した理由は**テストの主張が実装の契約を超えていた**こと:
+  //   - 停止中のシーケンスに `(seamless)` を要求していた。`seamlessParameterUpdate()` は
+  //     `isLooping() || isPlaying()` かつ `scheduler.isRunning` の時だけ出す（`sequence.ts:278-281`）
+  //   - dedup の検査に **ERROR 総数**を使っていた。skip は stderr → ERROR に分類されるので
+  //     他の ERROR が混ざり、**dedup の証明にならない**
+  //
+  // 検証は 13 本のユニットテストが担う。#736 で主張を直してから実機へ戻す。
+
   // ──────────────────────────────────────────────────────────────────
   // #611 §9 / #543-a — capture today's output-line sound before engine changes
   // ─────────────────────────────────────────────────────────────────
@@ -4583,10 +4779,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   /**
    * 定常状態の 1 区間を録る（#611 PR-O0）。
    *
-   * 🔴 **`LOOP()` は既定で次の小節境界まで待つ**（`quantize-manager.ts:70`・既定 `'bar'`）。
-   * 120 BPM 4/4 なら 1 小節 = 2000 ms なので、`run_selection` 直後に録ると**窓の大半が
-   * 発音前の無音**になり、測っているのは音量ではなく「窓に入ったヒット数」になる。
-   * 監査で実際にそれが起きていた（`output-line-expectations.ts` 冒頭の注記）。
+   * `captureSegment` が初回だけ絶対 RMS 床で発音を待つ。その後 6.84 秒を確保し、`steadyRms` が
+   * guard 内の最初の onset から 8 周期へスナップする。
    */
   const captureSteady = async (
     ctx: {
@@ -4594,27 +4788,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     },
     name: string,
   ): Promise<void> => {
-    await ctx.captureSegment(name, STEADY_CAPTURE.windowMs, STEADY_CAPTURE.settleMs)
-  }
-
-  /**
-   * 区間が定常状態であることを確かめてから RMS を返す。
-   *
-   * 🔴 **オンセット数を固定しないと RMS は音量の指標にならない**（ヒット数が変われば RMS も変わる）。
-   * ここで数を固定して初めて、RMS の差が「1 ヒットあたりの音量の差」を意味する。
-   */
-  const steadyRms = (
-    result: { rms: (s: string) => number; onsets: (s: string) => readonly number[] },
-    name: string,
-  ): number => {
-    expect(
-      result.onsets(name).length,
-      `${name}: 定常状態なら窓に ${STEADY_CAPTURE.expectedOnsets} 発入るはず（入らないなら ` +
-        `録り始めが早すぎるか、譜面が鳴っていない）`,
-    ).toBe(STEADY_CAPTURE.expectedOnsets)
-    const value = result.rms(name)
-    expect(value, `${name} must be audible`).toBeGreaterThan(STEADY_CAPTURE.audibleFloorRms)
-    return value
+    await ctx.captureSegment(name, STEADY_CAPTURE.captureMs)
   }
 
   it.skipIf(!appAvailable)(
@@ -4636,8 +4810,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
 
       const first = await captureOnce('611-o0-no-bus-first')
       const second = await captureOnce('611-o0-no-bus-second')
-      const firstRms = steadyRms(first, 'steady')
-      const secondRms = steadyRms(second, 'steady')
+      const firstRms = steadyRms(first, 'steady', STEADY_CAPTURE)
+      const secondRms = steadyRms(second, 'steady', STEADY_CAPTURE)
       // eslint-disable-next-line no-console
       console.log('[#611 O0-1] no-bus RMS:', JSON.stringify({ firstRms, secondRms }))
       expect(first.analysis.format.channels, 'O0-1 requires a 2ch device').toBe(
@@ -4649,7 +4823,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(
         relativeDelta(secondRms, firstRms),
         `O0-1 two no-bus captures must agree; first=${firstRms} second=${secondRms}`,
-      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.noBus.tolerance)
+      ).toBeLessThanOrEqual(0.02)
       expect(
         relativeDelta(firstRms, OUTPUT_LINE_GOLDENS.noBus.rms),
         `O0-1 no-bus RMS must stay at ${OUTPUT_LINE_GOLDENS.noBus.rms}; actual=${firstRms}`,
@@ -4672,7 +4846,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       expect(result, 'O0-2 must return captured windows').toBeDefined()
       if (!result) throw new Error('O0-2 did not return captured windows')
-      const sumRms = steadyRms(result, 'sum')
+      const sumRms = steadyRms(result, 'sum', STEADY_CAPTURE)
       // eslint-disable-next-line no-console
       console.log('[#611 O0-2] sumOutput.rms:', sumRms)
       expect(
@@ -4701,8 +4875,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       expect(result, 'O0-3 must return captured windows').toBeDefined()
       if (!result) throw new Error('O0-3 did not return captured windows')
-      const dryRms = steadyRms(result, 'dry')
-      const totalRms = steadyRms(result, 'dryPlusAux')
+      const dryRms = steadyRms(result, 'dry', STEADY_CAPTURE)
+      const totalRms = steadyRms(result, 'dryPlusAux', STEADY_CAPTURE)
       const totalOverDry = totalRms / dryRms
       // eslint-disable-next-line no-console
       console.log(
@@ -4741,9 +4915,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       expect(result, 'O0-4 must return captured windows').toBeDefined()
       if (!result) throw new Error('O0-4 did not return captured windows')
-      const dryRms = steadyRms(result, 'dry')
-      const effectOnlyRms = steadyRms(result, 'effectOnly')
-      const combinedRms = steadyRms(result, 'combined')
+      const dryRms = steadyRms(result, 'dry', STEADY_CAPTURE)
+      const effectOnlyRms = steadyRms(result, 'effectOnly', STEADY_CAPTURE)
+      const combinedRms = steadyRms(result, 'combined', STEADY_CAPTURE)
       const effectOnlyOverDry = effectOnlyRms / dryRms
       const combinedOverDry = combinedRms / dryRms
       // eslint-disable-next-line no-console
@@ -4763,6 +4937,119 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         `O0-4 combined/dry must be unity (Gain(+6) x gain(-6)); actual=${combinedOverDry}`,
       ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.sequenceGainWithEffect.combinedTolerance)
       await expectNoNewErrors(session.client, errorsBefore, '#611 O0-4')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  // ──────────────────────────────────────────────────────────────────
+  // #606 PR-K-A2 — plugin all-notes-off (T1 / E2E-K3)
+  // ──────────────────────────────────────────────────────────────────
+
+  // There is deliberately no standalone T2 `stop_engine` audio/log assertion.
+  // `stop_engine` terminates the daemon that writes the capture, so even a healthy
+  // run ends with the still-sounding window and cannot record a silent tail. The
+  // daemon's tracing output is relayed by the engine, which is already dead when
+  // disconnect cleanup runs, so absence of a `released=` line cannot prove an
+  // empty ledger either. Restarting into a fresh daemon/plugin process would be
+  // silent regardless of whether the old process released its notes and is also
+  // non-discriminating. T1 covers the observable engine-side release path; E2E-K3
+  // keeps the old daemon alive after engine SIGKILL and directly observes its
+  // disconnect fallback as a sounding-to-silent capture transition.
+
+  const pluginNoteScore = (receiver: string, instrumentName: string, run: 'RUN' | 'LOOP') => [
+    'var global = init GLOBAL',
+    'global.key("C")',
+    'global.tempo(120)',
+    'global.beat(4 by 4)',
+    'global.start()',
+    `var ${receiver} = init global.seq`,
+    `${receiver}.instrument(${JSON.stringify(instrumentName)})`,
+    `${receiver}.play(1, 1, 1, 1)`,
+    `${run}(${receiver})`,
+  ]
+
+  it.skipIf(!appAvailable)(
+    '#606 T1 releases a RUN instrument at natural termination',
+    async () => {
+      const session = requireOutputLineSession()
+      const result = await runScore(
+        session,
+        {
+          slug: '606-run-natural-note-off',
+          lines: pluginNoteScore('run606', session.catalog.clapSynthName, 'RUN'),
+        },
+        async () => {
+          await sleep(6500)
+        },
+        { capture: true },
+      )
+      expect(result, 'T1 capture must be available').toBeDefined()
+      if (!result) throw new Error('T1 capture was not produced')
+      expect(
+        Math.max(...(result.analysis.windows ?? []).map((window) => window.rms)),
+        'T1 must prove the RUN instrument sounded before terminating',
+      ).toBeGreaterThan(0.01)
+      expect(analysisTailRms(result.analysis, 0.5)).toBeLessThan(0.01)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#606 E2E-K3 releases notes when SIGKILL disconnects engine but daemon survives',
+    async () => {
+      const session = requireOutputLineSession()
+      const capturePath = session.captureWavPath('606-engine-sigkill-note-off')
+      let daemonPid: number | undefined
+      const daemonPidsBeforeStart = new Set(orbitAudioDaemonPids())
+      try {
+        await startEngineForRun(session.client, '#606 E2E-K3', capturePath)
+        await session.client.call('evaluate_orbitscore', {
+          code: pluginNoteScore('kill606', session.catalog.clapSynthName, 'LOOP').join('\n'),
+        })
+        await sleep(3500)
+
+        const startedDaemonPids = orbitAudioDaemonPids().filter(
+          (pid) => !daemonPidsBeforeStart.has(pid),
+        )
+        expect(
+          startedDaemonPids,
+          'E2E-K3 requires exactly one daemon added by its own engine start',
+        ).toHaveLength(1)
+        daemonPid = startedDaemonPids[0]
+        const enginePid = parentPid(daemonPid!)
+        expect(processCommand(enginePid)).toContain('cli-audio.js')
+
+        // SAFETY: the PID delta excludes every daemon that existed before this test's
+        // start. If a concurrent start makes the delta ambiguous, the length assertion
+        // fails before this signal. Kill only the parent proven to be this daemon's
+        // OrbitScore cli-audio engine.
+        process.kill(enginePid, 'SIGKILL')
+        await waitForEngineState(session.client, false, 15_000, '#606 E2E-K3 engine SIGKILL')
+        await sleep(1000)
+        expect(processExists(daemonPid!), 'daemon must outlive its disconnected engine').toBe(true)
+
+        // Stop only the exact orphan daemon captured before SIGKILL so its WAV is finalized.
+        process.kill(daemonPid!, 'SIGTERM')
+        await waitUntil(() => Promise.resolve(!processExists(daemonPid!)), {
+          intervalMs: 100,
+          timeoutMs: 10_000,
+          label: '#606 E2E-K3 orphan daemon stopped',
+        })
+        daemonPid = undefined
+        await sleep(500)
+
+        const analysis = analyzeWavBuffer(fs.readFileSync(capturePath), { windowMs: 20 })
+        expect(
+          Math.max(...(analysis.windows ?? []).map((window) => window.rms)),
+          'E2E-K3 must prove the LOOP instrument sounded before SIGKILL',
+        ).toBeGreaterThan(0.01)
+        expect(analysisTailRms(analysis, 0.5)).toBeLessThan(0.01)
+      } finally {
+        if (daemonPid !== undefined && processExists(daemonPid)) {
+          process.kill(daemonPid, 'SIGTERM')
+        }
+        await session.client.call('stop_engine')
+      }
     },
     TEST_TIMEOUT_MS,
   )

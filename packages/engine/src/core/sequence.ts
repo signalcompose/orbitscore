@@ -89,6 +89,22 @@ function buildRoutingSends(auxSends: ReadonlyMap<string, number>): { bus: string
   return Array.from(auxSends.entries()).map(([bus, gain]) => ({ bus, gain }))
 }
 
+/**
+ * The resolved dispatch destination for a sequence's audio events (#645 PR-D0).
+ *
+ * 🔴 `undefined` is deliberately NOT part of this type. The pre-#645 signature was
+ * `string | undefined`, where `undefined` meant "route to the hardware bus" — so a
+ * caller that got `undefined` back from an *error* path (e.g. a naive refactor of the
+ * old throw into a `catch { return undefined }`) would silently route audio to
+ * hardware instead of skipping it. That is a different kind of surprise than the one
+ * #645 reported (a stopped sequence), not a fix for it. `hardware` and `skip` are
+ * distinct variants so that mistake cannot type-check.
+ */
+export type DispatchTarget =
+  | { readonly kind: 'hardware' } // LinkAudio off (or a MIDI sequence, which is exempt) — the pre-#645 `undefined`
+  | { readonly kind: 'link'; readonly channel: string } // LinkAudio on + `.output()` set
+  | { readonly kind: 'skip'; readonly reason: string } // LinkAudio on + `.output()` unset → silent skip (design 610 §0 裁定 6)
+
 export class Sequence {
   private global: Global
   private audioEngine: AudioEngine
@@ -106,6 +122,12 @@ export class Sequence {
 
   // LinkAudio output channel (only meaningful when Global.linkAudio() is enabled)
   private _outputChannel?: string
+
+  // #645 PR-D0: dedup key for `logSkipOnce()`. Holds the `reason` string of the last
+  // skip logged for this sequence so a looping sequence (which re-resolves its dispatch
+  // target every bar) logs the SAME skip reason once, not once per bar. Reset when the
+  // reason changes or when `.output()` sets a channel (see the `output()` setter below).
+  private _dispatchSkipLoggedFor?: string
 
   // #598 P1: score-mode render bus selected by numeric output(1..16). Kept separate from the
   // realtime insert bus so declaring an offline stem destination cannot alter the existing live
@@ -307,6 +329,15 @@ export class Sequence {
     this.stateManager.setLoopStartTime(result.loopStartTime)
   }
 
+  /** Cancel a pending one-shot completion before another owner takes over playback. */
+  private clearRunTimer(): void {
+    const runTimer = this.stateManager.getRunTimer()
+    if (runTimer) {
+      clearTimeout(runTimer)
+      this.stateManager.setRunTimer(undefined)
+    }
+  }
+
   gain(valueDb: number | RandomValue): this {
     this.gainManager.setGain({ valueDb })
     this.seamlessParameterUpdate('gain', this.gainManager.getGainDescription())
@@ -392,8 +423,9 @@ export class Sequence {
       // 🔴 §4.4.1: **オフラインの宛先宣言は live routing を変えない**（一方向の非対称）。
       // ここで `_outputChannel` をクリアしてはいけない — `global.linkAudio()` セッションで
       // `kick.output("Kick Ch")` が稼働中に、レンダ準備として `kick.output(1)` を書き足すと
-      // 次の schedule で `resolveDispatchChannel()` が「has no .output() channel set」を
-      // throw し、**ライブ中に kick が停止する**（#612 監査で特定）。
+      // 次の schedule で `resolveDispatchChannel()` が「has no .output() channel set」の
+      // skip 判定に落ち、**ライブ中に kick が無音になる**（#612 監査で特定。#645 PR-D0 以降は
+      // throw ではなく無音スキップ + ログだが、意図しない skip 自体は今も避けるべき事故）。
       // 逆向き（live 宣言が render bus をクリアする）は下の string 分岐で行う — offline は
       // まだ走らないので stale を残さない方が良い。
       this._renderBus = destinationName
@@ -410,6 +442,10 @@ export class Sequence {
     }
     this._renderBus = undefined
     this._outputChannel = destinationName
+    // #645 PR-D0: declaring a channel resolves the "no .output()" skip reason, so a
+    // subsequent skip (a different reason, if one ever exists) must be logged again
+    // rather than staying suppressed by the pre-`.output()` dedup key.
+    this._dispatchSkipLoggedFor = undefined
     if (this.global.isLinkAudioEnabled()) {
       // Eagerly register the channel with the plugin so its source appears in
       // Live's "Audio From" list NOW (at declaration), letting the operator
@@ -1550,6 +1586,16 @@ export class Sequence {
       return
     }
 
+    // #645 PR-D0: resolve once and bail before scheduling if the dispatch target is
+    // `skip` — this is the path a mid-loop `.gain()`/`.pan()`/`.audio()`/… call takes
+    // (`seamlessParameterUpdate` → here), so it must not throw: a throw here killed
+    // the whole evaluation block, silencing every OTHER sequence too, not just this one.
+    const dispatchTarget = this.resolveDispatchChannel()
+    if (dispatchTarget.kind === 'skip') {
+      this.logSkipOnce(dispatchTarget.reason)
+      return
+    }
+
     const gainState = this.gainManager.getGain()
     const panState = this.panManager.getPan()
 
@@ -1568,29 +1614,52 @@ export class Sequence {
       loopStartTime: this.stateManager.getLoopStartTime(),
       masterGainDb: this.global.getMasterGainDb(),
       patternDuration: this.getPatternDuration(),
-      outputChannel: this.resolveDispatchChannel(),
+      outputChannel: dispatchTarget.kind === 'link' ? dispatchTarget.channel : undefined,
       insertBus: this._insertBus,
     })
+  }
+
+  /**
+   * Log a dispatch skip, deduped per-sequence by `reason` (#645 PR-D0).
+   *
+   * A looping sequence re-resolves its dispatch target every bar
+   * (`scheduleEventsFromTime` above runs once per loop timer tick), so without this
+   * dedup a single stuck `skip` reason would flood the `get_log` ring — 1 line per
+   * bar, forever — and crowd out every other diagnostic. `_dispatchSkipLoggedFor` is
+   * reset when the reason changes (a different `skip` cause) or when `.output()` sets
+   * a channel (the `output()` setter above), so a resolved-then-broken-again sequence
+   * logs again instead of staying silently suppressed.
+   */
+  private logSkipOnce(reason: string): void {
+    if (this._dispatchSkipLoggedFor === reason) return
+    this._dispatchSkipLoggedFor = reason
+    const name = this.stateManager.getName() || 'sequence'
+    console.error(`[ERROR] Sequence '${name}': ${reason} このシーケンスは無音でスキップします。`)
   }
 
   /**
    * Resolve the channel to forward to the scheduler.
    *
    * Strict-mode contract (per DSL spec §8.1.2):
-   *   - Global LinkAudio off, regardless of `.output()` → returns undefined
+   *   - Global LinkAudio off, regardless of `.output()` → `{ kind: 'hardware' }`
    *     (sequence routes through the hardware bus, existing behavior).
-   *   - Global LinkAudio on AND `.output()` set → returns the channel name.
-   *   - Global LinkAudio on AND `.output()` unset → throws. Hardware/LinkAudio
-   *     mixing within the same file is forbidden, so a sequence with no
-   *     declared destination is a hard error rather than a silent fallback.
+   *   - Global LinkAudio on AND `.output()` set → `{ kind: 'link', channel }`.
+   *   - Global LinkAudio on AND `.output()` unset → `{ kind: 'skip', reason }`.
+   *     Hardware/LinkAudio mixing within the same file is forbidden, so a
+   *     sequence with no declared destination is silently skipped rather than
+   *     falling back to hardware output (design 610 §0 裁定 6 — a silent
+   *     fallback to a DIFFERENT output would be its own kind of surprise).
    *     The VS Code diagnostic `analyzeLinkAudioMissingOutput` surfaces this
-   *     at edit time; this throw is the runtime safety net for engines /
-   *     CLIs / tests that bypass the editor.
+   *     at edit time; this is the runtime net for engines / CLIs / tests that
+   *     bypass the editor. #645 PR-D0: this used to `throw` here, which killed
+   *     the awaited call chain for every sequence in the same evaluation block
+   *     (not just this one) — live coding, so a stopped performance is worse
+   *     than a silently-skipped sequence with a logged reason.
    *
-   * Public so the boot pipeline (Step 4) and the test suite can exercise the
-   * dispatch contract without going through the full scheduling loop.
+   * Never throws. Public so the boot pipeline (Step 4) and the test suite can
+   * exercise the dispatch contract without going through the full scheduling loop.
    */
-  resolveDispatchChannel(): string | undefined {
+  resolveDispatchChannel(): DispatchTarget {
     // MIDI sequences emit to a MIDI bus (IAC etc.), never to an SC audio bus,
     // so the LinkAudio strict-mode `.output()` requirement does not apply to
     // them. Design decision #14 (DESIGN_DISCUSSION_RECORD): "MIDI と SC オーディオ
@@ -1598,23 +1667,23 @@ export class Sequence {
     // LinkAudio 型の排他は適用しない". Spec §8.1.2 scopes the requirement to
     // "発音 (sounding) sequences". Without this, run()/loop() (which call this
     // eagerly, unlike the schedule paths that early-return for MIDI) wrongly
-    // throw for a `.midi()` sequence in a `global.linkAudio()` file (#282).
+    // rejected a `.midi()` sequence in a `global.linkAudio()` file (#282).
     if (this.isNoteSequence()) {
-      return undefined
+      return { kind: 'hardware' }
     }
     if (!this.global.isLinkAudioEnabled()) {
-      return undefined
+      return { kind: 'hardware' }
     }
     if (!this._outputChannel) {
-      throw new Error(
-        `Sequence '${this.stateManager.getName() || 'sequence'}' has no .output() ` +
-          `channel set, but global.linkAudio() is enabled. LinkAudio mode requires ` +
-          `every sequence to declare an output channel name. Add .output("name") ` +
-          `to the sequence chain, or remove global.linkAudio() to fall back to ` +
-          `hardware output.`,
-      )
+      return {
+        kind: 'skip',
+        reason:
+          `has no .output() channel set, but global.linkAudio() is enabled. LinkAudio mode ` +
+          `requires every sequence to declare an output channel name. Add .output("name") ` +
+          `to the sequence chain, or remove global.linkAudio() to fall back to hardware output.`,
+      }
     }
-    return this._outputChannel
+    return { kind: 'link', channel: this._outputChannel }
   }
 
   async scheduleEvents(
@@ -1629,6 +1698,14 @@ export class Sequence {
 
     const timedEvents = this.stateManager.getTimedEvents()
     if (!this._audioFilePath || !timedEvents || timedEvents.length === 0) {
+      return
+    }
+
+    // #645 PR-D0: same skip-before-scheduling contract as scheduleEventsFromTime above
+    // — this is the path run()/loop() take for the FIRST iteration of a sequence.
+    const dispatchTarget = this.resolveDispatchChannel()
+    if (dispatchTarget.kind === 'skip') {
+      this.logSkipOnce(dispatchTarget.reason)
       return
     }
 
@@ -1650,7 +1727,7 @@ export class Sequence {
       sequenceName: this.stateManager.getName(),
       masterGainDb: this.global.getMasterGainDb(),
       patternDuration: this.getPatternDuration(),
-      outputChannel: this.resolveDispatchChannel(),
+      outputChannel: dispatchTarget.kind === 'link' ? dispatchTarget.channel : undefined,
       insertBus: this._insertBus,
     })
 
@@ -1668,10 +1745,12 @@ export class Sequence {
    * @internal - Reserved keywords use only. Use RUN(seq) instead.
    */
   async run(): Promise<this> {
-    // Validate the strict-mode contract eagerly so the throw propagates through
-    // the awaited call chain to the REPL catch block, instead of becoming an
-    // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
-    this.resolveDispatchChannel()
+    // #645 PR-D0: resolve eagerly so a `skip` reason is logged as soon as possible
+    // (before playback prep runs), not just once scheduling gets to it. Never throws —
+    // the actual skip-before-scheduling happens in scheduleEvents()/scheduleEventsFromTime()
+    // above, so this call's only job here is the early log.
+    const eagerDispatchTarget = this.resolveDispatchChannel()
+    if (eagerDispatchTarget.kind === 'skip') this.logSkipOnce(eagerDispatchTarget.reason)
     this.validateMidiDispatch() // eager root + degree validation (same rationale)
     this.applyVoiceLeading() // §6.3 (C1): deterministic auto voice-leading annotation
     this.validateNonMidiDispatch() // eager `[ ]`-in-audio rejection (§10-5)
@@ -1691,6 +1770,7 @@ export class Sequence {
     if (!prepared) return this
 
     const { scheduler, currentTime } = prepared
+    this.clearRunTimer()
     // Note: preparePlayback() has already cleared any existing loop timer
     // run() is one-shot playback, so we ensure loopTimer remains undefined
     this.stateManager.setLoopTimer(undefined)
@@ -1703,6 +1783,7 @@ export class Sequence {
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
       getPatternDurationFn: () => this.getPatternDuration(),
       clearSequenceEventsFn: (name) => this.clearEvents(name),
+      setRunTimerFn: (timer) => this.stateManager.setRunTimer(timer),
     })
 
     this.stateManager.setPlaying(result.isPlaying)
@@ -1715,10 +1796,9 @@ export class Sequence {
    * @internal - Reserved keywords use only. Use LOOP(seq) instead.
    */
   async loop(): Promise<this> {
-    // Validate the strict-mode contract eagerly so the throw propagates through
-    // the awaited call chain to the REPL catch block, instead of becoming an
-    // unhandled rejection inside the fire-and-forget scheduleEventsFn callback.
-    this.resolveDispatchChannel()
+    // #645 PR-D0: see the matching comment in run() above — eager, log-only, never throws.
+    const eagerDispatchTarget = this.resolveDispatchChannel()
+    if (eagerDispatchTarget.kind === 'skip') this.logSkipOnce(eagerDispatchTarget.reason)
     this.validateMidiDispatch() // eager root + degree validation (same rationale)
     this.applyVoiceLeading() // §6.3 (C1): deterministic auto voice-leading annotation
     this.validateNonMidiDispatch() // eager `[ ]`-in-audio rejection (§10-5)
@@ -1738,6 +1818,7 @@ export class Sequence {
     if (!prepared) return this
 
     const { scheduler, currentTime } = prepared
+    this.clearRunTimer()
 
     // Set loop state BEFORE calling loopSequence to avoid race condition
     // The setInterval callback will check this state via getIsLoopingFn()
@@ -1777,6 +1858,9 @@ export class Sequence {
 
     // Clear scheduled events (MIDI: also releases sounding notes, §7-2)
     this.clearEvents(sequenceName)
+
+    // Cancel a pending one-shot completion so it cannot clear later playback.
+    this.clearRunTimer()
 
     // Clear loop timer (only exists if loop() was called, not run())
     // Note: run() sets loopTimer to undefined, so this check prevents redundant clearInterval

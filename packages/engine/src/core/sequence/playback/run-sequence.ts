@@ -11,6 +11,7 @@ export interface RunSequenceOptions {
   scheduleEventsFn: (scheduler: Scheduler, offset: number, baseTime: number) => void
   getPatternDurationFn: () => number
   clearSequenceEventsFn: (sequenceName: string) => void
+  setRunTimerFn: (timer: NodeJS.Timeout | undefined) => void
 }
 
 /**
@@ -41,6 +42,7 @@ export function runSequence(options: RunSequenceOptions): RunSequenceResult {
     scheduleEventsFn,
     getPatternDurationFn,
     clearSequenceEventsFn,
+    setRunTimerFn,
   } = options
 
   // RUN() is imperative: always execute immediately, even if already playing
@@ -57,10 +59,16 @@ export function runSequence(options: RunSequenceOptions): RunSequenceResult {
 
   // Auto-stop after pattern duration
   const patternDuration = getPatternDurationFn()
-  setTimeout(() => {
+  // 🔴 `+ 100` と直に書かない。尻尾は**イベントを実際に置いた原点**から測る必要があり、
+  // 差で書いておくと `scheduleTime` の決め方が変わっても自動で追随する。この整合こそが
+  // 「RUN 終端で音が止まる」の前提なので、定数へ畳んで結合を切らないこと。
+  const tailDelay = patternDuration + (scheduleTime - currentTime)
+  const runTimer = setTimeout(() => {
+    setRunTimerFn(undefined)
     clearSequenceEventsFn(sequenceName)
     console.log(`⏹ ${sequenceName} (finished)`)
-  }, patternDuration)
+  }, tailDelay)
+  setRunTimerFn(runTimer)
 
   return { isPlaying: true, isLooping: false }
 }

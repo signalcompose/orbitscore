@@ -496,13 +496,16 @@ The sequence side also has `run()`, `loop()`, and `stop()`. From the DSL they ar
 - `seq.stop()` → clears events and cancels the loop timer
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1774-1799
+// packages/engine/src/core/sequence.ts:1855-1880
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()
 
     // Clear scheduled events (MIDI: also releases sounding notes, §7-2)
     this.clearEvents(sequenceName)
+
+    // Cancel a pending one-shot completion so it cannot clear later playback.
+    this.clearRunTimer()
 
     // Clear loop timer (only exists if loop() was called, not run())
     // Note: run() sets loopTimer to undefined, so this check prevents redundant clearInterval
@@ -520,9 +523,6 @@ The sequence side also has `run()`, `loop()`, and `stop()`. From the DSL they ar
     if (wasLooping) {
       console.log(`⏹ ${sequenceName} (loop stopped)`)
     }
-
-    return this
-  }
 ```
 
 Here one statement of the 2026-05 version needs correcting. The 2026-05 version wrote that "even if global stops, each sequence's loop timer keeps running, and when `global.start()` is called again each sequence produces sound at its next iteration," but `TransportControl.stop()` **calls `stop()` on every sequence first**, so the loop timers are `clearTimeout`ed there. To make sequences sound again after `global.stop()` → `global.start()`, `LOOP()` / `RUN()` must be re-evaluated. `transport-control.ts:43-59` was the same code as of 2026-05, so this is not drift but a misreading in the original.
