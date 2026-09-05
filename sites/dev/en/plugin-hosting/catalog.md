@@ -578,7 +578,7 @@ this separation. Completion works as long as the file exists, even when no engin
 Two commands are registered under `contributes.commands` in `package.json`.
 
 ```json
-// packages/vscode-extension/package.json:110-121
+// packages/vscode-extension/package.json:120-131
       {
         "command": "orbitscore.rescanPlugins",
         "title": "OrbitScore: Rescan Plugin Catalog",
@@ -1027,9 +1027,9 @@ RMS is nearly identical and "RMS differs significantly" would be a false asserti
 Instead the VST3 side carries a +7 semitone state and the two are told apart by frequency.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3403-3411
-      const e4Hz = estimateFundamentalHz(capture, audioRange(segments.e4!))
-      const e5Hz = estimateFundamentalHz(capture, audioRange(segments.e5!))
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3467-3475
+      const e4Hz = estimateFundamentalHz(capture, segments.e4!)
+      const e5Hz = estimateFundamentalHz(capture, segments.e5!)
       expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
       expect(e2Hz, 'E2 VST3 replacement needs a measurable fundamental').toBeDefined()
       expect(e4Hz, 'E4 surviving VST3 needs a measurable fundamental').toBeDefined()
@@ -1266,7 +1266,7 @@ applied (the `engaged` wiring is cut)" can be distinguished numerically.
 Removal is `effect([])`.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3696-3702
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3774-3780
         // 空のラックを適用するのが「外す」の表現になった。
         const removeA = await activeClient.call('evaluate_orbitscore', {
           code: 'fx625.effect([])',
@@ -1284,7 +1284,7 @@ PID appeared" at the time of #625; with the rack, **the PID not changing** is th
 of "no respawn = the dry window is gone".
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3554-3567
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3632-3645
         // ここは「旧 child が消えた」を待っていた。#628 のラック化では **1 child が
         // チェーン全体を持つ**ため、差し替えは同じ child の中で prepare-commit される。
         // **PID が変わらないことこそが「respawn していない = dry 窓が消えた」の実機証明**で、
@@ -1305,7 +1305,7 @@ R-E3 (replacement with a nonexistent path) asserted "dry — neither A nor B" un
 is prepare-commit, it pins by audio that **B keeps playing even after the failure**.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3912-3927
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3987-4002
 
       // 🔴 R-E3: #628 で**期待が反転した**。失敗後は **B のまま鳴り続ける**。
       //

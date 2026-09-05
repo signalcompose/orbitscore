@@ -27,25 +27,36 @@
  * 🔴 **測定手法の欠陥を engine の性質だと結論しない。** 「未検証のモデルを assert しない」という
  * 方針自体は正しいが、その適用を誤ると**検証済みの一次ソースを「未検証」と呼ぶ**ことになる。
  *
- * ## 直した形
+ * ## 現在の測り方（#739）
  *
- * 1. **settle を 1 小節 + 余裕**にして、**定常状態でだけ録る**
- * 2. **窓長をヒット周期の整数倍**にする。信号は 500 ms 周期なので、整数倍の窓なら
- *    **開始位相に依らずヒット数とエネルギーが一定**になる
- * 3. 🔴 **オンセット数を明示的に assert する**。これで初めて RMS が「1 ヒットあたりの音量」を意味する
+ * 1. 絶対 RMS 床で発音を待ってから capture のバイト長を時計にする
+ * 2. guard 内の最初の onset に測定範囲をスナップし、8 × 500 ms を測る
+ * 3. onset 数と gap 中央値を assert してから二乗平均 RMS を返す
  */
+
+import { ANALYSIS_BUCKET_MS } from './helpers/capture-windows'
 
 /** dB → 線形。 */
 const dbToLinear = (db: number): number => 10 ** (db / 20)
 
-/** 譜面の 1 ヒット周期（120 BPM 4/4・`play(1,1,1,1)` なので 1 拍 = 500 ms）。 */
+/** 譜面の 1 ヒット周期。(60000 / 120 BPM) × 4 beats/bar / 4 slots/bar = 500 ms。 */
 const HIT_PERIOD_MS = 500
 
-/** 録り始める前に待つ時間。🔴 `LOOP()` が待つ 1 小節（2000 ms）＋余裕。 */
-const STEADY_SETTLE_MS = 2600
+const EXPECTED_ONSETS = 8
 
-/** 録る長さ。🔴 **ヒット周期の整数倍**（8 発）。位相に依らずヒット数が一定になる。 */
-const STEADY_WINDOW_MS = HIT_PERIOD_MS * 8
+/**
+ * 演奏中に譜面を足したとき、新しいフレーズが始まるまでの最大待ち（1 小節）。
+ *
+ * 🔴 `LOOP()` は**小節量子化**する（120 BPM 4/4 = 2000 ms = 4 スロット）。O0-3 / O0-4 は
+ * 鳴っている最中に `send` / `effect` を足すので、区間の頭に**まるまる 1 小節の無音**が入る。
+ *
+ * 2026-09-05 の実機で実測した O0-3 のキャプチャ:
+ *   onsets 8.06 →（**2.000 s ちょうどの無音**）→ 10.06 10.56 11.06 … 13.06
+ *
+ * これを勘定に入れないと、8 発ぶんを測る範囲が録り幅からはみ出して落ちる
+ * （`guarded search is too short for 8 hits`）。
+ */
+const REQUANTIZE_SLOTS = 4
 
 /**
  * 実機層の許容。**実測したノイズ床から決めた**（推測値ではない）。
@@ -76,20 +87,20 @@ const STEADY_WINDOW_MS = HIT_PERIOD_MS * 8
  * 🔴 **したがって期待値は理論式のままにし、許容をアーチファクトの幅に合わせる。**
  * 実測値をベタ書きすると、**アーチファクトを engine の性質として固定**してしまう。
  *
- * **follow-up**: 窓を 500 ms 周期の整数倍で長く取る（16 発 = 8000 ms なら端の寄与は半分）か、
- * `runScore` の区間→capture 時刻の写像から量子化を取る。どちらもこの PR の範囲外。
+ * #739 で区間写像を capture のバイト時計へ移し、最初の onset に 8 周期の範囲をスナップした。
+ * golden と既存の意味論許容はそのまま残し、2 セッションの再現性だけを 2% で別に固定する。
  */
 
-/** RMS の絶対値。🔴 上記アーチファクト（±6.9%）を含む幅。 */
+/** RMS の絶対値。既存 golden の実機意味論許容。 */
 const RMS_TOLERANCE = 0.12
 
 /** aux との合算比（2 回で ±6%・部分的にコヒーレントな合流のため）。 */
 const SEND_RATIO_TOLERANCE = 0.12
 
-/** ラック単体の比。理論と 9 桁一致する回もあるが、アーチファクトが乗る回もある。 */
+/** ラック単体の比。理論値に対する既存の実機意味論許容。 */
 const RACK_RATIO_TOLERANCE = 0.12
 
-/** ゲイン積の比。同じアーチファクトが乗る。 */
+/** ゲイン積の比に対する既存の実機意味論許容。 */
 const GAIN_PRODUCT_TOLERANCE = 0.12
 
 /** 音が出ていることの下限（無音ハーネスを緑にしないためのガード・#528）。 */
@@ -100,9 +111,19 @@ const SEND_AMOUNT_AS_WRITTEN = 0.3
 
 /** 全 golden 共通の録り方。オンセット数まで含めて 1 箇所で決める。 */
 export const STEADY_CAPTURE = {
-  settleMs: STEADY_SETTLE_MS,
-  windowMs: STEADY_WINDOW_MS,
-  expectedOnsets: STEADY_WINDOW_MS / HIT_PERIOD_MS,
+  // 幅の内訳: 小節量子化（最大 1 小節）+ 位相 1 周期 + 測る 8 発 + guard 両側。
+  // snap はアタック直前の 1 バケットも測定へ含めるため、境界丸めを含む 2 バケット分を
+  // 余裕へ足す。ここが無いと最悪位相では必要幅と録り幅が同値になり、1 バケット不足する。
+  // 🔴 録り幅を伸ばしても **golden の値は動かない** — snap は最初の onset から厳密に
+  // `EXPECTED_ONSETS × HIT_PERIOD_MS` だけを測るので、余った尻尾は測定範囲に入らない。
+  // この厳密さを保証しているのは `capture-windows.ts` の `steadyRms` が onset とバケットの
+  // 比較を整数の解析バケット index で行っていること（#746 C-1）。float のまま `>=`/`<` で
+  // 比較すると 2 つの独立した浮動小数の族の丸め誤差で位相ごとに 199/200/201 バケットへ揺れる。
+  captureMs:
+    HIT_PERIOD_MS * (REQUANTIZE_SLOTS + 1 + EXPECTED_ONSETS) + 300 + ANALYSIS_BUCKET_MS * 2,
+  expectedOnsets: EXPECTED_ONSETS,
+  guardSec: 0.15,
+  hitPeriodSec: HIT_PERIOD_MS / 1000,
   audibleFloorRms: AUDIBLE_FLOOR_RMS,
 } as const
 

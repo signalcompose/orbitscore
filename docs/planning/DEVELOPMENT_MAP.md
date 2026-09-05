@@ -274,6 +274,7 @@
 | 土台（入口・内部） | **#643** | ✅ PR-1（Rust 4 層・`SetSourceRouting`）/ ✅ PR-2（TS 表面の解禁・unit 0 固定）/ ○ PR-3 = **#645**（LinkAudio の実配線は not-ready 方針が owner 判断待ちで別） | `session.rs:2259` `"SetSourceRouting"` / merge `0a6502f7`・`637a6262` / `sequence.ts:376-412` が instrument の `output(n)`・LinkAudio を「PR-3 まで拒否」 |
 | 演奏中の throw 封じ（実装） | **#645** | ○ **実装済み・ユニット 13 本**。2026-09-04 の実機で 3 点確認: ① skip がログに出る ② throw しない ③ 兄弟シーケンスを巻き添えにしない | `sequence.ts` の `DispatchTarget` / `resolveDispatchChannel()` / `logSkipOnce` |
 | 同（**実機 E2E の主張**） | **#736** | 🔴 未解決。**実装ではなくテストの主張が実装の契約を超えていた** — 停止中のシーケンスに `(seamless)` を要求 / dedup を **ERROR 総数**で数えていた（skip は stderr → ERROR に分類されるので他が混ざる） | `sequence.ts:278-281`（`seamlessParameterUpdate` の発火条件） |
+| 🔴 **測定器**（gated capture の窓） | **#739** | 🔴 **未着手・PR-O2 の直前に入れる**。`captureSegment` が固定 settle 400 ms で窓を開けるが、`LOOP()` の小節量子化（2000 ms）+ プラグイン attach で**音が出るのは約 3 秒後**。**E2E-1 は「0 dB の音」を一度も測っていなかった**（実測 half/unity = 1.36 — 下げたのに大きい）。固定値で追いかけると再発する（settle を 2600 ms にしたら unity が 0 に**悪化**した — 区間がキャプチャ末尾からの逆算なので、窓を後ろへ動かすと逆に前を測る）| PR-O0（`STEADY_CAPTURE` に既に正しい形がある） |
 | フェーダー位置 | **#649** | 📐 **設計のみ**（PR #653 は設計文書だけ。実装なし） | `docs/design/649-audio-line-design.md` / `output.rs:936` `render_multi_feeds`（master gain）の**後**で `:957` `BusTarget::Master` が `hw` へ加算 |
 | 出口 | **#611** 🔴 | ○ realtime 未実装（オフライン `output(n)` は ✅ `render-score.ts`） | #611 本文の実測表・`output.rs:957-960` 合流 3 行 |
 | マルチティンバー | **#647** | ✅ 受け皿（アドレス `(instance, unit)`・protocol）/ ○ 子プロセスの N 出力・shm | #647 本文（`transport.rs:60` `BUF_LEN = MAX_FRAMES * CHANNELS`） |
@@ -1081,7 +1082,8 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 |---|---|---|---|
 | ローカルリリースのスクリプト化 | **#659** | ○（`scripts/orbitstudio/make-local-release.sh` が **untracked** で作業中・`git status`） | — |
 | 署名・公証・リリース経路 | **#656** 🚪 | ○（証明書と ASC API キーは手元にある・`CODESIGN_PIPELINE.md` は SC 前提で古い） | #659 |
-| workspace trust | **#385** 🚪候補 | ○ | — |
+| workspace trust（宣言） | **#385** 🚪候補 | ✅ **宣言は入った**（`packages/vscode-extension/package.json` の `capabilities.untrustedWorkspaces`・`supported: true`・裁定 656 §16 (1)）。ユニット 6 本が変異 3 種で red を確認 | — |
+| workspace trust（**実機検証**） | **#735** | 🔴 **未着手**。🔴 **dev モード（`--extensionDevelopmentPath`）は trust の制限を迂回するので、そこで書いた E2E は宣言を消しても緑になる**（2026-09-04 実測）。installed モード（vsix 導入）が要るが、**導入は成功するのに拡張が activate しない**（trust 無効でも同じ = trust は原因でない）。まず `exthost.log` を取る観測手段から | #385（宣言）/ #659（vsix を焼く経路） |
 | Marketplace | #197 🚪 / #184 | ○（**#656 の方針と矛盾** → §3 要裁定） | — |
 | LinkAudio on Rust（GPL 隔離） | #321 / Epic #187 | 部分 ✅（A4-2 egress = #329 CLOSED・`orbit-link-audio` 隔離 crate・default off）/ A4-3 テンポリーダー・A4-4 e2e ❓（PR の有無未確認） | **配布形態は #671 の拡張点で変わる**: LinkAudio は CLAP へ・Link テンポは DSL Plugin へ出せば engine 本体から GPL が消える（§4.E「切り出し」表）。**A4-3 は #671 段階 4 の判断を待つ**（engine 内に作ると二重になる）。**#187 は SC 前提** |
 | Sentry | #498 | ○ | #656（リリース紐付け） |
@@ -1090,7 +1092,11 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 | FUNDING.yml | #291 | ○（方針未決） | — |
 | env prefix 統一 | #156 | ○ | **§4.H.1 の一覧化の前提**（一覧を作ってから改名すると 2 度手間） |
 
-**順序**: #659 → #656 → #498。#385 は独立で先にできる。
+**順序**: #659 → #656 → #498。#385（宣言）は独立で先にできる — **済**。
+🔴 **#735（実機検証）は #659 の後**。vsix を焼く経路が固まってから着手する方が安い
+（`make-local-release.sh` が `--install-extension` の作法を確定させる）。
+**`orbs --install-extension` は失敗しても exit 0 を返す**ので、#659 側でも
+**展開されたディレクトリの実在**で判定すること（実測 2026-09-04）。
 **統合**: **#187（SC 時代 Epic）→ #321 に集約して閉じる**（#321 が Rust 版の正本。#187 の Step 4 の残は全部 SC 経路 = #502 で退役）/
 **#138 → #656 に吸収**（受け入れ基準を「.app を落として開いて鳴る」に書き直す）。#184 は §3 の裁定次第。
 
