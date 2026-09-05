@@ -1,12 +1,12 @@
 ---
 title: "RE-1. daemon アーキテクチャ概観"
 chapter-id: "RE-1"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 46f5d7a
+verified-at: "2026-09-05"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡に、2026-09-05 の #606（session 切断 trigger と `PluginAllNotesOff`）を追補したものです。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # RE-1. daemon アーキテクチャ概観
 
@@ -197,7 +197,7 @@ spawn します。#474 以降はもう 1 本、watchdog thread が broadcast す
 （`PluginUiClosed` 等）を session の writer queue へ橋渡しする task が増えています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:739-766
+// rust/crates/orbit-audio-daemon/src/session.rs:739-767
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -226,7 +226,42 @@ pub async fn run(
         let tx = tx.clone();
         let events = engine.subscribe_plugin_ui_events();
         tokio::spawn(forward_plugin_ui_events(events, tx))
+    };
 ```
+
+handshake の直後に出てくる `SessionRegistration::new` は #606 で入ったもので、この session を
+daemon の接続カウンタへ登録する RAII ガードです。ここが面白いのは、**登録を数えること自体が
+目的ではない**という点でしょう。engine プロセスが異常終了した場合、`PluginAllNotesOff` の RPC は
+原理的に届きません。そこで daemon 側は「read loop が終わった = engine との接続が切れた」ことを
+第二の trigger として、鳴りっぱなしの note を解放します。
+
+```rust
+// rust/crates/orbit-audio-daemon/src/session.rs:1271-1284
+    if session.disconnect() {
+        let release_engine = engine.clone();
+        match tokio::task::spawn_blocking(move || release_engine.plugin_all_notes_off()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                error!("plugin all-notes-off after session disconnect failed: {error}")
+            }
+            // 🔴 JoinError は「解放タスクが panic / cancel して**そもそも試みられていない**」ことを
+            // 意味するので、部分的な配送失敗（上の腕）より軽く記録してはいけない。
+            Err(error) => {
+                error!("plugin all-notes-off task after session disconnect failed: {error}")
+            }
+        }
+    }
+```
+
+`session.disconnect()` が `bool` を返しているのがポイントです。daemon は複数 session を受理でき、
+active note の台帳はそれらで共有されているので、**途中の 1 接続が切れただけで解放してしまうと、
+まだ生きている別の session の音まで止めてしまいます**。そのため解放が走るのは、最後の確立済み
+session が切れたときだけです。
+
+`Drop` 側でカウンタだけを戻して解放そのものは行わない、という非対称も意図的なものです。`Drop` は
+async runtime のスレッド上で走るのに対し、`plugin_all_notes_off` は bounded retry で sleep しうる
+ためです。その session ぶんの音は残ってしまいますが、**次の session の切断で正しく発火する状態には
+戻る**、という割り切りになっています。
 
 `method` の dispatch は `handle_command` が担います。`PluginNoteOn`/`PluginNoteOff` のような
 plugin note 系 method は `plugin_note_spec` という純関数を「唯一の判定箇所」として先に分離してから
@@ -267,7 +302,7 @@ async fn handle_command(
 ### コマンド一覧（`handle_command` の match arm から）
 
 `Command` は `method: String` を持つ構造体で、Rust の enum ではありません。したがって「コマンドの
-一覧」は `session.rs` の `match method.as_str()` の arm を数えたものになります。2026-09-01 時点で
+一覧」は `session.rs` の `match method.as_str()` の arm を数えたものになります。2026-09-05 時点で
 arm は次のとおりです（`cfg` 列は feature で分岐する arm）。
 
 | method | 役割 | 備考 |
@@ -275,7 +310,7 @@ arm は次のとおりです（`cfg` 列は feature で分岐する arm）。
 | `Ping` | 疎通確認（`"pong"`） | |
 | `ListAudioDevices` | cpal の output device 列挙 | #484 D1・`spawn_blocking` |
 | `SelectAudioDevice` | ランタイム device 切替 | #484 D2・audio owner thread へ委譲 |
-| `GetStatus` | daemon/protocol version・sample rate・`render_contentions` 等 | |
+| `GetStatus` | daemon/protocol version・sample rate・`render_contentions`・`active_plugin_notes` 等 | `active_plugin_notes` は `outproc-instrument` build のみ（#606） |
 | `LoadSample` / `UnloadSample` | audio file の登録 / 解除 | |
 | `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | |
 | `LoadPlugin` | plugin の attach（`role` / `bus` / `instance` / `state`） | in-process build は `role` 必須 |
@@ -291,6 +326,7 @@ arm は次のとおりです（`cfg` 列は feature で分岐する arm）。
 | `SetSourceRouting` | instrument source → bus の実行時ルーティング | `outproc-effect,outproc-instrument` build のみ |
 | `InjectFault` | kill-test 用の panic 注入 | `ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1` のときだけ |
 | `PluginNoteOn` / `PluginNoteOff` | instrument への note | `plugin_note_spec` 経由（match の外） |
+| `PluginAllNotesOff` | 追跡中の instrument note を一括解放（`released` / `stale` / `failed` を返す） | #606・session 切断時にも同じ配送関数が走る |
 
 `SetGlobalGain` の行の「#643 で修正」は、WORK_LOG 6.415 に記録された「master fader が instrument に
 効いていなかった」不具合の修正を指します。同じ command が RE-4 で扱う capture E2E で捕まった、

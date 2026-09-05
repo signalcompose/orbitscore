@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 46f5d7a
+verified-at: "2026-09-05"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, with the 2026-09-05 additions from #606 (the session-disconnect trigger and `PluginAllNotesOff`). The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-1. Daemon Architecture Overview
 
@@ -203,7 +203,7 @@ that drains an `mpsc` channel. Since #474 there is one more task: it bridges the
 (`PluginUiClosed` and friends) broadcast by the watchdog threads into the session's writer queue.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:739-766
+// rust/crates/orbit-audio-daemon/src/session.rs:739-767
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -232,7 +232,43 @@ pub async fn run(
         let tx = tx.clone();
         let events = engine.subscribe_plugin_ui_events();
         tokio::spawn(forward_plugin_ui_events(events, tx))
+    };
 ```
+
+The `SessionRegistration::new` right after the handshake arrived with #606. It is an RAII guard that
+registers this session in the daemon's connection counter, and what makes it interesting is that
+counting the registrations is not the point in itself. When the engine process dies abnormally, the
+`PluginAllNotesOff` RPC can never arrive — by construction. So the daemon takes "the read loop
+ended, meaning the connection to the engine is gone" as a second trigger and releases any notes
+still sounding.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/session.rs:1271-1284
+    if session.disconnect() {
+        let release_engine = engine.clone();
+        match tokio::task::spawn_blocking(move || release_engine.plugin_all_notes_off()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                error!("plugin all-notes-off after session disconnect failed: {error}")
+            }
+            // 🔴 JoinError は「解放タスクが panic / cancel して**そもそも試みられていない**」ことを
+            // 意味するので、部分的な配送失敗（上の腕）より軽く記録してはいけない。
+            Err(error) => {
+                error!("plugin all-notes-off task after session disconnect failed: {error}")
+            }
+        }
+    }
+```
+
+The point is that `session.disconnect()` returns a `bool`. The daemon accepts multiple sessions and
+the active-note ledger is shared across them, so releasing on any single disconnect would cut off
+the sound of sessions that are still alive. The release therefore runs only when the last
+established session goes away.
+
+The asymmetry in `Drop` — restoring the counter but not performing the release — is deliberate too.
+`Drop` runs on an async runtime thread, whereas `plugin_all_notes_off` may sleep in a bounded retry.
+The notes belonging to that session stay sounding, but the daemon returns to a state where the next
+disconnect fires correctly.
 
 `method` dispatch is handled by `handle_command`. Plugin-note methods such as
 `PluginNoteOn`/`PluginNoteOff` are first split off through a pure function, `plugin_note_spec`,
@@ -274,7 +310,7 @@ async fn handle_command(
 ### The command list (from the match arms of `handle_command`)
 
 `Command` is a struct carrying `method: String`; it is not a Rust enum. The "list of commands"
-is therefore whatever arms exist in `session.rs`'s `match method.as_str()`. As of 2026-09-01 the
+is therefore whatever arms exist in `session.rs`'s `match method.as_str()`. As of 2026-09-05 the
 arms are as follows (the notes column mentions the arms gated by a feature `cfg`).
 
 | method | role | notes |
@@ -282,7 +318,7 @@ arms are as follows (the notes column mentions the arms gated by a feature `cfg`
 | `Ping` | liveness check (`"pong"`) | |
 | `ListAudioDevices` | enumerate cpal output devices | #484 D1, runs under `spawn_blocking` |
 | `SelectAudioDevice` | runtime device switch | #484 D2, delegated to the audio owner thread |
-| `GetStatus` | daemon/protocol version, sample rate, `render_contentions`, etc. | |
+| `GetStatus` | daemon/protocol version, sample rate, `render_contentions`, `active_plugin_notes`, etc. | `active_plugin_notes` only on `outproc-instrument` builds (#606) |
 | `LoadSample` / `UnloadSample` | register / release an audio file | |
 | `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | |
 | `LoadPlugin` | attach a plugin (`role` / `bus` / `instance` / `state`) | the in-process build requires `role` |
@@ -298,6 +334,7 @@ arms are as follows (the notes column mentions the arms gated by a feature `cfg`
 | `SetSourceRouting` | runtime routing instrument source → bus | `outproc-effect,outproc-instrument` builds only |
 | `InjectFault` | panic injection for kill tests | only with `ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1` |
 | `PluginNoteOn` / `PluginNoteOff` | notes to an instrument | via `plugin_note_spec` (outside the match) |
+| `PluginAllNotesOff` | release every tracked instrument note (returns `released` / `stale` / `failed`) | #606, the same delivery function also runs on session disconnect |
 
 The "fixed in #643" note on the `SetGlobalGain` row refers to the defect recorded in WORK_LOG
 6.415: the master fader was not affecting instruments. That the very same command was caught by
