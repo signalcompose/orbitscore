@@ -54,7 +54,13 @@ import {
 } from '../../packages/vscode-extension/src/wav-analysis'
 import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
 
-import { countErrors, countLogMarker, errorBaseline, expectNoNewErrors } from './helpers/engine-log'
+import {
+  countErrors,
+  countLogMarker,
+  errorBaseline,
+  expectNoNewErrors,
+  newErrorLines,
+} from './helpers/engine-log'
 import {
   captureWindowsFrom,
   createCaptureClock,
@@ -5348,10 +5354,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             const settledLog = (await faultClient!.call('get_log', { lines: 500 })).text
             expect(settledLog).toContain(expectedFailureMarker)
             expect(settledLog).toContain('produced no callback')
+            // 🔴 件数（`countErrors`）で見ない。`get_log` は固定 500 行窓なので、この区間で
+            // キャプチャを 1 本足しただけでも窓がずれて件数が動く（2026-09-05 に
+            // `expected 6 to be less than or equal to 5` で落ちた）。**どの行が増えたか**で語る。
             expect(
-              countErrors(settledLog),
-              '#661 D-3 must add exactly one ERROR and no delayed fatal',
-            ).toBeLessThanOrEqual(errorsBeforeExpectedFailure + 1)
+              newErrorLines(beforeFailureLog, settledLog).filter(
+                (line) => !line.includes(expectedFailureMarker),
+              ),
+              '#661 D-3 must add no ERROR other than the expected switch failure',
+            ).toEqual([])
             expect(
               countLogMarker(settledLog, expectedFailureMarker) - switchFailuresBefore,
               '#661 D-3 must log the expected switch failure once',
