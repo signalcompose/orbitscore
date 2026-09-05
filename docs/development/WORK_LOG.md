@@ -102,12 +102,29 @@ C-6 の実測（`--audio-device <既定の名前>` → host 既定へ切替）:
 | (a) だけ削除 / (b) だけ削除 | 94（もう片方が効く） |
 | **(a)(b) 両方削除** | **190**（ほぼ倍速） |
 
-#### 別 issue へ分離（6 本）
+#### fix 差分の再点検（PROJECT_RULES §4）
+
+`73b7abce..326e5fce` を 1 レビュアーで再点検。問いは 2 つだけ（新しい故障モード / 実行コンテキスト）。
+**Critical 0 / Important 1**: 「`get_engine_state` の予算短縮が本番の観測性を下げる」。
+
+一次ソースで裁定した結果、**予算では解決しない**:
+
+`//#getEngineState` は REPL の `handleLine` の中で処理され、`createReplSession` の `pushLine` は
+**全行を単一の FIFO promise チェーン**に載せる（`repl-mode.ts`「直列化の根拠 — #476」）。
+instrument の attach は実測 30 秒超なので、10 秒でも 2.5 秒でも答えは返らない。伸ばして変わるのは
+「同じ `statusError` を返すまでに何秒ブロックするか」だけ。
+
+→ 2.5 秒は据え置き、コメントを **E2E 都合ではなく本番の根拠**に書き直して
+`ENGINE_STATE_QUERY_BUDGET_MS` として定数化。本来の解決（状態問い合わせをキューの外で処理する）は
+**#759** へ切り出した。
+
+#### 別 issue へ分離（7 本）
 
 **#755** `select_audio_device` が人間のクリックトグルを共有 /
 **#756** `setupStderrHandler` の `ERROR:` 前置が chunk 単位 /
 **#757** request 相関ブリッジが 5 本 625 行の重複 /
-**#758** 捨てた旧ストリームの disconnect listener が共有 `StreamStats` に `device_lost` を書く
+**#758** 捨てた旧ストリームの disconnect listener が共有 `StreamStats` に `device_lost` を書く /
+**#759** `//#getEngineState` が評価キューの後ろに並ぶので長い await 中は状態が見えない
 
 #### 検証（実機・sandbox 外）
 

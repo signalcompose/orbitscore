@@ -3191,13 +3191,24 @@ function stopEngineForAgent(): CommandResult {
 }
 
 /**
+ * `get_engine_state` が daemon の状態を待つ予算。
+ *
+ * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
+ * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
+ * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
+ * （instrument の attach は実測 30 秒超）の最中は、**どんな予算でも答えは返らない**。
+ * 予算を伸ばして得られるのは「同じ `statusError` を返すまでに何秒ブロックするか」だけで、
+ * 対話的なツール呼び出しとしては短く degrade する方が良い。
+ *
+ * `running` は同期に分かるので、状態が取れなくても `{running, statusError}` は必ず返る。
+ * **長い処理の最中にも状態を見せたいなら、必要なのは予算ではなく `//#getEngineState` を
+ * キューの外で処理すること**（別 issue）。
+ */
+const ENGINE_STATE_QUERY_BUDGET_MS = 2_500
+
+/**
  * Report engine state for the MCP `get_engine_state` tool. 判定そのものは
  * `resolveEngineState`（`engine-state-bridge.ts`）にあり、ここは配線だけ。
- *
- * 🔴 予算を 2.5 秒にする理由: gated E2E の `waitForEngine` はこのツールで `running` を 500 ms
- * 間隔でポーリングする。既定の 10 秒だと、REPL が長い await（プラグイン attach 等）に入って
- * いる間は 1 回の問い合わせで 10 秒使い、30 秒予算で 3 回しか試せない。`running` は同期に
- * 分かるので、daemon の状態が取れない時は `statusError` で degrade する方が LLM にも E2E にも良い。
  */
 function getEngineStateForAgent(): Promise<EngineState> {
   return resolveEngineState(
@@ -3205,7 +3216,7 @@ function getEngineStateForAgent(): Promise<EngineState> {
       running: Boolean(engineProcess && !engineProcess.killed),
       liveCoding: isLiveCodingMode,
     },
-    () => sendEngineStateMeta(2_500),
+    () => sendEngineStateMeta(ENGINE_STATE_QUERY_BUDGET_MS),
   )
 }
 

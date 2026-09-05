@@ -182,7 +182,7 @@ On the other hand, features **newly gained** in v2.0:
 Also, `updateDiagnostics()` has a warning implementation for remnants of v1.0 MIDI syntax. Lines containing the `sequence ` keyword are highlighted with `DiagnosticTag.Deprecated`:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4070-4079
+// packages/vscode-extension/src/extension.ts:4081-4090
     // Check for deprecated syntax (old MIDI DSL)
     if (line.includes('sequence ') && !line.includes('//')) {
       const diagnostic = new vscode.Diagnostic(
