@@ -236,6 +236,18 @@ describe('translateSelectAudioDeviceError', () => {
     )
   })
 
+  it('translates AUDIO_DEVICE_STREAM_DEAD and says the old output continues', () => {
+    expect(translateSelectAudioDeviceError('AUDIO_DEVICE_STREAM_DEAD: timed out')).toBe(
+      'デバイスから音声コールバックが届きません — 元の出力を継続します (AUDIO_DEVICE_STREAM_DEAD: timed out)',
+    )
+  })
+
+  it('translates AUDIO_DEVICE_RATE_MISMATCH and recommends an engine restart', () => {
+    expect(translateSelectAudioDeviceError('AUDIO_DEVICE_RATE_MISMATCH: 44100 != 48000')).toBe(
+      'サンプルレートが異なるため切替できません — エンジンを再起動してください (AUDIO_DEVICE_RATE_MISMATCH: 44100 != 48000)',
+    )
+  })
+
   it('passes other errors through unchanged', () => {
     expect(translateSelectAudioDeviceError('device not found')).toBe('device not found')
   })

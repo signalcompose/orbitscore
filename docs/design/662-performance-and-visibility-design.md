@@ -216,6 +216,8 @@ issue にあるのは**観測**（daemon CPU 0.0% / 縮退警告なし / child �
 > `play()` 後だけでなく、**Engine / RenderState を作る前の probe**で候補を確定する。これにより
 > 名指し stream の cpal 参照循環があっても、dead 判定後に callback-owned state を回収せず
 > host 既定へ縮退できる。probe は専用 counter を使い、`StreamStats.callbacks` を増やさない。
+> ライブ切替では probe 中も旧 stream を動かし続け、probe 成功後だけ旧 stream を `pause()` する。
+> probe 失敗なら旧 stream は一度も pause されない（正本 §4.4）。
 
 1. **起動時に掴んだ構成をログへ**（issue の直すべきこと 2・正本 §4 最終行）。現在 `[daemon]` は `listening` と `accepted connection` の 2 行だけ（`main.rs:128` 付近）。
    出す: `requested` / `resolved` / `fell_back` / `sample_rate` / `channels` / `sample_format` / `buffer_size` / **最初のコールバックまでの実測 ms**。
@@ -231,8 +233,9 @@ issue にあるのは**観測**（daemon CPU 0.0% / 縮退警告なし / child �
 
 `apply_device_switch` の確定手順は
 [`661-audio-device-liveness-design.md`](661-audio-device-liveness-design.md) §4.3–§4.4 とする。
-**旧 stream を `pause()` → 新候補を専用 stream で probe → 実 stream を build/play → callback
-事後確認 → 成功時だけ差し替え**の順で、失敗時は新 stream を `pause()` して捨て、旧 stream を
+**新候補を専用 zero-fill stream で probe（旧 stream は鳴ったまま）→ probe 成功後だけ旧 stream を
+`pause()` → 実 stream を build → play → callback 事後確認 → 成功時だけ差し替え**の順とする。
+probe 失敗時は旧 stream を pause しない。probe 後の失敗時は新 stream を `pause()` して捨て、旧 stream を
 `play()` で再開する。`OutputStream::drop` 自身も先に `pause()` するため、cpal 0.15.3 の名指し
 stream 参照循環が残っても二重レンダを継続させない。
 
@@ -551,7 +554,7 @@ packages/engine/src/audio/rust-engine/rust-engine-player.ts:573:      const stat
 packages/engine/src/audio/rust-engine/rust-engine-player.ts:1794:    return this.daemon.getStatus()                  ← getDaemonStatus()（@internal・呼び出し元 0）
 ```
 
-**拡張から `GetStatus` に届く経路は今日 1 本も無い。** §7.1 の `//#engineStatus` が最初の 1 本になる。
+**拡張から `GetStatus` へは MCP `get_engine_state` → `//#getEngineState` → `getDaemonStatus()` の相関経路で到達し、daemon の `output` / `callback` を加工せず同梱する。**
 
 ```
 $ grep -rn "engineView\|EngineViewProvider" packages/vscode-extension/src/extension.ts | head

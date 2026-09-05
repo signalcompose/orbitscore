@@ -140,13 +140,18 @@ resolve_output_device(request)                     -- 既存（eprintln! を撤�
 §2.2 の参照循環は cpal 側の問題で、こちらからは切れない。
 **`pause()`（= `audio_unit.stop()`）を明示的に呼べばコールバックは止まる**（leak は残る）。
 
-`impl Drop for OutputStream { let _ = self._stream.pause(); }` を置き、
-`apply_device_switch` は **旧を pause → 新を build/probe → 成功なら差し替え / 失敗なら旧を `play()`** とする。
+`impl Drop for OutputStream { let _ = self._stream.pause(); }` を置く。`apply_device_switch` の順序は
+**probe（旧 stream は鳴ったまま）→ 旧を pause → build → play → confirm** とする。probe stream は
+zero-fill と probe 専用 counter だけを使い `RenderState` / 共有 `StreamStats` に触れないため、旧 stream と
+共存できる。probe 失敗では旧 stream を一度も pause せず、そのまま `Err` を返す。probe 後の build /
+play / confirm が失敗した場合は、失敗した新 stream を必ず pause して drop してから旧を `play()` する。
+旧の再開にも失敗した場合は、元の失敗を主理由、再開失敗を従理由として同じエラーに保持する。
+
 その処理全体の `Result` は成功・失敗とも `record_device_switch_result` へ合流させる。この関数だけが
 切替結果のログと状態を記録し、成功時は実効構成を一括差し替えて `last_switch_failure` を消去、失敗時は
 実効構成を保持したまま `StreamConfigSnapshot.last_switch_failure` に理由を残して `tracing::error!` を出す。
-したがって RPC の一過性エラーを見逃しても、その後の `GetStatus.output.last_switch_failure` で直近の失敗を
-観測できる。
+したがって RPC の一過性エラーを見逃しても、MCP `get_engine_state` が daemon `GetStatus` の `output` /
+`callback` を同梱するため、直近の失敗と callback 生存状態を後から観測できる。
 
 ### 4.5 ログの層
 
@@ -154,7 +159,7 @@ resolve_output_device(request)                     -- 既存（eprintln! を撤�
 |---|---|---|---|
 | 起動成功（縮退なし） | `tracing::info!` | `establishSession()` の `getStatus()` 後に `🔊 output: "N" @ 48000 Hz × 2ch (first callback 12 ms)` | INFO 1 行。**正常系で ERROR は増えない** |
 | 起動時の縮退 | `tracing::warn!` | `❌ audio device fallback: requested "X" → using "N": <reason>` | **ERROR 1 行**（縮退時のみ） |
-| 起動全滅 | `tracing::error!` + `ready:false` | `DaemonStartupError` に stderr 全文 | 既存経路 |
+| 起動全滅 | `report_startup_failure()` が `ready:false` JSON を `write_line_best_effort` で stderr へ出す（`tracing::error!` は出さない） | `DaemonStartupError` に stderr 全文 | 既存経路 |
 | 切替失敗 | `tracing::error!` + RPC error（`AUDIO_DEVICE_STREAM_DEAD` / `AUDIO_DEVICE_RATE_MISMATCH`） | `❌ live device switch to "X" failed: …` | ERROR 1 行。理由は以後も `GetStatus.output.last_switch_failure` に残る |
 
 🔴 **native（`output.rs`）は一切 print しない。** `eprintln!` を撤去し、縮退理由を
@@ -225,18 +230,19 @@ fault は **env ではなく `StartupOptions` に typed で**渡す。
 |---|---|
 | C-1 | 正常: `device_fell_back == false`・`callbacks` 前進・`first_callback_ms < 3000` |
 | C-2 | `DeadProbeRequested` → `device_fell_back == true`・reason に "no callback"・**縮退先が生きている** |
-| C-3 | `DeadAllProbes` → `Err(StreamDead)` |
-| C-4 | `DeadRealStream`（起動）→ `Err(StreamDead)`（**再縮退しない**） |
-| C-5 | 切替失敗で**旧が止まらない**: `apply_device_switch` の前後で `callbacks` が途切れず前進し、`last_switch_failure` に理由が残る |
-| **C-6** 🔴 | **切替成功で二重レンダにならない**: 名指し起動 → `apply_device_switch(None)` → 1 s の Δcallbacks が `sample_rate / last_frames` の **±30 % 以内**（2 倍なら旧 stream が生きている）。**`Drop` の `pause()` を外すと red になること**を main が 1 回手で確認し、実出力を貼る |
+| C-3 | `DeadAllProbes` → `Err(StreamDead { phase: Probe, .. })` |
+| C-4 | `DeadRealStream`（起動）→ `Err(StreamDead { phase: RealStream, .. })`（**再縮退しない**） |
+| C-5 | 切替の dead probe（3 s）を別 thread から 100 ms 間隔で観測し、旧 `callbacks` に 500 ms 以上の停滞が無く、`last_switch_failure` に理由が残る |
+| **C-6** 🔴 | **切替成功で二重レンダにならない**: 名指し起動 → 切替前 1 s の callbacks 実測率を保存 → `apply_device_switch(None)` → 切替後 1 s の率が切替前の **±30 % 以内**（2 倍なら旧 stream が生きている） |
 
 ### gated MCP E2E（ユーザー動線・`orbitstudio-mcp-gated.spec.ts`）
 
 | # | 検査 |
 |---|---|
+| D-0 | **名指し受け入れ（注入なし）**: `--list-audio-devices` の既定名を設定して起動し、`runScore(.., {capture:true})` の **RMS > 0** |
 | D-1 | **縮退の報告（注入なし）**: `select_audio_device("NoSuchDevice-<uuid>")` → `get_log` に `❌ … fallback … not found` が**増える**（`toBeGreaterThanOrEqual(before+1)`）→ `🔊 … output:` が出る |
 | D-2 | **dead device を指定しても音が出る（注入あり）**: 縮退後に `runScore(.., {capture:true})` で **RMS > 0** |
-| D-3 | **切替失敗で音が止まらない**: 鳴っている状態で失敗する切替 → `ok:false` + reason → 要求名と理由を持つ ERROR が 1 行増え、その後は増えない |
+| D-3 | **切替失敗で音が止まらない**: dead probe 中も C-5 の旧 callback が前進し、`STREAM_CALLBACK_STALLED` が増えない。要求名と理由を持つ ERROR はちょうど 1 行だけ増え、`get_engine_state.output.last_switch_failure` と `callback.alive` からも観測できる |
 
 🔴 **D-1 は実装前に書いて red を確認する**（§2.3 の実証を兼ねる）。
 

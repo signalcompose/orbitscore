@@ -55,7 +55,7 @@ VS Code 拡張側が「送るコードを決める」、エンジン側が「受
 まず、エンジンがどう起動しているかを確認しておきましょう。`startEngine()` では引数に `'repl'` を指定して Node プロセスを spawn します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2112-2164 (env の組み立てを省略)
+// packages/vscode-extension/src/extension.ts:2124-2176 (env の組み立てを省略)
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -115,7 +115,7 @@ Cmd+Enter で起動するのが `runSelection()` 関数です。まず「何を�
 選択テキストが空でなければシンプルにその内容を使います。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2735-2738
+// packages/vscode-extension/src/extension.ts:2748-2751
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -129,7 +129,7 @@ Cmd+Enter で起動するのが `runSelection()` 関数です。まず「何を�
 subject を判定する関数が `getLineSubject()` です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2702-2715
+// packages/vscode-extension/src/extension.ts:2715-2728
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -157,7 +157,7 @@ subject が `null` の場合 — つまり `RUN(kick, snare)` のようなスタ
 送るコードが確定したあと、`writeCodeToEngine()` がドキュメントのディレクトリパスを 2 通りの方法で engine に伝えます。`audioPath()` / `audio()` の相対パス解決、そして `import` の基準ディレクトリ (IM.6) に使われます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3001-3033
+// packages/vscode-extension/src/extension.ts:3032-3064
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -209,7 +209,7 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
 `runSelection()` は `writeCodeToEngine()` の戻り値を見て、送れたときだけ視覚フィードバックを出します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2874-2881
+// packages/vscode-extension/src/extension.ts:2887-2894
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
@@ -229,7 +229,7 @@ MCP の `evaluate_orbitscore` も同じ `writeCodeToEngine()` を呼びますが
 stdin に書き込まれたコードは、エンジン側の `startREPL()` が受けます。2026-05 版では `rl.on('line', async ...)` の中に全ロジックがありましたが、この版では `createReplSession()` に切り出されています。
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:521-541
+// packages/engine/src/cli/repl-mode.ts:573-593
 export async function startREPL(interpreter: InterpreterV2): Promise<void> {
   // 🔴 #607: この関数も返らない。play/run/eval から REPL に入る経路でも publish する。
   setActiveInterpreter(interpreter)
@@ -260,7 +260,7 @@ export async function startREPL(interpreter: InterpreterV2): Promise<void> {
 `createReplSession()` の設計理由はコメントに凝縮されています。
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:292-301
+// packages/engine/src/cli/repl-mode.ts:335-344
 /**
  * REPL の行処理セッション（#476 で分離・単体テスト可能に）。
  *
@@ -278,7 +278,7 @@ export async function startREPL(interpreter: InterpreterV2): Promise<void> {
 セッションの状態は closure に閉じています。
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:302-311
+// packages/engine/src/cli/repl-mode.ts:345-354
 export function createReplSession(interpreter: InterpreterV2): {
   pushLine: (line: string) => void
   idle: () => Promise<void>
@@ -294,7 +294,7 @@ export function createReplSession(interpreter: InterpreterV2): {
 `pushLine()` は行を promise チェーンに繋ぐだけです。
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:499-518
+// packages/engine/src/cli/repl-mode.ts:551-570
   return {
     pushLine(line: string): void {
       // handleLine は内部で全エラーを捕捉するが、防御としてチェーン自体も reject を握る
@@ -324,7 +324,7 @@ export function createReplSession(interpreter: InterpreterV2): {
 `handleLine()` は先にメタ行を振り分け、残りを DSL バッファに積みます。DSL 部分の末尾は次のとおりです。
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:459-472
+// packages/engine/src/cli/repl-mode.ts:511-524
     if (line.trim() === '') {
       emptyLineCount++
       buffer += '\n'
@@ -348,7 +348,7 @@ export function createReplSession(interpreter: InterpreterV2): {
 実行の本体が `executeCurrentBuffer()` です。parse と execute を別々の `try` に分けているのが要点で、その理由もコメントに残っています。
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:335-386
+// packages/engine/src/cli/repl-mode.ts:378-429
   async function executeCurrentBuffer(clearOnIncomplete: boolean): Promise<void> {
     const code = buffer.trim()
     if (!code) {
@@ -447,7 +447,7 @@ export function extractDocumentDirectoryMeta(code: string): string | undefined {
 `//#evalMark <json>` は「投入は以上、結果を返せ」という提出の境界です。REPL は行を FIFO で処理するので、このマーカーに到達した時点で先行コードの評価は完了しています。
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:404-426
+// packages/engine/src/cli/repl-mode.ts:447-469
     if (EVAL_MARK_META_RE.test(line)) {
       // 🔴 マーカーは「投入は以上、結果を返せ」という**提出の境界**である。
       // 未完のままバッファに残った入力を放置すると「何も実行していないのに ok」を返して

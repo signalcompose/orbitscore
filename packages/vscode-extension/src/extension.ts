@@ -58,6 +58,7 @@ import { DeviceSwitchBridge } from './device-switch-bridge'
 import { PluginStateBridge } from './plugin-state-bridge'
 import { PluginUiBridge, type PluginUiAction } from './plugin-ui-bridge'
 import { EvalMarkBridge } from './eval-mark-bridge'
+import { EngineStateBridge } from './engine-state-bridge'
 import {
   applyEngineError,
   applyEngineExit,
@@ -123,6 +124,7 @@ const pluginStateBridge = new PluginStateBridge()
 const pluginUiBridge = new PluginUiBridge()
 /** #614: `evaluate_orbitscore` に評価結果を返すための相関ブリッジ。 */
 const evalMarkBridge = new EvalMarkBridge()
+const engineStateBridge = new EngineStateBridge()
 // Audio Engine Settings TreeView (#484 D3). Non-null once activated.
 let engineViewProvider: EngineViewProvider | null = null
 // Changes whenever a spawn is created or a user explicitly stops the engine.
@@ -1172,7 +1174,8 @@ function shouldFilterLine(line: string): boolean {
   if (
     trimmed.startsWith('{"savePluginState"') ||
     trimmed.startsWith('{"pluginUi"') ||
-    trimmed.startsWith('{"evalMark"')
+    trimmed.startsWith('{"evalMark"') ||
+    trimmed.startsWith('{"engineState"')
   ) {
     return true
   }
@@ -1507,6 +1510,13 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
           if (!parsed && isCurrent) {
             outputChannel?.appendLine(`⚠️ received a malformed //#evalMark result line: ${rawLine}`)
           }
+        } else if (trimmedLine.startsWith('{"engineState"')) {
+          const parsed = isCurrent && engineStateBridge.handleLine(rawLine)
+          if (!parsed && isCurrent) {
+            outputChannel?.appendLine(
+              `⚠️ received a malformed //#getEngineState result line: ${rawLine}`,
+            )
+          }
         }
       }
 
@@ -1596,6 +1606,7 @@ export function setupStdinErrorHandler(process: child_process.ChildProcess): voi
           pluginStateBridge.drainAll(reason)
           pluginUiBridge.drainAll(reason)
           evalMarkBridge.drainAll(reason)
+          engineStateBridge.drainAll(reason)
         },
       })
     } catch (innerErr) {
@@ -1618,6 +1629,7 @@ function engineTerminationEffects(): Omit<EngineExitEffects, 'logExit'> {
       pluginStateBridge.drainAll(reason)
       pluginUiBridge.drainAll(reason)
       evalMarkBridge.drainAll(reason)
+      engineStateBridge.drainAll(reason)
     },
     showStoppedStatus: () => {
       statusBarItem!.text = '🎵 OrbitScore: Stopped'
@@ -2221,6 +2233,7 @@ export function stopEngine(): boolean {
     pluginStateBridge.drainAll('engine was stopped before responding to //#savePluginState')
     pluginUiBridge.drainAll('engine was stopped before responding to //#pluginUi')
     evalMarkBridge.drainAll('engine was stopped before responding to //#evalMark')
+    engineStateBridge.drainAll('engine was stopped before responding to //#getEngineState')
 
     // Send graceful shutdown signal (SIGTERM)
     // This allows the engine to clean up SuperCollider properly
@@ -2940,6 +2953,24 @@ function sendSelectAudioDeviceMeta(
   )
 }
 
+function sendEngineStateMeta(
+  timeoutMs = 10_000,
+): Promise<import('./engine-state-bridge').EngineStatusBridgeResult> {
+  if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
+    return Promise.reject(new Error('engine stdin is not writable (engine not running?)'))
+  }
+  const stdin = engineProcess.stdin
+  return engineStateBridge.send((line, onError) => {
+    stdin.write(line, (error) => {
+      if (error) {
+        outputChannel?.appendLine(`⚠️ failed to write //#getEngineState to stdin: ${error.message}`)
+        onError(error)
+      }
+    })
+    return true
+  }, timeoutMs)
+}
+
 function sendPluginStateMeta(
   sequence: string,
   index: number,
@@ -3166,10 +3197,21 @@ function stopEngineForAgent(): CommandResult {
 }
 
 /** Report engine state for the MCP `get_engine_state` tool. */
-function getEngineStateForAgent(): EngineState {
-  return {
+async function getEngineStateForAgent(): Promise<EngineState> {
+  const state: EngineState = {
     running: Boolean(engineProcess && !engineProcess.killed),
     liveCoding: isLiveCodingMode,
+  }
+  if (!state.running) return state
+  try {
+    const status = await sendEngineStateMeta()
+    if (!status.ok) return { ...state, statusError: status.error }
+    return { ...state, output: status.output, callback: status.callback }
+  } catch (error) {
+    return {
+      ...state,
+      statusError: error instanceof Error ? error.message : String(error),
+    }
   }
 }
 

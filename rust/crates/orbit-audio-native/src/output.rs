@@ -119,7 +119,11 @@ pub enum OutputError {
     #[error("capture writer error: {0}")]
     Capture(String),
     #[error("audio output device \"{device}\" produced no callback within {waited_ms} ms")]
-    StreamDead { device: String, waited_ms: u64 },
+    StreamDead {
+        device: String,
+        waited_ms: u64,
+        phase: StreamLivenessPhase,
+    },
     #[error(
         "audio output device \"{device}\" uses {device_rate} Hz, but the running engine uses {engine_rate} Hz; restart the engine to change sample rate"
     )]
@@ -128,6 +132,18 @@ pub enum OutputError {
         device_rate: u32,
         engine_rate: u32,
     },
+    #[error("{primary}; additionally failed to resume the old audio stream: {resume}")]
+    SwitchRecoveryFailed {
+        primary: Box<OutputError>,
+        resume: Box<OutputError>,
+    },
+}
+
+/// Identifies which half of the two-stage liveness gate rejected a stream.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum StreamLivenessPhase {
+    Probe,
+    RealStream,
 }
 
 /// Test-only liveness failure selected by the daemon's typed startup options.
@@ -479,6 +495,7 @@ pub fn select_live_output_device(
         return Err(OutputError::StreamDead {
             device: first_name,
             waited_ms: FIRST_CALLBACK_DEADLINE.as_millis() as u64,
+            phase: StreamLivenessPhase::Probe,
         });
     };
 
@@ -500,6 +517,7 @@ pub fn select_live_output_device(
     probe_candidate(fallback, false)?.ok_or(OutputError::StreamDead {
         device: fallback_name,
         waited_ms: FIRST_CALLBACK_DEADLINE.as_millis() as u64,
+        phase: StreamLivenessPhase::Probe,
     })
 }
 
@@ -1776,20 +1794,12 @@ fn start_output_inner(
 /// Rebuild only the cpal device/stream while preserving the engine, callback
 /// state, and stream statistics. Capture is intentionally not attached here.
 pub fn rebuild_output_stream(
+    live: LiveOutputDevice,
     render_state: Arc<std::sync::Mutex<RenderState>>,
     engine: Engine,
     stats: Arc<StreamStats>,
     cb_stats: Option<Arc<CallbackTimeStats>>,
-    buffer_frames: Option<u32>,
-    expected_sample_rate: u32,
-    device_request: OutputDeviceRequest,
 ) -> Result<OutputStream, OutputError> {
-    let live = select_live_output_device(
-        device_request,
-        buffer_frames,
-        Some(expected_sample_rate),
-        false,
-    )?;
     let stream = build_stream(
         &live,
         engine,
@@ -1824,6 +1834,7 @@ fn play_and_confirm(
         confirm_first_callback(stats, baseline).ok_or_else(|| OutputError::StreamDead {
             device: output_stream.device_name.clone(),
             waited_ms: FIRST_CALLBACK_DEADLINE.as_millis() as u64,
+            phase: StreamLivenessPhase::RealStream,
         })?;
     Ok(())
 }

@@ -17,6 +17,59 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(daemon): keep the old output live while probing a switch candidate (#661 / PR #748 round 1) (Sep 5, 2026)
+
+実機計測で、失敗する切替が本来の 3 秒 probe timeout より約 1.6 秒早く
+`STREAM_CALLBACK_STALLED` fatal を発生させ、約 3.1 秒の無音を作ることが判明した。
+`apply_device_switch` を **probe → 旧 stream の pause → build → play → confirm** に変更し、
+probe 失敗では旧 stream を一度も pause しない。probe と `OutputStream::drop` の
+pause-before-drop は維持した。
+
+併せて、probe / real-stream の `StreamDead` を phase で区別し、旧 stream 再開失敗時も元の
+失敗理由を保持した。`select_audio_device` の早期拒否も `last_switch_failure` に記録する。
+MCP `get_engine_state` は相関 REPL bridge 経由で daemon `GetStatus.output` / `callback` を返す。
+gated E2E には、注入なしの実名デバイス起動 + capture RMS、D-3 の不足していた capture 前提確認、
+ERROR 上限、`STREAM_CALLBACK_STALLED` 非増加を追加した。名前不一致時の F4 挙動は owner 判断待ちの
+まま変更していない。
+
+#### 🔴 この欠陥をどう掴んだか（Fable の予測 → main の実測）
+
+Fable 監査 F1 が「pause が probe より前にあるので、1 Hz の ticker が 2 tick 連続で停止と判定し
+**偽の FATAL が決定論的に出る**」と機構から予測し、**反証用のスクリプトを添えて**きた。
+main が sandbox 外で回した実出力:
+
+```
+[switch-start  2674ms] SelectAudioDevice -> "MacBook Proのスピーカー"
+[EVENT  4172ms] STREAM_CALLBACK_STALLED  severity=warning
+[EVENT  5172ms] STREAM_CALLBACK_STALLED  severity=fatal     ← 偽の FATAL
+[stderr 5802ms] ERROR ... produced no callback within 3000 ms  ← 本物のエラー
+```
+
+**本物のエラーより 1.6 秒早く FATAL が出る。** 設計 §6 D-3 の「ERROR が 1 行」は成立しておらず、
+実際は DaemonError 2 件 + stderr ERROR 1 件だった。だから D-3 のアサーションは `>=` に緩められていた
+（症状に合わせて期待を緩めると、原因が見えなくなる例）。
+
+同時に、**成功する切替が `last_switch_failure` を `null` に戻す**ことも実測で確認できた。
+
+#### レビュアー間で解けた誤検知 2 件
+
+silent-failure が「起動時フォールバックが ERROR でない」「ライブ切替が黙ってすり替わる」と HIGH で
+報告したが、どちらも **Rust 層だけを見て TS 層を見落としたもの**だった。
+
+- 起動時の縮退の利用者向け ERROR は `reportAudioOutput`（`rust-engine-player.ts:904-928`）が
+  `console.error('❌ audio device fallback: ...')` で出す。engine の stderr は `get_log` で ERROR 行になる
+- ライブ切替は `select_live_output_device` の第 4 引数 `allow_dead_fallback` が **`false`**
+  （起動は `true`）なので、黙ってすり替わらず `StreamDead` を返して旧デバイスへ復帰する
+
+code-reviewer がこの二層構成を追ったことで解けた。**単層だけ見て「未実装」と判定しない。**
+
+#### 検証（main が sandbox 外で実測・Codex が走らせられなかったもの）
+
+- `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument`
+  — lib **268 passed** / **protocol 32 passed**（Codex は sandbox の loopback 禁止で 32 failed と報告していた）
+- `npm test` **2260 passed / 0 failed**（loopback を要する HTTP 31 件と daemon-client 32 件も含む）
+- `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified / 0 failed**
+
 ### refactor(daemon): apply the /simplify pass to the device-liveness branch (#661) (Sep 5, 2026)
 
 **Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748

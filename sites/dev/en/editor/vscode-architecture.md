@@ -66,7 +66,7 @@ Because of `onStartupFinished`, the extension is always loaded even if no OrbitS
 `extension.ts` is a large file of 4,115 lines, and state lives in module-level variables. The declarations near the top serve as an index of what this extension carries.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:104-115
+// packages/vscode-extension/src/extension.ts:105-116
 let engineProcess: child_process.ChildProcess | null = null
 let outputChannel: vscode.OutputChannel | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
@@ -90,7 +90,7 @@ After this come four **bridges** that wait for JSON lines coming back on the eng
 The entry point is `activate()` in `extension.ts`. It is called once immediately after VS Code loads the extension. Let's look at the first half.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:286-341
+// packages/vscode-extension/src/extension.ts:288-343
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
 
@@ -162,7 +162,7 @@ The rest of `activate()` is roughly five jobs:
 The last two are written like this.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:445-499 (MCP ツールのハンドラ表を省略)
+// packages/vscode-extension/src/extension.ts:447-501 (MCP ツールのハンドラ表を省略)
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -198,7 +198,7 @@ There are **two** status bar indicators. Their priority values differ, determini
 The display of `bundleStatusItem` is decided by `updateBundleStatus()`, and its first branch is the **engine kind**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:726-742
+// packages/vscode-extension/src/extension.ts:728-744
 function updateBundleStatus(): void {
   if (!bundleStatusItem) return
   if (getConfiguredEngineKind() === 'rust') {
@@ -229,7 +229,7 @@ Under the `rust` kind, when the daemon is found (= the normal state), the indica
 Let's organize the commands `activate()` registers. There are 17 listed in `contributes.commands`, plus 2 internal commands invoked only from TreeView nodes.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:367-404
+// packages/vscode-extension/src/extension.ts:369-406
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -372,7 +372,7 @@ The completion vocabulary is duplicated in `dsl-method-catalog.ts`, and a test e
 Diagnostics (`updateDiagnostics`) were driven only by `onDidChangeTextDocument` as of 2026-05, but #384 extended them to "when opened," "when closed," and "documents already open at activation."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:414-443
+// packages/vscode-extension/src/extension.ts:416-445
   // Compute diagnostics on open and change; clear them on close (#384).
   // Diagnostics must not wait for the first edit — files opened from the CLI,
   // restored tabs, or the activation-time initial pass below all need
@@ -414,7 +414,7 @@ There are 9 kinds of checks in total: 3 per-line plus 6 cross-line analyses. For
 Before spawning the engine, the extension pre-checks "does the audio process's executable really exist?" There is an interesting implementation pattern here. It is a structure where **the JS of the Extension Host (compiled from TypeScript) runtime-loads the engine package's compiled JS via `require`**, with a wrapper of the same shape for both scsynth and the daemon.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:677-711
+// packages/vscode-extension/src/extension.ts:679-713
 function resolveScsynthForUI(): { path: string; source: string } | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
@@ -480,7 +480,7 @@ The scsynth resolver is `explicit > env > bundle > throw`; the daemon resolver i
 The pre-check is quoted in [III-3](/en/audio/scsynth-bundle#the-call-itself-is-gated-by-the-engine-kind), so here we read from assembling args and env through the spawn.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2112-2125
+// packages/vscode-extension/src/extension.ts:2124-2137
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -500,7 +500,7 @@ The pre-check is quoted in [III-3](/en/audio/scsynth-bundle#the-call-itself-is-g
 The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcommand, and the output device is passed via the `--audio-device` argument (the `orbitscore.audioDevice` setting takes precedence, otherwise `.orbitscore.json`). `__default__` is a sentinel meaning "the OS default output."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2143-2165
+// packages/vscode-extension/src/extension.ts:2155-2177
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
@@ -531,7 +531,7 @@ A point to note here is that `ORBITSCORE_ENGINE` is **set explicitly in both bra
 `stdio: ['pipe', 'pipe', 'pipe']` is important. By making stdin/stdout/stderr all pipes, the Extension Host can directly write/read them. Right after spawn, five handlers are attached, and after one `process.nextTick` it checks "is the same process still alive?"
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2180-2191
+// packages/vscode-extension/src/extension.ts:2192-2203
   // Setup handlers
   setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
@@ -564,7 +564,7 @@ Communication between the Extension Host and the engine process is via **stdin/s
 The send part is consolidated into `writeCodeToEngine()`, shared by the editor's Run Selection and MCP's `evaluate_orbitscore`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3001-3033
+// packages/vscode-extension/src/extension.ts:3032-3064
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -633,7 +633,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1513-1549 (effects の中身を一部省略)
+// packages/vscode-extension/src/extension.ts:1523-1559 (effects の中身を一部省略)
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
         clearSequence: clearPlayheadForSequence,
@@ -674,7 +674,7 @@ Execution feedback (flashing the executed lines, the playhead, diagnostics) is c
 `stopEngine()` performs a two-stage shutdown of SIGTERM → (after 2 seconds) SIGKILL. Compared with 2026-05, draining the bridges and clearing the playhead were added, and the SIGKILL condition was fixed.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2205-2253
+// packages/vscode-extension/src/extension.ts:2217-2265
 export function stopEngine(): boolean {
   engineGeneration += 1
   if (engineProcess && !engineProcess.killed) {
@@ -694,6 +694,7 @@ export function stopEngine(): boolean {
     pluginStateBridge.drainAll('engine was stopped before responding to //#savePluginState')
     pluginUiBridge.drainAll('engine was stopped before responding to //#pluginUi')
     evalMarkBridge.drainAll('engine was stopped before responding to //#evalMark')
+    engineStateBridge.drainAll('engine was stopped before responding to //#getEngineState')
 
     // Send graceful shutdown signal (SIGTERM)
     // This allows the engine to clean up SuperCollider properly
@@ -723,7 +724,6 @@ export function stopEngine(): boolean {
     return true
   }
   return false
-}
 ```
 
 As the #532 comment points out, the `if (!proc.killed)` of 2026-05 was checking "was the signal sent," so SIGKILL never fired. Whether both `exitCode` / `signalCode` are `null` is the correct test for "still alive."

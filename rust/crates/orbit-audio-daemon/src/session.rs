@@ -2699,6 +2699,22 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
             crate::protocol::ERROR_CODE_AUDIO_DEVICE_RATE_MISMATCH,
             e.to_string(),
         ),
+        WrapError::Output(O::SwitchRecoveryFailed { primary, .. })
+            if matches!(primary.as_ref(), O::StreamDead { .. }) =>
+        {
+            ProtocolError::new(
+                crate::protocol::ERROR_CODE_AUDIO_DEVICE_STREAM_DEAD,
+                e.to_string(),
+            )
+        }
+        WrapError::Output(O::SwitchRecoveryFailed { primary, .. })
+            if matches!(primary.as_ref(), O::SampleRateMismatch { .. }) =>
+        {
+            ProtocolError::new(
+                crate::protocol::ERROR_CODE_AUDIO_DEVICE_RATE_MISMATCH,
+                e.to_string(),
+            )
+        }
         WrapError::Output(o) => ProtocolError::new("DEVICE_CONFIG_ERROR", o.to_string()),
         WrapError::Scheduler(msg) => ProtocolError::new("INTERNAL_ERROR", msg.clone()),
         // feature-gap（TS は warn-once で握り潰す）と runtime 失敗（TS は rethrow）を別コードにする。
@@ -3711,10 +3727,12 @@ mod tests {
 
     #[test]
     fn audio_device_liveness_errors_map_to_actionable_codes() {
-        let dead = WrapError::Output(orbit_audio_native::OutputError::StreamDead {
+        let primary = orbit_audio_native::OutputError::StreamDead {
             device: "USB Audio".into(),
             waited_ms: 3_000,
-        });
+            phase: orbit_audio_native::StreamLivenessPhase::Probe,
+        };
+        let dead = WrapError::Output(primary);
         assert_eq!(
             wrap_err_to_protocol(&dead).code,
             crate::protocol::ERROR_CODE_AUDIO_DEVICE_STREAM_DEAD
@@ -3728,6 +3746,26 @@ mod tests {
             wrap_err_to_protocol(&mismatch).code,
             crate::protocol::ERROR_CODE_AUDIO_DEVICE_RATE_MISMATCH
         );
+
+        let recovery = WrapError::Output(orbit_audio_native::OutputError::SwitchRecoveryFailed {
+            primary: Box::new(orbit_audio_native::OutputError::StreamDead {
+                device: "USB Audio".into(),
+                waited_ms: 3_000,
+                phase: orbit_audio_native::StreamLivenessPhase::RealStream,
+            }),
+            resume: Box::new(orbit_audio_native::OutputError::PlayStream(
+                "resume refused".into(),
+            )),
+        });
+        let protocol = wrap_err_to_protocol(&recovery);
+        assert_eq!(
+            protocol.code,
+            crate::protocol::ERROR_CODE_AUDIO_DEVICE_STREAM_DEAD
+        );
+        assert!(protocol
+            .message
+            .contains("produced no callback within 3000 ms"));
+        assert!(protocol.message.contains("resume refused"));
     }
 
     // CLAP エラーの protocol code 分割を pin（LinkAudio と同様: feature-gap=UNAVAILABLE /

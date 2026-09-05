@@ -6,7 +6,9 @@
 use std::time::Duration;
 
 use orbit_audio_daemon::engine_wrap::{EngineWrap, StartupOptions, WrapError};
-use orbit_audio_native::{list_output_devices, OutputError, OutputFault, FIRST_CALLBACK_DEADLINE};
+use orbit_audio_native::{
+    list_output_devices, OutputError, OutputFault, StreamLivenessPhase, FIRST_CALLBACK_DEADLINE,
+};
 
 fn named_default_output() -> String {
     let devices = list_output_devices().expect("enumerate output devices");
@@ -22,14 +24,18 @@ fn options(device_name: Option<String>, fault: OutputFault) -> StartupOptions {
     StartupOptions { device_name, fault }
 }
 
-fn assert_startup_fails_with_stream_dead(fault: OutputFault, panic_message: &str) {
+fn assert_startup_fails_with_stream_dead(
+    fault: OutputFault,
+    expected_phase: StreamLivenessPhase,
+    panic_message: &str,
+) {
     let error = match EngineWrap::start_with_options(options(Some(named_default_output()), fault)) {
         Err(error) => error,
         Ok(_) => panic!("{panic_message}"),
     };
     assert!(matches!(
         error,
-        WrapError::Output(OutputError::StreamDead { .. })
+        WrapError::Output(OutputError::StreamDead { phase, .. }) if phase == expected_phase
     ));
 }
 
@@ -78,6 +84,7 @@ fn c2_dead_requested_probe_falls_back_to_a_live_default() {
 fn c3_all_dead_probes_fail_startup() {
     assert_startup_fails_with_stream_dead(
         OutputFault::DeadAllProbes,
+        StreamLivenessPhase::Probe,
         "all dead probes must fail startup",
     );
 }
@@ -87,24 +94,64 @@ fn c3_all_dead_probes_fail_startup() {
 fn c4_dead_real_stream_fails_without_a_second_fallback() {
     assert_startup_fails_with_stream_dead(
         OutputFault::DeadRealStream,
+        StreamLivenessPhase::RealStream,
         "a dead real stream must fail its postcondition",
     );
 }
 
 #[test]
 #[ignore = "needs a real audio output device"]
-fn c5_failed_switch_resumes_the_old_stream() {
+fn c5_failed_switch_keeps_the_old_stream_advancing_during_probe() {
     let (engine, mut guard) =
         EngineWrap::start_with_options(options(None, OutputFault::DeadProbeRequested))
             .expect("initial default stream must start");
-    let before = engine.stream_stats_snapshot().callbacks;
+
+    // Observe the shared real-stream counter from another thread while apply_device_switch blocks
+    // for the injected 3 s dead probe. The probe has its own counter, so every advance here comes
+    // from the old stream. A pause-before-probe mutation creates roughly 30 stagnant 100 ms windows.
+    let observed_engine = engine.clone();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+    let observer = std::thread::spawn(move || {
+        let mut previous = observed_engine.stream_stats_snapshot().callbacks;
+        let mut samples = 0_u32;
+        let mut consecutive_stagnant = 0_u32;
+        let mut max_stagnant = 0_u32;
+        while let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+            stop_rx.recv_timeout(Duration::from_millis(100))
+        {
+            let callbacks = observed_engine.stream_stats_snapshot().callbacks;
+            samples += 1;
+            if callbacks == previous {
+                consecutive_stagnant += 1;
+                max_stagnant = max_stagnant.max(consecutive_stagnant);
+            } else {
+                consecutive_stagnant = 0;
+            }
+            previous = callbacks;
+        }
+        (samples, max_stagnant)
+    });
+
     let error = engine
         .apply_device_switch(&mut guard, Some(named_default_output()))
         .expect_err("the requested switch probe is injected dead");
+    stop_tx.send(()).expect("stop callback observer");
+    let (samples, max_stagnant) = observer.join().expect("join callback observer");
     assert!(matches!(
         error,
-        WrapError::Output(OutputError::StreamDead { .. })
+        WrapError::Output(OutputError::StreamDead {
+            phase: StreamLivenessPhase::Probe,
+            ..
+        })
     ));
+    assert!(
+        samples >= 20,
+        "dead probe returned before its 3 s deadline: {samples}"
+    );
+    assert!(
+        max_stagnant < 5,
+        "old stream stalled during probe for at least 500 ms: max_stagnant={max_stagnant}"
+    );
     let output = engine.stream_config_snapshot();
     assert!(
         output
@@ -112,11 +159,6 @@ fn c5_failed_switch_resumes_the_old_stream() {
             .as_deref()
             .is_some_and(|reason| reason.contains("produced no callback")),
         "failed switch reason was not retained: {output:?}"
-    );
-    std::thread::sleep(Duration::from_millis(250));
-    assert!(
-        engine.stream_stats_snapshot().callbacks > before,
-        "old stream did not resume after failed switch"
     );
 }
 

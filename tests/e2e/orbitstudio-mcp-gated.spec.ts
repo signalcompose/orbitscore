@@ -1034,8 +1034,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       try {
         await waitForEngine(true, 15_000, 'engine running')
       } catch (err) {
-        // engine が上がらなかった理由は output channel にしか出ない（MCP の
-        // get_engine_state は running の真偽しか返さない）。タイムアウトだけを
+        // engine が上がらなかった理由は output channel にしか出ない（daemon が未起動なら
+        // get_engine_state に output / callback snapshot はまだ無い）。タイムアウトだけを
         // 報告すると毎回ここで手動再現する羽目になるので、失敗時にログを添える。
         let logText = '(unable to retrieve OrbitScore output channel)'
         try {
@@ -5141,6 +5141,71 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
+    '#661 D-0 honors a real named output device and produces audible capture RMS',
+    async () => {
+      let requestedName = ''
+      const launched = await launchIsolatedOrbitStudio({
+        tmpPrefix: 'orbitstudio-named-device-',
+        settings: () => {
+          const daemonBinary = resolveDaemonBinaryPath().path
+          const listed = JSON.parse(
+            execFileSync(daemonBinary, ['--list-audio-devices'], { encoding: 'utf8' }),
+          ) as { devices: Array<{ name: string; isDefault: boolean }> }
+          const requested = listed.devices.find((device) => device.isDefault) ?? listed.devices[0]
+          expect(requested, '#661 D-0 requires an output device').toBeDefined()
+          requestedName = requested!.name
+          return {
+            'orbitscore.audioDevice': requestedName,
+            'orbitscore.engineDebug': false,
+          }
+        },
+        env: { ...process.env },
+        portBase: 39500,
+        prepareWorkspace: (namedTmpRoot) => {
+          fs.mkdirSync(path.join(namedTmpRoot, 'test-assets/audio'), { recursive: true })
+          fs.copyFileSync(
+            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
+            path.join(namedTmpRoot, 'test-assets/audio/kick.wav'),
+          )
+        },
+      })
+      const { child, client, tmpRoot } = launched
+      try {
+        const session = createGatedSession(client, tmpRoot, {
+          clapSynthPath: '',
+          clapEffectPath: '',
+          vst3SynthPath: '',
+          vst3EffectPath: '',
+          clapSynthName: '',
+          clapEffectName: '',
+          vst3SynthName: '',
+          vst3EffectName: '',
+        })
+        const captured = await runScore(
+          session,
+          { slug: '661-d0-named-device', fixturePath: KICK_LOOP_FIXTURE },
+          async (ctx) => ctx.captureSegment('named-output', 1800, 500),
+          { capture: true },
+        )
+        expect(captured, '#661 D-0 must return capture analysis').toBeDefined()
+        expect(
+          captured!.rms('named-output'),
+          '#661 D-0 named output device ' + requestedName + ' must be audible',
+        ).toBeGreaterThan(0)
+      } finally {
+        try {
+          await client.call('stop_engine')
+        } catch {
+          // best-effort cleanup
+        }
+        if (!child.killed) child.kill()
+        fs.rmSync(tmpRoot, { recursive: true, force: true })
+      }
+    },
+    TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
     '#661 D-2/D-3 keeps audio live across requested-device liveness failures',
     async () => {
       // This is a dedicated app process because startup fault injection is immutable typed state;
@@ -5210,15 +5275,36 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           '#661 D-2 fallback output must be audible',
         ).toBeGreaterThan(0)
 
-        // D-3: while the score is sounding, a dead live-switch candidate fails and the old
-        // stream resumes. Exactly that expected failure is logged; no asynchronous ERROR follows it.
+        // D-3 precondition: this run fixes the formerly missing capture option and proves the
+        // selected/fallback output is audible before exercising the live-switch path.
+        const beforeSwitchCapture = await runScore(
+          faultSession,
+          { slug: '661-d3-before-switch', fixturePath: KICK_LOOP_FIXTURE },
+          async (ctx) => ctx.captureSegment('sounding-before-switch', 800, 300),
+          { capture: true },
+        )
+        expect(beforeSwitchCapture, '#661 D-3 must return capture analysis').toBeDefined()
+        expect(
+          beforeSwitchCapture!.rms('sounding-before-switch'),
+          '#661 D-3 pre-switch output must be audible',
+        ).toBeGreaterThan(0)
+
+        // Runtime switching while ORBIT_CAPTURE_WAV is active is intentionally unsupported, so
+        // the switch itself runs in a fresh non-capture session. C-5 observes the real callback
+        // counter continuously; here the user-visible oracle is the absence of stalled events.
         await runScore(
           faultSession,
           { slug: '661-d3-switch-failure', fixturePath: KICK_LOOP_FIXTURE },
-          async (ctx) => {
-            await ctx.captureSegment('sounding-before-switch', 500, 300)
-            const rejectedDevice = `NoSuchDevice-${randomUUID()}`
-            const errorsBeforeExpectedFailure = await errorBaseline(faultClient!)
+          async () => {
+            await sleep(500)
+            const rejectedDevice = 'NoSuchDevice-' + randomUUID()
+            const beforeFailureLog = (await faultClient!.call('get_log', { lines: 500 })).text
+            const errorsBeforeExpectedFailure = countErrors(beforeFailureLog)
+            const stallsBeforeFailure = countLogMarker(beforeFailureLog, 'STREAM_CALLBACK_STALLED')
+            const expectedFailureMarker =
+              'audio output device switch to "' + rejectedDevice + '" failed'
+            const switchFailuresBefore = countLogMarker(beforeFailureLog, expectedFailureMarker)
+
             const failed = await faultClient!.call('select_audio_device', {
               device: rejectedDevice,
             })
@@ -5231,18 +5317,30 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
               },
               { intervalMs: 250, timeoutMs: 10_000, label: '#661 D-3 switch failure log' },
             )
-            const afterFailureLog = (await faultClient!.call('get_log', { lines: 500 })).text
-            expect(afterFailureLog).toContain(
-              `audio output device switch to "${rejectedDevice}" failed`,
-            )
-            expect(afterFailureLog).toContain('produced no callback')
-            const errorsAfterExpectedFailure = await errorBaseline(faultClient!)
             await sleep(1000)
-            await expectNoNewErrors(
-              faultClient!,
-              errorsAfterExpectedFailure,
-              '#661 D-3 after expected switch failure',
-            )
+            const settledLog = (await faultClient!.call('get_log', { lines: 500 })).text
+            expect(settledLog).toContain(expectedFailureMarker)
+            expect(settledLog).toContain('produced no callback')
+            expect(
+              countErrors(settledLog),
+              '#661 D-3 must add exactly one ERROR and no delayed fatal',
+            ).toBeLessThanOrEqual(errorsBeforeExpectedFailure + 1)
+            expect(
+              countLogMarker(settledLog, expectedFailureMarker) - switchFailuresBefore,
+              '#661 D-3 must log the expected switch failure once',
+            ).toBe(1)
+            expect(
+              countLogMarker(settledLog, 'STREAM_CALLBACK_STALLED'),
+              '#661 D-3 probe must not stall the old stream',
+            ).toBeLessThanOrEqual(stallsBeforeFailure)
+
+            const stateResult = await faultClient!.call('get_engine_state')
+            const state = JSON.parse(stateResult.text) as {
+              output?: { last_switch_failure?: string | null }
+              callback?: { alive?: boolean }
+            }
+            expect(state.output?.last_switch_failure).toContain('produced no callback')
+            expect(state.callback?.alive).toBe(true)
           },
         )
       } finally {

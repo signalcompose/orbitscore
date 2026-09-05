@@ -55,7 +55,7 @@ The VS Code extension side "decides what code to send," and the engine side "rec
 First, let's confirm how the engine boots. `startEngine()` spawns a Node process with `'repl'` as an argument.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2112-2164 (env の組み立てを省略)
+// packages/vscode-extension/src/extension.ts:2124-2176 (env の組み立てを省略)
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -115,7 +115,7 @@ The function triggered by Cmd+Enter is `runSelection()`. Let's first look at the
 If the selected text is non-empty, its content is used as-is.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2735-2738
+// packages/vscode-extension/src/extension.ts:2748-2751
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -129,7 +129,7 @@ When there is no selection, the "subject" of the cursor line is identified, and 
 The function that determines the subject is `getLineSubject()`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2702-2715
+// packages/vscode-extension/src/extension.ts:2715-2728
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -157,7 +157,7 @@ When the subject is `null` — that is, a stand-alone command like `RUN(kick, sn
 After the code to send is determined, `writeCodeToEngine()` tells the engine the document's directory path in two ways. It is used to resolve relative paths in `audioPath()` / `audio()` and as the base directory for `import` (IM.6).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3001-3033
+// packages/vscode-extension/src/extension.ts:3032-3064
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -209,7 +209,7 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 `runSelection()` looks at the return value of `writeCodeToEngine()` and gives visual feedback only when the code was actually sent.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2874-2881
+// packages/vscode-extension/src/extension.ts:2887-2894
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
@@ -229,7 +229,7 @@ The MCP `evaluate_orbitscore` also calls the same `writeCodeToEngine()`, but pas
 The code written to stdin is received by `startREPL()` on the engine side. In the 2026-05 edition all the logic lived inside `rl.on('line', async ...)`; in this edition it is extracted into `createReplSession()`.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:521-541
+// packages/engine/src/cli/repl-mode.ts:573-593
 export async function startREPL(interpreter: InterpreterV2): Promise<void> {
   // 🔴 #607: この関数も返らない。play/run/eval から REPL に入る経路でも publish する。
   setActiveInterpreter(interpreter)
@@ -260,7 +260,7 @@ export async function startREPL(interpreter: InterpreterV2): Promise<void> {
 The design rationale of `createReplSession()` is condensed in its comment.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:292-301
+// packages/engine/src/cli/repl-mode.ts:335-344
 /**
  * REPL の行処理セッション（#476 で分離・単体テスト可能に）。
  *
@@ -278,7 +278,7 @@ The extension sends a multi-line block in a single `stdin.write`. readline split
 The session state is closed over in a closure.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:302-311
+// packages/engine/src/cli/repl-mode.ts:345-354
 export function createReplSession(interpreter: InterpreterV2): {
   pushLine: (line: string) => void
   idle: () => Promise<void>
@@ -294,7 +294,7 @@ export function createReplSession(interpreter: InterpreterV2): {
 `pushLine()` only links the line onto the promise chain.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:499-518
+// packages/engine/src/cli/repl-mode.ts:551-570
   return {
     pushLine(line: string): void {
       // handleLine は内部で全エラーを捕捉するが、防御としてチェーン自体も reject を握る
@@ -324,7 +324,7 @@ export function createReplSession(interpreter: InterpreterV2): {
 `handleLine()` first sorts out meta lines, then queues the rest into the DSL buffer. The tail of the DSL part is as follows.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:459-472
+// packages/engine/src/cli/repl-mode.ts:511-524
     if (line.trim() === '') {
       emptyLineCount++
       buffer += '\n'
@@ -348,7 +348,7 @@ Two or more consecutive empty lines force-execute the buffer (`clearOnIncomplete
 The body of execution is `executeCurrentBuffer()`. The key point is that parse and execute are in separate `try` blocks, and the reason is preserved in the comments.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:335-386
+// packages/engine/src/cli/repl-mode.ts:378-429
   async function executeCurrentBuffer(clearOnIncomplete: boolean): Promise<void> {
     const code = buffer.trim()
     if (!code) {
@@ -447,7 +447,7 @@ The other meta lines (`//#selectAudioDevice` / `//#savePluginState` / `//#plugin
 `//#evalMark <json>` is a submission boundary meaning "that is all the input; return the result." Because the REPL processes lines in FIFO order, by the time this marker is reached the evaluation of the preceding code is complete.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:404-426
+// packages/engine/src/cli/repl-mode.ts:447-469
     if (EVAL_MARK_META_RE.test(line)) {
       // 🔴 マーカーは「投入は以上、結果を返せ」という**提出の境界**である。
       // 未完のままバッファに残った入力を放置すると「何も実行していないのに ok」を返して

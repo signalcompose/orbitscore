@@ -66,7 +66,7 @@ MCP is not a "test back door"; it is **a device that lets a machine walk the sam
 The fact that the tool implementations never touch VS Code directly, and are called through an `OrbitScoreToolHandlers` interface instead, is an extension of the same idea.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:233-286
+// packages/vscode-extension/src/mcp-server.ts:236-289
 /**
  * VSCode-agnostic handler seam. Keeping the tool implementations behind this
  * interface (rather than reaching into the extension directly) means the same
@@ -79,7 +79,7 @@ export interface OrbitScoreToolHandlers {
     debug?: boolean
   }): Promise<CommandResult> | CommandResult
   stopEngine(): Promise<CommandResult> | CommandResult
-  getEngineState(): EngineState
+  getEngineState(): Promise<EngineState> | EngineState
   forceKillScsynth(): Promise<CommandResult> | CommandResult
   listAudioDevices(): Promise<AudioDevicesResult> | AudioDevicesResult
   selectAudioDevice(device: string): Promise<CommandResult> | CommandResult
@@ -98,7 +98,28 @@ export interface OrbitScoreToolHandlers {
     windowMs?: number,
     perChannel?: boolean,
   ): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
-  // ...
+  /** list_plugins (#463 PC.4): return the plugin catalog as-is. */
+  listPlugins(): Promise<ListPluginsResult> | ListPluginsResult
+  /** rescan_plugins (#463 PC.4/C1b): run the scanner and return its summary. */
+  rescanPlugins(): Promise<RescanPluginsResult> | RescanPluginsResult
+  /** 明示plugin state保存。互換フィールド `sequence` で UIH.5 の `(receiver,index)` を受ける。 */
+  savePluginState?(
+    sequence: string,
+    index: number,
+  ): Promise<SavePluginStateResult> | SavePluginStateResult
+  openPluginUi?(
+    receiver: string,
+    index: number,
+    expectedName?: string,
+  ): Promise<PluginUiResult> | PluginUiResult
+  closePluginUi?(receiver: string, index: number): Promise<PluginUiResult> | PluginUiResult
+  /**
+   * Optional (unlike the members above): only hosts that can register
+   * themselves into Claude Code expose the register_mcp_server tool — the
+   * tool is skipped when this handler is absent, so existing stub suites and
+   * alternative hosts (WCTM pi harness) stay valid without changes.
+   */
+  registerMcpServer?(args: RegisterMcpServerInput): Promise<CommandResult> | CommandResult
 }
 ```
 
@@ -111,7 +132,7 @@ export interface OrbitScoreToolHandlers {
 The server does not start by default. Near the end of `activate()`, the port is decided in the order environment variable → setting.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:445-456
+// packages/vscode-extension/src/extension.ts:447-458
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -131,7 +152,7 @@ The default of `orbitscore.mcpServer.port` is `0` (= disabled) (`packages/vscode
 The HTTP layer listens on `127.0.0.1:<port>/mcp` using Node's standard `http` module. The MCP Streamable HTTP transport is **stateful**, and a session is created per `initialize`.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1185-1190
+// packages/vscode-extension/src/mcp-server.ts:1192-1197
  * Sessions are created **per initialize request** and routed by the
  * `mcp-session-id` header. A single shared transport would permanently consume
  * its one session slot on the first client — any later client (or a Claude Code
@@ -145,7 +166,7 @@ A `McpServer` instance is created per session, but the handlers are shared. Whic
 There is also a judgement that a loopback bind alone is not enough.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1204-1211
+// packages/vscode-extension/src/mcp-server.ts:1211-1218
   // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
   // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
   // same-origin — reaching this port from a browser with full response access.
@@ -209,7 +230,7 @@ What is interesting is that most of this catalogue mirrors "operations a human c
 This is the part of the chapter to read most carefully. The tool description makes this promise:
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:542-559
+// packages/vscode-extension/src/mcp-server.ts:545-562
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -233,7 +254,7 @@ This is the part of the chapter to read most carefully. The tool description mak
 Meanwhile CLAUDE.md repeats that "asserting on the `ok` of `evaluate_orbitscore` proves nothing" and "engine-side errors appear only in `get_log`". Which one is right? **Both, each at its own point in time.** The meaning of `ok` changed with `#614`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3041-3078
+// packages/vscode-extension/src/extension.ts:3072-3109
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -292,7 +313,7 @@ Before `#614`, `ok` meant only "written to stdin". The engine's REPL processes l
 The engine answers with a JSON line `{"evalMark": {...}}` on stdout, and `setupStdoutHandler` hands it to `evalMarkBridge.handleLine()`. The comment stresses that this branch **must be independent**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1502-1510
+// packages/vscode-extension/src/extension.ts:1505-1513
         } else if (trimmedLine.startsWith('{"evalMark"')) {
           // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
           // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -301,7 +322,7 @@ The engine answers with a JSON line `{"evalMark": {...}}` on stdout, and `setupS
           if (!parsed && isCurrent) {
             outputChannel?.appendLine(`⚠️ received a malformed //#evalMark result line: ${rawLine}`)
           }
-        }
+        } else if (trimmedLine.startsWith('{"engineState"')) {
 ```
 
 "Every unit test was green; only the real-device E2E caught it" — a miniature of this chapter's whole theme.
@@ -317,7 +338,7 @@ The comment in `log-ring.ts` still carried its pre-`#614` wording ("`get_log` is
 The extension has no central log sink. So `activate()` monkey-patches the output channel's `appendLine` / `append` to push the same lines into a ring buffer.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:138-148
+// packages/vscode-extension/src/extension.ts:140-150
 // Ring buffer of output-channel lines for the MCP get_log tool (#388). There is
 // no other central log sink to tap, so activate() monkey-patches
 // outputChannel.appendLine/append to also push here.
@@ -332,7 +353,7 @@ function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:301-312
+// packages/vscode-extension/src/extension.ts:303-314
   const rawAppendLine = outputChannel.appendLine.bind(outputChannel)
   outputChannel.appendLine = (value: string) => {
     pushLogRing(value)
@@ -932,7 +953,7 @@ export function parseStepLine(line: string): StepEvent | null {
 The audio-side source is a single place in `rust-engine-player.ts`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1603-1609
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1611-1617
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
       console.log(
@@ -1005,7 +1026,7 @@ State mutations are guarded by `isCurrent` (whether the process that produced th
 The real `handleStep` is in `extension.ts`, and it **waits until the grid time** before moving the highlight.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:235-246
+// packages/vscode-extension/src/extension.ts:237-248
 function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -1023,7 +1044,7 @@ function handleStepLine(step: StepEvent): void {
 Dispatch runs a lookahead early, so lighting the highlight the moment the line arrives would move it ahead of the sound. Lines more than one second late (replayed buffered output, for example) are dropped.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:248-267
+// packages/vscode-extension/src/extension.ts:250-269
 function showPlayheadStep(step: StepEvent): void {
   for (const editor of vscode.window.visibleTextEditors) {
     // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
@@ -1051,7 +1072,7 @@ function showPlayheadStep(step: StepEvent): void {
 ### `[STEP]` is invisible in normal mode
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1154-1178
+// packages/vscode-extension/src/extension.ts:1156-1180
 function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
@@ -1073,10 +1094,10 @@ function shouldFilterLine(line: string): boolean {
   if (
     trimmed.startsWith('{"savePluginState"') ||
     trimmed.startsWith('{"pluginUi"') ||
-    trimmed.startsWith('{"evalMark"')
+    trimmed.startsWith('{"evalMark"') ||
+    trimmed.startsWith('{"engineState"')
   ) {
     return true
-  }
 ```
 
 The playhead reads from the raw stream, and `[STEP]` never reaches the output channel (= `get_log`). This means **the only way to observe the playhead from MCP is debug mode**. In debug mode `transcribeLog` appends `output` as-is, so `[STEP]` lines appear in `get_log`. The `#654` E2E takes exactly that shape.

@@ -66,7 +66,7 @@ MCP は「テスト用の裏口」ではなく、**ユーザーと同じ動線�
 ツール実装が VS Code に直接触らず `OrbitScoreToolHandlers` というインターフェイス越しに呼ばれているのも、同じ思想の延長です。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:233-286
+// packages/vscode-extension/src/mcp-server.ts:236-289
 /**
  * VSCode-agnostic handler seam. Keeping the tool implementations behind this
  * interface (rather than reaching into the extension directly) means the same
@@ -79,7 +79,7 @@ export interface OrbitScoreToolHandlers {
     debug?: boolean
   }): Promise<CommandResult> | CommandResult
   stopEngine(): Promise<CommandResult> | CommandResult
-  getEngineState(): EngineState
+  getEngineState(): Promise<EngineState> | EngineState
   forceKillScsynth(): Promise<CommandResult> | CommandResult
   listAudioDevices(): Promise<AudioDevicesResult> | AudioDevicesResult
   selectAudioDevice(device: string): Promise<CommandResult> | CommandResult
@@ -98,7 +98,28 @@ export interface OrbitScoreToolHandlers {
     windowMs?: number,
     perChannel?: boolean,
   ): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
-  // ...
+  /** list_plugins (#463 PC.4): return the plugin catalog as-is. */
+  listPlugins(): Promise<ListPluginsResult> | ListPluginsResult
+  /** rescan_plugins (#463 PC.4/C1b): run the scanner and return its summary. */
+  rescanPlugins(): Promise<RescanPluginsResult> | RescanPluginsResult
+  /** 明示plugin state保存。互換フィールド `sequence` で UIH.5 の `(receiver,index)` を受ける。 */
+  savePluginState?(
+    sequence: string,
+    index: number,
+  ): Promise<SavePluginStateResult> | SavePluginStateResult
+  openPluginUi?(
+    receiver: string,
+    index: number,
+    expectedName?: string,
+  ): Promise<PluginUiResult> | PluginUiResult
+  closePluginUi?(receiver: string, index: number): Promise<PluginUiResult> | PluginUiResult
+  /**
+   * Optional (unlike the members above): only hosts that can register
+   * themselves into Claude Code expose the register_mcp_server tool — the
+   * tool is skipped when this handler is absent, so existing stub suites and
+   * alternative hosts (WCTM pi harness) stay valid without changes.
+   */
+  registerMcpServer?(args: RegisterMcpServerInput): Promise<CommandResult> | CommandResult
 }
 ```
 
@@ -111,7 +132,7 @@ export interface OrbitScoreToolHandlers {
 サーバは既定では立ちません。`activate()` の末尾近くで、環境変数 → 設定の順にポートを決めます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:445-456
+// packages/vscode-extension/src/extension.ts:447-458
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -131,7 +152,7 @@ export interface OrbitScoreToolHandlers {
 HTTP 層は Node 標準の `http` モジュールで `127.0.0.1:<port>/mcp` を listen します。MCP の Streamable HTTP トランスポートは **stateful** で、`initialize` ごとにセッションを作ります。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1185-1190
+// packages/vscode-extension/src/mcp-server.ts:1192-1197
  * Sessions are created **per initialize request** and routed by the
  * `mcp-session-id` header. A single shared transport would permanently consume
  * its one session slot on the first client — any later client (or a Claude Code
@@ -145,7 +166,7 @@ HTTP 層は Node 標準の `http` モジュールで `127.0.0.1:<port>/mcp` を 
 ローカル bind だけでは足りない、という判断も入っています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1204-1211
+// packages/vscode-extension/src/mcp-server.ts:1211-1218
   // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
   // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
   // same-origin — reaching this port from a browser with full response access.
@@ -209,7 +230,7 @@ export function buildMcpServerUrl(port: number): string {
 ここが本章で最も気をつけて読むべき箇所です。ツール説明はこう約束しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:542-559
+// packages/vscode-extension/src/mcp-server.ts:545-562
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -233,7 +254,7 @@ export function buildMcpServerUrl(port: number): string {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3041-3078
+// packages/vscode-extension/src/extension.ts:3072-3109
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -292,7 +313,7 @@ async function evaluateForAgent(code: string): Promise<EvaluateResult> {
 engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setupStdoutHandler` がそれを `evalMarkBridge.handleLine()` へ渡します。この分岐は **独立していなければならない**、と強調されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1502-1510
+// packages/vscode-extension/src/extension.ts:1505-1513
         } else if (trimmedLine.startsWith('{"evalMark"')) {
           // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
           // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -301,7 +322,7 @@ engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setup
           if (!parsed && isCurrent) {
             outputChannel?.appendLine(`⚠️ received a malformed //#evalMark result line: ${rawLine}`)
           }
-        }
+        } else if (trimmedLine.startsWith('{"engineState"')) {
 ```
 
 「ユニットテストは全て緑・実機 E2E だけが捕まえた」— これは本章全体のテーマの縮図です。
@@ -317,7 +338,7 @@ engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setup
 拡張には中央のログ sink がありません。そこで `activate()` が出力チャネルの `appendLine` / `append` を monkey-patch して、同じ行をリングバッファにも積んでいます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:138-148
+// packages/vscode-extension/src/extension.ts:140-150
 // Ring buffer of output-channel lines for the MCP get_log tool (#388). There is
 // no other central log sink to tap, so activate() monkey-patches
 // outputChannel.appendLine/append to also push here.
@@ -332,7 +353,7 @@ function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:301-312
+// packages/vscode-extension/src/extension.ts:303-314
   const rawAppendLine = outputChannel.appendLine.bind(outputChannel)
   outputChannel.appendLine = (value: string) => {
     pushLogRing(value)
@@ -932,7 +953,7 @@ export function parseStepLine(line: string): StepEvent | null {
 audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1603-1609
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1611-1617
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
       console.log(
@@ -1005,7 +1026,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 `handleStep` の実体は `extension.ts` にあり、**グリッド時刻まで待ってから**ハイライトを動かします。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:235-246
+// packages/vscode-extension/src/extension.ts:237-248
 function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -1023,7 +1044,7 @@ function handleStepLine(step: StepEvent): void {
 dispatch は lookahead 分だけ早く走るので、行が届いた瞬間に光らせると音より先に動いてしまいます。1 秒以上遅れた行（バッファされた出力の再生など）は捨てます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:248-267
+// packages/vscode-extension/src/extension.ts:250-269
 function showPlayheadStep(step: StepEvent): void {
   for (const editor of vscode.window.visibleTextEditors) {
     // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
@@ -1051,7 +1072,7 @@ function showPlayheadStep(step: StepEvent): void {
 ### `[STEP]` は通常モードでは見えない
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1154-1178
+// packages/vscode-extension/src/extension.ts:1156-1180
 function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
@@ -1073,10 +1094,10 @@ function shouldFilterLine(line: string): boolean {
   if (
     trimmed.startsWith('{"savePluginState"') ||
     trimmed.startsWith('{"pluginUi"') ||
-    trimmed.startsWith('{"evalMark"')
+    trimmed.startsWith('{"evalMark"') ||
+    trimmed.startsWith('{"engineState"')
   ) {
     return true
-  }
 ```
 
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。

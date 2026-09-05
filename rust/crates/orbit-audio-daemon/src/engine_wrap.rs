@@ -4292,6 +4292,14 @@ fn capture_path_from_env() -> Option<PathBuf> {
         }
     }
 }
+fn probe_then_pause_old<T>(
+    probe: impl FnOnce() -> Result<T, OutputError>,
+    pause_old: impl FnOnce() -> Result<(), OutputError>,
+) -> Result<T, OutputError> {
+    let live = probe()?;
+    pause_old()?;
+    Ok(live)
+}
 
 impl EngineWrap {
     /// Engine とストリーム guard を起動する（本番用、cpal 既定出力）。
@@ -5124,6 +5132,16 @@ impl EngineWrap {
         }
     }
 
+    fn reject_device_switch(
+        &self,
+        requested_device: Option<&str>,
+        error: WrapError,
+    ) -> Result<String, WrapError> {
+        let result: Result<(String, StreamConfigSnapshot), WrapError> = Err(error);
+        self.record_device_switch_result(requested_device, &result, None, None);
+        result.map(|(selected_name, _)| selected_name)
+    }
+
     #[cfg(test)]
     pub(crate) fn record_device_switch_failure_for_test(
         &self,
@@ -5154,39 +5172,61 @@ impl EngineWrap {
     /// - **ブロッキング呼び出し**: 呼び出し側は `spawn_blocking`（session.rs の他の cpal I/O ハンドラと
     ///   同じ隔離）から呼ぶこと。RT callback 内からは絶対に呼ばない。
     pub fn select_audio_device(&self, device: Option<String>) -> Result<String, WrapError> {
+        let requested = device.clone();
         if capture_path_from_env().is_some() {
-            return Err(WrapError::AudioDeviceSwitchUnavailable(
-                "ORBIT_CAPTURE_WAV is active; runtime device switch is unsupported while \
-                 capture is recording (restart the daemon to change device with capture on)"
-                    .into(),
-            ));
-        }
-        let tx = self
-            .device_switch_tx
-            .lock()
-            .map_err(|_| {
-                WrapError::AudioDeviceSwitchUnavailable("device switch channel poisoned".into())
-            })?
-            .clone()
-            .ok_or_else(|| {
+            return self.reject_device_switch(
+                requested.as_deref(),
                 WrapError::AudioDeviceSwitchUnavailable(
-                    "no audio owner thread registered (test backend or daemon shutting down)"
+                    "ORBIT_CAPTURE_WAV is active; runtime device switch is unsupported while \
+                     capture is recording (restart the daemon to change device with capture on)"
                         .into(),
-                )
-            })?;
+                ),
+            );
+        }
+        let tx = match self.device_switch_tx.lock() {
+            Ok(slot) => match slot.clone() {
+                Some(tx) => tx,
+                None => {
+                    return self.reject_device_switch(
+                        requested.as_deref(),
+                        WrapError::AudioDeviceSwitchUnavailable(
+                            "no audio owner thread registered (test backend or daemon shutting down)"
+                                .into(),
+                        ),
+                    );
+                }
+            },
+            Err(_) => {
+                return self.reject_device_switch(
+                    requested.as_deref(),
+                    WrapError::AudioDeviceSwitchUnavailable(
+                        "device switch channel poisoned".into(),
+                    ),
+                );
+            }
+        };
         let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-        tx.send(DeviceSwitchRequest {
-            device,
-            reply: reply_tx,
-        })
-        .map_err(|_| {
-            WrapError::AudioDeviceSwitchUnavailable("audio owner thread has exited".into())
-        })?;
-        reply_rx.recv().map_err(|_| {
-            WrapError::AudioDeviceSwitchUnavailable(
-                "audio owner thread dropped the reply channel".into(),
-            )
-        })?
+        if tx
+            .send(DeviceSwitchRequest {
+                device,
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return self.reject_device_switch(
+                requested.as_deref(),
+                WrapError::AudioDeviceSwitchUnavailable("audio owner thread has exited".into()),
+            );
+        }
+        match reply_rx.recv() {
+            Ok(result) => result,
+            Err(_) => self.reject_device_switch(
+                requested.as_deref(),
+                WrapError::AudioDeviceSwitchUnavailable(
+                    "audio owner thread dropped the reply channel".into(),
+                ),
+            ),
+        }
     }
 
     /// device switch（#484 D2）: 実際の cpal I/O。**audio owner thread 上でのみ呼ぶこと**
@@ -5205,32 +5245,49 @@ impl EngineWrap {
         let current = self.stream_config_snapshot();
 
         let switch_result = (|| {
-            // Order is load-bearing: stop the old callback before probing/building a replacement.
-            // Named cpal streams can survive Drop, so assignment alone cannot prevent double render.
-            guard.stream.pause()?;
+            // Probe is a standalone zero-fill stream with a private callback counter, so the old
+            // render stream stays live for the full (up to 3 s) preflight. Only a probe success is
+            // allowed to pause the old stream before build -> play -> callback confirmation.
+            let live = probe_then_pause_old(
+                || {
+                    orbit_audio_native::select_live_output_device(
+                        OutputDeviceRequest {
+                            name: device.clone(),
+                            fault: current.output_fault,
+                        },
+                        buffer_frames,
+                        Some(current.sample_rate),
+                        false,
+                    )
+                },
+                || guard.stream.pause(),
+            )?;
             let rebuilt = orbit_audio_native::rebuild_output_stream(
+                live,
                 render_state,
                 self.engine.clone(),
                 self.stream_stats.clone(),
                 cb_stats.clone(),
-                buffer_frames,
-                current.sample_rate,
-                OutputDeviceRequest {
-                    name: device.clone(),
-                    fault: current.output_fault,
-                },
             );
             let new_stream = match rebuilt {
                 Ok(stream) => stream,
-                Err(error) => {
-                    // The replacement was rejected or failed its callback postcondition. Its
-                    // OutputStream Drop pauses it; resume the untouched old stream before returning.
-                    guard.stream.play()?;
+                Err(primary) => {
+                    // A failed replacement is paused before its OutputStream is dropped. Resume
+                    // the untouched old stream, retaining both causes if that recovery also fails.
+                    let error = match guard.stream.play() {
+                        Ok(()) => primary,
+                        Err(resume) => OutputError::SwitchRecoveryFailed {
+                            primary: Box::new(primary),
+                            resume: Box::new(resume),
+                        },
+                    };
                     return Err(WrapError::Output(error));
                 }
             };
             let stream_config = StreamConfigSnapshot::from_output_stream(&new_stream);
             let selected_name = stream_config.device_name.clone();
+            // Assignment drops the already-paused old OutputStream; its Drop pauses once more as
+            // the final invariant that no discarded cpal stream remains live.
             guard.stream = new_stream;
             Ok((selected_name, stream_config))
         })();
@@ -10411,9 +10468,10 @@ mod startup_options_tests {
 /// 領域（unit test では検証不能）。
 #[cfg(test)]
 mod select_audio_device_tests {
-    use super::{EngineWrap, OutputFault, StreamConfigSnapshot, WrapError};
+    use super::{probe_then_pause_old, EngineWrap, OutputFault, StreamConfigSnapshot, WrapError};
     use crate::backend::StubBackend;
     use orbit_audio_native::OutputError;
+    use std::cell::RefCell;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
 
@@ -10441,12 +10499,44 @@ mod select_audio_device_tests {
         }
     }
 
+    #[test]
+    fn probe_completes_before_pause_and_probe_failure_never_pauses() {
+        let calls = RefCell::new(Vec::new());
+        let selected = probe_then_pause_old(
+            || {
+                calls.borrow_mut().push("probe");
+                Ok("live")
+            },
+            || {
+                calls.borrow_mut().push("pause");
+                Ok(())
+            },
+        )
+        .expect("successful probe should proceed to pause");
+        assert_eq!(selected, "live");
+        assert_eq!(*calls.borrow(), ["probe", "pause"]);
+
+        calls.borrow_mut().clear();
+        let failed = probe_then_pause_old::<()>(
+            || {
+                calls.borrow_mut().push("probe");
+                Err(OutputError::NoDevice)
+            },
+            || {
+                calls.borrow_mut().push("pause");
+                Ok(())
+            },
+        );
+        assert!(matches!(failed, Err(OutputError::NoDevice)));
+        assert_eq!(*calls.borrow(), ["probe"]);
+    }
+
     /// capture-active（`ORBIT_CAPTURE_WAV`）拒否と、audio owner thread 未登録（`start_with` /
     /// test backend 経路）拒否の両方を **1 テスト関数内**で順に検証する。`ORBIT_CAPTURE_WAV` は
     /// プロセス全体で共有される可変状態なので、別テスト関数に分けて cargo test のデフォルト並列
     /// 実行に晒すと set/remove がレースする（`named_bus_pool_tests` の既存 env 慣習と同じ落とし穴）。
     #[test]
-    fn select_audio_device_rejects_capture_active_then_missing_owner_thread() {
+    fn select_audio_device_records_capture_owner_and_send_rejections() {
         // SAFETY: テスト専用の単一テスト関数内 env 操作（このテストの実行区間でのみ意味を持つ値）。
         unsafe {
             std::env::set_var("ORBIT_CAPTURE_WAV", "/tmp/does-not-matter.wav");
@@ -10460,10 +10550,13 @@ mod select_audio_device_tests {
             format!("{capture_error}").contains("ORBIT_CAPTURE_WAV is active"),
             "{capture_error}"
         );
+        assert!(wrap
+            .stream_config_snapshot()
+            .last_switch_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("ORBIT_CAPTURE_WAV is active")));
 
-        // capture を無効化すると、`start_with`（test backend）が `install_device_switch_channel`
-        // を一度も呼んでいないため「audio owner thread 未登録」として明示的に reject する
-        // （無音で成功したふりをしない）。
+        // capture を無効化すると test backend は owner thread 未登録として明示的に reject する。
         unsafe {
             std::env::remove_var("ORBIT_CAPTURE_WAV");
         }
@@ -10474,6 +10567,27 @@ mod select_audio_device_tests {
             format!("{no_owner_error}").contains("no audio owner thread"),
             "{no_owner_error}"
         );
+        assert!(wrap
+            .stream_config_snapshot()
+            .last_switch_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("no audio owner thread")));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(rx);
+        wrap.install_device_switch_channel(tx);
+        let send_error = wrap
+            .select_audio_device(Some("Disconnected Device".into()))
+            .expect_err("closed owner channel must reject the switch");
+        assert!(
+            format!("{send_error}").contains("audio owner thread has exited"),
+            "{send_error}"
+        );
+        assert!(wrap
+            .stream_config_snapshot()
+            .last_switch_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("audio owner thread has exited")));
     }
 
     #[test]
@@ -10538,6 +10652,7 @@ mod select_audio_device_tests {
         let failed = Err(WrapError::Output(OutputError::StreamDead {
             device: "Rejected Output".to_string(),
             waited_ms: 3_000,
+            phase: orbit_audio_native::StreamLivenessPhase::Probe,
         }));
         let log = Arc::new(Mutex::new(Vec::new()));
         let subscriber = tracing_subscriber::fmt()

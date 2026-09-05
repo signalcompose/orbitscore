@@ -103,7 +103,7 @@ graph TD
 `startEngine()` is responsible for starting the engine. The first thing it does is decide "which backend to use," normalizing the `orbitscore.engine` setting with the engine-side `resolveEngineKind` (loaded from compiled JS via a runtime require).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2054-2057
+// packages/vscode-extension/src/extension.ts:2066-2069
   // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
   // 'rust' (default since cutover #369), skip the scsynth pre-check entirely —
   // the native daemon doesn't need scsynth to be resolvable.
@@ -113,7 +113,7 @@ graph TD
 A point to note here is that **backend binary resolution always precedes spawning the engine**. Under the default `rust` kind it pre-checks the daemon binary.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2079-2088
+// packages/vscode-extension/src/extension.ts:2091-2100
     const daemonResolution = resolveDaemonForUI()
     if (!daemonResolution) {
       outputChannel?.appendLine(
@@ -146,7 +146,7 @@ What is interesting is that the resolved path is not handed to the engine via en
 The backend kind is **always set explicitly** on the engine through the `ORBITSCORE_ENGINE` env var.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2143-2156
+// packages/vscode-extension/src/extension.ts:2155-2168
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
@@ -166,7 +166,7 @@ The backend kind is **always set explicitly** on the engine through the `ORBITSC
 The engine process itself is then started with `child_process.spawn` running Node.js.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2158-2164
+// packages/vscode-extension/src/extension.ts:2170-2176
   // Spawn engine process
   try {
     engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -179,7 +179,7 @@ The engine process itself is then started with `child_process.spawn` running Nod
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3031-3032
+// packages/vscode-extension/src/extension.ts:3062-3063
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -207,7 +207,7 @@ Since #388 on 2026-07-07 (WORK_LOG 6.188-6.192), the extension hosts an MCP (Mod
 The start condition lives in `activate()`. The env var takes precedence over the setting so that an Extension Development Host launched from the CLI can have its port set without touching a settings file.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:451-456
+// packages/vscode-extension/src/extension.ts:453-458
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0
@@ -219,7 +219,7 @@ The start condition lives in `activate()`. The env var takes precedence over the
 The server binds only to loopback.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1358-1362
+// packages/vscode-extension/src/mcp-server.ts:1365-1369
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject)
     httpServer.listen(port, '127.0.0.1', () => resolve())
@@ -315,7 +315,7 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 `resolveEngineKind()` returns only two values, and everything other than `sc` / `supercollider` falls to `rust`.
 
 ```typescript
-// packages/engine/src/audio/engine-backend.ts:65-68
+// packages/engine/src/audio/engine-backend.ts:67-70
 export function resolveEngineKind(raw: string | undefined): EngineKind {
   const v = raw?.trim().toLowerCase()
   return v === 'sc' || v === 'supercollider' ? 'supercollider' : 'rust'
@@ -374,7 +374,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 `RustEnginePlayer` is the boundary on the engine side. Its `boot()` calls `DaemonClient.start()` and then establishes the transport clock anchor.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:548-555
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:578-585
   async boot(outputDevice?: string): Promise<void> {
     await this.daemon.start({
       daemonPath: this.daemonPath,

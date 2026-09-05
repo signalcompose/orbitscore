@@ -347,6 +347,36 @@ const RESPAWN_BACKOFF_MS = 150
  */
 const freshWarned = (): Set<string> => new Set()
 
+export function audioOutputReportLines(status: Record<string, unknown>): {
+  error?: string
+  info?: string
+} {
+  const output = status.output as
+    | {
+        device_name?: unknown
+        sample_rate?: unknown
+        channels?: unknown
+        device_requested?: unknown
+        device_fell_back?: unknown
+        fallback_reason?: unknown
+        first_callback_ms?: unknown
+      }
+    | undefined
+  if (!output || typeof output.device_name !== 'string') return {}
+  const error =
+    output.device_fell_back === true &&
+    typeof output.device_requested === 'string' &&
+    typeof output.fallback_reason === 'string'
+      ? `❌ audio device fallback: requested "${output.device_requested}" → using "${output.device_name}": ${output.fallback_reason}`
+      : undefined
+  return {
+    ...(error === undefined ? {} : { error }),
+    info:
+      `🔊 output: "${output.device_name}" @ ${Number(output.sample_rate)} Hz × ${Number(output.channels)}ch ` +
+      `(first callback ${Number(output.first_callback_ms)} ms)`,
+  }
+}
+
 export class RustEnginePlayer implements AudioEngineBackend {
   private readonly daemon: DaemonClient
   private readonly daemonPath?: string
@@ -902,31 +932,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   private reportAudioOutput(status: Record<string, unknown>): void {
-    const output = status.output as
-      | {
-          device_name?: unknown
-          sample_rate?: unknown
-          channels?: unknown
-          device_requested?: unknown
-          device_fell_back?: unknown
-          fallback_reason?: unknown
-          first_callback_ms?: unknown
-        }
-      | undefined
-    if (!output || typeof output.device_name !== 'string') return
-    if (
-      output.device_fell_back === true &&
-      typeof output.device_requested === 'string' &&
-      typeof output.fallback_reason === 'string'
-    ) {
-      console.error(
-        `❌ audio device fallback: requested "${output.device_requested}" → using "${output.device_name}": ${output.fallback_reason}`,
-      )
-    }
-    console.log(
-      `🔊 output: "${output.device_name}" @ ${Number(output.sample_rate)} Hz × ${Number(output.channels)}ch ` +
-        `(first callback ${Number(output.first_callback_ms)} ms)`,
-    )
+    const report = audioOutputReportLines(status)
+    if (report.error) console.error(report.error)
+    if (report.info) console.log(report.info)
   }
 
   /**

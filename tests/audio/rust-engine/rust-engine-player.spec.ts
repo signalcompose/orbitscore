@@ -19,6 +19,7 @@ import { resolveEngineKind } from '../../../packages/engine/src/audio/engine-bac
 import { DaemonClient } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
 import {
   fitAnchorSamples,
+  audioOutputReportLines,
   RustEnginePlayer,
 } from '../../../packages/engine/src/audio/rust-engine/rust-engine-player'
 import { SuperColliderPlayer } from '../../../packages/engine/src/audio/supercollider-player'
@@ -79,6 +80,44 @@ function defaultHandlers(overrides: MockDaemonHandlers = {}): MockDaemonHandlers
     ...overrides,
   }
 }
+
+describe('audioOutputReportLines', () => {
+  it('formats the effective output and first callback latency', () => {
+    expect(
+      audioOutputReportLines({
+        output: {
+          device_name: 'USB Audio',
+          sample_rate: 48_000,
+          channels: 2,
+          device_fell_back: false,
+          first_callback_ms: 12,
+        },
+      }),
+    ).toEqual({
+      info: '🔊 output: "USB Audio" @ 48000 Hz × 2ch (first callback 12 ms)',
+    })
+  })
+
+  it('formats fallback reason without dropping the effective output line', () => {
+    expect(
+      audioOutputReportLines({
+        output: {
+          device_name: 'Built-in Output',
+          sample_rate: 48_000,
+          channels: 2,
+          device_requested: 'Dead Device',
+          device_fell_back: true,
+          fallback_reason: 'produced no callback',
+          first_callback_ms: 9,
+        },
+      }),
+    ).toEqual({
+      error:
+        '❌ audio device fallback: requested "Dead Device" → using "Built-in Output": produced no callback',
+      info: '🔊 output: "Built-in Output" @ 48000 Hz × 2ch (first callback 9 ms)',
+    })
+  })
+})
 
 describe('RustEnginePlayer with mock daemon', () => {
   let server: MockDaemonServer

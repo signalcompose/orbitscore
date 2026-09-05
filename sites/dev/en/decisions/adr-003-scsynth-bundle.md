@@ -22,7 +22,7 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 ```
 
 ```typescript
-// packages/engine/src/audio/engine-backend.ts:52-53
+// packages/engine/src/audio/engine-backend.ts:54-55
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
 export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```
@@ -275,7 +275,7 @@ As covered in [III-3](/en/audio/scsynth-bundle) and [IV-1](/en/editor/vscode-arc
 | `rust` | (scsynth is not resolved) | hidden if the daemon resolves; otherwise `$(error) daemon: not found` |
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:743-767
+// packages/vscode-extension/src/extension.ts:745-769
   bundleStatusItem.show()
   const resolution = resolveScsynthForUI()
   if (!resolution) {
