@@ -5431,9 +5431,19 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             const beforeFailureLog = (await faultClient!.call('get_log', { lines: 500 })).text
             const errorsBeforeExpectedFailure = countErrors(beforeFailureLog)
             const stallsBeforeFailure = countLogMarker(beforeFailureLog, 'STREAM_CALLBACK_STALLED')
-            const expectedFailureMarker =
+            // 🔴 **同じ 1 回の失敗を 2 層が別々の文言で記録する**。片方だけを除外条件にすると、
+            // もう片方が「想定外の ERROR」として残る（2026-09-05 に実機でこれで落ちた）:
+            //   daemon (`engine_wrap.rs` `record_device_switch_result`)
+            //     `audio output device switch to "X" failed: …`
+            //   engine (`packages/engine/src/cli/repl-mode.ts`)
+            //     `❌ live device switch to "X" failed: …`
+            // 共通部分は `device switch to "X" failed` なので、除外はそちらで行う。
+            const daemonFailureMarker =
               'audio output device switch to "' + rejectedDevice + '" failed'
-            const switchFailuresBefore = countLogMarker(beforeFailureLog, expectedFailureMarker)
+            const engineFailureMarker =
+              '\u274c live device switch to "' + rejectedDevice + '" failed'
+            const anyLayerFailureMarker = 'device switch to "' + rejectedDevice + '" failed'
+            const switchFailuresBefore = countLogMarker(beforeFailureLog, daemonFailureMarker)
 
             const failed = await faultClient!.call('select_audio_device', {
               device: rejectedDevice,
@@ -5449,19 +5459,34 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             )
             await sleep(1000)
             const settledLog = (await faultClient!.call('get_log', { lines: 500 })).text
-            expect(settledLog).toContain(expectedFailureMarker)
+            expect(settledLog).toContain(daemonFailureMarker)
             expect(settledLog).toContain('produced no callback')
             // 🔴 件数（`countErrors`）で見ない。`get_log` は固定 500 行窓なので、この区間で
             // キャプチャを 1 本足しただけでも窓がずれて件数が動く（2026-09-05 に
             // `expected 6 to be less than or equal to 5` で落ちた）。**どの行が増えたか**で語る。
+            const newErrors = newErrorLines(beforeFailureLog, settledLog)
+            // 落ちた時に「どの層がどう書いたか」を残す。実機は 1 回 15 秒かかるので、
+            // 再実行して観測し直す羽目にならないようにここで文脈を出す。
+            const linesNamingDevice = settledLog
+              .split('\n')
+              .filter((line) => line.includes(rejectedDevice))
+              .join('\n')
             expect(
-              newErrorLines(beforeFailureLog, settledLog).filter(
-                (line) => !line.includes(expectedFailureMarker),
-              ),
-              '#661 D-3 must add no ERROR other than the expected switch failure',
+              newErrors.filter((line) => !line.includes(anyLayerFailureMarker)),
+              '#661 D-3 must add no ERROR other than the expected switch failure. ' +
+                `Lines naming the device:\n${linesNamingDevice}`,
             ).toEqual([])
+            // 利用者に届く ERROR は **TS 層**が出す（daemon の tracing ERROR 行は
+            // `outputChannel.append('ERROR: ' + chunk)` が chunk 単位で前置するため、
+            // 同じ chunk の 2 行目以降には `ERROR:` が付かない）。だから「失敗が
+            // 利用者に届いたか」は engine 側の文言で数える。
             expect(
-              countLogMarker(settledLog, expectedFailureMarker) - switchFailuresBefore,
+              newErrors.filter((line) => line.includes(engineFailureMarker)),
+              '#661 D-3 must surface the switch failure to the user as exactly one ERROR line. ' +
+                `Lines naming the device:\n${linesNamingDevice}`,
+            ).toHaveLength(1)
+            expect(
+              countLogMarker(settledLog, daemonFailureMarker) - switchFailuresBefore,
               '#661 D-3 must log the expected switch failure once',
             ).toBe(1)
             expect(
