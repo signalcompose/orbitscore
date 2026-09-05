@@ -197,7 +197,7 @@ describe('capture windows', () => {
   })
 
   it('reports capture diagnostics when sound never starts', async () => {
-    // #746 D-3: the old assertion only checked that the four field names appeared in
+    // #746 D-3: the old assertion only checked that the five field names appeared in
     // order (`/durationSec.*peak.*maxWindowRms.*stat\.size.*capturePath/`), so a mutant that
     // always fills the values with the same wrong constants would still pass. Check the
     // actual measured values instead — durationSec/peak/maxWindowRms/stat.size must be the
@@ -412,10 +412,10 @@ describe('capture windows', () => {
   })
 
   it('distinguishes quadratic-mean RMS from a plain arithmetic mean', () => {
-    // #746 D-2: the phase-independence test above (and the phase sweep below) use a single
-    // steady tone, so every window has the same RMS and quadratic mean equals arithmetic
-    // mean there — a mutant swapping sqrt(mean(x^2)) for mean(x) would still pass both.
-    // Give windows with different RMS so the two formulas actually disagree.
+    // #746 D-2: the phase-independence test above uses a single steady tone, so every window
+    // has the same RMS and quadratic mean equals arithmetic mean there — a mutant swapping
+    // sqrt(mean(x^2)) for mean(x) would still pass that test. Give windows with different RMS
+    // so the two formulas actually disagree.
     const windows = [{ rms: 0.1 }, { rms: 0.3 }]
     const quadraticMean = quadraticMeanRms(windows)
     const arithmeticMean = windows.reduce((sum, window) => sum + window.rms, 0) / windows.length
@@ -495,7 +495,27 @@ describe('capture windows', () => {
     ).toThrow(/expectedOnsets >= 2/)
   })
 
-  it('measures the same bucket count across a 500-phase sweep at 48kHz (#746 C-2)', () => {
+  it('rejects hit periods that are not an integer number of analysis buckets', () => {
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(6, { sample: sineAfter(0) }), {
+      windowMs: 20,
+    })
+    const result = captureWindowsFrom(
+      analysis,
+      { steady: { fromSec: 0.25, toSec: 5.75, fromWall: 250, toWall: 5750 } },
+      'unaligned-period synthetic capture',
+    )
+
+    expect(() =>
+      steadyRms(result, 'steady', {
+        expectedOnsets: 8,
+        guardSec: 0.15,
+        hitPeriodSec: 0.51,
+        audibleFloorRms: 0.01,
+      }),
+    ).toThrow(/hitPeriodSec must be an integer multiple of 0\.02s, got 0\.51s/)
+  })
+
+  it('measures the same bucket count and finite steadyRms across 500 phases at 48kHz (#746 C-2)', () => {
     // 🔴 The 25-phase sweep below only asserts that steadyRms does not throw — that is exactly
     // what let the phase-dependent bucket count through review undetected. `onsets` (from
     // `w * WINDOW_SEC`) and `windows[].startSec` (from `start / sampleRate`) are two
@@ -503,6 +523,14 @@ describe('capture windows', () => {
     // default 1000 Hz sampleRate they happen not to show the drift Fable measured against the
     // real capture rate. Use 48000 Hz (the daemon's actual capture rate) and assert the
     // measured bucket count is identical across every phase, not just that nothing throws.
+    //
+    // 🔴 What this test does NOT prove: it moves the capture segment inside ONE bucket while
+    // the synthesized hits stay at fixed absolute times, so `firstOnset` only takes one or two
+    // distinct values here. A mutant restoring the original cross-family `>=`/`<` comparison
+    // SURVIVES this test (measured). The drift depends on the absolute onset index, which is
+    // what `measures the same bucket count across 1000 absolute onset indices (#746 C-1)`
+    // above sweeps. Keep both: this one drives the real audio path end to end, that one
+    // discriminates the defect.
     const sampleRate = 48000
     const wav = syntheticFloat32Wav(9, {
       sampleRate,
@@ -524,6 +552,7 @@ describe('capture windows', () => {
     const bucketSec = ANALYSIS_BUCKET_MS / 1000
     const phaseCount = 500
     const bucketCounts = new Set<number>()
+    const steadyRmsValues: number[] = []
     const failures: Array<{ phase: number; message: string }> = []
 
     for (let phase = 0; phase < phaseCount; phase += 1) {
@@ -536,6 +565,7 @@ describe('capture windows', () => {
       )
       try {
         bucketCounts.add(measuredBucketCountForSteadyRms(result, 'steady', requirements))
+        steadyRmsValues.push(steadyRms(result, 'steady', requirements))
       } catch (error) {
         failures.push({ phase, message: String(error) })
       }
@@ -545,6 +575,78 @@ describe('capture windows', () => {
     expect([...bucketCounts], 'measured bucket count must not depend on capture phase').toEqual([
       200,
     ])
+    expect(steadyRmsValues, 'steadyRms must return once for every phase').toHaveLength(phaseCount)
+    expect(
+      steadyRmsValues.every(Number.isFinite),
+      'steadyRms must return a finite value for every phase',
+    ).toBe(true)
+  })
+
+  it('measures the same bucket count across 1000 absolute onset indices (#746 C-1)', () => {
+    // 🔴 The 500-phase sweep above moves the capture segment inside ONE analysis bucket while
+    // the synthesized hits stay at fixed absolute times, so `firstOnset` only ever takes one
+    // or two distinct values there. The 199/200/201 drift this PR fixes depends on the
+    // ABSOLUTE bucket index — `onsets` are built as `w * WINDOW_SEC` while `windows[].startSec`
+    // is built as `(w * winFrames) / sampleRate`, and how far those two float families diverge
+    // grows with `w`. Sweeping the segment therefore cannot reproduce the defect: a mutant that
+    // restores the original cross-family `>=`/`<` comparison survives that test (measured).
+    //
+    // Drive the two families directly instead of synthesizing audio, so a thousand absolute
+    // indices are cheap and the reproduction is exact.
+    const sampleRate = 48000
+    const bucketSec = ANALYSIS_BUCKET_MS / 1000
+    const bucketFrames = Math.round(bucketSec * sampleRate)
+    const requirements = {
+      expectedOnsets: 8,
+      guardSec: 0,
+      hitPeriodSec: 0.5,
+      audibleFloorRms: 0.01,
+    }
+    const periodBuckets = Math.round(requirements.hitPeriodSec / bucketSec)
+    const spanBuckets = requirements.expectedOnsets * periodBuckets
+
+    /** `wav-analysis.ts` builds onsets from `w * WINDOW_SEC` (:170). */
+    const onsetSecOf = (bucket: number) => bucket * bucketSec
+    /** …and window starts from `start / format.sampleRate` (:374). Two different families. */
+    const windowSecOf = (bucket: number) => (bucket * bucketFrames) / sampleRate
+
+    const indexCount = 1000
+    const bucketCounts = new Set<number>()
+    const steadyRmsValues: number[] = []
+    const failures: Array<{ firstOnsetBucket: number; message: string }> = []
+
+    for (let index = 0; index < indexCount; index += 1) {
+      const firstOnsetBucket = index + 1
+      const searchFromBucket = firstOnsetBucket - 1
+      const searchToBucket = firstOnsetBucket + spanBuckets
+      const windows: Array<{ startSec: number; peak: number; rms: number }> = []
+      for (let bucket = searchFromBucket; bucket < searchToBucket; bucket += 1) {
+        windows.push({ startSec: windowSecOf(bucket), peak: 0.5, rms: 0.5 })
+      }
+      const onsets: number[] = []
+      for (let hit = 0; hit < requirements.expectedOnsets; hit += 1) {
+        onsets.push(onsetSecOf(firstOnsetBucket + hit * periodBuckets))
+      }
+      const result = { windows: () => windows, onsets: () => onsets }
+
+      try {
+        bucketCounts.add(measuredBucketCountForSteadyRms(result, 'steady', requirements))
+        steadyRmsValues.push(steadyRms(result, 'steady', requirements))
+      } catch (error) {
+        failures.push({ firstOnsetBucket, message: String(error) })
+      }
+    }
+
+    expect(failures, `failed ${failures.length}/${indexCount} onset indices`).toEqual([])
+    expect(
+      [...bucketCounts],
+      'measured bucket count must not depend on the absolute onset index',
+    ).toEqual([spanBuckets])
+    expect(steadyRmsValues, 'steadyRms must return once per index').toHaveLength(indexCount)
+    expect(
+      steadyRmsValues.every(Number.isFinite),
+      'steadyRms must return a finite value for every index',
+    ).toBe(true)
   })
 
   it('snaps periodic RMS across every 20ms phase of a 500ms hit period', () => {

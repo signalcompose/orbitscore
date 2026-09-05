@@ -232,6 +232,17 @@ function resolveMeasuredRange(
   name: string,
   requirements: SteadyRmsRequirements,
 ): MeasuredRange {
+  const hitPeriodBuckets = Math.round(requirements.hitPeriodSec / ANALYSIS_BUCKET_SEC)
+  if (
+    !Number.isFinite(requirements.hitPeriodSec) ||
+    Math.abs(requirements.hitPeriodSec - hitPeriodBuckets * ANALYSIS_BUCKET_SEC) >
+      BUCKET_WIDTH_TOLERANCE_SEC
+  ) {
+    throw new Error(
+      `${name}: hitPeriodSec must be an integer multiple of ${ANALYSIS_BUCKET_SEC}s, ` +
+        `got ${requirements.hitPeriodSec}s`,
+    )
+  }
   const search = result.windows(name, requirements.guardSec)
   const searchFromIdx = toBucketIndex(search[0]!.startSec)
   const searchToIdx = toBucketIndex(search[search.length - 1]!.startSec) + 1
@@ -240,9 +251,7 @@ function resolveMeasuredRange(
     throw new Error(`${name}: guarded search must contain an onset to snap the measurement window`)
   }
   const measureFromIdx = toBucketIndex(firstOnset) - 1
-  const widthBuckets = Math.round(
-    (requirements.expectedOnsets * requirements.hitPeriodSec) / ANALYSIS_BUCKET_SEC,
-  )
+  const widthBuckets = requirements.expectedOnsets * hitPeriodBuckets
   const measureToIdx = measureFromIdx + widthBuckets
   if (measureFromIdx < searchFromIdx || measureToIdx > searchToIdx) {
     throw new Error(

@@ -17,6 +17,52 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(e2e): make the phase sweep actually discriminate the float-family bug (#746 round-3) (Sep 5, 2026)
+
+**Issue**: #739 / **ブランチ**: `739-capture-windows-follow-sound` / **PR** #746
+
+ラウンド2 で入れた「500 位相スイープ」が、**守るべき欠陥を検出できていなかった**。
+
+#### 何が起きていたか
+
+ラウンド2 は「`onsets`（`w * WINDOW_SEC`）と `windows[].startSec`（`start / sampleRate`）が
+**別の浮動小数の族**で、`>=` / `<` 比較が位相で 199/200/201 に揺れる」を整数バケット index への
+統一で直し、500 位相スイープを常設した。
+
+🔴 **main が変異検証したところ、ウィンドウ選択を元の族またぎ比較へ戻しても、そのスイープは緑のままだった。**
+
+原因: スイープは**合成 WAV 内の打撃時刻を固定したまま capture 区間だけ**を 1 バケット内で動かすので、
+`firstOnset` が実質 1〜2 値しか取らない。**ずれの発生源は絶対バケット index**（2 つの族の乖離は
+`w` が大きいほど広がる）なので、区間を動かしても再現しない。
+
+Codex が回した変異（`steadyRms` が NaN を返す）は「アサーションが結線されている」ことしか示しておらず、
+**シナリオが欠陥を区別できるか**は示していなかった。
+
+#### 直したこと
+
+- **絶対 onset index を 1000 通り掃く**テストを追加。音を合成せず、`wav-analysis.ts` の 2 つの族を
+  そのまま再現した stub を `steadyRms` / `measuredBucketCountForSteadyRms` に渡す
+  （`resolveMeasuredRange` は `Pick<CaptureWindows,'windows'|'onsets'>` を取るのでスタブで足りる）
+- 🔴 **変異で red を確認**: 族またぎ比較へ戻すと
+  `expected [ 200, 199, 201 ] to deeply equal [ 200 ]` — Fable が実測した分布がそのまま出る。
+  復元後 46 件 green（`cmp` で復元一致を確認）
+- 500 位相スイープは**残す**（実音声の経路を端から端まで通す役）。ただしコメントに
+  **「この変異はここでは生き残る」**と明記し、区別する役は新テストだと書いた
+
+#### 同ラウンドで直した残り
+
+- 500 位相スイープが `steadyRms` **本体**を全位相で呼ぶようにした（従来は診断関数だけで、
+  onset 数一致・周期性・可聴床のアサーションを通っていなかった）
+- `hitPeriodSec` が `ANALYSIS_BUCKET_SEC` の整数倍でなければ**明示的に throw**（暗黙の前提を検査）
+- コメントの不正確 2 件（"four" → "five"、D-2 の根拠づけが下のテストに当てはまらない点）
+
+#### 検証（main が本ツリーで実測）
+
+- `npm test` **2238 passed / 0 failed**
+- `typecheck:e2e` / `lint` exit 0
+- `docs:check` **926 verified / 0 failed**
+- 実機 gated: **`main` baseline 10/24 と失敗集合が完全一致 = 退行ゼロ**（同日・同一条件で baseline を取り直した）
+
 ### fix(e2e): clock capture segments off the capture file and open them on sound (#739 PR-O2a) (Sep 4, 2026)
 
 **Issue**: #739 / **ブランチ**: `739-capture-windows-follow-sound` / **PR-O2a**
