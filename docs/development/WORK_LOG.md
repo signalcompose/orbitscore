@@ -17,6 +17,47 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(planning): record the eight issues cut out of the stage-1 must-fix work (#763) (Sep 5, 2026)
+
+**Issue**: #763 / **ブランチ**: `763-record-cut-out-issues` / **PR** #764（マージ済み `490dc32c`）
+
+段 1（#645 / #606 / #385 / #661 / #649）の must-fix を進める中でスコープ外として切り出した
+issue 8 本を、地図と実装計画に記録した。切り出したまま放置すると「誰も追わない deferred」に
+なるため、置き場と着手の目安を書いた。**docs のみの変更**（コード・テストは触っていない）。
+
+#### 地図（`docs/planning/DEVELOPMENT_MAP.md`）
+
+| 節 | 内容 |
+|---|---|
+| §4.H バッチ A | **#661 を ✅ に更新**（PR #748 でマージ済み）。**A' 行**を追加 |
+| **§4.H.A'**（新設） | #661 から派生した 3 件（**#755** / **#759** / **#758**）と「なぜ #661 で直さなかったか」 |
+| §4.G | 測定器の欠陥 3 件（**#761** / **#756** / **#760**） |
+| **§4.J.1**（新設） | 拡張・daemon の内部整理（**#757** / **#752**）。振る舞いを変えないので急がないが、放置すると次の変更が高くつく類 |
+
+#### 実装計画（`docs/planning/IMPLEMENTATION_PLAN_2026-09.md`）
+
+- **§1.8 PR-V**: 「PR-V3 + PR-V4 は PR #748 でマージ済み・#661 は CLOSED」と owner 裁定を追記し、
+  派生 3 件を **PR-V10 / PR-V6 / PR-V6 の後**へ割り当てた
+- **§1.10 PR-E**: 測定器の欠陥 3 件と着手の順序（#761 は着手可 / #756 は #649 の baseline 比較の
+  後 / #760 は独立）
+
+#### 🔴 記録して見えたこと
+
+**#761 / #756 / #760 は 3 本とも「測定器の欠陥」**で、いずれも「**実装が正しいのにテストが
+赤 / 緑になる**」型だった。#649 も #661 も同じ形だったので、偶然ではなく**この段の主題**として
+計画に束ねている。
+
+#### あわせて直したもの
+
+`DEVELOPMENT_MAP.md` に**存在しない §4.H.1 への参照**（599 行目）があったので §4.H へ寄せた。
+新しい節は §4.H.A' と名付けて番号の衝突を避けている。
+
+#### 検証
+
+`docs:check` **926 verified / 0 failed**。コード変更なしのためビルド・実機 E2E は不要
+（CLAUDE.md「docs のみの変更」）。CI は `code-review` / `fmt / clippy / test` /
+`license / dependency gate` の 3 件すべて success。
+
 ### fix(661): close the review round-2 findings across all four layers (#661) (Sep 5, 2026)
 
 **Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
