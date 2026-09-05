@@ -676,7 +676,11 @@ k.audio("kick.wav").output("drums")
 s.audio("snare.wav").output("drums")               // kick と snare が同 channel に合成されて Live で受信
 ```
 
-**Strict mode (v1.2.0+)**: `global.linkAudio()` を宣言したファイル内では、 全ての発音 sequence が `.output(name)` で channel を宣言する必要がある。 `.output()` を持たない sequence が `.play()` した時点で **runtime error** を投げる (`Sequence.resolveDispatchChannel`)。 これは「LinkAudio mode 中は全 sequence が LinkAudio 経由」 という §8.1.1 の宣言と整合させるための strict 制約で、 hardware 出力との silent fallback は行わない (hardware/LinkAudio 混在は不可、 §8.1.1 参照)。 編集時には VS Code 拡張が `analyzeLinkAudioMissingOutput` で同等の error 診断を出す (§11)。
+**Strict mode (v1.2.0+)**: `global.linkAudio()` を宣言したファイル内では、 全ての発音 sequence が `.output(name)` で channel を宣言する必要がある。 これは「LinkAudio mode 中は全 sequence が LinkAudio 経由」 という §8.1.1 の宣言と整合させるための strict 制約で、 hardware 出力との silent fallback は行わない (hardware/LinkAudio 混在は不可、 §8.1.1 参照)。 編集時には VS Code 拡張が `analyzeLinkAudioMissingOutput` で error 診断を出す (§11)。
+
+🔴 **違反時の runtime 挙動は「無音スキップ + ログ」であって throw ではない**（#645 PR-D0・2026-09-04 変更）。`.output()` を持たない発音 sequence は `Sequence.resolveDispatchChannel()` が `{ kind: 'skip', reason }` を返し、そのシーケンスだけが無音でスキップされ、理由が `[ERROR] Sequence '<name>': … このシーケンスは無音でスキップします。` として 1 回だけ（同じ reason につき 1 回・`logSkipOnce` で dedup）ログに出る。**hardware への silent fallback は依然として行わない** — skip は「別の出力へ流す」ことではなく「鳴らさない」ことである。
+
+> **なぜ throw を止めたか**: `resolveDispatchChannel()` は演奏中の schedule 経路（loop timer の毎小節・`seamlessParameterUpdate()` 経由の mid-loop `.gain()` 等）からも呼ばれる。そこで throw すると await 連鎖が切れ、**同じ評価ブロックに書かれた他の sequence まで巻き添えで止まる**（ライブコーディング中に kick が止まる）。1 シーケンスの無音の方が、演奏全体の停止より軽い。戻り値は `DispatchTarget = { kind: 'hardware' } | { kind: 'link'; channel } | { kind: 'skip'; reason }` の tagged union で、`undefined`（= hardware）と skip が型として区別されている。
 
 **MIDI 例外**: `seq.midi()` で宣言した MIDI sequence は strict mode の `.output()` 要件から**免除**される。MIDI sequence は SC audio bus ではなく MIDI bus にルーティングされるため、LinkAudio channel binding は不要 (#282)。`seq.instrument()` で宣言した instrument sequence も同様に免除される（plugin 経路にルーティングされるため。ただし v1 では `global.linkAudio()` と plugin hosting の同時使用自体が不可 — Plugin Hosting PH.5 参照）。
 

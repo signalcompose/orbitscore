@@ -190,6 +190,22 @@
 
 **最短経路（must-fix）**: PR-V3 → PR-V4。#156 の裁定を待たずに V3 は着手できる。
 
+> ✅ **2026-09-05: PR-V3 + PR-V4 は PR #748 でマージ済み（`ef192ca4`）。#661 は CLOSED。**
+> 実機で `D-0`（要求したデバイスで鳴る）/ `D-1`（名前不一致は拒否・鳴っているデバイスは変わらない）/
+> `D-2`（dead から縮退して鳴る）/ `D-3`（切替候補が dead でも旧が鳴り続ける）と
+> gated Rust `C-1`〜`C-7` が緑。`get_engine_state` は daemon の `output` / `callback` を返す。
+>
+> 🔴 **owner 裁定（2026-09-05）**: **起動時は host 既定へ縮退／ライブ切替は元のデバイスへ復帰**
+> （演奏中のタイプミスで音が内蔵スピーカーへ移らないように）。設計 `661` §3 が正本。
+>
+> **PR-V4 から派生した 3 件を後続の PR-V へ割り当てた**（地図 §4.H.A'）:
+>
+> | issue | 割り当て先 | 理由 |
+> |---|---|---|
+> | **#755** `select_audio_device` が人間のクリックトグルを共有し engine が止まる | **PR-V10**（バッチ C・デバイス選択の配線） | 同じ `select_audio_device` の UX を触る PR |
+> | **#759** `//#getEngineState` が評価キューの後ろに並び長い await 中は状態が見えない | **PR-V6**（バッチ B・見える化） | 「見える化」が目的の PR で、見えない条件を潰す |
+> | **#758** 捨てた旧ストリームの listener が共有 `StreamStats` に `device_lost` を書く | **PR-V6 の後** | `StreamStats` の世代管理が要る。**実機で再現確認が先**（確信度 中） |
+
 ### 1.9 配布 — PR-S（doc 656 §14・番号は同文書の PR-T/R/C に対応）
 
 > 🔴 **2026-09-04 改訂**: PR-S-T1 の件名から `and refuse loudly` を落とし、`extension.ts` を
@@ -231,6 +247,16 @@
 | PR-E10 ⟂ | `fix(daemon): log the startup stages and surface DaemonStartupError.stderr` | #640-B（🔴 `DaemonStartupError.stderr`/`.exitCode` を読む箇所が 0・ready 前 3 段にログ無し）| `main.rs`（+25）・`daemon-client.ts`（+20）| — | 実機で engine 再起動 → `get_log` に段マーカー | — |
 | PR-E11 ⟂ | `test: skip DAC-dependent cases when running as root` | #684（root で必ず落ちる 3 件）| `tests/helpers/privileges.ts`（+25）・2 spec | — | root / 非 root で `npm test` | — |
 | PR-E12 | `test: dual ledger — spec sections must be classified` | #543-(b) 台帳 1（仕様 ↔ テスト・#671 と独立に先に入れられる）| `tests/e2e/dsl-coverage-ledger.ts`（+250）| PR-E4 | `npm test` | — |
+
+> 🔴 **2026-09-05 追記 — 測定器の欠陥 3 件を PR-E の対象に足す**（#661 / #649 のゲート④ で実測）。
+> **どれも「実装が正しいのにテストが赤／緑になる」型**で、放置すると実装の可否を語れなくなる。
+>
+> | issue | 欠陥 | 直し方 | 順序 |
+> |---|---|---|---|
+> | **#761** | ERROR **件数**で「増えた」と主張する形（`toBeGreaterThanOrEqual(before + 1)`）が偽赤を生む。`get_log` は固定 500 行窓なので、古い ERROR がスクロールアウトすると**新しい ERROR が出ていても総数は減る**。全件を 2 回回すと**失敗集合が入れ替わる**ことで特定した | `newErrorLines` / `newLogLines`（#661 で追加済み）で「どの行が増えたか」で語る。`gated-assertion-hygiene.spec.ts` に「増加を `>=` で主張していないか」のラチェットを足す | **#661 マージ済みなので着手可** |
+> | **#756** | `setupStderrHandler` の `ERROR:` 前置が **chunk 単位**。同じ chunk の 2 行目以降に前置が付かず、`countErrors` が**構造的に過小カウント**する | `setupStdoutHandler` と同じ形に揃える。🔴 **部分行のバッファリングが要る**（`createDaemonStderrLineRouter` が同じ問題を解いている） | **#649 の baseline 比較が済んでから**（gated 全体の測定器が動く） |
+> | **#760** | `OUTPROC_ATTACH_FAILED` のアサーションが `child exited before publishing READY` を期待するが、存在しない CLAP は **child を spawn する前に discovery で落ちる**。**main でも落ちる**（実測） | 「`[OUTPROC_ATTACH_FAILED]` が増えた + 理由がファイル不在」を検査する形へ | 独立・小粒 |
+
 
 🔴 **段 0 の実体は PR-E1 → E2 → E3 → E4（+ PR-O0 golden）**。PR-E3（per-channel）が無いと doc 611 / 598 のチャンネル判定 E2E は緑のまま嘘をつく。
 

@@ -30,31 +30,31 @@ capture は `render_block_with_sources`（[RE-1](/rust-engine/) 参照）の中�
 変わりません（読むだけで mutation ではない）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1076-1121
+// rust/crates/orbit-audio-native/src/output.rs:1170-1193
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     insert_buses: &mut [InsertBusStage],
     sources: &mut [SourceSlot],
     transport: &mut BlockTransport,
-    post: &mut Option<Box<dyn PostProcessor>>,
+    master: &mut MasterLine,
     capture: &mut Option<RingTapSink>,
     cb_stats: &Option<Arc<CallbackTimeStats>>,
     output_channels: usize,
     hw: &mut [f32],
 ) {
-// ...
-    // 読み取り専用 tap。`RingTapSink::commit` は wait-free / no-alloc（満杯時はあふれを drop カウント）
-    // ＝ RT 契約を満たす。off-thread writer が ring を drain する。post の後・計測の内側に置くことで
-    // capture コストも callback-duration に含めて監視する。
-    if let Some(sink) = capture.as_mut() {
-        sink.commit(hw);
-    }
+    // Instant::now() は macOS では mach_absolute_time（lock/alloc なし）= RT 許容。A0 §6 に基づき
+    // production RT 監視を callback-duration ベースにするための計測（cb_stats 有り時のみ）。
+    let t0 = cb_stats.as_ref().map(|_| Instant::now());
 
-    if let (Some(stats), Some(t0)) = (cb_stats, t0) {
-        stats.record(t0.elapsed().as_nanos() as u64);
-    }
-}
+    // engine（+ bus graph）は常に 2ch で完結する（設計 §5.5 row 1・3）。`master.buffer` が core の
+    // 「hardware_out」を受ける — デバイス幅（`output_channels`／`hw`）とは無関係。buffer は起動時に
+    // 事前確保済み（`start_output_inner`）なので RT では resize しない。
+    let frames = hw.len() / output_channels;
+    let bs = frames * 2;
+    debug_assert!(
+        master.buffer.len() >= bs,
+        "master buffer too short: {} < {bs}",
 ```
 
 タップは `RingTapSink::commit` という wait-free / no-alloc な操作で行われ、
@@ -368,7 +368,7 @@ daemon を `<extension>/engine/bin/<platform>/` に同梱しており、これ�
 走査から外すディレクトリがあり、それは後述します（#713）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:174-188
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:175-189
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -414,7 +414,7 @@ mtime 比較は「rebuild が no-op か」より弱い判定ですが、テス�
 そこで走査から `tests` / `benches` / `examples` の 3 ディレクトリを外しました。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:169-173
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:170-174
         // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
         // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {

@@ -406,18 +406,18 @@ the callback body was a single function, `render_block`; as of 2026-09-01 it has
 `OutputStream::render_state`).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:667-673
+// rust/crates/orbit-audio-native/src/output.rs:760-766
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
     sources: Vec<SourceSlot>,
     transport: BlockTransport,
-    post: Option<Box<dyn PostProcessor>>,
+    master: MasterLine,
 }
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:994-1031
+// rust/crates/orbit-audio-native/src/output.rs:1085-1122
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -437,7 +437,7 @@ fn render_shared_block(
                 insert_buses,
                 sources,
                 transport,
-                post,
+                master,
             } = &mut *state;
             render_block_with_sources(
                 engine,
@@ -445,7 +445,7 @@ fn render_shared_block(
                 insert_buses,
                 sources,
                 transport,
-                post,
+                master,
                 capture,
                 cb_stats,
                 output_channels,
@@ -468,14 +468,14 @@ opt-ins, and the invariant that the path is bit-identical to the legacy path whe
 still stands.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1076-1121
+// rust/crates/orbit-audio-native/src/output.rs:1170-1243
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     insert_buses: &mut [InsertBusStage],
     sources: &mut [SourceSlot],
     transport: &mut BlockTransport,
-    post: &mut Option<Box<dyn PostProcessor>>,
+    master: &mut MasterLine,
     capture: &mut Option<RingTapSink>,
     cb_stats: &Option<Arc<CallbackTimeStats>>,
     output_channels: usize,
@@ -485,23 +485,51 @@ fn render_block_with_sources(
     // production RT 監視を callback-duration ベースにするための計測（cb_stats 有り時のみ）。
     let t0 = cb_stats.as_ref().map(|_| Instant::now());
 
-    // active な bus が 1 つも無ければ既存の呼び出し列をそのまま維持する（bit-identical）。
-    // 既定 bus プール（全 stage inactive で起動）はここで従来経路に落ちるため、
-    // `seq.effect()` 未使用セッションに RT コストを課さない。
+    // engine（+ bus graph）は常に 2ch で完結する（設計 §5.5 row 1・3）。`master.buffer` が core の
+    // 「hardware_out」を受ける — デバイス幅（`output_channels`／`hw`）とは無関係。buffer は起動時に
+    // 事前確保済み（`start_output_inner`）なので RT では resize しない。
+    let frames = hw.len() / output_channels;
+    let bs = frames * 2;
+    debug_assert!(
+        master.buffer.len() >= bs,
+        "master buffer too short: {} < {bs}",
+        master.buffer.len()
+    );
     render_engine_with_sources(
         engine,
         link,
         insert_buses,
         sources,
         transport,
-        output_channels,
-        hw,
+        2,
+        &mut master.buffer[..bs],
     );
 
-    // master-bus post-processor（CLAP）。engine render 済みの hardware sum を in-place 変換。
-    if let Some(p) = post.as_mut() {
-        p.process(hw);
+    // master ライン（設計 §5.3）: ラック → gain（single 適用点・§5.4）。core の
+    // `global_gain` は production では 1.0 固定のまま呼ばれない（乗算経路はここ 1 本）。
+    if let Some(p) = master.post.as_mut() {
+        p.process(&mut master.buffer[..bs]);
     }
+    let g = master.advance_gain(frames);
+    // g == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
+    // 「未使用 gain 経路に per-sample 乗算コストを払わない」ための最適化であり、O0 golden の
+    // bit 一致は乗算そのものではなく `gain_current` が初期値 1.0 のまま変化しないことに由来する
+    // （`SetGlobalGain` を一度も呼ばない譜面では target=current=1.0 が恒常的に成立する）。
+    if g != 1.0 {
+        for s in master.buffer[..bs].iter_mut() {
+            *s *= g;
+        }
+    }
+
+    // デバイス配置（設計 §5.3・row 6）: master.buffer（2ch）を hw（デバイス幅）の ch{0,1} へ置く。
+    // 2ch デバイスなら memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。3ch 以上は ch2 以降が
+    // 無音で残る — Device 出口はまだ master 固定 program の 1 本のみ（さらなる出口は PR-O3/O4）。
+    //
+    // 🔴 ここで `hw` を全域 zero-fill しない。`place_master_into_device` が **hw の全要素を
+    // 書き切る**ので、1ch / 2ch（＝今日検証されている構成すべて）では書いた直後に全部上書きされ、
+    // RT コールバックで**毎ブロック二重に store する**ことになる（64 frames × 2ch なら
+    // 約 96,000 store/秒の無駄）。余剰チャンネルの 0 埋めは配置関数の責務に閉じた。
+    place_master_into_device(&master.buffer[..bs], frames, output_channels, hw);
 
     // capture seam（#307 realtime）: post 適用後の最終 hw（= device に出る実信号）を WAV へ逃がす
     // 読み取り専用 tap。`RingTapSink::commit` は wait-free / no-alloc（満杯時はあふれを drop カウント）
@@ -523,7 +551,7 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1123-1164
+// rust/crates/orbit-audio-native/src/output.rs:1279-1320
 #[inline]
 fn render_engine_with_sources(
     engine: &Engine,
@@ -574,7 +602,7 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1961-1978
+// rust/crates/orbit-audio-native/src/output.rs:2125-2142
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(
