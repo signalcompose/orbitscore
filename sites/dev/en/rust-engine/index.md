@@ -39,23 +39,37 @@ async fn run() -> Result<(), i32> {
         return run_list_audio_devices();
     }
 
-    // 0. `--audio-device <name>` を解析し、`ORBIT_AUDIO_DEVICE` env へ反映する（#484 D1）。
-    // 実際の device 解決（列挙・一致判定・不一致時の縮退警告）は `orbit-audio-native`
-    // 側（`resolve_output_device`）が cpal I/O を伴って行う。ここでは env に橋渡しするだけ
-    // （`engine_wrap::device_name_from_env` が capture_path_from_env と同じ層分けで読む）。
-    apply_audio_device_arg(std::env::args().skip(1));
+    // 0. CLI と gated fault env を一度だけ typed options に解決する。device 名を process-global env
+    // へ書き戻さないため、並行する owner thread も同じ immutable 値を受け取る。
+    let startup_options = StartupOptions::from_env();
 
     // 1. Engine を起動（audio device 取得）。ランタイム device switch（#484 D2）に備え、実際の
     // `EngineWrap::start()` 呼び出しと `StreamGuard` の生存管理を専用 OS thread（"audio owner
     // thread"）へ委譲する — `cpal::Stream` は `!Send` なので、以降 tokio worker 間を自由に飛び回る
     // 通常の async task にはハンドルを一切持ち込めない。
-    let engine = match start_engine_with_device_switch() {
+    let engine = match start_engine_with_device_switch(startup_options) {
         Ok(e) => e,
         Err(e) => {
             report_startup_failure(ProtocolError::new("DEVICE_CONFIG_ERROR", e.to_string()));
             return Err(1);
         }
     };
+    let output = engine.stream_config_snapshot();
+    if let Some(reason) = &output.fallback_reason {
+        tracing::warn!(
+            "audio device fallback: requested {:?} -> using {:?}: {}",
+            output.device_requested,
+            output.device_name,
+            reason
+        );
+    }
+    tracing::info!(
+        "audio output {:?} @ {} Hz x {}ch (first callback {} ms)",
+        output.device_name,
+        output.sample_rate,
+        output.channels,
+        output.first_callback_ms
+    );
 
     // 2. WebSocket listener bind
     let bound = match server::bind_localhost().await {
@@ -72,20 +86,6 @@ async fn run() -> Result<(), i32> {
         ready: true,
         port,
         protocol_version: PROTOCOL_VERSION,
-    };
-    let line = serde_json::to_string(&ready).unwrap_or_else(|_| {
-        format!(r#"{{"ready":true,"port":{port},"protocol_version":"{PROTOCOL_VERSION}"}}"#)
-    });
-    println!("{line}");
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
-
-    tracing::info!("orbit-audio-daemon listening on 127.0.0.1:{port}");
-
-    // 4. accept loop
-    server::serve(bound.listener, engine).await;
-    Ok(())
-}
 ```
 
 On startup failure, the daemon instead writes a single line of JSON to stderr
@@ -99,7 +99,7 @@ dedicated OS thread (the "audio owner thread"), which owns the `StreamGuard` for
 `mpsc` channel — #484 D2).
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:135-146
+// rust/crates/orbit-audio-daemon/src/main.rs:149-160
 /// ランタイム device switch（#484 D2）: `EngineWrap::start()`（cpal I/O・`cpal::Stream` は `!Send`）を
 /// 専用 OS thread（"audio owner thread"）上で実行し、その thread に `StreamGuard` を生涯所有させる。
 /// 呼び出し元（`run()`・tokio 上の async fn）は `Arc<EngineWrap>`（`Send + Sync`）だけを受け取る。
@@ -109,9 +109,9 @@ dedicated OS thread (the "audio owner thread"), which owns the `StreamGuard` for
 /// を行う。thread は `switch_rx` が close する（= `engine.device_switch_tx` を保持する最後の `Arc`
 /// が drop される）まで無期限に生存し、`_guard`（`StreamGuard`）を握り続ける — 既存の「`main()` の
 /// ローカル変数が daemon プロセス終了まで guard を握る」という寿命モデルと同一。
-fn start_engine_with_device_switch() -> Result<Arc<EngineWrap>, WrapError> {
-    let (switch_tx, switch_rx) = std::sync::mpsc::channel::<DeviceSwitchRequest>();
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<Arc<EngineWrap>, WrapError>>();
+fn start_engine_with_device_switch(
+    startup_options: StartupOptions,
+) -> Result<Arc<EngineWrap>, WrapError> {
 ```
 
 Once the connection is established, the daemon first sends a handshake frame. After that, it
@@ -203,7 +203,7 @@ that drains an `mpsc` channel. Since #474 there is one more task: it bridges the
 (`PluginUiClosed` and friends) broadcast by the watchdog threads into the session's writer queue.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:739-766
+// rust/crates/orbit-audio-daemon/src/session.rs:799-826
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -240,7 +240,7 @@ kept as the single point of truth, before falling through to the match — refle
 learned that keeping the same string set in two independently-maintained places drifts.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1339-1366
+// rust/crates/orbit-audio-daemon/src/session.rs:1415-1442
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,
@@ -406,7 +406,7 @@ the callback body was a single function, `render_block`; as of 2026-09-01 it has
 `OutputStream::render_state`).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:254-260
+// rust/crates/orbit-audio-native/src/output.rs:667-673
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
@@ -417,7 +417,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:581-618
+// rust/crates/orbit-audio-native/src/output.rs:994-1031
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -429,6 +429,7 @@ fn render_shared_block(
     hw: &mut [f32],
     stats: &StreamStats,
 ) {
+    stats.record_callback((hw.len() / output_channels) as u32);
     match state.try_lock() {
         Ok(mut state) => {
             let RenderState {
@@ -455,7 +456,6 @@ fn render_shared_block(
             hw.fill(0.0);
             stats.record_render_contention();
         }
-    }
 ```
 
 The number of failed `try_lock`s accumulates in `StreamStats` and can be read as
@@ -468,7 +468,7 @@ opt-ins, and the invariant that the path is bit-identical to the legacy path whe
 still stands.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:662-707
+// rust/crates/orbit-audio-native/src/output.rs:1076-1121
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -523,7 +523,7 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:709-750
+// rust/crates/orbit-audio-native/src/output.rs:1123-1164
 #[inline]
 fn render_engine_with_sources(
     engine: &Engine,
@@ -574,12 +574,16 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1539-1556
+// rust/crates/orbit-audio-native/src/output.rs:1961-1978
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(
                 config,
                 move |data: &mut [f32], _| {
+                    if suppress_callback {
+                        data.fill(0.0);
+                        return;
+                    }
                     render_shared_block(
                         &engine,
                         &render_state,
@@ -589,10 +593,6 @@ pre-sized for one second up front, avoiding heap allocation on the RT hot path).
                         data,
                         &callback_stats,
                     )
-                },
-                make_err_fn(stats.clone()),
-                None,
-            )
 ```
 
 This "bit-identical when unused" design principle also applies consistently to the insert-bus

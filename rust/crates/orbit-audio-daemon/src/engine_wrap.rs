@@ -24,12 +24,80 @@ use std::time::Duration;
 
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
 use orbit_audio_native::{
-    load_sample_resampled, LoaderError, OutputError, OutputStream, ResampleError, StreamStats,
-    StreamStatsSnapshot,
+    load_sample_resampled, LoaderError, OutputDeviceRequest, OutputError, OutputFault,
+    OutputStream, ResampleError, StreamStats, StreamStatsSnapshot,
 };
 use uuid::Uuid;
 
 use crate::backend::AudioBackend;
+
+const OUTPUT_FAULT_ENV: &str = "ORBIT_AUDIO_OUTPUT_FAULT";
+
+pub fn parse_output_fault(raw: Option<&str>) -> OutputFault {
+    match raw.map(str::trim) {
+        Some("dead-probe-requested" | "DeadProbeRequested") => OutputFault::DeadProbeRequested,
+        Some("dead-all-probes" | "DeadAllProbes") => OutputFault::DeadAllProbes,
+        Some("dead-real-stream" | "DeadRealStream") => OutputFault::DeadRealStream,
+        Some("dead-real-stream-on-switch" | "DeadRealStreamOnSwitch") => {
+            OutputFault::DeadRealStreamOnSwitch
+        }
+        _ => OutputFault::None,
+    }
+}
+
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+pub struct StartupOptions {
+    pub device_name: Option<String>,
+    pub fault: OutputFault,
+}
+
+impl StartupOptions {
+    pub fn from_args_and_env<I: IntoIterator<Item = String>>(
+        args: I,
+        env_device_name: Option<&str>,
+        allow_fault_injection: bool,
+        fault_raw: Option<&str>,
+    ) -> Self {
+        let mut device_name = env_device_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string);
+        let mut iter = args.into_iter();
+        while let Some(arg) = iter.next() {
+            if arg == "--audio-device" {
+                device_name = iter.next().filter(|name| !name.trim().is_empty());
+            }
+        }
+        Self {
+            device_name,
+            fault: if allow_fault_injection {
+                parse_output_fault(fault_raw)
+            } else {
+                OutputFault::None
+            },
+        }
+    }
+
+    pub fn from_env() -> Self {
+        let allow_fault_injection =
+            std::env::var("ORBIT_DAEMON_ALLOW_FAULT_INJECTION").as_deref() == Ok("1");
+        let fault_raw = std::env::var(OUTPUT_FAULT_ENV).ok();
+        let env_device_name = std::env::var("ORBIT_AUDIO_DEVICE").ok();
+        Self::from_args_and_env(
+            std::env::args().skip(1),
+            env_device_name.as_deref(),
+            allow_fault_injection,
+            fault_raw.as_deref(),
+        )
+    }
+
+    fn output_request(&self) -> OutputDeviceRequest {
+        OutputDeviceRequest {
+            name: self.device_name.clone(),
+            fault: self.fault,
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum WrapError {
@@ -1554,8 +1622,13 @@ mod effect_rack_tests {
 /// [`start`] が返す [`StreamGuard`] を main 側で alive に保つ責務。
 pub struct EngineWrap {
     engine: Engine,
+    // Engine 自体の構成値。device switch は PR-V4 の再構築対象であり、この PR では変えない。
     sample_rate: u32,
     channels: u16,
+    /// 現在 cpal が掴んでいる stream の実効構成。GetStatus は固定 engine 値でなくこちらを読む。
+    stream_config: Mutex<StreamConfigSnapshot>,
+    /// 直近 1 Hz ticker 区間で callback count が前進したか。
+    callback_alive: AtomicBool,
     samples: Mutex<HashMap<String, Sample>>,
     started_at: std::time::Instant,
     stream_stats: Arc<StreamStats>,
@@ -4139,6 +4212,40 @@ pub struct StreamGuard {
     _child_guards: Vec<Arc<Mutex<ChildSlot>>>,
 }
 
+/// 現在の出力 stream から得た実効構成と、直近の device switch 失敗理由。
+/// 実効構成は switch 成功時だけ差し替え、失敗時は旧構成を保ったまま理由だけを更新する。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StreamConfigSnapshot {
+    pub device_name: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub device_requested: Option<String>,
+    pub device_fell_back: bool,
+    pub fallback_reason: Option<String>,
+    pub first_callback_ms: u64,
+    pub last_switch_failure: Option<String>,
+    output_fault: OutputFault,
+}
+
+impl StreamConfigSnapshot {
+    fn from_output_stream(stream: &OutputStream) -> Self {
+        Self {
+            device_name: stream.device_name.clone(),
+            sample_rate: stream.sample_rate,
+            channels: stream.channels,
+            device_requested: stream.device_requested.clone(),
+            device_fell_back: stream.device_fallback.is_some(),
+            fallback_reason: stream
+                .device_fallback
+                .as_ref()
+                .map(|fallback| fallback.reason.clone()),
+            first_callback_ms: stream.first_callback_ms,
+            last_switch_failure: None,
+            output_fault: stream.fault(),
+        }
+    }
+}
+
 impl StreamGuard {
     /// capture seam（#307 realtime）: capture 有効時のみ producer-side drop 累積を返す（無効は `None`）。
     /// `Some(0)` は録音健全・`> 0` は録音破損（検証 invalid）。gated 検証ハーネスが teardown 前に
@@ -4188,24 +4295,13 @@ fn capture_path_from_env() -> Option<PathBuf> {
         }
     }
 }
-
-/// device 選択（#484 D1）: 環境変数 `ORBIT_AUDIO_DEVICE` を解決する。main.rs が `--audio-device`
-/// CLI 引数をこの env に反映してから `EngineWrap::start()` を呼ぶ（`capture_path_from_env` と
-/// 同じ層分け＝env 読取りは daemon 層に集約し、native へは解決済み値を渡す）。未設定 / 空文字列は
-/// `None`（host 既定を使う・従来経路とビット同一）。
-fn device_name_from_env() -> Option<String> {
-    match std::env::var("ORBIT_AUDIO_DEVICE") {
-        Ok(raw) if !raw.trim().is_empty() => Some(raw),
-        Ok(_) => None,
-        Err(std::env::VarError::NotPresent) => None,
-        Err(std::env::VarError::NotUnicode(_)) => {
-            // 🔴 #612: 上と同じ理由で best-effort（診断が書けないだけで daemon を殺さない）。
-            crate::best_effort_stderr::write_line_best_effort(
-                "[audio-device] ORBIT_AUDIO_DEVICE が非 UTF-8 のため無視した（host 既定へ縮退）",
-            );
-            None
-        }
-    }
+fn probe_then_pause_old<T>(
+    probe: impl FnOnce() -> Result<T, OutputError>,
+    pause_old: impl FnOnce() -> Result<(), OutputError>,
+) -> Result<T, OutputError> {
+    let live = probe()?;
+    pause_old()?;
+    Ok(live)
 }
 
 impl EngineWrap {
@@ -4221,13 +4317,24 @@ impl EngineWrap {
         not(feature = "outproc-instrument")
     ))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        Self::start_with_options(StartupOptions::from_env())
+    }
+
+    #[cfg(all(
+        not(feature = "link-audio"),
+        not(feature = "clap-host"),
+        not(feature = "outproc-effect"),
+        not(feature = "outproc-instrument")
+    ))]
+    pub fn start_with_options(
+        options: StartupOptions,
+    ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let (engine, stream, stream_stats) = orbit_audio_native::start_default_output_with_device(
             capture_path_from_env(),
-            device_name_from_env(),
+            options.output_request(),
         )?;
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let wrap = Self::finish_start(engine, &stream, stream_stats, None, None);
         let guard = StreamGuard { stream };
-        wrap.record_stream_config(None, None);
         Ok((wrap, guard))
     }
 
@@ -4241,11 +4348,23 @@ impl EngineWrap {
         not(feature = "outproc-instrument")
     ))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        Self::start_with_options(StartupOptions::from_env())
+    }
+
+    #[cfg(all(
+        feature = "link-audio",
+        not(feature = "clap-host"),
+        not(feature = "outproc-effect"),
+        not(feature = "outproc-instrument")
+    ))]
+    pub fn start_with_options(
+        options: StartupOptions,
+    ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let (engine, stream, stream_stats, reg_tx) =
             orbit_audio_native::start_default_output_with_link_egress(
                 crate::link_audio::REG_RING_CAPACITY,
                 capture_path_from_env(),
-                device_name_from_env(),
+                options.output_request(),
             )?;
         let (control, link_guard) = crate::link_audio::LinkAudioControl::spawn(
             reg_tx,
@@ -4253,7 +4372,7 @@ impl EngineWrap {
             stream.channels as usize,
         )
         .map_err(|e| WrapError::LinkAudio(e.to_string()))?;
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let wrap = Self::finish_start(engine, &stream, stream_stats, None, None);
         *wrap
             .link
             .lock()
@@ -4262,7 +4381,6 @@ impl EngineWrap {
             stream,
             _link: Some(link_guard),
         };
-        wrap.record_stream_config(None, None);
         Ok((wrap, guard))
     }
 
@@ -4278,6 +4396,18 @@ impl EngineWrap {
         not(feature = "outproc-instrument")
     ))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        Self::start_with_options(StartupOptions::from_env())
+    }
+
+    #[cfg(all(
+        feature = "clap-host",
+        not(feature = "link-audio"),
+        not(feature = "outproc-effect"),
+        not(feature = "outproc-instrument")
+    ))]
+    pub fn start_with_options(
+        options: StartupOptions,
+    ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         // event ring 1024 / install ring 1（spike と同容量）。
         let (processor, parts) = orbit_clap_host::new_clap_host(1024, 1);
         let (engine, stream, stream_stats, cb_stats) =
@@ -4285,7 +4415,7 @@ impl EngineWrap {
                 processor,
                 None,
                 capture_path_from_env(),
-                device_name_from_env(),
+                options.output_request(),
             )
             .map_err(WrapError::Output)?;
         // 専用スレッドを起動（!Send instance + pump をここで所有）。install ring producer を渡す。
@@ -4294,7 +4424,7 @@ impl EngineWrap {
             parts.resize_count,
             parts.install_tx,
         );
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let wrap = Self::finish_start(engine, &stream, stream_stats, None, Some(cb_stats.clone()));
         *wrap
             .clap
             .lock()
@@ -4313,7 +4443,6 @@ impl EngineWrap {
             stream,
             _clap_thread: thread_guard,
         };
-        wrap.record_stream_config(None, Some(cb_stats));
         Ok((wrap, guard))
     }
 
@@ -4327,9 +4456,21 @@ impl EngineWrap {
         not(feature = "outproc-instrument")
     ))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        Self::start_with_options(StartupOptions::from_env())
+    }
+
+    #[cfg(all(
+        feature = "outproc-effect",
+        not(feature = "clap-host"),
+        not(feature = "link-audio"),
+        not(feature = "outproc-instrument")
+    ))]
+    pub fn start_with_options(
+        options: StartupOptions,
+    ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let cfg = crate::outproc_effect::OutProcEffectConfig::from_env()
             .map_err(WrapError::OutProcEffectUnavailable)?;
-        Self::start_outproc_effect_post_boot(cfg)
+        Self::start_outproc_effect_post_boot_with_options(cfg, options)
     }
 
     /// 既存 gated harness 用の明示設定入口。従来どおり、返却前に設定済み plugin を attach する。
@@ -4353,6 +4494,14 @@ impl EngineWrap {
     #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
     pub fn start_outproc_effect_post_boot(
         cfg: crate::outproc_effect::OutProcEffectConfig,
+    ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        Self::start_outproc_effect_post_boot_with_options(cfg, StartupOptions::from_env())
+    }
+
+    #[cfg(all(feature = "outproc-effect", not(feature = "outproc-instrument")))]
+    fn start_outproc_effect_post_boot_with_options(
+        cfg: crate::outproc_effect::OutProcEffectConfig,
+        options: StartupOptions,
     ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         use crate::outproc_effect::{
             OutProcEffectPostProcessor, OutProcEffectPostProcessorParts, OutProcEffectStats,
@@ -4393,7 +4542,7 @@ impl EngineWrap {
                 processor,
                 cfg.buffer_frames,
                 capture_path_from_env(),
-                device_name_from_env(),
+                options.output_request(),
             )
             .map_err(WrapError::Output)?;
         let sample_rate = stream.sample_rate;
@@ -4413,7 +4562,13 @@ impl EngineWrap {
         shm_cleanup.disarm();
 
         // 6. wrap 構築 + control 注入。
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let wrap = Self::finish_start(
+            engine,
+            &stream,
+            stream_stats,
+            cfg.buffer_frames,
+            Some(cb_stats.clone()),
+        );
         *wrap
             .outproc
             .lock()
@@ -4470,7 +4625,6 @@ impl EngineWrap {
             _child_guard: child_slot,
             _bus_child_guards: bus_child_guards,
         };
-        wrap.record_stream_config(cfg.buffer_frames, Some(cb_stats));
         Ok((wrap, guard))
     }
 
@@ -4483,9 +4637,21 @@ impl EngineWrap {
         not(feature = "outproc-effect")
     ))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        Self::start_with_options(StartupOptions::from_env())
+    }
+
+    #[cfg(all(
+        feature = "outproc-instrument",
+        not(feature = "clap-host"),
+        not(feature = "link-audio"),
+        not(feature = "outproc-effect")
+    ))]
+    pub fn start_with_options(
+        options: StartupOptions,
+    ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let cfg = crate::outproc_instrument::OutProcInstrumentConfig::from_env()
             .map_err(WrapError::OutProcInstrumentUnavailable)?;
-        Self::start_outproc_instrument_post_boot(cfg)
+        Self::start_outproc_instrument_post_boot_with_options(cfg, options)
     }
 
     /// Existing gated-harness entry point. Preserves its pre-existing eager attach behavior.
@@ -4517,6 +4683,19 @@ impl EngineWrap {
     pub fn start_outproc_instrument_post_boot(
         cfg: crate::outproc_instrument::OutProcInstrumentConfig,
     ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        Self::start_outproc_instrument_post_boot_with_options(cfg, StartupOptions::from_env())
+    }
+
+    #[cfg(all(
+        feature = "outproc-instrument",
+        not(feature = "clap-host"),
+        not(feature = "link-audio"),
+        not(feature = "outproc-effect")
+    ))]
+    fn start_outproc_instrument_post_boot_with_options(
+        cfg: crate::outproc_instrument::OutProcInstrumentConfig,
+        options: StartupOptions,
+    ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         // #540 P1: instrument slot pool（both build と同方式・instrument-only 版）。
         let (pending_instrument_slots, instrument_sources) =
             build_pending_instrument_slots(cfg.slots)?;
@@ -4527,7 +4706,7 @@ impl EngineWrap {
                 instrument_sources,
                 buffer_frames,
                 capture_path_from_env(),
-                device_name_from_env(),
+                options.output_request(),
             )
             .map_err(WrapError::Output)?;
         let sample_rate = stream.sample_rate;
@@ -4536,7 +4715,13 @@ impl EngineWrap {
         let (instrument_slot_entries, instrument_child_guards, instrument_teardowns) =
             install_instrument_slots(pending_instrument_slots, &cfg.child_exe, sample_rate);
 
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let wrap = Self::finish_start(
+            engine,
+            &stream,
+            stream_stats,
+            buffer_frames,
+            Some(cb_stats.clone()),
+        );
         *wrap.outproc_instrument.lock().map_err(|_| {
             WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
         })? = Some(OutProcInstrumentControl {
@@ -4552,7 +4737,6 @@ impl EngineWrap {
             stream,
             _child_guards: instrument_child_guards,
         };
-        wrap.record_stream_config(buffer_frames, Some(cb_stats));
         Ok((wrap, guard))
     }
 
@@ -4577,6 +4761,19 @@ impl EngineWrap {
     pub fn start_outproc_both(
         effect_cfg: crate::outproc_effect::OutProcEffectConfig,
         instrument_cfg: crate::outproc_instrument::OutProcInstrumentConfig,
+    ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        Self::start_outproc_both_with_options(
+            effect_cfg,
+            instrument_cfg,
+            StartupOptions::from_env(),
+        )
+    }
+
+    #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
+    fn start_outproc_both_with_options(
+        effect_cfg: crate::outproc_effect::OutProcEffectConfig,
+        instrument_cfg: crate::outproc_instrument::OutProcInstrumentConfig,
+        options: StartupOptions,
     ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         use crate::outproc_effect::{
             OutProcEffectPostProcessor, OutProcEffectPostProcessorParts, OutProcEffectStats,
@@ -4622,7 +4819,7 @@ impl EngineWrap {
                 processor,
                 buffer_frames,
                 capture_path_from_env(),
-                device_name_from_env(),
+                options.output_request(),
             )
             .map_err(WrapError::Output)?;
         let installed_master = install_effect_slot(EffectSlotInstallParts {
@@ -4646,7 +4843,13 @@ impl EngineWrap {
                 &instrument_cfg.child_exe,
                 stream.sample_rate,
             );
-        let wrap = Self::build(engine, stream.sample_rate, stream.channels, stream_stats);
+        let wrap = Self::finish_start(
+            engine,
+            &stream,
+            stream_stats,
+            buffer_frames,
+            Some(effect_cb_stats.clone()),
+        );
         *wrap
             .outproc
             .lock()
@@ -4713,7 +4916,6 @@ impl EngineWrap {
             _bus_child_guards: bus_child_guards,
             _instrument_child_guards: instrument_child_guards,
         };
-        wrap.record_stream_config(buffer_frames, Some(effect_cb_stats));
         Ok((wrap, guard))
     }
 
@@ -4724,11 +4926,23 @@ impl EngineWrap {
         not(feature = "link-audio")
     ))]
     pub fn start() -> Result<(Arc<Self>, StreamGuard), WrapError> {
+        Self::start_with_options(StartupOptions::from_env())
+    }
+
+    #[cfg(all(
+        feature = "outproc-effect",
+        feature = "outproc-instrument",
+        not(feature = "clap-host"),
+        not(feature = "link-audio")
+    ))]
+    pub fn start_with_options(
+        options: StartupOptions,
+    ) -> Result<(Arc<Self>, StreamGuard), WrapError> {
         let effect = crate::outproc_effect::OutProcEffectConfig::from_env()
             .map_err(WrapError::OutProcEffectUnavailable)?;
         let instrument = crate::outproc_instrument::OutProcInstrumentConfig::from_env()
             .map_err(WrapError::OutProcInstrumentUnavailable)?;
-        Self::start_outproc_both(effect, instrument)
+        Self::start_outproc_both_with_options(effect, instrument, options)
     }
 
     /// [`AudioBackend`] 経由で起動する（integration test 用）。
@@ -4741,6 +4955,7 @@ impl EngineWrap {
         let started = backend.start()?;
         let wrap = Self::build(
             started.engine,
+            "test audio backend".to_string(),
             started.sample_rate,
             started.channels,
             started.stats,
@@ -4748,10 +4963,34 @@ impl EngineWrap {
         Ok((wrap, started.guard))
     }
 
+    /// Real-output start variants share this final construction and stream-config recording path.
+    fn finish_start(
+        engine: Engine,
+        stream: &OutputStream,
+        stream_stats: Arc<StreamStats>,
+        buffer_frames: Option<u32>,
+        cb_stats: Option<Arc<orbit_audio_native::CallbackTimeStats>>,
+    ) -> Arc<Self> {
+        let wrap = Self::build(
+            engine,
+            stream.device_name.clone(),
+            stream.sample_rate,
+            stream.channels,
+            stream_stats,
+        );
+        wrap.record_stream_config(
+            StreamConfigSnapshot::from_output_stream(stream),
+            buffer_frames,
+            cb_stats,
+        );
+        wrap
+    }
+
     /// `start` / `start_with` 共通の Arc<Self> 構築部。新しいフィールドが
     /// 追加された際、両経路で初期化漏れが起きないよう一箇所に集約する。
     fn build(
         engine: Engine,
+        device_name: String,
         sample_rate: u32,
         channels: u16,
         stream_stats: Arc<StreamStats>,
@@ -4761,6 +5000,18 @@ impl EngineWrap {
             engine,
             sample_rate,
             channels,
+            stream_config: Mutex::new(StreamConfigSnapshot {
+                device_name,
+                sample_rate,
+                channels,
+                device_requested: None,
+                device_fell_back: false,
+                fallback_reason: None,
+                first_callback_ms: 0,
+                last_switch_failure: None,
+                output_fault: OutputFault::None,
+            }),
+            callback_alive: AtomicBool::new(false),
             samples: Mutex::new(HashMap::new()),
             started_at: std::time::Instant::now(),
             stream_stats,
@@ -4823,16 +5074,92 @@ impl EngineWrap {
     /// callback-duration 計測の連続性を保つ）。`StreamGuard` 自体の所有権はこれまでどおり呼び出し側
     /// （`main.rs` の audio owner thread ローカル変数）が持つ — ここでは触らない。
     fn record_stream_config(
-        self: &Arc<Self>,
+        &self,
+        stream_config: StreamConfigSnapshot,
         buffer_frames: Option<u32>,
         cb_stats: Option<Arc<orbit_audio_native::CallbackTimeStats>>,
     ) {
+        match self.stream_config.lock() {
+            Ok(mut slot) => *slot = stream_config,
+            Err(poisoned) => {
+                tracing::warn!(
+                    "stream config mutex poisoned; replacing the stored stream configuration"
+                );
+                *poisoned.into_inner() = stream_config;
+            }
+        }
         if let Ok(mut slot) = self.output_buffer_frames.lock() {
             *slot = buffer_frames;
         }
         if let Ok(mut slot) = self.output_cb_stats.lock() {
             *slot = cb_stats;
         }
+    }
+
+    /// Record both arms of a live device-switch attempt through one path. A failed attempt keeps
+    /// the effective stream fields intact and only attaches its reason for `GetStatus`.
+    fn record_device_switch_result(
+        &self,
+        requested_device: Option<&str>,
+        result: &Result<(String, StreamConfigSnapshot), WrapError>,
+        buffer_frames: Option<u32>,
+        cb_stats: Option<Arc<orbit_audio_native::CallbackTimeStats>>,
+    ) {
+        let requested_device = requested_device.unwrap_or("<system default output>");
+        match result {
+            Ok((selected_device, stream_config)) => {
+                tracing::info!(
+                    "audio output device switch to {:?} succeeded: using {:?}",
+                    requested_device,
+                    selected_device
+                );
+                self.record_stream_config(stream_config.clone(), buffer_frames, cb_stats);
+            }
+            Err(error) => {
+                // 🔴 切替では何も init していないので、`WrapError::Output` の Display が付ける
+                // 「audio output init failed: 」は嘘になる（この文字列は ERROR ログ・
+                // `last_switch_failure`・MCP の返り値・エディタの警告すべてに載る）。
+                // 内側の `OutputError` の Display を使う。
+                let reason = match error {
+                    WrapError::Output(output) => output.to_string(),
+                    other => other.to_string(),
+                };
+                tracing::error!(
+                    "audio output device switch to {:?} failed: {}",
+                    requested_device,
+                    reason
+                );
+                match self.stream_config.lock() {
+                    Ok(mut snapshot) => snapshot.last_switch_failure = Some(reason),
+                    Err(poisoned) => {
+                        tracing::warn!(
+                            "stream config mutex poisoned; recording the device switch failure"
+                        );
+                        poisoned.into_inner().last_switch_failure = Some(reason);
+                    }
+                }
+            }
+        }
+    }
+
+    fn reject_device_switch(
+        &self,
+        requested_device: Option<&str>,
+        error: WrapError,
+    ) -> Result<String, WrapError> {
+        let result: Result<(String, StreamConfigSnapshot), WrapError> = Err(error);
+        self.record_device_switch_result(requested_device, &result, None, None);
+        result.map(|(selected_name, _)| selected_name)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_device_switch_failure_for_test(
+        &self,
+        requested_device: &str,
+        reason: &str,
+    ) {
+        let result = Err(WrapError::AudioDeviceSwitchUnavailable(reason.to_string()));
+        self.record_device_switch_result(Some(requested_device), &result, None, None);
     }
 
     /// device switch（#484 D2）: `main.rs` の audio owner thread が `EngineWrap::start()` 直後に
@@ -4855,6 +5182,35 @@ impl EngineWrap {
     /// - **ブロッキング呼び出し**: 呼び出し側は `spawn_blocking`（session.rs の他の cpal I/O ハンドラと
     ///   同じ隔離）から呼ぶこと。RT callback 内からは絶対に呼ばない。
     pub fn select_audio_device(&self, device: Option<String>) -> Result<String, WrapError> {
+        let requested = device.clone();
+        // 🔴 owner thread に**届く前**の失敗はすべて `dispatch_device_switch` が `Err` で返し、
+        // 記録はここ 1 箇所で行う。以前は失敗経路ごとに `reject_device_switch` を書いていて、
+        // 5 つ目の経路を足す人が記録を落としても型で気づけなかった。
+        let reply_rx = match self.dispatch_device_switch(device) {
+            Ok(reply_rx) => reply_rx,
+            Err(error) => return self.reject_device_switch(requested.as_deref(), error),
+        };
+        match reply_rx.recv() {
+            // owner thread の `apply_device_switch` が成否とも記録済み。**二重に記録しない。**
+            Ok(result) => result,
+            Err(_) => self.reject_device_switch(
+                requested.as_deref(),
+                WrapError::AudioDeviceSwitchUnavailable(
+                    "audio owner thread dropped the reply channel".into(),
+                ),
+            ),
+        }
+    }
+
+    /// 切替要求を audio owner thread へ渡すところまで。
+    ///
+    /// ここが返す `Err` は **まだ `record_device_switch_result` を通っていない**（要求が owner
+    /// thread に届いていないので、記録は呼び出し側の責任）。逆に、返した receiver から届く
+    /// `Result` は owner thread 側で記録済みである。
+    fn dispatch_device_switch(
+        &self,
+        device: Option<String>,
+    ) -> Result<std::sync::mpsc::Receiver<Result<String, WrapError>>, WrapError> {
         if capture_path_from_env().is_some() {
             return Err(WrapError::AudioDeviceSwitchUnavailable(
                 "ORBIT_CAPTURE_WAV is active; runtime device switch is unsupported while \
@@ -4883,11 +5239,7 @@ impl EngineWrap {
         .map_err(|_| {
             WrapError::AudioDeviceSwitchUnavailable("audio owner thread has exited".into())
         })?;
-        reply_rx.recv().map_err(|_| {
-            WrapError::AudioDeviceSwitchUnavailable(
-                "audio owner thread dropped the reply channel".into(),
-            )
-        })?
+        Ok(reply_rx)
     }
 
     /// device switch（#484 D2）: 実際の cpal I/O。**audio owner thread 上でのみ呼ぶこと**
@@ -4900,27 +5252,68 @@ impl EngineWrap {
         guard: &mut StreamGuard,
         device: Option<String>,
     ) -> Result<String, WrapError> {
-        let device_label = match &device {
-            Some(name) if !name.trim().is_empty() => name.clone(),
-            _ => "system default".to_string(),
-        };
         let render_state = guard.stream.render_state();
         let buffer_frames = self.output_buffer_frames.lock().ok().and_then(|g| *g);
         let cb_stats = self.output_cb_stats.lock().ok().and_then(|g| g.clone());
+        let current = self.stream_config_snapshot();
 
-        let new_stream = orbit_audio_native::rebuild_output_stream(
-            render_state,
-            self.engine.clone(),
-            self.stream_stats.clone(),
-            cb_stats,
+        let switch_result = (|| {
+            // Probe is a standalone zero-fill stream with a private callback counter, so the old
+            // render stream stays live for the full (up to 3 s) preflight. Only a probe success is
+            // allowed to pause the old stream before build -> play -> callback confirmation.
+            let live = probe_then_pause_old(
+                || {
+                    orbit_audio_native::select_live_output_device(
+                        OutputDeviceRequest {
+                            name: device.clone(),
+                            fault: current.output_fault,
+                        },
+                        buffer_frames,
+                        Some(current.sample_rate),
+                        // ライブ切替は縮退しない（owner 裁定 2026-09-05・設計 §3）。
+                        orbit_audio_native::DeviceFallbackPolicy::RejectAndKeepCurrent,
+                    )
+                },
+                || guard.stream.pause(),
+            )?;
+            let rebuilt = orbit_audio_native::rebuild_output_stream(
+                live,
+                render_state,
+                self.engine.clone(),
+                self.stream_stats.clone(),
+                cb_stats.clone(),
+            );
+            let new_stream = match rebuilt {
+                Ok(stream) => stream,
+                Err(primary) => {
+                    // A failed replacement is paused before its OutputStream is dropped. Resume
+                    // the untouched old stream, retaining both causes if that recovery also fails.
+                    let error = match guard.stream.play() {
+                        Ok(()) => primary,
+                        Err(resume) => OutputError::SwitchRecoveryFailed {
+                            primary: Box::new(primary),
+                            resume: Box::new(resume),
+                        },
+                    };
+                    return Err(WrapError::Output(error));
+                }
+            };
+            let stream_config = StreamConfigSnapshot::from_output_stream(&new_stream);
+            let selected_name = stream_config.device_name.clone();
+            // Assignment drops the already-paused old OutputStream; its Drop pauses once more as
+            // the final invariant that no discarded cpal stream remains live.
+            guard.stream = new_stream;
+            Ok((selected_name, stream_config))
+        })();
+
+        // Success and failure deliberately converge here so neither observability arm can drift.
+        self.record_device_switch_result(
+            device.as_deref(),
+            &switch_result,
             buffer_frames,
-            device,
-        )?;
-        // 新 stream が再生開始した後にだけ古い stream を差し替える（`rebuild_output_stream` は
-        // 内部で `stream.play()` 済みを返す）。切替が失敗した場合はこの代入に到達せず、古い stream が
-        // そのまま生き続ける＝無音のまま失敗しない。
-        guard.stream = new_stream;
-        Ok(device_label)
+            cb_stats,
+        );
+        switch_result.map(|(selected_name, _)| selected_name)
     }
 
     /// 名前付き LinkAudio channel を登録する（A4-2b-2・feature `link-audio` 専用）。
@@ -8054,7 +8447,7 @@ impl EngineWrap {
     }
 
     pub fn output_sample_rate(&self) -> u32 {
-        self.sample_rate
+        self.stream_config_snapshot().sample_rate
     }
 
     /// 現在の出力ストリーム時刻（scheduler transport 秒）。`play_at` の `time_sec` と同一座標系。
@@ -8092,7 +8485,7 @@ impl EngineWrap {
     }
 
     pub fn output_channels(&self) -> u16 {
-        self.channels
+        self.stream_config_snapshot().channels
     }
 
     /// ファイルをロードし sample_id を返す。
@@ -8318,6 +8711,29 @@ impl EngineWrap {
     /// audio stream の稼働統計スナップショット（StreamStats event 用）。
     pub fn stream_stats_snapshot(&self) -> StreamStatsSnapshot {
         self.stream_stats.snapshot()
+    }
+
+    /// GetStatus 用の現在の実効 stream 構成。1 回の lock で3フィールドを整合したまま複製する。
+    pub fn stream_config_snapshot(&self) -> StreamConfigSnapshot {
+        match self.stream_config.lock() {
+            Ok(snapshot) => snapshot.clone(),
+            Err(poisoned) => {
+                tracing::warn!(
+                    "stream config mutex poisoned; reporting the last stored stream configuration"
+                );
+                poisoned.into_inner().clone()
+            }
+        }
+    }
+
+    /// 1 Hz ticker が直近区間の callback 前進有無を書き込む。
+    pub(crate) fn set_callback_alive(&self, alive: bool) {
+        self.callback_alive.store(alive, Ordering::Relaxed);
+    }
+
+    /// GetStatus は時間窓を作らず、1 Hz ticker が確定した値だけを読む。
+    pub fn callback_alive(&self) -> bool {
+        self.callback_alive.load(Ordering::Relaxed)
     }
 
     /// `samples` Mutex を poisoned-safe に取得する。
@@ -9399,7 +9815,13 @@ mod plugin_load_gate_tests {
     // ClapControl 無しで plugin_loaded ガードだけを検証できる（#405）。
     fn unstarted_engine() -> Arc<EngineWrap> {
         let engine = orbit_audio_core::Engine::new(48_000, 2);
-        EngineWrap::build(engine, 48_000, 2, Arc::new(StreamStats::default()))
+        EngineWrap::build(
+            engine,
+            "test-device".to_string(),
+            48_000,
+            2,
+            Arc::new(StreamStats::default()),
+        )
     }
 
     /// plugin 未ロード時に `f` が **専用の** `WrapError::ClapNotLoaded` を返すことを検証する共通
@@ -10006,21 +10428,129 @@ mod capture_path_tests {
     }
 }
 
+#[cfg(test)]
+mod startup_options_tests {
+    use super::{parse_output_fault, StartupOptions};
+    use orbit_audio_native::OutputFault;
+
+    #[test]
+    fn parses_output_fault_names_and_defaults_unknown_values_to_none() {
+        assert_eq!(parse_output_fault(None), OutputFault::None);
+        assert_eq!(
+            parse_output_fault(Some("dead-probe-requested")),
+            OutputFault::DeadProbeRequested
+        );
+        assert_eq!(
+            parse_output_fault(Some("DeadAllProbes")),
+            OutputFault::DeadAllProbes
+        );
+        assert_eq!(
+            parse_output_fault(Some("dead-real-stream")),
+            OutputFault::DeadRealStream
+        );
+        assert_eq!(parse_output_fault(Some("unknown")), OutputFault::None);
+    }
+
+    #[test]
+    fn startup_options_only_honor_faults_when_the_gate_is_enabled() {
+        let args = ["--audio-device".to_string(), "USB Audio".to_string()];
+        assert_eq!(
+            StartupOptions::from_args_and_env(
+                args.clone(),
+                Some("Environment Audio"),
+                false,
+                Some("dead-all-probes"),
+            ),
+            StartupOptions {
+                device_name: Some("USB Audio".to_string()),
+                fault: OutputFault::None,
+            }
+        );
+        assert_eq!(
+            StartupOptions::from_args_and_env(args, None, true, Some("dead-all-probes")),
+            StartupOptions {
+                device_name: Some("USB Audio".to_string()),
+                fault: OutputFault::DeadAllProbes,
+            }
+        );
+    }
+}
+
 /// device switch（#484 D2）: `select_audio_device` の非 cpal 分岐（capture 拒否・
 /// owner thread 未生存）を `StubBackend`（実 cpal I/O を伴わない test backend）で検証する。
 /// 実際の cpal `Device`/`Stream` 差し替えそのもの（`apply_device_switch`）は実機 gated harness の
 /// 領域（unit test では検証不能）。
 #[cfg(test)]
 mod select_audio_device_tests {
-    use super::EngineWrap;
+    use super::{probe_then_pause_old, EngineWrap, OutputFault, StreamConfigSnapshot, WrapError};
     use crate::backend::StubBackend;
+    use orbit_audio_native::OutputError;
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct LogCaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+    struct LogCaptureGuard(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for LogCaptureGuard {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("capture log mutex").extend(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogCaptureWriter {
+        type Writer = LogCaptureGuard;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            LogCaptureGuard(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn probe_completes_before_pause_and_probe_failure_never_pauses() {
+        let calls = RefCell::new(Vec::new());
+        let selected = probe_then_pause_old(
+            || {
+                calls.borrow_mut().push("probe");
+                Ok("live")
+            },
+            || {
+                calls.borrow_mut().push("pause");
+                Ok(())
+            },
+        )
+        .expect("successful probe should proceed to pause");
+        assert_eq!(selected, "live");
+        assert_eq!(*calls.borrow(), ["probe", "pause"]);
+
+        calls.borrow_mut().clear();
+        let failed = probe_then_pause_old::<()>(
+            || {
+                calls.borrow_mut().push("probe");
+                Err(OutputError::NoDevice)
+            },
+            || {
+                calls.borrow_mut().push("pause");
+                Ok(())
+            },
+        );
+        assert!(matches!(failed, Err(OutputError::NoDevice)));
+        assert_eq!(*calls.borrow(), ["probe"]);
+    }
 
     /// capture-active（`ORBIT_CAPTURE_WAV`）拒否と、audio owner thread 未登録（`start_with` /
     /// test backend 経路）拒否の両方を **1 テスト関数内**で順に検証する。`ORBIT_CAPTURE_WAV` は
     /// プロセス全体で共有される可変状態なので、別テスト関数に分けて cargo test のデフォルト並列
     /// 実行に晒すと set/remove がレースする（`named_bus_pool_tests` の既存 env 慣習と同じ落とし穴）。
     #[test]
-    fn select_audio_device_rejects_capture_active_then_missing_owner_thread() {
+    fn select_audio_device_records_capture_owner_and_send_rejections() {
         // SAFETY: テスト専用の単一テスト関数内 env 操作（このテストの実行区間でのみ意味を持つ値）。
         unsafe {
             std::env::set_var("ORBIT_CAPTURE_WAV", "/tmp/does-not-matter.wav");
@@ -10034,10 +10564,13 @@ mod select_audio_device_tests {
             format!("{capture_error}").contains("ORBIT_CAPTURE_WAV is active"),
             "{capture_error}"
         );
+        assert!(wrap
+            .stream_config_snapshot()
+            .last_switch_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("ORBIT_CAPTURE_WAV is active")));
 
-        // capture を無効化すると、`start_with`（test backend）が `install_device_switch_channel`
-        // を一度も呼んでいないため「audio owner thread 未登録」として明示的に reject する
-        // （無音で成功したふりをしない）。
+        // capture を無効化すると test backend は owner thread 未登録として明示的に reject する。
         unsafe {
             std::env::remove_var("ORBIT_CAPTURE_WAV");
         }
@@ -10048,6 +10581,146 @@ mod select_audio_device_tests {
             format!("{no_owner_error}").contains("no audio owner thread"),
             "{no_owner_error}"
         );
+        assert!(wrap
+            .stream_config_snapshot()
+            .last_switch_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("no audio owner thread")));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(rx);
+        wrap.install_device_switch_channel(tx);
+        let send_error = wrap
+            .select_audio_device(Some("Disconnected Device".into()))
+            .expect_err("closed owner channel must reject the switch");
+        assert!(
+            format!("{send_error}").contains("audio owner thread has exited"),
+            "{send_error}"
+        );
+        assert!(wrap
+            .stream_config_snapshot()
+            .last_switch_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("audio owner thread has exited")));
+    }
+
+    #[test]
+    fn stream_config_snapshot_replaces_all_effective_fields_together() {
+        let (wrap, _guard) = EngineWrap::start_with(StubBackend {
+            sample_rate: 44_100,
+            channels: 1,
+        })
+        .expect("stub backend start");
+        assert_eq!(
+            wrap.stream_config_snapshot(),
+            StreamConfigSnapshot {
+                device_name: "test audio backend".to_string(),
+                sample_rate: 44_100,
+                channels: 1,
+                device_requested: None,
+                device_fell_back: false,
+                fallback_reason: None,
+                first_callback_ms: 0,
+                last_switch_failure: None,
+                output_fault: OutputFault::None,
+            }
+        );
+
+        wrap.record_stream_config(
+            StreamConfigSnapshot {
+                device_name: "switched output".to_string(),
+                sample_rate: 96_000,
+                channels: 6,
+                device_requested: Some("requested output".to_string()),
+                device_fell_back: true,
+                fallback_reason: Some("test fallback".to_string()),
+                first_callback_ms: 12,
+                last_switch_failure: None,
+                output_fault: OutputFault::DeadProbeRequested,
+            },
+            None,
+            None,
+        );
+
+        let switched = wrap.stream_config_snapshot();
+        assert_eq!(switched.device_name, "switched output");
+        assert_eq!(
+            switched.device_requested.as_deref(),
+            Some("requested output")
+        );
+        assert!(switched.device_fell_back);
+        assert_eq!(switched.fallback_reason.as_deref(), Some("test fallback"));
+        assert_eq!(switched.first_callback_ms, 12);
+        assert_eq!(wrap.output_sample_rate(), 96_000);
+        assert_eq!(wrap.output_channels(), 6);
+    }
+
+    #[test]
+    fn device_switch_result_records_failure_and_success_through_the_same_path() {
+        let (wrap, _guard) = EngineWrap::start_with(StubBackend {
+            sample_rate: 48_000,
+            channels: 2,
+        })
+        .expect("stub backend start");
+        let original = wrap.stream_config_snapshot();
+        let failed = Err(WrapError::Output(OutputError::StreamDead {
+            device: "Rejected Output".to_string(),
+            waited_ms: 3_000,
+            phase: orbit_audio_native::StreamLivenessPhase::Probe,
+        }));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::ERROR)
+            .with_writer(LogCaptureWriter(log.clone()))
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            // 🔴 callsite の interest はプロセス全体で 1 つ。並列に走る別テストが同じ
+            // `tracing::error!` を **subscriber の無い状態**で先に踏むと `Interest::never()` が
+            // キャッシュされ、このテストの捕捉が**空**になる（2026-09-05 に `--lib` 全件で 1 回
+            // 発生・単体と再実行では緑）。捕捉の直前に再構築して、この順序依存を消す。
+            tracing::callsite::rebuild_interest_cache();
+            wrap.record_device_switch_result(Some("Requested Output"), &failed, None, None);
+        });
+
+        let rejected = wrap.stream_config_snapshot();
+        assert_eq!(rejected.device_name, original.device_name);
+        assert_eq!(rejected.sample_rate, original.sample_rate);
+        assert_eq!(rejected.channels, original.channels);
+        assert!(rejected
+            .last_switch_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("produced no callback within 3000 ms")));
+        let rendered = String::from_utf8(log.lock().expect("capture log mutex").clone())
+            .expect("tracing output is utf8");
+        assert!(rendered.contains("ERROR"), "captured log: {rendered:?}");
+        assert_eq!(
+            rendered
+                .lines()
+                .filter(
+                    |line| line.contains("audio output device switch") && line.contains("failed")
+                )
+                .count(),
+            1,
+            "captured log: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("Requested Output")
+                && rendered.contains("produced no callback within 3000 ms"),
+            "captured log: {rendered:?}"
+        );
+
+        let mut selected = original;
+        selected.device_name = "Selected Output".to_string();
+        selected.device_requested = Some("Requested Output".to_string());
+        selected.first_callback_ms = 9;
+        selected.last_switch_failure = None;
+        let succeeded = Ok((selected.device_name.clone(), selected.clone()));
+        wrap.record_device_switch_result(Some("Requested Output"), &succeeded, None, None);
+
+        assert_eq!(wrap.stream_config_snapshot(), selected);
     }
 }
 
@@ -13489,6 +14162,9 @@ mod outproc_instrument_replace_tests {
             .finish();
         let started = Instant::now();
         let result = tracing::subscriber::with_default(subscriber, || {
+            // 上の `device_switch_result_records_...` と同じ理由（callsite interest はプロセス
+            // 全体で 1 つ）。捕捉の直前に再構築する。
+            tracing::callsite::rebuild_interest_cache();
             wrap.replace_outproc_instrument_plugin(
                 PathBuf::from(NEW_PLUGIN),
                 None,

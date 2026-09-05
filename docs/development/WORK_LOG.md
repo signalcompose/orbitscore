@@ -17,6 +17,396 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(661): close the review round-2 findings across all four layers (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+ゲート③ ラウンド 2（`/code:pr-review-team` フル編成 4 体 + Fable 監査を並行）。
+**Critical 0 / Important 5**（うち 3 体が同じ 1 件に収束）。設計パスを 1 つ置いてから一括で直した。
+
+#### 設計パス P1 — ライブ切替の失敗を利用者にどう見せるか
+
+分ける軸は「**いま鳴っている音を止めずに直せるか**」。表は
+`packages/vscode-extension/src/engine-view.ts` の `SELECT_AUDIO_DEVICE_ERRORS` **1 箇所**に置き、
+文言・再起動の要否・「既知かどうか」の 3 つをすべてそこから引く。
+
+| code | 音 | Restart Engine |
+|---|---|---|
+| `AUDIO_DEVICE_UNAVAILABLE` | 鳴り続ける | ❌ 出さない |
+| `AUDIO_DEVICE_STREAM_DEAD` | 鳴り続ける | ❌ 出さない |
+| `AUDIO_DEVICE_SWITCH_UNAVAILABLE`（録音中） | 鳴り続ける | ✅ |
+| `AUDIO_DEVICE_RATE_MISMATCH` | 鳴り続ける | ✅ |
+| `AUDIO_DEVICE_SWITCH_RECOVERY_FAILED`（新設） | **止まっている** | ✅ |
+
+🔴 これを直した理由: F4（名前不一致は縮退せず拒否）を実装したのに、**UI は未知コードとして
+「Restart Engine」を提示**していた。再起動すると起動経路のポリシーで host 既定へ移るので、
+**F4 が避けたかった「演奏中のタイプミスで音が内蔵スピーカーへ移る」を UI が自分で起こす**形だった。
+
+`SwitchRecoveryFailed` を `primary` のコードへ畳むのもやめた。畳むと
+`AUDIO_DEVICE_STREAM_DEAD` の「元の出力を継続します」が、**継続できていない**事象に付く。
+
+#### 🔴 C-7 — 到達不能だった安全網を到達可能にした
+
+`apply_device_switch` の「probe 成功 → 旧を pause → 新の build/play/confirm が失敗 → 旧を
+`play()` で再開」は、**どのテストからも到達できなかった**。実ストリームを殺せる唯一のフォールト
+`DeadRealStream` はプロセス全体に効き、daemon が起動できない（C-4 がそれを証明している）。
+
+`StreamBuildStage { Startup, Switch }` と `OutputFault::DeadRealStreamOnSwitch` を足して到達可能にし、
+gated Rust `C-7` を新設。**変異で赤を実測**:
+
+```
+変異なし                    : ok
+guard.stream.play() を削除  : FAILED
+  the old stream did not resume after a failed switch:
+  before_rate=48, resumed_rate=0
+```
+
+`resumed_rate=0` = 旧ストリームは pause されたまま**恒久的に無音**。これが起きるのが最悪ケース。
+
+#### E2E の判定を強くした
+
+| テスト | 直前まで | 直した形 |
+|---|---|---|
+| **D-0** | `rms > 0` だけ | `output.device_name` が**要求名と一致**・`device_fell_back === false` |
+| **D-2** | `rms > 0` だけ | `device_requested` が要求名・`device_fell_back === true`・`fallback_reason` に理由 |
+| **D-1** | `toBe(before)` が両辺 undefined で**空振りで通る** | 先に `typeof … === 'string'` を固定。包含側も D-3 水準へ |
+| **D-3** | 包含側が `ERROR:` 前置に依存（chunk 境界で**偽赤**） | 前置に依存しない `newLogLines` で数える |
+
+🔴 D-0 は **#661 の受け入れテストそのもの**（「デバイス指定で音が出る」）なのに、`rms > 0` は
+「何らかのデバイスから音が出た」しか言わない。このマシンは出力が実質 1 台なので、
+**指定が無視されて既定に落ちても緑になっていた。**
+
+デバイスの検査は**鳴っている間**に取る必要があった（`runScore` から戻った時点で engine は停止済みで
+`get_engine_state` は `{running:false}` しか返さない）。1 度これで落ちてから直した。
+
+#### その他
+
+- `get_engine_state` の状態問い合わせ予算を 10 秒 → **2.5 秒**。`waitForEngine` はこのツールで
+  `running` を 500 ms 間隔でポーリングするので、10 秒だと 30 秒予算で 3 回しか試せなかった
+- 判定を `resolveEngineState`（`engine-state-bridge.ts`）へ切り出し、**3 分岐すべてに単体テスト**
+  （停止中 / ブリッジが `ok:false` / ブリッジ自体が reject）
+- 切替失敗のメッセージから `audio output init failed: ` の前置を落とした。**切替では何も init して
+  いない**のに、ERROR ログ・`last_switch_failure`・MCP の返り値・UI 文言すべてに載っていた
+- `engine-view.spec.ts` の入力を実形式 `[CODE] message` に揃えた（捏造した mock 文言だった）
+- 設計 §4.5 に「1 回の失敗を 2 層が記録する」を明記。§6 受け入れ 7（**倍速になるか**）に結論を記載
+- `docs/research/ENGINE_DAEMON_PROTOCOL.md` に `SelectAudioDevice` の失敗コード表を追加
+
+#### §2.2「時間が倍速になるか」— 決着
+
+**倍速にならない。ただしそれは `pause()` が 2 重に効いているから**で、リスク自体は実在した。
+C-6 の実測（`--audio-device <既定の名前>` → host 既定へ切替）:
+
+| 変異 | callbacks/s |
+|---|---|
+| 変異なし | **94**（等速） |
+| (a) だけ削除 / (b) だけ削除 | 94（もう片方が効く） |
+| **(a)(b) 両方削除** | **190**（ほぼ倍速） |
+
+#### fix 差分の再点検（PROJECT_RULES §4）
+
+`73b7abce..326e5fce` を 1 レビュアーで再点検。問いは 2 つだけ（新しい故障モード / 実行コンテキスト）。
+**Critical 0 / Important 1**: 「`get_engine_state` の予算短縮が本番の観測性を下げる」。
+
+一次ソースで裁定した結果、**予算では解決しない**:
+
+`//#getEngineState` は REPL の `handleLine` の中で処理され、`createReplSession` の `pushLine` は
+**全行を単一の FIFO promise チェーン**に載せる（`repl-mode.ts`「直列化の根拠 — #476」）。
+instrument の attach は実測 30 秒超なので、10 秒でも 2.5 秒でも答えは返らない。伸ばして変わるのは
+「同じ `statusError` を返すまでに何秒ブロックするか」だけ。
+
+→ 2.5 秒は据え置き、コメントを **E2E 都合ではなく本番の根拠**に書き直して
+`ENGINE_STATE_QUERY_BUDGET_MS` として定数化。本来の解決（状態問い合わせをキューの外で処理する）は
+**#759** へ切り出した。
+
+#### 別 issue へ分離（7 本）
+
+**#755** `select_audio_device` が人間のクリックトグルを共有 /
+**#756** `setupStderrHandler` の `ERROR:` 前置が chunk 単位 /
+**#757** request 相関ブリッジが 5 本 625 行の重複 /
+**#758** 捨てた旧ストリームの disconnect listener が共有 `StreamStats` に `device_lost` を書く /
+**#759** `//#getEngineState` が評価キューの後ろに並ぶので長い await 中は状態が見えない
+
+#### 検証（実機・sandbox 外）
+
+```
+gated Rust  C-1〜C-7  7 passed / 0 failed
+gated MCP   #661 D-0 / D-2 / D-3  3 passed
+```
+
+🔴 `cargo test` を Bash の sandbox 内で回すと CoreAudio が塞がれ `Device::name()` が
+backend error で落ちる（C-1 まで赤くなる）。実機オーディオのテストは sandbox 外で回すこと。
+
+---
+
+### refactor: apply the second /simplify pass to the device-liveness branch (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+F4 の実装と D-1/D-3 の書き換えが 1 回目の `/simplify`（`b535527f`）より後に入ったので、
+`b535527f..HEAD` を対象に 2 回目を回した（reuse / simplification / efficiency / altitude の 4 体）。
+Efficiency は指摘なし（RT コールバック本体・`FIRST_CALLBACK_DEADLINE` の起動予算・1 Hz ticker の
+いずれにも新しいコストは入っていない）。
+
+#### 適用した 5 件
+
+| 指摘 | 直した形 |
+|---|---|
+| `requireCatalogPaths()` が `requireCatalogFixtures()` の完全な部分集合 | 後者が前者を呼ぶ形にして、パス検査を 1 箇所に戻した |
+| `--list-audio-devices` で既定デバイス名を取る 5 行が **3 箇所**（D-0 / D-2 / D-3） | `tests/e2e/helpers/audio-devices.ts` を新設（`listOutputDevices` / `defaultOutputDeviceName`） |
+| `session.rs` の `OutputError` → protocol code の表が **2 箇所**（直接の `Output` と `SwitchRecoveryFailed.primary`） | `actionable_output_error_code` に集約。6 アーム → 1 アーム |
+| `select_audio_device` の `reject_device_switch` が **5 箇所**に散っていた | `dispatch_device_switch` が「owner thread に届く前」の失敗をまとめて `Err` で返し、記録は 1 箇所 |
+| 🔴 `resolve_output_device(.., allow_fallback: bool)` / `select_live_output_device(.., allow_dead_fallback: bool)` | **`DeviceFallbackPolicy { FallBackToHostDefault, RejectAndKeepCurrent }`** に置換 |
+
+最後の 1 件が本命。`allow_fallback` と `allow_dead_fallback` という**別名の裸の bool 2 つ**が、
+実は owner 裁定（起動時 = host 既定へ縮退／ライブ切替 = 元のデバイスへ復帰）という**1 つの二値
+ポリシー**だった。位置引数の `true` / `false` は取り違えてもコンパイルが通るので、
+**実装が裁定文と食い違っていた F4 と同じクラスの回帰**が再発しうる形だった。
+CLAUDE.md「型で潰す」の適用例（兄弟コールバックを 1 本に畳むのと同型）。
+
+#### 別 issue へ分離した 3 件
+
+| # | 指摘 | なぜ #661 でやらないか |
+|---|---|---|
+| **#755** | `select_audio_device` がエージェント経路でも人間のクリックトグル（`resolveDeviceClickAction`）を共有していて、**現在のデバイス名を渡すと engine が止まる** | MCP の観測可能な挙動が変わる。D-3 のアプリ分割はこれの回避 |
+| **#756** | `setupStderrHandler` の `ERROR:` 前置が **chunk 単位**で、同じ chunk の 2 行目以降が数えられない | **gated 全体の測定器**を動かす。#649 が baseline 比較の最中 |
+| **#757** | request 相関ブリッジが **5 本 625 行**の重複（`engine-state-bridge.ts` で 5 本目） | 既存 4 ファイルの書き換えを伴い、無関係な経路に回帰リスクを持ち込む |
+
+#### `cargo test --lib` が 1 回だけ落ちた（順序依存・修正済み）
+
+`device_switch_result_records_failure_and_success_through_the_same_path` が
+`captured log: ""` で落ちた。単体実行と再実行は緑。
+
+原因は **`tracing` の callsite interest がプロセス全体で 1 つ**であること。並列に走る別テストが
+同じ `tracing::error!` を subscriber の無い状態で先に踏むと `Interest::never()` がキャッシュされ、
+捕捉が空になる。捕捉の直前に `tracing::callsite::rebuild_interest_cache()` を呼ぶ形にして、
+`--lib` 全件を 3 回連続で緑にした（同型の捕捉テストは 2 箇所あるので両方に入れた）。
+
+#### 検証
+
+`npm test` **2260 passed / 57 skipped** / `typecheck:e2e` 0 / `lint` 0 /
+`cargo test -p orbit-audio-native -p orbit-audio-daemon` **152 passed / 0 failed**（22 スイート）/
+clippy **5 象限**（4 象限 + `clap-host`）全緑 / `docs:check` **926 verified・0 failed**
+（`--fix` で行番号アンカーのみ再固定・16 ファイル）。
+
+---
+
+### test(e2e): split D-3 into its own app and count its failure on both layers (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+#661 の残り 1 件だった gated `D-3` を実機で緑にした。2 つの別々の欠陥があった。
+
+#### 1. 「切替」ではなく「トグル」になっていた
+
+実機で `audio device deselected and engine stopped: expected false to be true`。
+`selectAudioDeviceForAgent`（`packages/vscode-extension/src/extension.ts`）は
+`resolveDeviceClickAction` を通しており、**要求デバイスが現在の設定と同じなら「選択解除」**
+として扱う（UI のクリック挙動）。D-2/D-3 は同じ fault アプリを共有していて、そのアプリは
+`orbitscore.audioDevice` に**既定デバイス名**を持つ。このマシンには出力デバイスが実質 1 台
+なので「実在するが現在設定と違う名前」が選べず、D-3 の要求が必ずトグルになっていた。
+
+根は **D-2 と D-3 で必要なアプリ構成が逆**であること:
+
+| | 必要な起動構成 |
+|---|---|
+| D-2 | 起動時に名前付きが dead → 既定へ縮退して鳴る → **名前付きで起動** |
+| D-3 | 演奏中の切替候補が dead → 旧のまま鳴り続ける → **現在の設定と違う名前を要求** |
+
+D-3 を独立した `it.skipIf` に切り出し、`orbitscore.audioDevice: '__default__'` で起動して
+既定デバイスを**名前で**要求する形にした（`portBase: 39800`）。`dead-probe-requested` は
+「要求された」デバイスに効くので probe が死ぬ。設計 §6 にもこの制約を明記した。
+
+#### 2. 1 回の失敗を 2 層が別々の文言で記録していた
+
+上を直すと今度は `expected [ Array(1) ] to deeply equal []`。除外条件が daemon 側の文言
+（`audio output device switch to "X" failed`・`engine_wrap.rs` の `record_device_switch_result`）
+だけを見ていたため、engine 側が出す `❌ live device switch to "X" failed: …`
+（`packages/engine/src/cli/repl-mode.ts`）が「想定外の ERROR」として残っていた。
+
+- 除外は共通部分 `device switch to "X" failed` で行う
+- **利用者に届いたか**は engine 側の文言で「ちょうど 1 行」を要求する。daemon の tracing
+  ERROR 行は `outputChannel.append('ERROR: ' + chunk)` が **chunk 単位**で前置するため、
+  同じ chunk の 2 行目以降には `ERROR:` が付かず ERROR 行として数えられない
+- 落ちた時にデバイス名を含むログ行を全部出す。実機は 1 回 15 秒かかる
+
+#### 検証（実機・sandbox 外）
+
+```
+#661 D-0 honors a real named output device and produces audible capture RMS   8255ms  ✓
+#661 D-2 falls back from a dead named device at startup and stays audible    14265ms  ✓
+#661 D-3 keeps the old stream playing when a live switch candidate is dead   13099ms  ✓
+```
+
+`typecheck:e2e` 0 / `eslint` 0 / `prettier --check` 通過 / `docs:check` 926 verified・0 failed。
+
+**関連**: [[reviewers-judge-one-layer-only]]（層をまたぐ契約は片翼だけ見ても分からない）
+
+---
+
+### fix(daemon): keep the current device when a live switch names a missing one (#661 F4) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+🔴 **owner 裁定 2026-09-05**: ライブ切替で名前が一致しない時は **元のデバイスへ復帰**（縮退しない）。
+
+Fable 監査 F4 が、**実装と設計 §3 の裁定文が食い違っている**ことを見つけた。
+`resolve_output_device` の not-found 縮退（`output.rs:315-346`）が**切替経路でも無条件に効く**ため、
+存在しないデバイス名を指定すると `ok:true` で **host 既定へ移っていた**。
+演奏中に `"Pro Tools Aggregate"` をタイプミスすると内蔵スピーカーへ音が移る形だった。
+
+- `resolve_output_device` に `allow_fallback` を足し、**切替経路では名前不一致・出力不可のどちらでも
+  縮退しない**（起動時の縮退は据え置き）。値は既存の `allow_dead_fallback`（起動 `true` / 切替 `false`）
+  をそのまま流用した — 「これは起動か」という同じ問いなので、フラグを増やさない
+- 新エラー `OutputError::DeviceUnavailable` → プロトコルコード **`AUDIO_DEVICE_UNAVAILABLE`**
+- 設計 §3 の確定事項表に裁定を追記
+
+#### E2E D-1 を裁定に合わせて書き換えた
+
+D-1 は**現在の「既定へ移る」挙動を明示的に期待していた**ので、実装と同じラウンドで直した。
+
+- 拒否されること（`isError === true`・メッセージにデバイス名）
+- 🔴 **縮退の痕跡（`❌ audio device fallback: requested "..."`）が出ていないこと**
+- 増えた ERROR は「切替に失敗した」1 種類だけ（`newErrorLines` で行単位に判定）
+- 🔴 **鳴っているデバイスが変わっていないこと** — `get_engine_state` の `output.device_name` を前後で比較。
+  **この比較は同ラウンドで新設した bridge があって初めて書ける**（それまで `get_engine_state` は
+  `{running}` しか返さなかった）
+
+#### 検証（main が sandbox 外で実測）
+
+- 🔴 **clippy 全 5 象限 green**（default / clap-host / outproc-effect / outproc-instrument / 両方）
+- `cargo test --features outproc-effect,outproc-instrument` — lib **268 passed** / protocol **32 passed**
+- `npm test` **2260 passed / 0 failed** / `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified 0 failed**
+- **実機での D-1 / D-3 / D-0 の確認は未実施**
+
+### fix(daemon): keep the old output live while probing a switch candidate (#661 / PR #748 round 1) (Sep 5, 2026)
+
+実機計測で、失敗する切替が本来の 3 秒 probe timeout より約 1.6 秒早く
+`STREAM_CALLBACK_STALLED` fatal を発生させ、約 3.1 秒の無音を作ることが判明した。
+`apply_device_switch` を **probe → 旧 stream の pause → build → play → confirm** に変更し、
+probe 失敗では旧 stream を一度も pause しない。probe と `OutputStream::drop` の
+pause-before-drop は維持した。
+
+併せて、probe / real-stream の `StreamDead` を phase で区別し、旧 stream 再開失敗時も元の
+失敗理由を保持した。`select_audio_device` の早期拒否も `last_switch_failure` に記録する。
+MCP `get_engine_state` は相関 REPL bridge 経由で daemon `GetStatus.output` / `callback` を返す。
+gated E2E には、注入なしの実名デバイス起動 + capture RMS、D-3 の不足していた capture 前提確認、
+ERROR 上限、`STREAM_CALLBACK_STALLED` 非増加を追加した。名前不一致時の F4 挙動は owner 判断待ちの
+まま変更していない。
+
+#### 🔴 この欠陥をどう掴んだか（Fable の予測 → main の実測）
+
+Fable 監査 F1 が「pause が probe より前にあるので、1 Hz の ticker が 2 tick 連続で停止と判定し
+**偽の FATAL が決定論的に出る**」と機構から予測し、**反証用のスクリプトを添えて**きた。
+main が sandbox 外で回した実出力:
+
+```
+[switch-start  2674ms] SelectAudioDevice -> "MacBook Proのスピーカー"
+[EVENT  4172ms] STREAM_CALLBACK_STALLED  severity=warning
+[EVENT  5172ms] STREAM_CALLBACK_STALLED  severity=fatal     ← 偽の FATAL
+[stderr 5802ms] ERROR ... produced no callback within 3000 ms  ← 本物のエラー
+```
+
+**本物のエラーより 1.6 秒早く FATAL が出る。** 設計 §6 D-3 の「ERROR が 1 行」は成立しておらず、
+実際は DaemonError 2 件 + stderr ERROR 1 件だった。だから D-3 のアサーションは `>=` に緩められていた
+（症状に合わせて期待を緩めると、原因が見えなくなる例）。
+
+同時に、**成功する切替が `last_switch_failure` を `null` に戻す**ことも実測で確認できた。
+
+#### レビュアー間で解けた誤検知 2 件
+
+silent-failure が「起動時フォールバックが ERROR でない」「ライブ切替が黙ってすり替わる」と HIGH で
+報告したが、どちらも **Rust 層だけを見て TS 層を見落としたもの**だった。
+
+- 起動時の縮退の利用者向け ERROR は `reportAudioOutput`（`rust-engine-player.ts:904-928`）が
+  `console.error('❌ audio device fallback: ...')` で出す。engine の stderr は `get_log` で ERROR 行になる
+- ライブ切替は `select_live_output_device` の第 4 引数 `allow_dead_fallback` が **`false`**
+  （起動は `true`）なので、黙ってすり替わらず `StreamDead` を返して旧デバイスへ復帰する
+
+code-reviewer がこの二層構成を追ったことで解けた。**単層だけ見て「未実装」と判定しない。**
+
+#### 検証（main が sandbox 外で実測・Codex が走らせられなかったもの）
+
+- `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument`
+  — lib **268 passed** / **protocol 32 passed**（Codex は sandbox の loopback 禁止で 32 failed と報告していた）
+- `npm test` **2260 passed / 0 failed**（loopback を要する HTTP 31 件と daemon-client 32 件も含む）
+- `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified / 0 failed**
+
+### refactor(daemon): apply the /simplify pass to the device-liveness branch (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+ゲート③の `/simplify`（4 体並行）。再利用観点は指摘ゼロで、`StreamConfigSnapshot` が既に
+`device_requested` / `device_fell_back` / `fallback_reason` / `first_callback_ms` を持っており、
+owner 裁定（縮退して鳴らし続ける + 理由を `GetStatus` に記録）の形が型に入っていることが確認できた。
+
+#### 🔴 最重要 — owner 裁定が半分しか実装されていなかった（2 体が独立に指摘）
+
+設計 §3 の確定事項は「起動時 = host 既定へ縮退／**ライブ切替 = 元のデバイスへ復帰**。
+**どちらも ERROR ログ + `GetStatus` に理由**」。しかし**起動時の縮退だけ**が `GetStatus` に残り、
+**ライブ切替の失敗は `apply_device_switch` の Err 腕で `record_stream_config` も `tracing::error!` も
+呼んでいなかった**。理由は RPC のエラー応答と CLI の `console.error` 一回きりにしか存在せず、
+**`GetStatus` をポーリングする MCP 経路（LLM / UI の主経路）からは切替失敗が見えない**状態だった。
+
+- 成功・失敗を **`record_device_switch_result` 1 本**へ合流。失敗時は要求デバイス名と理由を
+  `tracing::error!` に出し、`StreamConfigSnapshot.last_switch_failure` へ保存する
+- `record_stream_config` は snapshot を丸ごと差し替え、コンストラクタが `last_switch_failure: None`
+  を置くので、**成功した切替が古い失敗理由を確実に消す**（main が実装を読んで確認）
+- 🔴 E2E の D-3 は「ERROR が増えないこと」ではなく「**ちょうど 1 行増えること**」
+  （`countErrors(log) >= errorsBeforeExpectedFailure + 1`）へ更新された。
+  **ログを出さない方向で辻褄を合わせていない**
+
+#### 却下した指摘（理由を残す）
+
+効率観点が「前置き probe が二重 open を生んでいるので、実ストリームの初回コールバックだけを
+ゲートにせよ」と提案したが、**設計で一度検討して却下済み**だった。設計 §4.1:
+
+> `play()` 直後だけに置いてはいけない。`start_output_inner` は `insert_buses` / `sources` を
+> `RenderState` に **move** するので、dead 判定後に作り直すには回収が要る。参照循環により
+> **名指しデバイスでは `Arc::try_unwrap` が永遠に失敗し、回収できない**。
+
+コストも実測済みで **probe + 事後確認で +20〜40 ms**、`FIRST_CALLBACK_DEADLINE = 3000 ms` は
+**失敗時にしか効かない**。読まずに発注していたら直せない状態を作っていた。
+
+#### そのほか適用
+
+未使用の `probe_ms` を削除／`resolved` / `play_and_confirm` / `finish_start` へ重複を集約／
+gated テストと E2E の起動ボイラープレートをヘルパー化。
+
+#### 🔴 main が直したもの — リファクタが持ち込んだ型退行
+
+`prepareWorkspace` コールバック経由の代入になったことで、`catalogClapSynthPath` 等 4 件と
+`kickLoopWorkPath` が `string | undefined` のままになり `typecheck:e2e` が 6 件の error を出した。
+`npm test` は vitest が型を見ないので**緑のまま**で、[[consumerless-code-is-unprotected]] と同じ形。
+既存の `requireCatalogFixtures()` を使う形へ寄せ、`requireKickLoopWorkPath()` を足した。
+
+#### 検証（main が sandbox 外で実測）
+
+- 🔴 **clippy を全 5 象限で実行**（default / clap-host / outproc-effect / outproc-instrument /
+  outproc 両方）— **すべて green**。`check-cfg-matrix.sh` は 4 象限しか見ないので `clap-host` が漏れる
+- `cargo test --features outproc-effect,outproc-instrument` — lib **267 passed**
+- `npm test` **2251 passed / 0 failed** / `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified 0 failed**
+
+### fix(audio): gate output devices on callback liveness (#661 PR-V4) (Sep 5, 2026)
+
+`--audio-device` で stream の build/play が成功しても callback が一度も来ず、無音のまま
+daemon が起動成功していた問題に対し、`Engine` と callback-owned `RenderState` の生成前に
+probe stream を開く liveness gate を追加した。probe は専用 `AtomicU64` を使うため、実 stream の
+`StreamStats.callbacks` を汚さない。3 秒以内に callback が来ない名指し候補は起動時だけ host
+既定へ 1 回縮退し、全候補 dead または実 stream の事後確認 dead は起動を失敗させる。
+
+cpal 0.15.3 の名指し stream 参照循環に対して、`OutputStream::drop` は必ず内部 stream を
+`pause()` してから field を破棄する。ライブ切替も旧 stream を先に pause し、新 stream の probe /
+事後確認が失敗したら新 stream を pause+drop して旧 stream を再開する。異なる sample rate は
+`AUDIO_DEVICE_RATE_MISMATCH` で拒否し、Engine の作り直しは行わない。
+
+`GetStatus.output` に requested / fallback / reason / first callback ms を追加し、engine は正常時の
+出力構成を INFO、縮退時だけ `❌ audio device fallback` を ERROR としてユーザーの `get_log` へ出す。
+実機 gated Rust C-1〜C-6 と MCP D-1〜D-3 を追加した。
+
+検証: Rust lib 105 passed / 2 ignored、daemon bin 7 passed、gated Rust はコンパイル成功、clippy
+`--all-targets -D warnings` 成功、cfg 4 象限成功、`clap-host` build 成功、E2E hygiene 15 passed、
+`typecheck:e2e` 成功。`link-audio` / `link-audio-verification` は worktree に Ableton Link submodule が
+無く build.rs で失敗。実機 gated と C-6 の pause 除去変異は sandbox では実行しない。
 ### test(daemon): prove the all-notes-off ledger actually shrinks (#606 round-3) (Sep 5, 2026)
 
 **Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR** #738

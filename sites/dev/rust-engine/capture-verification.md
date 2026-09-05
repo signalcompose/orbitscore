@@ -30,7 +30,7 @@ capture は `render_block_with_sources`（[RE-1](/rust-engine/) 参照）の中�
 変わりません（読むだけで mutation ではない）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:662-707
+// rust/crates/orbit-audio-native/src/output.rs:1076-1121
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -275,7 +275,7 @@ Rust の struct field 宣言順 drop を利用し「stream 停止（callback 停
 writer が ring 残りを drain して finalize」という順序を構造的に保証しています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:224-233
+// rust/crates/orbit-audio-native/src/output.rs:608-617
 /// 生きている間はストリームを保持する RAII ハンドル。
 pub struct OutputStream {
     _stream: Stream,
@@ -284,8 +284,8 @@ pub struct OutputStream {
     /// 残りを drain して WAV を finalize」に固定する（Rust は struct field を宣言順に drop する）。
     _capture: Option<crate::capture::CaptureWriter>,
     render_state: Arc<std::sync::Mutex<RenderState>>,
+    pub device_name: String,
     pub sample_rate: u32,
-    pub channels: u16,
 ```
 
 ## 「客観検証」の実際: gated test の drops assert + oracle 一致
@@ -368,7 +368,7 @@ daemon を `<extension>/engine/bin/<platform>/` に同梱しており、これ�
 走査から外すディレクトリがあり、それは後述します（#713）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:165-179
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:174-188
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -414,7 +414,7 @@ mtime 比較は「rebuild が no-op か」より弱い判定ですが、テス�
 そこで走査から `tests` / `benches` / `examples` の 3 ディレクトリを外しました。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:160-164
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:169-173
         // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
         // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
