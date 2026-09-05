@@ -924,7 +924,7 @@ identical slots plus `instance_index` (an indirection from name to slot)**. The 
 comment states the mechanism in one line.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6010-6022
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6051-6063
     /// #618: instrument plugin を目標 spec へ収束させる ensure 操作。
     ///
     /// 未割当/Empty は通常 load、同一 Active は no-op、異 spec Active は spare へ prepare して
@@ -1027,7 +1027,7 @@ RMS is nearly identical and "RMS differs significantly" would be a false asserti
 Instead the VST3 side carries a +7 semitone state and the two are told apart by frequency.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3467-3475
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3518-3526
       const e4Hz = estimateFundamentalHz(capture, segments.e4!)
       const e5Hz = estimateFundamentalHz(capture, segments.e5!)
       expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
@@ -1056,7 +1056,7 @@ by bus name**, and the render side's `InsertBusStage` holds the processor direct
 rebuild of the same ChildSlot**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5514-5522
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5555-5563
     /// effect plugin を固定 slot 上で目標 spec へ収束させる ensure 操作。
     /// Active の異 spec だけを quiesce ack 後に同じ shm 上で建て直す。
     #[cfg(feature = "outproc-effect")]
@@ -1144,7 +1144,7 @@ mechanism was unified onto `ApplyEffectChain`, and the protocol doc marks
 `superseded by ApplyEffectChain (#628)`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5080-5088
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5121-5129
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -1266,7 +1266,7 @@ applied (the `engaged` wiring is cut)" can be distinguished numerically.
 Removal is `effect([])`.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3774-3780
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3825-3831
         // 空のラックを適用するのが「外す」の表現になった。
         const removeA = await activeClient.call('evaluate_orbitscore', {
           code: 'fx625.effect([])',
@@ -1284,7 +1284,7 @@ PID appeared" at the time of #625; with the rack, **the PID not changing** is th
 of "no respawn = the dry window is gone".
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3632-3645
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3683-3696
         // ここは「旧 child が消えた」を待っていた。#628 のラック化では **1 child が
         // チェーン全体を持つ**ため、差し替えは同じ child の中で prepare-commit される。
         // **PID が変わらないことこそが「respawn していない = dry 窓が消えた」の実機証明**で、
@@ -1305,7 +1305,7 @@ R-E3 (replacement with a nonexistent path) asserted "dry — neither A nor B" un
 is prepare-commit, it pins by audio that **B keeps playing even after the failure**.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3987-4002
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4038-4053
 
       // 🔴 R-E3: #628 で**期待が反転した**。失敗後は **B のまま鳴り続ける**。
       //

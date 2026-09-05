@@ -67,7 +67,7 @@ snare」と列挙するのではなく、kick と snare がそれぞれ `output(
 仕様の DSL サンプルも引用しておきます（spec の Markdown から逐語）。
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1766-1770
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1768-1772
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")                  // 同じ宛先なので加算される
@@ -76,7 +76,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1860-1862
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1862-1864
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
@@ -161,7 +161,7 @@ export const MIXER_BUS_POOL_SIZE = 4
 対応する Rust 側の定数は daemon の `engine_wrap.rs` にあります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1963-1976
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1987-2000
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
 /// （M3 で配線予定）。
 #[cfg(feature = "outproc-effect")]
@@ -207,7 +207,7 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
 > 追従は #598 の PR-R 系（撤回）と #611 の PR-O4（解決順）です。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:372-397
+// packages/engine/src/core/sequence.ts:381-406
   output(channelName: string | number): this {
     const name = this.stateManager.getName() || 'sequence'
     const destinationName = typeof channelName === 'number' ? String(channelName) : channelName
@@ -270,7 +270,7 @@ midi だけがミキサーと無関係・例外は LinkAudio が出力先の時�
 fan-out、同じ aux 名なら上書きです。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:481-508
+// packages/engine/src/core/sequence.ts:490-517
   send(auxName: string, amount: number): this {
     const name = this.stateManager.getName() || 'sequence'
     if (!auxName || !auxName.trim()) {
@@ -326,7 +326,7 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 という規則が読み取れます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5797-5817
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5838-5858
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -503,7 +503,7 @@ PR-2（TS 側）は、instrument sequence が insert bus を持った時点で
 1 箇所に集約しました。`instrument()` → `effect()` の順でも逆でも、ここを通ります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:757-784
+// packages/engine/src/core/sequence.ts:766-793
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
     const bus = this._insertBus
@@ -711,7 +711,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1450-1488
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1501-1539
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -764,7 +764,7 @@ E2E-4 は sum + aux の経路です。dry（bus 無し）と、`output("sum643")
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1594-1613
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1645-1664
         [
           'var global = init GLOBAL',
           'global.key("C")',
