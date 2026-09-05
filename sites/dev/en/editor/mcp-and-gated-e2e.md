@@ -489,7 +489,7 @@ npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` a
     if (!child.killed) child.kill()
 ```
 
-> 🔴 2026-09-05: この起動手順は `launchIsolatedOrbitStudio()` へ切り出されました（#661 の `/simplify`）。隔離した user-data / extensions / workspace 設定を作り、`orbs` を `--extensionDevelopmentPath` 付きで起動して `pollInitialize` するまでが 1 関数です。
+> 🔴 2026-09-05: this launch sequence was extracted into `launchIsolatedOrbitStudio()` (the `/simplify` pass on #661). One function now creates the isolated user-data, extensions and workspace-settings directories, spawns `orbs` with `--extensionDevelopmentPath`, and polls until `pollInitialize` succeeds.
 
 
 `--extensionDevelopmentPath` loads the extension source straight from the repository, and `--user-data-dir` / `--extensions-dir` point at temporary directories to isolate the run from the developer's own settings. The port is chosen as `39400 + Math.floor(Math.random() * 200)`, and `pollInitialize()` hits `initialize` every 2 seconds for up to 60 seconds until the connection comes up. The client (`tests/e2e/helpers/mcp-client.ts`) is raw JSON-RPC without the MCP SDK — a thin layer that just extracts `content[0].text` and `isError` from `tools/call`.
