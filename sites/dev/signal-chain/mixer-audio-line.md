@@ -698,20 +698,20 @@ MCP 経由で駆動し、daemon の capture WAV を区間ごとに RMS 測定し
 0.15 秒）を取って遷移の影響を除きます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:593-598
-    const rms = (name: string, guardSec = 0.15): number => {
-      const selected = windows(name, guardSec)
-      return Math.sqrt(
-        selected.reduce((sum, window) => sum + window.rms * window.rms, 0) / selected.length,
-      )
-    }
+// tests/e2e/helpers/capture-windows.ts:190-195
+export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
+  if (windows.length === 0) throw new Error('quadraticMeanRms requires at least one window')
+  return Math.sqrt(
+    windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
+  )
+}
 ```
 
 E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価してもう 1 区間を取り、
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1429-1463
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1450-1488
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -741,6 +741,10 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
       // 0 dB -> -6 dB で amplitude は 10^(-6/20) ≈ 0.501 = 約半分。
       const unity = result.rms('unity')
       const half = result.rms('half')
+      expect(
+        ['unity', 'half'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
+      ).toBe(true)
+      expect(unity, 'E2E-1 unity must measure the 0 dB instrument').toBeGreaterThan(0.15)
       expect(unity, 'E2E-1 unity instrument must be audible').toBeGreaterThan(0.05)
       expect(half / unity, `E2E-1 half/unity RMS ratio (${half}/${unity})`).toBeGreaterThan(0.45)
       expect(half / unity, `E2E-1 half/unity RMS ratio (${half}/${unity})`).toBeLessThan(0.55)
@@ -760,7 +764,7 @@ E2E-4 は sum + aux の経路です。dry（bus 無し）と、`output("sum643")
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1556-1575
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1594-1613
         [
           'var global = init GLOBAL',
           'global.key("C")',
