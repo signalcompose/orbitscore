@@ -17,6 +17,59 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(e2e): split D-3 into its own app and count its failure on both layers (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+#661 の残り 1 件だった gated `D-3` を実機で緑にした。2 つの別々の欠陥があった。
+
+#### 1. 「切替」ではなく「トグル」になっていた
+
+実機で `audio device deselected and engine stopped: expected false to be true`。
+`selectAudioDeviceForAgent`（`packages/vscode-extension/src/extension.ts`）は
+`resolveDeviceClickAction` を通しており、**要求デバイスが現在の設定と同じなら「選択解除」**
+として扱う（UI のクリック挙動）。D-2/D-3 は同じ fault アプリを共有していて、そのアプリは
+`orbitscore.audioDevice` に**既定デバイス名**を持つ。このマシンには出力デバイスが実質 1 台
+なので「実在するが現在設定と違う名前」が選べず、D-3 の要求が必ずトグルになっていた。
+
+根は **D-2 と D-3 で必要なアプリ構成が逆**であること:
+
+| | 必要な起動構成 |
+|---|---|
+| D-2 | 起動時に名前付きが dead → 既定へ縮退して鳴る → **名前付きで起動** |
+| D-3 | 演奏中の切替候補が dead → 旧のまま鳴り続ける → **現在の設定と違う名前を要求** |
+
+D-3 を独立した `it.skipIf` に切り出し、`orbitscore.audioDevice: '__default__'` で起動して
+既定デバイスを**名前で**要求する形にした（`portBase: 39800`）。`dead-probe-requested` は
+「要求された」デバイスに効くので probe が死ぬ。設計 §6 にもこの制約を明記した。
+
+#### 2. 1 回の失敗を 2 層が別々の文言で記録していた
+
+上を直すと今度は `expected [ Array(1) ] to deeply equal []`。除外条件が daemon 側の文言
+（`audio output device switch to "X" failed`・`engine_wrap.rs` の `record_device_switch_result`）
+だけを見ていたため、engine 側が出す `❌ live device switch to "X" failed: …`
+（`packages/engine/src/cli/repl-mode.ts`）が「想定外の ERROR」として残っていた。
+
+- 除外は共通部分 `device switch to "X" failed` で行う
+- **利用者に届いたか**は engine 側の文言で「ちょうど 1 行」を要求する。daemon の tracing
+  ERROR 行は `outputChannel.append('ERROR: ' + chunk)` が **chunk 単位**で前置するため、
+  同じ chunk の 2 行目以降には `ERROR:` が付かず ERROR 行として数えられない
+- 落ちた時にデバイス名を含むログ行を全部出す。実機は 1 回 15 秒かかる
+
+#### 検証（実機・sandbox 外）
+
+```
+#661 D-0 honors a real named output device and produces audible capture RMS   8255ms  ✓
+#661 D-2 falls back from a dead named device at startup and stays audible    14265ms  ✓
+#661 D-3 keeps the old stream playing when a live switch candidate is dead   13099ms  ✓
+```
+
+`typecheck:e2e` 0 / `eslint` 0 / `prettier --check` 通過 / `docs:check` 926 verified・0 failed。
+
+**関連**: [[reviewers-judge-one-layer-only]]（層をまたぐ契約は片翼だけ見ても分からない）
+
+---
+
 ### fix(daemon): keep the current device when a live switch names a missing one (#661 F4) (Sep 5, 2026)
 
 **Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748

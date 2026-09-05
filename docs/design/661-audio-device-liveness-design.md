@@ -241,11 +241,13 @@ fault は **env ではなく `StartupOptions` に typed で**渡す。
 | # | 検査 |
 |---|---|
 | D-0 | **名指し受け入れ（注入なし）**: `--list-audio-devices` の既定名を設定して起動し、`runScore(.., {capture:true})` の **RMS > 0** |
-| D-1 | **縮退の報告（注入なし）**: `select_audio_device("NoSuchDevice-<uuid>")` → `get_log` に `❌ … fallback … not found` が**増える**（`toBeGreaterThanOrEqual(before+1)`）→ `🔊 … output:` が出る |
+| D-1 | **名前不一致は拒否される（注入なし）**: `select_audio_device("NoSuchDevice-<uuid>")` が `isError: true` を返し、`❌ audio device fallback: requested "…"` は**出ない**。増える ERROR 行は `switch to "…" failed` の 1 種類だけで、`get_engine_state.output.device_name` は**切替前と同じ**（※ owner 裁定 2026-09-05・§3。当初は「既定へ縮退する」を期待していたが、裁定に合わせて書き換えた） |
 | D-2 | **dead device を指定しても音が出る（注入あり）**: 縮退後に `runScore(.., {capture:true})` で **RMS > 0** |
-| D-3 | **切替失敗で音が止まらない**: dead probe 中も C-5 の旧 callback が前進し、`STREAM_CALLBACK_STALLED` が増えない。要求名と理由を持つ ERROR はちょうど 1 行だけ増え、`get_engine_state.output.last_switch_failure` と `callback.alive` からも観測できる |
+| D-3 | **切替失敗で音が止まらない**: dead probe 中も C-5 の旧 callback が前進し、`STREAM_CALLBACK_STALLED` が増えない。増える ERROR 行は「その切替の失敗」だけで、利用者に届く行（engine 層の `❌ live device switch to "…" failed`）は**ちょうど 1 行**。`get_engine_state.output.last_switch_failure` と `callback.alive` からも観測できる （※ 1 回の失敗を daemon と engine の**2 層が別々の文言で**記録する。除外判定は共通部分 `device switch to "…" failed` で行う） |
 
 🔴 **D-1 は実装前に書いて red を確認する**（§2.3 の実証を兼ねる）。
+
+🔴 **D-3 は D-0/D-2 と別のアプリで起動する**（2026-09-05 実機で確定）。`select_audio_device` は UI のクリック挙動（`resolveDeviceClickAction`）を共有していて、**要求デバイスが現在の設定と同じなら「選択解除」**になる。D-2 は名前付きで起動する必要が、D-3 は現在の設定と違う名前を要求する必要があり、両立しない。D-3 は `orbitscore.audioDevice` を `__default__` にして起動し、既定デバイスを名前で要求する。
 
 ### 受け入れ
 
