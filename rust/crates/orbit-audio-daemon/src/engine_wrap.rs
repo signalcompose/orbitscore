@@ -7,9 +7,7 @@
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-#[cfg(feature = "outproc-effect")]
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 use std::sync::MutexGuard;
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
@@ -1747,6 +1745,13 @@ pub struct EngineWrap {
     /// out-of-process instrument の note-ring producer（control side）。
     #[cfg(feature = "outproc-instrument")]
     outproc_instrument: Mutex<Option<OutProcInstrumentControl>>,
+    /// master line（native `MasterLine`・#649 PR-O2）の gain 書き込みハンドル。`SetGlobalGain` は
+    /// これへ atomic store するだけで、`orbit_audio_core::Engine::set_global_gain`（core の
+    /// scheduler ramp）は production では呼ばない — production の乗算経路を master line 1 本に
+    /// する（`docs/design/611-output-line-design.md` §5.4/§5.5 row 4）。`start_with`（test backend）
+    /// 経路は実 stream を持たないため、どこにも接続されないオーファン Arc を持つ（wire レベルの
+    /// accept/reject 検証のみが対象で、実音は無い）。
+    master_gain: Arc<AtomicU32>,
 }
 
 /// out-of-process effect の control-side ハンドル一式（feature `outproc-effect` 専用）。
@@ -4369,7 +4374,9 @@ impl EngineWrap {
         let (control, link_guard) = crate::link_audio::LinkAudioControl::spawn(
             reg_tx,
             stream.sample_rate,
-            stream.channels as usize,
+            // 🔴 デバイス幅ではなく **engine 幅**。RT は `ch.scratch[..frames * 2]` を commit する
+            // ので、consumer 側がデバイス幅で drain すると 8ch デバイスで崩れる（Fable 監査 I-2）。
+            orbit_audio_native::ENGINE_CHANNELS,
         )
         .map_err(|e| WrapError::LinkAudio(e.to_string()))?;
         let wrap = Self::finish_start(engine, &stream, stream_stats, None, None);
@@ -4953,12 +4960,17 @@ impl EngineWrap {
         backend: B,
     ) -> Result<(Arc<Self>, Box<dyn std::any::Any + Send>), WrapError> {
         let started = backend.start()?;
+        // test backend は実 `OutputStream`/`MasterLine` を持たない。`SetGlobalGain` の
+        // 受理/拒否検証だけが対象なので、どこにも接続されないオーファン Arc で足りる
+        // （実音は無い＝値は誰も読まない）。
+        let master_gain = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
         let wrap = Self::build(
             started.engine,
             "test audio backend".to_string(),
             started.sample_rate,
             started.channels,
             started.stats,
+            master_gain,
         );
         Ok((wrap, started.guard))
     }
@@ -4977,6 +4989,9 @@ impl EngineWrap {
             stream.sample_rate,
             stream.channels,
             stream_stats,
+            // master gain の Arc は `RenderState.master.gain_target` の clone（#649）。
+            // ここで引くことで、6 つの start バリアントが個別に受け渡さなくてよい。
+            stream.master_gain(),
         );
         wrap.record_stream_config(
             StreamConfigSnapshot::from_output_stream(stream),
@@ -4994,6 +5009,7 @@ impl EngineWrap {
         sample_rate: u32,
         channels: u16,
         stream_stats: Arc<StreamStats>,
+        master_gain: Arc<AtomicU32>,
     ) -> Arc<Self> {
         let (plugin_ui_events, _) = tokio::sync::broadcast::channel(128);
         Arc::new(Self {
@@ -5045,6 +5061,7 @@ impl EngineWrap {
             // outproc-instrument: production start injects the NeutralEvent ring producer.
             #[cfg(feature = "outproc-instrument")]
             outproc_instrument: Mutex::new(None),
+            master_gain,
         })
     }
 
@@ -7518,7 +7535,10 @@ impl EngineWrap {
                     path,
                     plugin_id,
                     sample_rate: self.sample_rate,
-                    channels: self.channels as usize,
+                    // 🔴 デバイス幅ではなく **engine 幅**。`ClapPostProcessor` が受け取るのは
+                    // `master.buffer`（常に 2ch）で、デバイス幅で de-interleave すると
+                    // 8ch デバイスで frame 数が 1/4 になって音が化ける（Fable 監査 I-2）。
+                    channels: orbit_audio_native::ENGINE_CHANNELS,
                     max_frames: CLAP_MAX_FRAMES,
                     reply: reply_tx,
                 })
@@ -8701,11 +8721,15 @@ impl EngineWrap {
         })
     }
 
-    /// マスターゲインを設定する。`ramp_sec` が 0 以下なら即時。
-    pub fn set_global_gain(&self, value: f32, ramp_sec: f64) -> Result<(), WrapError> {
-        self.engine
-            .set_global_gain(value, ramp_sec)
-            .map_err(|e| WrapError::Scheduler(e.to_string()))
+    /// マスターゲインを設定する。**production では単一の適用点（native master line・#649
+    /// PR-O2）へ atomic store するだけ**——`orbit_audio_core::Engine::set_global_gain`（core の
+    /// scheduler ramp）は production から呼ばない（`docs/design/611-output-line-design.md`
+    /// §5.4/§5.5 row 4・乗算経路を master line 1 本にする）。`ramp_sec` は wire 互換のため受け
+    /// 続けるが、native 側は構築時に確定した固定 ~5ms/block のランプ（`MasterLine::advance_gain`）
+    /// を使う（可変長ランプは持たない）。
+    pub fn set_global_gain(&self, value: f32, _ramp_sec: f64) -> Result<(), WrapError> {
+        self.master_gain.store(value.to_bits(), Ordering::Relaxed);
+        Ok(())
     }
 
     /// audio stream の稼働統計スナップショット（StreamStats event 用）。
@@ -9821,6 +9845,7 @@ mod plugin_load_gate_tests {
             48_000,
             2,
             Arc::new(StreamStats::default()),
+            Arc::new(AtomicU32::new(1.0_f32.to_bits())),
         )
     }
 
