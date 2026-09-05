@@ -5354,7 +5354,19 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           { slug: '661-d3-switch-failure', fixturePath: KICK_LOOP_FIXTURE },
           async () => {
             await sleep(500)
-            const rejectedDevice = 'NoSuchDevice-' + randomUUID()
+            // 🔴 **実在する**デバイス名を指定する。F4（owner 裁定 2026-09-05）以降、
+            // 存在しない名前は probe に入る前に `AUDIO_DEVICE_UNAVAILABLE` で拒否されるため、
+            // 「probe が死んでいる切替」を再現できない。ここで測りたいのは
+            // `ORBIT_AUDIO_OUTPUT_FAULT=dead-probe-requested` による**コールバック不達**の方。
+            const rejectedDevice = (() => {
+              const daemonBinary = resolveDaemonBinaryPath().path
+              const listed = JSON.parse(
+                execFileSync(daemonBinary, ['--list-audio-devices'], { encoding: 'utf8' }),
+              ) as { devices: Array<{ name: string; isDefault: boolean }> }
+              const device = listed.devices.find((d) => d.isDefault) ?? listed.devices[0]
+              expect(device, '#661 D-3 requires an output device').toBeDefined()
+              return device!.name
+            })()
             const beforeFailureLog = (await faultClient!.call('get_log', { lines: 500 })).text
             const errorsBeforeExpectedFailure = countErrors(beforeFailureLog)
             const stallsBeforeFailure = countLogMarker(beforeFailureLog, 'STREAM_CALLBACK_STALLED')
