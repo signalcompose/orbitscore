@@ -295,6 +295,30 @@ pub fn resolve_requested_device_name(
     available.iter().find(|n| n.as_str() == requested).cloned()
 }
 
+/// 要求されたデバイスが使えない時にどうするか（owner 裁定 2026-09-05・設計
+/// `docs/design/661-audio-device-liveness-design.md` §3）。
+///
+/// 🔴 **裸の bool にしない。** 「起動時は host 既定へ縮退／ライブ切替は元のデバイスへ復帰」は
+/// 1 つの二値ポリシーで、位置引数の `true` / `false` は取り違えてもコンパイルが通る。
+/// 実装が裁定文と食い違っていた F4 と同じクラスの回帰を、型で表現できなくする。
+///
+/// このポリシーは**縮退の理由を区別しない** — 「名前が見つからない」「出力デバイスではない」
+/// 「probe が callback を出さない」のいずれも同じ扱いにする。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceFallbackPolicy {
+    /// 起動経路。利用者を無音のまま放置しないので host 既定へ縮退して起動を成功させる。
+    FallBackToHostDefault,
+    /// ライブ切替経路。縮退せず `DeviceUnavailable` / `StreamDead` を返し、呼び出し側が
+    /// **いま鳴っているデバイスをそのまま使い続ける**。
+    RejectAndKeepCurrent,
+}
+
+impl DeviceFallbackPolicy {
+    fn allows_fallback(self) -> bool {
+        matches!(self, Self::FallBackToHostDefault)
+    }
+}
+
 /// `start_output_inner` から呼ばれる cpal I/O 込みの device 解決（#484 D1）。`resolve_requested_device_name`
 /// （pure）に実際の host 列挙を組み合わせる。`requested` が `None` なら常に host 既定を使う
 /// （列挙コストを払わない・従来経路とビット同一）。一致するデバイスが見つからない場合は
@@ -302,7 +326,7 @@ pub fn resolve_requested_device_name(
 fn resolve_output_device(
     host: &cpal::Host,
     requested: Option<&str>,
-    allow_fallback: bool,
+    policy: DeviceFallbackPolicy,
 ) -> Result<ResolvedOutputDevice, OutputError> {
     let Some(requested) = requested else {
         let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
@@ -341,7 +365,7 @@ fn resolve_output_device(
                     fallback: None,
                 })
             } else {
-                if !allow_fallback {
+                if !policy.allows_fallback() {
                     return Err(OutputError::DeviceUnavailable {
                         requested: requested.to_string(),
                         reason: "not an output device".to_string(),
@@ -361,7 +385,7 @@ fn resolve_output_device(
             }
         }
         None => {
-            if !allow_fallback {
+            if !policy.allows_fallback() {
                 return Err(OutputError::DeviceUnavailable {
                     requested: requested.to_string(),
                     reason: format!("not found (available: {available_names:?})"),
@@ -497,11 +521,11 @@ pub fn select_live_output_device(
     request: OutputDeviceRequest,
     buffer_frames: Option<u32>,
     expected_sample_rate: Option<u32>,
-    allow_dead_fallback: bool,
+    policy: DeviceFallbackPolicy,
 ) -> Result<LiveOutputDevice, OutputError> {
     let host = cpal::default_host();
     let first = output_config(
-        resolve_output_device(&host, request.name.as_deref(), allow_dead_fallback)?,
+        resolve_output_device(&host, request.name.as_deref(), policy)?,
         buffer_frames,
         expected_sample_rate,
         &request,
@@ -511,7 +535,7 @@ pub fn select_live_output_device(
         return Ok(live);
     }
 
-    let Some(requested) = request.name.clone().filter(|_| allow_dead_fallback) else {
+    let Some(requested) = request.name.clone().filter(|_| policy.allows_fallback()) else {
         return Err(OutputError::StreamDead {
             device: first_name,
             waited_ms: FIRST_CALLBACK_DEADLINE.as_millis() as u64,
@@ -524,7 +548,7 @@ pub fn select_live_output_device(
         FIRST_CALLBACK_DEADLINE.as_millis()
     );
     let mut fallback = output_config(
-        resolve_output_device(&host, None, true)?,
+        resolve_output_device(&host, None, DeviceFallbackPolicy::FallBackToHostDefault)?,
         buffer_frames,
         expected_sample_rate,
         &request,
@@ -1746,7 +1770,12 @@ fn start_output_inner(
     // The liveness gate runs before Engine creation and before insert buses/sources are moved into
     // RenderState. A dead named device can therefore fall back without recovering callback-owned
     // state from a cpal stream that may retain itself.
-    let live = select_live_output_device(device_request, buffer_frames, None, true)?;
+    let live = select_live_output_device(
+        device_request,
+        buffer_frames,
+        None,
+        DeviceFallbackPolicy::FallBackToHostDefault,
+    )?;
     let sample_rate = live.sample_rate();
     let channels = live.channels();
     for bus in &mut insert_buses {

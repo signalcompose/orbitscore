@@ -5173,52 +5173,15 @@ impl EngineWrap {
     ///   同じ隔離）から呼ぶこと。RT callback 内からは絶対に呼ばない。
     pub fn select_audio_device(&self, device: Option<String>) -> Result<String, WrapError> {
         let requested = device.clone();
-        if capture_path_from_env().is_some() {
-            return self.reject_device_switch(
-                requested.as_deref(),
-                WrapError::AudioDeviceSwitchUnavailable(
-                    "ORBIT_CAPTURE_WAV is active; runtime device switch is unsupported while \
-                     capture is recording (restart the daemon to change device with capture on)"
-                        .into(),
-                ),
-            );
-        }
-        let tx = match self.device_switch_tx.lock() {
-            Ok(slot) => match slot.clone() {
-                Some(tx) => tx,
-                None => {
-                    return self.reject_device_switch(
-                        requested.as_deref(),
-                        WrapError::AudioDeviceSwitchUnavailable(
-                            "no audio owner thread registered (test backend or daemon shutting down)"
-                                .into(),
-                        ),
-                    );
-                }
-            },
-            Err(_) => {
-                return self.reject_device_switch(
-                    requested.as_deref(),
-                    WrapError::AudioDeviceSwitchUnavailable(
-                        "device switch channel poisoned".into(),
-                    ),
-                );
-            }
+        // 🔴 owner thread に**届く前**の失敗はすべて `dispatch_device_switch` が `Err` で返し、
+        // 記録はここ 1 箇所で行う。以前は失敗経路ごとに `reject_device_switch` を書いていて、
+        // 5 つ目の経路を足す人が記録を落としても型で気づけなかった。
+        let reply_rx = match self.dispatch_device_switch(device) {
+            Ok(reply_rx) => reply_rx,
+            Err(error) => return self.reject_device_switch(requested.as_deref(), error),
         };
-        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-        if tx
-            .send(DeviceSwitchRequest {
-                device,
-                reply: reply_tx,
-            })
-            .is_err()
-        {
-            return self.reject_device_switch(
-                requested.as_deref(),
-                WrapError::AudioDeviceSwitchUnavailable("audio owner thread has exited".into()),
-            );
-        }
         match reply_rx.recv() {
+            // owner thread の `apply_device_switch` が成否とも記録済み。**二重に記録しない。**
             Ok(result) => result,
             Err(_) => self.reject_device_switch(
                 requested.as_deref(),
@@ -5227,6 +5190,46 @@ impl EngineWrap {
                 ),
             ),
         }
+    }
+
+    /// 切替要求を audio owner thread へ渡すところまで。
+    ///
+    /// ここが返す `Err` は **まだ `record_device_switch_result` を通っていない**（要求が owner
+    /// thread に届いていないので、記録は呼び出し側の責任）。逆に、返した receiver から届く
+    /// `Result` は owner thread 側で記録済みである。
+    fn dispatch_device_switch(
+        &self,
+        device: Option<String>,
+    ) -> Result<std::sync::mpsc::Receiver<Result<String, WrapError>>, WrapError> {
+        if capture_path_from_env().is_some() {
+            return Err(WrapError::AudioDeviceSwitchUnavailable(
+                "ORBIT_CAPTURE_WAV is active; runtime device switch is unsupported while \
+                 capture is recording (restart the daemon to change device with capture on)"
+                    .into(),
+            ));
+        }
+        let tx = self
+            .device_switch_tx
+            .lock()
+            .map_err(|_| {
+                WrapError::AudioDeviceSwitchUnavailable("device switch channel poisoned".into())
+            })?
+            .clone()
+            .ok_or_else(|| {
+                WrapError::AudioDeviceSwitchUnavailable(
+                    "no audio owner thread registered (test backend or daemon shutting down)"
+                        .into(),
+                )
+            })?;
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        tx.send(DeviceSwitchRequest {
+            device,
+            reply: reply_tx,
+        })
+        .map_err(|_| {
+            WrapError::AudioDeviceSwitchUnavailable("audio owner thread has exited".into())
+        })?;
+        Ok(reply_rx)
     }
 
     /// device switch（#484 D2）: 実際の cpal I/O。**audio owner thread 上でのみ呼ぶこと**
@@ -5257,7 +5260,8 @@ impl EngineWrap {
                         },
                         buffer_frames,
                         Some(current.sample_rate),
-                        false,
+                        // ライブ切替は縮退しない（owner 裁定 2026-09-05・設計 §3）。
+                        orbit_audio_native::DeviceFallbackPolicy::RejectAndKeepCurrent,
                     )
                 },
                 || guard.stream.pause(),
@@ -10663,6 +10667,11 @@ mod select_audio_device_tests {
             .finish();
 
         tracing::subscriber::with_default(subscriber, || {
+            // 🔴 callsite の interest はプロセス全体で 1 つ。並列に走る別テストが同じ
+            // `tracing::error!` を **subscriber の無い状態**で先に踏むと `Interest::never()` が
+            // キャッシュされ、このテストの捕捉が**空**になる（2026-09-05 に `--lib` 全件で 1 回
+            // 発生・単体と再実行では緑）。捕捉の直前に再構築して、この順序依存を消す。
+            tracing::callsite::rebuild_interest_cache();
             wrap.record_device_switch_result(Some("Requested Output"), &failed, None, None);
         });
 
@@ -14143,6 +14152,9 @@ mod outproc_instrument_replace_tests {
             .finish();
         let started = Instant::now();
         let result = tracing::subscriber::with_default(subscriber, || {
+            // 上の `device_switch_result_records_...` と同じ理由（callsite interest はプロセス
+            // 全体で 1 つ）。捕捉の直前に再構築する。
+            tracing::callsite::rebuild_interest_cache();
             wrap.replace_outproc_instrument_plugin(
                 PathBuf::from(NEW_PLUGIN),
                 None,

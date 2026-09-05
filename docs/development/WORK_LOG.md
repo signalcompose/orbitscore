@@ -17,6 +17,58 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor: apply the second /simplify pass to the device-liveness branch (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+F4 の実装と D-1/D-3 の書き換えが 1 回目の `/simplify`（`b535527f`）より後に入ったので、
+`b535527f..HEAD` を対象に 2 回目を回した（reuse / simplification / efficiency / altitude の 4 体）。
+Efficiency は指摘なし（RT コールバック本体・`FIRST_CALLBACK_DEADLINE` の起動予算・1 Hz ticker の
+いずれにも新しいコストは入っていない）。
+
+#### 適用した 5 件
+
+| 指摘 | 直した形 |
+|---|---|
+| `requireCatalogPaths()` が `requireCatalogFixtures()` の完全な部分集合 | 後者が前者を呼ぶ形にして、パス検査を 1 箇所に戻した |
+| `--list-audio-devices` で既定デバイス名を取る 5 行が **3 箇所**（D-0 / D-2 / D-3） | `tests/e2e/helpers/audio-devices.ts` を新設（`listOutputDevices` / `defaultOutputDeviceName`） |
+| `session.rs` の `OutputError` → protocol code の表が **2 箇所**（直接の `Output` と `SwitchRecoveryFailed.primary`） | `actionable_output_error_code` に集約。6 アーム → 1 アーム |
+| `select_audio_device` の `reject_device_switch` が **5 箇所**に散っていた | `dispatch_device_switch` が「owner thread に届く前」の失敗をまとめて `Err` で返し、記録は 1 箇所 |
+| 🔴 `resolve_output_device(.., allow_fallback: bool)` / `select_live_output_device(.., allow_dead_fallback: bool)` | **`DeviceFallbackPolicy { FallBackToHostDefault, RejectAndKeepCurrent }`** に置換 |
+
+最後の 1 件が本命。`allow_fallback` と `allow_dead_fallback` という**別名の裸の bool 2 つ**が、
+実は owner 裁定（起動時 = host 既定へ縮退／ライブ切替 = 元のデバイスへ復帰）という**1 つの二値
+ポリシー**だった。位置引数の `true` / `false` は取り違えてもコンパイルが通るので、
+**実装が裁定文と食い違っていた F4 と同じクラスの回帰**が再発しうる形だった。
+CLAUDE.md「型で潰す」の適用例（兄弟コールバックを 1 本に畳むのと同型）。
+
+#### 別 issue へ分離した 3 件
+
+| # | 指摘 | なぜ #661 でやらないか |
+|---|---|---|
+| **#755** | `select_audio_device` がエージェント経路でも人間のクリックトグル（`resolveDeviceClickAction`）を共有していて、**現在のデバイス名を渡すと engine が止まる** | MCP の観測可能な挙動が変わる。D-3 のアプリ分割はこれの回避 |
+| **#756** | `setupStderrHandler` の `ERROR:` 前置が **chunk 単位**で、同じ chunk の 2 行目以降が数えられない | **gated 全体の測定器**を動かす。#649 が baseline 比較の最中 |
+| **#757** | request 相関ブリッジが **5 本 625 行**の重複（`engine-state-bridge.ts` で 5 本目） | 既存 4 ファイルの書き換えを伴い、無関係な経路に回帰リスクを持ち込む |
+
+#### `cargo test --lib` が 1 回だけ落ちた（順序依存・修正済み）
+
+`device_switch_result_records_failure_and_success_through_the_same_path` が
+`captured log: ""` で落ちた。単体実行と再実行は緑。
+
+原因は **`tracing` の callsite interest がプロセス全体で 1 つ**であること。並列に走る別テストが
+同じ `tracing::error!` を subscriber の無い状態で先に踏むと `Interest::never()` がキャッシュされ、
+捕捉が空になる。捕捉の直前に `tracing::callsite::rebuild_interest_cache()` を呼ぶ形にして、
+`--lib` 全件を 3 回連続で緑にした（同型の捕捉テストは 2 箇所あるので両方に入れた）。
+
+#### 検証
+
+`npm test` **2260 passed / 57 skipped** / `typecheck:e2e` 0 / `lint` 0 /
+`cargo test -p orbit-audio-native -p orbit-audio-daemon` **152 passed / 0 failed**（22 スイート）/
+clippy **5 象限**（4 象限 + `clap-host`）全緑 / `docs:check` **926 verified・0 failed**
+（`--fix` で行番号アンカーのみ再固定・16 ファイル）。
+
+---
+
 ### test(e2e): split D-3 into its own app and count its failure on both layers (#661) (Sep 5, 2026)
 
 **Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748

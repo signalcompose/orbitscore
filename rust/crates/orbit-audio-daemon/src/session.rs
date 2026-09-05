@@ -2674,6 +2674,23 @@ fn err(id: &str, error: ProtocolError) -> Value {
     .expect("ErrorResponse must be serializable")
 }
 
+/// `OutputError` のうち、利用者が行動を変えられるものだけを protocol code へ写す。
+///
+/// 呼び出し元は 2 つ（直接の `WrapError::Output` と `SwitchRecoveryFailed.primary`）で、
+/// **どちらも同じ表を引く**。actionable でないものは `None` を返し、呼び出し元が
+/// `DEVICE_CONFIG_ERROR` へ落とす。
+fn actionable_output_error_code(output: &orbit_audio_native::OutputError) -> Option<&'static str> {
+    use orbit_audio_native::OutputError as O;
+    match output {
+        O::StreamDead { .. } => Some(crate::protocol::ERROR_CODE_AUDIO_DEVICE_STREAM_DEAD),
+        O::SampleRateMismatch { .. } => {
+            Some(crate::protocol::ERROR_CODE_AUDIO_DEVICE_RATE_MISMATCH)
+        }
+        O::DeviceUnavailable { .. } => Some(crate::protocol::ERROR_CODE_AUDIO_DEVICE_UNAVAILABLE),
+        _ => None,
+    }
+}
+
 fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
     use orbit_audio_native::LoaderError as L;
     use orbit_audio_native::OutputError as O;
@@ -2691,43 +2708,20 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         WrapError::Loader(L::Io(io)) => ProtocolError::new("INTERNAL_ERROR", io.to_string()),
         WrapError::Loader(L::Resample(r)) => ProtocolError::new("RESAMPLE_ERROR", r.to_string()),
         WrapError::Resample(r) => ProtocolError::new("RESAMPLE_ERROR", r.to_string()),
-        WrapError::Output(O::StreamDead { .. }) => ProtocolError::new(
-            crate::protocol::ERROR_CODE_AUDIO_DEVICE_STREAM_DEAD,
-            e.to_string(),
-        ),
-        WrapError::Output(O::SampleRateMismatch { .. }) => ProtocolError::new(
-            crate::protocol::ERROR_CODE_AUDIO_DEVICE_RATE_MISMATCH,
-            e.to_string(),
-        ),
-        WrapError::Output(O::DeviceUnavailable { .. }) => ProtocolError::new(
-            crate::protocol::ERROR_CODE_AUDIO_DEVICE_UNAVAILABLE,
-            e.to_string(),
-        ),
-        WrapError::Output(O::SwitchRecoveryFailed { primary, .. })
-            if matches!(primary.as_ref(), O::DeviceUnavailable { .. }) =>
-        {
-            ProtocolError::new(
-                crate::protocol::ERROR_CODE_AUDIO_DEVICE_UNAVAILABLE,
-                e.to_string(),
-            )
+        // 🔴 コード表は `actionable_output_error_code` の 1 箇所だけ。以前はここに直接 3 アーム +
+        // `SwitchRecoveryFailed.primary` 用に同じ 3 アームが並んでいて、新しい actionable な
+        // `OutputError` を足す人が**片方だけ更新して黙って `DEVICE_CONFIG_ERROR` に落ちる**形だった。
+        WrapError::Output(o) => {
+            let primary = match o {
+                O::SwitchRecoveryFailed { primary, .. } => primary.as_ref(),
+                other => other,
+            };
+            match actionable_output_error_code(primary) {
+                // actionable なものは `WrapError` の Display（`audio output init failed: …`）ごと返す。
+                Some(code) => ProtocolError::new(code, e.to_string()),
+                None => ProtocolError::new("DEVICE_CONFIG_ERROR", o.to_string()),
+            }
         }
-        WrapError::Output(O::SwitchRecoveryFailed { primary, .. })
-            if matches!(primary.as_ref(), O::StreamDead { .. }) =>
-        {
-            ProtocolError::new(
-                crate::protocol::ERROR_CODE_AUDIO_DEVICE_STREAM_DEAD,
-                e.to_string(),
-            )
-        }
-        WrapError::Output(O::SwitchRecoveryFailed { primary, .. })
-            if matches!(primary.as_ref(), O::SampleRateMismatch { .. }) =>
-        {
-            ProtocolError::new(
-                crate::protocol::ERROR_CODE_AUDIO_DEVICE_RATE_MISMATCH,
-                e.to_string(),
-            )
-        }
-        WrapError::Output(o) => ProtocolError::new("DEVICE_CONFIG_ERROR", o.to_string()),
         WrapError::Scheduler(msg) => ProtocolError::new("INTERNAL_ERROR", msg.clone()),
         // feature-gap（TS は warn-once で握り潰す）と runtime 失敗（TS は rethrow）を別コードにする。
         WrapError::LinkAudioUnavailable(msg) => {

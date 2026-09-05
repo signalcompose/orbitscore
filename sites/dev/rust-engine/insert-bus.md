@@ -53,7 +53,7 @@ render 側の核は `orbit-audio-native` の `InsertBusStage` です。`processo
 event が retain され続けます（後述の landmine）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:731-750
+// rust/crates/orbit-audio-native/src/output.rs:755-774
 /// named routing tag を受ける per-bus insert stage。sum/aux を含む mixer graph の1ノード
 /// （#459/#453・MX.1-MX.5）。
 ///
@@ -99,7 +99,7 @@ RE-1 で見た `render_engine_with_sources` は、insert bus が 1 つも active
 使わないセッションは bus プールのコストを一切払いません。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1076-1081
+// rust/crates/orbit-audio-native/src/output.rs:1100-1105
     if sources.is_empty() {
         if buses.iter().any(|bus| bus.active.load(Ordering::Relaxed)) {
             render_engine_with_insert_buses(engine, link, buses, output_channels, hw);
@@ -115,7 +115,7 @@ active な bus がある場合は `render_engine_with_insert_buses`（instrument
 両 pass の見え方が食い違うため）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1192-1198
+// rust/crates/orbit-audio-native/src/output.rs:1216-1222
     let bs = (hw.len() / output_channels) * output_channels;
 
     // active フラグを 1 回だけ atomic load して使い回す（RT: 同じ判定を何度も load しない）。

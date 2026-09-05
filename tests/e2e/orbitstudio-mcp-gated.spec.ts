@@ -54,6 +54,7 @@ import {
 } from '../../packages/vscode-extension/src/wav-analysis'
 import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
 
+import { defaultOutputDeviceName } from './helpers/audio-devices'
 import {
   countErrors,
   countLogMarker,
@@ -536,20 +537,14 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     }
   }
 
+  /** パス側の検査は `requireCatalogPaths()` に委ねる（判定を 2 箇所に置かない）。 */
   const requireCatalogFixtures = () => {
-    expect(catalogClapSynthPath, 'catalog CLAP synth path must be initialized').toBeDefined()
-    expect(catalogClapEffectPath, 'catalog CLAP effect path must be initialized').toBeDefined()
-    expect(catalogVst3SynthPath, 'catalog VST3 synth path must be initialized').toBeDefined()
-    expect(catalogVst3EffectPath, 'catalog VST3 effect path must be initialized').toBeDefined()
+    const paths = requireCatalogPaths()
     expect(catalogClapSynthName, 'catalog CLAP synth name must be initialized').toBeDefined()
     expect(catalogClapEffectName, 'catalog CLAP effect name must be initialized').toBeDefined()
     expect(catalogVst3SynthName, 'catalog VST3 synth name must be initialized').toBeDefined()
     expect(catalogVst3EffectName, 'catalog VST3 effect name must be initialized').toBeDefined()
     if (
-      !catalogClapSynthPath ||
-      !catalogClapEffectPath ||
-      !catalogVst3SynthPath ||
-      !catalogVst3EffectPath ||
       !catalogClapSynthName ||
       !catalogClapEffectName ||
       !catalogVst3SynthName ||
@@ -558,10 +553,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       throw new Error('main gated phase did not initialize catalog fixture state')
     }
     return {
-      clapSynthPath: catalogClapSynthPath,
-      clapEffectPath: catalogClapEffectPath,
-      vst3SynthPath: catalogVst3SynthPath,
-      vst3EffectPath: catalogVst3EffectPath,
+      ...paths,
       clapSynthName: catalogClapSynthName,
       clapEffectName: catalogClapEffectName,
       vst3SynthName: catalogVst3SynthName,
@@ -5204,13 +5196,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const launched = await launchIsolatedOrbitStudio({
         tmpPrefix: 'orbitstudio-named-device-',
         settings: () => {
-          const daemonBinary = resolveDaemonBinaryPath().path
-          const listed = JSON.parse(
-            execFileSync(daemonBinary, ['--list-audio-devices'], { encoding: 'utf8' }),
-          ) as { devices: Array<{ name: string; isDefault: boolean }> }
-          const requested = listed.devices.find((device) => device.isDefault) ?? listed.devices[0]
-          expect(requested, '#661 D-0 requires an output device').toBeDefined()
-          requestedName = requested!.name
+          requestedName = defaultOutputDeviceName('#661 D-0')
           return {
             'orbitscore.audioDevice': requestedName,
             'orbitscore.engineDebug': false,
@@ -5269,18 +5255,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // changing it in the shared long-running suite would invalidate all following scenarios.
       const launched = await launchIsolatedOrbitStudio({
         tmpPrefix: 'orbitstudio-device-gate-',
-        settings: () => {
-          const daemonBinary = resolveDaemonBinaryPath().path
-          const listed = JSON.parse(
-            execFileSync(daemonBinary, ['--list-audio-devices'], { encoding: 'utf8' }),
-          ) as { devices: Array<{ name: string; isDefault: boolean }> }
-          const requested = listed.devices.find((device) => device.isDefault) ?? listed.devices[0]
-          expect(requested, '#661 D-2 requires an output device').toBeDefined()
-          return {
-            'orbitscore.audioDevice': requested!.name,
-            'orbitscore.engineDebug': false,
-          }
-        },
+        settings: () => ({
+          'orbitscore.audioDevice': defaultOutputDeviceName('#661 D-2'),
+          'orbitscore.engineDebug': false,
+        }),
         env: {
           ...process.env,
           ORBIT_DAEMON_ALLOW_FAULT_INJECTION: '1',
@@ -5419,15 +5397,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             // 存在しない名前は probe に入る前に `AUDIO_DEVICE_UNAVAILABLE` で拒否されるため、
             // 「probe が死んでいる切替」を再現できない。ここで測りたいのは
             // `ORBIT_AUDIO_OUTPUT_FAULT=dead-probe-requested` による**コールバック不達**の方。
-            const rejectedDevice = (() => {
-              const daemonBinary = resolveDaemonBinaryPath().path
-              const listed = JSON.parse(
-                execFileSync(daemonBinary, ['--list-audio-devices'], { encoding: 'utf8' }),
-              ) as { devices: Array<{ name: string; isDefault: boolean }> }
-              const device = listed.devices.find((d) => d.isDefault) ?? listed.devices[0]
-              expect(device, '#661 D-3 requires an output device').toBeDefined()
-              return device!.name
-            })()
+            const rejectedDevice = defaultOutputDeviceName('#661 D-3')
             const beforeFailureLog = (await faultClient!.call('get_log', { lines: 500 })).text
             const errorsBeforeExpectedFailure = countErrors(beforeFailureLog)
             const stallsBeforeFailure = countLogMarker(beforeFailureLog, 'STREAM_CALLBACK_STALLED')

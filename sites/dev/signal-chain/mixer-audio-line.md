@@ -326,7 +326,7 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 という規則が読み取れます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6217-6237
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6221-6241
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -362,7 +362,7 @@ daemon が atomic に書いた routing を、native の render callback はど�
 **post-loop** がその場所です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1290-1316
+// rust/crates/orbit-audio-native/src/output.rs:1314-1340
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -422,7 +422,7 @@ instrument が何かを知らず、「render すると N 本の block をくれ�
 持ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:623-636
+// rust/crates/orbit-audio-native/src/output.rs:647-660
 /// A callback-owned source which renders one or more interleaved output units.
 pub trait BlockSource: Send {
     fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
@@ -448,7 +448,7 @@ feed の収集は `collect_source_feeds`（`output.rs:772-801`）が行い、uni
 core の `FeedDest` に写します。写像の部分だけ引用します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1142-1152
+// rust/crates/orbit-audio-native/src/output.rs:1166-1176
             let dest = match slot.dests[unit].load() {
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
@@ -711,7 +711,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1644-1682
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1636-1674
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -764,7 +764,7 @@ E2E-4 は sum + aux の経路です。dry（bus 無し）と、`output("sum643")
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1788-1807
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1780-1799
         [
           'var global = init GLOBAL',
           'global.key("C")',

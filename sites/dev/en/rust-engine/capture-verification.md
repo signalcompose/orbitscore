@@ -34,7 +34,7 @@ device"; the presence of capture does not change the output samples themselves (
 it does not mutate).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1017-1062
+// rust/crates/orbit-audio-native/src/output.rs:1041-1086
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -287,7 +287,7 @@ guarantee the sequence "stream stops (callback stops) → writer drains
 remaining ring contents and finalizes".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:549-558
+// rust/crates/orbit-audio-native/src/output.rs:573-582
 /// 生きている間はストリームを保持する RAII ハンドル。
 pub struct OutputStream {
     _stream: Stream,
@@ -387,7 +387,7 @@ under `rust/`, it fails before running a single test. Some directories are exclu
 walk, which the next subsection covers (#713).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:172-186
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:173-187
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -437,7 +437,7 @@ test at startup.
 So three directories, `tests` / `benches` / `examples`, were dropped from the walk.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:167-171
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:168-172
         // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
         // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
