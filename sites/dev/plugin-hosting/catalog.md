@@ -1375,7 +1375,7 @@ LOOP(drums)
 - `packages/vscode-extension/src/plugin-catalog-completion.ts:44-45` / `:68-87` / `:166-205` / `:241-252` — ラック文脈スキャナ・候補フィルタ・Quick Pick 行
 - `packages/vscode-extension/src/plugin-name-diagnostics.ts:8-20` / `:262-275` — 解決規則のミラーと合意テスト
 - `packages/vscode-extension/src/extension.ts:3716-3726` / `:4096-4112` — カタログ不在の案内・Warning 診断
-- `packages/vscode-extension/package.json:110-121` — `Rescan Plugin Catalog` / `Browse Plugins` コマンド
+- `packages/vscode-extension/package.json:120-131` — `Rescan Plugin Catalog` / `Browse Plugins` コマンド
 - `packages/vscode-extension/src/mcp-server.ts:1022-1032` — MCP `list_plugins`
 - `tests/vscode-extension/plugin-name-diagnostics.spec.ts:192-225` — engine resolver との合意テスト
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:3406-3414` — #618 E1-E6 の周波数オラクル
