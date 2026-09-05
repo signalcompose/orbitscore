@@ -1511,9 +1511,11 @@ export class RustEnginePlayer implements AudioEngineBackend {
       })
       void this.daemon
         .pluginAllNotesOff()
-        .then(({ released, stale }) => {
-          if (released > 0 || stale > 0) {
-            console.log(`[rust-engine] plugin all-notes-off: released=${released} stale=${stale}`)
+        .then(({ released, stale, failed }) => {
+          if (released > 0 || stale > 0 || failed > 0) {
+            console.log(
+              `[rust-engine] plugin all-notes-off: released=${released} stale=${stale} failed=${failed}`,
+            )
           }
         })
         .catch((err) => {

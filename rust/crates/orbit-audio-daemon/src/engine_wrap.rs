@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(feature = "outproc-effect")]
-use std::sync::atomic::{AtomicU32, AtomicUsize};
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 use std::sync::MutexGuard;
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
@@ -128,6 +128,11 @@ pub enum WrapError {
     AudioDeviceSwitchUnavailable(String),
 }
 
+#[cfg(feature = "outproc-instrument")]
+type ActivePluginNote = (String, u8, u8);
+#[cfg(feature = "outproc-instrument")]
+type ActivePluginNotes = HashSet<ActivePluginNote>;
+
 /// daemon が追跡していた plugin note の一括解放結果（#606）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PluginAllNotesOffSummary {
@@ -135,6 +140,8 @@ pub struct PluginAllNotesOffSummary {
     pub released: usize,
     /// 台帳にはあったが送り先 instance が既に無かった件数。
     pub stale: usize,
+    /// NoteOff の送出を試みたが runtime error になった件数。
+    pub failed: usize,
 }
 
 #[cfg(all(test, feature = "outproc-effect"))]
@@ -1615,20 +1622,23 @@ pub struct EngineWrap {
     /// 恒久 bool のため `AtomicBool` を使うが、他の `outproc_instrument_*` 注入用フィールドと同じ
     /// 「本番経路から分離した cross-thread 注入 seam」設計（[`Self::outproc_instrument_measurement_invalid_arc`]）。
     outproc_instrument_measurement_invalid: Arc<AtomicBool>,
-    /// `push_plugin_event` が bounded retry（[`push_with_bounded_retry`]）の末に諦めた回数（本番は
-    /// 常に 0 に近い想定・health signal）。event ring は audio callback が毎 block 全量 drain する
-    /// ため満杯は一時的であり、真の drop はこの回数だけ発生する（M2 doc の「溢れても失わない」方針を
-    /// in-process ring に retrofit・issue #400）。`EngineWrap` は常に `Arc<EngineWrap>` として共有
+    /// in-process / OOP instrument の note push が bounded retry（[`push_with_bounded_retry`]）の末に
+    /// 諦めた回数（本番は常に 0 に近い想定・health signal）。event ring は audio callback が毎 block
+    /// 全量 drain するため満杯は一時的であり、真の drop はこの回数だけ発生する（issue #400）。
+    /// `EngineWrap` は常に `Arc<EngineWrap>` として共有
     /// されるため、`link_egress_drops`/`clap_process_errors` と異なり test 注入用の `_arc()` getter
     /// が不要。本番の bounded retry 書き込みも test 注入用の
     /// [`plugin_event_ring_overflow_inject`](Self::plugin_event_ring_overflow_inject)（#402）も、
     /// producer 側を別スレッドへ outsource せず常に `&self` 経由で `EngineWrap` 自身が直接書くため、
     /// `Arc` clone による cross-thread 共有が不要で、プレーンな `AtomicU64` で足りる。
     plugin_event_ring_overflow_count: AtomicU64,
-    /// control-sideで送信に成功した NoteOn の集合。state保存は音声処理と同じchild loopを止めるため、
-    /// sample schedulerだけでなくlive instrument noteが残る間もfail-closedに拒否する。
+    /// control-side で送信に成功し、まだ NoteOff が成功していない OOP instrument note の集合。
+    /// `PluginAllNotesOff` の最後の砦と replacement 成功後の旧 tenant 掃除がこの台帳を消費する。
     #[cfg(feature = "outproc-instrument")]
-    active_plugin_notes: Mutex<HashSet<(String, u8, u8)>>,
+    active_plugin_notes: Mutex<ActivePluginNotes>,
+    /// 確立済み WebSocket session 数。daemon は複数接続を受け付けるため、途中の 1 session が
+    /// 切れても別 session の note を止めず、最後の session 切断だけを異常終了 trigger にする。
+    connected_sessions: AtomicUsize,
     /// device switch（#484 D2）: `StreamGuard`（延いては `cpal::Stream`）を排他所有する専用 OS thread
     /// （"audio owner thread"・`main.rs` が spawn）への要求チャンネル。`cpal::Stream` は `!Send` なので
     /// `EngineWrap`（`Arc` 共有で `Send + Sync` 必須）にはハンドルを一切持たせられない — 代わりに
@@ -3965,18 +3975,18 @@ pub enum ClapPluginRole {
 const CLAP_MAX_FRAMES: u32 = 8192;
 
 /// event ring への bounded retry の再試行間隔。
-#[cfg(feature = "clap-host")]
+#[cfg(any(feature = "clap-host", feature = "outproc-instrument"))]
 const PLUGIN_EVENT_RETRY_INTERVAL: Duration = Duration::from_millis(1);
 /// 最大再試行回数（≈200ms 上限）。event ring の consumer（audio callback）は毎 block ごとに
 /// ring を全量 drain するため、通常は最初の数回で空きが生まれる。この上限は大きめの buffer
 /// 構成（cpal callback 周期が長いケース）でも安全にカバーする余裕を持たせた値であり、
 /// 「ここまで待っても空かない」を真の overflow とみなす閾値。
-#[cfg(feature = "clap-host")]
+#[cfg(any(feature = "clap-host", feature = "outproc-instrument"))]
 const PLUGIN_EVENT_RETRY_MAX_ATTEMPTS: u32 = 200;
 
-/// 1回の push 試行の結果。`Fatal` はリトライしても解決しない状態（mutex poisoned / clap 未初期化）
+/// 1回の push 試行の結果。`Fatal` はリトライしても解決しない状態（mutex poisoned / control 不在）
 /// を表し、bounded retry ループを即座に打ち切る。
-#[cfg(feature = "clap-host")]
+#[cfg(any(feature = "clap-host", feature = "outproc-instrument"))]
 enum PushAttemptOutcome<T> {
     Sent,
     Full(T),
@@ -3996,13 +4006,14 @@ enum PushAttemptOutcome<T> {
 /// 解放」規約と同じ理由・#402 レビュー指摘）。
 ///
 /// 真に `max_attempts` 尽きた場合のみ `overflow_count` を進めてエラーを返す。
-#[cfg(feature = "clap-host")]
+#[cfg(any(feature = "clap-host", feature = "outproc-instrument"))]
 fn push_with_bounded_retry<T>(
     mut attempt: impl FnMut(T) -> PushAttemptOutcome<T>,
     mut item: T,
     max_attempts: u32,
     retry_interval: Duration,
     overflow_count: &AtomicU64,
+    exhausted_error: impl FnOnce() -> WrapError,
 ) -> Result<(), WrapError> {
     let attempts = max_attempts.max(1);
     for i in 0..attempts {
@@ -4018,9 +4029,7 @@ fn push_with_bounded_retry<T>(
         }
     }
     overflow_count.fetch_add(1, Ordering::Relaxed);
-    Err(WrapError::Clap(
-        "plugin event ring full after bounded retry".into(),
-    ))
+    Err(exhausted_error())
 }
 
 // link-audio と clap-host の併用は現状未対応（1 つの cpal callback で LinkAudio per-channel egress と
@@ -4769,6 +4778,7 @@ impl EngineWrap {
             plugin_event_ring_overflow_count: AtomicU64::new(0),
             #[cfg(feature = "outproc-instrument")]
             active_plugin_notes: Mutex::new(HashSet::new()),
+            connected_sessions: AtomicUsize::new(0),
             device_switch_tx: Mutex::new(None),
             output_buffer_frames: Mutex::new(None),
             output_cb_stats: Mutex::new(None),
@@ -4785,6 +4795,23 @@ impl EngineWrap {
             #[cfg(feature = "outproc-instrument")]
             outproc_instrument: Mutex::new(None),
         })
+    }
+
+    /// 確立済み session を登録する。session 切断 trigger は台帳が daemon 全体で共有されるため、
+    /// 対応する [`Self::session_disconnected_is_last`] と組にして最後の接続だけで発火させる。
+    pub(crate) fn session_connected(&self) {
+        self.connected_sessions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// session 登録を解除し、daemon の最後の確立済み session だったかを返す。
+    pub(crate) fn session_disconnected_is_last(&self) -> bool {
+        let previous = self.connected_sessions.fetch_sub(1, Ordering::Relaxed);
+        if previous == 0 {
+            self.connected_sessions.store(0, Ordering::Relaxed);
+            tracing::error!("session counter underflow while disconnecting");
+            return false;
+        }
+        previous == 1
     }
 
     pub fn subscribe_plugin_ui_events(&self) -> tokio::sync::broadcast::Receiver<PluginUiEvent> {
@@ -6147,6 +6174,17 @@ impl EngineWrap {
             state,
         )?;
 
+        // 台帳 lock と control lock は入れ子にしない。再ポイント前の旧 tenant 集合だけを
+        // 写し取り、teardown 中に新 tenant が追加した同名 entry を掃除へ巻き込まない。
+        let old_active_notes = {
+            let active = self.lock_active_notes()?;
+            active
+                .iter()
+                .filter(|(instance, _, _)| instance == &name)
+                .cloned()
+                .collect::<HashSet<_>>()
+        };
+
         // Atomic commit: every subsequent note/state/UI lookup resolves to the READY spare.
         {
             let mut guard = self.outproc_instrument.lock().map_err(|_| {
@@ -6205,17 +6243,16 @@ impl EngineWrap {
                 "instrument replacement completed with old slot quarantined from free-list"
             );
         }
-        // teardown 成功時だけ旧 tenant の台帳を捨てる。失敗時は旧 child がまだ鳴っている可能性が
-        // あるため、最後の砦 PluginAllNotesOff が拾えるよう entry を保持する。
+        // teardown 成功時だけ、再ポイント前に写し取った旧 tenant の entry を捨てる。
+        // teardown 中に新 tenant が追加した entry は集合に無いため残る。失敗時は旧 child がまだ
+        // 鳴っている可能性があるため、最後の砦 PluginAllNotesOff が拾えるよう全 entry を保持する。
         let note_cleanup_error = if teardown.is_ok() {
-            match self.active_plugin_notes.lock() {
+            match self.lock_active_notes() {
                 Ok(mut active) => {
-                    active.retain(|(instance, _, _)| instance != &name);
+                    active.retain(|note| !old_active_notes.contains(note));
                     None
                 }
-                Err(_) => Some(WrapError::OutProcInstrument(
-                    "active plugin note tracker mutex poisoned".into(),
-                )),
+                Err(error) => Some(error),
             }
         } else {
             None
@@ -7162,12 +7199,11 @@ impl EngineWrap {
         })
     }
 
-    /// in-process CLAP は instance ごとの active-note 台帳を持たないため利用不可。
+    /// in-process CLAP は instance ごとの active-note 台帳を持たない。発音経路が台帳の対象外で
+    /// あることは停止失敗ではないため、global.stop() から安全に呼べる空の成功を返す。
     #[cfg(all(feature = "clap-host", not(feature = "outproc-instrument")))]
     pub fn plugin_all_notes_off(&self) -> Result<PluginAllNotesOffSummary, WrapError> {
-        Err(WrapError::ClapUnavailable(
-            "PluginAllNotesOff requires an outproc-instrument daemon build".into(),
-        ))
+        Ok(PluginAllNotesOffSummary::default())
     }
 
     /// Out-of-process instrument NoteOn. Conversion to the format-neutral wire event happens on
@@ -7195,12 +7231,7 @@ impl EngineWrap {
             .as_deref()
             .unwrap_or(DEFAULT_INSTRUMENT_INSTANCE)
             .to_string();
-        self.active_plugin_notes
-            .lock()
-            .map_err(|_| {
-                WrapError::OutProcInstrument("active plugin note tracker mutex poisoned".into())
-            })?
-            .insert((name, channel, key));
+        self.lock_active_notes()?.insert((name, channel, key));
         Ok(())
     }
 
@@ -7226,28 +7257,22 @@ impl EngineWrap {
             .as_deref()
             .unwrap_or(DEFAULT_INSTRUMENT_INSTANCE)
             .to_string();
-        self.active_plugin_notes
-            .lock()
-            .map_err(|_| {
-                WrapError::OutProcInstrument("active plugin note tracker mutex poisoned".into())
-            })?
-            .remove(&(name, channel, key));
+        self.lock_active_notes()?.remove(&(name, channel, key));
         Ok(())
     }
 
-    /// 追跡中の全 OOP instrument note を解放する。台帳 lock は drain の間だけ保持し、
-    /// ring push 前に必ず解放する（control lock との循環と他 note RPC の足止めを防ぐ）。
+    /// 追跡中の全 OOP instrument note を解放する。台帳は clone した snapshot から送出し、
+    /// 成功または stale と判定できた entry だけを最後に除去する。ring push 前には台帳 lock を
+    /// 必ず解放するため、control lock との入れ子も retry 中の他 note RPC の足止めも生じない。
     #[cfg(all(feature = "outproc-instrument", not(feature = "clap-host")))]
     pub fn plugin_all_notes_off(&self) -> Result<PluginAllNotesOffSummary, WrapError> {
         let notes = {
-            let mut active = self.active_plugin_notes.lock().map_err(|_| {
-                WrapError::OutProcInstrument("active plugin note tracker mutex poisoned".into())
-            })?;
-            active.drain().collect::<Vec<_>>()
+            let active = self.lock_active_notes()?;
+            active.iter().cloned().collect::<Vec<_>>()
         };
 
         let mut summary = PluginAllNotesOffSummary::default();
-        let mut failed_notes = Vec::new();
+        let mut released_notes = HashSet::new();
         let mut first_error = None;
         for (instance, channel, key) in notes {
             let event = orbit_audio_sandbox::NeutralEvent::NoteOff {
@@ -7256,39 +7281,55 @@ impl EngineWrap {
                 velocity: 0.0,
             };
             match self.push_outproc_instrument_event(event, Some(&instance)) {
-                Ok(()) => summary.released += 1,
+                Ok(()) => {
+                    summary.released += 1;
+                    released_notes.insert((instance, channel, key));
+                }
                 Err(
                     WrapError::OutProcInstrumentStale(_)
                     | WrapError::OutProcInstrumentUnavailable(_),
-                ) => summary.stale += 1,
+                ) => {
+                    summary.stale += 1;
+                    released_notes.insert((instance, channel, key));
+                }
                 Err(error) => {
-                    failed_notes.push((instance, channel, key));
+                    summary.failed += 1;
                     if first_error.is_none() {
                         first_error = Some(error);
                     }
                 }
             }
         }
-        if !failed_notes.is_empty() {
-            self.active_plugin_notes
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .extend(failed_notes);
+        if !released_notes.is_empty() {
+            self.lock_active_notes()?
+                .retain(|note| !released_notes.contains(note));
         }
-        match first_error {
-            Some(error) => Err(error),
-            None => Ok(summary),
+        if let Some(error) = first_error {
+            tracing::error!(
+                first_error = %error,
+                released = summary.released,
+                stale = summary.stale,
+                failed = summary.failed,
+                "plugin all-notes-off completed with delivery failures"
+            );
         }
+        Ok(summary)
+    }
+
+    /// active-note 台帳の poison 方針を一箇所で強制する。poison は回復せず、呼び手へ大声の
+    /// runtime error として返す。
+    #[cfg(feature = "outproc-instrument")]
+    fn lock_active_notes(&self) -> Result<MutexGuard<'_, ActivePluginNotes>, WrapError> {
+        self.active_plugin_notes.lock().map_err(|_| {
+            WrapError::OutProcInstrument("active plugin note tracker mutex poisoned".into())
+        })
     }
 
     /// integration test seam: active-note 台帳の現在件数。
     #[cfg(feature = "outproc-instrument")]
     #[doc(hidden)]
-    pub fn active_plugin_note_count(&self) -> usize {
-        self.active_plugin_notes
-            .lock()
-            .map(|active| active.len())
-            .unwrap_or_else(|poisoned| poisoned.into_inner().len())
+    pub fn active_plugin_note_count(&self) -> Result<usize, WrapError> {
+        self.lock_active_notes().map(|active| active.len())
     }
 
     /// integration test seam: 実 child を鳴らさず active-note 台帳へ 1 件注入する。
@@ -7300,11 +7341,7 @@ impl EngineWrap {
         channel: u8,
         key: u8,
     ) -> Result<(), WrapError> {
-        self.active_plugin_notes
-            .lock()
-            .map_err(|_| {
-                WrapError::OutProcInstrument("active plugin note tracker mutex poisoned".into())
-            })?
+        self.lock_active_notes()?
             .insert((instance.to_owned(), channel, key));
         Ok(())
     }
@@ -7338,33 +7375,54 @@ impl EngineWrap {
         event: orbit_audio_sandbox::NeutralEvent,
         instance: Option<&str>,
     ) -> Result<(), WrapError> {
-        let mut guard = self.outproc_instrument.lock().map_err(|_| {
-            WrapError::OutProcInstrument("outproc instrument mutex poisoned".into())
-        })?;
-        let control = guard.as_mut().ok_or_else(|| {
-            WrapError::OutProcInstrumentUnavailable(
-                "outproc instrument not initialized (test backend)".into(),
-            )
-        })?;
-        // #540 P1: instance → slot の解決。未割当の instance への note は「未ロード」と同義
-        // なので明示エラーにする（旧単数時代は ring へ積んで黙って捨てられていた — 診断の改善）。
         let name = instance.unwrap_or(DEFAULT_INSTRUMENT_INSTANCE);
-        let Some(&index) = control.instance_index.get(name) else {
-            return Err(WrapError::OutProcInstrumentStale(format!(
-                "unknown instrument instance '{name}' (LoadPlugin has not assigned it a slot)"
-            )));
-        };
-        let slot = control
-            .slots
-            .get_mut(index)
-            .expect("instance_index always maps to a pre-allocated slot");
-        slot.event_tx.push(event).map_err(|_| {
-            self.plugin_event_ring_overflow_count
-                .fetch_add(1, Ordering::Relaxed);
-            // 診断の同一性方針（#542 レビュー）: N 台化したエラーは instance を名指しする
-            // （unknown-instance / pool-exhausted と対称）。
-            WrapError::OutProcInstrument(format!("instrument note ring full (instance '{name}')"))
-        })
+        // OOP ring も in-process と同じ bounded retry に載せる。各試行で lock を取り直すため、
+        // sleep 中は control lock を保持しない。
+        push_with_bounded_retry(
+            |item| {
+                let mut guard = match self.outproc_instrument.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        return PushAttemptOutcome::Fatal(WrapError::OutProcInstrument(
+                            "outproc instrument mutex poisoned".into(),
+                        ));
+                    }
+                };
+                let control = match guard.as_mut() {
+                    Some(control) => control,
+                    None => {
+                        return PushAttemptOutcome::Fatal(WrapError::OutProcInstrumentUnavailable(
+                            "outproc instrument not initialized (test backend)".into(),
+                        ));
+                    }
+                };
+                // #540 P1: instance → slot の解決。未割当の instance への note は「未ロード」と同義
+                // なので明示エラーにする（旧単数時代は ring へ積んで黙って捨てられていた）。
+                let Some(&index) = control.instance_index.get(name) else {
+                    return PushAttemptOutcome::Fatal(WrapError::OutProcInstrumentStale(format!(
+                        "unknown instrument instance '{name}' (LoadPlugin has not assigned it a slot)"
+                    )));
+                };
+                let slot = control
+                    .slots
+                    .get_mut(index)
+                    .expect("instance_index always maps to a pre-allocated slot");
+                match slot.event_tx.push(item) {
+                    Ok(()) => PushAttemptOutcome::Sent,
+                    Err(rtrb::PushError::Full(returned)) => PushAttemptOutcome::Full(returned),
+                }
+            },
+            event,
+            PLUGIN_EVENT_RETRY_MAX_ATTEMPTS,
+            PLUGIN_EVENT_RETRY_INTERVAL,
+            &self.plugin_event_ring_overflow_count,
+            || {
+                // 診断の同一性方針（#542 レビュー）: N 台化したエラーは instance を名指しする。
+                WrapError::OutProcInstrument(format!(
+                    "instrument note ring full after bounded retry (instance '{name}')"
+                ))
+            },
+        )
     }
 
     #[cfg(feature = "clap-host")]
@@ -7416,6 +7474,7 @@ impl EngineWrap {
             PLUGIN_EVENT_RETRY_MAX_ATTEMPTS,
             PLUGIN_EVENT_RETRY_INTERVAL,
             &self.plugin_event_ring_overflow_count,
+            || WrapError::Clap("plugin event ring full after bounded retry".into()),
         )
     }
 
@@ -9742,6 +9801,7 @@ mod plugin_event_ring_retry_tests {
             5,
             Duration::from_millis(1),
             &overflow,
+            || super::WrapError::Clap("test ring exhausted".into()),
         );
         assert!(result.is_ok());
         assert_eq!(overflow.load(Ordering::Relaxed), 0);
@@ -9765,6 +9825,7 @@ mod plugin_event_ring_retry_tests {
             50,
             Duration::from_millis(1),
             &overflow,
+            || super::WrapError::Clap("test ring exhausted".into()),
         );
         drain_handle.join().expect("drain thread should not panic");
 
@@ -9789,6 +9850,7 @@ mod plugin_event_ring_retry_tests {
             3,
             Duration::from_millis(1),
             &overflow,
+            || super::WrapError::Clap("test ring exhausted".into()),
         );
 
         assert!(result.is_err(), "should give up after max_attempts");
@@ -9812,6 +9874,7 @@ mod plugin_event_ring_retry_tests {
             5,
             Duration::from_millis(1),
             &overflow,
+            || super::WrapError::Clap("test ring exhausted".into()),
         );
 
         assert!(result.is_err(), "fatal outcome must propagate as an error");
@@ -9889,6 +9952,18 @@ mod push_plugin_event_tests {
             before,
             "Fatal short-circuit must not be counted as a bounded-retry overflow"
         );
+    }
+
+    #[test]
+    fn plugin_all_notes_off_is_a_noop_without_an_outproc_ledger() {
+        let (engine, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend starts");
+
+        let summary = engine
+            .plugin_all_notes_off()
+            .expect("clap-only build has no tracked outproc notes to release");
+
+        assert_eq!(summary, Default::default());
     }
 }
 
@@ -12856,6 +12931,55 @@ mod outproc_instrument_replace_tests {
     }
 
     #[test]
+    fn replacement_cleanup_keeps_notes_added_after_repoint() {
+        let (wrap, mut old, spare, _old_pid) = two_slot_fixture("slow-child.sh");
+        wrap.inject_active_plugin_note(OLD_INSTANCE, 0, 60)
+            .expect("inject old tenant note");
+
+        let wrap_call = wrap.clone();
+        let call = std::thread::spawn(move || {
+            wrap_call.replace_outproc_instrument_plugin(
+                PathBuf::from(NEW_PLUGIN),
+                None,
+                Some(OLD_INSTANCE.into()),
+                None,
+            )
+        });
+        wait_until("spare child pid", || {
+            spare.stats.current_child_pid.load(Ordering::Relaxed) != 0
+        });
+        publish_ready(&spare);
+        wait_until("old slot drain request", || {
+            old.drain_requested.load(Ordering::Acquire)
+        });
+
+        // drain request は snapshot と instance_index の再ポイントより後。ここで入れた note は
+        // 新 tenant の entry なので、旧 tenant snapshot の cleanup に巻き込まれてはならない。
+        wrap.inject_active_plugin_note(OLD_INSTANCE, 0, 61)
+            .expect("inject new tenant note during teardown");
+        let ack = spawn_drain_ack(
+            old.event_rx.take().expect("old event consumer"),
+            old.shm_path.clone(),
+            old.engaged.clone(),
+            old.drain_requested.clone(),
+            old.drain_done.clone(),
+            old.stats.clone(),
+        );
+
+        call.join()
+            .expect("replace thread panicked")
+            .expect("replacement succeeds");
+        ack.join().expect("drain ack thread panicked");
+
+        let active = wrap.lock_active_notes().expect("lock active notes");
+        assert_eq!(active.len(), 1);
+        assert!(
+            active.contains(&(OLD_INSTANCE.to_string(), 0, 61)),
+            "cleanup must remove only the pre-repoint snapshot"
+        );
+    }
+
+    #[test]
     fn successful_teardown_resets_all_unit_destinations_before_slot_reuse() {
         let (entry, mut fixture) = empty_slot(fixture_script("slow-child.sh"));
         let child_pid = activate_slot(&fixture, OLD_PLUGIN);
@@ -13641,7 +13765,7 @@ mod outproc_instrument_note_tests {
     }
 
     #[test]
-    fn plugin_all_notes_off_restores_every_ring_full_entry_and_continues() {
+    fn plugin_all_notes_off_keeps_every_ring_full_entry_and_reports_failures() {
         let (wrap, _event_rx) = wrap_with_note_consumer(1);
         wrap.plugin_note_on(60, 0, 0.8, None)
             .expect("first note fills the ring");
@@ -13649,23 +13773,51 @@ mod outproc_instrument_note_tests {
             .expect("inject second tracked note");
         let before = wrap.plugin_event_ring_overflow_count();
 
-        let err = wrap
+        let summary = wrap
             .plugin_all_notes_off()
-            .expect_err("the full ring must reject both NoteOff events");
+            .expect("delivery failures are returned in the summary");
 
-        assert!(
-            matches!(err, WrapError::OutProcInstrument(_)),
-            "the first ring-full error must be returned, got {err:?}"
-        );
+        assert_eq!(summary.released, 0);
+        assert_eq!(summary.stale, 0);
+        assert_eq!(summary.failed, 2);
         assert_eq!(
-            wrap.active_plugin_note_count(),
+            wrap.active_plugin_note_count().expect("count notes"),
             2,
-            "every failed entry must be restored to the active-note ledger"
+            "failed entries must never leave the active-note ledger"
         );
         assert_eq!(
             wrap.plugin_event_ring_overflow_count(),
             before + 2,
             "a failure must not prevent the remaining ledger entry from being attempted"
+        );
+    }
+
+    #[test]
+    fn plugin_all_notes_off_panic_leaves_the_full_ledger_intact() {
+        let (wrap, _event_rx) = wrap_with_note_consumer(1);
+        wrap.inject_active_plugin_note(super::DEFAULT_INSTRUMENT_INSTANCE, 0, 62)
+            .expect("inject tracked note");
+        wrap.outproc_instrument
+            .lock()
+            .expect("lock instrument control")
+            .as_mut()
+            .expect("instrument control")
+            .instance_index
+            .insert(super::DEFAULT_INSTRUMENT_INSTANCE.to_string(), usize::MAX);
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = wrap.plugin_all_notes_off();
+        }))
+        .is_err();
+
+        assert!(
+            panicked,
+            "invalid slot index must exercise the loop panic path"
+        );
+        assert_eq!(
+            wrap.active_plugin_note_count().expect("count notes"),
+            1,
+            "snapshot delivery must not remove the ledger before the loop completes"
         );
     }
 

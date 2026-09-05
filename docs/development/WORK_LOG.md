@@ -17,6 +17,59 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(daemon): make the all-notes-off ledger survive its own failures (#606 round-1) (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR** #738
+
+レビュー 5 体（Sonnet 4 + Fable）の指摘を 2 つの横断ポリシーへ集約して一括で直した。
+指摘単位のローカルパッチは振動の主因なので置かない。
+
+#### ポリシー A — 壊れた時に真因が残ること
+
+台帳を **drain（取り切り）→ 失敗分を戻す**のをやめ、**clone → 送出 → 解放済みだけ除去**に向きを反転した。
+
+- 🔴 旧実装はループ内で panic すると（`push_outproc_instrument_event` に
+  `.expect("instance_index always maps to a pre-allocated slot")` がある）**台帳が丸ごと消え、
+  二度と復元されなかった** — 最後の砦が最後の砦でなくなる。反転後は panic が「台帳が残る」＝安全側に倒れる
+- 復帰用 `extend` と、そこにあった**無言の `poisoned.into_inner()`** が消えた（drain 側は大声の `Err`
+  だったので扱いが非対称だった）
+- `PluginAllNotesOffSummary` に `failed` を足し、配送に失敗しても **`Ok(summary)` を返す**。
+  `Err` は台帳そのものが読めない（poison）時だけ。呼び手が知りたいのは「音が残ったか」で、
+  それに答えるのは `failed > 0` という機械可読な数であって不透明な `Err` ではない
+- 最初のエラーは released/stale/failed と一緒に `tracing::error!` へ 1 回だけ
+
+#### ポリシー B — 暗黙の結合を検証する
+
+台帳の鍵は**名前**だが、スロットの同一性は **index + 世代**である。この 2 つがずれる窓を塞いだ。
+
+- 🔴 `ReplacePlugin` は `instance_index.insert(name, spare)` で**名前を新スロットへ向けた後**、
+  teardown（最大 500 ms 待つ）を挟んでから名前一致で台帳を掃除していた。その窓で新テナントへ届いた
+  NoteOn は同じ `(name, ch, key)` として台帳に入り、**巻き込まれて消える → その音が解放されず鳴りっぱなしになる**。
+  **3 体のレビュアーが独立に指摘した唯一の項目**
+- 修正: **再ポイントの前に**旧テナントの entry を写し取り、teardown 後は**その集合だけ**を消す。
+  lock の入れ子は作らない（control を握ったまま台帳 lock を取らない）
+- `push_outproc_instrument_event` を `push_with_bounded_retry` に載せた。in-process の兄弟は
+  同じ物理状況（ring 満杯は一時的）に既に bounded retry を持っており、**片方だけ one-shot** だった
+- 台帳 lock + poison 文言の 5 重複を `lock_active_notes` に集約（poison の扱いが構造として 1 つになる）
+
+#### そのほか
+
+- session 切断 trigger を「**最後の確立済み session が切れた時だけ**」に変更。台帳は daemon 全体で
+  共有なので、2 つ目のクライアントが切れて 1 つ目の音が止まる形を避ける
+- `clap-host` のみのビルドは空 summary を返す（`global.stop()` のたびの警告が消える）
+- `engine_wrap.rs` の active-note 台帳コメントを実体に合わせた
+
+#### 検証（main が sandbox 外で実測）
+
+- `cargo clippy --all-targets -- -D warnings` exit 0
+- `cargo test -p orbit-audio-daemon` — protocol **29 passed** ほか全 green
+- `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument`
+  — lib **252 passed** / protocol **32 passed** / `plugin_all_notes_off` 1 passed
+- `npm test` **2224 passed / 0 failed**
+
+🔴 Codex は sandbox で protocol テスト（loopback bind）を走らせられず 29 件 red と報告していた。
+**同じテストが sandbox 外では全部 green** — 委譲先の赤も緑も main が回し直す。
+
 ### feat(audio): add daemon-side plugin all-notes-off fallback (#606 PR-K-A2) (Sep 5, 2026)
 
 **Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR-K-A2**

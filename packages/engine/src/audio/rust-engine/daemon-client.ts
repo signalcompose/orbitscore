@@ -454,11 +454,12 @@ export class DaemonClient extends EventEmitter {
   }
 
   /** daemon が追跡する全 instrument note を解放し、配送結果を返す。 */
-  async pluginAllNotesOff(): Promise<{ released: number; stale: number }> {
+  async pluginAllNotesOff(): Promise<{ released: number; stale: number; failed: number }> {
     const result = await this.request('PluginAllNotesOff', {})
     return {
       released: Number(result.released ?? 0),
       stale: Number(result.stale ?? 0),
+      failed: Number(result.failed ?? 0),
     }
   }
 

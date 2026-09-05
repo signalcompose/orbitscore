@@ -63,7 +63,7 @@ function defaultHandlers(overrides: MockDaemonHandlers = {}): MockDaemonHandlers
     }),
     PlayAt: () => ({ play_id: `p-${playSeq++}` }),
     StopAll: () => ({ stopped: 0 }),
-    PluginAllNotesOff: () => ({ released: 0, stale: 0 }),
+    PluginAllNotesOff: () => ({ released: 0, stale: 0, failed: 0 }),
     // 既定の mock daemon は feature `link-audio` 無効ビルドを模す（LINK_AUDIO_UNAVAILABLE）。player は
     // これを warn-once gap として握り潰す。実 egress を持つ daemon の挙動は override で差し替える。
     RegisterLinkAudioChannel: () => {
@@ -807,20 +807,24 @@ describe('RustEnginePlayer with mock daemon', () => {
     ).toEqual(['StopAll', 'PluginAllNotesOff'])
   })
 
-  it('PluginAllNotesOff は解放または stale がある時だけ stdout に要約を出す', async () => {
+  it('PluginAllNotesOff は released/stale/failed のいずれかがある時だけ stdout に要約を出す', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     const flushSpy = vi.spyOn(DaemonClient.prototype, 'pluginAllNotesOff')
     let flushCount = 0
     const p = await boot(
       defaultHandlers({
         PluginAllNotesOff: () =>
-          ++flushCount === 1 ? { released: 2, stale: 1 } : { released: 0, stale: 0 },
+          ++flushCount === 1
+            ? { released: 2, stale: 1, failed: 1 }
+            : { released: 0, stale: 0, failed: 0 },
       }),
     )
     p.stopAll()
     await waitFor(() => flushSpy.mock.calls.length === 1)
     await flushSpy.mock.results[0].value
-    expect(logSpy).toHaveBeenCalledWith('[rust-engine] plugin all-notes-off: released=2 stale=1')
+    expect(logSpy).toHaveBeenCalledWith(
+      '[rust-engine] plugin all-notes-off: released=2 stale=1 failed=1',
+    )
     logSpy.mockClear()
 
     p.stopAll()
@@ -871,8 +875,8 @@ describe('RustEnginePlayer plugin all-notes-off wiring without a socket', () => 
     const stop = vi.spyOn(daemon, 'stopAll').mockResolvedValue(0)
     const flush = vi
       .spyOn(daemon, 'pluginAllNotesOff')
-      .mockResolvedValueOnce({ released: 2, stale: 1 })
-      .mockResolvedValueOnce({ released: 0, stale: 0 })
+      .mockResolvedValueOnce({ released: 2, stale: 1, failed: 1 })
+      .mockResolvedValueOnce({ released: 0, stale: 0, failed: 0 })
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const player = new RustEnginePlayer({ daemonClient: daemon })
 
@@ -881,7 +885,9 @@ describe('RustEnginePlayer plugin all-notes-off wiring without a socket', () => 
     expect(stop).toHaveBeenCalledTimes(1)
     expect(flush).toHaveBeenCalledTimes(1)
     expect(stop.mock.invocationCallOrder[0]).toBeLessThan(flush.mock.invocationCallOrder[0]!)
-    expect(log).toHaveBeenCalledWith('[rust-engine] plugin all-notes-off: released=2 stale=1')
+    expect(log).toHaveBeenCalledWith(
+      '[rust-engine] plugin all-notes-off: released=2 stale=1 failed=1',
+    )
 
     log.mockClear()
     player.stopAll()
@@ -895,7 +901,9 @@ describe('RustEnginePlayer plugin all-notes-off wiring without a socket', () => 
     const daemon = new DaemonClient()
     vi.spyOn(daemon, 'isRunning').mockReturnValue(true)
     const stop = vi.spyOn(daemon, 'stopAll').mockResolvedValue(0)
-    const flush = vi.spyOn(daemon, 'pluginAllNotesOff').mockResolvedValue({ released: 0, stale: 0 })
+    const flush = vi
+      .spyOn(daemon, 'pluginAllNotesOff')
+      .mockResolvedValue({ released: 0, stale: 0, failed: 0 })
     const player = new RustEnginePlayer({ daemonClient: daemon })
 
     await player.quit()

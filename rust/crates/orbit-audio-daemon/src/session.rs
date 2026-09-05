@@ -699,6 +699,7 @@ pub async fn run(
     write
         .send(Message::Text(to_json_or_fallback(&Handshake::current())))
         .await?;
+    engine.session_connected();
 
     let writer_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -1217,12 +1218,19 @@ pub async fn run(
     }
 
     // engine が異常終了すると RPC は原理的に届かない。read loop の終了そのものを第二 trigger
-    // とし、RPC handler と同じ単一配送関数で daemon 台帳を解放する（#606）。
-    let release_engine = engine.clone();
-    match tokio::task::spawn_blocking(move || release_engine.plugin_all_notes_off()).await {
-        Ok(Ok(_)) => {}
-        Ok(Err(error)) => warn!("plugin all-notes-off after session disconnect failed: {error}"),
-        Err(error) => warn!("plugin all-notes-off task after session disconnect failed: {error}"),
+    // とする。ただし daemon は複数 session を受理し台帳は共有するため、途中の 1 接続ではなく
+    // 最後の確立済み session が切れた時だけ単一配送関数で解放する（#606）。
+    if engine.session_disconnected_is_last() {
+        let release_engine = engine.clone();
+        match tokio::task::spawn_blocking(move || release_engine.plugin_all_notes_off()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                warn!("plugin all-notes-off after session disconnect failed: {error}")
+            }
+            Err(error) => {
+                warn!("plugin all-notes-off task after session disconnect failed: {error}")
+            }
+        }
     }
 
     // stats_task は自身の tx clone を保持するため、drop(tx) では exit しない。
@@ -2225,7 +2233,11 @@ async fn handle_command(
             match tokio::task::spawn_blocking(move || engine.plugin_all_notes_off()).await {
                 Ok(Ok(summary)) => ok(
                     &id,
-                    json!({"released": summary.released, "stale": summary.stale}),
+                    json!({
+                        "released": summary.released,
+                        "stale": summary.stale,
+                        "failed": summary.failed,
+                    }),
                 ),
                 Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
                 Err(error) => err(&id, ProtocolError::new("INTERNAL_ERROR", error.to_string())),
