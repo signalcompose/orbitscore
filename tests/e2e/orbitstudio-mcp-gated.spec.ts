@@ -1029,33 +1029,57 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // hardcoded to the capture wording (see the unit-level equivalent in
       // engine-lifecycle.spec.ts's `decideStartEngineForAgent` describe).
 
-      // ── #661 D-1: a missing named device falls back loudly ──
+      // ── #661 D-1: a missing named device is REJECTED and the current device keeps playing ──
+      //
+      // 🔴 owner 裁定 2026-09-05（設計 §3）: **起動時は host 既定へ縮退／ライブ切替は元のデバイスへ復帰**。
+      // 以前の実装は切替でも既定へ移っており、演奏中に "Pro Tools Aggregate" をタイプミスすると
+      // 内蔵スピーカーへ音が移る形だった。いまは切替経路では縮退せず `AUDIO_DEVICE_UNAVAILABLE`
+      // を返し、鳴っているデバイスをそのまま使い続ける。
+      //
       // This runs before capture is enabled because live device switching is intentionally
       // rejected while ORBIT_CAPTURE_WAV is active.
       const missingAudioDevice = `NoSuchDevice-${randomUUID()}`
       const beforeDeviceFallbackLog = (await client.call('get_log', { lines: 500 })).text
-      const errorsBeforeDeviceFallback = countErrors(beforeDeviceFallbackLog)
+      const deviceBeforeReject = JSON.parse((await client.call('get_engine_state')).text) as Record<
+        string,
+        unknown
+      >
       const selectMissingDevice = await client.call('select_audio_device', {
         device: missingAudioDevice,
       })
-      expect(selectMissingDevice.isError, selectMissingDevice.text).toBe(false)
+      expect(
+        selectMissingDevice.isError,
+        `#661 D-1 must reject a missing device instead of falling back: ${selectMissingDevice.text}`,
+      ).toBe(true)
+      expect(selectMissingDevice.text).toContain(missingAudioDevice)
       await waitUntil(
         async () => {
           const log = (await client!.call('get_log', { lines: 500 })).text
-          return countErrors(log) >= errorsBeforeDeviceFallback + 1
+          return log.includes(`audio output device switch to "${missingAudioDevice}" failed`)
         },
-        { intervalMs: 250, timeoutMs: 10_000, label: '#661 D-1 device fallback log' },
+        { intervalMs: 250, timeoutMs: 10_000, label: '#661 D-1 switch rejection log' },
       )
       const afterDeviceFallbackLog = (await client.call('get_log', { lines: 500 })).text
-      expect(
-        countErrors(afterDeviceFallbackLog),
-        `#661 D-1 must add a fallback ERROR. Log tail: ${afterDeviceFallbackLog.slice(-1600)}`,
-      ).toBeGreaterThanOrEqual(errorsBeforeDeviceFallback + 1)
-      expect(afterDeviceFallbackLog).toContain(
+      // 🔴 「縮退した」痕跡が出ていないこと。出ていたら裁定違反。
+      expect(afterDeviceFallbackLog).not.toContain(
         `❌ audio device fallback: requested "${missingAudioDevice}"`,
       )
-      expect(afterDeviceFallbackLog).toContain('not found')
-      expect(afterDeviceFallbackLog).toContain('🔊 output: "')
+      // 増えた ERROR は「切替に失敗した」1 種類だけで、他の ERROR は増えていない。
+      expect(
+        newErrorLines(beforeDeviceFallbackLog, afterDeviceFallbackLog).filter(
+          (line) => !line.includes(`switch to "${missingAudioDevice}" failed`),
+        ),
+        '#661 D-1 must add no ERROR other than the rejected switch',
+      ).toEqual([])
+      // 鳴っているデバイスは変わっていない。
+      const deviceAfterReject = JSON.parse((await client.call('get_engine_state')).text) as Record<
+        string,
+        unknown
+      >
+      expect(
+        (deviceAfterReject.output as Record<string, unknown> | undefined)?.device_name,
+        '#661 D-1 must keep the device that was already playing',
+      ).toBe((deviceBeforeReject.output as Record<string, unknown> | undefined)?.device_name)
 
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)

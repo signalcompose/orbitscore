@@ -2699,6 +2699,18 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
             crate::protocol::ERROR_CODE_AUDIO_DEVICE_RATE_MISMATCH,
             e.to_string(),
         ),
+        WrapError::Output(O::DeviceUnavailable { .. }) => ProtocolError::new(
+            crate::protocol::ERROR_CODE_AUDIO_DEVICE_UNAVAILABLE,
+            e.to_string(),
+        ),
+        WrapError::Output(O::SwitchRecoveryFailed { primary, .. })
+            if matches!(primary.as_ref(), O::DeviceUnavailable { .. }) =>
+        {
+            ProtocolError::new(
+                crate::protocol::ERROR_CODE_AUDIO_DEVICE_UNAVAILABLE,
+                e.to_string(),
+            )
+        }
         WrapError::Output(O::SwitchRecoveryFailed { primary, .. })
             if matches!(primary.as_ref(), O::StreamDead { .. }) =>
         {

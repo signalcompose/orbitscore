@@ -30,7 +30,7 @@ capture は `render_block_with_sources`（[RE-1](/rust-engine/) 参照）の中�
 変わりません（読むだけで mutation ではない）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:997-1042
+// rust/crates/orbit-audio-native/src/output.rs:1017-1062
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -275,7 +275,7 @@ Rust の struct field 宣言順 drop を利用し「stream 停止（callback 停
 writer が ring 残りを drain して finalize」という順序を構造的に保証しています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:529-538
+// rust/crates/orbit-audio-native/src/output.rs:549-558
 /// 生きている間はストリームを保持する RAII ハンドル。
 pub struct OutputStream {
     _stream: Stream,

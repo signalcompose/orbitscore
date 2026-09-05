@@ -17,6 +17,41 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(daemon): keep the current device when a live switch names a missing one (#661 F4) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+🔴 **owner 裁定 2026-09-05**: ライブ切替で名前が一致しない時は **元のデバイスへ復帰**（縮退しない）。
+
+Fable 監査 F4 が、**実装と設計 §3 の裁定文が食い違っている**ことを見つけた。
+`resolve_output_device` の not-found 縮退（`output.rs:315-346`）が**切替経路でも無条件に効く**ため、
+存在しないデバイス名を指定すると `ok:true` で **host 既定へ移っていた**。
+演奏中に `"Pro Tools Aggregate"` をタイプミスすると内蔵スピーカーへ音が移る形だった。
+
+- `resolve_output_device` に `allow_fallback` を足し、**切替経路では名前不一致・出力不可のどちらでも
+  縮退しない**（起動時の縮退は据え置き）。値は既存の `allow_dead_fallback`（起動 `true` / 切替 `false`）
+  をそのまま流用した — 「これは起動か」という同じ問いなので、フラグを増やさない
+- 新エラー `OutputError::DeviceUnavailable` → プロトコルコード **`AUDIO_DEVICE_UNAVAILABLE`**
+- 設計 §3 の確定事項表に裁定を追記
+
+#### E2E D-1 を裁定に合わせて書き換えた
+
+D-1 は**現在の「既定へ移る」挙動を明示的に期待していた**ので、実装と同じラウンドで直した。
+
+- 拒否されること（`isError === true`・メッセージにデバイス名）
+- 🔴 **縮退の痕跡（`❌ audio device fallback: requested "..."`）が出ていないこと**
+- 増えた ERROR は「切替に失敗した」1 種類だけ（`newErrorLines` で行単位に判定）
+- 🔴 **鳴っているデバイスが変わっていないこと** — `get_engine_state` の `output.device_name` を前後で比較。
+  **この比較は同ラウンドで新設した bridge があって初めて書ける**（それまで `get_engine_state` は
+  `{running}` しか返さなかった）
+
+#### 検証（main が sandbox 外で実測）
+
+- 🔴 **clippy 全 5 象限 green**（default / clap-host / outproc-effect / outproc-instrument / 両方）
+- `cargo test --features outproc-effect,outproc-instrument` — lib **268 passed** / protocol **32 passed**
+- `npm test` **2260 passed / 0 failed** / `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified 0 failed**
+- **実機での D-1 / D-3 / D-0 の確認は未実施**
+
 ### fix(daemon): keep the old output live while probing a switch candidate (#661 / PR #748 round 1) (Sep 5, 2026)
 
 実機計測で、失敗する切替が本来の 3 秒 probe timeout より約 1.6 秒早く

@@ -124,6 +124,13 @@ pub enum OutputError {
         waited_ms: u64,
         phase: StreamLivenessPhase,
     },
+    /// ライブ切替で要求デバイスが見つからない / 出力できない。
+    ///
+    /// 🔴 起動時は host 既定へ縮退するが、**ライブ切替は元のデバイスへ復帰する**
+    /// （owner 裁定 2026-09-05・設計 §3）。演奏中にタイプミスして内蔵スピーカーへ
+    /// 音が移るのを避けるため、切替経路では縮退せずこのエラーを返す。
+    #[error("requested output device \"{requested}\" is not available ({reason}); keeping the current device")]
+    DeviceUnavailable { requested: String, reason: String },
     #[error(
         "audio output device \"{device}\" uses {device_rate} Hz, but the running engine uses {engine_rate} Hz; restart the engine to change sample rate"
     )]
@@ -295,6 +302,7 @@ pub fn resolve_requested_device_name(
 fn resolve_output_device(
     host: &cpal::Host,
     requested: Option<&str>,
+    allow_fallback: bool,
 ) -> Result<ResolvedOutputDevice, OutputError> {
     let Some(requested) = requested else {
         let device = host.default_output_device().ok_or(OutputError::NoDevice)?;
@@ -333,6 +341,12 @@ fn resolve_output_device(
                     fallback: None,
                 })
             } else {
+                if !allow_fallback {
+                    return Err(OutputError::DeviceUnavailable {
+                        requested: requested.to_string(),
+                        reason: "not an output device".to_string(),
+                    });
+                }
                 let reason = format!(
                     "requested device \"{requested}\" is not an output device — falling back to system default output"
                 );
@@ -347,6 +361,12 @@ fn resolve_output_device(
             }
         }
         None => {
+            if !allow_fallback {
+                return Err(OutputError::DeviceUnavailable {
+                    requested: requested.to_string(),
+                    reason: format!("not found (available: {available_names:?})"),
+                });
+            }
             let reason = format!(
                 "requested device \"{requested}\" not found (available: {available_names:?}) — falling back to system default output"
             );
@@ -481,7 +501,7 @@ pub fn select_live_output_device(
 ) -> Result<LiveOutputDevice, OutputError> {
     let host = cpal::default_host();
     let first = output_config(
-        resolve_output_device(&host, request.name.as_deref())?,
+        resolve_output_device(&host, request.name.as_deref(), allow_dead_fallback)?,
         buffer_frames,
         expected_sample_rate,
         &request,
@@ -504,7 +524,7 @@ pub fn select_live_output_device(
         FIRST_CALLBACK_DEADLINE.as_millis()
     );
     let mut fallback = output_config(
-        resolve_output_device(&host, None)?,
+        resolve_output_device(&host, None, true)?,
         buffer_frames,
         expected_sample_rate,
         &request,

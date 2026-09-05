@@ -56,7 +56,7 @@ event is always consumed — if it were not consumed, events tagged for an
 unattached bus would be retained forever (the landmine described below).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:711-730
+// rust/crates/orbit-audio-native/src/output.rs:731-750
 /// named routing tag を受ける per-bus insert stage。sum/aux を含む mixer graph の1ノード
 /// （#459/#453・MX.1-MX.5）。
 ///
@@ -103,7 +103,7 @@ The `render_engine_with_sources` seen in RE-1 falls back entirely to the legacy 
 pays nothing for the bus pool.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1056-1061
+// rust/crates/orbit-audio-native/src/output.rs:1076-1081
     if sources.is_empty() {
         if buses.iter().any(|bus| bus.active.load(Ordering::Relaxed)) {
             render_engine_with_insert_buses(engine, link, buses, output_channels, hw);
@@ -119,7 +119,7 @@ that both the marking pass and the accumulation pass reuse (loading the same ato
 let a `SetBusRouting` that lands mid-callback make the two passes see different things).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1172-1178
+// rust/crates/orbit-audio-native/src/output.rs:1192-1198
     let bs = (hw.len() / output_channels) * output_channels;
 
     // active フラグを 1 回だけ atomic load して使い回す（RT: 同じ判定を何度も load しない）。
