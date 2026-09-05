@@ -17,6 +17,42 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(site): follow up #746 — capture clock invariants and the finalize precondition (Sep 5, 2026)
+
+**追従元**: PR [#746](https://github.com/signalcompose/orbitscore/pull/746)（マージコミット `76a4056`）/ **ブランチ**: `claude/docs-sync-pr746`
+
+マージ済み #746 に対するドキュメント追従。#746 自身が `sites/dev/editor/mcp-and-gated-e2e.md` の
+写像の説明と引用アンカーを更新していたので、その差分では埋まっていなかった 2 点を足した。
+`packages/` `rust/` の変更は無い PR なので、DSL 仕様 / ユーザー向けドキュメントの追従は不要。
+
+#### 足したもの
+
+1. **`sites/dev/editor/mcp-and-gated-e2e.md`（ja / en）— 不変条件 A1 / U1 / U2 / U3**
+   `captureWindowsFrom` が区間写像の前に検査する 4 本が、どこにも書かれていなかった。
+   これらは実機 gated で名前つきの Error として表面に出るので、読み手が遭遇する観測可能な表面である。
+   U3 の例外が区間名の文字列 `'transition'` から `CaptureSegment.overlapsPrevious` へ移った経緯も
+   併せて記録した（名前で例外を判定すると、同じ名前を別の意図で使った瞬間に検査が静かに緩む）。
+
+2. **`sites/dev/rust-engine/capture-verification.md`（ja / en）— `finalize` は通常停止でも走らない**
+   同章は `sync_header` の定期 patch を「**異常終了でも**開ける WAV」の話として書いていたが、
+   #746 の `readCaptureForAnalysis` が一次ソースで確かめたのは **通常の client 停止も SIGTERM で、
+   daemon に signal handler が無いので `CaptureWriter::Drop` → `finalize` は普段から走らない**
+   ことだった（`rust/crates/orbit-audio-daemon/src/main.rs:21-30`・既知事項 #448）。
+   header の申告サイズは常に最後の `sync_header` 時点で止まるため、区間解析する全経路で
+   申告サイズの零化が要る。#739 の実機ではこれで 6 件が誤検知していた。
+   あわせて `ORBIT_CAPTURE_WAV` のディレクトリが無いと engine 起動そのものが
+   `DEVICE_CONFIG_ERROR "audio output init failed: capture writer error: No such file or directory"`
+   で落ち、テスト側には「daemon-backed REPL ready after 30000ms」という無関係に見える
+   タイムアウトとして現れる件を記録した。
+
+両章の frontmatter `verified-against` / `verified-at` を `76a4056` / 2026-09-05 に更新。
+
+#### 直していないもの（PR 本文へ回した）
+
+E2E の穴と弱いアサーションの指摘は書き出すだけにした。実機 gated は
+`ORBIT_GATED_ORBITSTUDIO` が無い環境では skip されて緑になるため、この追従作業で E2E を積むと
+一度も走っていないテストを積むことになる。`dsl-e2e-coverage.spec.ts` の baseline も編集していない。
+
 ### test(e2e): make the phase sweep actually discriminate the float-family bug (#746 round-3) (Sep 5, 2026)
 
 **Issue**: #739 / **ブランチ**: `739-capture-windows-follow-sound` / **PR** #746

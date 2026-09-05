@@ -1,8 +1,8 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: c2010db
-verified-at: "2026-09-04"
+verified-against: 76a4056
+verified-at: "2026-09-05"
 status: draft
 ---
 
@@ -724,6 +724,73 @@ What this assertion caught is recorded in WORK_LOG 6.415. On 2026-08-29, when th
 
 `ORBIT_KEEP_CAPTURES=<dir>` was formalised the same day. When set, capture WAVs are written to that directory instead of tmpRoot — because "the harness's assertions show only one number inside the window, but the defect may be outside it" (6.415). It only started taking effect across the whole spec with #668 PR-E2, though: before that, one of the 13 capture-path sites honoured it ([the shared harness layer](#the-shared-harness-layer-—-tests-e2e-helpers)).
 
+### Four invariants that protect the mapping itself — A1 / U1 / U2 / U3
+
+Swapping the clock does not help if the segments themselves are built wrong; the measurement still
+lands in the wrong place. So `captureWindowsFrom` checks four invariants before mapping segments to
+buckets, and when one breaks it throws a named Error saying **which invariant broke on which
+segment** (the `label`, an id such as `A1`, and a JSON blob of `fromSec` / `toSec` / `durationSec` /
+`soundStartSec` / `bucketCount`). #739 fixed the clock, and these four landed with it.
+
+**A1 — the first segment must not open before sound starts.** This is the original #739 incident
+itself. Bar quantisation in `LOOP()` plus plugin attach delays the sound by seconds, so opening the
+window on a fixed settle leaves the `unity` window entirely silent and the denominator of the
+comparison stops meaning anything.
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:441-449
+    if (index === 0 && (soundStartSec === null || segment.fromSec < soundStartSec)) {
+      throw invariantError(
+        'A1',
+        name,
+        segment,
+        bucketCount,
+        'the first segment must not open before sound starts',
+      )
+    }
+```
+
+**U1 — the number of buckets taken from a segment must match what its length predicts.** The
+guard-trimmed segment length divided by 20 ms is compared against the count actually selected, and
+anything beyond `±2` fails. Zero fails too. That stops the quiet failure "a window was named but
+nothing was in it" before it can turn into a number.
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:388-391
+    const expected = Math.round(
+      (segment.toSec - segment.fromSec - 2 * guardSec) / ANALYSIS_BUCKET_SEC,
+    )
+    if (Math.abs(selected.length - expected) > BUCKET_COUNT_TOLERANCE) {
+```
+
+**U2 — the segment length on the capture clock must not diverge from the one on the wall clock.**
+Since the clock moved to byte length, every segment re-checks that this clock has not drifted away
+from the wall clock, with a tolerance of `0.12` s. A broken clock can point a segment anywhere, so
+this is a check aimed at the clock itself.
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:450-452
+    const captureDurationSec = segment.toSec - segment.fromSec
+    const wallDurationSec = (segment.toWall - segment.fromWall) / 1000
+    if (Math.abs(captureDurationSec - wallDurationSec) > CLOCK_WALL_TOLERANCE_SEC) {
+```
+
+**U3 — segments must be finite, inside capture time, monotonic, and non-overlapping.** The
+interesting part is how the exception is expressed. The boundary probe of `#643` E2E-3 deliberately
+reaches 250 ms back into the previous segment, so an overlap is an explicit **opt-in on the segment**
+via `CaptureSegment.overlapsPrevious`. Review on #739 moved it here from an implementation that
+looked at the segment name string `'transition'`. Deciding an exception by name means the check
+quietly weakens the moment that name is reused with a different intent.
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:426-430
+      // #643 E2E-3's boundary probe intentionally looks back 250 ms. Every overlap must
+      // opt in explicitly; regular capture segments remain strictly non-overlapping.
+      (previous !== undefined &&
+        segment.overlapsPrevious !== true &&
+        segment.fromSec < previous[1].toSec)
+```
+
 ---
 
 ## Turning discipline into mechanism — the ratchet and assertion hygiene
@@ -1185,6 +1252,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `tests/e2e/gated-sources.ts:1-106` — the list of gated sources the ratchet and hygiene test read (#668 PR-E1)
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` assertions (where the seven `countErrors` definitions converged, #668 PR-E2)
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` and `captureWavPath()`
+- `tests/e2e/helpers/capture-windows.ts:1-489` — the capture clock, sound detection, segment-to-bucket mapping, and invariants A1 / U1 / U2 / U3 (#739)
 - `tests/e2e/helpers/run-score.ts:1-272` — one function that copies a score and evaluates it on real hardware
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — waiting for generated artefacts (with `minBytes`)
 - `tests/e2e/helpers/run-cli.ts:1-62` — child-process runs of `orbitscore replay` / `render` (the only path that bypasses MCP)
