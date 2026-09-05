@@ -52,6 +52,893 @@ A design and implementation project for a new music DSL (Domain Specific Languag
   `tests/e2e/orbitstudio-mcp-gated.spec.ts:4583` / `:4593` の **コメント 2 箇所だけ**である。
   同 PR で gated E2E 本体（`it(...)`）は #736 へ切り出されて存在しない。ラチェットの走査は
   ソース文字列 `/\.([a-zA-Z][a-zA-Z0-9]*)\s*\(/g` なのでコメントでも満たされる
+### fix(661): close the review round-2 findings across all four layers (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+ゲート③ ラウンド 2（`/code:pr-review-team` フル編成 4 体 + Fable 監査を並行）。
+**Critical 0 / Important 5**（うち 3 体が同じ 1 件に収束）。設計パスを 1 つ置いてから一括で直した。
+
+#### 設計パス P1 — ライブ切替の失敗を利用者にどう見せるか
+
+分ける軸は「**いま鳴っている音を止めずに直せるか**」。表は
+`packages/vscode-extension/src/engine-view.ts` の `SELECT_AUDIO_DEVICE_ERRORS` **1 箇所**に置き、
+文言・再起動の要否・「既知かどうか」の 3 つをすべてそこから引く。
+
+| code | 音 | Restart Engine |
+|---|---|---|
+| `AUDIO_DEVICE_UNAVAILABLE` | 鳴り続ける | ❌ 出さない |
+| `AUDIO_DEVICE_STREAM_DEAD` | 鳴り続ける | ❌ 出さない |
+| `AUDIO_DEVICE_SWITCH_UNAVAILABLE`（録音中） | 鳴り続ける | ✅ |
+| `AUDIO_DEVICE_RATE_MISMATCH` | 鳴り続ける | ✅ |
+| `AUDIO_DEVICE_SWITCH_RECOVERY_FAILED`（新設） | **止まっている** | ✅ |
+
+🔴 これを直した理由: F4（名前不一致は縮退せず拒否）を実装したのに、**UI は未知コードとして
+「Restart Engine」を提示**していた。再起動すると起動経路のポリシーで host 既定へ移るので、
+**F4 が避けたかった「演奏中のタイプミスで音が内蔵スピーカーへ移る」を UI が自分で起こす**形だった。
+
+`SwitchRecoveryFailed` を `primary` のコードへ畳むのもやめた。畳むと
+`AUDIO_DEVICE_STREAM_DEAD` の「元の出力を継続します」が、**継続できていない**事象に付く。
+
+#### 🔴 C-7 — 到達不能だった安全網を到達可能にした
+
+`apply_device_switch` の「probe 成功 → 旧を pause → 新の build/play/confirm が失敗 → 旧を
+`play()` で再開」は、**どのテストからも到達できなかった**。実ストリームを殺せる唯一のフォールト
+`DeadRealStream` はプロセス全体に効き、daemon が起動できない（C-4 がそれを証明している）。
+
+`StreamBuildStage { Startup, Switch }` と `OutputFault::DeadRealStreamOnSwitch` を足して到達可能にし、
+gated Rust `C-7` を新設。**変異で赤を実測**:
+
+```
+変異なし                    : ok
+guard.stream.play() を削除  : FAILED
+  the old stream did not resume after a failed switch:
+  before_rate=48, resumed_rate=0
+```
+
+`resumed_rate=0` = 旧ストリームは pause されたまま**恒久的に無音**。これが起きるのが最悪ケース。
+
+#### E2E の判定を強くした
+
+| テスト | 直前まで | 直した形 |
+|---|---|---|
+| **D-0** | `rms > 0` だけ | `output.device_name` が**要求名と一致**・`device_fell_back === false` |
+| **D-2** | `rms > 0` だけ | `device_requested` が要求名・`device_fell_back === true`・`fallback_reason` に理由 |
+| **D-1** | `toBe(before)` が両辺 undefined で**空振りで通る** | 先に `typeof … === 'string'` を固定。包含側も D-3 水準へ |
+| **D-3** | 包含側が `ERROR:` 前置に依存（chunk 境界で**偽赤**） | 前置に依存しない `newLogLines` で数える |
+
+🔴 D-0 は **#661 の受け入れテストそのもの**（「デバイス指定で音が出る」）なのに、`rms > 0` は
+「何らかのデバイスから音が出た」しか言わない。このマシンは出力が実質 1 台なので、
+**指定が無視されて既定に落ちても緑になっていた。**
+
+デバイスの検査は**鳴っている間**に取る必要があった（`runScore` から戻った時点で engine は停止済みで
+`get_engine_state` は `{running:false}` しか返さない）。1 度これで落ちてから直した。
+
+#### その他
+
+- `get_engine_state` の状態問い合わせ予算を 10 秒 → **2.5 秒**。`waitForEngine` はこのツールで
+  `running` を 500 ms 間隔でポーリングするので、10 秒だと 30 秒予算で 3 回しか試せなかった
+- 判定を `resolveEngineState`（`engine-state-bridge.ts`）へ切り出し、**3 分岐すべてに単体テスト**
+  （停止中 / ブリッジが `ok:false` / ブリッジ自体が reject）
+- 切替失敗のメッセージから `audio output init failed: ` の前置を落とした。**切替では何も init して
+  いない**のに、ERROR ログ・`last_switch_failure`・MCP の返り値・UI 文言すべてに載っていた
+- `engine-view.spec.ts` の入力を実形式 `[CODE] message` に揃えた（捏造した mock 文言だった）
+- 設計 §4.5 に「1 回の失敗を 2 層が記録する」を明記。§6 受け入れ 7（**倍速になるか**）に結論を記載
+- `docs/research/ENGINE_DAEMON_PROTOCOL.md` に `SelectAudioDevice` の失敗コード表を追加
+
+#### §2.2「時間が倍速になるか」— 決着
+
+**倍速にならない。ただしそれは `pause()` が 2 重に効いているから**で、リスク自体は実在した。
+C-6 の実測（`--audio-device <既定の名前>` → host 既定へ切替）:
+
+| 変異 | callbacks/s |
+|---|---|
+| 変異なし | **94**（等速） |
+| (a) だけ削除 / (b) だけ削除 | 94（もう片方が効く） |
+| **(a)(b) 両方削除** | **190**（ほぼ倍速） |
+
+#### fix 差分の再点検（PROJECT_RULES §4）
+
+`73b7abce..326e5fce` を 1 レビュアーで再点検。問いは 2 つだけ（新しい故障モード / 実行コンテキスト）。
+**Critical 0 / Important 1**: 「`get_engine_state` の予算短縮が本番の観測性を下げる」。
+
+一次ソースで裁定した結果、**予算では解決しない**:
+
+`//#getEngineState` は REPL の `handleLine` の中で処理され、`createReplSession` の `pushLine` は
+**全行を単一の FIFO promise チェーン**に載せる（`repl-mode.ts`「直列化の根拠 — #476」）。
+instrument の attach は実測 30 秒超なので、10 秒でも 2.5 秒でも答えは返らない。伸ばして変わるのは
+「同じ `statusError` を返すまでに何秒ブロックするか」だけ。
+
+→ 2.5 秒は据え置き、コメントを **E2E 都合ではなく本番の根拠**に書き直して
+`ENGINE_STATE_QUERY_BUDGET_MS` として定数化。本来の解決（状態問い合わせをキューの外で処理する）は
+**#759** へ切り出した。
+
+#### 別 issue へ分離（7 本）
+
+**#755** `select_audio_device` が人間のクリックトグルを共有 /
+**#756** `setupStderrHandler` の `ERROR:` 前置が chunk 単位 /
+**#757** request 相関ブリッジが 5 本 625 行の重複 /
+**#758** 捨てた旧ストリームの disconnect listener が共有 `StreamStats` に `device_lost` を書く /
+**#759** `//#getEngineState` が評価キューの後ろに並ぶので長い await 中は状態が見えない
+
+#### 検証（実機・sandbox 外）
+
+```
+gated Rust  C-1〜C-7  7 passed / 0 failed
+gated MCP   #661 D-0 / D-2 / D-3  3 passed
+```
+
+🔴 `cargo test` を Bash の sandbox 内で回すと CoreAudio が塞がれ `Device::name()` が
+backend error で落ちる（C-1 まで赤くなる）。実機オーディオのテストは sandbox 外で回すこと。
+
+---
+
+### refactor: apply the second /simplify pass to the device-liveness branch (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+F4 の実装と D-1/D-3 の書き換えが 1 回目の `/simplify`（`b535527f`）より後に入ったので、
+`b535527f..HEAD` を対象に 2 回目を回した（reuse / simplification / efficiency / altitude の 4 体）。
+Efficiency は指摘なし（RT コールバック本体・`FIRST_CALLBACK_DEADLINE` の起動予算・1 Hz ticker の
+いずれにも新しいコストは入っていない）。
+
+#### 適用した 5 件
+
+| 指摘 | 直した形 |
+|---|---|
+| `requireCatalogPaths()` が `requireCatalogFixtures()` の完全な部分集合 | 後者が前者を呼ぶ形にして、パス検査を 1 箇所に戻した |
+| `--list-audio-devices` で既定デバイス名を取る 5 行が **3 箇所**（D-0 / D-2 / D-3） | `tests/e2e/helpers/audio-devices.ts` を新設（`listOutputDevices` / `defaultOutputDeviceName`） |
+| `session.rs` の `OutputError` → protocol code の表が **2 箇所**（直接の `Output` と `SwitchRecoveryFailed.primary`） | `actionable_output_error_code` に集約。6 アーム → 1 アーム |
+| `select_audio_device` の `reject_device_switch` が **5 箇所**に散っていた | `dispatch_device_switch` が「owner thread に届く前」の失敗をまとめて `Err` で返し、記録は 1 箇所 |
+| 🔴 `resolve_output_device(.., allow_fallback: bool)` / `select_live_output_device(.., allow_dead_fallback: bool)` | **`DeviceFallbackPolicy { FallBackToHostDefault, RejectAndKeepCurrent }`** に置換 |
+
+最後の 1 件が本命。`allow_fallback` と `allow_dead_fallback` という**別名の裸の bool 2 つ**が、
+実は owner 裁定（起動時 = host 既定へ縮退／ライブ切替 = 元のデバイスへ復帰）という**1 つの二値
+ポリシー**だった。位置引数の `true` / `false` は取り違えてもコンパイルが通るので、
+**実装が裁定文と食い違っていた F4 と同じクラスの回帰**が再発しうる形だった。
+CLAUDE.md「型で潰す」の適用例（兄弟コールバックを 1 本に畳むのと同型）。
+
+#### 別 issue へ分離した 3 件
+
+| # | 指摘 | なぜ #661 でやらないか |
+|---|---|---|
+| **#755** | `select_audio_device` がエージェント経路でも人間のクリックトグル（`resolveDeviceClickAction`）を共有していて、**現在のデバイス名を渡すと engine が止まる** | MCP の観測可能な挙動が変わる。D-3 のアプリ分割はこれの回避 |
+| **#756** | `setupStderrHandler` の `ERROR:` 前置が **chunk 単位**で、同じ chunk の 2 行目以降が数えられない | **gated 全体の測定器**を動かす。#649 が baseline 比較の最中 |
+| **#757** | request 相関ブリッジが **5 本 625 行**の重複（`engine-state-bridge.ts` で 5 本目） | 既存 4 ファイルの書き換えを伴い、無関係な経路に回帰リスクを持ち込む |
+
+#### `cargo test --lib` が 1 回だけ落ちた（順序依存・修正済み）
+
+`device_switch_result_records_failure_and_success_through_the_same_path` が
+`captured log: ""` で落ちた。単体実行と再実行は緑。
+
+原因は **`tracing` の callsite interest がプロセス全体で 1 つ**であること。並列に走る別テストが
+同じ `tracing::error!` を subscriber の無い状態で先に踏むと `Interest::never()` がキャッシュされ、
+捕捉が空になる。捕捉の直前に `tracing::callsite::rebuild_interest_cache()` を呼ぶ形にして、
+`--lib` 全件を 3 回連続で緑にした（同型の捕捉テストは 2 箇所あるので両方に入れた）。
+
+#### 検証
+
+`npm test` **2260 passed / 57 skipped** / `typecheck:e2e` 0 / `lint` 0 /
+`cargo test -p orbit-audio-native -p orbit-audio-daemon` **152 passed / 0 failed**（22 スイート）/
+clippy **5 象限**（4 象限 + `clap-host`）全緑 / `docs:check` **926 verified・0 failed**
+（`--fix` で行番号アンカーのみ再固定・16 ファイル）。
+
+---
+
+### test(e2e): split D-3 into its own app and count its failure on both layers (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+#661 の残り 1 件だった gated `D-3` を実機で緑にした。2 つの別々の欠陥があった。
+
+#### 1. 「切替」ではなく「トグル」になっていた
+
+実機で `audio device deselected and engine stopped: expected false to be true`。
+`selectAudioDeviceForAgent`（`packages/vscode-extension/src/extension.ts`）は
+`resolveDeviceClickAction` を通しており、**要求デバイスが現在の設定と同じなら「選択解除」**
+として扱う（UI のクリック挙動）。D-2/D-3 は同じ fault アプリを共有していて、そのアプリは
+`orbitscore.audioDevice` に**既定デバイス名**を持つ。このマシンには出力デバイスが実質 1 台
+なので「実在するが現在設定と違う名前」が選べず、D-3 の要求が必ずトグルになっていた。
+
+根は **D-2 と D-3 で必要なアプリ構成が逆**であること:
+
+| | 必要な起動構成 |
+|---|---|
+| D-2 | 起動時に名前付きが dead → 既定へ縮退して鳴る → **名前付きで起動** |
+| D-3 | 演奏中の切替候補が dead → 旧のまま鳴り続ける → **現在の設定と違う名前を要求** |
+
+D-3 を独立した `it.skipIf` に切り出し、`orbitscore.audioDevice: '__default__'` で起動して
+既定デバイスを**名前で**要求する形にした（`portBase: 39800`）。`dead-probe-requested` は
+「要求された」デバイスに効くので probe が死ぬ。設計 §6 にもこの制約を明記した。
+
+#### 2. 1 回の失敗を 2 層が別々の文言で記録していた
+
+上を直すと今度は `expected [ Array(1) ] to deeply equal []`。除外条件が daemon 側の文言
+（`audio output device switch to "X" failed`・`engine_wrap.rs` の `record_device_switch_result`）
+だけを見ていたため、engine 側が出す `❌ live device switch to "X" failed: …`
+（`packages/engine/src/cli/repl-mode.ts`）が「想定外の ERROR」として残っていた。
+
+- 除外は共通部分 `device switch to "X" failed` で行う
+- **利用者に届いたか**は engine 側の文言で「ちょうど 1 行」を要求する。daemon の tracing
+  ERROR 行は `outputChannel.append('ERROR: ' + chunk)` が **chunk 単位**で前置するため、
+  同じ chunk の 2 行目以降には `ERROR:` が付かず ERROR 行として数えられない
+- 落ちた時にデバイス名を含むログ行を全部出す。実機は 1 回 15 秒かかる
+
+#### 検証（実機・sandbox 外）
+
+```
+#661 D-0 honors a real named output device and produces audible capture RMS   8255ms  ✓
+#661 D-2 falls back from a dead named device at startup and stays audible    14265ms  ✓
+#661 D-3 keeps the old stream playing when a live switch candidate is dead   13099ms  ✓
+```
+
+`typecheck:e2e` 0 / `eslint` 0 / `prettier --check` 通過 / `docs:check` 926 verified・0 failed。
+
+**関連**: [[reviewers-judge-one-layer-only]]（層をまたぐ契約は片翼だけ見ても分からない）
+
+---
+
+### fix(daemon): keep the current device when a live switch names a missing one (#661 F4) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+🔴 **owner 裁定 2026-09-05**: ライブ切替で名前が一致しない時は **元のデバイスへ復帰**（縮退しない）。
+
+Fable 監査 F4 が、**実装と設計 §3 の裁定文が食い違っている**ことを見つけた。
+`resolve_output_device` の not-found 縮退（`output.rs:315-346`）が**切替経路でも無条件に効く**ため、
+存在しないデバイス名を指定すると `ok:true` で **host 既定へ移っていた**。
+演奏中に `"Pro Tools Aggregate"` をタイプミスすると内蔵スピーカーへ音が移る形だった。
+
+- `resolve_output_device` に `allow_fallback` を足し、**切替経路では名前不一致・出力不可のどちらでも
+  縮退しない**（起動時の縮退は据え置き）。値は既存の `allow_dead_fallback`（起動 `true` / 切替 `false`）
+  をそのまま流用した — 「これは起動か」という同じ問いなので、フラグを増やさない
+- 新エラー `OutputError::DeviceUnavailable` → プロトコルコード **`AUDIO_DEVICE_UNAVAILABLE`**
+- 設計 §3 の確定事項表に裁定を追記
+
+#### E2E D-1 を裁定に合わせて書き換えた
+
+D-1 は**現在の「既定へ移る」挙動を明示的に期待していた**ので、実装と同じラウンドで直した。
+
+- 拒否されること（`isError === true`・メッセージにデバイス名）
+- 🔴 **縮退の痕跡（`❌ audio device fallback: requested "..."`）が出ていないこと**
+- 増えた ERROR は「切替に失敗した」1 種類だけ（`newErrorLines` で行単位に判定）
+- 🔴 **鳴っているデバイスが変わっていないこと** — `get_engine_state` の `output.device_name` を前後で比較。
+  **この比較は同ラウンドで新設した bridge があって初めて書ける**（それまで `get_engine_state` は
+  `{running}` しか返さなかった）
+
+#### 検証（main が sandbox 外で実測）
+
+- 🔴 **clippy 全 5 象限 green**（default / clap-host / outproc-effect / outproc-instrument / 両方）
+- `cargo test --features outproc-effect,outproc-instrument` — lib **268 passed** / protocol **32 passed**
+- `npm test` **2260 passed / 0 failed** / `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified 0 failed**
+- **実機での D-1 / D-3 / D-0 の確認は未実施**
+
+### fix(daemon): keep the old output live while probing a switch candidate (#661 / PR #748 round 1) (Sep 5, 2026)
+
+実機計測で、失敗する切替が本来の 3 秒 probe timeout より約 1.6 秒早く
+`STREAM_CALLBACK_STALLED` fatal を発生させ、約 3.1 秒の無音を作ることが判明した。
+`apply_device_switch` を **probe → 旧 stream の pause → build → play → confirm** に変更し、
+probe 失敗では旧 stream を一度も pause しない。probe と `OutputStream::drop` の
+pause-before-drop は維持した。
+
+併せて、probe / real-stream の `StreamDead` を phase で区別し、旧 stream 再開失敗時も元の
+失敗理由を保持した。`select_audio_device` の早期拒否も `last_switch_failure` に記録する。
+MCP `get_engine_state` は相関 REPL bridge 経由で daemon `GetStatus.output` / `callback` を返す。
+gated E2E には、注入なしの実名デバイス起動 + capture RMS、D-3 の不足していた capture 前提確認、
+ERROR 上限、`STREAM_CALLBACK_STALLED` 非増加を追加した。名前不一致時の F4 挙動は owner 判断待ちの
+まま変更していない。
+
+#### 🔴 この欠陥をどう掴んだか（Fable の予測 → main の実測）
+
+Fable 監査 F1 が「pause が probe より前にあるので、1 Hz の ticker が 2 tick 連続で停止と判定し
+**偽の FATAL が決定論的に出る**」と機構から予測し、**反証用のスクリプトを添えて**きた。
+main が sandbox 外で回した実出力:
+
+```
+[switch-start  2674ms] SelectAudioDevice -> "MacBook Proのスピーカー"
+[EVENT  4172ms] STREAM_CALLBACK_STALLED  severity=warning
+[EVENT  5172ms] STREAM_CALLBACK_STALLED  severity=fatal     ← 偽の FATAL
+[stderr 5802ms] ERROR ... produced no callback within 3000 ms  ← 本物のエラー
+```
+
+**本物のエラーより 1.6 秒早く FATAL が出る。** 設計 §6 D-3 の「ERROR が 1 行」は成立しておらず、
+実際は DaemonError 2 件 + stderr ERROR 1 件だった。だから D-3 のアサーションは `>=` に緩められていた
+（症状に合わせて期待を緩めると、原因が見えなくなる例）。
+
+同時に、**成功する切替が `last_switch_failure` を `null` に戻す**ことも実測で確認できた。
+
+#### レビュアー間で解けた誤検知 2 件
+
+silent-failure が「起動時フォールバックが ERROR でない」「ライブ切替が黙ってすり替わる」と HIGH で
+報告したが、どちらも **Rust 層だけを見て TS 層を見落としたもの**だった。
+
+- 起動時の縮退の利用者向け ERROR は `reportAudioOutput`（`rust-engine-player.ts:904-928`）が
+  `console.error('❌ audio device fallback: ...')` で出す。engine の stderr は `get_log` で ERROR 行になる
+- ライブ切替は `select_live_output_device` の第 4 引数 `allow_dead_fallback` が **`false`**
+  （起動は `true`）なので、黙ってすり替わらず `StreamDead` を返して旧デバイスへ復帰する
+
+code-reviewer がこの二層構成を追ったことで解けた。**単層だけ見て「未実装」と判定しない。**
+
+#### 検証（main が sandbox 外で実測・Codex が走らせられなかったもの）
+
+- `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument`
+  — lib **268 passed** / **protocol 32 passed**（Codex は sandbox の loopback 禁止で 32 failed と報告していた）
+- `npm test` **2260 passed / 0 failed**（loopback を要する HTTP 31 件と daemon-client 32 件も含む）
+- `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified / 0 failed**
+
+### refactor(daemon): apply the /simplify pass to the device-liveness branch (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+ゲート③の `/simplify`（4 体並行）。再利用観点は指摘ゼロで、`StreamConfigSnapshot` が既に
+`device_requested` / `device_fell_back` / `fallback_reason` / `first_callback_ms` を持っており、
+owner 裁定（縮退して鳴らし続ける + 理由を `GetStatus` に記録）の形が型に入っていることが確認できた。
+
+#### 🔴 最重要 — owner 裁定が半分しか実装されていなかった（2 体が独立に指摘）
+
+設計 §3 の確定事項は「起動時 = host 既定へ縮退／**ライブ切替 = 元のデバイスへ復帰**。
+**どちらも ERROR ログ + `GetStatus` に理由**」。しかし**起動時の縮退だけ**が `GetStatus` に残り、
+**ライブ切替の失敗は `apply_device_switch` の Err 腕で `record_stream_config` も `tracing::error!` も
+呼んでいなかった**。理由は RPC のエラー応答と CLI の `console.error` 一回きりにしか存在せず、
+**`GetStatus` をポーリングする MCP 経路（LLM / UI の主経路）からは切替失敗が見えない**状態だった。
+
+- 成功・失敗を **`record_device_switch_result` 1 本**へ合流。失敗時は要求デバイス名と理由を
+  `tracing::error!` に出し、`StreamConfigSnapshot.last_switch_failure` へ保存する
+- `record_stream_config` は snapshot を丸ごと差し替え、コンストラクタが `last_switch_failure: None`
+  を置くので、**成功した切替が古い失敗理由を確実に消す**（main が実装を読んで確認）
+- 🔴 E2E の D-3 は「ERROR が増えないこと」ではなく「**ちょうど 1 行増えること**」
+  （`countErrors(log) >= errorsBeforeExpectedFailure + 1`）へ更新された。
+  **ログを出さない方向で辻褄を合わせていない**
+
+#### 却下した指摘（理由を残す）
+
+効率観点が「前置き probe が二重 open を生んでいるので、実ストリームの初回コールバックだけを
+ゲートにせよ」と提案したが、**設計で一度検討して却下済み**だった。設計 §4.1:
+
+> `play()` 直後だけに置いてはいけない。`start_output_inner` は `insert_buses` / `sources` を
+> `RenderState` に **move** するので、dead 判定後に作り直すには回収が要る。参照循環により
+> **名指しデバイスでは `Arc::try_unwrap` が永遠に失敗し、回収できない**。
+
+コストも実測済みで **probe + 事後確認で +20〜40 ms**、`FIRST_CALLBACK_DEADLINE = 3000 ms` は
+**失敗時にしか効かない**。読まずに発注していたら直せない状態を作っていた。
+
+#### そのほか適用
+
+未使用の `probe_ms` を削除／`resolved` / `play_and_confirm` / `finish_start` へ重複を集約／
+gated テストと E2E の起動ボイラープレートをヘルパー化。
+
+#### 🔴 main が直したもの — リファクタが持ち込んだ型退行
+
+`prepareWorkspace` コールバック経由の代入になったことで、`catalogClapSynthPath` 等 4 件と
+`kickLoopWorkPath` が `string | undefined` のままになり `typecheck:e2e` が 6 件の error を出した。
+`npm test` は vitest が型を見ないので**緑のまま**で、[[consumerless-code-is-unprotected]] と同じ形。
+既存の `requireCatalogFixtures()` を使う形へ寄せ、`requireKickLoopWorkPath()` を足した。
+
+#### 検証（main が sandbox 外で実測）
+
+- 🔴 **clippy を全 5 象限で実行**（default / clap-host / outproc-effect / outproc-instrument /
+  outproc 両方）— **すべて green**。`check-cfg-matrix.sh` は 4 象限しか見ないので `clap-host` が漏れる
+- `cargo test --features outproc-effect,outproc-instrument` — lib **267 passed**
+- `npm test` **2251 passed / 0 failed** / `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified 0 failed**
+
+### fix(audio): gate output devices on callback liveness (#661 PR-V4) (Sep 5, 2026)
+
+`--audio-device` で stream の build/play が成功しても callback が一度も来ず、無音のまま
+daemon が起動成功していた問題に対し、`Engine` と callback-owned `RenderState` の生成前に
+probe stream を開く liveness gate を追加した。probe は専用 `AtomicU64` を使うため、実 stream の
+`StreamStats.callbacks` を汚さない。3 秒以内に callback が来ない名指し候補は起動時だけ host
+既定へ 1 回縮退し、全候補 dead または実 stream の事後確認 dead は起動を失敗させる。
+
+cpal 0.15.3 の名指し stream 参照循環に対して、`OutputStream::drop` は必ず内部 stream を
+`pause()` してから field を破棄する。ライブ切替も旧 stream を先に pause し、新 stream の probe /
+事後確認が失敗したら新 stream を pause+drop して旧 stream を再開する。異なる sample rate は
+`AUDIO_DEVICE_RATE_MISMATCH` で拒否し、Engine の作り直しは行わない。
+
+`GetStatus.output` に requested / fallback / reason / first callback ms を追加し、engine は正常時の
+出力構成を INFO、縮退時だけ `❌ audio device fallback` を ERROR としてユーザーの `get_log` へ出す。
+実機 gated Rust C-1〜C-6 と MCP D-1〜D-3 を追加した。
+
+検証: Rust lib 105 passed / 2 ignored、daemon bin 7 passed、gated Rust はコンパイル成功、clippy
+`--all-targets -D warnings` 成功、cfg 4 象限成功、`clap-host` build 成功、E2E hygiene 15 passed、
+`typecheck:e2e` 成功。`link-audio` / `link-audio-verification` は worktree に Ableton Link submodule が
+無く build.rs で失敗。実機 gated と C-6 の pause 除去変異は sandbox では実行しない。
+### test(daemon): prove the all-notes-off ledger actually shrinks (#606 round-3) (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR** #738
+
+fix 差分の再レビュー（4 体）。**指摘はすべて fix 起因**で、元差分起因の新規指摘は出なかった。
+
+#### 🔴 最も重い指摘 — 中核の機構に検査が無かった
+
+`plugin_all_notes_off` が**成功時に台帳から entry を除去することを検査するテストが 1 本も無かった**。
+panic テストは `retain` ブロックに到達する前に止まるので、**ブロックを丸ごと削除する変異が全テストを通過**する。
+放置すると台帳が永久に増え、次の解放で**死んだ note を送り続ける**。
+
+- `plugin_all_notes_off_removes_every_released_entry_from_the_ledger` を追加。
+  3 件解放して `released == 3` / `stale == 0` / `failed == 0` に加え、
+  **`active_plugin_note_count() == 0`** と **ring へ 3 件届いたこと**を検査する
+- 🔴 **変異で red を確認**: `retain` ブロック削除 → `left: 3 / right: 0`。
+  このとき**既存の他 2 本は通ったまま**で、指摘が事実だったことも同時に裏付けられた
+
+#### そのほか
+
+- **重大度の逆転が半分しか直っていなかった**。`spawn_blocking` の `JoinError`（解放タスク自体が
+  panic / cancel = **そもそも試みられていない**）が `warn!` のまま残っていたので `error!` に上げた
+- bounded retry の「途中で成功する」分岐が、cfg を広げた後も**bare な `rtrb::Producer` を叩くだけ**で
+  本番の `push_outproc_instrument_event`（instance 解決 + lock 分岐）を通っていなかった。
+  容量 1 の ring を埋め、15 ms 後に consumer が drain する形で**実経路を通すテスト**を追加
+- 設計書の `StopAll` 行参照が二度ずれていた（`2289-2292` → 実体は `2296-2299`）
+
+#### 🔴 私の失敗 — 変異のバックアップに `git checkout --` を使った
+
+未コミットの新テストごと巻き戻した。**git で戻せるのはコミット済みの内容だけ**で、
+未コミットの追加があるときはファイル退避が正しい。生成スクリプトが残っていたので復旧できた。
+
+#### 検証（main が sandbox 外で実測）
+
+- `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument`
+  — lib **259 passed** / protocol **32 passed**
+- `cargo clippy --all-targets -- -D warnings` exit 0
+- `npm test` **2251 passed / 0 failed** / `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified / 0 failed**
+- 実機 gated（`89e9d389`）: **10 failed / 16 passed・退行ゼロ**、`#606 T1` / `#606 E2E-K3` とも ✅
+
+### fix(daemon): close review round-2 on the RUN-termination branch (#606) (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR** #738
+
+レビュー 5 体のラウンド2。**実機の受け入れは先に達成している**（T1 / E2E-K3 とも緑・退行ゼロ）ので、
+このラウンドで直したのは**診断・記録・テストの区別力**である。
+
+#### 🔴 指摘が 1 件、レビュアー間で解けた
+
+silent-failure が「panic 時に `SessionRegistration::drop` が解放しないので最後の砦が機能しない」（MEDIUM）、
+pr-test-analyzer が「その経路にテストが無い」（Critical）と報告したが、Fable の経路列挙と
+`main.rs:53-75` の実装で、**daemon の panic hook は `std::process::exit(1)` を呼び unwind しない**ことが分かった。
+本番で Drop のフォールバック分岐には**到達しない**（そして daemon が死ねば `ParentWatch` で child も落ちるので音は止まる）。
+
+ガード自体は将来の早期 return に対する保険として残し、**コメントを実体に合わせた**。
+
+#### ポリシー A — 文書とコメントは実体を写す（5 件）
+
+**この PR の fix 自身が作った不一致**だった:
+
+- `clap-host` 単独ビルドは実装が `Ok(空 summary)` なのに、文書 2 箇所が `CLAP_UNAVAILABLE` のまま
+- wire 例とフィールド説明に `failed` が無い（実装は常に返す）
+- 設計 §3.5 の「quarantine 時は旧 child がまだ鳴っている可能性がある」という**前提そのものが誤り** —
+  quarantine の全 variant で child は必ず殺される（`InstrumentChildSupervisor::drop` → watchdog が
+  `CONTROL_QUIT` → `reap`）。実害は `released` の水増しに留まる。**#752 の scope に含めると明記**
+- 設計 §4 の受け入れ表に T2 が残っていた（実装は**意図して置いていない**・理由はコード側にある）
+
+#### ポリシー B — 診断は読める場所まで届かせる（2 件）
+
+- **`GetStatus` に `active_plugin_notes` を追加**。設計 §1 H4 の問題意識が「台帳に読み手が 0 件」だったので、
+  LLM が「stop 後に台帳が空か」を**ポーリングで確認できる**ようにした（`get_log` の 500 行窓に依存しない）
+- 🔴 **main が Codex の差分を読んで 1 件直した**: 台帳が読めない（poison）時に **`GetStatus` 全体が失敗する**
+  実装になっていた。それではデバイス・レート・uptime・render_contentions まで**異常時にこそ**失われる。
+  **その 1 項目だけ `null` に縮退**させ、理由を ERROR ログに出す形にした（文書にも明記）
+- disconnect trigger で「そもそも解放を試みられなかった」失敗が `warn!` だったのを `error!` に上げた
+  （より軽い「一部の note の配送失敗」が `error!` で、重大度が逆転していた）
+
+#### ポリシー C — テストは区別できる形に（2 件）
+
+- 🔴 panic テストが台帳に **1 件しか注入しておらず**、「push 成功のたびにその場で remove」実装に変えても
+  生き残っていた。**3 件注入**（配送成功済み / panic する / 未処理）に直し、変異で
+  **`left: 2 / right: 3`** の red を実出力で確認
+- 🔴 bounded retry の**「リトライ途中で成功する」分岐**が `#[cfg(feature = "clap-host")]` に閉じており、
+  **本番構成（`outproc-instrument` 単体）ではコンパイルすらされていなかった**。cfg を広げ、
+  `--features outproc-effect,outproc-instrument` で実走することを確認
+
+#### 先送り（#752 に集約）
+
+code-reviewer が `plugin_all_notes_off` 自身にも同型のレース（スナップショットと最終 `retain` の間の
+NoteOn が消える）を見つけたが、**本番の daemon 接続は 1 本のみで RPC も直列化される**ため到達しない。
+台帳に識別子を持たせる構造的な解は **#752** にまとめ、ここで部分的に変えない。
+
+#### 検証（main が sandbox 外で実測）
+
+- `cargo clippy --all-targets -- -D warnings` exit 0
+- `cargo test -p orbit-audio-daemon` — protocol **29 passed** ほか全 green
+- 同 `--features outproc-effect,outproc-instrument` — lib **257 passed** / protocol **32 passed**
+- `npm test` **2251 passed / 0 failed** / `docs:check` **926 verified / 0 failed**
+
+### refactor(daemon): apply the /simplify pass to the RUN-termination branch (#606) (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR** #738
+
+ゲート③の `/simplify`（4 体並行）。効率観点は**指摘ゼロ**で、台帳のスナップショットは
+stop/shutdown の cold path のみ、bounded retry は ring が空いていれば従来と同コスト
+（closure 1 回・追加 allocation なし）と確認された。
+
+#### 適用した 4 件
+
+- **二乗平均の重複を解消**: `analysisTailRms` が式を再実装していた。#746 が
+  `tests/e2e/helpers/capture-windows.ts` に `quadraticMeanRms` を切り出して main に入ったので、
+  本ブランチを載せ替えて **import に差し替えた**（設計 §6.3）
+- 🔴 **session カウンタを RAII ガードにした**（`SessionRegistration`）。`session_connected()` と
+  `session_disconnected_is_last()` の間で read loop が **panic すると減算に到達せず**、
+  `connected_sessions` が永久に加算されたままになる。そうなると**以後どの session が切れても
+  最後の砦が二度と発火しない** — daemon が生きている限りずっと、である。
+  同ファイルの `InstrumentReplacementReservation` と同じ「明示的な確定 + Drop の安全網」の形にした
+- `wrap_err_to_protocol` の `OutProcInstrument` / `OutProcInstrumentStale` が同じ
+  `ProtocolError` を返す完全重複だったので or-pattern に畳んだ
+- `stopAll()` の 2 つの fire-and-forget が同一の catch ロジック（ログ文言だけ違う）を写していたので
+  `warnUnlessDisconnected(label, err)` に切り出した
+
+#### 適用しなかった 1 件と、その理由
+
+`tailDelay = patternDuration + (scheduleTime - currentTime)` を `patternDuration + 100` に畳む案は
+**採らない**。`scheduleTime` は 2 行上で `currentTime + 100` と定義されているので値は同じだが、
+差で書いてあることに意味がある — **尻尾はイベントを実際に置いた原点から測る**必要があり、
+`scheduleTime` の決め方が将来変わっても自動で追随する。この整合こそが「RUN 終端で音が止まる」の
+前提なので、定数へ畳んで結合を切らない。**理由をコメントに書いた。**
+
+テスト重複の指摘 1 件も見送った（アサーションを減らす方向なので）。
+
+#### 先送りしたもの（設計 §6 に記録）
+
+- 🔴 **台帳のキーを slot 同一性にする → #752**。`ReplacePlugin` のスナップショットと再ポイントの間に
+  届いた旧 instance 宛 NoteOn は台帳に残り、次の `PluginAllNotesOff` が**新テナントへ NoteOff を送って
+  鳴っている音を切る**。本 PR が直した欠陥の鏡像。**窓を狭めるだけでは閉じない**（`plugin_note_on` は
+  push → 台帳 insert の順で、その間 control lock を持たない）。
+  🔴 **本設計で「wire が名前しか運ばないから無理」と却下したのは誤りだった** —
+  `push_outproc_instrument_event` は note の時点で名前→index を解決済みで、`tenant_generation` も既にある
+- タイマーのライフサイクル管理点が 2 箇所に分かれている件（設計 §6.2）
+
+#### 検証
+
+- `npm test` **2251 passed / 0 failed**
+- `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument`
+  — lib **252 passed** / protocol **32 passed**
+- `clippy --all-targets -- -D warnings` exit 0 / `typecheck:e2e` / `lint` exit 0
+
+### fix(daemon): make the all-notes-off ledger survive its own failures (#606 round-1) (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR** #738
+
+レビュー 5 体（Sonnet 4 + Fable）の指摘を 2 つの横断ポリシーへ集約して一括で直した。
+指摘単位のローカルパッチは振動の主因なので置かない。
+
+#### ポリシー A — 壊れた時に真因が残ること
+
+台帳を **drain（取り切り）→ 失敗分を戻す**のをやめ、**clone → 送出 → 解放済みだけ除去**に向きを反転した。
+
+- 🔴 旧実装はループ内で panic すると（`push_outproc_instrument_event` に
+  `.expect("instance_index always maps to a pre-allocated slot")` がある）**台帳が丸ごと消え、
+  二度と復元されなかった** — 最後の砦が最後の砦でなくなる。反転後は panic が「台帳が残る」＝安全側に倒れる
+- 復帰用 `extend` と、そこにあった**無言の `poisoned.into_inner()`** が消えた（drain 側は大声の `Err`
+  だったので扱いが非対称だった）
+- `PluginAllNotesOffSummary` に `failed` を足し、配送に失敗しても **`Ok(summary)` を返す**。
+  `Err` は台帳そのものが読めない（poison）時だけ。呼び手が知りたいのは「音が残ったか」で、
+  それに答えるのは `failed > 0` という機械可読な数であって不透明な `Err` ではない
+- 最初のエラーは released/stale/failed と一緒に `tracing::error!` へ 1 回だけ
+
+#### ポリシー B — 暗黙の結合を検証する
+
+台帳の鍵は**名前**だが、スロットの同一性は **index + 世代**である。この 2 つがずれる窓を塞いだ。
+
+- 🔴 `ReplacePlugin` は `instance_index.insert(name, spare)` で**名前を新スロットへ向けた後**、
+  teardown（最大 500 ms 待つ）を挟んでから名前一致で台帳を掃除していた。その窓で新テナントへ届いた
+  NoteOn は同じ `(name, ch, key)` として台帳に入り、**巻き込まれて消える → その音が解放されず鳴りっぱなしになる**。
+  **3 体のレビュアーが独立に指摘した唯一の項目**
+- 修正: **再ポイントの前に**旧テナントの entry を写し取り、teardown 後は**その集合だけ**を消す。
+  lock の入れ子は作らない（control を握ったまま台帳 lock を取らない）
+- `push_outproc_instrument_event` を `push_with_bounded_retry` に載せた。in-process の兄弟は
+  同じ物理状況（ring 満杯は一時的）に既に bounded retry を持っており、**片方だけ one-shot** だった
+- 台帳 lock + poison 文言の 5 重複を `lock_active_notes` に集約（poison の扱いが構造として 1 つになる）
+
+#### そのほか
+
+- session 切断 trigger を「**最後の確立済み session が切れた時だけ**」に変更。台帳は daemon 全体で
+  共有なので、2 つ目のクライアントが切れて 1 つ目の音が止まる形を避ける
+- `clap-host` のみのビルドは空 summary を返す（`global.stop()` のたびの警告が消える）
+- `engine_wrap.rs` の active-note 台帳コメントを実体に合わせた
+
+#### 検証（main が sandbox 外で実測）
+
+- `cargo clippy --all-targets -- -D warnings` exit 0
+- `cargo test -p orbit-audio-daemon` — protocol **29 passed** ほか全 green
+- `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument`
+  — lib **252 passed** / protocol **32 passed** / `plugin_all_notes_off` 1 passed
+- `npm test` **2224 passed / 0 failed**
+
+🔴 Codex は sandbox で protocol テスト（loopback bind）を走らせられず 29 件 red と報告していた。
+**同じテストが sandbox 外では全部 green** — 委譲先の赤も緑も main が回し直す。
+
+### feat(audio): add daemon-side plugin all-notes-off fallback (#606 PR-K-A2) (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR-K-A2**
+
+OOP instrument の active-note 台帳を drain して個別 `NoteOff` を送る
+`EngineWrap::plugin_all_notes_off()` を追加した。配送関数はこの 1 本に集約し、明示
+`PluginAllNotesOff` RPC と WebSocket session 切断直後の 2 箇所から起動する。これにより、
+engine が異常終了して RPC を送れず daemon と instrument child だけが残る経路でも解放できる。
+台帳 lock は drain 中だけ保持し、ring push 前に解放する。`ReplacePlugin` の旧 tenant entry は
+teardown 成功時だけ除去し、quarantine 時は最後の砦が拾えるよう保持する。
+
+TS は `RustEnginePlayer.stopAll()` の既存 `StopAll` の直後だけに flush を配線した。
+空の要約は無言とし、`released` または `stale` が非 0 の時だけ stdout に要約を出す。
+protocol/core spec に wire 契約と 2 trigger を記録した。
+
+protocol / gated / TS テストは実装ファイルと分離して先に追加し、未実装状態で Rust は新 API
+不在の E0599、Vitest は `pluginAllNotesOff is not a function` の red を確認した。sandbox の bind
+制限下でも本体を実行できる socket 非依存 integration を実装後に補助追加した。実装後は Rust lib
+（default: 39 passed、outproc-instrument: 131 passed / 1 ignored）、同 integration、対象 Vitest、
+cfg 4 象限 clippy、E2E typecheck、lint が green。WebSocket integration は sandbox の loopback
+bind が `EPERM`、実機 gated E2E は指示どおり未実行。全 `npm test` は 153 files / 2118 tests が
+pass した一方、loopback 使用箇所が同じ `listen EPERM: operation not permitted 127.0.0.1` により
+4 files / 106 tests fail（55 skipped）した。git metadata が親 worktree 配下にあるため sandbox が
+`index.lock` を拒否し、要求された test-only / implementation の 2 commit は作成できなかった。
+
+---
+
+### fix(engine): hold the RUN tail timer and align its origin (#606 PR-K-A1) (Sep 4, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR-K-A1**（修正部分）
+
+同ブランチの守りのテスト（`run-termination-noteoff.spec.ts`）に続けて、
+計画 `IMPLEMENTATION_PLAN_2026-09.md:126` が定める **H1 / H2 の修正**を入れた。
+守りのテストだけでは #606 の must-fix は閉じない（鎖は既にあったが、
+その鎖を駆動するタイマ自体が 2 つの欠陥を持っていた）。
+
+## 直した 2 つの欠陥
+
+### H2 — 終端タイマの原点が 100 ms ずれていた
+
+イベントは `scheduleTime = currentTime + 100` を原点に積むのに、自動停止タイマは
+**「今」から `patternDuration`** で測っていた（`run-sequence.ts`）。停止が約 100 ms 早く来るので、
+パターン末尾の note が鳴り切る前に `clearSequenceEventsFn` が走る。
+
+`tailDelay = patternDuration + (scheduleTime - currentTime)` に揃えた。
+🔴 **マジックナンバー 100 を 2 箇所に書かない** — `scheduleTime` から導いている。
+
+### H1 — `setTimeout` のハンドルを捨てていた
+
+キャンセルできないので、`RUN()` を再度呼ぶ / `LOOP()` へ切り替える / `global.stop()` すると、
+**古いタイマが後から発火して新しく始まった再生を消す**（stale timer）。
+
+ハンドルを既存の per-sequence `StateManager` に保持し（新機構を作らない）、
+`run()` / `loop()` / `stop()` の 3 経路でキャンセルする。`setRunTimerFn` は**必須引数**にして、
+将来の呼び出し元がハンドルを取り落とすことを型で防いだ。
+
+## テスト
+
+TDD で先に書いて red を確認してから直した（実出力は PR 本文）。
+
+| 検査 | 内容 |
+|---|---|
+| H2 | `patternDuration` ちょうどでは clear されず、原点ぶんを足した時刻で clear される |
+| H1 | 2 回目の `RUN()` / `LOOP()` 切替 / `global.stop()` のいずれでも、1 回目のタイマが
+新しい再生を消さない。**`toHaveBeenCalledTimes` と引数まで検証**する |
+
+## 🔴 `clearRunTimer` の分類（main が追加）
+
+`private clearRunTimer()` を足したところ `signal-chain-dispatch.spec.ts` が red になった。
+**TypeScript の `private` は実行時に残らない**ので、公開メソッド分類器からは未分類に見える。
+内部 API リストへ追加した。
+
+ただし **除外リストへの追加は「主張」にすぎない**（CLAUDE.md が #528 で名指しした事故は
+「DSL 語彙であるべきものを除外リストへ誤分類し、テストは緑・実行時だけ壊れる」型）。
+そこで**逆向きの実証**を 1 本足した — `kick.clearRunTimer()` が
+`Unknown chain method` で弾かれること。**変異検証済み**:
+`SEQUENCE_DSL_METHODS` に `clearRunTimer` を足すとこのテストが red になる。
+
+## 検証
+
+`npm test` **2220 passed / 52 skipped / 0 failed**（sandbox 外・main が実行）。
+lint / `tsc --noEmit` ともに exit 0。
+
+⚠️ 委譲先（Codex）は sandbox で全件を回せず `tests/core` の緑までしか確認できていなかった。
+**上記 1 件の red は main が sandbox 外で回して初めて出た** — CLAUDE.md
+「委譲先の green 報告は必ず main が回し直す」の実例がまた 1 件増えた。
+
+---
+
+### test(engine): pin the RUN-termination note-off release (#606 PR-K-A1) (Sep 4, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR-K-A1**
+
+#### 🔴 実装は既にあった。足したのは「守り」である
+
+着手前に実装を読んだところ、**発火点も配送機構も揃っていた**
+（[[invent-rules-only-after-reading-the-code]] のとおり、規則を発明する前に読む）:
+
+| 層 | 場所 |
+|---|---|
+| RUN 終端の発火 | `run-sequence.ts:60-63` の `setTimeout(… clearSequenceEventsFn(name) …, patternDuration)` |
+| 経路の振り分け | `sequence.ts:1015-1023` `clearEvents()` → MIDI / instrument なら `clearOwner(name)` |
+| 実際の note-off | `midi-scheduler.ts:211-214` `clearOwner()` が **`output.releaseOwner(owner)` を呼ぶ** |
+
+つまり #606 の PR-K-A1 は「flush 機構を作る」仕事ではなかった。
+地図に「配送機構は既にある・欠けているのは発火点だけ」と書いた（#731）が、
+**発火点も既にあった** — さらに一段浅く見積もっていた。
+
+#### ところが、この鎖を検査するテストが 1 本も無かった
+
+`clearOwner()` から `releaseOwner()` の **1 行を落としても既存 2205 件は全部通る**。
+**鳴りっぱなしは音にしか出ない**ので、ユニットで守らないと誰も気づけない
+（[[consumerless-code-is-unprotected]]）。テスト 4 本を追加した。
+
+#### 🔴 変異検証で穴が 1 つ見つかった（3 本 → 4 本）
+
+| 変異 | 結果 |
+|---|---|
+| `releaseOwner()` の呼び出しを削除 | **2 件 red** |
+| `clearOwner()` の queue フィルタを `this.queue = []`（wildcard 全消し）へ | 🔴 **当初は 3 件とも green（生き残り）** |
+| queue のクリアを削除 | **1 件 red** |
+
+**解放（`releaseOwner`）の側は owner を見ていたが、予定（queue）の側は見ていなかった。**
+片翼だけ守っていたことになる（[[enumeration-stops-one-level-too-early]]）。
+「終端したシーケンスの予定だけが落ちる」を検査する 1 本を足したところ、この変異も red になった。
+
+restore 後 4 件 green・`midi-scheduler.ts` は `cmp` で復元一致。
+
+🔴 **1 種類の変異が red になっただけで結論してはいけない**という規律が、そのまま効いた実例。
+
+#### 粒度（#729 で明文化した条文の実装側）
+
+守っているのは **owner 単位の解放**である。daemon 側の「最後の砦」は
+**instance 単位（全 owner）**で、`global.stop()` / shutdown / engine 異常終了の 3 場面だけ。
+混同すると他シーケンスの発音を巻き込むので、テストのコメントに書き分けた。
+### test(e2e): make the phase sweep actually discriminate the float-family bug (#746 round-3) (Sep 5, 2026)
+
+**Issue**: #739 / **ブランチ**: `739-capture-windows-follow-sound` / **PR** #746
+
+ラウンド2 で入れた「500 位相スイープ」が、**守るべき欠陥を検出できていなかった**。
+
+#### 何が起きていたか
+
+ラウンド2 は「`onsets`（`w * WINDOW_SEC`）と `windows[].startSec`（`start / sampleRate`）が
+**別の浮動小数の族**で、`>=` / `<` 比較が位相で 199/200/201 に揺れる」を整数バケット index への
+統一で直し、500 位相スイープを常設した。
+
+🔴 **main が変異検証したところ、ウィンドウ選択を元の族またぎ比較へ戻しても、そのスイープは緑のままだった。**
+
+原因: スイープは**合成 WAV 内の打撃時刻を固定したまま capture 区間だけ**を 1 バケット内で動かすので、
+`firstOnset` が実質 1〜2 値しか取らない。**ずれの発生源は絶対バケット index**（2 つの族の乖離は
+`w` が大きいほど広がる）なので、区間を動かしても再現しない。
+
+Codex が回した変異（`steadyRms` が NaN を返す）は「アサーションが結線されている」ことしか示しておらず、
+**シナリオが欠陥を区別できるか**は示していなかった。
+
+#### 直したこと
+
+- **絶対 onset index を 1000 通り掃く**テストを追加。音を合成せず、`wav-analysis.ts` の 2 つの族を
+  そのまま再現した stub を `steadyRms` / `measuredBucketCountForSteadyRms` に渡す
+  （`resolveMeasuredRange` は `Pick<CaptureWindows,'windows'|'onsets'>` を取るのでスタブで足りる）
+- 🔴 **変異で red を確認**: 族またぎ比較へ戻すと
+  `expected [ 200, 199, 201 ] to deeply equal [ 200 ]` — Fable が実測した分布がそのまま出る。
+  復元後 46 件 green（`cmp` で復元一致を確認）
+- 500 位相スイープは**残す**（実音声の経路を端から端まで通す役）。ただしコメントに
+  **「この変異はここでは生き残る」**と明記し、区別する役は新テストだと書いた
+
+#### 同ラウンドで直した残り
+
+- 500 位相スイープが `steadyRms` **本体**を全位相で呼ぶようにした（従来は診断関数だけで、
+  onset 数一致・周期性・可聴床のアサーションを通っていなかった）
+- `hitPeriodSec` が `ANALYSIS_BUCKET_SEC` の整数倍でなければ**明示的に throw**（暗黙の前提を検査）
+- コメントの不正確 2 件（"four" → "five"、D-2 の根拠づけが下のテストに当てはまらない点）
+
+#### 検証（main が本ツリーで実測）
+
+- `npm test` **2238 passed / 0 failed**
+- `typecheck:e2e` / `lint` exit 0
+- `docs:check` **926 verified / 0 failed**
+- 実機 gated: **`main` baseline 10/24 と失敗集合が完全一致 = 退行ゼロ**（同日・同一条件で baseline を取り直した）
+
+### fix(e2e): clock capture segments off the capture file and open them on sound (#739 PR-O2a) (Sep 4, 2026)
+
+**Issue**: #739 / **ブランチ**: `739-capture-windows-follow-sound` / **PR-O2a**
+**設計**: `docs/design/739-capture-clock-design.md`（起案 Fable / 審査 main）
+
+実機 gated E2E の「名前つき区間 RMS」測定器が、**楽器が鳴る前に窓を開けていた**。
+#649 PR-O2 の受け入れ（E2E-1）が緑にならない原因は engine ではなく**測定器**だった。
+
+## 直した 2 つの欠陥
+
+1. **固定 settle 400 ms が音より早い。** `LOOP()` の小節量子化（120 BPM 4/4 = 2000 ms）＋
+   プラグイン attach で音は約 3 秒後に出る。`unity` 窓は丸ごと無音で、
+   **`global.gain(-6)` は楽器が一度も鳴る前に適用されていた**（実測 half/unity = 1.36）
+2. **区間マッピングが壁時計からの逆算で、黙ってクランプする。**
+   `Math.max(0, durationSec - (stopWall - from)/1000)` は実長が壁時計より短いと
+   **ファイル先頭を指す**。settle を 2600 ms にしたら unity が 0.0632 → **0** と悪化した
+   （窓を後ろへ動かすと逆に前を測る）
+
+## 採った形
+
+**キャプチャファイルのバイト長を時計にする** — `(stat.size - 44) / (channels × 4) / sampleRate`。
+`stopWall` からの逆算を捨てた。「音が出たか」の待ちは**いつ窓を開けてよいか**を決めるだけで、
+時計には使わない（header の flush 間隔 1 秒ぶんの不定性を時計に持ち込まないため）。
+
+新規 `tests/e2e/helpers/capture-windows.ts` に A1 / U1 / U2 / U3 を内蔵し、
+**5 箇所に複製されていた逆算式**（`run-score.ts` / gated spec の 4 箇所）をすべて置き換えた。
+
+## 🔴 前提の訂正 3 件（一次ソースで確認）
+
+| 当初の想定 | 事実 |
+|---|---|
+| 複製は 2 箇所 | **5 箇所**。E2E-1 は `run-score.ts` ではなく gated spec 内の別実装を使う |
+| 受け入れは「各窓のオンセット数」 | **正弦系（CLAPTestSynth）にオンセットは出ない**。`gate(1)` は note-off が次の note-on と同時刻で連続音。オンセット数は**打楽器 fixture にだけ**意味を持つ |
+| √(8/7) は写像の量子化 | **guard の非対称**（`rms` は guard 0.15・`onsets` は guard 0） |
+
+## 🔴 レビューで塞いだ穴（変異で実証）
+
+新しい衛生規則を足したが、**走査対象が写像の新しい住所を含んでいなかった**。
+`gated-sources.ts` は `orbitstudio-mcp-gated.spec.ts` と `gated/**` しか見ておらず、
+本 PR が写像を移した `helpers/` は対象外だった。
+
+| 実験 | 結果 |
+|---|---|
+| `capture-windows.ts` に旧逆算式を植える | **green**（見逃す） |
+| 対照: 走査対象のファイルに同じ変異 | **red**（規則自体は機能する） |
+| `helpers/` を走査範囲に足して再実行 | **red**・違反行を名指し |
+| 変異なしで hygiene + coverage | 16 件 green（巻き添えなし） |
+
+🔴 **`gated-sources.ts` 自身の冒頭がこの失敗モードを予告していた** —
+「シナリオを別ファイルへ出した瞬間に**衛生検査が新ファイルを見ず、黙って弱くなる**。
+red にならないぶん危険で、検査が効いていないことに気づけない」。本 PR がまさにそれをやった。
+
+あわせて、U3（区間の単調・非重複）の例外が**区間名の文字列 `'transition'`** で
+表現されていたのを `CaptureSegment.overlapsPrevious` へ移した
+（汎用ヘルパーが特定テストの語彙を知っている層の逆転を解消。CLAUDE.md
+「不変条件をデータの配置で強制する」）。
+
+## 🔴 実機 gated の収束（main が sandbox 外で 5 回実測）
+
+| ラウンド | 失敗 | 退行 | 原因 |
+|---|---|---|---|
+| 1 | 23/24 | — | **#747**: worktree のビルド配置が壊れエンジンが起動せず（本 PR とは無関係） |
+| 2 | 19/24 | — | main の実行ミス: 存在しない `ORBIT_KEEP_CAPTURES` ディレクトリ |
+| 3 | 16/24 | **6** | **時計が 2 つあった**（`stat.size` vs WAV header の申告サイズ） |
+| 4 | 12/24 | **2** | **小節量子化の 2 秒**を録り幅が勘定していなかった |
+| **5（最終）** | **10/24** | **0** | — |
+
+**baseline（`main`・同一条件）は 12/24。** 最終ラウンドは**退行ゼロ**で baseline より 2 件少ない。
+残る 10 件はすべて baseline から存在するもの（`#643 E2E-1〜7` ほか）で、次の PR-O2（#649）の対象。
+
+⚠️ 「減った 2 件」はプラグイン state 復元系で、ラウンド 4 でも同じ 2 件が差分に出ている。
+**本 PR が直したというより flaky の可能性が高い。** 確実に言えるのは**退行ゼロ**の方。
+
+### ラウンド 3 で塞いだもの — 時間軸の統一
+
+`analyzeWavBuffer` は **header が申告する data サイズを優先**する
+（`wav-analysis.ts:106`・0 か範囲外のときだけ EOF まで読む）。一方 `sync_header` は固定
+96,000 interleaved samples ごと（48 kHz stereo なら約 1 秒、mono なら約 2 秒）にしか
+patch しない。つまり区間は「`stat.size` 時間」で刻まれ、
+バケットは「header 時間」で並んでいた（実測の差は 0.256 / 0.939 / 0.299 秒）。
+
+解析の直前に申告サイズを 0 に上書きして EOF まで読ませ、**2 つの時間軸を構成的に一致させた**
+（`readCaptureForAnalysis`）。許容値を緩める直し方は採らない — 緩めると末尾の区間が
+黙って解析範囲から外れる。
+
+### ラウンド 4 で塞いだもの — 小節量子化
+
+残った 2 件（O0-3 / O0-4）は snap のバグに見えたが、キャプチャを解析すると
+**2.000 秒ちょうどの無音**が区間の頭にあった:
+
+```
+onsets 8.06 →（2.000 s の無音）→ 10.06 10.56 11.06 … 13.06
+```
+
+`LOOP()` の**小節量子化**（120 BPM 4/4 = 2000 ms）で、O0-3 / O0-4 だけが演奏中に
+`send` / `effect` を足すため発生する。録り幅を `小節 + 位相 + n·P + guard + snap 余裕` の式に直した
+（PR 前 4000 → 6840 ms。4800 ms はラウンド 3 途中の値）。**snap は最初の onset から厳密に
+`n·P` を測るので golden の値は動かない。**
+
+### ついでに塞いだもの
+
+`prepareCapturePath` — capture を書く直前にディレクトリを作り、前回の残骸を消す。
+ディレクトリが無いと daemon の `File::create` が失敗し、テスト側には
+「daemon-backed REPL ready after 30000ms」という**無関係に見えるタイムアウト**として現れる
+（ラウンド 2 でこれに実機 1 回分を費やした）。変異検証済み。
+
+## 検証
+
+`npm test` **2226 passed / 52 skipped / 0 failed**（sandbox 外・main が実行）。
+`typecheck:e2e` / lint ともに exit 0。`check-citations` **926 verified / 0 failed**
+（本 PR で `tests/` の行が動いたため 12 箇所を再アンカーし、`captureInstrumentScenario` から
+`capture-windows.ts` へ移動した引用を貼り直し、**逆算を説明していた本文も現状に合わせた**）。
+
+---
 
 ### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
 
@@ -706,642 +1593,6 @@ E2E は未実施（main が別途実施）。
 
 ---
 
-### docs(design): 詳細設計 11 本と実装プラン 2026-09 を起草 (Sep 3, 2026)
-
-**Issue**: #611 / #694 / #598 / #672 / #634 / #428 / #610 / #662 / #656 / #668 / #679（設計のみ・実装なし）/ **ブランチ**: `claude/elegant-pasteur-l9gdrl`
-
-owner 指示（2026-09-03）: 「① 詳細設計（`docs/design/`）と ② 実装プラン（PR 戦略）を作る。実装はしない。決まっていないところ以外は、そのまま作れる粒度で。曖昧さは owner 裁定待ちに隔離する」。
-
-#### 成果物
-
-| 文書 | 束 |
-|---|---|
-| `docs/design/611-output-line-design.md` | 出口の一般化（#611/#649/#543-a/#409/#647）— `output(dest, thru, db)`・`AudioLine`・`SetBusLine`・`LineProgram`・master ライン・engine 2ch 固定 |
-| `docs/design/694-session-log-editor-path-design.md` | #694（設定 → env・`//#sourceFile`・`<DIR>/`・純度・v2）/ #695（`//#evalBegin/End` フレーム・複数 GLOBAL）/ #241（in-process replay・transport 駆動） |
-| `docs/design/598-render-endpoint-design.md` | `mix.render(<path>)`・`%n`・合算 = 解決後パス・`RenderInstance`（実時間 stem）・`RenderScore` v2・評価列 × 仮想クロック driver・P3 差分 |
-| `docs/design/672-plugin-boundaries-design.md` | 境界 5 本（3rd-party / 標準 / タップ / 標準シンセ / DSL）と残りのコア・`DslModule` / `HostContext`・2 spec の目次 |
-| `docs/design/634-pdc-layer-instrument-rack-design.md` `428-timed-event-queue-design.md` `610-diagnostics-applicability-design.md` `662-performance-and-visibility-design.md` `656-release-design.md` `668-e2e-foundation-design.md` | subagent 起草 → main 検収（裁定の出どころ・path:line・裁定待ちの隔離を確認） |
-| `docs/design/679-input-consistency-check.md` | 入力は着手しない裁定。今回の設計に矛盾が無いことを 12 観点で確認 |
-| `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` | 一方通行の判断 17 件 → PR 一覧（接頭辞 O/L/R/P/K/Q/D/V/S/E）→ 順序の根拠 → 段 0〜8 |
-
-#### 設計上の主な判断（裁定の範囲内）
-
-- フェーダー = 出口のレベル（裁定 ④）は「乗算 = 出口の op」なので位置ずれのクラスが消える。#649 の原因説明は撤回済み（コメント 1）なので E2E-1 は red-first
-- render も log も「譜面からの相対」。`.orbslog` は今日 0 本なので `logVersion: 2` を今出す
-- フレーム（`//#evalBegin/End`）は #649 §10.3 と #695 の**同一機構**（PR-L2 の 1 本）
-- offline driver は最初から**評価列**を入力にする（`.orbs` = 1 eval・`.orbslog` = transport 順）。前提は Clock DI（core 17 箇所・挙動不変）
-- コアは「境界の残り」として**列挙**で確定（#671 コメント 1 の 9:31 と整合）
-
-#### 裁定待ち（設計に混ぜていない）
-
-各文書の末尾節に隔離。地図 §9 の未決 9 件は埋めていない。新規に出た主なもの: `<DIR>/` の名前 / CLI のログ既定 / 数値 `output(n)` の退役 / プレースホルダ語彙 / 実時間 stem の issue の置き場 / A4 実行形態 / transport 書きの競合 / #674 表面 / midi の `output` 拒否。
-
-#### 検証
-
-docs のみ（コード変更なし）。`npm test` は未実行（変更対象外）。issue へは**コメントのみ**（本文・ラベル・close は触っていない）。
-
-#### 追記（同日）: owner 裁定の反映
-
-裁定シート（artifact）で owner が 66 問中 50 問に回答。推奨から変わったもの: 同一宛先の `output` は 2 要素として加算 / `pan` をライン要素に / mono 宛先は L+R マージ / `--until` は高速畳み込みを最初から設計 / `--verify` はイベント sidecar + assets hash / OSC はメッセージ値を `play()` に / `seq.root()` は note-name も受ける / `[...]@v` per-voice 分配 / `chop(n>1)` の tie は伸ばす / child の QoS を TIME_CONSTRAINT へ / node を同梱 / 標準プラグインの実装は WASM スパイク後。各設計文書の裁定待ち節と `IMPLEMENTATION_PLAN_2026-09.md`（W-18〜22・§4）へ反映。相談中 6 件はチャットで提示。
-
-### 追記: Q-694-7 — 今日の `.orbslog` はリプレイに使えるか（実装を実走・同日）
-
-owner: 「ログが出ていた時に再現に使える形になっている様に中身が見えなかった。実装を調べて
-ちゃんとリプレイできるのか？それがないとオフラインレンダリングができないのでしっかり見て」
-
-mock backend の `InterpreterV2` に、拡張が stdin へ書く形（`extension.ts:3013-3022` の注入込み）を
-`createReplSession().pushLine` で流し、`Date.now` を差し替えてログを生成した（doc 694 §2b）。
-
-**結論: そのままでは再現に使えない。** 欠落 11 件を `path:line` と生成ログの根拠つきで一覧化
-（doc 694 §2b.3 G1〜G11）。owner の記憶「中身が見えなかった」は G1（注入で `code` が汚れる）・
-G2（`untitled` が cwd に落ちる）・G3（1 行 = 1 eval で選択の形が残らない）の実体。**それに加えて**:
-
-| 発見 | 実測 | 手当 |
-|---|---|---|
-| **`transport` が音楽時間ではない**（G6） | tempo 120→60 の 10 ms 後の stamp が `1:3.000` → **`1:2.010` に逆行**。LOOP の quantize も同式で「+2990 ms」待った | `TransportTimeline`（PR-L8）。quantize を乗せるかは 🔴 doc 694 §13 (8) |
-| **プラグイン状態がログの外**（G7） | `stop()` の auto-snapshot と `//#savePluginState` が同じ相対パスへ上書き（版なし）。replay は後のセッションで上書きされた状態を読む | start/stop で `orbslog/<log>.states/` へ写す（PR-L9・🔴 §13 (9)）。**#598 P3（PR-R8）の前提** |
-| 評価の結果・import 本文・MCP 由来の印が無い（G4/G5/G8） | REPL は `//#evalMark` で `ok` を計算済みなのに捨てている | `result` / `import` レコード + フレーム属性（PR-L7）|
-
-plan: PR-L7/L8/L9 追加・PR-L4 は L7/L8 の後・PR-R5 は L8 の後・PR-R8 は L9 の後（W-23/24/25）。
-
-同日の他の反映: Q-598-2 サラウンド → **B-lite**（N ch の render 器 + `output(at:, mono:)`・
-エンコードは Logic。doc 598 §3.6・PR-R9）/ Q-610-5 確定（赤線 + その文だけスキップ）/
-Q-656-1 `untrustedWorkspaces.supported: true`（DAW に合わせる）/ Q-656-2 #138 独立のまま。
-
-**同日夕・残り 3 問が確定（すべて A・推奨どおり）**: Q-694-3 `--until` 境界ちょうどは適用済み /
-Q-694-8 LOOP quantize も `TransportTimeline` に乗せる（tempo 変更後の境界の飛びを修正として記録）/
-Q-694-9 プラグイン状態は start/stop で `orbslog/<log>.states/` へ写す。これで裁定シート 66 問は
-すべて回答済み。doc 694 §0 に裁定 9〜11 を追加・plan §4 は「裁定待ち 0 件」。
-
-**同日・ユーザー視点の到達点**（owner「各 PR が完了すると何が出来るのかユーザー視点で纏めて」）:
-`docs/planning/USER_OUTCOMES_2026-09.md` を追加。plan §1 の 98 PR すべてに「完了するとできること」を
-1 行ずつ、見え方（🎵 音・操作 30 / 👀 見える 25 / 🧱 土台 31 / 📄 仕様 12）と段を添えて記載。
-「何も変わらない」PR はそのまま書く（土台の PR が続く週はそれが正しい状態）。
-
-**同日・束ブランチ運用の採用**（owner「PR-O のような纏まりで stacked PR を積んで、纏まりが終わってから
-レビューチームを走らせるのはどうか」→ 相談の結果、統合ブランチ方式で合意）:
-`docs/development/BUNDLE_BRANCH_WORKFLOW.md` を追加。束ごとに統合ブランチを置き、小 PR は
-CI + その PR の E2E 実機 + 目視の軽いゲートで入れ、統合ブランチ → main の束 PR で
-`/simplify` → レビューチーム + Fable → 実機全件を 1 回だけ回す。束は 1,500 行以下で継ぎ目で切る
-（OrbitScore は 7 束・フルレビュー 27 回 → 7 回）。純 stacked PR を採らない理由は squash との相性
-（下の層が main に入るたび上の層の rebase が要る）。GitHub の stacked pull requests
-（2026-07-30 公開プレビュー）は「層ごとにレビューを増やす」道具で目的が逆、プレビュー中は併用しない。
-参照 17 件は URL の実在を確認（docs.github.com 等はプロキシで本文取得不可のため検索要約で確認）。
-→ owner 了承（同日）で **#703** として別 PR に。bot の `if` は `claude-code-review.yml` **だけ**
-（`code-review.yml` はジョブ名が `code-review` だがテスト CI 本体なので触らない）。plan §2.5 に束の割り当て表を追加。
-
----
-
-### chore(meta): critical path の 27 issue に実装チェックリストを入れた (Sep 3, 2026)
-
-**Issue**: #697 / **記法**: `docs/core/PROJECT_RULES.md` §1d
-
-owner: 「地図でリンクしてる ISSUE に**実装内容のチェックリスト**を作って、実装時に**ちゃんと終わってるか**、
-**終わってなければ理由は何か（変更になった、いらなくなったなど）をトラッキング**できるように」
-
-#### 🔴 要点は「終わらなかった理由が残ること」
-
-チェックが消える／黙って削られると**なぜやらなかったのかが次の人に分からない**。
-本日それで実害が出た — **#506 の看板は SC.10.9 で撤回済み**だったのに、撤回が spec 側にしかなく
-issue 本文が古いままで、main が **#680 を重複起票**した。
-
-#### 記法（§1d）
-
-```markdown
-- [ ] 未着手
-- [x] 完了 — PR #NNN / commit `abc1234`
-- [x] ~~やらなくなった~~ — 🔴 **不要**: 理由（出どころ: MAP §4.X / #NNN / owner YYYY-MM-DD）
-- [x] ~~形が変わった~~ — 🔴 **変更**: 何にどう変わったか（同上）
-```
-
-**項目を削除しない** / **完了には PR か commit** / **`[x]` は「解決済み」**（完了も「やらない」も。
-**未解決だけが `[ ]`** なので**残数がそのまま残作業**）/ **理由には出どころ** /
-🔴 **未決事項をチェックリスト化しない**（決めていないものを「やること」にしない）。
-
-#### 対象 — 27 件（critical path のみ）
-
-#543 #649 #645 #606 #634 #635 #636 #669 #659 #656 #661 #660 #662 #667 #663 #672 #671 #680
-#428 #610 #644 #668 #694 #695 #679 #385 #611
-
-**地図が参照する OPEN issue は 117 件**あるが、全件に入れると**更新されないチェックリストが 117 個**できる。
-
-項目は**地図と issue 本文から導いた**。受け入れ基準は可能な限り**実測値**にした
-（例: #649 は「`global.gain(-6)` で instrument の RMS が 0.08864 → 0.044」= #649 本文の実測）。
-
-### docs(index): アーカイブ後の INDEX を追従させ、地図を目次に登録 (Sep 3, 2026)
-
-**追従元**: PR #693（マージコミット `b9fad48`）/ **ブランチ**: `claude/docs-sync-pr693`
-
-PR #693 は 9 本を `docs/archive/` へ移し、**現役ファイルからの参照リンクは全部直した**
-（`INDEX.md` のリンク先も `../archive/...` に書き換わっている）。追従できていなかったのは
-**目次の構造とラベル**の方で、2 点あった。
-
-#### ① 移動した 8 本が「現役」の見出しの下に残っていた
-
-`docs/core/INDEX.md:75-88`（追従前）は、見出し「設計ノート (`docs/design/`)」/
-「Planning (`docs/planning/`)」の表に、リンク先だけ `../archive/` へ変わった行が
-**現役の行と混在**していた。読者は見出しを信じて表を読むので、**アーカイブ済み文書を
-現在の設計として読める**状態が残っていた — #696 が消そうとした「紛らわしいから」
-そのものである。
-
-現役（`643` / `649`）と分け、**アーカイブ済みの表を別に立てて「現在の正本」列**を持たせた。
-列の値は移動時に各文書へ付けたバナー（例: `docs/archive/design/628-effect-chain-model.md:2`
-「**現在の正本**: `SIGNAL_CHAIN_DSL_SPEC_v1.md` **SC.10**」）から採っており、新しい判断はしていない。
-
-#### ② 🔴 `DEVELOPMENT_MAP.md` が目次に無かった
-
-PR #693 が追加した本体（1388 行・**開発計画の正本**）が `INDEX.md` に**1 行も無く**、
-Planning 節は**移動済みの 2 本だけ**を挙げていた。`grep` で確認した地図への参照は
-リポジトリ全体で `PROJECT_RULES.md:34` の 1 箇所のみ。
-
-地図 §0.2 は「**番号の検索ではなく、地図の見出しで探す**」を運用規則にしているが、
-**その地図に目次から辿り着けない**。CLAUDE.md がセッション開始時の必読に挙げるのは
-`INDEX.md` なので、ここに無いと運用規則が起動しない。地図と
-`2026-09-03-issue-triage.md`（#696 が「現役」と明記）を Planning 節へ登録し、
-§0.2 の起票規則を引用で添えた。
-
-#### ③ 棚卸し記録が、同じ PR で覆されたラベル状態を載せたままだった
-
-`docs/planning/2026-09-03-issue-triage.md:115` は「`foundation` と `release-gate` の **2 枚のみ**」と
-書き、C5 の表（同 `:96`）は **#197 に `release-gate`** を付けている。PR #693 はこの両方を覆した —
-**`must-fix` を新設して 3 枚**にし、**#197 のラベルは外した**（WORK_LOG 上の記述: 「🔴 3 件目は
-main の誤り — #197 に `release-gate` を付けたとき #656 と突き合わせていなかった。ラベルを外した」）。
-
-この文書は #696 が「**地図の入力として現役**」と明記して残したものなので、放置すると
-現役の文書が古いラベル状態を主張し続ける。**表の行は棚卸し時点の記録として保存**し、
-§5 に**追記**として 2 点の変更と「ラベルの現在の状態は地図を見る」を書いた
-（`docs/design/` の設計書と同じく、記録の書き換えはしない）。
-
-#### 追従不要と判断した層
-
-- **DSL/言語仕様・ランタイム/MCP・OrbitStudio**: PR #693 の差分 22 ファイルは
-  `docs/` と `sites/dev/` のみ。`packages/` の実装は 1 行も無い。唯一の `rust/` の変更は
-  `spike_s_concurrent_load.rs:15` の**行コメント内のパス文字列**で、コードではない
-- **`sites/dev/`**: 参照パス 6 箇所が ja / en 対で既に直っている（`sites/dev/signal-chain/index.md:27`
-  と `sites/dev/en/signal-chain/index.md:28` など）。地図の裁定（出口の一般化・`send` の dB 化）は
-  **未実装の決定**であり、dev サイトは実装の解説なので、書くと「実装されていない挙動」の記述になる
-- **`sites/user/` / `docs/user/`**: ユーザーが書く語は 1 つも増減していない
-
----
-
-### chore(docs): 正本が別にできた設計・計画文書を 9 本アーカイブ (Sep 3, 2026)
-
-**Issue**: #696 / **MAP §0.3**
-
-owner: 「仕様検討したドキュメントは、イシューになって地図に書かれたものは**アーカイブ**しておこうか。**紛らわしいから**。」
-
-#### なぜ
-
-同じ主題の文書が複数あると誤読が起きる。**実例**: 本日 main が **#506（plugin-as-method）を読まずに
-#680 を重複起票**した。#506 の看板（メソッド形）は **SC.10.9 で撤回済み**だったが、
-撤回が spec 側にしかなく issue 本文が古いままだった。
-
-#### 基準 —「正本が別にできたもの」
-
-| 移した文書 | 現在の正本 |
-|---|---|
-| `628-effect-chain-model.md` | **spec SC.10**（文書自身が「確定・SC.10 として制定済み」と明記） |
-| `628-plan-reset` / `628-rack-chain-implementation-design` / `628-gated-e2e-rack-design` / `628-ui-pump-per-index-design` | **#628 / #633 CLOSED**（PR #639 / #652 で出荷済み） |
-| `625-effect-replacement-design.md` | **#625 CLOSED**（PR #627） |
-| `ROADMAP_2026.md` / `IMPROVEMENT_RECOMMENDATIONS.md` | **`DEVELOPMENT_MAP.md`**（地図 §0.3 が「歴史的スナップショット」と明記） |
-| `2026-09-02-feature-map-comments.md` | **地図 §4 各節 + #679 / #680 / #681** |
-
-**残したもの**（issue が OPEN・**正本がまだ他に無い**）: `643-mixer-foundation-design.md`（PR-3 = #645 が残る）/
-`649-audio-line-design.md`（設計のみ・実装なし）/ `662-engine-visibility-and-limits.md`（未着手）/
-`2026-09-03-issue-triage.md`（地図の入力として現役）。
-
-#### 🔴 参照を全部直した — ここが本体
-
-**移動して参照が切れると、探せなくなって同じ重複が起きる。**
-
-現役ファイル 12 本の参照を書き換え（`INDEX.md` / `INSTRUCTION_ORBITSCORE_DSL.md` / `WORK_LOG.md` /
-`DEVELOPMENT_MAP.md` / `SIGNAL_CHAIN_DSL_SPEC_v1.md` / `spike_s_concurrent_load.rs` /
-dev サイト 6 本）+ **アーカイブ同士の相互参照 5 本**。
-
-各文書の冒頭に「**アーカイブ。現在の正本は〜。新しい判断の根拠にしないこと**」を付けた。
-
-#### 検証
-
-- **現役ファイルから移動前のパスを指す参照: 0 件**（`grep`）
-- `npm run docs:check` **904 引用 / 0 failed**
-- `npm run docs:build` dev / user とも成功
-- `git diff -M` で**リネームとして検出**（内容は移動・参照のみ書き換え）
-
----
-
-### docs(planning): 入力の DSL 表面と、入力が入ると変わる性能の性質 (Sep 3, 2026)
-
-**Issue**: #692 / **正本**: `docs/planning/DEVELOPMENT_MAP.md` §4.O.1・§4.P.1
-
-#### 🔴 入力の経路は現在ゼロ（実測）
-
-| | 結果 |
-|---|---|
-| cpal の入力ストリーム | **0 件**（`build_input_stream` / `default_input` とも） |
-| デバイス列挙 | **`list_output_devices` のみ**・`maxOutputChannels` だけ返す |
-| `rebuild_output_stream(…buffer_frames, device_name)` | **出力専用**。入力用の対は無い |
-| `CallbackTimeStats` / `StreamStats` | **出力コールバックの所要時間**のみ。**往復を測る手段が無い** |
-| `input` / `rec` / `record` | **DSL 語彙に 0 件** = 新しい主語 |
-
-**#661 / #660 / #662-A が扱っているのは全部「出力側」。** 入力はデバイスの列挙・選択・レート・
-バッファ・統計が**すべて新規**。
-
-#### §4.O.1 入力が入ると変わること（owner 2026-09-03）
-
-> 性能向上とともに**サンプリング周波数の変更やレイテンシー、バッファの調整**が必要になりますよね。
-> **特にインプット系があると。**
-
-- 🔴 **レイテンシーが「往復」になる**（入力バッファ + 処理 + 出力バッファ）。
-  性能ゴール「64 / 32」は memory の記述が出力バッファと out-of-process の +1 block の話なので
-  **片道として読める** → **往復の目標値は未決**（§9・owner 確認）
-- **サンプルレートは入出力で一致していなければならない**。#662 の「🔴 再起動」の理由が 1 つ増える
-- **入力バッファは新規**（出力は #368 / #662-D と同じ場所）
-- **クロックのずれ（drift）は main の推測**。owner は言っておらず実装にも該当なし → **未検証と明記**
-
-**順序への影響**: 入力は「測れるようになってから」だけでなく、**入力自体が測る対象を増やす**。
-**#662-B は一度で終わらず、入力が入った後にもう一度広がる。**
-
-#### §4.P.1 入力の DSL 表面（owner のスケッチ・確定ではない）
-
-> サンプリングも**インプットからオーディオが渡される DSL で表現されるべき**なのでは？
-> `input.rec(…).effect` のように**順番でドライの録音かウェットの録音かも決められる。**
-
-🔴 **§4.A.1 の規則が入力側にもそのまま効く** — `rec` はライン上の要素で、**位置が dry / wet を決める**:
-
-```
-input.rec().effect("Reverb")     ドライを録る
-input.effect("Reverb").rec()     ウェットを録る
-```
-
-**専用のフラグが要らない。** パンチイン / アウトは **`play()` と同じパターン**（owner 提案）で、
-**録音専用の構文も要らない**。
-
-**出口との対称**: `output(宛先, thru, db)` ↔ `rec(パターン, …)`。
-**`thru` = 入力モニターは main の読み**（owner は言っていない）と明示。
-
-**未決**（§9・詳細は着手時に詰める・owner「まだ詳細決めきれないとは思うけど」）:
-`input` の位置づけ（**文の受け手は今 globals / sequences / mixer nodes の 3 種** — 4 番目にするか
-シーケンスの一種か）/ `rec` の引数（`play()` はスライス番号だが録音は 2 値）/ 録ったものの命名（テイク）。
-
-**main の読み**: `input` を #643 の**ソース（feed）の一種**と決めれば、入力ラインは出力ラインと
-同じ土台に乗り、`rec` は `output` と同じ資格の要素になる — **対称性がそのまま実装の形になる**。
-
----
-
-### docs(planning): 設定変数・性能・入力（レコーディング）を地図へ (Sep 3, 2026)
-
-**Issue**: #692 / **正本**: `docs/planning/DEVELOPMENT_MAP.md` §4.H.1・§4.O・§4.P
-
-owner の確認 3 件で、**2 つの欠落と 1 つの分類ミス**が見つかった。
-
-#### ① 設定変数の一覧化（§4.H.1・新設）
-
-owner「設定のところに**変数を取り出して設定する**、とか **MIDI パニックを流すためのボタン**とか入ってる？」
-
-| | 結果 |
-|---|---|
-| MIDI panic | ✅ 入っている（バッチ C・`midi-output.ts:90` 実装済み・**配線のみ**） |
-| 設定変数 | 🔴 **部分的**。#662 が名指しするのは **5 項目**だが、本番ソースの env 変数は **33 個** |
-
-`GetStatus` は**状態だけ**を返す（`session.rs:1349-1360`: version / sample_rate / channels /
-loaded_samples / active_plays / uptime / render_contentions）。**設定値は 1 つも返さない。**
-起動引数として渡せるのは `--audio-device` と `--list-audio-devices` **だけ**。
-
-**#156（prefix 統一）が一覧化の前提**（`ORBITSCORE_*` 5 / `ORBIT_*` 28 の不統一が表に出る）。
-**#694 の実装先が #662 の設定面になる可能性**（`ORBITSCORE_SESSION_LOG` を拡張から渡す手段が無い件）。
-
-#### ② 性能（§4.O・新設）
-
-owner「**マルチスレッドちゃんと使えてる？メモリは有効に使えてる？**」「**性能向上は必要。効率化大事です。**」
-
-🔴 **地図に 1 件も無かった**（grep 0 件）。#667 / #590 / #640 は §4.I に個別の不具合として
-入っていただけで、**性能という軸が存在しなかった**。
-
-**owner の 2 つの問いは、いま答えられない** — スレッド構成はソースから読めるが（cpal RT /
-audio owner `output.rs:128` / capture writer / tokio / supervisor）、**実測が無い**。
-
-| 分かっていること | 実測値 |
-|---|---|
-| メモリは**起動時に固定確保** | 64 stage × sample_rate × channels = **2ch@48k で約 24.6 MB**（8ch で 4 倍・`output.rs:1408`） |
-| instrument は **1 インスタンス 1 child** | Kontakt 6 台 = child 6。**各 child が 1 コアを食い切る**（#667）→ **実質の上限 = コア数** |
-| RT の post-loop | 配列順で**直列**（`output.rs:943-975`）。並列化は未検討 |
-
-**性能は他の裁定の前提**（#663 本文「バッチ B → 本 issue の順。逆にしてはいけない」/
-#667 本文「#663 の前にこれを直さないと、上限だけ外して実際には増やせない」）。
-順序: **#662-A → #662-B（測る）→ #667（直す）→ #663（外す）**。
-
-#### 上限を決めない — owner の 5 語を定数で照合
-
-| owner の語 | 実体 | #663 の対象か |
-|---|---|---|
-| トラック数 | `MAX_INSERT_BUS_STAGES = 64` | ✅ |
-| インスト数 | `MAX_INSTRUMENT_SLOTS = 32` | ✅ |
-| エフェクト数 | ラック内 N に上限定数なし | △ |
-| 🔴 **アウトプット数** | **1 ラインの出口 = 1**（`_sumOutputBus` 単一）/ render bus 16 / Link ch 64 | **1 と 16 は #663 に無い** → **§4.A.1 の裁定（複数 `output`）と正面から衝突** |
-| パス数 | send は stage 64 に従属 | ✅ |
-
-#### ③ レコーディング = 入力の録音（§4.P・新設）— main の分類ミス
-
-owner「**いやインプットの話したじゃん**」「**リアルタイムサンプリングが自然と Opcode Vision や、
-Ableton・Bitwig のようなレコーディング機能になるはずです**」。
-
-🔴 **#679 は「レコーディング機能の前段」ではなく、レコーディング機能そのもの。**
-昨日のコメントに「Ableton, Bitwig, Opcode Vision 的なオーディオの扱い」と**既にあった**のに、
-地図は引用だけ載せて**結論を書いていなかった**。§4.L の 1 行に埋もれ、「録音」の語で引けなかった。
-
-**スコープへの影響**: 「フレーズを 1 つ録る」だけ作ると、後で録音機能を別に足すことになる。
-
-**「録る」を 3 種に分離**（混ざっていた）:
-
-| | 何を記録するか | 節 |
-|---|---|---|
-| `.orbslog` + `replay --render` | **評価の記録**（因果）→ 後から音を作り直す | §4.A.3 |
-| capture / `output(<file>)` | **出力の音**（現象） | §4.A.3 |
-| **#679** | **入力の音**（楽器の演奏）→ DSL の素材 | **§4.P** |
-
-🔴 **capture は engine 起動時にしか指定できない**（`extension.ts:2130` で env・
-`StartCapture` / `StopCapture` の RPC は **0 件**）。**演奏中に録る操作が無い**ので、
-書き出し側も「レコーディング機能」として未完成。
-
----
-
-### docs(planning): 退行を守る軸を地図に追加 — 譜面 108 本のうち音が固定されているのは 7 本 (Sep 3, 2026)
-
-**Issue**: #692 / **正本**: `docs/planning/DEVELOPMENT_MAP.md` §4.G.1
-
-owner の指摘「**E2E で既存機能が壊れてないかを守る件は書かれてる？**」→ **書かれていなかった。**
-§4.G は「語が E2E に出てくるか」（カバレッジ）だけを扱っていた。
-
-#### 🔴 なぜ致命的か
-
-**本日の裁定はほぼ全部が既存の意味を変える**うえ、全部「**評価は成功するのに音が変わる**」形:
-
-| 裁定 | 壊れ方 |
-|---|---|
-| `send` を dB へ | `send("rev", 0.3)` の音量が変わる。**エラーは出ない** |
-| フェーダー = 出口の属性 | `global.gain()` が効くようになる = **今の音と変わる** |
-| master = 出力先の 1 つ | 既定が保てないと**無音か二重** |
-| `output` の `thru` | 既定 `false` なら不変の**はず**（要検証） |
-
-`ok` でも `get_log` の ERROR でも捕まらない。**capture の数値でしか見えない。**
-
-#### 実測: 譜面 108 本のうち、音のレベルで固定されているのは 7 本
-
-| 置き場 | 本数 | 音を固定しているか |
-|---|---|---|
-| `test-assets/scores/` | 66 | ❌ **パースに使うだけ** |
-| `examples/` | 24 | `examples/22` の 1 本だけ |
-| `test-assets/verify-fixtures/` | 4 | ✅ Leg 1 / Leg 2 |
-| `tests/fixtures/mcp-e2e/` | 2 | ✅ gated |
-| その他 | 12 | ❌ |
-
-🔴 **mixer（sum / aux / send）・instrument・プラグイン・`global.gain()` を通る譜面の
-「この音になる」は 1 本も固定されていない** — **本日の裁定が触るのは全部そこ**。
-
-#### owner 指示（逐語・§4.G.1 の冒頭に置いた）
-
-> また**変異テストが増えて時間ばかり浪費するのは絶対に避けたい**ので E2E テストは重要です。
-> **変異テストより「実際に動くか？」を、MCP 経由、つまりユーザーと同じ形でテストする**のが重要です。
-
-これは新方針ではなく **CLAUDE.md の規律の再確認**（地図が引いていなかった）。
-検証手段の順位: 1 仕様 → **2 MCP 経由 E2E**（カバレッジ = §4.G / 退行 = §4.G.1）→ 3 機能テスト →
-**4 変異検証 = PR 外**（無人 `--in-diff` か週次）。
-
-🔴 **実証が今日の議論のど真ん中**: `global.gain()` が instrument に効かない欠陥を、
-**変異 35 件（80 分超）もユニット 2149 件も 1 件も捕まえず、キャプチャ E2E の RMS 実測だけが捕まえた**。
-それが **#649** — **今日その設計（フェーダー = 出口のレベル）で消そうとしている当のバグ**。
-
-#### 実装前に固定するもの（順序の条件）
-
-`send` の現在の音 / `global.gain()` の現在の音（**効いていない状態 = バグの記録**）/
-`output` を書かない譜面の宛先 / `seq.gain()`。**固定していないと「変わったのが意図した分だけか」を判定できない。**
-
-受け入れ基準は #649 本文の実測がそのまま使える: `global.gain(-6)` で instrument の RMS が
-**0.08864 → 0.044**（半分）になること。
-
-#### #543 の分割を提案
-
-#543 の「オフライン決定論層（同一 `.orbs` → ビット一致 PCM・CI 常駐）」が**退行の固定そのもの**。
-**(a) 回帰の固定 / (b) 二重台帳（カバレッジ）**に分け、**(a) を裁定の実装より先**に置いた。
-
----
-
-### docs(planning): 書き出しの筋 — replay がライブとオフラインの橋である (Sep 3, 2026)
-
-**Issue**: #692 / **正本**: `docs/planning/DEVELOPMENT_MAP.md` §4.A.3
-
-owner の問い: 「**アウトプットの音は全てレンダリングできるように。各トラックパラでレンダリングしたり、
-マスターをレンダリングしたり**」「**順番ごとに実行するのをどうオフラインレンダリングに繋ぐか**」
-「ライブコーディングで作ったものを録音する時にオフラインが要る（例: **840 / 1260**）」。
-
-#### 🔴 答えは既に設計にあった
-
-`SESSION_LOG_SPEC_v1.md` §4:
-
-```
-orbitscore replay <log> --render out.wav   # オフラインレンダー（faster-than-realtime）
-```
-
-> リプレイヤーはエンジンから見て**もう一人の評価送信者**（VS Code 拡張と同じ口）。
-> **エンジン側に専用経路を作らない。** 駆動は **`transport` 時刻**。
-
-**owner の「タイミングが合わない」懸念は、Known Decision で原理的に解けている** —
-「リプレイは**音楽時間駆動**（三重スタンプ）」（棄却案: 壁時計駆動・`IMPLEMENTATION_INSTRUCTIONS.md:138`）。
-
-#### 地図の分類ミスを訂正
-
-🔴 **#241（L2 replayer CLI）を §4.M「研究トラック・本番後に実施」に置いていたのは誤り。**
-WCTM の文脈でそう書かれていたのを写しただけで、**実際にはライブ → オフラインの橋**である。
-**§4.A へ移した**（§2 の全体図も `#598 P2 → #241 replay → #598 P3`）。
-
-#### 書き出しの経路は 3 つあり、違いは「時計」であって「宛先」ではない
-
-| 経路 | 何を書くか | 時計 | 状態 |
-|---|---|---|---|
-| capture（`ORBIT_CAPTURE_WAV`） | **master 1 本**（`render_block` の post 後 `hw`） | 実時間 | ✅ 実装済み |
-| #598 render | per-bus stem | 高速 | **P1 のみ ✅**（`10f3594c`・PR #612）/ P2・P3 ○ |
-| `replay --render` | セッション全体（評価列） | 高速 | spec のみ（#241 ○） |
-
-**`replay --render` と #598 は別ではなく積** — `--render` = 何を流すか（ログ = transport 順の評価列）、
-#598 P2 = どこへ書くか + 誰が駆動するか。**順序: #598 P2 → #241 → #598 P3。**
-
-🔴 **owner の要求のうち「演奏しながら各トラックをパラで」は今日どこにも無い**（capture は master 1 本、
-#598 はオフライン）。`thru: true` が効く場所であり、§7 に新規候補として立てた。
-
-#### 840 / 1260 を録るのに足りないもの
-
-① replayer（#241）② オフライン driver（#598 P2）③ per-bus（P1 ✅）
-④ 🔴 **editor 経路のファイル名伝達** — `SESSION_LOG_SPEC_v1.md:80`「editor 経路は現状エンジンへ
-ファイル名を渡さない（`setDocumentDirectory` はディレクトリのみ）ため v1 は
-**`untitled.<timestamp>.orbslog`** フォールバック。**follow-up**」。
-**840 / 1260 はエディタ経路なので、ログの名前が付かず後から特定できない。④ だけ issue が無い。**
-
-#### instrument が render bus を拒否している理由
-
-**出口の問題ではない。** #598 P3（instrument child のオフライン駆動）が要るため。
-**出口を一般化しても消えない**（P3 まで `output(n)` は「受理して無音」）。
-
-#### 追加の裁定（owner 2026-09-03）
-
-**A** `send` は残す（機能は `output` と同じ意味論だが名前が直感的）/ **B** `send` も dB へ統一
-（🔴 移行の手当ては未決）/ **C** master は `output` の出力先の 1 つ。
-
----
-
-### docs(planning): 出口の一般化 — owner 裁定 4 件と、機能の持ち方の原理 (Sep 3, 2026)
-
-**Issue**: #692 / **正本**: `docs/planning/DEVELOPMENT_MAP.md` §1b・§4.A.1・§4.N
-
-地図の初版を owner が読み、**昨日・本日の議論の帰結が入っていない**と指摘。順に反映した。
-
-#### 入っていなかったもの
-
-1. **#681（GUI）が §4 に節を持っていなかった** — §1 と §8 に 1 行ずつあるだけで「いつ・何の後にやるか」が読めなかった → **§4.N** を新設
-2. **LinkAudio のプラグイン化と「スルー」が繋がっていなかった** — 別々の節に並んでいるだけ
-3. **「機能の持ち方」という原理が §4.E に埋まっていた** → **§1b** として上位へ
-
-#### 🔴 §1b — コアは最小に保ち、機能はプラグインで足す
-
-owner「オーディオエンジンの**コア機能以外のプラグイン化・モジュール化や DSL のプラグイン化**などで
-**拡張性を担保してかつライセンス問題を解決**しましょう」。
-
-**この立場は 2026-06-30 から存在していた** — `POST_2.0_PLUGIN_STRATEGY` §1「規格に乗れる所は乗り、
-自分たちにしか作れない fundamental に希少な開発リソースを寄せる。**§2–§7 はすべてこのメタ原則の
-インスタンス**」（引用を一次資料で照合済み）。地図の初版はこれを 1 領域の話として埋めていた。
-
-**ライセンスは目的ではなく帰結。** #671 の拡張点が入れば、LinkAudio は CLAP へ・Link テンポは
-DSL Plugin へ出せて **engine 本体から GPL が消える**（「隔離」から「外へ出す」へ）。
-**未決**: 「コア」とは何か（`PLUGIN_STRATEGY` は fundamental に audio DSL を含むが、
-#671 はその語彙をプラグインで足すと言う。線は #672 で owner 裁定）。
-
-#### 🔴 出口の一般化（§4.A.1）— owner 裁定 4 件
-
-> ラインは要素の列であり、`output(宛先, スルー, レベル)` もその 1 要素。**宛先に特別なものは無い**
-> （master / sum / aux / Link / デバイス ch は同じ軸）。**フェーダーは出口のレベルであって段ではない。**
-
-| # | 裁定 | 帰結 |
-|---|---|---|
-| ① スルーの既定 | **`false`** | 既存譜面の意味が変わらない |
-| ② レベルの単位 | **dB** | 🔴 `send("rev", 0.3)` の線形が例外 = **静かに壊れる**（0.3 は線形 -10.5 dB / dB では +0.3 dB）。移行は未決 |
-| ③ `output` が aux を指せるか | **指せる** | `send` との差 4 点の最後が消え、**`send` は糖衣になる**（畳むかは未裁定） |
-| ④ フェーダーの持ち方 | **`output` の level。`gain` は残す** | `gain` = ライン全体 / `output(db:)` = その宛先へ行く分 |
-
-未決: ⑤ フラグ名（main 推奨 `thru`）/ `send` を畳むか / ② の移行。
-
-#### 検証で分かったこと（すべて一次情報）
-
-- 🔴 **#649 のバグの正体**: master gain は core の render 内で per-frame ramp（`scheduler.rs:444-455`）、
-  その**後**に post-loop が stage を `hw` へ**素のまま**加算（`output.rs:958` `*dst += *s`）。
-  一方 `send` は同じ合流点で `*d += *s * send.gain`（`:965`）。**同じ場所で send だけが乗算を持つ。**
-  level を出口の属性にすると乗算が合流点に固定され、**位置ずれがクラスとして起きえなくなる**
-- **「宛先に特別なものは無い」は 2026-07-18 に決定済み**（SC.2.1 `var master = mix.output(1, 2)`・
-  規範 (4)「バス自身もレシーバ」・決定 #78「master は出力エンドポイントの予約名」）。**未実装なだけ**
-- **AUX の「戻り」は `send` の性質ではなく aux バス自身の性質**（MX.1）。`send` と `output` を分ける理由にならない
-- **main の読みが 1 点外れた**: `GainManager` は「ライン全体」でも「master への送り」でもなく、
-  `calculateEventGain` で**イベント生成時に畳み込む**（`event-scheduler.ts:106`）= 適用点が発音点
-
-#### engine 側に残る制約（規則では消えない・#611 の仕事）
-
-トポロジの固定順と sum ネスト不可（MX.4）/ master のステレオ固定（`transport.rs:60`）/
-LinkAudio とミキサーの相互排他（PH.5）/ PDC 無し（#634）。
-
----
-
-### docs(planning): 開発計画の地図を制定し、issue をその写像にする (Sep 3, 2026)
-
-**Issue**: #692 / **正本**: `docs/planning/DEVELOPMENT_MAP.md`（Fable 起案・611 行）
-
-#### なぜ作ったか
-
-2026-09-03 の 1 日で main が**同じ内容の issue を 2 回重複起票**した（#686→#218 / #680→#506+#522）。
-2 回目は 1 回目の反省を `PROJECT_RULES.md` に書いた**直後**。
-
-owner 判断: **注意力の問題ではなく、121 件を並列に並べたまま順序も包含関係も無いことが原因。
-地図を作り、issue をそれに合わせる**（既存番号は活かす = 案 A）。
-
-#### 地図が持つもの
-
-§0 運用規則（**番号ではなく地図の見出しで探す**）/ §1 再設計しない確定事項 / §2 依存グラフ /
-§3 リリースまでの筋 / §4 領域別 13 節 / §5 Epic 裁定（**Epic issue は作らない。地図の節がその役割を持つ**）/
-§6 統合一覧 / §7 新規候補 / §8 確定事項への提案 / §9 未確認一覧。
-
-#### main の受け入れ検証で確認した 3 件
-
-| Fable の主張 | 検証 |
-|---|---|
-| #506 のメソッド形は撤回済み → #680 を正本に | ✅ SC.10 規範 (4)「メソッド形で指す形は**撤回する**」（SC.10.9・owner 確定 2026-08-27） |
-| #546 の「復元側は 1 行も無い」は古い | ✅ `packages/engine/src/core/project-state-store.ts:122` が `manifest.states[key]` を読む |
-| #197 と #656 が矛盾 | ✅ #656 本文に「**vsix は基本リリースしない。**」 |
-
-🔴 **3 件目は main の誤り** — #197 に `release-gate` を付けたとき #656 と突き合わせていなかった。ラベルを外した。
-
-#### owner 決定 2 件（地図に反映）
-
-1. **配布は `.app` と `.vsix` の両方**（Marketplace 経由かは未決）→ #656 の「vsix は出さない」を撤回
-2. 🔴 **`must-fix` ラベルを新設** — 「リリースゲートというかバグフィックスで必ずやらないとダメなやつ」。
-   `release-gate`（出荷物が成立しない）とは軸が違う。#661 / #606 / #645 / #649 / #385 に付与
-
----
-
-### docs(index): 棚卸し記録を INDEX の Planning 表に載せる (Sep 3, 2026)
-
-**追従元**: PR #690（マージコミット `84a2e95`）/ **Issue**: #689
-
-PR #690 が追加した `docs/planning/2026-09-03-issue-triage.md` が
-`docs/core/INDEX.md` の Planning 表（`docs/core/INDEX.md:213-217`）に載っておらず、
-**目次から辿れない**状態だった。INDEX は CLAUDE.md が「すべてのドキュメントの目次（必読）」と
-位置づけている入口なので、そこに無い文書は次の棚卸しで**もう一度同じ調査をやり直すことになる**。
-
-行を 1 本足し、クラスタ C1〜C6 の見出しとラベル運用（`PROJECT_RULES.md` §1b）への導線を書いた。
-
-**追従不要と判断したもの**: PR #690 は `packages/` / `rust/` を 1 行も触っていないため、
-DSL 仕様（`docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`）・ユーザー向け語彙
-（`sites/user/`）・内部構造（`sites/dev/`）はいずれも変化していない。
-
-### chore(meta): issue 棚卸し 164→120 とラベル運用の制定 (Sep 3, 2026)
-
-**Issue**: #689 / **記録**: `docs/planning/2026-09-03-issue-triage.md`
-
-open issue が 164 件まで溜まり、タイトルだけでは生死が判別できない状態だった。**1 件ずつ実装と
-突き合わせて** 44 件を処理（**164 → 120**）。
-
-#### 🔴 最も古い issue が、最も正しかった
-
-**#218**（2026-05-09）は「閾値超過に気づかないまま WORK_LOG が肥大化する」と予測しており、
-**そのとおり 7.5 倍（14,926 行）になった**。しかも本日 main が同じ問題を **#686 として重複起票**
-している（起票前の既存確認を怠った）。**タイトルだけ見れば「古い chore」だった。**
-
-→ 棚卸しの作法を `PROJECT_RULES.md` §1c に明文化した（更新日で判定しない／閉じる根拠を残す／
-残す場合も現存の証拠を残す／起票前に重複を確認する）。
-
-#### 判定が変わった例
-
-**#92（タイムストレッチ選定）**: `rubato` が入っているので完了に見えるが、**rubato はリサンプラ**で
-`fixpitch()` が要求するピッチ保持のストレッチではない。#213 が未実装のまま = **選定は済んでいない**。
-
-#### ラベル運用（`PROJECT_RULES.md` §1b）
-
-🔴 **種別ラベルは足さない。** 164 件中 **162 件がタイトルに Conventional Commits の接頭辞を持つ**ため
-二重管理になる。既存ラベルは **20% にしか付いておらず**、`icmc-blocker` のように**過ぎた期限を
-名前にしたもの**が腐っていた（`legacy:` へ改名）。
-
-新設は 2 枚のみ: **`foundation`**（他の issue の前提）/ **`release-gate`**（リリース前に必要）。
-この 2 枚で「基礎 → その上」の順序が機械的に読め、設計の発注順が決まる。
-
-#### 見えたクラスタ（設計の入力）
-
-個別に着手すると同じ設計を繰り返す群を 6 つ記録した:
-**C1 診断の整合**（#280/#644/#610/#255）/ **C2 プラグインの生存管理**（#418/#626/#637/#342）/
-**C3 daemon 起動の失敗面**（#129/#383/#130/#367）/ **C4 時間の粒度**（#428/#680/#674）/
-**C5 配布**（#656/#197/#184/#385/#659/#321）/ **C6 ミキサーの出力側**（#611/#409/#647/#598）。
-
-🔴 **C4 は不整合が具体的**: パラメータは CLAP も VST3 も**サンプル精度で送れる**のに、
-ノートは今も即時メソッド（`engine_wrap.rs:4455` に明記）。
-
----
-
----
-
 ## Archived sections
 
 Older entries have been archived by month for readability:
@@ -1354,7 +1605,7 @@ Older entries have been archived by month for readability:
 - [2026-06](../archive/WORK_LOG_2026-06.md)
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
-- [2026-09（前半・09-01〜09-02）](../archive/WORK_LOG_2026-09.md)
+- [2026-09（前半・09-01〜09-03）](../archive/WORK_LOG_2026-09.md)
 
 ## 2026-09-03: マージ後の head ブランチは自動削除（規則を owner の決定に合わせる）
 

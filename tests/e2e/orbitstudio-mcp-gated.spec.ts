@@ -40,6 +40,7 @@
  */
 
 import { spawn, execFileSync, type ChildProcess } from 'child_process'
+import { randomUUID } from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -53,11 +54,36 @@ import {
 } from '../../packages/vscode-extension/src/wav-analysis'
 import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
 
-import { countErrors, countLogMarker, errorBaseline, expectNoNewErrors } from './helpers/engine-log'
+import { defaultOutputDeviceName } from './helpers/audio-devices'
+import {
+  countErrors,
+  countLogMarker,
+  newLogLines,
+  errorBaseline,
+  expectNoNewErrors,
+  newErrorLines,
+} from './helpers/engine-log'
+import {
+  captureWindowsFrom,
+  createCaptureClock,
+  prepareCapturePath,
+  quadraticMeanRms,
+  readCaptureForAnalysis,
+  steadyRms,
+  waitForSound,
+  type CaptureSegment,
+} from './helpers/capture-windows'
 import { captureWavPath, createGatedSession, type GatedCatalog } from './helpers/gated-session'
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
 import { rackChildPidsFromLog } from './helpers/rack-child-pid'
-import { logAnchor, logAppendedSince, relativeDelta, runScore } from './helpers/run-score'
+import {
+  logAnchor,
+  logAppendedSince,
+  relativeDelta,
+  runScore,
+  startEngineForRun,
+  waitForEngineState,
+} from './helpers/run-score'
 import { OUTPUT_LINE_GOLDENS, STEADY_CAPTURE } from './output-line-expectations'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
@@ -308,6 +334,49 @@ function processExists(pid: number): boolean {
   }
 }
 
+/**
+ * Find daemon processes without assuming which checkout supplied the binary.
+ *
+ * SAFETY: keep both executable-name boundaries. A broad `daemon` / `audio`
+ * pattern could include unrelated user processes. K3 never signals this whole
+ * list: it snapshots the list before starting its engine and may signal only
+ * the single PID added by that successful start.
+ */
+function orbitAudioDaemonPids(): number[] {
+  try {
+    return execFileSync('pgrep', ['-f', '(^|/)orbit-audio-daemon([[:space:]]|$)'], {
+      encoding: 'utf8',
+    })
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(Number)
+      .filter((pid) => Number.isSafeInteger(pid) && pid > 0)
+  } catch {
+    return []
+  }
+}
+
+function parentPid(pid: number): number {
+  return Number(execFileSync('ps', ['-p', String(pid), '-o', 'ppid='], { encoding: 'utf8' }).trim())
+}
+
+function processCommand(pid: number): string {
+  return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).trim()
+}
+
+function analysisTailRms(
+  analysis: ReturnType<typeof analyzeWavBuffer>,
+  durationSec: number,
+): number {
+  const windows = (analysis.windows ?? []).filter(
+    (window) => window.startSec >= Math.max(0, analysis.durationSec - durationSec),
+  )
+  expect(windows.length, `capture tail ${durationSec}s must contain RMS windows`).toBeGreaterThan(0)
+  // 二乗平均の式は正本を 1 つに保つ（`run-score.ts:127-130` が drift しやすいと警告している式）。
+  return quadraticMeanRms(windows)
+}
+
 /** Catalog drops create files here; bypass and standard-stage drops must not. */
 function stateFileCount(statesDirectory: string): number {
   if (!fs.existsSync(statesDirectory)) return 0
@@ -348,6 +417,70 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+type IsolatedOrbitStudioOptions = {
+  tmpPrefix: string
+  settings: Record<string, unknown> | ((tmpRoot: string) => Record<string, unknown>)
+  env: NodeJS.ProcessEnv
+  portBase: number
+  prepareWorkspace?: (tmpRoot: string) => void | Promise<void>
+}
+
+type IsolatedOrbitStudio = {
+  child: ChildProcess
+  client: McpClient
+  tmpRoot: string
+}
+
+/** Launch one clean OrbitStudio process with the same directory/settings/MCP bootstrap contract. */
+async function launchIsolatedOrbitStudio({
+  tmpPrefix,
+  settings,
+  env,
+  portBase,
+  prepareWorkspace,
+}: IsolatedOrbitStudioOptions): Promise<IsolatedOrbitStudio> {
+  killOrbitStudio()
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), tmpPrefix))
+  const userDataDir = path.join(tmpRoot, 'user-data')
+  const extensionsDir = path.join(tmpRoot, 'extensions')
+  const workspaceSettingsDir = path.join(tmpRoot, '.vscode')
+  fs.mkdirSync(userDataDir, { recursive: true })
+  fs.mkdirSync(extensionsDir, { recursive: true })
+  fs.mkdirSync(workspaceSettingsDir, { recursive: true })
+  const resolvedSettings = typeof settings === 'function' ? settings(tmpRoot) : settings
+  fs.writeFileSync(
+    path.join(workspaceSettingsDir, 'settings.json'),
+    JSON.stringify(resolvedSettings, null, 2) + '\n',
+  )
+  await prepareWorkspace?.(tmpRoot)
+
+  const port = portBase + Math.floor(Math.random() * 200)
+  const child = spawn(
+    path.join(appPath, 'Contents/Resources/app/bin/orbs'),
+    [
+      '--new-window',
+      `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
+      `--user-data-dir=${userDataDir}`,
+      `--extensions-dir=${extensionsDir}`,
+      tmpRoot,
+    ],
+    {
+      env: { ...env, ORBITSCORE_MCP_PORT: String(port) },
+      stdio: 'ignore',
+      detached: false,
+    },
+  )
+
+  try {
+    const client = await pollInitialize(port, { intervalMs: 2000, timeoutMs: 60_000 })
+    return { child, client, tmpRoot }
+  } catch (error) {
+    if (!child.killed) child.kill()
+    fs.rmSync(tmpRoot, { recursive: true, force: true })
+    throw error
+  }
+}
+
 describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', () => {
   let child: ChildProcess | undefined
   let client: McpClient | undefined
@@ -372,20 +505,64 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   let catalogErrorsAfter: number | undefined
   let brokenCatalogPath: string | undefined
 
-  const requireCatalogFixtures = () => {
+  /**
+   * `get_engine_state` から daemon の `GetStatus.output` を取る。
+   *
+   * 🔴 `rms > 0` は「**何らかの**デバイスから音が出た」しか言わない。このマシンは出力が実質
+   * 1 台なので、`orbitscore.audioDevice` の指定が黙って無視されても capture は鳴る
+   * （2026-09-05 の監査で D-0 / D-2 がこの穴を持っていた）。**鳴っているデバイスまで見る。**
+   */
+  const requireDaemonOutput = async (
+    activeClient: McpClient,
+    label: string,
+  ): Promise<Record<string, unknown>> => {
+    const raw = (await activeClient.call('get_engine_state')).text
+    const state = JSON.parse(raw) as Record<string, unknown>
+    expect(state.output, `${label} needs daemon output state: ${raw}`).toBeDefined()
+    return state.output as Record<string, unknown>
+  }
+
+  /** `prepareWorkspace` コールバック経由の代入は TS が narrowing できないので、明示的に弾く。 */
+  const requireKickLoopWorkPath = (): string => {
+    expect(kickLoopWorkPath, 'kick_loop work path must be initialized').toBeDefined()
+    if (!kickLoopWorkPath) throw new Error('main gated phase did not initialize kickLoopWorkPath')
+    return kickLoopWorkPath
+  }
+
+  /**
+   * 🔴 カタログ**パス**だけを要求する。`requireCatalogFixtures()` は名前も要求するが、
+   * 名前は catalog 走査の**結果**から後で代入されるので、走査中に呼ぶと必ず undefined で落ちる
+   * （2026-09-05 に実機で踏んだ・`/simplify` の `prepareWorkspace` 化で narrowing が消えた分の対処）。
+   */
+  const requireCatalogPaths = () => {
     expect(catalogClapSynthPath, 'catalog CLAP synth path must be initialized').toBeDefined()
     expect(catalogClapEffectPath, 'catalog CLAP effect path must be initialized').toBeDefined()
     expect(catalogVst3SynthPath, 'catalog VST3 synth path must be initialized').toBeDefined()
     expect(catalogVst3EffectPath, 'catalog VST3 effect path must be initialized').toBeDefined()
+    if (
+      !catalogClapSynthPath ||
+      !catalogClapEffectPath ||
+      !catalogVst3SynthPath ||
+      !catalogVst3EffectPath
+    ) {
+      throw new Error('main gated phase did not initialize catalog fixture paths')
+    }
+    return {
+      clapSynthPath: catalogClapSynthPath,
+      clapEffectPath: catalogClapEffectPath,
+      vst3SynthPath: catalogVst3SynthPath,
+      vst3EffectPath: catalogVst3EffectPath,
+    }
+  }
+
+  /** パス側の検査は `requireCatalogPaths()` に委ねる（判定を 2 箇所に置かない）。 */
+  const requireCatalogFixtures = () => {
+    const paths = requireCatalogPaths()
     expect(catalogClapSynthName, 'catalog CLAP synth name must be initialized').toBeDefined()
     expect(catalogClapEffectName, 'catalog CLAP effect name must be initialized').toBeDefined()
     expect(catalogVst3SynthName, 'catalog VST3 synth name must be initialized').toBeDefined()
     expect(catalogVst3EffectName, 'catalog VST3 effect name must be initialized').toBeDefined()
     if (
-      !catalogClapSynthPath ||
-      !catalogClapEffectPath ||
-      !catalogVst3SynthPath ||
-      !catalogVst3EffectPath ||
       !catalogClapSynthName ||
       !catalogClapEffectName ||
       !catalogVst3SynthName ||
@@ -394,10 +571,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       throw new Error('main gated phase did not initialize catalog fixture state')
     }
     return {
-      clapSynthPath: catalogClapSynthPath,
-      clapEffectPath: catalogClapEffectPath,
-      vst3SynthPath: catalogVst3SynthPath,
-      vst3EffectPath: catalogVst3EffectPath,
+      ...paths,
       clapSynthName: catalogClapSynthName,
       clapEffectName: catalogClapEffectName,
       vst3SynthName: catalogVst3SynthName,
@@ -432,6 +606,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     // 既に別テストがエンジンを起動していると
     // 「engine is already running; requested spawn-only option(s): capture_wav」で弾かれる。
     // capture を要求する時は必ず一度落としてから起動する（#643 E2E 7本がこれで全滅した）。
+    // 🔴 この停止は SIGTERM で、daemon には signal handler が無いため capture の Drop/finalize は
+    // 通常停止でも走らない。解析側の `readCaptureForAnalysis` による data-size 零化が必須である。
     if (captureWav !== undefined) {
       await activeClient.call('stop_engine')
       await waitForEngine(false, 15_000, `${label} stopped before capture start`)
@@ -473,11 +649,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     }
   }
 
-  type InstrumentCaptureSegment = { from: number; to: number }
   type InstrumentCaptureContext = {
     activeClient: McpClient
     catalog: ReturnType<typeof requireCatalogFixtures>
-    segments: Record<string, InstrumentCaptureSegment>
+    segments: Record<string, CaptureSegment>
+    clock(): number
     evaluate(code: string): Promise<void>
     captureSegment(name: string, durationMs?: number, settleMs?: number): Promise<void>
   }
@@ -519,11 +695,14 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       (await activeClient.call('get_log', { lines: 500 })).text
 
     fs.writeFileSync(dslPath, initialDsl.join('\n') + '\n')
+    prepareCapturePath(capturePath)
     await startR28Engine(activeClient, `#643 ${slug} capture engine`, capturePath)
     await sleep(1000)
     const errorsBefore = countErrors(await readLog())
-    const segments: Record<string, InstrumentCaptureSegment> = {}
-    let stopWall = Date.now()
+    const segments: Record<string, CaptureSegment> = {}
+    let soundReady = false
+
+    const clock = createCaptureClock(capturePath)
 
     const evaluate = async (code: string): Promise<void> => {
       const result = await activeClient.call('evaluate_orbitscore', { code })
@@ -534,12 +713,26 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       durationMs = 2000,
       settleMs = 400,
     ): Promise<void> => {
+      if (!soundReady) {
+        await waitForSound(capturePath, {
+          floor: 0.01,
+          intervalMs: 250,
+          timeoutMs: 20_000,
+          label: `#643 ${slug}`,
+        })
+        soundReady = true
+      }
       if (settleMs > 0) await sleep(settleMs)
-      const from = Date.now()
+      const fromWall = Date.now()
+      const fromSec = clock()
       await sleep(durationMs)
-      segments[name] = { from, to: Date.now() }
+      const toSec = clock()
+      const toWall = Date.now()
+      segments[name] = { fromSec, toSec, fromWall, toWall }
     }
 
+    let bodyError: unknown
+    let cleanupFailure: unknown
     try {
       const opened = await activeClient.call('open_file', { path: dslPath })
       expect(opened.isError, opened.text).toBe(false)
@@ -553,50 +746,43 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const run = await activeClient.call('run_selection')
       expect(run.isError, run.text).toBe(false)
 
-      await body({ activeClient, catalog, segments, evaluate, captureSegment })
+      await body({ activeClient, catalog, segments, clock, evaluate, captureSegment })
       const finalLog = await readLog()
       expect(
         countErrors(finalLog),
         `#643 ${slug} must add no ERROR lines. Log tail: ${finalLog.slice(-1600)}`,
       ).toBeLessThanOrEqual(errorsBefore)
+    } catch (error) {
+      bodyError = error
+      throw error
     } finally {
-      await activeClient.call('evaluate_orbitscore', { code: 'global.stop()' })
-      const stopped = await activeClient.call('stop_engine')
-      expect(stopped.isError, stopped.text).toBe(false)
-      stopWall = Date.now()
-      await waitForEngine(false, 15_000, `#643 ${slug} capture engine stopped`)
-      await sleep(1000)
+      try {
+        await activeClient.call('evaluate_orbitscore', { code: 'global.stop()' })
+        const stopped = await activeClient.call('stop_engine')
+        expect(stopped.isError, stopped.text).toBe(false)
+        await waitForEngine(false, 15_000, `#643 ${slug} capture engine stopped`)
+        await sleep(1000)
+      } catch (cleanupError) {
+        if (bodyError === undefined) {
+          cleanupFailure = cleanupError
+        } else {
+          // eslint-disable-next-line no-console
+          console.warn(
+            `[#643 ${slug}] cleanup also failed; reporting the original failure instead:` +
+              `\n${String(cleanupError)}`,
+          )
+        }
+      }
     }
+    if (cleanupFailure !== undefined) throw cleanupFailure
 
-    const capture = fs.readFileSync(capturePath)
+    const capture = readCaptureForAnalysis(capturePath)
     const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
-    const range = (segment: InstrumentCaptureSegment, guardSec = 0.15) => ({
-      fromSec: Math.max(0, analysis.durationSec - (stopWall - segment.from) / 1000 + guardSec),
-      toSec: Math.min(
-        analysis.durationSec,
-        analysis.durationSec - (stopWall - segment.to) / 1000 - guardSec,
-      ),
-    })
-    const windows = (name: string, guardSec = 0.15) => {
-      const segment = segments[name]
-      expect(segment, `#643 ${slug} segment '${name}' must exist`).toBeDefined()
-      const requested = range(segment!, guardSec)
-      const selected = (analysis.windows ?? []).filter(
-        (window) => window.startSec >= requested.fromSec && window.startSec < requested.toSec,
-      )
-      expect(
-        selected.length,
-        `#643 ${slug} segment '${name}' must contain windows`,
-      ).toBeGreaterThan(0)
-      return selected
+    return {
+      ...captureWindowsFrom(analysis, segments, `#643 ${slug}`, capturePath),
+      capture,
+      segments,
     }
-    const rms = (name: string, guardSec = 0.15): number => {
-      const selected = windows(name, guardSec)
-      return Math.sqrt(
-        selected.reduce((sum, window) => sum + window.rms * window.rms, 0) / selected.length,
-      )
-    }
-    return { analysis, capture, range, windows, rms, segments }
   }
 
   afterAll(async () => {
@@ -633,125 +819,98 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     'drives real OrbitStudio end-to-end: diagnostics-on-open, run_selection, live edit, capture verification',
     async () => {
       // ── 1. Setup: clear stray instances, fresh isolated dirs, pick a port ──
-      killOrbitStudio()
-      tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'orbitstudio-mcp-e2e-'))
-      const userDataDir = path.join(tmpRoot, 'user-data')
-      const extensionsDir = path.join(tmpRoot, 'extensions')
-      fs.mkdirSync(userDataDir, { recursive: true })
-      fs.mkdirSync(extensionsDir, { recursive: true })
-      // tmpRoot を workspace にしたため、リポジトリの .vscode/settings.json は効かない。
-      // autoStartConfiguredRustEngine は保存済み audioDevice が無いと即 return するので、
-      // デバイス名の存在確認をスキップするセンチネル __default__ を設定し、
-      // マシン固有のデバイス名に依存せず拡張の auto-start を有効化する。
-      const workspaceSettingsDir = path.join(tmpRoot, '.vscode')
-      fs.mkdirSync(workspaceSettingsDir, { recursive: true })
-      fs.writeFileSync(
-        path.join(workspaceSettingsDir, 'settings.json'),
-        JSON.stringify(
-          {
-            'orbitscore.audioDevice': '__default__',
-            'orbitscore.engineDebug': false,
-          },
-          null,
-          2,
-        ) + '\n',
-      )
-      const captureWavFile = captureWavPath(tmpRoot, 'capture')
-      // Scratch copy of the kick-loop fixture (basename preserved so the
-      // languageId/path assertions below still hold): save_file writes here,
-      // inside the tmpRoot that afterAll removes, instead of the tracked fixture.
-      //
-      // #528: the copy MUST reproduce the fixture's directory depth. The fixture
-      // deliberately uses `audioPath("../../../test-assets/audio")` to prove that
-      // `setDocumentDirectory` resolves relative paths against the edited file's
-      // own directory — that relative form is the assertion, not an accident.
-      // Copying it to a flat tmpRoot (the #392 behaviour) made `../../../` climb
-      // out to `/var/folders/<x>/test-assets/audio`, so kick.wav was never found
-      // (`[SAMPLE_NOT_FOUND]`) and the capture came back silent — the suite's most
-      // valuable assertion was failing for a harness reason, unnoticed.
-      //
-      // Recreating `tests/fixtures/mcp-e2e/` under tmpRoot keeps the relative
-      // resolution genuinely exercised (now rooted at tmpRoot instead of the repo).
-      // 実プラグインを attach する前に CLAP oracle を release でビルドし直す
-      // （定数の doc を参照 — 古いバンドルを検証してしまう事故が実際に起きた）。
-      for (const script of [CLAP_TEST_SYNTH_BUNDLE_SCRIPT, CLAP_TEST_EFFECT_BUNDLE_SCRIPT]) {
-        execFileSync('/bin/bash', [script, '--release'], {
-          cwd: path.dirname(script),
-          encoding: 'utf8',
-        })
-      }
-      const vst3SynthPath = execFileSync(
-        '/bin/bash',
-        [VST3_SYNTH_PACKAGE_SCRIPT, 'release', 'mcp-e2e'],
-        { encoding: 'utf8' },
-      ).trim()
-      const vst3EffectPath = execFileSync('/bin/bash', [VST3_EFFECT_PACKAGE_SCRIPT, 'release'], {
-        encoding: 'utf8',
-      }).trim()
-      fs.mkdirSync(USER_CLAP_PLUGIN_DIR, { recursive: true })
-      fs.mkdirSync(USER_VST3_PLUGIN_DIR, { recursive: true })
-      catalogClapSynthPath = GATED_PLUGIN_FIXTURE_PATHS.clapSynth
-      catalogClapEffectPath = GATED_PLUGIN_FIXTURE_PATHS.clapEffect
-      catalogVst3SynthPath = GATED_PLUGIN_FIXTURE_PATHS.vst3Synth
-      catalogVst3EffectPath = GATED_PLUGIN_FIXTURE_PATHS.vst3Effect
-      brokenCatalogPath = GATED_PLUGIN_FIXTURE_PATHS.brokenClap
-      // 🔴 symlink 先を tmp に置かない: 実行後に tmp が消えると標準ディレクトリに
-      // **壊れたリンクが残り**、次回以降のスキャンに出続ける（今回直した stale bundle と
-      // 同じ性質）。リポジトリ内のチェックイン済み fixture を指せば、リンクは常に有効な
-      // まま「ロードできないバンドル」であり続ける — scanner に見せたい失敗は
-      // 「ロード不能」であって「リンク切れ」ではない。
-      const brokenCatalogSourcePath = BROKEN_CATALOG_FIXTURE_SOURCE
-      replaceGatedPluginFixtureSymlink(CLAP_TEST_SYNTH_PATH, catalogClapSynthPath)
-      replaceGatedPluginFixtureSymlink(CLAP_TEST_EFFECT_PATH, catalogClapEffectPath)
-      replaceGatedPluginFixtureSymlink(vst3SynthPath, catalogVst3SynthPath)
-      replaceGatedPluginFixtureSymlink(vst3EffectPath, catalogVst3EffectPath)
-      replaceGatedPluginFixtureSymlink(brokenCatalogSourcePath, brokenCatalogPath)
-
-      const fixtureRelDir = path.dirname(path.relative(REPO_ROOT, KICK_LOOP_FIXTURE))
-      const workFixtureDir = path.join(tmpRoot, fixtureRelDir)
-      fs.mkdirSync(workFixtureDir, { recursive: true })
-      kickLoopWorkPath = path.join(workFixtureDir, path.basename(KICK_LOOP_FIXTURE))
-      fs.copyFileSync(KICK_LOOP_FIXTURE, kickLoopWorkPath)
-      // The audio the fixture's relative path must land on, mirrored at the same
-      // depth from tmpRoot as it sits from REPO_ROOT.
-      workAudioDir = path.join(tmpRoot, 'test-assets/audio')
-      fs.mkdirSync(workAudioDir, { recursive: true })
-      fs.copyFileSync(
-        path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
-        path.join(workAudioDir, 'kick.wav'),
-      )
-      const port = 39400 + Math.floor(Math.random() * 200)
       // Fixtures now live in the standard per-user plugin directories. Remove
       // ORBIT_PLUGIN_PATH even when inherited from the invoking shell so this E2E
       // cannot silently fall back to OrbitScore's extra scan-path escape hatch.
       const appEnv = { ...process.env }
       delete appEnv.ORBIT_PLUGIN_PATH
 
-      // ── 2. Launch: `orbs` CLI with the extension in dev mode ──
-      const orbsBin = path.join(appPath, 'Contents/Resources/app/bin/orbs')
-      child = spawn(
-        orbsBin,
-        [
-          '--new-window',
-          `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
-          `--user-data-dir=${userDataDir}`,
-          `--extensions-dir=${extensionsDir}`,
-          // `evaluate_orbitscore` は workspace root を documentDirectory として渡すので、
-          // プロジェクト（project.yaml / states/）を置く tmpRoot を workspace として開く。
-          // これはユーザーが曲フォルダを開く実際の使い方とも一致する。
-          tmpRoot,
-        ],
-        {
-          env: {
-            ...appEnv,
-            ORBITSCORE_MCP_PORT: String(port),
-          },
-          stdio: 'ignore',
-          detached: false,
+      // tmpRoot を workspace にしたため、リポジトリの .vscode/settings.json は効かない。
+      // autoStartConfiguredRustEngine は保存済み audioDevice が無いと即 return するので、
+      // デバイス名の存在確認をスキップするセンチネル __default__ を設定し、
+      // マシン固有のデバイス名に依存せず拡張の auto-start を有効化する。
+      const launched = await launchIsolatedOrbitStudio({
+        tmpPrefix: 'orbitstudio-mcp-e2e-',
+        settings: {
+          'orbitscore.audioDevice': '__default__',
+          'orbitscore.engineDebug': false,
         },
-      )
+        env: appEnv,
+        portBase: 39400,
+        prepareWorkspace: (isolatedRoot) => {
+          // Scratch copy of the kick-loop fixture (basename preserved so the
+          // languageId/path assertions below still hold): save_file writes here,
+          // inside the tmpRoot that afterAll removes, instead of the tracked fixture.
+          //
+          // #528: the copy MUST reproduce the fixture's directory depth. The fixture
+          // deliberately uses `audioPath("../../../test-assets/audio")` to prove that
+          // `setDocumentDirectory` resolves relative paths against the edited file's
+          // own directory — that relative form is the assertion, not an accident.
+          // Copying it to a flat tmpRoot (the #392 behaviour) made `../../../` climb
+          // out to `/var/folders/<x>/test-assets/audio`, so kick.wav was never found
+          // (`[SAMPLE_NOT_FOUND]`) and the capture came back silent — the suite's most
+          // valuable assertion was failing for a harness reason, unnoticed.
+          //
+          // Recreating `tests/fixtures/mcp-e2e/` under tmpRoot keeps the relative
+          // resolution genuinely exercised (now rooted at tmpRoot instead of the repo).
+          // 実プラグインを attach する前に CLAP oracle を release でビルドし直す
+          // （定数の doc を参照 — 古いバンドルを検証してしまう事故が実際に起きた）。
+          for (const script of [CLAP_TEST_SYNTH_BUNDLE_SCRIPT, CLAP_TEST_EFFECT_BUNDLE_SCRIPT]) {
+            execFileSync('/bin/bash', [script, '--release'], {
+              cwd: path.dirname(script),
+              encoding: 'utf8',
+            })
+          }
+          const vst3SynthPath = execFileSync(
+            '/bin/bash',
+            [VST3_SYNTH_PACKAGE_SCRIPT, 'release', 'mcp-e2e'],
+            { encoding: 'utf8' },
+          ).trim()
+          const vst3EffectPath = execFileSync(
+            '/bin/bash',
+            [VST3_EFFECT_PACKAGE_SCRIPT, 'release'],
+            {
+              encoding: 'utf8',
+            },
+          ).trim()
+          fs.mkdirSync(USER_CLAP_PLUGIN_DIR, { recursive: true })
+          fs.mkdirSync(USER_VST3_PLUGIN_DIR, { recursive: true })
+          catalogClapSynthPath = GATED_PLUGIN_FIXTURE_PATHS.clapSynth
+          catalogClapEffectPath = GATED_PLUGIN_FIXTURE_PATHS.clapEffect
+          catalogVst3SynthPath = GATED_PLUGIN_FIXTURE_PATHS.vst3Synth
+          catalogVst3EffectPath = GATED_PLUGIN_FIXTURE_PATHS.vst3Effect
+          brokenCatalogPath = GATED_PLUGIN_FIXTURE_PATHS.brokenClap
+          // 🔴 symlink 先を tmp に置かない: 実行後に tmp が消えると標準ディレクトリに
+          // **壊れたリンクが残り**、次回以降のスキャンに出続ける（今回直した stale bundle と
+          // 同じ性質）。リポジトリ内のチェックイン済み fixture を指せば、リンクは常に有効な
+          // まま「ロードできないバンドル」であり続ける — scanner に見せたい失敗は
+          // 「ロード不能」であって「リンク切れ」ではない。
+          const brokenCatalogSourcePath = BROKEN_CATALOG_FIXTURE_SOURCE
+          replaceGatedPluginFixtureSymlink(CLAP_TEST_SYNTH_PATH, catalogClapSynthPath)
+          replaceGatedPluginFixtureSymlink(CLAP_TEST_EFFECT_PATH, catalogClapEffectPath)
+          replaceGatedPluginFixtureSymlink(vst3SynthPath, catalogVst3SynthPath)
+          replaceGatedPluginFixtureSymlink(vst3EffectPath, catalogVst3EffectPath)
+          replaceGatedPluginFixtureSymlink(brokenCatalogSourcePath, brokenCatalogPath)
 
-      client = await pollInitialize(port, { intervalMs: 2000, timeoutMs: 60_000 })
+          const fixtureRelDir = path.dirname(path.relative(REPO_ROOT, KICK_LOOP_FIXTURE))
+          const workFixtureDir = path.join(isolatedRoot, fixtureRelDir)
+          fs.mkdirSync(workFixtureDir, { recursive: true })
+          kickLoopWorkPath = path.join(workFixtureDir, path.basename(KICK_LOOP_FIXTURE))
+          fs.copyFileSync(KICK_LOOP_FIXTURE, kickLoopWorkPath)
+          // The audio the fixture's relative path must land on, mirrored at the same
+          // depth from tmpRoot as it sits from REPO_ROOT.
+          workAudioDir = path.join(isolatedRoot, 'test-assets/audio')
+          fs.mkdirSync(workAudioDir, { recursive: true })
+          fs.copyFileSync(
+            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
+            path.join(workAudioDir, 'kick.wav'),
+          )
+        },
+      })
+      tmpRoot = launched.tmpRoot
+      child = launched.child
+      client = launched.client
+      const captureWavFile = captureWavPath(tmpRoot, 'capture')
 
       // Every plugin declaration in this gated suite follows the human/LLM path:
       // scan the four real fixtures once, then use the scanner's actual display
@@ -765,11 +924,25 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const listedCatalog = await client.call('list_plugins')
       expect(listedCatalog.isError, listedCatalog.text).toBe(false)
       catalogPlugins = JSON.parse(listedCatalog.text) as CatalogPluginEntry[]
+      // 🔴 `prepareWorkspace` コールバック経由の代入になったので TS は narrowing できない。
+      // ここは catalog 走査の**最中**なので、名前まで要求する `requireCatalogFixtures()` ではなく
+      // パスだけを弾く `requireCatalogPaths()` を使う（名前はこの下で代入される）。
+      const fixturePaths = requireCatalogPaths()
       const fixtureEntries = {
-        clapSynth: catalogPluginsAt(catalogPlugins, catalogClapSynthPath, 'clap', 'instrument'),
-        clapEffect: catalogPluginsAt(catalogPlugins, catalogClapEffectPath, 'clap', 'effect'),
-        vst3Synth: catalogPluginsAt(catalogPlugins, catalogVst3SynthPath, 'vst3', 'instrument'),
-        vst3Effect: catalogPluginsAt(catalogPlugins, catalogVst3EffectPath, 'vst3', 'effect'),
+        clapSynth: catalogPluginsAt(
+          catalogPlugins,
+          fixturePaths.clapSynthPath,
+          'clap',
+          'instrument',
+        ),
+        clapEffect: catalogPluginsAt(catalogPlugins, fixturePaths.clapEffectPath, 'clap', 'effect'),
+        vst3Synth: catalogPluginsAt(
+          catalogPlugins,
+          fixturePaths.vst3SynthPath,
+          'vst3',
+          'instrument',
+        ),
+        vst3Effect: catalogPluginsAt(catalogPlugins, fixturePaths.vst3EffectPath, 'vst3', 'effect'),
       }
       expect(fixtureEntries.clapSynth, 'catalog must contain exactly one CLAP synth').toHaveLength(
         1,
@@ -866,6 +1039,79 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // hardcoded to the capture wording (see the unit-level equivalent in
       // engine-lifecycle.spec.ts's `decideStartEngineForAgent` describe).
 
+      // ── #661 D-1: a missing named device is REJECTED and the current device keeps playing ──
+      //
+      // 🔴 owner 裁定 2026-09-05（設計 §3）: **起動時は host 既定へ縮退／ライブ切替は元のデバイスへ復帰**。
+      // 以前の実装は切替でも既定へ移っており、演奏中に "Pro Tools Aggregate" をタイプミスすると
+      // 内蔵スピーカーへ音が移る形だった。いまは切替経路では縮退せず `AUDIO_DEVICE_UNAVAILABLE`
+      // を返し、鳴っているデバイスをそのまま使い続ける。
+      //
+      // This runs before capture is enabled because live device switching is intentionally
+      // rejected while ORBIT_CAPTURE_WAV is active.
+      const missingAudioDevice = `NoSuchDevice-${randomUUID()}`
+      const beforeDeviceFallbackLog = (await client.call('get_log', { lines: 500 })).text
+      const deviceBeforeReject = JSON.parse((await client.call('get_engine_state')).text) as Record<
+        string,
+        unknown
+      >
+      const selectMissingDevice = await client.call('select_audio_device', {
+        device: missingAudioDevice,
+      })
+      expect(
+        selectMissingDevice.isError,
+        `#661 D-1 must reject a missing device instead of falling back: ${selectMissingDevice.text}`,
+      ).toBe(true)
+      expect(selectMissingDevice.text).toContain(missingAudioDevice)
+      await waitUntil(
+        async () => {
+          const log = (await client!.call('get_log', { lines: 500 })).text
+          return log.includes(`audio output device switch to "${missingAudioDevice}" failed`)
+        },
+        { intervalMs: 250, timeoutMs: 10_000, label: '#661 D-1 switch rejection log' },
+      )
+      const afterDeviceFallbackLog = (await client.call('get_log', { lines: 500 })).text
+      // 🔴 「縮退した」痕跡が出ていないこと。出ていたら裁定違反。
+      expect(afterDeviceFallbackLog).not.toContain(
+        `❌ audio device fallback: requested "${missingAudioDevice}"`,
+      )
+      // 増えた ERROR は「切替に失敗した」1 種類だけで、他の ERROR は増えていない。
+      const anyLayerRejectionMarker = `switch to "${missingAudioDevice}" failed`
+      expect(
+        newErrorLines(beforeDeviceFallbackLog, afterDeviceFallbackLog).filter(
+          (line) => !line.includes(anyLayerRejectionMarker),
+        ),
+        '#661 D-1 must add no ERROR other than the rejected switch',
+      ).toEqual([])
+      // D-3 と同じ水準: 「想定内のものが重複していない」まで見る。`ERROR:` 前置は chunk 単位で
+      // 付くので、包含側は前置に依存しない `newLogLines` で数える。
+      expect(
+        newLogLines(beforeDeviceFallbackLog, afterDeviceFallbackLog).filter((line) =>
+          line.includes(`\u274c live device switch to "${missingAudioDevice}" failed`),
+        ),
+        '#661 D-1 must surface the rejection to the user exactly once',
+      ).toHaveLength(1)
+      // 鳴っているデバイスは変わっていない。
+      const deviceAfterReject = JSON.parse((await client.call('get_engine_state')).text) as Record<
+        string,
+        unknown
+      >
+      const deviceNameOf = (state: Record<string, unknown>): unknown =>
+        (state.output as Record<string, unknown> | undefined)?.device_name
+      // 🔴 先にデバイス名が**取れていること**を固定する。`get_engine_state` が `statusError` を
+      // 返すと両辺とも undefined になり、`toBe` が**空振りで通る**（2026-09-05 の監査で指摘）。
+      expect(
+        typeof deviceNameOf(deviceBeforeReject),
+        `#661 D-1 needs the device name before the switch: ${JSON.stringify(deviceBeforeReject)}`,
+      ).toBe('string')
+      expect(
+        typeof deviceNameOf(deviceAfterReject),
+        `#661 D-1 needs the device name after the switch: ${JSON.stringify(deviceAfterReject)}`,
+      ).toBe('string')
+      expect(
+        deviceNameOf(deviceAfterReject),
+        '#661 D-1 must keep the device that was already playing',
+      ).toBe(deviceNameOf(deviceBeforeReject))
+
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -876,8 +1122,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       try {
         await waitForEngine(true, 15_000, 'engine running')
       } catch (err) {
-        // engine が上がらなかった理由は output channel にしか出ない（MCP の
-        // get_engine_state は running の真偽しか返さない）。タイムアウトだけを
+        // engine が上がらなかった理由は output channel にしか出ない（daemon が未起動なら
+        // get_engine_state に output / callback snapshot はまだ無い）。タイムアウトだけを
         // 報告すると毎回ここで手動再現する羽目になるので、失敗時にログを添える。
         let logText = '(unable to retrieve OrbitScore output channel)'
         try {
@@ -929,7 +1175,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // (not diagnostic_case.orbs, opened just before it) is the active document.
       expect(editorState.path?.endsWith('kick_loop.orbs')).toBe(true)
 
-      const kickLoopContent = fs.readFileSync(kickLoopWorkPath, 'utf8')
+      const kickLoopContent = fs.readFileSync(requireKickLoopWorkPath(), 'utf8')
       const kickLoopLines = kickLoopContent.split('\n')
       const totalLines = kickLoopLines.length
 
@@ -964,7 +1210,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const saveRes = await client.call('save_file')
       expect(saveRes.isError, saveRes.text).toBe(false)
 
-      const savedFixtureContent = fs.readFileSync(kickLoopWorkPath, 'utf8')
+      const savedFixtureContent = fs.readFileSync(requireKickLoopWorkPath(), 'utf8')
       expect(
         savedFixtureContent.includes('global.tempo(180)'),
         'save_file did not persist the edit_replace change to disk',
@@ -1455,6 +1701,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // 0 dB -> -6 dB で amplitude は 10^(-6/20) ≈ 0.501 = 約半分。
       const unity = result.rms('unity')
       const half = result.rms('half')
+      expect(
+        ['unity', 'half'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
+      ).toBe(true)
+      expect(unity, 'E2E-1 unity must measure the 0 dB instrument').toBeGreaterThan(0.15)
       expect(unity, 'E2E-1 unity instrument must be audible').toBeGreaterThan(0.05)
       expect(half / unity, `E2E-1 half/unity RMS ratio (${half}/${unity})`).toBeGreaterThan(0.45)
       expect(half / unity, `E2E-1 half/unity RMS ratio (${half}/${unity})`).toBeLessThan(0.55)
@@ -1493,6 +1743,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       const dry = result.rms('dry')
       const wet = result.rms('wet')
+      expect(
+        ['dry', 'wet'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
+      ).toBe(true)
       expect(dry, 'E2E-2 dry instrument must be audible').toBeGreaterThan(0.05)
       expect(wet / dry, `E2E-2 wet/dry RMS ratio (${wet}/${dry})`).toBeGreaterThan(0.45)
       expect(wet / dry, `E2E-2 wet/dry RMS ratio (${wet}/${dry})`).toBeLessThan(0.56)
@@ -1518,12 +1771,19 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'live643.play(1, 1, 1, 1)',
           'LOOP(live643)',
         ],
-        async ({ captureSegment, evaluate, segments }) => {
+        async ({ captureSegment, clock, evaluate, segments }) => {
           await captureSegment('dry')
-          const from = Date.now() - 250
+          const fromSec = clock() - 0.25
+          const fromWall = Date.now() - 250
           await evaluate('live643.effect([Gain(db: -6)])')
           await sleep(500)
-          segments.transition = { from, to: Date.now() }
+          segments.transition = {
+            fromSec,
+            toSec: clock(),
+            fromWall,
+            toWall: Date.now(),
+            overlapsPrevious: true,
+          }
           await captureSegment('wet')
         },
       )
@@ -1533,6 +1793,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const dryPeak = Math.max(...result.windows('dry').map((window) => window.peak))
       const transitionPeak = Math.max(...transition.map((window) => window.peak))
       const transitionFloor = Math.min(...transition.map((window) => window.rms))
+      expect(
+        ['dry', 'wet'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
+      ).toBe(true)
       expect(wet / dry, `E2E-3 post-attach wet/dry ratio (${wet}/${dry})`).toBeGreaterThan(0.45)
       expect(wet / dry, `E2E-3 post-attach wet/dry ratio (${wet}/${dry})`).toBeLessThan(0.56)
       expect(
@@ -1581,6 +1844,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       const dry = result.rms('dry')
       const sumAux = result.rms('sumAux')
+      expect(
+        ['dry', 'sumAux'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
+      ).toBe(true)
       expect(dry, 'E2E-4 dry instrument must be audible').toBeGreaterThan(0.05)
       expect(
         sumAux / dry,
@@ -1621,6 +1887,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const before = result.rms('beforeReplace')
       const after = result.rms('afterReplace')
       const dry = result.rms('replacementDry')
+      expect(
+        ['beforeReplace', 'afterReplace', 'replacementDry']
+          .flatMap((name) => result.windows(name))
+          .every((w) => w.rms >= 0.01),
+      ).toBe(true)
       expect(before, 'E2E-5 pre-replacement effect output must be audible').toBeGreaterThan(0.02)
       expect(after, 'E2E-5 replacement must remain audible').toBeGreaterThan(0.02)
       expect(after / dry, `E2E-5 effected replacement/dry ratio (${after}/${dry})`).toBeGreaterThan(
@@ -1672,6 +1943,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       const dry = result.rms('nextDry')
       const wet = result.rms('nextWet')
+      expect(
+        ['oldWet', 'nextDry', 'nextWet']
+          .flatMap((name) => result.windows(name))
+          .every((w) => w.rms >= 0.01),
+      ).toBe(true)
       expect(dry, 'E2E-6 next tenant must produce dry audio').toBeGreaterThan(0.05)
       expect(wet / dry, `E2E-6 next-tenant wet/dry ratio (${wet}/${dry})`).toBeGreaterThan(0.45)
       expect(wet / dry, `E2E-6 next-tenant wet/dry ratio (${wet}/${dry})`).toBeLessThan(0.56)
@@ -1702,6 +1978,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         },
       )
       const dry = result.rms('dry')
+      expect(result.windows('dry').every((window) => window.rms >= 0.01)).toBe(true)
       expect(result.analysis.soundDetected, JSON.stringify(result.analysis)).toBe(true)
       expect(
         dry,
@@ -3169,13 +3446,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       vst3State.writeInt32LE(7, 4)
       fs.writeFileSync(vst3StatePath, vst3State)
 
+      prepareCapturePath(capturePath)
       const start = await activeClient.call('start_engine', { capture_wav: capturePath })
       expect(start.isError, start.text).toBe(false)
       await waitForEngine(true, 15_000, '#618 E1-E6 engine running')
       await sleep(2500)
-      const captureWallStart = Date.now()
-      let stopWall = captureWallStart
-      const segments: Record<string, { from: number; to: number }> = {}
+      const clock = createCaptureClock(capturePath)
+      const segments: Record<string, CaptureSegment> = {}
+      let bodyError: unknown
+      let cleanupFailure: unknown
       try {
         const baselineLog = (await activeClient.call('get_log', { lines: 500 })).text
         const errorsBefore = countErrors(baselineLog)
@@ -3201,9 +3480,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         })
         const oldChildPids = pluginChildPids(catalog.clapSynthPath)
         expect(oldChildPids.length, 'E1 must observe the old CLAP child PID').toBeGreaterThan(0)
-        segments.e1 = { from: Date.now(), to: 0 }
+        await waitForSound(capturePath, {
+          floor: 0.01,
+          intervalMs: 250,
+          timeoutMs: 20_000,
+          label: '#618 E1-E6',
+        })
+        segments.e1 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
         await sleep(3000)
-        segments.e1.to = Date.now()
+        segments.e1.toSec = clock()
+        segments.e1.toWall = Date.now()
 
         // E2: replace while the LOOP is actively playing. The VST3 state shifts pitch by +7,
         // giving an independent spectral oracle in addition to non-silent RMS.
@@ -3230,9 +3516,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           countErrors(afterReplaceLog),
           `E2 replacement must add no ERROR lines. Log tail: ${afterReplaceLog.slice(-1200)}`,
         ).toBeLessThanOrEqual(errorsBeforeReplace)
-        segments.e2 = { from: Date.now(), to: 0 }
+        segments.e2 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
         await sleep(3000)
-        segments.e2.to = Date.now()
+        segments.e2.toSec = clock()
+        segments.e2.toWall = Date.now()
 
         // E6: the post-replace UI must be the VST3 tenant, not stale bookkeeping for A.
         const errorsBeforeUi = countErrors(afterReplaceLog)
@@ -3293,9 +3580,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // E3: a rest-only pattern must be silent; the old tenant PIDs remain gone.
         await activeClient.call('evaluate_orbitscore', { code: 'cb618.play(0, 0, 0, 0)' })
         await sleep(1000)
-        segments.e3 = { from: Date.now(), to: 0 }
+        segments.e3 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
         await sleep(2500)
-        segments.e3.to = Date.now()
+        segments.e3.toSec = clock()
+        segments.e3.toWall = Date.now()
         expect(oldChildPids.every((pid) => !processExists(pid))).toBe(true)
         expect(pluginChildPids(catalog.clapSynthPath)).toEqual([])
 
@@ -3325,9 +3613,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         ).toBe(true)
         await activeClient.call('evaluate_orbitscore', { code: 'cb618.play(1, 1, 1, 1)' })
         await sleep(1000)
-        segments.e4 = { from: Date.now(), to: 0 }
+        segments.e4 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
         await sleep(3000)
-        segments.e4.to = Date.now()
+        segments.e4.toSec = clock()
+        segments.e4.toWall = Date.now()
 
         // E5: A was automatically registered before A→B; switching back uses that state.
         const projectFile = path.join(root, 'project.yaml')
@@ -3350,58 +3639,58 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           },
           { intervalMs: 200, timeoutMs: 15_000, label: '#618 old state restore log' },
         )
-        segments.e5 = { from: Date.now(), to: 0 }
+        segments.e5 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
         await sleep(3000)
-        segments.e5.to = Date.now()
+        segments.e5.toSec = clock()
+        segments.e5.toWall = Date.now()
 
         const finalLog = (await activeClient.call('get_log', { lines: 500 })).text
         // The deliberate E4 error is the only new error in this scenario.
         expect(countErrors(finalLog)).toBeGreaterThanOrEqual(errorsBefore + 1)
+      } catch (error) {
+        bodyError = error
+        throw error
       } finally {
-        await activeClient.call('evaluate_orbitscore', {
-          code: 'cb618.stop()\nglobal.stop()',
-        })
-        const stopped = await activeClient.call('stop_engine')
-        expect(stopped.isError, stopped.text).toBe(false)
-        stopWall = Date.now()
-        await waitForEngine(false, 15_000, '#618 E1-E6 engine stopped')
-        await sleep(1500)
+        try {
+          await activeClient.call('evaluate_orbitscore', {
+            code: 'cb618.stop()\nglobal.stop()',
+          })
+          const stopped = await activeClient.call('stop_engine')
+          expect(stopped.isError, stopped.text).toBe(false)
+          await waitForEngine(false, 15_000, '#618 E1-E6 engine stopped')
+          await sleep(1500)
+        } catch (cleanupError) {
+          if (bodyError === undefined) {
+            cleanupFailure = cleanupError
+          } else {
+            // eslint-disable-next-line no-console
+            console.warn(
+              '[#618 E1-E6] cleanup also failed; reporting the original failure instead:' +
+                `\n${String(cleanupError)}`,
+            )
+          }
+        }
       }
+      if (cleanupFailure !== undefined) throw cleanupFailure
 
-      const capture = fs.readFileSync(capturePath)
-      const analysis = analyzeWavBuffer(capture, { windowMs: 100 })
-      const audioRange = (segment: { from: number; to: number }) => ({
-        fromSec: Math.max(0, analysis.durationSec - (stopWall - segment.from) / 1000),
-        toSec: Math.min(
-          analysis.durationSec,
-          analysis.durationSec - (stopWall - segment.to) / 1000,
-        ),
-      })
-      const segmentRms = (segment: { from: number; to: number }): number => {
-        const range = audioRange(segment)
-        const windows = (analysis.windows ?? []).filter(
-          (window) => window.startSec >= range.fromSec && window.startSec < range.toSec,
-        )
-        return Math.sqrt(
-          windows.reduce((sum, window) => sum + window.rms * window.rms, 0) /
-            Math.max(1, windows.length),
-        )
-      }
-      const e1Rms = segmentRms(segments.e1!)
-      const e2Rms = segmentRms(segments.e2!)
-      const e3Rms = segmentRms(segments.e3!)
-      const e4Rms = segmentRms(segments.e4!)
-      const e5Rms = segmentRms(segments.e5!)
+      const capture = readCaptureForAnalysis(capturePath)
+      const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
+      const captured = captureWindowsFrom(analysis, segments, '#618 E1-E6', capturePath)
+      const e1Rms = captured.rms('e1', 0)
+      const e2Rms = captured.rms('e2', 0)
+      const e3Rms = captured.rms('e3', 0)
+      const e4Rms = captured.rms('e4', 0)
+      const e5Rms = captured.rms('e5', 0)
       expect(e1Rms, 'E1 CLAP baseline must be non-silent').toBeGreaterThan(0.03)
       expect(e2Rms, 'E2 VST3 replacement must be non-silent').toBeGreaterThan(0.03)
       expect(e3Rms, 'E3 rest pattern must be silent').toBeLessThan(0.005)
       expect(e4Rms, 'E4 failed replacement must leave B sounding').toBeGreaterThan(0.03)
       expect(e5Rms, 'E5 restored A must be non-silent').toBeGreaterThan(0.03)
 
-      const e1Hz = estimateFundamentalHz(capture, audioRange(segments.e1!))
-      const e2Hz = estimateFundamentalHz(capture, audioRange(segments.e2!))
-      const e4Hz = estimateFundamentalHz(capture, audioRange(segments.e4!))
-      const e5Hz = estimateFundamentalHz(capture, audioRange(segments.e5!))
+      const e1Hz = estimateFundamentalHz(capture, segments.e1!)
+      const e2Hz = estimateFundamentalHz(capture, segments.e2!)
+      const e4Hz = estimateFundamentalHz(capture, segments.e4!)
+      const e5Hz = estimateFundamentalHz(capture, segments.e5!)
       expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
       expect(e2Hz, 'E2 VST3 replacement needs a measurable fundamental').toBeDefined()
       expect(e4Hz, 'E4 surviving VST3 needs a measurable fundamental').toBeDefined()
@@ -3474,19 +3763,33 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         }),
       )
 
+      prepareCapturePath(capturePath)
       const start = await activeClient.call('start_engine', { capture_wav: capturePath })
       expect(start.isError, start.text).toBe(false)
       await waitForEngine(true, 15_000, '#625 R-E1-R-E7 engine running')
       await sleep(2500)
 
-      const segments: Record<string, { from: number; to: number }> = {}
+      let soundReady = false
+      const clock = createCaptureClock(capturePath)
+      const segments: Record<string, CaptureSegment> = {}
       const captureSegment = async (name: string): Promise<void> => {
+        if (!soundReady) {
+          await waitForSound(capturePath, {
+            floor: 0.01,
+            intervalMs: 250,
+            timeoutMs: 20_000,
+            label: '#625 R-E1-R-E7',
+          })
+          soundReady = true
+        }
         await sleep(750)
-        segments[name] = { from: Date.now(), to: 0 }
+        const fromWall = Date.now()
+        const fromSec = clock()
         await sleep(3000)
-        segments[name]!.to = Date.now()
+        segments[name] = { fromSec, toSec: clock(), fromWall, toWall: Date.now() }
       }
-      let stopWall = Date.now()
+      let bodyError: unknown
+      let cleanupFailure: unknown
       try {
         // A dry segment with the final sum/aux routing already in place is the
         // reference for both failed replacement (R-E3) and remove (R-E6).
@@ -3755,48 +4058,43 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           countErrors(afterMasterLog),
           `R-E7 master replacement must add no ERROR lines. Log tail: ${afterMasterLog.slice(-1200)}`,
         ).toBeLessThanOrEqual(errorsBeforeMaster)
+      } catch (error) {
+        bodyError = error
+        throw error
       } finally {
-        await activeClient.call('evaluate_orbitscore', {
-          code: 'fx625.stop()\nglobal.stop()',
-        })
-        const stopped = await activeClient.call('stop_engine')
-        expect(stopped.isError, stopped.text).toBe(false)
-        stopWall = Date.now()
-        await waitForEngine(false, 15_000, '#625 R-E1-R-E7 engine stopped')
-        await sleep(1500)
+        try {
+          await activeClient.call('evaluate_orbitscore', {
+            code: 'fx625.stop()\nglobal.stop()',
+          })
+          const stopped = await activeClient.call('stop_engine')
+          expect(stopped.isError, stopped.text).toBe(false)
+          await waitForEngine(false, 15_000, '#625 R-E1-R-E7 engine stopped')
+          await sleep(1500)
+        } catch (cleanupError) {
+          if (bodyError === undefined) {
+            cleanupFailure = cleanupError
+          } else {
+            // eslint-disable-next-line no-console
+            console.warn(
+              '[#625 R-E1-R-E7] cleanup also failed; reporting the original failure instead:' +
+                `\n${String(cleanupError)}`,
+            )
+          }
+        }
       }
+      if (cleanupFailure !== undefined) throw cleanupFailure
 
-      const capture = fs.readFileSync(capturePath)
-      const analysis = analyzeWavBuffer(capture, { windowMs: 100 })
-      // 🔴 区間の両端に 400ms のガードを入れる。壁時計と録音タイムラインの間にはスキューが
+      const capture = readCaptureForAnalysis(capturePath)
+      const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
+      // 🔴 区間の両端に 400ms のガードを入れる。capture 時計の境界にも drain/buffer の遅れが
       // あり、**次の操作の効果が窓の末尾に食い込む**。実測: b 区間の最後の 1 窓だけが
       // 0.232（= dry の打点レベル 0.115/0.5）を拾い、それだけで区間 RMS が 1.5 倍に見えた
       // （他の 5 窓は recoveredB と同じ 0.115 で、機構は正しく効いていた）。
       // ガードは「遷移ではなく定常状態を測る」ためのもので、主張そのものは緩めていない。
       const SEGMENT_GUARD_SEC = 0.4
-      const audioRange = (segment: { from: number; to: number }) => ({
-        fromSec: Math.max(
-          0,
-          analysis.durationSec - (stopWall - segment.from) / 1000 + SEGMENT_GUARD_SEC,
-        ),
-        toSec: Math.min(
-          analysis.durationSec,
-          analysis.durationSec - (stopWall - segment.to) / 1000 - SEGMENT_GUARD_SEC,
-        ),
-      })
+      const captured = captureWindowsFrom(analysis, segments, '#625 R-E1-R-E7', capturePath)
       const segmentRms = (name: string): number => {
-        const segment = segments[name]
-        expect(segment, `${name} capture segment must exist`).toBeDefined()
-        const range = audioRange(segment!)
-        const windows = (analysis.windows ?? []).filter(
-          (window) => window.startSec >= range.fromSec && window.startSec < range.toSec,
-        )
-        expect(windows.length, `${name} capture segment must contain RMS windows`).toBeGreaterThan(
-          0,
-        )
-        return Math.sqrt(
-          windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
-        )
+        return captured.rms(name, SEGMENT_GUARD_SEC)
       }
 
       const dryRms = segmentRms('dryBaseline')
@@ -3833,35 +4131,38 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // 🔴 窓ごとの生系列。区間 RMS が 1.5 倍でも、(a) 全窓が一様に高い＝定常的な増幅 と
       // (b) 一部の窓だけ dry(1.0x) で残りが 0.5x ＝混在 は同じ集計値になる。原因の探索先が
       // まったく違うので、集計だけで判断しない。
-      const segmentWindows = (segment: { from: number; to: number }): string => {
-        const range = audioRange(segment)
-        return (analysis.windows ?? [])
-          .filter((w) => w.startSec >= range.fromSec && w.startSec < range.toSec)
+      const segmentWindows = (name: string): string => {
+        return captured
+          .windows(name, SEGMENT_GUARD_SEC)
           .map((w) => w.rms.toFixed(3))
           .join(',')
       }
       // eslint-disable-next-line no-console
-      console.log('[#625 R-E1-R-E7] b windows: ' + segmentWindows(segments.b!))
+      console.log('[#625 R-E1-R-E7] b windows: ' + segmentWindows('b'))
       // eslint-disable-next-line no-console
-      console.log('[#625 R-E1-R-E7] recoveredB windows: ' + segmentWindows(segments.recoveredB!))
+      console.log('[#625 R-E1-R-E7] recoveredB windows: ' + segmentWindows('recoveredB'))
 
       // 🔴 決着させる観測: 区間ごとの onset 数。b が 9/3s なら「余剰イベント」、
       // 6/3s のままなら「1 発あたりのエネルギー増」で、原因の探索先が変わる。
-      const segmentOnsets = (segment: { from: number; to: number }): number => {
-        const range = audioRange(segment)
-        return (analysis.onsets ?? []).filter((t) => t >= range.fromSec && t < range.toSec).length
+      const segmentOnsets = (name: string): number => {
+        const segment = segments[name]!
+        return (analysis.onsets ?? []).filter(
+          (onset) =>
+            onset >= segment.fromSec + SEGMENT_GUARD_SEC &&
+            onset < segment.toSec - SEGMENT_GUARD_SEC,
+        ).length
       }
       // eslint-disable-next-line no-console
       console.log(
         '[#625 R-E1-R-E7] segment onsets/3s: ' +
           JSON.stringify({
-            dryBaseline: segmentOnsets(segments.dryBaseline!),
-            a: segmentOnsets(segments.a!),
-            b: segmentOnsets(segments.b!),
-            failedDry: segmentOnsets(segments.failedDry!),
-            recoveredB: segmentOnsets(segments.recoveredB!),
-            restoredA: segmentOnsets(segments.restoredA!),
-            removedDry: segmentOnsets(segments.removedDry!),
+            dryBaseline: segmentOnsets('dryBaseline'),
+            a: segmentOnsets('a'),
+            b: segmentOnsets('b'),
+            failedDry: segmentOnsets('failedDry'),
+            recoveredB: segmentOnsets('recoveredB'),
+            restoredA: segmentOnsets('restoredA'),
+            removedDry: segmentOnsets('removedDry'),
           }),
       )
       // 🔴 比較の基準は **bus がアクティブな dry**（= failedDry / removedDry）であって、
@@ -3871,9 +4172,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // だった。実測を完全グラフモデルと突き合わせると、busDry は
       // `kick.wav の RMS 0.1230601 × 等パワーパン(1/√2) × (sum 1.0 + send 0.2) = 0.1044211`
       // と **6 桁一致**する（実測 0.1044200）。つまり busDry の方が理論値どおりで、
-      // `dryBaseline` が低いのは **3 秒窓の先頭 1 秒が LOOP 開始レイテンシで無音**なため
-      // （エネルギーがきっかり 2/3 = 振幅 √(2/3)）。経路の違いではない。
-      // dryBaseline の待ちを 1 バー分足せば busDry と一致するはずである。
+      // 旧 `dryBaseline` が低かったのは **3 秒窓の先頭 1 秒が LOOP 開始レイテンシで無音**だった
+      // ため（エネルギーがきっかり 2/3 = 振幅 √(2/3)）。#739 は初回発音待ちでこの無音を除く。
       // 🔴 #628 で `failedDry` は **dry ではなくなった**。
       //
       // #625 は in-place 型だったので、差し替えの失敗は dry 縮退を意味し、`failedDry` は
@@ -4018,17 +4318,31 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         }),
       )
 
+      prepareCapturePath(capturePath)
       await startR28Engine(activeClient, '#628 R28 capture engine', capturePath)
 
-      const segments: Record<string, { from: number; to: number }> = {}
+      let soundReady = false
+      const clock = createCaptureClock(capturePath)
+      const segments: Record<string, CaptureSegment> = {}
       const captureSegment = async (name: string): Promise<void> => {
+        if (!soundReady) {
+          await waitForSound(capturePath, {
+            floor: 0.01,
+            intervalMs: 250,
+            timeoutMs: 20_000,
+            label: '#628 R28',
+          })
+          soundReady = true
+        }
         await sleep(750)
-        segments[name] = { from: Date.now(), to: 0 }
+        const fromWall = Date.now()
+        const fromSec = clock()
         await sleep(3000)
-        segments[name]!.to = Date.now()
+        segments[name] = { fromSec, toSec: clock(), fromWall, toWall: Date.now() }
       }
-      let stopWall = Date.now()
 
+      let bodyError: unknown
+      let cleanupFailure: unknown
       try {
         // A previous suite block may leave a master declaration in the persistent interpreter
         // registry. Clear it before taking the bus-dry reference so the R28 ratio oracle is local.
@@ -4335,54 +4649,50 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           stateFileCount(statesDirectory),
           'R28 seg10: failed prepare-commit must not save or drop state',
         ).toBe(stateFilesBeforeDropGain)
+      } catch (error) {
+        bodyError = error
+        throw error
       } finally {
-        await activeClient.call('evaluate_orbitscore', {
-          code: 'fx628.effect([])\nfx628.stop()\nglobal.stop()',
-        })
-        const stopped = await activeClient.call('stop_engine')
-        expect(stopped.isError, stopped.text).toBe(false)
-        stopWall = Date.now()
-        await waitForEngine(false, 15_000, '#628 R28 capture engine stopped')
-        await sleep(1500)
+        try {
+          await activeClient.call('evaluate_orbitscore', {
+            code: 'fx628.effect([])\nfx628.stop()\nglobal.stop()',
+          })
+          const stopped = await activeClient.call('stop_engine')
+          expect(stopped.isError, stopped.text).toBe(false)
+          await waitForEngine(false, 15_000, '#628 R28 capture engine stopped')
+          await sleep(1500)
+        } catch (cleanupError) {
+          if (bodyError === undefined) {
+            cleanupFailure = cleanupError
+          } else {
+            // eslint-disable-next-line no-console
+            console.warn(
+              '[#628 R28] cleanup also failed; reporting the original failure instead:' +
+                `\n${String(cleanupError)}`,
+            )
+          }
+        }
       }
+      if (cleanupFailure !== undefined) throw cleanupFailure
 
-      const capture = fs.readFileSync(capturePath)
-      const analysis = analyzeWavBuffer(capture, { windowMs: 100 })
+      const capture = readCaptureForAnalysis(capturePath)
+      const analysis = analyzeWavBuffer(capture, { windowMs: 20 })
       const SEGMENT_GUARD_SEC = 0.4
-      const audioRange = (segment: { from: number; to: number }) => ({
-        fromSec: Math.max(
-          0,
-          analysis.durationSec - (stopWall - segment.from) / 1000 + SEGMENT_GUARD_SEC,
-        ),
-        toSec: Math.min(
-          analysis.durationSec,
-          analysis.durationSec - (stopWall - segment.to) / 1000 - SEGMENT_GUARD_SEC,
-        ),
-      })
+      const captured = captureWindowsFrom(analysis, segments, '#628 R28', capturePath)
       const rmsWindows = (name: string) => {
-        const segment = segments[name]
-        expect(segment, `${name} capture segment must exist`).toBeDefined()
-        const range = audioRange(segment!)
-        const windows = (analysis.windows ?? []).filter(
-          (window) => window.startSec >= range.fromSec && window.startSec < range.toSec,
-        )
-        expect(windows.length, `${name} must contain guarded RMS windows`).toBeGreaterThan(0)
-        return windows
+        return captured.windows(name, SEGMENT_GUARD_SEC)
       }
-      const segmentRms = (name: string): number => {
-        const windows = rmsWindows(name)
-        return Math.sqrt(
-          windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
-        )
-      }
+      const segmentRms = (name: string): number => captured.rms(name, SEGMENT_GUARD_SEC)
       const segmentWindows = (name: string): string =>
         rmsWindows(name)
           .map((window) => window.rms.toFixed(3))
           .join(',')
       const segmentOnsets = (name: string): number => {
-        const range = audioRange(segments[name]!)
+        const segment = segments[name]!
         return (analysis.onsets ?? []).filter(
-          (onset) => onset >= range.fromSec && onset < range.toSec,
+          (onset) =>
+            onset >= segment.fromSec + SEGMENT_GUARD_SEC &&
+            onset < segment.toSec - SEGMENT_GUARD_SEC,
         ).length
       }
       const rms = {
@@ -4643,10 +4953,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   /**
    * 定常状態の 1 区間を録る（#611 PR-O0）。
    *
-   * 🔴 **`LOOP()` は既定で次の小節境界まで待つ**（`quantize-manager.ts:70`・既定 `'bar'`）。
-   * 120 BPM 4/4 なら 1 小節 = 2000 ms なので、`run_selection` 直後に録ると**窓の大半が
-   * 発音前の無音**になり、測っているのは音量ではなく「窓に入ったヒット数」になる。
-   * 監査で実際にそれが起きていた（`output-line-expectations.ts` 冒頭の注記）。
+   * `captureSegment` が初回だけ絶対 RMS 床で発音を待つ。その後 6.84 秒を確保し、`steadyRms` が
+   * guard 内の最初の onset から 8 周期へスナップする。
    */
   const captureSteady = async (
     ctx: {
@@ -4654,27 +4962,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     },
     name: string,
   ): Promise<void> => {
-    await ctx.captureSegment(name, STEADY_CAPTURE.windowMs, STEADY_CAPTURE.settleMs)
-  }
-
-  /**
-   * 区間が定常状態であることを確かめてから RMS を返す。
-   *
-   * 🔴 **オンセット数を固定しないと RMS は音量の指標にならない**（ヒット数が変われば RMS も変わる）。
-   * ここで数を固定して初めて、RMS の差が「1 ヒットあたりの音量の差」を意味する。
-   */
-  const steadyRms = (
-    result: { rms: (s: string) => number; onsets: (s: string) => readonly number[] },
-    name: string,
-  ): number => {
-    expect(
-      result.onsets(name).length,
-      `${name}: 定常状態なら窓に ${STEADY_CAPTURE.expectedOnsets} 発入るはず（入らないなら ` +
-        `録り始めが早すぎるか、譜面が鳴っていない）`,
-    ).toBe(STEADY_CAPTURE.expectedOnsets)
-    const value = result.rms(name)
-    expect(value, `${name} must be audible`).toBeGreaterThan(STEADY_CAPTURE.audibleFloorRms)
-    return value
+    await ctx.captureSegment(name, STEADY_CAPTURE.captureMs)
   }
 
   it.skipIf(!appAvailable)(
@@ -4696,8 +4984,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
 
       const first = await captureOnce('611-o0-no-bus-first')
       const second = await captureOnce('611-o0-no-bus-second')
-      const firstRms = steadyRms(first, 'steady')
-      const secondRms = steadyRms(second, 'steady')
+      const firstRms = steadyRms(first, 'steady', STEADY_CAPTURE)
+      const secondRms = steadyRms(second, 'steady', STEADY_CAPTURE)
       // eslint-disable-next-line no-console
       console.log('[#611 O0-1] no-bus RMS:', JSON.stringify({ firstRms, secondRms }))
       expect(first.analysis.format.channels, 'O0-1 requires a 2ch device').toBe(
@@ -4709,7 +4997,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(
         relativeDelta(secondRms, firstRms),
         `O0-1 two no-bus captures must agree; first=${firstRms} second=${secondRms}`,
-      ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.noBus.tolerance)
+      ).toBeLessThanOrEqual(0.02)
       expect(
         relativeDelta(firstRms, OUTPUT_LINE_GOLDENS.noBus.rms),
         `O0-1 no-bus RMS must stay at ${OUTPUT_LINE_GOLDENS.noBus.rms}; actual=${firstRms}`,
@@ -4732,7 +5020,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       expect(result, 'O0-2 must return captured windows').toBeDefined()
       if (!result) throw new Error('O0-2 did not return captured windows')
-      const sumRms = steadyRms(result, 'sum')
+      const sumRms = steadyRms(result, 'sum', STEADY_CAPTURE)
       // eslint-disable-next-line no-console
       console.log('[#611 O0-2] sumOutput.rms:', sumRms)
       expect(
@@ -4761,8 +5049,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       expect(result, 'O0-3 must return captured windows').toBeDefined()
       if (!result) throw new Error('O0-3 did not return captured windows')
-      const dryRms = steadyRms(result, 'dry')
-      const totalRms = steadyRms(result, 'dryPlusAux')
+      const dryRms = steadyRms(result, 'dry', STEADY_CAPTURE)
+      const totalRms = steadyRms(result, 'dryPlusAux', STEADY_CAPTURE)
       const totalOverDry = totalRms / dryRms
       // eslint-disable-next-line no-console
       console.log(
@@ -4801,9 +5089,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       expect(result, 'O0-4 must return captured windows').toBeDefined()
       if (!result) throw new Error('O0-4 did not return captured windows')
-      const dryRms = steadyRms(result, 'dry')
-      const effectOnlyRms = steadyRms(result, 'effectOnly')
-      const combinedRms = steadyRms(result, 'combined')
+      const dryRms = steadyRms(result, 'dry', STEADY_CAPTURE)
+      const effectOnlyRms = steadyRms(result, 'effectOnly', STEADY_CAPTURE)
+      const combinedRms = steadyRms(result, 'combined', STEADY_CAPTURE)
       const effectOnlyOverDry = effectOnlyRms / dryRms
       const combinedOverDry = combinedRms / dryRms
       // eslint-disable-next-line no-console
@@ -4825,5 +5113,454 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       await expectNoNewErrors(session.client, errorsBefore, '#611 O0-4')
     },
     TEST_TIMEOUT_MS,
+  )
+
+  // ──────────────────────────────────────────────────────────────────
+  // #606 PR-K-A2 — plugin all-notes-off (T1 / E2E-K3)
+  // ──────────────────────────────────────────────────────────────────
+
+  // There is deliberately no standalone T2 `stop_engine` audio/log assertion.
+  // `stop_engine` terminates the daemon that writes the capture, so even a healthy
+  // run ends with the still-sounding window and cannot record a silent tail. The
+  // daemon's tracing output is relayed by the engine, which is already dead when
+  // disconnect cleanup runs, so absence of a `released=` line cannot prove an
+  // empty ledger either. Restarting into a fresh daemon/plugin process would be
+  // silent regardless of whether the old process released its notes and is also
+  // non-discriminating. T1 covers the observable engine-side release path; E2E-K3
+  // keeps the old daemon alive after engine SIGKILL and directly observes its
+  // disconnect fallback as a sounding-to-silent capture transition.
+
+  const pluginNoteScore = (receiver: string, instrumentName: string, run: 'RUN' | 'LOOP') => [
+    'var global = init GLOBAL',
+    'global.key("C")',
+    'global.tempo(120)',
+    'global.beat(4 by 4)',
+    'global.start()',
+    `var ${receiver} = init global.seq`,
+    `${receiver}.instrument(${JSON.stringify(instrumentName)})`,
+    `${receiver}.play(1, 1, 1, 1)`,
+    `${run}(${receiver})`,
+  ]
+
+  it.skipIf(!appAvailable)(
+    '#606 T1 releases a RUN instrument at natural termination',
+    async () => {
+      const session = requireOutputLineSession()
+      const result = await runScore(
+        session,
+        {
+          slug: '606-run-natural-note-off',
+          lines: pluginNoteScore('run606', session.catalog.clapSynthName, 'RUN'),
+        },
+        async () => {
+          await sleep(6500)
+        },
+        { capture: true },
+      )
+      expect(result, 'T1 capture must be available').toBeDefined()
+      if (!result) throw new Error('T1 capture was not produced')
+      expect(
+        Math.max(...(result.analysis.windows ?? []).map((window) => window.rms)),
+        'T1 must prove the RUN instrument sounded before terminating',
+      ).toBeGreaterThan(0.01)
+      expect(analysisTailRms(result.analysis, 0.5)).toBeLessThan(0.01)
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#606 E2E-K3 releases notes when SIGKILL disconnects engine but daemon survives',
+    async () => {
+      const session = requireOutputLineSession()
+      const capturePath = session.captureWavPath('606-engine-sigkill-note-off')
+      let daemonPid: number | undefined
+      const daemonPidsBeforeStart = new Set(orbitAudioDaemonPids())
+      try {
+        await startEngineForRun(session.client, '#606 E2E-K3', capturePath)
+        await session.client.call('evaluate_orbitscore', {
+          code: pluginNoteScore('kill606', session.catalog.clapSynthName, 'LOOP').join('\n'),
+        })
+        await sleep(3500)
+
+        const startedDaemonPids = orbitAudioDaemonPids().filter(
+          (pid) => !daemonPidsBeforeStart.has(pid),
+        )
+        expect(
+          startedDaemonPids,
+          'E2E-K3 requires exactly one daemon added by its own engine start',
+        ).toHaveLength(1)
+        daemonPid = startedDaemonPids[0]
+        const enginePid = parentPid(daemonPid!)
+        expect(processCommand(enginePid)).toContain('cli-audio.js')
+
+        // SAFETY: the PID delta excludes every daemon that existed before this test's
+        // start. If a concurrent start makes the delta ambiguous, the length assertion
+        // fails before this signal. Kill only the parent proven to be this daemon's
+        // OrbitScore cli-audio engine.
+        process.kill(enginePid, 'SIGKILL')
+        await waitForEngineState(session.client, false, 15_000, '#606 E2E-K3 engine SIGKILL')
+        await sleep(1000)
+        expect(processExists(daemonPid!), 'daemon must outlive its disconnected engine').toBe(true)
+
+        // Stop only the exact orphan daemon captured before SIGKILL so its WAV is finalized.
+        process.kill(daemonPid!, 'SIGTERM')
+        await waitUntil(() => Promise.resolve(!processExists(daemonPid!)), {
+          intervalMs: 100,
+          timeoutMs: 10_000,
+          label: '#606 E2E-K3 orphan daemon stopped',
+        })
+        daemonPid = undefined
+        await sleep(500)
+
+        const analysis = analyzeWavBuffer(fs.readFileSync(capturePath), { windowMs: 20 })
+        expect(
+          Math.max(...(analysis.windows ?? []).map((window) => window.rms)),
+          'E2E-K3 must prove the LOOP instrument sounded before SIGKILL',
+        ).toBeGreaterThan(0.01)
+        expect(analysisTailRms(analysis, 0.5)).toBeLessThan(0.01)
+      } finally {
+        if (daemonPid !== undefined && processExists(daemonPid)) {
+          process.kill(daemonPid, 'SIGTERM')
+        }
+        await session.client.call('stop_engine')
+      }
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#661 D-0 honors a real named output device and produces audible capture RMS',
+    async () => {
+      let requestedName = ''
+      const launched = await launchIsolatedOrbitStudio({
+        tmpPrefix: 'orbitstudio-named-device-',
+        settings: () => {
+          requestedName = defaultOutputDeviceName('#661 D-0')
+          return {
+            'orbitscore.audioDevice': requestedName,
+            'orbitscore.engineDebug': false,
+          }
+        },
+        env: { ...process.env },
+        portBase: 39500,
+        prepareWorkspace: (namedTmpRoot) => {
+          fs.mkdirSync(path.join(namedTmpRoot, 'test-assets/audio'), { recursive: true })
+          fs.copyFileSync(
+            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
+            path.join(namedTmpRoot, 'test-assets/audio/kick.wav'),
+          )
+        },
+      })
+      const { child, client, tmpRoot } = launched
+      try {
+        const session = createGatedSession(client, tmpRoot, {
+          clapSynthPath: '',
+          clapEffectPath: '',
+          vst3SynthPath: '',
+          vst3EffectPath: '',
+          clapSynthName: '',
+          clapEffectName: '',
+          vst3SynthName: '',
+          vst3EffectName: '',
+        })
+        // 🔴 デバイスの検査は**鳴っている間**に取る。`runScore` から戻った時点で engine は
+        // 停止済みで、`get_engine_state` は `{running:false}` しか返さない（daemon の
+        // `GetStatus` は engine と一緒に消える）。
+        let d0Output: Record<string, unknown> | undefined
+        const captured = await runScore(
+          session,
+          { slug: '661-d0-named-device', fixturePath: KICK_LOOP_FIXTURE },
+          async (ctx) => {
+            await ctx.captureSegment('named-output', 1800, 500)
+            d0Output = await requireDaemonOutput(client, '#661 D-0')
+          },
+          { capture: true },
+        )
+        expect(captured, '#661 D-0 must return capture analysis').toBeDefined()
+        expect(
+          captured!.rms('named-output'),
+          '#661 D-0 named output device ' + requestedName + ' must be audible',
+        ).toBeGreaterThan(0)
+        // 🔴 受け入れは「**要求した**デバイスで鳴ること」。RMS だけでは指定が無視されても緑になる。
+        expect(d0Output!.device_name, '#661 D-0 must honor the requested device').toBe(
+          requestedName,
+        )
+        expect(d0Output!.device_requested, '#661 D-0 must record what was requested').toBe(
+          requestedName,
+        )
+        expect(d0Output!.device_fell_back, '#661 D-0 must not fall back').toBe(false)
+      } finally {
+        try {
+          await client.call('stop_engine')
+        } catch {
+          // best-effort cleanup
+        }
+        if (!child.killed) child.kill()
+        fs.rmSync(tmpRoot, { recursive: true, force: true })
+      }
+    },
+    TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#661 D-2 falls back from a dead named device at startup and stays audible',
+    async () => {
+      // This is a dedicated app process because startup fault injection is immutable typed state;
+      // changing it in the shared long-running suite would invalidate all following scenarios.
+      let deadRequestedName = ''
+      const launched = await launchIsolatedOrbitStudio({
+        tmpPrefix: 'orbitstudio-device-gate-',
+        settings: () => {
+          deadRequestedName = defaultOutputDeviceName('#661 D-2')
+          return {
+            'orbitscore.audioDevice': deadRequestedName,
+            'orbitscore.engineDebug': false,
+          }
+        },
+        env: {
+          ...process.env,
+          ORBIT_DAEMON_ALLOW_FAULT_INJECTION: '1',
+          ORBIT_AUDIO_OUTPUT_FAULT: 'dead-probe-requested',
+        },
+        portBase: 39600,
+        prepareWorkspace: (faultTmpRoot) => {
+          fs.mkdirSync(path.join(faultTmpRoot, 'test-assets/audio'), { recursive: true })
+          fs.copyFileSync(
+            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
+            path.join(faultTmpRoot, 'test-assets/audio/kick.wav'),
+          )
+        },
+      })
+      const { child: faultChild, tmpRoot: faultTmpRoot } = launched
+
+      const faultClient = launched.client
+      try {
+        await waitUntil(
+          async () => {
+            const state = await faultClient!.call('get_engine_state')
+            return (JSON.parse(state.text) as { running: boolean }).running
+          },
+          { intervalMs: 500, timeoutMs: 30_000, label: '#661 fault engine running' },
+        )
+
+        const emptyCatalog: GatedCatalog = {
+          clapSynthPath: '',
+          clapEffectPath: '',
+          vst3SynthPath: '',
+          vst3EffectPath: '',
+          clapSynthName: '',
+          clapEffectName: '',
+          vst3SynthName: '',
+          vst3EffectName: '',
+        }
+        const faultSession = createGatedSession(faultClient, faultTmpRoot, emptyCatalog)
+
+        // D-2: the injected-dead named unit falls back, and the user's score is still audible.
+        // D-0 と同じ理由で、デバイスの検査は鳴っている間に取る。
+        let d2Output: Record<string, unknown> | undefined
+        const captured = await runScore(
+          faultSession,
+          { slug: '661-d2-dead-device', fixturePath: KICK_LOOP_FIXTURE },
+          async (ctx) => {
+            await ctx.captureSegment('playing', 1800, 500)
+            d2Output = await requireDaemonOutput(faultClient, '#661 D-2')
+          },
+          { capture: true },
+        )
+        expect(captured, '#661 D-2 must return capture analysis').toBeDefined()
+        expect(
+          captured!.rms('playing'),
+          '#661 D-2 fallback output must be audible',
+        ).toBeGreaterThan(0)
+        // 🔴 D-2 が測るのは「縮退**して**鳴っている」こと。RMS だけだと、そもそも縮退が
+        // 起きていなくても（fault が効かなくても）緑になる。
+        expect(d2Output!.device_requested, '#661 D-2 must record what was requested').toBe(
+          deadRequestedName,
+        )
+        expect(d2Output!.device_fell_back, '#661 D-2 must fall back from the dead device').toBe(
+          true,
+        )
+        expect(d2Output!.fallback_reason, '#661 D-2 must record why it fell back').toContain(
+          'no callback',
+        )
+      } finally {
+        try {
+          await faultClient.call('stop_engine')
+        } catch {
+          // best-effort cleanup
+        }
+        if (!faultChild.killed) faultChild.kill()
+        fs.rmSync(faultTmpRoot, { recursive: true, force: true })
+      }
+    },
+    TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#661 D-3 keeps the old stream playing when a live switch candidate is dead',
+    async () => {
+      // 🔴 D-2 とアプリを分ける理由（2026-09-05 実機で踏んだ）:
+      // `select_audio_device` は UI のクリック挙動を共有していて、`resolveDeviceClickAction`
+      // （`extension.ts:3297-3310`）が **要求デバイス == 現在の設定** を「選択解除」と解釈する。
+      // D-2 のアプリは `orbitscore.audioDevice` に既定デバイス名を持つので、D-3 が同じ名前を
+      // 要求すると**切替ではなくトグル**になり `audio device deselected and engine stopped` が返る。
+      // D-3 は**デバイス無指定で起動**し、既定デバイスを名前で要求することで本当の切替にする。
+      // `dead-probe-requested` は「要求された」デバイスに効くので、その probe が死ぬ。
+      const launched = await launchIsolatedOrbitStudio({
+        tmpPrefix: 'orbitstudio-device-switch-',
+        settings: { 'orbitscore.audioDevice': '__default__', 'orbitscore.engineDebug': false },
+        env: {
+          ...process.env,
+          ORBIT_DAEMON_ALLOW_FAULT_INJECTION: '1',
+          ORBIT_AUDIO_OUTPUT_FAULT: 'dead-probe-requested',
+        },
+        portBase: 39800,
+        prepareWorkspace: (faultTmpRoot) => {
+          fs.mkdirSync(path.join(faultTmpRoot, 'test-assets/audio'), { recursive: true })
+          fs.copyFileSync(
+            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
+            path.join(faultTmpRoot, 'test-assets/audio/kick.wav'),
+          )
+        },
+      })
+      const { child: faultChild, tmpRoot: faultTmpRoot } = launched
+      const faultClient = launched.client
+      try {
+        await waitUntil(
+          async () => {
+            const state = await faultClient!.call('get_engine_state')
+            return (JSON.parse(state.text) as { running: boolean }).running
+          },
+          { intervalMs: 500, timeoutMs: 30_000, label: '#661 D-3 engine running' },
+        )
+        const emptyCatalog: GatedCatalog = {
+          clapSynthPath: '',
+          clapEffectPath: '',
+          vst3SynthPath: '',
+          vst3EffectPath: '',
+          clapSynthName: '',
+          clapEffectName: '',
+          vst3SynthName: '',
+          vst3EffectName: '',
+        }
+        const faultSession = createGatedSession(faultClient, faultTmpRoot, emptyCatalog)
+
+        // D-3 precondition: this run fixes the formerly missing capture option and proves the
+        // selected/fallback output is audible before exercising the live-switch path.
+        const beforeSwitchCapture = await runScore(
+          faultSession,
+          { slug: '661-d3-before-switch', fixturePath: KICK_LOOP_FIXTURE },
+          async (ctx) => ctx.captureSegment('sounding-before-switch', 800, 300),
+          { capture: true },
+        )
+        expect(beforeSwitchCapture, '#661 D-3 must return capture analysis').toBeDefined()
+        expect(
+          beforeSwitchCapture!.rms('sounding-before-switch'),
+          '#661 D-3 pre-switch output must be audible',
+        ).toBeGreaterThan(0)
+
+        // Runtime switching while ORBIT_CAPTURE_WAV is active is intentionally unsupported, so
+        // the switch itself runs in a fresh non-capture session. C-5 observes the real callback
+        // counter continuously; here the user-visible oracle is the absence of stalled events.
+        await runScore(
+          faultSession,
+          { slug: '661-d3-switch-failure', fixturePath: KICK_LOOP_FIXTURE },
+          async () => {
+            await sleep(500)
+            // 🔴 **実在する**デバイス名を指定する。F4（owner 裁定 2026-09-05）以降、
+            // 存在しない名前は probe に入る前に `AUDIO_DEVICE_UNAVAILABLE` で拒否されるため、
+            // 「probe が死んでいる切替」を再現できない。ここで測りたいのは
+            // `ORBIT_AUDIO_OUTPUT_FAULT=dead-probe-requested` による**コールバック不達**の方。
+            const rejectedDevice = defaultOutputDeviceName('#661 D-3')
+            const beforeFailureLog = (await faultClient!.call('get_log', { lines: 500 })).text
+            const errorsBeforeExpectedFailure = countErrors(beforeFailureLog)
+            const stallsBeforeFailure = countLogMarker(beforeFailureLog, 'STREAM_CALLBACK_STALLED')
+            // 🔴 **同じ 1 回の失敗を 2 層が別々の文言で記録する**。片方だけを除外条件にすると、
+            // もう片方が「想定外の ERROR」として残る（2026-09-05 に実機でこれで落ちた）:
+            //   daemon (`engine_wrap.rs` `record_device_switch_result`)
+            //     `audio output device switch to "X" failed: …`
+            //   engine (`packages/engine/src/cli/repl-mode.ts`)
+            //     `❌ live device switch to "X" failed: …`
+            // 共通部分は `device switch to "X" failed` なので、除外はそちらで行う。
+            const daemonFailureMarker =
+              'audio output device switch to "' + rejectedDevice + '" failed'
+            const engineFailureMarker =
+              '\u274c live device switch to "' + rejectedDevice + '" failed'
+            const anyLayerFailureMarker = 'device switch to "' + rejectedDevice + '" failed'
+            const switchFailuresBefore = countLogMarker(beforeFailureLog, daemonFailureMarker)
+
+            const failed = await faultClient!.call('select_audio_device', {
+              device: rejectedDevice,
+            })
+            expect(failed.isError, failed.text).toBe(true)
+            expect(failed.text).toContain('callback')
+            await waitUntil(
+              async () => {
+                const log = (await faultClient!.call('get_log', { lines: 500 })).text
+                return countErrors(log) >= errorsBeforeExpectedFailure + 1
+              },
+              { intervalMs: 250, timeoutMs: 10_000, label: '#661 D-3 switch failure log' },
+            )
+            await sleep(1000)
+            const settledLog = (await faultClient!.call('get_log', { lines: 500 })).text
+            expect(settledLog).toContain(daemonFailureMarker)
+            expect(settledLog).toContain('produced no callback')
+            // 🔴 件数（`countErrors`）で見ない。`get_log` は固定 500 行窓なので、この区間で
+            // キャプチャを 1 本足しただけでも窓がずれて件数が動く（2026-09-05 に
+            // `expected 6 to be less than or equal to 5` で落ちた）。**どの行が増えたか**で語る。
+            const newErrors = newErrorLines(beforeFailureLog, settledLog)
+            // 落ちた時に「どの層がどう書いたか」を残す。実機は 1 回 15 秒かかるので、
+            // 再実行して観測し直す羽目にならないようにここで文脈を出す。
+            const linesNamingDevice = settledLog
+              .split('\n')
+              .filter((line) => line.includes(rejectedDevice))
+              .join('\n')
+            expect(
+              newErrors.filter((line) => !line.includes(anyLayerFailureMarker)),
+              '#661 D-3 must add no ERROR other than the expected switch failure. ' +
+                `Lines naming the device:\n${linesNamingDevice}`,
+            ).toEqual([])
+            // 利用者に届く ERROR は **TS 層**が出す（daemon の tracing ERROR 行は
+            // `outputChannel.append('ERROR: ' + chunk)` が chunk 単位で前置するため、
+            // 同じ chunk の 2 行目以降には `ERROR:` が付かない）。だから「失敗が
+            // 利用者に届いたか」は engine 側の文言で数える。
+            // 🔴 包含側は `ERROR:` 前置に依存させない（前置は chunk 単位なので、たまたま同じ
+            // chunk の 2 行目になると前置を失い**偽赤**になる。`newLogLines` の docstring 参照）。
+            expect(
+              newLogLines(beforeFailureLog, settledLog).filter((line) =>
+                line.includes(engineFailureMarker),
+              ),
+              '#661 D-3 must surface the switch failure to the user exactly once. ' +
+                `Lines naming the device:\n${linesNamingDevice}`,
+            ).toHaveLength(1)
+            expect(
+              countLogMarker(settledLog, daemonFailureMarker) - switchFailuresBefore,
+              '#661 D-3 must log the expected switch failure once',
+            ).toBe(1)
+            expect(
+              countLogMarker(settledLog, 'STREAM_CALLBACK_STALLED'),
+              '#661 D-3 probe must not stall the old stream',
+            ).toBeLessThanOrEqual(stallsBeforeFailure)
+
+            const stateResult = await faultClient!.call('get_engine_state')
+            const state = JSON.parse(stateResult.text) as {
+              output?: { last_switch_failure?: string | null }
+              callback?: { alive?: boolean }
+            }
+            expect(state.output?.last_switch_failure).toContain('produced no callback')
+            expect(state.callback?.alive).toBe(true)
+          },
+        )
+      } finally {
+        try {
+          await faultClient.call('stop_engine')
+        } catch {
+          // best-effort cleanup
+        }
+        if (!faultChild.killed) faultChild.kill()
+        fs.rmSync(faultTmpRoot, { recursive: true, force: true })
+      }
+    },
+    TEST_TIMEOUT_MS * 2,
   )
 })

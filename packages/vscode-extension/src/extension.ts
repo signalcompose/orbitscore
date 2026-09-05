@@ -41,10 +41,11 @@ import {
   type SavePluginStateResult,
 } from './mcp-server'
 import {
-  AUDIO_DEVICE_SWITCH_UNAVAILABLE,
   buildRootNodes,
   deviceNameFromNodeId,
   deviceSectionChildren,
+  hasTranslatedSelectAudioDeviceError,
+  liveSwitchFailureNeedsRestart,
   recoveryCommandFromNodeId,
   recoverySectionChildren,
   resolveDeviceClickAction,
@@ -58,6 +59,7 @@ import { DeviceSwitchBridge } from './device-switch-bridge'
 import { PluginStateBridge } from './plugin-state-bridge'
 import { PluginUiBridge, type PluginUiAction } from './plugin-ui-bridge'
 import { EvalMarkBridge } from './eval-mark-bridge'
+import { EngineStateBridge, resolveEngineState } from './engine-state-bridge'
 import {
   applyEngineError,
   applyEngineExit,
@@ -123,6 +125,7 @@ const pluginStateBridge = new PluginStateBridge()
 const pluginUiBridge = new PluginUiBridge()
 /** #614: `evaluate_orbitscore` に評価結果を返すための相関ブリッジ。 */
 const evalMarkBridge = new EvalMarkBridge()
+const engineStateBridge = new EngineStateBridge()
 // Audio Engine Settings TreeView (#484 D3). Non-null once activated.
 let engineViewProvider: EngineViewProvider | null = null
 // Changes whenever a spawn is created or a user explicitly stops the engine.
@@ -1172,7 +1175,8 @@ function shouldFilterLine(line: string): boolean {
   if (
     trimmed.startsWith('{"savePluginState"') ||
     trimmed.startsWith('{"pluginUi"') ||
-    trimmed.startsWith('{"evalMark"')
+    trimmed.startsWith('{"evalMark"') ||
+    trimmed.startsWith('{"engineState"')
   ) {
     return true
   }
@@ -1507,6 +1511,13 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
           if (!parsed && isCurrent) {
             outputChannel?.appendLine(`⚠️ received a malformed //#evalMark result line: ${rawLine}`)
           }
+        } else if (trimmedLine.startsWith('{"engineState"')) {
+          const parsed = isCurrent && engineStateBridge.handleLine(rawLine)
+          if (!parsed && isCurrent) {
+            outputChannel?.appendLine(
+              `⚠️ received a malformed //#getEngineState result line: ${rawLine}`,
+            )
+          }
         }
       }
 
@@ -1596,6 +1607,7 @@ export function setupStdinErrorHandler(process: child_process.ChildProcess): voi
           pluginStateBridge.drainAll(reason)
           pluginUiBridge.drainAll(reason)
           evalMarkBridge.drainAll(reason)
+          engineStateBridge.drainAll(reason)
         },
       })
     } catch (innerErr) {
@@ -1618,6 +1630,7 @@ function engineTerminationEffects(): Omit<EngineExitEffects, 'logExit'> {
       pluginStateBridge.drainAll(reason)
       pluginUiBridge.drainAll(reason)
       evalMarkBridge.drainAll(reason)
+      engineStateBridge.drainAll(reason)
     },
     showStoppedStatus: () => {
       statusBarItem!.text = '🎵 OrbitScore: Stopped'
@@ -1963,28 +1976,21 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
         vscode.window.showInformationMessage(`🔊 switched to "${result.device ?? deviceName}"`)
         return
       }
-      if (result.error?.includes(AUDIO_DEVICE_SWITCH_UNAVAILABLE)) {
-        const choice = await vscode.window.showWarningMessage(
-          translateSelectAudioDeviceError(result.error),
-          'Restart Engine',
-        )
-        if (choice === 'Restart Engine') {
-          stopEngine()
-          setTimeout(
-            () =>
-              void startEngine().catch((err) => logHandlerFailure('engineViewSelectDevice', err)),
-            2200,
-          )
-        }
-        return
-      }
       // #501 review Important #4: surface the specific failure rather than
       // silently falling through to the generic "applies on next start" prompt.
       outputChannel?.appendLine(`⚠️ live device switch failed: ${result.error}`)
-      const choice = await vscode.window.showWarningMessage(
-        `🔊 live device switch failed: ${translateSelectAudioDeviceError(result.error)}`,
-        'Restart Engine',
-      )
+      // 既知のコードは翻訳文だけで何が起きたか分かる。未知のエラーにだけ何の失敗かを前置する。
+      const failureMessage = hasTranslatedSelectAudioDeviceError(result.error)
+        ? translateSelectAudioDeviceError(result.error)
+        : `🔊 live device switch failed: ${translateSelectAudioDeviceError(result.error)}`
+      // 🔴 音が鳴り続けている失敗に「Restart Engine」を出さない（#661 F4・engine-view.ts の
+      // `SELECT_AUDIO_DEVICE_ERRORS` 参照）。再起動すると起動経路のポリシーで host 既定へ移り、
+      // 「演奏中のタイプミスで音が移らない」という裁定を UI が自分で壊す。
+      if (!liveSwitchFailureNeedsRestart(result.error)) {
+        void vscode.window.showWarningMessage(failureMessage)
+        return
+      }
+      const choice = await vscode.window.showWarningMessage(failureMessage, 'Restart Engine')
       if (choice === 'Restart Engine') {
         stopEngine()
         setTimeout(
@@ -2221,6 +2227,7 @@ export function stopEngine(): boolean {
     pluginStateBridge.drainAll('engine was stopped before responding to //#savePluginState')
     pluginUiBridge.drainAll('engine was stopped before responding to //#pluginUi')
     evalMarkBridge.drainAll('engine was stopped before responding to //#evalMark')
+    engineStateBridge.drainAll('engine was stopped before responding to //#getEngineState')
 
     // Send graceful shutdown signal (SIGTERM)
     // This allows the engine to clean up SuperCollider properly
@@ -2940,6 +2947,24 @@ function sendSelectAudioDeviceMeta(
   )
 }
 
+function sendEngineStateMeta(
+  timeoutMs = 10_000,
+): Promise<import('./engine-state-bridge').EngineStatusBridgeResult> {
+  if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
+    return Promise.reject(new Error('engine stdin is not writable (engine not running?)'))
+  }
+  const stdin = engineProcess.stdin
+  return engineStateBridge.send((line, onError) => {
+    stdin.write(line, (error) => {
+      if (error) {
+        outputChannel?.appendLine(`⚠️ failed to write //#getEngineState to stdin: ${error.message}`)
+        onError(error)
+      }
+    })
+    return true
+  }, timeoutMs)
+}
+
 function sendPluginStateMeta(
   sequence: string,
   index: number,
@@ -3165,12 +3190,34 @@ function stopEngineForAgent(): CommandResult {
   return { ok: true, message: 'engine stopping' }
 }
 
-/** Report engine state for the MCP `get_engine_state` tool. */
-function getEngineStateForAgent(): EngineState {
-  return {
-    running: Boolean(engineProcess && !engineProcess.killed),
-    liveCoding: isLiveCodingMode,
-  }
+/**
+ * `get_engine_state` が daemon の状態を待つ予算。
+ *
+ * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
+ * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
+ * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
+ * （instrument の attach は実測 30 秒超）の最中は、**どんな予算でも答えは返らない**。
+ * 予算を伸ばして得られるのは「同じ `statusError` を返すまでに何秒ブロックするか」だけで、
+ * 対話的なツール呼び出しとしては短く degrade する方が良い。
+ *
+ * `running` は同期に分かるので、状態が取れなくても `{running, statusError}` は必ず返る。
+ * **長い処理の最中にも状態を見せたいなら、必要なのは予算ではなく `//#getEngineState` を
+ * キューの外で処理すること**（別 issue）。
+ */
+const ENGINE_STATE_QUERY_BUDGET_MS = 2_500
+
+/**
+ * Report engine state for the MCP `get_engine_state` tool. 判定そのものは
+ * `resolveEngineState`（`engine-state-bridge.ts`）にあり、ここは配線だけ。
+ */
+function getEngineStateForAgent(): Promise<EngineState> {
+  return resolveEngineState(
+    {
+      running: Boolean(engineProcess && !engineProcess.killed),
+      liveCoding: isLiveCodingMode,
+    },
+    () => sendEngineStateMeta(ENGINE_STATE_QUERY_BUDGET_MS),
+  )
 }
 
 /**

@@ -1,7 +1,7 @@
 # Engine Daemon IPC Protocol Specification (v0.2 draft)
 
 **ステータス**: Draft（Issue #93 の初期設計）
-**最終更新**: 2026-08-27
+**最終更新**: 2026-09-05
 **対象バージョン**: protocol v0.2
 **関連 Issue**: [#93](https://github.com/signalcompose/orbitscore/issues/93), [#107](https://github.com/signalcompose/orbitscore/issues/107), [#108](https://github.com/signalcompose/orbitscore/issues/108)
 
@@ -289,6 +289,35 @@ JSON-RPC 2.0 の影響を受けた独自形式:
 
 - `stopped`: 停止した voice 数（空でも 0 を返す冪等動作）
 
+### PluginAllNotesOff
+
+daemon が追跡する全 instrument instance の active note を drain し、個別の NoteOff を逐次送出する
+（#606・冪等）。`NoteChoke` は使わない。engine 側の `global.stop()` / shutdown に加え、engine が
+異常終了して RPC を送れない場合にも止められるよう、daemon は WebSocket session の切断時にも同じ
+配送関数を呼ぶ。protocol version は `0.2` のままとする。
+
+```json
+// Request
+{
+  "id": "u5b",
+  "method": "PluginAllNotesOff",
+  "params": {}
+}
+
+// Response
+{
+  "id": "u5b",
+  "result": { "released": 3, "stale": 0, "failed": 0 }
+}
+```
+
+- `released`: NoteOff の ring push に成功した件数
+- `stale`: 台帳には残っていたが、対応する instance が既に無かった件数
+- `failed`: NoteOff の送出を試みたが runtime error になった件数（詳細は daemon log に記録）
+- 台帳 mutex poison は `OUTPROC_INSTRUMENT_RUNTIME`、join 失敗は `INTERNAL_ERROR`
+- `clap-host` 単独 build と plugin hosting feature の無い build は、発音経路が台帳の対象外または
+  存在しないため `{ "released": 0, "stale": 0, "failed": 0 }` を返す
+
 ### SetGlobalGain
 
 マスターゲインを設定（ramp 付き）。
@@ -321,10 +350,54 @@ daemon の状態取得。
     "output_sample_rate": 48000,
     "output_channels": 2,
     "loaded_samples": 12,
-    "active_plays": 3
+    "active_plays": 3,
+    "active_plugin_notes": 0,
+    "render_contentions": 0,
+    "output": {
+      "device_name": "Built-in Output",
+      "sample_rate": 48000,
+      "channels": 2,
+      "device_requested": "USB Audio",
+      "device_fell_back": false,
+      "fallback_reason": null,
+      "first_callback_ms": 11,
+      "last_switch_failure": "audio output device \"Rejected Output\" produced no callback within 3000 ms"
+    },
+    "callback": {
+      "count": 11531,
+      "alive": true,
+      "last_frames": 512
+    }
   }
 }
 ```
+
+- `output.last_switch_failure`: 直近のライブ出力デバイス切替が失敗した理由。失敗前から鳴っている
+  `output` の実効構成は変えず、この項目だけを更新する。起動直後および直近の切替成功後は `null`。
+  切替失敗時は要求デバイス名と理由を含む daemon `ERROR` ログも同時に出る（engine 側も
+  `❌ live device switch to "X" failed: …` を出すので、**1 回の失敗を 2 層が記録する**）。
+
+#### `SelectAudioDevice` の失敗コード（#484 / #661）
+
+| code | 音は鳴っているか | 利用者が取れる手 |
+|---|---|---|
+| `AUDIO_DEVICE_UNAVAILABLE` | **鳴り続けている**（現在のデバイスのまま） | 名前を直して指定し直す |
+| `AUDIO_DEVICE_STREAM_DEAD` | **鳴り続けている** | 別のデバイスを選ぶ |
+| `AUDIO_DEVICE_SWITCH_UNAVAILABLE` | 鳴り続けている | `ORBIT_CAPTURE_WAV` 録音中は切替不可。**engine を再起動** |
+| `AUDIO_DEVICE_RATE_MISMATCH` | 鳴り続けている | サンプルレートが違う。**engine を再起動** |
+| `AUDIO_DEVICE_SWITCH_RECOVERY_FAILED` | **止まっている** | 切替も旧デバイスの復帰も失敗した。**engine を再起動** |
+
+🔴 **起動経路とライブ切替経路で縮退のポリシーが違う**（owner 裁定 2026-09-05・
+`docs/design/661-audio-device-liveness-design.md` §3）: 起動時は利用者を無音のまま放置しないので
+host 既定へ縮退して起動を成功させる。ライブ切替は縮退せず、**いま鳴っているデバイスをそのまま
+使い続ける**（演奏中のタイプミスで音が内蔵スピーカーへ移らないように）。
+
+エディタはこの表の「鳴っているか」を見て、鳴り続けている失敗には **`Restart Engine` を提示しない**
+（`packages/vscode-extension/src/engine-view.ts` の `SELECT_AUDIO_DEVICE_ERRORS`）。
+- `active_plugin_notes`: daemon の OOP instrument active-note 台帳の現在件数
+  （`outproc-instrument` feature build でのみ含まれる）。
+  🔴 台帳が読めない（mutex poisoned）場合は **`null`** になり、理由は daemon の `ERROR` ログに出る。
+  **その 1 項目だけを縮退させ、GetStatus 全体は成功させる** — 異常時にこそデバイス・レート・uptime が要るため
 
 ### Ping
 

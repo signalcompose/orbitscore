@@ -835,6 +835,31 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect(body.result.content[0]?.text).toContain('boom')
   })
 
+  it('get_engine_state includes daemon output and callback snapshots', async () => {
+    const output = {
+      device_name: 'USB Audio',
+      first_callback_ms: 12,
+      last_switch_failure: null,
+    }
+    const callback = { count: 42, alive: true, last_frames: 512 }
+    const { handlers } = createStubHandlers({
+      getEngineState: async () => ({ running: true, liveCoding: true, output, callback }),
+    })
+    handle = await startTestServer(handlers)
+    const client = new McpTestClient(handle.port)
+    await client.connect()
+
+    const response = await client.toolsCall('get_engine_state')
+    expect(response.status).toBe(200)
+    const body = response.json as JsonRpcOk<ToolCallResult>
+    expect(JSON.parse(body.result.content[0]!.text)).toEqual({
+      running: true,
+      liveCoding: true,
+      output,
+      callback,
+    })
+  })
+
   it('MULTI-SESSION REGRESSION: three sequential clients each initialize independently with distinct session ids', async () => {
     // WORK_LOG 6.189: a single shared transport permanently consumed its one
     // session slot on the first client — any later client (or a Claude Code
