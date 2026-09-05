@@ -153,6 +153,20 @@ pub enum StreamLivenessPhase {
     RealStream,
 }
 
+/// 実ストリームをどの段で組み立てているか。`OutputFault` の効き先を段で分けるためだけに使う。
+///
+/// 🔴 これが無いと **`DeadRealStream` はプロセス全体に効く**ので、「起動は正常・切替で作った
+/// 2 本目の実ストリームだけ死ぬ」が表現できない。その結果、`apply_device_switch` の
+/// 「旧を pause 済み → 新の build/play/confirm が失敗 → 旧を `play()` で再開」という
+/// **#661 の最後の安全網**に、どのテストからも到達できなかった（2026-09-05 のレビューで発覚）。
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum StreamBuildStage {
+    /// daemon 起動時の 1 本目。
+    Startup,
+    /// ライブ切替で作る 2 本目以降。
+    Switch,
+}
+
 /// Test-only liveness failure selected by the daemon's typed startup options.
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub enum OutputFault {
@@ -160,7 +174,21 @@ pub enum OutputFault {
     None,
     DeadProbeRequested,
     DeadAllProbes,
+    /// 実ストリームの callback を**常に**殺す。1 本目にも効くので daemon は起動できない（C-4）。
     DeadRealStream,
+    /// 実ストリームの callback を**切替で作った 2 本目以降だけ**殺す。起動は正常に通る。
+    DeadRealStreamOnSwitch,
+}
+
+impl OutputFault {
+    /// この段の実ストリームで callback を抑止するか。
+    fn suppresses_real_callback(self, stage: StreamBuildStage) -> bool {
+        match self {
+            OutputFault::DeadRealStream => true,
+            OutputFault::DeadRealStreamOnSwitch => stage == StreamBuildStage::Switch,
+            _ => false,
+        }
+    }
 }
 
 /// A requested output device and optional gated fault injection.
@@ -319,10 +347,17 @@ impl DeviceFallbackPolicy {
     }
 }
 
-/// `start_output_inner` から呼ばれる cpal I/O 込みの device 解決（#484 D1）。`resolve_requested_device_name`
-/// （pure）に実際の host 列挙を組み合わせる。`requested` が `None` なら常に host 既定を使う
-/// （列挙コストを払わない・従来経路とビット同一）。一致するデバイスが見つからない場合は
-/// fallback metadata を付けて host 既定へ縮退する（daemon 起動を失敗させない）。
+/// cpal I/O 込みの device 解決（#484 D1）。`resolve_requested_device_name`（pure）に実際の host
+/// 列挙を組み合わせる。`requested` が `None` なら常に host 既定を使う（列挙コストを払わない・
+/// 従来経路とビット同一）。
+///
+/// 🔴 **一致するデバイスが見つからない時の振る舞いは `policy` で決まる**（owner 裁定 2026-09-05・
+/// 設計 §3。[`DeviceFallbackPolicy`] の doc を参照）:
+///
+/// - [`DeviceFallbackPolicy::FallBackToHostDefault`]（起動経路）— fallback metadata を付けて
+///   host 既定へ縮退する（daemon 起動を失敗させない）
+/// - [`DeviceFallbackPolicy::RejectAndKeepCurrent`]（ライブ切替経路）— 縮退せず
+///   [`OutputError::DeviceUnavailable`] を返し、呼び出し側がいま鳴っているデバイスを保つ
 fn resolve_output_device(
     host: &cpal::Host,
     requested: Option<&str>,
@@ -1822,6 +1857,7 @@ fn start_output_inner(
         render_state.clone(),
         capture_sink,
         cb_stats.clone(),
+        StreamBuildStage::Startup,
     )?;
     let mut output_stream = OutputStream {
         _stream: stream,
@@ -1856,6 +1892,7 @@ pub fn rebuild_output_stream(
         render_state.clone(),
         None,
         cb_stats,
+        StreamBuildStage::Switch,
     )?;
     let mut output_stream = OutputStream {
         _stream: stream,
@@ -1900,11 +1937,12 @@ fn build_stream(
     render_state: Arc<std::sync::Mutex<RenderState>>,
     mut capture: Option<RingTapSink>,
     cb_stats: Option<Arc<CallbackTimeStats>>,
+    stage: StreamBuildStage,
 ) -> Result<Stream, OutputError> {
     let device = &live.device;
     let config = &live.config;
     let sample_format = live.sample_format;
-    let suppress_callback = live.fault == OutputFault::DeadRealStream;
+    let suppress_callback = live.fault.suppresses_real_callback(stage);
     let make_err_fn = |stats: Arc<StreamStats>| {
         // 上位 (daemon session) が StreamStats / DaemonError 経由で可視化する責務を持つ。
         move |err: cpal::StreamError| stats.record_error(&err)

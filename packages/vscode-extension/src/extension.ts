@@ -41,10 +41,11 @@ import {
   type SavePluginStateResult,
 } from './mcp-server'
 import {
-  AUDIO_DEVICE_SWITCH_UNAVAILABLE,
   buildRootNodes,
   deviceNameFromNodeId,
   deviceSectionChildren,
+  hasTranslatedSelectAudioDeviceError,
+  liveSwitchFailureNeedsRestart,
   recoveryCommandFromNodeId,
   recoverySectionChildren,
   resolveDeviceClickAction,
@@ -58,7 +59,7 @@ import { DeviceSwitchBridge } from './device-switch-bridge'
 import { PluginStateBridge } from './plugin-state-bridge'
 import { PluginUiBridge, type PluginUiAction } from './plugin-ui-bridge'
 import { EvalMarkBridge } from './eval-mark-bridge'
-import { EngineStateBridge } from './engine-state-bridge'
+import { EngineStateBridge, resolveEngineState } from './engine-state-bridge'
 import {
   applyEngineError,
   applyEngineExit,
@@ -1975,28 +1976,21 @@ async function engineViewSelectDevice(node: EngineViewNode): Promise<void> {
         vscode.window.showInformationMessage(`🔊 switched to "${result.device ?? deviceName}"`)
         return
       }
-      if (result.error?.includes(AUDIO_DEVICE_SWITCH_UNAVAILABLE)) {
-        const choice = await vscode.window.showWarningMessage(
-          translateSelectAudioDeviceError(result.error),
-          'Restart Engine',
-        )
-        if (choice === 'Restart Engine') {
-          stopEngine()
-          setTimeout(
-            () =>
-              void startEngine().catch((err) => logHandlerFailure('engineViewSelectDevice', err)),
-            2200,
-          )
-        }
-        return
-      }
       // #501 review Important #4: surface the specific failure rather than
       // silently falling through to the generic "applies on next start" prompt.
       outputChannel?.appendLine(`⚠️ live device switch failed: ${result.error}`)
-      const choice = await vscode.window.showWarningMessage(
-        `🔊 live device switch failed: ${translateSelectAudioDeviceError(result.error)}`,
-        'Restart Engine',
-      )
+      // 既知のコードは翻訳文だけで何が起きたか分かる。未知のエラーにだけ何の失敗かを前置する。
+      const failureMessage = hasTranslatedSelectAudioDeviceError(result.error)
+        ? translateSelectAudioDeviceError(result.error)
+        : `🔊 live device switch failed: ${translateSelectAudioDeviceError(result.error)}`
+      // 🔴 音が鳴り続けている失敗に「Restart Engine」を出さない（#661 F4・engine-view.ts の
+      // `SELECT_AUDIO_DEVICE_ERRORS` 参照）。再起動すると起動経路のポリシーで host 既定へ移り、
+      // 「演奏中のタイプミスで音が移らない」という裁定を UI が自分で壊す。
+      if (!liveSwitchFailureNeedsRestart(result.error)) {
+        void vscode.window.showWarningMessage(failureMessage)
+        return
+      }
+      const choice = await vscode.window.showWarningMessage(failureMessage, 'Restart Engine')
       if (choice === 'Restart Engine') {
         stopEngine()
         setTimeout(
@@ -3196,23 +3190,23 @@ function stopEngineForAgent(): CommandResult {
   return { ok: true, message: 'engine stopping' }
 }
 
-/** Report engine state for the MCP `get_engine_state` tool. */
-async function getEngineStateForAgent(): Promise<EngineState> {
-  const state: EngineState = {
-    running: Boolean(engineProcess && !engineProcess.killed),
-    liveCoding: isLiveCodingMode,
-  }
-  if (!state.running) return state
-  try {
-    const status = await sendEngineStateMeta()
-    if (!status.ok) return { ...state, statusError: status.error }
-    return { ...state, output: status.output, callback: status.callback }
-  } catch (error) {
-    return {
-      ...state,
-      statusError: error instanceof Error ? error.message : String(error),
-    }
-  }
+/**
+ * Report engine state for the MCP `get_engine_state` tool. 判定そのものは
+ * `resolveEngineState`（`engine-state-bridge.ts`）にあり、ここは配線だけ。
+ *
+ * 🔴 予算を 2.5 秒にする理由: gated E2E の `waitForEngine` はこのツールで `running` を 500 ms
+ * 間隔でポーリングする。既定の 10 秒だと、REPL が長い await（プラグイン attach 等）に入って
+ * いる間は 1 回の問い合わせで 10 秒使い、30 秒予算で 3 回しか試せない。`running` は同期に
+ * 分かるので、daemon の状態が取れない時は `statusError` で degrade する方が LLM にも E2E にも良い。
+ */
+function getEngineStateForAgent(): Promise<EngineState> {
+  return resolveEngineState(
+    {
+      running: Boolean(engineProcess && !engineProcess.killed),
+      liveCoding: isLiveCodingMode,
+    },
+    () => sendEngineStateMeta(2_500),
+  )
 }
 
 /**

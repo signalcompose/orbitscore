@@ -132,7 +132,7 @@ export interface OrbitScoreToolHandlers {
 サーバは既定では立ちません。`activate()` の末尾近くで、環境変数 → 設定の順にポートを決めます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:447-458
+// packages/vscode-extension/src/extension.ts:448-459
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -254,7 +254,7 @@ export function buildMcpServerUrl(port: number): string {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3072-3109
+// packages/vscode-extension/src/extension.ts:3066-3103
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -313,7 +313,7 @@ async function evaluateForAgent(code: string): Promise<EvaluateResult> {
 engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setupStdoutHandler` がそれを `evalMarkBridge.handleLine()` へ渡します。この分岐は **独立していなければならない**、と強調されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1505-1513
+// packages/vscode-extension/src/extension.ts:1506-1514
         } else if (trimmedLine.startsWith('{"evalMark"')) {
           // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
           // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -338,7 +338,7 @@ engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setup
 拡張には中央のログ sink がありません。そこで `activate()` が出力チャネルの `appendLine` / `append` を monkey-patch して、同じ行をリングバッファにも積んでいます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:140-150
+// packages/vscode-extension/src/extension.ts:141-151
 // Ring buffer of output-channel lines for the MCP get_log tool (#388). There is
 // no other central log sink to tap, so activate() monkey-patches
 // outputChannel.appendLine/append to also push here.
@@ -353,7 +353,7 @@ function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:303-314
+// packages/vscode-extension/src/extension.ts:304-315
   const rawAppendLine = outputChannel.appendLine.bind(outputChannel)
   outputChannel.appendLine = (value: string) => {
     pushLogRing(value)
@@ -428,7 +428,7 @@ flowchart LR
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:89-95
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:90-96
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH =
   '/Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app'
@@ -445,7 +445,7 @@ const appAvailable = fs.existsSync(appPath)
 suite の読み込み時、テストを 1 本も走らせる前に daemon バイナリの鮮度を検査します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:181-191
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:182-192
   if (newest.at > builtAt) {
     throw new Error(
       'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
@@ -464,7 +464,7 @@ suite の読み込み時、テストを 1 本も走らせる前に daemon バイ
 **何を「ソース」と数えるか**にも一手が入っています（#713）。`rust/` 配下の `.rs` を無条件に拾うと、別の cargo ターゲットである統合テスト（実測では `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs`）が「最新のソース」に選ばれてしまいます。それらは `orbit-audio-daemon` のバイナリの依存グラフに入らないので、cargo は依存関係を正しく読んで何もビルドせず、バイナリの mtime も更新されません。つまりガードのメッセージが指示する `npm run test:e2e:gated` を何度打っても消えない、**解消不能な赤**になります。引き金は mtime の性質で、`git checkout` はファイルの mtime をチェックアウトした時刻へ更新するため、ブランチを行き来しただけで内容の変わっていない統合テストが「最新のソース」に化けます。#713 ではこれで実機 gated が起動段階から 1 本も走らなくなりました。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:170-172
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:171-173
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
           continue
         }
@@ -485,7 +485,7 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 ### アプリの起動 — `orbs` CLI と Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:456-477
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:457-478
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
     path.join(appPath, 'Contents/Resources/app/bin/orbs'),
@@ -518,7 +518,7 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 teardown は「安全性」の注意書きが繰り返されています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:274-280
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:275-281
 function killOrbitStudio(): void {
   try {
     execFileSync('pkill', ['-f', 'OrbitStudio.app/Contents/MacOS'], { stdio: 'ignore' })
@@ -535,7 +535,7 @@ function killOrbitStudio(): void {
 キャプチャの有効化は daemon の spawn 時に `ORBIT_CAPTURE_WAV` 環境変数で渡すしかありません。拡張は `activate()` 時に engine を自動起動するので、gated spec は **自動起動した engine を一度止めてから** capture 付きで起動し直します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1076-1081
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1115-1120
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -606,7 +606,7 @@ export function decideStartEngineForAgent(
 `countErrors` は gated spec の中に **7 箇所**、それぞれ独立に定義されていました（変更前の行番号で `:496 / 2144 / 2722 / 3155 / 3461 / 3969 / 4464`）。同じ 1 行が 7 回書かれていたので、ERROR 件数の数え方を変えたければ 7 箇所直さねばならず、直し漏れは静かに残ります。統合先は `expectNoNewErrors` で、比較が `<=` であることがここで 1 箇所に固定されます。
 
 ```typescript
-// tests/e2e/helpers/engine-log.ts:80-91
+// tests/e2e/helpers/engine-log.ts:96-107
 export async function expectNoNewErrors(
   client: McpClient,
   baseline: number,
@@ -708,7 +708,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 先頭テストの最後の assert は、この onset 間隔をテンポの証拠に使います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1617-1631
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1656-1670
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -1026,7 +1026,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 `handleStep` の実体は `extension.ts` にあり、**グリッド時刻まで待ってから**ハイライトを動かします。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:237-248
+// packages/vscode-extension/src/extension.ts:238-249
 function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -1044,7 +1044,7 @@ function handleStepLine(step: StepEvent): void {
 dispatch は lookahead 分だけ早く走るので、行が届いた瞬間に光らせると音より先に動いてしまいます。1 秒以上遅れた行（バッファされた出力の再生など）は捨てます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:250-269
+// packages/vscode-extension/src/extension.ts:251-270
 function showPlayheadStep(step: StepEvent): void {
   for (const editor of vscode.window.visibleTextEditors) {
     // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
@@ -1072,7 +1072,7 @@ function showPlayheadStep(step: StepEvent): void {
 ### `[STEP]` は通常モードでは見えない
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1156-1180
+// packages/vscode-extension/src/extension.ts:1157-1181
 function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
@@ -1103,7 +1103,7 @@ function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2285-2295
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2324-2334
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1118,13 +1118,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2298-2299
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2337-2338
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2355-2357
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2394-2396
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

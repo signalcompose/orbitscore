@@ -38,6 +38,9 @@ pub fn parse_output_fault(raw: Option<&str>) -> OutputFault {
         Some("dead-probe-requested" | "DeadProbeRequested") => OutputFault::DeadProbeRequested,
         Some("dead-all-probes" | "DeadAllProbes") => OutputFault::DeadAllProbes,
         Some("dead-real-stream" | "DeadRealStream") => OutputFault::DeadRealStream,
+        Some("dead-real-stream-on-switch" | "DeadRealStreamOnSwitch") => {
+            OutputFault::DeadRealStreamOnSwitch
+        }
         _ => OutputFault::None,
     }
 }
@@ -5113,7 +5116,14 @@ impl EngineWrap {
                 self.record_stream_config(stream_config.clone(), buffer_frames, cb_stats);
             }
             Err(error) => {
-                let reason = error.to_string();
+                // 🔴 切替では何も init していないので、`WrapError::Output` の Display が付ける
+                // 「audio output init failed: 」は嘘になる（この文字列は ERROR ログ・
+                // `last_switch_failure`・MCP の返り値・エディタの警告すべてに載る）。
+                // 内側の `OutputError` の Display を使う。
+                let reason = match error {
+                    WrapError::Output(output) => output.to_string(),
+                    other => other.to_string(),
+                };
                 tracing::error!(
                     "audio output device switch to {:?} failed: {}",
                     requested_device,

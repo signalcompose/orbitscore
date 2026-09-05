@@ -55,7 +55,7 @@ VS Code 拡張側が「送るコードを決める」、エンジン側が「受
 まず、エンジンがどう起動しているかを確認しておきましょう。`startEngine()` では引数に `'repl'` を指定して Node プロセスを spawn します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2124-2176 (env の組み立てを省略)
+// packages/vscode-extension/src/extension.ts:2118-2170 (env の組み立てを省略)
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -115,7 +115,7 @@ Cmd+Enter で起動するのが `runSelection()` 関数です。まず「何を�
 選択テキストが空でなければシンプルにその内容を使います。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2748-2751
+// packages/vscode-extension/src/extension.ts:2742-2745
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -129,7 +129,7 @@ Cmd+Enter で起動するのが `runSelection()` 関数です。まず「何を�
 subject を判定する関数が `getLineSubject()` です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2715-2728
+// packages/vscode-extension/src/extension.ts:2709-2722
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -157,7 +157,7 @@ subject が `null` の場合 — つまり `RUN(kick, snare)` のようなスタ
 送るコードが確定したあと、`writeCodeToEngine()` がドキュメントのディレクトリパスを 2 通りの方法で engine に伝えます。`audioPath()` / `audio()` の相対パス解決、そして `import` の基準ディレクトリ (IM.6) に使われます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3032-3064
+// packages/vscode-extension/src/extension.ts:3026-3058
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -209,7 +209,7 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
 `runSelection()` は `writeCodeToEngine()` の戻り値を見て、送れたときだけ視覚フィードバックを出します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2887-2894
+// packages/vscode-extension/src/extension.ts:2881-2888
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }

@@ -167,7 +167,8 @@ fn c5_failed_switch_keeps_the_old_stream_advancing_during_probe() {
 // 🔴 この検査が捕まえるのは「**古いストリームを止める防御が全部消えたこと**」である。
 //
 // 止める経路は 2 つあり、**互いに冗長**:
-//   (a) `EngineWrap::apply_device_switch` の `guard.stream.pause()?`
+//   (a) `EngineWrap::apply_device_switch` が `probe_then_pause_old` へ渡す
+//       `|| guard.stream.pause()` クロージャ（probe 成功後にだけ呼ばれる）
 //   (b) `OutputStream` の `impl Drop` の `pause()`
 //
 // main が実機で測った（2026-09-05・`--audio-device <既定の名前>` → host 既定へ切替）:
@@ -215,4 +216,65 @@ fn c6_successful_named_to_default_switch_has_one_callback_rate() {
             && after_rate as f64 <= before_rate as f64 * 1.30,
         "callback rate changed after device switch: before_rate={before_rate}, after_rate={after_rate}, stats={after:?}"
     );
+}
+
+#[test]
+#[ignore = "needs a real audio output device"]
+// 🔴 これが #661 の**最後の安全網**の検査（設計 §4.4）。
+//
+// `apply_device_switch` の順序は probe → 旧を pause → build → play → confirm。**probe に成功して
+// 旧を pause した後**で新ストリームが死ぬと、`Err(primary) => guard.stream.play()` で旧を
+// 再開する。ここが壊れると「切替に失敗しただけなのに恒久的に無音」になる。
+//
+// この経路は 2026-09-05 のレビューまで**どのテストからも到達できなかった**。実ストリームを殺せる
+// 唯一のフォールト `DeadRealStream` はプロセス全体に効くので、そもそも daemon が起動できない
+// （C-4 がそれを証明している）。そこで `DeadRealStreamOnSwitch`（起動は正常・切替の実ストリーム
+// だけ殺す）を足して到達可能にした。
+//
+// probe は殺していないので probe は成功し、旧が pause される。その後 `play_and_confirm` が
+// `StreamDead { phase: RealStream }` で落ち、旧が再開されるはず。
+fn c7_a_dead_replacement_stream_resumes_the_paused_old_one() {
+    let (engine, mut guard) =
+        EngineWrap::start_with_options(options(None, OutputFault::DeadRealStreamOnSwitch))
+            .expect("startup must be unaffected by the switch-only fault");
+
+    std::thread::sleep(Duration::from_millis(250));
+    let before_start = engine.stream_stats_snapshot().callbacks;
+    std::thread::sleep(Duration::from_millis(500));
+    let before_rate = engine.stream_stats_snapshot().callbacks - before_start;
+    assert!(before_rate > 0, "the old stream produced no callbacks");
+
+    let error = engine
+        .apply_device_switch(&mut guard, Some(named_default_output()))
+        .expect_err("a dead replacement stream must fail the switch");
+    assert!(
+        matches!(
+            error,
+            WrapError::Output(OutputError::StreamDead { phase, .. })
+                if phase == StreamLivenessPhase::RealStream
+        ),
+        "{error:?}"
+    );
+
+    // 🔴 ここが本命。旧ストリームは pause 済みだったので、再開できていなければ callback は
+    // 1 つも進まない。`guard.stream.play()` を消す変異でここが red になる。
+    let resumed_start = engine.stream_stats_snapshot().callbacks;
+    std::thread::sleep(Duration::from_millis(500));
+    let resumed_rate = engine.stream_stats_snapshot().callbacks - resumed_start;
+    assert!(
+        resumed_rate as f64 >= before_rate as f64 * 0.70,
+        "the old stream did not resume after a failed switch: before_rate={before_rate}, resumed_rate={resumed_rate}"
+    );
+
+    // 失敗は観測可能でなければならない（設計 §4.5）。
+    let output = engine.stream_config_snapshot();
+    assert!(
+        output
+            .last_switch_failure
+            .as_deref()
+            .is_some_and(|reason| reason.contains("produced no callback")),
+        "{output:?}"
+    );
+    // 縮退していない = 鳴っているのは切替前と同じデバイス。
+    assert!(!output.device_fell_back, "{output:?}");
 }

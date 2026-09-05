@@ -287,7 +287,7 @@ In the 2026-05 version this was hard-coded as `audioEngine: new SuperColliderPla
 When `Cmd+Enter` is pressed, the VS Code extension writes only the text of the block at the cursor (or the selection) to stdin.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3062-3062
+// packages/vscode-extension/src/extension.ts:3056-3056
   engineProcess.stdin.write(codeToSend + '\n')
 ```
 

@@ -2675,10 +2675,12 @@ fn err(id: &str, error: ProtocolError) -> Value {
 }
 
 /// `OutputError` のうち、利用者が行動を変えられるものだけを protocol code へ写す。
-///
-/// 呼び出し元は 2 つ（直接の `WrapError::Output` と `SwitchRecoveryFailed.primary`）で、
-/// **どちらも同じ表を引く**。actionable でないものは `None` を返し、呼び出し元が
+/// **コード表はここ 1 箇所だけ**。actionable でないものは `None` を返し、呼び出し元が
 /// `DEVICE_CONFIG_ERROR` へ落とす。
+///
+/// 🔴 `SwitchRecoveryFailed` を `primary` のコードへ畳まないのは意図的。畳むと
+/// 「元の出力を継続します」という `AUDIO_DEVICE_STREAM_DEAD` の文言が、**継続できていない**
+/// 事象に付く（2026-09-05 の監査で発覚）。取れる手が違う（再起動しかない）ので別コードにする。
 fn actionable_output_error_code(output: &orbit_audio_native::OutputError) -> Option<&'static str> {
     use orbit_audio_native::OutputError as O;
     match output {
@@ -2687,13 +2689,15 @@ fn actionable_output_error_code(output: &orbit_audio_native::OutputError) -> Opt
             Some(crate::protocol::ERROR_CODE_AUDIO_DEVICE_RATE_MISMATCH)
         }
         O::DeviceUnavailable { .. } => Some(crate::protocol::ERROR_CODE_AUDIO_DEVICE_UNAVAILABLE),
+        O::SwitchRecoveryFailed { .. } => {
+            Some(crate::protocol::ERROR_CODE_AUDIO_DEVICE_SWITCH_RECOVERY_FAILED)
+        }
         _ => None,
     }
 }
 
 fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
     use orbit_audio_native::LoaderError as L;
-    use orbit_audio_native::OutputError as O;
     match e {
         WrapError::SampleNotFound(sid) => {
             ProtocolError::new("SAMPLE_NOT_FOUND", format!("sample_id not found: {sid}"))
@@ -2711,17 +2715,13 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         // 🔴 コード表は `actionable_output_error_code` の 1 箇所だけ。以前はここに直接 3 アーム +
         // `SwitchRecoveryFailed.primary` 用に同じ 3 アームが並んでいて、新しい actionable な
         // `OutputError` を足す人が**片方だけ更新して黙って `DEVICE_CONFIG_ERROR` に落ちる**形だった。
-        WrapError::Output(o) => {
-            let primary = match o {
-                O::SwitchRecoveryFailed { primary, .. } => primary.as_ref(),
-                other => other,
-            };
-            match actionable_output_error_code(primary) {
-                // actionable なものは `WrapError` の Display（`audio output init failed: …`）ごと返す。
-                Some(code) => ProtocolError::new(code, e.to_string()),
-                None => ProtocolError::new("DEVICE_CONFIG_ERROR", o.to_string()),
-            }
-        }
+        //
+        // メッセージは常に `OutputError` の Display を使う（`WrapError::Output` の
+        // 「audio output init failed: 」は切替経路では嘘になる）。
+        WrapError::Output(o) => ProtocolError::new(
+            actionable_output_error_code(o).unwrap_or("DEVICE_CONFIG_ERROR"),
+            o.to_string(),
+        ),
         WrapError::Scheduler(msg) => ProtocolError::new("INTERNAL_ERROR", msg.clone()),
         // feature-gap（TS は warn-once で握り潰す）と runtime 失敗（TS は rethrow）を別コードにする。
         WrapError::LinkAudioUnavailable(msg) => {
@@ -3764,14 +3764,35 @@ mod tests {
             )),
         });
         let protocol = wrap_err_to_protocol(&recovery);
+        // 🔴 `primary` のコードへ畳まない。畳むと「元の出力を継続します」という
+        // `AUDIO_DEVICE_STREAM_DEAD` の UI 文言が、継続できていない事象に付く。
         assert_eq!(
             protocol.code,
-            crate::protocol::ERROR_CODE_AUDIO_DEVICE_STREAM_DEAD
+            crate::protocol::ERROR_CODE_AUDIO_DEVICE_SWITCH_RECOVERY_FAILED
         );
         assert!(protocol
             .message
             .contains("produced no callback within 3000 ms"));
         assert!(protocol.message.contains("resume refused"));
+
+        // F4（owner 裁定 2026-09-05）で新設した経路。ここが落ちると利用者は
+        // `DEVICE_CONFIG_ERROR` しか受け取れず、エディタは「元の出力を継続します」を出せない。
+        let unavailable = WrapError::Output(orbit_audio_native::OutputError::DeviceUnavailable {
+            requested: "NoSuchDevice".into(),
+            reason: "not found (available: [])".into(),
+        });
+        let protocol = wrap_err_to_protocol(&unavailable);
+        assert_eq!(
+            protocol.code,
+            crate::protocol::ERROR_CODE_AUDIO_DEVICE_UNAVAILABLE
+        );
+        assert!(protocol.message.contains("NoSuchDevice"));
+        // 切替では何も init していないので、この前置は載ってはいけない。
+        assert!(
+            !protocol.message.contains("audio output init failed"),
+            "{}",
+            protocol.message
+        );
     }
 
     // CLAP エラーの protocol code 分割を pin（LinkAudio と同様: feature-gap=UNAVAILABLE /

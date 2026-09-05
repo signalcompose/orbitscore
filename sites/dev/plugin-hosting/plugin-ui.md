@@ -943,7 +943,7 @@ ack の照合キーは `(generation, window, evt_seq)` の三つ組になり、�
 loud に拒否されます。event frame の `PluginUiTarget` にも `window` が載りました。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9399-9412
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9409-9422
 /// WS event frame に載せる、解決済み plugin UI 宛先。
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PluginUiTarget {
@@ -1045,7 +1045,7 @@ struct UiEventHubCore {
 `extension.ts` の stdout ルータはこの結果行を `{"pluginUi"` の前方一致で拾います。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1500-1504
+// packages/vscode-extension/src/extension.ts:1501-1505
         } else if (trimmedLine.startsWith('{"pluginUi"')) {
           const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
           if (!parsed && isCurrent) {
@@ -1075,7 +1075,7 @@ recorded` で失敗するので、「DSL で open → MCP の close が成功す
 その後 1 枚目も閉じます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2002-2024
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2041-2063
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

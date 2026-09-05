@@ -17,6 +17,110 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(661): close the review round-2 findings across all four layers (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+ゲート③ ラウンド 2（`/code:pr-review-team` フル編成 4 体 + Fable 監査を並行）。
+**Critical 0 / Important 5**（うち 3 体が同じ 1 件に収束）。設計パスを 1 つ置いてから一括で直した。
+
+#### 設計パス P1 — ライブ切替の失敗を利用者にどう見せるか
+
+分ける軸は「**いま鳴っている音を止めずに直せるか**」。表は
+`packages/vscode-extension/src/engine-view.ts` の `SELECT_AUDIO_DEVICE_ERRORS` **1 箇所**に置き、
+文言・再起動の要否・「既知かどうか」の 3 つをすべてそこから引く。
+
+| code | 音 | Restart Engine |
+|---|---|---|
+| `AUDIO_DEVICE_UNAVAILABLE` | 鳴り続ける | ❌ 出さない |
+| `AUDIO_DEVICE_STREAM_DEAD` | 鳴り続ける | ❌ 出さない |
+| `AUDIO_DEVICE_SWITCH_UNAVAILABLE`（録音中） | 鳴り続ける | ✅ |
+| `AUDIO_DEVICE_RATE_MISMATCH` | 鳴り続ける | ✅ |
+| `AUDIO_DEVICE_SWITCH_RECOVERY_FAILED`（新設） | **止まっている** | ✅ |
+
+🔴 これを直した理由: F4（名前不一致は縮退せず拒否）を実装したのに、**UI は未知コードとして
+「Restart Engine」を提示**していた。再起動すると起動経路のポリシーで host 既定へ移るので、
+**F4 が避けたかった「演奏中のタイプミスで音が内蔵スピーカーへ移る」を UI が自分で起こす**形だった。
+
+`SwitchRecoveryFailed` を `primary` のコードへ畳むのもやめた。畳むと
+`AUDIO_DEVICE_STREAM_DEAD` の「元の出力を継続します」が、**継続できていない**事象に付く。
+
+#### 🔴 C-7 — 到達不能だった安全網を到達可能にした
+
+`apply_device_switch` の「probe 成功 → 旧を pause → 新の build/play/confirm が失敗 → 旧を
+`play()` で再開」は、**どのテストからも到達できなかった**。実ストリームを殺せる唯一のフォールト
+`DeadRealStream` はプロセス全体に効き、daemon が起動できない（C-4 がそれを証明している）。
+
+`StreamBuildStage { Startup, Switch }` と `OutputFault::DeadRealStreamOnSwitch` を足して到達可能にし、
+gated Rust `C-7` を新設。**変異で赤を実測**:
+
+```
+変異なし                    : ok
+guard.stream.play() を削除  : FAILED
+  the old stream did not resume after a failed switch:
+  before_rate=48, resumed_rate=0
+```
+
+`resumed_rate=0` = 旧ストリームは pause されたまま**恒久的に無音**。これが起きるのが最悪ケース。
+
+#### E2E の判定を強くした
+
+| テスト | 直前まで | 直した形 |
+|---|---|---|
+| **D-0** | `rms > 0` だけ | `output.device_name` が**要求名と一致**・`device_fell_back === false` |
+| **D-2** | `rms > 0` だけ | `device_requested` が要求名・`device_fell_back === true`・`fallback_reason` に理由 |
+| **D-1** | `toBe(before)` が両辺 undefined で**空振りで通る** | 先に `typeof … === 'string'` を固定。包含側も D-3 水準へ |
+| **D-3** | 包含側が `ERROR:` 前置に依存（chunk 境界で**偽赤**） | 前置に依存しない `newLogLines` で数える |
+
+🔴 D-0 は **#661 の受け入れテストそのもの**（「デバイス指定で音が出る」）なのに、`rms > 0` は
+「何らかのデバイスから音が出た」しか言わない。このマシンは出力が実質 1 台なので、
+**指定が無視されて既定に落ちても緑になっていた。**
+
+デバイスの検査は**鳴っている間**に取る必要があった（`runScore` から戻った時点で engine は停止済みで
+`get_engine_state` は `{running:false}` しか返さない）。1 度これで落ちてから直した。
+
+#### その他
+
+- `get_engine_state` の状態問い合わせ予算を 10 秒 → **2.5 秒**。`waitForEngine` はこのツールで
+  `running` を 500 ms 間隔でポーリングするので、10 秒だと 30 秒予算で 3 回しか試せなかった
+- 判定を `resolveEngineState`（`engine-state-bridge.ts`）へ切り出し、**3 分岐すべてに単体テスト**
+  （停止中 / ブリッジが `ok:false` / ブリッジ自体が reject）
+- 切替失敗のメッセージから `audio output init failed: ` の前置を落とした。**切替では何も init して
+  いない**のに、ERROR ログ・`last_switch_failure`・MCP の返り値・UI 文言すべてに載っていた
+- `engine-view.spec.ts` の入力を実形式 `[CODE] message` に揃えた（捏造した mock 文言だった）
+- 設計 §4.5 に「1 回の失敗を 2 層が記録する」を明記。§6 受け入れ 7（**倍速になるか**）に結論を記載
+- `docs/research/ENGINE_DAEMON_PROTOCOL.md` に `SelectAudioDevice` の失敗コード表を追加
+
+#### §2.2「時間が倍速になるか」— 決着
+
+**倍速にならない。ただしそれは `pause()` が 2 重に効いているから**で、リスク自体は実在した。
+C-6 の実測（`--audio-device <既定の名前>` → host 既定へ切替）:
+
+| 変異 | callbacks/s |
+|---|---|
+| 変異なし | **94**（等速） |
+| (a) だけ削除 / (b) だけ削除 | 94（もう片方が効く） |
+| **(a)(b) 両方削除** | **190**（ほぼ倍速） |
+
+#### 別 issue へ分離（6 本）
+
+**#755** `select_audio_device` が人間のクリックトグルを共有 /
+**#756** `setupStderrHandler` の `ERROR:` 前置が chunk 単位 /
+**#757** request 相関ブリッジが 5 本 625 行の重複 /
+**#758** 捨てた旧ストリームの disconnect listener が共有 `StreamStats` に `device_lost` を書く
+
+#### 検証（実機・sandbox 外）
+
+```
+gated Rust  C-1〜C-7  7 passed / 0 failed
+gated MCP   #661 D-0 / D-2 / D-3  3 passed
+```
+
+🔴 `cargo test` を Bash の sandbox 内で回すと CoreAudio が塞がれ `Device::name()` が
+backend error で落ちる（C-1 まで赤くなる）。実機オーディオのテストは sandbox 外で回すこと。
+
+---
+
 ### refactor: apply the second /simplify pass to the device-liveness branch (#661) (Sep 5, 2026)
 
 **Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748

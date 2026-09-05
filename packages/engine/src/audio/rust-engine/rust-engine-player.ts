@@ -1841,9 +1841,15 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * 現在 live な daemon の状態スナップショット（kill-test の daemon-side 状態クエリ用 / @internal）。
-   * respawn 後に uptime_sec（≈transport）/ loaded_samples / active_plays を読み、再 anchor と
-   * セッション再確立を daemon 側から検証する（#300 の orphaned play_id / active loops 復帰の接地）。
+   * 現在 live な daemon の状態スナップショット（`GetStatus` の生の中身）。
+   *
+   * 🔴 **もう @internal ではない**（#661・2026-09-05）。`AudioEngineBackend` のメソッドとして
+   * 昇格し、REPL の `//#getEngineState` 経由で MCP の `get_engine_state` が返す `output` /
+   * `callback` の供給元になっている。**本番の可観測性機能なので、形を変えると LLM とエディタの
+   * 状態表示が壊れる。**
+   *
+   * 元の用途（#300 の kill-test）も現役: respawn 後に uptime_sec（≈transport）/ loaded_samples /
+   * active_plays を読み、再 anchor とセッション再確立を daemon 側から検証する。
    */
   async getDaemonStatus(): Promise<Record<string, unknown>> {
     return this.daemon.getStatus()

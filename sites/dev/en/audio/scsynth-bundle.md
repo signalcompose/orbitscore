@@ -196,7 +196,7 @@ The error message includes the list of searched paths, so "where it looked and d
 The VS Code extension uses the resolver by `require()`-ing the engine's compiled JS.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:679-695
+// packages/vscode-extension/src/extension.ts:680-696
 function resolveScsynthForUI(): { path: string; source: string } | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
@@ -225,7 +225,7 @@ If VS Code's setting `orbitscore.scsynthPath` is non-empty, it is passed as `exp
 This is the big difference from the 2026-05 reading. **Whether** `resolveScsynthForUI()` is called at all is decided by `getConfiguredEngineKind()`, which normalizes the `orbitscore.engine` setting (#377, `docs/archive/WORK_LOG_2026-07.md` §6.186). The normalization runtime-`require`s the engine's `resolveEngineKind()` so that the UI and the engine never disagree.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:656-672
+// packages/vscode-extension/src/extension.ts:657-673
 function getConfiguredEngineKind(): 'rust' | 'sc' {
   const raw = vscode.workspace.getConfiguration('orbitscore').get<string>('engine', 'rust')
   try {
@@ -248,7 +248,7 @@ function getConfiguredEngineKind(): 'rust' | 'sc' {
 The pre-check in `startEngine()` resolves scsynth only under the `sc` kind; under the `rust` kind it resolves the daemon binary instead.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2066-2082
+// packages/vscode-extension/src/extension.ts:2060-2076
   // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
   // 'rust' (default since cutover #369), skip the scsynth pre-check entirely —
   // the native daemon doesn't need scsynth to be resolvable.
@@ -294,7 +294,7 @@ Each path is verified by `isExecutableFile()` (existence + execute permission). 
 The extension calls `updateBundleStatus()` at startup and on configuration change (`orbitscore.scsynthPath` / `orbitscore.engine`). Under the `sc` kind it shows the resolver result on the status bar: one of `'bundle'`, `'env'`, or `'explicit'` is shown as the source, and if unresolved, `$(error) scsynth: not found` is shown emphasized. Under the `rust` kind, on the other hand, **the indicator itself is hidden as long as the daemon resolves**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:728-744
+// packages/vscode-extension/src/extension.ts:729-745
 function updateBundleStatus(): void {
   if (!bundleStatusItem) return
   if (getConfiguredEngineKind() === 'rust') {

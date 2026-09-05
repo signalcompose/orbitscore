@@ -58,6 +58,7 @@ import { defaultOutputDeviceName } from './helpers/audio-devices'
 import {
   countErrors,
   countLogMarker,
+  newLogLines,
   errorBaseline,
   expectNoNewErrors,
   newErrorLines,
@@ -503,6 +504,23 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   let catalogErrorsBefore: number | undefined
   let catalogErrorsAfter: number | undefined
   let brokenCatalogPath: string | undefined
+
+  /**
+   * `get_engine_state` から daemon の `GetStatus.output` を取る。
+   *
+   * 🔴 `rms > 0` は「**何らかの**デバイスから音が出た」しか言わない。このマシンは出力が実質
+   * 1 台なので、`orbitscore.audioDevice` の指定が黙って無視されても capture は鳴る
+   * （2026-09-05 の監査で D-0 / D-2 がこの穴を持っていた）。**鳴っているデバイスまで見る。**
+   */
+  const requireDaemonOutput = async (
+    activeClient: McpClient,
+    label: string,
+  ): Promise<Record<string, unknown>> => {
+    const raw = (await activeClient.call('get_engine_state')).text
+    const state = JSON.parse(raw) as Record<string, unknown>
+    expect(state.output, `${label} needs daemon output state: ${raw}`).toBeDefined()
+    return state.output as Record<string, unknown>
+  }
 
   /** `prepareWorkspace` コールバック経由の代入は TS が narrowing できないので、明示的に弾く。 */
   const requireKickLoopWorkPath = (): string => {
@@ -1057,21 +1075,42 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         `❌ audio device fallback: requested "${missingAudioDevice}"`,
       )
       // 増えた ERROR は「切替に失敗した」1 種類だけで、他の ERROR は増えていない。
+      const anyLayerRejectionMarker = `switch to "${missingAudioDevice}" failed`
       expect(
         newErrorLines(beforeDeviceFallbackLog, afterDeviceFallbackLog).filter(
-          (line) => !line.includes(`switch to "${missingAudioDevice}" failed`),
+          (line) => !line.includes(anyLayerRejectionMarker),
         ),
         '#661 D-1 must add no ERROR other than the rejected switch',
       ).toEqual([])
+      // D-3 と同じ水準: 「想定内のものが重複していない」まで見る。`ERROR:` 前置は chunk 単位で
+      // 付くので、包含側は前置に依存しない `newLogLines` で数える。
+      expect(
+        newLogLines(beforeDeviceFallbackLog, afterDeviceFallbackLog).filter((line) =>
+          line.includes(`\u274c live device switch to "${missingAudioDevice}" failed`),
+        ),
+        '#661 D-1 must surface the rejection to the user exactly once',
+      ).toHaveLength(1)
       // 鳴っているデバイスは変わっていない。
       const deviceAfterReject = JSON.parse((await client.call('get_engine_state')).text) as Record<
         string,
         unknown
       >
+      const deviceNameOf = (state: Record<string, unknown>): unknown =>
+        (state.output as Record<string, unknown> | undefined)?.device_name
+      // 🔴 先にデバイス名が**取れていること**を固定する。`get_engine_state` が `statusError` を
+      // 返すと両辺とも undefined になり、`toBe` が**空振りで通る**（2026-09-05 の監査で指摘）。
       expect(
-        (deviceAfterReject.output as Record<string, unknown> | undefined)?.device_name,
+        typeof deviceNameOf(deviceBeforeReject),
+        `#661 D-1 needs the device name before the switch: ${JSON.stringify(deviceBeforeReject)}`,
+      ).toBe('string')
+      expect(
+        typeof deviceNameOf(deviceAfterReject),
+        `#661 D-1 needs the device name after the switch: ${JSON.stringify(deviceAfterReject)}`,
+      ).toBe('string')
+      expect(
+        deviceNameOf(deviceAfterReject),
         '#661 D-1 must keep the device that was already playing',
-      ).toBe((deviceBeforeReject.output as Record<string, unknown> | undefined)?.device_name)
+      ).toBe(deviceNameOf(deviceBeforeReject))
 
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
@@ -5224,10 +5263,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           vst3SynthName: '',
           vst3EffectName: '',
         })
+        // 🔴 デバイスの検査は**鳴っている間**に取る。`runScore` から戻った時点で engine は
+        // 停止済みで、`get_engine_state` は `{running:false}` しか返さない（daemon の
+        // `GetStatus` は engine と一緒に消える）。
+        let d0Output: Record<string, unknown> | undefined
         const captured = await runScore(
           session,
           { slug: '661-d0-named-device', fixturePath: KICK_LOOP_FIXTURE },
-          async (ctx) => ctx.captureSegment('named-output', 1800, 500),
+          async (ctx) => {
+            await ctx.captureSegment('named-output', 1800, 500)
+            d0Output = await requireDaemonOutput(client, '#661 D-0')
+          },
           { capture: true },
         )
         expect(captured, '#661 D-0 must return capture analysis').toBeDefined()
@@ -5235,6 +5281,14 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           captured!.rms('named-output'),
           '#661 D-0 named output device ' + requestedName + ' must be audible',
         ).toBeGreaterThan(0)
+        // 🔴 受け入れは「**要求した**デバイスで鳴ること」。RMS だけでは指定が無視されても緑になる。
+        expect(d0Output!.device_name, '#661 D-0 must honor the requested device').toBe(
+          requestedName,
+        )
+        expect(d0Output!.device_requested, '#661 D-0 must record what was requested').toBe(
+          requestedName,
+        )
+        expect(d0Output!.device_fell_back, '#661 D-0 must not fall back').toBe(false)
       } finally {
         try {
           await client.call('stop_engine')
@@ -5253,12 +5307,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     async () => {
       // This is a dedicated app process because startup fault injection is immutable typed state;
       // changing it in the shared long-running suite would invalidate all following scenarios.
+      let deadRequestedName = ''
       const launched = await launchIsolatedOrbitStudio({
         tmpPrefix: 'orbitstudio-device-gate-',
-        settings: () => ({
-          'orbitscore.audioDevice': defaultOutputDeviceName('#661 D-2'),
-          'orbitscore.engineDebug': false,
-        }),
+        settings: () => {
+          deadRequestedName = defaultOutputDeviceName('#661 D-2')
+          return {
+            'orbitscore.audioDevice': deadRequestedName,
+            'orbitscore.engineDebug': false,
+          }
+        },
         env: {
           ...process.env,
           ORBIT_DAEMON_ALLOW_FAULT_INJECTION: '1',
@@ -5298,10 +5356,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         const faultSession = createGatedSession(faultClient, faultTmpRoot, emptyCatalog)
 
         // D-2: the injected-dead named unit falls back, and the user's score is still audible.
+        // D-0 と同じ理由で、デバイスの検査は鳴っている間に取る。
+        let d2Output: Record<string, unknown> | undefined
         const captured = await runScore(
           faultSession,
           { slug: '661-d2-dead-device', fixturePath: KICK_LOOP_FIXTURE },
-          async (ctx) => ctx.captureSegment('playing', 1800, 500),
+          async (ctx) => {
+            await ctx.captureSegment('playing', 1800, 500)
+            d2Output = await requireDaemonOutput(faultClient, '#661 D-2')
+          },
           { capture: true },
         )
         expect(captured, '#661 D-2 must return capture analysis').toBeDefined()
@@ -5309,6 +5372,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           captured!.rms('playing'),
           '#661 D-2 fallback output must be audible',
         ).toBeGreaterThan(0)
+        // 🔴 D-2 が測るのは「縮退**して**鳴っている」こと。RMS だけだと、そもそも縮退が
+        // 起きていなくても（fault が効かなくても）緑になる。
+        expect(d2Output!.device_requested, '#661 D-2 must record what was requested').toBe(
+          deadRequestedName,
+        )
+        expect(d2Output!.device_fell_back, '#661 D-2 must fall back from the dead device').toBe(
+          true,
+        )
+        expect(d2Output!.fallback_reason, '#661 D-2 must record why it fell back').toContain(
+          'no callback',
+        )
       } finally {
         try {
           await faultClient.call('stop_engine')
@@ -5450,9 +5524,13 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             // `outputChannel.append('ERROR: ' + chunk)` が chunk 単位で前置するため、
             // 同じ chunk の 2 行目以降には `ERROR:` が付かない）。だから「失敗が
             // 利用者に届いたか」は engine 側の文言で数える。
+            // 🔴 包含側は `ERROR:` 前置に依存させない（前置は chunk 単位なので、たまたま同じ
+            // chunk の 2 行目になると前置を失い**偽赤**になる。`newLogLines` の docstring 参照）。
             expect(
-              newErrors.filter((line) => line.includes(engineFailureMarker)),
-              '#661 D-3 must surface the switch failure to the user as exactly one ERROR line. ' +
+              newLogLines(beforeFailureLog, settledLog).filter((line) =>
+                line.includes(engineFailureMarker),
+              ),
+              '#661 D-3 must surface the switch failure to the user exactly once. ' +
                 `Lines naming the device:\n${linesNamingDevice}`,
             ).toHaveLength(1)
             expect(

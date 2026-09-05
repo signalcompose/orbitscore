@@ -161,7 +161,18 @@ play / confirm が失敗した場合は、失敗した新 stream を必ず pause
 | 起動成功（縮退なし） | `tracing::info!` | `establishSession()` の `getStatus()` 後に `🔊 output: "N" @ 48000 Hz × 2ch (first callback 12 ms)` | INFO 1 行。**正常系で ERROR は増えない** |
 | 起動時の縮退 | `tracing::warn!` | `❌ audio device fallback: requested "X" → using "N": <reason>` | **ERROR 1 行**（縮退時のみ） |
 | 起動全滅 | `report_startup_failure()` が `ready:false` JSON を `write_line_best_effort` で stderr へ出す（`tracing::error!` は出さない） | `DaemonStartupError` に stderr 全文 | 既存経路 |
-| 切替失敗 | `tracing::error!` + RPC error（`AUDIO_DEVICE_STREAM_DEAD` / `AUDIO_DEVICE_RATE_MISMATCH`） | `❌ live device switch to "X" failed: …` | ERROR 1 行。理由は以後も `GetStatus.output.last_switch_failure` に残る |
+| 切替失敗 | `tracing::error!` + RPC error（`AUDIO_DEVICE_STREAM_DEAD` / `AUDIO_DEVICE_RATE_MISMATCH` / `AUDIO_DEVICE_UNAVAILABLE` / `AUDIO_DEVICE_SWITCH_RECOVERY_FAILED`） | `❌ live device switch to "X" failed: …` | **2 層が別々の文言で 1 回の失敗を記録する**（下記）。理由は以後も `GetStatus.output.last_switch_failure` に残る |
+
+🔴 **切替失敗は「ERROR 1 行」ではない**（2026-09-05 の実測で判明。当初この表は 1 行と書いていた）。
+daemon の `tracing::error!` は `createDaemonStderrLineRouter` 経由で engine の `console.error` に流れ、
+engine 自身も `❌ live device switch to …` を出すので、**同じ 1 回の失敗を 2 層が別々の文言で
+記録する**。しかも拡張の `outputChannel.append('ERROR: ' + chunk)` は **chunk 単位**で前置するため、
+2 行が同じ chunk に入ると `ERROR:` が付くのは片方だけになる（→ #756）。
+
+したがって gated E2E の判定は:
+
+- **除外**（「他の ERROR は増えていない」）は 2 層に共通する部分文字列 `device switch to "X" failed` で行う
+- **包含**（「利用者に届いた」）は `ERROR:` 前置に依存しない `newLogLines` で engine 層の文言を数える
 
 🔴 **native（`output.rs`）は一切 print しない。** `eprintln!` を撤去し、縮退理由を
 `DeviceFallback { reason }` として値で返す。理由: (1) §2.3 で起動時は無意味
@@ -235,6 +246,7 @@ fault は **env ではなく `StartupOptions` に typed で**渡す。
 | C-4 | `DeadRealStream`（起動）→ `Err(StreamDead { phase: RealStream, .. })`（**再縮退しない**） |
 | C-5 | 切替の dead probe（3 s）を別 thread から 100 ms 間隔で観測し、旧 `callbacks` に 500 ms 以上の停滞が無く、`last_switch_failure` に理由が残る |
 | **C-6** 🔴 | **切替成功で二重レンダにならない**: 名指し起動 → 切替前 1 s の callbacks 実測率を保存 → `apply_device_switch(None)` → 切替後 1 s の率が切替前の **±30 % 以内**（2 倍なら旧 stream が生きている） |
+| **C-7** 🔴 | **probe 成功後に新ストリームが死んだら旧を再開する**: `DeadRealStreamOnSwitch`（起動は正常・切替の実ストリームだけ殺す）で切替 → `StreamDead { phase: RealStream }` が返り、**旧ストリームの callbacks が切替前の 70 % 以上へ復帰**。`last_switch_failure` に理由が残り `device_fell_back` は false のまま |
 
 ### gated MCP E2E（ユーザー動線・`orbitstudio-mcp-gated.spec.ts`）
 
@@ -254,14 +266,30 @@ fault は **env ではなく `StartupOptions` に typed で**渡す。
 1. `cargo test -p orbit-audio-native -p orbit-audio-daemon` 全緑 + `clippy --all-targets` +
    **cfg 5 feature すべて**（`check-cfg-matrix.sh` の 4 象限 + `clap-host` / `link-audio` /
    `link-audio-verification`）
-2. gated Rust C-1〜C-6 が緑。**C-6 の変異（`pause()` を外す）で red** の実出力
+2. gated Rust C-1〜**C-7** が緑。**C-6 の変異（`pause()` を外す）で red** の実出力
+   （**C-7 の変異（`guard.stream.play()` を外す）でも red** を実測: `before_rate=48, resumed_rate=0` = 旧ストリームが pause されたまま恒久的に無音）
 3. gated MCP D-1〜D-3 が緑。`ORBIT_GATED_ORBITSTUDIO` 未設定で skip
 4. **既存 gated 全件が緑のまま**（ERROR 件数の巻き添えなし）
 5. 実機（main・sandbox 外）: `--audio-device "Pro Tools Aggregate I/O"` で
    `get_log` に `🔊 output: … (first callback N ms)` が 1 行・**ERROR 増分 0**
 6. `main.rs` から `set_var("ORBIT_AUDIO_DEVICE")` が消えている（grep）
-7. 🔴 **§2.2 の「時間が倍速になるか」を実測して結論を書く**（capture の RMS 時系列か
-   オンセット間隔で。倍速なら別 issue へ）
+7. ✅ **§2.2 の「時間が倍速になるか」— 実測して決着した**（2026-09-05・main が実機で）
+
+   **結論: 倍速にならない。ただしそれは `pause()` が 2 重に効いているからで、リスク自体は実在した。**
+
+   `cursor_frames` はコールバック 1 ブロックにつき 1 回進むので、**共有 `StreamStats` の
+   callbacks/s がそのまま transport の進み方**になる。C-6 がこれを切替の前後で比較している
+   （`--audio-device <既定の名前>` → host 既定へ切替）:
+
+   | 変異 | callbacks/s | 意味 |
+   |---|---|---|
+   | 変異なし | **94** | 旧ストリームは進めていない = **等速** |
+   | (a) `apply_device_switch` の pause だけ削除 | 94 | (b) が効く |
+   | (b) `OutputStream::drop` の pause だけ削除 | 94 | (a) が効く |
+   | **(a)(b) 両方削除** | **190** | **ほぼ倍速。§2.2 の懸念は実在する** |
+
+   つまり cpal 0.15.3 の参照循環（§2.2）は本物で、**`pause()` を両方落とすと時間が倍速になる**。
+   実装はこれを 2 重の防御で塞いでおり、C-6 が回帰ガードになっている。別 issue は不要。
 
 ---
 

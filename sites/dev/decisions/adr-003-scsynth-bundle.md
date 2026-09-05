@@ -275,7 +275,7 @@ SC プロジェクトが既に Apple Developer ID + hardened runtime + notarize 
 | `rust` | (scsynth は解決しない) | daemon 解決可なら非表示、不可なら `$(error) daemon: not found` |
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:745-769
+// packages/vscode-extension/src/extension.ts:746-770
   bundleStatusItem.show()
   const resolution = resolveScsynthForUI()
   if (!resolution) {

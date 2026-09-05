@@ -275,7 +275,7 @@ As covered in [III-3](/en/audio/scsynth-bundle) and [IV-1](/en/editor/vscode-arc
 | `rust` | (scsynth is not resolved) | hidden if the daemon resolves; otherwise `$(error) daemon: not found` |
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:745-769
+// packages/vscode-extension/src/extension.ts:746-770
   bundleStatusItem.show()
   const resolution = resolveScsynthForUI()
   if (!resolution) {

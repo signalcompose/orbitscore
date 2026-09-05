@@ -248,22 +248,89 @@ export function parseSelectAudioDeviceResultLine(
 export const AUDIO_DEVICE_SWITCH_UNAVAILABLE = 'AUDIO_DEVICE_SWITCH_UNAVAILABLE'
 export const AUDIO_DEVICE_STREAM_DEAD = 'AUDIO_DEVICE_STREAM_DEAD'
 export const AUDIO_DEVICE_RATE_MISMATCH = 'AUDIO_DEVICE_RATE_MISMATCH'
+export const AUDIO_DEVICE_UNAVAILABLE = 'AUDIO_DEVICE_UNAVAILABLE'
+export const AUDIO_DEVICE_SWITCH_RECOVERY_FAILED = 'AUDIO_DEVICE_SWITCH_RECOVERY_FAILED'
+
+interface SelectAudioDeviceErrorKind {
+  readonly code: string
+  /** エンジンを再起動しないと直らないか。 */
+  readonly needsRestart: boolean
+  readonly message: (error: string) => string
+}
 
 /**
- * User-facing translation for the daemon's `AUDIO_DEVICE_SWITCH_UNAVAILABLE` error
- * (raised while `ORBIT_CAPTURE_WAV` recording is active — the daemon refuses to tear
- * down the stream mid-capture, #484 D2 brief choice (a)). Other errors pass through
- * unchanged so real failures aren't masked.
+ * ライブ切替の失敗コードの**唯一の表**。文言・再起動の要否・「既知かどうか」の 3 つは
+ * すべてここから引く（分岐を 3 箇所に書くと、コードを足した時に片方だけ更新される）。
+ *
+ * 🔴 `needsRestart` を分ける軸は「**いま鳴っている音を止めずに直せるか**」
+ * （owner 裁定 2026-09-05・設計 `docs/design/661-audio-device-liveness-design.md` §3）。
+ * 音が鳴り続けている失敗に「Restart Engine」を出すと、F4 が守ろうとした
+ * 「演奏中のタイプミスで音が止まらない」を **UI が自分で壊す**（再起動すると起動経路の
+ * ポリシーで host 既定へ移る）。
+ *
+ * 順序が意味を持つ: 先に一致したものが採用される。`SWITCH_RECOVERY_FAILED` は
+ * 「切替も復帰も失敗した」= 音が**止まっている**ので、他より先に判定する。
+ */
+const SELECT_AUDIO_DEVICE_ERRORS: readonly SelectAudioDeviceErrorKind[] = [
+  {
+    code: AUDIO_DEVICE_SWITCH_RECOVERY_FAILED,
+    needsRestart: true,
+    message: (error) =>
+      `切替に失敗し、元の出力も再開できませんでした — エンジンを再起動してください (${error})`,
+  },
+  {
+    code: AUDIO_DEVICE_SWITCH_UNAVAILABLE,
+    needsRestart: true,
+    message: () => '録音中は切替できません — エンジンを再起動してください',
+  },
+  {
+    code: AUDIO_DEVICE_UNAVAILABLE,
+    needsRestart: false,
+    message: (error) => `指定したデバイスが見つかりません — 元の出力を継続します (${error})`,
+  },
+  {
+    code: AUDIO_DEVICE_STREAM_DEAD,
+    needsRestart: false,
+    message: (error) =>
+      `デバイスから音声コールバックが届きません — 元の出力を継続します (${error})`,
+  },
+  {
+    code: AUDIO_DEVICE_RATE_MISMATCH,
+    needsRestart: true,
+    message: (error) =>
+      `サンプルレートが異なるため切替できません — エンジンを再起動してください (${error})`,
+  },
+]
+
+function matchSelectAudioDeviceError(
+  error: string | undefined,
+): SelectAudioDeviceErrorKind | undefined {
+  if (!error) return undefined
+  return SELECT_AUDIO_DEVICE_ERRORS.find((kind) => error.includes(kind.code))
+}
+
+/**
+ * User-facing translation for the daemon's live device-switch errors. Unknown errors pass
+ * through unchanged so real failures aren't masked.
  */
 export function translateSelectAudioDeviceError(error: string | undefined): string {
-  if (error && error.includes(AUDIO_DEVICE_SWITCH_UNAVAILABLE)) {
-    return '録音中は切替できません — エンジンを再起動してください'
-  }
-  if (error && error.includes(AUDIO_DEVICE_STREAM_DEAD)) {
-    return `デバイスから音声コールバックが届きません — 元の出力を継続します (${error})`
-  }
-  if (error && error.includes(AUDIO_DEVICE_RATE_MISMATCH)) {
-    return `サンプルレートが異なるため切替できません — エンジンを再起動してください (${error})`
-  }
+  const kind = matchSelectAudioDeviceError(error)
+  if (kind && error) return kind.message(error)
   return error ?? 'live audio device switch failed'
+}
+
+/**
+ * 「Restart Engine」を提示してよい失敗か。**未知のエラーは true**（何が起きたか分からないので
+ * 従来どおり再起動を選べるようにする）。
+ */
+export function liveSwitchFailureNeedsRestart(error: string | undefined): boolean {
+  return matchSelectAudioDeviceError(error)?.needsRestart ?? true
+}
+
+/**
+ * 翻訳済みの文言を持つ既知のコードか。未知のエラーは文言だけでは何の失敗か分からないので、
+ * 呼び出し側が「live device switch failed:」を前置する判断に使う。
+ */
+export function hasTranslatedSelectAudioDeviceError(error: string | undefined): boolean {
+  return matchSelectAudioDeviceError(error) !== undefined
 }

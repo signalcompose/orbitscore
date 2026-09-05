@@ -182,7 +182,7 @@ v1.0 → v2.0 の pivot で消えた機能があります:
 また、`updateDiagnostics()` には v1.0 MIDI 構文の残滓への警告が実装されています。`sequence ` キーワードを含む行は `DiagnosticTag.Deprecated` でハイライトされます:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4076-4085
+// packages/vscode-extension/src/extension.ts:4070-4079
     // Check for deprecated syntax (old MIDI DSL)
     if (line.includes('sequence ') && !line.includes('//')) {
       const diagnostic = new vscode.Diagnostic(

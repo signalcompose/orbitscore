@@ -53,14 +53,30 @@ export async function errorBaseline(client: McpClient): Promise<number> {
  * 「想定した 1 件以外は増えていない」という**より強い主張**ができる。
  */
 export function newErrorLines(before: string, after: string): readonly string[] {
-  const errorsOf = (log: string): string[] =>
-    log.split('\n').filter((line) => line.includes('ERROR:'))
+  return newLogLines(before, after).filter((line) => line.includes('ERROR:'))
+}
+
+/**
+ * 直前のスナップショット以降に**新しく現れた行**（`ERROR:` に限らない）。
+ *
+ * 🔴 なぜ `newErrorLines` と分けるか: 拡張は engine の stderr を
+ * `outputChannel.append('ERROR: ' + chunk)` と **chunk 単位**で前置する
+ * （`packages/vscode-extension/src/extension.ts` の `setupStderrHandler`）。同じ chunk に 2 行
+ * 入ると 2 行目以降に `ERROR:` が付かない。したがって
+ *
+ * - **除外**の判定（「他に ERROR が増えていない」）に `newErrorLines` を使うと**偽緑**方向
+ * - **包含**の判定（「この失敗がちょうど 1 行出た」）に使うと、たまたま前置を失った時に**偽赤**
+ *
+ * 包含側は前置に依存しない `newLogLines` で数える。除外側の弱さは #756 で根本を直す。
+ */
+export function newLogLines(before: string, after: string): readonly string[] {
+  const linesOf = (log: string): string[] => log.split('\n').filter((line) => line.trim() !== '')
   const remaining = new Map<string, number>()
-  for (const line of errorsOf(before)) {
+  for (const line of linesOf(before)) {
     remaining.set(line, (remaining.get(line) ?? 0) + 1)
   }
   const added: string[] = []
-  for (const line of errorsOf(after)) {
+  for (const line of linesOf(after)) {
     const left = remaining.get(line) ?? 0
     if (left > 0) {
       remaining.set(line, left - 1)

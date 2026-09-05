@@ -1,5 +1,7 @@
 import { randomUUID } from 'crypto'
 
+import type { EngineState } from './mcp-server'
+
 export type EngineStatusBridgeResult =
   | {
       requestId: string
@@ -105,5 +107,32 @@ export class EngineStateBridge {
 
   get pendingCount(): number {
     return this.pending.size
+  }
+}
+
+/**
+ * `get_engine_state` の応答を組み立てる。
+ *
+ * 🔴 **daemon の状態が取れないことを理由に、このツールが例外で落ちてはいけない。** LLM は
+ * これを「いま何が起きているか」を知る唯一の窓口として使うので、`running` だけでも返す方が
+ * 何も返さないより役に立つ。取れなかった理由は `statusError` に載せる。
+ *
+ * 配線（`extension.ts` の `getEngineStateForAgent`）から切り離してあるのは、3 つの分岐
+ * （停止中 / ブリッジが `ok:false` / ブリッジ自体が reject）を単体で固定するため。
+ */
+export async function resolveEngineState(
+  base: Pick<EngineState, 'running' | 'liveCoding'>,
+  fetchStatus: () => Promise<EngineStatusBridgeResult>,
+): Promise<EngineState> {
+  if (!base.running) return { ...base }
+  try {
+    const status = await fetchStatus()
+    if (!status.ok) return { ...base, statusError: status.error }
+    return { ...base, output: status.output, callback: status.callback }
+  } catch (error) {
+    return {
+      ...base,
+      statusError: error instanceof Error ? error.message : String(error),
+    }
   }
 }

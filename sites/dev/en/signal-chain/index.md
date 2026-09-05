@@ -839,7 +839,7 @@ pub struct EffectChainPlan {
 the mode.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5504-5512
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5514-5522
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -852,7 +852,7 @@ the mode.
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5575-5597
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5585-5607
         let mut route = {
             let slot = lock_child_slot_recovering(&child_slot, "effect chain route inspection");
             let registry_is_intact = effect_chain_registry_is_intact(&slot, &stats);
@@ -1455,7 +1455,7 @@ rack on the gated side is below; it runs the SC.10.4 shape — a `var` binding f
 `effect(variable)` — on real hardware as is.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4351-4358
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4390-4397
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
