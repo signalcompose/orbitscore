@@ -329,6 +329,15 @@ export class Sequence {
     this.stateManager.setLoopStartTime(result.loopStartTime)
   }
 
+  /** Cancel a pending one-shot completion before another owner takes over playback. */
+  private clearRunTimer(): void {
+    const runTimer = this.stateManager.getRunTimer()
+    if (runTimer) {
+      clearTimeout(runTimer)
+      this.stateManager.setRunTimer(undefined)
+    }
+  }
+
   gain(valueDb: number | RandomValue): this {
     this.gainManager.setGain({ valueDb })
     this.seamlessParameterUpdate('gain', this.gainManager.getGainDescription())
@@ -1761,6 +1770,7 @@ export class Sequence {
     if (!prepared) return this
 
     const { scheduler, currentTime } = prepared
+    this.clearRunTimer()
     // Note: preparePlayback() has already cleared any existing loop timer
     // run() is one-shot playback, so we ensure loopTimer remains undefined
     this.stateManager.setLoopTimer(undefined)
@@ -1773,6 +1783,7 @@ export class Sequence {
       scheduleEventsFn: (sched, offset, baseTime) => this.scheduleEvents(sched, offset, baseTime),
       getPatternDurationFn: () => this.getPatternDuration(),
       clearSequenceEventsFn: (name) => this.clearEvents(name),
+      setRunTimerFn: (timer) => this.stateManager.setRunTimer(timer),
     })
 
     this.stateManager.setPlaying(result.isPlaying)
@@ -1807,6 +1818,7 @@ export class Sequence {
     if (!prepared) return this
 
     const { scheduler, currentTime } = prepared
+    this.clearRunTimer()
 
     // Set loop state BEFORE calling loopSequence to avoid race condition
     // The setInterval callback will check this state via getIsLoopingFn()
@@ -1846,6 +1858,9 @@ export class Sequence {
 
     // Clear scheduled events (MIDI: also releases sounding notes, §7-2)
     this.clearEvents(sequenceName)
+
+    // Cancel a pending one-shot completion so it cannot clear later playback.
+    this.clearRunTimer()
 
     // Clear loop timer (only exists if loop() was called, not run())
     // Note: run() sets loopTimer to undefined, so this check prevents redundant clearInterval

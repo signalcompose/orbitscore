@@ -197,7 +197,7 @@ spawn します。#474 以降はもう 1 本、watchdog thread が broadcast す
 （`PluginUiClosed` 等）を session の writer queue へ橋渡しする task が増えています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:691-718
+// rust/crates/orbit-audio-daemon/src/session.rs:739-766
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -209,6 +209,7 @@ pub async fn run(
     write
         .send(Message::Text(to_json_or_fallback(&Handshake::current())))
         .await?;
+    let session = SessionRegistration::new(engine.clone());
 
     let writer_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -225,7 +226,6 @@ pub async fn run(
         let tx = tx.clone();
         let events = engine.subscribe_plugin_ui_events();
         tokio::spawn(forward_plugin_ui_events(events, tx))
-    };
 ```
 
 `method` の dispatch は `handle_command` が担います。`PluginNoteOn`/`PluginNoteOff` のような
@@ -233,7 +233,7 @@ plugin note 系 method は `plugin_note_spec` という純関数を「唯一の�
 match に落とす設計です（2 箇所で同じ文字列集合を独立管理すると drift するという教訓が反映されています）。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1272-1299
+// rust/crates/orbit-audio-daemon/src/session.rs:1339-1366
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,
