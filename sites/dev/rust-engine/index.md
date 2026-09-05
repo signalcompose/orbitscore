@@ -1,12 +1,12 @@
 ---
 title: "RE-1. daemon アーキテクチャ概観"
 chapter-id: "RE-1"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: ef192ca
+verified-at: "2026-09-05"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #661（PR #748・出力デバイスの生存確認）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # RE-1. daemon アーキテクチャ概観
 
@@ -274,8 +274,8 @@ arm は次のとおりです（`cfg` 列は feature で分岐する arm）。
 |---|---|---|
 | `Ping` | 疎通確認（`"pong"`） | |
 | `ListAudioDevices` | cpal の output device 列挙 | #484 D1・`spawn_blocking` |
-| `SelectAudioDevice` | ランタイム device 切替 | #484 D2・audio owner thread へ委譲 |
-| `GetStatus` | daemon/protocol version・sample rate・`render_contentions` 等 | |
+| `SelectAudioDevice` | ランタイム device 切替 | #484 D2・audio owner thread へ委譲。#661 で候補を先に probe する |
+| `GetStatus` | daemon/protocol version・sample rate・`render_contentions` 等 | #661 で `output`（実際に鳴っているデバイスと縮退の履歴）と `callback`（生存カウンタ）が加わった |
 | `LoadSample` / `UnloadSample` | audio file の登録 / 解除 | |
 | `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | |
 | `LoadPlugin` | plugin の attach（`role` / `bus` / `instance` / `state`） | in-process build は `role` 必須 |
@@ -589,6 +589,103 @@ daemon 全体のアーキテクチャ確定（楽器=in-process・effects/3rd-pa
 > 楽器（サンプラー/audio DSL）= in-process（crown jewel）／ effects + 3rd-party =
 > out-of-process sandboxed plugin ／ audio DSL ⊇ pitch DSL
 
+## 出力デバイスの生存確認 — 先に probe し、捨てる stream は pause する
+
+`orbitscore.audioDevice` にデバイス名を書くと**音が一切出なくなる**（エラーも警告も出ない）という
+不具合が #661 で報告されました。cpal の `build_output_stream` は成功を返すのに、そのデバイスの
+コールバックが一度も走らない、という状態があり得ます。stream が「作れた」ことは「鳴る」ことを
+意味しない、というのがこの節の出発点です。
+
+対策は 2 段です。1 つめは、**デバイスを確定する前に捨ててよい probe stream で生存確認をする**こと。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:505-539
+fn probe_output_device(
+    live: &LiveOutputDevice,
+    suppress_callback: bool,
+) -> Result<Option<u64>, OutputError> {
+    // This counter is deliberately probe-local. Reusing StreamStats would inflate the ticker's
+    // callback count before the real stream exists.
+    let callbacks = Arc::new(AtomicU64::new(0));
+    let callback_counter = callbacks.clone();
+    let stream = live
+        .device
+        .build_output_stream_raw(
+            &live.config,
+            live.sample_format,
+            move |data, _| {
+                data.bytes_mut().fill(0);
+                if !suppress_callback {
+                    callback_counter.fetch_add(1, Ordering::Relaxed);
+                }
+            },
+            |_| {},
+            None,
+        )
+        .map_err(|e| OutputError::BuildStream(e.to_string()))?;
+    if let Err(error) = stream.play() {
+        let _ = stream.pause();
+        drop(stream);
+        return Err(OutputError::PlayStream(error.to_string()));
+    }
+    let result = confirm_callback_counter(&callbacks, 0, FIRST_CALLBACK_DEADLINE);
+    // cpal 0.15.3 can retain named streams through a reference cycle. Explicit pause is therefore
+    // required before every probe stream is dropped.
+    let _ = stream.pause();
+    drop(stream);
+    Ok(result)
+}
+```
+
+probe を**実 stream より前に**置いているのは順序の都合です。実 stream を先に作ってから dead と
+判定すると、`insert_buses` / `sources` が既に `RenderState` へ move されていて回収できません。
+カウンタが probe 専用なのも同じ用心で、`StreamStats` を借りると 1 Hz ticker の callback 数が
+「実 stream が存在する前」に膨らんでしまいます。
+
+2 つめが、上のコードのコメントが名指ししている **cpal 0.15.3 の参照循環**です。捨てるはずの
+stream を drop しただけではコールバックが止まらないので、`OutputStream` は `Drop` でも明示的に
+`pause()` します。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:655-661
+impl Drop for OutputStream {
+    fn drop(&mut self) {
+        // cpal 0.15.3 retains named CoreAudio streams through a reference cycle. Dropping the
+        // wrapper alone does not stop callbacks; pause must happen before field destruction.
+        let _ = self._stream.pause();
+    }
+}
+```
+
+これを外すとどうなるかは実機で測れます。名指し起動から host 既定へ切り替えたときの実測
+callbacks/s は、`pause()` が 2 箇所とも生きていれば 94（期待値 93.8）、両方外すと **188**
+になります。旧ストリームが生き続けて、新旧 2 本が同時に回っている状態です（PR #748 の実測表）。
+
+面白いのは、**縮退のポリシーが起動経路とライブ切替経路で逆になる**ところです。ここは型で
+分けられています。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:335-342
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceFallbackPolicy {
+    /// 起動経路。利用者を無音のまま放置しないので host 既定へ縮退して起動を成功させる。
+    FallBackToHostDefault,
+    /// ライブ切替経路。縮退せず `DeviceUnavailable` / `StreamDead` を返し、呼び出し側が
+    /// **いま鳴っているデバイスをそのまま使い続ける**。
+    RejectAndKeepCurrent,
+}
+```
+
+起動時に縮退するのは「設定を書いたら無音になる」を防ぐため、ライブ切替で縮退しないのは
+「演奏中のタイプミスで音が内蔵スピーカーへ移らない」ためです。同じ「デバイスが使えない」でも
+利用者が困る方向が逆なので、扱いも逆になります。`bool` の位置引数ではなく enum にしてあるのは、
+取り違えてもコンパイルが通ってしまう形を避けるためだと doc コメントに書かれています。
+
+失敗したときに利用者へ何を見せるかは protocol 側のエラーコードで分かれます。表は
+`docs/research/ENGINE_DAEMON_PROTOCOL.md` の「`SelectAudioDevice` の失敗コード」節にあり、
+エディタはその「音は鳴っているか」列を見て `Restart Engine` を出すかどうかを決めています
+（`packages/vscode-extension/src/engine-view.ts` の `SELECT_AUDIO_DEVICE_ERRORS`）。
+
 ## Try it: daemon を起動して単音を鳴らす（capture peak 検証）
 
 `ORBIT_CAPTURE_WAV` 環境変数を daemon 起動時に設定すると、`render_block_with_sources` の capture tap
@@ -609,7 +706,7 @@ ORBIT_CAPTURE_WAV=/tmp/orbit-capture-test.wav node cli-audio.js path/to/single-n
 
 ## 次の深掘り候補
 
-- `SelectAudioDevice` の実装（`EngineWrap::apply_device_switch`）— cpal stream の再構築と `RenderState` の引き継ぎ
+- `EngineWrap::apply_device_switch` の内側 — probe を通ったあとの cpal stream 再構築と `RenderState` の引き継ぎ
 - `StreamStats` 1 Hz ticker が発火する `DaemonError` の一覧（`protocol.rs:86-161` のエラーコード群）と、それぞれの観測点
 - `RenderScore`（#598 P2）の offline render 経路
 - `forward_plugin_ui_events` の lag 処理（loss-sensitive な close/safepoint frame をどう扱うか）

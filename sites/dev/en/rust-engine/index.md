@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: ef192ca
+verified-at: "2026-09-05"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #661 (PR #748, output-device liveness) on 2026-09-05. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-1. Daemon Architecture Overview
 
@@ -281,8 +281,8 @@ arms are as follows (the notes column mentions the arms gated by a feature `cfg`
 |---|---|---|
 | `Ping` | liveness check (`"pong"`) | |
 | `ListAudioDevices` | enumerate cpal output devices | #484 D1, runs under `spawn_blocking` |
-| `SelectAudioDevice` | runtime device switch | #484 D2, delegated to the audio owner thread |
-| `GetStatus` | daemon/protocol version, sample rate, `render_contentions`, etc. | |
+| `SelectAudioDevice` | runtime device switch | #484 D2, delegated to the audio owner thread; #661 probes the candidate first |
+| `GetStatus` | daemon/protocol version, sample rate, `render_contentions`, etc. | #661 added `output` (the device actually playing, plus the fallback history) and `callback` (the liveness counter) |
 | `LoadSample` / `UnloadSample` | register / release an audio file | |
 | `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | |
 | `LoadPlugin` | attach a plugin (`role` / `bus` / `instance` / `state`) | the in-process build requires `role` |
@@ -608,6 +608,107 @@ The overall architecture decision behind the daemon (instruments = in-process; e
 > (Instruments (sampler / audio DSL) = in-process (crown jewel) / effects + 3rd-party =
 > out-of-process sandboxed plugin / audio DSL ⊇ pitch DSL)
 
+## Output-device liveness — probe first, and pause every stream you throw away
+
+Issue #661 reported that writing a device name into `orbitscore.audioDevice` made **all sound
+disappear**, with no error and no warning. cpal's `build_output_stream` can return success on a
+device whose callback then never runs even once. That a stream "could be built" does not mean it
+will play — that is the starting point of this section.
+
+The countermeasure has two parts. The first is to **check liveness on a throwaway probe stream
+before committing to the device**.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:505-539
+fn probe_output_device(
+    live: &LiveOutputDevice,
+    suppress_callback: bool,
+) -> Result<Option<u64>, OutputError> {
+    // This counter is deliberately probe-local. Reusing StreamStats would inflate the ticker's
+    // callback count before the real stream exists.
+    let callbacks = Arc::new(AtomicU64::new(0));
+    let callback_counter = callbacks.clone();
+    let stream = live
+        .device
+        .build_output_stream_raw(
+            &live.config,
+            live.sample_format,
+            move |data, _| {
+                data.bytes_mut().fill(0);
+                if !suppress_callback {
+                    callback_counter.fetch_add(1, Ordering::Relaxed);
+                }
+            },
+            |_| {},
+            None,
+        )
+        .map_err(|e| OutputError::BuildStream(e.to_string()))?;
+    if let Err(error) = stream.play() {
+        let _ = stream.pause();
+        drop(stream);
+        return Err(OutputError::PlayStream(error.to_string()));
+    }
+    let result = confirm_callback_counter(&callbacks, 0, FIRST_CALLBACK_DEADLINE);
+    // cpal 0.15.3 can retain named streams through a reference cycle. Explicit pause is therefore
+    // required before every probe stream is dropped.
+    let _ = stream.pause();
+    drop(stream);
+    Ok(result)
+}
+```
+
+The probe has to come **before** the real stream for an ordering reason: if the real stream were
+built first and only then judged dead, `insert_buses` and `sources` would already have been moved
+into `RenderState` and could not be recovered. The probe-local counter is the same kind of caution
+— borrowing `StreamStats` would inflate the 1 Hz ticker's callback count before the real stream
+even exists.
+
+The second part is the **reference cycle in cpal 0.15.3** that the comment above names. Dropping a
+stream you meant to discard does not stop its callbacks, so `OutputStream` pauses explicitly in
+`Drop` as well.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:655-661
+impl Drop for OutputStream {
+    fn drop(&mut self) {
+        // cpal 0.15.3 retains named CoreAudio streams through a reference cycle. Dropping the
+        // wrapper alone does not stop callbacks; pause must happen before field destruction.
+        let _ = self._stream.pause();
+    }
+}
+```
+
+What happens without it is measurable on real hardware. Switching from a named device to the host
+default gives 94 callbacks/s (expected 93.8) while both `pause()` calls are in place, and **188**
+once both are removed — the old stream stays alive and two streams run at once (measurements in
+PR #748).
+
+What is interesting is that the **fallback policy is inverted between the startup path and the
+live-switch path**. That distinction is carried by a type.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:335-342
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceFallbackPolicy {
+    /// 起動経路。利用者を無音のまま放置しないので host 既定へ縮退して起動を成功させる。
+    FallBackToHostDefault,
+    /// ライブ切替経路。縮退せず `DeviceUnavailable` / `StreamDead` を返し、呼び出し側が
+    /// **いま鳴っているデバイスをそのまま使い続ける**。
+    RejectAndKeepCurrent,
+}
+```
+
+Startup falls back so that writing a setting can never leave the user in silence; a live switch
+refuses to fall back so that a typo mid-performance can never move the sound to the built-in
+speakers. The same "device is unusable" condition hurts the user in opposite directions, so it is
+handled in opposite ways. The doc comment explains that this is an enum rather than a positional
+`bool` precisely because a swapped `true`/`false` would still compile.
+
+What the user is shown on failure is decided by the protocol error codes. The table lives in the
+"`SelectAudioDevice` の失敗コード" section of `docs/research/ENGINE_DAEMON_PROTOCOL.md`, and the
+editor reads its "is sound still playing" column to decide whether to offer `Restart Engine`
+(`SELECT_AUDIO_DEVICE_ERRORS` in `packages/vscode-extension/src/engine-view.ts`).
+
 ## Try it: boot the daemon and play a single note (capture peak verification)
 
 Setting the `ORBIT_CAPTURE_WAV` environment variable when starting the daemon activates the
@@ -630,7 +731,7 @@ i.e. two independent measurement paths agreeing at the same tap point). These fi
 
 ## Next exploration candidates
 
-- The implementation of `SelectAudioDevice` (`EngineWrap::apply_device_switch`) — rebuilding the cpal stream and carrying `RenderState` across
+- The inside of `EngineWrap::apply_device_switch` — rebuilding the cpal stream once the probe has passed, and carrying `RenderState` across
 - The full list of `DaemonError`s fired by the `StreamStats` 1 Hz ticker (the error-code constants in `protocol.rs:86-161`) and where each is observed
 - The `RenderScore` (#598 P2) offline render path
 - Lag handling in `forward_plugin_ui_events` (how loss-sensitive close/safepoint frames are treated)

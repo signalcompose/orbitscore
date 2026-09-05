@@ -17,6 +17,35 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #748 in the dev site and the user site (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `claude/docs-sync-pr748` / **追従元**: PR #748（merge commit `ef192ca`）
+
+マージ済み PR #748（出力デバイスの生存確認と縮退）に、ドキュメントとサイトを追従させた。
+**コードとテストは 1 行も変更していない。**
+
+#### 直したもの
+
+| 場所 | 何が古かったか |
+|---|---|
+| `sites/dev/editor/mcp-and-gated-e2e.md`（+ `en/`） | ツールカタログが `get_engine_state` を `{ running, liveCoding }` と書いていた。`output` / `callback` / `statusError` が抜けていた |
+| 同上 | `get_engine_state` の節が無かった。`resolveEngineState` の 3 分岐と、予算 2.5 秒が「伸ばしても取れるようにはならない」理由（REPL の FIFO 直列化）を追加 |
+| `sites/dev/rust-engine/index.md`（+ `en/`） | コマンド表の `GetStatus` / `SelectAudioDevice` 行。probe と `output` / `callback` の追加を反映 |
+| 同上 | 「出力デバイスの生存確認」節を新設。probe を実 stream より**前**に置く理由（`insert_buses` / `sources` が `RenderState` へ move 済みになる）、cpal 0.15.3 の参照循環と `Drop` の `pause()`、`DeviceFallbackPolicy` が起動経路とライブ切替経路で逆になること |
+| `sites/user/getting-started/engine-settings.md`（+ `en/`） | 「出力デバイスは OS のデフォルトに固定」「エンジン内からの選択は未実装（#484）」と書いてあった。**実装済み**（Output Device ノード・ライブ切替）なので書き換え、確認できなかった時の起動時 / 演奏中の振る舞いの違いと、`Restart Engine` が出る 3 条件を追記 |
+| `sites/user/troubleshooting.md`（+ `en/`） | 「音が出ない」の項が OS 側の出力設定しか案内していなかった。OrbitScore 側の Output Device と起動時の縮退への導線を追加 |
+
+#### 追従不要と判断したもの
+
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — この PR は DSL の構文・意味論を変えていない。デバイス関連の記述も元から無い
+- `sites/user/reference/methods.md` — 新しい DSL 語は増えていない（`global.audioDevice` は #484 で既出）
+- `docs/research/ENGINE_DAEMON_PROTOCOL.md` — PR #748 自身が `GetStatus` の新フィールドと失敗コード表を追加済み
+- `docs/design/661-audio-device-liveness-design.md` — 起案時点のスナップショットなので触らない
+
+#### 検証
+
+`npm run docs:build`（user / dev）と `npm run docs:check` を実行。出力は PR 本文に貼った。
+
 ### fix(661): close the review round-2 findings across all four layers (#661) (Sep 5, 2026)
 
 **Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
