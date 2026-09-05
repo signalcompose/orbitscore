@@ -161,7 +161,7 @@ export const MIXER_BUS_POOL_SIZE = 4
 対応する Rust 側の定数は daemon の `engine_wrap.rs` にあります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1987-2000
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1992-2005
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
 /// （M3 で配線予定）。
 #[cfg(feature = "outproc-effect")]
@@ -326,7 +326,7 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 という規則が読み取れます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5838-5858
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5892-5912
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -362,7 +362,7 @@ daemon が atomic に書いた routing を、native の render callback はど�
 **post-loop** がその場所です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:935-961
+// rust/crates/orbit-audio-native/src/output.rs:1062-1088
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -422,7 +422,7 @@ instrument が何かを知らず、「render すると N 本の block をくれ�
 持ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:269-282
+// rust/crates/orbit-audio-native/src/output.rs:346-359
 /// A callback-owned source which renders one or more interleaved output units.
 pub trait BlockSource: Send {
     fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
@@ -448,7 +448,7 @@ feed の収集は `collect_source_feeds`（`output.rs:772-801`）が行い、uni
 core の `FeedDest` に写します。写像の部分だけ引用します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:787-797
+// rust/crates/orbit-audio-native/src/output.rs:914-924
             let dest = match slot.dests[unit].load() {
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
@@ -472,7 +472,7 @@ feed 加算（`422-441`・`FeedDest::Hardware` なら `hardware_out`、`Channel(
 `*dst += *sample`）→ gain ramp、の順になっています。gain ramp の部分を引用します。
 
 ```rust
-// rust/crates/orbit-audio-core/src/scheduler.rs:443-456
+// rust/crates/orbit-audio-core/src/scheduler.rs:447-460
         // master gain ramp を **1 回だけ**進め（next_gain_frame）、全バッファに同じ per-frame
         // gain を適用する（バッファごとに進めると ramp が多重に進み desync するため frame ループは 1 つ）。
         for frame in 0..frames_to_render {
@@ -711,7 +711,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1501-1539
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1539-1577
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -741,9 +741,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
       // 0 dB -> -6 dB で amplitude は 10^(-6/20) ≈ 0.501 = 約半分。
       const unity = result.rms('unity')
       const half = result.rms('half')
-      expect(
-        ['unity', 'half'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
-      ).toBe(true)
+      expectSegmentsSounding(result, ['unity', 'half'])
       expect(unity, 'E2E-1 unity must measure the 0 dB instrument').toBeGreaterThan(0.15)
       expect(unity, 'E2E-1 unity instrument must be audible').toBeGreaterThan(0.05)
       expect(half / unity, `E2E-1 half/unity RMS ratio (${half}/${unity})`).toBeGreaterThan(0.45)
@@ -751,6 +749,8 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
     },
     TEST_TIMEOUT_MS,
   )
+
+  it.skipIf(!appAvailable)(
 ```
 
 ただしこの E2E-1 の測定そのものに疑いが向けられています。#611 PR-O0 が出口の golden を録る過程で、`captureSegment` を `run_selection` の直後に取ると窓の大半が発音前の無音になる、という問題が見つかりました。`LOOP()` は既定で次の小節境界まで待ってから鳴り始めるからです。窓に入るヒット数が実行ごとに変われば、RMS は音量ではなくヒット数を測ってしまいます（[IV-3 の「区間 RMS が音量を意味するのは窓に入るヒット数を固定したときだけ」](/editor/mcp-and-gated-e2e#区間-rms-が音量を意味するのは窓に入るヒット数を固定したときだけ)）。
@@ -764,7 +764,7 @@ E2E-4 は sum + aux の経路です。dry（bus 無し）と、`output("sum643")
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1645-1664
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1677-1696
         [
           'var global = init GLOBAL',
           'global.key("C")',

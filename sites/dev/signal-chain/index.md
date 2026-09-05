@@ -818,7 +818,7 @@ pub struct EffectChainPlan {
 選びます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5121-5129
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5175-5183
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -831,7 +831,7 @@ pub struct EffectChainPlan {
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5192-5214
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5246-5268
         let mut route = {
             let slot = lock_child_slot_recovering(&child_slot, "effect chain route inspection");
             let registry_is_intact = effect_chain_registry_is_intact(&slot, &stats);
@@ -1423,7 +1423,7 @@ WORK_LOG 6.397 には、設計原案の `Gain(db: -20)` を入れるとこの un
 という SC.10.4 の形をそのまま実機で通しています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4216-4223
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4238-4245
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
