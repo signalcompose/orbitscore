@@ -63,6 +63,7 @@ import {
   steadyRms,
   waitForSound,
   type CaptureSegment,
+  waitForSoundRestart,
 } from './helpers/capture-windows'
 import { captureWavPath, createGatedSession, type GatedCatalog } from './helpers/gated-session'
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
@@ -542,6 +543,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     clock(): number
     evaluate(code: string): Promise<void>
     captureSegment(name: string, durationMs?: number, settleMs?: number): Promise<void>
+    /**
+     * 譜面の途中で鳴らし直した後、**もう一度鳴り出すまで**待つ。
+     *
+     * 🔴 `captureSegment` の発音待ちは初回だけで、2 回目以降は固定 settle しか置かない。
+     * `stop()` → `LOOP()` は次の小節境界まで鳴らない（120 BPM で最大 2 秒）ので、鳴らし直した
+     * 直後に窓を開けると**無音の上に開く**。2026-09-05 に E2E-2 を実機計測して確定
+     * （85 窓中 46 窓しか可聴でなく、しかも比は 0.0899/0.1794 = 0.501 で**実装は正しかった**）。
+     */
+    awaitSoundRestart(label?: string): Promise<void>
   }
 
   /**
@@ -654,6 +664,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const toWall = Date.now()
       segments[name] = { fromSec, toSec, fromWall, toWall }
     }
+    const awaitSoundRestart = async (label?: string): Promise<void> => {
+      await waitForSoundRestart(capturePath, {
+        floor: 0.01,
+        // LOOP の小節境界にできる切れ目は実測 80 ms。それより十分長く取る。
+        quietSec: 0.3,
+        intervalMs: 100,
+        quietTimeoutMs: 4_000,
+        timeoutMs: 20_000,
+        label: `#643 ${slug}${label === undefined ? '' : ` (${label})`}`,
+      })
+    }
 
     let bodyError: unknown
     let cleanupFailure: unknown
@@ -670,7 +691,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const run = await activeClient.call('run_selection')
       expect(run.isError, run.text).toBe(false)
 
-      await body({ activeClient, catalog, segments, clock, evaluate, captureSegment })
+      await body({
+        activeClient,
+        catalog,
+        segments,
+        clock,
+        evaluate,
+        captureSegment,
+        awaitSoundRestart,
+      })
       const finalLog = await readLog()
       expect(
         countErrors(finalLog),
@@ -1597,9 +1626,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'wet643.play(1, 1, 1, 1)',
           'LOOP(dry643)',
         ],
-        async ({ captureSegment, evaluate }) => {
+        async ({ awaitSoundRestart, captureSegment, evaluate }) => {
           await captureSegment('dry')
           await evaluate('dry643.stop()\nLOOP(wet643)')
+          // 🔴 固定 settle では追えない。`LOOP` は次の小節境界まで鳴らない（120 BPM で最大 2 秒）。
+          await awaitSoundRestart('wet643')
           await captureSegment('wet')
         },
       )
@@ -1694,9 +1725,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'routeWet643.play(1, 1, 1, 1)',
           'LOOP(routeDry643)',
         ],
-        async ({ captureSegment, evaluate }) => {
+        async ({ awaitSoundRestart, captureSegment, evaluate }) => {
           await captureSegment('dry')
           await evaluate('routeDry643.stop()\nLOOP(routeWet643)')
+          // E2E-2 と同じ理由: `LOOP` は次の小節境界まで鳴らない。固定 settle では追えない。
+          await awaitSoundRestart('routeWet643')
           await captureSegment('sumAux')
         },
       )
@@ -1775,7 +1808,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'oldTenant643.play(1, 1, 1, 1)',
           'LOOP(oldTenant643)',
         ],
-        async ({ captureSegment, evaluate, catalog: activeCatalog }) => {
+        async ({ awaitSoundRestart, captureSegment, evaluate, catalog: activeCatalog }) => {
           await captureSegment('oldWet')
           await evaluate(
             [
@@ -1788,6 +1821,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
               'LOOP(nextTenant643)',
             ].join('\n'),
           )
+          // 前のテナントを止めて別の seq を LOOP し直すので、小節境界まで鳴らない。
+          await awaitSoundRestart('nextTenant643')
           await captureSegment('nextDry')
           await evaluate('nextTenant643.effect([Gain(db: -6)])')
           await captureSegment('nextWet')
@@ -1826,7 +1861,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         },
       )
       const dry = result.rms('dry')
-      expect(result.windows('dry').every((window) => window.rms >= 0.01)).toBe(true)
+      // 🔴 `every(rms >= 0.01)`（= 一度も途切れない）は**原理的に満たせない**。区間 2 秒は
+      // 120 BPM の小節境界を必ず 1 つ含み、そこに実測 80 ms の切れ目が入る。他の 6 本と同じ
+      // 「割合で見る」判定に揃える（2026-09-05・E2E-7 だけ旧オラクルが残っていた）。
+      expectSegmentsSounding(result, ['dry'])
       expect(result.analysis.soundDetected, JSON.stringify(result.analysis)).toBe(true)
       expect(
         dry,

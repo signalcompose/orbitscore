@@ -17,6 +17,64 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(e2e): open the window after the sound restarts, not after a fixed settle (#649) (Sep 5, 2026)
+
+**Issue**: #649 / **ブランチ**: `649-stereo-internal-master-line` / **PR** #754
+
+**`#643 E2E-1` 〜 `E2E-7` の 7 本すべてが実機で緑**になった。落ちていたのは**判定側**で、
+ミキサーの実装は最初から正しかった。
+
+#### 実測（`ORBIT_KEEP_CAPTURES` で WAV を残し 20 ms 窓を並べた）
+
+E2E-2 の capture:
+
+```
+0.00 – 3.06s  silent            ← 起動 + 小節量子化 + attach
+3.06 – 4.98s  SOUND  max 0.1794 ← dry（0 dB）
+4.98 – 5.06s  silent (0.08s)    ← LOOP の小節境界の切れ目
+5.06 – 5.78s  SOUND  max 0.1794
+5.78 – 7.08s  silent (1.30s)    ← dry.stop() → LOOP(wet) の量子化待ち
+7.08 – 8.02s  SOUND  max 0.0899 ← wet
+```
+
+🔴 **比は `0.0899 / 0.1794 = 0.501`** — -6 dB の理論値ちょうど。**実装は正しい。**
+落ちていたのは「wet の窓が 6.2 秒から開いて 85 窓中 46 窓しか可聴でない」という判定側だった。
+
+#### 原因は 2 種類
+
+| 原因 | 該当 | 直し方 |
+|---|---|---|
+| **窓が無音の上に開く** — `captureSegment` の発音待ちは**初回だけ**で、2 回目以降は固定 400 ms | E2E-2 / E2E-4 / E2E-6 | `waitForSoundRestart` を新設し、鳴らし直した後に**もう一度鳴り出すまで待つ** |
+| **原理的に満たせない条件** — `every(rms >= 0.01)`（一度も途切れない） | E2E-7 | 他の 6 本と同じ `expectSegmentsSounding`（割合で見る）へ |
+
+`waitForSoundRestart` は 2 段階:
+
+1. **末尾が静かになるまで待つ**（前の LOOP が実際に止まった確認）。`quietTimeoutMs` 以内に
+   静かにならなければ**そのまま次へ進む** — 切れ目なく続く譜面では静寂が来ないのが正しい
+2. **末尾が可聴になるまで待つ**
+
+`quietSec` は LOOP の小節境界の切れ目（**実測 80 ms**）より十分長く取る（0.3 秒）。短いと
+段階 1 がその切れ目で成立してしまい、鳴り直しを待たずに返る。
+
+🔴 **固定 settle を伸ばす形にしない。** 小節境界までの残り時間は評価のタイミング次第で
+0〜1 小節ぶん変わるので、定数では追えない（前セッションで settle 2600 ms が反証済み）。
+
+#### 実機（全件）
+
+**5 failed / 21 passed（26 件）**。main baseline は **10 failed / 24**。
+
+| 残る失敗 | 種別 |
+|---|---|
+| `drives real OrbitStudio end-to-end` | main baseline（**#760** で main を実測して確認） |
+| `steps the live playhead` | main baseline（`Mixer bus name "drum" is ambiguous`） |
+| `restores an MCP-saved …` | 環境要因の疑い（`Failed to cleanup old directories: ENOENT`） |
+| `#606 E2E-K3` | **起動タイムアウト**（アサーション失敗ではない） |
+| `#611 O0-4` | `snapped range must contain exactly 8 onsets; got 9`。**単独実行では緑**（`effectOnlyOverDry=1.9953` / `combinedOverDry=1.0000`）＝全件の文脈でだけ出る揺れ |
+
+`npm test` 2251 passed / `typecheck:e2e` 0 / `lint` 0 / `docs:check` 926 verified 0 failed。
+
+---
+
 ### test(e2e): fix the #643 audibility oracle — E2E-1 is green (Sep 5, 2026)
 
 **Issue**: #649 / **ブランチ**: `649-stereo-internal-master-line`

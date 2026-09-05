@@ -1423,7 +1423,7 @@ WORK_LOG 6.397 には、設計原案の `Gain(db: -20)` を入れるとこの un
 という SC.10.4 の形をそのまま実機で通しています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4238-4245
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4276-4283
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
