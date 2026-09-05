@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
-use tracing::warn;
+use tracing::{error, warn};
 
 #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
 use crate::engine_wrap::ClapPluginRole;
@@ -690,11 +690,12 @@ fn validate_render_score_params(params: &Value) -> Result<RenderScoreManifest, P
 /// error 経路は cold path なので 1 回のアロケーションは実質無償。
 /// session 登録の RAII ガード。
 ///
-/// 🔴 `disconnect()` を呼ばずに drop された場合（read loop の panic 等）でもカウンタを戻す。
+/// 🔴 `disconnect()` を呼ばずに drop された場合でもカウンタを戻す。
 /// 戻さないと `connected_sessions` が永久に加算されたままになり、**以後どの session が
 /// 切れても最後の砦（`PluginAllNotesOff`）が二度と発火しない** — daemon プロセスが生きている
 /// 限りずっと、である。同ファイルの `InstrumentReplacementReservation` と同じ「明示的な
-/// 確定 + Drop の安全網」の形。
+/// 確定 + Drop の安全網」の形。現在の production panic path は daemon の panic hook が unwind 前に
+/// process を exit するためここへ到達しないが、将来の早期 return 等の経路に備えて guard は維持する。
 struct SessionRegistration {
     engine: Arc<EngineWrap>,
     released: bool,
@@ -721,7 +722,8 @@ impl Drop for SessionRegistration {
         if self.released {
             return;
         }
-        // ここへ来るのは unwind（panic）か、明示切断より手前の早期 return。カウンタだけ戻す。
+        // 現在の daemon panic hook は unwind 前に process を exit するため、panic ではここへ来ない。
+        // 将来、明示切断より手前の早期 return 等が追加された場合の安全網としてカウンタだけ戻す。
         // 解放そのものはここでは行わない — Drop は async runtime のスレッド上で走り、
         // `plugin_all_notes_off` は bounded retry で sleep しうるため。この session が最後
         // だった場合その分の音は残るが、**次の session の切断で正しく発火する状態には戻る**。
@@ -1271,7 +1273,7 @@ pub async fn run(
         match tokio::task::spawn_blocking(move || release_engine.plugin_all_notes_off()).await {
             Ok(Ok(_)) => {}
             Ok(Err(error)) => {
-                warn!("plugin all-notes-off after session disconnect failed: {error}")
+                error!("plugin all-notes-off after session disconnect failed: {error}")
             }
             Err(error) => {
                 warn!("plugin all-notes-off task after session disconnect failed: {error}")
@@ -1420,7 +1422,26 @@ async fn handle_command(
                 "uptime_sec": engine.uptime_sec(),
                 "render_contentions": engine.stream_stats_snapshot().render_contentions,
             });
-            ok(&id, status)
+            #[cfg(feature = "outproc-instrument")]
+            {
+                let mut status = status;
+                // 🔴 診断は縮退する。台帳が読めない（poison）ことを理由に GetStatus 全体を失敗させると、
+                // デバイス・レート・uptime・render_contentions まで**異常時にこそ**失われる。
+                // この項目を足した目的（stop 後に台帳が空かを外から確認できるようにする）からしても、
+                // 読めない時は件数だけ null にして理由をログへ出すのが正しい。
+                status["active_plugin_notes"] = match engine.active_plugin_note_count() {
+                    Ok(count) => json!(count),
+                    Err(error) => {
+                        error!("GetStatus could not read the active plugin note ledger: {error}");
+                        serde_json::Value::Null
+                    }
+                };
+                ok(&id, status)
+            }
+            #[cfg(not(feature = "outproc-instrument"))]
+            {
+                ok(&id, status)
+            }
         }
         "LoadSample" => match params.get("path").and_then(|p| p.as_str()) {
             Some(path_str) => {
@@ -2641,6 +2662,30 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "outproc-instrument")]
+    #[tokio::test]
+    async fn get_status_reports_active_plugin_note_count() {
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
+            .expect("stub backend starts");
+        engine
+            .inject_active_plugin_note("plugin:status", 2, 64)
+            .expect("inject active note");
+        let (tx, _rx) = mpsc::channel(1);
+
+        let response = handle_command(
+            Command {
+                id: "status-notes".into(),
+                method: "GetStatus".into(),
+                params: json!({}),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+
+        assert_eq!(response["result"]["active_plugin_notes"], 1);
+    }
 
     #[test]
     fn set_source_routing_parses_opaque_source_unit_and_nullable_target() {

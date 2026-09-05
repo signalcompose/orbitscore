@@ -17,6 +17,65 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(daemon): close review round-2 on the RUN-termination branch (#606) (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR** #738
+
+レビュー 5 体のラウンド2。**実機の受け入れは先に達成している**（T1 / E2E-K3 とも緑・退行ゼロ）ので、
+このラウンドで直したのは**診断・記録・テストの区別力**である。
+
+#### 🔴 指摘が 1 件、レビュアー間で解けた
+
+silent-failure が「panic 時に `SessionRegistration::drop` が解放しないので最後の砦が機能しない」（MEDIUM）、
+pr-test-analyzer が「その経路にテストが無い」（Critical）と報告したが、Fable の経路列挙と
+`main.rs:53-75` の実装で、**daemon の panic hook は `std::process::exit(1)` を呼び unwind しない**ことが分かった。
+本番で Drop のフォールバック分岐には**到達しない**（そして daemon が死ねば `ParentWatch` で child も落ちるので音は止まる）。
+
+ガード自体は将来の早期 return に対する保険として残し、**コメントを実体に合わせた**。
+
+#### ポリシー A — 文書とコメントは実体を写す（5 件）
+
+**この PR の fix 自身が作った不一致**だった:
+
+- `clap-host` 単独ビルドは実装が `Ok(空 summary)` なのに、文書 2 箇所が `CLAP_UNAVAILABLE` のまま
+- wire 例とフィールド説明に `failed` が無い（実装は常に返す）
+- 設計 §3.5 の「quarantine 時は旧 child がまだ鳴っている可能性がある」という**前提そのものが誤り** —
+  quarantine の全 variant で child は必ず殺される（`InstrumentChildSupervisor::drop` → watchdog が
+  `CONTROL_QUIT` → `reap`）。実害は `released` の水増しに留まる。**#752 の scope に含めると明記**
+- 設計 §4 の受け入れ表に T2 が残っていた（実装は**意図して置いていない**・理由はコード側にある）
+
+#### ポリシー B — 診断は読める場所まで届かせる（2 件）
+
+- **`GetStatus` に `active_plugin_notes` を追加**。設計 §1 H4 の問題意識が「台帳に読み手が 0 件」だったので、
+  LLM が「stop 後に台帳が空か」を**ポーリングで確認できる**ようにした（`get_log` の 500 行窓に依存しない）
+- 🔴 **main が Codex の差分を読んで 1 件直した**: 台帳が読めない（poison）時に **`GetStatus` 全体が失敗する**
+  実装になっていた。それではデバイス・レート・uptime・render_contentions まで**異常時にこそ**失われる。
+  **その 1 項目だけ `null` に縮退**させ、理由を ERROR ログに出す形にした（文書にも明記）
+- disconnect trigger で「そもそも解放を試みられなかった」失敗が `warn!` だったのを `error!` に上げた
+  （より軽い「一部の note の配送失敗」が `error!` で、重大度が逆転していた）
+
+#### ポリシー C — テストは区別できる形に（2 件）
+
+- 🔴 panic テストが台帳に **1 件しか注入しておらず**、「push 成功のたびにその場で remove」実装に変えても
+  生き残っていた。**3 件注入**（配送成功済み / panic する / 未処理）に直し、変異で
+  **`left: 2 / right: 3`** の red を実出力で確認
+- 🔴 bounded retry の**「リトライ途中で成功する」分岐**が `#[cfg(feature = "clap-host")]` に閉じており、
+  **本番構成（`outproc-instrument` 単体）ではコンパイルすらされていなかった**。cfg を広げ、
+  `--features outproc-effect,outproc-instrument` で実走することを確認
+
+#### 先送り（#752 に集約）
+
+code-reviewer が `plugin_all_notes_off` 自身にも同型のレース（スナップショットと最終 `retain` の間の
+NoteOn が消える）を見つけたが、**本番の daemon 接続は 1 本のみで RPC も直列化される**ため到達しない。
+台帳に識別子を持たせる構造的な解は **#752** にまとめ、ここで部分的に変えない。
+
+#### 検証（main が sandbox 外で実測）
+
+- `cargo clippy --all-targets -- -D warnings` exit 0
+- `cargo test -p orbit-audio-daemon` — protocol **29 passed** ほか全 green
+- 同 `--features outproc-effect,outproc-instrument` — lib **257 passed** / protocol **32 passed**
+- `npm test` **2251 passed / 0 failed** / `docs:check` **926 verified / 0 failed**
+
 ### refactor(daemon): apply the /simplify pass to the RUN-termination branch (#606) (Sep 5, 2026)
 
 **Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR** #738

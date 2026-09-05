@@ -203,7 +203,7 @@ that drains an `mpsc` channel. Since #474 there is one more task: it bridges the
 (`PluginUiClosed` and friends) broadcast by the watchdog threads into the session's writer queue.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:737-764
+// rust/crates/orbit-audio-daemon/src/session.rs:739-766
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -240,7 +240,7 @@ kept as the single point of truth, before falling through to the match — refle
 learned that keeping the same string set in two independently-maintained places drifts.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1335-1362
+// rust/crates/orbit-audio-daemon/src/session.rs:1337-1364
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,

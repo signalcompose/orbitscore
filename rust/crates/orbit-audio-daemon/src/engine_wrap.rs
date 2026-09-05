@@ -7325,7 +7325,7 @@ impl EngineWrap {
         })
     }
 
-    /// integration test seam: active-note 台帳の現在件数。
+    /// GetStatus 診断と integration test seam が使う active-note 台帳の現在件数。
     #[cfg(feature = "outproc-instrument")]
     #[doc(hidden)]
     pub fn active_plugin_note_count(&self) -> Result<usize, WrapError> {
@@ -9775,7 +9775,7 @@ mod outproc_instrument_eager_start_tests {
     }
 }
 
-#[cfg(feature = "clap-host")]
+#[cfg(any(feature = "clap-host", feature = "outproc-instrument"))]
 #[cfg(test)]
 mod plugin_event_ring_retry_tests {
     use super::{push_with_bounded_retry, Ordering, PushAttemptOutcome};
@@ -13794,16 +13794,40 @@ mod outproc_instrument_note_tests {
 
     #[test]
     fn plugin_all_notes_off_panic_leaves_the_full_ledger_intact() {
-        let (wrap, _event_rx) = wrap_with_note_consumer(1);
-        wrap.inject_active_plugin_note(super::DEFAULT_INSTRUMENT_INSTANCE, 0, 62)
-            .expect("inject tracked note");
-        wrap.outproc_instrument
+        let (wrap, mut event_rx) = wrap_with_note_consumer(1);
+        for (instance, key) in [
+            ("plugin:first", 60),
+            ("plugin:panic", 61),
+            ("plugin:last", 62),
+        ] {
+            wrap.inject_active_plugin_note(instance, 0, key)
+                .expect("inject tracked note");
+        }
+
+        // HashSet iteration is deliberately unordered. Read the stable order for this unchanged
+        // set, then make its middle entry panic: entry 0 must be delivered successfully first,
+        // while entry 2 must remain unprocessed after the panic.
+        let iteration_order = wrap
+            .lock_active_notes()
+            .expect("lock active notes")
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(iteration_order.len(), 3);
+        let panic_instance = iteration_order[1].0.clone();
+        let mut instrument = wrap
+            .outproc_instrument
             .lock()
-            .expect("lock instrument control")
+            .expect("lock instrument control");
+        let instance_index = &mut instrument
             .as_mut()
             .expect("instrument control")
-            .instance_index
-            .insert(super::DEFAULT_INSTRUMENT_INSTANCE.to_string(), usize::MAX);
+            .instance_index;
+        for (instance, _, _) in &iteration_order {
+            instance_index.insert(instance.clone(), 0);
+        }
+        instance_index.insert(panic_instance, usize::MAX);
+        drop(instrument);
 
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = wrap.plugin_all_notes_off();
@@ -13814,10 +13838,24 @@ mod outproc_instrument_note_tests {
             panicked,
             "invalid slot index must exercise the loop panic path"
         );
+        let delivered = event_rx
+            .pop()
+            .expect("first entry must be delivered before panic");
+        match delivered {
+            NeutralEvent::NoteOff { addr, .. } => {
+                assert_eq!(addr.channel, i16::from(iteration_order[0].1));
+                assert_eq!(addr.key, i16::from(iteration_order[0].2));
+            }
+            other => panic!("expected NoteOff before panic, got {other:?}"),
+        }
+        assert!(
+            event_rx.pop().is_err(),
+            "entry after the panic must never be processed"
+        );
         assert_eq!(
             wrap.active_plugin_note_count().expect("count notes"),
-            1,
-            "snapshot delivery must not remove the ledger before the loop completes"
+            3,
+            "even the successfully delivered entry must remain until the whole loop commits"
         );
     }
 

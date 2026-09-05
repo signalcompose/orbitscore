@@ -197,7 +197,7 @@ spawn します。#474 以降はもう 1 本、watchdog thread が broadcast す
 （`PluginUiClosed` 等）を session の writer queue へ橋渡しする task が増えています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:737-764
+// rust/crates/orbit-audio-daemon/src/session.rs:739-766
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -233,7 +233,7 @@ plugin note 系 method は `plugin_note_spec` という純関数を「唯一の�
 match に落とす設計です（2 箇所で同じ文字列集合を独立管理すると drift するという教訓が反映されています）。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1335-1362
+// rust/crates/orbit-audio-daemon/src/session.rs:1337-1364
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,

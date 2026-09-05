@@ -307,15 +307,16 @@ daemon が追跡する全 instrument instance の active note を drain し、�
 // Response
 {
   "id": "u5b",
-  "result": { "released": 3, "stale": 0 }
+  "result": { "released": 3, "stale": 0, "failed": 0 }
 }
 ```
 
 - `released`: NoteOff の ring push に成功した件数
 - `stale`: 台帳には残っていたが、対応する instance が既に無かった件数
-- mutex poison / ring 枯渇は `OUTPROC_INSTRUMENT_RUNTIME`、join 失敗は `INTERNAL_ERROR`
-- `clap-host` 単独 build は `CLAP_UNAVAILABLE`、plugin hosting feature の無い build は
-  `{ "released": 0, "stale": 0 }` を返す
+- `failed`: NoteOff の送出を試みたが runtime error になった件数（詳細は daemon log に記録）
+- 台帳 mutex poison は `OUTPROC_INSTRUMENT_RUNTIME`、join 失敗は `INTERNAL_ERROR`
+- `clap-host` 単独 build と plugin hosting feature の無い build は、発音経路が台帳の対象外または
+  存在しないため `{ "released": 0, "stale": 0, "failed": 0 }` を返す
 
 ### SetGlobalGain
 
@@ -349,10 +350,16 @@ daemon の状態取得。
     "output_sample_rate": 48000,
     "output_channels": 2,
     "loaded_samples": 12,
-    "active_plays": 3
+    "active_plays": 3,
+    "active_plugin_notes": 0
   }
 }
 ```
+
+- `active_plugin_notes`: daemon の OOP instrument active-note 台帳の現在件数
+  （`outproc-instrument` feature build でのみ含まれる）。
+  🔴 台帳が読めない（mutex poisoned）場合は **`null`** になり、理由は daemon の `ERROR` ログに出る。
+  **その 1 項目だけを縮退させ、GetStatus 全体は成功させる** — 異常時にこそデバイス・レート・uptime が要るため
 
 ### Ping
 
