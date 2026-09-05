@@ -719,7 +719,7 @@ export interface EffectChainApplyResult {
 The daemon client sends the JSON-RPC `ApplyEffectChain` with `role: 'effect'` and `save_dropped`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:538-545
+// packages/engine/src/audio/rust-engine/daemon-client.ts:548-555
   async applyEffectChain(request: EffectChainApplyRequest): Promise<EffectChainApplyResult> {
     const result = await this.request('ApplyEffectChain', {
       role: 'effect',
@@ -734,7 +734,7 @@ The daemon client sends the JSON-RPC `ApplyEffectChain` with `role: 'effect'` an
 respawn re-issues a plan that loads every stage with `mode: 'rebuild'`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1341-1351
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1380-1390
   private async reloadEffectRacksAfterRespawn(): Promise<void> {
     for (const { bus, chain } of this.loadedEffectRacks.values()) {
       const key = RustEnginePlayer.pluginKey('effect', bus)
@@ -839,7 +839,7 @@ pub struct EffectChainPlan {
 the mode.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5080-5088
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5514-5522
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -852,7 +852,7 @@ the mode.
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5151-5173
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5585-5607
         let mut route = {
             let slot = lock_child_slot_recovering(&child_slot, "effect chain route inspection");
             let registry_is_intact = effect_chain_registry_is_intact(&slot, &stats);
@@ -1455,7 +1455,7 @@ rack on the gated side is below; it runs the SC.10.4 shape — a `var` binding f
 `effect(variable)` — on real hardware as is.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4165-4172
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4390-4397
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(

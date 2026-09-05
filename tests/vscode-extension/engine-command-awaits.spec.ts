@@ -262,6 +262,51 @@ describe('registered command startEngine awaits', () => {
     )
   })
 
+  // 🔴 #661 F4: 名前不一致は縮退せず拒否され、**いま鳴っているデバイスはそのまま**。
+  // ここで「Restart Engine」を出すと、再起動時は起動経路のポリシー（host 既定へ縮退）が効くので、
+  // 演奏中のタイプミスで音が内蔵スピーカーへ移る — 実装で避けた事故を UI が起こす形になる。
+  it('engineViewSelectDevice does not offer a restart when the old device keeps playing', async () => {
+    vi.useFakeTimers()
+    await activateForCommands()
+    ext.__setEngineProcessForTest(fakeSpawnedProcess(true))
+    const appendedLines: string[] = []
+    ext.__setOutputChannelForTest({
+      appendLine: (value: string) => appendedLines.push(value),
+      append: () => {},
+    })
+    const warning = vi.spyOn(vscode.window, 'showWarningMessage').mockResolvedValue(undefined)
+
+    const commandPromise = handler('orbitscore.engineViewSelectDevice')({
+      id: 'device:Test Device',
+      kind: 'device',
+      label: 'Test Device',
+      collapsible: false,
+    }) as Promise<void>
+    const bridge = ext.__getDeviceSwitchBridgeForTest()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(bridge.pendingCount).toBe(1)
+    expect(
+      bridge.handleLine(
+        JSON.stringify({
+          selectAudioDevice: {
+            ok: false,
+            error:
+              '[AUDIO_DEVICE_UNAVAILABLE] requested output device "Test Device" is not available',
+          },
+        }),
+      ),
+    ).toBe(true)
+    await commandPromise
+
+    const shown = warning.mock.calls.filter(([message]) =>
+      String(message).includes('指定したデバイスが見つかりません'),
+    )
+    expect(shown, JSON.stringify(warning.mock.calls)).toHaveLength(1)
+    // 引数が 1 つだけ = ボタンを渡していない。
+    expect(shown[0]).toHaveLength(1)
+    vi.useRealTimers()
+  })
+
   it('engineViewSelectDevice bridge-exception recovery logs its rejected restart', async () => {
     await expectSelectDeviceRestartFailure(
       undefined,

@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{tungstenite::Message, WebSocketStream};
-use tracing::warn;
+use tracing::{error, warn};
 
 #[cfg(not(any(feature = "outproc-effect", feature = "outproc-instrument")))]
 use crate::engine_wrap::ClapPluginRole;
@@ -41,6 +41,66 @@ const EVENT_CHANNEL_CAPACITY: usize = 128;
 
 /// StreamStats の送出間隔。protocol 仕様で 1 Hz 固定。
 const STREAM_STATS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+const ERROR_CODE_STREAM_CALLBACK_DEAD: &str = "STREAM_CALLBACK_DEAD";
+const ERROR_CODE_STREAM_CALLBACK_STALLED: &str = "STREAM_CALLBACK_STALLED";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CallbackHealthEvent {
+    Dead,
+    StalledWarning,
+    StalledFatal,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CallbackHealthUpdate {
+    alive: bool,
+    event: Option<CallbackHealthEvent>,
+}
+
+/// 1 Hz ticker 専用の callback 生存状態。GetStatus 呼び出しごとの時間窓は作らない。
+struct CallbackLiveness {
+    previous_count: u64,
+    ever_ran: bool,
+    dead_reported: bool,
+    consecutive_stalled_ticks: u8,
+}
+
+impl CallbackLiveness {
+    fn new(initial_count: u64) -> Self {
+        Self {
+            previous_count: initial_count,
+            ever_ran: initial_count > 0,
+            dead_reported: false,
+            consecutive_stalled_ticks: 0,
+        }
+    }
+
+    fn observe(&mut self, count: u64) -> CallbackHealthUpdate {
+        let alive = count != self.previous_count;
+        self.previous_count = count;
+        if alive {
+            self.ever_ran = true;
+            self.consecutive_stalled_ticks = 0;
+            return CallbackHealthUpdate { alive, event: None };
+        }
+        let event = if !self.ever_ran {
+            if self.dead_reported {
+                None
+            } else {
+                self.dead_reported = true;
+                Some(CallbackHealthEvent::Dead)
+            }
+        } else {
+            self.consecutive_stalled_ticks = self.consecutive_stalled_ticks.saturating_add(1);
+            match self.consecutive_stalled_ticks {
+                1 => Some(CallbackHealthEvent::StalledWarning),
+                2 => Some(CallbackHealthEvent::StalledFatal),
+                _ => None,
+            }
+        };
+        CallbackHealthUpdate { alive, event }
+    }
+}
 
 /// `EVENT_DAEMON_ERROR` を共通形（severity / code / message の3フィールド）で構築する。
 /// 1 Hz ticker の fatal(device_lost) / warning(xrun) / warning(link egress drop) が共有する。
@@ -688,6 +748,54 @@ fn validate_render_score_params(params: &Value) -> Result<RenderScoreManifest, P
 /// Err を `Box` に包むのは `clippy::result_large_err` 対応（CI の stable clippy 1.98 で発火）。
 /// `tungstenite::Error` は外部 crate の型で 136 バイトあり、こちらでは小さくできない。
 /// error 経路は cold path なので 1 回のアロケーションは実質無償。
+/// session 登録の RAII ガード。
+///
+/// 🔴 `disconnect()` を呼ばずに drop された場合でもカウンタを戻す。
+/// 戻さないと `connected_sessions` が永久に加算されたままになり、**以後どの session が
+/// 切れても最後の砦（`PluginAllNotesOff`）が二度と発火しない** — daemon プロセスが生きている
+/// 限りずっと、である。同ファイルの `InstrumentReplacementReservation` と同じ「明示的な
+/// 確定 + Drop の安全網」の形。現在の production panic path は daemon の panic hook が unwind 前に
+/// process を exit するためここへ到達しないが、将来の早期 return 等の経路に備えて guard は維持する。
+struct SessionRegistration {
+    engine: Arc<EngineWrap>,
+    released: bool,
+}
+
+impl SessionRegistration {
+    fn new(engine: Arc<EngineWrap>) -> Self {
+        engine.session_connected();
+        Self {
+            engine,
+            released: false,
+        }
+    }
+
+    /// 明示的な切断。daemon の最後の確立済み session だったかを返す。
+    fn disconnect(mut self) -> bool {
+        self.released = true;
+        self.engine.session_disconnected_is_last()
+    }
+}
+
+impl Drop for SessionRegistration {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        // 現在の daemon panic hook は unwind 前に process を exit するため、panic ではここへ来ない。
+        // 将来、明示切断より手前の早期 return 等が追加された場合の安全網としてカウンタだけ戻す。
+        // 解放そのものはここでは行わない — Drop は async runtime のスレッド上で走り、
+        // `plugin_all_notes_off` は bounded retry で sleep しうるため。この session が最後
+        // だった場合その分の音は残るが、**次の session の切断で正しく発火する状態には戻る**。
+        let was_last = self.engine.session_disconnected_is_last();
+        warn!(
+            was_last,
+            "session registration dropped without an explicit disconnect; \
+             the all-notes-off trigger did not run for this session"
+        );
+    }
+}
+
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -699,6 +807,7 @@ pub async fn run(
     write
         .send(Message::Text(to_json_or_fallback(&Handshake::current())))
         .await?;
+    let session = SessionRegistration::new(engine.clone());
 
     let writer_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -756,10 +865,14 @@ pub async fn run(
             let mut outproc_instrument_invalid_reported = false;
             let mut device_lost_reported = false;
             let mut engine_lock_poisoned_reported = false;
+            let initial_callbacks = engine.stream_stats_snapshot().callbacks;
+            let mut callback_liveness = CallbackLiveness::new(initial_callbacks);
             loop {
                 ticker.tick().await;
                 let snapshot = engine.stream_stats_snapshot();
                 let now_sec = engine.transport_or_uptime_sec();
+                let callback_health = callback_liveness.observe(snapshot.callbacks);
+                engine.set_callback_alive(callback_health.alive);
 
                 // fatal を warning より先に送り、client が最終イベントとして確実に観測できる順序にする。
                 if snapshot.device_lost && !device_lost_reported {
@@ -791,6 +904,18 @@ pub async fn run(
                         break;
                     }
                     engine_lock_poisoned_reported = true;
+                }
+
+                if let Some(health_event) = callback_health.event {
+                    let (severity, code, message) = match health_event {
+                        CallbackHealthEvent::Dead => (ERROR_SEVERITY_FATAL, ERROR_CODE_STREAM_CALLBACK_DEAD, "audio stream callback has never run since stream start".to_string()),
+                        CallbackHealthEvent::StalledWarning => (ERROR_SEVERITY_WARNING, ERROR_CODE_STREAM_CALLBACK_STALLED, format!("audio stream callback did not advance during the last tick ({} callbacks total)", snapshot.callbacks)),
+                        CallbackHealthEvent::StalledFatal => (ERROR_SEVERITY_FATAL, ERROR_CODE_STREAM_CALLBACK_STALLED, format!("audio stream callback remained stalled for consecutive ticks ({} callbacks total)", snapshot.callbacks)),
+                    };
+                    let callback_evt = daemon_error_event(severity, code, message);
+                    if tx.send(to_json_or_fallback(&callback_evt)).await.is_err() {
+                        break;
+                    }
                 }
 
                 if snapshot.xruns > last_xruns {
@@ -1216,6 +1341,24 @@ pub async fn run(
         }
     }
 
+    // engine が異常終了すると RPC は原理的に届かない。read loop の終了そのものを第二 trigger
+    // とする。ただし daemon は複数 session を受理し台帳は共有するため、途中の 1 接続ではなく
+    // 最後の確立済み session が切れた時だけ単一配送関数で解放する（#606）。
+    if session.disconnect() {
+        let release_engine = engine.clone();
+        match tokio::task::spawn_blocking(move || release_engine.plugin_all_notes_off()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                error!("plugin all-notes-off after session disconnect failed: {error}")
+            }
+            // 🔴 JoinError は「解放タスクが panic / cancel して**そもそも試みられていない**」ことを
+            // 意味するので、部分的な配送失敗（上の腕）より軽く記録してはいけない。
+            Err(error) => {
+                error!("plugin all-notes-off task after session disconnect failed: {error}")
+            }
+        }
+    }
+
     // stats_task は自身の tx clone を保持するため、drop(tx) では exit しない。
     // abort してから join を待ち、cancelled 以外の終了（panic 等）があれば warn する。
     stats_task.abort();
@@ -1334,11 +1477,27 @@ async fn handle_command(
                 .and_then(|d| d.as_str())
                 .map(|s| s.to_string())
                 .filter(|s| !s.trim().is_empty());
-            let engine = engine.clone();
+            let engine_for_switch = engine.clone();
             let switched =
-                tokio::task::spawn_blocking(move || engine.select_audio_device(device)).await;
+                tokio::task::spawn_blocking(move || engine_for_switch.select_audio_device(device))
+                    .await;
             match switched {
-                Ok(Ok(device)) => ok(&id, json!({ "ok": true, "device": device })),
+                Ok(Ok(device)) => {
+                    let output = engine.stream_config_snapshot();
+                    ok(
+                        &id,
+                        json!({
+                            "ok": true,
+                            "device": device,
+                            "device_requested": output.device_requested,
+                            "device_fell_back": output.device_fell_back,
+                            "fallback_reason": output.fallback_reason,
+                            "first_callback_ms": output.first_callback_ms,
+                            "sample_rate": output.sample_rate,
+                            "channels": output.channels,
+                        }),
+                    )
+                }
                 Ok(Err(e)) => err(&id, wrap_err_to_protocol(&e)),
                 Err(join_err) => err(
                     &id,
@@ -1347,17 +1506,49 @@ async fn handle_command(
             }
         }
         "GetStatus" => {
+            let stream_config = engine.stream_config_snapshot();
+            let stream_stats = engine.stream_stats_snapshot();
             let status = json!({
                 "daemon_version": env!("CARGO_PKG_VERSION"),
                 "protocol_version": crate::protocol::PROTOCOL_VERSION,
-                "output_sample_rate": engine.output_sample_rate(),
-                "output_channels": engine.output_channels(),
+                "output_sample_rate": stream_config.sample_rate,
+                "output_channels": stream_config.channels,
                 "loaded_samples": engine.loaded_sample_count(),
                 "active_plays": engine.active_play_count(),
                 "uptime_sec": engine.uptime_sec(),
-                "render_contentions": engine.stream_stats_snapshot().render_contentions,
+                "render_contentions": stream_stats.render_contentions,
+                "output": {
+                    "device_name": stream_config.device_name,
+                    "sample_rate": stream_config.sample_rate,
+                    "channels": stream_config.channels,
+                    "device_requested": stream_config.device_requested,
+                    "device_fell_back": stream_config.device_fell_back,
+                    "fallback_reason": stream_config.fallback_reason,
+                    "first_callback_ms": stream_config.first_callback_ms,
+                    "last_switch_failure": stream_config.last_switch_failure,
+                },
+                "callback": { "count": stream_stats.callbacks, "alive": engine.callback_alive(), "last_frames": stream_stats.last_frames },
             });
-            ok(&id, status)
+            #[cfg(feature = "outproc-instrument")]
+            {
+                let mut status = status;
+                // 🔴 診断は縮退する。台帳が読めない（poison）ことを理由に GetStatus 全体を失敗させると、
+                // デバイス・レート・uptime・render_contentions まで**異常時にこそ**失われる。
+                // この項目を足した目的（stop 後に台帳が空かを外から確認できるようにする）からしても、
+                // 読めない時は件数だけ null にして理由をログへ出すのが正しい。
+                status["active_plugin_notes"] = match engine.active_plugin_note_count() {
+                    Ok(count) => json!(count),
+                    Err(error) => {
+                        error!("GetStatus could not read the active plugin note ledger: {error}");
+                        serde_json::Value::Null
+                    }
+                };
+                ok(&id, status)
+            }
+            #[cfg(not(feature = "outproc-instrument"))]
+            {
+                ok(&id, status)
+            }
         }
         "LoadSample" => match params.get("path").and_then(|p| p.as_str()) {
             Some(path_str) => {
@@ -2211,6 +2402,21 @@ async fn handle_command(
             Ok(n) => ok(&id, json!({"stopped": n})),
             Err(e) => err(&id, wrap_err_to_protocol(&e)),
         },
+        "PluginAllNotesOff" => {
+            let engine = engine.clone();
+            match tokio::task::spawn_blocking(move || engine.plugin_all_notes_off()).await {
+                Ok(Ok(summary)) => ok(
+                    &id,
+                    json!({
+                        "released": summary.released,
+                        "stale": summary.stale,
+                        "failed": summary.failed,
+                    }),
+                ),
+                Ok(Err(error)) => err(&id, wrap_err_to_protocol(&error)),
+                Err(error) => err(&id, ProtocolError::new("INTERNAL_ERROR", error.to_string())),
+            }
+        }
         "SetGlobalGain" => {
             let value = params.get("value").and_then(|v| v.as_f64()).unwrap_or(1.0);
             let ramp_sec = params
@@ -2468,6 +2674,28 @@ fn err(id: &str, error: ProtocolError) -> Value {
     .expect("ErrorResponse must be serializable")
 }
 
+/// `OutputError` のうち、利用者が行動を変えられるものだけを protocol code へ写す。
+/// **コード表はここ 1 箇所だけ**。actionable でないものは `None` を返し、呼び出し元が
+/// `DEVICE_CONFIG_ERROR` へ落とす。
+///
+/// 🔴 `SwitchRecoveryFailed` を `primary` のコードへ畳まないのは意図的。畳むと
+/// 「元の出力を継続します」という `AUDIO_DEVICE_STREAM_DEAD` の文言が、**継続できていない**
+/// 事象に付く（2026-09-05 の監査で発覚）。取れる手が違う（再起動しかない）ので別コードにする。
+fn actionable_output_error_code(output: &orbit_audio_native::OutputError) -> Option<&'static str> {
+    use orbit_audio_native::OutputError as O;
+    match output {
+        O::StreamDead { .. } => Some(crate::protocol::ERROR_CODE_AUDIO_DEVICE_STREAM_DEAD),
+        O::SampleRateMismatch { .. } => {
+            Some(crate::protocol::ERROR_CODE_AUDIO_DEVICE_RATE_MISMATCH)
+        }
+        O::DeviceUnavailable { .. } => Some(crate::protocol::ERROR_CODE_AUDIO_DEVICE_UNAVAILABLE),
+        O::SwitchRecoveryFailed { .. } => {
+            Some(crate::protocol::ERROR_CODE_AUDIO_DEVICE_SWITCH_RECOVERY_FAILED)
+        }
+        _ => None,
+    }
+}
+
 fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
     use orbit_audio_native::LoaderError as L;
     match e {
@@ -2484,7 +2712,16 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         WrapError::Loader(L::Io(io)) => ProtocolError::new("INTERNAL_ERROR", io.to_string()),
         WrapError::Loader(L::Resample(r)) => ProtocolError::new("RESAMPLE_ERROR", r.to_string()),
         WrapError::Resample(r) => ProtocolError::new("RESAMPLE_ERROR", r.to_string()),
-        WrapError::Output(o) => ProtocolError::new("DEVICE_CONFIG_ERROR", o.to_string()),
+        // 🔴 コード表は `actionable_output_error_code` の 1 箇所だけ。以前はここに直接 3 アーム +
+        // `SwitchRecoveryFailed.primary` 用に同じ 3 アームが並んでいて、新しい actionable な
+        // `OutputError` を足す人が**片方だけ更新して黙って `DEVICE_CONFIG_ERROR` に落ちる**形だった。
+        //
+        // メッセージは常に `OutputError` の Display を使う（`WrapError::Output` の
+        // 「audio output init failed: 」は切替経路では嘘になる）。
+        WrapError::Output(o) => ProtocolError::new(
+            actionable_output_error_code(o).unwrap_or("DEVICE_CONFIG_ERROR"),
+            o.to_string(),
+        ),
         WrapError::Scheduler(msg) => ProtocolError::new("INTERNAL_ERROR", msg.clone()),
         // feature-gap（TS は warn-once で握り潰す）と runtime 失敗（TS は rethrow）を別コードにする。
         WrapError::LinkAudioUnavailable(msg) => {
@@ -2516,7 +2753,7 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         WrapError::OutProcInstrumentUnavailable(msg) => {
             ProtocolError::new("OUTPROC_INSTRUMENT_UNAVAILABLE", msg.clone())
         }
-        WrapError::OutProcInstrument(msg) => {
+        WrapError::OutProcInstrument(msg) | WrapError::OutProcInstrumentStale(msg) => {
             ProtocolError::new("OUTPROC_INSTRUMENT_RUNTIME", msg.clone())
         }
         WrapError::OutProcAttachFailed(msg) => {
@@ -2563,6 +2800,144 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "outproc-instrument")]
+    #[tokio::test]
+    async fn get_status_reports_active_plugin_note_count() {
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
+            .expect("stub backend starts");
+        engine
+            .inject_active_plugin_note("plugin:status", 2, 64)
+            .expect("inject active note");
+        let (tx, _rx) = mpsc::channel(1);
+
+        let response = handle_command(
+            Command {
+                id: "status-notes".into(),
+                method: "GetStatus".into(),
+                params: json!({}),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+
+        assert_eq!(response["result"]["active_plugin_notes"], 1);
+    }
+
+    #[test]
+    fn callback_liveness_uses_tick_deltas_and_escalates_a_continuous_stall() {
+        let mut health = CallbackLiveness::new(10);
+        assert_eq!(
+            health.observe(11),
+            CallbackHealthUpdate {
+                alive: true,
+                event: None
+            }
+        );
+        assert_eq!(
+            health.observe(11),
+            CallbackHealthUpdate {
+                alive: false,
+                event: Some(CallbackHealthEvent::StalledWarning)
+            }
+        );
+        assert_eq!(
+            health.observe(11),
+            CallbackHealthUpdate {
+                alive: false,
+                event: Some(CallbackHealthEvent::StalledFatal)
+            }
+        );
+        assert_eq!(
+            health.observe(11),
+            CallbackHealthUpdate {
+                alive: false,
+                event: None
+            }
+        );
+        assert_eq!(
+            health.observe(12),
+            CallbackHealthUpdate {
+                alive: true,
+                event: None
+            }
+        );
+        assert_eq!(
+            health.observe(12),
+            CallbackHealthUpdate {
+                alive: false,
+                event: Some(CallbackHealthEvent::StalledWarning)
+            }
+        );
+    }
+
+    #[test]
+    fn callback_liveness_reports_never_started_once_as_fatal() {
+        let mut health = CallbackLiveness::new(0);
+        assert_eq!(
+            health.observe(0),
+            CallbackHealthUpdate {
+                alive: false,
+                event: Some(CallbackHealthEvent::Dead)
+            }
+        );
+        assert_eq!(
+            health.observe(0),
+            CallbackHealthUpdate {
+                alive: false,
+                event: None
+            }
+        );
+        assert_eq!(
+            health.observe(1),
+            CallbackHealthUpdate {
+                alive: true,
+                event: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn get_status_adds_effective_output_callback_state_and_last_switch_failure() {
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend {
+            sample_rate: 96_000,
+            channels: 6,
+        })
+        .expect("stub backend starts");
+        engine.stream_stats_arc().record_callback(384);
+        engine.set_callback_alive(true);
+        engine
+            .record_device_switch_failure_for_test("Rejected Output", "simulated callback timeout");
+        let (tx, _rx) = mpsc::channel(1);
+        let response = handle_command(
+            Command {
+                id: "status".into(),
+                method: "GetStatus".into(),
+                params: json!({}),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+        let result = &response["result"];
+        assert_eq!(result["output_sample_rate"], 96_000);
+        assert_eq!(result["output_channels"], 6);
+        assert_eq!(result["output"]["device_name"], "test audio backend");
+        assert_eq!(result["output"]["sample_rate"], 96_000);
+        assert_eq!(result["output"]["channels"], 6);
+        assert_eq!(result["output"]["device_requested"], Value::Null);
+        assert_eq!(result["output"]["device_fell_back"], false);
+        assert_eq!(result["output"]["fallback_reason"], Value::Null);
+        assert_eq!(result["output"]["first_callback_ms"], 0);
+        assert_eq!(
+            result["output"]["last_switch_failure"],
+            "audio device switch unavailable: simulated callback timeout"
+        );
+        assert_eq!(result["callback"]["count"], 1);
+        assert_eq!(result["callback"]["alive"], true);
+        assert_eq!(result["callback"]["last_frames"], 384);
+    }
 
     #[test]
     fn set_source_routing_parses_opaque_source_unit_and_nullable_target() {
@@ -3354,6 +3729,70 @@ mod tests {
     fn link_audio_runtime_maps_to_runtime_code() {
         let e = WrapError::LinkAudio("channel limit reached".into());
         assert_eq!(wrap_err_to_protocol(&e).code, "LINK_AUDIO_RUNTIME");
+    }
+
+    #[test]
+    fn audio_device_liveness_errors_map_to_actionable_codes() {
+        let primary = orbit_audio_native::OutputError::StreamDead {
+            device: "USB Audio".into(),
+            waited_ms: 3_000,
+            phase: orbit_audio_native::StreamLivenessPhase::Probe,
+        };
+        let dead = WrapError::Output(primary);
+        assert_eq!(
+            wrap_err_to_protocol(&dead).code,
+            crate::protocol::ERROR_CODE_AUDIO_DEVICE_STREAM_DEAD
+        );
+        let mismatch = WrapError::Output(orbit_audio_native::OutputError::SampleRateMismatch {
+            device: "USB Audio".into(),
+            device_rate: 44_100,
+            engine_rate: 48_000,
+        });
+        assert_eq!(
+            wrap_err_to_protocol(&mismatch).code,
+            crate::protocol::ERROR_CODE_AUDIO_DEVICE_RATE_MISMATCH
+        );
+
+        let recovery = WrapError::Output(orbit_audio_native::OutputError::SwitchRecoveryFailed {
+            primary: Box::new(orbit_audio_native::OutputError::StreamDead {
+                device: "USB Audio".into(),
+                waited_ms: 3_000,
+                phase: orbit_audio_native::StreamLivenessPhase::RealStream,
+            }),
+            resume: Box::new(orbit_audio_native::OutputError::PlayStream(
+                "resume refused".into(),
+            )),
+        });
+        let protocol = wrap_err_to_protocol(&recovery);
+        // 🔴 `primary` のコードへ畳まない。畳むと「元の出力を継続します」という
+        // `AUDIO_DEVICE_STREAM_DEAD` の UI 文言が、継続できていない事象に付く。
+        assert_eq!(
+            protocol.code,
+            crate::protocol::ERROR_CODE_AUDIO_DEVICE_SWITCH_RECOVERY_FAILED
+        );
+        assert!(protocol
+            .message
+            .contains("produced no callback within 3000 ms"));
+        assert!(protocol.message.contains("resume refused"));
+
+        // F4（owner 裁定 2026-09-05）で新設した経路。ここが落ちると利用者は
+        // `DEVICE_CONFIG_ERROR` しか受け取れず、エディタは「元の出力を継続します」を出せない。
+        let unavailable = WrapError::Output(orbit_audio_native::OutputError::DeviceUnavailable {
+            requested: "NoSuchDevice".into(),
+            reason: "not found (available: [])".into(),
+        });
+        let protocol = wrap_err_to_protocol(&unavailable);
+        assert_eq!(
+            protocol.code,
+            crate::protocol::ERROR_CODE_AUDIO_DEVICE_UNAVAILABLE
+        );
+        assert!(protocol.message.contains("NoSuchDevice"));
+        // 切替では何も init していないので、この前置は載ってはいけない。
+        assert!(
+            !protocol.message.contains("audio output init failed"),
+            "{}",
+            protocol.message
+        );
     }
 
     // CLAP エラーの protocol code 分割を pin（LinkAudio と同様: feature-gap=UNAVAILABLE /

@@ -22,7 +22,7 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 ```
 
 ```typescript
-// packages/engine/src/audio/engine-backend.ts:52-53
+// packages/engine/src/audio/engine-backend.ts:54-55
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
 export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```
@@ -196,7 +196,7 @@ export class ScsynthNotFoundError extends Error {
 VS Code extension は engine の compiled JS を `require()` して resolver を使います。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:677-693
+// packages/vscode-extension/src/extension.ts:680-696
 function resolveScsynthForUI(): { path: string; source: string } | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
@@ -225,7 +225,7 @@ VS Code の設定 `orbitscore.scsynthPath` が非空ならば `explicit` とし�
 ここが 2026-05 時点との大きな違いです。`resolveScsynthForUI()` を **呼ぶかどうか**を、`orbitscore.engine` 設定を正規化した `getConfiguredEngineKind()` が決めます (#377、`docs/archive/WORK_LOG_2026-07.md` §6.186)。正規化は engine 側の `resolveEngineKind()` を runtime `require` して行い、UI と engine で判定がズレないようにしています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:654-670
+// packages/vscode-extension/src/extension.ts:657-673
 function getConfiguredEngineKind(): 'rust' | 'sc' {
   const raw = vscode.workspace.getConfiguration('orbitscore').get<string>('engine', 'rust')
   try {
@@ -248,7 +248,7 @@ function getConfiguredEngineKind(): 'rust' | 'sc' {
 `startEngine()` の事前チェックは、`sc` kind のときだけ scsynth を解決し、`rust` kind では代わりに daemon バイナリを解決します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2054-2070
+// packages/vscode-extension/src/extension.ts:2060-2076
   // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
   // 'rust' (default since cutover #369), skip the scsynth pre-check entirely —
   // the native daemon doesn't need scsynth to be resolvable.
@@ -294,7 +294,7 @@ flowchart TD
 extension は起動時と設定変更時 (`orbitscore.scsynthPath` / `orbitscore.engine`) に `updateBundleStatus()` を呼びます。`sc` kind では resolver の結果をステータスバーに表示し、source が `'bundle'`, `'env'`, `'explicit'` のいずれかが表示され、未解決なら `$(error) scsynth: not found` と強調表示されます。一方 `rust` kind では **daemon が解決できる限りインジケータ自体を隠します**。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:726-742
+// packages/vscode-extension/src/extension.ts:729-745
 function updateBundleStatus(): void {
   if (!bundleStatusItem) return
   if (getConfiguredEngineKind() === 'rust') {

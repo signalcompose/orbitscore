@@ -139,7 +139,7 @@ The important point here is **idempotence**. If `_isRunning` is already `true`, 
 Eventually, `RustEnginePlayer.start()` starts `setInterval(1)` and records the playback start time as `startTime = Date.now()`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1467-1471
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1506-1510
   start(): void {
     if (this.isRunning) return
     this.isRunning = true
@@ -287,14 +287,14 @@ In the 2026-05 version this was hard-coded as `audioEngine: new SuperColliderPla
 When `Cmd+Enter` is pressed, the VS Code extension writes only the text of the block at the cursor (or the selection) to stdin.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3031-3031
+// packages/vscode-extension/src/extension.ts:3056-3056
   engineProcess.stdin.write(codeToSend + '\n')
 ```
 
 The engine's REPL evaluates the received text via `parseAudioDSL()` → `interpreter.execute()`.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:370-378
+// packages/engine/src/cli/repl-mode.ts:415-423
     try {
       const metaDir = extractDocumentDirectoryMeta(code)
       if (metaDir) sessionDocumentDirectory = metaDir
@@ -444,7 +444,7 @@ All `ScheduledPlay.time` values are **relative times (ms)** based on the schedul
 The important point is that `startTime` is not reset even when `stop()` is called.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1486-1492
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1525-1531
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId)
@@ -496,13 +496,16 @@ The sequence side also has `run()`, `loop()`, and `stop()`. From the DSL they ar
 - `seq.stop()` → clears events and cancels the loop timer
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1843-1868
+// packages/engine/src/core/sequence.ts:1855-1880
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()
 
     // Clear scheduled events (MIDI: also releases sounding notes, §7-2)
     this.clearEvents(sequenceName)
+
+    // Cancel a pending one-shot completion so it cannot clear later playback.
+    this.clearRunTimer()
 
     // Clear loop timer (only exists if loop() was called, not run())
     // Note: run() sets loopTimer to undefined, so this check prevents redundant clearInterval
@@ -520,9 +523,6 @@ The sequence side also has `run()`, `loop()`, and `stop()`. From the DSL they ar
     if (wasLooping) {
       console.log(`⏹ ${sequenceName} (loop stopped)`)
     }
-
-    return this
-  }
 ```
 
 Here one statement of the 2026-05 version needs correcting. The 2026-05 version wrote that "even if global stops, each sequence's loop timer keeps running, and when `global.start()` is called again each sequence produces sound at its next iteration," but `TransportControl.stop()` **calls `stop()` on every sequence first**, so the loop timers are `clearTimeout`ed there. To make sequences sound again after `global.stop()` → `global.start()`, `LOOP()` / `RUN()` must be re-evaluated. `transport-control.ts:43-59` was the same code as of 2026-05, so this is not drift but a misreading in the original.
