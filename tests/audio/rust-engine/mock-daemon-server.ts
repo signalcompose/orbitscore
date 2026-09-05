@@ -33,6 +33,7 @@ export interface MockDaemonHandlers {
   PlayAt?: MockHandler
   Stop?: MockHandler
   StopAll?: MockHandler
+  PluginAllNotesOff?: MockHandler
   SetGlobalGain?: MockHandler
   RegisterLinkAudioChannel?: MockHandler
   SetLinkTempo?: MockHandler

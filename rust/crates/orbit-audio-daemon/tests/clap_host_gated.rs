@@ -87,10 +87,11 @@ fn synth_processes_audio_via_daemon() {
     let cb = engine
         .clap_callback_stats()
         .expect("callback stats available with clap host");
+    let callback_count = engine.stream_stats_snapshot().callbacks;
 
     println!("=== clap-host PR1 synth verdict ===");
     println!("post_mix_peak:       {peak:.5}");
-    println!("callback_count:      {}", cb.callback_count);
+    println!("callback_count:      {callback_count}");
     println!("callback_min_ns:     {}", cb.min_ns);
     println!("callback_mean_ns:    {}", cb.mean_ns);
     println!("callback_p99_ns:     {}", cb.p99_ns);
@@ -104,7 +105,7 @@ fn synth_processes_audio_via_daemon() {
     );
     // callback が実際に回った。
     assert!(
-        cb.callback_count > 0,
+        callback_count > 0,
         "audio callback が回っていない (callback_count=0)"
     );
     // RT 健全性: callback max が budget 内。CoreAudio 既定 buffer（~512 frame @ 44.1k ≈ 11.6ms、

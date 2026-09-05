@@ -66,7 +66,7 @@ MCP は「テスト用の裏口」ではなく、**ユーザーと同じ動線�
 ツール実装が VS Code に直接触らず `OrbitScoreToolHandlers` というインターフェイス越しに呼ばれているのも、同じ思想の延長です。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:233-286
+// packages/vscode-extension/src/mcp-server.ts:236-289
 /**
  * VSCode-agnostic handler seam. Keeping the tool implementations behind this
  * interface (rather than reaching into the extension directly) means the same
@@ -79,7 +79,7 @@ export interface OrbitScoreToolHandlers {
     debug?: boolean
   }): Promise<CommandResult> | CommandResult
   stopEngine(): Promise<CommandResult> | CommandResult
-  getEngineState(): EngineState
+  getEngineState(): Promise<EngineState> | EngineState
   forceKillScsynth(): Promise<CommandResult> | CommandResult
   listAudioDevices(): Promise<AudioDevicesResult> | AudioDevicesResult
   selectAudioDevice(device: string): Promise<CommandResult> | CommandResult
@@ -98,7 +98,28 @@ export interface OrbitScoreToolHandlers {
     windowMs?: number,
     perChannel?: boolean,
   ): Promise<AnalyzeAudioResult> | AnalyzeAudioResult
-  // ...
+  /** list_plugins (#463 PC.4): return the plugin catalog as-is. */
+  listPlugins(): Promise<ListPluginsResult> | ListPluginsResult
+  /** rescan_plugins (#463 PC.4/C1b): run the scanner and return its summary. */
+  rescanPlugins(): Promise<RescanPluginsResult> | RescanPluginsResult
+  /** 明示plugin state保存。互換フィールド `sequence` で UIH.5 の `(receiver,index)` を受ける。 */
+  savePluginState?(
+    sequence: string,
+    index: number,
+  ): Promise<SavePluginStateResult> | SavePluginStateResult
+  openPluginUi?(
+    receiver: string,
+    index: number,
+    expectedName?: string,
+  ): Promise<PluginUiResult> | PluginUiResult
+  closePluginUi?(receiver: string, index: number): Promise<PluginUiResult> | PluginUiResult
+  /**
+   * Optional (unlike the members above): only hosts that can register
+   * themselves into Claude Code expose the register_mcp_server tool — the
+   * tool is skipped when this handler is absent, so existing stub suites and
+   * alternative hosts (WCTM pi harness) stay valid without changes.
+   */
+  registerMcpServer?(args: RegisterMcpServerInput): Promise<CommandResult> | CommandResult
 }
 ```
 
@@ -111,7 +132,7 @@ export interface OrbitScoreToolHandlers {
 サーバは既定では立ちません。`activate()` の末尾近くで、環境変数 → 設定の順にポートを決めます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:445-456
+// packages/vscode-extension/src/extension.ts:448-459
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -131,7 +152,7 @@ export interface OrbitScoreToolHandlers {
 HTTP 層は Node 標準の `http` モジュールで `127.0.0.1:<port>/mcp` を listen します。MCP の Streamable HTTP トランスポートは **stateful** で、`initialize` ごとにセッションを作ります。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1185-1190
+// packages/vscode-extension/src/mcp-server.ts:1192-1197
  * Sessions are created **per initialize request** and routed by the
  * `mcp-session-id` header. A single shared transport would permanently consume
  * its one session slot on the first client — any later client (or a Claude Code
@@ -145,7 +166,7 @@ HTTP 層は Node 標準の `http` モジュールで `127.0.0.1:<port>/mcp` を 
 ローカル bind だけでは足りない、という判断も入っています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1204-1211
+// packages/vscode-extension/src/mcp-server.ts:1211-1218
   // DNS-rebinding protection: the server binds 127.0.0.1, but a malicious page
   // can point its own domain at 127.0.0.1 (short-TTL rebind) and then fetch()
   // same-origin — reaching this port from a browser with full response access.
@@ -209,7 +230,7 @@ export function buildMcpServerUrl(port: number): string {
 ここが本章で最も気をつけて読むべき箇所です。ツール説明はこう約束しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:542-559
+// packages/vscode-extension/src/mcp-server.ts:545-562
   server.registerTool(
     'evaluate_orbitscore',
     {
@@ -233,7 +254,7 @@ export function buildMcpServerUrl(port: number): string {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3041-3078
+// packages/vscode-extension/src/extension.ts:3066-3103
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -292,7 +313,7 @@ async function evaluateForAgent(code: string): Promise<EvaluateResult> {
 engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setupStdoutHandler` がそれを `evalMarkBridge.handleLine()` へ渡します。この分岐は **独立していなければならない**、と強調されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1502-1510
+// packages/vscode-extension/src/extension.ts:1506-1514
         } else if (trimmedLine.startsWith('{"evalMark"')) {
           // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
           // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -301,7 +322,7 @@ engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setup
           if (!parsed && isCurrent) {
             outputChannel?.appendLine(`⚠️ received a malformed //#evalMark result line: ${rawLine}`)
           }
-        }
+        } else if (trimmedLine.startsWith('{"engineState"')) {
 ```
 
 「ユニットテストは全て緑・実機 E2E だけが捕まえた」— これは本章全体のテーマの縮図です。
@@ -317,7 +338,7 @@ engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setup
 拡張には中央のログ sink がありません。そこで `activate()` が出力チャネルの `appendLine` / `append` を monkey-patch して、同じ行をリングバッファにも積んでいます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:138-148
+// packages/vscode-extension/src/extension.ts:141-151
 // Ring buffer of output-channel lines for the MCP get_log tool (#388). There is
 // no other central log sink to tap, so activate() monkey-patches
 // outputChannel.appendLine/append to also push here.
@@ -332,7 +353,7 @@ function pushLogRing(line: string): void {
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:301-312
+// packages/vscode-extension/src/extension.ts:304-315
   const rawAppendLine = outputChannel.appendLine.bind(outputChannel)
   outputChannel.appendLine = (value: string) => {
     pushLogRing(value)
@@ -407,7 +428,7 @@ flowchart LR
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:64-70
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:90-96
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH =
   '/Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app'
@@ -424,7 +445,7 @@ const appAvailable = fs.existsSync(appPath)
 suite の読み込み時、テストを 1 本も走らせる前に daemon バイナリの鮮度を検査します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:156-166
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:182-192
   if (newest.at > builtAt) {
     throw new Error(
       'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
@@ -443,7 +464,7 @@ suite の読み込み時、テストを 1 本も走らせる前に daemon バイ
 **何を「ソース」と数えるか**にも一手が入っています（#713）。`rust/` 配下の `.rs` を無条件に拾うと、別の cargo ターゲットである統合テスト（実測では `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs`）が「最新のソース」に選ばれてしまいます。それらは `orbit-audio-daemon` のバイナリの依存グラフに入らないので、cargo は依存関係を正しく読んで何もビルドせず、バイナリの mtime も更新されません。つまりガードのメッセージが指示する `npm run test:e2e:gated` を何度打っても消えない、**解消不能な赤**になります。引き金は mtime の性質で、`git checkout` はファイルの mtime をチェックアウトした時刻へ更新するため、ブランチを行き来しただけで内容の変わっていない統合テストが「最新のソース」に化けます。#713 ではこれで実機 gated が起動段階から 1 本も走らなくなりました。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:145-147
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:171-173
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
           continue
         }
@@ -464,37 +485,40 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 ### アプリの起動 — `orbs` CLI と Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:731-752
-      const orbsBin = path.join(appPath, 'Contents/Resources/app/bin/orbs')
-      child = spawn(
-        orbsBin,
-        [
-          '--new-window',
-          `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
-          `--user-data-dir=${userDataDir}`,
-          `--extensions-dir=${extensionsDir}`,
-          // `evaluate_orbitscore` は workspace root を documentDirectory として渡すので、
-          // プロジェクト（project.yaml / states/）を置く tmpRoot を workspace として開く。
-          // これはユーザーが曲フォルダを開く実際の使い方とも一致する。
-          tmpRoot,
-        ],
-        {
-          env: {
-            ...appEnv,
-            ORBITSCORE_MCP_PORT: String(port),
-          },
-          stdio: 'ignore',
-          detached: false,
-        },
-      )
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:457-478
+  const port = portBase + Math.floor(Math.random() * 200)
+  const child = spawn(
+    path.join(appPath, 'Contents/Resources/app/bin/orbs'),
+    [
+      '--new-window',
+      `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
+      `--user-data-dir=${userDataDir}`,
+      `--extensions-dir=${extensionsDir}`,
+      tmpRoot,
+    ],
+    {
+      env: { ...env, ORBITSCORE_MCP_PORT: String(port) },
+      stdio: 'ignore',
+      detached: false,
+    },
+  )
+
+  try {
+    const client = await pollInitialize(port, { intervalMs: 2000, timeoutMs: 60_000 })
+    return { child, client, tmpRoot }
+  } catch (error) {
+    if (!child.killed) child.kill()
 ```
+
+> 🔴 2026-09-05: この起動手順は `launchIsolatedOrbitStudio()` へ切り出されました（#661 の `/simplify`）。隔離した user-data / extensions / workspace 設定を作り、`orbs` を `--extensionDevelopmentPath` 付きで起動して `pollInitialize` するまでが 1 関数です。
+
 
 `--extensionDevelopmentPath` でリポジトリ内の拡張ソースをそのまま読ませ、`--user-data-dir` / `--extensions-dir` を一時ディレクトリに向けて手元の設定から隔離します。ポートは `39400 + Math.floor(Math.random() * 200)` で選び、`pollInitialize()` が `initialize` を 2 秒間隔で最大 60 秒叩いて接続を待ちます。クライアント（`tests/e2e/helpers/mcp-client.ts`）は MCP SDK を使わない生の JSON-RPC で、`tools/call` の `content[0].text` と `isError` を取り出すだけの薄い層です。
 
 teardown は「安全性」の注意書きが繰り返されています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:249-255
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:275-281
 function killOrbitStudio(): void {
   try {
     execFileSync('pkill', ['-f', 'OrbitStudio.app/Contents/MacOS'], { stdio: 'ignore' })
@@ -511,7 +535,7 @@ function killOrbitStudio(): void {
 キャプチャの有効化は daemon の spawn 時に `ORBIT_CAPTURE_WAV` 環境変数で渡すしかありません。拡張は `activate()` 時に engine を自動起動するので、gated spec は **自動起動した engine を一度止めてから** capture 付きで起動し直します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:869-874
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1115-1120
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -582,7 +606,7 @@ export function decideStartEngineForAgent(
 `countErrors` は gated spec の中に **7 箇所**、それぞれ独立に定義されていました（変更前の行番号で `:496 / 2144 / 2722 / 3155 / 3461 / 3969 / 4464`）。同じ 1 行が 7 回書かれていたので、ERROR 件数の数え方を変えたければ 7 箇所直さねばならず、直し漏れは静かに残ります。統合先は `expectNoNewErrors` で、比較が `<=` であることがここで 1 箇所に固定されます。
 
 ```typescript
-// tests/e2e/helpers/engine-log.ts:51-62
+// tests/e2e/helpers/engine-log.ts:96-107
 export async function expectNoNewErrors(
   client: McpClient,
   baseline: number,
@@ -611,7 +635,7 @@ export function captureWavPath(tmpRoot: string, slug: string): string {
 `runScore` は「譜面を work copy にして、エディタ経路（`open_file` → `set_selection` → `run_selection`）で評価し、要求されれば capture を解析して区間 RMS を返す」までを 1 関数にしたものです。そこにある `evaluate` が `ok` / `isError` に assert しないのは意図した設計で、理由は本章の [`ok` の節](#evaluate-orbitscore-の-ok-は何を意味するか)と同じところにあります。
 
 ```typescript
-// tests/e2e/helpers/run-score.ts:264-276
+// tests/e2e/helpers/run-score.ts:246-258
     // 🔴 **ただし「assert しない」は「握り潰す」ではない**（silent-failure レビュー 2026-09-04）。
     // `ok` は**必要条件**で、`ok: false` は `get_log` を漁らずその場で取れる一次シグナルである
     // （パース / 実行時診断・`mcp-server.ts` の tool 説明）。捨てると、セットアップの typo が
@@ -684,7 +708,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 先頭テストの最後の assert は、この onset 間隔をテンポの証拠に使います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1410-1424
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1656-1670
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -704,16 +728,18 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 
 `kick_loop.orbs` は 120 bpm で 4 分音符ごとに kick を鳴らし、途中で `edit_replace` により `global.tempo(180)` に書き換えて再評価します。0.5 秒間隔の onset 群と 0.333 秒間隔の onset 群が **両方** 3 つ以上あれば、「run_selection が動いた」「edit_replace + run_selection で live に変わった」「音が出た」がまとめて証明されます。
 
-`#643` 系のテストはもう一歩踏み込み、時間区間ごとの RMS を比べます。各操作の壁時計時刻をセグメントとして記録し、capture 終了時刻から逆算して WAV 上の区間に写像し、その区間の 20 ms 窓 RMS を二乗平均します。
+`#643` 系のテストはもう一歩踏み込み、時間区間ごとの RMS を比べます。区間の境界では **キャプチャファイルのバイト長**をそのまま時計として読み（`(stat.size - 44) / (channels × 4) / sampleRate`）、最初の区間は**音が出たことを検出してから**開きます。その区間の 20 ms 窓 RMS を二乗平均します。
+
+🔴 かつては「各操作の壁時計時刻を記録し、capture 終了時刻から逆算して WAV 上の区間に写像する」形でした。これは #739 で撤去されています — 逆算はキャプチャ実長が壁時計より短いと負になり、`Math.max(0, …)` で **黙って 0 にクランプされてファイル先頭を指す**ためです。窓を後ろへずらすと逆に前を測る、という形で実際に事故が起きました。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:593-598
-    const rms = (name: string, guardSec = 0.15): number => {
-      const selected = windows(name, guardSec)
-      return Math.sqrt(
-        selected.reduce((sum, window) => sum + window.rms * window.rms, 0) / selected.length,
-      )
-    }
+// tests/e2e/helpers/capture-windows.ts:190-195
+export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
+  if (windows.length === 0) throw new Error('quadraticMeanRms requires at least one window')
+  return Math.sqrt(
+    windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
+  )
+}
 ```
 
 たとえば E2E-1 は `rms('unity')` と `rms('half')` を比べて、`global.gain(-6)` が RMS をおよそ半分（$10^{-6/20} \approx 0.501$）にすることを確かめます。
@@ -733,13 +759,17 @@ WORK_LOG 6.418 のタイトルは「今日の是正を『知識』から『再�
 2 本の検査はどちらも「gated E2E のソースを読んで判定する」という作りなので、**どのファイルを読むか**を各自が抱えると具合が悪くなります。シナリオを別ファイルへ切り出した瞬間に、ラチェットは「カバー済みだった語が消えた」と読んで red になり、衛生検査のほうは新しいファイルを見ないまま **黙って通ってしまう**からです。後者は red にならないぶん厄介で、検査が効いていないことに気づけません。そこで走査先は `tests/e2e/gated-sources.ts` が 1 箇所で持ちます。
 
 ```typescript
-// tests/e2e/gated-sources.ts:29-35
+// tests/e2e/gated-sources.ts:37-47
 const GATED_SOURCE_GLOBS: readonly {
   readonly dir: string
   readonly match: (name: string) => boolean
 }[] = [
   { dir: E2E_DIR, match: (name) => name === 'orbitstudio-mcp-gated.spec.ts' },
   { dir: path.join(E2E_DIR, 'gated'), match: (name) => name.endsWith('.ts') },
+  {
+    dir: path.join(E2E_DIR, 'helpers'),
+    match: (name) => name.endsWith('.ts') && !name.endsWith('.spec.ts'),
+  },
 ]
 ```
 
@@ -748,7 +778,7 @@ const GATED_SOURCE_GLOBS: readonly {
 もう 1 つ、一覧が空になったときの扱いが決めてあります。
 
 ```typescript
-// tests/e2e/gated-sources.ts:87-104
+// tests/e2e/gated-sources.ts:99-116
 /** 各ソースを「相対パス + 中身」で返す。行番号つきで報告したい検査はこちらを使う。 */
 export function readGatedSourceEntries(): readonly {
   readonly file: string
@@ -849,7 +879,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 後半 2 本は**片方向ずつ**を留めるペアになっています。前者だけなら「除外を消す」退行を捕まえられますが、後者が無いと「行きすぎて `src` まで除外する」方向は素通りします。ガードの目的（古いバイナリで測らない）は `src` を見ていることに依存するので、両方向を留めて初めて線引きが固定されます。
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:95-99
+// tests/e2e/gated-assertion-hygiene.spec.ts:104-108
     expect(
       /entry\.name === 'src'/.test(source),
       'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +
@@ -923,7 +953,7 @@ export function parseStepLine(line: string): StepEvent | null {
 audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1556-1562
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1611-1617
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
       console.log(
@@ -946,7 +976,7 @@ audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1421-1431
+// packages/engine/src/core/sequence.ts:1430-1440
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {
@@ -996,7 +1026,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 `handleStep` の実体は `extension.ts` にあり、**グリッド時刻まで待ってから**ハイライトを動かします。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:235-246
+// packages/vscode-extension/src/extension.ts:238-249
 function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -1014,7 +1044,7 @@ function handleStepLine(step: StepEvent): void {
 dispatch は lookahead 分だけ早く走るので、行が届いた瞬間に光らせると音より先に動いてしまいます。1 秒以上遅れた行（バッファされた出力の再生など）は捨てます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:248-267
+// packages/vscode-extension/src/extension.ts:251-270
 function showPlayheadStep(step: StepEvent): void {
   for (const editor of vscode.window.visibleTextEditors) {
     // Resolves the full dot path ("1.0" → first element inside the 2nd arg),
@@ -1042,7 +1072,7 @@ function showPlayheadStep(step: StepEvent): void {
 ### `[STEP]` は通常モードでは見えない
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1154-1178
+// packages/vscode-extension/src/extension.ts:1157-1181
 function shouldFilterLine(line: string): boolean {
   const trimmed = line.trim()
 
@@ -1064,16 +1094,16 @@ function shouldFilterLine(line: string): boolean {
   if (
     trimmed.startsWith('{"savePluginState"') ||
     trimmed.startsWith('{"pluginUi"') ||
-    trimmed.startsWith('{"evalMark"')
+    trimmed.startsWith('{"evalMark"') ||
+    trimmed.startsWith('{"engineState"')
   ) {
     return true
-  }
 ```
 
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2047-2057
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2324-2334
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1088,13 +1118,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2060-2061
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2337-2338
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2117-2119
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2394-2396
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

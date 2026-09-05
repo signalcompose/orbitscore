@@ -317,6 +317,140 @@ async fn stop_all_clears_scheduled_plays() {
     );
 }
 
+/// PluginAllNotesOff は台帳が空なら冪等に `{released:0, stale:0, failed:0}` を返す。
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn plugin_all_notes_off_is_idempotent_when_ledger_is_empty() {
+    let daemon = TestDaemon::start().await;
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+
+    send_cmd(&mut ws, "pano-empty", "PluginAllNotesOff", json!({})).await;
+    let resp = recv_reply_for_id(&mut ws, "pano-empty").await;
+    assert_eq!(resp["result"]["released"].as_u64(), Some(0), "{resp}");
+    assert_eq!(resp["result"]["stale"].as_u64(), Some(0), "{resp}");
+    assert_eq!(resp["result"]["failed"].as_u64(), Some(0), "{resp}");
+}
+
+/// test backend には OOP instrument の送り先が無い。注入した台帳 entry は stale として
+/// 数えられ、RPC 後には解放済み集合として台帳から除去される。
+#[cfg(feature = "outproc-instrument")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn plugin_all_notes_off_reports_injected_missing_destination_as_stale() {
+    let daemon = TestDaemon::start().await;
+    daemon
+        .engine
+        .inject_active_plugin_note("missing-instance", 3, 64)
+        .expect("inject active note");
+    assert_eq!(
+        daemon
+            .engine
+            .active_plugin_note_count()
+            .expect("count notes"),
+        1
+    );
+
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+    send_cmd(&mut ws, "pano-stale", "PluginAllNotesOff", json!({})).await;
+    let resp = recv_reply_for_id(&mut ws, "pano-stale").await;
+    assert_eq!(resp["result"]["released"].as_u64(), Some(0), "{resp}");
+    assert_eq!(resp["result"]["stale"].as_u64(), Some(1), "{resp}");
+    assert_eq!(resp["result"]["failed"].as_u64(), Some(0), "{resp}");
+    assert_eq!(
+        daemon
+            .engine
+            .active_plugin_note_count()
+            .expect("count notes"),
+        0
+    );
+}
+
+/// engine process の異常終了に相当する WebSocket drop では RPC を送れない。session の
+/// read loop 終了そのものが同じ all-notes-off 配送関数を起動し、台帳を解放する。
+#[cfg(feature = "outproc-instrument")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn dropping_session_drains_active_plugin_note_ledger() {
+    let daemon = TestDaemon::start().await;
+    daemon
+        .engine
+        .inject_active_plugin_note("disconnected-engine", 0, 60)
+        .expect("inject active note");
+    let mut ws = daemon.connect().await;
+    let _hs = TestDaemon::recv_handshake(&mut ws).await;
+    drop(ws);
+
+    for _ in 0..100 {
+        if daemon
+            .engine
+            .active_plugin_note_count()
+            .expect("count notes")
+            == 0
+        {
+            break;
+        }
+        advance_and_yield(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        daemon
+            .engine
+            .active_plugin_note_count()
+            .expect("count notes"),
+        0,
+        "session disconnect must trigger PluginAllNotesOff"
+    );
+}
+
+/// 台帳は daemon 全 session で共有される。補助的な 2 本目の接続が切れても、主 session が
+/// 生きている間は note を解放せず、最後の session 切断だけを異常終了 trigger にする。
+#[cfg(feature = "outproc-instrument")]
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn disconnecting_one_of_two_sessions_keeps_active_note_ledger() {
+    let daemon = TestDaemon::start().await;
+    daemon
+        .engine
+        .inject_active_plugin_note("multi-session", 0, 60)
+        .expect("inject active note");
+
+    let mut primary = daemon.connect().await;
+    let _primary_hs = TestDaemon::recv_handshake(&mut primary).await;
+    let mut secondary = daemon.connect().await;
+    let _secondary_hs = TestDaemon::recv_handshake(&mut secondary).await;
+
+    drop(secondary);
+    for _ in 0..10 {
+        advance_and_yield(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        daemon
+            .engine
+            .active_plugin_note_count()
+            .expect("count notes"),
+        1,
+        "disconnecting a secondary session must not release the shared ledger"
+    );
+
+    drop(primary);
+    for _ in 0..100 {
+        if daemon
+            .engine
+            .active_plugin_note_count()
+            .expect("count notes")
+            == 0
+        {
+            break;
+        }
+        advance_and_yield(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        daemon
+            .engine
+            .active_plugin_note_count()
+            .expect("count notes"),
+        0,
+        "the last session disconnect must trigger PluginAllNotesOff"
+    );
+}
+
 /// PlayAt の `rate` が **wire 経由**（`session.rs` の `param_f64("rate")` → `engine.play_at`）で
 /// 出力尺に効くことを、PlayEnded の `ended_at_sec`（= start_sec + 出力尺）で検証する（#319）。
 /// オフライン harness は `wrap.play_at` を直接呼んで session 層を bypass するため、`"rate"` キーの

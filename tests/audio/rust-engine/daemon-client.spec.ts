@@ -519,6 +519,16 @@ describe('DaemonClient with mock server', () => {
     expect(await client.stop('p-ghost')).toBe(false)
   })
 
+  it('PluginAllNotesOff は空 params を送り released/stale/failed を返す', async () => {
+    const request = vi
+      .spyOn(client as any, 'request')
+      .mockResolvedValue({ released: 3, stale: 2, failed: 1 })
+
+    await expect(client.pluginAllNotesOff()).resolves.toEqual({ released: 3, stale: 2, failed: 1 })
+    expect(request).toHaveBeenCalledTimes(1)
+    expect(request).toHaveBeenCalledWith('PluginAllNotesOff', {})
+  })
+
   it('SetGlobalGain は resolve する', async () => {
     const url = await server.start({
       SetGlobalGain: () => ({ status: 'accepted' }),
