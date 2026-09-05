@@ -13859,6 +13859,88 @@ mod outproc_instrument_note_tests {
         );
     }
 
+    /// 🔴 ラウンド3 のレビュー指摘: **成功時に台帳から除去することを検査するテストが 1 本も無かった**。
+    /// panic テストは `retain` ブロックに到達する前に止まるので、**ブロックを丸ごと削除する変異が
+    /// 全テストを通過していた**。台帳が永久に増え、次の解放で死んだ note を送り続ける状態になる。
+    #[test]
+    fn plugin_all_notes_off_removes_every_released_entry_from_the_ledger() {
+        let (wrap, mut event_rx) = wrap_with_note_consumer(8);
+        let notes = [("plugin:a", 60u8), ("plugin:b", 61), ("plugin:c", 62)];
+        for (instance, key) in notes {
+            wrap.inject_active_plugin_note(instance, 0, key)
+                .expect("inject tracked note");
+        }
+        {
+            let mut instrument = wrap
+                .outproc_instrument
+                .lock()
+                .expect("lock instrument control");
+            let instance_index = &mut instrument
+                .as_mut()
+                .expect("instrument control")
+                .instance_index;
+            for (instance, _) in notes {
+                instance_index.insert(instance.to_string(), 0);
+            }
+        }
+
+        let summary = wrap
+            .plugin_all_notes_off()
+            .expect("every entry resolves to a live slot");
+
+        assert_eq!(summary.released, notes.len());
+        assert_eq!(summary.stale, 0);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(
+            wrap.active_plugin_note_count().expect("count notes"),
+            0,
+            "released entries must be removed from the ledger once the loop commits"
+        );
+        let mut delivered = 0;
+        while event_rx.pop().is_ok() {
+            delivered += 1;
+        }
+        assert_eq!(delivered, notes.len(), "every release must reach the ring");
+    }
+
+    /// 🔴 ラウンド3: bounded retry の「途中で成功する」分岐を、**本番の
+    /// `push_outproc_instrument_event` 経由**で通す。既存の `plugin_event_ring_retry_tests` は
+    /// bare な `rtrb::Producer` を叩くだけで、instance 解決と lock 分岐を含む実経路は通らない。
+    #[test]
+    fn outproc_push_retries_then_succeeds_once_the_consumer_drains() {
+        let (wrap, mut event_rx) = wrap_with_note_consumer(1);
+        {
+            let mut instrument = wrap
+                .outproc_instrument
+                .lock()
+                .expect("lock instrument control");
+            instrument
+                .as_mut()
+                .expect("instrument control")
+                .instance_index
+                .insert(super::DEFAULT_INSTRUMENT_INSTANCE.to_string(), 0);
+        }
+        // 容量 1 の ring を埋めて、次の push を必ず Full にする。
+        wrap.plugin_note_on(60, 0, 0.8, None)
+            .expect("first note fills the ring");
+
+        // retry の途中（budget 200ms のうち十数 ms）で 1 枠あける。
+        let drainer = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(15));
+            event_rx.pop().expect("consumer drains the queued event");
+            event_rx
+        });
+
+        wrap.plugin_note_on(62, 0, 0.8, None)
+            .expect("bounded retry must succeed once the consumer drains a slot");
+
+        let mut event_rx = drainer.join().expect("drainer thread panicked");
+        assert!(
+            event_rx.pop().is_ok(),
+            "the retried note must actually be in the ring"
+        );
+    }
+
     // pr-test-analyzer (item 8, PR #422 review): `push_outproc_instrument_event`'s `None` branch
     // (outproc_instrument not initialized, e.g. test backend) had no direct test, unlike the
     // analogous and already-tested `clap-host` `ClapUnavailable` branch

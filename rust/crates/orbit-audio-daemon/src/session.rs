@@ -1275,8 +1275,10 @@ pub async fn run(
             Ok(Err(error)) => {
                 error!("plugin all-notes-off after session disconnect failed: {error}")
             }
+            // 🔴 JoinError は「解放タスクが panic / cancel して**そもそも試みられていない**」ことを
+            // 意味するので、部分的な配送失敗（上の腕）より軽く記録してはいけない。
             Err(error) => {
-                warn!("plugin all-notes-off task after session disconnect failed: {error}")
+                error!("plugin all-notes-off task after session disconnect failed: {error}")
             }
         }
     }

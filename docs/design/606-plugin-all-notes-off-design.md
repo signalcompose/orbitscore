@@ -59,7 +59,7 @@ RPC だけでは届かない。
   消費者は本 PR に存在しない（消費者のいない API を作らない）
 - `released` = NoteOff の push に成功した件数。`stale` = 台帳にあったが送り先が既に無かった件数。
   `failed` = NoteOff の送出を試みたが runtime error になった件数
-- 戻り値の形は既存の兄弟 `StopAll` → `{"stopped": n}`（`session.rs:2289-2292`）に揃える
+- 戻り値の形は既存の兄弟 `StopAll` → `{"stopped": n}`（`session.rs:2296-2299`）に揃える
 - **`NoteChoke` は使わない** — PH.4 が「note-off を逐次送出」と定めている
 
 **エラー語彙は新設しない**: 台帳 mutex poisoned → `OUTPROC_INSTRUMENT_RUNTIME` /

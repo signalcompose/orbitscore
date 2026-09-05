@@ -827,7 +827,7 @@ When does the caller of `closePluginUi` return? The daemon's `ClosePluginUI` res
 **Phase A acceptance only**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2099-2100
+// rust/crates/orbit-audio-daemon/src/session.rs:2101-2102
                     // This is explicitly Phase A acceptance, never close completion.
                     Ok(Ok(())) => ok(&id, json!({"status": "accepted"})),
 ```

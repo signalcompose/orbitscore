@@ -17,6 +17,46 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(daemon): prove the all-notes-off ledger actually shrinks (#606 round-3) (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR** #738
+
+fix 差分の再レビュー（4 体）。**指摘はすべて fix 起因**で、元差分起因の新規指摘は出なかった。
+
+#### 🔴 最も重い指摘 — 中核の機構に検査が無かった
+
+`plugin_all_notes_off` が**成功時に台帳から entry を除去することを検査するテストが 1 本も無かった**。
+panic テストは `retain` ブロックに到達する前に止まるので、**ブロックを丸ごと削除する変異が全テストを通過**する。
+放置すると台帳が永久に増え、次の解放で**死んだ note を送り続ける**。
+
+- `plugin_all_notes_off_removes_every_released_entry_from_the_ledger` を追加。
+  3 件解放して `released == 3` / `stale == 0` / `failed == 0` に加え、
+  **`active_plugin_note_count() == 0`** と **ring へ 3 件届いたこと**を検査する
+- 🔴 **変異で red を確認**: `retain` ブロック削除 → `left: 3 / right: 0`。
+  このとき**既存の他 2 本は通ったまま**で、指摘が事実だったことも同時に裏付けられた
+
+#### そのほか
+
+- **重大度の逆転が半分しか直っていなかった**。`spawn_blocking` の `JoinError`（解放タスク自体が
+  panic / cancel = **そもそも試みられていない**）が `warn!` のまま残っていたので `error!` に上げた
+- bounded retry の「途中で成功する」分岐が、cfg を広げた後も**bare な `rtrb::Producer` を叩くだけ**で
+  本番の `push_outproc_instrument_event`（instance 解決 + lock 分岐）を通っていなかった。
+  容量 1 の ring を埋め、15 ms 後に consumer が drain する形で**実経路を通すテスト**を追加
+- 設計書の `StopAll` 行参照が二度ずれていた（`2289-2292` → 実体は `2296-2299`）
+
+#### 🔴 私の失敗 — 変異のバックアップに `git checkout --` を使った
+
+未コミットの新テストごと巻き戻した。**git で戻せるのはコミット済みの内容だけ**で、
+未コミットの追加があるときはファイル退避が正しい。生成スクリプトが残っていたので復旧できた。
+
+#### 検証（main が sandbox 外で実測）
+
+- `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument`
+  — lib **259 passed** / protocol **32 passed**
+- `cargo clippy --all-targets -- -D warnings` exit 0
+- `npm test` **2251 passed / 0 failed** / `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified / 0 failed**
+- 実機 gated（`89e9d389`）: **10 failed / 16 passed・退行ゼロ**、`#606 T1` / `#606 E2E-K3` とも ✅
+
 ### fix(daemon): close review round-2 on the RUN-termination branch (#606) (Sep 5, 2026)
 
 **Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR** #738

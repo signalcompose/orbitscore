@@ -240,7 +240,7 @@ kept as the single point of truth, before falling through to the match — refle
 learned that keeping the same string set in two independently-maintained places drifts.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1337-1364
+// rust/crates/orbit-audio-daemon/src/session.rs:1339-1366
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,

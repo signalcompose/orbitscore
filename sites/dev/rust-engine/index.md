@@ -233,7 +233,7 @@ plugin note 系 method は `plugin_note_spec` という純関数を「唯一の�
 match に落とす設計です（2 箇所で同じ文字列集合を独立管理すると drift するという教訓が反映されています）。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1337-1364
+// rust/crates/orbit-audio-daemon/src/session.rs:1339-1366
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,
