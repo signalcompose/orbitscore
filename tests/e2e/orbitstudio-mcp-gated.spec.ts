@@ -504,6 +504,32 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     return kickLoopWorkPath
   }
 
+  /**
+   * 🔴 カタログ**パス**だけを要求する。`requireCatalogFixtures()` は名前も要求するが、
+   * 名前は catalog 走査の**結果**から後で代入されるので、走査中に呼ぶと必ず undefined で落ちる
+   * （2026-09-05 に実機で踏んだ・`/simplify` の `prepareWorkspace` 化で narrowing が消えた分の対処）。
+   */
+  const requireCatalogPaths = () => {
+    expect(catalogClapSynthPath, 'catalog CLAP synth path must be initialized').toBeDefined()
+    expect(catalogClapEffectPath, 'catalog CLAP effect path must be initialized').toBeDefined()
+    expect(catalogVst3SynthPath, 'catalog VST3 synth path must be initialized').toBeDefined()
+    expect(catalogVst3EffectPath, 'catalog VST3 effect path must be initialized').toBeDefined()
+    if (
+      !catalogClapSynthPath ||
+      !catalogClapEffectPath ||
+      !catalogVst3SynthPath ||
+      !catalogVst3EffectPath
+    ) {
+      throw new Error('main gated phase did not initialize catalog fixture paths')
+    }
+    return {
+      clapSynthPath: catalogClapSynthPath,
+      clapEffectPath: catalogClapEffectPath,
+      vst3SynthPath: catalogVst3SynthPath,
+      vst3EffectPath: catalogVst3EffectPath,
+    }
+  }
+
   const requireCatalogFixtures = () => {
     expect(catalogClapSynthPath, 'catalog CLAP synth path must be initialized').toBeDefined()
     expect(catalogClapEffectPath, 'catalog CLAP effect path must be initialized').toBeDefined()
@@ -883,8 +909,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(listedCatalog.isError, listedCatalog.text).toBe(false)
       catalogPlugins = JSON.parse(listedCatalog.text) as CatalogPluginEntry[]
       // 🔴 `prepareWorkspace` コールバック経由の代入になったので TS は narrowing できない。
-      // 既存の `requireCatalogFixtures()` が `undefined` を弾いた値を使う。
-      const fixturePaths = requireCatalogFixtures()
+      // ここは catalog 走査の**最中**なので、名前まで要求する `requireCatalogFixtures()` ではなく
+      // パスだけを弾く `requireCatalogPaths()` を使う（名前はこの下で代入される）。
+      const fixturePaths = requireCatalogPaths()
       const fixtureEntries = {
         clapSynth: catalogPluginsAt(
           catalogPlugins,

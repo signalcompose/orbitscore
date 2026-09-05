@@ -711,7 +711,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1587-1625
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1614-1652
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -764,7 +764,7 @@ E2E-4 は sum + aux の経路です。dry（bus 無し）と、`output("sum643")
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1731-1750
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1758-1777
         [
           'var global = init GLOBAL',
           'global.key("C")',
