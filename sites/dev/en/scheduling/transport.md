@@ -139,7 +139,7 @@ The important point here is **idempotence**. If `_isRunning` is already `true`, 
 Eventually, `RustEnginePlayer.start()` starts `setInterval(1)` and records the playback start time as `startTime = Date.now()`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1467-1471
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1498-1502
   start(): void {
     if (this.isRunning) return
     this.isRunning = true
@@ -294,7 +294,7 @@ When `Cmd+Enter` is pressed, the VS Code extension writes only the text of the b
 The engine's REPL evaluates the received text via `parseAudioDSL()` → `interpreter.execute()`.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:370-378
+// packages/engine/src/cli/repl-mode.ts:372-380
     try {
       const metaDir = extractDocumentDirectoryMeta(code)
       if (metaDir) sessionDocumentDirectory = metaDir
@@ -444,7 +444,7 @@ All `ScheduledPlay.time` values are **relative times (ms)** based on the schedul
 The important point is that `startTime` is not reset even when `stop()` is called.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1486-1492
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1517-1523
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId)

@@ -182,7 +182,7 @@ export interface ScheduledPlay {
 新しいイベントをキューに積むのは `scheduleEvent()` で、Rust 版は内部の `enqueue()` に委譲します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1399-1415
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1430-1446
   scheduleEvent(
     filepath: string,
     time: number,
@@ -203,7 +203,7 @@ export interface ScheduledPlay {
 ```
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1554-1560
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1585-1591
   private enqueue(play: ScheduledPlay): void {
     this.scheduledPlays.push(play)
     this.scheduledPlays.sort((a, b) => a.time - b.time)
@@ -241,7 +241,7 @@ const MAX_DRIFT_MS = 1000
 1ms ごとにキューを確認し、時刻が来たイベントを dispatch します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1467-1484
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1498-1515
   start(): void {
     if (this.isRunning) return
     this.isRunning = true
@@ -330,7 +330,7 @@ poll がイベントを検出した時点で、Rust 版は「今すぐ鳴らせ�
 この方式には「TS の `Date.now()` と daemon の transport clock を対応づける」という新しい問題が伴います。daemon は 1Hz の `StreamStats` で自分の `now_sec` を報告し、TS 側はそれを anchor として蓄積します。#389 の機構 B で、単一 anchor から **直近 30 サンプルの最小二乗フィット**に変わりました (`ANCHOR_WINDOW`、`fitAnchorSamples()`)。dispatch のホットパスで呼ばれる `daemonNowSec()` は、そのフィットを O(1) で評価します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1716-1722
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1747-1753
   private daemonNowSec(): number {
     const fit = this.anchorFit
     if (fit) {
@@ -375,7 +375,7 @@ sequenceDiagram
 シーケンスを停止したり、`Cmd+Enter` で新しいパターンを評価した場合、既存のキューに残っているイベントをキャンセルする必要があります。`clearSequenceEvents()` がその役割を担います。Rust 版はとても短くなりました。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1531-1539
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1562-1570
   clearSequenceEvents(sequenceName: string): void {
     this.scheduledPlays = this.scheduledPlays.filter((p) => p.sequenceName !== sequenceName)
     // 集合から消すことで、まだ queue に残るイベントも poll/exec 時に skip される。
@@ -412,7 +412,7 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
 実際に daemon へ送るのは `executePlayback()` です。ここには複数の保護機構が直列に並んでいます。関数冒頭の respawn 関連のコメントは長いので、ガードの本体から引用します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1586-1630
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1617-1661
     if (this.respawning || !this.daemon.isRunning()) return
     if (play.sequenceName) {
       // poll 検出から executePlayback 実行までの microtask gap で clear された場合の skip。
@@ -493,7 +493,7 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
 `emitStepMarker()` は、エディタ拡張が `play()` の引数をハイライトする live playhead のための、機械可読な 1 行を stdout に出します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1562-1578
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1593-1609
   /**
    * #390 live playhead: machine-readable step marker for the editor extension.
    * The epoch ms is the event's GRID time (startTime + play.time — the same
@@ -566,7 +566,7 @@ $$
 `stop()` はインターバルを止め、`stopAll()` はさらにキューを空にして daemon 側の発音も止めます。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1486-1513
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1517-1544
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId)

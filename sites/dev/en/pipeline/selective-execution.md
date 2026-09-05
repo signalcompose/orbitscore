@@ -229,7 +229,7 @@ The MCP `evaluate_orbitscore` also calls the same `writeCodeToEngine()`, but pas
 The code written to stdin is received by `startREPL()` on the engine side. In the 2026-05 edition all the logic lived inside `rl.on('line', async ...)`; in this edition it is extracted into `createReplSession()`.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:519-539
+// packages/engine/src/cli/repl-mode.ts:521-541
 export async function startREPL(interpreter: InterpreterV2): Promise<void> {
   // 🔴 #607: この関数も返らない。play/run/eval から REPL に入る経路でも publish する。
   setActiveInterpreter(interpreter)
@@ -260,7 +260,7 @@ export async function startREPL(interpreter: InterpreterV2): Promise<void> {
 The design rationale of `createReplSession()` is condensed in its comment.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:290-299
+// packages/engine/src/cli/repl-mode.ts:292-301
 /**
  * REPL の行処理セッション（#476 で分離・単体テスト可能に）。
  *
@@ -278,7 +278,7 @@ The extension sends a multi-line block in a single `stdin.write`. readline split
 The session state is closed over in a closure.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:300-309
+// packages/engine/src/cli/repl-mode.ts:302-311
 export function createReplSession(interpreter: InterpreterV2): {
   pushLine: (line: string) => void
   idle: () => Promise<void>
@@ -294,7 +294,7 @@ export function createReplSession(interpreter: InterpreterV2): {
 `pushLine()` only links the line onto the promise chain.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:497-516
+// packages/engine/src/cli/repl-mode.ts:499-518
   return {
     pushLine(line: string): void {
       // handleLine は内部で全エラーを捕捉するが、防御としてチェーン自体も reject を握る
@@ -324,7 +324,7 @@ export function createReplSession(interpreter: InterpreterV2): {
 `handleLine()` first sorts out meta lines, then queues the rest into the DSL buffer. The tail of the DSL part is as follows.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:457-470
+// packages/engine/src/cli/repl-mode.ts:459-472
     if (line.trim() === '') {
       emptyLineCount++
       buffer += '\n'
@@ -348,7 +348,7 @@ Two or more consecutive empty lines force-execute the buffer (`clearOnIncomplete
 The body of execution is `executeCurrentBuffer()`. The key point is that parse and execute are in separate `try` blocks, and the reason is preserved in the comments.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:333-384
+// packages/engine/src/cli/repl-mode.ts:335-386
   async function executeCurrentBuffer(clearOnIncomplete: boolean): Promise<void> {
     const code = buffer.trim()
     if (!code) {
@@ -447,7 +447,7 @@ The other meta lines (`//#selectAudioDevice` / `//#savePluginState` / `//#plugin
 `//#evalMark <json>` is a submission boundary meaning "that is all the input; return the result." Because the REPL processes lines in FIFO order, by the time this marker is reached the evaluation of the preceding code is complete.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:402-424
+// packages/engine/src/cli/repl-mode.ts:404-426
     if (EVAL_MARK_META_RE.test(line)) {
       // 🔴 マーカーは「投入は以上、結果を返せ」という**提出の境界**である。
       // 未完のままバッファに残った入力を放置すると「何も実行していないのに ok」を返して
