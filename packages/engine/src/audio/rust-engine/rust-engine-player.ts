@@ -347,6 +347,36 @@ const RESPAWN_BACKOFF_MS = 150
  */
 const freshWarned = (): Set<string> => new Set()
 
+export function audioOutputReportLines(status: Record<string, unknown>): {
+  error?: string
+  info?: string
+} {
+  const output = status.output as
+    | {
+        device_name?: unknown
+        sample_rate?: unknown
+        channels?: unknown
+        device_requested?: unknown
+        device_fell_back?: unknown
+        fallback_reason?: unknown
+        first_callback_ms?: unknown
+      }
+    | undefined
+  if (!output || typeof output.device_name !== 'string') return {}
+  const error =
+    output.device_fell_back === true &&
+    typeof output.device_requested === 'string' &&
+    typeof output.fallback_reason === 'string'
+      ? `❌ audio device fallback: requested "${output.device_requested}" → using "${output.device_name}": ${output.fallback_reason}`
+      : undefined
+  return {
+    ...(error === undefined ? {} : { error }),
+    info:
+      `🔊 output: "${output.device_name}" @ ${Number(output.sample_rate)} Hz × ${Number(output.channels)}ch ` +
+      `(first callback ${Number(output.first_callback_ms)} ms)`,
+  }
+}
+
 export class RustEnginePlayer implements AudioEngineBackend {
   private readonly daemon: DaemonClient
   private readonly daemonPath?: string
@@ -573,6 +603,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
       const status = await this.daemon.getStatus()
       const uptime = Number(status.uptime_sec)
       this.clockAnchor = { tsMs: Date.now(), daemonSec: Number.isFinite(uptime) ? uptime : 0 }
+      this.reportAudioOutput(status)
     } catch (err) {
       // anchor=0 は初回 StreamStats（≤約1s）で自己修復するが、その間 onset clip しうるので
       // 無言にせず通知する（空 catch を避ける）。
@@ -895,7 +926,15 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * @returns 実際に適用されたデバイス名。
    */
   async selectAudioDevice(device: string): Promise<string> {
-    return this.daemon.selectAudioDevice(device)
+    const selected = await this.daemon.selectAudioDevice(device)
+    this.reportAudioOutput(await this.daemon.getStatus())
+    return selected
+  }
+
+  private reportAudioOutput(status: Record<string, unknown>): void {
+    const report = audioOutputReportLines(status)
+    if (report.error) console.error(report.error)
+    if (report.info) console.log(report.info)
   }
 
   /**
@@ -1802,9 +1841,15 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * 現在 live な daemon の状態スナップショット（kill-test の daemon-side 状態クエリ用 / @internal）。
-   * respawn 後に uptime_sec（≈transport）/ loaded_samples / active_plays を読み、再 anchor と
-   * セッション再確立を daemon 側から検証する（#300 の orphaned play_id / active loops 復帰の接地）。
+   * 現在 live な daemon の状態スナップショット（`GetStatus` の生の中身）。
+   *
+   * 🔴 **もう @internal ではない**（#661・2026-09-05）。`AudioEngineBackend` のメソッドとして
+   * 昇格し、REPL の `//#getEngineState` 経由で MCP の `get_engine_state` が返す `output` /
+   * `callback` の供給元になっている。**本番の可観測性機能なので、形を変えると LLM とエディタの
+   * 状態表示が壊れる。**
+   *
+   * 元の用途（#300 の kill-test）も現役: respawn 後に uptime_sec（≈transport）/ loaded_samples /
+   * active_plays を読み、再 anchor とセッション再確立を daemon 側から検証する。
    */
   async getDaemonStatus(): Promise<Record<string, unknown>> {
     return this.daemon.getStatus()

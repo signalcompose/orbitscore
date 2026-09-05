@@ -31,6 +31,8 @@ export interface AudioEngineBackend extends Scheduler {
   setAvailableDevices?(devices: AudioDevice[]): void
   /** ランタイム中に出力デバイスを切り替える（Rust daemon 経路のみ・#484 D2/D2.5）。実際に適用されたデバイス名を返す。 */
   selectAudioDevice?(device: string): Promise<string>
+  /** daemon GetStatus の構造化スナップショット（Rust REPL bridge / MCP 可観測性用）。 */
+  getDaemonStatus?(): Promise<Record<string, unknown>>
   registerLinkAudioChannel?(channelName: string): Promise<void>
   setLinkTempo?(bpm: number): Promise<void>
   loadPlugin?(

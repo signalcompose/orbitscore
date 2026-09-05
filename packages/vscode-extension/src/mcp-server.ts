@@ -107,6 +107,9 @@ export type CommandResult = { ok: true; message?: string } | { ok: false; error:
 export interface EngineState {
   running: boolean
   liveCoding: boolean
+  output?: Record<string, unknown>
+  callback?: Record<string, unknown>
+  statusError?: string
 }
 
 /** One SuperCollider-reported audio device (list_audio_devices / select_audio_device). */
@@ -242,7 +245,7 @@ export interface OrbitScoreToolHandlers {
     debug?: boolean
   }): Promise<CommandResult> | CommandResult
   stopEngine(): Promise<CommandResult> | CommandResult
-  getEngineState(): EngineState
+  getEngineState(): Promise<EngineState> | EngineState
   forceKillScsynth(): Promise<CommandResult> | CommandResult
   listAudioDevices(): Promise<AudioDevicesResult> | AudioDevicesResult
   selectAudioDevice(device: string): Promise<CommandResult> | CommandResult
@@ -600,9 +603,13 @@ function buildServer(
     'get_engine_state',
     {
       title: 'Get Engine State',
-      description: 'Report whether the OrbitScore engine process is currently running.',
+      description:
+        'Report engine process state plus the daemon GetStatus output and callback snapshots.',
     },
-    async () => ({ content: [{ type: 'text', text: JSON.stringify(handlers.getEngineState()) }] }),
+    async () => {
+      const state = await handlers.getEngineState()
+      return { content: [{ type: 'text', text: JSON.stringify(state) }] }
+    },
   )
 
   server.registerTool(

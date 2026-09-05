@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: 46f5d7a
-verified-at: "2026-09-05"
+verified-against: 69dc968
+verified-at: "2026-09-01"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, with the 2026-09-05 additions from #606 (the session-disconnect trigger and `PluginAllNotesOff`). The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-1. Daemon Architecture Overview
 
@@ -39,23 +39,37 @@ async fn run() -> Result<(), i32> {
         return run_list_audio_devices();
     }
 
-    // 0. `--audio-device <name>` を解析し、`ORBIT_AUDIO_DEVICE` env へ反映する（#484 D1）。
-    // 実際の device 解決（列挙・一致判定・不一致時の縮退警告）は `orbit-audio-native`
-    // 側（`resolve_output_device`）が cpal I/O を伴って行う。ここでは env に橋渡しするだけ
-    // （`engine_wrap::device_name_from_env` が capture_path_from_env と同じ層分けで読む）。
-    apply_audio_device_arg(std::env::args().skip(1));
+    // 0. CLI と gated fault env を一度だけ typed options に解決する。device 名を process-global env
+    // へ書き戻さないため、並行する owner thread も同じ immutable 値を受け取る。
+    let startup_options = StartupOptions::from_env();
 
     // 1. Engine を起動（audio device 取得）。ランタイム device switch（#484 D2）に備え、実際の
     // `EngineWrap::start()` 呼び出しと `StreamGuard` の生存管理を専用 OS thread（"audio owner
     // thread"）へ委譲する — `cpal::Stream` は `!Send` なので、以降 tokio worker 間を自由に飛び回る
     // 通常の async task にはハンドルを一切持ち込めない。
-    let engine = match start_engine_with_device_switch() {
+    let engine = match start_engine_with_device_switch(startup_options) {
         Ok(e) => e,
         Err(e) => {
             report_startup_failure(ProtocolError::new("DEVICE_CONFIG_ERROR", e.to_string()));
             return Err(1);
         }
     };
+    let output = engine.stream_config_snapshot();
+    if let Some(reason) = &output.fallback_reason {
+        tracing::warn!(
+            "audio device fallback: requested {:?} -> using {:?}: {}",
+            output.device_requested,
+            output.device_name,
+            reason
+        );
+    }
+    tracing::info!(
+        "audio output {:?} @ {} Hz x {}ch (first callback {} ms)",
+        output.device_name,
+        output.sample_rate,
+        output.channels,
+        output.first_callback_ms
+    );
 
     // 2. WebSocket listener bind
     let bound = match server::bind_localhost().await {
@@ -72,20 +86,6 @@ async fn run() -> Result<(), i32> {
         ready: true,
         port,
         protocol_version: PROTOCOL_VERSION,
-    };
-    let line = serde_json::to_string(&ready).unwrap_or_else(|_| {
-        format!(r#"{{"ready":true,"port":{port},"protocol_version":"{PROTOCOL_VERSION}"}}"#)
-    });
-    println!("{line}");
-    use std::io::Write;
-    let _ = std::io::stdout().flush();
-
-    tracing::info!("orbit-audio-daemon listening on 127.0.0.1:{port}");
-
-    // 4. accept loop
-    server::serve(bound.listener, engine).await;
-    Ok(())
-}
 ```
 
 On startup failure, the daemon instead writes a single line of JSON to stderr
@@ -99,7 +99,7 @@ dedicated OS thread (the "audio owner thread"), which owns the `StreamGuard` for
 `mpsc` channel — #484 D2).
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:135-146
+// rust/crates/orbit-audio-daemon/src/main.rs:149-160
 /// ランタイム device switch（#484 D2）: `EngineWrap::start()`（cpal I/O・`cpal::Stream` は `!Send`）を
 /// 専用 OS thread（"audio owner thread"）上で実行し、その thread に `StreamGuard` を生涯所有させる。
 /// 呼び出し元（`run()`・tokio 上の async fn）は `Arc<EngineWrap>`（`Send + Sync`）だけを受け取る。
@@ -109,9 +109,9 @@ dedicated OS thread (the "audio owner thread"), which owns the `StreamGuard` for
 /// を行う。thread は `switch_rx` が close する（= `engine.device_switch_tx` を保持する最後の `Arc`
 /// が drop される）まで無期限に生存し、`_guard`（`StreamGuard`）を握り続ける — 既存の「`main()` の
 /// ローカル変数が daemon プロセス終了まで guard を握る」という寿命モデルと同一。
-fn start_engine_with_device_switch() -> Result<Arc<EngineWrap>, WrapError> {
-    let (switch_tx, switch_rx) = std::sync::mpsc::channel::<DeviceSwitchRequest>();
-    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<Arc<EngineWrap>, WrapError>>();
+fn start_engine_with_device_switch(
+    startup_options: StartupOptions,
+) -> Result<Arc<EngineWrap>, WrapError> {
 ```
 
 Once the connection is established, the daemon first sends a handshake frame. After that, it
@@ -203,7 +203,7 @@ that drains an `mpsc` channel. Since #474 there is one more task: it bridges the
 (`PluginUiClosed` and friends) broadcast by the watchdog threads into the session's writer queue.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:739-767
+// rust/crates/orbit-audio-daemon/src/session.rs:799-826
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -232,43 +232,7 @@ pub async fn run(
         let tx = tx.clone();
         let events = engine.subscribe_plugin_ui_events();
         tokio::spawn(forward_plugin_ui_events(events, tx))
-    };
 ```
-
-The `SessionRegistration::new` right after the handshake arrived with #606. It is an RAII guard that
-registers this session in the daemon's connection counter, and what makes it interesting is that
-counting the registrations is not the point in itself. When the engine process dies abnormally, the
-`PluginAllNotesOff` RPC can never arrive — by construction. So the daemon takes "the read loop
-ended, meaning the connection to the engine is gone" as a second trigger and releases any notes
-still sounding.
-
-```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1271-1284
-    if session.disconnect() {
-        let release_engine = engine.clone();
-        match tokio::task::spawn_blocking(move || release_engine.plugin_all_notes_off()).await {
-            Ok(Ok(_)) => {}
-            Ok(Err(error)) => {
-                error!("plugin all-notes-off after session disconnect failed: {error}")
-            }
-            // 🔴 JoinError は「解放タスクが panic / cancel して**そもそも試みられていない**」ことを
-            // 意味するので、部分的な配送失敗（上の腕）より軽く記録してはいけない。
-            Err(error) => {
-                error!("plugin all-notes-off task after session disconnect failed: {error}")
-            }
-        }
-    }
-```
-
-The point is that `session.disconnect()` returns a `bool`. The daemon accepts multiple sessions and
-the active-note ledger is shared across them, so releasing on any single disconnect would cut off
-the sound of sessions that are still alive. The release therefore runs only when the last
-established session goes away.
-
-The asymmetry in `Drop` — restoring the counter but not performing the release — is deliberate too.
-`Drop` runs on an async runtime thread, whereas `plugin_all_notes_off` may sleep in a bounded retry.
-The notes belonging to that session stay sounding, but the daemon returns to a state where the next
-disconnect fires correctly.
 
 `method` dispatch is handled by `handle_command`. Plugin-note methods such as
 `PluginNoteOn`/`PluginNoteOff` are first split off through a pure function, `plugin_note_spec`,
@@ -276,7 +240,7 @@ kept as the single point of truth, before falling through to the match — refle
 learned that keeping the same string set in two independently-maintained places drifts.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1339-1366
+// rust/crates/orbit-audio-daemon/src/session.rs:1415-1442
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,
@@ -310,7 +274,7 @@ async fn handle_command(
 ### The command list (from the match arms of `handle_command`)
 
 `Command` is a struct carrying `method: String`; it is not a Rust enum. The "list of commands"
-is therefore whatever arms exist in `session.rs`'s `match method.as_str()`. As of 2026-09-05 the
+is therefore whatever arms exist in `session.rs`'s `match method.as_str()`. As of 2026-09-01 the
 arms are as follows (the notes column mentions the arms gated by a feature `cfg`).
 
 | method | role | notes |
@@ -318,7 +282,7 @@ arms are as follows (the notes column mentions the arms gated by a feature `cfg`
 | `Ping` | liveness check (`"pong"`) | |
 | `ListAudioDevices` | enumerate cpal output devices | #484 D1, runs under `spawn_blocking` |
 | `SelectAudioDevice` | runtime device switch | #484 D2, delegated to the audio owner thread |
-| `GetStatus` | daemon/protocol version, sample rate, `render_contentions`, `active_plugin_notes`, etc. | `active_plugin_notes` only on `outproc-instrument` builds (#606) |
+| `GetStatus` | daemon/protocol version, sample rate, `render_contentions`, etc. | |
 | `LoadSample` / `UnloadSample` | register / release an audio file | |
 | `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | |
 | `LoadPlugin` | attach a plugin (`role` / `bus` / `instance` / `state`) | the in-process build requires `role` |
@@ -334,7 +298,6 @@ arms are as follows (the notes column mentions the arms gated by a feature `cfg`
 | `SetSourceRouting` | runtime routing instrument source → bus | `outproc-effect,outproc-instrument` builds only |
 | `InjectFault` | panic injection for kill tests | only with `ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1` |
 | `PluginNoteOn` / `PluginNoteOff` | notes to an instrument | via `plugin_note_spec` (outside the match) |
-| `PluginAllNotesOff` | release every tracked instrument note (returns `released` / `stale` / `failed`) | #606, the same delivery function also runs on session disconnect |
 
 The "fixed in #643" note on the `SetGlobalGain` row refers to the defect recorded in WORK_LOG
 6.415: the master fader was not affecting instruments. That the very same command was caught by
@@ -443,7 +406,7 @@ the callback body was a single function, `render_block`; as of 2026-09-01 it has
 `OutputStream::render_state`).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:254-260
+// rust/crates/orbit-audio-native/src/output.rs:667-673
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
@@ -454,7 +417,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:581-618
+// rust/crates/orbit-audio-native/src/output.rs:994-1031
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -466,6 +429,7 @@ fn render_shared_block(
     hw: &mut [f32],
     stats: &StreamStats,
 ) {
+    stats.record_callback((hw.len() / output_channels) as u32);
     match state.try_lock() {
         Ok(mut state) => {
             let RenderState {
@@ -492,7 +456,6 @@ fn render_shared_block(
             hw.fill(0.0);
             stats.record_render_contention();
         }
-    }
 ```
 
 The number of failed `try_lock`s accumulates in `StreamStats` and can be read as
@@ -505,7 +468,7 @@ opt-ins, and the invariant that the path is bit-identical to the legacy path whe
 still stands.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:662-707
+// rust/crates/orbit-audio-native/src/output.rs:1076-1121
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -560,7 +523,7 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:709-750
+// rust/crates/orbit-audio-native/src/output.rs:1123-1164
 #[inline]
 fn render_engine_with_sources(
     engine: &Engine,
@@ -611,12 +574,16 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1539-1556
+// rust/crates/orbit-audio-native/src/output.rs:1961-1978
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(
                 config,
                 move |data: &mut [f32], _| {
+                    if suppress_callback {
+                        data.fill(0.0);
+                        return;
+                    }
                     render_shared_block(
                         &engine,
                         &render_state,
@@ -626,10 +593,6 @@ pre-sized for one second up front, avoiding heap allocation on the RT hot path).
                         data,
                         &callback_stats,
                     )
-                },
-                make_err_fn(stats.clone()),
-                None,
-            )
 ```
 
 This "bit-identical when unused" design principle also applies consistently to the insert-bus

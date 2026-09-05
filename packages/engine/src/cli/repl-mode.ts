@@ -94,6 +94,7 @@ export function extractSelectAudioDeviceMeta(line: string): { device: string } |
 
 const SAVE_PLUGIN_STATE_META_RE = /^\s*\/\/#savePluginState\s+(.+?)\s*$/
 const META_REQUEST_ID_RE = /"requestId"\s*:\s*("(?:\\[\s\S]|[^"\\])*")/
+const GET_ENGINE_STATE_META_RE = /^\s*\/\/#getEngineState\s+(.+?)\s*$/
 const PLUGIN_UI_META_RE = /^\s*\/\/#pluginUi\s+(.+?)\s*$/
 /**
  * `//#evalMark <json>`（#614）: 直前に投入されたコードの**評価結果**を呼び出し元へ返すための
@@ -282,9 +283,53 @@ async function executeSelectAudioDeviceMeta(
       result = { ok: true, device: await audioEngine.selectAudioDevice(device) }
     }
   } catch (error: any) {
-    result = { ok: false, error: error?.message ?? String(error) }
+    const message = error?.message ?? String(error)
+    console.error(`❌ live device switch to "${device}" failed: ${message}`)
+    result = { ok: false, error: message }
   }
   console.log(JSON.stringify({ selectAudioDevice: result }))
+}
+
+async function executeEngineStateMeta(
+  interpreter: InterpreterV2,
+  requestId: string,
+): Promise<void> {
+  let result:
+    | {
+        requestId: string
+        ok: true
+        output: Record<string, unknown>
+        callback: Record<string, unknown>
+      }
+    | { requestId: string; ok: false; error: string }
+  try {
+    const audioEngine = interpreter.audioEngine
+    if (!audioEngine.getDaemonStatus) {
+      throw new Error('GetStatus is not supported by the current audio engine backend')
+    }
+    const status = await audioEngine.getDaemonStatus()
+    const output = status.output
+    const callback = status.callback
+    if (
+      typeof output !== 'object' ||
+      output === null ||
+      Array.isArray(output) ||
+      typeof callback !== 'object' ||
+      callback === null ||
+      Array.isArray(callback)
+    ) {
+      throw new Error('daemon GetStatus omitted output or callback')
+    }
+    result = {
+      requestId,
+      ok: true,
+      output: output as Record<string, unknown>,
+      callback: callback as Record<string, unknown>,
+    }
+  } catch (error: any) {
+    result = { requestId, ok: false, error: error?.message ?? String(error) }
+  }
+  console.log(JSON.stringify({ engineState: result }))
 }
 
 /**
@@ -444,6 +489,15 @@ export function createReplSession(interpreter: InterpreterV2): {
         } else {
           console.error(`[ERROR] ${message}`)
         }
+      }
+      return
+    }
+    if (GET_ENGINE_STATE_META_RE.test(line)) {
+      const requestId = recoverMetaRequestId(line)
+      if (requestId) {
+        await executeEngineStateMeta(interpreter, requestId)
+      } else {
+        console.error('[ERROR] //#getEngineState requires a non-empty string requestId')
       }
       return
     }

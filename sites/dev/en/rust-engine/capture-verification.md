@@ -34,7 +34,7 @@ device"; the presence of capture does not change the output samples themselves (
 it does not mutate).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:662-707
+// rust/crates/orbit-audio-native/src/output.rs:1076-1121
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -287,7 +287,7 @@ guarantee the sequence "stream stops (callback stops) → writer drains
 remaining ring contents and finalizes".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:224-233
+// rust/crates/orbit-audio-native/src/output.rs:608-617
 /// 生きている間はストリームを保持する RAII ハンドル。
 pub struct OutputStream {
     _stream: Stream,
@@ -296,8 +296,8 @@ pub struct OutputStream {
     /// 残りを drain して WAV を finalize」に固定する（Rust は struct field を宣言順に drop する）。
     _capture: Option<crate::capture::CaptureWriter>,
     render_state: Arc<std::sync::Mutex<RenderState>>,
+    pub device_name: String,
     pub sample_rate: u32,
-    pub channels: u16,
 ```
 
 ## "Objective verification" in practice: the gated test's drops assert + oracle agreement
@@ -387,7 +387,7 @@ under `rust/`, it fails before running a single test. Some directories are exclu
 walk, which the next subsection covers (#713).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:165-179
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:174-188
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -437,7 +437,7 @@ test at startup.
 So three directories, `tests` / `benches` / `examples`, were dropped from the walk.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:160-164
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:169-173
         // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
         // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
