@@ -25,8 +25,8 @@ pub use output::{
     BusTarget, DeviceFallback, DeviceFallbackPolicy, InsertBusStage, LinkChannelActivate,
     LiveOutputDevice, OutputDeviceRequest, OutputError, OutputFault, OutputStream, RenderState,
     SourceDest, SourceDestCell, SourceSlot, StreamBuildStage, StreamLivenessPhase, StreamStats,
-    StreamStatsSnapshot, FIRST_CALLBACK_DEADLINE, MAX_INSERT_BUS_STAGES, MAX_LINK_CHANNELS,
-    MAX_SOURCE_SLOTS, MAX_SOURCE_UNITS,
+    StreamStatsSnapshot, ENGINE_CHANNELS, FIRST_CALLBACK_DEADLINE, MAX_INSERT_BUS_STAGES,
+    MAX_LINK_CHANNELS, MAX_SOURCE_SLOTS, MAX_SOURCE_UNITS,
 };
 pub use post_processor::{CallbackTimeSnapshot, CallbackTimeStats, PostProcessor};
 pub use resampler::ResampleError;
