@@ -777,7 +777,7 @@ that landed in #474 P4b (2026-07-31); it creates no new save mechanism and merel
 existing save flow from the event.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:622-650
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:653-681
   private readonly onPluginUiClosed = (raw: unknown): void => {
     this.enqueuePluginUiEvent(async () => {
       const data = wireObject(raw, 'PluginUiClosed data')
@@ -827,7 +827,7 @@ When does the caller of `closePluginUi` return? The daemon's `ClosePluginUI` res
 **Phase A acceptance only**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2101-2102
+// rust/crates/orbit-audio-daemon/src/session.rs:2206-2207
                     // This is explicitly Phase A acceptance, never close completion.
                     Ok(Ok(())) => ok(&id, json!({"status": "accepted"})),
 ```
@@ -837,7 +837,7 @@ TS separately waits for the `UI_CLOSED_DONE` event frame. Moreover, it registers
 the daemon side, so DONE can overtake the ack.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:852-866
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:883-897
     try {
       // Register the DONE waiter before issuing CLOSE_UI: the event pump and
       // command response use independent tasks, so DONE may race the ack.
@@ -957,7 +957,7 @@ The ack matching key became the triple `(generation, window, evt_seq)`; an ack c
 window is rejected loudly. The event frame's `PluginUiTarget` also gained `window`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9056-9069
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9433-9446
 /// WS event frame に載せる、解決済み plugin UI 宛先。
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PluginUiTarget {
@@ -1063,7 +1063,7 @@ correlates the `{"pluginUi": ...}` line that comes back on stdout by `requestId`
 The stdout router in `extension.ts` picks up this result line by the `{"pluginUi"` prefix.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1497-1501
+// packages/vscode-extension/src/extension.ts:1501-1505
         } else if (trimmedLine.startsWith('{"pluginUi"')) {
           const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
           if (!parsed && isCurrent) {
@@ -1094,7 +1094,7 @@ E2E-1 of #633 inserts the same plugin twice, opens two windows with `ui("name")`
 second one first**, and then closes the first.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1917-1939
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2091-2113
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

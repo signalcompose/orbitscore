@@ -89,13 +89,14 @@ fn effect_processes_audio_via_daemon() {
     let cb = engine
         .clap_callback_stats()
         .expect("callback stats available with clap host");
+    let callback_count = engine.stream_stats_snapshot().callbacks;
 
     let ratio = effected / baseline;
     println!("=== clap-host PR2 effect verdict ===");
     println!("baseline_peak:       {baseline:.5}");
     println!("effected_peak:       {effected:.5}");
     println!("ratio (eff/base):    {ratio:.5}  (expect ~{EFFECT_GAIN})");
-    println!("callback_count:      {}", cb.callback_count);
+    println!("callback_count:      {callback_count}");
     println!("callback_min_ns:     {}", cb.min_ns);
     println!("callback_mean_ns:    {}", cb.mean_ns);
     println!("callback_p99_ns:     {}", cb.p99_ns);
@@ -115,7 +116,7 @@ fn effect_processes_audio_via_daemon() {
          add-mix（~1.5）や入力無音（~0）でないか、replace/de-interleave 配線を確認"
     );
     // callback が実際に回った。
-    assert!(cb.callback_count > 0, "audio callback が回っていない");
+    assert!(callback_count > 0, "audio callback が回っていない");
     // RT 健全性: callback max が budget 内（synth gated と同じ保守的上限 20ms）。
     assert!(
         cb.max_ns < 20_000_000,

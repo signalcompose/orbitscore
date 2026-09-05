@@ -164,7 +164,7 @@ export const MIXER_BUS_POOL_SIZE = 4
 The corresponding Rust constants live in the daemon's `engine_wrap.rs`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1992-2005
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2065-2078
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
 /// （M3 で配線予定）。
 #[cfg(feature = "outproc-effect")]
@@ -336,7 +336,7 @@ later stage and `BusKind::Sum`", "a send target must be a later stage and `BusKi
 "if even one check fails, nothing is applied".
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5894-5914
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6248-6268
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -371,7 +371,7 @@ place is the second half of `render_engine_with_insert_buses_and_source_outputs`
 `output.rs`, the so-called **post-loop**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1091-1117
+// rust/crates/orbit-audio-native/src/output.rs:1505-1531
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -431,7 +431,7 @@ native) does not know what an instrument is; it holds only the abstraction "some
 back N blocks when rendered".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:362-375
+// rust/crates/orbit-audio-native/src/output.rs:775-788
 /// A callback-owned source which renders one or more interleaved output units.
 pub trait BlockSource: Send {
     fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
@@ -457,7 +457,7 @@ Feed collection is done by `collect_source_feeds` (`output.rs:772-801`), which m
 `SourceDest` to the core's `FeedDest`. Only the mapping is quoted here.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:943-953
+// rust/crates/orbit-audio-native/src/output.rs:1357-1367
             let dest = match slot.dests[unit].load() {
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
@@ -595,7 +595,7 @@ is optional, so nothing happens on the SC backend. The essential point of
 `RustEnginePlayer.setGlobalGain` is "record the intent first, regardless of the daemon's state".
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1247-1259
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1286-1298
   async setGlobalGain(amplitude: number, rampSec = 0): Promise<void> {
     // 🔴 daemon の状態に関わらず**先に intent を記録する**。未接続時に捨てると、
     // 接続後に復元する手がかりが消える（`Global.gain()` を再評価する経路は存在しない）。
@@ -732,7 +732,7 @@ E2E-1 takes one segment at `global.gain(0)`, evaluates `global.gain(-6)`, takes 
 requires the ratio to fall within 0.45–0.55 ($10^{-6/20} \approx 0.501$).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1558-1596
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1732-1768
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -770,8 +770,6 @@ requires the ratio to fall within 0.45–0.55 ($10^{-6/20} \approx 0.501$).
     },
     TEST_TIMEOUT_MS,
   )
-
-  it.skipIf(!appAvailable)(
 ```
 
 The measurement inside this E2E-1 has itself come under suspicion. While recording the
@@ -796,7 +794,7 @@ E2E-4 is the sum + aux path. It switches between dry (no bus) and an instrument 
 (theoretical 1.5) (`1585-1592`). The DSL part is quoted.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1698-1717
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1872-1891
         [
           'var global = init GLOBAL',
           'global.key("C")',

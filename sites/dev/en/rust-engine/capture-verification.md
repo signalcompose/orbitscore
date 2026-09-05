@@ -33,13 +33,8 @@ but right before it is sent to the device, inside `render_block_with_sources` (s
 device"; the presence of capture does not change the output samples themselves (it only reads —
 it does not mutate).
 
-🔴 **As of #649 PR-O2 (2026-09), the `post` argument became `master: &mut MasterLine`.** The
-master rack (the old `post`) is applied to `master.buffer` (always 2ch), gain is applied next, and
-the result is placed into the device-width `hw` (`docs/design/611-output-line-design.md` §5.3).
-Capture still taps `hw` — the final signal after placement, right before the device.
-
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:756-829
+// rust/crates/orbit-audio-native/src/output.rs:1170-1193
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -52,18 +47,18 @@ fn render_block_with_sources(
     output_channels: usize,
     hw: &mut [f32],
 ) {
-// ...
-    // 読み取り専用 tap。`RingTapSink::commit` は wait-free / no-alloc（満杯時はあふれを drop カウント）
-    // ＝ RT 契約を満たす。off-thread writer が ring を drain する。post の後・計測の内側に置くことで
-    // capture コストも callback-duration に含めて監視する。
-    if let Some(sink) = capture.as_mut() {
-        sink.commit(hw);
-    }
+    // Instant::now() は macOS では mach_absolute_time（lock/alloc なし）= RT 許容。A0 §6 に基づき
+    // production RT 監視を callback-duration ベースにするための計測（cb_stats 有り時のみ）。
+    let t0 = cb_stats.as_ref().map(|_| Instant::now());
 
-    if let (Some(stats), Some(t0)) = (cb_stats, t0) {
-        stats.record(t0.elapsed().as_nanos() as u64);
-    }
-}
+    // engine（+ bus graph）は常に 2ch で完結する（設計 §5.5 row 1・3）。`master.buffer` が core の
+    // 「hardware_out」を受ける — デバイス幅（`output_channels`／`hw`）とは無関係。buffer は起動時に
+    // 事前確保済み（`start_output_inner`）なので RT では resize しない。
+    let frames = hw.len() / output_channels;
+    let bs = frames * 2;
+    debug_assert!(
+        master.buffer.len() >= bs,
+        "master buffer too short: {} < {bs}",
 ```
 
 The tap is performed via `RingTapSink::commit`, a wait-free / no-alloc
@@ -292,7 +287,7 @@ guarantee the sequence "stream stops (callback stops) → writer drains
 remaining ring contents and finalizes".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:224-233
+// rust/crates/orbit-audio-native/src/output.rs:608-617
 /// 生きている間はストリームを保持する RAII ハンドル。
 pub struct OutputStream {
     _stream: Stream,
@@ -301,8 +296,8 @@ pub struct OutputStream {
     /// 残りを drain して WAV を finalize」に固定する（Rust は struct field を宣言順に drop する）。
     _capture: Option<crate::capture::CaptureWriter>,
     render_state: Arc<std::sync::Mutex<RenderState>>,
+    pub device_name: String,
     pub sample_rate: u32,
-    pub channels: u16,
 ```
 
 ## "Objective verification" in practice: the gated test's drops assert + oracle agreement
@@ -392,7 +387,7 @@ under `rust/`, it fails before running a single test. Some directories are exclu
 walk, which the next subsection covers (#713).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:166-180
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:175-189
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -442,7 +437,7 @@ test at startup.
 So three directories, `tests` / `benches` / `examples`, were dropped from the walk.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:161-165
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:170-174
         // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
         // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
