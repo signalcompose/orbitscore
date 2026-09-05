@@ -50,7 +50,7 @@ it opens all of them.
 The implementation lives in `Sequence.ui()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:701-721
+// packages/engine/src/core/sequence.ts:710-730
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -313,7 +313,7 @@ The TS → daemon wire simply adds three methods to the existing JSON request/re
 target vocabulary is the same `{role, bus?, instance?}` shape as `GetPluginState`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:620-633
+// packages/engine/src/audio/rust-engine/daemon-client.ts:630-643
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,
@@ -827,7 +827,7 @@ When does the caller of `closePluginUi` return? The daemon's `ClosePluginUI` res
 **Phase A acceptance only**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2015-2016
+// rust/crates/orbit-audio-daemon/src/session.rs:2078-2079
                     // This is explicitly Phase A acceptance, never close completion.
                     Ok(Ok(())) => ok(&id, json!({"status": "accepted"})),
 ```
@@ -957,7 +957,7 @@ The ack matching key became the triple `(generation, window, evt_seq)`; an ack c
 window is rejected loudly. The event frame's `PluginUiTarget` also gained `window`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8802-8815
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8993-9006
 /// WS event frame に載せる、解決済み plugin UI 宛先。
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PluginUiTarget {
@@ -1094,7 +1094,7 @@ E2E-1 of #633 inserts the same plugin twice, opens two windows with `ui("name")`
 second one first**, and then closes the first.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1816-1838
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1867-1889
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

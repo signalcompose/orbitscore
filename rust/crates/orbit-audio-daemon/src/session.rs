@@ -688,6 +688,52 @@ fn validate_render_score_params(params: &Value) -> Result<RenderScoreManifest, P
 /// Err を `Box` に包むのは `clippy::result_large_err` 対応（CI の stable clippy 1.98 で発火）。
 /// `tungstenite::Error` は外部 crate の型で 136 バイトあり、こちらでは小さくできない。
 /// error 経路は cold path なので 1 回のアロケーションは実質無償。
+/// session 登録の RAII ガード。
+///
+/// 🔴 `disconnect()` を呼ばずに drop された場合（read loop の panic 等）でもカウンタを戻す。
+/// 戻さないと `connected_sessions` が永久に加算されたままになり、**以後どの session が
+/// 切れても最後の砦（`PluginAllNotesOff`）が二度と発火しない** — daemon プロセスが生きている
+/// 限りずっと、である。同ファイルの `InstrumentReplacementReservation` と同じ「明示的な
+/// 確定 + Drop の安全網」の形。
+struct SessionRegistration {
+    engine: Arc<EngineWrap>,
+    released: bool,
+}
+
+impl SessionRegistration {
+    fn new(engine: Arc<EngineWrap>) -> Self {
+        engine.session_connected();
+        Self {
+            engine,
+            released: false,
+        }
+    }
+
+    /// 明示的な切断。daemon の最後の確立済み session だったかを返す。
+    fn disconnect(mut self) -> bool {
+        self.released = true;
+        self.engine.session_disconnected_is_last()
+    }
+}
+
+impl Drop for SessionRegistration {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        // ここへ来るのは unwind（panic）か、明示切断より手前の早期 return。カウンタだけ戻す。
+        // 解放そのものはここでは行わない — Drop は async runtime のスレッド上で走り、
+        // `plugin_all_notes_off` は bounded retry で sleep しうるため。この session が最後
+        // だった場合その分の音は残るが、**次の session の切断で正しく発火する状態には戻る**。
+        let was_last = self.engine.session_disconnected_is_last();
+        warn!(
+            was_last,
+            "session registration dropped without an explicit disconnect; \
+             the all-notes-off trigger did not run for this session"
+        );
+    }
+}
+
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -699,7 +745,7 @@ pub async fn run(
     write
         .send(Message::Text(to_json_or_fallback(&Handshake::current())))
         .await?;
-    engine.session_connected();
+    let session = SessionRegistration::new(engine.clone());
 
     let writer_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -1220,7 +1266,7 @@ pub async fn run(
     // engine が異常終了すると RPC は原理的に届かない。read loop の終了そのものを第二 trigger
     // とする。ただし daemon は複数 session を受理し台帳は共有するため、途中の 1 接続ではなく
     // 最後の確立済み session が切れた時だけ単一配送関数で解放する（#606）。
-    if engine.session_disconnected_is_last() {
+    if session.disconnect() {
         let release_engine = engine.clone();
         match tokio::task::spawn_blocking(move || release_engine.plugin_all_notes_off()).await {
             Ok(Ok(_)) => {}
@@ -2548,10 +2594,7 @@ fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
         WrapError::OutProcInstrumentUnavailable(msg) => {
             ProtocolError::new("OUTPROC_INSTRUMENT_UNAVAILABLE", msg.clone())
         }
-        WrapError::OutProcInstrument(msg) => {
-            ProtocolError::new("OUTPROC_INSTRUMENT_RUNTIME", msg.clone())
-        }
-        WrapError::OutProcInstrumentStale(msg) => {
+        WrapError::OutProcInstrument(msg) | WrapError::OutProcInstrumentStale(msg) => {
             ProtocolError::new("OUTPROC_INSTRUMENT_RUNTIME", msg.clone())
         }
         WrapError::OutProcAttachFailed(msg) => {

@@ -58,6 +58,7 @@ import {
   captureWindowsFrom,
   createCaptureClock,
   prepareCapturePath,
+  quadraticMeanRms,
   readCaptureForAnalysis,
   steadyRms,
   waitForSound,
@@ -363,9 +364,8 @@ function analysisTailRms(
     (window) => window.startSec >= Math.max(0, analysis.durationSec - durationSec),
   )
   expect(windows.length, `capture tail ${durationSec}s must contain RMS windows`).toBeGreaterThan(0)
-  return Math.sqrt(
-    windows.reduce((sum, window) => sum + window.rms * window.rms, 0) / windows.length,
-  )
+  // 二乗平均の式は正本を 1 つに保つ（`run-score.ts:127-130` が drift しやすいと警告している式）。
+  return quadraticMeanRms(windows)
 }
 
 /** Catalog drops create files here; bypass and standard-stage drops must not. */

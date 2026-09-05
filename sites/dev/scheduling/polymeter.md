@@ -268,7 +268,7 @@ launch quantize (`global.quantize("bar")` が既定) が入ったことで、`se
 `startTime` を渡しているのは `Sequence.loop()` で、`nextQuantizedTime()` (グローバルの tempo と beat から計算) の結果です。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1816-1824
+// packages/engine/src/core/sequence.ts:1828-1836
     // Quantize the loop start to the next bar boundary on the master grid so
     // newly-started LOOPs slot in cleanly with whatever is already running.
     const startTime = this.nextQuantizedTime(currentTime)

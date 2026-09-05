@@ -138,7 +138,7 @@ a contract that must match the TS-side `SequenceEffectManager` both numerically
 and as a string.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1904-1912
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1928-1936
 /// 既定 insert bus プールの名前 prefix。DSL 側（TS）の per-sequence effect manager が
 /// 同じ規則（`seq-bus-<n>`）で bus 名を組み立てて `LoadPlugin.bus` / `PlayAt.bus` に
 /// 送るため、prefix を変える場合は TS 側の定数も合わせて更新すること（#434 S3）。
@@ -155,7 +155,7 @@ path) is set, it takes priority; otherwise the default pool is generated
 per `ORBIT_EFFECT_BUS_POOL`:
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1936-1948
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1960-1972
 /// bus 名の解決: `ORBIT_EFFECT_BUSES`（明示名・非空）が設定されていればそれを使う（既存 S2 挙動を
 /// 保つ）。未設定なら `ORBIT_EFFECT_BUS_POOL`（既定 8・`"0"` で無効）に従って `seq-bus-<n>` の
 /// 既定プールを生成する。両方指定は `ORBIT_EFFECT_BUSES` を優先（明示指定が常に勝つ）。
@@ -178,7 +178,7 @@ from 2026-07-17 is the added `kind: BusKind` (insert / sum / aux) and the shared
 the mixer.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2026-2048
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2050-2072
 /// 1 本の named bus stage（insert/sum/aux 共通）を構成する部材（`build_effect_bus_stages` →
 /// `install_effect_bus_slots` の間で運ぶ・#434 S2/S3・M2 で kind/routing を追加）。
 /// effect-only / both の両起動経路で同一のライフサイクルを共有する。

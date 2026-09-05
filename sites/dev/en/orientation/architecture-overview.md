@@ -412,7 +412,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 Seen from the engine, the daemon is a **child process**. The communication, however, is WebSocket rather than stdin/stdout; stdout is used only to receive the startup ready line (a one-line JSON containing the port number).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:869-879
+// packages/engine/src/audio/rust-engine/daemon-client.ts:879-889
   private async spawnDaemon(
     explicitPath: string | undefined,
     timeoutMs: number,
@@ -427,7 +427,7 @@ Seen from the engine, the daemon is a **child process**. The communication, howe
 ```
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:943-957
+// packages/engine/src/audio/rust-engine/daemon-client.ts:953-967
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる

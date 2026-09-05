@@ -48,7 +48,7 @@ aux("verb").ui("ValhallaRoom")
 実装は `Sequence.ui()` にあります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:701-721
+// packages/engine/src/core/sequence.ts:710-730
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -308,7 +308,7 @@ TS → daemon の wire は既存の JSON request/response に 3 つのメソッ�
 `GetPluginState` と同じ `{role, bus?, instance?}` 形です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:620-633
+// packages/engine/src/audio/rust-engine/daemon-client.ts:630-643
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,
@@ -815,7 +815,7 @@ TS 側の受け手が `RustEnginePlayer.onPluginUiClosed` です。#474 P4b（20
 **フェーズ A の受理**でしかありません。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2015-2016
+// rust/crates/orbit-audio-daemon/src/session.rs:2078-2079
                     // This is explicitly Phase A acceptance, never close completion.
                     Ok(Ok(())) => ok(&id, json!({"status": "accepted"})),
 ```
@@ -943,7 +943,7 @@ ack の照合キーは `(generation, window, evt_seq)` の三つ組になり、�
 loud に拒否されます。event frame の `PluginUiTarget` にも `window` が載りました。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8802-8815
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8993-9006
 /// WS event frame に載せる、解決済み plugin UI 宛先。
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PluginUiTarget {
@@ -1075,7 +1075,7 @@ recorded` で失敗するので、「DSL で open → MCP の close が成功す
 その後 1 枚目も閉じます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1816-1838
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1867-1889
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

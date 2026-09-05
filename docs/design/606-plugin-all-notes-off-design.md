@@ -158,3 +158,40 @@ fixture の CLAP test synth は **note-off が来るまで 0.25 振幅の sin �
 | **E2E-K3 のハーネス**（engine の `pgrep`・孤児 daemon の後始末・次テストの engine 再起動） | **中〜低** | flaky なら cargo gated + `protocol.rs` を主証拠に降格し K3 は隔離して報告。**T2 だけでは daemon 側の砦を証明できない**（TS の経路が先に止める） |
 | stale の判定を文字列一致でしている | 中 | `WrapError` の variant で判定できる形に寄せる。**文字列で判定しない** |
 | `ReplacePlugin` commit で台帳を消す副作用 | 中 | quarantine 時は消さない分岐にして unit で両方を固定する |
+
+---
+
+## 6. レビュー後に**先送りしたもの**（2026-09-05・main が追記）
+
+🔴 **この節は「後回しにしたが、やらないとは言っていない」ものの置き場である。** 消さないこと。
+
+### 6.1 台帳のキーを slot 同一性にする → **#752**
+
+`ReplacePlugin` の**スナップショットと `instance_index` の再ポイントの間**に旧 instance 宛の NoteOn が
+届くと、その entry はスナップショットから漏れ、teardown 後の cleanup を素通りして台帳に残る。
+旧 child は殺されるので**その音は止まる**が、次の `PluginAllNotesOff` が**新テナントへ NoteOff を送り**、
+新テナントが同じ (channel, key) を鳴らしていれば**その音が切れる**。本 PR が直した欠陥の鏡像である。
+
+- 🔴 **窓を狭めるだけでは閉じない**。`plugin_note_on` は push（control lock を取って解放）→ 台帳 insert の
+  順なので、push 済み・insert 前の note がどうやってもスナップショットから漏れる
+- 直し方は **`(slot_index, tenant_generation, channel, key)` でキーし直す**。`tenant_generation` は
+  既に存在する（`outproc_instrument.rs:208`・teardown で `fetch_add`・`engine_wrap.rs:6413`）
+- 🔴 **本設計の §「却下した案」で「wire が名前しか運ばないから無理」と書いたのは誤り**だった。
+  `push_outproc_instrument_event` は note の時点で名前→index を解決済みで、index は追加コストなしに手に入る
+- 本 PR に含めない理由: 差分が既に 1600 行あり、この変更は per-note 経路のシグネチャに触る。
+  残存窓はロック 2 回ぶんで、本 PR が直した 500 ms の窓より 2 桁以上狭い
+
+### 6.2 タイマーのライフサイクル管理点が 2 箇所に分かれている
+
+`loopTimer` は `preparePlayback` が一括クリアする一方、`runTimer` は `run()` / `loop()` / `stop()` の
+3 箇所で個別に `clearRunTimer()` している。**本 PR が特別扱いを増やしたわけではなく**（`stop()` 側の
+`loopTimer` インラインクリアも既存の同型）、既存パターンを踏襲しただけだが、層はずれている。
+
+寄せ先は `PreparePlaybackOptions` に `runTimer` も渡して既存の「Clear existing loop timer if any」を
+両タイマー共通にすること、および `stop()` のインラインクリアを `stateManager.clearTimers()`（既に両方を
+クリアする実装がある）へ寄せること。**挙動が変わりうるので独立した PR で扱う。**
+
+### 6.3 `analysisTailRms` の二乗平均の重複 → **解消済み**（2026-09-05）
+
+PR #746 が `tests/e2e/helpers/capture-windows.ts` に `quadraticMeanRms` を切り出して main に入ったので、
+本ブランチを載せ替えたうえで **import に差し替えた**。
