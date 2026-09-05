@@ -63,7 +63,7 @@ import {
   steadyRms,
   waitForSound,
   type CaptureSegment,
-  waitForSoundRestart,
+  makeAwaitSoundRestart,
 } from './helpers/capture-windows'
 import { captureWavPath, createGatedSession, type GatedCatalog } from './helpers/gated-session'
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
@@ -664,17 +664,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const toWall = Date.now()
       segments[name] = { fromSec, toSec, fromWall, toWall }
     }
-    const awaitSoundRestart = async (label?: string): Promise<void> => {
-      await waitForSoundRestart(capturePath, {
-        floor: 0.01,
-        // LOOP の小節境界にできる切れ目は実測 80 ms。それより十分長く取る。
-        quietSec: 0.3,
-        intervalMs: 100,
-        quietTimeoutMs: 4_000,
-        timeoutMs: 20_000,
-        label: `#643 ${slug}${label === undefined ? '' : ` (${label})`}`,
-      })
-    }
+    const awaitSoundRestart = makeAwaitSoundRestart(capturePath, `#643 ${slug}`)
 
     let bodyError: unknown
     let cleanupFailure: unknown

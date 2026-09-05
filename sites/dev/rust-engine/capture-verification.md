@@ -35,7 +35,7 @@ device 幅の `hw` へ配置する（`docs/design/611-output-line-design.md` §5
 `hw` は依然として「配置後・device に送る直前」の最終信号のまま。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:742-814
+// rust/crates/orbit-audio-native/src/output.rs:756-829
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,

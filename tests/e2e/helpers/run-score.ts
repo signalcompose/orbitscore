@@ -22,8 +22,8 @@ import {
   createCaptureClock,
   prepareCapturePath,
   readCaptureForAnalysis,
+  makeAwaitSoundRestart,
   waitForSound,
-  waitForSoundRestart,
   type CaptureSegment,
   type CaptureWindows,
 } from './capture-windows'
@@ -296,15 +296,7 @@ export async function runScore(
     if (capturePath === undefined) {
       throw new Error(`runScore ${source.slug}: awaitSoundRestart requires { capture: true }`)
     }
-    await waitForSoundRestart(capturePath, {
-      floor: 0.01,
-      // LOOP の小節境界にできる切れ目は実測 80 ms。それより十分長く取る。
-      quietSec: 0.3,
-      intervalMs: 100,
-      quietTimeoutMs: 4_000,
-      timeoutMs: 20_000,
-      label: `runScore ${source.slug}${label === undefined ? '' : ` (${label})`}`,
-    })
+    await makeAwaitSoundRestart(capturePath, `runScore ${source.slug}`)(label)
   }
 
   let bodyError: unknown

@@ -17,6 +17,76 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(649): correct the attribution and add the test that actually guards the master line (Sep 5, 2026)
+
+**Issue**: #649 / **ブランチ**: `649-stereo-internal-master-line` / **PR** #754
+
+ゲート③（`/simplify` 4 体 + Fable 監査を並行）。**Critical 0 / Important 3**。
+最大の指摘は「**この PR の Rust 差分を区別できる検証が存在しない**」だった。
+
+#### 🔴 帰属の訂正 — E2E-1 が緑なのは本 PR の Rust 差分の効果ではない
+
+Fable が `374e8b2d`（2026-08-29・**main に既に入っている**）を指摘した。そのコミット本文:
+
+> instrument の音は `CompositePostProcessor` で master バッファへ直接加算されており、
+> バスグラフの外にいた。これを `render_multi` の内側・event 混合後・gain ramp の前へ移し …
+> **帰結: `global.gain` が instrument に効くようになった**
+
+**推論で済ませず実機で反証した**（main の `rust/` + このブランチの `tests/`）:
+
+```
+✓ #643 E2E-1 applies global.gain(-6) … 9321ms
+```
+
+**main の rust でも緑**。つまり #649 の見出しの症状は 8/29 に main で消えており、E2E-1 が赤かったのは
+**オラクルだけ**が原因だった。「段 1 の目的が証明された」という以前の報告は、事実（E2E-1 が緑）は
+真だが**帰属が誤り**だった。
+
+#### では本 PR の Rust 差分は何を直しているのか
+
+**同じクラスの残り半分**。main では `global.effect()`（master ラック = `post`）が core の gain ramp の
+**後**に走るので、**ラックが生成・変形した音は `global.gain()` を逃れる**。`MasterLine` は順序を
+`rack → gain` に固定してこれを塞ぐ（設計 §5.2）。
+
+🔴 **`Gain` のような線形ラックでは順序を区別できない**（乗算は可換）ので、DSL 経由の E2E では
+測れない（`#611 O0-4` のテスト名「a linear rack cannot show order」がまさにこれ）。ユニットで押さえた:
+
+```
+master_gain_applies_after_the_master_rack_generates_sound
+  FillPost(0.75) + gain 0.5 → hw = 0.375
+
+変異（post と gain の順序を main の形へ戻す）:
+  FAILED  master gain must attenuate what the master rack produced: [0.75, …]
+```
+
+**これが本 PR の Rust 差分を守る唯一のテスト**。あわせて `advance_gain` / `place_master_into_device`
+（8ch の余剰チャンネル・mono マージ）にもユニットを足した。
+
+#### `/simplify` の適用
+
+| 指摘 | 直した形 |
+|---|---|
+| 🔴 **RT ホットパスで `hw` を二重に書いていた**（3 体が独立に指摘）— 全域 zero-fill の直後に `place_master_into_device` が全要素を上書き | zero-fill を削除し、余剰チャンネルの 0 埋めを配置関数の責務へ。2ch は `copy_from_slice` に。**64 frames × 2ch なら約 96,000 store/秒の無駄**だった |
+| `ensure_buffer_len` が `MasterLine` と `InsertBusStage` で完全に同一 | 自由関数 `ensure_audio_buffer_len` へ集約 |
+| `awaitSoundRestart` の 5 定数が 2 箇所に verbatim | `makeAwaitSoundRestart` ファクトリへ集約 |
+
+#### Fable I-2 — 非 production feature が engine バッファをデバイス幅で解釈していた
+
+`clap-host` は `ClapPostProcessor` に、`link-audio` は consumer に **`stream.channels`（デバイス幅）**を
+渡していた。どちらも受け取るのは `master.buffer`（**常に 2ch**）なので、8ch デバイスでは frame 数が
+1/4 になって音が化ける。`ENGINE_CHANNELS: usize = 2` を名前付き定数として公開し、両方をそれに揃えた。
+
+production build には含まれない feature なので実害は無かったが、設計 §5.5 の
+「events / feeds / stages はすべて 2ch」を**この 2 経路だけが継承していなかった**。
+
+#### 検証
+
+`npm test` 2251 passed / `typecheck:e2e` 0 / `lint` 0 /
+`cargo test -p orbit-audio-native -p orbit-audio-daemon` **144 passed / 0 failed**（21 スイート）/
+clippy **5 象限**（`clap-host` / `link-audio` を含む）全緑 / `docs:check` 926 verified 0 failed
+
+---
+
 ### test(e2e): open the window after the sound restarts, not after a fixed settle (#649) (Sep 5, 2026)
 
 **Issue**: #649 / **ブランチ**: `649-stereo-internal-master-line` / **PR** #754

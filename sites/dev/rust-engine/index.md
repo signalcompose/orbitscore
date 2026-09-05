@@ -393,7 +393,7 @@ SIGABRT を見てしまう — そのため `write_line_best_effort` を使う�
 callback 側の状態を引き継ぐためです（`OutputStream::render_state` のコメント参照）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:331-337
+// rust/crates/orbit-audio-native/src/output.rs:347-353
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
@@ -408,7 +408,7 @@ pub struct RenderState {
 まとめる（`docs/design/611-output-line-design.md` §5.2）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:658-695
+// rust/crates/orbit-audio-native/src/output.rs:672-709
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -460,7 +460,7 @@ callback 所要時間の記録、という順に進みます。`master.post`/`ca
 （2ch デバイス）、という不変条件はそのまま残っています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:742-814
+// rust/crates/orbit-audio-native/src/output.rs:756-829
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -515,11 +515,12 @@ fn render_block_with_sources(
 
     // デバイス配置（設計 §5.3・row 6）: master.buffer（2ch）を hw（デバイス幅）の ch{0,1} へ置く。
     // 2ch デバイスなら memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。3ch 以上は ch2 以降が
-    // 無音のまま（zero-fill 済み）残る — Device 出口はまだ master 固定 program の 1 本のみ
-    // （さらなる出口は PR-O3/O4）。
-    for s in hw.iter_mut() {
-        *s = 0.0;
-    }
+    // 無音で残る — Device 出口はまだ master 固定 program の 1 本のみ（さらなる出口は PR-O3/O4）。
+    //
+    // 🔴 ここで `hw` を全域 zero-fill しない。`place_master_into_device` が **hw の全要素を
+    // 書き切る**ので、1ch / 2ch（＝今日検証されている構成すべて）では書いた直後に全部上書きされ、
+    // RT コールバックで**毎ブロック二重に store する**ことになる（64 frames × 2ch なら
+    // 約 96,000 store/秒の無駄）。余剰チャンネルの 0 埋めは配置関数の責務に閉じた。
     place_master_into_device(&master.buffer[..bs], frames, output_channels, hw);
 
     // capture seam（#307 realtime）: post 適用後の最終 hw（= device に出る実信号）を WAV へ逃がす
@@ -541,7 +542,7 @@ engine render 部分の `render_engine_with_sources` は、instrument source（O
 4 通りに分かれます。source も active bus も無ければ、従来の `render_engine` に落ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:836-877
+// rust/crates/orbit-audio-native/src/output.rs:865-906
 #[inline]
 fn render_engine_with_sources(
     engine: &Engine,
@@ -592,7 +593,7 @@ fn render_engine_with_sources(
 避けるため、scratch buffer は 1 秒分をあらかじめ確保しています）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1674-1691
+// rust/crates/orbit-audio-native/src/output.rs:1703-1720
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

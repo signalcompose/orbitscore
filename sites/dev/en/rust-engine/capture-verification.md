@@ -39,7 +39,7 @@ the result is placed into the device-width `hw` (`docs/design/611-output-line-de
 Capture still taps `hw` — the final signal after placement, right before the device.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:742-814
+// rust/crates/orbit-audio-native/src/output.rs:756-829
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,

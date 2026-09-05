@@ -4262,7 +4262,9 @@ impl EngineWrap {
         let (control, link_guard) = crate::link_audio::LinkAudioControl::spawn(
             reg_tx,
             stream.sample_rate,
-            stream.channels as usize,
+            // 🔴 デバイス幅ではなく **engine 幅**。RT は `ch.scratch[..frames * 2]` を commit する
+            // ので、consumer 側がデバイス幅で drain すると 8ch デバイスで崩れる（Fable 監査 I-2）。
+            orbit_audio_native::ENGINE_CHANNELS,
         )
         .map_err(|e| WrapError::LinkAudio(e.to_string()))?;
         let master_gain = stream.master_gain();
@@ -7179,7 +7181,10 @@ impl EngineWrap {
                     path,
                     plugin_id,
                     sample_rate: self.sample_rate,
-                    channels: self.channels as usize,
+                    // 🔴 デバイス幅ではなく **engine 幅**。`ClapPostProcessor` が受け取るのは
+                    // `master.buffer`（常に 2ch）で、デバイス幅で de-interleave すると
+                    // 8ch デバイスで frame 数が 1/4 になって音が化ける（Fable 監査 I-2）。
+                    channels: orbit_audio_native::ENGINE_CHANNELS,
                     max_frames: CLAP_MAX_FRAMES,
                     reply: reply_tx,
                 })

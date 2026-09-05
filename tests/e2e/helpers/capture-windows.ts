@@ -266,6 +266,29 @@ export async function waitForSoundRestart(
   )
 }
 
+/**
+ * `waitForSoundRestart` を既定値つきで束ねたクロージャを作る。
+ *
+ * 🔴 呼び出し側（`run-score.ts` と gated spec）が同じ 5 つの定数を verbatim で持っていたので
+ * 集約した。可変なのはラベルだけ。`quietSec` を調整する時に 2 箇所を同期させ続けなくてよい。
+ */
+export function makeAwaitSoundRestart(
+  capturePath: string,
+  labelPrefix: string,
+): (label?: string) => Promise<void> {
+  return async (label?: string): Promise<void> => {
+    await waitForSoundRestart(capturePath, {
+      floor: 0.01,
+      // LOOP の小節境界にできる切れ目は実測 80 ms。それより十分長く取る。
+      quietSec: 0.3,
+      intervalMs: 100,
+      quietTimeoutMs: 4_000,
+      timeoutMs: 20_000,
+      label: `${labelPrefix}${label === undefined ? '' : ` (${label})`}`,
+    })
+  }
+}
+
 /** Quadratic mean of RMS buckets; preserves signal energy across bucket boundaries. */
 export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
   if (windows.length === 0) throw new Error('quadraticMeanRms requires at least one window')

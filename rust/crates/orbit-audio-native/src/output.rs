@@ -266,6 +266,24 @@ impl OutputStream {
 /// 🔴 wire は変えない（`SetBusLine` / 汎用 `LineProgram` は PR-O3）。ここでは §5.1 の generic な
 /// `line: LineSlot` は持たず、**固定の既定 program**（ラック → gain → Device{0,1} 配置）を
 /// native 側で直接実行する。
+/// engine 内部のチャンネル幅。**デバイス幅とは無関係に常に 2**（設計 §5.5）。
+///
+/// events / feeds / stages / master.buffer はすべてこの幅で扱い、デバイス幅への変換は
+/// `place_master_into_device` の 1 箇所だけで行う。デバイス幅（`StreamConfig.channels`）を
+/// engine バッファの解釈に使うと、8ch デバイスで frame 数が 1/4 になって音が化ける
+/// （#611 本文の実害がこれ）。
+pub const ENGINE_CHANNELS: usize = 2;
+
+/// RT で resize しないための事前確保（`MasterLine` / `InsertBusStage` が共有する規律）。
+///
+/// 🔴 **同じ本体を 2 箇所に置かない。** 「RT hot path で resize しない」という不変条件を守る
+/// ロジックが分かれていると、確保サイズの計算式や初期値を変える時に片方だけ直る。
+fn ensure_audio_buffer_len(buffer: &mut Vec<f32>, len: usize) {
+    if buffer.len() < len {
+        buffer.resize(len, 0.0);
+    }
+}
+
 pub struct MasterLine {
     /// 全 stage の Master 宛て出口が加算される 2ch バッファ（zero-fill は callback 冒頭・
     /// `render_engine_with_sources` に core の `hardware_out` として渡す）。事前確保のみ・RT では
@@ -301,9 +319,7 @@ impl MasterLine {
     /// callback block は通常これより遥かに短い。RT hot path の resize を構造的に排除する
     /// （`InsertBusStage::ensure_buffer_len` と同じ意図）。
     fn ensure_buffer_len(&mut self, len: usize) {
-        if self.buffer.len() < len {
-            self.buffer.resize(len, 0.0);
-        }
+        ensure_audio_buffer_len(&mut self.buffer, len);
     }
 
     /// control 側（`EngineWrap::set_global_gain`）が保持する書き込みハンドル。RT はここへは
@@ -560,9 +576,7 @@ impl InsertBusStage {
     }
 
     fn ensure_buffer_len(&mut self, len: usize) {
-        if self.buffer.len() < len {
-            self.buffer.resize(len, 0.0);
-        }
+        ensure_audio_buffer_len(&mut self.buffer, len);
     }
 }
 
@@ -793,11 +807,12 @@ fn render_block_with_sources(
 
     // デバイス配置（設計 §5.3・row 6）: master.buffer（2ch）を hw（デバイス幅）の ch{0,1} へ置く。
     // 2ch デバイスなら memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。3ch 以上は ch2 以降が
-    // 無音のまま（zero-fill 済み）残る — Device 出口はまだ master 固定 program の 1 本のみ
-    // （さらなる出口は PR-O3/O4）。
-    for s in hw.iter_mut() {
-        *s = 0.0;
-    }
+    // 無音で残る — Device 出口はまだ master 固定 program の 1 本のみ（さらなる出口は PR-O3/O4）。
+    //
+    // 🔴 ここで `hw` を全域 zero-fill しない。`place_master_into_device` が **hw の全要素を
+    // 書き切る**ので、1ch / 2ch（＝今日検証されている構成すべて）では書いた直後に全部上書きされ、
+    // RT コールバックで**毎ブロック二重に store する**ことになる（64 frames × 2ch なら
+    // 約 96,000 store/秒の無駄）。余剰チャンネルの 0 埋めは配置関数の責務に閉じた。
     place_master_into_device(&master.buffer[..bs], frames, output_channels, hw);
 
     // capture seam（#307 realtime）: post 適用後の最終 hw（= device に出る実信号）を WAV へ逃がす
@@ -819,16 +834,30 @@ fn render_block_with_sources(
 /// なし。`device_channels == 0` は cpal が返さない前提（既存コードも同じ前提で `hw.len() /
 /// output_channels` を除算している）。
 #[inline]
+/// master.buffer（常に 2ch）を hw（デバイス幅）へ置く。**hw の全要素を書き切る**
+/// （呼び出し側は事前の zero-fill をしない — RT ホットパスで二重に store しないため）。
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
-    if device_channels >= 2 {
-        for frame in 0..frames {
-            hw[frame * device_channels] = buf[frame * 2];
-            hw[frame * device_channels + 1] = buf[frame * 2 + 1];
-        }
-    } else if device_channels == 1 {
+    match device_channels {
+        0 => {}
         // mono デバイス: L+R を 0.5 でマージ（相関信号でクリップしない・設計 §2.2 Q-611-5 と同じ法則）。
-        for frame in 0..frames {
-            hw[frame] = (buf[frame * 2] + buf[frame * 2 + 1]) * 0.5;
+        1 => {
+            for frame in 0..frames {
+                hw[frame] = (buf[frame * 2] + buf[frame * 2 + 1]) * 0.5;
+            }
+        }
+        // 2ch は幅が一致するので memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。
+        2 => hw[..frames * 2].copy_from_slice(&buf[..frames * 2]),
+        // 3ch 以上: ch0/1 に置き、**余剰チャンネルはここで 0 にする**（Device 出口は master の
+        // 1 本だけなので、残りは無音が正しい）。
+        _ => {
+            for frame in 0..frames {
+                let base = frame * device_channels;
+                hw[base] = buf[frame * 2];
+                hw[base + 1] = buf[frame * 2 + 1];
+                for extra in &mut hw[base + 2..base + device_channels] {
+                    *extra = 0.0;
+                }
+            }
         }
     }
 }
@@ -2706,6 +2735,114 @@ mod tests {
         assert!(!snap.device_lost);
     }
 
+    /// hw を定数で埋める post-processor スタブ（engine render の無音を潰す）。
+    /// **master ラックが「音を生成・変形する」場合**を模す。
+    struct FillPost(f32);
+    impl PostProcessor for FillPost {
+        fn process(&mut self, data: &mut [f32]) {
+            data.fill(self.0);
+        }
+    }
+
+    /// 🔴 **これが #649 の残り半分を守る唯一のテスト**（2026-09-05・Fable 監査 I-1）。
+    ///
+    /// #649 の症状「`global.gain()` が instrument に効かない」は、instrument を mixer source へ
+    /// 移した `374e8b2d`（2026-08-29・main）で既に消えている。**gated `E2E-1` は main の rust でも
+    /// 緑になる**（実機で確認済み）ので、E2E-1 は本 PR の Rust 差分を何も守っていない。
+    ///
+    /// 残っていたのは**同じクラスの別の穴**: master ラック（`post`）が core の gain ramp の
+    /// **後**に走っていたので、**ラックが生成・変形した音は `global.gain()` を逃れていた**。
+    /// `MasterLine` は順序を `rack → gain` に固定してこれを塞ぐ（設計 §5.2）。
+    ///
+    /// このテストが赤になる変異: `render_block_with_sources` で `post.process` と
+    /// `advance_gain` の乗算を入れ替える（= main の順序に戻す）。その時 hw は 0.75 になる。
+    ///
+    /// **`Gain` のような線形ラックでは順序を区別できない**（乗算は可換）ので、DSL 経由の E2E では
+    /// この不変条件を測れない（`#611 O0-4` のテスト名が「a linear rack cannot show order」と
+    /// 言っているのはこのこと）。だからここはユニットで押さえる。
+    #[test]
+    fn master_gain_applies_after_the_master_rack_generates_sound() {
+        let engine = Engine::new(48_000, 2); // schedule 空 → render は無音（0.0）。
+        let mut link: Option<LinkEgress> = None;
+        let mut master = MasterLine::new(48_000, Some(Box::new(FillPost(0.75))));
+        master.ensure_buffer_len(8);
+        // ramp が 1 block で目標へ到達するよう、block を ramp_frames 以上にする（4 frames では
+        // 一次遅れの途中になるため、ここでは `gain_current` を直接置いて狙いを 1 つに絞る）。
+        master
+            .gain_target_handle()
+            .store(0.5_f32.to_bits(), Ordering::Relaxed);
+        master.gain_current = 0.5;
+        let mut capture: Option<RingTapSink> = None;
+        let cb_stats: Option<Arc<CallbackTimeStats>> = None;
+
+        let mut hw = vec![0.0f32; 8]; // 4 frames × 2ch。
+        render_block(
+            &engine,
+            &mut link,
+            &mut [],
+            &mut master,
+            &mut capture,
+            &cb_stats,
+            2,
+            &mut hw,
+        );
+
+        // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
+        // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
+        assert!(
+            hw.iter().all(|&s| (s - 0.375).abs() < 1e-6),
+            "master gain must attenuate what the master rack produced: {hw:?}"
+        );
+    }
+
+    /// `advance_gain` は block が ramp より長ければ 1 回で目標へ到達し、短ければ寄っていく。
+    #[test]
+    fn advance_gain_saturates_at_the_target_for_blocks_longer_than_the_ramp() {
+        let mut master = MasterLine::new(48_000, None);
+        master
+            .gain_target_handle()
+            .store(0.25_f32.to_bits(), Ordering::Relaxed);
+        // ramp_frames は 48_000 の 5 ms = 240。512 frame block は frac = 1.0 で即時到達。
+        assert!((master.advance_gain(512) - 0.25).abs() < 1e-6);
+
+        let mut slow = MasterLine::new(48_000, None);
+        slow.gain_target_handle()
+            .store(0.0_f32.to_bits(), Ordering::Relaxed);
+        // 64 frame block は frac = 64/240 なので 1 回では到達しない（が単調に近づく）。
+        let first = slow.advance_gain(64);
+        assert!(first < 1.0 && first > 0.0, "{first}");
+        let second = slow.advance_gain(64);
+        assert!(
+            second < first,
+            "gain must keep approaching the target: {first} -> {second}"
+        );
+    }
+
+    /// 3ch 以上のデバイスでは ch0/1 だけに置き、**ch2 以降には何も書かない**
+    /// （呼び出し側が zero-fill 済み）。8ch@2048 は #611 本文の実害そのもの。
+    #[test]
+    fn place_master_into_device_fills_only_the_first_two_channels() {
+        let buf = [0.1, 0.2, 0.3, 0.4]; // 2 frames × 2ch
+                                        // 🔴 前の内容を残した状態で渡す。呼び出し側は zero-fill しないので、**余剰チャンネルを
+                                        // 0 にするのはこの関数の責務**。0 埋め済みの hw を渡すと、その責務を検査できない。
+        let mut hw = vec![9.9f32; 2 * 8]; // 2 frames × 8ch
+        place_master_into_device(&buf, 2, 8, &mut hw);
+        assert_eq!(&hw[0..2], &[0.1, 0.2]);
+        assert!(hw[2..8].iter().all(|&s| s == 0.0), "{hw:?}");
+        assert_eq!(&hw[8..10], &[0.3, 0.4]);
+        assert!(hw[10..16].iter().all(|&s| s == 0.0), "{hw:?}");
+    }
+
+    /// mono デバイスは L+R を 0.5 でマージする（相関信号でクリップしない）。
+    #[test]
+    fn place_master_into_device_merges_to_mono_at_half_gain() {
+        let buf = [1.0, 1.0, 1.0, -1.0]; // frame0: 相関 / frame1: 逆相
+        let mut hw = vec![9.9f32; 2];
+        place_master_into_device(&buf, 2, 1, &mut hw);
+        assert!((hw[0] - 1.0).abs() < 1e-6, "{hw:?}");
+        assert!(hw[1].abs() < 1e-6, "{hw:?}");
+    }
+
     // #307 capture seam: render_block が capture へ渡すのは **post 適用後**の hw であることを
     // 実 device 抜きで pin する。post が hw を 0.75 に上書きするスタブを挿し、capture ring に
     // commit された値が 0.75（post 後）であって 0.0（engine render 直後の無音・post 前）でない
@@ -2714,14 +2851,6 @@ mod tests {
     #[test]
     fn render_block_captures_post_processed_hw() {
         use crate::link_audio_ring::RingTapSink;
-
-        // hw を一律 0.75 に上書きする post-processor スタブ（engine render の無音を潰す）。
-        struct FillPost(f32);
-        impl PostProcessor for FillPost {
-            fn process(&mut self, data: &mut [f32]) {
-                data.fill(self.0);
-            }
-        }
 
         let engine = Engine::new(48_000, 2); // schedule 空 → render は無音（0.0）。
         let mut link: Option<LinkEgress> = None;

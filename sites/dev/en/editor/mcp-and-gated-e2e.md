@@ -464,7 +464,7 @@ npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` a
 ### Launching the app — the `orbs` CLI and the Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:870-891
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:860-881
       const orbsBin = path.join(appPath, 'Contents/Resources/app/bin/orbs')
       child = spawn(
         orbsBin,
@@ -511,7 +511,7 @@ The pattern must never be widened to `Code` or `Electron`, it says in two places
 Capture can only be enabled by passing the `ORBIT_CAPTURE_WAV` environment variable at daemon spawn time. The extension auto-starts the engine during `activate()`, so the gated spec **stops the auto-started engine first**, then starts it again with capture.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1008-1013
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:998-1003
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -684,7 +684,7 @@ The onset threshold is the larger of "median window RMS × 4" and the absolute f
 The last assertion of the first test uses these onset gaps as evidence of tempo.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1549-1563
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1539-1553
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -709,7 +709,7 @@ The `#643` tests go one step further and compare RMS per time segment. Segment b
 This used to work the other way around: each operation's wall-clock time was recorded and mapped back onto the WAV from the capture end time. #739 removed that. The reverse mapping goes negative whenever the capture is shorter than the wall clock, and `Math.max(0, ...)` then **silently clamped it to the start of the file** — moving a window later made it measure earlier.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:270-275
+// tests/e2e/helpers/capture-windows.ts:293-298
 export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
   if (windows.length === 0) throw new Error('quadraticMeanRms requires at least one window')
   return Math.sqrt(
@@ -1079,7 +1079,7 @@ function shouldFilterLine(line: string): boolean {
 The playhead reads from the raw stream, and `[STEP]` never reaches the output channel (= `get_log`). This means **the only way to observe the playhead from MCP is debug mode**. In debug mode `transcribeLog` appends `output` as-is, so `[STEP]` lines appear in `get_log`. The `#654` E2E takes exactly that shape.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2210-2220
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2200-2210
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1094,13 +1094,13 @@ The playhead reads from the raw stream, and `[STEP]` never reaches the output ch
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2223-2224
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2213-2214
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2280-2282
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2270-2272
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

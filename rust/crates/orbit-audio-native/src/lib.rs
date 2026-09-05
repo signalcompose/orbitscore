@@ -22,7 +22,7 @@ pub use output::{
     start_default_output_with_insert_buses_sources_and_post, start_default_output_with_link_egress,
     start_default_output_with_sources, AudioDeviceInfo, BlockSource, BlockTransport, BusSend,
     BusTarget, InsertBusStage, LinkChannelActivate, OutputError, OutputStream, RenderState,
-    SourceDest, SourceDestCell, SourceSlot, StreamStats, StreamStatsSnapshot,
+    SourceDest, SourceDestCell, SourceSlot, StreamStats, StreamStatsSnapshot, ENGINE_CHANNELS,
     MAX_INSERT_BUS_STAGES, MAX_LINK_CHANNELS, MAX_SOURCE_SLOTS, MAX_SOURCE_UNITS,
 };
 pub use post_processor::{CallbackTimeSnapshot, CallbackTimeStats, PostProcessor};
