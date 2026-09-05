@@ -292,8 +292,11 @@ audio sequence と instrument sequence の両方で使える。既存 `output(su
   宣言であって、いま鳴っている経路の指示ではない。これが live routing を壊すと、
   `global.linkAudio()` セッションで `kick.output("Kick Ch")` が稼働中に
   レンダ準備として `kick.output(1)` と書き足した瞬間、`_outputChannel` が消えて
-  次の schedule で `resolveDispatchChannel()` が throw し、**ライブ中に kick が停止する**
-  （2026-08-01 の #612 監査で特定）
+  次の schedule で `resolveDispatchChannel()` が「has no .output() channel set」の skip 判定に落ち、
+  **ライブ中に kick が無音になる**（2026-08-01 の #612 監査で特定）。
+  🔴 #645 PR-D0（2026-09-04）以降、この経路は throw ではなく**無音スキップ + ログ**である
+  （core spec §8.1.2 参照）。他の sequence を巻き添えにはしなくなったが、
+  **意図しない skip 自体は今も避けるべき事故**なので、非対称の理由は変わらない
 - **live → オフライン方向を許す理由**: オフラインレンダは P2 まで走らないので、
   live 宛先の宣言が render bus を落としても失うものが無い。むしろ
   「もう使わない render bus が残り続ける」stale を防げる
