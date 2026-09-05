@@ -5263,7 +5263,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
-    '#661 D-2/D-3 keeps audio live across requested-device liveness failures',
+    '#661 D-2 falls back from a dead named device at startup and stays audible',
     async () => {
       // This is a dedicated app process because startup fault injection is immutable typed state;
       // changing it in the shared long-running suite would invalidate all following scenarios.
@@ -5275,7 +5275,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             execFileSync(daemonBinary, ['--list-audio-devices'], { encoding: 'utf8' }),
           ) as { devices: Array<{ name: string; isDefault: boolean }> }
           const requested = listed.devices.find((device) => device.isDefault) ?? listed.devices[0]
-          expect(requested, '#661 D-2/D-3 require an output device').toBeDefined()
+          expect(requested, '#661 D-2 requires an output device').toBeDefined()
           return {
             'orbitscore.audioDevice': requested!.name,
             'orbitscore.engineDebug': false,
@@ -5331,6 +5331,67 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           captured!.rms('playing'),
           '#661 D-2 fallback output must be audible',
         ).toBeGreaterThan(0)
+      } finally {
+        try {
+          await faultClient.call('stop_engine')
+        } catch {
+          // best-effort cleanup
+        }
+        if (!faultChild.killed) faultChild.kill()
+        fs.rmSync(faultTmpRoot, { recursive: true, force: true })
+      }
+    },
+    TEST_TIMEOUT_MS * 2,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#661 D-3 keeps the old stream playing when a live switch candidate is dead',
+    async () => {
+      // 🔴 D-2 とアプリを分ける理由（2026-09-05 実機で踏んだ）:
+      // `select_audio_device` は UI のクリック挙動を共有していて、`resolveDeviceClickAction`
+      // （`extension.ts:3297-3310`）が **要求デバイス == 現在の設定** を「選択解除」と解釈する。
+      // D-2 のアプリは `orbitscore.audioDevice` に既定デバイス名を持つので、D-3 が同じ名前を
+      // 要求すると**切替ではなくトグル**になり `audio device deselected and engine stopped` が返る。
+      // D-3 は**デバイス無指定で起動**し、既定デバイスを名前で要求することで本当の切替にする。
+      // `dead-probe-requested` は「要求された」デバイスに効くので、その probe が死ぬ。
+      const launched = await launchIsolatedOrbitStudio({
+        tmpPrefix: 'orbitstudio-device-switch-',
+        settings: { 'orbitscore.audioDevice': '__default__', 'orbitscore.engineDebug': false },
+        env: {
+          ...process.env,
+          ORBIT_DAEMON_ALLOW_FAULT_INJECTION: '1',
+          ORBIT_AUDIO_OUTPUT_FAULT: 'dead-probe-requested',
+        },
+        portBase: 39800,
+        prepareWorkspace: (faultTmpRoot) => {
+          fs.mkdirSync(path.join(faultTmpRoot, 'test-assets/audio'), { recursive: true })
+          fs.copyFileSync(
+            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
+            path.join(faultTmpRoot, 'test-assets/audio/kick.wav'),
+          )
+        },
+      })
+      const { child: faultChild, tmpRoot: faultTmpRoot } = launched
+      const faultClient = launched.client
+      try {
+        await waitUntil(
+          async () => {
+            const state = await faultClient!.call('get_engine_state')
+            return (JSON.parse(state.text) as { running: boolean }).running
+          },
+          { intervalMs: 500, timeoutMs: 30_000, label: '#661 D-3 engine running' },
+        )
+        const emptyCatalog: GatedCatalog = {
+          clapSynthPath: '',
+          clapEffectPath: '',
+          vst3SynthPath: '',
+          vst3EffectPath: '',
+          clapSynthName: '',
+          clapEffectName: '',
+          vst3SynthName: '',
+          vst3EffectName: '',
+        }
+        const faultSession = createGatedSession(faultClient, faultTmpRoot, emptyCatalog)
 
         // D-3 precondition: this run fixes the formerly missing capture option and proves the
         // selected/fallback output is audible before exercising the live-switch path.
