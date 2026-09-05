@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: c2010db
-verified-at: "2026-09-04"
+verified-against: ef192ca
+verified-at: "2026-09-05"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 and to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, and to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -26,12 +26,13 @@ They look like three independent features, but a single line — the engine's st
 2. [Startup conditions and the HTTP layer](#startup-conditions-and-the-http-layer)
 3. [Tool catalogue](#tool-catalogue)
 4. [What `ok` from `evaluate_orbitscore` means](#what-ok-from-evaluate_orbitscore-means)
-5. [`get_log` and the ring buffer](#get_log-and-the-ring-buffer)
-6. [The gated E2E harness — driving the real OrbitStudio.app through MCP alone](#the-gated-e2e-harness--driving-the-real-orbitstudioapp-through-mcp-alone)
-7. [Capture WAV and RMS assertions](#capture-wav-and-rms-assertions)
-8. [Turning discipline into mechanism — the ratchet and assertion hygiene](#turning-discipline-into-mechanism--the-ratchet-and-assertion-hygiene)
-9. [The live playhead — from `[STEP]` lines to decorations](#the-live-playhead--from-step-lines-to-decorations)
-10. [Running it locally](#running-it-locally)
+5. [`get_engine_state` — no longer just `running`](#get_engine_state--no-longer-just-running)
+6. [`get_log` and the ring buffer](#get_log-and-the-ring-buffer)
+7. [The gated E2E harness — driving the real OrbitStudio.app through MCP alone](#the-gated-e2e-harness--driving-the-real-orbitstudioapp-through-mcp-alone)
+8. [Capture WAV and RMS assertions](#capture-wav-and-rms-assertions)
+9. [Turning discipline into mechanism — the ratchet and assertion hygiene](#turning-discipline-into-mechanism--the-ratchet-and-assertion-hygiene)
+10. [The live playhead — from `[STEP]` lines to decorations](#the-live-playhead--from-step-lines-to-decorations)
+11. [Running it locally](#running-it-locally)
 
 ---
 
@@ -200,7 +201,7 @@ The tools registered by `buildServer()` via `registerTool`, grouped by role (the
 | **Evaluation** | `evaluate_orbitscore` | Send `.orbs` source to the engine, wait for evaluation to finish, and report whether parse / runtime diagnostics were raised |
 | **Engine lifecycle** | `start_engine` | Start the engine (Rust daemon). `capture_wav` records the master output to a WAV; `debug: true` gives verbose logging |
 | | `stop_engine` | Stop the engine |
-| | `get_engine_state` | Return `{ running, liveCoding }` |
+| | `get_engine_state` | Return `{ running, liveCoding }` plus the `output` / `callback` snapshots taken from the daemon's `GetStatus` (or `statusError` when they cannot be read) |
 | | `force_kill_scsynth` | `killall` stray scsynth processes (an escape hatch for the SuperCollider path) |
 | **Audio devices** | `list_audio_devices` / `select_audio_device` | Enumerate and select devices (on the Rust engine, list is unimplemented and select switches live) |
 | **Editor operations** | `open_file` | `openTextDocument` + `showTextDocument` |
@@ -330,6 +331,70 @@ The engine answers with a JSON line `{"evalMark": {...}}` on stdout, and `setupS
 So after `#614`, is `get_log` unnecessary? **No.** What `ok` guarantees is that no diagnostics were raised by the engine up to the point the marker was reached. Failures that occur asynchronously after the evaluation returns still appear only in stdout/stderr. The gated spec itself shows the division of labour: after evaluating `instSeq.instrument(...)` with `evaluate_orbitscore` and confirming `isError` is `false`, it does `sleep(6000)`, then reads `get_log` and asserts separately that `[OUTPROC_ATTACH_FAILED]` is absent (`tests/e2e/orbitstudio-mcp-gated.spec.ts:1017-1029`). An out-of-process CLAP attach involves a spawn plus an IPC handshake, so the completion of the evaluation and the success of the attach live on different timelines.
 
 The comment in `log-ring.ts` still carried its pre-`#614` wording ("`get_log` is the **only channel** in which engine-side errors appear"); this PR rewords it to "the **only channel in which failures that happen asynchronously after evaluation returns** appear". The three matching passages in `CLAUDE.md` ("asserting on `ok` proves nothing") were updated to the post-`#614` meaning as well. **The range over which `ok` carries meaning has widened, but there is still a region where `get_log` is the only observation point** — that is the accurate understanding as of 2026-09-02.
+
+---
+
+## `get_engine_state` — no longer just `running`
+
+It is no accident that the `{"engineState"` branch sits next to `{"evalMark"`. With #661, `get_engine_state` stopped being a tool that only answers "is the extension's engine process alive" and became one that answers **which device the daemon is actually sending audio to**. The return type tells the story by itself.
+
+```typescript
+// packages/vscode-extension/src/mcp-server.ts:106-113
+/** Snapshot of the engine process state. */
+export interface EngineState {
+  running: boolean
+  liveCoding: boolean
+  output?: Record<string, unknown>
+  callback?: Record<string, unknown>
+  statusError?: string
+}
+```
+
+`output` and `callback` carry the daemon's `GetStatus` payload as-is (for their contents see the `GetStatus` section of [`docs/research/ENGINE_DAEMON_PROTOCOL.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/research/ENGINE_DAEMON_PROTOCOL.md)). The path has the same shape as `evalMark`: the extension writes `//#getEngineState {"requestId":…}` to the engine's stdin, and the engine's REPL reads it and returns one `{"engineState": …}` line on stdout. The engine-side entry point is the `GET_ENGINE_STATE_META_RE` branch in `packages/engine/src/cli/repl-mode.ts`, which calls `AudioEngineBackend.getDaemonStatus()`.
+
+What to watch here is that **all three fields are optional**. When the daemon's state cannot be read, the tool does not throw — it returns whatever it does know.
+
+```typescript
+// packages/vscode-extension/src/engine-state-bridge.ts:123-138
+export async function resolveEngineState(
+  base: Pick<EngineState, 'running' | 'liveCoding'>,
+  fetchStatus: () => Promise<EngineStatusBridgeResult>,
+): Promise<EngineState> {
+  if (!base.running) return { ...base }
+  try {
+    const status = await fetchStatus()
+    if (!status.ok) return { ...base, statusError: status.error }
+    return { ...base, output: status.output, callback: status.callback }
+  } catch (error) {
+    return {
+      ...base,
+      statusError: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+```
+
+There are three branches (not running / the bridge answered `ok:false` / the bridge itself rejected), and every one of them still returns `running`. The implementation comment gives the reason: an LLM uses this as its only window onto "what is happening right now", so returning `running` alone is more useful than returning nothing.
+
+The query budget is 2.5 seconds. That looks short, but it is the result of deciding that a longer budget would buy nothing.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:3196-3207
+ * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
+ * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
+ * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
+ * （instrument の attach は実測 30 秒超）の最中は、**どんな予算でも答えは返らない**。
+ * 予算を伸ばして得られるのは「同じ `statusError` を返すまでに何秒ブロックするか」だけで、
+ * 対話的なツール呼び出しとしては短く degrade する方が良い。
+ *
+ * `running` は同期に分かるので、状態が取れなくても `{running, statusError}` は必ず返る。
+ * **長い処理の最中にも状態を見せたいなら、必要なのは予算ではなく `//#getEngineState` を
+ * キューの外で処理すること**（別 issue）。
+ */
+const ENGINE_STATE_QUERY_BUDGET_MS = 2_500
+```
+
+So `statusError` does not necessarily mean "the daemon is broken" — it can equally mean "**the REPL queue is currently blocked by a long operation**". Telling those two apart requires reading `get_log` alongside it, exactly as with the `ok` of `evaluate_orbitscore`.
 
 ---
 
