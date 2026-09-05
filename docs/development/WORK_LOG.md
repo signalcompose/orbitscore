@@ -17,6 +17,54 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow up the merged #606 in the protocol spec and the dev site (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `claude/docs-sync-pr738` / **追従元**: PR #738（merge commit `46f5d7a`）
+
+マージ済み PR #738 に対するドキュメント追従。**実装・テストは一切変更していない。**
+
+#### 直したもの
+
+- **`docs/research/ENGINE_DAEMON_PROTOCOL.md`**: `PluginAllNotesOff` の説明が
+  「active note を **drain** し」のままだった。実装はレビュー ラウンド1 で
+  **clone した snapshot から送出し、解放できた entry だけを除去する**形へ反転している
+  （`engine_wrap.rs:7268-7317`）ので、記述が実装と食い違っていた。あわせて
+  **`failed` の note は台帳に残り次回再試行される**ことと、session 切断 trigger が
+  発火するのは**最後の確立済み session が切れたときだけ**であること（`session.rs:1271-1284`）を追記
+- **`sites/dev/rust-engine/index.md`（+ en）**: daemon の RPC 表に `PluginAllNotesOff` の行が
+  無かった。`GetStatus` の行にも `active_plugin_notes` が反映されていなかった。
+  `SessionRegistration` と切断 trigger の解説を追加（`Drop` が解放を行わない理由も含む）
+- **`sites/dev/scheduling/transport.md`（+ en）**: `seq.stop()` の箇条書きが
+  「ループタイマーをキャンセルする」のままで、RUN 尻尾タイマーに触れていなかった。
+  ハンドル保持（`runTimer`）と `tailDelay` の原点整合の解説を追加
+- 上記 2 章は frontmatter の `verified-against` / `verified-at` を `46f5d7a` / `2026-09-05` へ更新
+
+#### 引用の再アンカーで欠けていた行の復元
+
+PR #738 は `check-citations --fix` で引用窓をずらしており、その結果
+**閉じ括弧が窓から外れた**引用が 2 箇所あった（コード片が途中で切れて見える）。
+実ファイルを読み直して範囲を延ばした。
+
+| 引用 | 変更 |
+|---|---|
+| `session.rs`（rust-engine/index.md・en 両方） | `739-766` → `739-767`（`};` を復元） |
+| `sequence.ts`（scheduling/transport.md・en 両方） | `1855-1880` → `1855-1883`（`return this` / `}` を復元） |
+
+#### 検証
+
+- `npm run docs:check` — **930 citations verified / 0 failed**（追従前 926）
+- `npm run docs:build -w @orbitscore/user-site` — build complete
+- `npm run docs:build -w @orbitscore/dev-site` — build complete
+
+#### 追従せず報告に回したもの
+
+- `GetStatus.active_plugin_notes` に **TS 側の読み手が 1 件も無い**
+  （`packages/` / `tests/` を grep して 0 件）。設計 §1 H4 の問題意識が
+  「台帳に読み手が 0 件」だったので、daemon 側だけ実装して**MCP から読めない片翼状態**になっている
+- `SYNTAX_UNCOVERED_BASELINE` の `transport-run` / `transport-loop` は、#738 が足した
+  T1 / E2E-K3 が実際に `RUN(...)` / `LOOP(...)` を評価しているのに残ったまま。
+  🔴 **baseline は実機で緑を確認した者だけが減らせる**ので、ここでは編集していない
+
 ### fix(661): close the review round-2 findings across all four layers (#661) (Sep 5, 2026)
 
 **Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748

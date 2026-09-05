@@ -1,12 +1,12 @@
 ---
 title: "II-4. transport"
 chapter-id: "II-4"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 46f5d7a
+verified-at: "2026-09-05"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡に、2026-09-05 の #606（RUN 尻尾タイマーの保持と原点の整合）を追補したものです。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # II-4. transport
 
@@ -493,10 +493,16 @@ stateDiagram-v2
 
 - `seq.run()` → 1 回だけパターンを再生して止まる (one-shot)。quantize の影響を受けない
 - `seq.loop()` → `nextQuantizedTime()` で求めた次の境界から、`setTimeout` チェーンで永続的にループ
-- `seq.stop()` → イベントをクリアし、ループタイマーをキャンセルする
+- `seq.stop()` → イベントをクリアし、ループタイマーと RUN の尻尾タイマーをキャンセルする
+
+`stop()` が消すタイマーが 2 種類あるのは #606 で入った変更です。それまで `run()` の終端タイマーは
+`setTimeout` の返り値を捨てていて、**キャンセルする手段がありませんでした**。そのため古い RUN の
+尻尾が、あとから始まった再生のイベントを消してしまう、という取り違えが起こり得ます。いまは
+`StateManager` が `runTimer` としてハンドルを保持し、`run()` / `loop()` / `stop()` の入口で
+`clearRunTimer()` が先に走るようになっています。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1855-1880
+// packages/engine/src/core/sequence.ts:1855-1883
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()
@@ -523,6 +529,29 @@ stateDiagram-v2
     if (wasLooping) {
       console.log(`⏹ ${sequenceName} (loop stopped)`)
     }
+
+    return this
+  }
+```
+
+尻尾タイマーの **delay の測り方**にも一手が入っています。以前は「今」から `patternDuration` だけ
+待っていたのですが、イベント自体は `currentTime + 100` を原点に並びます。つまり尻尾が約 100 ms
+早く来ていて、末尾スロットが消えることになります。修正後は、実際にイベントを置いた原点との差を
+足した `patternDuration + (scheduleTime - currentTime)` を使います。定数 `100` を直に書かずに差で
+書いてあるのは、`scheduleTime` の決め方が変わっても自動で追随させるためです。
+
+```typescript
+// packages/engine/src/core/sequence/playback/run-sequence.ts:62-71
+  // 🔴 `+ 100` と直に書かない。尻尾は**イベントを実際に置いた原点**から測る必要があり、
+  // 差で書いておくと `scheduleTime` の決め方が変わっても自動で追随する。この整合こそが
+  // 「RUN 終端で音が止まる」の前提なので、定数へ畳んで結合を切らないこと。
+  const tailDelay = patternDuration + (scheduleTime - currentTime)
+  const runTimer = setTimeout(() => {
+    setRunTimerFn(undefined)
+    clearSequenceEventsFn(sequenceName)
+    console.log(`⏹ ${sequenceName} (finished)`)
+  }, tailDelay)
+  setRunTimerFn(runTimer)
 ```
 
 ここで 2026-05 版の記述を 1 つ訂正しておきます。2026-05 版は「global が止まっても各シーケンスの loop タイマー自体は動き続け、再度 `global.start()` したとき各シーケンスは自分の次のイテレーションで再び音を出す」と書いていましたが、`TransportControl.stop()` は**全シーケンスの `stop()` を先に呼ぶ**ので、ループタイマーはそこで `clearTimeout` されます。`global.stop()` → `global.start()` のあとにシーケンスを鳴らすには、`LOOP()` / `RUN()` を再評価する必要があります。2026-05 時点の `transport-control.ts:43-59` も同じ code だったので、これは drift ではなく元の読み違いです。

@@ -1,12 +1,12 @@
 ---
 title: "II-4. Transport"
 chapter-id: "II-4"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 46f5d7a
+verified-at: "2026-09-05"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, with the 2026-09-05 additions from #606 (holding the RUN tail timer and aligning its origin). The code is the truth; this page is only a snapshot of understanding at that time.
 
 # II-4. Transport
 
@@ -493,10 +493,16 @@ The sequence side also has `run()`, `loop()`, and `stop()`. From the DSL they ar
 
 - `seq.run()` → plays the pattern once and stops (one-shot). Unaffected by quantize
 - `seq.loop()` → loops continuously via a `setTimeout` chain, starting from the next boundary found by `nextQuantizedTime()`
-- `seq.stop()` → clears events and cancels the loop timer
+- `seq.stop()` → clears events and cancels both the loop timer and the RUN tail timer
+
+There being two kinds of timer to clear is a change that arrived with #606. Until then the tail
+timer of `run()` threw away the return value of `setTimeout`, so **there was no way to cancel it**.
+That allows a mix-up in which the tail of an old RUN wipes out the events of a playback that
+started later. The handle is now held by `StateManager` as `runTimer`, and `clearRunTimer()` runs
+first at the entry of `run()` / `loop()` / `stop()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1855-1880
+// packages/engine/src/core/sequence.ts:1855-1883
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()
@@ -523,6 +529,30 @@ The sequence side also has `run()`, `loop()`, and `stop()`. From the DSL they ar
     if (wasLooping) {
       console.log(`⏹ ${sequenceName} (loop stopped)`)
     }
+
+    return this
+  }
+```
+
+**How the tail delay is measured** also received a fix. It used to wait `patternDuration` from
+"now", but the events themselves are laid out from an origin of `currentTime + 100`. The tail
+therefore arrived roughly 100 ms early, which drops the last slot. The corrected version uses
+`patternDuration + (scheduleTime - currentTime)`, adding the difference against the origin the
+events were actually placed at. Writing it as a difference rather than a literal `100` is what
+makes it follow along automatically if the way `scheduleTime` is decided ever changes.
+
+```typescript
+// packages/engine/src/core/sequence/playback/run-sequence.ts:62-71
+  // 🔴 `+ 100` と直に書かない。尻尾は**イベントを実際に置いた原点**から測る必要があり、
+  // 差で書いておくと `scheduleTime` の決め方が変わっても自動で追随する。この整合こそが
+  // 「RUN 終端で音が止まる」の前提なので、定数へ畳んで結合を切らないこと。
+  const tailDelay = patternDuration + (scheduleTime - currentTime)
+  const runTimer = setTimeout(() => {
+    setRunTimerFn(undefined)
+    clearSequenceEventsFn(sequenceName)
+    console.log(`⏹ ${sequenceName} (finished)`)
+  }, tailDelay)
+  setRunTimerFn(runTimer)
 ```
 
 Here one statement of the 2026-05 version needs correcting. The 2026-05 version wrote that "even if global stops, each sequence's loop timer keeps running, and when `global.start()` is called again each sequence produces sound at its next iteration," but `TransportControl.stop()` **calls `stop()` on every sequence first**, so the loop timers are `clearTimeout`ed there. To make sequences sound again after `global.stop()` → `global.start()`, `LOOP()` / `RUN()` must be re-evaluated. `transport-control.ts:43-59` was the same code as of 2026-05, so this is not drift but a misreading in the original.
