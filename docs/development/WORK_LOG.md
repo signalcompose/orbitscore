@@ -17,6 +17,82 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(daemon): unlink orphaned outproc shm at startup (Sep 6, 2026)
+
+**ブランチ**: `779-startup-shm-sweep`（束 `780-merge-gate` の小 PR・Part of #779）
+
+daemon が SIGTERM / SIGKILL / panic で死ぬと `Drop` が走らず、out-of-process の共有メモリが
+`$TMPDIR` に残る（#779）。**起動時に孤児を回収する経路**を足した。
+
+#### 🔴 起案時の前提のうち 2 つが一次ソースで否定された
+
+| 前提 | 実際 |
+|---|---|
+| 「`Drop` がサイドカーを消していない」 | **誤り。** effect の `Drop` は `.chain.json` と `.apply.json` を両方消している（`outproc_effect.rs:1078-1088`）。**`:1077` で読むのを止めたのが原因** |
+| 「`.respawn-args` が漏れている」 | **test 専用**。書き手は fixture script のみ、読み手 3 箇所はすべて test module 内 |
+
+したがって **`Drop` には手を入れていない**。
+
+#### 🔴 漏れるのは `pkill` の時だけではない
+
+通常の `stop_engine` も `killChildGracefully` が **SIGTERM** を送り、daemon に SIGTERM ハンドラが
+無い（`main.rs:21-25` が既知事項として記載済み）ので `Drop` は走らない。**engine を止めるたびに
+約 25 ファイル漏れる**。
+
+#### 設計（Fable 起案・main が 3 点を一次ソースで検証）
+
+- **述語は 3 値**: `libc::kill(pid, 0)` を `Alive` / `Dead`(ESRCH) / `Unknown`(EPERM 等) に写す。
+  🔴 **削除を許す腕は `Dead` と自 PID だけ**。`bool is_alive` にすると EPERM（プロセスは存在するが
+  権限が無い）が死亡側へ落ちて**生きている shm を消す**
+- 🔴 **プロセス名で「daemon かどうか」を照合する案は却下**。`cargo test` のテストバイナリも同じ
+  名前の shm を作るので、照合すると**走行中のテストの mmap 先を unlink する** — #780 とまったく
+  同じ故障を新しく作ることになる
+- **年齢下限 2 秒**（TOCTOU の保険）。macOS では **mmap 経由の書き込みは msync まで mtime を進めず、
+  SIGKILL でも進まない**ことを実験で確認したので、この下限は「起動から 2 秒未満で死んだ daemon を
+  1 回先送りにする」以上の意味を持たない
+- **置き場所**は `main.rs::run()` の `StartupOptions::from_env()` の後・`start_engine_with_device_switch`
+  の前。🔴 **最初の shm 生成より前であることが自 PID 規則の正当性要件**
+- 診断は **`tracing::info!` 1 行**。`eprintln!` は使わない（stderr は ERROR に分類され、gated の
+  「ERROR 増 0」を自分で落とす）
+
+#### 変更
+
+| ファイル | 内容 |
+|---|---|
+| `outproc_shm_sweep.rs`（新規・cfg 無し） | 述語・parse・`sweep_dir`（純粋）・`sweep_orphaned_outproc_shm`（薄い殻）+ unit 6 本 |
+| `main.rs` | 段 0 と段 1 の間で 1 行呼ぶ |
+| `outproc_effect.rs` / `outproc_instrument.rs` | `unique_shm_path()` の `format!` を共有定数 `OUTPROC_SHM_PREFIX` で書く（生成側と走査側で名前がずれない） |
+| `orbitstudio-mcp-gated.spec.ts` | gated E2E 1 本（死亡 PID のファイルを植えて消えること・**生存 PID のは残ること**を FS で確認） |
+
+#### 検証（main が sandbox 外で実測）
+
+| 項目 | 結果 |
+|---|---|
+| `check-cfg-matrix.sh --clippy` | **4 象限すべて緑** |
+| `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument` | **274 passed / 0 failed**（protocol 32 passed） |
+| sweep のユニット 6 本 | 全 ok |
+| `npm run typecheck:e2e` | exit 0 |
+| 変異 3 種（`Unknown` を削除側へ / 年齢下限 0 / 自 PID 規則を外す） | 委譲先が**それぞれ赤の実出力**を提出 |
+
+🔴 委譲先が sandbox で「`tests/protocol.rs` 32 件 FAILED」と報告していたのは **localhost bind が
+塞がれていたため**で、sandbox 外では 32 passed。**委譲先の赤も緑も、main が回し直すまでは根拠に
+ならない**。
+
+#### 🔴 これは緩和であって根治ではない
+
+SIGTERM ハンドラの追加は別 issue（#448 / `main.rs` のコメントが「本 issue のスコープ外」と明記）。
+掃除は**次回起動時**に効くので、定常状態は **0 ではなく 25〜60 ファイル**に収束する。
+
+#### 検証時の落とし穴（実測）
+
+`$TMPDIR` は実行環境で別のディレクトリを指す。**測るシェルは run と同じ環境でなければ意味がない。**
+
+| ディレクトリ | 漏れ | PID 種類 |
+|---|---|---|
+| `/var/folders/kf/.../T`（通常起動の daemon） | 957 | 37（全部死亡） |
+| `/tmp/claude-501`（sandbox 内のシェル） | 152 | 13 |
+
+
 ### docs(planning): split the E-env bundle so stage 2 is not blocked by measurement noise (Sep 6, 2026)
 
 **ブランチ**: `779-restructure-e-env-bundles`

@@ -953,6 +953,7 @@ name = "orbit-audio-daemon"
 version = "0.0.1"
 dependencies = [
  "futures-util",
+ "libc",
  "orbit-audio-core",
  "orbit-audio-native",
  "orbit-audio-sandbox",

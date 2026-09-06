@@ -39,7 +39,7 @@
  * killing the user's actual VS Code is a known past incident.
  */
 
-import { spawn, execFileSync, type ChildProcess } from 'child_process'
+import { spawn, spawnSync, execFileSync, type ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -5389,6 +5389,68 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           process.kill(daemonPid, 'SIGTERM')
         }
         await session.client.call('stop_engine')
+      }
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#779 startup sweep unlinks orphaned outproc shm but keeps live ones',
+    async () => {
+      const launched = await launchIsolatedOrbitStudio({
+        tmpPrefix: 'orbitstudio-shm-sweep-',
+        settings: {
+          'orbitscore.audioDevice': '__default__',
+          'orbitscore.engineDebug': false,
+        },
+        env: { ...process.env },
+        portBase: 39700,
+      })
+      const { child: sweepApp, client: sweepClient, tmpRoot: sweepTmpRoot } = launched
+      const planted: string[] = []
+      try {
+        await sweepClient.call('stop_engine')
+        await waitForEngineState(sweepClient, false, 15_000, '#779 precondition')
+
+        const reaped = spawnSync('true')
+        expect(reaped.status, 'dead-PID fixture process must exit successfully').toBe(0)
+        expect(reaped.pid, 'dead-PID fixture must expose its PID').toBeGreaterThan(0)
+        const deadShm = path.join(os.tmpdir(), `orbit-outproc-effect-${reaped.pid}-0.shm`)
+        const deadSidecar = `${deadShm}.chain.json`
+        const liveShm = path.join(os.tmpdir(), `orbit-outproc-instrument-${process.pid}-999.shm`)
+        planted.push(deadShm, deadSidecar, liveShm)
+        const old = new Date(Date.now() - 60_000)
+        for (const file of planted) {
+          fs.writeFileSync(file, 'sweep fixture')
+          fs.utimesSync(file, old, old)
+        }
+
+        const errorsBefore = countErrors((await sweepClient.call('get_log', { lines: 500 })).text)
+        const started = await sweepClient.call('start_engine')
+        expect(started.isError, started.text).toBe(false)
+        await waitForEngineState(sweepClient, true, 15_000, '#779 swept engine')
+
+        expect(fs.existsSync(deadShm), 'dead PID shm must be swept').toBe(false)
+        expect(fs.existsSync(deadSidecar), 'dead PID sidecar must be swept').toBe(false)
+        expect(fs.existsSync(liveShm), 'live PID shm must be preserved').toBe(true)
+        const log = (await sweepClient.call('get_log', { lines: 500 })).text
+        const summary = [...log.matchAll(/\[outproc-shm-sweep\][^\n]*removed=(\d+)/g)].at(-1)
+        expect(
+          Number(summary?.[1] ?? 0),
+          `missing sweep summary in log: ${log.slice(-1600)}`,
+        ).toBeGreaterThanOrEqual(2)
+        expect(countErrors(log), 'startup sweep must not add ERROR lines').toBeLessThanOrEqual(
+          errorsBefore,
+        )
+      } finally {
+        for (const file of planted) fs.rmSync(file, { force: true })
+        try {
+          await sweepClient.call('stop_engine')
+        } catch {
+          // best-effort cleanup
+        }
+        if (!sweepApp.killed) sweepApp.kill()
+        fs.rmSync(sweepTmpRoot, { recursive: true, force: true })
       }
     },
     TEST_TIMEOUT_MS,
