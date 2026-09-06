@@ -1565,17 +1565,6 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
 }
 
 /**
- * Setup stderr handler for engine process.
- *
- * #527 review round 5 Minor #2: wrapped in the same try/catch +
- * `logHandlerFailure` containment as the other three listener bodies above —
- * this one had been left unwrapped despite the crash-containment note two
- * functions up describing the danger in general terms for "every listener
- * body registered on the engine process". `outputChannel?.append` has no
- * realistic throw path today, so this is a symmetry fix, not a fix for an
- * observed failure.
- */
-/**
  * chunk 列を**行**に整え、完成した行だけを `emit` へ渡す。未完了の末尾は次の chunk まで持ち越す。
  *
  * 🔴 なぜ要るか（#756）: `setupStderrHandler` は `outputChannel.append('ERROR: ' + chunk)` と
@@ -1615,6 +1604,20 @@ export function createLinePrefixer(emit: (line: string) => void): {
   }
 }
 
+/**
+ * Setup stderr handler for engine process.
+ *
+ * #527 review round 5 Minor #2: wrapped in the same try/catch +
+ * `logHandlerFailure` containment as the other three listener bodies above —
+ * this one had been left unwrapped despite the crash-containment note two
+ * functions up describing the danger in general terms for "every listener
+ * body registered on the engine process". The output channel has no realistic
+ * throw path today, so that part is a symmetry fix, not a fix for an observed
+ * failure.
+ *
+ * 🔴 #756: 前置は `createLinePrefixer` を通して**行単位**で行う（chunk 単位だと同じ chunk の
+ * 2 行目以降に `ERROR:` が付かず、gated E2E の ERROR 会計が構造的に過小カウントする）。
+ */
 export function setupStderrHandler(process: child_process.ChildProcess): void {
   const prefixer = createLinePrefixer((line) => {
     outputChannel?.appendLine(`ERROR: ${line}`)
