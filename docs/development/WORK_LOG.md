@@ -69,6 +69,256 @@ op としてラックの**後**に必ず来る」。
 
 ---
 
+### docs(planning): record the eight issues cut out of the stage-1 must-fix work (#763) (Sep 5, 2026)
+
+**Issue**: #763 / **ブランチ**: `763-record-cut-out-issues` / **PR** #764（マージ済み `490dc32c`）
+
+段 1（#645 / #606 / #385 / #661 / #649）の must-fix を進める中でスコープ外として切り出した
+issue 8 本を、地図と実装計画に記録した。切り出したまま放置すると「誰も追わない deferred」に
+なるため、置き場と着手の目安を書いた。**docs のみの変更**（コード・テストは触っていない）。
+
+#### 地図（`docs/planning/DEVELOPMENT_MAP.md`）
+
+| 節 | 内容 |
+|---|---|
+| §4.H バッチ A | **#661 を ✅ に更新**（PR #748 でマージ済み）。**A' 行**を追加 |
+| **§4.H.A'**（新設） | #661 から派生した 3 件（**#755** / **#759** / **#758**）と「なぜ #661 で直さなかったか」 |
+| §4.G | 測定器の欠陥 3 件（**#761** / **#756** / **#760**） |
+| **§4.J.1**（新設） | 拡張・daemon の内部整理（**#757** / **#752**）。振る舞いを変えないので急がないが、放置すると次の変更が高くつく類 |
+
+#### 実装計画（`docs/planning/IMPLEMENTATION_PLAN_2026-09.md`）
+
+- **§1.8 PR-V**: 「PR-V3 + PR-V4 は PR #748 でマージ済み・#661 は CLOSED」と owner 裁定を追記し、
+  派生 3 件を **PR-V10 / PR-V6 / PR-V6 の後**へ割り当てた
+- **§1.10 PR-E**: 測定器の欠陥 3 件と着手の順序（#761 は着手可 / #756 は #649 の baseline 比較の
+  後 / #760 は独立）
+
+#### 🔴 記録して見えたこと
+
+**#761 / #756 / #760 は 3 本とも「測定器の欠陥」**で、いずれも「**実装が正しいのにテストが
+赤 / 緑になる**」型だった。#649 も #661 も同じ形だったので、偶然ではなく**この段の主題**として
+計画に束ねている。
+
+#### あわせて直したもの
+
+`DEVELOPMENT_MAP.md` に**存在しない §4.H.1 への参照**（599 行目）があったので §4.H へ寄せた。
+新しい節は §4.H.A' と名付けて番号の衝突を避けている。
+
+#### 検証
+
+`docs:check` **926 verified / 0 failed**。コード変更なしのためビルド・実機 E2E は不要
+（CLAUDE.md「docs のみの変更」）。CI は `code-review` / `fmt / clippy / test` /
+`license / dependency gate` の 3 件すべて success。
+### docs(planning): record the #385 layer-2 deferral on the map (Sep 5, 2026)
+
+**Issue**: #385 / **ブランチ**: `385-map-record-trust-layer-2`
+
+owner 判断（2026-09-05）で **#385 は段 1（must-fix の音の経路）では触らない**ことにした。
+段 1 の対象は #649 / #661 / #606 の 3 件に限定する。
+
+問題は「後にずらしたものが地図から落ちる」ことだった。`DEVELOPMENT_MAP.md` §4.J は
+**層 1（宣言）と実機検証（#735）の 2 行しか持たず、層 2（ビルドで trust 既定 off）の行が無い**。
+さらに「順序」の行が「#385（宣言）は独立で先にできる — **済**」とだけ書いてあり、
+**#385 全体が終わったように読める**状態だった。
+
+- §4.J に **層 2 の行**を追加（PR-S-T2・`product.overrides.json` + `build_orbitstudio.sh`・
+  設計は `656-release-design.md` §3.4）
+- 🔴 **層 1 では救えない理由**を明記 — `anthropic.claude-code` は
+  `untrustedWorkspaces.supported: false` を宣言しており Anthropic 管理なのでこちらから足せない。
+  loose-file 起動では **LLM 側が黙って activate しない**。LLM を第一級ユーザーに置く方針では
+  出荷ブロッカーなので **#656 出荷の前**に入れる
+- 「順序」の行を「層 1 は済 / **#385 はこれで完了ではない**」に書き替え
+
+計画側（`IMPLEMENTATION_PLAN_2026-09.md` の PR-S-T2 行・`USER_OUTCOMES_2026-09.md` の段 8）と
+設計側（`656-release-design.md` §3.4）は既に層 2 を持っていたので変更なし。**欠けていたのは地図だけ**。
+
+### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
+### docs: follow PR #748 in the dev site and the user site (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `claude/docs-sync-pr748` / **追従元**: PR #748（merge commit `ef192ca`）
+
+マージ済み PR #748（出力デバイスの生存確認と縮退）に、ドキュメントとサイトを追従させた。
+**コードとテストは 1 行も変更していない。**
+
+#### 直したもの
+
+| 場所 | 何が古かったか |
+|---|---|
+| `sites/dev/editor/mcp-and-gated-e2e.md`（+ `en/`） | ツールカタログが `get_engine_state` を `{ running, liveCoding }` と書いていた。`output` / `callback` / `statusError` が抜けていた |
+| 同上 | `get_engine_state` の節が無かった。`resolveEngineState` の 3 分岐と、予算 2.5 秒が「伸ばしても取れるようにはならない」理由（REPL の FIFO 直列化）を追加 |
+| `sites/dev/rust-engine/index.md`（+ `en/`） | コマンド表の `GetStatus` / `SelectAudioDevice` 行。probe と `output` / `callback` の追加を反映 |
+| 同上 | 「出力デバイスの生存確認」節を新設。probe を実 stream より**前**に置く理由（`insert_buses` / `sources` が `RenderState` へ move 済みになる）、cpal 0.15.3 の参照循環と `Drop` の `pause()`、`DeviceFallbackPolicy` が起動経路とライブ切替経路で逆になること |
+| `sites/user/getting-started/engine-settings.md`（+ `en/`） | 「出力デバイスは OS のデフォルトに固定」「エンジン内からの選択は未実装（#484）」と書いてあった。**実装済み**（Output Device ノード・ライブ切替）なので書き換え、確認できなかった時の起動時 / 演奏中の振る舞いの違いと、`Restart Engine` が出る 3 条件を追記 |
+| `sites/user/troubleshooting.md`（+ `en/`） | 「音が出ない」の項が OS 側の出力設定しか案内していなかった。OrbitScore 側の Output Device と起動時の縮退への導線を追加 |
+
+#### 追従不要と判断したもの
+
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — この PR は DSL の構文・意味論を変えていない。デバイス関連の記述も元から無い
+- `sites/user/reference/methods.md` — 新しい DSL 語は増えていない（`global.audioDevice` は #484 で既出）
+- `docs/research/ENGINE_DAEMON_PROTOCOL.md` — PR #748 自身が `GetStatus` の新フィールドと失敗コード表を追加済み
+- `docs/design/661-audio-device-liveness-design.md` — 起案時点のスナップショットなので触らない
+
+#### 検証
+
+`npm run docs:build`（user / dev）と `npm run docs:check` を実行。出力は PR 本文に貼った。
+### docs: follow up the merged #606 in the protocol spec and the dev site (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `claude/docs-sync-pr738` / **追従元**: PR #738（merge commit `46f5d7a`）
+
+マージ済み PR #738 に対するドキュメント追従。**実装・テストは一切変更していない。**
+
+#### 直したもの
+
+- **`docs/research/ENGINE_DAEMON_PROTOCOL.md`**: `PluginAllNotesOff` の説明が
+  「active note を **drain** し」のままだった。実装はレビュー ラウンド1 で
+  **clone した snapshot から送出し、解放できた entry だけを除去する**形へ反転している
+  （`engine_wrap.rs:7268-7317`）ので、記述が実装と食い違っていた。あわせて
+  **`failed` の note は台帳に残り次回再試行される**ことと、session 切断 trigger が
+  発火するのは**最後の確立済み session が切れたときだけ**であること（`session.rs:1271-1284`）を追記
+- **`sites/dev/rust-engine/index.md`（+ en）**: daemon の RPC 表に `PluginAllNotesOff` の行が
+  無かった。`GetStatus` の行にも `active_plugin_notes` が反映されていなかった。
+  `SessionRegistration` と切断 trigger の解説を追加（`Drop` が解放を行わない理由も含む）
+- **`sites/dev/scheduling/transport.md`（+ en）**: `seq.stop()` の箇条書きが
+  「ループタイマーをキャンセルする」のままで、RUN 尻尾タイマーに触れていなかった。
+  ハンドル保持（`runTimer`）と `tailDelay` の原点整合の解説を追加
+- 上記 2 章は frontmatter の `verified-against` / `verified-at` を `46f5d7a` / `2026-09-05` へ更新
+
+#### 引用の再アンカーで欠けていた行の復元
+
+PR #738 は `check-citations --fix` で引用窓をずらしており、その結果
+**閉じ括弧が窓から外れた**引用が 2 箇所あった（コード片が途中で切れて見える）。
+実ファイルを読み直して範囲を延ばした。
+
+| 引用 | 変更 |
+|---|---|
+| `session.rs`（rust-engine/index.md・en 両方） | `739-766` → `739-767`（`};` を復元） |
+| `sequence.ts`（scheduling/transport.md・en 両方） | `1855-1880` → `1855-1883`（`return this` / `}` を復元） |
+
+#### 検証
+
+- `npm run docs:check` — **930 citations verified / 0 failed**（追従前 926）
+- `npm run docs:build -w @orbitscore/user-site` — build complete
+- `npm run docs:build -w @orbitscore/dev-site` — build complete
+
+#### 追従せず報告に回したもの
+
+- `GetStatus.active_plugin_notes` に **TS 側の読み手が 1 件も無い**
+  （`packages/` / `tests/` を grep して 0 件）。設計 §1 H4 の問題意識が
+  「台帳に読み手が 0 件」だったので、daemon 側だけ実装して**MCP から読めない片翼状態**になっている
+- `SYNTAX_UNCOVERED_BASELINE` の `transport-run` / `transport-loop` は、#738 が足した
+  T1 / E2E-K3 が実際に `RUN(...)` / `LOOP(...)` を評価しているのに残ったまま。
+  🔴 **baseline は実機で緑を確認した者だけが減らせる**ので、ここでは編集していない
+### docs(site): follow up #746 — capture clock invariants and the finalize precondition (Sep 5, 2026)
+
+**追従元**: PR [#746](https://github.com/signalcompose/orbitscore/pull/746)（マージコミット `76a4056`）/ **ブランチ**: `claude/docs-sync-pr746`
+
+マージ済み #746 に対するドキュメント追従。#746 自身が `sites/dev/editor/mcp-and-gated-e2e.md` の
+写像の説明と引用アンカーを更新していたので、その差分では埋まっていなかった 2 点を足した。
+`packages/` `rust/` の変更は無い PR なので、DSL 仕様 / ユーザー向けドキュメントの追従は不要。
+
+#### 足したもの
+
+1. **`sites/dev/editor/mcp-and-gated-e2e.md`（ja / en）— 不変条件 A1 / U1 / U2 / U3**
+   `captureWindowsFrom` が区間写像の前に検査する 4 本が、どこにも書かれていなかった。
+   これらは実機 gated で名前つきの Error として表面に出るので、読み手が遭遇する観測可能な表面である。
+   U3 の例外が区間名の文字列 `'transition'` から `CaptureSegment.overlapsPrevious` へ移った経緯も
+   併せて記録した（名前で例外を判定すると、同じ名前を別の意図で使った瞬間に検査が静かに緩む）。
+
+2. **`sites/dev/rust-engine/capture-verification.md`（ja / en）— `finalize` は通常停止でも走らない**
+   同章は `sync_header` の定期 patch を「**異常終了でも**開ける WAV」の話として書いていたが、
+   #746 の `readCaptureForAnalysis` が一次ソースで確かめたのは **通常の client 停止も SIGTERM で、
+   daemon に signal handler が無いので `CaptureWriter::Drop` → `finalize` は普段から走らない**
+   ことだった（`rust/crates/orbit-audio-daemon/src/main.rs:21-30`・既知事項 #448）。
+   header の申告サイズは常に最後の `sync_header` 時点で止まるため、区間解析する全経路で
+   申告サイズの零化が要る。#739 の実機ではこれで 6 件が誤検知していた。
+   あわせて `ORBIT_CAPTURE_WAV` のディレクトリが無いと engine 起動そのものが
+   `DEVICE_CONFIG_ERROR "audio output init failed: capture writer error: No such file or directory"`
+   で落ち、テスト側には「daemon-backed REPL ready after 30000ms」という無関係に見える
+   タイムアウトとして現れる件を記録した。
+
+両章の frontmatter `verified-against` / `verified-at` を `76a4056` / 2026-09-05 に更新。
+
+#### 直していないもの（PR 本文へ回した）
+
+E2E の穴と弱いアサーションの指摘は書き出すだけにした。実機 gated は
+`ORBIT_GATED_ORBITSTUDIO` が無い環境では skip されて緑になるため、この追従作業で E2E を積むと
+一度も走っていないテストを積むことになる。`dsl-e2e-coverage.spec.ts` の baseline も編集していない。
+### docs(site): follow PR #730's untrusted-workspace capability into the dev site (Sep 4, 2026)
+
+**追従元**: PR [#730](https://github.com/signalcompose/orbitscore/pull/730)（`385-untrusted-workspace-capability` → main・マージコミット `4f2ebd5`）/ **ブランチ**: `claude/docs-sync-pr730`
+
+#730 は `packages/vscode-extension/package.json` に `capabilities.untrustedWorkspaces` を宣言した。
+**マニフェストの宣言が振る舞いを決める**変更なので、拡張アーキテクチャの章に対応する節が必要だった。
+コードとテストは変更していない。
+
+#### 1. IV-1 章に「workspace trust と untrustedWorkspaces」を追加
+
+`sites/dev/editor/vscode-architecture.md` は `activationEvents`（いつ起動するか）を書いていたが、
+**「そもそも起動してよいか」を決める workspace trust** に触れていなかった。
+`activation と activationEvents` の直後に節を足し、差分から確定できることだけを書いた:
+
+- loose-file 起動（`orbs file.orbs`）は ad-hoc な未信頼 workspace になる（#385 の症状は沈黙）
+- `supported: true` の根拠は `docs/design/656-release-design.md` §16 (1)（DAW に併せる）。
+  `startEngine()` にガードは無い
+- `restrictedConfigurations` は `supported` と独立に効き、基準は
+  「workspace が値を決めると別の実行ファイルが動く」もの 2 件だけ。`audioDevice` が入らない理由も
+- 実機の確認（`E2E-D1`）は **#735 へ分離済み**であり、この層が保証するのは宣言の内容まで
+
+引用は `packages/vscode-extension/package.json:34-43` を verbatim で置いた。
+目次・drift 表・関連用語・Sources と、`sites/dev/glossary.md` の
+`workspace trust (untrustedWorkspaces)` 項も足した。ja / en 両方。
+frontmatter の `verified-against` を `4f2ebd5`・`verified-at` を `2026-09-04` へ。
+
+#### 2. `package.json` に 10 行入ったので、散文の行参照が +10 ずれた
+
+#730 は `// FILE:START-END` 形式の引用（`catalog.md` のコードブロック）を再アンカーしているが、
+**Sources 節や本文中の散文の行参照は `check-citations.mjs` の対象外**なので取り残されていた。
+前回（#724 追従）と同じ型である。
+
+| 参照元 | 旧 | 新 | 対象 |
+|---|---|---|---|
+| `sites/dev/plugin-hosting/catalog.md:1378` / en:1410 | `110-121` | `120-131` | `rescanPlugins` / `browsePlugins` コマンド |
+| `sites/dev/editor/mcp-and-gated-e2e.md:129,1170` / en:129,1170 | `400-407` | `410-417` | `orbitscore.mcpServer.port` 設定 |
+
+いずれも実ファイルで対象ブロックの位置を確かめてから書き換えた（コマンドは 120-131、
+`mcpServer.port` は 410-417）。行参照の修正だけなので、この 2 章の `verified-against` は動かしていない。
+
+---
+### docs: follow PR #737's dispatch-skip contract into the specs and both sites (Sep 4, 2026)
+
+**追従元**: PR [#737](https://github.com/signalcompose/orbitscore/pull/737)（`645-contain-playback-throws` → main・マージコミット `ef140b1`）/ **ブランチ**: `claude/docs-sync-pr737`
+
+#737 は `Sequence.resolveDispatchChannel()` の **throw を撤去**し、戻り値を
+`DispatchTarget = { kind: 'hardware' } | { kind: 'link'; channel } | { kind: 'skip'; reason }`
+の tagged union にした（`sequence.ts:103-106`）。LinkAudio セッションで `.output()` を持たない
+発音 sequence は、**runtime error ではなく無音スキップ + `logSkipOnce()` のログ 1 行**になる。
+**この意味論の変更が 4 つの文書に追従していなかった。**
+
+#### 直したもの
+
+| 場所 | 追従した内容 |
+|---|---|
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §8.1.2 | 「`.play()` した時点で **runtime error** を投げる」を削除し、無音スキップ + dedup ログ + `DispatchTarget` の説明に置換。**hardware への silent fallback を行わない**点は不変 |
+| `docs/specs-v2/MULTICHANNEL_RENDERING_DESIGN_598.md` §4.4.1 | 「`resolveDispatchChannel()` が throw し、ライブ中に kick が**停止**する」→「skip 判定に落ち、**無音になる**」。非対称の理由（オフライン宣言が live routing を壊さない）は変わらない |
+| `sites/dev/editor/execution-feedback.md`（日英）§6-8 | 「runtime では throw として現れる」「7 と 8 が Error なのは runtime で必ず throw するから」を訂正。`DispatchTarget` の引用と、`undefined` を union から外した理由（`catch { return undefined }` が黙って hardware へ流す事故を型で潰す）を追加。drift 表に #645 行 |
+| `sites/user/midi/link-audio.md`（日英） | 「ランタイムエラーを発生させます」→「無音でスキップされ、理由がログに出ます」。巻き添え停止を避けるための変更である旨を 1 段落 |
+
+🔴 **ユーザーから見た壊れ方が変わった**: 以前は例外が出て気づけたが、いまは**音が出ないだけ**である。
+気づく手段はログ（`[ERROR] Sequence '<name>': … このシーケンスは無音でスキップします。`）と
+編集時診断 `analyzeLinkAudioMissingOutput` の 2 つになる。user site にその旨を書いた。
+
+#### 追従しなかったもの
+
+- `docs/design/610-diagnostics-applicability-design.md` — 起案時点のスナップショット（本 PR の設計正本そのもの）
+- `sites/user/reference/methods.md` の `output("name")` 行 — 「`global.linkAudio()` 宣言時**必須**」は今も正しい（要件は不変・違反時の挙動だけが変わった）
+
+#### 手順 3 の指摘（直さず PR 本文へ）
+
+- `tests/e2e/dsl-e2e-coverage.spec.ts:86-96` — `GLOBAL_UNCOVERED_BASELINE` から `linkAudio` が
+  削除されたが、gated sources 内の `.linkAudio(` は
+  `tests/e2e/orbitstudio-mcp-gated.spec.ts:4583` / `:4593` の **コメント 2 箇所だけ**である。
+  同 PR で gated E2E 本体（`it(...)`）は #736 へ切り出されて存在しない。ラチェットの走査は
+  ソース文字列 `/\.([a-zA-Z][a-zA-Z0-9]*)\s*\(/g` なのでコメントでも満たされる
 ### fix(649): correct the attribution and add the test that actually guards the master line (Sep 5, 2026)
 
 **Issue**: #649 / **ブランチ**: `649-stereo-internal-master-line` / **PR** #754

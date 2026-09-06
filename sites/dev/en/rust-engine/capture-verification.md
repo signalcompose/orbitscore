@@ -1,8 +1,8 @@
 ---
 title: "RE-4. Capture Seam and Objective Verification (ORBIT_CAPTURE_WAV)"
 chapter-id: "RE-4"
-verified-against: f006a51
-verified-at: "2026-09-03"
+verified-against: 76a4056
+verified-at: "2026-09-05"
 status: draft
 ---
 
@@ -198,6 +198,73 @@ The comments spell out two things to be careful about.
    `write_all_at` (the `pwrite` equivalent) does not move the file cursor, so appending proceeds
    untouched while only the header is overwritten (the project is macOS-only, so `std::os::unix`
    is available).
+
+### `finalize` does not run on a normal stop either — segment analysis reads the real bytes (#739)
+
+This section is titled "a WAV that opens after an abnormal exit", but what #739 established is that
+**`finalize` failing to run is not limited to abnormal exits**. The daemon installs no SIGTERM /
+SIGINT handler, and the client's ordinary stop is that same SIGTERM, so `CaptureWriter::Drop` →
+`finalize` **does not run on the normal path either**.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/main.rs:21-25
+// 既知事項（#448）: この daemon には SIGTERM/SIGINT ハンドラが無く、`install_fatal_panic_hook`
+// の panic hook も `process::exit(1)` を hook 内から直接呼ぶ（unwind が supervisor 保持フレーム
+// まで届く前に終了する）。そのため通常の client 側 `SIGTERM → SIGKILL` 停止（daemon-client.ts
+// `killChildGracefully`）や panic では、`InstrumentChildSupervisor` / `EffectChildSupervisor` の
+// `Drop`（CONTROL_QUIT 送出）が実行されず、out-of-process CLAP/VST3 child が孤児化し得る。
+```
+
+So the data size a capture file's header declares should always be treated as frozen at the last
+`sync_header`. The patch interval is the fixed `HEADER_SYNC_INTERVAL_SAMPLES` = 96,000 interleaved
+samples, so roughly one second at 48 kHz stereo — two seconds at mono — of the tail is missing from
+the declared value.
+
+Anything measuring segment RMS steps on this. If segment boundaries are cut from the byte length
+while the analysis alone follows the declared size, **the last segment falls outside the analysed
+range**. On real hardware in #739 this produced six false detections. The fix is to collapse the
+declared size to zero, so the analysis sees the whole of the physical bytes.
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:75-82
+export function readCaptureForAnalysis(capturePath: string): Buffer {
+  const capture = fs.readFileSync(capturePath)
+  if (capture.toString('ascii', 36, 40) !== 'data') {
+    throw new Error(`${capturePath}: expected fixed 44-byte capture WAV data chunk at byte 36`)
+  }
+  capture.writeUInt32LE(0, 40)
+  return capture
+}
+```
+
+It confirms the `data` chunk really sits at byte 36 before writing the zero, so an unexpected header
+is never silently rewritten. The point worth holding on to is that this zeroing is not insurance for
+abnormal exits: it is **required on every path that analyses a capture by segment** (the
+graceful-shutdown wiring itself remains open as
+[#448](https://github.com/signalcompose/orbitscore/issues/448)).
+
+### Create the capture directory before starting the engine
+
+There is one more precondition that #739 paid real-device time to learn. If the directory
+`ORBIT_CAPTURE_WAV` points into does not exist, **starting the engine itself fails**. The capture
+writer's `File::create` fails and the result is `DEVICE_CONFIG_ERROR "audio output init failed:
+capture writer error: No such file or directory"`.
+
+The awkward part is how that failure reaches the test: as a **seemingly unrelated timeout**,
+"daemon-backed REPL ready after 30000ms". The causal string appears nowhere, so it is hard to get
+as far as suspecting the capture path. The preparation is therefore folded into one function.
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:58-61
+export function prepareCapturePath(capturePath: string): void {
+  fs.mkdirSync(path.dirname(capturePath), { recursive: true })
+  fs.rmSync(capturePath, { force: true })
+}
+```
+
+Path resolution (`captureWavPath`) deliberately keeps no side effect. That one is a pure function
+that unit tests call with literal paths, so mixing directory creation into it would create real
+directories.
 
 ## `CaptureWriter`: an off-thread writer that drains outside the RT callback
 
@@ -520,7 +587,9 @@ post-peak accessors observe the same signal. These figures were not re-measured 
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:1-23` — capture seam realtime gated test's module doc comment (purpose, how to run)
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:99-111` — WAV header vs. physical size cross-check (silent-failure guard)
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:206-217` — `drops == 0` assertion (pre-teardown silent-failure guard)
+- `rust/crates/orbit-audio-daemon/src/main.rs:21-30` — the absence of SIGTERM / SIGINT handlers (#448; why `finalize` does not run even on a normal stop)
 - `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:232-234` — `post_peak_bits` (lock-free peak accumulation implementation)
+- `tests/e2e/helpers/capture-windows.ts:45-82` — `prepareCapturePath` (the capture directory precondition) and `readCaptureForAnalysis` (zeroing the declared size so analysis reads the real bytes)
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:80-154` — the stale artifact guard (`assertDaemonBinaryIsNotStale`)
 - `package.json:17-18` — `pretest:e2e:gated` / `test:e2e:gated`
 - [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 / 6.416 / 6.417 — discovery of the #643 master fader defect, the #651 header patch and stale guard, pretest automation
