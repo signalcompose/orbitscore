@@ -567,7 +567,7 @@ pub fn probe_pid_liveness(pid: u32) -> PidLiveness {
 削除まで進む条件は、走査ループの終盤に集まっています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:110-128
+// rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:121-145
         let old_enough = now.duration_since(modified).is_ok_and(|age| age >= min_age);
         if !old_enough {
             summary.kept_young += 1;
@@ -582,7 +582,13 @@ pub fn probe_pid_liveness(pid: u32) -> PidLiveness {
         match disposition {
             PidLiveness::Dead => match fs::remove_file(entry.path()) {
                 Ok(()) => summary.removed += 1,
-                Err(_) => summary.failed += 1,
+                Err(error) => {
+                    tracing::debug!(
+                        "[outproc-shm-sweep] remove_file() failed for {}: {error}",
+                        entry.path().display()
+                    );
+                    summary.failed += 1;
+                }
             },
             PidLiveness::Alive => summary.kept_alive += 1,
             PidLiveness::Unknown => summary.kept_unknown += 1,
@@ -655,8 +661,8 @@ pub fn parse_outproc_shm_name(name: &OsStr) -> Option<u32> {
 - `rust/crates/orbit-child-runtime/src/lib.rs:61-72` — `child_should_quit`（QUIT と親死亡を 1 述語に畳む）
 - `rust/crates/orbit-audio-sandbox/tests/parent_watch_integration.rs` — 実プロセス階層での `ParentWatch` 実証テスト
 - `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:32-37,311-318,488-761` — `InstrumentChildSupervisor`（watchdog スレッド、#573 fast-fail ガード、respawn、`measurement_invalid` fire-once、#618 の `SlotSignals`）
-- `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:9-49,110-128` — 起動時 sweep（接頭辞定数・`MIN_ORPHAN_AGE`・3 値述語・ファイル名 parse・削除の分岐）
-- `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:134-163` — `sweep_orphaned_outproc_shm`（段 0.5 が呼ぶ薄い殻と `tracing::info!` の要約行）
+- `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:9-49,121-145` — 起動時 sweep（接頭辞定数・`MIN_ORPHAN_AGE`・3 値述語・ファイル名 parse・削除の分岐）
+- `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:167-196` — `sweep_orphaned_outproc_shm`（段 0.5 が呼ぶ薄い殻と `tracing::info!` の要約行）
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:891-910` — ready 行までの stderr 蓄積（sweep の INFO 行が `get_log` に出ない理由）
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:5397-5462` — 死亡 PID の shm とサイドカーが消え、生存 PID のものが残ることを検査する gated E2E
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — in-process/OOP 分割の確定アーキ

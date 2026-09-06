@@ -17,6 +17,98 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(test): close the review findings on the E-gate bundle (Sep 7, 2026)
+
+**ブランチ**: `780-merge-gate`（束 PR [#789](https://github.com/signalcompose/orbitscore/pull/789) の
+レビュー指摘。統合ブランチの先頭に積む）
+
+レビュアー 4 名 + Fable 監査の結果。**Critical 0 / Important 4 / Minor 9**。
+指摘単位のローカルパッチを避けるため、**修正の前にポリシーを 4 本決めてから**一括適用した。
+
+#### 🔴 Important 4 件のうち 3 件は「差分に無いもの」だった
+
+code-reviewer と comment-analyzer は Critical 0 / Important 0。彼らが見る層（差分に**在る**ものの
+正しさ）には問題が無く、**差分に無いもの**（ラッパー越しの 2 箇所・走らない回帰テスト・届かない
+診断）は別系統の目でなければ見えなかった。CLAUDE.md の「Sonnet チームと Fable は発見クラスが
+直交する」がそのまま出た形。
+
+| 指摘 | 出どころ | 処理 |
+|---|---|---|
+| 窓由来カウントの厳密等価が **2 箇所残る**（`:2603` / `:2692`）。`countAttachFailures` という**ローカル arrow ラッパー**越しなので **3 本のラチェットすべてが構造的に見えない** | Fable | **ポリシー 1**（下記）。2 箇所を移行し、束の主張を「4 箇所」→「**6 箇所**」に訂正 |
+| 🔴 **回帰テストがどの自動経路でも走らない** | pr-test-analyzer | CLAUDE.md のマージ前ゲートに `--ignored` 無しの行を追加 |
+| `probe_pid_liveness` の `Unknown` 分岐が無防備 | pr-test-analyzer | `pid=0` / `pid=u32::MAX` のテストを追加（実プロセス不要なので **ubuntu CI でも走る**） |
+| sweep の診断が**起動成功時に構造的に到達不能** | silent-failure-hunter | **ポリシー 2**（下記）。提案された修正は却下 |
+
+##### 回帰テストが走らなかった件（実測）
+
+```
+$ cargo test ... -p orbit-effect-rack-child --lib -- --ignored actual_fixtures_use_distinct_shm_paths
+running 0 tests ... 19 filtered out          ← CLAUDE.md がゲートに指定したコマンド
+$ cargo test ... -p orbit-effect-rack-child --lib actual_fixtures_use_distinct_shm_paths
+test ... ok. 1 passed                        ← --ignored を外すと走る
+```
+
+`-- --ignored` は **`#[ignore]` を付けたテストしか実行しない**。#780 の回帰テストは実プラグイン
+不要なので意図的に `#[ignore]` していない。したがって **CI（ubuntu なので `#[cfg(macos)]` は
+存在しない）でもゲートでも二度と走らない**状態だった。`--include-ignored` はリポジトリで
+1 箇所も使われていない（grep 実測）。**束自身の測定器が繋がっていなかった。**
+
+#### ポリシー 1 — 「窓由来カウント」は**形**ではなく**出どころの連鎖**で閉じる
+
+検出器はこれまで**値の形**を列挙してきた（名前 → `Before` の算術 → `.match().length` →
+import した helper）。**ローカルラッパーは「次の形」**であり、1 つずつ足す限り必ず次が漏れる。
+
+そこで形の列挙をやめ、**「log 由来の文字列を受けて件数を返す関数」を一般に解決**する
+（`resolveLogCountHelperNames`）。関数宣言・arrow const のうち本体が第 1 引数に対する count 式で
+あるものを helper として登録し、🔴 **集合が増えなくなるまで反復する**（ラッパーがラッパーを
+包む場合に届くため）。
+
+🔴 **私自身の列挙も一段手前で止まっていた。** 設計の「3 箇所」を疑って全列挙し 4 箇所を見つけたが、
+その走査は `.match(` を手がかりにしていたので**ラッパー越しは最初から視野の外**だった。
+「列挙を尽くした」と思ったときこそ、**何を手がかりに列挙したか**を疑う必要がある。
+
+#### ポリシー 2 — 可観測性は「主張しない」。事実だけ書く
+
+🔴 **silent-failure-hunter の提案（sweep を ready 行の後ろへ動かす）は採らなかった。**
+`engine_wrap.rs:4797` が **engine 起動中に** master effect の shm を作る（ready 行より前）ので、
+後ろへ動かすと自 PID 規則が**この daemon 自身の生きた shm を削除**する — この束が直したばかりの
+SIGBUS のクラスを再導入する。レビュアーは TS 側と `main.rs` は読んだが `engine_wrap.rs` の
+shm 生成までは辿っていなかった。**層をまたぐ契約は main が両層を読んで裁定する。**
+
+指摘そのものは有効なので、届くようにする代わりに:
+
+- E2E のコメントを**事実に訂正**（「起動失敗時には `DaemonStartupError` の診断として観測できる」は
+  **偽**。`.stderr` を読む箇所はリポジトリに存在しない）
+- 呼び出し順序の前提を doc に明文化（動かすと自分の shm を消す）
+- 個別失敗に `tracing::debug!` で path と元 error を残す（既定の `info` では出ない）
+
+#### ポリシー 3 / 4
+
+行番号引用の off-by-one を 4 箇所で訂正（`:1396`→`:1397` 等）。`IMPLEMENTATION_PLAN` の PR-E13 行を
+実態（6 箇所・provenance 検出器の新設）へ更新。ラチェットが**黙って空振り**する条件
+（`engine-log` のファイル名変更）に赤を置いた。
+
+#### 検証（main が実測）
+
+| 項目 | 結果 |
+|---|---|
+| `gated-assertion-hygiene.spec.ts` | **29 passed**（25 → +4） |
+| `tests/e2e/` 全体 | **106 passed / 37 skipped**（100 → +6） |
+| daemon 両 feature | **275 passed / 0 failed**（274 → +1）・sweep のテストは **7 本** |
+| `rack-child --lib`（`--ignored` 無し） | **16 passed**＝回帰テストが走るようになった |
+| clippy **5 象限** | 4 象限 + `clap-host` すべて exit 0 |
+| `typecheck:e2e` / `fmt` / `docs:check` | exit 0 / exit 0 / **978 verified 0 failed** |
+| 🔴 **変異**（ラッパー越しの形を復活） | **赤・該当行を名指し**（`:2610`）→ 復元で 29 passed |
+
+#### fix 差分の再点検（新しい故障モードは何か / どの実行コンテキストで走るか）
+
+検出器の一般化は**より多く検出する**方向なのでリスクは偽陽性だが、最終判定は
+`isLogDerivedText`（`get_log` 由来か）と AND されるため、引数が log 由来でなければ違反にならない
+（陰性 corpus が境界を押さえている）。新コードの実行文脈は、検出器 = `npm test` 毎回、
+`tracing::debug!` = daemon 起動時のみで既定フィルタでは出ない、`probe_pid_liveness` の 2 テスト =
+実プロセス不要なので ubuntu CI でも走る、移行した 2 箇所 = 実機 gated のみ。
+
+
 ### refactor(test): apply the /simplify pass to the E-gate bundle (Sep 7, 2026)
 
 **ブランチ**: `780-merge-gate`（束 PR [#789](https://github.com/signalcompose/orbitscore/pull/789) の
