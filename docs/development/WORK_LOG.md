@@ -17,6 +17,47 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #750 and restore the entry its merge dropped (Sep 6, 2026)
+
+**追従元**: PR [#750](https://github.com/signalcompose/orbitscore/pull/750)（`385-map-record-trust-layer-2` → main・マージコミット `aa16f7a`）/ **ブランチ**: `claude/docs-sync-pr750`
+
+マージ済み PR #750（#385 層 2 の繰り延べを地図に記録）への追従。**コードとテストは 1 行も変更していない。**
+
+#### 🔴 マージが WORK_LOG のエントリ本文を 64 行落としていた
+
+PR #750 の head commit `6e6e8eb` は `Merge remote-tracking branch 'origin/main' into wip-750b`
+で、コミットメッセージが `# Conflicts: docs/development/WORK_LOG.md` と申告している。
+この解決で **`### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)` の
+見出しだけが残り、本文 64 行が消えた**（マージ後の main で見出しの次行がいきなり別の見出し）。
+
+- ブランチ側 `8842048` の同エントリを**バイト一致で復元**した（内容の書き換えはしていない）
+- 消えていたのは PR #730 の作業記録そのもの — 変異 3 種でユニット 6 本の red を確認した経緯、
+  `--extensionDevelopmentPath` が workspace trust を迂回する実測、
+  `orbs --install-extension` が失敗しても exit 0 を返す副産物、3 文書を揃えた経緯
+- `sites/dev/editor/vscode-architecture.md:852`（+ `en/`）の検証マップが
+  この WORK_LOG エントリを出典として名指ししており、**参照先が空になっていた**
+
+#### 直したもの
+
+| 場所 | 何が古かったか |
+|---|---|
+| `docs/development/WORK_LOG.md` | 上記の欠落エントリを復元 |
+| `sites/dev/editor/vscode-architecture.md`（+ `en/`） | workspace trust の節が「宣言 (層 1) を入れた」で終わっており、**層 1 では救えない**ことが書かれていなかった。同居する `anthropic.claude-code` が `untrustedWorkspaces.supported: false` を宣言していてこちらから足せず、loose-file 起動では LLM 側が黙って activate しないこと、層 2（PR-S-T2・ビルドで trust 既定 off）が #656 出荷前に残っていることを追記 |
+| 同上 frontmatter | `verified-against` を `aa16f7a`・`verified-at` を 2026-09-06 に更新。冒頭 Note にも #750 までの追従を明記 |
+
+#### 追従不要と判断したもの
+
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — #750 は DSL の構文・意味論・`.orbslog` 形式を一切変えていない（差分は計画文書 2 ファイルのみ）
+- `sites/user/reference/methods.md` / `docs/user/ja/USER_MANUAL.md` — ユーザーが書く語は増減していない
+- `rust/` 系の章 — MCP ツールの引数・返り値・エラー挙動に変更なし
+- `docs/design/656-release-design.md` — 起案時点のスナップショットなので触らない（#750 本文いわく設計側は既に層 2 を持っている）
+
+#### 直していないもの（PR 本文へ回した）
+
+E2E の穴・弱いアサーション・CI の指摘は書き出すだけにした。実機 gated は
+`ORBIT_GATED_ORBITSTUDIO` が無い環境では skip されて緑になるため、この追従作業で E2E を積むと
+一度も走っていないテストを積むことになる。`dsl-e2e-coverage.spec.ts` の baseline も編集していない。
+
 ### docs(planning): record the #385 layer-2 deferral on the map (Sep 5, 2026)
 
 **Issue**: #385 / **ブランチ**: `385-map-record-trust-layer-2`
@@ -41,6 +82,70 @@ owner 判断（2026-09-05）で **#385 は段 1（must-fix の音の経路）で
 設計側（`656-release-design.md` §3.4）は既に層 2 を持っていたので変更なし。**欠けていたのは地図だけ**。
 
 ### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
+
+**Issue**: #385 / **ブランチ**: `385-untrusted-workspace-capability` / **PR-S-T1**
+
+フォルダ無しの loose-file 起動（`orbs file.orbs`）は**未信頼の ad-hoc workspace** を作る。
+`capabilities.untrustedWorkspaces` を宣言していない拡張はそこで activate されず、
+利用者には「何も起きない」ようにしか見える。**実害は拒否ではなく沈黙**である。
+
+owner 裁定（`docs/design/656-release-design.md` §16 (1)・2026-09-03）は **`supported: true`**
+「一般的な DAW の挙動に併せて」。`"limited"` は撤回済みなので `startEngine()` に trust ガードは置かない。
+
+#### 🔴 レビューで自分のテストが「何も証明していない」と分かった（2 段階）
+
+**① ユニット側**: `restrictedConfigurations` を `?? []` でフォールバックしていたため、
+**宣言が丸ごと消えても `for...of []` が 0 周して green** になっていた。
+フォールバックを外し、取り出せない形なら**その場で落とす**ようにした。変異で実証:
+
+| 変異 | 旧 | 新 |
+|---|---|---|
+| `restrictedConfigurations` を削除 | 2 件**素通り** | **3 件 red** |
+| `audioDevice` を restricted に追加 | — | **2 件 red** |
+| `supported: false` | — | **1 件 red** |
+
+restore 後 6 件 green・`package.json` は `cmp` で復元一致。
+
+**② E2E 側（本 PR では出さない・**#735** へ切り出し）**: 正本計画は PR-S-T1 に
+**E2E-D1（実機）**を課している。書いて実機で回したところ **dev モードでは緑になったが、
+`capabilities` ブロックを丸ごと削除しても緑のまま**だった。
+🔴 **`--extensionDevelopmentPath` は workspace trust の制限を迂回する**ためで、
+設計が `ORBIT_GATED_EXT_MODE=installed` を要求していた理由が実験で裏付けられた。
+
+installed モード（vsix を焼いて `--install-extension`）に切り替えると、
+**導入は成功するのに拡張が activate しない**（trust を無効にしても同じなので trust は原因ではない）。
+ここは #385 の症状とは別の観測性の問題なので **#735** へ切り出した。6 実験の結果はそちらに残してある。
+
+**副産物**: `orbs --install-extension` は**失敗しても exit 0 を返す**（壊れた vsix で
+「Failed Installing Extensions」を出しながら 0）。exit code で判定してはいけない。
+
+#### 🔴 地図だけでなく設計と実装プランにも反映した（owner 指摘）
+
+> 地図だけでなく設計と実装プランにも反映してあるかな？？
+
+最初は `DEVELOPMENT_MAP.md` §4.J しか直しておらず、**この PR 自身が #727 で直したばかりの型**
+（規範を変えたのに写しが古い）を繰り返すところだった。3 文書を揃えた:
+
+| 文書 | 直した内容 |
+|---|---|
+| `DEVELOPMENT_MAP.md` §4.J | #385（宣言・✅ 済）と **#735（実機検証・未着手）**の 2 行に分離。#735 は **#659 の後** |
+| `656-release-design.md` §12 | **E2E-D1 の期待値を反転**（`running: true` / 音が出る / `not trusted` は 0 行）。**E2E-D2 は取り消し線 + 理由**（裁定 (1) で trust の有無が挙動を変えなくなり D1 と同判定になるため）。**§12.1 を新設**して 6 実験の結果と「成果物なしで成立する」の訂正を記録 |
+| `IMPLEMENTATION_PLAN_2026-09.md` §1.9 | PR-S-T1 の件名から **`and refuse loudly` を削除**・`extension.ts` を触るファイルから除外（裁定 (1) で trust ガードが不要になり「断る」対象が無い）。実機 E2E を **PR-S-T3（#735）**として新規行に分離 |
+
+**「issue を立てた」だけでは追跡されない。** 地図は所在、設計は判定条件、計画は工数と順序を持つので、
+1 つでも古いままだと次の起案者がそこを読んで誤る。
+
+#### reuse: マニフェスト読み取りを共有ヘルパーへ
+
+`playhead.spec.ts:211` が既に同じ `package.json` を**別の書き方**（`new URL(…, import.meta.url)`）で
+読んでいた。`tests/helpers/vscode-extension-manifest.ts` を新設し、**両方をそこへ寄せた**
+（新設だけして重複を残すと 1 箇所が 3 箇所になる）。`playhead.spec.ts` 33 件は通ったまま。
+
+#### 検証
+
+`npm run typecheck:e2e` 0 / `tests/vscode-extension/` **430 passed** / lint 0。
+
+---
 ### docs: follow PR #748 in the dev site and the user site (#661) (Sep 5, 2026)
 
 **Issue**: #661 / **ブランチ**: `claude/docs-sync-pr748` / **追従元**: PR #748（merge commit `ef192ca`）
