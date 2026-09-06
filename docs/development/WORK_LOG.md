@@ -77,6 +77,39 @@ E4 の直前直後という重なる区間で主張し、撤去の理由をコ�
 | `toBeGreaterThanOrEqual(errorsBefore + 1)` を再導入 | 🔴 **red**（1 failed / 6 passed） |
 | 復元 | ✅ **7 passed** |
 
+#### 🔴 偽赤が本物の赤を隠していた — E3 の窓も直した（スコープ拡張）
+
+件数アサーションを撤去したところ、**同じ try 節の下流にあって一度も評価されていなかった**
+アサーションが初めて走り、落ちた:
+
+```
+E3 rest pattern must be silent: expected 0.1004 to be less than 0.005
+```
+
+`:3733` は `try` の中、E3 の RMS 判定群は `try/finally` の**後**。`:3733` が throw していた間、
+E3 は**到達不能**だった。**測定器が壊れていると、その下流の判定が全部見えなくなる**という、
+この束の主題そのものの実例。
+
+**`ORBIT_KEEP_CAPTURES` で WAV を残して実測**（250 ms バケット）:
+
+```
+ 4.50–16.50s  ~0.155   E1 (CLAP) → E2 (VST3)
+16.50–18.50s  0.00000  ← 休符は効いている（ちょうど 1 小節 = 2.0s @120BPM 4/4）
+18.50–22.00s  ~0.155   E4 の play(1,1,1,1) が次の小節頭で復帰
+```
+
+**実装は正しく、窓の位置だけが誤り**だった。E3 は固定 `sleep(1000)` で窓を開けるが、
+`play()` は次の小節境界で効くので 0〜2.0 秒ずれる。窓 15.50–18.00 の先頭 1.0 秒が音で、
+√(1.0 × 0.155² / 2.5) = **0.098** ≒ 実測 **0.1004** と一致する。
+
+**直し方**: `waitForSoundRestart` の段階 1（末尾が静かになるまで待つ）を **`waitForQuiet` として
+切り出し**、E3 で窓を音に追従させた（#739 と同じ規律）。戻り値そのものが「休符に切り替えたら
+無音になる」の実時間側の主張で、RMS 判定が WAV 側の主張になる。
+
+> **スコープについて**: #761 の本文は ERROR 件数の話だが、束「gated の測定器」の主題は
+> 「測定器が嘘をつく」こと。E3 も同じファイル・同じ型（固定 settle で置いた窓）であり、
+> **この束の完了条件（実機の失敗 3 → 1）が要求する**ため同じ PR で直した。
+
 ### fix(e2e): assert the attach failure's reason instead of a fallback wording (#760) (Sep 6, 2026)
 
 **ブランチ**: `760-attach-failure-assertion`（base = 束 `761-gated-measurement`） / **Part of** [#760](https://github.com/signalcompose/orbitscore/issues/760)

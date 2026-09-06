@@ -186,6 +186,47 @@ export async function waitForSound(
   )
 }
 
+/** capture の末尾 `tailSec` ぶんの解析窓。ファイルがまだヘッダ未満なら空を返す。 */
+function captureTailWindows(
+  capturePath: string,
+  tailSec: number,
+): Array<{ startSec: number; rms: number }> {
+  if (fs.statSync(capturePath).size < CAPTURE_HEADER_BYTES) return []
+  const analysis = analyzeWavBuffer(readCaptureForAnalysis(capturePath), { windowMs: 20 })
+  const windows = analysis.windows ?? []
+  const from = analysis.durationSec - tailSec
+  return windows.filter((window) => window.startSec >= from)
+}
+
+/**
+ * capture の**末尾**が `quietSec` ぶん静かになるまで待つ。
+ *
+ * 🔴 なぜ要るか（#761）: 「休符に切り替えたら無音になるはず」の区間は、**無音になってから
+ * 窓を開けなければならない**。固定 settle では追えない — `play()` は次の小節境界で効くので、
+ * 待ち時間は評価のタイミング次第で 0〜1 小節ぶん変わる（120 BPM の 4/4 なら 0〜2.0 秒）。
+ * `waitForSoundRestart` の段階 1 がまさにこれで、そこから切り出した。
+ *
+ * @returns 静寂を観測できたか。**例外にしない** — 「静かにならないのが正しい」呼び出し側
+ *          （`waitForSoundRestart` の段階 1: 切れ目なく次の音が続く譜面）を壊さないため。
+ *          静寂が要件である側は戻り値を assert すること。
+ */
+export async function waitForQuiet(
+  capturePath: string,
+  opts: { floor: number; quietSec: number; intervalMs: number; timeoutMs: number },
+): Promise<boolean> {
+  const deadline = Date.now() + opts.timeoutMs
+  while (Date.now() <= deadline) {
+    try {
+      const tail = captureTailWindows(capturePath, opts.quietSec)
+      if (tail.length > 0 && tail.every((window) => window.rms < opts.floor)) return true
+    } catch {
+      // writer がヘッダを書き終える前など。次の周回で読み直す。
+    }
+    await delay(opts.intervalMs)
+  }
+  return false
+}
+
 /**
  * キャプチャの**末尾**が可聴になるまで待つ（譜面の途中で鳴らし直すシナリオ用）。
  *
@@ -225,34 +266,18 @@ export async function waitForSoundRestart(
     label: string
   },
 ): Promise<{ quietObserved: boolean }> {
-  const tailWindows = (tailSec: number): Array<{ startSec: number; rms: number }> => {
-    if (fs.statSync(capturePath).size < CAPTURE_HEADER_BYTES) return []
-    const analysis = analyzeWavBuffer(readCaptureForAnalysis(capturePath), { windowMs: 20 })
-    const windows = analysis.windows ?? []
-    const from = analysis.durationSec - tailSec
-    return windows.filter((window) => window.startSec >= from)
-  }
-
-  let quietObserved = false
-  const quietDeadline = Date.now() + opts.quietTimeoutMs
-  while (Date.now() <= quietDeadline) {
-    try {
-      const tail = tailWindows(opts.quietSec)
-      if (tail.length > 0 && tail.every((window) => window.rms < opts.floor)) {
-        quietObserved = true
-        break
-      }
-    } catch {
-      // writer がヘッダを書き終える前など。次の周回で読み直す。
-    }
-    await delay(opts.intervalMs)
-  }
+  const quietObserved = await waitForQuiet(capturePath, {
+    floor: opts.floor,
+    quietSec: opts.quietSec,
+    intervalMs: opts.intervalMs,
+    timeoutMs: opts.quietTimeoutMs,
+  })
 
   const deadline = Date.now() + opts.timeoutMs
   let lastTailMax = 0
   while (Date.now() <= deadline) {
     try {
-      const tail = tailWindows(0.1)
+      const tail = captureTailWindows(capturePath, 0.1)
       lastTailMax = tail.reduce((maximum, window) => Math.max(maximum, window.rms), 0)
       if (lastTailMax >= opts.floor) return { quietObserved }
     } catch {

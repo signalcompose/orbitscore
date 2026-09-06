@@ -71,6 +71,7 @@ import {
   readCaptureForAnalysis,
   steadyRms,
   waitForSound,
+  waitForQuiet,
   type CaptureSegment,
   makeAwaitSoundRestart,
 } from './helpers/capture-windows'
@@ -3662,8 +3663,37 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         expect(effectUiClose.isError, effectUiClose.text).toBe(false)
 
         // E3: a rest-only pattern must be silent; the old tenant PIDs remain gone.
+        //
+        // 🔴 #761: ここは固定 `sleep(1000)` で窓を開けていたため、**窓の先頭に旧パターンの音が
+        // 混ざっていた**。`play()` は次の小節境界で効くので、待ち時間は評価のタイミング次第で
+        // 0〜1 小節ぶん変わる（120 BPM の 4/4 なら 0〜2.0 秒）。
+        //
+        // 2026-09-06 に `ORBIT_KEEP_CAPTURES` で WAV を残して実測（250 ms バケット）:
+        //
+        //    4.50–16.50s  ~0.155   E1 (CLAP) → E2 (VST3)
+        //   16.50–18.50s  0.00000  ← **休符は効いている**（ちょうど 1 小節）
+        //   18.50–22.00s  ~0.155   E4 の play(1,1,1,1) が次の小節頭で復帰
+        //
+        // 窓は 15.50–18.00 に置かれ先頭 1.0 秒が音だったので RMS = 0.1004
+        // （√(1.0 × 0.155² / 2.5) = 0.098 と一致）。**実装は正しく、窓の位置だけが誤り**だった。
+        //
+        // 🔴 このアサーションは #761 以前は**一度も評価されていなかった** — 同じ try 節の中で
+        // ERROR 件数の偽赤が先に throw していたため。偽赤が本物の赤を隠していた。
+        //
+        // 音に窓を追従させる（#739 と同じ規律）。`waitForQuiet` の戻り値そのものが
+        // 「休符に切り替えたら無音になる」の実時間側の主張で、下の RMS 判定が WAV 側の主張。
         await activeClient.call('evaluate_orbitscore', { code: 'cb618.play(0, 0, 0, 0)' })
-        await sleep(1000)
+        const e3Quiet = await waitForQuiet(capturePath, {
+          // 下の `E3 rest pattern must be silent` と同じ閾値にする（別の値にすると
+          // 「静かと判定したのに窓は静かでない」が起こりうる）。
+          floor: 0.005,
+          quietSec: 0.3,
+          intervalMs: 100,
+          timeoutMs: 10_000,
+        })
+        expect(e3Quiet, 'E3: 休符パターンへ切り替えたら capture は無音にならなければならない').toBe(
+          true,
+        )
         segments.e3 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
         await sleep(2500)
         segments.e3.toSec = clock()
