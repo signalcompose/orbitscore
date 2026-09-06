@@ -71,6 +71,98 @@ PR #783 は `CLAUDE.md:302` と `BUNDLE_BRANCH_WORKFLOW.md:71` で、小 PR の�
 `rust/**` が無いため、ここでも走らない。
 
 
+
+### docs: sharpen the ORBIT_GATED_ONLY correction after the routine review (Sep 6, 2026)
+
+**ブランチ**: `785-widen-count-ratchet`（束 `780-merge-gate`）
+
+ルーティンの doc-sync PR [#786](https://github.com/signalcompose/orbitscore/pull/786) が、
+**私が入れた訂正の精度不足を 2 点**指摘した。ルーティンは `docs:check` が見ない層
+（引用を囲む本文の整合）を見るので、その指摘を反映する。
+
+| 指摘 | 私が書いていたこと | 実際 |
+|---|---|---|
+| 1 | 「`ORBIT_GATED_ONLY` は**存在しない env**」 | 事実としては正しいが、**doc 668 の決定 D-4（`:1082`）で「A: 入れる」と確定済みの未実装機能**。誤りは「既存の仕組みとして参照していた」ことであって、名前を発明したわけではない |
+| 2 | 「個々の絞り込みは vitest の `-t`」 | 🔴 **gated suite 本体では `-t` が効かない。** 先頭の 1 本がアプリ起動・カタログ初期化・capture 付き engine 起動を担い、残りはその状態に依存する（`sites/dev/editor/mcp-and-gated-e2e.md:645` / WORK_LOG 6.409 が「`catalogClapEffectPath` 未初期化で落ちる」と記録）。効くのは**自前でアプリを起動する自己完結テストだけ**（#779 の E2E は `launchIsolatedOrbitStudio` を呼ぶので `-t '779'` で走った） |
+
+`CLAUDE.md:302` と `BUNDLE_BRANCH_WORKFLOW.md:71` の両方を実態に合わせた。
+
+🔴 **私自身、#788 の PR 本文で「移行した 4 箇所を含む it は単独 `-t` では走らない」と書いていた。**
+同じセッション内で片方に正しく書き、もう片方に不正確に書いていたことになる。ルーティンが
+**両者を突き合わせた**ので見つかった。
+
+#786 の 3 点目（回帰ガード `actual_fixtures_use_distinct_shm_paths` が `#[cfg(target_os = "macos")]`
+なので ubuntu の `rust-ci.yml` からは**存在すらしない**）は事実。無条件マージゲートを守るガードが
+CI から 1 度も走らない位置にある。**手元がこの検査の唯一の実行経路**という CLAUDE.md の記述と
+整合しており、本 PR では変えない。
+
+
+### test(e2e): widen the log-count ratchet to provenance, not identifier names (Sep 6, 2026)
+
+**ブランチ**: `785-widen-count-ratchet`（束 `780-merge-gate` の小 PR・Part of #785）
+
+束 E-gate の 3 本目。`get_log` の固定 500 行窓から数えた件数を**演算なしで厳密比較**している
+箇所が残っており、既存の hygiene ラチェット 2 本はどちらも捕まえられなかった。
+
+#### 🔴 対象は 3 箇所ではなく 4 箇所だった
+
+設計（`668-e2e-foundation-design.md` §13.5.3）は `:1396` / `:1589` / `:1615` の 3 つを挙げていたが、
+機械的に全列挙したところ **`:1378` の `.toBe(0)`** が漏れていた。
+
+| 箇所 | 形 | 崩れ方 |
+|---|---|---|
+| `:1378` | `.toBe(0)`（`[OUTPROC_ATTACH_FAILED]` が窓に 0 件） | 🔴 **偽緑**（設計の一覧に無かった） |
+| `:1397` / `:1590` / `:1616` | `.toBe(<countBefore>)` | 偽赤 |
+
+**窓から流れ出る効果はカウントを減らす方向にしか働かない**ので、同じ 1 つの原因が比較の向きに
+よって正反対の症状を出す。対処は 1 つ — 件数ではなく「**どの行が増えたか**」で語る
+（`newLogLines`）。
+
+対象外と確認したもの: `:1568` / `:1741` は `toBeLessThanOrEqual`。`stopsBefore`（`:2817` /
+`:3060`）は `>` で比べる**待機の述語**でアサーションではない。
+
+#### なぜ既存ラチェットが素通ししたか
+
+1 本目（`bareErrorCountEqualityOffenders`）は検出条件が**識別子の名前**
+（`/(?:errorsBefore|errorCount|catalogErrors)/i`）に依存している。実際の変数名は
+`stoppedBeforeRejectedSave` / `attachFailuresBefore*` で一致しない。
+
+🔴 **名前は書き手が自由に付けられるので、名前で条件付ける限り必ず漏れる。** #761 のラチェットが
+「偽緑を防ぐために作られながら自分が偽緑の発生源だった」のも同じ構図（正規表現が `Before` で
+**終わる**名前しか見ていなかった）。**測定器を名前で条件付けない**という教訓が 2 度目。
+
+#### 変更
+
+| ファイル | 内容 |
+|---|---|
+| `orbitstudio-mcp-gated.spec.ts` | 4 箇所を `newLogLines(before, after).filter(...)` → `toEqual([])` へ。`:1590` は before スナップショットがカウントのみだったのでログ本文を保持する形に変更。失敗メッセージに**増えた行そのもの**を出す |
+| `gated-assertion-hygiene.spec.ts` | `logProvenanceStrictEqualityOffenders` を追加。**値の出どころ**を AST で辿る（`get_log` の戻り値 → `.match(...).length` → `toBe`/`toEqual`）。`?? []` の有無・分割代入・エイリアス・インライン形に対応。**除外リストは無い** |
+| 同上 | 1 本目のコメントが「算術のない strict equality は逃げる。別 issue の対象」と書いていたのを実態に合わせて更新（4 箇所目も追記） |
+| `sites/dev/editor/mcp-and-gated-e2e.md`（ja / en） | 引用の行ずれを `--fix` で貼り直し（**行番号だけの移動を差分で確認**）+ **3 本目のラチェットの説明を本文に追記**（`docs:check` は引用アンカーしか見ないので本文の陳腐化は機械が教えない） |
+
+`toEqual([])` は「1 件も増えていない」という**より強い**主張であって緩和ではない。
+
+#### 検証（main が本ツリーで実測）
+
+| 項目 | 結果 |
+|---|---|
+| `gated-assertion-hygiene.spec.ts` | **23 passed**（新規 9 件: 陽性 4 種 + 陰性 4 種 + `toEqual` 確認） |
+| `tests/e2e/` 全体 | **100 passed / 37 skipped**（6 files passed） |
+| `npm run typecheck:e2e` | exit 0 |
+| `npm run docs:check` | 972 verified / 0 failed |
+| 🔴 **変異（1 箇所を件数の厳密等価へ戻す）** | **赤になり該当行を名指し**（`orbitstudio-mcp-gated.spec.ts:1643`）→ 復元で 23 passed |
+
+🔴 委譲先は worktree に `packages/engine/node_modules` が無く `tests/e2e/` の 3 ファイルが
+`uuid` 未解決で load 失敗すると報告したが、**本ツリーでは全件緑**だった。委譲先の赤も緑も、
+main が回し直すまでは根拠にならない（本日 2 度目）。
+
+#### 委譲先の切り替え
+
+Codex が 2 回続けて**起動前に** sandbox に弾かれた（companion の git 利用 / 状態ディレクトリの
+`mkdir` が `EPERM`）。「Codex が**使えない**」ケースなので規約どおり Sonnet subagent へ
+フォールバックした（「収束しない」場合の main への昇格とは別の分岐）。
+
+
 ### docs(dev-site): document the startup shm sweep in RE-1 / RE-2 (Sep 6, 2026)
 
 **ブランチ**: `claude/docs-sync-pr784`（PR [#784](https://github.com/signalcompose/orbitscore/pull/784)・
