@@ -1,12 +1,12 @@
 ---
 title: "IV-1. VS Code Extension Architecture"
 chapter-id: "IV-1"
-verified-against: aa16f7a
+verified-against: d2e94af
 verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730), the `capabilities.untrustedWorkspaces` declaration) on 2026-09-04, and to the deferral of #385 layer 2 (PR [#750](https://github.com/signalcompose/orbitscore/pull/750)) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730), the `capabilities.untrustedWorkspaces` declaration) on 2026-09-04, to the deferral of #385 layer 2 (PR [#750](https://github.com/signalcompose/orbitscore/pull/750)) on 2026-09-06, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing) the same day. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-1. VS Code Extension Architecture
 
@@ -590,7 +590,69 @@ A point to note here is that `ORBITSCORE_ENGINE` is **set explicitly in both bra
 
 `setupErrorHandler` (#533) receives the `'error'` event of a spawn failure (`ENOENT`, etc.); without it, `engineProcess` stays non-null and `isEngineRunning()` lies.
 
-Of the five, `setupStderrHandler` is the one that transcribes the engine's stderr into the Output channel with an `ERROR: ` prefix. It prefixes **per line, not per chunk** (#756). `createLinePrefixer()` reassembles the chunk stream into lines: `'data'` emits only the completed lines, and `'end'` drains the last line that did not end with a newline. The granularity of the prefix is used directly as the scale for the gated E2E's ERROR accounting (`countErrors` / `newErrorLines`), so a per-chunk granularity makes the measuring instrument structurally undercount. The background is in [IV-3](/en/editor/mcp-and-gated-e2e#who-writes-the-error-prefix).
+### Turning stderr back into lines — `createLinePrefixer` (#756)
+
+Of those five, `setupStderrHandler` is the one that copies the engine's stderr into the Output Channel with an `ERROR:` prefix. There is one mechanism worth noting here. What arrives from the pipe is a **chunk** (a fragment of text cut wherever the read happened), not a line, so prefixing chunk by chunk means that when a single chunk holds two lines, **the second line and everything after it gets no `ERROR:`**. The Output Channel is read by the MCP `get_log` tool through the ring buffer seen at the start of this chapter, and the gated E2E counts those `ERROR:` occurrences to claim "this operation added no ERROR lines" — so a dropped prefix becomes a straightforward **undercount (false green)**.
+
+A small helper therefore sits in between, reassembling the chunk stream into lines.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1599-1619
+export function createLinePrefixer(emit: (line: string) => void): {
+  push: (chunk: string) => void
+  flush: () => void
+} {
+  let partial = ''
+  return {
+    push(chunk: string): void {
+      partial += chunk
+      const lines = partial.split('\n')
+      partial = lines.pop() ?? ''
+      for (const line of lines) {
+        if (line.trim() !== '') emit(line)
+      }
+    },
+    flush(): void {
+      const remaining = partial
+      partial = ''
+      if (remaining.trim() !== '') emit(remaining)
+    },
+  }
+}
+```
+
+There are three things to read here. The first is carrying `partial` over: a naive `chunk.split('\n')` does not fix this, because **chunk boundaries do not coincide with line boundaries**, so the tail of a line would be treated as an independent line and get a second `ERROR:` prefix. The second is the existence of `flush()`: once output is reassembled into lines, the **final piece of output that does not end in a newline** stays in the buffer when the process exits. That would have the change meant to fix an undercount open the very same hole in the other direction, so the `end` event always drains it. The third is the check that skips empty lines: emitting a bare `ERROR: ` line would **inflate** the count instead.
+
+`setupStderrHandler` itself is now just `push` / `flush` wired up inside `logHandlerFailure` containment.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1635-1657
+export function setupStderrHandler(process: child_process.ChildProcess): void {
+  const prefixer = createLinePrefixer((line) => {
+    outputChannel?.appendLine(`ERROR: ${line}`)
+  })
+  process.stderr?.on('error', (err) => {
+    logHandlerFailure('setupStderrHandler', err)
+  })
+  process.stderr?.on('data', (data) => {
+    try {
+      prefixer.push(data.toString())
+    } catch (err) {
+      logHandlerFailure('setupStderrHandler', err)
+    }
+  })
+  // 改行で終わらなかった最後の 1 行を取りこぼさない。
+  process.stderr?.on('end', () => {
+    try {
+      prefixer.flush()
+    } catch (err) {
+      logHandlerFailure('setupStderrHandler', err)
+    }
+  })
+}
+```
+
+Incidentally, there are **four** implementations of "chunk stream → lines" across the repository. The implementation comment enumerates all four precisely so that nobody fixes `createLinePrefixer` and assumes the set is now consistent: this one for engine stderr; `createDaemonStderrLineRouter` for daemon stderr (`packages/engine/src/audio/rust-engine/daemon-client.ts`, [#777](https://github.com/signalcompose/orbitscore/issues/777)); `setupStdoutHandler` for engine stdout ([#773](https://github.com/signalcompose/orbitscore/issues/773)); and the ring proxy seen at the start of this chapter (the part that does `value.split('\n')` on `append` and copies into the ring). The extension package does not depend on `@orbitscore/engine`, so at least the first two cannot be shared as things stand. Decisions about newline handling, empty lines, and the trailing flush can propagate to all four sites — that is the conclusion the implementation comment draws.
 
 ---
 
@@ -902,6 +964,9 @@ The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEn
 - `packages/vscode-extension/src/extension.ts:725-798` — `updateBundleStatus()` / `maybeShowBundleNotice()`
 - `packages/vscode-extension/src/extension.ts:800-883` — `showCommands()` (branches on engine kind) / `restartEngine()` / `reloadWindow()`
 - `packages/vscode-extension/src/extension.ts:1473-1553` — `setupStdoutHandler()`: bridge dispatch and the `applyEngineStdoutChunk` call
+- `packages/vscode-extension/src/extension.ts:1567-1619` — `createLinePrefixer()`: reassembling a chunk stream into lines (carrying `partial` over, `flush()`, skipping empty lines), plus the implementation comment enumerating all four "chunk → line" implementations (#756)
+- `packages/vscode-extension/src/extension.ts:1621-1657` — `setupStderrHandler()`: line-wise `ERROR:` prefixing and the flush on `end`
+- `tests/vscode-extension/extension-wiring.spec.ts` — the four specs pinning line-wise prefixing (PR [#772](https://github.com/signalcompose/orbitscore/pull/772))
 - `packages/vscode-extension/src/extension.ts:1699-1723` — `autoStartConfiguredRustEngine()`
 - `packages/vscode-extension/src/extension.ts:2044-2198` — `startEngine()`: engine-kind pre-check, args / env, spawn, handlers, nextTick guard
 - `packages/vscode-extension/src/extension.ts:2204-2252` — `stopEngine()`: drain, SIGTERM, SIGKILL on the `exitCode`/`signalCode` test

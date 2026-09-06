@@ -17,6 +17,34 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(dev-site): follow PR #776 — line-wise `ERROR:` prefixing (Sep 6, 2026)
+
+**ブランチ**: `claude/docs-sync-pr776`（ルーチンによる docs 追従）
+
+束 PR [#776](https://github.com/signalcompose/orbitscore/pull/776)（マージコミット `d2e94af`）が
+`packages/vscode-extension/src/extension.ts` に足した `createLinePrefixer`（#756）が dev サイトに
+載っていなかったので追従した。#760 の `transport.rs` 側（`CHILD_STATUS_LOAD_FAILED` の doc コメント）は
+束の中で `sites/dev/rust-engine/oop-children.md` の日英とも追従済みだったため対象外。
+
+#### 変更
+
+| ファイル | 内容 |
+|---|---|
+| `sites/dev/editor/vscode-architecture.md` / `en/` | 「stderr を『行』に戻す — `createLinePrefixer` (#756)」節を新設。`partial` の持ち越し・`flush()`・空行を emit しない判定の 3 点と、「chunk → 行」実装が repo 全体で 4 つあること |
+| `sites/dev/editor/mcp-and-gated-e2e.md` / `en/` | ERROR 会計の節に、窓とは別の偽緑（chunk 単位前置による構造的な過小カウント）と #756 の解消を追記 |
+
+引用は `packages/vscode-extension/src/extension.ts:1599-1619` / `:1635-1657` を逐語。
+4 章とも `verified-against` を `d2e94af` へ更新した。
+
+#### 追従しなかったもの
+
+- `tests/` の変更（`gated-assertion-hygiene.spec.ts` のラチェット再設計・`capture-windows.ts` の
+  `waitForQuiet` 切り出し）— ルーチンはテストを変更しない。`waitForQuiet` は
+  `sites/dev/editor/mcp-and-gated-e2e.md` の窓の節に追記する候補として PR 本文へ回した
+- `docs/` の計画・設計・WORK_LOG — 束の中で更新済み
+
+---
+
 ### fix(e2e): apply review round 1 — the ratchet was itself producing a false green (Sep 6, 2026)
 
 **ブランチ**: `761-gated-measurement`（束 PR [#776](https://github.com/signalcompose/orbitscore/pull/776)）
