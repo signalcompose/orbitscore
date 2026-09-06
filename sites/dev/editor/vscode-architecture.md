@@ -1,12 +1,12 @@
 ---
 title: "IV-1. VS Code 拡張アーキテクチャ"
 chapter-id: "IV-1"
-verified-against: aa16f7a
+verified-against: d2e94af
 verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-1. VS Code 拡張アーキテクチャ
 
@@ -590,7 +590,69 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
 
 `setupErrorHandler` (#533) は spawn 失敗 (`ENOENT` 等) の `'error'` イベントを受けるもので、これが無いと `engineProcess` が non-null のまま残って `isEngineRunning()` が嘘をつきます。
 
-5 本のうち `setupStderrHandler` は、engine の stderr を Output チャネルへ `ERROR: ` 付きで転記する係です。ここは **chunk 単位ではなく行単位**で前置します (#756)。`createLinePrefixer()` が chunk 列を行に組み直し、`'data'` では完成した行だけを、`'end'` では改行で終わらなかった最後の 1 行を吐き出します。前置の粒度は gated E2E の ERROR 会計 (`countErrors` / `newErrorLines`) がそのまま目盛りに使うので、粒度が chunk だと測定器側が構造的に過小カウントします。この経緯は [IV-3](/editor/mcp-and-gated-e2e#error-の前置は誰が付けているのか) で読みます。
+### stderr を「行」に戻す — `createLinePrefixer` (#756)
+
+5 本のうち `setupStderrHandler` は、engine の stderr を Output Channel へ `ERROR:` を前置して写す役目です。ここには一段の仕掛けが入っています。pipe から届くのは **chunk (受信のたびに切れた文字列断片)** であって行ではないので、chunk のまま前置すると 1 つの chunk に 2 行入ったときに **2 行目以降へ `ERROR:` が付きません**。Output Channel は本章冒頭で見た ring buffer 経由で MCP の `get_log` に読まれ、gated E2E はその `ERROR:` を数えて「この操作は ERROR を増やさなかった」を主張しているので、前置の取りこぼしはそのまま **過小カウント (偽緑)** になります。
+
+そこで chunk 列を行へ組み直す小さなヘルパが挟まっています。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1599-1619
+export function createLinePrefixer(emit: (line: string) => void): {
+  push: (chunk: string) => void
+  flush: () => void
+} {
+  let partial = ''
+  return {
+    push(chunk: string): void {
+      partial += chunk
+      const lines = partial.split('\n')
+      partial = lines.pop() ?? ''
+      for (const line of lines) {
+        if (line.trim() !== '') emit(line)
+      }
+    },
+    flush(): void {
+      const remaining = partial
+      partial = ''
+      if (remaining.trim() !== '') emit(remaining)
+    },
+  }
+}
+```
+
+読みどころは 3 つです。1 つ目は `partial` の持ち越しで、素朴に `chunk.split('\n')` するだけでは **chunk 境界と行境界が一致しない**ため、行の後半が独立した 1 行として扱われて `ERROR:` が二重に付いてしまいます。2 つ目は `flush()` の存在で、行に整えると「**改行で終わらない最後の出力**」が buffer に残ったままプロセスが終わります。過小カウントを直すはずの変更が逆方向に同じ穴を開けることになるので、`end` イベントで必ず吐き出します。3 つ目は空行を emit しない判定で、`ERROR: ` だけの行を作ると今度は件数が**水増し**されます。
+
+`setupStderrHandler` 側は、この `push` / `flush` を `logHandlerFailure` で包んで繋ぐだけになりました。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1635-1657
+export function setupStderrHandler(process: child_process.ChildProcess): void {
+  const prefixer = createLinePrefixer((line) => {
+    outputChannel?.appendLine(`ERROR: ${line}`)
+  })
+  process.stderr?.on('error', (err) => {
+    logHandlerFailure('setupStderrHandler', err)
+  })
+  process.stderr?.on('data', (data) => {
+    try {
+      prefixer.push(data.toString())
+    } catch (err) {
+      logHandlerFailure('setupStderrHandler', err)
+    }
+  })
+  // 改行で終わらなかった最後の 1 行を取りこぼさない。
+  process.stderr?.on('end', () => {
+    try {
+      prefixer.flush()
+    } catch (err) {
+      logHandlerFailure('setupStderrHandler', err)
+    }
+  })
+}
+```
+
+ちなみに、この「chunk 列 → 行」の実装はリポジトリ全体で **4 つ**あります。実装のコメントが 4 つとも列挙していて、`createLinePrefixer` を直しただけで全部揃ったと思わないように、と注意書きが付いています。engine stderr のここ、daemon stderr の `createDaemonStderrLineRouter` (`packages/engine/src/audio/rust-engine/daemon-client.ts`、[#777](https://github.com/signalcompose/orbitscore/issues/777))、engine stdout の `setupStdoutHandler` ([#773](https://github.com/signalcompose/orbitscore/issues/773))、そして本章冒頭で見た ring proxy (`append` を `value.split('\n')` して ring へ写す部分) です。拡張パッケージは `@orbitscore/engine` に依存しないので、少なくとも前 2 つは今のところ共有できません。改行コード・空行・末尾 flush の判断は 4 箇所すべてへ波及しうる、というのが実装コメントの結論です。
 
 ---
 
@@ -902,6 +964,9 @@ flowchart TD
 - `packages/vscode-extension/src/extension.ts:725-798` — `updateBundleStatus()` / `maybeShowBundleNotice()`
 - `packages/vscode-extension/src/extension.ts:800-883` — `showCommands()` (engine kind で分岐) / `restartEngine()` / `reloadWindow()`
 - `packages/vscode-extension/src/extension.ts:1473-1553` — `setupStdoutHandler()`: bridge 振り分けと `applyEngineStdoutChunk` 呼び出し
+- `packages/vscode-extension/src/extension.ts:1567-1619` — `createLinePrefixer()`: chunk 列を行へ戻す (`partial` の持ち越し・`flush()`・空行を emit しない) と、実装コメントによる「chunk → 行」4 実装の列挙 (#756)
+- `packages/vscode-extension/src/extension.ts:1621-1657` — `setupStderrHandler()`: `ERROR:` の行単位前置と `end` での flush
+- `tests/vscode-extension/extension-wiring.spec.ts` — 行単位前置を留める 4 本 (PR [#772](https://github.com/signalcompose/orbitscore/pull/772))
 - `packages/vscode-extension/src/extension.ts:1699-1723` — `autoStartConfiguredRustEngine()`
 - `packages/vscode-extension/src/extension.ts:2044-2198` — `startEngine()`: engine kind 事前チェック・args / env・spawn・ハンドラ・nextTick ガード
 - `packages/vscode-extension/src/extension.ts:2204-2252` — `stopEngine()`: drain・SIGTERM・`exitCode`/`signalCode` 判定の SIGKILL

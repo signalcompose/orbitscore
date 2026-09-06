@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: 2c0f4be
+verified-against: d2e94af
 verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, and to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR #772, the `ERROR:` prefix made per-line) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -456,75 +456,7 @@ export function selectLogLines(ring: readonly string[], requested?: number): str
 
 Why so much care? The E2E frequently "compares the ERROR count before and after an operation". With a fixed-width window, an old ERROR scrolling out at the same moment a new ERROR scrolls in leaves the count unchanged — a **false green**. `#567` raised the cap from 500 to the actual capacity of 1000 and made truncation part of the response for this reason. The window is still finite, though, so CLAUDE.md rules that "ERROR counts must not be compared with strict equality (use `<=`)". That rule is mechanised by the hygiene test described below.
 
-### Who writes the `ERROR:` prefix
-
-By the way, who writes the `ERROR:` prefix that the "ERROR count" counts? Not the engine itself. The extension reads the engine process's stderr and prefixes it as it writes to the Output channel (`setupStderrHandler()`). So the ERROR count is not "how many times the engine called `console.error`" but **how many lines the extension wrote with `ERROR:`**. The granularity of the prefix is the scale on the measuring instrument.
-
-Up to #756 that scale was **per chunk**. The code read `outputChannel.append('ERROR: ' + chunk)`, so when a single chunk carried two or more lines, **the second and later lines got no `ERROR:` prefix**. Every line still appeared in the log, yet `countErrors` / `newErrorLines` counted one — the instrument itself was **structurally undercounting**. The measurement recorded in the implementation's comment (2026-09-05) is that a device-switch failure was logged separately by the daemon and by the engine, and only one of the two got the prefix.
-
-The fix is factored out into a small tool called `createLinePrefixer()`.
-
-```typescript
-// packages/vscode-extension/src/extension.ts:1599-1619
-export function createLinePrefixer(emit: (line: string) => void): {
-  push: (chunk: string) => void
-  flush: () => void
-} {
-  let partial = ''
-  return {
-    push(chunk: string): void {
-      partial += chunk
-      const lines = partial.split('\n')
-      partial = lines.pop() ?? ''
-      for (const line of lines) {
-        if (line.trim() !== '') emit(line)
-      }
-    },
-    flush(): void {
-      const remaining = partial
-      partial = ''
-      if (remaining.trim() !== '') emit(remaining)
-    },
-  }
-}
-```
-
-What to watch out for here is that a naive `split('\n')` loop does not fix it. **Chunk boundaries do not coincide with line boundaries.** A chunk can end while the engine is halfway through writing a line, so with `split` alone the tail half is treated as an independent "line" and gets its own `ERROR:`. What was meant to fix the undercount becomes an overcount instead. That is what carrying `partial` over is for.
-
-The reason `flush()` has to exist has the same shape. Once output is folded into lines, **the last output that does not end with a newline** stays in `partial` when the process ends. A change meant to fix an undercount would open the very same hole from the other direction. So the `'end'` event always drains it.
-
-```typescript
-// packages/vscode-extension/src/extension.ts:1635-1657
-export function setupStderrHandler(process: child_process.ChildProcess): void {
-  const prefixer = createLinePrefixer((line) => {
-    outputChannel?.appendLine(`ERROR: ${line}`)
-  })
-  process.stderr?.on('error', (err) => {
-    logHandlerFailure('setupStderrHandler', err)
-  })
-  process.stderr?.on('data', (data) => {
-    try {
-      prefixer.push(data.toString())
-    } catch (err) {
-      logHandlerFailure('setupStderrHandler', err)
-    }
-  })
-  // 改行で終わらなかった最後の 1 行を取りこぼさない。
-  process.stderr?.on('end', () => {
-    try {
-      prefixer.flush()
-    } catch (err) {
-      logHandlerFailure('setupStderrHandler', err)
-    }
-  })
-}
-```
-
-Not emitting blank lines is also about the accounting. Producing a line that is just `ERROR: ` would inflate `countErrors` instead. The constraint "fix the undercount without creating an overcount" shows up as `trim() !== ''` in both `push` and `flush`.
-
-The move of the prefix from `append` to `appendLine` also reads back against the ring buffer. As quoted above, the monkey-patch on `append` already split the value on `'\n'` and pushed the lines into the ring one by one, so **the number of lines entering the ring was never broken**. What was off was only how many lines carried `ERROR:`. That asymmetry is why the symptom was hard to notice: reading the `get_log` output by eye showed every error, while only `countErrors` came out low.
-
-Note that the same chunk-boundary problem remains on the stdout side. `setupStdoutHandler()` only does `output.split('\n')` per chunk and carries no partial line, so a single-line JSON envelope such as `{"evalMark"` that is split across a boundary leaves both fragments failing the prefix checks and being dropped as "malformed" (the wording `possible chunk-boundary split` in the `//#selectAudioDevice` warning points at this same path). #756 **does not fix it** — the bridge dispatch is the area that broke once in #614, and it is separate work with an E2E of its own. It is carved out as #773.
+There was a second false green hiding in this count, unrelated to the window. The `ERROR:` prefix is applied by `setupStderrHandler` on the extension side, and before [#756](https://github.com/signalcompose/orbitscore/issues/756) it was applied **per chunk**, so when a single chunk held several lines the second line onwards got no `ERROR:` at all. In other words the ERROR count was **structurally low** before the window ever entered the picture. Measured in practice: a device-switch failure was recorded separately by the daemon and by the engine, yet only one of the two carried an `ERROR:`. #756 changed the prefixing to be **line-wise**, via `createLinePrefixer` (see the "Turning stderr back into lines" section of [IV-1](/en/editor/vscode-architecture)). The general lesson worth keeping is the one about the instrument itself: **a broken measuring instrument can hide every judgement downstream of it**.
 
 ---
 
@@ -1374,7 +1306,6 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `estimateFundamentalHz()` in `analyze_audio` — how the plugin-state restore tests assert "the same measured pitch"
 - The safety envelope of `killOrbitStudio()` / `replaceGatedPluginFixtureSymlink()` (allowlists) — the boundary that keeps the harness from damaging the user's environment
 - Improving the structure that prevents gated tests from running one at a time (WORK_LOG 6.409)
-- How to protect the bridge dispatch (the path that broke once in #614) when partial-line buffering is added to `setupStdoutHandler()` (#773)
 
 ## Sources
 
@@ -1388,7 +1319,6 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `packages/vscode-extension/src/extension.ts:445-495` — MCP server startup gate and handler wiring
 - `packages/vscode-extension/src/extension.ts:1153-1177` — `shouldFilterLine()` (exclusion of `[STEP]` and bridge envelopes)
 - `packages/vscode-extension/src/extension.ts:1473-1553` — `setupStdoutHandler()`
-- `packages/vscode-extension/src/extension.ts:1567-1643` — `createLinePrefixer()` / `setupStderrHandler()` (the `ERROR:` prefix made per-line, #756)
 - `packages/vscode-extension/src/extension.ts:3040-3077` — `evaluateForAgent()` (#614)
 - `packages/vscode-extension/src/extension.ts:3585-3597` — `getLogForAgent()` / `analyzeAudioForAgent()`
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-142` — the `//#evalMark` requestId correlation bridge
@@ -1408,6 +1338,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `tests/e2e/helpers/mcp-client.ts:1-174` — raw JSON-RPC client
 - `tests/e2e/gated-sources.ts:1-106` — the list of gated sources the ratchet and hygiene test read (#668 PR-E1)
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` assertions (where the seven `countErrors` definitions converged, #668 PR-E2)
+- `packages/vscode-extension/src/extension.ts:1567-1657` — `createLinePrefixer` / `setupStderrHandler`, which moved the `ERROR:` prefix from per-chunk to per-line (#756, PR [#776](https://github.com/signalcompose/orbitscore/pull/776))
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` and `captureWavPath()`
 - `tests/e2e/helpers/capture-windows.ts:1-489` — the capture clock, sound detection, segment-to-bucket mapping, and invariants A1 / U1 / U2 / U3 (#739)
 - `tests/e2e/helpers/run-score.ts:1-272` — one function that copies a score and evaluates it on real hardware
@@ -1432,5 +1363,3 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — periodic capture header patch and stale guard
 - Issue [#654](https://github.com/signalcompose/orbitscore/issues/654) — playhead not moving for instrument sequences
 - Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E foundation (PR-E1 `gated-sources.ts` / PR-E2 the shared harness layer)
-- Issue [#756](https://github.com/signalcompose/orbitscore/issues/756) — the `ERROR:` prefix was per-chunk, so the ERROR accounting undercounted (PR [#772](https://github.com/signalcompose/orbitscore/pull/772))
-- Issue [#773](https://github.com/signalcompose/orbitscore/issues/773) — `setupStdoutHandler()` carries no partial line (left untouched by #756)
