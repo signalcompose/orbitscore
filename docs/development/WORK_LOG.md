@@ -17,6 +17,61 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: record the doc-sync review of PR #783 (Sep 6, 2026)
+
+**ブランチ**: `claude/docs-sync-pr783`（doc-sync ルーチン・追従元は PR
+[#783](https://github.com/signalcompose/orbitscore/pull/783) / merge commit `cac5c76`・
+base は `main` ではなく束の統合ブランチ `780-merge-gate`）
+
+PR #783（`fix(test): give every rack fixture its own shm path`）に対する追従レビュー。
+**ドキュメントの実体的な追従は不要**と判断し、そう判断した理由と、追従できていない点を
+ここに残す。
+
+#### 追従不要と判断した理由
+
+| 変更されたもの | 判断 |
+|---|---|
+| `rust/crates/orbit-effect-rack-child/src/tests.rs`（±24） | **テストのみの変更**。DSL 表面・MCP ツールの引数/返り値・評価経路のいずれも変わっていない |
+| `CLAUDE.md` / `docs/development/BUNDLE_BRANCH_WORKFLOW.md` / `docs/design/668-e2e-foundation-design.md` / `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` / `docs/development/WORK_LOG.md` | **ドキュメントそのものの修正**。下流に追従先が無い |
+
+`ORBIT_GATED_ONLY` が実在しない env であるという記述訂正について、リポジトリ全体を
+grep した結果、`sites/dev/` と `sites/user/` にはこの env への言及が 1 件も無く、
+追従先が無いことを確認した。`sites/dev/` に
+`rust/crates/orbit-effect-rack-child/src/tests.rs` の引用も存在しないため、
+`// FILE:START-END` 引用の行ずれも発生していない。
+
+#### 🔴 追従できていない点 1 — `-t` による絞り込みの記述が dev サイトと矛盾する
+
+PR #783 は `CLAUDE.md:302` と `BUNDLE_BRANCH_WORKFLOW.md:71` で、小 PR のゲート
+「その PR が足した E2E だけを実機で」の手段を **`ORBIT_GATED_ORBITSTUDIO=1` + vitest の
+`-t`** と書き換えた。しかし dev サイトは、その `-t` が使えないことを記録している。
+
+- `sites/dev/editor/mcp-and-gated-e2e.md:645` / `sites/dev/en/editor/mcp-and-gated-e2e.md:645`:
+  「先頭の 1 本がアプリ起動・カタログ初期化・capture 付き engine 起動を担い、残りはその状態を
+  前提にします（WORK_LOG 6.409 が『1 本だけを `-t` で絞ると `catalogClapEffectPath` 未初期化で
+  落ちる』と記録しているのはこのためです）」
+
+どちらが正しいかは**運用の判断**（先頭の 1 本を必ず含める形で `-t` を書くのか、
+それとも段 2 のモジュール分割まで絞り込みは持たないのか）なので、doc-sync では直さない。
+
+#### 追従できていない点 2 — 決定 D-4 は「入れる」のまま未実装
+
+`docs/design/668-e2e-foundation-design.md:1082` の決定 **D-4** は
+`ORBIT_GATED_ONLY` を「**A**: 入れる」で確定しており、`:428` の §7.2 段 3 にも
+実行手段として載っている。PR #783 が訂正したのは CLAUDE.md 側の「既存の仕組みとして
+参照していた」誤りであって、**決定 D-4 自体は未実装のまま残っている**。
+設計文書は起案時点のスナップショットなので doc-sync では書き換えない。
+
+#### 追従できていない点 3 — 回帰ガードが CI から見えない
+
+`actual_fixtures_use_distinct_shm_paths`（`rust/crates/orbit-effect-rack-child/src/tests.rs:670-676`）
+は `#[cfg(target_os = "macos")]` なので、`rust-ci.yml`（全ジョブ ubuntu）では**存在すらしない**。
+無条件マージゲートを守るガードが、CI からは 1 度も走らない位置にある。PR #783 の WORK_LOG も
+この事実を書いているが、`release.yml`（macos-14）は `pull_request` の paths フィルタに
+`rust/**` が無いため、ここでも走らない。
+
+
+
 ### docs: sharpen the ORBIT_GATED_ONLY correction after the routine review (Sep 6, 2026)
 
 **ブランチ**: `785-widen-count-ratchet`（束 `780-merge-gate`）
