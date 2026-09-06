@@ -17,6 +17,31 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: sharpen the ORBIT_GATED_ONLY correction after the routine review (Sep 6, 2026)
+
+**ブランチ**: `785-widen-count-ratchet`（束 `780-merge-gate`）
+
+ルーティンの doc-sync PR [#786](https://github.com/signalcompose/orbitscore/pull/786) が、
+**私が入れた訂正の精度不足を 2 点**指摘した。ルーティンは `docs:check` が見ない層
+（引用を囲む本文の整合）を見るので、その指摘を反映する。
+
+| 指摘 | 私が書いていたこと | 実際 |
+|---|---|---|
+| 1 | 「`ORBIT_GATED_ONLY` は**存在しない env**」 | 事実としては正しいが、**doc 668 の決定 D-4（`:1082`）で「A: 入れる」と確定済みの未実装機能**。誤りは「既存の仕組みとして参照していた」ことであって、名前を発明したわけではない |
+| 2 | 「個々の絞り込みは vitest の `-t`」 | 🔴 **gated suite 本体では `-t` が効かない。** 先頭の 1 本がアプリ起動・カタログ初期化・capture 付き engine 起動を担い、残りはその状態に依存する（`sites/dev/editor/mcp-and-gated-e2e.md:645` / WORK_LOG 6.409 が「`catalogClapEffectPath` 未初期化で落ちる」と記録）。効くのは**自前でアプリを起動する自己完結テストだけ**（#779 の E2E は `launchIsolatedOrbitStudio` を呼ぶので `-t '779'` で走った） |
+
+`CLAUDE.md:302` と `BUNDLE_BRANCH_WORKFLOW.md:71` の両方を実態に合わせた。
+
+🔴 **私自身、#788 の PR 本文で「移行した 4 箇所を含む it は単独 `-t` では走らない」と書いていた。**
+同じセッション内で片方に正しく書き、もう片方に不正確に書いていたことになる。ルーティンが
+**両者を突き合わせた**ので見つかった。
+
+#786 の 3 点目（回帰ガード `actual_fixtures_use_distinct_shm_paths` が `#[cfg(target_os = "macos")]`
+なので ubuntu の `rust-ci.yml` からは**存在すらしない**）は事実。無条件マージゲートを守るガードが
+CI から 1 度も走らない位置にある。**手元がこの検査の唯一の実行経路**という CLAUDE.md の記述と
+整合しており、本 PR では変えない。
+
+
 ### test(e2e): widen the log-count ratchet to provenance, not identifier names (Sep 6, 2026)
 
 **ブランチ**: `785-widen-count-ratchet`（束 `780-merge-gate` の小 PR・Part of #785）
