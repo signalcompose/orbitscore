@@ -54,6 +54,207 @@ head `f3fd4d4`）への docs 追従。#788 は **テストのみのコード変�
 
 **テストは変更していない**（ルーチンの禁止事項）。
 
+> 🔴 **追記（同日・main）**: 上の「まだ 2 箇所残っている」は**発見時点では正しく、その後解消した**。
+> 束 PR [#789](https://github.com/signalcompose/orbitscore/pull/789) のレビューで **Fable 監査が
+> 独立に同じ 2 箇所を報告**し、`2aa42f91` で
+> **検出器を「形の列挙」から「log 由来の値を受けて件数を返す関数の解決」へ一段抽象化**（不動点まで
+> 反復）したうえで 2 箇所も移行した。変異（ラッパー越しの形を復活）で赤・該当行の名指しを確認済み。
+>
+> **ルーティンと設計監査が、別経路で同じ穴に到達した**のは記録に値する。ルーティンは「ラチェットの
+> 棚卸しを本文に書く」過程で、監査は「不在証明」の問いから。**測定器の適用範囲を機械で列挙していない**
+> という同じ形を、両者が違う入口から見つけた。
+
+
+### fix(test): close the review findings on the E-gate bundle (Sep 7, 2026)
+
+**ブランチ**: `780-merge-gate`（束 PR [#789](https://github.com/signalcompose/orbitscore/pull/789) の
+レビュー指摘。統合ブランチの先頭に積む）
+
+レビュアー 4 名 + Fable 監査の結果。**Critical 0 / Important 4 / Minor 9**。
+指摘単位のローカルパッチを避けるため、**修正の前にポリシーを 4 本決めてから**一括適用した。
+
+#### 🔴 Important 4 件のうち 3 件は「差分に無いもの」だった
+
+code-reviewer と comment-analyzer は Critical 0 / Important 0。彼らが見る層（差分に**在る**ものの
+正しさ）には問題が無く、**差分に無いもの**（ラッパー越しの 2 箇所・走らない回帰テスト・届かない
+診断）は別系統の目でなければ見えなかった。CLAUDE.md の「Sonnet チームと Fable は発見クラスが
+直交する」がそのまま出た形。
+
+| 指摘 | 出どころ | 処理 |
+|---|---|---|
+| 窓由来カウントの厳密等価が **2 箇所残る**（`:2603` / `:2692`）。`countAttachFailures` という**ローカル arrow ラッパー**越しなので **3 本のラチェットすべてが構造的に見えない** | Fable | **ポリシー 1**（下記）。2 箇所を移行し、束の主張を「4 箇所」→「**6 箇所**」に訂正 |
+| 🔴 **回帰テストがどの自動経路でも走らない** | pr-test-analyzer | CLAUDE.md のマージ前ゲートに `--ignored` 無しの行を追加 |
+| `probe_pid_liveness` の `Unknown` 分岐が無防備 | pr-test-analyzer | `pid=0` / `pid=u32::MAX` のテストを追加（実プロセス不要なので **ubuntu CI でも走る**） |
+| sweep の診断が**起動成功時に構造的に到達不能** | silent-failure-hunter | **ポリシー 2**（下記）。提案された修正は却下 |
+
+##### 回帰テストが走らなかった件（実測）
+
+```
+$ cargo test ... -p orbit-effect-rack-child --lib -- --ignored actual_fixtures_use_distinct_shm_paths
+running 0 tests ... 19 filtered out          ← CLAUDE.md がゲートに指定したコマンド
+$ cargo test ... -p orbit-effect-rack-child --lib actual_fixtures_use_distinct_shm_paths
+test ... ok. 1 passed                        ← --ignored を外すと走る
+```
+
+`-- --ignored` は **`#[ignore]` を付けたテストしか実行しない**。#780 の回帰テストは実プラグイン
+不要なので意図的に `#[ignore]` していない。したがって **CI（ubuntu なので `#[cfg(macos)]` は
+存在しない）でもゲートでも二度と走らない**状態だった。`--include-ignored` はリポジトリで
+1 箇所も使われていない（grep 実測）。**束自身の測定器が繋がっていなかった。**
+
+#### ポリシー 1 — 「窓由来カウント」は**形**ではなく**出どころの連鎖**で閉じる
+
+検出器はこれまで**値の形**を列挙してきた（名前 → `Before` の算術 → `.match().length` →
+import した helper）。**ローカルラッパーは「次の形」**であり、1 つずつ足す限り必ず次が漏れる。
+
+そこで形の列挙をやめ、**「log 由来の文字列を受けて件数を返す関数」を一般に解決**する
+（`resolveLogCountHelperNames`）。関数宣言・arrow const のうち本体が第 1 引数に対する count 式で
+あるものを helper として登録し、🔴 **集合が増えなくなるまで反復する**（ラッパーがラッパーを
+包む場合に届くため）。
+
+🔴 **私自身の列挙も一段手前で止まっていた。** 設計の「3 箇所」を疑って全列挙し 4 箇所を見つけたが、
+その走査は `.match(` を手がかりにしていたので**ラッパー越しは最初から視野の外**だった。
+「列挙を尽くした」と思ったときこそ、**何を手がかりに列挙したか**を疑う必要がある。
+
+#### ポリシー 2 — 可観測性は「主張しない」。事実だけ書く
+
+🔴 **silent-failure-hunter の提案（sweep を ready 行の後ろへ動かす）は採らなかった。**
+`engine_wrap.rs:4797` が **engine 起動中に** master effect の shm を作る（ready 行より前）ので、
+後ろへ動かすと自 PID 規則が**この daemon 自身の生きた shm を削除**する — この束が直したばかりの
+SIGBUS のクラスを再導入する。レビュアーは TS 側と `main.rs` は読んだが `engine_wrap.rs` の
+shm 生成までは辿っていなかった。**層をまたぐ契約は main が両層を読んで裁定する。**
+
+指摘そのものは有効なので、届くようにする代わりに:
+
+- E2E のコメントを**事実に訂正**（「起動失敗時には `DaemonStartupError` の診断として観測できる」は
+  **偽**。`.stderr` を読む箇所はリポジトリに存在しない）
+- 呼び出し順序の前提を doc に明文化（動かすと自分の shm を消す）
+- 個別失敗に `tracing::debug!` で path と元 error を残す（既定の `info` では出ない）
+
+#### ポリシー 3 / 4
+
+行番号引用の off-by-one を 4 箇所で訂正（`:1396`→`:1397` 等）。`IMPLEMENTATION_PLAN` の PR-E13 行を
+実態（6 箇所・provenance 検出器の新設）へ更新。ラチェットが**黙って空振り**する条件
+（`engine-log` のファイル名変更）に赤を置いた。
+
+#### 検証（main が実測）
+
+| 項目 | 結果 |
+|---|---|
+| `gated-assertion-hygiene.spec.ts` | **29 passed**（25 → +4） |
+| `tests/e2e/` 全体 | **106 passed / 37 skipped**（100 → +6） |
+| daemon 両 feature | **275 passed / 0 failed**（274 → +1）・sweep のテストは **7 本** |
+| `rack-child --lib`（`--ignored` 無し） | **16 passed**＝回帰テストが走るようになった |
+| clippy **5 象限** | 4 象限 + `clap-host` すべて exit 0 |
+| `typecheck:e2e` / `fmt` / `docs:check` | exit 0 / exit 0 / **978 verified 0 failed** |
+| 🔴 **変異**（ラッパー越しの形を復活） | **赤・該当行を名指し**（`:2610`）→ 復元で 29 passed |
+
+#### fix 差分の再点検（新しい故障モードは何か / どの実行コンテキストで走るか）
+
+検出器の一般化は**より多く検出する**方向なのでリスクは偽陽性だが、最終判定は
+`isLogDerivedText`（`get_log` 由来か）と AND されるため、引数が log 由来でなければ違反にならない
+（陰性 corpus が境界を押さえている）。新コードの実行文脈は、検出器 = `npm test` 毎回、
+`tracing::debug!` = daemon 起動時のみで既定フィルタでは出ない、`probe_pid_liveness` の 2 テスト =
+実プロセス不要なので ubuntu CI でも走る、移行した 2 箇所 = 実機 gated のみ。
+
+
+### refactor(test): apply the /simplify pass to the E-gate bundle (Sep 7, 2026)
+
+**ブランチ**: `780-merge-gate`（束 PR [#789](https://github.com/signalcompose/orbitscore/pull/789) の
+レビュー指摘。束運用どおり**統合ブランチの先頭に積む**）
+
+`/simplify` の 4 観点（reuse / simplification / efficiency / altitude）を並行実行した結果。
+
+#### 適用したもの
+
+| 指摘 | 出どころ | 対処 |
+|---|---|---|
+| AST の走査骨格が **3 本目のコピー**（`sourceEntries` を回す → `createSourceFile` → 再帰 `visit` → `formattedNodeLine`） | reuse と simplification が**独立に一致** | `scanGatedSources(entries, makeOffenderAt)` を抽出し 3 本すべてを移行。`makeOffenderAt` はファイルごとに 1 回呼ばれるので、provenance 検出器の 2 パス前処理はそのクロージャに収まる。`createSourceFile` のエラー寛容性についての load-bearing なコメントも共有側へ移した |
+| 🔴 **`countErrors` の別名で両方の検出器をすり抜ける** | altitude | provenance 検出器が `helpers/engine-log` からの import の**局所名**を解決し、`countErrors(<log 由来>)` / `countLogMarker(<log 由来>, ...)` も「件数」として追うようにした |
+
+🔴 **altitude の指摘が的確だった**: 1 本目は `countErrors` を**リテラルな名前**で特別扱いしているだけなので、
+`import { countErrors as ce }` にすると**どちらの検出器からも消える**。つまり 2 本目を作った目的
+（名前依存の脆さの解消）が、1 本目の特例として**同じ脆さのまま残っていた**。
+
+#### スキップしたもの（理由つき）
+
+| 指摘 | 理由 |
+|---|---|
+| `newLogLines(...).filter(...)` を helper に畳む（simplification） | reuse が「確立済みイディオム」と判定して対立したので事実で裁定した。gated spec に **18 箇所**あり、新しい 4 箇所だけ畳むと**同じことを表す書き方が 2 つ並存**する。18 箇所すべての移行は束の範囲外（実機 15 分の回し直しも要る） |
+| `sweep_dir` で `metadata()` を生存判定の後ろへ動かす（efficiency） | 正しい指摘だが利得が小さい。節約できるのは**生存 PID の orbit ファイル**の `lstat` だけで、定常状態は約 25 件、backlog の場合はほぼ全部 Dead なので `metadata()` は結局必要。検証済みの sweep とその分岐表テストを触る対価に見合わない |
+| `create_shared` を `create_new(true)` にする（altitude Q1） | 筋は通るが **production の音声インフラの挙動変更**で、PID 再利用で同名の残骸があると**起動が失敗する**新しい経路を作る（sweep は 2 秒未満のファイルを残すので残骸が必ず消えている保証はない）。**別 issue に切った** |
+
+#### altitude Q2 は設計の裏付けになった
+
+「起動時 sweep は #448（SIGTERM ハンドラ）が入っても不要にならないバックストップか」への回答は
+**Yes**。SIGKILL / OOM kill / panic-in-panic では、ハンドラを足しても `Drop` は走らない。
+分割は妥当と独立に確認された。
+
+#### 検証
+
+| 項目 | 結果 |
+|---|---|
+| `gated-assertion-hygiene.spec.ts` | **25 passed**（corpus に陽性 1 + 陰性 1 を追加） |
+| `tests/e2e/` 全体 | 100 passed / 37 skipped |
+| `npm run typecheck:e2e` | exit 0 |
+| 🔴 変異 1（helper 追跡を外す） | **新しい corpus が赤** |
+| 🔴 変異 2（gated spec の 1 箇所を件数比較へ戻す） | **ラチェットが赤・該当行を名指し**（`:1643`） |
+
+
+### docs: record the doc-sync review of PR #783 (Sep 6, 2026)
+
+**ブランチ**: `claude/docs-sync-pr783`（doc-sync ルーチン・追従元は PR
+[#783](https://github.com/signalcompose/orbitscore/pull/783) / merge commit `cac5c76`・
+base は `main` ではなく束の統合ブランチ `780-merge-gate`）
+
+PR #783（`fix(test): give every rack fixture its own shm path`）に対する追従レビュー。
+**ドキュメントの実体的な追従は不要**と判断し、そう判断した理由と、追従できていない点を
+ここに残す。
+
+#### 追従不要と判断した理由
+
+| 変更されたもの | 判断 |
+|---|---|
+| `rust/crates/orbit-effect-rack-child/src/tests.rs`（±24） | **テストのみの変更**。DSL 表面・MCP ツールの引数/返り値・評価経路のいずれも変わっていない |
+| `CLAUDE.md` / `docs/development/BUNDLE_BRANCH_WORKFLOW.md` / `docs/design/668-e2e-foundation-design.md` / `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` / `docs/development/WORK_LOG.md` | **ドキュメントそのものの修正**。下流に追従先が無い |
+
+`ORBIT_GATED_ONLY` が実在しない env であるという記述訂正について、リポジトリ全体を
+grep した結果、`sites/dev/` と `sites/user/` にはこの env への言及が 1 件も無く、
+追従先が無いことを確認した。`sites/dev/` に
+`rust/crates/orbit-effect-rack-child/src/tests.rs` の引用も存在しないため、
+`// FILE:START-END` 引用の行ずれも発生していない。
+
+#### 🔴 追従できていない点 1 — `-t` による絞り込みの記述が dev サイトと矛盾する
+
+PR #783 は `CLAUDE.md:302` と `BUNDLE_BRANCH_WORKFLOW.md:71` で、小 PR のゲート
+「その PR が足した E2E だけを実機で」の手段を **`ORBIT_GATED_ORBITSTUDIO=1` + vitest の
+`-t`** と書き換えた。しかし dev サイトは、その `-t` が使えないことを記録している。
+
+- `sites/dev/editor/mcp-and-gated-e2e.md:645` / `sites/dev/en/editor/mcp-and-gated-e2e.md:645`:
+  「先頭の 1 本がアプリ起動・カタログ初期化・capture 付き engine 起動を担い、残りはその状態を
+  前提にします（WORK_LOG 6.409 が『1 本だけを `-t` で絞ると `catalogClapEffectPath` 未初期化で
+  落ちる』と記録しているのはこのためです）」
+
+どちらが正しいかは**運用の判断**（先頭の 1 本を必ず含める形で `-t` を書くのか、
+それとも段 2 のモジュール分割まで絞り込みは持たないのか）なので、doc-sync では直さない。
+
+#### 追従できていない点 2 — 決定 D-4 は「入れる」のまま未実装
+
+`docs/design/668-e2e-foundation-design.md:1082` の決定 **D-4** は
+`ORBIT_GATED_ONLY` を「**A**: 入れる」で確定しており、`:428` の §7.2 段 3 にも
+実行手段として載っている。PR #783 が訂正したのは CLAUDE.md 側の「既存の仕組みとして
+参照していた」誤りであって、**決定 D-4 自体は未実装のまま残っている**。
+設計文書は起案時点のスナップショットなので doc-sync では書き換えない。
+
+#### 追従できていない点 3 — 回帰ガードが CI から見えない
+
+`actual_fixtures_use_distinct_shm_paths`（`rust/crates/orbit-effect-rack-child/src/tests.rs:670-676`）
+は `#[cfg(target_os = "macos")]` なので、`rust-ci.yml`（全ジョブ ubuntu）では**存在すらしない**。
+無条件マージゲートを守るガードが、CI からは 1 度も走らない位置にある。PR #783 の WORK_LOG も
+この事実を書いているが、`release.yml`（macos-14）は `pull_request` の paths フィルタに
+`rust/**` が無いため、ここでも走らない。
+
+
+
 ### docs: sharpen the ORBIT_GATED_ONLY correction after the routine review (Sep 6, 2026)
 
 **ブランチ**: `785-widen-count-ratchet`（束 `780-merge-gate`）
@@ -1652,254 +1853,6 @@ gated MCP   #661 D-0 / D-2 / D-3  3 passed
 backend error で落ちる（C-1 まで赤くなる）。実機オーディオのテストは sandbox 外で回すこと。
 
 ---
-
-### refactor: apply the second /simplify pass to the device-liveness branch (#661) (Sep 5, 2026)
-
-**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
-
-F4 の実装と D-1/D-3 の書き換えが 1 回目の `/simplify`（`b535527f`）より後に入ったので、
-`b535527f..HEAD` を対象に 2 回目を回した（reuse / simplification / efficiency / altitude の 4 体）。
-Efficiency は指摘なし（RT コールバック本体・`FIRST_CALLBACK_DEADLINE` の起動予算・1 Hz ticker の
-いずれにも新しいコストは入っていない）。
-
-#### 適用した 5 件
-
-| 指摘 | 直した形 |
-|---|---|
-| `requireCatalogPaths()` が `requireCatalogFixtures()` の完全な部分集合 | 後者が前者を呼ぶ形にして、パス検査を 1 箇所に戻した |
-| `--list-audio-devices` で既定デバイス名を取る 5 行が **3 箇所**（D-0 / D-2 / D-3） | `tests/e2e/helpers/audio-devices.ts` を新設（`listOutputDevices` / `defaultOutputDeviceName`） |
-| `session.rs` の `OutputError` → protocol code の表が **2 箇所**（直接の `Output` と `SwitchRecoveryFailed.primary`） | `actionable_output_error_code` に集約。6 アーム → 1 アーム |
-| `select_audio_device` の `reject_device_switch` が **5 箇所**に散っていた | `dispatch_device_switch` が「owner thread に届く前」の失敗をまとめて `Err` で返し、記録は 1 箇所 |
-| 🔴 `resolve_output_device(.., allow_fallback: bool)` / `select_live_output_device(.., allow_dead_fallback: bool)` | **`DeviceFallbackPolicy { FallBackToHostDefault, RejectAndKeepCurrent }`** に置換 |
-
-最後の 1 件が本命。`allow_fallback` と `allow_dead_fallback` という**別名の裸の bool 2 つ**が、
-実は owner 裁定（起動時 = host 既定へ縮退／ライブ切替 = 元のデバイスへ復帰）という**1 つの二値
-ポリシー**だった。位置引数の `true` / `false` は取り違えてもコンパイルが通るので、
-**実装が裁定文と食い違っていた F4 と同じクラスの回帰**が再発しうる形だった。
-CLAUDE.md「型で潰す」の適用例（兄弟コールバックを 1 本に畳むのと同型）。
-
-#### 別 issue へ分離した 3 件
-
-| # | 指摘 | なぜ #661 でやらないか |
-|---|---|---|
-| **#755** | `select_audio_device` がエージェント経路でも人間のクリックトグル（`resolveDeviceClickAction`）を共有していて、**現在のデバイス名を渡すと engine が止まる** | MCP の観測可能な挙動が変わる。D-3 のアプリ分割はこれの回避 |
-| **#756** | `setupStderrHandler` の `ERROR:` 前置が **chunk 単位**で、同じ chunk の 2 行目以降が数えられない | **gated 全体の測定器**を動かす。#649 が baseline 比較の最中 |
-| **#757** | request 相関ブリッジが **5 本 625 行**の重複（`engine-state-bridge.ts` で 5 本目） | 既存 4 ファイルの書き換えを伴い、無関係な経路に回帰リスクを持ち込む |
-
-#### `cargo test --lib` が 1 回だけ落ちた（順序依存・修正済み）
-
-`device_switch_result_records_failure_and_success_through_the_same_path` が
-`captured log: ""` で落ちた。単体実行と再実行は緑。
-
-原因は **`tracing` の callsite interest がプロセス全体で 1 つ**であること。並列に走る別テストが
-同じ `tracing::error!` を subscriber の無い状態で先に踏むと `Interest::never()` がキャッシュされ、
-捕捉が空になる。捕捉の直前に `tracing::callsite::rebuild_interest_cache()` を呼ぶ形にして、
-`--lib` 全件を 3 回連続で緑にした（同型の捕捉テストは 2 箇所あるので両方に入れた）。
-
-#### 検証
-
-`npm test` **2260 passed / 57 skipped** / `typecheck:e2e` 0 / `lint` 0 /
-`cargo test -p orbit-audio-native -p orbit-audio-daemon` **152 passed / 0 failed**（22 スイート）/
-clippy **5 象限**（4 象限 + `clap-host`）全緑 / `docs:check` **926 verified・0 failed**
-（`--fix` で行番号アンカーのみ再固定・16 ファイル）。
-
----
-
-### test(e2e): split D-3 into its own app and count its failure on both layers (#661) (Sep 5, 2026)
-
-**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
-
-#661 の残り 1 件だった gated `D-3` を実機で緑にした。2 つの別々の欠陥があった。
-
-#### 1. 「切替」ではなく「トグル」になっていた
-
-実機で `audio device deselected and engine stopped: expected false to be true`。
-`selectAudioDeviceForAgent`（`packages/vscode-extension/src/extension.ts`）は
-`resolveDeviceClickAction` を通しており、**要求デバイスが現在の設定と同じなら「選択解除」**
-として扱う（UI のクリック挙動）。D-2/D-3 は同じ fault アプリを共有していて、そのアプリは
-`orbitscore.audioDevice` に**既定デバイス名**を持つ。このマシンには出力デバイスが実質 1 台
-なので「実在するが現在設定と違う名前」が選べず、D-3 の要求が必ずトグルになっていた。
-
-根は **D-2 と D-3 で必要なアプリ構成が逆**であること:
-
-| | 必要な起動構成 |
-|---|---|
-| D-2 | 起動時に名前付きが dead → 既定へ縮退して鳴る → **名前付きで起動** |
-| D-3 | 演奏中の切替候補が dead → 旧のまま鳴り続ける → **現在の設定と違う名前を要求** |
-
-D-3 を独立した `it.skipIf` に切り出し、`orbitscore.audioDevice: '__default__'` で起動して
-既定デバイスを**名前で**要求する形にした（`portBase: 39800`）。`dead-probe-requested` は
-「要求された」デバイスに効くので probe が死ぬ。設計 §6 にもこの制約を明記した。
-
-#### 2. 1 回の失敗を 2 層が別々の文言で記録していた
-
-上を直すと今度は `expected [ Array(1) ] to deeply equal []`。除外条件が daemon 側の文言
-（`audio output device switch to "X" failed`・`engine_wrap.rs` の `record_device_switch_result`）
-だけを見ていたため、engine 側が出す `❌ live device switch to "X" failed: …`
-（`packages/engine/src/cli/repl-mode.ts`）が「想定外の ERROR」として残っていた。
-
-- 除外は共通部分 `device switch to "X" failed` で行う
-- **利用者に届いたか**は engine 側の文言で「ちょうど 1 行」を要求する。daemon の tracing
-  ERROR 行は `outputChannel.append('ERROR: ' + chunk)` が **chunk 単位**で前置するため、
-  同じ chunk の 2 行目以降には `ERROR:` が付かず ERROR 行として数えられない
-- 落ちた時にデバイス名を含むログ行を全部出す。実機は 1 回 15 秒かかる
-
-#### 検証（実機・sandbox 外）
-
-```
-#661 D-0 honors a real named output device and produces audible capture RMS   8255ms  ✓
-#661 D-2 falls back from a dead named device at startup and stays audible    14265ms  ✓
-#661 D-3 keeps the old stream playing when a live switch candidate is dead   13099ms  ✓
-```
-
-`typecheck:e2e` 0 / `eslint` 0 / `prettier --check` 通過 / `docs:check` 926 verified・0 failed。
-
-**関連**: [[reviewers-judge-one-layer-only]]（層をまたぐ契約は片翼だけ見ても分からない）
-
----
-
-### fix(daemon): keep the current device when a live switch names a missing one (#661 F4) (Sep 5, 2026)
-
-**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
-
-🔴 **owner 裁定 2026-09-05**: ライブ切替で名前が一致しない時は **元のデバイスへ復帰**（縮退しない）。
-
-Fable 監査 F4 が、**実装と設計 §3 の裁定文が食い違っている**ことを見つけた。
-`resolve_output_device` の not-found 縮退（`output.rs:315-346`）が**切替経路でも無条件に効く**ため、
-存在しないデバイス名を指定すると `ok:true` で **host 既定へ移っていた**。
-演奏中に `"Pro Tools Aggregate"` をタイプミスすると内蔵スピーカーへ音が移る形だった。
-
-- `resolve_output_device` に `allow_fallback` を足し、**切替経路では名前不一致・出力不可のどちらでも
-  縮退しない**（起動時の縮退は据え置き）。値は既存の `allow_dead_fallback`（起動 `true` / 切替 `false`）
-  をそのまま流用した — 「これは起動か」という同じ問いなので、フラグを増やさない
-- 新エラー `OutputError::DeviceUnavailable` → プロトコルコード **`AUDIO_DEVICE_UNAVAILABLE`**
-- 設計 §3 の確定事項表に裁定を追記
-
-#### E2E D-1 を裁定に合わせて書き換えた
-
-D-1 は**現在の「既定へ移る」挙動を明示的に期待していた**ので、実装と同じラウンドで直した。
-
-- 拒否されること（`isError === true`・メッセージにデバイス名）
-- 🔴 **縮退の痕跡（`❌ audio device fallback: requested "..."`）が出ていないこと**
-- 増えた ERROR は「切替に失敗した」1 種類だけ（`newErrorLines` で行単位に判定）
-- 🔴 **鳴っているデバイスが変わっていないこと** — `get_engine_state` の `output.device_name` を前後で比較。
-  **この比較は同ラウンドで新設した bridge があって初めて書ける**（それまで `get_engine_state` は
-  `{running}` しか返さなかった）
-
-#### 検証（main が sandbox 外で実測）
-
-- 🔴 **clippy 全 5 象限 green**（default / clap-host / outproc-effect / outproc-instrument / 両方）
-- `cargo test --features outproc-effect,outproc-instrument` — lib **268 passed** / protocol **32 passed**
-- `npm test` **2260 passed / 0 failed** / `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified 0 failed**
-- **実機での D-1 / D-3 / D-0 の確認は未実施**
-
-### fix(daemon): keep the old output live while probing a switch candidate (#661 / PR #748 round 1) (Sep 5, 2026)
-
-実機計測で、失敗する切替が本来の 3 秒 probe timeout より約 1.6 秒早く
-`STREAM_CALLBACK_STALLED` fatal を発生させ、約 3.1 秒の無音を作ることが判明した。
-`apply_device_switch` を **probe → 旧 stream の pause → build → play → confirm** に変更し、
-probe 失敗では旧 stream を一度も pause しない。probe と `OutputStream::drop` の
-pause-before-drop は維持した。
-
-併せて、probe / real-stream の `StreamDead` を phase で区別し、旧 stream 再開失敗時も元の
-失敗理由を保持した。`select_audio_device` の早期拒否も `last_switch_failure` に記録する。
-MCP `get_engine_state` は相関 REPL bridge 経由で daemon `GetStatus.output` / `callback` を返す。
-gated E2E には、注入なしの実名デバイス起動 + capture RMS、D-3 の不足していた capture 前提確認、
-ERROR 上限、`STREAM_CALLBACK_STALLED` 非増加を追加した。名前不一致時の F4 挙動は owner 判断待ちの
-まま変更していない。
-
-#### 🔴 この欠陥をどう掴んだか（Fable の予測 → main の実測）
-
-Fable 監査 F1 が「pause が probe より前にあるので、1 Hz の ticker が 2 tick 連続で停止と判定し
-**偽の FATAL が決定論的に出る**」と機構から予測し、**反証用のスクリプトを添えて**きた。
-main が sandbox 外で回した実出力:
-
-```
-[switch-start  2674ms] SelectAudioDevice -> "MacBook Proのスピーカー"
-[EVENT  4172ms] STREAM_CALLBACK_STALLED  severity=warning
-[EVENT  5172ms] STREAM_CALLBACK_STALLED  severity=fatal     ← 偽の FATAL
-[stderr 5802ms] ERROR ... produced no callback within 3000 ms  ← 本物のエラー
-```
-
-**本物のエラーより 1.6 秒早く FATAL が出る。** 設計 §6 D-3 の「ERROR が 1 行」は成立しておらず、
-実際は DaemonError 2 件 + stderr ERROR 1 件だった。だから D-3 のアサーションは `>=` に緩められていた
-（症状に合わせて期待を緩めると、原因が見えなくなる例）。
-
-同時に、**成功する切替が `last_switch_failure` を `null` に戻す**ことも実測で確認できた。
-
-#### レビュアー間で解けた誤検知 2 件
-
-silent-failure が「起動時フォールバックが ERROR でない」「ライブ切替が黙ってすり替わる」と HIGH で
-報告したが、どちらも **Rust 層だけを見て TS 層を見落としたもの**だった。
-
-- 起動時の縮退の利用者向け ERROR は `reportAudioOutput`（`rust-engine-player.ts:904-928`）が
-  `console.error('❌ audio device fallback: ...')` で出す。engine の stderr は `get_log` で ERROR 行になる
-- ライブ切替は `select_live_output_device` の第 4 引数 `allow_dead_fallback` が **`false`**
-  （起動は `true`）なので、黙ってすり替わらず `StreamDead` を返して旧デバイスへ復帰する
-
-code-reviewer がこの二層構成を追ったことで解けた。**単層だけ見て「未実装」と判定しない。**
-
-#### 検証（main が sandbox 外で実測・Codex が走らせられなかったもの）
-
-- `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument`
-  — lib **268 passed** / **protocol 32 passed**（Codex は sandbox の loopback 禁止で 32 failed と報告していた）
-- `npm test` **2260 passed / 0 failed**（loopback を要する HTTP 31 件と daemon-client 32 件も含む）
-- `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified / 0 failed**
-
-### refactor(daemon): apply the /simplify pass to the device-liveness branch (#661) (Sep 5, 2026)
-
-**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
-
-ゲート③の `/simplify`（4 体並行）。再利用観点は指摘ゼロで、`StreamConfigSnapshot` が既に
-`device_requested` / `device_fell_back` / `fallback_reason` / `first_callback_ms` を持っており、
-owner 裁定（縮退して鳴らし続ける + 理由を `GetStatus` に記録）の形が型に入っていることが確認できた。
-
-#### 🔴 最重要 — owner 裁定が半分しか実装されていなかった（2 体が独立に指摘）
-
-設計 §3 の確定事項は「起動時 = host 既定へ縮退／**ライブ切替 = 元のデバイスへ復帰**。
-**どちらも ERROR ログ + `GetStatus` に理由**」。しかし**起動時の縮退だけ**が `GetStatus` に残り、
-**ライブ切替の失敗は `apply_device_switch` の Err 腕で `record_stream_config` も `tracing::error!` も
-呼んでいなかった**。理由は RPC のエラー応答と CLI の `console.error` 一回きりにしか存在せず、
-**`GetStatus` をポーリングする MCP 経路（LLM / UI の主経路）からは切替失敗が見えない**状態だった。
-
-- 成功・失敗を **`record_device_switch_result` 1 本**へ合流。失敗時は要求デバイス名と理由を
-  `tracing::error!` に出し、`StreamConfigSnapshot.last_switch_failure` へ保存する
-- `record_stream_config` は snapshot を丸ごと差し替え、コンストラクタが `last_switch_failure: None`
-  を置くので、**成功した切替が古い失敗理由を確実に消す**（main が実装を読んで確認）
-- 🔴 E2E の D-3 は「ERROR が増えないこと」ではなく「**ちょうど 1 行増えること**」
-  （`countErrors(log) >= errorsBeforeExpectedFailure + 1`）へ更新された。
-  **ログを出さない方向で辻褄を合わせていない**
-
-#### 却下した指摘（理由を残す）
-
-効率観点が「前置き probe が二重 open を生んでいるので、実ストリームの初回コールバックだけを
-ゲートにせよ」と提案したが、**設計で一度検討して却下済み**だった。設計 §4.1:
-
-> `play()` 直後だけに置いてはいけない。`start_output_inner` は `insert_buses` / `sources` を
-> `RenderState` に **move** するので、dead 判定後に作り直すには回収が要る。参照循環により
-> **名指しデバイスでは `Arc::try_unwrap` が永遠に失敗し、回収できない**。
-
-コストも実測済みで **probe + 事後確認で +20〜40 ms**、`FIRST_CALLBACK_DEADLINE = 3000 ms` は
-**失敗時にしか効かない**。読まずに発注していたら直せない状態を作っていた。
-
-#### そのほか適用
-
-未使用の `probe_ms` を削除／`resolved` / `play_and_confirm` / `finish_start` へ重複を集約／
-gated テストと E2E の起動ボイラープレートをヘルパー化。
-
-#### 🔴 main が直したもの — リファクタが持ち込んだ型退行
-
-`prepareWorkspace` コールバック経由の代入になったことで、`catalogClapSynthPath` 等 4 件と
-`kickLoopWorkPath` が `string | undefined` のままになり `typecheck:e2e` が 6 件の error を出した。
-`npm test` は vitest が型を見ないので**緑のまま**で、[[consumerless-code-is-unprotected]] と同じ形。
-既存の `requireCatalogFixtures()` を使う形へ寄せ、`requireKickLoopWorkPath()` を足した。
-
-#### 検証（main が sandbox 外で実測）
-
-- 🔴 **clippy を全 5 象限で実行**（default / clap-host / outproc-effect / outproc-instrument /
-  outproc 両方）— **すべて green**。`check-cfg-matrix.sh` は 4 象限しか見ないので `clap-host` が漏れる
-- `cargo test --features outproc-effect,outproc-instrument` — lib **267 passed**
-- `npm test` **2251 passed / 0 failed** / `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified 0 failed**
 
 ## Archived sections
 

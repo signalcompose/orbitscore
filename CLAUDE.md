@@ -661,9 +661,15 @@ npm run build          # engine/daemon に変更があれば npm run build:clean
 # 🔴 同梱の標準プラグインが実機で鳴ることを確かめる（owner 判断 2026-08-28・#628）
 bash rust/crates/orbit-std-gain/bundle-macos.sh
 cargo test --manifest-path rust/Cargo.toml -p orbit-effect-rack-child --lib -- --ignored
+
+# 🔴 上の `-- --ignored` は #[ignore] を付けた 3 件（実 gain プラグイン依存）**しか** 走らせない。
+# 退行検知テスト（#780 の `actual_fixtures_use_distinct_shm_paths` 等）は #[ignore] していない
+# ので `--ignored` 付きだと `0 passed; 19 filtered out` で**実行されずに緑を装う**
+# （main が実測済み・2026-09-07）。`--ignored` を外した通常実行で拾う。
+cargo test --manifest-path rust/Cargo.toml -p orbit-effect-rack-child --lib
 ```
 
-**この 2 行は無条件で回す。**「rust を触った PR のみ」のような**条件分岐を付けない** —
+**この 3 行は無条件で回す。**「rust を触った PR のみ」のような**条件分岐を付けない** —
 条件付きの手動手順は飛ばされるのがこの repo の実測クラス（列挙が一段手前で止まる型）で、
 無条件 19〜67 秒の方が条件判定の認知コストより安い。
 

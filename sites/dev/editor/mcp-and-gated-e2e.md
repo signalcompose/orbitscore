@@ -987,7 +987,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 ### アサーション衛生
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:390-399
+// tests/e2e/gated-assertion-hygiene.spec.ts:553-562
   it('never asserts on a bare ERROR count equality', () => {
     // `get_log` は固定 500 行窓なので、ERROR 件数の**厳密等価**は窓の外へ流れた瞬間に
     // 嘘になる（#625）。`<=` / `toBeLessThanOrEqual` を使うこと。
@@ -1004,12 +1004,12 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 
 2026-09-06 に 3 本目が加わりました（#785）。上の 1 本目は検出条件が**識別子の名前**（`/(?:errorsBefore|errorCount|catalogErrors)/i`）なので、`stoppedBeforeRejectedSave` や `attachFailuresBeforeRoleMismatch` のような別名は素通りしていました。**名前は書き手が自由に付けられるので、名前で条件付ける限り必ず漏れます。** 3 本目は名前を見ず、**値の出どころ**を AST で辿ります — 「`get_log` の戻り値に由来する文字列」→「それに対する `.match(...).length`」→「`toBe` / `toEqual` で比較」という連鎖を、変数を経由していてもインラインでも拾います。実際にこれで実機 spec の 4 箇所が見つかり、すべて `newLogLines` の行差分へ移りました。うち 1 箇所は `.toBe(0)` で、他の 3 つとは**崩れる向きが逆**でした — 窓から流れ出る効果はカウントを減らす方向にしか働かないので、`toBe(0)` は偽赤ではなく**偽緑**を生みます。
 
-この追跡は 1 本の式の連鎖の中で閉じているので、件数を**ヘルパー関数の中で**作る形は、名前によらず素通りします。`tests/e2e/orbitstudio-mcp-gated.spec.ts:2601-2603` と `:2690-2692` の `countAttachFailures(...)` → `.toBe(...)` がその形で、`.match(...).length` 自体は `tests/e2e/helpers/engine-log.ts` の `countLogMarker` の中にあります。窓の外へ流れた古い行が数を減らすという性質は同じなので、この 2 箇所は移行済みの 4 箇所と同じ**偽赤**の可能性を残しています。
+この追跡は当初、**1 本の式の連鎖の中で閉じて**いました。件数を**ローカルのヘルパー関数の中で**作る形（`countAttachFailures(...)` → `.toBe(...)`。`.match(...).length` はラッパーの中にある）は、名前によらず素通りしていたのです。この穴は 2026-09-07 に**ルーティンの docs 追従と束 PR の設計監査が独立に**見つけ、[#789](https://github.com/signalcompose/orbitscore/pull/789) で塞ぎました — 「形」の列挙（名前 → 算術 → `.match().length` → import した helper → ローカルラッパー）をやめ、**「log 由来の値を受けて件数を返す関数」を一般に解決**する形へ変え、ラッパーがラッパーを包む場合に届くよう**集合が増えなくなるまで反復**します。残っていた 2 箇所も同時に移行しました。🔴 **教訓は 3 度目です**: #761 は「名前で条件付けると漏れる」、#785 は「名前でなく値の出どころを見る」、そして今回は「**出どころを 1 式の中でしか見ていないと漏れる**」。手がかりを一段上げるたびに、その手がかりが**視野そのものを決めている**ことが露呈しました。
 
 stale ガードの 2 本（`keeps the stale guard off cargo targets it can never rebuild` と `still lets the stale guard see the sources the daemon is built from`）は**片方向ずつ**を留めるペアになっています。前者だけなら「除外を消す」退行を捕まえられますが、後者が無いと「行きすぎて `src` まで除外する」方向は素通りします。ガードの目的（古いバイナリで測らない）は `src` を見ていることに依存するので、両方向を留めて初めて線引きが固定されます。
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:518-522
+// tests/e2e/gated-assertion-hygiene.spec.ts:681-685
     expect(
       /entry\.name === 'src'/.test(source),
       'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +

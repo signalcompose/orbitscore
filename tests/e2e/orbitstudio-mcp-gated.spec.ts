@@ -2560,8 +2560,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
 
       const shiftedWav = captureWavPath(root, 'shifted')
       const restoredWav = captureWavPath(root, 'restored')
-      const countAttachFailures = (log: string): number =>
-        countLogMarker(log, /\[OUTPROC_ATTACH_FAILED\]/g)
       const countGlobalStops = (log: string): number =>
         countLogMarker(log, /(?:✅ Global stopped|⏹ Global)/g)
 
@@ -2586,9 +2584,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         ].join('\n'),
       })
       expect(initShifted.isError, initShifted.text).toBe(false)
-      const attachFailuresBeforeShifted = countAttachFailures(
-        (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
-      )
+      const beforeShiftedAttachLog = (
+        await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })
+      ).text
       const attachShifted = await activeClient.call('evaluate_orbitscore', {
         code: `stSeq.instrument(${JSON.stringify(catalog.clapSynthName)}, ${JSON.stringify(handStatePath)})`,
       })
@@ -2597,10 +2595,20 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const afterShiftedAttachLog = (
         await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })
       ).text
+      // #789: was `countAttachFailures(afterShiftedAttachLog).toBe(attachFailuresBeforeShifted)`
+      // — a window-scoped strict-equality count via a local wrapper around
+      // countLogMarker, which is exactly the shape #785 fixed elsewhere but this wrapper
+      // hid from the name-based provenance ratchet. Keep the actual "before" log text so
+      // the check can say WHICH lines appeared via newLogLines.
+      const newAttachFailedAfterShifted = newLogLines(
+        beforeShiftedAttachLog,
+        afterShiftedAttachLog,
+      ).filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]'))
       expect(
-        countAttachFailures(afterShiftedAttachLog),
-        `Cycle A instrument attach must add no OUTPROC_ATTACH_FAILED. Log tail: ${afterShiftedAttachLog.slice(-1200)}`,
-      ).toBe(attachFailuresBeforeShifted)
+        newAttachFailedAfterShifted,
+        `Cycle A instrument attach must add no OUTPROC_ATTACH_FAILED. New attach-failed lines: ` +
+          `${JSON.stringify(newAttachFailedAfterShifted)}. Log tail: ${afterShiftedAttachLog.slice(-1200)}`,
+      ).toEqual([])
 
       const playShifted = await activeClient.call('evaluate_orbitscore', {
         code: ['stSeq.play(1)', 'RUN(stSeq)'].join('\n'),
@@ -2675,9 +2683,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         ].join('\n'),
       })
       expect(initRestored.isError, initRestored.text).toBe(false)
-      const attachFailuresBeforeRestored = countAttachFailures(
-        (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
-      )
+      const beforeRestoredAttachLog = (
+        await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })
+      ).text
       const attachRestored = await activeClient.call('evaluate_orbitscore', {
         code: `stSeq.instrument(${JSON.stringify(catalog.clapSynthName)})`,
       })
@@ -2686,10 +2694,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const afterRestoredAttachLog = (
         await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })
       ).text
+      // #789: was `countAttachFailures(afterRestoredAttachLog).toBe(attachFailuresBeforeRestored)`
+      // — same window-scoped strict-equality count via the local wrapper (#785).
+      const newAttachFailedAfterRestored = newLogLines(
+        beforeRestoredAttachLog,
+        afterRestoredAttachLog,
+      ).filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]'))
       expect(
-        countAttachFailures(afterRestoredAttachLog),
-        `Cycle B instrument attach must add no OUTPROC_ATTACH_FAILED. Log tail: ${afterRestoredAttachLog.slice(-1200)}`,
-      ).toBe(attachFailuresBeforeRestored)
+        newAttachFailedAfterRestored,
+        `Cycle B instrument attach must add no OUTPROC_ATTACH_FAILED. New attach-failed lines: ` +
+          `${JSON.stringify(newAttachFailedAfterRestored)}. Log tail: ${afterRestoredAttachLog.slice(-1200)}`,
+      ).toEqual([])
       expect(
         afterRestoredAttachLog,
         `Cycle B must surface the automatic project-state restore. Log tail: ${afterRestoredAttachLog.slice(-1200)}`,
@@ -5446,7 +5461,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         await waitForEngineState(sweepClient, false, 15_000, '#779 precondition')
 
         const reaped = spawnSync('true')
-        expect(reaped.status, 'dead-PID fixture process must exit successfully').toBe(0)
+        expect(
+          reaped.status,
+          `dead-PID fixture process must exit successfully. spawn error: ${String(reaped.error)}`,
+        ).toBe(0)
         expect(reaped.pid, 'dead-PID fixture must expose its PID').toBeGreaterThan(0)
         const deadShm = path.join(os.tmpdir(), `orbit-outproc-effect-${reaped.pid}-0.shm`)
         const deadSidecar = `${deadShm}.chain.json`
@@ -5472,8 +5490,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // `collecting = false` の後で、蓄積分が表に出るのは**起動が失敗した時だけ**
         // （`:946` 以降のエラー経路）。sweep は最初の shm 生成より前＝ready 行より前に
         // 走るので、起動が成功する限りその INFO 行は `get_log` に現れない。
-        // これは欠陥ではなく設計どおりで、「掃除が遅すぎて ready に間に合わない」という
-        // 肝心の場合には DaemonStartupError の診断として観測できる。
+        // これは欠陥ではなく設計どおりだが、「掃除が遅すぎて ready に間に合わない」という
+        // 肝心の場合でも `DaemonStartupError` の診断としては観測**できない**: `.stderr`
+        // プロパティは `errors.ts:21` で代入されるだけで、それを読む箇所はリポジトリに
+        // 存在しない（`.message` にも埋め込まれない）。sweep の要約は成功・失敗いずれの
+        // 場合でも `get_log` には現れない。
         // したがって**このテストのオラクルはファイルシステム**（上の 3 つ）であり、
         // ログは ERROR が増えていないことの確認にだけ使う。
         const log = (await sweepClient.call('get_log', { lines: 500 })).text

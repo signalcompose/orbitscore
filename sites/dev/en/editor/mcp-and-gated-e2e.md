@@ -991,7 +991,7 @@ Its limits are stated honestly too. Since it only scans the source as text, it d
 ### Assertion hygiene
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:390-399
+// tests/e2e/gated-assertion-hygiene.spec.ts:553-562
   it('never asserts on a bare ERROR count equality', () => {
     // `get_log` は固定 500 行窓なので、ERROR 件数の**厳密等価**は窓の外へ流れた瞬間に
     // 嘘になる（#625）。`<=` / `toBeLessThanOrEqual` を使うこと。
@@ -1008,12 +1008,12 @@ The suite also checks whether capture-using specs contain an `rms(` / `peak(` / 
 
 A third check landed on 2026-09-06 (#785). The first one keys off **identifier names** (`/(?:errorsBefore|errorCount|catalogErrors)/i`), so aliases such as `stoppedBeforeRejectedSave` or `attachFailuresBeforeRoleMismatch` slipped straight through. **Names are the author's to choose, so keying a check off a name will always leak.** The third check ignores names and follows **provenance** through the AST instead: "a string derived from the return value of `get_log`" → "a `.match(...).length` over it" → "compared with `toBe` / `toEqual`", picked up whether it goes through a variable or is written inline. It found four sites in the real-device spec, all of which moved to line diffs via `newLogLines`. One of them was `.toBe(0)`, which breaks in the **opposite direction** from the other three: scrolling can only push the count down, so `toBe(0)` yields a false green rather than a false red.
 
-That tracking stays inside a single expression chain, so a count built **inside a helper function** still slips past it, whatever the identifiers are called. `tests/e2e/orbitstudio-mcp-gated.spec.ts:2601-2603` and `:2690-2692` have exactly that shape — `countAttachFailures(...)` → `.toBe(...)`, with the `.match(...).length` itself living inside `countLogMarker` in `tests/e2e/helpers/engine-log.ts`. Old lines scrolling out of the window still push the count down, so those two sites keep the same **false red** exposure as the four that were migrated.
+That tracking originally stayed **inside a single expression chain**, so a count built **inside a local helper function** (`countAttachFailures(...)` → `.toBe(...)`, with the `.match(...).length` hidden in the wrapper) slipped past it whatever the identifiers were called. The routine documentation follow-up and the bundle audit found that hole **independently** on 2026-09-07, and [#789](https://github.com/signalcompose/orbitscore/pull/789) closed it: instead of enumerating *shapes* (name → arithmetic → `.match().length` → imported helper → local wrapper), the detector now **resolves any function that takes a log-derived value and returns a count**, **iterating to a fixed point** so wrappers around wrappers are still reached. The two remaining sites were migrated at the same time. 🔴 **This is the third time the same lesson has surfaced**: #761 was "keying off names leaks", #785 was "follow provenance, not names", and this one is "following provenance only within one expression leaks too". Each time the handle was raised, it turned out that **the handle itself had been defining the field of view**.
 
 The two stale-guard checks (`keeps the stale guard off cargo targets it can never rebuild` and `still lets the stale guard see the sources the daemon is built from`) form a pair that pins **one direction each**. The first alone catches the regression "the exclusion was deleted", but without the second, going too far and excluding `src` as well would pass unnoticed. The guard's purpose — never measure a stale binary — depends on it still looking at `src`, so only both directions together fix the line.
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:518-522
+// tests/e2e/gated-assertion-hygiene.spec.ts:681-685
     expect(
       /entry\.name === 'src'/.test(source),
       'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +
