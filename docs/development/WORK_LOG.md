@@ -17,6 +17,64 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(e2e): apply the /simplify pass on the gated-measurement bundle (Sep 6, 2026)
+
+**ブランチ**: `761-gated-measurement`（束 PR [#776](https://github.com/signalcompose/orbitscore/pull/776)）
+
+束 PR のレビューフロー ①。4 エージェント（reuse / simplification / efficiency / altitude）を
+並行起動し、指摘を重複排除して適用した。
+
+#### 🔴 最重要: ラチェット自身が目的より狭かった（altitude）
+
+#761 が足した `gated-assertion-hygiene.spec.ts` のラチェットは **1 行スコープ**だった。
+撤去した違反がたまたま 1 行だっただけで、この suite の主流である複数行 `expect()` は素通りする:
+
+```ts
+expect(x, msg).toBeGreaterThanOrEqual(
+  errorsBefore + 1,
+)
+```
+
+**偽赤を防ぐために足した仕組みが、書き方を変えるだけで無効化される**状態だった。
+`offendingLines()` を追加し、**コメント行を落としてから残りを連結**して照合、一致位置から
+元の行番号を引き直す形へ。
+
+**変異で実証**: 複数行に散らした違反を注入 → **red**（`…spec.ts:3749` と正しく報告）、復元で 7 passed。
+
+#### efficiency: capture の末尾だけを読む
+
+`waitForQuiet` は 100 ms ごとに `captureTailWindows` を呼び、**capture 全体**を `readFileSync` して
+`analyzeWavBuffer` に渡していた。E3 の時点でファイルは ≈6 MiB、全フレームを 2 回走査して
+≈825 窓を作り、**末尾 ≈15 窓（2%）しか使わない**。timeout まで回ると 100 ポーリング ≈600 MB。
+
+`readCaptureFormat` と同じ `openSync` + 位置指定 `readSync` で**末尾のバイトだけ**を読む形へ
+（`captureTailRms`）。併せて**返り値を RMS の配列だけに狭めた** — 末尾だけ読むと `startSec` は
+ファイル先頭基準ではなくなるので、使われない座標を返して誤用を招くより契約を狭める。
+
+**変異で実証**: 先頭から読む → red / `tailSec` を無視して全体を解析（旧形への退行）→ red。復元で 49 passed。
+
+#### simplification
+
+- `0.005` が 2 箇所（`waitForQuiet` の floor と E3 の RMS 判定）に増え、**コメントだけで同期**して
+  いた。`E3_SILENCE_FLOOR_RMS` に括り出し、同期を約束するコメントを不要にした
+- `ReturnType<typeof fakeChildProcess>` → 既存の `FakeChildProcess` を名指し
+
+#### reuse / altitude → issue 化（束では直さない）
+
+| # | 内容 |
+|---|---|
+| **#777** | `createDaemonStderrLineRouter` に **`flush()` が無い**。#756 と同じ欠陥クラスで、**daemon が panic して改行なしで死んだ時の最後の 1 行**が落ちる。#756 の doc コメント自身が「双子はこれを持たない」と書いており、**一般化した教訓が片方にしか適用されていなかった** |
+
+`createLinePrefixer` の doc コメントに、双子の所在・同期すべき点・#777 を明記した。
+共通化は拡張パッケージが `@orbitscore/engine` に依存していないため別問題（#777 に記載）。
+
+#### 検証
+
+| 何 | 結果 |
+|---|---|
+| `npm test` | 2288 passed / 57 skipped |
+| `typecheck:e2e` / eslint / `docs:check` | 0 / 0 / 968 verified 0 failed |
+
 ### fix(extension): prefix stderr per line, not per chunk (#756) (Sep 6, 2026)
 
 **ブランチ**: `756-stderr-line-prefix`（base = 束 `761-gated-measurement`） / **Part of** [#756](https://github.com/signalcompose/orbitscore/issues/756)

@@ -3515,6 +3515,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     TEST_TIMEOUT_MS * 2,
   )
 
+  /**
+   * E3（休符パターン）を「無音」と見なす RMS の上限。
+   *
+   * 🔴 実時間側（`waitForQuiet` の `floor`）と WAV 側（`e3Rms` の判定）で**同じ値でなければ
+   * ならない**。違うと「静かと判定して窓を開けたのに、その窓は判定基準を満たさない」が
+   * 起こりうる。以前はコメントで同期を約束していたが、定数にすれば約束が要らない。
+   */
+  const E3_SILENCE_FLOOR_RMS = 0.005
+
   it.skipIf(!appAvailable)(
     'replaces a playing instrument across CLAP/VST3 with audio, state, process, failure, and UI oracles (#618 E1-E6)',
     async () => {
@@ -3684,9 +3693,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // 「休符に切り替えたら無音になる」の実時間側の主張で、下の RMS 判定が WAV 側の主張。
         await activeClient.call('evaluate_orbitscore', { code: 'cb618.play(0, 0, 0, 0)' })
         const e3Quiet = await waitForQuiet(capturePath, {
-          // 下の `E3 rest pattern must be silent` と同じ閾値にする（別の値にすると
-          // 「静かと判定したのに窓は静かでない」が起こりうる）。
-          floor: 0.005,
+          floor: E3_SILENCE_FLOOR_RMS,
           quietSec: 0.3,
           intervalMs: 100,
           timeoutMs: 10_000,
@@ -3821,7 +3828,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const e5Rms = captured.rms('e5', 0)
       expect(e1Rms, 'E1 CLAP baseline must be non-silent').toBeGreaterThan(0.03)
       expect(e2Rms, 'E2 VST3 replacement must be non-silent').toBeGreaterThan(0.03)
-      expect(e3Rms, 'E3 rest pattern must be silent').toBeLessThan(0.005)
+      expect(e3Rms, 'E3 rest pattern must be silent').toBeLessThan(E3_SILENCE_FLOOR_RMS)
       expect(e4Rms, 'E4 failed replacement must leave B sounding').toBeGreaterThan(0.03)
       expect(e5Rms, 'E5 restored A must be non-silent').toBeGreaterThan(0.03)
 

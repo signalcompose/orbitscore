@@ -551,9 +551,7 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
     // gated E2E の ERROR 会計（`countErrors` / `newErrorLines`）は `ERROR:` を数える。
     // chunk 単位で前置していた頃は、1 chunk に複数行入ると 2 行目以降が**最初から見えて
     // いなかった**（= 構造的な過小カウント＝偽緑）。
-    const collectErrorLines = (
-      drive: (fake: ReturnType<typeof fakeChildProcess>) => void,
-    ): string[] => {
+    const collectErrorLines = (drive: (fake: FakeChildProcess) => void): string[] => {
       const fake = fakeChildProcess()
       const appended: string[] = []
       ext.__setOutputChannelForTest({

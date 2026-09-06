@@ -28,6 +28,52 @@ const linesMatching = (predicate: (line: string) => boolean): string[] =>
     .filter(({ line }) => predicate(line))
     .map(({ file, line, n }) => `${file}:${n}: ${line.trim()}`)
 
+/**
+ * **式**をまたいで正規表現を照合し、一致した箇所を `file:line` で返す。
+ *
+ * 🔴 なぜ行単位ではだめか: この suite の `expect()` は matcher と引数が別の行に来ることが多い。
+ * 行ごとに照合すると、同じ違反でも 1 行に収まったものだけを捕まえ、複数行に散らしたものを
+ * 見逃す — 検査が「書き方」に依存してしまう。
+ *
+ * コメント行（`//` / JSDoc の `*`）は連結の前に落とす。アンチパターンを**説明した注釈**を
+ * 検査自身が拾うと、正しく直したのに赤くなる（規律を説明できなくなる）。
+ *
+ * 連結は改行を空白に置き換えるだけなので、`\s*` を含む正規表現がそのまま跨いで一致する。
+ * 行番号は連結後のオフセットから引き直す。
+ */
+const offendingLines = (pattern: RegExp): string[] => {
+  const isComment = (line: string): boolean => {
+    const trimmed = line.trim()
+    return trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')
+  }
+  const found: string[] = []
+  for (const { file, source: text } of entries) {
+    // 連結後のオフセット → 元の行番号 を引けるよう、残した行の開始位置を控える。
+    const kept: Array<{ n: number; line: string; at: number }> = []
+    let joined = ''
+    text.split('\n').forEach((line, i) => {
+      if (isComment(line)) return
+      kept.push({ n: i + 1, line, at: joined.length })
+      joined += `${line}\n`
+    })
+    const scan = new RegExp(
+      pattern.source,
+      pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`,
+    )
+    for (let m = scan.exec(joined); m !== null; m = scan.exec(joined)) {
+      const index = m.index
+      // 一致開始位置を含む行（`at <= index` の最後の要素）。
+      let hit = kept[0]
+      for (const candidate of kept) {
+        if (candidate.at > index) break
+        hit = candidate
+      }
+      if (hit !== undefined) found.push(`${file}:${hit.n}: ${hit.line.trim()}`)
+    }
+  }
+  return found
+}
+
 describe('gated E2E assertion hygiene', () => {
   it('never asserts on a bare ERROR count equality', () => {
     // `get_log` は固定 500 行窓なので、ERROR 件数の**厳密等価**は窓の外へ流れた瞬間に
@@ -115,13 +161,20 @@ describe('gated E2E assertion hygiene', () => {
     // ⚠️ コメント行は除外する。**このアンチパターンを説明した注釈自身**を検査が拾ってしまい、
     // 「正しく直したのに赤くなる」＝ 規律を説明できなくなる（実際に本 PR で発火した）。
     // コメントアウトされたコードは実行されないので、除外して困ることもない。
-    const offenders = linesMatching((line) => {
-      const trimmed = line.trim()
-      if (trimmed.startsWith('//') || trimmed.startsWith('*')) return false
-      return /\.(toBe|toEqual|toBeGreaterThanOrEqual|toBeLessThanOrEqual)\(\s*\w*[Bb]efore\s*[+-]\s*\d/.test(
-        line,
-      )
-    })
+    //
+    // 🔴 **1 行ずつ照合してはいけない**（`/simplify` の altitude 指摘）。この suite の主流の
+    // `expect()` は複数行に跨る:
+    //
+    //     expect(x, msg).toBeGreaterThanOrEqual(
+    //       errorsBefore + 1,
+    //     )
+    //
+    // matcher と引数が別の行に来るので、行単位の照合では**素通りする**。撤去した違反が
+    // たまたま 1 行だっただけで、検査が目的より狭かった。コメント行を落としてから
+    // **残りを連結して**照合し、一致位置から元の行番号へ引き直す。
+    const offenders = offendingLines(
+      /\.(toBe|toEqual|toBeGreaterThanOrEqual|toBeLessThanOrEqual)\(\s*\w*[Bb]efore\s*[+-]\s*\d/g,
+    )
     expect(
       offenders,
       'Log counts come from a fixed 500-line window, so "baseline + N" claims break when old ' +

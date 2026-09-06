@@ -186,16 +186,48 @@ export async function waitForSound(
   )
 }
 
-/** capture の末尾 `tailSec` ぶんの解析窓。ファイルがまだヘッダ未満なら空を返す。 */
-function captureTailWindows(
-  capturePath: string,
-  tailSec: number,
-): Array<{ startSec: number; rms: number }> {
-  if (fs.statSync(capturePath).size < CAPTURE_HEADER_BYTES) return []
-  const analysis = analyzeWavBuffer(readCaptureForAnalysis(capturePath), { windowMs: 20 })
-  const windows = analysis.windows ?? []
-  const from = analysis.durationSec - tailSec
-  return windows.filter((window) => window.startSec >= from)
+/**
+ * capture の**末尾** `tailSec` ぶんの RMS 窓（20 ms バケット）。ヘッダ未満なら空。
+ *
+ * 🔴 **末尾のバイトだけを読む**（`/simplify` の efficiency 指摘）。以前はファイル全体を
+ * `readFileSync` して `analyzeWavBuffer` に渡し、全フレームを走査してから末尾だけ残していた。
+ * gated E2E の capture は 24 秒で ~9 MB になり、これを **100 ms ごとに**繰り返すと、
+ * 生成した窓の **2% 前後しか使わないのに**数百 MB を読み直すことになる。
+ * `readCaptureFormat` と同じ `openSync` + 位置指定 `readSync` で末尾だけを切り出す。
+ *
+ * 🔴 **返すのは RMS の配列だけ**。以前は `{ startSec, rms }` を返していたが、末尾だけを
+ * 読むと `startSec` は**ファイル先頭からの時刻ではなくなる**。呼び出し側は 2 箇所とも
+ * `rms` しか見ていないので、使われない座標を返して誤用を招くより、契約を狭める。
+ */
+function captureTailRms(capturePath: string, tailSec: number): number[] {
+  const size = fs.statSync(capturePath).size
+  if (size < CAPTURE_HEADER_BYTES) return []
+  const { sampleRate, channels } = readCaptureFormat(capturePath)
+  const bytesPerFrame = channels * BYTES_PER_SAMPLE
+  // writer は frame 単位で追記するが、読んだ瞬間に端数が乗っていることはありうる。
+  const dataBytes = size - CAPTURE_HEADER_BYTES
+  const wholeFrameBytes = dataBytes - (dataBytes % bytesPerFrame)
+  const tailBytes = Math.min(wholeFrameBytes, Math.ceil(tailSec * sampleRate) * bytesPerFrame)
+  if (tailBytes <= 0) return []
+
+  const buffer = Buffer.alloc(CAPTURE_HEADER_BYTES + tailBytes)
+  const fd = fs.openSync(capturePath, 'r')
+  try {
+    fs.readSync(fd, buffer, 0, CAPTURE_HEADER_BYTES, 0)
+    fs.readSync(
+      fd,
+      buffer,
+      CAPTURE_HEADER_BYTES,
+      tailBytes,
+      CAPTURE_HEADER_BYTES + wholeFrameBytes - tailBytes,
+    )
+  } finally {
+    fs.closeSync(fd)
+  }
+  // `readCaptureForAnalysis` と同じ理由で data サイズを 0 にする（writer が書いた
+  // ヘッダの値は追記に追いつかないので、物理バイト数で解析させる）。
+  buffer.writeUInt32LE(0, 40)
+  return (analyzeWavBuffer(buffer, { windowMs: 20 }).windows ?? []).map((window) => window.rms)
 }
 
 /**
@@ -217,8 +249,8 @@ export async function waitForQuiet(
   const deadline = Date.now() + opts.timeoutMs
   while (Date.now() <= deadline) {
     try {
-      const tail = captureTailWindows(capturePath, opts.quietSec)
-      if (tail.length > 0 && tail.every((window) => window.rms < opts.floor)) return true
+      const tail = captureTailRms(capturePath, opts.quietSec)
+      if (tail.length > 0 && tail.every((rms) => rms < opts.floor)) return true
     } catch {
       // writer がヘッダを書き終える前など。次の周回で読み直す。
     }
@@ -277,8 +309,8 @@ export async function waitForSoundRestart(
   let lastTailMax = 0
   while (Date.now() <= deadline) {
     try {
-      const tail = captureTailWindows(capturePath, 0.1)
-      lastTailMax = tail.reduce((maximum, window) => Math.max(maximum, window.rms), 0)
+      const tail = captureTailRms(capturePath, 0.1)
+      lastTailMax = tail.reduce((maximum, rms) => Math.max(maximum, rms), 0)
       if (lastTailMax >= opts.floor) return { quietObserved }
     } catch {
       // 同上

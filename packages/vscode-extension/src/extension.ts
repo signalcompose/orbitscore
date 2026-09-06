@@ -1578,7 +1578,15 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
  *
  * 🔴 `flush()` を持つ理由: 行に整えると、**改行で終わらない最後の出力**が buffer に残ったまま
  * プロセスが終わる。それは過小カウントを直すはずのこの変更が**逆方向に**同じ穴を開けること
- * になる。`end` で必ず吐き出す。（engine 側の `createDaemonStderrLineRouter` はここを持たない。）
+ * になる。`end` で必ず吐き出す。
+ *
+ * 🔴 **双子がいる**: `packages/engine/src/audio/rust-engine/daemon-client.ts` の
+ * `createDaemonStderrLineRouter` が同じ「`partial` を持ち越して行に組み直す」中核を持つ
+ * （扱うプロセス境界は別 — こちらは拡張 → engine、あちらは engine → daemon）。
+ * 拡張パッケージは `@orbitscore/engine` に依存していないので今は共有できない。
+ * **片方に入れた変更（改行コードの扱い・空行の扱い・flush）はもう片方にも要る**。
+ * あちらには `flush()` が無く、daemon が panic して改行なしで死んだ時に最後の 1 行を落とす
+ * （#777 で追跡）。
  *
  * 空行は emit しない。`ERROR: ` だけの行を作ると `countErrors` が**水増し**される。
  */
