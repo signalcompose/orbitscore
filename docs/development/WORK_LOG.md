@@ -17,6 +17,52 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: repair the orphan WORK_LOG headings the docs-sync merges left (Sep 6, 2026)
+
+**追従元**: PR [#750](https://github.com/signalcompose/orbitscore/pull/750)（`385-map-record-trust-layer-2` → main・マージコミット `aa16f7a`）/ **ブランチ**: `claude/docs-sync-pr750`
+
+マージ済み PR #750（#385 層 2 の繰り延べを地図に記録）への追従。**コードとテストは 1 行も変更していない。**
+
+#### 🔴 何が起きていたか — 本文の消失ではなく「孤立見出し」
+
+2026-09-06 に docs-sync 7 本を「1 本ずつ解消 → マージ」で処理した際、WORK_LOG の衝突を
+**両側を残す**形で機械的に解いた。ところが同じ日に PR #754 が **WORK_LOG をローテーション**して
+09-04 以前のエントリを `docs/archive/WORK_LOG_2026-09.md` へ移していたため、
+「ブランチ側にはエントリがあり、main 側では移動済み」という組み合わせが生まれた。
+
+結果、main の現行ログに
+**`### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)` の見出しだけが 2 つ**
+残った（本文なし・次の行がいきなり別の見出し）。
+
+🔴 **本文は消えていない。** `docs/archive/WORK_LOG_2026-09.md:798` に無傷で残っている。
+壊れていたのは**現行ログ側の見出しと、そこを指していた出典参照**である。
+
+- 走査した結果、孤立見出しは**この 1 種類 2 箇所だけ**で、他への波及は無かった
+- `sites/dev/editor/vscode-architecture.md:854`（+ `en/`）の検証マップが
+  この WORK_LOG エントリを出典として名指ししており、**参照先が空になっていた**
+
+#### 直したもの
+
+| 場所 | 何が古かったか |
+|---|---|
+| `docs/development/WORK_LOG.md` | 孤立見出し 2 つを除去。本文はアーカイブ側が正なので現行ログへは戻さない |
+| `sites/dev/editor/vscode-architecture.md`（+ `en/`） | 出典を `docs/archive/WORK_LOG_2026-09.md` へ向け直した（現行ログを指したままだと空を指す） |
+| `sites/dev/editor/vscode-architecture.md`（+ `en/`） | workspace trust の節が「宣言 (層 1) を入れた」で終わっており、**層 1 では救えない**ことが書かれていなかった。同居する `anthropic.claude-code` が `untrustedWorkspaces.supported: false` を宣言していてこちらから足せず、loose-file 起動では LLM 側が黙って activate しないこと、層 2（PR-S-T2・ビルドで trust 既定 off）が #656 出荷前に残っていることを追記 |
+| 同上 frontmatter | `verified-against` を `aa16f7a`・`verified-at` を 2026-09-06 に更新。冒頭 Note にも #750 までの追従を明記 |
+
+#### 追従不要と判断したもの
+
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — #750 は DSL の構文・意味論・`.orbslog` 形式を一切変えていない（差分は計画文書 2 ファイルのみ）
+- `sites/user/reference/methods.md` / `docs/user/ja/USER_MANUAL.md` — ユーザーが書く語は増減していない
+- `rust/` 系の章 — MCP ツールの引数・返り値・エラー挙動に変更なし
+- `docs/design/656-release-design.md` — 起案時点のスナップショットなので触らない（#750 本文いわく設計側は既に層 2 を持っている）
+
+#### 直していないもの（PR 本文へ回した）
+
+E2E の穴・弱いアサーション・CI の指摘は書き出すだけにした。実機 gated は
+`ORBIT_GATED_ORBITSTUDIO` が無い環境では skip されて緑になるため、この追従作業で E2E を積むと
+一度も走っていないテストを積むことになる。`dsl-e2e-coverage.spec.ts` の baseline も編集していない。
+
 ### chore(hooks): verify a push actually landed (#742) (Sep 4, 2026)
 
 **Issue**: #742 / owner 指摘「**繰り返さない様に仕組みでカバー出来るところはやりましょう**」
@@ -67,7 +113,6 @@ git push -q origin <branch> && echo pushed
 
 ---
 
-### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
 ### docs(649): follow the master line up in the spec and the dev site (Sep 5, 2026)
 
 **Issue**: #649 / **ブランチ**: `claude/docs-sync-pr754` / **追従元 PR** [#754](https://github.com/signalcompose/orbitscore/pull/754)（merge commit `f2dadd9`）
@@ -183,7 +228,6 @@ owner 判断（2026-09-05）で **#385 は段 1（must-fix の音の経路）で
 計画側（`IMPLEMENTATION_PLAN_2026-09.md` の PR-S-T2 行・`USER_OUTCOMES_2026-09.md` の段 8）と
 設計側（`656-release-design.md` §3.4）は既に層 2 を持っていたので変更なし。**欠けていたのは地図だけ**。
 
-### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
 ### docs: follow PR #748 in the dev site and the user site (#661) (Sep 5, 2026)
 
 **Issue**: #661 / **ブランチ**: `claude/docs-sync-pr748` / **追従元**: PR #748（merge commit `ef192ca`）
