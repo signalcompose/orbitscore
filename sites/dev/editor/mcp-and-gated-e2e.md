@@ -465,7 +465,7 @@ export function selectLogLines(ring: readonly string[], requested?: number): str
 修正は `createLinePrefixer()` という小さな道具に切り出されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1585-1605
+// packages/vscode-extension/src/extension.ts:1599-1619
 export function createLinePrefixer(emit: (line: string) => void): {
   push: (chunk: string) => void
   flush: () => void
@@ -494,7 +494,7 @@ export function createLinePrefixer(emit: (line: string) => void): {
 `flush()` が要る理由も同じ形をしています。行に整えると、**改行で終わらない最後の出力**が `partial` に残ったままプロセスが終わります。過小カウントを直すはずの変更が、逆方向から同じ穴を開けてしまうのです。そこで `'end'` イベントで必ず吐き出します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1621-1643
+// packages/vscode-extension/src/extension.ts:1635-1657
 export function setupStderrHandler(process: child_process.ChildProcess): void {
   const prefixer = createLinePrefixer((line) => {
     outputChannel?.appendLine(`ERROR: ${line}`)

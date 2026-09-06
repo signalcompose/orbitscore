@@ -465,7 +465,7 @@ Up to #756 that scale was **per chunk**. The code read `outputChannel.append('ER
 The fix is factored out into a small tool called `createLinePrefixer()`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1585-1605
+// packages/vscode-extension/src/extension.ts:1599-1619
 export function createLinePrefixer(emit: (line: string) => void): {
   push: (chunk: string) => void
   flush: () => void
@@ -494,7 +494,7 @@ What to watch out for here is that a naive `split('\n')` loop does not fix it. *
 The reason `flush()` has to exist has the same shape. Once output is folded into lines, **the last output that does not end with a newline** stays in `partial` when the process ends. A change meant to fix an undercount would open the very same hole from the other direction. So the `'end'` event always drains it.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1621-1643
+// packages/vscode-extension/src/extension.ts:1635-1657
 export function setupStderrHandler(process: child_process.ChildProcess): void {
   const prefixer = createLinePrefixer((line) => {
     outputChannel?.appendLine(`ERROR: ${line}`)
