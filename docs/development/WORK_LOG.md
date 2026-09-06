@@ -17,6 +17,43 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(dev-site): correct the hygiene-ratchet inventory after #785 (Sep 6, 2026)
+
+**ブランチ**: `claude/docs-sync-pr788`（base は束の統合ブランチ `780-merge-gate`）
+
+PR [#788](https://github.com/signalcompose/orbitscore/pull/788)（マージコミット `0bb337b` /
+head `f3fd4d4`）への docs 追従。#788 は **テストのみのコード変更**（`packages/` / `rust/` は
+1 行も触っていない）なので、追従先は dev サイトの「アサーション衛生」節に限られる。
+
+#### 直したもの
+
+| 箇所 | 直した内容 |
+|---|---|
+| `sites/dev/editor/mcp-and-gated-e2e.md:1020` / en `:1024` | 「**5 本**すべてがソース**文字列**を走査する」→ 「`describe('gated E2E assertion hygiene')` の **8 本**すべてがソースを**静的に読む**（多くは文字列走査、#761 と #785 の 2 本は AST）」。件数は #785 以前から陳腐化していて（7 本）、#785 の追加で 8 本になった。走査手段の記述も #761 の AST 化以降ずれていた |
+| 同 `:1009` / en `:1013` | 「**後半 2 本**は片方向ずつを留めるペア」の指示対象が、#785 の `it` が 7 番目に挿入されたことで曖昧になった。stale ガードの 2 本を名前で名指しする形へ |
+| 同 `:1007` / en `:1011` | ラチェットの**穴**を追記。provenance 追跡は 1 本の式の連鎖の中で閉じるので、件数を**ヘルパー関数の中で**作る形は名前によらず素通りする |
+| 上記 2 ファイルの frontmatter | `verified-against: d2e94af` → `0bb337b`、冒頭 Note に #785 / PR #788 を追記 |
+
+#### 🔴 #788 が「4 箇所すべて」と書いた形は、まだ 2 箇所残っている
+
+新しい `logProvenanceStrictEqualityOffenders` は `get_log` の戻り値 → `.match(...).length` →
+`toBe`/`toEqual` の連鎖を AST で辿るが、**`.match(...).length` がヘルパーの中にある**と辿れない。
+
+| 箇所 | 形 |
+|---|---|
+| `tests/e2e/orbitstudio-mcp-gated.spec.ts:2601-2603` | `expect(countAttachFailures(afterShiftedAttachLog), ...).toBe(attachFailuresBeforeShifted)` |
+| 同 `:2690-2692` | `expect(countAttachFailures(afterRestoredAttachLog), ...).toBe(attachFailuresBeforeRestored)` |
+
+どちらも `countAttachFailures` → `tests/e2e/helpers/engine-log.ts` の `countLogMarker` を経由するため、
+新ラチェットは**緑のまま**である。#788 本文の「🔴 除外リストは無い」は走査器の設計としては正しいが、
+「機械的に全列挙した」の結果は 4 箇所ではなく 6 箇所だった。
+
+🔴 教訓の反復: #761 は「名前で条件付けると漏れる」、#785 は「名前でなく値の出どころを見る」だった。
+今回残ったのは **「値の出どころを見る」を 1 式の中でしか見ていない**ことによる漏れで、
+**測定器の適用範囲そのものを機械で列挙していない**という同じ形をしている。
+
+**テストは変更していない**（ルーチンの禁止事項）。
+
 ### docs: sharpen the ORBIT_GATED_ONLY correction after the routine review (Sep 6, 2026)
 
 **ブランチ**: `785-widen-count-ratchet`（束 `780-merge-gate`）

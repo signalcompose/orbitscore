@@ -1,12 +1,12 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: d2e94af
+verified-against: 0bb337b
 verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -1004,7 +1004,9 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 
 2026-09-06 に 3 本目が加わりました（#785）。上の 1 本目は検出条件が**識別子の名前**（`/(?:errorsBefore|errorCount|catalogErrors)/i`）なので、`stoppedBeforeRejectedSave` や `attachFailuresBeforeRoleMismatch` のような別名は素通りしていました。**名前は書き手が自由に付けられるので、名前で条件付ける限り必ず漏れます。** 3 本目は名前を見ず、**値の出どころ**を AST で辿ります — 「`get_log` の戻り値に由来する文字列」→「それに対する `.match(...).length`」→「`toBe` / `toEqual` で比較」という連鎖を、変数を経由していてもインラインでも拾います。実際にこれで実機 spec の 4 箇所が見つかり、すべて `newLogLines` の行差分へ移りました。うち 1 箇所は `.toBe(0)` で、他の 3 つとは**崩れる向きが逆**でした — 窓から流れ出る効果はカウントを減らす方向にしか働かないので、`toBe(0)` は偽赤ではなく**偽緑**を生みます。
 
-後半 2 本は**片方向ずつ**を留めるペアになっています。前者だけなら「除外を消す」退行を捕まえられますが、後者が無いと「行きすぎて `src` まで除外する」方向は素通りします。ガードの目的（古いバイナリで測らない）は `src` を見ていることに依存するので、両方向を留めて初めて線引きが固定されます。
+この追跡は 1 本の式の連鎖の中で閉じているので、件数を**ヘルパー関数の中で**作る形は、名前によらず素通りします。`tests/e2e/orbitstudio-mcp-gated.spec.ts:2601-2603` と `:2690-2692` の `countAttachFailures(...)` → `.toBe(...)` がその形で、`.match(...).length` 自体は `tests/e2e/helpers/engine-log.ts` の `countLogMarker` の中にあります。窓の外へ流れた古い行が数を減らすという性質は同じなので、この 2 箇所は移行済みの 4 箇所と同じ**偽赤**の可能性を残しています。
+
+stale ガードの 2 本（`keeps the stale guard off cargo targets it can never rebuild` と `still lets the stale guard see the sources the daemon is built from`）は**片方向ずつ**を留めるペアになっています。前者だけなら「除外を消す」退行を捕まえられますが、後者が無いと「行きすぎて `src` まで除外する」方向は素通りします。ガードの目的（古いバイナリで測らない）は `src` を見ていることに依存するので、両方向を留めて初めて線引きが固定されます。
 
 ```typescript
 // tests/e2e/gated-assertion-hygiene.spec.ts:518-522
@@ -1015,7 +1017,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
     ).toBe(false)
 ```
 
-ただし 5 本すべてが gated spec の**ソース文字列**を走査するだけなので、保証するのは「そう書いてある」ことまでです。ガード本体の `assertDaemonBinaryIsNotStale()` は `gated && appAvailable` のときだけ呼ばれるので、通常の `npm test` では 1 行も実行されません。この節の検査は「実行された振る舞い」ではなく「書かれた形」を留めるもの、という位置づけで読むのが正確です。
+ただし `describe('gated E2E assertion hygiene')` の 8 本すべてが gated spec の**ソースを静的に読むだけ**（多くは文字列走査、#761 と #785 の 2 本は AST の走査）なので、保証するのは「そう書いてある」ことまでです。ガード本体の `assertDaemonBinaryIsNotStale()` は `gated && appAvailable` のときだけ呼ばれるので、通常の `npm test` では 1 行も実行されません。この節の検査は「実行された振る舞い」ではなく「書かれた形」を留めるもの、という位置づけで読むのが正確です。
 
 ちなみにコメントの「固定 500 行窓」は `#567` で 1000 行に拡張される前の数字ですが、有限窓であることに変わりはないので規律そのものは有効です。
 
