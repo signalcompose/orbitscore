@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: d2e94af
+verified-against: 0bb337b
 verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing) and #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -1008,7 +1008,9 @@ The suite also checks whether capture-using specs contain an `rms(` / `peak(` / 
 
 A third check landed on 2026-09-06 (#785). The first one keys off **identifier names** (`/(?:errorsBefore|errorCount|catalogErrors)/i`), so aliases such as `stoppedBeforeRejectedSave` or `attachFailuresBeforeRoleMismatch` slipped straight through. **Names are the author's to choose, so keying a check off a name will always leak.** The third check ignores names and follows **provenance** through the AST instead: "a string derived from the return value of `get_log`" → "a `.match(...).length` over it" → "compared with `toBe` / `toEqual`", picked up whether it goes through a variable or is written inline. It found four sites in the real-device spec, all of which moved to line diffs via `newLogLines`. One of them was `.toBe(0)`, which breaks in the **opposite direction** from the other three: scrolling can only push the count down, so `toBe(0)` yields a false green rather than a false red.
 
-Those last two form a pair that pins **one direction each**. The first alone catches the regression "the exclusion was deleted", but without the second, going too far and excluding `src` as well would pass unnoticed. The guard's purpose — never measure a stale binary — depends on it still looking at `src`, so only both directions together fix the line.
+That tracking originally stayed **inside a single expression chain**, so a count built **inside a local helper function** (`countAttachFailures(...)` → `.toBe(...)`, with the `.match(...).length` hidden in the wrapper) slipped past it whatever the identifiers were called. The routine documentation follow-up and the bundle audit found that hole **independently** on 2026-09-07, and [#789](https://github.com/signalcompose/orbitscore/pull/789) closed it: instead of enumerating *shapes* (name → arithmetic → `.match().length` → imported helper → local wrapper), the detector now **resolves any function that takes a log-derived value and returns a count**, **iterating to a fixed point** so wrappers around wrappers are still reached. The two remaining sites were migrated at the same time. 🔴 **This is the third time the same lesson has surfaced**: #761 was "keying off names leaks", #785 was "follow provenance, not names", and this one is "following provenance only within one expression leaks too". Each time the handle was raised, it turned out that **the handle itself had been defining the field of view**.
+
+The two stale-guard checks (`keeps the stale guard off cargo targets it can never rebuild` and `still lets the stale guard see the sources the daemon is built from`) form a pair that pins **one direction each**. The first alone catches the regression "the exclusion was deleted", but without the second, going too far and excluding `src` as well would pass unnoticed. The guard's purpose — never measure a stale binary — depends on it still looking at `src`, so only both directions together fix the line.
 
 ```typescript
 // tests/e2e/gated-assertion-hygiene.spec.ts:681-685
@@ -1019,7 +1021,7 @@ Those last two form a pair that pins **one direction each**. The first alone cat
     ).toBe(false)
 ```
 
-All five, though, only scan the **source text** of the gated spec, so what they guarantee stops at "it is written that way". The guard itself, `assertDaemonBinaryIsNotStale()`, is called only when `gated && appAvailable`, so an ordinary `npm test` never executes a line of it. It is accurate to read this section's checks as pinning the *written shape*, not an *executed behaviour*.
+All eight checks in `describe('gated E2E assertion hygiene')`, though, only read the gated spec's **source statically** (mostly as text; the #761 and #785 pair walk the AST), so what they guarantee stops at "it is written that way". The guard itself, `assertDaemonBinaryIsNotStale()`, is called only when `gated && appAvailable`, so an ordinary `npm test` never executes a line of it. It is accurate to read this section's checks as pinning the *written shape*, not an *executed behaviour*.
 
 Incidentally, the "fixed 500-line window" in the comment is the number from before `#567` widened it to 1000 lines; the window is still finite, so the rule itself stands.
 
