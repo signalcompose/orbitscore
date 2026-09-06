@@ -1,12 +1,12 @@
 ---
 title: "RE-2. OOP Children and the Shared-Memory Transport"
 chapter-id: "RE-2"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: f5d2ef5
+verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-2. OOP Children and the Shared-Memory Transport
 
@@ -247,7 +247,27 @@ pub const CHILD_STATUS_READY: u32 = 1;
 pub const CHILD_STATUS_LOAD_FAILED: u32 = 2;
 ```
 
-The gotcha the comment points out matters: the shm file itself is truncated (zero-initialized)
+The third value, `CHILD_STATUS_LOAD_FAILED`, is exactly what its name says: the status a child
+raises right before it exits because loading failed. When the rack child's
+`RackController::load_initial` fails to load a plugin, it first publishes the details of that
+failure to `cmd_result_detail` and only **afterwards** stores this status and exits. On the daemon
+side (the Root 3-3 branch in `engine_wrap.rs`), this status is read **before** the watchdog signal
+that catches an early child exit. So what reaches the host is not the generic "the child died" but
+the specific reason: "the load at index n failed like this". The PR-1c (#441) watchdog has not lost
+its job — it remains the path that catches, without waiting for a timeout, a child that dies
+*without* raising this status (an early exit for some reason other than loading).
+
+Incidentally, this doc comment itself disagreed with the implementation up until
+[#760](https://github.com/signalcompose/orbitscore/issues/760): it still read "an unused reserved
+value" with "no write site". The real-hardware gated E2E had anchored on the generic wording that
+followed from that description (`child exited before publishing READY`), so the moment the
+diagnostics became more specific, the test alone started failing. PR
+[#769](https://github.com/signalcompose/orbitscore/pull/769) is what realigned both the comment and
+the assertion with the implementation. This is a spot where the chain "a wrong comment breeds a
+wrong test" actually played out, so when reading it, it is worth following through to the write
+side of the status (the rack child).
+
+The other gotcha the comment points out matters too: the shm file itself is truncated (zero-initialized)
 only once, at daemon startup, and a respawn (a watchdog-triggered child restart) **reuses the
 same shm** rather than re-truncating it. So if a respawn fails after the child once reached
 READY, `child_status` does not fall back to STARTING — the previous incarnation's READY value
@@ -538,7 +558,7 @@ for both roles.
 ## Sources
 
 - `rust/crates/orbit-audio-daemon/src/lib.rs:84-93` — `SPAWNABLE_CHILD_BINARIES` (the source of truth for spawnable children)
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:113-140,170-285` — `CONTROL_*` / `CHILD_STATUS_*` / `CHILD_FLAG_*`, the `SharedRegion` layout (audio, M2 event windows, command mailbox, event ring, `dirty_epoch`, `active_stage_index`)
+- `rust/crates/orbit-audio-sandbox/src/transport.rs:113-143,173-288` — `CONTROL_*` / `CHILD_STATUS_*` / `CHILD_FLAG_*`, the `SharedRegion` layout (audio, M2 event windows, command mailbox, event ring, `dirty_epoch`, `active_stage_index`)
 - `rust/crates/orbit-audio-sandbox/src/host.rs:1-98` — `PipelinedEffectHost` (pipelined submit/read state machine, RT-safe `process_block`)
 - `rust/crates/orbit-audio-sandbox/src/child.rs:44-84` — `SandboxChildGuard` (child-teardown RAII guard: QUIT → reap → kill fallback → shm removal)
 - `rust/crates/orbit-audio-sandbox/src/parent_watch.rs:1-124` (full file) — `ParentWatch` (`getppid()`-based parent-liveness monitoring, rate-limited, `orphaned_for_tests`)
@@ -550,3 +570,4 @@ for both roles.
 - Issue [#573](https://github.com/signalcompose/orbitscore/issues/573) — giving up the respawn loop after consecutive fast failures
 - Issue [#618](https://github.com/signalcompose/orbitscore/issues/618) — instrument replacement and draining the event ring
 - Issue [#628](https://github.com/signalcompose/orbitscore/issues/628) — the effect rack child
+- Issue [#760](https://github.com/signalcompose/orbitscore/issues/760) / PR [#769](https://github.com/signalcompose/orbitscore/pull/769) — realigning the `CHILD_STATUS_LOAD_FAILED` doc comment with the implementation, and re-anchoring the gated E2E on the specific failure reason

@@ -17,6 +17,40 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #769 (attach failure assertion) (Sep 6, 2026)
+
+**ブランチ**: `claude/docs-sync-pr769` / **追従元 PR** [#769](https://github.com/signalcompose/orbitscore/pull/769)（merge commit `f5d2ef5`・base は束 `761-gated-measurement` であって main ではない）
+
+PR #769 は `CHILD_STATUS_LOAD_FAILED` の doc コメントを実装へ合わせ直し、gated E2E のアンカーを
+具体的な失敗理由へ変更した。**同 PR は dev サイトの引用（行範囲と逐語ブロック）を再アンカーしたが、
+引用の周りの地の文と、誤った原因記述を持つ計画ドキュメントには触れていない。** その追従を行う。
+
+#### 直したもの
+
+| 場所 | 何を |
+|---|---|
+| `docs/planning/DEVELOPMENT_MAP.md` / `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` | 🔴 **#760 の原因記述が誤っていた**。両表とも「存在しない CLAP は **child を spawn する前に discovery で落ちる**」と書いていたが、PR #769 が一次ソースで訂正したとおり **child は spawn される**。`RackController::load_initial` がロードに失敗し、詳細を publish してから `CHILD_STATUS_LOAD_FAILED` を立てて終了する。結論（`child exited before publishing READY` に到達しない）は同じだが理由が違う。併せて #769 で対処済みであることを記録 |
+| `sites/dev/rust-engine/oop-children.md`（ja / en） | 「child-side READY handshake」節の**地の文**に `CHILD_STATUS_LOAD_FAILED` の説明が無かった。#769 で引用ブロックだけが差し替わり、読者が実際に読む散文は READY と respawn 注意しか語らない状態になっていた。load 失敗の診断経路（publish → status → daemon の Root 3-3 が watchdog signal より先に見る）と、コメントの誤りが gated E2E のアンカーの誤りを生んだ経緯を追記 |
+| 同上・`## Sources` | `transport.rs` の行範囲を `113-140,170-285` → `113-143,173-288` に更新（#769 の行ずれに追従）。#760 / #769 を出典に追加 |
+| 同上・frontmatter | `verified-against` を `69dc968` → `f5d2ef5`、`verified-at` / Note の日付を `2026-09-06` に更新。🔴 **再検証したのは READY handshake 節のみ**で、章全体を読み直したわけではない |
+
+#### 追従不要と判断したもの
+
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts` / `rust/.../transport.rs` — 前者はテストのみ、後者は
+  コメントのみの変更で、DSL 表面・MCP の引数/返り値・評価フローのいずれも変わっていない
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` / `sites/user/` /
+  `docs/user/ja/USER_MANUAL.md` — ユーザーが書く語も DSL の意味論も変わっていない
+- `docs/archive/` — 過去ログのスナップショットなので書き換えない
+
+#### 検証
+
+| 何 | 結果 |
+|---|---|
+| `npm ci` | exit 0 |
+| `npm run docs:build -w @orbitscore/user-site` | build complete（16.40s） |
+| `npm run docs:build -w @orbitscore/dev-site` | build complete（41.23s） |
+| `npm run docs:check` | **968 citation(s) verified, 0 failed**, 58 files |
+
 ### fix(e2e): assert the attach failure's reason instead of a fallback wording (#760) (Sep 6, 2026)
 
 **ブランチ**: `760-attach-failure-assertion`（base = 束 `761-gated-measurement`） / **Part of** [#760](https://github.com/signalcompose/orbitscore/issues/760)
