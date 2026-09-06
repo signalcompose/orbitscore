@@ -45,6 +45,8 @@ global.audioPath("/Users/yourname/orbitscore-practice/audio")
 
 OS のオーディオ出力設定で、音を聞きたいデバイスが選ばれているか確認してください。システムの音量が 0 になっていないかも確認してください。
 
+OrbitScore 側でデバイスを選んでいる場合は、**Audio Engine Settings** ビューの **Output Device** で `●` が付いているデバイスも確認してください。指定したデバイスから音の要求が来なかった場合、エンジンは起動時に OS のデフォルト出力へ切り替えます（[エンジン設定](/getting-started/engine-settings)）。
+
 ---
 
 ## `Cmd+Enter` が動かない
