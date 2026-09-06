@@ -150,17 +150,29 @@ const formattedNodeLine = (file: string, sourceFile: ts.SourceFile, node: ts.Nod
  * `Before` を**含む**識別子が `+` / `-` に参加し、その式を matcher または生の比較演算子で
  * 比較している箇所を AST で拾う。`expect(after - before).toBe(1)` も expect 側を調べる。
  */
-const logBaselineArithmeticOffenders = (sourceEntries: readonly SourceEntry[]): string[] => {
+/**
+ * 3 本の検出器が共有する走査の骨格（#785 で 3 本目ができたときに抽出した）。
+ *
+ * `makeOffenderAt` は**ファイルごとに 1 回**呼ばれるので、事前に集めておきたい情報
+ * （provenance 検出器の log-text / log-count 識別子など）はそのクロージャの中で作れる。
+ * 返した述語が違反ノードを返したら位置を `file:line: 内容` の形で記録し、**その枝は掘らない**
+ * （入れ子の同型違反を二重報告しないため）。
+ *
+ * ⚠️ `ts.createSourceFile` は**エラー寛容**で、壊れた TS でも例外を投げずに部分的な AST を
+ * 返す。したがって対象がパースできなくなると、これらの検査は**黙って無検出になる**
+ * ＝ この suite が直そうとしている偽緑そのものになる。
+ *
+ * その穴を塞いでいるのは**この検査自身ではなく、同じ CI job が走らせる
+ * `npm run typecheck:e2e`**（`.github/workflows/code-review.yml` の "Typecheck gated E2E"）。
+ * パースできない gated ソースはそこで先に赤くなるので、ここへは到達しない。
+ * 🔴 **その step を消すなら、ここに parse 健全性の検査を足すこと。**
+ */
+const scanGatedSources = (
+  sourceEntries: readonly SourceEntry[],
+  makeOffenderAt: (sourceFile: ts.SourceFile) => (node: ts.Node) => ts.Node | undefined,
+): string[] => {
   const found: string[] = []
   for (const { file, source: text } of sourceEntries) {
-    // ⚠️ `ts.createSourceFile` は**エラー寛容**で、壊れた TS でも例外を投げずに部分的な AST を
-    // 返す。したがって対象がパースできなくなると、この検査は**黙って無検出になる**
-    // ＝ この suite が直そうとしている偽緑そのものになる。
-    //
-    // その穴を塞いでいるのは**この検査自身ではなく、同じ CI job が走らせる
-    // `npm run typecheck:e2e`**（`.github/workflows/code-review.yml` の "Typecheck gated E2E"）。
-    // パースできない gated ソースはそこで先に赤くなるので、ここへは到達しない。
-    // 🔴 **その step を消すなら、ここに parse 健全性の検査を足すこと。**
     const sourceFile = ts.createSourceFile(
       file,
       text,
@@ -168,18 +180,11 @@ const logBaselineArithmeticOffenders = (sourceEntries: readonly SourceEntry[]): 
       true,
       ts.ScriptKind.TS,
     )
+    const offenderAt = makeOffenderAt(sourceFile)
     const visit = (node: ts.Node): void => {
-      const matcher = matcherCall(node)
-      const comparedRoots = matcher
-        ? [matcher.expectArgument, ...matcher.call.arguments]
-        : ts.isBinaryExpression(node) && isRawComparison(node)
-          ? [node]
-          : []
-      const identifiers = comparedRoots
-        .flatMap(arithmeticBeforeIdentifiers)
-        .filter((name) => !NON_LOG_BASELINE_ALLOWLIST.has(name))
-      if (identifiers.length > 0) {
-        found.push(formattedNodeLine(file, sourceFile, matcher?.call ?? node))
+      const offender = offenderAt(node)
+      if (offender !== undefined) {
+        found.push(formattedNodeLine(file, sourceFile, offender))
         return
       }
       node.forEachChild(visit)
@@ -189,9 +194,22 @@ const logBaselineArithmeticOffenders = (sourceEntries: readonly SourceEntry[]): 
   return found
 }
 
+const logBaselineArithmeticOffenders = (sourceEntries: readonly SourceEntry[]): string[] =>
+  scanGatedSources(sourceEntries, () => (node) => {
+    const matcher = matcherCall(node)
+    const comparedRoots = matcher
+      ? [matcher.expectArgument, ...matcher.call.arguments]
+      : ts.isBinaryExpression(node) && isRawComparison(node)
+        ? [node]
+        : []
+    const identifiers = comparedRoots
+      .flatMap(arithmeticBeforeIdentifiers)
+      .filter((name) => !NON_LOG_BASELINE_ALLOWLIST.has(name))
+    return identifiers.length > 0 ? (matcher?.call ?? node) : undefined
+  })
+
 /** `ERROR` 件数の strict matcher を複数行でも拾う（#625 の既存規律）。 */
 const bareErrorCountEqualityOffenders = (sourceEntries: readonly SourceEntry[]): string[] => {
-  const found: string[] = []
   const containsErrorCount = (root: ts.Node): boolean => {
     let contains = false
     const visit = (node: ts.Node): void => {
@@ -209,30 +227,15 @@ const bareErrorCountEqualityOffenders = (sourceEntries: readonly SourceEntry[]):
     visit(root)
     return contains
   }
-  for (const { file, source: text } of sourceEntries) {
-    const sourceFile = ts.createSourceFile(
-      file,
-      text,
-      ts.ScriptTarget.Latest,
-      true,
-      ts.ScriptKind.TS,
-    )
-    const visit = (node: ts.Node): void => {
-      const matcher = matcherCall(node)
-      if (
-        matcher !== undefined &&
-        ts.isPropertyAccessExpression(matcher.call.expression) &&
-        ['toBe', 'toEqual'].includes(matcher.call.expression.name.text) &&
-        [matcher.expectArgument, ...matcher.call.arguments].some(containsErrorCount)
-      ) {
-        found.push(formattedNodeLine(file, sourceFile, matcher.call))
-        return
-      }
-      node.forEachChild(visit)
-    }
-    visit(sourceFile)
-  }
-  return found
+  return scanGatedSources(sourceEntries, () => (node) => {
+    const matcher = matcherCall(node)
+    return matcher !== undefined &&
+      ts.isPropertyAccessExpression(matcher.call.expression) &&
+      ['toBe', 'toEqual'].includes(matcher.call.expression.name.text) &&
+      [matcher.expectArgument, ...matcher.call.arguments].some(containsErrorCount)
+      ? matcher.call
+      : undefined
+  })
 }
 
 /**
@@ -303,17 +306,8 @@ const matchLengthBase = (node: ts.Node): ts.Expression | undefined => {
   return matchCallBase(inner)
 }
 
-const logProvenanceStrictEqualityOffenders = (sourceEntries: readonly SourceEntry[]): string[] => {
-  const found: string[] = []
-  for (const { file, source: text } of sourceEntries) {
-    const sourceFile = ts.createSourceFile(
-      file,
-      text,
-      ts.ScriptTarget.Latest,
-      true,
-      ts.ScriptKind.TS,
-    )
-
+const logProvenanceStrictEqualityOffenders = (sourceEntries: readonly SourceEntry[]): string[] =>
+  scanGatedSources(sourceEntries, (sourceFile) => {
     // Pass 1: `get_log` の `.text` に直接束縛された識別子（直接形・分割代入の両方）。
     const logTextIdentifiers = new Set<string>()
     const collectLogText = (node: ts.Node): void => {
@@ -336,26 +330,68 @@ const logProvenanceStrictEqualityOffenders = (sourceEntries: readonly SourceEntr
     }
     collectLogText(sourceFile)
 
+    // 🔴 `helpers/engine-log` の「ログから件数を数える」ヘルパを、**このファイルでの名前**で拾う
+    // （`import { countErrors as ce }` のような別名も追える）。
+    //
+    // これが無いと `countErrors(log)` の形が両方の検出器から漏れる: 上の 1 本目は
+    // `countErrors` を**リテラルな名前で**特別扱いしているだけなので、helper を rename や
+    // alias した瞬間に見えなくなり、この検出器は `.match(...).length` しか辿らないので
+    // 関数呼び出しの中身には届かない。**2 本目を作った目的（名前依存の脆さの解消）が
+    // 1 本目の特例として残っている**という指摘（#789 の altitude レビュー）への対処。
+    const logCountHelpers = new Set<string>()
+    const collectImportedCountHelpers = (node: ts.Node): void => {
+      if (
+        ts.isImportDeclaration(node) &&
+        ts.isStringLiteralLike(node.moduleSpecifier) &&
+        node.moduleSpecifier.text.includes('engine-log')
+      ) {
+        const bindings = node.importClause?.namedBindings
+        if (bindings !== undefined && ts.isNamedImports(bindings)) {
+          for (const element of bindings.elements) {
+            const imported = (element.propertyName ?? element.name).text
+            if (imported === 'countErrors' || imported === 'countLogMarker') {
+              logCountHelpers.add(element.name.text)
+            }
+          }
+        }
+      }
+      node.forEachChild(collectImportedCountHelpers)
+    }
+    collectImportedCountHelpers(sourceFile)
+
     const isLogDerivedText = (expr: ts.Expression): boolean => {
       if (isInlineLogText(expr)) return true
       const e = unwrapParens(expr)
       return ts.isIdentifier(e) && logTextIdentifiers.has(e.text)
     }
 
-    // Pass 2: log-text（直接束縛 or インライン）に対する `.match(...).length` に束縛された識別子。
-    // 2パスに分けているのは、宣言の並び順（テキスト識別子→カウント識別子）に依存せず、
-    // ファイル内のどこにあっても拾うため。
+    /** `countErrors(<log 由来>)` / `countLogMarker(<log 由来>, ...)` の形か。 */
+    const isLogCountHelperCall = (expr: ts.Expression): boolean => {
+      const e = unwrapParens(expr)
+      if (!ts.isCallExpression(e) || !ts.isIdentifier(e.expression)) return false
+      if (!logCountHelpers.has(e.expression.text)) return false
+      const first = e.arguments[0]
+      return first !== undefined && isLogDerivedText(first)
+    }
+
+    /** log 由来の値を「件数」に変える式か（`.match(...).length` か helper 呼び出し）。 */
+    const isLogDerivedCount = (expr: ts.Expression): boolean => {
+      const base = matchLengthBase(unwrapParens(expr))
+      if (base !== undefined && isLogDerivedText(base)) return true
+      return isLogCountHelperCall(expr)
+    }
+
+    // Pass 2: 上の「件数」に束縛された識別子。2 パスに分けているのは、宣言の並び順
+    // （テキスト識別子 → カウント識別子）に依存せず、ファイル内のどこにあっても拾うため。
     const logCountIdentifiers = new Set<string>()
     const collectLogCount = (node: ts.Node): void => {
       if (
         ts.isVariableDeclaration(node) &&
         ts.isIdentifier(node.name) &&
-        node.initializer !== undefined
+        node.initializer !== undefined &&
+        isLogDerivedCount(node.initializer)
       ) {
-        const base = matchLengthBase(unwrapParens(node.initializer))
-        if (base !== undefined && isLogDerivedText(base)) {
-          logCountIdentifiers.add(node.name.text)
-        }
+        logCountIdentifiers.add(node.name.text)
       }
       node.forEachChild(collectLogCount)
     }
@@ -364,27 +400,19 @@ const logProvenanceStrictEqualityOffenders = (sourceEntries: readonly SourceEntr
     const isOffendingArg = (argNode: ts.Expression): boolean => {
       const e = unwrapParens(argNode)
       if (ts.isIdentifier(e) && logCountIdentifiers.has(e.text)) return true
-      const base = matchLengthBase(e)
-      return base !== undefined && isLogDerivedText(base)
+      return isLogDerivedCount(e)
     }
 
-    const visit = (node: ts.Node): void => {
+    return (node) => {
       const matcher = matcherCall(node)
-      if (
-        matcher !== undefined &&
+      return matcher !== undefined &&
         ts.isPropertyAccessExpression(matcher.call.expression) &&
         ['toBe', 'toEqual'].includes(matcher.call.expression.name.text) &&
         [matcher.expectArgument, ...matcher.call.arguments].some(isOffendingArg)
-      ) {
-        found.push(formattedNodeLine(file, sourceFile, matcher.call))
-        return
-      }
-      node.forEachChild(visit)
+        ? matcher.call
+        : undefined
     }
-    visit(sourceFile)
-  }
-  return found
-}
+  })
 
 describe('gated E2E assertion hygiene', () => {
   it('never asserts on a bare ERROR count equality', () => {
@@ -681,6 +709,45 @@ describe('gated E2E assertion hygiene scanner fixtures', () => {
     ]
 
     expect(logProvenanceStrictEqualityOffenders(fixture)).toEqual(['literal-zero.ts:2: expect('])
+  })
+
+  it('follows a countErrors() helper call, even when the import is aliased (#789 altitude)', () => {
+    // 🔴 1 本目（`bareErrorCountEqualityOffenders`）は `countErrors` を**リテラルな名前**で
+    // 特別扱いしているだけなので、`import { countErrors as ce }` のような別名にすると
+    // どちらの検出器からも消える — 2 本目を作った目的（名前依存の脆さの解消）が
+    // 1 本目の特例として残っていた。import の局所名を解決してその穴を塞ぐ。
+    const fixture = [
+      {
+        file: 'aliased-helper.ts',
+        source: [
+          "import { countErrors as ce } from './helpers/engine-log'",
+          "const beforeLog = (await client.call('get_log', { lines: 500 })).text",
+          'const before = ce(beforeLog)',
+          "const afterLog = (await client.call('get_log', { lines: 500 })).text",
+          'expect(ce(afterLog)).toBe(before)',
+        ].join('\n'),
+      },
+    ]
+
+    expect(logProvenanceStrictEqualityOffenders(fixture)).toEqual([
+      'aliased-helper.ts:5: expect(ce(afterLog)).toBe(before)',
+    ])
+  })
+
+  it('does not flag a count helper applied to something that is not log-derived', () => {
+    // 陰性: 同じ helper でも、引数が `get_log` 由来でなければ窓の問題は起きない。
+    const fixture = [
+      {
+        file: 'not-log-derived.ts',
+        source: [
+          "import { countErrors } from './helpers/engine-log'",
+          'const captured = readSomeFileSync(path)',
+          'expect(countErrors(captured)).toBe(0)',
+        ].join('\n'),
+      },
+    ]
+
+    expect(logProvenanceStrictEqualityOffenders(fixture)).toEqual([])
   })
 
   it('flags the same double-variable shape via toEqual, not just toBe', () => {

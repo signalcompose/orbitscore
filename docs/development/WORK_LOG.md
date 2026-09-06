@@ -17,6 +17,49 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(test): apply the /simplify pass to the E-gate bundle (Sep 7, 2026)
+
+**ブランチ**: `780-merge-gate`（束 PR [#789](https://github.com/signalcompose/orbitscore/pull/789) の
+レビュー指摘。束運用どおり**統合ブランチの先頭に積む**）
+
+`/simplify` の 4 観点（reuse / simplification / efficiency / altitude）を並行実行した結果。
+
+#### 適用したもの
+
+| 指摘 | 出どころ | 対処 |
+|---|---|---|
+| AST の走査骨格が **3 本目のコピー**（`sourceEntries` を回す → `createSourceFile` → 再帰 `visit` → `formattedNodeLine`） | reuse と simplification が**独立に一致** | `scanGatedSources(entries, makeOffenderAt)` を抽出し 3 本すべてを移行。`makeOffenderAt` はファイルごとに 1 回呼ばれるので、provenance 検出器の 2 パス前処理はそのクロージャに収まる。`createSourceFile` のエラー寛容性についての load-bearing なコメントも共有側へ移した |
+| 🔴 **`countErrors` の別名で両方の検出器をすり抜ける** | altitude | provenance 検出器が `helpers/engine-log` からの import の**局所名**を解決し、`countErrors(<log 由来>)` / `countLogMarker(<log 由来>, ...)` も「件数」として追うようにした |
+
+🔴 **altitude の指摘が的確だった**: 1 本目は `countErrors` を**リテラルな名前**で特別扱いしているだけなので、
+`import { countErrors as ce }` にすると**どちらの検出器からも消える**。つまり 2 本目を作った目的
+（名前依存の脆さの解消）が、1 本目の特例として**同じ脆さのまま残っていた**。
+
+#### スキップしたもの（理由つき）
+
+| 指摘 | 理由 |
+|---|---|
+| `newLogLines(...).filter(...)` を helper に畳む（simplification） | reuse が「確立済みイディオム」と判定して対立したので事実で裁定した。gated spec に **18 箇所**あり、新しい 4 箇所だけ畳むと**同じことを表す書き方が 2 つ並存**する。18 箇所すべての移行は束の範囲外（実機 15 分の回し直しも要る） |
+| `sweep_dir` で `metadata()` を生存判定の後ろへ動かす（efficiency） | 正しい指摘だが利得が小さい。節約できるのは**生存 PID の orbit ファイル**の `lstat` だけで、定常状態は約 25 件、backlog の場合はほぼ全部 Dead なので `metadata()` は結局必要。検証済みの sweep とその分岐表テストを触る対価に見合わない |
+| `create_shared` を `create_new(true)` にする（altitude Q1） | 筋は通るが **production の音声インフラの挙動変更**で、PID 再利用で同名の残骸があると**起動が失敗する**新しい経路を作る（sweep は 2 秒未満のファイルを残すので残骸が必ず消えている保証はない）。**別 issue に切った** |
+
+#### altitude Q2 は設計の裏付けになった
+
+「起動時 sweep は #448（SIGTERM ハンドラ）が入っても不要にならないバックストップか」への回答は
+**Yes**。SIGKILL / OOM kill / panic-in-panic では、ハンドラを足しても `Drop` は走らない。
+分割は妥当と独立に確認された。
+
+#### 検証
+
+| 項目 | 結果 |
+|---|---|
+| `gated-assertion-hygiene.spec.ts` | **25 passed**（corpus に陽性 1 + 陰性 1 を追加） |
+| `tests/e2e/` 全体 | 100 passed / 37 skipped |
+| `npm run typecheck:e2e` | exit 0 |
+| 🔴 変異 1（helper 追跡を外す） | **新しい corpus が赤** |
+| 🔴 変異 2（gated spec の 1 箇所を件数比較へ戻す） | **ラチェットが赤・該当行を名指し**（`:1643`） |
+
+
 ### docs: sharpen the ORBIT_GATED_ONLY correction after the routine review (Sep 6, 2026)
 
 **ブランチ**: `785-widen-count-ratchet`（束 `780-merge-gate`）
