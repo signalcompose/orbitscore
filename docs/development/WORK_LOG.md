@@ -142,6 +142,26 @@ expect(x, msg).toBeGreaterThanOrEqual(
 
 `createLinePrefixer` の doc コメントに、双子の所在・同期すべき点・#777 を明記した。
 共通化は拡張パッケージが `@orbitscore/engine` に依存していないため別問題（#777 に記載）。
+### docs: follow PR #772 (stderr line prefix) (Sep 6, 2026)
+
+**ブランチ**: `claude/docs-sync-pr772` / **追従元 PR** [#772](https://github.com/signalcompose/orbitscore/pull/772)（merge commit `2c0f4be`・base は束 `761-gated-measurement` であって main ではない）
+
+PR #772 は `setupStderrHandler` の `ERROR:` 前置を chunk 単位から行単位へ移した（`createLinePrefixer` の追加）。**同 PR は dev サイトの引用ヘッダを行ずれに追従させたが、地の文は 1 行も足していない** — `ERROR:` 前置がどこで付くかは gated E2E の ERROR 会計そのものの前提なので、その説明を dev サイトへ入れる。**実装・テストは 1 行も変更していない。**
+
+#### 直したもの
+
+| 場所 | 何を |
+|---|---|
+| `sites/dev/editor/mcp-and-gated-e2e.md`（ja / en） | `## get_log とリングバッファ` に `### ERROR: の前置は誰が付けているのか` を新設。ERROR 件数が数えているのは「engine が `console.error` した回数」ではなく「拡張が `ERROR:` を書いた行数」であること、#756 まで前置が chunk 単位で構造的に過小カウントしていたこと、`createLinePrefixer` の 3 つの制約（部分行の持ち越し / `'end'` の flush / 空行スキップ）、`append` → `appendLine` へ移っても ring に入る行数は元から壊れていなかったこと、同じ chunk 境界の問題が stdout 側に #773 として残ることを記述。`extension.ts:1585-1605` / `:1621-1643` を逐語引用 |
+| 同上・`## Sources` / `## 次の深掘り候補` / frontmatter | `createLinePrefixer()` / `setupStderrHandler()` の出典と #756 / #773 を追加。`verified-against` を `ef192ca` → `2c0f4be`、`verified-at` を `2026-09-06` に更新。🔴 **再検証したのは `get_log` 節のみ**で、章全体を読み直したわけではない |
+| `sites/dev/editor/vscode-architecture.md`（ja / en） | spawn 直後の 5 ハンドラの節に、`setupStderrHandler` が行単位で前置すること・前置の粒度が gated E2E の目盛りであることを 1 段落追記し、IV-3 の新節へリンク |
+| `docs/planning/DEVELOPMENT_MAP.md` / `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` | #756 の行を ✅ 済みに更新（#760 と同じ書式・束経由で main へ入る旨を明記）。併せて 🔴 起案時の「`createDaemonStderrLineRouter` が同じ問題を解いている」を訂正 — engine 側の router は部分行を持ち越すが**終端の flush を持たない**（`packages/engine/src/audio/rust-engine/daemon-client.ts:167-182` に flush が無く、`:906-922` の呼び出し側も `end` で drain していない） |
+
+#### 追従不要と判断したもの
+
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` / `sites/user/` / `docs/user/ja/USER_MANUAL.md` — DSL の構文も意味論もユーザーが書く語も変わっていない（差分は拡張の stderr 転記のみ）
+- `tests/vscode-extension/extension-wiring.spec.ts` — テストのみの変更
+- `docs/design/` / `docs/archive/` — 起案時点・過去ログのスナップショットなので書き換えない
 
 #### 検証
 
@@ -149,6 +169,10 @@ expect(x, msg).toBeGreaterThanOrEqual(
 |---|---|
 | `npm test` | 2288 passed / 57 skipped |
 | `typecheck:e2e` / eslint / `docs:check` | 0 / 0 / 968 verified 0 failed |
+| `npm ci` | exit 0 |
+| `npm run docs:build -w @orbitscore/user-site` | build complete（13.16s） |
+| `npm run docs:build -w @orbitscore/dev-site` | build complete（34.30s） |
+| `npm run docs:check` | **972 citation(s) verified, 0 failed**, 58 files |
 
 ### fix(extension): prefix stderr per line, not per chunk (#756) (Sep 6, 2026)
 

@@ -1,12 +1,12 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: ef192ca
-verified-at: "2026-09-05"
+verified-against: 2c0f4be
+verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR #772・stderr の `ERROR:` 前置を行単位へ）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -455,6 +455,76 @@ export function selectLogLines(ring: readonly string[], requested?: number): str
 ```
 
 なぜここまで気を遣うのでしょうか。E2E は「操作前後の ERROR 件数を比較する」という書き方を多用します。窓が固定幅だと、古い ERROR が窓から流れ出るのと同時に新しい ERROR が入ればカウントが一致して **false green** になります。`#567` はそのために上限を 500 から実容量 1000 に引き上げ、切り詰めを応答に含めるようにしました。それでも窓は有限なので、CLAUDE.md は「ERROR 件数は厳密等価にしない（`<=` を使う）」と定めています。この規律は後述の hygiene テストで機械化されています。
+
+### `ERROR:` の前置は誰が付けているのか
+
+ところで、その「ERROR 件数」が数えている `ERROR:` という前置は、誰が付けているのでしょうか。engine 本体ではありません。engine プロセスの stderr を拡張が読み、Output チャネルへ書き出すときに前置しています（`setupStderrHandler()`）。つまり ERROR 件数は「engine が何回 `console.error` を呼んだか」ではなく、**拡張が何行 `ERROR:` を書いたか**を数えています。前置の粒度が、そのまま測定器の目盛りになるわけです。
+
+その目盛りは #756 まで **chunk 単位**でした。`outputChannel.append('ERROR: ' + chunk)` と書かれていたので、1 つの chunk に 2 行以上入ると **2 行目以降には `ERROR:` が付きません**。ログには全部の行が出ているのに `countErrors` / `newErrorLines` は 1 件としか数えない — 測定器そのものが**構造的に過小カウント**していたことになります。実装のコメントが記録している実測（2026-09-05）では、デバイス切替の失敗を daemon と engine が別々に記録したのに、`ERROR:` が付いたのは片方だけでした。
+
+修正は `createLinePrefixer()` という小さな道具に切り出されています。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1585-1605
+export function createLinePrefixer(emit: (line: string) => void): {
+  push: (chunk: string) => void
+  flush: () => void
+} {
+  let partial = ''
+  return {
+    push(chunk: string): void {
+      partial += chunk
+      const lines = partial.split('\n')
+      partial = lines.pop() ?? ''
+      for (const line of lines) {
+        if (line.trim() !== '') emit(line)
+      }
+    },
+    flush(): void {
+      const remaining = partial
+      partial = ''
+      if (remaining.trim() !== '') emit(remaining)
+    },
+  }
+}
+```
+
+ここで気をつけたいのは、素朴に `split('\n')` して回すだけでは直らないという点です。**chunk 境界は行境界と一致しません**。engine が 1 行を書いている途中でも chunk は切れるので、`split` だけだと行の後半が独立した「行」として扱われ、そちらにも `ERROR:` が付きます。過小カウントを直したつもりが、こんどは水増しになるわけです。`partial` に持ち越しているのはそのためです。
+
+`flush()` が要る理由も同じ形をしています。行に整えると、**改行で終わらない最後の出力**が `partial` に残ったままプロセスが終わります。過小カウントを直すはずの変更が、逆方向から同じ穴を開けてしまうのです。そこで `'end'` イベントで必ず吐き出します。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1621-1643
+export function setupStderrHandler(process: child_process.ChildProcess): void {
+  const prefixer = createLinePrefixer((line) => {
+    outputChannel?.appendLine(`ERROR: ${line}`)
+  })
+  process.stderr?.on('error', (err) => {
+    logHandlerFailure('setupStderrHandler', err)
+  })
+  process.stderr?.on('data', (data) => {
+    try {
+      prefixer.push(data.toString())
+    } catch (err) {
+      logHandlerFailure('setupStderrHandler', err)
+    }
+  })
+  // 改行で終わらなかった最後の 1 行を取りこぼさない。
+  process.stderr?.on('end', () => {
+    try {
+      prefixer.flush()
+    } catch (err) {
+      logHandlerFailure('setupStderrHandler', err)
+    }
+  })
+}
+```
+
+空行を emit しないのも会計のためです。`ERROR: ` だけの行を作れば、こんどは `countErrors` が水増しされます。「過小を直して過大を作らない」という制約が、`push` と `flush` の両方に `trim() !== ''` として現れています。
+
+前置が `append` から `appendLine` へ移った点も、リングバッファとの関係で読み解けます。上で引用したとおり `append` 側の monkey-patch は値を `split('\n')` してから 1 行ずつ ring に押し込んでいたので、**ring に入る行数のほうは壊れていませんでした**。狂っていたのは `ERROR:` が何行に付くかだけです。`get_log` の出力を目で読むとエラーは全部見えているのに `countErrors` だけが少ない、という気づきにくい形になっていたのは、この非対称が理由です。
+
+なお、同じ chunk 境界の問題は stdout 側にも残っています。`setupStdoutHandler()` は chunk ごとに `output.split('\n')` するだけで部分行を持ち越さないため、`{"evalMark"` のような 1 行 JSON が境界で割れると両断片とも prefix 判定に落ち、「malformed」として捨てられます（`//#selectAudioDevice` の警告文言に `possible chunk-boundary split` と書かれているのは、この経路を指しています）。#756 では **直していません** — bridge の dispatch は #614 で一度壊れた領域で、独自の E2E を伴う別作業になるためです。#773 として切り出されています。
 
 ---
 
@@ -1300,6 +1370,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `analyze_audio` の `estimateFundamentalHz()` — plugin state 復元テストが「同じ測定ピッチ」をどう assert しているか
 - `killOrbitStudio()` / `replaceGatedPluginFixtureSymlink()` の安全域（allowlist）— ハーネスがユーザー環境を壊さないための境界
 - gated spec が 1 本ずつ実行できない構造（WORK_LOG 6.409）の改善案
+- `setupStdoutHandler()` に部分行バッファリングを入れるとき、bridge の dispatch（#614 で一度壊れた経路）をどう守るか（#773）
 
 ## Sources
 
@@ -1313,6 +1384,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `packages/vscode-extension/src/extension.ts:445-495` — MCP サーバの起動ゲートとハンドラ配線
 - `packages/vscode-extension/src/extension.ts:1153-1177` — `shouldFilterLine()`（`[STEP]` と bridge envelope の除外）
 - `packages/vscode-extension/src/extension.ts:1473-1553` — `setupStdoutHandler()`
+- `packages/vscode-extension/src/extension.ts:1567-1643` — `createLinePrefixer()` / `setupStderrHandler()`（`ERROR:` 前置を行単位に・#756）
 - `packages/vscode-extension/src/extension.ts:3040-3077` — `evaluateForAgent()`（#614）
 - `packages/vscode-extension/src/extension.ts:3585-3597` — `getLogForAgent()` / `analyzeAudioForAgent()`
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-142` — `//#evalMark` の requestId 相関ブリッジ
@@ -1356,3 +1428,5 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — capture ヘッダの定期 patch と stale ガード
 - Issue [#654](https://github.com/signalcompose/orbitscore/issues/654) — instrument シーケンスで playhead が動かない
 - Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E の基盤（PR-E1 `gated-sources.ts` / PR-E2 共有ハーネス層）
+- Issue [#756](https://github.com/signalcompose/orbitscore/issues/756) — `ERROR:` 前置が chunk 単位で ERROR 会計が過小カウントする（PR [#772](https://github.com/signalcompose/orbitscore/pull/772)）
+- Issue [#773](https://github.com/signalcompose/orbitscore/issues/773) — `setupStdoutHandler()` の部分行バッファリング欠如（#756 では未着手）

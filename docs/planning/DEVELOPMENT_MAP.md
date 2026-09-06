@@ -870,7 +870,7 @@ owner 判断が要る（#671 §5(a) / #672 A4）。**#321 の残作業（Link �
 | worktree で hook が誤ブロック | #465 | ○（**再現確認が要る**・triage） | — |
 | golden render の重複 | #315 | ○（**再現確認が要る**・triage） | — |
 | **ERROR 件数で「増えた」と主張する形が偽赤を生む** | **#761** 🔴 | ○（**実測済み**: 全件を 2 回回すと失敗集合が入れ替わる。`get_log` は固定 500 行窓なので、古い ERROR がスクロールアウトすると**新しい ERROR が出ていても総数は減る**） | **#661 マージ後**（`newErrorLines` を使う。他ブランチで複製すると衝突するため） |
-| **stderr の `ERROR:` 前置が chunk 単位** | **#756** 🔴 | ○（**実測済み**: 同じ chunk の 2 行目以降に前置が付かない。`countErrors` / `newErrorLines` の**測定器そのもの**が過小カウントする） | #661 マージ後・**#649 の baseline 比較が済んでから**（gated 全体の測定器が動くため） |
+| **stderr の `ERROR:` 前置が chunk 単位** | **#756** | ✅ **PR [#772](https://github.com/signalcompose/orbitscore/pull/772) で対処済み**（束 `761-gated-measurement` に merge・main へは束 PR で入る）。`createLinePrefixer()` を足して行単位へ — 部分行は `partial` に持ち越し、`'end'` で `flush()`、空行は emit しない（過小を直して過大を作らない） | 束「gated の測定器」の 3 本目（最後） |
 | `OUTPROC_ATTACH_FAILED` のアサーションが古い | **#760** | ✅ **PR [#769](https://github.com/signalcompose/orbitscore/pull/769) で対処済み**（束 `761-gated-measurement` に merge・main へは束 PR で入る）。**main で実測して同一失敗を確認**していたが、🔴 **原因の記述は誤りだった** — child は spawn される。`RackController::load_initial` が CLAP のロードに失敗し、詳細を publish してから `CHILD_STATUS_LOAD_FAILED` を立てて終了する。daemon（`engine_wrap.rs` の Root 3-3）がこの status を early-exit の watchdog signal より先に見るため、`child exited before publishing READY` に到達しない | 独立・小粒 |
 
 | **shm が gated 実行のたびに漏れる** | **#779** 🔴 | ○（**実測 2026-09-06**: `orbit-outproc-*.shm` が **35,282 個 / TMPDIR 11 GB**。清掃は `Drop` に乗っており **SIGKILL では走らない**。同日 rack-child の実機テストが **SIGBUS** で落ち、直後 2 回は再現せず） | **束 E-env の 1 番目**（計画 PR-E10・doc 668 §13.5.3）。**#775 より先**——環境の汚れが #775 の寄与要因の可能性が高く、逆順だと切り分け不能になる |
