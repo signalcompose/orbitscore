@@ -775,7 +775,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 先頭テストの最後の assert は、この onset 間隔をテンポの証拠に使います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1752-1766
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1785-1799
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -987,7 +987,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 ### アサーション衛生
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:239-248
+// tests/e2e/gated-assertion-hygiene.spec.ts:390-399
   it('never asserts on a bare ERROR count equality', () => {
     // `get_log` は固定 500 行窓なので、ERROR 件数の**厳密等価**は窓の外へ流れた瞬間に
     // 嘘になる（#625）。`<=` / `toBeLessThanOrEqual` を使うこと。
@@ -1002,10 +1002,12 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 
 ほかにも、「capture を使う spec に `rms(` / `peak(` / `.rms` のアサーションが実在するか」、stale ガードの両方向、固定窓ログ由来 baseline の算術比較などを検査します。走査器自体が黙って無効化されないよう、複数行の違反、コメント、clean 入力、行番号を固定する positive self-test も持ちます。書いた直後に実在の違反を 1 件検出した（`.toBe(errorCountBeforeMixer)` を `<=` へ修正）と 6.418 は記録しています。
 
+2026-09-06 に 3 本目が加わりました（#785）。上の 1 本目は検出条件が**識別子の名前**（`/(?:errorsBefore|errorCount|catalogErrors)/i`）なので、`stoppedBeforeRejectedSave` や `attachFailuresBeforeRoleMismatch` のような別名は素通りしていました。**名前は書き手が自由に付けられるので、名前で条件付ける限り必ず漏れます。** 3 本目は名前を見ず、**値の出どころ**を AST で辿ります — 「`get_log` の戻り値に由来する文字列」→「それに対する `.match(...).length`」→「`toBe` / `toEqual` で比較」という連鎖を、変数を経由していてもインラインでも拾います。実際にこれで実機 spec の 4 箇所が見つかり、すべて `newLogLines` の行差分へ移りました。うち 1 箇所は `.toBe(0)` で、他の 3 つとは**崩れる向きが逆**でした — 窓から流れ出る効果はカウントを減らす方向にしか働かないので、`toBe(0)` は偽赤ではなく**偽緑**を生みます。
+
 後半 2 本は**片方向ずつ**を留めるペアになっています。前者だけなら「除外を消す」退行を捕まえられますが、後者が無いと「行きすぎて `src` まで除外する」方向は素通りします。ガードの目的（古いバイナリで測らない）は `src` を見ていることに依存するので、両方向を留めて初めて線引きが固定されます。
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:339-343
+// tests/e2e/gated-assertion-hygiene.spec.ts:518-522
     expect(
       /entry\.name === 'src'/.test(source),
       'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +
@@ -1229,7 +1231,7 @@ function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2414-2424
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2447-2457
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1244,13 +1246,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2427-2428
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2460-2461
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2484-2486
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2517-2519
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

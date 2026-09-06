@@ -235,6 +235,157 @@ const bareErrorCountEqualityOffenders = (sourceEntries: readonly SourceEntry[]):
   return found
 }
 
+/**
+ * `get_log` の戻り値に由来する文字列に対する `.match(...).length` を、**名前ではなく値の
+ * 出どころ（provenance）**で追跡し、それを strict equality（`toBe` / `toEqual`）で比較して
+ * いないかを AST で辿る（#785）。
+ *
+ * 🔴 なぜ名前で条件付けないか: すぐ上の `bareErrorCountEqualityOffenders` は識別子名
+ * （`/(?:errorsBefore|errorCount|catalogErrors)/i`）に依存しているため、
+ * `stoppedBeforeRejectedSave` / `attachFailuresBefore*` のような別名は素通りする。
+ * **名前は書き手が自由に付けられるので、名前で条件付ける限り必ず漏れる。**
+ *
+ * 追跡する2種類の識別子（いずれも `.text` プロパティの読み出し元まで遡る）:
+ * - **log-text 識別子**: `get_log` 呼び出しの `.text` に直接束縛された文字列
+ *   （`const x = (await client.call('get_log', {...})).text` の直接形、または
+ *   `const { text } = await client.call('get_log', {...})` の分割代入。エイリアス
+ *   （`{ text: log }`）も拾う）。
+ * - **log-count 識別子**: log-text 識別子（またはインラインの `get_log(...).text`）に対する
+ *   `.match(pattern).length`（`?? []` フォールバックの有無を問わない）に束縛された数値。
+ *
+ * matcher（`toBe` / `toEqual`）の被検査値・引数のどちらかが、上記いずれかの識別子
+ * （またはそれと同型のインライン式）であれば違反として報告する。
+ */
+const unwrapParens = (expr: ts.Expression): ts.Expression => {
+  let e = expr
+  while (ts.isParenthesizedExpression(e)) e = e.expression
+  return e
+}
+
+/** `<obj>.call('get_log', ...)`（`await` / 非 null アサーション `!` の有無を問わない）。 */
+const isGetLogCall = (expr: ts.Expression): boolean => {
+  let e = unwrapParens(expr)
+  if (ts.isAwaitExpression(e)) e = unwrapParens(e.expression)
+  if (!ts.isCallExpression(e) || !ts.isPropertyAccessExpression(e.expression)) return false
+  if (e.expression.name.text !== 'call') return false
+  const firstArg = e.arguments[0]
+  return firstArg !== undefined && ts.isStringLiteralLike(firstArg) && firstArg.text === 'get_log'
+}
+
+/** `(await <obj>.call('get_log', ...)).text` のインライン形。 */
+const isInlineLogText = (expr: ts.Expression): boolean => {
+  const e = unwrapParens(expr)
+  return ts.isPropertyAccessExpression(e) && e.name.text === 'text' && isGetLogCall(e.expression)
+}
+
+/** `<expr>.match(pattern)` の `<expr>`（`match` 呼び出しでなければ `undefined`）。 */
+const matchCallBase = (node: ts.Expression): ts.Expression | undefined => {
+  if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) {
+    return undefined
+  }
+  if (node.expression.name.text !== 'match') return undefined
+  return node.expression.expression
+}
+
+/**
+ * `(<expr>.match(pattern) ?? []).length` / `<expr>.match(pattern).length` の `<expr>`。
+ * `.length` プロパティアクセスでなければ `undefined`。
+ */
+const matchLengthBase = (node: ts.Node): ts.Expression | undefined => {
+  if (!ts.isPropertyAccessExpression(node) || node.name.text !== 'length') return undefined
+  let inner = unwrapParens(node.expression)
+  if (
+    ts.isBinaryExpression(inner) &&
+    inner.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+  ) {
+    inner = unwrapParens(inner.left)
+  }
+  return matchCallBase(inner)
+}
+
+const logProvenanceStrictEqualityOffenders = (sourceEntries: readonly SourceEntry[]): string[] => {
+  const found: string[] = []
+  for (const { file, source: text } of sourceEntries) {
+    const sourceFile = ts.createSourceFile(
+      file,
+      text,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    )
+
+    // Pass 1: `get_log` の `.text` に直接束縛された識別子（直接形・分割代入の両方）。
+    const logTextIdentifiers = new Set<string>()
+    const collectLogText = (node: ts.Node): void => {
+      if (ts.isVariableDeclaration(node) && node.initializer !== undefined) {
+        if (ts.isIdentifier(node.name) && isInlineLogText(node.initializer)) {
+          logTextIdentifiers.add(node.name.text)
+        } else if (ts.isObjectBindingPattern(node.name) && isGetLogCall(node.initializer)) {
+          for (const element of node.name.elements) {
+            if (!ts.isIdentifier(element.name)) continue
+            const sourceProp = element.propertyName
+              ? ts.isIdentifier(element.propertyName)
+                ? element.propertyName.text
+                : undefined
+              : element.name.text
+            if (sourceProp === 'text') logTextIdentifiers.add(element.name.text)
+          }
+        }
+      }
+      node.forEachChild(collectLogText)
+    }
+    collectLogText(sourceFile)
+
+    const isLogDerivedText = (expr: ts.Expression): boolean => {
+      if (isInlineLogText(expr)) return true
+      const e = unwrapParens(expr)
+      return ts.isIdentifier(e) && logTextIdentifiers.has(e.text)
+    }
+
+    // Pass 2: log-text（直接束縛 or インライン）に対する `.match(...).length` に束縛された識別子。
+    // 2パスに分けているのは、宣言の並び順（テキスト識別子→カウント識別子）に依存せず、
+    // ファイル内のどこにあっても拾うため。
+    const logCountIdentifiers = new Set<string>()
+    const collectLogCount = (node: ts.Node): void => {
+      if (
+        ts.isVariableDeclaration(node) &&
+        ts.isIdentifier(node.name) &&
+        node.initializer !== undefined
+      ) {
+        const base = matchLengthBase(unwrapParens(node.initializer))
+        if (base !== undefined && isLogDerivedText(base)) {
+          logCountIdentifiers.add(node.name.text)
+        }
+      }
+      node.forEachChild(collectLogCount)
+    }
+    collectLogCount(sourceFile)
+
+    const isOffendingArg = (argNode: ts.Expression): boolean => {
+      const e = unwrapParens(argNode)
+      if (ts.isIdentifier(e) && logCountIdentifiers.has(e.text)) return true
+      const base = matchLengthBase(e)
+      return base !== undefined && isLogDerivedText(base)
+    }
+
+    const visit = (node: ts.Node): void => {
+      const matcher = matcherCall(node)
+      if (
+        matcher !== undefined &&
+        ts.isPropertyAccessExpression(matcher.call.expression) &&
+        ['toBe', 'toEqual'].includes(matcher.call.expression.name.text) &&
+        [matcher.expectArgument, ...matcher.call.arguments].some(isOffendingArg)
+      ) {
+        found.push(formattedNodeLine(file, sourceFile, matcher.call))
+        return
+      }
+      node.forEachChild(visit)
+    }
+    visit(sourceFile)
+  }
+  return found
+}
+
 describe('gated E2E assertion hygiene', () => {
   it('never asserts on a bare ERROR count equality', () => {
     // `get_log` は固定 500 行窓なので、ERROR 件数の**厳密等価**は窓の外へ流れた瞬間に
@@ -311,8 +462,10 @@ describe('gated E2E assertion hygiene', () => {
     // 🔴 実際の守備範囲は「名前のどこかに `Before` を含む識別子が `+` / `-` に参加し、
     // その式が matcher または生の比較演算子で比較される箇所」。Before が名前の途中にある形、
     // `return count >= errorsBefore + 1`、`expect(count - failuresBefore).toBe(1)` も拾う。
-    // 一方で `Before` を含まない別名への代入、helper 内へ隠した比較、算術のない strict equality
-    // （`:1396` / `:1589` / `:1615` の形）は逃げる。後者は別 issue の対象で、ここでは触らない。
+    // 一方で `Before` を含まない別名への代入・helper 内へ隠した比較・**算術のない strict
+    // equality**（旧 `:1378` / `:1396` / `:1589` / `:1615` の形）は逃げる — こちらは名前でなく
+    // **値の出どころ**（`get_log` の戻り値 → `.match(...).length`）を AST で辿る
+    // `logProvenanceStrictEqualityOffenders`（下の別テスト・#785）が拾う。
     //
     // 正しい形は `newLogLines` / `newErrorLines` で「**どの行が**増えたか」を見ること。多重集合の
     // 差分は窓のずれに影響されず、「想定した 1 件以外は増えていない」という強い主張もできる。
@@ -330,6 +483,32 @@ describe('gated E2E assertion hygiene', () => {
       offenders,
       'Log counts come from a fixed 500-line window, so "baseline + N" claims break when old ' +
         'lines scroll out. Say WHICH lines appeared with newLogLines()/newErrorLines() (#761).',
+    ).toEqual([])
+  })
+
+  it('never asserts a log-derived match count via strict equality, regardless of identifier name', () => {
+    // 🔴 #785: 上の1本目（bare ERROR count equality）は識別子名
+    // （`/(?:errorsBefore|errorCount|catalogErrors)/i`）に依存するため、
+    // `stoppedBeforeRejectedSave` / `attachFailuresBefore*` のような別名は素通りしていた
+    // （実際に `tests/e2e/orbitstudio-mcp-gated.spec.ts` の4箇所がこれで両ラチェットを
+    // 逃れていた: `:1378` `.toBe(0)`、`:1396` `.toBe(stoppedBeforeRejectedSave)`、
+    // `:1589` `.toBe(attachFailuresBeforeRoleMismatch)`、`:1615`
+    // `.toBe(attachFailuresBeforeSecondSeq)` — いずれも #785 で `newLogLines` の行差分へ
+    // 移行済み）。
+    //
+    // ここは名前を見ない。`get_log` の戻り値に由来する文字列（`.text` への直接束縛・
+    // 分割代入・インラインのいずれも）を追跡し、その文字列に対する `.match(...).length`
+    // （`?? []` の有無を問わない）が、変数を経由していても・インラインでも、
+    // `toBe`/`toEqual` の被検査値または引数に現れたら違反とする。
+    //
+    // 🔴 除外リストは無い。引っかかった箇所は直す（本 issue の趣旨がそれ）。
+    const offenders = logProvenanceStrictEqualityOffenders(entries)
+    expect(
+      offenders,
+      'A count derived from get_log() via .match(...).length must not be compared with ' +
+        'strict equality (toBe/toEqual), no matter what the identifier is named: the fixed ' +
+        '500-line window makes both toBe(0) (false green) and toBe(before) (false red) lie. ' +
+        'Say WHICH lines appeared with newLogLines()/newErrorLines() instead (#785).',
     ).toEqual([])
   })
 
@@ -446,5 +625,145 @@ describe('gated E2E assertion hygiene scanner fixtures', () => {
     ]
 
     expect(logBaselineArithmeticOffenders(fixture)).toEqual([])
+  })
+
+  // ── #785: provenance-based scanner (name-independent) ──
+
+  it('flags a match-length count stored in a variable and compared bare (mirrors #785 :1615)', () => {
+    const fixture = [
+      {
+        file: 'variable-indirection.ts',
+        source: [
+          "const beforeLog = (await client.call('get_log', { lines: 500 })).text",
+          'const before = (beforeLog.match(/FAIL/g) ?? []).length',
+          "const afterLog = (await client.call('get_log', { lines: 500 })).text",
+          'const after = (afterLog.match(/FAIL/g) ?? []).length',
+          'expect(after).toBe(before)',
+        ].join('\n'),
+      },
+    ]
+
+    expect(logProvenanceStrictEqualityOffenders(fixture)).toEqual([
+      'variable-indirection.ts:5: expect(after).toBe(before)',
+    ])
+  })
+
+  it('flags an inline get_log().text.match().length count used as a bare matcher argument (mirrors #785 :1589)', () => {
+    const fixture = [
+      {
+        file: 'inline-get-log.ts',
+        source: [
+          'const before = (',
+          "  (await client.call('get_log', { lines: 500 })).text.match(/FAIL/g) ?? []",
+          ').length',
+          'const observedFailures = countTotalFailuresFromSomewhereElse()',
+          'expect(observedFailures).toBe(before)',
+        ].join('\n'),
+      },
+    ]
+
+    expect(logProvenanceStrictEqualityOffenders(fixture)).toEqual([
+      'inline-get-log.ts:5: expect(observedFailures).toBe(before)',
+    ])
+  })
+
+  it('flags an inline match-length expectArgument compared to a literal via toBe(0) (mirrors #785 :1378)', () => {
+    const fixture = [
+      {
+        file: 'literal-zero.ts',
+        source: [
+          "const afterAttachLog = (await client.call('get_log', { lines: 500 })).text",
+          'expect(',
+          '  (afterAttachLog.match(/\\[FAILED\\]/g) ?? []).length,',
+          ').toBe(0)',
+        ].join('\n'),
+      },
+    ]
+
+    expect(logProvenanceStrictEqualityOffenders(fixture)).toEqual(['literal-zero.ts:2: expect('])
+  })
+
+  it('flags the same double-variable shape via toEqual, not just toBe', () => {
+    const fixture = [
+      {
+        file: 'via-toequal.ts',
+        source: [
+          "const beforeLog = (await client.call('get_log', { lines: 500 })).text",
+          'const countBefore = (beforeLog.match(/FAIL/g) ?? []).length',
+          "const afterLog = (await client.call('get_log', { lines: 500 })).text",
+          'const countAfter = (afterLog.match(/FAIL/g) ?? []).length',
+          'expect(countAfter).toEqual(countBefore)',
+        ].join('\n'),
+      },
+    ]
+
+    expect(logProvenanceStrictEqualityOffenders(fixture)).toEqual([
+      'via-toequal.ts:5: expect(countAfter).toEqual(countBefore)',
+    ])
+  })
+
+  it('does not flag toBeLessThanOrEqual / toBeGreaterThanOrEqual on a log-derived count', () => {
+    const fixture = [
+      {
+        file: 'lenient.ts',
+        source: [
+          "const log = (await client.call('get_log', { lines: 500 })).text",
+          'const errors = (log.match(/ERROR:/g) ?? []).length',
+          'expect(errors).toBeLessThanOrEqual(errorsBefore)',
+          'expect(errors).toBeGreaterThanOrEqual(0)',
+        ].join('\n'),
+      },
+    ]
+
+    expect(logProvenanceStrictEqualityOffenders(fixture)).toEqual([])
+  })
+
+  it('does not flag a raw `>` wait predicate (not an assertion)', () => {
+    const fixture = [
+      {
+        file: 'wait-predicate.ts',
+        source: [
+          "const before = (await client.call('get_log', { lines: 500 })).text",
+          'const stopsBefore = (before.match(/STOP/g) ?? []).length',
+          'await waitUntil(async () => {',
+          "  const log = (await client.call('get_log', { lines: 500 })).text",
+          '  return (log.match(/STOP/g) ?? []).length > stopsBefore',
+          '})',
+        ].join('\n'),
+      },
+    ]
+
+    expect(logProvenanceStrictEqualityOffenders(fixture)).toEqual([])
+  })
+
+  it('does not flag a match-length count on a string that is not get_log-derived', () => {
+    const fixture = [
+      {
+        file: 'unrelated-string.ts',
+        source: [
+          'const notes = readFile(path)',
+          'const count = (notes.match(/TODO/g) ?? []).length',
+          'expect(count).toBe(0)',
+        ].join('\n'),
+      },
+    ]
+
+    expect(logProvenanceStrictEqualityOffenders(fixture)).toEqual([])
+  })
+
+  it('does not flag the fixed newLogLines() form', () => {
+    const fixture = [
+      {
+        file: 'fixed.ts',
+        source: [
+          "const before = (await client.call('get_log', { lines: 500 })).text",
+          "const after = (await client.call('get_log', { lines: 500 })).text",
+          "const newFailedLines = newLogLines(before, after).filter((line) => line.includes('FAILED'))",
+          'expect(newFailedLines).toEqual([])',
+        ].join('\n'),
+      },
+    ]
+
+    expect(logProvenanceStrictEqualityOffenders(fixture)).toEqual([])
   })
 })
