@@ -851,7 +851,7 @@ The main changes that entered the extension between the first draft on 2026-05-0
 | Stop `get_log`'s silent truncation; raise the cap to the ring capacity of 1000 | #567 | `log-ring.ts:1-18` |
 | Correlating evaluation results via `//#evalMark` (`EvalMarkBridge`), an independent stdout branch | #614 | `eval-mark-bridge.ts:1-23`, `extension.ts:1501-1509` |
 | The `browsePlugins` command and the unknown-plugin-name diagnostic | #638 | §6.412 (2026-08-29), `extension.ts:2285-2298`, `extension.ts:4095-4112` → [PH-3](/en/plugin-hosting/catalog) |
-| The `capabilities.untrustedWorkspaces` declaration (`supported: true`, 2 `restrictedConfigurations`). A folder-less loose-file launch activates too | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/development/WORK_LOG.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)", `package.json:34-43` |
+| The `capabilities.untrustedWorkspaces` declaration (`supported: true`, 2 `restrictedConfigurations`). A folder-less loose-file launch activates too | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/archive/WORK_LOG_2026-09.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)" (rotated out of the current log), `package.json:34-43` |
 
 The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEngine` is synchronous and requires scsynth" no longer hold at 69dc968.
 

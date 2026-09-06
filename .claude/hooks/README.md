@@ -99,6 +99,37 @@ Claude Code Hooksは、特定のイベント（セッション開始、コミッ
 
 **理由**: PROJECT_RULESでは、すべてのコミットでWORK_LOG.mdの更新が必須
 
+### 5. PostPush Hook (`post-push-verify.sh`) 🔴 NEW（#742）
+
+**発火**: `PostToolUse` / matcher `Bash:git push.*`
+
+**やること**: push の直後に **ローカル HEAD とリモート追跡ブランチの SHA を突き合わせる**。
+一致しなければ理由と確認手順を stderr へ出して `exit 2`。
+
+🔴 **ブロックはしない。** push 自体は済んでいるので止めても意味がなく、
+**「入っていない」ことを見えるようにする**のが目的（本 README の weak-form 方針）。
+
+**なぜ要るか**（2026-09-04 に 2 回踏んだ）:
+
+```bash
+git commit -q -F - <<'EOF' ... EOF
+git push -q origin <branch> && echo pushed
+```
+
+`git commit` が **husky の pre-commit で失敗**しても、**次の `git push` は走る**。
+リモートは既に最新なので「Everything up-to-date」で **exit 0 = 成功**になり `echo pushed` が出る。
+結果、**ブランチに何も入っていないのに「push した」と報告**していた。
+
+**検証済み**（意図的に不一致を作って確認）:
+
+| 状況 | 結果 |
+|---|---|
+| ローカルとリモートが一致 | 無言・`exit 0` |
+| リモート未作成（初回 push 前） | 無言・`exit 0`（対象外） |
+| コミットせずに HEAD だけ進んだ状態 | **鳴る**・`exit 2` |
+
+---
+
 ### 3. PreBranch Hook (`pre-branch-check.sh`)
 
 **実行タイミング**: `git checkout -b`実行前

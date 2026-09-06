@@ -851,7 +851,7 @@ flowchart TD
 | `get_log` の silent truncation をやめ、上限をリング容量 1000 に | #567 | `log-ring.ts:1-18` |
 | `//#evalMark` による評価結果の相関 (`EvalMarkBridge`)、stdout の独立分岐 | #614 | `eval-mark-bridge.ts:1-23`、`extension.ts:1501-1509` |
 | `browsePlugins` コマンドと未知プラグイン名の診断 | #638 | §6.412 (2026-08-29)、`extension.ts:2285-2298`、`extension.ts:4095-4112` → [PH-3](/plugin-hosting/catalog) |
-| `capabilities.untrustedWorkspaces` の宣言 (`supported: true`・`restrictedConfigurations` は 2 件)。フォルダ無しの loose-file 起動でも activate する | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/development/WORK_LOG.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)"、`package.json:34-43` |
+| `capabilities.untrustedWorkspaces` の宣言 (`supported: true`・`restrictedConfigurations` は 2 件)。フォルダ無しの loose-file 起動でも activate する | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/archive/WORK_LOG_2026-09.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)"（本体はローテーション済み）、`package.json:34-43` |
 
 初稿の「8 つのコマンド」「診断は 3 種 (+2)」「`startEngine` は同期で scsynth 必須」はいずれも 69dc968 では成り立ちません。
 

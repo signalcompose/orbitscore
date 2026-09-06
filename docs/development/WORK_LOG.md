@@ -17,31 +17,36 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
-### docs: follow PR #750 and restore the entry its merge dropped (Sep 6, 2026)
+### docs: repair the orphan WORK_LOG headings the docs-sync merges left (Sep 6, 2026)
 
 **追従元**: PR [#750](https://github.com/signalcompose/orbitscore/pull/750)（`385-map-record-trust-layer-2` → main・マージコミット `aa16f7a`）/ **ブランチ**: `claude/docs-sync-pr750`
 
 マージ済み PR #750（#385 層 2 の繰り延べを地図に記録）への追従。**コードとテストは 1 行も変更していない。**
 
-#### 🔴 マージが WORK_LOG のエントリ本文を 64 行落としていた
+#### 🔴 何が起きていたか — 本文の消失ではなく「孤立見出し」
 
-PR #750 の head commit `6e6e8eb` は `Merge remote-tracking branch 'origin/main' into wip-750b`
-で、コミットメッセージが `# Conflicts: docs/development/WORK_LOG.md` と申告している。
-この解決で **`### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)` の
-見出しだけが残り、本文 64 行が消えた**（マージ後の main で見出しの次行がいきなり別の見出し）。
+2026-09-06 に docs-sync 7 本を「1 本ずつ解消 → マージ」で処理した際、WORK_LOG の衝突を
+**両側を残す**形で機械的に解いた。ところが同じ日に PR #754 が **WORK_LOG をローテーション**して
+09-04 以前のエントリを `docs/archive/WORK_LOG_2026-09.md` へ移していたため、
+「ブランチ側にはエントリがあり、main 側では移動済み」という組み合わせが生まれた。
 
-- ブランチ側 `8842048` の同エントリを**バイト一致で復元**した（内容の書き換えはしていない）
-- 消えていたのは PR #730 の作業記録そのもの — 変異 3 種でユニット 6 本の red を確認した経緯、
-  `--extensionDevelopmentPath` が workspace trust を迂回する実測、
-  `orbs --install-extension` が失敗しても exit 0 を返す副産物、3 文書を揃えた経緯
-- `sites/dev/editor/vscode-architecture.md:852`（+ `en/`）の検証マップが
+結果、main の現行ログに
+**`### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)` の見出しだけが 2 つ**
+残った（本文なし・次の行がいきなり別の見出し）。
+
+🔴 **本文は消えていない。** `docs/archive/WORK_LOG_2026-09.md:798` に無傷で残っている。
+壊れていたのは**現行ログ側の見出しと、そこを指していた出典参照**である。
+
+- 走査した結果、孤立見出しは**この 1 種類 2 箇所だけ**で、他への波及は無かった
+- `sites/dev/editor/vscode-architecture.md:854`（+ `en/`）の検証マップが
   この WORK_LOG エントリを出典として名指ししており、**参照先が空になっていた**
 
 #### 直したもの
 
 | 場所 | 何が古かったか |
 |---|---|
-| `docs/development/WORK_LOG.md` | 上記の欠落エントリを復元 |
+| `docs/development/WORK_LOG.md` | 孤立見出し 2 つを除去。本文はアーカイブ側が正なので現行ログへは戻さない |
+| `sites/dev/editor/vscode-architecture.md`（+ `en/`） | 出典を `docs/archive/WORK_LOG_2026-09.md` へ向け直した（現行ログを指したままだと空を指す） |
 | `sites/dev/editor/vscode-architecture.md`（+ `en/`） | workspace trust の節が「宣言 (層 1) を入れた」で終わっており、**層 1 では救えない**ことが書かれていなかった。同居する `anthropic.claude-code` が `untrustedWorkspaces.supported: false` を宣言していてこちらから足せず、loose-file 起動では LLM 側が黙って activate しないこと、層 2（PR-S-T2・ビルドで trust 既定 off）が #656 出荷前に残っていることを追記 |
 | 同上 frontmatter | `verified-against` を `aa16f7a`・`verified-at` を 2026-09-06 に更新。冒頭 Note にも #750 までの追従を明記 |
 
@@ -58,6 +63,148 @@ E2E の穴・弱いアサーション・CI の指摘は書き出すだけにし�
 `ORBIT_GATED_ORBITSTUDIO` が無い環境では skip されて緑になるため、この追従作業で E2E を積むと
 一度も走っていないテストを積むことになる。`dsl-e2e-coverage.spec.ts` の baseline も編集していない。
 
+### chore(hooks): verify a push actually landed (#742) (Sep 4, 2026)
+
+**Issue**: #742 / owner 指摘「**繰り返さない様に仕組みでカバー出来るところはやりましょう**」
+
+#### 同じ型の取りこぼしを 2 回踏んだ
+
+**1. commit が落ちているのに push して「pushed」と報告した**
+
+```bash
+git commit -q -F - <<'EOF' ... EOF
+git push -q origin <branch> && echo pushed
+```
+
+`git commit` が **husky の pre-commit で失敗**（WORK_LOG が 2000 行超過）しても、
+**次の `git push` は走る**。リモートは既に最新なので「Everything up-to-date」で
+**exit 0 = 成功**になり `echo pushed` が出る。
+結果、**ブランチに何も入っていないのに「push した」と報告**していた。
+
+**2. 自分の記録を上書きして消しかけた**
+
+衝突解消中に `git checkout origin/main -- docs/development/WORK_LOG.md` を実行し、
+**その PR の記録 49 行を丸ごと消した**まま commit しかけた。
+
+どちらも **「やったつもり」と「実際」のずれ**。owner の
+「先に進めることを優先して取りこぼして後で大変にならないように」で気づいた。
+
+#### 仕組み
+
+`PostToolUse` / matcher `Bash:git push.*` で、push 直後に
+**ローカル HEAD とリモート追跡ブランチの SHA を突き合わせる**。
+
+🔴 **ブロックはしない。** push 自体は済んでいるので止めても意味がなく、
+**「入っていない」ことを見えるようにする**のが目的（既存の weak-form 方針）。
+
+#### 意図的に不一致を作って確認した
+
+| 状況 | 結果 |
+|---|---|
+| ローカルとリモートが一致 | 無言・`exit 0` |
+| リモート未作成（初回 push 前） | 無言・`exit 0`（対象外） |
+| コミットせずに HEAD だけ進んだ状態 | **鳴る**・`exit 2` |
+
+#### 🔴 記録: フックは既に仕事をしていた
+
+同じ日に **pre-commit フックが 2 回正しく止めてくれた**（WORK_LOG のローテーション超過）。
+**仕組みは効いていて、出力を読まずに次へ行った私が問題だった。**
+だから今回足したのは「止める」ものではなく「**見えるようにする**」ものにした。
+
+---
+
+### docs(649): follow the master line up in the spec and the dev site (Sep 5, 2026)
+
+**Issue**: #649 / **ブランチ**: `claude/docs-sync-pr754` / **追従元 PR** [#754](https://github.com/signalcompose/orbitscore/pull/754)（merge commit `f2dadd9`）
+
+マージ済み PR #754（#649 PR-O2・stereo 内部化 + master ライン）に、ドキュメントを追従させた。
+**実装・テストは一切変更していない。**
+
+#### 仕様（`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`）
+
+🔴 **PH.2b の既知の v1 制約が 1 つ解消され、順序が入れ替わった。**
+
+| 変更前 | 変更後 |
+|---|---|
+| master gain ramp は per-sequence insert の**前**（DAW の「fader は insert 後」と逆） | master gain は **master ラック（PH.2）の後**。per-sequence insert も `global.effect()` も master gain の**手前**に来る（DAW と同じ並び） |
+
+根拠は PR #754 の差分そのもの（`EngineWrap::set_global_gain` が core の scheduler ramp を
+呼ばなくなり、`MasterLine`（rack → gain → デバイス配置）へ atomic store するだけになった）と、
+設計正本 `docs/design/611-output-line-design.md` §5.2/§5.4「master のゲインは master ラインの
+op としてラックの**後**に必ず来る」。
+
+あわせて PH.4（instrument）の「`render_multi` の内側（event 混合後・**gain ramp の前**）で
+合流する」から、production に存在しなくなった gain ramp への参照を外した。
+
+#### dev 学習サイト（ja / en 両方）
+
+- `sites/dev/rust-engine/index.md` — 「master ライン — engine の内部幅は常に 2ch」節を新設。
+  `ENGINE_CHANNELS` / `place_master_into_device`（mono マージ・2ch memcpy・3ch 以上の 0 埋め）/
+  `MasterLine::advance_gain`（構築時に確定する 5 ms ランプ）/ `EngineWrap::set_global_gain` を引用。
+  `render_block_with_sources` の段数が 3 → 5 になったこと、ビット同一の条件が
+  「ラック無し + gain 1.0 + 2ch デバイス」に変わったことを本文に反映
+- `sites/dev/signal-chain/mixer-audio-line.md` — 「master gain の適用点が移った」節と
+  「(5) 4 度目の読み直し」節を追加。(3)「master gain は今も insert の前」に解消の注記。
+  E2E-1 が赤かったのは**オラクル**（`every(rms >= 0.01)` は LOOP の 80 ms の切れ目で
+  原理的に満たせない）であって実装ではなかったこと、症状自体は `374e8b2d` で消えていたこと、
+  PR-O2 が塞いだのは「ラックが生成した音が `global.gain()` を逃れる」残り半分であることを記載
+
+両章とも `verified-against` を `f2dadd9` / `verified-at` を 2026-09-05 に更新した。
+
+#### 追従不要と判断したもの
+
+| 対象 | 理由 |
+|---|---|
+| `docs/specs-v2/` | master gain の適用位置に言及している箇所が無い（`grep "gain ramp\|master gain\|マスターゲイン\|global gain"` で 0 件）。SC.10 は順序ではなくラックの形を規定している |
+| `sites/user/` / `docs/user/ja/USER_MANUAL.md` | `global.gain()` の適用位置を書いている箇所が無い。`sites/user/reference/methods.md` の `gain(dB)` は seq のフェーダーで、本 PR は触っていない |
+| `docs/design/611-output-line-design.md` | PR #754 が §5.5 にオフラインレンダの注記を追加済み |
+
+#### 検証
+
+`npm ci` / `docs:build`（user・dev）/ `docs:check` — PR 本文に出力を貼付。
+
+---
+
+### docs(planning): record the eight issues cut out of the stage-1 must-fix work (#763) (Sep 5, 2026)
+
+**Issue**: #763 / **ブランチ**: `763-record-cut-out-issues` / **PR** #764（マージ済み `490dc32c`）
+
+段 1（#645 / #606 / #385 / #661 / #649）の must-fix を進める中でスコープ外として切り出した
+issue 8 本を、地図と実装計画に記録した。切り出したまま放置すると「誰も追わない deferred」に
+なるため、置き場と着手の目安を書いた。**docs のみの変更**（コード・テストは触っていない）。
+
+#### 地図（`docs/planning/DEVELOPMENT_MAP.md`）
+
+| 節 | 内容 |
+|---|---|
+| §4.H バッチ A | **#661 を ✅ に更新**（PR #748 でマージ済み）。**A' 行**を追加 |
+| **§4.H.A'**（新設） | #661 から派生した 3 件（**#755** / **#759** / **#758**）と「なぜ #661 で直さなかったか」 |
+| §4.G | 測定器の欠陥 3 件（**#761** / **#756** / **#760**） |
+| **§4.J.1**（新設） | 拡張・daemon の内部整理（**#757** / **#752**）。振る舞いを変えないので急がないが、放置すると次の変更が高くつく類 |
+
+#### 実装計画（`docs/planning/IMPLEMENTATION_PLAN_2026-09.md`）
+
+- **§1.8 PR-V**: 「PR-V3 + PR-V4 は PR #748 でマージ済み・#661 は CLOSED」と owner 裁定を追記し、
+  派生 3 件を **PR-V10 / PR-V6 / PR-V6 の後**へ割り当てた
+- **§1.10 PR-E**: 測定器の欠陥 3 件と着手の順序（#761 は着手可 / #756 は #649 の baseline 比較の
+  後 / #760 は独立）
+
+#### 🔴 記録して見えたこと
+
+**#761 / #756 / #760 は 3 本とも「測定器の欠陥」**で、いずれも「**実装が正しいのにテストが
+赤 / 緑になる**」型だった。#649 も #661 も同じ形だったので、偶然ではなく**この段の主題**として
+計画に束ねている。
+
+#### あわせて直したもの
+
+`DEVELOPMENT_MAP.md` に**存在しない §4.H.1 への参照**（599 行目）があったので §4.H へ寄せた。
+新しい節は §4.H.A' と名付けて番号の衝突を避けている。
+
+#### 検証
+
+`docs:check` **926 verified / 0 failed**。コード変更なしのためビルド・実機 E2E は不要
+（CLAUDE.md「docs のみの変更」）。CI は `code-review` / `fmt / clippy / test` /
+`license / dependency gate` の 3 件すべて success。
 ### docs(planning): record the #385 layer-2 deferral on the map (Sep 5, 2026)
 
 **Issue**: #385 / **ブランチ**: `385-map-record-trust-layer-2`
@@ -81,71 +228,6 @@ owner 判断（2026-09-05）で **#385 は段 1（must-fix の音の経路）で
 計画側（`IMPLEMENTATION_PLAN_2026-09.md` の PR-S-T2 行・`USER_OUTCOMES_2026-09.md` の段 8）と
 設計側（`656-release-design.md` §3.4）は既に層 2 を持っていたので変更なし。**欠けていたのは地図だけ**。
 
-### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
-
-**Issue**: #385 / **ブランチ**: `385-untrusted-workspace-capability` / **PR-S-T1**
-
-フォルダ無しの loose-file 起動（`orbs file.orbs`）は**未信頼の ad-hoc workspace** を作る。
-`capabilities.untrustedWorkspaces` を宣言していない拡張はそこで activate されず、
-利用者には「何も起きない」ようにしか見える。**実害は拒否ではなく沈黙**である。
-
-owner 裁定（`docs/design/656-release-design.md` §16 (1)・2026-09-03）は **`supported: true`**
-「一般的な DAW の挙動に併せて」。`"limited"` は撤回済みなので `startEngine()` に trust ガードは置かない。
-
-#### 🔴 レビューで自分のテストが「何も証明していない」と分かった（2 段階）
-
-**① ユニット側**: `restrictedConfigurations` を `?? []` でフォールバックしていたため、
-**宣言が丸ごと消えても `for...of []` が 0 周して green** になっていた。
-フォールバックを外し、取り出せない形なら**その場で落とす**ようにした。変異で実証:
-
-| 変異 | 旧 | 新 |
-|---|---|---|
-| `restrictedConfigurations` を削除 | 2 件**素通り** | **3 件 red** |
-| `audioDevice` を restricted に追加 | — | **2 件 red** |
-| `supported: false` | — | **1 件 red** |
-
-restore 後 6 件 green・`package.json` は `cmp` で復元一致。
-
-**② E2E 側（本 PR では出さない・**#735** へ切り出し）**: 正本計画は PR-S-T1 に
-**E2E-D1（実機）**を課している。書いて実機で回したところ **dev モードでは緑になったが、
-`capabilities` ブロックを丸ごと削除しても緑のまま**だった。
-🔴 **`--extensionDevelopmentPath` は workspace trust の制限を迂回する**ためで、
-設計が `ORBIT_GATED_EXT_MODE=installed` を要求していた理由が実験で裏付けられた。
-
-installed モード（vsix を焼いて `--install-extension`）に切り替えると、
-**導入は成功するのに拡張が activate しない**（trust を無効にしても同じなので trust は原因ではない）。
-ここは #385 の症状とは別の観測性の問題なので **#735** へ切り出した。6 実験の結果はそちらに残してある。
-
-**副産物**: `orbs --install-extension` は**失敗しても exit 0 を返す**（壊れた vsix で
-「Failed Installing Extensions」を出しながら 0）。exit code で判定してはいけない。
-
-#### 🔴 地図だけでなく設計と実装プランにも反映した（owner 指摘）
-
-> 地図だけでなく設計と実装プランにも反映してあるかな？？
-
-最初は `DEVELOPMENT_MAP.md` §4.J しか直しておらず、**この PR 自身が #727 で直したばかりの型**
-（規範を変えたのに写しが古い）を繰り返すところだった。3 文書を揃えた:
-
-| 文書 | 直した内容 |
-|---|---|
-| `DEVELOPMENT_MAP.md` §4.J | #385（宣言・✅ 済）と **#735（実機検証・未着手）**の 2 行に分離。#735 は **#659 の後** |
-| `656-release-design.md` §12 | **E2E-D1 の期待値を反転**（`running: true` / 音が出る / `not trusted` は 0 行）。**E2E-D2 は取り消し線 + 理由**（裁定 (1) で trust の有無が挙動を変えなくなり D1 と同判定になるため）。**§12.1 を新設**して 6 実験の結果と「成果物なしで成立する」の訂正を記録 |
-| `IMPLEMENTATION_PLAN_2026-09.md` §1.9 | PR-S-T1 の件名から **`and refuse loudly` を削除**・`extension.ts` を触るファイルから除外（裁定 (1) で trust ガードが不要になり「断る」対象が無い）。実機 E2E を **PR-S-T3（#735）**として新規行に分離 |
-
-**「issue を立てた」だけでは追跡されない。** 地図は所在、設計は判定条件、計画は工数と順序を持つので、
-1 つでも古いままだと次の起案者がそこを読んで誤る。
-
-#### reuse: マニフェスト読み取りを共有ヘルパーへ
-
-`playhead.spec.ts:211` が既に同じ `package.json` を**別の書き方**（`new URL(…, import.meta.url)`）で
-読んでいた。`tests/helpers/vscode-extension-manifest.ts` を新設し、**両方をそこへ寄せた**
-（新設だけして重複を残すと 1 箇所が 3 箇所になる）。`playhead.spec.ts` 33 件は通ったまま。
-
-#### 検証
-
-`npm run typecheck:e2e` 0 / `tests/vscode-extension/` **430 passed** / lint 0。
-
----
 ### docs: follow PR #748 in the dev site and the user site (#661) (Sep 5, 2026)
 
 **Issue**: #661 / **ブランチ**: `claude/docs-sync-pr748` / **追従元**: PR #748（merge commit `ef192ca`）
