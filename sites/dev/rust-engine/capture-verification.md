@@ -1,8 +1,8 @@
 ---
 title: "RE-4. capture seam と客観検証（ORBIT_CAPTURE_WAV）"
 chapter-id: "RE-4"
-verified-against: f006a51
-verified-at: "2026-09-03"
+verified-against: 76a4056
+verified-at: "2026-09-05"
 status: draft
 ---
 
@@ -190,6 +190,68 @@ const HEADER_SYNC_INTERVAL_SAMPLES: u64 = 48_000 * 2;
    動かすので往復のたびに書き込み位置の管理が絡みます。`write_all_at`（`pwrite` 相当）は
    ファイルのカーソルを動かさないので、追記は素直に進んだまま header だけを上書きできます
    （macOS 限定プロジェクトなので `std::os::unix` を使える）。
+
+### `finalize` は通常の停止でも走らない — 区間解析は実バイトを見る（#739）
+
+この節の見出しは「異常終了でも開ける WAV」ですが、#739 で分かったのは **`finalize` が走らないのは
+異常終了のときだけではない**という点です。daemon には SIGTERM / SIGINT のハンドラが無く、client 側の
+通常停止もその SIGTERM なので、`CaptureWriter::Drop` → `finalize` は**通常の経路でも走りません**。
+
+```rust
+// rust/crates/orbit-audio-daemon/src/main.rs:21-25
+// 既知事項（#448）: この daemon には SIGTERM/SIGINT ハンドラが無く、`install_fatal_panic_hook`
+// の panic hook も `process::exit(1)` を hook 内から直接呼ぶ（unwind が supervisor 保持フレーム
+// まで届く前に終了する）。そのため通常の client 側 `SIGTERM → SIGKILL` 停止（daemon-client.ts
+// `killChildGracefully`）や panic では、`InstrumentChildSupervisor` / `EffectChildSupervisor` の
+// `Drop`（CONTROL_QUIT 送出）が実行されず、out-of-process CLAP/VST3 child が孤児化し得る。
+```
+
+つまり capture ファイルの header が申告する data サイズは、**いつでも最後の `sync_header` の時点で
+止まっている**と考えるべきです。patch の間隔は `HEADER_SYNC_INTERVAL_SAMPLES` = 96,000 interleaved
+samples の固定値なので、48 kHz stereo なら約 1 秒、mono なら約 2 秒ぶんの末尾が申告値から漏れます。
+
+区間 RMS を測る側はここを踏みます。区間の境界をバイト長で刻んでおきながら、解析だけが申告サイズに
+従うと **末尾の区間が解析範囲の外へ落ちます**。#739 の実機では、これで 6 件が誤検知しました。
+対策は「申告サイズを 0 に潰して、解析に物理バイト全体を見せる」ことです。
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:75-82
+export function readCaptureForAnalysis(capturePath: string): Buffer {
+  const capture = fs.readFileSync(capturePath)
+  if (capture.toString('ascii', 36, 40) !== 'data') {
+    throw new Error(`${capturePath}: expected fixed 44-byte capture WAV data chunk at byte 36`)
+  }
+  capture.writeUInt32LE(0, 40)
+  return capture
+}
+```
+
+`data` チャンクが byte 36 にあることを確かめてから 0 を書き込むので、想定と違う header を黙って
+書き換えてしまうことはありません。ここで大事なのは、この零化が「異常終了時の保険」ではなく
+**capture を区間解析する全経路で必要**だという点です（graceful-shutdown の配線そのものは
+[#448](https://github.com/signalcompose/orbitscore/issues/448) の別課題として残っています）。
+
+### capture のディレクトリは engine を起動する前に作る
+
+もう 1 つ、#739 が実機時間で払って分かった前提があります。`ORBIT_CAPTURE_WAV` が指す
+**ディレクトリが存在しないと、engine の起動そのものが落ちます**。capture writer の `File::create`
+が失敗し、`DEVICE_CONFIG_ERROR "audio output init failed: capture writer error: No such file or
+directory"` になります。
+
+厄介なのは、この失敗がテスト側には「daemon-backed REPL ready after 30000ms」という
+**無関係に見えるタイムアウト**として現れることです。原因の文字列がどこにも出ないので、
+capture のパスを疑うところまで辿り着きにくいのです。そこで準備は 1 つの関数にまとめてあります。
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:58-61
+export function prepareCapturePath(capturePath: string): void {
+  fs.mkdirSync(path.dirname(capturePath), { recursive: true })
+  fs.rmSync(capturePath, { force: true })
+}
+```
+
+パス解決のほう（`captureWavPath`）には副作用を持たせていません。あちらはユニットテストが
+リテラルパスを渡す純粋な関数なので、ディレクトリ作成を混ぜると実ディレクトリを作ってしまいます。
 
 ## `CaptureWriter`: RT callback の外で drain する off-thread writer
 
@@ -491,7 +553,9 @@ DSL E2E の capture WAV 実測 peak = **0.25000**（WORK_LOG 6.258）— 独立�
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:1-23` — capture seam realtime gated test のモジュールコメント（役割・実行方法）
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:99-111` — WAV header/物理サイズ突き合わせ（silent-failure ガード）
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:206-217` — `drops == 0` assert（teardown 前の silent-failure ガード）
+- `rust/crates/orbit-audio-daemon/src/main.rs:21-30` — SIGTERM / SIGINT ハンドラが無いこと（#448・通常停止でも `finalize` が走らない根拠）
 - `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:232-234` — `post_peak_bits`（lock-free peak 累積の実装）
+- `tests/e2e/helpers/capture-windows.ts:45-82` — `prepareCapturePath`（capture ディレクトリの前提）/ `readCaptureForAnalysis`（申告サイズを零化して実バイトを解析させる）
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:80-154` — stale artifact ガード（`assertDaemonBinaryIsNotStale`）
 - `package.json:17-18` — `pretest:e2e:gated` / `test:e2e:gated`
 - [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 / 6.416 / 6.417 — #643 master fader の発見、#651 の header patch と stale ガード、pretest 自動化

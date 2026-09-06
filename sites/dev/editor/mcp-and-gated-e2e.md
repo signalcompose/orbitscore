@@ -1,8 +1,8 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: c2010db
-verified-at: "2026-09-04"
+verified-against: 76a4056
+verified-at: "2026-09-05"
 status: draft
 ---
 
@@ -748,6 +748,69 @@ export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }
 
 同じ日に `ORBIT_KEEP_CAPTURES=<dir>` が正式化されました。指定するとキャプチャ WAV を tmpRoot ではなくそのディレクトリに残します。「ハーネスのアサーションは窓の中の 1 つの数しか見せないが、欠陥は窓の外にいることがある」（6.415）ためです。ただしこの環境変数が spec 全体で効くようになったのは #668 PR-E2 以降です — それまでは 13 箇所のパス組み立てのうち 1 箇所しか見ていませんでした（[共有ハーネス層](#共有ハーネス層-—-tests-e2e-helpers)）。
 
+### 写像そのものを守る 4 つの不変条件 — A1 / U1 / U2 / U3
+
+時計を替えても、区間の作り方を間違えれば測る場所はずれます。そこで `captureWindowsFrom` は区間を
+バケットへ写像する前に 4 つの不変条件を検査し、破れたら **どの不変条件がどの区間で破れたか**を
+名前つきの Error にして投げます（`label` + `A1` などの id + `fromSec` / `toSec` / `durationSec` /
+`soundStartSec` / `bucketCount` の JSON）。#739 が直したのは時計ですが、同時にこの 4 本が入りました。
+
+**A1 — 最初の区間は、音が出る前に開いてはいけない。** これが #739 の元の事故そのものです。
+`LOOP()` の小節量子化とプラグイン attach で音は数秒後に出るので、固定 settle で窓を開けると
+`unity` 窓が丸ごと無音になり、比較の分母が意味を失います。
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:441-449
+    if (index === 0 && (soundStartSec === null || segment.fromSec < soundStartSec)) {
+      throw invariantError(
+        'A1',
+        name,
+        segment,
+        bucketCount,
+        'the first segment must not open before sound starts',
+      )
+    }
+```
+
+**U1 — 区間から取れたバケット数が、区間長から期待される数と合っていること。** guard を引いた
+区間長を 20 ms で割った値と実際に選ばれたバケット数を比べ、`±2` を超えたら落とします。0 件も
+落とします。「窓を指定したのに何も入っていなかった」という静かな失敗を、ここで音になる前に
+止めるためです。
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:388-391
+    const expected = Math.round(
+      (segment.toSec - segment.fromSec - 2 * guardSec) / ANALYSIS_BUCKET_SEC,
+    )
+    if (Math.abs(selected.length - expected) > BUCKET_COUNT_TOLERANCE) {
+```
+
+**U2 — キャプチャ時計で測った区間長と、壁時計で測った区間長が食い違わないこと。** 時計をバイト長へ
+移したので、その時計が壁時計から離れていないことを毎回確かめます。許容は `0.12` 秒です。時計が
+壊れれば区間はどこでも指せてしまうので、時計そのものへ張った検査だと言えます。
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:450-452
+    const captureDurationSec = segment.toSec - segment.fromSec
+    const wallDurationSec = (segment.toWall - segment.fromWall) / 1000
+    if (Math.abs(captureDurationSec - wallDurationSec) > CLOCK_WALL_TOLERANCE_SEC) {
+```
+
+**U3 — 区間は有限・キャプチャ時間内・単調で、重ならないこと。** 面白いのは例外の作り方です。
+`#643` E2E-3 の境界プローブは直前の区間へ 250 ms わざと食い込むので、重なりは
+`CaptureSegment.overlapsPrevious` で **区間側が明示的に opt-in** する形になっています。#739 の
+レビューで、区間名の文字列 `'transition'` を見る実装からここへ移されました。名前で例外を判定すると、
+同じ名前を別の意図で使った瞬間に検査が静かに緩みます。
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:426-430
+      // #643 E2E-3's boundary probe intentionally looks back 250 ms. Every overlap must
+      // opt in explicitly; regular capture segments remain strictly non-overlapping.
+      (previous !== undefined &&
+        segment.overlapsPrevious !== true &&
+        segment.fromSec < previous[1].toSec)
+```
+
 ---
 
 ## 規律を仕組みに変えるテスト — ラチェットとアサーション衛生
@@ -1209,6 +1272,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `tests/e2e/gated-sources.ts:1-106` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` の判定（`countErrors` 7 重定義の統合先・#668 PR-E2）
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` と `captureWavPath()`
+- `tests/e2e/helpers/capture-windows.ts:1-489` — キャプチャ時計・音の検出・区間 → バケット写像と不変条件 A1 / U1 / U2 / U3（#739）
 - `tests/e2e/helpers/run-score.ts:1-272` — 譜面を work copy にして実機で評価する 1 関数
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — 生成物の待ち合わせ（`minBytes` つき）
 - `tests/e2e/helpers/run-cli.ts:1-62` — `orbitscore replay` / `render` の子プロセス実行（MCP を通らない唯一の例外）
