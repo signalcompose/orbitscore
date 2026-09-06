@@ -554,7 +554,7 @@ DSL E2E の capture WAV 実測 peak = **0.25000**（WORK_LOG 6.258）— 独立�
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:99-111` — WAV header/物理サイズ突き合わせ（silent-failure ガード）
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:206-217` — `drops == 0` assert（teardown 前の silent-failure ガード）
 - `rust/crates/orbit-audio-daemon/src/main.rs:21-30` — SIGTERM / SIGINT ハンドラが無いこと（#448・通常停止でも `finalize` が走らない根拠）
-- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:232-234` — `post_peak_bits`（lock-free peak 累積の実装）
+- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:233-235` — `post_peak_bits`（lock-free peak 累積の実装）
 - `tests/e2e/helpers/capture-windows.ts:45-82` — `prepareCapturePath`（capture ディレクトリの前提）/ `readCaptureForAnalysis`（申告サイズを零化して実バイトを解析させる）
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:80-154` — stale artifact ガード（`assertDaemonBinaryIsNotStale`）
 - `package.json:17-18` — `pretest:e2e:gated` / `test:e2e:gated`

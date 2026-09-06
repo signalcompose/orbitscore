@@ -1582,7 +1582,7 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:538-576` — sending `ApplyEffectChain` and validating the response
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1170-1214,1341-1364` — the `loadedEffectRacks` ledger and the rebuild after respawn
 - `rust/crates/orbit-audio-sandbox/src/rack_wire.rs:1-142` — the single definition of the wire types and the record of the serde defect caused by duplication
-- `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:55-138,163-184,450-458,641-676` — `ChainStageConfig` / `EffectChainPlan`, manifest writing, child spawn
+- `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:55-138,163-184,453-461,644-679` — `ChainStageConfig` / `EffectChainPlan`, manifest writing, child spawn
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5080-5180` — route selection in `apply_outproc_effect_chain`
 - `rust/crates/orbit-effect-rack-child/src/lib.rs:1-6,85-102,196-217,330-426,491-824` — rack child core (stage list, generation swap, `RackController::apply`)
 - `rust/crates/orbit-effect-rack-child/src/macos.rs:345-372` — stage loading (host selected by extension, standard plugins from `std-plugins/`)
