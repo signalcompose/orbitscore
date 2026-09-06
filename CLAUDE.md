@@ -239,6 +239,7 @@ npm run docs:check       # dev 学習サイトの引用 (// file:start-end) を 
 - `pre-edit-check.sh` blocks Edit/Write on main branch
 - `pre-commit-check.sh` blocks Serena memory commits on main
 - `session-start.sh` shows reminders at session start
+- `post-push-verify.sh` compares local HEAD with `origin/<branch>` after `git push` and reports a mismatch (does not block — #742)
 
 See `.claude/settings.json` for Hook configuration.
 

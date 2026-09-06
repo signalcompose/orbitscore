@@ -17,6 +17,38 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #744 (post-push verify hook) (Sep 6, 2026)
+
+**ブランチ**: `claude/docs-sync-pr744` / **追従元 PR** [#744](https://github.com/signalcompose/orbitscore/pull/744)（merge commit `7b93791`）
+
+マージ済み PR #744（push が本当に入ったかを確認する PostToolUse フック）に、
+ドキュメントを追従させた。**実装・テストは 1 行も変更していない。**
+
+#### 追従したもの
+
+| 場所 | 何が古かったか |
+|---|---|
+| `CLAUDE.md` の "Hook Protection" | 自動ガードの一覧に `post-push-verify.sh` が無かった（`pre-edit-check` / `pre-commit-check` / `session-start` の 3 件だけ） |
+
+#### 🔴 ローテーションの取りこぼしを 2 件回収した
+
+`docs/development/WORK_LOG.md` に、**本文が無い見出しだけの行**が 2 つ残っていた。
+
+```
+### fix(studio): declare untrusted-workspace capability (#385 PR-S-T1) (Sep 4, 2026)
+### docs(649): follow the master line up in the spec and the dev site (Sep 5, 2026)
+```
+
+見出しの直後に次の見出しが続き、**後続エントリのタイトルを飲み込んで見える**状態だった。
+本文は `docs/archive/WORK_LOG_2026-09.md`（`### fix(studio): declare untrusted-workspace...`）へ
+既にローテーション済みで、**見出し行だけが本体に取り残されていた**もの。
+
+- 1 件目は PR #744 のマージ衝突解消（merge commit `1283dda`・`# Conflicts: docs/development/WORK_LOG.md`）で新たに複製されたもの
+- 2 件目は #744 の base（`4d7b63b`）に既に在ったもの
+
+本文は archive にあるので、**本体側の見出し行 2 行を削除した**（archive は変更していない）。
+PR #742 が「**やったつもりと実際のずれ**」を機械で見えるようにしたのと同じ型の取りこぼしが、
+その PR 自身のマージで 1 件増えていた。
 ### docs: repair the orphan WORK_LOG headings the docs-sync merges left (Sep 6, 2026)
 
 **追従元**: PR [#750](https://github.com/signalcompose/orbitscore/pull/750)（`385-map-record-trust-layer-2` → main・マージコミット `aa16f7a`）/ **ブランチ**: `claude/docs-sync-pr750`
