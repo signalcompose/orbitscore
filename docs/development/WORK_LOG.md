@@ -71,7 +71,20 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 | `npx eslint` / `prettier --check`（対象ファイル） | 0 / 差分なし |
 | `cargo check -p orbit-audio-sandbox` | 緑 |
 | `gated-assertion-hygiene` / `dsl-e2e-coverage` ラチェット | 緑 |
-| 実機 gated（当該シナリオ） | 別掲（下記の追記） |
+| **実機 gated（当該シナリオ）** | ✅ **1 passed / 28 skipped**（54.5s・起動時 load 1.83 の clean な測定）。`main` で落ちていたシナリオが緑になり、実機の失敗は 3 件 → 2 件 |
+
+#### 🔴 引用 42 件が陳腐化した — 手順の欠陥
+
+行番号がずれたことで、dev 学習サイトが `orbitstudio-mcp-gated.spec.ts` と `transport.rs` を
+**行範囲で引用**している箇所が 42 件失敗した（CI の `code-review` で発覚）。
+
+**ローカルの `docs:check` は緑だったが、それは編集の「前」に走らせたもので検証になっていなかった。**
+
+- 40 件は純粋な行ずれ → `check-citations.mjs --fix` が再アンカー
+- **2 件は本文の変更**（`rust-engine/oop-children.md` の日英）。サイトが
+  `CHILD_STATUS_LOAD_FAILED` の**古いコメントを逐語引用**していたので、新しい文面へ差し替えた。
+  つまり**同じ事実誤りがサイト側にも載っていた**
+- 地の文は `LOAD_FAILED` を「未使用」と書いていないため、散文の修正は不要（grep で確認）
 
 ### docs: follow PR #744 (post-push verify hook) (Sep 6, 2026)
 
