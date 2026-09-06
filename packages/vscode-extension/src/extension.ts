@@ -1580,13 +1580,19 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
  * プロセスが終わる。それは過小カウントを直すはずのこの変更が**逆方向に**同じ穴を開けること
  * になる。`end` で必ず吐き出す。
  *
- * 🔴 **双子がいる**: `packages/engine/src/audio/rust-engine/daemon-client.ts` の
- * `createDaemonStderrLineRouter` が同じ「`partial` を持ち越して行に組み直す」中核を持つ
- * （扱うプロセス境界は別 — こちらは拡張 → engine、あちらは engine → daemon）。
- * 拡張パッケージは `@orbitscore/engine` に依存していないので今は共有できない。
- * **片方に入れた変更（改行コードの扱い・空行の扱い・flush）はもう片方にも要る**。
- * あちらには `flush()` が無く、daemon が panic して改行なしで死んだ時に最後の 1 行を落とす
- * （#777 で追跡）。
+ * 🔴 **「chunk → 行」の実装は合計 4 つある**。この関数だけを直して全部揃ったと思わないこと:
+ *
+ * 1. ここ `createLinePrefixer` — engine stderr を行へ戻す（#756）。
+ * 2. `packages/engine/src/audio/rust-engine/daemon-client.ts` の
+ *    `createDaemonStderrLineRouter` — daemon stderr の同型実装（#777）。拡張パッケージは
+ *    `@orbitscore/engine` に依存しないので今は共有できない。
+ * 3. 同ファイルの `setupStdoutHandler` — `output.split('\n')` で engine stdout を分ける。
+ *    chunk 境界を持ち越さない問題は #773 で追跡するため、この束では変更しない。
+ * 4. `activate()` 冒頭の output-channel ring proxy — `append` を `value.split('\n')` して
+ *    `get_log` 用 ring へ写す。これは現時点で issue 未追跡である。
+ *
+ * **改行コード・空行・末尾 flush の判断は 4 箇所すべてへ波及しうる**。特に daemon 側には
+ * `flush()` が無く、panic が改行なしで終わると最後の 1 行を落とす（#777）。
  *
  * 空行は emit しない。`ERROR: ` だけの行を作ると `countErrors` が**水増し**される。
  */

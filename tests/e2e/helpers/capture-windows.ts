@@ -42,6 +42,19 @@ export interface CaptureFormat {
   readonly channels: number
 }
 
+export interface CaptureTailRms {
+  /** 末尾から読めた 20 ms 窓。最後の窓は 20 ms 未満のことがある。 */
+  readonly rms: readonly number[]
+  /** 末尾バッファが実際に覆う時間。窓数から逆算すると端数窓を過大評価するため別に持つ。 */
+  readonly durationSec: number
+}
+
+/** `waitForQuiet` は boolean 契約を保つので、timeout 時の観測値はこの入れ物へ返す。 */
+export interface WaitForQuietDiagnostics {
+  lastTailRms: readonly number[]
+  lastError: string | undefined
+}
+
 /**
  * capture を書き出す直前の準備 — **ディレクトリを作り、前回の残骸を消す**。
  *
@@ -81,18 +94,24 @@ export function readCaptureForAnalysis(capturePath: string): Buffer {
   return capture
 }
 
-/** Read and validate the daemon capture seam's fixed 44-byte float32 WAV header. */
-export function readCaptureFormat(capturePath: string): CaptureFormat {
-  const header = Buffer.alloc(CAPTURE_HEADER_BYTES)
-  const fd = fs.openSync(capturePath, 'r')
-  try {
-    const bytesRead = fs.readSync(fd, header, 0, header.length, 0)
-    if (bytesRead !== CAPTURE_HEADER_BYTES) {
-      throw new Error(`${capturePath}: expected a 44-byte capture header, read ${bytesRead}`)
-    }
-  } finally {
-    fs.closeSync(fd)
+/** 固定長を要求して読む。短読みを Buffer.alloc の 0（= 無音）として解析へ渡さない。 */
+function readCaptureBytes(
+  fd: number,
+  capturePath: string,
+  buffer: Buffer,
+  offset: number,
+  length: number,
+  position: number,
+  label: string,
+): void {
+  const bytesRead = fs.readSync(fd, buffer, offset, length, position)
+  if (bytesRead !== length) {
+    throw new Error(`${capturePath}: expected ${length} ${label} bytes, read ${bytesRead}`)
   }
+}
+
+/** daemon capture seam の固定 44-byte float32 WAV header を検証する純粋部分。 */
+function captureFormatFromHeader(capturePath: string, header: Buffer): CaptureFormat {
   const audioFormat = header.readUInt16LE(20)
   const channels = header.readUInt16LE(22)
   const sampleRate = header.readUInt32LE(24)
@@ -113,6 +132,18 @@ export function readCaptureFormat(capturePath: string): CaptureFormat {
     )
   }
   return { sampleRate, channels }
+}
+
+/** Read and validate the daemon capture seam's fixed 44-byte float32 WAV header. */
+export function readCaptureFormat(capturePath: string): CaptureFormat {
+  const header = Buffer.alloc(CAPTURE_HEADER_BYTES)
+  const fd = fs.openSync(capturePath, 'r')
+  try {
+    readCaptureBytes(fd, capturePath, header, 0, header.length, 0, 'capture header')
+  } finally {
+    fs.closeSync(fd)
+  }
+  return captureFormatFromHeader(capturePath, header)
 }
 
 /** Current capture time, using bytes already visible in the capture file as the clock. */
@@ -195,39 +226,51 @@ export async function waitForSound(
  * 生成した窓の **2% 前後しか使わないのに**数百 MB を読み直すことになる。
  * `readCaptureFormat` と同じ `openSync` + 位置指定 `readSync` で末尾だけを切り出す。
  *
- * 🔴 **返すのは RMS の配列だけ**。以前は `{ startSec, rms }` を返していたが、末尾だけを
- * 読むと `startSec` は**ファイル先頭からの時刻ではなくなる**。呼び出し側は 2 箇所とも
- * `rms` しか見ていないので、使われない座標を返して誤用を招くより、契約を狭める。
+ * 🔴 **返す座標は実際に読めた長さだけ**。以前の `{ startSec, rms }` に相当するファイル先頭
+ * からの座標は、末尾だけを読むこの関数では作れない。代わりに `durationSec` を返すのは、
+ * `rms.length * 20ms` だと最後の端数窓を過大評価し、要求時間を読めたか判定できないため。
  */
-function captureTailRms(capturePath: string, tailSec: number): number[] {
-  const size = fs.statSync(capturePath).size
-  if (size < CAPTURE_HEADER_BYTES) return []
-  const { sampleRate, channels } = readCaptureFormat(capturePath)
-  const bytesPerFrame = channels * BYTES_PER_SAMPLE
-  // writer は frame 単位で追記するが、読んだ瞬間に端数が乗っていることはありうる。
-  const dataBytes = size - CAPTURE_HEADER_BYTES
-  const wholeFrameBytes = dataBytes - (dataBytes % bytesPerFrame)
-  const tailBytes = Math.min(wholeFrameBytes, Math.ceil(tailSec * sampleRate) * bytesPerFrame)
-  if (tailBytes <= 0) return []
-
-  const buffer = Buffer.alloc(CAPTURE_HEADER_BYTES + tailBytes)
+export function captureTailRms(capturePath: string, tailSec: number): CaptureTailRms {
   const fd = fs.openSync(capturePath, 'r')
   try {
-    fs.readSync(fd, buffer, 0, CAPTURE_HEADER_BYTES, 0)
-    fs.readSync(
+    // 🔴 stat → open の間に writer / cleanup がファイルを差し替えると、header と data が別の
+    // capture になりうる。同じ fd の fstat・read だけで 1 回の観測を構成する。
+    const size = fs.fstatSync(fd).size
+    if (size < CAPTURE_HEADER_BYTES) return { rms: [], durationSec: 0 }
+
+    const header = Buffer.alloc(CAPTURE_HEADER_BYTES)
+    readCaptureBytes(fd, capturePath, header, 0, header.length, 0, 'capture header')
+    const { sampleRate, channels } = captureFormatFromHeader(capturePath, header)
+    const bytesPerFrame = channels * BYTES_PER_SAMPLE
+    // writer は frame 単位で追記するが、読んだ瞬間に端数が乗っていることはありうる。
+    // 端数を末尾位置へ足すと読み始めが channel の途中へずれ、stereo の左右が入れ替わる。
+    const dataBytes = size - CAPTURE_HEADER_BYTES
+    const wholeFrameBytes = dataBytes - (dataBytes % bytesPerFrame)
+    const tailBytes = Math.min(wholeFrameBytes, Math.ceil(tailSec * sampleRate) * bytesPerFrame)
+    if (tailBytes <= 0) return { rms: [], durationSec: 0 }
+
+    const buffer = Buffer.alloc(CAPTURE_HEADER_BYTES + tailBytes)
+    header.copy(buffer)
+    readCaptureBytes(
       fd,
+      capturePath,
       buffer,
       CAPTURE_HEADER_BYTES,
       tailBytes,
       CAPTURE_HEADER_BYTES + wholeFrameBytes - tailBytes,
+      'capture tail',
     )
+
+    // `readCaptureForAnalysis` と同じ理由で data サイズを 0 にする（writer が書いた
+    // ヘッダの値は追記に追いつかないので、物理バイト数で解析させる）。
+    buffer.writeUInt32LE(0, 40)
+    return {
+      rms: (analyzeWavBuffer(buffer, { windowMs: 20 }).windows ?? []).map((window) => window.rms),
+      durationSec: tailBytes / bytesPerFrame / sampleRate,
+    }
   } finally {
     fs.closeSync(fd)
   }
-  // `readCaptureForAnalysis` と同じ理由で data サイズを 0 にする（writer が書いた
-  // ヘッダの値は追記に追いつかないので、物理バイト数で解析させる）。
-  buffer.writeUInt32LE(0, 40)
-  return (analyzeWavBuffer(buffer, { windowMs: 20 }).windows ?? []).map((window) => window.rms)
 }
 
 /**
@@ -240,18 +283,36 @@ function captureTailRms(capturePath: string, tailSec: number): number[] {
  *
  * @returns 静寂を観測できたか。**例外にしない** — 「静かにならないのが正しい」呼び出し側
  *          （`waitForSoundRestart` の段階 1: 切れ目なく次の音が続く譜面）を壊さないため。
- *          静寂が要件である側は戻り値を assert すること。
+ *          静寂が要件である側は戻り値を assert し、`diagnostics` の最後の RMS 窓と例外を
+ *          失敗メッセージへ載せること。
  */
 export async function waitForQuiet(
   capturePath: string,
-  opts: { floor: number; quietSec: number; intervalMs: number; timeoutMs: number },
+  opts: {
+    floor: number
+    quietSec: number
+    intervalMs: number
+    timeoutMs: number
+    /** false を返す契約を変えずに、呼び出し側の失敗メッセージへ観測値を載せる。 */
+    diagnostics?: WaitForQuietDiagnostics
+  },
 ): Promise<boolean> {
   const deadline = Date.now() + opts.timeoutMs
   while (Date.now() <= deadline) {
     try {
       const tail = captureTailRms(capturePath, opts.quietSec)
-      if (tail.length > 0 && tail.every((rms) => rms < opts.floor)) return true
-    } catch {
+      if (opts.diagnostics !== undefined) opts.diagnostics.lastTailRms = tail.rms
+      // 🔴 全窓が無音でも、要求時間を実際に観測していなければ「静か」とは言えない。
+      // `rms.length * 20ms` は端数窓を丸々 20ms と数えるので、実バイト由来の時間を見る。
+      if (
+        tail.durationSec >= opts.quietSec &&
+        tail.rms.length > 0 &&
+        tail.rms.every((rms) => rms < opts.floor)
+      ) {
+        return true
+      }
+    } catch (error) {
+      if (opts.diagnostics !== undefined) opts.diagnostics.lastError = String(error)
       // writer がヘッダを書き終える前など。次の周回で読み直す。
     }
     await delay(opts.intervalMs)
@@ -310,7 +371,7 @@ export async function waitForSoundRestart(
   while (Date.now() <= deadline) {
     try {
       const tail = captureTailRms(capturePath, 0.1)
-      lastTailMax = tail.reduce((maximum, rms) => Math.max(maximum, rms), 0)
+      lastTailMax = tail.rms.reduce((maximum, rms) => Math.max(maximum, rms), 0)
       if (lastTailMax >= opts.floor) return { quietObserved }
     } catch {
       // 同上
