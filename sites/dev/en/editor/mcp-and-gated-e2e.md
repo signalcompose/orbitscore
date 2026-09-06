@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: c2010db
-verified-at: "2026-09-04"
+verified-against: ef192ca
+verified-at: "2026-09-05"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 and to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, and to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -26,12 +26,13 @@ They look like three independent features, but a single line — the engine's st
 2. [Startup conditions and the HTTP layer](#startup-conditions-and-the-http-layer)
 3. [Tool catalogue](#tool-catalogue)
 4. [What `ok` from `evaluate_orbitscore` means](#what-ok-from-evaluate_orbitscore-means)
-5. [`get_log` and the ring buffer](#get_log-and-the-ring-buffer)
-6. [The gated E2E harness — driving the real OrbitStudio.app through MCP alone](#the-gated-e2e-harness--driving-the-real-orbitstudioapp-through-mcp-alone)
-7. [Capture WAV and RMS assertions](#capture-wav-and-rms-assertions)
-8. [Turning discipline into mechanism — the ratchet and assertion hygiene](#turning-discipline-into-mechanism--the-ratchet-and-assertion-hygiene)
-9. [The live playhead — from `[STEP]` lines to decorations](#the-live-playhead--from-step-lines-to-decorations)
-10. [Running it locally](#running-it-locally)
+5. [`get_engine_state` — no longer just `running`](#get_engine_state--no-longer-just-running)
+6. [`get_log` and the ring buffer](#get_log-and-the-ring-buffer)
+7. [The gated E2E harness — driving the real OrbitStudio.app through MCP alone](#the-gated-e2e-harness--driving-the-real-orbitstudioapp-through-mcp-alone)
+8. [Capture WAV and RMS assertions](#capture-wav-and-rms-assertions)
+9. [Turning discipline into mechanism — the ratchet and assertion hygiene](#turning-discipline-into-mechanism--the-ratchet-and-assertion-hygiene)
+10. [The live playhead — from `[STEP]` lines to decorations](#the-live-playhead--from-step-lines-to-decorations)
+11. [Running it locally](#running-it-locally)
 
 ---
 
@@ -147,7 +148,7 @@ The server does not start by default. Near the end of `activate()`, the port is 
   if (mcpPort && mcpPort > 0) {
 ```
 
-The default of `orbitscore.mcpServer.port` is `0` (= disabled) (`packages/vscode-extension/package.json:400-407`). The `ORBITSCORE_MCP_PORT` environment variable takes precedence so that the gated E2E, which launches the app **from the CLI**, does not have to touch settings files. The "pre-merge gate" section of CLAUDE.md, which says to launch with `ORBITSCORE_MCP_PORT=39123` ("without this environment variable the MCP server does not come up"), uses the same route.
+The default of `orbitscore.mcpServer.port` is `0` (= disabled) (`packages/vscode-extension/package.json:410-417`). The `ORBITSCORE_MCP_PORT` environment variable takes precedence so that the gated E2E, which launches the app **from the CLI**, does not have to touch settings files. The "pre-merge gate" section of CLAUDE.md, which says to launch with `ORBITSCORE_MCP_PORT=39123` ("without this environment variable the MCP server does not come up"), uses the same route.
 
 The HTTP layer listens on `127.0.0.1:<port>/mcp` using Node's standard `http` module. The MCP Streamable HTTP transport is **stateful**, and a session is created per `initialize`.
 
@@ -200,7 +201,7 @@ The tools registered by `buildServer()` via `registerTool`, grouped by role (the
 | **Evaluation** | `evaluate_orbitscore` | Send `.orbs` source to the engine, wait for evaluation to finish, and report whether parse / runtime diagnostics were raised |
 | **Engine lifecycle** | `start_engine` | Start the engine (Rust daemon). `capture_wav` records the master output to a WAV; `debug: true` gives verbose logging |
 | | `stop_engine` | Stop the engine |
-| | `get_engine_state` | Return `{ running, liveCoding }` |
+| | `get_engine_state` | Return `{ running, liveCoding }` plus the `output` / `callback` snapshots taken from the daemon's `GetStatus` (or `statusError` when they cannot be read) |
 | | `force_kill_scsynth` | `killall` stray scsynth processes (an escape hatch for the SuperCollider path) |
 | **Audio devices** | `list_audio_devices` / `select_audio_device` | Enumerate and select devices (on the Rust engine, list is unimplemented and select switches live) |
 | **Editor operations** | `open_file` | `openTextDocument` + `showTextDocument` |
@@ -333,6 +334,70 @@ The comment in `log-ring.ts` still carried its pre-`#614` wording ("`get_log` is
 
 ---
 
+## `get_engine_state` — no longer just `running`
+
+It is no accident that the `{"engineState"` branch sits next to `{"evalMark"`. With #661, `get_engine_state` stopped being a tool that only answers "is the extension's engine process alive" and became one that answers **which device the daemon is actually sending audio to**. The return type tells the story by itself.
+
+```typescript
+// packages/vscode-extension/src/mcp-server.ts:106-113
+/** Snapshot of the engine process state. */
+export interface EngineState {
+  running: boolean
+  liveCoding: boolean
+  output?: Record<string, unknown>
+  callback?: Record<string, unknown>
+  statusError?: string
+}
+```
+
+`output` and `callback` carry the daemon's `GetStatus` payload as-is (for their contents see the `GetStatus` section of [`docs/research/ENGINE_DAEMON_PROTOCOL.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/research/ENGINE_DAEMON_PROTOCOL.md)). The path has the same shape as `evalMark`: the extension writes `//#getEngineState {"requestId":…}` to the engine's stdin, and the engine's REPL reads it and returns one `{"engineState": …}` line on stdout. The engine-side entry point is the `GET_ENGINE_STATE_META_RE` branch in `packages/engine/src/cli/repl-mode.ts`, which calls `AudioEngineBackend.getDaemonStatus()`.
+
+What to watch here is that **all three fields are optional**. When the daemon's state cannot be read, the tool does not throw — it returns whatever it does know.
+
+```typescript
+// packages/vscode-extension/src/engine-state-bridge.ts:123-138
+export async function resolveEngineState(
+  base: Pick<EngineState, 'running' | 'liveCoding'>,
+  fetchStatus: () => Promise<EngineStatusBridgeResult>,
+): Promise<EngineState> {
+  if (!base.running) return { ...base }
+  try {
+    const status = await fetchStatus()
+    if (!status.ok) return { ...base, statusError: status.error }
+    return { ...base, output: status.output, callback: status.callback }
+  } catch (error) {
+    return {
+      ...base,
+      statusError: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+```
+
+There are three branches (not running / the bridge answered `ok:false` / the bridge itself rejected), and every one of them still returns `running`. The implementation comment gives the reason: an LLM uses this as its only window onto "what is happening right now", so returning `running` alone is more useful than returning nothing.
+
+The query budget is 2.5 seconds. That looks short, but it is the result of deciding that a longer budget would buy nothing.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:3196-3207
+ * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
+ * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
+ * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
+ * （instrument の attach は実測 30 秒超）の最中は、**どんな予算でも答えは返らない**。
+ * 予算を伸ばして得られるのは「同じ `statusError` を返すまでに何秒ブロックするか」だけで、
+ * 対話的なツール呼び出しとしては短く degrade する方が良い。
+ *
+ * `running` は同期に分かるので、状態が取れなくても `{running, statusError}` は必ず返る。
+ * **長い処理の最中にも状態を見せたいなら、必要なのは予算ではなく `//#getEngineState` を
+ * キューの外で処理すること**（別 issue）。
+ */
+const ENGINE_STATE_QUERY_BUDGET_MS = 2_500
+```
+
+So `statusError` does not necessarily mean "the daemon is broken" — it can equally mean "**the REPL queue is currently blocked by a long operation**". Telling those two apart requires reading `get_log` alongside it, exactly as with the `ok` of `evaluate_orbitscore`.
+
+---
+
 ## `get_log` and the ring buffer
 
 The extension has no central log sink. So `activate()` monkey-patches the output channel's `appendLine` / `append` to push the same lines into a ring buffer.
@@ -428,7 +493,7 @@ flowchart LR
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:90-96
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:91-97
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH =
   '/Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app'
@@ -445,7 +510,7 @@ const appAvailable = fs.existsSync(appPath)
 When the suite is loaded, before a single test runs, it checks the freshness of the daemon binary.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:182-192
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:183-193
   if (newest.at > builtAt) {
     throw new Error(
       'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
@@ -464,7 +529,7 @@ Which binary to inspect is not hardcoded; the guard asks `resolveDaemonBinaryPat
 **What counts as a "source"** took a second pass as well (#713). Picking up every `.rs` under `rust/` unconditionally lets an integration test — a separate cargo target, in practice `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs` — be selected as the "newest source". Such a file never enters the dependency graph of the `orbit-audio-daemon` binary, so cargo correctly reads its dependencies, builds nothing, and the binary's mtime is never refreshed. The result is an **unfixable red**: running `npm run test:e2e:gated`, exactly what the guard's message instructs, cannot clear it. The trigger is a property of mtime — `git checkout` sets a file's mtime to the checkout time, so merely moving between branches turns an integration test whose content never changed into the "newest source". In #713 this stopped the gated suite from running a single test.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:171-173
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:172-174
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
           continue
         }
@@ -485,7 +550,7 @@ npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` a
 ### Launching the app — the `orbs` CLI and the Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:457-478
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:458-479
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
     path.join(appPath, 'Contents/Resources/app/bin/orbs'),
@@ -518,7 +583,7 @@ npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` a
 The teardown repeats a safety warning.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:275-281
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:276-282
 function killOrbitStudio(): void {
   try {
     execFileSync('pkill', ['-f', 'OrbitStudio.app/Contents/MacOS'], { stdio: 'ignore' })
@@ -535,7 +600,7 @@ The pattern must never be widened to `Code` or `Electron`, it says in two places
 Capture can only be enabled by passing the `ORBIT_CAPTURE_WAV` environment variable at daemon spawn time. The extension auto-starts the engine during `activate()`, so the gated spec **stops the auto-started engine first**, then starts it again with capture.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1115-1120
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1172-1177
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -635,7 +700,7 @@ export function captureWavPath(tmpRoot: string, slug: string): string {
 `runScore` folds "copy the score into a work copy, evaluate it through the editor path (`open_file` → `set_selection` → `run_selection`), and if asked, analyse the capture and return segment RMS" into one function. Its `evaluate` deliberately does not assert on `ok` / `isError`, for the reason given in [the `ok` section](#what-ok-from-evaluate-orbitscore-means) of this chapter.
 
 ```typescript
-// tests/e2e/helpers/run-score.ts:246-258
+// tests/e2e/helpers/run-score.ts:258-270
     // 🔴 **ただし「assert しない」は「握り潰す」ではない**（silent-failure レビュー 2026-09-04）。
     // `ok` は**必要条件**で、`ok: false` は `get_log` を漁らずその場で取れる一次シグナルである
     // （パース / 実行時診断・`mcp-server.ts` の tool 説明）。捨てると、セットアップの typo が
@@ -708,7 +773,7 @@ The onset threshold is the larger of "median window RMS × 4" and the absolute f
 The last assertion of the first test uses these onset gaps as evidence of tempo.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1656-1670
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1713-1727
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -733,7 +798,7 @@ The `#643` tests go one step further and compare RMS per time segment. Segment b
 This used to work the other way around: each operation's wall-clock time was recorded and mapped back onto the WAV from the capture end time. #739 removed that. The reverse mapping goes negative whenever the capture is shorter than the wall clock, and `Math.max(0, ...)` then **silently clamped it to the start of the file** — moving a window later made it measure earlier.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:190-195
+// tests/e2e/helpers/capture-windows.ts:293-298
 export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
   if (windows.length === 0) throw new Error('quadraticMeanRms requires at least one window')
   return Math.sqrt(
@@ -747,6 +812,73 @@ E2E-1, for example, compares `rms('unity')` and `rms('half')` to confirm that `g
 What this assertion caught is recorded in WORK_LOG 6.415. On 2026-08-29, when this E2E was written and run on the real device, it turned out that **`global.gain()` had no effect at all on instruments**. The cause was in `output.rs`: audio joining the master from the mixer stages **was added after the master gain had been applied**. Every layer returned success, not a single ERROR line appeared, and neither 35 mutation checks nor 2149 unit tests had caught it. CLAUDE.md cites this case as the grounds for "E2E matters most" because it was the only layer able to catch "**looks correct, but the composition is wrong**".
 
 `ORBIT_KEEP_CAPTURES=<dir>` was formalised the same day. When set, capture WAVs are written to that directory instead of tmpRoot — because "the harness's assertions show only one number inside the window, but the defect may be outside it" (6.415). It only started taking effect across the whole spec with #668 PR-E2, though: before that, one of the 13 capture-path sites honoured it ([the shared harness layer](#the-shared-harness-layer-—-tests-e2e-helpers)).
+
+### Four invariants that protect the mapping itself — A1 / U1 / U2 / U3
+
+Swapping the clock does not help if the segments themselves are built wrong; the measurement still
+lands in the wrong place. So `captureWindowsFrom` checks four invariants before mapping segments to
+buckets, and when one breaks it throws a named Error saying **which invariant broke on which
+segment** (the `label`, an id such as `A1`, and a JSON blob of `fromSec` / `toSec` / `durationSec` /
+`soundStartSec` / `bucketCount`). #739 fixed the clock, and these four landed with it.
+
+**A1 — the first segment must not open before sound starts.** This is the original #739 incident
+itself. Bar quantisation in `LOOP()` plus plugin attach delays the sound by seconds, so opening the
+window on a fixed settle leaves the `unity` window entirely silent and the denominator of the
+comparison stops meaning anything.
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:544-552
+    if (index === 0 && (soundStartSec === null || segment.fromSec < soundStartSec)) {
+      throw invariantError(
+        'A1',
+        name,
+        segment,
+        bucketCount,
+        'the first segment must not open before sound starts',
+      )
+    }
+```
+
+**U1 — the number of buckets taken from a segment must match what its length predicts.** The
+guard-trimmed segment length divided by 20 ms is compared against the count actually selected, and
+anything beyond `±2` fails. Zero fails too. That stops the quiet failure "a window was named but
+nothing was in it" before it can turn into a number.
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:491-494
+    const expected = Math.round(
+      (segment.toSec - segment.fromSec - 2 * guardSec) / ANALYSIS_BUCKET_SEC,
+    )
+    if (Math.abs(selected.length - expected) > BUCKET_COUNT_TOLERANCE) {
+```
+
+**U2 — the segment length on the capture clock must not diverge from the one on the wall clock.**
+Since the clock moved to byte length, every segment re-checks that this clock has not drifted away
+from the wall clock, with a tolerance of `0.12` s. A broken clock can point a segment anywhere, so
+this is a check aimed at the clock itself.
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:553-555
+    const captureDurationSec = segment.toSec - segment.fromSec
+    const wallDurationSec = (segment.toWall - segment.fromWall) / 1000
+    if (Math.abs(captureDurationSec - wallDurationSec) > CLOCK_WALL_TOLERANCE_SEC) {
+```
+
+**U3 — segments must be finite, inside capture time, monotonic, and non-overlapping.** The
+interesting part is how the exception is expressed. The boundary probe of `#643` E2E-3 deliberately
+reaches 250 ms back into the previous segment, so an overlap is an explicit **opt-in on the segment**
+via `CaptureSegment.overlapsPrevious`. Review on #739 moved it here from an implementation that
+looked at the segment name string `'transition'`. Deciding an exception by name means the check
+quietly weakens the moment that name is reused with a different intent.
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:529-533
+      // #643 E2E-3's boundary probe intentionally looks back 250 ms. Every overlap must
+      // opt in explicitly; regular capture segments remain strictly non-overlapping.
+      (previous !== undefined &&
+        segment.overlapsPrevious !== true &&
+        segment.fromSec < previous[1].toSec)
+```
 
 ---
 
@@ -1103,7 +1235,7 @@ function shouldFilterLine(line: string): boolean {
 The playhead reads from the raw stream, and `[STEP]` never reaches the output channel (= `get_log`). This means **the only way to observe the playhead from MCP is debug mode**. In debug mode `transcribeLog` appends `output` as-is, so `[STEP]` lines appear in `get_log`. The `#654` E2E takes exactly that shape.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2324-2334
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2374-2384
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1118,13 +1250,13 @@ The playhead reads from the raw stream, and `[STEP]` never reaches the output ch
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2337-2338
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2387-2388
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2394-2396
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2444-2446
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
@@ -1197,7 +1329,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `packages/vscode-extension/src/engine-lifecycle.ts:264-291` — `decideStartEngineForAgent()` (spawn-only options)
 - `packages/vscode-extension/src/playhead.ts:1-273` — `[STEP]` grammar, palette, `findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/wav-analysis.ts:1-171` — WAV analysis (peak / RMS / onsets / `soundDetected`)
-- `packages/vscode-extension/package.json:400-407` — the `orbitscore.mcpServer.port` setting
+- `packages/vscode-extension/package.json:410-417` — the `orbitscore.mcpServer.port` setting
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio-path `[STEP]` source
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()` (#654)
 - `packages/engine/src/core/sequence.ts:1381-1404` — note-path marker enqueueing and dedup (#654)
@@ -1209,6 +1341,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `tests/e2e/gated-sources.ts:1-106` — the list of gated sources the ratchet and hygiene test read (#668 PR-E1)
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` assertions (where the seven `countErrors` definitions converged, #668 PR-E2)
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` and `captureWavPath()`
+- `tests/e2e/helpers/capture-windows.ts:1-489` — the capture clock, sound detection, segment-to-bucket mapping, and invariants A1 / U1 / U2 / U3 (#739)
 - `tests/e2e/helpers/run-score.ts:1-272` — one function that copies a score and evaluates it on real hardware
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — waiting for generated artefacts (with `minBytes`)
 - `tests/e2e/helpers/run-cli.ts:1-62` — child-process runs of `orbitscore replay` / `render` (the only path that bypasses MCP)

@@ -291,10 +291,19 @@ JSON-RPC 2.0 の影響を受けた独自形式:
 
 ### PluginAllNotesOff
 
-daemon が追跡する全 instrument instance の active note を drain し、個別の NoteOff を逐次送出する
+daemon が追跡する全 instrument instance の active note に対し、個別の NoteOff を逐次送出する
 （#606・冪等）。`NoteChoke` は使わない。engine 側の `global.stop()` / shutdown に加え、engine が
 異常終了して RPC を送れない場合にも止められるよう、daemon は WebSocket session の切断時にも同じ
 配送関数を呼ぶ。protocol version は `0.2` のままとする。
+
+台帳の扱いは **drain（取り切り）ではなく、clone した snapshot から送出し、解放できた entry だけを
+最後に除去する**形になっている（`engine_wrap.rs:7268-7317`）。drain 方式だと送出ループの途中で
+panic した場合に台帳が丸ごと消えて復元されず、**最後の砦が最後の砦でなくなる**ため。
+この結果、`failed` に数えられた note は**台帳に残り、次回の呼び出しで再試行される**。
+
+session 切断 trigger が発火するのは、daemon が受理している**最後の確立済み session が切れたとき
+だけ**である（`session.rs:1271-1284`）。daemon は複数 session を受理し台帳はそれらで共有されるため、
+途中の 1 接続が切れただけで解放すると、生きている他の session の音まで止めてしまう。
 
 ```json
 // Request

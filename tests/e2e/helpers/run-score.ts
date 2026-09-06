@@ -22,6 +22,7 @@ import {
   createCaptureClock,
   prepareCapturePath,
   readCaptureForAnalysis,
+  makeAwaitSoundRestart,
   waitForSound,
   type CaptureSegment,
   type CaptureWindows,
@@ -107,6 +108,17 @@ export interface ScoreRunContext {
   evaluate(code: string): Promise<void>
   /** 名前つき区間を録る（初回だけ発音待ち → settle → duration）。 */
   captureSegment(name: string, durationMs?: number, settleMs?: number): Promise<void>
+  /**
+   * 譜面の途中で鳴らし直した後、**もう一度鳴り出すまで**待つ。
+   *
+   * 🔴 `captureSegment` の発音待ちは**初回だけ**で、2 回目以降は固定 settle しか置かない。
+   * `stop()` → `LOOP()` は次の小節境界まで鳴らない（120 BPM で最大 2 秒）ので、
+   * 鳴らし直した後に `captureSegment` を呼ぶと**窓が無音の上に開く**。
+   * 2026-09-05 に #643 E2E-2 を実機計測して確定（85 窓中 46 窓しか可聴でなかった）。
+   *
+   * 固定値を足して追いかけないこと（境界までの残り時間は評価タイミング次第で変わる）。
+   */
+  awaitSoundRestart(label?: string): Promise<void>
 }
 
 // #645 PR-D0 (post-hoc fix): exported so a caller that needs staged run_selection
@@ -280,6 +292,13 @@ export async function runScore(
     segments[name] = { fromSec, toSec, fromWall, toWall }
   }
 
+  const awaitSoundRestart = async (label?: string): Promise<void> => {
+    if (capturePath === undefined) {
+      throw new Error(`runScore ${source.slug}: awaitSoundRestart requires { capture: true }`)
+    }
+    await makeAwaitSoundRestart(capturePath, `runScore ${source.slug}`)(label)
+  }
+
   let bodyError: unknown
   let cleanupFailure: unknown
   try {
@@ -298,7 +317,7 @@ export async function runScore(
     const run = await client.call('run_selection')
     expect(run.isError, run.text).toBe(false)
 
-    if (body) await body({ session, evaluate, captureSegment })
+    if (body) await body({ session, evaluate, captureSegment, awaitSoundRestart })
   } catch (error) {
     bodyError = error
     throw error
