@@ -1,12 +1,12 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: ef192ca
-verified-at: "2026-09-05"
+verified-against: fe7cb4b
+verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #761（PR #771・窓に依存しないアサーションと `waitForQuiet`）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -662,7 +662,7 @@ export function decideStartEngineForAgent(
 
 | モジュール | 何を持つか |
 |---|---|
-| `engine-log.ts` | `LOG_WINDOW_LINES` / `countLogMarker` / `countErrors` / `errorBaseline` / `expectNoNewErrors` / `expectLogMarkerAtLeast` |
+| `engine-log.ts` | `LOG_WINDOW_LINES` / `countLogMarker` / `countErrors` / `errorBaseline` / `newLogLines` / `newErrorLines` / `expectNoNewErrors` / `expectLogMarkerAtLeast` |
 | `gated-session.ts` | `GatedCatalog` / `GatedSession` / `captureWavPath` / `createGatedSession` |
 | `run-score.ts` | `ScoreSource` / `CaptureWindows` / `ScoreRunContext` / `runScore` |
 | `wait-for-file.ts` | `waitForFile` / `waitForMatchingFile` |
@@ -876,6 +876,36 @@ export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }
         segment.fromSec < previous[1].toSec)
 ```
 
+### 静寂を測る窓も、音に追従させる — `waitForQuiet`（#761）
+
+A1 は「最初の区間は音が出る前に開いてはいけない」でした。その鏡になる要求があります。**「休符に切り替えたのだから無音のはず」と主張する区間は、無音になってから開かなければならない**、というものです。
+
+`#618` の E3 がまさにそこを外していました。窓を固定の `sleep(1000)` で開けていたのですが、`play()` が効くのは次の小節境界なので、待ち時間は評価のタイミング次第で 0〜1 小節ぶん（120 bpm の 4/4 なら 0〜2.0 秒）変わります。窓の先頭に前のパターンの音が残ってしまうわけです。そこで `waitForSoundRestart` の段階 1（末尾が静かになるまで待つ）が `waitForQuiet` として切り出され、E3 はこれで窓を音に追従させるようになりました。
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:213-228
+export async function waitForQuiet(
+  capturePath: string,
+  opts: { floor: number; quietSec: number; intervalMs: number; timeoutMs: number },
+): Promise<boolean> {
+  const deadline = Date.now() + opts.timeoutMs
+  while (Date.now() <= deadline) {
+    try {
+      const tail = captureTailWindows(capturePath, opts.quietSec)
+      if (tail.length > 0 && tail.every((window) => window.rms < opts.floor)) return true
+    } catch {
+      // writer がヘッダを書き終える前など。次の周回で読み直す。
+    }
+    await delay(opts.intervalMs)
+  }
+  return false
+}
+```
+
+例外にせず `boolean` を返すのは、切り出し元である `waitForSoundRestart` の段階 1 が「**静かにならないのが正しい**」譜面（切れ目なく次の音が続く）でも呼ばれるからです。静寂そのものが要件である側は、戻り値を assert します。E3 では「休符に切り替えたら無音になる」という**実時間側の主張**が `waitForQuiet` の戻り値、「その区間の RMS が 0.005 未満」という **WAV 側の主張**が `captured.rms('e3', 0)` になり、二重化されました。閾値はどちらも `0.005` に揃えてあります（別の値にすると「静かと判定したのに窓は静かでない」が起こりえます）。
+
+見つかった経緯そのものが、この節の主題を示しています。E3 の RMS 判定は同じ `it` の `try/finally` の**後ろ**にあり、`try` の中には次節で扱う窓カウントの偽赤が居ました。偽赤が先に throw していたので、**E3 の判定は一度も評価されていなかった**のです。測定器を直したら、その下流に隠れていた本物の赤が初めて見えました。`ORBIT_KEEP_CAPTURES` で WAV を残して 250 ms バケットで測ると、窓 15.50–18.00 秒の先頭 1.0 秒だけが音で、RMS は `0.1004` — `√(1.0 × 0.155² / 2.5) = 0.098` と一致します。実装は正しく、窓の位置だけが誤っていたことになります。
+
 ---
 
 ## 規律を仕組みに変えるテスト — ラチェットとアサーション衛生
@@ -1002,7 +1032,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
   })
 ```
 
-残り 4 本は「capture を使う spec に `rms(` / `peak(` / `.rms` のアサーションが実在するか」「stale ガードが `resolveDaemonBinaryPath()` を呼んでいるか」、そして #713 で足された 2 本、「stale ガードが `tests` / `benches` / `examples` を除外しているか」と「`src` まで除外していないか」です。書いた直後に実在の違反を 1 件検出した（`.toBe(errorCountBeforeMixer)` を `<=` へ修正）と 6.418 は記録しています。
+残りは「区間の写像をキャプチャ実長からの逆算で作っていないか」（#739）、「capture を使う spec に `rms(` / `peak(` / `.rms` のアサーションが実在するか」、「stale ガードが `resolveDaemonBinaryPath()` を呼んでいるか」、#713 で足された 2 本、「stale ガードが `tests` / `benches` / `examples` を除外しているか」と「`src` まで除外していないか」、そして #761 で足された 1 本（次項）です。書いた直後に実在の違反を 1 件検出した（`.toBe(errorCountBeforeMixer)` を `<=` へ修正）と 6.418 は記録しています。
 
 後半 2 本は**片方向ずつ**を留めるペアになっています。前者だけなら「除外を消す」退行を捕まえられますが、後者が無いと「行きすぎて `src` まで除外する」方向は素通りします。ガードの目的（古いバイナリで測らない）は `src` を見ていることに依存するので、両方向を留めて初めて線引きが固定されます。
 
@@ -1015,9 +1045,52 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
     ).toBe(false)
 ```
 
-ただし 5 本すべてが gated spec の**ソース文字列**を走査するだけなので、保証するのは「そう書いてある」ことまでです。ガード本体の `assertDaemonBinaryIsNotStale()` は `gated && appAvailable` のときだけ呼ばれるので、通常の `npm test` では 1 行も実行されません。この節の検査は「実行された振る舞い」ではなく「書かれた形」を留めるもの、という位置づけで読むのが正確です。
+ただし 7 本すべてが gated spec の**ソース文字列**を走査するだけなので、保証するのは「そう書いてある」ことまでです。ガード本体の `assertDaemonBinaryIsNotStale()` は `gated && appAvailable` のときだけ呼ばれるので、通常の `npm test` では 1 行も実行されません。この節の検査は「実行された振る舞い」ではなく「書かれた形」を留めるもの、という位置づけで読むのが正確です。
 
 ちなみにコメントの「固定 500 行窓」は `#567` で 1000 行に拡張される前の数字ですが、有限窓であることに変わりはないので規律そのものは有効です。
+
+### 「何件になったか」ではなく「どの行が増えたか」（#761）
+
+1 本目は等価比較を禁じますが、`GreaterThan` を含む行を**除外**しているので `toBeGreaterThanOrEqual(errorsBefore + 1)` は素通りします。さらに変数名を `errorsBefore` / `errorCount` / `countErrors` に限定しているので、`attachFailedBefore + 1` のような別名も拾えません。この 2 つの穴から、窓の外へ行が流れるだけで崩れる主張が実際に生き残っていました。2026-09-05 には `#618` の E1-E6 が `expected 6 to be greater than or equal to 7` で落ちています — **新しい ERROR は出ているのに、古い行が窓から流れ出たぶん総数が減っていた**、という偽赤です。
+
+#761 で足された 1 本は、この形を機械で止めます。
+
+```typescript
+// tests/e2e/gated-assertion-hygiene.spec.ts:118-129
+    const offenders = linesMatching((line) => {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('//') || trimmed.startsWith('*')) return false
+      return /\.(toBe|toEqual|toBeGreaterThanOrEqual|toBeLessThanOrEqual)\(\s*\w*[Bb]efore\s*[+-]\s*\d/.test(
+        line,
+      )
+    })
+    expect(
+      offenders,
+      'Log counts come from a fixed 500-line window, so "baseline + N" claims break when old ' +
+        'lines scroll out. Say WHICH lines appeared with newLogLines()/newErrorLines() (#761).',
+    ).toEqual([])
+```
+
+コメント行を除外しているのには実務的な理由があります。**このアンチパターンを説明した注釈自身**を検査が拾ってしまうと、「正しく直したのに赤くなる」— つまり規律を説明できなくなるからです（#761 の作業中に実際に発火しました）。コメントアウトされたコードは実行されないので、除外して困ることもありません。
+
+では正しい形は何かというと、[共有ハーネス層](#共有ハーネス層-—-tests-e2e-helpers)の `newLogLines` / `newErrorLines` で「**どの行が**増えたか」を言うことです。多重集合の差分なので窓のずれに影響されず、しかも「想定した 1 件以外は増えていない」というより強い主張ができます。`#618` の E4（存在しないプラグインへの差し替え）はこの形へ書き換えられました。
+
+```typescript
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3737-3745
+        expect(
+          failedReplace.isError,
+          `E4: 存在しないプラグインへの差し替えは loud に失敗しなければならない: ${failedReplace.text}`,
+        ).toBe(true)
+        const e4NewLines = newLogLines(beforeFailureLog, afterFailureLog)
+        expect(
+          e4NewLines.filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]')),
+          `E4 の attach 失敗がログに届いていない。新規行: ${JSON.stringify(e4NewLines, null, 2)}`,
+        ).not.toHaveLength(0)
+```
+
+旧い形は `failedReplace.isError || countErrors(after) > countErrors(before)` という**論理和**でした。ここには 2 つ問題がありました。1 つは、同じ論理和を `waitUntil` の述語にも使っていたこと — `isError` は poll に入る前に確定した定数なので、真なら**ログを 1 度も待たずに**抜けます。「失敗がログに届くのを待つ」という名前と実際の挙動が食い違っていたわけです。もう 1 つは、論理和だと「loud に失敗した」と「ログに届いた」のどちらか一方しか保証されないことです。#761 は 2 つの主張に分けました。
+
+🔴 ただし**行の差分は、前後 2 つのスナップショットの窓が重なっている時だけ**意味を持ちます。シナリオ全体の冒頭と末尾のように窓が丸ごと入れ替わる区間で取ると、`after` の全行が「新規」になってしまうためです。#761 が E1-E6 のシナリオ全体を対象にした件数比較を「置き換え」ではなく**撤去**したのはそれが理由で、E4 の主張は評価の直前直後という重なる区間で行っています。
 
 ### ハーネス仕様が実装に追いついた（2026-09-04・#724）
 
@@ -1335,15 +1408,15 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:2030-2136` — #654 playhead E2E
 - `tests/e2e/helpers/mcp-client.ts:1-174` — 生 JSON-RPC クライアント
 - `tests/e2e/gated-sources.ts:1-106` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）
-- `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` の判定（`countErrors` 7 重定義の統合先・#668 PR-E2）
+- `tests/e2e/helpers/engine-log.ts:1-119` — `get_log` の判定（`countErrors` 7 重定義の統合先・#668 PR-E2 / `newLogLines` / `newErrorLines`）
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` と `captureWavPath()`
-- `tests/e2e/helpers/capture-windows.ts:1-489` — キャプチャ時計・音の検出・区間 → バケット写像と不変条件 A1 / U1 / U2 / U3（#739）
+- `tests/e2e/helpers/capture-windows.ts:1-616` — キャプチャ時計・音の検出（`waitForSound` / `waitForQuiet`・#761）・区間 → バケット写像と不変条件 A1 / U1 / U2 / U3（#739）
 - `tests/e2e/helpers/run-score.ts:1-272` — 譜面を work copy にして実機で評価する 1 関数
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — 生成物の待ち合わせ（`minBytes` つき）
 - `tests/e2e/helpers/run-cli.ts:1-62` — `orbitscore replay` / `render` の子プロセス実行（MCP を通らない唯一の例外）
 - `tests/e2e/helpers/rack-child-pid.ts:1-38` — rack child の PID オラクル（ログ由来・#668 PR-E1 で spec から移動）
 - `tests/e2e/dsl-e2e-coverage.spec.ts:1-146` — DSL 網羅率ラチェット
-- `tests/e2e/gated-assertion-hygiene.spec.ts:1-68` — アサーション衛生
+- `tests/e2e/gated-assertion-hygiene.spec.ts:1-141` — アサーション衛生（7 本・#761 で「baseline + N」の禁止が追加）
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixture
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — OrbitStudio.app のビルド
@@ -1360,3 +1433,4 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — capture ヘッダの定期 patch と stale ガード
 - Issue [#654](https://github.com/signalcompose/orbitscore/issues/654) — instrument シーケンスで playhead が動かない
 - Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E の基盤（PR-E1 `gated-sources.ts` / PR-E2 共有ハーネス層）
+- Issue [#761](https://github.com/signalcompose/orbitscore/issues/761) / PR [#771](https://github.com/signalcompose/orbitscore/pull/771) — 窓に依存しないアサーション（`newLogLines`）と `waitForQuiet`

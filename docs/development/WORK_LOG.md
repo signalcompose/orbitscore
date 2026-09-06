@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #771 (window-proof assertions) (Sep 6, 2026)
+
+**ブランチ**: `claude/docs-sync-pr771` / **追従元 PR** [#771](https://github.com/signalcompose/orbitscore/pull/771)（merge commit `fe7cb4b`・base は束 `761-gated-measurement` であって main ではない）
+
+#771 の CI は **3 件すべて success**（赤いままのマージではない）。差分は `tests/e2e/` と dev サイトの引用行のみで、`packages/` / `rust/` の実装には触れていない。したがって DSL 仕様・MCP 表面・ユーザー向けドキュメントは追従不要で、追従先は **dev サイトの地の文**に限られる。
+
+#### 直した箇所（ja / en 両方）
+
+| ファイル | 内容 |
+|---|---|
+| `sites/dev/editor/mcp-and-gated-e2e.md` / `sites/dev/en/editor/mcp-and-gated-e2e.md` | ①「静寂を測る窓も、音に追従させる — `waitForQuiet`（#761）」節を新設（A1 の鏡としての位置づけ・`boolean` を返す理由・E3 の実測値）②「『何件になったか』ではなく『どの行が増えたか』（#761）」節を新設（既存ラチェットの 2 つの穴・コメント行除外の理由・`newLogLines` の窓重なり前提）③ アサーション衛生の本数を 5 → 7 に訂正し、列挙から漏れていた #739 の 1 本を追記 ④ 共有ハーネス層の表に `newLogLines` / `newErrorLines` ⑤ Sources の行範囲を実長へ更新 ⑥ frontmatter を `fe7cb4b` / 2026-09-06 へ |
+
+#### 追従不要と判断したもの
+
+`docs/specs-v2/` と `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`（DSL の構文・意味論は不変）、`sites/user/` と `docs/user/ja/USER_MANUAL.md`（ユーザーが書く語に増減なし）、`sites/dev/rust-engine/capture-verification.md`（衛生検査に言及するが本数を書いていないので訂正箇所が無い）。
+
+#### PR 本文に回した指摘（本 PR では直していない）
+
+E2E の穴は **該当なし**（差分が触れた DSL 語 `play` / `instrument` / `effect` / `ui` はいずれも baseline に載っていない）。弱いアサーションとして、#618 E1-E6 に残る `countErrors(...) <= before` 形 3 件・E4 の poll 述語と assert のマーカー不一致・`ok` を一度も見ない `evaluate_orbitscore` 呼び出しを PR 本文に列挙した。
+
 ### fix(e2e): say which log lines appeared instead of counting them (#761) (Sep 6, 2026)
 
 **ブランチ**: `761-window-proof-assertions`（base = 束 `761-gated-measurement`） / **Part of** [#761](https://github.com/signalcompose/orbitscore/issues/761)

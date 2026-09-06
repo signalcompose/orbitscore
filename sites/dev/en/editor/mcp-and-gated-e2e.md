@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: ef192ca
-verified-at: "2026-09-05"
+verified-against: fe7cb4b
+verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, and to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #761 (PR #771, window-proof assertions and `waitForQuiet`) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -662,7 +662,7 @@ On 2026-09-03 (#668 PR-E2) the small tools each scenario had been keeping locall
 
 | Module | What it holds |
 |---|---|
-| `engine-log.ts` | `LOG_WINDOW_LINES` / `countLogMarker` / `countErrors` / `errorBaseline` / `expectNoNewErrors` / `expectLogMarkerAtLeast` |
+| `engine-log.ts` | `LOG_WINDOW_LINES` / `countLogMarker` / `countErrors` / `errorBaseline` / `newLogLines` / `newErrorLines` / `expectNoNewErrors` / `expectLogMarkerAtLeast` |
 | `gated-session.ts` | `GatedCatalog` / `GatedSession` / `captureWavPath` / `createGatedSession` |
 | `run-score.ts` | `ScoreSource` / `CaptureWindows` / `ScoreRunContext` / `runScore` |
 | `wait-for-file.ts` | `waitForFile` / `waitForMatchingFile` |
@@ -880,6 +880,54 @@ quietly weakens the moment that name is reused with a different intent.
         segment.fromSec < previous[1].toSec)
 ```
 
+### A silence window has to follow the sound too — `waitForQuiet` (#761)
+
+A1 says "the first segment must not open before sound starts". There is a mirror requirement:
+**a segment that claims "the pattern is rests now, so this must be silent" has to open after the
+sound has stopped.**
+
+`#618` E3 was missing exactly that. It opened its window on a fixed `sleep(1000)`, but `play()`
+takes effect at the next bar boundary, so the wait varies by up to a bar depending on when the
+evaluation lands (0–2.0 s at 120 bpm in 4/4). The head of the window kept the previous pattern's
+sound. Stage 1 of `waitForSoundRestart` (wait until the tail goes quiet) was therefore extracted
+as `waitForQuiet`, and E3 now uses it to make the window follow the sound.
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:213-228
+export async function waitForQuiet(
+  capturePath: string,
+  opts: { floor: number; quietSec: number; intervalMs: number; timeoutMs: number },
+): Promise<boolean> {
+  const deadline = Date.now() + opts.timeoutMs
+  while (Date.now() <= deadline) {
+    try {
+      const tail = captureTailWindows(capturePath, opts.quietSec)
+      if (tail.length > 0 && tail.every((window) => window.rms < opts.floor)) return true
+    } catch {
+      // writer がヘッダを書き終える前など。次の周回で読み直す。
+    }
+    await delay(opts.intervalMs)
+  }
+  return false
+}
+```
+
+It returns a `boolean` rather than throwing because its own extraction site, stage 1 of
+`waitForSoundRestart`, is also called for scores where **not going quiet is the correct
+outcome** (the next sound follows without a gap). Callers for whom the silence itself is the
+requirement assert on the return value. In E3 the return value is the **real-time claim** ("switch
+to rests and the capture goes silent") while `captured.rms('e3', 0)` is the **WAV-side claim**
+(the segment's RMS is below 0.005) — two independent statements. Both thresholds are `0.005`; a
+mismatch would allow "judged quiet, yet the window is not quiet".
+
+How this was found is itself the point of this section. E3's RMS assertions sit **after** the
+`try/finally` of the same `it`, and inside that `try` was the window-count false red covered in
+the next section. The false red threw first, so **E3's assertion had never once been evaluated**.
+Fixing the instrument was what made the real red underneath it visible. Keeping the WAV with
+`ORBIT_KEEP_CAPTURES` and measuring in 250 ms buckets showed that only the first 1.0 s of the
+15.50–18.00 s window carried sound, giving RMS `0.1004` — matching `√(1.0 × 0.155² / 2.5) = 0.098`.
+The implementation was right; only the placement of the window was wrong.
+
 ---
 
 ## Turning discipline into mechanism — the ratchet and assertion hygiene
@@ -1006,7 +1054,7 @@ Its limits are stated honestly too. Since it only scans the source as text, it d
   })
 ```
 
-The remaining four check "does a spec that uses capture actually contain an `rms(` / `peak(` / `.rms` assertion", "does the stale guard call `resolveDaemonBinaryPath()`", and the two added in #713: "does the stale guard exclude `tests` / `benches` / `examples`" and "does it stop short of excluding `src`". 6.418 records that it detected one real violation immediately after being written (`.toBe(errorCountBeforeMixer)`, corrected to `<=`).
+The rest check "is a segment mapping built by subtracting from the final capture duration" (#739), "does a spec that uses capture actually contain an `rms(` / `peak(` / `.rms` assertion", "does the stale guard call `resolveDaemonBinaryPath()`", the two added in #713 — "does the stale guard exclude `tests` / `benches` / `examples`" and "does it stop short of excluding `src`" — and the one added in #761 (next subsection). 6.418 records that it detected one real violation immediately after being written (`.toBe(errorCountBeforeMixer)`, corrected to `<=`).
 
 Those last two form a pair that pins **one direction each**. The first alone catches the regression "the exclusion was deleted", but without the second, going too far and excluding `src` as well would pass unnoticed. The guard's purpose — never measure a stale binary — depends on it still looking at `src`, so only both directions together fix the line.
 
@@ -1019,9 +1067,74 @@ Those last two form a pair that pins **one direction each**. The first alone cat
     ).toBe(false)
 ```
 
-All five, though, only scan the **source text** of the gated spec, so what they guarantee stops at "it is written that way". The guard itself, `assertDaemonBinaryIsNotStale()`, is called only when `gated && appAvailable`, so an ordinary `npm test` never executes a line of it. It is accurate to read this section's checks as pinning the *written shape*, not an *executed behaviour*.
+All seven, though, only scan the **source text** of the gated spec, so what they guarantee stops at "it is written that way". The guard itself, `assertDaemonBinaryIsNotStale()`, is called only when `gated && appAvailable`, so an ordinary `npm test` never executes a line of it. It is accurate to read this section's checks as pinning the *written shape*, not an *executed behaviour*.
 
 Incidentally, the "fixed 500-line window" in the comment is the number from before `#567` widened it to 1000 lines; the window is still finite, so the rule itself stands.
+
+### Say which lines appeared, not how many there are (#761)
+
+The first check forbids equality, but it **excludes** any line containing `GreaterThan`, so
+`toBeGreaterThanOrEqual(errorsBefore + 1)` walks straight past it. It also limits the variable
+names it looks for to `errorsBefore` / `errorCount` / `countErrors`, so an alias such as
+`attachFailedBefore + 1` is never picked up. Claims that break when lines merely scroll out of the
+window survived through those two holes. On 2026-09-05 the `#618` E1-E6 test failed with
+`expected 6 to be greater than or equal to 7` — a **false red**: new ERROR lines had appeared, but
+the total had dropped because older lines scrolled out of the window.
+
+The check added in #761 stops that shape mechanically.
+
+```typescript
+// tests/e2e/gated-assertion-hygiene.spec.ts:118-129
+    const offenders = linesMatching((line) => {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('//') || trimmed.startsWith('*')) return false
+      return /\.(toBe|toEqual|toBeGreaterThanOrEqual|toBeLessThanOrEqual)\(\s*\w*[Bb]efore\s*[+-]\s*\d/.test(
+        line,
+      )
+    })
+    expect(
+      offenders,
+      'Log counts come from a fixed 500-line window, so "baseline + N" claims break when old ' +
+        'lines scroll out. Say WHICH lines appeared with newLogLines()/newErrorLines() (#761).',
+    ).toEqual([])
+```
+
+Comment lines are excluded for a practical reason: if the check picked up **the very comment that
+explains the anti-pattern**, "fixing it correctly turns the suite red" — the discipline could no
+longer be written down (this actually fired while #761 was being written). Commented-out code
+never runs, so excluding it costs nothing.
+
+What, then, is the correct shape? Say **which lines** appeared, using `newLogLines` /
+`newErrorLines` from the [shared harness layer](#the-shared-harness-layer-—-tests-e2e-helpers).
+A multiset difference is unaffected by the window sliding, and it supports the stronger claim
+"nothing appeared other than the one line we expected". `#618` E4 (replacement with a nonexistent
+plugin) was rewritten into that shape.
+
+```typescript
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3737-3745
+        expect(
+          failedReplace.isError,
+          `E4: 存在しないプラグインへの差し替えは loud に失敗しなければならない: ${failedReplace.text}`,
+        ).toBe(true)
+        const e4NewLines = newLogLines(beforeFailureLog, afterFailureLog)
+        expect(
+          e4NewLines.filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]')),
+          `E4 の attach 失敗がログに届いていない。新規行: ${JSON.stringify(e4NewLines, null, 2)}`,
+        ).not.toHaveLength(0)
+```
+
+The old shape was the **disjunction** `failedReplace.isError || countErrors(after) >
+countErrors(before)`, and it carried two problems. One: the same disjunction was also the
+predicate of a `waitUntil`, and `isError` is a constant settled before the poll begins — when true
+the poll returns **without waiting for the log even once**, which contradicts its own label ("wait
+for the failure to reach the log"). Two: a disjunction only ever guarantees one of "it failed
+loudly" and "it reached the log". #761 split them into two assertions.
+
+🔴 A line difference is only meaningful **while the two snapshots' windows overlap**. Taken across
+a span where the window turns over completely — the start and the end of a whole scenario, say —
+every line of `after` counts as "new". That is why #761 **removed** the scenario-wide count
+comparison in E1-E6 instead of replacing it, and why E4's claim is made across the overlapping
+span immediately before and after the evaluation.
 
 ### The harness spec catches up with the implementation (2026-09-04, #724)
 
@@ -1339,15 +1452,15 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:2030-2136` — the #654 playhead E2E
 - `tests/e2e/helpers/mcp-client.ts:1-174` — raw JSON-RPC client
 - `tests/e2e/gated-sources.ts:1-106` — the list of gated sources the ratchet and hygiene test read (#668 PR-E1)
-- `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` assertions (where the seven `countErrors` definitions converged, #668 PR-E2)
+- `tests/e2e/helpers/engine-log.ts:1-119` — `get_log` assertions (where the seven `countErrors` definitions converged, #668 PR-E2; `newLogLines` / `newErrorLines`)
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` and `captureWavPath()`
-- `tests/e2e/helpers/capture-windows.ts:1-489` — the capture clock, sound detection, segment-to-bucket mapping, and invariants A1 / U1 / U2 / U3 (#739)
+- `tests/e2e/helpers/capture-windows.ts:1-616` — the capture clock, sound detection (`waitForSound` / `waitForQuiet`, #761), segment-to-bucket mapping, and invariants A1 / U1 / U2 / U3 (#739)
 - `tests/e2e/helpers/run-score.ts:1-272` — one function that copies a score and evaluates it on real hardware
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — waiting for generated artefacts (with `minBytes`)
 - `tests/e2e/helpers/run-cli.ts:1-62` — child-process runs of `orbitscore replay` / `render` (the only path that bypasses MCP)
 - `tests/e2e/helpers/rack-child-pid.ts:1-38` — the rack child PID oracle (log-derived; moved out of the spec in #668 PR-E1)
 - `tests/e2e/dsl-e2e-coverage.spec.ts:1-146` — DSL coverage ratchet
-- `tests/e2e/gated-assertion-hygiene.spec.ts:1-68` — assertion hygiene
+- `tests/e2e/gated-assertion-hygiene.spec.ts:1-141` — assertion hygiene (seven checks; #761 added the ban on "baseline + N")
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixtures
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — building OrbitStudio.app
@@ -1364,3 +1477,4 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — periodic capture header patch and stale guard
 - Issue [#654](https://github.com/signalcompose/orbitscore/issues/654) — playhead not moving for instrument sequences
 - Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E foundation (PR-E1 `gated-sources.ts` / PR-E2 the shared harness layer)
+- Issue [#761](https://github.com/signalcompose/orbitscore/issues/761) / PR [#771](https://github.com/signalcompose/orbitscore/pull/771) — window-proof assertions (`newLogLines`) and `waitForQuiet`
