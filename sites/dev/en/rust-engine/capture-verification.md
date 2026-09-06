@@ -588,7 +588,7 @@ post-peak accessors observe the same signal. These figures were not re-measured 
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:99-111` — WAV header vs. physical size cross-check (silent-failure guard)
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:206-217` — `drops == 0` assertion (pre-teardown silent-failure guard)
 - `rust/crates/orbit-audio-daemon/src/main.rs:21-30` — the absence of SIGTERM / SIGINT handlers (#448; why `finalize` does not run even on a normal stop)
-- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:232-234` — `post_peak_bits` (lock-free peak accumulation implementation)
+- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:233-235` — `post_peak_bits` (lock-free peak accumulation implementation)
 - `tests/e2e/helpers/capture-windows.ts:45-82` — `prepareCapturePath` (the capture directory precondition) and `readCaptureForAnalysis` (zeroing the declared size so analysis reads the real bytes)
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:80-154` — the stale artifact guard (`assertDaemonBinaryIsNotStale`)
 - `package.json:17-18` — `pretest:e2e:gated` / `test:e2e:gated`

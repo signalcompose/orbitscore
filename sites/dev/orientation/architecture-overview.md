@@ -685,8 +685,8 @@ export const DSL_VERSION = '1.1'
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:869-997` — `spawnDaemon()`: stderr ルーティングと ready line 読み取り
 - `packages/engine/src/audio/rust-engine/index.ts:1-8` — protocol v0.1、cutover #108 の注記
 - `packages/engine/src/version.ts:14-17` — `ENGINE_VERSION` / `DSL_VERSION`
-- `rust/crates/orbit-audio-daemon/src/lib.rs:84-93` — `SPAWNABLE_CHILD_BINARIES`
-- `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:450-458` — sibling-of-exe による child 解決
+- `rust/crates/orbit-audio-daemon/src/lib.rs:86-95` — `SPAWNABLE_CHILD_BINARIES`
+- `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:453-461` — sibling-of-exe による child 解決
 - `scripts/copy-daemon-bin.sh:1-47,121-132` — daemon / child / 標準プラグインの同梱方針
 - `package.json:9-11` — `build:copy-engine` が `copy-daemon-bin.sh` を呼ぶ
 - `docs/research/ENGINE_DAEMON_PROTOCOL.md` — wire protocol の正本

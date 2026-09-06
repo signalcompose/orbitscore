@@ -1547,7 +1547,7 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:538-576` — `ApplyEffectChain` の送信と応答検証
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1170-1214,1341-1364` — 帳簿 `loadedEffectRacks` と respawn 後の rebuild
 - `rust/crates/orbit-audio-sandbox/src/rack_wire.rs:1-142` — wire 型の唯一の定義と、二重定義が生んだ serde 欠陥の記録
-- `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:55-138,163-184,450-458,641-676` — `ChainStageConfig` / `EffectChainPlan`・manifest 書き出し・child spawn
+- `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:55-138,163-184,453-461,644-679` — `ChainStageConfig` / `EffectChainPlan`・manifest 書き出し・child spawn
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5080-5180` — `apply_outproc_effect_chain` の経路選択
 - `rust/crates/orbit-effect-rack-child/src/lib.rs:1-6,85-102,196-217,330-426,491-824` — rack child の core（stage list・generation swap・`RackController::apply`）
 - `rust/crates/orbit-effect-rack-child/src/macos.rs:345-372` — stage のロード（拡張子でホスト選択・標準は `std-plugins/`）

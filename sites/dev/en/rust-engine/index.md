@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: f2dadd9
-verified-at: "2026-09-05"
+verified-against: b513659
+verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-1. Daemon Architecture Overview
 
@@ -388,6 +388,12 @@ out-of-process children) never run, and the child processes can be orphaned.
 The primary defense against this daemon-side shutdown gap lives on the child side
 (`ParentWatch`, which lets a child detect its parent's death on its own) — covered in the
 [RE-2](/en/rust-engine/oop-children) chapter.
+
+Processes are not the only thing left orphaned. When `Drop` does not run, neither does the removal
+of the shm file, so the shared memory used for out-of-process children stays behind in `$TMPDIR`.
+Stage 0.5 above is what reclaims it at startup (#779); the decision rules, and why the count does
+not converge on zero, are covered in the "Reclaiming orphaned shm at startup" section of
+[RE-2](/en/rust-engine/oop-children).
 
 Incidentally, the panic hook itself was rewritten in #605. If stderr is broken, an `eprintln!`
 inside the hook panics again, the recursion detector calls `process::abort()`, and the client
@@ -888,6 +894,8 @@ i.e. two independent measurement paths agreeing at the same tap point). These fi
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — engine-first roadmap and architecture decision (instruments = in-process / effects + 3rd-party = out-of-process sandbox)
 - [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 / 6.262 — capture peak measurements
 - [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 — the master fader defect (#643)
+- `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:134-163` — `sweep_orphaned_outproc_shm` (the thin shell stage 0.5 calls, plus its one-line `tracing::info!` summary)
 - Issue [#448](https://github.com/signalcompose/orbitscore/issues/448) — daemon graceful-shutdown gap and the `ParentWatch` countermeasure
+- Issue [#779](https://github.com/signalcompose/orbitscore/issues/779) / PR [#784](https://github.com/signalcompose/orbitscore/pull/784) — reclaiming orphaned shm at startup (stage 0.5)
 - Issue [#484](https://github.com/signalcompose/orbitscore/issues/484) — audio device enumeration, selection and runtime switching (D1 / D2 / D3)
 - Issue [#605](https://github.com/signalcompose/orbitscore/issues/605) — best-effort stderr in the panic hook
