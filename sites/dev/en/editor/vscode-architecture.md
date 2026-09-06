@@ -522,7 +522,7 @@ The scsynth resolver is `explicit > env > bundle > throw`; the daemon resolver i
 The pre-check is quoted in [III-3](/en/audio/scsynth-bundle#the-call-itself-is-gated-by-the-engine-kind), so here we read from assembling args and env through the spawn.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2118-2131
+// packages/vscode-extension/src/extension.ts:2172-2185
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -542,7 +542,7 @@ The pre-check is quoted in [III-3](/en/audio/scsynth-bundle#the-call-itself-is-g
 The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcommand, and the output device is passed via the `--audio-device` argument (the `orbitscore.audioDevice` setting takes precedence, otherwise `.orbitscore.json`). `__default__` is a sentinel meaning "the OS default output."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2149-2171
+// packages/vscode-extension/src/extension.ts:2203-2225
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
@@ -573,7 +573,7 @@ A point to note here is that `ORBITSCORE_ENGINE` is **set explicitly in both bra
 `stdio: ['pipe', 'pipe', 'pipe']` is important. By making stdin/stdout/stderr all pipes, the Extension Host can directly write/read them. Right after spawn, five handlers are attached, and after one `process.nextTick` it checks "is the same process still alive?"
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2186-2197
+// packages/vscode-extension/src/extension.ts:2240-2251
   // Setup handlers
   setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
@@ -606,7 +606,7 @@ Communication between the Extension Host and the engine process is via **stdin/s
 The send part is consolidated into `writeCodeToEngine()`, shared by the editor's Run Selection and MCP's `evaluate_orbitscore`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3026-3058
+// packages/vscode-extension/src/extension.ts:3080-3112
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -716,7 +716,7 @@ Execution feedback (flashing the executed lines, the playhead, diagnostics) is c
 `stopEngine()` performs a two-stage shutdown of SIGTERM → (after 2 seconds) SIGKILL. Compared with 2026-05, draining the bridges and clearing the playhead were added, and the SIGKILL condition was fixed.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2211-2259
+// packages/vscode-extension/src/extension.ts:2265-2313
 export function stopEngine(): boolean {
   engineGeneration += 1
   if (engineProcess && !engineProcess.killed) {

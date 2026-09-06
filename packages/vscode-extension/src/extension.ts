@@ -1565,23 +1565,77 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
 }
 
 /**
+ * chunk 列を**行**に整え、完成した行だけを `emit` へ渡す。未完了の末尾は次の chunk まで持ち越す。
+ *
+ * 🔴 なぜ要るか（#756）: `setupStderrHandler` は `outputChannel.append('ERROR: ' + chunk)` と
+ * **chunk 単位**で前置していた。1 つの chunk に複数行入ると 2 行目以降に `ERROR:` が付かず、
+ * gated E2E の ERROR 会計（`countErrors` / `newErrorLines`）が**構造的に過小カウント**する
+ * （= 偽緑）。実測 2026-09-05: デバイス切替の失敗を daemon と engine が別々に記録したのに
+ * `ERROR:` が付いたのは片方だけだった。
+ *
+ * 🔴 素朴な `split('\n')` では直らない。**chunk 境界は行境界と一致しない**ので、行の後半が
+ * 独立した「行」として扱われ `ERROR:` が二重に付く。`partial` を持ち越すのが要点。
+ *
+ * 🔴 `flush()` を持つ理由: 行に整えると、**改行で終わらない最後の出力**が buffer に残ったまま
+ * プロセスが終わる。それは過小カウントを直すはずのこの変更が**逆方向に**同じ穴を開けること
+ * になる。`end` で必ず吐き出す。（engine 側の `createDaemonStderrLineRouter` はここを持たない。）
+ *
+ * 空行は emit しない。`ERROR: ` だけの行を作ると `countErrors` が**水増し**される。
+ */
+export function createLinePrefixer(emit: (line: string) => void): {
+  push: (chunk: string) => void
+  flush: () => void
+} {
+  let partial = ''
+  return {
+    push(chunk: string): void {
+      partial += chunk
+      const lines = partial.split('\n')
+      partial = lines.pop() ?? ''
+      for (const line of lines) {
+        if (line.trim() !== '') emit(line)
+      }
+    },
+    flush(): void {
+      const remaining = partial
+      partial = ''
+      if (remaining.trim() !== '') emit(remaining)
+    },
+  }
+}
+
+/**
  * Setup stderr handler for engine process.
  *
  * #527 review round 5 Minor #2: wrapped in the same try/catch +
  * `logHandlerFailure` containment as the other three listener bodies above —
  * this one had been left unwrapped despite the crash-containment note two
  * functions up describing the danger in general terms for "every listener
- * body registered on the engine process". `outputChannel?.append` has no
- * realistic throw path today, so this is a symmetry fix, not a fix for an
- * observed failure.
+ * body registered on the engine process". The output channel has no realistic
+ * throw path today, so that part is a symmetry fix, not a fix for an observed
+ * failure.
+ *
+ * 🔴 #756: 前置は `createLinePrefixer` を通して**行単位**で行う（chunk 単位だと同じ chunk の
+ * 2 行目以降に `ERROR:` が付かず、gated E2E の ERROR 会計が構造的に過小カウントする）。
  */
 export function setupStderrHandler(process: child_process.ChildProcess): void {
+  const prefixer = createLinePrefixer((line) => {
+    outputChannel?.appendLine(`ERROR: ${line}`)
+  })
   process.stderr?.on('error', (err) => {
     logHandlerFailure('setupStderrHandler', err)
   })
   process.stderr?.on('data', (data) => {
     try {
-      outputChannel?.append(`ERROR: ${data.toString()}`)
+      prefixer.push(data.toString())
+    } catch (err) {
+      logHandlerFailure('setupStderrHandler', err)
+    }
+  })
+  // 改行で終わらなかった最後の 1 行を取りこぼさない。
+  process.stderr?.on('end', () => {
+    try {
+      prefixer.flush()
     } catch (err) {
       logHandlerFailure('setupStderrHandler', err)
     }
