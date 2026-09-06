@@ -762,7 +762,7 @@ window on a fixed settle leaves the `unity` window entirely silent and the denom
 comparison stops meaning anything.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:441-449
+// tests/e2e/helpers/capture-windows.ts:544-552
     if (index === 0 && (soundStartSec === null || segment.fromSec < soundStartSec)) {
       throw invariantError(
         'A1',
@@ -780,7 +780,7 @@ anything beyond `±2` fails. Zero fails too. That stops the quiet failure "a win
 nothing was in it" before it can turn into a number.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:388-391
+// tests/e2e/helpers/capture-windows.ts:491-494
     const expected = Math.round(
       (segment.toSec - segment.fromSec - 2 * guardSec) / ANALYSIS_BUCKET_SEC,
     )
@@ -793,7 +793,7 @@ from the wall clock, with a tolerance of `0.12` s. A broken clock can point a se
 this is a check aimed at the clock itself.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:450-452
+// tests/e2e/helpers/capture-windows.ts:553-555
     const captureDurationSec = segment.toSec - segment.fromSec
     const wallDurationSec = (segment.toWall - segment.fromWall) / 1000
     if (Math.abs(captureDurationSec - wallDurationSec) > CLOCK_WALL_TOLERANCE_SEC) {
@@ -807,7 +807,7 @@ looked at the segment name string `'transition'`. Deciding an exception by name 
 quietly weakens the moment that name is reused with a different intent.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:426-430
+// tests/e2e/helpers/capture-windows.ts:529-533
       // #643 E2E-3's boundary probe intentionally looks back 250 ms. Every overlap must
       // opt in explicitly; regular capture segments remain strictly non-overlapping.
       (previous !== undefined &&
