@@ -775,7 +775,7 @@ The onset threshold is the larger of "median window RMS × 4" and the absolute f
 The last assertion of the first test uses these onset gaps as evidence of tempo.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1752-1766
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1785-1799
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -991,7 +991,7 @@ Its limits are stated honestly too. Since it only scans the source as text, it d
 ### Assertion hygiene
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:239-248
+// tests/e2e/gated-assertion-hygiene.spec.ts:390-399
   it('never asserts on a bare ERROR count equality', () => {
     // `get_log` は固定 500 行窓なので、ERROR 件数の**厳密等価**は窓の外へ流れた瞬間に
     // 嘘になる（#625）。`<=` / `toBeLessThanOrEqual` を使うこと。
@@ -1006,10 +1006,12 @@ Its limits are stated honestly too. Since it only scans the source as text, it d
 
 The suite also checks whether capture-using specs contain an `rms(` / `peak(` / `.rms` assertion, both directions of the stale guard, and arithmetic against fixed-window log baselines. Positive self-tests pin multiline violations, comments, clean input and line-number reporting so the scanner itself cannot silently go inert. 6.418 records that it detected one real violation immediately after being written (`.toBe(errorCountBeforeMixer)`, corrected to `<=`).
 
+A third check landed on 2026-09-06 (#785). The first one keys off **identifier names** (`/(?:errorsBefore|errorCount|catalogErrors)/i`), so aliases such as `stoppedBeforeRejectedSave` or `attachFailuresBeforeRoleMismatch` slipped straight through. **Names are the author's to choose, so keying a check off a name will always leak.** The third check ignores names and follows **provenance** through the AST instead: "a string derived from the return value of `get_log`" → "a `.match(...).length` over it" → "compared with `toBe` / `toEqual`", picked up whether it goes through a variable or is written inline. It found four sites in the real-device spec, all of which moved to line diffs via `newLogLines`. One of them was `.toBe(0)`, which breaks in the **opposite direction** from the other three: scrolling can only push the count down, so `toBe(0)` yields a false green rather than a false red.
+
 Those last two form a pair that pins **one direction each**. The first alone catches the regression "the exclusion was deleted", but without the second, going too far and excluding `src` as well would pass unnoticed. The guard's purpose — never measure a stale binary — depends on it still looking at `src`, so only both directions together fix the line.
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:339-343
+// tests/e2e/gated-assertion-hygiene.spec.ts:518-522
     expect(
       /entry\.name === 'src'/.test(source),
       'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +
@@ -1233,7 +1235,7 @@ function shouldFilterLine(line: string): boolean {
 The playhead reads from the raw stream, and `[STEP]` never reaches the output channel (= `get_log`). This means **the only way to observe the playhead from MCP is debug mode**. In debug mode `transcribeLog` appends `output` as-is, so `[STEP]` lines appear in `get_log`. The `#654` E2E takes exactly that shape.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2414-2424
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2447-2457
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1248,13 +1250,13 @@ The playhead reads from the raw stream, and `[STEP]` never reaches the output ch
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2427-2428
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2460-2461
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2484-2486
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2517-2519
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
