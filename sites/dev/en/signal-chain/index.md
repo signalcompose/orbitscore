@@ -911,7 +911,7 @@ old child, which started with `--plugin <absolute path>`, the manifest is a temp
 ERROR and make the E2E fail itself.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:646-660
+// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:649-663
 pub fn spawn_effect_child(
     child_exe: &Path,
     shm_path: &Path,
@@ -932,7 +932,7 @@ pub fn spawn_effect_child(
 The default path of the child executable is `orbit-effect-rack-child` in the same directory as the daemon.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:450-458
+// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:453-461
 /// daemon 実行ファイルと同一ディレクトリの format 対応 child を既定パスとする
 /// （spike の sibling-of-exe を踏襲・設計 §4.5）。インストール時は daemon と child が並んで置かれる前提。
 fn default_rack_child_exe() -> Result<PathBuf, String> {

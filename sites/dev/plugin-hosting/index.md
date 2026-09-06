@@ -227,7 +227,7 @@ audio/event をやり取りします。spawn し得る child は `SPAWNABLE_CHIL
 （一覧と役割は [RE-2](/rust-engine/oop-children) の表を参照）。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:84-93
+// rust/crates/orbit-audio-daemon/src/lib.rs:86-95
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",
@@ -304,7 +304,7 @@ pub(crate) fn child_exe_for_attach(
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:154-191
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:155-192
 /// instrument child のフォーマット別デフォルト binary 名。VST3 だけが専用 child を持ち、
 /// それ以外（.clap・raw .dylib CLAP 等）は従来どおり CLAP child が担当する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -361,7 +361,7 @@ effect 側は #628 以降、format で child を分岐しません。`default_ra
 ディレクトリの `orbit-effect-rack-child` を既定にします。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:451-458
+// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:454-461
 /// （spike の sibling-of-exe を踏襲・設計 §4.5）。インストール時は daemon と child が並んで置かれる前提。
 fn default_rack_child_exe() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;

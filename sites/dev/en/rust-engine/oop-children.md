@@ -49,7 +49,7 @@ The child binaries the daemon may spawn are spelled out in `orbit-audio-daemon`'
 truth is kept in one place.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:84-93
+// rust/crates/orbit-audio-daemon/src/lib.rs:86-95
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",
@@ -306,7 +306,7 @@ const MAX_CONSECUTIVE_FAST_RESPAWNS: u32 = 5;
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:662-687
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:663-688
                             if consecutive_fast_fails >= MAX_CONSECUTIVE_FAST_RESPAWNS {
                                 tracing::error!(
                                     plugin = ?plugin,
@@ -352,7 +352,7 @@ one, the control thread asks "discard every remaining event in the ring", and th
 acks only after it has emptied it.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:310-317
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:311-318
 pub struct SlotSignals {
     pub teardown_requested: Arc<AtomicBool>,
     pub teardown_done: Arc<AtomicBool>,

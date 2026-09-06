@@ -40,7 +40,7 @@ daemon が spawn し得る child バイナリは `orbit-audio-daemon` の `SPAWN
 実装が食い違わないよう「真実を 1 箇所に置く」ために作られた定数です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:84-93
+// rust/crates/orbit-audio-daemon/src/lib.rs:86-95
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",
@@ -289,7 +289,7 @@ const MAX_CONSECUTIVE_FAST_RESPAWNS: u32 = 5;
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:662-687
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:663-688
                             if consecutive_fast_fails >= MAX_CONSECUTIVE_FAST_RESPAWNS {
                                 tracing::error!(
                                     plugin = ?plugin,
@@ -334,7 +334,7 @@ respawn とは別に、#618 の instrument 差し替え（`ReplacePlugin`）は 
 「event ring の全残渣を捨てて」と要求し、audio thread が空にしてから ack する構造です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:310-317
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:311-318
 pub struct SlotSignals {
     pub teardown_requested: Arc<AtomicBool>,
     pub teardown_done: Arc<AtomicBool>,

@@ -125,6 +125,18 @@ daemon バイナリを spawn し、その daemon が起動時に 37 PID 分の�
 🔴 **25 は設計の予測（1 daemon = master effect 1 + effect bus pool 8 + instrument slot 8 +
 sum 4 + aux 4）とちょうど一致する。**
 
+#### 🔴 dev 学習サイトの引用 24 件を CI で落とした（このブランチで `docs:check` を回していなかった）
+
+`main.rs` / `lib.rs` / `outproc_effect.rs` / `outproc_instrument.rs` に行を足したので、
+サイトが行範囲で引用している 24 箇所がずれた。**PR-E14 のブランチでは `docs:check` を回したが、
+このブランチでは回さずに push した。**
+
+- 22 件は `check-citations.mjs --fix` で貼り直し（**行番号だけの移動**を差分で確認した。
+  `--fix` は「スニペットが移動しただけ」の時しか安全に使えない）
+- 残る 2 件（`rust-engine/index.md` の ja / en）は**引用範囲の内部に行を挿入した**ので機械では
+  直せない。`main.rs:78-133` → `78-136` へ広げ、逐語ブロックを差し替え、**本文にも段 0.5 の説明を
+  足した**（`docs:check` は引用アンカーしか見ないので、本文の陳腐化は機械が教えない）
+
 ### docs(planning): split the E-env bundle so stage 2 is not blocked by measurement noise (Sep 6, 2026)
 
 **ブランチ**: `779-restructure-e-env-bundles`

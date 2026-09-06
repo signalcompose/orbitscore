@@ -25,9 +25,11 @@ daemon は起動すると audio device を確保し、localhost の空きポー�
 して、その port 番号を stdout に 1 行 JSON で出力します。TS 側はこの行を読んで接続します。
 `run()` を見てみましょう。2026-07-17 時点の版と比べると、先頭に `--list-audio-devices` /
 `--audio-device` の CLI 処理（#484 D1 / D3）が増え、Engine の起動が専用スレッドへ委譲されています。
+さらに 2026-09-06 に、**最初の shm を作る前に**死亡した旧 daemon の共有メモリを回収する段（0.5）が
+入りました（#779）。この順序は「自分の PID の残骸を消してよい」という規則の正当性要件です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:78-133
+// rust/crates/orbit-audio-daemon/src/main.rs:78-136
 async fn run() -> Result<(), i32> {
     // -1. `--list-audio-devices`（#484 D3）: cpal 列挙のみ行い stdout に JSON 一覧を出して即 exit
     // する軽量モード。stream は開かない（ハングリスクを避ける・上の `resolve_output_device` の
@@ -40,6 +42,9 @@ async fn run() -> Result<(), i32> {
     // 0. CLI と gated fault env を一度だけ typed options に解決する。device 名を process-global env
     // へ書き戻さないため、並行する owner thread も同じ immutable 値を受け取る。
     let startup_options = StartupOptions::from_env();
+
+    // 0.5. この daemon が最初の shm を作る前に、死亡した旧 daemon の shm を回収する。
+    orbit_audio_daemon::outproc_shm_sweep::sweep_orphaned_outproc_shm();
 
     // 1. Engine を起動（audio device 取得）。ランタイム device switch（#484 D2）に備え、実際の
     // `EngineWrap::start()` 呼び出しと `StreamGuard` の生存管理を専用 OS thread（"audio owner
@@ -95,7 +100,7 @@ async fn run() -> Result<(), i32> {
 （ランタイムの device 切替 `SelectAudioDevice` もこの thread に `mpsc` で委譲されます・#484 D2）。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:149-160
+// rust/crates/orbit-audio-daemon/src/main.rs:152-163
 /// ランタイム device switch（#484 D2）: `EngineWrap::start()`（cpal I/O・`cpal::Stream` は `!Send`）を
 /// 専用 OS thread（"audio owner thread"）上で実行し、その thread に `StreamGuard` を生涯所有させる。
 /// 呼び出し元（`run()`・tokio 上の async fn）は `Arc<EngineWrap>`（`Send + Sync`）だけを受け取る。
