@@ -26,10 +26,12 @@ On startup, the daemon claims an audio device, binds a WebSocket listener to a f
 port, and writes that port number to stdout as a single line of JSON. The TS side reads this
 line to connect. Let us look at `run()`. Compared with the 2026-07-17 version, the CLI handling for
 `--list-audio-devices` / `--audio-device` (#484 D1 / D3) was added at the top, and engine startup
-is delegated to a dedicated thread.
+is delegated to a dedicated thread. On 2026-09-06 a further stage (0.5) was added that reclaims
+shared memory left behind by dead daemons **before the first shm is created** (#779); that ordering
+is what makes the "delete leftovers carrying my own PID" rule sound.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:78-133
+// rust/crates/orbit-audio-daemon/src/main.rs:78-136
 async fn run() -> Result<(), i32> {
     // -1. `--list-audio-devices`（#484 D3）: cpal 列挙のみ行い stdout に JSON 一覧を出して即 exit
     // する軽量モード。stream は開かない（ハングリスクを避ける・上の `resolve_output_device` の
@@ -42,6 +44,9 @@ async fn run() -> Result<(), i32> {
     // 0. CLI と gated fault env を一度だけ typed options に解決する。device 名を process-global env
     // へ書き戻さないため、並行する owner thread も同じ immutable 値を受け取る。
     let startup_options = StartupOptions::from_env();
+
+    // 0.5. この daemon が最初の shm を作る前に、死亡した旧 daemon の shm を回収する。
+    orbit_audio_daemon::outproc_shm_sweep::sweep_orphaned_outproc_shm();
 
     // 1. Engine を起動（audio device 取得）。ランタイム device switch（#484 D2）に備え、実際の
     // `EngineWrap::start()` 呼び出しと `StreamGuard` の生存管理を専用 OS thread（"audio owner
@@ -99,7 +104,7 @@ dedicated OS thread (the "audio owner thread"), which owns the `StreamGuard` for
 `mpsc` channel — #484 D2).
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:149-160
+// rust/crates/orbit-audio-daemon/src/main.rs:152-163
 /// ランタイム device switch（#484 D2）: `EngineWrap::start()`（cpal I/O・`cpal::Stream` は `!Send`）を
 /// 専用 OS thread（"audio owner thread"）上で実行し、その thread に `StreamGuard` を生涯所有させる。
 /// 呼び出し元（`run()`・tokio 上の async fn）は `Arc<EngineWrap>`（`Send + Sync`）だけを受け取る。

@@ -65,7 +65,8 @@ static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
 pub fn unique_shm_path() -> PathBuf {
     let seq = SHM_SEQ.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "orbit-outproc-instrument-{}-{seq}.shm",
+        "{}instrument-{}-{seq}.shm",
+        crate::outproc_shm_sweep::OUTPROC_SHM_PREFIX,
         std::process::id()
     ))
 }

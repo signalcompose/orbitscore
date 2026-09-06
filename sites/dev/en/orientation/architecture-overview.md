@@ -501,7 +501,7 @@ Not only the daemon itself but also the plugin children described below and the 
 The daemon does not load the actual plugins (CLAP / VST3) into its own process. Effects and instruments are each spawned as separate binaries in **out-of-process (OOP)** children, exchanging audio with the daemon over shared memory. The list of children that can be spawned is stated explicitly, in one place, as a constant in the daemon crate.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:84-93
+// rust/crates/orbit-audio-daemon/src/lib.rs:86-95
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",
@@ -517,7 +517,7 @@ pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
 Child binaries are looked up **next to** the daemon executable. No knowledge of the install layout is put into the daemon or the TS side; the wiring holds simply by "placing them side by side."
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:450-458
+// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:453-461
 /// daemon 実行ファイルと同一ディレクトリの format 対応 child を既定パスとする
 /// （spike の sibling-of-exe を踏襲・設計 §4.5）。インストール時は daemon と child が並んで置かれる前提。
 fn default_rack_child_exe() -> Result<PathBuf, String> {

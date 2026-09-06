@@ -889,7 +889,7 @@ rack child の spawn は `--shm` / `--chain` / `--sample-rate` の 3 引数で�
 分類されて E2E 自身を落とす、という罠がコメントに残っています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:646-660
+// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:649-663
 pub fn spawn_effect_child(
     child_exe: &Path,
     shm_path: &Path,
@@ -910,7 +910,7 @@ pub fn spawn_effect_child(
 child 実行ファイルの既定パスは daemon と同じディレクトリの `orbit-effect-rack-child` です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:450-458
+// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:453-461
 /// daemon 実行ファイルと同一ディレクトリの format 対応 child を既定パスとする
 /// （spike の sibling-of-exe を踏襲・設計 §4.5）。インストール時は daemon と child が並んで置かれる前提。
 fn default_rack_child_exe() -> Result<PathBuf, String> {

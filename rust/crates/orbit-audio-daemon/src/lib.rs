@@ -22,6 +22,8 @@ pub mod link_audio;
 /// （規則を2箇所に持つと、片方だけ直し忘れる — #548 がまさにその形のバグだった）。
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 pub(crate) mod outproc_child_exe;
+/// 起動時に、死亡した旧 daemon が残した out-of-process 共有メモリを best-effort で回収する。
+pub mod outproc_shm_sweep;
 
 /// f32 サンプル列の絶対ピークを IEEE754 bits で返す（符号ビットを落として比較可能にする）。
 /// `AtomicU32::fetch_max` で published される peak 統計の共通実装。
