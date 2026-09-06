@@ -1641,10 +1641,44 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       await sleep(6000) // real out-of-process attach attempt, then failure
 
       const afterEffectFailLog = (await client.call('get_log', { lines: 500 })).text
+      // 🔴 このアサーションが何を守るか（#760 で実装に合わせ直した）。1 本 49 秒の長い
+      // シナリオなので、守備範囲をここに明記しておく:
+      //   (1) 失敗が**ユーザーに届く** — 新しい `[OUTPROC_ATTACH_FAILED]` 行が出る
+      //   (2) 届いた理由が**プラグインファイルを読めなかったこと**である。「何か attach に
+      //       失敗した」だけだと role 不一致・timeout・child の早期死でも緑になり、この
+      //       フィクスチャが何を再現しているのか分からなくなる
+      //   (3) **前のチェーンが保たれた** — 6c の主題である EffectChainMap のロールバック。
+      //       旧アサーションはここを一度も見ていなかった
+      //
+      // ⚠️ 旧アサーションは `[OUTPROC_ATTACH_FAILED] child exited before publishing READY` を
+      // 期待していたが、このフィクスチャでは**到達しない**。child は spawn されており、CLAP の
+      // ロードに失敗すると詳細を publish してから `CHILD_STATUS_LOAD_FAILED` を立てて終了する
+      // (`orbit-effect-rack-child/src/lib.rs` の `RackController::load_initial`)。daemon は
+      // 汎用の early-exit 文言より**その具体的な詳細を優先**する (`engine_wrap.rs` の Root 3-3)。
+      // つまり期待文言が合わなくなったのは実装の退行ではなく、**診断が具体的になったから**。
+      // 汎用の early-exit 経路を測りたいなら、ロードには成功して READY 前に死ぬ child が要る
+      // (`rust/crates/orbit-audio-daemon/tests/fixtures/lib/` のスクリプト child 等)。
+      //
+      // 件数ではなく**増えた行**で語る: `get_log` は固定 500 行窓なので、件数比較は古い行が
+      // 窓から流れ出るだけで動く。
+      const newAttachFailureLines = newLogLines(beforeEffectFailLog, afterEffectFailLog).filter(
+        (line) => line.includes('[OUTPROC_ATTACH_FAILED]'),
+      )
       expect(
-        afterEffectFailLog,
-        `expected an OUTPROC_ATTACH_FAILED error, got log tail: ${afterEffectFailLog.slice(-800)}`,
-      ).toContain('[OUTPROC_ATTACH_FAILED] child exited before publishing READY')
+        newAttachFailureLines,
+        `expected a new OUTPROC_ATTACH_FAILED line, got log tail: ${afterEffectFailLog.slice(-800)}`,
+      ).not.toHaveLength(0)
+      expect(
+        newAttachFailureLines.filter(
+          (line) =>
+            line.includes('effect chain apply failed at index 0') &&
+            // `discovery.rs` / `controller.rs` のハードコード文言。内側の `No such file or
+            // directory (os error 2)` は OS の strerror でロケール依存なのでアンカーにしない。
+            line.includes('プラグインファイルのロードに失敗') &&
+            line.includes('the previous chain is kept'),
+        ),
+        `the deliberate failure must name the unreadable plugin file at rack index 0 and keep the previous chain, got: ${JSON.stringify(newAttachFailureLines, null, 2)}`,
+      ).not.toHaveLength(0)
 
       // Engine survives: a normal statement right after the failure must still
       // be accepted, and must not add a NEW attach failure of its own.
