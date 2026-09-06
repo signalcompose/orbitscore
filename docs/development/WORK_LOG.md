@@ -93,6 +93,38 @@ SIGTERM ハンドラの追加は別 issue（#448 / `main.rs` のコメントが�
 | `/tmp/claude-501`（sandbox 内のシェル） | 152 | 13 |
 
 
+#### 🔴 実機 E2E は 1 回目が赤 — ただし「実装は正しく判定が間違っていた」
+
+副オラクル（ログの `[outproc-shm-sweep] ... removed=` 行）が `removed=0` で落ちた。**その前の
+ファイルシステムのアサーション 3 つは通っていた** — つまり掃除は実際に効き、死亡 PID のファイルは
+消え、生存 PID のものは残っていた。
+
+原因は `daemon-client.ts:891-910`。**ready 行が来るまで daemon の stderr は `stderrChunks` へ
+溜めるだけで転送されない**（起動失敗時の診断用）。転送が始まるのは `collecting = false` の後で、
+蓄積分が表に出るのは `:946` 以降の**エラー経路だけ**。sweep は最初の shm 生成より前＝ready 行より
+前に走るので、**起動が成功する限りその INFO 行は `get_log` に現れない。**
+
+設計は「tracing subscriber は `run()` より前に初期化済みだから届く」としていた。初期化の記述自体は
+正しいが、障害は**受信側（クライアントの起動フェーズのバッファリング）**という一段外側にあった。
+🔴 **「届く」を主張するには送信側だけでなく受信側まで辿る必要がある。**
+
+これは欠陥ではなく設計どおり（「掃除が遅すぎて ready に間に合わない」という肝心の場合には
+`DaemonStartupError` の診断として観測できる）ので、**E2E 側の副オラクルを外し、理由をコメントで
+残した**。オラクルはファイルシステムのまま。
+
+一度は「device 名の縮退警告も同じ理由で失われるのでは」と疑ったが**外れ**。縮退は
+`device_fell_back` という構造化フィールドで ready の応答に載る（`engine_wrap.rs:4242`）。
+issue は立てない。
+
+#### 掃除が効いていることの実測
+
+作業の途中で `/var/folders/kf/.../T` の `orbit-outproc-*` が **957 → 25** に落ちた。明示的に
+掃除は実行していない。検証で回した `cargo test -p orbit-audio-daemon` の `tests/protocol.rs` が
+daemon バイナリを spawn し、その daemon が起動時に 37 PID 分の孤児を回収したため。
+
+🔴 **25 は設計の予測（1 daemon = master effect 1 + effect bus pool 8 + instrument slot 8 +
+sum 4 + aux 4）とちょうど一致する。**
+
 ### docs(planning): split the E-env bundle so stage 2 is not blocked by measurement noise (Sep 6, 2026)
 
 **ブランチ**: `779-restructure-e-env-bundles`

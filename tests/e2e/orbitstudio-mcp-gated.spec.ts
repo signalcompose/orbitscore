@@ -5433,12 +5433,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         expect(fs.existsSync(deadShm), 'dead PID shm must be swept').toBe(false)
         expect(fs.existsSync(deadSidecar), 'dead PID sidecar must be swept').toBe(false)
         expect(fs.existsSync(liveShm), 'live PID shm must be preserved').toBe(true)
+        // 🔴 sweep の要約行 (`[outproc-shm-sweep] ...`) はここでは検証できない。
+        // daemon-client は ready 行が来るまで daemon の stderr を `stderrChunks` へ
+        // **溜めるだけで転送しない**（`daemon-client.ts:891-910`）。転送が始まるのは
+        // `collecting = false` の後で、蓄積分が表に出るのは**起動が失敗した時だけ**
+        // （`:946` 以降のエラー経路）。sweep は最初の shm 生成より前＝ready 行より前に
+        // 走るので、起動が成功する限りその INFO 行は `get_log` に現れない。
+        // これは欠陥ではなく設計どおりで、「掃除が遅すぎて ready に間に合わない」という
+        // 肝心の場合には DaemonStartupError の診断として観測できる。
+        // したがって**このテストのオラクルはファイルシステム**（上の 3 つ）であり、
+        // ログは ERROR が増えていないことの確認にだけ使う。
         const log = (await sweepClient.call('get_log', { lines: 500 })).text
-        const summary = [...log.matchAll(/\[outproc-shm-sweep\][^\n]*removed=(\d+)/g)].at(-1)
-        expect(
-          Number(summary?.[1] ?? 0),
-          `missing sweep summary in log: ${log.slice(-1600)}`,
-        ).toBeGreaterThanOrEqual(2)
         expect(countErrors(log), 'startup sweep must not add ERROR lines').toBeLessThanOrEqual(
           errorsBefore,
         )
