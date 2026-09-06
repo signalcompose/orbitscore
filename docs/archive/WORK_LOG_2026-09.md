@@ -2475,3 +2475,331 @@ open issue が 164 件まで溜まり、タイトルだけでは生死が判別�
 
 🔴 **C4 は不整合が具体的**: パラメータは CLAP も VST3 も**サンプル精度で送れる**のに、
 ノートは今も即時メソッド（`engine_wrap.rs:4455` に明記）。
+
+## 2026-09-03: マージ後の head ブランチは自動削除（規則を owner の決定に合わせる）
+
+#702 / #704 のマージで head ブランチが消えているのに気づき owner に確認 → 「増えすぎるし後からでも
+追えるので自動で消すようにした」（owner 2026-09-03）。PROJECT_RULES の「ブランチは消さない」
+（4 箇所）・CLAUDE.md の Branch Structure・BUNDLE_BRANCH_WORKFLOW（3 箇所）を「マージ後は
+GitHub 設定で自動削除・履歴は merge commit から辿る」に訂正。統合ブランチも束 PR のマージ後に
+消えてよい（自動削除はマージ後にしか動かないので、小 PR の base が途中で消えることはない）。
+
+## 2026-09-03: PR #704 の追従監査（ドキュメント変更なし・指摘 3 件）
+
+ルーチン「マージ済み PR にドキュメントとサイトを追従させる」を PR #704（`703-bundle-branch-workflow`
+→ main・merge commit `3fa1150`）に対して実行。**追従すべきドキュメント変更は 0 件**。
+
+- 差分 6 ファイルはすべて規約文書と CI 定義（`CLAUDE.md` / `docs/core/PROJECT_RULES.md` /
+  `docs/development/BUNDLE_BRANCH_WORKFLOW.md` / `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` /
+  `docs/development/WORK_LOG.md` / `.github/workflows/claude-code-review.yml`）で、
+  `packages/engine/` `rust/` `packages/vscode-extension/` に変更が無い。DSL の構文・意味論、
+  MCP ツールの契約、OrbitStudio の評価経路のいずれも変わっていないので、
+  `docs/specs-v2/` `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` `sites/user/` `sites/dev/` は追従不要
+- `squash` → `merge commit` の訂正は差分内で完結している（リポジトリ全体を grep して、
+  規約文書に旧記述の残りは無い。`sites/dev/en/signal-chain/index.md:1230` の "squashed" は
+  信号処理の記述で無関係）
+
+**追従できていない点として PR で報告した 3 件**（本ルーチンでは直さない）:
+
+1. `CLAUDE.md:301` と `docs/development/BUNDLE_BRANCH_WORKFLOW.md:70` が小 PR のゲートで
+   `ORBIT_GATED_ONLY` を既存の仕組みとして参照しているが、実装が無い。
+   実在するのは `ORBIT_GATED_ORBITSTUDIO`（`tests/e2e/orbitstudio-mcp-gated.spec.ts:59`）で
+   suite 全体の on/off。`ORBIT_GATED_ONLY` は `docs/design/668-e2e-foundation-design.md:891`
+   の決定 D-4（未実装）
+2. `.github/workflows/claude-code-review.yml` の最終実行は 2026-06-17（run #278）。
+   今回足した `if: github.base_ref == 'main'` の効果を Actions で観測できない
+3. PR #704 は最終 head `7f53a5d` の CI 完了を待たずにマージされている
+   （CI 開始 10:29:37Z / マージ 10:29:39Z）。赤ではないが、マージ時点では未検証
+
+## 2026-09-03: 束ブランチ運用の採用（#703）
+
+owner との相談（PR #702 セッション）で、レビューの単位を PR から**束**へ変更。小 PR は束の
+統合ブランチへ軽いゲート（CI + その PR が足した E2E を実機で + 目視）で入れ、統合ブランチ → main の
+束 PR で `/simplify` → `/code:pr-review-team` + Fable → 実機 E2E 全件を 1 回だけ回す。
+手引きは `docs/development/BUNDLE_BRANCH_WORKFLOW.md`（PR #702）。
+
+| ファイル | 変更 |
+|---|---|
+| `CLAUDE.md` | 「PR レビューワークフロー」に「レビューの単位は束」節を追加。マージ前ゲートの対象・禁止事項 2 件・Branch Structure・Quick Workflow |
+| `docs/core/PROJECT_RULES.md` | 「Git Workflow and Branch Protection」に統合ブランチと束の手順表・`Part of #N` / `Closes #N` の使い分け |
+| `.github/workflows/claude-code-review.yml` | ジョブに `if: github.base_ref == 'main'`。bot レビューは束 PR だけ。`code-review.yml`（テスト CI）は触らない |
+| `PROJECT_RULES.md`「Merging PRs」ほか | 🔴 **squash はリポジトリ設定で禁止**（#702 のマージで API が 405 "Squash merges are not allowed" を返した。main の履歴も merge commit）。旧記述の `--squash` を `--merge` に訂正し、束ブランチ運用の文書も merge commit 前提に統一 |
+
+## 2026-09-03: 出口・レンダ宛先・コア境界の裁定を地図と issue に同期
+
+**背景**: 地図 §9 の未決約 40 件を「owner が決めるもの / 調べれば分かるもの」に分けたところ、
+出口まわりの数件がその場で裁定された。
+
+**owner 裁定**:
+
+1. **同じ宛先へ 2 回 `output` = 合算**。正確には「**解決後の宛先**が同じなら合算」
+2. **master は終端ではなく単にアウト先の 1 つ** — `output(master, thru).output("3,4")` で
+   master を 3/4 でモニターできる。🔴 **「終端」という概念が無い**ので、地図 §9 の
+   「master ラインの終端の書き方」は**問い自体が消滅**
+3. **render の宛先 = エンドポイント宣言**（`var stem = mix.render("stems/%n_%v.wav")`）。
+   トラック別は **`%n` テンプレート**で宣言 1 行に畳む
+4. **「コア」は先に定義しない。境界を引いた残りがコア**（#672 が「定義待ち」で止まらなくなった）
+5. **入力系は今はやらない。** ただし「入力とは instrument が Audio I/O のインプットに
+   なっただけ」= 新しい受け手を作らない、という置き場所は決着
+6. **ログは ① 出力（#694）→ ② 本当にリプレイできるか確認（#241）→ ③ オフラインレンダ（#598）** の順
+
+**main の誤りと訂正**:
+
+- 「`send(` を使う譜面が 0 本だから移行不要」と書いた。owner 訂正:
+  **「実装と実際の利用は関係ない」**。仕様が線形と定めている以上 dB へ直すのは実装の仕事で、
+  既存資産の有無とは無関係。地図 §9 の「B の移行の手当て」は**未決ではなく作業**に降格
+- (c)（エンドポイント宣言）を推した時、**トラック 30 本なら宣言 30 行**になる後退を見落として
+  いた。owner の指摘で `%n` テンプレートに至った
+
+**コードで確認したこと**: `%n` は実装可能。シーケンスは変数への代入時に名前を受け取る
+（`packages/engine/src/core/sequence.ts:197-200` の `setName` → `stateManager.setName` +
+`global.registerSequence`）。エラー文言も既にそれを使う（同 :354）。追加の記法は要らない。
+
+**記録先**: 地図（§1・§1b.3・§4.A.3.1 新設・§9・§10）と issue #611 / #598 / #672 / #409 /
+#679 / #694 の 6 本。issue 側には**実装チェックリストへの追加分**も書いた。
+
+### 追記: 地図がリンクする open issue 70 本にチェックリストを充填（同日）
+
+owner 指示:
+
+> 地図でリンクしてる ISSUE に実装チェックリストを作って、実装時にちゃんと終わってるか、
+> **終わってなければ理由は何か（変更になった、いらなくなったなど）をトラッキングできる**ように
+
+6 班（sonnet subagent）に領域ごとに並行委譲。**39 本は同日早い時間に投稿済みだったため
+重複を避け、残りに新規投稿**した。`PROJECT_RULES.md` §1d の書式に統一。
+
+🔴 **変異検証はどのチェックリストにも既定で入れていない**（owner 2026-09-03 の投資順位:
+① 仕様 → ② MCP 経由の E2E → ③ 機能テスト → ④ 変異検証は最後の手段）。
+
+**エージェントが見つけた実質的な問題**（すべて地図 §9 に記録）:
+
+| 発見 | 中身 |
+|---|---|
+| **移管先が宙に浮いている** | #474 の cmd+click は 2026-08-28 に #633 へ移管された記録があるが、**#633 マージ後もコード上は未実装**（grep 0 件）。移管したまま誰も持っていない |
+| **地図と issue の食い違い** | #138 の吸収先 — 地図 §6.1 は「#656 へ」、#138 自身の棚卸しコメントは「#659 と統合が自然」。どちらも根拠つき |
+| **枝番号の不整合** | #484 の「D4」が **issue 本文に一度も登場しない**（2026-07-26 指摘・未解決） |
+| **本文が SC 時代のまま** | #213 の実装計画が SuperCollider 前提で、地図 §1「SC 退役」と矛盾 |
+| **本文が古い** | #546 Phase 3 の復元側は本文が「読むコードが 1 行もない」のままだが、実際は完了済み |
+| **未実装の確定** | `ORBIT_OUTPUT_BUFFER_FRAMES`（#368）は grep で未実装と確認 |
+
+## 同日の追加裁定（本コミットに含む）
+
+- 🔴 **ICLC には出さない**（owner）。藝大不採択の retarget 先が消え、**本番トラックから
+  締切が無くなった** → 開発の順序は**地図 §3 のリリース道筋が唯一**になる
+- 🔴 **WCTM の開発はこのリポジトリでやらない**（owner）。作品開発は WCTM 側セッションが持ち、
+  必要な機能は**そこから機能要望として降りてくる** → 降りてきたら**普通の機能 issue** として
+  扱う（「研究トラック」という別枠に入れない）。地図 §4.M の見出しを
+  「研究・作品トラック（🔴 このリポジトリでは進めない）」へ変更
+
+## 2026-09-03: 死んだ `.env.example` を削除（#708）
+
+**実害**: sandbox 内でフック付きコミットが**必ず失敗**していた。
+
+```
+[FAILED] error: lstat(".env.example"): Operation not permitted
+  ✖ lint-staged failed due to a git error.
+```
+
+Claude Code の sandbox は `./.env*` の読み取りを拒否する（秘密の保護）。`lint-staged` は
+コミット前に `git stash` するので、`.env.example` を lstat した時点で落ちる。
+🔴 **エラーが「git error」としか出ないため lint の失敗と紛らわしく**、本日の PR-E1 でも
+原因調査に時間を使った。
+
+**なぜあったか**: `9a7a7bae`（2025-10-26）で BFG により `.env` を履歴から削除した際、
+テンプレートとして作られた。**その後、参照する仕組みが消えていた**:
+
+| 確認 | 結果 |
+|---|---|
+| 中身 | Slack 通知用 env 4 個 |
+| その env を読むコード | **0 件** |
+| `.env` を読み込む仕組み | **`dotenv` 依存なし。何も読んでいない** |
+| Slack 連携の実体 | **無い**（`slack` のヒットは SuperCollider の vendor と英単語のみ） |
+
+**残した注意点**: `.gitignore` の `!.env.example` / `!.env.sample` / `!.env.template` は
+**外部ツール管理ブロック**（`[code:security-patterns:fbe2794b]`・生成元はリポジトリ内に無い）
+なので触っていない。したがって**将来 `.env.example` を再び置くと同じ問題が再発する**。
+
+## 2026-09-03: stale ガードが再ビルド不能なファイルで発火していた（#713）
+
+**実害**: 🔴 **実機 gated E2E が起動段階で全部落ちる。しかもガードが指示する対処では解消しない。**
+
+```
+Error: gated E2E: the daemon binary is older than the Rust sources, so this run would measure stale code.
+  newest source: rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs
+  binary:        2026-09-02T02:05:35.862Z
+  source:        2026-09-03T00:53:01.573Z
+```
+
+指示どおり `npm run test:e2e:gated` を回しても `pretest` の cargo は
+`Finished release profile in 0.21s` で**何もビルドしない**。当然で、そのファイルは
+`orbit-vst3-host` の**統合テストターゲット**であり、`orbit-audio-daemon` のバイナリの
+依存グラフに入っていない。**バイナリの mtime は永久に更新されず、ガードは永久に赤。**
+
+**なぜ今まで出なかったか**: mtime は **`git checkout` で現在時刻に更新される**。
+ブランチを行き来すると無関係な Rust ファイルが「最新のソース」になる。
+
+**修正**（`assertDaemonBinaryIsNotStale`）: 走査から **`tests` / `benches` / `examples`** を除外。
+別の cargo ターゲットなので daemon バイナリに入らない。⚠️ **`src/` は除外しない** —
+daemon が依存するコードが新しければ、ガードは本来の役目どおり赤くなるべきである。
+
+**仕組みで守る**（規律を文章で持たない）: `gated-assertion-hygiene.spec.ts` に検査 2 本。
+
+| 検査 | red になる条件 |
+|---|---|
+| 除外の維持 | `tests` / `benches` / `examples` の除外が消えたら |
+| **行きすぎの防止** | **`src` まで除外したら**（ガードの目的自体が失われる） |
+
+**変異で両方向を確認した**（実出力）:
+
+```
+変異A: 除外を消す        → × keeps the stale guard off cargo targets it can never rebuild
+変異B: src も除外する    → × still lets the stale guard see the sources the daemon is built from
+restore 後              → Tests  5 passed (5)   ／ cmp で復元一致を確認
+```
+
+### 🔴 副産物: 実機 gated は現在 main で 11 件が意図的に red
+
+ガードを直して初めて中身が走り、**20 件中 9 passed / 11 failed** だと分かった。
+これは**退行ではなく、修正より先に書かれたテスト**である（一次情報:
+`docs/design/649-audio-line-design.md` §B-0「**E2E-1 を先に書いて red 固定**」)。
+修正は**段 1**（PR-O2 / #649・plan §3「段 1 の結果: `global.gain(-6)` が instrument に効く」）。
+
+**したがって段 0 の小 PR のゲートは「実機 gated 全通し」にできない。**
+正しい判定は **「失敗集合が before/after で同一」**（新しい失敗を作っていない）。
+baseline（main + 本修正・2026-09-03 実測）:
+
+```
+#643 E2E-1〜E2E-7（7 件）
+auto-records and restores all five plugin receiver kinds across a restart without explicit saves
+drives real OrbitStudio end-to-end: diagnostics-on-open, run_selection, live edit, capture verification
+replaces a playing instrument across CLAP/VST3 ... (#618 E1-E6)
+steps the live playhead through an instrument() sequence, rests included
+```
+
+E2E-2 / E2E-3 の dry RMS が **ちょうど 0**、E2E-1 の比が **1.27**（gain が効いていない値）
+という内容も、段 1 が直す欠陥と一致している。
+
+## 2026-09-03: #713 のガード変更に dev 学習サイトを追従させた（docs のみ）
+
+**対象**: PR [#714](https://github.com/signalcompose/orbitscore/pull/714)（merge commit `f006a51`）。
+コード・テストは一切変更していない。
+
+PR #714 は引用のアンカー（`// FILE:START-END` 形式の見出し行）を直したが、**引用を囲む本文**と
+`## Sources` の行範囲は旧状態のままだった。`docs:check` は前者しか検査しないので、後者は
+red にならずに残った。この 2 種を追従させた。
+
+**本文の乖離 2 件**（どちらも #714 で挙動が変わった箇所を古い説明のまま記述していた）:
+
+| 場所 | 旧記述 | 実態 |
+|---|---|---|
+| `sites/dev/rust-engine/capture-verification.md` / `sites/dev/editor/mcp-and-gated-e2e.md` | ガードは `rust/**/*.rs` \| `Cargo.toml` を走査 | `tests` / `benches` / `examples` を除外する（#713） |
+| `sites/dev/editor/mcp-and-gated-e2e.md` | 「残り **2 本**」（アサーション衛生は 3 本） | #713 で 2 本増えて **5 本** |
+
+両章に #713 の節を足した。走査除外の理由（別 cargo ターゲットなので daemon バイナリに入らない・
+`git checkout` が mtime を動かすので解消不能な赤になる）と、`src/` を除外しない理由、
+`gated-assertion-hygiene.spec.ts` の 2 本が両方向を留めていることを書いた。
+ja / en 両方（STYLE_GUIDE のバイリンガル必須）。
+
+**`## Sources` の行範囲**: ガードが 15 行伸びたので、`orbitstudio-mcp-gated.spec.ts` の
+128 行目以降を指す参照はすべて +15 ずれていた。6 章 × ja/en で 12 ファイル分を直した
+（`78-152` → `78-166`、`1434-1468` → `1449-1483` など）。境界行は実ファイルで確認済み。
+
+**frontmatter**: 本文を実質的に足した 2 章（RE-4 / IV-3）の `verified-against` を
+`69dc968` → `f006a51`、`verified-at` を `2026-09-03` に更新した（STYLE_GUIDE
+「章本文を実質的に書き直したとき: 必ず最新 commit に更新する」）。
+
+### 追従の過程で見えた、直していない点
+
+このセッションでは**指摘のみ**（テスト・実装は変更しない方針のため）。詳細は PR 本文。
+
+1. `tests/e2e/gated-assertion-hygiene.spec.ts:76-83` / `:89-93` は gated spec の**ソース文字列**を
+   正規表現で見るだけなので、「除外ブロックを `walk(full)` の**後ろ**へ動かす」変異
+   （除外が到達不能になり #713 の赤が戻る）で **2 本とも緑のまま**になる
+2. 同 `:77` は式の**字面**に依存するので、`Set` へ畳む等の挙動不変なリファクタで red になる
+3. `assertDaemonBinaryIsNotStale()` は `tests/e2e/orbitstudio-mcp-gated.spec.ts:164-166` の
+   `gated && appAvailable` の下でしか呼ばれない。CI は全ジョブ非 gated なので、
+   #713 で足した 15 行は**どこでも 1 行も実行されていない**
+
+## 2026-09-03: PR #700 のドキュメント追従（ICLC 取り下げ / WCTM の持ち先 / §10 の表崩れ）
+
+**追従元**: PR [#700](https://github.com/signalcompose/orbitscore/pull/700)（マージコミット `ca176f0`・head `f5b16d8`）。
+docs のみの変更で、`CLAUDE.md` の本番トラック注記・`docs/planning/DEVELOPMENT_MAP.md`・本 WORK_LOG を更新していた。
+
+**#700 が `CLAUDE.md` にしか書かなかったため、同じ注記を持つ他のドキュメントが古いまま残っていた:**
+
+| ファイル | 何が古かったか |
+|---|---|
+| `docs/core/INDEX.md:39` | 「本番トラックは ICLC への proposal 提出方向へ retarget（年次・提出日・提出形態はいずれも要確認）」 |
+| `docs/core/INDEX.md:207` | 同じ retarget 注記（WCTM 調査群の凍結セクション） |
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:18` | 「ICLC 提出方向へ retarget（年次・提出日・形態は要確認）」 |
+| `sites/dev/decisions/adr-001-supercollider.md:267` / `:314`（+ `en` 対訳） | 「Consequences revisited」の 3. 学術的文脈が ICLC retarget で止まっていた |
+
+いずれも **ICLC 取り下げ（owner 2026-09-03）・本番トラックに締切が無い・WCTM 本体の開発は本リポジトリで進めない**
+の 3 点へ書き換えた。`sites/dev` は日英両方を更新（STYLE_GUIDE のバイリンガル必須）。
+
+**#700 が入れた表崩れも直した**: `DEVELOPMENT_MAP.md` §10 で、追記の箇条書きと更新履歴テーブルのヘッダ行の間に
+空行が無く、GFM ではテーブルがリスト項目の遅延継続として吸われて**描画されない**状態だった
+（`docs/planning/DEVELOPMENT_MAP.md:1463-1464`）。空行を 1 行入れただけで、本文は変えていない。
+
+**追従しなかったもの**: #700 が記録した出口・レンダ宛先・`%n` テンプレートの裁定は、地図自身が
+「spec への反映は §6.2 の改訂候補（owner 裁定で行う）」と書いているため `docs/specs-v2/` と
+`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` へは**反映していない**（実装も未着手で、DSL 表面は変わっていない）。
+
+
+## 2026-09-03: PR #709 追従 — 失効した landmine 記述を更新
+
+PR #709（`7d2df31`・上記 #708）で `.env.example` を削除した結果、
+`docs/development/POST_2.0_VST3_HOSTING_PLAN.md:256` の landmine 記述が**失効した**。
+
+| | 内容 |
+|---|---|
+| 旧記述 | 「`.env.example` は sandbox read-deny → `git diff` が誤って削除表示。`git status --short` が権威」 |
+| なぜ失効か | ファイルが実在しなくなったため、この誤検知は起きない |
+| 🔴 なぜ放置できないか | **実際に削除された今、この記述は「`.env.example` の削除表示は無視してよい」と読める** — 真の削除を sandbox の誤検知と取り違えさせる |
+
+取り消し線で旧記述を残したうえで、解消済みであることと、`.gitignore:55-57` の
+un-ignore 行が残っているため**再設置すると再発する**ことを追記した。
+
+**追従不要と判断した層**（PR #709 の差分は `.env.example` 削除と WORK_LOG 追記のみ）:
+
+| 層 | 判断 |
+|---|---|
+| DSL/言語仕様（`packages/engine/`） | 差分に含まれない。構文・意味論・`.orbslog` 形式に変化なし |
+| ランタイム/MCP（`rust/`） | 差分に含まれない。MCP ツールの引数・返り値・エラー挙動に変化なし |
+| OrbitStudio（`packages/vscode-extension/`） | 差分に含まれない。評価フロー・診断・補完に変化なし |
+| `sites/user/` `sites/dev/` | 削除したファイルを参照する記述は 0 件（repo 全体 grep で確認） |
+
+## 2026-09-04: ルーティンのドキュメント追従 PR を溜めない規則（#718）
+
+**実害**: ルーティンが出したドキュメント追従 PR **9 本のうち 8 本が衝突**し、1 本ずつ手で解決した。
+
+| PR | 結果 |
+|---|---|
+| #716 / #717 | **出てすぐ入れた → clean** |
+| #688 / #691 / #698 / #701 / #705 / #710 / #711 | **溜めた → 全部衝突** |
+
+**原因**: ルーティン PR の差分は**「追従した時点の main」に対して計算されている**。その後 main に
+入る 1 コミットごとに陳腐化する。待たせている間に #709 / #714 / #716 と束の追従が入り、
+`WORK_LOG` の追記位置・`INDEX` の項目・各ドキュメントの **`## Sources` の行範囲**と
+**引用のアンカー**が全部ずれた。
+
+🔴 **片側を捨てると情報が落ちる**ので、機械的な解決ができない。実例:
+
+- **#688**: 「archive パスへの修正」（PR 側）と「ICLC 取り下げの追記」（main 側）が**同じ行**で衝突。
+  両方が正しいので、パスは PR 側・文末は main 側を採った
+- **#711**: `## Sources` は束側が最新だったが、`helpers/rack-child-pid.ts` の行は PR 側にしか無かった
+
+**規則**（owner 合意）:
+
+1. main に何かをマージしたら、**ルーティン PR が出た時点でその場で入れる**
+2. 遅くとも **統合ブランチを main から切る前**に全部消化する
+3. 🔴 **base の選び方**: 追従先のファイルが**束にしか無い**なら base は **統合ブランチ**にする。
+   main を base にすると引用が実ファイルを指せず `docs:check` が落ちる（#711 が実際その状態だった。
+   #717 はルーティン自身が正しく束を base にしていた）
+
+**止めない理由**: 🔴 **ルーティンは機械が見ていない層を見ている。** `docs:check` は**引用のアンカー
+しか検査せず**、引用を囲む**本文**と **`## Sources` の行範囲**は検査しない。#716 はまさにそこを
+検出した（#714 でガードの走査範囲を変えたのに、本文は「`rust/**/*.rs` を走査」のまま）。
+
+**自動マージにもしない**: #688 の本文には事実誤認があった（「vitest を回す CI チェックは 1 本も
+存在しない」— 実際は `code-review.yml:26` が `npm test` を実行している）。人が読む前提は変えない。

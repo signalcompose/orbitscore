@@ -394,7 +394,7 @@ UI を「開く」だけなら host → child のメールボックスで足り�
 追加された evt リングです。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:265-277
+// rust/crates/orbit-audio-sandbox/src/transport.rs:268-280
     // ── #474 P2: child → host の取りこぼし不可イベントリング（UIH.2a）。
     /// child -> host: 新規イベント投函時に単調増加。0 = 未発行。
     pub evt_seq: ReleaseAcquireSeq,
@@ -435,7 +435,7 @@ publish / read の両側で Release / Acquire 対が**必須**です（欠ける
 データ競合 = UB）。面白いのは、これを**テストではなく型で守っている**ことです。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:359-378
+// rust/crates/orbit-audio-sandbox/src/transport.rs:362-381
     #[repr(transparent)]
     pub struct ReleaseAcquireSeq(AtomicU64);
 
@@ -469,7 +469,7 @@ publish / read の両側で Release / Acquire 対が**必須**です（欠ける
 再利用の不変条件（`evt_ack_seq >= s - EVT_SLOTS`）を検査してから publish します。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:512-538
+// rust/crates/orbit-audio-sandbox/src/transport.rs:515-541
     pub unsafe fn service(
         &mut self,
         region: *mut SharedRegion,
@@ -735,7 +735,7 @@ daemon の `UiEventPump::poll_step` は watchdog の 1 tick ごとにリング�
 しない・リング先頭で止まる）。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:1213-1225
+// rust/crates/orbit-audio-sandbox/src/transport.rs:1216-1228
 /// [`UiEventPump::poll_step`] が daemon の非ブロッキング sink へ渡す固定通知。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiPumpNotification {
@@ -910,7 +910,7 @@ open UI の共存は「動かさない（= 自動 close = C-A 違反）」か「
 daemon 側の `UiPumpState` は、こうして per-window の map になりました。
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:1355-1374
+// rust/crates/orbit-audio-sandbox/src/transport.rs:1358-1377
 #[derive(Debug, Default)]
 struct UiPumpState {
     generation: u64,
@@ -1075,7 +1075,7 @@ recorded` で失敗するので、「DSL で open → MCP の close が成功す
 その後 1 枚目も閉じます。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2091-2113
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2130-2152
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

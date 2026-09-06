@@ -28,6 +28,7 @@ import { analyzeWavBuffer } from '../../../packages/vscode-extension/src/wav-ana
 import {
   ANALYSIS_BUCKET_MS,
   captureClockSec,
+  captureTailRms,
   captureWindowsFrom,
   measuredBucketCountForSteadyRms,
   prepareCapturePath,
@@ -35,9 +36,10 @@ import {
   readCaptureForAnalysis,
   readCaptureFormat,
   steadyRms,
+  waitForQuiet,
   waitForSound,
 } from './capture-windows'
-import { countErrors, countLogMarker, LOG_WINDOW_LINES } from './engine-log'
+import { countErrors, countLogMarker, LOG_WINDOW_LINES, newLogLines } from './engine-log'
 import { logAnchor, logAppendedSince } from './run-score'
 import { captureWavPath } from './gated-session'
 import { runOrbitscoreCli } from './run-cli'
@@ -273,6 +275,111 @@ describe('capture windows', () => {
         label: 'continuous synthetic capture',
       }),
     ).resolves.toBeUndefined()
+  })
+
+  it('reports a quiet tail so a silence window can follow the sound', async () => {
+    // #761: 「休符に切り替えたら無音」の区間は、無音になってから窓を開けなければならない。
+    // 音 → 無音 の順に並ぶ capture の**末尾**を見る。
+    const capturePath = path.join(makeTmpDir(), 'quiet-tail.wav')
+    const wav = syntheticFloat32Wav(0.6, {
+      sample: (timeSec) => (timeSec < 0.2 ? 0.25 * Math.sin(2 * Math.PI * 50 * timeSec) : 0),
+    })
+    fs.writeFileSync(capturePath, wav)
+
+    await expect(
+      waitForQuiet(capturePath, { floor: 0.01, quietSec: 0.3, intervalMs: 1, timeoutMs: 20 }),
+    ).resolves.toBe(true)
+  })
+
+  it('does not mistake a short gap for a quiet tail', async () => {
+    // 🔴 これが識別力のあるテスト。`quietSec` より**短い**無音を静寂と認めてしまうと、
+    // LOOP の小節境界にできる切れ目（実測 80 ms）で返ってしまい、鳴り止むのを待たない。
+    // 末尾 0.1s だけが無音（`quietSec` は 0.3s）なので false でなければならない。
+    const capturePath = path.join(makeTmpDir(), 'short-gap.wav')
+    const wav = syntheticFloat32Wav(0.6, {
+      sample: (timeSec) => (timeSec < 0.5 ? 0.25 * Math.sin(2 * Math.PI * 50 * timeSec) : 0),
+    })
+    fs.writeFileSync(capturePath, wav)
+
+    await expect(
+      waitForQuiet(capturePath, { floor: 0.01, quietSec: 0.3, intervalMs: 1, timeoutMs: 20 }),
+    ).resolves.toBe(false)
+  })
+
+  it('does not report quiet before the capture covers quietSec', async () => {
+    // 🔴 50 ms の全無音は「観測した 50 ms が静か」しか証明しない。旧実装は窓が 1 本でも
+    // あって全て floor 未満なら true を返し、要求した 300 ms のうち 250 ms を見ていなかった。
+    const capturePath = path.join(makeTmpDir(), 'too-short-silence.wav')
+    fs.writeFileSync(capturePath, syntheticFloat32Wav(0.05))
+    const diagnostics = {
+      lastTailRms: [] as readonly number[],
+      lastError: undefined as string | undefined,
+    }
+
+    await expect(
+      waitForQuiet(capturePath, {
+        floor: 0.01,
+        quietSec: 0.3,
+        intervalMs: 1,
+        timeoutMs: 5,
+        diagnostics,
+      }),
+    ).resolves.toBe(false)
+    expect(diagnostics.lastTailRms.length).toBeGreaterThan(0)
+    expect(diagnostics.lastTailRms.every((rms) => rms === 0)).toBe(true)
+    expect(diagnostics.lastError).toBeUndefined()
+  })
+
+  it('keeps a partial trailing frame out of the stereo tail window', () => {
+    // 左=1 / 右=0 の 20 frames なら mono RMS は正確に 0.5。末尾へ右 channel 片側ぶんの
+    // 4 bytes を足すと、frame 端数を読み始め位置へ含める mutant は L/R の組を 1 sample
+    // ずつずらし、最後だけ (0, 0) と読んで RMS を約 0.487 へ落とす。
+    const capturePath = path.join(makeTmpDir(), 'partial-stereo-frame.wav')
+    const completeFrames = syntheticFloat32Wav(0.02, {
+      sampleRate: 1000,
+      channels: 2,
+      sample: (_timeSec, channel) => (channel === 0 ? 1 : 0),
+    })
+    fs.writeFileSync(capturePath, Buffer.concat([completeFrames, Buffer.alloc(4)]))
+
+    const tail = captureTailRms(capturePath, 0.02)
+    expect(tail.durationSec).toBe(0.02)
+    expect(tail.rms).toHaveLength(1)
+    expect(tail.rms[0]).toBeCloseTo(0.5, 10)
+  })
+
+  it('keeps the last capture error available when quiet times out', async () => {
+    const capturePath = path.join(makeTmpDir(), 'broken-quiet.wav')
+    const brokenWav = Buffer.alloc(44)
+    brokenWav.write('data', 36, 'ascii')
+    fs.writeFileSync(capturePath, brokenWav)
+    const diagnostics = {
+      lastTailRms: [] as readonly number[],
+      lastError: undefined as string | undefined,
+    }
+
+    await expect(
+      waitForQuiet(capturePath, {
+        floor: 0.01,
+        quietSec: 0.3,
+        intervalMs: 1,
+        timeoutMs: 2,
+        diagnostics,
+      }),
+    ).resolves.toBe(false)
+    expect(diagnostics.lastTailRms).toEqual([])
+    expect(diagnostics.lastError).toContain('expected fixed 44-byte IEEE float32 capture WAV')
+  })
+
+  it('returns false instead of throwing when the capture never goes quiet', async () => {
+    // `waitForSoundRestart` の段階 1 は「静かにならないのが正しい」譜面を通すため、
+    // ここが例外を投げると切れ目なく鳴り続ける譜面を壊す。
+    const capturePath = path.join(makeTmpDir(), 'never-quiet.wav')
+    fs.writeFileSync(capturePath, syntheticFloat32Wav(0.6, { sample: sineAfter(0) }))
+
+    await expect(
+      waitForQuiet(capturePath, { floor: 0.01, quietSec: 0.3, intervalMs: 1, timeoutMs: 20 }),
+    ).resolves.toBe(false)
   })
 
   it('selects the same buckets as the old range when its reverse-map offset is zero', () => {
@@ -709,6 +816,23 @@ describe('engine-log', () => {
   it('states the fixed log window so callers compare with <=, not equality', () => {
     // #625: `get_log` は固定窓なので、件数の厳密等価は窓の外へ流れた瞬間に嘘になる。
     expect(LOG_WINDOW_LINES).toBe(500)
+  })
+
+  it('returns newly appended lines after the fixed window shifts', () => {
+    const before = ['old line that scrolls out', 'stable A', 'stable B'].join('\n')
+    const after = ['stable A', 'stable B', 'new line'].join('\n')
+
+    expect(newLogLines(before, after)).toEqual(['new line'])
+  })
+
+  it('documents that an identical repeated line can consume a genuinely new line', () => {
+    // ⚠️ 既知の限界（この束では直さない）: 固定窓の先頭にあった `repeat` が流れ、同じ文言が
+    // 末尾へ新しく来ても、多重集合の差分には時系列の同一性が無いので既存 1 件と相殺される。
+    // これは「現状の契約を固定する」テストであり、正しい新規行検出を主張するテストではない。
+    const before = ['repeat', 'stable'].join('\n')
+    const after = ['stable', 'repeat'].join('\n')
+
+    expect(newLogLines(before, after)).toEqual([])
   })
 })
 

@@ -69,6 +69,8 @@ interface FakeChildProcess {
   fireStderrData: (chunk: string) => void
   fireStdoutError: (err: Error) => void
   fireStderrError: (err: Error) => void
+  /** stderr の `end`。#756 の flush（改行で終わらない最後の行）を駆動する。 */
+  fireStderrEnd: () => void
   fireStdinError: (err: Error) => void
   fireError: (err: Error) => void
 }
@@ -79,6 +81,7 @@ function fakeChildProcess(): FakeChildProcess {
   const stderrListeners: Array<(data: Buffer) => void> = []
   const stdoutErrorListeners: Array<(err: Error) => void> = []
   const stderrErrorListeners: Array<(err: Error) => void> = []
+  const stderrEndListeners: Array<() => void> = []
   const stdinErrorListeners: Array<(err: Error) => void> = []
   const errorListeners: Array<(err: Error) => void> = []
 
@@ -98,6 +101,7 @@ function fakeChildProcess(): FakeChildProcess {
       on: (event: string, cb: (...args: unknown[]) => void) => {
         if (event === 'data') stderrListeners.push(cb as (data: Buffer) => void)
         if (event === 'error') stderrErrorListeners.push(cb as (err: Error) => void)
+        if (event === 'end') stderrEndListeners.push(cb as () => void)
       },
     } as unknown as ChildProcess['stderr'],
     stdin: {
@@ -114,6 +118,7 @@ function fakeChildProcess(): FakeChildProcess {
     fireStderrData: (chunk) => stderrListeners.forEach((cb) => cb(Buffer.from(chunk))),
     fireStdoutError: (err) => stdoutErrorListeners.forEach((cb) => cb(err)),
     fireStderrError: (err) => stderrErrorListeners.forEach((cb) => cb(err)),
+    fireStderrEnd: () => stderrEndListeners.forEach((cb) => cb()),
     fireStdinError: (err) => stdinErrorListeners.forEach((cb) => cb(err)),
     fireError: (err) => errorListeners.forEach((cb) => cb(err)),
   }
@@ -508,20 +513,27 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
     // Symmetry fix: the other three listener bodies (setupStdoutHandler,
     // setupExitHandler, setupStdinErrorHandler) are each wrapped in
     // try/catch + logHandlerFailure per round 4 Important #1, but
-    // setupStderrHandler had been left unwrapped. `outputChannel?.append`
-    // has no realistic throw path today, so this test injects a throwing
-    // fake to prove the containment exists, the same way the other three
-    // handlers' round-4 tests do.
+    // setupStderrHandler had been left unwrapped. The output channel has no
+    // realistic throw path today, so this test injects a throwing fake to
+    // prove the containment exists, the same way the other three handlers'
+    // round-4 tests do.
+    //
+    // 🔴 #756: 前置が `append`（chunk 単位）から `appendLine`（行単位）へ移ったので、
+    // 注入先も移した。`append` に仕掛けたままだと**発火しなくなり、このテストは
+    // 何も検証しなくなる**（緑のまま封じ込めの退行を見逃す）。
+    // `logHandlerFailure` 自身も `appendLine` を使うため、**`ERROR: ` 行だけ**を落として
+    // 診断行は通す。
     it('contains an exception thrown inside the listener body instead of letting it escape', () => {
       const { proc, fireStderrData } = fakeChildProcess()
       const appendedLines: string[] = []
       ext.__setOutputChannelForTest({
         appendLine: (value: string) => {
+          if (value.startsWith('ERROR: ')) {
+            throw new Error('injected fault in outputChannel.appendLine')
+          }
           appendedLines.push(value)
         },
-        append: () => {
-          throw new Error('injected fault in outputChannel.append')
-        },
+        append: () => {},
       })
 
       ext.setupStderrHandler(proc)
@@ -532,6 +544,58 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
       expect(marker, appendedLines.join('\n')).toBeDefined()
       expect(marker).toContain('🛑 internal error in setupStderrHandler')
       expect(appendedLines.some((line) => line.includes('at '))).toBe(true)
+    })
+
+    // ── #756: `ERROR:` の前置は chunk 単位ではなく**行単位**でなければならない ──
+    //
+    // gated E2E の ERROR 会計（`countErrors` / `newErrorLines`）は `ERROR:` を数える。
+    // chunk 単位で前置していた頃は、1 chunk に複数行入ると 2 行目以降が**最初から見えて
+    // いなかった**（= 構造的な過小カウント＝偽緑）。
+    const collectErrorLines = (drive: (fake: FakeChildProcess) => void): string[] => {
+      const fake = fakeChildProcess()
+      const appended: string[] = []
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => appended.push(value),
+        append: () => {},
+      })
+      ext.setupStderrHandler(fake.proc)
+      drive(fake)
+      return appended.filter((line) => line.startsWith('ERROR: '))
+    }
+
+    it('prefixes every line in a multi-line chunk, not just the first', () => {
+      const lines = collectErrorLines(({ fireStderrData }) => {
+        fireStderrData('first failure\nsecond failure\n')
+      })
+      expect(lines).toEqual(['ERROR: first failure', 'ERROR: second failure'])
+    })
+
+    it('joins a line split across chunk boundaries into exactly one prefixed line', () => {
+      // 🔴 素朴な `split()` だとここで断片が独立した 2 行になり `ERROR:` が二重に付く。
+      const lines = collectErrorLines(({ fireStderrData }) => {
+        fireStderrData('a single fail')
+        fireStderrData('ure spanning chunks\n')
+      })
+      expect(lines).toEqual(['ERROR: a single failure spanning chunks'])
+    })
+
+    it('flushes a trailing line that never got a newline when stderr ends', () => {
+      // 行に整えると、改行で終わらない最後の出力が buffer に残る。過小カウントを直す変更が
+      // 逆方向に同じ穴を開けないよう `end` で吐き出す。
+      const lines = collectErrorLines(({ fireStderrData, fireStderrEnd }) => {
+        fireStderrData('no trailing newline here')
+        fireStderrEnd()
+      })
+      expect(lines).toEqual(['ERROR: no trailing newline here'])
+    })
+
+    it('does not emit a prefix for blank lines', () => {
+      // `ERROR: ` だけの行を作ると `countErrors` が水増しされる。過小カウントを直す変更が
+      // 逆に過大カウントを作ってはいけない。
+      const lines = collectErrorLines(({ fireStderrData }) => {
+        fireStderrData('real failure\n\n   \n')
+      })
+      expect(lines).toEqual(['ERROR: real failure'])
     })
   })
 

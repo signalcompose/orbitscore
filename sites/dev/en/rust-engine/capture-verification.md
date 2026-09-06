@@ -226,7 +226,7 @@ range**. On real hardware in #739 this produced six false detections. The fix is
 declared size to zero, so the analysis sees the whole of the physical bytes.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:75-82
+// tests/e2e/helpers/capture-windows.ts:88-95
 export function readCaptureForAnalysis(capturePath: string): Buffer {
   const capture = fs.readFileSync(capturePath)
   if (capture.toString('ascii', 36, 40) !== 'data') {
@@ -255,7 +255,7 @@ The awkward part is how that failure reaches the test: as a **seemingly unrelate
 as far as suspecting the capture path. The preparation is therefore folded into one function.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:58-61
+// tests/e2e/helpers/capture-windows.ts:71-74
 export function prepareCapturePath(capturePath: string): void {
   fs.mkdirSync(path.dirname(capturePath), { recursive: true })
   fs.rmSync(capturePath, { force: true })
@@ -454,7 +454,7 @@ under `rust/`, it fails before running a single test. Some directories are exclu
 walk, which the next subsection covers (#713).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:175-189
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:177-191
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -504,7 +504,7 @@ test at startup.
 So three directories, `tests` / `benches` / `examples`, were dropped from the walk.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:170-174
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:172-176
         // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
         // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {

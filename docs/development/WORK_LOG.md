@@ -17,6 +17,385 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(e2e): apply review round 1 — the ratchet was itself producing a false green (Sep 6, 2026)
+
+**ブランチ**: `761-gated-measurement`（束 PR [#776](https://github.com/signalcompose/orbitscore/pull/776)）
+
+レビューフロー ②③④。`/code:pr-review-team` フル編成 4 体と **Fable 監査を並行**起動し、
+指摘を集約 → 設計パスを 1 つ置いてから fixer（Codex）へ一括委譲した。
+
+#### 🔴 最重要: ラチェットが自分の守備範囲について嘘をついていた
+
+#761 が足したラチェットは、コメントで「変数名を `errorsBefore` 系に限定しない」と書きながら、
+正規表現は `[Bb]efore` の**直後**に演算を要求しており、実際には「**Before で終わる名前**」に
+限定されていた。対象ソースに**生きた違反が 8 箇所**あった:
+
+```
+:4562 spawnsBeforeFull.length + 1     :4569 aRestoresBeforeFull + 1
+:4573 bRestoresBeforeFull + 1         :4705 bRestoresBeforeReadd + 1
+:4961 spawnsBeforeMaster.length + 1   :5645 countErrors(log) >= errorsBeforeExpectedFailure + 1
+:5682 countLogMarker(...) - switchFailuresBefore ... .toBe(1)
+:2303 catalogErrorsAfter ... .toBe(catalogErrorsBefore)
+```
+
+すり抜け経路は 3 つ — ① Before が名前の**途中** ② **素の比較式**（matcher でない）
+③ **代数的な書き換え**（`後 − 前` を先に計算して literal と比較）。
+
+**「0 offenders」は将来の読み手に「この bug class は絶滅した」と読まれる。**
+偽緑を防ぐために足した仕組みが、**それ自身が偽緑の発生源**になっていた。
+
+**直し方**: 正規表現を広げるのではなく **TypeScript AST** で検出する形へ。3 経路を全部塞ぎ、
+ログ由来でない baseline（`stateFilesBeforeDropB` / `daemonPidsBeforeStart`）は**由来の説明つきで
+明示 allow-list**（黙って外れない）。ラチェットが赤くした 8 箇所は全部 `newLogLines` /
+`newErrorLines` へ移行した。🔴 **意味は弱めていない** — 「ちょうど 1 件増えた」は
+`newLogLines(...).filter(...).toHaveLength(1)` に対応する（main が 1 件ずつ確認）。
+
+#### ラチェットに肯定形のテストを足した
+
+従来は実コーパスへの `toEqual([])` だけ＝**否定形のみ**で、検出器が壊れても緑だった。
+`offendingLines` / AST 検出器を `entries` を引数に取る純粋関数へ切り出し、fixture で
+「複数行の違反を見つける」「コメントアウトは見つけない」「clean は空」「行番号が正しい」
+「Before が名前の途中でも・素の比較でも・代数的書き換えでも見つける」を固定（7 → 14 本）。
+
+#### `waitForQuiet` の偽緑と診断性
+
+- **偽緑**: `quietSec` ぶんのデータが無くても `true` を返した（50 ms しか無くても「300 ms 静か」）。
+  2 レビュアーが独立に指摘し、片方は実証した。`captureTailRms` が実際に読めた `durationSec` を
+  返し、**被覆するまで quiet と判定しない**形へ
+- **診断性**: `catch {}` が全例外を飲み、新しい `expect(e3Quiet).toBe(true)` は bare boolean しか
+  報告しなかった（置き換える前の `toBeLessThan` は実測 RMS を出していたので**後退**）。
+  最後の tail RMS と例外を保持し、失敗文に載せる
+- **短読み**: `readSync` の戻り値を検査（ゼロ埋め＝無音に化ける）。兄弟の `readCaptureFormat` は
+  既に検査していた非対称を解消
+
+#### 🔴 私が譲らなかった点
+
+Fable は暫定措置として **U2 を診断へ降格**（throw せず warn）を提案した。suite のフレークは
+止まるが、**測定器を黙らせて完了条件の数を合わせる**ことになる。本束の主題と正面から矛盾するので
+**採らない**。「3 → 2」のまま出し、失敗シグネチャを #775 に記録する。
+
+#### fix 差分の再点検（ラウンドを閉じる前・問い 2 つ）
+
+| 問い | 答え |
+|---|---|
+| **新しい故障モードは** | `ts.createSourceFile` は**エラー寛容**なので、対象がパースできなくなるとラチェットは**黙って無検出**になる。塞いでいるのは同じ CI job の `typecheck:e2e` であって検査自身ではない → **その依存をコメントに明記した**（step を消すなら parse 健全性の検査が要る） |
+| **どの実行コンテキストで走るか** | ラチェットは通常の `npm test`（確認済み）。**`waitForQuiet` / `captureTailRms` の新経路と移行した 8 アサーションは gated 実機のみ**で、ユニットでは触れられない → **実機で回すまでこの差分は未検証** |
+
+#### 検証（main が sandbox 外で実行）
+
+| 何 | 結果 |
+|---|---|
+| `npm test` | **2300 passed / 57 skipped**（+12） |
+| `typecheck:e2e` / eslint / `docs:check` | 0 / 0 / 968 verified 0 failed |
+| 実機 gated 全 29 件 | 別掲（下記の追記） |
+
+🔴 Codex 環境の `npm test` は `listen EPERM: 127.0.0.1` で失敗した（sandbox で localhost bind が
+不可）。CLAUDE.md の「検証を委譲先に任せない」がそのまま当てはまるので、main が回し直した。
+
+### refactor(e2e): apply the /simplify pass on the gated-measurement bundle (Sep 6, 2026)
+
+**ブランチ**: `761-gated-measurement`（束 PR [#776](https://github.com/signalcompose/orbitscore/pull/776)）
+
+束 PR のレビューフロー ①。4 エージェント（reuse / simplification / efficiency / altitude）を
+並行起動し、指摘を重複排除して適用した。
+
+#### 🔴 最重要: ラチェット自身が目的より狭かった（altitude）
+
+#761 が足した `gated-assertion-hygiene.spec.ts` のラチェットは **1 行スコープ**だった。
+撤去した違反がたまたま 1 行だっただけで、この suite の主流である複数行 `expect()` は素通りする:
+
+```ts
+expect(x, msg).toBeGreaterThanOrEqual(
+  errorsBefore + 1,
+)
+```
+
+**偽赤を防ぐために足した仕組みが、書き方を変えるだけで無効化される**状態だった。
+`offendingLines()` を追加し、**コメント行を落としてから残りを連結**して照合、一致位置から
+元の行番号を引き直す形へ。
+
+**変異で実証**: 複数行に散らした違反を注入 → **red**（`…spec.ts:3749` と正しく報告）、復元で 7 passed。
+
+#### efficiency: capture の末尾だけを読む
+
+`waitForQuiet` は 100 ms ごとに `captureTailWindows` を呼び、**capture 全体**を `readFileSync` して
+`analyzeWavBuffer` に渡していた。E3 の時点でファイルは ≈6 MiB、全フレームを 2 回走査して
+≈825 窓を作り、**末尾 ≈15 窓（2%）しか使わない**。timeout まで回ると 100 ポーリング ≈600 MB。
+
+`readCaptureFormat` と同じ `openSync` + 位置指定 `readSync` で**末尾のバイトだけ**を読む形へ
+（`captureTailRms`）。併せて**返り値を RMS の配列だけに狭めた** — 末尾だけ読むと `startSec` は
+ファイル先頭基準ではなくなるので、使われない座標を返して誤用を招くより契約を狭める。
+
+**変異で実証**: 先頭から読む → red / `tailSec` を無視して全体を解析（旧形への退行）→ red。復元で 49 passed。
+
+#### simplification
+
+- `0.005` が 2 箇所（`waitForQuiet` の floor と E3 の RMS 判定）に増え、**コメントだけで同期**して
+  いた。`E3_SILENCE_FLOOR_RMS` に括り出し、同期を約束するコメントを不要にした
+- `ReturnType<typeof fakeChildProcess>` → 既存の `FakeChildProcess` を名指し
+
+#### reuse / altitude → issue 化（束では直さない）
+
+| # | 内容 |
+|---|---|
+| **#777** | `createDaemonStderrLineRouter` に **`flush()` が無い**。#756 と同じ欠陥クラスで、**daemon が panic して改行なしで死んだ時の最後の 1 行**が落ちる。#756 の doc コメント自身が「双子はこれを持たない」と書いており、**一般化した教訓が片方にしか適用されていなかった** |
+
+`createLinePrefixer` の doc コメントに、双子の所在・同期すべき点・#777 を明記した。
+共通化は拡張パッケージが `@orbitscore/engine` に依存していないため別問題（#777 に記載）。
+
+#### 検証
+
+| 何 | 結果 |
+|---|---|
+| `npm test` | 2288 passed / 57 skipped |
+| `typecheck:e2e` / eslint / `docs:check` | 0 / 0 / 968 verified 0 failed |
+
+### fix(extension): prefix stderr per line, not per chunk (#756) (Sep 6, 2026)
+
+**ブランチ**: `756-stderr-line-prefix`（base = 束 `761-gated-measurement`） / **Part of** [#756](https://github.com/signalcompose/orbitscore/issues/756)
+
+束「gated の測定器」の 3 本目（最後）。`setupStderrHandler` は engine の stderr を
+`outputChannel.append('ERROR: ' + chunk)` と **chunk 単位**で前置していた。1 つの chunk に
+複数行入ると **2 行目以降に `ERROR:` が付かない**。
+
+gated E2E の ERROR 会計（`countErrors` / `newErrorLines`）は `ERROR:` を数えるので、
+**構造的に過小カウント**する（= 偽緑）。だから束の**最後**に置いた — 判定側（#760 / #761）を
+正しくしてから測定器そのものを直す。
+
+#### 変更
+
+`createLinePrefixer` を追加し、`setupStderrHandler` を行単位へ。
+
+| 論点 | 対処 |
+|---|---|
+| **部分行** | chunk 境界は行境界と一致しない。素朴な `split('\n')` だと行の後半が独立した行になり `ERROR:` が二重に付く → `partial` を持ち越す |
+| **終端の取りこぼし** | 行に整えると**改行で終わらない最後の出力**が buffer に残る。過小カウントを直す変更が逆方向に同じ穴を開けることになるので、`end` で `flush()` する。🔴 engine 側の `createDaemonStderrLineRouter` はここを持っていない |
+| **空行** | `ERROR: ` だけの行を作ると `countErrors` が**水増し**される。過小を直して過大を作らない |
+
+#### 🔴 既存テストの注入先を移した（移さないと黙って何も検証しなくなる）
+
+封じ込めテストは `append` を throw させて「例外が listener の外へ逃げない」ことを検査していた。
+前置が `append` → `appendLine` へ移ったので、**注入先を移さないと発火せず、テストは緑のまま
+封じ込めの退行を見逃す**。`logHandlerFailure` 自身も `appendLine` を使うため、
+**`ERROR: ` 行だけ**を落として診断行は通す精密な注入にした。
+
+#### 変異検証（実出力）
+
+| 変異 | red になったテスト |
+|---|---|
+| `partial` の持ち越しを消す | **2 本**（チャンク跨ぎの結合 / 終端 flush） |
+| `flush()` を no-op | **1 本**（末尾行の flush） |
+| 空行スキップを外す | **1 本**（空行で前置しない） |
+| 復元 | ✅ 48 passed |
+
+#### 🔴 issue 本文と実装のずれ（報告のみ・本 PR では直さない）
+
+> すぐ上の `setupStdoutHandler` は同じファイルで既に `split('\n')` して 1 行ずつ処理している。
+> **stderr 側だけがこの対処を欠いている。**
+
+**stdout も部分行をバッファリングしていない**（`extension.ts` の `setupStdoutHandler`）。
+`output.split('\n')` をチャンクごとに処理するだけなので、`{"evalMark"` などの JSON envelope が
+チャンク境界で割れると**両断片とも prefix 判定に落ちて「malformed」として捨てられる**。
+
+本 PR では**直さない** — stdout の分割挙動は bridge の dispatch（#614 で一度壊れた高リスク領域）に
+影響し、独自の E2E を伴う別作業になるため。別 issue として起票する。
+
+### fix(e2e): say which log lines appeared instead of counting them (#761) (Sep 6, 2026)
+
+**ブランチ**: `761-window-proof-assertions`（base = 束 `761-gated-measurement`） / **Part of** [#761](https://github.com/signalcompose/orbitscore/issues/761)
+
+束「gated の測定器」の 2 本目。`get_log` は**固定 500 行窓**なので、「baseline より N 件増えた」と
+いう主張は**古い行が窓から流れ出るだけで崩れる**（偽赤）。実測: 2026-09-05 に #618 E1-E6 が
+`expected 6 to be greater than or equal to 7` で落ちた。
+
+#### 直した 3 箇所
+
+| 場所 | 旧 | 新 |
+|---|---|---|
+| 6c（`:1705`） | `.toBe(attachFailedBefore + 1)` = 窓内カウントの**等価比較** | `newLogLines` の `[OUTPROC_ATTACH_FAILED]` 行が**ちょうど 1 本** |
+| #618 E4（poll） | `failedReplace.isError \|\| countErrors(after) > countErrors(before)` | ログ側だけを見る述語へ |
+| #618 E4（判定） | 同じ論理和 + シナリオ冒頭 baseline との `>= errorsBefore + 1` | ① `isError` で loud を直接 ② 増えた行で「ログにも届いた」 |
+
+🔴 **`:1705` は #760 の作業中に見つけたもの**で、既存ラチェットの正規表現が
+`errorsBefore|errorCount|countErrors` しか見ないため**すり抜けていた**。
+
+#### 🔴 先例に揃えた（推測ではなく、このリポジトリが既に採った形）
+
+同じ「存在しないプラグイン」を使う #625 の「playing effect の replace/remove」シナリオ内の
+R-E3 は、#628 の時点で
+**すでに件数比較を捨てている**:
+
+> 🔴 #628: ERROR 件数の前後比較はもう使わない。（略）判定は「B が鳴り続けているか」（音）と
+> 「child PID が変わっていないか」（プロセス）で行う。
+
+**#618 E4 だけが古い形のまま取り残されていた。**
+
+#### 🔴 poll の述語が意味を持っていなかった
+
+E4 の `waitUntil` は `failedReplace.isError || countErrors(...) > ...` を述語にしていた。
+`isError` は **poll に入る前に確定した定数**なので、真なら**ログを 1 度も待たずに**即座に抜ける。
+「失敗がログに届くのを待つ」という名前と実際の挙動が食い違っていた。
+
+#### 🔴 シナリオ全体の件数比較は「置き換え」ではなく「撤去」した
+
+`countErrors(finalLog) >= errorsBefore + 1` を `newErrorLines(baselineLog, finalLog)` へ
+単純置換するのは**誤り**。`baselineLog`（テスト冒頭）と `finalLog` は 500 行窓が重ならないので、
+**`finalLog` の全行が「新規」**になる。多重集合の差分は**窓が重なる時だけ**意味を持つ。
+E4 の直前直後という重なる区間で主張し、撤去の理由をコメントに残した。
+
+#### ラチェット（`gated-assertion-hygiene.spec.ts`）
+
+窓由来のカウント baseline に `+ N` して主張する形を機械で禁止する。
+
+- 既存の 1 本目は `GreaterThan` を含む行を**除外**するので `toBeGreaterThanOrEqual(before + 1)` を
+  捕まえられない。ここが補完
+- 変数名を `errorsBefore` 系に限定しない（`attachFailedBefore` を取り逃がした穴）
+- ⚠️ **コメント行は除外する。** アンチパターンを説明した注釈自身を拾ってしまい、
+  「正しく直したのに赤くなる」= 規律を説明できなくなる（本 PR で実際に発火した）
+
+#### 変異検証（実出力・自己申告ではない）
+
+| 変異 | 結果 |
+|---|---|
+| `.toBe(<name>Before + 1)` を再導入 | 🔴 **red**（1 failed / 6 passed） |
+| `toBeGreaterThanOrEqual(errorsBefore + 1)` を再導入 | 🔴 **red**（1 failed / 6 passed） |
+| 復元 | ✅ **7 passed** |
+
+#### 🔴 偽赤が本物の赤を隠していた — E3 の窓も直した（スコープ拡張）
+
+件数アサーションを撤去したところ、**同じ try 節の下流にあって一度も評価されていなかった**
+アサーションが初めて走り、落ちた:
+
+```
+E3 rest pattern must be silent: expected 0.1004 to be less than 0.005
+```
+
+`:3733` は `try` の中、E3 の RMS 判定群は `try/finally` の**後**。`:3733` が throw していた間、
+E3 は**到達不能**だった。**測定器が壊れていると、その下流の判定が全部見えなくなる**という、
+この束の主題そのものの実例。
+
+**`ORBIT_KEEP_CAPTURES` で WAV を残して実測**（250 ms バケット）:
+
+```
+ 4.50–16.50s  ~0.155   E1 (CLAP) → E2 (VST3)
+16.50–18.50s  0.00000  ← 休符は効いている（ちょうど 1 小節 = 2.0s @120BPM 4/4）
+18.50–22.00s  ~0.155   E4 の play(1,1,1,1) が次の小節頭で復帰
+```
+
+**実装は正しく、窓の位置だけが誤り**だった。E3 は固定 `sleep(1000)` で窓を開けるが、
+`play()` は次の小節境界で効くので 0〜2.0 秒ずれる。窓 15.50–18.00 の先頭 1.0 秒が音で、
+√(1.0 × 0.155² / 2.5) = **0.098** ≒ 実測 **0.1004** と一致する。
+
+**直し方**: `waitForSoundRestart` の段階 1（末尾が静かになるまで待つ）を **`waitForQuiet` として
+切り出し**、E3 で窓を音に追従させた（#739 と同じ規律）。戻り値そのものが「休符に切り替えたら
+無音になる」の実時間側の主張で、RMS 判定が WAV 側の主張になる。
+
+> **スコープについて**: #761 の本文は ERROR 件数の話だが、束「gated の測定器」の主題は
+> 「測定器が嘘をつく」こと。E3 も同じファイル・同じ型（固定 settle で置いた窓）であり、
+> **この束の完了条件（実機の失敗 3 → 1）が要求する**ため同じ PR で直した。
+### docs: follow PR #769 (attach failure assertion) (Sep 6, 2026)
+
+**ブランチ**: `claude/docs-sync-pr769` / **追従元 PR** [#769](https://github.com/signalcompose/orbitscore/pull/769)（PR ブランチ先端 `f5d2ef5`、束への merge commit `a646c2e7`・base は束 `761-gated-measurement` であって main ではない）
+
+PR #769 は `CHILD_STATUS_LOAD_FAILED` の doc コメントを実装へ合わせ直し、gated E2E のアンカーを
+具体的な失敗理由へ変更した。**同 PR は dev サイトの引用（行範囲と逐語ブロック）を再アンカーしたが、
+引用の周りの地の文と、誤った原因記述を持つ計画ドキュメントには触れていない。** その追従を行う。
+
+#### 直したもの
+
+| 場所 | 何を |
+|---|---|
+| `docs/planning/DEVELOPMENT_MAP.md` / `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` | 🔴 **#760 の原因記述が誤っていた**。両表とも「存在しない CLAP は **child を spawn する前に discovery で落ちる**」と書いていたが、PR #769 が一次ソースで訂正したとおり **child は spawn される**。`RackController::load_initial` がロードに失敗し、詳細を publish してから `CHILD_STATUS_LOAD_FAILED` を立てて終了する。結論（`child exited before publishing READY` に到達しない）は同じだが理由が違う。併せて #769 で対処済みであることを記録 |
+| `sites/dev/rust-engine/oop-children.md`（ja / en） | 「child-side READY handshake」節の**地の文**に `CHILD_STATUS_LOAD_FAILED` の説明が無かった。#769 で引用ブロックだけが差し替わり、読者が実際に読む散文は READY と respawn 注意しか語らない状態になっていた。load 失敗の診断経路（publish → status → daemon の Root 3-3 が watchdog signal より先に見る）と、コメントの誤りが gated E2E のアンカーの誤りを生んだ経緯を追記 |
+| 同上・`## Sources` | `transport.rs` の行範囲を `113-140,170-285` → `113-143,173-288` に更新（#769 の行ずれに追従）。#760 / #769 を出典に追加 |
+| 同上・frontmatter | `verified-against` を `69dc968` → `f5d2ef5`、`verified-at` / Note の日付を `2026-09-06` に更新。🔴 **再検証したのは READY handshake 節のみ**で、章全体を読み直したわけではない |
+
+#### 追従不要と判断したもの
+
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts` / `rust/.../transport.rs` — 前者はテストのみ、後者は
+  コメントのみの変更で、DSL 表面・MCP の引数/返り値・評価フローのいずれも変わっていない
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` / `sites/user/` /
+  `docs/user/ja/USER_MANUAL.md` — ユーザーが書く語も DSL の意味論も変わっていない
+- `docs/archive/` — 過去ログのスナップショットなので書き換えない
+
+#### 検証
+
+| 何 | 結果 |
+|---|---|
+| `npm ci` | exit 0 |
+| `npm run docs:build -w @orbitscore/user-site` | build complete（16.40s） |
+| `npm run docs:build -w @orbitscore/dev-site` | build complete（41.23s） |
+| `npm run docs:check` | **968 citation(s) verified, 0 failed**, 58 files |
+
+### fix(e2e): assert the attach failure's reason instead of a fallback wording (#760) (Sep 6, 2026)
+
+**ブランチ**: `760-attach-failure-assertion`（base = 束 `761-gated-measurement`） / **Part of** [#760](https://github.com/signalcompose/orbitscore/issues/760)
+
+束「gated の測定器」の 1 本目。実機 gated で `drives real OrbitStudio end-to-end …` が
+**`main` でも落ちていた**（2026-09-05 実測）。実装ではなく**アサーションの欠陥**である。
+
+#### 🔴 issue の原因記述が実装と食い違っていた（一次ソースで訂正）
+
+| #760 本文の記述 | 実装（読んで確認） |
+|---|---|
+| 存在しない CLAP は **child を spawn する前に** discovery で落ちる | **child は spawn される。** `RackController::load_initial`（`rust/crates/orbit-effect-rack-child/src/lib.rs`）が CLAP のロードに失敗し、**詳細を publish してから** `CHILD_STATUS_LOAD_FAILED` を立てて終了する |
+
+したがって「`child exited before publishing READY` に到達しない」という**結論は正しい**が、
+理由が違う。daemon（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs` の Root 3-3 分岐）は
+この status を early-exit の watchdog signal **より先に**見るので、汎用文言ではなく
+「index 0 の load がこう失敗した」という**具体的な理由**が上がる。
+
+**期待文言が合わなくなったのは退行ではなく、診断が具体的になったから。**
+テストが**最も具体性の低いフォールバック文言**にアンカーしていたため、エラー報告が
+改善した瞬間に落ちた。
+
+#### 直したもの
+
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` の 6c（#527 由来のロールバック確認）:
+
+| 旧 | 新 |
+|---|---|
+| `.toContain('[OUTPROC_ATTACH_FAILED] child exited before publishing READY')` の 1 本 | ① 新しい `[OUTPROC_ATTACH_FAILED]` 行が出た ② 理由が**プラグインファイルを読めなかったこと** ③ **前のチェーンが保たれた** |
+
+- **件数ではなく増えた行で語る**。`newLogLines`（#661 で main に入った）を使う。`get_log` は
+  固定 500 行窓なので、件数比較は古い行が窓から流れ出るだけで動く
+- ③ は 6c の主題（`EffectChainMap` のロールバック）そのものだが、**旧アサーションは一度も
+  見ていなかった**。文言を実装に合わせるついでに、守るべきものを足した
+- アンカーは `discovery.rs` / `controller.rs` の**ハードコード文言**。内側の
+  `No such file or directory (os error 2)` は OS の strerror で**ロケール依存**なので使わない
+- 1 本 49 秒の長いシナリオなので、🔴 **どのアサーションが何を守るか**をコメントに明記した（#760 の指示）
+
+#### 併せて: stale な doc コメントを実装に合わせた
+
+`rust/crates/orbit-audio-sandbox/src/transport.rs` の `CHILD_STATUS_LOAD_FAILED` は
+**「現状は未使用の予約値」「write 箇所なし」**と書かれたままだった（実際には rack child が
+書いている）。文末は文が壊れてもいた。**issue が原因を誤診したのはこの注釈が原因の可能性が高い**
+ので、同じ PR で直す。コメントのみで挙動は変わらない。
+
+#### 検証
+
+| 何 | 結果 |
+|---|---|
+| `npm test` | 2280 passed / 57 skipped（exit 0） |
+| `npm run typecheck:e2e` | 0 |
+| `npx eslint` / `prettier --check`（対象ファイル） | 0 / 差分なし |
+| `cargo check -p orbit-audio-sandbox` | 緑 |
+| `gated-assertion-hygiene` / `dsl-e2e-coverage` ラチェット | 緑 |
+| **実機 gated（当該シナリオ）** | ✅ **1 passed / 28 skipped**（54.5s・起動時 load 1.83 の clean な測定）。`main` で落ちていたシナリオが緑になり、実機の失敗は 3 件 → 2 件 |
+
+#### 🔴 引用 42 件が陳腐化した — 手順の欠陥
+
+行番号がずれたことで、dev 学習サイトが `orbitstudio-mcp-gated.spec.ts` と `transport.rs` を
+**行範囲で引用**している箇所が 42 件失敗した（CI の `code-review` で発覚）。
+
+**ローカルの `docs:check` は緑だったが、それは編集の「前」に走らせたもので検証になっていなかった。**
+
+- 40 件は純粋な行ずれ → `check-citations.mjs --fix` が再アンカー
+- **2 件は本文の変更**（`rust-engine/oop-children.md` の日英）。サイトが
+  `CHILD_STATUS_LOAD_FAILED` の**古いコメントを逐語引用**していたので、新しい文面へ差し替えた。
+  つまり**同じ事実誤りがサイト側にも載っていた**
+- 地の文は `LOAD_FAILED` を「未使用」と書いていないため、散文の修正は不要（grep で確認）
+
 ### docs: follow PR #744 (post-push verify hook) (Sep 6, 2026)
 
 **ブランチ**: `claude/docs-sync-pr744` / **追従元 PR** [#744](https://github.com/signalcompose/orbitscore/pull/744)（merge commit `7b93791`）
@@ -1316,331 +1695,3 @@ Older entries have been archived by month for readability:
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
 - [2026-09（前半・09-01〜09-04）](../archive/WORK_LOG_2026-09.md)
-
-## 2026-09-03: マージ後の head ブランチは自動削除（規則を owner の決定に合わせる）
-
-#702 / #704 のマージで head ブランチが消えているのに気づき owner に確認 → 「増えすぎるし後からでも
-追えるので自動で消すようにした」（owner 2026-09-03）。PROJECT_RULES の「ブランチは消さない」
-（4 箇所）・CLAUDE.md の Branch Structure・BUNDLE_BRANCH_WORKFLOW（3 箇所）を「マージ後は
-GitHub 設定で自動削除・履歴は merge commit から辿る」に訂正。統合ブランチも束 PR のマージ後に
-消えてよい（自動削除はマージ後にしか動かないので、小 PR の base が途中で消えることはない）。
-
-## 2026-09-03: PR #704 の追従監査（ドキュメント変更なし・指摘 3 件）
-
-ルーチン「マージ済み PR にドキュメントとサイトを追従させる」を PR #704（`703-bundle-branch-workflow`
-→ main・merge commit `3fa1150`）に対して実行。**追従すべきドキュメント変更は 0 件**。
-
-- 差分 6 ファイルはすべて規約文書と CI 定義（`CLAUDE.md` / `docs/core/PROJECT_RULES.md` /
-  `docs/development/BUNDLE_BRANCH_WORKFLOW.md` / `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` /
-  `docs/development/WORK_LOG.md` / `.github/workflows/claude-code-review.yml`）で、
-  `packages/engine/` `rust/` `packages/vscode-extension/` に変更が無い。DSL の構文・意味論、
-  MCP ツールの契約、OrbitStudio の評価経路のいずれも変わっていないので、
-  `docs/specs-v2/` `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` `sites/user/` `sites/dev/` は追従不要
-- `squash` → `merge commit` の訂正は差分内で完結している（リポジトリ全体を grep して、
-  規約文書に旧記述の残りは無い。`sites/dev/en/signal-chain/index.md:1230` の "squashed" は
-  信号処理の記述で無関係）
-
-**追従できていない点として PR で報告した 3 件**（本ルーチンでは直さない）:
-
-1. `CLAUDE.md:301` と `docs/development/BUNDLE_BRANCH_WORKFLOW.md:70` が小 PR のゲートで
-   `ORBIT_GATED_ONLY` を既存の仕組みとして参照しているが、実装が無い。
-   実在するのは `ORBIT_GATED_ORBITSTUDIO`（`tests/e2e/orbitstudio-mcp-gated.spec.ts:59`）で
-   suite 全体の on/off。`ORBIT_GATED_ONLY` は `docs/design/668-e2e-foundation-design.md:891`
-   の決定 D-4（未実装）
-2. `.github/workflows/claude-code-review.yml` の最終実行は 2026-06-17（run #278）。
-   今回足した `if: github.base_ref == 'main'` の効果を Actions で観測できない
-3. PR #704 は最終 head `7f53a5d` の CI 完了を待たずにマージされている
-   （CI 開始 10:29:37Z / マージ 10:29:39Z）。赤ではないが、マージ時点では未検証
-
-## 2026-09-03: 束ブランチ運用の採用（#703）
-
-owner との相談（PR #702 セッション）で、レビューの単位を PR から**束**へ変更。小 PR は束の
-統合ブランチへ軽いゲート（CI + その PR が足した E2E を実機で + 目視）で入れ、統合ブランチ → main の
-束 PR で `/simplify` → `/code:pr-review-team` + Fable → 実機 E2E 全件を 1 回だけ回す。
-手引きは `docs/development/BUNDLE_BRANCH_WORKFLOW.md`（PR #702）。
-
-| ファイル | 変更 |
-|---|---|
-| `CLAUDE.md` | 「PR レビューワークフロー」に「レビューの単位は束」節を追加。マージ前ゲートの対象・禁止事項 2 件・Branch Structure・Quick Workflow |
-| `docs/core/PROJECT_RULES.md` | 「Git Workflow and Branch Protection」に統合ブランチと束の手順表・`Part of #N` / `Closes #N` の使い分け |
-| `.github/workflows/claude-code-review.yml` | ジョブに `if: github.base_ref == 'main'`。bot レビューは束 PR だけ。`code-review.yml`（テスト CI）は触らない |
-| `PROJECT_RULES.md`「Merging PRs」ほか | 🔴 **squash はリポジトリ設定で禁止**（#702 のマージで API が 405 "Squash merges are not allowed" を返した。main の履歴も merge commit）。旧記述の `--squash` を `--merge` に訂正し、束ブランチ運用の文書も merge commit 前提に統一 |
-
-## 2026-09-03: 出口・レンダ宛先・コア境界の裁定を地図と issue に同期
-
-**背景**: 地図 §9 の未決約 40 件を「owner が決めるもの / 調べれば分かるもの」に分けたところ、
-出口まわりの数件がその場で裁定された。
-
-**owner 裁定**:
-
-1. **同じ宛先へ 2 回 `output` = 合算**。正確には「**解決後の宛先**が同じなら合算」
-2. **master は終端ではなく単にアウト先の 1 つ** — `output(master, thru).output("3,4")` で
-   master を 3/4 でモニターできる。🔴 **「終端」という概念が無い**ので、地図 §9 の
-   「master ラインの終端の書き方」は**問い自体が消滅**
-3. **render の宛先 = エンドポイント宣言**（`var stem = mix.render("stems/%n_%v.wav")`）。
-   トラック別は **`%n` テンプレート**で宣言 1 行に畳む
-4. **「コア」は先に定義しない。境界を引いた残りがコア**（#672 が「定義待ち」で止まらなくなった）
-5. **入力系は今はやらない。** ただし「入力とは instrument が Audio I/O のインプットに
-   なっただけ」= 新しい受け手を作らない、という置き場所は決着
-6. **ログは ① 出力（#694）→ ② 本当にリプレイできるか確認（#241）→ ③ オフラインレンダ（#598）** の順
-
-**main の誤りと訂正**:
-
-- 「`send(` を使う譜面が 0 本だから移行不要」と書いた。owner 訂正:
-  **「実装と実際の利用は関係ない」**。仕様が線形と定めている以上 dB へ直すのは実装の仕事で、
-  既存資産の有無とは無関係。地図 §9 の「B の移行の手当て」は**未決ではなく作業**に降格
-- (c)（エンドポイント宣言）を推した時、**トラック 30 本なら宣言 30 行**になる後退を見落として
-  いた。owner の指摘で `%n` テンプレートに至った
-
-**コードで確認したこと**: `%n` は実装可能。シーケンスは変数への代入時に名前を受け取る
-（`packages/engine/src/core/sequence.ts:197-200` の `setName` → `stateManager.setName` +
-`global.registerSequence`）。エラー文言も既にそれを使う（同 :354）。追加の記法は要らない。
-
-**記録先**: 地図（§1・§1b.3・§4.A.3.1 新設・§9・§10）と issue #611 / #598 / #672 / #409 /
-#679 / #694 の 6 本。issue 側には**実装チェックリストへの追加分**も書いた。
-
-### 追記: 地図がリンクする open issue 70 本にチェックリストを充填（同日）
-
-owner 指示:
-
-> 地図でリンクしてる ISSUE に実装チェックリストを作って、実装時にちゃんと終わってるか、
-> **終わってなければ理由は何か（変更になった、いらなくなったなど）をトラッキングできる**ように
-
-6 班（sonnet subagent）に領域ごとに並行委譲。**39 本は同日早い時間に投稿済みだったため
-重複を避け、残りに新規投稿**した。`PROJECT_RULES.md` §1d の書式に統一。
-
-🔴 **変異検証はどのチェックリストにも既定で入れていない**（owner 2026-09-03 の投資順位:
-① 仕様 → ② MCP 経由の E2E → ③ 機能テスト → ④ 変異検証は最後の手段）。
-
-**エージェントが見つけた実質的な問題**（すべて地図 §9 に記録）:
-
-| 発見 | 中身 |
-|---|---|
-| **移管先が宙に浮いている** | #474 の cmd+click は 2026-08-28 に #633 へ移管された記録があるが、**#633 マージ後もコード上は未実装**（grep 0 件）。移管したまま誰も持っていない |
-| **地図と issue の食い違い** | #138 の吸収先 — 地図 §6.1 は「#656 へ」、#138 自身の棚卸しコメントは「#659 と統合が自然」。どちらも根拠つき |
-| **枝番号の不整合** | #484 の「D4」が **issue 本文に一度も登場しない**（2026-07-26 指摘・未解決） |
-| **本文が SC 時代のまま** | #213 の実装計画が SuperCollider 前提で、地図 §1「SC 退役」と矛盾 |
-| **本文が古い** | #546 Phase 3 の復元側は本文が「読むコードが 1 行もない」のままだが、実際は完了済み |
-| **未実装の確定** | `ORBIT_OUTPUT_BUFFER_FRAMES`（#368）は grep で未実装と確認 |
-
-## 同日の追加裁定（本コミットに含む）
-
-- 🔴 **ICLC には出さない**（owner）。藝大不採択の retarget 先が消え、**本番トラックから
-  締切が無くなった** → 開発の順序は**地図 §3 のリリース道筋が唯一**になる
-- 🔴 **WCTM の開発はこのリポジトリでやらない**（owner）。作品開発は WCTM 側セッションが持ち、
-  必要な機能は**そこから機能要望として降りてくる** → 降りてきたら**普通の機能 issue** として
-  扱う（「研究トラック」という別枠に入れない）。地図 §4.M の見出しを
-  「研究・作品トラック（🔴 このリポジトリでは進めない）」へ変更
-
-## 2026-09-03: 死んだ `.env.example` を削除（#708）
-
-**実害**: sandbox 内でフック付きコミットが**必ず失敗**していた。
-
-```
-[FAILED] error: lstat(".env.example"): Operation not permitted
-  ✖ lint-staged failed due to a git error.
-```
-
-Claude Code の sandbox は `./.env*` の読み取りを拒否する（秘密の保護）。`lint-staged` は
-コミット前に `git stash` するので、`.env.example` を lstat した時点で落ちる。
-🔴 **エラーが「git error」としか出ないため lint の失敗と紛らわしく**、本日の PR-E1 でも
-原因調査に時間を使った。
-
-**なぜあったか**: `9a7a7bae`（2025-10-26）で BFG により `.env` を履歴から削除した際、
-テンプレートとして作られた。**その後、参照する仕組みが消えていた**:
-
-| 確認 | 結果 |
-|---|---|
-| 中身 | Slack 通知用 env 4 個 |
-| その env を読むコード | **0 件** |
-| `.env` を読み込む仕組み | **`dotenv` 依存なし。何も読んでいない** |
-| Slack 連携の実体 | **無い**（`slack` のヒットは SuperCollider の vendor と英単語のみ） |
-
-**残した注意点**: `.gitignore` の `!.env.example` / `!.env.sample` / `!.env.template` は
-**外部ツール管理ブロック**（`[code:security-patterns:fbe2794b]`・生成元はリポジトリ内に無い）
-なので触っていない。したがって**将来 `.env.example` を再び置くと同じ問題が再発する**。
-
-## 2026-09-03: stale ガードが再ビルド不能なファイルで発火していた（#713）
-
-**実害**: 🔴 **実機 gated E2E が起動段階で全部落ちる。しかもガードが指示する対処では解消しない。**
-
-```
-Error: gated E2E: the daemon binary is older than the Rust sources, so this run would measure stale code.
-  newest source: rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs
-  binary:        2026-09-02T02:05:35.862Z
-  source:        2026-09-03T00:53:01.573Z
-```
-
-指示どおり `npm run test:e2e:gated` を回しても `pretest` の cargo は
-`Finished release profile in 0.21s` で**何もビルドしない**。当然で、そのファイルは
-`orbit-vst3-host` の**統合テストターゲット**であり、`orbit-audio-daemon` のバイナリの
-依存グラフに入っていない。**バイナリの mtime は永久に更新されず、ガードは永久に赤。**
-
-**なぜ今まで出なかったか**: mtime は **`git checkout` で現在時刻に更新される**。
-ブランチを行き来すると無関係な Rust ファイルが「最新のソース」になる。
-
-**修正**（`assertDaemonBinaryIsNotStale`）: 走査から **`tests` / `benches` / `examples`** を除外。
-別の cargo ターゲットなので daemon バイナリに入らない。⚠️ **`src/` は除外しない** —
-daemon が依存するコードが新しければ、ガードは本来の役目どおり赤くなるべきである。
-
-**仕組みで守る**（規律を文章で持たない）: `gated-assertion-hygiene.spec.ts` に検査 2 本。
-
-| 検査 | red になる条件 |
-|---|---|
-| 除外の維持 | `tests` / `benches` / `examples` の除外が消えたら |
-| **行きすぎの防止** | **`src` まで除外したら**（ガードの目的自体が失われる） |
-
-**変異で両方向を確認した**（実出力）:
-
-```
-変異A: 除外を消す        → × keeps the stale guard off cargo targets it can never rebuild
-変異B: src も除外する    → × still lets the stale guard see the sources the daemon is built from
-restore 後              → Tests  5 passed (5)   ／ cmp で復元一致を確認
-```
-
-### 🔴 副産物: 実機 gated は現在 main で 11 件が意図的に red
-
-ガードを直して初めて中身が走り、**20 件中 9 passed / 11 failed** だと分かった。
-これは**退行ではなく、修正より先に書かれたテスト**である（一次情報:
-`docs/design/649-audio-line-design.md` §B-0「**E2E-1 を先に書いて red 固定**」)。
-修正は**段 1**（PR-O2 / #649・plan §3「段 1 の結果: `global.gain(-6)` が instrument に効く」）。
-
-**したがって段 0 の小 PR のゲートは「実機 gated 全通し」にできない。**
-正しい判定は **「失敗集合が before/after で同一」**（新しい失敗を作っていない）。
-baseline（main + 本修正・2026-09-03 実測）:
-
-```
-#643 E2E-1〜E2E-7（7 件）
-auto-records and restores all five plugin receiver kinds across a restart without explicit saves
-drives real OrbitStudio end-to-end: diagnostics-on-open, run_selection, live edit, capture verification
-replaces a playing instrument across CLAP/VST3 ... (#618 E1-E6)
-steps the live playhead through an instrument() sequence, rests included
-```
-
-E2E-2 / E2E-3 の dry RMS が **ちょうど 0**、E2E-1 の比が **1.27**（gain が効いていない値）
-という内容も、段 1 が直す欠陥と一致している。
-
-## 2026-09-03: #713 のガード変更に dev 学習サイトを追従させた（docs のみ）
-
-**対象**: PR [#714](https://github.com/signalcompose/orbitscore/pull/714)（merge commit `f006a51`）。
-コード・テストは一切変更していない。
-
-PR #714 は引用のアンカー（`// FILE:START-END` 形式の見出し行）を直したが、**引用を囲む本文**と
-`## Sources` の行範囲は旧状態のままだった。`docs:check` は前者しか検査しないので、後者は
-red にならずに残った。この 2 種を追従させた。
-
-**本文の乖離 2 件**（どちらも #714 で挙動が変わった箇所を古い説明のまま記述していた）:
-
-| 場所 | 旧記述 | 実態 |
-|---|---|---|
-| `sites/dev/rust-engine/capture-verification.md` / `sites/dev/editor/mcp-and-gated-e2e.md` | ガードは `rust/**/*.rs` \| `Cargo.toml` を走査 | `tests` / `benches` / `examples` を除外する（#713） |
-| `sites/dev/editor/mcp-and-gated-e2e.md` | 「残り **2 本**」（アサーション衛生は 3 本） | #713 で 2 本増えて **5 本** |
-
-両章に #713 の節を足した。走査除外の理由（別 cargo ターゲットなので daemon バイナリに入らない・
-`git checkout` が mtime を動かすので解消不能な赤になる）と、`src/` を除外しない理由、
-`gated-assertion-hygiene.spec.ts` の 2 本が両方向を留めていることを書いた。
-ja / en 両方（STYLE_GUIDE のバイリンガル必須）。
-
-**`## Sources` の行範囲**: ガードが 15 行伸びたので、`orbitstudio-mcp-gated.spec.ts` の
-128 行目以降を指す参照はすべて +15 ずれていた。6 章 × ja/en で 12 ファイル分を直した
-（`78-152` → `78-166`、`1434-1468` → `1449-1483` など）。境界行は実ファイルで確認済み。
-
-**frontmatter**: 本文を実質的に足した 2 章（RE-4 / IV-3）の `verified-against` を
-`69dc968` → `f006a51`、`verified-at` を `2026-09-03` に更新した（STYLE_GUIDE
-「章本文を実質的に書き直したとき: 必ず最新 commit に更新する」）。
-
-### 追従の過程で見えた、直していない点
-
-このセッションでは**指摘のみ**（テスト・実装は変更しない方針のため）。詳細は PR 本文。
-
-1. `tests/e2e/gated-assertion-hygiene.spec.ts:76-83` / `:89-93` は gated spec の**ソース文字列**を
-   正規表現で見るだけなので、「除外ブロックを `walk(full)` の**後ろ**へ動かす」変異
-   （除外が到達不能になり #713 の赤が戻る）で **2 本とも緑のまま**になる
-2. 同 `:77` は式の**字面**に依存するので、`Set` へ畳む等の挙動不変なリファクタで red になる
-3. `assertDaemonBinaryIsNotStale()` は `tests/e2e/orbitstudio-mcp-gated.spec.ts:164-166` の
-   `gated && appAvailable` の下でしか呼ばれない。CI は全ジョブ非 gated なので、
-   #713 で足した 15 行は**どこでも 1 行も実行されていない**
-
-## 2026-09-03: PR #700 のドキュメント追従（ICLC 取り下げ / WCTM の持ち先 / §10 の表崩れ）
-
-**追従元**: PR [#700](https://github.com/signalcompose/orbitscore/pull/700)（マージコミット `ca176f0`・head `f5b16d8`）。
-docs のみの変更で、`CLAUDE.md` の本番トラック注記・`docs/planning/DEVELOPMENT_MAP.md`・本 WORK_LOG を更新していた。
-
-**#700 が `CLAUDE.md` にしか書かなかったため、同じ注記を持つ他のドキュメントが古いまま残っていた:**
-
-| ファイル | 何が古かったか |
-|---|---|
-| `docs/core/INDEX.md:39` | 「本番トラックは ICLC への proposal 提出方向へ retarget（年次・提出日・提出形態はいずれも要確認）」 |
-| `docs/core/INDEX.md:207` | 同じ retarget 注記（WCTM 調査群の凍結セクション） |
-| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:18` | 「ICLC 提出方向へ retarget（年次・提出日・形態は要確認）」 |
-| `sites/dev/decisions/adr-001-supercollider.md:267` / `:314`（+ `en` 対訳） | 「Consequences revisited」の 3. 学術的文脈が ICLC retarget で止まっていた |
-
-いずれも **ICLC 取り下げ（owner 2026-09-03）・本番トラックに締切が無い・WCTM 本体の開発は本リポジトリで進めない**
-の 3 点へ書き換えた。`sites/dev` は日英両方を更新（STYLE_GUIDE のバイリンガル必須）。
-
-**#700 が入れた表崩れも直した**: `DEVELOPMENT_MAP.md` §10 で、追記の箇条書きと更新履歴テーブルのヘッダ行の間に
-空行が無く、GFM ではテーブルがリスト項目の遅延継続として吸われて**描画されない**状態だった
-（`docs/planning/DEVELOPMENT_MAP.md:1463-1464`）。空行を 1 行入れただけで、本文は変えていない。
-
-**追従しなかったもの**: #700 が記録した出口・レンダ宛先・`%n` テンプレートの裁定は、地図自身が
-「spec への反映は §6.2 の改訂候補（owner 裁定で行う）」と書いているため `docs/specs-v2/` と
-`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` へは**反映していない**（実装も未着手で、DSL 表面は変わっていない）。
-
-
-## 2026-09-03: PR #709 追従 — 失効した landmine 記述を更新
-
-PR #709（`7d2df31`・上記 #708）で `.env.example` を削除した結果、
-`docs/development/POST_2.0_VST3_HOSTING_PLAN.md:256` の landmine 記述が**失効した**。
-
-| | 内容 |
-|---|---|
-| 旧記述 | 「`.env.example` は sandbox read-deny → `git diff` が誤って削除表示。`git status --short` が権威」 |
-| なぜ失効か | ファイルが実在しなくなったため、この誤検知は起きない |
-| 🔴 なぜ放置できないか | **実際に削除された今、この記述は「`.env.example` の削除表示は無視してよい」と読める** — 真の削除を sandbox の誤検知と取り違えさせる |
-
-取り消し線で旧記述を残したうえで、解消済みであることと、`.gitignore:55-57` の
-un-ignore 行が残っているため**再設置すると再発する**ことを追記した。
-
-**追従不要と判断した層**（PR #709 の差分は `.env.example` 削除と WORK_LOG 追記のみ）:
-
-| 層 | 判断 |
-|---|---|
-| DSL/言語仕様（`packages/engine/`） | 差分に含まれない。構文・意味論・`.orbslog` 形式に変化なし |
-| ランタイム/MCP（`rust/`） | 差分に含まれない。MCP ツールの引数・返り値・エラー挙動に変化なし |
-| OrbitStudio（`packages/vscode-extension/`） | 差分に含まれない。評価フロー・診断・補完に変化なし |
-| `sites/user/` `sites/dev/` | 削除したファイルを参照する記述は 0 件（repo 全体 grep で確認） |
-
-## 2026-09-04: ルーティンのドキュメント追従 PR を溜めない規則（#718）
-
-**実害**: ルーティンが出したドキュメント追従 PR **9 本のうち 8 本が衝突**し、1 本ずつ手で解決した。
-
-| PR | 結果 |
-|---|---|
-| #716 / #717 | **出てすぐ入れた → clean** |
-| #688 / #691 / #698 / #701 / #705 / #710 / #711 | **溜めた → 全部衝突** |
-
-**原因**: ルーティン PR の差分は**「追従した時点の main」に対して計算されている**。その後 main に
-入る 1 コミットごとに陳腐化する。待たせている間に #709 / #714 / #716 と束の追従が入り、
-`WORK_LOG` の追記位置・`INDEX` の項目・各ドキュメントの **`## Sources` の行範囲**と
-**引用のアンカー**が全部ずれた。
-
-🔴 **片側を捨てると情報が落ちる**ので、機械的な解決ができない。実例:
-
-- **#688**: 「archive パスへの修正」（PR 側）と「ICLC 取り下げの追記」（main 側）が**同じ行**で衝突。
-  両方が正しいので、パスは PR 側・文末は main 側を採った
-- **#711**: `## Sources` は束側が最新だったが、`helpers/rack-child-pid.ts` の行は PR 側にしか無かった
-
-**規則**（owner 合意）:
-
-1. main に何かをマージしたら、**ルーティン PR が出た時点でその場で入れる**
-2. 遅くとも **統合ブランチを main から切る前**に全部消化する
-3. 🔴 **base の選び方**: 追従先のファイルが**束にしか無い**なら base は **統合ブランチ**にする。
-   main を base にすると引用が実ファイルを指せず `docs:check` が落ちる（#711 が実際その状態だった。
-   #717 はルーティン自身が正しく束を base にしていた）
-
-**止めない理由**: 🔴 **ルーティンは機械が見ていない層を見ている。** `docs:check` は**引用のアンカー
-しか検査せず**、引用を囲む**本文**と **`## Sources` の行範囲**は検査しない。#716 はまさにそこを
-検出した（#714 でガードの走査範囲を変えたのに、本文は「`rust/**/*.rs` を走査」のまま）。
-
-**自動マージにもしない**: #688 の本文には事実誤認があった（「vitest を回す CI チェックは 1 本も
-存在しない」— 実際は `code-review.yml:26` が `npm test` を実行している）。人が読む前提は変えない。

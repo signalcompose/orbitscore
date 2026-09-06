@@ -522,7 +522,7 @@ scsynth の resolver は `explicit > env > bundle > throw`、daemon の resolver
 事前チェックは [III-3](/audio/scsynth-bundle#engine-kind-で呼び出しそのものが-gate-される) に引用したので、ここでは引数と env の組み立てから spawn までを読みます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2118-2131
+// packages/vscode-extension/src/extension.ts:2186-2199
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -542,7 +542,7 @@ scsynth の resolver は `explicit > env > bundle > throw`、daemon の resolver
 engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動され、出力デバイスは `--audio-device` 引数で渡されます (`orbitscore.audioDevice` 設定が優先、無ければ `.orbitscore.json`)。`__default__` は「OS の既定出力」を意味する番兵です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2149-2171
+// packages/vscode-extension/src/extension.ts:2217-2239
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
@@ -573,7 +573,7 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
 `stdio: ['pipe', 'pipe', 'pipe']` が重要です。stdin/stdout/stderr をすべて pipe にすることで、Extension Host から直接 write/read できます。spawn 直後にはハンドラを 5 本付け、`process.nextTick` を 1 回またいでから「まだ同じプロセスが生きているか」を確認します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2186-2197
+// packages/vscode-extension/src/extension.ts:2254-2265
   // Setup handlers
   setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
@@ -606,7 +606,7 @@ Extension Host と engine プロセスの通信は **stdin/stdout パイプ** �
 送信部分は editor の Run Selection と MCP の `evaluate_orbitscore` が共有する `writeCodeToEngine()` に集約されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3026-3058
+// packages/vscode-extension/src/extension.ts:3094-3126
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -716,7 +716,7 @@ export function transportStatusText(state: TransportState, debugMode: boolean): 
 `stopEngine()` は SIGTERM → (2 秒後) SIGKILL という 2 段階のシャットダウンを行います。2026-05 と比べると、bridge の drain と playhead のクリアが増え、SIGKILL の条件が直っています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2211-2259
+// packages/vscode-extension/src/extension.ts:2279-2327
 export function stopEngine(): boolean {
   engineGeneration += 1
   if (engineProcess && !engineProcess.killed) {

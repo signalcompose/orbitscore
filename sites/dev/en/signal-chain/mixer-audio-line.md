@@ -796,7 +796,7 @@ is the root of the mean of the squared RMS of each window inside it, with a guar
 seconds) trimmed from both ends of the segment to exclude transitions.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:293-298
+// tests/e2e/helpers/capture-windows.ts:411-416
 export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
   if (windows.length === 0) throw new Error('quadraticMeanRms requires at least one window')
   return Math.sqrt(
@@ -809,7 +809,7 @@ E2E-1 takes one segment at `global.gain(0)`, evaluates `global.gain(-6)`, takes 
 requires the ratio to fall within 0.45–0.55 ($10^{-6/20} \approx 0.501$).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1732-1768
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1771-1807
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -871,7 +871,7 @@ E2E-4 is the sum + aux path. It switches between dry (no bus) and an instrument 
 (theoretical 1.5) (`1585-1592`). The DSL part is quoted.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1872-1891
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1911-1930
         [
           'var global = init GLOBAL',
           'global.key("C")',

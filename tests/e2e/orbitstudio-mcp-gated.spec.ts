@@ -71,7 +71,9 @@ import {
   readCaptureForAnalysis,
   steadyRms,
   waitForSound,
+  waitForQuiet,
   type CaptureSegment,
+  type WaitForQuietDiagnostics,
   makeAwaitSoundRestart,
 } from './helpers/capture-windows'
 import { captureWavPath, createGatedSession, type GatedCatalog } from './helpers/gated-session'
@@ -502,8 +504,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   let catalogVst3EffectName: string | undefined
   let catalogRescanResult: CatalogRescanResult | undefined
   let catalogPlugins: CatalogPluginEntry[] | undefined
-  let catalogErrorsBefore: number | undefined
-  let catalogErrorsAfter: number | undefined
+  let catalogLogBefore: string | undefined
+  let catalogLogAfter: string | undefined
   let brokenCatalogPath: string | undefined
 
   /**
@@ -974,7 +976,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // names everywhere. Exact path + format + role makes a missing or ambiguous
       // fixture a loud setup failure instead of inventing a catalog name here.
       const beforeCatalogLog = (await client.call('get_log', { lines: 500 })).text
-      catalogErrorsBefore = (beforeCatalogLog.match(/ERROR:/g) ?? []).length
+      catalogLogBefore = beforeCatalogLog
       const rescanCatalog = await client.call('rescan_plugins')
       expect(rescanCatalog.isError, rescanCatalog.text).toBe(false)
       catalogRescanResult = JSON.parse(rescanCatalog.text) as CatalogRescanResult
@@ -1054,7 +1056,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       catalogVst3SynthName = vst3SynthEntry!.name
       catalogVst3EffectName = vst3EffectEntry!.name
       const afterCatalogLog = (await client.call('get_log', { lines: 500 })).text
-      catalogErrorsAfter = (afterCatalogLog.match(/ERROR:/g) ?? []).length
+      catalogLogAfter = afterCatalogLog
       const catalog = requireCatalogFixtures()
 
       // ── 3. start_engine with capture_wav, wait for it to come up ──
@@ -1626,8 +1628,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // for this half, since resolvePluginSpec doesn't check fs existence for
       // path-direct specs (only the async out-of-process attach can fail).
       const beforeEffectFailLog = (await client.call('get_log', { lines: 500 })).text
-      const attachFailedBefore = (beforeEffectFailLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? [])
-        .length
 
       const badEffectRes = await client.call('evaluate_orbitscore', {
         code: 'global.effect("nonexistent-plugin.clap")',
@@ -1641,10 +1641,44 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       await sleep(6000) // real out-of-process attach attempt, then failure
 
       const afterEffectFailLog = (await client.call('get_log', { lines: 500 })).text
+      // 🔴 このアサーションが何を守るか（#760 で実装に合わせ直した）。1 本 49 秒の長い
+      // シナリオなので、守備範囲をここに明記しておく:
+      //   (1) 失敗が**ユーザーに届く** — 新しい `[OUTPROC_ATTACH_FAILED]` 行が出る
+      //   (2) 届いた理由が**プラグインファイルを読めなかったこと**である。「何か attach に
+      //       失敗した」だけだと role 不一致・timeout・child の早期死でも緑になり、この
+      //       フィクスチャが何を再現しているのか分からなくなる
+      //   (3) **前のチェーンが保たれた** — 6c の主題である EffectChainMap のロールバック。
+      //       旧アサーションはここを一度も見ていなかった
+      //
+      // ⚠️ 旧アサーションは `[OUTPROC_ATTACH_FAILED] child exited before publishing READY` を
+      // 期待していたが、このフィクスチャでは**到達しない**。child は spawn されており、CLAP の
+      // ロードに失敗すると詳細を publish してから `CHILD_STATUS_LOAD_FAILED` を立てて終了する
+      // (`orbit-effect-rack-child/src/lib.rs` の `RackController::load_initial`)。daemon は
+      // 汎用の early-exit 文言より**その具体的な詳細を優先**する (`engine_wrap.rs` の Root 3-3)。
+      // つまり期待文言が合わなくなったのは実装の退行ではなく、**診断が具体的になったから**。
+      // 汎用の early-exit 経路を測りたいなら、ロードには成功して READY 前に死ぬ child が要る
+      // (`rust/crates/orbit-audio-daemon/tests/fixtures/lib/` のスクリプト child 等)。
+      //
+      // 件数ではなく**増えた行**で語る: `get_log` は固定 500 行窓なので、件数比較は古い行が
+      // 窓から流れ出るだけで動く。
+      const newAttachFailureLines = newLogLines(beforeEffectFailLog, afterEffectFailLog).filter(
+        (line) => line.includes('[OUTPROC_ATTACH_FAILED]'),
+      )
       expect(
-        afterEffectFailLog,
-        `expected an OUTPROC_ATTACH_FAILED error, got log tail: ${afterEffectFailLog.slice(-800)}`,
-      ).toContain('[OUTPROC_ATTACH_FAILED] child exited before publishing READY')
+        newAttachFailureLines,
+        `expected a new OUTPROC_ATTACH_FAILED line, got log tail: ${afterEffectFailLog.slice(-800)}`,
+      ).not.toHaveLength(0)
+      expect(
+        newAttachFailureLines.filter(
+          (line) =>
+            line.includes('effect chain apply failed at index 0') &&
+            // `discovery.rs` / `controller.rs` のハードコード文言。内側の `No such file or
+            // directory (os error 2)` は OS の strerror でロケール依存なのでアンカーにしない。
+            line.includes('プラグインファイルのロードに失敗') &&
+            line.includes('the previous chain is kept'),
+        ),
+        `the deliberate failure must name the unreadable plugin file at rack index 0 and keep the previous chain, got: ${JSON.stringify(newAttachFailureLines, null, 2)}`,
+      ).not.toHaveLength(0)
 
       // Engine survives: a normal statement right after the failure must still
       // be accepted, and must not add a NEW attach failure of its own.
@@ -1658,17 +1692,22 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(JSON.parse(engineStateAfterFailure.text).running).toBe(true)
 
       const afterRecoveryLog = (await client.call('get_log', { lines: 500 })).text
-      const attachFailedAfterRecovery = (afterRecoveryLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? [])
-        .length
-      // Exactly one NEW attach failure (the deliberate one above) — the
-      // recovery statement must not add another.
-      const attachFailureLines = afterRecoveryLog
-        .split('\n')
-        .filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]'))
+      // Exactly one NEW attach failure (the deliberate one above) — the recovery
+      // statement must not add another.
+      //
+      // 🔴 #761: ここは `.toBe(attachFailedBefore + 1)` という**窓内カウントの等価比較**
+      // だった。`get_log` は固定 500 行窓なので、古い行が窓から流れ出るだけで件数は動く。
+      // 「何件になったか」ではなく「**どの行が増えたか**」で語れば窓のずれに影響されず、
+      // 「増えたのはちょうど 1 本」という同じ主張がそのまま書ける。
+      const newAttachFailuresAfterRecovery = newLogLines(
+        beforeEffectFailLog,
+        afterRecoveryLog,
+      ).filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]'))
       expect(
-        attachFailedAfterRecovery,
-        `attach-failure lines in window: ${JSON.stringify(attachFailureLines, null, 2)}`,
-      ).toBe(attachFailedBefore + 1)
+        newAttachFailuresAfterRecovery,
+        'the deliberate failure must be the only new attach failure; the recovery statement ' +
+          'must not add one of its own',
+      ).toHaveLength(1)
 
       // ── 6d. #521/#517 S3 regression guard: the mixer/routing DSL (bus-name
       // chain methods — mix.output/sum/aux, `.verb(0.3)` send, `.drums` sum
@@ -2205,12 +2244,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(catalogRescanResult, 'main gated phase must retain the rescan result').toBeDefined()
       expect(catalogPlugins, 'main gated phase must retain the catalog listing').toBeDefined()
       expect(
-        catalogErrorsBefore,
-        'main gated phase must retain the pre-rescan error count',
+        catalogLogBefore,
+        'main gated phase must retain the pre-rescan log window',
       ).toBeDefined()
       expect(
-        catalogErrorsAfter,
-        'main gated phase must retain the post-rescan error count',
+        catalogLogAfter,
+        'main gated phase must retain the post-rescan log window',
       ).toBeDefined()
       expect(
         brokenCatalogPath,
@@ -2220,8 +2259,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         !client ||
         !catalogRescanResult ||
         !catalogPlugins ||
-        catalogErrorsBefore === undefined ||
-        catalogErrorsAfter === undefined ||
+        catalogLogBefore === undefined ||
+        catalogLogAfter === undefined ||
         !brokenCatalogPath
       ) {
         throw new Error('main gated phase did not initialize catalog fixture state')
@@ -2262,9 +2301,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           }),
         ]),
       )
-      expect(catalogErrorsAfter, 'catalog rescan must add no ERROR: lines').toBe(
-        catalogErrorsBefore,
-      )
+      expect(
+        newErrorLines(catalogLogBefore, catalogLogAfter),
+        'catalog rescan must add no ERROR: lines',
+      ).toEqual([])
     },
     TEST_TIMEOUT_MS,
   )
@@ -3477,6 +3517,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     TEST_TIMEOUT_MS * 2,
   )
 
+  /**
+   * E3（休符パターン）を「無音」と見なす RMS の上限。
+   *
+   * 🔴 実時間側（`waitForQuiet` の `floor`）と WAV 側（`e3Rms` の判定）で**同じ値でなければ
+   * ならない**。違うと「静かと判定して窓を開けたのに、その窓は判定基準を満たさない」が
+   * 起こりうる。以前はコメントで同期を約束していたが、定数にすれば約束が要らない。
+   */
+  const E3_SILENCE_FLOOR_RMS = 0.005
+
   it.skipIf(!appAvailable)(
     'replaces a playing instrument across CLAP/VST3 with audio, state, process, failure, and UI oracles (#618 E1-E6)',
     async () => {
@@ -3506,9 +3555,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       let bodyError: unknown
       let cleanupFailure: unknown
       try {
-        const baselineLog = (await activeClient.call('get_log', { lines: 500 })).text
-        const errorsBefore = countErrors(baselineLog)
-
         // E1: A is the CLAP oracle. LOOP keeps producing fresh note lifetimes while replace runs.
         await activeClient.call('evaluate_orbitscore', {
           code: [
@@ -3628,8 +3674,43 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         expect(effectUiClose.isError, effectUiClose.text).toBe(false)
 
         // E3: a rest-only pattern must be silent; the old tenant PIDs remain gone.
+        //
+        // 🔴 #761: ここは固定 `sleep(1000)` で窓を開けていたため、**窓の先頭に旧パターンの音が
+        // 混ざっていた**。`play()` は次の小節境界で効くので、待ち時間は評価のタイミング次第で
+        // 0〜1 小節ぶん変わる（120 BPM の 4/4 なら 0〜2.0 秒）。
+        //
+        // 2026-09-06 に `ORBIT_KEEP_CAPTURES` で WAV を残して実測（250 ms バケット）:
+        //
+        //    4.50–16.50s  ~0.155   E1 (CLAP) → E2 (VST3)
+        //   16.50–18.50s  0.00000  ← **休符は効いている**（ちょうど 1 小節）
+        //   18.50–22.00s  ~0.155   E4 の play(1,1,1,1) が次の小節頭で復帰
+        //
+        // 窓は 15.50–18.00 に置かれ先頭 1.0 秒が音だったので RMS = 0.1004
+        // （√(1.0 × 0.155² / 2.5) ≒ 0.098 で、実測値に近い）。**実装は正しく、窓の位置だけが誤り**だった。
+        //
+        // 🔴 このアサーションは #761 以前は**一度も評価されていなかった** — 同じ try 節の中で
+        // ERROR 件数の偽赤が先に throw していたため。偽赤が本物の赤を隠していた。
+        //
+        // 音に窓を追従させる（#739 と同じ規律）。`waitForQuiet` の戻り値そのものが
+        // 「休符に切り替えたら無音になる」の実時間側の主張で、下の RMS 判定が WAV 側の主張。
         await activeClient.call('evaluate_orbitscore', { code: 'cb618.play(0, 0, 0, 0)' })
-        await sleep(1000)
+        const e3QuietDiagnostics: WaitForQuietDiagnostics = {
+          lastTailRms: [],
+          lastError: undefined,
+        }
+        const e3Quiet = await waitForQuiet(capturePath, {
+          floor: E3_SILENCE_FLOOR_RMS,
+          quietSec: 0.3,
+          intervalMs: 100,
+          timeoutMs: 10_000,
+          diagnostics: e3QuietDiagnostics,
+        })
+        expect(
+          e3Quiet,
+          'E3: 休符パターンへ切り替えたら capture は無音にならなければならない。' +
+            ` 最終tailRms=${JSON.stringify(e3QuietDiagnostics.lastTailRms)}, ` +
+            `lastError=${e3QuietDiagnostics.lastError ?? 'なし'}`,
+        ).toBe(true)
         segments.e3 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
         await sleep(2500)
         segments.e3.toSec = clock()
@@ -3648,19 +3729,38 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // instead of keeping it in the closure — a bare `const` inside the predicate left the
         // assertion referencing an undeclared name, and nothing typechecks `tests/`.
         let afterFailureLog = beforeFailureLog
+        // 🔴 #761: この poll の述語は `failedReplace.isError || countErrors(after) > ...` だった。
+        // `isError` は poll 前に確定した定数なので、真なら**ログを 1 度も待たずに**抜けていた。
+        // ログが届いたことを待ちたいなら、ログの側だけを見る。
         await waitUntil(
           async () => {
             afterFailureLog = (await activeClient.call('get_log', { lines: 500 })).text
-            return (
-              failedReplace.isError || countErrors(afterFailureLog) > countErrors(beforeFailureLog)
+            return newLogLines(beforeFailureLog, afterFailureLog).some(
+              (line) => line.includes('[OUTPROC_ATTACH_FAILED]') || line.includes('Issue618.vst3'),
             )
           },
           { intervalMs: 200, timeoutMs: 10_000, label: '#618 failed replacement surfaced' },
         )
+        // 🔴 #761 — 判定を 2 つに分けた。#628 が #625 の「playing effect の
+        // replace/remove」シナリオ内の R-E3 で既に「ERROR 件数の前後比較はもう使わない」と
+        // 決めており、その先例に揃える。
+        //
+        //   (1) 失敗が **loud** であること → `isError` で直接言う（件数と論理和にしない）
+        //   (2) 失敗が **ログにも届いた**こと → **増えた行**で言う。`get_log` は固定 500 行窓
+        //       なので件数は古い行が流れ出るだけで動く（2026-09-05 に
+        //       `expected 6 to be greater than or equal to 7` で偽赤になった）
+        //
+        // 包含側に `newLogLines` を使うのは、拡張の `ERROR:` 前置が chunk 単位で、同じ chunk の
+        // 2 行目以降に前置が付かないため（根本は #756）。
         expect(
-          failedReplace.isError || countErrors(afterFailureLog) > countErrors(beforeFailureLog),
-          `E4 failure was not surfaced by evaluation or get_log: ${afterFailureLog.slice(-1200)}`,
+          failedReplace.isError,
+          `E4: 存在しないプラグインへの差し替えは loud に失敗しなければならない: ${failedReplace.text}`,
         ).toBe(true)
+        const e4NewLines = newLogLines(beforeFailureLog, afterFailureLog)
+        expect(
+          e4NewLines.filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]')),
+          `E4 の attach 失敗がログに届いていない。新規行: ${JSON.stringify(e4NewLines, null, 2)}`,
+        ).not.toHaveLength(0)
         await activeClient.call('evaluate_orbitscore', { code: 'cb618.play(1, 1, 1, 1)' })
         await sleep(1000)
         segments.e4 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
@@ -3694,9 +3794,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         segments.e5.toSec = clock()
         segments.e5.toWall = Date.now()
 
-        const finalLog = (await activeClient.call('get_log', { lines: 500 })).text
-        // The deliberate E4 error is the only new error in this scenario.
-        expect(countErrors(finalLog)).toBeGreaterThanOrEqual(errorsBefore + 1)
+        // 🔴 #761: ここには `countErrors(finalLog) >= errorsBefore + 1`（シナリオ冒頭の
+        // baseline との件数比較）があった。`get_log` は固定 500 行窓で、E1〜E6 を跨ぐ間に
+        // 窓は丸ごと入れ替わる。**新しい ERROR が出ていても総数は減りうる**ので偽赤になった。
+        //
+        // 「E4 の失敗が届いた」は E4 の直前直後という**窓が重なる区間**で、増えた行として
+        // 上で主張済み。多重集合の差分は窓が重ならないと意味を持たない（重ならなければ
+        // `finalLog` の全行が「新規」になる）ので、シナリオ全体を 1 対の baseline/final で
+        // 語る形は再導入しない。全体の「他に ERROR が増えていない」が要るなら、各ステップに
+        // baseline を置くこと（本 issue の範囲外）。
       } catch (error) {
         bodyError = error
         throw error
@@ -3733,7 +3839,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const e5Rms = captured.rms('e5', 0)
       expect(e1Rms, 'E1 CLAP baseline must be non-silent').toBeGreaterThan(0.03)
       expect(e2Rms, 'E2 VST3 replacement must be non-silent').toBeGreaterThan(0.03)
-      expect(e3Rms, 'E3 rest pattern must be silent').toBeLessThan(0.005)
+      expect(e3Rms, 'E3 rest pattern must be silent').toBeLessThan(E3_SILENCE_FLOOR_RMS)
       expect(e4Rms, 'E4 failed replacement must leave B sounding').toBeGreaterThan(0.03)
       expect(e5Rms, 'E5 restored A must be non-silent').toBeGreaterThan(0.03)
 
@@ -4432,11 +4538,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         const stateFilesBeforeFull = stateFileCount(statesDirectory)
         const beforeFullLog = await readLog()
         const errorsBeforeFull = countErrors(beforeFullLog)
-        const spawnsBeforeFull = rackChildPidsFromLog(beforeFullLog)
         const aRestoreMarker = `[plugin-state] restoring '${aIdentity}'`
         const bRestoreMarker = `[plugin-state] restoring '${bIdentity}'`
-        const aRestoresBeforeFull = countMarker(beforeFullLog, aRestoreMarker)
-        const bRestoresBeforeFull = countMarker(beforeFullLog, bRestoreMarker)
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
@@ -4448,10 +4551,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         await waitUntil(
           async () => {
             const log = await readLog()
+            const added = newLogLines(beforeFullLog, log)
             return (
-              rackChildPidsFromLog(log).length > spawnsBeforeFull.length &&
-              countMarker(log, aRestoreMarker) > aRestoresBeforeFull &&
-              countMarker(log, bRestoreMarker) > bRestoresBeforeFull
+              added.some((line) => line.includes('[orbit-effect-rack] child spawned pid=')) &&
+              added.some((line) => line.includes(aRestoreMarker)) &&
+              added.some((line) => line.includes(bRestoreMarker))
             )
           },
           {
@@ -4462,20 +4566,24 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           },
         )
         const afterFullLog = await readLog()
-        const fullPids = rackChildPidsFromLog(afterFullLog)
-        expect(fullPids.length, 'R28 seg2: three stages must spawn exactly one rack child').toBe(
-          spawnsBeforeFull.length + 1,
+        const addedFullLines = newLogLines(beforeFullLog, afterFullLog)
+        const fullSpawnLines = addedFullLines.filter((line) =>
+          line.includes('[orbit-effect-rack] child spawned pid='),
         )
-        const rackPid = fullPids[fullPids.length - 1]!
+        expect(
+          fullSpawnLines,
+          'R28 seg2: three stages must spawn exactly one rack child',
+        ).toHaveLength(1)
+        const rackPid = rackChildPidsFromLog(fullSpawnLines[0]!)[0]!
         expect(processExists(rackPid), 'R28 seg2: spawned rack child must be alive').toBe(true)
         expect(
-          countMarker(afterFullLog, aRestoreMarker),
+          addedFullLines.filter((line) => line.includes(aRestoreMarker)),
           'R28 seg2: A state restore marker must increase exactly once',
-        ).toBe(aRestoresBeforeFull + 1)
+        ).toHaveLength(1)
         expect(
-          countMarker(afterFullLog, bRestoreMarker),
+          addedFullLines.filter((line) => line.includes(bRestoreMarker)),
           'R28 seg2: B state restore marker must increase exactly once',
-        ).toBe(bRestoresBeforeFull + 1)
+        ).toHaveLength(1)
         expect(
           countErrors(afterFullLog),
           `R28 seg2 full rack must add no ERROR lines. Log tail: ${afterFullLog.slice(-1200)}`,
@@ -4591,23 +4699,27 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
 
         const errorsBeforeReaddB = countErrors(await readLog())
         const beforeReaddBLog = await readLog()
-        const bRestoresBeforeReadd = countMarker(beforeReaddBLog, bRestoreMarker)
         await activeClient.call('evaluate_orbitscore', {
           code: `fx628.effect([${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(
             catalog.vst3EffectName,
           )}, Gain(db: ${stages.standardDb})])`,
         })
         await waitUntil(
-          async () => countMarker(await readLog(), bRestoreMarker) > bRestoresBeforeReadd,
+          async () =>
+            newLogLines(beforeReaddBLog, await readLog()).some((line) =>
+              line.includes(bRestoreMarker),
+            ),
           { intervalMs: 200, timeoutMs: 15_000, label: '#628 R28 seg6 B occurrence-0 restore' },
         )
         await assertCurrentPid(rackPid, 'R28 seg6 re-add B')
         await captureSegment('reAddedB')
         const afterReaddBLog = await readLog()
         expect(
-          countMarker(afterReaddBLog, bRestoreMarker),
+          newLogLines(beforeReaddBLog, afterReaddBLog).filter((line) =>
+            line.includes(bRestoreMarker),
+          ),
           'R28 seg6: B occurrence-0 restore marker must increase exactly once',
-        ).toBe(bRestoresBeforeReadd + 1)
+        ).toHaveLength(1)
         expect(
           countErrors(afterReaddBLog),
           `R28 seg6 re-add B must add no ERROR lines. Log tail: ${afterReaddBLog.slice(-1200)}`,
@@ -4840,7 +4952,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       try {
         const beforeMasterLog = await readLog()
         const errorsBeforeMaster = countErrors(beforeMasterLog)
-        const spawnsBeforeMaster = rackChildPidsFromLog(beforeMasterLog)
         await activeClient.call('evaluate_orbitscore', {
           code: [
             'var global = init GLOBAL',
@@ -4850,7 +4961,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           ].join('\n'),
         })
         await waitUntil(
-          async () => rackChildPidsFromLog(await readLog()).length > spawnsBeforeMaster.length,
+          async () =>
+            newLogLines(beforeMasterLog, await readLog()).some((line) =>
+              line.includes('[orbit-effect-rack] child spawned pid='),
+            ),
           {
             intervalMs: 200,
             timeoutMs: 15_000,
@@ -4859,12 +4973,14 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           },
         )
         const afterMasterLog = await readLog()
-        const masterPids = rackChildPidsFromLog(afterMasterLog)
+        const masterSpawnLines = newLogLines(beforeMasterLog, afterMasterLog).filter((line) =>
+          line.includes('[orbit-effect-rack] child spawned pid='),
+        )
         expect(
-          masterPids.length,
+          masterSpawnLines,
           'R28 E8: master [catalog, Gain] must spawn exactly one rack child',
-        ).toBe(spawnsBeforeMaster.length + 1)
-        masterPid = masterPids[masterPids.length - 1]
+        ).toHaveLength(1)
+        masterPid = rackChildPidsFromLog(masterSpawnLines[0]!)[0]
         expect(processExists(masterPid!), 'R28 E8: master rack child must be alive').toBe(true)
         expect(
           countErrors(afterMasterLog),
@@ -5523,7 +5639,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             // `ORBIT_AUDIO_OUTPUT_FAULT=dead-probe-requested` による**コールバック不達**の方。
             const rejectedDevice = defaultOutputDeviceName('#661 D-3')
             const beforeFailureLog = (await faultClient!.call('get_log', { lines: 500 })).text
-            const errorsBeforeExpectedFailure = countErrors(beforeFailureLog)
             const stallsBeforeFailure = countLogMarker(beforeFailureLog, 'STREAM_CALLBACK_STALLED')
             // 🔴 **同じ 1 回の失敗を 2 層が別々の文言で記録する**。片方だけを除外条件にすると、
             // もう片方が「想定外の ERROR」として残る（2026-09-05 に実機でこれで落ちた）:
@@ -5537,7 +5652,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             const engineFailureMarker =
               '\u274c live device switch to "' + rejectedDevice + '" failed'
             const anyLayerFailureMarker = 'device switch to "' + rejectedDevice + '" failed'
-            const switchFailuresBefore = countLogMarker(beforeFailureLog, daemonFailureMarker)
 
             const failed = await faultClient!.call('select_audio_device', {
               device: rejectedDevice,
@@ -5547,7 +5661,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             await waitUntil(
               async () => {
                 const log = (await faultClient!.call('get_log', { lines: 500 })).text
-                return countErrors(log) >= errorsBeforeExpectedFailure + 1
+                return newLogLines(beforeFailureLog, log).some((line) =>
+                  line.includes(anyLayerFailureMarker),
+                )
               },
               { intervalMs: 250, timeoutMs: 10_000, label: '#661 D-3 switch failure log' },
             )
@@ -5584,9 +5700,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
                 `Lines naming the device:\n${linesNamingDevice}`,
             ).toHaveLength(1)
             expect(
-              countLogMarker(settledLog, daemonFailureMarker) - switchFailuresBefore,
+              newLogLines(beforeFailureLog, settledLog).filter((line) =>
+                line.includes(daemonFailureMarker),
+              ),
               '#661 D-3 must log the expected switch failure once',
-            ).toBe(1)
+            ).toHaveLength(1)
             expect(
               countLogMarker(settledLog, 'STREAM_CALLBACK_STALLED'),
               '#661 D-3 probe must not stall the old stream',
