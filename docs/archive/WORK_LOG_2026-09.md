@@ -1,4 +1,305 @@
-# WORK_LOG Archive — 2026-09（前半）
+# WORK_LOG Archive — 2026-09（前半・09-01〜09-05）
+
+## 段 1 must-fix（09-05・#661 / #606 / #746）
+
+`docs/development/WORK_LOG.md` が 2,000 行上限を超えたため 2026-09-06 に移設した分。
+
+### fix(audio): gate output devices on callback liveness (#661 PR-V4) (Sep 5, 2026)
+
+`--audio-device` で stream の build/play が成功しても callback が一度も来ず、無音のまま
+daemon が起動成功していた問題に対し、`Engine` と callback-owned `RenderState` の生成前に
+probe stream を開く liveness gate を追加した。probe は専用 `AtomicU64` を使うため、実 stream の
+`StreamStats.callbacks` を汚さない。3 秒以内に callback が来ない名指し候補は起動時だけ host
+既定へ 1 回縮退し、全候補 dead または実 stream の事後確認 dead は起動を失敗させる。
+
+cpal 0.15.3 の名指し stream 参照循環に対して、`OutputStream::drop` は必ず内部 stream を
+`pause()` してから field を破棄する。ライブ切替も旧 stream を先に pause し、新 stream の probe /
+事後確認が失敗したら新 stream を pause+drop して旧 stream を再開する。異なる sample rate は
+`AUDIO_DEVICE_RATE_MISMATCH` で拒否し、Engine の作り直しは行わない。
+
+`GetStatus.output` に requested / fallback / reason / first callback ms を追加し、engine は正常時の
+出力構成を INFO、縮退時だけ `❌ audio device fallback` を ERROR としてユーザーの `get_log` へ出す。
+実機 gated Rust C-1〜C-6 と MCP D-1〜D-3 を追加した。
+
+検証: Rust lib 105 passed / 2 ignored、daemon bin 7 passed、gated Rust はコンパイル成功、clippy
+`--all-targets -D warnings` 成功、cfg 4 象限成功、`clap-host` build 成功、E2E hygiene 15 passed、
+`typecheck:e2e` 成功。`link-audio` / `link-audio-verification` は worktree に Ableton Link submodule が
+無く build.rs で失敗。実機 gated と C-6 の pause 除去変異は sandbox では実行しない。
+### test(daemon): prove the all-notes-off ledger actually shrinks (#606 round-3) (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR** #738
+
+fix 差分の再レビュー（4 体）。**指摘はすべて fix 起因**で、元差分起因の新規指摘は出なかった。
+
+#### 🔴 最も重い指摘 — 中核の機構に検査が無かった
+
+`plugin_all_notes_off` が**成功時に台帳から entry を除去することを検査するテストが 1 本も無かった**。
+panic テストは `retain` ブロックに到達する前に止まるので、**ブロックを丸ごと削除する変異が全テストを通過**する。
+放置すると台帳が永久に増え、次の解放で**死んだ note を送り続ける**。
+
+- `plugin_all_notes_off_removes_every_released_entry_from_the_ledger` を追加。
+  3 件解放して `released == 3` / `stale == 0` / `failed == 0` に加え、
+  **`active_plugin_note_count() == 0`** と **ring へ 3 件届いたこと**を検査する
+- 🔴 **変異で red を確認**: `retain` ブロック削除 → `left: 3 / right: 0`。
+  このとき**既存の他 2 本は通ったまま**で、指摘が事実だったことも同時に裏付けられた
+
+#### そのほか
+
+- **重大度の逆転が半分しか直っていなかった**。`spawn_blocking` の `JoinError`（解放タスク自体が
+  panic / cancel = **そもそも試みられていない**）が `warn!` のまま残っていたので `error!` に上げた
+- bounded retry の「途中で成功する」分岐が、cfg を広げた後も**bare な `rtrb::Producer` を叩くだけ**で
+  本番の `push_outproc_instrument_event`（instance 解決 + lock 分岐）を通っていなかった。
+  容量 1 の ring を埋め、15 ms 後に consumer が drain する形で**実経路を通すテスト**を追加
+- 設計書の `StopAll` 行参照が二度ずれていた（`2289-2292` → 実体は `2296-2299`）
+
+#### 🔴 私の失敗 — 変異のバックアップに `git checkout --` を使った
+
+未コミットの新テストごと巻き戻した。**git で戻せるのはコミット済みの内容だけ**で、
+未コミットの追加があるときはファイル退避が正しい。生成スクリプトが残っていたので復旧できた。
+
+#### 検証（main が sandbox 外で実測）
+
+- `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument`
+  — lib **259 passed** / protocol **32 passed**
+- `cargo clippy --all-targets -- -D warnings` exit 0
+- `npm test` **2251 passed / 0 failed** / `typecheck:e2e` / `lint` exit 0 / `docs:check` **926 verified / 0 failed**
+- 実機 gated（`89e9d389`）: **10 failed / 16 passed・退行ゼロ**、`#606 T1` / `#606 E2E-K3` とも ✅
+
+### fix(daemon): close review round-2 on the RUN-termination branch (#606) (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR** #738
+
+レビュー 5 体のラウンド2。**実機の受け入れは先に達成している**（T1 / E2E-K3 とも緑・退行ゼロ）ので、
+このラウンドで直したのは**診断・記録・テストの区別力**である。
+
+#### 🔴 指摘が 1 件、レビュアー間で解けた
+
+silent-failure が「panic 時に `SessionRegistration::drop` が解放しないので最後の砦が機能しない」（MEDIUM）、
+pr-test-analyzer が「その経路にテストが無い」（Critical）と報告したが、Fable の経路列挙と
+`main.rs:53-75` の実装で、**daemon の panic hook は `std::process::exit(1)` を呼び unwind しない**ことが分かった。
+本番で Drop のフォールバック分岐には**到達しない**（そして daemon が死ねば `ParentWatch` で child も落ちるので音は止まる）。
+
+ガード自体は将来の早期 return に対する保険として残し、**コメントを実体に合わせた**。
+
+#### ポリシー A — 文書とコメントは実体を写す（5 件）
+
+**この PR の fix 自身が作った不一致**だった:
+
+- `clap-host` 単独ビルドは実装が `Ok(空 summary)` なのに、文書 2 箇所が `CLAP_UNAVAILABLE` のまま
+- wire 例とフィールド説明に `failed` が無い（実装は常に返す）
+- 設計 §3.5 の「quarantine 時は旧 child がまだ鳴っている可能性がある」という**前提そのものが誤り** —
+  quarantine の全 variant で child は必ず殺される（`InstrumentChildSupervisor::drop` → watchdog が
+  `CONTROL_QUIT` → `reap`）。実害は `released` の水増しに留まる。**#752 の scope に含めると明記**
+- 設計 §4 の受け入れ表に T2 が残っていた（実装は**意図して置いていない**・理由はコード側にある）
+
+#### ポリシー B — 診断は読める場所まで届かせる（2 件）
+
+- **`GetStatus` に `active_plugin_notes` を追加**。設計 §1 H4 の問題意識が「台帳に読み手が 0 件」だったので、
+  LLM が「stop 後に台帳が空か」を**ポーリングで確認できる**ようにした（`get_log` の 500 行窓に依存しない）
+- 🔴 **main が Codex の差分を読んで 1 件直した**: 台帳が読めない（poison）時に **`GetStatus` 全体が失敗する**
+  実装になっていた。それではデバイス・レート・uptime・render_contentions まで**異常時にこそ**失われる。
+  **その 1 項目だけ `null` に縮退**させ、理由を ERROR ログに出す形にした（文書にも明記）
+- disconnect trigger で「そもそも解放を試みられなかった」失敗が `warn!` だったのを `error!` に上げた
+  （より軽い「一部の note の配送失敗」が `error!` で、重大度が逆転していた）
+
+#### ポリシー C — テストは区別できる形に（2 件）
+
+- 🔴 panic テストが台帳に **1 件しか注入しておらず**、「push 成功のたびにその場で remove」実装に変えても
+  生き残っていた。**3 件注入**（配送成功済み / panic する / 未処理）に直し、変異で
+  **`left: 2 / right: 3`** の red を実出力で確認
+- 🔴 bounded retry の**「リトライ途中で成功する」分岐**が `#[cfg(feature = "clap-host")]` に閉じており、
+  **本番構成（`outproc-instrument` 単体）ではコンパイルすらされていなかった**。cfg を広げ、
+  `--features outproc-effect,outproc-instrument` で実走することを確認
+
+#### 先送り（#752 に集約）
+
+code-reviewer が `plugin_all_notes_off` 自身にも同型のレース（スナップショットと最終 `retain` の間の
+NoteOn が消える）を見つけたが、**本番の daemon 接続は 1 本のみで RPC も直列化される**ため到達しない。
+台帳に識別子を持たせる構造的な解は **#752** にまとめ、ここで部分的に変えない。
+
+#### 検証（main が sandbox 外で実測）
+
+- `cargo clippy --all-targets -- -D warnings` exit 0
+- `cargo test -p orbit-audio-daemon` — protocol **29 passed** ほか全 green
+- 同 `--features outproc-effect,outproc-instrument` — lib **257 passed** / protocol **32 passed**
+- `npm test` **2251 passed / 0 failed** / `docs:check` **926 verified / 0 failed**
+
+### refactor(daemon): apply the /simplify pass to the RUN-termination branch (#606) (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR** #738
+
+ゲート③の `/simplify`（4 体並行）。効率観点は**指摘ゼロ**で、台帳のスナップショットは
+stop/shutdown の cold path のみ、bounded retry は ring が空いていれば従来と同コスト
+（closure 1 回・追加 allocation なし）と確認された。
+
+#### 適用した 4 件
+
+- **二乗平均の重複を解消**: `analysisTailRms` が式を再実装していた。#746 が
+  `tests/e2e/helpers/capture-windows.ts` に `quadraticMeanRms` を切り出して main に入ったので、
+  本ブランチを載せ替えて **import に差し替えた**（設計 §6.3）
+- 🔴 **session カウンタを RAII ガードにした**（`SessionRegistration`）。`session_connected()` と
+  `session_disconnected_is_last()` の間で read loop が **panic すると減算に到達せず**、
+  `connected_sessions` が永久に加算されたままになる。そうなると**以後どの session が切れても
+  最後の砦が二度と発火しない** — daemon が生きている限りずっと、である。
+  同ファイルの `InstrumentReplacementReservation` と同じ「明示的な確定 + Drop の安全網」の形にした
+- `wrap_err_to_protocol` の `OutProcInstrument` / `OutProcInstrumentStale` が同じ
+  `ProtocolError` を返す完全重複だったので or-pattern に畳んだ
+- `stopAll()` の 2 つの fire-and-forget が同一の catch ロジック（ログ文言だけ違う）を写していたので
+  `warnUnlessDisconnected(label, err)` に切り出した
+
+#### 適用しなかった 1 件と、その理由
+
+`tailDelay = patternDuration + (scheduleTime - currentTime)` を `patternDuration + 100` に畳む案は
+**採らない**。`scheduleTime` は 2 行上で `currentTime + 100` と定義されているので値は同じだが、
+差で書いてあることに意味がある — **尻尾はイベントを実際に置いた原点から測る**必要があり、
+`scheduleTime` の決め方が将来変わっても自動で追随する。この整合こそが「RUN 終端で音が止まる」の
+前提なので、定数へ畳んで結合を切らない。**理由をコメントに書いた。**
+
+テスト重複の指摘 1 件も見送った（アサーションを減らす方向なので）。
+
+#### 先送りしたもの（設計 §6 に記録）
+
+- 🔴 **台帳のキーを slot 同一性にする → #752**。`ReplacePlugin` のスナップショットと再ポイントの間に
+  届いた旧 instance 宛 NoteOn は台帳に残り、次の `PluginAllNotesOff` が**新テナントへ NoteOff を送って
+  鳴っている音を切る**。本 PR が直した欠陥の鏡像。**窓を狭めるだけでは閉じない**（`plugin_note_on` は
+  push → 台帳 insert の順で、その間 control lock を持たない）。
+  🔴 **本設計で「wire が名前しか運ばないから無理」と却下したのは誤りだった** —
+  `push_outproc_instrument_event` は note の時点で名前→index を解決済みで、`tenant_generation` も既にある
+- タイマーのライフサイクル管理点が 2 箇所に分かれている件（設計 §6.2）
+
+#### 検証
+
+- `npm test` **2251 passed / 0 failed**
+- `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument`
+  — lib **252 passed** / protocol **32 passed**
+- `clippy --all-targets -- -D warnings` exit 0 / `typecheck:e2e` / `lint` exit 0
+
+### fix(daemon): make the all-notes-off ledger survive its own failures (#606 round-1) (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR** #738
+
+レビュー 5 体（Sonnet 4 + Fable）の指摘を 2 つの横断ポリシーへ集約して一括で直した。
+指摘単位のローカルパッチは振動の主因なので置かない。
+
+#### ポリシー A — 壊れた時に真因が残ること
+
+台帳を **drain（取り切り）→ 失敗分を戻す**のをやめ、**clone → 送出 → 解放済みだけ除去**に向きを反転した。
+
+- 🔴 旧実装はループ内で panic すると（`push_outproc_instrument_event` に
+  `.expect("instance_index always maps to a pre-allocated slot")` がある）**台帳が丸ごと消え、
+  二度と復元されなかった** — 最後の砦が最後の砦でなくなる。反転後は panic が「台帳が残る」＝安全側に倒れる
+- 復帰用 `extend` と、そこにあった**無言の `poisoned.into_inner()`** が消えた（drain 側は大声の `Err`
+  だったので扱いが非対称だった）
+- `PluginAllNotesOffSummary` に `failed` を足し、配送に失敗しても **`Ok(summary)` を返す**。
+  `Err` は台帳そのものが読めない（poison）時だけ。呼び手が知りたいのは「音が残ったか」で、
+  それに答えるのは `failed > 0` という機械可読な数であって不透明な `Err` ではない
+- 最初のエラーは released/stale/failed と一緒に `tracing::error!` へ 1 回だけ
+
+#### ポリシー B — 暗黙の結合を検証する
+
+台帳の鍵は**名前**だが、スロットの同一性は **index + 世代**である。この 2 つがずれる窓を塞いだ。
+
+- 🔴 `ReplacePlugin` は `instance_index.insert(name, spare)` で**名前を新スロットへ向けた後**、
+  teardown（最大 500 ms 待つ）を挟んでから名前一致で台帳を掃除していた。その窓で新テナントへ届いた
+  NoteOn は同じ `(name, ch, key)` として台帳に入り、**巻き込まれて消える → その音が解放されず鳴りっぱなしになる**。
+  **3 体のレビュアーが独立に指摘した唯一の項目**
+- 修正: **再ポイントの前に**旧テナントの entry を写し取り、teardown 後は**その集合だけ**を消す。
+  lock の入れ子は作らない（control を握ったまま台帳 lock を取らない）
+- `push_outproc_instrument_event` を `push_with_bounded_retry` に載せた。in-process の兄弟は
+  同じ物理状況（ring 満杯は一時的）に既に bounded retry を持っており、**片方だけ one-shot** だった
+- 台帳 lock + poison 文言の 5 重複を `lock_active_notes` に集約（poison の扱いが構造として 1 つになる）
+
+#### そのほか
+
+- session 切断 trigger を「**最後の確立済み session が切れた時だけ**」に変更。台帳は daemon 全体で
+  共有なので、2 つ目のクライアントが切れて 1 つ目の音が止まる形を避ける
+- `clap-host` のみのビルドは空 summary を返す（`global.stop()` のたびの警告が消える）
+- `engine_wrap.rs` の active-note 台帳コメントを実体に合わせた
+
+#### 検証（main が sandbox 外で実測）
+
+- `cargo clippy --all-targets -- -D warnings` exit 0
+- `cargo test -p orbit-audio-daemon` — protocol **29 passed** ほか全 green
+- `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument`
+  — lib **252 passed** / protocol **32 passed** / `plugin_all_notes_off` 1 passed
+- `npm test` **2224 passed / 0 failed**
+
+🔴 Codex は sandbox で protocol テスト（loopback bind）を走らせられず 29 件 red と報告していた。
+**同じテストが sandbox 外では全部 green** — 委譲先の赤も緑も main が回し直す。
+
+### feat(audio): add daemon-side plugin all-notes-off fallback (#606 PR-K-A2) (Sep 5, 2026)
+
+**Issue**: #606 / **ブランチ**: `606-run-termination-noteoff` / **PR-K-A2**
+
+OOP instrument の active-note 台帳を drain して個別 `NoteOff` を送る
+`EngineWrap::plugin_all_notes_off()` を追加した。配送関数はこの 1 本に集約し、明示
+`PluginAllNotesOff` RPC と WebSocket session 切断直後の 2 箇所から起動する。これにより、
+engine が異常終了して RPC を送れず daemon と instrument child だけが残る経路でも解放できる。
+台帳 lock は drain 中だけ保持し、ring push 前に解放する。`ReplacePlugin` の旧 tenant entry は
+teardown 成功時だけ除去し、quarantine 時は最後の砦が拾えるよう保持する。
+
+TS は `RustEnginePlayer.stopAll()` の既存 `StopAll` の直後だけに flush を配線した。
+空の要約は無言とし、`released` または `stale` が非 0 の時だけ stdout に要約を出す。
+protocol/core spec に wire 契約と 2 trigger を記録した。
+
+protocol / gated / TS テストは実装ファイルと分離して先に追加し、未実装状態で Rust は新 API
+不在の E0599、Vitest は `pluginAllNotesOff is not a function` の red を確認した。sandbox の bind
+制限下でも本体を実行できる socket 非依存 integration を実装後に補助追加した。実装後は Rust lib
+（default: 39 passed、outproc-instrument: 131 passed / 1 ignored）、同 integration、対象 Vitest、
+cfg 4 象限 clippy、E2E typecheck、lint が green。WebSocket integration は sandbox の loopback
+bind が `EPERM`、実機 gated E2E は指示どおり未実行。全 `npm test` は 153 files / 2118 tests が
+pass した一方、loopback 使用箇所が同じ `listen EPERM: operation not permitted 127.0.0.1` により
+4 files / 106 tests fail（55 skipped）した。git metadata が親 worktree 配下にあるため sandbox が
+`index.lock` を拒否し、要求された test-only / implementation の 2 commit は作成できなかった。
+
+---
+
+### test(e2e): make the phase sweep actually discriminate the float-family bug (#746 round-3) (Sep 5, 2026)
+
+**Issue**: #739 / **ブランチ**: `739-capture-windows-follow-sound` / **PR** #746
+
+ラウンド2 で入れた「500 位相スイープ」が、**守るべき欠陥を検出できていなかった**。
+
+#### 何が起きていたか
+
+ラウンド2 は「`onsets`（`w * WINDOW_SEC`）と `windows[].startSec`（`start / sampleRate`）が
+**別の浮動小数の族**で、`>=` / `<` 比較が位相で 199/200/201 に揺れる」を整数バケット index への
+統一で直し、500 位相スイープを常設した。
+
+🔴 **main が変異検証したところ、ウィンドウ選択を元の族またぎ比較へ戻しても、そのスイープは緑のままだった。**
+
+原因: スイープは**合成 WAV 内の打撃時刻を固定したまま capture 区間だけ**を 1 バケット内で動かすので、
+`firstOnset` が実質 1〜2 値しか取らない。**ずれの発生源は絶対バケット index**（2 つの族の乖離は
+`w` が大きいほど広がる）なので、区間を動かしても再現しない。
+
+Codex が回した変異（`steadyRms` が NaN を返す）は「アサーションが結線されている」ことしか示しておらず、
+**シナリオが欠陥を区別できるか**は示していなかった。
+
+#### 直したこと
+
+- **絶対 onset index を 1000 通り掃く**テストを追加。音を合成せず、`wav-analysis.ts` の 2 つの族を
+  そのまま再現した stub を `steadyRms` / `measuredBucketCountForSteadyRms` に渡す
+  （`resolveMeasuredRange` は `Pick<CaptureWindows,'windows'|'onsets'>` を取るのでスタブで足りる）
+- 🔴 **変異で red を確認**: 族またぎ比較へ戻すと
+  `expected [ 200, 199, 201 ] to deeply equal [ 200 ]` — Fable が実測した分布がそのまま出る。
+  復元後 46 件 green（`cmp` で復元一致を確認）
+- 500 位相スイープは**残す**（実音声の経路を端から端まで通す役）。ただしコメントに
+  **「この変異はここでは生き残る」**と明記し、区別する役は新テストだと書いた
+
+#### 同ラウンドで直した残り
+
+- 500 位相スイープが `steadyRms` **本体**を全位相で呼ぶようにした（従来は診断関数だけで、
+  onset 数一致・周期性・可聴床のアサーションを通っていなかった）
+- `hitPeriodSec` が `ANALYSIS_BUCKET_SEC` の整数倍でなければ**明示的に throw**（暗黙の前提を検査）
+- コメントの不正確 2 件（"four" → "five"、D-2 の根拠づけが下のテストに当てはまらない点）
+
+#### 検証（main が本ツリーで実測）
+
+- `npm test` **2238 passed / 0 failed**
+- `typecheck:e2e` / `lint` exit 0
+- `docs:check` **926 verified / 0 failed**
+- 実機 gated: **`main` baseline 10/24 と失敗集合が完全一致 = 退行ゼロ**（同日・同一条件で baseline を取り直した）
+
 
 ## 束 668-e2e-foundation — E2E 基盤（段 0・安全網）
 

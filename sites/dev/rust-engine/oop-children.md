@@ -1,7 +1,7 @@
 ---
 title: "RE-2. OOP children と shm transport"
 chapter-id: "RE-2"
-verified-against: f5d2ef5
+verified-against: b513659
 verified-at: "2026-09-06"
 status: draft
 ---
@@ -14,7 +14,8 @@ status: draft
 楽器（サンプラー/audio DSL）は in-process ですが、effects と 3rd-party plugin は out-of-process (OOP)
 sandbox の子プロセスとして分離されます。本章では、この in-process/OOP の使い分けの理由、
 child バイナリの一覧、`orbit-audio-sandbox` crate が提供する共有メモリ (shm) transport の仕組み、
-READY handshake、watchdog/respawn、そして親プロセス死活監視 (`ParentWatch`) を扱います。
+READY handshake、watchdog/respawn、親プロセス死活監視 (`ParentWatch`)、そして起動時の孤児 shm
+回収 (#779) を扱います。
 plugin hosting の DSL 面（`global.effect()` / `seq.instrument()`）や child バイナリ選択ロジック
 （`child_exe_for_attach`）は [PH-1](/plugin-hosting/) 章に、plugin UI の window 配線は
 [PH-2](/plugin-hosting/plugin-ui) 章に譲り、ここでは effect/instrument 両方の child が
@@ -40,7 +41,7 @@ daemon が spawn し得る child バイナリは `orbit-audio-daemon` の `SPAWN
 実装が食い違わないよう「真実を 1 箇所に置く」ために作られた定数です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:84-93
+// rust/crates/orbit-audio-daemon/src/lib.rs:86-95
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",
@@ -289,7 +290,7 @@ const MAX_CONSECUTIVE_FAST_RESPAWNS: u32 = 5;
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:662-687
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:663-688
                             if consecutive_fast_fails >= MAX_CONSECUTIVE_FAST_RESPAWNS {
                                 tracing::error!(
                                     plugin = ?plugin,
@@ -334,7 +335,7 @@ respawn とは別に、#618 の instrument 差し替え（`ReplacePlugin`）は 
 「event ring の全残渣を捨てて」と要求し、audio thread が空にしてから ack する構造です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:310-317
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:311-318
 pub struct SlotSignals {
     pub teardown_requested: Arc<AtomicBool>,
     pub teardown_done: Arc<AtomicBool>,
@@ -525,25 +526,142 @@ feature flag 付きで実行します: `cargo test -p orbit-audio-daemon --featu
 で instrument 系、`--features outproc-effect` で effect 系、両 role 同時は
 `--features outproc-effect,outproc-instrument`。
 
+## 起動時の孤児 shm 回収（#779）
+
+`ParentWatch` が引き受けるのは「親が死んだら child が自分で抜ける」ところまでで、**ファイルは
+残ります**。上で見た `SandboxChildGuard::drop` の最後の `remove_file` は daemon が `Drop` を
+経て死ぬことが前提なので、SIGTERM・SIGKILL・panic で死ぬと shm ファイルが `$TMPDIR` に残ります。
+しかも [RE-1](/rust-engine/) で引いた `main.rs:21-30` のコメントが書いているとおり、client 側の
+通常停止（`killChildGracefully`）も SIGTERM を送る経路なので、これは crash のときだけの話では
+ありません。
+
+そこで daemon 側に、起動時に旧世代の残骸を回収する段を足しました（#779）。判定の中心にあるのは
+「その PID はまだ生きているか」に **3 値で** 答える述語です。
+
+```rust
+// rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:20-36
+pub fn probe_pid_liveness(pid: u32) -> PidLiveness {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return PidLiveness::Unknown;
+    };
+    if pid < 1 {
+        return PidLiveness::Unknown;
+    }
+
+    // SAFETY: signal 0 does not deliver a signal; it only asks the kernel to validate the PID.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        PidLiveness::Alive
+    } else if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+        PidLiveness::Dead
+    } else {
+        PidLiveness::Unknown
+    }
+}
+```
+
+`bool` にしなかったのが要点です。`kill(pid, 0)` は成功（生存）と `ESRCH`（そんな PID は無い）の
+ほかに `EPERM`（プロセスは在るが権限が無い）等も返し得ます。これを「死んでいる」側へ畳むと、
+**生きている daemon の shm を消してしまう**からです。`Unknown` という第 3 の腕は、そのための
+逃げ場と言えます。
+
+削除まで進む条件は、走査ループの終盤に集まっています。
+
+```rust
+// rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:110-128
+        let old_enough = now.duration_since(modified).is_ok_and(|age| age >= min_age);
+        if !old_enough {
+            summary.kept_young += 1;
+            continue;
+        }
+
+        let disposition = if pid == self_pid {
+            PidLiveness::Dead
+        } else {
+            *liveness_by_pid.entry(pid).or_insert_with(|| liveness(pid))
+        };
+        match disposition {
+            PidLiveness::Dead => match fs::remove_file(entry.path()) {
+                Ok(()) => summary.removed += 1,
+                Err(_) => summary.failed += 1,
+            },
+            PidLiveness::Alive => summary.kept_alive += 1,
+            PidLiveness::Unknown => summary.kept_unknown += 1,
+        }
+```
+
+読みどころは 3 つです。まず `kept_young` — mtime が `MIN_ORPHAN_AGE`（2 秒）に満たないファイルは
+その回では触らず、次回起動へ先送りします。次に `pid == self_pid` を `Dead` として扱う行 —
+自分の PID を名乗るファイルが起動時点で既に在るなら、それは PID が再利用された前世代の残骸だ、
+という読み方です。この規則が成り立つのは sweep が **自分の最初の shm を作るより前** に走るから
+で、[RE-1](/rust-engine/) で見た `run()` の段 0.5 という置き場所はそのための要件になっています。
+最後に `Alive` と `Unknown` はどちらも残す側です。
+
+ファイル名から PID を取り出す側は、生成側と接頭辞定数 `OUTPROC_SHM_PREFIX` を共有します。
+`outproc_effect.rs` / `outproc_instrument.rs` の `unique_shm_path()` が同じ定数で `format!` する
+ようになったので、名前の規則が 2 箇所へ分かれません。
+
+```rust
+// rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:38-49
+pub fn parse_outproc_shm_name(name: &OsStr) -> Option<u32> {
+    let rest = name.to_str()?.strip_prefix(OUTPROC_SHM_PREFIX)?;
+    let (role, rest) = rest.split_once('-')?;
+    if role.is_empty() || !role.bytes().all(|byte| byte.is_ascii_lowercase()) {
+        return None;
+    }
+    let (pid, rest) = rest.split_once('-')?;
+    let pid = pid.parse::<u32>().ok().filter(|pid| *pid >= 1)?;
+    let (seq, _) = rest.split_once(".shm")?;
+    seq.parse::<u32>().ok()?;
+    Some(pid)
+}
+```
+
+`.shm` の後ろに何が続くかを問わない作りなので、`....shm.chain.json` のようなサイドカー
+（`ApplyEffectChain` の manifest）も同じ規則で拾われます。gated E2E は死亡 PID の `.shm` と
+その `.chain.json` が両方消えること、そして**生存 PID のファイルが残ること**をファイルシステムで
+確認しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:5397-5462`）。
+
+ちなみに「プロセス名を見て daemon かどうか照合する」案は採られていません。`cargo test` の
+テストバイナリも同じ名前で shm を作るので、照合すると走行中のテストの mmap 先を unlink して
+しまうためです。
+
+診断は `sweep_orphaned_outproc_shm` の末尾が出す `tracing::info!` の 1 行（`scanned` /
+`removed` / `kept_*` / `failed` / `elapsed_ms`）だけです。ここで気をつけたいのは、**起動が成功
+する限り、この行は OrbitStudio の `get_log` には出てこない**という点です。TS 側の
+`daemon-client.ts:891-910` が ready 行が来るまで daemon の stderr を `stderrChunks` へ溜める
+だけで転送しないためで、蓄積分が表に出るのは起動失敗の診断経路だけです。sweep は最初の shm 生成
+より前、つまり ready 行より前に走るので、ちょうどその窓に入ります。上の E2E がログを主オラクル
+にできないのはこれが理由です。
+
+そしてこれは緩和であって、`Drop` が走らない穴そのものの修理ではありません。掃除が効くのは
+**次に daemon が起動したとき**なので、`$TMPDIR` のファイル数は 0 ではなく「直前の 1 世代ぶん」に
+収束します。SIGTERM ハンドラの追加は #448 のままです。
+
 ## 次の深掘り候補
 
 - rack child（`orbit-effect-rack-child`）の stage 切替 — `ApplyEffectChain` の prepare-commit と `active_stage_index` の関係
 - command mailbox（#555）の state 保存経路（`GetPluginState` → `cmd_arg` の sidecar path → child の書き込み）
 - `evt_sync`（`ReleaseAcquireSeq` / `MonotoneEpoch`）が型で禁じているものと、`reset_child_starting` が `evt_seq` をリセットする理由
 - `outproc_respawn_guard.rs` の generation 管理（respawn 世代を跨ぐ ack の拒否）
+- 起動時 sweep の残り（`sweep_dir` の `SweepSummary` 各カウンタが実運用でどう分布するか、SIGTERM ハンドラ（#448）が入ったら sweep 側に何が残るか）
 
 ## Sources
 
-- `rust/crates/orbit-audio-daemon/src/lib.rs:84-93` — `SPAWNABLE_CHILD_BINARIES`（spawn し得る child の正本）
+- `rust/crates/orbit-audio-daemon/src/lib.rs:86-95` — `SPAWNABLE_CHILD_BINARIES`（spawn し得る child の正本）
 - `rust/crates/orbit-audio-sandbox/src/transport.rs:113-143,173-288` — `CONTROL_*` / `CHILD_STATUS_*` / `CHILD_FLAG_*`、`SharedRegion` レイアウト（audio・M2 event 窓・command mailbox・event ring・`dirty_epoch`・`active_stage_index`）
 - `rust/crates/orbit-audio-sandbox/src/host.rs:1-98` — `PipelinedEffectHost`（pipelined submit/read 状態機械、RT-safe `process_block`）
 - `rust/crates/orbit-audio-sandbox/src/child.rs:44-84` — `SandboxChildGuard`（child teardown の RAII ガード：QUIT → reap → kill フォールバック → shm 削除）
 - `rust/crates/orbit-audio-sandbox/src/parent_watch.rs:1-124`（全文） — `ParentWatch`（`getppid()` ベースの親死活監視、rate-limit 済み、`orphaned_for_tests`）
 - `rust/crates/orbit-child-runtime/src/lib.rs:61-72` — `child_should_quit`（QUIT と親死亡を 1 述語に畳む）
 - `rust/crates/orbit-audio-sandbox/tests/parent_watch_integration.rs` — 実プロセス階層での `ParentWatch` 実証テスト
-- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:32-37,310-317,487-760` — `InstrumentChildSupervisor`（watchdog スレッド、#573 fast-fail ガード、respawn、`measurement_invalid` fire-once、#618 の `SlotSignals`）
+- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:32-37,311-318,488-761` — `InstrumentChildSupervisor`（watchdog スレッド、#573 fast-fail ガード、respawn、`measurement_invalid` fire-once、#618 の `SlotSignals`）
+- `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:9-49,110-128` — 起動時 sweep（接頭辞定数・`MIN_ORPHAN_AGE`・3 値述語・ファイル名 parse・削除の分岐）
+- `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:134-163` — `sweep_orphaned_outproc_shm`（段 0.5 が呼ぶ薄い殻と `tracing::info!` の要約行）
+- `packages/engine/src/audio/rust-engine/daemon-client.ts:891-910` — ready 行までの stderr 蓄積（sweep の INFO 行が `get_log` に出ない理由）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:5397-5462` — 死亡 PID の shm とサイドカーが消え、生存 PID のものが残ることを検査する gated E2E
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — in-process/OOP 分割の確定アーキ
 - Issue [#448](https://github.com/signalcompose/orbitscore/issues/448) — daemon graceful-shutdown ギャップと `ParentWatch` 対策（PR: `a0449b8`）
+- Issue [#779](https://github.com/signalcompose/orbitscore/issues/779) / PR [#784](https://github.com/signalcompose/orbitscore/pull/784) — 起動時の孤児 shm 回収（`Drop` が走らない経路への緩和）
 - Issue [#573](https://github.com/signalcompose/orbitscore/issues/573) — 連続 fast-fail での respawn 打ち切り
 - Issue [#618](https://github.com/signalcompose/orbitscore/issues/618) — instrument 差し替えと event ring の drain
 - Issue [#628](https://github.com/signalcompose/orbitscore/issues/628) — effect rack child

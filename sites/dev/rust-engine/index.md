@@ -1,12 +1,12 @@
 ---
 title: "RE-1. daemon アーキテクチャ概観"
 chapter-id: "RE-1"
-verified-against: f2dadd9
-verified-at: "2026-09-05"
+verified-against: b513659
+verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで、2026-09-06 に #779 の起動時 shm sweep（[#784](https://github.com/signalcompose/orbitscore/pull/784)）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # RE-1. daemon アーキテクチャ概観
 
@@ -25,9 +25,11 @@ daemon は起動すると audio device を確保し、localhost の空きポー�
 して、その port 番号を stdout に 1 行 JSON で出力します。TS 側はこの行を読んで接続します。
 `run()` を見てみましょう。2026-07-17 時点の版と比べると、先頭に `--list-audio-devices` /
 `--audio-device` の CLI 処理（#484 D1 / D3）が増え、Engine の起動が専用スレッドへ委譲されています。
+さらに 2026-09-06 に、**最初の shm を作る前に**死亡した旧 daemon の共有メモリを回収する段（0.5）が
+入りました（#779）。この順序は「自分の PID の残骸を消してよい」という規則の正当性要件です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:78-133
+// rust/crates/orbit-audio-daemon/src/main.rs:78-136
 async fn run() -> Result<(), i32> {
     // -1. `--list-audio-devices`（#484 D3）: cpal 列挙のみ行い stdout に JSON 一覧を出して即 exit
     // する軽量モード。stream は開かない（ハングリスクを避ける・上の `resolve_output_device` の
@@ -40,6 +42,9 @@ async fn run() -> Result<(), i32> {
     // 0. CLI と gated fault env を一度だけ typed options に解決する。device 名を process-global env
     // へ書き戻さないため、並行する owner thread も同じ immutable 値を受け取る。
     let startup_options = StartupOptions::from_env();
+
+    // 0.5. この daemon が最初の shm を作る前に、死亡した旧 daemon の shm を回収する。
+    orbit_audio_daemon::outproc_shm_sweep::sweep_orphaned_outproc_shm();
 
     // 1. Engine を起動（audio device 取得）。ランタイム device switch（#484 D2）に備え、実際の
     // `EngineWrap::start()` 呼び出しと `StreamGuard` の生存管理を専用 OS thread（"audio owner
@@ -95,7 +100,7 @@ async fn run() -> Result<(), i32> {
 （ランタイムの device 切替 `SelectAudioDevice` もこの thread に `mpsc` で委譲されます・#484 D2）。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:149-160
+// rust/crates/orbit-audio-daemon/src/main.rs:152-163
 /// ランタイム device switch（#484 D2）: `EngineWrap::start()`（cpal I/O・`cpal::Stream` は `!Send`）を
 /// 専用 OS thread（"audio owner thread"）上で実行し、その thread に `StreamGuard` を生涯所有させる。
 /// 呼び出し元（`run()`・tokio 上の async fn）は `Arc<EngineWrap>`（`Send + Sync`）だけを受け取る。
@@ -373,6 +378,11 @@ child プロセスが孤児化し得ます。
 
 この daemon 側 shutdown の穴に対する本命の防御策が child 側の `ParentWatch`（親プロセスの生死を
 child 自身が監視する仕組み）で、[RE-2](/rust-engine/oop-children) 章で扱います。
+
+孤児化するのはプロセスだけではありません。`Drop` が走らないと shm ファイルの削除も走らないので、
+`$TMPDIR` に out-of-process 用の共有メモリが残ります。これを起動時に回収するのが上の段 0.5
+（#779）で、判定規則と「なぜ 0 には収束しないのか」は
+[RE-2](/rust-engine/oop-children) の「起動時の孤児 shm 回収」節で扱います。
 
 ちなみに panic hook 自身も #605 で書き換えられています。stderr が壊れている状況で `eprintln!` を
 使うと panic hook の中で panic して `process::abort()` に落ち、client が exit code 1 ではなく
@@ -857,6 +867,8 @@ ORBIT_CAPTURE_WAV=/tmp/orbit-capture-test.wav node cli-audio.js path/to/single-n
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — engine-first ロードマップとアーキ確定（楽器=in-process／effects+3rd-party=out-of-process sandbox）
 - [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 / 6.262 — capture peak の実測記録
 - [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 — master fader 不具合（#643）
+- `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:134-163` — `sweep_orphaned_outproc_shm`（段 0.5 が呼ぶ薄い殻・`tracing::info!` 1 行の要約）
 - Issue [#448](https://github.com/signalcompose/orbitscore/issues/448) — daemon の graceful-shutdown ギャップと `ParentWatch` 対策
+- Issue [#779](https://github.com/signalcompose/orbitscore/issues/779) / PR [#784](https://github.com/signalcompose/orbitscore/pull/784) — 起動時の孤児 shm 回収（段 0.5）
 - Issue [#484](https://github.com/signalcompose/orbitscore/issues/484) — audio device の列挙・選択・ランタイム切替（D1 / D2 / D3）
 - Issue [#605](https://github.com/signalcompose/orbitscore/issues/605) — panic hook の best-effort stderr 化
