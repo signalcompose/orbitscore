@@ -299,7 +299,7 @@ Codex は sandbox で **daemon protocol（localhost bind）・MCP 系・実機 E
 
 | 単位 | ゲート |
 |---|---|
-| 小 PR（base = 束の統合ブランチ・draft） | CI（unit / lint / cargo）+ **その PR が足した E2E だけを実機で**（`ORBIT_GATED_ONLY`）+ main が差分を読む。レビューチーム・Fable・bot は呼ばない |
+| 小 PR（base = 束の統合ブランチ・draft） | CI（unit / lint / cargo）+ **その PR が足した E2E だけを実機で**（`ORBIT_GATED_ORBITSTUDIO=1` + vitest の `-t` で名前を絞る。🔴 `ORBIT_GATED_ONLY` という env は**実装されていない**・2026-09-06 実測）+ main が差分を読む。レビューチーム・Fable・bot は呼ばない |
 | 束 PR（統合ブランチ → main） | 下の 1〜8 をすべて + マージ前ゲート（ビルド + 実機 E2E 全件）。監査には設計文書と束の差分を渡す |
 | main 直行 PR | 仕様だけの PR（advisor 相談の軽いレビュー）と must-fix（従来どおり 1〜8）。束をまたぐ PR も単独 |
 

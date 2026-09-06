@@ -17,6 +17,33 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: correct the ORBIT_GATED_ONLY reference — the env does not exist (Sep 6, 2026)
+
+**ブランチ**: `780-fixture-shm-path`（束 `780-merge-gate` の小 PR）
+
+束 E-gate の小 PR ゲートを実行しようとして、**手引きが実在しない道具を名指ししている**ことに
+気づいた。
+
+`CLAUDE.md:302` と `BUNDLE_BRANCH_WORKFLOW.md:71` が、小 PR のゲート
+「**その PR が足した E2E だけを実機で**」の手段として `ORBIT_GATED_ONLY` を挙げていたが、
+この env は**コードのどこにも実装されていない**（リポジトリ全体の grep で、この 2 つの
+ドキュメント以外にヒットが無い）。
+
+実在するのは:
+
+| env / 手段 | 実体 |
+|---|---|
+| `ORBIT_GATED_ORBITSTUDIO` | gated suite 全体の on/off（`orbitstudio-mcp-gated.spec.ts:93` / `package.json:19`） |
+| vitest の `-t` | 個々のテスト名で絞る |
+
+両方の記述を実態に合わせ、`ORBIT_GATED_ONLY` が存在しないことを注記した。
+
+🔴 **`docs:check` は引用のアンカーしか検査しないので、この種の「主張が実物とずれている」誤りは
+機械が教えない。** 本日はこれで記録と実物のずれが 3 件目（#780 の原因記述 / `Drop` が
+サイドカーを消していないという main の報告 / 本件）。いずれも読んで筋が通る内容だったため
+疑われないまま残っていた。
+
+
 ### fix(test): give every rack fixture its own shm path (Sep 6, 2026)
 
 **ブランチ**: `780-fixture-shm-path`（束 `780-merge-gate` の小 PR・Part of #780）
