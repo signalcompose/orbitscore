@@ -148,7 +148,7 @@ export interface OrbitScoreToolHandlers {
   if (mcpPort && mcpPort > 0) {
 ```
 
-`orbitscore.mcpServer.port` の既定値は `0`（= 無効）です（`packages/vscode-extension/package.json:400-407`）。環境変数 `ORBITSCORE_MCP_PORT` が優先されるのは、gated E2E がアプリを **CLI から** 起動するときに設定ファイルを触らずに済ませるためです。CLAUDE.md の「マージ前ゲート」節が「`ORBITSCORE_MCP_PORT=39123` を付けて起動（この環境変数が無いと MCP サーバーが立たない）」と書いているのも同じ経路です。
+`orbitscore.mcpServer.port` の既定値は `0`（= 無効）です（`packages/vscode-extension/package.json:410-417`）。環境変数 `ORBITSCORE_MCP_PORT` が優先されるのは、gated E2E がアプリを **CLI から** 起動するときに設定ファイルを触らずに済ませるためです。CLAUDE.md の「マージ前ゲート」節が「`ORBITSCORE_MCP_PORT=39123` を付けて起動（この環境変数が無いと MCP サーバーが立たない）」と書いているのも同じ経路です。
 
 HTTP 層は Node 標準の `http` モジュールで `127.0.0.1:<port>/mcp` を listen します。MCP の Streamable HTTP トランスポートは **stateful** で、`initialize` ごとにセッションを作ります。
 
@@ -493,7 +493,7 @@ flowchart LR
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:90-96
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:91-97
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH =
   '/Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app'
@@ -510,7 +510,7 @@ const appAvailable = fs.existsSync(appPath)
 suite の読み込み時、テストを 1 本も走らせる前に daemon バイナリの鮮度を検査します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:182-192
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:183-193
   if (newest.at > builtAt) {
     throw new Error(
       'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
@@ -529,7 +529,7 @@ suite の読み込み時、テストを 1 本も走らせる前に daemon バイ
 **何を「ソース」と数えるか**にも一手が入っています（#713）。`rust/` 配下の `.rs` を無条件に拾うと、別の cargo ターゲットである統合テスト（実測では `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs`）が「最新のソース」に選ばれてしまいます。それらは `orbit-audio-daemon` のバイナリの依存グラフに入らないので、cargo は依存関係を正しく読んで何もビルドせず、バイナリの mtime も更新されません。つまりガードのメッセージが指示する `npm run test:e2e:gated` を何度打っても消えない、**解消不能な赤**になります。引き金は mtime の性質で、`git checkout` はファイルの mtime をチェックアウトした時刻へ更新するため、ブランチを行き来しただけで内容の変わっていない統合テストが「最新のソース」に化けます。#713 ではこれで実機 gated が起動段階から 1 本も走らなくなりました。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:171-173
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:172-174
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
           continue
         }
@@ -550,7 +550,7 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 ### アプリの起動 — `orbs` CLI と Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:457-478
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:458-479
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
     path.join(appPath, 'Contents/Resources/app/bin/orbs'),
@@ -583,7 +583,7 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 teardown は「安全性」の注意書きが繰り返されています。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:275-281
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:276-282
 function killOrbitStudio(): void {
   try {
     execFileSync('pkill', ['-f', 'OrbitStudio.app/Contents/MacOS'], { stdio: 'ignore' })
@@ -600,7 +600,7 @@ function killOrbitStudio(): void {
 キャプチャの有効化は daemon の spawn 時に `ORBIT_CAPTURE_WAV` 環境変数で渡すしかありません。拡張は `activate()` 時に engine を自動起動するので、gated spec は **自動起動した engine を一度止めてから** capture 付きで起動し直します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1115-1120
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1172-1177
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -700,7 +700,7 @@ export function captureWavPath(tmpRoot: string, slug: string): string {
 `runScore` は「譜面を work copy にして、エディタ経路（`open_file` → `set_selection` → `run_selection`）で評価し、要求されれば capture を解析して区間 RMS を返す」までを 1 関数にしたものです。そこにある `evaluate` が `ok` / `isError` に assert しないのは意図した設計で、理由は本章の [`ok` の節](#evaluate-orbitscore-の-ok-は何を意味するか)と同じところにあります。
 
 ```typescript
-// tests/e2e/helpers/run-score.ts:246-258
+// tests/e2e/helpers/run-score.ts:258-270
     // 🔴 **ただし「assert しない」は「握り潰す」ではない**（silent-failure レビュー 2026-09-04）。
     // `ok` は**必要条件**で、`ok: false` は `get_log` を漁らずその場で取れる一次シグナルである
     // （パース / 実行時診断・`mcp-server.ts` の tool 説明）。捨てると、セットアップの typo が
@@ -773,7 +773,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 先頭テストの最後の assert は、この onset 間隔をテンポの証拠に使います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1656-1670
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1713-1727
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -798,7 +798,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 🔴 かつては「各操作の壁時計時刻を記録し、capture 終了時刻から逆算して WAV 上の区間に写像する」形でした。これは #739 で撤去されています — 逆算はキャプチャ実長が壁時計より短いと負になり、`Math.max(0, …)` で **黙って 0 にクランプされてファイル先頭を指す**ためです。窓を後ろへずらすと逆に前を測る、という形で実際に事故が起きました。
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:190-195
+// tests/e2e/helpers/capture-windows.ts:293-298
 export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
   if (windows.length === 0) throw new Error('quadraticMeanRms requires at least one window')
   return Math.sqrt(
@@ -812,6 +812,69 @@ export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }
 このアサーションが何を捕まえたかは、WORK_LOG 6.415 に記録されています。2026-08-29、この E2E を書いて実機で走らせたところ、**`global.gain()` が instrument にまったく効いていない**ことが分かりました。原因は `output.rs` でミキサーの stage から master へ合流する音が **master gain を掛けた後に加算されていた**ことです。各層は成功を返し、ERROR は 1 行も出ず、変異検証 35 件もユニットテスト 2149 件も捕まえていませんでした。CLAUDE.md がこの事例を「E2E が最重要」の根拠として引くのは、それが「**正しく見えるが合成が違う**」を捕まえられる唯一の層だったからです。
 
 同じ日に `ORBIT_KEEP_CAPTURES=<dir>` が正式化されました。指定するとキャプチャ WAV を tmpRoot ではなくそのディレクトリに残します。「ハーネスのアサーションは窓の中の 1 つの数しか見せないが、欠陥は窓の外にいることがある」（6.415）ためです。ただしこの環境変数が spec 全体で効くようになったのは #668 PR-E2 以降です — それまでは 13 箇所のパス組み立てのうち 1 箇所しか見ていませんでした（[共有ハーネス層](#共有ハーネス層-—-tests-e2e-helpers)）。
+
+### 写像そのものを守る 4 つの不変条件 — A1 / U1 / U2 / U3
+
+時計を替えても、区間の作り方を間違えれば測る場所はずれます。そこで `captureWindowsFrom` は区間を
+バケットへ写像する前に 4 つの不変条件を検査し、破れたら **どの不変条件がどの区間で破れたか**を
+名前つきの Error にして投げます（`label` + `A1` などの id + `fromSec` / `toSec` / `durationSec` /
+`soundStartSec` / `bucketCount` の JSON）。#739 が直したのは時計ですが、同時にこの 4 本が入りました。
+
+**A1 — 最初の区間は、音が出る前に開いてはいけない。** これが #739 の元の事故そのものです。
+`LOOP()` の小節量子化とプラグイン attach で音は数秒後に出るので、固定 settle で窓を開けると
+`unity` 窓が丸ごと無音になり、比較の分母が意味を失います。
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:544-552
+    if (index === 0 && (soundStartSec === null || segment.fromSec < soundStartSec)) {
+      throw invariantError(
+        'A1',
+        name,
+        segment,
+        bucketCount,
+        'the first segment must not open before sound starts',
+      )
+    }
+```
+
+**U1 — 区間から取れたバケット数が、区間長から期待される数と合っていること。** guard を引いた
+区間長を 20 ms で割った値と実際に選ばれたバケット数を比べ、`±2` を超えたら落とします。0 件も
+落とします。「窓を指定したのに何も入っていなかった」という静かな失敗を、ここで音になる前に
+止めるためです。
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:491-494
+    const expected = Math.round(
+      (segment.toSec - segment.fromSec - 2 * guardSec) / ANALYSIS_BUCKET_SEC,
+    )
+    if (Math.abs(selected.length - expected) > BUCKET_COUNT_TOLERANCE) {
+```
+
+**U2 — キャプチャ時計で測った区間長と、壁時計で測った区間長が食い違わないこと。** 時計をバイト長へ
+移したので、その時計が壁時計から離れていないことを毎回確かめます。許容は `0.12` 秒です。時計が
+壊れれば区間はどこでも指せてしまうので、時計そのものへ張った検査だと言えます。
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:553-555
+    const captureDurationSec = segment.toSec - segment.fromSec
+    const wallDurationSec = (segment.toWall - segment.fromWall) / 1000
+    if (Math.abs(captureDurationSec - wallDurationSec) > CLOCK_WALL_TOLERANCE_SEC) {
+```
+
+**U3 — 区間は有限・キャプチャ時間内・単調で、重ならないこと。** 面白いのは例外の作り方です。
+`#643` E2E-3 の境界プローブは直前の区間へ 250 ms わざと食い込むので、重なりは
+`CaptureSegment.overlapsPrevious` で **区間側が明示的に opt-in** する形になっています。#739 の
+レビューで、区間名の文字列 `'transition'` を見る実装からここへ移されました。名前で例外を判定すると、
+同じ名前を別の意図で使った瞬間に検査が静かに緩みます。
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:529-533
+      // #643 E2E-3's boundary probe intentionally looks back 250 ms. Every overlap must
+      // opt in explicitly; regular capture segments remain strictly non-overlapping.
+      (previous !== undefined &&
+        segment.overlapsPrevious !== true &&
+        segment.fromSec < previous[1].toSec)
+```
 
 ---
 
@@ -1168,7 +1231,7 @@ function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2324-2334
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2374-2384
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1183,13 +1246,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2337-2338
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2387-2388
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2394-2396
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2444-2446
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
@@ -1262,7 +1325,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `packages/vscode-extension/src/engine-lifecycle.ts:264-291` — `decideStartEngineForAgent()`（spawn 専用オプション）
 - `packages/vscode-extension/src/playhead.ts:1-273` — `[STEP]` 文法・パレット・`findPlayArgRangeForPath()`
 - `packages/vscode-extension/src/wav-analysis.ts:1-171` — WAV 解析（peak / RMS / onset / `soundDetected`）
-- `packages/vscode-extension/package.json:400-407` — `orbitscore.mcpServer.port` 設定
+- `packages/vscode-extension/package.json:410-417` — `orbitscore.mcpServer.port` 設定
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1546-1562` — audio 経路の `[STEP]` 発生源
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()`（#654）
 - `packages/engine/src/core/sequence.ts:1381-1404` — note 経路の marker 積み込みとデデュープ（#654）
@@ -1274,6 +1337,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `tests/e2e/gated-sources.ts:1-106` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` の判定（`countErrors` 7 重定義の統合先・#668 PR-E2）
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` と `captureWavPath()`
+- `tests/e2e/helpers/capture-windows.ts:1-489` — キャプチャ時計・音の検出・区間 → バケット写像と不変条件 A1 / U1 / U2 / U3（#739）
 - `tests/e2e/helpers/run-score.ts:1-272` — 譜面を work copy にして実機で評価する 1 関数
 - `tests/e2e/helpers/wait-for-file.ts:1-57` — 生成物の待ち合わせ（`minBytes` つき）
 - `tests/e2e/helpers/run-cli.ts:1-62` — `orbitscore replay` / `render` の子プロセス実行（MCP を通らない唯一の例外）

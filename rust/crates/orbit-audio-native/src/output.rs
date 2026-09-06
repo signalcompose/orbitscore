@@ -628,6 +628,18 @@ impl OutputStream {
     pub fn render_state(&self) -> Arc<std::sync::Mutex<RenderState>> {
         self.render_state.clone()
     }
+
+    /// master line の gain 書き込みハンドル（`EngineWrap::set_global_gain` が保持する）。
+    /// 起動シーケンス（非 RT）で 1 回だけ呼ぶ想定 — poison してもハンドルの clone 自体は
+    /// 継続できるよう `into_inner` で復旧する（RT 側の実体は無事なので、ここが失敗しても
+    /// gain 書き込みの意味は保たれる）。
+    pub fn master_gain(&self) -> Arc<AtomicU32> {
+        self.render_state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .master
+            .gain_target_handle()
+    }
     /// capture 有効時のみ、producer 側で drop した interleaved サンプル累積を返す。capture 無効は
     /// `None`。**`> 0` は「off-thread writer が追いつかず録音が破損した = 検証 invalid」を意味する**
     /// （検証ハーネス/オペレータが assert・監視する silent-failure ガード）。
@@ -660,6 +672,87 @@ impl Drop for OutputStream {
     }
 }
 
+/// Master ライン（設計 `docs/design/611-output-line-design.md` §5.2）。全 stage の Master 宛て
+/// 出口が加算される 2ch バッファ・master ラック（旧 `RenderState::post`）・production の master
+/// gain 適用点をひとつにまとめる。
+///
+/// 🔴 wire は変えない（`SetBusLine` / 汎用 `LineProgram` は PR-O3）。ここでは §5.1 の generic な
+/// `line: LineSlot` は持たず、**固定の既定 program**（ラック → gain → Device{0,1} 配置）を
+/// native 側で直接実行する。
+/// engine 内部のチャンネル幅。**デバイス幅とは無関係に常に 2**（設計 §5.5）。
+///
+/// events / feeds / stages / master.buffer はすべてこの幅で扱い、デバイス幅への変換は
+/// `place_master_into_device` の 1 箇所だけで行う。デバイス幅（`StreamConfig.channels`）を
+/// engine バッファの解釈に使うと、8ch デバイスで frame 数が 1/4 になって音が化ける
+/// （#611 本文の実害がこれ）。
+pub const ENGINE_CHANNELS: usize = 2;
+
+/// RT で resize しないための事前確保（`MasterLine` / `InsertBusStage` が共有する規律）。
+///
+/// 🔴 **同じ本体を 2 箇所に置かない。** 「RT hot path で resize しない」という不変条件を守る
+/// ロジックが分かれていると、確保サイズの計算式や初期値を変える時に片方だけ直る。
+fn ensure_audio_buffer_len(buffer: &mut Vec<f32>, len: usize) {
+    if buffer.len() < len {
+        buffer.resize(len, 0.0);
+    }
+}
+
+pub struct MasterLine {
+    /// 全 stage の Master 宛て出口が加算される 2ch バッファ（zero-fill は callback 冒頭・
+    /// `render_engine_with_sources` に core の `hardware_out` として渡す）。事前確保のみ・RT では
+    /// resize しない（`InsertBusStage::ensure_buffer_len` と同じ規律）。
+    buffer: Vec<f32>,
+    /// master ラック（今日の `post`）。CLAP effect/instrument（Issue #340）。engine render 後の
+    /// **master.buffer（常に 2ch）**を in-place 変換する（デバイス幅とは無関係）。
+    post: Option<Box<dyn PostProcessor>>,
+    /// control（`SetGlobalGain`）が書き込む目標ゲイン（線形振幅・f32 bits）。RT は Relaxed load
+    /// のみ（`InsertBusStage::send_gain_overrides` と同じ atomic gain パターン）。core の
+    /// `Engine::set_global_gain` は production では呼ばない — 乗算経路をここ 1 本にする
+    /// （§5.4「経路が 1 本になった」）。
+    gain_target: Arc<AtomicU32>,
+    /// RT が block ごとに `gain_target` へ寄せていく現在値（RT 専有・非 atomic）。
+    gain_current: f32,
+    /// 5ms 相当のフレーム数（**構築時に** sample_rate から算出。`advance_gain` の分母）。
+    ramp_frames: u32,
+}
+
+impl MasterLine {
+    /// `ramp_frames` を sample_rate から**構築時に**算出する（RT では計算しない）。
+    pub fn new(sample_rate: u32, post: Option<Box<dyn PostProcessor>>) -> Self {
+        let ramp_frames = ((sample_rate as f64 * 0.005).round() as u32).max(1);
+        Self {
+            buffer: Vec::new(),
+            post,
+            gain_target: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
+            gain_current: 1.0,
+            ramp_frames,
+        }
+    }
+
+    /// callback block は通常これより遥かに短い。RT hot path の resize を構造的に排除する
+    /// （`InsertBusStage::ensure_buffer_len` と同じ意図）。
+    fn ensure_buffer_len(&mut self, len: usize) {
+        ensure_audio_buffer_len(&mut self.buffer, len);
+    }
+
+    /// control 側（`EngineWrap::set_global_gain`）が保持する書き込みハンドル。RT はここへは
+    /// 触れない（Arc の clone は非 RT の起動シーケンスで 1 回だけ行う）。
+    pub fn gain_target_handle(&self) -> Arc<AtomicU32> {
+        self.gain_target.clone()
+    }
+
+    /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
+    /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
+    /// 算術のみ（alloc/lock/syscall なし）。
+    #[inline]
+    fn advance_gain(&mut self, frames: usize) -> f32 {
+        let target = f32::from_bits(self.gain_target.load(Ordering::Relaxed));
+        let frac = (frames as f32 / self.ramp_frames as f32).min(1.0);
+        self.gain_current += (target - self.gain_current) * frac;
+        self.gain_current
+    }
+}
+
 /// Mutable callback state which must survive a cpal stream rebuild (notably
 /// out-of-process processor adapters). The callback uses one `try_lock`; a
 /// concurrent control-plane rebuild produces a silent block instead of ever
@@ -669,7 +762,7 @@ pub struct RenderState {
     insert_buses: Vec<InsertBusStage>,
     sources: Vec<SourceSlot>,
     transport: BlockTransport,
-    post: Option<Box<dyn PostProcessor>>,
+    master: MasterLine,
 }
 
 /// One callback's transport snapshot passed to block sources.
@@ -896,9 +989,7 @@ impl InsertBusStage {
     }
 
     fn ensure_buffer_len(&mut self, len: usize) {
-        if self.buffer.len() < len {
-            self.buffer.resize(len, 0.0);
-        }
+        ensure_audio_buffer_len(&mut self.buffer, len);
     }
 }
 
@@ -1010,7 +1101,7 @@ fn render_shared_block(
                 insert_buses,
                 sources,
                 transport,
-                post,
+                master,
             } = &mut *state;
             render_block_with_sources(
                 engine,
@@ -1018,7 +1109,7 @@ fn render_shared_block(
                 insert_buses,
                 sources,
                 transport,
-                post,
+                master,
                 capture,
                 cb_stats,
                 output_channels,
@@ -1033,12 +1124,15 @@ fn render_shared_block(
 }
 
 ///
-/// 手順: (1) callback 開始時刻を取る（`cb_stats` 有り時のみ）→ (2) [`render_engine`] で engine
-/// （+ LinkAudio egress）を render → (3) `post` 有りなら hardware sum を in-place 変換（CLAP
-/// effect/instrument・Issue #340）→ (4) `capture` 有りなら **post 適用後の最終 `hw`** を WAV 用
-/// ring へ読み取り専用 tap（#307）→ (5) callback 所要時間を記録。`post`/`capture`/`cb_stats` は
-/// 各々独立の opt-in 分岐で、すべて None なら従来経路とビット同一。`capture` は `hw` を読むだけ
-/// なので有効でも出力サンプルは不変（tap であって mutation ではない）。
+/// 手順（設計 `611-output-line-design.md` §5.3）: (1) callback 開始時刻を取る（`cb_stats` 有り時
+/// のみ）→ (2) engine（+ 各 insert bus / LinkAudio egress）を常に 2ch で render し `master.buffer`
+/// へ集約 → (3) master ライン: `master.post` 有りなら `master.buffer`（2ch）を in-place 変換
+/// （CLAP effect/instrument・Issue #340）、続けて gain を適用（production の乗算経路はここ 1 本・
+/// §5.4）→ (4) `master.buffer` を device 幅の `hw` へ配置（`place_master_into_device`）→
+/// (5) `capture` 有りなら **配置後の最終 `hw`** を WAV 用 ring へ読み取り専用 tap（#307）→
+/// (6) callback 所要時間を記録。`master.post`/`capture`/`cb_stats` は各々独立の opt-in 分岐で、
+/// `master.post` が None かつ gain が 1.0（既定）なら従来経路とビット同一（2ch デバイス）。
+/// `capture` は `hw` を読むだけなので有効でも出力サンプルは不変（tap であって mutation ではない）。
 #[inline]
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)] // callback state is kept as independent opt-in seams.
@@ -1046,7 +1140,7 @@ fn render_block(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     insert_buses: &mut [InsertBusStage],
-    post: &mut Option<Box<dyn PostProcessor>>,
+    master: &mut MasterLine,
     capture: &mut Option<RingTapSink>,
     cb_stats: &Option<Arc<CallbackTimeStats>>,
     output_channels: usize,
@@ -1063,7 +1157,7 @@ fn render_block(
         insert_buses,
         &mut sources,
         &mut transport,
-        post,
+        master,
         capture,
         cb_stats,
         output_channels,
@@ -1079,7 +1173,7 @@ fn render_block_with_sources(
     insert_buses: &mut [InsertBusStage],
     sources: &mut [SourceSlot],
     transport: &mut BlockTransport,
-    post: &mut Option<Box<dyn PostProcessor>>,
+    master: &mut MasterLine,
     capture: &mut Option<RingTapSink>,
     cb_stats: &Option<Arc<CallbackTimeStats>>,
     output_channels: usize,
@@ -1089,23 +1183,51 @@ fn render_block_with_sources(
     // production RT 監視を callback-duration ベースにするための計測（cb_stats 有り時のみ）。
     let t0 = cb_stats.as_ref().map(|_| Instant::now());
 
-    // active な bus が 1 つも無ければ既存の呼び出し列をそのまま維持する（bit-identical）。
-    // 既定 bus プール（全 stage inactive で起動）はここで従来経路に落ちるため、
-    // `seq.effect()` 未使用セッションに RT コストを課さない。
+    // engine（+ bus graph）は常に 2ch で完結する（設計 §5.5 row 1・3）。`master.buffer` が core の
+    // 「hardware_out」を受ける — デバイス幅（`output_channels`／`hw`）とは無関係。buffer は起動時に
+    // 事前確保済み（`start_output_inner`）なので RT では resize しない。
+    let frames = hw.len() / output_channels;
+    let bs = frames * 2;
+    debug_assert!(
+        master.buffer.len() >= bs,
+        "master buffer too short: {} < {bs}",
+        master.buffer.len()
+    );
     render_engine_with_sources(
         engine,
         link,
         insert_buses,
         sources,
         transport,
-        output_channels,
-        hw,
+        2,
+        &mut master.buffer[..bs],
     );
 
-    // master-bus post-processor（CLAP）。engine render 済みの hardware sum を in-place 変換。
-    if let Some(p) = post.as_mut() {
-        p.process(hw);
+    // master ライン（設計 §5.3）: ラック → gain（single 適用点・§5.4）。core の
+    // `global_gain` は production では 1.0 固定のまま呼ばれない（乗算経路はここ 1 本）。
+    if let Some(p) = master.post.as_mut() {
+        p.process(&mut master.buffer[..bs]);
     }
+    let g = master.advance_gain(frames);
+    // g == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
+    // 「未使用 gain 経路に per-sample 乗算コストを払わない」ための最適化であり、O0 golden の
+    // bit 一致は乗算そのものではなく `gain_current` が初期値 1.0 のまま変化しないことに由来する
+    // （`SetGlobalGain` を一度も呼ばない譜面では target=current=1.0 が恒常的に成立する）。
+    if g != 1.0 {
+        for s in master.buffer[..bs].iter_mut() {
+            *s *= g;
+        }
+    }
+
+    // デバイス配置（設計 §5.3・row 6）: master.buffer（2ch）を hw（デバイス幅）の ch{0,1} へ置く。
+    // 2ch デバイスなら memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。3ch 以上は ch2 以降が
+    // 無音で残る — Device 出口はまだ master 固定 program の 1 本のみ（さらなる出口は PR-O3/O4）。
+    //
+    // 🔴 ここで `hw` を全域 zero-fill しない。`place_master_into_device` が **hw の全要素を
+    // 書き切る**ので、1ch / 2ch（＝今日検証されている構成すべて）では書いた直後に全部上書きされ、
+    // RT コールバックで**毎ブロック二重に store する**ことになる（64 frames × 2ch なら
+    // 約 96,000 store/秒の無駄）。余剰チャンネルの 0 埋めは配置関数の責務に閉じた。
+    place_master_into_device(&master.buffer[..bs], frames, output_channels, hw);
 
     // capture seam（#307 realtime）: post 適用後の最終 hw（= device に出る実信号）を WAV へ逃がす
     // 読み取り専用 tap。`RingTapSink::commit` は wait-free / no-alloc（満杯時はあふれを drop カウント）
@@ -1117,6 +1239,40 @@ fn render_block_with_sources(
 
     if let (Some(stats), Some(t0)) = (cb_stats, t0) {
         stats.record(t0.elapsed().as_nanos() as u64);
+    }
+}
+
+/// `master.buffer`（常に 2ch）を device 幅の `hw` へ配置する（裁定 2「Device 宛ては master の
+/// ラック・ゲインを通らない」＝この関数の**手前**でラック/gain が既に適用済み）。`hw` は直前に
+/// zero-fill 済みでこの関数が唯一の書き手なので加算ではなく代入で足りる。RT: alloc/lock/syscall
+/// なし。`device_channels == 0` は cpal が返さない前提（既存コードも同じ前提で `hw.len() /
+/// output_channels` を除算している）。
+#[inline]
+/// master.buffer（常に 2ch）を hw（デバイス幅）へ置く。**hw の全要素を書き切る**
+/// （呼び出し側は事前の zero-fill をしない — RT ホットパスで二重に store しないため）。
+fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
+    match device_channels {
+        0 => {}
+        // mono デバイス: L+R を 0.5 でマージ（相関信号でクリップしない・設計 §2.2 Q-611-5 と同じ法則）。
+        1 => {
+            for frame in 0..frames {
+                hw[frame] = (buf[frame * 2] + buf[frame * 2 + 1]) * 0.5;
+            }
+        }
+        // 2ch は幅が一致するので memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。
+        2 => hw[..frames * 2].copy_from_slice(&buf[..frames * 2]),
+        // 3ch 以上: ch0/1 に置き、**余剰チャンネルはここで 0 にする**（Device 出口は master の
+        // 1 本だけなので、残りは無音が正しい）。
+        _ => {
+            for frame in 0..frames {
+                let base = frame * device_channels;
+                hw[base] = buf[frame * 2];
+                hw[base + 1] = buf[frame * 2 + 1];
+                for extra in &mut hw[base + 2..base + device_channels] {
+                    *extra = 0.0;
+                }
+            }
+        }
     }
 }
 
@@ -1625,8 +1781,9 @@ pub fn start_default_output_with_link_egress(
 }
 
 /// CLAP master-bus post-processor 経路付きで出力を起動する（feature `clap-host` / `outproc-effect`
-/// 経由でのみ daemon が使う・Issue #340 / #359）。`post` は engine render 後の hardware sum を RT
-/// callback 内で in-place 変換する（CLAP effect=serial insert / instrument=add-mix。実体は実装が所有）。
+/// 経由でのみ daemon が使う・Issue #340 / #359）。`post` は `MasterLine.post` として保持され、
+/// engine render 後の master.buffer（常に 2ch）を RT callback 内で in-place 変換する（CLAP
+/// effect=serial insert / instrument=add-mix。実体は実装が所有）。
 /// 戻り値の `CallbackTimeStats` は callback-duration ベースの RT 監視用（A0 §6: CoreAudio+cpal は xrun
 /// 不発火 → duration が唯一の RT signal）。
 ///
@@ -1815,7 +1972,9 @@ fn start_output_inner(
     let channels = live.channels();
     for bus in &mut insert_buses {
         // callback block は通常これより遥かに短い。RT hot path の resize を構造的に排除する。
-        bus.ensure_buffer_len(sample_rate as usize * channels as usize);
+        // engine は常に 2ch で完結する（設計 §5.5 row 2）。8ch@2048 の feed 破棄（#611 本文の
+        // 実害）は `bs = frames*2 <= 8192` で消える — デバイス channel 数に比例して膨らまない。
+        bus.ensure_buffer_len(sample_rate as usize * 2);
     }
 
     // capture seam（#307 realtime・A = daemon-start config / whole-stream）: `capture_path` が
@@ -1839,7 +1998,12 @@ fn start_output_inner(
     // callback-duration 計測は post（CLAP）経路でのみ有効化する。hardware-only / link 経路は
     // 従来通り無計測（None → render_block は計測分岐を踏まずビット同一）。
     let cb_stats = callback_timing.then(CallbackTimeStats::new);
-    let engine = Engine::new(sample_rate, channels);
+    // 設計 §5.5 row 1: events / feeds / stages はすべて 2ch。デバイス幅は Device 出口の配置
+    // （`place_master_into_device`）でのみ現れる。
+    let engine = Engine::new(sample_rate, 2);
+    let mut master = MasterLine::new(sample_rate, post);
+    // master.buffer も 2ch 前提で事前確保する（bus buffer と同じ規律・row 2）。
+    master.ensure_buffer_len(sample_rate as usize * 2);
     let render_state = Arc::new(std::sync::Mutex::new(RenderState {
         link,
         insert_buses,
@@ -1848,7 +2012,7 @@ fn start_output_inner(
             cursor_frames: 0,
             sample_rate,
         },
-        post,
+        master,
     }));
     let stream = build_stream(
         &live,
@@ -2435,14 +2599,15 @@ mod tests {
         let mut buses = Vec::new();
         let mut actual = vec![0.0; 8];
         let mut link = None;
-        let mut post = None;
+        let mut master = MasterLine::new(48_000, None);
+        master.ensure_buffer_len(8);
         let mut capture = None;
         let cb_stats = None;
         render_block(
             &with_buses,
             &mut link,
             &mut buses,
-            &mut post,
+            &mut master,
             &mut capture,
             &cb_stats,
             2,
@@ -2468,14 +2633,15 @@ mod tests {
         ];
         let mut actual = vec![0.0; 8];
         let mut link = None;
-        let mut post = None;
+        let mut master = MasterLine::new(48_000, None);
+        master.ensure_buffer_len(8);
         let mut capture = None;
         let cb_stats = None;
         render_block(
             &with_buses,
             &mut link,
             &mut buses,
-            &mut post,
+            &mut master,
             &mut capture,
             &cb_stats,
             2,
@@ -2516,7 +2682,8 @@ mod tests {
             cursor_frames: 0,
             sample_rate: 48_000,
         };
-        let mut post = None;
+        let mut master = MasterLine::new(48_000, None);
+        master.ensure_buffer_len(4);
         let mut capture = None;
         render_block_with_sources(
             &engine,
@@ -2524,7 +2691,7 @@ mod tests {
             &mut buses,
             &mut sources,
             &mut transport,
-            &mut post,
+            &mut master,
             &mut capture,
             &None,
             2,
@@ -2944,6 +3111,13 @@ mod tests {
     #[test]
     fn render_callback_records_count_and_last_frames_without_timing_stats() {
         let engine = Engine::new(48_000, 2);
+        // #649 で `post` は `MasterLine` の中へ移った（master ラック → gain → device 配置を
+        // 1 本の固定 program にするため）。本番は `start_output_inner` が起動時に確保するので、
+        // ここでも同じように事前確保する（RT では resize しない規律）。
+        let mut master = MasterLine::new(48_000, None);
+        // 本番（`start_output_inner`）と同じく 1 秒ぶんを確保する。このテストは 8 と 12 の
+        // 2 種類のブロックを流すので、大きい方に足りる必要がある。
+        master.ensure_buffer_len(48_000 * ENGINE_CHANNELS);
         let state = Arc::new(std::sync::Mutex::new(RenderState {
             link: None,
             insert_buses: Vec::new(),
@@ -2952,7 +3126,7 @@ mod tests {
                 cursor_frames: 0,
                 sample_rate: 48_000,
             },
-            post: None,
+            master,
         }));
         let stats = StreamStats::default();
         let mut capture = None;
@@ -3087,6 +3261,114 @@ mod tests {
         assert!(!snap.device_lost);
     }
 
+    /// hw を定数で埋める post-processor スタブ（engine render の無音を潰す）。
+    /// **master ラックが「音を生成・変形する」場合**を模す。
+    struct FillPost(f32);
+    impl PostProcessor for FillPost {
+        fn process(&mut self, data: &mut [f32]) {
+            data.fill(self.0);
+        }
+    }
+
+    /// 🔴 **これが #649 の残り半分を守る唯一のテスト**（2026-09-05・Fable 監査 I-1）。
+    ///
+    /// #649 の症状「`global.gain()` が instrument に効かない」は、instrument を mixer source へ
+    /// 移した `374e8b2d`（2026-08-29・main）で既に消えている。**gated `E2E-1` は main の rust でも
+    /// 緑になる**（実機で確認済み）ので、E2E-1 は本 PR の Rust 差分を何も守っていない。
+    ///
+    /// 残っていたのは**同じクラスの別の穴**: master ラック（`post`）が core の gain ramp の
+    /// **後**に走っていたので、**ラックが生成・変形した音は `global.gain()` を逃れていた**。
+    /// `MasterLine` は順序を `rack → gain` に固定してこれを塞ぐ（設計 §5.2）。
+    ///
+    /// このテストが赤になる変異: `render_block_with_sources` で `post.process` と
+    /// `advance_gain` の乗算を入れ替える（= main の順序に戻す）。その時 hw は 0.75 になる。
+    ///
+    /// **`Gain` のような線形ラックでは順序を区別できない**（乗算は可換）ので、DSL 経由の E2E では
+    /// この不変条件を測れない（`#611 O0-4` のテスト名が「a linear rack cannot show order」と
+    /// 言っているのはこのこと）。だからここはユニットで押さえる。
+    #[test]
+    fn master_gain_applies_after_the_master_rack_generates_sound() {
+        let engine = Engine::new(48_000, 2); // schedule 空 → render は無音（0.0）。
+        let mut link: Option<LinkEgress> = None;
+        let mut master = MasterLine::new(48_000, Some(Box::new(FillPost(0.75))));
+        master.ensure_buffer_len(8);
+        // ramp が 1 block で目標へ到達するよう、block を ramp_frames 以上にする（4 frames では
+        // 一次遅れの途中になるため、ここでは `gain_current` を直接置いて狙いを 1 つに絞る）。
+        master
+            .gain_target_handle()
+            .store(0.5_f32.to_bits(), Ordering::Relaxed);
+        master.gain_current = 0.5;
+        let mut capture: Option<RingTapSink> = None;
+        let cb_stats: Option<Arc<CallbackTimeStats>> = None;
+
+        let mut hw = vec![0.0f32; 8]; // 4 frames × 2ch。
+        render_block(
+            &engine,
+            &mut link,
+            &mut [],
+            &mut master,
+            &mut capture,
+            &cb_stats,
+            2,
+            &mut hw,
+        );
+
+        // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
+        // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
+        assert!(
+            hw.iter().all(|&s| (s - 0.375).abs() < 1e-6),
+            "master gain must attenuate what the master rack produced: {hw:?}"
+        );
+    }
+
+    /// `advance_gain` は block が ramp より長ければ 1 回で目標へ到達し、短ければ寄っていく。
+    #[test]
+    fn advance_gain_saturates_at_the_target_for_blocks_longer_than_the_ramp() {
+        let mut master = MasterLine::new(48_000, None);
+        master
+            .gain_target_handle()
+            .store(0.25_f32.to_bits(), Ordering::Relaxed);
+        // ramp_frames は 48_000 の 5 ms = 240。512 frame block は frac = 1.0 で即時到達。
+        assert!((master.advance_gain(512) - 0.25).abs() < 1e-6);
+
+        let mut slow = MasterLine::new(48_000, None);
+        slow.gain_target_handle()
+            .store(0.0_f32.to_bits(), Ordering::Relaxed);
+        // 64 frame block は frac = 64/240 なので 1 回では到達しない（が単調に近づく）。
+        let first = slow.advance_gain(64);
+        assert!(first < 1.0 && first > 0.0, "{first}");
+        let second = slow.advance_gain(64);
+        assert!(
+            second < first,
+            "gain must keep approaching the target: {first} -> {second}"
+        );
+    }
+
+    /// 3ch 以上のデバイスでは ch0/1 だけに置き、**ch2 以降には何も書かない**
+    /// （呼び出し側が zero-fill 済み）。8ch@2048 は #611 本文の実害そのもの。
+    #[test]
+    fn place_master_into_device_fills_only_the_first_two_channels() {
+        let buf = [0.1, 0.2, 0.3, 0.4]; // 2 frames × 2ch
+                                        // 🔴 前の内容を残した状態で渡す。呼び出し側は zero-fill しないので、**余剰チャンネルを
+                                        // 0 にするのはこの関数の責務**。0 埋め済みの hw を渡すと、その責務を検査できない。
+        let mut hw = vec![9.9f32; 2 * 8]; // 2 frames × 8ch
+        place_master_into_device(&buf, 2, 8, &mut hw);
+        assert_eq!(&hw[0..2], &[0.1, 0.2]);
+        assert!(hw[2..8].iter().all(|&s| s == 0.0), "{hw:?}");
+        assert_eq!(&hw[8..10], &[0.3, 0.4]);
+        assert!(hw[10..16].iter().all(|&s| s == 0.0), "{hw:?}");
+    }
+
+    /// mono デバイスは L+R を 0.5 でマージする（相関信号でクリップしない）。
+    #[test]
+    fn place_master_into_device_merges_to_mono_at_half_gain() {
+        let buf = [1.0, 1.0, 1.0, -1.0]; // frame0: 相関 / frame1: 逆相
+        let mut hw = vec![9.9f32; 2];
+        place_master_into_device(&buf, 2, 1, &mut hw);
+        assert!((hw[0] - 1.0).abs() < 1e-6, "{hw:?}");
+        assert!(hw[1].abs() < 1e-6, "{hw:?}");
+    }
+
     // #307 capture seam: render_block が capture へ渡すのは **post 適用後**の hw であることを
     // 実 device 抜きで pin する。post が hw を 0.75 に上書きするスタブを挿し、capture ring に
     // commit された値が 0.75（post 後）であって 0.0（engine render 直後の無音・post 前）でない
@@ -3096,17 +3378,10 @@ mod tests {
     fn render_block_captures_post_processed_hw() {
         use crate::link_audio_ring::RingTapSink;
 
-        // hw を一律 0.75 に上書きする post-processor スタブ（engine render の無音を潰す）。
-        struct FillPost(f32);
-        impl PostProcessor for FillPost {
-            fn process(&mut self, data: &mut [f32]) {
-                data.fill(self.0);
-            }
-        }
-
         let engine = Engine::new(48_000, 2); // schedule 空 → render は無音（0.0）。
         let mut link: Option<LinkEgress> = None;
-        let mut post: Option<Box<dyn PostProcessor>> = Some(Box::new(FillPost(0.75)));
+        let mut master = MasterLine::new(48_000, Some(Box::new(FillPost(0.75))));
+        master.ensure_buffer_len(8);
         let (sink, mut consumer, _drops) = RingTapSink::new(64);
         let mut capture: Option<RingTapSink> = Some(sink);
         let cb_stats: Option<Arc<CallbackTimeStats>> = None;
@@ -3116,7 +3391,7 @@ mod tests {
             &engine,
             &mut link,
             &mut [],
-            &mut post,
+            &mut master,
             &mut capture,
             &cb_stats,
             2,

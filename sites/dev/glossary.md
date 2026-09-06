@@ -257,6 +257,10 @@ VS Code が拡張を実行するための専用 Node.js プロセス。Renderer 
 
 VS Code API。エディタ下部のステータスバーに表示するアイテム。OrbitScore は 2 本使います: engine 動作状態 (priority 100) と scsynth 解決状態 (priority 99) です。
 
+### workspace trust (untrustedWorkspaces)
+
+VS Code の信頼モデル。未信頼のワークスペースでは拡張が既定で制限され `activate()` すら呼ばれません。OrbitScore は `package.json` の `capabilities.untrustedWorkspaces` で `supported: true` を宣言し (#385)、フォルダを開かない loose-file 起動でも activate します。`restrictedConfigurations` には「ワークスペースが値を決めると別の実行ファイルが動く」2 件 (`orbitscore.scsynthPath` / `orbitscore.engine`) だけを挙げています。
+
 ---
 
 ## scsynth Resolver / Bundle 用語
