@@ -1,12 +1,12 @@
 ---
 title: "IV-1. VS Code Extension Architecture"
 chapter-id: "IV-1"
-verified-against: 4f2ebd5
-verified-at: "2026-09-04"
+verified-against: aa16f7a
+verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730), the `capabilities.untrustedWorkspaces` declaration) on 2026-09-04. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730), the `capabilities.untrustedWorkspaces` declaration) on 2026-09-04, and to the deferral of #385 layer 2 (PR [#750](https://github.com/signalcompose/orbitscore/pull/750)) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-1. VS Code Extension Architecture
 
@@ -98,6 +98,8 @@ The declaration sits in `package.json` between `engines` and `main`.
 What is interesting is that this declaration is never read from code. Left alone it would become "a setting nobody reads," so the 6 tests in `tests/vscode-extension/untrusted-workspace-capability.spec.ts` read the manifest directly and inspect it. They are written to fail on the spot when `restrictedConfigurations` cannot be taken out as an array, because falling back to `?? []` would let `for...of` iterate zero times and go green the moment the declaration disappears entirely.
 
 That said, **what this layer guarantees stops at the content of the declaration**. Whether the extension really activates in an untrusted workspace, and moreover produces sound as usual, is meant to be pinned down by the gated real-device E2E (`E2E-D1`), which was split out into #735. Development mode launched with `--extensionDevelopmentPath` bypasses the workspace-trust restriction, so an E2E written there stays green even when the whole `capabilities` block is deleted — that is what was measured on 2026-09-04.
+
+Beyond that, **the declaration only covers OrbitScore's own extension**. `anthropic.claude-code` ships alongside it inside OrbitStudio, and according to `docs/planning/DEVELOPMENT_MAP.md` §4.J (PR [#750](https://github.com/signalcompose/orbitscore/pull/750)) that extension declares `untrustedWorkspaces.supported: false`; it is managed by Anthropic, so **we cannot add the declaration from our side**. In a loose-file launch OrbitScore therefore activates while **the LLM side silently does not**, which is a shipping blocker under a policy that treats the LLM as a first-class user. So #385 is **not finished at the declaration (layer 1)**: a **layer 2** remains, turning workspace trust off by default in the OrbitStudio build itself (`product.overrides.json` + `build_orbitstudio.sh`, PR-S-T2 in the plan, designed in `docs/design/656-release-design.md` §3.4). Layer 2 is scheduled before the #656 release, and it was decided that stage 1 (the must-fix audio path) would not touch it (owner, 2026-09-05).
 
 ---
 
@@ -849,7 +851,7 @@ The main changes that entered the extension between the first draft on 2026-05-0
 | Stop `get_log`'s silent truncation; raise the cap to the ring capacity of 1000 | #567 | `log-ring.ts:1-18` |
 | Correlating evaluation results via `//#evalMark` (`EvalMarkBridge`), an independent stdout branch | #614 | `eval-mark-bridge.ts:1-23`, `extension.ts:1501-1509` |
 | The `browsePlugins` command and the unknown-plugin-name diagnostic | #638 | §6.412 (2026-08-29), `extension.ts:2285-2298`, `extension.ts:4095-4112` → [PH-3](/en/plugin-hosting/catalog) |
-| The `capabilities.untrustedWorkspaces` declaration (`supported: true`, 2 `restrictedConfigurations`). A folder-less loose-file launch activates too | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/development/WORK_LOG.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)", `package.json:34-43` |
+| The `capabilities.untrustedWorkspaces` declaration (`supported: true`, 2 `restrictedConfigurations`). A folder-less loose-file launch activates too | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/archive/WORK_LOG_2026-09.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)" (rotated out of the current log), `package.json:34-43` |
 
 The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEngine` is synchronous and requires scsynth" no longer hold at 69dc968.
 

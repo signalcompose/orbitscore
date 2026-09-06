@@ -1,12 +1,12 @@
 ---
 title: "IV-1. VS Code 拡張アーキテクチャ"
 chapter-id: "IV-1"
-verified-against: 4f2ebd5
-verified-at: "2026-09-04"
+verified-against: aa16f7a
+verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-1. VS Code 拡張アーキテクチャ
 
@@ -98,6 +98,8 @@ OrbitScore が使っているのは 2 種類です:
 面白いのは、この宣言がコードからは一度も読まれないという点です。放っておくと「誰も読まない設定」になってしまうので、`tests/vscode-extension/untrusted-workspace-capability.spec.ts` の 6 本がマニフェストを直接読んで検査しています。`restrictedConfigurations` を配列として取り出せない形になったらその場で落とす、という書き方になっているのは、`?? []` へフォールバックすると宣言が丸ごと消えたときに `for...of` が 0 周して green になってしまうためです。
 
 ただし**この層が保証するのは宣言の内容までです**。「実際に未信頼ワークスペースで activate され、しかも普通に音が出る」ことは実機の gated E2E (`E2E-D1`) が押さえる予定で、こちらは #735 へ分離されました。`--extensionDevelopmentPath` で起動する開発モードは workspace trust の制限を迂回するため、そこで書いた E2E は `capabilities` ブロックを丸ごと削除しても緑になってしまう、というのが 2026-09-04 の実測です。
+
+さらに、**この宣言が効くのは OrbitScore 自身の拡張だけです**。OrbitStudio には `anthropic.claude-code` が同居しますが、`docs/planning/DEVELOPMENT_MAP.md` §4.J (PR [#750](https://github.com/signalcompose/orbitscore/pull/750)) の記録によれば、そちらは `untrustedWorkspaces.supported: false` を宣言していて、Anthropic 管理なので**こちらから宣言を足せません**。つまり loose-file 起動では OrbitScore は activate しても **LLM 側が黙って activate しない**ままで、LLM を第一級ユーザーに置く方針では出荷ブロッカーになります。そのため #385 は**宣言 (層 1) で完了ではなく**、OrbitStudio のビルド側で workspace trust そのものを既定 off にする**層 2** (`product.overrides.json` + `build_orbitstudio.sh`・計画上は PR-S-T2・設計は `docs/design/656-release-design.md` §3.4) が残っています。層 2 は #656 の出荷前に入れる予定で、段 1 (音の経路の must-fix) では触らないと決まりました (owner 2026-09-05)。
 
 ---
 
@@ -849,7 +851,7 @@ flowchart TD
 | `get_log` の silent truncation をやめ、上限をリング容量 1000 に | #567 | `log-ring.ts:1-18` |
 | `//#evalMark` による評価結果の相関 (`EvalMarkBridge`)、stdout の独立分岐 | #614 | `eval-mark-bridge.ts:1-23`、`extension.ts:1501-1509` |
 | `browsePlugins` コマンドと未知プラグイン名の診断 | #638 | §6.412 (2026-08-29)、`extension.ts:2285-2298`、`extension.ts:4095-4112` → [PH-3](/plugin-hosting/catalog) |
-| `capabilities.untrustedWorkspaces` の宣言 (`supported: true`・`restrictedConfigurations` は 2 件)。フォルダ無しの loose-file 起動でも activate する | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/development/WORK_LOG.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)"、`package.json:34-43` |
+| `capabilities.untrustedWorkspaces` の宣言 (`supported: true`・`restrictedConfigurations` は 2 件)。フォルダ無しの loose-file 起動でも activate する | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/archive/WORK_LOG_2026-09.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)"（本体はローテーション済み）、`package.json:34-43` |
 
 初稿の「8 つのコマンド」「診断は 3 種 (+2)」「`startEngine` は同期で scsynth 必須」はいずれも 69dc968 では成り立ちません。
 
