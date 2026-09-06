@@ -760,7 +760,7 @@ export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }
 `unity` 窓が丸ごと無音になり、比較の分母が意味を失います。
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:441-449
+// tests/e2e/helpers/capture-windows.ts:544-552
     if (index === 0 && (soundStartSec === null || segment.fromSec < soundStartSec)) {
       throw invariantError(
         'A1',
@@ -778,7 +778,7 @@ export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }
 止めるためです。
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:388-391
+// tests/e2e/helpers/capture-windows.ts:491-494
     const expected = Math.round(
       (segment.toSec - segment.fromSec - 2 * guardSec) / ANALYSIS_BUCKET_SEC,
     )
@@ -790,7 +790,7 @@ export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }
 壊れれば区間はどこでも指せてしまうので、時計そのものへ張った検査だと言えます。
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:450-452
+// tests/e2e/helpers/capture-windows.ts:553-555
     const captureDurationSec = segment.toSec - segment.fromSec
     const wallDurationSec = (segment.toWall - segment.fromWall) / 1000
     if (Math.abs(captureDurationSec - wallDurationSec) > CLOCK_WALL_TOLERANCE_SEC) {
@@ -803,7 +803,7 @@ export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }
 同じ名前を別の意図で使った瞬間に検査が静かに緩みます。
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:426-430
+// tests/e2e/helpers/capture-windows.ts:529-533
       // #643 E2E-3's boundary probe intentionally looks back 250 ms. Every overlap must
       // opt in explicitly; regular capture segments remain strictly non-overlapping.
       (previous !== undefined &&
