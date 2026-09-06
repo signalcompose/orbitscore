@@ -1,12 +1,12 @@
 ---
 title: "RE-2. OOP children と shm transport"
 chapter-id: "RE-2"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: f5d2ef5
+verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-06 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # RE-2. OOP children と shm transport
 
@@ -235,7 +235,24 @@ pub const CHILD_STATUS_READY: u32 = 1;
 pub const CHILD_STATUS_LOAD_FAILED: u32 = 2;
 ```
 
-コメントが指摘する落とし穴は重要です: shm ファイル自体は daemon 起動時に一度だけ truncate（ゼロ
+3 つ目の `CHILD_STATUS_LOAD_FAILED` は、名前のとおり child が load に失敗して終了する直前に立てる
+status です。rack child の `RackController::load_initial` が plugin のロードに失敗すると、まず
+失敗の詳細を `cmd_result_detail` へ publish し、**その後で**この status を store してから終了します。
+daemon 側（`engine_wrap.rs` の Root 3-3 分岐）は、child の早期終了を拾う watchdog signal
+**より先に**この status を見ます。ですから host に上がるのは「child が死んだ」という汎用の文言では
+なく、「index n の load がこう失敗した」という具体的な理由になります。PR-1c（#441）の watchdog は
+役目を失ったわけではなく、この status を立てないまま死ぬ child（ロード以外の理由による早期終了）を
+timeout を待たずに拾う経路として残っています。
+
+ちなみに、この doc コメント自体が [#760](https://github.com/signalcompose/orbitscore/issues/760)
+まで実装と食い違っていて、「未使用の予約値」「write 箇所なし」と書かれたままでした。実機 gated E2E は
+その記述に沿った汎用文言（`child exited before publishing READY`）をアンカーにしていたので、診断が
+具体的になった時点でテストだけが落ちる、という形になっていました。注釈とアサーションの両方を実装へ
+合わせ直したのが PR [#769](https://github.com/signalcompose/orbitscore/pull/769) です。ここは
+「コメントの誤りがテストの誤りを生む」という連鎖が実際に起きた箇所なので、読むときは status の
+write 側（rack child）まで辿ることをおすすめします。
+
+コメントが指摘するもう 1 つの落とし穴も重要です: shm ファイル自体は daemon 起動時に一度だけ truncate（ゼロ
 初期化）され、respawn（watchdog による child 再起動）は**同じ shm を再利用**します。そのため、
 一度 READY に達した後で respawn に失敗すると、`child_status` は STARTING に戻らず前
 incarnation の READY が残ってしまいます。これに対する修正が「spawn 直前に必ず `reset_child_starting`
@@ -518,7 +535,7 @@ feature flag 付きで実行します: `cargo test -p orbit-audio-daemon --featu
 ## Sources
 
 - `rust/crates/orbit-audio-daemon/src/lib.rs:84-93` — `SPAWNABLE_CHILD_BINARIES`（spawn し得る child の正本）
-- `rust/crates/orbit-audio-sandbox/src/transport.rs:113-140,170-285` — `CONTROL_*` / `CHILD_STATUS_*` / `CHILD_FLAG_*`、`SharedRegion` レイアウト（audio・M2 event 窓・command mailbox・event ring・`dirty_epoch`・`active_stage_index`）
+- `rust/crates/orbit-audio-sandbox/src/transport.rs:113-143,173-288` — `CONTROL_*` / `CHILD_STATUS_*` / `CHILD_FLAG_*`、`SharedRegion` レイアウト（audio・M2 event 窓・command mailbox・event ring・`dirty_epoch`・`active_stage_index`）
 - `rust/crates/orbit-audio-sandbox/src/host.rs:1-98` — `PipelinedEffectHost`（pipelined submit/read 状態機械、RT-safe `process_block`）
 - `rust/crates/orbit-audio-sandbox/src/child.rs:44-84` — `SandboxChildGuard`（child teardown の RAII ガード：QUIT → reap → kill フォールバック → shm 削除）
 - `rust/crates/orbit-audio-sandbox/src/parent_watch.rs:1-124`（全文） — `ParentWatch`（`getppid()` ベースの親死活監視、rate-limit 済み、`orphaned_for_tests`）
@@ -530,3 +547,4 @@ feature flag 付きで実行します: `cargo test -p orbit-audio-daemon --featu
 - Issue [#573](https://github.com/signalcompose/orbitscore/issues/573) — 連続 fast-fail での respawn 打ち切り
 - Issue [#618](https://github.com/signalcompose/orbitscore/issues/618) — instrument 差し替えと event ring の drain
 - Issue [#628](https://github.com/signalcompose/orbitscore/issues/628) — effect rack child
+- Issue [#760](https://github.com/signalcompose/orbitscore/issues/760) / PR [#769](https://github.com/signalcompose/orbitscore/pull/769) — `CHILD_STATUS_LOAD_FAILED` の doc コメントを実装へ合わせ直し、gated E2E のアンカーを具体的な失敗理由へ変更
