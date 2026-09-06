@@ -72,6 +72,7 @@ import {
   steadyRms,
   waitForSound,
   type CaptureSegment,
+  makeAwaitSoundRestart,
 } from './helpers/capture-windows'
 import { captureWavPath, createGatedSession, type GatedCatalog } from './helpers/gated-session'
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
@@ -656,6 +657,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     clock(): number
     evaluate(code: string): Promise<void>
     captureSegment(name: string, durationMs?: number, settleMs?: number): Promise<void>
+    /**
+     * 譜面の途中で鳴らし直した後、**もう一度鳴り出すまで**待つ。
+     *
+     * 🔴 `captureSegment` の発音待ちは初回だけで、2 回目以降は固定 settle しか置かない。
+     * `stop()` → `LOOP()` は次の小節境界まで鳴らない（120 BPM で最大 2 秒）ので、鳴らし直した
+     * 直後に窓を開けると**無音の上に開く**。2026-09-05 に E2E-2 を実機計測して確定
+     * （85 窓中 46 窓しか可聴でなく、しかも比は 0.0899/0.1794 = 0.501 で**実装は正しかった**）。
+     */
+    awaitSoundRestart(label?: string): Promise<void>
   }
 
   /**
@@ -673,6 +683,44 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
    * 経路で駆動する。`evaluate_orbitscore` の受理結果は補助的にしか使わず、成功判定は必ず
    * capture の区間 RMS/peak と固定500行窓の ERROR 件数で行う。
    */
+  /**
+   * #643 の区間に楽器が**実際に鳴っている**ことの前提条件。
+   *
+   * 🔴 旧実装は `windows(name).every((w) => w.rms >= 0.01)` で**区間内の全 20 ms 窓が可聴**で
+   * あることを要求していた。これは **LOOP の小節境界を跨ぐと必ず落ちる**。
+   * 2026-09-05 に `ORBIT_KEEP_CAPTURES` で WAV を残して実測した結果（`643-global-gain.wav`）:
+   *
+   * - 音は持続音で 0.175〜0.179 と安定。`global.gain(-6)` 後は 0.087〜0.090（比 0.497 ≒ -6 dB）
+   * - 0.01 未満の窓は **247 個中 11 個だけ**で、位置は 4.96/4.98/5.00/5.02 と 6.96/6.98/7.00/7.02 秒
+   * - 120 BPM の 1 小節 = 2 秒なので **3.0 / 5.0 / 7.0 秒はループの折り返し**。そこに 80 ms の
+   *   切れ目が入る。区間 2 秒は必ずこの境界を 1 つ含む
+   *
+   * つまり旧条件は「音が出ているか」ではなく「**一度も途切れないか**」を見ていた。
+   * 測りたいのは前者なので、**大半の窓が可聴であること**で判定する。
+   *
+   * 🔴 オンセット数（`onsets(name).length`）では判定できない。オンセット閾値は
+   * `max(全窓 RMS の中央値 × 4, 下限)` で**打楽器向け**であり、#643 の持続音では
+   * 中央値 0.0877 × 4 = 0.3508 が最大値 0.1794 を超えて**構造的に 0 個**になる
+   * （同じ実行で `#611 O0-*` が通るのは、あちらが無音の多い打楽器で中央値 0.00001 だから）。
+   */
+  const expectSegmentsSounding = (
+    result: { windows: (name: string) => ReadonlyArray<{ readonly rms: number }> },
+    names: readonly string[],
+    minAudibleFraction = 0.9,
+  ): void => {
+    for (const name of names) {
+      const windows = result.windows(name)
+      expect(windows.length, `#643 segment '${name}' must have windows`).toBeGreaterThan(0)
+      const audible = windows.filter((w) => w.rms >= 0.01).length
+      const fraction = audible / windows.length
+      expect(
+        fraction,
+        `#643 segment '${name}' must be predominantly audible ` +
+          `(${audible}/${windows.length} windows >= 0.01)`,
+      ).toBeGreaterThanOrEqual(minAudibleFraction)
+    }
+  }
+
   const captureInstrumentScenario = async (
     slug: string,
     initialDsl: readonly string[],
@@ -730,6 +778,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const toWall = Date.now()
       segments[name] = { fromSec, toSec, fromWall, toWall }
     }
+    const awaitSoundRestart = makeAwaitSoundRestart(capturePath, `#643 ${slug}`)
 
     let bodyError: unknown
     let cleanupFailure: unknown
@@ -746,7 +795,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const run = await activeClient.call('run_selection')
       expect(run.isError, run.text).toBe(false)
 
-      await body({ activeClient, catalog, segments, clock, evaluate, captureSegment })
+      await body({
+        activeClient,
+        catalog,
+        segments,
+        clock,
+        evaluate,
+        captureSegment,
+        awaitSoundRestart,
+      })
       const finalLog = await readLog()
       expect(
         countErrors(finalLog),
@@ -1701,9 +1758,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // 0 dB -> -6 dB で amplitude は 10^(-6/20) ≈ 0.501 = 約半分。
       const unity = result.rms('unity')
       const half = result.rms('half')
-      expect(
-        ['unity', 'half'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
-      ).toBe(true)
+      expectSegmentsSounding(result, ['unity', 'half'])
       expect(unity, 'E2E-1 unity must measure the 0 dB instrument').toBeGreaterThan(0.15)
       expect(unity, 'E2E-1 unity instrument must be audible').toBeGreaterThan(0.05)
       expect(half / unity, `E2E-1 half/unity RMS ratio (${half}/${unity})`).toBeGreaterThan(0.45)
@@ -1735,17 +1790,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'wet643.play(1, 1, 1, 1)',
           'LOOP(dry643)',
         ],
-        async ({ captureSegment, evaluate }) => {
+        async ({ awaitSoundRestart, captureSegment, evaluate }) => {
           await captureSegment('dry')
           await evaluate('dry643.stop()\nLOOP(wet643)')
+          // 🔴 固定 settle では追えない。`LOOP` は次の小節境界まで鳴らない（120 BPM で最大 2 秒）。
+          await awaitSoundRestart('wet643')
           await captureSegment('wet')
         },
       )
       const dry = result.rms('dry')
       const wet = result.rms('wet')
-      expect(
-        ['dry', 'wet'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
-      ).toBe(true)
+      expectSegmentsSounding(result, ['dry', 'wet'])
       expect(dry, 'E2E-2 dry instrument must be audible').toBeGreaterThan(0.05)
       expect(wet / dry, `E2E-2 wet/dry RMS ratio (${wet}/${dry})`).toBeGreaterThan(0.45)
       expect(wet / dry, `E2E-2 wet/dry RMS ratio (${wet}/${dry})`).toBeLessThan(0.56)
@@ -1793,9 +1848,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const dryPeak = Math.max(...result.windows('dry').map((window) => window.peak))
       const transitionPeak = Math.max(...transition.map((window) => window.peak))
       const transitionFloor = Math.min(...transition.map((window) => window.rms))
-      expect(
-        ['dry', 'wet'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
-      ).toBe(true)
+      expectSegmentsSounding(result, ['dry', 'wet'])
       expect(wet / dry, `E2E-3 post-attach wet/dry ratio (${wet}/${dry})`).toBeGreaterThan(0.45)
       expect(wet / dry, `E2E-3 post-attach wet/dry ratio (${wet}/${dry})`).toBeLessThan(0.56)
       expect(
@@ -1836,17 +1889,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'routeWet643.play(1, 1, 1, 1)',
           'LOOP(routeDry643)',
         ],
-        async ({ captureSegment, evaluate }) => {
+        async ({ awaitSoundRestart, captureSegment, evaluate }) => {
           await captureSegment('dry')
           await evaluate('routeDry643.stop()\nLOOP(routeWet643)')
+          // E2E-2 と同じ理由: `LOOP` は次の小節境界まで鳴らない。固定 settle では追えない。
+          await awaitSoundRestart('routeWet643')
           await captureSegment('sumAux')
         },
       )
       const dry = result.rms('dry')
       const sumAux = result.rms('sumAux')
-      expect(
-        ['dry', 'sumAux'].flatMap((name) => result.windows(name)).every((w) => w.rms >= 0.01),
-      ).toBe(true)
+      expectSegmentsSounding(result, ['dry', 'sumAux'])
       expect(dry, 'E2E-4 dry instrument must be audible').toBeGreaterThan(0.05)
       expect(
         sumAux / dry,
@@ -1887,11 +1940,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const before = result.rms('beforeReplace')
       const after = result.rms('afterReplace')
       const dry = result.rms('replacementDry')
-      expect(
-        ['beforeReplace', 'afterReplace', 'replacementDry']
-          .flatMap((name) => result.windows(name))
-          .every((w) => w.rms >= 0.01),
-      ).toBe(true)
+      expectSegmentsSounding(result, ['beforeReplace', 'afterReplace', 'replacementDry'])
       expect(before, 'E2E-5 pre-replacement effect output must be audible').toBeGreaterThan(0.02)
       expect(after, 'E2E-5 replacement must remain audible').toBeGreaterThan(0.02)
       expect(after / dry, `E2E-5 effected replacement/dry ratio (${after}/${dry})`).toBeGreaterThan(
@@ -1923,7 +1972,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'oldTenant643.play(1, 1, 1, 1)',
           'LOOP(oldTenant643)',
         ],
-        async ({ captureSegment, evaluate, catalog: activeCatalog }) => {
+        async ({ awaitSoundRestart, captureSegment, evaluate, catalog: activeCatalog }) => {
           await captureSegment('oldWet')
           await evaluate(
             [
@@ -1936,6 +1985,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
               'LOOP(nextTenant643)',
             ].join('\n'),
           )
+          // 前のテナントを止めて別の seq を LOOP し直すので、小節境界まで鳴らない。
+          await awaitSoundRestart('nextTenant643')
           await captureSegment('nextDry')
           await evaluate('nextTenant643.effect([Gain(db: -6)])')
           await captureSegment('nextWet')
@@ -1943,11 +1994,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       const dry = result.rms('nextDry')
       const wet = result.rms('nextWet')
-      expect(
-        ['oldWet', 'nextDry', 'nextWet']
-          .flatMap((name) => result.windows(name))
-          .every((w) => w.rms >= 0.01),
-      ).toBe(true)
+      expectSegmentsSounding(result, ['oldWet', 'nextDry', 'nextWet'])
       expect(dry, 'E2E-6 next tenant must produce dry audio').toBeGreaterThan(0.05)
       expect(wet / dry, `E2E-6 next-tenant wet/dry ratio (${wet}/${dry})`).toBeGreaterThan(0.45)
       expect(wet / dry, `E2E-6 next-tenant wet/dry ratio (${wet}/${dry})`).toBeLessThan(0.56)
@@ -1978,7 +2025,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         },
       )
       const dry = result.rms('dry')
-      expect(result.windows('dry').every((window) => window.rms >= 0.01)).toBe(true)
+      // 🔴 `every(rms >= 0.01)`（= 一度も途切れない）は**原理的に満たせない**。区間 2 秒は
+      // 120 BPM の小節境界を必ず 1 つ含み、そこに実測 80 ms の切れ目が入る。他の 6 本と同じ
+      // 「割合で見る」判定に揃える（2026-09-05・E2E-7 だけ旧オラクルが残っていた）。
+      expectSegmentsSounding(result, ['dry'])
       expect(result.analysis.soundDetected, JSON.stringify(result.analysis)).toBe(true)
       expect(
         dry,
