@@ -211,6 +211,10 @@ impl Scheduler {
 
     /// マスターゲインを設定する。`ramp_frames == 0` なら即時、それ以外は定数ステップで
     /// 線形に `value` へ到達する。負の値は 0.0 にクランプする。
+    ///
+    /// 🔴 **production では呼ばれない**（#649 PR-O2）。正本は native の
+    /// `orbit_audio_native::output::MasterLine::advance_gain`。`Engine::set_global_gain` の
+    /// doc コメント参照。
     pub fn set_global_gain(&mut self, value: f32, ramp_frames: u64) {
         let value = value.max(0.0);
         if ramp_frames == 0 {

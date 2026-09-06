@@ -186,6 +186,109 @@ export async function waitForSound(
   )
 }
 
+/**
+ * キャプチャの**末尾**が可聴になるまで待つ（譜面の途中で鳴らし直すシナリオ用）。
+ *
+ * 🔴 `waitForSound` はファイル全体を見るので、**一度でも鳴った後は即座に返る**。
+ * `stop()` → `LOOP()` のように途中で鳴らし直す譜面では、次の小節境界まで鳴らないのに
+ * 窓が開いてしまい、区間の半分以上が無音になる。2026-09-05 に実機で計測した #643 E2E-2:
+ *
+ * ```
+ * 5.78 – 7.08s  silent (1.30s)   ← dry.stop() → LOOP(wet) の量子化待ち
+ * 7.08 – 8.02s  SOUND  0.0899    ← wet（比 0.501 = -6 dB ちょうど。実装は正しい）
+ * ```
+ *
+ * 窓は 6.2s から開いていたので 85 窓中 46 窓しか可聴でなかった。**固定 settle では追えない**
+ * （小節境界までの残り時間は評価のタイミング次第で 0〜1 小節ぶん変わる）。
+ *
+ * 手順は 2 段階:
+ *
+ * 1. **末尾が静かになるまで待つ**（前の LOOP が実際に止まったことの確認）。
+ *    `quietTimeoutMs` 以内に静かにならなければ**そのまま次へ進む** — 切れ目なく次の音が
+ *    続く譜面では静寂が来ないのが正しいので、ここで失敗させない
+ * 2. **末尾が可聴になるまで待つ**
+ *
+ * `quietSec` は LOOP の小節境界にできる短い切れ目（実測 80 ms）より十分長く取ること。
+ * 短いと段階 1 がその切れ目で成立してしまい、鳴り直しを待たずに返る。
+ */
+export async function waitForSoundRestart(
+  capturePath: string,
+  opts: {
+    floor: number
+    /** 「静か」と判定する末尾の長さ。LOOP の小節境界の切れ目（実測 80 ms）より長く。 */
+    quietSec: number
+    intervalMs: number
+    /** 段階 1 の上限。超えたら静寂を待たずに段階 2 へ進む（失敗にしない）。 */
+    quietTimeoutMs: number
+    /** 段階 2 の上限。超えたら失敗。 */
+    timeoutMs: number
+    label: string
+  },
+): Promise<{ quietObserved: boolean }> {
+  const tailWindows = (tailSec: number): Array<{ startSec: number; rms: number }> => {
+    if (fs.statSync(capturePath).size < CAPTURE_HEADER_BYTES) return []
+    const analysis = analyzeWavBuffer(readCaptureForAnalysis(capturePath), { windowMs: 20 })
+    const windows = analysis.windows ?? []
+    const from = analysis.durationSec - tailSec
+    return windows.filter((window) => window.startSec >= from)
+  }
+
+  let quietObserved = false
+  const quietDeadline = Date.now() + opts.quietTimeoutMs
+  while (Date.now() <= quietDeadline) {
+    try {
+      const tail = tailWindows(opts.quietSec)
+      if (tail.length > 0 && tail.every((window) => window.rms < opts.floor)) {
+        quietObserved = true
+        break
+      }
+    } catch {
+      // writer がヘッダを書き終える前など。次の周回で読み直す。
+    }
+    await delay(opts.intervalMs)
+  }
+
+  const deadline = Date.now() + opts.timeoutMs
+  let lastTailMax = 0
+  while (Date.now() <= deadline) {
+    try {
+      const tail = tailWindows(0.1)
+      lastTailMax = tail.reduce((maximum, window) => Math.max(maximum, window.rms), 0)
+      if (lastTailMax >= opts.floor) return { quietObserved }
+    } catch {
+      // 同上
+    }
+    await delay(opts.intervalMs)
+  }
+  throw new Error(
+    `${opts.label}: timed out waiting for the capture to sound again ` +
+      JSON.stringify({ quietObserved, lastTailMax, floor: opts.floor, capturePath }),
+  )
+}
+
+/**
+ * `waitForSoundRestart` を既定値つきで束ねたクロージャを作る。
+ *
+ * 🔴 呼び出し側（`run-score.ts` と gated spec）が同じ 5 つの定数を verbatim で持っていたので
+ * 集約した。可変なのはラベルだけ。`quietSec` を調整する時に 2 箇所を同期させ続けなくてよい。
+ */
+export function makeAwaitSoundRestart(
+  capturePath: string,
+  labelPrefix: string,
+): (label?: string) => Promise<void> {
+  return async (label?: string): Promise<void> => {
+    await waitForSoundRestart(capturePath, {
+      floor: 0.01,
+      // LOOP の小節境界にできる切れ目は実測 80 ms。それより十分長く取る。
+      quietSec: 0.3,
+      intervalMs: 100,
+      quietTimeoutMs: 4_000,
+      timeoutMs: 20_000,
+      label: `${labelPrefix}${label === undefined ? '' : ` (${label})`}`,
+    })
+  }
+}
+
 /** Quadratic mean of RMS buckets; preserves signal energy across bucket boundaries. */
 export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
   if (windows.length === 0) throw new Error('quadraticMeanRms requires at least one window')
