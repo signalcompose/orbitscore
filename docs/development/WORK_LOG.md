@@ -17,6 +17,50 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(test): give every rack fixture its own shm path (Sep 6, 2026)
+
+**ブランチ**: `780-fixture-shm-path`（束 `780-merge-gate` の小 PR・Part of #780）
+
+#780 の実体を直した。原因の特定と設計文書の訂正は直前のエントリを参照。
+
+#### 変更
+
+`ActualFixture::new` のパス生成を `line!()` から **`static SHM_SEQ: AtomicU64` の連番 + PID** へ。
+production の `unique_shm_path()`（`outproc_effect.rs:318-325` / `outproc_instrument.rs:63-71`）と
+同じ形に揃えた。`line!()` は定義位置で展開される定数なので、4 つの fixture が同一パスを共有し、
+`create_shared` の `.truncate(true)` が他のテストの生きたマッピングを切り詰めていた。
+
+#### テスト
+
+`actual_fixtures_use_distinct_shm_paths`（**非 `#[ignore]`**）を追加。
+`ActualFixture::new` を 2 回呼んで `path` が異なることを検査する。
+
+🔴 **最初に提出された版はヘルパ関数だけを検査していて、`ActualFixture::new` に `line!()` を
+書き戻しても緑のまま通った。** 差し戻して**実際の構築経路を通る形**にした。`line!()` を戻す変異で
+赤になることを実出力で確認済み:
+
+```
+assertion `left != right` failed
+  left: ".../orbit-rack-gain-41301-662.shm"
+ right: ".../orbit-rack-gain-41301-662.shm"
+```
+
+`ActualFixture::new` は `create_shared` + `region_ptr` だけなので Gain.clap のバンドルは不要で、
+`#[ignore]` にせず通常の `cargo test` で走る。ただし `ActualFixture` 自体が macOS 限定なので
+`#[cfg(target_os = "macos")]` が付き、**CI（ubuntu）では走らない**。
+
+#### 検証（main が本ツリーで実測）
+
+| 項目 | 結果 |
+|---|---|
+| 無条件マージゲート `cargo test -p orbit-effect-rack-child --lib -- --ignored` を **10 回連続** | **10 PASS / 0 FAIL**（収束条件・修正前は並列 5 回で 1 FAIL） |
+| `cargo clippy -p orbit-effect-rack-child --all-targets -- -D warnings` | exit 0 |
+| `cargo fmt --all --check` | exit 0 |
+| 残留 `orbit-rack-*` | 2（修正前からの残骸のみ。10 回回して増えていない） |
+
+実装は Codex（`gpt-5.6-sol` / effort high）に委譲。検証は main が sandbox 外で実施した。
+
+
 ### docs(design): correct the recorded cause of #780 — a shared shm path, not a moved fixture (Sep 6, 2026)
 
 **ブランチ**: `780-fixture-shm-path`（束 `780-merge-gate` の小 PR・Part of #780）
