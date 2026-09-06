@@ -244,6 +244,11 @@
 | PR-E7 | `test(e2e): mute, unmute, loop, pan on real hardware` | #668-B（baseline を 5 語減らす。残りの語は同型で束ごと 1 PR）| gated（+200）| PR-E3・PR-E4 | 実機 gated（capture の数値）| — |
 | PR-E8 | `test(e2e): assert at most one daemon at every phase boundary` | #624（孤児 daemon の二重出力は capture に写らない）| `helpers/daemon-census.ts`（+80）・gated（+30）| PR-E2 | 実機 gated | — |
 | PR-E9 ⟂ | `test: report load average when a child deadline expires` | #640-A | `host_child_integration.rs`（+30）| — | 負荷下で cargo test | — |
+| PR-E10 | `fix(daemon): unlink orphaned outproc shm at startup` | **#779**（doc 668 §13.5.3）。実測 **35,282 ファイル / TMPDIR 11 GB**。清掃が `Drop` に乗っており **SIGKILL では走らない**（gated のテardown はアプリを kill する） | `engine_wrap.rs`（+80）・起動時走査（+40）・unit（+60）| — | 🔴 **gated 全件を回した後に shm が増えていないこと**を実測（回す前後で `find $TMPDIR -name 'orbit-outproc-*' \| wc -l`）。PID 再利用があるので名前の PID を信じない | — |
+| PR-E11 | `fix(e2e): derive the capture/wall tolerance from the buffer size` | **#775**（doc 668 §13.5.3）。`CLOCK_WALL_TOLERANCE_SEC = 0.12` は根拠コメント無しの裸の定数（2048 frames @48kHz = 42.67 ms の約 2.8 バッファ） | `capture-windows.ts`（±40）・unit（+40）| **PR-E10**（順序に根拠あり・下記） | 🔴 **gated 全件を 3 回連続で回して失敗集合が一致**すること。閾値を先に緩めない | — |
+| PR-E12 | `fix(extension): one line router for every chunk stream` | **#777 → #773 → ring proxy**（doc 668 §13.5.2）。「chunk 列 → 行」の実装が **4 つ**あり教訓が片方にしか適用されていない | `daemon-client.ts`（±40）・`extension.ts`（±80・`:311` のリングプロキシ含む）・unit（+120）| — | `npm test` + 実機 gated（`get_log` の ERROR 会計が変わるので全件）| — |
+| PR-E14 | `fix(test): stop c18 from writing to a read-only shm mapping` | **#780**（doc 668 §13.5.3）。CLAUDE.md が無条件ゲートに指定した 2 行の片方が **SIGBUS（`KERN_PROTECTION_FAILURE`）** で間欠的に落ちる。クラッシュレポート 2 件の実スタックはどちらも `AudioChain::process_block` → `AtomicUsize::store` | `orbit-effect-rack-child/src/tests.rs`（±60）・fixture のマッピング（±40）| **PR-E10 の次**（環境を先に安定させる）| 🔴 **10 回連続で緑**（間欠故障なので 1 回では閉じない）| — |
+| PR-E13 ⟂ | `test(e2e): widen the bare ERROR-count equality ratchet` | doc 668 §13.5.3 の 4 つ目。`orbitstudio-mcp-gated.spec.ts` の `:1396` / `:1589` / `:1615` が**演算なしの厳密等価**で 1 本目のラチェットをすり抜ける | `gated-assertion-hygiene.spec.ts`（±60）・gated spec の 3 箇所（±30）| — | 変異で red を実測 → 移行 → 実機 gated | — |
 | PR-E10 ⟂ | `fix(daemon): log the startup stages and surface DaemonStartupError.stderr` | #640-B（🔴 `DaemonStartupError.stderr`/`.exitCode` を読む箇所が 0・ready 前 3 段にログ無し）| `main.rs`（+25）・`daemon-client.ts`（+20）| — | 実機で engine 再起動 → `get_log` に段マーカー | — |
 | PR-E11 ⟂ | `test: skip DAC-dependent cases when running as root` | #684（root で必ず落ちる 3 件）| `tests/helpers/privileges.ts`（+25）・2 spec | — | root / 非 root で `npm test` | — |
 | PR-E12 | `test: dual ledger — spec sections must be classified` | #543-(b) 台帳 1（仕様 ↔ テスト・#671 と独立に先に入れられる）| `tests/e2e/dsl-coverage-ledger.ts`（+250）| PR-E4 | `npm test` | — |
@@ -311,6 +316,8 @@
 | R-live | `598-render-live` | PR-R1・R2・R3 | 約 1,400 行 |
 | R-offline | `598-render-offline` | PR-R4・R5・R6・R7 | 約 1,700 行（R4 は先に main へ入れてよい）|
 | R-p3 | `598-render-p3` | PR-R8・R9 | 約 800 行 |
+| **E-env** | `779-gated-environment` | PR-E10・**E14**・E11・E13 | 約 350 行（doc 668 §13.5.3。**収束条件: gated 全件を 3 回連続で回して失敗集合が一致**）|
+| **E-router** | `777-line-router` | PR-E12 | 約 240 行（doc 668 §13.5.2。**収束条件: 「chunk 列 → 行」が 1 本の共有プリミティブに畳まれる**。🔴 **#757 の直前**に置く）|
 
 **main 直行**（束を通さず従来どおり単独でフルレビュー）: 仕様だけの PR-O1 / L0 / R0 / P0 / K-*0 / Q-A / D1 / E0、must-fix の PR-O2 / D0 / V4 / K-A1 / K-A2 / S-T1、束をまたぐ PR。PR-P / K / Q / D / V / S / E の束割りは着手時に同じ規則（1,500 行・継ぎ目）で決める。
 
@@ -323,7 +330,12 @@
 
 - **結果**: 「既存の譜面が同じ音のまま」が capture の数値で固定され、以降のすべての変更が退行を機械で検出できる。
 - **確認**: `npm run test:e2e:gated` → golden 4 譜面が緑。`get_log` に `[ERROR]` 増加なし（`<=`）。
-- **閉じる**: #543 (a)(b 台帳 1) / #668 A・C / #650・#630・#624・#640・#684 の該当項目（doc 668 §20）。
+- **閉じる**: #543 (a)(b 台帳 1) / #668 A・C / #650・#630・#624・#640・#684 の該当項目（doc 668 §20）
+  / **#760・#761・#756**（束 `761-gated-measurement`・測定器の 3 件）
+  / **#779・#780・#775**（束 E-env）/ **#777・#773**（束 E-router）。
+- 🔴 **測定環境も段 0 の一部**（doc 668 §13.5.4）: 「以降のすべての変更が退行を機械で検出できる」は、
+  測定が**再現する**ことを含む。E-env / E-router は段 2 以降と並行してよいが、
+  **段 0 の完了条件からは外さない**。
 
 ### 段 1 — must-fix（PR-O2・PR-D の #645・PR-V の #661・PR-K の #606・PR-S の #385）
 

@@ -873,6 +873,10 @@ owner 判断が要る（#671 §5(a) / #672 A4）。**#321 の残作業（Link �
 | **stderr の `ERROR:` 前置が chunk 単位** | **#756** 🔴 | ○（**実測済み**: 同じ chunk の 2 行目以降に前置が付かない。`countErrors` / `newErrorLines` の**測定器そのもの**が過小カウントする） | #661 マージ後・**#649 の baseline 比較が済んでから**（gated 全体の測定器が動くため） |
 | `OUTPROC_ATTACH_FAILED` のアサーションが古い | **#760** | ✅ **PR [#769](https://github.com/signalcompose/orbitscore/pull/769) で対処済み**（束 `761-gated-measurement` に merge・main へは束 PR で入る）。**main で実測して同一失敗を確認**していたが、🔴 **原因の記述は誤りだった** — child は spawn される。`RackController::load_initial` が CLAP のロードに失敗し、詳細を publish してから `CHILD_STATUS_LOAD_FAILED` を立てて終了する。daemon（`engine_wrap.rs` の Root 3-3）がこの status を early-exit の watchdog signal より先に見るため、`child exited before publishing READY` に到達しない | 独立・小粒 |
 
+| **shm が gated 実行のたびに漏れる** | **#779** 🔴 | ○（**実測 2026-09-06**: `orbit-outproc-*.shm` が **35,282 個 / TMPDIR 11 GB**。清掃は `Drop` に乗っており **SIGKILL では走らない**。同日 rack-child の実機テストが **SIGBUS** で落ち、直後 2 回は再現せず） | **束 E-env の 1 番目**（計画 PR-E10・doc 668 §13.5.3）。**#775 より先**——環境の汚れが #775 の寄与要因の可能性が高く、逆順だと切り分け不能になる |
+| **無条件ゲートの `rack-child` が SIGBUS で間欠的に落ちる** | **#780** 🔴 | ○（**クラッシュレポート 2 件の実スタック**: `AudioChain::process_block` → `AtomicUsize::store` で `KERN_PROTECTION_FAILURE`。テストが shm の生ポインタを渡すが領域が書き込み可能にマップされていない） | **束 E-env の 2 番目**（計画 PR-E14）。**#779 の次・#775 の前**。🔴 **収束条件は 10 回連続で緑**。⚠️ 原因を推測で書かない——2 つの仮説（shm 漏れ / bundle との競合）が**どちらも実測で反証された** |
+| **U2（capture 時計 vs 実時間）の許容が裸の定数** | **#775** 🔴 | ○（**実測**: 長時間ランで**場所を変えて**出る。#618 e5 / #611 O0-4 dry。`CLOCK_WALL_TOLERANCE_SEC = 0.12` に根拠コメントが無い） | **束 E-env の 2 番目**（計画 PR-E11）。🔴 **閾値を先に緩めない**。緩めるならバッファ数から導出する |
+
 **順序**: #668-A → {#650, #630}（同じ PR で語ごとに）→ #543（#671 段階 3 で「登録済み語から導出」が入ると #543 の台帳 2 は不要になる。
 **#543 の設計は #671 段階 1-3 の後に見直す**）。#624 / #640 / #684 は独立・小粒。
 
@@ -1121,6 +1125,10 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 |---|---|---|---|
 | **#757** | `packages/vscode-extension/src/` に requestId 相関ブリッジが **5 本 625 行**の重複（`eval-mark` / `plugin-ui` / `plugin-state` / `device-switch` / `engine-state`） | timeout・drain・二重解決防止のバグ修正が **5 箇所**に要る。既にずれている（`EngineStateBridge` だけ重複チェックが無い） | **6 本目を足す前**（新しいメタコマンドを足す PR で共通化する） |
 | **#752** | OOP instrument の active-note 台帳のキーが slot 同一性になっていない | 台帳の取り違えが起きうる（#606 の周辺） | #626（watchdog 復旧）と同時 |
+| **#777** | `createDaemonStderrLineRouter` に `flush()` が無い（`partial` を持ち越すが吐き出さない） | 🔴 **クラッシュ経路**で最後の 1 行が落ちる。daemon が panic して改行なしで死ぬのは、診断が最も要る場面 | **束 E-router の 1 番目**（計画 PR-E12・doc 668 §13.5.2） |
+| **#773** | `setupStdoutHandler` も部分行をバッファリングしていない | bridge envelope がチャンク境界で割れると**両断片とも捨てられる**（#614 と同じ帰結）。`get_log` のリング（`extension.ts:311`）も同じ穴の上にある | 同上（束 E-router）。🔴 **#757 の直前**——#757 の共通化はこの層の上に乗る |
+
+🔴 **束 E-router の収束条件**: 「chunk 列 → 行」の実装が **4 つ**（`createLinePrefixer` / `createDaemonStderrLineRouter` / `setupStdoutHandler` の inline split / `extension.ts:311` のリングプロキシ）から **1 本の共有プリミティブ**に畳まれること。1 つずつ直すと次の人がまた 1 つだけ直す（#756 の doc コメント自身が「双子はこれを持たない」と書いていたのに双子を直さなかったのが実例）。
 
 ### 4.K docs / 学習サイト
 
