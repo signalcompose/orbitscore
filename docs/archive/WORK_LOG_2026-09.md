@@ -1,5 +1,397 @@
 # WORK_LOG Archive — 2026-09（前半・09-01〜09-05）
 
+## 09-04〜09-05 の追補（本体の 2,000 行上限で移設・2026-09-07）
+
+### docs(site): follow PR #730's untrusted-workspace capability into the dev site (Sep 4, 2026)
+
+**追従元**: PR [#730](https://github.com/signalcompose/orbitscore/pull/730)（`385-untrusted-workspace-capability` → main・マージコミット `4f2ebd5`）/ **ブランチ**: `claude/docs-sync-pr730`
+
+#730 は `packages/vscode-extension/package.json` に `capabilities.untrustedWorkspaces` を宣言した。
+**マニフェストの宣言が振る舞いを決める**変更なので、拡張アーキテクチャの章に対応する節が必要だった。
+コードとテストは変更していない。
+
+#### 1. IV-1 章に「workspace trust と untrustedWorkspaces」を追加
+
+`sites/dev/editor/vscode-architecture.md` は `activationEvents`（いつ起動するか）を書いていたが、
+**「そもそも起動してよいか」を決める workspace trust** に触れていなかった。
+`activation と activationEvents` の直後に節を足し、差分から確定できることだけを書いた:
+
+- loose-file 起動（`orbs file.orbs`）は ad-hoc な未信頼 workspace になる（#385 の症状は沈黙）
+- `supported: true` の根拠は `docs/design/656-release-design.md` §16 (1)（DAW に併せる）。
+  `startEngine()` にガードは無い
+- `restrictedConfigurations` は `supported` と独立に効き、基準は
+  「workspace が値を決めると別の実行ファイルが動く」もの 2 件だけ。`audioDevice` が入らない理由も
+- 実機の確認（`E2E-D1`）は **#735 へ分離済み**であり、この層が保証するのは宣言の内容まで
+
+引用は `packages/vscode-extension/package.json:34-43` を verbatim で置いた。
+目次・drift 表・関連用語・Sources と、`sites/dev/glossary.md` の
+`workspace trust (untrustedWorkspaces)` 項も足した。ja / en 両方。
+frontmatter の `verified-against` を `4f2ebd5`・`verified-at` を `2026-09-04` へ。
+
+#### 2. `package.json` に 10 行入ったので、散文の行参照が +10 ずれた
+
+#730 は `// FILE:START-END` 形式の引用（`catalog.md` のコードブロック）を再アンカーしているが、
+**Sources 節や本文中の散文の行参照は `check-citations.mjs` の対象外**なので取り残されていた。
+前回（#724 追従）と同じ型である。
+
+| 参照元 | 旧 | 新 | 対象 |
+|---|---|---|---|
+| `sites/dev/plugin-hosting/catalog.md:1378` / en:1410 | `110-121` | `120-131` | `rescanPlugins` / `browsePlugins` コマンド |
+| `sites/dev/editor/mcp-and-gated-e2e.md:129,1170` / en:129,1170 | `400-407` | `410-417` | `orbitscore.mcpServer.port` 設定 |
+
+いずれも実ファイルで対象ブロックの位置を確かめてから書き換えた（コマンドは 120-131、
+`mcpServer.port` は 410-417）。行参照の修正だけなので、この 2 章の `verified-against` は動かしていない。
+
+---
+### docs: follow PR #737's dispatch-skip contract into the specs and both sites (Sep 4, 2026)
+
+**追従元**: PR [#737](https://github.com/signalcompose/orbitscore/pull/737)（`645-contain-playback-throws` → main・マージコミット `ef140b1`）/ **ブランチ**: `claude/docs-sync-pr737`
+
+#737 は `Sequence.resolveDispatchChannel()` の **throw を撤去**し、戻り値を
+`DispatchTarget = { kind: 'hardware' } | { kind: 'link'; channel } | { kind: 'skip'; reason }`
+の tagged union にした（`sequence.ts:103-106`）。LinkAudio セッションで `.output()` を持たない
+発音 sequence は、**runtime error ではなく無音スキップ + `logSkipOnce()` のログ 1 行**になる。
+**この意味論の変更が 4 つの文書に追従していなかった。**
+
+#### 直したもの
+
+| 場所 | 追従した内容 |
+|---|---|
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §8.1.2 | 「`.play()` した時点で **runtime error** を投げる」を削除し、無音スキップ + dedup ログ + `DispatchTarget` の説明に置換。**hardware への silent fallback を行わない**点は不変 |
+| `docs/specs-v2/MULTICHANNEL_RENDERING_DESIGN_598.md` §4.4.1 | 「`resolveDispatchChannel()` が throw し、ライブ中に kick が**停止**する」→「skip 判定に落ち、**無音になる**」。非対称の理由（オフライン宣言が live routing を壊さない）は変わらない |
+| `sites/dev/editor/execution-feedback.md`（日英）§6-8 | 「runtime では throw として現れる」「7 と 8 が Error なのは runtime で必ず throw するから」を訂正。`DispatchTarget` の引用と、`undefined` を union から外した理由（`catch { return undefined }` が黙って hardware へ流す事故を型で潰す）を追加。drift 表に #645 行 |
+| `sites/user/midi/link-audio.md`（日英） | 「ランタイムエラーを発生させます」→「無音でスキップされ、理由がログに出ます」。巻き添え停止を避けるための変更である旨を 1 段落 |
+
+🔴 **ユーザーから見た壊れ方が変わった**: 以前は例外が出て気づけたが、いまは**音が出ないだけ**である。
+気づく手段はログ（`[ERROR] Sequence '<name>': … このシーケンスは無音でスキップします。`）と
+編集時診断 `analyzeLinkAudioMissingOutput` の 2 つになる。user site にその旨を書いた。
+
+#### 追従しなかったもの
+
+- `docs/design/610-diagnostics-applicability-design.md` — 起案時点のスナップショット（本 PR の設計正本そのもの）
+- `sites/user/reference/methods.md` の `output("name")` 行 — 「`global.linkAudio()` 宣言時**必須**」は今も正しい（要件は不変・違反時の挙動だけが変わった）
+
+#### 手順 3 の指摘（直さず PR 本文へ）
+
+- `tests/e2e/dsl-e2e-coverage.spec.ts:86-96` — `GLOBAL_UNCOVERED_BASELINE` から `linkAudio` が
+  削除されたが、gated sources 内の `.linkAudio(` は
+  `tests/e2e/orbitstudio-mcp-gated.spec.ts:4583` / `:4593` の **コメント 2 箇所だけ**である。
+  同 PR で gated E2E 本体（`it(...)`）は #736 へ切り出されて存在しない。ラチェットの走査は
+  ソース文字列 `/\.([a-zA-Z][a-zA-Z0-9]*)\s*\(/g` なのでコメントでも満たされる
+### fix(649): correct the attribution and add the test that actually guards the master line (Sep 5, 2026)
+
+**Issue**: #649 / **ブランチ**: `649-stereo-internal-master-line` / **PR** #754
+
+ゲート③（`/simplify` 4 体 + Fable 監査を並行）。**Critical 0 / Important 3**。
+最大の指摘は「**この PR の Rust 差分を区別できる検証が存在しない**」だった。
+
+#### 🔴 帰属の訂正 — E2E-1 が緑なのは本 PR の Rust 差分の効果ではない
+
+Fable が `374e8b2d`（2026-08-29・**main に既に入っている**）を指摘した。そのコミット本文:
+
+> instrument の音は `CompositePostProcessor` で master バッファへ直接加算されており、
+> バスグラフの外にいた。これを `render_multi` の内側・event 混合後・gain ramp の前へ移し …
+> **帰結: `global.gain` が instrument に効くようになった**
+
+**推論で済ませず実機で反証した**（main の `rust/` + このブランチの `tests/`）:
+
+```
+✓ #643 E2E-1 applies global.gain(-6) … 9321ms
+```
+
+**main の rust でも緑**。つまり #649 の見出しの症状は 8/29 に main で消えており、E2E-1 が赤かったのは
+**オラクルだけ**が原因だった。「段 1 の目的が証明された」という以前の報告は、事実（E2E-1 が緑）は
+真だが**帰属が誤り**だった。
+
+#### では本 PR の Rust 差分は何を直しているのか
+
+**同じクラスの残り半分**。main では `global.effect()`（master ラック = `post`）が core の gain ramp の
+**後**に走るので、**ラックが生成・変形した音は `global.gain()` を逃れる**。`MasterLine` は順序を
+`rack → gain` に固定してこれを塞ぐ（設計 §5.2）。
+
+🔴 **`Gain` のような線形ラックでは順序を区別できない**（乗算は可換）ので、DSL 経由の E2E では
+測れない（`#611 O0-4` のテスト名「a linear rack cannot show order」がまさにこれ）。ユニットで押さえた:
+
+```
+master_gain_applies_after_the_master_rack_generates_sound
+  FillPost(0.75) + gain 0.5 → hw = 0.375
+
+変異（post と gain の順序を main の形へ戻す）:
+  FAILED  master gain must attenuate what the master rack produced: [0.75, …]
+```
+
+**これが本 PR の Rust 差分を守る唯一のテスト**。あわせて `advance_gain` / `place_master_into_device`
+（8ch の余剰チャンネル・mono マージ）にもユニットを足した。
+
+#### `/simplify` の適用
+
+| 指摘 | 直した形 |
+|---|---|
+| 🔴 **RT ホットパスで `hw` を二重に書いていた**（3 体が独立に指摘）— 全域 zero-fill の直後に `place_master_into_device` が全要素を上書き | zero-fill を削除し、余剰チャンネルの 0 埋めを配置関数の責務へ。2ch は `copy_from_slice` に。**64 frames × 2ch なら約 96,000 store/秒の無駄**だった |
+| `ensure_buffer_len` が `MasterLine` と `InsertBusStage` で完全に同一 | 自由関数 `ensure_audio_buffer_len` へ集約 |
+| `awaitSoundRestart` の 5 定数が 2 箇所に verbatim | `makeAwaitSoundRestart` ファクトリへ集約 |
+
+#### Fable I-2 — 非 production feature が engine バッファをデバイス幅で解釈していた
+
+`clap-host` は `ClapPostProcessor` に、`link-audio` は consumer に **`stream.channels`（デバイス幅）**を
+渡していた。どちらも受け取るのは `master.buffer`（**常に 2ch**）なので、8ch デバイスでは frame 数が
+1/4 になって音が化ける。`ENGINE_CHANNELS: usize = 2` を名前付き定数として公開し、両方をそれに揃えた。
+
+production build には含まれない feature なので実害は無かったが、設計 §5.5 の
+「events / feeds / stages はすべて 2ch」を**この 2 経路だけが継承していなかった**。
+
+#### 検証
+
+`npm test` 2251 passed / `typecheck:e2e` 0 / `lint` 0 /
+`cargo test -p orbit-audio-native -p orbit-audio-daemon` **144 passed / 0 failed**（21 スイート）/
+clippy **5 象限**（`clap-host` / `link-audio` を含む）全緑 / `docs:check` 926 verified 0 failed
+
+---
+
+### test(e2e): open the window after the sound restarts, not after a fixed settle (#649) (Sep 5, 2026)
+
+**Issue**: #649 / **ブランチ**: `649-stereo-internal-master-line` / **PR** #754
+
+**`#643 E2E-1` 〜 `E2E-7` の 7 本すべてが実機で緑**になった。落ちていたのは**判定側**で、
+ミキサーの実装は最初から正しかった。
+
+#### 実測（`ORBIT_KEEP_CAPTURES` で WAV を残し 20 ms 窓を並べた）
+
+E2E-2 の capture:
+
+```
+0.00 – 3.06s  silent            ← 起動 + 小節量子化 + attach
+3.06 – 4.98s  SOUND  max 0.1794 ← dry（0 dB）
+4.98 – 5.06s  silent (0.08s)    ← LOOP の小節境界の切れ目
+5.06 – 5.78s  SOUND  max 0.1794
+5.78 – 7.08s  silent (1.30s)    ← dry.stop() → LOOP(wet) の量子化待ち
+7.08 – 8.02s  SOUND  max 0.0899 ← wet
+```
+
+🔴 **比は `0.0899 / 0.1794 = 0.501`** — -6 dB の理論値ちょうど。**実装は正しい。**
+落ちていたのは「wet の窓が 6.2 秒から開いて 85 窓中 46 窓しか可聴でない」という判定側だった。
+
+#### 原因は 2 種類
+
+| 原因 | 該当 | 直し方 |
+|---|---|---|
+| **窓が無音の上に開く** — `captureSegment` の発音待ちは**初回だけ**で、2 回目以降は固定 400 ms | E2E-2 / E2E-4 / E2E-6 | `waitForSoundRestart` を新設し、鳴らし直した後に**もう一度鳴り出すまで待つ** |
+| **原理的に満たせない条件** — `every(rms >= 0.01)`（一度も途切れない） | E2E-7 | 他の 6 本と同じ `expectSegmentsSounding`（割合で見る）へ |
+
+`waitForSoundRestart` は 2 段階:
+
+1. **末尾が静かになるまで待つ**（前の LOOP が実際に止まった確認）。`quietTimeoutMs` 以内に
+   静かにならなければ**そのまま次へ進む** — 切れ目なく続く譜面では静寂が来ないのが正しい
+2. **末尾が可聴になるまで待つ**
+
+`quietSec` は LOOP の小節境界の切れ目（**実測 80 ms**）より十分長く取る（0.3 秒）。短いと
+段階 1 がその切れ目で成立してしまい、鳴り直しを待たずに返る。
+
+🔴 **固定 settle を伸ばす形にしない。** 小節境界までの残り時間は評価のタイミング次第で
+0〜1 小節ぶん変わるので、定数では追えない（前セッションで settle 2600 ms が反証済み）。
+
+#### 実機（全件）
+
+**5 failed / 21 passed（26 件）**。main baseline は **10 failed / 24**。
+
+| 残る失敗 | 種別 |
+|---|---|
+| `drives real OrbitStudio end-to-end` | main baseline（**#760** で main を実測して確認） |
+| `steps the live playhead` | main baseline（`Mixer bus name "drum" is ambiguous`） |
+| `restores an MCP-saved …` | 環境要因の疑い（`Failed to cleanup old directories: ENOENT`） |
+| `#606 E2E-K3` | **起動タイムアウト**（アサーション失敗ではない） |
+| `#611 O0-4` | `snapped range must contain exactly 8 onsets; got 9`。**単独実行では緑**（`effectOnlyOverDry=1.9953` / `combinedOverDry=1.0000`）＝全件の文脈でだけ出る揺れ |
+
+`npm test` 2251 passed / `typecheck:e2e` 0 / `lint` 0 / `docs:check` 926 verified 0 failed。
+
+---
+
+### test(e2e): fix the #643 audibility oracle — E2E-1 is green (Sep 5, 2026)
+
+**Issue**: #649 / **ブランチ**: `649-stereo-internal-master-line`
+
+🔴 **段 1 の目的「`global.gain(-6)` が instrument に効く」が実機のキャプチャ RMS で証明された。**
+
+| | 失敗 |
+|---|---|
+| `main` baseline（同日・同一条件） | 10 / 24 |
+| **#649（本コミット後）** | **8 / 26** |
+
+`#643 E2E-1` / `E2E-3` / `E2E-5` が緑になった。新規の失敗 1 件は
+`restored RMS 0.0307 vs 許容 0.03` の**境界落ち**で、実行ごとに揺れるプラグイン state 復元系。
+
+#### 🔴 E2E-1 が赤かった本当の理由 — ミキサーではなくオラクル
+
+`#649` のミキサー差分を載せても、E2E-1 は赤のままだった（退行ゼロ・改善ゼロ）。
+`ORBIT_KEEP_CAPTURES` で WAV を残して実測したところ、**音も gain の変化も正しく写っていた**:
+
+```
+643-global-gain.wav  dur=7.96s
+  0〜3.04s 無音（小節量子化 + プラグイン attach。#739 の記録どおり）
+  3.04〜5.48s : 0.175〜0.179（持続音・安定）
+  5.48s〜     : 0.087〜0.090   ← global.gain(-6)
+  比 = 0.088 / 0.177 = 0.497   （-6 dB の理論値 0.501）
+```
+
+落ちていたのは前提条件 `windows(name).every((w) => w.rms >= 0.01)` だった。
+0.01 未満の窓は **247 個中 11 個だけ**で、位置がすべて **4.96/4.98/5.00/5.02** と
+**6.96/6.98/7.00/7.02** 秒。120 BPM の 1 小節は 2 秒なので **3.0 / 5.0 / 7.0 秒は LOOP の折り返し**で、
+そこに **80 ms の切れ目**が入る。区間 2 秒は必ずこの境界を 1 つ含む。
+
+**つまりこの条件は「音が出ているか」ではなく「一度も途切れないか」を見ており、
+LOOP を跨ぐ限り原理的に満たせなかった。** 測りたいのは前者なので、
+**大半の窓（既定 90%）が可聴であること**へ変えた。
+
+#### 🔴 途中で 1 度、誤った修正を入れた（記録）
+
+最初は「減衰音では全窓可聴を満たせない」と考え、**オンセット数**（`onsets(name).length >= 3`）に
+置き換えた。実機は `got 0` で落ちた。理由は素材の取り違えで、#643 は**持続音**だった。
+オンセット閾値は `max(全窓 RMS の中央値 × 4, 下限)` という**打楽器向け**の式で、実測すると:
+
+| capture | 中央値 | max | 閾値 | オンセット |
+|---|---|---|---|---|
+| `643-global-gain`（持続音） | 0.0877 | 0.1794 | **0.3508** | **0**（閾値が max を超える） |
+| `611-o0-no-bus-first`（打楽器） | 0.00001 | 0.3793 | 0.0200 | 15 |
+
+同じ実行で O0-* が通り #643 が落ちる差は、**素材の違い**だった。
+
+**推測で 2 回動くより、WAV を 1 回残した方が速かった。**
+
+#### 残る #643 の 4 件は性質が違う
+
+- **E2E-2 / E2E-4 / E2E-6**: `wet 34/85`・`sumAux 35/85`・`nextDry 52/85` と**区間の半分以上が本当に無音**。
+  オラクルではなく、その経路で音が出ていない可能性がある
+- **E2E-7**: `expected 7 to be greater than or equal to 8`（別のアサーション）
+
+#### そのほか
+
+`clap-host` feature でしかコンパイルされないテスト呼び出しが `EngineWrap::build` の
+`master_gain` 追加に追従しておらず、pre-push の clippy が捕まえた。
+🔴 **`check-cfg-matrix.sh` は 4 象限しか見ない**ので、`--features outproc-*` のビルドと
+`npm test` が緑でもこの象限は一度もコンパイルされない。
+
+### fix(661): close the review round-2 findings across all four layers (#661) (Sep 5, 2026)
+
+**Issue**: #661 / **ブランチ**: `661-stream-liveness-instrumentation` / **PR** #748
+
+ゲート③ ラウンド 2（`/code:pr-review-team` フル編成 4 体 + Fable 監査を並行）。
+**Critical 0 / Important 5**（うち 3 体が同じ 1 件に収束）。設計パスを 1 つ置いてから一括で直した。
+
+#### 設計パス P1 — ライブ切替の失敗を利用者にどう見せるか
+
+分ける軸は「**いま鳴っている音を止めずに直せるか**」。表は
+`packages/vscode-extension/src/engine-view.ts` の `SELECT_AUDIO_DEVICE_ERRORS` **1 箇所**に置き、
+文言・再起動の要否・「既知かどうか」の 3 つをすべてそこから引く。
+
+| code | 音 | Restart Engine |
+|---|---|---|
+| `AUDIO_DEVICE_UNAVAILABLE` | 鳴り続ける | ❌ 出さない |
+| `AUDIO_DEVICE_STREAM_DEAD` | 鳴り続ける | ❌ 出さない |
+| `AUDIO_DEVICE_SWITCH_UNAVAILABLE`（録音中） | 鳴り続ける | ✅ |
+| `AUDIO_DEVICE_RATE_MISMATCH` | 鳴り続ける | ✅ |
+| `AUDIO_DEVICE_SWITCH_RECOVERY_FAILED`（新設） | **止まっている** | ✅ |
+
+🔴 これを直した理由: F4（名前不一致は縮退せず拒否）を実装したのに、**UI は未知コードとして
+「Restart Engine」を提示**していた。再起動すると起動経路のポリシーで host 既定へ移るので、
+**F4 が避けたかった「演奏中のタイプミスで音が内蔵スピーカーへ移る」を UI が自分で起こす**形だった。
+
+`SwitchRecoveryFailed` を `primary` のコードへ畳むのもやめた。畳むと
+`AUDIO_DEVICE_STREAM_DEAD` の「元の出力を継続します」が、**継続できていない**事象に付く。
+
+#### 🔴 C-7 — 到達不能だった安全網を到達可能にした
+
+`apply_device_switch` の「probe 成功 → 旧を pause → 新の build/play/confirm が失敗 → 旧を
+`play()` で再開」は、**どのテストからも到達できなかった**。実ストリームを殺せる唯一のフォールト
+`DeadRealStream` はプロセス全体に効き、daemon が起動できない（C-4 がそれを証明している）。
+
+`StreamBuildStage { Startup, Switch }` と `OutputFault::DeadRealStreamOnSwitch` を足して到達可能にし、
+gated Rust `C-7` を新設。**変異で赤を実測**:
+
+```
+変異なし                    : ok
+guard.stream.play() を削除  : FAILED
+  the old stream did not resume after a failed switch:
+  before_rate=48, resumed_rate=0
+```
+
+`resumed_rate=0` = 旧ストリームは pause されたまま**恒久的に無音**。これが起きるのが最悪ケース。
+
+#### E2E の判定を強くした
+
+| テスト | 直前まで | 直した形 |
+|---|---|---|
+| **D-0** | `rms > 0` だけ | `output.device_name` が**要求名と一致**・`device_fell_back === false` |
+| **D-2** | `rms > 0` だけ | `device_requested` が要求名・`device_fell_back === true`・`fallback_reason` に理由 |
+| **D-1** | `toBe(before)` が両辺 undefined で**空振りで通る** | 先に `typeof … === 'string'` を固定。包含側も D-3 水準へ |
+| **D-3** | 包含側が `ERROR:` 前置に依存（chunk 境界で**偽赤**） | 前置に依存しない `newLogLines` で数える |
+
+🔴 D-0 は **#661 の受け入れテストそのもの**（「デバイス指定で音が出る」）なのに、`rms > 0` は
+「何らかのデバイスから音が出た」しか言わない。このマシンは出力が実質 1 台なので、
+**指定が無視されて既定に落ちても緑になっていた。**
+
+デバイスの検査は**鳴っている間**に取る必要があった（`runScore` から戻った時点で engine は停止済みで
+`get_engine_state` は `{running:false}` しか返さない）。1 度これで落ちてから直した。
+
+#### その他
+
+- `get_engine_state` の状態問い合わせ予算を 10 秒 → **2.5 秒**。`waitForEngine` はこのツールで
+  `running` を 500 ms 間隔でポーリングするので、10 秒だと 30 秒予算で 3 回しか試せなかった
+- 判定を `resolveEngineState`（`engine-state-bridge.ts`）へ切り出し、**3 分岐すべてに単体テスト**
+  （停止中 / ブリッジが `ok:false` / ブリッジ自体が reject）
+- 切替失敗のメッセージから `audio output init failed: ` の前置を落とした。**切替では何も init して
+  いない**のに、ERROR ログ・`last_switch_failure`・MCP の返り値・UI 文言すべてに載っていた
+- `engine-view.spec.ts` の入力を実形式 `[CODE] message` に揃えた（捏造した mock 文言だった）
+- 設計 §4.5 に「1 回の失敗を 2 層が記録する」を明記。§6 受け入れ 7（**倍速になるか**）に結論を記載
+- `docs/research/ENGINE_DAEMON_PROTOCOL.md` に `SelectAudioDevice` の失敗コード表を追加
+
+#### §2.2「時間が倍速になるか」— 決着
+
+**倍速にならない。ただしそれは `pause()` が 2 重に効いているから**で、リスク自体は実在した。
+C-6 の実測（`--audio-device <既定の名前>` → host 既定へ切替）:
+
+| 変異 | callbacks/s |
+|---|---|
+| 変異なし | **94**（等速） |
+| (a) だけ削除 / (b) だけ削除 | 94（もう片方が効く） |
+| **(a)(b) 両方削除** | **190**（ほぼ倍速） |
+
+#### fix 差分の再点検（PROJECT_RULES §4）
+
+`73b7abce..326e5fce` を 1 レビュアーで再点検。問いは 2 つだけ（新しい故障モード / 実行コンテキスト）。
+**Critical 0 / Important 1**: 「`get_engine_state` の予算短縮が本番の観測性を下げる」。
+
+一次ソースで裁定した結果、**予算では解決しない**:
+
+`//#getEngineState` は REPL の `handleLine` の中で処理され、`createReplSession` の `pushLine` は
+**全行を単一の FIFO promise チェーン**に載せる（`repl-mode.ts`「直列化の根拠 — #476」）。
+instrument の attach は実測 30 秒超なので、10 秒でも 2.5 秒でも答えは返らない。伸ばして変わるのは
+「同じ `statusError` を返すまでに何秒ブロックするか」だけ。
+
+→ 2.5 秒は据え置き、コメントを **E2E 都合ではなく本番の根拠**に書き直して
+`ENGINE_STATE_QUERY_BUDGET_MS` として定数化。本来の解決（状態問い合わせをキューの外で処理する）は
+**#759** へ切り出した。
+
+#### 別 issue へ分離（7 本）
+
+**#755** `select_audio_device` が人間のクリックトグルを共有 /
+**#756** `setupStderrHandler` の `ERROR:` 前置が chunk 単位 /
+**#757** request 相関ブリッジが 5 本 625 行の重複 /
+**#758** 捨てた旧ストリームの disconnect listener が共有 `StreamStats` に `device_lost` を書く /
+**#759** `//#getEngineState` が評価キューの後ろに並ぶので長い await 中は状態が見えない
+
+#### 検証（実機・sandbox 外）
+
+```
+gated Rust  C-1〜C-7  7 passed / 0 failed
+gated MCP   #661 D-0 / D-2 / D-3  3 passed
+```
+
+🔴 `cargo test` を Bash の sandbox 内で回すと CoreAudio が塞がれ `Device::name()` が
+backend error で落ちる（C-1 まで赤くなる）。実機オーディオのテストは sandbox 外で回すこと。
+
+---
+
+
 ## 段 1 must-fix（09-05・#661 / #606 / #746）
 
 `docs/development/WORK_LOG.md` が 2,000 行上限を超えたため 2026-09-06 に移設した分。
