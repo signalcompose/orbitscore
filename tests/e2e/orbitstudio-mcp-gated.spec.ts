@@ -71,6 +71,7 @@ import {
   readCaptureForAnalysis,
   steadyRms,
   waitForSound,
+  waitForQuiet,
   type CaptureSegment,
   makeAwaitSoundRestart,
 } from './helpers/capture-windows'
@@ -1626,8 +1627,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // for this half, since resolvePluginSpec doesn't check fs existence for
       // path-direct specs (only the async out-of-process attach can fail).
       const beforeEffectFailLog = (await client.call('get_log', { lines: 500 })).text
-      const attachFailedBefore = (beforeEffectFailLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? [])
-        .length
 
       const badEffectRes = await client.call('evaluate_orbitscore', {
         code: 'global.effect("nonexistent-plugin.clap")',
@@ -1692,17 +1691,22 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       expect(JSON.parse(engineStateAfterFailure.text).running).toBe(true)
 
       const afterRecoveryLog = (await client.call('get_log', { lines: 500 })).text
-      const attachFailedAfterRecovery = (afterRecoveryLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? [])
-        .length
-      // Exactly one NEW attach failure (the deliberate one above) — the
-      // recovery statement must not add another.
-      const attachFailureLines = afterRecoveryLog
-        .split('\n')
-        .filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]'))
+      // Exactly one NEW attach failure (the deliberate one above) — the recovery
+      // statement must not add another.
+      //
+      // 🔴 #761: ここは `.toBe(attachFailedBefore + 1)` という**窓内カウントの等価比較**
+      // だった。`get_log` は固定 500 行窓なので、古い行が窓から流れ出るだけで件数は動く。
+      // 「何件になったか」ではなく「**どの行が増えたか**」で語れば窓のずれに影響されず、
+      // 「増えたのはちょうど 1 本」という同じ主張がそのまま書ける。
+      const newAttachFailuresAfterRecovery = newLogLines(
+        beforeEffectFailLog,
+        afterRecoveryLog,
+      ).filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]'))
       expect(
-        attachFailedAfterRecovery,
-        `attach-failure lines in window: ${JSON.stringify(attachFailureLines, null, 2)}`,
-      ).toBe(attachFailedBefore + 1)
+        newAttachFailuresAfterRecovery,
+        'the deliberate failure must be the only new attach failure; the recovery statement ' +
+          'must not add one of its own',
+      ).toHaveLength(1)
 
       // ── 6d. #521/#517 S3 regression guard: the mixer/routing DSL (bus-name
       // chain methods — mix.output/sum/aux, `.verb(0.3)` send, `.drums` sum
@@ -3540,9 +3544,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       let bodyError: unknown
       let cleanupFailure: unknown
       try {
-        const baselineLog = (await activeClient.call('get_log', { lines: 500 })).text
-        const errorsBefore = countErrors(baselineLog)
-
         // E1: A is the CLAP oracle. LOOP keeps producing fresh note lifetimes while replace runs.
         await activeClient.call('evaluate_orbitscore', {
           code: [
@@ -3662,8 +3663,37 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         expect(effectUiClose.isError, effectUiClose.text).toBe(false)
 
         // E3: a rest-only pattern must be silent; the old tenant PIDs remain gone.
+        //
+        // 🔴 #761: ここは固定 `sleep(1000)` で窓を開けていたため、**窓の先頭に旧パターンの音が
+        // 混ざっていた**。`play()` は次の小節境界で効くので、待ち時間は評価のタイミング次第で
+        // 0〜1 小節ぶん変わる（120 BPM の 4/4 なら 0〜2.0 秒）。
+        //
+        // 2026-09-06 に `ORBIT_KEEP_CAPTURES` で WAV を残して実測（250 ms バケット）:
+        //
+        //    4.50–16.50s  ~0.155   E1 (CLAP) → E2 (VST3)
+        //   16.50–18.50s  0.00000  ← **休符は効いている**（ちょうど 1 小節）
+        //   18.50–22.00s  ~0.155   E4 の play(1,1,1,1) が次の小節頭で復帰
+        //
+        // 窓は 15.50–18.00 に置かれ先頭 1.0 秒が音だったので RMS = 0.1004
+        // （√(1.0 × 0.155² / 2.5) = 0.098 と一致）。**実装は正しく、窓の位置だけが誤り**だった。
+        //
+        // 🔴 このアサーションは #761 以前は**一度も評価されていなかった** — 同じ try 節の中で
+        // ERROR 件数の偽赤が先に throw していたため。偽赤が本物の赤を隠していた。
+        //
+        // 音に窓を追従させる（#739 と同じ規律）。`waitForQuiet` の戻り値そのものが
+        // 「休符に切り替えたら無音になる」の実時間側の主張で、下の RMS 判定が WAV 側の主張。
         await activeClient.call('evaluate_orbitscore', { code: 'cb618.play(0, 0, 0, 0)' })
-        await sleep(1000)
+        const e3Quiet = await waitForQuiet(capturePath, {
+          // 下の `E3 rest pattern must be silent` と同じ閾値にする（別の値にすると
+          // 「静かと判定したのに窓は静かでない」が起こりうる）。
+          floor: 0.005,
+          quietSec: 0.3,
+          intervalMs: 100,
+          timeoutMs: 10_000,
+        })
+        expect(e3Quiet, 'E3: 休符パターンへ切り替えたら capture は無音にならなければならない').toBe(
+          true,
+        )
         segments.e3 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
         await sleep(2500)
         segments.e3.toSec = clock()
@@ -3682,19 +3712,37 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // instead of keeping it in the closure — a bare `const` inside the predicate left the
         // assertion referencing an undeclared name, and nothing typechecks `tests/`.
         let afterFailureLog = beforeFailureLog
+        // 🔴 #761: この poll の述語は `failedReplace.isError || countErrors(after) > ...` だった。
+        // `isError` は poll 前に確定した定数なので、真なら**ログを 1 度も待たずに**抜けていた。
+        // ログが届いたことを待ちたいなら、ログの側だけを見る。
         await waitUntil(
           async () => {
             afterFailureLog = (await activeClient.call('get_log', { lines: 500 })).text
-            return (
-              failedReplace.isError || countErrors(afterFailureLog) > countErrors(beforeFailureLog)
+            return newLogLines(beforeFailureLog, afterFailureLog).some(
+              (line) => line.includes('[OUTPROC_ATTACH_FAILED]') || line.includes('Issue618.vst3'),
             )
           },
           { intervalMs: 200, timeoutMs: 10_000, label: '#618 failed replacement surfaced' },
         )
+        // 🔴 #761 — 判定を 2 つに分けた。#628 が R-E3（`:3985` の同型シナリオ）で既に
+        // 「ERROR 件数の前後比較はもう使わない」と決めており、その先例に揃える。
+        //
+        //   (1) 失敗が **loud** であること → `isError` で直接言う（件数と論理和にしない）
+        //   (2) 失敗が **ログにも届いた**こと → **増えた行**で言う。`get_log` は固定 500 行窓
+        //       なので件数は古い行が流れ出るだけで動く（2026-09-05 に
+        //       `expected 6 to be greater than or equal to 7` で偽赤になった）
+        //
+        // 包含側に `newLogLines` を使うのは、拡張の `ERROR:` 前置が chunk 単位で、同じ chunk の
+        // 2 行目以降に前置が付かないため（根本は #756）。
         expect(
-          failedReplace.isError || countErrors(afterFailureLog) > countErrors(beforeFailureLog),
-          `E4 failure was not surfaced by evaluation or get_log: ${afterFailureLog.slice(-1200)}`,
+          failedReplace.isError,
+          `E4: 存在しないプラグインへの差し替えは loud に失敗しなければならない: ${failedReplace.text}`,
         ).toBe(true)
+        const e4NewLines = newLogLines(beforeFailureLog, afterFailureLog)
+        expect(
+          e4NewLines.filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]')),
+          `E4 の attach 失敗がログに届いていない。新規行: ${JSON.stringify(e4NewLines, null, 2)}`,
+        ).not.toHaveLength(0)
         await activeClient.call('evaluate_orbitscore', { code: 'cb618.play(1, 1, 1, 1)' })
         await sleep(1000)
         segments.e4 = { fromSec: clock(), toSec: 0, fromWall: Date.now(), toWall: 0 }
@@ -3728,9 +3776,15 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         segments.e5.toSec = clock()
         segments.e5.toWall = Date.now()
 
-        const finalLog = (await activeClient.call('get_log', { lines: 500 })).text
-        // The deliberate E4 error is the only new error in this scenario.
-        expect(countErrors(finalLog)).toBeGreaterThanOrEqual(errorsBefore + 1)
+        // 🔴 #761: ここには `countErrors(finalLog) >= errorsBefore + 1`（シナリオ冒頭の
+        // baseline との件数比較）があった。`get_log` は固定 500 行窓で、E1〜E6 を跨ぐ間に
+        // 窓は丸ごと入れ替わる。**新しい ERROR が出ていても総数は減りうる**ので偽赤になった。
+        //
+        // 「E4 の失敗が届いた」は E4 の直前直後という**窓が重なる区間**で、増えた行として
+        // 上で主張済み。多重集合の差分は窓が重ならないと意味を持たない（重ならなければ
+        // `finalLog` の全行が「新規」になる）ので、シナリオ全体を 1 対の baseline/final で
+        // 語る形は再導入しない。全体の「他に ERROR が増えていない」が要るなら、各ステップに
+        // baseline を置くこと（本 issue の範囲外）。
       } catch (error) {
         bodyError = error
         throw error

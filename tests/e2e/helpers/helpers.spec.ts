@@ -35,6 +35,7 @@ import {
   readCaptureForAnalysis,
   readCaptureFormat,
   steadyRms,
+  waitForQuiet,
   waitForSound,
 } from './capture-windows'
 import { countErrors, countLogMarker, LOG_WINDOW_LINES } from './engine-log'
@@ -273,6 +274,46 @@ describe('capture windows', () => {
         label: 'continuous synthetic capture',
       }),
     ).resolves.toBeUndefined()
+  })
+
+  it('reports a quiet tail so a silence window can follow the sound', async () => {
+    // #761: 「休符に切り替えたら無音」の区間は、無音になってから窓を開けなければならない。
+    // 音 → 無音 の順に並ぶ capture の**末尾**を見る。
+    const capturePath = path.join(makeTmpDir(), 'quiet-tail.wav')
+    const wav = syntheticFloat32Wav(0.6, {
+      sample: (timeSec) => (timeSec < 0.2 ? 0.25 * Math.sin(2 * Math.PI * 50 * timeSec) : 0),
+    })
+    fs.writeFileSync(capturePath, wav)
+
+    await expect(
+      waitForQuiet(capturePath, { floor: 0.01, quietSec: 0.3, intervalMs: 1, timeoutMs: 20 }),
+    ).resolves.toBe(true)
+  })
+
+  it('does not mistake a short gap for a quiet tail', async () => {
+    // 🔴 これが識別力のあるテスト。`quietSec` より**短い**無音を静寂と認めてしまうと、
+    // LOOP の小節境界にできる切れ目（実測 80 ms）で返ってしまい、鳴り止むのを待たない。
+    // 末尾 0.1s だけが無音（`quietSec` は 0.3s）なので false でなければならない。
+    const capturePath = path.join(makeTmpDir(), 'short-gap.wav')
+    const wav = syntheticFloat32Wav(0.6, {
+      sample: (timeSec) => (timeSec < 0.5 ? 0.25 * Math.sin(2 * Math.PI * 50 * timeSec) : 0),
+    })
+    fs.writeFileSync(capturePath, wav)
+
+    await expect(
+      waitForQuiet(capturePath, { floor: 0.01, quietSec: 0.3, intervalMs: 1, timeoutMs: 20 }),
+    ).resolves.toBe(false)
+  })
+
+  it('returns false instead of throwing when the capture never goes quiet', async () => {
+    // `waitForSoundRestart` の段階 1 は「静かにならないのが正しい」譜面を通すため、
+    // ここが例外を投げると切れ目なく鳴り続ける譜面を壊す。
+    const capturePath = path.join(makeTmpDir(), 'never-quiet.wav')
+    fs.writeFileSync(capturePath, syntheticFloat32Wav(0.6, { sample: sineAfter(0) }))
+
+    await expect(
+      waitForQuiet(capturePath, { floor: 0.01, quietSec: 0.3, intervalMs: 1, timeoutMs: 20 }),
+    ).resolves.toBe(false)
   })
 
   it('selects the same buckets as the old range when its reverse-map offset is zero', () => {
