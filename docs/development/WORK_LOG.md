@@ -17,6 +17,66 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(e2e): say which log lines appeared instead of counting them (#761) (Sep 6, 2026)
+
+**ブランチ**: `761-window-proof-assertions`（base = 束 `761-gated-measurement`） / **Part of** [#761](https://github.com/signalcompose/orbitscore/issues/761)
+
+束「gated の測定器」の 2 本目。`get_log` は**固定 500 行窓**なので、「baseline より N 件増えた」と
+いう主張は**古い行が窓から流れ出るだけで崩れる**（偽赤）。実測: 2026-09-05 に #618 E1-E6 が
+`expected 6 to be greater than or equal to 7` で落ちた。
+
+#### 直した 3 箇所
+
+| 場所 | 旧 | 新 |
+|---|---|---|
+| 6c（`:1705`） | `.toBe(attachFailedBefore + 1)` = 窓内カウントの**等価比較** | `newLogLines` の `[OUTPROC_ATTACH_FAILED]` 行が**ちょうど 1 本** |
+| #618 E4（poll） | `failedReplace.isError \|\| countErrors(after) > countErrors(before)` | ログ側だけを見る述語へ |
+| #618 E4（判定） | 同じ論理和 + シナリオ冒頭 baseline との `>= errorsBefore + 1` | ① `isError` で loud を直接 ② 増えた行で「ログにも届いた」 |
+
+🔴 **`:1705` は #760 の作業中に見つけたもの**で、既存ラチェットの正規表現が
+`errorsBefore|errorCount|countErrors` しか見ないため**すり抜けていた**。
+
+#### 🔴 先例に揃えた（推測ではなく、このリポジトリが既に採った形）
+
+同じ「存在しないプラグイン」を使う #625 の R-E3（同ファイル `:3985` 付近）は、#628 の時点で
+**すでに件数比較を捨てている**:
+
+> 🔴 #628: ERROR 件数の前後比較はもう使わない。（略）判定は「B が鳴り続けているか」（音）と
+> 「child PID が変わっていないか」（プロセス）で行う。
+
+**#618 E4 だけが古い形のまま取り残されていた。**
+
+#### 🔴 poll の述語が意味を持っていなかった
+
+E4 の `waitUntil` は `failedReplace.isError || countErrors(...) > ...` を述語にしていた。
+`isError` は **poll に入る前に確定した定数**なので、真なら**ログを 1 度も待たずに**即座に抜ける。
+「失敗がログに届くのを待つ」という名前と実際の挙動が食い違っていた。
+
+#### 🔴 シナリオ全体の件数比較は「置き換え」ではなく「撤去」した
+
+`countErrors(finalLog) >= errorsBefore + 1` を `newErrorLines(baselineLog, finalLog)` へ
+単純置換するのは**誤り**。`baselineLog`（テスト冒頭）と `finalLog` は 500 行窓が重ならないので、
+**`finalLog` の全行が「新規」**になる。多重集合の差分は**窓が重なる時だけ**意味を持つ。
+E4 の直前直後という重なる区間で主張し、撤去の理由をコメントに残した。
+
+#### ラチェット（`gated-assertion-hygiene.spec.ts`）
+
+窓由来のカウント baseline に `+ N` して主張する形を機械で禁止する。
+
+- 既存の 1 本目は `GreaterThan` を含む行を**除外**するので `toBeGreaterThanOrEqual(before + 1)` を
+  捕まえられない。ここが補完
+- 変数名を `errorsBefore` 系に限定しない（`attachFailedBefore` を取り逃がした穴）
+- ⚠️ **コメント行は除外する。** アンチパターンを説明した注釈自身を拾ってしまい、
+  「正しく直したのに赤くなる」= 規律を説明できなくなる（本 PR で実際に発火した）
+
+#### 変異検証（実出力・自己申告ではない）
+
+| 変異 | 結果 |
+|---|---|
+| `.toBe(<name>Before + 1)` を再導入 | 🔴 **red**（1 failed / 6 passed） |
+| `toBeGreaterThanOrEqual(errorsBefore + 1)` を再導入 | 🔴 **red**（1 failed / 6 passed） |
+| 復元 | ✅ **7 passed** |
+
 ### fix(e2e): assert the attach failure's reason instead of a fallback wording (#760) (Sep 6, 2026)
 
 **ブランチ**: `760-attach-failure-assertion`（base = 束 `761-gated-measurement`） / **Part of** [#760](https://github.com/signalcompose/orbitscore/issues/760)

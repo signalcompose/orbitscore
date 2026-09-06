@@ -98,6 +98,37 @@ describe('gated E2E assertion hygiene', () => {
     ).toBe(true)
   })
 
+  it('never claims a log-derived count increased by comparing to a baseline', () => {
+    // 🔴 #761: `get_log` は固定 500 行窓。「baseline + N になった」という主張は、古い行が
+    // 窓から流れ出るだけで崩れる（**偽赤**）。2026-09-05 に #618 E1-E6 が
+    // `expected 6 to be greater than or equal to 7` で落ちたのがこれ。
+    //
+    // 上の 1 本目（bare ERROR count equality）は `GreaterThan` を含む行を**除外**するので
+    // `toBeGreaterThanOrEqual(errorsBefore + 1)` を捕まえられない。ここがその補完になる。
+    //
+    // 🔴 変数名を `errorsBefore` 系に限定しない。`attachFailedBefore + 1` を取り逃がしたのが
+    // まさにその穴だった（#760 の作業中に発見）。
+    //
+    // 正しい形は `newLogLines` / `newErrorLines` で「**どの行が**増えたか」を見ること。多重集合の
+    // 差分は窓のずれに影響されず、「想定した 1 件以外は増えていない」という強い主張もできる。
+    //
+    // ⚠️ コメント行は除外する。**このアンチパターンを説明した注釈自身**を検査が拾ってしまい、
+    // 「正しく直したのに赤くなる」＝ 規律を説明できなくなる（実際に本 PR で発火した）。
+    // コメントアウトされたコードは実行されないので、除外して困ることもない。
+    const offenders = linesMatching((line) => {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('//') || trimmed.startsWith('*')) return false
+      return /\.(toBe|toEqual|toBeGreaterThanOrEqual|toBeLessThanOrEqual)\(\s*\w*[Bb]efore\s*[+-]\s*\d/.test(
+        line,
+      )
+    })
+    expect(
+      offenders,
+      'Log counts come from a fixed 500-line window, so "baseline + N" claims break when old ' +
+        'lines scroll out. Say WHICH lines appeared with newLogLines()/newErrorLines() (#761).',
+    ).toEqual([])
+  })
+
   it('still lets the stale guard see the sources the daemon is built from', () => {
     // 逆方向: #713 の修正が行きすぎて `src` まで除外したら、ガードは**古いバイナリを
     // 見逃す**ようになる。それは CLAUDE.md「実機テストは最新ビルドで走る」に反する。
