@@ -16,8 +16,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { gainDbToAmplitude } from '../../../packages/engine/src/audio/audio-gain-utils'
 import { createAudioEngine } from '../../../packages/engine/src/audio/create-audio-engine'
 import { resolveEngineKind } from '../../../packages/engine/src/audio/engine-backend'
+import { DaemonClient } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
 import {
   fitAnchorSamples,
+  audioOutputReportLines,
   RustEnginePlayer,
 } from '../../../packages/engine/src/audio/rust-engine/rust-engine-player'
 import { SuperColliderPlayer } from '../../../packages/engine/src/audio/supercollider-player'
@@ -41,7 +43,7 @@ async function waitFor(
   throw new Error(`waitFor: condition not met within ${timeoutMs}ms`)
 }
 
-/** GetStatus + LoadSample + PlayAt + StopAll の既定ハンドラ（uptime=10 で anchor を固定的に）。 */
+/** GetStatus + LoadSample + PlayAt + stop flush の既定ハンドラ（uptime=10 で anchor を固定的に）。 */
 function defaultHandlers(overrides: MockDaemonHandlers = {}): MockDaemonHandlers {
   let playSeq = 0
   return {
@@ -62,6 +64,7 @@ function defaultHandlers(overrides: MockDaemonHandlers = {}): MockDaemonHandlers
     }),
     PlayAt: () => ({ play_id: `p-${playSeq++}` }),
     StopAll: () => ({ stopped: 0 }),
+    PluginAllNotesOff: () => ({ released: 0, stale: 0, failed: 0 }),
     // 既定の mock daemon は feature `link-audio` 無効ビルドを模す（LINK_AUDIO_UNAVAILABLE）。player は
     // これを warn-once gap として握り潰す。実 egress を持つ daemon の挙動は override で差し替える。
     RegisterLinkAudioChannel: () => {
@@ -77,6 +80,44 @@ function defaultHandlers(overrides: MockDaemonHandlers = {}): MockDaemonHandlers
     ...overrides,
   }
 }
+
+describe('audioOutputReportLines', () => {
+  it('formats the effective output and first callback latency', () => {
+    expect(
+      audioOutputReportLines({
+        output: {
+          device_name: 'USB Audio',
+          sample_rate: 48_000,
+          channels: 2,
+          device_fell_back: false,
+          first_callback_ms: 12,
+        },
+      }),
+    ).toEqual({
+      info: '🔊 output: "USB Audio" @ 48000 Hz × 2ch (first callback 12 ms)',
+    })
+  })
+
+  it('formats fallback reason without dropping the effective output line', () => {
+    expect(
+      audioOutputReportLines({
+        output: {
+          device_name: 'Built-in Output',
+          sample_rate: 48_000,
+          channels: 2,
+          device_requested: 'Dead Device',
+          device_fell_back: true,
+          fallback_reason: 'produced no callback',
+          first_callback_ms: 9,
+        },
+      }),
+    ).toEqual({
+      error:
+        '❌ audio device fallback: requested "Dead Device" → using "Built-in Output": produced no callback',
+      info: '🔊 output: "Built-in Output" @ 48000 Hz × 2ch (first callback 9 ms)',
+    })
+  })
+})
 
 describe('RustEnginePlayer with mock daemon', () => {
   let server: MockDaemonServer
@@ -786,9 +827,10 @@ describe('RustEnginePlayer with mock daemon', () => {
     const statusAfter = server.received.filter((r) => r.method === 'GetStatus').length
     expect(statusAfter).toBe(statusBefore)
     expect(p.isRunning).toBe(false)
+    expect(server.received.some((r) => r.method === 'PluginAllNotesOff')).toBe(false)
   })
 
-  it('stopAll() は daemon に StopAll を送る（hard-stop-all・#319）', async () => {
+  it('stopAll() は StopAll の直後に PluginAllNotesOff を送る', async () => {
     const p = await boot()
     p.scheduleEvent('/audio/kick.wav', 0, 0, 0, 'seqA')
     p.start()
@@ -796,8 +838,40 @@ describe('RustEnginePlayer with mock daemon', () => {
     await waitFor(() => playAtRecords().length >= 1)
     p.stopAll()
     // stopAll は fire-and-forget（同期）。loopback WebSocket の往復を待つため waitFor を使う。
-    await waitFor(() => server.received.some((r) => r.method === 'StopAll'))
-    expect(server.received.some((r) => r.method === 'StopAll')).toBe(true)
+    await waitFor(() => server.received.some((r) => r.method === 'PluginAllNotesOff'))
+    expect(
+      server.received
+        .filter((r) => r.method === 'StopAll' || r.method === 'PluginAllNotesOff')
+        .map((r) => r.method),
+    ).toEqual(['StopAll', 'PluginAllNotesOff'])
+  })
+
+  it('PluginAllNotesOff は released/stale/failed のいずれかがある時だけ stdout に要約を出す', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const flushSpy = vi.spyOn(DaemonClient.prototype, 'pluginAllNotesOff')
+    let flushCount = 0
+    const p = await boot(
+      defaultHandlers({
+        PluginAllNotesOff: () =>
+          ++flushCount === 1
+            ? { released: 2, stale: 1, failed: 1 }
+            : { released: 0, stale: 0, failed: 0 },
+      }),
+    )
+    p.stopAll()
+    await waitFor(() => flushSpy.mock.calls.length === 1)
+    await flushSpy.mock.results[0].value
+    expect(logSpy).toHaveBeenCalledWith(
+      '[rust-engine] plugin all-notes-off: released=2 stale=1 failed=1',
+    )
+    logSpy.mockClear()
+
+    p.stopAll()
+    await waitFor(() => flushSpy.mock.calls.length === 2)
+    await flushSpy.mock.results[1].value
+    expect(logSpy).not.toHaveBeenCalled()
+    flushSpy.mockRestore()
+    logSpy.mockRestore()
   })
 
   it('respawn backoff 中に quit() しても clean に終わる（quit-during-respawn）', async () => {
@@ -830,6 +904,50 @@ describe('RustEnginePlayer with mock daemon', () => {
     expect(p.isRunning).toBe(false)
     warnSpy.mockRestore()
     errorSpy.mockRestore()
+  })
+})
+
+describe('RustEnginePlayer plugin all-notes-off wiring without a socket', () => {
+  it('StopAll の直後に flush し、非空要約だけを stdout に出す', async () => {
+    const daemon = new DaemonClient()
+    vi.spyOn(daemon, 'isRunning').mockReturnValue(true)
+    const stop = vi.spyOn(daemon, 'stopAll').mockResolvedValue(0)
+    const flush = vi
+      .spyOn(daemon, 'pluginAllNotesOff')
+      .mockResolvedValueOnce({ released: 2, stale: 1, failed: 1 })
+      .mockResolvedValueOnce({ released: 0, stale: 0, failed: 0 })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const player = new RustEnginePlayer({ daemonClient: daemon })
+
+    player.stopAll()
+    await Promise.resolve()
+    expect(stop).toHaveBeenCalledTimes(1)
+    expect(flush).toHaveBeenCalledTimes(1)
+    expect(stop.mock.invocationCallOrder[0]).toBeLessThan(flush.mock.invocationCallOrder[0]!)
+    expect(log).toHaveBeenCalledWith(
+      '[rust-engine] plugin all-notes-off: released=2 stale=1 failed=1',
+    )
+
+    log.mockClear()
+    player.stopAll()
+    await Promise.resolve()
+    expect(flush).toHaveBeenCalledTimes(2)
+    expect(log).not.toHaveBeenCalled()
+    log.mockRestore()
+  })
+
+  it('quit は disposed guard により RPC flush を送らない', async () => {
+    const daemon = new DaemonClient()
+    vi.spyOn(daemon, 'isRunning').mockReturnValue(true)
+    const stop = vi.spyOn(daemon, 'stopAll').mockResolvedValue(0)
+    const flush = vi
+      .spyOn(daemon, 'pluginAllNotesOff')
+      .mockResolvedValue({ released: 0, stale: 0, failed: 0 })
+    const player = new RustEnginePlayer({ daemonClient: daemon })
+
+    await player.quit()
+    expect(stop).not.toHaveBeenCalled()
+    expect(flush).not.toHaveBeenCalled()
   })
 })
 

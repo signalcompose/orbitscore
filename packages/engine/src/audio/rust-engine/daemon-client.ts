@@ -453,6 +453,16 @@ export class DaemonClient extends EventEmitter {
     return Number(result.stopped ?? 0)
   }
 
+  /** daemon が追跡する全 instrument note を解放し、配送結果を返す。 */
+  async pluginAllNotesOff(): Promise<{ released: number; stale: number; failed: number }> {
+    const result = await this.request('PluginAllNotesOff', {})
+    return {
+      released: Number(result.released ?? 0),
+      stale: Number(result.stale ?? 0),
+      failed: Number(result.failed ?? 0),
+    }
+  }
+
   async setGlobalGain(value: number, rampSec = 0): Promise<void> {
     await this.request('SetGlobalGain', { value, ramp_sec: rampSec })
   }

@@ -45,6 +45,8 @@ Please make sure the file specified by `audio()` actually exists inside the fold
 
 Please make sure your operating system's audio output is set to the device you want to listen on. Also confirm that the system volume is not at 0.
 
+If you have picked a device inside OrbitScore, also check which device is marked `●` under **Output Device** in the **Audio Engine Settings** view. When the device you chose never asks for audio, the engine starts on the OS default output instead ([Engine Settings](/en/getting-started/engine-settings)).
+
 ---
 
 ## `Cmd+Enter` Does Not Work

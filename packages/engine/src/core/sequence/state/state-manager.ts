@@ -22,6 +22,7 @@ export class StateManager {
   private _loopStartTime?: number
   private playbackInterval?: NodeJS.Timeout
   private loopTimer?: NodeJS.Timeout
+  private runTimer?: NodeJS.Timeout
 
   /**
    * Set sequence name
@@ -168,6 +169,20 @@ export class StateManager {
   }
 
   /**
+   * Set the one-shot RUN tail timer
+   */
+  setRunTimer(timer: NodeJS.Timeout | undefined): void {
+    this.runTimer = timer
+  }
+
+  /**
+   * Get the one-shot RUN tail timer
+   */
+  getRunTimer(): NodeJS.Timeout | undefined {
+    return this.runTimer
+  }
+
+  /**
    * Get complete sequence state
    */
   getState(): StateManagerState {
@@ -193,6 +208,10 @@ export class StateManager {
     if (this.loopTimer) {
       clearTimeout(this.loopTimer)
       this.loopTimer = undefined
+    }
+    if (this.runTimer) {
+      clearTimeout(this.runTimer)
+      this.runTimer = undefined
     }
   }
 }

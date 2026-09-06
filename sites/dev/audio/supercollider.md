@@ -27,7 +27,7 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 ```
 
 ```typescript
-// packages/engine/src/audio/engine-backend.ts:65-68
+// packages/engine/src/audio/engine-backend.ts:67-70
 export function resolveEngineKind(raw: string | undefined): EngineKind {
   const v = raw?.trim().toLowerCase()
   return v === 'sc' || v === 'supercollider' ? 'supercollider' : 'rust'

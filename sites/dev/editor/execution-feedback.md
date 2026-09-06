@@ -1,8 +1,8 @@
 ---
 title: "IV-2. インライン実行とフィードバック"
 chapter-id: "IV-2"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: ef140b1
+verified-at: "2026-09-04"
 status: draft
 ---
 
@@ -37,7 +37,7 @@ status: draft
 `Cmd+Enter` が押されると `orbitscore.runSelection` コマンドが発火し、`runSelection()` 関数が呼ばれます。まず 2 つのガード条件を確認します:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2717-2728
+// packages/vscode-extension/src/extension.ts:2724-2735
 async function runSelection() {
   const editor = vscode.window.activeTextEditor
   if (!editor || editor.document.languageId !== 'orbitscore') {
@@ -63,7 +63,7 @@ async function runSelection() {
 選択がある場合 (`!selection.isEmpty`) は単純です。選択範囲のテキストをそのまま取得します:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2735-2737
+// packages/vscode-extension/src/extension.ts:2742-2744
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -78,7 +78,7 @@ async function runSelection() {
 選択がない場合が面白いです。「カーソルがいる行はどの変数 (subject) に属しているか」を調べて、そのsubject に関わる **ファイル全体の行** をかき集めます:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2738-2787 (setDocumentDirectory 注入前まで)
+// packages/vscode-extension/src/extension.ts:2745-2794 (setDocumentDirectory 注入前まで)
   } else {
     // No selection: subject-based block evaluation
     // Detect which variable/object the current line belongs to, then collect all related lines
@@ -134,7 +134,7 @@ async function runSelection() {
 `getLineSubject()` は各行を見て「この行はどの変数に属するか」を返す関数です。初稿では深掘りしませんでしたが、実装は 2 本の正規表現だけの小さなものです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2702-2715
+// packages/vscode-extension/src/extension.ts:2709-2722
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -179,7 +179,7 @@ _kick.play(
 `getLineSubject()` が `null` を返した場合は、スタンドアロンコマンド (`LOOP`, `RUN`, `MUTE` 等) と判断します。この場合も同じ `parenBalance` ロジックで複数行を追いかけますが、ファイル全体を走査するのではなく**カーソル行から下方向のみ**に範囲を拡張します:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2787-2810
+// packages/vscode-extension/src/extension.ts:2794-2817
     } else {
       // Standalone command (LOOP, RUN, MUTE, etc.) - evaluate current statement only
       let endLine = currentLine
@@ -213,7 +213,7 @@ _kick.play(
 収集したテキストを engine に送る役目は、2026-05 時点では `runSelection()` の末尾に直書きされていましたが、MCP の `evaluate_orbitscore` と共有するために `writeCodeToEngine()` に切り出されています。`audioPath()` や `audio()` の相対パス解決を `.orbs` ファイルのディレクトリ基準で行うための仕掛けが 2 層あります。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3001-3033
+// packages/vscode-extension/src/extension.ts:3026-3058
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -267,7 +267,7 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
 `runSelection()` の末尾はこうなっています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2874-2881
+// packages/vscode-extension/src/extension.ts:2881-2888
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
@@ -287,7 +287,7 @@ engine 側に `process.cwd()` へのフォールバックは存在しません (
 実行した範囲をエディタ上で点滅させるのが `flashLines()` です。`createTextEditorDecorationType` (VS Code API) を使って実装されています:
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2815-2872
+// packages/vscode-extension/src/extension.ts:2822-2879
   // Visual feedback: flash the executed lines (configurable)
   const flashLines = () => {
     const config = vscode.workspace.getConfiguration('orbitscore')
@@ -396,7 +396,7 @@ export function parseStepLine(line: string): StepEvent | null {
 `argPath` は `play()` の引数ツリーへのインデックスで、`"1.0"` なら「2 番目の引数の中の最初の要素」です。`atEpochMs` はイベントの **グリッド時刻** で、engine は lookahead で先に dispatch するため行は早く届きます。拡張はその時刻まで decoration を遅らせます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:235-246
+// packages/vscode-extension/src/extension.ts:238-249
 function handleStepLine(step: StepEvent): void {
   const delayMs = step.atEpochMs - Date.now()
   if (delayMs < -1000) return
@@ -422,7 +422,7 @@ function handleStepLine(step: StepEvent): void {
 人間のユーザーはエディタの赤線と Output Channel でエラーに気づけますが、MCP 経由の LLM には `evaluate_orbitscore` の `ok` しか届きません。そして `writeCodeToEngine()` の `true` は「stdin に届いた」までしか意味しません。#614 は、コードの直後に `//#evalMark {"requestId":...}` を送り、engine が FIFO でそこに到達したときに、直前の評価で溜まった診断を JSON で返す仕組みを足しました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3060-3069
+// packages/vscode-extension/src/extension.ts:3085-3094
   const result = await evalMarkBridge.send((line, onError) => {
     // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
     stdin.write(line, (error) => {
@@ -438,7 +438,7 @@ function handleStepLine(step: StepEvent): void {
 stdout 側の受信は `setupStdoutHandler()` に **独立した分岐** として置かれています。コメントが、最初は `{"pluginUi"` 分岐に相乗りさせて一度も dispatch されず、ユニットテストは全部緑で実機 E2E だけが捕まえた、と記録しています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1502-1510
+// packages/vscode-extension/src/extension.ts:1506-1514
         } else if (trimmedLine.startsWith('{"evalMark"')) {
           // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
           // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
@@ -447,7 +447,7 @@ stdout 側の受信は `setupStdoutHandler()` に **独立した分岐** とし�
           if (!parsed && isCurrent) {
             outputChannel?.appendLine(`⚠️ received a malformed //#evalMark result line: ${rawLine}`)
           }
-        }
+        } else if (trimmedLine.startsWith('{"engineState"')) {
 ```
 
 editor の `Cmd+Enter` はこのマーカーを送りません。人間にはフラッシュ + 診断 + Output Channel で足りるからで、evalMark は MCP の evaluate 専用です。MCP ツール群の全体は [IV-3. MCP サーバと実機 gated E2E](/editor/mcp-and-gated-e2e) で扱います。
@@ -459,7 +459,7 @@ editor の `Cmd+Enter` はこのマーカーを送りません。人間にはフ
 `Cmd+Enter` とは別に、ドキュメントの open / change / activation 時に `updateDiagnostics()` が走ります (#384、[IV-1](/editor/vscode-architecture#intellisense-と診断の登録))。前半は 2026-05 時点と同じ行内チェック 3 種です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3970-4044
+// packages/vscode-extension/src/extension.ts:4017-4091
 async function updateDiagnostics(
   document: vscode.TextDocument,
   collection: vscode.DiagnosticCollection,
@@ -540,7 +540,7 @@ async function updateDiagnostics(
 後半は **横断解析** で、純関数 (`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts`) が返す `DiagnosticIssue` を `vscode.Diagnostic` に写すだけです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4046-4057
+// packages/vscode-extension/src/extension.ts:4093-4104
   // === Cross-line analyses (pure functions, unit-testable) ===
   // Pure logic は `diagnostics-analysis.ts` に分離し、ここでは
   // VS Code Diagnostic オブジェクトに変換するだけにする。
@@ -633,14 +633,32 @@ export const GLOBAL_ONCE_METHODS = new Set([
 
 ### 6-8. LinkAudio strict mode の編集時カウンターパート
 
-DSL 仕様 §8.1.2 の「LinkAudio ファイルでは発音 sequence すべてが `.output()` を宣言する。hardware と LinkAudio は 1 ファイル内で混在できない」という契約は、runtime では `Sequence.resolveDispatchChannel()` の throw として現れます。診断 6-8 はその編集時カウンターパートです。7 と 8 が **Error** なのは、runtime で必ず throw するからです。7 は `.midi()` / `.instrument()` を持つ sequence を対象外にしていて、コメントが decision #14 (MIDI と SC オーディオは併走可) を引いています。
+DSL 仕様 §8.1.2 の「LinkAudio ファイルでは発音 sequence すべてが `.output()` を宣言する。hardware と LinkAudio は 1 ファイル内で混在できない」という契約は、runtime では `Sequence.resolveDispatchChannel()` が返す dispatch 先として現れます。診断 6-8 はその編集時カウンターパートです。7 は `.midi()` / `.instrument()` を持つ sequence を対象外にしていて、コメントが decision #14 (MIDI と SC オーディオは併走可) を引いています。
+
+runtime 側の扱いは #645 (PR-D0) で変わりました。以前は `.output()` の無い発音 sequence に対して `resolveDispatchChannel()` が例外を投げていたのですが、**このメソッドは演奏中の schedule 経路からも呼ばれます** — loop timer が小節ごとに叩く `scheduleEventsFromTime()` や、演奏中の `.gain()` が通る `seamlessParameterUpdate()` がそれです。そこで throw すると await 連鎖が切れて、**同じ評価ブロックに書いた他の sequence まで巻き添えで止まります**。ライブコーディング中に kick が止まる、という壊れ方です。
+
+そこで戻り値を tagged union にして、throw をやめました。以下が新しい契約の型です。
+
+```typescript
+// packages/engine/src/core/sequence.ts:103-106
+export type DispatchTarget =
+  | { readonly kind: 'hardware' } // LinkAudio off (or a MIDI sequence, which is exempt) — the pre-#645 `undefined`
+  | { readonly kind: 'link'; readonly channel: string } // LinkAudio on + `.output()` set
+  | { readonly kind: 'skip'; readonly reason: string } // LinkAudio on + `.output()` unset → silent skip (design 610 §0 裁定 6)
+```
+
+面白いのは `undefined` を意図的に union から外している点です。変更前の signature は `string | undefined` で、`undefined` が「hardware バスへ流す」を意味していました。もし throw を素朴に `catch { return undefined }` へ書き換えていたら、エラー経路が**黙って hardware へ音を流す**ことになります。`hardware` と `skip` を別の variant にしておくと、その取り違えは型検査を通りません。
+
+スキップは黙って消えるわけではなく、`logSkipOnce()` が `[ERROR] Sequence '<name>': … このシーケンスは無音でスキップします。` を出します。ループしている sequence は小節ごとに dispatch 先を解決し直すので、同じ理由のログは 1 回だけに dedup されます (`_dispatchSkipLoggedFor` が直前の reason を持ち、`.output()` が channel を設定したときにリセットされます)。
+
+診断 7 と 8 が **Error** 相当のままなのは、runtime が throw するからではなく、**LinkAudio セッションでその sequence が鳴らないから**です。編集時に気づけないと、無音の理由をログから探すことになります。
 
 ### 9. 未知の plugin 名 (Warning)
 
 `effect("...")` / `instrument("...")` の名前が plugin catalog に無いときの警告です (#638)。engine は評価時に throw しますが、342 件の catalog では typo が普通に起きるので、評価前に知らせます。**Warning に留めている**のは、catalog がキャッシュされたスナップショットで、「正しい名前だがまだスキャンしていない」場合があるからです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4100-4117
+// packages/vscode-extension/src/extension.ts:4147-4164
   // #638: plugin names that the catalog cannot resolve. The engine throws on
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
@@ -721,6 +739,7 @@ flowchart TD
 | 送信失敗時はフラッシュしない | — | `extension.ts:2873-2875` のコメント |
 | `//#evalMark` による評価結果の相関 (MCP 専用) | #614 | `eval-mark-bridge.ts:1-23`、`extension.ts:3048-3077` / `:1501-1509` |
 | 未知 plugin 名の診断 (Warning) | #638 | §6.412 (2026-08-29)、`extension.ts:4095-4112` |
+| 診断 6-8 の runtime カウンターパートが throw から**無音スキップ + ログ**へ (`DispatchTarget` tagged union) | #645 | `sequence.ts:103-106` / `:1580-1587`（PR [#737](https://github.com/signalcompose/orbitscore/pull/737)） |
 
 ---
 

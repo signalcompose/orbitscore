@@ -45,6 +45,15 @@ describe('gated E2E assertion hygiene', () => {
     ).toEqual([])
   })
 
+  it('never maps capture segments by subtracting wall time from final duration', () => {
+    const offenders = linesMatching((line) => /durationSec\s*-\s*\(stopWall/.test(line))
+    expect(
+      offenders,
+      'Capture segments must use the capture-file byte clock; final-duration wall-clock ' +
+        'reverse mapping can silently point at the start of the file (#739).',
+    ).toEqual([])
+  })
+
   it('does not use the engine log as the only oracle for audible behaviour', () => {
     // 音に出る機能は**キャプチャの数値**で判定する。ここでは「capture を使う spec に
     // rms/peak のアサーションが実在するか」だけを確かめる（個々のテストの強さは見ない）。

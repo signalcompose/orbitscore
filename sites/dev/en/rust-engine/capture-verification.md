@@ -1,8 +1,8 @@
 ---
 title: "RE-4. Capture Seam and Objective Verification (ORBIT_CAPTURE_WAV)"
 chapter-id: "RE-4"
-verified-against: f006a51
-verified-at: "2026-09-03"
+verified-against: 76a4056
+verified-at: "2026-09-05"
 status: draft
 ---
 
@@ -34,31 +34,31 @@ device"; the presence of capture does not change the output samples themselves (
 it does not mutate).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:662-707
+// rust/crates/orbit-audio-native/src/output.rs:1170-1193
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
     insert_buses: &mut [InsertBusStage],
     sources: &mut [SourceSlot],
     transport: &mut BlockTransport,
-    post: &mut Option<Box<dyn PostProcessor>>,
+    master: &mut MasterLine,
     capture: &mut Option<RingTapSink>,
     cb_stats: &Option<Arc<CallbackTimeStats>>,
     output_channels: usize,
     hw: &mut [f32],
 ) {
-// ...
-    // 読み取り専用 tap。`RingTapSink::commit` は wait-free / no-alloc（満杯時はあふれを drop カウント）
-    // ＝ RT 契約を満たす。off-thread writer が ring を drain する。post の後・計測の内側に置くことで
-    // capture コストも callback-duration に含めて監視する。
-    if let Some(sink) = capture.as_mut() {
-        sink.commit(hw);
-    }
+    // Instant::now() は macOS では mach_absolute_time（lock/alloc なし）= RT 許容。A0 §6 に基づき
+    // production RT 監視を callback-duration ベースにするための計測（cb_stats 有り時のみ）。
+    let t0 = cb_stats.as_ref().map(|_| Instant::now());
 
-    if let (Some(stats), Some(t0)) = (cb_stats, t0) {
-        stats.record(t0.elapsed().as_nanos() as u64);
-    }
-}
+    // engine（+ bus graph）は常に 2ch で完結する（設計 §5.5 row 1・3）。`master.buffer` が core の
+    // 「hardware_out」を受ける — デバイス幅（`output_channels`／`hw`）とは無関係。buffer は起動時に
+    // 事前確保済み（`start_output_inner`）なので RT では resize しない。
+    let frames = hw.len() / output_channels;
+    let bs = frames * 2;
+    debug_assert!(
+        master.buffer.len() >= bs,
+        "master buffer too short: {} < {bs}",
 ```
 
 The tap is performed via `RingTapSink::commit`, a wait-free / no-alloc
@@ -199,6 +199,73 @@ The comments spell out two things to be careful about.
    untouched while only the header is overwritten (the project is macOS-only, so `std::os::unix`
    is available).
 
+### `finalize` does not run on a normal stop either — segment analysis reads the real bytes (#739)
+
+This section is titled "a WAV that opens after an abnormal exit", but what #739 established is that
+**`finalize` failing to run is not limited to abnormal exits**. The daemon installs no SIGTERM /
+SIGINT handler, and the client's ordinary stop is that same SIGTERM, so `CaptureWriter::Drop` →
+`finalize` **does not run on the normal path either**.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/main.rs:21-25
+// 既知事項（#448）: この daemon には SIGTERM/SIGINT ハンドラが無く、`install_fatal_panic_hook`
+// の panic hook も `process::exit(1)` を hook 内から直接呼ぶ（unwind が supervisor 保持フレーム
+// まで届く前に終了する）。そのため通常の client 側 `SIGTERM → SIGKILL` 停止（daemon-client.ts
+// `killChildGracefully`）や panic では、`InstrumentChildSupervisor` / `EffectChildSupervisor` の
+// `Drop`（CONTROL_QUIT 送出）が実行されず、out-of-process CLAP/VST3 child が孤児化し得る。
+```
+
+So the data size a capture file's header declares should always be treated as frozen at the last
+`sync_header`. The patch interval is the fixed `HEADER_SYNC_INTERVAL_SAMPLES` = 96,000 interleaved
+samples, so roughly one second at 48 kHz stereo — two seconds at mono — of the tail is missing from
+the declared value.
+
+Anything measuring segment RMS steps on this. If segment boundaries are cut from the byte length
+while the analysis alone follows the declared size, **the last segment falls outside the analysed
+range**. On real hardware in #739 this produced six false detections. The fix is to collapse the
+declared size to zero, so the analysis sees the whole of the physical bytes.
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:75-82
+export function readCaptureForAnalysis(capturePath: string): Buffer {
+  const capture = fs.readFileSync(capturePath)
+  if (capture.toString('ascii', 36, 40) !== 'data') {
+    throw new Error(`${capturePath}: expected fixed 44-byte capture WAV data chunk at byte 36`)
+  }
+  capture.writeUInt32LE(0, 40)
+  return capture
+}
+```
+
+It confirms the `data` chunk really sits at byte 36 before writing the zero, so an unexpected header
+is never silently rewritten. The point worth holding on to is that this zeroing is not insurance for
+abnormal exits: it is **required on every path that analyses a capture by segment** (the
+graceful-shutdown wiring itself remains open as
+[#448](https://github.com/signalcompose/orbitscore/issues/448)).
+
+### Create the capture directory before starting the engine
+
+There is one more precondition that #739 paid real-device time to learn. If the directory
+`ORBIT_CAPTURE_WAV` points into does not exist, **starting the engine itself fails**. The capture
+writer's `File::create` fails and the result is `DEVICE_CONFIG_ERROR "audio output init failed:
+capture writer error: No such file or directory"`.
+
+The awkward part is how that failure reaches the test: as a **seemingly unrelated timeout**,
+"daemon-backed REPL ready after 30000ms". The causal string appears nowhere, so it is hard to get
+as far as suspecting the capture path. The preparation is therefore folded into one function.
+
+```typescript
+// tests/e2e/helpers/capture-windows.ts:58-61
+export function prepareCapturePath(capturePath: string): void {
+  fs.mkdirSync(path.dirname(capturePath), { recursive: true })
+  fs.rmSync(capturePath, { force: true })
+}
+```
+
+Path resolution (`captureWavPath`) deliberately keeps no side effect. That one is a pure function
+that unit tests call with literal paths, so mixing directory creation into it would create real
+directories.
+
 ## `CaptureWriter`: an off-thread writer that drains outside the RT callback
 
 `CaptureWriter::create` creates the WAV writer and a `RingTapSink`, and
@@ -287,7 +354,7 @@ guarantee the sequence "stream stops (callback stops) → writer drains
 remaining ring contents and finalizes".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:224-233
+// rust/crates/orbit-audio-native/src/output.rs:608-617
 /// 生きている間はストリームを保持する RAII ハンドル。
 pub struct OutputStream {
     _stream: Stream,
@@ -296,8 +363,8 @@ pub struct OutputStream {
     /// 残りを drain して WAV を finalize」に固定する（Rust は struct field を宣言順に drop する）。
     _capture: Option<crate::capture::CaptureWriter>,
     render_state: Arc<std::sync::Mutex<RenderState>>,
+    pub device_name: String,
     pub sample_rate: u32,
-    pub channels: u16,
 ```
 
 ## "Objective verification" in practice: the gated test's drops assert + oracle agreement
@@ -387,7 +454,7 @@ under `rust/`, it fails before running a single test. Some directories are exclu
 walk, which the next subsection covers (#713).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:148-162
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:175-189
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -437,7 +504,7 @@ test at startup.
 So three directories, `tests` / `benches` / `examples`, were dropped from the walk.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:143-147
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:170-174
         // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
         // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
@@ -520,7 +587,9 @@ post-peak accessors observe the same signal. These figures were not re-measured 
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:1-23` — capture seam realtime gated test's module doc comment (purpose, how to run)
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:99-111` — WAV header vs. physical size cross-check (silent-failure guard)
 - `rust/crates/orbit-audio-daemon/tests/capture_realtime_gated.rs:206-217` — `drops == 0` assertion (pre-teardown silent-failure guard)
+- `rust/crates/orbit-audio-daemon/src/main.rs:21-30` — the absence of SIGTERM / SIGINT handlers (#448; why `finalize` does not run even on a normal stop)
 - `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:232-234` — `post_peak_bits` (lock-free peak accumulation implementation)
+- `tests/e2e/helpers/capture-windows.ts:45-82` — `prepareCapturePath` (the capture directory precondition) and `readCaptureForAnalysis` (zeroing the declared size so analysis reads the real bytes)
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:80-154` — the stale artifact guard (`assertDaemonBinaryIsNotStale`)
 - `package.json:17-18` — `pretest:e2e:gated` / `test:e2e:gated`
 - [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 / 6.416 / 6.417 — discovery of the #643 master fader defect, the #651 header patch and stale guard, pretest automation

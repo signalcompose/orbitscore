@@ -9,7 +9,7 @@
 //! 起動失敗時は stderr に 1 行 JSON を出して非ゼロ exit code で終了する。
 
 use orbit_audio_daemon::best_effort_stderr::{best_effort_stderr, write_line_best_effort};
-use orbit_audio_daemon::engine_wrap::{DeviceSwitchRequest, EngineWrap, WrapError};
+use orbit_audio_daemon::engine_wrap::{DeviceSwitchRequest, EngineWrap, StartupOptions, WrapError};
 use orbit_audio_daemon::protocol::{
     Event, ProtocolError, StartupError, StartupReady, ERROR_CODE_FATAL_PANIC, ERROR_SEVERITY_FATAL,
     EVENT_DAEMON_ERROR, PROTOCOL_VERSION,
@@ -84,23 +84,37 @@ async fn run() -> Result<(), i32> {
         return run_list_audio_devices();
     }
 
-    // 0. `--audio-device <name>` を解析し、`ORBIT_AUDIO_DEVICE` env へ反映する（#484 D1）。
-    // 実際の device 解決（列挙・一致判定・不一致時の縮退警告）は `orbit-audio-native`
-    // 側（`resolve_output_device`）が cpal I/O を伴って行う。ここでは env に橋渡しするだけ
-    // （`engine_wrap::device_name_from_env` が capture_path_from_env と同じ層分けで読む）。
-    apply_audio_device_arg(std::env::args().skip(1));
+    // 0. CLI と gated fault env を一度だけ typed options に解決する。device 名を process-global env
+    // へ書き戻さないため、並行する owner thread も同じ immutable 値を受け取る。
+    let startup_options = StartupOptions::from_env();
 
     // 1. Engine を起動（audio device 取得）。ランタイム device switch（#484 D2）に備え、実際の
     // `EngineWrap::start()` 呼び出しと `StreamGuard` の生存管理を専用 OS thread（"audio owner
     // thread"）へ委譲する — `cpal::Stream` は `!Send` なので、以降 tokio worker 間を自由に飛び回る
     // 通常の async task にはハンドルを一切持ち込めない。
-    let engine = match start_engine_with_device_switch() {
+    let engine = match start_engine_with_device_switch(startup_options) {
         Ok(e) => e,
         Err(e) => {
             report_startup_failure(ProtocolError::new("DEVICE_CONFIG_ERROR", e.to_string()));
             return Err(1);
         }
     };
+    let output = engine.stream_config_snapshot();
+    if let Some(reason) = &output.fallback_reason {
+        tracing::warn!(
+            "audio device fallback: requested {:?} -> using {:?}: {}",
+            output.device_requested,
+            output.device_name,
+            reason
+        );
+    }
+    tracing::info!(
+        "audio output {:?} @ {} Hz x {}ch (first callback {} ms)",
+        output.device_name,
+        output.sample_rate,
+        output.channels,
+        output.first_callback_ms
+    );
 
     // 2. WebSocket listener bind
     let bound = match server::bind_localhost().await {
@@ -141,14 +155,16 @@ async fn run() -> Result<(), i32> {
 /// を行う。thread は `switch_rx` が close する（= `engine.device_switch_tx` を保持する最後の `Arc`
 /// が drop される）まで無期限に生存し、`_guard`（`StreamGuard`）を握り続ける — 既存の「`main()` の
 /// ローカル変数が daemon プロセス終了まで guard を握る」という寿命モデルと同一。
-fn start_engine_with_device_switch() -> Result<Arc<EngineWrap>, WrapError> {
+fn start_engine_with_device_switch(
+    startup_options: StartupOptions,
+) -> Result<Arc<EngineWrap>, WrapError> {
     let (switch_tx, switch_rx) = std::sync::mpsc::channel::<DeviceSwitchRequest>();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<Arc<EngineWrap>, WrapError>>();
 
     std::thread::Builder::new()
         .name("orbit-audio-owner".into())
         .spawn(move || {
-            let (engine, mut guard) = match EngineWrap::start() {
+            let (engine, mut guard) = match EngineWrap::start_with_options(startup_options) {
                 Ok(pair) => pair,
                 Err(e) => {
                     // ready_rx 側が既に drop されていても（呼び出し元が別経路で失敗した等）
@@ -179,32 +195,6 @@ fn start_engine_with_device_switch() -> Result<Arc<EngineWrap>, WrapError> {
     ready_rx
         .recv()
         .expect("audio owner thread exited before reporting readiness")
-}
-
-/// `--audio-device <name>` を argv から抽出する純関数（#484 D1）。値が欠けている（末尾で
-/// 引数無し）場合は `None` を返し無視する（起動は既定デバイスで続行 — 起動失敗にしない）。
-/// 複数回指定された場合は最後の指定を優先する（CLI の一般的な慣習）。
-fn parse_audio_device_arg<I: IntoIterator<Item = String>>(args: I) -> Option<String> {
-    let mut result = None;
-    let mut iter = args.into_iter();
-    while let Some(arg) = iter.next() {
-        if arg == "--audio-device" {
-            result = iter.next();
-        }
-    }
-    result
-}
-
-/// argv から `--audio-device` を解析し、見つかれば `ORBIT_AUDIO_DEVICE` env へ反映する
-/// （`EngineWrap::start()` 到達前に呼ぶ必要がある・main の起動シーケンス step 0）。
-fn apply_audio_device_arg<I: IntoIterator<Item = String>>(args: I) {
-    if let Some(name) = parse_audio_device_arg(args) {
-        // SAFETY: main() 起動シーケンス冒頭・単一スレッドで他スレッド生成前に呼ばれるため、
-        // env の読み書き競合は発生しない（tokio worker はまだ起動していない）。
-        unsafe {
-            std::env::set_var("ORBIT_AUDIO_DEVICE", name);
-        }
-    }
 }
 
 /// argv に `--list-audio-devices` フラグが含まれるかを判定する純関数（#484 D3）。
@@ -271,20 +261,29 @@ mod tests {
     #[test]
     fn parse_audio_device_arg_absent() {
         let args = ["--foo".to_string(), "bar".to_string()];
-        assert_eq!(parse_audio_device_arg(args), None);
+        assert_eq!(
+            StartupOptions::from_args_and_env(args, None, false, None).device_name,
+            None
+        );
     }
 
     #[test]
     fn parse_audio_device_arg_present() {
         let args = ["--audio-device".to_string(), "USB Audio".to_string()];
-        assert_eq!(parse_audio_device_arg(args), Some("USB Audio".to_string()));
+        assert_eq!(
+            StartupOptions::from_args_and_env(args, None, false, None).device_name,
+            Some("USB Audio".to_string())
+        );
     }
 
     #[test]
     fn parse_audio_device_arg_missing_value_ignored() {
         // 末尾で値が欠けている（typo 等）場合は起動を落とさず None へ縮退する。
         let args = ["--audio-device".to_string()];
-        assert_eq!(parse_audio_device_arg(args), None);
+        assert_eq!(
+            StartupOptions::from_args_and_env(args, None, false, None).device_name,
+            None
+        );
     }
 
     #[test]
@@ -295,7 +294,10 @@ mod tests {
             "--audio-device".to_string(),
             "Second".to_string(),
         ];
-        assert_eq!(parse_audio_device_arg(args), Some("Second".to_string()));
+        assert_eq!(
+            StartupOptions::from_args_and_env(args, None, false, None).device_name,
+            Some("Second".to_string())
+        );
     }
 
     #[test]

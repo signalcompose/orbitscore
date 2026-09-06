@@ -1,12 +1,12 @@
 ---
 title: "IV-1. VS Code 拡張アーキテクチャ"
 chapter-id: "IV-1"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 4f2ebd5
+verified-at: "2026-09-04"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-1. VS Code 拡張アーキテクチャ
 
@@ -18,17 +18,18 @@ OrbitScore の VS Code 拡張 (`packages/vscode-extension`、package version 2.1
 
 1. [Extension Host の基礎](#extension-host-の基礎)
 2. [activation と activationEvents](#activation-と-activationevents)
-3. [モジュールレベルの状態](#モジュールレベルの状態)
-4. [`activate()` 関数の全体像](#activate-関数の全体像)
-5. [Status Bar: 2 本のインジケータと engine kind](#status-bar-2-本のインジケータと-engine-kind)
-6. [Command 登録](#command-登録)
-7. [IntelliSense と診断の登録](#intellisense-と診断の登録)
-8. [バイナリ解決: scsynth と daemon](#バイナリ解決-scsynth-と-daemon)
-9. [Engine プロセスの spawn](#engine-プロセスの-spawn)
-10. [Engine との通信プロトコル](#engine-との通信プロトコル)
-11. [Engine の停止とライフサイクルの識別ガード](#engine-の停止とライフサイクルの識別ガード)
-12. [アーキテクチャ全体図](#アーキテクチャ全体図)
-13. [2026-09 時点の drift](#2026-09-時点の-drift)
+3. [workspace trust と untrustedWorkspaces](#workspace-trust-と-untrustedworkspaces)
+4. [モジュールレベルの状態](#モジュールレベルの状態)
+5. [`activate()` 関数の全体像](#activate-関数の全体像)
+6. [Status Bar: 2 本のインジケータと engine kind](#status-bar-2-本のインジケータと-engine-kind)
+7. [Command 登録](#command-登録)
+8. [IntelliSense と診断の登録](#intellisense-と診断の登録)
+9. [バイナリ解決: scsynth と daemon](#バイナリ解決-scsynth-と-daemon)
+10. [Engine プロセスの spawn](#engine-プロセスの-spawn)
+11. [Engine との通信プロトコル](#engine-との通信プロトコル)
+12. [Engine の停止とライフサイクルの識別ガード](#engine-の停止とライフサイクルの識別ガード)
+13. [アーキテクチャ全体図](#アーキテクチャ全体図)
+14. [2026-09 時点の drift](#2026-09-時点の-drift)
 
 ---
 
@@ -61,12 +62,51 @@ OrbitScore が使っているのは 2 種類です:
 
 ---
 
+## workspace trust と untrustedWorkspaces
+
+`activationEvents` が決めるのは「いつ起動するか」でした。では「そもそも起動してよいか」は誰が決めるのでしょうか。それが VS Code の **workspace trust** (ワークスペースの信頼) です。信頼されていないワークスペースでは拡張は既定で「制限付き」になり、`activate()` そのものが呼ばれません。
+
+ここで問題になるのが、フォルダを開かずに `.orbs` を 1 本だけ渡す起動 (`orbs file.orbs`) です。この形は VS Code 側では **ad-hoc な未信頼ワークスペース**として扱われるため、`capabilities.untrustedWorkspaces` を宣言していない拡張はそこで activate されません。利用者からは「何も起きない」ようにしか見えないので、**実害は拒否ではなく沈黙**でした (#385)。
+
+宣言は `package.json` の `engines` と `main` のあいだに置かれています。
+
+```json
+// packages/vscode-extension/package.json:34-43
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "OrbitScore starts a native audio engine and loads the audio plugins named by the score, the same way a DAW opens a project. Evaluation works in untrusted workspaces; only the settings that choose which executable runs are restricted.",
+      "restrictedConfigurations": [
+        "orbitscore.scsynthPath",
+        "orbitscore.engine"
+      ]
+    }
+  },
+```
+
+`supported: true` は「未信頼でも制限しない」という宣言です。裁定の根拠は「一般的な DAW の挙動に併せて」で (`docs/design/656-release-design.md` §16 (1))、DAW はプロジェクトを開くときに信頼を問わずプラグインを読みます。OrbitScore も未信頼ワークスペースで engine を起動し、譜面の `instrument(path)` を読みます。そのため `startEngine()` の側に信頼を確かめるガードは置かれていません。ライブコーディングは評価を繰り返す行為なので、1 回の確認ダイアログが「毎回の中断」になってしまうからです。
+
+一方 `restrictedConfigurations` は `supported` の値とは独立に効きます。ここに挙げた設定キーは、未信頼ワークスペースでは**ワークスペース側の設定値が無視され、ユーザー設定の値が使われます**。基準は「ワークスペースが値を決めると別の実行ファイルが動く」ものだけ、という 1 点です。
+
+| 設定 | 入れた理由 |
+|---|---|
+| `orbitscore.scsynthPath` | 実行ファイルのパスそのもの |
+| `orbitscore.engine` | `"sc"` に倒すと `scsynthPath` を有効化する |
+
+`orbitscore.audioDevice` はこの基準に当てはまりません。デバイス名は実行対象を選ばないうえ、gated E2E のハーネスがワークスペース設定へ書き込むので、restrict すると実機テストが壊れます。
+
+面白いのは、この宣言がコードからは一度も読まれないという点です。放っておくと「誰も読まない設定」になってしまうので、`tests/vscode-extension/untrusted-workspace-capability.spec.ts` の 6 本がマニフェストを直接読んで検査しています。`restrictedConfigurations` を配列として取り出せない形になったらその場で落とす、という書き方になっているのは、`?? []` へフォールバックすると宣言が丸ごと消えたときに `for...of` が 0 周して green になってしまうためです。
+
+ただし**この層が保証するのは宣言の内容までです**。「実際に未信頼ワークスペースで activate され、しかも普通に音が出る」ことは実機の gated E2E (`E2E-D1`) が押さえる予定で、こちらは #735 へ分離されました。`--extensionDevelopmentPath` で起動する開発モードは workspace trust の制限を迂回するため、そこで書いた E2E は `capabilities` ブロックを丸ごと削除しても緑になってしまう、というのが 2026-09-04 の実測です。
+
+---
+
 ## モジュールレベルの状態
 
 `extension.ts` は 4,115 行の大きなファイルで、状態はモジュールレベル変数に置かれています。先頭付近の宣言を見ると、この拡張が何を抱えているかの索引になります。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:104-115
+// packages/vscode-extension/src/extension.ts:106-117
 let engineProcess: child_process.ChildProcess | null = null
 let outputChannel: vscode.OutputChannel | null = null
 let statusBarItem: vscode.StatusBarItem | null = null
@@ -90,7 +130,7 @@ let mcpServerHandle: McpServerHandle | null = null
 エントリポイントは `extension.ts` の `activate()` です。VS Code が extension を読み込んだ直後に一度だけ呼ばれます。前半を見てみましょう。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:286-341
+// packages/vscode-extension/src/extension.ts:289-344
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
 
@@ -162,7 +202,7 @@ export async function activate(context: vscode.ExtensionContext) {
 最後の 2 つはこう書かれています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:445-499 (MCP ツールのハンドラ表を省略)
+// packages/vscode-extension/src/extension.ts:448-502 (MCP ツールのハンドラ表を省略)
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -198,7 +238,7 @@ Status bar インジケータは **2 本** あります。priority の値が違�
 `bundleStatusItem` の表示は `updateBundleStatus()` が決めますが、その最初の分岐が **engine kind** です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:726-742
+// packages/vscode-extension/src/extension.ts:729-745
 function updateBundleStatus(): void {
   if (!bundleStatusItem) return
   if (getConfiguredEngineKind() === 'rust') {
@@ -229,7 +269,7 @@ engine kind を決める `getConfiguredEngineKind()` は `orbitscore.engine` 設
 `activate()` が登録しているコマンドを整理します。`contributes.commands` に載る 17 個と、TreeView のノードからだけ呼ばれる内部コマンド 2 個があります。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:367-404
+// packages/vscode-extension/src/extension.ts:370-407
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -372,7 +412,7 @@ interface MethodChainContext {
 診断 (`updateDiagnostics`) は、2026-05 時点では `onDidChangeTextDocument` だけで駆動していましたが、#384 で「開いたとき」「閉じたとき」「activation 時に既に開いていたもの」にも広がりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:414-443
+// packages/vscode-extension/src/extension.ts:417-446
   // Compute diagnostics on open and change; clear them on close (#384).
   // Diagnostics must not wait for the first edit — files opened from the CLI,
   // restored tabs, or the activation-time initial pass below all need
@@ -414,7 +454,7 @@ interface MethodChainContext {
 engine を spawn する前に、拡張は「音声プロセスの実行ファイルが本当にあるか」を事前チェックします。ここに面白い実装パターンがあります。**Extension Host の JS (TypeScript にコンパイル済) が、engine パッケージの compiled JS を `require` でランタイムロードする** という構造で、scsynth と daemon の両方に同じ形の wrapper があります。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:677-711
+// packages/vscode-extension/src/extension.ts:680-714
 function resolveScsynthForUI(): { path: string; source: string } | null {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
@@ -480,7 +520,7 @@ scsynth の resolver は `explicit > env > bundle > throw`、daemon の resolver
 事前チェックは [III-3](/audio/scsynth-bundle#engine-kind-で呼び出しそのものが-gate-される) に引用したので、ここでは引数と env の組み立てから spawn までを読みます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2112-2125
+// packages/vscode-extension/src/extension.ts:2118-2131
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -500,7 +540,7 @@ scsynth の resolver は `explicit > env > bundle > throw`、daemon の resolver
 engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動され、出力デバイスは `--audio-device` 引数で渡されます (`orbitscore.audioDevice` 設定が優先、無ければ `.orbitscore.json`)。`__default__` は「OS の既定出力」を意味する番兵です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2143-2165
+// packages/vscode-extension/src/extension.ts:2149-2171
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
@@ -531,7 +571,7 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
 `stdio: ['pipe', 'pipe', 'pipe']` が重要です。stdin/stdout/stderr をすべて pipe にすることで、Extension Host から直接 write/read できます。spawn 直後にはハンドラを 5 本付け、`process.nextTick` を 1 回またいでから「まだ同じプロセスが生きているか」を確認します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2180-2191
+// packages/vscode-extension/src/extension.ts:2186-2197
   // Setup handlers
   setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
@@ -564,7 +604,7 @@ Extension Host と engine プロセスの通信は **stdin/stdout パイプ** �
 送信部分は editor の Run Selection と MCP の `evaluate_orbitscore` が共有する `writeCodeToEngine()` に集約されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3001-3033
+// packages/vscode-extension/src/extension.ts:3026-3058
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -633,7 +673,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1513-1549 (effects の中身を一部省略)
+// packages/vscode-extension/src/extension.ts:1524-1560 (effects の中身を一部省略)
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
         clearSequence: clearPlayheadForSequence,
@@ -674,7 +714,7 @@ export function transportStatusText(state: TransportState, debugMode: boolean): 
 `stopEngine()` は SIGTERM → (2 秒後) SIGKILL という 2 段階のシャットダウンを行います。2026-05 と比べると、bridge の drain と playhead のクリアが増え、SIGKILL の条件が直っています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2205-2253
+// packages/vscode-extension/src/extension.ts:2211-2259
 export function stopEngine(): boolean {
   engineGeneration += 1
   if (engineProcess && !engineProcess.killed) {
@@ -694,6 +734,7 @@ export function stopEngine(): boolean {
     pluginStateBridge.drainAll('engine was stopped before responding to //#savePluginState')
     pluginUiBridge.drainAll('engine was stopped before responding to //#pluginUi')
     evalMarkBridge.drainAll('engine was stopped before responding to //#evalMark')
+    engineStateBridge.drainAll('engine was stopped before responding to //#getEngineState')
 
     // Send graceful shutdown signal (SIGTERM)
     // This allows the engine to clean up SuperCollider properly
@@ -723,7 +764,6 @@ export function stopEngine(): boolean {
     return true
   }
   return false
-}
 ```
 
 #532 のコメントが指摘するとおり、2026-05 時点の `if (!proc.killed)` は「シグナルを送れたか」を見ていたので、SIGKILL は一度も発火しませんでした。`exitCode` / `signalCode` が両方 `null` かどうかが「まだ生きている」の正しい判定です。
@@ -809,6 +849,7 @@ flowchart TD
 | `get_log` の silent truncation をやめ、上限をリング容量 1000 に | #567 | `log-ring.ts:1-18` |
 | `//#evalMark` による評価結果の相関 (`EvalMarkBridge`)、stdout の独立分岐 | #614 | `eval-mark-bridge.ts:1-23`、`extension.ts:1501-1509` |
 | `browsePlugins` コマンドと未知プラグイン名の診断 | #638 | §6.412 (2026-08-29)、`extension.ts:2285-2298`、`extension.ts:4095-4112` → [PH-3](/plugin-hosting/catalog) |
+| `capabilities.untrustedWorkspaces` の宣言 (`supported: true`・`restrictedConfigurations` は 2 件)。フォルダ無しの loose-file 起動でも activate する | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/development/WORK_LOG.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)"、`package.json:34-43` |
 
 初稿の「8 つのコマンド」「診断は 3 種 (+2)」「`startEngine` は同期で scsynth 必須」はいずれも 69dc968 では成り立ちません。
 
@@ -818,6 +859,7 @@ flowchart TD
 
 - [activate() / deactivate()](/glossary#activate--deactivate) — VS Code 拡張のライフサイクル関数。本章で詳説する `activate()` がすべての登録を行う
 - [activationEvents](/glossary#activationevents) — `"onStartupFinished"` と `"onLanguage:orbitscore"` の 2 種類で常時起動を実現
+- [workspace trust (untrustedWorkspaces)](/glossary#workspace-trust-untrustedworkspaces) — 未信頼ワークスペースで activate してよいかの宣言。`supported: true` と 2 件の `restrictedConfigurations`
 - [Extension Host](/glossary#extension-host) — 拡張コードが動く Node.js プロセス。engine プロセスの親プロセス
 - [StatusBarItem](/glossary#statusbaritem) — `statusBarItem` (priority 100) と `bundleStatusItem` (priority 99) の 2 本を管理
 - [language ID (orbitscore)](/glossary#language-id-orbitscore) — `.orbs` ファイルに割り当てた言語 ID。IntelliSense・診断・キーバインドがすべてこの ID でフィルタリング
@@ -845,6 +887,9 @@ flowchart TD
 ## Sources
 
 - `packages/vscode-extension/package.json` — version 2.1.0、`activationEvents`、`contributes.commands` (17)、`viewsContainers` / `views` / `viewsWelcome`、`walkthroughs`、`menus`、`keybindings`、`configuration` (`orbitscore.engine` / `mcpServer.port` / `playheadPalette` 等)
+- `packages/vscode-extension/package.json:34-43` — `capabilities.untrustedWorkspaces` の宣言 (#385)
+- `tests/vscode-extension/untrusted-workspace-capability.spec.ts:1-125` — 宣言を検査する 6 本 (`restrictedConfigurations` を `?? []` に落とさない理由もここ)
+- `tests/helpers/vscode-extension-manifest.ts:1-53` — マニフェスト読み取りの共有ヘルパー (`readExtensionManifest()` / `declaredConfigurationKeys()`)
 - `packages/vscode-extension/src/extension.ts:104-134` — モジュールレベル状態と 4 つの bridge
 - `packages/vscode-extension/src/extension.ts:150-284` — live playhead の decoration 管理 (#390)
 - `packages/vscode-extension/src/extension.ts:286-498` — `activate()` 全体: log ring の monkey-patch・status bar・設定リスナー・command / TreeView 登録・診断・MCP サーバ・auto-start
