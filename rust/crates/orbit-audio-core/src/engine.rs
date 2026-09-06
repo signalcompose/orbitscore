@@ -140,6 +140,16 @@ impl Engine {
     /// 正の `ramp_sec` がサブフレーム相当（例: 1/sample_rate 未満）でも、
     /// 呼び出し側の「ランプ要求」意図を尊重して最小 1 フレームのランプとして扱う。
     /// これにより、意図せず即時切替にフォールバックして pop ノイズが乗ることを防ぐ。
+    ///
+    /// 🔴 **production では呼ばれない**（#649 PR-O2・`docs/design/611-output-line-design.md`
+    /// §5.4/§5.5 row 4）。master gain の適用点は native の
+    /// `orbit_audio_native::output::MasterLine::advance_gain`（1 本のみ・block ごとの
+    /// one-pole ステップ）へ移った。`orbit-audio-daemon` の `EngineWrap::set_global_gain` は
+    /// この API を呼ばず `MasterLine` の gain target へ直接 atomic store する。
+    /// このメソッドは **core 単体テスト / オフライン検証ハーネス専用**として残る
+    /// （`render_offline`・`verify_schedule_pcm.rs`・`export_verify_pcm.rs`）。
+    /// production のオフラインレンダを実装する時は、master line を経由しないと
+    /// 実時間レンダと音が食い違う点に注意（#598 / #729）。
     pub fn set_global_gain(&self, value: f32, ramp_sec: f64) -> Result<(), EngineError> {
         let mut s = self.inner.lock().map_err(|_| EngineError::Poisoned)?;
         let ramp_frames = if ramp_sec > 0.0 {

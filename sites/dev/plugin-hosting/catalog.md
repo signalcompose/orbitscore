@@ -646,7 +646,7 @@ MCP の `list_plugins` / `rescan_plugins` も同じ `loadPluginCatalog()` / `run
 共有しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1037-1047
+// packages/vscode-extension/src/mcp-server.ts:1044-1054
   server.registerTool(
     'list_plugins',
     {
@@ -761,7 +761,7 @@ export function filterCatalogEntries(
 促す案内を出します（`pluginCatalogHintShown` フラグで nag を防いでいます）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3721-3731
+// packages/vscode-extension/src/extension.ts:3768-3778
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -861,7 +861,7 @@ export function analyzeUnknownPluginNames(
 証拠にならないからです。そして重大度は Error でなく **Warning** です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4101-4117
+// packages/vscode-extension/src/extension.ts:4148-4164
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //
@@ -908,7 +908,7 @@ spec PH.4 は同一シーケンスへの再宣言についてこう定めてい�
 機構を一文で言い切っています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6010-6022
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6461-6473
     /// #618: instrument plugin を目標 spec へ収束させる ensure 操作。
     ///
     /// 未割当/Empty は通常 load、同一 Active は no-op、異 spec Active は spare へ prepare して
@@ -1008,9 +1008,9 @@ project.yaml 配下へ保存してから差し替え要求を出します。spec
 代わりに VST3 側に +7 半音の state を持たせ、周波数で識別します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3403-3411
-      const e4Hz = estimateFundamentalHz(capture, audioRange(segments.e4!))
-      const e5Hz = estimateFundamentalHz(capture, audioRange(segments.e5!))
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3742-3750
+      const e4Hz = estimateFundamentalHz(capture, segments.e4!)
+      const e5Hz = estimateFundamentalHz(capture, segments.e5!)
       expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
       expect(e2Hz, 'E2 VST3 replacement needs a measurable fundamental').toBeDefined()
       expect(e4Hz, 'E4 surviving VST3 needs a measurable fundamental').toBeDefined()
@@ -1035,7 +1035,7 @@ render 側の `InsertBusStage` が processor を直接抱えるため、「名�
 張り替え先が無いので、採用されたのは**同一 ChildSlot の in-place 建て直し**でした。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5514-5522
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5965-5973
     /// effect plugin を固定 slot 上で目標 spec へ収束させる ensure 操作。
     /// Active の異 spec だけを quiesce ack 後に同じ shm 上で建て直す。
     #[cfg(feature = "outproc-effect")]
@@ -1119,7 +1119,7 @@ Stage A では Codex の変異 8 種（すべて「削除」型）が全部 red 
 の明示エラーを返す」と記しています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5080-5088
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5531-5539
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -1238,7 +1238,7 @@ R-E1〜R-E7 は同一 WAV 内に `dry → A → B → 失敗 → 復旧 B → �
 削除は `effect([])` です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3696-3702
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4049-4055
         // 空のラックを適用するのが「外す」の表現になった。
         const removeA = await activeClient.call('evaluate_orbitscore', {
           code: 'fx625.effect([])',
@@ -1256,7 +1256,7 @@ R-E1〜R-E7 は同一 WAV 内に `dry → A → B → 失敗 → 復旧 B → �
 実機証明になります。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3554-3567
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:3907-3920
         // ここは「旧 child が消えた」を待っていた。#628 のラック化では **1 child が
         // チェーン全体を持つ**ため、差し替えは同じ child の中で prepare-commit される。
         // **PID が変わらないことこそが「respawn していない = dry 窓が消えた」の実機証明**で、
@@ -1277,7 +1277,7 @@ R-E3（存在しないパスへの差し替え）は、#625 では「dry であ�
 いました。#628 で prepare-commit になってからは、**失敗しても B のまま鳴り続ける**ことを音で pin します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:3912-3927
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4262-4277
 
       // 🔴 R-E3: #628 で**期待が反転した**。失敗後は **B のまま鳴り続ける**。
       //
@@ -1375,7 +1375,7 @@ LOOP(drums)
 - `packages/vscode-extension/src/plugin-catalog-completion.ts:44-45` / `:68-87` / `:166-205` / `:241-252` — ラック文脈スキャナ・候補フィルタ・Quick Pick 行
 - `packages/vscode-extension/src/plugin-name-diagnostics.ts:8-20` / `:262-275` — 解決規則のミラーと合意テスト
 - `packages/vscode-extension/src/extension.ts:3716-3726` / `:4096-4112` — カタログ不在の案内・Warning 診断
-- `packages/vscode-extension/package.json:110-121` — `Rescan Plugin Catalog` / `Browse Plugins` コマンド
+- `packages/vscode-extension/package.json:120-131` — `Rescan Plugin Catalog` / `Browse Plugins` コマンド
 - `packages/vscode-extension/src/mcp-server.ts:1022-1032` — MCP `list_plugins`
 - `tests/vscode-extension/plugin-name-diagnostics.spec.ts:192-225` — engine resolver との合意テスト
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:3406-3414` — #618 E1-E6 の周波数オラクル

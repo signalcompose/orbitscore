@@ -86,6 +86,15 @@ pub const ERROR_SEVERITY_FATAL: &str = "fatal";
 pub const ERROR_CODE_STREAM_XRUN: &str = "STREAM_XRUN";
 pub const ERROR_CODE_DEVICE_LOST: &str = "DEVICE_LOST";
 pub const ERROR_CODE_FATAL_PANIC: &str = "FATAL_PANIC";
+pub const ERROR_CODE_AUDIO_DEVICE_STREAM_DEAD: &str = "AUDIO_DEVICE_STREAM_DEAD";
+pub const ERROR_CODE_AUDIO_DEVICE_RATE_MISMATCH: &str = "AUDIO_DEVICE_RATE_MISMATCH";
+/// ライブ切替で要求デバイスが見つからない / 出力できない。**元のデバイスのまま**（owner 裁定 2026-09-05）。
+pub const ERROR_CODE_AUDIO_DEVICE_UNAVAILABLE: &str = "AUDIO_DEVICE_UNAVAILABLE";
+/// 切替に失敗し、**旧デバイスの再開にも失敗した**。他の切替失敗と違い音が戻っていないので、
+/// 利用者に取れる手は engine の再起動しかない（`AUDIO_DEVICE_UNAVAILABLE` /
+/// `AUDIO_DEVICE_STREAM_DEAD` は旧デバイスが鳴り続けているので再起動は逆効果）。
+pub const ERROR_CODE_AUDIO_DEVICE_SWITCH_RECOVERY_FAILED: &str =
+    "AUDIO_DEVICE_SWITCH_RECOVERY_FAILED";
 /// LinkAudio egress の ring overflow drop（消費が追いつかず音が落ちた）。WARNING severity。
 /// daemon が 1 Hz ticker で aggregate drop 数の増加を検知して発火する（A4-2b-2b）。
 pub const ERROR_CODE_LINK_EGRESS_DROP: &str = "LINK_EGRESS_DROP";

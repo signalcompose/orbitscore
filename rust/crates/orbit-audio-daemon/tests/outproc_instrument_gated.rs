@@ -65,7 +65,7 @@ fn setup_test() -> OutProcInstrumentConfig {
 
 #[test]
 #[ignore = "Issue #420 Part 3b: needs a real output device + built instrument child + test-synth dylib"]
-fn outproc_instrument_sounds_via_daemon_note_on_off() {
+fn outproc_instrument_all_notes_off_releases_live_note() {
     let (engine, _guard) =
         EngineWrap::start_outproc_instrument(setup_test()).expect("start OOP instrument daemon");
 
@@ -78,9 +78,11 @@ fn outproc_instrument_sounds_via_daemon_note_on_off() {
             .map(|stats| stats.post_peak > 0.01 && stats.fresh > 0 && stats.probe_live_count > 0)
             .unwrap_or(false)
     });
-    engine
-        .plugin_note_off(PROBE_NOTE_KEY, PROBE_NOTE_CHANNEL, 0.0, None)
-        .expect("send A4 note off");
+    let summary = engine
+        .plugin_all_notes_off()
+        .expect("release every tracked plugin note");
+    assert_eq!(summary.released, 1);
+    assert_eq!(summary.stale, 0);
     let note_end_received = wait_until(Duration::from_secs(3), || {
         engine
             .outproc_instrument_stats()
@@ -121,7 +123,7 @@ fn outproc_instrument_sounds_via_daemon_note_on_off() {
     );
     assert!(
         note_end_received,
-        "note-off 後3秒以内に cross-process NOTE_END が host voice bookkeeping へ届かなかった \
+        "plugin_all_notes_off 後3秒以内に cross-process NOTE_END が host voice bookkeeping へ届かなかった \
          (probe_live_count={})",
         stats.probe_live_count
     );

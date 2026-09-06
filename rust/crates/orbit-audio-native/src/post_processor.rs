@@ -38,8 +38,8 @@ const BUCKET_NS: u64 = 50_000; // 50us / bucket
 /// 全フィールドは audio thread から更新し、reporting thread（daemon の 1 Hz ticker）が
 /// `snapshot()` で読む。`Arc` 共有で両者が同一データを見る。
 pub struct CallbackTimeStats {
-    /// 処理した callback 数。
-    callback_count: AtomicU64,
+    /// 記録した duration sample 数。callback 生存回数は `StreamStats` が一元所有する。
+    sample_count: AtomicU64,
     /// callback 所要時間の最小（ns）。
     min_ns: AtomicU64,
     /// callback 所要時間の最大（ns）= 最悪 callback。
@@ -54,7 +54,7 @@ pub struct CallbackTimeStats {
 impl CallbackTimeStats {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            callback_count: AtomicU64::new(0),
+            sample_count: AtomicU64::new(0),
             min_ns: AtomicU64::new(u64::MAX),
             max_ns: AtomicU64::new(0),
             sum_ns: AtomicU64::new(0),
@@ -64,7 +64,7 @@ impl CallbackTimeStats {
 
     /// 1 callback 分の所要時間を記録する（RT 安全: atomic のみ・alloc/lock なし）。
     pub fn record(&self, elapsed_ns: u64) {
-        self.callback_count.fetch_add(1, Ordering::Relaxed);
+        self.sample_count.fetch_add(1, Ordering::Relaxed);
         self.min_ns.fetch_min(elapsed_ns, Ordering::Relaxed);
         self.max_ns.fetch_max(elapsed_ns, Ordering::Relaxed);
         self.sum_ns.fetch_add(elapsed_ns, Ordering::Relaxed);
@@ -75,7 +75,7 @@ impl CallbackTimeStats {
     /// histogram から p99（ns）を算出する（stream 停止後に reporting thread が読む）。
     /// 99 パーセンタイルが入るバケットの下限を ns で返す。callback 0 件なら None。
     pub fn p99_ns(&self) -> Option<u64> {
-        let total = self.callback_count.load(Ordering::Relaxed);
+        let total = self.sample_count.load(Ordering::Relaxed);
         if total == 0 {
             return None;
         }
@@ -92,10 +92,10 @@ impl CallbackTimeStats {
 
     /// 非 RT 側（daemon ticker / test）が読むスナップショット。
     pub fn snapshot(&self) -> CallbackTimeSnapshot {
-        let count = self.callback_count.load(Ordering::Relaxed);
+        let count = self.sample_count.load(Ordering::Relaxed);
         let min = self.min_ns.load(Ordering::Relaxed);
         CallbackTimeSnapshot {
-            callback_count: count,
+            sample_count: count,
             min_ns: if count == 0 { 0 } else { min },
             max_ns: self.max_ns.load(Ordering::Relaxed),
             mean_ns: self
@@ -111,7 +111,7 @@ impl CallbackTimeStats {
 /// [`CallbackTimeStats`] の読み取り専用スナップショット。
 #[derive(Debug, Clone, Copy)]
 pub struct CallbackTimeSnapshot {
-    pub callback_count: u64,
+    pub sample_count: u64,
     pub min_ns: u64,
     pub max_ns: u64,
     pub mean_ns: u64,
@@ -127,7 +127,7 @@ mod tests {
         let s = CallbackTimeStats::new();
         assert_eq!(s.p99_ns(), None);
         let snap = s.snapshot();
-        assert_eq!(snap.callback_count, 0);
+        assert_eq!(snap.sample_count, 0);
         assert_eq!(snap.min_ns, 0);
         assert_eq!(snap.mean_ns, 0);
     }
@@ -138,7 +138,7 @@ mod tests {
         s.record(100_000); // 100us
         s.record(300_000); // 300us
         let snap = s.snapshot();
-        assert_eq!(snap.callback_count, 2);
+        assert_eq!(snap.sample_count, 2);
         assert_eq!(snap.min_ns, 100_000);
         assert_eq!(snap.max_ns, 300_000);
         assert_eq!(snap.mean_ns, 200_000);

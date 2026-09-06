@@ -40,6 +40,8 @@ export type CommandMethod =
   | 'Stop'
   // 全アクティブ再生の即時停止（hard-stop-all）。respawn / stopAll で in-flight voice を断つ。
   | 'StopAll'
+  // daemon が追跡する全 plugin note を個別 NoteOff で解放する（#606）。
+  | 'PluginAllNotesOff'
   | 'SetGlobalGain'
   // LinkAudio outputChannel を daemon に登録する（#209・A4-2b-2）。daemon が
   // feature `link-audio` 無効なら LINK_AUDIO_UNAVAILABLE、runtime 失敗なら LINK_AUDIO_RUNTIME を返す。

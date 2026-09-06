@@ -8,6 +8,8 @@ import {
   buildRecoverySectionNode,
   deviceNameFromNodeId,
   deviceSectionChildren,
+  hasTranslatedSelectAudioDeviceError,
+  liveSwitchFailureNeedsRestart,
   parseSelectAudioDeviceResultLine,
   resolveDeviceClickAction,
   recoverySectionChildren,
@@ -229,11 +231,50 @@ describe('parseSelectAudioDeviceResultLine', () => {
   })
 })
 
+// 🔴 入力は `DaemonProtocolError`（`packages/engine/src/audio/rust-engine/errors.ts`）が組み立てる
+// **実際の形**（`[CODE] message`）に揃える。捏造した mock 文言でテストすると、実文言と乖離しても
+// 気づけない（2026-09-05 の監査で `CODE: message` 形式になっていたのを指摘された）。
+const RECORDING = '[AUDIO_DEVICE_SWITCH_UNAVAILABLE] ORBIT_CAPTURE_WAV is active'
+const STREAM_DEAD = '[AUDIO_DEVICE_STREAM_DEAD] produced no callback within 3000 ms'
+const RATE_MISMATCH = '[AUDIO_DEVICE_RATE_MISMATCH] device 44100 != engine 48000'
+const UNAVAILABLE = '[AUDIO_DEVICE_UNAVAILABLE] requested output device "Nope" is not available'
+const RECOVERY_FAILED =
+  '[AUDIO_DEVICE_SWITCH_RECOVERY_FAILED] produced no callback within 3000 ms; ' +
+  'additionally failed to resume the old audio stream'
+
 describe('translateSelectAudioDeviceError', () => {
   it('translates AUDIO_DEVICE_SWITCH_UNAVAILABLE to a Japanese user message', () => {
-    expect(translateSelectAudioDeviceError('AUDIO_DEVICE_SWITCH_UNAVAILABLE')).toBe(
+    expect(translateSelectAudioDeviceError(RECORDING)).toBe(
       '録音中は切替できません — エンジンを再起動してください',
     )
+  })
+
+  it('translates AUDIO_DEVICE_STREAM_DEAD and says the old output continues', () => {
+    expect(translateSelectAudioDeviceError(STREAM_DEAD)).toBe(
+      `デバイスから音声コールバックが届きません — 元の出力を継続します (${STREAM_DEAD})`,
+    )
+  })
+
+  it('translates AUDIO_DEVICE_RATE_MISMATCH and recommends an engine restart', () => {
+    expect(translateSelectAudioDeviceError(RATE_MISMATCH)).toBe(
+      `サンプルレートが異なるため切替できません — エンジンを再起動してください (${RATE_MISMATCH})`,
+    )
+  })
+
+  // #661 F4: 名前不一致は縮退せず拒否される。鳴っているデバイスはそのままなので、
+  // 「元の出力を継続します」と言い切れる。
+  it('translates AUDIO_DEVICE_UNAVAILABLE and says the old output continues', () => {
+    expect(translateSelectAudioDeviceError(UNAVAILABLE)).toBe(
+      `指定したデバイスが見つかりません — 元の出力を継続します (${UNAVAILABLE})`,
+    )
+  })
+
+  // 🔴 これだけは音が止まっている。`primary` のコードへ畳むと STREAM_DEAD の
+  // 「元の出力を継続します」が付いてしまう（継続できていないのに）。
+  it('translates AUDIO_DEVICE_SWITCH_RECOVERY_FAILED without claiming the old output continues', () => {
+    const message = translateSelectAudioDeviceError(RECOVERY_FAILED)
+    expect(message).toContain('元の出力も再開できませんでした')
+    expect(message).not.toContain('元の出力を継続します')
   })
 
   it('passes other errors through unchanged', () => {
@@ -242,5 +283,39 @@ describe('translateSelectAudioDeviceError', () => {
 
   it('falls back to a generic message when undefined', () => {
     expect(translateSelectAudioDeviceError(undefined)).toBe('live audio device switch failed')
+  })
+})
+
+describe('liveSwitchFailureNeedsRestart', () => {
+  // 🔴 分ける軸は「いま鳴っている音を止めずに直せるか」（owner 裁定 2026-09-05・設計 §3）。
+  // 鳴り続けている失敗に Restart Engine を出すと、再起動で host 既定へ移り、F4 が守ろうとした
+  // 「演奏中のタイプミスで音が移らない」を UI が自分で壊す。
+  it.each([
+    [UNAVAILABLE, false],
+    [STREAM_DEAD, false],
+    [RECORDING, true],
+    [RATE_MISMATCH, true],
+    [RECOVERY_FAILED, true],
+  ])('%s -> needsRestart=%s', (error, expected) => {
+    expect(liveSwitchFailureNeedsRestart(error)).toBe(expected)
+  })
+
+  it('offers a restart for unknown errors, because nothing is known about the state', () => {
+    expect(liveSwitchFailureNeedsRestart('device not found')).toBe(true)
+    expect(liveSwitchFailureNeedsRestart(undefined)).toBe(true)
+  })
+})
+
+describe('hasTranslatedSelectAudioDeviceError', () => {
+  it.each([RECORDING, STREAM_DEAD, RATE_MISMATCH, UNAVAILABLE, RECOVERY_FAILED])(
+    'recognizes %s',
+    (error) => {
+      expect(hasTranslatedSelectAudioDeviceError(error)).toBe(true)
+    },
+  )
+
+  it('does not recognize an unknown error or undefined', () => {
+    expect(hasTranslatedSelectAudioDeviceError('device not found')).toBe(false)
+    expect(hasTranslatedSelectAudioDeviceError(undefined)).toBe(false)
   })
 })

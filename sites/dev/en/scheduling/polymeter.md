@@ -268,7 +268,7 @@ With launch quantize (`global.quantize("bar")` is the default), the **start time
 It is `Sequence.loop()` that passes `startTime`, the result of `nextQuantizedTime()` (computed from the global tempo and beat).
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1816-1824
+// packages/engine/src/core/sequence.ts:1828-1836
     // Quantize the loop start to the next bar boundary on the master grid so
     // newly-started LOOPs slot in cleanly with whatever is already running.
     const startTime = this.nextQuantizedTime(currentTime)

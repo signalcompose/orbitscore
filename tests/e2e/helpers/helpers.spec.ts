@@ -23,6 +23,20 @@ import * as path from 'path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { analyzeWavBuffer } from '../../../packages/vscode-extension/src/wav-analysis'
+
+import {
+  ANALYSIS_BUCKET_MS,
+  captureClockSec,
+  captureWindowsFrom,
+  measuredBucketCountForSteadyRms,
+  prepareCapturePath,
+  quadraticMeanRms,
+  readCaptureForAnalysis,
+  readCaptureFormat,
+  steadyRms,
+  waitForSound,
+} from './capture-windows'
 import { countErrors, countLogMarker, LOG_WINDOW_LINES } from './engine-log'
 import { logAnchor, logAppendedSince } from './run-score'
 import { captureWavPath } from './gated-session'
@@ -34,6 +48,66 @@ const makeTmpDir = (): string => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbit-helpers-spec-'))
   tmpDirs.push(dir)
   return dir
+}
+
+const syntheticFloat32Wav = (
+  durationSec: number,
+  opts: {
+    sampleRate?: number
+    channels?: number
+    sample?: (timeSec: number, channel: number) => number
+  } = {},
+): Buffer => {
+  const sampleRate = opts.sampleRate ?? 1000
+  const channels = opts.channels ?? 2
+  const frames = Math.round(durationSec * sampleRate)
+  const dataBytes = frames * channels * 4
+  const wav = Buffer.alloc(44 + dataBytes)
+  wav.write('RIFF', 0, 'ascii')
+  wav.writeUInt32LE(36 + dataBytes, 4)
+  wav.write('WAVE', 8, 'ascii')
+  wav.write('fmt ', 12, 'ascii')
+  wav.writeUInt32LE(16, 16)
+  wav.writeUInt16LE(3, 20)
+  wav.writeUInt16LE(channels, 22)
+  wav.writeUInt32LE(sampleRate, 24)
+  wav.writeUInt32LE(sampleRate * channels * 4, 28)
+  wav.writeUInt16LE(channels * 4, 32)
+  wav.writeUInt16LE(32, 34)
+  wav.write('data', 36, 'ascii')
+  wav.writeUInt32LE(dataBytes, 40)
+  for (let frame = 0; frame < frames; frame += 1) {
+    for (let channel = 0; channel < channels; channel += 1) {
+      wav.writeFloatLE(
+        opts.sample?.(frame / sampleRate, channel) ?? 0,
+        44 + (frame * channels + channel) * 4,
+      )
+    }
+  }
+  return wav
+}
+
+const sineAfter =
+  (startSec: number, phase = 0) =>
+  (timeSec: number): number =>
+    timeSec < startSec ? 0 : 0.25 * Math.sin(2 * Math.PI * 50 * (timeSec - startSec) + phase)
+
+const expectCaptureInvariantFailure = (
+  run: () => unknown,
+  invariant: 'A1' | 'U1' | 'U2' | 'U3',
+): void => {
+  let thrown: unknown
+  try {
+    run()
+  } catch (error) {
+    thrown = error
+  }
+  expect(thrown).toBeInstanceOf(Error)
+  const message = (thrown as Error).message
+  expect(message).toContain(`"invariant":"${invariant}"`)
+  for (const field of ['name', 'fromSec', 'toSec', 'durationSec', 'soundStartSec', 'bucketCount']) {
+    expect(message, `${invariant} failure must report ${field}`).toContain(`"${field}"`)
+  }
 }
 
 afterEach(() => {
@@ -61,6 +135,553 @@ describe('captureWavPath', () => {
     expect(captureWavPath('/tmp/example-root', 'shifted')).toBe(
       path.join('/tmp/keep', 'shifted.wav'),
     )
+  })
+})
+
+describe('prepareCapturePath', () => {
+  it('creates a missing capture directory so the daemon can open the file', () => {
+    // 🔴 ディレクトリが無いと daemon の capture writer（`File::create`）が失敗し、
+    // **エンジンの起動そのものが落ちる**。テスト側にはそれが
+    // 「daemon-backed REPL ready after 30000ms」という無関係に見える形で現れる
+    // （2026-09-05 に実機 gated 1 回分を失った）。
+    const root = makeTmpDir()
+    const capturePath = path.join(root, 'nested', 'deeper', 'take.wav')
+    expect(fs.existsSync(path.dirname(capturePath))).toBe(false)
+
+    prepareCapturePath(capturePath)
+
+    expect(fs.existsSync(path.dirname(capturePath))).toBe(true)
+    // ディレクトリを作るだけで、ファイルは作らない（daemon が作る）。
+    expect(fs.existsSync(capturePath)).toBe(false)
+  })
+
+  it('removes a stale capture so a failed run cannot be measured as this one', () => {
+    const root = makeTmpDir()
+    const capturePath = path.join(root, 'take.wav')
+    fs.writeFileSync(capturePath, 'stale bytes from a previous run')
+
+    prepareCapturePath(capturePath)
+
+    expect(fs.existsSync(capturePath)).toBe(false)
+  })
+})
+
+describe('capture windows', () => {
+  it('reads the fixed 44-byte float32 capture header', () => {
+    const capturePath = path.join(makeTmpDir(), 'header.wav')
+    fs.writeFileSync(capturePath, syntheticFloat32Wav(1, { sampleRate: 2000, channels: 2 }))
+
+    expect(readCaptureFormat(capturePath)).toEqual({ sampleRate: 2000, channels: 2 })
+  })
+
+  it('maps capture file bytes to seconds', () => {
+    const capturePath = path.join(makeTmpDir(), 'clock.wav')
+    fs.writeFileSync(capturePath, syntheticFloat32Wav(1.25, { sampleRate: 2000, channels: 2 }))
+    const format = readCaptureFormat(capturePath)
+
+    expect(captureClockSec(capturePath, format)).toBe(1.25)
+  })
+
+  it('analyzes all capture bytes when the data header trails the writer', () => {
+    const capturePath = path.join(makeTmpDir(), 'stale-header.wav')
+    const wav = syntheticFloat32Wav(1.25, { sampleRate: 2000, channels: 2 })
+    wav.writeUInt32LE(2000 * 2 * 4, 40)
+    fs.writeFileSync(capturePath, wav)
+
+    const staleHeaderCapture = fs.readFileSync(capturePath)
+    expect(analyzeWavBuffer(staleHeaderCapture, { windowMs: 20 }).durationSec).toBe(1)
+
+    const fullCapture = readCaptureForAnalysis(capturePath)
+    expect(fullCapture.readUInt32LE(40)).toBe(0)
+    expect(analyzeWavBuffer(fullCapture, { windowMs: 20 }).durationSec).toBe(1.25)
+  })
+
+  it('reports capture diagnostics when sound never starts', async () => {
+    // #746 D-3: the old assertion only checked that the five field names appeared in
+    // order (`/durationSec.*peak.*maxWindowRms.*stat\.size.*capturePath/`), so a mutant that
+    // always fills the values with the same wrong constants would still pass. Check the
+    // actual measured values instead — durationSec/peak/maxWindowRms/stat.size must be the
+    // ones this specific 0.1s silent capture actually produces.
+    const capturePath = path.join(makeTmpDir(), 'silent.wav')
+    fs.writeFileSync(capturePath, syntheticFloat32Wav(0.1))
+    const expectedSize = fs.statSync(capturePath).size
+
+    let thrown: unknown
+    try {
+      await waitForSound(capturePath, {
+        floor: 0.01,
+        intervalMs: 1,
+        timeoutMs: 2,
+        label: 'silent synthetic capture',
+      })
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(Error)
+    const message = (thrown as Error).message
+    expect(message).toContain('"durationSec":0.1')
+    expect(message).toContain('"peak":0')
+    expect(message).toContain('"maxWindowRms":0')
+    expect(message).toContain(`"stat.size":${expectedSize}`)
+    expect(message).toContain(`"capturePath":"${capturePath}"`)
+  })
+
+  it('keeps the last capture parse error in a sound timeout', async () => {
+    const capturePath = path.join(makeTmpDir(), 'broken.wav')
+    const brokenWav = Buffer.alloc(44)
+    brokenWav.write('data', 36, 'ascii')
+    fs.writeFileSync(capturePath, brokenWav)
+
+    await expect(
+      waitForSound(capturePath, {
+        floor: 0.01,
+        intervalMs: 1,
+        timeoutMs: 2,
+        label: 'broken synthetic capture',
+      }),
+    ).rejects.toThrow(/lastError.*not a RIFF\/WAVE file/)
+  })
+
+  it('waits for sound using physical bytes beyond a stale data-size header', async () => {
+    const capturePath = path.join(makeTmpDir(), 'stale-sound.wav')
+    const wav = syntheticFloat32Wav(0.3, { sample: sineAfter(0.15) })
+    wav.writeUInt32LE(100 * 2 * 4, 40)
+    fs.writeFileSync(capturePath, wav)
+
+    expect(analyzeWavBuffer(wav, { windowMs: 20 }).peak).toBe(0)
+    await expect(
+      waitForSound(capturePath, {
+        floor: 0.01,
+        intervalMs: 1,
+        timeoutMs: 10,
+        label: 'stale-header synthetic capture',
+      }),
+    ).resolves.toBeUndefined()
+  })
+
+  it('detects continuous sound from absolute RMS windows even when there are no onsets', async () => {
+    const capturePath = path.join(makeTmpDir(), 'continuous.wav')
+    const wav = syntheticFloat32Wav(0.2, { sample: sineAfter(0) })
+    fs.writeFileSync(capturePath, wav)
+    expect(analyzeWavBuffer(wav, { windowMs: 20 }).onsets).toEqual([])
+
+    await expect(
+      waitForSound(capturePath, {
+        floor: 0.01,
+        intervalMs: 1,
+        timeoutMs: 10,
+        label: 'continuous synthetic capture',
+      }),
+    ).resolves.toBeUndefined()
+  })
+
+  it('selects the same buckets as the old range when its reverse-map offset is zero', () => {
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(3, { sample: sineAfter(0) }), {
+      windowMs: 20,
+    })
+    const segment = { fromSec: 0.5, toSec: 2.5, fromWall: 500, toWall: 2500 }
+    const stopWall = analysis.durationSec * 1000
+    const oldRange = {
+      fromSec: analysis.durationSec - (stopWall - segment.fromWall) / 1000 + 0.15,
+      toSec: analysis.durationSec - (stopWall - segment.toWall) / 1000 - 0.15,
+    }
+    const oldBuckets = analysis.windows!.filter(
+      (window) => window.startSec >= oldRange.fromSec && window.startSec < oldRange.toSec,
+    )
+
+    expect(
+      captureWindowsFrom(analysis, { steady: segment }, 'zero-offset').windows('steady'),
+    ).toEqual(oldBuckets)
+  })
+
+  it('diverges from the old reverse-map range once there is clock drift (#739 the actual bug)', () => {
+    // #746 D-4: the zero-offset test above only proves equivalence in the case that never
+    // exhibited the bug. The real #739 failure was drift between the wall-clock stop time and
+    // the capture file's actual duration, which silently shifted the old reverse-mapped range
+    // toward the start of the file. Reproduce that with a non-zero offset.
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(3, { sample: sineAfter(0) }), {
+      windowMs: 20,
+    })
+    const segment = { fromSec: 0.5, toSec: 2.5, fromWall: 500, toWall: 2500 }
+    const driftSec = 0.2 // e.g. the capture writer's file lagged 200ms behind the wall clock
+    const stopWall = analysis.durationSec * 1000 + driftSec * 1000
+    const oldRange = {
+      fromSec: analysis.durationSec - (stopWall - segment.fromWall) / 1000 + 0.15,
+      toSec: analysis.durationSec - (stopWall - segment.toWall) / 1000 - 0.15,
+    }
+    const oldBuckets = analysis.windows!.filter(
+      (window) => window.startSec >= oldRange.fromSec && window.startSec < oldRange.toSec,
+    )
+    const newBuckets = captureWindowsFrom(analysis, { steady: segment }, 'drifted-offset').windows(
+      'steady',
+    )
+
+    // The reverse-map silently shifts its whole range earlier — toward the start of the file —
+    // by exactly the drift, instead of failing loudly.
+    expect(oldRange.fromSec).toBeCloseTo(segment.fromSec + 0.15 - driftSec, 10)
+    expect(oldBuckets).not.toEqual(newBuckets)
+  })
+
+  it('fails A1 when the first segment opens before sound', () => {
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(2, { sample: sineAfter(0.5) }), {
+      windowMs: 20,
+    })
+    expectCaptureInvariantFailure(
+      () =>
+        captureWindowsFrom(
+          analysis,
+          { early: { fromSec: 0.25, toSec: 1.75, fromWall: 250, toWall: 1750 } },
+          'synthetic capture',
+        ),
+      'A1',
+    )
+  })
+
+  it('fails U1 when the mapped width does not contain the expected bucket count', () => {
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(2, { sample: sineAfter(0) }), {
+      windowMs: 20,
+    })
+    analysis.windows = analysis.windows!.slice(0, 20)
+    expectCaptureInvariantFailure(
+      () =>
+        captureWindowsFrom(
+          analysis,
+          { short: { fromSec: 0.25, toSec: 1.75, fromWall: 250, toWall: 1750 } },
+          'synthetic capture',
+        ),
+      'U1',
+    )
+  })
+
+  it('fails U2 when capture-clock duration disagrees with wall-clock duration', () => {
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(2, { sample: sineAfter(0) }), {
+      windowMs: 20,
+    })
+    expectCaptureInvariantFailure(
+      () =>
+        captureWindowsFrom(
+          analysis,
+          { stalled: { fromSec: 0.25, toSec: 1.75, fromWall: 250, toWall: 2250 } },
+          'synthetic capture',
+        ),
+      'U2',
+    )
+  })
+
+  it('fails U3 instead of clamping a segment outside capture time', () => {
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(2, { sample: sineAfter(0) }), {
+      windowMs: 20,
+    })
+    expectCaptureInvariantFailure(
+      () =>
+        captureWindowsFrom(
+          analysis,
+          { outside: { fromSec: 0.5, toSec: 2.1, fromWall: 500, toWall: 2100 } },
+          'synthetic capture',
+        ),
+      'U3',
+    )
+  })
+
+  it('requires an explicit boundary-probe marker for overlapping segments', () => {
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(3, { sample: sineAfter(0) }), {
+      windowMs: 20,
+    })
+    const first = { fromSec: 0.25, toSec: 1.25, fromWall: 250, toWall: 1250 }
+    const overlapping = { fromSec: 1, toSec: 2, fromWall: 1000, toWall: 2000 }
+
+    expectCaptureInvariantFailure(
+      () => captureWindowsFrom(analysis, { first, overlapping }, 'synthetic overlap'),
+      'U3',
+    )
+    expect(() =>
+      captureWindowsFrom(
+        analysis,
+        { first, boundaryProbe: { ...overlapping, overlapsPrevious: true } },
+        'synthetic explicit overlap',
+      ),
+    ).not.toThrow()
+  })
+
+  it('keeps quadratic-mean RMS independent of sine phase', () => {
+    const atPhase = (phase: number) =>
+      analyzeWavBuffer(syntheticFloat32Wav(1, { sample: sineAfter(0, phase) }), { windowMs: 20 })
+        .windows!
+
+    expect(quadraticMeanRms(atPhase(0))).toBeCloseTo(quadraticMeanRms(atPhase(Math.PI / 3)), 8)
+  })
+
+  it('distinguishes quadratic-mean RMS from a plain arithmetic mean', () => {
+    // #746 D-2: the phase-independence test above uses a single steady tone, so every window
+    // has the same RMS and quadratic mean equals arithmetic mean there — a mutant swapping
+    // sqrt(mean(x^2)) for mean(x) would still pass that test. Give windows with different RMS
+    // so the two formulas actually disagree.
+    const windows = [{ rms: 0.1 }, { rms: 0.3 }]
+    const quadraticMean = quadraticMeanRms(windows)
+    const arithmeticMean = windows.reduce((sum, window) => sum + window.rms, 0) / windows.length
+
+    expect(quadraticMean).toBeCloseTo(Math.sqrt((0.1 ** 2 + 0.3 ** 2) / 2), 10)
+    expect(arithmeticMean).toBeCloseTo(0.2, 10)
+    expect(quadraticMean).not.toBeCloseTo(arithmeticMean, 2)
+  })
+
+  it('rejects analysis buckets that do not match the harness 20ms contract', () => {
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(2, { sample: sineAfter(0) }), {
+      windowMs: 100,
+    })
+    expect(() =>
+      captureWindowsFrom(
+        analysis,
+        { steady: { fromSec: 0.25, toSec: 1.75, fromWall: 250, toWall: 1750 } },
+        '100ms synthetic capture',
+      ),
+    ).toThrow(/analysis bucket width must be 0\.02s, got 0\.1s/)
+  })
+
+  it('defers a narrow default guard check until that guard is requested', () => {
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(1, { sample: sineAfter(0) }), {
+      windowMs: 20,
+    })
+    const captured = captureWindowsFrom(
+      analysis,
+      { short: { fromSec: 0.1, toSec: 0.3, fromWall: 100, toWall: 300 } },
+      'short synthetic capture',
+    )
+
+    expect(captured.windows('short', 0)).toHaveLength(10)
+    expectCaptureInvariantFailure(() => captured.windows('short'), 'U1')
+  })
+
+  it('applies the expected bucket-count invariant to channel RMS too', () => {
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(2, { sample: sineAfter(0) }), {
+      windowMs: 20,
+      perChannel: true,
+    })
+    analysis.channelWindows = [
+      analysis.channelWindows![0]!.slice(0, 20),
+      analysis.channelWindows![1]!,
+    ]
+    const captured = captureWindowsFrom(
+      analysis,
+      { steady: { fromSec: 0.25, toSec: 1.75, fromWall: 250, toWall: 1750 } },
+      'channel synthetic capture',
+    )
+
+    expectCaptureInvariantFailure(() => captured.channelRms('steady', 0), 'U1')
+  })
+
+  it('rejects expectedOnsets < 2 instead of silently no-op-ing periodicity checking', () => {
+    // #746 D-1: expectedOnsets <= 1 makes `gaps` empty inside steadyRms, so
+    // `sortedGaps[Math.floor(sortedGaps.length / 2)]` used to read `undefined`,
+    // `Math.abs(undefined - hitPeriodSec)` silently evaluated to NaN, and `NaN > 0.1` is
+    // always false — the median-gap periodicity check passed no matter what the data was.
+    // The `!` non-null assertion masked the type checker instead of catching this.
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(2, { sample: sineAfter(0) }), {
+      windowMs: 20,
+    })
+    const result = captureWindowsFrom(
+      analysis,
+      { steady: { fromSec: 0.25, toSec: 1.75, fromWall: 250, toWall: 1750 } },
+      'single-onset synthetic capture',
+    )
+
+    expect(() =>
+      steadyRms(result, 'steady', {
+        expectedOnsets: 1,
+        guardSec: 0.15,
+        hitPeriodSec: 0.5,
+        audibleFloorRms: 0.01,
+      }),
+    ).toThrow(/expectedOnsets >= 2/)
+  })
+
+  it('rejects hit periods that are not an integer number of analysis buckets', () => {
+    const analysis = analyzeWavBuffer(syntheticFloat32Wav(6, { sample: sineAfter(0) }), {
+      windowMs: 20,
+    })
+    const result = captureWindowsFrom(
+      analysis,
+      { steady: { fromSec: 0.25, toSec: 5.75, fromWall: 250, toWall: 5750 } },
+      'unaligned-period synthetic capture',
+    )
+
+    expect(() =>
+      steadyRms(result, 'steady', {
+        expectedOnsets: 8,
+        guardSec: 0.15,
+        hitPeriodSec: 0.51,
+        audibleFloorRms: 0.01,
+      }),
+    ).toThrow(/hitPeriodSec must be an integer multiple of 0\.02s, got 0\.51s/)
+  })
+
+  it('measures the same bucket count and finite steadyRms across 500 phases at 48kHz (#746 C-2)', () => {
+    // 🔴 The 25-phase sweep below only asserts that steadyRms does not throw — that is exactly
+    // what let the phase-dependent bucket count through review undetected. `onsets` (from
+    // `w * WINDOW_SEC`) and `windows[].startSec` (from `start / sampleRate`) are two
+    // independent float derivations of the same nominal bucket boundary; at the sweep's
+    // default 1000 Hz sampleRate they happen not to show the drift Fable measured against the
+    // real capture rate. Use 48000 Hz (the daemon's actual capture rate) and assert the
+    // measured bucket count is identical across every phase, not just that nothing throws.
+    //
+    // 🔴 What this test does NOT prove: it moves the capture segment inside ONE bucket while
+    // the synthesized hits stay at fixed absolute times, so `firstOnset` only takes one or two
+    // distinct values here. A mutant restoring the original cross-family `>=`/`<` comparison
+    // SURVIVES this test (measured). The drift depends on the absolute onset index, which is
+    // what `measures the same bucket count across 1000 absolute onset indices (#746 C-1)`
+    // above sweeps. Keep both: this one drives the real audio path end to end, that one
+    // discriminates the defect.
+    const sampleRate = 48000
+    const wav = syntheticFloat32Wav(9, {
+      sampleRate,
+      sample: (timeSec) => {
+        if (timeSec < 0.5) return 0
+        const hitTimeSec = (timeSec - 0.5) % 0.5
+        return hitTimeSec < 0.12
+          ? 0.5 * Math.exp(-30 * hitTimeSec) * Math.sin(2 * Math.PI * 50 * hitTimeSec)
+          : 0
+      },
+    })
+    const analysis = analyzeWavBuffer(wav, { windowMs: 20 })
+    const requirements = {
+      expectedOnsets: 8,
+      guardSec: 0.15,
+      hitPeriodSec: 0.5,
+      audibleFloorRms: 0.01,
+    }
+    const bucketSec = ANALYSIS_BUCKET_MS / 1000
+    const phaseCount = 500
+    const bucketCounts = new Set<number>()
+    const steadyRmsValues: number[] = []
+    const failures: Array<{ phase: number; message: string }> = []
+
+    for (let phase = 0; phase < phaseCount; phase += 1) {
+      const fromSec = 1.347 + (phase / phaseCount) * bucketSec
+      const toSec = fromSec + 6.8
+      const result = captureWindowsFrom(
+        analysis,
+        { steady: { fromSec, toSec, fromWall: fromSec * 1000, toWall: toSec * 1000 } },
+        `48kHz phase ${phase}`,
+      )
+      try {
+        bucketCounts.add(measuredBucketCountForSteadyRms(result, 'steady', requirements))
+        steadyRmsValues.push(steadyRms(result, 'steady', requirements))
+      } catch (error) {
+        failures.push({ phase, message: String(error) })
+      }
+    }
+
+    expect(failures, `failed ${failures.length}/${phaseCount} phases`).toEqual([])
+    expect([...bucketCounts], 'measured bucket count must not depend on capture phase').toEqual([
+      200,
+    ])
+    expect(steadyRmsValues, 'steadyRms must return once for every phase').toHaveLength(phaseCount)
+    expect(
+      steadyRmsValues.every(Number.isFinite),
+      'steadyRms must return a finite value for every phase',
+    ).toBe(true)
+  })
+
+  it('measures the same bucket count across 1000 absolute onset indices (#746 C-1)', () => {
+    // 🔴 The 500-phase sweep above moves the capture segment inside ONE analysis bucket while
+    // the synthesized hits stay at fixed absolute times, so `firstOnset` only ever takes one
+    // or two distinct values there. The 199/200/201 drift this PR fixes depends on the
+    // ABSOLUTE bucket index — `onsets` are built as `w * WINDOW_SEC` while `windows[].startSec`
+    // is built as `(w * winFrames) / sampleRate`, and how far those two float families diverge
+    // grows with `w`. Sweeping the segment therefore cannot reproduce the defect: a mutant that
+    // restores the original cross-family `>=`/`<` comparison survives that test (measured).
+    //
+    // Drive the two families directly instead of synthesizing audio, so a thousand absolute
+    // indices are cheap and the reproduction is exact.
+    const sampleRate = 48000
+    const bucketSec = ANALYSIS_BUCKET_MS / 1000
+    const bucketFrames = Math.round(bucketSec * sampleRate)
+    const requirements = {
+      expectedOnsets: 8,
+      guardSec: 0,
+      hitPeriodSec: 0.5,
+      audibleFloorRms: 0.01,
+    }
+    const periodBuckets = Math.round(requirements.hitPeriodSec / bucketSec)
+    const spanBuckets = requirements.expectedOnsets * periodBuckets
+
+    /** `wav-analysis.ts` builds onsets from `w * WINDOW_SEC` (:170). */
+    const onsetSecOf = (bucket: number) => bucket * bucketSec
+    /** …and window starts from `start / format.sampleRate` (:374). Two different families. */
+    const windowSecOf = (bucket: number) => (bucket * bucketFrames) / sampleRate
+
+    const indexCount = 1000
+    const bucketCounts = new Set<number>()
+    const steadyRmsValues: number[] = []
+    const failures: Array<{ firstOnsetBucket: number; message: string }> = []
+
+    for (let index = 0; index < indexCount; index += 1) {
+      const firstOnsetBucket = index + 1
+      const searchFromBucket = firstOnsetBucket - 1
+      const searchToBucket = firstOnsetBucket + spanBuckets
+      const windows: Array<{ startSec: number; peak: number; rms: number }> = []
+      for (let bucket = searchFromBucket; bucket < searchToBucket; bucket += 1) {
+        windows.push({ startSec: windowSecOf(bucket), peak: 0.5, rms: 0.5 })
+      }
+      const onsets: number[] = []
+      for (let hit = 0; hit < requirements.expectedOnsets; hit += 1) {
+        onsets.push(onsetSecOf(firstOnsetBucket + hit * periodBuckets))
+      }
+      const result = { windows: () => windows, onsets: () => onsets }
+
+      try {
+        bucketCounts.add(measuredBucketCountForSteadyRms(result, 'steady', requirements))
+        steadyRmsValues.push(steadyRms(result, 'steady', requirements))
+      } catch (error) {
+        failures.push({ firstOnsetBucket, message: String(error) })
+      }
+    }
+
+    expect(failures, `failed ${failures.length}/${indexCount} onset indices`).toEqual([])
+    expect(
+      [...bucketCounts],
+      'measured bucket count must not depend on the absolute onset index',
+    ).toEqual([spanBuckets])
+    expect(steadyRmsValues, 'steadyRms must return once per index').toHaveLength(indexCount)
+    expect(
+      steadyRmsValues.every(Number.isFinite),
+      'steadyRms must return a finite value for every index',
+    ).toBe(true)
+  })
+
+  it('snaps periodic RMS across every 20ms phase of a 500ms hit period', () => {
+    const wav = syntheticFloat32Wav(9, {
+      sample: (timeSec) => {
+        if (timeSec < 0.5) return 0
+        const hitTimeSec = (timeSec - 0.5) % 0.5
+        return hitTimeSec < 0.12
+          ? 0.5 * Math.exp(-30 * hitTimeSec) * Math.sin(2 * Math.PI * 50 * hitTimeSec)
+          : 0
+      },
+    })
+    const analysis = analyzeWavBuffer(wav, { windowMs: 20 })
+    const failures: Array<{ phase: number; fromSec: number; message: string }> = []
+
+    for (let phase = 0; phase < 25; phase += 1) {
+      const fromSec = 1.347 + phase * 0.02
+      const toSec = fromSec + 6.8
+      const result = captureWindowsFrom(
+        analysis,
+        { steady: { fromSec, toSec, fromWall: fromSec * 1000, toWall: toSec * 1000 } },
+        `periodic phase ${phase}`,
+      )
+      try {
+        steadyRms(result, 'steady', {
+          expectedOnsets: 8,
+          guardSec: 0.15,
+          hitPeriodSec: 0.5,
+          audibleFloorRms: 0.01,
+        })
+      } catch (error) {
+        failures.push({ phase, fromSec, message: String(error) })
+      }
+    }
+    expect(failures, `failed ${failures.length}/25 phases`).toEqual([])
   })
 })
 

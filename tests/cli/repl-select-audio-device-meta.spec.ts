@@ -160,3 +160,40 @@ describe('createReplSession //#selectAudioDevice bridge', () => {
     }
   })
 })
+
+describe('createReplSession //#getEngineState bridge', () => {
+  it('returns daemon output and callback snapshots in a correlated envelope', async () => {
+    const interpreter = new InterpreterV2()
+    const audioEngine = (interpreter as any).state.audioEngine
+    audioEngine.getDaemonStatus = vi.fn().mockResolvedValue({
+      output: {
+        device_name: 'USB Audio',
+        first_callback_ms: 12,
+        last_switch_failure: null,
+      },
+      callback: { count: 42, alive: true, last_frames: 512 },
+    })
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    try {
+      const session = createReplSession(interpreter)
+      session.pushLine('//#getEngineState {"requestId":"request-1"}')
+      await session.idle()
+      expect(logSpy).toHaveBeenCalledWith(
+        JSON.stringify({
+          engineState: {
+            requestId: 'request-1',
+            ok: true,
+            output: {
+              device_name: 'USB Audio',
+              first_callback_ms: 12,
+              last_switch_failure: null,
+            },
+            callback: { count: 42, alive: true, last_frames: 512 },
+          },
+        }),
+      )
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+})
