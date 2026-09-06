@@ -675,7 +675,7 @@ stream を drop しただけではコールバックが止まらないので、`
 `pause()` します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:655-661
+// rust/crates/orbit-audio-native/src/output.rs:667-673
 impl Drop for OutputStream {
     fn drop(&mut self) {
         // cpal 0.15.3 retains named CoreAudio streams through a reference cycle. Dropping the
