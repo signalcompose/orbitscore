@@ -17,6 +17,67 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(design): correct the recorded cause of #780 — a shared shm path, not a moved fixture (Sep 6, 2026)
+
+**ブランチ**: `780-fixture-shm-path`（束 `780-merge-gate` の小 PR・Part of #780）
+
+束 E-gate に着手し、#780（無条件マージゲートが SIGBUS / SIGSEGV で間欠的に落ちる）の
+**設計文書に書かれていた原因が誤りだった**ことを実測で確認したので、実装より先に spec を訂正した
+（PROJECT_RULES / CLAUDE.md 運用規則 6「spec が正本」）。
+
+#### 何が誤っていたか
+
+前日の記述は「`ActualFixture` が `_mmap`（実体）と `region`（その中を指す生ポインタ）を並べて
+持ち、move すると両者の関係が型で保証されない」。**これは成り立たない**:
+
+- `create_shared` が返すのは `MmapMut`。**構造体を move してもマップ先のアドレスは動かない**
+  （`MmapMut` が持つのは (ptr, len) だけ）。`Box<dyn Any>` が実体を生かし続けるので
+  `region` は有効なまま
+- `KERN_PROTECTION_FAILURE` は「マップされているが書けない」であって、
+  **ダングリングポインタの症状ではない**
+- 🔴 この記述が示す修正方向（`region` を `_mmap` から導出する）では**故障が 1 つも直らない**
+
+#### 実際の原因（実測で特定）
+
+`ActualFixture::new`（`tests.rs:649-653`）が `line!()` でパスの一意性を作ろうとしているが、
+**`line!()` はマクロを書いた位置（652 行目）で展開される定数**で、呼び出し元の行ではない。
+`ActualFixture::new` を呼ぶのは `actual_gain()`（`:688`）1 箇所だけで、それを
+**c16(`:711`) / c17(`:735`) / c18(`:760`・`:766`) の 4 箇所**が呼ぶ。したがって
+**4 つの fixture がすべて同一パス `orbit-rack-gain-{pid}-652.shm` を共有していた。**
+
+`create_shared`（`transport.rs:2031-2041`）は `.truncate(true)` で開くので、
+**あるテストが他のテストの生きたマッピングを 0 バイトに切り詰める** → EOF の外側になった
+ページへの書き込みで SIGBUS / SIGSEGV。スタック（`AudioChain::process_block` →
+`AtomicUsize::store`）とも、スレッド絡みに依存する**間欠性**とも一致する。
+
+| 実行形態 | 結果 |
+|---|---|
+| 並列（既定） | 5 回中 **1 回 FAIL**（`signal: 11, SIGSEGV`） |
+| `--test-threads=1` | 5 回中 **0 回 FAIL** |
+| `$TMPDIR` の残骸 | `orbit-rack-gain-81727-652.shm` が **1 個だけ**（4 fixture 分あるはずが 1 個） |
+
+単一スレッドで落ちないのは、c18 が自分で 2 回束縛する分については切り詰めた後の古い
+マッピングに触らないため。落ちるのは**テスト間の並列衝突**である。
+
+#### 🔴 これで #780 の原因仮説は 3 連続で外れた
+
+①漏れた shm ②`bundle-macos.sh` との競合 ③fixture の move。①②は前日に実測で反証済み、
+③は**コードを読んだだけで実測しなかった**ために設計文書に載り、**直っても直らない修正方向まで
+指示していた**。決め手はいずれも実測（クラッシュレポートの実スタック / 並列・単一スレッドの
+対照実験）だった。**読んで筋が通ることは実測の代わりにならない。**
+
+#### 変更
+
+| ファイル | 内容 |
+|---|---|
+| `docs/design/668-e2e-foundation-design.md` §13.5.3 | 原因記述を差し替え。**訂正の記録を引用ブロックで残した**（同じ轍を踏まないため）。`$TMPDIR` 清掃を SIGBUS の説明に使っていた箇所も訂正 |
+| `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` §1.10 | PR-E14 の件名を `give every rack fixture its own shm path` に変更。依存を「PR-E10 の次」→「**PR-E10 と独立**」に（原因が #779 と無関係と判明したため） |
+
+実装（パスを atomic カウンタで一意にする）は Codex に委譲。検証（10 回連続で緑）は main が
+本ツリーで行う。🔴 **`--test-threads=1` を既定にする回避は採らない** — 欠陥を隠すだけで
+並列環境で再発する。
+
+
 ### docs(planning): split the E-env bundle so stage 2 is not blocked by measurement noise (Sep 6, 2026)
 
 **ブランチ**: `779-restructure-e-env-bundles`
