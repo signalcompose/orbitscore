@@ -1,12 +1,12 @@
 ---
 title: "SC-1. ラック — チェーンを値として書く（SC.10）"
 chapter-id: "SC-1"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 900d453
+verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-06 に #780 / #789（PR [#789](https://github.com/signalcompose/orbitscore/pull/789)・マージ前ゲートの 2 つの欠陥）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # SC-1. ラック — チェーンを値として書く（SC.10）
 
@@ -1342,6 +1342,64 @@ plugin 名は手打ちせず `lib.rs` の定数から読み出します。
 `cargo test -p orbit-effect-rack-child --lib -- --ignored` を「無条件で回す」と定めているのも、
 `rust-ci.yml` が全ジョブ ubuntu で macOS 限定のこの 3 件が存在しないためです。
 
+### そのゲート自身が 2 つの欠陥を抱えていました（#780・#789）
+
+面白いのは、この「無条件ゲート」が**測定器として二重に壊れていた**ことです。2026-09-06 の
+束 [#789](https://github.com/signalcompose/orbitscore/pull/789) が両方を直しました。
+
+1 つ目は **`-- --ignored` の意味**です。`--ignored` は `#[ignore]` を付けたテスト**だけ**を走らせる
+フィルタなので、`#[ignore]` していない退行検知テストは、このゲートでも `rust-ci.yml`（ubuntu なので
+`#[cfg(target_os = "macos")]` のテストが存在しない）でも、**どの自動経路でも 1 度も走りません**。
+実測は `0 passed; 19 filtered out` でした。そこで `CLAUDE.md` のゲートは 2 行から 3 行になり、
+`--ignored` を外した通常実行が足されています（`CLAUDE.md:665-669`）。
+
+2 つ目は、そのゲートが**間欠的に SIGBUS / SIGSEGV で落ちていた**ことです。原因は fixture の
+shm パスでした。`ActualFixture::new` はパスの一意化に `line!()` を使っていたのですが、`line!()` は
+**マクロを書いた行**で展開される定数なので、呼び出し元がいくつあっても値は 1 つです。結果として
+4 つの fixture が同じ `orbit-rack-gain-{pid}-652.shm` を共有し、`create_shared`
+（`orbit-audio-sandbox/src/transport.rs:2031-2041`）の `.truncate(true)` が、**別のテストが
+mmap したまま使っている領域を切り詰めて**いました。書き込みが EOF の外側に落ちて SIGBUS になる、
+という筋です。単一スレッドでは落ちず並列でだけ落ちるのも、これがテスト**間**の衝突だからです。
+
+直し方は production 側の `unique_shm_path()` と同じで、`static AtomicU64` の連番を使います。
+
+```rust
+// rust/crates/orbit-effect-rack-child/src/tests.rs:646-654
+#[cfg(target_os = "macos")]
+static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(target_os = "macos")]
+fn actual_fixture_path(label: &str) -> PathBuf {
+    let seq = SHM_SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    std::env::temp_dir().join(format!("orbit-rack-{label}-{pid}-{seq}.shm"))
+}
+```
+
+そして「一意であること」自体に退行検知テストが置かれました。`line!()` に戻すと 2 つの fixture が
+同じパスになるので、このテストが赤くなります。
+
+```rust
+// rust/crates/orbit-effect-rack-child/src/tests.rs:670-676
+#[cfg(target_os = "macos")]
+#[test]
+fn actual_fixtures_use_distinct_shm_paths() {
+    let first = ActualFixture::new("gain");
+    let second = ActualFixture::new("gain");
+    assert_ne!(first.path, second.path);
+}
+```
+
+ここで気をつけたいのは、この 2 つが**独立した欠陥ではない**という点です。1 つ目（`--ignored` の
+フィルタ）を直さない限り、2 つ目の退行検知テストは書いても走りません。ゲートを信用するには、
+「何を測るか」と「それが実際に走るか」の両方を押さえる必要がある、という順序になっています。
+
+なお `#780` の原因は、設計文書に**誤った原因が先に記録されていた**という経緯を持ちます。起案時は
+「`ActualFixture` が move されると `_mmap` と `region` の関係が型で保証されない」と書かれて
+いましたが、`MmapMut` は move してもマップ先が動かず、`KERN_PROTECTION_FAILURE` はダングリング
+ポインタの症状でもありません。訂正の記録は `docs/design/668-e2e-foundation-design.md` §13.5.3 に
+引用ブロックとして残されています。
+
 ### E2E の数値設計は定数 1 つに集約されている
 
 gated E2E（`ORBIT_GATED_ORBITSTUDIO=1`）は、カタログ 2 つ（0.8 倍・0.63 倍）と `Gain(db: -6)` の
@@ -1556,6 +1614,9 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 - `rust/crates/orbit-std-gain/bundle-macos.sh:1-45` — `.clap` bundle の組み立て
 - `scripts/copy-daemon-bin.sh:131-132` — `std-plugins/Gain.clap` の同梱
 - `.github/workflows/release.yml:86-98,191-200` — 実 Gain テストと `.vsix` 内の同梱ゲート
+- `rust/crates/orbit-effect-rack-child/src/tests.rs:646-654,670-676` — #780 の修正（`line!()` を `static AtomicU64` の連番へ）と、一意性そのものへの退行検知テスト
+- `CLAUDE.md:658-674` — マージ前ゲートの 3 行（`--ignored` 付き / 無しの使い分けとその理由）
+- Issue [#780](https://github.com/signalcompose/orbitscore/issues/780) / PR [#789](https://github.com/signalcompose/orbitscore/pull/789) — 無条件ゲートの間欠 SIGBUS と `--ignored` フィルタの穴
 - `tests/e2e/rack-chain-gain-expectations.ts:1-34` / `tests/e2e/rack-chain-gain-expectations.spec.ts:1-30` — E2E の数値設計とその純 unit
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:4081-4111` — `#628 R28` 実機ブロックの full rack 区間
 - `tests/core/rack-chain.spec.ts:105-414` — T3〜T23（LCS・occurrence・keep 更新・uncertain 復旧）
