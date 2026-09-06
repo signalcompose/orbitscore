@@ -590,6 +590,8 @@ A point to note here is that `ORBITSCORE_ENGINE` is **set explicitly in both bra
 
 `setupErrorHandler` (#533) receives the `'error'` event of a spawn failure (`ENOENT`, etc.); without it, `engineProcess` stays non-null and `isEngineRunning()` lies.
 
+Of the five, `setupStderrHandler` is the one that transcribes the engine's stderr into the Output channel with an `ERROR: ` prefix. It prefixes **per line, not per chunk** (#756). `createLinePrefixer()` reassembles the chunk stream into lines: `'data'` emits only the completed lines, and `'end'` drains the last line that did not end with a newline. The granularity of the prefix is used directly as the scale for the gated E2E's ERROR accounting (`countErrors` / `newErrorLines`), so a per-chunk granularity makes the measuring instrument structurally undercount. The background is in [IV-3](/en/editor/mcp-and-gated-e2e#who-writes-the-error-prefix).
+
 ---
 
 ## Communication Protocol with the Engine

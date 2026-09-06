@@ -590,6 +590,8 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
 
 `setupErrorHandler` (#533) は spawn 失敗 (`ENOENT` 等) の `'error'` イベントを受けるもので、これが無いと `engineProcess` が non-null のまま残って `isEngineRunning()` が嘘をつきます。
 
+5 本のうち `setupStderrHandler` は、engine の stderr を Output チャネルへ `ERROR: ` 付きで転記する係です。ここは **chunk 単位ではなく行単位**で前置します (#756)。`createLinePrefixer()` が chunk 列を行に組み直し、`'data'` では完成した行だけを、`'end'` では改行で終わらなかった最後の 1 行を吐き出します。前置の粒度は gated E2E の ERROR 会計 (`countErrors` / `newErrorLines`) がそのまま目盛りに使うので、粒度が chunk だと測定器側が構造的に過小カウントします。この経緯は [IV-3](/editor/mcp-and-gated-e2e#error-の前置は誰が付けているのか) で読みます。
+
 ---
 
 ## Engine との通信プロトコル
