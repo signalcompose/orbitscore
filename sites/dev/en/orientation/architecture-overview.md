@@ -103,7 +103,7 @@ graph TD
 `startEngine()` is responsible for starting the engine. The first thing it does is decide "which backend to use," normalizing the `orbitscore.engine` setting with the engine-side `resolveEngineKind` (loaded from compiled JS via a runtime require).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2060-2063
+// packages/vscode-extension/src/extension.ts:2111-2114
   // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
   // 'rust' (default since cutover #369), skip the scsynth pre-check entirely —
   // the native daemon doesn't need scsynth to be resolvable.
@@ -113,7 +113,7 @@ graph TD
 A point to note here is that **backend binary resolution always precedes spawning the engine**. Under the default `rust` kind it pre-checks the daemon binary.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2085-2094
+// packages/vscode-extension/src/extension.ts:2136-2145
     const daemonResolution = resolveDaemonForUI()
     if (!daemonResolution) {
       outputChannel?.appendLine(
@@ -146,7 +146,7 @@ What is interesting is that the resolved path is not handed to the engine via en
 The backend kind is **always set explicitly** on the engine through the `ORBITSCORE_ENGINE` env var.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2149-2162
+// packages/vscode-extension/src/extension.ts:2200-2213
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
@@ -166,7 +166,7 @@ The backend kind is **always set explicitly** on the engine through the `ORBITSC
 The engine process itself is then started with `child_process.spawn` running Node.js.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2164-2170
+// packages/vscode-extension/src/extension.ts:2215-2221
   // Spawn engine process
   try {
     engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -179,7 +179,7 @@ The engine process itself is then started with `child_process.spawn` running Nod
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3056-3057
+// packages/vscode-extension/src/extension.ts:3107-3108
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```

@@ -17,6 +17,56 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(extension): prefix stderr per line, not per chunk (#756) (Sep 6, 2026)
+
+**ブランチ**: `756-stderr-line-prefix`（base = 束 `761-gated-measurement`） / **Part of** [#756](https://github.com/signalcompose/orbitscore/issues/756)
+
+束「gated の測定器」の 3 本目（最後）。`setupStderrHandler` は engine の stderr を
+`outputChannel.append('ERROR: ' + chunk)` と **chunk 単位**で前置していた。1 つの chunk に
+複数行入ると **2 行目以降に `ERROR:` が付かない**。
+
+gated E2E の ERROR 会計（`countErrors` / `newErrorLines`）は `ERROR:` を数えるので、
+**構造的に過小カウント**する（= 偽緑）。だから束の**最後**に置いた — 判定側（#760 / #761）を
+正しくしてから測定器そのものを直す。
+
+#### 変更
+
+`createLinePrefixer` を追加し、`setupStderrHandler` を行単位へ。
+
+| 論点 | 対処 |
+|---|---|
+| **部分行** | chunk 境界は行境界と一致しない。素朴な `split('\n')` だと行の後半が独立した行になり `ERROR:` が二重に付く → `partial` を持ち越す |
+| **終端の取りこぼし** | 行に整えると**改行で終わらない最後の出力**が buffer に残る。過小カウントを直す変更が逆方向に同じ穴を開けることになるので、`end` で `flush()` する。🔴 engine 側の `createDaemonStderrLineRouter` はここを持っていない |
+| **空行** | `ERROR: ` だけの行を作ると `countErrors` が**水増し**される。過小を直して過大を作らない |
+
+#### 🔴 既存テストの注入先を移した（移さないと黙って何も検証しなくなる）
+
+封じ込めテストは `append` を throw させて「例外が listener の外へ逃げない」ことを検査していた。
+前置が `append` → `appendLine` へ移ったので、**注入先を移さないと発火せず、テストは緑のまま
+封じ込めの退行を見逃す**。`logHandlerFailure` 自身も `appendLine` を使うため、
+**`ERROR: ` 行だけ**を落として診断行は通す精密な注入にした。
+
+#### 変異検証（実出力）
+
+| 変異 | red になったテスト |
+|---|---|
+| `partial` の持ち越しを消す | **2 本**（チャンク跨ぎの結合 / 終端 flush） |
+| `flush()` を no-op | **1 本**（末尾行の flush） |
+| 空行スキップを外す | **1 本**（空行で前置しない） |
+| 復元 | ✅ 48 passed |
+
+#### 🔴 issue 本文と実装のずれ（報告のみ・本 PR では直さない）
+
+> すぐ上の `setupStdoutHandler` は同じファイルで既に `split('\n')` して 1 行ずつ処理している。
+> **stderr 側だけがこの対処を欠いている。**
+
+**stdout も部分行をバッファリングしていない**（`extension.ts` の `setupStdoutHandler`）。
+`output.split('\n')` をチャンクごとに処理するだけなので、`{"evalMark"` などの JSON envelope が
+チャンク境界で割れると**両断片とも prefix 判定に落ちて「malformed」として捨てられる**。
+
+本 PR では**直さない** — stdout の分割挙動は bridge の dispatch（#614 で一度壊れた高リスク領域）に
+影響し、独自の E2E を伴う別作業になるため。別 issue として起票する。
+
 ### fix(e2e): say which log lines appeared instead of counting them (#761) (Sep 6, 2026)
 
 **ブランチ**: `761-window-proof-assertions`（base = 束 `761-gated-measurement`） / **Part of** [#761](https://github.com/signalcompose/orbitscore/issues/761)

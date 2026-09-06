@@ -103,7 +103,7 @@ graph TD
 engine の起動は `startEngine()` が担います。最初にやるのは「どのバックエンドを使うか」の決定で、`orbitscore.engine` 設定を engine 側の `resolveEngineKind` (compiled JS を runtime require) で正規化します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2060-2063
+// packages/vscode-extension/src/extension.ts:2111-2114
   // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
   // 'rust' (default since cutover #369), skip the scsynth pre-check entirely —
   // the native daemon doesn't need scsynth to be resolvable.
@@ -113,7 +113,7 @@ engine の起動は `startEngine()` が担います。最初にやるのは「�
 ここで気をつけたいのは、**engine を spawn する前にバックエンドのバイナリ解決を先行させる** という点です。既定の `rust` kind では daemon バイナリを pre-check します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2085-2094
+// packages/vscode-extension/src/extension.ts:2136-2145
     const daemonResolution = resolveDaemonForUI()
     if (!daemonResolution) {
       outputChannel?.appendLine(
@@ -146,7 +146,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 バックエンドの種別は `ORBITSCORE_ENGINE` env で **必ず明示的に** engine に伝えます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2149-2162
+// packages/vscode-extension/src/extension.ts:2200-2213
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
@@ -166,7 +166,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 そして engine プロセス本体は `child_process.spawn` で Node.js を起動します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2164-2170
+// packages/vscode-extension/src/extension.ts:2215-2221
   // Spawn engine process
   try {
     engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -179,7 +179,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3056-3057
+// packages/vscode-extension/src/extension.ts:3107-3108
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
