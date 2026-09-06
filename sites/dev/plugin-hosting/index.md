@@ -227,7 +227,7 @@ audio/event をやり取りします。spawn し得る child は `SPAWNABLE_CHIL
 （一覧と役割は [RE-2](/rust-engine/oop-children) の表を参照）。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:84-93
+// rust/crates/orbit-audio-daemon/src/lib.rs:86-95
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",
@@ -304,7 +304,7 @@ pub(crate) fn child_exe_for_attach(
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:154-191
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:155-192
 /// instrument child のフォーマット別デフォルト binary 名。VST3 だけが専用 child を持ち、
 /// それ以外（.clap・raw .dylib CLAP 等）は従来どおり CLAP child が担当する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -361,7 +361,7 @@ effect 側は #628 以降、format で child を分岐しません。`default_ra
 ディレクトリの `orbit-effect-rack-child` を既定にします。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:451-458
+// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:454-461
 /// （spike の sibling-of-exe を踏襲・設計 §4.5）。インストール時は daemon と child が並んで置かれる前提。
 fn default_rack_child_exe() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
@@ -425,10 +425,10 @@ DSL → `LoadPlugin(role=instrument, instance="plugin:synth")` → 拡張子ベ�
 - `packages/engine/src/core/global/plugin-instrument-manager.ts:22-91` — `PluginInstrumentManager.instrument()`（`plugin:<seqName>` instance ID・statePath）
 - `packages/engine/src/core/global/plugin-effect-manager.ts:15-62` — `PluginEffectManager.effect()`（ラック経路）
 - `packages/engine/src/core/global/effect-slot.ts:33-61` — `resolveEffectSpec`（load-bearing な validate → gate → resolve の順序）
-- `rust/crates/orbit-audio-daemon/src/lib.rs:84-93` — `SPAWNABLE_CHILD_BINARIES`
+- `rust/crates/orbit-audio-daemon/src/lib.rs:86-95` — `SPAWNABLE_CHILD_BINARIES`
 - `rust/crates/orbit-audio-daemon/src/outproc_child_exe.rs:1-64` — child binary 選択の共通規則（#552）
-- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:154-199` — `InstrumentPluginFormat` / `child_exe_for_attach` / `default_child_exe`
-- `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:451-458` — `default_rack_child_exe`
+- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:155-200` — `InstrumentPluginFormat` / `child_exe_for_attach` / `default_child_exe`
+- `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:454-461` — `default_rack_child_exe`
 - [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/core/INSTRUCTION_ORBITSCORE_DSL.md) PH.1〜PH.6 / PC.1〜PC.5 — plugin hosting と catalog の DSL 規範
 - [`docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md) SC.10 — ラック形の正本
 - [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 — VST3 instrument production の実機 E2E 記録（capture peak 0.25000）

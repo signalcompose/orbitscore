@@ -758,29 +758,59 @@ U2 が消えていれば #775 は不要になりうる。** 3 回連続の実測
 #779（shm の漏れを止める）→ #780（無条件ゲートの SIGBUS）→ 厳密等価 3 箇所
 ```
 
-#### 🔴 #780 の原因（2026-09-06 にコードを読んで特定・推測ではない）
+#### 🔴 #780 の原因（2026-09-06 に実測で特定。**同日の初出記述は誤りだったので訂正した**）
 
-クラッシュレポート 2 件の実スタックはどちらも
-`AudioChain::process_block` → `AtomicUsize::store` で **`KERN_PROTECTION_FAILURE`**
-（書き込み権限の無い領域への atomic store）。
+> **訂正の記録**: 起案時は「`ActualFixture` が move されると `_mmap` の実体と `region` が指す先の
+> 関係が型で保証されない」と書いた。**これは誤りである。** `create_shared` が返すのは `MmapMut` で、
+> 構造体を move してもマップ先のアドレスは動かない（`MmapMut` が持つのは (ptr, len) だけ）うえ、
+> `Box<dyn Any>` が実体を生かし続けるので `region` は有効なまま。さらに `KERN_PROTECTION_FAILURE`
+> は「マップされているが書けない」であって**ダングリングポインタの症状ではない**。この記述に従って
+> `region` を `_mmap` から導出する形にしても、**故障は 1 つも直らない。**
 
-`orbit-effect-rack-child/src/tests.rs` の fixture:
+**実際の原因は shm パスの衝突である。**
+
+`ActualFixture::new`（`orbit-effect-rack-child/src/tests.rs:649-653`）:
 
 ```rust
-struct ActualFixture {
-    path: PathBuf,
-    _mmap: Box<dyn std::any::Any>,          // ← mmap の実体を型を消して持つ
-    region: *mut orbit_audio_sandbox::SharedRegion,  // ← その中を指す生ポインタ
-}
+let path = std::env::temp_dir().join(format!(
+    "orbit-rack-{label}-{}-{}.shm",
+    std::process::id(),
+    line!()          // 🔴 呼び出し元ではなく、この行（652）で展開される定数
+));
 ```
 
-`actual_gain()` はこれを**タプルで返し**、呼び出し側が分解束縛する。
-**`ActualFixture` が move されると、`_mmap` の実体と `region` が指す先の関係が
-型で保証されていない。** `c18` は同じ `it` 内で `let (…, fixture) = actual_gain(…)` を
-**2 回**行い、2 回目で同名を再束縛する。SIGBUS が**間欠的**なのはこの不確定性と一致する。
+`line!()` は**マクロを書いた位置**で展開されるので常に `652`。`ActualFixture::new` を呼ぶのは
+`actual_gain()`（`:688`）1 箇所だけで、その `actual_gain()` を **c16(`:711`) / c17(`:735`) /
+c18(`:760`・`:766`) の 4 箇所**が呼ぶ。したがって **4 つの fixture がすべて同一パス
+`orbit-rack-gain-{pid}-652.shm` を共有している。**
 
-**直し方の方向**: `region` を生ポインタで持たず、`_mmap` から**その場で導出**する
-（`fn region(&self) -> *mut SharedRegion`）。move しても関係が崩れない形にする。
+`orbit_audio_sandbox::create_shared`（`orbit-audio-sandbox/src/transport.rs:2031-2041`）は
+**`.truncate(true)`** でファイルを開く。したがって:
+
+```
+c16 が mmap 経由で process_block 実行中
+  → c18 が同じファイルを truncate(0)
+  → c16 のマップページが EOF の外側になる
+  → 書き込みで SIGBUS / SIGSEGV（スタックは AudioChain::process_block → AtomicUsize::store）
+```
+
+`impl Drop for ActualFixture`（`:664-668`）の `remove_file(&self.path)` も同じ衝突で、
+**他の fixture のファイルを消す。**
+
+**実測（main・本ツリー・2026-09-06）**:
+
+| 実行形態 | 結果 |
+|---|---|
+| 並列（既定） | 5 回中 **1 回 FAIL**（`signal: 11, SIGSEGV`） |
+| `--test-threads=1` | 5 回中 **0 回 FAIL** |
+| `$TMPDIR` の残骸 | `orbit-rack-gain-81727-652.shm` が **1 個だけ**（4 fixture 分あるはずが 1 個 = パス共有の直接証拠） |
+
+単一スレッドで落ちないのは、c18 が同じ `it` 内で 2 回束縛する分については
+**truncate した後の古いマッピングに触らない**ため。落ちるのは**テスト間の並列衝突**である。
+
+**直し方の方向**: パスを**実際に一意**にする（production の `unique_shm_path()` と同じ
+`static AtomicU64` の連番 + PID。`outproc_effect.rs:318-325` / `outproc_instrument.rs:63-71`）。
+🔴 **`--test-threads=1` を既定にして回避しない** — 欠陥を隠すだけで、並列で走る環境では再発する。
 🔴 **収束条件は 10 回連続で緑**（間欠故障なので 1 回では閉じない・1 回約 40 秒）。
 
 #### なぜ #779 が先か
@@ -791,9 +821,10 @@ struct ActualFixture {
 
 🔴 **この順序には根拠がある。** #779 は 2026-09-06 の実測で **35,282 ファイル / TMPDIR 11 GB**
 に達しており、**#775 の「場所を変えて断続的に出る」性質の寄与要因**である可能性が高い。
-同日 `cargo test -p orbit-effect-rack-child --lib -- --ignored` が **SIGBUS** で落ちた
-（直後の 2 回は 3 passed で再現せず）のも、macOS の `$TMPDIR` 清掃が mmap 中のファイルを
-消したためと整合する。
+
+> 🔴 **訂正**: ここには当初「同日の `cargo test … -- --ignored` の SIGBUS も、macOS の `$TMPDIR`
+> 清掃が mmap 中のファイルを消したためと整合する」と書いていたが、**これも誤り**である。実際の
+> 原因はテスト自身のパス衝突（上記「#780 の原因」）で、**#779 とは独立**している。
 
 **#779 を先に直せば #775 が自然に消える可能性があり、消えなければ本当に許容値の問題**だと
 切り分けられる。逆順だと、許容値を動かした理由が「環境が汚れていたから」なのか
@@ -804,19 +835,21 @@ struct ActualFixture {
 **バッファ数から導出**する形にし、導出の根拠を書く。「定規を測定値に合わせる」ことはしない。
 
 **E-gate に含める（#780・2026-09-06 追加）**: `c18_real_gain_obeys_the_decibel_contract`
-（`orbit-effect-rack-child/src/tests.rs:759`）が **SIGBUS（`KERN_PROTECTION_FAILURE`）** で
-間欠的に落ちる。クラッシュレポート 2 件の実スタックはどちらも
-`AudioChain::process_block` → `AtomicUsize::store`。テストが shm 領域の生ポインタから
-`active_stage_index` の参照を作って渡しており、**その領域が書き込み可能にマップされていない**。
+（`orbit-effect-rack-child/src/tests.rs:759`）が **SIGBUS / SIGSEGV** で間欠的に落ちる。
+原因は上記のとおり、**fixture の shm パスが 4 つの呼び出しで共有されており、`create_shared` の
+`truncate(true)` が他のテストの生きたマッピングを切り詰める**こと。
 
 🔴 **この 2 行は CLAUDE.md が「条件分岐を付けない」と明記した無条件ゲート**なので、
 間欠的に落ちると (i) 毎回「自分の変更のせいか」を切り分けさせ (ii) 慣れると無視される。
 **順序は #779 の次・#775 の前**——環境の漏れを止めてから測定器の安定性を確定し、
 そのうえで U2 の許容を導出する。**収束条件は 10 回連続で緑**（間欠故障なので 1 回では閉じない）。
 
-⚠️ **原因を推測で書かないこと。** この件では 2 つの仮説（漏れた shm / `bundle-macos.sh` との
-競合）を立て、**どちらも実測で反証された**（全削除後も再発／対照実験で 3 passed）。
-決め手はクラッシュレポートの実スタックだった。
+⚠️ **原因を推測で書かないこと。** この件では仮説を **3 つ立てて 3 つとも外した**
+（①漏れた shm ②`bundle-macos.sh` との競合 ③fixture の move）。①②は実測で反証され
+（全削除後も再発／対照実験で 3 passed）、③は**コードを読んだだけで実測しなかった**ために
+設計文書に誤った原因として載り、**直っても直らない修正方向まで指示していた**。
+🔴 **決め手になったのは、クラッシュレポートの実スタックと、並列 / 単一スレッドの対照実験である。**
+読んで筋が通ることは、実測の代わりにならない。
 
 **E-gate に含める 3 本目**: `orbitstudio-mcp-gated.spec.ts` の `:1396` / `:1589` / `:1615` の
 **演算なしの厳密等価**（`toBe(attachFailedBefore)`）。窓内カウントの等価比較で #761 と同族だが、

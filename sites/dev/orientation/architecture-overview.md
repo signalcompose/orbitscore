@@ -501,7 +501,7 @@ daemon 本体だけでなく、後述の plugin child と標準プラグイン `
 daemon はプラグイン (CLAP / VST3) の実体を自分のプロセスに載せません。effect と instrument はそれぞれ別のバイナリを **out-of-process (OOP)** の子プロセスとして spawn し、共有メモリで音声をやり取りします。spawn され得る child の一覧は daemon crate の定数として 1 箇所に明示されています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:84-93
+// rust/crates/orbit-audio-daemon/src/lib.rs:86-95
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",
@@ -517,7 +517,7 @@ pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
 child バイナリは daemon 実行ファイルの **隣** から探します。インストールレイアウトの知識を daemon や TS に持たせず、「並べて置く」だけで配線が成立するようにしてあります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:450-458
+// rust/crates/orbit-audio-daemon/src/outproc_effect.rs:453-461
 /// daemon 実行ファイルと同一ディレクトリの format 対応 child を既定パスとする
 /// （spike の sibling-of-exe を踏襲・設計 §4.5）。インストール時は daemon と child が並んで置かれる前提。
 fn default_rack_child_exe() -> Result<PathBuf, String> {
@@ -685,8 +685,8 @@ export const DSL_VERSION = '1.1'
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:869-997` — `spawnDaemon()`: stderr ルーティングと ready line 読み取り
 - `packages/engine/src/audio/rust-engine/index.ts:1-8` — protocol v0.1、cutover #108 の注記
 - `packages/engine/src/version.ts:14-17` — `ENGINE_VERSION` / `DSL_VERSION`
-- `rust/crates/orbit-audio-daemon/src/lib.rs:84-93` — `SPAWNABLE_CHILD_BINARIES`
-- `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:450-458` — sibling-of-exe による child 解決
+- `rust/crates/orbit-audio-daemon/src/lib.rs:86-95` — `SPAWNABLE_CHILD_BINARIES`
+- `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:453-461` — sibling-of-exe による child 解決
 - `scripts/copy-daemon-bin.sh:1-47,121-132` — daemon / child / 標準プラグインの同梱方針
 - `package.json:9-11` — `build:copy-engine` が `copy-daemon-bin.sh` を呼ぶ
 - `docs/research/ENGINE_DAEMON_PROTOCOL.md` — wire protocol の正本

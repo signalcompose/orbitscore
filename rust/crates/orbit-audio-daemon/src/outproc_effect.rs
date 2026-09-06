@@ -321,7 +321,10 @@ static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
 pub fn unique_shm_path() -> PathBuf {
     let seq = SHM_SEQ.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
-    std::env::temp_dir().join(format!("orbit-outproc-effect-{pid}-{seq}.shm"))
+    std::env::temp_dir().join(format!(
+        "{}effect-{pid}-{seq}.shm",
+        crate::outproc_shm_sweep::OUTPROC_SHM_PREFIX
+    ))
 }
 
 /// OOP effect child が host する plugin format。transport/watchdog/respawn は format 非依存。

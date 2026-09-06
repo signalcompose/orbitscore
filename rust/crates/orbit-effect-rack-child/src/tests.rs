@@ -644,13 +644,19 @@ struct ActualFixture {
 }
 
 #[cfg(target_os = "macos")]
+static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(target_os = "macos")]
+fn actual_fixture_path(label: &str) -> PathBuf {
+    let seq = SHM_SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    std::env::temp_dir().join(format!("orbit-rack-{label}-{pid}-{seq}.shm"))
+}
+
+#[cfg(target_os = "macos")]
 impl ActualFixture {
     fn new(label: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "orbit-rack-{label}-{}-{}.shm",
-            std::process::id(),
-            line!()
-        ));
+        let path = actual_fixture_path(label);
         let mmap = orbit_audio_sandbox::create_shared(&path).expect("create rack shm");
         let region = orbit_audio_sandbox::region_ptr(&mmap);
         Self {
@@ -659,6 +665,14 @@ impl ActualFixture {
             region,
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn actual_fixtures_use_distinct_shm_paths() {
+    let first = ActualFixture::new("gain");
+    let second = ActualFixture::new("gain");
+    assert_ne!(first.path, second.path);
 }
 
 #[cfg(target_os = "macos")]

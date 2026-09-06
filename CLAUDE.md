@@ -299,7 +299,7 @@ Codex は sandbox で **daemon protocol（localhost bind）・MCP 系・実機 E
 
 | 単位 | ゲート |
 |---|---|
-| 小 PR（base = 束の統合ブランチ・draft） | CI（unit / lint / cargo）+ **その PR が足した E2E だけを実機で**（`ORBIT_GATED_ONLY`）+ main が差分を読む。レビューチーム・Fable・bot は呼ばない |
+| 小 PR（base = 束の統合ブランチ・draft） | CI（unit / lint / cargo）+ **その PR が足した E2E だけを実機で**（`ORBIT_GATED_ORBITSTUDIO=1` + vitest の `-t` で名前を絞る。🔴 `ORBIT_GATED_ONLY` は doc 668 の決定 **D-4 で「入れる」と確定しているが未実装**・2026-09-06 実測。🔴 **`-t` が効くのは自前でアプリを起動する自己完結テストだけ**で、gated suite 本体は先頭の 1 本が作った状態に依存するため絞ると落ちる — その場合は全件回す）+ main が差分を読む。レビューチーム・Fable・bot は呼ばない |
 | 束 PR（統合ブランチ → main） | 下の 1〜8 をすべて + マージ前ゲート（ビルド + 実機 E2E 全件）。監査には設計文書と束の差分を渡す |
 | main 直行 PR | 仕様だけの PR（advisor 相談の軽いレビュー）と must-fix（従来どおり 1〜8）。束をまたぐ PR も単独 |
 
@@ -661,9 +661,15 @@ npm run build          # engine/daemon に変更があれば npm run build:clean
 # 🔴 同梱の標準プラグインが実機で鳴ることを確かめる（owner 判断 2026-08-28・#628）
 bash rust/crates/orbit-std-gain/bundle-macos.sh
 cargo test --manifest-path rust/Cargo.toml -p orbit-effect-rack-child --lib -- --ignored
+
+# 🔴 上の `-- --ignored` は #[ignore] を付けた 3 件（実 gain プラグイン依存）**しか** 走らせない。
+# 退行検知テスト（#780 の `actual_fixtures_use_distinct_shm_paths` 等）は #[ignore] していない
+# ので `--ignored` 付きだと `0 passed; 19 filtered out` で**実行されずに緑を装う**
+# （main が実測済み・2026-09-07）。`--ignored` を外した通常実行で拾う。
+cargo test --manifest-path rust/Cargo.toml -p orbit-effect-rack-child --lib
 ```
 
-**この 2 行は無条件で回す。**「rust を触った PR のみ」のような**条件分岐を付けない** —
+**この 3 行は無条件で回す。**「rust を触った PR のみ」のような**条件分岐を付けない** —
 条件付きの手動手順は飛ばされるのがこの repo の実測クラス（列挙が一段手前で止まる型）で、
 無条件 19〜67 秒の方が条件判定の認知コストより安い。
 

@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: f2dadd9
-verified-at: "2026-09-05"
+verified-against: b513659
+verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-1. Daemon Architecture Overview
 
@@ -26,10 +26,12 @@ On startup, the daemon claims an audio device, binds a WebSocket listener to a f
 port, and writes that port number to stdout as a single line of JSON. The TS side reads this
 line to connect. Let us look at `run()`. Compared with the 2026-07-17 version, the CLI handling for
 `--list-audio-devices` / `--audio-device` (#484 D1 / D3) was added at the top, and engine startup
-is delegated to a dedicated thread.
+is delegated to a dedicated thread. On 2026-09-06 a further stage (0.5) was added that reclaims
+shared memory left behind by dead daemons **before the first shm is created** (#779); that ordering
+is what makes the "delete leftovers carrying my own PID" rule sound.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:78-133
+// rust/crates/orbit-audio-daemon/src/main.rs:78-136
 async fn run() -> Result<(), i32> {
     // -1. `--list-audio-devices`（#484 D3）: cpal 列挙のみ行い stdout に JSON 一覧を出して即 exit
     // する軽量モード。stream は開かない（ハングリスクを避ける・上の `resolve_output_device` の
@@ -42,6 +44,9 @@ async fn run() -> Result<(), i32> {
     // 0. CLI と gated fault env を一度だけ typed options に解決する。device 名を process-global env
     // へ書き戻さないため、並行する owner thread も同じ immutable 値を受け取る。
     let startup_options = StartupOptions::from_env();
+
+    // 0.5. この daemon が最初の shm を作る前に、死亡した旧 daemon の shm を回収する。
+    orbit_audio_daemon::outproc_shm_sweep::sweep_orphaned_outproc_shm();
 
     // 1. Engine を起動（audio device 取得）。ランタイム device switch（#484 D2）に備え、実際の
     // `EngineWrap::start()` 呼び出しと `StreamGuard` の生存管理を専用 OS thread（"audio owner
@@ -99,7 +104,7 @@ dedicated OS thread (the "audio owner thread"), which owns the `StreamGuard` for
 `mpsc` channel — #484 D2).
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/main.rs:149-160
+// rust/crates/orbit-audio-daemon/src/main.rs:152-163
 /// ランタイム device switch（#484 D2）: `EngineWrap::start()`（cpal I/O・`cpal::Stream` は `!Send`）を
 /// 専用 OS thread（"audio owner thread"）上で実行し、その thread に `StreamGuard` を生涯所有させる。
 /// 呼び出し元（`run()`・tokio 上の async fn）は `Arc<EngineWrap>`（`Send + Sync`）だけを受け取る。
@@ -383,6 +388,12 @@ out-of-process children) never run, and the child processes can be orphaned.
 The primary defense against this daemon-side shutdown gap lives on the child side
 (`ParentWatch`, which lets a child detect its parent's death on its own) — covered in the
 [RE-2](/en/rust-engine/oop-children) chapter.
+
+Processes are not the only thing left orphaned. When `Drop` does not run, neither does the removal
+of the shm file, so the shared memory used for out-of-process children stays behind in `$TMPDIR`.
+Stage 0.5 above is what reclaims it at startup (#779); the decision rules, and why the count does
+not converge on zero, are covered in the "Reclaiming orphaned shm at startup" section of
+[RE-2](/en/rust-engine/oop-children).
 
 Incidentally, the panic hook itself was rewritten in #605. If stderr is broken, an `eprintln!`
 inside the hook panics again, the recursion detector calls `process::abort()`, and the client
@@ -883,6 +894,8 @@ i.e. two independent measurement paths agreeing at the same tap point). These fi
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — engine-first roadmap and architecture decision (instruments = in-process / effects + 3rd-party = out-of-process sandbox)
 - [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 / 6.262 — capture peak measurements
 - [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 — the master fader defect (#643)
+- `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:134-163` — `sweep_orphaned_outproc_shm` (the thin shell stage 0.5 calls, plus its one-line `tracing::info!` summary)
 - Issue [#448](https://github.com/signalcompose/orbitscore/issues/448) — daemon graceful-shutdown gap and the `ParentWatch` countermeasure
+- Issue [#779](https://github.com/signalcompose/orbitscore/issues/779) / PR [#784](https://github.com/signalcompose/orbitscore/pull/784) — reclaiming orphaned shm at startup (stage 0.5)
 - Issue [#484](https://github.com/signalcompose/orbitscore/issues/484) — audio device enumeration, selection and runtime switching (D1 / D2 / D3)
 - Issue [#605](https://github.com/signalcompose/orbitscore/issues/605) — best-effort stderr in the panic hook

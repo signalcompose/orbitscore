@@ -1,12 +1,12 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: d2e94af
+verified-against: 0bb337b
 verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -775,7 +775,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 先頭テストの最後の assert は、この onset 間隔をテンポの証拠に使います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1752-1766
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1785-1799
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -987,7 +987,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 ### アサーション衛生
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:239-248
+// tests/e2e/gated-assertion-hygiene.spec.ts:553-562
   it('never asserts on a bare ERROR count equality', () => {
     // `get_log` は固定 500 行窓なので、ERROR 件数の**厳密等価**は窓の外へ流れた瞬間に
     // 嘘になる（#625）。`<=` / `toBeLessThanOrEqual` を使うこと。
@@ -1002,10 +1002,14 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 
 ほかにも、「capture を使う spec に `rms(` / `peak(` / `.rms` のアサーションが実在するか」、stale ガードの両方向、固定窓ログ由来 baseline の算術比較などを検査します。走査器自体が黙って無効化されないよう、複数行の違反、コメント、clean 入力、行番号を固定する positive self-test も持ちます。書いた直後に実在の違反を 1 件検出した（`.toBe(errorCountBeforeMixer)` を `<=` へ修正）と 6.418 は記録しています。
 
-後半 2 本は**片方向ずつ**を留めるペアになっています。前者だけなら「除外を消す」退行を捕まえられますが、後者が無いと「行きすぎて `src` まで除外する」方向は素通りします。ガードの目的（古いバイナリで測らない）は `src` を見ていることに依存するので、両方向を留めて初めて線引きが固定されます。
+2026-09-06 に 3 本目が加わりました（#785）。上の 1 本目は検出条件が**識別子の名前**（`/(?:errorsBefore|errorCount|catalogErrors)/i`）なので、`stoppedBeforeRejectedSave` や `attachFailuresBeforeRoleMismatch` のような別名は素通りしていました。**名前は書き手が自由に付けられるので、名前で条件付ける限り必ず漏れます。** 3 本目は名前を見ず、**値の出どころ**を AST で辿ります — 「`get_log` の戻り値に由来する文字列」→「それに対する `.match(...).length`」→「`toBe` / `toEqual` で比較」という連鎖を、変数を経由していてもインラインでも拾います。実際にこれで実機 spec の 4 箇所が見つかり、すべて `newLogLines` の行差分へ移りました。うち 1 箇所は `.toBe(0)` で、他の 3 つとは**崩れる向きが逆**でした — 窓から流れ出る効果はカウントを減らす方向にしか働かないので、`toBe(0)` は偽赤ではなく**偽緑**を生みます。
+
+この追跡は当初、**1 本の式の連鎖の中で閉じて**いました。件数を**ローカルのヘルパー関数の中で**作る形（`countAttachFailures(...)` → `.toBe(...)`。`.match(...).length` はラッパーの中にある）は、名前によらず素通りしていたのです。この穴は 2026-09-07 に**ルーティンの docs 追従と束 PR の設計監査が独立に**見つけ、[#789](https://github.com/signalcompose/orbitscore/pull/789) で塞ぎました — 「形」の列挙（名前 → 算術 → `.match().length` → import した helper → ローカルラッパー）をやめ、**「log 由来の値を受けて件数を返す関数」を一般に解決**する形へ変え、ラッパーがラッパーを包む場合に届くよう**集合が増えなくなるまで反復**します。残っていた 2 箇所も同時に移行しました。🔴 **教訓は 3 度目です**: #761 は「名前で条件付けると漏れる」、#785 は「名前でなく値の出どころを見る」、そして今回は「**出どころを 1 式の中でしか見ていないと漏れる**」。手がかりを一段上げるたびに、その手がかりが**視野そのものを決めている**ことが露呈しました。
+
+stale ガードの 2 本（`keeps the stale guard off cargo targets it can never rebuild` と `still lets the stale guard see the sources the daemon is built from`）は**片方向ずつ**を留めるペアになっています。前者だけなら「除外を消す」退行を捕まえられますが、後者が無いと「行きすぎて `src` まで除外する」方向は素通りします。ガードの目的（古いバイナリで測らない）は `src` を見ていることに依存するので、両方向を留めて初めて線引きが固定されます。
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:339-343
+// tests/e2e/gated-assertion-hygiene.spec.ts:681-685
     expect(
       /entry\.name === 'src'/.test(source),
       'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +
@@ -1013,7 +1017,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
     ).toBe(false)
 ```
 
-ただし 5 本すべてが gated spec の**ソース文字列**を走査するだけなので、保証するのは「そう書いてある」ことまでです。ガード本体の `assertDaemonBinaryIsNotStale()` は `gated && appAvailable` のときだけ呼ばれるので、通常の `npm test` では 1 行も実行されません。この節の検査は「実行された振る舞い」ではなく「書かれた形」を留めるもの、という位置づけで読むのが正確です。
+ただし `describe('gated E2E assertion hygiene')` の 8 本すべてが gated spec の**ソースを静的に読むだけ**（多くは文字列走査、#761 と #785 の 2 本は AST の走査）なので、保証するのは「そう書いてある」ことまでです。ガード本体の `assertDaemonBinaryIsNotStale()` は `gated && appAvailable` のときだけ呼ばれるので、通常の `npm test` では 1 行も実行されません。この節の検査は「実行された振る舞い」ではなく「書かれた形」を留めるもの、という位置づけで読むのが正確です。
 
 ちなみにコメントの「固定 500 行窓」は `#567` で 1000 行に拡張される前の数字ですが、有限窓であることに変わりはないので規律そのものは有効です。
 
@@ -1229,7 +1233,7 @@ function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2414-2424
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2447-2457
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1244,13 +1248,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2427-2428
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2460-2461
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2484-2486
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2517-2519
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

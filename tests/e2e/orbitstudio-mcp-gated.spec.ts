@@ -39,7 +39,7 @@
  * killing the user's actual VS Code is a known past incident.
  */
 
-import { spawn, execFileSync, type ChildProcess } from 'child_process'
+import { spawn, spawnSync, execFileSync, type ChildProcess } from 'child_process'
 import { randomUUID } from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -1372,10 +1372,22 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         await sleep(12_000) // three real child spawns + READY handshakes
 
         const afterFourFormAttachLog = (await client.call('get_log', { lines: 500 })).text
+        // #785: bare `.toBe(0)` on a window-scoped match count is a false green — a
+        // real attach failure that scrolls out of the fixed 500-line window would still
+        // read as 0. `afterFirstInstrumentLog` is a valid "before" snapshot for this
+        // check: nothing between capturing it and here can have logged an attach
+        // failure (the `if`/`else` above only branches on it), and the guard above
+        // already proves it contains zero `[OUTPROC_ATTACH_FAILED]` lines.
+        const newAttachFailedAfterFourFormAttach = newLogLines(
+          afterFirstInstrumentLog,
+          afterFourFormAttachLog,
+        ).filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]'))
         expect(
-          (afterFourFormAttachLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? []).length,
-          `all four #562 plugin forms must be live. Log tail: ${afterFourFormAttachLog.slice(-1200)}`,
-        ).toBe(0)
+          newAttachFailedAfterFourFormAttach,
+          `all four #562 plugin forms must be live. New attach-failed lines: ` +
+            `${JSON.stringify(newAttachFailedAfterFourFormAttach)}. ` +
+            `Log tail: ${afterFourFormAttachLog.slice(-1200)}`,
+        ).toEqual([])
 
         // Playing requests are rejected at the MCP boundary and must not stop
         // transport as a side effect. Count the engine's own stop marker before
@@ -1391,10 +1403,19 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         expect(rejectedWhilePlaying.text).toContain('transport is running')
         await sleep(500)
         const afterRejectedSaveLog = (await client.call('get_log', { lines: 500 })).text
+        // #785: was `.toBe(stoppedBeforeRejectedSave)` — a window-scoped strict-equality
+        // count comparison, which is a false red the moment an unrelated stop marker
+        // scrolls out of the fixed 500-line window between the two snapshots.
+        const newStopLinesAfterRejectedSave = newLogLines(
+          afterFourFormAttachLog,
+          afterRejectedSaveLog,
+        ).filter((line) => /(?:✅ Global stopped|⏹ Global)/.test(line))
         expect(
-          (afterRejectedSaveLog.match(/(?:✅ Global stopped|⏹ Global)/g) ?? []).length,
-          `save rejection must not auto-stop transport. Log tail: ${afterRejectedSaveLog.slice(-800)}`,
-        ).toBe(stoppedBeforeRejectedSave)
+          newStopLinesAfterRejectedSave,
+          `save rejection must not auto-stop transport. New stop lines: ` +
+            `${JSON.stringify(newStopLinesAfterRejectedSave)}. ` +
+            `Log tail: ${afterRejectedSaveLog.slice(-800)}`,
+        ).toEqual([])
 
         // evaluate_orbitscore normally refreshes the workspace directory. Set
         // the scratch project directory last in this same evaluation so
@@ -1571,10 +1592,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // before the daemon sees a replacement request. Pin both the loud error
         // and the absence of a new attach failure; daemon rollback remains covered
         // by the path-direct nonexistent-plugin scenarios below and in #618 E4.
-        const attachFailuresBeforeRoleMismatch = (
-          (await client.call('get_log', { lines: 500 })).text.match(/\[OUTPROC_ATTACH_FAILED\]/g) ??
-          []
-        ).length
+        //
+        // #785: was a window-scoped strict-equality count (`.toBe(attachFailuresBeforeRoleMismatch)`).
+        // Keep the actual "before" log text (not just its match count) so the check can
+        // say WHICH lines appeared via newLogLines instead of comparing counts that a
+        // scrolled-out old line can silently change.
+        const beforeRoleMismatchLog = (await client.call('get_log', { lines: 500 })).text
         const secondInstrumentRes = await client.call('evaluate_orbitscore', {
           code: `instSeq.instrument(${JSON.stringify(catalog.clapEffectName)})`,
         })
@@ -1584,18 +1607,25 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         )
 
         const afterSecondInstrumentLog = (await client.call('get_log', { lines: 500 })).text
+        const newAttachFailedAfterRoleMismatch = newLogLines(
+          beforeRoleMismatchLog,
+          afterSecondInstrumentLog,
+        ).filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]'))
         expect(
-          (afterSecondInstrumentLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? []).length,
-          `catalog role rejection must not reach daemon attach. Log tail: ${afterSecondInstrumentLog.slice(-800)}`,
-        ).toBe(attachFailuresBeforeRoleMismatch)
+          newAttachFailedAfterRoleMismatch,
+          `catalog role rejection must not reach daemon attach. New attach-failed lines: ` +
+            `${JSON.stringify(newAttachFailedAfterRoleMismatch)}. ` +
+            `Log tail: ${afterSecondInstrumentLog.slice(-800)}`,
+        ).toEqual([])
         expect(afterSecondInstrumentLog).not.toContain('restart the engine to change the plugin')
 
         // ── #540 P1 (b): 別シーケンスは自分の独立インスタンスを持てる（旧「エンジン
         // 全体で1台」制限の撤去がこの PR の表面）。同じ synth をもう1台 attach し、
         // 新規の attach 失敗が**増えない**ことを確認する。
-        const attachFailuresBeforeSecondSeq = (
-          afterSecondInstrumentLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? []
-        ).length
+        //
+        // #785: was `.toBe(attachFailuresBeforeSecondSeq)` — same window-scoped count
+        // comparison. `afterSecondInstrumentLog` above is already the right "before"
+        // snapshot for this step.
         const declareInstSeq2Res = await client.call('evaluate_orbitscore', {
           code: 'var instSeq2 = init global.seq',
         })
@@ -1607,13 +1637,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         await sleep(6000) // 2台目の実 out-of-process attach（spawn + IPC handshake）
 
         const afterSecondSeqLog = (await client.call('get_log', { lines: 500 })).text
-        const attachFailuresAfterSecondSeq = (
-          afterSecondSeqLog.match(/\[OUTPROC_ATTACH_FAILED\]/g) ?? []
-        ).length
+        const newAttachFailedAfterSecondSeq = newLogLines(
+          afterSecondInstrumentLog,
+          afterSecondSeqLog,
+        ).filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]'))
         expect(
-          attachFailuresAfterSecondSeq,
-          `second sequence's own instrument must attach (no new OUTPROC_ATTACH_FAILED). Log tail: ${afterSecondSeqLog.slice(-800)}`,
-        ).toBe(attachFailuresBeforeSecondSeq)
+          newAttachFailedAfterSecondSeq,
+          `second sequence's own instrument must attach (no new OUTPROC_ATTACH_FAILED). ` +
+            `New attach-failed lines: ${JSON.stringify(newAttachFailedAfterSecondSeq)}. ` +
+            `Log tail: ${afterSecondSeqLog.slice(-800)}`,
+        ).toEqual([])
         expect(
           afterSecondSeqLog,
           `second sequence must NOT hit the same-sequence duplicate rejection. Log tail: ${afterSecondSeqLog.slice(-800)}`,
@@ -2527,8 +2560,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
 
       const shiftedWav = captureWavPath(root, 'shifted')
       const restoredWav = captureWavPath(root, 'restored')
-      const countAttachFailures = (log: string): number =>
-        countLogMarker(log, /\[OUTPROC_ATTACH_FAILED\]/g)
       const countGlobalStops = (log: string): number =>
         countLogMarker(log, /(?:✅ Global stopped|⏹ Global)/g)
 
@@ -2553,9 +2584,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         ].join('\n'),
       })
       expect(initShifted.isError, initShifted.text).toBe(false)
-      const attachFailuresBeforeShifted = countAttachFailures(
-        (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
-      )
+      const beforeShiftedAttachLog = (
+        await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })
+      ).text
       const attachShifted = await activeClient.call('evaluate_orbitscore', {
         code: `stSeq.instrument(${JSON.stringify(catalog.clapSynthName)}, ${JSON.stringify(handStatePath)})`,
       })
@@ -2564,10 +2595,20 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const afterShiftedAttachLog = (
         await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })
       ).text
+      // #789: was `countAttachFailures(afterShiftedAttachLog).toBe(attachFailuresBeforeShifted)`
+      // — a window-scoped strict-equality count via a local wrapper around
+      // countLogMarker, which is exactly the shape #785 fixed elsewhere but this wrapper
+      // hid from the name-based provenance ratchet. Keep the actual "before" log text so
+      // the check can say WHICH lines appeared via newLogLines.
+      const newAttachFailedAfterShifted = newLogLines(
+        beforeShiftedAttachLog,
+        afterShiftedAttachLog,
+      ).filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]'))
       expect(
-        countAttachFailures(afterShiftedAttachLog),
-        `Cycle A instrument attach must add no OUTPROC_ATTACH_FAILED. Log tail: ${afterShiftedAttachLog.slice(-1200)}`,
-      ).toBe(attachFailuresBeforeShifted)
+        newAttachFailedAfterShifted,
+        `Cycle A instrument attach must add no OUTPROC_ATTACH_FAILED. New attach-failed lines: ` +
+          `${JSON.stringify(newAttachFailedAfterShifted)}. Log tail: ${afterShiftedAttachLog.slice(-1200)}`,
+      ).toEqual([])
 
       const playShifted = await activeClient.call('evaluate_orbitscore', {
         code: ['stSeq.play(1)', 'RUN(stSeq)'].join('\n'),
@@ -2642,9 +2683,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         ].join('\n'),
       })
       expect(initRestored.isError, initRestored.text).toBe(false)
-      const attachFailuresBeforeRestored = countAttachFailures(
-        (await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })).text,
-      )
+      const beforeRestoredAttachLog = (
+        await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })
+      ).text
       const attachRestored = await activeClient.call('evaluate_orbitscore', {
         code: `stSeq.instrument(${JSON.stringify(catalog.clapSynthName)})`,
       })
@@ -2653,10 +2694,17 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const afterRestoredAttachLog = (
         await activeClient.call('get_log', { lines: RESTORE_LOG_LINES })
       ).text
+      // #789: was `countAttachFailures(afterRestoredAttachLog).toBe(attachFailuresBeforeRestored)`
+      // — same window-scoped strict-equality count via the local wrapper (#785).
+      const newAttachFailedAfterRestored = newLogLines(
+        beforeRestoredAttachLog,
+        afterRestoredAttachLog,
+      ).filter((line) => line.includes('[OUTPROC_ATTACH_FAILED]'))
       expect(
-        countAttachFailures(afterRestoredAttachLog),
-        `Cycle B instrument attach must add no OUTPROC_ATTACH_FAILED. Log tail: ${afterRestoredAttachLog.slice(-1200)}`,
-      ).toBe(attachFailuresBeforeRestored)
+        newAttachFailedAfterRestored,
+        `Cycle B instrument attach must add no OUTPROC_ATTACH_FAILED. New attach-failed lines: ` +
+          `${JSON.stringify(newAttachFailedAfterRestored)}. Log tail: ${afterRestoredAttachLog.slice(-1200)}`,
+      ).toEqual([])
       expect(
         afterRestoredAttachLog,
         `Cycle B must surface the automatic project-state restore. Log tail: ${afterRestoredAttachLog.slice(-1200)}`,
@@ -5389,6 +5437,79 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           process.kill(daemonPid, 'SIGTERM')
         }
         await session.client.call('stop_engine')
+      }
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#779 startup sweep unlinks orphaned outproc shm but keeps live ones',
+    async () => {
+      const launched = await launchIsolatedOrbitStudio({
+        tmpPrefix: 'orbitstudio-shm-sweep-',
+        settings: {
+          'orbitscore.audioDevice': '__default__',
+          'orbitscore.engineDebug': false,
+        },
+        env: { ...process.env },
+        portBase: 39700,
+      })
+      const { child: sweepApp, client: sweepClient, tmpRoot: sweepTmpRoot } = launched
+      const planted: string[] = []
+      try {
+        await sweepClient.call('stop_engine')
+        await waitForEngineState(sweepClient, false, 15_000, '#779 precondition')
+
+        const reaped = spawnSync('true')
+        expect(
+          reaped.status,
+          `dead-PID fixture process must exit successfully. spawn error: ${String(reaped.error)}`,
+        ).toBe(0)
+        expect(reaped.pid, 'dead-PID fixture must expose its PID').toBeGreaterThan(0)
+        const deadShm = path.join(os.tmpdir(), `orbit-outproc-effect-${reaped.pid}-0.shm`)
+        const deadSidecar = `${deadShm}.chain.json`
+        const liveShm = path.join(os.tmpdir(), `orbit-outproc-instrument-${process.pid}-999.shm`)
+        planted.push(deadShm, deadSidecar, liveShm)
+        const old = new Date(Date.now() - 60_000)
+        for (const file of planted) {
+          fs.writeFileSync(file, 'sweep fixture')
+          fs.utimesSync(file, old, old)
+        }
+
+        const errorsBefore = countErrors((await sweepClient.call('get_log', { lines: 500 })).text)
+        const started = await sweepClient.call('start_engine')
+        expect(started.isError, started.text).toBe(false)
+        await waitForEngineState(sweepClient, true, 15_000, '#779 swept engine')
+
+        expect(fs.existsSync(deadShm), 'dead PID shm must be swept').toBe(false)
+        expect(fs.existsSync(deadSidecar), 'dead PID sidecar must be swept').toBe(false)
+        expect(fs.existsSync(liveShm), 'live PID shm must be preserved').toBe(true)
+        // 🔴 sweep の要約行 (`[outproc-shm-sweep] ...`) はここでは検証できない。
+        // daemon-client は ready 行が来るまで daemon の stderr を `stderrChunks` へ
+        // **溜めるだけで転送しない**（`daemon-client.ts:891-910`）。転送が始まるのは
+        // `collecting = false` の後で、蓄積分が表に出るのは**起動が失敗した時だけ**
+        // （`:946` 以降のエラー経路）。sweep は最初の shm 生成より前＝ready 行より前に
+        // 走るので、起動が成功する限りその INFO 行は `get_log` に現れない。
+        // これは欠陥ではなく設計どおりだが、「掃除が遅すぎて ready に間に合わない」という
+        // 肝心の場合でも `DaemonStartupError` の診断としては観測**できない**: `.stderr`
+        // プロパティは `errors.ts:21` で代入されるだけで、それを読む箇所はリポジトリに
+        // 存在しない（`.message` にも埋め込まれない）。sweep の要約は成功・失敗いずれの
+        // 場合でも `get_log` には現れない。
+        // したがって**このテストのオラクルはファイルシステム**（上の 3 つ）であり、
+        // ログは ERROR が増えていないことの確認にだけ使う。
+        const log = (await sweepClient.call('get_log', { lines: 500 })).text
+        expect(countErrors(log), 'startup sweep must not add ERROR lines').toBeLessThanOrEqual(
+          errorsBefore,
+        )
+      } finally {
+        for (const file of planted) fs.rmSync(file, { force: true })
+        try {
+          await sweepClient.call('stop_engine')
+        } catch {
+          // best-effort cleanup
+        }
+        if (!sweepApp.killed) sweepApp.kill()
+        fs.rmSync(sweepTmpRoot, { recursive: true, force: true })
       }
     },
     TEST_TIMEOUT_MS,

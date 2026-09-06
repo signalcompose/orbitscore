@@ -88,6 +88,9 @@ async fn run() -> Result<(), i32> {
     // へ書き戻さないため、並行する owner thread も同じ immutable 値を受け取る。
     let startup_options = StartupOptions::from_env();
 
+    // 0.5. この daemon が最初の shm を作る前に、死亡した旧 daemon の shm を回収する。
+    orbit_audio_daemon::outproc_shm_sweep::sweep_orphaned_outproc_shm();
+
     // 1. Engine を起動（audio device 取得）。ランタイム device switch（#484 D2）に備え、実際の
     // `EngineWrap::start()` 呼び出しと `StreamGuard` の生存管理を専用 OS thread（"audio owner
     // thread"）へ委譲する — `cpal::Stream` は `!Send` なので、以降 tokio worker 間を自由に飛び回る

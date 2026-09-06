@@ -1,7 +1,7 @@
 ---
 title: "RE-2. OOP Children and the Shared-Memory Transport"
 chapter-id: "RE-2"
-verified-against: f5d2ef5
+verified-against: b513659
 verified-at: "2026-09-06"
 status: draft
 ---
@@ -14,8 +14,9 @@ The daemon we saw in [RE-1](/en/rust-engine/) does not host any 3rd-party plugin
 implementation in its own process. Instruments (sampler / audio DSL) are in-process, but effects
 and 3rd-party plugins are split off as out-of-process (OOP) sandbox child processes. This chapter
 covers why that split exists, the list of child binaries, how the shared-memory (shm) transport
-in the `orbit-audio-sandbox` crate works, the READY handshake, watchdog/respawn behavior, and
-parent-liveness monitoring (`ParentWatch`). The plugin-hosting DSL surface (`global.effect()` /
+in the `orbit-audio-sandbox` crate works, the READY handshake, watchdog/respawn behavior,
+parent-liveness monitoring (`ParentWatch`), and the startup sweep that reclaims orphaned shm
+files (#779). The plugin-hosting DSL surface (`global.effect()` /
 `seq.instrument()`) and the child-binary selection logic (`child_exe_for_attach`) belong to the
 [PH-1](/en/plugin-hosting/) chapter, and the plugin UI window wiring to
 [PH-2](/en/plugin-hosting/plugin-ui); this chapter focuses on the **shared substrate** both
@@ -49,7 +50,7 @@ The child binaries the daemon may spawn are spelled out in `orbit-audio-daemon`'
 truth is kept in one place.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:84-93
+// rust/crates/orbit-audio-daemon/src/lib.rs:86-95
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",
@@ -306,7 +307,7 @@ const MAX_CONSECUTIVE_FAST_RESPAWNS: u32 = 5;
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:662-687
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:663-688
                             if consecutive_fast_fails >= MAX_CONSECUTIVE_FAST_RESPAWNS {
                                 tracing::error!(
                                     plugin = ?plugin,
@@ -352,7 +353,7 @@ one, the control thread asks "discard every remaining event in the ring", and th
 acks only after it has emptied it.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:310-317
+// rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:311-318
 pub struct SlotSignals {
     pub teardown_requested: Arc<AtomicBool>,
     pub teardown_done: Arc<AtomicBool>,
@@ -548,25 +549,152 @@ and carry no `#[ignore]` tag. They run with feature flags:
 `--features outproc-effect` for the effect side, and `--features outproc-effect,outproc-instrument`
 for both roles.
 
+## Reclaiming orphaned shm at startup (#779)
+
+`ParentWatch` only covers "when the parent dies, the child leaves on its own" — **the files stay
+behind**. The `remove_file` at the end of `SandboxChildGuard::drop` above assumes the daemon dies
+by way of `Drop`, so when it dies from SIGTERM, SIGKILL or a panic the shm files remain in
+`$TMPDIR`. And as the `main.rs:21-30` comment quoted in [RE-1](/en/rust-engine/) points out, the
+client's ordinary stop path (`killChildGracefully`) also sends SIGTERM, so this is not only a
+crash-time story.
+
+That is why a stage was added on the daemon side that reclaims the previous generation's leftovers
+at startup (#779). At its center is a predicate that answers "is this PID still alive?" with
+**three** values.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:20-36
+pub fn probe_pid_liveness(pid: u32) -> PidLiveness {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return PidLiveness::Unknown;
+    };
+    if pid < 1 {
+        return PidLiveness::Unknown;
+    }
+
+    // SAFETY: signal 0 does not deliver a signal; it only asks the kernel to validate the PID.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        PidLiveness::Alive
+    } else if std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+        PidLiveness::Dead
+    } else {
+        PidLiveness::Unknown
+    }
+}
+```
+
+Not making this a `bool` is the point. Besides success (alive) and `ESRCH` (no such PID),
+`kill(pid, 0)` can also return things like `EPERM` (the process exists but we lack permission),
+and folding those into the "dead" side would **delete the shm of a living daemon**. The third arm,
+`Unknown`, is the escape hatch for exactly that.
+
+The conditions that lead all the way to deletion are gathered near the end of the scan loop.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:121-145
+        let old_enough = now.duration_since(modified).is_ok_and(|age| age >= min_age);
+        if !old_enough {
+            summary.kept_young += 1;
+            continue;
+        }
+
+        let disposition = if pid == self_pid {
+            PidLiveness::Dead
+        } else {
+            *liveness_by_pid.entry(pid).or_insert_with(|| liveness(pid))
+        };
+        match disposition {
+            PidLiveness::Dead => match fs::remove_file(entry.path()) {
+                Ok(()) => summary.removed += 1,
+                Err(error) => {
+                    tracing::debug!(
+                        "[outproc-shm-sweep] remove_file() failed for {}: {error}",
+                        entry.path().display()
+                    );
+                    summary.failed += 1;
+                }
+            },
+            PidLiveness::Alive => summary.kept_alive += 1,
+            PidLiveness::Unknown => summary.kept_unknown += 1,
+        }
+```
+
+There are three things to read here. First `kept_young` — a file whose mtime is younger than
+`MIN_ORPHAN_AGE` (2 seconds) is left untouched on this pass and deferred to the next startup. Next
+the line that treats `pid == self_pid` as `Dead` — if a file claiming our own PID already exists at
+startup, the reading is that it is a leftover from an earlier generation whose PID got reused. That
+rule only holds because the sweep runs **before we create our own first shm**, which is what makes
+the placement at stage 0.5 of `run()`, seen in [RE-1](/en/rust-engine/), a requirement rather than
+a preference. Finally, `Alive` and `Unknown` are both on the keep side.
+
+The side that extracts the PID from the file name shares the prefix constant
+`OUTPROC_SHM_PREFIX` with the side that creates it. Since `unique_shm_path()` in
+`outproc_effect.rs` / `outproc_instrument.rs` now `format!`s with that same constant, the naming
+rule no longer lives in two places.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:38-49
+pub fn parse_outproc_shm_name(name: &OsStr) -> Option<u32> {
+    let rest = name.to_str()?.strip_prefix(OUTPROC_SHM_PREFIX)?;
+    let (role, rest) = rest.split_once('-')?;
+    if role.is_empty() || !role.bytes().all(|byte| byte.is_ascii_lowercase()) {
+        return None;
+    }
+    let (pid, rest) = rest.split_once('-')?;
+    let pid = pid.parse::<u32>().ok().filter(|pid| *pid >= 1)?;
+    let (seq, _) = rest.split_once(".shm")?;
+    seq.parse::<u32>().ok()?;
+    Some(pid)
+}
+```
+
+Because it does not care what follows `.shm`, sidecars such as `....shm.chain.json` (the
+`ApplyEffectChain` manifest) are picked up by the same rule. The gated E2E checks on the file
+system that both the `.shm` of a dead PID and its `.chain.json` disappear, and that **a file
+belonging to a live PID survives** (`tests/e2e/orbitstudio-mcp-gated.spec.ts:5397-5462`).
+
+Incidentally, the idea of "matching on the process name to decide whether it is a daemon" was not
+taken. `cargo test` binaries create shm files under the same names, so matching would unlink the
+mmap target of a test run in progress.
+
+The only diagnostic is the single `tracing::info!` line at the end of `sweep_orphaned_outproc_shm`
+(`scanned` / `removed` / `kept_*` / `failed` / `elapsed_ms`). What is worth noticing here is that
+**as long as startup succeeds, that line never shows up in OrbitStudio's `get_log`**. The TS side
+(`daemon-client.ts:891-910`) only accumulates the daemon's stderr into `stderrChunks` until the
+ready line arrives, without forwarding it, and what was accumulated surfaces only on the
+startup-failure diagnostic path. The sweep runs before the first shm is created — that is, before
+the ready line — so it falls exactly inside that window. This is why the E2E above cannot use the
+log as its primary oracle.
+
+And this is a mitigation, not a repair of the hole where `Drop` never runs. The cleanup takes
+effect **the next time the daemon starts**, so the file count in `$TMPDIR` converges not on zero
+but on "one generation's worth". Adding a SIGTERM handler remains #448.
+
 ## Next exploration candidates
 
 - Stage switching in the rack child (`orbit-effect-rack-child`) — how `ApplyEffectChain`'s prepare-commit relates to `active_stage_index`
 - The state-save path through the command mailbox (#555): `GetPluginState` → sidecar path in `cmd_arg` → the child's write
 - What `evt_sync` (`ReleaseAcquireSeq` / `MonotoneEpoch`) forbids in the type system, and why `reset_child_starting` resets `evt_seq`
 - Generation management in `outproc_respawn_guard.rs` (rejecting acks that cross a respawn generation)
+- What is left of the startup sweep (how `sweep_dir`'s `SweepSummary` counters distribute in practice, and what remains on the sweep side once a SIGTERM handler (#448) lands)
 
 ## Sources
 
-- `rust/crates/orbit-audio-daemon/src/lib.rs:84-93` — `SPAWNABLE_CHILD_BINARIES` (the source of truth for spawnable children)
+- `rust/crates/orbit-audio-daemon/src/lib.rs:86-95` — `SPAWNABLE_CHILD_BINARIES` (the source of truth for spawnable children)
 - `rust/crates/orbit-audio-sandbox/src/transport.rs:113-143,173-288` — `CONTROL_*` / `CHILD_STATUS_*` / `CHILD_FLAG_*`, the `SharedRegion` layout (audio, M2 event windows, command mailbox, event ring, `dirty_epoch`, `active_stage_index`)
 - `rust/crates/orbit-audio-sandbox/src/host.rs:1-98` — `PipelinedEffectHost` (pipelined submit/read state machine, RT-safe `process_block`)
 - `rust/crates/orbit-audio-sandbox/src/child.rs:44-84` — `SandboxChildGuard` (child-teardown RAII guard: QUIT → reap → kill fallback → shm removal)
 - `rust/crates/orbit-audio-sandbox/src/parent_watch.rs:1-124` (full file) — `ParentWatch` (`getppid()`-based parent-liveness monitoring, rate-limited, `orphaned_for_tests`)
 - `rust/crates/orbit-child-runtime/src/lib.rs:61-72` — `child_should_quit` (folds QUIT and parent death into one predicate)
 - `rust/crates/orbit-audio-sandbox/tests/parent_watch_integration.rs` — real-process-hierarchy test of `ParentWatch`
-- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:32-37,310-317,487-760` — `InstrumentChildSupervisor` (watchdog thread, #573 fast-fail guard, respawn, `measurement_invalid` fire-once, #618 `SlotSignals`)
+- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:32-37,311-318,488-761` — `InstrumentChildSupervisor` (watchdog thread, #573 fast-fail guard, respawn, `measurement_invalid` fire-once, #618 `SlotSignals`)
+- `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:9-49,121-145` — the startup sweep (prefix constant, `MIN_ORPHAN_AGE`, the three-valued predicate, file-name parsing, the deletion branch)
+- `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:167-196` — `sweep_orphaned_outproc_shm` (the thin shell stage 0.5 calls, and its `tracing::info!` summary line)
+- `packages/engine/src/audio/rust-engine/daemon-client.ts:891-910` — the stderr accumulation until the ready line (why the sweep's INFO line does not reach `get_log`)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:5397-5462` — the gated E2E asserting that a dead PID's shm and sidecar are swept while a live PID's file survives
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — confirmed in-process/OOP architecture split
 - Issue [#448](https://github.com/signalcompose/orbitscore/issues/448) — daemon graceful-shutdown gap and the `ParentWatch` countermeasure (PR: `a0449b8`)
+- Issue [#779](https://github.com/signalcompose/orbitscore/issues/779) / PR [#784](https://github.com/signalcompose/orbitscore/pull/784) — reclaiming orphaned shm at startup (a mitigation for the paths where `Drop` never runs)
 - Issue [#573](https://github.com/signalcompose/orbitscore/issues/573) — giving up the respawn loop after consecutive fast failures
 - Issue [#618](https://github.com/signalcompose/orbitscore/issues/618) — instrument replacement and draining the event ring
 - Issue [#628](https://github.com/signalcompose/orbitscore/issues/628) — the effect rack child
