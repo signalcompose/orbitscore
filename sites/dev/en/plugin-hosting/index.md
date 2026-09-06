@@ -434,10 +434,10 @@ The E2E that goes through the user's own path (OrbitStudio + MCP) is accumulated
 - `packages/engine/src/core/global/plugin-instrument-manager.ts:22-91` — `PluginInstrumentManager.instrument()` (`plugin:<seqName>` instance ID, statePath)
 - `packages/engine/src/core/global/plugin-effect-manager.ts:15-62` — `PluginEffectManager.effect()` (rack path)
 - `packages/engine/src/core/global/effect-slot.ts:33-61` — `resolveEffectSpec` (the load-bearing validate → gate → resolve order)
-- `rust/crates/orbit-audio-daemon/src/lib.rs:84-93` — `SPAWNABLE_CHILD_BINARIES`
+- `rust/crates/orbit-audio-daemon/src/lib.rs:86-95` — `SPAWNABLE_CHILD_BINARIES`
 - `rust/crates/orbit-audio-daemon/src/outproc_child_exe.rs:1-64` — the shared child-binary selection rule (#552)
-- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:154-199` — `InstrumentPluginFormat` / `child_exe_for_attach` / `default_child_exe`
-- `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:451-458` — `default_rack_child_exe`
+- `rust/crates/orbit-audio-daemon/src/outproc_instrument.rs:155-200` — `InstrumentPluginFormat` / `child_exe_for_attach` / `default_child_exe`
+- `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:454-461` — `default_rack_child_exe`
 - [`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/core/INSTRUCTION_ORBITSCORE_DSL.md) PH.1–PH.6 / PC.1–PC.5 — DSL spec for plugin hosting and the catalog
 - [`docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md) SC.10 — source of truth for the rack form
 - [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 — VST3 instrument production real-hardware E2E record (capture peak 0.25000)

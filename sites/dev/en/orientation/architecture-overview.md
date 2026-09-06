@@ -685,8 +685,8 @@ Topics worth reading one level deeper from here. Each is expected to be filed as
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:869-997` — `spawnDaemon()`: stderr routing and ready-line reading
 - `packages/engine/src/audio/rust-engine/index.ts:1-8` — protocol v0.1, note on cutover #108
 - `packages/engine/src/version.ts:14-17` — `ENGINE_VERSION` / `DSL_VERSION`
-- `rust/crates/orbit-audio-daemon/src/lib.rs:84-93` — `SPAWNABLE_CHILD_BINARIES`
-- `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:450-458` — child resolution by sibling-of-exe
+- `rust/crates/orbit-audio-daemon/src/lib.rs:86-95` — `SPAWNABLE_CHILD_BINARIES`
+- `rust/crates/orbit-audio-daemon/src/outproc_effect.rs:453-461` — child resolution by sibling-of-exe
 - `scripts/copy-daemon-bin.sh:1-47,121-132` — bundling policy for daemon / children / standard plugins
 - `package.json:9-11` — `build:copy-engine` calls `copy-daemon-bin.sh`
 - `docs/research/ENGINE_DAEMON_PROTOCOL.md` — the SoT of the wire protocol
