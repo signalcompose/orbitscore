@@ -17,6 +17,75 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(e2e): assert the attach failure's reason instead of a fallback wording (#760) (Sep 6, 2026)
+
+**ブランチ**: `760-attach-failure-assertion`（base = 束 `761-gated-measurement`） / **Part of** [#760](https://github.com/signalcompose/orbitscore/issues/760)
+
+束「gated の測定器」の 1 本目。実機 gated で `drives real OrbitStudio end-to-end …` が
+**`main` でも落ちていた**（2026-09-05 実測）。実装ではなく**アサーションの欠陥**である。
+
+#### 🔴 issue の原因記述が実装と食い違っていた（一次ソースで訂正）
+
+| #760 本文の記述 | 実装（読んで確認） |
+|---|---|
+| 存在しない CLAP は **child を spawn する前に** discovery で落ちる | **child は spawn される。** `RackController::load_initial`（`rust/crates/orbit-effect-rack-child/src/lib.rs`）が CLAP のロードに失敗し、**詳細を publish してから** `CHILD_STATUS_LOAD_FAILED` を立てて終了する |
+
+したがって「`child exited before publishing READY` に到達しない」という**結論は正しい**が、
+理由が違う。daemon（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs` の Root 3-3 分岐）は
+この status を early-exit の watchdog signal **より先に**見るので、汎用文言ではなく
+「index 0 の load がこう失敗した」という**具体的な理由**が上がる。
+
+**期待文言が合わなくなったのは退行ではなく、診断が具体的になったから。**
+テストが**最も具体性の低いフォールバック文言**にアンカーしていたため、エラー報告が
+改善した瞬間に落ちた。
+
+#### 直したもの
+
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` の 6c（#527 由来のロールバック確認）:
+
+| 旧 | 新 |
+|---|---|
+| `.toContain('[OUTPROC_ATTACH_FAILED] child exited before publishing READY')` の 1 本 | ① 新しい `[OUTPROC_ATTACH_FAILED]` 行が出た ② 理由が**プラグインファイルを読めなかったこと** ③ **前のチェーンが保たれた** |
+
+- **件数ではなく増えた行で語る**。`newLogLines`（#661 で main に入った）を使う。`get_log` は
+  固定 500 行窓なので、件数比較は古い行が窓から流れ出るだけで動く
+- ③ は 6c の主題（`EffectChainMap` のロールバック）そのものだが、**旧アサーションは一度も
+  見ていなかった**。文言を実装に合わせるついでに、守るべきものを足した
+- アンカーは `discovery.rs` / `controller.rs` の**ハードコード文言**。内側の
+  `No such file or directory (os error 2)` は OS の strerror で**ロケール依存**なので使わない
+- 1 本 49 秒の長いシナリオなので、🔴 **どのアサーションが何を守るか**をコメントに明記した（#760 の指示）
+
+#### 併せて: stale な doc コメントを実装に合わせた
+
+`rust/crates/orbit-audio-sandbox/src/transport.rs` の `CHILD_STATUS_LOAD_FAILED` は
+**「現状は未使用の予約値」「write 箇所なし」**と書かれたままだった（実際には rack child が
+書いている）。文末は文が壊れてもいた。**issue が原因を誤診したのはこの注釈が原因の可能性が高い**
+ので、同じ PR で直す。コメントのみで挙動は変わらない。
+
+#### 検証
+
+| 何 | 結果 |
+|---|---|
+| `npm test` | 2280 passed / 57 skipped（exit 0） |
+| `npm run typecheck:e2e` | 0 |
+| `npx eslint` / `prettier --check`（対象ファイル） | 0 / 差分なし |
+| `cargo check -p orbit-audio-sandbox` | 緑 |
+| `gated-assertion-hygiene` / `dsl-e2e-coverage` ラチェット | 緑 |
+| **実機 gated（当該シナリオ）** | ✅ **1 passed / 28 skipped**（54.5s・起動時 load 1.83 の clean な測定）。`main` で落ちていたシナリオが緑になり、実機の失敗は 3 件 → 2 件 |
+
+#### 🔴 引用 42 件が陳腐化した — 手順の欠陥
+
+行番号がずれたことで、dev 学習サイトが `orbitstudio-mcp-gated.spec.ts` と `transport.rs` を
+**行範囲で引用**している箇所が 42 件失敗した（CI の `code-review` で発覚）。
+
+**ローカルの `docs:check` は緑だったが、それは編集の「前」に走らせたもので検証になっていなかった。**
+
+- 40 件は純粋な行ずれ → `check-citations.mjs --fix` が再アンカー
+- **2 件は本文の変更**（`rust-engine/oop-children.md` の日英）。サイトが
+  `CHILD_STATUS_LOAD_FAILED` の**古いコメントを逐語引用**していたので、新しい文面へ差し替えた。
+  つまり**同じ事実誤りがサイト側にも載っていた**
+- 地の文は `LOAD_FAILED` を「未使用」と書いていないため、散文の修正は不要（grep で確認）
+
 ### docs: follow PR #744 (post-push verify hook) (Sep 6, 2026)
 
 **ブランチ**: `claude/docs-sync-pr744` / **追従元 PR** [#744](https://github.com/signalcompose/orbitscore/pull/744)（merge commit `7b93791`）

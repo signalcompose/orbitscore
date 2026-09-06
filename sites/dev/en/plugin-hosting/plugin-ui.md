@@ -400,7 +400,7 @@ If all we needed was to "open" a UI, the host → child mailbox would suffice. T
 #474 P2.
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:265-277
+// rust/crates/orbit-audio-sandbox/src/transport.rs:268-280
     // ── #474 P2: child → host の取りこぼし不可イベントリング（UIH.2a）。
     /// child -> host: 新規イベント投函時に単調増加。0 = 未発行。
     pub evt_seq: ReleaseAcquireSeq,
@@ -441,7 +441,7 @@ a cross-process data race, i.e. UB). What is interesting is that this is **guard
 tests**.
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:359-378
+// rust/crates/orbit-audio-sandbox/src/transport.rs:362-381
     #[repr(transparent)]
     pub struct ReleaseAcquireSeq(AtomicU64);
 
@@ -475,7 +475,7 @@ then call `publish`". The child-side publisher `EventRingChild::service` keeps t
 checking the slot-reuse invariant (`evt_ack_seq >= s - EVT_SLOTS`) before publishing.
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:512-538
+// rust/crates/orbit-audio-sandbox/src/transport.rs:515-541
     pub unsafe fn service(
         &mut self,
         region: *mut SharedRegion,
@@ -747,7 +747,7 @@ The daemon's `UiEventPump::poll_step` reads the ring on every watchdog tick; whe
 `false`** (= does not ack; stops at the ring head).
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:1213-1225
+// rust/crates/orbit-audio-sandbox/src/transport.rs:1216-1228
 /// [`UiEventPump::poll_step`] が daemon の非ブロッキング sink へ渡す固定通知。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiPumpNotification {
@@ -924,7 +924,7 @@ The essence of the problem was "open windows were being addressed and attributed
 The daemon's `UiPumpState` thereby became a per-window map.
 
 ```rust
-// rust/crates/orbit-audio-sandbox/src/transport.rs:1355-1374
+// rust/crates/orbit-audio-sandbox/src/transport.rs:1358-1377
 #[derive(Debug, Default)]
 struct UiPumpState {
     generation: u64,
@@ -1094,7 +1094,7 @@ E2E-1 of #633 inserts the same plugin twice, opens two windows with `ui("name")`
 second one first**, and then closes the first.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2091-2113
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2125-2147
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

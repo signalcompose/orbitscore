@@ -120,18 +120,21 @@ pub const CONTROL_QUIT: u32 = 1;
 pub const CHILD_STATUS_STARTING: u32 = 0;
 /// child が load に成功し、以降 process loop に入る状態。
 pub const CHILD_STATUS_READY: u32 = 1;
-/// **現状は未使用の予約値**（child が load に失敗して終了する直前の状態を表す想定）。
-/// child は load 失敗時 `?` の早期 return でこの値を書かずにそのままプロセス終了する。PR-1c (#441)
-/// では watchdog が初回 attach 中の child exit を stats に publish し、host が timeout を待たずに
-/// retryable attach failure として返す。
+/// child が load に失敗して終了する直前に立てる状態。
+///
+/// 🔴 **write 箇所はある**（#760 で注釈を実装へ合わせ直した・2026-09-06）。rack child の
+/// `RackController::load_initial`（`orbit-effect-rack-child/src/lib.rs`）が、失敗の詳細を
+/// `cmd_result_detail` へ publish した**後で**この値を store する。daemon（`engine_wrap.rs` の
+/// Root 3-3）はこの status を early-exit の watchdog signal **より先に**見るので、「child が
+/// 死んだ」ではなく「index n の load がこう失敗した」という具体的な理由が上がる。
+/// PR-1c (#441) の watchdog は、この status を立てずに死ぬ child（load 以外の理由での早期終了）を
+/// timeout を待たずに拾う経路として残る。
 ///
 /// **respawn 注意**: shm は daemon 起動時に一度だけ truncate され、respawn（`EffectChildSupervisor`/
 /// `InstrumentChildSupervisor` の watchdog による再起動）は同一 shm を再利用する（再 truncate しない）
 /// ため、一度 READY に達した後の respawn 失敗では `child_status` は STARTING でなく前 incarnation の
 /// READY が残留する。PR-1b（#440）は spawn 直前の `reset_child_starting` による STARTING リセット
-/// のみを実装し、この前 incarnation の READY 残留誤認を解消した。一方、初回 attach 時に child が
-/// `CHILD_STATUS_LOAD_FAILED` は現状も write 箇所なしの予約値であり、early-exit は上記 watchdog
-/// signal で検出する。
+/// のみを実装し、この前 incarnation の READY 残留誤認を解消した。
 pub const CHILD_STATUS_LOAD_FAILED: u32 = 2;
 
 /// child のロード結果を表す bit flags（PR-431）。bit0 = has_audio_input
