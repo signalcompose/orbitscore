@@ -760,7 +760,7 @@ rust/crates/orbit-audio-native/src/output.rs:588 :638 :671 :716-745 :808 :829 :8
 >
 > | 束 | 統合ブランチ | 中身 | 検証 |
 > |---|---|---|---|
-> | **O-wire** | `611-line-wire` | **PR-O3** + #773 | 🔴 **goldens（`OUTPUT_LINE_GOLDENS` / `O0-1`）が 1 つも動かないこと** + cargo |
+> | **O-wire** | `611-line-wire` | **PR-O3** + #773 + **#801** | 🔴 **goldens（`OUTPUT_LINE_GOLDENS` / `O0-1`）が 1 つも動かないこと** + cargo（**#801 = CI の flaky を先に潰す**）|
 > | **O-surface** | `611-output-line` | **PR-O4** + daemon 台数のアサーション | **E2E-2〜7 + E2E-10** |
 > | **O-multiout** | `611-multiout` | **PR-O5・PR-O6** | **E2E-9** + 全件緑 |
 >
