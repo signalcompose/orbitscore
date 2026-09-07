@@ -23,6 +23,37 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 「**`OUTPUT_LINE_GOLDENS` / `O0-1` などの goldens が 1 つも動かないこと**」+ cargo 全緑 + 実機 gated 全件。
 中身は PR-O3（`LineProgram` / `SetBusLine`）+ #773 + #801。
 
+### docs(dev-site): describe the stdout bridge buffer introduced by #773 (Sep 7, 2026)
+
+**追従元**: PR [#806](https://github.com/signalcompose/orbitscore/pull/806)（マージコミット `3af4eaf`）/
+**ブランチ**: `claude/docs-sync-pr806` → `611-line-wire`（docs のみ）
+
+#### なぜ追加で要ったか
+
+PR #806 の 2 コミット目は dev サイトの引用 80 件を**再アンカー**しただけで、
+コミットメッセージも「地の文は今も正しいので触っていない」と明記している。
+だが引用のインデントが 8 → 4 に変わったのは分岐が `for` ループから
+`createLinePrefixer` のコールバックへ移ったからで、**その理由がどの章にも書かれていない**状態だった。
+IV-1 の「chunk → 行の経路は 4 つ」の段落も、3 番目（engine stdout）を
+**まだ塞がれていない経路**として列挙したままだった。
+
+#### 変更内容
+
+| ファイル | 何を足したか |
+|---|---|
+| `sites/dev/editor/vscode-architecture.md`（+ `en/`） | 新節「stdout の bridge dispatch を行に戻す — `setupStdoutHandler` (#773)」。壊れ方（前半 = malformed 警告 / 後半 = 通常ログとして破棄）、buffer をハンドラ内に置く理由（stale プロセスの断片が混ざらない）、`data` 側が 1 行増えるだけでログは遅れないこと、`end` flush が保険であること（4 種の envelope はすべて `console.log` 経由で必ず改行が付く）、`//#selectAudioDevice` は対象外であることを記述。4 経路の列挙を実装 docstring の引用に差し替え |
+| `sites/dev/editor/execution-feedback.md`（+ `en/`） | `//#evalMark` の受信側の引用の後に、インデントが変わった理由と「応答がまるごと失われて `evaluateForAgent()` が timeout する」故障を追記 |
+| `sites/dev/editor/mcp-and-gated-e2e.md`（+ `en/`） | `ok` の意味論の節に「`ok` は envelope が 1 行として届いたことを前提にした値」であることを追記 |
+
+3 章 6 ファイルとも frontmatter の `verified-against` / `verified-at` を `3af4eaf` / 2026-09-07 に更新。
+
+#### 追従不要と判断したもの
+
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — DSL の構文・意味論・`.orbslog` 形式は無変更
+- `sites/user/` / `docs/user/ja/USER_MANUAL.md` — ユーザーが書く語は無変更
+- `rust/` — 差分に含まれない
+- `tests/vscode-extension/extension-wiring.spec.ts` — テストのみの変更
+
 ### fix(extension): buffer partial stdout lines before bridge dispatch (#773) (Sep 7, 2026)
 
 **Issue**: #773 / **ブランチ**: `773-stdout-line-buffer` → `611-line-wire`（小 PR）

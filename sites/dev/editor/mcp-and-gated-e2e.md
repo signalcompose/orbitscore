@@ -1,12 +1,12 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: 900d453
-verified-at: "2026-09-06"
+verified-against: 3af4eaf
+verified-at: "2026-09-07"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）、束 [#789](https://github.com/signalcompose/orbitscore/pull/789)（ローカルラッパー越しの追跡と、ラチェット自身の生存確認）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）、束 [#789](https://github.com/signalcompose/orbitscore/pull/789)（ローカルラッパー越しの追跡と、ラチェット自身の生存確認）、2026-09-07 に #773（PR [#806](https://github.com/signalcompose/orbitscore/pull/806)・stdout の bridge dispatch の行単位化）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -327,6 +327,8 @@ engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setup
 ```
 
 「ユニットテストは全て緑・実機 E2E だけが捕まえた」— これは本章全体のテーマの縮図です。
+
+この分岐は 2026-09-07 (#773・[PR #806](https://github.com/signalcompose/orbitscore/pull/806)) から `createLinePrefixer` のコールバックの中で走っています。それ以前は stdout を chunk ごとに `split('\n')` するだけだったので、`{"evalMark":...}` が chunk 境界で割れると応答がまるごと失われ、`evaluate_orbitscore` は `ok` も診断も返さずに timeout していました。**`ok` は「envelope が 1 行として届いた」ことが前提の値**である、という土台がここで固められています。詳しくは [IV-1](/editor/vscode-architecture) の「stdout の bridge dispatch を行に戻す」節を参照してください。
 
 では `#614` 後は `get_log` を見なくてよいのでしょうか。**そうではありません。** `ok` が保証するのは「マーカー到達までに engine が上げた診断が無い」ことまでです。評価が返ったあとに非同期に起きる失敗は、依然として stdout/stderr にしか現れません。gated spec 自身がその使い分けを示しています。`instSeq.instrument(...)` を `evaluate_orbitscore` で評価して `isError` が `false` であることを確認したあと、`sleep(6000)` してから `get_log` を読み、`[OUTPROC_ATTACH_FAILED]` が無いことを別途 assert しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:1017-1029`）。out-of-process の CLAP attach は spawn + IPC handshake を伴うため、評価の完了と attach の成否は別のタイムラインにあるからです。
 

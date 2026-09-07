@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: 900d453
-verified-at: "2026-09-06"
+verified-against: 3af4eaf
+verified-at: "2026-09-07"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing), #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) and the [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle (tracking through local wrappers, plus a liveness check on the ratchet itself) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing), #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) and the [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle (tracking through local wrappers, plus a liveness check on the ratchet itself) on 2026-09-06, and to #773 (PR [#806](https://github.com/signalcompose/orbitscore/pull/806), line-wise stdout bridge dispatch) on 2026-09-07. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -327,6 +327,8 @@ The engine answers with a JSON line `{"evalMark": {...}}` on stdout, and `setupS
 ```
 
 "Every unit test was green; only the real-device E2E caught it" — a miniature of this chapter's whole theme.
+
+Since 2026-09-07 (#773, [PR #806](https://github.com/signalcompose/orbitscore/pull/806)) this branch runs inside a `createLinePrefixer` callback. Before that, stdout was merely `split('\n')` per chunk, so an `{"evalMark":...}` envelope cut at a chunk boundary lost the whole reply and `evaluate_orbitscore` timed out without returning either `ok` or diagnostics. **`ok` is a value that presupposes the envelope arrived as one line** — that foundation is what got shored up here. See the "Turning stdout bridge dispatch back into lines" section of [IV-1](/en/editor/vscode-architecture) for the details.
 
 So after `#614`, is `get_log` unnecessary? **No.** What `ok` guarantees is that no diagnostics were raised by the engine up to the point the marker was reached. Failures that occur asynchronously after the evaluation returns still appear only in stdout/stderr. The gated spec itself shows the division of labour: after evaluating `instSeq.instrument(...)` with `evaluate_orbitscore` and confirming `isError` is `false`, it does `sleep(6000)`, then reads `get_log` and asserts separately that `[OUTPROC_ATTACH_FAILED]` is absent (`tests/e2e/orbitstudio-mcp-gated.spec.ts:1017-1029`). An out-of-process CLAP attach involves a spawn plus an IPC handshake, so the completion of the evaluation and the success of the attach live on different timelines.
 

@@ -1,12 +1,12 @@
 ---
 title: "IV-1. VS Code 拡張アーキテクチャ"
 chapter-id: "IV-1"
-verified-against: d2e94af
-verified-at: "2026-09-06"
+verified-against: 3af4eaf
+verified-at: "2026-09-07"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで、2026-09-07 に #773（PR [#806](https://github.com/signalcompose/orbitscore/pull/806)・stdout の bridge dispatch の行単位化）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-1. VS Code 拡張アーキテクチャ
 
@@ -652,7 +652,85 @@ export function setupStderrHandler(process: child_process.ChildProcess): void {
 }
 ```
 
-ちなみに、この「chunk 列 → 行」の実装はリポジトリ全体で **4 つ**あります。実装のコメントが 4 つとも列挙していて、`createLinePrefixer` を直しただけで全部揃ったと思わないように、と注意書きが付いています。engine stderr のここ、daemon stderr の `createDaemonStderrLineRouter` (`packages/engine/src/audio/rust-engine/daemon-client.ts`、[#777](https://github.com/signalcompose/orbitscore/issues/777))、engine stdout の `setupStdoutHandler` ([#773](https://github.com/signalcompose/orbitscore/issues/773))、そして本章冒頭で見た ring proxy (`append` を `value.split('\n')` して ring へ写す部分) です。拡張パッケージは `@orbitscore/engine` に依存しないので、少なくとも前 2 つは今のところ共有できません。改行コード・空行・末尾 flush の判断は 4 箇所すべてへ波及しうる、というのが実装コメントの結論です。
+ちなみに、この「chunk 列 → 行」の**経路**はリポジトリ全体で **4 つ**あります。実装のコメントが 4 つとも列挙していて、`createLinePrefixer` を直しただけで全部揃ったと思わないように、と注意書きが付いています。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1597-1607
+ * 🔴 **「chunk → 行」の経路は合計 4 つある**。この関数だけを直して全部揃ったと思わないこと:
+ *
+ * 1. ここ `createLinePrefixer` — engine stderr を行へ戻す（#756）。
+ * 2. `packages/engine/src/audio/rust-engine/daemon-client.ts` の
+ *    `createDaemonStderrLineRouter` — daemon stderr の同型実装（#777）。拡張パッケージは
+ *    `@orbitscore/engine` に依存しないので今は共有できない。
+ * 3. 同ファイルの `setupStdoutHandler` — bridge dispatch だけをこの関数で行へ戻す（#773）。
+ *    生 chunk とその `output.split('\n')` は従来どおり即座に `applyEngineStdoutChunk` へ渡し、
+ *    ログ転写と playhead / `//#selectAudioDevice` 処理の呼び出し規約は変えない。
+ * 4. `activate()` 冒頭の output-channel ring proxy — `append` を `value.split('\n')` して
+ *    `get_log` 用 ring へ写す。これは現時点で issue 未追跡である。
+```
+
+拡張パッケージは `@orbitscore/engine` に依存しないので、1 と 2 は今のところ共有できません。改行コード・空行・末尾 flush の判断は 4 箇所すべてへ波及しうる、というのが実装コメントの結論です。3 番目の engine stdout は、この列挙が書かれた時点ではまだ「持ち越さない」ままでしたが、[#773](https://github.com/signalcompose/orbitscore/issues/773) で塞がれました。次節で読みます。
+
+### stdout の bridge dispatch を行に戻す — `setupStdoutHandler` (#773)
+
+engine の stdout には人間向けログのほかに `{"savePluginState":...}` / `{"pluginUi":...}` / `{"evalMark":...}` / `{"engineState":...}` の 1 行 JSON (**bridge envelope**) が流れます。`setupStdoutHandler` はこれを chunk ごとの `output.split('\n')` で拾っていましたが、**部分行を次の chunk へ持ち越していませんでした**。envelope が chunk 境界で割れると:
+
+- 前半は `{"evalMark"` 等で始まるので分岐には入るものの、**JSON として不正**なので malformed 警告になる
+- 後半は 4 つの prefix 判定を**すべてすり抜け、通常ログとして捨てられる**
+
+つまり **その要求の応答が失われます**。4 つの bridge は同じ経路を共有しているので影響は 4 つ全部に及び、MCP 経由のエージェントと gated E2E は応答を待ち続けて timeout します。
+
+直し方は、同じファイルにすでにある `createLinePrefixer` を **bridge dispatch にだけ**被せることでした ([PR #806](https://github.com/signalcompose/orbitscore/pull/806))。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1479-1486
+  // #773: Bridge envelopes are line-framed, but stdout data events are not.
+  // Keep this buffer inside the handler so a stale process can never donate a
+  // partial line to the current process. Only bridge dispatch is buffered:
+  // applyEngineStdoutChunk still receives each raw chunk immediately below.
+  const bridgeLines = createLinePrefixer((rawLine) => {
+    const trimmedLine = rawLine.trim()
+    const isCurrent = engineProcess === process
+    if (trimmedLine.startsWith('{"savePluginState"')) {
+```
+
+buffer を `setupStdoutHandler` の**中**に置いているのが要点です。こうすると buffer の寿命が engine プロセス 1 つ分と一致するので、停止した (stale) プロセスが残した断片が現行プロセスの dispatch に混ざりません。本章末尾で見る #528 の同一性ガードと同じ意図です。
+
+`data` ハンドラ側の変更は `bridgeLines.push(output)` の 1 行だけです。生 chunk と chunk 単位の `lines` は従来どおり**即座に** `applyEngineStdoutChunk` へ渡るので、Output Channel に出るログは 1 行も遅れませんし、`createLinePrefixer` の空行除去もログ側には入りません。playhead の `[STEP]` 行と `//#selectAudioDevice` の呼び出し規約も変わっていません。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1519-1531
+  process.stdout?.on('data', (data) => {
+    try {
+      const output = data.toString()
+      const lines: string[] = output.split('\n')
+
+      // Identity-guarded via applyEngineStdoutChunk — see its docstring in
+      // engine-lifecycle.ts for the #528 stop→start race this protects against
+      // (same mechanism as setupExitHandler/setupStdinErrorHandler below).
+      const isCurrent = engineProcess === process
+
+      bridgeLines.push(output)
+
+      applyEngineStdoutChunk(output, lines, isCurrent, {
+```
+
+stderr 側と同じく、改行で終わらなかった最後の 1 行のための `end` flush も付きます。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1572-1578
+  process.stdout?.on('end', () => {
+    try {
+      bridgeLines.flush()
+    } catch (err) {
+      logHandlerFailure('setupStdoutHandler', err)
+    }
+  })
+```
+
+もっともこの flush は保険です。4 種の envelope はすべて `packages/engine/src/cli/repl-mode.ts` の `console.log(JSON.stringify(...))` で出ており (savePluginState `:165` `:175` `:480` / pluginUi `:242` `:248` `:440` / evalMark `:460` / engineState `:332`)、`console.log` は必ず改行を付けるので、通常の経路で最後の 1 行が buffer に残ることはありません。
+
+なお `//#selectAudioDevice` の応答 (`{"selectAudioDevice":...}`) は **この buffer を通っていません**。そちらは `applyEngineStdoutChunk` の側にあり、chunk 境界で割れると専用の「possible chunk-boundary split」警告が出るだけで、#773 のスコープ外として残っています。
 
 ---
 
@@ -665,7 +743,7 @@ Extension Host と engine プロセスの通信は **stdin/stdout パイプ** �
   - `//#selectAudioDevice <name>` — 走行中の出力デバイス切替 (#484 D2.5)
   - `//#savePluginState` / `//#pluginUi` — plugin 状態保存・UI 開閉
   - `//#evalMark {"requestId":...}` — 直前のコードの評価完了と診断を返してもらう (#614)
-- **Engine → Extension (stdout)**: 人間向けログに混じって、`{"selectAudioDevice":...}` / `{"savePluginState":...}` / `{"pluginUi":...}` / `{"evalMark":...}` の 1 行 JSON と、playhead 用の `[STEP] <seq> <argPath> <atEpochMs>` 行が流れます
+- **Engine → Extension (stdout)**: 人間向けログに混じって、`{"selectAudioDevice":...}` / `{"savePluginState":...}` / `{"pluginUi":...}` / `{"evalMark":...}` / `{"engineState":...}` の 1 行 JSON と、playhead 用の `[STEP] <seq> <argPath> <atEpochMs>` 行が流れます。この JSON は**行**が単位ですが pipe が届けるのは chunk なので、`{"selectAudioDevice"}` を除く 4 種は前節の buffer (#773) を通してから dispatch されます
 
 送信部分は editor の Run Selection と MCP の `evaluate_orbitscore` が共有する `writeCodeToEngine()` に集約されています。
 
@@ -963,10 +1041,11 @@ flowchart TD
 - `packages/vscode-extension/src/extension.ts:653-710` — `getConfiguredEngineKind()` / `resolveScsynthForUI()` / `resolveDaemonForUI()`
 - `packages/vscode-extension/src/extension.ts:725-798` — `updateBundleStatus()` / `maybeShowBundleNotice()`
 - `packages/vscode-extension/src/extension.ts:800-883` — `showCommands()` (engine kind で分岐) / `restartEngine()` / `reloadWindow()`
-- `packages/vscode-extension/src/extension.ts:1473-1553` — `setupStdoutHandler()`: bridge 振り分けと `applyEngineStdoutChunk` 呼び出し
-- `packages/vscode-extension/src/extension.ts:1567-1619` — `createLinePrefixer()`: chunk 列を行へ戻す (`partial` の持ち越し・`flush()`・空行を emit しない) と、実装コメントによる「chunk → 行」4 実装の列挙 (#756)
-- `packages/vscode-extension/src/extension.ts:1621-1657` — `setupStderrHandler()`: `ERROR:` の行単位前置と `end` での flush
-- `tests/vscode-extension/extension-wiring.spec.ts` — 行単位前置を留める 4 本 (PR [#772](https://github.com/signalcompose/orbitscore/pull/772))
+- `packages/vscode-extension/src/extension.ts:1475-1579` — `setupStdoutHandler()`: bridge 振り分け（#773 で `createLinePrefixer` を被せた `bridgeLines`）と `applyEngineStdoutChunk` 呼び出し、`end` での flush
+- `packages/vscode-extension/src/extension.ts:1581-1634` — `createLinePrefixer()`: chunk 列を行へ戻す (`partial` の持ち越し・`flush()`・空行を emit しない) と、実装コメントによる「chunk → 行」4 経路の列挙 (#756・3 番目を #773 の結果へ更新)
+- `packages/vscode-extension/src/extension.ts:1636-1672` — `setupStderrHandler()`: `ERROR:` の行単位前置と `end` での flush
+- `tests/vscode-extension/extension-wiring.spec.ts` — 行単位前置を留める 4 本 (PR [#772](https://github.com/signalcompose/orbitscore/pull/772)) と、stdout の bridge dispatch を chunk 境界で割って検証する 9 本 (PR [#806](https://github.com/signalcompose/orbitscore/pull/806))
+- `packages/engine/src/cli/repl-mode.ts:165` / `:175` / `:242` / `:248` / `:332` / `:440` / `:460` / `:480` — 4 種の bridge envelope を `console.log(JSON.stringify(...))` で出す箇所 (必ず改行が付くので #773 の `end` flush は保険)
 - `packages/vscode-extension/src/extension.ts:1699-1723` — `autoStartConfiguredRustEngine()`
 - `packages/vscode-extension/src/extension.ts:2044-2198` — `startEngine()`: engine kind 事前チェック・args / env・spawn・ハンドラ・nextTick ガード
 - `packages/vscode-extension/src/extension.ts:2204-2252` — `stopEngine()`: drain・SIGTERM・`exitCode`/`signalCode` 判定の SIGKILL

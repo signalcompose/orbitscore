@@ -1,12 +1,12 @@
 ---
 title: "IV-2. Inline Execution and Feedback"
 chapter-id: "IV-2"
-verified-against: ef140b1
-verified-at: "2026-09-04"
+verified-against: 3af4eaf
+verified-at: "2026-09-07"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #773 (PR [#806](https://github.com/signalcompose/orbitscore/pull/806), line-wise stdout bridge dispatch) on 2026-09-07. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-2. Inline Execution and Feedback
 
@@ -449,6 +449,8 @@ The reception on the stdout side is placed as an **independent branch** in `setu
       }
     } else if (trimmedLine.startsWith('{"engineState"')) {
 ```
+
+The quotation is indented by four rather than eight because on 2026-09-07 (#773, [PR #806](https://github.com/signalcompose/orbitscore/pull/806)) this branch moved out of a `for` loop and into a `createLinePrefixer` callback. Before that, stdout was only `output.split('\n')` per chunk, with **no partial line carried over to the next chunk**, so an `{"evalMark":...}` envelope cut at a chunk boundary produced a "malformed" warning for its first half while its second half slipped past the prefix tests and was discarded as an ordinary log line. **The entire evalMark reply is lost**, so the `await` in `evaluateForAgent()` does not return until it times out. The `savePluginState` / `pluginUi` / `engineState` branches share the path and break the same way. See the "Turning stdout bridge dispatch back into lines" section of [IV-1](/en/editor/vscode-architecture) for the details.
 
 The editor's `Cmd+Enter` does not send this marker. For a human, the flash + diagnostics + Output Channel suffice; evalMark is dedicated to MCP evaluate. The full set of MCP tools is covered in [IV-3. MCP Server and Gated Real-Device E2E](/en/editor/mcp-and-gated-e2e).
 
