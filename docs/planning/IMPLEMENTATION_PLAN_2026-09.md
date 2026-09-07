@@ -69,10 +69,10 @@
 | PR-O1 ⟂ | `docs(spec): output as a line element — MX.2/2.1/3/4/5, SC.2.1/4, #649 §10` | #611 spec 改訂項目・#649 §7.3/§10-12・#643 §1.5/§12 | core spec（±120）・`SIGNAL_CHAIN_DSL_SPEC`（±40）・`649-audio-line-design.md`（±30）| — | docs のみ（advisor レビュー）| — |
 | PR-O2a 🔴 | `test(e2e): make capture windows follow the sound` | **#739**（`captureSegment` が固定 settle 400 ms で窓を開けるが、`LOOP()` の小節量子化 + attach で**音は約 3 秒後**。E2E-1 は「0 dB の音」を一度も測っていなかった）| `tests/e2e/helpers/run-score.ts`・gated spec の呼び出し **34 箇所** | PR-O0 | **各窓のオンセット数**（`onsets(name).length`）。🔴 **E2E-1 が緑になることは受け入れ基準にしない** — それは PR-O2 の仕事 | — |
 | PR-O2 | `fix(engine): stereo-internal engine + master line (fader position, 8ch@2048 silence)` | **#649 must-fix**・#611 本文の 8ch 無音・E2E-0/1/8/11 | `output.rs`（±200: `MasterLine`・post-loop 置換・`Engine::new(sr,2)`）・`engine_wrap.rs`（±40）・`session.rs` `SetGlobalGain`（±20）| PR-O0（golden で bit 一致を確認するため）・PR-O1 | E2E-0 bit 一致・E2E-1 **red-first**・E2E-8・E2E-11。実機: `global.gain(-6)` + instrument で RMS 半減 | — |
-| PR-O3 🔴 | `feat(daemon): LineProgram + SetBusLine (full-replacement bus line wire)` | #611 wire・#647 shm 拡張 | `output.rs`（+350: `OutputDest`/`LineOp`/`LineSlot`・RT 実行）・`session.rs`（+180 検証）・`protocol-types.ts` `daemon-client.ts`（+60）・cargo test（+200）| PR-O2 | cargo: forward-only 検証・thru:false で break・ramp。実機: 既存譜面が `SetBusRouting` 経路のまま同音（両 wire 併存）| W-1 |
-| PR-O4 🔴 | `feat(dsl): output(dest, thru, db) / send in dB / pan as a line element — AudioLine on Sequence and master` | #611 DSL・#649 実装 B・**#543-a 差分ゼロ（`pan` 譜面は再ベースライン）**・同一宛先の複数 `output`（2 要素）・mono 宛先 | `core/sequence/audio-line.ts`（新 +240）・`sequence.ts`（±130）・`global.ts`（+40）・`mixer-manager.ts`（±60）・`runtime.ts`（±30）・`evaluate-method.ts`（+40）・`repl-mode.ts`（+20）・tests（+320）| PR-O3・**PR-L2（フレーム）**・PR-O1 | E2E-2〜7・E2E-10 + `pan` の L/R（PR-E3 の後）。実機: `kick.output(verb, thru:true, db:-12).output(master)` を評価して aux の RMS 比 | W-2 / W-3 / W-18 |
-| PR-O5 | `feat(engine): instrument outs: — per-unit passthrough stages` | #409 `outs:`・#647 | `sequence.ts` `instrument()`（+60）・`engine_wrap.rs` `SetSourceRouting` 緩和（+40）・`outproc_instrument.rs` shm（+30）| PR-O4 | E2E-9。実機: `outs: {"kick": bd}` で bd バスの RMS > 0 | — |
-| PR-O6 | `refactor(daemon): retire SetBusRouting / routing_override / send_gain_overrides` | #611 cleanup | `output.rs`（−150）・`session.rs`（−80）・TS（−60）| PR-O4 | 既存全件 + gated 全件 | W-1 |
+| PR-O3 🔴 | `feat(daemon): LineProgram + SetBusLine (full-replacement bus line wire)` | #611 wire・#647 shm 拡張。🔴 **束 O-wire**（`611-line-wire`）に **#773 と一緒に**入れる。**検証は「goldens が動かないこと」** — 互換維持の配線入れ替えなので、この検算はこの束でしか使えない | `output.rs`（+350: `OutputDest`/`LineOp`/`LineSlot`・RT 実行）・`session.rs`（+180 検証）・`protocol-types.ts` `daemon-client.ts`（+60）・cargo test（+200）| PR-O2 | cargo: forward-only 検証・thru:false で break・ramp。実機: 既存譜面が `SetBusRouting` 経路のまま同音（両 wire 併存）| W-1 |
+| PR-O4 🔴 | `feat(dsl): output(dest, thru, db) / send in dB / pan as a line element — AudioLine on Sequence and master` | 🔴 **束 O-surface**（`611-output-line`）。**daemon 台数のアサーション（#624 の狭いスライス）をこの PR に含める** — 検証列のとおり **E2E-10（daemon respawn）は本 PR の検証**だから。#611 DSL・#649 実装 B・**#543-a 差分ゼロ（`pan` 譜面は再ベースライン）**・同一宛先の複数 `output`（2 要素）・mono 宛先 | `core/sequence/audio-line.ts`（新 +240）・`sequence.ts`（±130）・`global.ts`（+40）・`mixer-manager.ts`（±60）・`runtime.ts`（±30）・`evaluate-method.ts`（+40）・`repl-mode.ts`（+20）・tests（+320）| PR-O3・**PR-L2（フレーム）**・PR-O1 | E2E-2〜7・E2E-10 + `pan` の L/R（PR-E3 の後）。実機: `kick.output(verb, thru:true, db:-12).output(master)` を評価して aux の RMS 比 | W-2 / W-3 / W-18 |
+| PR-O5 | `feat(engine): instrument outs: — per-unit passthrough stages` | 🔴 **束 O-multiout**（`611-multiout`）。#409 `outs:`・#647 | `sequence.ts` `instrument()`（+60）・`engine_wrap.rs` `SetSourceRouting` 緩和（+40）・`outproc_instrument.rs` shm（+30）| PR-O4 | E2E-9。実機: `outs: {"kick": bd}` で bd バスの RMS > 0 | — |
+| PR-O6 | `refactor(daemon): retire SetBusRouting / routing_override / send_gain_overrides` | 🔴 **束 O-multiout**。**O4 が実機で確かめられた後に置く** — 旧経路を消すと「新しい DSL が誤り」と「消したものがまだ必要だった」を区別できなくなる。#611 cleanup | `output.rs`（−150）・`session.rs`（−80）・TS（−60）| PR-O4 | 既存全件 + gated 全件 | W-1 |
 
 ### 1.2 セッションログ → リプレイ — PR-L（doc 694 §10）
 
@@ -312,10 +312,15 @@
 
 レビューの単位は PR ではなく**束**。小 PR は束の統合ブランチへ軽いゲート（CI + その PR が足した E2E を実機で + 目視）で入れ、統合ブランチ → main の束 PR で `/simplify` → `/code:pr-review-team` + Fable → 実機 E2E 全件を 1 回だけ回す（マージは merge commit・squash はリポジトリ設定で不可）。手引きは [`BUNDLE_BRANCH_WORKFLOW.md`](../development/BUNDLE_BRANCH_WORKFLOW.md)。束は差分 1,500 行以下で継ぎ目（wire / DSL・記録 / 再生・実時間 / オフライン）で切る。
 
+> 🔴 **「概算」は変更行（`+` と `-` の合計）で数える**（2026-09-07 明記）。差引き（net）で数えると
+> 同じ束が 1,500 行の上限を跨いだり跨がなかったりする — 旧「O-dsl 約 1,300 行」は net の数え方だった。
+> **レビューが読む量は変更行**なので、上限の判定もそちらに揃える。
+
 | 束 | 統合ブランチ | 中身 | 概算 |
 |---|---|---|---|
-| O-wire | `611-line-wire` | PR-O3 | 約 800 行（1 本なので実質単独レビュー）|
-| O-dsl | `611-output-line` | PR-O4・O5・O6 | 約 1,300 行 |
+| **O-wire** 🔴 | `611-line-wire` | PR-O3 + **#773** + **#801** | 約 850 行。🔴 **検証は「goldens が 1 つも動かないこと」**（`OUTPUT_LINE_GOLDENS` / `O0-1`）+ cargo。**振る舞いを変えない配線の入れ替えなので、この検算はここでしか使えない** |
+| **O-surface** 🔴 | `611-output-line` | PR-O4 + **daemon 台数のアサーション** | 約 1,200 行（変更行）。検証は **E2E-2〜7 + E2E-10**。🔴 **一方通行**（DSL 表面） |
+| **O-multiout** | `611-multiout` | PR-O5・PR-O6 | 約 650 行（変更行）。検証は **E2E-9 + 全件緑**。🔴 **O6 は旧経路の撤去＝逃げ道を塞ぐので、O4 が実機で確かめられた後に置く** |
 | L-record | `694-session-log` | PR-L1a・L1b・L2・L3・L7・L8・L9 | 約 1,500 行 |
 | L-replay | `241-replay` | PR-L4・L5・L6 | 約 900 行 |
 | R-live | `598-render-live` | PR-R1・R2・R3 | 約 1,400 行 |
@@ -380,7 +385,7 @@
 
 | 扱い | 対象 | いつ |
 |---|---|---|
-| 🔴 **ステージ 2 の PR に含める** | **#773**（受け側を直してから `//#evalBegin` を足す）→ **PR-O4 の直前** / **daemon 台数のアサーション**（既存 `orbitAudioDaemonPids()` を helper へ引き上げ、E2E-10 の respawn 前後で 1 台を確認）→ **PR-O6 と同じ PR** | ステージ 2 の中 |
+| 🔴 **ステージ 2 の PR に含める** | **#801**（CI の flaky）→ **束 O-wire**（下記）/ **#773** → **束 O-wire**（PR-O3 と同じ束・O4 が `//#evalBegin` を足す前に受け側を直す）/ **daemon 台数のアサーション**（既存 `orbitAudioDaemonPids()` を helper へ引き上げ、respawn 前後で 1 台を確認）→ 🔴 **PR-O4 と同じ PR**（§1.10 の O4 行の検証列が **E2E-10 は O4 の検証**と明記。**#797 で「PR-O6」と書いたのは誤り・2026-09-07 訂正**）| ステージ 2 の中 |
 | **backlog**（完了条件にしない） | #777 / PR-E5 / PR-E6・E7 / PR-E9 / PR-E16 | **着手時期を決めない。** 手が空いた時・関連を触る時に拾う |
 | 据え置き | 束 E-noise（#775） | ステージ 2 の実機で観測してから |
 
@@ -457,6 +462,40 @@
 - 🔴 **既知の失敗は台帳で扱う**: ステージ 2 の実機では `steps the live playhead`（main baseline）と
   `#611 O0-4`（#775）が出る。**新しい赤だけを見る**。#775 は E-gate の後に消えている可能性があるので、
   **ステージ 2 の実機で観測して必要性を判断する**。
+#### 🔴 3 束に切る（owner 2026-09-07・#799）
+
+ステージ 2 は **PR-O3〜O6 で約 2,600 行**（変更行）。**3 束**に切る。§2.5 の割り当てが正本。
+
+| 束 | 統合ブランチ | 中身 | 検証 | 🔴 ここで切る理由 |
+|---|---|---|---|---|
+| **O-wire** | `611-line-wire` | PR-O3 + **#773** + **#801** | **goldens が 1 つも動かないこと** + cargo（🔴 **CI の flaky を先に潰す**）| **O3 の検証は一度しか使えない機会**（下記） |
+| **O-surface** | `611-output-line` | PR-O4 + **daemon 台数のアサーション** | **E2E-2〜7 + E2E-10** | 一方通行（DSL 表面）を単独で確かめる |
+| **O-multiout** | `611-multiout` | PR-O5 + PR-O6 | **E2E-9 + 全件緑** | **O6 は逃げ道を塞ぐ**ので O4 の後（下記） |
+
+🔴 **#801（CI の flaky）を O-wire に引き込む**（owner 2026-09-07）。`device_switch_result_records_failure_and_success_through_the_same_path` が `captured log: ""` で間欠的に落ちる（2026-09-07 に CI で発生・**docs のみの PR #800 で**）。`rust-ci.yml` は**全 PR で走る**ので、赤の帰属ができなくなり慣れるとゲートが死ぬ — **#780 をステージ 2 の着手条件にしたのと同じクラス**。O-wire は Rust を触る束なので**この CI ジョブを最も多く回す**。
+
+🔴 **理由 1 — O3 の検証は一度しか使えない。** PR-O3 は「旧 `SetBusRouting` の内部を program 生成へ
+写す（**互換維持**）」＝**振る舞いを変えない配線の入れ替え**なので、検証は
+「**goldens が動かないこと**」で済む（`OUTPUT_LINE_GOLDENS` / `O0-1` は実装済み）。
+**O4 と同じ束に入れるとこの検算は永久に失われる** — O4 は DSL 表面を変えるので goldens は
+*正当に*動き、「配線の入れ替えで音が変わったか」は二度と問えなくなる。
+
+🔴 **理由 2 — O6 は旧経路を消す＝逃げ道を塞ぐ。** O4 と同じ束にすると、赤が出たときに
+「**新しい DSL が誤り**」と「**消したものがまだ必要だった**」を区別できない。
+O3 が互換のために残した経路は、**O4 が実機で確かめられた後に**消す。
+
+**理由 3 — 一方通行と可逆を混ぜない。** O4 は 🔴 一方通行（DSL 表面）、O5 / O6 は戻せる。
+
+**理由 4（分量・これは三番目以下）** — O4+O5+O6 = 約 1,850 変更行で束の上限 1,500 を超える。
+
+**払うコスト（正直に）**: 束の締めのフルレビューが **1 回 → 3 回**。ただし束の中の小 PR
+（O3/O4/O5/O6）はどのみち分かれているので、増えるのは**締めのレビュー 2 回分**。
+
+**この分割を採る根拠**: このリポジトリの反復する失敗モードは**帰属**である
+（#780 は仮説を 3 連続で外した。E-gate をステージ 2 の前提にしたのも「毎回**自分の変更のせいかを
+切り分けさせる**」から）。不可逆な変更を 1 サイクルに 2 つ入れると、赤の帰属ができず、
+どちらも安く戻せない。
+
 - **結果**: `kick.output(verb, thru: true, db: -12).output(master)` が書け、master も aux も物理アウトも同じ軸。`send` は dB。`outs:` でマルチアウト。
 - **確認**: E2E-2〜10 の手順を `evaluate_orbitscore` で再現し capture の RMS 比を見る。daemon respawn 後に routing が復元（E2E-10）。
 - **閉じる**: #611 / #409 / #647 / #543 (a) の差分ゼロ確認。

@@ -276,12 +276,18 @@
 | 同（**実機 E2E の主張**） | **#736** | 🔴 未解決。**実装ではなくテストの主張が実装の契約を超えていた** — 停止中のシーケンスに `(seamless)` を要求 / dedup を **ERROR 総数**で数えていた（skip は stderr → ERROR に分類されるので他が混ざる） | `sequence.ts:278-281`（`seamlessParameterUpdate` の発火条件） |
 | 🔴 **測定器**（gated capture の窓） | **#739** | 🔴 **未着手・PR-O2 の直前に入れる**。`captureSegment` が固定 settle 400 ms で窓を開けるが、`LOOP()` の小節量子化（2000 ms）+ プラグイン attach で**音が出るのは約 3 秒後**。**E2E-1 は「0 dB の音」を一度も測っていなかった**（実測 half/unity = 1.36 — 下げたのに大きい）。固定値で追いかけると再発する（settle を 2600 ms にしたら unity が 0 に**悪化**した — 区間がキャプチャ末尾からの逆算なので、窓を後ろへ動かすと逆に前を測る）| PR-O0（`STEADY_CAPTURE` に既に正しい形がある） |
 | フェーダー位置 | **#649** | 📐 **設計のみ**（PR #653 は設計文書だけ。実装なし） | `docs/design/649-audio-line-design.md` / `output.rs:936` `render_multi_feeds`（master gain）の**後**で `:957` `BusTarget::Master` が `hw` へ加算 |
-| 出口 | **#611** 🔴 | ○ realtime 未実装（オフライン `output(n)` は ✅ `render-score.ts`） | #611 本文の実測表・`output.rs:957-960` 合流 3 行 |
+| 出口 | **#611** 🔴 | ○ realtime 未実装（オフライン `output(n)` は ✅ `render-score.ts`）。🔴 **ステージ 2 = 3 束に切った**（owner 2026-09-07・#799）: **O-wire**（PR-O3 + #773 + **#801**・検証は **goldens が動かないこと**）→ **O-surface**（PR-O4 + daemon 台数・E2E-2〜7 + E2E-10）→ **O-multiout**（PR-O5・O6・E2E-9 + 全件緑）。正本は計画 §2.5 / §3 | #611 本文の実測表・`output.rs:957-960` 合流 3 行 |
 | マルチティンバー | **#647** | ✅ 受け皿（アドレス `(instance, unit)`・protocol）/ ○ 子プロセスの N 出力・shm | #647 本文（`transport.rs:60` `BUF_LEN = MAX_FRAMES * CHANNELS`） |
 | sidechain / multi-out 搬送 | **#409** | ○ | 🔴 **形が決まった**（2026-09-03）: `outs:` の値が**宣言されたノード**（バス / 物理アウト / render）を一様に受ける。owner 評「これはできたら最高だな」 |
 | オフライン per-bus レンダ | **#598** | ✅ P1（DSL/wire/manifest・PR #612 `10f3594c`）/ ○ P2（stem WAV 書き出し）/ ○ P3（プラグイン・instrument の offline 駆動）。**出口の一般化との関係は 4.A.3** | `session.rs:555-562` / 設計 §5 / `git log` |
 | `.orbslog` リプレイ（ライブ → オフラインの橋） | **#241** | ✅ L1 記録（#229・`session-log-writer.ts`）/ ○ L2 replay（`cli/` に無し）。**§4.M から移した**（4.A.3） | `SESSION_LOG_SPEC_v1.md` §4 / `ls packages/engine/src/cli` |
 | MIDI サミング → 部 → voice | **#524 → #525 → #526** | ○（#525 本文の「S4 で用意済み」は**確認できず** — `session.rs` に `GetPluginParams` / `SetPluginPreset` ハンドラは**無い**。§4.D 参照） | `session.rs:1298-2372` のハンドラ列挙 |
+
+> 🔴 **ステージ 2（#611 の実装）を 3 束に切った理由**（owner 2026-09-07・#799・正本は計画 §3）:
+> **分量ではなく検証の機会**である。**PR-O3 は互換維持の配線入れ替え＝振る舞いを変えない**ので、
+> 検証を「**goldens が動かないこと**」で行える。**PR-O4 と同じ束に入れるとこの検算は永久に失われる**
+> （O4 は DSL 表面を変えるので goldens は正当に動く）。
+> **PR-O6 は旧経路を撤去する＝逃げ道を塞ぐ**ので、O4 が実機で確かめられた後に置く。
 
 **前提の順序**: #645（PR-3）→ #649 → #611 → {#647, #409} → #598 の realtime 側。#524-#526 は #611 と独立だが、
 part 指定の DSL は #647（unit）と同じ語彙になるため **#647 と一緒に DSL 表面を決める**。
@@ -864,7 +870,7 @@ owner 判断が要る（#671 §5(a) / #672 A4）。**#321 の残作業（Link �
 | 未カバー語を埋める | **#668-B** = **#650** | ○（gated spec の `it(` は 20 件・未カバー 22 語） | `orbitstudio-mcp-gated.spec.ts` |
 | import の実機 E2E | #630 | ○ | — |
 | 網羅ハーネス（二重台帳・オフライン決定論層・無人） | **#543** | 📐 設計原則のみ確定（#543 本文）/ 実装 ○ | — |
-| capture が孤児 daemon の二重出力を見えない | #624 | ○（提案: daemon 本数 assert） | 🔴 **狭いスライスをステージ 2 に引き込む**（2026-09-07）。**E2E-10 が daemon respawn なので、台数を見ないと偽緑になりうる**。既存 `orbitAudioDaemonPids()`（`orbitstudio-mcp-gated.spec.ts:348-361`）を helper へ上げ、respawn 前後で 1 台を確認する。🔴 **雛形は `#606 E2E-K3`**（`orbitstudio-mcp-gated.spec.ts:5385-5404`・この関数を使う唯一のテスト）だが、そこの `toHaveLength(1)` は「**自分の start が増やした分**」の**差分**であって「高々 1 台」ではない — **総数を見る述語が要る**。**issue 全体（census 機構）は backlog** |
+| capture が孤児 daemon の二重出力を見えない | #624 | ○（提案: daemon 本数 assert） | 🔴 **狭いスライスをステージ 2 に引き込む**（2026-09-07）。**E2E-10 が daemon respawn なので、台数を見ないと偽緑になりうる**。既存 `orbitAudioDaemonPids()`（`orbitstudio-mcp-gated.spec.ts:348-361`）を helper へ上げ、respawn 前後で 1 台を確認する。🔴 **置き場は PR-O4**（§1.10 の O4 行の検証列が「E2E-2〜7・**E2E-10**」= O4 の検証と明記。**#797 で「PR-O6」と書いたのは誤り・2026-09-07 訂正**）。🔴 **雛形は `#606 E2E-K3`**（`orbitstudio-mcp-gated.spec.ts:5385-5404`・この関数を使う唯一のテスト）だが、そこの `toHaveLength(1)` は「**自分の start が増やした分**」の**差分**であって「高々 1 台」ではない — **総数を見る述語が要る**。**issue 全体（census 機構）は backlog** |
 | 負荷で落ちる Rust テスト | #640 | ○（推奨: 失敗時に load average を出す） | — |
 | root で落ちる 3 件（hook 迂回の常態化） | #684 | ○（推奨 A: root では skip） | — |
 | worktree で hook が誤ブロック | #465 | ○（**再現確認が要る**・triage） | — |
@@ -1125,8 +1131,9 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 |---|---|---|---|
 | **#757** | `packages/vscode-extension/src/` に requestId 相関ブリッジが **5 本 625 行**の重複（`eval-mark` / `plugin-ui` / `plugin-state` / `device-switch` / `engine-state`） | timeout・drain・二重解決防止のバグ修正が **5 箇所**に要る。既にずれている（`EngineStateBridge` だけ重複チェックが無い） | **6 本目を足す前**（新しいメタコマンドを足す PR で共通化する） |
 | **#752** | OOP instrument の active-note 台帳のキーが slot 同一性になっていない | 台帳の取り違えが起きうる（#606 の周辺） | #626（watchdog 復旧）と同時 |
-| **#777** | `createDaemonStderrLineRouter` に `flush()` が無い（`partial` を持ち越すが吐き出さない） | 🔴 **クラッシュ経路**で最後の 1 行が落ちる。daemon が panic して改行なしで死ぬのは、診断が最も要る場面 | **束 E-router の 1 番目**（計画 PR-E12・doc 668 §13.5.2） |
-| **#773** | `setupStdoutHandler` も部分行をバッファリングしていない | bridge envelope がチャンク境界で割れると**両断片とも捨てられる**（#614 と同じ帰結）。`get_log` のリング（`extension.ts:311`）も同じ穴の上にある | 同上（束 E-router）。🔴 **#757 の直前**——#757 の共通化はこの層の上に乗る |
+| **#801** 🔴 | `device_switch_result_records_failure_and_success_through_the_same_path` が `captured log: ""` で間欠的に落ちる（`engine_wrap.rs:10723`）| 🔴 **`rust-ci.yml` は全 PR で走る**ので、赤の帰属ができなくなり慣れるとゲートが死ぬ。**2026-09-05 に緩和（`rebuild_interest_cache()`）が入っているのに 09-07 に再発**（docs のみの PR #800 で発生・Rust 差分 0 件）。実測は負荷依存（並走 5 回で 2 FAIL / アイドル 25 回で 0 FAIL / 再実行で緑）| 🔴 **束 O-wire に引き込む**（2026-09-07）。**#780 をステージ 2 の着手条件にしたのと同じクラス**で、O-wire は Rust を触る束なのでこの CI ジョブを最も多く回す |
+| **#777** | `createDaemonStderrLineRouter` に `flush()` が無い（`partial` を持ち越すが吐き出さない） | 🔴 **クラッシュ経路**で最後の 1 行が落ちる。daemon が panic して改行なしで死ぬのは、診断が最も要る場面 | 🔴 **backlog**（2026-09-07・#799）。ステージ 2 の受け入れ基準に現れないので完了条件にしない。**#757 に着手する時点で #773 と畳む** |
+| **#773** | `setupStdoutHandler` も部分行をバッファリングしていない | bridge envelope がチャンク境界で割れると**両断片とも捨てられる**（#614 と同じ帰結）。`get_log` のリング（`extension.ts:311`）も同じ穴の上にある | 🔴 **束 O-wire に引き込む**（2026-09-07・#799）。**PR-O4 が `//#evalBegin` / `//#evalEnd` を導入し、#773 が落とすのが `{"evalMark"` を含む封筒**なので、**通信量を増やす前に受け側を直す**。#757 の順序制約は保たれる |
 
 🔴 **2026-09-07: 束 E-router は束として持たない**（計画 §3「安全網の残余」・doc 668 §13.5.4 の再改訂）。
 **#773 はステージ 2 の PR に引き込む**（PR-O4 が `//#evalBegin` / `//#evalEnd` を導入し、#773 が落とすのは
