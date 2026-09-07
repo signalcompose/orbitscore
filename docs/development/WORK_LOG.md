@@ -88,6 +88,30 @@ PR の中で直す**」に照らして引き込む。
 ---
 
 ### docs(planning): split stage 2 into three bundles (Sep 7, 2026)
+### docs(process): follow the three-bundle split into the workflow docs (Sep 7, 2026)
+
+**追従元**: PR [#800](https://github.com/signalcompose/orbitscore/pull/800)（`799-split-stage2-bundles` → main・マージコミット `9672ba3`）/ **ブランチ**: `claude/docs-sync-pr800`
+
+#### 何を追従したか
+
+#800 は計画 §2.5 / 地図 §4.A / 設計 611 §12 の 3 点セットを直したが、**束テーブルの写しがもう 1 箇所ある**ことを拾えていなかった。`BUNDLE_BRANCH_WORKFLOW.md` §10 は旧 2 束（`O-dsl` = PR-O4・O5・O6・約 1,300 行）のまま残っていた。
+
+| ファイル | 直した内容 |
+|---|---|
+| `docs/development/BUNDLE_BRANCH_WORKFLOW.md` §10 | 旧 2 束 → **3 束**（O-wire / O-surface / O-multiout）。検証列を追加し、**正本が計画 §2.5 である**ことを明記 |
+| 同 §10.1（新設） | 3 束に切った 4 つの理由と払うコスト |
+| 同 §5.1 | 🔴 **上限だけで切らず「検算の機会」でも切る**を一般規則として追加。数え方（**変更行 = `+` と `-` の合計**）も追加 |
+| 同 §2 用語 | 「1 つの設計文書に対応する」→ **1 設計文書 = 1 束とは限らない**（611 は 3 束）|
+| 同 §3 形 | 図の小 PR ラベル `O3 O4 O5 O6` を汎用の番号へ（1 束 = O3〜O6 ではなくなったため）|
+| `docs/core/PROJECT_RULES.md` 束ブランチ運用 | 同上 2 点（1 設計文書 = 1 束ではない・変更行で数える）|
+| `CLAUDE.md` 束の節 | 数え方と「検算の機会で切る」を 1 行で追記 |
+| `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` §3 | 🔴 **`#### 3 束に切る` が箇条書きの途中に空行なしで挿入されていた**ため、ステージ 2 の `- **結果**` / `- **確認**` / `- **閉じる**` 以降 20 行超が**この見出しの配下に回っていた**。見出しブロックをステージ 2 の末尾へ移動（**本文は 1 文字も変えていない**）|
+
+#### 追従不要と判断したもの
+
+`packages/` `rust/` の変更がゼロなので、DSL 仕様（`docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`）・ユーザー向け（`sites/user/` / `docs/user/`）・dev サイト（`sites/dev/`）はいずれも対象外。#800 は**まだ書かれていない PR の割り当て**を決めただけで、出荷された表面は変わっていない。
+
+
 
 **ブランチ**: `799-split-stage2-bundles`（main 直行・docs のみ・Closes #799）
 

@@ -534,7 +534,7 @@ git checkout -b <issue-number>-descriptive-name
 
 **束ブランチ運用（2026-09-03 制定・#703・手引きは [`BUNDLE_BRANCH_WORKFLOW.md`](../development/BUNDLE_BRANCH_WORKFLOW.md)）:**
 
-レビューの単位は PR ではなく**束**（1 つの設計文書に対応する PR の集合・差分 1,500 行以下）。
+レビューの単位は PR ではなく**束**（まとめてレビューするのが合理的な PR の集合・差分 1,500 行以下）。**1 設計文書 = 1 束とは限らない** — 「出口の一般化」（設計文書 611）は 3 束に分かれた（2026-09-07・#799）。🔴 **1,500 行は変更行（`+` と `-` の合計）で数える**（正本は [`IMPLEMENTATION_PLAN_2026-09.md`](../planning/IMPLEMENTATION_PLAN_2026-09.md) §2.5）。
 
 | 段階 | やること | コマンド |
 |---|---|---|
