@@ -5011,6 +5011,8 @@ impl EngineWrap {
         stream_stats: Arc<StreamStats>,
         master_gain: Arc<AtomicU32>,
     ) -> Arc<Self> {
+        #[cfg(test)]
+        crate::test_tracing::install_interest_anchor();
         let (plugin_ui_events, _) = tokio::sync::broadcast::channel(128);
         Arc::new(Self {
             engine,
@@ -10509,34 +10511,10 @@ mod startup_options_tests {
 mod select_audio_device_tests {
     use super::{probe_then_pause_old, EngineWrap, OutputFault, StreamConfigSnapshot, WrapError};
     use crate::backend::StubBackend;
+    use crate::test_tracing::{capture_tracing, simulate_subscriberless_rebuild};
     use orbit_audio_native::OutputError;
     use std::cell::RefCell;
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
-
-    #[derive(Clone)]
-    struct LogCaptureWriter(Arc<Mutex<Vec<u8>>>);
-
-    struct LogCaptureGuard(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for LogCaptureGuard {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().expect("capture log mutex").extend(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogCaptureWriter {
-        type Writer = LogCaptureGuard;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            LogCaptureGuard(self.0.clone())
-        }
-    }
+    use std::sync::Arc;
 
     #[test]
     fn probe_completes_before_pause_and_probe_failure_never_pauses() {
@@ -10693,20 +10671,7 @@ mod select_audio_device_tests {
             waited_ms: 3_000,
             phase: orbit_audio_native::StreamLivenessPhase::Probe,
         }));
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .without_time()
-            .with_ansi(false)
-            .with_max_level(tracing::Level::ERROR)
-            .with_writer(LogCaptureWriter(log.clone()))
-            .finish();
-
-        tracing::subscriber::with_default(subscriber, || {
-            // 🔴 callsite の interest はプロセス全体で 1 つ。並列に走る別テストが同じ
-            // `tracing::error!` を **subscriber の無い状態**で先に踏むと `Interest::never()` が
-            // キャッシュされ、このテストの捕捉が**空**になる（2026-09-05 に `--lib` 全件で 1 回
-            // 発生・単体と再実行では緑）。捕捉の直前に再構築して、この順序依存を消す。
-            tracing::callsite::rebuild_interest_cache();
+        let ((), rendered) = capture_tracing(tracing::Level::ERROR, || {
             wrap.record_device_switch_result(Some("Requested Output"), &failed, None, None);
         });
 
@@ -10718,8 +10683,6 @@ mod select_audio_device_tests {
             .last_switch_failure
             .as_deref()
             .is_some_and(|reason| reason.contains("produced no callback within 3000 ms")));
-        let rendered = String::from_utf8(log.lock().expect("capture log mutex").clone())
-            .expect("tracing output is utf8");
         assert!(rendered.contains("ERROR"), "captured log: {rendered:?}");
         assert_eq!(
             rendered
@@ -10746,6 +10709,44 @@ mod select_audio_device_tests {
         wrap.record_device_switch_result(Some("Requested Output"), &succeeded, None, None);
 
         assert_eq!(wrap.stream_config_snapshot(), selected);
+    }
+
+    #[test]
+    fn device_switch_capture_survives_subscriberless_first_registration_and_rebuild() {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let failed = Err(WrapError::Output(OutputError::StreamDead {
+            device: "Rejected Output".to_string(),
+            waited_ms: 3_000,
+            phase: orbit_audio_native::StreamLivenessPhase::Probe,
+        }));
+
+        let ((), log) = capture_tracing(tracing::Level::ERROR, || {
+            // Exercise the culprit's product path without a subscriber while capture is active.
+            let other_thread_wrap = Arc::clone(&wrap);
+            std::thread::spawn(move || {
+                other_thread_wrap.record_device_switch_failure_for_test("Other", "poke");
+            })
+            .join()
+            .expect("subscriber-less product call thread");
+
+            // Model a late interest write even when another test registered the callsite first.
+            std::thread::spawn(simulate_subscriberless_rebuild)
+                .join()
+                .expect("subscriber-less callsite rebuild thread");
+
+            wrap.record_device_switch_result(Some("Requested Output"), &failed, None, None);
+        });
+
+        assert_eq!(
+            log.lines()
+                .filter(
+                    |line| line.contains("audio output device switch") && line.contains("failed")
+                )
+                .count(),
+            1,
+            "captured log: {log:?}"
+        );
     }
 }
 
@@ -13069,9 +13070,9 @@ mod outproc_instrument_replace_tests {
     };
     use crate::backend::StubBackend;
     use crate::outproc_instrument::OutProcInstrumentStats;
+    use crate::test_tracing::capture_tracing;
     use orbit_audio_sandbox::NeutralEvent;
     use std::collections::HashMap;
-    use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -14140,30 +14141,6 @@ mod outproc_instrument_replace_tests {
         ));
     }
 
-    #[derive(Clone)]
-    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
-
-    struct CaptureGuard(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for CaptureGuard {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().expect("capture log mutex").extend(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
-        type Writer = CaptureGuard;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            CaptureGuard(self.0.clone())
-        }
-    }
-
     #[test]
     fn r9_missing_rt_ack_warns_and_quarantines_old_slot() {
         let (wrap, old, spare, _old_pid) = two_slot_fixture("slow-child.sh");
@@ -14178,18 +14155,8 @@ mod outproc_instrument_replace_tests {
             let region = orbit_audio_sandbox::region_ptr(&mmap);
             unsafe { orbit_audio_sandbox::transport::publish_child_ready(region, false) };
         });
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .without_time()
-            .with_ansi(false)
-            .with_max_level(tracing::Level::WARN)
-            .with_writer(CaptureWriter(log.clone()))
-            .finish();
         let started = Instant::now();
-        let result = tracing::subscriber::with_default(subscriber, || {
-            // 上の `device_switch_result_records_...` と同じ理由（callsite interest はプロセス
-            // 全体で 1 つ）。捕捉の直前に再構築する。
-            tracing::callsite::rebuild_interest_cache();
+        let (result, rendered) = capture_tracing(tracing::Level::WARN, || {
             wrap.replace_outproc_instrument_plugin(
                 PathBuf::from(NEW_PLUGIN),
                 None,
@@ -14201,8 +14168,6 @@ mod outproc_instrument_replace_tests {
         assert!(result.quarantined_slot);
         publisher.join().expect("READY publisher panicked");
         assert!(started.elapsed() >= super::INSTRUMENT_DRAIN_TIMEOUT);
-        let rendered = String::from_utf8(log.lock().expect("capture log mutex").clone())
-            .expect("tracing output is utf8");
         let timeout_warning = rendered
             .lines()
             .find(|line| line.contains("event drain-and-discard ack timed out"))

@@ -23,6 +23,128 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 「**`OUTPUT_LINE_GOLDENS` / `O0-1` などの goldens が 1 つも動かないこと**」+ cargo 全緑 + 実機 gated 全件。
 中身は PR-O3（`LineProgram` / `SetBusLine`）+ #773 + #801。
 
+### fix(test): anchor the tracing callsite interest so capture cannot go empty (#801) (Sep 7, 2026)
+
+**Issue**: #801 / **ブランチ**: `801-tracing-interest-anchor` → `611-line-wire`（小 PR）
+
+#### 実害 — ステージ 2 の 1 本目を出す前に 2 回起きた
+
+`rust-ci.yml` は**全 PR で走る**。`device_switch_result_records_failure_and_success_through_the_same_path`
+が `captured log: ""` で間欠的に落ちると、**赤の帰属ができなくなる**。
+
+本日、**docs のみの PR 2 本**（[#800](https://github.com/signalcompose/orbitscore/pull/800) /
+[#805](https://github.com/signalcompose/orbitscore/pull/805)・いずれも **Rust 差分 0 件**）で発生し、
+#805 では**再実行（attempt 2）でも同じ失敗**をした。
+
+#### 🔴 申し送りの前提が 1 つ崩れた — 「負荷依存」ではなく「スレッド数依存」
+
+`/goal` は「**負荷をかけて再現条件を作れ**」だったが、**CPU 負荷は無関係だった**。
+default feature の `--lib`（**55 テスト・1 回 0.01 秒**）を、負荷ゼロで 100 回ずつ:
+
+| `--test-threads` | 失敗 / 100 |
+|---|---|
+| 1 | **0** |
+| 2 | **16〜24** |
+| 3 | 0 |
+| 4（= `ubuntu-latest` は 4 コア）| **9** |
+| 6 | **11** |
+
+⚠️ `--test-threads 3` が 0 なのは**説明できていない**（不確実として残す）。
+🔴 **CPU を 20 プロセスで飽和させた最初の試みは無駄足だった。変数の当て方を誤っていた。**
+
+#### 🔴 除外実験で犯人を 1 本に確定した
+
+| 条件（`--test-threads 2` × 100）| 失敗 |
+|---|---|
+| baseline（全 55）| **24** |
+| `--skip select_audio_device_records_capture_owner_and_send_rejections` | 🔴 **0** |
+| `--skip get_status_adds_effective_output_callback_state_and_last_switch_failure` | 22（**変化なし**）|
+
+当初候補に挙げた `session::tests::get_status_...` は**無関係**だった（推測を実測が否定した）。
+
+#### 機構（一次ソース `tracing-core 0.1.36`・設計は Fable・実証は main）
+
+1. `never` を書くのは **初回登録（`DefaultCallsite::register`）の 1 回だけ**
+2. 🔴 `MAX_LEVEL` の初期値は `OFF` で、マクロは `level_enabled!` を `interest()` より**先に**評価する
+   → **犯人が初回登録者になれるのは、被害者が `Dispatch::new` を済ませた後だけ**（窓は数 µs）
+3. 犯人が登録者になると `NoSubscriber` に解決して **`Interest::never()`** をキャッシュ
+4. それが被害者の `rebuild_interest_cache()` **より後**・`error!` **より前**に着地すると **skip**
+   （`never` は `enabled()` にフォールバックしない）
+
+🔴 **2026-09-05 の緩和策のコメント「この順序依存を消す」は誤りだった。** 窓を狭めただけである。
+
+#### 直し方 — グローバル「anchor」subscriber
+
+`register_callsite` が**常に `Interest::sometimes()`** を返す subscriber を `set_global_default` で
+1 回だけ入れる。以後どのスレッドが登録・再構築しても interest は `sometimes` に固定され
+（`Interest::and` は異なる値なら `sometimes`）、判定は毎回**そのスレッドの `enabled()`** に落ちる。
+
+`max_level_hint` は **`OFF`**。捕捉スコープが無い間は `MAX_LEVEL` が `OFF` のままなので、
+**残り約 270 本の挙動とコストが現状と同一**（マクロが `level_enabled!` で短絡）。
+
+#### 🔴 発注前に不確実性をゼロにした（最小クレートで 5 モード実行・各モード別プロセス）
+
+| モード | 捕捉 |
+|---|---|
+| `baseline` / `preregistered`（`--test-threads=1` の形）| ERROR 行あり |
+| **`race`** / **`firsthit-after-rebuild`**（実経路を順序づけた形）| 🔴 **`""`** |
+| **`anchor`**（本修正）| ✅ ERROR 行あり |
+
+`max_level_hint` を **`TRACE` と `OFF` の両方**で実行し、どちらでも `anchor` が捕捉できることを確認。
+設計で唯一「中〜高」だった確信度を**実装発注の前に**潰した。
+
+#### 入ったもの
+
+| 場所 | 内容 |
+|---|---|
+| `test_tracing.rs`（新設・`#[cfg(test)]`）| `InterestAnchor` / `install_interest_anchor()` / 共通 `capture_tracing` / `simulate_subscriberless_rebuild` |
+| `engine_wrap.rs` `EngineWrap::build` | `#[cfg(test)] install_interest_anchor()`。🔴 **`start_with` ではなく `build`**（`start_with` は integration test からも呼ばれ `cfg(test)` が付かない）|
+| 捕捉 2 箇所 | 共通 helper へ。**誤ったコメントと `rebuild_interest_cache()` を削除**。重複していた writer 実装 2 つも 1 本化 |
+| 決定論テスト | 犯人の実経路（別スレッド）+ 遅着 rebuild（別スレッド）の**両方**を置く |
+| 衛生テスト | `with_default` 等が `test_tracing.rs` の外に現れたら赤（自分自身は `concat!` で除外）|
+
+**犯人テストは書き換えていない** — subscriber を張らずに製品コードを呼ぶのは正当なテストで、
+壊れていたのは**捕捉の仕組みの方**である。
+
+#### 検証（🔴 すべて main が sandbox 外で実行した結果）
+
+| 何を | 結果 |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo clippy`（`outproc-effect,outproc-instrument`）| exit 0 |
+| `cargo test --workspace --locked` | **599 passed / 0 failed / 38 ignored**（93 スイート）|
+| `cargo test`（feature 付き）| **326 passed / 0 failed / 13 ignored**（20 スイート）・`r9_missing_rt_ack` も緑 |
+| 🔴 **red-first** | anchor の設置を外すと **`assertion left == right failed: captured log: ""` / `left: 0, right: 1`** |
+| 100 回 × `--test-threads 2` | **0 / 100**（修正前 16〜24）|
+| 100 回 × `--test-threads 4`（CI と同条件）| **0 / 100** |
+
+#### 🔴 測定で 2 回つまずいた（同じ轍を踏まないための記録）
+
+1. **空パスを実行して「100/100 失敗」と出した。** `ls -t ... | grep -v '\.d$'` が空を返し、
+   `"" --test-threads 2` を 100 回叩いていた。**変数を表示していたので気づけた**
+2. **中断された実行を「完走」と読みかけた。** ワークスペーステストが `orbit_effect_rack_child` の
+   起動行で止まったログを、50 スイート分の集計で「455 passed」と報告した。
+   🔴 **終了マーカー（`EXIT=`）を確認してから数字を使う。** 走らせ直したら 93 スイート・599 passed だった
+
+#### 🔴 既知の赤を 1 件、台帳に足す
+
+`pipelined_host_with_real_child_is_gain_delayed_one_block`（`orbit-audio-sandbox`）が 4 回連続で
+落ちたが、**私の変更を外しても落ちた**。`docs/archive/WORK_LOG_2026-08.md:1557` に同じ記録があり、
+原因は **macOS のセキュリティ評価**（実測: `syspolicyd` 42% / `XprotectService` 29%）。
+**静穏になってから 3 回走らせると 0.1〜0.3 秒で pass**（負荷時は 7.00 秒 = タイムアウト）。
+テスト自身が `#520` で「ビルド直後の child は macOS のセキュリティ評価で数秒〜24 秒止まりうる」と
+警告している。**赤を実装のせいにする前に、静穏時に測り直す。**
+
+#### 触っていないもの（列挙として残す）
+
+`orbit-audio-sandbox/src/transport.rs:3273` / `:3329` に**同型の脆さ**があるが、
+**実害が観測されていない**ので本 PR の範囲外とした（束の差分予算）。
+探索範囲つきの全列挙は [#801 のコメント](https://github.com/signalcompose/orbitscore/issues/801)に残した。
+本筋は dev 専用クレート `orbit-tracing-testkit` へ抽出して両クレートで共有すること。
+
+---
+
 ### fix(extension): buffer partial stdout lines before bridge dispatch (#773) (Sep 7, 2026)
 
 **Issue**: #773 / **ブランチ**: `773-stdout-line-buffer` → `611-line-wire`（小 PR）
