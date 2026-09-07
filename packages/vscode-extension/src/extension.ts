@@ -1476,6 +1476,43 @@ function logHandlerFailure(handlerName: string, err: unknown): void {
  * Setup stdout handler for engine process.
  */
 export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
+  // #773: Bridge envelopes are line-framed, but stdout data events are not.
+  // Keep this buffer inside the handler so a stale process can never donate a
+  // partial line to the current process. Only bridge dispatch is buffered:
+  // applyEngineStdoutChunk still receives each raw chunk immediately below.
+  const bridgeLines = createLinePrefixer((rawLine) => {
+    const trimmedLine = rawLine.trim()
+    const isCurrent = engineProcess === process
+    if (trimmedLine.startsWith('{"savePluginState"')) {
+      const parsed = isCurrent && pluginStateBridge.handleLine(rawLine)
+      if (!parsed && isCurrent) {
+        outputChannel?.appendLine(
+          `⚠️ received a malformed //#savePluginState result line: ${rawLine}`,
+        )
+      }
+    } else if (trimmedLine.startsWith('{"pluginUi"')) {
+      const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
+      if (!parsed && isCurrent) {
+        outputChannel?.appendLine(`⚠️ received a malformed //#pluginUi result line: ${rawLine}`)
+      }
+    } else if (trimmedLine.startsWith('{"evalMark"')) {
+      // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
+      // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
+      // dispatch されなかった（ユニットテストは全て緑・実機 E2E だけが捕まえた）。
+      const parsed = isCurrent && evalMarkBridge.handleLine(rawLine)
+      if (!parsed && isCurrent) {
+        outputChannel?.appendLine(`⚠️ received a malformed //#evalMark result line: ${rawLine}`)
+      }
+    } else if (trimmedLine.startsWith('{"engineState"')) {
+      const parsed = isCurrent && engineStateBridge.handleLine(rawLine)
+      if (!parsed && isCurrent) {
+        outputChannel?.appendLine(
+          `⚠️ received a malformed //#getEngineState result line: ${rawLine}`,
+        )
+      }
+    }
+  })
+
   process.stdout?.on('error', (err) => {
     logHandlerFailure('setupStdoutHandler', err)
   })
@@ -1489,37 +1526,7 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
       // (same mechanism as setupExitHandler/setupStdinErrorHandler below).
       const isCurrent = engineProcess === process
 
-      for (const rawLine of lines) {
-        const trimmedLine = rawLine.trim()
-        if (trimmedLine.startsWith('{"savePluginState"')) {
-          const parsed = isCurrent && pluginStateBridge.handleLine(rawLine)
-          if (!parsed && isCurrent) {
-            outputChannel?.appendLine(
-              `⚠️ received a malformed //#savePluginState result line: ${rawLine}`,
-            )
-          }
-        } else if (trimmedLine.startsWith('{"pluginUi"')) {
-          const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
-          if (!parsed && isCurrent) {
-            outputChannel?.appendLine(`⚠️ received a malformed //#pluginUi result line: ${rawLine}`)
-          }
-        } else if (trimmedLine.startsWith('{"evalMark"')) {
-          // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
-          // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
-          // dispatch されなかった（ユニットテストは全て緑・実機 E2E だけが捕まえた）。
-          const parsed = isCurrent && evalMarkBridge.handleLine(rawLine)
-          if (!parsed && isCurrent) {
-            outputChannel?.appendLine(`⚠️ received a malformed //#evalMark result line: ${rawLine}`)
-          }
-        } else if (trimmedLine.startsWith('{"engineState"')) {
-          const parsed = isCurrent && engineStateBridge.handleLine(rawLine)
-          if (!parsed && isCurrent) {
-            outputChannel?.appendLine(
-              `⚠️ received a malformed //#getEngineState result line: ${rawLine}`,
-            )
-          }
-        }
-      }
+      bridgeLines.push(output)
 
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
@@ -1562,6 +1569,13 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
       logHandlerFailure('setupStdoutHandler', err)
     }
   })
+  process.stdout?.on('end', () => {
+    try {
+      bridgeLines.flush()
+    } catch (err) {
+      logHandlerFailure('setupStdoutHandler', err)
+    }
+  })
 }
 
 /**
@@ -1580,14 +1594,15 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
  * プロセスが終わる。それは過小カウントを直すはずのこの変更が**逆方向に**同じ穴を開けること
  * になる。`end` で必ず吐き出す。
  *
- * 🔴 **「chunk → 行」の実装は合計 4 つある**。この関数だけを直して全部揃ったと思わないこと:
+ * 🔴 **「chunk → 行」の経路は合計 4 つある**。この関数だけを直して全部揃ったと思わないこと:
  *
  * 1. ここ `createLinePrefixer` — engine stderr を行へ戻す（#756）。
  * 2. `packages/engine/src/audio/rust-engine/daemon-client.ts` の
  *    `createDaemonStderrLineRouter` — daemon stderr の同型実装（#777）。拡張パッケージは
  *    `@orbitscore/engine` に依存しないので今は共有できない。
- * 3. 同ファイルの `setupStdoutHandler` — `output.split('\n')` で engine stdout を分ける。
- *    chunk 境界を持ち越さない問題は #773 で追跡するため、この束では変更しない。
+ * 3. 同ファイルの `setupStdoutHandler` — bridge dispatch だけをこの関数で行へ戻す（#773）。
+ *    生 chunk とその `output.split('\n')` は従来どおり即座に `applyEngineStdoutChunk` へ渡し、
+ *    ログ転写と playhead / `//#selectAudioDevice` 処理の呼び出し規約は変えない。
  * 4. `activate()` 冒頭の output-channel ring proxy — `append` を `value.split('\n')` して
  *    `get_log` 用 ring へ写す。これは現時点で issue 未追跡である。
  *
