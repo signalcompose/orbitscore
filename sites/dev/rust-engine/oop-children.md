@@ -41,7 +41,7 @@ daemon が spawn し得る child バイナリは `orbit-audio-daemon` の `SPAWN
 実装が食い違わないよう「真実を 1 箇所に置く」ために作られた定数です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:86-95
+// rust/crates/orbit-audio-daemon/src/lib.rs:88-97
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",

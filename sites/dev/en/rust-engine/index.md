@@ -645,7 +645,7 @@ The point worth holding onto is that **production now has exactly one multiplica
 the daemon, and `EngineWrap::set_global_gain` only stores into the `MasterLine` target.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8724-8733
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8726-8735
     /// マスターゲインを設定する。**production では単一の適用点（native master line・#649
     /// PR-O2）へ atomic store するだけ**——`orbit_audio_core::Engine::set_global_gain`（core の
     /// scheduler ramp）は production から呼ばない（`docs/design/611-output-line-design.md`

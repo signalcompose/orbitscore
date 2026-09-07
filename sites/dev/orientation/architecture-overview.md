@@ -501,7 +501,7 @@ daemon 本体だけでなく、後述の plugin child と標準プラグイン `
 daemon はプラグイン (CLAP / VST3) の実体を自分のプロセスに載せません。effect と instrument はそれぞれ別のバイナリを **out-of-process (OOP)** の子プロセスとして spawn し、共有メモリで音声をやり取りします。spawn され得る child の一覧は daemon crate の定数として 1 箇所に明示されています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:86-95
+// rust/crates/orbit-audio-daemon/src/lib.rs:88-97
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",

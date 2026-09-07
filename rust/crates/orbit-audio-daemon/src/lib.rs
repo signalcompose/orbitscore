@@ -61,6 +61,8 @@ pub(crate) mod outproc_stub_child;
 pub mod protocol;
 pub mod server;
 pub mod session;
+#[cfg(test)]
+pub(crate) mod test_tracing;
 
 /// daemon が spawn しうる child 実行ファイル名の**唯一の一覧**。
 ///
