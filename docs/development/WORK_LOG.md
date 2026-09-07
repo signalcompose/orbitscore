@@ -17,6 +17,46 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(index): follow PR #805 — the archive period label stayed at 09-05 (Sep 7, 2026)
+
+**ブランチ**: `claude/docs-sync-pr805`（ルーチンによる docs 追従）
+
+PR [#805](https://github.com/signalcompose/orbitscore/pull/805)（マージコミット `7a71f51`）の追従。
+#805 は WORK_LOG のローテーションのみで、**DSL / ランタイム / OrbitStudio の表面は 1 行も動いていない**。
+追従対象はアーカイブの索引 1 箇所だけだった。
+
+#### 直した箇所
+
+| ファイル | 内容 |
+|---|---|
+| `docs/core/INDEX.md:176` | 「Archived WORK_LOG」表の period 列 `2026-09（前半・09-01〜09-05）` → `09-01〜09-06` |
+
+#805 はアーカイブ側 H1（`docs/archive/WORK_LOG_2026-09.md:1`）と本体末尾の索引
+（`docs/development/WORK_LOG.md:1184`）を `09-01〜09-06` へ更新したが、`PROJECT_RULES.md:116` が
+更新を義務づけている **3 箇所目の `docs/core/INDEX.md` が旧ラベルのまま**残っていた。
+
+🔴 **仕組みがこの列を見ていない。** `tests/docs/worklog-size.spec.ts:44-53` の索引テストは
+「`docs/archive/` にある `WORK_LOG_YYYY-MM.md` が本体末尾から辿れるか」= **ファイル名の存在**しか
+照合しない。period 列のラベルも INDEX.md 側の表も検査範囲の外なので、ずれても緑のままになる。
+
+#### 追従不要と判断したもの
+
+- `docs/archive/WORK_LOG_2026-09.md`（+790 行）と `docs/development/WORK_LOG.md`（-786 行）の
+  本文 — **移設のみで内容は不変**（#805 が文字列比較で同一性を確認済み）。参照先が本体から
+  archive へ移るが、`sites/**` からの `development/WORK_LOG.md` 名指しは 0 件で、
+  `sites/dev/editor/vscode-architecture.md:918`（および `en/` 同行）は既に archive を指している
+- `sites/dev/` の各章 — 内部構造・評価経路は変わっていない
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — DSL の構文・意味論は変わっていない
+
+#### 🔴 #805 は `fmt / clippy / test` が赤いままマージされている
+
+`device_switch_result_records_failure_and_success_through_the_same_path` の `captured log: ""`
+（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10723`）。**再実行（run_attempt 2）でも再発**。
+既知の flaky #801 で、docs のみの差分とは無関係。PR [#808](https://github.com/signalcompose/orbitscore/pull/808)
+（`801-tracing-interest-anchor`）が anchor subscriber で直しており、その run は緑。
+
+---
+
 ### chore(docs): rotate WORK_LOG before the O-wire bundle (#804) (Sep 7, 2026)
 
 **Issue**: #804 / **ブランチ**: `804-rotate-worklog`（main 直行・docs のみ）
