@@ -23,6 +23,119 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 「**`OUTPUT_LINE_GOLDENS` / `O0-1` などの goldens が 1 つも動かないこと**」+ cargo 全緑 + 実機 gated 全件。
 中身は PR-O3（`LineProgram` / `SetBusLine`）+ #773 + #801。
 
+### feat(daemon): line program and RT execution, legacy SetBusRouting mapped onto it (#611 PR-O3a) (Sep 8, 2026)
+
+**Issue**: #611 / **ブランチ**: `611-o3a-line-program` → `611-line-wire`（小 PR）
+**正本**: `docs/design/611-output-line-design.md` §5.1（型）・§5.3（RT アルゴリズム）
+
+#### この PR の価値は「音が変わらないこと」にある
+
+`OutputDest` / `LineOutput` / `LineOp` / `LineProgram` / `LineSlot` を新設し、RT の post-loop を
+プログラム実行に置き換えた。**旧 `SetBusRouting` は内部で `LineProgram` を生成する形に写して互換を保つ。**
+振る舞いを変えない配線の入れ替えなので、**「変わっていない」が最も決定的な検算**になる。
+
+🔴 **wire（`SetBusLine`）と TS 側は含まない**（PR-O3b）。`LineOp::Pan` / `OutputDest::Render` /
+`OutputDest::Link` は variant の定義のみで**実配線しない**（PR-O4 以降）。
+
+#### 🔴 収束条件は満たされた — goldens は 10 桁一致
+
+| golden | O3a 前（#773 の実機）| O3a 後 1 本目 | O3a 後 2 本目 |
+|---|---|---|---|
+| `noBus firstRms` | 0.0870166332**8518032** | 0.0870166332**7764678** | 0.0870166332**8789269** |
+| `totalOverDry` | 1.3000000133**642298** | 1.3000000133**585945** | 1.3000000129**92668** |
+| `effectOnly/dry` | 1.9952622670**586015** | 1.9952622670**915188** | 1.9952622669**054862** |
+| `combined/dry` | 0.9999999201**338745** | 0.9999999201**503713** | 0.9999999200**459261** |
+
+⚠️ **golden 定数（0.0846173）との +2.8% のずれは O3a 以前から存在していた**もので、±12% の
+意味論許容に吸収されている。**この PR で動いたものは何も無い。**
+
+#### 🔴 main の変異検証がテストの穴を 1 つ見つけた
+
+`if !output.thru { … break }` は **2 箇所**ある。`if false {` へ変異させて実測:
+
+| 箇所 | 役割 | 当初 | 修正後 |
+|---|---|---|---|
+| `output.rs:2161`（RT 実行側）| 加算の打ち切り | ✅ red | ✅ red |
+| 🔴 `output.rs:2002`（**marking pass**）| `render_targets[target] = true` の打ち切り | 🔴 **70 件すべて緑**（生き残り）| ✅ **red** |
+
+marking pass が止まらないと**本来描画されないバスが描画対象になり、自分のラインを実行して
+master へ加算する** = **音が変わる**。**この束の収束条件が捕まえるべき種類の誤りが、
+cargo 層では素通りしていた。**
+
+対処として `marking_stops_before_bus_output_after_thru_false` と対照の
+`marking_reaches_bus_output_after_thru_true` を追加（後段 inactive バスに sentinel 値を置き、
+marking されれば zero-fill される／されなければ保存される、で区別する）。
+🔴 **実装は 1 行も変えていない**（実装領域の SHA-256 照合で確認）。
+
+#### 🔴 main が反証してほしい読み（Fable 監査へ回す）
+
+互換の bit 一致テスト 2 本は「旧 API 構成」と「program 構成」を比べているが、
+**O3a 以降は旧 API も内部で `LineProgram` を生成する**ので両方が同じ実行経路に収束する。
+したがって保証されるのは**変換の正しさ**であって、
+**「新しい RT 実行が O3a 以前と同じ音を出すこと」ではない。**
+後者を保証しているのは**期待値を直書きした既存テスト（無改変）**と**実機 goldens（±12%）**だけ。
+
+#### 退役規律は先例を踏襲した
+
+`RetiredLineProgram::retired_at_generation` を**退役オブジェクト内**に保持する。
+`orbit-effect-rack-child` の `StageList::retired_at_generation`（`:214, :247-249`）が
+**「別の atomic をポインタの隣に置く形」を明示的に棄却している**ので、それに倣った。
+世代は RT が `finish_generation()` で進め、**描画対象でない stage も含む全 stage** に対して
+呼ぶので、非アクティブなバスの退役分も回収される。
+
+#### 検証（🔴 すべて main が sandbox 外で実行）
+
+| 何を | 結果 |
+|---|---|
+| `cargo fmt --all --check` | exit 0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | exit 0 |
+| `cargo clippy`（`outproc-effect,outproc-instrument`）| exit 0 |
+| `cargo test --workspace --locked` | **608 passed / 0 failed / 38 ignored**（93 スイート・**完走マーカーで確認**）|
+| `cargo test -p orbit-audio-native --lib` | **72 passed / 0 failed / 2 ignored** |
+| 互換 bit 一致 2 本 | pass |
+| 🔴 変異（marking pass）| 修正前 = 生き残り → 修正後 = **red** |
+| 実機 gated（静穏時）| **29 passed / 1 failed** = `steps the live playhead`（**既知の main baseline**）のみ |
+| 既存アサーションの削除・変更 | **0 件** |
+
+#### 引用の再アンカー（64 件・うち 10 件は引用元の変更）
+
+`output.rs` を大きく触ったので dev サイトの引用が 64 件落ちた。
+
+| 種類 | 件数 | 対処 |
+|---|---|---|
+| 純粋な行ずれ | 54 | `check-citations.mjs --fix` |
+| 🔴 **引用元の移動** | **10**（ja/en 各 5）| **手作業で新しい位置へ付け替え** |
+
+後者は `render_block_with_sources` / `advance_gain` の doc / `render_engine_with_sources` /
+`sources.is_empty()` / `collect_source_feeds` の 5 箇所で、**中身は同じで位置だけが動いた**もの。
+行数を変えずに開始位置だけを移した。
+
+検証: `npm run docs:check` → **984 citations verified, 0 failed**。
+
+🔴 **`--fix` の後に必ず残件を確認する。** 64 → 10 に減った時点で満足すると、
+**引用元が変わった 10 件が古いコードを見せ続ける**。#773（80 → 6）でも同じ形だった。
+
+#### 🔴 実機の赤を実装のせいにしかけた（本日 2 件目）
+
+1 本目の実機で `#611 O0-1` が落ちたが、原因は RMS ではなく **ERROR 行の増加**だった:
+
+```
+engine lock contention (N total); a block was silently zero-filled — this self-heals next block
+```
+
+`session.rs:987` の**既存**の WARNING（#401・engine 内部 Mutex の `try_lock` 失敗を可視化）で、
+O3a の差分には無い。しかし **O3a 前の実機ログでは 0 回**だったので「無関係」とは言えず、
+`LineSlot::install` が control 側で `Mutex` を取ることもあって**因果があり得た**。
+
+**静穏時に測り直したら contention は 0 回・O0-1 は緑**だった。1 本目は `syspolicyd` が 30%
+動いている最中の実行だった。
+
+🔴 **本日 2 件目**（1 件目は `pipelined_host_with_real_child_is_gain_delayed_one_block`）。
+**実機の赤は、実装を疑う前に静穏時に測り直す。** macOS のセキュリティ評価
+（`syspolicyd` / `XprotectService`）は数十秒〜数分の単位で走り、その間だけ実機テストが落ちる。
+
+---
+
 ### fix(test): anchor the tracing callsite interest so capture cannot go empty (#801) (Sep 7, 2026)
 
 **Issue**: #801 / **ブランチ**: `801-tracing-interest-anchor` → `611-line-wire`（小 PR）

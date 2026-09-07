@@ -164,7 +164,7 @@ export const MIXER_BUS_POOL_SIZE = 4
 The corresponding Rust constants live in the daemon's `engine_wrap.rs`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2065-2078
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2076-2089
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
 /// （M3 で配線予定）。
 #[cfg(feature = "outproc-effect")]
@@ -336,7 +336,7 @@ later stage and `BusKind::Sum`", "a send target must be a later stage and `BusKi
 "if even one check fails, nothing is applied".
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6250-6270
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6318-6338
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -371,34 +371,34 @@ place is the second half of `render_engine_with_insert_buses_and_source_outputs`
 `output.rs`, the so-called **post-loop**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1505-1531
+// rust/crates/orbit-audio-native/src/output.rs:2062-2088
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
 
-    // post-loop: 配列順（= トポロジカル順・MX.4）で is_render_target な stage を処理する。
-    // stage i の output_target/send は必ず i より後ろを指す（構築時 validate_bus_topology で
-    // 検証済み）ので、`split_at_mut(i + 1)` で「i を含む左」と「i より後ろの右」に安全に分割できる
-    // （sum のネスト・循環は構造的に発生しない）。
+    // post-loop: execute each captured line in topological stage order. Bus outputs retain the
+    // existing split_at_mut(i + 1) discipline; every target was validated before publication.
     for i in 0..buses.len() {
         if !render_targets[i] {
             continue;
         }
-        if active_flags[i] {
-            if let Some(processor) = buses[i].processor.as_mut() {
-                processor.process(&mut buses[i].buffer[..bs]);
-            }
-        }
-
-        let (left, right) = buses.split_at_mut(i + 1);
-        let src_stage = &left[i];
-
-        match effective_targets[i] {
-            BusTarget::Master => {
-                for (dst, s) in hw.iter_mut().zip(&src_stage.buffer[..bs]) {
-                    *dst += *s;
+        // SAFETY: paired with the Acquire load above and the generation completion below.
+        let program = unsafe { &*programs[i] };
+        let mut first_output = true;
+        let mut reached_end = true;
+        for (op_index, op) in program.ops.iter().enumerate() {
+            match *op {
+                LineOp::Rack => {
+                    if active_flags[i] {
+                        if let Some(processor) = buses[i].processor.as_mut() {
+                            processor.process(&mut buses[i].buffer[..bs]);
+                        }
+                    }
                 }
-            }
+                LineOp::Gain(target) => {
+                    let gain = line_gain(
+                        program,
+                        op_index,
 ```
 
 Read it like this.
@@ -434,7 +434,7 @@ native) does not know what an instrument is; it holds only the abstraction "some
 back N blocks when rendered".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:775-788
+// rust/crates/orbit-audio-native/src/output.rs:793-806
 /// A callback-owned source which renders one or more interleaved output units.
 pub trait BlockSource: Send {
     fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
@@ -460,7 +460,7 @@ Feed collection is done by `collect_source_feeds` (`output.rs:772-801`), which m
 `SourceDest` to the core's `FeedDest`. Only the mapping is quoted here.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1357-1367
+// rust/crates/orbit-audio-native/src/output.rs:1799-1809
             let dest = match slot.dests[unit].load() {
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
@@ -775,7 +775,7 @@ commutes, so either order yields the same value). The invariant is therefore unm
 a DSL-level E2E, and the sole guard is a unit test whose rack stub **generates** sound.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:3316-3321
+// rust/crates/orbit-audio-native/src/output.rs:4344-4349
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(
