@@ -17,6 +17,76 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(planning): pull the CI flake (#801) into the O-wire bundle (Sep 7, 2026)
+
+**ブランチ**: `801-pull-flake-into-o-wire`（main 直行・docs のみ・Closes #801 ではない — #801 は実装で閉じる）
+
+#### 発端 — docs のみの PR で CI が落ちた
+
+PR [#800](https://github.com/signalcompose/orbitscore/pull/800)（**`.md` 4 ファイルのみ・Rust 差分 0 件**）で
+`fmt / clippy / test` が FAILURE になった。落ちたのは
+`engine_wrap::select_audio_device_tests::device_switch_result_records_failure_and_success_through_the_same_path`
+の **`captured log: ""`**（`engine_wrap.rs:10723`）。
+
+🔴 **コード中のコメント自身がこの故障を記録していた**（`engine_wrap.rs:10704-10709`）:
+
+> callsite の interest はプロセス全体で 1 つ。並列に走る別テストが同じ `tracing::error!` を
+> **subscriber の無い状態**で先に踏むと `Interest::never()` がキャッシュされ、このテストの捕捉が**空**になる
+> （**2026-09-05 に `--lib` 全件で 1 回発生**・単体と再実行では緑）。捕捉の直前に再構築して、この順序依存を消す。
+
+**緩和策（`tracing::callsite::rebuild_interest_cache()`）は 2026-09-05 に入っているのに、09-07 に再発した。**
+「この順序依存を消す」は達成できていない。→ **issue #801** を新規に立てた。
+
+#### 実測（負荷依存・単一の失敗率は出さない）
+
+| 実行 | 結果 |
+|---|---|
+| CI（ubuntu） | 🔴 **FAIL** → 再実行で **SUCCESS**（flaky の裏付け） |
+| 手元 `--lib` 全件 × 5（他の処理と並走） | **2 FAIL / 5** |
+| 手元 `--lib` 全件 × 10（アイドル） | 0 FAIL |
+| 手元 当該テスト単体 × 10 | 0 FAIL |
+| 手元 `--lib` 全件 × 5（`--test-threads=1`） | 0 FAIL |
+
+⚠️ **途中で計測を 1 回壊した。** `$TMPDIR` がサンドボックスの内外で別を指すため
+`> "$TMPDIR/a1.log"` のリダイレクトが失敗し、cargo の終了コードではなく**リダイレクトの失敗**で
+「25 件すべて FAIL」に見えていた。書けるディレクトリを明示して取り直した値が上表。
+🔴 **終了コードだけで判定せず、ログに期待する文字列（`captured log: ""`）が在るかで数え直した。**
+
+#### 🔴 O-wire 束に引き込む（owner 2026-09-07）
+
+計画 §3 の引き込み条件「**そのステージの受け入れ基準が依存しているものだけを、そのステージの
+PR の中で直す**」に照らして引き込む。
+
+**依存している根拠**: `rust-ci.yml` は**全 PR で走る**。間欠的に赤くなると
+**ステージ 2 のどの PR でも「自分の変更のせいか」を切り分けさせる**ことになり、慣れると無視されて
+ゲートが死ぬ — **#780 をステージ 2 の着手条件にしたのと同じクラス**。
+**O-wire は Rust を触る束なので、この CI ジョブを最も多く回す。**
+
+| 束 | 中身（更新後） | 概算 |
+|---|---|---|
+| **O-wire** | PR-O3 + **#773** + **#801** | 約 850 行 |
+
+#### 反映先
+
+- **実装プラン**: §2.5 束テーブル / §3 ステージ 2 の 3 束テーブル + 引き込みの理由 / 引き込み条件の表
+- **地図**: §4.A の出口行 / §6.2 に **#801 の行を新設**
+- **設計 611**: §12 の束テーブル
+- Serena 引き継ぎメモリ + `/goal` プロンプト + auto-memory
+
+#### 🔴 直し方は決めていない（未検証の仮説だけ残す）
+
+`rebuild_interest_cache()` は**呼んだ時点**の interest を再計算するが、`with_default` のスコープに
+入った後で**別スレッドが同じ callsite を subscriber 無しで踏む**と再びキャッシュが `never` へ倒れうる。
+だとすれば「捕捉の直前に 1 回再構築」では足りない。**机上推論なので確定させず、
+着手時に再現条件（負荷をかける）を作ってから直す**（#801 本文）。
+
+#### 検証
+
+- `npm run docs:check`: 984 citations verified / 0 failed
+- `tests/docs/`: 2 passed
+
+---
+
 ### docs(planning): split stage 2 into three bundles (Sep 7, 2026)
 
 **ブランチ**: `799-split-stage2-bundles`（main 直行・docs のみ・Closes #799）
