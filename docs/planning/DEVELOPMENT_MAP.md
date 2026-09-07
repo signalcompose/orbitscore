@@ -864,7 +864,7 @@ owner 判断が要る（#671 §5(a) / #672 A4）。**#321 の残作業（Link �
 | 未カバー語を埋める | **#668-B** = **#650** | ○（gated spec の `it(` は 20 件・未カバー 22 語） | `orbitstudio-mcp-gated.spec.ts` |
 | import の実機 E2E | #630 | ○ | — |
 | 網羅ハーネス（二重台帳・オフライン決定論層・無人） | **#543** | 📐 設計原則のみ確定（#543 本文）/ 実装 ○ | — |
-| capture が孤児 daemon の二重出力を見えない | #624 | ○（提案: daemon 本数 assert） | — |
+| capture が孤児 daemon の二重出力を見えない | #624 | ○（提案: daemon 本数 assert） | 🔴 **狭いスライスをステージ 2 に引き込む**（2026-09-07）。**E2E-10 が daemon respawn なので、台数を見ないと偽緑になりうる**。既存 `orbitAudioDaemonPids()`（`orbitstudio-mcp-gated.spec.ts:348-361`）を helper へ上げ、respawn 前後で 1 台を確認する。**issue 全体（census 機構）は backlog** |
 | 負荷で落ちる Rust テスト | #640 | ○（推奨: 失敗時に load average を出す） | — |
 | root で落ちる 3 件（hook 迂回の常態化） | #684 | ○（推奨 A: root では skip） | — |
 | worktree で hook が誤ブロック | #465 | ○（**再現確認が要る**・triage） | — |
@@ -875,7 +875,7 @@ owner 判断が要る（#671 §5(a) / #672 A4）。**#321 の残作業（Link �
 | **shm が gated 実行のたびに漏れる** | **#779** 🔴 | ○（**実測 2026-09-06**: `orbit-outproc-*.shm` が **35,282 個 / TMPDIR 11 GB**。清掃は `Drop` に乗っており **SIGKILL では走らない**。同日 rack-child の実機テストが **SIGBUS** で落ち、直後 2 回は再現せず） | ✅ **CLOSED 2026-09-07**（束 E-gate・PR #789・merge `900d4532`）。起動時に孤児を回収する経路を新設。述語は 3 値（`Alive`/`Dead`/`Unknown`）で**削除は `Dead` と自 PID だけ**。🔴 **漏れは `pkill` 時だけではなかった** — 通常の `stop_engine` も SIGTERM で `Drop` が走らず、engine を止めるたび約 25 個漏れていた。実測 957 → 25 で**増えなくなった**。🔴 **緩和であって根治ではない**（SIGTERM ハンドラは #448） |
 | **無条件ゲートの `rack-child` が SIGBUS で間欠的に落ちる** | **#780** 🔴 | ○（**クラッシュレポート 2 件の実スタック**: `AudioChain::process_block` → `AtomicUsize::store` で `KERN_PROTECTION_FAILURE`。テストが shm の生ポインタを渡すが領域が書き込み可能にマップされていない） | ✅ **CLOSED 2026-09-07**（束 E-gate・PR #789）。**10 回連続で緑**を実測（修正前は並列 5 回で 1 FAIL）。🔴 **ここに書いていた原因（`_mmap` と `region` の関係が move で保証されない）は誤りだった。** `MmapMut` は move してもマップ先が動かず、`KERN_PROTECTION_FAILURE` はダングリングの症状でもない。**実際の原因は `line!()` が定義位置で展開される定数だったこと** — 4 つの fixture が同一 shm パスを共有し、`create_shared` の `truncate(true)` が互いの生きたマッピングを切り詰めていた。決め手は**並列 / 単一スレッドの対照実験**（並列 5 回で 1 FAIL・`--test-threads=1` で 0 FAIL）。**仮説は 3 連続で外れた**（漏れた shm / `bundle-macos.sh` との競合 / move）|
 | **窓由来カウントの厳密等価がラチェットを素通りする** | **#785** | ○（**2026-09-07 実測**: `orbitstudio-mcp-gated.spec.ts` に 6 箇所。うち `:1378` の `.toBe(0)` は他と**崩れる向きが逆**で偽緑を生む） | ✅ **CLOSED 2026-09-07**（束 E-gate・PR #789）。**名前ではなく値の出どころ**を AST で辿る検出器を新設し、6 箇所を `newLogLines` の行差分へ移行。🔴 **教訓は 3 度目** — #761「名前で条件付けると漏れる」→ #785「出どころを見る」→ #789「出どころを **1 式の中でしか**見ていないと漏れる」。**手がかりを一段上げるたび、その手がかり自体が視野を決めていたことが露呈する** |
-| **U2（capture 時計 vs 実時間）の許容が裸の定数** | **#775** 🔴 | ○（**実測**: 長時間ランで**場所を変えて**出る。#618 e5 / #611 O0-4 dry。`CLOCK_WALL_TOLERANCE_SEC = 0.12` に根拠コメントが無い） | **束 E-noise**（計画 PR-E11）。🔴 **段 0 の完了条件から外した**（2026-09-06 夕・owner 裁定）——段 2 と**並行可**で、**段 2 の実機で「U2 が消えたか」を観測してから必要性を判断する**。閾値を先に緩めない。緩めるならバッファ数から導出する |
+| **U2（capture 時計 vs 実時間）の許容が裸の定数** | **#775** 🔴 | ○（**実測**: 長時間ランで**場所を変えて**出る。#618 e5 / #611 O0-4 dry。`CLOCK_WALL_TOLERANCE_SEC = 0.12` に根拠コメントが無い） | **束 E-noise**（計画 PR-E11）。🔴 **ステージ 0 の完了条件から外した**（2026-09-06 夕・owner 裁定）——ステージ 2 と**並行可**で、**ステージ 2 の実機で「U2 が消えたか」を観測してから必要性を判断する**。閾値を先に緩めない。緩めるならバッファ数から導出する |
 
 **順序**: #668-A → {#650, #630}（同じ PR で語ごとに）→ #543（#671 段階 3 で「登録済み語から導出」が入ると #543 の台帳 2 は不要になる。
 **#543 の設計は #671 段階 1-3 の後に見直す**）。#624 / #640 / #684 は独立・小粒。
@@ -960,7 +960,7 @@ owner 判断が要る（#671 §5(a) / #672 A4）。**#321 の残作業（Link �
 
 **期待値の持ち方**: `rack-chain-gain-expectations.ts` と同じく**式で書く**（マジックナンバー禁止・#543 §5 と同じ規律）。裁定 B の変換は `amount → 20·log10(amount)` を期待値側に置く。
 
-**4. owner の投資順位との整合**（上表）: **退行の防止は段 2 の中**にある — 「仕様どおり」には**変えていない部分が変わっていないこと**が含まれる。
+**4. owner の投資順位との整合**（上表）: **退行の防止はステージ 2 の中**にある — 「仕様どおり」には**変えていない部分が変わっていないこと**が含まれる。
 カバレッジ（§4.G 本体）は「新しい語が 2 に載ること」、退行（本節）は「古い譜面が 2 に載り続けること」。**同じ層の 2 つの軸**であり、変異検証（4）ではない。
 
 **5. 🔴 本日の裁定を実装する時の具体形 — すべて MCP 経由（`evaluate_orbitscore` → `get_log` → capture）。ユニットテストで代替しない**:
@@ -1099,7 +1099,7 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 | ローカルリリースのスクリプト化 | **#659** | ○（`scripts/orbitstudio/make-local-release.sh` が **untracked** で作業中・`git status`） | — |
 | 署名・公証・リリース経路 | **#656** 🚪 | ○（証明書と ASC API キーは手元にある・`CODESIGN_PIPELINE.md` は SC 前提で古い） | #659 |
 | workspace trust（宣言） | **#385** 🚪候補 | ✅ **宣言は入った**（`packages/vscode-extension/package.json` の `capabilities.untrustedWorkspaces`・`supported: true`・裁定 656 §16 (1)）。ユニット 6 本が変異 3 種で red を確認 | — |
-| workspace trust（**ビルド既定**・層 2） | **#385** 🚪候補 / **PR-S-T2**（plan 段 8）| 🔴 **未着手**。OrbitStudio ビルドで trust を既定 off（`product.overrides.json` 新 +8・`build_orbitstudio.sh` +3・設計は `656-release-design.md` §3.4）。🔴 **層 1（宣言）では救えない** — `anthropic.claude-code` は `untrustedWorkspaces.supported: false` を宣言しており Anthropic 管理なのでこちらから足せない。loose-file 起動では **LLM 側が黙って activate しない**ままで、LLM を第一級ユーザーに置く方針では出荷ブロッカー。**段 1（must-fix の音の経路）では触らない**（owner 2026-09-05）— #656 出荷の前に必ず入れる | #659（焼く経路）→ #656 の前 |
+| workspace trust（**ビルド既定**・層 2） | **#385** 🚪候補 / **PR-S-T2**（plan ステージ 8）| 🔴 **未着手**。OrbitStudio ビルドで trust を既定 off（`product.overrides.json` 新 +8・`build_orbitstudio.sh` +3・設計は `656-release-design.md` §3.4）。🔴 **層 1（宣言）では救えない** — `anthropic.claude-code` は `untrustedWorkspaces.supported: false` を宣言しており Anthropic 管理なのでこちらから足せない。loose-file 起動では **LLM 側が黙って activate しない**ままで、LLM を第一級ユーザーに置く方針では出荷ブロッカー。**ステージ 1（must-fix の音の経路）では触らない**（owner 2026-09-05）— #656 出荷の前に必ず入れる | #659（焼く経路）→ #656 の前 |
 | workspace trust（**実機検証**） | **#735** | 🔴 **未着手**。🔴 **dev モード（`--extensionDevelopmentPath`）は trust の制限を迂回するので、そこで書いた E2E は宣言を消しても緑になる**（2026-09-04 実測）。installed モード（vsix 導入）が要るが、**導入は成功するのに拡張が activate しない**（trust 無効でも同じ = trust は原因でない）。まず `exthost.log` を取る観測手段から | #385（宣言）/ #659（vsix を焼く経路） |
 | Marketplace | #197 🚪 / #184 | ○（**#656 の方針と矛盾** → §3 要裁定） | — |
 | LinkAudio on Rust（GPL 隔離） | #321 / Epic #187 | 部分 ✅（A4-2 egress = #329 CLOSED・`orbit-link-audio` 隔離 crate・default off）/ A4-3 テンポリーダー・A4-4 e2e ❓（PR の有無未確認） | **配布形態は #671 の拡張点で変わる**: LinkAudio は CLAP へ・Link テンポは DSL Plugin へ出せば engine 本体から GPL が消える（§4.E「切り出し」表）。**A4-3 は #671 段階 4 の判断を待つ**（engine 内に作ると二重になる）。**#187 は SC 前提** |
@@ -1109,7 +1109,7 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 | FUNDING.yml | #291 | ○（方針未決） | — |
 | env prefix 統一 | #156 | ○ | **§4.H.1 の一覧化の前提**（一覧を作ってから改名すると 2 度手間） |
 
-**順序**: #659 → #656 → #498。#385 の**層 1（宣言）は独立で先にできる — 済**（PR #730）。🔴 **#385 はこれで完了ではない** — 層 2（PR-S-T2・ビルドで trust 既定 off）が未了で、**#656 出荷の前**に入れる（段 1 では触らない・owner 2026-09-05）。
+**順序**: #659 → #656 → #498。#385 の**層 1（宣言）は独立で先にできる — 済**（PR #730）。🔴 **#385 はこれで完了ではない** — 層 2（PR-S-T2・ビルドで trust 既定 off）が未了で、**#656 出荷の前**に入れる（ステージ 1 では触らない・owner 2026-09-05）。
 🔴 **#735（実機検証）は #659 の後**。vsix を焼く経路が固まってから着手する方が安い
 （`make-local-release.sh` が `--install-extension` の作法を確定させる）。
 **`orbs --install-extension` は失敗しても exit 0 を返す**ので、#659 側でも
