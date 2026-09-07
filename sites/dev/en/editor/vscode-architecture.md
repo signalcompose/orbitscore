@@ -522,7 +522,7 @@ The scsynth resolver is `explicit > env > bundle > throw`; the daemon resolver i
 The pre-check is quoted in [III-3](/en/audio/scsynth-bundle#the-call-itself-is-gated-by-the-engine-kind), so here we read from assembling args and env through the spawn.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2186-2199
+// packages/vscode-extension/src/extension.ts:2201-2214
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -542,7 +542,7 @@ The pre-check is quoted in [III-3](/en/audio/scsynth-bundle#the-call-itself-is-g
 The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcommand, and the output device is passed via the `--audio-device` argument (the `orbitscore.audioDevice` setting takes precedence, otherwise `.orbitscore.json`). `__default__` is a sentinel meaning "the OS default output."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2217-2239
+// packages/vscode-extension/src/extension.ts:2232-2254
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
@@ -573,7 +573,7 @@ A point to note here is that `ORBITSCORE_ENGINE` is **set explicitly in both bra
 `stdio: ['pipe', 'pipe', 'pipe']` is important. By making stdin/stdout/stderr all pipes, the Extension Host can directly write/read them. Right after spawn, five handlers are attached, and after one `process.nextTick` it checks "is the same process still alive?"
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2254-2265
+// packages/vscode-extension/src/extension.ts:2269-2280
   // Setup handlers
   setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
@@ -597,7 +597,7 @@ Of those five, `setupStderrHandler` is the one that copies the engine's stderr i
 A small helper therefore sits in between, reassembling the chunk stream into lines.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1599-1619
+// packages/vscode-extension/src/extension.ts:1614-1634
 export function createLinePrefixer(emit: (line: string) => void): {
   push: (chunk: string) => void
   flush: () => void
@@ -626,7 +626,7 @@ There are three things to read here. The first is carrying `partial` over: a nai
 `setupStderrHandler` itself is now just `push` / `flush` wired up inside `logHandlerFailure` containment.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1635-1657
+// packages/vscode-extension/src/extension.ts:1650-1672
 export function setupStderrHandler(process: child_process.ChildProcess): void {
   const prefixer = createLinePrefixer((line) => {
     outputChannel?.appendLine(`ERROR: ${line}`)
@@ -670,7 +670,7 @@ Communication between the Extension Host and the engine process is via **stdin/s
 The send part is consolidated into `writeCodeToEngine()`, shared by the editor's Run Selection and MCP's `evaluate_orbitscore`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3094-3126
+// packages/vscode-extension/src/extension.ts:3109-3141
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -739,7 +739,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1524-1560 (effects の中身を一部省略)
+// packages/vscode-extension/src/extension.ts:1531-1567 (effects の中身を一部省略)
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
         clearSequence: clearPlayheadForSequence,
@@ -780,7 +780,7 @@ Execution feedback (flashing the executed lines, the playhead, diagnostics) is c
 `stopEngine()` performs a two-stage shutdown of SIGTERM → (after 2 seconds) SIGKILL. Compared with 2026-05, draining the bridges and clearing the playhead were added, and the SIGKILL condition was fixed.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2279-2327
+// packages/vscode-extension/src/extension.ts:2294-2342
 export function stopEngine(): boolean {
   engineGeneration += 1
   if (engineProcess && !engineProcess.killed) {

@@ -255,7 +255,7 @@ This is the part of the chapter to read most carefully. The tool description mak
 Meanwhile CLAUDE.md repeats that "asserting on the `ok` of `evaluate_orbitscore` proves nothing" and "engine-side errors appear only in `get_log`". Which one is right? **Both, each at its own point in time.** The meaning of `ok` changed with `#614`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3134-3171
+// packages/vscode-extension/src/extension.ts:3149-3186
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -314,16 +314,16 @@ Before `#614`, `ok` meant only "written to stdin". The engine's REPL processes l
 The engine answers with a JSON line `{"evalMark": {...}}` on stdout, and `setupStdoutHandler` hands it to `evalMarkBridge.handleLine()`. The comment stresses that this branch **must be independent**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1506-1514
-        } else if (trimmedLine.startsWith('{"evalMark"')) {
-          // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
-          // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
-          // dispatch されなかった（ユニットテストは全て緑・実機 E2E だけが捕まえた）。
-          const parsed = isCurrent && evalMarkBridge.handleLine(rawLine)
-          if (!parsed && isCurrent) {
-            outputChannel?.appendLine(`⚠️ received a malformed //#evalMark result line: ${rawLine}`)
-          }
-        } else if (trimmedLine.startsWith('{"engineState"')) {
+// packages/vscode-extension/src/extension.ts:1498-1506
+    } else if (trimmedLine.startsWith('{"evalMark"')) {
+      // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
+      // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
+      // dispatch されなかった（ユニットテストは全て緑・実機 E2E だけが捕まえた）。
+      const parsed = isCurrent && evalMarkBridge.handleLine(rawLine)
+      if (!parsed && isCurrent) {
+        outputChannel?.appendLine(`⚠️ received a malformed //#evalMark result line: ${rawLine}`)
+      }
+    } else if (trimmedLine.startsWith('{"engineState"')) {
 ```
 
 "Every unit test was green; only the real-device E2E caught it" — a miniature of this chapter's whole theme.
@@ -379,7 +379,7 @@ There are three branches (not running / the bridge answered `ok:false` / the bri
 The query budget is 2.5 seconds. That looks short, but it is the result of deciding that a longer budget would buy nothing.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3264-3275
+// packages/vscode-extension/src/extension.ts:3279-3290
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await

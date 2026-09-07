@@ -84,6 +84,28 @@ sandbox 外実行で緑**である（上表 2324 に含まれる）。
 | process ごとの分離 | 別 process の断片が混ざらない |
 | ログ転写（debug / 非 debug） | **即時・従来と同一**（空行の扱いを含む）|
 
+#### 🔴 引用のずれを 2 種類に分けて直した（CI が捕まえた）
+
+`extension.ts` に 49 行足したので、dev サイトの `// file:start-end` 引用 **80 件**が落ちた
+（`code-review` ワークフローの `docs:check`）。**内訳は 2 種類で、直し方が違う。**
+
+| 種類 | 件数 | 直し方 |
+|---|---|---|
+| **純粋な行ずれ** | 74 | `check-citations.mjs --fix` が再アンカー |
+| 🔴 **本文の変更** | 6（ja/en 各 3）| **サイトが古い形のコードを逐語引用していた**ので、現在のコードで置き換えた |
+
+後者は `{"evalMark"` / `{"pluginUi"` の分岐を引用していた 3 箇所（`editor/execution-feedback.md` /
+`editor/mcp-and-gated-e2e.md` / `plugin-hosting/plugin-ui.md`）。分岐が `for` ループから
+`createLinePrefixer` のコールバックへ移り、**インデントが 8 → 4 に変わった**ため機械的な
+再アンカーでは合わなかった。地の文（「`setupStdoutHandler` に独立した分岐として置かれている」
+「stdout ルータが `{"pluginUi"` の前方一致で拾う」）は現在も正しいので触っていない。
+
+検証: `npm run docs:check` → **984 citations verified, 0 failed**。
+
+🔴 **`--fix` の結果を確認せずに済ませない。** `--fix` 後もまだ 6 件落ちており、
+そこだけが「行がずれた」ではなく「**引用元が変わった**」だった。件数が減ったことを
+成功と読むと、古い記述がサイトに残る。
+
 #### 直していないもの
 
 `//#selectAudioDevice` も chunk 境界で割れうるが、そちらは既に専用の
