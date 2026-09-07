@@ -354,14 +354,18 @@
 段 0 の目的は達成済みだが、doc 668 §20 の PR-E 群には未実装が残る。**成果物の実在で確認した**
 （2026-09-07）。段 2 を止めないので、着手順は自由。
 
+> 🔴 **この表は一度間違えている**（#796 で訂正）。PR-E4 を「正本が無い」としたが、`tests/e2e/` の下だけを
+> 探しており、実物は `packages/engine/src/` にあった。**「無い」は探索範囲とセットでしか成り立たない** —
+> 不在を書くときは**どこを探したか**まで書く。
+
 | 項目 | 状態（成果物） | 備考 |
 |---|---|---|
 | PR-E1 / E2 / E3 / **E17** | ✅ `tests/e2e/gated-sources.ts` / `tests/e2e/helpers/`（9 本）/ `analyze_audio(per_channel)` / `tests/e2e/dsl-coverage-ledger.ts` | **E17 は旧 PR-E12**（§1.10 の重複解消で改番）|
 | PR-E10 / E13 / E14 | ✅ 束 E-gate（#779 / #785 / #780・PR [#789](https://github.com/signalcompose/orbitscore/pull/789)）| 段 0 の「閉じた」と同じもの |
-| **PR-E4** | **部分**。ラチェット `dsl-e2e-coverage.spec.ts` は在るが、**正本 `dsl-surface.ts` が無い**（`KEYWORDS` は `parser/tokenizer.ts` のまま） | #668-A の残り |
-| **PR-E5** | ❌ `tests/docs/reference-coverage.spec.ts` が無い（`tests/docs/` は `worklog-size` のみ） | #668-C |
-| **PR-E6 / E7** | ❓ 未確認（import / mute・loop・pan の実機 E2E） | #630 / #668-B |
-| **PR-E8** | ❓ `daemon-census.ts` は無い。`helpers/rack-child-pid.ts` が近い役割 | #624 |
+| PR-E4 | ✅ 正本 `packages/engine/src/parser/dsl-surface.ts`（`DSL_SYNTAX_SURFACE` 13 件）+ ラチェット `dsl-e2e-coverage.spec.ts:36` が import | 🔴 **2026-09-07 訂正**。#794 は「部分・正本が無い」と書いたが**誤り**（`tests/e2e/` の下だけを探していた）。#668 のクローズも PR-E4 を ✅（PR #715）と記録 |
+| **PR-E5** | ❌ 未着手。`reference-coverage.spec.ts` はリポジトリ全体に無い（`find` で `*reference*` / `*coverage*` の `.ts` を全走査）。**ラチェット側もそれを前提に書かれている** — `dsl-e2e-coverage.spec.ts:219-222` が「§20 は A-10 を PR-E5（`reference-coverage.spec.ts` のみ）に割り当てているが**分割の隙間に落ちる**のでここで塞ぐ」と明記 | #668-C |
+| **PR-E6 / E7** | ❌ **未カバー 36 語**（ラチェットの baseline が自認している数）: sequence **16**（`cell` `comp` `defaultGain` `defaultPan` `density` `hold` `loop` `midi` `mute` `pan` `quantize` `root` `unmute` `vel` `vl` `voicelead`）/ global **7**（`audioDevice` `compressor` `limiter` `loop` `midiLatency` `normalizer` `quantize`）/ syntax **13 件中 13 件**（`DSL_SYNTAX_SURFACE` 全部） | #630 / #650 / #668-B。🔴 構文表面が全滅なのは、**正本を作る PR-E4 と埋める PR-E6/E7 が別作業**だからで矛盾ではない |
+| **PR-E8** | ❌ **目的は未達だが部品は在る**。`orbitAudioDaemonPids()`（`orbitstudio-mcp-gated.spec.ts:348-361`・`pgrep -f` で daemon の PID 一覧）が使われているのは **1 箇所だけ**（`:5391` の #779 sweep テストが起動前スナップショットに使う）。PR-E8 の狙い「**各 phase 境界で daemon が高々 1 台**」のアサーションはどこにも無い | #624。着手時はこの関数を helper へ引き上げる |
 | **PR-E9** | ❌ load average の報告が無い | #640-A |
 | **PR-E16**（root skip） | ❌ `tests/helpers/privileges.ts` が無い | #684。**旧 PR-E11**（改番）|
 | **束 E-router**（`777-line-router`・計画 **PR-E12**） | ❌ #777 / #773 が OPEN | 🔴 **#757 の直前に置く**（#757 の共通化がこの層に乗るため、逆順だと 5 本を直した後にもう一度触る） |

@@ -17,6 +17,49 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(planning): correct the safety-net remainder table (Sep 7, 2026)
+
+**ブランチ**: `796-correct-remainder-table`（main 直行・docs のみ・Closes #796）
+
+owner の「段 2 に着手するにあたって、並行でやる束もあるんだっけ？」に答えるため
+**表を実物で読み直したところ、前日の PR #794 で自分が書いた行が 1 つ間違っていた。**
+
+#### 🔴 誤りの中身
+
+| 行 | #794 の記載 | 実際 |
+|---|---|---|
+| **PR-E4** | 「**部分**。正本 `dsl-surface.ts` が無い」 | ✅ **完了している。** 正本は `packages/engine/src/parser/dsl-surface.ts`（`DSL_SYNTAX_SURFACE` 13 件）で、ラチェットが `dsl-e2e-coverage.spec.ts:36` で import している。#668 のクローズコメントも PR-E4 を ✅（PR #715）と記録 |
+
+原因は **`tests/e2e/` の下だけを探して `packages/engine/src/parser/` を見ていなかった**こと。
+「成果物の実在で確認した」と表に書いておきながら、**探索範囲が狭くて不在と誤判定した。**
+
+🔴 **教訓**: **「無い」は探索範囲とセットでしか成り立たない。** 不在を記録するときは
+**どこを探したか**まで書く。書いてあれば、次の人はその範囲の外を疑える。
+表の冒頭にこの注意書きを残した。
+
+#### 精度が上がった行
+
+| 行 | 旧 | 新 |
+|---|---|---|
+| **PR-E6 / E7** | ❓ 未確認 | ❌ **未カバー 36 語**（ラチェットの baseline が自認）: sequence 16 / global 7 / **syntax 13 件中 13 件** |
+| **PR-E5** | ❌（`tests/docs/` を見た） | ❌（**リポジトリ全体を `find` で走査**）。加えて `dsl-e2e-coverage.spec.ts:219-222` が「A-10 は PR-E5 に割り当てられているが分割の隙間に落ちるのでここで塞ぐ」と明記しており、**ラチェット側も未存在を前提に書かれている** |
+| **PR-E8** | ❓ `daemon-census.ts` は無い | ❌ **目的は未達だが部品は在る**。`orbitAudioDaemonPids()`（`:348-361`）は在るが使用は **1 箇所**（`:5391` の #779 sweep が起動前スナップショットに使う）。「各 phase 境界で daemon が高々 1 台」のアサーションは無い |
+
+構文表面が 13/13 全部未カバーなのは、**正本を作る PR-E4 と埋める PR-E6/E7 が別作業**だからで矛盾ではない。
+
+#### 段 2 と並行してよいもの（owner への回答）
+
+- **束 E-router**（`777-line-router`・PR-E12・#777 → #773）— 🔴 **#757 の直前**。これが**唯一の順序制約**
+- 束 **E-noise**（`775-capture-clock`・PR-E11・#775）— 🔴 **先に払わない**。段 2 の実機で U2 を観測してから
+- 単発: **PR-E5**（#668-C）/ **PR-E9**（#640-A）/ **PR-E16**（#684）/ **PR-E6・E7**（#650 / #630 / #668-B）
+
+#### 検証
+
+- `npm run docs:check`: 984 citations verified / 0 failed
+- `tests/docs/`: 2 passed
+
+---
+
 ### docs(planning): record stage 0/1 completion and reshape the safety-net remainder (Sep 7, 2026)
 
 **ブランチ**: `793-record-stage-state`（main 直行・docs のみ・Closes #793）
