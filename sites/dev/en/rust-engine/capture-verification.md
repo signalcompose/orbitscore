@@ -34,7 +34,7 @@ device"; the presence of capture does not change the output samples themselves (
 it does not mutate).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1170-1193
+// rust/crates/orbit-audio-native/src/output.rs:1565-1588
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -354,7 +354,7 @@ guarantee the sequence "stream stops (callback stops) → writer drains
 remaining ring contents and finalizes".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:608-617
+// rust/crates/orbit-audio-native/src/output.rs:609-618
 /// 生きている間はストリームを保持する RAII ハンドル。
 pub struct OutputStream {
     _stream: Stream,

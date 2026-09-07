@@ -25,11 +25,17 @@ use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputDeviceRequest, OutputError, OutputFault,
     OutputStream, ResampleError, StreamStats, StreamStatsSnapshot,
 };
+#[cfg(feature = "outproc-effect")]
+use orbit_audio_native::{BusSend, BusTarget};
 use uuid::Uuid;
 
 use crate::backend::AudioBackend;
 
 const OUTPUT_FAULT_ENV: &str = "ORBIT_AUDIO_OUTPUT_FAULT";
+
+#[cfg(feature = "outproc-effect")]
+type BusLineInstaller =
+    Arc<dyn Fn(BusTarget, Vec<BusSend>, usize, usize) -> Result<(), OutputError> + Send + Sync>;
 
 pub fn parse_output_fault(raw: Option<&str>) -> OutputFault {
     match raw.map(str::trim) {
@@ -1742,6 +1748,11 @@ pub struct EngineWrap {
     /// 本番 `start()` で `Some`、test backend 経路では `None`（`clap` / `link` と同設計）。
     #[cfg(feature = "outproc-effect")]
     outproc: Mutex<Option<OutProcControl>>,
+    /// Generic line-program publication handles for named buses. Kept outside `OutProcControl` so
+    /// the compatibility state there remains the old atomics while `SetBusRouting` is translated
+    /// into one full program install.
+    #[cfg(feature = "outproc-effect")]
+    bus_lines: Mutex<HashMap<String, BusLineInstaller>>,
     /// out-of-process instrument の note-ring producer（control side）。
     #[cfg(feature = "outproc-instrument")]
     outproc_instrument: Mutex<Option<OutProcInstrumentControl>>,
@@ -2149,6 +2160,13 @@ struct EffectBusBuild {
     send_gain_overrides: Vec<Arc<AtomicU32>>,
 }
 
+#[cfg(feature = "outproc-effect")]
+type EffectBusStagesBuild = (
+    Vec<orbit_audio_native::InsertBusStage>,
+    Vec<EffectBusBuild>,
+    HashMap<String, BusLineInstaller>,
+);
+
 /// `ORBIT_EFFECT_BUSES`/`ORBIT_EFFECT_BUS_POOL`（insert）+ `ORBIT_SUM_BUS_POOL`（sum）+
 /// `ORBIT_AUX_BUS_POOL`（aux）の bus 名から、render 側の `InsertBusStage` 群と daemon 側の部材
 /// （`EffectBusBuild`）を構築する。**stage 配列の並びは `[insert…, sum…, aux…]` に固定**する
@@ -2157,8 +2175,7 @@ struct EffectBusBuild {
 /// で activate される。sum/aux stage も同じ `OutProcEffectPostProcessor` 機構（PH.2b）で
 /// 自前の insert chain を持てる（M2 で明示解禁）。
 #[cfg(feature = "outproc-effect")]
-fn build_effect_bus_stages(
-) -> Result<(Vec<orbit_audio_native::InsertBusStage>, Vec<EffectBusBuild>), WrapError> {
+fn build_effect_bus_stages() -> Result<EffectBusStagesBuild, WrapError> {
     use crate::outproc_effect::{
         OutProcEffectPostProcessor, OutProcEffectPostProcessorParts, OutProcEffectStats,
     };
@@ -2183,6 +2200,7 @@ fn build_effect_bus_stages(
 
     let mut builds = Vec::with_capacity(total);
     let mut insert_buses = Vec::with_capacity(total);
+    let mut bus_lines = HashMap::with_capacity(total);
     for (index, (name, kind)) in named.into_iter().enumerate() {
         let shm_path = crate::outproc_effect::unique_shm_path();
         let host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(
@@ -2201,23 +2219,22 @@ fn build_effect_bus_stages(
         let send_gain_overrides: Vec<Arc<AtomicU32>> = (0..(total - index - 1))
             .map(|_| Arc::new(AtomicU32::new(0)))
             .collect();
-        insert_buses.push(
-            orbit_audio_native::InsertBusStage::with_activation(
-                name.clone(),
-                Some(Box::new(OutProcEffectPostProcessor::new(
-                    OutProcEffectPostProcessorParts {
-                        host,
-                        engaged: engaged.clone(),
-                        teardown_requested: stop.clone(),
-                        teardown_done: done.clone(),
-                        stats: stats.clone(),
-                    },
-                ))),
-                0,
-                active.clone(),
-            )
-            .with_routing_overrides(routing_override.clone(), send_gain_overrides.clone()),
+        let stage = orbit_audio_native::InsertBusStage::with_activation(
+            name.clone(),
+            Some(Box::new(OutProcEffectPostProcessor::new(
+                OutProcEffectPostProcessorParts {
+                    host,
+                    engaged: engaged.clone(),
+                    teardown_requested: stop.clone(),
+                    teardown_done: done.clone(),
+                    stats: stats.clone(),
+                },
+            ))),
+            0,
+            active.clone(),
         );
+        bus_lines.insert(name.clone(), stage.legacy_line_installer());
+        insert_buses.push(stage);
         builds.push(EffectBusBuild {
             name,
             kind,
@@ -2231,7 +2248,7 @@ fn build_effect_bus_stages(
             send_gain_overrides,
         });
     }
-    Ok((insert_buses, builds))
+    Ok((insert_buses, builds, bus_lines))
 }
 
 /// bus 部材を ChildSlot / 観測 map / routing map / StreamGuard 用 guard 群へ展開する（stream 起動後・
@@ -2762,6 +2779,47 @@ mod set_bus_routing_tests {
             .get("seq-bus-0")
             .unwrap();
         assert_eq!(routing.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn set_bus_routing_publishes_one_complete_legacy_line_program_per_partial_update() {
+        let wrap = wrap_with_three_stage_topology();
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = calls.clone();
+        wrap.bus_lines.lock().unwrap().insert(
+            "seq-bus-0".to_owned(),
+            Arc::new(move |target, sends, bus_index, bus_count| {
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push((target, sends, bus_index, bus_count));
+                Ok(())
+            }),
+        );
+
+        wrap.set_bus_routing(
+            "seq-bus-0",
+            Some("sum-bus-0"),
+            &[("aux-bus-0".to_owned(), 0.375)],
+        )
+        .expect("legacy routing must publish a line program");
+        wrap.set_bus_routing("seq-bus-0", Some("master"), &[])
+            .expect("output-only update must retain the existing send");
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        let (target, sends, bus_index, bus_count) = &calls[0];
+        assert_eq!(*target, super::BusTarget::Bus(1));
+        assert_eq!((*bus_index, *bus_count), (0, 3));
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].target, 2);
+        assert_eq!(sends[0].gain.to_bits(), 0.375_f32.to_bits());
+        let (target, sends, bus_index, bus_count) = &calls[1];
+        assert_eq!(*target, super::BusTarget::Master);
+        assert_eq!((*bus_index, *bus_count), (0, 3));
+        assert_eq!(sends.len(), 1, "the unmentioned send must be retained");
+        assert_eq!(sends[0].target, 2);
+        assert_eq!(sends[0].gain.to_bits(), 0.375_f32.to_bits());
     }
 
     #[test]
@@ -4517,7 +4575,7 @@ impl EngineWrap {
 
         // Each registered bus owns a complete transport up front.  Attachment is the existing
         // lock-free `engaged` release-store（activation は LoadPlugin 時・`EffectBusBuild` doc 参照）。
-        let (insert_buses, bus_builds) = build_effect_bus_stages()?;
+        let (insert_buses, bus_builds, bus_lines) = build_effect_bus_stages()?;
 
         // 1. shm 作成 → host mmap（adapter が所有・audio thread）。
         let shm_path = crate::outproc_effect::unique_shm_path();
@@ -4576,6 +4634,10 @@ impl EngineWrap {
             cfg.buffer_frames,
             Some(cb_stats.clone()),
         );
+        *wrap
+            .bus_lines
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))? = bus_lines;
         *wrap
             .outproc
             .lock()
@@ -4792,7 +4854,7 @@ impl EngineWrap {
 
         // 同じ transport 構築を effect-only 経路（`start_outproc_effect_post_boot`）と共有する。
         // bus 0 個（または全 bus inactive）なら render は従来経路とビット同一に振る舞う。
-        let (insert_buses, bus_builds) = build_effect_bus_stages()?;
+        let (insert_buses, bus_builds, bus_lines) = build_effect_bus_stages()?;
 
         let effect_shm = crate::outproc_effect::unique_shm_path();
         let effect_host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(
@@ -4857,6 +4919,10 @@ impl EngineWrap {
             buffer_frames,
             Some(effect_cb_stats.clone()),
         );
+        *wrap
+            .bus_lines
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))? = bus_lines;
         *wrap
             .outproc
             .lock()
@@ -5060,6 +5126,8 @@ impl EngineWrap {
             // outproc-effect: 本番 `start()` / `start_outproc_effect` が spawn 後に Some を注入する。
             #[cfg(feature = "outproc-effect")]
             outproc: Mutex::new(None),
+            #[cfg(feature = "outproc-effect")]
+            bus_lines: Mutex::new(HashMap::new()),
             // outproc-instrument: production start injects the NeutralEvent ring producer.
             #[cfg(feature = "outproc-instrument")]
             outproc_instrument: Mutex::new(None),
@@ -6293,29 +6361,89 @@ impl EngineWrap {
             resolved_sends.push((target_index, *gain));
         }
 
-        // 3. 検証済みの値だけを atomic へ反映する。
-        if let Some(routing_value) = resolved_output {
-            let routing = control.bus_routing.get(seq_bus).ok_or_else(|| {
+        // 3. Every compatibility handle is resolved before the one program publication, so a
+        // missing slot cannot leave only part of the requested routing applied.
+        let routing_handle = if resolved_output.is_some() {
+            Some(control.bus_routing.get(seq_bus).ok_or_else(|| {
                 WrapError::OutProcEffect(format!("bus '{seq_bus}' has no routing handle"))
-            })?;
-            // エンコード: 0=override 無し・1=Master・n>=2 => Bus(n-2)（native `InsertBusStage`
-            // doc 参照）。
+            })?)
+        } else {
+            None
+        };
+        let send_slots = if resolved_sends.is_empty() {
+            None
+        } else {
+            Some(control.bus_sends.get(seq_bus).ok_or_else(|| {
+                WrapError::OutProcEffect(format!("bus '{seq_bus}' has no send slots"))
+            })?)
+        };
+        for (target_index, _) in &resolved_sends {
+            let k = *target_index - seq_index - 1;
+            if send_slots.and_then(|slots| slots.get(k)).is_none() {
+                return Err(WrapError::OutProcEffect(format!(
+                    "bus '{seq_bus}' has no send slot for target index {target_index}"
+                )));
+            }
+        }
+
+        let line = self
+            .bus_lines
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))?
+            .get(seq_bus)
+            .cloned();
+        if let Some(line) = line {
+            let routing_value = resolved_output.unwrap_or_else(|| {
+                control
+                    .bus_routing
+                    .get(seq_bus)
+                    .map(|routing| routing.load(Ordering::Relaxed))
+                    .unwrap_or(0)
+            });
+            let output_target = match routing_value {
+                0 | 1 => BusTarget::Master,
+                encoded => BusTarget::Bus(encoded - 2),
+            };
+            let existing_sends = control.bus_sends.get(seq_bus);
+            let mut gains = existing_sends
+                .map(|slots| {
+                    slots
+                        .iter()
+                        .map(|slot| f32::from_bits(slot.load(Ordering::Relaxed)))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            for (target_index, gain) in &resolved_sends {
+                let k = *target_index - seq_index - 1;
+                gains[k] = *gain;
+            }
+            let enabled_sends = gains
+                .into_iter()
+                .enumerate()
+                .filter(|(_, gain)| *gain != 0.0)
+                .map(|(offset, gain)| BusSend {
+                    target: seq_index + 1 + offset,
+                    gain,
+                })
+                .collect();
+            line(
+                output_target,
+                enabled_sends,
+                seq_index,
+                control.bus_index.len(),
+            )
+            .map_err(WrapError::Output)?;
+        }
+
+        // Mirror the accepted state into the old handles. Existing Rust callers and tests can
+        // continue to observe the partial-update API, while production RT reads only LineProgram.
+        if let (Some(routing), Some(routing_value)) = (routing_handle, resolved_output) {
             routing.store(routing_value, Ordering::Relaxed);
         }
-        if !resolved_sends.is_empty() {
-            let send_slots = control.bus_sends.get(seq_bus).ok_or_else(|| {
-                WrapError::OutProcEffect(format!("bus '{seq_bus}' has no send slots"))
-            })?;
+        if let Some(send_slots) = send_slots {
             for (target_index, gain) in resolved_sends {
-                // slot k は絶対 index `seq_index + 1 + k` を指す（構築時の割当・build_effect_bus_stages
-                // doc 参照）ので k = target_index - seq_index - 1。
                 let k = target_index - seq_index - 1;
-                let slot = send_slots.get(k).ok_or_else(|| {
-                    WrapError::OutProcEffect(format!(
-                        "bus '{seq_bus}' has no send slot for target index {target_index}"
-                    ))
-                })?;
-                slot.store(gain.to_bits(), Ordering::Relaxed);
+                send_slots[k].store(gain.to_bits(), Ordering::Relaxed);
             }
         }
 

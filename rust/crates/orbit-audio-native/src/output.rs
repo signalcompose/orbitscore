@@ -1,8 +1,9 @@
 //! cpal を使った既定出力デバイスへのストリーム設定。
 
+use std::cell::Cell;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -697,11 +698,23 @@ fn ensure_audio_buffer_len(buffer: &mut Vec<f32>, len: usize) {
     }
 }
 
+/// One block of the click-free gain ramp shared by the master line and generic line programs.
+/// `ramp_frames` is prepared from the sample rate before the callback starts.
+#[inline]
+fn advance_ramped_gain(current: &mut f32, target: f32, frames: usize, ramp_frames: u32) -> f32 {
+    let frac = (frames as f32 / ramp_frames as f32).min(1.0);
+    *current += (target - *current) * frac;
+    *current
+}
+
 pub struct MasterLine {
     /// 全 stage の Master 宛て出口が加算される 2ch バッファ（zero-fill は callback 冒頭・
     /// `render_engine_with_sources` に core の `hardware_out` として渡す）。事前確保のみ・RT では
     /// resize しない（`InsertBusStage::ensure_buffer_len` と同じ規律）。
     buffer: Vec<f32>,
+    /// Bus-line `Device` outputs bypass the master rack/gain and accumulate here until master
+    /// placement is complete. It is sized on the control thread and zero-filled per callback.
+    direct_device_buffer: Vec<f32>,
     /// master ラック（今日の `post`）。CLAP effect/instrument（Issue #340）。engine render 後の
     /// **master.buffer（常に 2ch）**を in-place 変換する（デバイス幅とは無関係）。
     post: Option<Box<dyn PostProcessor>>,
@@ -722,6 +735,7 @@ impl MasterLine {
         let ramp_frames = ((sample_rate as f64 * 0.005).round() as u32).max(1);
         Self {
             buffer: Vec::new(),
+            direct_device_buffer: Vec::new(),
             post,
             gain_target: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
             gain_current: 1.0,
@@ -733,6 +747,12 @@ impl MasterLine {
     /// （`InsertBusStage::ensure_buffer_len` と同じ意図）。
     fn ensure_buffer_len(&mut self, len: usize) {
         ensure_audio_buffer_len(&mut self.buffer, len);
+        // Existing unit-level render seams use a 2ch hardware buffer of the same length.
+        ensure_audio_buffer_len(&mut self.direct_device_buffer, len);
+    }
+
+    fn ensure_device_buffer_len(&mut self, len: usize) {
+        ensure_audio_buffer_len(&mut self.direct_device_buffer, len);
     }
 
     /// control 側（`EngineWrap::set_global_gain`）が保持する書き込みハンドル。RT はここへは
@@ -747,9 +767,7 @@ impl MasterLine {
     #[inline]
     fn advance_gain(&mut self, frames: usize) -> f32 {
         let target = f32::from_bits(self.gain_target.load(Ordering::Relaxed));
-        let frac = (frames as f32 / self.ramp_frames as f32).min(1.0);
-        self.gain_current += (target - self.gain_current) * frac;
-        self.gain_current
+        advance_ramped_gain(&mut self.gain_current, target, frames, self.ramp_frames)
     }
 }
 
@@ -880,6 +898,357 @@ pub struct BusSend {
     pub gain: f32,
 }
 
+pub type LegacyLineInstaller =
+    Arc<dyn Fn(BusTarget, Vec<BusSend>, usize, usize) -> Result<(), OutputError> + Send + Sync>;
+
+/// A resolved output destination for one line operation. Bus and channel names are converted to
+/// stable indices on the control thread before a program is published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputDest {
+    Master,
+    Bus(usize),
+    Device { left: usize, right: Option<usize> },
+    Render(usize),
+    Link(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineOutput {
+    pub dest: OutputDest,
+    pub thru: bool,
+    pub gain: f32,
+}
+
+/// One operation in a bus line. `Pan` is reserved for PR-O4; this PR does not generate it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineOp {
+    Rack,
+    Gain(f32),
+    Pan(f32),
+    Output(LineOutput),
+}
+
+/// Immutable line operations plus callback-owned gain state. The control side loses ownership of
+/// a program when it installs it; only the audio thread dereferences the published pointer or
+/// mutates these `Cell`s.
+pub struct LineProgram {
+    pub ops: Box<[LineOp]>,
+    pub current_gain: Box<[Cell<f32>]>,
+    #[cfg(test)]
+    drop_thread_log: Option<Arc<std::sync::Mutex<Vec<std::thread::ThreadId>>>>,
+}
+
+impl LineProgram {
+    /// Construct a generic program whose gain state starts at unity and ramps to each target.
+    pub fn new(ops: Vec<LineOp>) -> Self {
+        Self::with_gain_state(ops, false)
+    }
+
+    /// Construct a program already at every target. Static and legacy routing use this path because
+    /// their pre-LineProgram behavior applied gains immediately, including the first callback.
+    pub fn settled(ops: Vec<LineOp>) -> Self {
+        Self::with_gain_state(ops, true)
+    }
+
+    fn with_gain_state(ops: Vec<LineOp>, settled: bool) -> Self {
+        let current_gain = ops
+            .iter()
+            .map(|op| {
+                Cell::new(if settled {
+                    match op {
+                        LineOp::Gain(gain) => *gain,
+                        LineOp::Output(output) => output.gain,
+                        LineOp::Rack | LineOp::Pan(_) => 1.0,
+                    }
+                } else {
+                    1.0
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Self {
+            ops: ops.into_boxed_slice(),
+            current_gain,
+            #[cfg(test)]
+            drop_thread_log: None,
+        }
+    }
+
+    fn legacy(output_target: BusTarget, sends: &[BusSend]) -> Self {
+        let mut ops = Vec::with_capacity(sends.len() + 2);
+        ops.push(LineOp::Rack);
+        ops.push(LineOp::Output(LineOutput {
+            dest: match output_target {
+                BusTarget::Master => OutputDest::Master,
+                BusTarget::Bus(index) => OutputDest::Bus(index),
+            },
+            thru: !sends.is_empty(),
+            gain: 1.0,
+        }));
+        for (index, send) in sends.iter().enumerate() {
+            ops.push(LineOp::Output(LineOutput {
+                dest: OutputDest::Bus(send.target),
+                thru: index + 1 != sends.len(),
+                gain: send.gain,
+            }));
+        }
+        Self::settled(ops)
+    }
+
+    fn validate_shape(&self) -> Result<(), OutputError> {
+        if self.ops.len() != self.current_gain.len() {
+            return Err(OutputError::NoConfig(format!(
+                "line program has {} ops but {} gain cells",
+                self.ops.len(),
+                self.current_gain.len()
+            )));
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn with_drop_thread_log(
+        mut self,
+        log: Arc<std::sync::Mutex<Vec<std::thread::ThreadId>>>,
+    ) -> Self {
+        self.drop_thread_log = Some(log);
+        self
+    }
+}
+
+#[cfg(test)]
+impl Drop for LineProgram {
+    fn drop(&mut self) {
+        if let Some(log) = &self.drop_thread_log {
+            log.lock()
+                .expect("line-program drop-thread log")
+                .push(std::thread::current().id());
+        }
+    }
+}
+
+/// A retired program and the RT generation after which it can be destroyed. The generation lives
+/// in the retired object itself, matching `StageList::retired_at_generation`: there is no
+/// separately published retirement tag whose store could drift past pointer publication.
+struct RetiredLineProgram {
+    program: Box<LineProgram>,
+    retired_at_generation: u64,
+}
+
+struct LineExchange {
+    live: AtomicPtr<LineProgram>,
+    retired: Mutex<Vec<RetiredLineProgram>>,
+    /// Completed RT generations. The audio thread is the sole writer; control only Acquire-loads.
+    generation: AtomicU64,
+}
+
+impl LineExchange {
+    fn new(program: LineProgram) -> Arc<Self> {
+        Arc::new(Self {
+            live: AtomicPtr::new(Box::into_raw(Box::new(program))),
+            retired: Mutex::new(Vec::new()),
+            generation: AtomicU64::new(0),
+        })
+    }
+
+    fn install(
+        &self,
+        program: LineProgram,
+        bus_index: usize,
+        bus_count: usize,
+    ) -> Result<(), OutputError> {
+        validate_line_program(&program, bus_index, bus_count)?;
+        let next = Box::into_raw(Box::new(program));
+        let previous = self.live.swap(next, Ordering::AcqRel);
+        debug_assert!(!previous.is_null());
+
+        let completed = self.generation.load(Ordering::Acquire);
+        let mut retired = self
+            .retired
+            .lock()
+            .map_err(|_| OutputError::NoConfig("line retirement mutex poisoned".into()))?;
+        retired.retain(|entry| completed < entry.retired_at_generation);
+        if !previous.is_null() {
+            // SAFETY: `previous` was produced by Box::into_raw and the swap removed it from the
+            // live owner. RT may still hold a shared raw reference, so the box stays retained for
+            // two completed generations and is never dereferenced by control.
+            retired.push(RetiredLineProgram {
+                program: unsafe { Box::from_raw(previous) },
+                retired_at_generation: completed.saturating_add(2),
+            });
+        }
+        Ok(())
+    }
+}
+
+impl Drop for LineExchange {
+    fn drop(&mut self) {
+        let live = *self.live.get_mut();
+        if !live.is_null() {
+            // SAFETY: final `Arc<LineExchange>` destruction means no RT or control handle remains.
+            drop(unsafe { Box::from_raw(live) });
+        }
+        if let Ok(retired) = self.retired.get_mut() {
+            for entry in retired.drain(..) {
+                drop(entry.program);
+            }
+        }
+    }
+}
+
+/// Control-only installation handle. It cannot expose `LineProgram::current_gain`, so the Cell
+/// state remains an audio-thread concern even though pointer publication is shared.
+#[derive(Clone)]
+pub struct LineControl {
+    exchange: Arc<LineExchange>,
+}
+
+impl LineControl {
+    pub fn install_for_bus(
+        &self,
+        program: LineProgram,
+        bus_index: usize,
+        bus_count: usize,
+    ) -> Result<(), OutputError> {
+        self.exchange.install(program, bus_index, bus_count)
+    }
+}
+
+struct LegacyLineRouting {
+    output: Arc<AtomicUsize>,
+    sends: Vec<Arc<AtomicU32>>,
+}
+
+/// RT-side line reader. Production reads the published program with one Acquire load; reclamation,
+/// allocation, locking, and destruction are confined to `LineControl`.
+pub struct LineSlot {
+    exchange: Arc<LineExchange>,
+    ramp_frames: u32,
+    legacy: Option<LegacyLineRouting>,
+    #[cfg(test)]
+    read_interlock: std::sync::Mutex<Option<(Arc<std::sync::Barrier>, Arc<std::sync::Barrier>)>>,
+}
+
+impl LineSlot {
+    pub fn new(program: LineProgram) -> Self {
+        Self {
+            exchange: LineExchange::new(program),
+            // Direct unit-test construction uses the engine's normal 48 kHz default. Production
+            // replaces this from the selected device rate before the callback starts.
+            ramp_frames: 240,
+            legacy: None,
+            #[cfg(test)]
+            read_interlock: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub fn line_control(&self) -> LineControl {
+        LineControl {
+            exchange: self.exchange.clone(),
+        }
+    }
+
+    fn set_sample_rate(&mut self, sample_rate: u32) {
+        self.ramp_frames = ((sample_rate as f64 * 0.005).round() as u32).max(1);
+    }
+
+    #[inline]
+    fn load(&self) -> *mut LineProgram {
+        let program = self.exchange.live.load(Ordering::Acquire);
+        debug_assert!(!program.is_null());
+        #[cfg(test)]
+        self.wait_at_read_interlock();
+        program
+    }
+
+    #[inline]
+    fn finish_generation(&self) {
+        self.exchange.generation.fetch_add(1, Ordering::Release);
+    }
+
+    fn replace_during_construction(&self, program: LineProgram) {
+        // Construction-only builders have no stage index yet. Bus topology is validated once the
+        // complete stage array exists, before a callback can start.
+        let next = Box::into_raw(Box::new(program));
+        let previous = self.exchange.live.swap(next, Ordering::AcqRel);
+        if !previous.is_null() {
+            let mut retired = self
+                .exchange
+                .retired
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            // No RT generation has begun during construction, but a control handle may already
+            // have been cloned. Retaining until final drop avoids relying on that convention.
+            retired.push(RetiredLineProgram {
+                // SAFETY: the live swap transferred ownership to this retired entry.
+                program: unsafe { Box::from_raw(previous) },
+                retired_at_generation: u64::MAX,
+            });
+        }
+    }
+
+    fn ops_snapshot_during_construction(&self) -> Vec<LineOp> {
+        let program = self.exchange.live.load(Ordering::Acquire);
+        assert!(!program.is_null(), "line program must always be installed");
+        // SAFETY: builder methods are construction-only and hold exclusive access to the stage.
+        unsafe { (&*program).ops.to_vec() }
+    }
+
+    #[cfg(test)]
+    fn interlock_next_read(
+        &mut self,
+        reached_after_load: Arc<std::sync::Barrier>,
+        resume_read: Arc<std::sync::Barrier>,
+    ) {
+        *self.read_interlock.lock().expect("line read interlock") =
+            Some((reached_after_load, resume_read));
+    }
+
+    #[cfg(test)]
+    fn wait_at_read_interlock(&self) {
+        let interlock = self
+            .read_interlock
+            .lock()
+            .expect("line read interlock")
+            .take();
+        if let Some((reached_after_load, resume_read)) = interlock {
+            reached_after_load.wait();
+            resume_read.wait();
+        }
+    }
+
+    #[cfg(test)]
+    fn visit_program_for_test(&self, visit: impl FnOnce(&LineProgram)) {
+        let program = self.load();
+        // SAFETY: the RT generation guard retains a replaced program until two later completed
+        // generations, and this method publishes completion only after `visit` returns.
+        visit(unsafe { &*program });
+        self.finish_generation();
+    }
+}
+
+fn validate_line_program(
+    program: &LineProgram,
+    bus_index: usize,
+    bus_count: usize,
+) -> Result<(), OutputError> {
+    program.validate_shape()?;
+    for op in &program.ops {
+        if let LineOp::Output(LineOutput {
+            dest: OutputDest::Bus(target),
+            ..
+        }) = op
+        {
+            if *target <= bus_index || *target >= bus_count {
+                return Err(OutputError::NoConfig(format!(
+                    "insert bus index {bus_index} output Bus({target}) must be a later stage"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// named routing tag を受ける per-bus insert stage。sum/aux を含む mixer graph の1ノード
 /// （#459/#453・MX.1-MX.5）。
 ///
@@ -900,26 +1269,9 @@ pub struct InsertBusStage {
     /// activation → その後に tag 付き PlayAt」の順序を守ること（`seq.effect()` は await するので
     /// 構造的に成立）。
     active: Arc<AtomicBool>,
-    /// この stage の insert 適用後 buffer を最終的にどこへ足すか（既定 `Master` = 従来経路）。
-    /// **静的**構成（テスト・PH.2b の固定 topology）用。M2 の実行時切替は `routing_override` を
-    /// 優先する（後述）。
-    output_target: BusTarget,
-    /// post-insert の buffer を copy 加算する先（既定空 = 従来経路）。MX.3 の send/aux。
-    /// `output_target` と同様、静的構成専用。M2 の実行時切替は `send_gain_overrides` を使う。
-    sends: Vec<BusSend>,
-    /// M2（#459/#453）: `SetBusRouting` daemon コマンド（非 RT・session.rs）が書き込む実行時
-    /// ルーティング。RT callback は atomic load のみ行う（Relaxed で可・ルーティング変更は
-    /// 音楽的タイミング精度不要）。エンコード: `0` = override 無し（静的 `output_target` を使う）・
-    /// `1` = `Master`・`n >= 2` = `Bus(n - 2)`。呼び出し側（`build_effect_bus_stages` 系）が
-    /// 構築時に `Arc::new(AtomicUsize::new(0))` を渡し、control 側にも同じ Arc の clone を保持させる
-    /// ことで、命名解決済みの routing 変更を RT 側に不可視な形で反映する。
-    routing_override: Arc<AtomicUsize>,
-    /// M2: 実行時 send gain override。index `k` は「この stage より `k + 1` 個後ろ」の stage への
-    /// send gain（f32 bits・`0.0` = 無効 = send 無し）。構築時に「この stage より後ろの全 stage」分の
-    /// スロットを確保しておく（v1 の設計判断: SetBusRouting は既存スロットへの書き込みのみで、
-    /// 実行時に Vec を伸長しない）。send 先は aux kind のみ許可（control 側 `SetBusRouting` ハンドラが
-    /// 検証・spec MX.4）。
-    send_gain_overrides: Vec<Arc<AtomicU32>>,
+    /// Published line program. Routing, sends, and rack position are all interpreted from this one
+    /// ordered program by the callback post-loop.
+    line: LineSlot,
 }
 
 impl InsertBusStage {
@@ -948,10 +1300,7 @@ impl InsertBusStage {
             processor,
             buffer: vec![0.0; buffer_len],
             active,
-            output_target: BusTarget::default(),
-            sends: Vec::new(),
-            routing_override: Arc::new(AtomicUsize::new(0)),
-            send_gain_overrides: Vec::new(),
+            line: LineSlot::new(LineProgram::legacy(BusTarget::Master, &[])),
         }
     }
 
@@ -962,15 +1311,64 @@ impl InsertBusStage {
 
     /// この stage の出力先を指定する（既定 `Master`）。sum の member や sum→master 以外の合流に
     /// 使う（MX.1）。target index の妥当性（自分より後ろ）は構築 API 側で検証する。
-    pub fn with_output_target(mut self, target: BusTarget) -> Self {
-        self.output_target = target;
+    pub fn with_output_target(self, target: BusTarget) -> Self {
+        let mut ops = self.line.ops_snapshot_during_construction();
+        if let Some(LineOp::Output(output)) =
+            ops.iter_mut().find(|op| matches!(op, LineOp::Output(_)))
+        {
+            output.dest = match target {
+                BusTarget::Master => OutputDest::Master,
+                BusTarget::Bus(index) => OutputDest::Bus(index),
+            };
+        }
+        self.line
+            .replace_during_construction(LineProgram::settled(ops));
         self
     }
 
     /// 複数の send（aux/return への post-fader copy・MX.3）を指定する（既定空）。
-    pub fn with_sends(mut self, sends: Vec<BusSend>) -> Self {
-        self.sends = sends;
+    pub fn with_sends(self, sends: Vec<BusSend>) -> Self {
+        let mut ops = self.line.ops_snapshot_during_construction();
+        let primary = ops
+            .iter()
+            .position(|op| matches!(op, LineOp::Output(_)))
+            .expect("legacy line has a primary output");
+        ops.truncate(primary + 1);
+        if let LineOp::Output(output) = &mut ops[primary] {
+            output.thru = !sends.is_empty();
+        }
+        for (index, send) in sends.iter().enumerate() {
+            ops.push(LineOp::Output(LineOutput {
+                dest: OutputDest::Bus(send.target),
+                thru: index + 1 != sends.len(),
+                gain: send.gain,
+            }));
+        }
+        self.line
+            .replace_during_construction(LineProgram::settled(ops));
         self
+    }
+
+    /// Replace the construction-time default with an explicit generic line program. Topology is
+    /// validated once the complete stage array is available.
+    pub fn with_line(self, program: LineProgram) -> Self {
+        self.line.replace_during_construction(program);
+        self
+    }
+
+    /// Obtain the control-only publication handle before moving the stage into callback state.
+    pub fn line_control(&self) -> LineControl {
+        self.line.line_control()
+    }
+
+    /// Compatibility bridge used by the daemon's old `SetBusRouting` command. The closure accepts
+    /// the old routing shape but publishes a complete `LineProgram`; it exposes neither the live
+    /// pointer nor callback-owned gain cells to control code.
+    pub fn legacy_line_installer(&self) -> LegacyLineInstaller {
+        let control = self.line.line_control();
+        Arc::new(move |target, sends, bus_index, bus_count| {
+            control.install_for_bus(LineProgram::legacy(target, &sends), bus_index, bus_count)
+        })
     }
 
     /// M2（#459/#453）: 実行時ルーティング用の atomic ハンドルを装着する。`routing_override` は
@@ -983,24 +1381,25 @@ impl InsertBusStage {
         routing_override: Arc<AtomicUsize>,
         send_gain_overrides: Vec<Arc<AtomicU32>>,
     ) -> Self {
-        self.routing_override = routing_override;
-        self.send_gain_overrides = send_gain_overrides;
+        if !send_gain_overrides.is_empty() {
+            let mut ops = self.line.ops_snapshot_during_construction();
+            for op in &mut ops {
+                if let LineOp::Output(output) = op {
+                    output.thru = true;
+                }
+            }
+            self.line
+                .replace_during_construction(LineProgram::settled(ops));
+        }
+        self.line.legacy = Some(LegacyLineRouting {
+            output: routing_override,
+            sends: send_gain_overrides,
+        });
         self
     }
 
     fn ensure_buffer_len(&mut self, len: usize) {
         ensure_audio_buffer_len(&mut self.buffer, len);
-    }
-}
-
-/// stage の実行時 output target を解決する（M2）。`routing_override` が `0`（override 無し）なら
-/// 静的 `output_target` をそのまま使う。RT callback から呼ぶため atomic load 以外の副作用は無い。
-#[inline]
-fn effective_output_target(stage: &InsertBusStage) -> BusTarget {
-    match stage.routing_override.load(Ordering::Relaxed) {
-        0 => stage.output_target,
-        1 => BusTarget::Master,
-        n => BusTarget::Bus(n - 2),
     }
 }
 
@@ -1010,22 +1409,18 @@ fn effective_output_target(stage: &InsertBusStage) -> BusTarget {
 /// MX.2）。構築 API の入口（`start_default_output_with_insert_buses*`）でのみ呼ぶ。
 fn validate_bus_topology(stages: &[InsertBusStage]) -> Result<(), OutputError> {
     for (i, stage) in stages.iter().enumerate() {
-        if let BusTarget::Bus(target) = stage.output_target {
-            if target <= i || target >= stages.len() {
-                return Err(OutputError::NoConfig(format!(
-                    "insert bus '{}' (index {i}) output_target Bus({target}) must be a later stage",
-                    stage.name
-                )));
-            }
+        let program = stage.line.exchange.live.load(Ordering::Acquire);
+        if program.is_null() {
+            return Err(OutputError::NoConfig(format!(
+                "insert bus '{}' has no line program",
+                stage.name
+            )));
         }
-        for send in &stage.sends {
-            if send.target <= i || send.target >= stages.len() {
-                return Err(OutputError::NoConfig(format!(
-                    "insert bus '{}' (index {i}) send target {} must be a later stage",
-                    stage.name, send.target
-                )));
-            }
-        }
+        // SAFETY: topology validation runs before stages enter callback state; the construction
+        // API cannot replace this pointer concurrently.
+        validate_line_program(unsafe { &*program }, i, stages.len()).map_err(|error| {
+            OutputError::NoConfig(format!("insert bus '{}': {error}", stage.name))
+        })?;
     }
     Ok(())
 }
@@ -1193,15 +1588,25 @@ fn render_block_with_sources(
         "master buffer too short: {} < {bs}",
         master.buffer.len()
     );
-    render_engine_with_sources(
-        engine,
-        link,
-        insert_buses,
-        sources,
-        transport,
-        2,
-        &mut master.buffer[..bs],
-    );
+    debug_assert!(master.direct_device_buffer.len() >= hw.len());
+    let direct_device_written = {
+        let mut device = DeviceLineBuffer {
+            samples: &mut master.direct_device_buffer[..hw.len()],
+            channels: output_channels,
+            wrote: false,
+        };
+        render_engine_with_sources_impl(
+            engine,
+            link,
+            insert_buses,
+            sources,
+            transport,
+            2,
+            &mut master.buffer[..bs],
+            Some(&mut device),
+        );
+        device.wrote
+    };
 
     // master ライン（設計 §5.3）: ラック → gain（single 適用点・§5.4）。core の
     // `global_gain` は production では 1.0 固定のまま呼ばれない（乗算経路はここ 1 本）。
@@ -1228,6 +1633,9 @@ fn render_block_with_sources(
     // RT コールバックで**毎ブロック二重に store する**ことになる（64 frames × 2ch なら
     // 約 96,000 store/秒の無駄）。余剰チャンネルの 0 埋めは配置関数の責務に閉じた。
     place_master_into_device(&master.buffer[..bs], frames, output_channels, hw);
+    if direct_device_written {
+        add_scaled(hw, &master.direct_device_buffer[..hw.len()], 1.0);
+    }
 
     // capture seam（#307 realtime）: post 適用後の最終 hw（= device に出る実信号）を WAV へ逃がす
     // 読み取り専用 tap。`RingTapSink::commit` は wait-free / no-alloc（満杯時はあふれを drop カウント）
@@ -1277,6 +1685,7 @@ fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, 
 }
 
 #[inline]
+#[cfg(test)]
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -1286,11 +1695,43 @@ fn render_engine_with_sources(
     output_channels: usize,
     hw: &mut [f32],
 ) {
+    render_engine_with_sources_impl(
+        engine,
+        link,
+        buses,
+        sources,
+        transport,
+        output_channels,
+        hw,
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_engine_with_sources_impl(
+    engine: &Engine,
+    link: &mut Option<LinkEgress>,
+    buses: &mut [InsertBusStage],
+    sources: &mut [SourceSlot],
+    transport: &mut BlockTransport,
+    output_channels: usize,
+    hw: &mut [f32],
+    device: Option<&mut DeviceLineBuffer<'_>>,
+) {
     let frames = hw.len() / output_channels;
 
     if sources.is_empty() {
         if buses.iter().any(|bus| bus.active.load(Ordering::Relaxed)) {
-            render_engine_with_insert_buses(engine, link, buses, output_channels, hw);
+            render_engine_with_insert_buses_and_source_outputs(
+                engine,
+                link,
+                buses,
+                &[],
+                &[],
+                output_channels,
+                hw,
+                device,
+            );
         } else {
             render_engine(engine, link, output_channels, hw);
         }
@@ -1305,6 +1746,7 @@ fn render_engine_with_sources(
                 &rendered_units,
                 output_channels,
                 hw,
+                device,
             );
         } else {
             render_engine_with_source_outputs(
@@ -1371,6 +1813,7 @@ fn collect_source_feeds<'a>(
 }
 
 #[inline]
+#[cfg(test)]
 fn render_engine_with_insert_buses(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -1386,10 +1829,86 @@ fn render_engine_with_insert_buses(
         &[],
         output_channels,
         hw,
+        None,
     );
 }
 
 #[inline]
+fn line_gain(
+    program: &LineProgram,
+    op_index: usize,
+    target: f32,
+    frames: usize,
+    ramp_frames: u32,
+) -> f32 {
+    let cell = &program.current_gain[op_index];
+    let mut current = cell.get();
+    let gain = advance_ramped_gain(&mut current, target, frames, ramp_frames);
+    cell.set(current);
+    gain
+}
+
+#[inline]
+fn add_scaled(dst: &mut [f32], src: &[f32], gain: f32) {
+    if gain == 1.0 {
+        for (dst, src) in dst.iter_mut().zip(src) {
+            *dst += *src;
+        }
+    } else {
+        for (dst, src) in dst.iter_mut().zip(src) {
+            *dst += *src * gain;
+        }
+    }
+}
+
+struct DeviceLineBuffer<'a> {
+    samples: &'a mut [f32],
+    channels: usize,
+    wrote: bool,
+}
+
+#[inline]
+fn add_to_device(
+    device: &mut DeviceLineBuffer<'_>,
+    src: &[f32],
+    frames: usize,
+    left: usize,
+    right: Option<usize>,
+    gain: f32,
+) {
+    if !device.wrote {
+        device.samples.fill(0.0);
+    }
+    debug_assert!(left < device.channels);
+    debug_assert!(right.is_none_or(|channel| channel < device.channels));
+    match right {
+        Some(right) => {
+            for frame in 0..frames {
+                let device_base = frame * device.channels;
+                let source_base = frame * ENGINE_CHANNELS;
+                if gain == 1.0 {
+                    device.samples[device_base + left] += src[source_base];
+                    device.samples[device_base + right] += src[source_base + 1];
+                } else {
+                    device.samples[device_base + left] += src[source_base] * gain;
+                    device.samples[device_base + right] += src[source_base + 1] * gain;
+                }
+            }
+        }
+        None => {
+            for frame in 0..frames {
+                let source_base = frame * ENGINE_CHANNELS;
+                let merged = (src[source_base] + src[source_base + 1]) * 0.5;
+                device.samples[frame * device.channels + left] +=
+                    if gain == 1.0 { merged } else { merged * gain };
+            }
+        }
+    }
+    device.wrote = true;
+}
+
+#[inline]
+#[allow(clippy::too_many_arguments)]
 fn render_engine_with_insert_buses_and_source_outputs(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -1398,6 +1917,7 @@ fn render_engine_with_insert_buses_and_source_outputs(
     rendered_units: &[usize],
     output_channels: usize,
     hw: &mut [f32],
+    mut device: Option<&mut DeviceLineBuffer<'_>>,
 ) {
     // LinkAudio と併用するときも 1 回の render_multi に集約し、transport/gain ramp を一度だけ進める。
     // bus 名と Link channel 名が重複した場合は bus を先に登録する（S1 は daemon Link 配線を変更しない）。
@@ -1412,23 +1932,44 @@ fn render_engine_with_insert_buses_and_source_outputs(
         .map(|bus| bus.active.load(Ordering::Relaxed))
         .collect();
 
-    // M2 routing atomics も callback 冒頭で 1 回だけ snapshot する。marking pass と post-loop が
-    // 同じ atomic を別々に load すると、callback 途中に `SetBusRouting` が挟まった場合に
-    // 「marking が見た合流先 j」と「accumulation が書く合流先 j'」が食い違い、zero-fill されて
-    // いない buffer へ加算 → 次に render target になった block で前分が一括流出（pop）する。
-    // snapshot を両パスで共有すれば 1 callback 内の view は常に一貫する。
-    let effective_targets: ArrayVec<BusTarget, MAX_INSERT_BUS_STAGES> =
-        buses.iter().map(effective_output_target).collect();
-    let send_override_gains: ArrayVec<
+    // One Acquire pointer snapshot per line is shared by the marking pass and execution. A control
+    // install during this callback therefore cannot make the two passes disagree about which
+    // downstream buffers must be cleared. The generation is published only after both passes.
+    let programs: ArrayVec<*mut LineProgram, MAX_INSERT_BUS_STAGES> =
+        buses.iter().map(|bus| bus.line.load()).collect();
+
+    // `with_routing_overrides` remains as a source-compatible construction shim for existing
+    // native callers. Production `SetBusRouting` installs a complete program; only this legacy
+    // shim snapshots the old atomic handles.
+    let legacy_targets: ArrayVec<Option<OutputDest>, MAX_INSERT_BUS_STAGES> = buses
+        .iter()
+        .map(|bus| {
+            bus.line.legacy.as_ref().and_then(|legacy| {
+                match legacy.output.load(Ordering::Relaxed) {
+                    0 => None,
+                    1 => Some(OutputDest::Master),
+                    n => Some(OutputDest::Bus(n - 2)),
+                }
+            })
+        })
+        .collect();
+    let legacy_send_gains: ArrayVec<
         ArrayVec<f32, { MAX_INSERT_BUS_STAGES - 1 }>,
         MAX_INSERT_BUS_STAGES,
     > = buses
         .iter()
         .map(|bus| {
-            bus.send_gain_overrides
-                .iter()
-                .map(|g| f32::from_bits(g.load(Ordering::Relaxed)))
-                .collect()
+            bus.line
+                .legacy
+                .as_ref()
+                .map(|legacy| {
+                    legacy
+                        .sends
+                        .iter()
+                        .map(|gain| f32::from_bits(gain.load(Ordering::Relaxed)))
+                        .collect()
+                })
+                .unwrap_or_default()
         })
         .collect();
 
@@ -1438,21 +1979,37 @@ fn render_engine_with_insert_buses_and_source_outputs(
     // も、buffer を zero-fill し post-loop で処理しないと合流先が前 block のゴミを持ち越す。
     let mut render_targets: ArrayVec<bool, MAX_INSERT_BUS_STAGES> =
         active_flags.iter().copied().collect();
-    for (i, bus) in buses.iter().enumerate() {
+    for (i, _bus) in buses.iter().enumerate() {
         if !active_flags[i] {
             continue;
         }
-        if let BusTarget::Bus(j) = effective_targets[i] {
-            render_targets[j] = true;
+        // SAFETY: the line generation is not completed until after execution below. Control keeps
+        // any replaced box retired for two later completed generations.
+        let program = unsafe { &*programs[i] };
+        let mut first_output = true;
+        let mut reached_end = true;
+        for op in &program.ops {
+            if let LineOp::Output(output) = op {
+                let dest = if first_output {
+                    first_output = false;
+                    legacy_targets[i].unwrap_or(output.dest)
+                } else {
+                    output.dest
+                };
+                if let OutputDest::Bus(target) = dest {
+                    render_targets[target] = true;
+                }
+                if !output.thru {
+                    reached_end = false;
+                    break;
+                }
+            }
         }
-        for send in &bus.sends {
-            render_targets[send.target] = true;
-        }
-        // M2: 実行時 send override も render target 判定に加える（override が非ゼロ gain の間、
-        // 合流先 stage を post-loop の zero-fill/processor 対象に含める必要がある）。
-        for (k, gain) in send_override_gains[i].iter().enumerate() {
-            if *gain != 0.0 {
-                render_targets[i + 1 + k] = true;
+        if reached_end {
+            for (offset, gain) in legacy_send_gains[i].iter().enumerate() {
+                if *gain != 0.0 {
+                    render_targets[i + 1 + offset] = true;
+                }
             }
         }
     }
@@ -1506,53 +2063,121 @@ fn render_engine_with_insert_buses_and_source_outputs(
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
 
-    // post-loop: 配列順（= トポロジカル順・MX.4）で is_render_target な stage を処理する。
-    // stage i の output_target/send は必ず i より後ろを指す（構築時 validate_bus_topology で
-    // 検証済み）ので、`split_at_mut(i + 1)` で「i を含む左」と「i より後ろの右」に安全に分割できる
-    // （sum のネスト・循環は構造的に発生しない）。
+    // post-loop: execute each captured line in topological stage order. Bus outputs retain the
+    // existing split_at_mut(i + 1) discipline; every target was validated before publication.
     for i in 0..buses.len() {
         if !render_targets[i] {
             continue;
         }
-        if active_flags[i] {
-            if let Some(processor) = buses[i].processor.as_mut() {
-                processor.process(&mut buses[i].buffer[..bs]);
+        // SAFETY: paired with the Acquire load above and the generation completion below.
+        let program = unsafe { &*programs[i] };
+        let mut first_output = true;
+        let mut reached_end = true;
+        for (op_index, op) in program.ops.iter().enumerate() {
+            match *op {
+                LineOp::Rack => {
+                    if active_flags[i] {
+                        if let Some(processor) = buses[i].processor.as_mut() {
+                            processor.process(&mut buses[i].buffer[..bs]);
+                        }
+                    }
+                }
+                LineOp::Gain(target) => {
+                    let gain = line_gain(
+                        program,
+                        op_index,
+                        target,
+                        bs / output_channels,
+                        buses[i].line.ramp_frames,
+                    );
+                    if gain != 1.0 {
+                        for sample in &mut buses[i].buffer[..bs] {
+                            *sample *= gain;
+                        }
+                    }
+                }
+                // Pan is introduced as a type in this PR but wired in PR-O4.
+                LineOp::Pan(_) => {}
+                LineOp::Output(output) => {
+                    let dest = if first_output {
+                        first_output = false;
+                        legacy_targets[i].unwrap_or(output.dest)
+                    } else {
+                        output.dest
+                    };
+                    let gain = line_gain(
+                        program,
+                        op_index,
+                        output.gain,
+                        bs / output_channels,
+                        buses[i].line.ramp_frames,
+                    );
+                    match dest {
+                        OutputDest::Master => {
+                            add_scaled(hw, &buses[i].buffer[..bs], gain);
+                        }
+                        OutputDest::Bus(target) => {
+                            let (left, right) = buses.split_at_mut(i + 1);
+                            add_scaled(
+                                &mut right[target - i - 1].buffer[..bs],
+                                &left[i].buffer[..bs],
+                                gain,
+                            );
+                        }
+                        OutputDest::Device { left, right } => {
+                            if let Some(device) = device.as_deref_mut() {
+                                add_to_device(
+                                    device,
+                                    &buses[i].buffer[..bs],
+                                    bs / output_channels,
+                                    left,
+                                    right,
+                                    gain,
+                                );
+                            } else {
+                                // Unit-level engine seams have no outer master line; in that shape
+                                // their `hw` argument is the physical destination itself.
+                                let mut direct = DeviceLineBuffer {
+                                    samples: hw,
+                                    channels: output_channels,
+                                    // `hw` already contains the core/master contribution in this
+                                    // unit-level shape, so Device output accumulates without clear.
+                                    wrote: true,
+                                };
+                                add_to_device(
+                                    &mut direct,
+                                    &buses[i].buffer[..bs],
+                                    bs / output_channels,
+                                    left,
+                                    right,
+                                    gain,
+                                );
+                            }
+                        }
+                        // Render and Link sinks arrive in their dedicated follow-up PRs. No
+                        // program generated by this compatibility PR contains these destinations.
+                        OutputDest::Render(_) | OutputDest::Link(_) => {}
+                    }
+                    if !output.thru {
+                        reached_end = false;
+                        break;
+                    }
+                }
             }
         }
 
-        let (left, right) = buses.split_at_mut(i + 1);
-        let src_stage = &left[i];
+        if reached_end {
+            for (offset, gain) in legacy_send_gains[i].iter().copied().enumerate() {
+                if gain != 0.0 {
+                    let (left, right) = buses.split_at_mut(i + 1);
+                    add_scaled(&mut right[offset].buffer[..bs], &left[i].buffer[..bs], gain);
+                }
+            }
+        }
+    }
 
-        match effective_targets[i] {
-            BusTarget::Master => {
-                for (dst, s) in hw.iter_mut().zip(&src_stage.buffer[..bs]) {
-                    *dst += *s;
-                }
-            }
-            BusTarget::Bus(j) => {
-                let dst_buf = &mut right[j - i - 1].buffer[..bs];
-                for (d, s) in dst_buf.iter_mut().zip(&src_stage.buffer[..bs]) {
-                    *d += *s;
-                }
-            }
-        }
-        for send in &src_stage.sends {
-            let dst_buf = &mut right[send.target - i - 1].buffer[..bs];
-            for (d, s) in dst_buf.iter_mut().zip(&src_stage.buffer[..bs]) {
-                *d += *s * send.gain;
-            }
-        }
-        // M2: 実行時 send override（`SetBusRouting`）。gain=0.0 は無効（分岐で skip）。
-        // 冒頭 snapshot（send_override_gains）を使い marking pass と同じ値で加算する。
-        for (k, gain) in send_override_gains[i].iter().copied().enumerate() {
-            if gain == 0.0 {
-                continue;
-            }
-            let dst_buf = &mut right[k].buffer[..bs];
-            for (d, s) in dst_buf.iter_mut().zip(&src_stage.buffer[..bs]) {
-                *d += *s * gain;
-            }
-        }
+    for bus in buses.iter() {
+        bus.line.finish_generation();
     }
 
     if let Some(le) = link {
@@ -1971,6 +2596,7 @@ fn start_output_inner(
     let sample_rate = live.sample_rate();
     let channels = live.channels();
     for bus in &mut insert_buses {
+        bus.line.set_sample_rate(sample_rate);
         // callback block は通常これより遥かに短い。RT hot path の resize を構造的に排除する。
         // engine は常に 2ch で完結する（設計 §5.5 row 2）。8ch@2048 の feed 破棄（#611 本文の
         // 実害）は `bs = frames*2 <= 8192` で消える — デバイス channel 数に比例して膨らまない。
@@ -2004,6 +2630,7 @@ fn start_output_inner(
     let mut master = MasterLine::new(sample_rate, post);
     // master.buffer も 2ch 前提で事前確保する（bus buffer と同じ規律・row 2）。
     master.ensure_buffer_len(sample_rate as usize * 2);
+    master.ensure_device_buffer_len(sample_rate as usize * channels as usize);
     let render_state = Arc::new(std::sync::Mutex::new(RenderState {
         link,
         insert_buses,
@@ -2049,6 +2676,11 @@ pub fn rebuild_output_stream(
     stats: Arc<StreamStats>,
     cb_stats: Option<Arc<CallbackTimeStats>>,
 ) -> Result<OutputStream, OutputError> {
+    render_state
+        .lock()
+        .map_err(|_| OutputError::NoConfig("render state mutex poisoned".into()))?
+        .master
+        .ensure_device_buffer_len(live.sample_rate() as usize * live.channels() as usize);
     let stream = build_stream(
         &live,
         engine,
@@ -2907,6 +3539,402 @@ mod tests {
         // aux 経由で Master へ。hw = dry + wet = raw × 0.75。
         let raw = 2.0_f32 * 0.5_f32.sqrt();
         assert!(hw.iter().all(|&sample| (sample - raw * 0.75).abs() < 1e-6));
+    }
+
+    fn render_tagged_line(program: LineProgram, frames: usize) -> Vec<f32> {
+        let engine = Engine::new(48_000, 2);
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("line".into()),
+                "line-program".into(),
+                // Keep source data beyond the rendered block so the resampler's final-frame
+                // boundary does not become part of the line-gain assertion.
+                orbit_audio_core::Sample::new(vec![2.0; (frames + 4) * 2], 48_000, 2),
+            )
+            .expect("schedule line input");
+        let mut buses = vec![InsertBusStage::new("line", None, frames * 2).with_line(program)];
+        let mut hw = vec![0.0; frames * 2];
+        render_engine_with_insert_buses(&engine, &mut None, &mut buses, 2, &mut hw);
+        hw
+    }
+
+    #[test]
+    fn line_program_rejects_non_forward_bus_output_during_topology_validation() {
+        let stages = vec![
+            InsertBusStage::new("self", None, 4).with_line(LineProgram::new(vec![
+                LineOp::Rack,
+                LineOp::Output(LineOutput {
+                    dest: OutputDest::Bus(0),
+                    thru: false,
+                    gain: 1.0,
+                }),
+            ])),
+        ];
+
+        let error = validate_bus_topology(&stages).expect_err("self output must be rejected");
+        assert!(
+            error.to_string().contains("must be a later stage"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn line_output_without_thru_stops_before_later_gain() {
+        let hw = render_tagged_line(
+            LineProgram::settled(vec![
+                LineOp::Rack,
+                LineOp::Output(LineOutput {
+                    dest: OutputDest::Master,
+                    thru: false,
+                    gain: 1.0,
+                }),
+                LineOp::Gain(2.0),
+                LineOp::Output(LineOutput {
+                    dest: OutputDest::Master,
+                    thru: false,
+                    gain: 1.0,
+                }),
+            ]),
+            2,
+        );
+        let raw = 2.0_f32 * 0.5_f32.sqrt();
+        assert_eq!(
+            hw.iter().map(|sample| sample.to_bits()).collect::<Vec<_>>(),
+            vec![raw.to_bits(); 4]
+        );
+    }
+
+    #[test]
+    fn line_output_with_thru_continues_into_later_gain() {
+        let hw = render_tagged_line(
+            LineProgram::settled(vec![
+                LineOp::Rack,
+                LineOp::Output(LineOutput {
+                    dest: OutputDest::Master,
+                    thru: true,
+                    gain: 1.0,
+                }),
+                LineOp::Gain(2.0),
+                LineOp::Output(LineOutput {
+                    dest: OutputDest::Master,
+                    thru: false,
+                    gain: 1.0,
+                }),
+            ]),
+            2,
+        );
+        let expected = (2.0_f32 * 0.5_f32.sqrt()) * 3.0;
+        assert_eq!(
+            hw.iter().map(|sample| sample.to_bits()).collect::<Vec<_>>(),
+            vec![expected.to_bits(); 4]
+        );
+    }
+
+    fn render_marking_target_after_first_output(first_output_thru: bool) -> Vec<f32> {
+        let engine = Engine::new(48_000, 2);
+        let mut buses = vec![
+            InsertBusStage::new("source", None, 4).with_line(LineProgram::settled(vec![
+                LineOp::Output(LineOutput {
+                    dest: OutputDest::Master,
+                    thru: first_output_thru,
+                    gain: 1.0,
+                }),
+                LineOp::Output(LineOutput {
+                    dest: OutputDest::Bus(1),
+                    thru: false,
+                    gain: 1.0,
+                }),
+            ])),
+            InsertBusStage::with_activation("later", None, 4, Arc::new(AtomicBool::new(false))),
+        ];
+        buses[1].buffer.fill(0.625);
+
+        let mut hw = vec![0.0; 4];
+        render_engine_with_insert_buses(&engine, &mut None, &mut buses, 2, &mut hw);
+        buses.remove(1).buffer
+    }
+
+    #[test]
+    fn marking_stops_before_bus_output_after_thru_false() {
+        let later = render_marking_target_after_first_output(false);
+        assert_eq!(
+            later
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            vec![0.625_f32.to_bits(); 4],
+            "an unreachable bus output must not mark or clear the later bus"
+        );
+    }
+
+    #[test]
+    fn marking_reaches_bus_output_after_thru_true() {
+        let later = render_marking_target_after_first_output(true);
+        assert_eq!(
+            later
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            vec![0.0_f32.to_bits(); 4],
+            "a reachable bus output must mark and clear the inactive later bus"
+        );
+    }
+
+    #[test]
+    fn line_gain_moves_toward_target_by_block_fraction() {
+        let program = LineProgram::new(vec![
+            LineOp::Rack,
+            LineOp::Gain(0.0),
+            LineOp::Output(LineOutput {
+                dest: OutputDest::Master,
+                thru: false,
+                gain: 1.0,
+            }),
+        ]);
+        let hw = render_tagged_line(program, 48);
+        let raw = 2.0_f32 * 0.5_f32.sqrt();
+        let expected = raw * 0.8;
+        assert!(
+            hw.iter().all(|sample| (*sample - expected).abs() < 1e-6),
+            "first 48-frame block must use 1 + (0 - 1) * (48 / 240): {hw:?}"
+        );
+        assert!(hw.iter().all(|sample| *sample != 0.0));
+    }
+
+    fn render_legacy_static_line(use_program: bool) -> Vec<u32> {
+        struct Half;
+        impl PostProcessor for Half {
+            fn process(&mut self, data: &mut [f32]) {
+                for sample in data {
+                    *sample *= 0.5;
+                }
+            }
+        }
+
+        let engine = Engine::new(48_000, 2);
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("source".into()),
+                "compat-static".into(),
+                orbit_audio_core::Sample::new(
+                    vec![0.25, -0.5, 0.75, -1.0, 1.25, -1.5, 1.75, -2.0],
+                    48_000,
+                    2,
+                ),
+            )
+            .expect("schedule static compatibility input");
+
+        let source = if use_program {
+            InsertBusStage::new("source", None, 8).with_line(LineProgram::settled(vec![
+                LineOp::Rack,
+                LineOp::Output(LineOutput {
+                    dest: OutputDest::Bus(1),
+                    thru: true,
+                    gain: 1.0,
+                }),
+                LineOp::Output(LineOutput {
+                    dest: OutputDest::Bus(2),
+                    thru: false,
+                    gain: 0.375,
+                }),
+            ]))
+        } else {
+            InsertBusStage::new("source", None, 8)
+                .with_output_target(BusTarget::Bus(1))
+                .with_sends(vec![BusSend {
+                    target: 2,
+                    gain: 0.375,
+                }])
+        };
+        let mut buses = vec![
+            source,
+            InsertBusStage::new("sum", Some(Box::new(Half)), 8),
+            InsertBusStage::unattached("aux"),
+        ];
+        buses[2].ensure_buffer_len(8);
+        let mut hw = vec![0.0; 8];
+        render_engine_with_insert_buses(&engine, &mut None, &mut buses, 2, &mut hw);
+        hw.into_iter().map(f32::to_bits).collect()
+    }
+
+    #[test]
+    fn legacy_output_target_and_sends_match_line_program_bit_for_bit() {
+        let legacy = render_legacy_static_line(false);
+        let program = render_legacy_static_line(true);
+        assert_eq!(program, legacy);
+    }
+
+    fn schedule_runtime_compat_input(engine: &Engine, id: &str) {
+        engine
+            .schedule_with_play_id(
+                0.0,
+                1.0,
+                0.0,
+                0,
+                0,
+                1.0,
+                Some("source".into()),
+                id.into(),
+                orbit_audio_core::Sample::new(
+                    vec![0.125, -0.25, 0.5, -1.0, 1.5, -2.0, 2.5, -3.0],
+                    48_000,
+                    2,
+                ),
+            )
+            .expect("schedule runtime compatibility input");
+    }
+
+    #[test]
+    fn legacy_runtime_routing_switch_matches_line_program_install_bit_for_bit() {
+        struct Half;
+        impl PostProcessor for Half {
+            fn process(&mut self, data: &mut [f32]) {
+                for sample in data {
+                    *sample *= 0.5;
+                }
+            }
+        }
+
+        let legacy_engine = Engine::new(48_000, 2);
+        let program_engine = Engine::new(48_000, 2);
+        schedule_runtime_compat_input(&legacy_engine, "legacy-before");
+        schedule_runtime_compat_input(&program_engine, "program-before");
+
+        let routing = Arc::new(AtomicUsize::new(0));
+        let send_to_sum = Arc::new(AtomicU32::new(0));
+        let send_to_aux = Arc::new(AtomicU32::new(0));
+        let legacy_source = InsertBusStage::new("source", None, 8)
+            .with_routing_overrides(routing.clone(), vec![send_to_sum, send_to_aux.clone()]);
+        let program_source = InsertBusStage::new("source", None, 8);
+        let install_line = program_source.legacy_line_installer();
+        let mut legacy_buses = vec![
+            legacy_source,
+            InsertBusStage::new("sum", Some(Box::new(Half)), 8),
+            InsertBusStage::unattached("aux"),
+        ];
+        let mut program_buses = vec![
+            program_source,
+            InsertBusStage::new("sum", Some(Box::new(Half)), 8),
+            InsertBusStage::unattached("aux"),
+        ];
+        legacy_buses[2].ensure_buffer_len(8);
+        program_buses[2].ensure_buffer_len(8);
+
+        let mut legacy_before = vec![0.0; 8];
+        let mut program_before = vec![0.0; 8];
+        render_engine_with_insert_buses(
+            &legacy_engine,
+            &mut None,
+            &mut legacy_buses,
+            2,
+            &mut legacy_before,
+        );
+        render_engine_with_insert_buses(
+            &program_engine,
+            &mut None,
+            &mut program_buses,
+            2,
+            &mut program_before,
+        );
+        assert_eq!(
+            program_before
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            legacy_before
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>()
+        );
+
+        routing.store(3, Ordering::Relaxed);
+        send_to_aux.store(0.375_f32.to_bits(), Ordering::Relaxed);
+        install_line(
+            BusTarget::Bus(1),
+            vec![BusSend {
+                target: 2,
+                gain: 0.375,
+            }],
+            0,
+            3,
+        )
+        .expect("install switched line");
+        schedule_runtime_compat_input(&legacy_engine, "legacy-after");
+        schedule_runtime_compat_input(&program_engine, "program-after");
+
+        let mut legacy_after = vec![0.0; 8];
+        let mut program_after = vec![0.0; 8];
+        render_engine_with_insert_buses(
+            &legacy_engine,
+            &mut None,
+            &mut legacy_buses,
+            2,
+            &mut legacy_after,
+        );
+        render_engine_with_insert_buses(
+            &program_engine,
+            &mut None,
+            &mut program_buses,
+            2,
+            &mut program_after,
+        );
+        assert_eq!(
+            program_after
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>(),
+            legacy_after
+                .iter()
+                .map(|sample| sample.to_bits())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn retired_line_program_survives_an_in_flight_rt_read() {
+        let dropped_on = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut slot = LineSlot::new(
+            LineProgram::new(vec![LineOp::Rack]).with_drop_thread_log(dropped_on.clone()),
+        );
+        let control = slot.line_control();
+        let reached_after_load = Arc::new(std::sync::Barrier::new(2));
+        let resume_read = Arc::new(std::sync::Barrier::new(2));
+        slot.interlock_next_read(reached_after_load.clone(), resume_read.clone());
+
+        let rt = std::thread::spawn(move || {
+            slot.visit_program_for_test(|program| assert_eq!(program.ops.len(), 1));
+            slot.visit_program_for_test(|program| assert_eq!(program.ops.len(), 1));
+            slot
+        });
+        reached_after_load.wait();
+        control
+            .install_for_bus(LineProgram::new(vec![LineOp::Rack]), 0, 1)
+            .expect("install while RT holds old program");
+        assert!(
+            dropped_on.lock().unwrap().is_empty(),
+            "the in-flight program must not be reclaimed"
+        );
+        resume_read.wait();
+        let slot = rt.join().expect("RT reader");
+
+        let control_thread = std::thread::current().id();
+        control
+            .install_for_bus(LineProgram::new(vec![LineOp::Rack]), 0, 1)
+            .expect("collect after two completed RT generations");
+        assert_eq!(*dropped_on.lock().unwrap(), vec![control_thread]);
+        drop(slot);
     }
 
     // #459/#453 M2: 実行時ルーティング（`routing_override`/`send_gain_overrides`）が次の
