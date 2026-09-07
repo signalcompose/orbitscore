@@ -867,7 +867,7 @@ ORBIT_CAPTURE_WAV=/tmp/orbit-capture-test.wav node cli-audio.js path/to/single-n
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — engine-first ロードマップとアーキ確定（楽器=in-process／effects+3rd-party=out-of-process sandbox）
 - [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 / 6.262 — capture peak の実測記録
 - [`docs/archive/WORK_LOG_2026-08.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-08.md) 6.415 — master fader 不具合（#643）
-- `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:134-163` — `sweep_orphaned_outproc_shm`（段 0.5 が呼ぶ薄い殻・`tracing::info!` 1 行の要約）
+- `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:167-196` — `sweep_orphaned_outproc_shm`（段 0.5 が呼ぶ薄い殻・`tracing::info!` 1 行の要約）
 - Issue [#448](https://github.com/signalcompose/orbitscore/issues/448) — daemon の graceful-shutdown ギャップと `ParentWatch` 対策
 - Issue [#779](https://github.com/signalcompose/orbitscore/issues/779) / PR [#784](https://github.com/signalcompose/orbitscore/pull/784) — 起動時の孤児 shm 回収（段 0.5）
 - Issue [#484](https://github.com/signalcompose/orbitscore/issues/484) — audio device の列挙・選択・ランタイム切替（D1 / D2 / D3）

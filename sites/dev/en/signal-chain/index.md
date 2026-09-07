@@ -1,12 +1,12 @@
 ---
 title: "SC-1. Racks — Writing a Chain as a Value (SC.10)"
 chapter-id: "SC-1"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 900d453
+verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #780 / #789 (PR [#789](https://github.com/signalcompose/orbitscore/pull/789), the two defects in the pre-merge gate) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # SC-1. Racks — Writing a Chain as a Value (SC.10)
 
@@ -1372,6 +1372,66 @@ The pre-merge gate in `CLAUDE.md` requires `bundle-macos.sh` and
 `cargo test -p orbit-effect-rack-child --lib -- --ignored` to be run "unconditionally" for the same
 reason: every job in `rust-ci.yml` runs on ubuntu, where these three macOS-only tests do not even exist.
 
+### The gate itself carried two defects (#780, #789)
+
+What is interesting is that this "unconditional gate" was broken twice over as a measuring
+instrument. The [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle of 2026-09-06
+fixed both.
+
+The first defect is what `-- --ignored` means. `--ignored` is a filter that runs **only** the tests
+marked `#[ignore]`, so a regression test that is not `#[ignore]`d never runs on this gate — and it
+does not run in `rust-ci.yml` either, because every job there is ubuntu, where
+`#[cfg(target_os = "macos")]` tests do not exist at all. The measured output was
+`0 passed; 19 filtered out`. The gate in `CLAUDE.md` therefore grew from two lines to three, adding a
+plain run without `--ignored` (`CLAUDE.md:665-669`).
+
+The second defect is that the gate itself failed intermittently with SIGBUS / SIGSEGV. The cause was
+the fixture's shm path. `ActualFixture::new` used `line!()` to make the path unique, but `line!()`
+expands at the line where the macro is written, so it is a constant no matter how many callers there
+are. Four fixtures therefore shared one `orbit-rack-gain-{pid}-652.shm`, and the `.truncate(true)` in
+`create_shared` (`orbit-audio-sandbox/src/transport.rs:2031-2041`) truncated a region another test
+still had mapped. Writes then landed past EOF, which is what SIGBUS means here. That it never failed
+single-threaded and only failed in parallel follows from this being a collision *between* tests.
+
+The fix is the same shape as the production `unique_shm_path()`: a `static AtomicU64` counter.
+
+```rust
+// rust/crates/orbit-effect-rack-child/src/tests.rs:646-654
+#[cfg(target_os = "macos")]
+static SHM_SEQ: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(target_os = "macos")]
+fn actual_fixture_path(label: &str) -> PathBuf {
+    let seq = SHM_SEQ.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    std::env::temp_dir().join(format!("orbit-rack-{label}-{pid}-{seq}.shm"))
+}
+```
+
+And uniqueness itself now has a regression test. Reverting to `line!()` makes two fixtures share a
+path, which turns this test red.
+
+```rust
+// rust/crates/orbit-effect-rack-child/src/tests.rs:670-676
+#[cfg(target_os = "macos")]
+#[test]
+fn actual_fixtures_use_distinct_shm_paths() {
+    let first = ActualFixture::new("gain");
+    let second = ActualFixture::new("gain");
+    assert_ne!(first.path, second.path);
+}
+```
+
+The thing worth noticing is that these two defects are not independent. Until the first one (the
+`--ignored` filter) is fixed, the regression test for the second one can be written but will never
+run. Trusting a gate requires pinning both "what it measures" and "whether it actually runs".
+
+The cause of `#780` also has a history: a wrong cause was recorded in the design document first. The
+original draft said that "when `ActualFixture` is moved, the relationship between `_mmap` and
+`region` is not guaranteed by the type", but a `MmapMut` does not move its mapping when the struct
+moves, and `KERN_PROTECTION_FAILURE` is not a symptom of a dangling pointer either. The correction is
+kept as a quoted block in `docs/design/668-e2e-foundation-design.md` §13.5.3.
+
 ### The E2E numeric design is concentrated in one constant
 
 The gated E2E (`ORBIT_GATED_ORBITSTUDIO=1`) builds a three-stage chain of two catalog plugins
@@ -1591,6 +1651,9 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - `rust/crates/orbit-std-gain/bundle-macos.sh:1-45` — assembling the `.clap` bundle
 - `scripts/copy-daemon-bin.sh:131-132` — bundling `std-plugins/Gain.clap`
 - `.github/workflows/release.yml:86-98,191-200` — the real Gain test and the bundling gate inside the `.vsix`
+- `rust/crates/orbit-effect-rack-child/src/tests.rs:646-654,670-676` — the #780 fix (`line!()` replaced by a `static AtomicU64` counter) and the regression test on uniqueness itself
+- `CLAUDE.md:658-674` — the three lines of the pre-merge gate (when `--ignored` is used, when it is not, and why)
+- Issue [#780](https://github.com/signalcompose/orbitscore/issues/780) / PR [#789](https://github.com/signalcompose/orbitscore/pull/789) — the intermittent SIGBUS in the unconditional gate and the hole in the `--ignored` filter
 - `tests/e2e/rack-chain-gain-expectations.ts:1-34` / `tests/e2e/rack-chain-gain-expectations.spec.ts:1-30` — the E2E numeric design and its pure unit
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:4081-4111` — the full-rack segment of the `#628 R28` hardware block
 - `tests/core/rack-chain.spec.ts:105-414` — T3–T23 (LCS, occurrence, keep updates, uncertain recovery)

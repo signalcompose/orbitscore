@@ -625,7 +625,7 @@ pub fn parse_outproc_shm_name(name: &OsStr) -> Option<u32> {
 `.shm` の後ろに何が続くかを問わない作りなので、`....shm.chain.json` のようなサイドカー
 （`ApplyEffectChain` の manifest）も同じ規則で拾われます。gated E2E は死亡 PID の `.shm` と
 その `.chain.json` が両方消えること、そして**生存 PID のファイルが残ること**をファイルシステムで
-確認しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:5397-5462`）。
+確認しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:5445-5516`）。
 
 ちなみに「プロセス名を見て daemon かどうか照合する」案は採られていません。`cargo test` の
 テストバイナリも同じ名前で shm を作るので、照合すると走行中のテストの mmap 先を unlink して
@@ -664,7 +664,7 @@ pub fn parse_outproc_shm_name(name: &OsStr) -> Option<u32> {
 - `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:9-49,121-145` — 起動時 sweep（接頭辞定数・`MIN_ORPHAN_AGE`・3 値述語・ファイル名 parse・削除の分岐）
 - `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:167-196` — `sweep_orphaned_outproc_shm`（段 0.5 が呼ぶ薄い殻と `tracing::info!` の要約行）
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:891-910` — ready 行までの stderr 蓄積（sweep の INFO 行が `get_log` に出ない理由）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:5397-5462` — 死亡 PID の shm とサイドカーが消え、生存 PID のものが残ることを検査する gated E2E
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:5445-5516` — 死亡 PID の shm とサイドカーが消え、生存 PID のものが残ることを検査する gated E2E
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — in-process/OOP 分割の確定アーキ
 - Issue [#448](https://github.com/signalcompose/orbitscore/issues/448) — daemon graceful-shutdown ギャップと `ParentWatch` 対策（PR: `a0449b8`）
 - Issue [#779](https://github.com/signalcompose/orbitscore/issues/779) / PR [#784](https://github.com/signalcompose/orbitscore/pull/784) — 起動時の孤児 shm 回収（`Drop` が走らない経路への緩和）
