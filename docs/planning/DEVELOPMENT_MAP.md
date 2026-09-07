@@ -870,7 +870,7 @@ owner 判断が要る（#671 §5(a) / #672 A4）。**#321 の残作業（Link �
 | 未カバー語を埋める | **#668-B** = **#650** | ○（gated spec の `it(` は 20 件・未カバー 22 語） | `orbitstudio-mcp-gated.spec.ts` |
 | import の実機 E2E | #630 | ○ | — |
 | 網羅ハーネス（二重台帳・オフライン決定論層・無人） | **#543** | 📐 設計原則のみ確定（#543 本文）/ 実装 ○ | — |
-| capture が孤児 daemon の二重出力を見えない | #624 | ○（提案: daemon 本数 assert） | 🔴 **狭いスライスをステージ 2 に引き込む**（2026-09-07）。**E2E-10 が daemon respawn なので、台数を見ないと偽緑になりうる**。既存 `orbitAudioDaemonPids()`（`orbitstudio-mcp-gated.spec.ts:348-361`）を helper へ上げ、respawn 前後で 1 台を確認する。🔴 **置き場は PR-O4**（§1.10 の O4 行の検証列が「E2E-2〜7・**E2E-10**」= O4 の検証と明記。**#797 で「PR-O6」と書いたのは誤り・2026-09-07 訂正**）。**issue 全体（census 機構）は backlog** |
+| capture が孤児 daemon の二重出力を見えない | #624 | ○（提案: daemon 本数 assert） | 🔴 **狭いスライスをステージ 2 に引き込む**（2026-09-07）。**E2E-10 が daemon respawn なので、台数を見ないと偽緑になりうる**。既存 `orbitAudioDaemonPids()`（`orbitstudio-mcp-gated.spec.ts:348-361`）を helper へ上げ、respawn 前後で 1 台を確認する。🔴 **置き場は PR-O4**（§1.10 の O4 行の検証列が「E2E-2〜7・**E2E-10**」= O4 の検証と明記。**#797 で「PR-O6」と書いたのは誤り・2026-09-07 訂正**）。🔴 **雛形は `#606 E2E-K3`**（`orbitstudio-mcp-gated.spec.ts:5385-5404`・この関数を使う唯一のテスト）だが、そこの `toHaveLength(1)` は「**自分の start が増やした分**」の**差分**であって「高々 1 台」ではない — **総数を見る述語が要る**。**issue 全体（census 機構）は backlog** |
 | 負荷で落ちる Rust テスト | #640 | ○（推奨: 失敗時に load average を出す） | — |
 | root で落ちる 3 件（hook 迂回の常態化） | #684 | ○（推奨 A: root では skip） | — |
 | worktree で hook が誤ブロック | #465 | ○（**再現確認が要る**・triage） | — |
@@ -1135,7 +1135,13 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 | **#777** | `createDaemonStderrLineRouter` に `flush()` が無い（`partial` を持ち越すが吐き出さない） | 🔴 **クラッシュ経路**で最後の 1 行が落ちる。daemon が panic して改行なしで死ぬのは、診断が最も要る場面 | 🔴 **backlog**（2026-09-07・#799）。ステージ 2 の受け入れ基準に現れないので完了条件にしない。**#757 に着手する時点で #773 と畳む** |
 | **#773** | `setupStdoutHandler` も部分行をバッファリングしていない | bridge envelope がチャンク境界で割れると**両断片とも捨てられる**（#614 と同じ帰結）。`get_log` のリング（`extension.ts:311`）も同じ穴の上にある | 🔴 **束 O-wire に引き込む**（2026-09-07・#799）。**PR-O4 が `//#evalBegin` / `//#evalEnd` を導入し、#773 が落とすのが `{"evalMark"` を含む封筒**なので、**通信量を増やす前に受け側を直す**。#757 の順序制約は保たれる |
 
-🔴 **束 E-router の収束条件**: 「chunk 列 → 行」の実装が **4 つ**（`createLinePrefixer` / `createDaemonStderrLineRouter` / `setupStdoutHandler` の inline split / `extension.ts:311` のリングプロキシ）から **1 本の共有プリミティブ**に畳まれること。1 つずつ直すと次の人がまた 1 つだけ直す（#756 の doc コメント自身が「双子はこれを持たない」と書いていたのに双子を直さなかったのが実例）。
+🔴 **2026-09-07: 束 E-router は束として持たない**（計画 §3「安全網の残余」・doc 668 §13.5.4 の再改訂）。
+**#773 はステージ 2 の PR に引き込む**（PR-O4 が `//#evalBegin` / `//#evalEnd` を導入し、#773 が落とすのは
+`{"evalMark"` を含む封筒なので、**ステージ 2 は壊れているチャネルの通信量を増やす**）。
+**#777 は backlog**（ステージ 2 の受け入れ基準に現れない）。上表の「束 E-router の 1 番目」「同上（束 E-router）」は
+この改訂で**着手の単位が変わった**が、下の収束条件と #757 の順序制約は**#757 に着手する時点で #777 と畳む**形で保たれる。
+
+**束 E-router の収束条件**（単位が変わっても目標は同じ）: 「chunk 列 → 行」の実装が **4 つ**（`createLinePrefixer` / `createDaemonStderrLineRouter` / `setupStdoutHandler` の inline split / `extension.ts:311` のリングプロキシ）から **1 本の共有プリミティブ**に畳まれること。1 つずつ直すと次の人がまた 1 つだけ直す（#756 の doc コメント自身が「双子はこれを持たない」と書いていたのに双子を直さなかったのが実例）。
 
 ### 4.K docs / 学習サイト
 

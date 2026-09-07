@@ -147,6 +147,52 @@ E-gate をステージ 2 の前提にしたのも「毎回**自分の変更の�
 - `tests/docs/`: 2 passed
 
 ---
+### docs(planning): follow up PR #797 — split the E-router bundle in the summary rows and fix the PR-E8 call site (Sep 7, 2026)
+
+**ブランチ**: `claude/docs-sync-pr797`（docs 追従ルーチン・**docs のみ**。実装とテストは触っていない）
+
+**追従元**: PR [#797](https://github.com/signalcompose/orbitscore/pull/797)（merge commit `c1144bd`・head `f008705c`）。
+CI は head `f008705c` に対して **3 件すべて緑**（code-review / fmt・clippy・test / license・dependency gate）。
+
+#### 1. 束 E-router の「割った」が要約行に届いていなかった
+
+#797 §3 は **束 E-router を束として持たず割る**（#773 → ステージ 2 の PR / #777 → backlog）と決めたが、
+**同じ文書の要約行 2 つと地図の 1 節が旧のまま**だった:
+
+| 場所 | 旧 | 直した内容 |
+|---|---|---|
+| `IMPLEMENTATION_PLAN_2026-09.md:325` | 束一覧に「E-router / PR-E12 / 約 240 行 / ステージ 2 と並行可」 | 打ち消し + §3 への差し戻し。順序制約は #757 着手時に #777 と畳んで満たす旨を明記 |
+| 同 `:406` | 現況一覧に「🔴 #757 の直前に置く」 | 同上 |
+| `DEVELOPMENT_MAP.md:1131` 手前 | 「束 E-router の収束条件」が束前提のまま | 改訂の見出しを前に置き、**着手の単位が変わった**ことと**目標は変わらない**ことを分けた |
+
+**放置した場合の実害**は #797 自身が書いたものと同型 — 束一覧を読んだ次の人が `777-line-router` を切りに行く。
+🔴 **決定を本文に書いても、同じ文書の要約表が古いままなら決定は伝わらない。**
+
+#### 2. 🔴 PR-E8 の「唯一の使用箇所」が別のテストだった
+
+#797 は `orbitAudioDaemonPids()` の唯一の使用を「`:5391` の **#779 sweep** テスト」と書いたが**誤り**:
+
+- `:5391` / `:5399` は **`#606 E2E-K3`**（`tests/e2e/orbitstudio-mcp-gated.spec.ts:5385`）の内側
+- #779 の sweep テストは `:5446` から始まり、**この関数を呼んでいない**
+
+さらに「gated spec に台数のアサーションは無い」も不正確で、`:5399-5404` に
+`expect(startedDaemonPids).toHaveLength(1)` が**在る**。ただしこれは
+「**このテスト自身の start が増やした daemon がちょうど 1 台**」という**差分**の主張で、
+PR-E8 の狙い「**各 phase 境界で daemon が高々 1 台**」（総数）ではない。
+**結論（E2E-10 が偽緑になりうる）は変わらない**ので、根拠だけ差し替えた。
+
+🔴 **教訓**: #797 が残した「**『無い』は探索範囲とセットでしか成り立たない**」の隣に、
+**「唯一の使用箇所」は行番号ではなくテスト名で書く**を並べた。行番号だけなら、
+それがどの `it(` の内側かを確かめずに書ける — 実際そうなっていた。
+
+#### 3. 追従不要と判断したもの
+
+- **用語 `段 N` → `ステージ N`**: 残っている `段` は `make-local-release.sh` の手順（656）と
+  daemon `run()` の `段 0.5`（`sites/dev/rust-engine/`）だけで、#797 が**意図して残した**ものと一致
+- **dev サイト en**: `sites/dev/en/editor/vscode-architecture.md:102` は元から `stage 1` と書いており、
+  ja 側の rename に対する en の追従は**既に済んでいた**（片翼になっていない）
+- **DSL / MCP / OrbitStudio の各層**: #797 は `packages/` `rust/` を 1 行も触っていないので、
+  `docs/specs-v2/` `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` `sites/user/` に追従先は無い
 
 ### docs(planning): rename 段 to ステージ and stop treating the remainder as a checklist (Sep 7, 2026)
 
