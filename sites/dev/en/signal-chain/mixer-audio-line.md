@@ -1,12 +1,12 @@
 ---
 title: "SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: f2dadd9
-verified-at: "2026-09-05"
+verified-against: 7a26988
+verified-at: "2026-09-07"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04 and to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04 and to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the line-program conversion of #611 PR-O3a ([#810](https://github.com/signalcompose/orbitscore/pull/810)) on 2026-09-07. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain
 
@@ -361,8 +361,41 @@ later stage and `BusKind::Sum`", "a send target must be a later stage and `BusKi
 ```
 
 `Some("master") => Some(1)` is the receiving end of the `"master"` we saw reserved on the TS side.
-The `target_index + 2` encoding packs three states — "0 = unchanged / 1 = Master / 2 and up =
-bus index" — into one atomic, which the native side's `routing_override` reads.
+The `target_index + 2` encoding packed three states — "0 = unchanged / 1 = Master / 2 and up =
+bus index" — into one atomic.
+
+### PR-O3a: `SetBusRouting` installs one line program
+
+Since #611 PR-O3a ([#810](https://github.com/signalcompose/orbitscore/pull/810)), the values that
+pass this validation are no longer written straight into the atomics. Instead the handler builds
+**one complete `LineProgram` for the bus and installs it**. Even a call that updates only
+`output` reads the already-standing sends back from the atomics and rebuilds the **whole**
+program.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6395-6406
+        if let Some(line) = line {
+            let routing_value = resolved_output.unwrap_or_else(|| {
+                control
+                    .bus_routing
+                    .get(seq_bus)
+                    .map(|routing| routing.load(Ordering::Relaxed))
+                    .unwrap_or(0)
+            });
+            let output_target = match routing_value {
+                0 | 1 => BusTarget::Master,
+                encoded => BusTarget::Bus(encoded - 2),
+            };
+```
+
+The "send the whole thing, not a diff" character of the TS-side `syncBusRouting()` has become the
+unit of publication on the daemon side too. Stores into the old atomics (`routing_override` /
+`send_gain_overrides`) remain, but with only two jobs left: **control-side state that the next
+partial update reads back for whatever the call did not mention**, and a compatibility API that
+existing Rust callers and tests observe. **Production RT reads only the `LineProgram`** — because
+`build_effect_bus_stages` no longer calls `with_routing_overrides`, no atomic handle is attached
+to the stage. The native post-loop looks at those atomics only on the construction-shim path that
+does use `with_routing_overrides`.
 
 ### The render side: the post-loop merges in topological order
 
@@ -409,17 +442,58 @@ Read it like this.
    section). Since #649 PR-O2, though, this `hw` is **the 2ch `master.buffer`, not the device
    buffer**, and the core gain is pinned at 1.0 in production (see "Where the master gain is
    applied moved" below)
-2. The post-loop walks the stages in array order (= topological order, MX.4), runs
-   `processor.process` if there is an insert, and adds into `hw` (Master) or a later bus
-   (`Bus(j)`) according to `effective_targets[i]`
-3. The continuation of the excerpt (`output.rs:962-985`) adds into `Bus(j)` and then adds
-   gain-scaled copies for `sends` and the runtime send overrides (fan-out is not event
-   duplication but "copy-add at the bus processing stage", exactly as MX.4 prescribes)
+2. The post-loop walks the stages in array order (= topological order, MX.4) and **executes that
+   stage's `LineProgram` in op order**. `LineOp::Rack` runs the insert processor, `LineOp::Gain`
+   advances the per-block ramp and applies it to the buffer, and `LineOp::Output` adds into `hw`
+   (`OutputDest::Master`) or into a later bus (`OutputDest::Bus`)
+3. Hitting an op whose `LineOutput.thru` is `false` **ends that stage's line there**. While
+   `thru` is `true` execution continues to the next op — a "does the signal pass through" flag —
+   and fan-out is expressed not as event duplication but as "copy-add at the bus processing
+   stage", exactly as MX.4 prescribes
+4. Before execution begins, the callback Acquire-loads the `AtomicPtr` **once per stage** into
+   `programs`. The marking pass (which decides which buses must be zero-filled and processed) and
+   this accumulation pass therefore see **the same pointer**, so a `SetBusRouting` landing
+   mid-callback cannot make the two passes disagree
 
 `split_at_mut(i + 1)` can split left and right because `validate_bus_topology` verified at
 construction that "stage i's destination is always later than i". Here is the implementation-side
 backing for the spec's guarantee that sum nesting and cycles cannot occur **structurally** (MX.2
-"nesting is not supported in v1").
+"nesting is not supported in v1"). Since PR-O3a the body of that check lives in
+`validate_line_program`, and the same check runs **every time a program is installed**.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1230-1250
+fn validate_line_program(
+    program: &LineProgram,
+    bus_index: usize,
+    bus_count: usize,
+) -> Result<(), OutputError> {
+    program.validate_shape()?;
+    for op in &program.ops {
+        if let LineOp::Output(LineOutput {
+            dest: OutputDest::Bus(target),
+            ..
+        }) = op
+        {
+            if *target <= bus_index || *target >= bus_count {
+                return Err(OutputError::NoConfig(format!(
+                    "insert bus index {bus_index} output Bus({target}) must be a later stage"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+```
+
+So the "only backward references exist" invariant went from something checked once at startup to
+**a gate that every program the RT might read has to pass**. `LineExchange::install` publishes
+only a program that passed, and the program it replaced is kept as
+`RetiredLineProgram { program, retired_at_generation }` in a retirement list until the RT's
+completed generation has advanced by two. Keeping the generation number **inside the retired
+object** follows the precedent of `StageList::retired_at_generation` in
+`orbit-effect-rack-child`: it avoids a shape where the pointer publication and a retirement-tag
+store can drift apart.
 
 ## Making an instrument a mixer source (#643)
 
@@ -1030,6 +1104,11 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 - `rust/crates/orbit-audio-native/src/output.rs:700-754,1253-1277` — `MasterLine` (rack → gain) / `place_master_into_device`
 - `rust/crates/orbit-audio-native/src/output.rs:3290-3322` — unit test `master_gain_applies_after_the_master_rack_generates_sound` (the only guard on the ordering)
 - `docs/design/611-output-line-design.md` §5.2 / §5.4 / §5.5 — design source of truth for the master line and the single multiplication path
+- `docs/design/611-output-line-design.md` §5.1 / §5.3 — design source of truth for the line-program types and the RT algorithm (PR-O3a)
+- `rust/crates/orbit-audio-native/src/output.rs:1230-1250` — `validate_line_program` (the backward-reference check that runs on every install)
+- `rust/crates/orbit-audio-native/src/output.rs:1030-1097` — `RetiredLineProgram` / `LineExchange` (publication and two-generation retirement)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6364-6448` — `set_bus_routing` (resolve everything → one program install → mirror into the old atomics)
+- PR [#810](https://github.com/signalcompose/orbitscore/pull/810) — #611 PR-O3a (line program and RT execution, `SetBusRouting` mapped onto it)
 - `docs/design/643-mixer-foundation-design.md` — #643 design (owner's three articles, responsibility boundary, feed injection point §5.1, `output()` three branches §12)
 - `docs/design/649-audio-line-design.md` — #649 audio-line design (§7 decisions, §8 open items, §9–§14 implementation design v3)
 - `docs/archive/WORK_LOG_2026-08.md` 6.404 / 6.405 / 6.408 / 6.410 / 6.415 / 6.420 — #643 design → PR-1 → PR-2 → review correction → real-machine discovery → #649 design v3

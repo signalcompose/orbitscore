@@ -1,12 +1,12 @@
 ---
 title: "RE-1. daemon アーキテクチャ概観"
 chapter-id: "RE-1"
-verified-against: b513659
-verified-at: "2026-09-06"
+verified-against: 7a26988
+verified-at: "2026-09-07"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで、2026-09-06 に #779 の起動時 shm sweep（[#784](https://github.com/signalcompose/orbitscore/pull/784)）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで、2026-09-06 に #779 の起動時 shm sweep（[#784](https://github.com/signalcompose/orbitscore/pull/784)）まで、2026-09-07 に #611 PR-O3a（[#810](https://github.com/signalcompose/orbitscore/pull/810)）の line program 化まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # RE-1. daemon アーキテクチャ概観
 
@@ -460,9 +460,15 @@ fn render_shared_block(
 自己修復します（次の block で戻る）。
 
 本体の `render_block_with_sources` は、engine render → **master ライン（ラック → gain）** →
-**デバイス配置** → capture tap → callback 所要時間の記録、という順に進みます。中ほどの 2 段は
+**デバイス配置** → **デバイス直行ラインの加算** → capture tap → callback 所要時間の記録、という順に
+進みます。中ほどの 2 段は
 #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）で入ったもので、それ以前は
-「engine render → master post-processor → capture tap」の 3 段でした。`master.post`/`capture`/`cb_stats`
+「engine render → master post-processor → capture tap」の 3 段でした。デバイス直行ラインの段は
+#611 PR-O3a（[#810](https://github.com/signalcompose/orbitscore/pull/810)）で足されたもので、
+`OutputDest::Device` を持つ bus ライン用の受け皿（`DeviceLineBuffer`）を engine render に渡し、
+**そこへ実際に書かれた場合だけ** master 配置後の `hw` に足し込みます。PR-O3a のコードは
+このデスティネーションを持つ program を 1 つも生成しないので、`direct_device_written` は常に
+`false` のままで、音は変わりません（生成は PR-O4 以降）。`master.post`/`capture`/`cb_stats`
 がそれぞれ独立した opt-in であることは変わりませんが、ビット同一の条件は
 **「ラックが無く、master gain が既定の 1.0 のまま、かつデバイスが 2ch」** に読み替えます
 （デバイス配置の段が増えたぶん、2ch 以外では配置のコストが常に乗ります）。
@@ -547,7 +553,7 @@ fn render_block_with_sources(
 
 ### master ライン — engine の内部幅は常に 2ch
 
-引用したコードで目を引くのは、`render_engine_with_sources` に渡している幅が
+引用したコードで目を引くのは、`render_engine_with_sources_impl` に渡している幅が
 `output_channels` ではなく定数の `2` になっている点でしょう。#649 PR-O2 以降、engine から
 バスグラフまでの内部処理は**デバイスが何チャンネルであっても常に 2ch** で完結します。
 その幅は名前付きの定数として公開されています。
@@ -606,7 +612,7 @@ gain を 1 つの構造体にまとめ、**ラック → gain** の順を固定�
 atomic に書いた目標値へ、block ごとに寄せていく形です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:764-774
+// rust/crates/orbit-audio-native/src/output.rs:764-772
     /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
     /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
     /// 算術のみ（alloc/lock/syscall なし）。
@@ -616,9 +622,11 @@ atomic に書いた目標値へ、block ごとに寄せていく形です。
         advance_ramped_gain(&mut self.gain_current, target, frames, self.ramp_frames)
     }
 }
-
-/// Mutable callback state which must survive a cpal stream rebuild (notably
 ```
+
+ランプの計算そのものは #611 PR-O3a で `advance_ramped_gain` という自由関数へ切り出されました。
+bus ライン側の `LineOp::Gain` が同じ関数を呼ぶためで、master と bus でランプの式が
+2 本に分かれない形にしてあります。
 
 `ramp_frames` は 5 ms 相当のフレーム数で、`MasterLine::new` が sample_rate から**構築時に**
 算出します（RT では割り算の分母として使うだけです）。block が ramp より長ければ `frac` が
@@ -646,12 +654,19 @@ wire（`SetGlobalGain`）の `ramp_sec` は互換のため受け取り続けま�
 ~5 ms ランプしか持たないので**値は使われません**。この順序の変更が signal chain 側から
 どう見えるかは [SC-2](/signal-chain/mixer-audio-line) で扱います。
 
-engine render 部分の `render_engine_with_sources` は、instrument source（OOP instrument の出力を
+engine render 部分は、instrument source（OOP instrument の出力を
 `BlockSource` として持つ `SourceSlot`）と insert bus の有無で
 4 通りに分かれます。source も active bus も無ければ、従来の `render_engine` に落ちます。
 
+#611 PR-O3a でここに `device` 引数が増えたため、分岐の本体は
+`render_engine_with_sources_impl` に移りました。もとの名前
+`render_engine_with_sources` は `device: None` を渡すだけの `#[cfg(test)]` ラッパーとして
+残っています。
+
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1689-1730
+// rust/crates/orbit-audio-native/src/output.rs:1687-1708
+#[inline]
+#[cfg(test)]
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -672,7 +687,10 @@ fn render_engine_with_sources(
         None,
     );
 }
+```
 
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1710-1737
 #[allow(clippy::too_many_arguments)]
 fn render_engine_with_sources_impl(
     engine: &Engine,
@@ -694,7 +712,18 @@ fn render_engine_with_sources_impl(
                 buses,
                 &[],
                 &[],
+                output_channels,
+                hw,
+                device,
+            );
+        } else {
+            render_engine(engine, link, output_channels, hw);
+        }
 ```
+
+source が無い側の分岐も `render_engine_with_insert_buses_and_source_outputs` に
+空スライスを渡す形へ統合されました（PR-O3a より前は source 無し専用の
+`render_engine_with_insert_buses` が居ましたが、いまは `#[cfg(test)]` のラッパーです）。
 
 `build_stream` はこの `render_shared_block` を cpal の `build_output_stream` クロージャから直接
 呼びます。サンプルフォーマット（`F32`/`I16`/`I32`）ごとに 3 通りのクロージャがあり、`F32` 以外は
@@ -862,6 +891,8 @@ ORBIT_CAPTURE_WAV=/tmp/orbit-capture-test.wav node cli-audio.js path/to/single-n
 - `rust/crates/orbit-audio-daemon/src/session.rs:691-718,1272-2372` — `session::run`（handshake・writer task・UI event 転送）と `handle_command` の match arm（コマンド表の出典）
 - `rust/crates/orbit-audio-native/src/output.rs:254-260,581-618,662-750,1513-1556` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
 - `rust/crates/orbit-audio-native/src/output.rs:682-688,700-754,1253-1277` — `ENGINE_CHANNELS` / `MasterLine`（ラック → gain）/ `place_master_into_device`（#649 PR-O2）
+- `rust/crates/orbit-audio-native/src/output.rs:701-707,716-718,754-756` — `advance_ramped_gain` の切り出しと `direct_device_buffer`（#611 PR-O3a）
+- `rust/crates/orbit-audio-native/src/output.rs:1687-1737` — `render_engine_with_sources`（`#[cfg(test)]` ラッパー）と `render_engine_with_sources_impl`（`device` 引数付きの本体）
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8724-8733` — `EngineWrap::set_global_gain`（master line への atomic store・`ramp_sec` は wire 互換のみ）
 - [`docs/design/611-output-line-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/design/611-output-line-design.md) §5.2-5.5 — master ライン・内部幅 2ch・core master gain を production から外す設計正本
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — engine-first ロードマップとアーキ確定（楽器=in-process／effects+3rd-party=out-of-process sandbox）

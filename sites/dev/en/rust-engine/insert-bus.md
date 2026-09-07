@@ -1,8 +1,8 @@
 ---
 title: "RE-3. Per-Sequence Insert Bus (seq.effect())"
 chapter-id: "RE-3"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 7a26988
+verified-at: "2026-09-07"
 status: draft
 ---
 
@@ -92,9 +92,36 @@ by "await the declaration, then send the tagged `PlayAt`" (see
 watches core's `Scheduler::unroutable_event_count` and surfaces "tag before declaration / name
 typo" as an `UNROUTABLE_EVENTS` `DaemonError` (`protocol.rs:157-161`).
 
-Beyond the four fields of 2026-07-17, `InsertBusStage` now carries the mixer fields
-`output_target` / `sends` / `routing_override` / `send_gain_overrides` (`output.rs:397-412`). They
-decide where this bus's output is summed — the subject of the SC-2 chapter.
+Beyond the four fields of 2026-07-17, `InsertBusStage` used to carry four mixer fields:
+`output_target` / `sends` / `routing_override` / `send_gain_overrides`. #611 PR-O3a
+([#810](https://github.com/signalcompose/orbitscore/pull/810)) collapsed all four into
+**a single `line: LineSlot`**.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1272-1274
+    /// Published line program. Routing, sends, and rack position are all interpreted from this one
+    /// ordered program by the callback post-loop.
+    line: LineSlot,
+```
+
+What `LineSlot` holds is a `LineProgram` — that is, **a sequence of `LineOp`**. Unlike the old
+fields, which only said where to sum, the program expresses where the rack runs (`Rack`), where
+gain is applied (`Gain`), and where the signal goes (`Output`) as **one ordered program**.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:922-929
+/// One operation in a bus line. `Pan` is reserved for PR-O4; this PR does not generate it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineOp {
+    Rack,
+    Gain(f32),
+    Pan(f32),
+    Output(LineOutput),
+}
+```
+
+`LineOp::Pan` exists only as a type; no code in PR-O3a generates that op (wiring lands in PR-O4).
+Where a bus's output is actually summed remains the subject of the SC-2 chapter.
 
 ## Zero buses → bit-identical legacy path
 
@@ -112,8 +139,10 @@ pays nothing for the bus pool.
                 buses,
 ```
 
-When some bus is active, `render_engine_with_insert_buses` (or
-`render_engine_with_insert_buses_and_source_outputs` when instrument sources exist) is called.
+When some bus is active, `render_engine_with_insert_buses_and_source_outputs` is called. With no
+instrument sources it simply receives empty source slices, so there is a single path (before
+PR-O3a a source-free `render_engine_with_insert_buses` was used; that function survives as a
+`#[cfg(test)]` test wrapper).
 The `active` flags are atomic-loaded once at the top of the callback into an `ArrayVec` snapshot
 that both the marking pass and the accumulation pass reuse (loading the same atomic twice would
 let a `SetBusRouting` that lands mid-callback make the two passes see different things).
@@ -439,6 +468,8 @@ The E2E that goes through the user's own path (OrbitStudio + MCP) is accumulated
 ## Sources
 
 - `rust/crates/orbit-audio-native/src/output.rs:377-412` — the `InsertBusStage` struct (meaning of `processor`/`active` and the mixer fields)
+- `rust/crates/orbit-audio-native/src/output.rs:1252-1275` — `InsertBusStage` after PR-O3a (four mixer fields → `line: LineSlot`)
+- `rust/crates/orbit-audio-native/src/output.rs:904-929` — `OutputDest` / `LineOutput` / `LineOp` (`Pan` reserved for PR-O4)
 - `rust/crates/orbit-audio-native/src/output.rs:709-750` — `render_engine_with_sources`'s zero-bus fallback (bit-identical path)
 - `rust/crates/orbit-audio-native/src/output.rs:823-846` — the active-flag snapshot in `render_engine_with_insert_buses_and_source_outputs`
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1904-1948` — `DEFAULT_EFFECT_BUS_POOL_PREFIX` / `DEFAULT_EFFECT_BUS_POOL_SIZE` / `effect_buses_from_env`

@@ -23,6 +23,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 「**`OUTPUT_LINE_GOLDENS` / `O0-1` などの goldens が 1 つも動かないこと**」+ cargo 全緑 + 実機 gated 全件。
 中身は PR-O3（`LineProgram` / `SetBusLine`）+ #773 + #801。
 
+### docs(dev-site): follow the line-program conversion in RE-1 / RE-3 / SC-2 (Sep 7, 2026)
+
+**追従元**: PR [#810](https://github.com/signalcompose/orbitscore/pull/810)（マージコミット `7a26988`）
+**ブランチ**: `claude/docs-sync-pr810` → `611-line-wire`（docs のみ・実装とテストは無改変）
+
+#810 は dev サイトの引用行番号を `--fix` で再アンカーしただけで、**本文が旧構造のまま残っていた**。
+実装を読み直して 3 章の散文を line program の形に合わせた。
+
+| 章 | 直したもの |
+|---|---|
+| RE-3 (`rust-engine/insert-bus`) | `InsertBusStage` の mixer 用 4 フィールド（`output_target` / `sends` / `routing_override` / `send_gain_overrides`）→ `line: LineSlot` 1 本。`LineOp` の 4 variant（`Pan` は PR-O4 予約）。source 無し経路が `render_engine_with_insert_buses_and_source_outputs` に統合され、旧関数が `#[cfg(test)]` になったこと |
+| SC-2 (`signal-chain/mixer-audio-line`) | `SetBusRouting` が atomic 直書きから「全量解決 → 1 回の `LineProgram` install」に変わったこと。旧 atomic が control 側の読み戻し + 互換 API に縮んだこと。post-loop の op 実行・`thru` の打ち切り・1 stage 1 回の Acquire snapshot。`validate_line_program` が install ごとに走る関門になったことと `RetiredLineProgram` の 2 世代退役 |
+| RE-1 (`rust-engine/index`) | `render_block_with_sources` に増えたデバイス直行ラインの段（PR-O3a では program が生成されないので無音）。`advance_ramped_gain` の切り出し。`render_engine_with_sources` → `render_engine_with_sources_impl` |
+
+`--fix` が `advance_gain` の引用を 2 行伸ばして**次の宣言の doc コメント途中で切れていた**のも直した。
+
+- ja / en の両方を同一コミットで更新（STYLE_GUIDE §10）
+- `node sites/dev/scripts/check-citations.mjs`: 994 citations verified, 0 failed
+- 🔴 **追従できていない点（E2E の穴・弱いアサーション）は PR 本文に書き出すだけにした。** E2E は実機 gated でしか走らないので、この環境で積むと「一度も走っていないテスト」になる
+
 ### feat(daemon): line program and RT execution, legacy SetBusRouting mapped onto it (#611 PR-O3a) (Sep 8, 2026)
 
 **Issue**: #611 / **ブランチ**: `611-o3a-line-program` → `611-line-wire`（小 PR）

@@ -1,12 +1,12 @@
 ---
 title: "SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: f2dadd9
-verified-at: "2026-09-05"
+verified-against: 7a26988
+verified-at: "2026-09-07"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）の測定に関する発見、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）の測定に関する発見、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入、2026-09-07 に #611 PR-O3a（[#810](https://github.com/signalcompose/orbitscore/pull/810)）の line program 化まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain
 
@@ -352,8 +352,39 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 
 `Some("master") => Some(1)` が、先ほど TS 側で予約していた `"master"` の受け口です。
 `target_index + 2` というエンコードは「0 = 変更なし / 1 = Master / 2 以降 = bus index」の
-三状態を 1 つの atomic に詰めるためのもので、native 側の `routing_override` がこれを
-読みます。
+三状態を 1 つの atomic に詰めるためのものでした。
+
+### PR-O3a: `SetBusRouting` は 1 本の line program を install する
+
+#611 PR-O3a（[#810](https://github.com/signalcompose/orbitscore/pull/810)）以降、この検証を
+通った値は atomic へ直接書かれるのではなく、**bus 1 本ぶんの完全な `LineProgram` を組み立てて
+install する**形になりました。`output` だけを更新する呼び出しでも、既に立っている send を
+atomic から読み直して**全量の program** を作り直します。
+
+```rust
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6395-6406
+        if let Some(line) = line {
+            let routing_value = resolved_output.unwrap_or_else(|| {
+                control
+                    .bus_routing
+                    .get(seq_bus)
+                    .map(|routing| routing.load(Ordering::Relaxed))
+                    .unwrap_or(0)
+            });
+            let output_target = match routing_value {
+                0 | 1 => BusTarget::Master,
+                encoded => BusTarget::Bus(encoded - 2),
+            };
+```
+
+「差分ではなく全量を送る」という TS 側 `syncBusRouting()` の性格が、daemon 側でも
+そのまま program の単位になった、と読めます。旧 atomic（`routing_override` /
+`send_gain_overrides`）への store も残っていますが、その役目は 2 つに減りました:
+**次の部分更新が「言及されなかった側」を読み戻すための control 側の状態**と、
+既存の Rust 呼び出し側・テストが観測する互換 API です。**production の RT は
+`LineProgram` しか読みません** — `build_effect_bus_stages` は `with_routing_overrides` を
+呼ばなくなったので、stage 側に atomic ハンドルが刺さっていないからです。native の
+post-loop がこの atomic を見るのは、`with_routing_overrides` を使う構築時シム経路だけです。
 
 ### render 側: post-loop がトポロジカル順に合流させる
 
@@ -399,16 +430,56 @@ daemon が atomic に書いた routing を、native の render callback はど�
    全 buffer に 1 回だけ**適用します（core 側の実装は次節）。ただし #649 PR-O2 以降、この
    `hw` は**デバイスのバッファではなく 2ch の `master.buffer`** で、core の gain も production では
    1.0 に固定されています（後述の「master gain の適用点が移った」を参照）
-2. post-loop は stage を配列順（= トポロジカル順・MX.4）に回し、insert があれば
-   `processor.process` を通し、`effective_targets[i]` に従って `hw`（Master）か後ろの bus
-   （`Bus(j)`）に加算します
-3. 引用の続き（`output.rs:962-985`）では `Bus(j)` への加算と、`sends` / 実行時 send override の
-   `gain` を掛けた copy 加算が続きます（fan-out は event の複製ではなく「bus 処理段の copy 加算」
-   という MX.4 の規範どおり）
+2. post-loop は stage を配列順（= トポロジカル順・MX.4）に回し、その stage の `LineProgram` を
+   **op の並び順に実行**します。`LineOp::Rack` で insert processor を通し、`LineOp::Gain` で
+   ブロック単位のランプを進めて buffer に掛け、`LineOp::Output` で `hw`（`OutputDest::Master`）か
+   後ろの bus（`OutputDest::Bus`）へ加算します
+3. `LineOutput.thru` が `false` の op に当たるとそこで**その stage のラインは打ち切られます**。
+   `thru: true` の間は次の op へ進む、という「通り抜けるかどうか」のフラグで、
+   fan-out は event の複製ではなく「bus 処理段の copy 加算」という MX.4 の規範どおりに表現されます
+4. program の実行に入る前に、callback 冒頭で **1 stage につき 1 回だけ** `AtomicPtr` を Acquire
+   load して `programs` に snapshot します。marking pass（どの bus を zero-fill / 処理対象にするか
+   決めるパス）と、この加算パスが**同じポインタ**を見るので、callback の途中に `SetBusRouting` が
+   挟まっても両パスの見え方が食い違いません
 
 `split_at_mut(i + 1)` で左右に分けられるのは、構築時に `validate_bus_topology` が
 「stage i の行き先は必ず i より後ろ」を検証しているからです。sum のネストや循環が
 **構造的に**起きない、という仕様（MX.2「ネストは v1 不可」）の実装側の裏付けがここにあります。
+PR-O3a 以降、この検査の本体は `validate_line_program` に移り、**program を install する
+たびに**同じ検査が走ります。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1230-1250
+fn validate_line_program(
+    program: &LineProgram,
+    bus_index: usize,
+    bus_count: usize,
+) -> Result<(), OutputError> {
+    program.validate_shape()?;
+    for op in &program.ops {
+        if let LineOp::Output(LineOutput {
+            dest: OutputDest::Bus(target),
+            ..
+        }) = op
+        {
+            if *target <= bus_index || *target >= bus_count {
+                return Err(OutputError::NoConfig(format!(
+                    "insert bus index {bus_index} output Bus({target}) must be a later stage"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+```
+
+つまり「後ろ向きの参照しか無い」という不変条件は、起動時に 1 回だけ確かめるものから、
+**RT が読む可能性のあるすべての program が通る関門**になりました。`LineExchange::install`
+は検査に通った program だけを publish し、置き換えられた前の program は
+`RetiredLineProgram { program, retired_at_generation }` として「RT の完了世代が 2 つ進むまで」
+retire リストに保持されます。世代番号を**退役オブジェクトの中**に置くのは
+`orbit-effect-rack-child` の `StageList::retired_at_generation` の先例に倣ったもので、
+「ポインタの publish と退役タグの store が別々にずれる」という並びを作らないためです。
 
 ## instrument をミキサーの source にする（#643）
 
@@ -990,6 +1061,11 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - `rust/crates/orbit-audio-native/src/output.rs:700-754,1253-1277` — `MasterLine`（ラック → gain）/ `place_master_into_device`
 - `rust/crates/orbit-audio-native/src/output.rs:3290-3322` — unit test `master_gain_applies_after_the_master_rack_generates_sound`（順序を守る唯一のテスト）
 - `docs/design/611-output-line-design.md` §5.2 / §5.4 / §5.5 — master ライン・乗算経路を 1 本にする設計正本
+- `docs/design/611-output-line-design.md` §5.1 / §5.3 — line program の型と RT アルゴリズムの設計正本（PR-O3a）
+- `rust/crates/orbit-audio-native/src/output.rs:1230-1250` — `validate_line_program`（install ごとに走る後方参照検査）
+- `rust/crates/orbit-audio-native/src/output.rs:1030-1097` — `RetiredLineProgram` / `LineExchange`（publish と 2 世代の退役保持）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6364-6448` — `set_bus_routing`（全量解決 → 1 回の program install → 旧 atomic への鏡写し）
+- PR [#810](https://github.com/signalcompose/orbitscore/pull/810) — #611 PR-O3a（line program と RT 実行・`SetBusRouting` の互換写し）
 - `docs/design/643-mixer-foundation-design.md` — #643 設計（owner 三条・責務境界・feed 注入点 §5.1・`output()` 3 分岐 §12）
 - `docs/design/649-audio-line-design.md` — #649 オーディオライン設計（§7 確定事項・§8 未決・§9-§14 実装設計 v3）
 - `docs/archive/WORK_LOG_2026-08.md` 6.404 / 6.405 / 6.408 / 6.410 / 6.415 / 6.420 — #643 設計〜PR-1〜PR-2〜レビュー訂正〜実機発見〜#649 設計 v3

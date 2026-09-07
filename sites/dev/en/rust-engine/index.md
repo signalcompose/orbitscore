@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: b513659
-verified-at: "2026-09-06"
+verified-against: 7a26988
+verified-at: "2026-09-07"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the line-program conversion of #611 PR-O3a ([#810](https://github.com/signalcompose/orbitscore/pull/810)) on 2026-09-07. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-1. Daemon Architecture Overview
 
@@ -474,10 +474,17 @@ The number of failed `try_lock`s accumulates in `StreamStats` and can be read as
 choice, and the contention is self-healing (the next block recovers).
 
 The body, `render_block_with_sources`, proceeds in order: engine render → **the master line (rack
-→ gain)** → **device placement** → capture tap → record the callback duration. The two middle
+→ gain)** → **device placement** → **adding the direct device line** → capture tap → record the
+callback duration. The two middle
 stages arrived with #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754));
 before that the sequence was the three stages "engine render → master post-processor → capture
-tap". `master.post`/`capture`/`cb_stats` are still each independent opt-ins, but the
+tap". The direct-device-line stage arrived with #611 PR-O3a
+([#810](https://github.com/signalcompose/orbitscore/pull/810)): a scratch buffer
+(`DeviceLineBuffer`) for bus lines whose output is `OutputDest::Device` is handed to the engine
+render, and it is added into `hw` after master placement **only if something was actually written
+into it**. No program built by PR-O3a carries that destination, so `direct_device_written` stays
+`false` and the sound does not change (generation lands in PR-O4 and later).
+`master.post`/`capture`/`cb_stats` are still each independent opt-ins, but the
 bit-identical condition now reads **"no rack, master gain still at its default of 1.0, and a 2ch
 device"** — with the placement stage added, anything other than 2ch always pays for the
 placement.
@@ -563,7 +570,7 @@ fn render_block_with_sources(
 ### The master line — the engine is always 2ch inside
 
 The striking detail in the code above is that the width handed to
-`render_engine_with_sources` is the literal `2`, not `output_channels`. Since #649 PR-O2,
+`render_engine_with_sources_impl` is the literal `2`, not `output_channels`. Since #649 PR-O2,
 everything from the engine through the bus graph runs at **exactly two channels no matter how
 many the device has**. That width is published as a named constant.
 
@@ -621,7 +628,7 @@ old `post`) and the gain into one struct and fixes the order as **rack → gain*
 toward the target the control side (`SetGlobalGain`) wrote atomically, one block at a time.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:764-774
+// rust/crates/orbit-audio-native/src/output.rs:764-772
     /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
     /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
     /// 算術のみ（alloc/lock/syscall なし）。
@@ -631,9 +638,11 @@ toward the target the control side (`SetGlobalGain`) wrote atomically, one block
         advance_ramped_gain(&mut self.gain_current, target, frames, self.ramp_frames)
     }
 }
-
-/// Mutable callback state which must survive a cpal stream rebuild (notably
 ```
+
+The ramp arithmetic itself was extracted into a free function, `advance_ramped_gain`, by #611
+PR-O3a, so that the bus-line `LineOp::Gain` can call the same function and the ramp formula does
+not fork into two copies for master and bus.
 
 `ramp_frames` is the frame count for 5 ms, computed **at construction time** by
 `MasterLine::new` from the sample rate (the RT path only uses it as a divisor). When a block is
@@ -662,13 +671,19 @@ The wire still accepts `ramp_sec` on `SetGlobalGain` for compatibility, but the 
 has the fixed ~5 ms ramp, so **the value is not used**. How this reordering looks from the signal
 chain side is covered in [SC-2](/en/signal-chain/mixer-audio-line).
 
-The engine-render part, `render_engine_with_sources`, splits four ways depending on whether there
+The engine-render part splits four ways depending on whether there
 are instrument sources (`SourceSlot`s that hold an OOP instrument's output as a `BlockSource`)
 and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
+#611 PR-O3a added a `device` argument here, so the body of the branching moved to
+`render_engine_with_sources_impl`. The original name, `render_engine_with_sources`, survives as a
+`#[cfg(test)]` wrapper that only passes `device: None`.
+
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1689-1730
+// rust/crates/orbit-audio-native/src/output.rs:1687-1708
+#[inline]
+#[cfg(test)]
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -689,7 +704,10 @@ fn render_engine_with_sources(
         None,
     );
 }
+```
 
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1710-1737
 #[allow(clippy::too_many_arguments)]
 fn render_engine_with_sources_impl(
     engine: &Engine,
@@ -711,7 +729,18 @@ fn render_engine_with_sources_impl(
                 buses,
                 &[],
                 &[],
+                output_channels,
+                hw,
+                device,
+            );
+        } else {
+            render_engine(engine, link, output_channels, hw);
+        }
 ```
+
+The source-free branch was merged into `render_engine_with_insert_buses_and_source_outputs` too,
+by passing empty slices (before PR-O3a there was a source-free
+`render_engine_with_insert_buses`; it is now a `#[cfg(test)]` wrapper).
 
 `build_stream` calls this `render_shared_block` directly from cpal's `build_output_stream`
 closure. There are three closures, one per sample format (`F32`/`I16`/`I32`); the non-`F32`
@@ -889,6 +918,8 @@ i.e. two independent measurement paths agreeing at the same tap point). These fi
 - `rust/crates/orbit-audio-daemon/src/session.rs:691-718,1272-2372` — `session::run` (handshake, writer task, UI event forwarding) and the `handle_command` match arms (source of the command table)
 - `rust/crates/orbit-audio-native/src/output.rs:254-260,581-618,662-750,1513-1556` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
 - `rust/crates/orbit-audio-native/src/output.rs:682-688,700-754,1253-1277` — `ENGINE_CHANNELS` / `MasterLine` (rack → gain) / `place_master_into_device` (#649 PR-O2)
+- `rust/crates/orbit-audio-native/src/output.rs:701-707,716-718,754-756` — the `advance_ramped_gain` extraction and `direct_device_buffer` (#611 PR-O3a)
+- `rust/crates/orbit-audio-native/src/output.rs:1687-1737` — `render_engine_with_sources` (the `#[cfg(test)]` wrapper) and `render_engine_with_sources_impl` (the body, with the `device` argument)
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8724-8733` — `EngineWrap::set_global_gain` (atomic store into the master line; `ramp_sec` kept for wire compatibility only)
 - [`docs/design/611-output-line-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/design/611-output-line-design.md) §5.2-5.5 — design source of truth for the master line, the 2ch internal width, and taking the core master gain out of production
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — engine-first roadmap and architecture decision (instruments = in-process / effects + 3rd-party = out-of-process sandbox)
