@@ -322,7 +322,7 @@
 | R-offline | `598-render-offline` | PR-R4・R5・R6・R7 | 約 1,700 行（R4 は先に main へ入れてよい）|
 | R-p3 | `598-render-p3` | PR-R8・R9 | 約 800 行 |
 | **E-gate** 🔴 | `780-merge-gate` | PR-E10・E14・E13 | 約 210 行（doc 668 §13.5.3。**🔴 ステージ 2 に着手する前提**。収束条件: **#780 が 10 回連続で緑** + 実行前後で shm が増えない）|
-| **E-router** | `777-line-router` | PR-E12 | 約 240 行（doc 668 §13.5.2。**収束条件: 「chunk 列 → 行」が 1 本の共有プリミティブに畳まれる**。🔴 **#757 の直前**に置く。ステージ 2 と**並行可**）|
+| ~~**E-router**~~ | ~~`777-line-router`~~ | ~~PR-E12~~ | 🔴 **束としては持たない**（2026-09-07・§3「安全網の残余」）。**#773 はステージ 2 の PR に引き込み**（PR-O4 の直前）、**#777 は backlog**。doc 668 §13.5.2 の収束条件（「chunk 列 → 行」を 1 本の共有プリミティブへ）と **#757 の直前**という順序制約は、**#757 に着手する時点で #777 と一緒に畳む**形で保たれる（§3 末尾）|
 | **E-noise** | `775-capture-clock` | PR-E11 | 約 80 行（doc 668 §13.5.4。**ステージ 2 と並行可**。🔴 **ステージ 2 の実機で「U2 が消えたか」を観測してから必要性を判断する** — 3 回連続の実測はこの系列で最も重い投資なので、必要性が確定してから払う）|
 
 **main 直行**（束を通さず従来どおり単独でフルレビュー）: 仕様だけの PR-O1 / L0 / R0 / P0 / K-*0 / Q-A / D1 / E0、must-fix の PR-O2 / D0 / V4 / K-A1 / K-A2 / S-T1、束をまたぐ PR。PR-P / K / Q / D / V / S / E の束割りは着手時に同じ規則（1,500 行・継ぎ目）で決める。
@@ -371,7 +371,7 @@
 
 | 残り | 結合 | 根拠 |
 |---|---|---|
-| **PR-E8 の狭いスライス**（daemon 台数） | 🔴 **結合** | ステージ 2 の受け入れ基準 **E2E-10 は daemon respawn**（doc 611 §10）。#624 は「旧 daemon が残ったまま新しいのが立つと**両方がデバイスへ出力し、capture には片方しか写らない**」。gated spec に台数のアサーションは無い（`orbitAudioDaemonPids()` の使用は `orbitstudio-mcp-gated.spec.ts:5391` の #779 sweep だけ）→ **E2E-10 は偽緑になりうる** |
+| **PR-E8 の狭いスライス**（daemon 台数） | 🔴 **結合** | ステージ 2 の受け入れ基準 **E2E-10 は daemon respawn**（doc 611 §10）。#624 は「旧 daemon が残ったまま新しいのが立つと**両方がデバイスへ出力し、capture には片方しか写らない**」。gated spec に**「高々 1 台」の台数アサーションは無い**（`orbitAudioDaemonPids()` の使用は 1 テストだけ・後述の訂正）→ **E2E-10 は偽緑になりうる** |
 | **#773**（bridge 封筒の chunk 分断） | 🔴 **結合** | **PR-O4 が `//#evalBegin` / `//#evalEnd` を導入する**（doc 611 §7 手順 1-2・`extension.ts:3000-3033`）。#773 が落とすのは `{"evalMark"` を含む封筒。**ステージ 2 は壊れているチャネルの通信量を増やす** |
 | #777 / PR-E5 / E6 / E7 / E9 / E16 | ⚪ **無関係** | ステージ 2 の受け入れ基準（E2E-0〜11）に一度も現れない。36 語も `pan` / `mute` / `loop` / `midi` 等で、ステージ 2 が触るのは `output` / `send` / `thru:` / `db:` / `outs:`。`pan` のライン要素化は doc 611 §2.4b が**別 PR**と明記 |
 | 束 E-noise（#775） | ⚪ 観測待ち | 既定どおり。ステージ 2 の実機で U2 が消えたかを見てから要否判断 |
@@ -400,14 +400,24 @@
 | PR-E4 | ✅ 正本 `packages/engine/src/parser/dsl-surface.ts`（`DSL_SYNTAX_SURFACE` 13 件）+ ラチェット `dsl-e2e-coverage.spec.ts:36` が import | 🔴 **2026-09-07 訂正**。#794 は「部分・正本が無い」と書いたが**誤り**（`tests/e2e/` の下だけを探していた）。#668 のクローズも PR-E4 を ✅（PR #715）と記録 |
 | **PR-E5** | ❌ 未着手。`reference-coverage.spec.ts` はリポジトリ全体に無い（`find` で `*reference*` / `*coverage*` の `.ts` を全走査）。**ラチェット側もそれを前提に書かれている** — `dsl-e2e-coverage.spec.ts:219-222` が「§20 は A-10 を PR-E5（`reference-coverage.spec.ts` のみ）に割り当てているが**分割の隙間に落ちる**のでここで塞ぐ」と明記 | #668-C |
 | **PR-E6 / E7** | ❌ **未カバー 36 語**（ラチェットの baseline が自認している数）: sequence **16**（`cell` `comp` `defaultGain` `defaultPan` `density` `hold` `loop` `midi` `mute` `pan` `quantize` `root` `unmute` `vel` `vl` `voicelead`）/ global **7**（`audioDevice` `compressor` `limiter` `loop` `midiLatency` `normalizer` `quantize`）/ syntax **13 件中 13 件**（`DSL_SYNTAX_SURFACE` 全部） | #630 / #650 / #668-B。🔴 構文表面が全滅なのは、**正本を作る PR-E4 と埋める PR-E6/E7 が別作業**だからで矛盾ではない |
-| **PR-E8** | ❌ **目的は未達だが部品は在る**。`orbitAudioDaemonPids()`（`orbitstudio-mcp-gated.spec.ts:348-361`・`pgrep -f` で daemon の PID 一覧）が使われているのは **1 箇所だけ**（`:5391` の #779 sweep テストが起動前スナップショットに使う）。PR-E8 の狙い「**各 phase 境界で daemon が高々 1 台**」のアサーションはどこにも無い | #624。着手時はこの関数を helper へ引き上げる |
+| **PR-E8** | ❌ **目的は未達だが部品は在る**。`orbitAudioDaemonPids()`（`orbitstudio-mcp-gated.spec.ts:348-361`・`pgrep -f` で daemon の PID 一覧）を使うテストは **1 本だけ** = **`#606 E2E-K3`**（`orbitstudio-mcp-gated.spec.ts:5385-5404`）。**そこには台数アサーションが既に在る**が `toHaveLength(1)`（`:5399-5404`）は「**このテスト自身の start が増やした daemon がちょうど 1 台**」という**差分**の主張で、PR-E8 の狙い「**各 phase 境界で daemon が高々 1 台**」（全体の国勢調査）ではない | #624。着手時はこの関数を helper へ引き上げ、**差分ではなく総数**を見る述語を足す |
 | **PR-E9** | ❌ load average の報告が無い | #640-A |
 | **PR-E16**（root skip） | ❌ `tests/helpers/privileges.ts` が無い | #684。**旧 PR-E11**（改番）|
-| **束 E-router**（`777-line-router`・計画 **PR-E12**） | ❌ #777 / #773 が OPEN | 🔴 **#757 の直前に置く**（#757 の共通化がこの層に乗るため、逆順だと 5 本を直した後にもう一度触る） |
+| ~~**束 E-router**~~（`777-line-router`・旧 **PR-E12**） | ❌ #777 / #773 が OPEN | 🔴 **束としては持たない**（上の「したがってこう進める」）。**#773 → ステージ 2 の PR（PR-O4 の直前）／ #777 → backlog**。順序制約「#757 の直前」は #757 着手時に #777 と畳んで満たす |
 | 束 E-noise（`775-capture-clock`・計画 **PR-E11**） | #775 OPEN | 🔴 **ステージ 2 の実機で U2 が消えたかを観測してから要否判断**。2026-09-07 の実機では `#611 O0-4` が**2 回とも通った**が、間欠故障なので断定しない |
 
 **issue が OPEN のままなのはこの残余のため**（#543 / #650 / #630 / #624 / #640 / #684）。
 「該当項目」の粒度なので、issue 全体がステージ 0 の対象だったわけではない。
+
+> 🔴 **2026-09-07 訂正（PR-E8 の呼び出し元）**: PR [#797](https://github.com/signalcompose/orbitscore/pull/797) は
+> `orbitAudioDaemonPids()` の唯一の使用を「`:5391` の **#779 sweep** テスト」と書いたが**誤り**。
+> `:5391` / `:5399` は **`#606 E2E-K3`**（`orbitstudio-mcp-gated.spec.ts:5385`）の中で、
+> #779 の sweep テストは `:5446` から始まり**この関数を呼んでいない**。
+> **結論（E2E-10 が偽緑になりうる）は変わらない** — E2E-K3 の `toHaveLength(1)` は
+> 「自分の start が増やした分」を見る**差分**の主張であって、「高々 1 台」ではないため。
+> **「無い」は探索範囲とセットでしか成り立たない**（上の教訓）の隣に、
+> **「唯一の使用箇所」は行番号ではなくテスト名で書く**を並べる — 行番号だけだと、
+> それがどの `it(` の内側かを確かめずに書ける。
 
 ### ステージ 1 — must-fix（PR-O2・PR-D の #645・PR-V の #661・PR-K の #606 / ~~PR-S の #385~~ → 所属未定）
 
