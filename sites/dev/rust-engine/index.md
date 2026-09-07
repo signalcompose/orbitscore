@@ -629,7 +629,7 @@ atomic に書いた目標値へ、block ごとに寄せていく形です。
 `EngineWrap::set_global_gain` は `MasterLine` の目標値へ atomic store するだけになりました。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8724-8733
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8726-8735
     /// マスターゲインを設定する。**production では単一の適用点（native master line・#649
     /// PR-O2）へ atomic store するだけ**——`orbit_audio_core::Engine::set_global_gain`（core の
     /// scheduler ramp）は production から呼ばない（`docs/design/611-output-line-design.md`
