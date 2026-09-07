@@ -110,6 +110,42 @@ sweep の診断が `DaemonStartupError` で観測できるという主張 / #385
 
 `npm run docs:check` / `tests/docs`
 
+### docs(dev-site): follow the E-gate bundle into the rack and hygiene chapters (Sep 6, 2026)
+
+**ブランチ**: `claude/docs-sync-pr789`（base は `main`）
+
+束 PR [#789](https://github.com/signalcompose/orbitscore/pull/789)（マージコミット `900d453` /
+head `952a1c41`）への docs 追従。束の中間 PR（#783 / #784 / #788）はルーチンが個別に追従済み
+（PR #786 / #787 / #790）だが、**束の締めで積んだ 2 コミット**（`809ea40` の `/simplify` と
+`2aa42f9` のレビュー fix）は追従されないまま main に入っていた。ここはその差分に対する追従である。
+
+#### 追従したもの
+
+| 箇所 | 直した内容 | 差分の対応 |
+|---|---|---|
+| `sites/dev/signal-chain/index.md` / en 同パス | 新節「そのゲート自身が 2 つの欠陥を抱えていました（#780・#789）」を追加。`-- --ignored` が `#[ignore]` 付きのテスト**だけ**を走らせるため退行検知テストがどの自動経路でも走らなかったこと、`line!()` が定義位置で展開される定数で 4 fixture が同一 shm パスを共有し `create_shared` の `truncate(true)` が生きたマッピングを切り詰めていたこと、修正（`static AtomicU64` の連番）と退行検知テストを引用付きで記述 | `CLAUDE.md:665-669` / `rust/crates/orbit-effect-rack-child/src/tests.rs:646-654,670-676` |
+| `sites/dev/editor/mcp-and-gated-e2e.md:1020` / en `:1024` | 「**8 本**すべて」→「**9 本**すべて」。`2aa42f9` が 9 本目（`keeps resolving at least one log-count helper from the real gated corpus`）を足したため。9 本目の説明段落と引用も追加 | `tests/e2e/gated-assertion-hygiene.spec.ts:688-703` |
+| `sites/dev/rust-engine/index.md:870` / en `:897` | `outproc_shm_sweep.rs:134-163` → `:167-196`。`2aa42f9` が `sweep_orphaned_outproc_shm` の前に `tracing::debug!` と doc コメントを足して 33 行下がった | `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:167-196` |
+| `sites/dev/rust-engine/oop-children.md:628,667` / en `:654,694` | `orbitstudio-mcp-gated.spec.ts:5397-5462` → `:5445-5516`。`2aa42f9` が #779 の gated E2E より前に 49 行足した | `tests/e2e/orbitstudio-mcp-gated.spec.ts:5445-5516` |
+| `sites/dev/editor/mcp-and-gated-e2e.md:1363` / en `:1373` | Sources の `gated-assertion-hygiene.spec.ts:1-68` → `:1-11,552-704`。`809ea40` が検出器を `scanGatedSources` へ抽出し `describe` が 552 行目へ動いた | 同ファイルの構造変更 |
+| 上記 3 章の frontmatter | `verified-against` を `900d453` / `verified-at` を 2026-09-06 へ。冒頭 Note に #789 を追記 | — |
+
+#### 🔴 行番号引用は「機械が見る形」だけが直っていた
+
+`2aa42f9` は「行番号引用の off-by-one を 4 箇所訂正」と記録しているが、直っていたのは
+**`// FILE:START-END` ヘッダ付きコードブロック**（`docs:check` が突合する形）だけだった。
+**散文中の `path:line` と `## Sources` の箇条書きは機械検証の対象外**なので、同じ +48 / +33 の
+ずれがそのまま残っていた。今回はそのうち **#789 の差分が動かしたと特定できるもの**だけを直している。
+
+#### 追従不要と判断したもの
+
+| 対象 | 理由 |
+|---|---|
+| `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | DSL の構文・意味論は 1 行も変わっていない（`packages/engine/` の差分がゼロ） |
+| `sites/user/` / `docs/user/ja/USER_MANUAL.md` | ユーザーが書く語は変わっていない |
+| `docs/design/668-e2e-foundation-design.md` | この PR 自身が §13.5.3 の原因記述を訂正済み。過去の設計書は書き換えない |
+
+**テスト・実装は変更していない**（ルーチンの禁止事項）。
 
 ### docs(dev-site): correct the hygiene-ratchet inventory after #785 (Sep 6, 2026)
 

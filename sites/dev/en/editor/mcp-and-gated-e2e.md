@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: 0bb337b
+verified-against: 900d453
 verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing) and #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing), #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) and the [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle (tracking through local wrappers, plus a liveness check on the ratchet itself) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -1021,7 +1021,27 @@ The two stale-guard checks (`keeps the stale guard off cargo targets it can neve
     ).toBe(false)
 ```
 
-All eight checks in `describe('gated E2E assertion hygiene')`, though, only read the gated spec's **source statically** (mostly as text; the #761 and #785 pair walk the AST), so what they guarantee stops at "it is written that way". The guard itself, `assertDaemonBinaryIsNotStale()`, is called only when `gated && appAvailable`, so an ordinary `npm test` never executes a line of it. It is accurate to read this section's checks as pinning the *written shape*, not an *executed behaviour*.
+The ninth is a liveness check on the ratchet itself — does it still see anything at all?
+`resolveLogCountHelperNames` decides which imports are helpers by a **filename string match**,
+`moduleSpecifier.text.includes('engine-log')`. If `helpers/engine-log.ts` is renamed or moved, the
+resolution quietly returns nothing, without throwing, and the provenance detector is structurally
+blind. So the test asserts that at least one log-count helper resolves out of the real gated corpus.
+It is the same idea as `gated-sources.ts` throwing on an empty list: pin the detector's own blindness
+from outside the detector.
+
+```typescript
+// tests/e2e/gated-assertion-hygiene.spec.ts:694-701
+    const resolved = resolvedLogCountHelperNamesAcrossCorpus(entries)
+    expect(
+      [...resolved].sort(),
+      'No log-count helper name resolved from the real gated corpus. This almost certainly ' +
+        "means the import-matching heuristic (moduleSpecifier.text.includes('engine-log')) " +
+        'silently broke (file rename, refactor, or the helper module was replaced with a ' +
+        'typed wrapper) and the provenance detector (#785/#789) is now blind.',
+    ).not.toEqual([])
+```
+
+All nine checks in `describe('gated E2E assertion hygiene')`, though, only read the gated spec's **source statically** (mostly as text; the #761 and #785 pair walk the AST, and the #789 liveness check inspects what that walk resolved), so what they guarantee stops at "it is written that way". The guard itself, `assertDaemonBinaryIsNotStale()`, is called only when `gated && appAvailable`, so an ordinary `npm test` never executes a line of it. It is accurate to read this section's checks as pinning the *written shape*, not an *executed behaviour*.
 
 Incidentally, the "fixed 500-line window" in the comment is the number from before `#567` widened it to 1000 lines; the window is still finite, so the rule itself stands.
 
@@ -1350,7 +1370,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `tests/e2e/helpers/run-cli.ts:1-62` — child-process runs of `orbitscore replay` / `render` (the only path that bypasses MCP)
 - `tests/e2e/helpers/rack-child-pid.ts:1-38` — the rack child PID oracle (log-derived; moved out of the spec in #668 PR-E1)
 - `tests/e2e/dsl-e2e-coverage.spec.ts:1-146` — DSL coverage ratchet
-- `tests/e2e/gated-assertion-hygiene.spec.ts:1-68` — assertion hygiene
+- `tests/e2e/gated-assertion-hygiene.spec.ts:1-11,552-704` — the nine assertion-hygiene ratchets (#785 / #789 replaced the detectors with provenance-based ones and moved the describe)
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixtures
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — building OrbitStudio.app

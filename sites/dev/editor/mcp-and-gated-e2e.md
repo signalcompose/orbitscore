@@ -1,12 +1,12 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: 0bb337b
+verified-against: 900d453
 verified-at: "2026-09-06"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）、束 [#789](https://github.com/signalcompose/orbitscore/pull/789)（ローカルラッパー越しの追跡と、ラチェット自身の生存確認）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -1017,7 +1017,21 @@ stale ガードの 2 本（`keeps the stale guard off cargo targets it can never
     ).toBe(false)
 ```
 
-ただし `describe('gated E2E assertion hygiene')` の 8 本すべてが gated spec の**ソースを静的に読むだけ**（多くは文字列走査、#761 と #785 の 2 本は AST の走査）なので、保証するのは「そう書いてある」ことまでです。ガード本体の `assertDaemonBinaryIsNotStale()` は `gated && appAvailable` のときだけ呼ばれるので、通常の `npm test` では 1 行も実行されません。この節の検査は「実行された振る舞い」ではなく「書かれた形」を留めるもの、という位置づけで読むのが正確です。
+9 本目は、ラチェットそのものが**黙って空振りしていないか**を見る生存確認です。`resolveLogCountHelperNames` はヘルパの import を `moduleSpecifier.text.includes('engine-log')` という**ファイル名の文字列一致**で判定しているので、`helpers/engine-log.ts` が rename / 移動されると例外も投げずに解決結果が空になり、provenance 検出器は構造的に無力化されます。そこで「実際の gated corpus から log-count ヘルパが 1 つ以上解決できること」自体を assert しています。`gated-sources.ts` が空リストで throw するのと同じ発想で、**検出器が見えなくなったことを検出器の外側から留める**わけです。
+
+```typescript
+// tests/e2e/gated-assertion-hygiene.spec.ts:694-701
+    const resolved = resolvedLogCountHelperNamesAcrossCorpus(entries)
+    expect(
+      [...resolved].sort(),
+      'No log-count helper name resolved from the real gated corpus. This almost certainly ' +
+        "means the import-matching heuristic (moduleSpecifier.text.includes('engine-log')) " +
+        'silently broke (file rename, refactor, or the helper module was replaced with a ' +
+        'typed wrapper) and the provenance detector (#785/#789) is now blind.',
+    ).not.toEqual([])
+```
+
+ただし `describe('gated E2E assertion hygiene')` の 9 本すべてが gated spec の**ソースを静的に読むだけ**（多くは文字列走査、#761 と #785 の 2 本は AST の走査、#789 の生存確認はその解決結果を見るもの）なので、保証するのは「そう書いてある」ことまでです。ガード本体の `assertDaemonBinaryIsNotStale()` は `gated && appAvailable` のときだけ呼ばれるので、通常の `npm test` では 1 行も実行されません。この節の検査は「実行された振る舞い」ではなく「書かれた形」を留めるもの、という位置づけで読むのが正確です。
 
 ちなみにコメントの「固定 500 行窓」は `#567` で 1000 行に拡張される前の数字ですが、有限窓であることに変わりはないので規律そのものは有効です。
 
@@ -1346,7 +1360,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `tests/e2e/helpers/run-cli.ts:1-62` — `orbitscore replay` / `render` の子プロセス実行（MCP を通らない唯一の例外）
 - `tests/e2e/helpers/rack-child-pid.ts:1-38` — rack child の PID オラクル（ログ由来・#668 PR-E1 で spec から移動）
 - `tests/e2e/dsl-e2e-coverage.spec.ts:1-146` — DSL 網羅率ラチェット
-- `tests/e2e/gated-assertion-hygiene.spec.ts:1-68` — アサーション衛生
+- `tests/e2e/gated-assertion-hygiene.spec.ts:1-11,552-704` — アサーション衛生の 9 本のラチェット（#785 / #789 で検出器が provenance ベースに置き換わり、describe の位置が動いた）
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixture
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
 - `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — OrbitStudio.app のビルド

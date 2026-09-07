@@ -651,7 +651,7 @@ pub fn parse_outproc_shm_name(name: &OsStr) -> Option<u32> {
 Because it does not care what follows `.shm`, sidecars such as `....shm.chain.json` (the
 `ApplyEffectChain` manifest) are picked up by the same rule. The gated E2E checks on the file
 system that both the `.shm` of a dead PID and its `.chain.json` disappear, and that **a file
-belonging to a live PID survives** (`tests/e2e/orbitstudio-mcp-gated.spec.ts:5397-5462`).
+belonging to a live PID survives** (`tests/e2e/orbitstudio-mcp-gated.spec.ts:5445-5516`).
 
 Incidentally, the idea of "matching on the process name to decide whether it is a daemon" was not
 taken. `cargo test` binaries create shm files under the same names, so matching would unlink the
@@ -691,7 +691,7 @@ but on "one generation's worth". Adding a SIGTERM handler remains #448.
 - `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:9-49,121-145` — the startup sweep (prefix constant, `MIN_ORPHAN_AGE`, the three-valued predicate, file-name parsing, the deletion branch)
 - `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:167-196` — `sweep_orphaned_outproc_shm` (the thin shell stage 0.5 calls, and its `tracing::info!` summary line)
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:891-910` — the stderr accumulation until the ready line (why the sweep's INFO line does not reach `get_log`)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:5397-5462` — the gated E2E asserting that a dead PID's shm and sidecar are swept while a live PID's file survives
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:5445-5516` — the gated E2E asserting that a dead PID's shm and sidecar are swept while a live PID's file survives
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — confirmed in-process/OOP architecture split
 - Issue [#448](https://github.com/signalcompose/orbitscore/issues/448) — daemon graceful-shutdown gap and the `ParentWatch` countermeasure (PR: `a0449b8`)
 - Issue [#779](https://github.com/signalcompose/orbitscore/issues/779) / PR [#784](https://github.com/signalcompose/orbitscore/pull/784) — reclaiming orphaned shm at startup (a mitigation for the paths where `Drop` never runs)
