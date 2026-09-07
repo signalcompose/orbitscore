@@ -1045,12 +1045,12 @@ struct UiEventHubCore {
 `extension.ts` の stdout ルータはこの結果行を `{"pluginUi"` の前方一致で拾います。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1501-1505
-        } else if (trimmedLine.startsWith('{"pluginUi"')) {
-          const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
-          if (!parsed && isCurrent) {
-            outputChannel?.appendLine(`⚠️ received a malformed //#pluginUi result line: ${rawLine}`)
-          }
+// packages/vscode-extension/src/extension.ts:1493-1497
+    } else if (trimmedLine.startsWith('{"pluginUi"')) {
+      const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
+      if (!parsed && isCurrent) {
+        outputChannel?.appendLine(`⚠️ received a malformed //#pluginUi result line: ${rawLine}`)
+      }
 ```
 
 `PluginStateBridge`（`//#savePluginState`）と構造が同じなのは、request ID の運び方が

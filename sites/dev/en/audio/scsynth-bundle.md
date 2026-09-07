@@ -248,7 +248,7 @@ function getConfiguredEngineKind(): 'rust' | 'sc' {
 The pre-check in `startEngine()` resolves scsynth only under the `sc` kind; under the `rust` kind it resolves the daemon binary instead.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2128-2144
+// packages/vscode-extension/src/extension.ts:2143-2159
   // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
   // 'rust' (default since cutover #369), skip the scsynth pre-check entirely —
   // the native daemon doesn't need scsynth to be resolvable.

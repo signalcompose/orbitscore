@@ -17,6 +17,103 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+## 束 O-wire（#611 ステージ 2・統合ブランチ `611-line-wire`）
+
+出口の配線を入れ替える束。**振る舞いは変えない**ので、束の収束条件は
+「**`OUTPUT_LINE_GOLDENS` / `O0-1` などの goldens が 1 つも動かないこと**」+ cargo 全緑 + 実機 gated 全件。
+中身は PR-O3（`LineProgram` / `SetBusLine`）+ #773 + #801。
+
+### fix(extension): buffer partial stdout lines before bridge dispatch (#773) (Sep 7, 2026)
+
+**Issue**: #773 / **ブランチ**: `773-stdout-line-buffer` → `611-line-wire`（小 PR）
+
+#### 何が壊れていたか
+
+`setupStdoutHandler`（`extension.ts:1478`）は engine stdout を **chunk ごとに `output.split('\n')`**
+していたが、**部分行を次の chunk へ持ち越していなかった**。JSON envelope が chunk 境界で割れると:
+
+- 前半は `{"evalMark"` 等で始まるので分岐に入るが **JSON として不正** → 「malformed」警告
+- 後半は prefix 判定を**すべてすり抜けて通常ログとして捨てられる**
+
+→ **その要求の応答が失われる**。`evalMark` / `savePluginState` / `pluginUi` / `engineState` の
+4 ブリッジすべてが同じ経路なので、MCP 経由の LLM と gated E2E が待ち続けて timeout する。
+
+**この束で直す理由**: PR-O4 が `//#evalBegin` / `//#evalEnd` を導入して**この壊れたチャネルの
+通信量を増やす**ので、増やす前に受け側を直す（計画 §3「ステージ 2 が実際に依存しているもの」）。
+
+#### 直し方 — `createLinePrefixer` を **bridge dispatch だけ**に流用
+
+同じファイルの `createLinePrefixer`（#756・`:1599`）が既に「`partial` を持ち越し、`end` で flush」の
+正解形を持っていたので、それを **bridge の 4 分岐だけ**に被せた。
+
+🔴 **ログ転写には使っていない。** 生 chunk と chunk 単位の `lines` は従来どおり即座に
+`applyEngineStdoutChunk` へ渡すので、**ユーザーが見るログは 1 行も遅れない**し、
+`createLinePrefixer` の空行除去も入らない。playhead / `//#selectAudioDevice` の呼び出し規約も不変。
+
+buffer は `setupStdoutHandler` の**呼び出しごと** = process ごとに閉じているので、
+stale な process の断片が現行 process の dispatch に混ざらない（#528 の stale ガードと同じ意図）。
+
+#### 🔴 遅延は実際には起きない（一次確認）
+
+バッファリングは「改行が来るまで待つ」ので、原理的には最後の 1 行が遅れうる。
+だが 4 種の envelope はすべて `packages/engine/src/cli/repl-mode.ts` の
+**`console.log(JSON.stringify(...))`** で出しており、`console.log` は**必ず改行を付ける**
+（`:460` evalMark / `:167,177,482` savePluginState / `:244,250,440` pluginUi / `:332` engineState）。
+したがって `end` の flush は**保険**であって、通常経路では発火しない。
+
+#### 検証（main が sandbox 外で実行した結果）
+
+| 何を | 結果 |
+|---|---|
+| `npm test`（全件） | **2324 passed / 58 skipped**（158 files passed / 4 skipped）|
+| `npm run lint` | 緑（ESLint errors 0）|
+| 🔴 **red-first**（main が実装だけ戻して実行）| **新規 7 本が red**。差分の実例: 期待 `{"savePluginState":{"requestId":...}}` に対し実際は **`{"savePluginState":{"reque`**（＝断片が dispatch されていた）|
+| 等価ガード 2 本（ログ転写）| **前後とも緑** — 転写の挙動が変わっていないことの証拠 |
+
+🔴 **委譲先の緑を根拠にしていない。** Codex は sandbox の loopback bind 制限で HTTP 系 31 件が
+`listen EPERM` になり「all green とは報告しない」と正しく申告した。**その 31 件は main の
+sandbox 外実行で緑**である（上表 2324 に含まれる）。
+
+#### 追加したテスト（57 本中の新規 9 本）
+
+| 何を | アサーション |
+|---|---|
+| 4 ブリッジそれぞれ、envelope を 2 chunk に割って投入 | `toHaveBeenCalledTimes(1)` + **完全な行**で `toHaveBeenNthCalledWith` + malformed 警告 **0 件** |
+| 1 chunk に完成 2 本 + 末尾断片 | 完成分は**即座に** 2 回、断片は次の chunk で 3 回目 |
+| 改行なしで `end` | flush されて**ちょうど 1 回** |
+| process ごとの分離 | 別 process の断片が混ざらない |
+| ログ転写（debug / 非 debug） | **即時・従来と同一**（空行の扱いを含む）|
+
+#### 🔴 引用のずれを 2 種類に分けて直した（CI が捕まえた）
+
+`extension.ts` に 49 行足したので、dev サイトの `// file:start-end` 引用 **80 件**が落ちた
+（`code-review` ワークフローの `docs:check`）。**内訳は 2 種類で、直し方が違う。**
+
+| 種類 | 件数 | 直し方 |
+|---|---|---|
+| **純粋な行ずれ** | 74 | `check-citations.mjs --fix` が再アンカー |
+| 🔴 **本文の変更** | 6（ja/en 各 3）| **サイトが古い形のコードを逐語引用していた**ので、現在のコードで置き換えた |
+
+後者は `{"evalMark"` / `{"pluginUi"` の分岐を引用していた 3 箇所（`editor/execution-feedback.md` /
+`editor/mcp-and-gated-e2e.md` / `plugin-hosting/plugin-ui.md`）。分岐が `for` ループから
+`createLinePrefixer` のコールバックへ移り、**インデントが 8 → 4 に変わった**ため機械的な
+再アンカーでは合わなかった。地の文（「`setupStdoutHandler` に独立した分岐として置かれている」
+「stdout ルータが `{"pluginUi"` の前方一致で拾う」）は現在も正しいので触っていない。
+
+検証: `npm run docs:check` → **984 citations verified, 0 failed**。
+
+🔴 **`--fix` の結果を確認せずに済ませない。** `--fix` 後もまだ 6 件落ちており、
+そこだけが「行がずれた」ではなく「**引用元が変わった**」だった。件数が減ったことを
+成功と読むと、古い記述がサイトに残る。
+
+#### 直していないもの
+
+`//#selectAudioDevice` も chunk 境界で割れうるが、そちらは既に専用の
+「possible chunk-boundary split」警告を持っており、本 issue のスコープ外。
+docstring の「chunk → 行の経路は 4 つ」の 3 番を現状に合わせて更新した。
+
+---
+
 ### chore(docs): rotate WORK_LOG before the O-wire bundle (#804) (Sep 7, 2026)
 
 **Issue**: #804 / **ブランチ**: `804-rotate-worklog`（main 直行・docs のみ）

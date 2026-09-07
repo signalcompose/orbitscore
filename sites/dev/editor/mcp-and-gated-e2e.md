@@ -255,7 +255,7 @@ export function buildMcpServerUrl(port: number): string {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3134-3171
+// packages/vscode-extension/src/extension.ts:3149-3186
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -314,16 +314,16 @@ async function evaluateForAgent(code: string): Promise<EvaluateResult> {
 engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setupStdoutHandler` がそれを `evalMarkBridge.handleLine()` へ渡します。この分岐は **独立していなければならない**、と強調されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1506-1514
-        } else if (trimmedLine.startsWith('{"evalMark"')) {
-          // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
-          // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
-          // dispatch されなかった（ユニットテストは全て緑・実機 E2E だけが捕まえた）。
-          const parsed = isCurrent && evalMarkBridge.handleLine(rawLine)
-          if (!parsed && isCurrent) {
-            outputChannel?.appendLine(`⚠️ received a malformed //#evalMark result line: ${rawLine}`)
-          }
-        } else if (trimmedLine.startsWith('{"engineState"')) {
+// packages/vscode-extension/src/extension.ts:1498-1506
+    } else if (trimmedLine.startsWith('{"evalMark"')) {
+      // 🔴 #614: この分岐は**独立していなければならない**。最初は `{"pluginUi"` 分岐の中に
+      // 相乗りさせてしまい、`{"evalMark"` 行は prefix チェーンをすり抜けて一度も
+      // dispatch されなかった（ユニットテストは全て緑・実機 E2E だけが捕まえた）。
+      const parsed = isCurrent && evalMarkBridge.handleLine(rawLine)
+      if (!parsed && isCurrent) {
+        outputChannel?.appendLine(`⚠️ received a malformed //#evalMark result line: ${rawLine}`)
+      }
+    } else if (trimmedLine.startsWith('{"engineState"')) {
 ```
 
 「ユニットテストは全て緑・実機 E2E だけが捕まえた」— これは本章全体のテーマの縮図です。
@@ -379,7 +379,7 @@ export async function resolveEngineState(
 問い合わせの予算は 2.5 秒です。短く見えますが、これは伸ばしても意味が無いという判断の結果でした。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3264-3275
+// packages/vscode-extension/src/extension.ts:3279-3290
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await

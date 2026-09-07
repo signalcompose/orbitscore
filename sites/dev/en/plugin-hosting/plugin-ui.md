@@ -1063,12 +1063,12 @@ correlates the `{"pluginUi": ...}` line that comes back on stdout by `requestId`
 The stdout router in `extension.ts` picks up this result line by the `{"pluginUi"` prefix.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1501-1505
-        } else if (trimmedLine.startsWith('{"pluginUi"')) {
-          const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
-          if (!parsed && isCurrent) {
-            outputChannel?.appendLine(`⚠️ received a malformed //#pluginUi result line: ${rawLine}`)
-          }
+// packages/vscode-extension/src/extension.ts:1493-1497
+    } else if (trimmedLine.startsWith('{"pluginUi"')) {
+      const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
+      if (!parsed && isCurrent) {
+        outputChannel?.appendLine(`⚠️ received a malformed //#pluginUi result line: ${rawLine}`)
+      }
 ```
 
 It has the same structure as `PluginStateBridge` (`//#savePluginState`) because the way the request
