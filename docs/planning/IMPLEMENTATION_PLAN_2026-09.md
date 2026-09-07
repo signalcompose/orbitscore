@@ -245,7 +245,7 @@
 | PR-E8 | `test(e2e): assert at most one daemon at every phase boundary` | #624（孤児 daemon の二重出力は capture に写らない）| `helpers/daemon-census.ts`（+80）・gated（+30）| PR-E2 | 実機 gated | — |
 | PR-E9 ⟂ | `test: report load average when a child deadline expires` | #640-A | `host_child_integration.rs`（+30）| — | 負荷下で cargo test | — |
 | PR-E10 | `fix(daemon): unlink orphaned outproc shm at startup` | **#779**（doc 668 §13.5.3）。実測 **35,282 ファイル / TMPDIR 11 GB**。清掃が `Drop` に乗っており **SIGKILL では走らない**（gated のテardown はアプリを kill する） | `engine_wrap.rs`（+80）・起動時走査（+40）・unit（+60）| — | 🔴 **gated 全件を回した後に shm が増えていないこと**を実測（回す前後で `find $TMPDIR -name 'orbit-outproc-*' \| wc -l`）。PID 再利用があるので名前の PID を信じない | — |
-| PR-E11 | `fix(e2e): derive the capture/wall tolerance from the buffer size` | **#775**（doc 668 §13.5.3）。`CLOCK_WALL_TOLERANCE_SEC = 0.12` は根拠コメント無しの裸の定数（2048 frames @48kHz = 42.67 ms の約 2.8 バッファ） | `capture-windows.ts`（±40）・unit（+40）| **束 E-gate の後**。🔴 **段 2 の実機で「U2 が消えたか」を観測してから必要性を判断する**（消えていれば本 PR 自体が不要） | 🔴 **gated 全件を 3 回連続で回して失敗集合が一致**すること（この系列で最も重い投資・1 回 15 分 + 負荷待ち）。閾値を先に緩めない | — |
+| PR-E11 | `fix(e2e): derive the capture/wall tolerance from the buffer size` | **#775**（doc 668 §13.5.3）。`CLOCK_WALL_TOLERANCE_SEC = 0.12` は根拠コメント無しの裸の定数（2048 frames @48kHz = 42.67 ms の約 2.8 バッファ） | `capture-windows.ts`（±40）・unit（+40）| **束 E-gate の後**。🔴 **ステージ 2 の実機で「U2 が消えたか」を観測してから必要性を判断する**（消えていれば本 PR 自体が不要） | 🔴 **gated 全件を 3 回連続で回して失敗集合が一致**すること（この系列で最も重い投資・1 回 15 分 + 負荷待ち）。閾値を先に緩めない | — |
 | PR-E12 | `fix(extension): one line router for every chunk stream` | **#777 → #773 → ring proxy**（doc 668 §13.5.2）。「chunk 列 → 行」の実装が **4 つ**あり教訓が片方にしか適用されていない | `daemon-client.ts`（±40）・`extension.ts`（±80・`:311` のリングプロキシ含む）・unit（+120）| — | `npm test` + 実機 gated（`get_log` の ERROR 会計が変わるので全件）| — |
 | PR-E14 | `fix(test): give every rack fixture its own shm path` | **#780**（doc 668 §13.5.3）。CLAUDE.md が無条件ゲートに指定した 2 行の片方が **SIGBUS / SIGSEGV** で間欠的に落ちる。🔴 **原因は実測で特定済み**: `ActualFixture::new` の `line!()` が定義位置で展開される定数なので **4 つの fixture が同一の shm パスを共有**し、`create_shared` の `truncate(true)` が他のテストの生きたマッピングを切り詰める（並列 5 回で 1 FAIL / `--test-threads=1` で 0 FAIL） | `orbit-effect-rack-child/src/tests.rs`（±40）| **PR-E10 と独立**（原因が #779 と無関係と判明したため並行可）| 🔴 **10 回連続で緑**（間欠故障なので 1 回では閉じない）。🔴 `--test-threads=1` で回避しない | — |
 | PR-E13 ⟂ | `test(e2e): provenance-based log-count-equality detector` | doc 668 §13.5.3 の 4 つ目。`orbitstudio-mcp-gated.spec.ts` の**演算なしの厳密等価**が 1 本目のラチェット（識別子名依存）をすり抜ける箇所が **6 箇所**（`:1378` / `:1397` / `:1590` / `:1616` + ローカルラッパー `countAttachFailures` 経由の 2 箇所）。解決は「1 本目の守備範囲を広げる」のではなく、**値の出どころ（provenance）を AST で追跡する検出器を新設**（`logProvenanceStrictEqualityOffenders`。#785 で名前非依存の4箇所を移行、#789 でローカルラッパー解決（`resolveLogCountHelperNames`・反復での fixed-point 解決）を追加して残り2箇所も解決） | `gated-assertion-hygiene.spec.ts`（±180）・gated spec の 6 箇所（±60）| — | 変異で red を実測 → 移行 → 実機 gated | — |
@@ -268,7 +268,7 @@
 > | **#760** ✅ | `OUTPROC_ATTACH_FAILED` のアサーションが `child exited before publishing READY` を期待するが到達しない。**main でも落ちる**（実測）。🔴 **原因の記述を PR #769 が一次ソースで訂正した**: child は spawn される。`RackController::load_initial` が CLAP のロードに失敗し、詳細を publish してから `CHILD_STATUS_LOAD_FAILED` を立てて終了する。daemon（`engine_wrap.rs` の Root 3-3）はこの status を early-exit の watchdog signal より先に見るので、汎用文言ではなく具体的な理由が上がる（= 退行ではなく診断の具体化） | 「`[OUTPROC_ATTACH_FAILED]` が増えた + 理由がファイル不在 + 前のチェーンが保たれた」を検査する形へ | 独立・小粒 / **PR [#769](https://github.com/signalcompose/orbitscore/pull/769) で対処済み**（束 `761-gated-measurement` 経由で **main へマージ済み**・merge commit `d2e94af7`） |
 
 
-🔴 **段 0 の実体は PR-E1 → E2 → E3 → E4（+ PR-O0 golden）**。PR-E3（per-channel）が無いと doc 611 / 598 のチャンネル判定 E2E は緑のまま嘘をつく。
+🔴 **ステージ 0 の実体は PR-E1 → E2 → E3 → E4（+ PR-O0 golden）**。PR-E3（per-channel）が無いと doc 611 / 598 のチャンネル判定 E2E は緑のまま嘘をつく。
 
 ---
 
@@ -321,18 +321,18 @@
 | R-live | `598-render-live` | PR-R1・R2・R3 | 約 1,400 行 |
 | R-offline | `598-render-offline` | PR-R4・R5・R6・R7 | 約 1,700 行（R4 は先に main へ入れてよい）|
 | R-p3 | `598-render-p3` | PR-R8・R9 | 約 800 行 |
-| **E-gate** 🔴 | `780-merge-gate` | PR-E10・E14・E13 | 約 210 行（doc 668 §13.5.3。**🔴 段 2 に着手する前提**。収束条件: **#780 が 10 回連続で緑** + 実行前後で shm が増えない）|
-| **E-router** | `777-line-router` | PR-E12 | 約 240 行（doc 668 §13.5.2。**収束条件: 「chunk 列 → 行」が 1 本の共有プリミティブに畳まれる**。🔴 **#757 の直前**に置く。段 2 と**並行可**）|
-| **E-noise** | `775-capture-clock` | PR-E11 | 約 80 行（doc 668 §13.5.4。**段 2 と並行可**。🔴 **段 2 の実機で「U2 が消えたか」を観測してから必要性を判断する** — 3 回連続の実測はこの系列で最も重い投資なので、必要性が確定してから払う）|
+| **E-gate** 🔴 | `780-merge-gate` | PR-E10・E14・E13 | 約 210 行（doc 668 §13.5.3。**🔴 ステージ 2 に着手する前提**。収束条件: **#780 が 10 回連続で緑** + 実行前後で shm が増えない）|
+| **E-router** | `777-line-router` | PR-E12 | 約 240 行（doc 668 §13.5.2。**収束条件: 「chunk 列 → 行」が 1 本の共有プリミティブに畳まれる**。🔴 **#757 の直前**に置く。ステージ 2 と**並行可**）|
+| **E-noise** | `775-capture-clock` | PR-E11 | 約 80 行（doc 668 §13.5.4。**ステージ 2 と並行可**。🔴 **ステージ 2 の実機で「U2 が消えたか」を観測してから必要性を判断する** — 3 回連続の実測はこの系列で最も重い投資なので、必要性が確定してから払う）|
 
 **main 直行**（束を通さず従来どおり単独でフルレビュー）: 仕様だけの PR-O1 / L0 / R0 / P0 / K-*0 / Q-A / D1 / E0、must-fix の PR-O2 / D0 / V4 / K-A1 / K-A2 / S-T1、束をまたぐ PR。PR-P / K / Q / D / V / S / E の束割りは着手時に同じ規則（1,500 行・継ぎ目）で決める。
 
 
-## 3. 段（マイルストーン）
+## 3. ステージ（マイルストーン）
 
-各段: **ユーザーに見える結果（1 文）** / **MCP 実機確認の手順** / **閉じるチェックリスト項目**。順序は地図 §3（リリースまでの筋）に、owner の順序（ログ → リプレイ → レンダ）を組み込んだもの。**日程は書かない。**
+各ステージ: **ユーザーに見える結果（1 文）** / **MCP 実機確認の手順** / **閉じるチェックリスト項目**。順序は地図 §3（リリースまでの筋）に、owner の順序（ログ → リプレイ → レンダ）を組み込んだもの。**日程は書かない。**
 
-### 段 0 — 安全網（PR-E1 → E2 → E3 → E4・PR-O0・PR-L0・PR-O1・PR-R0・PR-P8）
+### ステージ 0 — 安全網（PR-E1 → E2 → E3 → E4・PR-O0・PR-L0・PR-O1・PR-R0・PR-P8）
 
 - ✅ **達成（2026-09-07・owner 裁定）。**
 - **結果**: 「既存の譜面が同じ音のまま」が capture の数値で固定され、以降のすべての変更が退行を機械で検出できる。
@@ -343,39 +343,78 @@
 - **閉じた**: #668 A・C / **#760・#761・#756**（束 `761-gated-measurement`・測定器の 3 件）
   / **#779・#780・#785**（束 E-gate・PR [#789](https://github.com/signalcompose/orbitscore/pull/789)・
   merge commit `900d4532`）。
-- 🔴 **残りは「安全網の残余」へ移した**（次項・**段 2 と並行**・順序の制約なし）。
-  段 0 の*目的*は達成しており、残余は**測定の質を上げる**作業なので、段 2 の着手を止める理由にならない。
-  **#775 を段 0 から外したとき（2026-09-06・doc 668 §13.5.4）と同じ形の裁定**である。
+- 🔴 **残りは「安全網の残余」へ移した**（次項・**ステージ 2 と並行**・順序の制約なし）。
+  ステージ 0 の*目的*は達成しており、残余は**測定の質を上げる**作業なので、ステージ 2 の着手を止める理由にならない。
+  **#775 をステージ 0 から外したとき（2026-09-06・doc 668 §13.5.4）と同じ形の裁定**である。
   🔴 **目的の達成と品質改善を混同しない** — これは 2026-09-06 に一度踏んだ誤りで、
   同じ判断を残余全体へ広げたのが本項。
 
-### 安全網の残余 — 段 2 と**並行**（順序の制約は E-router のみ）
+### 安全網の残余 — 🔴 **チェックリストではない**（2026-09-07 owner 指示で方針変更）
 
-段 0 の目的は達成済みだが、doc 668 §20 の PR-E 群には未実装が残る。**成果物の実在で確認した**
-（2026-09-07）。段 2 を止めないので、着手順は自由。
+> **ステージ 0、1 を完璧を目指してずるずるとやると機能実装に進まないので、ステージ 2 との関連を
+> 考えて**（owner 2026-09-07）
+
+**残余を「全部やる」対象から外す。** 代わりに**引き込み条件**を 1 つだけ置く:
+
+> 🔴 **そのステージの受け入れ基準が依存しているものだけを、そのステージの PR の中で直す。**
+> 依存していないものは backlog に置き、**どのステージの完了条件にもしない。**
+
+**なぜこれで安全か**: 未カバー語はラチェット（`dsl-e2e-coverage.spec.ts`）が**増加を止めている**ので、
+放置しても悪化しない。**債務の上限は既に機械が押さえており、返済速度を急ぐ理由が無い。**
+「残っている＝危険」ではなく「**残っている＋上限が無い＝危険**」であって、後者は既に潰してある。
+
+**なぜ完璧を目指すと危ないか**: 2026-09-06 に一度踏んでいる — ステージ 0 の*目的*（退行を機械で
+検出できる）は達成済みなのに、*完了条件*が残っていたので先へ進めないと読んでいた。
+**目的の達成と品質改善は別物**で、混同すると機能が止まる。
+
+#### ステージ 2 が実際に依存しているもの（測定した・2026-09-07）
+
+| 残り | 結合 | 根拠 |
+|---|---|---|
+| **PR-E8 の狭いスライス**（daemon 台数） | 🔴 **結合** | ステージ 2 の受け入れ基準 **E2E-10 は daemon respawn**（doc 611 §10）。#624 は「旧 daemon が残ったまま新しいのが立つと**両方がデバイスへ出力し、capture には片方しか写らない**」。gated spec に台数のアサーションは無い（`orbitAudioDaemonPids()` の使用は `orbitstudio-mcp-gated.spec.ts:5391` の #779 sweep だけ）→ **E2E-10 は偽緑になりうる** |
+| **#773**（bridge 封筒の chunk 分断） | 🔴 **結合** | **PR-O4 が `//#evalBegin` / `//#evalEnd` を導入する**（doc 611 §7 手順 1-2・`extension.ts:3000-3033`）。#773 が落とすのは `{"evalMark"` を含む封筒。**ステージ 2 は壊れているチャネルの通信量を増やす** |
+| #777 / PR-E5 / E6 / E7 / E9 / E16 | ⚪ **無関係** | ステージ 2 の受け入れ基準（E2E-0〜11）に一度も現れない。36 語も `pan` / `mute` / `loop` / `midi` 等で、ステージ 2 が触るのは `output` / `send` / `thru:` / `db:` / `outs:`。`pan` のライン要素化は doc 611 §2.4b が**別 PR**と明記 |
+| 束 E-noise（#775） | ⚪ 観測待ち | 既定どおり。ステージ 2 の実機で U2 が消えたかを見てから要否判断 |
+
+#### したがってこう進める
+
+| 扱い | 対象 | いつ |
+|---|---|---|
+| 🔴 **ステージ 2 の PR に含める** | **#773**（受け側を直してから `//#evalBegin` を足す）→ **PR-O4 の直前** / **daemon 台数のアサーション**（既存 `orbitAudioDaemonPids()` を helper へ引き上げ、E2E-10 の respawn 前後で 1 台を確認）→ **PR-O6 と同じ PR** | ステージ 2 の中 |
+| **backlog**（完了条件にしない） | #777 / PR-E5 / PR-E6・E7 / PR-E9 / PR-E16 | **着手時期を決めない。** 手が空いた時・関連を触る時に拾う |
+| 据え置き | 束 E-noise（#775） | ステージ 2 の実機で観測してから |
+
+🔴 **束 E-router を丸ごとやらず #773 だけ先に出しても、#757 の順序制約は保たれる**
+（#757 はこの先。#777 は backlog に残るが、#757 に着手する時点で #773 と一緒に畳めばよい）。
+
+#### 現況の一覧（成果物の実在で確認・2026-09-07）
+
+> 🔴 **この表は一度間違えている**（#796 で訂正）。PR-E4 を「正本が無い」としたが、`tests/e2e/` の下だけを
+> 探しており、実物は `packages/engine/src/` にあった。**「無い」は探索範囲とセットでしか成り立たない** —
+> 不在を書くときは**どこを探したか**まで書く。
 
 | 項目 | 状態（成果物） | 備考 |
 |---|---|---|
 | PR-E1 / E2 / E3 / **E17** | ✅ `tests/e2e/gated-sources.ts` / `tests/e2e/helpers/`（9 本）/ `analyze_audio(per_channel)` / `tests/e2e/dsl-coverage-ledger.ts` | **E17 は旧 PR-E12**（§1.10 の重複解消で改番）|
-| PR-E10 / E13 / E14 | ✅ 束 E-gate（#779 / #785 / #780・PR [#789](https://github.com/signalcompose/orbitscore/pull/789)）| 段 0 の「閉じた」と同じもの |
-| **PR-E4** | **部分**。ラチェット `dsl-e2e-coverage.spec.ts` は在るが、**正本 `dsl-surface.ts` が無い**（`KEYWORDS` は `parser/tokenizer.ts` のまま） | #668-A の残り |
-| **PR-E5** | ❌ `tests/docs/reference-coverage.spec.ts` が無い（`tests/docs/` は `worklog-size` のみ） | #668-C |
-| **PR-E6 / E7** | ❓ 未確認（import / mute・loop・pan の実機 E2E） | #630 / #668-B |
-| **PR-E8** | ❓ `daemon-census.ts` は無い。`helpers/rack-child-pid.ts` が近い役割 | #624 |
+| PR-E10 / E13 / E14 | ✅ 束 E-gate（#779 / #785 / #780・PR [#789](https://github.com/signalcompose/orbitscore/pull/789)）| ステージ 0 の「閉じた」と同じもの |
+| PR-E4 | ✅ 正本 `packages/engine/src/parser/dsl-surface.ts`（`DSL_SYNTAX_SURFACE` 13 件）+ ラチェット `dsl-e2e-coverage.spec.ts:36` が import | 🔴 **2026-09-07 訂正**。#794 は「部分・正本が無い」と書いたが**誤り**（`tests/e2e/` の下だけを探していた）。#668 のクローズも PR-E4 を ✅（PR #715）と記録 |
+| **PR-E5** | ❌ 未着手。`reference-coverage.spec.ts` はリポジトリ全体に無い（`find` で `*reference*` / `*coverage*` の `.ts` を全走査）。**ラチェット側もそれを前提に書かれている** — `dsl-e2e-coverage.spec.ts:219-222` が「§20 は A-10 を PR-E5（`reference-coverage.spec.ts` のみ）に割り当てているが**分割の隙間に落ちる**のでここで塞ぐ」と明記 | #668-C |
+| **PR-E6 / E7** | ❌ **未カバー 36 語**（ラチェットの baseline が自認している数）: sequence **16**（`cell` `comp` `defaultGain` `defaultPan` `density` `hold` `loop` `midi` `mute` `pan` `quantize` `root` `unmute` `vel` `vl` `voicelead`）/ global **7**（`audioDevice` `compressor` `limiter` `loop` `midiLatency` `normalizer` `quantize`）/ syntax **13 件中 13 件**（`DSL_SYNTAX_SURFACE` 全部） | #630 / #650 / #668-B。🔴 構文表面が全滅なのは、**正本を作る PR-E4 と埋める PR-E6/E7 が別作業**だからで矛盾ではない |
+| **PR-E8** | ❌ **目的は未達だが部品は在る**。`orbitAudioDaemonPids()`（`orbitstudio-mcp-gated.spec.ts:348-361`・`pgrep -f` で daemon の PID 一覧）が使われているのは **1 箇所だけ**（`:5391` の #779 sweep テストが起動前スナップショットに使う）。PR-E8 の狙い「**各 phase 境界で daemon が高々 1 台**」のアサーションはどこにも無い | #624。着手時はこの関数を helper へ引き上げる |
 | **PR-E9** | ❌ load average の報告が無い | #640-A |
 | **PR-E16**（root skip） | ❌ `tests/helpers/privileges.ts` が無い | #684。**旧 PR-E11**（改番）|
 | **束 E-router**（`777-line-router`・計画 **PR-E12**） | ❌ #777 / #773 が OPEN | 🔴 **#757 の直前に置く**（#757 の共通化がこの層に乗るため、逆順だと 5 本を直した後にもう一度触る） |
-| 束 E-noise（`775-capture-clock`・計画 **PR-E11**） | #775 OPEN | 🔴 **段 2 の実機で U2 が消えたかを観測してから要否判断**。2026-09-07 の実機では `#611 O0-4` が**2 回とも通った**が、間欠故障なので断定しない |
+| 束 E-noise（`775-capture-clock`・計画 **PR-E11**） | #775 OPEN | 🔴 **ステージ 2 の実機で U2 が消えたかを観測してから要否判断**。2026-09-07 の実機では `#611 O0-4` が**2 回とも通った**が、間欠故障なので断定しない |
 
 **issue が OPEN のままなのはこの残余のため**（#543 / #650 / #630 / #624 / #640 / #684）。
-「該当項目」の粒度なので、issue 全体が段 0 の対象だったわけではない。
+「該当項目」の粒度なので、issue 全体がステージ 0 の対象だったわけではない。
 
-### 段 1 — must-fix（PR-O2・PR-D の #645・PR-V の #661・PR-K の #606 / ~~PR-S の #385~~ → 所属未定）
+### ステージ 1 — must-fix（PR-O2・PR-D の #645・PR-V の #661・PR-K の #606 / ~~PR-S の #385~~ → 所属未定）
 
 - ✅ **完了（2026-09-07 に確認）。** #649 / #645 / #661 / #606 はすべて CLOSED。
 - 🔴 **対象は 3 件へ絞られている**（owner 2026-09-05・#385 のコメント）:
-  「段 1（演奏が壊れる must-fix）の対象は **#649 / #661 / #606 の 3 件**に限定します。
-  本 issue（#385）は段 1 では着手しません」。#645 も同時期に CLOSE 済み。
+  「ステージ 1（演奏が壊れる must-fix）の対象は **#649 / #661 / #606 の 3 件**に限定します。
+  本 issue（#385）はステージ 1 では着手しません」。#645 も同時期に CLOSE 済み。
 - **結果**: 演奏が壊れる件（#649 フェーダー / #645 演奏中 throw / #661 無音 / #606 note-off）が直り、
   **`global.gain(-6)` が instrument に効く**。
 - **確認**: `start_engine({capture_wav})` → instrument 譜面 → `evaluate_orbitscore('global.gain(-6)')` → 窓 RMS が半減（E2E-1）。`select_audio_device` 後に音が出る（doc 662 の手順）。RUN 終端で音が止まる（doc 634）。
@@ -390,22 +429,24 @@
   並んでいて区別がつかない**。`configurationDefaults` でセキュリティ設定を上書きできるかも未確認。
   所属と対策の当否は**まとめて今後決める**（#793 に記録）。
 
-### 段 2 — 出口の一般化（PR-O3〜O6）
+### ステージ 2 — 出口の一般化（PR-O3〜O6）
 
 - ✅ 🔴 **着手条件は満たされた（2026-09-07）。** 束 E-gate が main へ入り
   （PR [#789](https://github.com/signalcompose/orbitscore/pull/789)・merge commit `900d4532`）、
   **#780 は 10 回連続で緑**（修正前は並列 5 回で 1 FAIL）、**#779 の漏れも止まった**
   （`orbit-outproc-*` が 957 → 25 で、gated 全件の前後で増えない）。**着手してよい。**
   - 条件だった理由: 無条件マージゲート（`cargo test -p orbit-effect-rack-child --lib -- --ignored`）が
-    間欠的に落ちる状態だと、**段 2 のどの PR でも毎回「自分の変更のせいか」を切り分けさせる**。
+    間欠的に落ちる状態だと、**ステージ 2 のどの PR でも毎回「自分の変更のせいか」を切り分けさせる**。
     慣れると無視されてゲートが死ぬ。
-  - **安全網の残余（E-router / E4 残 / E5 / E9 / E11）と E-noise は着手条件ではない**（並行可・§3 段 0 の次項）。
+  - 🔴 **安全網の残余は着手条件ではない。**「全部やる」対象からも外した（§3「安全網の残余」）。
+    ただし **#773 と daemon 台数のアサーションの 2 件だけはステージ 2 の PR に含める** —
+    ステージ 2 の受け入れ基準（E2E-10 / PR-O4 の `//#evalBegin`）が**実際に依存している**ため。
 - 🔴 **マージ前ゲートが 3 行になった**（2026-09-07・#789）。`-- --ignored` は **`#[ignore]` を付けた
   テストしか走らせない**ので、`#[ignore]` していない退行検知テストは**実行されずに緑を装う**
   （実測 `0 passed; 19 filtered out`）。`--ignored` 無しの行を足してある。CLAUDE.md 参照。
-- 🔴 **既知の失敗は台帳で扱う**: 段 2 の実機では `steps the live playhead`（main baseline）と
+- 🔴 **既知の失敗は台帳で扱う**: ステージ 2 の実機では `steps the live playhead`（main baseline）と
   `#611 O0-4`（#775）が出る。**新しい赤だけを見る**。#775 は E-gate の後に消えている可能性があるので、
-  **段 2 の実機で観測して必要性を判断する**。
+  **ステージ 2 の実機で観測して必要性を判断する**。
 - **結果**: `kick.output(verb, thru: true, db: -12).output(master)` が書け、master も aux も物理アウトも同じ軸。`send` は dB。`outs:` でマルチアウト。
 - **確認**: E2E-2〜10 の手順を `evaluate_orbitscore` で再現し capture の RMS 比を見る。daemon respawn 後に routing が復元（E2E-10）。
 - **閉じる**: #611 / #409 / #647 / #543 (a) の差分ゼロ確認。
@@ -418,46 +459,46 @@
   （PR #754 = PR-O2 のマージと同時刻）で、**閉じた issue を完了条件に残すと後から追えない**。
   実体は次のとおりで、どちらも別の場所に既にある:
   - **実装 B**（`output()` をライン要素にする）→ **PR-O4 が名指しで持っている**（§1.1）。
-    段 2 の PR 一覧（PR-O3〜O6）で表現済みなので、issue 番号での二重記載は不要
+    ステージ 2 の PR 一覧（PR-O3〜O6）で表現済みなので、issue 番号での二重記載は不要
   - **設計文書の改訂**（§7.3「`output` の後ろに音は届かない」にスルー属性を反映 /
     §10.1「`output` は単一」を宛先キーへ）→ 地図 §4.A.1 の帰結 2 が「要る」と書いているが、
-    **どの段の完了条件にも載っていなかった**。ここへ移した。
+    **どのステージの完了条件にも載っていなかった**。ここへ移した。
     ✅ **2026-09-07 追記**: 上の「改訂の中身は裁定を待つ」は**古い**。裁定は 2026-09-03 に済み、
     §7.3 / §10.1 への反映も済んでいる（正本は doc 611）。**この完了条件は既に満たされている。**
     🔴 この「裁定待ち」の記述を、その後 4 セッションにわたり `/goal` プロンプトが持ち回っていた —
     **文書を開かずに申し送りだけを転記すると、解消済みの宿題が生き続ける**。
 
-### 段 3 — ログ → リプレイ（PR-L1a/L1b/L2/L3/L7/L8/L9 → L4/L5/L6）
+### ステージ 3 — ログ → リプレイ（PR-L1a/L1b/L2/L3/L7/L8/L9 → L4/L5/L6）
 
 - **結果**: OrbitStudio で演奏すると `<DIR>/<basename>.<stamp>.orbslog` が出て、`orbitscore replay <log>` が**同じ音**を鳴らす（840 / 1260 型の演奏を後から再生できる）。
 - **確認**: `open_file` → `run_selection`（`global.start()`）→ `ls <scoreDir>/<DIR>/` → `readOrbsLog` で meta/eval/transport → `stop_engine` → `orbitscore replay <log>` を capture 付きで → 窓 RMS がライブと一致（E2E-R1）。
 - **閉じる**: #694 全項目（B 含む）/ #695 (1)(2) / #241 忠実リプレイ・`--until` v1。
 
-### 段 4 — render（PR-R1〜R7・P2・R9）
+### ステージ 4 — render（PR-R1〜R7・P2・R9）
 
 - **結果**: `var stems = mix.render("stems/%n_%v.wav")` で**演奏しながら stem が書け**、`orbitscore replay <log> --render` / `render <orbs> --duration T` が実時間より速く同じファイル群を作る。
 - **確認**: E2E-R1（実時間 stem）・R5（offline bit 一致・実時間比を記録）・R6（replay --render がライブ capture と一致）。
 - **閉じる**: #598 P2 全項目 + エンドポイント宣言 / `%n` / 合算 / 相対 / `outs:` / #241 `--render` / 地図 §7 (7)(11)(8) のうち `%n`。
 
-### 段 5 — 可視化・設定・性能（PR-V: #156 → A → B → #667 → #663）
+### ステージ 5 — 可視化・設定・性能（PR-V: #156 → A → B → #667 → #663）
 
 - **結果**: エンジンが掴んでいるデバイス・レート・バッファ・callback 統計・設定の実効値が `get_engine_state` / Engine view に出る。child がアイドルで CPU を食わない。プール上限が off-thread で伸びる。
 - **確認**: `get_engine_state` に device / sample_rate / buffer / callback 統計 / children が実在（E-4）。`ps` で 5 child のアイドル CPU（E-6）。`select_audio_device` 後に capture RMS > 0（E-2）。
 - **閉じる**: #662 バッチ A〜D の項目 / #661 / #660 / #667 / #663 / #483 / #484（デバイス部分）/ #503 / #156（裁定後）。
 
-### 段 6 — リリースゲート連鎖（PR-Q → PR-K: #634 → #635 → #636 → #669）
+### ステージ 6 — リリースゲート連鎖（PR-Q → PR-K: #634 → #635 → #636 → #669）
 
 - **結果**: 並列ラック（PDC 補償済み）・レイヤー・instrument ラック・標準プラグイン（compressor 等）が使える。
 - **確認**: E2E-T1（note の到着が transport 時刻）・E2E-T2（小節頭の param 変化が窓 RMS に出る）・doc 634 の E2E（PDC: 並列 2 枝の逆相で無音 / RUN 終端で音が止まる）。
 - **閉じる**: #428 / #680 / #606 / #634 / #635 / #636 / #669（表面の裁定後）/ #460（前提の確認）。
 
-### 段 7 — プラグイン境界（PR-P0〜P7）→ render P3（PR-R8）
+### ステージ 7 — プラグイン境界（PR-P0〜P7）→ render P3（PR-R8）
 
 - **結果**: 語彙の登録から reference と E2E カバレッジが導出される。OSC（種 B）が送れる。Link テンポが engine の外に出る。オフラインレンダにプラグインと instrument が乗る（**#598 完了**）。
 - **確認**: E2E-P1〜P6・E2E-R8。
 - **閉じる**: #672 / #671 段階 1-4 / #674 / #321 PR3 / #598 P3 / #497 の受け皿。
 
-### 段 8 — 配布（PR-S: #659 → #656 → #138）
+### ステージ 8 — 配布（PR-S: #659 → #656 → #138）
 
 - **結果**: 署名・公証済み OrbitStudio.app と `.vsix` が GitHub Releases に置かれ、新規環境で起動して音が出る。
 - **確認**: E2E-D1/D2（trust）・E2E-D3（成果物に対する gated suite・PATH を絞って node pre-check が落ちる）・E2E-D4（署名済み `.app` で 3rd-party が鳴る）。
@@ -481,7 +522,7 @@
 | transport write 競合 | ✅ 単一 leader | なし |
 | #674 表面 | ✅ メッセージ値を `play()` に | なし |
 | #669 表面 / 中身 | ✅ `effect([...])` に統一・**実装は WASM スパイク後** | **PR-K-G2 / G3 は PR-P8 の後** |
-| #138 吸収先 | ✅ 独立のまま（リリース系は段 8 = 別ライン）| なし |
+| #138 吸収先 | ✅ 独立のまま（リリース系はステージ 8 = 別ライン）| なし |
 | 32 変数の線 / #156 の方向 | ✅ 全部出す / 境界規則 + 例外 3 個 | なし |
 | #680 表面 / `PluginNoteOn/Off` | ✅ B / 残す | なし |
 | `untrustedWorkspaces.supported` | ✅ `true`（DAW の挙動に合わせる）| なし |
@@ -501,7 +542,7 @@
 
 | 日付 | 内容 |
 |---|---|
-| 2026-09-03 | 初版（設計文書 11 本の PR を統合・一方通行 17 件・段 0〜8）|
+| 2026-09-03 | 初版（設計文書 11 本の PR を統合・一方通行 17 件・ステージ 0〜8）|
 | 2026-09-03 | §2.5 束の割り当て（束ブランチ運用・#703）を追加 |
 | 2026-09-03 | 残り 3 問（Q-694-3/8/9）が **A** で確定 → W-23/24 ✅・PR-L8/L9 の 🔴 を外す・§4「裁定待ち 0 件」|
 | 2026-09-03 | Q-694-7 の実測（doc 694 §2b: 今日のログは再現に使えない）→ PR-L7/L8/L9 追加・PR-L4/R5/R8 の依存を更新・W-23/24/25。Q-598-2 → B-lite（PR-R9）。Q-610-5 / Q-656-1 / Q-656-2 確定。§4 を「相談中 4 件」に更新 |

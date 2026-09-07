@@ -56,7 +56,7 @@ fromSec: Math.max(0, analysis.durationSec - (stopWall - segment.from) / 1000 + g
 加えて **E2E-3 は `segments.transition` を `Date.now()` で直接書く**（`:1523-1526`）ので、
 区間の単位を変えるとここも触る。
 
-🔴 **E2E-1 は #2 を使う。** `run-score.ts` だけ直しても段 1 の受け入れ条件は動かない。
+🔴 **E2E-1 は #2 を使う。** `run-score.ts` だけ直してもステージ 1 の受け入れ条件は動かない。
 
 ---
 

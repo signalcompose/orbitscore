@@ -433,7 +433,7 @@ v1/v2 の「像 = 評価」は**設計が発明した規則**であり、既存�
 > （doc 611 §12 / `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` §1.1）。対応は
 > B-0 → **PR-O0（golden）+ PR-O2**、B → **PR-O3（wire）+ PR-O4（DSL）**、
 > C → PR-O4 に吸収、A → `pan` がライン要素になったため std crate 版は任意のまま。
-> 「B で止めても実害が解消する」に対応するのは **PR-O2**（段 1 の must-fix・
+> 「B で止めても実害が解消する」に対応するのは **PR-O2**（ステージ 1 の must-fix・
 > `global.gain(-6)` が instrument に効く）。
 
 ---

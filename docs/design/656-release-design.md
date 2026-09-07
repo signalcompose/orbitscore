@@ -655,7 +655,7 @@ exit code を信じると、拡張が入らないまま起動して **60 秒の 
 
 > **2026-09-03 owner 回答（裁定シート Q-656-1〜8）**
 > - (1) ✅ **`supported: true`（owner 2026-09-03「一般的な DAW の挙動に併せて」）**。DAW はプロジェクトを開く時に「信頼」を問わずプラグインを読む。OrbitStudio も untrusted ワークスペースで engine を起動し `instrument(path)` を読む。`"limited"` の推奨は撤回 → PR-S-T1 は 1 値で確定
-> - (2) ✅ **C 独立のまま（owner 2026-09-03「リリースの話は別ラインとして扱いたい」）**。#138 は吸収しない。リリース系 issue（#659 / #656 / #138 / #498）は `IMPLEMENTATION_PLAN` 段 8 = 別ライン
+> - (2) ✅ **C 独立のまま（owner 2026-09-03「リリースの話は別ラインとして扱いたい」）**。#138 は吸収しない。リリース系 issue（#659 / #656 / #138 / #498）は `IMPLEMENTATION_PLAN` ステージ 8 = 別ライン
 > - (3) **C**（`.app` は手元・CI は upload だけ → B へ）
 > - (4) **A 提案どおり**
 > - (5) **A dmg・bundle id は VSCodium 既定**（一方通行・確定）
@@ -666,7 +666,7 @@ exit code を信じると、拡張が入らないまま起動して **60 秒の 
 | # | 問い | 選択肢 | 推奨 | 影響範囲 |
 |---|---|---|---|---|
 | (1) ✅ **B `true`（owner 2026-09-03「一般的な DAW の挙動に併せて」）** | `capabilities.untrustedWorkspaces.supported` の値 | **A** `"limited"`（activate する・engine と評価は拒否）/ **B** `true`（全部許す） | ~~**A**~~ → **B**（DAW はプロジェクトを開く時に信頼を問わずプラグインを読む。同じ挙動に揃える） | PR-T1 の `package.json` 1 ブロック。B なら §3.3 のガードが不要になる |
-| (2) ✅ **C 独立のまま（owner 2026-09-03）** | #138 の吸収先（地図 §9 `:1451` の未決） | **A** #656 へ吸収（地図 §6.1 `:1319`）/ **B** #659 と統合（#138 コメント 2）/ **C** 独立のまま | **C**。リリース系は別ライン（段 8）として扱う | issue の開閉のみ |
+| (2) ✅ **C 独立のまま（owner 2026-09-03）** | #138 の吸収先（地図 §9 `:1451` の未決） | **A** #656 へ吸収（地図 §6.1 `:1319`）/ **B** #659 と統合（#138 コメント 2）/ **C** 独立のまま | **C**。リリース系は別ライン（ステージ 8）として扱う | issue の開閉のみ |
 | (3) | app ジョブのベースアプリをどう得るか | **A** CI で VSCodium をフルビルド（tag 時のみ・macos-14・~1h）/ **B** ベースアプリを別リリースに置いて CI が取得 / **C** `.app` は手元で作り `gh release upload` だけ CI | **C を phase 1**（ビルド作業場が git 管理外・`README.md:21-22`）→ B。A は owner のコスト方針（`rust-ci.yml:37-38`）と正面から衝突する | PR-R5 の有無。C なら PR-R5 は「upload だけ」に縮む |
 | (4) | 退避先の既定・世代上限・**削る拡張の取捨** | 退避先 `~/Src/proj_orbitscore/orbitstudio-local-builds/`（#659 本文）/ 世代数 / `EDITOR_HOST_AND_APP_SIZE.md:243-260` の 21 個（うち `typescript-language-features` と `mermaid-markdown-features` は要検討・同 `:262-264`） | ソースマップ削除（−334 MB）は**判断の余地なし**なので既定で入れる。**拡張の削除は既定 off**（`--trim-extensions` で opt-in）。`840/perform/cue.ts` を編集するなら TS 拡張は要る | `make-local-release.sh` 段 6 と 12 |
 | (5) | 🔴 **一方通行**: 配布物の形と名前、`.app` の bundle id | 形: **A** dmg / **B** zip。id: 未確認（VSCodium 既定のまま） | **dmg**（macOS の一般的な導線・ドラッグ&ドロップで Applications へ）。bundle id は**初回署名リリースの前に**確定する — 後で変えると別アプリ扱いで TCC 許可も設定も失われる | PR-R4 / PR-R5・利用者の更新導線 |
