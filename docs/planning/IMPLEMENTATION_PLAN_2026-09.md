@@ -249,9 +249,14 @@
 | PR-E12 | `fix(extension): one line router for every chunk stream` | **#777 → #773 → ring proxy**（doc 668 §13.5.2）。「chunk 列 → 行」の実装が **4 つ**あり教訓が片方にしか適用されていない | `daemon-client.ts`（±40）・`extension.ts`（±80・`:311` のリングプロキシ含む）・unit（+120）| — | `npm test` + 実機 gated（`get_log` の ERROR 会計が変わるので全件）| — |
 | PR-E14 | `fix(test): give every rack fixture its own shm path` | **#780**（doc 668 §13.5.3）。CLAUDE.md が無条件ゲートに指定した 2 行の片方が **SIGBUS / SIGSEGV** で間欠的に落ちる。🔴 **原因は実測で特定済み**: `ActualFixture::new` の `line!()` が定義位置で展開される定数なので **4 つの fixture が同一の shm パスを共有**し、`create_shared` の `truncate(true)` が他のテストの生きたマッピングを切り詰める（並列 5 回で 1 FAIL / `--test-threads=1` で 0 FAIL） | `orbit-effect-rack-child/src/tests.rs`（±40）| **PR-E10 と独立**（原因が #779 と無関係と判明したため並行可）| 🔴 **10 回連続で緑**（間欠故障なので 1 回では閉じない）。🔴 `--test-threads=1` で回避しない | — |
 | PR-E13 ⟂ | `test(e2e): provenance-based log-count-equality detector` | doc 668 §13.5.3 の 4 つ目。`orbitstudio-mcp-gated.spec.ts` の**演算なしの厳密等価**が 1 本目のラチェット（識別子名依存）をすり抜ける箇所が **6 箇所**（`:1378` / `:1397` / `:1590` / `:1616` + ローカルラッパー `countAttachFailures` 経由の 2 箇所）。解決は「1 本目の守備範囲を広げる」のではなく、**値の出どころ（provenance）を AST で追跡する検出器を新設**（`logProvenanceStrictEqualityOffenders`。#785 で名前非依存の4箇所を移行、#789 でローカルラッパー解決（`resolveLogCountHelperNames`・反復での fixed-point 解決）を追加して残り2箇所も解決） | `gated-assertion-hygiene.spec.ts`（±180）・gated spec の 6 箇所（±60）| — | 変異で red を実測 → 移行 → 実機 gated | — |
-| PR-E10 ⟂ | `fix(daemon): log the startup stages and surface DaemonStartupError.stderr` | #640-B（🔴 `DaemonStartupError.stderr`/`.exitCode` を読む箇所が 0・ready 前 3 段にログ無し）| `main.rs`（+25）・`daemon-client.ts`（+20）| — | 実機で engine 再起動 → `get_log` に段マーカー | — |
-| PR-E11 ⟂ | `test: skip DAC-dependent cases when running as root` | #684（root で必ず落ちる 3 件）| `tests/helpers/privileges.ts`（+25）・2 spec | — | root / 非 root で `npm test` | — |
-| PR-E12 | `test: dual ledger — spec sections must be classified` | #543-(b) 台帳 1（仕様 ↔ テスト・#671 と独立に先に入れられる）| `tests/e2e/dsl-coverage-ledger.ts`（+250）| PR-E4 | `npm test` | — |
+| PR-E15 ⟂ | `fix(daemon): log the startup stages and surface DaemonStartupError.stderr` | #640-B（🔴 `DaemonStartupError.stderr`/`.exitCode` を読む箇所が 0・ready 前 3 段にログ無し）| `main.rs`（+25）・`daemon-client.ts`（+20）| — | 実機で engine 再起動 → `get_log` に段マーカー | — |
+| PR-E16 ⟂ | `test: skip DAC-dependent cases when running as root` | #684（root で必ず落ちる 3 件）| `tests/helpers/privileges.ts`（+25）・2 spec | — | root / 非 root で `npm test` | — |
+| PR-E17 | `test: dual ledger — spec sections must be classified` | #543-(b) 台帳 1（仕様 ↔ テスト・#671 と独立に先に入れられる）| `tests/e2e/dsl-coverage-ledger.ts`（+250）| PR-E4 | `npm test` | — |
+
+> 🔴 **2026-09-07 訂正 — PR 番号が重複していた。** `PR-E10` / `PR-E11` / `PR-E12` が**それぞれ 2 回**
+> 使われており（#779 の sweep と #640-B / root skip と #775 / 二重台帳 と #777）、
+> 「PR-E11 は済んだか」という問いに**一意に答えられない**状態だった。後発の 3 行を
+> **PR-E15 / E16 / E17** へ振り直した。番号は**識別子であって順序ではない**（依存は「依存」列が持つ）。
 
 > 🔴 **2026-09-05 追記 — 測定器の欠陥 3 件を PR-E の対象に足す**（#661 / #649 のゲート④ で実測）。
 > **どれも「実装が正しいのにテストが赤／緑になる」型**で、放置すると実装の可否を語れなくなる。
@@ -329,35 +334,86 @@
 
 ### 段 0 — 安全網（PR-E1 → E2 → E3 → E4・PR-O0・PR-L0・PR-O1・PR-R0・PR-P8）
 
+- ✅ **達成（2026-09-07・owner 裁定）。**
 - **結果**: 「既存の譜面が同じ音のまま」が capture の数値で固定され、以降のすべての変更が退行を機械で検出できる。
+- **達成の根拠**: 実機 gated **29 passed / 1 failed**（2026-09-07・束 E-gate マージ後）。唯一の失敗は
+  `steps the live playhead` = **main baseline** で、**新しい失敗はゼロ**。残る 1 件は原因も帰属も
+  特定済みなので、新しい赤と区別がつく = **退行を機械で検出できる**。
 - **確認**: `npm run test:e2e:gated` → golden 4 譜面が緑。`get_log` に `[ERROR]` 増加なし（`<=`）。
-- **閉じる**: #543 (a)(b 台帳 1) / #668 A・C / #650・#630・#624・#640・#684 の該当項目（doc 668 §20）
-  / **#760・#761・#756**（束 `761-gated-measurement`・測定器の 3 件）
-  / **#779・#780**（束 E-gate）/ **#777・#773**（束 E-router）。
-- 🔴 **#775 は段 0 の完了条件から外した**（2026-09-06 夕・owner 裁定・doc 668 §13.5.4）。
-  段 0 の目的「退行を機械で検出できる」は**既に達成されている**（27/29 緑・残る 2 件は原因も
-  帰属も特定済みなので、新しい失敗と区別がつく）。#775 が直すのは**測定のノイズ**であって
-  目的そのものではない。**目的の達成と品質改善を混同していた。**
+- **閉じた**: #668 A・C / **#760・#761・#756**（束 `761-gated-measurement`・測定器の 3 件）
+  / **#779・#780・#785**（束 E-gate・PR [#789](https://github.com/signalcompose/orbitscore/pull/789)・
+  merge commit `900d4532`）。
+- 🔴 **残りは「安全網の残余」へ移した**（次項・**段 2 と並行**・順序の制約なし）。
+  段 0 の*目的*は達成しており、残余は**測定の質を上げる**作業なので、段 2 の着手を止める理由にならない。
+  **#775 を段 0 から外したとき（2026-09-06・doc 668 §13.5.4）と同じ形の裁定**である。
+  🔴 **目的の達成と品質改善を混同しない** — これは 2026-09-06 に一度踏んだ誤りで、
+  同じ判断を残余全体へ広げたのが本項。
 
-### 段 1 — must-fix（PR-O2・PR-D の #645・PR-V の #661・PR-K の #606・PR-S の #385）
+### 安全網の残余 — 段 2 と**並行**（順序の制約は E-router のみ）
 
-- **結果**: 演奏が壊れる 5 件（#649 フェーダー / #645 演奏中 throw / #661 無音 / #606 note-off / #385 trust）が直り、**`global.gain(-6)` が instrument に効く**。
+段 0 の目的は達成済みだが、doc 668 §20 の PR-E 群には未実装が残る。**成果物の実在で確認した**
+（2026-09-07）。段 2 を止めないので、着手順は自由。
+
+| 項目 | 状態（成果物） | 備考 |
+|---|---|---|
+| PR-E1 / E2 / E3 / **E17** | ✅ `tests/e2e/gated-sources.ts` / `tests/e2e/helpers/`（9 本）/ `analyze_audio(per_channel)` / `tests/e2e/dsl-coverage-ledger.ts` | **E17 は旧 PR-E12**（§1.10 の重複解消で改番）|
+| PR-E10 / E13 / E14 | ✅ 束 E-gate（#779 / #785 / #780・PR [#789](https://github.com/signalcompose/orbitscore/pull/789)）| 段 0 の「閉じた」と同じもの |
+| **PR-E4** | **部分**。ラチェット `dsl-e2e-coverage.spec.ts` は在るが、**正本 `dsl-surface.ts` が無い**（`KEYWORDS` は `parser/tokenizer.ts` のまま） | #668-A の残り |
+| **PR-E5** | ❌ `tests/docs/reference-coverage.spec.ts` が無い（`tests/docs/` は `worklog-size` のみ） | #668-C |
+| **PR-E6 / E7** | ❓ 未確認（import / mute・loop・pan の実機 E2E） | #630 / #668-B |
+| **PR-E8** | ❓ `daemon-census.ts` は無い。`helpers/rack-child-pid.ts` が近い役割 | #624 |
+| **PR-E9** | ❌ load average の報告が無い | #640-A |
+| **PR-E16**（root skip） | ❌ `tests/helpers/privileges.ts` が無い | #684。**旧 PR-E11**（改番）|
+| **束 E-router**（`777-line-router`・計画 **PR-E12**） | ❌ #777 / #773 が OPEN | 🔴 **#757 の直前に置く**（#757 の共通化がこの層に乗るため、逆順だと 5 本を直した後にもう一度触る） |
+| 束 E-noise（`775-capture-clock`・計画 **PR-E11**） | #775 OPEN | 🔴 **段 2 の実機で U2 が消えたかを観測してから要否判断**。2026-09-07 の実機では `#611 O0-4` が**2 回とも通った**が、間欠故障なので断定しない |
+
+**issue が OPEN のままなのはこの残余のため**（#543 / #650 / #630 / #624 / #640 / #684）。
+「該当項目」の粒度なので、issue 全体が段 0 の対象だったわけではない。
+
+### 段 1 — must-fix（PR-O2・PR-D の #645・PR-V の #661・PR-K の #606 / ~~PR-S の #385~~ → 所属未定）
+
+- ✅ **完了（2026-09-07 に確認）。** #649 / #645 / #661 / #606 はすべて CLOSED。
+- 🔴 **対象は 3 件へ絞られている**（owner 2026-09-05・#385 のコメント）:
+  「段 1（演奏が壊れる must-fix）の対象は **#649 / #661 / #606 の 3 件**に限定します。
+  本 issue（#385）は段 1 では着手しません」。#645 も同時期に CLOSE 済み。
+- **結果**: 演奏が壊れる件（#649 フェーダー / #645 演奏中 throw / #661 無音 / #606 note-off）が直り、
+  **`global.gain(-6)` が instrument に効く**。
 - **確認**: `start_engine({capture_wav})` → instrument 譜面 → `evaluate_orbitscore('global.gain(-6)')` → 窓 RMS が半減（E2E-1）。`select_audio_device` 後に音が出る（doc 662 の手順）。RUN 終端で音が止まる（doc 634）。
-- **閉じる**: #649 全項目 / #645 / #661 / #606 / #385。
+- **閉じた**: #649 全項目 / #645 / #661 / #606。
+- 🔴 **#385（workspace trust policy）は所属未定**（owner 2026-09-07: 「今後決める」）。
+  `must-fix` ラベルは維持（**演奏は壊れないが、利用者が機能に到達できない**種類）。
+  内容は「フォルダなしの単一ファイル起動だと VS Code が未信頼 workspace を作り、
+  **orbitscore 拡張も Claude Code 拡張も activation されない**（silent）」。
+  ⚠️ **本文の対策 2「`configurationDefaults` で `security.workspace.trust.enabled: false`
+  ＝ VSCodium 系カスタムの定番手法」には出典が無い**（2026-09-07 確認）。同じ段落の前半
+  （`workspaceTrust.ts` の probe）には「根拠:」があるため、**未検証の主張が検証済みの根拠と
+  並んでいて区別がつかない**。`configurationDefaults` でセキュリティ設定を上書きできるかも未確認。
+  所属と対策の当否は**まとめて今後決める**（#793 に記録）。
 
 ### 段 2 — 出口の一般化（PR-O3〜O6）
 
-- 🔴 **着手条件**: **束 E-gate が閉じていること**（#780 が 10 回連続で緑・#779 の漏れが止まっている）。
-  無条件マージゲート（`cargo test -p orbit-effect-rack-child --lib -- --ignored`）が間欠的に落ちる状態だと、
-  **段 2 のどの PR でも毎回「自分の変更のせいか」を切り分けさせる**。慣れると無視されてゲートが死ぬ。
-  **E-router / E-noise は着手条件ではない**（並行可・doc 668 §13.5.4）。
+- ✅ 🔴 **着手条件は満たされた（2026-09-07）。** 束 E-gate が main へ入り
+  （PR [#789](https://github.com/signalcompose/orbitscore/pull/789)・merge commit `900d4532`）、
+  **#780 は 10 回連続で緑**（修正前は並列 5 回で 1 FAIL）、**#779 の漏れも止まった**
+  （`orbit-outproc-*` が 957 → 25 で、gated 全件の前後で増えない）。**着手してよい。**
+  - 条件だった理由: 無条件マージゲート（`cargo test -p orbit-effect-rack-child --lib -- --ignored`）が
+    間欠的に落ちる状態だと、**段 2 のどの PR でも毎回「自分の変更のせいか」を切り分けさせる**。
+    慣れると無視されてゲートが死ぬ。
+  - **安全網の残余（E-router / E4 残 / E5 / E9 / E11）と E-noise は着手条件ではない**（並行可・§3 段 0 の次項）。
+- 🔴 **マージ前ゲートが 3 行になった**（2026-09-07・#789）。`-- --ignored` は **`#[ignore]` を付けた
+  テストしか走らせない**ので、`#[ignore]` していない退行検知テストは**実行されずに緑を装う**
+  （実測 `0 passed; 19 filtered out`）。`--ignored` 無しの行を足してある。CLAUDE.md 参照。
 - 🔴 **既知の失敗は台帳で扱う**: 段 2 の実機では `steps the live playhead`（main baseline）と
   `#611 O0-4`（#775）が出る。**新しい赤だけを見る**。#775 は E-gate の後に消えている可能性があるので、
   **段 2 の実機で観測して必要性を判断する**。
 - **結果**: `kick.output(verb, thru: true, db: -12).output(master)` が書け、master も aux も物理アウトも同じ軸。`send` は dB。`outs:` でマルチアウト。
 - **確認**: E2E-2〜10 の手順を `evaluate_orbitscore` で再現し capture の RMS 比を見る。daemon respawn 後に routing が復元（E2E-10）。
-- **閉じる**: #611 / #409 / #647 / #543 (a) の差分ゼロ確認 /
-  **`docs/design/649-audio-line-design.md` §7.3・§10.1 の改訂**（下記）。
+- **閉じる**: #611 / #409 / #647 / #543 (a) の差分ゼロ確認。
+- ✅ 🔴 **`649-audio-line-design.md` §7.3・§10.1 の改訂は既に済んでいる**（2026-09-07 に本文で確認）。
+  両セクションとも 2026-09-03 の裁定を反映した引用ブロックを持ち、正本を doc 611 へ委ねている
+  （§7.3 → 611 §2.1 / §2.3 の `thru:`、§10.1 → 611 §2.6 / §3.1 / §14 (3) の宛先キー）。
+  **したがって本項はもはや完了条件ではない。**
+  ⚠️ 地図 §6.2 の #649 行は「spec 本文への反映はまだ」と書いているが**それは古い**（同日訂正）。
 - 🔴 **`#649 残り` を外した**（2026-09-06 裁定）。#649 は 2026-09-05 に **CLOSE 済み**
   （PR #754 = PR-O2 のマージと同時刻）で、**閉じた issue を完了条件に残すと後から追えない**。
   実体は次のとおりで、どちらも別の場所に既にある:
@@ -366,8 +422,10 @@
   - **設計文書の改訂**（§7.3「`output` の後ろに音は届かない」にスルー属性を反映 /
     §10.1「`output` は単一」を宛先キーへ）→ 地図 §4.A.1 の帰結 2 が「要る」と書いているが、
     **どの段の完了条件にも載っていなかった**。ここへ移した。
-    🔴 **確定事項の書き換えは owner 裁定で行う**（地図 §6.2）ので、本項は
-    「改訂されたこと」を条件とし、**改訂の中身は裁定を待つ**
+    ✅ **2026-09-07 追記**: 上の「改訂の中身は裁定を待つ」は**古い**。裁定は 2026-09-03 に済み、
+    §7.3 / §10.1 への反映も済んでいる（正本は doc 611）。**この完了条件は既に満たされている。**
+    🔴 この「裁定待ち」の記述を、その後 4 セッションにわたり `/goal` プロンプトが持ち回っていた —
+    **文書を開かずに申し送りだけを転記すると、解消済みの宿題が生き続ける**。
 
 ### 段 3 — ログ → リプレイ（PR-L1a/L1b/L2/L3/L7/L8/L9 → L4/L5/L6）
 
