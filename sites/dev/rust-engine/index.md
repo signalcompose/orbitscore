@@ -676,8 +676,23 @@ atomic に書いた目標値へ、block ごとに寄せていく形です。
 `EngineWrap::set_global_gain` は `MasterLine` の目標値へ atomic store するだけになりました。
 🔴 **2026-09-09 の #611 PR-O3b で 1 段増えています** — `outproc-effect` build では、master line の
 最初の `Gain` op を差し替えて再 publish し（無ければ最初の `Output` の前に挿入し）、**その上で**
-互換固定経路用の atomic にも同じ値を store します。`SetBusLine("master", …)` を一度も送っていない
-セッションでは後者だけが効くので、既存譜面の出力は変わりません。
+互換固定経路用の atomic にも同じ値を store します。
+
+ここで気をつけたいのは、**再 publish に使うハンドルが `explicit_line` を立てる側と同じもの**だという
+点です。`MasterLine::line_program_installer` が返す closure は install に成功すると必ず
+`explicit_line` を `true` にするので（`rust/crates/orbit-audio-native/src/output.rs:790-798`）、
+`SetBusLine("master", …)` を一度も送っていなくても、**`SetGlobalGain`（DSL の `global.gain()`）を
+1 回受けた時点で** master の render は `execute_master_line` 側の分岐へ移ります
+（分岐は `rust/crates/orbit-audio-native/src/output.rs:1719-1721`、`SetGlobalGain` から
+`EngineWrap::set_global_gain` までは `rust/crates/orbit-audio-daemon/src/session.rs:2607-2610`）。
+固定互換経路が使われるのは、`SetGlobalGain` も `SetBusLine` も来ていない間だけ、と読むのが
+コードに忠実です。
+
+> NOTE: unverified — この経路差が出力にどう出るかは実機で測っていません。少なくとも
+> `MasterLine::ramp_frames`（sample_rate から算出）と `LineSlot::new` の既定 `ramp_frames`（240 固定・
+> `rust/crates/orbit-audio-native/src/output.rs:1196`。`set_sample_rate` は insert bus の line にしか
+> 呼ばれない・同 `:2765`）が別物であること、`LineProgram::new` が gain セルを 1.0 から始めるため
+> 再 publish ごとにランプの起点が 1.0 に戻ること（同 `:1005-1020`）は差分から読み取れます。
 
 ```rust
 // rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9260-9294

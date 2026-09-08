@@ -692,8 +692,25 @@ The point worth holding onto is that **production now has exactly one multiplica
 the daemon, and `EngineWrap::set_global_gain` only stores into the `MasterLine` target.
 🔴 **#611 PR-O3b (2026-09-09) added one more step**: on an `outproc-effect` build it also rewrites the
 first `Gain` op of the master line and republishes it (inserting one before the first `Output` when the
-program has none) *before* storing into the compatibility atomic. A session that never sends
-`SetBusLine("master", …)` only ever feels the latter, so existing scores are unchanged.
+program has none) *before* storing into the compatibility atomic.
+
+The thing worth holding onto here is that **the handle used for that republish is the same one that
+raises `explicit_line`**. The closure returned by `MasterLine::line_program_installer` always stores
+`true` into `explicit_line` once the install succeeds
+(`rust/crates/orbit-audio-native/src/output.rs:790-798`), so even in a session that never sends
+`SetBusLine("master", …)`, **one `SetGlobalGain` (the DSL's `global.gain()`) is enough** to move the
+master render onto the `execute_master_line` branch (the branch itself is at
+`rust/crates/orbit-audio-native/src/output.rs:1719-1721`, and the path from `SetGlobalGain` to
+`EngineWrap::set_global_gain` is at `rust/crates/orbit-audio-daemon/src/session.rs:2607-2610`).
+Reading the code literally, the fixed compatibility path applies only while neither `SetGlobalGain`
+nor `SetBusLine` has arrived.
+
+> NOTE: unverified — how that path difference shows up in the output has not been measured on real
+> hardware. What the diff does show is that `MasterLine::ramp_frames` (derived from the sample rate)
+> and the default `ramp_frames` of `LineSlot::new` (a fixed 240 at
+> `rust/crates/orbit-audio-native/src/output.rs:1196`; `set_sample_rate` is only called for insert-bus
+> lines, at `:2765`) are two different values, and that `LineProgram::new` starts every gain cell at
+> 1.0, so each republish restarts the ramp from 1.0 (`:1005-1020`).
 
 ```rust
 // rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9260-9294
