@@ -115,6 +115,7 @@ Issue 単位の実装設計（起案 Fable / 審査 main。**owner 確定事項�
 
 | File | Purpose |
 |---|---|
+| [MACOS_DEV_SETUP.md](../development/MACOS_DEV_SETUP.md) | 🔴 **macOS 開発機のセットアップ** — デベロッパツール登録 + `cargo clean` で `cargo test` が **2,240 秒 → 66 秒**（#816）|
 | [WORK_LOG.md](../development/WORK_LOG.md) | Recent development log（newest first。**every commit must be logged**） |
 | [IMPLEMENTATION_PLAN.md](../development/IMPLEMENTATION_PLAN.md) | Phase-by-phase technical roadmap（audio DSL 移行期の記録・歴史的） |
 | [BEAT_METER_SPECIFICATION.md](../development/BEAT_METER_SPECIFICATION.md) | Beat / meter / polymeter specification |
@@ -239,6 +240,7 @@ CLAUDE.md の「テストの積み上げ規律」「E2E が最重要」「マー
 | [`USER_OUTCOMES_2026-09.md`](../planning/USER_OUTCOMES_2026-09.md) | 各 PR が完了するとユーザーは何ができるか（plan §1 の PR ごとに 1 行・見え方の凡例つき） |
 | [`BUNDLE_BRANCH_WORKFLOW.md`](../development/BUNDLE_BRANCH_WORKFLOW.md) | 束ブランチ運用: 小 PR は統合ブランチへ軽いゲートで、フルレビューと実機検証は束 PR で 1 回（他リポジトリへの導入手順・GitHub stacked PR との違い・参照つき） |
 | [2026-09-03-issue-triage.md](../planning/2026-09-03-issue-triage.md) | issue 棚卸し 164→120 の結果と判断根拠、および 6 つのクラスタ C1〜C6（診断の整合／プラグインの生存管理／daemon 起動の失敗面／時間の粒度／配布／ミキサーの出力側）。ラベル運用は [PROJECT_RULES.md](PROJECT_RULES.md) §1b (#689/#690) |
+| [issue-states.json](../planning/issue-states.json) | 🔴 **生成物・手で編集しない**（2026-09-08・#814）。地図と計画が参照する issue の open/closed スナップショット。`scripts/docs/refresh-issue-states.mjs`（`gh` の認証が要る）が生成し、`tests/docs/planning-issue-state.spec.ts` が突合する。**テストが GitHub API を叩かない**ための固定であって、古いこと自体はテストを赤にしない |
 
 | [2026-09-03-issue-triage.md](../planning/2026-09-03-issue-triage.md) | issue 棚卸し 164→120 とラベル運用の記録（#689）。**地図の入力として現役** |
 
