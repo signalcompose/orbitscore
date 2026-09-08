@@ -713,6 +713,23 @@ rust/crates/orbit-audio-native/src/output.rs:588 :638 :671 :716-745 :808 :829 :8
 
 ## 10. E2E 項目（すべて MCP 経由・`tests/e2e/orbitstudio-mcp-gated.spec.ts`・capture の数値で判定）
 
+> 🔴 **実機で「まだ一度も鳴っていない」もの（2026-09-08・束 O-wire の締めで測定）**
+>
+> 束 O-wire を閉じた時点で、実機 gated が実際に通している op は
+> **{`Rack`, `Output(Master, 1.0)`, `Output(Bus, 1.0)`, `Output(Bus, 0.3)`}** だけである。
+>
+> **実機未検証**: `LineOp::Gain` / `OutputDest::Device` 宛て / **mono マージ（L+R を 0.5）** /
+> **複数 send** / **gain 0 での send 除去**。
+> いずれも cargo の bit 一致 4 トポロジでは覆っているが、**端から端まで通した音では確かめていない**。
+>
+> 🔴 **これは PR-O4（束 O-surface）の E2E で押さえる対象。** 「cargo が緑だから実機も大丈夫」は
+> このリポジトリで繰り返し否定されている（`CLAUDE.md`「E2E が最重要」）。
+>
+> **なぜ実機の許容だけでは足りないか**（同日の設計監査が具体化）: 実機 goldens の意味論許容は
+> **±12%** なので、**`send` 係数 0.3 の誤りは 0.144〜0.456（−52%〜+52%）まで通る**。
+> 出力ゲイン ±1 dB・全体の極性反転・L/R 入れ替え（mono 化されるため）も通る。
+> **±12% は「大きく壊れていないこと」しか言えない。**
+
 | # | シナリオ | 判定（RMS 比・許容 ±10% 目安・式は expectations に）|
 |---|---|---|
 | E2E-0 | バス無し譜面（`kick_loop.orbs`）を 2ch デバイスで | 実装前後の capture が **bit 一致** |
