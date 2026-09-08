@@ -178,6 +178,10 @@ npm run lint             # ESLint + Prettier
 npm run docs:check       # dev 学習サイトの引用 (// file:start-end) を code と突合
 ```
 
+🔴 **macOS で `cargo test --workspace` が 30 分超かかるなら、まず [`docs/development/MACOS_DEV_SETUP.md`](docs/development/MACOS_DEV_SETUP.md) を読むこと。**
+ターミナルを**デベロッパツール**に登録 + **`cargo clean`** で **2,240 秒 → 66 秒**になる（2026-09-08 実測）。
+遅さの 91% は**テストでもビルドでもなく macOS のマルウェアスキャン**である。
+
 **Note**: Use `npm run build:clean` if you encounter TypeScript incremental build issues (e.g., `cli-audio.js` not generated).
 
 ### Technology Stack Summary
