@@ -403,7 +403,7 @@ SIGABRT を見てしまう — そのため `write_line_best_effort` を使う�
 callback 側の状態を引き継ぐためです（`OutputStream::render_state` のコメント参照）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:814-820
+// rust/crates/orbit-audio-native/src/output.rs:833-839
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
@@ -414,7 +414,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1588-1625
+// rust/crates/orbit-audio-native/src/output.rs:1607-1644
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -469,7 +469,7 @@ fn render_shared_block(
 （デバイス配置の段が増えたぶん、2ch 以外では配置のコストが常に乗ります）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1673-1763
+// rust/crates/orbit-audio-native/src/output.rs:1692-1782
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -573,7 +573,7 @@ master.buffer は常に 2ch なので、デバイス幅のバッファをもう 
 というのがこのバッファの理由です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2034-2038
+// rust/crates/orbit-audio-native/src/output.rs:2053-2057
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -614,7 +614,7 @@ pub const ENGINE_CHANNELS: usize = 2;
 `master.buffer` をデバイス幅の `hw` へ写します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1831-1855
+// rust/crates/orbit-audio-native/src/output.rs:1850-1874
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -653,7 +653,7 @@ gain を 1 つの構造体にまとめ、**ラック → gain** の順を固定�
 atomic に書いた目標値へ、block ごとに寄せていく形です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:800-810
+// rust/crates/orbit-audio-native/src/output.rs:819-829
     /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
     /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
     /// 算術のみ（alloc/lock/syscall なし）。
@@ -680,7 +680,7 @@ atomic に書いた目標値へ、block ごとに寄せていく形です。
 セッションでは後者だけが効くので、既存譜面の出力は変わりません。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9260-9294
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9270-9304
     /// マスターゲインを設定する。`outproc-effect` build では master line の最初の gain op を
     /// 差し替えて再 publish し、未 publish の互換固定経路用 atomic にも同じ値を store する。
     /// `orbit_audio_core::Engine::set_global_gain`（core の scheduler ramp）は production から
@@ -727,7 +727,7 @@ engine render 部分の `render_engine_with_sources` は、instrument source（O
 4 通りに分かれます。source も active bus も無ければ、従来の `render_engine` に落ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1859-1900
+// rust/crates/orbit-audio-native/src/output.rs:1878-1919
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -778,7 +778,7 @@ fn render_engine_with_sources_impl(
 避けるため、scratch buffer は 1 秒分をあらかじめ確保しています）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2923-2940
+// rust/crates/orbit-audio-native/src/output.rs:2942-2959
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

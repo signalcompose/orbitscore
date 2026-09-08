@@ -336,7 +336,7 @@ later stage and `BusKind::Sum`", "a send target must be a later stage and `BusKi
 "if even one check fails, nothing is applied".
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6725-6745
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6735-6755
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -369,7 +369,7 @@ Since #611 PR-O3a, this function **publishes one line program** after validation
 matters too.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6771-6786
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6781-6796
         // 3. Every compatibility handle is resolved before the one program publication, so a
         // missing slot cannot leave only part of the requested routing applied.
         let routing_handle = if resolved_output.is_some() {
@@ -406,7 +406,7 @@ place is the second half of `render_engine_with_insert_buses_and_source_outputs`
 `output.rs`, the so-called **post-loop**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2229-2255
+// rust/crates/orbit-audio-native/src/output.rs:2248-2274
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -466,7 +466,7 @@ place", it now "executes a per-stage sequence of operations from the top". The o
 these three.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:953-978
+// rust/crates/orbit-audio-native/src/output.rs:972-997
 /// A resolved output destination for one line operation. Bus and channel names are converted to
 /// stable indices on the control thread before a program is published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -506,7 +506,7 @@ before they reach RT.
 The execution of an output looks like this.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2268-2292
+// rust/crates/orbit-audio-native/src/output.rs:2287-2311
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
                         &mut first_output,
@@ -538,7 +538,7 @@ The execution of an output looks like this.
 by RT in this bundle. `Pan` / `Render` / `Link` are **rejected at install time**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1294-1302
+// rust/crates/orbit-audio-native/src/output.rs:1313-1321
     for op in &program.ops {
         match op {
             // These arms are availability gates, not permanent format restrictions. Remove the
@@ -562,7 +562,7 @@ devices are in place to preserve the semantics of the old API.
 The first is `effective_line_output_dest`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1340-1351
+// rust/crates/orbit-audio-native/src/output.rs:1359-1370
 fn effective_line_output_dest(
     first_output: &mut bool,
     legacy_target: Option<OutputDest>,
@@ -594,7 +594,7 @@ replacement becomes a question. `LineExchange`'s answer is "RT does one Acquire 
 belongs to control".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1092-1097
+// rust/crates/orbit-audio-native/src/output.rs:1111-1116
 struct LineExchange {
     live: AtomicPtr<LineProgram>,
     retired: Mutex<Vec<RetiredLineProgram>>,
@@ -613,7 +613,7 @@ What is interesting here is that the **marking pass (computing `render_targets`)
 share the same pointer snapshot**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2157-2174
+// rust/crates/orbit-audio-native/src/output.rs:2176-2193
         // SAFETY: the line generation is not completed until after execution below. Control keeps
         // any replaced box retired for two later completed generations.
         let program = unsafe { &*programs[i] };
@@ -657,7 +657,7 @@ native) does not know what an instrument is; it holds only the abstraction "some
 back N blocks when rendered".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:829-842
+// rust/crates/orbit-audio-native/src/output.rs:848-861
 /// A callback-owned source which renders one or more interleaved output units.
 pub trait BlockSource: Send {
     fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
@@ -683,7 +683,7 @@ Feed collection is done by `collect_source_feeds` (`output.rs:772-801`), which m
 `SourceDest` to the core's `FeedDest`. Only the mapping is quoted here.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1969-1979
+// rust/crates/orbit-audio-native/src/output.rs:1988-1998
             let dest = match slot.dests[unit].load() {
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
@@ -998,7 +998,7 @@ commutes, so either order yields the same value). The invariant is therefore unm
 a DSL-level E2E, and the sole guard is a unit test whose rack stub **generates** sound.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:4731-4736
+// rust/crates/orbit-audio-native/src/output.rs:4750-4755
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(

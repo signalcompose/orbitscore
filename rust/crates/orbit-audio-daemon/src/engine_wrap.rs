@@ -6496,7 +6496,50 @@ impl EngineWrap {
         Ok(())
     }
 
+    /// wire の 1 始まりチャンネル対を RT の 0 始まり `OutputDest::Device` へ写す。
+    /// **master line と named bus で扱いが同一**なので 1 箇所に置く（§4.1 の `dest.device`）。
+    #[cfg(feature = "outproc-effect")]
+    fn device_dest_from_wire(left: usize, right: usize) -> Result<OutputDest, WrapError> {
+        let one_based =
+            || WrapError::OutProcEffectRequest("SetBusLine device channels are 1-based".into());
+        Ok(OutputDest::Device {
+            left: left.checked_sub(1).ok_or_else(one_based)?,
+            right: Some(right.checked_sub(1).ok_or_else(one_based)?),
+        })
+    }
+
+    /// `dest.render` は登記簿（`DeclareRender`・PR-R2）が無いので今日はすべて未登録。
+    /// 🔴 これは §4.1 の規則を**今日の状態に当てはめた結果**であって、規則の変更ではない。
+    /// 登記簿が入ったら、ここと `output.rs` の `validate_line_program` の両方から外す。
+    #[cfg(feature = "outproc-effect")]
+    fn render_dest_rejected(id: &str) -> WrapError {
+        WrapError::OutProcEffectRequest(format!(
+            "SetBusLine render destination '{id}' is not registered"
+        ))
+    }
+
+    /// `dest.link` は **`link-audio` feature の有無にかかわらず**今日は受理しない。
+    /// 🔴 理由は feature ではなく **RT が Link 出口をまだ実行できない**こと
+    /// （`output.rs` の `validate_line_program` が同じ理由で拒否しており、**そちらが一次情報**）。
+    /// wire code は §4.1 の指定どおり `LINK_AUDIO_UNAVAILABLE`。RT へ配線されたら、
+    /// そこで初めて「feature 有効 + 登録済み channel なら受理」へ広げる。
+    #[cfg(feature = "outproc-effect")]
+    fn link_dest_rejected(channel: &str) -> WrapError {
+        WrapError::LinkAudioUnavailable(format!(
+            "SetBusLine link destination '{channel}' is not wired into RT execution yet"
+        ))
+    }
+
     /// §4.1 の complete line を検証・解決して LineSlot へ一度だけ publish する。
+    ///
+    /// 🔴 **入力は `session.rs` の `parse_set_bus_line_params` が先に検証済み**（wire の形・`rack` の
+    /// 重複・`gain` の範囲・master の自己参照）。ここでの再検証は **`pub fn` としての防御**であり、
+    /// production の経路では到達しない（呼び出し元は `session.rs` の dispatch 1 箇所のみ）。
+    ///
+    /// ⚠️ **`gain` の条件が session 側と違って見えるのは型が違うから**で、乖離ではない。
+    /// session は JSON の **f64** を受けるので `> f32::MAX` を弾いてから `as f32` する必要がある
+    /// （変換で `inf` になるのを防ぐ）。こちらは既に **f32** なので `is_finite()` が `inf` を弾き、
+    /// 有限な f32 は定義上 `f32::MAX` 以下である。**同じ規則を型に合わせて書いた形**。
     #[cfg(feature = "outproc-effect")]
     pub fn set_bus_line(&self, bus: &str, wire_ops: &[BusLineOp]) -> Result<(), WrapError> {
         let mut rack_seen = false;
@@ -6533,21 +6576,11 @@ impl EngineWrap {
                         thru,
                         gain,
                     } => LineOp::Output(LineOutput {
-                        dest: OutputDest::Device {
-                            left: left.checked_sub(1).ok_or_else(|| {
-                                WrapError::OutProcEffectRequest(
-                                    "SetBusLine device channels are 1-based".into(),
-                                )
-                            })?,
-                            right: Some(right.checked_sub(1).ok_or_else(|| {
-                                WrapError::OutProcEffectRequest(
-                                    "SetBusLine device channels are 1-based".into(),
-                                )
-                            })?),
-                        },
+                        dest: Self::device_dest_from_wire(*left, *right)?,
                         thru: *thru,
                         gain: *gain,
                     }),
+                    // master line の出口は device のみ（§4.1 の自己参照禁止）。
                     BusLineOp::Output {
                         dest: BusLineDest::Master | BusLineDest::Bus(_),
                         ..
@@ -6559,19 +6592,11 @@ impl EngineWrap {
                     BusLineOp::Output {
                         dest: BusLineDest::Render(id),
                         ..
-                    } => {
-                        return Err(WrapError::OutProcEffectRequest(format!(
-                            "SetBusLine render destination '{id}' is not registered"
-                        )));
-                    }
+                    } => return Err(Self::render_dest_rejected(id)),
                     BusLineOp::Output {
                         dest: BusLineDest::Link(channel),
                         ..
-                    } => {
-                        return Err(WrapError::LinkAudioUnavailable(format!(
-                            "SetBusLine link destination '{channel}' requires link-audio"
-                        )));
-                    }
+                    } => return Err(Self::link_dest_rejected(channel)),
                 });
             }
             let mut shadow = self.master_line_program.lock().map_err(|_| {
@@ -6629,27 +6654,12 @@ impl EngineWrap {
                             referenced_buses.push(name.as_str());
                             OutputDest::Bus(target)
                         }
-                        BusLineDest::Device { left, right } => OutputDest::Device {
-                            left: left.checked_sub(1).ok_or_else(|| {
-                                WrapError::OutProcEffectRequest(
-                                    "SetBusLine device channels are 1-based".into(),
-                                )
-                            })?,
-                            right: Some(right.checked_sub(1).ok_or_else(|| {
-                                WrapError::OutProcEffectRequest(
-                                    "SetBusLine device channels are 1-based".into(),
-                                )
-                            })?),
-                        },
-                        BusLineDest::Render(id) => {
-                            return Err(WrapError::OutProcEffectRequest(format!(
-                                "SetBusLine render destination '{id}' is not registered"
-                            )));
+                        BusLineDest::Device { left, right } => {
+                            Self::device_dest_from_wire(*left, *right)?
                         }
+                        BusLineDest::Render(id) => return Err(Self::render_dest_rejected(id)),
                         BusLineDest::Link(channel) => {
-                            return Err(WrapError::LinkAudioUnavailable(format!(
-                                "SetBusLine link destination '{channel}' requires link-audio"
-                            )));
+                            return Err(Self::link_dest_rejected(channel))
                         }
                     };
                     LineOp::Output(LineOutput {

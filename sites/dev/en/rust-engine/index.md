@@ -417,7 +417,7 @@ the callback body was a single function, `render_block`; as of 2026-09-01 it has
 `OutputStream::render_state`).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:814-820
+// rust/crates/orbit-audio-native/src/output.rs:833-839
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
@@ -428,7 +428,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1588-1625
+// rust/crates/orbit-audio-native/src/output.rs:1607-1644
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -484,7 +484,7 @@ device"** — with the placement stage added, anything other than 2ch always pay
 placement.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1673-1763
+// rust/crates/orbit-audio-native/src/output.rs:1692-1782
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -588,7 +588,7 @@ a second buffer at device width there would be nowhere for it to land — that i
 buffer exists.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2034-2038
+// rust/crates/orbit-audio-native/src/output.rs:2053-2057
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -629,7 +629,7 @@ The device width appears in exactly one place: `place_master_into_device`, which
 `master.buffer` onto the device-width `hw`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1831-1855
+// rust/crates/orbit-audio-native/src/output.rs:1850-1874
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -668,7 +668,7 @@ old `post`) and the gain into one struct and fixes the order as **rack → gain*
 toward the target the control side (`SetGlobalGain`) wrote atomically, one block at a time.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:800-810
+// rust/crates/orbit-audio-native/src/output.rs:819-829
     /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
     /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
     /// 算術のみ（alloc/lock/syscall なし）。
@@ -696,7 +696,7 @@ program has none) *before* storing into the compatibility atomic. A session that
 `SetBusLine("master", …)` only ever feels the latter, so existing scores are unchanged.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9260-9294
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9270-9304
     /// マスターゲインを設定する。`outproc-effect` build では master line の最初の gain op を
     /// 差し替えて再 publish し、未 publish の互換固定経路用 atomic にも同じ値を store する。
     /// `orbit_audio_core::Engine::set_global_gain`（core の scheduler ramp）は production から
@@ -744,7 +744,7 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1859-1900
+// rust/crates/orbit-audio-native/src/output.rs:1878-1919
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -795,7 +795,7 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2923-2940
+// rust/crates/orbit-audio-native/src/output.rs:2942-2959
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

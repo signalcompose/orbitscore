@@ -924,7 +924,7 @@ identical slots plus `instance_index` (an indirection from name to slot)**. The 
 comment states the mechanism in one line.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6997-7009
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7007-7019
     /// #618: instrument plugin を目標 spec へ収束させる ensure 操作。
     ///
     /// 未割当/Empty は通常 load、同一 Active は no-op、異 spec Active は spare へ prepare して

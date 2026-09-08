@@ -738,7 +738,26 @@ pub struct MasterLine {
     ramp_frames: u32,
     /// `SetBusLine("master", ...)` が publish する汎用 program。未 publish の間は固定互換経路を
     /// 実行し、既存譜面の bit-level 出力を保つ。
+    ///
+    /// 🔴 **ここに書いてある既定 program は RT では一度も実行されない。** `explicit_line` が
+    /// `false` の間は `render_block_with_sources` が固定互換経路の側へ分岐し、`true` になるのは
+    /// control が program を publish した後だからである（publish された時点で中身は control 側の
+    /// 値に置き換わっている）。`engine_wrap.rs` の `default_master_line_program` が
+    /// `output_channels` を見て `right` を出し分けるのに対しここが `Some(1)` 固定なのは、
+    /// **この値が使われないため**であって不整合ではない。
     line: LineSlot,
+    /// control が master program を **一度でも publish したか**（不可逆）。`line` の中身からは
+    /// 導出できない（RT で既定値と深い比較をすることになり、かつ「既定と同じ program を明示的に
+    /// publish した」場合を区別できない）。
+    ///
+    /// 🔴 **`SetBusLine("master", …)` だけでなく `SetGlobalGain` でも `true` になる**
+    /// （`engine_wrap.rs` の `set_global_gain` が `outproc-effect` build では master line へ
+    /// 再 publish するため）。名前は「明示的な line が入ったか」の意。
+    ///
+    /// 🔴 **いつこの分岐を消せるか**: PR-O4 で TS が `SetBusLine` / `global.gain()` 経由の
+    /// 呼び出しへ切り替わり、**その新表面が実機で確かめられ**、PR-O6 で旧 `SetBusRouting` 系が
+    /// 撤去され、O0 golden が新経路の値で取り直された後。そこで固定互換経路と本フラグを
+    /// 同時に削り、`execute_master_line` の 1 本にできる。
     explicit_line: Arc<AtomicBool>,
 }
 
