@@ -24,9 +24,13 @@ import type { ChildProcess } from 'child_process'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 import { DeviceSwitchBridge } from '../../packages/vscode-extension/src/device-switch-bridge'
+import { EngineStateBridge } from '../../packages/vscode-extension/src/engine-state-bridge'
 import * as engineLifecycle from '../../packages/vscode-extension/src/engine-lifecycle'
+import { EvalMarkBridge } from '../../packages/vscode-extension/src/eval-mark-bridge'
 import * as ext from '../../packages/vscode-extension/src/extension'
 import * as pluginCatalogReader from '../../packages/vscode-extension/src/plugin-catalog-reader'
+import { PluginStateBridge } from '../../packages/vscode-extension/src/plugin-state-bridge'
+import { PluginUiBridge } from '../../packages/vscode-extension/src/plugin-ui-bridge'
 // Resolves to the SAME module instance `extension.ts`'s `import * as vscode
 // from 'vscode'` gets via the root vitest.config.ts alias — pushing into
 // `vscodeMock.window.visibleTextEditors` is observed by extension.ts's own
@@ -65,10 +69,12 @@ vi.mock('../../packages/vscode-extension/src/plugin-catalog-reader', async (impo
 interface FakeChildProcess {
   proc: ChildProcess
   fireExit: (code: number | null) => void
-  fireStdoutData: (chunk: string) => void
+  fireStdoutData: (chunk: string | Buffer) => void
   fireStderrData: (chunk: string) => void
   fireStdoutError: (err: Error) => void
   fireStderrError: (err: Error) => void
+  /** stdout `end`: flushes a final line that has no trailing newline (#773). */
+  fireStdoutEnd: () => void
   /** stderr の `end`。#756 の flush（改行で終わらない最後の行）を駆動する。 */
   fireStderrEnd: () => void
   fireStdinError: (err: Error) => void
@@ -81,6 +87,7 @@ function fakeChildProcess(): FakeChildProcess {
   const stderrListeners: Array<(data: Buffer) => void> = []
   const stdoutErrorListeners: Array<(err: Error) => void> = []
   const stderrErrorListeners: Array<(err: Error) => void> = []
+  const stdoutEndListeners: Array<() => void> = []
   const stderrEndListeners: Array<() => void> = []
   const stdinErrorListeners: Array<(err: Error) => void> = []
   const errorListeners: Array<(err: Error) => void> = []
@@ -95,6 +102,7 @@ function fakeChildProcess(): FakeChildProcess {
       on: (event: string, cb: (...args: unknown[]) => void) => {
         if (event === 'data') stdoutListeners.push(cb as (data: Buffer) => void)
         if (event === 'error') stdoutErrorListeners.push(cb as (err: Error) => void)
+        if (event === 'end') stdoutEndListeners.push(cb as () => void)
       },
     } as unknown as ChildProcess['stdout'],
     stderr: {
@@ -114,10 +122,12 @@ function fakeChildProcess(): FakeChildProcess {
   return {
     proc: proc as ChildProcess,
     fireExit: (code) => exitListeners.forEach((cb) => cb(code)),
-    fireStdoutData: (chunk) => stdoutListeners.forEach((cb) => cb(Buffer.from(chunk))),
+    fireStdoutData: (chunk) =>
+      stdoutListeners.forEach((cb) => cb(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)),
     fireStderrData: (chunk) => stderrListeners.forEach((cb) => cb(Buffer.from(chunk))),
     fireStdoutError: (err) => stdoutErrorListeners.forEach((cb) => cb(err)),
     fireStderrError: (err) => stderrErrorListeners.forEach((cb) => cb(err)),
+    fireStdoutEnd: () => stdoutEndListeners.forEach((cb) => cb()),
     fireStderrEnd: () => stderrEndListeners.forEach((cb) => cb()),
     fireStdinError: (err) => stdinErrorListeners.forEach((cb) => cb(err)),
     fireError: (err) => errorListeners.forEach((cb) => cb(err)),
@@ -144,6 +154,253 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
   })
 
   describe('setupStdoutHandler', () => {
+    const bridgeCases = [
+      {
+        name: 'savePluginState',
+        prototype: PluginStateBridge.prototype,
+        line: JSON.stringify({
+          savePluginState: { requestId: 'state-split', ok: true, saved: { bytes: 2 } },
+        }),
+      },
+      {
+        name: 'pluginUi',
+        prototype: PluginUiBridge.prototype,
+        line: JSON.stringify({
+          pluginUi: {
+            requestId: 'ui-split',
+            action: 'open',
+            ok: true,
+            result: { receiver: 'lead' },
+          },
+        }),
+      },
+      {
+        name: 'evalMark',
+        prototype: EvalMarkBridge.prototype,
+        line: JSON.stringify({
+          evalMark: { requestId: 'eval-split', ok: true, diagnostics: [] },
+        }),
+      },
+      {
+        name: 'engineState',
+        prototype: EngineStateBridge.prototype,
+        line: JSON.stringify({
+          engineState: { requestId: 'engine-split', ok: true, output: {}, callback: {} },
+        }),
+      },
+    ] satisfies Array<{
+      name: string
+      prototype: { handleLine(line: string): boolean }
+      line: string
+    }>
+
+    it.each(bridgeCases)(
+      'buffers a $name envelope split across chunks and dispatches the complete line exactly once',
+      ({ prototype, line }) => {
+        const { proc, fireStdoutData } = fakeChildProcess()
+        const appendedLines: string[] = []
+        ext.__setEngineProcessForTest(proc)
+        ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+        ext.__setOutputChannelForTest({
+          appendLine: (value: string) => appendedLines.push(value),
+          append: () => {},
+        })
+        const handleLine = vi.spyOn(prototype, 'handleLine')
+
+        try {
+          ext.setupStdoutHandler(proc, false)
+          const splitAt = line.indexOf('requestId') + 5
+          fireStdoutData(line.slice(0, splitAt))
+          fireStdoutData(line.slice(splitAt) + '\n')
+
+          expect(handleLine).toHaveBeenCalledTimes(1)
+          expect(handleLine).toHaveBeenNthCalledWith(1, line)
+          expect(appendedLines.filter((entry) => entry.includes('malformed'))).toHaveLength(0)
+        } finally {
+          handleLine.mockRestore()
+        }
+      },
+    )
+
+    it('decodes an evalMark envelope split inside a UTF-8 character and dispatches it once', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => appendedLines.push(value),
+        append: () => {},
+      })
+      const handleLine = vi.spyOn(EvalMarkBridge.prototype, 'handleLine')
+      const envelope = JSON.stringify({
+        evalMark: {
+          requestId: 'eval-utf8-split',
+          ok: true,
+          diagnostics: [{ kind: 'parse', message: '日本語の診断' }],
+        },
+      })
+      const bytes = Buffer.from(`${envelope}\n`)
+      const characterStart = bytes.indexOf(Buffer.from('日'))
+      expect(characterStart).toBeGreaterThanOrEqual(0)
+
+      try {
+        ext.setupStdoutHandler(proc, false)
+        fireStdoutData(bytes.subarray(0, characterStart + 1))
+        fireStdoutData(bytes.subarray(characterStart + 1))
+
+        expect(handleLine).toHaveBeenCalledTimes(1)
+        expect(handleLine).toHaveBeenNthCalledWith(1, envelope)
+        expect(appendedLines.filter((entry) => entry.includes('malformed'))).toHaveLength(0)
+      } finally {
+        handleLine.mockRestore()
+      }
+    })
+
+    it('dispatches complete envelopes immediately while carrying only the trailing partial line', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => appendedLines.push(value),
+        append: () => {},
+      })
+      const handleLine = vi.spyOn(EvalMarkBridge.prototype, 'handleLine')
+      const envelopes = ['multi-1', 'multi-2', 'multi-3'].map((requestId) =>
+        JSON.stringify({ evalMark: { requestId, ok: true, diagnostics: [] } }),
+      )
+      const splitAt = envelopes[2]!.indexOf('requestId') + 7
+
+      try {
+        ext.setupStdoutHandler(proc, false)
+        fireStdoutData(`${envelopes[0]}\n${envelopes[1]}\n${envelopes[2]!.slice(0, splitAt)}`)
+
+        expect(handleLine).toHaveBeenCalledTimes(2)
+        expect(handleLine).toHaveBeenNthCalledWith(1, envelopes[0])
+        expect(handleLine).toHaveBeenNthCalledWith(2, envelopes[1])
+
+        fireStdoutData(envelopes[2]!.slice(splitAt) + '\n')
+
+        expect(handleLine).toHaveBeenCalledTimes(3)
+        expect(handleLine).toHaveBeenNthCalledWith(3, envelopes[2])
+        expect(appendedLines.filter((entry) => entry.includes('malformed'))).toHaveLength(0)
+      } finally {
+        handleLine.mockRestore()
+      }
+    })
+
+    it('flushes a final bridge envelope exactly once on stdout end when no newline was received', () => {
+      const { proc, fireStdoutData, fireStdoutEnd } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => appendedLines.push(value),
+        append: () => {},
+      })
+      const handleLine = vi.spyOn(EvalMarkBridge.prototype, 'handleLine')
+      const envelope = JSON.stringify({
+        evalMark: { requestId: 'flush-final', ok: true, diagnostics: [] },
+      })
+
+      try {
+        ext.setupStdoutHandler(proc, false)
+        fireStdoutData(envelope)
+
+        expect(handleLine).toHaveBeenCalledTimes(0)
+
+        fireStdoutEnd()
+
+        expect(handleLine).toHaveBeenCalledTimes(1)
+        expect(handleLine).toHaveBeenNthCalledWith(1, envelope)
+        expect(appendedLines.filter((entry) => entry.includes('malformed'))).toHaveLength(0)
+      } finally {
+        handleLine.mockRestore()
+      }
+    })
+
+    it('keeps bridge partial lines isolated per engine process', () => {
+      const first = fakeChildProcess()
+      const second = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => appendedLines.push(value),
+        append: () => {},
+      })
+      const handleLine = vi.spyOn(EvalMarkBridge.prototype, 'handleLine')
+      const firstEnvelope = JSON.stringify({
+        evalMark: { requestId: 'first-process', ok: true, diagnostics: [] },
+      })
+      const secondEnvelope = JSON.stringify({
+        evalMark: { requestId: 'second-process', ok: true, diagnostics: [] },
+      })
+      const splitAt = firstEnvelope.indexOf('requestId') + 4
+
+      try {
+        ext.setupStdoutHandler(first.proc, false)
+        ext.setupStdoutHandler(second.proc, false)
+
+        ext.__setEngineProcessForTest(first.proc)
+        first.fireStdoutData(firstEnvelope.slice(0, splitAt))
+
+        ext.__setEngineProcessForTest(second.proc)
+        second.fireStdoutData(secondEnvelope + '\n')
+
+        expect(handleLine).toHaveBeenCalledTimes(1)
+        expect(handleLine).toHaveBeenNthCalledWith(1, secondEnvelope)
+
+        ext.__setEngineProcessForTest(first.proc)
+        first.fireStdoutData(firstEnvelope.slice(splitAt) + '\n')
+
+        expect(handleLine).toHaveBeenCalledTimes(2)
+        expect(handleLine).toHaveBeenNthCalledWith(2, firstEnvelope)
+        expect(appendedLines.filter((entry) => entry.includes('malformed'))).toHaveLength(0)
+      } finally {
+        handleLine.mockRestore()
+      }
+    })
+
+    it('keeps non-debug log transcription immediate and unchanged for split chunks', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      const appended: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: () => {},
+        append: (value: string) => appended.push(value),
+      })
+
+      ext.setupStdoutHandler(proc, false)
+      fireStdoutData('visible partial')
+
+      expect(appended).toEqual(['visible partial\n'])
+
+      fireStdoutData(' rest\n\nvisible complete\n')
+
+      expect(appended).toEqual(['visible partial\n', ' rest\nvisible complete\n'])
+    })
+
+    it('keeps debug log transcription immediate and byte-for-byte identical, including blank lines', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      const appended: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: () => {},
+        append: (value: string) => appended.push(value),
+      })
+
+      ext.setupStdoutHandler(proc, true)
+      fireStdoutData('debug partial')
+
+      expect(appended).toEqual(['debug partial'])
+
+      fireStdoutData(' rest\n\ndebug complete\n')
+
+      expect(appended).toEqual(['debug partial', ' rest\n\ndebug complete\n'])
+    })
+
     it('routes stdout stream errors through logHandlerFailure', () => {
       const { proc, fireStdoutError } = fakeChildProcess()
       const appendedLines: string[] = []

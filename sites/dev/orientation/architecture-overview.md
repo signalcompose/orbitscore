@@ -103,7 +103,7 @@ graph TD
 engine の起動は `startEngine()` が担います。最初にやるのは「どのバックエンドを使うか」の決定で、`orbitscore.engine` 設定を engine 側の `resolveEngineKind` (compiled JS を runtime require) で正規化します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2128-2131
+// packages/vscode-extension/src/extension.ts:2151-2154
   // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
   // 'rust' (default since cutover #369), skip the scsynth pre-check entirely —
   // the native daemon doesn't need scsynth to be resolvable.
@@ -113,7 +113,7 @@ engine の起動は `startEngine()` が担います。最初にやるのは「�
 ここで気をつけたいのは、**engine を spawn する前にバックエンドのバイナリ解決を先行させる** という点です。既定の `rust` kind では daemon バイナリを pre-check します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2153-2162
+// packages/vscode-extension/src/extension.ts:2176-2185
     const daemonResolution = resolveDaemonForUI()
     if (!daemonResolution) {
       outputChannel?.appendLine(
@@ -146,7 +146,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 バックエンドの種別は `ORBITSCORE_ENGINE` env で **必ず明示的に** engine に伝えます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2217-2230
+// packages/vscode-extension/src/extension.ts:2240-2253
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
@@ -166,7 +166,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 そして engine プロセス本体は `child_process.spawn` で Node.js を起動します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2232-2238
+// packages/vscode-extension/src/extension.ts:2255-2261
   // Spawn engine process
   try {
     engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -179,7 +179,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3124-3125
+// packages/vscode-extension/src/extension.ts:3147-3148
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -207,7 +207,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 起動条件は `activate()` の中にあります。env が設定より優先されるのは、Extension Development Host を CLI から立ち上げるときに設定ファイルを触らずに済ませるためです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:454-459
+// packages/vscode-extension/src/extension.ts:455-460
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0
@@ -501,7 +501,7 @@ daemon 本体だけでなく、後述の plugin child と標準プラグイン `
 daemon はプラグイン (CLAP / VST3) の実体を自分のプロセスに載せません。effect と instrument はそれぞれ別のバイナリを **out-of-process (OOP)** の子プロセスとして spawn し、共有メモリで音声をやり取りします。spawn され得る child の一覧は daemon crate の定数として 1 箇所に明示されています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:86-95
+// rust/crates/orbit-audio-daemon/src/lib.rs:88-97
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",

@@ -21,6 +21,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
+#[cfg(feature = "outproc-effect")]
+use orbit_audio_native::{decode_bus_routing_sentinel, BusSend, BusTarget, LegacyLineInstaller};
 use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputDeviceRequest, OutputError, OutputFault,
     OutputStream, ResampleError, StreamStats, StreamStatsSnapshot,
@@ -1742,6 +1744,11 @@ pub struct EngineWrap {
     /// 本番 `start()` で `Some`、test backend 経路では `None`（`clap` / `link` と同設計）。
     #[cfg(feature = "outproc-effect")]
     outproc: Mutex<Option<OutProcControl>>,
+    /// Generic line-program publication handles for named buses. Kept outside `OutProcControl` so
+    /// the compatibility state there remains the old atomics while `SetBusRouting` is translated
+    /// into one full program install.
+    #[cfg(feature = "outproc-effect")]
+    bus_lines: Mutex<HashMap<String, LegacyLineInstaller>>,
     /// out-of-process instrument の note-ring producer（control side）。
     #[cfg(feature = "outproc-instrument")]
     outproc_instrument: Mutex<Option<OutProcInstrumentControl>>,
@@ -2149,6 +2156,13 @@ struct EffectBusBuild {
     send_gain_overrides: Vec<Arc<AtomicU32>>,
 }
 
+#[cfg(feature = "outproc-effect")]
+type EffectBusStagesBuild = (
+    Vec<orbit_audio_native::InsertBusStage>,
+    Vec<EffectBusBuild>,
+    HashMap<String, LegacyLineInstaller>,
+);
+
 /// `ORBIT_EFFECT_BUSES`/`ORBIT_EFFECT_BUS_POOL`（insert）+ `ORBIT_SUM_BUS_POOL`（sum）+
 /// `ORBIT_AUX_BUS_POOL`（aux）の bus 名から、render 側の `InsertBusStage` 群と daemon 側の部材
 /// （`EffectBusBuild`）を構築する。**stage 配列の並びは `[insert…, sum…, aux…]` に固定**する
@@ -2157,8 +2171,7 @@ struct EffectBusBuild {
 /// で activate される。sum/aux stage も同じ `OutProcEffectPostProcessor` 機構（PH.2b）で
 /// 自前の insert chain を持てる（M2 で明示解禁）。
 #[cfg(feature = "outproc-effect")]
-fn build_effect_bus_stages(
-) -> Result<(Vec<orbit_audio_native::InsertBusStage>, Vec<EffectBusBuild>), WrapError> {
+fn build_effect_bus_stages() -> Result<EffectBusStagesBuild, WrapError> {
     use crate::outproc_effect::{
         OutProcEffectPostProcessor, OutProcEffectPostProcessorParts, OutProcEffectStats,
     };
@@ -2183,6 +2196,7 @@ fn build_effect_bus_stages(
 
     let mut builds = Vec::with_capacity(total);
     let mut insert_buses = Vec::with_capacity(total);
+    let mut bus_lines = HashMap::with_capacity(total);
     for (index, (name, kind)) in named.into_iter().enumerate() {
         let shm_path = crate::outproc_effect::unique_shm_path();
         let host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(
@@ -2201,23 +2215,22 @@ fn build_effect_bus_stages(
         let send_gain_overrides: Vec<Arc<AtomicU32>> = (0..(total - index - 1))
             .map(|_| Arc::new(AtomicU32::new(0)))
             .collect();
-        insert_buses.push(
-            orbit_audio_native::InsertBusStage::with_activation(
-                name.clone(),
-                Some(Box::new(OutProcEffectPostProcessor::new(
-                    OutProcEffectPostProcessorParts {
-                        host,
-                        engaged: engaged.clone(),
-                        teardown_requested: stop.clone(),
-                        teardown_done: done.clone(),
-                        stats: stats.clone(),
-                    },
-                ))),
-                0,
-                active.clone(),
-            )
-            .with_routing_overrides(routing_override.clone(), send_gain_overrides.clone()),
+        let stage = orbit_audio_native::InsertBusStage::with_activation(
+            name.clone(),
+            Some(Box::new(OutProcEffectPostProcessor::new(
+                OutProcEffectPostProcessorParts {
+                    host,
+                    engaged: engaged.clone(),
+                    teardown_requested: stop.clone(),
+                    teardown_done: done.clone(),
+                    stats: stats.clone(),
+                },
+            ))),
+            0,
+            active.clone(),
         );
+        bus_lines.insert(name.clone(), stage.legacy_line_installer());
+        insert_buses.push(stage);
         builds.push(EffectBusBuild {
             name,
             kind,
@@ -2231,7 +2244,7 @@ fn build_effect_bus_stages(
             send_gain_overrides,
         });
     }
-    Ok((insert_buses, builds))
+    Ok((insert_buses, builds, bus_lines))
 }
 
 /// bus 部材を ChildSlot / 観測 map / routing map / StreamGuard 用 guard 群へ展開する（stream 起動後・
@@ -2728,6 +2741,11 @@ mod set_bus_routing_tests {
             bus_sends,
             replacements_in_flight: HashSet::new(),
         });
+        let mut bus_lines = wrap.bus_lines.lock().expect("lock bus lines for injection");
+        for name in ["seq-bus-0", "sum-bus-0", "aux-bus-0"] {
+            bus_lines.insert(name.to_owned(), Arc::new(|_, _, _, _| Ok(())));
+        }
+        drop(bus_lines);
         wrap
     }
 
@@ -2762,6 +2780,47 @@ mod set_bus_routing_tests {
             .get("seq-bus-0")
             .unwrap();
         assert_eq!(routing.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn set_bus_routing_publishes_one_complete_legacy_line_program_per_partial_update() {
+        let wrap = wrap_with_three_stage_topology();
+        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = calls.clone();
+        wrap.bus_lines.lock().unwrap().insert(
+            "seq-bus-0".to_owned(),
+            Arc::new(move |target, sends, bus_index, bus_count| {
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push((target, sends, bus_index, bus_count));
+                Ok(())
+            }),
+        );
+
+        wrap.set_bus_routing(
+            "seq-bus-0",
+            Some("sum-bus-0"),
+            &[("aux-bus-0".to_owned(), 0.375)],
+        )
+        .expect("legacy routing must publish a line program");
+        wrap.set_bus_routing("seq-bus-0", Some("master"), &[])
+            .expect("output-only update must retain the existing send");
+
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        let (target, sends, bus_index, bus_count) = &calls[0];
+        assert_eq!(*target, super::BusTarget::Bus(1));
+        assert_eq!((*bus_index, *bus_count), (0, 3));
+        assert_eq!(sends.len(), 1);
+        assert_eq!(sends[0].target, 2);
+        assert_eq!(sends[0].gain.to_bits(), 0.375_f32.to_bits());
+        let (target, sends, bus_index, bus_count) = &calls[1];
+        assert_eq!(*target, super::BusTarget::Master);
+        assert_eq!((*bus_index, *bus_count), (0, 3));
+        assert_eq!(sends.len(), 1, "the unmentioned send must be retained");
+        assert_eq!(sends[0].target, 2);
+        assert_eq!(sends[0].gain.to_bits(), 0.375_f32.to_bits());
     }
 
     #[test]
@@ -2844,6 +2903,18 @@ mod set_bus_routing_tests {
             .expect_err("unknown seq_bus must be rejected");
         let message = format!("{error:?}");
         assert!(message.contains("unknown bus"), "{message}");
+    }
+
+    #[test]
+    fn set_bus_routing_rejects_bus_without_registered_line() {
+        let wrap = wrap_with_three_stage_topology();
+        wrap.bus_lines.lock().unwrap().remove("seq-bus-0");
+
+        let error = wrap
+            .set_bus_routing("seq-bus-0", Some("master"), &[])
+            .expect_err("a bus without an RT line installer must be rejected");
+        let message = format!("{error:?}");
+        assert!(message.contains("unknown bus 'seq-bus-0'"), "{message}");
     }
 
     /// M3（#459/#453）: `SetBusRouting` は参照された bus（seq_bus 自身・output 先・send 先）を
@@ -4517,7 +4588,7 @@ impl EngineWrap {
 
         // Each registered bus owns a complete transport up front.  Attachment is the existing
         // lock-free `engaged` release-store（activation は LoadPlugin 時・`EffectBusBuild` doc 参照）。
-        let (insert_buses, bus_builds) = build_effect_bus_stages()?;
+        let (insert_buses, bus_builds, bus_lines) = build_effect_bus_stages()?;
 
         // 1. shm 作成 → host mmap（adapter が所有・audio thread）。
         let shm_path = crate::outproc_effect::unique_shm_path();
@@ -4576,6 +4647,10 @@ impl EngineWrap {
             cfg.buffer_frames,
             Some(cb_stats.clone()),
         );
+        *wrap
+            .bus_lines
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))? = bus_lines;
         *wrap
             .outproc
             .lock()
@@ -4792,7 +4867,7 @@ impl EngineWrap {
 
         // 同じ transport 構築を effect-only 経路（`start_outproc_effect_post_boot`）と共有する。
         // bus 0 個（または全 bus inactive）なら render は従来経路とビット同一に振る舞う。
-        let (insert_buses, bus_builds) = build_effect_bus_stages()?;
+        let (insert_buses, bus_builds, bus_lines) = build_effect_bus_stages()?;
 
         let effect_shm = crate::outproc_effect::unique_shm_path();
         let effect_host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(
@@ -4857,6 +4932,10 @@ impl EngineWrap {
             buffer_frames,
             Some(effect_cb_stats.clone()),
         );
+        *wrap
+            .bus_lines
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))? = bus_lines;
         *wrap
             .outproc
             .lock()
@@ -5011,6 +5090,8 @@ impl EngineWrap {
         stream_stats: Arc<StreamStats>,
         master_gain: Arc<AtomicU32>,
     ) -> Arc<Self> {
+        #[cfg(test)]
+        crate::test_tracing::install_interest_anchor();
         let (plugin_ui_events, _) = tokio::sync::broadcast::channel(128);
         Arc::new(Self {
             engine,
@@ -5058,6 +5139,8 @@ impl EngineWrap {
             // outproc-effect: 本番 `start()` / `start_outproc_effect` が spawn 後に Some を注入する。
             #[cfg(feature = "outproc-effect")]
             outproc: Mutex::new(None),
+            #[cfg(feature = "outproc-effect")]
+            bus_lines: Mutex::new(HashMap::new()),
             // outproc-instrument: production start injects the NeutralEvent ring producer.
             #[cfg(feature = "outproc-instrument")]
             outproc_instrument: Mutex::new(None),
@@ -6244,6 +6327,7 @@ impl EngineWrap {
             .bus_index
             .get(seq_bus)
             .ok_or_else(|| WrapError::OutProcEffect(format!("unknown bus '{seq_bus}'")))?;
+        let send_offset = |target_index: usize| target_index - seq_index - 1;
 
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
@@ -6291,29 +6375,88 @@ impl EngineWrap {
             resolved_sends.push((target_index, *gain));
         }
 
-        // 3. 検証済みの値だけを atomic へ反映する。
-        if let Some(routing_value) = resolved_output {
-            let routing = control.bus_routing.get(seq_bus).ok_or_else(|| {
+        // 3. Every compatibility handle is resolved before the one program publication, so a
+        // missing slot cannot leave only part of the requested routing applied.
+        let routing_handle = if resolved_output.is_some() {
+            Some(control.bus_routing.get(seq_bus).ok_or_else(|| {
                 WrapError::OutProcEffect(format!("bus '{seq_bus}' has no routing handle"))
+            })?)
+        } else {
+            None
+        };
+        let send_slots = if resolved_sends.is_empty() {
+            None
+        } else {
+            Some(control.bus_sends.get(seq_bus).ok_or_else(|| {
+                WrapError::OutProcEffect(format!("bus '{seq_bus}' has no send slots"))
+            })?)
+        };
+        for (target_index, _) in &resolved_sends {
+            let k = send_offset(*target_index);
+            if send_slots.and_then(|slots| slots.get(k)).is_none() {
+                return Err(WrapError::OutProcEffect(format!(
+                    "bus '{seq_bus}' has no send slot for target index {target_index}"
+                )));
+            }
+        }
+
+        let line = self
+            .bus_lines
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))?
+            .get(seq_bus)
+            .cloned()
+            .ok_or_else(|| {
+                WrapError::OutProcEffect(format!(
+                    "SetBusRouting: unknown bus '{seq_bus}' (no registered RT line)"
+                ))
             })?;
-            // エンコード: 0=override 無し・1=Master・n>=2 => Bus(n-2)（native `InsertBusStage`
-            // doc 参照）。
+        let routing_value = resolved_output.unwrap_or_else(|| {
+            control
+                .bus_routing
+                .get(seq_bus)
+                .map(|routing| routing.load(Ordering::Relaxed))
+                .unwrap_or(0)
+        });
+        let output_target = decode_bus_routing_sentinel(routing_value).unwrap_or(BusTarget::Master);
+        let existing_sends = control.bus_sends.get(seq_bus);
+        let mut gains = existing_sends
+            .map(|slots| {
+                slots
+                    .iter()
+                    .map(|slot| f32::from_bits(slot.load(Ordering::Relaxed)))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for (target_index, gain) in &resolved_sends {
+            gains[send_offset(*target_index)] = *gain;
+        }
+        let enabled_sends = gains
+            .into_iter()
+            .enumerate()
+            .filter(|(_, gain)| *gain != 0.0)
+            .map(|(offset, gain)| BusSend {
+                target: seq_index + 1 + offset,
+                gain,
+            })
+            .collect();
+        line(
+            output_target,
+            enabled_sends,
+            seq_index,
+            control.bus_index.len(),
+        )
+        .map_err(WrapError::Output)?;
+
+        // Mirror the accepted state into the old handles. Existing Rust callers and tests can
+        // continue to observe the partial-update API, while production RT reads only LineProgram.
+        if let (Some(routing), Some(routing_value)) = (routing_handle, resolved_output) {
             routing.store(routing_value, Ordering::Relaxed);
         }
-        if !resolved_sends.is_empty() {
-            let send_slots = control.bus_sends.get(seq_bus).ok_or_else(|| {
-                WrapError::OutProcEffect(format!("bus '{seq_bus}' has no send slots"))
-            })?;
+        if let Some(send_slots) = send_slots {
             for (target_index, gain) in resolved_sends {
-                // slot k は絶対 index `seq_index + 1 + k` を指す（構築時の割当・build_effect_bus_stages
-                // doc 参照）ので k = target_index - seq_index - 1。
-                let k = target_index - seq_index - 1;
-                let slot = send_slots.get(k).ok_or_else(|| {
-                    WrapError::OutProcEffect(format!(
-                        "bus '{seq_bus}' has no send slot for target index {target_index}"
-                    ))
-                })?;
-                slot.store(gain.to_bits(), Ordering::Relaxed);
+                let k = send_offset(target_index);
+                send_slots[k].store(gain.to_bits(), Ordering::Relaxed);
             }
         }
 
@@ -10509,34 +10652,10 @@ mod startup_options_tests {
 mod select_audio_device_tests {
     use super::{probe_then_pause_old, EngineWrap, OutputFault, StreamConfigSnapshot, WrapError};
     use crate::backend::StubBackend;
+    use crate::test_tracing::{capture_tracing, simulate_subscriberless_rebuild};
     use orbit_audio_native::OutputError;
     use std::cell::RefCell;
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
-
-    #[derive(Clone)]
-    struct LogCaptureWriter(Arc<Mutex<Vec<u8>>>);
-
-    struct LogCaptureGuard(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for LogCaptureGuard {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().expect("capture log mutex").extend(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogCaptureWriter {
-        type Writer = LogCaptureGuard;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            LogCaptureGuard(self.0.clone())
-        }
-    }
+    use std::sync::Arc;
 
     #[test]
     fn probe_completes_before_pause_and_probe_failure_never_pauses() {
@@ -10693,20 +10812,7 @@ mod select_audio_device_tests {
             waited_ms: 3_000,
             phase: orbit_audio_native::StreamLivenessPhase::Probe,
         }));
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .without_time()
-            .with_ansi(false)
-            .with_max_level(tracing::Level::ERROR)
-            .with_writer(LogCaptureWriter(log.clone()))
-            .finish();
-
-        tracing::subscriber::with_default(subscriber, || {
-            // 🔴 callsite の interest はプロセス全体で 1 つ。並列に走る別テストが同じ
-            // `tracing::error!` を **subscriber の無い状態**で先に踏むと `Interest::never()` が
-            // キャッシュされ、このテストの捕捉が**空**になる（2026-09-05 に `--lib` 全件で 1 回
-            // 発生・単体と再実行では緑）。捕捉の直前に再構築して、この順序依存を消す。
-            tracing::callsite::rebuild_interest_cache();
+        let ((), rendered) = capture_tracing(tracing::Level::ERROR, || {
             wrap.record_device_switch_result(Some("Requested Output"), &failed, None, None);
         });
 
@@ -10718,8 +10824,6 @@ mod select_audio_device_tests {
             .last_switch_failure
             .as_deref()
             .is_some_and(|reason| reason.contains("produced no callback within 3000 ms")));
-        let rendered = String::from_utf8(log.lock().expect("capture log mutex").clone())
-            .expect("tracing output is utf8");
         assert!(rendered.contains("ERROR"), "captured log: {rendered:?}");
         assert_eq!(
             rendered
@@ -10746,6 +10850,44 @@ mod select_audio_device_tests {
         wrap.record_device_switch_result(Some("Requested Output"), &succeeded, None, None);
 
         assert_eq!(wrap.stream_config_snapshot(), selected);
+    }
+
+    #[test]
+    fn device_switch_capture_survives_subscriberless_first_registration_and_rebuild() {
+        let (wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let failed = Err(WrapError::Output(OutputError::StreamDead {
+            device: "Rejected Output".to_string(),
+            waited_ms: 3_000,
+            phase: orbit_audio_native::StreamLivenessPhase::Probe,
+        }));
+
+        let ((), log) = capture_tracing(tracing::Level::ERROR, || {
+            // Exercise the culprit's product path without a subscriber while capture is active.
+            let other_thread_wrap = Arc::clone(&wrap);
+            std::thread::spawn(move || {
+                other_thread_wrap.record_device_switch_failure_for_test("Other", "poke");
+            })
+            .join()
+            .expect("subscriber-less product call thread");
+
+            // Model a late interest write even when another test registered the callsite first.
+            std::thread::spawn(simulate_subscriberless_rebuild)
+                .join()
+                .expect("subscriber-less callsite rebuild thread");
+
+            wrap.record_device_switch_result(Some("Requested Output"), &failed, None, None);
+        });
+
+        assert_eq!(
+            log.lines()
+                .filter(
+                    |line| line.contains("audio output device switch") && line.contains("failed")
+                )
+                .count(),
+            1,
+            "captured log: {log:?}"
+        );
     }
 }
 
@@ -13069,9 +13211,9 @@ mod outproc_instrument_replace_tests {
     };
     use crate::backend::StubBackend;
     use crate::outproc_instrument::OutProcInstrumentStats;
+    use crate::test_tracing::capture_tracing;
     use orbit_audio_sandbox::NeutralEvent;
     use std::collections::HashMap;
-    use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -14140,30 +14282,6 @@ mod outproc_instrument_replace_tests {
         ));
     }
 
-    #[derive(Clone)]
-    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
-
-    struct CaptureGuard(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for CaptureGuard {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().expect("capture log mutex").extend(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
-        type Writer = CaptureGuard;
-
-        fn make_writer(&'a self) -> Self::Writer {
-            CaptureGuard(self.0.clone())
-        }
-    }
-
     #[test]
     fn r9_missing_rt_ack_warns_and_quarantines_old_slot() {
         let (wrap, old, spare, _old_pid) = two_slot_fixture("slow-child.sh");
@@ -14178,18 +14296,8 @@ mod outproc_instrument_replace_tests {
             let region = orbit_audio_sandbox::region_ptr(&mmap);
             unsafe { orbit_audio_sandbox::transport::publish_child_ready(region, false) };
         });
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .without_time()
-            .with_ansi(false)
-            .with_max_level(tracing::Level::WARN)
-            .with_writer(CaptureWriter(log.clone()))
-            .finish();
         let started = Instant::now();
-        let result = tracing::subscriber::with_default(subscriber, || {
-            // 上の `device_switch_result_records_...` と同じ理由（callsite interest はプロセス
-            // 全体で 1 つ）。捕捉の直前に再構築する。
-            tracing::callsite::rebuild_interest_cache();
+        let (result, rendered) = capture_tracing(tracing::Level::WARN, || {
             wrap.replace_outproc_instrument_plugin(
                 PathBuf::from(NEW_PLUGIN),
                 None,
@@ -14201,8 +14309,6 @@ mod outproc_instrument_replace_tests {
         assert!(result.quarantined_slot);
         publisher.join().expect("READY publisher panicked");
         assert!(started.elapsed() >= super::INSTRUMENT_DRAIN_TIMEOUT);
-        let rendered = String::from_utf8(log.lock().expect("capture log mutex").clone())
-            .expect("tracing output is utf8");
         let timeout_warning = rendered
             .lines()
             .find(|line| line.contains("event drain-and-discard ack timed out"))

@@ -957,7 +957,7 @@ The ack matching key became the triple `(generation, window, evt_seq)`; an ack c
 window is rejected loudly. The event frame's `PluginUiTarget` also gained `window`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9433-9446
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9576-9589
 /// WS event frame に載せる、解決済み plugin UI 宛先。
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PluginUiTarget {
@@ -1063,12 +1063,12 @@ correlates the `{"pluginUi": ...}` line that comes back on stdout by `requestId`
 The stdout router in `extension.ts` picks up this result line by the `{"pluginUi"` prefix.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1501-1505
-        } else if (trimmedLine.startsWith('{"pluginUi"')) {
-          const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
-          if (!parsed && isCurrent) {
-            outputChannel?.appendLine(`⚠️ received a malformed //#pluginUi result line: ${rawLine}`)
-          }
+// packages/vscode-extension/src/extension.ts:1494-1498
+    } else if (trimmedLine.startsWith('{"pluginUi"')) {
+      const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
+      if (!parsed && isCurrent) {
+        outputChannel?.appendLine(`⚠️ received a malformed //#pluginUi result line: ${rawLine}`)
+      }
 ```
 
 It has the same structure as `PluginStateBridge` (`//#savePluginState`) because the way the request

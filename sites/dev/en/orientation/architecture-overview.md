@@ -103,7 +103,7 @@ graph TD
 `startEngine()` is responsible for starting the engine. The first thing it does is decide "which backend to use," normalizing the `orbitscore.engine` setting with the engine-side `resolveEngineKind` (loaded from compiled JS via a runtime require).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2128-2131
+// packages/vscode-extension/src/extension.ts:2151-2154
   // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
   // 'rust' (default since cutover #369), skip the scsynth pre-check entirely —
   // the native daemon doesn't need scsynth to be resolvable.
@@ -113,7 +113,7 @@ graph TD
 A point to note here is that **backend binary resolution always precedes spawning the engine**. Under the default `rust` kind it pre-checks the daemon binary.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2153-2162
+// packages/vscode-extension/src/extension.ts:2176-2185
     const daemonResolution = resolveDaemonForUI()
     if (!daemonResolution) {
       outputChannel?.appendLine(
@@ -146,7 +146,7 @@ What is interesting is that the resolved path is not handed to the engine via en
 The backend kind is **always set explicitly** on the engine through the `ORBITSCORE_ENGINE` env var.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2217-2230
+// packages/vscode-extension/src/extension.ts:2240-2253
   if (engineKind === 'rust') {
     env.ORBITSCORE_ENGINE = 'rust'
     outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
@@ -166,7 +166,7 @@ The backend kind is **always set explicitly** on the engine through the `ORBITSC
 The engine process itself is then started with `child_process.spawn` running Node.js.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2232-2238
+// packages/vscode-extension/src/extension.ts:2255-2261
   // Spawn engine process
   try {
     engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -179,7 +179,7 @@ The engine process itself is then started with `child_process.spawn` running Nod
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3124-3125
+// packages/vscode-extension/src/extension.ts:3147-3148
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -207,7 +207,7 @@ Since #388 on 2026-07-07 (WORK_LOG 6.188-6.192), the extension hosts an MCP (Mod
 The start condition lives in `activate()`. The env var takes precedence over the setting so that an Extension Development Host launched from the CLI can have its port set without touching a settings file.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:454-459
+// packages/vscode-extension/src/extension.ts:455-460
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0
@@ -501,7 +501,7 @@ Not only the daemon itself but also the plugin children described below and the 
 The daemon does not load the actual plugins (CLAP / VST3) into its own process. Effects and instruments are each spawned as separate binaries in **out-of-process (OOP)** children, exchanging audio with the daemon over shared memory. The list of children that can be spawned is stated explicitly, in one place, as a constant in the daemon crate.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/lib.rs:86-95
+// rust/crates/orbit-audio-daemon/src/lib.rs:88-97
 pub const SPAWNABLE_CHILD_BINARIES: &[&str] = &[
     // effect: #628 以降は rack child 1 本がチェーン全体を持つ（format で分岐しない）。
     "orbit-effect-rack-child",
