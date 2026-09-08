@@ -235,9 +235,43 @@ Fable が **設計 §4.1 自体が 2026-09-03 の裁定を反映していない*
 実装は §4.1 に忠実なので**本 PR の欠陥ではない**。§4.1 の改訂自体は運用規則 6 に従い今やるべきだが、
 束の範囲を広げる判断なので owner の裁定待ち。
 
+#### 🔴 束の締め — 収束条件を満たした（2026-09-09 実測）
+
+**マージ前ゲート**（無条件の 3 行 + build）:
+
+| ゲート | 結果 |
+|---|---|
+| `npm run build` | errors 0 |
+| `bash rust/crates/orbit-std-gain/bundle-macos.sh` | `Gain.clap` 生成 |
+| `cargo test -p orbit-effect-rack-child --lib -- --ignored` | **3 passed**（実 gain プラグイン依存）|
+| `cargo test -p orbit-effect-rack-child --lib`（`--ignored` **無し**）| **16 passed**（退行検知テストが実際に走った）|
+
+**実機 gated 全件**（`npm run test:e2e:gated`・523 秒）: **29 passed / 1 failed**。
+
+🔴 **収束条件「goldens が 1 つも動かないこと」を達成**:
+
+| golden | 実測 |
+|---|---|
+| `#611 O0-1` no-bus RMS | `0.08701663328646671` / `0.0870166332956341`（2 セッション）|
+| `#611 O0-2` sum-output RMS | `0.08701663328620282` |
+| `#611 O0-3` `send(0.3)` の total/dry | **`1.300000013268198`**（= 1 + 0.3）|
+| `#611 O0-4` `effect + gain(-6)` | `effectOnly 1.9952622668994517` / `combined 0.9999999200541101` |
+
+**4 件とも通過**。`#611 O0-4`（#775 の間欠故障）も**今回は緑**で、U2 に該当するログは 0 行だった。
+
+唯一の失敗は **`steps the live playhead`**（`timed out waiting for [STEP] markers ... after 20000ms`）で、
+これは **main baseline の既知の赤**（台帳に記載済み）。**新しい赤は 0 件。**
+
+孤児プロセス（`OrbitStudio` / `orbit-audio-daemon`）の残留なしも確認した。
+
+⚠️ **ログの所在で 2 回つまずいた**: `nohup` を `dangerouslyDisableSandbox` で回すと `$TMPDIR` が
+**sandbox 内とは別のパス**（`/var/folders/…/T/`）を指すため、sandbox 内から読めない。
+**完了マーカー（`EXIT=`）を先に見て集計行が無いことに気づいた**ので、「テスト本体に到達していない」と
+判断でき、実装ではなくログの所在を疑う方向に進めた。
+
 #### 未検証・次の束へ
 
-- 実機 gated（**goldens が 1 つも動かないこと**）は**束の締め**で 1 回
+- 実機 gated（**goldens が 1 つも動かないこと**）は**束の締め**で 1 回 → ✅ **上記のとおり達成**
 - `LineOp::Pan` の wire 表現は無い（§4.1 の `WireLineOp` に `pan` が無い・PR-O4）
 - `dest.render` は登記簿（`DeclareRender`・PR-R2）が無いので今日はすべて拒否
 
