@@ -750,14 +750,12 @@ pub struct MasterLine {
     /// 導出できない（RT で既定値と深い比較をすることになり、かつ「既定と同じ program を明示的に
     /// publish した」場合を区別できない）。
     ///
-    /// 🔴 **`SetBusLine("master", …)` だけでなく `SetGlobalGain` でも `true` になる**
-    /// （`engine_wrap.rs` の `set_global_gain` が `outproc-effect` build では master line へ
-    /// 再 publish するため）。名前は「明示的な line が入ったか」の意。
+    /// 名前は「明示的な line が入ったか」の意であり、`SetGlobalGain` の atomic 更新では変わらない。
     ///
-    /// 🔴 **いつこの分岐を消せるか**: PR-O4 で TS が `SetBusLine` / `global.gain()` 経由の
-    /// 呼び出しへ切り替わり、**その新表面が実機で確かめられ**、PR-O6 で旧 `SetBusRouting` 系が
-    /// 撤去され、O0 golden が新経路の値で取り直された後。そこで固定互換経路と本フラグを
-    /// 同時に削り、`execute_master_line` の 1 本にできる。
+    /// 🔴 **いつこの分岐を消せるか**: PR-O4 で TS の `global.gain()` が
+    /// `SetBusLine("master", …)` を送る新表面へ切り替わり、その経路が実機で確かめられ、PR-O6 で
+    /// 旧 `SetBusRouting` 系が撤去された後。そこで固定互換経路と本フラグを同時に削り、
+    /// `execute_master_line` の 1 本にできる見込みである。
     explicit_line: Arc<AtomicBool>,
 }
 
@@ -1824,6 +1822,9 @@ fn execute_master_line(
                 if let OutputDest::Device { left, right } = output.dest {
                     add_to_device(&mut device, &master.buffer[..bs], frames, left, right, gain);
                 } else {
+                    // release ではこの debug_assert は no-op。到達不能を保証する唯一の境界は
+                    // control 層の `set_bus_line` master 分岐であり、その検証が破れればこの出口は
+                    // 無音のまま捨てられ、ログにも残らない。
                     debug_assert!(false, "master line destination was not validated");
                 }
                 if !output.thru {
@@ -2813,6 +2814,7 @@ fn start_output_inner(
     // （`place_master_into_device`）でのみ現れる。
     let engine = Engine::new(sample_rate, 2);
     let mut master = MasterLine::new(sample_rate, post);
+    master.line.set_sample_rate(sample_rate);
     // master.buffer も 2ch 前提で事前確保する（bus buffer と同じ規律・row 2）。
     master.ensure_buffer_len(sample_rate as usize * 2);
     master.ensure_device_buffer_len(sample_rate as usize * channels as usize);

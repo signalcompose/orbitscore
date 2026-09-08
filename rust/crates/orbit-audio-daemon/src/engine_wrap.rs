@@ -1764,9 +1764,9 @@ pub struct EngineWrap {
     #[cfg(feature = "outproc-instrument")]
     outproc_instrument: Mutex<Option<OutProcInstrumentControl>>,
     /// master line（native `MasterLine`・#649 PR-O2）の互換 gain 書き込みハンドル。
-    /// `outproc-effect` build では `SetGlobalGain` を汎用 master line にも写し、旧固定経路用の
-    /// atomic と整合させる。`orbit_audio_core::Engine::set_global_gain`（core の scheduler ramp）は
-    /// production では呼ばない（`docs/design/611-output-line-design.md` §5.4/§5.5 row 4）。
+    /// `SetGlobalGain` は PR-O4 までこの atomic だけを更新する。
+    /// `orbit_audio_core::Engine::set_global_gain`（core の scheduler ramp）は production では
+    /// 呼ばない（`docs/design/611-output-line-design.md` §5.4/§5.5 row 4）。
     /// `start_with`（test backend）経路は実 stream を持たないため、どこにも接続されない
     /// オーファン Arc を持つ（wire レベルの accept/reject 検証のみが対象で、実音は無い）。
     master_gain: Arc<AtomicU32>,
@@ -3015,10 +3015,13 @@ mod set_bus_routing_tests {
 #[cfg(all(test, feature = "outproc-effect"))]
 mod set_bus_line_tests {
     use super::{BusLineDest, BusLineOp, EngineWrap, LineOp, LineOutput, WrapError};
+    use crate::backend::StubBackend;
     use crate::session::wrap_err_to_protocol;
+    use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex};
 
     type RecordedInstalls = Arc<Mutex<Vec<Vec<LineOp>>>>;
+    type RecordedInstallCalls = Arc<Mutex<Vec<(Vec<LineOp>, usize, usize)>>>;
 
     fn wrap_and_installs() -> (Arc<EngineWrap>, RecordedInstalls) {
         let wrap = super::set_bus_routing_tests::wrap_with_three_stage_topology();
@@ -3032,6 +3035,39 @@ mod set_bus_line_tests {
             }),
         );
         (wrap, installs)
+    }
+
+    fn wrap_and_install_calls() -> (Arc<EngineWrap>, RecordedInstallCalls) {
+        let wrap = super::set_bus_routing_tests::wrap_with_three_stage_topology();
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let recorded = calls.clone();
+        wrap.bus_line_programs.lock().unwrap().insert(
+            "seq-bus-0".to_owned(),
+            Arc::new(move |program, bus_index, bus_count| {
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push((program.ops.to_vec(), bus_index, bus_count));
+                Ok(())
+            }),
+        );
+        (wrap, calls)
+    }
+
+    fn wrap_and_master_install_calls() -> (Arc<EngineWrap>, RecordedInstallCalls) {
+        let (mut wrap, _guard) =
+            EngineWrap::start_with(StubBackend::default()).expect("stub backend start");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let recorded = calls.clone();
+        let wrap_mut = Arc::get_mut(&mut wrap).expect("fresh wrap must be uniquely owned");
+        wrap_mut.master_line = Arc::new(move |program, bus_index, bus_count| {
+            recorded
+                .lock()
+                .unwrap()
+                .push((program.ops.to_vec(), bus_index, bus_count));
+            Ok(())
+        });
+        (wrap, calls)
     }
 
     fn output(dest: BusLineDest, thru: bool, gain: f32) -> BusLineOp {
@@ -3096,6 +3132,179 @@ mod set_bus_line_tests {
                     gain: 1.0,
                 }),
             ]]
+        );
+    }
+
+    #[test]
+    fn set_bus_line_activates_source_and_referenced_destination_buses() {
+        let (wrap, calls) = wrap_and_install_calls();
+        let (source_active, destination_active) = {
+            let guard = wrap.outproc.lock().unwrap();
+            let control = guard.as_ref().expect("effect control");
+            (
+                control.bus_actives["seq-bus-0"].clone(),
+                control.bus_actives["sum-bus-0"].clone(),
+            )
+        };
+
+        wrap.set_bus_line(
+            "seq-bus-0",
+            &[output(BusLineDest::Bus("sum-bus-0".into()), false, 1.0)],
+        )
+        .expect("forward bus output must install");
+
+        assert!(
+            source_active.load(Ordering::Acquire),
+            "source must activate"
+        );
+        assert!(
+            destination_active.load(Ordering::Acquire),
+            "referenced destination must activate"
+        );
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &[(
+                vec![LineOp::Output(LineOutput {
+                    dest: orbit_audio_native::OutputDest::Bus(1),
+                    thru: false,
+                    gain: 1.0,
+                })],
+                0,
+                3,
+            )]
+        );
+    }
+
+    #[test]
+    fn set_bus_line_converts_one_based_device_channels_for_the_installer() {
+        let (wrap, calls) = wrap_and_install_calls();
+
+        wrap.set_bus_line(
+            "seq-bus-0",
+            &[output(
+                BusLineDest::Device { left: 1, right: 2 },
+                false,
+                1.0,
+            )],
+        )
+        .expect("valid device channels must install");
+
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &[(
+                vec![LineOp::Output(LineOutput {
+                    dest: orbit_audio_native::OutputDest::Device {
+                        left: 0,
+                        right: Some(1),
+                    },
+                    thru: false,
+                    gain: 1.0,
+                })],
+                0,
+                3,
+            )]
+        );
+    }
+
+    #[test]
+    fn set_bus_line_master_is_successful_and_all_or_nothing() {
+        let (wrap, calls) = wrap_and_master_install_calls();
+        let installed = vec![
+            LineOp::Rack,
+            LineOp::Gain(0.5),
+            LineOp::Output(LineOutput {
+                dest: orbit_audio_native::OutputDest::Device {
+                    left: 0,
+                    right: Some(1),
+                },
+                thru: false,
+                gain: 0.75,
+            }),
+        ];
+
+        wrap.set_bus_line(
+            "master",
+            &[
+                BusLineOp::Rack,
+                BusLineOp::Gain(0.5),
+                output(BusLineDest::Device { left: 1, right: 2 }, false, 0.75),
+            ],
+        )
+        .expect("valid master line must install");
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &[(installed.clone(), usize::MAX, 0)]
+        );
+        assert_eq!(*wrap.master_line_program.lock().unwrap(), installed);
+
+        let error = wrap
+            .set_bus_line(
+                "master",
+                &[
+                    BusLineOp::Gain(0.25),
+                    output(BusLineDest::Master, false, 1.0),
+                ],
+            )
+            .expect_err("master self-reference must reject the complete replacement");
+        assert_eq!(wrap_err_to_protocol(&error).code, "MALFORMED_REQUEST");
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &[(installed.clone(), usize::MAX, 0)],
+            "failed replacement must not publish"
+        );
+        assert_eq!(
+            *wrap.master_line_program.lock().unwrap(),
+            installed,
+            "failed replacement must not mutate the shadow"
+        );
+    }
+
+    #[test]
+    fn set_bus_line_accepts_a_forward_aux_destination() {
+        let (wrap, calls) = wrap_and_install_calls();
+
+        wrap.set_bus_line(
+            "seq-bus-0",
+            &[output(BusLineDest::Bus("aux-bus-0".into()), false, 0.75)],
+        )
+        .expect("forward output must not depend on the destination bus kind");
+
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &[(
+                vec![LineOp::Output(LineOutput {
+                    dest: orbit_audio_native::OutputDest::Bus(2),
+                    thru: false,
+                    gain: 0.75,
+                })],
+                0,
+                3,
+            )]
+        );
+    }
+
+    #[test]
+    fn set_global_gain_only_updates_the_compatibility_atomic() {
+        let (wrap, calls) = wrap_and_master_install_calls();
+        let original_shadow = wrap.master_line_program.lock().unwrap().clone();
+
+        wrap.set_global_gain(0.1, 0.005)
+            .expect("first gain update must succeed");
+        wrap.set_global_gain(0.316, 0.005)
+            .expect("second gain update must succeed");
+
+        assert_eq!(
+            f32::from_bits(wrap.master_gain.load(Ordering::Relaxed)),
+            0.316
+        );
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "SetGlobalGain must not republish a fresh master LineProgram"
+        );
+        assert_eq!(
+            *wrap.master_line_program.lock().unwrap(),
+            original_shadow,
+            "SetGlobalGain must leave the SetBusLine shadow untouched"
         );
     }
 
@@ -9267,38 +9476,13 @@ impl EngineWrap {
         })
     }
 
-    /// マスターゲインを設定する。`outproc-effect` build では master line の最初の gain op を
-    /// 差し替えて再 publish し、未 publish の互換固定経路用 atomic にも同じ値を store する。
-    /// `orbit_audio_core::Engine::set_global_gain`（core の scheduler ramp）は production から
-    /// 呼ばない（`docs/design/611-output-line-design.md` §5.4/§5.5 row 4・乗算経路を master line
-    /// 1 本にする）。`ramp_sec` は wire 互換のため受け続けるが、native 側は構築時に確定した
-    /// 固定 ~5ms/block のランプを使う（可変長ランプは持たない）。
+    /// マスターゲインを設定する。PR-O3b では従来どおり atomic だけを更新し、RT 専有の
+    /// `gain_current` を呼び出し間で連続させる。master line への写しは、TS の
+    /// `global.gain()` を `SetBusLine("master", …)` へ切り替え、再 publish 時に実効値を引き継ぐ
+    /// PR-O4 と同時に入れる。`orbit_audio_core::Engine::set_global_gain`（core の scheduler ramp）は
+    /// production から呼ばない（`docs/design/611-output-line-design.md` §4.2/§5.1）。`ramp_sec` は
+    /// wire 互換のため受け続けるが、native 側は構築時に確定した固定 ~5ms/block のランプを使う。
     pub fn set_global_gain(&self, value: f32, _ramp_sec: f64) -> Result<(), WrapError> {
-        #[cfg(feature = "outproc-effect")]
-        {
-            let mut shadow = self.master_line_program.lock().map_err(|_| {
-                WrapError::OutProcEffect("master line program mutex poisoned".into())
-            })?;
-            if let Some(gain) = shadow.iter_mut().find_map(|op| match op {
-                LineOp::Gain(gain) => Some(gain),
-                _ => None,
-            }) {
-                *gain = value;
-            } else {
-                let position = shadow
-                    .iter()
-                    .position(|op| matches!(op, LineOp::Output(_)))
-                    .unwrap_or(shadow.len());
-                shadow.insert(position, LineOp::Gain(value));
-            }
-            (self.master_line)(LineProgram::new(shadow.clone()), usize::MAX, 0).map_err(
-                |error| {
-                    WrapError::OutProcEffectRequest(format!(
-                        "SetGlobalGain master program failed validation: {error}"
-                    ))
-                },
-            )?;
-        }
         self.master_gain.store(value.to_bits(), Ordering::Relaxed);
         Ok(())
     }

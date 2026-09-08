@@ -417,6 +417,22 @@ export type WireLineOp =
 TS は `global.gain()` を `SetBusLine("master", …)` に切り替えるので、production の呼び出し元はゼロになる（`rust-engine-player.ts:1247-1258` / `:1027`）。
 core の `Engine::set_global_gain`（`engine.rs:143-152`）は **production では呼ばない**（§5.5）。
 
+> 🔴 **この写しを入れるのは PR-O4 と同時**（2026-09-09 に main が裁定・PR #824 のレビューで判明）。
+>
+> **PR-O3b で写してはいけない。** 理由は上の「**意味を変えない形で**」を満たせないから:
+> O3b の時点で TS はまだ `global.gain()` を `SetGlobalGain` として送る（切り替えは O4）。
+> その状態で master line へ写すと、**`SetGlobalGain` のたびに `LineProgram::new` が走り、§5.1 の
+> 規則により `current_gain` が全 op で 1.0 から再開する**。`global.gain()` を **2 回以上**呼ぶと
+> （フェード・ライブコーディングでの調整など通常の操作）、直前の実効ゲインから目標へ滑らかに
+> 寄るのではなく**一度 unity へ跳ね上がってから寄る** — 可聴のポップになる。
+>
+> それ以前の `SetGlobalGain` は `gain_target` atomic を更新するだけで、`advance_gain` が
+> **呼び出しをまたいで `gain_current` を連続させていた**。写した瞬間にその連続性が失われるので、
+> これは新機能の不足ではなく**既存機能の回帰**である。
+>
+> したがって順序は: **O3b は `SetGlobalGain` を従来どおり atomic のみで扱う** →
+> O4 で TS を `SetBusLine` へ切り替えるのと**同時に**、§5.1 の引き継ぎ機構とセットで写す。
+
 ### 4.3 変わらないもの
 
 `SetSourceRouting`（`:2259-2276`）/ `PlayAt` の `bus` / `channel`（`:2088-2150`）/ `GetStatus`（`:1349-1360`）。
@@ -463,6 +479,26 @@ pub struct LineSlot {
 `with_output_target` `:459` / `with_sends` `:465` / `with_routing_overrides` `:475` は `with_line(LineProgram)` に置き換える（呼び出し元は §7.3）。
 
 **上限を決めない**（owner）: `ops` は `Box<[_]>` なので出口の個数に定数上限は無い。RT 側の `ArrayVec` 容量（`MAX_INSERT_BUS_STAGES` `:347`）は stage 数の話で本書では変えない（撤廃は #663）。
+
+#### 🔴 再 publish 時の `current_gain` の初期値（2026-09-09 追記・本書に欠けていた規則）
+
+`LineProgram::new` は `current_gain` を **全 op で 1.0** から始める。これは「**まだ何も鳴っていない
+line を新しく作る**」ときの規則であって、**既に鳴っている line を差し替えるとき**の規則ではない。
+
+差し替えで 1.0 から再開すると、直前の実効ゲイン（例: −20 dB ≈ 0.1）から目標（例: −10 dB ≈ 0.316）へ
+寄る代わりに、**一度 unity へ跳ね上がってから寄る**。`ramp_frames` は 5 ms 相当なので、
+64 frame の小バッファでは数ブロックにわたって誤った軌跡を辿り、**可聴のポップ**になる。
+
+🔴 **したがって「実効値を引き継ぐ機構」が入るまで、再 publish を伴う操作を production 経路へ
+導入してはいけない**（§4.2 の `SetGlobalGain` がこれに該当し、PR-O4 まで写さないと決めた）。
+
+引き継ぎが今日できない理由は設計上の意図である: `LineControl` は `current_gain` を control 側へ
+**読み返させない**（RT 専有の `Cell` なので、control が読むと RT と競合する）。したがって機構は
+「control が読む」形では作れず、**install 時に RT 側が旧 program の値を引き継ぐ**形になる。
+具体案は PR-O4 の設計時に決める。
+
+**この節が無かったために PR-O3b で実際に回帰が入りかけた**（レビューで 2 つの独立した監査が
+同じ欠陥を指摘して止まった）。規則を先に書く。
 
 ### 5.2 master ライン（新設・`RenderState` `:1433-1442` に `master: MasterLine` を足す）
 

@@ -172,6 +172,69 @@ session は JSON の **f64** を受けるので `> f32::MAX` を弾いてから 
 適用後の再検証: cargo **617 / 339 passed・0 failed**（変更前と同数）・fmt・clippy 警告なし・
 `docs:check` **1,012 verified / 0 failed**（helper 追加で行番号が動いたので `--fix` で再アンカー）。
 
+#### 🔴 レビュー・ラウンド 1 — 既存機能の回帰を 1 件止めた
+
+レビューチーム 4 名 + Fable 監査を**並行**投入（CLAUDE.md）。**Critical 5 / Important 3 / Minor 2**。
+
+##### 最重要: `global.gain()` の可聴ポップ（**code-reviewer と Fable が独立に指摘**）
+
+`SetGlobalGain` を master line へ写した結果、`LineProgram::new` が `current_gain` を全 op で 1.0 から
+始めるため、**2 回目以降の `global.gain()` で ramp が unity から再開**する。直前の実効ゲイン
+（例 −20 dB）から目標（−10 dB）へ寄る代わりに**一度 1.0 へ跳ね上がってから寄る** — 64 frame の
+小バッファでは数ブロックかかるので可聴のポップになる。
+
+🔴 **これは新機能の不足ではなく回帰**である。この PR の前は `SetGlobalGain` が `gain_target` atomic を
+更新するだけで、`advance_gain` が**呼び出しをまたいで `gain_current` を連続させていた**。
+
+**裁定と、その前にやったこと**: 設計 §4.2 は「**意味を変えない形で**写す」と書いており、条件を
+満たしていない。運用規則 6 に従い**設計を先に更新**してから実装を直した:
+
+| 文書 | 追記 |
+|---|---|
+| §4.2 | 🔴 **この写しは PR-O4 と同時**。O3b で写すと TS がまだ `SetGlobalGain` を送るので回帰する |
+| §5.1 | 🔴 **再 publish 時の `current_gain` 初期値規則**（本書に欠けていた節）|
+
+Fable が「**§5.1 に新 program の初期値規則が無い**」と指摘したのが要点だった。規則が無いので
+実装者が判断できず、Codex は素直に `LineProgram::new` を使った。**規則を先に書く。**
+
+##### 適用した fix（Codex・ポリシーを 1 本にまとめて一括発注）
+
+| # | 何を |
+|---|---|
+| 1 | `set_global_gain` から master line 再 publish を**外した**（`master_gain.store` のみ＝この PR の前と同じ）|
+| 2 | 🔴 **`master.line.set_sample_rate` の呼び忘れ**（Fable）。`LineSlot::new` は `ramp_frames: 240` 固定で、呼び出しは insert bus の 1 箇所だけだった → 44.1k / 96k で master の ramp が 5 ms からずれていた |
+| 3a | `bus_actives` の活性化テスト（旧 `SetBusRouting` には前例があるのに新規側に無かった）|
+| 3b | **device channel の 1 始まり → 0 始まり変換**。🔴 `device_dest_from_wire` は**どのテストからも一度も実行されていなかった** |
+| 3c | `set_bus_line("master", …)` の成功系と全か無か（既存の master テストは installer を直接呼んでおり `set_bus_line` を通らなかった）|
+| 3d | 裁定③（kind を問わない）の**正のテスト**。🔴 Codex が「**kind チェックを復活させても既存 290 件は全緑**」を先に実証してから追加した＝変異検証として機能した |
+| 4 | `debug_assert!` が release で no-op であること・到達不能を保証するのは control 層だけであること・破れたら**無音でログにも残らない**ことをコメント化（実装は変えない）|
+| 5 | `explicit_line` の doc から**一次文書に根拠の無い一文**を削除（`/simplify` で main が書いたもの）|
+
+##### 検証（🔴 すべて main が本ツリーで実行）
+
+| 検証 | 結果 |
+|---|---|
+| `cargo test --workspace` | **617 passed / 0 failed / 38 ignored** |
+| `cargo test`（outproc features） | **344 passed / 0 failed / 13 ignored**（339 → 344・新規 5 件）|
+| fmt / clippy 2 本 | 警告なし |
+| `npm test` | **2,329 passed / 58 skipped** |
+| `npm run lint` / `typecheck:e2e` / `docs:build` | 緑 |
+| `npm run docs:check` | **1,012 verified / 0 failed**（Rust の行番号が動いたので `--fix` + 引用の中身を差し替え）|
+
+🔴 **Codex は sandbox で cargo の 29 件 / 32 件を落としていた**（`bind_localhost ... Operation not
+permitted`）。本ツリーでは **bind エラー 0 件で全緑**。「委譲先の緑は実機の緑ではない」が再現した。
+
+##### owner の裁定を仰いでいる 2 件（O3b の範囲外）
+
+Fable が **設計 §4.1 自体が 2026-09-03 の裁定を反映していない**ことを発見した:
+
+- **`pan` op が wire に無い** — §2.4b / W-18 は「wire に `pan`」と書くが §4.1 の `WireLineOp` は 3 op
+- **mono device が wire で表現できない** — §2.2 の `mix.output(3)` / §5.1 の `right: None` に対し、
+  §4.1 の `channels: [number, number]` は 2 要素必須
+
+実装は §4.1 に忠実なので**本 PR の欠陥ではない**。§4.1 の改訂自体は運用規則 6 に従い今やるべきだが、
+束の範囲を広げる判断なので owner の裁定待ち。
+
 #### 未検証・次の束へ
 
 - 実機 gated（**goldens が 1 つも動かないこと**）は**束の締め**で 1 回
