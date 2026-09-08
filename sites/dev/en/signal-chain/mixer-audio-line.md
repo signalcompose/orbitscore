@@ -1,12 +1,12 @@
 ---
 title: "SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: f2dadd9
-verified-at: "2026-09-05"
+verified-against: 66efda5
+verified-at: "2026-09-08"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04 and to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04, to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the line program of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain
 
@@ -364,6 +364,41 @@ later stage and `BusKind::Sum`", "a send target must be a later stage and `BusKi
 The `target_index + 2` encoding packs three states — "0 = unchanged / 1 = Master / 2 and up =
 bus index" — into one atomic, which the native side's `routing_override` reads.
 
+Since #611 PR-O3a, this function **publishes one line program** after validation and merely
+**mirrors the accepted values into the old atomics**. The order in which the handles are resolved
+matters too.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6378-6393
+        // 3. Every compatibility handle is resolved before the one program publication, so a
+        // missing slot cannot leave only part of the requested routing applied.
+        let routing_handle = if resolved_output.is_some() {
+            Some(control.bus_routing.get(seq_bus).ok_or_else(|| {
+                WrapError::OutProcEffect(format!("bus '{seq_bus}' has no routing handle"))
+            })?)
+        } else {
+            None
+        };
+        let send_slots = if resolved_sends.is_empty() {
+            None
+        } else {
+            Some(control.bus_sends.get(seq_bus).ok_or_else(|| {
+                WrapError::OutProcEffect(format!("bus '{seq_bus}' has no send slots"))
+            })?)
+        };
+```
+
+Both the routing handle and the send slots are obtained **before anything is written**. Previously
+the output was stored into its atomic first and the send slot was looked up afterwards, so a bus
+without a send slot could return an error with the output already applied. The implementation now
+meets the guarantee the doc comment claimed from the start: "if even one item fails validation,
+nothing is applied".
+
+What gets published is a **complete program**, rebuilt by reading back the existing sends —
+including the ones the call did not mention (`enabled_sends` keeps only the slots whose gain is not
+`0.0`). Rebuilding the whole thing every time is how the old API's "apply only the sends that were
+listed" partial-update semantics is reproduced.
+
 ### The render side: the post-loop merges in topological order
 
 How does the native render callback consume the routing the daemon wrote into the atomics? The
@@ -409,17 +444,205 @@ Read it like this.
    section). Since #649 PR-O2, though, this `hw` is **the 2ch `master.buffer`, not the device
    buffer**, and the core gain is pinned at 1.0 in production (see "Where the master gain is
    applied moved" below)
-2. The post-loop walks the stages in array order (= topological order, MX.4), runs
-   `processor.process` if there is an insert, and adds into `hw` (Master) or a later bus
-   (`Bus(j)`) according to `effective_targets[i]`
-3. The continuation of the excerpt (`output.rs:962-985`) adds into `Bus(j)` and then adds
-   gain-scaled copies for `sends` and the runtime send overrides (fan-out is not event
-   duplication but "copy-add at the bus processing stage", exactly as MX.4 prescribes)
+2. The post-loop walks the stages in array order (= topological order, MX.4). Since #611 PR-O3a,
+   though, what happens at each stage is decided not by a branch on `effective_targets[i]` but by
+   the **line program published for that stage** (a sequence of `LineOp`). `LineOp::Rack` is the
+   insert's `processor.process`; `LineOp::Output` is the add into `hw` (Master) or into a later
+   bus (`Bus(j)`)
+3. The continuation of the excerpt (`output.rs:2160-2184`) is the body of `LineOp::Output`, a
+   gain-scaled copy-add (fan-out is not event duplication but "copy-add at the bus processing
+   stage", exactly as MX.4 prescribes)
 
 `split_at_mut(i + 1)` can split left and right because `validate_bus_topology` verified at
 construction that "stage i's destination is always later than i". Here is the implementation-side
 backing for the spec's guarantee that sum nesting and cycles cannot occur **structurally** (MX.2
 "nesting is not supported in v1").
+
+### The line program — the output as a sequence of operations (#611 PR-O3a)
+
+On 2026-09-08, [#811](https://github.com/signalcompose/orbitscore/pull/811) (bundle O-wire)
+replaced the body of the post-loop: instead of "look at `effective_targets[i]` and add into one
+place", it now "executes a per-stage sequence of operations from the top". The operation types are
+these three.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:914-939
+/// A resolved output destination for one line operation. Bus and channel names are converted to
+/// stable indices on the control thread before a program is published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputDest {
+    Master,
+    Bus(usize),
+    Device { left: usize, right: Option<usize> },
+    Render(usize),
+    Link(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineOutput {
+    pub dest: OutputDest,
+    pub thru: bool,
+    pub gain: f32,
+}
+
+/// One operation in a bus line. `Pan` is reserved for PR-O4; this PR does not generate it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineOp {
+    Rack,
+    Gain(f32),
+    Pan(f32),
+    Output(LineOutput),
+}
+```
+
+The eye-catching field is `LineOutput.thru`. It is a boolean for "after writing to this output,
+does the operation sequence continue?", and when it is `false` the post-loop `break`s there. The
+old shape — "add once into `output_target`, then add all the sends" — is expressible in this
+vocabulary as **`Output(output_target, thru = whether there are sends)` followed by one `Output(..)`
+per send, with only the last one at `thru = false`**. That conversion is exactly what
+`LineProgram::legacy` performs, so calls through the old API are translated into a line program
+before they reach RT.
+
+The execution of an output looks like this.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:2160-2184
+                LineOp::Output(output) => {
+                    let dest = effective_line_output_dest(
+                        &mut first_output,
+                        legacy_targets[i],
+                        output.dest,
+                    );
+                    let gain = line_gain(
+                        program,
+                        op_index,
+                        output.gain,
+                        bs / output_channels,
+                        buses[i].line.ramp_frames,
+                    );
+                    match dest {
+                        OutputDest::Master => {
+                            add_scaled(hw, &buses[i].buffer[..bs], gain);
+                        }
+                        OutputDest::Bus(target) => {
+                            let (left, right) = buses.split_at_mut(i + 1);
+                            add_scaled(
+                                &mut right[target - i - 1].buffer[..bs],
+                                &left[i].buffer[..bs],
+                                gain,
+                            );
+                        }
+```
+
+`OutputDest` has five variants, but only three of them — `Master` / `Bus` / `Device` — are executed
+by RT in this bundle. `Pan` / `Render` / `Link` are **rejected at install time**.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1255-1263
+    for op in &program.ops {
+        match op {
+            // These arms are availability gates, not permanent format restrictions. Remove the
+            // corresponding rejection when the follow-up PR wires that variant into RT execution;
+            // until then accepting it would report success for a program the callback ignores.
+            LineOp::Pan(_) => {
+                return Err(OutputError::NoConfig(
+                    "line program Pan is not wired into RT execution".into(),
+                ));
+```
+
+The style is "introduce the type ahead of time, but do not let an install succeed while RT cannot
+execute it". Accepting one would produce the hardest kind of silent failure to find: the call
+reports success and the callback ignores the program.
+
+#### Two devices for compatibility
+
+The claim of this bundle is "the wiring was replaced, but the sound did not change", so two
+devices are in place to preserve the semantics of the old API.
+
+The first is `effective_line_output_dest`.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1301-1312
+fn effective_line_output_dest(
+    first_output: &mut bool,
+    legacy_target: Option<OutputDest>,
+    program_target: OutputDest,
+) -> OutputDest {
+    if *first_output {
+        *first_output = false;
+        legacy_target.unwrap_or(program_target)
+    } else {
+        program_target
+    }
+}
+```
+
+A stage built through `with_routing_overrides` still holds the old atomic (`routing_override`), and
+if a value is present it overrides **only the first `Output` in the sequence**. The second and later
+`Output`s (= the sends) use the program's own values. This is the mapping that makes the old API's
+"replace only the output" partial update mean the same thing in the world of operation sequences.
+
+The second is `LineProgram::settled`. The gain cells of `LineProgram::new` ramp from 1.0 toward
+their target, but the old path's gains took effect **immediately, from the very first callback**.
+That is why `legacy` uses `settled` (every cell starts at its target): it avoids changing the sound
+of the first block through the presence or absence of a ramp.
+
+#### Replacement is an AtomicPtr plus a generation counter
+
+A line program is built by the control thread and read by the RT thread, so the safety of
+replacement becomes a question. `LineExchange`'s answer is "RT does one Acquire load; reclamation
+belongs to control".
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1053-1058
+struct LineExchange {
+    live: AtomicPtr<LineProgram>,
+    retired: Mutex<Vec<RetiredLineProgram>>,
+    /// Completed RT generations. The audio thread is the sole writer; control only Acquire-loads.
+    generation: AtomicU64,
+}
+```
+
+`install` publishes a new `Box` with a `swap` and keeps the displaced old box in the retired list
+**until generation `completed + 2`** (one for a possible in-flight reader plus one spare). The RT
+side Acquire-loads one pointer per stage at the top of the callback and advances the generation with
+`finish_generation()` at the end. Since **allocation, locking and dropping all sit on the control
+side**, the RT contract is not broken.
+
+What is interesting here is that the **marking pass (computing `render_targets`) and the execution
+share the same pointer snapshot**.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:2049-2066
+        // SAFETY: the line generation is not completed until after execution below. Control keeps
+        // any replaced box retired for two later completed generations.
+        let program = unsafe { &*programs[i] };
+        let mut first_output = true;
+        let mut reached_end = true;
+        for op in &program.ops {
+            if let LineOp::Output(output) = op {
+                let dest =
+                    effective_line_output_dest(&mut first_output, legacy_targets[i], output.dest);
+                if let OutputDest::Bus(target) = dest {
+                    render_targets[target] = true;
+                }
+                if !output.thru {
+                    reached_end = false;
+                    break;
+                }
+            }
+        }
+```
+
+If the pass that decides "which buses to zero-fill and process in the post-loop" and the pass that
+actually adds **loaded the program separately, an install landing in between would let the two
+passes disagree** — a merge target could carry over garbage from the previous block, or a bus that
+should be silent could sound. One snapshot per callback, with the generation published only after
+both passes, closes that.
+
+It also follows that `if !output.thru { break }` exists in **two places** (the marking pass and the
+execution). If only one of them stops, a stage is either "alive as a render target but never added
+to" or the reverse.
 
 ## Making an instrument a mixer source (#643)
 
@@ -1048,11 +1271,15 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1023-1035` — `reapplyGlobalGainAfterRespawn`
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1247-1259` — `setGlobalGain` (intent recording)
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1950-1976` — `BusKind` / sum and aux pool prefixes and default sizes
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5776-5845` — `set_bus_routing` validation
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6310-6480` — `set_bus_routing` (validation → one line-program publication → mirror into the old atomics, #611 PR-O3a)
 - `rust/crates/orbit-audio-daemon/src/session.rs:2214-2236` — `SetGlobalGain` handler
 - `rust/crates/orbit-audio-native/src/output.rs:269-282` — `BlockSource` / `SourceDest`
 - `rust/crates/orbit-audio-native/src/output.rs:772-801` — `collect_source_feeds`
-- `rust/crates/orbit-audio-native/src/output.rs:935-986` — the `render_multi_feeds` call and the post-loop
+- `rust/crates/orbit-audio-native/src/output.rs:2119-2235` — the `render_multi_feeds` call and the post-loop (line-program execution, #611 PR-O3a)
+- `rust/crates/orbit-audio-native/src/output.rs:914-939` — `OutputDest` / `LineOutput` / `LineOp`
+- `rust/crates/orbit-audio-native/src/output.rs:1043-1100` — `LineExchange` (AtomicPtr publication + generation-counter reclamation)
+- `rust/crates/orbit-audio-native/src/output.rs:1249-1297` — `validate_line_program` (install-time rejection of `Pan` / `Render` / `Link`)
+- PR [#811](https://github.com/signalcompose/orbitscore/pull/811) / PR [#810](https://github.com/signalcompose/orbitscore/pull/810) — bundle O-wire, PR-O3a (line-program conversion, compatibility preserved)
 - `rust/crates/orbit-audio-native/src/output.rs:1078-1094` — the no-bus path `render_engine_with_source_outputs`
 - `rust/crates/orbit-audio-native/src/output.rs:2017-2060` — unit test `global_gain_scales_instrument_contribution`
 - `rust/crates/orbit-audio-core/src/scheduler.rs:375-460` — `render_multi_feeds` (feed addition and gain ramp)

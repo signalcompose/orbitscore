@@ -328,6 +328,8 @@ engine は `{"evalMark": {...}}` という JSON 行を stdout に返し、`setup
 
 「ユニットテストは全て緑・実機 E2E だけが捕まえた」— これは本章全体のテーマの縮図です。
 
+2026-09-08 の [#811](https://github.com/signalcompose/orbitscore/pull/811) (#773) で、この 4 分岐は `createLinePrefixer` の callback の中へ移りました。分岐そのものと prefix の順序は変わっていませんが、**行が chunk 境界で割れても両断片が失われなくなった**ぶん、`evalMark` 封筒の取りこぼし経路が 1 つ減っています。詳細は [IV-1](/editor/vscode-architecture#stdout-の-bridge-封筒も行へ戻す-773) を参照してください。
+
 では `#614` 後は `get_log` を見なくてよいのでしょうか。**そうではありません。** `ok` が保証するのは「マーカー到達までに engine が上げた診断が無い」ことまでです。評価が返ったあとに非同期に起きる失敗は、依然として stdout/stderr にしか現れません。gated spec 自身がその使い分けを示しています。`instSeq.instrument(...)` を `evaluate_orbitscore` で評価して `isError` が `false` であることを確認したあと、`sleep(6000)` してから `get_log` を読み、`[OUTPROC_ATTACH_FAILED]` が無いことを別途 assert しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:1017-1029`）。out-of-process の CLAP attach は spawn + IPC handshake を伴うため、評価の完了と attach の成否は別のタイムラインにあるからです。
 
 `log-ring.ts` のコメントには `#614` より前の記述（「`get_log` はエンジン側のエラーが現れる**唯一のチャネル**である」）が残っていましたが、本 PR で「**評価が返ったあとに非同期に起きる失敗が現れる唯一のチャネル**」へ改めました。同時に `CLAUDE.md` の 3 箇所（「`ok` に assert しても何も証明しない」）も、`#614` 後の意味へ更新しています。**`ok` が意味を持つ範囲は広がったが、`get_log` が唯一の観測点である領域は残っている** — これが 2026-09-02 時点の正確な理解です。

@@ -1,12 +1,12 @@
 ---
 title: "RE-1. daemon アーキテクチャ概観"
 chapter-id: "RE-1"
-verified-against: b513659
-verified-at: "2026-09-06"
+verified-against: 66efda5
+verified-at: "2026-09-08"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで、2026-09-06 に #779 の起動時 shm sweep（[#784](https://github.com/signalcompose/orbitscore/pull/784)）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで、2026-09-06 に #779 の起動時 shm sweep（[#784](https://github.com/signalcompose/orbitscore/pull/784)）まで、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の直行デバイスラインまで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # RE-1. daemon アーキテクチャ概観
 
@@ -460,7 +460,8 @@ fn render_shared_block(
 自己修復します（次の block で戻る）。
 
 本体の `render_block_with_sources` は、engine render → **master ライン（ラック → gain）** →
-**デバイス配置** → capture tap → callback 所要時間の記録、という順に進みます。中ほどの 2 段は
+**デバイス配置** → **直行デバイスラインの合流** → capture tap → callback 所要時間の記録、
+という順に進みます。中ほどの 2 段は
 #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）で入ったもので、それ以前は
 「engine render → master post-processor → capture tap」の 3 段でした。`master.post`/`capture`/`cb_stats`
 がそれぞれ独立した opt-in であることは変わりませんが、ビット同一の条件は
@@ -468,7 +469,7 @@ fn render_shared_block(
 （デバイス配置の段が増えたぶん、2ch 以外では配置のコストが常に乗ります）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1627-1700
+// rust/crates/orbit-audio-native/src/output.rs:1627-1713
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -543,7 +544,49 @@ fn render_block_with_sources(
     if direct_device_written {
         add_scaled(hw, &master.direct_device_buffer[..hw.len()], 1.0);
     }
+
+    // capture seam（#307 realtime）: post 適用後の最終 hw（= device に出る実信号）を WAV へ逃がす
+    // 読み取り専用 tap。`RingTapSink::commit` は wait-free / no-alloc（満杯時はあふれを drop カウント）
+    // ＝ RT 契約を満たす。off-thread writer が ring を drain する。post の後・計測の内側に置くことで
+    // capture コストも callback-duration に含めて監視する。
+    if let Some(sink) = capture.as_mut() {
+        sink.commit(hw);
+    }
+
+    if let (Some(stats), Some(t0)) = (cb_stats, t0) {
+        stats.record(t0.elapsed().as_nanos() as u64);
+    }
+}
 ```
+
+### 直行デバイスライン — master を通さない出口
+
+`direct_device_buffer` と `direct_device_written` の 2 つは
+#611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）で入りました。バスの
+line program が `OutputDest::Device { left, right }` を持つとき、その音は
+**master ライン（ラック → gain）を通さずに、デバイスの指定チャンネルへ直接**出ます。
+master.buffer は常に 2ch なので、デバイス幅のバッファをもう 1 枚用意しないと行き先が無い、
+というのがこのバッファの理由です。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1926-1930
+struct DeviceLineBuffer<'a> {
+    samples: &'a mut [f32],
+    channels: usize,
+    wrote: bool,
+}
+```
+
+`wrote` が効いています。`add_to_device` は **最初の書き込みのときだけ** バッファ全体を
+`fill(0.0)` するので、誰も Device 宛てを持っていない block では zero-fill のコストが
+一切かかりません。呼び出し側もそれを見て、`direct_device_written` が `false` なら
+最後の `add_scaled` ごと飛ばします。「使われていない経路には per-block のコストを払わない」
+という、`place_master_into_device` で `hw` を zero-fill しない判断と同じ方針です。
+
+この束の時点では `LineProgram::legacy`（= 旧 `SetBusRouting` の変換先）は `Master` と `Bus` しか
+生成しないので、production でこの経路が踏まれることはありません。RT が実行できる形にだけして
+おいて、出口を実際に生やすのは DSL 表面を変える次の束、という段取りです
+（[SC-2](/signal-chain/mixer-audio-line#line-program-—-出口を「命令列」として持つ-611-pr-o3a) 参照）。
 
 ### master ライン — engine の内部幅は常に 2ch
 
@@ -862,7 +905,9 @@ ORBIT_CAPTURE_WAV=/tmp/orbit-capture-test.wav node cli-audio.js path/to/single-n
 - `rust/crates/orbit-audio-daemon/src/session.rs:691-718,1272-2372` — `session::run`（handshake・writer task・UI event 転送）と `handle_command` の match arm（コマンド表の出典）
 - `rust/crates/orbit-audio-native/src/output.rs:254-260,581-618,662-750,1513-1556` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
 - `rust/crates/orbit-audio-native/src/output.rs:682-688,700-754,1253-1277` — `ENGINE_CHANNELS` / `MasterLine`（ラック → gain）/ `place_master_into_device`（#649 PR-O2）
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8724-8733` — `EngineWrap::set_global_gain`（master line への atomic store・`ramp_sec` は wire 互換のみ）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8867-8876` — `EngineWrap::set_global_gain`（master line への atomic store・`ramp_sec` は wire 互換のみ）
+- `rust/crates/orbit-audio-native/src/output.rs:1926-1930,1932-1985` — `DeviceLineBuffer` / `add_to_device`（直行デバイスライン・#611 PR-O3a）
+- PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — 束 O-wire（line program 化・互換維持）
 - [`docs/design/611-output-line-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/design/611-output-line-design.md) §5.2-5.5 — master ライン・内部幅 2ch・core master gain を production から外す設計正本
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — engine-first ロードマップとアーキ確定（楽器=in-process／effects+3rd-party=out-of-process sandbox）
 - [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 / 6.262 — capture peak の実測記録

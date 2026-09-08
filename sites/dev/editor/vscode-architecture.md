@@ -1,12 +1,12 @@
 ---
 title: "IV-1. VS Code 拡張アーキテクチャ"
 chapter-id: "IV-1"
-verified-against: d2e94af
-verified-at: "2026-09-06"
+verified-against: 66efda5
+verified-at: "2026-09-08"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで、2026-09-08 に #773（PR [#811](https://github.com/signalcompose/orbitscore/pull/811)・stdout bridge 封筒の行単位化）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-1. VS Code 拡張アーキテクチャ
 
@@ -652,7 +652,58 @@ export function setupStderrHandler(process: child_process.ChildProcess): void {
 }
 ```
 
-ちなみに、この「chunk 列 → 行」の実装はリポジトリ全体で **4 つ**あります。実装のコメントが 4 つとも列挙していて、`createLinePrefixer` を直しただけで全部揃ったと思わないように、と注意書きが付いています。engine stderr のここ、daemon stderr の `createDaemonStderrLineRouter` (`packages/engine/src/audio/rust-engine/daemon-client.ts`、[#777](https://github.com/signalcompose/orbitscore/issues/777))、engine stdout の `setupStdoutHandler` ([#773](https://github.com/signalcompose/orbitscore/issues/773))、そして本章冒頭で見た ring proxy (`append` を `value.split('\n')` して ring へ写す部分) です。拡張パッケージは `@orbitscore/engine` に依存しないので、少なくとも前 2 つは今のところ共有できません。改行コード・空行・末尾 flush の判断は 4 箇所すべてへ波及しうる、というのが実装コメントの結論です。
+ちなみに、この「chunk 列 → 行」の経路はリポジトリ全体で **4 つ**あります。実装のコメントが 4 つとも列挙していて、`createLinePrefixer` を直しただけで全部揃ったと思わないように、と注意書きが付いています。engine stderr のここ、daemon stderr の `createDaemonStderrLineRouter` (`packages/engine/src/audio/rust-engine/daemon-client.ts`、[#777](https://github.com/signalcompose/orbitscore/issues/777))、engine stdout の `setupStdoutHandler` ([#773](https://github.com/signalcompose/orbitscore/issues/773))、そして本章冒頭で見た ring proxy (`append` を `value.split('\n')` して ring へ写す部分) です。拡張パッケージは `@orbitscore/engine` に依存しないので、少なくとも前 2 つは今のところ共有できません。改行コード・空行・末尾 flush の判断は 4 箇所すべてへ波及しうる、というのが実装コメントの結論です。
+
+### stdout の bridge 封筒も行へ戻す (#773)
+
+3 つ目の `setupStdoutHandler` は、2026-09-08 の [#811](https://github.com/signalcompose/orbitscore/pull/811) (束 O-wire) で `createLinePrefixer` を使う側に回りました。それまでは chunk を `output.split('\n')` して、その場で `{"savePluginState"` / `{"pluginUi"` / `{"evalMark"` / `{"engineState"` の 4 分岐へ流していたので、**bridge の JSON 封筒が chunk 境界で割れると両方の断片が失われました**。前半は prefix チェーンのどれにも一致せず、後半は `{` で始まらないので、やはりどれにも一致しないからです。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1479-1486
+export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
+  // #773: Bridge envelopes are line-framed, but stdout data events are not.
+  // Keep this buffer inside the handler so a stale process can never donate a
+  // partial line to the current process. Only bridge dispatch is buffered:
+  // applyEngineStdoutChunk still receives each raw chunk immediately below.
+  const bridgeLines = createLinePrefixer((rawLine) => {
+    const trimmedLine = rawLine.trim()
+    const isCurrent = engineProcess === process
+```
+
+読みどころは、`bridgeLines` が **ハンドラの中で作られている**ことです。モジュールレベルに置くと、`stopEngine()` → `startEngine()` の間に古いプロセスが残した半端な行が、新しいプロセスの buffer に混ざります。stale ガードが `engineProcess === process` の同一性で判定できるのは、buffer がプロセスごとに独立しているからです。
+
+もう 1 つの仕掛けが `StringDecoder` です。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1516-1519
+  // Decode only the buffered bridge-dispatch path across Buffer boundaries. The log/playhead path
+  // below intentionally keeps its historical per-chunk `data.toString()` timing and values.
+  // stderr has the same UTF-8 boundary hazard but remains out of scope for this change.
+  const bridgeDecoder = new StringDecoder('utf8')
+```
+
+`data.toString()` は chunk を単独で UTF-8 として解釈するので、マルチバイト文字が chunk をまたぐと **その場で `U+FFFD` に化けます**。行を繋ぎ直しても文字が壊れたあとでは戻りません。`StringDecoder` は不完全なバイト列を次の chunk まで持ち越すので、その手前で守れます。コメントが明言しているとおり、この置き換えは **bridge dispatch の経路だけ**で、ログと playhead へ渡す `output` / `lines` は従来どおり `data.toString()` のままです。既存の呼び出し規約とタイミングを変えないための線引きで、stderr 側の同じ危険はこの変更の対象外だとも書かれています。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1534-1535
+      const bridgeOutput = bridgeDecoder.write(data)
+      if (bridgeOutput) bridgeLines.push(bridgeOutput)
+```
+
+そして stderr 側と同じく、`end` で必ず吐き出します。`bridgeDecoder.end()` が先に来るのは、decoder が抱えている未完のバイト列を文字へ戻してから prefixer へ渡さないと、最後の 1 行が化けたまま emit されるからです。
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1578-1586
+  process.stdout?.on('end', () => {
+    try {
+      const bridgeRemainder = bridgeDecoder.end()
+      if (bridgeRemainder) bridgeLines.push(bridgeRemainder)
+      bridgeLines.flush()
+    } catch (err) {
+      logHandlerFailure('setupStdoutHandler', err)
+    }
+  })
+```
 
 ---
 
@@ -963,9 +1014,10 @@ flowchart TD
 - `packages/vscode-extension/src/extension.ts:653-710` — `getConfiguredEngineKind()` / `resolveScsynthForUI()` / `resolveDaemonForUI()`
 - `packages/vscode-extension/src/extension.ts:725-798` — `updateBundleStatus()` / `maybeShowBundleNotice()`
 - `packages/vscode-extension/src/extension.ts:800-883` — `showCommands()` (engine kind で分岐) / `restartEngine()` / `reloadWindow()`
-- `packages/vscode-extension/src/extension.ts:1473-1553` — `setupStdoutHandler()`: bridge 振り分けと `applyEngineStdoutChunk` 呼び出し
-- `packages/vscode-extension/src/extension.ts:1567-1619` — `createLinePrefixer()`: chunk 列を行へ戻す (`partial` の持ち越し・`flush()`・空行を emit しない) と、実装コメントによる「chunk → 行」4 実装の列挙 (#756)
-- `packages/vscode-extension/src/extension.ts:1621-1657` — `setupStderrHandler()`: `ERROR:` の行単位前置と `end` での flush
+- `packages/vscode-extension/src/extension.ts:1479-1587` — `setupStdoutHandler()`: `createLinePrefixer` + `StringDecoder` による bridge 振り分けと `applyEngineStdoutChunk` 呼び出し (#773)
+- `packages/vscode-extension/src/extension.ts:1589-1642` — `createLinePrefixer()`: chunk 列を行へ戻す (`partial` の持ち越し・`flush()`・空行を emit しない) と、実装コメントによる「chunk → 行」4 経路の列挙 (#756 / #773)
+- `packages/vscode-extension/src/extension.ts:1644-1680` — `setupStderrHandler()`: `ERROR:` の行単位前置と `end` での flush
+- Issue [#773](https://github.com/signalcompose/orbitscore/issues/773) / PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — stdout の bridge 封筒が chunk 境界で割れて両断片とも失われる問題
 - `tests/vscode-extension/extension-wiring.spec.ts` — 行単位前置を留める 4 本 (PR [#772](https://github.com/signalcompose/orbitscore/pull/772))
 - `packages/vscode-extension/src/extension.ts:1699-1723` — `autoStartConfiguredRustEngine()`
 - `packages/vscode-extension/src/extension.ts:2044-2198` — `startEngine()`: engine kind 事前チェック・args / env・spawn・ハンドラ・nextTick ガード
