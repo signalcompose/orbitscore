@@ -1,8 +1,8 @@
 ---
 title: "RE-3. per-sequence insert bus（seq.effect()）"
 chapter-id: "RE-3"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 66efda5
+verified-at: "2026-09-08"
 status: draft
 ---
 
@@ -88,9 +88,36 @@ pub struct InsertBusStage {
 監視し、`UNROUTABLE_EVENTS` の `DaemonError` として「宣言前 tag / 名前 typo」を可視化します
 （`protocol.rs:157-161`）。
 
-`InsertBusStage` は 2026-07-17 時点の 4 フィールドに加えて、mixer 用の `output_target` /
-`sends` / `routing_override` / `send_gain_overrides` を持つようになりました（`output.rs:397-412`）。
-これらは「この bus の出力をどこへ足すか」を決めるもので、SC-2 章の主題です。
+`InsertBusStage` は 2026-07-17 時点の 4 フィールドに加えて、mixer 用に `output_target` /
+`sends` / `routing_override` / `send_gain_overrides` の 4 フィールドを持っていました。
+#611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）で、この 4 つは
+**`line: LineSlot` の 1 フィールドにまとめられました**。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1334-1336
+    /// Published line program. Routing, sends, and rack position are all interpreted from this one
+    /// ordered program by the callback post-loop.
+    line: LineSlot,
+```
+
+`LineSlot` が抱えるのは `LineProgram`、つまり **`LineOp` の並び**です。「どこへ足すか」だけを
+持っていた旧フィールドと違い、ラックをどの位置で通すか（`Rack`）・ゲインをどこで掛けるか
+（`Gain`）・どこへ出すか（`Output`）が **1 本の順序付きプログラム**として表現されます。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:932-939
+/// One operation in a bus line. `Pan` is reserved for PR-O4; this PR does not generate it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineOp {
+    Rack,
+    Gain(f32),
+    Pan(f32),
+    Output(LineOutput),
+}
+```
+
+`LineOp::Pan` は型としてだけ入っていて、PR-O3a のコードはこの op を 1 つも生成しません
+（配線は PR-O4）。この bus の出力がどこへ行くかという話そのものは SC-2 章の主題です。
 
 ## bus 0 個ならビット同一の従来経路
 
@@ -108,8 +135,10 @@ RE-1 で見た `render_engine_with_sources` は、insert bus が 1 つも active
                 buses,
 ```
 
-active な bus がある場合は `render_engine_with_insert_buses`（instrument source があれば
-`render_engine_with_insert_buses_and_source_outputs`）が呼ばれます。`active` フラグは callback の
+active な bus がある場合は `render_engine_with_insert_buses_and_source_outputs` が呼ばれます。
+instrument source が無いときは source 側に空スライスを渡すだけで、経路は 1 本に揃っています
+（PR-O3a より前は source 無し専用の `render_engine_with_insert_buses` を通っていました。この
+関数は `#[cfg(test)]` のテスト用ラッパーとして残っています）。`active` フラグは callback の
 冒頭で 1 回だけ atomic load して `ArrayVec` に snapshot し、その後の marking pass と加算 pass で
 使い回します（同じ atomic を 2 回 load すると、callback の途中に `SetBusRouting` が挟まったとき
 両 pass の見え方が食い違うため）。
@@ -427,6 +456,8 @@ WORK_LOG の記述であり、本ページの再読（2026-09-01）でも `outpr
 ## Sources
 
 - `rust/crates/orbit-audio-native/src/output.rs:377-412` — `InsertBusStage` 構造体（`processor`/`active` と mixer 用フィールドの意味）
+- `rust/crates/orbit-audio-native/src/output.rs:1252-1275` — PR-O3a 後の `InsertBusStage`（mixer 用 4 フィールド → `line: LineSlot`）
+- `rust/crates/orbit-audio-native/src/output.rs:904-929` — `OutputDest` / `LineOutput` / `LineOp`（`Pan` は PR-O4 予約）
 - `rust/crates/orbit-audio-native/src/output.rs:709-750` — `render_engine_with_sources` の bus 0 個フォールバック（bit-identical 経路）
 - `rust/crates/orbit-audio-native/src/output.rs:823-846` — `render_engine_with_insert_buses_and_source_outputs` の active flag snapshot
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1904-1948` — `DEFAULT_EFFECT_BUS_POOL_PREFIX` / `DEFAULT_EFFECT_BUS_POOL_SIZE` / `effect_buses_from_env`

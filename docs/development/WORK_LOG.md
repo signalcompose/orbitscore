@@ -32,8 +32,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 | `sites/dev/rust-engine/index.md` | `render_block_with_sources` に **直行デバイスライン**の段が増えた（`DeviceLineBuffer` / `direct_device_written` / `wrote` による遅延 zero-fill）。引用 range が capture tap と `cb_stats` を落としていたので本文の 5 段記述に合わせて復元 | `rust/crates/orbit-audio-native/src/output.rs:1651-1700,1926-1930` |
 | `sites/dev/editor/vscode-architecture.md` | #773: stdout の bridge dispatch が `createLinePrefixer` + `StringDecoder` 経由になった。buffer をハンドラ内に置く理由（stale プロセスとの分離）、decode をこの経路だけに限った線引き、`end` での `decoder.end()` → `flush()` の順序 | `packages/vscode-extension/src/extension.ts:1479-1486,1516-1519,1534-1535,1578-1586` |
 | `sites/dev/editor/mcp-and-gated-e2e.md` | evalMark 分岐が prefixer callback の中へ移ったこと（分岐と prefix 順は不変・取りこぼし経路が 1 つ減った）への cross-link | 同上 |
+| `sites/dev/rust-engine/insert-bus.md` | `InsertBusStage` の mixer 用 4 フィールド（`output_target` / `sends` / `routing_override` / `send_gain_overrides`）が **`line: LineSlot` の 1 本**へまとまった。`LineOp` の並びが「ラックの位置・gain・出口」を表す。source 無し専用の `render_engine_with_insert_buses` は `#[cfg(test)]` のラッパーへ後退 | `rust/crates/orbit-audio-native/src/output.rs:1314-1336,932-939,1785-1790` |
+| `sites/dev/editor/execution-feedback.md` | stdout の 4 分岐が `for` ループから prefixer callback へ移った理由（引用のインデントが 8 → 4 になった）と、それ以前は `evalMark` 応答がまるごと失われて `evaluateForAgent()` が timeout していたこと | `packages/vscode-extension/src/extension.ts:1499-1507` |
 
-3 章の frontmatter は `verified-against: 66efda5` / `verified-at: 2026-09-08` に更新した。
+5 章の frontmatter は `verified-against: 66efda5` / `verified-at: 2026-09-08` に更新した。
+
+#### 🔴 先行する追従 PR 2 本をここへ統合した（#807 / #812 は close）
+
+`claude/docs-sync-pr806`（#807・#773 の追従）と `claude/docs-sync-pr810`（#812・PR-O3a の追従）は、
+**本 PR と同じ章の同じ主題を、1 つ前の code に対して**書いていた。#811 が束として main に入った時点で
+両者の引用は壊れており（`docs:check` で 8 件 FAIL）、地の文も `StringDecoder` 導入前の説明のままだった。
+
+そこで **両者にしか無いファイルだけを本 PR へ取り込み**、重複していた 4 章
+（`vscode-architecture.md` / `mcp-and-gated-e2e.md` / `rust-engine/index.md` /
+`signal-chain/mixer-audio-line.md`）は**本 PR の版＝最新 code に対する記述を採った**。
+取り込んだのは上表の下 2 行。引用は `check-citations.mjs --fix` で再アンカーし、
+PR 参照は束のマージ PR **#811** に統一した（dev サイトは main の履歴を基準にするため）。
+
+🔴 **教訓**: ルーティンの追従 PR を溜めると、追従先の code が動いて**追従そのものが陳腐化する**。
+6 本溜まった時点で 3 本が同じ章を奪い合っていた。`BUNDLE_BRANCH_WORKFLOW` §4 が
+「束を開く前に全部消化する」と言っているのは、衝突だけでなくこの陳腐化も理由である。
 
 #### 追従不要と判断したもの
 
@@ -46,6 +64,198 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 #### 検証
 
 `npm run docs:build`（user / dev）と `npm run docs:check` を実行。結果は PR 本文に貼付。
+
+---
+
+### perf(test): the Rust test cycle was 91% macOS malware scanning — 2,240s to 66s (#816) (Sep 8, 2026)
+
+**Issue**: #816 / **ブランチ**: `816-test-cycle-perf` → main（直行）
+
+#### 発端（owner）
+
+> テストは重要なのですが、**過剰なテストになっていませんか？** テストを正しく無駄なく行う方法はありませんか？
+
+#### 🔴 答え: 過剰ではなかった。テストは 80 秒しか走っていない
+
+`cargo test --workspace --locked`（1 ファイル変更後）の内訳を実測で分解した:
+
+| 内訳 | 時間 | 割合 |
+|---|---|---|
+| ビルド + リンク | 101 秒 | 5% |
+| **テスト自身の実行** | **80 秒** | 4% |
+| 🔴 **バイナリ初回起動の macOS 検査** | **約 34 分** | **91%** |
+
+決定的な観測 — **同じバイナリを 3 回起動**した:
+
+```
+run 1: 23.22 秒   ← 初回
+run 2:  0.004 秒
+run 3:  0.004 秒
+```
+
+CPU サンプリングで犯人も特定した: **前半 5 秒が `syspolicyd`（Gatekeeper）・後半 6 秒が
+`XprotectService`（マルウェアスキャン）**。
+
+🔴 **`cargo test` はこの検査にとって最悪のケース**である。テストバイナリは**1 回しか実行されない**ので
+キャッシュが効く前に用済みになり、このワークスペースは**77 個**作る。しかも
+**`XprotectService` はシングルスレッド**なので、並列に起動しても検査は 1 本ずつしか進まない。
+
+#### 対策と結果
+
+**ターミナル（Ghostty）をデベロッパツールに登録 + ターミナル再起動 + `cargo clean`**。
+
+| | ベースライン | 対策後 |
+|---|---|---|
+| **所要** | **2,240 秒（37 分 20 秒）** | 🔴 **66 秒** |
+| passed / failed / ignored | 615 / 0 / 38 | **615 / 0 / 38** |
+| スイート数 | 93 | **93** |
+| テストバイナリ | 77 | **77** |
+
+🔴 **検証の範囲も結果も 1 つも変わらず 34 倍。** 「速度と正しさを交換する」類ではない。
+
+#### 🔴 `cargo clean` が要る理由（ここを飛ばすと効かない）
+
+設定は「**これから作られるバイナリ**」にしか効かない。`target` に残っている成果物（**71 GB** あった）は
+**設定前のまま**なので検査され続ける。nextest の公式が
+"You may also need to run `cargo clean` afterwards" と書いているとおりだった。
+
+**設定だけ入れて `cargo clean` しなかった段階では、32 秒のまま変化しなかった。**
+
+#### 効かなかったもの（記録・再試行の必要なし）
+
+| 手 | 結果 |
+|---|---|
+| `codesign -v` で事前検証 | ❌ 13.6 秒かけても初回起動は 76 秒。**署名検証と実行時スキャンは別物** |
+| バイナリを並列に warm up | ❌ `XprotectService` がシングルスレッドなので直列化する |
+| `sudo spctl developer-mode enable-terminal` 単独 | ❌ **Terminal.app を追加するだけ**でトグルも ON にならない。Ghostty 利用時は無関係 |
+
+⚠️ **並列 warm up の自作は危険**でもあった。`--list` を渡しても、テストバイナリではない実行ファイル
+（`orbit-plugin-scan` / `sandbox-effect-child`）は**引数を無視して本体として起動する**。
+実際にやってしまい 8 分以上走り続けた。**止めて方法を変えた。**
+
+#### 🔴 このリポジトリは既に半分知っていた
+
+`orbit-audio-sandbox/src/child.rs:107` の `warm_up_executable`（#520）が
+「`cargo build` 直後の child は macOS のセキュリティ評価を伴い**数秒〜24 秒**止まりうる」と
+コメントしていた。**個別のテストには対策済みで、テストサイクル全体には効いていなかった。**
+
+同日「実機の赤を実装のせいにしかけた」3 件のうち 2 件も**同じ Gatekeeper** が原因だった。
+**同じ現象に 3 つの別々の名前を付けて、別々に対処していた**ことになる。
+
+#### 残したもの
+
+- **`docs/development/MACOS_DEV_SETUP.md`**（新設）— 手順・トレードオフ・効かなかった手
+- **CLAUDE.md の Development Commands** と **`docs/core/INDEX.md`** からポインタ
+  （次のセッションが最初に読む場所に置く）
+
+#### 🔴 owner の環境で変えたもの（リポジトリ外・戻す時の参照）
+
+| # | 何を | 状態 |
+|---|---|---|
+| 1 | **Ghostty をデベロッパツールに登録（ON）** | 🔴 **これが効いた。外すと 37 分に戻る** |
+| 2 | `sudo spctl developer-mode enable-terminal` | ⚪ **無関係**（Terminal.app 対象・トグル OFF）。戻してよい |
+| 3 | `cargo-nextest` を `~/.cargo/bin` に導入 | ⚪ **未使用**。原因が別だったので出番が無かった |
+
+⚠️ **戻し方**: `spctl` に `disable-terminal` は**無い**（main が誤って案内し訂正した）。
+解除は **システム設定 → プライバシーとセキュリティ → デベロッパツール** で
+トグル OFF か `−` で削除する。
+
+#### 方針として採らなかったもの
+
+**「`--workspace` を毎回回さない」は採らない。** 検証の範囲を狭める手であり、このリポジトリは
+「委譲先の緑は実機の緑ではない」「配線は E2E でしか見えない」という失敗を繰り返している。
+**範囲を狭めると同じクラスの事故が戻る。** 今回の対策は「**同じ検証を速くする**」だけなので失うものが無い。
+
+---
+
+### chore(docs): stop planning documents from drifting silently (#814) (Sep 8, 2026)
+
+**Issue**: #814 / **ブランチ**: `814-doc-drift-check` → main（直行）
+
+#### 発端 — owner の問い
+
+束 O-wire を閉じる直前、owner に「**先に送った内容は地図・設計・プランに反映してあるか**」と問われ、
+一次ソースで確認したら**不十分だった**。さらに「**現状の地図や設計、実装プランが正しいことは保証
+できますか**」と問われ、**保証できないと答えた**（確認したのは 3 項目だけだった）。
+
+🔴 **地図の #801 行が「実測は負荷依存」のままだった。** これは**同日の実測で否定された記述**である。
+**地図は次のセッションが最初に読む層**なので、古い記述は**申し送りの誤りを再生産する** —
+実際その束は、旧 `/goal` の「負荷をかけて再現条件を作る」という**誤った前提から始まっていた**。
+
+#### 実測した規模
+
+| 文書 | 参照している issue（ユニーク）|
+|---|---|
+| `DEVELOPMENT_MAP.md` | **174 件** |
+| `IMPLEMENTATION_PLAN_2026-09.md` | 90 件 |
+
+⚠️ **粗い検出（同一行に複数 issue）だと 18 件出るが、行の主題で絞ると 4 件**だった。
+**数字を出すときは検出条件の粗さも一緒に言う** — 一度「18 件」とだけ報告して owner に問い返された。
+
+#### ① 手順書に「いつ更新するか」を書いた（`BUNDLE_BRANCH_WORKFLOW.md` §5.1b）
+
+**「後でまとめて書く」は必ず忘れる。** 同日の失敗はすべて「変わった直後に書かなかった」ことだった。
+
+| 時点 | 何を | なぜ |
+|---|---|---|
+| 🔴 **事実が変わった瞬間** | **地図** | 「今どうなっているか」の層。次のセッションが最初に読む |
+| 🔴 **決めた瞬間（実装の前）** | **計画・設計** | `CLAUDE.md` 運用規則 6「spec 側を先に更新してから実装する」|
+| 束を閉じる前 | 3 文書の突合 | 上 2 つができていれば**確認だけ**で済む |
+
+手順表にも 2 行足した（束を開く前の grep・束を閉じる前の突合）。
+
+🔴 **「実測」を書くときは出典（日付 / PR / commit）を必須にする**とも定めた。
+テストが捕まえるのは状態語の矛盾だけで、**内容の誤りは捕まらない**。
+出どころがあれば次の人が「これは 09-07 の測定で 09-08 に否定されている」と気づける。
+
+#### ② 突合テストを新設（`tests/docs/planning-issue-state.spec.ts`）
+
+- 文書の `#NNN` を抽出 → **行の主題**（最初に現れる番号）が CLOSED かを判定
+- CLOSED なのに `未着手` `引き込む` `予定` 等があれば **red**
+- **ベースラインでラチェット**（`dsl-e2e-coverage.spec.ts` と同じ形）
+
+🔴 **テストは GitHub API を叩かない。** issue の状態は
+`docs/planning/issue-states.json`（`scripts/docs/refresh-issue-states.mjs` が生成）に固定する。
+テストがネットワークとレート制限で落ちると、**#801 と同じ「赤の帰属ができない」状態**を持ち込む。
+
+#### 🔴 テストが初回から本物を 5 件捕まえた
+
+| 行 | 記述 | 実際 |
+|---|---|---|
+| `MAP:1136` `MAP:1139` | #773 を「**束 O-wire に引き込む**」 | **同日 CLOSED**（PR #811）|
+| `PLAN:332` | #780 の束が「**ステージ 2 に着手する前提**」 | **09-07 完了**・ステージ 2 は着手済み |
+| `PLAN:333` | #773 を「**引き込み**」 | 同上 |
+| `PLAN:499` | #801 を「**O-wire に引き込む**」 | **同日 CLOSED** |
+
+**5 件を直した。** 誤検知 3 件（行頭の番号が主題でない形）は**理由を書いてベースラインへ**。
+主題の判定を賢くするより、**少数の誤検知を明示的に許容する**ほうが読みやすいと判断した。
+
+#### 変異検証（main が実行）
+
+| 変異 | 結果 |
+|---|---|
+| 閉じた issue を「未着手」と書く行を足す | ✅ **red**（該当行を名指し）|
+| ベースラインから 1 件消す | ✅ **red** |
+
+#### 🔴 変異の復元を確認して助かった
+
+変異 2 のあと `git checkout -- tests/docs/planning-issue-state.spec.ts` で戻したつもりが、
+**ファイルが未追跡（`??`）なので効いていなかった**。テストが赤のままで気づいた。
+**「復元した」を確認せずに次へ進まない。**
+
+#### このテストが捕まえないもの（過大評価しない）
+
+| 誤りの型 | 捕まるか |
+|---|---|
+| 状態語の矛盾（CLOSED なのに「未着手」）| ✅ |
+| 🔴 **内容の誤り**（「#801 は負荷依存」・issue は OPEN）| ❌ |
+| 文書間のずれ（地図は「PR-O3」・計画は「PR-O3a」）| ❌ |
+
+**同日いちばん危なかったのは 2 番目**で、そこは出典必須の運用で担保する。
+
+---
+
+## 束 O-wire（#611 ステージ 2・統合ブランチ `611-line-wire`）
 
 出口の配線を入れ替える束。**振る舞いは変えない**ので、束の収束条件は
 「**`OUTPUT_LINE_GOLDENS` / `O0-1` などの goldens が 1 つも動かないこと**」+ cargo 全緑 + 実機 gated 全件。

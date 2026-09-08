@@ -1,12 +1,12 @@
 ---
 title: "IV-2. インライン実行とフィードバック"
 chapter-id: "IV-2"
-verified-against: ef140b1
-verified-at: "2026-09-04"
+verified-against: 66efda5
+verified-at: "2026-09-08"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-08 に #773（PR [#811](https://github.com/signalcompose/orbitscore/pull/811)・stdout の bridge dispatch の行単位化）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-2. インライン実行とフィードバック
 
@@ -449,6 +449,8 @@ stdout 側の受信は `setupStdoutHandler()` に **独立した分岐** とし�
       }
     } else if (trimmedLine.startsWith('{"engineState"')) {
 ```
+
+引用のインデントが 4 に見えるのは、この分岐が 2026-09-08 (#773・[PR #811](https://github.com/signalcompose/orbitscore/pull/811)) に `for` ループから `createLinePrefixer` のコールバックへ移ったからです。それ以前は stdout の chunk ごとに `output.split('\n')` するだけで**部分行を次の chunk へ持ち越していなかった**ので、`{"evalMark":...}` が chunk 境界で割れると前半は「malformed」警告になり、後半は prefix 判定をすり抜けて通常ログとして捨てられていました。**`evalMark` の応答がまるごと失われる**ので、`evaluateForAgent()` の `await` は timeout するまで返りません。`savePluginState` / `pluginUi` / `engineState` の 3 分岐も同じ経路なので同じ壊れ方をします。詳しくは [IV-1](/editor/vscode-architecture) の「stdout の bridge 封筒も行へ戻す」節を参照してください。
 
 editor の `Cmd+Enter` はこのマーカーを送りません。人間にはフラッシュ + 診断 + Output Channel で足りるからで、evalMark は MCP の evaluate 専用です。MCP ツール群の全体は [IV-3. MCP サーバと実機 gated E2E](/editor/mcp-and-gated-e2e) で扱います。
 
