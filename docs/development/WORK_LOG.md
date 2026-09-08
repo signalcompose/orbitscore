@@ -17,6 +17,94 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(testing): point the testing guide at the macOS setup trap (PR #819 follow-up) (Sep 8, 2026)
+
+**追従元**: PR [#819](https://github.com/signalcompose/orbitscore/pull/819)（マージコミット `6e22a84` / head `5ef4151`） / **ブランチ**: `claude/docs-sync-pr819`
+
+docs-sync ルーチンが PR #819 のマージを受けて実行。#819 は `docs/development/MACOS_DEV_SETUP.md` を
+新設し、CLAUDE.md と `docs/core/INDEX.md` からポインタを張ったが、**Rust テストの手順書である
+`docs/testing/TESTING_GUIDE.md` には張られていなかった**。同ガイドの Prerequisites は
+「Rust toolchain」「macOS Apple Silicon」を要求しつつ、設定なしの macOS では
+`cargo test --workspace` が 37 分かかる事実に触れていない。
+
+#### 変更
+
+- `docs/testing/TESTING_GUIDE.md` の System Requirements 直後に `MACOS_DEV_SETUP.md` への
+  ポインタを追加（2,240 秒 → 66 秒・遅さの 91% はマルウェアスキャン・件数は不変）
+
+#### 追従不要と判断したもの
+
+#819 の差分は 4 ファイルすべてがドキュメント（CLAUDE.md / `docs/core/INDEX.md` /
+`MACOS_DEV_SETUP.md` / WORK_LOG.md）で、`packages/engine/`・`rust/`・
+`packages/vscode-extension/` に変更が無い。DSL の構文・意味論、MCP ツールの引数と返り値、
+エディタの評価経路のいずれも変わらないため、`docs/specs-v2/`・
+`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`・`sites/user/`・`sites/dev/` は対象外。
+`sites/dev/` は内部構造の解説サイトで開発機セットアップの章を持たない（`orientation/` は
+`what-is-orbitscore.md` と `architecture-overview.md` のみ）。
+
+---
+
+### docs: follow up PR #815 — record the new planning-doc ratchet where the rules live (Sep 8, 2026)
+
+**追従元**: PR [#815](https://github.com/signalcompose/orbitscore/pull/815)（#814・merge commit `5eaea2f`）/
+**ブランチ**: `claude/docs-sync-pr815` → main（ルーティンのドキュメント追従）
+
+PR #815 は**仕組み**（`tests/docs/planning-issue-state.spec.ts`）と**運用規則**
+（`BUNDLE_BRANCH_WORKFLOW.md` §5.1b）を足したが、**それを列挙している既存の 3 箇所には入っていなかった**。
+規律の一覧が実在の仕組みより古いままだと、次のセッションは「その仕組みは無い」と読む。
+
+| 直した先 | 何を |
+|---|---|
+| `CLAUDE.md`「これらは仕組みで強制されている」 | 表に 1 行追加。**捕まえるのは状態語の矛盾だけ**で内容の誤りは通ることも併記（出典必須の運用へ送る）|
+| `DEVELOPMENT_MAP.md` §0.2 | 運用規則 7（事実が変わった瞬間に地図を更新）・8（実測には出典）を追加。既存の規則 4「issue を閉じたら」より**広い**ことを明示 |
+| `PROJECT_RULES.md` §1c（棚卸しの作法）| `KNOWN_STALE_BASELINE` が**棚卸しの入口**であること・直したら削ること・増やして通さないこと |
+| `INDEX.md` Planning 表 | `docs/planning/issue-states.json` を**生成物**として登録 |
+
+🔴 **`packages/` `rust/` `sites/` は 0 件。** 元 PR に実装の差分が無く、`sites/dev` は
+コードの内部構造を扱う層なので追従先が無い（判断理由は PR 本文）。
+
+---
+
+### docs(index): follow PR #805 — the archive period label stayed at 09-05 (Sep 7, 2026)
+
+**ブランチ**: `claude/docs-sync-pr805`（ルーチンによる docs 追従）
+
+PR [#805](https://github.com/signalcompose/orbitscore/pull/805)（マージコミット `7a71f51`）の追従。
+#805 は WORK_LOG のローテーションのみで、**DSL / ランタイム / OrbitStudio の表面は 1 行も動いていない**。
+追従対象はアーカイブの索引 1 箇所だけだった。
+
+#### 直した箇所
+
+| ファイル | 内容 |
+|---|---|
+| `docs/core/INDEX.md:176` | 「Archived WORK_LOG」表の period 列 `2026-09（前半・09-01〜09-05）` → `09-01〜09-06` |
+
+#805 はアーカイブ側 H1（`docs/archive/WORK_LOG_2026-09.md:1`）と本体末尾の索引
+（`docs/development/WORK_LOG.md:1184`）を `09-01〜09-06` へ更新したが、`PROJECT_RULES.md:116` が
+更新を義務づけている **3 箇所目の `docs/core/INDEX.md` が旧ラベルのまま**残っていた。
+
+🔴 **仕組みがこの列を見ていない。** `tests/docs/worklog-size.spec.ts:44-53` の索引テストは
+「`docs/archive/` にある `WORK_LOG_YYYY-MM.md` が本体末尾から辿れるか」= **ファイル名の存在**しか
+照合しない。period 列のラベルも INDEX.md 側の表も検査範囲の外なので、ずれても緑のままになる。
+
+#### 追従不要と判断したもの
+
+- `docs/archive/WORK_LOG_2026-09.md`（+790 行）と `docs/development/WORK_LOG.md`（-786 行）の
+  本文 — **移設のみで内容は不変**（#805 が文字列比較で同一性を確認済み）。参照先が本体から
+  archive へ移るが、`sites/**` からの `development/WORK_LOG.md` 名指しは 0 件で、
+  `sites/dev/editor/vscode-architecture.md:918`（および `en/` 同行）は既に archive を指している
+- `sites/dev/` の各章 — 内部構造・評価経路は変わっていない
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — DSL の構文・意味論は変わっていない
+
+#### 🔴 #805 は `fmt / clippy / test` が赤いままマージされている
+
+`device_switch_result_records_failure_and_success_through_the_same_path` の `captured log: ""`
+（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10723`）。**再実行（run_attempt 2）でも再発**。
+既知の flaky #801 で、docs のみの差分とは無関係。PR [#808](https://github.com/signalcompose/orbitscore/pull/808)
+（`801-tracing-interest-anchor`）が anchor subscriber で直しており、その run は緑。
+
+---
+
 ### docs: follow the merged O-wire bundle into the dev site (Sep 8, 2026)
 
 **ブランチ**: `claude/docs-sync-pr811` / **追従元**: PR [#811](https://github.com/signalcompose/orbitscore/pull/811)（束 O-wire・merge commit `66efda5`）

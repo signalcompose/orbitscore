@@ -115,7 +115,6 @@ Issue 単位の実装設計（起案 Fable / 審査 main。**owner 確定事項�
 
 | File | Purpose |
 |---|---|
-| [MACOS_DEV_SETUP.md](../development/MACOS_DEV_SETUP.md) | 🔴 **macOS 開発機のセットアップ** — デベロッパツール登録 + `cargo clean` で `cargo test` が **2,240 秒 → 66 秒**（#816）|
 | [WORK_LOG.md](../development/WORK_LOG.md) | Recent development log（newest first。**every commit must be logged**） |
 | [IMPLEMENTATION_PLAN.md](../development/IMPLEMENTATION_PLAN.md) | Phase-by-phase technical roadmap（audio DSL 移行期の記録・歴史的） |
 | [BEAT_METER_SPECIFICATION.md](../development/BEAT_METER_SPECIFICATION.md) | Beat / meter / polymeter specification |
@@ -174,7 +173,7 @@ user 向け学習サイト本体（VitePress、日英）。同 workflow で http
 | 2026-06 | [WORK_LOG_2026-06.md](../archive/WORK_LOG_2026-06.md) |
 | 2026-07 | [WORK_LOG_2026-07.md](../archive/WORK_LOG_2026-07.md) |
 | 2026-08 | [WORK_LOG_2026-08.md](../archive/WORK_LOG_2026-08.md) |
-| 2026-09（前半・09-01〜09-05） | [WORK_LOG_2026-09.md](../archive/WORK_LOG_2026-09.md) |
+| 2026-09（前半・09-01〜09-06） | [WORK_LOG_2026-09.md](../archive/WORK_LOG_2026-09.md) |
 
 ---
 

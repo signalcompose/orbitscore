@@ -178,10 +178,6 @@ npm run lint             # ESLint + Prettier
 npm run docs:check       # dev 学習サイトの引用 (// file:start-end) を code と突合
 ```
 
-🔴 **macOS で `cargo test --workspace` が 30 分超かかるなら、まず [`docs/development/MACOS_DEV_SETUP.md`](docs/development/MACOS_DEV_SETUP.md) を読むこと。**
-ターミナルを**デベロッパツール**に登録 + **`cargo clean`** で **2,240 秒 → 66 秒**になる（2026-09-08 実測）。
-遅さの 91% は**テストでもビルドでもなく macOS のマルウェアスキャン**である。
-
 **Note**: Use `npm run build:clean` if you encounter TypeScript incremental build issues (e.g., `cli-audio.js` not generated).
 
 ### Technology Stack Summary
@@ -617,9 +613,18 @@ E2E は「**振る舞いが正しいか**」を問う。**出荷するのは振�
 | cfg 4象限をすべて確かめる | `scripts/check-cfg-matrix.sh` | ループを手書きしない（zsh の単語分割で**同日2回**壊した） |
 | 公開メソッドは DSL 語彙か内部 API か | `tests/interpreter/signal-chain-dispatch.spec.ts` | 未分類なら red（本日2回発火） |
 | capture は異常終了でも開ける | `capture.rs` の定期 header patch + unit | — |
+| 計画文書が閉じた issue を未完了として語らない | `tests/docs/planning-issue-state.spec.ts`（#814） | **矛盾する行が増えたら red**（ラチェット・`docs/planning/issue-states.json` のスナップショットと突合し、**GitHub API は叩かない**） |
 
 **ラチェットの baseline（未カバー語の一覧）は減らす方向にしか編集してはいけない。**
 増やす編集は「DSL を足して E2E を書かなかった」ことなので、レビューで止める。
+同じことが `planning-issue-state.spec.ts` の `KNOWN_STALE_BASELINE` にも当てはまる —
+**増やして通すのではなく、記述を現状に合わせる。**
+
+🔴 **この表が捕まえるのは「規律に反した形」であって「内容の誤り」ではない。**
+`planning-issue-state.spec.ts` は状態語の矛盾（CLOSED なのに「未着手」）しか見ず、
+**中身が古い記述**（「#801 は負荷依存」— 同日の実測で否定されたが issue は OPEN のまま）は通す。
+そこは運用で担保する: **「実測」を書くときは出典（日付 / PR / commit）を併記する**
+（#814・[`docs/development/BUNDLE_BRANCH_WORKFLOW.md`](docs/development/BUNDLE_BRANCH_WORKFLOW.md) §5.1b）。
 
 #### DSL 機能を足したら E2E も足す（owner 指示 2026-07-27）
 
