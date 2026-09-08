@@ -27,6 +27,12 @@ This guide provides comprehensive testing procedures for OrbitScore's audio-base
 - VS Code / Cursor / Claude Code
 - Audio device (speakers or headphones)
 
+> 🔴 **macOS で Rust テストを回す前に [`../development/MACOS_DEV_SETUP.md`](../development/MACOS_DEV_SETUP.md) を読むこと（#816）。**
+> ターミナルを**デベロッパツール**に登録 + **`cargo clean`** をしていない macOS 機では
+> `cargo test --workspace` が **2,240 秒**かかる（実施後は **66 秒**・2026-09-08 実測）。
+> 遅さの 91% は**テストでもビルドでもなく macOS のマルウェアスキャン**であり、
+> passed / failed / ignored の件数は設定の前後で 1 つも変わらない。
+
 ### SuperCollider Installation (opt-out backend only)
 
 **macOS:**
