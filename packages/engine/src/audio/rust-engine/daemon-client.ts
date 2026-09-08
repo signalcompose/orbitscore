@@ -83,6 +83,18 @@ export interface AudioDeviceListEntry {
   direction: 'output' | 'input'
 }
 
+export type WireDest =
+  | { kind: 'master' }
+  | { kind: 'bus'; name: string }
+  | { kind: 'device'; channels: [number, number] }
+  | { kind: 'render'; id: string }
+  | { kind: 'link'; channel: string }
+
+export type WireLineOp =
+  | { op: 'rack' }
+  | { op: 'gain'; gain: number }
+  | { op: 'output'; dest: WireDest; thru: boolean; gain: number }
+
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000
 const DEFAULT_CONNECT_TIMEOUT_MS = 3_000
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 5_000
@@ -698,6 +710,11 @@ export class DaemonClient extends EventEmitter {
       ...(output === undefined ? {} : { output }),
       sends,
     })
+  }
+
+  /** Replace one daemon bus's complete ordered audio line (#611 wire contract §4.1). */
+  async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
+    await this.request('SetBusLine', { bus, line })
   }
 
   /** Route one opaque premaster source output to a named insert bus or Master (`null`). */

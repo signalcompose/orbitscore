@@ -21,6 +21,8 @@ use tracing::{error, warn};
 use crate::engine_wrap::ClapPluginRole;
 #[cfg(any(feature = "outproc-effect", feature = "outproc-instrument"))]
 use crate::engine_wrap::PluginStateTarget;
+#[cfg(feature = "outproc-effect")]
+use crate::engine_wrap::{BusLineDest, BusLineOp};
 use crate::engine_wrap::{EngineWrap, PluginUiEvent, WrapError};
 use crate::protocol::{
     Command, ErrorResponse, Event, Handshake, OkResponse, ProtocolError,
@@ -292,6 +294,173 @@ fn parse_set_bus_routing_params(
         _ => return Err("'sends' must be an array"),
     };
     Ok((seq_bus, output, sends))
+}
+
+#[cfg(feature = "outproc-effect")]
+fn set_bus_line_malformed(message: impl Into<String>) -> ProtocolError {
+    ProtocolError::new("MALFORMED_REQUEST", message)
+}
+
+/// `SetBusLine` の一方通行 wire shape を完全に検証してから engine 用 vocabulary を返す。
+#[cfg(feature = "outproc-effect")]
+fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>), ProtocolError> {
+    let bus = match params.get("bus") {
+        Some(Value::String(bus)) if !bus.trim().is_empty() => bus.clone(),
+        _ => return Err(set_bus_line_malformed("'bus' must be a non-empty string")),
+    };
+    let items = params
+        .get("line")
+        .and_then(Value::as_array)
+        .ok_or_else(|| set_bus_line_malformed("'line' must be an array"))?;
+    let mut line = Vec::with_capacity(items.len());
+    let mut rack_seen = false;
+    for item in items {
+        let op = item
+            .get("op")
+            .and_then(Value::as_str)
+            .ok_or_else(|| set_bus_line_malformed("'line[].op' must be a string"))?;
+        match op {
+            "rack" => {
+                if rack_seen {
+                    return Err(set_bus_line_malformed(
+                        "'line' may contain at most one rack op",
+                    ));
+                }
+                rack_seen = true;
+                line.push(BusLineOp::Rack);
+            }
+            "gain" => {
+                let gain = parse_set_bus_line_gain(item, "line[].gain")?;
+                line.push(BusLineOp::Gain(gain));
+            }
+            "output" => {
+                let gain = parse_set_bus_line_gain(item, "line[].gain")?;
+                let thru = item
+                    .get("thru")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| set_bus_line_malformed("'line[].thru' must be a boolean"))?;
+                let dest =
+                    parse_set_bus_line_dest(item.get("dest").ok_or_else(|| {
+                        set_bus_line_malformed("'line[].dest' must be an object")
+                    })?)?;
+                if bus == "master" && matches!(dest, BusLineDest::Master | BusLineDest::Bus(_)) {
+                    return Err(set_bus_line_malformed(
+                        "the master line cannot target master or a bus",
+                    ));
+                }
+                line.push(BusLineOp::Output { dest, thru, gain });
+            }
+            _ => {
+                return Err(set_bus_line_malformed(
+                    "'line[].op' must be one of rack, gain, or output",
+                ));
+            }
+        }
+    }
+    Ok((bus, line))
+}
+
+#[cfg(feature = "outproc-effect")]
+fn parse_set_bus_line_gain(item: &Value, field: &str) -> Result<f32, ProtocolError> {
+    let gain = item
+        .get("gain")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| set_bus_line_malformed(format!("'{field}' must be a number")))?;
+    if !gain.is_finite() || gain < 0.0 || gain > f32::MAX as f64 {
+        return Err(set_bus_line_malformed(format!(
+            "'{field}' must be finite and >= 0"
+        )));
+    }
+    Ok(gain as f32)
+}
+
+#[cfg(feature = "outproc-effect")]
+fn parse_set_bus_line_dest(dest: &Value) -> Result<BusLineDest, ProtocolError> {
+    let kind = dest
+        .get("kind")
+        .and_then(Value::as_str)
+        .ok_or_else(|| set_bus_line_malformed("'line[].dest.kind' must be a string"))?;
+    match kind {
+        "master" => Ok(BusLineDest::Master),
+        "bus" => match dest.get("name") {
+            Some(Value::String(name)) if !name.trim().is_empty() => {
+                Ok(BusLineDest::Bus(name.clone()))
+            }
+            _ => Err(set_bus_line_malformed(
+                "'line[].dest.name' must be a non-empty string",
+            )),
+        },
+        "device" => {
+            let channels = dest
+                .get("channels")
+                .and_then(Value::as_array)
+                .filter(|channels| channels.len() == 2)
+                .ok_or_else(|| {
+                    set_bus_line_malformed(
+                        "'line[].dest.channels' must be a two-element integer array",
+                    )
+                })?;
+            let channel = |index: usize| {
+                channels[index]
+                    .as_u64()
+                    .and_then(|value| usize::try_from(value).ok())
+                    .ok_or_else(|| {
+                        set_bus_line_malformed(
+                            "'line[].dest.channels' must contain non-negative integers",
+                        )
+                    })
+            };
+            Ok(BusLineDest::Device {
+                left: channel(0)?,
+                right: channel(1)?,
+            })
+        }
+        // DeclareRender（PR-R2）の登記簿がまだ無いため、今日の render id はすべて未登録。
+        "render" => Err(set_bus_line_malformed(
+            "'line[].dest.id' names an unregistered render destination",
+        )),
+        "link" => match dest.get("channel") {
+            Some(Value::String(channel)) if !channel.trim().is_empty() => {
+                Ok(BusLineDest::Link(channel.clone()))
+            }
+            _ => Err(set_bus_line_malformed(
+                "'line[].dest.channel' must be a non-empty string",
+            )),
+        },
+        _ => Err(set_bus_line_malformed(
+            "'line[].dest.kind' must be one of master, bus, device, render, or link",
+        )),
+    }
+}
+
+#[cfg(feature = "outproc-effect")]
+fn validate_set_bus_line_device_channels(
+    line: &[BusLineOp],
+    output_channels: u16,
+) -> Result<(), ProtocolError> {
+    for op in line {
+        let BusLineOp::Output {
+            dest: BusLineDest::Device { left, right },
+            ..
+        } = op
+        else {
+            continue;
+        };
+        if *left == 0
+            || *right == 0
+            || left == right
+            || *left > output_channels as usize
+            || *right > output_channels as usize
+        {
+            return Err(ProtocolError::new(
+                "PARAM_OUT_OF_RANGE",
+                format!(
+                    "device channels must be distinct and within 1..={output_channels}, got [{left}, {right}]"
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// `SetSourceRouting` の wire shape を検証する。`source` は内容を解釈せず、そのまま opaque key
@@ -2461,6 +2630,30 @@ async fn handle_command(
                 "SetBusRouting requires the outproc-effect build (mixer bus graph)",
             ),
         ),
+        #[cfg(feature = "outproc-effect")]
+        "SetBusLine" => match parse_set_bus_line_params(&params) {
+            Ok((bus, line)) => {
+                if let Err(error) =
+                    validate_set_bus_line_device_channels(&line, engine.output_channels())
+                {
+                    err(&id, error)
+                } else {
+                    match engine.set_bus_line(&bus, &line) {
+                        Ok(()) => ok(&id, json!({"status": "accepted"})),
+                        Err(error) => err(&id, wrap_err_to_protocol(&error)),
+                    }
+                }
+            }
+            Err(error) => err(&id, error),
+        },
+        #[cfg(not(feature = "outproc-effect"))]
+        "SetBusLine" => err(
+            &id,
+            ProtocolError::new(
+                "UNSUPPORTED",
+                "SetBusLine requires the outproc-effect build (mixer bus graph)",
+            ),
+        ),
         #[cfg(all(feature = "outproc-effect", feature = "outproc-instrument"))]
         "SetSourceRouting" => match parse_set_source_routing_params(&params) {
             Ok((source, unit, target)) => {
@@ -2696,7 +2889,7 @@ fn actionable_output_error_code(output: &orbit_audio_native::OutputError) -> Opt
     }
 }
 
-fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
+pub(crate) fn wrap_err_to_protocol(e: &WrapError) -> ProtocolError {
     use orbit_audio_native::LoaderError as L;
     match e {
         WrapError::SampleNotFound(sid) => {
@@ -3609,6 +3802,127 @@ mod tests {
         assert!(outproc_role_param_is_valid(&json!({"role": "effect"})));
         assert!(!outproc_role_param_is_valid(&json!({"role": "instrument"})));
         assert!(!outproc_role_param_is_valid(&json!({})));
+    }
+
+    #[cfg(not(feature = "outproc-effect"))]
+    #[tokio::test]
+    async fn set_bus_line_wire_feature_gap_is_unsupported() {
+        let (engine, _guard) = EngineWrap::start_with(crate::backend::StubBackend::default())
+            .expect("stub backend starts");
+        let (tx, _rx) = mpsc::channel(1);
+        let response = handle_command(
+            Command {
+                id: "set-bus-line-feature-gap".into(),
+                method: "SetBusLine".into(),
+                params: json!({"bus": "master", "line": []}),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+
+        assert_eq!(response["error"]["code"], "UNSUPPORTED");
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    fn assert_set_bus_line_parse_code(params: Value, expected: &str) {
+        let error = parse_set_bus_line_params(&params).expect_err("request must be rejected");
+        eprintln!("set_bus_line validation code={}", error.code);
+        assert_eq!(error.code, expected);
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn set_bus_line_wire_bus_must_be_a_nonempty_string() {
+        assert_set_bus_line_parse_code(json!({"bus": "", "line": []}), "MALFORMED_REQUEST");
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn set_bus_line_wire_line_ops_and_gains_must_have_the_contract_shape() {
+        for params in [
+            json!({"bus": "seq-bus-0", "line": {}}),
+            json!({"bus": "seq-bus-0", "line": [{"op": "pan", "value": 0.0}]}),
+            json!({"bus": "seq-bus-0", "line": [{"op": "gain", "gain": -0.1}]}),
+            json!({"bus": "seq-bus-0", "line": [{"op": "gain", "gain": 1e100}]}),
+            json!({"bus": "seq-bus-0", "line": [{"op": "output", "dest": {"kind": "master"}, "thru": false, "gain": "loud"}]}),
+        ] {
+            assert_set_bus_line_parse_code(params, "MALFORMED_REQUEST");
+        }
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn set_bus_line_wire_rack_may_appear_at_most_once() {
+        assert_set_bus_line_parse_code(
+            json!({"bus": "seq-bus-0", "line": [{"op": "rack"}, {"op": "rack"}]}),
+            "MALFORMED_REQUEST",
+        );
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn set_bus_line_wire_device_channels_must_be_distinct_and_in_range() {
+        for channels in [[1, 1], [0, 2], [1, 3]] {
+            let (_, line) = parse_set_bus_line_params(&json!({
+                "bus": "seq-bus-0",
+                "line": [{"op": "output", "dest": {"kind": "device", "channels": channels}, "thru": false, "gain": 1.0}]
+            }))
+            .expect("shape is valid before device-capacity validation");
+            let error = validate_set_bus_line_device_channels(&line, 2)
+                .expect_err("device channel pair must be distinct and in range");
+            eprintln!("set_bus_line validation code={}", error.code);
+            assert_eq!(error.code, "PARAM_OUT_OF_RANGE");
+        }
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    #[tokio::test]
+    async fn set_bus_line_wire_dispatch_accepts_a_complete_line() {
+        let engine = crate::engine_wrap::test_wrap_with_three_stage_topology();
+        let (tx, _rx) = mpsc::channel(1);
+        let response = handle_command(
+            Command {
+                id: "set-bus-line-accepted".into(),
+                method: "SetBusLine".into(),
+                params: json!({
+                    "bus": "seq-bus-0",
+                    "line": [
+                        {"op": "rack"},
+                        {"op": "gain", "gain": 0.5},
+                        {"op": "output", "dest": {"kind": "master"}, "thru": false, "gain": 1.0}
+                    ]
+                }),
+            },
+            &engine,
+            &tx,
+        )
+        .await;
+
+        assert_eq!(response["result"]["status"], "accepted");
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn set_bus_line_wire_render_destination_is_unregistered_today() {
+        assert_set_bus_line_parse_code(
+            json!({"bus": "seq-bus-0", "line": [{"op": "output", "dest": {"kind": "render", "id": "stem"}, "thru": false, "gain": 1.0}]}),
+            "MALFORMED_REQUEST",
+        );
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn set_bus_line_wire_master_rejects_master_and_bus_destinations() {
+        for dest in [
+            json!({"kind": "master"}),
+            json!({"kind": "bus", "name": "sum-bus-0"}),
+        ] {
+            assert_set_bus_line_parse_code(
+                json!({"bus": "master", "line": [{"op": "output", "dest": dest, "thru": false, "gain": 1.0}]}),
+                "MALFORMED_REQUEST",
+            );
+        }
     }
 
     #[cfg(all(feature = "outproc-instrument", not(feature = "outproc-effect")))]

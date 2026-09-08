@@ -17,6 +17,111 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+## 束 O-wire-b（#611 ステージ 2・統合ブランチ `611-line-wire-b`）
+
+`SetBusLine` の wire 契約を足す束。**DSL からは呼ばない**（送るのは PR-O4）ので、束の収束条件は
+O-wire と同じ「**`OUTPUT_LINE_GOLDENS` / `#611 O0-1〜4` が 1 つも動かないこと**」+ cargo 全緑 + 実機 gated 全件。
+
+### feat(daemon): SetBusLine wire command and TS client (#611 PR-O3b) (Sep 9, 2026)
+
+**Issue**: #611 / **ブランチ**: `611-o3b-setbusline` → `611-line-wire-b`（小 PR）/
+**実装**: Codex（`gpt-5.6-sol` / effort high・専用 worktree）/ **検証**: main（本ツリー）
+
+#### 何を足したか
+
+| 層 | 何 |
+|---|---|
+| `session.rs` | `parse_set_bus_line_params`（wire 形式の検証）+ dispatch。feature 無効ビルドは `UNSUPPORTED` |
+| `engine_wrap.rs` | `set_bus_line`（意味論の検証 → `LineProgram` 構築 → 全検証後に一括 publish）・`SetGlobalGain` と master line の同期 |
+| `output.rs` | 🔴 **`MasterLine.line` と `execute_master_line`**（下記）|
+| `lib.rs` | O3a の型（`LineOp` / `LineOutput` / `LineProgram` / `OutputDest`）と installer の re-export |
+| `protocol-types.ts` / `daemon-client.ts` | `'SetBusLine'` / `setBusLine()` / `WireDest` / `WireLineOp` |
+
+🔴 **TS の呼び出し元は作っていない**（DSL から送るのは PR-O4）。
+🔴 **旧 `SetBusRouting` は併存**（撤去は PR-O6）。既存テストは 1 行も書き換えていない。
+
+#### 🔴 PR-O3a の実装漏れを 1 件埋めた — `MasterLine.line`
+
+設計 611 **§5.2 は `MasterLine` に `line: LineSlot` を持たせる**と定め、**§4.1 の `bus` は `"master"` を
+受理対象**にしている（`master` の自己参照を拒否する検証行がその証拠）。ところが **PR-O3a はそれを
+入れていなかった** — main `2ca00f6a` の `output.rs` の `MasterLine` は `post` / `gain_target` などだけで、
+**`SetBusLine("master", …)` を受理する先が無い**。
+
+本 PR が §5.2 を埋めた。**互換は分岐で保つ**:
+
+```
+if master.explicit_line { execute_master_line(...) }   // publish 後
+else { post → advance_gain → place_master_into_device }  // 従来経路（1 命令も変えていない）
+```
+
+`explicit_line` は最初の `SetBusLine("master", …)` が publish されるまで `false` なので、
+**既存譜面は従来経路をそのまま通る**。O0 golden の bit 一致はこの分岐で構造的に保たれる
+（既存の `legacy_*_bit_for_bit` 群が無改変で緑）。
+
+⚠️ 計画 §1.10 の「触るファイル」欄が `output.rs` を落としていた（見積もりの漏れ）。
+`BUNDLE_BRANCH_WORKFLOW` §5.1b に従い、**実装の前に**計画へ理由と追加の検証条件を書いた（`fc67c771`）。
+
+#### 検証の層を分けた（main の裁定・2026-09-08）
+
+`validate_line_program`（`output.rs`）は **RT 実行の可用性ゲート**であって wire の契約検証ではない。
+そこは `Pan` / `Render` / `Link` を `OutputError::NoConfig` で拒否しており、**その文言を wire へ流すと
+`DEVICE_CONFIG_ERROR` になって §4.1 のどの行とも一致しない**（`actionable_output_error_code` は
+4 種の device エラーしか拾わない）。
+
+したがって `set_bus_line` が §4.1 の表を**先に**適用する。**このゲートは無改変**（差分に出ていない）:
+
+| §4.1 の行 | wire code | 経由する variant |
+|---|---|---|
+| 形式不正・`rack` 二重・`master` 自己参照・`render` 未登録 | `MALFORMED_REQUEST` | `OutProcEffectRequest` |
+| `dest.bus` 未知 / forward-only 違反 | `OUTPROC_EFFECT_RUNTIME` | `OutProcEffect` |
+| `dest.device` 範囲外・`a == b` | `PARAM_OUT_OF_RANGE` | （session の dispatch で直接）|
+| `dest.link`（feature 無し） | `LINK_AUDIO_UNAVAILABLE` | `LinkAudioUnavailable` |
+| feature 無効ビルド | `UNSUPPORTED` | （dispatch の `#[cfg(not(...))]`）|
+
+🔴 **ブリーフ（09-07 起案）は 3 箇所を誤っていた**ので、着手前に一次ソースで検算して訂正した:
+`engine_wrap.rs` の行番号（6227 → **6310**）/ feature 無効時の code（`OUTPROC_EFFECT_UNAVAILABLE`
+→ **`UNSUPPORTED`**）/ wire code は variant 名と別物であること。**訂正しなければ、存在しない
+エラー code を期待するテストが緑になっていた。**
+
+#### 検証（🔴 すべて main が本ツリーで実行）
+
+| 検証 | 結果 |
+|---|---|
+| `cargo test --workspace --locked` | **617 passed / 0 failed / 38 ignored** |
+| `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument` | **339 passed / 0 failed / 13 ignored**（新規 `set_bus_line_*` 11 件を含む）|
+| `cargo fmt --all --check` | 緑 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 警告なし |
+| `cargo clippy -p orbit-audio-daemon --features outproc-effect,outproc-instrument --all-targets` | 警告なし |
+| `npm run lint` | 緑 |
+| `npm test` | **2,329 passed / 58 skipped / 0 failed**（164 ファイル）|
+| `npm run build` / `npm run typecheck:e2e` | 緑 |
+
+🔴 **委譲先が走らせられなかったものが 2 つあった**:
+
+1. **protocol 統合テスト 61 件** — Codex の sandbox は localhost bind を許さず
+   `bind_localhost ... Operation not permitted` で全件落ちていた。**本ツリーでは bind エラー 0 件で全緑**
+2. **TS 側すべて** — worktree に `node_modules` が無く、lint / vitest / tsc を一度も実行していない
+
+**「Codex が緑と言った」だけでマージできる PR は構造的に存在しない**（CLAUDE.md）ことが、
+そのまま再現した形。
+
+#### main が差分を読んで直した点（1 件）
+
+`output.rs` の従来経路を `else` 分岐へ包む際に、**設計判断を記録したコメント 3 ブロックが削除**されていた:
+`g == 1.0` が bit 一致を崩さない理由 / デバイス配置の意味（設計 §5.3 row 6）/
+🔴 **`hw` を全域 zero-fill してはいけない**理由（`place_master_into_device` が全要素を書くので、
+1ch・2ch では毎ブロック二重 store になる。64 frames × 2ch で約 96,000 store/秒の無駄）。
+
+**コードは無改変だがコメントだけ落ちる**類の欠落で、テストでは検出できない。復元した。
+
+#### 未検証・次の束へ
+
+- 実機 gated（**goldens が 1 つも動かないこと**）は**束の締め**で 1 回
+- `LineOp::Pan` の wire 表現は無い（§4.1 の `WireLineOp` に `pan` が無い・PR-O4）
+- `dest.render` は登記簿（`DeclareRender`・PR-R2）が無いので今日はすべて拒否
+
+---
+
 ### chore(docs): rotate WORK_LOG before the O-wire-b bundle (Sep 9, 2026)
 
 **ブランチ**: `611-o3b-setbusline` → `611-line-wire-b`（束 O-wire-b の前処理）
