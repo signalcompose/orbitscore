@@ -17,6 +17,27 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow up PR #815 — record the new planning-doc ratchet where the rules live (Sep 8, 2026)
+
+**追従元**: PR [#815](https://github.com/signalcompose/orbitscore/pull/815)（#814・merge commit `5eaea2f`）/
+**ブランチ**: `claude/docs-sync-pr815` → main（ルーティンのドキュメント追従）
+
+PR #815 は**仕組み**（`tests/docs/planning-issue-state.spec.ts`）と**運用規則**
+（`BUNDLE_BRANCH_WORKFLOW.md` §5.1b）を足したが、**それを列挙している既存の 3 箇所には入っていなかった**。
+規律の一覧が実在の仕組みより古いままだと、次のセッションは「その仕組みは無い」と読む。
+
+| 直した先 | 何を |
+|---|---|
+| `CLAUDE.md`「これらは仕組みで強制されている」 | 表に 1 行追加。**捕まえるのは状態語の矛盾だけ**で内容の誤りは通ることも併記（出典必須の運用へ送る）|
+| `DEVELOPMENT_MAP.md` §0.2 | 運用規則 7（事実が変わった瞬間に地図を更新）・8（実測には出典）を追加。既存の規則 4「issue を閉じたら」より**広い**ことを明示 |
+| `PROJECT_RULES.md` §1c（棚卸しの作法）| `KNOWN_STALE_BASELINE` が**棚卸しの入口**であること・直したら削ること・増やして通さないこと |
+| `INDEX.md` Planning 表 | `docs/planning/issue-states.json` を**生成物**として登録 |
+
+🔴 **`packages/` `rust/` `sites/` は 0 件。** 元 PR に実装の差分が無く、`sites/dev` は
+コードの内部構造を扱う層なので追従先が無い（判断理由は PR 本文）。
+
+---
+
 ### chore(docs): stop planning documents from drifting silently (#814) (Sep 8, 2026)
 
 **Issue**: #814 / **ブランチ**: `814-doc-drift-check` → main（直行）
