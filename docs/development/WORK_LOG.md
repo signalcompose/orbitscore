@@ -17,6 +17,31 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(testing): point the testing guide at the macOS setup trap (PR #819 follow-up) (Sep 8, 2026)
+
+**追従元**: PR [#819](https://github.com/signalcompose/orbitscore/pull/819)（マージコミット `6e22a84` / head `5ef4151`） / **ブランチ**: `claude/docs-sync-pr819`
+
+docs-sync ルーチンが PR #819 のマージを受けて実行。#819 は `docs/development/MACOS_DEV_SETUP.md` を
+新設し、CLAUDE.md と `docs/core/INDEX.md` からポインタを張ったが、**Rust テストの手順書である
+`docs/testing/TESTING_GUIDE.md` には張られていなかった**。同ガイドの Prerequisites は
+「Rust toolchain」「macOS Apple Silicon」を要求しつつ、設定なしの macOS では
+`cargo test --workspace` が 37 分かかる事実に触れていない。
+
+#### 変更
+
+- `docs/testing/TESTING_GUIDE.md` の System Requirements 直後に `MACOS_DEV_SETUP.md` への
+  ポインタを追加（2,240 秒 → 66 秒・遅さの 91% はマルウェアスキャン・件数は不変）
+
+#### 追従不要と判断したもの
+
+#819 の差分は 4 ファイルすべてがドキュメント（CLAUDE.md / `docs/core/INDEX.md` /
+`MACOS_DEV_SETUP.md` / WORK_LOG.md）で、`packages/engine/`・`rust/`・
+`packages/vscode-extension/` に変更が無い。DSL の構文・意味論、MCP ツールの引数と返り値、
+エディタの評価経路のいずれも変わらないため、`docs/specs-v2/`・
+`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`・`sites/user/`・`sites/dev/` は対象外。
+`sites/dev/` は内部構造の解説サイトで開発機セットアップの章を持たない（`orientation/` は
+`what-is-orbitscore.md` と `architecture-overview.md` のみ）。
+
 ### perf(test): the Rust test cycle was 91% macOS malware scanning — 2,240s to 66s (#816) (Sep 8, 2026)
 
 **Issue**: #816 / **ブランチ**: `816-test-cycle-perf` → main（直行）
