@@ -21,21 +21,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
+#[cfg(feature = "outproc-effect")]
+use orbit_audio_native::{decode_bus_routing_sentinel, BusSend, BusTarget, LegacyLineInstaller};
 use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputDeviceRequest, OutputError, OutputFault,
     OutputStream, ResampleError, StreamStats, StreamStatsSnapshot,
 };
-#[cfg(feature = "outproc-effect")]
-use orbit_audio_native::{BusSend, BusTarget};
 use uuid::Uuid;
 
 use crate::backend::AudioBackend;
 
 const OUTPUT_FAULT_ENV: &str = "ORBIT_AUDIO_OUTPUT_FAULT";
-
-#[cfg(feature = "outproc-effect")]
-type BusLineInstaller =
-    Arc<dyn Fn(BusTarget, Vec<BusSend>, usize, usize) -> Result<(), OutputError> + Send + Sync>;
 
 pub fn parse_output_fault(raw: Option<&str>) -> OutputFault {
     match raw.map(str::trim) {
@@ -1752,7 +1748,7 @@ pub struct EngineWrap {
     /// the compatibility state there remains the old atomics while `SetBusRouting` is translated
     /// into one full program install.
     #[cfg(feature = "outproc-effect")]
-    bus_lines: Mutex<HashMap<String, BusLineInstaller>>,
+    bus_lines: Mutex<HashMap<String, LegacyLineInstaller>>,
     /// out-of-process instrument の note-ring producer（control side）。
     #[cfg(feature = "outproc-instrument")]
     outproc_instrument: Mutex<Option<OutProcInstrumentControl>>,
@@ -2164,7 +2160,7 @@ struct EffectBusBuild {
 type EffectBusStagesBuild = (
     Vec<orbit_audio_native::InsertBusStage>,
     Vec<EffectBusBuild>,
-    HashMap<String, BusLineInstaller>,
+    HashMap<String, LegacyLineInstaller>,
 );
 
 /// `ORBIT_EFFECT_BUSES`/`ORBIT_EFFECT_BUS_POOL`（insert）+ `ORBIT_SUM_BUS_POOL`（sum）+
@@ -2745,6 +2741,11 @@ mod set_bus_routing_tests {
             bus_sends,
             replacements_in_flight: HashSet::new(),
         });
+        let mut bus_lines = wrap.bus_lines.lock().expect("lock bus lines for injection");
+        for name in ["seq-bus-0", "sum-bus-0", "aux-bus-0"] {
+            bus_lines.insert(name.to_owned(), Arc::new(|_, _, _, _| Ok(())));
+        }
+        drop(bus_lines);
         wrap
     }
 
@@ -2902,6 +2903,18 @@ mod set_bus_routing_tests {
             .expect_err("unknown seq_bus must be rejected");
         let message = format!("{error:?}");
         assert!(message.contains("unknown bus"), "{message}");
+    }
+
+    #[test]
+    fn set_bus_routing_rejects_bus_without_registered_line() {
+        let wrap = wrap_with_three_stage_topology();
+        wrap.bus_lines.lock().unwrap().remove("seq-bus-0");
+
+        let error = wrap
+            .set_bus_routing("seq-bus-0", Some("master"), &[])
+            .expect_err("a bus without an RT line installer must be rejected");
+        let message = format!("{error:?}");
+        assert!(message.contains("unknown bus 'seq-bus-0'"), "{message}");
     }
 
     /// M3（#459/#453）: `SetBusRouting` は参照された bus（seq_bus 自身・output 先・send 先）を
@@ -6314,6 +6327,7 @@ impl EngineWrap {
             .bus_index
             .get(seq_bus)
             .ok_or_else(|| WrapError::OutProcEffect(format!("unknown bus '{seq_bus}'")))?;
+        let send_offset = |target_index: usize| target_index - seq_index - 1;
 
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
@@ -6378,7 +6392,7 @@ impl EngineWrap {
             })?)
         };
         for (target_index, _) in &resolved_sends {
-            let k = *target_index - seq_index - 1;
+            let k = send_offset(*target_index);
             if send_slots.and_then(|slots| slots.get(k)).is_none() {
                 return Err(WrapError::OutProcEffect(format!(
                     "bus '{seq_bus}' has no send slot for target index {target_index}"
@@ -6391,49 +6405,48 @@ impl EngineWrap {
             .lock()
             .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))?
             .get(seq_bus)
-            .cloned();
-        if let Some(line) = line {
-            let routing_value = resolved_output.unwrap_or_else(|| {
-                control
-                    .bus_routing
-                    .get(seq_bus)
-                    .map(|routing| routing.load(Ordering::Relaxed))
-                    .unwrap_or(0)
-            });
-            let output_target = match routing_value {
-                0 | 1 => BusTarget::Master,
-                encoded => BusTarget::Bus(encoded - 2),
-            };
-            let existing_sends = control.bus_sends.get(seq_bus);
-            let mut gains = existing_sends
-                .map(|slots| {
-                    slots
-                        .iter()
-                        .map(|slot| f32::from_bits(slot.load(Ordering::Relaxed)))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            for (target_index, gain) in &resolved_sends {
-                let k = *target_index - seq_index - 1;
-                gains[k] = *gain;
-            }
-            let enabled_sends = gains
-                .into_iter()
-                .enumerate()
-                .filter(|(_, gain)| *gain != 0.0)
-                .map(|(offset, gain)| BusSend {
-                    target: seq_index + 1 + offset,
-                    gain,
-                })
-                .collect();
-            line(
-                output_target,
-                enabled_sends,
-                seq_index,
-                control.bus_index.len(),
-            )
-            .map_err(WrapError::Output)?;
+            .cloned()
+            .ok_or_else(|| {
+                WrapError::OutProcEffect(format!(
+                    "SetBusRouting: unknown bus '{seq_bus}' (no registered RT line)"
+                ))
+            })?;
+        let routing_value = resolved_output.unwrap_or_else(|| {
+            control
+                .bus_routing
+                .get(seq_bus)
+                .map(|routing| routing.load(Ordering::Relaxed))
+                .unwrap_or(0)
+        });
+        let output_target = decode_bus_routing_sentinel(routing_value).unwrap_or(BusTarget::Master);
+        let existing_sends = control.bus_sends.get(seq_bus);
+        let mut gains = existing_sends
+            .map(|slots| {
+                slots
+                    .iter()
+                    .map(|slot| f32::from_bits(slot.load(Ordering::Relaxed)))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        for (target_index, gain) in &resolved_sends {
+            gains[send_offset(*target_index)] = *gain;
         }
+        let enabled_sends = gains
+            .into_iter()
+            .enumerate()
+            .filter(|(_, gain)| *gain != 0.0)
+            .map(|(offset, gain)| BusSend {
+                target: seq_index + 1 + offset,
+                gain,
+            })
+            .collect();
+        line(
+            output_target,
+            enabled_sends,
+            seq_index,
+            control.bus_index.len(),
+        )
+        .map_err(WrapError::Output)?;
 
         // Mirror the accepted state into the old handles. Existing Rust callers and tests can
         // continue to observe the partial-update API, while production RT reads only LineProgram.
@@ -6442,7 +6455,7 @@ impl EngineWrap {
         }
         if let Some(send_slots) = send_slots {
             for (target_index, gain) in resolved_sends {
-                let k = target_index - seq_index - 1;
+                let k = send_offset(target_index);
                 send_slots[k].store(gain.to_bits(), Ordering::Relaxed);
             }
         }

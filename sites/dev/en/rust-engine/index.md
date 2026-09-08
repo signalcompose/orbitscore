@@ -428,7 +428,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1480-1517
+// rust/crates/orbit-audio-native/src/output.rs:1542-1579
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -483,7 +483,7 @@ device"** — with the placement stage added, anything other than 2ch always pay
 placement.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1565-1638
+// rust/crates/orbit-audio-native/src/output.rs:1627-1700
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -582,7 +582,7 @@ The device width appears in exactly one place: `place_master_into_device`, which
 `master.buffer` onto the device-width `hw`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1661-1685
+// rust/crates/orbit-audio-native/src/output.rs:1723-1747
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -645,7 +645,7 @@ The point worth holding onto is that **production now has exactly one multiplica
 the daemon, and `EngineWrap::set_global_gain` only stores into the `MasterLine` target.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8854-8863
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8867-8876
     /// マスターゲインを設定する。**production では単一の適用点（native master line・#649
     /// PR-O2）へ atomic store するだけ**——`orbit_audio_core::Engine::set_global_gain`（core の
     /// scheduler ramp）は production から呼ばない（`docs/design/611-output-line-design.md`
@@ -668,7 +668,7 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1689-1730
+// rust/crates/orbit-audio-native/src/output.rs:1751-1792
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -719,7 +719,7 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2757-2774
+// rust/crates/orbit-audio-native/src/output.rs:2815-2832
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

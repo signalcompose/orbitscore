@@ -760,7 +760,8 @@ rust/crates/orbit-audio-native/src/output.rs:588 :638 :671 :716-745 :808 :829 :8
 >
 > | 束 | 統合ブランチ | 中身 | 検証 |
 > |---|---|---|---|
-> | **O-wire** | `611-line-wire` | **PR-O3** + #773 + **#801** | 🔴 **goldens（`OUTPUT_LINE_GOLDENS` / `O0-1`）が 1 つも動かないこと** + cargo（**#801 = CI の flaky を先に潰す**）|
+> | **O-wire** | `611-line-wire` | **PR-O3a** + #773 + **#801** | 🔴 **goldens（`OUTPUT_LINE_GOLDENS` / `O0-1`）が 1 つも動かないこと** + cargo + **互換の f32 bit 一致（4 トポロジ）**（**#801 = CI の flaky を先に潰す**）|
+> | **O-wire-b** 🔴 | `611-line-wire-b` | **PR-O3b**（`SetBusLine` wire + TS）| 同じ検算（goldens が動かない）+ §4.1 検証表の各行 |
 > | **O-surface** | `611-output-line` | **PR-O4** + daemon 台数のアサーション | **E2E-2〜7 + E2E-10** |
 > | **O-multiout** | `611-multiout` | **PR-O5・PR-O6** | **E2E-9** + 全件緑 |
 >
@@ -770,6 +771,14 @@ rust/crates/orbit-audio-native/src/output.rs:588 :638 :671 :716-745 :808 :829 :8
 > — O4 は DSL 表面を変えるので goldens は*正当に*動き、
 > 「配線の入れ替えで音が変わったか」を二度と問えなくなる。
 >
+> 🔴 **PR-O3 を O3a / O3b へ割った理由**（2026-09-08・実装後に確定）: **分量ではなく性質**。
+> **O3a は内部型で可逆**（TS からは見えない）、**O3b は wire 契約で一方通行**。
+> `BUNDLE_BRANCH_WORKFLOW.md` §5.1 は「一方通行の決定（wire 形式・DSL 表面・ファイル形式）を含む PR は
+> **束の先頭か単独に置く**」と定めており、O3b は単独が自然。
+> そして**両者は同じ検算（goldens が動かない）を共有する**ので、**分けても検算の機会は失われない** —
+> これが O3/O4 間との決定的な違い（あちらは分けないと検算が永久に失われる）。
+> 実測でも O3a 単体で 1,446 変更行あり、束の累計は 3,080 行だった。
+
 > **PR-O6 を PR-O4 と分ける理由**: O6 は O3 が互換のために残した旧経路を撤去する。
 > O4 と同じ束だと、赤が出たときに「**新しい DSL が誤り**」と「**消したものがまだ必要だった**」を
 > 区別できない。**逃げ道は O4 が実機で確かめられた後に塞ぐ。**
@@ -780,7 +789,8 @@ rust/crates/orbit-audio-native/src/output.rs:588 :638 :671 :716-745 :808 :829 :8
 | **PR-O0** | #543-a: §9 の 4 譜面の golden（fixture + expectations + gated E2E 4 本）| tests | +400 | 戻せる |
 | **PR-O1** | spec 改訂（§11）| docs | +150/-60 | 戻せる |
 | **PR-O2** | Rust: engine 内部幅 2ch + Device{0,1} 配置 + master line（`MasterLine`・`post` 移設）+ core gain を production から外す。**wire 無変更**。E2E-0/1/8 | native/daemon | +350/-80 | 戻せる（内部）|
-| **PR-O3** | Rust: `LineProgram` / `LineSlot` / `SetBusLine` + 旧 `SetBusRouting` の内部を program 生成へ写す（互換維持）| native/daemon/protocol | +600/-150 | 🔴 **一方通行**（wire）|
+| **PR-O3a** | Rust: `LineProgram` / `LineSlot` + RT 実行 + 旧 `SetBusRouting` の内部を program 生成へ写す（互換維持）| native/daemon | 実測 +1109/-131（`output.rs`）| 内部型なので**可逆** |
+| **PR-O3b** | wire `SetBusLine`（§4.1）+ `protocol-types.ts` / `daemon-client.ts`。**TS の呼び出し元は作らない** | daemon/protocol | +400 | 🔴 **一方通行**（wire 契約）|
 | **PR-O4** | TS: `AudioLine` / `output(dest, thru, db)` / `send` dB / master・aux・device 宛先 / 名前付き引数スキーマ / `//#evalBegin,End` / respawn replay。E2E-2〜7 | engine/extension | +900/-300 | 🔴 **一方通行**（DSL 表面）|
 | **PR-O5** | `outs:`（unit 0）+ passthrough stage + `SetSourceRouting` の kind 緩和。E2E-9 | engine/daemon | +250 | 戻せる |
 | **PR-O6** | 旧 `SetBusRouting` / `_sumOutputBus` 系 / `#484 D4` 文言 / 旧テストの削除 | 全層 | -400 | 戻せる |

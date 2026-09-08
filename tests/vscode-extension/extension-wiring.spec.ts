@@ -69,7 +69,7 @@ vi.mock('../../packages/vscode-extension/src/plugin-catalog-reader', async (impo
 interface FakeChildProcess {
   proc: ChildProcess
   fireExit: (code: number | null) => void
-  fireStdoutData: (chunk: string) => void
+  fireStdoutData: (chunk: string | Buffer) => void
   fireStderrData: (chunk: string) => void
   fireStdoutError: (err: Error) => void
   fireStderrError: (err: Error) => void
@@ -122,7 +122,8 @@ function fakeChildProcess(): FakeChildProcess {
   return {
     proc: proc as ChildProcess,
     fireExit: (code) => exitListeners.forEach((cb) => cb(code)),
-    fireStdoutData: (chunk) => stdoutListeners.forEach((cb) => cb(Buffer.from(chunk))),
+    fireStdoutData: (chunk) =>
+      stdoutListeners.forEach((cb) => cb(typeof chunk === 'string' ? Buffer.from(chunk) : chunk)),
     fireStderrData: (chunk) => stderrListeners.forEach((cb) => cb(Buffer.from(chunk))),
     fireStdoutError: (err) => stdoutErrorListeners.forEach((cb) => cb(err)),
     fireStderrError: (err) => stderrErrorListeners.forEach((cb) => cb(err)),
@@ -220,6 +221,40 @@ describe('extension.ts wiring (#527 review Critical #3)', () => {
         }
       },
     )
+
+    it('decodes an evalMark envelope split inside a UTF-8 character and dispatches it once', () => {
+      const { proc, fireStdoutData } = fakeChildProcess()
+      const appendedLines: string[] = []
+      ext.__setEngineProcessForTest(proc)
+      ext.__setStatusBarItemForTest({ text: '', tooltip: '' })
+      ext.__setOutputChannelForTest({
+        appendLine: (value: string) => appendedLines.push(value),
+        append: () => {},
+      })
+      const handleLine = vi.spyOn(EvalMarkBridge.prototype, 'handleLine')
+      const envelope = JSON.stringify({
+        evalMark: {
+          requestId: 'eval-utf8-split',
+          ok: true,
+          diagnostics: [{ kind: 'parse', message: '日本語の診断' }],
+        },
+      })
+      const bytes = Buffer.from(`${envelope}\n`)
+      const characterStart = bytes.indexOf(Buffer.from('日'))
+      expect(characterStart).toBeGreaterThanOrEqual(0)
+
+      try {
+        ext.setupStdoutHandler(proc, false)
+        fireStdoutData(bytes.subarray(0, characterStart + 1))
+        fireStdoutData(bytes.subarray(characterStart + 1))
+
+        expect(handleLine).toHaveBeenCalledTimes(1)
+        expect(handleLine).toHaveBeenNthCalledWith(1, envelope)
+        expect(appendedLines.filter((entry) => entry.includes('malformed'))).toHaveLength(0)
+      } finally {
+        handleLine.mockRestore()
+      }
+    })
 
     it('dispatches complete envelopes immediately while carrying only the trailing partial line', () => {
       const { proc, fireStdoutData } = fakeChildProcess()

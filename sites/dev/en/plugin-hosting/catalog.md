@@ -773,7 +773,7 @@ after the opening quote to the cursor). When there is no catalog it returns no c
 shows a one-time hint to rescan (the `pluginCatalogHintShown` flag prevents nagging).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3851-3861
+// packages/vscode-extension/src/extension.ts:3859-3869
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -876,7 +876,7 @@ When there is no catalog, **nothing is reported**: "not scanned yet" is not evid
 wrong. And the severity is **Warning**, not Error.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4231-4247
+// packages/vscode-extension/src/extension.ts:4239-4255
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //
@@ -924,7 +924,7 @@ identical slots plus `instance_index` (an indirection from name to slot)**. The 
 comment states the mechanism in one line.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6591-6603
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6604-6616
     /// #618: instrument plugin を目標 spec へ収束させる ensure 操作。
     ///
     /// 未割当/Empty は通常 load、同一 Active は no-op、異 spec Active は spare へ prepare して
@@ -1056,7 +1056,7 @@ by bus name**, and the render side's `InsertBusStage` holds the processor direct
 rebuild of the same ChildSlot**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6035-6043
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6048-6056
     /// effect plugin を固定 slot 上で目標 spec へ収束させる ensure 操作。
     /// Active の異 spec だけを quiesce ack 後に同じ shm 上で建て直す。
     #[cfg(feature = "outproc-effect")]
@@ -1144,7 +1144,7 @@ mechanism was unified onto `ApplyEffectChain`, and the protocol doc marks
 `superseded by ApplyEffectChain (#628)`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5601-5609
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5614-5622
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]

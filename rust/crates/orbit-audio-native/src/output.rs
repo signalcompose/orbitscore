@@ -890,6 +890,16 @@ pub enum BusTarget {
     Bus(usize),
 }
 
+/// Decode the compatibility routing sentinel shared by the legacy RT shim and the daemon's
+/// `SetBusRouting` publisher: `0` means no override, `1` means Master, and `n >= 2` means Bus(n-2).
+pub fn decode_bus_routing_sentinel(encoded: usize) -> Option<BusTarget> {
+    match encoded {
+        0 => None,
+        1 => Some(BusTarget::Master),
+        n => Some(BusTarget::Bus(n - 2)),
+    }
+}
+
 /// post-insert の signal を copy 加算する send（aux への並列タップ・MX.3）。post-fader 固定
 /// （v1・pre/post 切替は将来拡張）。`target` は `sends` を持つ stage 自身より**後ろ**の index。
 #[derive(Debug, Clone, Copy)]
@@ -930,7 +940,10 @@ pub enum LineOp {
 
 /// Immutable line operations plus callback-owned gain state. The control side loses ownership of
 /// a program when it installs it; only the audio thread dereferences the published pointer or
-/// mutates these `Cell`s.
+/// mutates these `Cell`s. That RT exclusivity is an encapsulation invariant, not a type guarantee:
+/// `Cell` makes `LineProgram` non-`Sync`, but `LineExchange` is `Send + Sync` through its
+/// `AtomicPtr`/`Mutex` fields. The invariant holds because `exchange` is private and `LineControl`
+/// exposes publication only through `install_for_bus`.
 pub struct LineProgram {
     pub ops: Box<[LineOp]>,
     pub current_gain: Box<[Cell<f32>]>,
@@ -1028,8 +1041,10 @@ impl Drop for LineProgram {
 }
 
 /// A retired program and the RT generation after which it can be destroyed. The generation lives
-/// in the retired object itself, matching `StageList::retired_at_generation`: there is no
-/// separately published retirement tag whose store could drift past pointer publication.
+/// in the retired object itself, matching the shape of the `ChainExchange` precedent. The safety
+/// argument differs: `ChainExchange` has RT write `retired_at_generation` before handoff, which
+/// establishes happens-before, while this exchange has control count completed RT generations.
+/// Only the “generation travels in the retired object” shape is borrowed here.
 struct RetiredLineProgram {
     program: Box<LineProgram>,
     retired_at_generation: u64,
@@ -1063,6 +1078,9 @@ impl LineExchange {
         debug_assert!(!previous.is_null());
 
         let completed = self.generation.load(Ordering::Acquire);
+        // The swap above has already published `next`. If this panic-only mutex-poisoning path is
+        // taken, install returns Err even though the new program is live and `previous` is leaked.
+        // This ordering is documented rather than disguised as an atomic control-side rollback.
         let mut retired = self
             .retired
             .lock()
@@ -1071,7 +1089,8 @@ impl LineExchange {
         if !previous.is_null() {
             // SAFETY: `previous` was produced by Box::into_raw and the swap removed it from the
             // live owner. RT may still hold a shared raw reference, so the box stays retained for
-            // two completed generations and is never dereferenced by control.
+            // two completed generations: one for the possible in-flight read plus one spare. It is
+            // never dereferenced by control.
             retired.push(RetiredLineProgram {
                 program: unsafe { Box::from_raw(previous) },
                 retired_at_generation: completed.saturating_add(2),
@@ -1234,19 +1253,62 @@ fn validate_line_program(
 ) -> Result<(), OutputError> {
     program.validate_shape()?;
     for op in &program.ops {
-        if let LineOp::Output(LineOutput {
-            dest: OutputDest::Bus(target),
-            ..
-        }) = op
-        {
-            if *target <= bus_index || *target >= bus_count {
+        match op {
+            // These arms are availability gates, not permanent format restrictions. Remove the
+            // corresponding rejection when the follow-up PR wires that variant into RT execution;
+            // until then accepting it would report success for a program the callback ignores.
+            LineOp::Pan(_) => {
+                return Err(OutputError::NoConfig(
+                    "line program Pan is not wired into RT execution".into(),
+                ));
+            }
+            LineOp::Output(LineOutput {
+                dest: OutputDest::Render(_),
+                ..
+            }) => {
+                return Err(OutputError::NoConfig(
+                    "line program Output destination Render is not wired into RT execution".into(),
+                ));
+            }
+            LineOp::Output(LineOutput {
+                dest: OutputDest::Link(_),
+                ..
+            }) => {
+                return Err(OutputError::NoConfig(
+                    "line program Output destination Link is not wired into RT execution".into(),
+                ));
+            }
+            LineOp::Output(LineOutput {
+                dest: OutputDest::Bus(target),
+                ..
+            }) if *target <= bus_index || *target >= bus_count => {
                 return Err(OutputError::NoConfig(format!(
                     "insert bus index {bus_index} output Bus({target}) must be a later stage"
                 )));
             }
+            LineOp::Rack
+            | LineOp::Gain(_)
+            | LineOp::Output(LineOutput {
+                dest: OutputDest::Master | OutputDest::Bus(_) | OutputDest::Device { .. },
+                ..
+            }) => {}
         }
     }
     Ok(())
+}
+
+#[inline]
+fn effective_line_output_dest(
+    first_output: &mut bool,
+    legacy_target: Option<OutputDest>,
+    program_target: OutputDest,
+) -> OutputDest {
+    if *first_output {
+        *first_output = false;
+        legacy_target.unwrap_or(program_target)
+    } else {
+        program_target
+    }
 }
 
 /// named routing tag を受ける per-bus insert stage。sum/aux を含む mixer graph の1ノード
@@ -1945,11 +2007,12 @@ fn render_engine_with_insert_buses_and_source_outputs(
         .iter()
         .map(|bus| {
             bus.line.legacy.as_ref().and_then(|legacy| {
-                match legacy.output.load(Ordering::Relaxed) {
-                    0 => None,
-                    1 => Some(OutputDest::Master),
-                    n => Some(OutputDest::Bus(n - 2)),
-                }
+                decode_bus_routing_sentinel(legacy.output.load(Ordering::Relaxed)).map(|target| {
+                    match target {
+                        BusTarget::Master => OutputDest::Master,
+                        BusTarget::Bus(index) => OutputDest::Bus(index),
+                    }
+                })
             })
         })
         .collect();
@@ -1990,12 +2053,8 @@ fn render_engine_with_insert_buses_and_source_outputs(
         let mut reached_end = true;
         for op in &program.ops {
             if let LineOp::Output(output) = op {
-                let dest = if first_output {
-                    first_output = false;
-                    legacy_targets[i].unwrap_or(output.dest)
-                } else {
-                    output.dest
-                };
+                let dest =
+                    effective_line_output_dest(&mut first_output, legacy_targets[i], output.dest);
                 if let OutputDest::Bus(target) = dest {
                     render_targets[target] = true;
                 }
@@ -2099,12 +2158,11 @@ fn render_engine_with_insert_buses_and_source_outputs(
                 // Pan is introduced as a type in this PR but wired in PR-O4.
                 LineOp::Pan(_) => {}
                 LineOp::Output(output) => {
-                    let dest = if first_output {
-                        first_output = false;
-                        legacy_targets[i].unwrap_or(output.dest)
-                    } else {
-                        output.dest
-                    };
+                    let dest = effective_line_output_dest(
+                        &mut first_output,
+                        legacy_targets[i],
+                        output.dest,
+                    );
                     let gain = line_gain(
                         program,
                         op_index,
@@ -3584,6 +3642,39 @@ mod tests {
         );
     }
 
+    fn install_unwired_line_op(op: LineOp) -> OutputError {
+        let slot = LineSlot::new(LineProgram::new(vec![LineOp::Rack]));
+        slot.line_control()
+            .install_for_bus(LineProgram::new(vec![op]), 0, 1)
+            .expect_err("an op without an RT implementation must be rejected")
+    }
+
+    #[test]
+    fn line_program_install_rejects_unwired_pan() {
+        let error = install_unwired_line_op(LineOp::Pan(0.25));
+        assert!(error.to_string().contains("Pan is not wired"), "{error}");
+    }
+
+    #[test]
+    fn line_program_install_rejects_unwired_render_destination() {
+        let error = install_unwired_line_op(LineOp::Output(LineOutput {
+            dest: OutputDest::Render(0),
+            thru: false,
+            gain: 1.0,
+        }));
+        assert!(error.to_string().contains("Render is not wired"), "{error}");
+    }
+
+    #[test]
+    fn line_program_install_rejects_unwired_link_destination() {
+        let error = install_unwired_line_op(LineOp::Output(LineOutput {
+            dest: OutputDest::Link(0),
+            thru: false,
+            gain: 1.0,
+        }));
+        assert!(error.to_string().contains("Link is not wired"), "{error}");
+    }
+
     #[test]
     fn line_output_without_thru_stops_before_later_gain() {
         let hw = render_tagged_line(
@@ -3794,6 +3885,194 @@ mod tests {
                 ),
             )
             .expect("schedule runtime compatibility input");
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct RuntimeRoutingBits {
+        hw: Vec<u32>,
+        buses: Vec<Vec<u32>>,
+    }
+
+    struct RuntimeRoutingHarness {
+        legacy_engine: Engine,
+        program_engine: Engine,
+        legacy_buses: Vec<InsertBusStage>,
+        program_buses: Vec<InsertBusStage>,
+        legacy_output: Arc<AtomicUsize>,
+        legacy_sends: Vec<Arc<AtomicU32>>,
+        install_line: LegacyLineInstaller,
+        effective_output: BusTarget,
+        effective_send_gains: Vec<f32>,
+    }
+
+    impl RuntimeRoutingHarness {
+        fn new() -> Self {
+            struct Half;
+            impl PostProcessor for Half {
+                fn process(&mut self, data: &mut [f32]) {
+                    for sample in data {
+                        *sample *= 0.5;
+                    }
+                }
+            }
+
+            let legacy_output = Arc::new(AtomicUsize::new(0));
+            let legacy_sends = (0..3)
+                .map(|_| Arc::new(AtomicU32::new(0)))
+                .collect::<Vec<_>>();
+            let legacy_source = InsertBusStage::new("source", None, 8)
+                .with_routing_overrides(legacy_output.clone(), legacy_sends.clone());
+            let program_source = InsertBusStage::new("source", None, 8);
+            let install_line = program_source.legacy_line_installer();
+
+            Self {
+                legacy_engine: Engine::new(48_000, 2),
+                program_engine: Engine::new(48_000, 2),
+                legacy_buses: vec![
+                    legacy_source,
+                    InsertBusStage::new("sum", Some(Box::new(Half)), 8),
+                    InsertBusStage::new("aux-a", None, 8),
+                    InsertBusStage::new("aux-b", None, 8),
+                ],
+                program_buses: vec![
+                    program_source,
+                    InsertBusStage::new("sum", Some(Box::new(Half)), 8),
+                    InsertBusStage::new("aux-a", None, 8),
+                    InsertBusStage::new("aux-b", None, 8),
+                ],
+                legacy_output,
+                legacy_sends,
+                install_line,
+                effective_output: BusTarget::Master,
+                effective_send_gains: vec![0.0; 3],
+            }
+        }
+
+        fn set_bus_routing(&mut self, output: Option<BusTarget>, sends: &[BusSend]) {
+            if let Some(target) = output {
+                self.effective_output = target;
+                let encoded = match target {
+                    BusTarget::Master => 1,
+                    BusTarget::Bus(index) => index + 2,
+                };
+                self.legacy_output.store(encoded, Ordering::Relaxed);
+            }
+            for send in sends {
+                let offset = send.target - 1;
+                self.effective_send_gains[offset] = send.gain;
+                self.legacy_sends[offset].store(send.gain.to_bits(), Ordering::Relaxed);
+            }
+            let enabled_sends = self
+                .effective_send_gains
+                .iter()
+                .copied()
+                .enumerate()
+                .filter(|(_, gain)| *gain != 0.0)
+                .map(|(offset, gain)| BusSend {
+                    target: offset + 1,
+                    gain,
+                })
+                .collect();
+            (self.install_line)(self.effective_output, enabled_sends, 0, 4)
+                .expect("install complete runtime routing line");
+        }
+
+        fn render(mut self, case: &str) -> (RuntimeRoutingBits, RuntimeRoutingBits) {
+            schedule_runtime_compat_input(&self.legacy_engine, &format!("legacy-{case}"));
+            schedule_runtime_compat_input(&self.program_engine, &format!("program-{case}"));
+            let mut legacy_hw = vec![0.0; 8];
+            let mut program_hw = vec![0.0; 8];
+            render_engine_with_insert_buses(
+                &self.legacy_engine,
+                &mut None,
+                &mut self.legacy_buses,
+                2,
+                &mut legacy_hw,
+            );
+            render_engine_with_insert_buses(
+                &self.program_engine,
+                &mut None,
+                &mut self.program_buses,
+                2,
+                &mut program_hw,
+            );
+
+            let snapshot = |hw: Vec<f32>, buses: Vec<InsertBusStage>| RuntimeRoutingBits {
+                hw: hw.into_iter().map(f32::to_bits).collect(),
+                buses: buses
+                    .into_iter()
+                    .map(|bus| bus.buffer.into_iter().map(f32::to_bits).collect())
+                    .collect(),
+            };
+            (
+                snapshot(legacy_hw, self.legacy_buses),
+                snapshot(program_hw, self.program_buses),
+            )
+        }
+    }
+
+    fn assert_runtime_routing_topology_matches(
+        harness: RuntimeRoutingHarness,
+        case: &str,
+    ) -> RuntimeRoutingBits {
+        let (legacy, program) = harness.render(case);
+        assert_eq!(program, legacy, "runtime routing mismatch for {case}");
+        program
+    }
+
+    #[test]
+    fn legacy_runtime_routing_topology_master_only_matches_all_buffers_bit_for_bit() {
+        assert_runtime_routing_topology_matches(RuntimeRoutingHarness::new(), "master-only");
+    }
+
+    #[test]
+    fn legacy_runtime_routing_topology_sum_only_matches_all_buffers_bit_for_bit() {
+        let mut harness = RuntimeRoutingHarness::new();
+        harness.set_bus_routing(Some(BusTarget::Bus(1)), &[]);
+        assert_runtime_routing_topology_matches(harness, "sum-only");
+    }
+
+    #[test]
+    fn legacy_runtime_routing_topology_output_only_update_retains_send_bit_for_bit() {
+        let mut harness = RuntimeRoutingHarness::new();
+        harness.set_bus_routing(
+            Some(BusTarget::Bus(1)),
+            &[BusSend {
+                target: 2,
+                gain: 0.375,
+            }],
+        );
+        harness.set_bus_routing(Some(BusTarget::Master), &[]);
+        let program = assert_runtime_routing_topology_matches(harness, "output-only-retains-send");
+        assert!(
+            program.buses[2]
+                .iter()
+                .any(|sample| *sample != 0.0_f32.to_bits()),
+            "the send omitted by the second update must remain audible in its bus buffer"
+        );
+    }
+
+    #[test]
+    fn legacy_runtime_routing_topology_two_sends_match_all_buffers_bit_for_bit() {
+        let mut harness = RuntimeRoutingHarness::new();
+        harness.set_bus_routing(
+            Some(BusTarget::Bus(1)),
+            &[
+                BusSend {
+                    target: 2,
+                    gain: 0.25,
+                },
+                BusSend {
+                    target: 3,
+                    gain: 0.625,
+                },
+            ],
+        );
+        let program = assert_runtime_routing_topology_matches(harness, "two-sends");
+        assert_ne!(
+            program.buses[2], program.buses[3],
+            "different send gains must produce distinct destination buffers"
+        );
     }
 
     #[test]

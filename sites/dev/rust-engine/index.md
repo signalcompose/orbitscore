@@ -414,7 +414,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1480-1517
+// rust/crates/orbit-audio-native/src/output.rs:1542-1579
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -468,7 +468,7 @@ fn render_shared_block(
 （デバイス配置の段が増えたぶん、2ch 以外では配置のコストが常に乗ります）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1565-1638
+// rust/crates/orbit-audio-native/src/output.rs:1627-1700
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -567,7 +567,7 @@ pub const ENGINE_CHANNELS: usize = 2;
 `master.buffer` をデバイス幅の `hw` へ写します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1661-1685
+// rust/crates/orbit-audio-native/src/output.rs:1723-1747
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -629,7 +629,7 @@ atomic に書いた目標値へ、block ごとに寄せていく形です。
 `EngineWrap::set_global_gain` は `MasterLine` の目標値へ atomic store するだけになりました。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8854-8863
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8867-8876
     /// マスターゲインを設定する。**production では単一の適用点（native master line・#649
     /// PR-O2）へ atomic store するだけ**——`orbit_audio_core::Engine::set_global_gain`（core の
     /// scheduler ramp）は production から呼ばない（`docs/design/611-output-line-design.md`
@@ -651,7 +651,7 @@ engine render 部分の `render_engine_with_sources` は、instrument source（O
 4 通りに分かれます。source も active bus も無ければ、従来の `render_engine` に落ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1689-1730
+// rust/crates/orbit-audio-native/src/output.rs:1751-1792
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -702,7 +702,7 @@ fn render_engine_with_sources_impl(
 避けるため、scratch buffer は 1 秒分をあらかじめ確保しています）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2757-2774
+// rust/crates/orbit-audio-native/src/output.rs:2815-2832
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

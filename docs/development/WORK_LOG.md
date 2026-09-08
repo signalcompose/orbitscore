@@ -23,6 +23,96 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 「**`OUTPUT_LINE_GOLDENS` / `O0-1` などの goldens が 1 つも動かないこと**」+ cargo 全緑 + 実機 gated 全件。
 中身は PR-O3（`LineProgram` / `SetBusLine`）+ #773 + #801。
 
+### fix(daemon): close the O-wire review round-1 findings (#611) (Sep 8, 2026)
+
+**PR**: [#811](https://github.com/signalcompose/orbitscore/pull/811)（束 O-wire → main）/ **ブランチ**: `611-line-wire`
+
+#### レビュー編成 — Fable を並行投入した（最後に回さない）
+
+`/simplify` 4 エージェント（reuse / simplification / efficiency / altitude）と **Fable 設計監査を並行**起動。
+**Critical 0 件**。発見クラスは規約どおり**直交**した:
+
+| 層 | 見つけたもの |
+|---|---|
+| Sonnet 4 名 | 差分に**在る**ものの重複・冗長（4 件）|
+| 🔴 **Fable** | 差分に**無い**もの — **silent な受理 2 件**・**UTF-8 の byte 境界**・**±12% で見逃せる誤りの具体的な範囲** |
+
+#### 🔴 監査が main の読みを 2 箇所訂正した
+
+1. 「bit 一致テストは変換の正しさしか見ていない」→ **静的な方は完全な同語反復**
+   （`with_output_target` / `with_sends` は内部で同じ `LineProgram` を組む）。
+   実行時の方は**別分岐だが両方とも新コード**。より正確だった
+2. 「互換ミラーは特殊ケースの積み上げでは」→ **呼び出し元を追跡すると本番では常に `None`**。
+   `with_routing_overrides` を呼ぶのは `output.rs` のテストだけで、
+   実体は**旧経路との bit 一致を証明する現役の安全網**だった
+
+#### 🔴 ±12% の許容で何が見逃せるか（監査が具体化）
+
+| 誤り | 検出 |
+|---|---|
+| **`send` 係数 0.3 の誤り** | 🔴 **0.144〜0.456（−52%〜+52%）が通る** |
+| 出力ゲイン ±1 dB / 全体の極性反転 / L/R 入れ替え | 通る |
+| send の二重加算・消失 | 落ちる |
+
+**穴は実在する。** これを知ったので cargo 層を厚くする判断ができた。
+
+#### ポリシーを 1 つ決めてから適用した（指摘単位のローカルパッチにしない）
+
+> **出口の配線において「未登録」「未配線」を silent に受理しない。**
+> 反映されない入力（登録されていない bus、RT が実行しない op）は `Ok` を返さず `Err` にする。
+
+このリポジトリでは「評価は成功するのに音が変わらない／変わる」形の欠陥が繰り返し出荷されている。
+**silent な受理は、次の PR の配線忘れをそのまま本番へ通す。**
+
+#### 直したもの
+
+| # | 内容 |
+|---|---|
+| **A-1** | `set_bus_routing` が `bus_lines` に無い bus で **silent に `Ok`** を返していた → `Err`。🔴 **`Err` は atomic mirror と activation の両方より前**に返る |
+| **A-2** | `Pan` / `Render` / `Link` を `validate_line_program` が受理し RT が無視 → `Err`。**「配線したらこの拒否行を消せ」とコメントに明記**（可用性ゲートであって形式制限ではない）|
+| **A-3** | #773 が **UTF-8 の byte 境界**未対応（`data.toString()` per chunk で多バイト文字が U+FFFD 化）→ `StringDecoder` を **bridge dispatch の前段だけ**に。🔴 **`decoder.end()` を `flush()` の前**に置く（逆順だと最後の 1 文字が消える）|
+| **B-1** | 実行時 bit 一致を **4 トポロジ**へ拡張（master のみ / sum のみ / output-only 更新で send 保持 / 2 send）|
+| C-1〜C-4 | `BusLineInstaller` の重複定義 / sentinel デコード 2 箇所 / send オフセット 3 箇所 / `first_output` の三項分岐 2 箇所 |
+| D-1〜D-3 | 退役 margin の論法を先例と書き分け / `Cell` の RT 専有は型でなく encapsulation 依存 / poisoning の注記 |
+
+🔴 **A-3 の red-first が本物だった**: 修正前は実際に `"���本語の診断"` と化けていた。
+
+#### 🔴 B-1 は要求より 1 段強く作られていた
+
+bit 一致だけだと「**両方とも send を落としている**」場合も緑になる。
+output-only 更新のテストが **「send バッファが非ゼロ」を別途 assert** しており、同語反復の穴が塞がれている。
+
+#### なぜ (A) ではなく (B) を採ったか
+
+監査は「旧 RT から bit-exact oracle を作る」(A) を推奨したが、**(B) トポロジを増やす**を採った。
+理由: RT の shim 分岐（`legacy_targets` / `legacy_send_gains`）は**無改変の既存テスト 6 本が固定している**ので、
+`shim ≡ program` を複数トポロジで示せば **推移的に「旧 RT ≡ program」**が言える。(A) より安く、ほぼ同じ強度。
+
+#### 見送った指摘（理由つき）
+
+| 指摘 | 見送りの理由 |
+|---|---|
+| RT の marking / execution 2 重 walk | **構造的**（`render_multi_feeds` が事前に完全な target を要求）・**パス数は元から 2 本**・**未測定**。2 人のレビュアーが独立に同判断 |
+| `extension.ts` の stdout 二重 split | **#614 で穴を踏んだ高リスク領域**。軽微・未測定 |
+| mono downmix の `0.5` が 2 箇所 | 意味論が違う（代入 vs 加算）|
+| `LineControl` の薄いラッパー | 確信度 中・呼び出し側の書き換えを伴う・実害小 |
+| `LineExchange` ≒ `ChainExchange` | 共有クレート抽出が要る・**PR-O6 まで形が固まらない** |
+
+#### 監査の運用指摘 2 件も処理した
+
+- **束の中身が正本とずれる**（O3b 分離）→ 計画 §1.10・§2.5 と設計 611 §12 に
+  **PR-O3a / O3b の分割とその理由**を記録
+- **追跡先が CLOSED 済み #801 のコメント**だった → issue
+  [#813](https://github.com/signalcompose/orbitscore/issues/813) を独立して作成
+
+#### 🔴 実機で検証されていない範囲（記録）
+
+実機 gated が通している op は **{Rack, Output(Master,1.0), Output(Bus,1.0), Output(Bus,0.3)}** だけ。
+**`Gain` op / `Device` 宛て / mono マージ / 複数 send / gain 0 での send 除去 は実機未検証**
+（cargo の bit 一致では覆っている）。
+
+---
+
 ### feat(daemon): line program and RT execution, legacy SetBusRouting mapped onto it (#611 PR-O3a) (Sep 8, 2026)
 
 **Issue**: #611 / **ブランチ**: `611-o3a-line-program` → `611-line-wire`（小 PR）

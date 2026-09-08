@@ -2,6 +2,7 @@ import * as child_process from 'child_process'
 import * as path from 'path'
 import * as fs from 'fs'
 import { randomUUID } from 'crypto'
+import { StringDecoder } from 'node:string_decoder'
 // import * as os from 'os'
 
 import * as vscode from 'vscode'
@@ -1512,6 +1513,10 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
       }
     }
   })
+  // Decode only the buffered bridge-dispatch path across Buffer boundaries. The log/playhead path
+  // below intentionally keeps its historical per-chunk `data.toString()` timing and values.
+  // stderr has the same UTF-8 boundary hazard but remains out of scope for this change.
+  const bridgeDecoder = new StringDecoder('utf8')
 
   process.stdout?.on('error', (err) => {
     logHandlerFailure('setupStdoutHandler', err)
@@ -1526,7 +1531,8 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
       // (same mechanism as setupExitHandler/setupStdinErrorHandler below).
       const isCurrent = engineProcess === process
 
-      bridgeLines.push(output)
+      const bridgeOutput = bridgeDecoder.write(data)
+      if (bridgeOutput) bridgeLines.push(bridgeOutput)
 
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
@@ -1571,6 +1577,8 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
   })
   process.stdout?.on('end', () => {
     try {
+      const bridgeRemainder = bridgeDecoder.end()
+      if (bridgeRemainder) bridgeLines.push(bridgeRemainder)
       bridgeLines.flush()
     } catch (err) {
       logHandlerFailure('setupStdoutHandler', err)
