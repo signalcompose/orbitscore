@@ -1,12 +1,12 @@
 ---
 title: "SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: f2dadd9
-verified-at: "2026-09-05"
+verified-against: 66efda5
+verified-at: "2026-09-08"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）の測定に関する発見、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #611 PR-O0（[#728](https://github.com/signalcompose/orbitscore/pull/728)）の測定に関する発見、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の line program 化まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain
 
@@ -355,6 +355,38 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 三状態を 1 つの atomic に詰めるためのもので、native 側の `routing_override` がこれを
 読みます。
 
+#611 PR-O3a 以降、この関数は検証のあとに **line program を 1 回 publish** し、旧 atomic には
+**受理済みの値をミラーするだけ**になりました。ハンドルの解決順にも意味があります。
+
+```rust
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6378-6393
+        // 3. Every compatibility handle is resolved before the one program publication, so a
+        // missing slot cannot leave only part of the requested routing applied.
+        let routing_handle = if resolved_output.is_some() {
+            Some(control.bus_routing.get(seq_bus).ok_or_else(|| {
+                WrapError::OutProcEffect(format!("bus '{seq_bus}' has no routing handle"))
+            })?)
+        } else {
+            None
+        };
+        let send_slots = if resolved_sends.is_empty() {
+            None
+        } else {
+            Some(control.bus_sends.get(seq_bus).ok_or_else(|| {
+                WrapError::OutProcEffect(format!("bus '{seq_bus}' has no send slots"))
+            })?)
+        };
+```
+
+routing handle も send slot も、**何かを書き込む前に**すべて取り終えます。以前は output を
+atomic へ store してから send slot を引いていたので、send slot が無い bus では
+「output だけ反映された状態でエラーを返す」ことがあり得ました。doc コメントが最初から
+掲げていた「1 件でも検証に失敗したら何も反映しない」を、実装が満たすようになった形です。
+
+publish されるのは、既存の send を読み直して**列挙されなかったぶんも含めた完全な program**
+です（`enabled_sends` は gain が `0.0` でない slot だけを拾います）。旧 API の「列挙された
+send だけを反映する」という部分更新の意味論を、毎回まるごと組み直すことで再現しています。
+
 ### render 側: post-loop がトポロジカル順に合流させる
 
 daemon が atomic に書いた routing を、native の render callback はどう消費するのでしょうか。
@@ -399,16 +431,198 @@ daemon が atomic に書いた routing を、native の render callback はど�
    全 buffer に 1 回だけ**適用します（core 側の実装は次節）。ただし #649 PR-O2 以降、この
    `hw` は**デバイスのバッファではなく 2ch の `master.buffer`** で、core の gain も production では
    1.0 に固定されています（後述の「master gain の適用点が移った」を参照）
-2. post-loop は stage を配列順（= トポロジカル順・MX.4）に回し、insert があれば
-   `processor.process` を通し、`effective_targets[i]` に従って `hw`（Master）か後ろの bus
-   （`Bus(j)`）に加算します
-3. 引用の続き（`output.rs:962-985`）では `Bus(j)` への加算と、`sends` / 実行時 send override の
-   `gain` を掛けた copy 加算が続きます（fan-out は event の複製ではなく「bus 処理段の copy 加算」
-   という MX.4 の規範どおり）
+2. post-loop は stage を配列順（= トポロジカル順・MX.4）に回します。ただし #611 PR-O3a 以降、
+   各 stage で何をするかは `effective_targets[i]` の分岐ではなく、その stage に **publish されて
+   いる line program**（`LineOp` の列）が決めます。`LineOp::Rack` が insert の
+   `processor.process`、`LineOp::Output` が `hw`（Master）か後ろの bus（`Bus(j)`）への加算です
+3. 引用の続き（`output.rs:2160-2184`）が `LineOp::Output` の本体で、`gain` を掛けた copy 加算に
+   なっています（fan-out は event の複製ではなく「bus 処理段の copy 加算」という MX.4 の規範どおり）
 
 `split_at_mut(i + 1)` で左右に分けられるのは、構築時に `validate_bus_topology` が
 「stage i の行き先は必ず i より後ろ」を検証しているからです。sum のネストや循環が
 **構造的に**起きない、という仕様（MX.2「ネストは v1 不可」）の実装側の裏付けがここにあります。
+
+### line program — 出口を「命令列」として持つ（#611 PR-O3a）
+
+2026-09-08 の [#811](https://github.com/signalcompose/orbitscore/pull/811)（束 O-wire）で、
+post-loop の中身が「`effective_targets[i]` を見て 1 箇所に足す」から
+「stage ごとの命令列を頭から実行する」へ置き換わりました。命令の型はこの 3 つです。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:914-939
+/// A resolved output destination for one line operation. Bus and channel names are converted to
+/// stable indices on the control thread before a program is published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputDest {
+    Master,
+    Bus(usize),
+    Device { left: usize, right: Option<usize> },
+    Render(usize),
+    Link(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineOutput {
+    pub dest: OutputDest,
+    pub thru: bool,
+    pub gain: f32,
+}
+
+/// One operation in a bus line. `Pan` is reserved for PR-O4; this PR does not generate it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineOp {
+    Rack,
+    Gain(f32),
+    Pan(f32),
+    Output(LineOutput),
+}
+```
+
+目を引くのは `LineOutput.thru` でしょう。「この出口に出したあとも命令列を続けるか」を表す
+真偽値で、`false` なら post-loop はそこで `break` します。旧実装の「output_target へ 1 回
+足して、あとは sends を全部足す」という形は、この語彙では
+**`Output(output_target, thru = sends があるか)` に続けて send の本数だけ `Output(..)` を並べ、
+最後だけ `thru = false`** と書けます。実際 `LineProgram::legacy` がその変換を行っており、
+旧 API の呼び出しは内部で line program に写されてから RT へ渡ります。
+
+出口の実行部分はこうなっています。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:2160-2184
+                LineOp::Output(output) => {
+                    let dest = effective_line_output_dest(
+                        &mut first_output,
+                        legacy_targets[i],
+                        output.dest,
+                    );
+                    let gain = line_gain(
+                        program,
+                        op_index,
+                        output.gain,
+                        bs / output_channels,
+                        buses[i].line.ramp_frames,
+                    );
+                    match dest {
+                        OutputDest::Master => {
+                            add_scaled(hw, &buses[i].buffer[..bs], gain);
+                        }
+                        OutputDest::Bus(target) => {
+                            let (left, right) = buses.split_at_mut(i + 1);
+                            add_scaled(
+                                &mut right[target - i - 1].buffer[..bs],
+                                &left[i].buffer[..bs],
+                                gain,
+                            );
+                        }
+```
+
+`OutputDest` は 5 値ありますが、この束で RT が実行するのは `Master` / `Bus` / `Device` の
+3 つだけです。`Pan` / `Render` / `Link` は **install の時点で弾かれます**。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1255-1263
+    for op in &program.ops {
+        match op {
+            // These arms are availability gates, not permanent format restrictions. Remove the
+            // corresponding rejection when the follow-up PR wires that variant into RT execution;
+            // until then accepting it would report success for a program the callback ignores.
+            LineOp::Pan(_) => {
+                return Err(OutputError::NoConfig(
+                    "line program Pan is not wired into RT execution".into(),
+                ));
+```
+
+「型としては先に置くが、RT が実行できないうちは install を成功させない」という書き方です。
+受理してしまうと「呼び出しは成功したのに callback は無視する」という、いちばん見つけにくい
+種類の silent failure になります。
+
+#### 互換のための 2 つの仕掛け
+
+この束の主張は「配線を入れ替えたが、音は変わっていない」なので、旧 API の意味論を
+そのまま保つ仕掛けが 2 つ入っています。
+
+1 つめが `effective_line_output_dest` です。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1301-1312
+fn effective_line_output_dest(
+    first_output: &mut bool,
+    legacy_target: Option<OutputDest>,
+    program_target: OutputDest,
+) -> OutputDest {
+    if *first_output {
+        *first_output = false;
+        legacy_target.unwrap_or(program_target)
+    } else {
+        program_target
+    }
+}
+```
+
+`with_routing_overrides` で作られた stage は旧来の atomic（`routing_override`）を持ち続けており、
+そこに値が入っていれば **命令列の最初の `Output` だけ**が上書きされます。2 つめ以降の
+`Output`（= send）は program の値をそのまま使います。旧 API の「output だけ差し替える」という
+部分更新が、命令列の世界でも同じ意味になるようにした対応付けです。
+
+2 つめが `LineProgram::settled` です。`LineProgram::new` の gain セルは 1.0 から目標値へ
+ramp しますが、旧経路の gain は**最初の callback から即座に効いていました**。`legacy` が
+`settled`（= 全セルが最初から目標値）を使うのはそのためで、ramp の有無で 1 block 目の
+音が変わることを避けています。
+
+#### 差し替えは AtomicPtr + 世代カウンタ
+
+line program は control スレッドが作って RT スレッドが読むので、差し替えの安全性を
+どう取るかという問題が出ます。`LineExchange` の答えは「RT は Acquire load 1 回だけ・
+回収は control 側」です。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1053-1058
+struct LineExchange {
+    live: AtomicPtr<LineProgram>,
+    retired: Mutex<Vec<RetiredLineProgram>>,
+    /// Completed RT generations. The audio thread is the sole writer; control only Acquire-loads.
+    generation: AtomicU64,
+}
+```
+
+`install` は新しい `Box` を `swap` で publish し、外れた古い box を
+**`completed + 2` 世代まで retired リストに保持**します（in-flight の読み手のぶん 1 + 予備 1）。
+RT 側は callback の頭で全 stage 分のポインタを 1 回ずつ Acquire load し、
+callback の最後に `finish_generation()` で世代を進めます。**alloc / lock / drop は
+すべて control 側**に寄っているので、RT の契約は崩れません。
+
+ここで面白いのは、**marking pass（`render_targets` の計算）と実行が同じポインタ snapshot を
+共有している**点です。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:2049-2066
+        // SAFETY: the line generation is not completed until after execution below. Control keeps
+        // any replaced box retired for two later completed generations.
+        let program = unsafe { &*programs[i] };
+        let mut first_output = true;
+        let mut reached_end = true;
+        for op in &program.ops {
+            if let LineOp::Output(output) = op {
+                let dest =
+                    effective_line_output_dest(&mut first_output, legacy_targets[i], output.dest);
+                if let OutputDest::Bus(target) = dest {
+                    render_targets[target] = true;
+                }
+                if !output.thru {
+                    reached_end = false;
+                    break;
+                }
+            }
+        }
+```
+
+「どの bus を zero-fill して post-loop で処理するか」を決める pass と、実際に加算する pass が
+**別々に program を load すると、その間に install が入ったときに 2 つの pass の意見が食い違い**、
+合流先が前 block のゴミを持ち越したり、逆に鳴るはずのないバスが鳴ったりします。
+1 callback につき 1 snapshot、世代の publish は両方が終わってから、という順序でそれを封じています。
+
+`if !output.thru { break }` が **2 箇所ある**（marking pass と実行）ことも、ここから読み取れます。
+片方だけ止まると「描画対象としては生きているのに加算されない」あるいはその逆になります。
 
 ## instrument をミキサーの source にする（#643）
 
@@ -1008,11 +1222,15 @@ feature 無しビルドでは `UNSUPPORTED` が返り、`syncBusRouting` が `co
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1023-1035` — `reapplyGlobalGainAfterRespawn`
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1247-1259` — `setGlobalGain`（intent 記録）
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1950-1976` — `BusKind` / sum・aux pool prefix と既定サイズ
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5776-5845` — `set_bus_routing` 検証
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6310-6480` — `set_bus_routing`（検証 → line program の 1 回 publish → 旧 atomic へのミラー・#611 PR-O3a）
 - `rust/crates/orbit-audio-daemon/src/session.rs:2214-2236` — `SetGlobalGain` ハンドラ
 - `rust/crates/orbit-audio-native/src/output.rs:269-282` — `BlockSource` / `SourceDest`
 - `rust/crates/orbit-audio-native/src/output.rs:772-801` — `collect_source_feeds`
-- `rust/crates/orbit-audio-native/src/output.rs:935-986` — `render_multi_feeds` 呼び出しと post-loop
+- `rust/crates/orbit-audio-native/src/output.rs:2119-2235` — `render_multi_feeds` 呼び出しと post-loop（line program 実行・#611 PR-O3a）
+- `rust/crates/orbit-audio-native/src/output.rs:914-939` — `OutputDest` / `LineOutput` / `LineOp`
+- `rust/crates/orbit-audio-native/src/output.rs:1043-1100` — `LineExchange`（AtomicPtr publish + 世代カウンタによる回収）
+- `rust/crates/orbit-audio-native/src/output.rs:1249-1297` — `validate_line_program`（`Pan` / `Render` / `Link` の install 拒否）
+- PR [#811](https://github.com/signalcompose/orbitscore/pull/811) / PR [#810](https://github.com/signalcompose/orbitscore/pull/810) — 束 O-wire・PR-O3a（line program 化・互換維持）
 - `rust/crates/orbit-audio-native/src/output.rs:1078-1094` — bus 無し経路 `render_engine_with_source_outputs`
 - `rust/crates/orbit-audio-native/src/output.rs:2017-2060` — unit test `global_gain_scales_instrument_contribution`
 - `rust/crates/orbit-audio-core/src/scheduler.rs:375-460` — `render_multi_feeds`（feed 加算と gain ramp）

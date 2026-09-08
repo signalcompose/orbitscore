@@ -1,12 +1,12 @@
 ---
 title: "IV-1. VS Code Extension Architecture"
 chapter-id: "IV-1"
-verified-against: d2e94af
-verified-at: "2026-09-06"
+verified-against: 66efda5
+verified-at: "2026-09-08"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730), the `capabilities.untrustedWorkspaces` declaration) on 2026-09-04, to the deferral of #385 layer 2 (PR [#750](https://github.com/signalcompose/orbitscore/pull/750)) on 2026-09-06, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing) the same day. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730), the `capabilities.untrustedWorkspaces` declaration) on 2026-09-04, to the deferral of #385 layer 2 (PR [#750](https://github.com/signalcompose/orbitscore/pull/750)) on 2026-09-06, to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing) the same day, and to #773 (PR [#811](https://github.com/signalcompose/orbitscore/pull/811), line-framing the stdout bridge envelopes) on 2026-09-08. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-1. VS Code Extension Architecture
 
@@ -652,7 +652,58 @@ export function setupStderrHandler(process: child_process.ChildProcess): void {
 }
 ```
 
-Incidentally, there are **four** implementations of "chunk stream → lines" across the repository. The implementation comment enumerates all four precisely so that nobody fixes `createLinePrefixer` and assumes the set is now consistent: this one for engine stderr; `createDaemonStderrLineRouter` for daemon stderr (`packages/engine/src/audio/rust-engine/daemon-client.ts`, [#777](https://github.com/signalcompose/orbitscore/issues/777)); `setupStdoutHandler` for engine stdout ([#773](https://github.com/signalcompose/orbitscore/issues/773)); and the ring proxy seen at the start of this chapter (the part that does `value.split('\n')` on `append` and copies into the ring). The extension package does not depend on `@orbitscore/engine`, so at least the first two cannot be shared as things stand. Decisions about newline handling, empty lines, and the trailing flush can propagate to all four sites — that is the conclusion the implementation comment draws.
+Incidentally, there are **four** routes from "chunk stream" to "lines" across the repository. The implementation comment enumerates all four precisely so that nobody fixes `createLinePrefixer` and assumes the set is now consistent: this one for engine stderr; `createDaemonStderrLineRouter` for daemon stderr (`packages/engine/src/audio/rust-engine/daemon-client.ts`, [#777](https://github.com/signalcompose/orbitscore/issues/777)); `setupStdoutHandler` for engine stdout ([#773](https://github.com/signalcompose/orbitscore/issues/773)); and the ring proxy seen at the start of this chapter (the part that does `value.split('\n')` on `append` and copies into the ring). The extension package does not depend on `@orbitscore/engine`, so at least the first two cannot be shared as things stand. Decisions about newline handling, empty lines, and the trailing flush can propagate to all four sites — that is the conclusion the implementation comment draws.
+
+### The stdout bridge envelopes are reassembled into lines too (#773)
+
+The third of them, `setupStdoutHandler`, became a caller of `createLinePrefixer` on 2026-09-08 in [#811](https://github.com/signalcompose/orbitscore/pull/811) (bundle O-wire). Until then it split each chunk with `output.split('\n')` and fed the pieces straight into the four branches for `{"savePluginState"` / `{"pluginUi"` / `{"evalMark"` / `{"engineState"`, so **when a bridge JSON envelope was cut at a chunk boundary, both fragments were lost**: the first half matched none of the prefixes, and the second half did not start with `{`, so it matched none of them either.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1479-1486
+export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
+  // #773: Bridge envelopes are line-framed, but stdout data events are not.
+  // Keep this buffer inside the handler so a stale process can never donate a
+  // partial line to the current process. Only bridge dispatch is buffered:
+  // applyEngineStdoutChunk still receives each raw chunk immediately below.
+  const bridgeLines = createLinePrefixer((rawLine) => {
+    const trimmedLine = rawLine.trim()
+    const isCurrent = engineProcess === process
+```
+
+The detail worth noticing is that `bridgeLines` is created **inside the handler**. At module level, a half-finished line left behind by an old process between `stopEngine()` and `startEngine()` would mix into the new process's buffer. The stale guard can decide on identity alone (`engineProcess === process`) precisely because each process has its own buffer.
+
+The other device is `StringDecoder`.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1516-1519
+  // Decode only the buffered bridge-dispatch path across Buffer boundaries. The log/playhead path
+  // below intentionally keeps its historical per-chunk `data.toString()` timing and values.
+  // stderr has the same UTF-8 boundary hazard but remains out of scope for this change.
+  const bridgeDecoder = new StringDecoder('utf8')
+```
+
+`data.toString()` interprets a chunk as UTF-8 on its own, so a multi-byte character straddling a chunk boundary **turns into `U+FFFD` right there**. Rejoining the lines afterwards cannot bring the character back. `StringDecoder` carries an incomplete byte sequence over to the next chunk, which guards the step before. As the comment states, the replacement covers **only the bridge dispatch path**: the `output` / `lines` handed to logging and the playhead still come from `data.toString()` as before. That is the line drawn to leave the existing calling convention and timing untouched, and it also records that the same hazard on stderr is out of scope for this change.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1534-1535
+      const bridgeOutput = bridgeDecoder.write(data)
+      if (bridgeOutput) bridgeLines.push(bridgeOutput)
+```
+
+And, as on the stderr side, everything is flushed on `end`. `bridgeDecoder.end()` comes first because the decoder's pending bytes have to be turned back into characters before they reach the prefixer; otherwise the last line would be emitted already mangled.
+
+```typescript
+// packages/vscode-extension/src/extension.ts:1578-1586
+  process.stdout?.on('end', () => {
+    try {
+      const bridgeRemainder = bridgeDecoder.end()
+      if (bridgeRemainder) bridgeLines.push(bridgeRemainder)
+      bridgeLines.flush()
+    } catch (err) {
+      logHandlerFailure('setupStdoutHandler', err)
+    }
+  })
+```
 
 ---
 
@@ -963,9 +1014,10 @@ The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEn
 - `packages/vscode-extension/src/extension.ts:653-710` — `getConfiguredEngineKind()` / `resolveScsynthForUI()` / `resolveDaemonForUI()`
 - `packages/vscode-extension/src/extension.ts:725-798` — `updateBundleStatus()` / `maybeShowBundleNotice()`
 - `packages/vscode-extension/src/extension.ts:800-883` — `showCommands()` (branches on engine kind) / `restartEngine()` / `reloadWindow()`
-- `packages/vscode-extension/src/extension.ts:1473-1553` — `setupStdoutHandler()`: bridge dispatch and the `applyEngineStdoutChunk` call
-- `packages/vscode-extension/src/extension.ts:1567-1619` — `createLinePrefixer()`: reassembling a chunk stream into lines (carrying `partial` over, `flush()`, skipping empty lines), plus the implementation comment enumerating all four "chunk → line" implementations (#756)
-- `packages/vscode-extension/src/extension.ts:1621-1657` — `setupStderrHandler()`: line-wise `ERROR:` prefixing and the flush on `end`
+- `packages/vscode-extension/src/extension.ts:1479-1587` — `setupStdoutHandler()`: bridge dispatch through `createLinePrefixer` + `StringDecoder`, and the `applyEngineStdoutChunk` call (#773)
+- `packages/vscode-extension/src/extension.ts:1589-1642` — `createLinePrefixer()`: reassembling a chunk stream into lines (carrying `partial` over, `flush()`, skipping empty lines), plus the implementation comment enumerating all four "chunk → line" routes (#756 / #773)
+- `packages/vscode-extension/src/extension.ts:1644-1680` — `setupStderrHandler()`: line-wise `ERROR:` prefixing and the flush on `end`
+- Issue [#773](https://github.com/signalcompose/orbitscore/issues/773) / PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — stdout bridge envelopes split at a chunk boundary losing both fragments
 - `tests/vscode-extension/extension-wiring.spec.ts` — the four specs pinning line-wise prefixing (PR [#772](https://github.com/signalcompose/orbitscore/pull/772))
 - `packages/vscode-extension/src/extension.ts:1699-1723` — `autoStartConfiguredRustEngine()`
 - `packages/vscode-extension/src/extension.ts:2044-2198` — `startEngine()`: engine-kind pre-check, args / env, spawn, handlers, nextTick guard

@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: b513659
-verified-at: "2026-09-06"
+verified-against: 66efda5
+verified-at: "2026-09-08"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-1. Daemon Architecture Overview
 
@@ -474,7 +474,8 @@ The number of failed `try_lock`s accumulates in `StreamStats` and can be read as
 choice, and the contention is self-healing (the next block recovers).
 
 The body, `render_block_with_sources`, proceeds in order: engine render → **the master line (rack
-→ gain)** → **device placement** → capture tap → record the callback duration. The two middle
+→ gain)** → **device placement** → **merging the direct device line** → capture tap → record the
+callback duration. The two middle
 stages arrived with #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754));
 before that the sequence was the three stages "engine render → master post-processor → capture
 tap". `master.post`/`capture`/`cb_stats` are still each independent opt-ins, but the
@@ -483,7 +484,7 @@ device"** — with the placement stage added, anything other than 2ch always pay
 placement.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1627-1700
+// rust/crates/orbit-audio-native/src/output.rs:1627-1713
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -558,7 +559,49 @@ fn render_block_with_sources(
     if direct_device_written {
         add_scaled(hw, &master.direct_device_buffer[..hw.len()], 1.0);
     }
+
+    // capture seam（#307 realtime）: post 適用後の最終 hw（= device に出る実信号）を WAV へ逃がす
+    // 読み取り専用 tap。`RingTapSink::commit` は wait-free / no-alloc（満杯時はあふれを drop カウント）
+    // ＝ RT 契約を満たす。off-thread writer が ring を drain する。post の後・計測の内側に置くことで
+    // capture コストも callback-duration に含めて監視する。
+    if let Some(sink) = capture.as_mut() {
+        sink.commit(hw);
+    }
+
+    if let (Some(stats), Some(t0)) = (cb_stats, t0) {
+        stats.record(t0.elapsed().as_nanos() as u64);
+    }
+}
 ```
+
+### The direct device line — an output that skips the master
+
+`direct_device_buffer` and `direct_device_written` arrived with #611 PR-O3a
+([#811](https://github.com/signalcompose/orbitscore/pull/811)). When a bus's line program carries
+an `OutputDest::Device { left, right }`, that sound goes **straight to the named device channels,
+without passing through the master line (rack → gain)**. `master.buffer` is always 2ch, so without
+a second buffer at device width there would be nowhere for it to land — that is the reason this
+buffer exists.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1926-1930
+struct DeviceLineBuffer<'a> {
+    samples: &'a mut [f32],
+    channels: usize,
+    wrote: bool,
+}
+```
+
+`wrote` is doing the work. `add_to_device` calls `fill(0.0)` over the whole buffer **only on the
+first write**, so a block in which nobody addresses a Device pays no zero-fill cost at all. The
+caller reads the same flag and, when `direct_device_written` is `false`, skips the final
+`add_scaled` entirely. It is the same policy as the decision not to zero-fill `hw` in
+`place_master_into_device`: an unused path pays nothing per block.
+
+As of this bundle, `LineProgram::legacy` (the translation target of the old `SetBusRouting`)
+generates only `Master` and `Bus`, so production never takes this path. The shape RT can execute is
+in place; actually growing the output belongs to the next bundle, which changes the DSL surface
+(see [SC-2](/en/signal-chain/mixer-audio-line#the-line-program-—-the-output-as-a-sequence-of-operations-611-pr-o3a)).
 
 ### The master line — the engine is always 2ch inside
 
@@ -889,7 +932,9 @@ i.e. two independent measurement paths agreeing at the same tap point). These fi
 - `rust/crates/orbit-audio-daemon/src/session.rs:691-718,1272-2372` — `session::run` (handshake, writer task, UI event forwarding) and the `handle_command` match arms (source of the command table)
 - `rust/crates/orbit-audio-native/src/output.rs:254-260,581-618,662-750,1513-1556` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
 - `rust/crates/orbit-audio-native/src/output.rs:682-688,700-754,1253-1277` — `ENGINE_CHANNELS` / `MasterLine` (rack → gain) / `place_master_into_device` (#649 PR-O2)
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8724-8733` — `EngineWrap::set_global_gain` (atomic store into the master line; `ramp_sec` kept for wire compatibility only)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8867-8876` — `EngineWrap::set_global_gain` (atomic store into the master line; `ramp_sec` kept for wire compatibility only)
+- `rust/crates/orbit-audio-native/src/output.rs:1926-1930,1932-1985` — `DeviceLineBuffer` / `add_to_device` (the direct device line, #611 PR-O3a)
+- PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — bundle O-wire (line-program conversion, compatibility preserved)
 - [`docs/design/611-output-line-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/design/611-output-line-design.md) §5.2-5.5 — design source of truth for the master line, the 2ch internal width, and taking the core master gain out of production
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — engine-first roadmap and architecture decision (instruments = in-process / effects + 3rd-party = out-of-process sandbox)
 - [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 / 6.262 — capture peak measurements
