@@ -161,7 +161,7 @@ export const MIXER_BUS_POOL_SIZE = 4
 対応する Rust 側の定数は daemon の `engine_wrap.rs` にあります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2072-2085
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2123-2136
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
 /// （M3 で配線予定）。
 #[cfg(feature = "outproc-effect")]
@@ -326,7 +326,7 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 という規則が読み取れます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6332-6352
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6725-6745
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -359,7 +359,7 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 **受理済みの値をミラーするだけ**になりました。ハンドルの解決順にも意味があります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6378-6393
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6771-6786
         // 3. Every compatibility handle is resolved before the one program publication, so a
         // missing slot cannot leave only part of the requested routing applied.
         let routing_handle = if resolved_output.is_some() {
@@ -394,7 +394,7 @@ daemon が atomic に書いた routing を、native の render callback はど�
 **post-loop** がその場所です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2121-2147
+// rust/crates/orbit-audio-native/src/output.rs:2229-2255
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -449,7 +449,7 @@ post-loop の中身が「`effective_targets[i]` を見て 1 箇所に足す」�
 「stage ごとの命令列を頭から実行する」へ置き換わりました。命令の型はこの 3 つです。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:914-939
+// rust/crates/orbit-audio-native/src/output.rs:953-978
 /// A resolved output destination for one line operation. Bus and channel names are converted to
 /// stable indices on the control thread before a program is published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -488,7 +488,7 @@ pub enum LineOp {
 出口の実行部分はこうなっています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2160-2184
+// rust/crates/orbit-audio-native/src/output.rs:2268-2292
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
                         &mut first_output,
@@ -520,7 +520,7 @@ pub enum LineOp {
 3 つだけです。`Pan` / `Render` / `Link` は **install の時点で弾かれます**。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1255-1263
+// rust/crates/orbit-audio-native/src/output.rs:1294-1302
     for op in &program.ops {
         match op {
             // These arms are availability gates, not permanent format restrictions. Remove the
@@ -544,7 +544,7 @@ pub enum LineOp {
 1 つめが `effective_line_output_dest` です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1301-1312
+// rust/crates/orbit-audio-native/src/output.rs:1340-1351
 fn effective_line_output_dest(
     first_output: &mut bool,
     legacy_target: Option<OutputDest>,
@@ -576,7 +576,7 @@ line program は control スレッドが作って RT スレッドが読むので
 回収は control 側」です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1053-1058
+// rust/crates/orbit-audio-native/src/output.rs:1092-1097
 struct LineExchange {
     live: AtomicPtr<LineProgram>,
     retired: Mutex<Vec<RetiredLineProgram>>,
@@ -595,7 +595,7 @@ callback の最後に `finish_generation()` で世代を進めます。**alloc /
 共有している**点です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2049-2066
+// rust/crates/orbit-audio-native/src/output.rs:2157-2174
         // SAFETY: the line generation is not completed until after execution below. Control keeps
         // any replaced box retired for two later completed generations.
         let program = unsafe { &*programs[i] };
@@ -638,7 +638,7 @@ instrument が何かを知らず、「render すると N 本の block をくれ�
 持ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:793-806
+// rust/crates/orbit-audio-native/src/output.rs:829-842
 /// A callback-owned source which renders one or more interleaved output units.
 pub trait BlockSource: Send {
     fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
@@ -664,7 +664,7 @@ feed の収集は `collect_source_feeds`（`output.rs:772-801`）が行い、uni
 core の `FeedDest` に写します。写像の部分だけ引用します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1861-1871
+// rust/crates/orbit-audio-native/src/output.rs:1969-1979
             let dest = match slot.dests[unit].load() {
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
@@ -965,7 +965,7 @@ master gain の**手前**に来ます。
 ラックが**音を生成する**スタブを使うユニットテストが唯一の守り手になっています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:4623-4628
+// rust/crates/orbit-audio-native/src/output.rs:4731-4736
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(

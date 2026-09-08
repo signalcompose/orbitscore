@@ -114,6 +114,29 @@ else { post → advance_gain → place_master_into_device }  // 従来経路（1
 
 **コードは無改変だがコメントだけ落ちる**類の欠落で、テストでは検出できない。復元した。
 
+#### 🔴 CI が捕まえた検証漏れ — `docs:check` を手元で回していなかった
+
+小 PR [#823](https://github.com/signalcompose/orbitscore/pull/823) の CI で `code-review` が落ちた。
+原因は**実装ではなく dev サイトの引用**で、**102 件が FAIL**。Rust に +1,096 行入れたので
+`// file:start-end` の行番号が動いたため。
+
+**私（main）の検証漏れである**。cargo・vitest・lint・build・typecheck は回したのに、
+**`npm run docs:check` を回していなかった**。`--no-verify` でコミットしたので pre-commit も走らず、
+**CI が唯一の検出点になっていた**。
+
+対処:
+
+| 手 | 結果 |
+|---|---|
+| `node sites/dev/scripts/check-citations.mjs --fix` | 102 → **4 件**（スニペットの移動ぶんは自動で再アンカーされる）|
+| 残り 4 件（ja/en の 2 箇所） | **引用の中身自体が変わっていた**ので `--fix` では直らず、コードブロックごと差し替えた |
+| 地の文 | `EngineWrap::set_global_gain` の説明が「`MasterLine` の目標値へ atomic store するだけ」のままだった（本 PR で master line への再 publish が 1 段増えている）。ja / en とも追記した |
+
+最終: **1,012 citations verified / 0 failed**・`npm run docs:build` 成功。
+
+🔴 **教訓**: Rust に大きな差分を入れたら **`docs:check` は cargo と同じ列に置く**。
+引用は「コードは正しいが記述が古い」を検出する層で、他のどのテストも代わりにならない。
+
 #### 未検証・次の束へ
 
 - 実機 gated（**goldens が 1 つも動かないこと**）は**束の締め**で 1 回
