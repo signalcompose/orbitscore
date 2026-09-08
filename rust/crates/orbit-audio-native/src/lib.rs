@@ -22,12 +22,12 @@ pub use output::{
     start_default_output_with_insert_buses, start_default_output_with_insert_buses_and_post,
     start_default_output_with_insert_buses_sources_and_post, start_default_output_with_link_egress,
     start_default_output_with_sources, AudioDeviceInfo, BlockSource, BlockTransport, BusSend,
-    BusTarget, DeviceFallback, DeviceFallbackPolicy, InsertBusStage, LegacyLineInstaller,
-    LinkChannelActivate, LiveOutputDevice, OutputDeviceRequest, OutputError, OutputFault,
-    OutputStream, RenderState, SourceDest, SourceDestCell, SourceSlot, StreamBuildStage,
-    StreamLivenessPhase, StreamStats, StreamStatsSnapshot, ENGINE_CHANNELS,
-    FIRST_CALLBACK_DEADLINE, MAX_INSERT_BUS_STAGES, MAX_LINK_CHANNELS, MAX_SOURCE_SLOTS,
-    MAX_SOURCE_UNITS,
+    BusTarget, DeviceFallback, DeviceFallbackPolicy, InsertBusStage, LegacyLineInstaller, LineOp,
+    LineOutput, LineProgram, LineProgramInstaller, LinkChannelActivate, LiveOutputDevice,
+    OutputDest, OutputDeviceRequest, OutputError, OutputFault, OutputStream, RenderState,
+    SourceDest, SourceDestCell, SourceSlot, StreamBuildStage, StreamLivenessPhase, StreamStats,
+    StreamStatsSnapshot, ENGINE_CHANNELS, FIRST_CALLBACK_DEADLINE, MAX_INSERT_BUS_STAGES,
+    MAX_LINK_CHANNELS, MAX_SOURCE_SLOTS, MAX_SOURCE_UNITS,
 };
 pub use post_processor::{CallbackTimeSnapshot, CallbackTimeStats, PostProcessor};
 pub use resampler::ResampleError;

@@ -641,6 +641,15 @@ impl OutputStream {
             .master
             .gain_target_handle()
     }
+
+    /// `SetBusLine("master", ...)` 用の control-only publication seam。
+    pub fn master_line_program_installer(&self) -> LineProgramInstaller {
+        self.render_state
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .master
+            .line_program_installer()
+    }
     /// capture 有効時のみ、producer 側で drop した interleaved サンプル累積を返す。capture 無効は
     /// `None`。**`> 0` は「off-thread writer が追いつかず録音が破損した = 検証 invalid」を意味する**
     /// （検証ハーネス/オペレータが assert・監視する silent-failure ガード）。
@@ -677,9 +686,9 @@ impl Drop for OutputStream {
 /// 出口が加算される 2ch バッファ・master ラック（旧 `RenderState::post`）・production の master
 /// gain 適用点をひとつにまとめる。
 ///
-/// 🔴 wire は変えない（`SetBusLine` / 汎用 `LineProgram` は PR-O3）。ここでは §5.1 の generic な
-/// `line: LineSlot` は持たず、**固定の既定 program**（ラック → gain → Device{0,1} 配置）を
-/// native 側で直接実行する。
+/// `SetBusLine("master", ...)` の publish 後は汎用 `LineProgram` を実行する。publish 前だけは
+/// **固定の既定 program**（ラック → gain → Device{0,1} 配置）を直接実行し、従来出力との
+/// bit-level 互換を保つ。
 /// engine 内部のチャンネル幅。**デバイス幅とは無関係に常に 2**（設計 §5.5）。
 ///
 /// events / feeds / stages / master.buffer はすべてこの幅で扱い、デバイス幅への変換は
@@ -727,6 +736,10 @@ pub struct MasterLine {
     gain_current: f32,
     /// 5ms 相当のフレーム数（**構築時に** sample_rate から算出。`advance_gain` の分母）。
     ramp_frames: u32,
+    /// `SetBusLine("master", ...)` が publish する汎用 program。未 publish の間は固定互換経路を
+    /// 実行し、既存譜面の bit-level 出力を保つ。
+    line: LineSlot,
+    explicit_line: Arc<AtomicBool>,
 }
 
 impl MasterLine {
@@ -740,6 +753,19 @@ impl MasterLine {
             gain_target: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
             gain_current: 1.0,
             ramp_frames,
+            line: LineSlot::new(LineProgram::settled(vec![
+                LineOp::Rack,
+                LineOp::Gain(1.0),
+                LineOp::Output(LineOutput {
+                    dest: OutputDest::Device {
+                        left: 0,
+                        right: Some(1),
+                    },
+                    thru: false,
+                    gain: 1.0,
+                }),
+            ])),
+            explicit_line: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -759,6 +785,16 @@ impl MasterLine {
     /// 触れない（Arc の clone は非 RT の起動シーケンスで 1 回だけ行う）。
     pub fn gain_target_handle(&self) -> Arc<AtomicU32> {
         self.gain_target.clone()
+    }
+
+    pub fn line_program_installer(&self) -> LineProgramInstaller {
+        let control = self.line.line_control();
+        let explicit = self.explicit_line.clone();
+        Arc::new(move |program, bus_index, bus_count| {
+            control.install_for_bus(program, bus_index, bus_count)?;
+            explicit.store(true, Ordering::Release);
+            Ok(())
+        })
     }
 
     /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
@@ -910,6 +946,9 @@ pub struct BusSend {
 
 pub type LegacyLineInstaller =
     Arc<dyn Fn(BusTarget, Vec<BusSend>, usize, usize) -> Result<(), OutputError> + Send + Sync>;
+
+pub type LineProgramInstaller =
+    Arc<dyn Fn(LineProgram, usize, usize) -> Result<(), OutputError> + Send + Sync>;
 
 /// A resolved output destination for one line operation. Bus and channel names are converted to
 /// stable indices on the control thread before a program is published.
@@ -1423,6 +1462,13 @@ impl InsertBusStage {
         self.line.line_control()
     }
 
+    pub fn line_program_installer(&self) -> LineProgramInstaller {
+        let control = self.line.line_control();
+        Arc::new(move |program, bus_index, bus_count| {
+            control.install_for_bus(program, bus_index, bus_count)
+        })
+    }
+
     /// Compatibility bridge used by the daemon's old `SetBusRouting` command. The closure accepts
     /// the old routing shape but publishes a complete `LineProgram`; it exposes neither the live
     /// pointer nor callback-owned gain cells to control code.
@@ -1670,31 +1716,35 @@ fn render_block_with_sources(
         device.wrote
     };
 
-    // master ライン（設計 §5.3）: ラック → gain（single 適用点・§5.4）。core の
-    // `global_gain` は production では 1.0 固定のまま呼ばれない（乗算経路はここ 1 本）。
-    if let Some(p) = master.post.as_mut() {
-        p.process(&mut master.buffer[..bs]);
-    }
-    let g = master.advance_gain(frames);
-    // g == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
-    // 「未使用 gain 経路に per-sample 乗算コストを払わない」ための最適化であり、O0 golden の
-    // bit 一致は乗算そのものではなく `gain_current` が初期値 1.0 のまま変化しないことに由来する
-    // （`SetGlobalGain` を一度も呼ばない譜面では target=current=1.0 が恒常的に成立する）。
-    if g != 1.0 {
-        for s in master.buffer[..bs].iter_mut() {
-            *s *= g;
+    if master.explicit_line.load(Ordering::Acquire) {
+        execute_master_line(master, frames, output_channels, hw);
+    } else {
+        // SetBusLine 未使用時は従来の固定 master 経路を保ち、既存出力を bit 単位で変えない。
+        // この分岐の中身は PR-O3b の前と 1 命令も変えていない（変えると O0 golden が動く）。
+        if let Some(p) = master.post.as_mut() {
+            p.process(&mut master.buffer[..bs]);
         }
+        let g = master.advance_gain(frames);
+        // g == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
+        // 「未使用 gain 経路に per-sample 乗算コストを払わない」ための最適化であり、O0 golden の
+        // bit 一致は乗算そのものではなく `gain_current` が初期値 1.0 のまま変化しないことに由来する
+        // （`SetGlobalGain` を一度も呼ばない譜面では target=current=1.0 が恒常的に成立する）。
+        if g != 1.0 {
+            for s in master.buffer[..bs].iter_mut() {
+                *s *= g;
+            }
+        }
+        // デバイス配置（設計 §5.3・row 6）: master.buffer（2ch）を hw（デバイス幅）の ch{0,1} へ置く。
+        // 2ch デバイスなら memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。3ch 以上は ch2 以降が
+        // 無音で残る — この分岐の Device 出口は master 固定 program の 1 本のみで、複数出口は
+        // `execute_master_line`（上の分岐）と PR-O4 以降の DSL 表面が持つ。
+        //
+        // 🔴 ここで `hw` を全域 zero-fill しない。`place_master_into_device` が **hw の全要素を
+        // 書き切る**ので、1ch / 2ch（＝今日検証されている構成すべて）では書いた直後に全部上書きされ、
+        // RT コールバックで**毎ブロック二重に store する**ことになる（64 frames × 2ch なら
+        // 約 96,000 store/秒の無駄）。余剰チャンネルの 0 埋めは配置関数の責務に閉じた。
+        place_master_into_device(&master.buffer[..bs], frames, output_channels, hw);
     }
-
-    // デバイス配置（設計 §5.3・row 6）: master.buffer（2ch）を hw（デバイス幅）の ch{0,1} へ置く。
-    // 2ch デバイスなら memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。3ch 以上は ch2 以降が
-    // 無音で残る — Device 出口はまだ master 固定 program の 1 本のみ（さらなる出口は PR-O3/O4）。
-    //
-    // 🔴 ここで `hw` を全域 zero-fill しない。`place_master_into_device` が **hw の全要素を
-    // 書き切る**ので、1ch / 2ch（＝今日検証されている構成すべて）では書いた直後に全部上書きされ、
-    // RT コールバックで**毎ブロック二重に store する**ことになる（64 frames × 2ch なら
-    // 約 96,000 store/秒の無駄）。余剰チャンネルの 0 埋めは配置関数の責務に閉じた。
-    place_master_into_device(&master.buffer[..bs], frames, output_channels, hw);
     if direct_device_written {
         add_scaled(hw, &master.direct_device_buffer[..hw.len()], 1.0);
     }
@@ -1710,6 +1760,64 @@ fn render_block_with_sources(
     if let (Some(stats), Some(t0)) = (cb_stats, t0) {
         stats.record(t0.elapsed().as_nanos() as u64);
     }
+}
+
+#[inline]
+fn execute_master_line(
+    master: &mut MasterLine,
+    frames: usize,
+    output_channels: usize,
+    hw: &mut [f32],
+) {
+    let bs = frames * ENGINE_CHANNELS;
+    let program_ptr = master.line.load();
+    // SAFETY: publication retains replaced programs for two completed RT generations. This
+    // generation is completed only after the whole master program has executed.
+    let program = unsafe { &*program_ptr };
+    let mut device = DeviceLineBuffer {
+        samples: hw,
+        channels: output_channels,
+        wrote: false,
+    };
+    for (op_index, op) in program.ops.iter().enumerate() {
+        match *op {
+            LineOp::Rack => {
+                if let Some(processor) = master.post.as_mut() {
+                    processor.process(&mut master.buffer[..bs]);
+                }
+            }
+            LineOp::Gain(target) => {
+                let gain = line_gain(program, op_index, target, frames, master.line.ramp_frames);
+                if gain != 1.0 {
+                    for sample in &mut master.buffer[..bs] {
+                        *sample *= gain;
+                    }
+                }
+            }
+            LineOp::Output(output) => {
+                let gain = line_gain(
+                    program,
+                    op_index,
+                    output.gain,
+                    frames,
+                    master.line.ramp_frames,
+                );
+                if let OutputDest::Device { left, right } = output.dest {
+                    add_to_device(&mut device, &master.buffer[..bs], frames, left, right, gain);
+                } else {
+                    debug_assert!(false, "master line destination was not validated");
+                }
+                if !output.thru {
+                    break;
+                }
+            }
+            LineOp::Pan(_) => {}
+        }
+    }
+    if !device.wrote {
+        device.samples.fill(0.0);
+    }
+    master.line.finish_generation();
 }
 
 /// `master.buffer`（常に 2ch）を device 幅の `hw` へ配置する（裁定 2「Device 宛ては master の
@@ -4625,6 +4733,52 @@ mod tests {
         assert!(
             hw.iter().all(|&s| (s - 0.375).abs() < 1e-6),
             "master gain must attenuate what the master rack produced: {hw:?}"
+        );
+    }
+
+    #[test]
+    fn set_bus_line_master_program_executes_in_the_published_order() {
+        let engine = Engine::new(48_000, 2);
+        let mut link: Option<LinkEgress> = None;
+        let mut master = MasterLine::new(48_000, Some(Box::new(FillPost(0.75))));
+        let frames = 512;
+        master.ensure_buffer_len(frames * 2);
+        master.ensure_device_buffer_len(frames * 2);
+        master.line_program_installer()(
+            LineProgram::new(vec![
+                LineOp::Rack,
+                LineOp::Gain(0.5),
+                LineOp::Output(LineOutput {
+                    dest: OutputDest::Device {
+                        left: 0,
+                        right: Some(1),
+                    },
+                    thru: false,
+                    gain: 1.0,
+                }),
+            ]),
+            usize::MAX,
+            0,
+        )
+        .expect("valid master program installs");
+        let mut capture: Option<RingTapSink> = None;
+        let cb_stats: Option<Arc<CallbackTimeStats>> = None;
+        let mut hw = vec![0.0; frames * 2];
+
+        render_block(
+            &engine,
+            &mut link,
+            &mut [],
+            &mut master,
+            &mut capture,
+            &cb_stats,
+            2,
+            &mut hw,
+        );
+
+        assert!(
+            hw.iter().all(|sample| (*sample - 0.375).abs() < 1e-6),
+            "rack -> gain -> device must execute in wire order"
         );
     }
 

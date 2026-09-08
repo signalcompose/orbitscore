@@ -17,6 +17,179 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+## 束 O-wire-b（#611 ステージ 2・統合ブランチ `611-line-wire-b`）
+
+`SetBusLine` の wire 契約を足す束。**DSL からは呼ばない**（送るのは PR-O4）ので、束の収束条件は
+O-wire と同じ「**`OUTPUT_LINE_GOLDENS` / `#611 O0-1〜4` が 1 つも動かないこと**」+ cargo 全緑 + 実機 gated 全件。
+
+### feat(daemon): SetBusLine wire command and TS client (#611 PR-O3b) (Sep 9, 2026)
+
+**Issue**: #611 / **ブランチ**: `611-o3b-setbusline` → `611-line-wire-b`（小 PR）/
+**実装**: Codex（`gpt-5.6-sol` / effort high・専用 worktree）/ **検証**: main（本ツリー）
+
+#### 何を足したか
+
+| 層 | 何 |
+|---|---|
+| `session.rs` | `parse_set_bus_line_params`（wire 形式の検証）+ dispatch。feature 無効ビルドは `UNSUPPORTED` |
+| `engine_wrap.rs` | `set_bus_line`（意味論の検証 → `LineProgram` 構築 → 全検証後に一括 publish）・`SetGlobalGain` と master line の同期 |
+| `output.rs` | 🔴 **`MasterLine.line` と `execute_master_line`**（下記）|
+| `lib.rs` | O3a の型（`LineOp` / `LineOutput` / `LineProgram` / `OutputDest`）と installer の re-export |
+| `protocol-types.ts` / `daemon-client.ts` | `'SetBusLine'` / `setBusLine()` / `WireDest` / `WireLineOp` |
+
+🔴 **TS の呼び出し元は作っていない**（DSL から送るのは PR-O4）。
+🔴 **旧 `SetBusRouting` は併存**（撤去は PR-O6）。既存テストは 1 行も書き換えていない。
+
+#### 🔴 PR-O3a の実装漏れを 1 件埋めた — `MasterLine.line`
+
+設計 611 **§5.2 は `MasterLine` に `line: LineSlot` を持たせる**と定め、**§4.1 の `bus` は `"master"` を
+受理対象**にしている（`master` の自己参照を拒否する検証行がその証拠）。ところが **PR-O3a はそれを
+入れていなかった** — main `2ca00f6a` の `output.rs` の `MasterLine` は `post` / `gain_target` などだけで、
+**`SetBusLine("master", …)` を受理する先が無い**。
+
+本 PR が §5.2 を埋めた。**互換は分岐で保つ**:
+
+```
+if master.explicit_line { execute_master_line(...) }   // publish 後
+else { post → advance_gain → place_master_into_device }  // 従来経路（1 命令も変えていない）
+```
+
+`explicit_line` は最初の `SetBusLine("master", …)` が publish されるまで `false` なので、
+**既存譜面は従来経路をそのまま通る**。O0 golden の bit 一致はこの分岐で構造的に保たれる
+（既存の `legacy_*_bit_for_bit` 群が無改変で緑）。
+
+⚠️ 計画 §1.10 の「触るファイル」欄が `output.rs` を落としていた（見積もりの漏れ）。
+`BUNDLE_BRANCH_WORKFLOW` §5.1b に従い、**実装の前に**計画へ理由と追加の検証条件を書いた（`fc67c771`）。
+
+#### 検証の層を分けた（main の裁定・2026-09-08）
+
+`validate_line_program`（`output.rs`）は **RT 実行の可用性ゲート**であって wire の契約検証ではない。
+そこは `Pan` / `Render` / `Link` を `OutputError::NoConfig` で拒否しており、**その文言を wire へ流すと
+`DEVICE_CONFIG_ERROR` になって §4.1 のどの行とも一致しない**（`actionable_output_error_code` は
+4 種の device エラーしか拾わない）。
+
+したがって `set_bus_line` が §4.1 の表を**先に**適用する。**このゲートは無改変**（差分に出ていない）:
+
+| §4.1 の行 | wire code | 経由する variant |
+|---|---|---|
+| 形式不正・`rack` 二重・`master` 自己参照・`render` 未登録 | `MALFORMED_REQUEST` | `OutProcEffectRequest` |
+| `dest.bus` 未知 / forward-only 違反 | `OUTPROC_EFFECT_RUNTIME` | `OutProcEffect` |
+| `dest.device` 範囲外・`a == b` | `PARAM_OUT_OF_RANGE` | （session の dispatch で直接）|
+| `dest.link`（feature 無し） | `LINK_AUDIO_UNAVAILABLE` | `LinkAudioUnavailable` |
+| feature 無効ビルド | `UNSUPPORTED` | （dispatch の `#[cfg(not(...))]`）|
+
+🔴 **ブリーフ（09-07 起案）は 3 箇所を誤っていた**ので、着手前に一次ソースで検算して訂正した:
+`engine_wrap.rs` の行番号（6227 → **6310**）/ feature 無効時の code（`OUTPROC_EFFECT_UNAVAILABLE`
+→ **`UNSUPPORTED`**）/ wire code は variant 名と別物であること。**訂正しなければ、存在しない
+エラー code を期待するテストが緑になっていた。**
+
+#### 検証（🔴 すべて main が本ツリーで実行）
+
+| 検証 | 結果 |
+|---|---|
+| `cargo test --workspace --locked` | **617 passed / 0 failed / 38 ignored** |
+| `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument` | **339 passed / 0 failed / 13 ignored**（新規 `set_bus_line_*` 11 件を含む）|
+| `cargo fmt --all --check` | 緑 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 警告なし |
+| `cargo clippy -p orbit-audio-daemon --features outproc-effect,outproc-instrument --all-targets` | 警告なし |
+| `npm run lint` | 緑 |
+| `npm test` | **2,329 passed / 58 skipped / 0 failed**（164 ファイル）|
+| `npm run build` / `npm run typecheck:e2e` | 緑 |
+
+🔴 **委譲先が走らせられなかったものが 2 つあった**:
+
+1. **protocol 統合テスト 61 件** — Codex の sandbox は localhost bind を許さず
+   `bind_localhost ... Operation not permitted` で全件落ちていた。**本ツリーでは bind エラー 0 件で全緑**
+2. **TS 側すべて** — worktree に `node_modules` が無く、lint / vitest / tsc を一度も実行していない
+
+**「Codex が緑と言った」だけでマージできる PR は構造的に存在しない**（CLAUDE.md）ことが、
+そのまま再現した形。
+
+#### main が差分を読んで直した点（1 件）
+
+`output.rs` の従来経路を `else` 分岐へ包む際に、**設計判断を記録したコメント 3 ブロックが削除**されていた:
+`g == 1.0` が bit 一致を崩さない理由 / デバイス配置の意味（設計 §5.3 row 6）/
+🔴 **`hw` を全域 zero-fill してはいけない**理由（`place_master_into_device` が全要素を書くので、
+1ch・2ch では毎ブロック二重 store になる。64 frames × 2ch で約 96,000 store/秒の無駄）。
+
+**コードは無改変だがコメントだけ落ちる**類の欠落で、テストでは検出できない。復元した。
+
+#### 🔴 CI が捕まえた検証漏れ — `docs:check` を手元で回していなかった
+
+小 PR [#823](https://github.com/signalcompose/orbitscore/pull/823) の CI で `code-review` が落ちた。
+原因は**実装ではなく dev サイトの引用**で、**102 件が FAIL**。Rust に +1,096 行入れたので
+`// file:start-end` の行番号が動いたため。
+
+**私（main）の検証漏れである**。cargo・vitest・lint・build・typecheck は回したのに、
+**`npm run docs:check` を回していなかった**。`--no-verify` でコミットしたので pre-commit も走らず、
+**CI が唯一の検出点になっていた**。
+
+対処:
+
+| 手 | 結果 |
+|---|---|
+| `node sites/dev/scripts/check-citations.mjs --fix` | 102 → **4 件**（スニペットの移動ぶんは自動で再アンカーされる）|
+| 残り 4 件（ja/en の 2 箇所） | **引用の中身自体が変わっていた**ので `--fix` では直らず、コードブロックごと差し替えた |
+| 地の文 | `EngineWrap::set_global_gain` の説明が「`MasterLine` の目標値へ atomic store するだけ」のままだった（本 PR で master line への再 publish が 1 段増えている）。ja / en とも追記した |
+
+最終: **1,012 citations verified / 0 failed**・`npm run docs:build` 成功。
+
+🔴 **教訓**: Rust に大きな差分を入れたら **`docs:check` は cargo と同じ列に置く**。
+引用は「コードは正しいが記述が古い」を検出する層で、他のどのテストも代わりにならない。
+
+#### 未検証・次の束へ
+
+- 実機 gated（**goldens が 1 つも動かないこと**）は**束の締め**で 1 回
+- `LineOp::Pan` の wire 表現は無い（§4.1 の `WireLineOp` に `pan` が無い・PR-O4）
+- `dest.render` は登記簿（`DeclareRender`・PR-R2）が無いので今日はすべて拒否
+
+---
+
+### chore(docs): rotate WORK_LOG before the O-wire-b bundle (Sep 9, 2026)
+
+**ブランチ**: `611-o3b-setbusline` → `611-line-wire-b`（束 O-wire-b の前処理）
+
+`tests/docs/worklog-size.spec.ts` の上限 2,000 行に対し **1,998 行**（残り 2 行）だったので、
+PR-O3b のエントリを書く前にローテーションした。
+
+| | 前 | 後 |
+|---|---|---|
+| `docs/development/WORK_LOG.md` | 1,998 行 | **1,430 行** |
+| `docs/archive/WORK_LOG_2026-09.md` | 4,535 行 | 5,119 行 |
+
+移設したのは **Sep 6 のエントリ 11 件**。archive 側に
+「## 09-06 の追補（本体の 2,000 行上限で移設・2026-09-09 第 3 回）」を新設して先頭へ入れた。
+本体末尾の索引と `docs/core/INDEX.md` の表は **`2026-09（前半・09-01〜09-06）` のままで正しい**
+（移したのが 09-06 の範囲内なので期間が変わらない）。
+
+🔴 日付が混在していたので**行の位置ではなく見出しの日付で選別**した。Sep 6 群の間に
+Sep 7 のエントリ 2 件（E-gate のレビュー fix と `/simplify`）が挟まっていたため、
+行範囲で切ると一緒に移動してしまう。
+
+---
+
+### docs: restore the three index lines the #821 consolidation dropped (Sep 8, 2026)
+
+**追従元**: PR [#821](https://github.com/signalcompose/orbitscore/pull/821)（マージコミット `2489218` / head `8c40ce8`）/ **ブランチ**: `claude/docs-sync-pr821`
+
+#821 は 3 本のルーティン追従 PR（#809 / #818 / #820）を 1 コミットにまとめ直したが、**その過程で 3 行が落ちた**。PR 本文は「中身はそのまま」と書いており削除に触れていない。**同じ PR が入れた WORK_LOG 本文が、落ちた行を実在する前提で書いている**（#820 分「#819 は CLAUDE.md と INDEX.md からポインタを張った」/ #818 分「INDEX.md Planning 表に `issue-states.json` を登録」）ため、意図した削除ではなく取りこぼしと判断して復元した。
+
+#### 直した箇所
+
+| ファイル | 何を | 出どころ |
+|---|---|---|
+| `CLAUDE.md:181-183` | Development Commands 直後の macOS スキャン警告（`MACOS_DEV_SETUP.md` へのポインタ）| PR #819（`6e22a84`）が追加 → #821 が削除 |
+| `docs/core/INDEX.md:118` | Development 表の `MACOS_DEV_SETUP.md` 行 | 同上 |
+| `docs/core/INDEX.md:243` | Planning 表の `issue-states.json` 行（生成物・手で編集しない）| PR #818 に在ったが #821 に入らなかった |
+
+復元前、`MACOS_DEV_SETUP.md` は `docs/testing/TESTING_GUIDE.md:30` と WORK_LOG 本文からしか辿れず、`issue-states.json` はどこからも索引されていなかった。🔴 **この取りこぼしを赤にするテストは無い**（`worklog-size.spec.ts` は行数とアーカイブ名、`planning-issue-state.spec.ts` は状態語の矛盾しか見ない）。提案は PR 本文へ回した。
+
+#### 追従不要と判断したもの
+
+#821 の差分 6 ファイルはすべて docs で、`packages/engine/`・`rust/`・`packages/vscode-extension/` に変更が無い。DSL の構文・意味論、MCP ツールの引数と返り値、エディタの評価経路のいずれも変わらないため、`docs/specs-v2/`・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`・`sites/user/`・`sites/dev/`（日英とも）は対象外。
+
+---
+
 ### docs(testing): point the testing guide at the macOS setup trap (PR #819 follow-up) (Sep 8, 2026)
 
 **追従元**: PR [#819](https://github.com/signalcompose/orbitscore/pull/819)（マージコミット `6e22a84` / head `5ef4151`） / **ブランチ**: `claude/docs-sync-pr819`
@@ -1258,91 +1431,6 @@ sweep の診断が `DaemonStartupError` で観測できるという主張 / #385
 
 `npm run docs:check` / `tests/docs`
 
-### docs(dev-site): follow the E-gate bundle into the rack and hygiene chapters (Sep 6, 2026)
-
-**ブランチ**: `claude/docs-sync-pr789`（base は `main`）
-
-束 PR [#789](https://github.com/signalcompose/orbitscore/pull/789)（マージコミット `900d453` /
-head `952a1c41`）への docs 追従。束の中間 PR（#783 / #784 / #788）はルーチンが個別に追従済み
-（PR #786 / #787 / #790）だが、**束の締めで積んだ 2 コミット**（`809ea40` の `/simplify` と
-`2aa42f9` のレビュー fix）は追従されないまま main に入っていた。ここはその差分に対する追従である。
-
-#### 追従したもの
-
-| 箇所 | 直した内容 | 差分の対応 |
-|---|---|---|
-| `sites/dev/signal-chain/index.md` / en 同パス | 新節「そのゲート自身が 2 つの欠陥を抱えていました（#780・#789）」を追加。`-- --ignored` が `#[ignore]` 付きのテスト**だけ**を走らせるため退行検知テストがどの自動経路でも走らなかったこと、`line!()` が定義位置で展開される定数で 4 fixture が同一 shm パスを共有し `create_shared` の `truncate(true)` が生きたマッピングを切り詰めていたこと、修正（`static AtomicU64` の連番）と退行検知テストを引用付きで記述 | `CLAUDE.md:665-669` / `rust/crates/orbit-effect-rack-child/src/tests.rs:646-654,670-676` |
-| `sites/dev/editor/mcp-and-gated-e2e.md:1020` / en `:1024` | 「**8 本**すべて」→「**9 本**すべて」。`2aa42f9` が 9 本目（`keeps resolving at least one log-count helper from the real gated corpus`）を足したため。9 本目の説明段落と引用も追加 | `tests/e2e/gated-assertion-hygiene.spec.ts:688-703` |
-| `sites/dev/rust-engine/index.md:870` / en `:897` | `outproc_shm_sweep.rs:134-163` → `:167-196`。`2aa42f9` が `sweep_orphaned_outproc_shm` の前に `tracing::debug!` と doc コメントを足して 33 行下がった | `rust/crates/orbit-audio-daemon/src/outproc_shm_sweep.rs:167-196` |
-| `sites/dev/rust-engine/oop-children.md:628,667` / en `:654,694` | `orbitstudio-mcp-gated.spec.ts:5397-5462` → `:5445-5516`。`2aa42f9` が #779 の gated E2E より前に 49 行足した | `tests/e2e/orbitstudio-mcp-gated.spec.ts:5445-5516` |
-| `sites/dev/editor/mcp-and-gated-e2e.md:1363` / en `:1373` | Sources の `gated-assertion-hygiene.spec.ts:1-68` → `:1-11,552-704`。`809ea40` が検出器を `scanGatedSources` へ抽出し `describe` が 552 行目へ動いた | 同ファイルの構造変更 |
-| 上記 3 章の frontmatter | `verified-against` を `900d453` / `verified-at` を 2026-09-06 へ。冒頭 Note に #789 を追記 | — |
-
-#### 🔴 行番号引用は「機械が見る形」だけが直っていた
-
-`2aa42f9` は「行番号引用の off-by-one を 4 箇所訂正」と記録しているが、直っていたのは
-**`// FILE:START-END` ヘッダ付きコードブロック**（`docs:check` が突合する形）だけだった。
-**散文中の `path:line` と `## Sources` の箇条書きは機械検証の対象外**なので、同じ +48 / +33 の
-ずれがそのまま残っていた。今回はそのうち **#789 の差分が動かしたと特定できるもの**だけを直している。
-
-#### 追従不要と判断したもの
-
-| 対象 | 理由 |
-|---|---|
-| `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | DSL の構文・意味論は 1 行も変わっていない（`packages/engine/` の差分がゼロ） |
-| `sites/user/` / `docs/user/ja/USER_MANUAL.md` | ユーザーが書く語は変わっていない |
-| `docs/design/668-e2e-foundation-design.md` | この PR 自身が §13.5.3 の原因記述を訂正済み。過去の設計書は書き換えない |
-
-**テスト・実装は変更していない**（ルーチンの禁止事項）。
-
-### docs(dev-site): correct the hygiene-ratchet inventory after #785 (Sep 6, 2026)
-
-**ブランチ**: `claude/docs-sync-pr788`（base は束の統合ブランチ `780-merge-gate`）
-
-PR [#788](https://github.com/signalcompose/orbitscore/pull/788)（マージコミット `0bb337b` /
-head `f3fd4d4`）への docs 追従。#788 は **テストのみのコード変更**（`packages/` / `rust/` は
-1 行も触っていない）なので、追従先は dev サイトの「アサーション衛生」節に限られる。
-
-#### 直したもの
-
-| 箇所 | 直した内容 |
-|---|---|
-| `sites/dev/editor/mcp-and-gated-e2e.md:1020` / en `:1024` | 「**5 本**すべてがソース**文字列**を走査する」→ 「`describe('gated E2E assertion hygiene')` の **8 本**すべてがソースを**静的に読む**（多くは文字列走査、#761 と #785 の 2 本は AST）」。件数は #785 以前から陳腐化していて（7 本）、#785 の追加で 8 本になった。走査手段の記述も #761 の AST 化以降ずれていた |
-| 同 `:1009` / en `:1013` | 「**後半 2 本**は片方向ずつを留めるペア」の指示対象が、#785 の `it` が 7 番目に挿入されたことで曖昧になった。stale ガードの 2 本を名前で名指しする形へ |
-| 同 `:1007` / en `:1011` | ラチェットの**穴**を追記。provenance 追跡は 1 本の式の連鎖の中で閉じるので、件数を**ヘルパー関数の中で**作る形は名前によらず素通りする |
-| 上記 2 ファイルの frontmatter | `verified-against: d2e94af` → `0bb337b`、冒頭 Note に #785 / PR #788 を追記 |
-
-#### 🔴 #788 が「4 箇所すべて」と書いた形は、まだ 2 箇所残っている
-
-新しい `logProvenanceStrictEqualityOffenders` は `get_log` の戻り値 → `.match(...).length` →
-`toBe`/`toEqual` の連鎖を AST で辿るが、**`.match(...).length` がヘルパーの中にある**と辿れない。
-
-| 箇所 | 形 |
-|---|---|
-| `tests/e2e/orbitstudio-mcp-gated.spec.ts:2601-2603` | `expect(countAttachFailures(afterShiftedAttachLog), ...).toBe(attachFailuresBeforeShifted)` |
-| 同 `:2690-2692` | `expect(countAttachFailures(afterRestoredAttachLog), ...).toBe(attachFailuresBeforeRestored)` |
-
-どちらも `countAttachFailures` → `tests/e2e/helpers/engine-log.ts` の `countLogMarker` を経由するため、
-新ラチェットは**緑のまま**である。#788 本文の「🔴 除外リストは無い」は走査器の設計としては正しいが、
-「機械的に全列挙した」の結果は 4 箇所ではなく 6 箇所だった。
-
-🔴 教訓の反復: #761 は「名前で条件付けると漏れる」、#785 は「名前でなく値の出どころを見る」だった。
-今回残ったのは **「値の出どころを見る」を 1 式の中でしか見ていない**ことによる漏れで、
-**測定器の適用範囲そのものを機械で列挙していない**という同じ形をしている。
-
-**テストは変更していない**（ルーチンの禁止事項）。
-
-> 🔴 **追記（同日・main）**: 上の「まだ 2 箇所残っている」は**発見時点では正しく、その後解消した**。
-> 束 PR [#789](https://github.com/signalcompose/orbitscore/pull/789) のレビューで **Fable 監査が
-> 独立に同じ 2 箇所を報告**し、`2aa42f91` で
-> **検出器を「形の列挙」から「log 由来の値を受けて件数を返す関数の解決」へ一段抽象化**（不動点まで
-> 反復）したうえで 2 箇所も移行した。変異（ラッパー越しの形を復活）で赤・該当行の名指しを確認済み。
->
-> **ルーティンと設計監査が、別経路で同じ穴に到達した**のは記録に値する。ルーティンは「ラチェットの
-> 棚卸しを本文に書く」過程で、監査は「不在証明」の問いから。**測定器の適用範囲を機械で列挙していない**
-> という同じ形を、両者が違う入口から見つけた。
-
-
 ### fix(test): close the review findings on the E-gate bundle (Sep 7, 2026)
 
 **ブランチ**: `780-merge-gate`（束 PR [#789](https://github.com/signalcompose/orbitscore/pull/789) の
@@ -1477,489 +1565,6 @@ shm 生成までは辿っていなかった。**層をまたぐ契約は main �
 | 🔴 変異 1（helper 追跡を外す） | **新しい corpus が赤** |
 | 🔴 変異 2（gated spec の 1 箇所を件数比較へ戻す） | **ラチェットが赤・該当行を名指し**（`:1643`） |
 
-
-### docs: record the doc-sync review of PR #783 (Sep 6, 2026)
-
-**ブランチ**: `claude/docs-sync-pr783`（doc-sync ルーチン・追従元は PR
-[#783](https://github.com/signalcompose/orbitscore/pull/783) / merge commit `cac5c76`・
-base は `main` ではなく束の統合ブランチ `780-merge-gate`）
-
-PR #783（`fix(test): give every rack fixture its own shm path`）に対する追従レビュー。
-**ドキュメントの実体的な追従は不要**と判断し、そう判断した理由と、追従できていない点を
-ここに残す。
-
-#### 追従不要と判断した理由
-
-| 変更されたもの | 判断 |
-|---|---|
-| `rust/crates/orbit-effect-rack-child/src/tests.rs`（±24） | **テストのみの変更**。DSL 表面・MCP ツールの引数/返り値・評価経路のいずれも変わっていない |
-| `CLAUDE.md` / `docs/development/BUNDLE_BRANCH_WORKFLOW.md` / `docs/design/668-e2e-foundation-design.md` / `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` / `docs/development/WORK_LOG.md` | **ドキュメントそのものの修正**。下流に追従先が無い |
-
-`ORBIT_GATED_ONLY` が実在しない env であるという記述訂正について、リポジトリ全体を
-grep した結果、`sites/dev/` と `sites/user/` にはこの env への言及が 1 件も無く、
-追従先が無いことを確認した。`sites/dev/` に
-`rust/crates/orbit-effect-rack-child/src/tests.rs` の引用も存在しないため、
-`// FILE:START-END` 引用の行ずれも発生していない。
-
-#### 🔴 追従できていない点 1 — `-t` による絞り込みの記述が dev サイトと矛盾する
-
-PR #783 は `CLAUDE.md:302` と `BUNDLE_BRANCH_WORKFLOW.md:71` で、小 PR のゲート
-「その PR が足した E2E だけを実機で」の手段を **`ORBIT_GATED_ORBITSTUDIO=1` + vitest の
-`-t`** と書き換えた。しかし dev サイトは、その `-t` が使えないことを記録している。
-
-- `sites/dev/editor/mcp-and-gated-e2e.md:645` / `sites/dev/en/editor/mcp-and-gated-e2e.md:645`:
-  「先頭の 1 本がアプリ起動・カタログ初期化・capture 付き engine 起動を担い、残りはその状態を
-  前提にします（WORK_LOG 6.409 が『1 本だけを `-t` で絞ると `catalogClapEffectPath` 未初期化で
-  落ちる』と記録しているのはこのためです）」
-
-どちらが正しいかは**運用の判断**（先頭の 1 本を必ず含める形で `-t` を書くのか、
-それとも段 2 のモジュール分割まで絞り込みは持たないのか）なので、doc-sync では直さない。
-
-#### 追従できていない点 2 — 決定 D-4 は「入れる」のまま未実装
-
-`docs/design/668-e2e-foundation-design.md:1082` の決定 **D-4** は
-`ORBIT_GATED_ONLY` を「**A**: 入れる」で確定しており、`:428` の §7.2 段 3 にも
-実行手段として載っている。PR #783 が訂正したのは CLAUDE.md 側の「既存の仕組みとして
-参照していた」誤りであって、**決定 D-4 自体は未実装のまま残っている**。
-設計文書は起案時点のスナップショットなので doc-sync では書き換えない。
-
-#### 追従できていない点 3 — 回帰ガードが CI から見えない
-
-`actual_fixtures_use_distinct_shm_paths`（`rust/crates/orbit-effect-rack-child/src/tests.rs:670-676`）
-は `#[cfg(target_os = "macos")]` なので、`rust-ci.yml`（全ジョブ ubuntu）では**存在すらしない**。
-無条件マージゲートを守るガードが、CI からは 1 度も走らない位置にある。PR #783 の WORK_LOG も
-この事実を書いているが、`release.yml`（macos-14）は `pull_request` の paths フィルタに
-`rust/**` が無いため、ここでも走らない。
-
-
-
-### docs: sharpen the ORBIT_GATED_ONLY correction after the routine review (Sep 6, 2026)
-
-**ブランチ**: `785-widen-count-ratchet`（束 `780-merge-gate`）
-
-ルーティンの doc-sync PR [#786](https://github.com/signalcompose/orbitscore/pull/786) が、
-**私が入れた訂正の精度不足を 2 点**指摘した。ルーティンは `docs:check` が見ない層
-（引用を囲む本文の整合）を見るので、その指摘を反映する。
-
-| 指摘 | 私が書いていたこと | 実際 |
-|---|---|---|
-| 1 | 「`ORBIT_GATED_ONLY` は**存在しない env**」 | 事実としては正しいが、**doc 668 の決定 D-4（`:1082`）で「A: 入れる」と確定済みの未実装機能**。誤りは「既存の仕組みとして参照していた」ことであって、名前を発明したわけではない |
-| 2 | 「個々の絞り込みは vitest の `-t`」 | 🔴 **gated suite 本体では `-t` が効かない。** 先頭の 1 本がアプリ起動・カタログ初期化・capture 付き engine 起動を担い、残りはその状態に依存する（`sites/dev/editor/mcp-and-gated-e2e.md:645` / WORK_LOG 6.409 が「`catalogClapEffectPath` 未初期化で落ちる」と記録）。効くのは**自前でアプリを起動する自己完結テストだけ**（#779 の E2E は `launchIsolatedOrbitStudio` を呼ぶので `-t '779'` で走った） |
-
-`CLAUDE.md:302` と `BUNDLE_BRANCH_WORKFLOW.md:71` の両方を実態に合わせた。
-
-🔴 **私自身、#788 の PR 本文で「移行した 4 箇所を含む it は単独 `-t` では走らない」と書いていた。**
-同じセッション内で片方に正しく書き、もう片方に不正確に書いていたことになる。ルーティンが
-**両者を突き合わせた**ので見つかった。
-
-#786 の 3 点目（回帰ガード `actual_fixtures_use_distinct_shm_paths` が `#[cfg(target_os = "macos")]`
-なので ubuntu の `rust-ci.yml` からは**存在すらしない**）は事実。無条件マージゲートを守るガードが
-CI から 1 度も走らない位置にある。**手元がこの検査の唯一の実行経路**という CLAUDE.md の記述と
-整合しており、本 PR では変えない。
-
-
-### test(e2e): widen the log-count ratchet to provenance, not identifier names (Sep 6, 2026)
-
-**ブランチ**: `785-widen-count-ratchet`（束 `780-merge-gate` の小 PR・Part of #785）
-
-束 E-gate の 3 本目。`get_log` の固定 500 行窓から数えた件数を**演算なしで厳密比較**している
-箇所が残っており、既存の hygiene ラチェット 2 本はどちらも捕まえられなかった。
-
-#### 🔴 対象は 3 箇所ではなく 4 箇所だった
-
-設計（`668-e2e-foundation-design.md` §13.5.3）は `:1396` / `:1589` / `:1615` の 3 つを挙げていたが、
-機械的に全列挙したところ **`:1378` の `.toBe(0)`** が漏れていた。
-
-| 箇所 | 形 | 崩れ方 |
-|---|---|---|
-| `:1378` | `.toBe(0)`（`[OUTPROC_ATTACH_FAILED]` が窓に 0 件） | 🔴 **偽緑**（設計の一覧に無かった） |
-| `:1397` / `:1590` / `:1616` | `.toBe(<countBefore>)` | 偽赤 |
-
-**窓から流れ出る効果はカウントを減らす方向にしか働かない**ので、同じ 1 つの原因が比較の向きに
-よって正反対の症状を出す。対処は 1 つ — 件数ではなく「**どの行が増えたか**」で語る
-（`newLogLines`）。
-
-対象外と確認したもの: `:1568` / `:1741` は `toBeLessThanOrEqual`。`stopsBefore`（`:2817` /
-`:3060`）は `>` で比べる**待機の述語**でアサーションではない。
-
-#### なぜ既存ラチェットが素通ししたか
-
-1 本目（`bareErrorCountEqualityOffenders`）は検出条件が**識別子の名前**
-（`/(?:errorsBefore|errorCount|catalogErrors)/i`）に依存している。実際の変数名は
-`stoppedBeforeRejectedSave` / `attachFailuresBefore*` で一致しない。
-
-🔴 **名前は書き手が自由に付けられるので、名前で条件付ける限り必ず漏れる。** #761 のラチェットが
-「偽緑を防ぐために作られながら自分が偽緑の発生源だった」のも同じ構図（正規表現が `Before` で
-**終わる**名前しか見ていなかった）。**測定器を名前で条件付けない**という教訓が 2 度目。
-
-#### 変更
-
-| ファイル | 内容 |
-|---|---|
-| `orbitstudio-mcp-gated.spec.ts` | 4 箇所を `newLogLines(before, after).filter(...)` → `toEqual([])` へ。`:1590` は before スナップショットがカウントのみだったのでログ本文を保持する形に変更。失敗メッセージに**増えた行そのもの**を出す |
-| `gated-assertion-hygiene.spec.ts` | `logProvenanceStrictEqualityOffenders` を追加。**値の出どころ**を AST で辿る（`get_log` の戻り値 → `.match(...).length` → `toBe`/`toEqual`）。`?? []` の有無・分割代入・エイリアス・インライン形に対応。**除外リストは無い** |
-| 同上 | 1 本目のコメントが「算術のない strict equality は逃げる。別 issue の対象」と書いていたのを実態に合わせて更新（4 箇所目も追記） |
-| `sites/dev/editor/mcp-and-gated-e2e.md`（ja / en） | 引用の行ずれを `--fix` で貼り直し（**行番号だけの移動を差分で確認**）+ **3 本目のラチェットの説明を本文に追記**（`docs:check` は引用アンカーしか見ないので本文の陳腐化は機械が教えない） |
-
-`toEqual([])` は「1 件も増えていない」という**より強い**主張であって緩和ではない。
-
-#### 検証（main が本ツリーで実測）
-
-| 項目 | 結果 |
-|---|---|
-| `gated-assertion-hygiene.spec.ts` | **23 passed**（新規 9 件: 陽性 4 種 + 陰性 4 種 + `toEqual` 確認） |
-| `tests/e2e/` 全体 | **100 passed / 37 skipped**（6 files passed） |
-| `npm run typecheck:e2e` | exit 0 |
-| `npm run docs:check` | 972 verified / 0 failed |
-| 🔴 **変異（1 箇所を件数の厳密等価へ戻す）** | **赤になり該当行を名指し**（`orbitstudio-mcp-gated.spec.ts:1643`）→ 復元で 23 passed |
-
-🔴 委譲先は worktree に `packages/engine/node_modules` が無く `tests/e2e/` の 3 ファイルが
-`uuid` 未解決で load 失敗すると報告したが、**本ツリーでは全件緑**だった。委譲先の赤も緑も、
-main が回し直すまでは根拠にならない（本日 2 度目）。
-
-#### 委譲先の切り替え
-
-Codex が 2 回続けて**起動前に** sandbox に弾かれた（companion の git 利用 / 状態ディレクトリの
-`mkdir` が `EPERM`）。「Codex が**使えない**」ケースなので規約どおり Sonnet subagent へ
-フォールバックした（「収束しない」場合の main への昇格とは別の分岐）。
-
-
-### docs(dev-site): document the startup shm sweep in RE-1 / RE-2 (Sep 6, 2026)
-
-**ブランチ**: `claude/docs-sync-pr784`（PR [#784](https://github.com/signalcompose/orbitscore/pull/784)・
-マージコミット `b513659` への docs 追従・base は束の統合ブランチ `780-merge-gate`）
-
-#784 は dev サイトの**引用の行ずれ**（`lib.rs` / `main.rs` / `outproc_*.rs`）だけを直しており、
-**sweep そのものの説明が本文に無い**状態だった。RE-2（OOP children）に節を足し、RE-1（daemon
-アーキ概観）の #448 shutdown ギャップの節から繋いだ。
-
-| ファイル | 内容 |
-|---|---|
-| `sites/dev/rust-engine/oop-children.md` / `sites/dev/en/rust-engine/oop-children.md` | 「起動時の孤児 shm 回収（#779）」節を新設（3 値述語・`Unknown` を残す理由・年齢下限・自 PID 規則と段 0.5 の関係・接頭辞定数の共有・サイドカーが同じ規則で拾われること・プロセス名照合を採らなかった理由・0 に収束しないこと）。frontmatter を `b513659` / 2026-09-06 に更新 |
-| `sites/dev/rust-engine/index.md` / `sites/dev/en/rust-engine/index.md` | #448 の shutdown ギャップの節に「孤児化するのはプロセスだけではない」段落を追加し RE-2 へ接続。Sources に `outproc_shm_sweep.rs:134-163` と #779 / #784 を追加。frontmatter を `b513659` / 2026-09-06 に更新 |
-| plugin-hosting / orientation / signal-chain / capture-verification（ja + en） | `## Sources` の行範囲が #784 の行ずれに追従していなかったので更新（`lib.rs:84-93`→`86-95` 他）。`## Sources` は `docs:check` の検査対象外なので機械的には落ちない |
-
-DSL / MCP / OrbitStudio の表面は変わっていないので `docs/specs-v2/`・`docs/core/`・
-`sites/user/`・`docs/user/ja/USER_MANUAL.md` は追従不要。
-
-検証: `npm run docs:build`（user / dev 両方）・`npm run docs:check` を実行して緑。
-
-### fix(daemon): unlink orphaned outproc shm at startup (Sep 6, 2026)
-
-**ブランチ**: `779-startup-shm-sweep`（束 `780-merge-gate` の小 PR・Part of #779）
-
-daemon が SIGTERM / SIGKILL / panic で死ぬと `Drop` が走らず、out-of-process の共有メモリが
-`$TMPDIR` に残る（#779）。**起動時に孤児を回収する経路**を足した。
-
-#### 🔴 起案時の前提のうち 2 つが一次ソースで否定された
-
-| 前提 | 実際 |
-|---|---|
-| 「`Drop` がサイドカーを消していない」 | **誤り。** effect の `Drop` は `.chain.json` と `.apply.json` を両方消している（`outproc_effect.rs:1078-1088`）。**`:1077` で読むのを止めたのが原因** |
-| 「`.respawn-args` が漏れている」 | **test 専用**。書き手は fixture script のみ、読み手 3 箇所はすべて test module 内 |
-
-したがって **`Drop` には手を入れていない**。
-
-#### 🔴 漏れるのは `pkill` の時だけではない
-
-通常の `stop_engine` も `killChildGracefully` が **SIGTERM** を送り、daemon に SIGTERM ハンドラが
-無い（`main.rs:21-25` が既知事項として記載済み）ので `Drop` は走らない。**engine を止めるたびに
-約 25 ファイル漏れる**。
-
-#### 設計（Fable 起案・main が 3 点を一次ソースで検証）
-
-- **述語は 3 値**: `libc::kill(pid, 0)` を `Alive` / `Dead`(ESRCH) / `Unknown`(EPERM 等) に写す。
-  🔴 **削除を許す腕は `Dead` と自 PID だけ**。`bool is_alive` にすると EPERM（プロセスは存在するが
-  権限が無い）が死亡側へ落ちて**生きている shm を消す**
-- 🔴 **プロセス名で「daemon かどうか」を照合する案は却下**。`cargo test` のテストバイナリも同じ
-  名前の shm を作るので、照合すると**走行中のテストの mmap 先を unlink する** — #780 とまったく
-  同じ故障を新しく作ることになる
-- **年齢下限 2 秒**（TOCTOU の保険）。macOS では **mmap 経由の書き込みは msync まで mtime を進めず、
-  SIGKILL でも進まない**ことを実験で確認したので、この下限は「起動から 2 秒未満で死んだ daemon を
-  1 回先送りにする」以上の意味を持たない
-- **置き場所**は `main.rs::run()` の `StartupOptions::from_env()` の後・`start_engine_with_device_switch`
-  の前。🔴 **最初の shm 生成より前であることが自 PID 規則の正当性要件**
-- 診断は **`tracing::info!` 1 行**。`eprintln!` は使わない（stderr は ERROR に分類され、gated の
-  「ERROR 増 0」を自分で落とす）
-
-#### 変更
-
-| ファイル | 内容 |
-|---|---|
-| `outproc_shm_sweep.rs`（新規・cfg 無し） | 述語・parse・`sweep_dir`（純粋）・`sweep_orphaned_outproc_shm`（薄い殻）+ unit 6 本 |
-| `main.rs` | 段 0 と段 1 の間で 1 行呼ぶ |
-| `outproc_effect.rs` / `outproc_instrument.rs` | `unique_shm_path()` の `format!` を共有定数 `OUTPROC_SHM_PREFIX` で書く（生成側と走査側で名前がずれない） |
-| `orbitstudio-mcp-gated.spec.ts` | gated E2E 1 本（死亡 PID のファイルを植えて消えること・**生存 PID のは残ること**を FS で確認） |
-
-#### 検証（main が sandbox 外で実測）
-
-| 項目 | 結果 |
-|---|---|
-| `check-cfg-matrix.sh --clippy` | **4 象限すべて緑** |
-| `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument` | **274 passed / 0 failed**（protocol 32 passed） |
-| sweep のユニット 6 本 | 全 ok |
-| `npm run typecheck:e2e` | exit 0 |
-| 変異 3 種（`Unknown` を削除側へ / 年齢下限 0 / 自 PID 規則を外す） | 委譲先が**それぞれ赤の実出力**を提出 |
-
-🔴 委譲先が sandbox で「`tests/protocol.rs` 32 件 FAILED」と報告していたのは **localhost bind が
-塞がれていたため**で、sandbox 外では 32 passed。**委譲先の赤も緑も、main が回し直すまでは根拠に
-ならない**。
-
-#### 🔴 これは緩和であって根治ではない
-
-SIGTERM ハンドラの追加は別 issue（#448 / `main.rs` のコメントが「本 issue のスコープ外」と明記）。
-掃除は**次回起動時**に効くので、定常状態は **0 ではなく 25〜60 ファイル**に収束する。
-
-#### 検証時の落とし穴（実測）
-
-`$TMPDIR` は実行環境で別のディレクトリを指す。**測るシェルは run と同じ環境でなければ意味がない。**
-
-| ディレクトリ | 漏れ | PID 種類 |
-|---|---|---|
-| `/var/folders/kf/.../T`（通常起動の daemon） | 957 | 37（全部死亡） |
-| `/tmp/claude-501`（sandbox 内のシェル） | 152 | 13 |
-
-
-#### 🔴 実機 E2E は 1 回目が赤 — ただし「実装は正しく判定が間違っていた」
-
-副オラクル（ログの `[outproc-shm-sweep] ... removed=` 行）が `removed=0` で落ちた。**その前の
-ファイルシステムのアサーション 3 つは通っていた** — つまり掃除は実際に効き、死亡 PID のファイルは
-消え、生存 PID のものは残っていた。
-
-原因は `daemon-client.ts:891-910`。**ready 行が来るまで daemon の stderr は `stderrChunks` へ
-溜めるだけで転送されない**（起動失敗時の診断用）。転送が始まるのは `collecting = false` の後で、
-蓄積分が表に出るのは `:946` 以降の**エラー経路だけ**。sweep は最初の shm 生成より前＝ready 行より
-前に走るので、**起動が成功する限りその INFO 行は `get_log` に現れない。**
-
-設計は「tracing subscriber は `run()` より前に初期化済みだから届く」としていた。初期化の記述自体は
-正しいが、障害は**受信側（クライアントの起動フェーズのバッファリング）**という一段外側にあった。
-🔴 **「届く」を主張するには送信側だけでなく受信側まで辿る必要がある。**
-
-これは欠陥ではなく設計どおり（「掃除が遅すぎて ready に間に合わない」という肝心の場合には
-`DaemonStartupError` の診断として観測できる）ので、**E2E 側の副オラクルを外し、理由をコメントで
-残した**。オラクルはファイルシステムのまま。
-
-一度は「device 名の縮退警告も同じ理由で失われるのでは」と疑ったが**外れ**。縮退は
-`device_fell_back` という構造化フィールドで ready の応答に載る（`engine_wrap.rs:4242`）。
-issue は立てない。
-
-#### 掃除が効いていることの実測
-
-作業の途中で `/var/folders/kf/.../T` の `orbit-outproc-*` が **957 → 25** に落ちた。明示的に
-掃除は実行していない。検証で回した `cargo test -p orbit-audio-daemon` の `tests/protocol.rs` が
-daemon バイナリを spawn し、その daemon が起動時に 37 PID 分の孤児を回収したため。
-
-🔴 **25 は設計の予測（1 daemon = master effect 1 + effect bus pool 8 + instrument slot 8 +
-sum 4 + aux 4）とちょうど一致する。**
-
-#### 🔴 dev 学習サイトの引用 24 件を CI で落とした（このブランチで `docs:check` を回していなかった）
-
-`main.rs` / `lib.rs` / `outproc_effect.rs` / `outproc_instrument.rs` に行を足したので、
-サイトが行範囲で引用している 24 箇所がずれた。**PR-E14 のブランチでは `docs:check` を回したが、
-このブランチでは回さずに push した。**
-
-- 22 件は `check-citations.mjs --fix` で貼り直し（**行番号だけの移動**を差分で確認した。
-  `--fix` は「スニペットが移動しただけ」の時しか安全に使えない）
-- 残る 2 件（`rust-engine/index.md` の ja / en）は**引用範囲の内部に行を挿入した**ので機械では
-  直せない。`main.rs:78-133` → `78-136` へ広げ、逐語ブロックを差し替え、**本文にも段 0.5 の説明を
-  足した**（`docs:check` は引用アンカーしか見ないので、本文の陳腐化は機械が教えない）
-
-### docs: correct the ORBIT_GATED_ONLY reference — the env does not exist (Sep 6, 2026)
-
-**ブランチ**: `780-fixture-shm-path`（束 `780-merge-gate` の小 PR）
-
-束 E-gate の小 PR ゲートを実行しようとして、**手引きが実在しない道具を名指ししている**ことに
-気づいた。
-
-`CLAUDE.md:302` と `BUNDLE_BRANCH_WORKFLOW.md:71` が、小 PR のゲート
-「**その PR が足した E2E だけを実機で**」の手段として `ORBIT_GATED_ONLY` を挙げていたが、
-この env は**コードのどこにも実装されていない**（リポジトリ全体の grep で、この 2 つの
-ドキュメント以外にヒットが無い）。
-
-実在するのは:
-
-| env / 手段 | 実体 |
-|---|---|
-| `ORBIT_GATED_ORBITSTUDIO` | gated suite 全体の on/off（`orbitstudio-mcp-gated.spec.ts:93` / `package.json:19`） |
-| vitest の `-t` | 個々のテスト名で絞る |
-
-両方の記述を実態に合わせ、`ORBIT_GATED_ONLY` が存在しないことを注記した。
-
-🔴 **`docs:check` は引用のアンカーしか検査しないので、この種の「主張が実物とずれている」誤りは
-機械が教えない。** 本日はこれで記録と実物のずれが 3 件目（#780 の原因記述 / `Drop` が
-サイドカーを消していないという main の報告 / 本件）。いずれも読んで筋が通る内容だったため
-疑われないまま残っていた。
-
-
-### fix(test): give every rack fixture its own shm path (Sep 6, 2026)
-
-**ブランチ**: `780-fixture-shm-path`（束 `780-merge-gate` の小 PR・Part of #780）
-
-#780 の実体を直した。原因の特定と設計文書の訂正は直前のエントリを参照。
-
-#### 変更
-
-`ActualFixture::new` のパス生成を `line!()` から **`static SHM_SEQ: AtomicU64` の連番 + PID** へ。
-production の `unique_shm_path()`（`outproc_effect.rs:318-325` / `outproc_instrument.rs:63-71`）と
-同じ形に揃えた。`line!()` は定義位置で展開される定数なので、4 つの fixture が同一パスを共有し、
-`create_shared` の `.truncate(true)` が他のテストの生きたマッピングを切り詰めていた。
-
-#### テスト
-
-`actual_fixtures_use_distinct_shm_paths`（**非 `#[ignore]`**）を追加。
-`ActualFixture::new` を 2 回呼んで `path` が異なることを検査する。
-
-🔴 **最初に提出された版はヘルパ関数だけを検査していて、`ActualFixture::new` に `line!()` を
-書き戻しても緑のまま通った。** 差し戻して**実際の構築経路を通る形**にした。`line!()` を戻す変異で
-赤になることを実出力で確認済み:
-
-```
-assertion `left != right` failed
-  left: ".../orbit-rack-gain-41301-662.shm"
- right: ".../orbit-rack-gain-41301-662.shm"
-```
-
-`ActualFixture::new` は `create_shared` + `region_ptr` だけなので Gain.clap のバンドルは不要で、
-`#[ignore]` にせず通常の `cargo test` で走る。ただし `ActualFixture` 自体が macOS 限定なので
-`#[cfg(target_os = "macos")]` が付き、**CI（ubuntu）では走らない**。
-
-#### 検証（main が本ツリーで実測）
-
-| 項目 | 結果 |
-|---|---|
-| 無条件マージゲート `cargo test -p orbit-effect-rack-child --lib -- --ignored` を **10 回連続** | **10 PASS / 0 FAIL**（収束条件・修正前は並列 5 回で 1 FAIL） |
-| `cargo clippy -p orbit-effect-rack-child --all-targets -- -D warnings` | exit 0 |
-| `cargo fmt --all --check` | exit 0 |
-| 残留 `orbit-rack-*` | 2（修正前からの残骸のみ。10 回回して増えていない） |
-
-実装は Codex（`gpt-5.6-sol` / effort high）に委譲。検証は main が sandbox 外で実施した。
-
-
-### docs(design): correct the recorded cause of #780 — a shared shm path, not a moved fixture (Sep 6, 2026)
-
-**ブランチ**: `780-fixture-shm-path`（束 `780-merge-gate` の小 PR・Part of #780）
-
-束 E-gate に着手し、#780（無条件マージゲートが SIGBUS / SIGSEGV で間欠的に落ちる）の
-**設計文書に書かれていた原因が誤りだった**ことを実測で確認したので、実装より先に spec を訂正した
-（PROJECT_RULES / CLAUDE.md 運用規則 6「spec が正本」）。
-
-#### 何が誤っていたか
-
-前日の記述は「`ActualFixture` が `_mmap`（実体）と `region`（その中を指す生ポインタ）を並べて
-持ち、move すると両者の関係が型で保証されない」。**これは成り立たない**:
-
-- `create_shared` が返すのは `MmapMut`。**構造体を move してもマップ先のアドレスは動かない**
-  （`MmapMut` が持つのは (ptr, len) だけ）。`Box<dyn Any>` が実体を生かし続けるので
-  `region` は有効なまま
-- `KERN_PROTECTION_FAILURE` は「マップされているが書けない」であって、
-  **ダングリングポインタの症状ではない**
-- 🔴 この記述が示す修正方向（`region` を `_mmap` から導出する）では**故障が 1 つも直らない**
-
-#### 実際の原因（実測で特定）
-
-`ActualFixture::new`（`tests.rs:649-653`）が `line!()` でパスの一意性を作ろうとしているが、
-**`line!()` はマクロを書いた位置（652 行目）で展開される定数**で、呼び出し元の行ではない。
-`ActualFixture::new` を呼ぶのは `actual_gain()`（`:688`）1 箇所だけで、それを
-**c16(`:711`) / c17(`:735`) / c18(`:760`・`:766`) の 4 箇所**が呼ぶ。したがって
-**4 つの fixture がすべて同一パス `orbit-rack-gain-{pid}-652.shm` を共有していた。**
-
-`create_shared`（`transport.rs:2031-2041`）は `.truncate(true)` で開くので、
-**あるテストが他のテストの生きたマッピングを 0 バイトに切り詰める** → EOF の外側になった
-ページへの書き込みで SIGBUS / SIGSEGV。スタック（`AudioChain::process_block` →
-`AtomicUsize::store`）とも、スレッド絡みに依存する**間欠性**とも一致する。
-
-| 実行形態 | 結果 |
-|---|---|
-| 並列（既定） | 5 回中 **1 回 FAIL**（`signal: 11, SIGSEGV`） |
-| `--test-threads=1` | 5 回中 **0 回 FAIL** |
-| `$TMPDIR` の残骸 | `orbit-rack-gain-81727-652.shm` が **1 個だけ**（4 fixture 分あるはずが 1 個） |
-
-単一スレッドで落ちないのは、c18 が自分で 2 回束縛する分については切り詰めた後の古い
-マッピングに触らないため。落ちるのは**テスト間の並列衝突**である。
-
-#### 🔴 これで #780 の原因仮説は 3 連続で外れた
-
-①漏れた shm ②`bundle-macos.sh` との競合 ③fixture の move。①②は前日に実測で反証済み、
-③は**コードを読んだだけで実測しなかった**ために設計文書に載り、**直っても直らない修正方向まで
-指示していた**。決め手はいずれも実測（クラッシュレポートの実スタック / 並列・単一スレッドの
-対照実験）だった。**読んで筋が通ることは実測の代わりにならない。**
-
-#### 変更
-
-| ファイル | 内容 |
-|---|---|
-| `docs/design/668-e2e-foundation-design.md` §13.5.3 | 原因記述を差し替え。**訂正の記録を引用ブロックで残した**（同じ轍を踏まないため）。`$TMPDIR` 清掃を SIGBUS の説明に使っていた箇所も訂正 |
-| `docs/planning/IMPLEMENTATION_PLAN_2026-09.md` §1.10 | PR-E14 の件名を `give every rack fixture its own shm path` に変更。依存を「PR-E10 の次」→「**PR-E10 と独立**」に（原因が #779 と無関係と判明したため） |
-
-実装（パスを atomic カウンタで一意にする）は Codex に委譲。検証（10 回連続で緑）は main が
-本ツリーで行う。🔴 **`--test-threads=1` を既定にする回避は採らない** — 欠陥を隠すだけで
-並列環境で再発する。
-
-
-### docs(planning): split the E-env bundle so stage 2 is not blocked by measurement noise (Sep 6, 2026)
-
-**ブランチ**: `779-restructure-e-env-bundles`
-
-owner の問い:「**段 0 が完全に収束するまで先に進めないのか？も検討したい。
-先が長いので。着実に安全に進めたいが開発自体が停滞しないようにしたい。**」
-
-#### 🔴 これで設計上の誤りが 1 つ見つかった
-
-前日に E-env / E-router を「段 0 の完了条件から外さない」としたが、
-**「段 0 の完了条件」と「段 2 に進む前提条件」を同一視していた。**
-
-段 0 が守るのは「**退行を機械で検出できる**」こと。現在の実機は **27/29 が緑で、残る 2 件は
-原因も帰属も特定済み**——**退行は既に検出できている**（新しい失敗が出れば区別がつく）。
-E-env が直すのは「**測定のノイズを減らす**」ことであって、段 0 の目的そのものではない。
-**目的の達成と品質改善を混同していた。**
-
-#### 段 2 を止めるのは 1 件だけだった
-
-| # | 段 2 を止めるか | 理由 |
-|---|---|---|
-| **#780** | 🔴 **止める** | **無条件マージゲート**なので段 2 の**どの PR でも毎回**落ちて切り分けを強いる。慣れると無視されてゲートが死ぬ |
-| #779 | 止めない | ディスク・inode の圧力。掃除で回避できる |
-| #775 | 止めない | 失敗が 1 件・場所が動くだけ。既知として扱える |
-| 厳密等価 3 箇所 | 止めない | 対象が限定的 |
-
-#### 2 束 → 3 束に再編
-
-| 束 | 統合ブランチ | 中身 | 段との関係 |
-|---|---|---|---|
-| **E-gate** | `780-merge-gate` | #779 → #780 → 厳密等価 3 箇所 | 🔴 **段 2 の着手条件** |
-| **E-router** | `777-line-router` | #777 → #773 → ring proxy | 並行可 |
-| **E-noise** | `775-capture-clock` | #775 | 🔴 **段 0 の完了条件から外した**・並行可 |
-
-**着手のゲートと束の完了条件を分けた。** 前者は軽く（#780 が 10 回連続で緑）、
-後者は据え置き（gated 全件 3 回連続で失敗集合一致）。
-
-🔴 **#775 は「必要かどうか」自体が未確定**。#779 / #780 を直すと消える可能性があるので、
-**段 2 の実機で観測してから判断する**。3 回連続の実測（1 回 15 分 + 負荷待ち）は
-この系列で最も重い投資なので、必要性が確定してから払う。
-
-#### 🔴 #780 の原因を特定した（見積りのために実装を読んだ副産物）
-
-```rust
-struct ActualFixture {
-    _mmap: Box<dyn std::any::Any>,                   // mmap の実体（型消去）
-    region: *mut orbit_audio_sandbox::SharedRegion,  // その中を指す生ポインタ
-}
-```
-
-`actual_gain()` がこれを**タプルで返し**呼び出し側が分解束縛するので、**move すると
-`_mmap` と `region` の関係が型で保証されない**。`c18` は同じ `it` 内で 2 回束縛する。
-SIGBUS が**間欠的**なのはこの不確定性と一致する。直す方向は
-「`region` を生ポインタで持たず `_mmap` からその場で導出する」。
-
-#### 反映先（3 層）
-
-- 設計 `668-e2e-foundation-design.md` **§13.5.1 / §13.5.3 / §13.5.4**
-- 計画 §2.5 束の割り当て・**§3 段 0 の閉じる**・**§3 段 2 に着手条件を新設**・PR-E11 の依存
-- 地図 §4.G の 3 行
-
-検証: `npm run docs:check` → 972 citations verified, 0 failed
-
----
 
 ## Archived sections
 

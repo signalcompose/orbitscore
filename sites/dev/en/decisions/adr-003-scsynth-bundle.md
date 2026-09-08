@@ -339,7 +339,7 @@ Cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179) switched
 The core of this ADR — "fail loud, no silent fallback, a candidate must be an executable file" — is carried over as-is into `resolveDaemonBinaryPath()`. #306 (`docs/archive/WORK_LOG_2026-07.md` §6.185) added the `.vsix`-bundled daemon as the last candidate, and in review Round 2 of #366 (§6.186) the finding that "it only checks `existsSync` and does not look at the exec bit — asymmetric with `isExecutableFile` on the scsynth side" led to the daemon side also requiring an executable regular file. The candidate order is `explicit → env (ORBIT_AUDIO_DAEMON_PATH) → monorepo-release → monorepo-debug → extension-bundle`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:99-99
+// packages/engine/src/audio/rust-engine/daemon-client.ts:111-111
   source: 'explicit' | 'env' | 'monorepo-release' | 'monorepo-debug' | 'extension-bundle'
 ```
 

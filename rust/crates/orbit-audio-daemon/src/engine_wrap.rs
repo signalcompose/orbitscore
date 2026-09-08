@@ -22,7 +22,10 @@ use std::time::Duration;
 
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
 #[cfg(feature = "outproc-effect")]
-use orbit_audio_native::{decode_bus_routing_sentinel, BusSend, BusTarget, LegacyLineInstaller};
+use orbit_audio_native::{
+    decode_bus_routing_sentinel, BusSend, BusTarget, LegacyLineInstaller, LineOp, LineOutput,
+    LineProgram, LineProgramInstaller, OutputDest,
+};
 use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputDeviceRequest, OutputError, OutputFault,
     OutputStream, ResampleError, StreamStats, StreamStatsSnapshot,
@@ -1749,15 +1752,23 @@ pub struct EngineWrap {
     /// into one full program install.
     #[cfg(feature = "outproc-effect")]
     bus_lines: Mutex<HashMap<String, LegacyLineInstaller>>,
+    /// `SetBusLine` が complete program を publish する named-bus control seam。
+    #[cfg(feature = "outproc-effect")]
+    bus_line_programs: Mutex<HashMap<String, LineProgramInstaller>>,
+    /// master は named bus topology の外側だが、同じ LineSlot publication を使う。
+    #[cfg(feature = "outproc-effect")]
+    master_line: LineProgramInstaller,
+    #[cfg(feature = "outproc-effect")]
+    master_line_program: Mutex<Vec<LineOp>>,
     /// out-of-process instrument の note-ring producer（control side）。
     #[cfg(feature = "outproc-instrument")]
     outproc_instrument: Mutex<Option<OutProcInstrumentControl>>,
-    /// master line（native `MasterLine`・#649 PR-O2）の gain 書き込みハンドル。`SetGlobalGain` は
-    /// これへ atomic store するだけで、`orbit_audio_core::Engine::set_global_gain`（core の
-    /// scheduler ramp）は production では呼ばない — production の乗算経路を master line 1 本に
-    /// する（`docs/design/611-output-line-design.md` §5.4/§5.5 row 4）。`start_with`（test backend）
-    /// 経路は実 stream を持たないため、どこにも接続されないオーファン Arc を持つ（wire レベルの
-    /// accept/reject 検証のみが対象で、実音は無い）。
+    /// master line（native `MasterLine`・#649 PR-O2）の互換 gain 書き込みハンドル。
+    /// `outproc-effect` build では `SetGlobalGain` を汎用 master line にも写し、旧固定経路用の
+    /// atomic と整合させる。`orbit_audio_core::Engine::set_global_gain`（core の scheduler ramp）は
+    /// production では呼ばない（`docs/design/611-output-line-design.md` §5.4/§5.5 row 4）。
+    /// `start_with`（test backend）経路は実 stream を持たないため、どこにも接続されない
+    /// オーファン Arc を持つ（wire レベルの accept/reject 検証のみが対象で、実音は無い）。
     master_gain: Arc<AtomicU32>,
 }
 
@@ -2069,6 +2080,46 @@ pub enum BusKind {
     Aux,
 }
 
+/// `SetBusLine` の wire vocabulary。JSON shape の検証は session 層、名前から RT index への
+/// 解決は topology を所有する EngineWrap が担う。
+#[cfg(feature = "outproc-effect")]
+#[derive(Debug, Clone, PartialEq)]
+pub enum BusLineDest {
+    Master,
+    Bus(String),
+    Device { left: usize, right: usize },
+    Render(String),
+    Link(String),
+}
+
+#[cfg(feature = "outproc-effect")]
+#[derive(Debug, Clone, PartialEq)]
+pub enum BusLineOp {
+    Rack,
+    Gain(f32),
+    Output {
+        dest: BusLineDest,
+        thru: bool,
+        gain: f32,
+    },
+}
+
+#[cfg(feature = "outproc-effect")]
+fn default_master_line_program(output_channels: u16) -> Vec<LineOp> {
+    vec![
+        LineOp::Rack,
+        LineOp::Gain(1.0),
+        LineOp::Output(LineOutput {
+            dest: OutputDest::Device {
+                left: 0,
+                right: (output_channels > 1).then_some(1),
+            },
+            thru: false,
+            gain: 1.0,
+        }),
+    ]
+}
+
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
 /// （M3 で配線予定）。
 #[cfg(feature = "outproc-effect")]
@@ -2161,6 +2212,7 @@ type EffectBusStagesBuild = (
     Vec<orbit_audio_native::InsertBusStage>,
     Vec<EffectBusBuild>,
     HashMap<String, LegacyLineInstaller>,
+    HashMap<String, LineProgramInstaller>,
 );
 
 /// `ORBIT_EFFECT_BUSES`/`ORBIT_EFFECT_BUS_POOL`（insert）+ `ORBIT_SUM_BUS_POOL`（sum）+
@@ -2197,6 +2249,7 @@ fn build_effect_bus_stages() -> Result<EffectBusStagesBuild, WrapError> {
     let mut builds = Vec::with_capacity(total);
     let mut insert_buses = Vec::with_capacity(total);
     let mut bus_lines = HashMap::with_capacity(total);
+    let mut bus_line_programs = HashMap::with_capacity(total);
     for (index, (name, kind)) in named.into_iter().enumerate() {
         let shm_path = crate::outproc_effect::unique_shm_path();
         let host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(
@@ -2230,6 +2283,7 @@ fn build_effect_bus_stages() -> Result<EffectBusStagesBuild, WrapError> {
             active.clone(),
         );
         bus_lines.insert(name.clone(), stage.legacy_line_installer());
+        bus_line_programs.insert(name.clone(), stage.line_program_installer());
         insert_buses.push(stage);
         builds.push(EffectBusBuild {
             name,
@@ -2244,7 +2298,7 @@ fn build_effect_bus_stages() -> Result<EffectBusStagesBuild, WrapError> {
             send_gain_overrides,
         });
     }
-    Ok((insert_buses, builds, bus_lines))
+    Ok((insert_buses, builds, bus_lines, bus_line_programs))
 }
 
 /// bus 部材を ChildSlot / 観測 map / routing map / StreamGuard 用 guard 群へ展開する（stream 起動後・
@@ -2956,6 +3010,131 @@ mod set_bus_routing_tests {
             "send target must activate"
         );
     }
+}
+
+#[cfg(all(test, feature = "outproc-effect"))]
+mod set_bus_line_tests {
+    use super::{BusLineDest, BusLineOp, EngineWrap, LineOp, LineOutput, WrapError};
+    use crate::session::wrap_err_to_protocol;
+    use std::sync::{Arc, Mutex};
+
+    type RecordedInstalls = Arc<Mutex<Vec<Vec<LineOp>>>>;
+
+    fn wrap_and_installs() -> (Arc<EngineWrap>, RecordedInstalls) {
+        let wrap = super::set_bus_routing_tests::wrap_with_three_stage_topology();
+        let installs = Arc::new(Mutex::new(Vec::new()));
+        let recorded = installs.clone();
+        wrap.bus_line_programs.lock().unwrap().insert(
+            "seq-bus-0".to_owned(),
+            Arc::new(move |program, _, _| {
+                recorded.lock().unwrap().push(program.ops.to_vec());
+                Ok(())
+            }),
+        );
+        (wrap, installs)
+    }
+
+    fn output(dest: BusLineDest, thru: bool, gain: f32) -> BusLineOp {
+        BusLineOp::Output { dest, thru, gain }
+    }
+
+    #[test]
+    fn set_bus_line_wire_bus_destination_must_be_known_and_forward_only() {
+        let (wrap, _) = wrap_and_installs();
+        for (bus, dest) in [("seq-bus-0", "missing-bus"), ("sum-bus-0", "seq-bus-0")] {
+            let error = wrap
+                .set_bus_line(bus, &[output(BusLineDest::Bus(dest.into()), false, 1.0)])
+                .expect_err("unknown or backward bus destination must be rejected");
+            let protocol = wrap_err_to_protocol(&error);
+            eprintln!("set_bus_line validation code={}", protocol.code);
+            assert_eq!(protocol.code, "OUTPROC_EFFECT_RUNTIME");
+        }
+    }
+
+    #[cfg(not(feature = "link-audio"))]
+    #[test]
+    fn set_bus_line_wire_link_requires_the_link_audio_feature() {
+        let (wrap, _) = wrap_and_installs();
+        let error = wrap
+            .set_bus_line(
+                "seq-bus-0",
+                &[output(BusLineDest::Link("live-out".into()), false, 1.0)],
+            )
+            .expect_err("link destination must reject a build without link-audio");
+        let protocol = wrap_err_to_protocol(&error);
+        eprintln!("set_bus_line validation code={}", protocol.code);
+        assert_eq!(protocol.code, "LINK_AUDIO_UNAVAILABLE");
+    }
+
+    #[test]
+    fn set_bus_line_installs_the_sent_program_in_signal_order() {
+        let (wrap, installs) = wrap_and_installs();
+        wrap.set_bus_line(
+            "seq-bus-0",
+            &[
+                BusLineOp::Rack,
+                BusLineOp::Gain(0.5),
+                output(BusLineDest::Bus("sum-bus-0".into()), true, 0.25),
+                output(BusLineDest::Master, false, 1.0),
+            ],
+        )
+        .expect("valid line must install");
+
+        assert_eq!(
+            installs.lock().unwrap().as_slice(),
+            &[vec![
+                LineOp::Rack,
+                LineOp::Gain(0.5),
+                LineOp::Output(LineOutput {
+                    dest: orbit_audio_native::OutputDest::Bus(1),
+                    thru: true,
+                    gain: 0.25,
+                }),
+                LineOp::Output(LineOutput {
+                    dest: orbit_audio_native::OutputDest::Master,
+                    thru: false,
+                    gain: 1.0,
+                }),
+            ]]
+        );
+    }
+
+    #[test]
+    fn set_bus_line_is_all_or_nothing_when_the_second_op_is_invalid() {
+        let (wrap, installs) = wrap_and_installs();
+        let before = [BusLineOp::Rack, output(BusLineDest::Master, false, 1.0)];
+        wrap.set_bus_line("seq-bus-0", &before)
+            .expect("initial line must install");
+        let snapshot = installs.lock().unwrap().last().cloned().unwrap();
+
+        let error = wrap
+            .set_bus_line(
+                "seq-bus-0",
+                &[
+                    BusLineOp::Gain(0.25),
+                    output(BusLineDest::Bus("missing-bus".into()), false, 1.0),
+                ],
+            )
+            .expect_err("invalid second op must reject the complete replacement");
+        assert!(matches!(error, WrapError::OutProcEffect(_)));
+        let guard = installs.lock().unwrap();
+        assert_eq!(guard.len(), 1, "failed replacement must not publish");
+        assert_eq!(guard[0], snapshot, "effective line must remain unchanged");
+    }
+}
+
+#[cfg(all(test, feature = "outproc-effect"))]
+pub(crate) fn test_wrap_with_three_stage_topology() -> Arc<EngineWrap> {
+    let wrap = set_bus_routing_tests::wrap_with_three_stage_topology();
+    let mut bus_line_programs = wrap
+        .bus_line_programs
+        .lock()
+        .expect("lock generic bus lines for injection");
+    for name in ["seq-bus-0", "sum-bus-0", "aux-bus-0"] {
+        bus_line_programs.insert(name.to_owned(), Arc::new(|_, _, _| Ok(())));
+    }
+    drop(bus_line_programs);
+    wrap
 }
 
 #[cfg(all(test, feature = "outproc-effect", feature = "outproc-instrument"))]
@@ -4588,7 +4767,7 @@ impl EngineWrap {
 
         // Each registered bus owns a complete transport up front.  Attachment is the existing
         // lock-free `engaged` release-store（activation は LoadPlugin 時・`EffectBusBuild` doc 参照）。
-        let (insert_buses, bus_builds, bus_lines) = build_effect_bus_stages()?;
+        let (insert_buses, bus_builds, bus_lines, bus_line_programs) = build_effect_bus_stages()?;
 
         // 1. shm 作成 → host mmap（adapter が所有・audio thread）。
         let shm_path = crate::outproc_effect::unique_shm_path();
@@ -4651,6 +4830,11 @@ impl EngineWrap {
             .bus_lines
             .lock()
             .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))? = bus_lines;
+        *wrap
+            .bus_line_programs
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))? =
+            bus_line_programs;
         *wrap
             .outproc
             .lock()
@@ -4867,7 +5051,7 @@ impl EngineWrap {
 
         // 同じ transport 構築を effect-only 経路（`start_outproc_effect_post_boot`）と共有する。
         // bus 0 個（または全 bus inactive）なら render は従来経路とビット同一に振る舞う。
-        let (insert_buses, bus_builds, bus_lines) = build_effect_bus_stages()?;
+        let (insert_buses, bus_builds, bus_lines, bus_line_programs) = build_effect_bus_stages()?;
 
         let effect_shm = crate::outproc_effect::unique_shm_path();
         let effect_host = orbit_audio_sandbox::PipelinedEffectHost::from_mmap(
@@ -4936,6 +5120,11 @@ impl EngineWrap {
             .bus_lines
             .lock()
             .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))? = bus_lines;
+        *wrap
+            .bus_line_programs
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))? =
+            bus_line_programs;
         *wrap
             .outproc
             .lock()
@@ -5043,6 +5232,9 @@ impl EngineWrap {
         // 受理/拒否検証だけが対象なので、どこにも接続されないオーファン Arc で足りる
         // （実音は無い＝値は誰も読まない）。
         let master_gain = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
+        #[cfg(feature = "outproc-effect")]
+        let master_line =
+            orbit_audio_native::InsertBusStage::unattached("test-master").line_program_installer();
         let wrap = Self::build(
             started.engine,
             "test audio backend".to_string(),
@@ -5050,6 +5242,8 @@ impl EngineWrap {
             started.channels,
             started.stats,
             master_gain,
+            #[cfg(feature = "outproc-effect")]
+            master_line,
         );
         Ok((wrap, started.guard))
     }
@@ -5071,6 +5265,8 @@ impl EngineWrap {
             // master gain の Arc は `RenderState.master.gain_target` の clone（#649）。
             // ここで引くことで、6 つの start バリアントが個別に受け渡さなくてよい。
             stream.master_gain(),
+            #[cfg(feature = "outproc-effect")]
+            stream.master_line_program_installer(),
         );
         wrap.record_stream_config(
             StreamConfigSnapshot::from_output_stream(stream),
@@ -5089,6 +5285,7 @@ impl EngineWrap {
         channels: u16,
         stream_stats: Arc<StreamStats>,
         master_gain: Arc<AtomicU32>,
+        #[cfg(feature = "outproc-effect")] master_line: LineProgramInstaller,
     ) -> Arc<Self> {
         #[cfg(test)]
         crate::test_tracing::install_interest_anchor();
@@ -5141,6 +5338,12 @@ impl EngineWrap {
             outproc: Mutex::new(None),
             #[cfg(feature = "outproc-effect")]
             bus_lines: Mutex::new(HashMap::new()),
+            #[cfg(feature = "outproc-effect")]
+            bus_line_programs: Mutex::new(HashMap::new()),
+            #[cfg(feature = "outproc-effect")]
+            master_line,
+            #[cfg(feature = "outproc-effect")]
+            master_line_program: Mutex::new(default_master_line_program(channels)),
             // outproc-instrument: production start injects the NeutralEvent ring producer.
             #[cfg(feature = "outproc-instrument")]
             outproc_instrument: Mutex::new(None),
@@ -6290,6 +6493,196 @@ impl EngineWrap {
             });
         // FM-R18/R27 mutation point: stale flags and shutdown-owned requests are both unsafe.
         clear_quiesce_unless_shutdown(entry);
+        Ok(())
+    }
+
+    /// §4.1 の complete line を検証・解決して LineSlot へ一度だけ publish する。
+    #[cfg(feature = "outproc-effect")]
+    pub fn set_bus_line(&self, bus: &str, wire_ops: &[BusLineOp]) -> Result<(), WrapError> {
+        let mut rack_seen = false;
+        for op in wire_ops {
+            match op {
+                BusLineOp::Rack if rack_seen => {
+                    return Err(WrapError::OutProcEffectRequest(
+                        "SetBusLine rack may appear at most once".into(),
+                    ));
+                }
+                BusLineOp::Rack => rack_seen = true,
+                BusLineOp::Gain(gain) if !gain.is_finite() || *gain < 0.0 => {
+                    return Err(WrapError::OutProcEffectRequest(
+                        "SetBusLine gain must be finite and >= 0".into(),
+                    ));
+                }
+                BusLineOp::Output { gain, .. } if !gain.is_finite() || *gain < 0.0 => {
+                    return Err(WrapError::OutProcEffectRequest(
+                        "SetBusLine output gain must be finite and >= 0".into(),
+                    ));
+                }
+                BusLineOp::Gain(_) | BusLineOp::Output { .. } => {}
+            }
+        }
+
+        if bus == "master" {
+            let mut resolved = Vec::with_capacity(wire_ops.len());
+            for op in wire_ops {
+                resolved.push(match op {
+                    BusLineOp::Rack => LineOp::Rack,
+                    BusLineOp::Gain(gain) => LineOp::Gain(*gain),
+                    BusLineOp::Output {
+                        dest: BusLineDest::Device { left, right },
+                        thru,
+                        gain,
+                    } => LineOp::Output(LineOutput {
+                        dest: OutputDest::Device {
+                            left: left.checked_sub(1).ok_or_else(|| {
+                                WrapError::OutProcEffectRequest(
+                                    "SetBusLine device channels are 1-based".into(),
+                                )
+                            })?,
+                            right: Some(right.checked_sub(1).ok_or_else(|| {
+                                WrapError::OutProcEffectRequest(
+                                    "SetBusLine device channels are 1-based".into(),
+                                )
+                            })?),
+                        },
+                        thru: *thru,
+                        gain: *gain,
+                    }),
+                    BusLineOp::Output {
+                        dest: BusLineDest::Master | BusLineDest::Bus(_),
+                        ..
+                    } => {
+                        return Err(WrapError::OutProcEffectRequest(
+                            "SetBusLine master line cannot target master or a bus".into(),
+                        ));
+                    }
+                    BusLineOp::Output {
+                        dest: BusLineDest::Render(id),
+                        ..
+                    } => {
+                        return Err(WrapError::OutProcEffectRequest(format!(
+                            "SetBusLine render destination '{id}' is not registered"
+                        )));
+                    }
+                    BusLineOp::Output {
+                        dest: BusLineDest::Link(channel),
+                        ..
+                    } => {
+                        return Err(WrapError::LinkAudioUnavailable(format!(
+                            "SetBusLine link destination '{channel}' requires link-audio"
+                        )));
+                    }
+                });
+            }
+            let mut shadow = self.master_line_program.lock().map_err(|_| {
+                WrapError::OutProcEffect("master line program mutex poisoned".into())
+            })?;
+            (self.master_line)(LineProgram::new(resolved.clone()), usize::MAX, 0).map_err(
+                |error| {
+                    WrapError::OutProcEffectRequest(format!(
+                        "SetBusLine master program failed validation: {error}"
+                    ))
+                },
+            )?;
+            *shadow = resolved;
+            return Ok(());
+        }
+
+        let guard = self
+            .outproc
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("outproc mutex poisoned".into()))?;
+        let control = guard.as_ref().ok_or_else(|| {
+            WrapError::OutProcEffectUnavailable(
+                "outproc effect not initialized (test backend has no outproc path)".into(),
+            )
+        })?;
+        let bus_index = *control
+            .bus_index
+            .get(bus)
+            .ok_or_else(|| WrapError::OutProcEffect(format!("unknown bus '{bus}'")))?;
+        let bus_count = control.bus_index.len();
+        let mut referenced_buses = Vec::new();
+        let mut resolved = Vec::with_capacity(wire_ops.len());
+        for op in wire_ops {
+            resolved.push(match op {
+                BusLineOp::Rack => LineOp::Rack,
+                BusLineOp::Gain(gain) => LineOp::Gain(*gain),
+                BusLineOp::Output {
+                    dest,
+                    thru,
+                    gain,
+                } => {
+                    let dest = match dest {
+                        BusLineDest::Master => OutputDest::Master,
+                        BusLineDest::Bus(name) => {
+                            let target = *control.bus_index.get(name).ok_or_else(|| {
+                                WrapError::OutProcEffect(format!(
+                                    "SetBusLine output: unknown bus '{name}'"
+                                ))
+                            })?;
+                            if target <= bus_index {
+                                return Err(WrapError::OutProcEffect(format!(
+                                    "SetBusLine output '{name}' (index {target}) must be a later stage than '{bus}' (index {bus_index})"
+                                )));
+                            }
+                            referenced_buses.push(name.as_str());
+                            OutputDest::Bus(target)
+                        }
+                        BusLineDest::Device { left, right } => OutputDest::Device {
+                            left: left.checked_sub(1).ok_or_else(|| {
+                                WrapError::OutProcEffectRequest(
+                                    "SetBusLine device channels are 1-based".into(),
+                                )
+                            })?,
+                            right: Some(right.checked_sub(1).ok_or_else(|| {
+                                WrapError::OutProcEffectRequest(
+                                    "SetBusLine device channels are 1-based".into(),
+                                )
+                            })?),
+                        },
+                        BusLineDest::Render(id) => {
+                            return Err(WrapError::OutProcEffectRequest(format!(
+                                "SetBusLine render destination '{id}' is not registered"
+                            )));
+                        }
+                        BusLineDest::Link(channel) => {
+                            return Err(WrapError::LinkAudioUnavailable(format!(
+                                "SetBusLine link destination '{channel}' requires link-audio"
+                            )));
+                        }
+                    };
+                    LineOp::Output(LineOutput {
+                        dest,
+                        thru: *thru,
+                        gain: *gain,
+                    })
+                }
+            });
+        }
+
+        let installer = self
+            .bus_line_programs
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))?
+            .get(bus)
+            .cloned()
+            .ok_or_else(|| {
+                WrapError::OutProcEffect(format!(
+                    "SetBusLine: unknown bus '{bus}' (no registered RT line)"
+                ))
+            })?;
+        installer(LineProgram::new(resolved), bus_index, bus_count).map_err(|error| {
+            WrapError::OutProcEffectRequest(format!(
+                "SetBusLine program failed validation: {error}"
+            ))
+        })?;
+
+        for name in std::iter::once(bus).chain(referenced_buses) {
+            if let Some(active) = control.bus_actives.get(name) {
+                active.store(true, Ordering::Release);
+            }
+        }
         Ok(())
     }
 
@@ -8864,13 +9257,38 @@ impl EngineWrap {
         })
     }
 
-    /// マスターゲインを設定する。**production では単一の適用点（native master line・#649
-    /// PR-O2）へ atomic store するだけ**——`orbit_audio_core::Engine::set_global_gain`（core の
-    /// scheduler ramp）は production から呼ばない（`docs/design/611-output-line-design.md`
-    /// §5.4/§5.5 row 4・乗算経路を master line 1 本にする）。`ramp_sec` は wire 互換のため受け
-    /// 続けるが、native 側は構築時に確定した固定 ~5ms/block のランプ（`MasterLine::advance_gain`）
-    /// を使う（可変長ランプは持たない）。
+    /// マスターゲインを設定する。`outproc-effect` build では master line の最初の gain op を
+    /// 差し替えて再 publish し、未 publish の互換固定経路用 atomic にも同じ値を store する。
+    /// `orbit_audio_core::Engine::set_global_gain`（core の scheduler ramp）は production から
+    /// 呼ばない（`docs/design/611-output-line-design.md` §5.4/§5.5 row 4・乗算経路を master line
+    /// 1 本にする）。`ramp_sec` は wire 互換のため受け続けるが、native 側は構築時に確定した
+    /// 固定 ~5ms/block のランプを使う（可変長ランプは持たない）。
     pub fn set_global_gain(&self, value: f32, _ramp_sec: f64) -> Result<(), WrapError> {
+        #[cfg(feature = "outproc-effect")]
+        {
+            let mut shadow = self.master_line_program.lock().map_err(|_| {
+                WrapError::OutProcEffect("master line program mutex poisoned".into())
+            })?;
+            if let Some(gain) = shadow.iter_mut().find_map(|op| match op {
+                LineOp::Gain(gain) => Some(gain),
+                _ => None,
+            }) {
+                *gain = value;
+            } else {
+                let position = shadow
+                    .iter()
+                    .position(|op| matches!(op, LineOp::Output(_)))
+                    .unwrap_or(shadow.len());
+                shadow.insert(position, LineOp::Gain(value));
+            }
+            (self.master_line)(LineProgram::new(shadow.clone()), usize::MAX, 0).map_err(
+                |error| {
+                    WrapError::OutProcEffectRequest(format!(
+                        "SetGlobalGain master program failed validation: {error}"
+                    ))
+                },
+            )?;
+        }
         self.master_gain.store(value.to_bits(), Ordering::Relaxed);
         Ok(())
     }
