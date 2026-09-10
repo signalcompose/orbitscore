@@ -1127,7 +1127,7 @@ C3 の 6 件は「起動失敗を黙らせない」の 1 PR にまとめられ�
 
 | 段 | 正本 | 現在地 | 前提 |
 |---|---|---|---|
-| ローカルリリースのスクリプト化 | **#659** | ○（`scripts/orbitstudio/make-local-release.sh` が **untracked** で作業中・`git status`） | — |
+| ローカルリリースのスクリプト化 | **#659** | 旧フォーク用案は廃止（現行方針は [`NATIVE_MIGRATION_2026-09.md`](NATIVE_MIGRATION_2026-09.md) §12.3） | — |
 | 署名・公証・リリース経路 | **#656** 🚪 | ○（証明書と ASC API キーは手元にある・`CODESIGN_PIPELINE.md` は SC 前提で古い） | #659 |
 | workspace trust（宣言） | **#385** 🚪候補 | ✅ **宣言は入った**（`packages/vscode-extension/package.json` の `capabilities.untrustedWorkspaces`・`supported: true`・裁定 656 §16 (1)）。ユニット 6 本が変異 3 種で red を確認 | — |
 | workspace trust（**ビルド既定**・層 2） | **#385** 🚪候補 / **PR-S-T2**（plan ステージ 8）| 🔴 **未着手**。OrbitStudio ビルドで trust を既定 off（`product.overrides.json` 新 +8・`build_orbitstudio.sh` +3・設計は `656-release-design.md` §3.4）。🔴 **層 1（宣言）では救えない** — `anthropic.claude-code` は `untrustedWorkspaces.supported: false` を宣言しており Anthropic 管理なのでこちらから足せない。loose-file 起動では **LLM 側が黙って activate しない**ままで、LLM を第一級ユーザーに置く方針では出荷ブロッカー。**ステージ 1（must-fix の音の経路）では触らない**（owner 2026-09-05）— #656 出荷の前に必ず入れる | #659（焼く経路）→ #656 の前 |
