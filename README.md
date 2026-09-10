@@ -54,11 +54,14 @@ Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundle
 - **Audio foundation** — native daemon sample playback (WAV/AIFF/MP3/MP4), `.chop()` slicing, polymeter, `RUN()`/`LOOP()`/`MUTE()` transport
 - **Post-2.0 (shipped on `main`, extension 2.1.0)** — Rust engine as default (#108), out-of-process CLAP/VST3 hosting (#340–#424), per-sequence inserts (#434), plugin UI (#474), catalog (#463), replacement (#618/#625), racks + standard `Gain` (#628), mixer foundation (#643), live playhead (#390/#654). See [WORK_LOG.md](docs/development/WORK_LOG.md).
 
-> ⚠️ **Ableton Link / LinkAudio is not enabled in released builds.** `global.linkAudio()` parses
-> and warns once, and audio goes to the hardware device. Ableton Link is dual-licensed
-> GPL-2.0-or-later / commercial, so the daemon keeps it behind a default-off `link-audio` feature
-> that the release does not turn on. `global.compressor()` / `limiter()` / `normalizer()` are
-> likewise no-ops on the native engine — put a CLAP / VST3 plugin on the master bus instead.
+> ⚠️ **Ableton Link / LinkAudio is not enabled in released builds, and nothing is audible under
+> `global.linkAudio()`.** Ableton Link is dual-licensed GPL-2.0-or-later / commercial, so the
+> daemon keeps it behind a default-off `link-audio` feature that the release does not turn on.
+> The DSL spec says the sound should fall back to the hardware output with a single warning, but
+> a real-machine run measured capture RMS 0 and no warning marker at all
+> (`tests/e2e/orbitstudio-mcp-gated.spec.ts`), so which is correct is unresolved — do not build a
+> set on it. `global.compressor()` / `limiter()` / `normalizer()` are likewise no-ops on the
+> native engine; put a CLAP / VST3 plugin on the master bus instead.
 
 **Supported platforms**: macOS Apple Silicon (arm64) **only**. Intel Macs are not supported. Windows / Linux not supported currently.
 

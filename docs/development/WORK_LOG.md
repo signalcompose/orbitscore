@@ -33,6 +33,21 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 **追加**: `global.compressor()` / `limiter()` / `normalizer()` が native engine で no-op であることを
 「Not in this build」表に明記した（#502 で唯一の実装だった SC synthdef が消えたため）。
 
+**🔴 LinkAudio の記述を実測に合わせ直した（自分の初稿の誤り）**: 最初「音は hardware へ出る」と
+書いたが、これは `rust-engine-player.ts` の**コメントの主張**であって実測ではない。
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` の記録によれば、2026-09-04 の実機実行では
+`global.linkAudio()` 下の sequence の **capture RMS = 0**、かつ `get_log` に
+`LINK_AUDIO_UNAVAILABLE` も gap 警告も出ていない。つまり**音が出ず警告も出ない**。
+仕様（§8.1）とどちらが正しいかは未決なので、README には「未決であり LinkAudio を前提にした
+演奏はしないこと」と書いた。ユーザー学習サイト（`sites/user/midi/link-audio.md`）は
+#835 で既に同じ扱いになっていた。
+
+**AU ホスティングの偽記載を削除**: walkthrough ステップ 4 が ja / en とも
+「CLAP / VST3 / AU をホストできます」と書いていたが、`PluginFormat::from_env_value` は
+`clap` / `vst3` **以外を Err で弾く**（`outproc_effect.rs:338-346`）。AU の child バイナリも
+crate も存在しない。walkthrough の md と `package.json` の step description の両方を直した。
+🔴 **walkthrough は `.vsix` に同梱されるので、これは出荷物の偽記載だった。**
+
 **その他の追従**: `✅ engine: rust (native)` ステータスバー表示は #108 以降存在しない
 （健全時はインジケータを出さない・`updateBundleStatus`）。コマンド一覧が 5 件しか載っておらず
 プラグイン系・walkthrough・MCP 登録が抜けていた。設定一覧が 5 件で `engineDebug` /

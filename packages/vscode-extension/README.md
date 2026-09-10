@@ -78,12 +78,11 @@ LOOP(kick)
 
 ## Not in this build
 
-Two DSL surfaces parse and run but produce no effect. Both warn once in the OrbitScore output
-channel rather than failing silently.
+Two DSL surfaces parse and run but do not do what their names suggest.
 
 | Surface | What happens |
 |---|---|
-| `global.linkAudio()` / Ableton Link tempo push | **No LinkAudio.** Audio goes to the hardware device instead. Ableton Link is dual-licensed GPL / commercial, so enabling it would put GPL code into the shipped binary — the daemon feature is off by default and the release does not turn it on |
+| `global.linkAudio()` / Ableton Link tempo push | **No LinkAudio, and nothing is audible under it.** Ableton Link is dual-licensed GPL / commercial, so enabling it would put GPL code into the shipped binary; the daemon feature is off by default and the release does not turn it on. The spec says the sound should fall back to the hardware output with one warning, but a real-machine measurement found silence and no warning, so **do not build a set on `global.linkAudio()`** |
 | `global.compressor()` / `limiter()` / `normalizer()` | **No-ops.** The only implementation lived in the retired audio backend and has no replacement on the native engine. Put a CLAP / VST3 plugin on the master bus instead |
 
 ## Commands
