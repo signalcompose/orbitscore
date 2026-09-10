@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(readme): drop the deleted SuperCollider paths from the repository tree (#502) (Sep 10, 2026)
+
+束 #840 を締める前の追従。root `README.md` のディレクトリ図が
+`packages/engine/src/audio/supercollider/`・`packages/engine/supercollider/`・
+`packages/sc-link-audio/` を**現存するものとして**描いていたため、実体に合わせた
+（3 経路とも #838 / #836 で削除済み）。`vscode-extension/` が `packages/` の末子に
+なったので罫線も直した。
+
+残る `SuperCollider` の語（Phase 7 の完了表・#136 の merged 表・冒頭の「#502 で削除された」）は
+**履歴の記述**なので残す。README 全体の書き換えは stable リリースの手順 4 で別途行う。
+
 ### refactor(engine): remove the SuperCollider backend implementation and its editor surface (#502) (Sep 10, 2026)
 
 owner 裁定（#827 / #502・`NATIVE_MIGRATION_2026-09.md` §12.5）に従い、SC バックエンドの

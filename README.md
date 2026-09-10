@@ -131,18 +131,16 @@ orbitscore/
 │   │   │   ├── parser/       # Parser implementation
 │   │   │   ├── interpreter/  # Interpreter (v2)
 │   │   │   ├── core/         # Global & Sequence
-│   │   │   ├── audio/        # Backend seam: rust-engine/ (default) + supercollider/ (opt-out)
+│   │   │   ├── audio/        # Native engine client (rust-engine/) + slicing
 │   │   │   ├── signal-chain/ # Rack recipes (SC.10)
 │   │   │   ├── midi/         # Pitch DSL / MIDI output
 │   │   │   ├── timing/       # Timing calculation
 │   │   │   └── cli/          # CLI interface
-│   │   ├── dist/             # Build output
-│   │   └── supercollider/    # SynthDef definitions (opt-out backend)
-│   ├── vscode-extension/     # VS Code extension (+ MCP server, engine view, playhead)
-│   │   ├── src/              # Extension source
-│   │   ├── syntaxes/         # Syntax definition
-│   │   └── engine/           # Bundled engine + daemon binaries
-│   └── sc-link-audio/        # LinkAudio shim package
+│   │   └── dist/             # Build output
+│   └── vscode-extension/     # VS Code extension (+ MCP server, engine view, playhead)
+│       ├── src/              # Extension source
+│       ├── syntaxes/         # Syntax definition
+│       └── engine/           # Bundled engine + daemon binaries
 ├── rust/                     # Cargo workspace (see rust/README.md)
 │   └── crates/               # orbit-audio-daemon, plugin children, hosts, scanner, std plugins
 ├── sites/
