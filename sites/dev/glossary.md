@@ -207,7 +207,7 @@ OrbitScore が SuperCollider に登録する専用 SynthDef の名前。`PlayBuf
 
 ### scsynth
 
-SuperCollider のオーディオサーバーバイナリ。OSC/UDP で制御を受け付け、SynthDef を実行してオーディオを出力します。v1.0 からは `.vsix` に bundle として同梱されます。
+SuperCollider のオーディオサーバーバイナリ。OSC/UDP で制御を受け付け、SynthDef を実行してオーディオを出力します。v1.0 から `.vsix` に bundle として同梱されていましたが、**[#836](https://github.com/signalcompose/orbitscore/pull/836)（2026-09-10）で同梱をやめました**。抽出スクリプト (`scripts/extract-scsynth-bundle.sh`)・検証スクリプト (`scripts/verify-bundle.sh`)・`.vscodeignore` の `!engine/scsynth/**` keep 指定・`release.yml` の `brew install --cask supercollider` ステップがすべて削除されています。
 
 ### SynthDef (SC)
 
@@ -268,6 +268,8 @@ VS Code の信頼モデル。未信頼のワークスペースでは拡張が既
 ### bundle (scsynth source)
 
 `ScsynthSource` の一つ。`.vsix` に同梱された scsynth バイナリを使う場合の source 識別子。`<engine root>/scsynth/Contents/Resources/scsynth` を指します。
+
+🔴 **[#836](https://github.com/signalcompose/orbitscore/pull/836)（2026-09-10）以降、この候補が当たることはありません。** `packages/engine/scripts/sync-dist.js` が engine を拡張へ同期するたびに `engine/scsynth` を削除するようになり、`.vscodeignore` の keep 指定も外れたためです。型と分岐そのものは `packages/engine/src/audio/supercollider/scsynth-resolver.ts` に残っています（SC の TS 実装の撤去は #836 の本文いわく「次の PR」）。
 
 ### explicit (scsynth source)
 

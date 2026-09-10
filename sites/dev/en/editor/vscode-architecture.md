@@ -466,6 +466,15 @@ export function extensionEngineFileExists(enginePath: string): boolean {
 
 The daemon resolver is `explicit > env > monorepo-release > monorepo-debug > extension-bundle > throw`. It has no silent fallback; if nothing is found, it fails loud with an exception (see [ADR-003](/en/decisions/adr-003-scsynth-bundle) — a historical record of the decision for the scsynth resolver it covers; that resolver was removed in #502).
 
+::: warning The scsynth candidates cannot be reached from a shipped build (#836, 2026-09-10)
+Since [#836](https://github.com/signalcompose/orbitscore/pull/836), `packages/engine/scripts/sync-dist.js` deletes `engine/scsynth` and the synced `dist/audio/supercollider/` every time it syncs the engine into the extension. So in a shipped `.vsix`:
+
+- the `bundle` candidate path (`<engine root>/scsynth/Contents/Resources/scsynth`) does not exist
+- **the very module** the code above `require`s — `../engine/dist/audio/supercollider/scsynth-resolver` — does not exist either
+
+`resolveScsynthForUI()` catches the require failure, writes `❌ scsynth resolver failed: …` to the outputChannel and returns `null`, so what happens under the `sc` kind is now "the resolver cannot be loaded". The extension's TypeScript was **not** touched by #836 — removing the SC TypeScript implementation and the extension surface is, per the #836 description, "the next PR".
+:::
+
 ---
 
 ## Spawning the Engine Process

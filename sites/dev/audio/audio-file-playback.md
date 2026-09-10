@@ -112,6 +112,8 @@ export interface BufferInfo {
 
 SC 経路で対応する音声フォーマットは、scsynth がバッファ読み込みに使う libsndfile に依存します。`.vsix` に同梱される `libsndfile.dylib` のサポート範囲が事実上の対応フォーマットになります。
 
+> 🔴 **[#836](https://github.com/signalcompose/orbitscore/pull/836)（2026-09-10）以降、`libsndfile.dylib` は `.vsix` に入りません。** scsynth bundle（バイナリ・plugins・libsndfile・LICENSE/NOTICE を丸ごと）を同梱していたのは `.vscodeignore` の `!engine/scsynth/**` keep 指定と `scripts/extract-scsynth-bundle.sh` で、どちらも削除されました。本節は SC 経路の歴史的読解として残しています。
+
 > NOTE: unverified — WAV / AIFF については libsndfile の標準サポートで確認できますが、MP3 / MP4 は libsndfile のビルドオプションと version に依存します。同梱 `libsndfile.dylib` (約 4.9 MB) の具体的な version と MP3 サポート有無は別途確認が必要です。
 
 ## soxi による尺取得: scsynth とは独立したコードパス

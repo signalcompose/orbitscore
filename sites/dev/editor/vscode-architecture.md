@@ -466,6 +466,15 @@ export function extensionEngineFileExists(enginePath: string): boolean {
 
 daemon の resolver は `explicit > env > monorepo-release > monorepo-debug > extension-bundle > throw` です。silent fallback を持たず、見つからなければ例外で fail loud します ([ADR-003](/decisions/adr-003-scsynth-bundle) — かつての scsynth resolver の意思決定記録。scsynth 側は #502 で削除済み)。
 
+::: warning scsynth 側の候補は出荷物からは引けない (#836・2026-09-10)
+[#836](https://github.com/signalcompose/orbitscore/pull/836) 以降、`packages/engine/scripts/sync-dist.js` は engine を拡張へ同期するたびに `engine/scsynth` と同期先の `dist/audio/supercollider/` を削除します。したがって出荷された `.vsix` では
+
+- `bundle` 候補のパス (`<engine root>/scsynth/Contents/Resources/scsynth`) が存在しない
+- 上のコードが `require` している `../engine/dist/audio/supercollider/scsynth-resolver` **そのものが存在しない**
+
+という状態になります。`resolveScsynthForUI()` は require 失敗を catch して `❌ scsynth resolver failed: …` を outputChannel に出し `null` を返す作りなので、`sc` kind を選んだときの挙動は「resolver が読めない」に変わっています。拡張側の TypeScript は #836 では**触られていません**（SC の TS 実装と拡張の表面の撤去は #836 本文いわく「次の PR」）。
+:::
+
 ---
 
 ## Engine プロセスの spawn

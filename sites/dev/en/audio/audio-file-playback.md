@@ -112,6 +112,8 @@ What is worth noting is the order of duration retrieval (`getAudioFileDuration`)
 
 The audio formats supported on the SC path depend on libsndfile, which scsynth uses for buffer loading. The support range of `libsndfile.dylib` bundled in the `.vsix` becomes the de facto supported format list.
 
+> 🔴 **Since [#836](https://github.com/signalcompose/orbitscore/pull/836) (2026-09-10), `libsndfile.dylib` is no longer in the `.vsix`.** What put the scsynth bundle there — the binary, the plugins, libsndfile and the LICENSE/NOTICE, all of it — was the `!engine/scsynth/**` keep entry in `.vscodeignore` plus `scripts/extract-scsynth-bundle.sh`, and both were deleted. This section is kept as a historical reading of the SC path.
+
 > NOTE: unverified — for WAV / AIFF, libsndfile's standard support can be confirmed, but MP3 / MP4 depend on libsndfile's build options and version. The specific version of the bundled `libsndfile.dylib` (about 4.9 MB) and whether it includes MP3 support need separate confirmation.
 
 ## Duration via soxi: A Code Path Independent of scsynth

@@ -207,7 +207,7 @@ The name of the dedicated SynthDef that OrbitScore registers with SuperCollider.
 
 ### scsynth
 
-The SuperCollider audio server binary. It accepts control via OSC/UDP, executes SynthDefs, and produces audio output. From v1.0 onward, it is bundled inside the `.vsix`.
+The SuperCollider audio server binary. It accepts control via OSC/UDP, executes SynthDefs, and produces audio output. From v1.0 onward it was bundled inside the `.vsix`, but **[#836](https://github.com/signalcompose/orbitscore/pull/836) (2026-09-10) stopped bundling it**. The extraction script (`scripts/extract-scsynth-bundle.sh`), the verification script (`scripts/verify-bundle.sh`), the `!engine/scsynth/**` keep entry in `.vscodeignore`, and the `brew install --cask supercollider` step in `release.yml` were all deleted.
 
 ### SynthDef (SC)
 
@@ -268,6 +268,8 @@ VS Code's trust model. In an untrusted workspace an extension is restricted by d
 ### bundle (scsynth source)
 
 One of the `ScsynthSource` values. The source identifier used when the scsynth binary bundled in the `.vsix` is used. It points to `<engine root>/scsynth/Contents/Resources/scsynth`.
+
+🔴 **Since [#836](https://github.com/signalcompose/orbitscore/pull/836) (2026-09-10) this candidate can never hit.** `packages/engine/scripts/sync-dist.js` now deletes `engine/scsynth` every time it syncs the engine into the extension, and the `.vscodeignore` keep entry is gone. The type and the branch themselves still live in `packages/engine/src/audio/supercollider/scsynth-resolver.ts` — removing the SC TypeScript implementation is, per the #836 description, "the next PR".
 
 ### explicit (scsynth source)
 

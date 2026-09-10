@@ -35,6 +35,28 @@ removal (commit `58f558f5`) and no longer exist in the current repository. This 
 as a record of the decision.
 :::
 
+::: warning The bundle itself is gone too (#836, 2026-09-10)
+The very thing this ADR is about — **bundling scsynth** — was removed from the repository by
+[#836](https://github.com/signalcompose/orbitscore/pull/836). The following went together:
+
+- `scripts/extract-scsynth-bundle.sh` (the body of `npm run build:bundle`) and
+  `scripts/verify-bundle.sh` (the body of `npm run verify:bundle`), plus both npm scripts
+- The `!engine/scsynth/**` / `!engine/supercollider/**` / `!legal/**` keep entries in
+  `packages/vscode-extension/.vscodeignore`
+- `packages/vscode-extension/legal/scsynth-LICENSE.GPL-3.0` and `legal/scsynth-NOTICE`
+- The `brew install --cask supercollider`, `build:bundle`, `verify:bundle` and post-packaging
+  `verify-bundle.sh` steps in `.github/workflows/release.yml`
+
+On top of that, `packages/engine/scripts/sync-dist.js` now **explicitly deletes**
+`engine/scsynth` and `engine/supercollider`, as well as `dist/audio/supercollider/` and
+`dist/audio/supercollider-player.*` inside the synced copy, every time it syncs the engine into
+the extension. The shipped `.vsix` therefore contains no SC assets at all (measured in the #836
+description: zero SC references; the `.vsix` is 7.4 MB, about 11.5 MB smaller).
+
+Read the "is bundled" / "run `build:bundle`" statements in the body below as **historical
+record** from here on.
+:::
+
 # ADR-003 scsynth bundle strict mode
 
 From v1.0, OrbitScore began bundling scsynth (SuperCollider's audio server binary) into the `.vsix` extension package. At the same time, the implicit fallback to SC.app was **intentionally removed** from the scsynth path resolution logic. This chapter unpacks that decision and its implementation.
@@ -329,6 +351,8 @@ Two workarounds:
 1. **Via environment variable**: add `export ORBIT_SCSYNTH_PATH=/Applications/SuperCollider.app/Contents/Resources/scsynth` to `.zshenv` or similar
 2. **Bundle extraction**: run `npm run build:bundle` first to place the binary in `engine/scsynth/`
 
+🔴 **The second one is impossible since [#836](https://github.com/signalcompose/orbitscore/pull/836).** The `build:bundle` script and `scripts/extract-scsynth-bundle.sh` were deleted, and `sync-dist.js` wipes `engine/scsynth` on every sync. The only remaining workaround is the first one (`ORBIT_SCSYNTH_PATH`).
+
 Since cutover #108, in addition to this, `ORBITSCORE_ENGINE=sc` (`orbitscore.engine: "sc"` in VS Code) is needed just to select the SC path in the first place.
 
 ---
@@ -340,6 +364,15 @@ Following the ADR format, this records the consequences after the decision.
 ### The bundle stays; the path became an opt-out
 
 Cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179) switched the default backend to Rust, but the scsynth bundle itself remains. The engine-kind branching of #377 (`docs/archive/WORK_LOG_2026-07.md` §6.186) records, regarding release.yml, that "the scsynth-related steps (brew install / build:bundle / verify:bundle) are kept unchanged (interim owner decision: keep the scsynth bundle as-is in Phase 1)." Therefore, even at 69dc968, the `.vsix` ships both the SC bundle and the daemon binary.
+
+### And then the bundle was removed (#836, 2026-09-10)
+
+"Kept as-is" ended just before the stable tag. [#836](https://github.com/signalcompose/orbitscore/pull/836) removed the SC bundling, build and licensing in one go, leaving the `.vsix` shipping only the daemon binary. The PR description gives two deciding reasons:
+
+- **Licensing**: the current `.vsix` bundles a **GPL scsynth** because of the keep entries in `.vscodeignore`, and `release.yml` publishes to Marketplace / Open VSX on `v*` tags. So it had to go before the stable tag (owner ruling, `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.5)
+- **Ordering**: `build:copy-engine` was copying `packages/engine/supercollider`, so the copying side had to be removed **before** the copy source
+
+`packages/sc-link-audio/` (the GPL-2.0-or-later SC LinkAudio plugin) and the two `.gitmodules` entries went at the same time, leaving the repository with no git submodules at all. The GPL isolation gate in `rust/deny.toml` was **not** touched — its subject is Ableton Link's `orbit-link-audio`, which is a different thing from SC.
 
 ### The strict resolver pattern was inherited by the daemon
 
@@ -380,11 +413,10 @@ The "no re-signing required" conclusion in this ADR was about scsynth, which can
 
 ## Next Exploration Candidates
 
-- Implementation of the `build:bundle` script (`scripts/extract-scsynth-bundle.sh`) — details of the processing that extracts and places scsynth from SC.app
+- ~~Implementation of the `build:bundle` script (`scripts/extract-scsynth-bundle.sh`)~~ — **deleted in #836**; read it at a pre-removal commit if you need it
 - `scripts/copy-daemon-bin.sh` — the daemon-side bundling script. Why it is limited to `darwin-arm64`, and the ordering guarantee in release.yml
-- Bundle strategies for Windows / Linux — supporting platforms beyond the macOS-targeted universal binary
-- Bundle update flow for SC.app version-up — the Update policy in `SCSYNTH_BUNDLE_MANIFEST.md` (re-extract on Major/Minor bump only)
-- Handling of the GPL-3.0 license for the bundled inclusion — the detail of the issue noted in `SCSYNTH_BUNDLE_MANIFEST.md` as "strongly maintain GPL-3.0 aggregation property"
+- ~~Bundle strategies for Windows / Linux~~ / ~~Bundle update flow for SC.app version-up~~ — **moot: #836 removed the bundling itself**
+- ~~Handling of the GPL-3.0 license for the bundled inclusion~~ — **resolved by #836 removing the bundle**; `legal/scsynth-LICENSE.GPL-3.0` and `legal/scsynth-NOTICE` were deleted with it
 - Status of the daemon's signing / notarization — how the §6.185 follow-up was handled afterward
 
 ---
