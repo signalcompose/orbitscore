@@ -73,7 +73,6 @@ const SEQUENCE_UNCOVERED_BASELINE: readonly string[] = [
   'loop',
   'midi',
   'mute',
-  'pan',
   'quantize',
   'root',
   'unmute',

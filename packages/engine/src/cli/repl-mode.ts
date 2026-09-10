@@ -6,6 +6,7 @@ import * as readline from 'readline'
 
 import { InterpreterV2 } from '../interpreter/interpreter-v2'
 import { parseAudioDSL } from '../parser/audio-parser'
+import { AudioLine } from '../core/sequence/audio-line'
 
 import { setActiveInterpreter } from './active-interpreter'
 import { REPLOptions } from './types'
@@ -102,6 +103,17 @@ const PLUGIN_UI_META_RE = /^\s*\/\/#pluginUi\s+(.+?)\s*$/
  * 評価は完了している。したがって「どこまで待つか」を時間で決める必要がない。
  */
 const EVAL_MARK_META_RE = /^\s*\/\/#evalMark\s+(.+?)\s*$/
+
+/**
+ * `//#evalBegin` / `//#evalEnd`（#611 §5.7）: the extension (and, through it, the MCP
+ * `evaluate_orbitscore` tool, which shares `writeCodeToEngine`) wraps every evaluated chunk
+ * with this pair so the audio-line cursor rules (#649 §10.2) see "one evaluation" as the
+ * batch boundary, not one statement. Manual stdin (a human typing into the REPL) sends
+ * neither line, so it stays on the "no batch" degeneration (#611 §3.2 rule 4: value-only
+ * update, position unchanged).
+ */
+const EVAL_BEGIN_META_RE = /^\s*\/\/#evalBegin\s*$/
+const EVAL_END_META_RE = /^\s*\/\/#evalEnd\s*$/
 
 export interface SavePluginStateMeta {
   requestId: string
@@ -429,6 +441,21 @@ export function createReplSession(interpreter: InterpreterV2): {
   }
 
   async function handleLine(line: string): Promise<void> {
+    // #611 §5.7 guard 1 (implicit close): `AudioLine.beginBatch()` itself closes any batch
+    // still open on that line, so a missing `//#evalEnd` (the host crashing mid-evaluation)
+    // self-heals on the next `//#evalBegin` instead of wedging the cursor rules open forever.
+    if (EVAL_BEGIN_META_RE.test(line)) {
+      AudioLine.beginBatchAll()
+      return
+    }
+    if (EVAL_END_META_RE.test(line)) {
+      // #611 §5.7 guard 2: every statement inside `executeCurrentBuffer` already runs under
+      // its own try/catch (below), so a throwing statement never escapes this FIFO queue —
+      // `//#evalEnd` always still arrives and always still closes the batch. No additional
+      // try/finally is needed here to reach `endBatchAll()`.
+      AudioLine.endBatchAll()
+      return
+    }
     if (PLUGIN_UI_META_RE.test(line)) {
       try {
         const input = extractPluginUiMeta(line)

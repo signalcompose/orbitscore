@@ -71,13 +71,21 @@ export const SEQUENCE_DSL_METHODS: ReadonlySet<string> = new Set([
   'unmute',
 ])
 
-export const BUS_DSL_METHODS: ReadonlySet<string> = new Set(['effect', 'ui'])
+export const BUS_DSL_METHODS: ReadonlySet<string> = new Set([
+  'effect',
+  'ui',
+  'output',
+  'send',
+  'gain',
+  'pan',
+])
 
 export type MixerRuntimeNode =
   | {
       readonly kind: 'output'
       readonly global: Global
-      readonly channels: readonly [number, number]
+      // #611 §2.2: a one-element pair is mono (L+R merged at the daemon — Q-611-5).
+      readonly channels: readonly [number, number] | readonly [number]
     }
   | {
       readonly kind: 'sum' | 'aux'
@@ -293,11 +301,13 @@ export function resolveMixerNode(
 /**
  * The object a mixer node exposes as a statement receiver.
  *
- * Only sum/aux buses have one in v1: they are real daemon buses that already
- * accept inserts. Output endpoints — including implicit `master` on channels 1–2 —
- * have no receiver surface at any channel pair, because routing to a physical
- * output is what #484 D4 adds. Throwing for every output keeps the unimplemented
- * path loud (SC.3.3 forbids swallowing it) instead of handing back an inert
+ * Only sum/aux buses have one in v1: they are real daemon buses that already accept inserts.
+ * A physical output node (`mix.output(...)`, including the implicit `master` compat node on
+ * channels 1-2) is never itself a receiver — it has no insert of its own to chain onto — but
+ * IS routable as a DESTINATION: pass it as an argument to another receiver's `output()`/
+ * `send()` (`kick.output(cue)`), which the interpreter resolves structurally (#611 §3.8), or
+ * write its bare name/"L,R" form as a string. Throwing here for every output keeps a mistaken
+ * `cue.effect(...)` loud (SC.3.3 forbids swallowing it) instead of handing back an inert
  * object that `callMethod` would silently no-op on.
  *
  * Which methods the returned bus accepts is not decided here: {@link guardBusChain}
@@ -308,7 +318,7 @@ export function mixerNodeReceiver(node: MixerRuntimeNode): MixerBusHandle {
     return node.handle
   }
   throw new Error(
-    `Mixer output endpoints (channels ${node.channels.join(', ')}) cannot receive methods yet: ` +
-      `routing to a physical output lands with #484 D4.`,
+    `Mixer output endpoints (channels ${node.channels.join(', ')}) cannot receive methods — ` +
+      `pass this node as an output()/send() destination instead (e.g. kick.output(<this node>)).`,
   )
 }

@@ -179,7 +179,7 @@ The engine process itself is then started with `child_process.spawn` running Nod
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3147-3148
+// packages/vscode-extension/src/extension.ts:3153-3154
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -234,7 +234,7 @@ The MCP tool `evaluate_orbitscore` writes to the engine's stdin through the very
 The engine's entry point is `packages/engine/src/cli-audio.ts`; when it receives the `repl` subcommand, `startREPLMode()` is called.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:30-53
+// packages/engine/src/cli/repl-mode.ts:31-54
 export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
   console.log('🎵 OrbitScore Audio Engine')
   console.log('✅ Initialized')

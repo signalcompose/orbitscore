@@ -213,7 +213,7 @@ _kick.play(
 収集したテキストを engine に送る役目は、2026-05 時点では `runSelection()` の末尾に直書きされていましたが、MCP の `evaluate_orbitscore` と共有するために `writeCodeToEngine()` に切り出されています。`audioPath()` や `audio()` の相対パス解決を `.orbs` ファイルのディレクトリ基準で行うための仕掛けが 2 層あります。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3117-3149
+// packages/vscode-extension/src/extension.ts:3117-3155
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -239,6 +239,12 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
       codeToSend = setDirCommand + '\n' + codeToSend
     }
   }
+
+  // #611 §5.7: every evaluated chunk is one audio-line batch (#649 §10.2's cursor rules
+  // key off "one evaluation", not one statement) — wrap it so `repl-mode.ts` can open/close
+  // that batch on every declared line. Placed after the `//#documentDirectory` prefix (and
+  // the `setDocumentDirectory(...)` injection above) so both land inside the frame.
+  codeToSend = `//#evalBegin\n${codeToSend}\n//#evalEnd`
 
   // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
   if (statusBarItem?.text.includes('🐛')) {
@@ -422,7 +428,7 @@ function handleStepLine(step: StepEvent): void {
 人間のユーザーはエディタの赤線と Output Channel でエラーに気づけますが、MCP 経由の LLM には `evaluate_orbitscore` の `ok` しか届きません。そして `writeCodeToEngine()` の `true` は「stdin に届いた」までしか意味しません。#614 は、コードの直後に `//#evalMark {"requestId":...}` を送り、engine が FIFO でそこに到達したときに、直前の評価で溜まった診断を JSON で返す仕組みを足しました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3176-3185
+// packages/vscode-extension/src/extension.ts:3182-3191
   const result = await evalMarkBridge.send((line, onError) => {
     // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
     stdin.write(line, (error) => {
@@ -461,7 +467,7 @@ editor の `Cmd+Enter` はこのマーカーを送りません。人間にはフ
 `Cmd+Enter` とは別に、ドキュメントの open / change / activation 時に `updateDiagnostics()` が走ります (#384、[IV-1](/editor/vscode-architecture#intellisense-と診断の登録))。前半は 2026-05 時点と同じ行内チェック 3 種です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4108-4182
+// packages/vscode-extension/src/extension.ts:4114-4188
 async function updateDiagnostics(
   document: vscode.TextDocument,
   collection: vscode.DiagnosticCollection,
@@ -542,7 +548,7 @@ async function updateDiagnostics(
 後半は **横断解析** で、純関数 (`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts`) が返す `DiagnosticIssue` を `vscode.Diagnostic` に写すだけです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4184-4195
+// packages/vscode-extension/src/extension.ts:4190-4201
   // === Cross-line analyses (pure functions, unit-testable) ===
   // Pure logic は `diagnostics-analysis.ts` に分離し、ここでは
   // VS Code Diagnostic オブジェクトに変換するだけにする。
@@ -642,7 +648,7 @@ runtime 側の扱いは #645 (PR-D0) で変わりました。以前は `.output(
 そこで戻り値を tagged union にして、throw をやめました。以下が新しい契約の型です。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:142-145
+// packages/engine/src/core/sequence.ts:105-108
 export type DispatchTarget =
   | { readonly kind: 'hardware' } // LinkAudio off (or a MIDI sequence, which is exempt) — the pre-#645 `undefined`
   | { readonly kind: 'link'; readonly channel: string } // LinkAudio on + `.output()` set
@@ -660,7 +666,7 @@ export type DispatchTarget =
 `effect("...")` / `instrument("...")` の名前が plugin catalog に無いときの警告です (#638)。engine は評価時に throw しますが、342 件の catalog では typo が普通に起きるので、評価前に知らせます。**Warning に留めている**のは、catalog がキャッシュされたスナップショットで、「正しい名前だがまだスキャンしていない」場合があるからです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4238-4255
+// packages/vscode-extension/src/extension.ts:4244-4261
   // #638: plugin names that the catalog cannot resolve. The engine throws on
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.

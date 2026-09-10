@@ -179,7 +179,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3147-3148
+// packages/vscode-extension/src/extension.ts:3153-3154
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -234,7 +234,7 @@ MCP ツールの `evaluate_orbitscore` は、エディタの `runSelection()` �
 engine のエントリポイントは `packages/engine/src/cli-audio.ts` で、`repl` サブコマンドを受けると `startREPLMode()` が呼ばれます。
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:30-53
+// packages/engine/src/cli/repl-mode.ts:31-54
 export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
   console.log('🎵 OrbitScore Audio Engine')
   console.log('✅ Initialized')

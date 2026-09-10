@@ -213,7 +213,7 @@ When `getLineSubject()` returns `null`, it is judged a standalone command (`LOOP
 The job of sending the collected text to the engine was written inline at the tail of `runSelection()` as of 2026-05, but it has been carved out into `writeCodeToEngine()` so it can be shared with MCP's `evaluate_orbitscore`. There are two layers of mechanism for resolving the relative paths of `audioPath()` and `audio()` against the `.orbs` file's directory.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3117-3149
+// packages/vscode-extension/src/extension.ts:3117-3155
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -239,6 +239,12 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
       codeToSend = setDirCommand + '\n' + codeToSend
     }
   }
+
+  // #611 §5.7: every evaluated chunk is one audio-line batch (#649 §10.2's cursor rules
+  // key off "one evaluation", not one statement) — wrap it so `repl-mode.ts` can open/close
+  // that batch on every declared line. Placed after the `//#documentDirectory` prefix (and
+  // the `setDocumentDirectory(...)` injection above) so both land inside the frame.
+  codeToSend = `//#evalBegin\n${codeToSend}\n//#evalEnd`
 
   // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
   if (statusBarItem?.text.includes('🐛')) {
@@ -422,7 +428,7 @@ For deep nesting of the argument tree (group runs like `(A)(B).root(X)` or stack
 A human user notices errors via the editor's red squiggles and the Output Channel, but an LLM going through MCP receives only the `ok` of `evaluate_orbitscore`. And the `true` of `writeCodeToEngine()` only means "it reached stdin." #614 added a mechanism that sends `//#evalMark {"requestId":...}` right after the code, and when the engine reaches it in FIFO order, returns the diagnostics accumulated during the preceding evaluation as JSON.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3176-3185
+// packages/vscode-extension/src/extension.ts:3182-3191
   const result = await evalMarkBridge.send((line, onError) => {
     // 既存 bridge（pluginUi）と同じ書き方に揃える。error は null 込みで来る。
     stdin.write(line, (error) => {
@@ -461,7 +467,7 @@ The editor's `Cmd+Enter` does not send this marker. For a human, the flash + dia
 Separately from `Cmd+Enter`, `updateDiagnostics()` runs on document open / change / activation (#384, [IV-1](/en/editor/vscode-architecture#intellisense-and-diagnostics-registration)). The first half is the same three per-line checks as of 2026-05.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4108-4182
+// packages/vscode-extension/src/extension.ts:4114-4188
 async function updateDiagnostics(
   document: vscode.TextDocument,
   collection: vscode.DiagnosticCollection,
@@ -542,7 +548,7 @@ async function updateDiagnostics(
 The second half consists of **cross-line analyses**, which merely map the `DiagnosticIssue`s returned by pure functions (`diagnostics-analysis.ts` / `plugin-name-diagnostics.ts`) to `vscode.Diagnostic`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4184-4195
+// packages/vscode-extension/src/extension.ts:4190-4201
   // === Cross-line analyses (pure functions, unit-testable) ===
   // Pure logic は `diagnostics-analysis.ts` に分離し、ここでは
   // VS Code Diagnostic オブジェクトに変換するだけにする。
@@ -642,7 +648,7 @@ The runtime side of this changed in #645 (PR-D0). It used to throw for a soundin
 So the return value became a tagged union and the throw was removed. Here is the new contract:
 
 ```typescript
-// packages/engine/src/core/sequence.ts:142-145
+// packages/engine/src/core/sequence.ts:105-108
 export type DispatchTarget =
   | { readonly kind: 'hardware' } // LinkAudio off (or a MIDI sequence, which is exempt) — the pre-#645 `undefined`
   | { readonly kind: 'link'; readonly channel: string } // LinkAudio on + `.output()` set
@@ -660,7 +666,7 @@ Diagnostics 7 and 8 stay at **Error** severity, not because the runtime throws, 
 A warning when the name in `effect("...")` / `instrument("...")` is not in the plugin catalog (#638). The engine throws at evaluation time, but with 342 catalog entries a typo is common, so it is reported before evaluation. It **stays at Warning** because the catalog is a cached snapshot, and a name may be "correct but not scanned yet."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4238-4255
+// packages/vscode-extension/src/extension.ts:4244-4261
   // #638: plugin names that the catalog cannot resolve. The engine throws on
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.

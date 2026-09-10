@@ -77,7 +77,7 @@ First, let's confirm how the engine boots. `startEngine()` spawns a Node process
 The point is `stdio: ['pipe', 'pipe', 'pipe']`. Because stdin, stdout, and stderr are all pipe-connected, the extension can pump code in via `engineProcess.stdin.write(...)`. The omitted part sets the backend kind explicitly on `env.ORBITSCORE_ENGINE` (see [0-2](/en/orientation/architecture-overview)). On receiving the `repl` subcommand, the engine calls `startREPLMode()`.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:30-53
+// packages/engine/src/cli/repl-mode.ts:31-54
 export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
   console.log('🎵 OrbitScore Audio Engine')
   console.log('✅ Initialized')
@@ -157,7 +157,7 @@ When the subject is `null` — that is, a stand-alone command like `RUN(kick, sn
 After the code to send is determined, `writeCodeToEngine()` tells the engine the document's directory path in two ways. It is used to resolve relative paths in `audioPath()` / `audio()` and as the base directory for `import` (IM.6).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3117-3149
+// packages/vscode-extension/src/extension.ts:3117-3155
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -183,6 +183,12 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
       codeToSend = setDirCommand + '\n' + codeToSend
     }
   }
+
+  // #611 §5.7: every evaluated chunk is one audio-line batch (#649 §10.2's cursor rules
+  // key off "one evaluation", not one statement) — wrap it so `repl-mode.ts` can open/close
+  // that batch on every declared line. Placed after the `//#documentDirectory` prefix (and
+  // the `setDocumentDirectory(...)` injection above) so both land inside the frame.
+  codeToSend = `//#evalBegin\n${codeToSend}\n//#evalEnd`
 
   // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
   if (statusBarItem?.text.includes('🐛')) {
@@ -229,7 +235,7 @@ The MCP `evaluate_orbitscore` also calls the same `writeCodeToEngine()`, but pas
 The code written to stdin is received by `startREPL()` on the engine side. In the 2026-05 edition all the logic lived inside `rl.on('line', async ...)`; in this edition it is extracted into `createReplSession()`.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:573-593
+// packages/engine/src/cli/repl-mode.ts:600-620
 export async function startREPL(interpreter: InterpreterV2): Promise<void> {
   // 🔴 #607: この関数も返らない。play/run/eval から REPL に入る経路でも publish する。
   setActiveInterpreter(interpreter)
@@ -260,7 +266,7 @@ export async function startREPL(interpreter: InterpreterV2): Promise<void> {
 The design rationale of `createReplSession()` is condensed in its comment.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:335-344
+// packages/engine/src/cli/repl-mode.ts:347-356
 /**
  * REPL の行処理セッション（#476 で分離・単体テスト可能に）。
  *
@@ -278,7 +284,7 @@ The extension sends a multi-line block in a single `stdin.write`. readline split
 The session state is closed over in a closure.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:345-354
+// packages/engine/src/cli/repl-mode.ts:357-366
 export function createReplSession(interpreter: InterpreterV2): {
   pushLine: (line: string) => void
   idle: () => Promise<void>
@@ -294,7 +300,7 @@ export function createReplSession(interpreter: InterpreterV2): {
 `pushLine()` only links the line onto the promise chain.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:551-570
+// packages/engine/src/cli/repl-mode.ts:578-597
   return {
     pushLine(line: string): void {
       // handleLine は内部で全エラーを捕捉するが、防御としてチェーン自体も reject を握る
@@ -324,7 +330,7 @@ export function createReplSession(interpreter: InterpreterV2): {
 `handleLine()` first sorts out meta lines, then queues the rest into the DSL buffer. The tail of the DSL part is as follows.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:511-524
+// packages/engine/src/cli/repl-mode.ts:538-551
     if (line.trim() === '') {
       emptyLineCount++
       buffer += '\n'
@@ -348,7 +354,7 @@ Two or more consecutive empty lines force-execute the buffer (`clearOnIncomplete
 The body of execution is `executeCurrentBuffer()`. The key point is that parse and execute are in separate `try` blocks, and the reason is preserved in the comments.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:378-429
+// packages/engine/src/cli/repl-mode.ts:390-441
   async function executeCurrentBuffer(clearOnIncomplete: boolean): Promise<void> {
     const code = buffer.trim()
     if (!code) {
@@ -421,7 +427,7 @@ By the same logic, the `EOF` decision must not apply to runtime errors. The ENOE
 `extractDocumentDirectoryMeta()` is what pulls `//#documentDirectory` out of the DSL.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:64-79
+// packages/engine/src/cli/repl-mode.ts:65-80
 /**
  * REPL メタ行 `//#documentDirectory <path>`（I3, #456）: エディタ統合（VS Code 拡張）が
  * 「開いているファイルのディレクトリ」を eval 単位で伝えるための帯域外チャネル。DSL 注入
@@ -447,7 +453,7 @@ The other meta lines (`//#selectAudioDevice` / `//#savePluginState` / `//#plugin
 `//#evalMark <json>` is a submission boundary meaning "that is all the input; return the result." Because the REPL processes lines in FIFO order, by the time this marker is reached the evaluation of the preceding code is complete.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:447-469
+// packages/engine/src/cli/repl-mode.ts:474-496
     if (EVAL_MARK_META_RE.test(line)) {
       // 🔴 マーカーは「投入は以上、結果を返せ」という**提出の境界**である。
       // 未完のままバッファに残った入力を放置すると「何も実行していないのに ok」を返して

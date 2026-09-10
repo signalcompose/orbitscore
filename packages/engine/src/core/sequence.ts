@@ -32,13 +32,7 @@ import { SequenceQuantizeManager } from './sequence/parameters/quantize-manager'
 import { QuantizeValue, nextQuantizedTime } from './global/quantize-manager'
 import { StateManager } from './sequence/state/state-manager'
 import { scheduleEvents, scheduleEventsFromTime } from './sequence/scheduling/event-scheduler'
-import {
-  AudioLine,
-  destKey,
-  toWire,
-  type LineElement,
-  type OutputDest,
-} from './sequence/audio-line'
+import { AudioLine, toWire, type LineElement, type OutputDest } from './sequence/audio-line'
 
 /**
  * `{ }` legato overlap (§4): how long the interior note rings past the next
@@ -86,46 +80,15 @@ function writtenPitchOf(ev: TimedEvent): SymbolicPitch {
   )
 }
 
-type OutputElement = Extract<LineElement, { kind: 'output' }>
-
-/** Reproduce `LineProgram::legacy` exactly while the public send amount remains linear. */
-function buildLegacyRoutingLine(
-  output: OutputDest | undefined,
-  sends: readonly OutputElement[],
-): AudioLine {
-  const line = new AudioLine()
-  line.beginBatch()
-  line.upsert({ kind: 'rack' })
-  line.upsert({
-    kind: 'output',
-    dest: output ?? { kind: 'master' },
-    thru: sends.length > 0,
-    db: 0,
-    sugar: 'output',
-  })
-  sends.forEach((send, index) => {
-    line.upsert({ ...send, thru: index + 1 !== sends.length })
-  })
-  line.endBatch()
-  return line
+/** §2.1: `output(dest, opts)` named options — `thru` defaults to false, `db` to 0. */
+export interface OutputOptions {
+  readonly thru?: boolean
+  readonly db?: number
 }
 
-function routingOutput(line: AudioLine): OutputDest | undefined {
-  return line.outputs().find((element) => element.sugar === 'output')?.dest
-}
-
-function routingSends(line: AudioLine): OutputElement[] {
-  return line.outputs().filter((element) => element.sugar === 'send')
-}
-
-function toLegacyWire(line: AudioLine) {
-  const program = line.program()
-  return toWire(program).map((wire, index) => {
-    const element = program[index]
-    return wire.op === 'output' && element.kind === 'output' && element.sugar === 'send'
-      ? { ...wire, gain: element.db }
-      : wire
-  })
+/** §2.3: `send(aux, db, opts)` named options. `enabled: false` sends at -Infinity dB (gain 0). */
+export interface SendOptions {
+  readonly enabled?: boolean
 }
 
 /**
@@ -311,7 +274,11 @@ export class Sequence {
    *   are real-time mixer-style adjustments, and audio / chop swaps are rare
    *   enough that the live-coding "instant feedback" wins over alignment.
    */
-  private seamlessParameterUpdate(parameterName: string, description: string): void {
+  private seamlessParameterUpdate(
+    parameterName: string,
+    description: string,
+    skipReschedule = false,
+  ): void {
     if (this.stateManager.isLooping() || this.stateManager.isPlaying()) {
       const scheduler = this.activeScheduler()
 
@@ -321,6 +288,18 @@ export class Sequence {
         if (deferToNextCycle && this.stateManager.isLooping()) {
           console.log(
             `🎚️ ${this.stateManager.getName()}: ${parameterName}=${description} (next cycle)`,
+          )
+          return
+        }
+
+        // #611 §5.2: a fixed gain()/pan() on a sequence that already has a bus is carried
+        // entirely by the line's own ramp (the daemon side) — the event side was already
+        // reset to 0 dB / center (see gain()/pan() below), so re-scheduling here would do
+        // nothing audible. Still log the familiar "(seamless)" line so the console reads
+        // the same either way.
+        if (skipReschedule) {
+          console.log(
+            `🎚️ ${this.stateManager.getName()}: ${parameterName}=${description} (seamless)`,
           )
           return
         }
@@ -375,9 +354,43 @@ export class Sequence {
     }
   }
 
+  /**
+   * §2.4/§5.2: a FIXED gain is a line element (`LineOp::Gain`) applied at its position in the
+   * chain — but only takes daemon effect once this sequence has a bus (`_insertBus`): the
+   * insert-bus pool has just 8 slots (`sequence-effect-manager.ts`), so `gain()` alone must
+   * never allocate one. Without a bus the fixed value stays applied event-side exactly like
+   * today (bit-identical audio) while still being recorded on `_line` for when a bus later
+   * appears (`effect()`/`output()`/`send()` — see `adoptLineOnFirstBus()`). instrument
+   * sequences are the one exception: they have no event-side gain path at all
+   * (`scheduleMidiEvents` never reads `gainManager`), so a bus is the ONLY way `gain()` can
+   * ever take effect and is allocated eagerly. A RANDOM gain always stays event-side
+   * (`calculateEventGain`) and is never mirrored onto the line.
+   */
   gain(valueDb: number | RandomValue): this {
-    this.gainManager.setGain({ valueDb })
-    this.seamlessParameterUpdate('gain', this.gainManager.getGainDescription())
+    const isRandom = typeof valueDb === 'object' && valueDb !== null && 'type' in valueDb
+    if (isRandom) {
+      this.gainManager.setGain({ valueDb })
+      this.seamlessParameterUpdate('gain', this.gainManager.getGainDescription())
+      return this
+    }
+    const { gainDb: clampedDb } = this.gainManager.setGain({ valueDb })
+    this.upsertLine({ kind: 'gain', db: clampedDb })
+    if (this.isInstrument()) {
+      const name = this.stateManager.getName() || 'sequence'
+      this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
+    }
+    if (this._insertBus) {
+      this.gainManager.setGain({ valueDb: 0 })
+      this.syncBusLine()
+      // instrument sequences have NO event-side gain path to conflict with the line's ramp
+      // (§5.2) — but they DO rely on seamlessParameterUpdate's immediate reschedule for an
+      // unrelated reason (clearing pending scheduled notes via the plugin scheduler's
+      // clearOwner, exercised by tests/core/sequence-instrument.spec.ts). Skip the reschedule
+      // only for the case it actually exists to avoid: an audio sequence with a bus.
+      this.seamlessParameterUpdate('gain', `${clampedDb} dB`, !this.isInstrument())
+    } else {
+      this.seamlessParameterUpdate('gain', this.gainManager.getGainDescription())
+    }
     return this
   }
 
@@ -393,68 +406,142 @@ export class Sequence {
     return this
   }
 
+  /** §2.4b/§5.2: same fixed-vs-random / bus-gated split as gain() above, for the L/R balance. */
   pan(value: number | RandomValue): this {
-    this.panManager.setPan({ value })
-    this.seamlessParameterUpdate('pan', this.panManager.getPanDescription())
+    const isRandom = typeof value === 'object' && value !== null && 'type' in value
+    if (isRandom) {
+      this.panManager.setPan({ value })
+      this.seamlessParameterUpdate('pan', this.panManager.getPanDescription())
+      return this
+    }
+    const { pan: clampedPan } = this.panManager.setPan({ value })
+    this.upsertLine({ kind: 'pan', pan: clampedPan })
+    if (this.isInstrument()) {
+      const name = this.stateManager.getName() || 'sequence'
+      this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
+    }
+    if (this._insertBus) {
+      this.panManager.setPan({ value: 0 })
+      this.syncBusLine()
+      // Same reasoning as gain() above.
+      this.seamlessParameterUpdate('pan', `${clampedPan}`, !this.isInstrument())
+    } else {
+      this.seamlessParameterUpdate('pan', this.panManager.getPanDescription())
+    }
     return this
   }
 
   /**
-   * Set the LinkAudio output channel name for this sequence, OR (MX.2, #459/#453 M3) route
-   * this sequence's per-seq insert bus to a declared sum/group bus.
-   *
-   * Name resolution (MX.2): if `channelName` matches a `global.sum(name)` declaration, this
-   * routes to that group bus via `SetBusRouting` (v1 mutual exclusion with LinkAudio means
-   * only one of the two branches below can ever apply). Otherwise, the existing LinkAudio
-   * egress-channel behavior applies unchanged: effective only when `Global.linkAudio()` was
-   * declared earlier in the same .orbs file; without that declaration the assignment is
-   * recorded but the sequence still routes through the hardware bus, and a runtime warning
-   * is emitted. Multiple sequences sharing the same channel name are summed by the SC plugin.
-   *
-   * Channel/routing changes take effect at the next scheduling cycle; in-flight loop
-   * iterations are not rewritten (no `seamlessParameterUpdate` — mid-loop switching is a
-   * separate feature, planned for Step 3.4).
+   * §2.1/§3.3: shared `output()`/`send()` destination resolution steps 2-4 (the `"master"`
+   * reserved word, a declared sum/aux bus name, or the `"L,R"` physical-channel shorthand).
+   * Returns `undefined` when none match, so the caller can fall back to its OWN remaining
+   * step (`output()` falls back to the unchanged LinkAudio-name behavior; `send()` throws).
    */
-  output(channelName: string | number): this {
+  private resolveLineDest(value: string): OutputDest | undefined {
+    if (value === 'master') return { kind: 'master' }
+    const mixerBus = this.global.resolveMixerBus(value)
+    if (mixerBus) return { kind: 'bus', bus: mixerBus.bus }
+    const pairMatch = value.match(/^(\d+)\s*,\s*(\d+)$/)
+    if (pairMatch) {
+      return { kind: 'device', channels: [Number(pairMatch[1]), Number(pairMatch[2])] }
+    }
+    return undefined
+  }
+
+  /**
+   * Write one element to `_line`, self-wrapping in a one-call batch when no `//#evalBegin`
+   * frame is already open (§5.7's `isInBatch()`) — so a lone `output()`/`send()`/`gain()`/
+   * `pan()`/`effect()` call made OUTSIDE the frame (raw stdin, a programmatic call, most unit
+   * tests) still gets the position-sensitive batch rules (terminal replacement §5.1, default-
+   * strip insertion) instead of degenerating all the way to rule 4's bare value-only update.
+   * A call made INSIDE an already-open frame must NOT start a nested batch — that would reset
+   * the shared cursor mid-evaluation and break position sensitivity across statements (E2E-6).
+   */
+  private upsertLine(element: LineElement): void {
+    const selfBatch = !this._line.isInBatch()
+    if (selfBatch) this._line.beginBatch()
+    this._line.upsert(element)
+    if (selfBatch) this._line.endBatch()
+  }
+
+  /**
+   * §2.1/§2.3: write one `output`/`send` element into `_line` and (fire-and-forget) push the
+   * updated program. Shared by `output()` and `send()` once `dest` is a resolved `OutputDest` —
+   * `send()` is exactly `output(dest, { thru: true, db })` (§2.3).
+   */
+  private applyOutputElement(
+    dest: OutputDest,
+    opts: { thru?: boolean; db?: number },
+    sugar: 'output' | 'send',
+  ): this {
     const name = this.stateManager.getName() || 'sequence'
-    const destinationName = typeof channelName === 'number' ? String(channelName) : channelName
+    if (this.isMidi()) {
+      throw new Error(
+        `Sequence '${name}': ${sugar}() cannot target a mixer destination. ` +
+          `MIDI is sent to an external device and therefore has no mixer output destination.`,
+      )
+    }
+    // #611 §4.4.1: a live destination declaration clears a stale offline render-bus intent.
+    this._renderBus = undefined
+    const hadBus = this._insertBus !== undefined
+    this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
+    if (!hadBus) this.adoptLineOnFirstBus()
+    this.upsertLine({
+      kind: 'output',
+      dest,
+      thru: opts.thru ?? false,
+      db: opts.db ?? 0,
+      sugar,
+    })
+    this.syncBusLine()
+    this.syncInstrumentSourceRouting()
+    return this
+  }
+
+  /**
+   * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
+   * §3.3):
+   *
+   * 1. an already-resolved `OutputDest` — the interpreter resolves a mixer-node-variable
+   *    argument (e.g. `output(cue)` where `var cue = mix.output(3, 4)`) before this runs
+   * 2. the `"master"` reserved word
+   * 3. a declared sum OR aux bus name (widened from sum-only — aux is now a valid `output()`
+   *    target too, matching doc 611 §2.2)
+   * 4. a `"L,R"` physical-channel-pair shorthand
+   * 5. a LinkAudio channel name — today's behavior, unchanged (including the numeric
+   *    render-bus branch below it, which #611 §14 (1) keeps as-is and does NOT fold into this
+   *    resolution order)
+   */
+  output(dest: string | number | OutputDest, opts: OutputOptions = {}): this {
+    const name = this.stateManager.getName() || 'sequence'
+    if (typeof dest === 'object') {
+      return this.applyOutputElement(dest, opts, 'output')
+    }
+    const destinationName = typeof dest === 'number' ? String(dest) : dest
     if (!destinationName || !destinationName.trim()) {
-      throw new Error(`Sequence '${name}': output(channelName) requires a non-empty channel name.`)
+      throw new Error(`Sequence '${name}': output(dest) requires a non-empty destination.`)
     }
 
-    // Resolution order is normative (#598 §4.4): an existing sum named "1" must still win over
-    // numeric render-bus interpretation. This lookup therefore deliberately precedes the number
-    // branch below.
-    const sumBus = this.global.resolveSumBus(destinationName)
-    if (sumBus) {
-      if (this.isMidi()) {
-        throw new Error(
-          `Sequence '${name}': output("${destinationName}") cannot target a mixer bus. ` +
-            `MIDI is sent to an external device and therefore has no mixer output destination.`,
-        )
-      }
-      // §4.4.1: live 宛先の宣言は render bus をクリアする（stale な offline 宛先を残さない）。
-      this._renderBus = undefined
-      this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
-      this._line = buildLegacyRoutingLine({ kind: 'bus', bus: sumBus }, routingSends(this._line))
-      this.syncBusLine()
-      this.syncInstrumentSourceRouting()
-      return this
-    }
+    // #598 §4.4: an existing sum/aux bus whose declared name equals the STRING form of a
+    // number (e.g. `global.sum("3")` then `output(3)`) wins over the numeric render-bus
+    // branch below — resolveLineDest's master/"L,R"-pair branches never match a bare digit
+    // string, so this is effectively the sum/aux-name check alone for a numeric `dest`.
+    const resolved = this.resolveLineDest(destinationName)
+    if (resolved) return this.applyOutputElement(resolved, opts, 'output')
 
-    if (typeof channelName === 'number') {
-      // 🔴 instrument の**オフラインレンダ先**は未設計（録音経路が別）なので loud に拒否する
+    if (typeof dest === 'number') {
+      // 🔴 instrument の**オフラインレンダ先**は未設計（録音経路が別）なのでloudに拒否する
       // （設計 §12・#643 PR-2）。黙って `_renderBus` に記録すると、書いた人は効いていると
-      // 誤解し続ける。**midi 側は破壊的変更になるため owner 確認待ちで据え置き**（#644）。
+      // 誤解し続ける。**midi 側は破壊的変更になるため owner 確認待ちで据え置く**（#644）。
       if (this.isInstrument()) {
         throw new Error(
-          `Sequence '${name}': output(${channelName}) selects an offline render bus, ` +
+          `Sequence '${name}': output(${dest}) selects an offline render bus, ` +
             `which is not supported for instrument sequences yet.`,
         )
       }
-      if (!Number.isInteger(channelName) || channelName < 1 || channelName > 16) {
+      if (!Number.isInteger(dest) || dest < 1 || dest > 16) {
         throw new Error(
-          `Sequence '${name}': output(renderBus) requires an integer from 1 to 16, got ${channelName}.`,
+          `Sequence '${name}': output(renderBus) requires an integer from 1 to 16, got ${dest}.`,
         )
       }
       // 🔴 §4.4.1: **オフラインの宛先宣言は live routing を変えない**（一方向の非対称）。
@@ -470,7 +557,7 @@ export class Sequence {
     }
 
     // 🔴 instrument → LinkAudio は **PR-3 で配線する**まで拒否する（設計 §12・#643 PR-2）。
-    // 宛先だけ記録して音が従わない状態は silent failure。**midi 側は据え置き**（#644）。
+    // 宛先だけ記録して音が従わない状態は silent failure。**midi 側は据え置く**（#644）。
     if (this.isInstrument()) {
       throw new Error(
         `Sequence '${name}': output("${destinationName}") targets a LinkAudio channel, ` +
@@ -519,54 +606,42 @@ export class Sequence {
   }
 
   /**
-   * Add a send to a declared aux/return bus (MX.3, #459/#453 M3). Post-fader fixed (after
-   * this sequence's own insert, if any). Multiple sends fan out (repeated calls with
-   * different `auxName` accumulate; the same `auxName` overwrites its gain). Audio and
-   * instrument sequences use the mixer; MIDI has no mixer output path.
+   * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
+   * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
+   * (it is not removed — re-enabling later restores position, matching #649 §6.6's dB unit
+   * decision). The public unit is dB, replacing the old 0.0-1.0 linear `amount` (🔴 a silently
+   * breaking change for any script still passing e.g. `send("rev", 0.3)` — that value is now
+   * read as +0.3 dB, not 30%; see WORK_LOG).
    */
-  send(auxName: string, amount: number): this {
+  send(aux: string | OutputDest, db: number, opts: SendOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
-    if (!auxName || !auxName.trim()) {
-      throw new Error(`Sequence '${name}': send(auxName, amount) requires a non-empty aux name.`)
+    if (typeof aux === 'string' && !aux.trim()) {
+      throw new Error(`Sequence '${name}': send(aux, db) requires a non-empty aux name.`)
     }
-    if (this.isMidi()) {
+    if (!Number.isFinite(db)) {
       throw new Error(
-        `Sequence '${name}': send() cannot target a mixer bus. ` +
-          `MIDI is sent to an external device and therefore has no mixer output destination.`,
+        `Sequence '${name}': send(${JSON.stringify(aux)}, ${db}) gain must be finite (dB).`,
       )
     }
-    const auxBus = this.global.resolveAuxBus(auxName)
-    if (!auxBus) {
-      throw new Error(
-        `Sequence '${name}': send("${auxName}", ...) references an undeclared aux bus. ` +
-          `Call global.aux("${auxName}") first.`,
-      )
-    }
-    if (!Number.isFinite(amount)) {
-      throw new Error(`Sequence '${name}': send("${auxName}", ${amount}) gain must be finite.`)
-    }
-
-    this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
-    const sends = routingSends(this._line)
-    const sendIndex = sends.findIndex((send) => destKey(send.dest) === `bus:${auxBus}`)
-    const nextSend: OutputElement = {
-      kind: 'output',
-      dest: { kind: 'bus', bus: auxBus },
-      thru: false,
-      // B1 keeps the public linear amount. `toLegacyWire` passes it through unchanged.
-      db: amount,
-      sugar: 'send',
-    }
-    if (sendIndex >= 0) sends[sendIndex] = nextSend
-    else sends.push(nextSend)
-    this._line = buildLegacyRoutingLine(routingOutput(this._line), sends)
-    this.syncBusLine()
-    this.syncInstrumentSourceRouting()
-    return this
+    const dest =
+      typeof aux === 'object'
+        ? aux
+        : (this.resolveLineDest(aux) ??
+          (() => {
+            throw new Error(
+              `Sequence '${name}': send("${aux}", ...) references an undeclared aux/sum bus. ` +
+                `Call global.aux("${aux}") (or global.sum("${aux}")) first.`,
+            )
+          })())
+    return this.applyOutputElement(
+      dest,
+      { thru: true, db: opts.enabled === false ? -Infinity : db },
+      'send',
+    )
   }
 
   /** Awaitable routing entry used only by Signal Chain mixer-name sugar. */
-  async routeOutputFromDsl(output: string): Promise<this> {
+  async routeOutputFromDsl(dest: OutputDest, opts: OutputOptions = {}): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     // 🔴 `seq.output()` と**同じ意味の操作の別入口**なので、ガードも同じでなければならない
     // （#643 PR-2）。instrument は解禁・midi は仕様として拒否（ミキサーに乗らない）。
@@ -577,18 +652,24 @@ export class Sequence {
           `MIDI is sent to an external device and therefore has no mixer output destination.`,
       )
     }
+    this._renderBus = undefined
+    const hadBus = this._insertBus !== undefined
     this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
-    this._line = buildLegacyRoutingLine(
-      output === 'master' ? { kind: 'master' } : { kind: 'bus', bus: output },
-      routingSends(this._line),
-    )
+    if (!hadBus) this.adoptLineOnFirstBus()
+    this.upsertLine({
+      kind: 'output',
+      dest,
+      thru: opts.thru ?? false,
+      db: opts.db ?? 0,
+      sugar: 'output',
+    })
     await this.pushBusLine()
     await this.ensureInstrumentSourceRouting()
     return this
   }
 
   /** Awaitable routing entry used only by Signal Chain aux-name sugar. */
-  async routeSendFromDsl(auxBus: string, amount: number): Promise<this> {
+  async routeSendFromDsl(dest: OutputDest, db: number, opts: SendOptions = {}): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     // `seq.send()` と同じ意味の操作の別入口（上の `routeOutputFromDsl` と同じ理由）。
     if (this.isMidi()) {
@@ -597,23 +678,20 @@ export class Sequence {
           `MIDI is sent to an external device and therefore has no mixer output destination.`,
       )
     }
-    if (!Number.isFinite(amount)) {
-      throw new Error(`Sequence '${name}': send gain must be finite.`)
+    if (!Number.isFinite(db)) {
+      throw new Error(`Sequence '${name}': send gain must be finite (dB).`)
     }
+    this._renderBus = undefined
+    const hadBus = this._insertBus !== undefined
     this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
-    const sends = routingSends(this._line)
-    const sendIndex = sends.findIndex((send) => destKey(send.dest) === `bus:${auxBus}`)
-    const nextSend: OutputElement = {
+    if (!hadBus) this.adoptLineOnFirstBus()
+    this.upsertLine({
       kind: 'output',
-      dest: { kind: 'bus', bus: auxBus },
-      thru: false,
-      // B1 keeps the public linear amount. `toLegacyWire` passes it through unchanged.
-      db: amount,
+      dest,
+      thru: true,
+      db: opts.enabled === false ? -Infinity : db,
       sugar: 'send',
-    }
-    if (sendIndex >= 0) sends[sendIndex] = nextSend
-    else sends.push(nextSend)
-    this._line = buildLegacyRoutingLine(routingOutput(this._line), sends)
+    })
     await this.pushBusLine()
     await this.ensureInstrumentSourceRouting()
     return this
@@ -622,7 +700,7 @@ export class Sequence {
   private async pushBusLine(): Promise<void> {
     if (!this._insertBus) return
     try {
-      await this.global.setBusLine(this._insertBus, toLegacyWire(this._line))
+      await this.global.setBusLine(this._insertBus, toWire(this._line.program()))
       this._busLineStale = false
     } catch (error) {
       this._busLineStale = true
@@ -639,12 +717,12 @@ export class Sequence {
   private syncBusLine(): void {
     if (!this._insertBus) return
     const bus = this._insertBus
-    void this.global.setBusLine(bus, toLegacyWire(this._line)).then(
+    void this.global.setBusLine(bus, toWire(this._line.program())).then(
       () => {
         this._busLineStale = false
       },
       (err) => {
-        // 失敗＝TS 側の line 宣言と daemon の実 line が乖離した状態。
+        // 失敗＝TS 側の routing 宣言と daemon の実 line が乖離した状態。
         // stale フラグを立て、次の routing 呼び出しまたは再生開始時に全量再送で自己修復する
         // （`pluginActiveByKey` の self-heal と同じ形）。
         this._busLineStale = true
@@ -812,9 +890,45 @@ export class Sequence {
           `MIDI is sent to an external device and therefore has no mixer output destination.`,
       )
     }
+    const hadBus = this._insertBus !== undefined
     this._insertBus = await this.global.sequenceEffect(name, value, pluginId)
+    // #611 §5.1/§3.1: record the rack's position in the chain (the plugin CONTENT is already
+    // loaded by sequenceEffect() above via the separate EffectChainMap/LoadPlugin path — this
+    // `rack` element is only the position marker `SetBusLine` needs to place it correctly
+    // relative to gain/pan/output/send, e.g. E2E-6's pre- vs. post-rack `send`).
+    this.upsertLine({ kind: 'rack' })
+    if (!hadBus) this.adoptLineOnFirstBus()
+    await this.pushBusLine()
     await this.ensureInstrumentSourceRouting()
     return this
+  }
+
+  /**
+   * #611 §5.2 "バス確保時の引き継ぎ": the moment a bus is FIRST allocated (by effect()/output()/
+   * send()), a fixed gain()/pan() already recorded on `_line` (written while this sequence had
+   * no bus, so it was still applied event-side) must stop being applied event-side too —
+   * otherwise it is double-applied (event side AND the new line) until the next bar boundary.
+   * A no-op when gain()/pan() were never called, or are random (random stays event-side always
+   * — §2.4/§5.2 — and is therefore never mirrored onto the line in the first place).
+   */
+  private adoptLineOnFirstBus(): void {
+    const gainState = this.gainManager.getGain()
+    const panState = this.panManager.getPan()
+    let changed = false
+    if (gainState.gainRandom === undefined && gainState.gainDb !== 0) {
+      this.gainManager.setGain({ valueDb: 0 })
+      changed = true
+    }
+    if (panState.panRandom === undefined && panState.pan !== 0) {
+      this.panManager.setPan({ value: 0 })
+      changed = true
+    }
+    if (changed) {
+      // Immediate reschedule (skipReschedule=false) — the line the daemon now also applies
+      // this on would otherwise double up with the still-applying event-side value for the
+      // rest of the current bar.
+      this.seamlessParameterUpdate('gain', 'bus adopted the fixed gain/pan')
+    }
   }
 
   /**

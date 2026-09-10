@@ -120,6 +120,42 @@ describe('AudioLine', () => {
     ])
   })
 
+  it('guard: beginBatch() called twice without an intervening endBatch() implicitly closes the abandoned batch instead of corrupting the cursor', () => {
+    const line = new AudioLine()
+    line.beginBatch()
+    line.upsert({ kind: 'rack' })
+    line.upsert({ kind: 'gain', db: -6 })
+    // No endBatch() here — simulates a host that died between `//#evalBegin` and `//#evalEnd`.
+    line.beginBatch()
+    line.upsert({ kind: 'pan', pan: -100 })
+    line.endBatch()
+    expect(line.program()).toEqual([
+      { kind: 'rack' },
+      { kind: 'gain', db: -6 },
+      { kind: 'pan', pan: -100 },
+      master(),
+    ])
+  })
+
+  it('guard: beginBatchAll()/endBatchAll() open and close a batch on every live AudioLine, including ones constructed while the frame is already open', () => {
+    const before = new AudioLine()
+    AudioLine.beginBatchAll()
+    const during = new AudioLine()
+    // `during` was constructed AFTER beginBatchAll() ran — it must still be in batch mode,
+    // or a sequence declared mid-evaluation would silently lose position sensitivity (E2E-6).
+    before.upsert({ kind: 'rack' })
+    before.upsert({ kind: 'gain', db: -6 })
+    during.upsert({ kind: 'rack' })
+    during.upsert(bus('verb', true))
+    AudioLine.endBatchAll()
+    expect(before.program()).toEqual([{ kind: 'rack' }, { kind: 'gain', db: -6 }, master()])
+    expect(during.program()).toEqual([{ kind: 'rack' }, bus('verb', true), master()])
+
+    // Outside the frame again, both lines degenerate to value-only updates.
+    before.upsert({ kind: 'gain', db: -18 })
+    expect(before.program()).toEqual([{ kind: 'rack' }, { kind: 'gain', db: -18 }, master()])
+  })
+
   it('U13 converts gain, pan, and mono device destinations and refuses link output', () => {
     expect(
       toWire([

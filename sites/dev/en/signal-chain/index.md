@@ -271,7 +271,7 @@ as chord or rack (design doc §4 decision 13: `[m7]` and `[glue]` cannot be told
 syntactically).
 
 ```typescript
-// packages/engine/src/parser/types.ts:151-159
+// packages/engine/src/parser/types.ts:152-160
 /**
  * Context-neutral `[ ... ]` value. The interpreter classifies it as a chord or rack after
  * resolving identifier bindings; nested arrays remain arrays until that classification.
@@ -286,7 +286,7 @@ export type ValueArray = {
 The interpreter-side branch looks like this.
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:333-343
+// packages/engine/src/interpreter/process-statement.ts:353-363
 /** Process `var NAME = [ ... ]` (§6): bind the evaluated chord value. */
 function processArrayBinding(statement: ChordBinding, state: InterpreterState): void {
   const global = requireGlobal(state, `array "${statement.variableName}"`)
@@ -346,7 +346,7 @@ An `effect()` call is intercepted in `process-statement.ts`, its arguments are c
 recipe, and only then is the receiver's method invoked.
 
 ```typescript
-// packages/engine/src/interpreter/process-statement.ts:263-266
+// packages/engine/src/interpreter/process-statement.ts:283-286
     if (method === 'effect') {
       if (!valueGlobal) throw new Error('effect() rack resolution requires an initialized global.')
       return callMethod(receiver, method, [effectArgumentsToRack(args, valueGlobal)])
@@ -1515,7 +1515,7 @@ rack on the gated side is below; it runs the SC.10.4 shape — a `var` binding f
 `effect(variable)` — on real hardware as is.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4730-4737
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4743-4750
         await activeClient.call('evaluate_orbitscore', {
           code: [
             `var rack628 = [${JSON.stringify(catalog.clapEffectName)}, ${JSON.stringify(

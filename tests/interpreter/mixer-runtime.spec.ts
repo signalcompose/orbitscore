@@ -105,14 +105,20 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
   })
 
   it.each(['sum', 'aux'] as const)(
-    'rejects unsupported methods on a declared %s bus, including chained calls',
+    // #611 §5.4: gain/pan/output/send moved from "unsupported" to real BUS_DSL_METHODS
+    // vocabulary. A still-genuinely-unsupported Sequence/Global-only method (`tempo`) keeps
+    // proving the bus gate rejects what it should, and that gain() itself now dispatches
+    // (it throws for a DIFFERENT reason without a Rust-engine `setBusLine`, not as staged).
+    'accepts gain() on a declared %s bus and still rejects a genuinely unsupported method',
     async (kind) => {
       const global = new Global(new RecordingScheduler())
       const state = stateWith(global)
       await run(`var mix = init global.mixer\nvar bus = mix.${kind}`, state)
 
-      await expect(run('bus.gain(0.5)', state)).rejects.toThrow(/S2.*S3.*#517/)
-      await expect(run('bus.effect("x").gain(0.5)', state)).rejects.toThrow(/S2.*S3.*#517/)
+      await expect(run('bus.gain(0.5)', state)).rejects.toThrow(
+        /Mixer bus routing requires the Rust engine backend/,
+      )
+      await expect(run('bus.tempo(120)', state)).rejects.toThrow(/S2.*S3.*#517/)
     },
   )
 
@@ -122,7 +128,7 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
       const global = new Global(new RecordingScheduler())
       const state = stateWith(global)
 
-      await expect(run(`${kind}("bus").gain(0.5)`, state)).rejects.toThrow(/S2.*S3.*#517/)
+      await expect(run(`${kind}("bus").tempo(120)`, state)).rejects.toThrow(/S2.*S3.*#517/)
     },
   )
 
@@ -132,7 +138,7 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
       const global = new Global(new RecordingScheduler())
       const state = stateWith(global)
 
-      await expect(run(`global.${kind}("bus").gain(0.5)`, state)).rejects.toThrow(/S2.*S3.*#517/)
+      await expect(run(`global.${kind}("bus").tempo(120)`, state)).rejects.toThrow(/S2.*S3.*#517/)
     },
   )
 
@@ -158,6 +164,8 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
   it('rejects a bus chain before any of its calls run, on every entry form', async () => {
     // The gate is atomic: nothing in the chain executes when a later method is
     // unsupported, so no plugin is loaded and no bus pool slot is consumed.
+    // #611 §5.4: `gain` moved into BUS_DSL_METHODS, so the still-unsupported method
+    // this chain pins on is `tempo` (a Sequence/Global-only DSL verb) instead.
     const global = new Global(new RecordingScheduler())
     const state = stateWith(global)
     await run('var mix = init global.mixer\nvar verb = mix.aux', state)
@@ -167,12 +175,12 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
       'effect',
     )
 
-    await expect(run('verb.effect("Reverb.clap").gain(0.5)', state)).rejects.toThrow(/#517/)
+    await expect(run('verb.effect("Reverb.clap").tempo(120)', state)).rejects.toThrow(/#517/)
     expect(declaredEffect).not.toHaveBeenCalled()
 
     const sum = vi.spyOn(global, 'sum')
-    await expect(run('sum("drums").gain(0.5)', state)).rejects.toThrow(/#517/)
-    await expect(run('global.sum("drums").gain(0.5)', state)).rejects.toThrow(/#517/)
+    await expect(run('sum("drums").tempo(120)', state)).rejects.toThrow(/#517/)
+    await expect(run('global.sum("drums").tempo(120)', state)).rejects.toThrow(/#517/)
     expect(sum).not.toHaveBeenCalled()
   })
 
@@ -213,10 +221,14 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     // inert object that callMethod would silently no-op on.
     const global = new Global(new RecordingScheduler())
     const state = stateWith(global)
-    await expect(run('master.effect("Reverb.clap")', state)).rejects.toThrow('#484 D4')
+    await expect(run('master.effect("Reverb.clap")', state)).rejects.toThrow(
+      'output()/send() destination instead',
+    )
 
     await run('var mix = init global.mixer\nvar main = mix.output(1, 2)', state)
-    await expect(run('main.effect("Reverb.clap")', state)).rejects.toThrow('#484 D4')
+    await expect(run('main.effect("Reverb.clap")', state)).rejects.toThrow(
+      'output()/send() destination instead',
+    )
   })
 
   it('rejects invalid bases, duplicate kinds, and methods on declared output endpoints', async () => {
@@ -226,7 +238,9 @@ describe('Signal Chain mixer runtime namespace (SC.2)', () => {
     await run('var mix = init global.mixer\nvar bus = mix.sum', state)
     await expect(run('var bus = mix.aux', state)).rejects.toThrow('cannot be redeclared')
     await run('var alt = mix.output(3, 4)', state)
-    await expect(run('alt.effect("x")', state)).rejects.toThrow('#484 D4')
+    await expect(run('alt.effect("x")', state)).rejects.toThrow(
+      'output()/send() destination instead',
+    )
   })
 
   it('resolves a declared master output instead of the implicit fallback', async () => {

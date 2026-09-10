@@ -230,7 +230,7 @@ sequenceDiagram
 `InterpreterV2` **is held as a single instance** throughout the REPL session.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:30-53
+// packages/engine/src/cli/repl-mode.ts:31-54
 export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
   console.log('🎵 OrbitScore Audio Engine')
   console.log('✅ Initialized')
@@ -287,14 +287,14 @@ In the 2026-05 version this was hard-coded as `audioEngine: new SuperColliderPla
 When `Cmd+Enter` is pressed, the VS Code extension writes only the text of the block at the cursor (or the selection) to stdin.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3147-3147
+// packages/vscode-extension/src/extension.ts:3153-3153
   engineProcess.stdin.write(codeToSend + '\n')
 ```
 
 The engine's REPL evaluates the received text via `parseAudioDSL()` → `interpreter.execute()`.
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:415-423
+// packages/engine/src/cli/repl-mode.ts:427-435
     try {
       const metaDir = extractDocumentDirectoryMeta(code)
       if (metaDir) sessionDocumentDirectory = metaDir
@@ -502,7 +502,7 @@ started later. The handle is now held by `StateManager` as `runTimer`, and `clea
 first at the entry of `run()` / `loop()` / `stop()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1915-1943
+// packages/engine/src/core/sequence.ts:2029-2057
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()

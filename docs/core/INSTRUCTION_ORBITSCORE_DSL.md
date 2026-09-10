@@ -688,7 +688,7 @@ s.audio("snare.wav").output("drums")               // kick と snare が同 chan
 
 🔴 **`output("master")` は LinkAudio channel 名にならない**（規範・MX.2.1）: `"master"` は予約語であり、名前解決の最初に master へ確定する。したがって `global.linkAudio()` 宣言下でも `"master"` という名前の egress channel は作れない。LinkAudio 側でその名前が要る場合は別名を使う。同様に、宣言済みの sum / aux 名・`"3,4"` 形式の物理アウト対も LinkAudio channel より先に解決される — **LinkAudio channel は解決順の最後**である。
 
-⚠️ **v1 の現在地**: この規範は**まだ実装されていない**。今日の `seq.output("master")` は sum にも render bus にも一致しないため **LinkAudio channel 名として記録される**（`sequence.ts:405-413`・既存契約は `tests/core/sequence-output.spec.ts:167-179`）。予約語として wire に届くのは `.master` 糖衣だけである。解決順の実装は PR-O4（MX.2.1 の注記も参照）。
+✅ **実装済み**（束 O-surface・PR-B2・2026-09-10）: `seq.output("master")` は予約語として `{kind:'master'}` に解決され、LinkAudio channel 名としては記録されない（`sequence.ts` の `output()`・`resolveLineDest()`）。解決順は MX.2.1 のとおり: 解決済み `OutputDest` → `"master"` → 宣言済み sum/aux 名 → `"L,R"` 物理アウト対 → LinkAudio channel 名。
 
 #### 8.1.3 Plugin lifecycle
 
@@ -1711,7 +1711,7 @@ kick.effect("./plugins/MyComp.clap")   // 従来の path 指定（不変・カ�
 
 > **Status**: 設計確定（2026-07-17・issue #459 コメントが決定記録）・実装は M1-M3 で段階導入。
 > **2026-09-03 に出口の意味論を改訂**（#611 / #649・owner 裁定）: 出口はラインの 1 要素であって
-> 段ではない。MX.2 / MX.3 が新しい規範で、実装は PR-O3 / PR-O4（各項の「v1 の現在地」を見ること）。
+> 段ではない。MX.2 / MX.3 が新しい規範で、実装は PR-O3（wire）と PR-B2（DSL・2026-09-10）で完了した。
 > 本節が規範（DocDD: spec 先行）。ブレスト正本 `POST_2.0_MIXER_DSL_DESIGN.html` は非規範。
 
 ### MX.1 ルーティングモデル
@@ -1729,17 +1729,21 @@ reconciliation key は名前（同名 = 同一 node・再評価は再束縛）�
 宛先に特別なものは無い — master・sum・aux・render・物理アウト・LinkAudio channel は
 すべて同じ軸の宛先であり、master も「終端」ではなく単なる宛先の 1 つである（MX.2.1）。
 
-> ⚠️ **`gain` / `pan` の既存節はまだ本節に追従していない。** 本ファイル内の `seq.gain()` /
-> `seq.pan()` の記述は「即時に効くリアルタイム制御」としてのみ書かれており、
-> ライン要素としての位置（既定はラック後・位置は自由）・`pan` がバス上の L/R バランスになって
-> **既存譜面の音が変わる**ことに触れていない。追従は **PR-O4**（doc 611 §2.4 / §2.4b）。
+> ✅ **実装済み（束 O-surface・PR-B2・2026-09-10）。** `seq.gain(固定値)` / `seq.pan(固定値)` は
+> ライン要素（`LineOp::Gain` / `LineOp::Pan`）として位置を持つ（既定はラック後・位置は自由）。
+> ただし **daemon にラインを持たない audio シーケンス**（`_insertBus` 未確保）では、プール枯渇を
+> 避けるため発音側で同値に適用する（`effect()`/`output()`/`send()` が初めて bus を確保した瞬間、
+> ラインへ引き継ぐ）。instrument はバスを確保してラインへ（発音側の適用経路が無いため）。
+> `gain(random)` / `pan(random)` は今日どおり発音側のまま。`pan` を含む既存譜面は
+> golden を再ベースラインした（`docs/design/611-o-surface-bundle-design.md` §7）。
 
 ### MX.2 出口 — `seq.output(destination, thru:, db:)`
 
-> **Status**: 仕様確定（2026-09-03 owner 裁定・設計正本は
-> [`docs/design/611-output-line-design.md`](../design/611-output-line-design.md)）。
-> **実装は段階導入**: `thru:` / `db:` と宛先の集合は PR-O3（wire）→ PR-O4（DSL）で入る。
-> 現在地は各項の「v1 の現在地」注記を見ること。
+> **Status**: ✅ **実装済み**（2026-09-03 owner 裁定・束 O-surface・PR-B2・2026-09-10。
+> 設計正本は [`docs/design/611-output-line-design.md`](../design/611-output-line-design.md)・
+> [`611-o-surface-bundle-design.md`](../design/611-o-surface-bundle-design.md)）。
+> `thru:` / `db:` と本節の宛先集合は wire（PR-O3）→ DSL（PR-B2）の両方が入っている。
+> 各項の「v1 の現在地」注記も実装済みへ更新済み。
 
 出口は**オーディオラインの 1 要素であり、終端ではない**。`output` を書いた位置の信号が宛先へ
 加算され、`thru: true` ならその先の要素へも流れる。pre / post fader はオプションではなく、
@@ -1800,14 +1804,11 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 **LinkAudio channel 名としては解決されない**（§8.1.2）。
 sum / aux に `master` と名付けることは SC.2.1 規範 (7) で明示エラー。
 
-> **v1 の現在地（🔴 予約語はまだ DSL 表面に無い）**: 予約語 `"master"` が実在するのは
-> **wire（`SetBusRouting`）** で、そこでは「sum への出力先指定を**解除**して hardware/master へ
-> 戻す」という部分適用の意味を持つ（`engine_wrap.rs:5766-5768` / `:5799`・#517 S3）。
-> DSL 側でその wire 値に届くのは **`.master` 糖衣だけ**であり、
-> **`seq.output("master")` は今日 LinkAudio channel 名として記録される**
-> （`sequence.ts:405-413`。既存契約は `tests/core/sequence-output.spec.ts:167-179`）。
-> 本節の規範（予約語として master へ解決する）と、「解除」ではなくラインの 1 要素として
-> 扱う意味論は、いずれも **PR-O4 で実装される**。
+> ✅ **実装済み**（束 O-surface・PR-B2・2026-09-10）: 予約語 `"master"` は
+> `Sequence.output()` / `MixerBusHandle.output()` の解決順（`resolveLineDest()`）の 2 段目で
+> `{kind:'master'}` に解決され、ライン（`AudioLine`）の 1 要素として扱われる（「解除」ではなく
+> 通常の宛先）。`seq.output("master")` は今日 `{kind:'master'}` に解決され、
+> LinkAudio channel 名としては記録されない。
 
 **名前解決の順序**（既存 2 用途を保護するため順序も規範）:
 
@@ -1831,19 +1832,18 @@ sum / aux に `master` と名付けることは SC.2.1 規範 (7) で明示エ�
 - 🔴 **バスの kind による宛先の制限は設けない**（MX.4）。sum が別の sum へ出す形も、
   順序が前向きなら規範上は許される。禁じるのは**循環（後方参照）だけ**。
 
-> **v1 の現在地**（一次ソースで確認した実装事実）:
+> **v1 の現在地**（束 O-surface・PR-B2・2026-09-10 実装）:
 >
 > | 本節の規範 | 今日 |
 > |---|---|
-> | `output(name)`（sum 名）・`mix.output(1, 2)` の物理アウト宣言 | ✅ **実装済み** |
-> | `output` の宛先は kind を問わない | ❌ **sum kind に限られる** — `SetBusRouting` が
->   `output '<name>' must be a sum bus` で拒否する（`engine_wrap.rs:5809-5813`）。
->   `send` 先も **aux kind に限られる**（同 `:5828` 付近） |
-> | forward-only（順序が前向きなら許す） | ✅ 実装済み（同 `:5802-5806` が index 比較で拒否） |
-> | sum が別の sum へ出せる | ⚠️ wire の kind 検証は通るが、**DSL 側の経路は未整備**。
->   旧 MX.5 は「sum ネスト不可」を v1 制約として挙げていた |
-> | `thru:` / `db:` / aux 宛て / `"3,4"` 形式 / mono 宛て / 同一ラインでの複数 `output` | ❌ **未実装**（PR-O3 → PR-O4） |
-> | `"master"` を `seq.output()` の文字列宛先として使う | ❌ **未実装**（上記の予約語の注記） |
+> | `output(name)`（sum 名）・`mix.output(1, 2)` の物理アウト宣言 | ✅ 実装済み |
+> | `output` の宛先は kind を問わない | ✅ **`SetBusLine`（DSL の唯一の経路）は kind を制限しない** —
+>   `output` は sum・aux のどちらでも指せる（MX.2.1 拡張）。旧 `SetBusRouting`（sum のみ・send は
+>   aux のみ）は Sequence/MixerManager から呼ばれなくなった |
+> | forward-only（順序が前向きなら許す） | ✅ 実装済み（`AudioLine` のカーソル規則がこの節の代わり） |
+> | sum が別の sum へ出せる | ✅ `output()` の宛先解決に kind 制限が無いので書ける |
+> | `thru:` / `db:` / aux 宛て / `"3,4"` 形式 / mono 宛て / 同一ラインでの複数 `output` | ✅ **実装済み** |
+> | `"master"` を `seq.output()` の文字列宛先として使う | ✅ **実装済み**（予約語として解決） |
 
 #### MX.2.3 数値 render bus `seq.output(n)` — **撤回**
 
@@ -1889,10 +1889,12 @@ kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要�
 - aux bus の insert（`aux("rev").effect(...)`）も**差し替え・削除できる**（異 spec 再宣言 =
   差し替え / `remove("名前")`・意味論は PH.2d）。
 
-> **v1 の現在地**: `send(name, amount)` の **`amount` は線形**（0.0-1.0 目安）で、タップ位置は
-> **post-insert 固定**。dB 化と位置の反映は **PR-O4 で入る**（#611）。
-> 🔴 移行時、`send("rev", 0.3)` は **+0.3 dB** と読み替えられる（ほぼ素通し）。
-> 静かに音が変わるため、PR-O0 の golden で差分を式として固定してから切り替える。
+> ✅ **実装済み**（束 O-surface・PR-B2・2026-09-10）: `send(aux, db, opts)` は `db` 単位で、
+> タップ位置はチェーン上の位置がそのまま意味を持つ（post-insert 固定ではない）。
+> 🔴 **既存譜面の意味が変わった**: `send("rev", 0.3)` は今日 **+0.3 dB**（`10 ** (0.3/20) ≈ 1.0351`
+> 倍・ほぼ素通し）と読まれる。旧線形 0.3（30%）とは別物。golden `send`
+> （`tests/e2e/output-line-expectations.ts`）は `dbTotalOverDry` へ切り替え済み。
+> `amount:` という名前付き引数は**改名された**として loud に throw する（`db:` を使う）。
 
 ### MX.4 エンジン実装（規範）
 
@@ -1905,24 +1907,13 @@ kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要�
 - bus は起動時プールから確保（kind: insert/sum/aux）。宣言 = activation・失敗ロールバック・
   per-bus health・UNROUTABLE_EVENTS 観測は PH.2b の機構を共有
 
-> **v1 の現在地**（2026-09-10・束 O-wire-b = PR [#824](https://github.com/signalcompose/orbitscore/pull/824) マージ後）:
-> 🔴 **利用者から見える kind 制約は今日も生きている。** `SetBusRouting` は
-> 「output は sum のみ・send 先は aux のみ」を検証して拒否する
-> （`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6956-6960`・send 側は同 `:6981-6985`。
-> コード側のコメントは本節 MX.4 を出典として引用している）。本節が「kind で制限しない」と
-> 規定するのは **到達点**である。
-> forward-only は今日も同じ規則で効いている（同 `:6951-6955`）。
->
-> **PR-O3 の到達点（2026-09-10・[#824](https://github.com/signalcompose/orbitscore/pull/824) マージ）**:
-> `SetBusLine` の wire は入り、その `bus` 宛ては **forward-only しか検証しない**
-> （`EngineWrap::set_bus_line`・同 `:6852-6865`。kind の照合は無く、
-> `set_bus_line_accepts_a_forward_aux_destination`・同 `:3262-3284` が固定している）。
-> ただし **DSL からこの wire を送る経路はまだ無く**、`output()` / `send()` は `SetBusRouting`
-> のままなので、**ユーザーから見える制約は変わっていない**。切り替えは **PR-O4**。
->
-> ⚠️ **`pan` と mono 宛先はまだ wire に無い**（設計 611 §4.1 の引用ブロック・owner 裁定 2026-09-10）。
-> §2.2 / §2.4b の裁定（`mix.output(3)` = L+R マージ・`pan` はライン要素）に **wire だけが**
-> **追従していなかった**ため、§4.1 を改訂して**実装は PR-O4 へ**割り当てた。
+> ✅ **到達点（束 O-surface・PR-B2・2026-09-10）**: DSL の `output()` / `send()` / `gain()` /
+> `pan()` は今すべて `SetBusLine` を送る（`SetBusRouting` の呼び出し元は Sequence/MixerManager
+> から消えた）。`SetBusLine` の `bus` 宛ては forward-only しか検証せず、kind の照合は無い
+> （`EngineWrap::set_bus_line`・`rust/crates/orbit-audio-daemon/src/engine_wrap.rs`）。
+> **利用者から見える kind 制約（output は sum のみ・send 先は aux のみ）は消えた** — 本節の
+> 「kind で制限しない」規範のとおりに動く。`pan` op と mono 宛先も wire・RT ともに実装済み
+> （設計 611 §4.1）。
 
 ### MX.5 v1 制約（実装事実の開示）
 
@@ -1931,12 +1922,10 @@ kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要�
 - 受理フォーマットは effect 系 = `.clap` のみ（PH.3）
 - **宛先の kind 制約**（output は sum のみ・send 先は aux のみ）— MX.4 の現在地注記を見ること
 
-> 🔴 上 2 項は**今日の制約であって到達点ではない**。owner 裁定（2026-09-03・doc 611 §14 (7)）は
-> 「kind による制限は設けない。循環だけを診断で拒否する」であり、MX.4 がその規範を書いている。
-> 本節は「実装事実の開示」なので、**制約がユーザーから見えなくなるまで両方を併記する**。
-> PR-O3（2026-09-10 マージ）で入ったのは `SetBusLine` の **wire だけ**で、DSL の `output()` /
-> `send()` は `SetBusRouting` を送り続けるため、併記が要らなくなるのは **PR-O4** である
-> （MX.4 の「PR-O3 の到達点」注記を見ること）。
+> ✅ **宛先の kind 制約は消えた**（束 O-surface・PR-B2・2026-09-10）。owner 裁定
+> （2026-09-03・doc 611 §14 (7)）「kind による制限は設けない。循環だけを診断で拒否する」が
+> DSL から見える形で実装された。**この節の 4 行目は歴史的事実として残す**（旧
+> `SetBusRouting` の制約）。sum ネスト不可（2 行目）は本節の対象外（#663 の別トピック）。
 
 ---
 

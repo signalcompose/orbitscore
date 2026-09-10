@@ -56,6 +56,28 @@ function defaultRank(element: LineElement): number {
   }
 }
 
+/**
+ * #611 §5.7: every `AudioLine` ever constructed (one per Sequence / MixerBusHandle) so the
+ * `//#evalBegin` / `//#evalEnd` frame can open/close a batch on all of them without each DSL
+ * caller (`output()`/`send()`/`gain()`/`pan()`) touching `beginBatch`/`endBatch` itself. A plain
+ * `Set` (not a `WeakSet`) because `beginBatchAll`/`endBatchAll` must iterate it; abandoned lines
+ * (a re-declared sequence's previous `_line`) stay referenced for the life of the process — an
+ * accepted v1 cost, not a correctness issue (a stale batch on a dead line never assembles into
+ * a `program()` anyone reads again).
+ */
+const allLines = new Set<AudioLine>()
+
+/**
+ * Whether an `//#evalBegin`/`//#evalEnd` frame is currently open. A `Sequence` (or a mixer
+ * bus) declared mid-evaluation — e.g. `var kick = audio(...)` on a later line of the SAME
+ * evaluated chunk — constructs its `AudioLine` AFTER `beginBatchAll()` already ran, so without
+ * this flag the new line would never see `inBatch = true` and would silently degenerate to
+ * "value-only update, position unchanged" for the rest of that evaluation — breaking position
+ * sensitivity (#649 §7.6, E2E-6) for every sequence declared and wired in one breath, which is
+ * the common case.
+ */
+let frameOpen = false
+
 /** One ordered audio line, including the evaluation-batch cursor rules. */
 export class AudioLine {
   private elements: LineElement[] = []
@@ -64,8 +86,42 @@ export class AudioLine {
   private firstInBatch = false
   private readonly ordinals = new Map<string, number>()
 
+  constructor() {
+    allLines.add(this)
+    // Join an already-open frame immediately — see `frameOpen`'s doc comment.
+    if (frameOpen) this.beginBatch()
+  }
+
+  /**
+   * Whether an `//#evalBegin`/`//#evalEnd` frame batch is currently open on this line.
+   * Used by `Sequence`/`MixerBusHandle` DSL methods (`output()`/`send()`/`gain()`/`pan()`) to
+   * decide whether to open their OWN one-call micro-batch: outside any frame (raw stdin, a
+   * programmatic call, most unit tests), each call should still get the position-sensitive
+   * batch rules (terminal replacement, default-strip insertion) rather than degenerating all
+   * the way down to rule 4's bare value-only update — but a call made INSIDE an already-open
+   * frame must NOT start a nested batch, which would reset the shared cursor mid-evaluation
+   * and break position sensitivity across statements (#611 §5.7, E2E-6).
+   */
+  isInBatch(): boolean {
+    return this.inBatch
+  }
+
+  /** #611 §5.7: `//#evalBegin` opens a batch on every live `AudioLine`. */
+  static beginBatchAll(): void {
+    frameOpen = true
+    for (const line of allLines) line.beginBatch()
+  }
+
+  /** #611 §5.7: `//#evalEnd` closes the batch on every live `AudioLine`. */
+  static endBatchAll(): void {
+    frameOpen = false
+    for (const line of allLines) line.endBatch()
+  }
+
   beginBatch(): void {
-    // Beginning another batch implicitly closes the abandoned one.
+    // Beginning another batch implicitly closes the abandoned one (#611 §5.7 guard 1:
+    // a missing `//#evalEnd` — e.g. the host crashing mid-evaluation — must not leave
+    // `inBatch` stuck true forever; the next `//#evalBegin` self-heals it).
     this.endBatch()
     this.cursor = 0
     this.inBatch = true

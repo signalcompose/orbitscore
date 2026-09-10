@@ -1,13 +1,17 @@
 import type { AudioEngine } from '../../audio/types'
 import type { RackRecipe } from '../../signal-chain/rack'
 import { createStatePathFallback } from '../project-state-store'
-import {
-  AudioLine,
-  destKey,
-  toWire,
-  type LineElement,
-  type OutputDest,
-} from '../sequence/audio-line'
+import { AudioLine, toWire, type LineElement, type OutputDest } from '../sequence/audio-line'
+
+/** #611 §2.1/§2.3: same option shapes as `Sequence.output()`/`.send()` (kept local to avoid a
+ * circular import — `sequence.ts` already imports this module). */
+export interface MixerOutputOptions {
+  readonly thru?: boolean
+  readonly db?: number
+}
+export interface MixerSendOptions {
+  readonly enabled?: boolean
+}
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
@@ -43,45 +47,6 @@ export const MIXER_BUS_POOL_SIZE = 4
 export const MIXER_BUS_KINDS = ['sum', 'aux'] as const
 
 export type MixerKind = (typeof MIXER_BUS_KINDS)[number]
-
-type OutputElement = Extract<LineElement, { kind: 'output' }>
-
-function mixerRoutingOutput(line: AudioLine): OutputDest | undefined {
-  return line.outputs().find((element) => element.sugar === 'output')?.dest
-}
-
-function mixerRoutingSends(line: AudioLine): OutputElement[] {
-  return line.outputs().filter((element) => element.sugar === 'send')
-}
-
-function buildLegacyMixerLine(
-  output: OutputDest | undefined,
-  sends: readonly OutputElement[],
-): AudioLine {
-  const line = new AudioLine()
-  line.beginBatch()
-  line.upsert({ kind: 'rack' })
-  line.upsert({
-    kind: 'output',
-    dest: output ?? { kind: 'master' },
-    thru: sends.length > 0,
-    db: 0,
-    sugar: 'output',
-  })
-  sends.forEach((send, index) => line.upsert({ ...send, thru: index + 1 !== sends.length }))
-  line.endBatch()
-  return line
-}
-
-function toLegacyMixerWire(line: AudioLine) {
-  const program = line.program()
-  return toWire(program).map((wire, index) => {
-    const element = program[index]
-    return wire.op === 'output' && element.kind === 'output' && element.sugar === 'send'
-      ? { ...wire, gain: element.db }
-      : wire
-  })
-}
 
 /**
  * Round-trip converters for the prefixed receiver identity (`sum:<name>` /
@@ -125,8 +90,15 @@ export interface MixerBusHandle {
    * Open/close every catalog insert matching `name`. A bus has no no-argument instrument UI.
    */
   ui(name?: string, open?: boolean): Promise<MixerBusHandle>
-  routeOutput(output: string): Promise<MixerBusHandle>
-  routeSend(bus: string, amount: number): Promise<MixerBusHandle>
+  /** #611 §2.1/§3.6: same resolution/semantics as `Sequence.output()` (minus the LinkAudio
+   * fallback and the numeric render-bus branch, which are Sequence-only concepts). */
+  output(dest: string | OutputDest, opts?: MixerOutputOptions): Promise<MixerBusHandle>
+  /** #611 §2.3/§3.6: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })`. */
+  send(aux: string | OutputDest, db: number, opts?: MixerSendOptions): Promise<MixerBusHandle>
+  /** #611 §5.4: a fixed gain on this bus's own line (`BUS_DSL_METHODS`). */
+  gain(db: number): Promise<MixerBusHandle>
+  /** #611 §5.4: a fixed pan on this bus's own line (`BUS_DSL_METHODS`). */
+  pan(pan: number): Promise<MixerBusHandle>
 }
 
 /**
@@ -353,53 +325,73 @@ export class MixerManager {
         await this.pluginUiHandler(formatReceiverId(kind, name), catalogName, open)
         return this.makeHandle(kind, name, bus)
       },
-      routeOutput: async (output: string) => {
-        await this.route(bus, output, undefined)
+      output: async (dest: string | OutputDest, opts: MixerOutputOptions = {}) => {
+        await this.applyLineElement(bus, {
+          kind: 'output',
+          dest: this.resolveDest(dest),
+          thru: opts.thru ?? false,
+          db: opts.db ?? 0,
+          sugar: 'output',
+        })
         return this.makeHandle(kind, name, bus)
       },
-      routeSend: async (target: string, amount: number) => {
-        await this.route(bus, undefined, { bus: target, amount })
+      send: async (aux: string | OutputDest, db: number, opts: MixerSendOptions = {}) => {
+        await this.applyLineElement(bus, {
+          kind: 'output',
+          dest: this.resolveDest(aux),
+          thru: true,
+          db: opts.enabled === false ? -Infinity : db,
+          sugar: 'send',
+        })
+        return this.makeHandle(kind, name, bus)
+      },
+      gain: async (db: number) => {
+        await this.applyLineElement(bus, { kind: 'gain', db })
+        return this.makeHandle(kind, name, bus)
+      },
+      pan: async (pan: number) => {
+        await this.applyLineElement(bus, { kind: 'pan', pan })
         return this.makeHandle(kind, name, bus)
       },
     }
   }
 
-  private async route(
-    source: string,
-    output: string | undefined,
-    send: { bus: string; amount: number } | undefined,
-  ): Promise<void> {
+  /** §2.1/§3.3 resolution (minus the LinkAudio/render-bus branches, which do not apply to a
+   * bus-to-bus route): an already-resolved `OutputDest`, the `"master"` reserved word, a
+   * declared sum/aux bus name, or an `"L,R"` physical-channel-pair shorthand. */
+  private resolveDest(value: string | OutputDest): OutputDest {
+    if (typeof value === 'object') return value
+    if (value === 'master') return { kind: 'master' }
+    const node = this.resolveNode(value)
+    if (node) return { kind: 'bus', bus: node.bus }
+    const pairMatch = value.match(/^(\d+)\s*,\s*(\d+)$/)
+    if (pairMatch) {
+      return { kind: 'device', channels: [Number(pairMatch[1]), Number(pairMatch[2])] }
+    }
+    throw new Error(
+      `Mixer bus routing target "${value}" is not "master", a declared sum/aux bus, or an ` +
+        `"L,R" channel-pair shorthand.`,
+    )
+  }
+
+  /**
+   * Write one line element for `bus` and push the updated program (#611 §5.3-style: the
+   * declared line is TS-side truth — a rejected push is NOT rolled back here, matching
+   * `Sequence`'s self-heal discipline (the next routing call resends the full program).
+   * Self-wraps in a one-call batch when no `//#evalBegin` frame is already open — see
+   * `Sequence.upsertLine()`'s doc comment for why (same reasoning, same #611 §5.7 rule).
+   */
+  private async applyLineElement(bus: string, element: LineElement): Promise<void> {
     if (!this.audioEngine.setBusLine) {
       throw new Error('Mixer bus routing requires the Rust engine backend.')
     }
-    const current = this.lines.get(source) ?? new AudioLine()
-    // Build the next state without touching the stored one, and commit only after
-    // the daemon accepts it. Merging happens on every call, so a rejected push that
-    // had already been recorded would leave every later call building on a routing
-    // the daemon never applied.
-    const nextOutput =
-      output === undefined
-        ? mixerRoutingOutput(current)
-        : output === 'master'
-          ? { kind: 'master' as const }
-          : { kind: 'bus' as const, bus: output }
-    const sends = mixerRoutingSends(current)
-    if (send !== undefined) {
-      const index = sends.findIndex((entry) => destKey(entry.dest) === `bus:${send.bus}`)
-      const entry: OutputElement = {
-        kind: 'output',
-        dest: { kind: 'bus', bus: send.bus },
-        thru: false,
-        // B1 keeps the public linear amount. `toLegacyMixerWire` passes it through unchanged.
-        db: send.amount,
-        sugar: 'send',
-      }
-      if (index >= 0) sends[index] = entry
-      else sends.push(entry)
-    }
-    const next = buildLegacyMixerLine(nextOutput, sends)
-    await this.audioEngine.setBusLine(source, toLegacyMixerWire(next))
-    this.lines.set(source, next)
+    const line = this.lines.get(bus) ?? new AudioLine()
+    const selfBatch = !line.isInBatch()
+    if (selfBatch) line.beginBatch()
+    line.upsert(element)
+    if (selfBatch) line.endBatch()
+    this.lines.set(bus, line)
+    await this.audioEngine.setBusLine(bus, toWire(line.program()))
   }
 
   private async effectFor(

@@ -761,7 +761,7 @@ export function filterCatalogEntries(
 促す案内を出します（`pluginCatalogHintShown` フラグで nag を防いでいます）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3859-3869
+// packages/vscode-extension/src/extension.ts:3865-3875
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -861,7 +861,7 @@ export function analyzeUnknownPluginNames(
 証拠にならないからです。そして重大度は Error でなく **Warning** です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4239-4255
+// packages/vscode-extension/src/extension.ts:4245-4261
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //
@@ -1008,7 +1008,7 @@ project.yaml 配下へ保存してから差し替え要求を出します。spec
 代わりに VST3 側に +7 半音の state を持たせ、周波数で識別します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4035-4043
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4048-4056
       const e4Hz = estimateFundamentalHz(capture, segments.e4!)
       const e5Hz = estimateFundamentalHz(capture, segments.e5!)
       expect(e1Hz, 'E1 CLAP baseline needs a measurable fundamental').toBeDefined()
@@ -1238,7 +1238,7 @@ R-E1〜R-E7 は同一 WAV 内に `dry → A → B → 失敗 → 復旧 B → �
 削除は `effect([])` です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4342-4348
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4355-4361
         // 空のラックを適用するのが「外す」の表現になった。
         const removeA = await activeClient.call('evaluate_orbitscore', {
           code: 'fx625.effect([])',
@@ -1256,7 +1256,7 @@ R-E1〜R-E7 は同一 WAV 内に `dry → A → B → 失敗 → 復旧 B → �
 実機証明になります。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4200-4213
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4213-4226
         // ここは「旧 child が消えた」を待っていた。#628 のラック化では **1 child が
         // チェーン全体を持つ**ため、差し替えは同じ child の中で prepare-commit される。
         // **PID が変わらないことこそが「respawn していない = dry 窓が消えた」の実機証明**で、
@@ -1277,7 +1277,7 @@ R-E3（存在しないパスへの差し替え）は、#625 では「dry であ�
 いました。#628 で prepare-commit になってからは、**失敗しても B のまま鳴り続ける**ことを音で pin します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:4555-4570
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:4568-4583
 
       // 🔴 R-E3: #628 で**期待が反転した**。失敗後は **B のまま鳴り続ける**。
       //

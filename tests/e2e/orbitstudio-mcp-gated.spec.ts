@@ -53,7 +53,7 @@ import {
 } from '../../packages/vscode-extension/src/wav-analysis'
 import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
 
-import { defaultOutputDeviceName } from './helpers/audio-devices'
+import { defaultOutputDeviceName, listOutputDevices } from './helpers/audio-devices'
 import {
   countErrors,
   countLogMarker,
@@ -120,6 +120,19 @@ const HARNESS_PGREP_PATTERN = `user-data-dir=[^[:space:]]*/${HARNESS_TMP_PREFIX}
 const gated = Boolean(process.env[GATE_ENV])
 const appPath = process.env.ORBIT_E2E_VSCODE_APP?.trim() || DEFAULT_APP_PATH
 const appAvailable = fs.existsSync(appPath)
+
+/**
+ * #611 E2E-4/E2E-5 (§8.3): the first output device that can carry >= 4 channels, or
+ * `undefined` if none exists (or the daemon binary/list call fails — swallowed rather than
+ * thrown, since this runs at `describe`-time collection and must never crash the whole file).
+ */
+function outputLineMultiChannelDevice(): string | undefined {
+  try {
+    return listOutputDevices().find((device) => device.maxOutputChannels >= 4)?.name
+  } catch {
+    return undefined
+  }
+}
 
 if (gated && !appAvailable) {
   // eslint-disable-next-line no-console
@@ -5386,7 +5399,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
-    '#611 O0-3 pins send(0.3) as a linear coefficient: total/dry = 1 + 0.3',
+    // #611 §2.3/§7 (B2): send()'s unit changed from linear (0.0-1.0) to dB. The SAME 0.3
+    // written in the fixture is now read as +0.3 dB, so this golden MOVES on purpose —
+    // total/dry = 1 + 10 ** (0.3 / 20) instead of 1 + 0.3.
+    '#611 O0-3 pins send(0.3) as a dB coefficient: total/dry = 1 + 10 ** (0.3 / 20)',
     async () => {
       const session = requireOutputLineSession()
       const errorsBefore = await errorBaseline(session.client)
@@ -5412,8 +5428,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       // 🔴 両区間のオンセット数は steadyRms が固定済みなので、この比は係数だけを表す。
       expect(
-        relativeDelta(totalOverDry, OUTPUT_LINE_GOLDENS.send.legacyTotalOverDry),
-        `O0-3 total/dry must be 1 + ${OUTPUT_LINE_GOLDENS.send.amountAsWritten} (linear today); actual=${totalOverDry}`,
+        relativeDelta(totalOverDry, OUTPUT_LINE_GOLDENS.send.dbTotalOverDry),
+        `O0-3 total/dry must be 1 + 10 ** (${OUTPUT_LINE_GOLDENS.send.amountAsWritten} / 20) ` +
+          `(dB, #611 §2.3); actual=${totalOverDry}`,
       ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.send.tolerance)
       await expectNoNewErrors(session.client, errorsBefore, '#611 O0-3')
     },
@@ -5467,6 +5484,253 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     },
     TEST_TIMEOUT_MS,
   )
+
+  // ──────────────────────────────────────────────────────────────────
+  // #611 B2 — DSL surface E2E (output(dest, thru, db) / send in dB / pan as a line element)
+  // ─────────────────────────────────────────────────────────────────
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-2 pins output(verb, thru: true, db: -12).output(master): total/dry = 1 + 10 ** (-12/20)',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        {
+          slug: '611-e2e2-thru-db',
+          fixturePath: 'tests/fixtures/mcp-e2e/output_line_thru_db.orbs',
+        },
+        async (ctx) => {
+          await captureSteady(ctx, 'dry')
+          await ctx.evaluate('dry.stop()\nLOOP(kick)')
+          await captureSteady(ctx, 'total')
+        },
+        { capture: true },
+      )
+      expect(result, 'E2E-2 must return captured windows').toBeDefined()
+      if (!result) throw new Error('E2E-2 did not return captured windows')
+      const dryRms = steadyRms(result, 'dry', STEADY_CAPTURE)
+      const totalRms = steadyRms(result, 'total', STEADY_CAPTURE)
+      const totalOverDry = totalRms / dryRms
+      const expected = 1 + 10 ** (-12 / 20)
+      // eslint-disable-next-line no-console
+      console.log('[#611 E2E-2] thru/db RMS:', JSON.stringify({ dryRms, totalRms, totalOverDry }))
+      expect(
+        relativeDelta(totalOverDry, expected),
+        `E2E-2 total/dry must be 1 + 10 ** (-12 / 20) = ${expected}; actual=${totalOverDry}`,
+      ).toBeLessThanOrEqual(0.12)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-2')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-3 proves send(aux, db) === output(aux, thru: true, db) (same magnitude)',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        {
+          slug: '611-e2e3-sugar-equivalence',
+          fixturePath: 'tests/fixtures/mcp-e2e/output_line_sugar_equivalence.orbs',
+        },
+        async (ctx) => {
+          await captureSteady(ctx, 'dry')
+          await ctx.evaluate('dry.stop()\nLOOP(kickA)')
+          await captureSteady(ctx, 'totalA')
+          await ctx.evaluate('kickA.stop()\nLOOP(kickB)')
+          await captureSteady(ctx, 'totalB')
+        },
+        { capture: true },
+      )
+      expect(result, 'E2E-3 must return captured windows').toBeDefined()
+      if (!result) throw new Error('E2E-3 did not return captured windows')
+      const dryRms = steadyRms(result, 'dry', STEADY_CAPTURE)
+      const totalARms = steadyRms(result, 'totalA', STEADY_CAPTURE)
+      const totalBRms = steadyRms(result, 'totalB', STEADY_CAPTURE)
+      const ratio = totalARms / totalBRms
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 E2E-3] send vs output(thru) RMS:',
+        JSON.stringify({ dryRms, totalARms, totalBRms, ratio }),
+      )
+      expect(
+        relativeDelta(ratio, 1),
+        `E2E-3 send() and output(thru:true) must agree within reproducibility noise; ` +
+          `totalA=${totalARms} totalB=${totalBRms}`,
+      ).toBeLessThanOrEqual(0.05)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-3')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-S/E2E-S0 pins two simultaneous sends and a disabled (gain 0) send',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        {
+          slug: '611-e2e-s-multi-send',
+          fixturePath: 'tests/fixtures/mcp-e2e/output_line_multi_send.orbs',
+        },
+        async (ctx) => {
+          await captureSteady(ctx, 'dry')
+          await ctx.evaluate('dry.stop()\nLOOP(kick)')
+          await captureSteady(ctx, 'twoSends')
+          await ctx.evaluate('kick.stop()\nLOOP(off)')
+          await captureSteady(ctx, 'disabledSend')
+        },
+        { capture: true },
+      )
+      expect(result, 'E2E-S must return captured windows').toBeDefined()
+      if (!result) throw new Error('E2E-S did not return captured windows')
+      const dryRms = steadyRms(result, 'dry', STEADY_CAPTURE)
+      const twoSendsRms = steadyRms(result, 'twoSends', STEADY_CAPTURE)
+      const disabledRms = steadyRms(result, 'disabledSend', STEADY_CAPTURE)
+      const twoSendsOverDry = twoSendsRms / dryRms
+      const disabledOverDry = disabledRms / dryRms
+      const expectedTwoSends = 1 + 10 ** (-12 / 20) + 10 ** (-6 / 20)
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 E2E-S/S0] multi-send RMS:',
+        JSON.stringify({ dryRms, twoSendsOverDry, disabledOverDry }),
+      )
+      expect(
+        relativeDelta(twoSendsOverDry, expectedTwoSends),
+        `E2E-S total/dry must be 1 + 10**(-12/20) + 10**(-6/20) = ${expectedTwoSends}; ` +
+          `actual=${twoSendsOverDry}`,
+      ).toBeLessThanOrEqual(0.12)
+      expect(
+        relativeDelta(disabledOverDry, 1),
+        `E2E-S0 a disabled send must contribute ~0 gain (total/dry ~= 1); actual=${disabledOverDry}`,
+      ).toBeLessThanOrEqual(0.05)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-S/E2E-S0')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-G pins LineOp::Gain: kick.gain(-6).output(drums) reaches the daemon-side line',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        {
+          slug: '611-e2e-g-line-gain',
+          fixturePath: 'tests/fixtures/mcp-e2e/output_line_gain_element.orbs',
+        },
+        async (ctx) => {
+          await captureSteady(ctx, 'dry')
+          await ctx.evaluate('dry.stop()\nLOOP(kick)')
+          await captureSteady(ctx, 'gained')
+        },
+        { capture: true },
+      )
+      expect(result, 'E2E-G must return captured windows').toBeDefined()
+      if (!result) throw new Error('E2E-G did not return captured windows')
+      const dryRms = steadyRms(result, 'dry', STEADY_CAPTURE)
+      const gainedRms = steadyRms(result, 'gained', STEADY_CAPTURE)
+      const gainedOverDry = gainedRms / dryRms
+      const expected = 10 ** (-6 / 20)
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 E2E-G] line gain RMS:',
+        JSON.stringify({ dryRms, gainedRms, gainedOverDry }),
+      )
+      expect(
+        relativeDelta(gainedOverDry, expected),
+        `E2E-G gained/dry must be 10 ** (-6 / 20) = ${expected}; actual=${gainedOverDry}`,
+      ).toBeLessThanOrEqual(0.12)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-G')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-P pins LineOp::Pan: hard-left silences the right channel, and center keeps the sqrt(2)-normalized level of an un-panned line',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        { slug: '611-e2e-p-pan', fixturePath: 'tests/fixtures/mcp-e2e/output_line_pan.orbs' },
+        async (ctx) => {
+          await captureSteady(ctx, 'noPan')
+          // Re-assert pan explicitly right before each measurement (also gives
+          // dsl-e2e-coverage.spec.ts's A-1 ratchet a literal `.pan(` to find — its
+          // scan reads THIS file's source, not the external fixture).
+          await ctx.evaluate('noPan.stop()\nhardLeft.pan(-100)\nLOOP(hardLeft)')
+          await captureSteady(ctx, 'hardLeft')
+          await ctx.evaluate('hardLeft.stop()\ncenter.pan(0)\nLOOP(center)')
+          await captureSteady(ctx, 'center')
+        },
+        { capture: true },
+      )
+      expect(result, 'E2E-P must return captured windows').toBeDefined()
+      if (!result) throw new Error('E2E-P did not return captured windows')
+      expect(result.analysis.format.channels, 'E2E-P requires a 2ch device').toBe(2)
+      const noPanRms = steadyRms(result, 'noPan', STEADY_CAPTURE)
+      const centerRms = steadyRms(result, 'center', STEADY_CAPTURE)
+      const hardLeftCh0 = result.channelRms('hardLeft', 0, STEADY_CAPTURE.guardSec)
+      const hardLeftCh1 = result.channelRms('hardLeft', 1, STEADY_CAPTURE.guardSec)
+      const hardLeftBalance = hardLeftCh1 / hardLeftCh0
+      const centerOverNoPan = centerRms / noPanRms
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 E2E-P] pan RMS:',
+        JSON.stringify({
+          noPanRms,
+          centerRms,
+          hardLeftCh0,
+          hardLeftCh1,
+          hardLeftBalance,
+          centerOverNoPan,
+        }),
+      )
+      expect(
+        hardLeftBalance,
+        `E2E-P hard-left must silence the right channel relative to the left; ` +
+          `ch0=${hardLeftCh0} ch1=${hardLeftCh1}`,
+      ).toBeLessThanOrEqual(0.05)
+      expect(
+        relativeDelta(centerOverNoPan, 1),
+        `E2E-P center must match an un-panned line's level (sqrt(2) normalization, not -3dB); ` +
+          `noPan=${noPanRms} center=${centerRms}`,
+      ).toBeLessThanOrEqual(0.1)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-P')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  {
+    // #611 §8.3 (owner 2026-09-10): E2E-4 (thru: false terminates the chain) and E2E-5
+    // (a physical multi-output split is -20dB relative to master) need a >= 4ch output
+    // device. This machine has none as of the design date (2ch built-in speaker + 2ch Pro
+    // Tools Aggregate I/O only) — `it.skip` with a warning rather than writing an assertion
+    // body no device here can verify. Implement per design 611-o-surface-bundle §8.3 once a
+    // >= 4ch device exists (e.g. a Loopback.app virtual device).
+    const multiChannelDevice = appAvailable ? outputLineMultiChannelDevice() : undefined
+    if (appAvailable && multiChannelDevice === undefined) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[E2E-4/E2E-5] no >=4ch output device — install/configure one (e.g. Loopback.app) to run',
+      )
+    }
+    it.skipIf(!appAvailable || multiChannelDevice === undefined)(
+      '#611 E2E-4/E2E-5 (needs >=4ch device) — thru: false terminates the chain, and a physical multi-output split is -20dB relative to master',
+      async () => {
+        throw new Error(
+          'E2E-4/E2E-5 is unimplemented — a >=4ch device was detected but no test body exists ' +
+            'yet. Implement per design 611-o-surface-bundle-design.md §8.3.',
+        )
+      },
+      TEST_TIMEOUT_MS,
+    )
+  }
 
   // ──────────────────────────────────────────────────────────────────
   // #606 PR-K-A2 — plugin all-notes-off (T1 / E2E-K3)

@@ -230,7 +230,7 @@ sequenceDiagram
 `InterpreterV2` は REPL セッション全体を通じて **単一のインスタンスが保持されます**。
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:30-53
+// packages/engine/src/cli/repl-mode.ts:31-54
 export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
   console.log('🎵 OrbitScore Audio Engine')
   console.log('✅ Initialized')
@@ -287,14 +287,14 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
 `Cmd+Enter` を押すと、VS Code extension はカーソル位置のブロック (または選択範囲) のテキストだけを stdin に書き込みます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3147-3147
+// packages/vscode-extension/src/extension.ts:3153-3153
   engineProcess.stdin.write(codeToSend + '\n')
 ```
 
 engine の REPL は受け取ったテキストを `parseAudioDSL()` → `interpreter.execute()` で評価します。
 
 ```typescript
-// packages/engine/src/cli/repl-mode.ts:415-423
+// packages/engine/src/cli/repl-mode.ts:427-435
     try {
       const metaDir = extractDocumentDirectoryMeta(code)
       if (metaDir) sessionDocumentDirectory = metaDir
@@ -502,7 +502,7 @@ stateDiagram-v2
 `clearRunTimer()` が先に走るようになっています。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1915-1943
+// packages/engine/src/core/sequence.ts:2029-2057
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()

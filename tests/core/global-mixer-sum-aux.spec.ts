@@ -196,12 +196,11 @@ describe('Global.sum() / Global.aux()', () => {
     expect(() => global.aux('master')).toThrow(/master.*reserved|reserved.*master/i)
   })
 
-  it('commits routing state only after the daemon accepts it, so a rejected call is not merged into a later one (#523 CRITICAL 5)', async () => {
-    // MixerManager.route() builds `next` from the last COMMITTED routing and
-    // only calls `this.lines.set(source, next)` after `setBusLine`
-    // resolves. If that commit ever moved before the `await`, a rejected send
-    // would still be recorded, and the next (unrelated) call on the same
-    // source would silently resend it merged into its own payload.
+  it("re-sends the full declared line (including a previously rejected element) on the next call — self-heal discipline (#611 §5.3-style, supersedes #523 CRITICAL 5's rollback)", async () => {
+    // #611: `MixerBusHandle.output()`/`.send()` treat the declared line as TS-side truth and
+    // do NOT roll it back on a rejected push (matching `Sequence`'s self-heal discipline —
+    // see `applyLineElement`'s doc comment). So a rejected send is NOT silently dropped: the
+    // next call resends the FULL current line, including that earlier (failed) element.
     const setBusLine = vi
       .fn()
       .mockRejectedValueOnce(new Error('daemon rejected'))
@@ -210,12 +209,20 @@ describe('Global.sum() / Global.aux()', () => {
     const global = new Global(engine)
     const handle = global.sum('drum')
 
-    await expect(handle.routeSend('aux-bus-0', 0.5)).rejects.toThrow('daemon rejected')
+    await expect(handle.send({ kind: 'bus', bus: 'aux-bus-0' }, 0.5)).rejects.toThrow(
+      'daemon rejected',
+    )
 
-    await handle.routeOutput('master')
+    await handle.output('master')
 
     expect(setBusLine).toHaveBeenNthCalledWith(2, 'sum-bus-0', [
       { op: 'rack' },
+      {
+        op: 'output',
+        dest: { kind: 'bus', name: 'aux-bus-0' },
+        thru: true,
+        gain: 10 ** (0.5 / 20),
+      },
       { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
     ])
   })

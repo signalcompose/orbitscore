@@ -169,10 +169,13 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
     seq.output('drum') // fails (transient)
     seq.send('rev', 0.3) // full-state re-send carries the sum output too
     await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(2))
+    // #611 §2.3/§5.1: send() is always thru: true by definition and inserts BEFORE the
+    // existing thru: false terminal (default-strip rank), not after it — 0.3 is now read as
+    // dB, not linear (10 ** (0.3 / 20) ≈ 1.0351).
     expect(setBusLine).toHaveBeenLastCalledWith('seq-bus-0', [
       rack,
-      busOutput('sum-bus-0', true),
-      busOutput('aux-bus-0', false, 0.3),
+      busOutput('aux-bus-0', true, 10 ** (0.3 / 20)),
+      busOutput('sum-bus-0', false),
     ])
   })
 
@@ -210,10 +213,12 @@ describe('Sequence.send() → aux bus routing (MX.3/MX.4)', () => {
     seq.send('rev', 0.3)
     await vi.waitFor(() => expect(setBusLine).toHaveBeenCalled())
     expect(seq.getInsertBus()).toBe('seq-bus-0')
+    // #611 §2.3: send() ≡ output(aux, thru: true, db) — 0.3 is dB now, not linear
+    // (10 ** (0.3 / 20) ≈ 1.0351), and the implicit master terminal follows it (§2.1).
     expect(setBusLine).toHaveBeenCalledWith('seq-bus-0', [
       rack,
-      masterOutput(true),
-      busOutput('aux-bus-0', false, 0.3),
+      busOutput('aux-bus-0', true, 10 ** (0.3 / 20)),
+      masterOutput(false),
     ])
   })
 
@@ -224,11 +229,13 @@ describe('Sequence.send() → aux bus routing (MX.3/MX.4)', () => {
     seq.send('rev', 0.3)
     seq.send('delay', 0.5)
     await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(2))
+    // #611 §2.3/§5.1: both sends are thru: true by definition (declaration order, not a
+    // sends.length-dependent formula) and the implicit master terminal follows both.
     expect(setBusLine).toHaveBeenLastCalledWith('seq-bus-0', [
       rack,
-      masterOutput(true),
-      busOutput('aux-bus-0', true, 0.3),
-      busOutput('aux-bus-1', false, 0.5),
+      busOutput('aux-bus-0', true, 10 ** (0.3 / 20)),
+      busOutput('aux-bus-1', true, 10 ** (0.5 / 20)),
+      masterOutput(false),
     ])
   })
 
@@ -239,16 +246,18 @@ describe('Sequence.send() → aux bus routing (MX.3/MX.4)', () => {
     seq.output('drum')
     seq.send('rev', 0.3)
     await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(2))
+    // #611 §5.1: send() inserts BEFORE the existing thru: false terminal (default-strip
+    // rank), not after it; 0.3 is dB now, not linear.
     expect(setBusLine).toHaveBeenLastCalledWith('seq-bus-0', [
       rack,
-      busOutput('sum-bus-0', true),
-      busOutput('aux-bus-0', false, 0.3),
+      busOutput('aux-bus-0', true, 10 ** (0.3 / 20)),
+      busOutput('sum-bus-0', false),
     ])
   })
 
   it('rejects send() to an undeclared aux bus', () => {
     const { seq } = harness()
-    expect(() => seq.send('nope', 0.5)).toThrow('undeclared aux bus')
+    expect(() => seq.send('nope', 0.5)).toThrow('undeclared aux/sum bus')
   })
 
   it('rejects non-finite gain', () => {
@@ -296,7 +305,7 @@ describe('signal-chain routing sugar mirrors the direct methods (#643)', () => {
     await seq.instrument('synth.clap')
     setSourceRouting.mockClear()
 
-    await seq.routeOutputFromDsl('strings')
+    await seq.routeOutputFromDsl({ kind: 'bus', bus: 'sum-bus-0' })
 
     expect(setSourceRouting).toHaveBeenCalledTimes(1)
     expect(setSourceRouting.mock.calls[0][1]).toBe(0)
@@ -308,7 +317,7 @@ describe('signal-chain routing sugar mirrors the direct methods (#643)', () => {
     await seq.instrument('synth.clap')
     setSourceRouting.mockClear()
 
-    await seq.routeSendFromDsl('rev', 0.3)
+    await seq.routeSendFromDsl({ kind: 'bus', bus: 'aux-bus-0' }, 0.3)
 
     expect(setSourceRouting).toHaveBeenCalledTimes(1)
     expect(setSourceRouting.mock.calls[0][1]).toBe(0)
@@ -320,8 +329,12 @@ describe('signal-chain routing sugar mirrors the direct methods (#643)', () => {
     global.aux('rev')
     seq.midi('IAC Bus 1', 1)
 
-    await expect(seq.routeOutputFromDsl('strings')).rejects.toThrow('cannot target a MIDI sequence')
-    await expect(seq.routeSendFromDsl('rev', 0.3)).rejects.toThrow('cannot target a MIDI sequence')
+    await expect(seq.routeOutputFromDsl({ kind: 'bus', bus: 'sum-bus-0' })).rejects.toThrow(
+      'cannot target a MIDI sequence',
+    )
+    await expect(seq.routeSendFromDsl({ kind: 'bus', bus: 'aux-bus-0' }, 0.3)).rejects.toThrow(
+      'cannot target a MIDI sequence',
+    )
   })
 })
 
