@@ -388,24 +388,51 @@ async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
 export type WireDest =
   | { kind: 'master' }
   | { kind: 'bus'; name: string }
-  | { kind: 'device'; channels: [number, number] }   // 1 始まり
+  | { kind: 'device'; channels: [number, number] | [number] }  // 1 始まり。長さ 1 = mono（L+R マージ・Q-611-5）
   | { kind: 'render'; id: string }                    // 598 設計 §4
   | { kind: 'link'; channel: string }
 export type WireLineOp =
   | { op: 'rack' }
   | { op: 'gain'; gain: number }                      // 線形・有限・>= 0
+  | { op: 'pan'; pan: number }                        // -1..1（等パワー・Q-611-4）。🔴 実装は PR-O4
   | { op: 'output'; dest: WireDest; thru: boolean; gain: number }
 ```
+
+> 🔴 **`pan` op と mono `device` は PR-O4（束 O-surface）で実装する**（2026-09-09 に main が発見・
+> owner が 2026-09-10 に裁定。PR #824 のレビューで Fable が指摘）。
+>
+> **本節はそれまで 09-03 の裁定に追従していなかった。** §2.2（`mix.output(3)` = L+R マージ・Q-611-5）・
+> §2.4b（`pan` はライン要素・Q-611-4）・§2.x の TS 型（`:162` `:179`）・§5.1 の Rust 型
+> （`Device { right: Option<usize> }` / `LineOp::Pan`）・§5.3 の RT 式はすべて裁定を反映済みだったが、
+> **その間にある本節（wire）だけが取り残されていた**。PR-O3b（#824）の実装は本節に忠実だったので
+> **実装の欠陥ではない** — 正本が古いと、忠実さがそのまま欠落になる。
+>
+> **なぜ O3b ではなく O4 か**（2 件でコストが違うため分けて判断した）:
+>
+> | | mono `device` | `pan` op |
+> |---|---|---|
+> | RT の実装 | ✅ **既にある**（`add_to_device` が `right: None` で L+R を 0.5 マージ）| ❌ **無い**（`validate_line_program` が拒否し、実行側も空）|
+> | 必要な作業 | wire の型と parse | wire + **RT 実行**（等パワー）|
+>
+> `pan` は RT 実装を伴うので、O3b に入れると**「振る舞いを変えない」という束の性格が壊れ、
+> goldens の「動かないこと」という検算が使えなくなる**（O3 を O3a / O3b に割ったのはこの検算を
+> 守るためだった）。mono だけ先に足すと **wire を 2 回変える**ことになり、一方通行の変更回数が増える。
+> したがって**両方を O4 で 1 回にまとめる**。
+>
+> ⚠️ 計画 §2.1 の「1 PR で wire と DSL の両方を変えると golden の差分がどちら由来か分からない」に
+> 抵触するが、**`pan` については §2.4b が既に「`pan` を含む譜面の golden は再ベースライン」と
+> 裁定済み**（owner 受け入れ済み）なので、帰属問題はその範囲で扱える。
 
 **検証（daemon・`session.rs` に `parse_set_bus_line_params` を新設・`:203-238` と同型）**:
 
 | 規則 | エラー code |
 |---|---|
 | `bus` は非空文字列 / `"master"` | `MALFORMED_REQUEST` |
-| `line` は配列・各 `op` は 3 種のどれか・`gain` は有限かつ `>= 0` | `MALFORMED_REQUEST` |
+| `line` は配列・各 `op` は 4 種のどれか・`gain` は有限かつ `>= 0` | `MALFORMED_REQUEST` |
 | `rack` は高々 1 回 | `MALFORMED_REQUEST` |
+| **`pan` は有限かつ `-1 <= pan <= 1`**（🔴 **PR-O4**）| `PARAM_OUT_OF_RANGE` |
 | `dest.bus` は既知・**`bus` より後ろの index**（forward-only・MX.4）。kind（sum/aux）は**問わない**（裁定 ③）| `OUTPROC_EFFECT`（既存 `WrapError::OutProcEffect` 経由）|
-| `dest.device` は `1 <= a,b <= output_channels` かつ `a != b` | `PARAM_OUT_OF_RANGE` |
+| `dest.device` は `channels` が **1 要素（mono）または 2 要素**。各値は `1 <= n <= output_channels`。2 要素なら `a != b`（🔴 **1 要素は PR-O4**）| `PARAM_OUT_OF_RANGE` |
 | `dest.render` は登録済み id（598 設計）| `MALFORMED_REQUEST` |
 | `dest.link` は `link-audio` feature 時のみ・登録済み channel | `LINK_AUDIO_UNAVAILABLE` / `MALFORMED_REQUEST` |
 | `bus == "master"` の `line` に `dest.master` / `dest.bus` は不可（自己参照） | `MALFORMED_REQUEST` |
@@ -416,6 +443,22 @@ export type WireLineOp =
 **残す**が意味を変えない形で master line に写す: 受理時に master line の `gain` op を差し替えて再インストール（`ramp_sec` は ramp 長）。
 TS は `global.gain()` を `SetBusLine("master", …)` に切り替えるので、production の呼び出し元はゼロになる（`rust-engine-player.ts:1247-1258` / `:1027`）。
 core の `Engine::set_global_gain`（`engine.rs:143-152`）は **production では呼ばない**（§5.5）。
+
+> 🔴 **この写しを入れるのは PR-O4 と同時**（2026-09-09 に main が裁定・PR #824 のレビューで判明）。
+>
+> **PR-O3b で写してはいけない。** 理由は上の「**意味を変えない形で**」を満たせないから:
+> O3b の時点で TS はまだ `global.gain()` を `SetGlobalGain` として送る（切り替えは O4）。
+> その状態で master line へ写すと、**`SetGlobalGain` のたびに `LineProgram::new` が走り、§5.1 の
+> 規則により `current_gain` が全 op で 1.0 から再開する**。`global.gain()` を **2 回以上**呼ぶと
+> （フェード・ライブコーディングでの調整など通常の操作）、直前の実効ゲインから目標へ滑らかに
+> 寄るのではなく**一度 unity へ跳ね上がってから寄る** — 可聴のポップになる。
+>
+> それ以前の `SetGlobalGain` は `gain_target` atomic を更新するだけで、`advance_gain` が
+> **呼び出しをまたいで `gain_current` を連続させていた**。写した瞬間にその連続性が失われるので、
+> これは新機能の不足ではなく**既存機能の回帰**である。
+>
+> したがって順序は: **O3b は `SetGlobalGain` を従来どおり atomic のみで扱う** →
+> O4 で TS を `SetBusLine` へ切り替えるのと**同時に**、§5.1 の引き継ぎ機構とセットで写す。
 
 ### 4.3 変わらないもの
 
@@ -463,6 +506,26 @@ pub struct LineSlot {
 `with_output_target` `:459` / `with_sends` `:465` / `with_routing_overrides` `:475` は `with_line(LineProgram)` に置き換える（呼び出し元は §7.3）。
 
 **上限を決めない**（owner）: `ops` は `Box<[_]>` なので出口の個数に定数上限は無い。RT 側の `ArrayVec` 容量（`MAX_INSERT_BUS_STAGES` `:347`）は stage 数の話で本書では変えない（撤廃は #663）。
+
+#### 🔴 再 publish 時の `current_gain` の初期値（2026-09-09 追記・本書に欠けていた規則）
+
+`LineProgram::new` は `current_gain` を **全 op で 1.0** から始める。これは「**まだ何も鳴っていない
+line を新しく作る**」ときの規則であって、**既に鳴っている line を差し替えるとき**の規則ではない。
+
+差し替えで 1.0 から再開すると、直前の実効ゲイン（例: −20 dB ≈ 0.1）から目標（例: −10 dB ≈ 0.316）へ
+寄る代わりに、**一度 unity へ跳ね上がってから寄る**。`ramp_frames` は 5 ms 相当なので、
+64 frame の小バッファでは数ブロックにわたって誤った軌跡を辿り、**可聴のポップ**になる。
+
+🔴 **したがって「実効値を引き継ぐ機構」が入るまで、再 publish を伴う操作を production 経路へ
+導入してはいけない**（§4.2 の `SetGlobalGain` がこれに該当し、PR-O4 まで写さないと決めた）。
+
+引き継ぎが今日できない理由は設計上の意図である: `LineControl` は `current_gain` を control 側へ
+**読み返させない**（RT 専有の `Cell` なので、control が読むと RT と競合する）。したがって機構は
+「control が読む」形では作れず、**install 時に RT 側が旧 program の値を引き継ぐ**形になる。
+具体案は PR-O4 の設計時に決める。
+
+**この節が無かったために PR-O3b で実際に回帰が入りかけた**（レビューで 2 つの独立した監査が
+同じ欠陥を指摘して止まった）。規則を先に書く。
 
 ### 5.2 master ライン（新設・`RenderState` `:1433-1442` に `master: MasterLine` を足す）
 

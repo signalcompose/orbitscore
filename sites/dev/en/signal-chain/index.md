@@ -719,7 +719,7 @@ export interface EffectChainApplyResult {
 The daemon client sends the JSON-RPC `ApplyEffectChain` with `role: 'effect'` and `save_dropped`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:548-555
+// packages/engine/src/audio/rust-engine/daemon-client.ts:560-567
   async applyEffectChain(request: EffectChainApplyRequest): Promise<EffectChainApplyResult> {
     const result = await this.request('ApplyEffectChain', {
       role: 'effect',
@@ -839,7 +839,7 @@ pub struct EffectChainPlan {
 the mode.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5614-5622
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6026-6034
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -852,7 +852,7 @@ the mode.
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5685-5707
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6097-6119
         let mut route = {
             let slot = lock_child_slot_recovering(&child_slot, "effect chain route inspection");
             let registry_is_intact = effect_chain_registry_is_intact(&slot, &stats);

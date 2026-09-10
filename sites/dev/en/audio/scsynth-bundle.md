@@ -321,7 +321,7 @@ Because there is no SC.app fallback, the situation of "appears to be working but
 As the leading comment of `scsynth-resolver.ts` says ("the pattern is borrowed from `resolveDaemonBinary()` in `daemon-client.ts`"), the Rust daemon has a resolver of the same shape. There are five candidates, and the daemon bundled in the `.vsix` (#306, `docs/archive/WORK_LOG_2026-07.md` §6.185) comes last.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:221-250 (extension-bundle 候補の説明コメントを省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:233-262 (extension-bundle 候補の説明コメントを省略)
 export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
   const searched: string[] = []
   const candidates: DaemonBinaryResolution[] = []

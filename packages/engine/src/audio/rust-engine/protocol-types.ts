@@ -30,6 +30,8 @@ export type CommandMethod =
   // sends(aux) を非 RT で書き換える。daemon が feature `outproc-effect` 無効ビルドなら
   // OUTPROC_EFFECT_UNAVAILABLE を返す。
   | 'SetBusRouting'
+  // 順序付き audio line の全置換（#611 §4.1）。旧 SetBusRouting の部分適用契約と分離する。
+  | 'SetBusLine'
   // premaster source の `(source, unit)` を named insert bus または master(null) へ向ける
   // 土台 routing（#643）。source は daemon が解釈しない opaque key。
   | 'SetSourceRouting'

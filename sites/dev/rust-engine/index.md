@@ -202,7 +202,7 @@ spawn します。#474 以降はもう 1 本、watchdog thread が broadcast す
 （`PluginUiClosed` 等）を session の writer queue へ橋渡しする task が増えています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:799-826
+// rust/crates/orbit-audio-daemon/src/session.rs:968-995
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -238,7 +238,7 @@ plugin note 系 method は `plugin_note_spec` という純関数を「唯一の�
 match に落とす設計です（2 箇所で同じ文字列集合を独立管理すると drift するという教訓が反映されています）。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1415-1442
+// rust/crates/orbit-audio-daemon/src/session.rs:1584-1611
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,
@@ -403,7 +403,7 @@ SIGABRT を見てしまう — そのため `write_line_best_effort` を使う�
 callback 側の状態を引き継ぐためです（`OutputStream::render_state` のコメント参照）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:778-784
+// rust/crates/orbit-audio-native/src/output.rs:831-837
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
@@ -414,7 +414,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1542-1579
+// rust/crates/orbit-audio-native/src/output.rs:1605-1642
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -469,7 +469,7 @@ fn render_shared_block(
 （デバイス配置の段が増えたぶん、2ch 以外では配置のコストが常に乗ります）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1627-1713
+// rust/crates/orbit-audio-native/src/output.rs:1690-1780
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -516,31 +516,35 @@ fn render_block_with_sources(
         device.wrote
     };
 
-    // master ライン（設計 §5.3）: ラック → gain（single 適用点・§5.4）。core の
-    // `global_gain` は production では 1.0 固定のまま呼ばれない（乗算経路はここ 1 本）。
-    if let Some(p) = master.post.as_mut() {
-        p.process(&mut master.buffer[..bs]);
-    }
-    let g = master.advance_gain(frames);
-    // g == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
-    // 「未使用 gain 経路に per-sample 乗算コストを払わない」ための最適化であり、O0 golden の
-    // bit 一致は乗算そのものではなく `gain_current` が初期値 1.0 のまま変化しないことに由来する
-    // （`SetGlobalGain` を一度も呼ばない譜面では target=current=1.0 が恒常的に成立する）。
-    if g != 1.0 {
-        for s in master.buffer[..bs].iter_mut() {
-            *s *= g;
+    if master.explicit_line.load(Ordering::Acquire) {
+        execute_master_line(master, frames, output_channels, hw);
+    } else {
+        // SetBusLine 未使用時は従来の固定 master 経路を保ち、既存出力を bit 単位で変えない。
+        // この分岐の中身は PR-O3b の前と 1 命令も変えていない（変えると O0 golden が動く）。
+        if let Some(p) = master.post.as_mut() {
+            p.process(&mut master.buffer[..bs]);
         }
+        let g = master.advance_gain(frames);
+        // g == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
+        // 「未使用 gain 経路に per-sample 乗算コストを払わない」ための最適化であり、O0 golden の
+        // bit 一致は乗算そのものではなく `gain_current` が初期値 1.0 のまま変化しないことに由来する
+        // （`SetGlobalGain` を一度も呼ばない譜面では target=current=1.0 が恒常的に成立する）。
+        if g != 1.0 {
+            for s in master.buffer[..bs].iter_mut() {
+                *s *= g;
+            }
+        }
+        // デバイス配置（設計 §5.3・row 6）: master.buffer（2ch）を hw（デバイス幅）の ch{0,1} へ置く。
+        // 2ch デバイスなら memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。3ch 以上は ch2 以降が
+        // 無音で残る — この分岐の Device 出口は master 固定 program の 1 本のみで、複数出口は
+        // `execute_master_line`（上の分岐）と PR-O4 以降の DSL 表面が持つ。
+        //
+        // 🔴 ここで `hw` を全域 zero-fill しない。`place_master_into_device` が **hw の全要素を
+        // 書き切る**ので、1ch / 2ch（＝今日検証されている構成すべて）では書いた直後に全部上書きされ、
+        // RT コールバックで**毎ブロック二重に store する**ことになる（64 frames × 2ch なら
+        // 約 96,000 store/秒の無駄）。余剰チャンネルの 0 埋めは配置関数の責務に閉じた。
+        place_master_into_device(&master.buffer[..bs], frames, output_channels, hw);
     }
-
-    // デバイス配置（設計 §5.3・row 6）: master.buffer（2ch）を hw（デバイス幅）の ch{0,1} へ置く。
-    // 2ch デバイスなら memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。3ch 以上は ch2 以降が
-    // 無音で残る — Device 出口はまだ master 固定 program の 1 本のみ（さらなる出口は PR-O3/O4）。
-    //
-    // 🔴 ここで `hw` を全域 zero-fill しない。`place_master_into_device` が **hw の全要素を
-    // 書き切る**ので、1ch / 2ch（＝今日検証されている構成すべて）では書いた直後に全部上書きされ、
-    // RT コールバックで**毎ブロック二重に store する**ことになる（64 frames × 2ch なら
-    // 約 96,000 store/秒の無駄）。余剰チャンネルの 0 埋めは配置関数の責務に閉じた。
-    place_master_into_device(&master.buffer[..bs], frames, output_channels, hw);
     if direct_device_written {
         add_scaled(hw, &master.direct_device_buffer[..hw.len()], 1.0);
     }
@@ -569,7 +573,7 @@ master.buffer は常に 2ch なので、デバイス幅のバッファをもう 
 というのがこのバッファの理由です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1926-1930
+// rust/crates/orbit-audio-native/src/output.rs:2054-2058
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -596,7 +600,7 @@ struct DeviceLineBuffer<'a> {
 その幅は名前付きの定数として公開されています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:683-689
+// rust/crates/orbit-audio-native/src/output.rs:692-698
 /// engine 内部のチャンネル幅。**デバイス幅とは無関係に常に 2**（設計 §5.5）。
 ///
 /// events / feeds / stages / master.buffer はすべてこの幅で扱い、デバイス幅への変換は
@@ -610,7 +614,7 @@ pub const ENGINE_CHANNELS: usize = 2;
 `master.buffer` をデバイス幅の `hw` へ写します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1723-1747
+// rust/crates/orbit-audio-native/src/output.rs:1851-1875
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -649,7 +653,7 @@ gain を 1 つの構造体にまとめ、**ラック → gain** の順を固定�
 atomic に書いた目標値へ、block ごとに寄せていく形です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:764-774
+// rust/crates/orbit-audio-native/src/output.rs:817-827
     /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
     /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
     /// 算術のみ（alloc/lock/syscall なし）。
@@ -670,15 +674,21 @@ atomic に書いた目標値へ、block ごとに寄せていく形です。
 ここで押さえておきたいのは、**production の乗算経路がこの 1 本になった**という点です。
 `orbit_audio_core::Engine::set_global_gain`（core の scheduler ramp）は daemon から呼ばれなくなり、
 `EngineWrap::set_global_gain` は `MasterLine` の目標値へ atomic store するだけになりました。
+🔴 **#611 PR-O3b は、ここを master line へ写しませんでした**（2026-09-09・レビューで裁定）。
+写すと `LineProgram::new` が ramp を毎回 unity から始めるため、`global.gain()` を 2 回以上呼ぶと
+**直前の実効ゲインから目標へ寄る代わりに一度 1.0 へ跳ね上がる** — 可聴のポップになります。
+設計 611 §4.2 の「**意味を変えない形で**写す」を満たせないので、写しは
+**TS が `global.gain()` を `SetBusLine("master", …)` へ切り替える PR-O4 と同時**に、
+§5.1 の「再 publish 時に実効値を引き継ぐ機構」とセットで入れます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8867-8876
-    /// マスターゲインを設定する。**production では単一の適用点（native master line・#649
-    /// PR-O2）へ atomic store するだけ**——`orbit_audio_core::Engine::set_global_gain`（core の
-    /// scheduler ramp）は production から呼ばない（`docs/design/611-output-line-design.md`
-    /// §5.4/§5.5 row 4・乗算経路を master line 1 本にする）。`ramp_sec` は wire 互換のため受け
-    /// 続けるが、native 側は構築時に確定した固定 ~5ms/block のランプ（`MasterLine::advance_gain`）
-    /// を使う（可変長ランプは持たない）。
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9479-9488
+    /// マスターゲインを設定する。PR-O3b では従来どおり atomic だけを更新し、RT 専有の
+    /// `gain_current` を呼び出し間で連続させる。master line への写しは、TS の
+    /// `global.gain()` を `SetBusLine("master", …)` へ切り替え、再 publish 時に実効値を引き継ぐ
+    /// PR-O4 と同時に入れる。`orbit_audio_core::Engine::set_global_gain`（core の scheduler ramp）は
+    /// production から呼ばない（`docs/design/611-output-line-design.md` §4.2/§5.1）。`ramp_sec` は
+    /// wire 互換のため受け続けるが、native 側は構築時に確定した固定 ~5ms/block のランプを使う。
     pub fn set_global_gain(&self, value: f32, _ramp_sec: f64) -> Result<(), WrapError> {
         self.master_gain.store(value.to_bits(), Ordering::Relaxed);
         Ok(())
@@ -694,7 +704,7 @@ engine render 部分の `render_engine_with_sources` は、instrument source（O
 4 通りに分かれます。source も active bus も無ければ、従来の `render_engine` に落ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1751-1792
+// rust/crates/orbit-audio-native/src/output.rs:1879-1920
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -745,7 +755,7 @@ fn render_engine_with_sources_impl(
 避けるため、scratch buffer は 1 秒分をあらかじめ確保しています）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2815-2832
+// rust/crates/orbit-audio-native/src/output.rs:2944-2961
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(
@@ -833,7 +843,7 @@ stream を drop しただけではコールバックが止まらないので、`
 `pause()` します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:668-674
+// rust/crates/orbit-audio-native/src/output.rs:677-683
 impl Drop for OutputStream {
     fn drop(&mut self) {
         // cpal 0.15.3 retains named CoreAudio streams through a reference cycle. Dropping the
@@ -905,7 +915,7 @@ ORBIT_CAPTURE_WAV=/tmp/orbit-capture-test.wav node cli-audio.js path/to/single-n
 - `rust/crates/orbit-audio-daemon/src/session.rs:691-718,1272-2372` — `session::run`（handshake・writer task・UI event 転送）と `handle_command` の match arm（コマンド表の出典）
 - `rust/crates/orbit-audio-native/src/output.rs:254-260,581-618,662-750,1513-1556` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
 - `rust/crates/orbit-audio-native/src/output.rs:682-688,700-754,1253-1277` — `ENGINE_CHANNELS` / `MasterLine`（ラック → gain）/ `place_master_into_device`（#649 PR-O2）
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:8867-8876` — `EngineWrap::set_global_gain`（master line への atomic store・`ramp_sec` は wire 互換のみ）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9479-9488` — `EngineWrap::set_global_gain`（PR-O3b では **atomic のみ**。master line への写しは PR-O4 と同時・`ramp_sec` は wire 互換のみ）
 - `rust/crates/orbit-audio-native/src/output.rs:1926-1930,1932-1985` — `DeviceLineBuffer` / `add_to_device`（直行デバイスライン・#611 PR-O3a）
 - PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — 束 O-wire（line program 化・互換維持）
 - [`docs/design/611-output-line-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/design/611-output-line-design.md) §5.2-5.5 — master ライン・内部幅 2ch・core master gain を production から外す設計正本
