@@ -417,7 +417,7 @@ place is the second half of `render_engine_with_insert_buses_and_source_outputs`
 `output.rs`, the so-called **post-loop**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2378-2404
+// rust/crates/orbit-audio-native/src/output.rs:2392-2418
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -517,7 +517,7 @@ before they reach RT.
 The execution of an output looks like this.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2421-2445
+// rust/crates/orbit-audio-native/src/output.rs:2435-2459
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
                         &mut first_output,
@@ -551,7 +551,7 @@ as an `Output`. `Render` / `Link` are still **rejected at install time** (`Pan` 
 it directly into RT. Details in the next heading).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1401-1413
+// rust/crates/orbit-audio-native/src/output.rs:1415-1427
     for op in &program.ops {
         match op {
             // These arms are availability gates, not permanent format restrictions. Remove the
@@ -580,7 +580,7 @@ both master-line execution (`execute_master_line`) and the post-loop with code t
 L/R.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2149-2168
+// rust/crates/orbit-audio-native/src/output.rs:2163-2182
 #[inline]
 fn apply_line_pan(buf: &mut [f32], frames: usize, pan: f32) {
     // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
@@ -624,7 +624,7 @@ devices are in place to preserve the semantics of the old API.
 The first is `effective_line_output_dest`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1443-1454
+// rust/crates/orbit-audio-native/src/output.rs:1457-1468
 fn effective_line_output_dest(
     first_output: &mut bool,
     legacy_target: Option<OutputDest>,
@@ -675,7 +675,7 @@ What is interesting here is that the **marking pass (computing `render_targets`)
 share the same pointer snapshot**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2306-2323
+// rust/crates/orbit-audio-native/src/output.rs:2320-2337
         // SAFETY: the line generation is not completed until after execution below. Control keeps
         // any replaced box retired for two later completed generations.
         let program = unsafe { &*programs[i] };
@@ -991,7 +991,7 @@ Feed collection is done by `collect_source_feeds` (`output.rs:772-801`), which m
 `SourceDest` to the core's `FeedDest`. Only the mapping is quoted here.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2082-2092
+// rust/crates/orbit-audio-native/src/output.rs:2096-2106
             let dest = match slot.dests[unit].load() {
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
@@ -1306,7 +1306,7 @@ commutes, so either order yields the same value). The invariant is therefore unm
 a DSL-level E2E, and the sole guard is a unit test whose rack stub **generates** sound.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:5010-5015
+// rust/crates/orbit-audio-native/src/output.rs:5024-5029
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(

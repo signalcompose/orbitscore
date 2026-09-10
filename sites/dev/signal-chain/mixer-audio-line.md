@@ -405,7 +405,7 @@ daemon が atomic に書いた routing を、native の render callback はど�
 **post-loop** がその場所です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2378-2404
+// rust/crates/orbit-audio-native/src/output.rs:2392-2418
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -499,7 +499,7 @@ pub enum LineOp {
 出口の実行部分はこうなっています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2421-2445
+// rust/crates/orbit-audio-native/src/output.rs:2435-2459
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
                         &mut first_output,
@@ -533,7 +533,7 @@ pub enum LineOp {
 詳しくは次の見出し）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1401-1413
+// rust/crates/orbit-audio-native/src/output.rs:1415-1427
     for op in &program.ops {
         match op {
             // These arms are availability gates, not permanent format restrictions. Remove the
@@ -560,7 +560,7 @@ pub enum LineOp {
 両方にある `LineOp::Pan(_)` 腕を、実際に L/R を掛ける処理へ置き換えます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2149-2168
+// rust/crates/orbit-audio-native/src/output.rs:2163-2182
 #[inline]
 fn apply_line_pan(buf: &mut [f32], frames: usize, pan: f32) {
     // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
@@ -604,7 +604,7 @@ golden は丸め誤差以外動かず**、動くのは「rack を挟んでから
 1 つめが `effective_line_output_dest` です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1443-1454
+// rust/crates/orbit-audio-native/src/output.rs:1457-1468
 fn effective_line_output_dest(
     first_output: &mut bool,
     legacy_target: Option<OutputDest>,
@@ -655,7 +655,7 @@ callback の最後に `finish_generation()` で世代を進めます。**alloc /
 共有している**点です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2306-2323
+// rust/crates/orbit-audio-native/src/output.rs:2320-2337
         // SAFETY: the line generation is not completed until after execution below. Control keeps
         // any replaced box retired for two later completed generations.
         let program = unsafe { &*programs[i] };
@@ -967,7 +967,7 @@ feed の収集は `collect_source_feeds`（`output.rs:772-801`）が行い、uni
 core の `FeedDest` に写します。写像の部分だけ引用します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2082-2092
+// rust/crates/orbit-audio-native/src/output.rs:2096-2106
             let dest = match slot.dests[unit].load() {
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
@@ -1268,7 +1268,7 @@ master gain の**手前**に来ます。
 ラックが**音を生成する**スタブを使うユニットテストが唯一の守り手になっています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:5010-5015
+// rust/crates/orbit-audio-native/src/output.rs:5024-5029
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(
