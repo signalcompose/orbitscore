@@ -694,9 +694,14 @@ per-PR の macOS ジョブは owner 方針（コスト）で回さない。**手
 🔴 **`--lib` は load-bearing**（#629）。付け忘れると実機オーディオデバイスを要する
 gated テストまで対象になる。
 
-1. **起動中の OrbitStudio を必ず終了してから起動し直す** — 古い extension host が新しい daemon を
-   spawn すると `DaemonStartupError: daemon exited before ready (code=null)` になる
-2. `ORBITSCORE_MCP_PORT=39123` を付けて起動（この環境変数が無いと MCP サーバーが立たない）
+1. 🔴 **前回のゲートで起動した dev host が残っていたら終了する** — 古い extension host が新しい
+   daemon を spawn すると `DaemonStartupError: daemon exited before ready (code=null)` になる。
+   隔離 dir を使っても**この危険は消えない**（stale なのはビルド済みの拡張コードであって設定ではない）。
+   ハーネス由来のインスタンスだけを対象にする: `pkill -f 'user-data-dir=[^[:space:]]*/orbitstudio-'`
+   日常利用の VS Code は、**orbitscore 拡張を入れていなければ**終了不要（入れていると daemon が
+   音声デバイスを掴んで実機テストと競合しうる）
+2. リポジトリルートから **stock VS Code を `--extensionDevelopmentPath=packages/vscode-extension` で起動する**。
+   `ORBITSCORE_MCP_PORT=39123 '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code' --new-window --extensionDevelopmentPath="$PWD/packages/vscode-extension" --user-data-dir="$(mktemp -d "${TMPDIR:-/tmp}/orbitstudio-merge-gate-user-XXXXXX")" --extensions-dir="$(mktemp -d "${TMPDIR:-/tmp}/orbitstudio-merge-gate-ext-XXXXXX")" "$PWD"`
 3. `mcp__orbitscore__get_engine_state` でエンジン起動を確認
 4. **その PR で追加/変更した DSL 機能を `mcp__orbitscore__evaluate_orbitscore` で実際に評価する**
 5. **`mcp__orbitscore__get_log` で ERROR が出ていないことを確認する**

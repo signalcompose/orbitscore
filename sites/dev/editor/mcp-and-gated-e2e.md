@@ -464,7 +464,7 @@ export function selectLogLines(ring: readonly string[], requested?: number): str
 
 ## gated E2E ハーネス — 実 OrbitStudio.app を MCP だけで駆動する
 
-ここからが本章の本体です。`tests/e2e/orbitstudio-mcp-gated.spec.ts` は 4,500 行を超える 1 ファイルで、実 OrbitStudio.app（VSCodium を OrbitStudio 名でリブランドしたアプリ・`scripts/orbitstudio/build_orbitstudio.sh`）を起動し、**MCP ツール呼び出しだけで**操作します。
+ここからが本章の本体です。`tests/e2e/orbitstudio-mcp-gated.spec.ts` は 4,500 行を超える 1 ファイルで、実 OrbitStudio.app（VSCodium を OrbitStudio 名でリブランドした旧構成。現行方針は `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.4）を起動し、**MCP ツール呼び出しだけで**操作します。
 
 ```mermaid
 flowchart LR
@@ -488,22 +488,23 @@ flowchart LR
  *                               skipped via describe.skipIf, so this file
  *                               always parses and collects cleanly in normal
  *                               `npm test` runs.
- *   ORBITSTUDIO_APP=<path>      Overrides the OrbitStudio.app bundle path.
- *                               Default:
- *                               /Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app
+ *   ORBIT_E2E_VSCODE_APP=<path> Overrides the VS Code.app bundle path.
+ *                               Default: /Applications/Visual Studio Code.app
  *                               If the resolved path doesn't exist, the test
  *                               is skipped with a console note (rather than
  *                               failing) even when the gate env var is set.
+ *
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:93-99
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:92-99
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
-const DEFAULT_APP_PATH =
-  '/Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app'
+const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
+const HARNESS_TMP_PREFIX = 'orbitstudio-'
+const HARNESS_KILL_PATTERN = `user-data-dir=[^[:space:]]*/${HARNESS_TMP_PREFIX}`
 
 const gated = Boolean(process.env[GATE_ENV])
-const appPath = process.env.ORBITSTUDIO_APP?.trim() || DEFAULT_APP_PATH
+const appPath = process.env.ORBIT_E2E_VSCODE_APP?.trim() || DEFAULT_APP_PATH
 const appAvailable = fs.existsSync(appPath)
 ```
 
@@ -557,7 +558,7 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 // tests/e2e/orbitstudio-mcp-gated.spec.ts:460-481
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
-    path.join(appPath, 'Contents/Resources/app/bin/orbs'),
+    path.join(appPath, 'Contents/Resources/app/bin/code'),
     [
       '--new-window',
       `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
@@ -588,9 +589,9 @@ teardown は「安全性」の注意書きが繰り返されています。
 
 ```typescript
 // tests/e2e/orbitstudio-mcp-gated.spec.ts:278-284
-function killOrbitStudio(): void {
+function killHarnessInstances(): void {
   try {
-    execFileSync('pkill', ['-f', 'OrbitStudio.app/Contents/MacOS'], { stdio: 'ignore' })
+    execFileSync('pkill', ['-f', HARNESS_KILL_PATTERN], { stdio: 'ignore' })
   } catch {
     // pkill exits non-zero when no process matched — not an error here.
   }
@@ -1284,7 +1285,7 @@ slot 1 と 3 が休符 `0` であることが要点です。「音符の所だ�
 
 ## 手元で走らせる
 
-macOS で OrbitStudio.app がビルド済みであることが前提です（`scripts/orbitstudio/README.md`。作業場は git 管理外で、拡張は同梱されないため `--extensionDevelopmentPath` で読ませます）。
+macOS で OrbitStudio.app がビルド済みであることが前提です（旧構成。現行方針は `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.4。拡張は `--extensionDevelopmentPath` で読ませます）。
 
 ```bash
 # 実機 gated E2E（cargo build + npm run build が pretest で自動実行される）
@@ -1365,7 +1366,7 @@ ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm r
 - `tests/e2e/gated-assertion-hygiene.spec.ts:1-11,552-704` — アサーション衛生の 9 本のラチェット（#785 / #789 で検出器が provenance ベースに置き換わり、describe の位置が動いた）
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixture
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
-- `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — OrbitStudio.app のビルド
+- `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.4 — stock VS Code を使う現行の gated 起動方針
 - `docs/testing/E2E_HARNESS_SPEC.md` — DSL 網羅 E2E ハーネス仕様（#543・2026-09-04 に #724 = #668 PR-E0 で §2.1 / §3 / §4.1 / §6.3 を改訂）
 - `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md` §3 — Agent Bridge の原設計
 - `docs/archive/WORK_LOG_2026-08.md` 6.348 / 6.409 / 6.415 / 6.416 / 6.417 / 6.418 / 6.421 — MCP ツール追加・実機検証・stale ガード・仕組み化・#654

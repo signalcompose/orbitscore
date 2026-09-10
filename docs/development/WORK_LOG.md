@@ -17,6 +17,17 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(e2e): launch the gated harness from stock VS Code (#830) (Sep 10, 2026)
+
+実機 gated ハーネスの起動先を VSCodium フォークの OrbitStudio.app から stock VS Code へ切り替え、
+`--extensionDevelopmentPath` と隔離した user-data / extensions dir をそのまま使う構成にした。
+終了処理はアプリ名ではなく、ハーネス専用 `--user-data-dir` の共通接頭辞だけを対象にするため、
+日常利用中の VS Code を巻き込まない。旧フォークのビルドスクリプトを削除し、非 archive 文書の
+参照先を現行のネイティブ移行裁定へ更新した。フォークを畳む前にマージゲートを維持するための変更で、
+実機 gated 全件の結果は main が本ツリーで実行して追記する。
+
+---
+
 ### docs(planning): record the extension-stable freeze line and the native OrbitStudio line (#827) (Sep 10, 2026)
 
 **Issue**: #827 / **ブランチ**: `827-stable-freeze-line` → main（docs のみ）
@@ -39,7 +50,7 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 - 🔴 検討状況の §2.6「フォークを畳んで失うのは 47 行のスクリプトと E2E のターゲット指定のみ」→
   **そのターゲット指定がマージゲート（実機 gated）そのもの**。ただしハーネス（`orbitstudio-mcp-gated.spec.ts:460-471`）は
-  既に `--extensionDevelopmentPath` + 隔離 dir で起動しており、**フォーク固有は `bin/orbs` の 1 行だけ**。
+  既に `--extensionDevelopmentPath` + 隔離 dir で起動しており、**フォーク固有は旧専用 CLI を指す 1 行だけ**。
   VS Code の `bin/code` に変えれば足りる
 - SC 削除の影響: 実機 gated は **0 件**、ユニットは 22 ファイル（SC 専用 5 本は削除・17 は整理）
 - 「凍結線はステージ 2 完了」→ 制作に `outs:` が要らないので **O-surface 完了まで縮んだ**。

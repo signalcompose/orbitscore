@@ -464,7 +464,7 @@ There was a second false green hiding in this count, unrelated to the window. Th
 
 ## The gated E2E harness — driving the real OrbitStudio.app through MCP alone
 
-From here on is the body of the chapter. `tests/e2e/orbitstudio-mcp-gated.spec.ts` is a single file of more than 4,500 lines that launches the real OrbitStudio.app (VSCodium rebranded as OrbitStudio; `scripts/orbitstudio/build_orbitstudio.sh`) and operates it **only through MCP tool calls**.
+From here on is the body of the chapter. `tests/e2e/orbitstudio-mcp-gated.spec.ts` is a single file of more than 4,500 lines that launches the real OrbitStudio.app (the former VSCodium-based setup; see `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.4 for the current direction) and operates it **only through MCP tool calls**.
 
 ```mermaid
 flowchart LR
@@ -488,22 +488,23 @@ flowchart LR
  *                               skipped via describe.skipIf, so this file
  *                               always parses and collects cleanly in normal
  *                               `npm test` runs.
- *   ORBITSTUDIO_APP=<path>      Overrides the OrbitStudio.app bundle path.
- *                               Default:
- *                               /Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app
+ *   ORBIT_E2E_VSCODE_APP=<path> Overrides the VS Code.app bundle path.
+ *                               Default: /Applications/Visual Studio Code.app
  *                               If the resolved path doesn't exist, the test
  *                               is skipped with a console note (rather than
  *                               failing) even when the gate env var is set.
+ *
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:93-99
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:92-99
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
-const DEFAULT_APP_PATH =
-  '/Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app'
+const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
+const HARNESS_TMP_PREFIX = 'orbitstudio-'
+const HARNESS_KILL_PATTERN = `user-data-dir=[^[:space:]]*/${HARNESS_TMP_PREFIX}`
 
 const gated = Boolean(process.env[GATE_ENV])
-const appPath = process.env.ORBITSTUDIO_APP?.trim() || DEFAULT_APP_PATH
+const appPath = process.env.ORBIT_E2E_VSCODE_APP?.trim() || DEFAULT_APP_PATH
 const appAvailable = fs.existsSync(appPath)
 ```
 
@@ -557,7 +558,7 @@ npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` a
 // tests/e2e/orbitstudio-mcp-gated.spec.ts:460-481
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
-    path.join(appPath, 'Contents/Resources/app/bin/orbs'),
+    path.join(appPath, 'Contents/Resources/app/bin/code'),
     [
       '--new-window',
       `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
@@ -588,9 +589,9 @@ The teardown repeats a safety warning.
 
 ```typescript
 // tests/e2e/orbitstudio-mcp-gated.spec.ts:278-284
-function killOrbitStudio(): void {
+function killHarnessInstances(): void {
   try {
-    execFileSync('pkill', ['-f', 'OrbitStudio.app/Contents/MacOS'], { stdio: 'ignore' })
+    execFileSync('pkill', ['-f', HARNESS_KILL_PATTERN], { stdio: 'ignore' })
   } catch {
     // pkill exits non-zero when no process matched — not an error here.
   }
@@ -1294,7 +1295,7 @@ The same `[STEP]` lines and the same `get_log` route serve humans as the playhea
 
 ## Running it locally
 
-The prerequisite is a built OrbitStudio.app on macOS (`scripts/orbitstudio/README.md`; the workspace is outside git, and the extension is not bundled, so it is loaded with `--extensionDevelopmentPath`).
+The prerequisite is a built OrbitStudio.app on macOS (the former setup; see `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.4 for the current direction; the extension is loaded with `--extensionDevelopmentPath`).
 
 ```bash
 # 実機 gated E2E（cargo build + npm run build が pretest で自動実行される）
@@ -1375,7 +1376,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `tests/e2e/gated-assertion-hygiene.spec.ts:1-11,552-704` — the nine assertion-hygiene ratchets (#785 / #789 replaced the detectors with provenance-based ones and moved the describe)
 - `tests/fixtures/mcp-e2e/kick_loop.orbs` / `diagnostic_case.orbs` — E2E fixtures
 - `package.json:18-19` — `pretest:e2e:gated` / `test:e2e:gated`
-- `scripts/orbitstudio/README.md` / `build_orbitstudio.sh` — building OrbitStudio.app
+- `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.4 — current gated launch policy using stock VS Code
 - `docs/testing/E2E_HARNESS_SPEC.md` — DSL coverage E2E harness spec (#543; §2.1 / §3 / §4.1 / §6.3 revised on 2026-09-04 by #724 = #668 PR-E0)
 - `docs/specs-v2/WCTM_SYSTEM_SPEC_v1.md` §3 — original design of the Agent Bridge
 - `docs/archive/WORK_LOG_2026-08.md` 6.348 / 6.409 / 6.415 / 6.416 / 6.417 / 6.418 / 6.421 — MCP tool additions, real-device verification, stale guard, mechanisation, #654

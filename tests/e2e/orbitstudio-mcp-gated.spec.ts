@@ -1,8 +1,8 @@
 /**
- * REAL OrbitStudio E2E over the Agent Bridge MCP server (#388).
+ * REAL VS Code E2E over the Agent Bridge MCP server (#388).
  *
- * Launches an actual OrbitStudio.app (VSCodium-based) Extension Development
- * Host, drives it entirely through MCP tool calls (no vscode API, no
+ * Launches stock VS Code as an Extension Development Host, drives it entirely
+ * through MCP tool calls (no vscode API, no
  * keyboard/UI automation), and verifies produced audio objectively via the
  * capture-seam WAV analyzer (wav-analysis.ts) — the same "verify without
  * listening" philosophy as WORK_LOG 6.189.
@@ -13,13 +13,13 @@
  *                               skipped via describe.skipIf, so this file
  *                               always parses and collects cleanly in normal
  *                               `npm test` runs.
- *   ORBITSTUDIO_APP=<path>      Overrides the OrbitStudio.app bundle path.
- *                               Default:
- *                               /Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app
+ *   ORBIT_E2E_VSCODE_APP=<path> Overrides the VS Code.app bundle path.
+ *                               Default: /Applications/Visual Studio Code.app
  *                               If the resolved path doesn't exist, the test
  *                               is skipped with a console note (rather than
  *                               failing) even when the gate env var is set.
  *
+ * The launched profile is isolated from the user's everyday VS Code state.
  * Run gated (this launches a real GUI app and plays audible sound — do NOT
  * run unattended/unprompted):
  *
@@ -32,11 +32,10 @@
  * root, an unscoped positional pattern can glob-match stale copies under
  * .claude/worktrees/ and launch multiple real GUI apps.
  *
- * SAFETY (repeated at the kill call site too): the teardown/setup kill
- * pattern targets `OrbitStudio.app/Contents/MacOS` — a path fragment unique
- * to the OrbitStudio.app bundle. It must NEVER be broadened to something
- * that could match a general "Visual Studio Code" / Electron process —
- * killing the user's actual VS Code is a known past incident.
+ * SAFETY (repeated at the kill call site too): teardown/setup identifies only
+ * processes whose command line carries the harness-owned `--user-data-dir`
+ * temp prefix. It must NEVER use an app or executable name: an overbroad
+ * process-name match killed the user's everyday editor in a past incident.
  */
 
 import { spawn, spawnSync, execFileSync, type ChildProcess } from 'child_process'
@@ -91,18 +90,19 @@ import { OUTPUT_LINE_GOLDENS, STEADY_CAPTURE } from './output-line-expectations'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
-const DEFAULT_APP_PATH =
-  '/Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app'
+const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
+const HARNESS_TMP_PREFIX = 'orbitstudio-'
+const HARNESS_KILL_PATTERN = `user-data-dir=[^[:space:]]*/${HARNESS_TMP_PREFIX}`
 
 const gated = Boolean(process.env[GATE_ENV])
-const appPath = process.env.ORBITSTUDIO_APP?.trim() || DEFAULT_APP_PATH
+const appPath = process.env.ORBIT_E2E_VSCODE_APP?.trim() || DEFAULT_APP_PATH
 const appAvailable = fs.existsSync(appPath)
 
 if (gated && !appAvailable) {
   // eslint-disable-next-line no-console
   console.log(
-    `[orbitstudio-mcp-gated] OrbitStudio app not found at ${appPath} — SKIPPING. ` +
-      'Set ORBITSTUDIO_APP to override the default path.',
+    `[orbitstudio-mcp-gated] VS Code app not found at ${appPath} — SKIPPING. ` +
+      'Set ORBIT_E2E_VSCODE_APP to override the default path.',
   )
 }
 
@@ -268,16 +268,16 @@ const TEST_TIMEOUT_MS = 120_000
 const TEARDOWN_TIMEOUT_MS = 30_000
 
 /**
- * SAFETY: this exact pattern ONLY. `OrbitStudio.app/Contents/MacOS` is a path
- * fragment unique to the OrbitStudio.app bundle — it must never be widened
- * to match "Code" / "Electron" / VSCodium generally. Killing the user's
- * actual VS Code by an overbroad pkill pattern is a known past incident.
+ * SAFETY: this exact pattern ONLY. It matches the `--user-data-dir` argument
+ * whose temp root begins with HARNESS_TMP_PREFIX, which only this harness
+ * creates. It must never be replaced by an app/process-name match: an
+ * overbroad pkill killed the user's everyday editor in a known past incident.
  * Uses execFileSync (no shell, fixed argv — not a template-built command
  * string) rather than exec/execSync.
  */
-function killOrbitStudio(): void {
+function killHarnessInstances(): void {
   try {
-    execFileSync('pkill', ['-f', 'OrbitStudio.app/Contents/MacOS'], { stdio: 'ignore' })
+    execFileSync('pkill', ['-f', HARNESS_KILL_PATTERN], { stdio: 'ignore' })
   } catch {
     // pkill exits non-zero when no process matched — not an error here.
   }
@@ -442,7 +442,7 @@ async function launchIsolatedOrbitStudio({
   portBase,
   prepareWorkspace,
 }: IsolatedOrbitStudioOptions): Promise<IsolatedOrbitStudio> {
-  killOrbitStudio()
+  killHarnessInstances()
   const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), tmpPrefix))
   const userDataDir = path.join(tmpRoot, 'user-data')
   const extensionsDir = path.join(tmpRoot, 'extensions')
@@ -459,7 +459,7 @@ async function launchIsolatedOrbitStudio({
 
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
-    path.join(appPath, 'Contents/Resources/app/bin/orbs'),
+    path.join(appPath, 'Contents/Resources/app/bin/code'),
     [
       '--new-window',
       `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
@@ -853,7 +853,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // best-effort — the process may already be gone.
       }
     }
-    killOrbitStudio()
+    killHarnessInstances()
     if (child && !child.killed) {
       try {
         child.kill()
@@ -889,7 +889,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // デバイス名の存在確認をスキップするセンチネル __default__ を設定し、
       // マシン固有のデバイス名に依存せず拡張の auto-start を有効化する。
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-mcp-e2e-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}mcp-e2e-`,
         settings: {
           'orbitscore.audioDevice': '__default__',
           'orbitscore.engineDebug': false,
@@ -5446,7 +5446,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     '#779 startup sweep unlinks orphaned outproc shm but keeps live ones',
     async () => {
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-shm-sweep-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}shm-sweep-`,
         settings: {
           'orbitscore.audioDevice': '__default__',
           'orbitscore.engineDebug': false,
@@ -5520,7 +5520,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     async () => {
       let requestedName = ''
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-named-device-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}named-device-`,
         settings: () => {
           requestedName = defaultOutputDeviceName('#661 D-0')
           return {
@@ -5596,7 +5596,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // changing it in the shared long-running suite would invalidate all following scenarios.
       let deadRequestedName = ''
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-device-gate-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}device-gate-`,
         settings: () => {
           deadRequestedName = defaultOutputDeviceName('#661 D-2')
           return {
@@ -5694,7 +5694,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // D-3 は**デバイス無指定で起動**し、既定デバイスを名前で要求することで本当の切替にする。
       // `dead-probe-requested` は「要求された」デバイスに効くので、その probe が死ぬ。
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-device-switch-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}device-switch-`,
         settings: { 'orbitscore.audioDevice': '__default__', 'orbitscore.engineDebug': false },
         env: {
           ...process.env,
