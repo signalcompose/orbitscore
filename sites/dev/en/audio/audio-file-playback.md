@@ -9,10 +9,10 @@ status: draft
 > **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
 
 ::: warning Status as of 2026-09
-The `BufferManager` / `orbitPlayBuf` / `EventScheduler` in this chapter (`packages/engine/src/audio/supercollider/`) belong to the SuperCollider path, which since cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179) is **not the default and is used only when you opt out with `ORBITSCORE_ENGINE=sc`**. On the default Rust daemon path, file decoding and slice playback are handled on the daemon side (see [RE-1. Daemon Architecture Overview](/en/rust-engine/)). The citations in this chapter match the real code at 69dc968, but read it as historical reading.
+The `BufferManager` / `orbitPlayBuf` / `EventScheduler` in this chapter (`packages/engine/src/audio/supercollider/`) belonged to the SuperCollider path. Cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179) switched the default to the Rust daemon path, and the SC path survived only as an `ORBITSCORE_ENGINE=sc` opt-out — but **the 2026-09-10 ruling (#827 / #502) removed the SC path itself, opt-out branch included**. `createAudioEngine()` now ignores arguments and environment variables entirely and always returns `RustEnginePlayer`. File decoding and slice playback are handled on the daemon side (see [RE-1. Daemon Architecture Overview](/en/rust-engine/)). Below is a snapshot of the opt-out branch code from before removal (commit `58f558f5`).
 
 ```typescript
-// packages/engine/src/audio/create-audio-engine.ts:17-22
+// (removed as of 58f558f5) packages/engine/src/audio/create-audio-engine.ts L17-22
 export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
   const raw = env[ENGINE_ENV_VAR]
   if (resolveEngineKind(raw) === 'supercollider') {
@@ -22,7 +22,7 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 ```
 
 ```typescript
-// packages/engine/src/audio/engine-backend.ts:54-55
+// (removed as of 58f558f5) packages/engine/src/audio/engine-backend.ts L54-55
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
 export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```

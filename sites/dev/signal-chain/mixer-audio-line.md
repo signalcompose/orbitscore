@@ -663,7 +663,7 @@ export type WireLineOp =
 DSL から実際に送るようになるのは PR-O4 からになります。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:715-718
+// packages/engine/src/audio/rust-engine/daemon-client.ts:714-717
   /** Replace one daemon bus's complete ordered audio line (#611 wire contract §4.1). */
   async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
     await this.request('SetBusLine', { bus, line })
@@ -1019,7 +1019,7 @@ capture の RMS が dry の約 1.5 倍（sum 経由 1.0 + aux 経由 0.5）に�
 `RustEnginePlayer.setGlobalGain` は「daemon の状態に関わらず先に intent を記録する」のが要点です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1286-1298
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1285-1297
   async setGlobalGain(amplitude: number, rampSec = 0): Promise<void> {
     // 🔴 daemon の状態に関わらず**先に intent を記録する**。未接続時に捨てると、
     // 接続後に復元する手がかりが消える（`Global.gain()` を再評価する経路は存在しない）。

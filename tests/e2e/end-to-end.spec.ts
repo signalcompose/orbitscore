@@ -2,9 +2,10 @@
  * End-to-End test with real audio files
  * Tests the complete flow from DSL parsing to audio playback
  *
- * NOTE: These tests are skipped by default because they require SuperCollider server to be running.
+ * NOTE: These tests are skipped by default because they require the Rust audio
+ * daemon (orbit-audio-daemon) to be running.
  * To run these tests:
- * 1. Start SuperCollider server manually
+ * 1. Build the daemon (cd rust && cargo build --release)
  * 2. Remove .skip from describe.skip()
  * 3. Run: npm test -- tests/e2e/end-to-end.spec.ts
  */
@@ -28,7 +29,7 @@ describe.skip('End-to-End Tests with Real Audio', () => {
   })
 
   afterEach(async () => {
-    // Clean up SuperCollider server
+    // Clean up the audio engine
     if (interpreter) {
       const state = interpreter.getState()
       for (const globalName in state.globals) {
@@ -228,7 +229,7 @@ describe.skip('End-to-End Tests with Real Audio', () => {
 
       // Verify transport states
       // Note: isRunning state is correctly updated by Global.start()
-      // The test may fail if SuperCollider server fails to start, but the
+      // The test may fail if the audio engine fails to start, but the
       // Global.start() method itself correctly sets isRunning to true
       expect(state.globals.global.isRunning).toBe(true)
       expect(state.sequences.seq.isMuted).toBe(false) // unmuted last

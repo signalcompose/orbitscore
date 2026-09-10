@@ -12,7 +12,7 @@ const AUTO_SNAPSHOT_SHUTDOWN_BUDGET_MS = 1_200
  * Gracefully shutdown the audio engine
  *
  * This function attempts to quit the audio engine backend cleanly
- * (Rust daemon by default since cutover #108, or SuperCollider when opted out)
+ * (Rust daemon — the only backend since #502)
  * before exiting the process. It's called on SIGINT (Ctrl+C) and SIGTERM.
  * `stop()` normally queues a fire-and-forget snapshot on the store's pending
  * chain; shutdown opts out so its explicitly awaited snapshot does not consume

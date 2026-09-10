@@ -684,7 +684,7 @@ The sending side is one line. The thing worth holding onto is that **there is no
 yet** — the DSL starts sending it in PR-O4.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:715-718
+// packages/engine/src/audio/rust-engine/daemon-client.ts:714-717
   /** Replace one daemon bus's complete ordered audio line (#611 wire contract §4.1). */
   async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
     await this.request('SetBusLine', { bus, line })
@@ -1044,7 +1044,7 @@ is optional, so nothing happens on the SC backend. The essential point of
 `RustEnginePlayer.setGlobalGain` is "record the intent first, regardless of the daemon's state".
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1286-1298
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1285-1297
   async setGlobalGain(amplitude: number, rampSec = 0): Promise<void> {
     // 🔴 daemon の状態に関わらず**先に intent を記録する**。未接続時に捨てると、
     // 接続後に復元する手がかりが消える（`Global.gain()` を再評価する経路は存在しない）。

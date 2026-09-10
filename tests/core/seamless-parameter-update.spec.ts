@@ -9,16 +9,16 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
 import { Sequence } from '../../packages/engine/src/core/sequence'
-import { SuperColliderPlayer } from '../../packages/engine/src/audio/supercollider-player'
+import { RustEnginePlayer } from '../../packages/engine/src/audio/rust-engine/rust-engine-player'
 
 describe('Seamless Parameter Update', () => {
   let global: Global
   let seq: Sequence
-  let mockPlayer: SuperColliderPlayer
+  let mockPlayer: RustEnginePlayer
   let consoleLogSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
-    // Create mock SuperCollider player with scheduler properties
+    // Create mock Rust engine player with scheduler properties
     mockPlayer = {
       boot: vi.fn().mockResolvedValue(undefined),
       getCurrentTime: vi.fn().mockReturnValue(0),

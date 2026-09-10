@@ -9,15 +9,15 @@ import { describe, it, expect, beforeEach } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
 import { Sequence } from '../../packages/engine/src/core/sequence'
-import { SuperColliderPlayer } from '../../packages/engine/src/audio/supercollider-player'
+import { RustEnginePlayer } from '../../packages/engine/src/audio/rust-engine/rust-engine-player'
 
 describe('Chop Timing', () => {
   let global: Global
-  let player: SuperColliderPlayer
+  let player: RustEnginePlayer
   let sequence: Sequence
 
   beforeEach(() => {
-    player = new SuperColliderPlayer()
+    player = new RustEnginePlayer()
     global = new Global(player)
     // Set documentDirectory so relative audio paths resolve in tests
     global.setDocumentDirectory('/tmp/test')
@@ -112,7 +112,7 @@ describe('Chop Timing', () => {
 
   describe('Slice Scheduling', () => {
     it('should call scheduleSliceEvent with correct parameters', async () => {
-      // Mock SuperColliderPlayer's public scheduleSliceEvent method
+      // Mock RustEnginePlayer's public scheduleSliceEvent method
       const scheduledEvents: any[] = []
       player.scheduleSliceEvent = (
         filepath: string,
@@ -137,7 +137,7 @@ describe('Chop Timing', () => {
       }
 
       // Mock loadBuffer to avoid server calls
-      player.loadBuffer = async () => ({ bufnum: 0, duration: 1.0 })
+      player.loadBuffer = async () => ({ sampleId: 'mock-sample' })
 
       // Setup
       global.tempo(60)
@@ -167,7 +167,7 @@ describe('Chop Timing', () => {
     })
 
     it('should schedule slices with correct slice positions', async () => {
-      // Mock SuperColliderPlayer's public scheduleSliceEvent method
+      // Mock RustEnginePlayer's public scheduleSliceEvent method
       const scheduledEvents: any[] = []
       player.scheduleSliceEvent = (
         filepath: string,
@@ -192,7 +192,7 @@ describe('Chop Timing', () => {
       }
 
       // Mock loadBuffer to avoid server calls
-      player.loadBuffer = async () => ({ bufnum: 0, duration: 1.0 })
+      player.loadBuffer = async () => ({ sampleId: 'mock-sample' })
 
       // Setup
       global.tempo(60)

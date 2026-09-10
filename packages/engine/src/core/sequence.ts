@@ -621,8 +621,8 @@ export class Sequence {
   /**
    * Declare this sequence as a MIDI output (§1). `play()` values are then
    * interpreted as degrees, not slice numbers. Cannot be combined with
-   * `audio()` / `chop()` / `instrument()`. Coexists with the SuperCollider
-   * audio path (no LinkAudio-style exclusion).
+   * `audio()` / `chop()` / `instrument()`. Coexists with the audio path
+   * (no LinkAudio-style exclusion).
    *
    * @param portName CoreMIDI output port (case-insensitive substring, e.g.
    *                 "iac" matches "IACドライバ バス1"). Resolved eagerly so an
@@ -970,10 +970,10 @@ export class Sequence {
     return this
   }
 
-  // Note: Audio loading is now handled by SuperCollider's buffer manager
+  // Note: Audio loading is now handled by the audio engine's buffer manager
   // This method is kept for backward compatibility but does nothing
   async loadAudio(): Promise<void> {
-    // SuperCollider handles audio loading internally via loadBuffer()
+    // The audio engine handles audio loading internally via loadBuffer()
     // No action needed here
   }
 
@@ -1035,7 +1035,7 @@ export class Sequence {
 
   /**
    * The scheduler this sequence schedules against: the MIDI transport (a shared
-   * TransportClock, no SuperCollider) for MIDI sequences, the SC audio engine
+   * TransportClock, no audio engine) for MIDI sequences, the audio engine
    * for audio sequences. Both share the same Date.now() origin, so audio and
    * MIDI stay in sync (§1).
    */

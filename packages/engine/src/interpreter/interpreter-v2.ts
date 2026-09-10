@@ -108,7 +108,7 @@ export class InterpreterV2 {
   }
 
   /**
-   * Boot SuperCollider server (public method for explicit boot)
+   * Boot the audio engine (public method for explicit boot)
    */
   async boot(audioDevice?: string): Promise<void> {
     if (!this.state.isBooted) {
@@ -118,7 +118,7 @@ export class InterpreterV2 {
   }
 
   /**
-   * Boot SuperCollider server (ensure it's booted)
+   * Boot the audio engine (ensure it's booted)
    */
   private async ensureBooted(): Promise<void> {
     await this.boot()
@@ -168,7 +168,7 @@ export class InterpreterV2 {
       })
     }
 
-    // Ensure SuperCollider is booted
+    // Ensure the audio engine is booted
     await this.ensureBooted()
 
     // File imports (IM.2, #456): evaluated BEFORE the entry's own declarations, in

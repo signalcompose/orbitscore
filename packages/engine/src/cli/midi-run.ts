@@ -1,9 +1,9 @@
 /**
  * Headless MIDI runner — evaluate a MIDI `.orbs` through the REAL engine path
  * (parser → degree resolution → MidiScheduler → MidiOutput → IAC) WITHOUT
- * booting SuperCollider.
+ * booting the audio engine.
  *
- * MIDI sequences schedule against the shared TransportClock (no SC), so a no-op
+ * MIDI sequences schedule against the shared TransportClock (no audio engine), so a no-op
  * audio engine is enough: the default MidiManager opens the real IAC port via
  * RtMidiOutput. This is the truthful Phase 1 (#228) run — what you hear is what
  * the engine actually produced from the DSL, not hand-crafted MIDI.
@@ -27,7 +27,7 @@ import { InterpreterState } from '../interpreter/types'
 import { createMixerRuntimeRegistry } from '../signal-chain/runtime'
 
 /**
- * No-op audio engine. MIDI runs on the TransportClock (no SuperCollider), so
+ * No-op audio engine. MIDI runs on the TransportClock (no audio engine), so
  * every audio/scheduler method here is a harmless stub. Only `start`/`stopAll`
  * are reached (via global transport control); the rest exist to satisfy the
  * AudioEngine + Scheduler surface.

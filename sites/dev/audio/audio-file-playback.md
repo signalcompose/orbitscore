@@ -9,10 +9,10 @@ status: draft
 > **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 ::: warning 2026-09 時点の位置づけ
-本章の `BufferManager` / `orbitPlayBuf` / `EventScheduler`（`packages/engine/src/audio/supercollider/`）は SuperCollider 経路のコードで、2026-07-03 の cutover #108（`docs/archive/WORK_LOG_2026-07.md` §6.179）以降は **既定ではなく `ORBITSCORE_ENGINE=sc` で opt-out したときだけ**使われます。既定の Rust daemon 経路ではファイルのデコードとスライス再生を daemon 側が担います（[RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照）。本章の引用は 69dc968 時点の実コードと一致しますが、歴史的読解として読んでください。
+本章の `BufferManager` / `orbitPlayBuf` / `EventScheduler`（`packages/engine/src/audio/supercollider/`）は SuperCollider 経路のコードでした。2026-07-03 の cutover #108（`docs/archive/WORK_LOG_2026-07.md` §6.179）で既定は Rust daemon 経路へ切り替わり、SC 経路は `ORBITSCORE_ENGINE=sc` の opt-out としてのみ残っていましたが、**2026-09-10 の裁定（#827 / #502）で SC 経路自体・opt-out の分岐コードごと削除**されました。`createAudioEngine()` は現在、引数も環境変数も見ず常に `RustEnginePlayer` を返します。ファイルのデコードとスライス再生は daemon 側が担います（[RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照）。以下は削除前（commit `58f558f5`）時点の、opt-out 分岐コードのスナップショットです。
 
 ```typescript
-// packages/engine/src/audio/create-audio-engine.ts:17-22
+// （削除済み・58f558f5 時点） packages/engine/src/audio/create-audio-engine.ts L17-22
 export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
   const raw = env[ENGINE_ENV_VAR]
   if (resolveEngineKind(raw) === 'supercollider') {
@@ -22,7 +22,7 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 ```
 
 ```typescript
-// packages/engine/src/audio/engine-backend.ts:54-55
+// （削除済み・58f558f5 時点） packages/engine/src/audio/engine-backend.ts L54-55
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
 export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```

@@ -110,7 +110,7 @@ The body proceeds in a fixed order.
 
 ```typescript
 // packages/engine/src/interpreter/interpreter-v2.ts:171-230 (file import の本体と session-log hook の設置を省略)
-    // Ensure SuperCollider is booted
+    // Ensure the audio engine is booted
     await this.ensureBooted()
 
     // File imports (IM.2, #456): evaluated BEFORE the entry's own declarations, in
@@ -147,7 +147,7 @@ The body proceeds in a fixed order.
 
 To summarize the order:
 
-1. `ensureBooted()` — confirms whether the audio backend has been booted, and boots it if not (the comment still says "SuperCollider," but by default the Rust daemon is what boots)
+1. `ensureBooted()` — confirms whether the audio backend has been booted, and boots it if not (boots the sole remaining backend, the Rust daemon)
 2. `processFileImports()` — evaluates `import { ... } from "./x.orbs"` before the entry's own declarations (only if present)
 3. `processGlobalInit()` — processes `var global = init GLOBAL` (only if present)
 4. `setDocumentDirectory()` — sets it on the Global if the `documentDirectory` option is given

@@ -17,6 +17,45 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(engine): remove the SuperCollider backend implementation and its editor surface (#502) (Sep 10, 2026)
+
+owner 裁定（#827 / #502・`NATIVE_MIGRATION_2026-09.md` §12.5）に従い、SC バックエンドの
+TypeScript 実装と拡張の編集表面を削除した（PR-SC3b・PR-SC3a の同梱まわり削除の続き）。
+
+**削除**: `packages/engine/src/audio/supercollider/`（event-scheduler / buffer-manager /
+osc-client / scsynth-resolver / synthdef-loader / link-audio-channels / types / index）・
+`supercollider-player.ts`・`packages/engine/supercollider/`（synthdef アセット）・未参照の
+`test-sc-*.js` スクラッチ9本・孤立 `packages/engine/package-lock.json`・テスト7本
+（SC専用5本 + `link-audio-dispatch`/`link-audio-channels`。後ろ2本は `EventScheduler` 等を
+直接 import しており import 整理では済まなかった）。
+
+**🔴 `AudioDevice` 型の退避**: エンジン非依存の共有型だったため、ディレクトリ削除前に
+`supercollider/types.ts` から `audio/types.ts` へ移した。
+
+**🔴 実行時 require の罠**: `extension.ts` の `resolveScsynthForUI()` は
+`require('.../supercollider/scsynth-resolver')` を実行時に呼んでおり、`tsc` の型検査を
+通らない経路（戻り値を `as` で型付け）だったためソースを消しても緑のまま実行時に落ちる。
+この関数ごと削除した。
+
+**`ORBITSCORE_ENGINE` を完全に撤去**: 選べる第2エンジンが無い以上、1択を選ぶ env var は
+死んだ分岐。`EngineKind`/`resolveEngineKind()` を撤去し `createAudioEngine()` は常に
+`RustEnginePlayer` を返す。`orbitscore.engine`/`orbitscore.scsynthPath` 設定・
+`Force Kill scsynth` コマンド・SC gated だった `Select Audio Device` コマンド・MCP
+`force_kill_scsynth` ツールを削除（`restrictedConfigurations` は空配列に）。`extension.ts` の
+`getConfiguredEngineKind()` 各種ガードと SC 専用関数群を撤去し Rust 経路のみへ折り畳んだ。
+
+`rust-engine-player.ts:945` 付近のコメントを実態に合わせた（`warnOnce('outputChannel', ...)`
+の呼び出しは1箇所のみ — 旧コメントは `scheduleEvent`/`scheduleSliceEvent` も呼ぶと誤記していた）。
+`supercolliderjs` devDependency も削除（SC の TS 実装が無くなったため）。
+
+**テスト**: `SuperColliderPlayer` をモックに使っていたテスト16本を `RustEnginePlayer` 基準へ
+書き換え（`chop-timing.spec.ts` は実インスタンス化のため `loadBuffer` の mock 戻り値も
+実シグネチャ `{ sampleId }` に合わせた）。件数: 2329 passed / 58 skipped / 2387 total →
+**2261 passed / 58 skipped / 2319 total**（削除7本ぶん -68 件）。
+
+**残課題**: `npm run docs:check` が本 PR の行番号シフト（`extension.ts` -444 行等）で
+198 件失敗する（baseline 0 失敗）。`sites/` 編集は本ブリーフで禁止のため未対応・main へ引き継ぐ。
+
 ### chore(build): remove the bundled scsynth, its GPL plugin, and the packaging steps (#502) (Sep 10, 2026)
 
 owner 裁定（#827 / #502）に従い、拡張の出荷物から bundled scsynth と GPL の

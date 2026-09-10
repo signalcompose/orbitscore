@@ -1,7 +1,7 @@
 /**
  * 検証ハーネス（#311 phase 2・tier(c) Leg 2）用の音声バックエンド。
  *
- * SuperCollider / daemon を一切立てずに、interpreter が `.orbs` から計算した発音
+ * daemon を一切立てずに、interpreter が `.orbs` から計算した発音
  * スケジュール（`scheduleEvent` / `scheduleSliceEvent` の引数）を**そのまま記録**する。
  * `boot()` は no-op なので `InterpreterV2.execute()` が device 無しで完走し、`execute()`
  * 後に `getRecorded()` で生の構造スケジュール（onset / gainDb / pan / slice）を得られる。

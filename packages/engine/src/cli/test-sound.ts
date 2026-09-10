@@ -58,7 +58,7 @@ hihat.run()
   // Keep process alive indefinitely to continue audio playback
   // This is intentional: the test command is designed to play sound continuously
   // until the user manually terminates with Ctrl+C (SIGINT).
-  // The shutdown handlers in shutdown.ts will gracefully stop SuperCollider.
+  // The shutdown handlers in shutdown.ts will gracefully stop the audio engine.
   // Note: This promise never resolves, which is the expected behavior.
   await new Promise(() => {})
 }
