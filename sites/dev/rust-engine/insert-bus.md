@@ -53,7 +53,7 @@ render 側の核は `orbit-audio-native` の `InsertBusStage` です。`processo
 event が retain され続けます（後述の landmine）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1456-1475
+// rust/crates/orbit-audio-native/src/output.rs:1470-1489
 /// named routing tag を受ける per-bus insert stage。sum/aux を含む mixer graph の1ノード
 /// （#459/#453・MX.1-MX.5）。
 ///
@@ -94,7 +94,7 @@ pub struct InsertBusStage {
 **`line: LineSlot` の 1 フィールドにまとめられました**。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1476-1478
+// rust/crates/orbit-audio-native/src/output.rs:1490-1492
     /// Published line program. Routing, sends, and rack position are all interpreted from this one
     /// ordered program by the callback post-loop.
     line: LineSlot,
@@ -129,7 +129,7 @@ RE-1 で見た `render_engine_with_sources` は、insert bus が 1 つも active
 使わないセッションは bus プールのコストを一切払いません。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2006-2011
+// rust/crates/orbit-audio-native/src/output.rs:2020-2025
     if sources.is_empty() {
         if buses.iter().any(|bus| bus.active.load(Ordering::Relaxed)) {
             render_engine_with_insert_buses_and_source_outputs(
@@ -147,7 +147,7 @@ instrument source が無いときは source 側に空スライスを渡すだけ
 両 pass の見え方が食い違うため）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2246-2252
+// rust/crates/orbit-audio-native/src/output.rs:2260-2266
     let bs = (hw.len() / output_channels) * output_channels;
 
     // active フラグを 1 回だけ atomic load して使い回す（RT: 同じ判定を何度も load しない）。
