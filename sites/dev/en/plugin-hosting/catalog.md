@@ -578,7 +578,7 @@ this separation. Completion works as long as the file exists, even when no engin
 Two commands are registered under `contributes.commands` in `package.json`.
 
 ```json
-// packages/vscode-extension/package.json:105-116
+// packages/vscode-extension/package.json:103-114
       {
         "command": "orbitscore.rescanPlugins",
         "title": "OrbitScore: Rescan Plugin Catalog",

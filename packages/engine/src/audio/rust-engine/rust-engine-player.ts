@@ -2,8 +2,8 @@
  * Rust audio backend adapter (post-2.0 S2 / Issue #296).
  *
  * `DaemonClient`（orbit-audio-daemon / WebSocket）を `AudioEngineBackend` 契約へ
- * ラップし、interpreter に差し込む。cutover #108 で `createAudioEngine()` の既定（唯一の）
- * バックエンド（唯一のバックエンド）。
+ * ラップし、interpreter に差し込む。cutover #108 以降、`createAudioEngine()` が返す唯一の
+ * バックエンド（#502 で SC への opt-out 経路ごと撤去した）。
  *
  * 設計（docs/development/POST_2.0_A0_RT_INTEGRATION_DESIGN.md §13 / master plan §4-A）:
  *

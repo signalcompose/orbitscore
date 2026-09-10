@@ -17,6 +17,41 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(build): prune the engine dist by source presence instead of by name (#502) (Sep 10, 2026)
+
+`/simplify`（4 エージェント）の指摘を適用した。
+
+**採用（altitude + efficiency の合流点）**: `packages/engine/scripts/sync-dist.js` の
+`removeRetiredBackend()` は `audio/supercollider` / `supercollider-player.*` という
+**SC 固有のファイル名を汎用ビルド道具の中に埋め込んでいた**。守りたかったのは
+「`tsc --build` の増分は、ソースを消しても出力を消さない」ことであって SC ではない。
+**`src` に対応する `.ts`（`.tsx`）が在るかで判定する `pruneOrphanedOutputs()`** に置き換えた。
+次に何を消してもこのスクリプトを直す必要がない。1 ディレクトリ内は `Promise.all` で並行に
+処理し、空になったディレクトリは畳む。`.ts` 以外から来た成果物には触らない。
+
+旧 root-copy / bundle 経路が `engine/` 直下へ置いた `supercollider/` `scsynth/`
+`audio/supercollider` は `tsc` の出力ではないので突き合わせでは拾えない。
+**一度きりの移行掃除**として明示的に消す（コメントでそう書いた）。
+
+**採用（消し残し）**: `ORBITSCORE_ENGINE=sc で SC に opt-out` を説明したままのコメントが
+3 箇所残っていた（`interpreter-v2.ts` / `cli/repl-mode.ts` / `audio/rust-engine/index.ts`）。
+env var も `resolveEngineKind()` も本束で消えているので、**存在しない経路を説明していた**。
+`rust-engine-player.ts` の冒頭コメントは機械置換の跡で「既定（唯一の）バックエンド
+（唯一のバックエンド）」と二重化していた。あわせて直した。
+`packages/vscode-extension/package.json` は `keywords` と `scripts` から要素を消した跡が
+空行 5 行として残っていたので削除した。
+
+**見送り（理由を残す）**: `AudioDevice` 型（`audio/types.ts`）は `RustEnginePlayer` の
+3 つのスタブ（常に `undefined` / `[]` / no-op）でしか使われておらず、同種の型が
+`daemon-client.ts` の `AudioDeviceListEntry` と `mcp-server.ts` の `AudioDeviceInfo` にもある。
+3 系統あるのは確かに冗長だが、**削除は `AudioEngine` インターフェースの変更**になり
+凍結線の直前に入れる変更ではない。`AudioEngineBackend` の継ぎ目も、ネイティブ
+OrbitStudio の新ライン（#827）で第 2 実装が来る見込みなので残す。
+
+**検算**: `npm run build` 緑（`sync-dist.js` を実走）・`npm run lint` 緑・
+`npm test` **2271 passed / 58 skipped / 2329**・引用チェック 934 件 / 0 失敗
+（行シフト 4 件を `--fix` で再アンカー）。
+
 ### docs(spec): the LinkAudio fallback claim was a comment, not a measurement (#502) (Sep 10, 2026)
 
 #833 で §8.1 に置いた警告ブロックは「daemon が `LINK_AUDIO_UNAVAILABLE` を返し、TS 側が
