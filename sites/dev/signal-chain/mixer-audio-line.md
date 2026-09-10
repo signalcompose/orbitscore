@@ -307,6 +307,17 @@ fan-out、同じ aux 名なら上書きです。
 
 ## routing を daemon へ届ける: `SetBusRouting`
 
+> **Note**（#611 PR-O3b・[#824](https://github.com/signalcompose/orbitscore/pull/824)）:
+> daemon の wire には `SetBusLine` という 2 本目の経路が併存するようになりました。こちらは
+> output と sends という枠ではなく、**順序付きの op 列**（`rack` / `gain` / `output`）で bus の
+> line を丸ごと置き換えます。ただし **TS 側に呼び出し元はまだ無く**（`DaemonClient.setBusLine`
+> は定義されているだけ・`packages/engine/src/audio/rust-engine/daemon-client.ts:715-718`）、
+> 本節が説明する `output()` / `send()` の経路は `SetBusRouting` のままです。DSL が
+> `SetBusLine` へ切り替わるのは PR-O4 で、wire 側の詳細は
+> [RE-1](/rust-engine/) にあります。
+> 🔴 下で見る **kind 制約（output は sum のみ・send 先は aux のみ）は `SetBusRouting` 固有**で、
+> `SetBusLine` の `bus` 宛ては forward-only しか見ません。
+
 `output()` / `send()` の末尾で呼ばれる `syncBusRouting()`（`sequence.ts:543-570`）は
 fire-and-forget で、`this.global.setBusRouting(bus, this._sumOutputBus, buildRoutingSends(this._auxSends))`
 と **output + 全 send を毎回まとめて** `SetBusRouting` に載せます。差分ではなく全量を送るのは、

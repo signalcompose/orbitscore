@@ -316,6 +316,17 @@ completely independent slice".
 
 ## Delivering the routing to the daemon: `SetBusRouting`
 
+> **Note** (#611 PR-O3b, [#824](https://github.com/signalcompose/orbitscore/pull/824)): a second
+> path, `SetBusLine`, now co-exists on the daemon wire. Instead of the output-plus-sends frame, it
+> replaces a bus's whole line with an **ordered op sequence** (`rack` / `gain` / `output`). No TS
+> caller sends it yet, though — `DaemonClient.setBusLine` is merely defined
+> (`packages/engine/src/audio/rust-engine/daemon-client.ts:715-718`) — so the `output()` /
+> `send()` path described in this section still goes through `SetBusRouting`. The DSL switches
+> over in PR-O4; the wire-side detail lives in [RE-1](/en/rust-engine/).
+> 🔴 The **kind constraint seen below (output targets must be sum, send targets must be aux) is
+> specific to `SetBusRouting`**; a `bus` destination on `SetBusLine` is only checked for
+> forward-only-ness.
+
 `syncBusRouting()` (`sequence.ts:543-570`), called at the end of `output()` / `send()`, is
 fire-and-forget and puts **the output plus all sends together every time** on `SetBusRouting`, as
 `this.global.setBusRouting(bus, this._sumOutputBus, buildRoutingSends(this._auxSends))`. Sending

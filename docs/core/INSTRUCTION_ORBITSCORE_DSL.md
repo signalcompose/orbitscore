@@ -1907,10 +1907,17 @@ kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要�
 
 > **v1 の現在地**: 🔴 **kind 制約は今日も生きている。** `SetBusRouting` は
 > 「output は sum のみ・send 先は aux のみ」を検証して拒否する
-> （`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:5809-5813` ほか。コード側のコメントは
-> 本節 MX.4 を出典として引用している）。本節が「kind で制限しない」と規定するのは
-> **到達点**であり、制約が外れるのは `SetBusLine` を入れる **PR-O3** である。
-> forward-only は今日も同じ規則で効いている（同 `:5802-5806`）。
+> （`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6956-6960`・send 側は同 `:6981-6985`。
+> コード側のコメントは本節 MX.4 を出典として引用している）。本節が「kind で制限しない」と
+> 規定するのは **到達点**である。
+> forward-only は今日も同じ規則で効いている（同 `:6951-6955`）。
+>
+> **PR-O3 の到達点（2026-09-10・[#824](https://github.com/signalcompose/orbitscore/pull/824) マージ）**:
+> `SetBusLine` の wire は入り、その `bus` 宛ては **forward-only しか検証しない**
+> （`EngineWrap::set_bus_line`・同 `:6852-6865`。kind の照合は無く、
+> `set_bus_line_accepts_a_forward_aux_destination`・同 `:3262-3284` が固定している）。
+> ただし **DSL からこの wire を送る経路はまだ無く**、`output()` / `send()` は `SetBusRouting`
+> のままなので、**ユーザーから見える制約は変わっていない**。切り替えは **PR-O4**。
 
 ### MX.5 v1 制約（実装事実の開示）
 
@@ -1921,7 +1928,10 @@ kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要�
 
 > 🔴 上 2 項は**今日の制約であって到達点ではない**。owner 裁定（2026-09-03・doc 611 §14 (7)）は
 > 「kind による制限は設けない。循環だけを診断で拒否する」であり、MX.4 がその規範を書いている。
-> 本節は「実装事実の開示」なので、**制約が外れる（PR-O3）まで両方を併記する**。
+> 本節は「実装事実の開示」なので、**制約がユーザーから見えなくなるまで両方を併記する**。
+> PR-O3（2026-09-10 マージ）で入ったのは `SetBusLine` の **wire だけ**で、DSL の `output()` /
+> `send()` は `SetBusRouting` を送り続けるため、併記が要らなくなるのは **PR-O4** である
+> （MX.4 の「PR-O3 の到達点」注記を見ること）。
 
 ---
 
