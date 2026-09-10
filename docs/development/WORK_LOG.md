@@ -17,6 +17,77 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(design): design the native macOS OrbitStudio, and start a fresh plan and map (#848) (Sep 11, 2026)
+
+owner 指示 2026-09-11。**凍結線を越えた後の本線**。設計は Fable（effort: xhigh）が起案し、
+main が実行フロー②（独立第二意見）として一次ソースで検算した。
+
+| 文書 | 行 | 何を決めたか |
+|---|---|---|
+| `docs/design/848-native-orbitstudio-design.md` | 577 | 完了条件 D-1〜D-8 / 層 2 のプロセス化 / セッションプロトコル / MCP の置き場 / Swift シェルの面積 / 配布（656 からの差分） / 拡張を仕様書として使う具体 |
+| `docs/planning/IMPLEMENTATION_PLAN_NATIVE.md` | 230 | 段 N0〜N4・束 9 本・一方通行 10 件・engine 線 PR の付け替え表 |
+| `docs/planning/NATIVE_DEVELOPMENT_MAP.md` | 297 | 現在地 → 第 1 リリースの筋・本線と枝葉・やらないこと |
+
+#### 戻れない判断 2 件
+
+**層 2 のプロセス化 = app が所有する Node 子プロセス + ヘッドレス host**。
+in-process JSC / 常駐サービス / Rust に JS 埋め込み / Rust 移植を棄却。決め手は
+**所有権を 1 つに固定すれば故障モードが今日と同じクラスに収まる**こと。常駐サービス案が
+持ち込む孤児・発見・二重起動は、このリポジトリが 2026-09 に何度も踏んだクラス
+（#624 二重 daemon・#779 shm 孤児・#830 のソケットパス 103 文字）。
+**B → C は後から足せるが C → B は戻れない**ので戻れる側に倒した。
+
+**プロトコルは作り直す = 双方向 JSON-RPC 2.0 over WebSocket**（同一リスナーの
+`/rpc` + `/mcp`・JSON Schema 単一正本）。決め手は `open_file` 等が
+**サーバ → エディタの逆方向**で、MCP にも LSP にもその形が無いこと。
+
+#### main の検算（実行フロー②）
+
+設計の土台になっている実測 2 件を一次ソースで確かめた。
+
+| 主張 | 実測 |
+|---|---|
+| engine が native N-API addon に依存する（JSC / Rust 埋め込み案を棄却する根拠） | `packages/engine/package.json` の dependencies に **`@julusian/midi`** が実在 |
+| 拡張 21 モジュール中 vscode 依存は 2 本だけ（層の分割が成り立つ根拠） | `ls src/*.ts` = **21**・`grep -l "from 'vscode'"` = **2**（`completion-context.ts` / `extension.ts`） |
+
+どちらも一致。**ただし but 1 件**: 設計は `origin/main`（`229d6387`）で書かれており、
+依存一覧に `supercolliderjs` が残っている。#502（PR #840）が入ると消えるので、
+束が main に入った時点で本文の依存列挙を更新する（設計の結論は変わらない）。
+
+#### main の follow-up（起案者が `tests/` を触れない指示だったため）
+
+`tests/docs/planning-issue-state.spec.ts` の `DOCUMENTS` に新 2 本を追加した。
+拡張版の 2 本と同じラチェットに載せる — 計画文書が閉じた issue を「未着手」と語る型の
+ドリフトは、**文書が増えるほど起きやすい**。3 件緑。
+
+#### owner 裁定待ち 14 件
+
+設計 §14 に列挙。主なもの: detach（アプリを閉じてもセッションを残す）を第 1 リリースに
+含めるか（推奨: 含めない）/ `packages/engine` の rename（推奨: しない）/ タグ名前空間 /
+自動更新 / Swift の CI / `.app` の bundle id（推奨: 過去の VSCodium 版と同じ
+`com.signalcompose.orbitstudio` を再利用）/ パリティ台帳で落としてよい拡張の表面 /
+**app の版の正本**（推奨: `apps/OrbitStudio/VERSION` + `app-v<版>` をタグで強制）。
+
+#### 🔴 owner 指摘で読み直した一次ソース 10 本（2026-09-11）
+
+最初のブリーフは参照文書を **6 本しか挙げておらず、既に検討済みの文書を落としていた**。
+owner の指摘で洗い直し、10 本 + Serena メモリ 3 本 + 協調計画を追送して設計を見直した。
+**列挙が一段手前で止まる型**（memory `enumeration-stops-one-level-too-early`）の再発である。
+
+設計が変わった主な点:
+
+- **配布（§9）は再設計をやめ、`656-release-design.md` からの差分だけにした**。
+  §9.0 に裁定 10 件 + Q-656 回答 8 件を「引き継ぐ / 失効」で 1 行ずつ仕分けた。
+  失効したのは trim（Electron 前提）/「自作しない」/ **app 版 = 拡張版 のバージョン規則** /
+  VSCodium 既定の bundle id / `ORBIT_GATED_EXT_MODE=installed`。
+  引き継いだのは署名順序・identity・entitlements の実測手順・stop 条件・E2E-D3/D4/D5
+- **§0b「既存の検討との関係」を新設**。文書ごとに「引き継ぐ / 棄却 / 失効」と本書での置き場を
+  表にした。**過去の検討を無かったことにしていない**と読み手が確認できる形にするため
+- `AUDIO_ENGINE_CORE_ARCHITECTURE.md` §5 の「musical timing を Rust へ移す引き金 =
+  複数フロントが同じ timing を使う時」は、**本設計では引かれない**（フロントが 3 つでも
+  timing を持つ層 2 は 1 プロセス）。MIDI / transport の Rust 化を急がない根拠として §4.6 に
+- 地図に `USER_OUTCOMES_2026-09.md` と同じ粒度で「各段が終わるとユーザーは何ができるか」を新設
+
 ### test(e2e): launch the gated harness from stock VS Code (#830) (Sep 10, 2026)
 
 🔴 **実機で回して 3 件の欠陥が出た。いずれも stock VS Code に切り替えて初めて現れたもので、

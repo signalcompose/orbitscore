@@ -41,6 +41,10 @@ const repoRoot = path.resolve(__dirname, '../..')
 const DOCUMENTS = [
   'docs/planning/DEVELOPMENT_MAP.md',
   'docs/planning/IMPLEMENTATION_PLAN_2026-09.md',
+  // #848 ネイティブ版の計画と地図。拡張版の 2 本と同じラチェットに載せる — 計画文書が
+  // 閉じた issue を「未着手」と語る型のドリフトは、文書が増えるほど起きやすい。
+  'docs/planning/IMPLEMENTATION_PLAN_NATIVE.md',
+  'docs/planning/NATIVE_DEVELOPMENT_MAP.md',
 ] as const
 
 /** 「まだ終わっていない」ことを含意する語。閉じた issue の行に出たら疑わしい。 */
