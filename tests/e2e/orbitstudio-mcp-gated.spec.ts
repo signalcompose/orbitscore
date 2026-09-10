@@ -92,7 +92,11 @@ import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
 const HARNESS_TMP_PREFIX = 'orbitstudio-'
-const HARNESS_KILL_PATTERN = `user-data-dir=[^[:space:]]*/${HARNESS_TMP_PREFIX}`
+/**
+ * Identity of a harness-owned process: the `--user-data-dir` we generated. Built from
+ * HARNESS_TMP_PREFIX so the launcher and the teardown can never drift apart.
+ */
+const HARNESS_KILL_RE = new RegExp(`user-data-dir=\\S*/${HARNESS_TMP_PREFIX}`)
 
 const gated = Boolean(process.env[GATE_ENV])
 const appPath = process.env.ORBIT_E2E_VSCODE_APP?.trim() || DEFAULT_APP_PATH
@@ -268,18 +272,62 @@ const TEST_TIMEOUT_MS = 120_000
 const TEARDOWN_TIMEOUT_MS = 30_000
 
 /**
- * SAFETY: this exact pattern ONLY. It matches the `--user-data-dir` argument
- * whose temp root begins with HARNESS_TMP_PREFIX, which only this harness
- * creates. It must never be replaced by an app/process-name match: an
- * overbroad pkill killed the user's everyday editor in a known past incident.
- * Uses execFileSync (no shell, fixed argv — not a template-built command
- * string) rather than exec/execSync.
+ * SAFETY: identity comes from the `--user-data-dir` argument whose temp root begins with
+ * HARNESS_TMP_PREFIX, which only this harness creates. It must never be replaced by an
+ * app/process-name match: an overbroad pkill killed the user's everyday editor in a known
+ * past incident.
+ *
+ * 🔴 Signal only the ROOT processes, never the helpers. Electron helper processes inherit
+ * the same `--user-data-dir` argument, so a blanket `pkill -f` reaches them too. Killing a
+ * renderer out from under a live main process makes VS Code report
+ * "The window terminated unexpectedly (reason: 'killed', code: '15')" in a modal dialog,
+ * which then waits for a human. Signalling only the roots lets each main process tear its
+ * own helpers down through the normal shutdown path, so no dialog appears.
+ *
+ * Uses execFileSync (no shell, fixed argv) rather than exec/execSync.
  */
-function killHarnessInstances(): void {
+function harnessProcessTree(): { pid: number; ppid: number }[] {
+  let listing = ''
   try {
-    execFileSync('pkill', ['-f', HARNESS_KILL_PATTERN], { stdio: 'ignore' })
+    listing = execFileSync('ps', ['-Ao', 'pid=,ppid=,command='], { encoding: 'utf8' })
   } catch {
-    // pkill exits non-zero when no process matched — not an error here.
+    return []
+  }
+  const rows: { pid: number; ppid: number }[] = []
+  for (const line of listing.split('\n')) {
+    if (!HARNESS_KILL_RE.test(line)) continue
+    const match = /^\s*(\d+)\s+(\d+)\s/.exec(line)
+    if (!match) continue
+    rows.push({ pid: Number(match[1]), ppid: Number(match[2]) })
+  }
+  return rows
+}
+
+function killHarnessInstances(): void {
+  const rows = harnessProcessTree()
+  if (rows.length === 0) return
+  const pids = new Set(rows.map((row) => row.pid))
+  // A root is a matching process whose parent is not itself a matching process.
+  const roots = rows.filter((row) => !pids.has(row.ppid)).map((row) => row.pid)
+  for (const pid of roots) {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      // already gone
+    }
+  }
+  if (roots.length === 0) return
+  // Give the roots a moment to take their helpers down, then force anything left.
+  const deadline = Date.now() + 5000
+  while (Date.now() < deadline && harnessProcessTree().length > 0) {
+    execFileSync('sleep', ['0.2'])
+  }
+  for (const row of harnessProcessTree()) {
+    try {
+      process.kill(row.pid, 'SIGKILL')
+    } catch {
+      // already gone
+    }
   }
 }
 
@@ -455,6 +503,26 @@ async function launchIsolatedOrbitStudio({
     path.join(workspaceSettingsDir, 'settings.json'),
     JSON.stringify(resolvedSettings, null, 2) + '\n',
   )
+  // User-scope settings: window restore, telemetry and the startup editor are application
+  // scope, so the workspace settings above cannot reach them. A fresh profile would
+  // otherwise open the welcome editor and, after a teardown, offer to restore windows.
+  const userSettingsDir = path.join(userDataDir, 'User')
+  fs.mkdirSync(userSettingsDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(userSettingsDir, 'settings.json'),
+    JSON.stringify(
+      {
+        'window.restoreWindows': 'none',
+        'workbench.startupEditor': 'none',
+        'telemetry.telemetryLevel': 'off',
+        'update.mode': 'none',
+        'extensions.autoUpdate': false,
+        'extensions.autoCheckUpdates': false,
+      },
+      null,
+      2,
+    ) + '\n',
+  )
   await prepareWorkspace?.(tmpRoot)
 
   const port = portBase + Math.floor(Math.random() * 200)
@@ -462,6 +530,14 @@ async function launchIsolatedOrbitStudio({
     path.join(appPath, 'Contents/Resources/app/bin/code'),
     [
       '--new-window',
+      // Stock VS Code greets a brand-new profile with the welcome tab, release notes and a
+      // sign-in nudge. The fork we used to launch had those disabled in its product build,
+      // so the harness never needed these. They are pure UI suppression: nothing about the
+      // extension under test changes.
+      '--skip-welcome',
+      '--skip-release-notes',
+      '--disable-updates',
+      '--disable-telemetry',
       `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
       `--user-data-dir=${userDataDir}`,
       `--extensions-dir=${extensionsDir}`,
