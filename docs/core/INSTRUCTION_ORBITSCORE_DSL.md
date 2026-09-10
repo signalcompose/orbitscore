@@ -2098,10 +2098,25 @@ Epic #224 phases 1/2/3/R/4:
   - `defaultGain(dB)`: Set initial gain without triggering playback - use before `run()` or `loop()`
   - `defaultPan(position)`: Set initial pan without triggering playback - use before `run()` or `loop()`
   - Random values: `r` (full random), `r0%10` (random walk)
-- **Global Mastering Effects**:
+- **Global Mastering Effects**: 🔴 **DSL 語彙としては受理されるが、出荷ビルドでは no-op**（下の警告を読むこと）
   - `global.compressor()`: Increase perceived loudness
   - `global.limiter()`: Prevent clipping
   - `global.normalizer()`: Maximize output level
+
+  > 🔴 **出荷ビルドでの現在地（2026-09-10・#502 の SC 削除時に実測）**
+  >
+  > この 3 メソッドは **`RustEnginePlayer` で実装されていない**。呼ぶと
+  > `⚠️  [rust-engine] master effect "..." is not supported yet (A4 era) — it is a no-op on the rust engine.`
+  > を **1 回だけ warn して no-op** になる（`packages/engine/src/audio/rust-engine/rust-engine-player.ts`
+  > の `addEffect` / `removeEffect`）。
+  >
+  > 実装があったのは **SC バックエンドの synthdef**（`fxCompressor` / `fxLimiter` /
+  > `fxNormalizer`）だけで、**#502 で scsynth ごと削除した**。したがって出荷される
+  > `.vsix` には**この 3 つを実行する経路が存在しない**。
+  >
+  > **代替**: master バスの処理は **CLAP / VST3 プラグインのラック**で行う
+  > （`global.effect(...)` — 「Plugin Hosting」節）。DSL 語彙から 3 メソッドを外すかどうかは
+  > **owner 裁定事項**として保留する（表面の削除は破壊的変更のため）。
 - **Audio Device Selection**: Choose output device via command palette
 - **Default Behavior**: `chop(1)` or no chop treats file as single slice
 
@@ -2217,6 +2232,8 @@ the two time/pitch axes stay orthogonal and consistent with the chop slice-fit v
 - v2.0 (2025-01-06): SuperCollider integration, global mastering effects, dB-based gain control
   - SuperCollider audio engine for professional-grade timing
   - Global mastering: compressor, limiter, normalizer
+    （🔴 **どちらも #502 で撤去済み** — SC バックエンドと、その synthdef に依存していた
+    master effects。前者は Rust daemon に置き換わり、後者は**代替なく no-op** になった）
   - dB-based gain control (-60 to +12 dB)
 
 - v1.0 (2024-12-25): Core implementation complete with 100% test coverage

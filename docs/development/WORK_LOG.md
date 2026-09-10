@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(spec): record that the global mastering effects are no-ops after the SC removal (#502) (Sep 10, 2026)
+
+束 #840 を締める前の追従。`INSTRUCTION_ORBITSCORE_DSL.md` の Implementation Status は
+`global.compressor()` / `limiter()` / `normalizer()` を **Completed Features ✅** に載せていたが、
+実装は **SC の synthdef（`fxCompressor` / `fxLimiter` / `fxNormalizer`）だけ**で、#502 で
+scsynth ごと削除した。`RustEnginePlayer.addEffect` は最初から
+`⚠️  [rust-engine] master effect "..." is not supported yet (A4 era)` を 1 回 warn して
+no-op に倒す実装で、**出荷される `.vsix` にはこの 3 つを実行する経路が無い**。
+
+DSL 語彙（`signal-chain/runtime.ts` の `GLOBAL_DSL_METHODS`）には残っているため
+**構文としては受理される**。表面から外すのは破壊的変更なので owner 裁定事項として保留し、
+仕様側に警告ブロックを置いた（LinkAudio egress と同じ扱い）。代替は
+CLAP / VST3 プラグインのラック（`global.effect(...)`）。
+
+v2.0 の変更履歴側にも「SC と master effects はどちらも #502 で撤去、前者は Rust daemon に
+置き換わり後者は代替なく no-op」を追記した。
+
+**検算**: `sites/user/**` の compressor/limiter への言及は 2 件ともプラグイン effect
+（`seq.effect()` / `sum("bus").effect()`）の話で、`global.compressor()` ではない。誤記なし。
+
 ### docs(readme): drop the deleted SuperCollider paths from the repository tree (#502) (Sep 10, 2026)
 
 束 #840 を締める前の追従。root `README.md` のディレクトリ図が
