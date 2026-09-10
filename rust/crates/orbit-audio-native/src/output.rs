@@ -1256,20 +1256,34 @@ impl LineControl {
     /// code-reviewer の Minor・2026-09-11: 「この規約を知らない 4 つ目の呼び出し元が
     /// 追加されると壊れる」）:
     ///
-    /// | 呼び出し元 | 保持している mutex |
-    /// |---|---|
-    /// | `EngineWrap::set_global_gain` 系の master 経路 | `master_line_program` |
-    /// | `EngineWrap::set_bus_line`（新経路） | `bus_line_shadows` |
-    /// | `EngineWrap::set_bus_routing`（旧経路） | `bus_line_shadows`（同じもの） |
+    /// `current_gains()` を呼ぶのは 2 箇所だけで、どちらも `EngineWrap::set_bus_line` の中にある:
     ///
-    /// bus 側の 2 経路が**同じ** mutex を取るので、同一 `LineExchange` への install は
-    /// 全経路で直列化される。ここを別ロックに分けると、退役中の program を読む
-    /// use-after-free が生まれる。
+    /// | 呼び出し元 | 直前に取っている mutex |
+    /// |---|---|
+    /// | `set_bus_line` の `bus == "master"` 分岐 | `master_line_program` |
+    /// | `set_bus_line` の named-bus 分岐 | `bus_line_shadows` |
+    ///
+    /// 同じ `LineExchange` へ install する経路は、`current_gains()` を呼ばないものも含めて
+    /// 次の 3 つ。**どれも上と同じ mutex を取ってから install する**ので、install どうしも
+    /// 「読む → install」も全経路で直列化される:
+    ///
+    /// | install する経路 | 取る mutex |
+    /// |---|---|
+    /// | `set_bus_line`（master 分岐） | `master_line_program` |
+    /// | `set_bus_line`（named-bus 分岐・新経路） | `bus_line_shadows` |
+    /// | `set_bus_routing`（旧 `SetBusRouting` 経路） | `bus_line_shadows`（同じもの） |
+    ///
+    /// ここを別ロックに分けると、退役中の program を読む use-after-free が生まれる。
+    ///
+    /// 🔴 `EngineWrap::set_global_gain` は**この表に入らない**。現状は `master_gain` atomic を
+    /// store するだけで、`master_line_program` にも `LineExchange` にも触れていない。TS の
+    /// `global.gain()` を `SetBusLine("master", …)` へ切り替える PR-O4 でこの経路に触るときは、
+    /// 「既に直列化されている」と読まずに上の契約を新たに満たすこと。
     pub fn current_gains(&self) -> Vec<f32> {
         let program = self.exchange.live.load(Ordering::Acquire);
         assert!(!program.is_null(), "line program must always be installed");
         // SAFETY: control is the sole publication side. The caller serializes reading the live
-        // values with replacement (see the table above), so this pointer remains live for the
+        // values with replacement (see the tables above), so this pointer remains live for the
         // duration of the loads.
         unsafe { &*program }
             .current_gain
