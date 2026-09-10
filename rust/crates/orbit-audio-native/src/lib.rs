@@ -16,7 +16,7 @@ mod resampler;
 pub use link_audio_ring::{PostMixSink, RingTapSink};
 pub use loader::{load_sample_from_file, load_sample_resampled, LoaderError};
 pub use output::{
-    decode_bus_routing_sentinel, list_output_devices, rebuild_output_stream,
+    decode_bus_routing_sentinel, legacy_line_ops, list_output_devices, rebuild_output_stream,
     resolve_requested_device_name, select_live_output_device, start_default_output,
     start_default_output_with_clap, start_default_output_with_device,
     start_default_output_with_insert_buses, start_default_output_with_insert_buses_and_post,

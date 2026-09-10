@@ -23,8 +23,8 @@ use std::time::Duration;
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
 #[cfg(feature = "outproc-effect")]
 use orbit_audio_native::{
-    decode_bus_routing_sentinel, BusSend, BusTarget, LegacyLineInstaller, LineOp, LineOutput,
-    LineProgram, LineProgramInstaller, OutputDest,
+    decode_bus_routing_sentinel, legacy_line_ops, BusSend, BusTarget, LegacyLineInstaller, LineOp,
+    LineOutput, LineProgram, LineProgramInstaller, OutputDest,
 };
 use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputDeviceRequest, OutputError, OutputFault,
@@ -2136,26 +2136,20 @@ fn default_bus_line_program() -> Vec<LineOp> {
     ]
 }
 
+/// Every bus starts at the default program, so its republish shadow starts there too.
+///
+/// 🔴 The shadow is what a later `SetBusLine` seeds effective gains from. If it disagreed with
+/// what the bus is actually running, seeding would restore the wrong value and reintroduce the
+/// jump it exists to prevent — so build it in exactly one place.
 #[cfg(feature = "outproc-effect")]
-fn legacy_shadow_line(output_target: BusTarget, sends: &[BusSend]) -> Vec<LineOp> {
-    let mut ops = Vec::with_capacity(sends.len() + 2);
-    ops.push(LineOp::Rack);
-    ops.push(LineOp::Output(LineOutput {
-        dest: match output_target {
-            BusTarget::Master => OutputDest::Master,
-            BusTarget::Bus(index) => OutputDest::Bus(index),
-        },
-        thru: !sends.is_empty(),
-        gain: 1.0,
-    }));
-    for (index, send) in sends.iter().enumerate() {
-        ops.push(LineOp::Output(LineOutput {
-            dest: OutputDest::Bus(send.target),
-            thru: index + 1 != sends.len(),
-            gain: send.gain,
-        }));
-    }
-    ops
+fn initial_bus_line_shadows(
+    bus_line_programs: &HashMap<String, LineProgramInstaller>,
+) -> HashMap<String, Vec<LineOp>> {
+    bus_line_programs
+        .keys()
+        .cloned()
+        .map(|name| (name, default_bus_line_program()))
+        .collect()
 }
 
 #[cfg(feature = "outproc-effect")]
@@ -5242,11 +5236,7 @@ impl EngineWrap {
             .bus_lines
             .lock()
             .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))? = bus_lines;
-        let bus_line_shadows = bus_line_programs
-            .keys()
-            .cloned()
-            .map(|name| (name, default_bus_line_program()))
-            .collect();
+        let bus_line_shadows = initial_bus_line_shadows(&bus_line_programs);
         *wrap
             .bus_line_programs
             .lock()
@@ -5542,11 +5532,7 @@ impl EngineWrap {
             .bus_lines
             .lock()
             .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))? = bus_lines;
-        let bus_line_shadows = bus_line_programs
-            .keys()
-            .cloned()
-            .map(|name| (name, default_bus_line_program()))
-            .collect();
+        let bus_line_shadows = initial_bus_line_shadows(&bus_line_programs);
         *wrap
             .bus_line_programs
             .lock()
@@ -7308,7 +7294,7 @@ impl EngineWrap {
                 gain,
             })
             .collect();
-        let shadow = legacy_shadow_line(output_target, &enabled_sends);
+        let shadow = legacy_line_ops(output_target, &enabled_sends);
         let mut shadows = self
             .bus_line_shadows
             .lock()

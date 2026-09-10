@@ -1033,6 +1033,34 @@ pub struct LineProgram {
     drop_thread_log: Option<Arc<std::sync::Mutex<Vec<std::thread::ThreadId>>>>,
 }
 
+/// The op sequence a legacy `SetBusRouting` maps onto: rack, the output target, then one
+/// `thru` output per send.
+///
+/// 🔴 This is the single definition. `LineProgram::legacy` builds a program from it, and the
+/// daemon keeps the same ops as its republish shadow. Duplicating the construction would let
+/// the two drift — the shadow decides what a later `SetBusLine` seeds from, so a mismatch
+/// would silently reintroduce the gain jump that seeding exists to prevent.
+pub fn legacy_line_ops(output_target: BusTarget, sends: &[BusSend]) -> Vec<LineOp> {
+    let mut ops = Vec::with_capacity(sends.len() + 2);
+    ops.push(LineOp::Rack);
+    ops.push(LineOp::Output(LineOutput {
+        dest: match output_target {
+            BusTarget::Master => OutputDest::Master,
+            BusTarget::Bus(index) => OutputDest::Bus(index),
+        },
+        thru: !sends.is_empty(),
+        gain: 1.0,
+    }));
+    for (index, send) in sends.iter().enumerate() {
+        ops.push(LineOp::Output(LineOutput {
+            dest: OutputDest::Bus(send.target),
+            thru: index + 1 != sends.len(),
+            gain: send.gain,
+        }));
+    }
+    ops
+}
+
 impl LineProgram {
     /// Construct a generic program whose gain state starts at unity and ramps to each target.
     pub fn new(ops: Vec<LineOp>) -> Self {
@@ -1070,24 +1098,7 @@ impl LineProgram {
     }
 
     fn legacy(output_target: BusTarget, sends: &[BusSend]) -> Self {
-        let mut ops = Vec::with_capacity(sends.len() + 2);
-        ops.push(LineOp::Rack);
-        ops.push(LineOp::Output(LineOutput {
-            dest: match output_target {
-                BusTarget::Master => OutputDest::Master,
-                BusTarget::Bus(index) => OutputDest::Bus(index),
-            },
-            thru: !sends.is_empty(),
-            gain: 1.0,
-        }));
-        for (index, send) in sends.iter().enumerate() {
-            ops.push(LineOp::Output(LineOutput {
-                dest: OutputDest::Bus(send.target),
-                thru: index + 1 != sends.len(),
-                gain: send.gain,
-            }));
-        }
-        Self::settled(ops)
+        Self::settled(legacy_line_ops(output_target, sends))
     }
 
     fn validate_shape(&self) -> Result<(), OutputError> {
@@ -2079,6 +2090,21 @@ fn line_gain(
     gain
 }
 
+/// Apply a bus-level pan to an interleaved stereo buffer.
+///
+/// 🔴 The `√2` is **not** an extra boost — it makes this stage unity at center.
+///
+/// The source side already applies `equal_power_pan` when it schedules an event
+/// (`orbit_audio_core::scheduler`), so a centered event arrives here having been multiplied by
+/// `(1/√2, 1/√2)`. Applying the raw equal-power law a second time would drop a further 3 dB, so
+/// **writing `pan(0)` would make a score quieter than not writing it at all**. Scaling by `√2`
+/// makes center `(1, 1)`, and hard-left `(√2, 0)` composes with the source-side center to `(1, 0)`
+/// — the same as today's source-side hard left. The two stages compose to the original law for
+/// every position.
+///
+/// Do not remove the factor as "double compensation": the compensation is what keeps this stage
+/// transparent. The source side cannot drop its own center application without breaking bit
+/// identity for existing scores (design `docs/design/611-o-surface-bundle-design.md` §4.1).
 #[inline]
 fn apply_line_pan(buf: &mut [f32], frames: usize, pan: f32) {
     let (left, right) = equal_power_pan(pan);
@@ -3875,7 +3901,10 @@ mod tests {
             ]),
             2,
         );
-        for frame in hard_left.chunks_exact(2) {
+        // `as_chunks::<2>()` rather than `chunks_exact(2)`: clippy 1.98 rejects the latter for a
+        // constant size (`chunks_exact_to_as_chunks`), and CI tracks stable while this machine
+        // may be a release behind.
+        for frame in hard_left.as_chunks::<2>().0 {
             assert!((frame[0] - 2.0).abs() <= 1e-6, "hard-left L={}", frame[0]);
             assert!(frame[1].abs() <= 1e-6, "hard-left R={}", frame[1]);
         }

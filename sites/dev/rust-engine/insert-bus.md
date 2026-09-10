@@ -53,7 +53,7 @@ render 側の核は `orbit-audio-native` の `InsertBusStage` です。`processo
 event が retain され続けます（後述の landmine）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1404-1423
+// rust/crates/orbit-audio-native/src/output.rs:1415-1434
 /// named routing tag を受ける per-bus insert stage。sum/aux を含む mixer graph の1ノード
 /// （#459/#453・MX.1-MX.5）。
 ///
@@ -94,7 +94,7 @@ pub struct InsertBusStage {
 **`line: LineSlot` の 1 フィールドにまとめられました**。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1424-1426
+// rust/crates/orbit-audio-native/src/output.rs:1435-1437
     /// Published line program. Routing, sends, and rack position are all interpreted from this one
     /// ordered program by the callback post-loop.
     line: LineSlot,
@@ -105,8 +105,8 @@ pub struct InsertBusStage {
 （`Gain`）・どこへ出すか（`Output`）が **1 本の順序付きプログラム**として表現されます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:988-995
-/// One operation in a bus line. `Pan` is reserved for PR-O4; this PR does not generate it.
+// rust/crates/orbit-audio-native/src/output.rs:1019-1026
+/// One operation in a bus line. Pan positions use the normalized -1..=1 wire range.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LineOp {
     Rack,
@@ -116,8 +116,11 @@ pub enum LineOp {
 }
 ```
 
-`LineOp::Pan` は型としてだけ入っていて、PR-O3a のコードはこの op を 1 つも生成しません
-（配線は PR-O4）。この bus の出力がどこへ行くかという話そのものは SC-2 章の主題です。
+`LineOp::Pan` は PR-O3a の時点では型としてのみ存在し、`validate_line_program` が RT 未配線を
+理由に install を拒否していました。続く #611 PR-O4（本束）でその拒否が外れ、post-loop と
+master line の両方で実行されるようになっています（バス上の Pan は素の等パワーではなく
+`√2 · equal_power_pan(p)` — 詳しくは [SC-2](/signal-chain/mixer-audio-line) の「line program」
+節）。この bus の出力がどこへ行くかという話そのものは SC-2 章の主題です。
 
 ## bus 0 個ならビット同一の従来経路
 
@@ -126,7 +129,7 @@ RE-1 で見た `render_engine_with_sources` は、insert bus が 1 つも active
 使わないセッションは bus プールのコストを一切払いません。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1954-1959
+// rust/crates/orbit-audio-native/src/output.rs:1965-1970
     if sources.is_empty() {
         if buses.iter().any(|bus| bus.active.load(Ordering::Relaxed)) {
             render_engine_with_insert_buses_and_source_outputs(
@@ -144,7 +147,7 @@ instrument source が無いときは source 側に空スライスを渡すだけ
 両 pass の見え方が食い違うため）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2170-2176
+// rust/crates/orbit-audio-native/src/output.rs:2196-2202
     let bs = (hw.len() / output_channels) * output_channels;
 
     // active フラグを 1 回だけ atomic load して使い回す（RT: 同じ判定を何度も load しない）。
@@ -200,7 +203,7 @@ fn effect_buses_from_env() -> Result<Vec<String>, WrapError> {
 `kind: BusKind`（insert / sum / aux）と mixer 用の routing 共有 Arc が足された点です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2258-2280
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2252-2274
 /// 1 本の named bus stage（insert/sum/aux 共通）を構成する部材（`build_effect_bus_stages` →
 /// `install_effect_bus_slots` の間で運ぶ・#434 S2/S3・M2 で kind/routing を追加）。
 /// effect-only / both の両起動経路で同一のライフサイクルを共有する。
@@ -457,7 +460,7 @@ WORK_LOG の記述であり、本ページの再読（2026-09-01）でも `outpr
 
 - `rust/crates/orbit-audio-native/src/output.rs:377-412` — `InsertBusStage` 構造体（`processor`/`active` と mixer 用フィールドの意味）
 - `rust/crates/orbit-audio-native/src/output.rs:1252-1275` — PR-O3a 後の `InsertBusStage`（mixer 用 4 フィールド → `line: LineSlot`）
-- `rust/crates/orbit-audio-native/src/output.rs:904-929` — `OutputDest` / `LineOutput` / `LineOp`（`Pan` は PR-O4 予約）
+- `rust/crates/orbit-audio-native/src/output.rs:1001-1026` — `OutputDest` / `LineOutput` / `LineOp`（`Pan` は #611 PR-O4 で配線済み）
 - `rust/crates/orbit-audio-native/src/output.rs:709-750` — `render_engine_with_sources` の bus 0 個フォールバック（bit-identical 経路）
 - `rust/crates/orbit-audio-native/src/output.rs:823-846` — `render_engine_with_insert_buses_and_source_outputs` の active flag snapshot
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1904-1948` — `DEFAULT_EFFECT_BUS_POOL_PREFIX` / `DEFAULT_EFFECT_BUS_POOL_SIZE` / `effect_buses_from_env`
