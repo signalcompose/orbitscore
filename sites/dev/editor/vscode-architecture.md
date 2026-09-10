@@ -71,7 +71,7 @@ OrbitScore が使っているのは 2 種類です:
 宣言は `package.json` の `engines` と `main` のあいだに置かれています。
 
 ```json
-// packages/vscode-extension/package.json:34-40
+// packages/vscode-extension/package.json:32-38
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": true,

@@ -1144,7 +1144,7 @@ export function parseStepLine(line: string): StepEvent | null {
 The audio-side source is a single place in `rust-engine-player.ts`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1610-1616
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1621-1627
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
       console.log(

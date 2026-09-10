@@ -262,8 +262,8 @@ require time-stretch — see `fixpitch()` / `time()` / `stretch()` in §12.
 | `chop(n > 1)` | `scheduleSliceEvent` | the slice is varispeed-fitted into its slot (above) — **pitch moves** |
 
 The branch is in `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138`
-(`if (chopDivisions && chopDivisions > 1)`) — full path, because a second `event-scheduler.ts`
-exists under `packages/engine/src/audio/supercollider/`.
+(`if (chopDivisions && chopDivisions > 1)`). The full path is a leftover from when a second
+`event-scheduler.ts` existed under the retired backend; that directory was removed in #502.
 `scheduleEvent` takes **no duration and no rate argument**, so there is nothing to scale by.
 
 **The non-chop path is a feature, not an omission.** It is how you write a one-shot that
@@ -657,11 +657,16 @@ LinkAudio は Live 12.4 (2026-05-05 公開) で導入された Link の上位互
 > **SC（GPL の scsynth 同梱）を削除した理由と同じ問題**をもう一度作ることになる。
 > 有効化は「そう決める」ことであって、まだ決めていない。
 >
-> **したがって今日の挙動**: `global.linkAudio()` 宣言下で `seq.output("kick")` を書くと、
-> daemon が `LINK_AUDIO_UNAVAILABLE` を返し、TS 側が **1 回だけ warn して継続**する
-> （`packages/engine/src/audio/rust-engine/rust-engine-player.ts` の `registerLinkAudioChannel`）。
-> channel 名は tag され続けるが、出力は hardware のみ。`global.tempo()` の Link への push
-> （§8.1.4・#283）も同じ feature に依存するため、同様に無効で 1 回 warn する。
+> **🔴 今日の挙動は未決である（設計の意図と実測が食い違っている）**
+>
+> | | 主張 | 出典 |
+> |---|---|---|
+> | 設計の意図 | daemon が `LINK_AUDIO_UNAVAILABLE` を返し、TS 側が 1 回だけ warn して継続。channel 名は tag され続けるが出力は hardware のみ | `rust-engine-player.ts` の `registerLinkAudioChannel` の**コメント** |
+> | **実測（2026-09-04・main の実機実行）** | `global.linkAudio()` 下の sequence は **capture RMS = 0**。`get_log` に `LINK_AUDIO_UNAVAILABLE` も gap 警告も**出ない** | `tests/e2e/orbitstudio-mcp-gated.spec.ts` の該当ブロック（capture ベースの証明をこの理由で取り下げた記録） |
+>
+> **コメントは実装の振る舞いの証拠ではない。** どちらが正しいかは、`link-audio` を有効化するか
+> どうかの裁定と一緒に決める。それまで **LinkAudio を前提にした演奏はしない**こと。
+> `global.tempo()` の Link への push（§8.1.4・#283）も同じ feature に依存するので同様に無効。
 
 #### 8.1.1 Global mode declaration
 
@@ -2089,7 +2094,7 @@ Epic #224 phases 1/2/3/R/4:
 - **Error Handling**: Graceful error reporting
 
 #### Audio Engine (Rust daemon)
-- **File Loading**: WAV / AIFF / MP3 / MP4 decoding (symphonia on the Rust path; buffer caching on the SC path)
+- **File Loading**: WAV / AIFF / MP3 / MP4 decoding (symphonia, on the Rust daemon — the only backend since #502)
 - **Slicing**: `chop(n)` divides audio into n equal parts with precise timing
 - **Playback**: sample-accurate `PlayAt` scheduling on the Rust daemon
 - **Audio Control**:
@@ -2117,7 +2122,7 @@ Epic #224 phases 1/2/3/R/4:
   > **代替**: master バスの処理は **CLAP / VST3 プラグインのラック**で行う
   > （`global.effect(...)` — 「Plugin Hosting」節）。DSL 語彙から 3 メソッドを外すかどうかは
   > **owner 裁定事項**として保留する（表面の削除は破壊的変更のため）。
-- **Audio Device Selection**: Choose output device via command palette
+- **Audio Device Selection**: Choose output device in the **Audio Engine Settings** view (or the MCP `select_audio_device` tool). 🔴 The palette command was removed in #502, and the DSL `global.audioDevice()` does **not** switch the device — it warns and points at the setting.
 - **Default Behavior**: `chop(1)` or no chop treats file as single slice
 
 #### Object-Oriented Architecture

@@ -648,14 +648,41 @@ describe('RustEnginePlayer with mock daemon', () => {
     expect(playAtRecords().length).toBe(0)
   })
 
-  it('master effect は 1 回 warn して no-op（addEffect/removeEffect）', async () => {
+  /**
+   * 🔴 このテストは **2026-09-10 に期待値を反転させた**（#840 レビュー・silent-failure-hunter）。
+   *
+   * 旧版は `expect(fxWarns.length).toBe(1)` で「master effect は種類によらず 1 セッション 1 回だけ
+   * warn する」を**固定していた**。しかしそれは欠陥そのもので、`compressor()` の後に `limiter()`
+   * を足すという普通のマスタリングチェーンで**2 つ目以降が完全に無音で失敗する**（`EffectsManager`
+   * は成功したように読める `🎛️ Global: ...` を毎回出す）。SC の synthdef がこの 3 つの唯一の実装
+   * だったので、#502 の削除以降は代替経路も無い。
+   *
+   * warn-once の単位は **(操作, effect 種別)** でなければならない。同じ操作の繰り返しは 1 回。
+   */
+  it('master effect は種類ごと・操作ごとに warn して no-op（addEffect/removeEffect）', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const p = await boot()
+    const fxWarns = () => warn.mock.calls.filter((c) => String(c[0]).includes('master effect'))
+
     await p.addEffect('master', 'compressor', { threshold: -12 })
+    expect(fxWarns().length).toBe(1)
+
+    // 別の effect は別の出来事。ここが 1 のままだと 2 つ目が無音で落ちる。
+    await p.addEffect('master', 'limiter', {})
+    expect(fxWarns().length).toBe(2)
+
+    // add と remove も別の出来事。
+    await p.removeEffect('master', 'compressor')
+    expect(fxWarns().length).toBe(3)
+
+    // 同じ操作の繰り返しは増えない（warn-once の性質は保つ）。
+    await p.addEffect('master', 'compressor', { threshold: -6 })
     await p.addEffect('master', 'limiter', {})
     await p.removeEffect('master', 'compressor')
-    const fxWarns = warn.mock.calls.filter((c) => String(c[0]).includes('master effect'))
-    expect(fxWarns.length).toBe(1) // warn-once
+    expect(fxWarns().length).toBe(3)
+
+    // 文言は「代わりに何をすればよいか」まで言う。
+    expect(String(fxWarns()[0][0])).toContain('CLAP / VST3 plugin on the master bus')
     warn.mockRestore()
   })
 

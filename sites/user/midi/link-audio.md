@@ -15,7 +15,7 @@ description: global.linkAudio() と seq.output() を使って OrbitScore の音�
 - 音声送出を担っていた **OrbitLinkAudio.scx**（SuperCollider 用のプラグイン）は、SuperCollider 経路ごと [#502](https://github.com/signalcompose/orbitscore/issues/502)（2026-09-10）で削除されました
 - 置き換えとなる Rust 側の送出機能（`orbit-link-audio`）は、配布ビルドに**含まれていません**。有効化すると Ableton Link のライセンス（GPL-2.0-or-later）が配布物に入るため、有効にするかどうかがまだ決まっていません
 
-⚠️ **そのとき音がどうなるかは、まだ確定していません。** 仕様（DSL 仕様 §8.1）は「ハードウェア出力へフォールバックし、警告が 1 回だけ出る」と書いていますが、2026-09-04 の実機測定では**音が出ず、警告も出ませんでした**（`tests/e2e/orbitstudio-mcp-gated.spec.ts:5113-5119` に記録）。**どちらが正しいかが決まるまで、LinkAudio を前提にした演奏はしないでください。**
+⚠️ **そのとき音がどうなるかは、まだ確定していません。** 仕様（DSL 仕様 §8.1）は「ハードウェア出力へフォールバックし、警告が 1 回だけ出る」と書いていますが、2026-09-04 の実機測定では**音が出ず、警告も出ませんでした**（`tests/e2e/orbitstudio-mcp-gated.spec.ts` の「**A comment is not evidence of implementation behavior**」で始まるコメント に記録）。**どちらが正しいかが決まるまで、LinkAudio を前提にした演奏はしないでください。**
 
 `global.tempo()` を Link の相手に伝える機能も同じ理由で無効です。
 
@@ -168,7 +168,7 @@ LOOP(piano, kick)
 
 警告が 1 回だけなのは意図的です。発音のたびに同じ理由の警告が積み上がらないよう、警告を出すのは**チャンネルを登録する 1 箇所だけ**と決められています。
 
-⚠️ ただし、**この記述と実機の測定が食い違っています**。2026-09-04 の実機では音が出ず（capture RMS = 0）、警告も出ませんでした（`tests/e2e/orbitstudio-mcp-gated.spec.ts:5113-5119`）。ページ冒頭の警告も参照してください。
+⚠️ ただし、**この記述と実機の測定が食い違っています**。2026-09-04 の実機では音が出ず（capture RMS = 0）、警告も出ませんでした（`tests/e2e/orbitstudio-mcp-gated.spec.ts` の「**A comment is not evidence of implementation behavior**」で始まるコメント）。ページ冒頭の警告も参照してください。
 
 ---
 

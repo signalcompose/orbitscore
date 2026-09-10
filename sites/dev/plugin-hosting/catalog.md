@@ -568,7 +568,7 @@ WORK_LOG 6.363 はこれを「dedup は後勝ち（PC.5）なのに resolve は�
 `package.json` の `contributes.commands` に 2 つのコマンドが登録されています。
 
 ```json
-// packages/vscode-extension/package.json:105-116
+// packages/vscode-extension/package.json:103-114
       {
         "command": "orbitscore.rescanPlugins",
         "title": "OrbitScore: Rescan Plugin Catalog",

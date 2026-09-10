@@ -17,6 +17,182 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(link-audio): tell the truth about the deleted Link submodule and the unresolved fallback (#502) (Sep 10, 2026)
+
+Fable 受け入れ監査（PR #840）の指摘を適用した。**Important 2 / Minor 4**。
+
+#### 🔴 Important — 消した submodule を案内し続ける build script
+
+`rust/crates/orbit-link-audio/build.rs` は Link のヘッダを
+`packages/sc-link-audio/external_libraries/link` に既定で探し、無ければ
+`git submodule update --init packages/sc-link-audio/external_libraries/link` を案内していた。
+本束は `.gitmodules` と gitlink を消したので、**その案内はもう "no submodule mapping" で失敗する**。
+
+`build.rs` の冒頭コメント自身が「Link submodule は **SC plugin と共有**する」と書いており、
+**SC 専用ではなかった**。owner 裁定（`NATIVE_MIGRATION_2026-09.md` §12.5）は
+`packages/sc-link-audio` を「**SC 専用なら**同時に削除」としていたので、共有物を消す判断は
+明示的にはされていない。
+
+| | |
+|---|---|
+| 出荷ビルド | **影響なし**。`link-audio` feature は default off |
+| 新規クローン | `--features link-audio` が build.rs の panic で落ちる（実測: 新しい worktree に `link/include/ableton/LinkAudio.hpp` が存在しない） |
+| 既存クローン | **成功してしまう**。gitlink を消しても git は submodule の作業ディレクトリを消さない。**手元の緑は証拠にならない** |
+| CI | 検出不能。`rust-ci.yml` は ubuntu で、`build.rs` は `target_os != macos` で先に panic する |
+
+**対処**: panic 文言を実態（`ORBIT_LINK_DIR` で Link の checkout を指す）に直し、
+crate の扱いそのものを **#845** の裁定事項として立てた（main の推奨は crate の退役）。
+
+#### 🔴 Important — リファレンス表が仕様と逆のことを書いていた
+
+`sites/user/reference/methods.md`（ja / en）は LinkAudio 無効時に
+「音はハードウェア出力に出て、警告が 1 回出ます」と**事実として断定**していた。
+一方 spec §8.1 と `sites/user/midi/link-audio.md` は「設計の意図と実測が食い違っていて未決・
+LinkAudio を前提にした演奏はしないこと」と書いている。**同じ束の中で矛盾していた。**
+リファレンス側を「未決」に揃えた。
+
+#### Minor
+
+- **行番号での出典が既にずれていた**（`orbitstudio-mcp-gated.spec.ts:5113-5119` → 実際は 5252-5256）。
+  main を merge するたびにずれるので、**行番号をやめて文言で参照する**ようにした
+  （「A comment is not evidence of implementation behavior」で始まるコメント）。5 箇所
+- 仕様の消し残し 3 件: 削除済みディレクトリを理由にフルパス表記を要求していた記述 /
+  「Choose output device via command palette」（コマンドは本束で削除・現在は Engine view と MCP）/
+  「buffer caching on the SC path」
+- `sites/dev` の glossary（ja / en）が `ORBITSCORE_ENGINE` を**現行の環境変数として定義**し、
+  `AudioEngineBackend` を「`SuperColliderPlayer` と `RustEnginePlayer` の両方が満たす」と
+  書いていた。両方直した
+- `sites/dev/**` の散文には同種が **107 行 / 20 ファイル**残っている。引用ブロックは
+  付け替え済みで `docs:check` は緑だが散文が現在形。束の外へ切り出した（**#846**）
+- 出荷 README の `✅ engine: rust (native)` と `numInputBusChannels` の記述は **#842 で解消済み**
+
+#### 監査が「無し」と確認した主なもの
+
+削除された識別子・設定キー・コマンド ID・MCP ツール名の残存参照（`build.rs` を除き 0）/
+型検査を通らない経路（実行時 `require` は実在するモジュールのみ）/ `contributes.commands` 15 件 ⊆
+`registerCommand` 18 件 / 旧 `SuperColliderPlayer` の public 面 19 メソッドの突合（Rust に無いのは
+master effects・LinkAudio・device の 3 スタブで、いずれも本束が文書化済み）/ `sync-dist.js` の
+写像（`rootDir: ./src` / `outDir: ./dist` と整合・read-only 実走で kept 440 / orphans 0）
+
+### fix(engine): make each master effect warn, and stop audioDevice from promising a restart (#502) (Sep 10, 2026)
+
+`/code:pr-review-team` ラウンド 1（4 レビュアー）の指摘を適用した。**Critical 1 / Important 2 /
+Minor 1**、fixer は main（Codex は sandbox の EPERM で起動できなかった）。
+
+#### 🔴 Critical — 2 つ目以降のマスターエフェクトが完全に無音で失敗していた
+
+`RustEnginePlayer.addEffect` / `removeEffect` は `warnOnce('masterEffect', ...)` を
+**discriminator 無しで**呼んでいた。`warningKey` は discriminator が無いと `kind` そのものを
+キーにするので、**1 セッションにつき 1 回しか warn しない**。一方 `EffectsManager` は
+`🎛️ Global: compressor(...)` を**無条件に**出す。したがって
+
+```
+global.compressor(...)   // warn が出る
+global.limiter(...)      // ✅ に見えるログだけ出て、警告は出ない・音も変わらない
+```
+
+という普通のマスタリングチェーンで、2 つ目以降が**気づく手段なく落ちる**。
+`(操作, effect 種別)` を discriminator にした。文言も「代わりに master バスへ
+CLAP / VST3 プラグインを置け」まで言うようにした。
+
+🔴 **既存テストがこの欠陥を固定していた**。`rust-engine-player.spec.ts` の
+「master effect は 1 回 warn して no-op」は `expect(fxWarns.length).toBe(1)` で、
+**3 種類の操作をして 1 回しか warn しないこと**を期待値にしていた。期待値を反転し、
+種類ごと・操作ごとに warn すること（3 回）と、同じ操作の繰り返しは増えないことを固定した。
+
+#### Important — `global.audioDevice()` が嘘の案内をしていた
+
+`RustEnginePlayer.getCurrentOutputDevice()` は常に `undefined` を返すので、この DSL メソッドは
+必ず `⚠️ Restart the engine to change audio device` を出して**何もしない**。再起動しても
+変わらない。実際の切り替え経路は VS Code 設定 `orbitscore.audioDevice`（エンジンビュー /
+MCP の `select_audio_device`）だけで、DSL からは配線されていない。
+**行き先を名指しするメッセージ**に置き換えた。
+
+#### Minor — `sync-dist.js` の `exists()` が全エラーを「不在」に畳んでいた
+
+この判定はそのまま `fs.rm` の根拠になる。EACCES 等を不在に畳むと**正当な出力を消して
+`.vsix` からモジュールが欠ける**（#654 と同じ形）。ENOENT だけを不在として扱い、
+他は投げるようにした。
+
+#### テスト — 出荷物の中身を決めるロジックにテストが 0 本だった
+
+`pruneOrphanedOutputs()`（本束で新設）は `.vsix` に何が載るかを決めるが、
+**間違えても npm test もビルドも緑のまま**通る。`sync-dist.js` を
+`require.main === module` でガードして `require` 可能にし、
+`tests/build/sync-dist-prune.spec.ts` に 7 件足した:
+4 種類の接尾辞の削除 / `.tsx` 由来を残す / `.ts` 由来でない成果物に触らない /
+空になったディレクトリを畳む / 入れ子を post-order で畳む /
+生き残りがあれば親を残す / `sourceStemFor` の境界。
+
+#### そのほか（comment-analyzer）
+
+- `CONTRIBUTING.md` が `ORBITSCORE_ENGINE=sc` opt-out 経路を現在形で説明したままだった。
+  README / CLAUDE.md / PROJECT_RULES / INDEX / CONTEXT7_GUIDE / TESTING_GUIDE は直っていて、
+  **CONTRIBUTING.md だけ列挙から漏れていた**
+- `README.md` と `CLAUDE.md` のテスト件数が 2026-09-02 の `2165 / 2233` のままで、
+  本束が spec 7 本を消した後の値になっていなかった。**出典（日付・commit）付きで**
+  `2271 passed / 58 skipped / 2329 total` に更新した
+
+#### 指摘のうち採らなかったもの
+
+- code-reviewer: Critical 0 / Important 0（型検査・全テスト・docs ビルド・`sync-dist.js` の
+  実走まで確認した上で「配線漏れ無し」）
+- pr-test-analyzer の Important 2（`chop-timing.spec.ts` の `sampleId` 未検証は本束が
+  持ち込んだ後退ではない / docs:check 198 件は上記のとおり解消済み）
+
+### refactor(build): prune the engine dist by source presence instead of by name (#502) (Sep 10, 2026)
+
+`/simplify`（4 エージェント）の指摘を適用した。
+
+**採用（altitude + efficiency の合流点）**: `packages/engine/scripts/sync-dist.js` の
+`removeRetiredBackend()` は `audio/supercollider` / `supercollider-player.*` という
+**SC 固有のファイル名を汎用ビルド道具の中に埋め込んでいた**。守りたかったのは
+「`tsc --build` の増分は、ソースを消しても出力を消さない」ことであって SC ではない。
+**`src` に対応する `.ts`（`.tsx`）が在るかで判定する `pruneOrphanedOutputs()`** に置き換えた。
+次に何を消してもこのスクリプトを直す必要がない。1 ディレクトリ内は `Promise.all` で並行に
+処理し、空になったディレクトリは畳む。`.ts` 以外から来た成果物には触らない。
+
+旧 root-copy / bundle 経路が `engine/` 直下へ置いた `supercollider/` `scsynth/`
+`audio/supercollider` は `tsc` の出力ではないので突き合わせでは拾えない。
+**一度きりの移行掃除**として明示的に消す（コメントでそう書いた）。
+
+**採用（消し残し）**: `ORBITSCORE_ENGINE=sc で SC に opt-out` を説明したままのコメントが
+3 箇所残っていた（`interpreter-v2.ts` / `cli/repl-mode.ts` / `audio/rust-engine/index.ts`）。
+env var も `resolveEngineKind()` も本束で消えているので、**存在しない経路を説明していた**。
+`rust-engine-player.ts` の冒頭コメントは機械置換の跡で「既定（唯一の）バックエンド
+（唯一のバックエンド）」と二重化していた。あわせて直した。
+`packages/vscode-extension/package.json` は `keywords` と `scripts` から要素を消した跡が
+空行 5 行として残っていたので削除した。
+
+**見送り（理由を残す）**: `AudioDevice` 型（`audio/types.ts`）は `RustEnginePlayer` の
+3 つのスタブ（常に `undefined` / `[]` / no-op）でしか使われておらず、同種の型が
+`daemon-client.ts` の `AudioDeviceListEntry` と `mcp-server.ts` の `AudioDeviceInfo` にもある。
+3 系統あるのは確かに冗長だが、**削除は `AudioEngine` インターフェースの変更**になり
+凍結線の直前に入れる変更ではない。`AudioEngineBackend` の継ぎ目も、ネイティブ
+OrbitStudio の新ライン（#827）で第 2 実装が来る見込みなので残す。
+
+**検算**: `npm run build` 緑（`sync-dist.js` を実走）・`npm run lint` 緑・
+`npm test` **2271 passed / 58 skipped / 2329**・引用チェック 934 件 / 0 失敗
+（行シフト 4 件を `--fix` で再アンカー）。
+
+### docs(spec): the LinkAudio fallback claim was a comment, not a measurement (#502) (Sep 10, 2026)
+
+#833 で §8.1 に置いた警告ブロックは「daemon が `LINK_AUDIO_UNAVAILABLE` を返し、TS 側が
+1 回だけ warn して継続する。出力は hardware のみ」と**断定していた**。これは
+`rust-engine-player.ts` の `registerLinkAudioChannel` の**コメントの主張**であって、実測ではない。
+
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` に残っている記録によれば、2026-09-04 の main の
+実機実行では `global.linkAudio()` 下の sequence の **capture RMS = 0**、かつ `get_log` に
+`LINK_AUDIO_UNAVAILABLE` も gap 警告も出ていない。capture ベースの証明はこの理由で
+取り下げられている。つまり**音が出ず、警告も出ない**。
+
+仕様側を「設計の意図 / 実測」の 2 行表に書き換え、**どちらが正しいかは未決**であることと
+出典を明記した。ユーザー学習サイト（`sites/user/midi/link-audio.md`）は #835 で既にこの
+扱いになっており、**仕様だけが古い断定のまま残っていた**（memory
+`one-layer-of-the-spec-lags-the-ruling` と同じ型）。
+
+引用 4 件が行シフトで動いたので `--fix` で再アンカーした。
+
 ### docs(readme): rewrite the shipped README for the stable GitHub Release (#841) (Sep 10, 2026)
 
 拡張版 stable リリース（#827 §12）の手順 4。`.vsix` に同梱される
@@ -127,8 +303,14 @@ osc-client / scsynth-resolver / synthdef-loader / link-audio-channels / types / 
 実シグネチャ `{ sampleId }` に合わせた）。件数: 2329 passed / 58 skipped / 2387 total →
 **2261 passed / 58 skipped / 2319 total**（削除7本ぶん -68 件）。
 
-**残課題**: `npm run docs:check` が本 PR の行番号シフト（`extension.ts` -444 行等）で
-198 件失敗する（baseline 0 失敗）。`sites/` 編集は本ブリーフで禁止のため未対応・main へ引き継ぐ。
+**残課題だったもの（解消済み・2026-09-10）**: `npm run docs:check` が本 PR の行番号シフト
+（`extension.ts` -444 行等）で 198 件失敗していた。束の締めで `--fix` の再アンカーと
+引用内容の手直しを行い、**934 件検証 / 0 失敗**になった（`502-sc-removal` の
+`b9f6ded1` 時点・main 実測）。
+
+**件数の但し書き**: 上の `2261 passed / 2319 total` は #838 単体を回した時の値。
+束を締めた時点（`b9f6ded1`）の実測は **2271 passed / 58 skipped / 2329 total** で、
+差の +10 は #839 以降に入ったテスト。README と CLAUDE.md にはこちらの値と出典を書いた。
 
 ### docs(sites): follow PR #836 — the scsynth bundle is gone from the shipped .vsix (#502) (Sep 10, 2026)
 
@@ -189,7 +371,7 @@ scsynth の `verify-bundle.sh` 呼び出しだけを除いた。
 
 **🔴 仕様と実測の食い違いを見つけた（決めていない・PR 本文に質問として出す）**:
 #833 の §8.1 は「egress が無ければ hardware へフォールバックし 1 回 warn する」と書いているが、
-`tests/e2e/orbitstudio-mcp-gated.spec.ts:5113-5119` には 2026-09-04 の実機で
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` の「**A comment is not evidence of implementation behavior**」で始まるコメントには、2026-09-04 の実機で
 **capture RMS = 0・警告マーカーも無し**という逆の実測が記録されており、さらに
 「`global.linkAudio()` 下の dispatch は `skip` か `link` で、capture できる `hardware` には
 決してならない」とも書かれている。**どちらが正しいかは仕様の判断**なので直さず、

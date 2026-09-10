@@ -89,11 +89,11 @@ The binary in `rust/crates/orbit-audio-daemon`. It receives commands from the TS
 
 ### AudioEngineBackend (backend seam)
 
-The interface in `packages/engine/src/audio/engine-backend.ts`. It is the only contract the interpreter / scheduler have with an audio backend; both `SuperColliderPlayer` and `RustEnginePlayer` satisfy it. It carries `boot` / `quit` / `loadPlugin` / `applyEffectChain` / `setGlobalGain` / `pluginNoteOn`, and so on.
+The interface in `packages/engine/src/audio/engine-backend.ts`. It is the only contract the interpreter / scheduler have with an audio backend. `RustEnginePlayer` is the sole production implementation (#502 removed the second one); the verification `RecordingScheduler` and the no-op MIDI engine also implement this face. It carries `boot` / `quit` / `loadPlugin` / `applyEffectChain` / `setGlobalGain` / `pluginNoteOn`, and so on.
 
 ### ORBITSCORE_ENGINE
 
-The environment variable that selects the backend. `sc` or `supercollider` opts out to the SuperCollider path; unset or anything else means the Rust daemon (`resolveEngineKind()` in `create-audio-engine.ts`). The VS Code setting `orbitscore.engine` maps to it.
+🔴 **Removed in #502 (2026-09-10).** It used to select the backend: `sc` or `supercollider` opted out to the SuperCollider path, anything else meant the Rust daemon. With no second backend left, `resolveEngineKind()` was deleted along with it and `createAudioEngine()` always returns `RustEnginePlayer`. The VS Code setting `orbitscore.engine` went away at the same time. **Kept here as a historical entry only.**
 
 ### RustEnginePlayer / DaemonClient
 

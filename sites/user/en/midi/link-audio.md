@@ -15,7 +15,7 @@ There are two reasons.
 - **OrbitLinkAudio.scx**, the SuperCollider plugin that used to carry the audio, was removed together with the whole SuperCollider path in [#502](https://github.com/signalcompose/orbitscore/issues/502) (2026-09-10)
 - Its Rust replacement (`orbit-link-audio`) is **not included in shipped builds**. Turning it on would pull Ableton Link's license (GPL-2.0-or-later) into what is shipped, and that decision has not been made yet
 
-⚠️ **What happens to the sound instead is not settled.** The spec (DSL spec §8.1) says playback falls back to hardware output and warns exactly once; a real-device measurement on 2026-09-04 found **no sound and no warning** (recorded at `tests/e2e/orbitstudio-mcp-gated.spec.ts:5113-5119`). **Until that is resolved, do not rely on LinkAudio for a performance.**
+⚠️ **What happens to the sound instead is not settled.** The spec (DSL spec §8.1) says playback falls back to hardware output and warns exactly once; a real-device measurement on 2026-09-04 found **no sound and no warning** (recorded at the comment beginning "**A comment is not evidence of implementation behavior**" in `tests/e2e/orbitstudio-mcp-gated.spec.ts`). **Until that is resolved, do not rely on LinkAudio for a performance.**
 
 Pushing `global.tempo()` to Link peers is disabled for the same reason.
 
@@ -168,7 +168,7 @@ Per the spec (DSL spec §8.1.3), if egress is unavailable and `global.linkAudio(
 
 The single warning is deliberate: so that the same reason does not pile up a warning per note, the warning is emitted from **exactly one place — where the channel is registered**.
 
-⚠️ However, **this description conflicts with what was measured on real hardware**. On 2026-09-04 there was no sound (capture RMS = 0) and no warning (`tests/e2e/orbitstudio-mcp-gated.spec.ts:5113-5119`). See also the notice at the top of this page.
+⚠️ However, **this description conflicts with what was measured on real hardware**. On 2026-09-04 there was no sound (capture RMS = 0) and no warning (the comment beginning "**A comment is not evidence of implementation behavior**" in `tests/e2e/orbitstudio-mcp-gated.spec.ts`). See also the notice at the top of this page.
 
 ---
 

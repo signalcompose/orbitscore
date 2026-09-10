@@ -126,21 +126,22 @@ export class AudioManager {
    * @param deviceName - Name of the output device to use
    */
   audioDevice(deviceName: string): this {
-    // Check if audioEngine has device selection support
-    if (this.audioEngine.getCurrentOutputDevice) {
-      const currentDevice = this.audioEngine.getCurrentOutputDevice()
-      if (currentDevice && currentDevice.name === deviceName) {
-        console.log(`🔊 Already using device: ${deviceName}`)
-        return this
-      }
-
-      console.warn(`⚠️  Audio device can only be set before engine starts`)
-      console.warn(`⚠️  Current device: ${currentDevice?.name || 'default'}`)
-      console.warn(`⚠️  Requested device: ${deviceName}`)
-      console.warn(`⚠️  Restart the engine to change audio device`)
-    } else {
-      console.warn('⚠️  Audio device selection not available')
+    const currentDevice = this.audioEngine.getCurrentOutputDevice?.()
+    if (currentDevice && currentDevice.name === deviceName) {
+      console.log(`🔊 Already using device: ${deviceName}`)
+      return this
     }
+
+    // 🔴 このメソッドは**どのバックエンドでも実際にデバイスを切り替えない**（#840 レビュー指摘）。
+    // 旧メッセージは「エンジンを再起動すれば変わる」と読めたが、再起動しても変わらない。
+    // 実際の切り替えは VS Code 設定 `orbitscore.audioDevice`（エンジンビュー / MCP の
+    // `select_audio_device`）が唯一の経路で、DSL からは配線されていない。
+    // 誤誘導するくらいなら、行き先を名指しする。
+    console.warn(`⚠️  global.audioDevice("${deviceName}") does not switch the output device.`)
+    console.warn(
+      `⚠️  Set it in the Audio Engine Settings view (VS Code setting "orbitscore.audioDevice") and restart the engine.`,
+    )
+    if (currentDevice) console.warn(`⚠️  Current device: ${currentDevice.name}`)
     return this
   }
 

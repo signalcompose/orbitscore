@@ -71,7 +71,7 @@ The case where this bites is a launch that opens no folder and passes a single `
 The declaration sits in `package.json` between `engines` and `main`.
 
 ```json
-// packages/vscode-extension/package.json:34-40
+// packages/vscode-extension/package.json:32-38
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": true,
