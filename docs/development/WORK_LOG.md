@@ -24,9 +24,9 @@ main が実行フロー②（独立第二意見）として一次ソースで検
 
 | 文書 | 行 | 何を決めたか |
 |---|---|---|
-| `docs/design/848-native-orbitstudio-design.md` | 488 | 完了条件 D-1〜D-8 / 層 2 のプロセス化 / セッションプロトコル / MCP の置き場 / Swift シェルの面積 / 配布（656 からの差分） / 拡張を仕様書として使う具体 |
-| `docs/planning/IMPLEMENTATION_PLAN_NATIVE.md` | 224 | 段 N0〜N4・束 9 本・一方通行 10 件・engine 線 PR の付け替え表 |
-| `docs/planning/NATIVE_DEVELOPMENT_MAP.md` | 271 | 現在地 → 第 1 リリースの筋・本線と枝葉・やらないこと |
+| `docs/design/848-native-orbitstudio-design.md` | 577 | 完了条件 D-1〜D-8 / 層 2 のプロセス化 / セッションプロトコル / MCP の置き場 / Swift シェルの面積 / 配布（656 からの差分） / 拡張を仕様書として使う具体 |
+| `docs/planning/IMPLEMENTATION_PLAN_NATIVE.md` | 230 | 段 N0〜N4・束 9 本・一方通行 10 件・engine 線 PR の付け替え表 |
+| `docs/planning/NATIVE_DEVELOPMENT_MAP.md` | 297 | 現在地 → 第 1 リリースの筋・本線と枝葉・やらないこと |
 
 #### 戻れない判断 2 件
 
@@ -60,11 +60,33 @@ in-process JSC / 常駐サービス / Rust に JS 埋め込み / Rust 移植を�
 拡張版の 2 本と同じラチェットに載せる — 計画文書が閉じた issue を「未着手」と語る型の
 ドリフトは、**文書が増えるほど起きやすい**。3 件緑。
 
-#### owner 裁定待ち 13 件
+#### owner 裁定待ち 14 件
 
 設計 §14 に列挙。主なもの: detach（アプリを閉じてもセッションを残す）を第 1 リリースに
 含めるか（推奨: 含めない）/ `packages/engine` の rename（推奨: しない）/ タグ名前空間 /
-自動更新 / Swift の CI / `.app` の bundle id と名前 / パリティ台帳で落としてよい拡張の表面。
+自動更新 / Swift の CI / `.app` の bundle id（推奨: 過去の VSCodium 版と同じ
+`com.signalcompose.orbitstudio` を再利用）/ パリティ台帳で落としてよい拡張の表面 /
+**app の版の正本**（推奨: `apps/OrbitStudio/VERSION` + `app-v<版>` をタグで強制）。
+
+#### 🔴 owner 指摘で読み直した一次ソース 10 本（2026-09-11）
+
+最初のブリーフは参照文書を **6 本しか挙げておらず、既に検討済みの文書を落としていた**。
+owner の指摘で洗い直し、10 本 + Serena メモリ 3 本 + 協調計画を追送して設計を見直した。
+**列挙が一段手前で止まる型**（memory `enumeration-stops-one-level-too-early`）の再発である。
+
+設計が変わった主な点:
+
+- **配布（§9）は再設計をやめ、`656-release-design.md` からの差分だけにした**。
+  §9.0 に裁定 10 件 + Q-656 回答 8 件を「引き継ぐ / 失効」で 1 行ずつ仕分けた。
+  失効したのは trim（Electron 前提）/「自作しない」/ **app 版 = 拡張版 のバージョン規則** /
+  VSCodium 既定の bundle id / `ORBIT_GATED_EXT_MODE=installed`。
+  引き継いだのは署名順序・identity・entitlements の実測手順・stop 条件・E2E-D3/D4/D5
+- **§0b「既存の検討との関係」を新設**。文書ごとに「引き継ぐ / 棄却 / 失効」と本書での置き場を
+  表にした。**過去の検討を無かったことにしていない**と読み手が確認できる形にするため
+- `AUDIO_ENGINE_CORE_ARCHITECTURE.md` §5 の「musical timing を Rust へ移す引き金 =
+  複数フロントが同じ timing を使う時」は、**本設計では引かれない**（フロントが 3 つでも
+  timing を持つ層 2 は 1 プロセス）。MIDI / transport の Rust 化を急がない根拠として §4.6 に
+- 地図に `USER_OUTCOMES_2026-09.md` と同じ粒度で「各段が終わるとユーザーは何ができるか」を新設
 
 ### test(e2e): launch the gated harness from stock VS Code (#830) (Sep 10, 2026)
 
