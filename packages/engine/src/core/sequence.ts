@@ -32,6 +32,13 @@ import { SequenceQuantizeManager } from './sequence/parameters/quantize-manager'
 import { QuantizeValue, nextQuantizedTime } from './global/quantize-manager'
 import { StateManager } from './sequence/state/state-manager'
 import { scheduleEvents, scheduleEventsFromTime } from './sequence/scheduling/event-scheduler'
+import {
+  AudioLine,
+  destKey,
+  toWire,
+  type LineElement,
+  type OutputDest,
+} from './sequence/audio-line'
 
 /**
  * `{ }` legato overlap (§4): how long the interior note rings past the next
@@ -79,14 +86,46 @@ function writtenPitchOf(ev: TimedEvent): SymbolicPitch {
   )
 }
 
-/**
- * The `sends` half of a full-state `SetBusRouting` payload. Shared by both push
- * paths so the payload shape cannot drift between them. Kept off the prototype:
- * every `Sequence` method is part of the surface a plugin name could shadow
- * (SC.2 norm 3), so internal helpers stay module-level.
- */
-function buildRoutingSends(auxSends: ReadonlyMap<string, number>): { bus: string; gain: number }[] {
-  return Array.from(auxSends.entries()).map(([bus, gain]) => ({ bus, gain }))
+type OutputElement = Extract<LineElement, { kind: 'output' }>
+
+/** Reproduce `LineProgram::legacy` exactly while the public send amount remains linear. */
+function buildLegacyRoutingLine(
+  output: OutputDest | undefined,
+  sends: readonly OutputElement[],
+): AudioLine {
+  const line = new AudioLine()
+  line.beginBatch()
+  line.upsert({ kind: 'rack' })
+  line.upsert({
+    kind: 'output',
+    dest: output ?? { kind: 'master' },
+    thru: sends.length > 0,
+    db: 0,
+    sugar: 'output',
+  })
+  sends.forEach((send, index) => {
+    line.upsert({ ...send, thru: index + 1 !== sends.length })
+  })
+  line.endBatch()
+  return line
+}
+
+function routingOutput(line: AudioLine): OutputDest | undefined {
+  return line.outputs().find((element) => element.sugar === 'output')?.dest
+}
+
+function routingSends(line: AudioLine): OutputElement[] {
+  return line.outputs().filter((element) => element.sugar === 'send')
+}
+
+function toLegacyWire(line: AudioLine) {
+  const program = line.program()
+  return toWire(program).map((wire, index) => {
+    const element = program[index]
+    return wire.op === 'output' && element.kind === 'output' && element.sugar === 'send'
+      ? { ...wire, gain: element.db }
+      : wire
+  })
 }
 
 /**
@@ -138,16 +177,14 @@ export class Sequence {
   // or auto-allocated by `output()`/`send()` targeting a sum/aux bus — MX.4 / #459/#453 M3)
   private _insertBus?: string
 
-  // MX.4/#459/#453 M3: the sum bus target for `SetBusRouting` (set by `output(sumName)`),
-  // and the accumulated aux sends (set by `send(auxName, amount)`). Kept so every
-  // `SetBusRouting` re-issue carries the FULL current routing state (idempotent re-send).
-  private _sumOutputBus?: string
-  private readonly _auxSends = new Map<string, number>()
+  // #611 B1: complete ordered routing intent. The DSL still exposes the legacy
+  // output(string)/send(name, linearAmount) surface; only the daemon command changes.
+  private _line = new AudioLine()
   /**
-   * 直近の `syncBusRouting` が失敗し、TS 側の routing 宣言と daemon の実 routing が乖離して
+   * 直近の `syncBusLine` が失敗し、TS 側の routing 宣言と daemon の実 line が乖離して
    * いる可能性がある状態（true の間）。再生開始時（dispatch 前）に検知して全量再送する。
    */
-  private _busRoutingStale = false
+  private _busLineStale = false
 
   // MIDI properties (only meaningful when seq.midi() was declared).
   // A MIDI sequence interprets play() values as degrees, not slice numbers.
@@ -399,8 +436,8 @@ export class Sequence {
       // §4.4.1: live 宛先の宣言は render bus をクリアする（stale な offline 宛先を残さない）。
       this._renderBus = undefined
       this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
-      this._sumOutputBus = sumBus
-      this.syncBusRouting()
+      this._line = buildLegacyRoutingLine({ kind: 'bus', bus: sumBus }, routingSends(this._line))
+      this.syncBusLine()
       this.syncInstrumentSourceRouting()
       return this
     }
@@ -510,8 +547,20 @@ export class Sequence {
     }
 
     this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
-    this._auxSends.set(auxBus, amount)
-    this.syncBusRouting()
+    const sends = routingSends(this._line)
+    const sendIndex = sends.findIndex((send) => destKey(send.dest) === `bus:${auxBus}`)
+    const nextSend: OutputElement = {
+      kind: 'output',
+      dest: { kind: 'bus', bus: auxBus },
+      thru: false,
+      // B1 keeps the public linear amount. `toLegacyWire` passes it through unchanged.
+      db: amount,
+      sugar: 'send',
+    }
+    if (sendIndex >= 0) sends[sendIndex] = nextSend
+    else sends.push(nextSend)
+    this._line = buildLegacyRoutingLine(routingOutput(this._line), sends)
+    this.syncBusLine()
     this.syncInstrumentSourceRouting()
     return this
   }
@@ -529,8 +578,11 @@ export class Sequence {
       )
     }
     this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
-    this._sumOutputBus = output
-    await this.pushBusRouting()
+    this._line = buildLegacyRoutingLine(
+      output === 'master' ? { kind: 'master' } : { kind: 'bus', bus: output },
+      routingSends(this._line),
+    )
+    await this.pushBusLine()
     await this.ensureInstrumentSourceRouting()
     return this
   }
@@ -549,56 +601,64 @@ export class Sequence {
       throw new Error(`Sequence '${name}': send gain must be finite.`)
     }
     this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
-    this._auxSends.set(auxBus, amount)
-    await this.pushBusRouting()
+    const sends = routingSends(this._line)
+    const sendIndex = sends.findIndex((send) => destKey(send.dest) === `bus:${auxBus}`)
+    const nextSend: OutputElement = {
+      kind: 'output',
+      dest: { kind: 'bus', bus: auxBus },
+      thru: false,
+      // B1 keeps the public linear amount. `toLegacyWire` passes it through unchanged.
+      db: amount,
+      sugar: 'send',
+    }
+    if (sendIndex >= 0) sends[sendIndex] = nextSend
+    else sends.push(nextSend)
+    this._line = buildLegacyRoutingLine(routingOutput(this._line), sends)
+    await this.pushBusLine()
     await this.ensureInstrumentSourceRouting()
     return this
   }
 
-  private async pushBusRouting(): Promise<void> {
+  private async pushBusLine(): Promise<void> {
     if (!this._insertBus) return
     try {
-      await this.global.setBusRouting(
-        this._insertBus,
-        this._sumOutputBus,
-        buildRoutingSends(this._auxSends),
-      )
-      this._busRoutingStale = false
+      await this.global.setBusLine(this._insertBus, toLegacyWire(this._line))
+      this._busLineStale = false
     } catch (error) {
-      this._busRoutingStale = true
+      this._busLineStale = true
       throw error
     }
   }
 
   /**
-   * Re-issues `SetBusRouting` with the FULL current routing state (output + all sends) for
+   * Re-issues `SetBusLine` with the complete current line program for
    * this sequence's insert bus (MX.4/#459/#453 M3). Fire-and-forget + best-effort, mirroring
    * `output()`'s eager LinkAudio registration: a failed push must not break the synchronous
    * `.method().method()` chaining contract these calls share with the rest of the DSL.
    */
-  private syncBusRouting(): void {
+  private syncBusLine(): void {
     if (!this._insertBus) return
     const bus = this._insertBus
-    void this.global.setBusRouting(bus, this._sumOutputBus, buildRoutingSends(this._auxSends)).then(
+    void this.global.setBusLine(bus, toLegacyWire(this._line)).then(
       () => {
-        this._busRoutingStale = false
+        this._busLineStale = false
       },
       (err) => {
-        // 失敗＝TS 側の宣言（_sumOutputBus/_auxSends）と daemon の実 routing が乖離した状態。
+        // 失敗＝TS 側の line 宣言と daemon の実 line が乖離した状態。
         // stale フラグを立て、次の routing 呼び出しまたは再生開始時に全量再送で自己修復する
         // （`pluginActiveByKey` の self-heal と同じ形）。
-        this._busRoutingStale = true
+        this._busLineStale = true
         const name = this.stateManager.getName() || 'sequence'
         if (err instanceof DaemonProtocolError) {
           // daemon 側の決定的な拒否（kind/順序違反・非 outproc-effect ビルドの UNSUPPORTED 等）。
           // 再送しても同じ結果＝スクリプト側の修正が必要なので、actionable な error で出す。
           console.error(
-            `❌ ${name}: SetBusRouting(${bus}) was rejected — routing was NOT applied. ` +
+            `❌ ${name}: SetBusLine(${bus}) was rejected — routing was NOT applied. ` +
               `Fix the declaration and re-run .output()/.send(): ${err.message}`,
           )
         } else {
           console.warn(
-            `⚠️  ${name}: SetBusRouting(${bus}) failed (transient) — ` +
+            `⚠️  ${name}: SetBusLine(${bus}) failed (transient) — ` +
               `will re-sync on the next routing call or playback start: ${err}`,
           )
         }
@@ -1754,9 +1814,9 @@ export class Sequence {
     this.validateMidiDispatch() // eager root + degree validation (same rationale)
     this.applyVoiceLeading() // §6.3 (C1): deterministic auto voice-leading annotation
     this.validateNonMidiDispatch() // eager `[ ]`-in-audio rejection (§10-5)
-    // 直近の SetBusRouting が失敗していたら、音が出る前に全量再送で自己修復する
+    // 直近の SetBusLine が失敗していたら、音が出る前に全量再送で自己修復する
     // （transient 失敗の回復経路。決定的拒否は再送しても同じ error log が出るだけで無害）。
-    if (this._busRoutingStale) this.syncBusRouting()
+    if (this._busLineStale) this.syncBusLine()
 
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
@@ -1802,9 +1862,9 @@ export class Sequence {
     this.validateMidiDispatch() // eager root + degree validation (same rationale)
     this.applyVoiceLeading() // §6.3 (C1): deterministic auto voice-leading annotation
     this.validateNonMidiDispatch() // eager `[ ]`-in-audio rejection (§10-5)
-    // 直近の SetBusRouting が失敗していたら、音が出る前に全量再送で自己修復する
+    // 直近の SetBusLine が失敗していたら、音が出る前に全量再送で自己修復する
     // （transient 失敗の回復経路。決定的拒否は再送しても同じ error log が出るだけで無害）。
-    if (this._busRoutingStale) this.syncBusRouting()
+    if (this._busLineStale) this.syncBusLine()
 
     const prepared = await preparePlayback({
       sequenceName: this.stateManager.getName(),
@@ -1968,6 +2028,7 @@ export class Sequence {
       outputChannel: this._outputChannel,
       renderBus: this._renderBus,
       insertBus: this._insertBus,
+      line: this._line.snapshot(),
       midiPort: this._midiPort,
       midiChannel: this._midiChannel,
       gate: this._gate,

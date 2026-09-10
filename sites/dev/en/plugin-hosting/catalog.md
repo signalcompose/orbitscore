@@ -924,7 +924,7 @@ identical slots plus `instance_index` (an indirection from name to slot)**. The 
 comment states the mechanism in one line.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7216-7228
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7478-7490
     /// #618: instrument plugin を目標 spec へ収束させる ensure 操作。
     ///
     /// 未割当/Empty は通常 load、同一 Active は no-op、異 spec Active は spare へ prepare して
@@ -1056,7 +1056,7 @@ by bus name**, and the render side's `InsertBusStage` holds the processor direct
 rebuild of the same ChildSlot**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6460-6468
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6685-6693
     /// effect plugin を固定 slot 上で目標 spec へ収束させる ensure 操作。
     /// Active の異 spec だけを quiesce ack 後に同じ shm 上で建て直す。
     #[cfg(feature = "outproc-effect")]
@@ -1077,7 +1077,7 @@ dry (never silence) plus forget-and-ensure — which is why the three effect man
 `failurePolicy: 'forget-and-ensure'`.
 
 ```typescript
-// packages/engine/src/core/global.ts:164-188
+// packages/engine/src/core/global.ts:169-193
     this.pluginEffectManager = new PluginEffectManager(
       audioEngine,
       this.audioManager,
@@ -1144,7 +1144,7 @@ mechanism was unified onto `ApplyEffectChain`, and the protocol doc marks
 `superseded by ApplyEffectChain (#628)`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6026-6034
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6251-6259
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -1198,7 +1198,7 @@ disappearing insert. The state save itself is performed atomically by the daemon
 `save_dropped` in `ApplyEffectChain`, so unlike the instrument side TS does not call save.
 
 ```typescript
-// packages/engine/src/core/global.ts:1380-1402
+// packages/engine/src/core/global.ts:1393-1415
   /** Close a disappearing effect UI before ApplyEffectChain performs its atomic drop/save. */
   private async prepareEffectReplacement(receiverId: string, oldSlot: PluginSlot): Promise<void> {
     const session = this.pluginUiSessionForInstance(receiverId, oldSlot.instanceId)

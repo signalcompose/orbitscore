@@ -322,7 +322,7 @@ A value classified as a rack goes to `Global.defineRack` and is stored via `stru
 enforced by the data layout.
 
 ```typescript
-// packages/engine/src/core/global.ts:352-366
+// packages/engine/src/core/global.ts:357-371
   /** Bind a rack recipe by value; later rebinding never mutates an already-applied receiver. */
   defineRack(name: string, rack: RackRecipe): this {
     if (this.rackRegistry.has(name) || this.chordRegistry.has(name)) {
@@ -682,7 +682,7 @@ routes it to a rebuild (design doc §2.3, the resolution of #626). On failure,
 The request type TS sends to the daemon is as follows.
 
 ```typescript
-// packages/engine/src/audio/types.ts:22-52
+// packages/engine/src/audio/types.ts:35-65
 export type EffectChainStageConfig =
   | {
       kind: 'catalog'
@@ -719,7 +719,7 @@ export interface EffectChainApplyResult {
 The daemon client sends the JSON-RPC `ApplyEffectChain` with `role: 'effect'` and `save_dropped`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:560-567
+// packages/engine/src/audio/rust-engine/daemon-client.ts:551-558
   async applyEffectChain(request: EffectChainApplyRequest): Promise<EffectChainApplyResult> {
     const result = await this.request('ApplyEffectChain', {
       role: 'effect',
@@ -734,7 +734,7 @@ The daemon client sends the JSON-RPC `ApplyEffectChain` with `role: 'effect'` an
 respawn re-issues a plan that loads every stage with `mode: 'rebuild'`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1380-1390
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1415-1425
   private async reloadEffectRacksAfterRespawn(): Promise<void> {
     for (const { bus, chain } of this.loadedEffectRacks.values()) {
       const key = RustEnginePlayer.pluginKey('effect', bus)
@@ -839,7 +839,7 @@ pub struct EffectChainPlan {
 the mode.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6026-6034
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6251-6259
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -852,7 +852,7 @@ the mode.
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6097-6119
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6322-6344
         let mut route = {
             let slot = lock_child_slot_recovering(&child_slot, "effect chain route inspection");
             let registry_is_intact = effect_chain_registry_is_intact(&slot, &stats);

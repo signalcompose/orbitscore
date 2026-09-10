@@ -76,7 +76,7 @@ The strategy OrbitScore takes is a look-ahead approach: **schedule events a litt
 Each element of the event queue is represented by a type called `ScheduledPlay`. The Rust path's version is flatter than the SC version: there is no nested `options`, and the chop slice information is grouped into `slice`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:169-200
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:170-201
 /** lean scheduler が保持する 1 発音イベント。SC `ScheduledPlay` の daemon 版。 */
 export interface ScheduledPlay {
   /** 再生開始時刻（`startTime` からの相対 ms）。 */
@@ -182,7 +182,7 @@ export interface ScheduledPlay {
 `scheduleEvent()` pushes a new event onto the queue, and the Rust version delegates to an internal `enqueue()`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1438-1454
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1473-1489
   scheduleEvent(
     filepath: string,
     time: number,
@@ -203,7 +203,7 @@ export interface ScheduledPlay {
 ```
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1593-1599
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1628-1634
   private enqueue(play: ScheduledPlay): void {
     this.scheduledPlays.push(play)
     this.scheduledPlays.sort((a, b) => a.time - b.time)
@@ -229,7 +229,7 @@ flowchart LR
 When the scheduler starts, `setInterval(callback, POLL_INTERVAL_MS)` is launched. The constants are grouped near the top of the file.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:330-335
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:331-336
 const DEFAULT_LOOKAHEAD_SEC = 0.05
 const PLUGIN_UI_OPEN_TIMEOUT_MS = 30_000
 const PLUGIN_UI_CLOSE_TIMEOUT_MS = 20_000
@@ -241,7 +241,7 @@ const MAX_DRIFT_MS = 1000
 Every 1 ms it checks the queue and dispatches events whose time has come.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1506-1523
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1541-1558
   start(): void {
     if (this.isRunning) return
     this.isRunning = true
@@ -330,7 +330,7 @@ The point is "absolute latency is a constant shift = musically irrelevant." Ever
 This scheme brings a new problem: "mapping TS's `Date.now()` to the daemon's transport clock." The daemon reports its own `now_sec` in a 1 Hz `StreamStats`, and the TS side accumulates those as anchors. With #389 mechanism B, the single anchor was replaced by a **least-squares fit over the last 30 samples** (`ANCHOR_WINDOW`, `fitAnchorSamples()`). `daemonNowSec()`, called on the dispatch hot path, evaluates that fit in O(1).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1755-1761
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1790-1796
   private daemonNowSec(): number {
     const fit = this.anchorFit
     if (fit) {
@@ -375,7 +375,7 @@ In this design, the act of "scheduling (bulk push)," the act of "executing (poll
 When you stop a sequence, or when you evaluate a new pattern with `Cmd+Enter`, you need to cancel the events remaining on the existing queue. `clearSequenceEvents()` plays this role. The Rust version became very short.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1570-1578
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1605-1613
   clearSequenceEvents(sequenceName: string): void {
     this.scheduledPlays = this.scheduledPlays.filter((p) => p.sequenceName !== sequenceName)
     // 集合から消すことで、まだ queue に残るイベントも poll/exec 時に skip される。
@@ -412,7 +412,7 @@ The SC version's `clearSequenceEvents()` (`event-scheduler.ts:440-462`) has the 
 What actually sends to the daemon is `executePlayback()`. Several protective mechanisms are lined up in series here. The respawn-related comment at the top of the function is long, so the quote starts from the guards themselves.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1625-1669
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1660-1704
     if (this.respawning || !this.daemon.isRunning()) return
     if (play.sequenceName) {
       // poll 検出から executePlayback 実行までの microtask gap で clear された場合の skip。
@@ -474,7 +474,7 @@ Let's read them in order.
 `daemon.playAt()` is a thin wrapper in `DaemonClient` that sends a JSON `PlayAt` request over WebSocket.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:426-436
+// packages/engine/src/audio/rust-engine/daemon-client.ts:417-427
   async playAt(
     sampleId: string,
     timeSec: number,
@@ -493,7 +493,7 @@ Let's read them in order.
 `emitStepMarker()` prints to stdout a machine-readable line for the live playhead, with which the editor extension highlights the `play()` arguments.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1601-1617
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1636-1652
   /**
    * #390 live playhead: machine-readable step marker for the editor extension.
    * The epoch ms is the event's GRID time (startTime + play.time — the same
@@ -566,7 +566,7 @@ Note that only the sequence gain is converted here. The master gain (`global.gai
 `stop()` halts the interval; `stopAll()` additionally empties the queue and stops the daemon-side voices too.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1525-1552
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1560-1587
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId)

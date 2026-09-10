@@ -198,15 +198,15 @@ describe('Global.sum() / Global.aux()', () => {
 
   it('commits routing state only after the daemon accepts it, so a rejected call is not merged into a later one (#523 CRITICAL 5)', async () => {
     // MixerManager.route() builds `next` from the last COMMITTED routing and
-    // only calls `this.routings.set(source, next)` after `setBusRouting`
+    // only calls `this.lines.set(source, next)` after `setBusLine`
     // resolves. If that commit ever moved before the `await`, a rejected send
     // would still be recorded, and the next (unrelated) call on the same
     // source would silently resend it merged into its own payload.
-    const setBusRouting = vi
+    const setBusLine = vi
       .fn()
       .mockRejectedValueOnce(new Error('daemon rejected'))
       .mockResolvedValueOnce(undefined)
-    const engine = { setBusRouting, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any
+    const engine = { setBusLine, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any
     const global = new Global(engine)
     const handle = global.sum('drum')
 
@@ -214,6 +214,9 @@ describe('Global.sum() / Global.aux()', () => {
 
     await handle.routeOutput('master')
 
-    expect(setBusRouting).toHaveBeenNthCalledWith(2, 'sum-bus-0', 'master', [])
+    expect(setBusLine).toHaveBeenNthCalledWith(2, 'sum-bus-0', [
+      { op: 'rack' },
+      { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
+    ])
   })
 })

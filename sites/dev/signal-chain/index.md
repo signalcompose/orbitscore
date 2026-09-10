@@ -311,7 +311,7 @@ rack と判定された値は `Global.defineRack` へ渡り、`structuredClone` 
 データの配置で守られています。
 
 ```typescript
-// packages/engine/src/core/global.ts:352-366
+// packages/engine/src/core/global.ts:357-371
   /** Bind a rack recipe by value; later rebinding never mutates an already-applied receiver. */
   defineRack(name: string, rack: RackRecipe): this {
     if (this.rackRegistry.has(name) || this.chordRegistry.has(name)) {
@@ -662,7 +662,7 @@ Active slot」を検分して rebuild へ倒す経路（設計書 §2.3・#626 �
 TS が daemon へ送る request の型は次のとおりです。
 
 ```typescript
-// packages/engine/src/audio/types.ts:22-52
+// packages/engine/src/audio/types.ts:35-65
 export type EffectChainStageConfig =
   | {
       kind: 'catalog'
@@ -700,7 +700,7 @@ daemon client は JSON-RPC の `ApplyEffectChain` に `role: 'effect'` と `save
 送ります。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:560-567
+// packages/engine/src/audio/rust-engine/daemon-client.ts:551-558
   async applyEffectChain(request: EffectChainApplyRequest): Promise<EffectChainApplyResult> {
     const result = await this.request('ApplyEffectChain', {
       role: 'effect',
@@ -715,7 +715,7 @@ daemon client は JSON-RPC の `ApplyEffectChain` に `role: 'effect'` と `save
 respawn 後は `mode: 'rebuild'` で全段 load の plan を再発行します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1380-1390
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1415-1425
   private async reloadEffectRacksAfterRespawn(): Promise<void> {
     for (const { bus, chain } of this.loadedEffectRacks.values()) {
       const key = RustEnginePlayer.pluginKey('effect', bus)
@@ -818,7 +818,7 @@ pub struct EffectChainPlan {
 選びます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6026-6034
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6251-6259
     /// Apply one receiver's complete serial effect rack. Diff mode uses the live rack mailbox;
     /// rebuild mode (and an unhealthy Active slot) reuses the #625 quiesce/teardown path.
     #[cfg(feature = "outproc-effect")]
@@ -831,7 +831,7 @@ pub struct EffectChainPlan {
 ```
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6097-6119
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6322-6344
         let mut route = {
             let slot = lock_child_slot_recovering(&child_slot, "effect chain route inspection");
             let registry_is_intact = effect_chain_registry_is_intact(&slot, &stats);

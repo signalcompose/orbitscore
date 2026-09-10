@@ -1,6 +1,13 @@
 import type { AudioEngine } from '../../audio/types'
 import type { RackRecipe } from '../../signal-chain/rack'
 import { createStatePathFallback } from '../project-state-store'
+import {
+  AudioLine,
+  destKey,
+  toWire,
+  type LineElement,
+  type OutputDest,
+} from '../sequence/audio-line'
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
@@ -36,6 +43,45 @@ export const MIXER_BUS_POOL_SIZE = 4
 export const MIXER_BUS_KINDS = ['sum', 'aux'] as const
 
 export type MixerKind = (typeof MIXER_BUS_KINDS)[number]
+
+type OutputElement = Extract<LineElement, { kind: 'output' }>
+
+function mixerRoutingOutput(line: AudioLine): OutputDest | undefined {
+  return line.outputs().find((element) => element.sugar === 'output')?.dest
+}
+
+function mixerRoutingSends(line: AudioLine): OutputElement[] {
+  return line.outputs().filter((element) => element.sugar === 'send')
+}
+
+function buildLegacyMixerLine(
+  output: OutputDest | undefined,
+  sends: readonly OutputElement[],
+): AudioLine {
+  const line = new AudioLine()
+  line.beginBatch()
+  line.upsert({ kind: 'rack' })
+  line.upsert({
+    kind: 'output',
+    dest: output ?? { kind: 'master' },
+    thru: sends.length > 0,
+    db: 0,
+    sugar: 'output',
+  })
+  sends.forEach((send, index) => line.upsert({ ...send, thru: index + 1 !== sends.length }))
+  line.endBatch()
+  return line
+}
+
+function toLegacyMixerWire(line: AudioLine) {
+  const program = line.program()
+  return toWire(program).map((wire, index) => {
+    const element = program[index]
+    return wire.op === 'output' && element.kind === 'output' && element.sugar === 'send'
+      ? { ...wire, gain: element.db }
+      : wire
+  })
+}
 
 /**
  * Round-trip converters for the prefixed receiver identity (`sum:<name>` /
@@ -113,7 +159,7 @@ interface KindState {
  */
 export class MixerManager {
   private readonly kinds: Record<MixerKind, KindState>
-  private readonly routings = new Map<string, { output?: string; sends: Map<string, number> }>()
+  private readonly lines = new Map<string, AudioLine>()
   private hasRuntimeDeclaration = false
 
   /**
@@ -323,25 +369,37 @@ export class MixerManager {
     output: string | undefined,
     send: { bus: string; amount: number } | undefined,
   ): Promise<void> {
-    if (!this.audioEngine.setBusRouting) {
+    if (!this.audioEngine.setBusLine) {
       throw new Error('Mixer bus routing requires the Rust engine backend.')
     }
-    const current = this.routings.get(source)
+    const current = this.lines.get(source) ?? new AudioLine()
     // Build the next state without touching the stored one, and commit only after
     // the daemon accepts it. Merging happens on every call, so a rejected push that
     // had already been recorded would leave every later call building on a routing
     // the daemon never applied.
-    const next = {
-      output: output !== undefined ? output : current?.output,
-      sends: new Map(current?.sends),
+    const nextOutput =
+      output === undefined
+        ? mixerRoutingOutput(current)
+        : output === 'master'
+          ? { kind: 'master' as const }
+          : { kind: 'bus' as const, bus: output }
+    const sends = mixerRoutingSends(current)
+    if (send !== undefined) {
+      const index = sends.findIndex((entry) => destKey(entry.dest) === `bus:${send.bus}`)
+      const entry: OutputElement = {
+        kind: 'output',
+        dest: { kind: 'bus', bus: send.bus },
+        thru: false,
+        // B1 keeps the public linear amount. `toLegacyMixerWire` passes it through unchanged.
+        db: send.amount,
+        sugar: 'send',
+      }
+      if (index >= 0) sends[index] = entry
+      else sends.push(entry)
     }
-    if (send !== undefined) next.sends.set(send.bus, send.amount)
-    await this.audioEngine.setBusRouting(
-      source,
-      next.output,
-      [...next.sends].map(([bus, gain]) => ({ bus, gain })),
-    )
-    this.routings.set(source, next)
+    const next = buildLegacyMixerLine(nextOutput, sends)
+    await this.audioEngine.setBusLine(source, toLegacyMixerWire(next))
+    this.lines.set(source, next)
   }
 
   private async effectFor(

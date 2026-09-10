@@ -51,6 +51,7 @@ import type {
   PluginStateSaveTarget,
   PluginUiCloseCompletion,
   PluginUiTarget,
+  WireLineOp,
 } from '../types'
 
 import { DaemonClient } from './daemon-client'
@@ -442,6 +443,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
     string,
     { output: string | undefined; sends: { bus: string; gain: number }[] }
   >()
+  /** Complete bus-line intents replayed after daemon respawn (#611 B1). */
+  private readonly busLines = new Map<string, WireLineOp[]>()
   /**
    * 🔴 最後に設定したマスターゲイン（#643 PR-2）。daemon は respawn すると
    * **unity から始まる**ので、再送しないとマスターが黙って効かなくなる。
@@ -790,6 +793,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
           await this.reloadPluginsAfterRespawn()
           await this.reloadEffectRacksAfterRespawn()
           await this.reapplyBusRoutingAfterRespawn()
+          await this.reapplyBusLinesAfterRespawn()
           await this.reapplySourceRoutingAfterRespawn()
           await this.reapplyGlobalGainAfterRespawn()
           console.warn(
@@ -1022,6 +1026,37 @@ export class RustEnginePlayer implements AudioEngineBackend {
         // Cache entry intentionally remains: a later daemon respawn retries restoration.
         console.error(
           `❌ [rust-engine] failed to restore bus routing after daemon respawn (bus=${seqBus})`,
+          err,
+        )
+      }
+    }
+  }
+
+  /** Replace a bus line and retain transport-failure intent for respawn replay. */
+  async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
+    const prev = this.busLines.get(bus)
+    const intent = [...line]
+    this.busLines.set(bus, intent)
+    try {
+      await this.daemon.setBusLine(bus, intent)
+    } catch (err) {
+      if (err instanceof DaemonProtocolError) {
+        if (prev) this.busLines.set(bus, prev)
+        else this.busLines.delete(bus)
+      }
+      throw err
+    }
+  }
+
+  /** Reapply complete bus-line intents after the legacy routing replay. */
+  private async reapplyBusLinesAfterRespawn(): Promise<void> {
+    for (const [bus, line] of this.busLines.entries()) {
+      try {
+        await this.daemon.setBusLine(bus, line)
+      } catch (err) {
+        // Keep the intent: a later respawn gets another restoration attempt.
+        console.error(
+          `❌ [rust-engine] failed to restore bus line after daemon respawn (bus=${bus})`,
           err,
         )
       }

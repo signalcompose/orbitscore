@@ -50,7 +50,7 @@ it opens all of them.
 The implementation lives in `Sequence.ui()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:710-730
+// packages/engine/src/core/sequence.ts:770-790
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -80,7 +80,7 @@ form enumerates every matching catalog element in the registered chain and calls
 open for each one.
 
 ```typescript
-// packages/engine/src/core/global.ts:1129-1139
+// packages/engine/src/core/global.ts:1142-1152
   async openPluginUisByName(receiverId: string, requestedName: string): Promise<void> {
     if (typeof requestedName !== 'string') {
       throw new Error(
@@ -103,7 +103,7 @@ perfectly legitimate action would turn red every time (the host-side error PH.2c
 through `openPluginUiIdempotent`, which succeeds as a no-op when the UI is already open.
 
 ```typescript
-// packages/engine/src/core/global.ts:1166-1174
+// packages/engine/src/core/global.ts:1179-1187
   async openPluginUiIdempotent(
     receiverId: string,
     index: number,
@@ -257,7 +257,7 @@ is fixed as the save target** and is never re-resolved for later close / save.
 When sending to the daemon, a window title and a **window token** are attached.
 
 ```typescript
-// packages/engine/src/core/global.ts:1244-1250
+// packages/engine/src/core/global.ts:1257-1263
     try {
       await this.audioEngine.openPluginUi(
         resolved.daemonTarget,
@@ -293,7 +293,7 @@ of a token that is in use" loudly, so even a collision does not become a silent 
 On a successful open, TS records one entry in its session ledger. The key is the window token.
 
 ```typescript
-// packages/engine/src/core/global.ts:60-66
+// packages/engine/src/core/global.ts:65-71
 type PluginUiSession = {
   window: number
   receiverId: string
@@ -313,7 +313,7 @@ The TS → daemon wire simply adds three methods to the existing JSON request/re
 target vocabulary is the same `{role, bus?, instance?}` shape as `GetPluginState`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:642-655
+// packages/engine/src/audio/rust-engine/daemon-client.ts:633-646
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,
@@ -777,7 +777,7 @@ that landed in #474 P4b (2026-07-31); it creates no new save mechanism and merel
 existing save flow from the event.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:653-681
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:656-684
   private readonly onPluginUiClosed = (raw: unknown): void => {
     this.enqueuePluginUiEvent(async () => {
       const data = wireObject(raw, 'PluginUiClosed data')
@@ -827,7 +827,7 @@ When does the caller of `closePluginUi` return? The daemon's `ClosePluginUI` res
 **Phase A acceptance only**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2375-2376
+// rust/crates/orbit-audio-daemon/src/session.rs:2393-2394
                     // This is explicitly Phase A acceptance, never close completion.
                     Ok(Ok(())) => ok(&id, json!({"status": "accepted"})),
 ```
@@ -837,7 +837,7 @@ TS separately waits for the `UI_CLOSED_DONE` event frame. Moreover, it registers
 the daemon side, so DONE can overtake the ack.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:883-897
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:887-901
     try {
       // Register the DONE waiter before issuing CLOSE_UI: the event pump and
       // command response use independent tasks, so DONE may race the ack.
@@ -862,7 +862,7 @@ and "save completed" is never falsely returned (main's mutation verification in 
 found this hole and added a test).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:331-332
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:332-333
 const PLUGIN_UI_OPEN_TIMEOUT_MS = 30_000
 const PLUGIN_UI_CLOSE_TIMEOUT_MS = 20_000
 ```
@@ -957,7 +957,7 @@ The ack matching key became the triple `(generation, window, evt_seq)`; an ack c
 window is rejected loudly. The event frame's `PluginUiTarget` also gained `window`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10188-10201
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10450-10463
 /// WS event frame に載せる、解決済み plugin UI 宛先。
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PluginUiTarget {

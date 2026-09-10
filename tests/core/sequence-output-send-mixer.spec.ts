@@ -29,7 +29,7 @@ function mockMidiOutput(): MidiOutput {
   } as unknown as MidiOutput
 }
 
-function harness(setBusRouting = vi.fn().mockResolvedValue(undefined)) {
+function harness(setBusLine = vi.fn().mockResolvedValue(undefined)) {
   const setSourceRouting = vi.fn().mockResolvedValue(undefined)
   const audio = {
     isRunning: true,
@@ -44,7 +44,7 @@ function harness(setBusRouting = vi.fn().mockResolvedValue(undefined)) {
     getAudioDuration: vi.fn(() => 1),
     getMasterGainDb: () => 0,
     loadPlugin: vi.fn().mockResolvedValue({}),
-    setBusRouting,
+    setBusLine,
     setSourceRouting,
   } as any
   installEffectChainMock(audio)
@@ -53,8 +53,22 @@ function harness(setBusRouting = vi.fn().mockResolvedValue(undefined)) {
   global.setDocumentDirectory('/songs')
   const seq = new Sequence(global, audio)
   seq.setName('kick')
-  return { audio, global, seq, setBusRouting, setSourceRouting }
+  return { audio, global, seq, setBusLine, setSourceRouting }
 }
+
+const rack = { op: 'rack' }
+const masterOutput = (thru: boolean) => ({
+  op: 'output',
+  dest: { kind: 'master' },
+  thru,
+  gain: 1,
+})
+const busOutput = (name: string, thru: boolean, gain = 1) => ({
+  op: 'output',
+  dest: { kind: 'bus', name },
+  thru,
+  gain,
+})
 
 describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
   beforeEach(() => {
@@ -66,31 +80,31 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
     vi.useRealTimers()
   })
 
-  it('auto-allocates a per-seq insert bus and issues SetBusRouting(output=<sum bus>) when no seq.effect() was declared', async () => {
-    const { global, seq, setBusRouting } = harness()
+  it('auto-allocates a per-seq insert bus and issues SetBusLine(output=<sum bus>) when no seq.effect() was declared', async () => {
+    const { global, seq, setBusLine } = harness()
     global.sum('drum')
     seq.output('drum')
-    await vi.waitFor(() => expect(setBusRouting).toHaveBeenCalled())
+    await vi.waitFor(() => expect(setBusLine).toHaveBeenCalled())
     expect(seq.getInsertBus()).toBe('seq-bus-0')
-    expect(setBusRouting).toHaveBeenCalledWith('seq-bus-0', 'sum-bus-0', [])
+    expect(setBusLine).toHaveBeenCalledWith('seq-bus-0', [rack, busOutput('sum-bus-0', false)])
   })
 
   it('reuses the existing insert bus when seq.effect() was already declared', async () => {
-    const { global, seq, setBusRouting } = harness()
+    const { global, seq, setBusLine } = harness()
     global.sum('drum')
     await seq.effect('./reverb.clap')
     expect(seq.getInsertBus()).toBe('seq-bus-0')
     seq.output('drum')
-    await vi.waitFor(() => expect(setBusRouting).toHaveBeenCalled())
-    expect(setBusRouting).toHaveBeenCalledWith('seq-bus-0', 'sum-bus-0', [])
+    await vi.waitFor(() => expect(setBusLine).toHaveBeenCalled())
+    expect(setBusLine).toHaveBeenCalledWith('seq-bus-0', [rack, busOutput('sum-bus-0', false)])
   })
 
   it('falls back to the LinkAudio/warn behavior for a name that is not a declared sum bus', () => {
-    const { seq, setBusRouting } = harness()
+    const { seq, setBusLine } = harness()
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     seq.output('not-a-sum')
     expect(seq.getOutputChannel()).toBe('not-a-sum')
-    expect(setBusRouting).not.toHaveBeenCalled()
+    expect(setBusLine).not.toHaveBeenCalled()
     expect(warnSpy).toHaveBeenCalledTimes(1)
   })
 
@@ -110,18 +124,18 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
   })
 
   it('routes an instrument main output to the allocated sum insert bus', async () => {
-    const { global, seq, setBusRouting, setSourceRouting } = harness()
+    const { global, seq, setBusLine, setSourceRouting } = harness()
     global.sum('drum')
     await seq.instrument('synth.clap')
     expect(seq.output('drum')).toBe(seq)
-    await vi.waitFor(() => expect(setBusRouting).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(1))
     expect(setSourceRouting).toHaveBeenCalledTimes(1)
     expect(setSourceRouting).toHaveBeenCalledWith('plugin:kick', 0, 'seq-bus-0')
   })
 
-  it('logs a transient warning (not error) and does not throw when SetBusRouting fails at transport', async () => {
-    const setBusRouting = vi.fn().mockRejectedValue(new Error('socket closed'))
-    const { global, seq } = harness(setBusRouting)
+  it('logs a transient warning (not error) and does not throw when SetBusLine fails at transport', async () => {
+    const setBusLine = vi.fn().mockRejectedValue(new Error('socket closed'))
+    const { global, seq } = harness(setBusLine)
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     global.sum('drum')
@@ -131,11 +145,11 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
     expect(errorSpy).not.toHaveBeenCalled()
   })
 
-  it('logs an actionable console.error when the daemon definitively rejects SetBusRouting', async () => {
-    const setBusRouting = vi
+  it('logs an actionable console.error when the daemon definitively rejects SetBusLine', async () => {
+    const setBusLine = vi
       .fn()
       .mockRejectedValue(new DaemonProtocolError('MALFORMED_REQUEST', 'kind mismatch'))
-    const { global, seq } = harness(setBusRouting)
+    const { global, seq } = harness(setBusLine)
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     global.sum('drum')
     expect(() => seq.output('drum')).not.toThrow()
@@ -144,20 +158,39 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
   })
 
   it('self-heals a failed routing push on the next routing call (full-state re-send)', async () => {
-    const setBusRouting = vi
+    const setBusLine = vi
       .fn()
       .mockRejectedValueOnce(new Error('socket closed'))
       .mockResolvedValue(undefined)
-    const { global, seq } = harness(setBusRouting)
+    const { global, seq } = harness(setBusLine)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     global.sum('drum')
     global.aux('rev')
     seq.output('drum') // fails (transient)
     seq.send('rev', 0.3) // full-state re-send carries the sum output too
-    await vi.waitFor(() => expect(setBusRouting).toHaveBeenCalledTimes(2))
-    expect(setBusRouting).toHaveBeenLastCalledWith('seq-bus-0', 'sum-bus-0', [
-      { bus: 'aux-bus-0', gain: 0.3 },
+    await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(2))
+    expect(setBusLine).toHaveBeenLastCalledWith('seq-bus-0', [
+      rack,
+      busOutput('sum-bus-0', true),
+      busOutput('aux-bus-0', false, 0.3),
     ])
+  })
+
+  it('self-heals a rejected SetBusLine at the next playback start', async () => {
+    const setBusLine = vi
+      .fn()
+      .mockRejectedValueOnce(new DaemonProtocolError('MALFORMED_REQUEST', 'kind mismatch'))
+      .mockResolvedValue(undefined)
+    const { global, seq } = harness(setBusLine)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    global.sum('drum')
+    seq.output('drum')
+    await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledTimes(1))
+
+    await seq.run()
+    await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(2))
+
+    expect(setBusLine).toHaveBeenLastCalledWith('seq-bus-0', [rack, busOutput('sum-bus-0', false)])
   })
 })
 
@@ -171,39 +204,45 @@ describe('Sequence.send() → aux bus routing (MX.3/MX.4)', () => {
     vi.useRealTimers()
   })
 
-  it('auto-allocates a per-seq insert bus and issues SetBusRouting(sends=[{bus, gain}])', async () => {
-    const { global, seq, setBusRouting } = harness()
+  it('auto-allocates a per-seq insert bus and issues SetBusLine with the legacy send shape', async () => {
+    const { global, seq, setBusLine } = harness()
     global.aux('rev')
     seq.send('rev', 0.3)
-    await vi.waitFor(() => expect(setBusRouting).toHaveBeenCalled())
+    await vi.waitFor(() => expect(setBusLine).toHaveBeenCalled())
     expect(seq.getInsertBus()).toBe('seq-bus-0')
-    expect(setBusRouting).toHaveBeenCalledWith('seq-bus-0', undefined, [
-      { bus: 'aux-bus-0', gain: 0.3 },
+    expect(setBusLine).toHaveBeenCalledWith('seq-bus-0', [
+      rack,
+      masterOutput(true),
+      busOutput('aux-bus-0', false, 0.3),
     ])
   })
 
   it('accumulates multiple sends (fan-out) and re-sends the full set each time', async () => {
-    const { global, seq, setBusRouting } = harness()
+    const { global, seq, setBusLine } = harness()
     global.aux('rev')
     global.aux('delay')
     seq.send('rev', 0.3)
     seq.send('delay', 0.5)
-    await vi.waitFor(() => expect(setBusRouting).toHaveBeenCalledTimes(2))
-    expect(setBusRouting).toHaveBeenLastCalledWith('seq-bus-0', undefined, [
-      { bus: 'aux-bus-0', gain: 0.3 },
-      { bus: 'aux-bus-1', gain: 0.5 },
+    await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(2))
+    expect(setBusLine).toHaveBeenLastCalledWith('seq-bus-0', [
+      rack,
+      masterOutput(true),
+      busOutput('aux-bus-0', true, 0.3),
+      busOutput('aux-bus-1', false, 0.5),
     ])
   })
 
-  it('combines an existing sum output with sends in the re-issued SetBusRouting', async () => {
-    const { global, seq, setBusRouting } = harness()
+  it('combines an existing sum output with sends in the re-issued SetBusLine', async () => {
+    const { global, seq, setBusLine } = harness()
     global.sum('drum')
     global.aux('rev')
     seq.output('drum')
     seq.send('rev', 0.3)
-    await vi.waitFor(() => expect(setBusRouting).toHaveBeenCalledTimes(2))
-    expect(setBusRouting).toHaveBeenLastCalledWith('seq-bus-0', 'sum-bus-0', [
-      { bus: 'aux-bus-0', gain: 0.3 },
+    await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(2))
+    expect(setBusLine).toHaveBeenLastCalledWith('seq-bus-0', [
+      rack,
+      busOutput('sum-bus-0', true),
+      busOutput('aux-bus-0', false, 0.3),
     ])
   })
 
@@ -228,11 +267,11 @@ describe('Sequence.send() → aux bus routing (MX.3/MX.4)', () => {
   })
 
   it('routes an instrument main output to the allocated aux-send insert bus', async () => {
-    const { global, seq, setBusRouting, setSourceRouting } = harness()
+    const { global, seq, setBusLine, setSourceRouting } = harness()
     global.aux('rev')
     await seq.instrument('synth.clap')
     expect(seq.send('rev', 0.5)).toBe(seq)
-    await vi.waitFor(() => expect(setBusRouting).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(1))
     expect(setSourceRouting).toHaveBeenCalledTimes(1)
     expect(setSourceRouting).toHaveBeenCalledWith('plugin:kick', 0, 'seq-bus-0')
   })

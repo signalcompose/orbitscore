@@ -48,7 +48,7 @@ aux("verb").ui("ValhallaRoom")
 実装は `Sequence.ui()` にあります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:710-730
+// packages/engine/src/core/sequence.ts:770-790
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -77,7 +77,7 @@ aux("verb").ui("ValhallaRoom")
 名前形は登記チェーンから一致する catalog 要素を全列挙し、1 件ずつ冪等 open を呼びます。
 
 ```typescript
-// packages/engine/src/core/global.ts:1129-1139
+// packages/engine/src/core/global.ts:1142-1152
   async openPluginUisByName(receiverId: string, requestedName: string): Promise<void> {
     if (typeof requestedName !== 'string') {
       throw new Error(
@@ -100,7 +100,7 @@ aux("verb").ui("ValhallaRoom")
 `openPluginUiIdempotent` を通り、既に開いていれば no-op で成功します。
 
 ```typescript
-// packages/engine/src/core/global.ts:1166-1174
+// packages/engine/src/core/global.ts:1179-1187
   async openPluginUiIdempotent(
     receiverId: string,
     index: number,
@@ -253,7 +253,7 @@ identity を保存対象として確定**させ、以降の close / 保存では
 daemon へ送る際には、ウィンドウタイトルと **window token** を添えます。
 
 ```typescript
-// packages/engine/src/core/global.ts:1244-1250
+// packages/engine/src/core/global.ts:1257-1263
     try {
       await this.audioEngine.openPluginUi(
         resolved.daemonTarget,
@@ -289,7 +289,7 @@ export function allocatePluginUiWindowToken(): number {
 open が成功すると、TS はセッション簿記に 1 枚ぶんの記録を残します。キーは window token です。
 
 ```typescript
-// packages/engine/src/core/global.ts:60-66
+// packages/engine/src/core/global.ts:65-71
 type PluginUiSession = {
   window: number
   receiverId: string
@@ -308,7 +308,7 @@ TS → daemon の wire は既存の JSON request/response に 3 つのメソッ�
 `GetPluginState` と同じ `{role, bus?, instance?}` 形です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:642-655
+// packages/engine/src/audio/rust-engine/daemon-client.ts:633-646
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,
@@ -765,7 +765,7 @@ TS 側の受け手が `RustEnginePlayer.onPluginUiClosed` です。#474 P4b（20
 だけになっています。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:653-681
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:656-684
   private readonly onPluginUiClosed = (raw: unknown): void => {
     this.enqueuePluginUiEvent(async () => {
       const data = wireObject(raw, 'PluginUiClosed data')
@@ -815,7 +815,7 @@ TS 側の受け手が `RustEnginePlayer.onPluginUiClosed` です。#474 P4b（20
 **フェーズ A の受理**でしかありません。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2375-2376
+// rust/crates/orbit-audio-daemon/src/session.rs:2393-2394
                     // This is explicitly Phase A acceptance, never close completion.
                     Ok(Ok(())) => ok(&id, json!({"status": "accepted"})),
 ```
@@ -825,7 +825,7 @@ TS はこれとは別に `UI_CLOSED_DONE` の event frame を待ち受けます�
 タスクなので、DONE が ack を追い抜くことがあるからです。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:883-897
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:887-901
     try {
       // Register the DONE waiter before issuing CLOSE_UI: the event pump and
       // command response use independent tasks, so DONE may race the ack.
@@ -850,7 +850,7 @@ pending が reject され、「保存完了」を偽って返すことはあり�
 変異検証がこの穴を見つけ、テストを足しています）。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:331-332
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:332-333
 const PLUGIN_UI_OPEN_TIMEOUT_MS = 30_000
 const PLUGIN_UI_CLOSE_TIMEOUT_MS = 20_000
 ```
@@ -943,7 +943,7 @@ ack の照合キーは `(generation, window, evt_seq)` の三つ組になり、�
 loud に拒否されます。event frame の `PluginUiTarget` にも `window` が載りました。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10188-10201
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10450-10463
 /// WS event frame に載せる、解決済み plugin UI 宛先。
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PluginUiTarget {

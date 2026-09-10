@@ -41,7 +41,7 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
       // output(). Without it the existing tests still pass (optional-chained),
       // but its absence meant the output()→register wiring was never exercised.
       registerLinkAudioChannel: vi.fn().mockResolvedValue(undefined),
-      setBusRouting: vi.fn().mockResolvedValue(undefined),
+      setBusLine: vi.fn().mockResolvedValue(undefined),
     } as any
 
     global = new Global(mockPlayer)
@@ -230,7 +230,15 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
 
       expect(seq.getRenderBus()).toBeUndefined()
       expect(seq.getInsertBus()).toBe('seq-bus-0')
-      expect(mockPlayer.setBusRouting).toHaveBeenCalledWith('seq-bus-0', 'sum-bus-0', [])
+      expect(mockPlayer.setBusLine).toHaveBeenCalledWith('seq-bus-0', [
+        { op: 'rack' },
+        {
+          op: 'output',
+          dest: { kind: 'bus', name: 'sum-bus-0' },
+          thru: false,
+          gain: 1,
+        },
+      ])
       expect(warnSpy).not.toHaveBeenCalled()
     })
   })

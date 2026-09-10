@@ -1109,7 +1109,7 @@ export function parseStepLine(line: string): StepEvent | null {
 The audio-side source is a single place in `rust-engine-player.ts`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1611-1617
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1646-1652
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
       console.log(
@@ -1132,7 +1132,7 @@ This is where `#654` enters. According to WORK_LOG 6.421, when a new seven-layer
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1430-1440
+// packages/engine/src/core/sequence.ts:1490-1500
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {

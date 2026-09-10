@@ -1099,7 +1099,7 @@ export function parseStepLine(line: string): StepEvent | null {
 audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1611-1617
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1646-1652
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
       console.log(
@@ -1122,7 +1122,7 @@ audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1430-1440
+// packages/engine/src/core/sequence.ts:1490-1500
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {

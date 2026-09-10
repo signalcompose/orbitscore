@@ -52,7 +52,7 @@ flowchart LR
 When `global.start()` is called from the DSL, the following call chain begins. First, `Global.start()`.
 
 ```typescript
-// packages/engine/src/core/global.ts:654-677
+// packages/engine/src/core/global.ts:667-690
   // Transport control
   start(): this {
     // §L1: only open a NEW session on an actual stopped→running transition —
@@ -139,7 +139,7 @@ The important point here is **idempotence**. If `_isRunning` is already `true`, 
 Eventually, `RustEnginePlayer.start()` starts `setInterval(1)` and records the playback start time as `startTime = Date.now()`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1506-1510
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1541-1545
   start(): void {
     if (this.isRunning) return
     this.isRunning = true
@@ -156,7 +156,7 @@ Note that `TransportClock.startTime` and `RustEnginePlayer.startTime` call `Date
 `global.stop()` cascades in the reverse direction. This too has grown by the session log and the auto-snapshot.
 
 ```typescript
-// packages/engine/src/core/global.ts:688-718 (プラグイン状態の auto-snapshot ブロックを // ... で省略)
+// packages/engine/src/core/global.ts:701-731 (プラグイン状態の auto-snapshot ブロックを // ... で省略)
   stop(options?: { autoSnapshot?: boolean }): this {
     // §L1: write the stop record BEFORE the clock clears, only if actually
     // running, and never let a log-write error block the note-offs below (a
@@ -363,7 +363,7 @@ When `skipTransportCommands: true` is passed, statements with `statement.type ==
 An element of transport that did not exist in the 2026-05 version is **launch quantize**. `global.quantize()` has `"bar"` as its default and makes the start of `LOOP()` and the swap of `play()` during LOOP wait until the next boundary.
 
 ```typescript
-// packages/engine/src/core/global.ts:555-573
+// packages/engine/src/core/global.ts:568-586
   /**
    * Set the global launch-quantize value.
    *
@@ -420,7 +420,7 @@ In OrbitScore, "playback position" is held as **the transport's start time**. In
 `Global` has functions that convert elapsed ms into `"bar:beat"` (added for the §L1 session log).
 
 ```typescript
-// packages/engine/src/core/global.ts:726-729
+// packages/engine/src/core/global.ts:739-742
   getTransportPosition(): string | null {
     if (!this.transportClock.running) return null
     return this.msToBarBeat(Date.now() - this.transportClock.startTime)
@@ -428,7 +428,7 @@ In OrbitScore, "playback position" is held as **the transport's start time**. In
 ```
 
 ```typescript
-// packages/engine/src/core/global.ts:762-767
+// packages/engine/src/core/global.ts:775-780
     const { tempo, beat } = params
     const beatUnitMs = ((60_000 / tempo) * 4) / beat.denominator // one meter-beat
     const totalBeatUnits = Math.max(0, elapsedMs) / beatUnitMs
@@ -444,7 +444,7 @@ All `ScheduledPlay.time` values are **relative times (ms)** based on the schedul
 The important point is that `startTime` is not reset even when `stop()` is called.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1525-1531
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1560-1566
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId)
@@ -476,7 +476,7 @@ stateDiagram-v2
 `loop()` remains deprecated; the recommended way is to control sequence loops individually with `seq.loop()` / `LOOP()`.
 
 ```typescript
-// packages/engine/src/core/global.ts:679-686
+// packages/engine/src/core/global.ts:692-699
   /**
    * @deprecated Not needed. Use LOOP(seq) for sequences instead.
    */
@@ -502,7 +502,7 @@ started later. The handle is now held by `StateManager` as `runTimer`, and `clea
 first at the entry of `run()` / `loop()` / `stop()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1855-1883
+// packages/engine/src/core/sequence.ts:1915-1943
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()
