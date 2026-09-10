@@ -261,10 +261,12 @@ Methods for MIDI sequences and related global settings. See [MIDI Output](/en/mi
 | `key("D3")` | Sets the tonic and register in one declaration ⚠️ | `global.key("D3")` |
 | `midiLatency(ms)` | Fixed MIDI send offset in ms for timing alignment (default 0) | `global.midiLatency(20)` |
 | `quantize(val)` | LOOP launch grid: `"bar"`(default) / `"beat"` / `"2bar"` / `"4bar"` / `"8bar"` / `"off"` | `global.quantize("bar")` |
-| `linkAudio()` | Enable LinkAudio mode (streams audio to Live; macOS + Live 12.4+) | `global.linkAudio()` |
-| `linkAudio(SR)` | Enable LinkAudio with explicit sample rate | `global.linkAudio(48000)` |
+| `linkAudio()` | Enable LinkAudio mode (streams audio to Live; macOS + Live 12.4+) 🔴 | `global.linkAudio()` |
+| `linkAudio(SR)` | Enable LinkAudio with explicit sample rate 🔴 | `global.linkAudio(48000)` |
 
 > ⚠️ `global.key()` / `seq.root()` and related root/key interfaces are scheduled for redesign post-2.0.
+>
+> 🔴 **LinkAudio audio egress does not work in shipped builds** (as of 2026-09-10). The declaration is accepted, but the sound goes to hardware output and one warning is logged. See [LinkAudio](../midi/link-audio.md).
 
 ### Sequence — MIDI Declaration
 
@@ -277,7 +279,9 @@ Methods for MIDI sequences and related global settings. See [MIDI Output](/en/mi
 | `root(N)` | Sequence-default root (degree only) ⚠️ | `piano.root(1)` |
 | `voicelead()` | Apply automatic voice leading to the whole sequence (alias: `vl()`) | `piano.voicelead()` |
 | `quantize(val)` | Per-sequence LOOP launch grid override | `fill.quantize("off")` |
-| `output("name")` | LinkAudio channel name (required when `global.linkAudio()` is active) | `kick.output("kick")` |
+| `output("name")` | LinkAudio channel name (required when `global.linkAudio()` is active) 🔴 | `kick.output("kick")` |
+
+> 🔴 **LinkAudio audio egress does not work in shipped builds** (as of 2026-09-10); the channel name is still recorded but the sound goes to hardware output. See [LinkAudio](../midi/link-audio.md).
 
 ### play() values for MIDI sequences
 
