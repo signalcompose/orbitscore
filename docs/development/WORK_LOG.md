@@ -17,6 +17,63 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(link-audio): tell the truth about the deleted Link submodule and the unresolved fallback (#502) (Sep 10, 2026)
+
+Fable 受け入れ監査（PR #840）の指摘を適用した。**Important 2 / Minor 4**。
+
+#### 🔴 Important — 消した submodule を案内し続ける build script
+
+`rust/crates/orbit-link-audio/build.rs` は Link のヘッダを
+`packages/sc-link-audio/external_libraries/link` に既定で探し、無ければ
+`git submodule update --init packages/sc-link-audio/external_libraries/link` を案内していた。
+本束は `.gitmodules` と gitlink を消したので、**その案内はもう "no submodule mapping" で失敗する**。
+
+`build.rs` の冒頭コメント自身が「Link submodule は **SC plugin と共有**する」と書いており、
+**SC 専用ではなかった**。owner 裁定（`NATIVE_MIGRATION_2026-09.md` §12.5）は
+`packages/sc-link-audio` を「**SC 専用なら**同時に削除」としていたので、共有物を消す判断は
+明示的にはされていない。
+
+| | |
+|---|---|
+| 出荷ビルド | **影響なし**。`link-audio` feature は default off |
+| 新規クローン | `--features link-audio` が build.rs の panic で落ちる（実測: 新しい worktree に `link/include/ableton/LinkAudio.hpp` が存在しない） |
+| 既存クローン | **成功してしまう**。gitlink を消しても git は submodule の作業ディレクトリを消さない。**手元の緑は証拠にならない** |
+| CI | 検出不能。`rust-ci.yml` は ubuntu で、`build.rs` は `target_os != macos` で先に panic する |
+
+**対処**: panic 文言を実態（`ORBIT_LINK_DIR` で Link の checkout を指す）に直し、
+crate の扱いそのものを **#845** の裁定事項として立てた（main の推奨は crate の退役）。
+
+#### 🔴 Important — リファレンス表が仕様と逆のことを書いていた
+
+`sites/user/reference/methods.md`（ja / en）は LinkAudio 無効時に
+「音はハードウェア出力に出て、警告が 1 回出ます」と**事実として断定**していた。
+一方 spec §8.1 と `sites/user/midi/link-audio.md` は「設計の意図と実測が食い違っていて未決・
+LinkAudio を前提にした演奏はしないこと」と書いている。**同じ束の中で矛盾していた。**
+リファレンス側を「未決」に揃えた。
+
+#### Minor
+
+- **行番号での出典が既にずれていた**（`orbitstudio-mcp-gated.spec.ts:5113-5119` → 実際は 5252-5256）。
+  main を merge するたびにずれるので、**行番号をやめて文言で参照する**ようにした
+  （「A comment is not evidence of implementation behavior」で始まるコメント）。5 箇所
+- 仕様の消し残し 3 件: 削除済みディレクトリを理由にフルパス表記を要求していた記述 /
+  「Choose output device via command palette」（コマンドは本束で削除・現在は Engine view と MCP）/
+  「buffer caching on the SC path」
+- `sites/dev` の glossary（ja / en）が `ORBITSCORE_ENGINE` を**現行の環境変数として定義**し、
+  `AudioEngineBackend` を「`SuperColliderPlayer` と `RustEnginePlayer` の両方が満たす」と
+  書いていた。両方直した
+- `sites/dev/**` の散文には同種が **107 行 / 20 ファイル**残っている。引用ブロックは
+  付け替え済みで `docs:check` は緑だが散文が現在形。束の外へ切り出した（**#846**）
+- 出荷 README の `✅ engine: rust (native)` と `numInputBusChannels` の記述は **#842 で解消済み**
+
+#### 監査が「無し」と確認した主なもの
+
+削除された識別子・設定キー・コマンド ID・MCP ツール名の残存参照（`build.rs` を除き 0）/
+型検査を通らない経路（実行時 `require` は実在するモジュールのみ）/ `contributes.commands` 15 件 ⊆
+`registerCommand` 18 件 / 旧 `SuperColliderPlayer` の public 面 19 メソッドの突合（Rust に無いのは
+master effects・LinkAudio・device の 3 スタブで、いずれも本束が文書化済み）/ `sync-dist.js` の
+写像（`rootDir: ./src` / `outDir: ./dist` と整合・read-only 実走で kept 440 / orphans 0）
+
 ### fix(engine): make each master effect warn, and stop audioDevice from promising a restart (#502) (Sep 10, 2026)
 
 `/code:pr-review-team` ラウンド 1（4 レビュアー）の指摘を適用した。**Critical 1 / Important 2 /
@@ -271,7 +328,7 @@ scsynth の `verify-bundle.sh` 呼び出しだけを除いた。
 
 **🔴 仕様と実測の食い違いを見つけた（決めていない・PR 本文に質問として出す）**:
 #833 の §8.1 は「egress が無ければ hardware へフォールバックし 1 回 warn する」と書いているが、
-`tests/e2e/orbitstudio-mcp-gated.spec.ts:5113-5119` には 2026-09-04 の実機で
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` の「**A comment is not evidence of implementation behavior**」で始まるコメントには、2026-09-04 の実機で
 **capture RMS = 0・警告マーカーも無し**という逆の実測が記録されており、さらに
 「`global.linkAudio()` 下の dispatch は `skip` か `link` で、capture できる `hardware` には
 決してならない」とも書かれている。**どちらが正しいかは仕様の判断**なので直さず、

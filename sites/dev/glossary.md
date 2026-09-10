@@ -89,11 +89,11 @@ CLI (`playFile`) では `.orbs` ファイルパスから自動導出されます
 
 ### AudioEngineBackend（backend seam）
 
-`packages/engine/src/audio/engine-backend.ts` の interface。interpreter / scheduler が音声バックエンドに要求する唯一の契約面で、`SuperColliderPlayer` と `RustEnginePlayer` の両方がこれを満たします。`boot` / `quit` / `loadPlugin` / `applyEffectChain` / `setGlobalGain` / `pluginNoteOn` 等を持ちます。
+`packages/engine/src/audio/engine-backend.ts` の interface。interpreter / scheduler が音声バックエンドに要求する唯一の契約面です。本番の実装は `RustEnginePlayer` だけで（#502 で第 2 実装は削除）、ほかに検証用の `RecordingScheduler` と MIDI 実行の no-op エンジンがこの面を実装します。`boot` / `quit` / `loadPlugin` / `applyEffectChain` / `setGlobalGain` / `pluginNoteOn` 等を持ちます。
 
 ### ORBITSCORE_ENGINE
 
-バックエンド選択の環境変数。`sc` または `supercollider` で SuperCollider 経路に opt-out、未設定・それ以外は Rust daemon（`create-audio-engine.ts` の `resolveEngineKind()`）。VS Code 設定 `orbitscore.engine` が対応します。
+🔴 **#502（2026-09-10）で撤去された**環境変数。かつてバックエンドを選ぶために使い、`sc` / `supercollider` で SuperCollider 経路へ opt-out できました。第 2 バックエンドが無くなったので `resolveEngineKind()` ごと削除し、`createAudioEngine()` は常に `RustEnginePlayer` を返します。VS Code 設定 `orbitscore.engine` も同時に削除されました。**歴史的な記述としてのみ残しています。**
 
 ### RustEnginePlayer / DaemonClient
 

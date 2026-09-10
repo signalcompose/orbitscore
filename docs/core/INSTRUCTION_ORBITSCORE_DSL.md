@@ -262,8 +262,8 @@ require time-stretch — see `fixpitch()` / `time()` / `stretch()` in §12.
 | `chop(n > 1)` | `scheduleSliceEvent` | the slice is varispeed-fitted into its slot (above) — **pitch moves** |
 
 The branch is in `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138`
-(`if (chopDivisions && chopDivisions > 1)`) — full path, because a second `event-scheduler.ts`
-exists under `packages/engine/src/audio/supercollider/`.
+(`if (chopDivisions && chopDivisions > 1)`). The full path is a leftover from when a second
+`event-scheduler.ts` existed under the retired backend; that directory was removed in #502.
 `scheduleEvent` takes **no duration and no rate argument**, so there is nothing to scale by.
 
 **The non-chop path is a feature, not an omission.** It is how you write a one-shot that
@@ -2094,7 +2094,7 @@ Epic #224 phases 1/2/3/R/4:
 - **Error Handling**: Graceful error reporting
 
 #### Audio Engine (Rust daemon)
-- **File Loading**: WAV / AIFF / MP3 / MP4 decoding (symphonia on the Rust path; buffer caching on the SC path)
+- **File Loading**: WAV / AIFF / MP3 / MP4 decoding (symphonia, on the Rust daemon — the only backend since #502)
 - **Slicing**: `chop(n)` divides audio into n equal parts with precise timing
 - **Playback**: sample-accurate `PlayAt` scheduling on the Rust daemon
 - **Audio Control**:
@@ -2122,7 +2122,7 @@ Epic #224 phases 1/2/3/R/4:
   > **代替**: master バスの処理は **CLAP / VST3 プラグインのラック**で行う
   > （`global.effect(...)` — 「Plugin Hosting」節）。DSL 語彙から 3 メソッドを外すかどうかは
   > **owner 裁定事項**として保留する（表面の削除は破壊的変更のため）。
-- **Audio Device Selection**: Choose output device via command palette
+- **Audio Device Selection**: Choose output device in the **Audio Engine Settings** view (or the MCP `select_audio_device` tool). 🔴 The palette command was removed in #502, and the DSL `global.audioDevice()` does **not** switch the device — it warns and points at the setting.
 - **Default Behavior**: `chop(1)` or no chop treats file as single slice
 
 #### Object-Oriented Architecture
