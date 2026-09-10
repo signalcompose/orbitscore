@@ -2173,7 +2173,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'var routeWet643 = init global.seq',
           `routeWet643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
           'routeWet643.output("sum643")',
-          'routeWet643.send("aux643", 0.5)',
+          // #611 PR-O4 で `send` は dB になった。旧 `0.5`（=50%）と同じ比を dB で書き直したもの。
+          'routeWet643.send("aux643", -6)',
           'routeWet643.gate(1)',
           'routeWet643.play(1, 1, 1, 1)',
           'LOOP(routeDry643)',
@@ -2190,11 +2191,14 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const sumAux = result.rms('sumAux')
       expectSegmentsSounding(result, ['dry', 'sumAux'])
       expect(dry, 'E2E-4 dry instrument must be audible').toBeGreaterThan(0.05)
+      // dry = sum のみ / sumAux = sum + aux。aux は同じ信号のコピーなので
+      // 比は `1 + 10^(-6/20) = 1.501`。許容は従来どおり ±0.15。
+      const sendLinear = Math.pow(10, -6 / 20)
       expect(
         sumAux / dry,
-        `E2E-4 sum+aux/dry RMS ratio (${sumAux}/${dry}) must include the 0.5 send`,
-      ).toBeGreaterThan(1.35)
-      expect(sumAux / dry).toBeLessThan(1.65)
+        `E2E-4 sum+aux/dry RMS ratio (${sumAux}/${dry}) must include the -6 dB send (${1 + sendLinear})`,
+      ).toBeGreaterThan(1 + sendLinear - 0.15)
+      expect(sumAux / dry).toBeLessThan(1 + sendLinear + 0.15)
     },
     TEST_TIMEOUT_MS,
   )
@@ -4226,6 +4230,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             'var fx625 = init global.seq',
             'fx625.audio("kick.wav").chop(1)',
             'fx625.output("fx625out")',
+            // 🔴 #611 PR-O4 以降、`send` の第 2 引数は **dB**（旧: 0.0-1.0 の線形係数）。
+            // ここは経路を張るだけで送出量を判定していない（この block の oracle は
+            // ERROR 件数と child プロセスの有無）ので、`0.2` は「+0.2 dB ≒ ほぼ素通し」と
+            // 読み替わるだけで判定は変わらない。**値を読む時は dB として読むこと。**
             'fx625.send("fx625send", 0.2)',
             'fx625.play(1, 1, 1, 1)',
             'LOOP(fx625)',

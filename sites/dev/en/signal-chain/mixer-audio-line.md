@@ -1384,11 +1384,11 @@ Today's half/unity ratio therefore cannot be held as a golden. `globalGainInstru
 E2E-1 is looking at a steady state**.
 
 E2E-4 is the sum + aux path. It switches between dry (no bus) and an instrument holding
-`output("sum643")` + `send("aux643", 0.5)`, and checks that the ratio falls within 1.35–1.65
+`output("sum643")` + `send("aux643", -6)`, and checks that the ratio falls within 1.35–1.65
 (theoretical 1.5) (`1585-1592`). The DSL part is quoted.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2161-2180
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2161-2181
         [
           'var global = init GLOBAL',
           'global.key("C")',
@@ -1404,7 +1404,8 @@ E2E-4 is the sum + aux path. It switches between dry (no bus) and an instrument 
           'var routeWet643 = init global.seq',
           `routeWet643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
           'routeWet643.output("sum643")',
-          'routeWet643.send("aux643", 0.5)',
+          // #611 PR-O4 で `send` は dB になった。旧 `0.5`（=50%）と同じ比を dB で書き直したもの。
+          'routeWet643.send("aux643", -6)',
           'routeWet643.gate(1)',
           'routeWet643.play(1, 1, 1, 1)',
           'LOOP(routeDry643)',
