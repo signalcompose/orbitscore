@@ -1,12 +1,12 @@
 ---
 title: "SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: 66efda5
+verified-against: f6c9c37
 verified-at: "2026-09-08"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04, to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the line program of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04, to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the line program of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) plus the `SetBusLine` wire of PR-O3b ([#823](https://github.com/signalcompose/orbitscore/pull/823)) on 2026-09-08. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain
 
@@ -644,6 +644,191 @@ It also follows that `if !output.thru { break }` exists in **two places** (the m
 execution). If only one of them stops, a stage is either "alive as a render target but never added
 to" or the reverse.
 
+### `SetBusLine` — replacing a whole line in one command (#611 PR-O3b)
+
+PR-O3a turned the daemon's internals into a line program, but the wire stayed `SetBusRouting` — the
+vocabulary of the older model, "one output target plus a list of sends". #611 PR-O3b
+(PR [#823](https://github.com/signalcompose/orbitscore/pull/823)) adds `SetBusLine` next to it,
+which sends **the entire line in one command**. The old `SetBusRouting` remains alongside it;
+retiring it is PR-O6.
+
+The wire vocabulary is mirrored on the TS side as types: five kinds of `dest`, three kinds of op.
+
+```typescript
+// packages/engine/src/audio/rust-engine/daemon-client.ts:86-96
+export type WireDest =
+  | { kind: 'master' }
+  | { kind: 'bus'; name: string }
+  | { kind: 'device'; channels: [number, number] }
+  | { kind: 'render'; id: string }
+  | { kind: 'link'; channel: string }
+
+export type WireLineOp =
+  | { op: 'rack' }
+  | { op: 'gain'; gain: number }
+  | { op: 'output'; dest: WireDest; thru: boolean; gain: number }
+```
+
+The sending side is one line. The thing worth holding onto is that **there is not a single caller
+yet** — the DSL starts sending it in PR-O4.
+
+```typescript
+// packages/engine/src/audio/rust-engine/daemon-client.ts:715-718
+  /** Replace one daemon bus's complete ordered audio line (#611 wire contract §4.1). */
+  async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
+    await this.request('SetBusLine', { bus, line })
+  }
+```
+
+#### Validation is split across two layers
+
+What is interesting is that validation is **split between the session layer and `EngineWrap`**. The
+session side only looks at the JSON shape (op names, `gain` finite and >= 0, at most one `rack`, a
+`master` line not pointing at master or at a bus); it never resolves a name into an RT index.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/session.rs:304-316
+/// `SetBusLine` の一方通行 wire shape を完全に検証してから engine 用 vocabulary を返す。
+#[cfg(feature = "outproc-effect")]
+fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>), ProtocolError> {
+    let bus = match params.get("bus") {
+        Some(Value::String(bus)) if !bus.trim().is_empty() => bus.clone(),
+        _ => return Err(set_bus_line_malformed("'bus' must be a non-empty string")),
+    };
+    let items = params
+        .get("line")
+        .and_then(Value::as_array)
+        .ok_or_else(|| set_bus_line_malformed("'line' must be an array"))?;
+    let mut line = Vec::with_capacity(items.len());
+    let mut rack_seen = false;
+```
+
+The dispatch is just those three steps in order (shape check, device-channel range check, delegation
+to the engine), with a separate arm returning `UNSUPPORTED` on a build without the feature.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/session.rs:2633-2656
+        #[cfg(feature = "outproc-effect")]
+        "SetBusLine" => match parse_set_bus_line_params(&params) {
+            Ok((bus, line)) => {
+                if let Err(error) =
+                    validate_set_bus_line_device_channels(&line, engine.output_channels())
+                {
+                    err(&id, error)
+                } else {
+                    match engine.set_bus_line(&bus, &line) {
+                        Ok(()) => ok(&id, json!({"status": "accepted"})),
+                        Err(error) => err(&id, wrap_err_to_protocol(&error)),
+                    }
+                }
+            }
+            Err(error) => err(&id, error),
+        },
+        #[cfg(not(feature = "outproc-effect"))]
+        "SetBusLine" => err(
+            &id,
+            ProtocolError::new(
+                "UNSUPPORTED",
+                "SetBusLine requires the outproc-effect build (mixer bus graph)",
+            ),
+        ),
+```
+
+Why not leave this to `validate_line_program`, the install-time gate from the previous section? That
+one rejects `Pan` / `Render` / `Link` with `OutputError::NoConfig` as an **RT availability gate**, and
+routing that wording out over the wire would surface as a device-configuration error code, matching
+no row of the wire contract table. So the contract table is applied **first**, and the availability
+gate stays behind it, unmodified.
+
+The rejection codes can be read straight off the values the tests expect.
+
+| What was rejected | code |
+|---|---|
+| Malformed shape, a second `rack`, a `master` line pointing at itself, a `render` destination | `MALFORMED_REQUEST` |
+| `dest.device` channels out of range, or left and right equal | `PARAM_OUT_OF_RANGE` |
+| `dest.bus` unknown, or a forward-only violation | `OUTPROC_EFFECT_RUNTIME` |
+| `dest.link` on a build without the `link-audio` feature | `LINK_AUDIO_UNAVAILABLE` |
+| A build without the `outproc-effect` feature | `UNSUPPORTED` |
+
+#### Forward-only stays; the kind constraint is gone
+
+`EngineWrap::set_bus_line` resolves names into indices and enforces **forward-only** (a line may only
+point at a later stage). What is worth noticing is that the **kind constraint that `set_bus_routing`
+has — an output target must be a sum bus, a send target must be an aux bus — is absent from
+`SetBusLine`**. An outlet only has to be a later stage; whether it is sum or aux is not asked.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6850-6865
+                    let dest = match dest {
+                        BusLineDest::Master => OutputDest::Master,
+                        BusLineDest::Bus(name) => {
+                            let target = *control.bus_index.get(name).ok_or_else(|| {
+                                WrapError::OutProcEffect(format!(
+                                    "SetBusLine output: unknown bus '{name}'"
+                                ))
+                            })?;
+                            if target <= bus_index {
+                                return Err(WrapError::OutProcEffect(format!(
+                                    "SetBusLine output '{name}' (index {target}) must be a later stage than '{bus}' (index {bus_index})"
+                                )));
+                            }
+                            referenced_buses.push(name.as_str());
+                            OutputDest::Bus(target)
+                        }
+```
+
+The assembly — resolve everything, then publish exactly once — is the same as `set_bus_routing`. If
+one element fails midway the publish is never reached, so **the previous line survives intact**.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6883-6898
+        let installer = self
+            .bus_line_programs
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))?
+            .get(bus)
+            .cloned()
+            .ok_or_else(|| {
+                WrapError::OutProcEffect(format!(
+                    "SetBusLine: unknown bus '{bus}' (no registered RT line)"
+                ))
+            })?;
+        installer(LineProgram::new(resolved), bus_index, bus_count).map_err(|error| {
+            WrapError::OutProcEffectRequest(format!(
+                "SetBusLine program failed validation: {error}"
+            ))
+        })?;
+```
+
+#### `master` joined the same publication
+
+The `bus` of `SetBusLine` accepts `"master"`. To have somewhere to receive that, PR-O3b also gave
+`MasterLine` a `line: LineSlot` and branched the render on whether a program has been published,
+tracked by `explicit_line` (the branch is at
+`rust/crates/orbit-audio-native/src/output.rs:1719-1721`, and the generic execution at `:1765-1821`).
+
+Here is the install handle.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:807-815
+    pub fn line_program_installer(&self) -> LineProgramInstaller {
+        let control = self.line.line_control();
+        let explicit = self.explicit_line.clone();
+        Arc::new(move |program, bus_index, bus_count| {
+            control.install_for_bus(program, bus_index, bus_count)?;
+            explicit.store(true, Ordering::Release);
+            Ok(())
+        })
+    }
+```
+
+`EngineWrap` calls this handle **not only from `SetBusLine("master", …)` but from `SetGlobalGain`
+too** (`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9284-9290`). So the condition for
+`explicit_line` being raised is not "a `SetBusLine("master", …)` arrived" but "the master line was
+published at least once", and a single `global.gain()` is enough. The master gain section of
+[RE-1](/en/rust-engine/) records what the diff shows about that difference (where the ramp length
+comes from, and where a republished ramp starts).
+
 ## Making an instrument a mixer source (#643)
 
 The routing so far was originally for audio sequences (`audio()` / `chop()`). Until #643 PR-1 on
@@ -1245,6 +1430,11 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
   admits is "undesigned". Why what lies beyond `SourceDest::Master` is fixed at stereo
 - **Re-reading after #649 lands** — how `_lineOrder` / `//#evalBegin` / native stage scalars
   replace this chapter's `_auxSends` / `syncBusRouting`
+- **Re-reading once the DSL sends `SetBusLine` (PR-O4)** — how the kind constraint (an output
+  target must be sum, a send target must be aux) looks to a user once `seq.output()`'s three
+  branches move off `SetBusRouting`
+- **Measuring the master once `explicit_line` is raised** — how the ramp length (the `LineSlot`
+  default of 240 frames) and the starting point of a republished ramp show up in the output
 
 ## Sources
 
@@ -1280,6 +1470,18 @@ via `console.error`. And in a session that declared `global.linkAudio()`, `globa
 - `rust/crates/orbit-audio-native/src/output.rs:1043-1100` — `LineExchange` (AtomicPtr publication + generation-counter reclamation)
 - `rust/crates/orbit-audio-native/src/output.rs:1249-1297` — `validate_line_program` (install-time rejection of `Pan` / `Render` / `Link`)
 - PR [#811](https://github.com/signalcompose/orbitscore/pull/811) / PR [#810](https://github.com/signalcompose/orbitscore/pull/810) — bundle O-wire, PR-O3a (line-program conversion, compatibility preserved)
+- PR [#823](https://github.com/signalcompose/orbitscore/pull/823) — bundle O-wire-b, PR-O3b (the `SetBusLine` wire and TS client, `MasterLine.line`)
+- `rust/crates/orbit-audio-daemon/src/session.rs:299-361` — `set_bus_line_malformed` / `parse_set_bus_line_params` (wire shape validation, `MALFORMED_REQUEST`)
+- `rust/crates/orbit-audio-daemon/src/session.rs:435-464` — `validate_set_bus_line_device_channels` (`PARAM_OUT_OF_RANGE`)
+- `rust/crates/orbit-audio-daemon/src/session.rs:2633-2656` — the `SetBusLine` dispatch and the `UNSUPPORTED` arm for a build without the feature
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6499-6687` — `EngineWrap::set_bus_line` (forward-only, the master branch, one publish after all validation)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9266-9294` — `EngineWrap::set_global_gain` (one more step: republishing the master line)
+- `rust/crates/orbit-audio-native/src/output.rs:739-742` — `MasterLine.line` / `explicit_line`
+- `rust/crates/orbit-audio-native/src/output.rs:1765-1821` — `execute_master_line` (master execution after a publish)
+- `packages/engine/src/audio/rust-engine/protocol-types.ts:33-34` — `'SetBusLine'` added to `CommandMethod`
+- `packages/engine/src/audio/rust-engine/daemon-client.ts:86-96` — `WireDest` / `WireLineOp`
+- `packages/engine/src/audio/rust-engine/daemon-client.ts:715-718` — `DaemonClient.setBusLine()`
+- `tests/audio/rust-engine/daemon-client-line-wire.spec.ts:8-36` — the only TS-side `SetBusLine` test (it mocks `request`)
 - `rust/crates/orbit-audio-native/src/output.rs:1078-1094` — the no-bus path `render_engine_with_source_outputs`
 - `rust/crates/orbit-audio-native/src/output.rs:2017-2060` — unit test `global_gain_scales_instrument_contribution`
 - `rust/crates/orbit-audio-core/src/scheduler.rs:375-460` — `render_multi_feeds` (feed addition and gain ramp)
