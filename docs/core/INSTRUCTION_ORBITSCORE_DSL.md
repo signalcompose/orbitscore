@@ -1908,19 +1908,21 @@ kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要�
 > **v1 の現在地**（2026-09-10・束 O-wire-b = PR [#824](https://github.com/signalcompose/orbitscore/pull/824) マージ後）:
 > 🔴 **利用者から見える kind 制約は今日も生きている。** `SetBusRouting` は
 > 「output は sum のみ・send 先は aux のみ」を検証して拒否する
-> （`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6958`（output）/ `:6984`（send）。
-> コード側のコメントは本節 MX.4 を出典として引用している）。
-> forward-only は今日も同じ規則で効いている（同 `:6953` / `:6979`）。
+> （`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6956-6960`・send 側は同 `:6981-6985`。
+> コード側のコメントは本節 MX.4 を出典として引用している）。本節が「kind で制限しない」と
+> 規定するのは **到達点**である。
+> forward-only は今日も同じ規則で効いている（同 `:6951-6955`）。
 >
-> 制約が外れるのは `SetBusLine` を入れる **PR-O3**（2026-09-08 に **PR-O3a / O3b** へ分割）である。
-> **wire 側は PR-O3b で入った** — `EngineWrap::set_bus_line` は forward-only だけを見て
-> **kind を問わない**（同 `:6860` が forward-only を拒否する唯一の判定で、`bus_kinds` を参照しない）。
-> ただし **DSL からの送信元がまだ無い**（`SetBusLine` を送るのは PR-O4）ので、
-> 譜面を書く側から見える振る舞いは `SetBusRouting` のまま変わっていない。
+> **PR-O3 の到達点（2026-09-10・[#824](https://github.com/signalcompose/orbitscore/pull/824) マージ）**:
+> `SetBusLine` の wire は入り、その `bus` 宛ては **forward-only しか検証しない**
+> （`EngineWrap::set_bus_line`・同 `:6852-6865`。kind の照合は無く、
+> `set_bus_line_accepts_a_forward_aux_destination`・同 `:3262-3284` が固定している）。
+> ただし **DSL からこの wire を送る経路はまだ無く**、`output()` / `send()` は `SetBusRouting`
+> のままなので、**ユーザーから見える制約は変わっていない**。切り替えは **PR-O4**。
 >
 > ⚠️ **`pan` と mono 宛先はまだ wire に無い**（設計 611 §4.1 の引用ブロック・owner 裁定 2026-09-10）。
-> §2.2 / §2.4b の裁定（`mix.output(3)` = L+R マージ・`pan` はライン要素）に **wire だけが
-> 追従していなかった**ため、§4.1 を改訂して**実装は PR-O4 へ**割り当てた。
+> §2.2 / §2.4b の裁定（`mix.output(3)` = L+R マージ・`pan` はライン要素）に **wire だけが**
+> **追従していなかった**ため、§4.1 を改訂して**実装は PR-O4 へ**割り当てた。
 
 ### MX.5 v1 制約（実装事実の開示）
 
@@ -1931,7 +1933,10 @@ kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要�
 
 > 🔴 上 2 項は**今日の制約であって到達点ではない**。owner 裁定（2026-09-03・doc 611 §14 (7)）は
 > 「kind による制限は設けない。循環だけを診断で拒否する」であり、MX.4 がその規範を書いている。
-> 本節は「実装事実の開示」なので、**制約が外れる（PR-O3）まで両方を併記する**。
+> 本節は「実装事実の開示」なので、**制約がユーザーから見えなくなるまで両方を併記する**。
+> PR-O3（2026-09-10 マージ）で入ったのは `SetBusLine` の **wire だけ**で、DSL の `output()` /
+> `send()` は `SetBusRouting` を送り続けるため、併記が要らなくなるのは **PR-O4** である
+> （MX.4 の「PR-O3 の到達点」注記を見ること）。
 
 ---
 

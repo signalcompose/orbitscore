@@ -1,12 +1,12 @@
 ---
 title: "RE-1. daemon アーキテクチャ概観"
 chapter-id: "RE-1"
-verified-against: 66efda5
-verified-at: "2026-09-08"
+verified-against: 183b612
+verified-at: "2026-09-10"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで、2026-09-06 に #779 の起動時 shm sweep（[#784](https://github.com/signalcompose/orbitscore/pull/784)）まで、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の直行デバイスラインまで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで、2026-09-06 に #779 の起動時 shm sweep（[#784](https://github.com/signalcompose/orbitscore/pull/784)）まで、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の直行デバイスラインまで、2026-09-10 に #611 PR-O3b（[#824](https://github.com/signalcompose/orbitscore/pull/824)）の `SetBusLine` wire 契約と master line の 2 本立てまで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # RE-1. daemon アーキテクチャ概観
 
@@ -273,7 +273,8 @@ async fn handle_command(
 
 `Command` は `method: String` を持つ構造体で、Rust の enum ではありません。したがって「コマンドの
 一覧」は `session.rs` の `match method.as_str()` の arm を数えたものになります。2026-09-01 時点で
-arm は次のとおりです（`cfg` 列は feature で分岐する arm）。
+arm は次のとおりです（`cfg` 列は feature で分岐する arm。`SetBusLine` の行だけ 2026-09-10 の
+#611 PR-O3b で足しました）。
 
 | method | 役割 | 備考 |
 |---|---|---|
@@ -293,6 +294,7 @@ arm は次のとおりです（`cfg` 列は feature で分岐する arm）。
 | `PlayAt` / `Stop` / `StopAll` | 再生のスケジュール / 停止 | `PlayAt` は `bus` tag を取れる |
 | `SetGlobalGain` | master gain（ramp 付き） | #643 で instrument にも効くよう修正 |
 | `SetBusRouting` | insert → sum/aux の実行時ルーティング | `outproc-effect` build のみ |
+| `SetBusLine` | 1 本の bus の**順序付き audio line を全置換** | #611 PR-O3b・`outproc-effect` build のみ（無効なら `UNSUPPORTED`）。**TS に呼び出し元はまだありません** |
 | `SetSourceRouting` | instrument source → bus の実行時ルーティング | `outproc-effect,outproc-instrument` build のみ |
 | `InjectFault` | kill-test 用の panic 注入 | `ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1` のときだけ |
 | `PluginNoteOn` / `PluginNoteOff` | instrument への note | `plugin_note_spec` 経由（match の外） |
@@ -699,6 +701,115 @@ wire（`SetGlobalGain`）の `ramp_sec` は互換のため受け取り続けま�
 ~5 ms ランプしか持たないので**値は使われません**。この順序の変更が signal chain 側から
 どう見えるかは [SC-2](/signal-chain/mixer-audio-line) で扱います。
 
+### `SetBusLine`: ライン全体を一度に差し替える wire
+
+#611 PR-O3b で、コマンド表に `SetBusLine` という arm が 1 つ増えました。旧 `SetBusRouting` が
+「output 先と send 群」という**固定の枠**を埋めるのに対し、`SetBusLine` は
+`{ bus, line: [op, op, …] }` という**順序付きの op 列そのもの**を送り、その bus の line を丸ごと
+置き換えます。op は `rack`（ラックを通す）・`gain`（線形ゲイン）・`output`（出口）の 3 種で、
+配列順がそのまま signal 順になります。
+
+検証は 2 段に分かれていて、ここが読むときの勘所です。**JSON の形**（`op` の綴り・`rack` の重複・
+`gain` の範囲・`dest` の形）は session 層の `parse_set_bus_line_params` が見て、
+**名前から RT index への解決**（bus 名が実在するか・forward-only か）は topology を持つ
+`EngineWrap::set_bus_line` が見ます。デバイスチャンネルの範囲だけは実際の出力幅を知る必要があるので、
+dispatch が `engine.output_channels()` を渡して間に挟まります。
+
+```rust
+// rust/crates/orbit-audio-daemon/src/session.rs:2633-2648
+        #[cfg(feature = "outproc-effect")]
+        "SetBusLine" => match parse_set_bus_line_params(&params) {
+            Ok((bus, line)) => {
+                if let Err(error) =
+                    validate_set_bus_line_device_channels(&line, engine.output_channels())
+                {
+                    err(&id, error)
+                } else {
+                    match engine.set_bus_line(&bus, &line) {
+                        Ok(()) => ok(&id, json!({"status": "accepted"})),
+                        Err(error) => err(&id, wrap_err_to_protocol(&error)),
+                    }
+                }
+            }
+            Err(error) => err(&id, error),
+        },
+```
+
+面白いのは、`set_bus_line` が**検証を全部通してから一度だけ publish する**点です。2 番目の op が
+不正なら 1 番目の op も反映されません。旧 `SetBusRouting` が「output と sends をまとめて送る」形に
+なっていたのも同じ動機で、部分適用された中間状態を RT に見せないためでした。
+
+宛先（`dest`）は `master` / `bus` / `device` / `render` / `link` の 5 種が wire 上に定義されて
+いますが、受理されるのは前 3 つだけです。`render` は登記簿（`DeclareRender`）がまだ無いので
+すべて未登録として弾かれ、`link` は RT が Link 出口を実行できないので `LINK_AUDIO_UNAVAILABLE` に
+なります。どちらも「規則が違う」のではなく「規則を今日の状態に当てはめた結果」だと、
+コード側のコメントが明示しています。
+
+もう 1 つ、`SetBusRouting` との違いで押さえておきたいのが**宛先の kind 制約**です。
+`SetBusRouting` は「output 先は sum bus のみ・send 先は aux bus のみ」を検証して拒否しますが、
+`set_bus_line` の `bus` 宛ては forward-only（後段の index であること）しか見ておらず、
+**kind では制限しません**。これは設計 611 の裁定（循環だけを拒否し kind では縛らない）に沿った
+振る舞いで、`set_bus_line_accepts_a_forward_aux_destination`
+（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:3262-3284`）がそれを固定しています。
+
+### master line の 2 本立て
+
+`SetBusLine` は `bus: "master"` も受け取ります。ただし master は named bus の外側にいるので、
+publish 先は `MasterLine` が持つ専用の `LineSlot` です。ここで気をつけたいのは、
+**publish されたかどうかを別の一方通行フラグで持っている**という点です。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:749-759
+    /// control が master program を **一度でも publish したか**（不可逆）。`line` の中身からは
+    /// 導出できない（RT で既定値と深い比較をすることになり、かつ「既定と同じ program を明示的に
+    /// publish した」場合を区別できない）。
+    ///
+    /// 名前は「明示的な line が入ったか」の意であり、`SetGlobalGain` の atomic 更新では変わらない。
+    ///
+    /// 🔴 **いつこの分岐を消せるか**: PR-O4 で TS の `global.gain()` が
+    /// `SetBusLine("master", …)` を送る新表面へ切り替わり、その経路が実機で確かめられ、PR-O6 で
+    /// 旧 `SetBusRouting` 系が撤去された後。そこで固定互換経路と本フラグを同時に削り、
+    /// `execute_master_line` の 1 本にできる見込みである。
+    explicit_line: Arc<AtomicBool>,
+```
+
+このフラグが `false` の間、RT は上で見た固定の互換経路（ラック → gain → デバイス配置）を通ります。
+`true` になって初めて `execute_master_line` が呼ばれ、publish された op 列を順に実行します。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1783-1800
+fn execute_master_line(
+    master: &mut MasterLine,
+    frames: usize,
+    output_channels: usize,
+    hw: &mut [f32],
+) {
+    let bs = frames * ENGINE_CHANNELS;
+    let program_ptr = master.line.load();
+    // SAFETY: publication retains replaced programs for two completed RT generations. This
+    // generation is completed only after the whole master program has executed.
+    let program = unsafe { &*program_ptr };
+    let mut device = DeviceLineBuffer {
+        samples: hw,
+        channels: output_channels,
+        wrote: false,
+    };
+    for (op_index, op) in program.ops.iter().enumerate() {
+        match *op {
+```
+
+分岐が 2 本ある理由は、既存の出力を**ビット単位で**変えないためです。`else` 側の中身は
+PR-O3b の前と 1 命令も違わないので、O0 golden（`OUTPUT_LINE_GOLDENS`）は 1 つも動きません。
+
+ここから 1 つ帰結が出てきます。`execute_master_line` の `LineOp::Gain` は **program に書かれた値**を
+読むので、master line が publish された後は `MasterLine::advance_gain`（`SetGlobalGain` が書く
+atomic を読む関数）が呼ばれません。つまり publish 後の `SetGlobalGain` は、誰も読まない atomic を
+更新するだけになります。PR-O3b の単体テスト `set_global_gain_only_updates_the_compatibility_atomic`
+（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:3286-3309`）は、まさにこの
+「`SetGlobalGain` は master program を publish し直さない」ことを固定しています。
+2 つのゲイン経路が繋がるのは、TS の `global.gain()` が `SetBusLine("master", …)` へ切り替わる
+PR-O4 で、再 publish 時に実効値を引き継ぐ機構と同時です。
+
 engine render 部分の `render_engine_with_sources` は、instrument source（OOP instrument の出力を
 `BlockSource` として持つ `SourceSlot`）と insert bus の有無で
 4 通りに分かれます。source も active bus も無ければ、従来の `render_engine` に落ちます。
@@ -917,7 +1028,12 @@ ORBIT_CAPTURE_WAV=/tmp/orbit-capture-test.wav node cli-audio.js path/to/single-n
 - `rust/crates/orbit-audio-native/src/output.rs:682-688,700-754,1253-1277` — `ENGINE_CHANNELS` / `MasterLine`（ラック → gain）/ `place_master_into_device`（#649 PR-O2）
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9479-9488` — `EngineWrap::set_global_gain`（PR-O3b では **atomic のみ**。master line への写しは PR-O4 と同時・`ramp_sec` は wire 互換のみ）
 - `rust/crates/orbit-audio-native/src/output.rs:1926-1930,1932-1985` — `DeviceLineBuffer` / `add_to_device`（直行デバイスライン・#611 PR-O3a）
+- `rust/crates/orbit-audio-daemon/src/session.rs:306-361,2633-2648` — `parse_set_bus_line_params`（wire 形の検証）と `SetBusLine` の dispatch arm（#611 PR-O3b）
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6753-6906` — `EngineWrap::set_bus_line`（名前 → RT index の解決・全検証後に一度だけ publish）
+- `rust/crates/orbit-audio-native/src/output.rs:739-759,1783-1841` — `MasterLine.line` / `explicit_line` / `execute_master_line`（#611 PR-O3b）
+- `packages/engine/src/audio/rust-engine/daemon-client.ts:86-96,715-718` — `WireDest` / `WireLineOp` / `DaemonClient.setBusLine`（呼び出し元は PR-O4）
 - PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — 束 O-wire（line program 化・互換維持）
+- PR [#824](https://github.com/signalcompose/orbitscore/pull/824) — 束 O-wire-b（`SetBusLine` の wire 契約・DSL からは呼ばない）
 - [`docs/design/611-output-line-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/design/611-output-line-design.md) §5.2-5.5 — master ライン・内部幅 2ch・core master gain を production から外す設計正本
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — engine-first ロードマップとアーキ確定（楽器=in-process／effects+3rd-party=out-of-process sandbox）
 - [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 / 6.262 — capture peak の実測記録

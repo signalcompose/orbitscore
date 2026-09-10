@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: 66efda5
-verified-at: "2026-09-08"
+verified-against: 183b612
+verified-at: "2026-09-10"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-1. Daemon Architecture Overview
 
@@ -280,7 +280,8 @@ async fn handle_command(
 
 `Command` is a struct carrying `method: String`; it is not a Rust enum. The "list of commands"
 is therefore whatever arms exist in `session.rs`'s `match method.as_str()`. As of 2026-09-01 the
-arms are as follows (the notes column mentions the arms gated by a feature `cfg`).
+arms are as follows (the notes column mentions the arms gated by a feature `cfg`; only the
+`SetBusLine` row was added later, by #611 PR-O3b on 2026-09-10).
 
 | method | role | notes |
 |---|---|---|
@@ -300,6 +301,7 @@ arms are as follows (the notes column mentions the arms gated by a feature `cfg`
 | `PlayAt` / `Stop` / `StopAll` | schedule / stop playback | `PlayAt` accepts a `bus` tag |
 | `SetGlobalGain` | master gain (with ramp) | fixed in #643 so it also affects instruments |
 | `SetBusRouting` | runtime routing insert → sum/aux | `outproc-effect` builds only |
+| `SetBusLine` | **replace one bus's whole ordered audio line** | #611 PR-O3b, `outproc-effect` builds only (otherwise `UNSUPPORTED`). **No TS caller sends it yet** |
 | `SetSourceRouting` | runtime routing instrument source → bus | `outproc-effect,outproc-instrument` builds only |
 | `InjectFault` | panic injection for kill tests | only with `ORBIT_DAEMON_ALLOW_FAULT_INJECTION=1` |
 | `PluginNoteOn` / `PluginNoteOff` | notes to an instrument | via `plugin_note_spec` (outside the match) |
@@ -714,6 +716,121 @@ The wire still accepts `ramp_sec` on `SetGlobalGain` for compatibility, but the 
 has the fixed ~5 ms ramp, so **the value is not used**. How this reordering looks from the signal
 chain side is covered in [SC-2](/en/signal-chain/mixer-audio-line).
 
+### `SetBusLine`: replacing a whole line in one shot
+
+#611 PR-O3b added one more arm to the command table: `SetBusLine`. Where the old `SetBusRouting`
+fills in a **fixed frame** ("one output target plus a set of sends"), `SetBusLine` sends
+`{ bus, line: [op, op, …] }` — **the ordered op sequence itself** — and replaces that bus's line
+wholesale. There are three ops: `rack` (run the rack), `gain` (linear gain) and `output` (an
+exit), and the array order is the signal order.
+
+Validation is split across two layers, which is the thing worth noticing when reading it. The
+**JSON shape** (spelling of `op`, a duplicated `rack`, the range of `gain`, the shape of `dest`)
+is checked by `parse_set_bus_line_params` in the session layer, while **resolving names to RT
+indices** (does the bus exist, is the reference forward-only) is checked by
+`EngineWrap::set_bus_line`, which owns the topology. Only the device channel range needs to know
+the actual output width, so the dispatch sits in between and passes `engine.output_channels()`.
+
+```rust
+// rust/crates/orbit-audio-daemon/src/session.rs:2633-2648
+        #[cfg(feature = "outproc-effect")]
+        "SetBusLine" => match parse_set_bus_line_params(&params) {
+            Ok((bus, line)) => {
+                if let Err(error) =
+                    validate_set_bus_line_device_channels(&line, engine.output_channels())
+                {
+                    err(&id, error)
+                } else {
+                    match engine.set_bus_line(&bus, &line) {
+                        Ok(()) => ok(&id, json!({"status": "accepted"})),
+                        Err(error) => err(&id, wrap_err_to_protocol(&error)),
+                    }
+                }
+            }
+            Err(error) => err(&id, error),
+        },
+```
+
+What is interesting here is that `set_bus_line` **runs every check first and publishes exactly
+once**. If the second op is invalid, the first op is not applied either. The old `SetBusRouting`
+took the "send the output and all sends together" shape for the same reason: never let the RT side
+observe a partially applied intermediate state.
+
+Five destination kinds are defined on the wire — `master` / `bus` / `device` / `render` / `link` —
+but only the first three are accepted. `render` is rejected as unregistered because the registry
+(`DeclareRender`) does not exist, and `link` returns `LINK_AUDIO_UNAVAILABLE` because the RT side
+cannot execute a Link exit. The code comments are explicit that neither is a different rule: both
+are the same §4.1 rule applied to the state of the tree as it stands.
+
+One more difference from `SetBusRouting` is worth holding onto: the **kind constraint on
+destinations**. `SetBusRouting` validates and rejects unless "the output target is a sum bus and
+send targets are aux buses", whereas `set_bus_line` only checks forward-only-ness (the target must
+be a later index) for a `bus` destination and **does not constrain the kind**. That matches the
+ruling in design 611 (reject cycles only, do not constrain by kind), and
+`set_bus_line_accepts_a_forward_aux_destination`
+(`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:3262-3284`) pins the behaviour down.
+
+### Two master line paths
+
+`SetBusLine` also accepts `bus: "master"`. Since master sits outside the named bus topology,
+though, the publication target is a dedicated `LineSlot` owned by `MasterLine`. The point to watch
+is that **whether a publication has happened is held in a separate one-way flag**.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:749-759
+    /// control が master program を **一度でも publish したか**（不可逆）。`line` の中身からは
+    /// 導出できない（RT で既定値と深い比較をすることになり、かつ「既定と同じ program を明示的に
+    /// publish した」場合を区別できない）。
+    ///
+    /// 名前は「明示的な line が入ったか」の意であり、`SetGlobalGain` の atomic 更新では変わらない。
+    ///
+    /// 🔴 **いつこの分岐を消せるか**: PR-O4 で TS の `global.gain()` が
+    /// `SetBusLine("master", …)` を送る新表面へ切り替わり、その経路が実機で確かめられ、PR-O6 で
+    /// 旧 `SetBusRouting` 系が撤去された後。そこで固定互換経路と本フラグを同時に削り、
+    /// `execute_master_line` の 1 本にできる見込みである。
+    explicit_line: Arc<AtomicBool>,
+```
+
+While that flag is `false`, the RT side runs the fixed compatibility path seen above (rack → gain →
+device placement). Only once it is `true` does `execute_master_line` get called and run the
+published op sequence in order.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:1783-1800
+fn execute_master_line(
+    master: &mut MasterLine,
+    frames: usize,
+    output_channels: usize,
+    hw: &mut [f32],
+) {
+    let bs = frames * ENGINE_CHANNELS;
+    let program_ptr = master.line.load();
+    // SAFETY: publication retains replaced programs for two completed RT generations. This
+    // generation is completed only after the whole master program has executed.
+    let program = unsafe { &*program_ptr };
+    let mut device = DeviceLineBuffer {
+        samples: hw,
+        channels: output_channels,
+        wrote: false,
+    };
+    for (op_index, op) in program.ops.iter().enumerate() {
+        match *op {
+```
+
+The reason there are two branches at all is to keep the existing output **bit-identical**. The
+body of the `else` side does not differ by a single instruction from before PR-O3b, so none of the
+O0 goldens (`OUTPUT_LINE_GOLDENS`) move.
+
+One consequence follows from this. `LineOp::Gain` inside `execute_master_line` reads **the value
+written in the program**, so once a master line has been published, `MasterLine::advance_gain`
+(the function that reads the atomic `SetGlobalGain` writes) is never called. In other words, a
+`SetGlobalGain` after publication only updates an atomic nobody reads. The PR-O3b unit test
+`set_global_gain_only_updates_the_compatibility_atomic`
+(`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:3286-3309`) pins exactly that: `SetGlobalGain`
+does not republish the master program. The two gain paths are joined in PR-O4, when TS's
+`global.gain()` switches over to `SetBusLine("master", …)`, together with the mechanism that
+carries the effective value across a re-publication.
+
 The engine-render part, `render_engine_with_sources`, splits four ways depending on whether there
 are instrument sources (`SourceSlot`s that hold an OOP instrument's output as a `BlockSource`)
 and whether any insert bus is active. With no
@@ -943,7 +1060,12 @@ i.e. two independent measurement paths agreeing at the same tap point). These fi
 - `rust/crates/orbit-audio-native/src/output.rs:682-688,700-754,1253-1277` — `ENGINE_CHANNELS` / `MasterLine` (rack → gain) / `place_master_into_device` (#649 PR-O2)
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9479-9488` — `EngineWrap::set_global_gain` (PR-O3b keeps it **atomic-only**; the copy into the master line lands in PR-O4; `ramp_sec` kept for wire compatibility only)
 - `rust/crates/orbit-audio-native/src/output.rs:1926-1930,1932-1985` — `DeviceLineBuffer` / `add_to_device` (the direct device line, #611 PR-O3a)
+- `rust/crates/orbit-audio-daemon/src/session.rs:306-361,2633-2648` — `parse_set_bus_line_params` (wire-shape validation) and the `SetBusLine` dispatch arm (#611 PR-O3b)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6753-6906` — `EngineWrap::set_bus_line` (name → RT index resolution, published exactly once after every check)
+- `rust/crates/orbit-audio-native/src/output.rs:739-759,1783-1841` — `MasterLine.line` / `explicit_line` / `execute_master_line` (#611 PR-O3b)
+- `packages/engine/src/audio/rust-engine/daemon-client.ts:86-96,715-718` — `WireDest` / `WireLineOp` / `DaemonClient.setBusLine` (the caller arrives in PR-O4)
 - PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — bundle O-wire (line-program conversion, compatibility preserved)
+- PR [#824](https://github.com/signalcompose/orbitscore/pull/824) — bundle O-wire-b (the `SetBusLine` wire contract; the DSL never calls it)
 - [`docs/design/611-output-line-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/design/611-output-line-design.md) §5.2-5.5 — design source of truth for the master line, the 2ch internal width, and taking the core master gain out of production
 - [`docs/development/POST_2.0_MASTER_PLAN.html`](https://github.com/signalcompose/orbitscore/blob/main/docs/development/POST_2.0_MASTER_PLAN.html) — engine-first roadmap and architecture decision (instruments = in-process / effects + 3rd-party = out-of-process sandbox)
 - [`docs/archive/WORK_LOG_2026-07.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/archive/WORK_LOG_2026-07.md) 6.258 / 6.262 — capture peak measurements
