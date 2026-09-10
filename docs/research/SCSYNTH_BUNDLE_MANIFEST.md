@@ -1,5 +1,7 @@
 # scsynth Bundle Manifest
 
+> 🔴 **歴史的記録**: 本書が記述する scsynth / SC plugin 経路は **#502（2026-09-10）で削除**されました。現在のバックエンドは Rust `orbit-audio-daemon` 単独です（[`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](../core/INSTRUCTION_ORBITSCORE_DSL.md) §8）。
+
 **日付**: 2026-04-23
 **Last verified**: 2026-04-23 (SC 3.14.1)
 **対象 Issue**: #134

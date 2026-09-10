@@ -1,5 +1,7 @@
 # Research: Ableton Link Audio API 調査結果（Issue #188 / Epic #187）
 
+> 🔴 **歴史的記録**: 本書が記述する scsynth / SC plugin 経路は **#502（2026-09-10）で削除**されました。現在のバックエンドは Rust `orbit-audio-daemon` 単独です（[`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](../core/INSTRUCTION_ORBITSCORE_DSL.md) §8）。LinkAudio egress の Rust 実装（`orbit-link-audio` crate）自体は出荷ビルドで default off のため、現在地は同 §8.1 を参照。
+
 **調査日**: 2026-05-07
 **ブランチ**: `188-link-audio-research`
 **関連 Issue**: [#188](https://github.com/signalcompose/orbitscore/issues/188) (Step 1) / [#187](https://github.com/signalcompose/orbitscore/issues/187) (Epic)

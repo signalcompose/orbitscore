@@ -8,8 +8,8 @@
 > 期待する 3 件が落ちる。WORK_LOG 6.423)。passed + skipped が total に一致しない数字は、
 > 落ちた分がどこかにある。
 
-> **2026-09 の位置づけ**: 既定バックエンドは Rust `orbit-audio-daemon`（cutover #108）。本ガイドの
-> SuperCollider 節は `ORBITSCORE_ENGINE=sc` の opt-out 経路にのみ必要。実機検証の正本は
+> **2026-09 の位置づけ**: Rust `orbit-audio-daemon` が唯一のバックエンド（cutover #108 で既定化・
+> SuperCollider opt-out 経路と `ORBITSCORE_ENGINE` は #502（2026-09-10）で削除）。実機検証の正本は
 > [E2E_HARNESS_SPEC.md](E2E_HARNESS_SPEC.md) と `npm run test:e2e:gated`（`ORBIT_GATED_ORBITSTUDIO=1`・
 > OrbitStudio.app を MCP で駆動・capture WAV アサーション）、および CLAUDE.md「マージ前ゲート」。
 
@@ -23,7 +23,6 @@ This guide provides comprehensive testing procedures for OrbitScore's audio-base
 - Node.js v22.0.0+
 - Rust toolchain（`rust/rust-toolchain.toml`、daemon / child バイナリのビルド用）
 - macOS Apple Silicon（実機 gated E2E・plugin child テストは macOS 限定）
-- SuperCollider — **opt-out 経路（`ORBITSCORE_ENGINE=sc`）を試す場合のみ**
 - VS Code / Cursor / Claude Code
 - Audio device (speakers or headphones)
 
@@ -32,21 +31,6 @@ This guide provides comprehensive testing procedures for OrbitScore's audio-base
 > `cargo test --workspace` が **2,240 秒**かかる（実施後は **66 秒**・2026-09-08 実測）。
 > 遅さの 91% は**テストでもビルドでもなく macOS のマルウェアスキャン**であり、
 > passed / failed / ignored の件数は設定の前後で 1 つも変わらない。
-
-### SuperCollider Installation (opt-out backend only)
-
-**macOS:**
-```bash
-brew install --cask supercollider
-```
-
-**Linux:**
-```bash
-sudo apt-get install supercollider
-```
-
-**Windows:**
-- Download from [SuperCollider official site](https://supercollider.github.io/)
 
 ### Environment Setup
 
@@ -57,13 +41,7 @@ npm install
 npm run build
 ```
 
-2. **Verify SynthDefs:**
-```bash
-ls -la packages/engine/supercollider/synthdefs/
-# Verify: orbitPlayBuf.scsyndef, fxCompressor.scsyndef, fxLimiter.scsyndef, fxNormalizer.scsyndef
-```
-
-3. **Prepare test audio files:**
+2. **Prepare test audio files:**
 ```bash
 ls -la test-assets/audio/
 # Verify: kick.wav, snare.wav, hihat.wav, bass.wav, arpeggio_c.wav
@@ -94,11 +72,9 @@ npm test -- unidirectional-toggle
 - ✅ Seamless Parameter Update: 10/10
 - ✅ DSL v3.0 Underscore Methods: 27/27
 - ✅ Gain/Pan Control: 41/41
-- ✅ SuperCollider Integration: 15/15
 
 **Skipped Tests** (23):
 - End-to-end tests requiring manual verification
-- SuperCollider environment-specific tests
 - Some interpreter tests
 
 ### Rust: CLAP Host Gated Fixture Tests
@@ -287,7 +263,7 @@ global.stop()
 #### Method Chaining
 - [x] All methods return `this` for chaining
 
-### Audio Engine (Rust daemon default; SuperCollider opt-out)
+### Audio Engine (Rust daemon)
 
 - [x] WAV file support
 - [x] Audio slicing (`chop(n)`)
@@ -313,7 +289,7 @@ global.stop()
 ### Issue: No Sound
 
 **Check**:
-1. The engine is running (`OrbitScore: Start / Stop Engine`; with `ORBITSCORE_ENGINE=sc`, that scsynth is running)
+1. The engine is running (`OrbitScore: Start / Stop Engine`)
 2. Audio files exist in `test-assets/audio/`
 3. System volume is up
 4. Correct audio device selected
@@ -358,7 +334,6 @@ ls -la test-assets/audio/*.wav
 | Underscore prefix | ⬜ | |
 | Gain/Pan control | ⬜ | |
 | Method chaining | ⬜ | |
-| SuperCollider integration | ⬜ | |
 
 ---
 
