@@ -155,10 +155,10 @@ export interface ScheduledPlay {
 
 この区別は仕様側にも明記されています (`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §3 "Slice-to-Slot Fitting")。仕様のこの節が chop 有りの挙動しか書いていなかったため、2026-08-31 に「オーディオは常にスロットへ詰められる」という誤読が 2 つのセッションで独立に起きています (#665)。
 
-参考までに、SC 経路の `ScheduledPlay` は次の形です。`options` の入れ子の中に `startPos` / `duration` / `rate` (chop 用) を平たく持っています。
+参考までに、SC 経路の `ScheduledPlay` は次の形でした（このコードは 2026-09-10 の裁定 #827 / #502 で削除が決まっており、以下は削除前 commit `58f558f5` 時点のスナップショットです）。`options` の入れ子の中に `startPos` / `duration` / `rate` (chop 用) を平たく持っています。
 
 ```typescript
-// packages/engine/src/audio/supercollider/types.ts:10-25
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/types.ts L10-25
 export interface ScheduledPlay {
   time: number
   filepath: string

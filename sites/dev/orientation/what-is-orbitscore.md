@@ -12,7 +12,7 @@ OrbitScore の DSL 設計哲学、論文との関係、なぜ作ったか (動�
 
 - **位置付け**: ライブコーディングで音楽を作るための DSL。 "code を実行 → 即時に音が出る" を中核体験とする。
 - **歴史**: v1 は MIDI ベースで実装、v3 で audio-based に pivot (詳細: [ADR-002](/decisions/adr-002-dsl-v3-pivot))。
-- **現状**: v3.0 (SuperCollider audio engine) で ICMC 2026 に向けて製品化中。
+- **現状**: v3.0。音声バックエンドは Rust の `orbit-audio-daemon`（cutover #108、2026-07-03 以降の既定）。SuperCollider audio engine は 2026-09-10 の裁定（#827 / #502）でリポジトリから削除が決まった歴史的経路。
 
 ## 次の深掘り候補
 

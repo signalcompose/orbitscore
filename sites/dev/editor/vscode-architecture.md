@@ -260,7 +260,7 @@ function updateBundleStatus(): void {
   }
 ```
 
-`rust` kind で daemon が見つかる (= 通常の状態) ときはインジケータを **隠します**。`sc` kind のときだけ scsynth の解決結果 (`bundled` / `custom` / `not found`) を表示します (`extension.ts:742-766`、[III-3](/audio/scsynth-bundle) 参照)。`env` と `explicit` を同じ `custom` 表示にまとめている判断は 2026-05 から変わっていません。
+`rust` kind で daemon が見つかる (= 通常の状態) ときはインジケータを **隠します**。`sc` kind のときだけ scsynth の解決結果 (`bundled` / `custom` / `not found`) を表示します (`extension.ts:742-766`、[ADR-003 scsynth bundle strict mode](/decisions/adr-003-scsynth-bundle) 参照。SC 経路自体は 2026-09-10 の裁定 #827 / #502 で削除が決まっています)。`env` と `explicit` を同じ `custom` 表示にまとめている判断は 2026-05 から変わっていません。
 
 engine kind を決める `getConfiguredEngineKind()` は `orbitscore.engine` 設定を読み、engine パッケージの `resolveEngineKind()` を runtime `require` で借りて正規化します (`extension.ts:653-669`)。UI と engine の判定を 1 か所に寄せるための工夫です。
 
@@ -519,7 +519,7 @@ scsynth の resolver は `explicit > env > bundle > throw`、daemon の resolver
 
 `startEngine(debugMode?, agentOpts?)` が実際に engine を子プロセスとして起動します。2026-05 との違いは、`async` になって `boolean` を返すこと、engine kind で事前チェックが分岐すること、MCP からの `capture_wav` を受け取ることです。
 
-事前チェックは [III-3](/audio/scsynth-bundle#engine-kind-で呼び出しそのものが-gate-される) に引用したので、ここでは引数と env の組み立てから spawn までを読みます。
+事前チェックは削除済みの旧 III-3 章（[ADR-003](/decisions/adr-003-scsynth-bundle) に記録）に引用したので、ここでは引数と env の組み立てから spawn までを読みます。
 
 ```typescript
 // packages/vscode-extension/src/extension.ts:2209-2222

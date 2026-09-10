@@ -12,7 +12,7 @@ status: draft
 本 ADR が記録する「SuperCollider (scsynth) を音声バックエンドに選ぶ」という決定は、2026-07-03 の cutover #108（`docs/archive/WORK_LOG_2026-07.md` §6.179）で **既定としては上書きされました**。`createAudioEngine()` は `ORBITSCORE_ENGINE=sc` を明示したときだけ `SuperColliderPlayer` を返し、既定は Rust の `orbit-audio-daemon` です。本 ADR は決定当時の経緯を残す歴史的読解で、末尾の「Consequences revisited (2026-09)」に cutover 後の帰結をまとめます。既定経路は [RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照してください。
 
 ```typescript
-// packages/engine/src/audio/create-audio-engine.ts:17-22
+// （削除済み・58f558f5 時点） packages/engine/src/audio/create-audio-engine.ts L17-22
 export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
   const raw = env[ENGINE_ENV_VAR]
   if (resolveEngineKind(raw) === 'supercollider') {
@@ -22,10 +22,16 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 ```
 
 ```typescript
-// packages/engine/src/audio/engine-backend.ts:54-55
+// （削除済み・58f558f5 時点） packages/engine/src/audio/engine-backend.ts L54-55
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
 export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```
+:::
+
+::: warning このコードは削除済み
+本 ADR が引用している SuperCollider 経路のコードは、**2026-09-10 の裁定（#827 / #502）で
+リポジトリから削除**されました。以下のコード片は削除前（commit `58f558f5`）のスナップショットで、
+現在のリポジトリには存在しません。ADR は決定の記録として残しています。
 :::
 
 # ADR-001 SuperCollider ベース実装の選択
@@ -194,7 +200,7 @@ SuperCollider 採用には以下のトレードオフがあります:
 特に `fixpitch()` や `time()` (タイムストレッチ) は、69dc968 時点でも補完候補から外されたままの planned 機能です (`completion-context.ts` のコメントが Issue #213 を指しています):
 
 ```typescript
-// packages/vscode-extension/src/completion-context.ts:222-224
+// （削除済み・58f558f5 時点） packages/vscode-extension/src/completion-context.ts L222-224
       // Future features (planned, see GitHub issue #213):
       // - fixpitch(): Pitch shift in semitones (planned)
       // - time(): Time stretch factor (planned)
@@ -248,7 +254,7 @@ ADR の形式にならって、決定から約 1 年半後の帰結を記録し�
 コード側ではファクトリのヘッダーコメントがそのまま決定の要約になっています。
 
 ```typescript
-// packages/engine/src/audio/create-audio-engine.ts:1-7
+// （削除済み・58f558f5 時点） packages/engine/src/audio/create-audio-engine.ts L1-7
 /**
  * 音声バックエンドのファクトリ（post-2.0 S2 / Issue #296・cutover #108）。
  *

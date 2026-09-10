@@ -155,10 +155,10 @@ What deserves attention here is the difference in arguments. `scheduleSliceEvent
 
 This distinction is stated in the spec as well (`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §3 "Slice-to-Slot Fitting"). Because that section of the spec described only the behavior with chop, on 2026-08-31 two sessions independently misread it as "audio is always fitted into the slot" (#665).
 
-For reference, the SC path's `ScheduledPlay` looks like this. Inside the nested `options` it holds `startPos` / `duration` / `rate` (for chop) flat.
+For reference, the SC path's `ScheduledPlay` looked like this (this code is scheduled for removal by the 2026-09-10 ruling #827 / #502; the snippet below is a snapshot from before the removal, commit `58f558f5`). Inside the nested `options` it holds `startPos` / `duration` / `rate` (for chop) flat.
 
 ```typescript
-// packages/engine/src/audio/supercollider/types.ts:10-25
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/types.ts L10-25
 export interface ScheduledPlay {
   time: number
   filepath: string
