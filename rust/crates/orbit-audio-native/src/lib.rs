@@ -23,7 +23,7 @@ pub use output::{
     start_default_output_with_insert_buses_sources_and_post, start_default_output_with_link_egress,
     start_default_output_with_sources, AudioDeviceInfo, BlockSource, BlockTransport, BusSend,
     BusTarget, DeviceFallback, DeviceFallbackPolicy, InsertBusStage, LegacyLineInstaller, LineOp,
-    LineOutput, LineProgram, LineProgramInstaller, LinkChannelActivate, LiveOutputDevice,
+    legacy_line_ops, LineOutput, LineProgram, LineProgramInstaller, LinkChannelActivate, LiveOutputDevice,
     OutputDest, OutputDeviceRequest, OutputError, OutputFault, OutputStream, RenderState,
     SourceDest, SourceDestCell, SourceSlot, StreamBuildStage, StreamLivenessPhase, StreamStats,
     StreamStatsSnapshot, ENGINE_CHANNELS, FIRST_CALLBACK_DEADLINE, MAX_INSERT_BUS_STAGES,
