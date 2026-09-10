@@ -262,8 +262,8 @@ require time-stretch — see `fixpitch()` / `time()` / `stretch()` in §12.
 | `chop(n > 1)` | `scheduleSliceEvent` | the slice is varispeed-fitted into its slot (above) — **pitch moves** |
 
 The branch is in `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138`
-(`if (chopDivisions && chopDivisions > 1)`) — full path, because a second `event-scheduler.ts`
-exists under `packages/engine/src/audio/supercollider/`.
+(`if (chopDivisions && chopDivisions > 1)`) — full path, a convention from when a second
+`event-scheduler.ts` existed under `packages/engine/src/audio/supercollider/` (removed in #502).
 `scheduleEvent` takes **no duration and no rate argument**, so there is nothing to scale by.
 
 **The non-chop path is a feature, not an omission.** It is how you write a one-shot that

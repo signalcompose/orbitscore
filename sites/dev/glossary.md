@@ -89,11 +89,11 @@ CLI (`playFile`) では `.orbs` ファイルパスから自動導出されます
 
 ### AudioEngineBackend（backend seam）
 
-`packages/engine/src/audio/engine-backend.ts` の interface。interpreter / scheduler が音声バックエンドに要求する唯一の契約面で、`SuperColliderPlayer` と `RustEnginePlayer` の両方がこれを満たします。`boot` / `quit` / `loadPlugin` / `applyEffectChain` / `setGlobalGain` / `pluginNoteOn` 等を持ちます。
+`packages/engine/src/audio/engine-backend.ts` の interface。interpreter / scheduler が音声バックエンドに要求する唯一の契約面です。かつては `SuperColliderPlayer` と `RustEnginePlayer` の両方がこれを満たしていましたが、**#502（2026-09-10）で SC 側が削除**され、現在この契約を満たすのは `RustEnginePlayer` だけです（seam 自体は残っています）。`boot` / `quit` / `loadPlugin` / `applyEffectChain` / `setGlobalGain` / `pluginNoteOn` 等を持ちます。
 
-### ORBITSCORE_ENGINE
+### ORBITSCORE_ENGINE（#502 で削除・歴史的読解）
 
-バックエンド選択の環境変数。`sc` または `supercollider` で SuperCollider 経路に opt-out、未設定・それ以外は Rust daemon（`create-audio-engine.ts` の `resolveEngineKind()`）。VS Code 設定 `orbitscore.engine` が対応します。
+バックエンド選択に使われていた環境変数。`sc` または `supercollider` で SuperCollider 経路に opt-out し、未設定・それ以外は Rust daemon でした（`create-audio-engine.ts` の `resolveEngineKind()`）。VS Code 設定 `orbitscore.engine` が対応していました。**env・設定キー・`resolveEngineKind()` / `EngineKind` 型はいずれも #502（2026-09-10）で削除**され、`createAudioEngine()` は引数も env も見ずに常に `RustEnginePlayer` を返します。
 
 ### RustEnginePlayer / DaemonClient
 
@@ -189,9 +189,9 @@ daemon 側で UI イベントを汲む pump。#633 で per-index / per-window �
 
 ---
 
-## オーディオ / SuperCollider 用語（削除決定 #502・歴史的読解）
+## オーディオ / SuperCollider 用語（#502 で削除済み・歴史的読解）
 
-> 以下は SuperCollider 経路（`ORBITSCORE_ENGINE=sc` での opt-out 経路）の用語です。この経路は **2026-09-10 の裁定（#827 / #502）でリポジトリからの削除が決まっています**。既定経路の用語は上の「Rust Engine / daemon 用語」を参照してください。
+> 以下は SuperCollider 経路（`ORBITSCORE_ENGINE=sc` での opt-out 経路）の用語です。この経路は **2026-09-10 の裁定（#827 / #502）でリポジトリから削除されました**（同梱・ビルド・ライセンスが PR [#836](https://github.com/signalcompose/orbitscore/pull/836)、実装と拡張の表面が PR [#838](https://github.com/signalcompose/orbitscore/pull/838)）。以下の語に対応するコードは現在のツリーには存在しません。既定経路の用語は上の「Rust Engine / daemon 用語」を参照してください。
 
 ### Buffer (SC)
 
@@ -255,15 +255,17 @@ VS Code が拡張を実行するための専用 Node.js プロセス。Renderer 
 
 ### StatusBarItem
 
-VS Code API。エディタ下部のステータスバーに表示するアイテム。OrbitScore は 2 本使います: engine 動作状態 (priority 100) と scsynth 解決状態 (priority 99) です。
+VS Code API。エディタ下部のステータスバーに表示するアイテム。OrbitScore は 2 本使います: engine 動作状態 (`statusBarItem`・priority 100) と daemon バイナリ解決状態 (`bundleStatusItem`・priority 99) です。後者はかつて scsynth の解決状態を出していましたが、#502 で SC 経路が削除された後は daemon だけを見ます（解決できたときはインジケータ自体を隠します）。
 
 ### workspace trust (untrustedWorkspaces)
 
-VS Code の信頼モデル。未信頼のワークスペースでは拡張が既定で制限され `activate()` すら呼ばれません。OrbitScore は `package.json` の `capabilities.untrustedWorkspaces` で `supported: true` を宣言し (#385)、フォルダを開かない loose-file 起動でも activate します。`restrictedConfigurations` には「ワークスペースが値を決めると別の実行ファイルが動く」2 件 (`orbitscore.scsynthPath` / `orbitscore.engine`) だけを挙げています。
+VS Code の信頼モデル。未信頼のワークスペースでは拡張が既定で制限され `activate()` すら呼ばれません。OrbitScore は `package.json` の `capabilities.untrustedWorkspaces` で `supported: true` を宣言し (#385)、フォルダを開かない loose-file 起動でも activate します。`restrictedConfigurations` にはかつて「ワークスペースが値を決めると別の実行ファイルが動く」2 件 (`orbitscore.scsynthPath` / `orbitscore.engine`) を挙げていましたが、**両方とも #502 で削除**されたため、現在は空配列です。
 
 ---
 
-## scsynth Resolver / Bundle 用語
+## scsynth Resolver / Bundle 用語（#502 で削除済み・歴史的読解）
+
+> このセクションの語は `packages/engine/src/audio/supercollider/scsynth-resolver.ts` の型と定数です。**ファイルごと #502（2026-09-10）で削除**されており、現在のツリーには存在しません。現存する対応物は daemon の resolver（`packages/engine/src/audio/rust-engine/daemon-client.ts`）で、fail-loud の方針だけがそちらに継承されています。
 
 ### bundle (scsynth source)
 
@@ -335,8 +337,9 @@ scsynth が見つからなかった時に throw される Error サブクラス�
 - `docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md` — v1.0 MIDI DSL アーカイブ
 - `packages/vscode-extension/src/extension.ts` — activate(), flashLines(), updateDiagnostics()
 - `packages/vscode-extension/src/completion-context.ts` — MethodChainContext インターフェース
-- `packages/engine/src/audio/supercollider/scsynth-resolver.ts` — ScsynthResolution, ScsynthNotFoundError
-- `packages/engine/src/audio/engine-backend.ts`, `create-audio-engine.ts` — AudioEngineBackend seam, ORBITSCORE_ENGINE
+- `packages/engine/src/audio/supercollider/scsynth-resolver.ts` — ScsynthResolution, ScsynthNotFoundError（**#502 で削除済み**。commit `58f558f5` 以前の位置）
+- `packages/engine/src/audio/engine-backend.ts`, `packages/engine/src/audio/create-audio-engine.ts` — AudioEngineBackend seam（`ENGINE_ENV_VAR` / `EngineKind` / `resolveEngineKind()` は #502 で削除）
+- `packages/engine/src/audio/rust-engine/daemon-client.ts` — daemon バイナリの resolver（scsynth resolver の fail-loud 方針を継ぐ現存実装）
 - `packages/engine/src/core/global/mixer-manager.ts` — SUM_BUS_PREFIX / AUX_BUS_PREFIX / MIXER_BUS_POOL_SIZE / formatReceiverId
 - `packages/engine/src/signal-chain/rack.ts` — RackRecipe
 - `packages/vscode-extension/src/mcp-server.ts`, `extension.ts` — MCP サーバ, ORBITSCORE_MCP_PORT の優先

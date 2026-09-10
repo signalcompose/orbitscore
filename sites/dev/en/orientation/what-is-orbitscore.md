@@ -12,7 +12,7 @@ The DSL design philosophy of OrbitScore, its relationship to the paper, and why 
 
 - **Positioning**: A DSL for making music via live coding, with "execute code → hear sound immediately" as the core experience.
 - **History**: v1 was implemented as MIDI-based, then pivoted to audio-based at v3 (details: [ADR-002](/en/decisions/adr-002-dsl-v3-pivot)).
-- **Current**: v3.0. The audio backend is the Rust `orbit-audio-daemon` (default since cutover #108, 2026-07-03). The SuperCollider audio engine is a historical path scheduled for removal from the repository by the 2026-09-10 ruling (#827 / #502).
+- **Current**: v3.0. The audio backend is the Rust `orbit-audio-daemon` (default since cutover #108, 2026-07-03). The SuperCollider audio engine is a historical path that was removed from the repository by the 2026-09-10 ruling (#827 / #502).
 
 ## Next Exploration Candidates
 

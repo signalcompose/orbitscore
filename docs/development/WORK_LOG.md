@@ -17,6 +17,42 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #838 in the dev site, the core spec and the user manuals (#502) (Sep 10, 2026)
+
+PR [#838](https://github.com/signalcompose/orbitscore/pull/838)（merge commit `585f495`）に
+ドキュメントを追従させた。**実装・テストは一切変更していない**（docs のみ）。
+
+**直したもの**（いずれも #838 の差分で「現存する」記述が偽になった箇所）:
+
+- `sites/dev/editor/vscode-architecture.md` — プロセスツリー図から scsynth 分岐を削除、
+  全体図の mermaid から `getConfiguredEngineKind()` / `resolveScsynthForUI()` / scsynth ノードを削除、
+  目次と見出し 2 件（アンカー切れの修正を含む）、Sources の `extension.ts` 行番号を実測値へ
+  （`:653-710` → `:628-642` ほか）
+- `sites/dev/glossary.md` — `ORBITSCORE_ENGINE` / `AudioEngineBackend` / StatusBarItem /
+  workspace trust の各項と、SC 用語・scsynth resolver 用語のセクション見出しを「削除済み」へ
+- `sites/dev/orientation/architecture-overview.md` — 全体図から SC ノードと
+  `env.ORBITSCORE_ENGINE` エッジを削除、§SuperCollider 経路を過去形へ
+- `sites/dev/{index,README}.md` / `.vitepress/sidebar.ts` /
+  `orientation/what-is-orbitscore.md` — Part VII の「削除決定」→「削除済み」
+- `sites/dev/pipeline/selective-execution.md` / `scheduling/{transport,event-queue}.md` —
+  spawn 時の env・`createAudioEngine()` の意味論・削除済みファイルへの Sources 参照
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — 「`supercollider/` にもう 1 つ
+  `event-scheduler.ts` が**ある**からフルパスで書く」という根拠が失効した旨へ書き換え
+- `docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.md` §2 — パッケージ一覧に失効注記
+  （`packages/sc-link-audio` は #836、`supercolliderjs` は #838 で削除済み）
+- `docs/user/{ja,en}/USER_MANUAL.md` — DEPRECATED バナーに、SC / scsynth 記述が
+  全て失効した旨（`orbitscore.scsynthPath` / `orbitscore.engine` / `Force Kill scsynth` /
+  `Select Audio Device` / `force_kill_scsynth` / `ORBITSCORE_ENGINE`）を追記
+- 🔴 **日英両方**を更新（`sites/dev/en/` 配下の同一パス）
+
+**検証**: `npm run docs:check` = **934 verified / 0 failed**（#838 merge 時点と同値）。
+user-site / dev-site の `docs:build` はいずれも成功。`docs:check` を壊さないため
+`INSTRUCTION_ORBITSCORE_DSL.md` の書き換えは**行数を保った**（+1 行で
+`mixer-audio-line.md` の引用 4 件が落ちることを実測して回避）。
+
+**注**: #838 の WORK_LOG 項目の「残課題」は「`docs:check` が 198 件失敗・未対応」と書いているが、
+merge 時点では 0 failed で、当該作業は #838 内（`c18a962` ほか）で完了している。
+
 ### refactor(engine): remove the SuperCollider backend implementation and its editor surface (#502) (Sep 10, 2026)
 
 owner 裁定（#827 / #502・`NATIVE_MIGRATION_2026-09.md` §12.5）に従い、SC バックエンドの

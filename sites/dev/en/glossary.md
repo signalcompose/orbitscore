@@ -89,11 +89,11 @@ The binary in `rust/crates/orbit-audio-daemon`. It receives commands from the TS
 
 ### AudioEngineBackend (backend seam)
 
-The interface in `packages/engine/src/audio/engine-backend.ts`. It is the only contract the interpreter / scheduler have with an audio backend; both `SuperColliderPlayer` and `RustEnginePlayer` satisfy it. It carries `boot` / `quit` / `loadPlugin` / `applyEffectChain` / `setGlobalGain` / `pluginNoteOn`, and so on.
+The interface in `packages/engine/src/audio/engine-backend.ts`. It is the only contract the interpreter / scheduler have with an audio backend. Both `SuperColliderPlayer` and `RustEnginePlayer` used to satisfy it, but **the SC side was removed in #502 (2026-09-10)**, so `RustEnginePlayer` is the only implementation today (the seam itself remains). It carries `boot` / `quit` / `loadPlugin` / `applyEffectChain` / `setGlobalGain` / `pluginNoteOn`, and so on.
 
-### ORBITSCORE_ENGINE
+### ORBITSCORE_ENGINE (removed in #502, historical)
 
-The environment variable that selects the backend. `sc` or `supercollider` opts out to the SuperCollider path; unset or anything else means the Rust daemon (`resolveEngineKind()` in `create-audio-engine.ts`). The VS Code setting `orbitscore.engine` maps to it.
+The environment variable that used to select the backend. `sc` or `supercollider` opted out to the SuperCollider path; unset or anything else meant the Rust daemon (`resolveEngineKind()` in `create-audio-engine.ts`). The VS Code setting `orbitscore.engine` mapped to it. **The env var, the setting key, and the `resolveEngineKind()` / `EngineKind` type were all removed in #502 (2026-09-10)**; `createAudioEngine()` now takes no argument, reads no env, and always returns `RustEnginePlayer`.
 
 ### RustEnginePlayer / DaemonClient
 
@@ -189,9 +189,9 @@ The feature that highlights `play()` arguments in step with the engine (#390). T
 
 ---
 
-## Audio / SuperCollider Terms (removal decided #502, historical)
+## Audio / SuperCollider Terms (removed in #502, historical)
 
-> The terms below belong to the SuperCollider path (the `ORBITSCORE_ENGINE=sc` opt-out path). This path is **scheduled for removal from the repository by the 2026-09-10 ruling (#827 / #502)**. For the default path, see "Rust Engine / Daemon Terms" above.
+> The terms below belong to the SuperCollider path (the `ORBITSCORE_ENGINE=sc` opt-out path). This path was **removed from the repository by the 2026-09-10 ruling (#827 / #502)** — bundling, build and licensing in PR [#836](https://github.com/signalcompose/orbitscore/pull/836), the implementation and the editor surface in PR [#838](https://github.com/signalcompose/orbitscore/pull/838). No code corresponding to the terms below exists in the current tree. For the default path, see "Rust Engine / Daemon Terms" above.
 
 ### Buffer (SC)
 
@@ -255,15 +255,17 @@ An interface in `completion-context.ts`. Represents the state of the method chai
 
 ### StatusBarItem
 
-A VS Code API. Items displayed in the status bar at the bottom of the editor. OrbitScore uses two: engine state (priority 100) and scsynth resolution state (priority 99).
+A VS Code API. Items displayed in the status bar at the bottom of the editor. OrbitScore uses two: engine state (`statusBarItem`, priority 100) and daemon binary resolution state (`bundleStatusItem`, priority 99). The latter used to show the scsynth resolution state; after the SC path was removed in #502 it only looks at the daemon (and hides itself entirely when the daemon resolves).
 
 ### workspace trust (untrustedWorkspaces)
 
-VS Code's trust model. In an untrusted workspace an extension is restricted by default and `activate()` is never called. OrbitScore declares `supported: true` under `capabilities.untrustedWorkspaces` in `package.json` (#385), so it activates even in a folder-less loose-file launch. `restrictedConfigurations` lists only the 2 settings where "the workspace deciding the value makes a different executable run" (`orbitscore.scsynthPath` / `orbitscore.engine`).
+VS Code's trust model. In an untrusted workspace an extension is restricted by default and `activate()` is never called. OrbitScore declares `supported: true` under `capabilities.untrustedWorkspaces` in `package.json` (#385), so it activates even in a folder-less loose-file launch. `restrictedConfigurations` used to list only the 2 settings where "the workspace deciding the value makes a different executable run" (`orbitscore.scsynthPath` / `orbitscore.engine`), but **both were removed in #502**, so it is an empty array today.
 
 ---
 
-## scsynth Resolver / Bundle Terms
+## scsynth Resolver / Bundle Terms (removed in #502, historical)
+
+> The terms in this section are the types and constants of `packages/engine/src/audio/supercollider/scsynth-resolver.ts`. **The whole file was deleted in #502 (2026-09-10)** and is not present in the current tree. The surviving counterpart is the daemon resolver (`packages/engine/src/audio/rust-engine/daemon-client.ts`), which inherits only the fail-loud policy.
 
 ### bundle (scsynth source)
 
@@ -335,8 +337,9 @@ The stages of a chapter's status. `stub` is table of contents and headings only,
 - `docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md` — v1.0 MIDI DSL archive
 - `packages/vscode-extension/src/extension.ts` — activate(), flashLines(), updateDiagnostics()
 - `packages/vscode-extension/src/completion-context.ts` — MethodChainContext interface
-- `packages/engine/src/audio/supercollider/scsynth-resolver.ts` — ScsynthResolution, ScsynthNotFoundError
-- `packages/engine/src/audio/engine-backend.ts`, `create-audio-engine.ts` — AudioEngineBackend seam, ORBITSCORE_ENGINE
+- `packages/engine/src/audio/supercollider/scsynth-resolver.ts` — ScsynthResolution, ScsynthNotFoundError (**deleted in #502**; this is its location as of commit `58f558f5`)
+- `packages/engine/src/audio/engine-backend.ts`, `packages/engine/src/audio/create-audio-engine.ts` — the AudioEngineBackend seam (`ENGINE_ENV_VAR` / `EngineKind` / `resolveEngineKind()` were removed in #502)
+- `packages/engine/src/audio/rust-engine/daemon-client.ts` — the daemon binary resolver (the surviving implementation of the scsynth resolver's fail-loud policy)
 - `packages/engine/src/core/global/mixer-manager.ts` — SUM_BUS_PREFIX / AUX_BUS_PREFIX / MIXER_BUS_POOL_SIZE / formatReceiverId
 - `packages/engine/src/signal-chain/rack.ts` — RackRecipe
 - `packages/vscode-extension/src/mcp-server.ts`, `extension.ts` — MCP server, ORBITSCORE_MCP_PORT precedence
