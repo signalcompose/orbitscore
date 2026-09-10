@@ -213,7 +213,7 @@ master line 上の Pan（`SetBusLine("master")`）も同じ分岐で動くが、
 | 項目 | doc 611 | 本書 | 理由 |
 |---|---|---|---|
 | `pan` 要素の値 | −1..1 | **DSL 値 −100..100 を保持**し、wire で `/100`（`rust-engine-player.ts:1812` の発音側と同じ換算） | `PanManager` が −100..100（`pan-manager.ts:15,36`）。2 か所で換算しない |
-| バッチ境界 | `//#evalBegin/End` | **1 文（`applyMethodChain`）= 1 バッチ**（§3.1） | |
+| バッチ境界 | `//#evalBegin/End` | **同じ**（owner 裁定 2026-09-10 で採用・§3.1 / §5.7） | 行を跨いだ順序が信号順に出ないと、チェーン内と規則が 2 つになる |
 | 規則 2 の擬似コード | `splice(i,1); splice(cursor,0,e); cursor += 1` | **`splice(i,1); cursor -= 1; splice(cursor,0,e); cursor += 1`** | 規則 2 は常に `i < cursor` なので、削除で cursor の指す位置が 1 つ前へずれる。doc のままだと `[rack, gain, output]` に `gain().effect()` → `[gain, output, rack]` |
 | 終端の既定位置 | 未定義 | **バッチの先頭要素が `thru: false` の output で、既に終端があれば、その終端を置換**（位置は旧終端のまま） | `kick.output("drums")` の後に `kick.output("cue")` を単文で評価した時、今日の「出力先を替える」意味を保つ。2 要素にすると旧終端の後ろで到達不能になり無音 |
 | 新規要素の既定位置（バッチ先頭のみ） | 既定ストリップ | 同じ: `[rack → gain → pan → sends(thru:true) → output(thru:false)]`。**2 つ目以降の新規要素はカーソル位置**（規則 3） | E2E-6 の `output(verb, thru:true).effect()` で rack が verb の後ろへ入る |
@@ -294,6 +294,27 @@ program(): 終端が無ければ末尾に output(master,false,0)。rack が無�
 - TS は `SetBusLine` に `dest.link` を**生成しない**（`OutputDest.link` はラインに置かず、`_outputChannel` + 発音側 tag で今日どおり）。`effect()` と LinkAudio の併用は既に拒否されている（`mixer-manager.ts` の LinkAudio gate・`resolveEffectRack` の文言）ので「link + line」は起こらない
 - `RustEnginePlayer.setBusLine` は **`LINK_AUDIO_UNAVAILABLE` を特別扱いしない**（`registerLinkAudioChannel :946-963` の warn-once を写さない）。全か無かの拒否を warn-once にすると line 全体が黙って落ちる
 - unit: `setBusLine` が `LINK_AUDIO_UNAVAILABLE` の `DaemonProtocolError` を **rethrow** し intent を revert すること 1 件
+
+
+### 5.7 🔴 評価フレーム `//#evalBegin` / `//#evalEnd`（owner 裁定 2026-09-10 で採用）
+
+**入れる範囲は最小**。W-8「構文エラーで全体棄却」は**入れない**（それは PR-L2 = 新ラインの意味論）。
+
+| 箇所 | 変更 |
+|---|---|
+| `extension.ts` `writeCodeToEngine` | 送出テキストを `//#evalBegin\n … \n//#evalEnd` で挟む。`//#documentDirectory` の**後** |
+| `repl-mode.ts` のメタ行群 | `EVAL_BEGIN_META_RE` / `EVAL_END_META_RE` を追加。`begin` で全 `AudioLine.beginBatch()`、`end` で `endBatch()` |
+| MCP `evaluate_orbitscore` | 同じ `writeCodeToEngine` を通るので追加作業なし |
+
+🔴 **必須のガード**（起案が挙げた故障モード）: `//#evalEnd` が届かないまま拡張が落ちると `inBatch` が
+立ったままになり、以後の生 stdin がバッチ内として振る舞う。
+
+1. **`beginBatch()` は「前のバッチが開いていれば暗黙に閉じてから開く」**
+2. **評価が例外で終わる経路でも `endBatch()` を通る**（`finally`）
+
+ユニットで **「begin → begin → end」**と**「begin → 例外 → 次の begin」**の 2 系列を固定する。
+
+**生 stdin（手動 REPL）** はフレーム無しなので「値だけ更新・位置不変」に退化する（doc 611 §3.2）。
 
 ---
 
