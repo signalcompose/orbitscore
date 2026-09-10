@@ -208,7 +208,7 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
 > `docs/design/611-output-line-design.md` §2-§3 を参照してください。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:500-528
+// packages/engine/src/core/sequence.ts:504-532
 
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
@@ -275,7 +275,7 @@ LinkAudio が出力先の時だけ** — が、ここのガード分割にその
 fan-out、同じ宛先名なら上書きです。**単位は #611 PR-B2 で線形（0.0-1.0）から dB へ変わりました。**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:608-624
+// packages/engine/src/core/sequence.ts:612-628
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -1050,7 +1050,7 @@ PR-2（TS 側）は、instrument sequence が insert bus を持った時点で
 1 箇所に集約しました。`instrument()` → `effect()` の順でも逆でも、ここを通ります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:940-967
+// packages/engine/src/core/sequence.ts:924-951
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
     const bus = this._insertBus
@@ -1291,7 +1291,7 @@ MCP 経由で駆動し、daemon の capture WAV を区間ごとに RMS 測定し
 0.15 秒）を取って遷移の影響を除きます。
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:411-416
+// tests/e2e/helpers/capture-windows.ts:417-422
 export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
   if (windows.length === 0) throw new Error('quadraticMeanRms requires at least one window')
   return Math.sqrt(
@@ -1304,7 +1304,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2067-2103
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2071-2107
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -1355,7 +1355,7 @@ E2E-4 は sum + aux の経路です。dry（bus 無し）と、`send("aux643", -
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2207-2229
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2211-2233
         [
           'var global = init GLOBAL',
           'global.key("C")',

@@ -63,20 +63,22 @@ import {
   newErrorLines,
 } from './helpers/engine-log'
 import {
+  BYTES_PER_SAMPLE,
+  CAPTURE_HEADER_BYTES,
+  type CaptureFormat,
+  type CaptureSegment,
   captureTailRms,
   captureWindowsFrom,
   createCaptureClock,
+  makeAwaitSoundRestart,
   prepareCapturePath,
   quadraticMeanRms,
   readCaptureForAnalysis,
   readCaptureFormat,
   steadyRms,
-  waitForSound,
   waitForQuiet,
-  type CaptureFormat,
-  type CaptureSegment,
   type WaitForQuietDiagnostics,
-  makeAwaitSoundRestart,
+  waitForSound,
 } from './helpers/capture-windows'
 import { captureWavPath, createGatedSession, type GatedCatalog } from './helpers/gated-session'
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
@@ -483,7 +485,12 @@ const RM_TREE = { recursive: true, force: true, maxRetries: 8, retryDelay: 150 }
  */
 async function removeHarnessTree(
   tmpRoot: string,
-  child?: { killed: boolean; exitCode: number | null; signalCode: NodeJS.Signals | null; kill: () => boolean },
+  child?: {
+    killed: boolean
+    exitCode: number | null
+    signalCode: NodeJS.Signals | null
+    kill: () => boolean
+  },
 ): Promise<void> {
   if (child) {
     if (!child.killed) child.kill()
@@ -538,9 +545,6 @@ function analysisTailRms(
   return quadraticMeanRms(windows)
 }
 
-const CAPTURE_HEADER_BYTES = 44
-const CAPTURE_BYTES_PER_SAMPLE = 4
-
 /**
  * 1 チャンネルぶんの生 interleaved float32 PCM サンプルを `[fromSec, toSec)` の範囲で読む
  * （#611 E2E-7）。クリック（不連続）は隣接サンプル間の 1 点の跳びとして現れ、この解析ファイル
@@ -555,14 +559,14 @@ function readChannelSamples(
   toSec: number,
 ): Float32Array {
   const buffer = readCaptureForAnalysis(capturePath)
-  const bytesPerFrame = format.channels * CAPTURE_BYTES_PER_SAMPLE
+  const bytesPerFrame = format.channels * BYTES_PER_SAMPLE
   const totalFrames = Math.floor((buffer.length - CAPTURE_HEADER_BYTES) / bytesPerFrame)
   const fromFrame = Math.max(0, Math.floor(fromSec * format.sampleRate))
   const toFrame = Math.min(totalFrames, Math.ceil(toSec * format.sampleRate))
   const out = new Float32Array(Math.max(0, toFrame - fromFrame))
   for (let i = 0; i < out.length; i += 1) {
     out[i] = buffer.readFloatLE(
-      CAPTURE_HEADER_BYTES + (fromFrame + i) * bytesPerFrame + channel * CAPTURE_BYTES_PER_SAMPLE,
+      CAPTURE_HEADER_BYTES + (fromFrame + i) * bytesPerFrame + channel * BYTES_PER_SAMPLE,
     )
   }
   return out

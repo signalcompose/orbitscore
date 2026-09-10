@@ -497,7 +497,7 @@ flowchart LR
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:101-125
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:103-127
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
 // ...
@@ -513,7 +513,7 @@ const appAvailable = fs.existsSync(appPath)
 When the suite is loaded, before a single test runs, it checks the freshness of the daemon binary.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:224-234
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:226-236
   if (newest.at > builtAt) {
     throw new Error(
       'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
@@ -532,7 +532,7 @@ Which binary to inspect is not hardcoded; the guard asks `resolveDaemonBinaryPat
 **What counts as a "source"** took a second pass as well (#713). Picking up every `.rs` under `rust/` unconditionally lets an integration test — a separate cargo target, in practice `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs` — be selected as the "newest source". Such a file never enters the dependency graph of the `orbit-audio-daemon` binary, so cargo correctly reads its dependencies, builds nothing, and the binary's mtime is never refreshed. The result is an **unfixable red**: running `npm run test:e2e:gated`, exactly what the guard's message instructs, cannot clear it. The trigger is a property of mtime — `git checkout` sets a file's mtime to the checkout time, so merely moving between branches turns an integration test whose content never changed into the "newest source". In #713 this stopped the gated suite from running a single test.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:213-215
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:215-217
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
           continue
         }
@@ -553,7 +553,7 @@ npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` a
 ### Launching the app — stock VS Code and the Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:709-740
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:713-744
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
     path.join(appPath, 'Contents/Resources/app/bin/code'),
@@ -595,7 +595,7 @@ The teardown repeats a safety warning. It used to send a blanket `pkill -f` to e
 The fix is to signal only the roots of the process tree.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:367-400
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:369-402
 async function killHarnessInstances(): Promise<void> {
   const pids = harnessPids()
   if (pids.length === 0) return
@@ -641,7 +641,7 @@ The pattern must never be widened to an app or process name, it says in more tha
 Capture can only be enabled by passing the `ORBIT_CAPTURE_WAV` environment variable at daemon spawn time. The extension auto-starts the engine during `activate()`, so the gated spec **stops the auto-started engine first**, then starts it again with capture.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1437-1442
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1441-1446
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -814,7 +814,7 @@ The onset threshold is the larger of "median window RMS × 4" and the absolute f
 The last assertion of the first test uses these onset gaps as evidence of tempo.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2048-2062
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2052-2066
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -839,7 +839,7 @@ The `#643` tests go one step further and compare RMS per time segment. Segment b
 This used to work the other way around: each operation's wall-clock time was recorded and mapped back onto the WAV from the capture end time. #739 removed that. The reverse mapping goes negative whenever the capture is shorter than the wall clock, and `Math.max(0, ...)` then **silently clamped it to the start of the file** — moving a window later made it measure earlier.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:411-416
+// tests/e2e/helpers/capture-windows.ts:417-422
 export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
   if (windows.length === 0) throw new Error('quadraticMeanRms requires at least one window')
   return Math.sqrt(
@@ -868,7 +868,7 @@ window on a fixed settle leaves the `unity` window entirely silent and the denom
 comparison stops meaning anything.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:662-670
+// tests/e2e/helpers/capture-windows.ts:668-676
     if (index === 0 && (soundStartSec === null || segment.fromSec < soundStartSec)) {
       throw invariantError(
         'A1',
@@ -886,7 +886,7 @@ anything beyond `±2` fails. Zero fails too. That stops the quiet failure "a win
 nothing was in it" before it can turn into a number.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:609-612
+// tests/e2e/helpers/capture-windows.ts:615-618
     const expected = Math.round(
       (segment.toSec - segment.fromSec - 2 * guardSec) / ANALYSIS_BUCKET_SEC,
     )
@@ -899,7 +899,7 @@ from the wall clock, with a tolerance of `0.12` s. A broken clock can point a se
 this is a check aimed at the clock itself.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:671-673
+// tests/e2e/helpers/capture-windows.ts:677-679
     const captureDurationSec = segment.toSec - segment.fromSec
     const wallDurationSec = (segment.toWall - segment.fromWall) / 1000
     if (Math.abs(captureDurationSec - wallDurationSec) > CLOCK_WALL_TOLERANCE_SEC) {
@@ -913,7 +913,7 @@ looked at the segment name string `'transition'`. Deciding an exception by name 
 quietly weakens the moment that name is reused with a different intent.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:647-651
+// tests/e2e/helpers/capture-windows.ts:653-657
       // #643 E2E-3's boundary probe intentionally looks back 250 ms. Every overlap must
       // opt in explicitly; regular capture segments remain strictly non-overlapping.
       (previous !== undefined &&
@@ -1169,7 +1169,7 @@ This is where `#654` enters. According to WORK_LOG 6.421, when a new seven-layer
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1604-1614
+// packages/engine/src/core/sequence.ts:1588-1598
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {
@@ -1296,7 +1296,7 @@ function shouldFilterLine(line: string): boolean {
 The playhead reads from the raw stream, and `[STEP]` never reaches the output channel (= `get_log`). This means **the only way to observe the playhead from MCP is debug mode**. In debug mode `transcribeLog` appends `output` as-is, so `[STEP]` lines appear in `get_log`. The `#654` E2E takes exactly that shape.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2716-2726
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2720-2730
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1311,13 +1311,13 @@ The playhead reads from the raw stream, and `[STEP]` never reaches the output ch
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2729-2730
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2733-2734
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2786-2788
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2790-2792
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

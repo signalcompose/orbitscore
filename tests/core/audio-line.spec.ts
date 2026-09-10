@@ -102,7 +102,10 @@ describe('AudioLine', () => {
     const line = new AudioLine()
     batch(line, [bus('verb', true, -12, 'send')])
     batch(line, [bus('verb', true, -6, 'send')])
-    expect(line.outputs()).toEqual([bus('verb', true, -6, 'send')])
+    // The second batch must REPLACE the -12 dB send, not append a second one — assert on the
+    // whole program (with the implicit rack + terminal `program()` adds), so a stray extra
+    // output cannot hide the way a filtered outputs-only view would have let it.
+    expect(line.program()).toEqual([{ kind: 'rack' }, bus('verb', true, -6, 'send'), master()])
   })
 
   it('degenerates outside a batch to value replacement without reordering', () => {

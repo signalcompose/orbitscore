@@ -693,6 +693,8 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       // Not DSL vocabulary (called only from output()/send()/gain()/pan()/effect()).
       'resolveLineDest',
       'applyOutputElement',
+      'stageOutputElement',
+      'ensureInsertBusForInstrument',
       'adoptLineOnFirstBus',
       'upsertLine',
       'isMidi',

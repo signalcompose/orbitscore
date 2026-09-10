@@ -1,17 +1,17 @@
 import type { AudioEngine } from '../../audio/types'
 import type { RackRecipe } from '../../signal-chain/rack'
 import { createStatePathFallback } from '../project-state-store'
-import { AudioLine, toWire, type LineElement, type OutputDest } from '../sequence/audio-line'
+import {
+  AudioLine,
+  resolveNamedOutputDest,
+  toWire,
+  type LineElement,
+  type OutputDest,
+  type OutputOptions as MixerOutputOptions,
+  type SendOptions as MixerSendOptions,
+} from '../sequence/audio-line'
 
-/** #611 §2.1/§2.3: same option shapes as `Sequence.output()`/`.send()` (kept local to avoid a
- * circular import — `sequence.ts` already imports this module). */
-export interface MixerOutputOptions {
-  readonly thru?: boolean
-  readonly db?: number
-}
-export interface MixerSendOptions {
-  readonly enabled?: boolean
-}
+export type { MixerOutputOptions, MixerSendOptions }
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
@@ -361,13 +361,8 @@ export class MixerManager {
    * declared sum/aux bus name, or an `"L,R"` physical-channel-pair shorthand. */
   private resolveDest(value: string | OutputDest): OutputDest {
     if (typeof value === 'object') return value
-    if (value === 'master') return { kind: 'master' }
-    const node = this.resolveNode(value)
-    if (node) return { kind: 'bus', bus: node.bus }
-    const pairMatch = value.match(/^(\d+)\s*,\s*(\d+)$/)
-    if (pairMatch) {
-      return { kind: 'device', channels: [Number(pairMatch[1]), Number(pairMatch[2])] }
-    }
+    const resolved = resolveNamedOutputDest(value, (name) => this.resolveNode(name))
+    if (resolved) return resolved
     throw new Error(
       `Mixer bus routing target "${value}" is not "master", a declared sum/aux bus, or an ` +
         `"L,R" channel-pair shorthand.`,
@@ -378,18 +373,14 @@ export class MixerManager {
    * Write one line element for `bus` and push the updated program (#611 §5.3-style: the
    * declared line is TS-side truth — a rejected push is NOT rolled back here, matching
    * `Sequence`'s self-heal discipline (the next routing call resends the full program).
-   * Self-wraps in a one-call batch when no `//#evalBegin` frame is already open — see
-   * `Sequence.upsertLine()`'s doc comment for why (same reasoning, same #611 §5.7 rule).
+   * Batch semantics live in `AudioLine.upsertAutoBatch()`.
    */
   private async applyLineElement(bus: string, element: LineElement): Promise<void> {
     if (!this.audioEngine.setBusLine) {
       throw new Error('Mixer bus routing requires the Rust engine backend.')
     }
     const line = this.lines.get(bus) ?? new AudioLine()
-    const selfBatch = !line.isInBatch()
-    if (selfBatch) line.beginBatch()
-    line.upsert(element)
-    if (selfBatch) line.endBatch()
+    line.upsertAutoBatch(element)
     this.lines.set(bus, line)
     await this.audioEngine.setBusLine(bus, toWire(line.program()))
   }

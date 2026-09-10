@@ -50,7 +50,7 @@ it opens all of them.
 The implementation lives in `Sequence.ui()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:848-868
+// packages/engine/src/core/sequence.ts:832-852
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -1094,7 +1094,7 @@ E2E-1 of #633 inserts the same plugin twice, opens two windows with `ui("name")`
 second one first**, and then closes the first.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2432-2454
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2436-2458
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

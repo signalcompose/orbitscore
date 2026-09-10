@@ -43,6 +43,43 @@ export function elementKey(element: LineElement, ordinal = 0): string {
   return element.kind === 'output' ? `output:${destKey(element.dest)}#${ordinal}` : element.kind
 }
 
+/** #611 §2.1/§2.3: `output()` / `MixerBusHandle.output()` の options。 */
+export interface OutputOptions {
+  readonly thru?: boolean
+  readonly db?: number
+}
+
+/**
+ * #611 §2.3: `send()` / `MixerBusHandle.send()` の options。dB は**位置引数**で渡すので
+ * ここには置かない（`send(aux, db, { enabled })`）。`enabled: false` は -Infinity dB。
+ */
+export interface SendOptions {
+  readonly enabled?: boolean
+}
+
+/**
+ * #611 §2.1/§3.3 の共有解決ステップ: `"master"` 予約語 → 宣言済み sum/aux バス名 →
+ * `"L,R"` 物理チャンネル対。どれにも当たらなければ `undefined` を返し、**残りのステップは
+ * 呼び手が持つ**（`Sequence.output()` は LinkAudio 名へ、`MixerManager` は throw へ）。
+ *
+ * バスの引き当てだけをコールバックにしてあるのは、`Sequence` が `global.resolveMixerBus`、
+ * `MixerManager` が自分の `resolveNode` を使うため — 正規表現と分岐の順序は仕様（§3.3）
+ * そのものなので、2 箇所に写すと片方だけ直る。
+ */
+export function resolveNamedOutputDest(
+  value: string,
+  lookupBus: (name: string) => { bus: string } | undefined,
+): OutputDest | undefined {
+  if (value === 'master') return { kind: 'master' }
+  const bus = lookupBus(value)
+  if (bus) return { kind: 'bus', bus: bus.bus }
+  const pairMatch = value.match(/^(\d+)\s*,\s*(\d+)$/)
+  if (pairMatch) {
+    return { kind: 'device', channels: [Number(pairMatch[1]), Number(pairMatch[2])] }
+  }
+  return undefined
+}
+
 function defaultRank(element: LineElement): number {
   switch (element.kind) {
     case 'rack':
@@ -57,15 +94,27 @@ function defaultRank(element: LineElement): number {
 }
 
 /**
- * #611 §5.7: every `AudioLine` ever constructed (one per Sequence / MixerBusHandle) so the
+ * #611 §5.7: every live `AudioLine` (one per Sequence / MixerBusHandle) so the
  * `//#evalBegin` / `//#evalEnd` frame can open/close a batch on all of them without each DSL
- * caller (`output()`/`send()`/`gain()`/`pan()`) touching `beginBatch`/`endBatch` itself. A plain
- * `Set` (not a `WeakSet`) because `beginBatchAll`/`endBatchAll` must iterate it; abandoned lines
- * (a re-declared sequence's previous `_line`) stay referenced for the life of the process — an
- * accepted v1 cost, not a correctness issue (a stale batch on a dead line never assembles into
- * a `program()` anyone reads again).
+ * caller (`output()`/`send()`/`gain()`/`pan()`) touching `beginBatch`/`endBatch` itself.
+ *
+ * Elements are `WeakRef`s, not the lines themselves. `beginBatchAll`/`endBatchAll` must
+ * ITERATE this registry, which rules out a `WeakSet` — but holding the lines strongly would
+ * pin every abandoned line (a re-declared sequence's previous `_line`) for the life of the
+ * process, and re-declaring a sequence is the normal move in a live-coding session, not an
+ * edge case. Dead refs are pruned during the iteration that finds them, so the registry
+ * tracks live lines rather than growing monotonically with the session.
  */
-const allLines = new Set<AudioLine>()
+const allLines = new Set<WeakRef<AudioLine>>()
+
+/** Iterate the live lines, dropping refs whose line has been collected. */
+function forEachLiveLine(visit: (line: AudioLine) => void): void {
+  for (const ref of allLines) {
+    const line = ref.deref()
+    if (line === undefined) allLines.delete(ref)
+    else visit(line)
+  }
+}
 
 /**
  * Whether an `//#evalBegin`/`//#evalEnd` frame is currently open. A `Sequence` (or a mixer
@@ -83,11 +132,10 @@ export class AudioLine {
   private elements: LineElement[] = []
   private cursor = 0
   private inBatch = false
-  private firstInBatch = false
   private readonly ordinals = new Map<string, number>()
 
   constructor() {
-    allLines.add(this)
+    allLines.add(new WeakRef(this))
     // Join an already-open frame immediately — see `frameOpen`'s doc comment.
     if (frameOpen) this.beginBatch()
   }
@@ -109,13 +157,27 @@ export class AudioLine {
   /** #611 §5.7: `//#evalBegin` opens a batch on every live `AudioLine`. */
   static beginBatchAll(): void {
     frameOpen = true
-    for (const line of allLines) line.beginBatch()
+    forEachLiveLine((line) => line.beginBatch())
   }
 
   /** #611 §5.7: `//#evalEnd` closes the batch on every live `AudioLine`. */
   static endBatchAll(): void {
     frameOpen = false
-    for (const line of allLines) line.endBatch()
+    forEachLiveLine((line) => line.endBatch())
+  }
+
+  /**
+   * Whether nothing has been written yet in the current batch — rule 1 (terminal replacement,
+   * default-strip insertion) applies to exactly that first `upsert`.
+   *
+   * Derived rather than tracked in its own field: `beginBatch()` is the only thing that sets
+   * `cursor` to 0, and every `upsert` path leaves `cursor >= 1` (each assignment is
+   * `<index> + 1` with `index >= 0`, and the splice branch's `-= 1` is always paired with a
+   * matching `+= 1`). So `cursor === 0` IS "first in this batch" — a separate flag would be a
+   * second copy of the same fact, free to drift out of step with the cursor it mirrors.
+   */
+  private get firstInBatch(): boolean {
+    return this.cursor === 0
   }
 
   beginBatch(): void {
@@ -125,14 +187,33 @@ export class AudioLine {
     this.endBatch()
     this.cursor = 0
     this.inBatch = true
-    this.firstInBatch = true
     this.ordinals.clear()
   }
 
   endBatch(): void {
     this.inBatch = false
-    this.firstInBatch = false
     this.ordinals.clear()
+  }
+
+  /**
+   * Write one element, self-wrapping in a one-call batch when no `//#evalBegin` frame is
+   * already open. A lone `output()`/`send()`/`gain()`/`pan()`/`effect()` call made OUTSIDE a
+   * frame (raw stdin, a programmatic call, most unit tests) still gets the position-sensitive
+   * batch rules (terminal replacement §5.1, default-strip insertion) instead of degenerating
+   * to rule 4's bare value-only update; a call made INSIDE an open frame must NOT start a
+   * nested batch, which would reset the shared cursor mid-evaluation and break position
+   * sensitivity across statements (#611 §5.7, E2E-6).
+   *
+   * 🔴 This is the line's own rule, not a convention for callers to remember. It lived as an
+   * identical four-line preamble in `Sequence.upsertLine()` and `MixerManager.applyLineElement()`
+   * before #852; a third writer that called bare `upsert()` would have silently lost position
+   * sensitivity, with no type or test to catch it.
+   */
+  upsertAutoBatch(element: LineElement): void {
+    const selfBatch = !this.inBatch
+    if (selfBatch) this.beginBatch()
+    this.upsert(element)
+    if (selfBatch) this.endBatch()
   }
 
   /** #649 cursor rules; outside a batch this degenerates to value-only replacement. */
@@ -148,7 +229,6 @@ export class AudioLine {
     }
 
     if (this.firstInBatch) {
-      this.firstInBatch = false
       if (index >= 0) {
         this.elements[index] = element
         this.cursor = index + 1
@@ -199,12 +279,6 @@ export class AudioLine {
       program.unshift({ kind: 'rack' })
     }
     return program
-  }
-
-  outputs(): readonly Extract<LineElement, { kind: 'output' }>[] {
-    return this.elements.filter(
-      (element): element is Extract<LineElement, { kind: 'output' }> => element.kind === 'output',
-    )
   }
 
   snapshot(): readonly LineElement[] {

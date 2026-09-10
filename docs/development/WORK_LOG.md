@@ -17,6 +17,64 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(dsl): apply the /simplify cleanup to the bundle-B line surface (#611) (Sep 11, 2026)
+
+束 B（PR #852）に `/simplify` を回した。4 体（reuse / simplification / efficiency / altitude）
+の指摘は 14 件、重複を畳んで 9 件。**3 体が同じ 1 件を指した**ので、そこから直した。
+
+| # | 指摘 | 何体 | 対応 |
+|---|---|---|---|
+| 1 | 自己バッチの 4 行が `Sequence.upsertLine` と `MixerManager.applyLineElement` に逐語重複 | **3** | `AudioLine.upsertAutoBatch()` へ移した |
+| 2 | `resolveLineDest` と `resolveDest` が同じ §3.3 の解決を二重に持つ | 2 | 共有 `resolveNamedOutputDest(value, lookupBus)` |
+| 3 | `allLines` が `Set` で、破棄された行がプロセス寿命だけ残る | 2 | `Set<WeakRef<AudioLine>>` + 反復時の剪定 |
+| 4 | `firstInBatch` は `cursor === 0` から導出できる | 1 | getter 化 |
+| 5 | `outputs()` が本番から呼ばれていない | 1 | 削除（テストは `program()` 全体で見る形へ） |
+| 6 | output 段取りの 5 行が 3 メソッドに重複 | 1 | `stageOutputElement()` |
+| 7 | `gain()`/`pan()` の instrument insert-bus ブロックが重複 | 2 | `ensureInsertBusForInstrument()` |
+| 8 | `MixerOutputOptions`/`MixerSendOptions` が `OutputOptions`/`SendOptions` の複製 | 1 | 共有版へ統合 |
+| 9 | capture 定数がテストで再定義 | 1 | `capture-windows.ts` から export して import |
+
+## 争点が 1 件あり、自分で検算した
+
+指摘 8 について **reuse 側は「循環しないので統合できる」、simplification 側は
+「循環 import があるので複製が正当」と逆の判断**をした。複製側のコメント自身が
+「circular import を避けるため」と書いていた。
+
+実際に読むと `audio-line.ts` の import は `audio-gain-utils` と `audio/types` の 2 本だけで、
+**`sequence.ts` にも `global.ts` にも `mixer-manager.ts` にも依存していない葉**。
+両者が既にここから import している以上、型をここへ置いても循環は起きない。
+**reuse 側が正しく、コメントの正当化根拠は成立していなかった。**
+simplification 側は `sequence.ts → global.ts → mixer-manager.ts` の向きだけを確認して、
+両者が共通で依存する葉の存在を見落としていた。
+
+## 指摘 4 は「フラグを消す」ではなく「導出を明示する」形にした
+
+`firstInBatch` を単に消すと、「`cursor` はバッチ中 0 に戻らない」という不変条件が
+暗黙になる。getter にして**その不変条件を doc に書いた**（`beginBatch()` だけが 0 にし、
+どの `upsert` 経路も `<index> + 1`（index >= 0）を代入し、splice 分岐の `-= 1` は必ず
+対の `+= 1` を伴う）。フラグという 2 つ目の写しは持たないが、根拠は残る。
+
+## 🔴 `WeakRef` は tsconfig の `lib` に触れた
+
+`WeakRef` は ES2021 で、この repo の `target` は ES2020 だった。最初 engine の
+tsconfig だけに `"lib": ["ES2021"]` を足したところ engine は通ったが、
+**`npm run typecheck:e2e` が `tsconfig.tests.json` で同じエラーを出した**
+（memory `consumerless-code-is-unprotected` の「正本は `npm run typecheck:e2e`」どおり）。
+
+`tsconfig.base.json` に 1 箇所だけ置いた。`target` は ES2020 のまま
+（`WeakRef` はランタイムグローバルであって構文ではないのでダウンレベルは不要）。
+そもそも root package.json が **Node >= 22 を要求**しているので、型面を ES2020 に絞るのは
+実際のランタイムより狭い宣言だった。
+
+## ラチェットが 1 件発火した
+
+`tests/interpreter/signal-chain-dispatch.spec.ts` が `stageOutputElement` を
+「未分類の Sequence メソッド」として赤にした。TS の `private` は実行時に残るので
+prototype に見える。`ensureInsertBusForInstrument` と併せて内部 API 側に分類した。
+
+検証: `npm test` **2,363 passed / 67 skipped / 0 failed** / `npm run lint` 緑 /
+`npm run typecheck:e2e` 緑 / 引用 1,034 verified / 0 failed。
+
 ### docs(native): correct the current_gains serialization table (#611) (Sep 11, 2026)
 
 束 A のレビューラウンドを閉じる前の **fix 差分再点検**（1 レビュアー・問いは

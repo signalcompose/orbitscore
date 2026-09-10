@@ -32,7 +32,15 @@ import { SequenceQuantizeManager } from './sequence/parameters/quantize-manager'
 import { QuantizeValue, nextQuantizedTime } from './global/quantize-manager'
 import { StateManager } from './sequence/state/state-manager'
 import { scheduleEvents, scheduleEventsFromTime } from './sequence/scheduling/event-scheduler'
-import { AudioLine, toWire, type LineElement, type OutputDest } from './sequence/audio-line'
+import {
+  resolveNamedOutputDest,
+  AudioLine,
+  toWire,
+  type LineElement,
+  type OutputDest,
+  type OutputOptions,
+  type SendOptions,
+} from './sequence/audio-line'
 
 /**
  * `{ }` legato overlap (§4): how long the interior note rings past the next
@@ -81,15 +89,7 @@ function writtenPitchOf(ev: TimedEvent): SymbolicPitch {
 }
 
 /** §2.1: `output(dest, opts)` named options — `thru` defaults to false, `db` to 0. */
-export interface OutputOptions {
-  readonly thru?: boolean
-  readonly db?: number
-}
-
-/** §2.3: `send(aux, db, opts)` named options. `enabled: false` sends at -Infinity dB (gain 0). */
-export interface SendOptions {
-  readonly enabled?: boolean
-}
+export type { OutputOptions, SendOptions } from './sequence/audio-line'
 
 /**
  * The resolved dispatch destination for a sequence's audio events (#645 PR-D0).
@@ -375,10 +375,7 @@ export class Sequence {
     }
     const { gainDb: clampedDb } = this.gainManager.setGain({ valueDb })
     this.upsertLine({ kind: 'gain', db: clampedDb })
-    if (this.isInstrument()) {
-      const name = this.stateManager.getName() || 'sequence'
-      this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
-    }
+    this.ensureInsertBusForInstrument()
     if (this._insertBus) {
       this.gainManager.setGain({ valueDb: 0 })
       this.syncBusLine()
@@ -416,10 +413,7 @@ export class Sequence {
     }
     const { pan: clampedPan } = this.panManager.setPan({ value })
     this.upsertLine({ kind: 'pan', pan: clampedPan })
-    if (this.isInstrument()) {
-      const name = this.stateManager.getName() || 'sequence'
-      this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
-    }
+    this.ensureInsertBusForInstrument()
     if (this._insertBus) {
       this.panManager.setPan({ value: 0 })
       this.syncBusLine()
@@ -438,30 +432,51 @@ export class Sequence {
    * step (`output()` falls back to the unchanged LinkAudio-name behavior; `send()` throws).
    */
   private resolveLineDest(value: string): OutputDest | undefined {
-    if (value === 'master') return { kind: 'master' }
-    const mixerBus = this.global.resolveMixerBus(value)
-    if (mixerBus) return { kind: 'bus', bus: mixerBus.bus }
-    const pairMatch = value.match(/^(\d+)\s*,\s*(\d+)$/)
-    if (pairMatch) {
-      return { kind: 'device', channels: [Number(pairMatch[1]), Number(pairMatch[2])] }
-    }
-    return undefined
+    return resolveNamedOutputDest(value, (name) => this.global.resolveMixerBus(name))
   }
 
   /**
-   * Write one element to `_line`, self-wrapping in a one-call batch when no `//#evalBegin`
-   * frame is already open (§5.7's `isInBatch()`) — so a lone `output()`/`send()`/`gain()`/
-   * `pan()`/`effect()` call made OUTSIDE the frame (raw stdin, a programmatic call, most unit
-   * tests) still gets the position-sensitive batch rules (terminal replacement §5.1, default-
-   * strip insertion) instead of degenerating all the way to rule 4's bare value-only update.
-   * A call made INSIDE an already-open frame must NOT start a nested batch — that would reset
-   * the shared cursor mid-evaluation and break position sensitivity across statements (E2E-6).
+   * #611 §2.1/§2.3: stage one `output`/`send` element on `_line`, doing the three things that
+   * must happen with it and in this order, whichever entry point was used:
+   *
+   * 1. clear a stale offline render-bus intent — §4.4.1: a live destination declaration wins
+   * 2. ensure this sequence has an insert bus, remembering whether it had one already
+   * 3. `adoptLineOnFirstBus()` on the transition, so elements declared BEFORE the bus existed
+   *    (a bare `gain()`/`pan()`) reach the daemon with it
+   *
+   * The three entries below (`applyOutputElement`, `routeOutputFromDsl`, `routeSendFromDsl`)
+   * differ only in their MIDI-guard wording and in whether they push the program fire-and-forget
+   * or awaited — not in this preamble, which was byte-identical in all three before #852.
    */
+  private stageOutputElement(
+    name: string,
+    dest: OutputDest,
+    thru: boolean,
+    db: number,
+    sugar: 'output' | 'send',
+  ): void {
+    this._renderBus = undefined
+    const hadBus = this._insertBus !== undefined
+    this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
+    if (!hadBus) this.adoptLineOnFirstBus()
+    this.upsertLine({ kind: 'output', dest, thru, db, sugar })
+  }
+
+  /**
+   * §2.4/§2.4b: instrument sequences have no event-side gain/pan path at all, so a bus is the
+   * ONLY way a fixed `gain()`/`pan()` can ever take effect — allocate one eagerly. Audio
+   * sequences must NOT: the insert-bus pool has 8 slots, and a bare `gain()` still works
+   * event-side without one.
+   */
+  private ensureInsertBusForInstrument(): void {
+    if (!this.isInstrument()) return
+    const name = this.stateManager.getName() || 'sequence'
+    this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
+  }
+
+  /** Write one element to `_line`. Batch semantics live in `AudioLine.upsertAutoBatch()`. */
   private upsertLine(element: LineElement): void {
-    const selfBatch = !this._line.isInBatch()
-    if (selfBatch) this._line.beginBatch()
-    this._line.upsert(element)
-    if (selfBatch) this._line.endBatch()
+    this._line.upsertAutoBatch(element)
   }
 
   /**
@@ -481,18 +496,7 @@ export class Sequence {
           `MIDI is sent to an external device and therefore has no mixer output destination.`,
       )
     }
-    // #611 §4.4.1: a live destination declaration clears a stale offline render-bus intent.
-    this._renderBus = undefined
-    const hadBus = this._insertBus !== undefined
-    this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
-    if (!hadBus) this.adoptLineOnFirstBus()
-    this.upsertLine({
-      kind: 'output',
-      dest,
-      thru: opts.thru ?? false,
-      db: opts.db ?? 0,
-      sugar,
-    })
+    this.stageOutputElement(name, dest, opts.thru ?? false, opts.db ?? 0, sugar)
     this.syncBusLine()
     this.syncInstrumentSourceRouting()
     return this
@@ -652,17 +656,7 @@ export class Sequence {
           `MIDI is sent to an external device and therefore has no mixer output destination.`,
       )
     }
-    this._renderBus = undefined
-    const hadBus = this._insertBus !== undefined
-    this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
-    if (!hadBus) this.adoptLineOnFirstBus()
-    this.upsertLine({
-      kind: 'output',
-      dest,
-      thru: opts.thru ?? false,
-      db: opts.db ?? 0,
-      sugar: 'output',
-    })
+    this.stageOutputElement(name, dest, opts.thru ?? false, opts.db ?? 0, 'output')
     await this.pushBusLine()
     await this.ensureInstrumentSourceRouting()
     return this
@@ -681,17 +675,7 @@ export class Sequence {
     if (!Number.isFinite(db)) {
       throw new Error(`Sequence '${name}': send gain must be finite (dB).`)
     }
-    this._renderBus = undefined
-    const hadBus = this._insertBus !== undefined
-    this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
-    if (!hadBus) this.adoptLineOnFirstBus()
-    this.upsertLine({
-      kind: 'output',
-      dest,
-      thru: true,
-      db: opts.enabled === false ? -Infinity : db,
-      sugar: 'send',
-    })
+    this.stageOutputElement(name, dest, true, opts.enabled === false ? -Infinity : db, 'send')
     await this.pushBusLine()
     await this.ensureInstrumentSourceRouting()
     return this
