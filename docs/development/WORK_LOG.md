@@ -17,6 +17,61 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### refactor(daemon): build the default bus line in exactly one place (#611) (Sep 11, 2026)
+
+束 A（PR #834）に `/simplify` を回した。**引き継ぎに「レビュー済み」とあったのを検算せず信じていた**
+（記録を見ると `/simplify` も `/code:pr-review-team` も痕跡が無かった）。owner の指摘で気づいた。
+memory `handoff-claims-need-primary-source-recheck` の再発である。
+
+#### 🔴 Reuse と Altitude が**独立に同じ 1 点**を指摘
+
+`default_bus_line_program()`（`engine_wrap.rs`）が `legacy_line_ops(BusTarget::Master, &[])` と
+**同じ ops 列を手書きで再定義**していた。すぐ下の `initial_bus_line_shadows` のコメントは
+
+> 🔴 The shadow is what a later `SetBusLine` seeds effective gains from. If it disagreed with
+> what the bus is actually running, seeding would restore the wrong value and reintroduce the
+> jump it exists to prevent — **so build it in exactly one place**
+
+と書いているのに、**実装は 2 箇所で作っていた**。`legacy_line_ops` 側だけが変わると shadow が
+旧い形で残り、未設定バスへの最初の `SetBusLine` が誤った seed から republish する
+— **この機構が防ごうとしているポップを、この機構自身が再導入する**。
+`legacy_line_ops` の呼び出しに置き換えた（1 行）。コメントの約束が実際に成立するようになった。
+
+#### Efficiency — 中央パンの早道
+
+`apply_line_pan` に unity の早期リターンが無く、`LineOp::Gain` が `gain != 1.0` で同じことを
+しているのと非対称だった。RT コールバックのたびに `frames × 2` 回の無駄な乗算になる。
+
+🔴 **副次的に丸め誤差が消える**。f32 では `sqrt(2) * cos(pi/4) = 0.99999994` で **1.0 ちょうどに
+ならない**（実測）。省くことで `pan(0)` を書いた譜面が書かない譜面と一致し、設計 §4.1 の
+「center で `(1, 1)`（unity）」が**文書どおり**になる。
+
+#### Simplification — wire parse の形をそろえた
+
+`pan` だけ「取得はアーム内にインライン・範囲検証は別関数」という、`gain`（1 関数）と違う分割に
+なっていた。`parse_set_bus_line_pan` に揃えてアームを 1 行にした。エラーコードは
+`PARAM_OUT_OF_RANGE` のまま残す（範囲外は「形が壊れている」ではない。`gain` 側を寄せるかは
+既存挙動を巻き込むので本 PR では触らない）。
+
+#### 🔴 到達できない入力でガードを検査していたテストを直した
+
+`!pan.is_finite()` の枝を `validate_set_bus_line_pan(f64::NAN)` で検査していたが、
+**非有限の pan は wire から到達できない**（2026-09-11 実測）: JSON に NaN / Infinity の
+リテラルは無く、`serde_json` は `1e400` を `Error("number out of range")` として
+**parse 時点で拒否する**。実際に来る形（数値でない → `MALFORMED_REQUEST`）を固定し直した。
+ガード自体は型が保証していないので防御として残す。
+
+#### 見送り
+
+`#[inline]` が無いという指摘は**誤検知**（既に付いている。差分だけを読んだため）。
+master line と bus post-loop の実行器 2 本を 1 本に畳む案は、Altitude が
+「本 PR 以前からある構造で、`Pan` はそれに素直に追従しただけ。畳むなら Gain / Output も含む
+別 PR」と判定したので見送る。
+
+**検算**: `cargo test -p orbit-audio-native --lib` **83 passed** /
+`-p orbit-audio-daemon --features outproc-effect --lib` **219 passed** /
+`cargo fmt --check` 緑 / `cargo clippy --all-targets -- -D warnings` 緑。
+
 ### test(daemon): add the three bundle-A tests the design listed but never got (#611) (Sep 10, 2026)
 
 Fable の受け入れ監査（束 A / PR #834）が **Important #1** として「設計 §11 が PR-A1 / PR-A2 の

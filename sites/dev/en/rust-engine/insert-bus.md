@@ -152,7 +152,7 @@ that both the marking pass and the accumulation pass reuse (loading the same ato
 let a `SetBusRouting` that lands mid-callback make the two passes see different things).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2196-2202
+// rust/crates/orbit-audio-native/src/output.rs:2205-2211
     let bs = (hw.len() / output_channels) * output_channels;
 
     // active フラグを 1 回だけ atomic load して使い回す（RT: 同じ判定を何度も load しない）。
@@ -211,7 +211,7 @@ from 2026-07-17 is the added `kind: BusKind` (insert / sum / aux) and the shared
 the mixer.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2252-2274
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2253-2275
 /// 1 本の named bus stage（insert/sum/aux 共通）を構成する部材（`build_effect_bus_stages` →
 /// `install_effect_bus_slots` の間で運ぶ・#434 S2/S3・M2 で kind/routing を追加）。
 /// effect-only / both の両起動経路で同一のライフサイクルを共有する。

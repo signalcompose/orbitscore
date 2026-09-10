@@ -2124,16 +2124,17 @@ fn default_master_line_program(output_channels: u16) -> Vec<LineOp> {
     ]
 }
 
+/// バスが実際に走らせている初期 program。
+///
+/// 🔴 **手で同じ列を書き直さない**（`/simplify` の reuse / altitude が独立に同じ指摘・2026-09-11）。
+/// RT へ渡る初期値は `InsertBusStage` が `LineProgram::legacy(BusTarget::Master, &[])` 経由で
+/// 作る `legacy_line_ops` そのもの。ここでリテラルを写すと、`legacy_line_ops` 側だけが変わった
+/// 時に **shadow だけが旧い形のまま残り、未設定バスへの最初の `SetBusLine` が誤った seed から
+/// republish する** — 下の `initial_bus_line_shadows` のコメントが「exactly one place」と
+/// 約束しているのは、まさにこれを防ぐため。
 #[cfg(feature = "outproc-effect")]
 fn default_bus_line_program() -> Vec<LineOp> {
-    vec![
-        LineOp::Rack,
-        LineOp::Output(LineOutput {
-            dest: OutputDest::Master,
-            thru: false,
-            gain: 1.0,
-        }),
-    ]
+    legacy_line_ops(BusTarget::Master, &[])
 }
 
 /// Every bus starts at the default program, so its republish shadow starts there too.

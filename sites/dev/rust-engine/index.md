@@ -202,7 +202,7 @@ spawn します。#474 以降はもう 1 本、watchdog thread が broadcast す
 （`PluginUiClosed` 等）を session の writer queue へ橋渡しする task が増えています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:986-1013
+// rust/crates/orbit-audio-daemon/src/session.rs:994-1021
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -238,7 +238,7 @@ plugin note 系 method は `plugin_note_spec` という純関数を「唯一の�
 match に落とす設計です（2 箇所で同じ文字列集合を独立管理すると drift するという教訓が反映されています）。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1602-1629
+// rust/crates/orbit-audio-daemon/src/session.rs:1610-1637
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,
@@ -575,7 +575,7 @@ master.buffer は常に 2ch なので、デバイス幅のバッファをもう 
 というのがこのバッファの理由です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2133-2137
+// rust/crates/orbit-audio-native/src/output.rs:2142-2146
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -684,7 +684,7 @@ atomic に書いた目標値へ、block ごとに寄せていく形です。
 §5.1 の「再 publish 時に実効値を引き継ぐ機構」とセットで入れます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9744-9753
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9745-9754
     /// マスターゲインを設定する。PR-O3b では従来どおり atomic だけを更新し、RT 専有の
     /// `gain_current` を呼び出し間で連続させる。master line への写しは、TS の
     /// `global.gain()` を `SetBusLine("master", …)` へ切り替え、再 publish 時に実効値を引き継ぐ
@@ -716,7 +716,7 @@ wire（`SetGlobalGain`）の `ramp_sec` は互換のため受け取り続けま�
 dispatch が `engine.output_channels()` を渡して間に挟まります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2651-2666
+// rust/crates/orbit-audio-daemon/src/session.rs:2659-2674
         #[cfg(feature = "outproc-effect")]
         "SetBusLine" => match parse_set_bus_line_params(&params) {
             Ok((bus, line)) => {
@@ -866,7 +866,7 @@ fn render_engine_with_sources_impl(
 避けるため、scratch buffer は 1 秒分をあらかじめ確保しています）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:3027-3044
+// rust/crates/orbit-audio-native/src/output.rs:3036-3053
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

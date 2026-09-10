@@ -147,7 +147,7 @@ instrument source が無いときは source 側に空スライスを渡すだけ
 両 pass の見え方が食い違うため）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2196-2202
+// rust/crates/orbit-audio-native/src/output.rs:2205-2211
     let bs = (hw.len() / output_channels) * output_channels;
 
     // active フラグを 1 回だけ atomic load して使い回す（RT: 同じ判定を何度も load しない）。
@@ -203,7 +203,7 @@ fn effect_buses_from_env() -> Result<Vec<String>, WrapError> {
 `kind: BusKind`（insert / sum / aux）と mixer 用の routing 共有 Arc が足された点です。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2252-2274
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2253-2275
 /// 1 本の named bus stage（insert/sum/aux 共通）を構成する部材（`build_effect_bus_stages` →
 /// `install_effect_bus_slots` の間で運ぶ・#434 S2/S3・M2 で kind/routing を追加）。
 /// effect-only / both の両起動経路で同一のライフサイクルを共有する。

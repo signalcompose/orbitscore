@@ -2107,6 +2107,15 @@ fn line_gain(
 /// identity for existing scores (design `docs/design/611-o-surface-bundle-design.md` §4.1).
 #[inline]
 fn apply_line_pan(buf: &mut [f32], frames: usize, pan: f32) {
+    // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
+    //
+    // 🔴 これは丸め誤差の除去でもある。f32 では `sqrt(2) * cos(pi/4) = 0.99999994` で
+    // **1.0 ちょうどにならない**ため、省かないと `pan(0)` を書いた譜面が書かない譜面と
+    // 6e-8 だけずれる。設計 §4.1 は「center で `(1, 1)`（unity）」と書いているので、
+    // 省く方が**文書どおり**になる。`LineOp::Gain` が `gain != 1.0` で同じことをしている。
+    if pan == 0.0 {
+        return;
+    }
     let (left, right) = equal_power_pan(pan);
     let left = left * std::f32::consts::SQRT_2;
     let right = right * std::f32::consts::SQRT_2;

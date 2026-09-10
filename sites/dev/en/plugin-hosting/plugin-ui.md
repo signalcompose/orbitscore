@@ -827,7 +827,7 @@ When does the caller of `closePluginUi` return? The daemon's `ClosePluginUI` res
 **Phase A acceptance only**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2393-2394
+// rust/crates/orbit-audio-daemon/src/session.rs:2401-2402
                     // This is explicitly Phase A acceptance, never close completion.
                     Ok(Ok(())) => ok(&id, json!({"status": "accepted"})),
 ```
@@ -957,7 +957,7 @@ The ack matching key became the triple `(generation, window, evt_seq)`; an ack c
 window is rejected loudly. The event frame's `PluginUiTarget` also gained `window`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10453-10466
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10454-10467
 /// WS event frame に載せる、解決済み plugin UI 宛先。
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PluginUiTarget {

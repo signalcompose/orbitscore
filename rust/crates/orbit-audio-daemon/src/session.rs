@@ -334,11 +334,7 @@ fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>),
                 line.push(BusLineOp::Gain(gain));
             }
             "pan" => {
-                let pan = item
-                    .get("pan")
-                    .and_then(Value::as_f64)
-                    .ok_or_else(|| set_bus_line_malformed("'line[].pan' must be a number"))?;
-                line.push(BusLineOp::Pan(validate_set_bus_line_pan(pan)?));
+                line.push(BusLineOp::Pan(parse_set_bus_line_pan(item)?));
             }
             "output" => {
                 let gain = parse_set_bus_line_gain(item, "line[].gain")?;
@@ -367,8 +363,20 @@ fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>),
     Ok((bus, line))
 }
 
+/// `parse_set_bus_line_gain` と**同じ形**にそろえてある（取得と検証を 1 関数に持つ・
+/// match アームは 1 行で呼ぶだけ）。`/simplify` simplification の指摘（2026-09-11）: 同じ役割の
+/// 数値フィールド検証が 2 通りの分割で並存すると、次に 3 つ目を足す人がどちらを踏襲すべきか
+/// 判断できない。
+///
+/// エラーコードだけは `gain`（`MALFORMED_REQUEST`）と揃えず `PARAM_OUT_OF_RANGE` のまま残す
+/// — 範囲外は「形が壊れている」のではなく「値が範囲外」で、device channels の範囲外検証も
+/// 同じコードを使っている。`gain` 側を寄せるかどうかは既存挙動を巻き込むので本 PR では触らない。
 #[cfg(feature = "outproc-effect")]
-fn validate_set_bus_line_pan(pan: f64) -> Result<f32, ProtocolError> {
+fn parse_set_bus_line_pan(item: &Value) -> Result<f32, ProtocolError> {
+    let pan = item
+        .get("pan")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| set_bus_line_malformed("'line[].pan' must be a number"))?;
     if !pan.is_finite() || !(-1.0..=1.0).contains(&pan) {
         return Err(ProtocolError::new(
             "PARAM_OUT_OF_RANGE",
@@ -3927,12 +3935,19 @@ mod tests {
             json!({"bus": "seq-bus-0", "line": [{"op": "pan", "pan": 1.5}]}),
             "PARAM_OUT_OF_RANGE",
         );
-        let nan_error = validate_set_bus_line_pan(f64::NAN).expect_err("NaN pan must reject");
+        // 🔴 旧版は `validate_set_bus_line_pan(f64::NAN)` を直接叩いて `!pan.is_finite()` の枝を
+        // 検査していた。しかし**非有限の pan は wire から到達できない**（2026-09-11 実測）:
+        // JSON に NaN / Infinity のリテラルは無く、`serde_json` は `1e400` を
+        // `Error("number out of range")` として **parse 時点で拒否**する。
+        // 到達できない入力でガードを検査しない — 実際に来る形（数値でない）を固定する。
+        // `is_finite` のガード自体は防御として残す（型が保証していないため）。
+        let nan_error = parse_set_bus_line_pan(&json!({"op": "pan", "pan": "loud"}))
+            .expect_err("a non-numeric pan must reject");
         eprintln!(
-            "mono=[3] accepted; duplicate={} pan(1.5)=PARAM_OUT_OF_RANGE pan(NaN)={}",
+            "mono=[3] accepted; duplicate={} pan(1.5)=PARAM_OUT_OF_RANGE pan(\"loud\")={}",
             duplicate_error.code, nan_error.code
         );
-        assert_eq!(nan_error.code, "PARAM_OUT_OF_RANGE");
+        assert_eq!(nan_error.code, "MALFORMED_REQUEST");
     }
 
     /// #611 束 A 監査（Fable Important #1）: 既存の pan wire テストは形の不正（否定側）しか見ておらず、

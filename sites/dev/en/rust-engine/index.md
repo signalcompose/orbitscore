@@ -208,7 +208,7 @@ that drains an `mpsc` channel. Since #474 there is one more task: it bridges the
 (`PluginUiClosed` and friends) broadcast by the watchdog threads into the session's writer queue.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:986-1013
+// rust/crates/orbit-audio-daemon/src/session.rs:994-1021
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -245,7 +245,7 @@ kept as the single point of truth, before falling through to the match — refle
 learned that keeping the same string set in two independently-maintained places drifts.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1602-1629
+// rust/crates/orbit-audio-daemon/src/session.rs:1610-1637
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,
@@ -590,7 +590,7 @@ a second buffer at device width there would be nowhere for it to land — that i
 buffer exists.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2133-2137
+// rust/crates/orbit-audio-native/src/output.rs:2142-2146
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -699,7 +699,7 @@ fails design 611 §4.2's "copy it *without changing its meaning*", so the copy l
 with the §5.1 mechanism that carries the effective gain across a republish.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9744-9753
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9745-9754
     /// マスターゲインを設定する。PR-O3b では従来どおり atomic だけを更新し、RT 専有の
     /// `gain_current` を呼び出し間で連続させる。master line への写しは、TS の
     /// `global.gain()` を `SetBusLine("master", …)` へ切り替え、再 publish 時に実効値を引き継ぐ
@@ -732,7 +732,7 @@ indices** (does the bus exist, is the reference forward-only) is checked by
 the actual output width, so the dispatch sits in between and passes `engine.output_channels()`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2651-2666
+// rust/crates/orbit-audio-daemon/src/session.rs:2659-2674
         #[cfg(feature = "outproc-effect")]
         "SetBusLine" => match parse_set_bus_line_params(&params) {
             Ok((bus, line)) => {
@@ -888,7 +888,7 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:3027-3044
+// rust/crates/orbit-audio-native/src/output.rs:3036-3053
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

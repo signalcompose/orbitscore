@@ -164,7 +164,7 @@ export const MIXER_BUS_POOL_SIZE = 4
 The corresponding Rust constants live in the daemon's `engine_wrap.rs`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2189-2202
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2190-2203
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
 /// （M3 で配線予定）。
 #[cfg(feature = "outproc-effect")]
@@ -347,7 +347,7 @@ later stage and `BusKind::Sum`", "a send target must be a later stage and `BusKi
 "if even one check fails, nothing is applied".
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7203-7223
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7204-7224
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -380,7 +380,7 @@ Since #611 PR-O3a, this function **publishes one line program** after validation
 matters too.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7249-7264
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7250-7265
         // 3. Every compatibility handle is resolved before the one program publication, so a
         // missing slot cannot leave only part of the requested routing applied.
         let routing_handle = if resolved_output.is_some() {
@@ -417,7 +417,7 @@ place is the second half of `render_engine_with_insert_buses_and_source_outputs`
 `output.rs`, the so-called **post-loop**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2328-2354
+// rust/crates/orbit-audio-native/src/output.rs:2337-2363
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -517,7 +517,7 @@ before they reach RT.
 The execution of an output looks like this.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2371-2395
+// rust/crates/orbit-audio-native/src/output.rs:2380-2404
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
                         &mut first_output,
@@ -580,9 +580,18 @@ both master-line execution (`execute_master_line`) and the post-loop with code t
 L/R.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2108-2118
+// rust/crates/orbit-audio-native/src/output.rs:2108-2127
 #[inline]
 fn apply_line_pan(buf: &mut [f32], frames: usize, pan: f32) {
+    // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
+    //
+    // 🔴 これは丸め誤差の除去でもある。f32 では `sqrt(2) * cos(pi/4) = 0.99999994` で
+    // **1.0 ちょうどにならない**ため、省かないと `pan(0)` を書いた譜面が書かない譜面と
+    // 6e-8 だけずれる。設計 §4.1 は「center で `(1, 1)`（unity）」と書いているので、
+    // 省く方が**文書どおり**になる。`LineOp::Gain` が `gain != 1.0` で同じことをしている。
+    if pan == 0.0 {
+        return;
+    }
     let (left, right) = equal_power_pan(pan);
     let left = left * std::f32::consts::SQRT_2;
     let right = right * std::f32::consts::SQRT_2;
@@ -666,7 +675,7 @@ What is interesting here is that the **marking pass (computing `render_targets`)
 share the same pointer snapshot**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2256-2273
+// rust/crates/orbit-audio-native/src/output.rs:2265-2282
         // SAFETY: the line generation is not completed until after execution below. Control keeps
         // any replaced box retired for two later completed generations.
         let program = unsafe { &*programs[i] };
@@ -763,7 +772,7 @@ The dispatch is just those three steps in order (shape check, device-channel ran
 to the engine), with a separate arm returning `UNSUPPORTED` on a build without the feature.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2651-2674
+// rust/crates/orbit-audio-daemon/src/session.rs:2659-2682
         #[cfg(feature = "outproc-effect")]
         "SetBusLine" => match parse_set_bus_line_params(&params) {
             Ok((bus, line)) => {
@@ -814,7 +823,7 @@ has — an output target must be a sum bus, a send target must be an aux bus —
 `SetBusLine`**. An outlet only has to be a later stage; whether it is sum or aux is not asked.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7093-7108
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7094-7109
                     let dest = match dest {
                         BusLineDest::Master => OutputDest::Master,
                         BusLineDest::Bus(name) => {
@@ -837,7 +846,7 @@ The assembly — resolve everything, then publish exactly once — is the same a
 one element fails midway the publish is never reached, so **the previous line survives intact**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7126-7157
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7127-7158
         let installer = self
             .bus_line_programs
             .lock()
@@ -1290,7 +1299,7 @@ commutes, so either order yields the same value). The invariant is therefore unm
 a DSL-level E2E, and the sole guard is a unit test whose rack stub **generates** sound.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:4959-4964
+// rust/crates/orbit-audio-native/src/output.rs:4968-4973
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(
