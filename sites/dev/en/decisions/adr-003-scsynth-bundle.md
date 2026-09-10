@@ -26,6 +26,8 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
 export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```
+
+**🔴 Added 2026-09-10 (owner ruling #827, PR #828)**: this ADR's decision to **bundle scsynth into the `.vsix` is being reversed** (`docs/planning/NATIVE_MIGRATION_2026-09.md` §12.5). What is bundled is GPL-2.0 scsynth, and `release.yml` publishes to Marketplace / Open VSX on `v*` tags, so the ruling fixes the order: **unbundling happens before the extension-stable tag**. Note that the ADR's *other* pattern, the **fail-loud strict resolver, stays** — it was carried over as-is to resolving `orbit-audio-daemon` (see "Consequences revisited (2026-09)" at the end of this chapter).
 :::
 
 # ADR-003 scsynth bundle strict mode

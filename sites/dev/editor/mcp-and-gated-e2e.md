@@ -581,6 +581,8 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 
 > 🔴 2026-09-05: この起動手順は `launchIsolatedOrbitStudio()` へ切り出されました（#661 の `/simplify`）。隔離した user-data / extensions / workspace 設定を作り、`orbs` を `--extensionDevelopmentPath` 付きで起動して `pollInitialize` するまでが 1 関数です。
 
+> 🔴 2026-09-10（owner 裁定 #827・PR #828）: **VSCodium フォークを畳む**ことが決まり、この起動を **stock の VS Code** へ向け直すことが裁定に含まれました（`docs/planning/NATIVE_MIGRATION_2026-09.md` §12.4）。上のコードは既に `--extensionDevelopmentPath`（拡張をソースから直接ロード）+ 隔離した `--user-data-dir` / `--extensions-dir` で起動しているので、**フォーク固有なのは実行ファイルのパス `Contents/Resources/app/bin/orbs` の 1 行だけ**で、VS Code の `bin/code` に変えれば足ります。vsix の入れ替えは不要で、日常使いの VS Code の設定にも触れません。順序も裁定されていて、**フォークを畳む前にこの 1 行を変える** — そうしないとマージゲート（実機 gated）を失う期間ができるためです。
+
 
 `--extensionDevelopmentPath` でリポジトリ内の拡張ソースをそのまま読ませ、`--user-data-dir` / `--extensions-dir` を一時ディレクトリに向けて手元の設定から隔離します。ポートは `39400 + Math.floor(Math.random() * 200)` で選び、`pollInitialize()` が `initialize` を 2 秒間隔で最大 60 秒叩いて接続を待ちます。クライアント（`tests/e2e/helpers/mcp-client.ts`）は MCP SDK を使わない生の JSON-RPC で、`tools/call` の `content[0].text` と `isError` を取り出すだけの薄い層です。
 

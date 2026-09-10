@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow PR #828 (stable freeze line) in the dev site (Sep 10, 2026)
+
+**追従元**: PR [#828](https://github.com/signalcompose/orbitscore/pull/828)（merge commit `5406feea`・#827）/ **ブランチ**: `claude/docs-sync-pr828` → main（docs のみ）
+
+PR #828 は planning の裁定だけを置いた（コード変更なし）ので、DSL 仕様・MCP・ユーザー向けドキュメントに追従はない。
+一方で **裁定が名指しした 5 章**は、その主題の行き先が変わったのに dev サイト側が「opt-out 経路として残る」と読める状態だったので、
+裁定へのポインタを警告ボックス / 注記に足した（**ja + en**）。
+
+| 章 | 足した注記 | 裁定の出どころ |
+|---|---|---|
+| `audio/supercollider.md` | SC は残置ではなく**削除**（gated 0 件・ユニット 22 ファイル・#502 更新が先） | §12.5 |
+| `audio/scsynth-bundle.md` | GPL-2.0 scsynth の同梱解消は **`v*` タグより前** | §12.5 |
+| `decisions/adr-001-supercollider.md` | 既定の上書き（#108）に続き経路そのものを削除 | §12.5 |
+| `decisions/adr-003-scsynth-bundle.md` | 同梱は取り消し。ただし **strict resolver のパターンは残る** | §12.5 |
+| `editor/mcp-and-gated-e2e.md` | 起動を stock VS Code へ。フォーク固有は `bin/orbs` の **1 行だけ**で、**畳む前**に変える | §12.4 |
+
+frontmatter（`verified-against` / `verified-at`）は触っていない — コードの読み直しはしておらず、足したのは planning へのポインタだけのため。
+
+**検証**: `npm run docs:build`（user / dev 両サイト）+ `docs:check` 1,032 verified / 0 failed。
+
 ### docs(planning): record the extension-stable freeze line and the native OrbitStudio line (#827) (Sep 10, 2026)
 
 **Issue**: #827 / **ブランチ**: `827-stable-freeze-line` → main（docs のみ）

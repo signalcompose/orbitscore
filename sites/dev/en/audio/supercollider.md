@@ -33,6 +33,8 @@ export function resolveEngineKind(raw: string | undefined): EngineKind {
   return v === 'sc' || v === 'supercollider' ? 'supercollider' : 'rust'
 }
 ```
+
+**🔴 Added 2026-09-10 (owner ruling #827, PR #828)**: this opt-out path is now slated for **deletion, not retention** ("we no longer use SC, so delete it properly and tidy up" — `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.5). The deletion lands in a dedicated PR (straight to main) **before the extension-stable tag**, and only **after #502 is changed from "legacy, left in place" to "delete"**. Measurements taken at ruling time: the real-device gated E2E has **zero** SC references (the merge gate is untouched), while **22 unit-test files** reference it — the 5 SC-only files (`supercollider-player-boot`, `supercollider-gain-pan`, `scsynth-resolver`, `synthdef-loader`, `osc-client-register`) get deleted and the other 17 have their imports/fixtures tidied.
 :::
 
 # III-1. Communication with SuperCollider

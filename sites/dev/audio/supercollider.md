@@ -33,6 +33,8 @@ export function resolveEngineKind(raw: string | undefined): EngineKind {
   return v === 'sc' || v === 'supercollider' ? 'supercollider' : 'rust'
 }
 ```
+
+**🔴 2026-09-10 追記（owner 裁定 #827・PR #828）**: この opt-out 経路は **残置ではなく削除**が決まりました（「もう SC は使っていないので、しっかり削除して整理する」・`docs/planning/NATIVE_MIGRATION_2026-09.md` §12.5）。削除は **拡張版 stable のタグより前**に専用 PR（main 直行）で行い、**#502 を「レガシー残置」から「削除」へ更新してから**着手します。裁定時の実測では、実機 gated E2E の SC 参照は **0 件**（マージゲートは無傷）、ユニットテストは **22 ファイル**が参照しています（SC 専用 5 本 = `supercollider-player-boot` / `supercollider-gain-pan` / `scsynth-resolver` / `synthdef-loader` / `osc-client-register` は削除、残り 17 本は import / fixture の整理）。
 :::
 
 # III-1. SuperCollider との通信

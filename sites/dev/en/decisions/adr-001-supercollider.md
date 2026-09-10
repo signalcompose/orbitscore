@@ -26,6 +26,8 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
 export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```
+
+**🔴 Added 2026-09-10 (owner ruling #827, PR #828)**: after cutover #108 overrode this ADR's decision **as the default**, the path itself is now slated for **deletion** (`docs/planning/NATIVE_MIGRATION_2026-09.md` §12.5). It happens in a dedicated PR before the extension-stable tag, and only **after #502 is changed from "legacy, left in place" to "delete"**. This ADR records the reasoning as it stood at the time, so it remains valid as history after the code is gone.
 :::
 
 # ADR-001 Choosing SuperCollider as the Implementation Base

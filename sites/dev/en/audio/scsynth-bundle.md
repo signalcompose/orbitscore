@@ -26,6 +26,8 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
 export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```
+
+**🔴 Added 2026-09-10 (owner ruling #827, PR #828)**: the SC assets are slated for **deletion, not retention** (`docs/planning/NATIVE_MIGRATION_2026-09.md` §12.5). The very bundling this chapter describes is in scope: the **current `.vsix` bundles GPL-2.0 scsynth via a keep entry in `.vscodeignore`**, and `release.yml` publishes to Marketplace / Open VSX on `v*` tags. The ruling therefore fixes the order — **unbundling happens before the extension-stable tag**. `packages/sc-link-audio` (GPL-2.0) is also listed for removal, at the same time if it turns out to be SC-only.
 :::
 
 # III-3. scsynth Bundle and Path Resolution

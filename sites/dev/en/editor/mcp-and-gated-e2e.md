@@ -581,6 +581,8 @@ npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` a
 
 > 🔴 2026-09-05: this launch sequence was extracted into `launchIsolatedOrbitStudio()` (the `/simplify` pass on #661). One function now creates the isolated user-data, extensions and workspace-settings directories, spawns `orbs` with `--extensionDevelopmentPath`, and polls until `pollInitialize` succeeds.
 
+> 🔴 2026-09-10 (owner ruling #827, PR #828): the **VSCodium fork is being folded**, and the ruling includes pointing this launch at **stock VS Code** (`docs/planning/NATIVE_MIGRATION_2026-09.md` §12.4). The code above already launches with `--extensionDevelopmentPath` (loading the extension straight from source) plus isolated `--user-data-dir` / `--extensions-dir`, so **the only fork-specific part is the one line holding the executable path `Contents/Resources/app/bin/orbs`** — switching it to VS Code's `bin/code` is enough. No vsix swap is needed, and the developer's everyday VS Code settings are untouched. The order is part of the ruling too: **change this one line before folding the fork**, so there is never a window without the merge gate (the real-device gated suite).
+
 
 `--extensionDevelopmentPath` loads the extension source straight from the repository, and `--user-data-dir` / `--extensions-dir` point at temporary directories to isolate the run from the developer's own settings. The port is chosen as `39400 + Math.floor(Math.random() * 200)`, and `pollInitialize()` hits `initialize` every 2 seconds for up to 60 seconds until the connection comes up. The client (`tests/e2e/helpers/mcp-client.ts`) is raw JSON-RPC without the MCP SDK — a thin layer that just extracts `content[0].text` and `isError` from `tools/call`.
 
