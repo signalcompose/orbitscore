@@ -193,6 +193,49 @@ OrbitStudio の新ライン（#827）で第 2 実装が来る見込みなので�
 
 引用 4 件が行シフトで動いたので `--fix` で再アンカーした。
 
+### docs(readme): rewrite the shipped README for the stable GitHub Release (#841) (Sep 10, 2026)
+
+拡張版 stable リリース（#827 §12）の手順 4。`.vsix` に同梱される
+`packages/vscode-extension/README.md` と root `README.md` を、**出荷物の実態**に合わせた。
+
+**直した事実誤り 3 件**（いずれも出荷物に対して偽だった）:
+
+| 箇所 | 旧記述 | 実測 |
+|---|---|---|
+| LinkAudio | 「OrbitScore acts as the Link tempo leader; Ableton Live follows OrbitScore's tempo」 | daemon の feature `link-audio` が default off。`copy-daemon-bin.sh` も `release.yml` も `--features outproc-effect,outproc-instrument` のみ。egress も §8.1.4 の tempo push も同じ feature に依存する |
+| Intel Mac | 「Untested (bundled binary is universal but not actively verified)」 | `release.yml` の `VSIX_TARGET: darwin-arm64`。universal ではない。方針も Apple Silicon のみ |
+| time-stretch / pitch shift | root README が `.time()` / `.fixpitch()` を Core Features に列挙 | `parser/types.ts:493` に「'time' and 'fixpitch' removed - not yet implemented」。#213 で defer 中 |
+
+**追加**: `global.compressor()` / `limiter()` / `normalizer()` が native engine で no-op であることを
+「Not in this build」表に明記した（#502 で唯一の実装だった SC synthdef が消えたため）。
+
+**🔴 LinkAudio の記述を実測に合わせ直した（自分の初稿の誤り）**: 最初「音は hardware へ出る」と
+書いたが、これは `rust-engine-player.ts` の**コメントの主張**であって実測ではない。
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` の記録によれば、2026-09-04 の実機実行では
+`global.linkAudio()` 下の sequence の **capture RMS = 0**、かつ `get_log` に
+`LINK_AUDIO_UNAVAILABLE` も gap 警告も出ていない。つまり**音が出ず警告も出ない**。
+仕様（§8.1）とどちらが正しいかは未決なので、README には「未決であり LinkAudio を前提にした
+演奏はしないこと」と書いた。ユーザー学習サイト（`sites/user/midi/link-audio.md`）は
+#835 で既に同じ扱いになっていた。
+
+**AU ホスティングの偽記載を削除**: walkthrough ステップ 4 が ja / en とも
+「CLAP / VST3 / AU をホストできます」と書いていたが、`PluginFormat::from_env_value` は
+`clap` / `vst3` **以外を Err で弾く**（`outproc_effect.rs:338-346`）。AU の child バイナリも
+crate も存在しない。walkthrough の md と `package.json` の step description の両方を直した。
+🔴 **walkthrough は `.vsix` に同梱されるので、これは出荷物の偽記載だった。**
+
+**その他の追従**: `✅ engine: rust (native)` ステータスバー表示は #108 以降存在しない
+（健全時はインジケータを出さない・`updateBundleStatus`）。コマンド一覧が 5 件しか載っておらず
+プラグイン系・walkthrough・MCP 登録が抜けていた。設定一覧が 5 件で `engineDebug` /
+`mcpServer.port` / `playheadPalette` が抜けていた。いずれも `package.json` の `contributes` から
+実体を引いて書き直した。
+
+**入手経路**: Marketplace / Open VSX には出さない（owner 2026-09-10）ので、
+両 README とも **GitHub Release の `.vsix`** を先頭に置いた。
+
+**版番号は据え置き**: 見出しから `(2.0.0)` を外して版に依存しない形にした。実際の版番号更新は
+手順 5（owner 裁定）で行う。
+
 ### docs(spec): record that the global mastering effects are no-ops after the SC removal (#502) (Sep 10, 2026)
 
 束 #840 を締める前の追従。`INSTRUCTION_ORBITSCORE_DSL.md` の Implementation Status は

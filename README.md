@@ -2,16 +2,17 @@
 
 **Live-coding music DSL with a native Rust audio engine, plugin hosting, and MIDI output**
 
-Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundled native audio engine (Rust `orbit-audio-daemon`: sample playback, CLAP / VST3 plugin hosting, mixer) and MIDI output (Pitch DSL, chords, comp, Ableton Link). Version 2.0.0 is the released state; the VS Code extension is at 2.1.0. The Rust daemon is the only audio backend; the SuperCollider opt-out path was removed in #502.
+Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundled native audio engine (Rust `orbit-audio-daemon`: sample playback, CLAP / VST3 plugin hosting, mixer) and MIDI output (Pitch DSL, chords, comp). Version 2.0.0 is the released state; the VS Code extension is at 2.1.0. The Rust daemon is the only audio backend; the opt-out path to the previous backend was removed in #502.
 
-## Core Features (2.0.0)
+## Core Features
 
 ### 🎵 Audio Processing
 
 - **Audio File Support**: WAV, AIFF, MP3, MP4 playback
-- **Time-Stretching**: Tempo adjustment with pitch preservation
 - **Audio Slicing**: `.chop(n)` to divide files into equal parts
-- **Pitch Shifting**: `.fixpitch(n)` for independent pitch control
+- **Real-time gain / pan**: `gain(dB)` and `pan()` apply while a sequence is playing
+
+> `.time()` and `.fixpitch()` (pitch-preserving time-stretch) are **parsed but not implemented** — see [#213](https://github.com/signalcompose/orbitscore/issues/213).
 
 ### ⚡ Live Coding Features
 
@@ -20,15 +21,14 @@ Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundle
 - **Real-time Control**: Bar-quantized transport with look-ahead
 - **Polymeter Support**: Independent sequence timing
 
-### 🎹 MIDI & Pitch (2.0.0)
+### 🎹 MIDI & Pitch
 
 - **MIDI Output**: Degrees/notes resolve to MIDI notes + velocity, emitted to a CoreMIDI / IAC virtual port
 - **Pitch DSL**: Musical pitch via scale degrees, chords, voicing, mode, and expression
 - **comp**: Automatic accompaniment — voice-leading (C1) + comp rhythm (C2a)
-- **Ableton Link Audio (LinkAudio)**: OrbitScore as the Link tempo leader; Ableton Live follows OrbitScore's tempo
 - **quantize**: Bar-quantized scheduling control
 
-### 🎛️ Plugin Hosting & Mixing (post-2.0, on the Rust engine)
+### 🎛️ Plugin Hosting & Mixing
 
 - **CLAP / VST3 hosting**: `seq.instrument("...")`, `global.effect("...")`, `seq.effect("...")` — plugins run in out-of-process children (crash isolation, auto-respawn)
 - **Plugin UI**: `seq.ui()` opens the plugin's own window; state is saved when the window closes
@@ -50,10 +50,18 @@ Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundle
 - **MIDI output** — degrees/notes resolve to MIDI notes + velocity, emitted to a CoreMIDI / IAC virtual port
 - **Pitch DSL** — scale degrees, chords, voicing, mode, and expression (DSL_VERSION 1.1)
 - **comp** — automatic accompaniment: voice-leading (C1) + comp rhythm (C2a)
-- **Ableton Link Audio (LinkAudio)** — OrbitScore as the Link tempo leader (Ableton Live follows OrbitScore's tempo)
 - **quantize** — bar-quantized scheduling control
 - **Audio foundation** — native daemon sample playback (WAV/AIFF/MP3/MP4), `.chop()` slicing, polymeter, `RUN()`/`LOOP()`/`MUTE()` transport
 - **Post-2.0 (shipped on `main`, extension 2.1.0)** — Rust engine as default (#108), out-of-process CLAP/VST3 hosting (#340–#424), per-sequence inserts (#434), plugin UI (#474), catalog (#463), replacement (#618/#625), racks + standard `Gain` (#628), mixer foundation (#643), live playhead (#390/#654). See [WORK_LOG.md](docs/development/WORK_LOG.md).
+
+> ⚠️ **Ableton Link / LinkAudio is not enabled in released builds, and nothing is audible under
+> `global.linkAudio()`.** Ableton Link is dual-licensed GPL-2.0-or-later / commercial, so the
+> daemon keeps it behind a default-off `link-audio` feature that the release does not turn on.
+> The DSL spec says the sound should fall back to the hardware output with a single warning, but
+> a real-machine run measured capture RMS 0 and no warning marker at all
+> (`tests/e2e/orbitstudio-mcp-gated.spec.ts`), so which is correct is unresolved — do not build a
+> set on it. `global.compressor()` / `limiter()` / `normalizer()` are likewise no-ops on the
+> native engine; put a CLAP / VST3 plugin on the master bus instead.
 
 **Supported platforms**: macOS Apple Silicon (arm64) **only**. Intel Macs are not supported. Windows / Linux not supported currently.
 
@@ -119,7 +127,7 @@ The pre-audio MIDI-based implementation (Phases 1-5) is preserved for historical
 - Rust (`rust/` workspace: `orbit-audio-daemon`, cpal / symphonia / rubato, CLAP / VST3 hosting, plugin children over shared memory)
 - VS Code Extension API
 - MIDI output (CoreMIDI / IAC virtual port)
-- Ableton Link (LinkAudio tempo sync, GPL-isolated crate)
+- Ableton Link (LinkAudio tempo sync) — GPL-isolated crate behind a default-off feature; **not enabled in released builds**
 
 ## Project Structure
 
@@ -165,7 +173,7 @@ orbitscore/
 
 ## Development Status
 
-### Completed Phases (2.0.0)
+### Completed Phases
 
 See [`docs/development/IMPLEMENTATION_PLAN.md`](docs/development/IMPLEMENTATION_PLAN.md) for details.
 
@@ -219,14 +227,14 @@ In-repo USER_MANUAL files are **deprecated** (historical reference only):
 - [USER_MANUAL.md (ja)](docs/user/ja/USER_MANUAL.md) — deprecated, see learning site above
 - [USER_MANUAL.md (en)](docs/user/en/USER_MANUAL.md) — deprecated, see learning site above
 
-## Implemented Features (2.0.0)
+## Implemented Features
 
-### 🎹 MIDI & Pitch (2.0.0 pillars)
+### 🎹 MIDI & Pitch
 
 - ✅ MIDI output — degrees/notes → MIDI notes + velocity, emitted to CoreMIDI / IAC virtual port
 - ✅ Pitch DSL — scale degrees, chords, voicing, mode, expression
 - ✅ comp — automatic accompaniment: voice-leading (C1) + comp rhythm (C2a)
-- ✅ Ableton Link Audio (LinkAudio) — OrbitScore as Link tempo leader; Live follows OrbitScore's tempo
+- ⚠️ Ableton Link Audio (LinkAudio) — implemented behind a default-off feature; **not enabled in released builds** (see the caveat above)
 - ✅ quantize — bar-quantized scheduling control
 
 ### Parser & Interpreter
@@ -303,6 +311,18 @@ npm run test:e2e:gated   # ORBIT_GATED_ORBITSTUDIO=1; builds the daemon, drives 
 ```
 
 ## Getting Started
+
+### Just want to use it?
+
+Download the `.vsix` from **[Releases](https://github.com/signalcompose/orbitscore/releases)** and
+install it — nothing else is required. OrbitScore is not published on the VS Code Marketplace or
+Open VSX.
+
+```bash
+code --install-extension orbitscore-<version>.vsix
+```
+
+The rest of this section is for building from source.
 
 ### Prerequisites
 
