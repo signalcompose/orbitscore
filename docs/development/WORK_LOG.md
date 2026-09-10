@@ -17,6 +17,90 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(daemon): build the master default line in exactly one place, too (#611) (Sep 11, 2026)
+
+`/code:pr-review-team` ラウンド 1（4 レビュアー）を束 A（PR #834）に回した。
+**Critical 1 / Important 4 / Minor 2**。fixer は main。
+
+#### 🔴 Critical — mono デバイスで seed が実体と食い違い、この機構が防ぐはずのポップを再導入する
+
+`MasterLine::new` は初期 program の `dest.right` を **`Some(1)` に固定**していた。一方 daemon 側の
+shadow `default_master_line_program(output_channels)` は `(output_channels > 1).then_some(1)` を
+返していた。**1ch デバイスでは `dest` が食い違う**ので、`line_republish_seeds` の Output 照合が
+外れ、新しい master Output の seed が既定の **0.0** に落ちる。鳴っていた master が一瞬無音から
+5 ms かけてフェードインし直す — 設計 §4.3 が名指ししている失敗モードそのもの。
+
+**2ch では偶然一致するので、開発機の実機検証でも顕在化しない。**
+
+さらに `add_to_device` の境界検査は `debug_assert` だけなので、**実 1ch デバイスでは
+`right: Some(1)` が RT で範囲外アクセスになる**（`device_base + 1` が mono バッファを超える）。
+
+**対処**: `default_master_line_ops(output_channels)` を `orbit-audio-native` から export し、
+`MasterLine::new` と daemon の shadow の**両方がこれを呼ぶ**ようにした。`MasterLine::new` は
+`output_channels` を受け取る（呼び出し 11 箇所・production の 1 箇所は同スコープに `channels` が居た）。
+**同じ日にバス側で `legacy_line_ops` へ統一したのと同じ手当てを master にも当てた**
+— reviewer が「是正の一貫性の欠落」として指摘したとおり。
+
+固定するテスト `master_line_starts_from_the_shared_default_ops_for_any_channel_count` を足し、
+**旧バグ（`right: Some(1)` 固定）を再現する変異で赤・戻して緑**を実走で確認した。
+
+#### Important — 設計 §11 が挙げた 6 件のうち 2 件がまだ未実装だった
+
+前回の Fable 監査が 3 件を埋めた**その一段外側**に、`channels` の要素数（0 個 / 3 個以上）の拒否と
+**mono の `left` が範囲外**の拒否が残っていた（既存テストは stereo ペアしか通しておらず
+`right: None` の枝に到達していなかった）。
+`set_bus_line_wire_rejects_device_channel_arity_and_mono_out_of_range` を追加。
+**2 種類の変異（要素数制限を外す / mono 上限を外す）で赤**を確認。
+
+**列挙は一段手前で止まる。** 同じ設計文書の同じ表で、2 回続けて起きた。
+
+#### Important — 「center は unity」を近似で検査していた
+
+`line_program_pan_is_normalized_and_executes_in_rt` の許容差は `1e-6` で、
+`apply_line_pan` の中央早期リターンを消しても `sqrt(2)*cos(pi/4)` の **6e-8** のずれが埋もれて
+**そのまま通った**。設計 §4.1 の「center は unity」は近似ではないので、**ビット一致**で見る形に
+変えた。変異で `1.4142134` と `1.4142135` の 1 ulp を捉えることを確認。
+
+#### Important — dev サイトが裁定と逆のことを書いていた（comment-analyzer の Critical）
+
+「`EngineWrap` はこのハンドルを `SetBusLine("master", …)` だけでなく **`SetGlobalGain` からも**
+呼ぶ」と書いてあったが、現在の `set_global_gain` は `master_gain.store(...)` の 1 行だけで、
+line-program installer を**呼ばない**。ユニットテスト
+`set_global_gain_only_updates_the_compatibility_atomic` が「must not republish」を assert している。
+PR #823 の時点では正しかったが、O-wire-b のレビュー修正（`9e22e427`）で戻り、裁定 F2（写さない）で
+確定していた。**文書だけが 1 層取り残されていた**（ゴールが警告している型）。ja / en とも訂正。
+
+#### そのほか
+
+- `line_republish_seeds` への行番号参照がずれていた（`2162-2193` → 実体は 2157-2188）ので、
+  **行番号をやめて関数名で参照する**ようにした
+- TS の `daemon-client-line-wire.spec.ts` が、この束が広げた型（`pan` op・mono の `channels: [number]`）を
+  **1 件も通していなかった**。設計 §11 が検証コマンドとして名指ししているファイルなのに
+  「実行はされるが変更点は通らない」状態だった。1 件追加
+- `LineControl::current_gains()` の直列化契約を、**どの mutex かまで表で明記**した
+  （code-reviewer の Minor: 「規約を知らない 4 つ目の呼び出し元が追加されると壊れる」）
+
+#### レビュアー別
+
+| | 結果 |
+|---|---|
+| code-reviewer | **Critical 0 / Important 0**（mutex 経路を追い直して UAF なしと確認・cargo で 31 件を実走） |
+| silent-failure-hunter | **Critical 1** / Important 1 / Minor 2 |
+| pr-test-analyzer | Important 3 / Minor 1 |
+| comment-analyzer | **Critical 1** / Important 2 |
+
+**検算**: `cargo test -p orbit-audio-native --lib` **84 passed** /
+`-p orbit-audio-daemon --features outproc-effect --lib` **220 passed** /
+`cargo fmt --check` 緑 / TS wire spec 2 passed。
+
+#### 持ち越し（issue 化する）
+
+silent-failure-hunter の Important #2: `LineExchange::install` は RT へ swap した**後**に
+`retired` mutex を取るので、その mutex が poison すると **RT は新 program で鳴っているのに
+呼び出し元へ Err が返る**。この束が新設した「shadow は install 成功時だけ前進する」不変条件は、
+その既存の非 atomic 失敗経路では成立しない。発生確率は低いが**ログが 1 行も出ない**。
+束 A の差分の外（既存仕様）なので **#850** に切り出した。
+
 ### refactor(daemon): build the default bus line in exactly one place (#611) (Sep 11, 2026)
 
 束 A（PR #834）に `/simplify` を回した。**引き継ぎに「レビュー済み」とあったのを検算せず信じていた**

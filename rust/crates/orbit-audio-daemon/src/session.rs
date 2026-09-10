@@ -3902,6 +3902,57 @@ mod tests {
         }
     }
 
+    /// 設計 §11 PR-A1 が「新規 6 件」として挙げた検証のうち、**2 件が実装後に照合されないまま
+    /// 残っていた**（`/code:pr-review-team` の test-analyzer・2026-09-11）。前回の Fable 監査が
+    /// 3 件を埋めた**その一段外側**である。列挙は一段手前で止まる。
+    ///
+    /// (a) `channels` の要素数が 1 でも 2 でもない形（0 個 / 3 個以上）の拒否
+    ///     — `parse_set_bus_line_dest` の `matches!(channels.len(), 1 | 2)`
+    /// (b) **mono** の `left` が出力チャンネル数を超える場合の拒否
+    ///     — `validate_set_bus_line_device_channels` の `*left > output_channels`
+    ///     （既存テストは stereo ペアしか通しておらず、`right: None` の枝に到達していなかった）
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn set_bus_line_wire_rejects_device_channel_arity_and_mono_out_of_range() {
+        // (a) 要素数の形。ここは shape の誤りなので MALFORMED_REQUEST。
+        for channels in [json!([]), json!([1, 2, 3]), json!([1, 2, 3, 4])] {
+            let error = parse_set_bus_line_params(&json!({
+                "bus": "seq-bus-0",
+                "line": [{"op": "output", "dest": {"kind": "device", "channels": channels},
+                          "thru": false, "gain": 1.0}]
+            }))
+            .expect_err("only one- or two-element channel arrays are a valid shape");
+            eprintln!("arity {channels} -> {}", error.code);
+            assert_eq!(error.code, "MALFORMED_REQUEST");
+        }
+
+        // (b) mono の範囲。形は正しいので capacity 検証まで進み、そこで範囲外になる。
+        let (_, mono_over) = parse_set_bus_line_params(&json!({
+            "bus": "seq-bus-0",
+            "line": [{"op": "output", "dest": {"kind": "device", "channels": [5]},
+                      "thru": false, "gain": 1.0}]
+        }))
+        .expect("a one-element array is a valid shape");
+        let error = validate_set_bus_line_device_channels(&mono_over, 2)
+            .expect_err("a mono channel past the device's capacity must reject");
+        eprintln!("mono [5] on 2ch -> {}", error.code);
+        assert_eq!(error.code, "PARAM_OUT_OF_RANGE");
+
+        // mono の下限（0 は 1-based では不正）も同じ枝で拒否される。
+        let (_, mono_zero) = parse_set_bus_line_params(&json!({
+            "bus": "seq-bus-0",
+            "line": [{"op": "output", "dest": {"kind": "device", "channels": [0]},
+                      "thru": false, "gain": 1.0}]
+        }))
+        .expect("a one-element array is a valid shape");
+        assert_eq!(
+            validate_set_bus_line_device_channels(&mono_zero, 2)
+                .expect_err("channel 0 is not a valid 1-based channel")
+                .code,
+            "PARAM_OUT_OF_RANGE"
+        );
+    }
+
     #[cfg(feature = "outproc-effect")]
     #[test]
     fn set_bus_line_wire_accepts_mono_device_and_rejects_pan_out_of_range() {

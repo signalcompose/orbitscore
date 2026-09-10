@@ -164,7 +164,7 @@ export const MIXER_BUS_POOL_SIZE = 4
 The corresponding Rust constants live in the daemon's `engine_wrap.rs`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2190-2203
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2186-2199
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
 /// （M3 で配線予定）。
 #[cfg(feature = "outproc-effect")]
@@ -347,7 +347,7 @@ later stage and `BusKind::Sum`", "a send target must be a later stage and `BusKi
 "if even one check fails, nothing is applied".
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7204-7224
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7200-7220
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -380,7 +380,7 @@ Since #611 PR-O3a, this function **publishes one line program** after validation
 matters too.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7250-7265
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7246-7261
         // 3. Every compatibility handle is resolved before the one program publication, so a
         // missing slot cannot leave only part of the requested routing applied.
         let routing_handle = if resolved_output.is_some() {
@@ -417,7 +417,7 @@ place is the second half of `render_engine_with_insert_buses_and_source_outputs`
 `output.rs`, the so-called **post-loop**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2337-2363
+// rust/crates/orbit-audio-native/src/output.rs:2378-2404
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -477,7 +477,7 @@ place", it now "executes a per-stage sequence of operations from the top". The o
 these three.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1001-1026
+// rust/crates/orbit-audio-native/src/output.rs:1000-1025
 /// A resolved output destination for one line operation. Bus and channel names are converted to
 /// stable indices on the control thread before a program is published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -517,7 +517,7 @@ before they reach RT.
 The execution of an output looks like this.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2380-2404
+// rust/crates/orbit-audio-native/src/output.rs:2421-2445
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
                         &mut first_output,
@@ -551,7 +551,7 @@ as an `Output`. `Render` / `Link` are still **rejected at install time** (`Pan` 
 it directly into RT. Details in the next heading).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1360-1372
+// rust/crates/orbit-audio-native/src/output.rs:1401-1413
     for op in &program.ops {
         match op {
             // These arms are availability gates, not permanent format restrictions. Remove the
@@ -580,7 +580,7 @@ both master-line execution (`execute_master_line`) and the post-loop with code t
 L/R.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2108-2127
+// rust/crates/orbit-audio-native/src/output.rs:2149-2168
 #[inline]
 fn apply_line_pan(buf: &mut [f32], frames: usize, pan: f32) {
     // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
@@ -624,7 +624,7 @@ devices are in place to preserve the semantics of the old API.
 The first is `effective_line_output_dest`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1402-1413
+// rust/crates/orbit-audio-native/src/output.rs:1443-1454
 fn effective_line_output_dest(
     first_output: &mut bool,
     legacy_target: Option<OutputDest>,
@@ -656,7 +656,7 @@ replacement becomes a question. `LineExchange`'s answer is "RT does one Acquire 
 belongs to control".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1146-1151
+// rust/crates/orbit-audio-native/src/output.rs:1172-1177
 struct LineExchange {
     live: AtomicPtr<LineProgram>,
     retired: Mutex<Vec<RetiredLineProgram>>,
@@ -675,7 +675,7 @@ What is interesting here is that the **marking pass (computing `render_targets`)
 share the same pointer snapshot**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2265-2282
+// rust/crates/orbit-audio-native/src/output.rs:2306-2323
         // SAFETY: the line generation is not completed until after execution below. Control keeps
         // any replaced box retired for two later completed generations.
         let program = unsafe { &*programs[i] };
@@ -823,7 +823,7 @@ has — an output target must be a sum bus, a send target must be an aux bus —
 `SetBusLine`**. An outlet only has to be a later stage; whether it is sum or aux is not asked.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7094-7109
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7090-7105
                     let dest = match dest {
                         BusLineDest::Master => OutputDest::Master,
                         BusLineDest::Bus(name) => {
@@ -846,7 +846,7 @@ The assembly — resolve everything, then publish exactly once — is the same a
 one element fails midway the publish is never reached, so **the previous line survives intact**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7127-7158
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7123-7154
         let installer = self
             .bus_line_programs
             .lock()
@@ -892,7 +892,7 @@ the very next block jumps by one sample**. Even a partial update, such as adding
 after `kick.send(verb, -12)`, re-ramps the `Output` bound for `verb` from 1.0 down to its target
 (say 0.25) over a few ms, sending an oversized signal into the reverb for that span.
 
-The fix is `line_republish_seeds` (`engine_wrap.rs:2162-2193`). It matches the old program's
+The fix is `line_republish_seeds` in `engine_wrap.rs`. It matches the old program's
 `Vec<LineOp>` against the effective values read through
 `LineProgramInstaller::current_gains()` (next section) by **the ordinal on which each op kind
 occurs** — `Gain` against `Gain`, `Pan` against `Pan`, and `Output` against `Output` whose
@@ -912,7 +912,7 @@ tracked by `explicit_line` (the branch is at
 Here is the install handle.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:806-818
+// rust/crates/orbit-audio-native/src/output.rs:805-817
     pub fn line_program_installer(&self) -> LineProgramInstaller {
         let control = self.line.line_control();
         let current = control.clone();
@@ -938,10 +938,17 @@ handing them to `line_republish_seeds`. That is also why the `current_gain` cell
 `Box<[Cell<f32>]>` to **`Box<[AtomicU32]>`** (Relaxed): the RT-side store costs the same as a plain
 store on ARM64, but control can now read it safely.
 
-`EngineWrap` calls this handle **not only from `SetBusLine("master", …)` but from `SetGlobalGain`
-too** (`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9284-9290`). So the condition for
-`explicit_line` being raised is not "a `SetBusLine("master", …)` arrived" but "the master line was
-published at least once", and a single `global.gain()` is enough. The master gain section of
+🔴 **Corrected on 2026-09-11.** This used to say that `EngineWrap` calls this handle not only from
+`SetBusLine("master", …)` but from `SetGlobalGain` too. That was true when PR #823 landed, but the
+O-wire-b review fix (`9e22e427`) put `set_global_gain` back to writing only the atomic, and ruling
+F2 (design 611-o-surface §0, "do not mirror it") settles that this is the shape going forward.
+
+Today `set_global_gain` (`rust/crates/orbit-audio-daemon/src/engine_wrap.rs`) is a single
+`master_gain.store(...)` and does **not** touch the line-program installer. The unit test
+`set_global_gain_only_updates_the_compatibility_atomic` asserts that SetGlobalGain "must not
+republish a fresh master LineProgram" and "must leave the SetBusLine shadow untouched". So
+`explicit_line` is raised **only** when a `SetBusLine("master", …)` arrives; `global.gain()` does
+not raise it. The master gain section of
 [RE-1](/en/rust-engine/) records what the diff shows about that difference (where the ramp length
 comes from, and where a republished ramp starts).
 
@@ -958,7 +965,7 @@ native) does not know what an instrument is; it holds only the abstraction "some
 back N blocks when rendered".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:849-862
+// rust/crates/orbit-audio-native/src/output.rs:848-861
 /// A callback-owned source which renders one or more interleaved output units.
 pub trait BlockSource: Send {
     fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
@@ -984,7 +991,7 @@ Feed collection is done by `collect_source_feeds` (`output.rs:772-801`), which m
 `SourceDest` to the core's `FeedDest`. Only the mapping is quoted here.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2041-2051
+// rust/crates/orbit-audio-native/src/output.rs:2082-2092
             let dest = match slot.dests[unit].load() {
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
@@ -1299,7 +1306,7 @@ commutes, so either order yields the same value). The invariant is therefore unm
 a DSL-level E2E, and the sole guard is a unit test whose rack stub **generates** sound.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:4968-4973
+// rust/crates/orbit-audio-native/src/output.rs:5010-5015
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(

@@ -23,8 +23,8 @@ use std::time::Duration;
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
 #[cfg(feature = "outproc-effect")]
 use orbit_audio_native::{
-    decode_bus_routing_sentinel, legacy_line_ops, BusSend, BusTarget, LegacyLineInstaller, LineOp,
-    LineOutput, LineProgram, LineProgramInstaller, OutputDest,
+    decode_bus_routing_sentinel, default_master_line_ops, legacy_line_ops, BusSend, BusTarget,
+    LegacyLineInstaller, LineOp, LineOutput, LineProgram, LineProgramInstaller, OutputDest,
 };
 use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputDeviceRequest, OutputError, OutputFault,
@@ -2108,20 +2108,16 @@ pub enum BusLineOp {
     },
 }
 
+/// master ラインの shadow 初期値。
+///
+/// 🔴 **`MasterLine::new` が RT へ install する program と同じ 1 関数から作る**
+/// （`default_master_line_ops` の doc を参照）。ここでリテラルを写していたときは、
+/// 1ch デバイスで `dest.right` が実体（`Some(1)` 固定）と食い違い、seed の Output 照合が
+/// 外れて既定 0.0 に落ちていた（`/code:pr-review-team` silent-failure-hunter・2026-09-11）。
+/// バス側で `legacy_line_ops` に統一したのと同じ手当てを master にも当てる。
 #[cfg(feature = "outproc-effect")]
 fn default_master_line_program(output_channels: u16) -> Vec<LineOp> {
-    vec![
-        LineOp::Rack,
-        LineOp::Gain(1.0),
-        LineOp::Output(LineOutput {
-            dest: OutputDest::Device {
-                left: 0,
-                right: (output_channels > 1).then_some(1),
-            },
-            thru: false,
-            gain: 1.0,
-        }),
-    ]
+    default_master_line_ops(output_channels)
 }
 
 /// バスが実際に走らせている初期 program。

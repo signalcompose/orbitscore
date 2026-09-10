@@ -34,7 +34,7 @@ device"; the presence of capture does not change the output samples themselves (
 it does not mutate).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1739-1762
+// rust/crates/orbit-audio-native/src/output.rs:1780-1803
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
