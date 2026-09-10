@@ -2090,7 +2090,6 @@ fn line_gain(
     gain
 }
 
-#[inline]
 /// Apply a bus-level pan to an interleaved stereo buffer.
 ///
 /// 🔴 The `√2` is **not** an extra boost — it makes this stage unity at center.
@@ -2106,6 +2105,7 @@ fn line_gain(
 /// Do not remove the factor as "double compensation": the compensation is what keeps this stage
 /// transparent. The source side cannot drop its own center application without breaking bit
 /// identity for existing scores (design `docs/design/611-o-surface-bundle-design.md` §4.1).
+#[inline]
 fn apply_line_pan(buf: &mut [f32], frames: usize, pan: f32) {
     let (left, right) = equal_power_pan(pan);
     let left = left * std::f32::consts::SQRT_2;
@@ -3901,7 +3901,10 @@ mod tests {
             ]),
             2,
         );
-        for frame in hard_left.chunks_exact(2) {
+        // `as_chunks::<2>()` rather than `chunks_exact(2)`: clippy 1.98 rejects the latter for a
+        // constant size (`chunks_exact_to_as_chunks`), and CI tracks stable while this machine
+        // may be a release behind.
+        for frame in hard_left.as_chunks::<2>().0 {
             assert!((frame[0] - 2.0).abs() <= 1e-6, "hard-left L={}", frame[0]);
             assert!(frame[1].abs() <= 1e-6, "hard-left R={}", frame[1]);
         }

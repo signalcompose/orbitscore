@@ -430,7 +430,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1643-1680
+// rust/crates/orbit-audio-native/src/output.rs:1654-1691
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -486,7 +486,7 @@ device"** — with the placement stage added, anything other than 2ch always pay
 placement.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1728-1818
+// rust/crates/orbit-audio-native/src/output.rs:1739-1829
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -590,7 +590,7 @@ a second buffer at device width there would be nowhere for it to land — that i
 buffer exists.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2107-2111
+// rust/crates/orbit-audio-native/src/output.rs:2133-2137
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -631,7 +631,7 @@ The device width appears in exactly one place: `place_master_into_device`, which
 `master.buffer` onto the device-width `hw`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1892-1916
+// rust/crates/orbit-audio-native/src/output.rs:1903-1927
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -699,7 +699,7 @@ fails design 611 §4.2's "copy it *without changing its meaning*", so the copy l
 with the §5.1 mechanism that carries the effective gain across a republish.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9741-9750
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9727-9736
     /// マスターゲインを設定する。PR-O3b では従来どおり atomic だけを更新し、RT 専有の
     /// `gain_current` を呼び出し間で連続させる。master line への写しは、TS の
     /// `global.gain()` を `SetBusLine("master", …)` へ切り替え、再 publish 時に実効値を引き継ぐ
@@ -796,7 +796,7 @@ device placement). Only once it is `true` does `execute_master_line` get called 
 published op sequence in order.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1821-1838
+// rust/crates/orbit-audio-native/src/output.rs:1832-1849
 fn execute_master_line(
     master: &mut MasterLine,
     frames: usize,
@@ -837,7 +837,7 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1920-1961
+// rust/crates/orbit-audio-native/src/output.rs:1931-1972
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -888,7 +888,7 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:3001-3018
+// rust/crates/orbit-audio-native/src/output.rs:3027-3044
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

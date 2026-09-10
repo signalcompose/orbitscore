@@ -56,7 +56,7 @@ event is always consumed — if it were not consumed, events tagged for an
 unattached bus would be retained forever (the landmine described below).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1404-1423
+// rust/crates/orbit-audio-native/src/output.rs:1415-1434
 /// named routing tag を受ける per-bus insert stage。sum/aux を含む mixer graph の1ノード
 /// （#459/#453・MX.1-MX.5）。
 ///
@@ -98,7 +98,7 @@ Beyond the four fields of 2026-07-17, `InsertBusStage` used to carry four mixer 
 **a single `line: LineSlot`**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1424-1426
+// rust/crates/orbit-audio-native/src/output.rs:1435-1437
     /// Published line program. Routing, sends, and rack position are all interpreted from this one
     /// ordered program by the callback post-loop.
     line: LineSlot,
@@ -134,7 +134,7 @@ The `render_engine_with_sources` seen in RE-1 falls back entirely to the legacy 
 pays nothing for the bus pool.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1954-1959
+// rust/crates/orbit-audio-native/src/output.rs:1965-1970
     if sources.is_empty() {
         if buses.iter().any(|bus| bus.active.load(Ordering::Relaxed)) {
             render_engine_with_insert_buses_and_source_outputs(
@@ -152,7 +152,7 @@ that both the marking pass and the accumulation pass reuse (loading the same ato
 let a `SetBusRouting` that lands mid-callback make the two passes see different things).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2170-2176
+// rust/crates/orbit-audio-native/src/output.rs:2196-2202
     let bs = (hw.len() / output_channels) * output_channels;
 
     // active フラグを 1 回だけ atomic load して使い回す（RT: 同じ判定を何度も load しない）。
@@ -211,7 +211,7 @@ from 2026-07-17 is the added `kind: BusKind` (insert / sum / aux) and the shared
 the mixer.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2258-2280
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2252-2274
 /// 1 本の named bus stage（insert/sum/aux 共通）を構成する部材（`build_effect_bus_stages` →
 /// `install_effect_bus_slots` の間で運ぶ・#434 S2/S3・M2 で kind/routing を追加）。
 /// effect-only / both の両起動経路で同一のライフサイクルを共有する。
