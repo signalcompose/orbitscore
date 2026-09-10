@@ -1,30 +1,40 @@
 # OrbitScore
 
-Live coding music DSL for VS Code with a bundled native audio engine (Rust `orbit-audio-daemon`).
+Live coding music DSL for VS Code, with a native audio engine bundled inside the extension.
 
-Write `.orbs` patches and run them line by line with `Cmd+Enter`. No separate audio-engine install required.
+Write `.orbs` patches and run them with `Cmd+Enter`. Nothing else to install — the Rust audio
+daemon (`orbit-audio-daemon`), the plugin hosts, and the standard plugins all ship in the `.vsix`.
 
-## Supported Platforms
+## Install
 
-**macOS (Apple Silicon)** only as of 2.0.0.
+OrbitScore is distributed as a `.vsix` on **[GitHub Releases](https://github.com/signalcompose/orbitscore/releases)**.
+It is not published on the VS Code Marketplace or Open VSX.
+
+1. Download `orbitscore-<version>.vsix` from the latest release
+2. In VS Code: **Extensions** → `…` menu → **Install from VSIX…**, or from a terminal:
+
+```bash
+code --install-extension orbitscore-<version>.vsix
+```
+
+Updating works the same way — install the newer `.vsix` over the old one.
+
+## Supported platforms
 
 | OS / Arch | Status |
 |---|---|
 | macOS Apple Silicon (arm64) | ✅ Supported |
-| macOS Intel (x86_64) | ⚠️ Untested (bundled binary is universal but not actively verified) |
-| Windows / Linux | ❌ Not supported currently |
+| macOS Intel (x86_64) | ❌ Not supported — the release builds an arm64-only `.vsix`, and Rosetta is not planned |
+| Windows / Linux | ❌ Not supported |
 
-Cross-platform support is tracked as a future effort.
+## Quick start
 
-## Quick Start
+1. Open or create a `.orbs` file (starter patches live in [examples/](https://github.com/signalcompose/orbitscore/tree/main/examples))
+2. Open the **Audio Engine Settings** view in the activity bar and pick an output device
+3. Run **OrbitScore: Start / Stop Engine** — the status bar shows `🎵 OrbitScore: Ready`
+4. Select some code, or put the cursor on a line, and press `Cmd+Enter`
 
-1. Open or create a `.orbs` file (a starter template is in [examples/](https://github.com/signalcompose/orbitscore/tree/main/examples))
-2. Run **OrbitScore: Start Engine** (status bar shows `OrbitScore: Ready`)
-3. Select code (or place the cursor on a line) and press `Cmd+Enter`
-
-The status bar item `✅ engine: rust (native)` confirms the native audio daemon is in use.
-
-Minimal example:
+New to the DSL? Run **OrbitScore: Start the Walkthrough** for a guided tour inside the editor.
 
 ```orbitscore
 var global = init GLOBAL
@@ -36,69 +46,105 @@ kick.audio("kick.wav").play(1, 0, 1, 0)
 LOOP(kick)
 ```
 
-## Features
+## What you get
 
-- Syntax highlighting for `.orbs` files
-- Run selection with `Cmd+Enter` (single line or multi-line block)
-- IntelliSense / hover for DSL keywords
-- Real-time syntax diagnostics
-- Status bar indicators for engine state and audio backend
-- Bundled native audio daemon (`orbit-audio-daemon`) + out-of-process CLAP/VST3 host children
+**Editing**
 
-### New in 2.0.0
+- Syntax highlighting, IntelliSense, and hover documentation for `.orbs`
+- Real-time syntax diagnostics as you type
+- Run a selection or the block under the cursor with `Cmd+Enter`, with a configurable line flash
+- A per-sequence playhead that follows playback in the editor gutter
+- A **Learning** view and an in-editor walkthrough
 
-- **MIDI output** — scale degrees/notes resolve to MIDI notes + velocity, emitted to a CoreMIDI / IAC virtual port
-- **Pitch DSL** — musical pitch via scale degrees, chords, voicing, mode, and expression
-- **comp** — automatic accompaniment: voice-leading (C1) + comp rhythm (C2a)
-- **Ableton Link Audio (LinkAudio)** — OrbitScore acts as the Link tempo leader; Ableton Live follows OrbitScore's tempo
-- **quantize** — bar-quantized scheduling control
+**Sound**
+
+- Sample playback (WAV / AIFF / MP3 / MP4) with `chop(n)` slicing and sample-accurate scheduling
+- Independent tempo and meter per sequence — polymeter falls out of the model
+- Real-time `gain(dB)` and `pan()` that apply while a sequence is playing
+- **Mixer / routing**: group buses (`sum`), aux buses and sends (`aux` / `send`)
+- **Plugin hosting**: CLAP and VST3 effects and instruments, each in its own out-of-process
+  child, with racks, plugin UIs opened from the score, and a scanned catalog with name completion
+
+**Notes**
+
+- **Pitch DSL** — scale degrees, chords, voicing, modes, ties and legato, per-note expression
+- **MIDI output** to a CoreMIDI / IAC virtual port
+- **comp** — automatic accompaniment with voice leading and comp rhythm
+
+**Projects**
+
+- `import { … } from "./file.orbs"` splits a set into several files. A plain single-file `.orbs`
+  keeps working exactly as before
+
+## Not in this build
+
+Two DSL surfaces parse and run but produce no effect. Both warn once in the OrbitScore output
+channel rather than failing silently.
+
+| Surface | What happens |
+|---|---|
+| `global.linkAudio()` / Ableton Link tempo push | **No LinkAudio.** Audio goes to the hardware device instead. Ableton Link is dual-licensed GPL / commercial, so enabling it would put GPL code into the shipped binary — the daemon feature is off by default and the release does not turn it on |
+| `global.compressor()` / `limiter()` / `normalizer()` | **No-ops.** The only implementation lived in the retired audio backend and has no replacement on the native engine. Put a CLAP / VST3 plugin on the master bus instead |
 
 ## Commands
 
 | Command | Description |
 |---|---|
-| `OrbitScore: Start Engine` | Boot the audio engine |
-| `OrbitScore: Run Selection` | Execute selected text or current block (`Cmd+Enter`) |
-| `OrbitScore: Stop Engine` | Stop the engine |
+| `OrbitScore: Start / Stop Engine` | Boot or stop the audio engine |
+| `OrbitScore: Run Selection` | Execute the selection or the current block (`Cmd+Enter`) |
+| `OrbitScore: Restart Engine (recovery)` | Stop and start again after a failure |
 | `OrbitScore: Start Engine (Debug)` | Boot with verbose logging |
-| `OrbitScore: Configure Flash` | Customize line-flash visual feedback |
+| `OrbitScore: Select Audio Device (Engine View)` | Choose the output device |
+| `OrbitScore: Browse Plugins` | Browse the scanned CLAP / VST3 catalog |
+| `OrbitScore: Rescan Plugin Catalog` | Re-scan installed plugins |
+| `OrbitScore: Configure Flash Settings` | Customize the line-flash feedback |
+| `OrbitScore: Start the Walkthrough` | Open the guided tour |
+| `OrbitScore: Open Learning Site` / `Open Dev Docs` | Open the documentation sites |
+| `OrbitScore: Register Claude Code MCP Server` | Wire the extension's MCP server into an agent |
 
 ## Settings
 
 | Setting | Default | Description |
 |---|---|---|
-| `orbitscore.audioDevice` | `""` | Output audio device to use. Empty means no device is selected; use `"__default__"` for the operating system default output. |
-| `orbitscore.flashCount` | `3` | Number of times to flash executed lines (1–5) |
-| `orbitscore.flashDuration` | `150` | Duration of each flash in milliseconds (50–500) |
-| `orbitscore.flashColor` | `selection` | Color theme for flash (`selection` / `error` / `warning` / `info` / `custom`) |
-| `orbitscore.flashCustomColor` | `#ff6b6b` | Custom flash color (hex) when `flashColor` is `custom` |
+| `orbitscore.audioDevice` | `""` | Output device. Empty means none selected; `"__default__"` uses the OS default output |
+| `orbitscore.engineDebug` | `false` | Start the audio engine in debug mode |
+| `orbitscore.flashCount` | `3` | Times to flash executed lines (1–5) |
+| `orbitscore.flashDuration` | `150` | Flash duration in milliseconds (50–500) |
+| `orbitscore.flashColor` | `selection` | Flash color theme (`selection` / `error` / `warning` / `info` / `custom`) |
+| `orbitscore.flashCustomColor` | `#ff6b6b` | Custom flash color when `flashColor` is `custom` |
+| `orbitscore.playheadPalette` | 32 colors | Playhead highlight colors; sequences are assigned from this list |
+| `orbitscore.mcpServer.port` | `0` | Port for the MCP control server. `0` disables it. Development and agent integration only |
 
 ## Troubleshooting
 
-### Status bar shows `❌ daemon: not found`
+**Status bar shows `daemon: not found`**
 
-The bundled `orbit-audio-daemon` could not be located. Try:
+The bundled `orbit-audio-daemon` could not be located.
 
-1. Reinstall the extension (the `.vsix` may be corrupted or partially installed)
-2. Or build it yourself (`cd rust && cargo build --release`) and set `ORBIT_AUDIO_DAEMON_PATH` to the binary
-3. Open `View → Output → OrbitScore` to see the resolver's failure reason
+1. Reinstall the extension — the `.vsix` may be partially installed
+2. Or build it yourself (`cd rust && cargo build --release`) and point `ORBIT_AUDIO_DAEMON_PATH` at the binary
+3. Open **View → Output → OrbitScore** for the resolver's failure reason
 
-### Engine starts but no sound
+**The engine starts but there is no sound**
 
-- Open the **Audio Engine Settings** view (activity bar) and pick the correct output device
-- The selected device is saved to `orbitscore.audioDevice`
+- Open **Audio Engine Settings** and select an output device. The choice is saved to `orbitscore.audioDevice`
 - Restart the engine after changing the device
 
-### Engine crashes on boot
+**The engine crashes on boot**
 
-- Check `View → Output → OrbitScore` for stderr from the engine process
-- A common cause is sample-rate mismatch when the input device differs from the output device. Forcing input channels off (`numInputBusChannels: 0`) is already enabled by default.
+- Check **View → Output → OrbitScore** for the engine's stderr
+- A common cause is a sample-rate mismatch when the input device differs from the output device
+
+**A plugin does not load**
+
+- Run **OrbitScore: Rescan Plugin Catalog**, then **Browse Plugins** to confirm it was found
+- Plugin children run out of process, so an attach failure appears in the output channel rather
+  than as an editor diagnostic
 
 ## Links
 
-- 📦 [Download the latest `.vsix`](https://github.com/signalcompose/orbitscore/releases) — GitHub Releases
-- 🎓 [User Learning Site (ja)](https://signalcompose.github.io/orbitscore/) — full feature docs (MIDI, Pitch DSL, comp, LinkAudio)
-- 🎓 [User Learning Site (en)](https://signalcompose.github.io/orbitscore/en/)
+- 📦 [Releases](https://github.com/signalcompose/orbitscore/releases) — download the `.vsix`
+- 🎓 [User guide (ja)](https://signalcompose.github.io/orbitscore/) / [(en)](https://signalcompose.github.io/orbitscore/en/)
 - 🐛 [Report an issue](https://github.com/signalcompose/orbitscore/issues)
-- 📖 [Source code](https://github.com/signalcompose/orbitscore) — Contributions welcome
-- 📜 License: Signal compose Fair Trade License (extension).
+- 📖 [Source code](https://github.com/signalcompose/orbitscore)
+- 📜 License: Signal compose Fair Trade License (extension)

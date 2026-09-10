@@ -17,6 +17,34 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(readme): rewrite the shipped README for the stable GitHub Release (#841) (Sep 10, 2026)
+
+拡張版 stable リリース（#827 §12）の手順 4。`.vsix` に同梱される
+`packages/vscode-extension/README.md` と root `README.md` を、**出荷物の実態**に合わせた。
+
+**直した事実誤り 3 件**（いずれも出荷物に対して偽だった）:
+
+| 箇所 | 旧記述 | 実測 |
+|---|---|---|
+| LinkAudio | 「OrbitScore acts as the Link tempo leader; Ableton Live follows OrbitScore's tempo」 | daemon の feature `link-audio` が default off。`copy-daemon-bin.sh` も `release.yml` も `--features outproc-effect,outproc-instrument` のみ。egress も §8.1.4 の tempo push も同じ feature に依存する |
+| Intel Mac | 「Untested (bundled binary is universal but not actively verified)」 | `release.yml` の `VSIX_TARGET: darwin-arm64`。universal ではない。方針も Apple Silicon のみ |
+| time-stretch / pitch shift | root README が `.time()` / `.fixpitch()` を Core Features に列挙 | `parser/types.ts:493` に「'time' and 'fixpitch' removed - not yet implemented」。#213 で defer 中 |
+
+**追加**: `global.compressor()` / `limiter()` / `normalizer()` が native engine で no-op であることを
+「Not in this build」表に明記した（#502 で唯一の実装だった SC synthdef が消えたため）。
+
+**その他の追従**: `✅ engine: rust (native)` ステータスバー表示は #108 以降存在しない
+（健全時はインジケータを出さない・`updateBundleStatus`）。コマンド一覧が 5 件しか載っておらず
+プラグイン系・walkthrough・MCP 登録が抜けていた。設定一覧が 5 件で `engineDebug` /
+`mcpServer.port` / `playheadPalette` が抜けていた。いずれも `package.json` の `contributes` から
+実体を引いて書き直した。
+
+**入手経路**: Marketplace / Open VSX には出さない（owner 2026-09-10）ので、
+両 README とも **GitHub Release の `.vsix`** を先頭に置いた。
+
+**版番号は据え置き**: 見出しから `(2.0.0)` を外して版に依存しない形にした。実際の版番号更新は
+手順 5（owner 裁定）で行う。
+
 ### docs(spec): record that the global mastering effects are no-ops after the SC removal (#502) (Sep 10, 2026)
 
 束 #840 を締める前の追従。`INSTRUCTION_ORBITSCORE_DSL.md` の Implementation Status は
