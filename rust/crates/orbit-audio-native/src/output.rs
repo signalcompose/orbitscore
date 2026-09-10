@@ -738,7 +738,24 @@ pub struct MasterLine {
     ramp_frames: u32,
     /// `SetBusLine("master", ...)` が publish する汎用 program。未 publish の間は固定互換経路を
     /// 実行し、既存譜面の bit-level 出力を保つ。
+    ///
+    /// 🔴 **ここに書いてある既定 program は RT では一度も実行されない。** `explicit_line` が
+    /// `false` の間は `render_block_with_sources` が固定互換経路の側へ分岐し、`true` になるのは
+    /// control が program を publish した後だからである（publish された時点で中身は control 側の
+    /// 値に置き換わっている）。`engine_wrap.rs` の `default_master_line_program` が
+    /// `output_channels` を見て `right` を出し分けるのに対しここが `Some(1)` 固定なのは、
+    /// **この値が使われないため**であって不整合ではない。
     line: LineSlot,
+    /// control が master program を **一度でも publish したか**（不可逆）。`line` の中身からは
+    /// 導出できない（RT で既定値と深い比較をすることになり、かつ「既定と同じ program を明示的に
+    /// publish した」場合を区別できない）。
+    ///
+    /// 名前は「明示的な line が入ったか」の意であり、`SetGlobalGain` の atomic 更新では変わらない。
+    ///
+    /// 🔴 **いつこの分岐を消せるか**: PR-O4 で TS の `global.gain()` が
+    /// `SetBusLine("master", …)` を送る新表面へ切り替わり、その経路が実機で確かめられ、PR-O6 で
+    /// 旧 `SetBusRouting` 系が撤去された後。そこで固定互換経路と本フラグを同時に削り、
+    /// `execute_master_line` の 1 本にできる見込みである。
     explicit_line: Arc<AtomicBool>,
 }
 
@@ -1805,6 +1822,9 @@ fn execute_master_line(
                 if let OutputDest::Device { left, right } = output.dest {
                     add_to_device(&mut device, &master.buffer[..bs], frames, left, right, gain);
                 } else {
+                    // release ではこの debug_assert は no-op。到達不能を保証する唯一の境界は
+                    // control 層の `set_bus_line` master 分岐であり、その検証が破れればこの出口は
+                    // 無音のまま捨てられ、ログにも残らない。
                     debug_assert!(false, "master line destination was not validated");
                 }
                 if !output.thru {
@@ -2794,6 +2814,7 @@ fn start_output_inner(
     // （`place_master_into_device`）でのみ現れる。
     let engine = Engine::new(sample_rate, 2);
     let mut master = MasterLine::new(sample_rate, post);
+    master.line.set_sample_rate(sample_rate);
     // master.buffer も 2ch 前提で事前確保する（bus buffer と同じ規律・row 2）。
     master.ensure_buffer_len(sample_rate as usize * 2);
     master.ensure_device_buffer_len(sample_rate as usize * channels as usize);

@@ -178,9 +178,178 @@ else { post → advance_gain → place_master_into_device }  // 従来経路（1
 🔴 **教訓**: Rust に大きな差分を入れたら **`docs:check` は cargo と同じ列に置く**。
 引用は「コードは正しいが記述が古い」を検出する層で、他のどのテストも代わりにならない。
 
+#### `/simplify` の結果（4 観点を並行・束 PR [#824](https://github.com/signalcompose/orbitscore/pull/824)）
+
+**適用したもの**:
+
+| 指摘 | 出所 | 何をしたか |
+|---|---|---|
+| master 分岐と named bus 分岐で **Device 変換・Render/Link 拒否が一字一句同一** | altitude・simplification が**独立に**指摘 | `device_dest_from_wire` / `render_dest_rejected` / `link_dest_rejected` の 3 つへ抽出。両分岐から呼ぶ |
+| `link` のエラー文言が「requires link-audio」で誤解を招く | altitude | **feature の有無ではなく RT が未配線だから拒否している**ので「is not wired into RT execution yet」へ。code は §4.1 どおり `LINK_AUDIO_UNAVAILABLE` のまま |
+| `explicit_line` の**消える条件**がコメントに無い | altitude | 「PR-O4 で新表面が実機で確かめられ、PR-O6 で旧経路が撤去され、O0 golden を取り直した後」と明記 |
+| `MasterLine::new` の既定 program が control 側 shadow と食い違う | simplification | **RT では一度も実行されない**（`explicit_line == false` の間は固定経路へ分岐する）ことを明記。不整合ではない |
+| `explicit_line` は `SetGlobalGain` でも `true` になる | simplification | フィールドの doc に明記（名前は「明示的な line が入ったか」の意） |
+
+🔴 **1 件は指摘が誤りだった（適用しかけて戻した）**。simplification が「`gain` の上限チェックが
+session 側にしか無い＝乖離」と報告したので条件を揃えたが、**型が違うため乖離ではない**:
+session は JSON の **f64** を受けるので `> f32::MAX` を弾いてから `as f32` する必要がある（変換で
+`inf` になるのを防ぐ）。`engine_wrap` 側は既に **f32** で、`is_finite()` が `inf` を弾き、有限な f32 は
+定義上 `f32::MAX` 以下。戻した上で**理由をコメントに残した**（次に同じ指摘が出ても即座に却下できる）。
+
+**skip したもの**:
+
+| 指摘 | skip の理由 |
+|---|---|
+| forward-only 判定が 3 箇所目 / activation ループが同一 | 相手の `set_bus_routing` は **PR-O6 で退役**（計画 §1.10）。今統合すると O6 で解く手間が増える。かつ `set_bus_line` が `bus_kinds` を見ないのは設計 §4.1 の**裁定 ③（kind は問わない）どおり** |
+| `LineOp::Gain` の逐語重複（6 行 × 2） | 軽微。master と insert bus で buffer と `ramp_frames` の取得元が違い、抽出しても引数で受け渡すだけになる |
+| `bus_lines` / `bus_line_programs` の二重 map | 旧 `SetBusRouting` と対になっており、PR-O6 で片方が消える |
+| Render/Link の判断が 3 層 4 箇所 | 一本化は範囲が大きい。**一次情報は `validate_line_program`** である旨を各所のコメントに書いて代替した |
+
+**efficiency は「該当なし」**が結論 — RT パス（`execute_master_line` / `LineSlot::load`）に
+**alloc・lock・syscall は無く**、`LineSlot` / `LineExchange` の退役規律も PR-O3a の insert bus と
+**同じ型をそのまま再利用**している。control 側の clone やロック区間の指摘はすべて
+「ユーザー操作 1 回・低頻度」の規模だった。
+
+適用後の再検証: cargo **617 / 339 passed・0 failed**（変更前と同数）・fmt・clippy 警告なし・
+`docs:check` **1,012 verified / 0 failed**（helper 追加で行番号が動いたので `--fix` で再アンカー）。
+
+#### 🔴 レビュー・ラウンド 1 — 既存機能の回帰を 1 件止めた
+
+レビューチーム 4 名 + Fable 監査を**並行**投入（CLAUDE.md）。**Critical 5 / Important 3 / Minor 2**。
+
+##### 最重要: `global.gain()` の可聴ポップ（**code-reviewer と Fable が独立に指摘**）
+
+`SetGlobalGain` を master line へ写した結果、`LineProgram::new` が `current_gain` を全 op で 1.0 から
+始めるため、**2 回目以降の `global.gain()` で ramp が unity から再開**する。直前の実効ゲイン
+（例 −20 dB）から目標（−10 dB）へ寄る代わりに**一度 1.0 へ跳ね上がってから寄る** — 64 frame の
+小バッファでは数ブロックかかるので可聴のポップになる。
+
+🔴 **これは新機能の不足ではなく回帰**である。この PR の前は `SetGlobalGain` が `gain_target` atomic を
+更新するだけで、`advance_gain` が**呼び出しをまたいで `gain_current` を連続させていた**。
+
+**裁定と、その前にやったこと**: 設計 §4.2 は「**意味を変えない形で**写す」と書いており、条件を
+満たしていない。運用規則 6 に従い**設計を先に更新**してから実装を直した:
+
+| 文書 | 追記 |
+|---|---|
+| §4.2 | 🔴 **この写しは PR-O4 と同時**。O3b で写すと TS がまだ `SetGlobalGain` を送るので回帰する |
+| §5.1 | 🔴 **再 publish 時の `current_gain` 初期値規則**（本書に欠けていた節）|
+
+Fable が「**§5.1 に新 program の初期値規則が無い**」と指摘したのが要点だった。規則が無いので
+実装者が判断できず、Codex は素直に `LineProgram::new` を使った。**規則を先に書く。**
+
+##### 適用した fix（Codex・ポリシーを 1 本にまとめて一括発注）
+
+| # | 何を |
+|---|---|
+| 1 | `set_global_gain` から master line 再 publish を**外した**（`master_gain.store` のみ＝この PR の前と同じ）|
+| 2 | 🔴 **`master.line.set_sample_rate` の呼び忘れ**（Fable）。`LineSlot::new` は `ramp_frames: 240` 固定で、呼び出しは insert bus の 1 箇所だけだった → 44.1k / 96k で master の ramp が 5 ms からずれていた |
+| 3a | `bus_actives` の活性化テスト（旧 `SetBusRouting` には前例があるのに新規側に無かった）|
+| 3b | **device channel の 1 始まり → 0 始まり変換**。🔴 `device_dest_from_wire` は**どのテストからも一度も実行されていなかった** |
+| 3c | `set_bus_line("master", …)` の成功系と全か無か（既存の master テストは installer を直接呼んでおり `set_bus_line` を通らなかった）|
+| 3d | 裁定③（kind を問わない）の**正のテスト**。🔴 Codex が「**kind チェックを復活させても既存 290 件は全緑**」を先に実証してから追加した＝変異検証として機能した |
+| 4 | `debug_assert!` が release で no-op であること・到達不能を保証するのは control 層だけであること・破れたら**無音でログにも残らない**ことをコメント化（実装は変えない）|
+| 5 | `explicit_line` の doc から**一次文書に根拠の無い一文**を削除（`/simplify` で main が書いたもの）|
+
+##### 検証（🔴 すべて main が本ツリーで実行）
+
+| 検証 | 結果 |
+|---|---|
+| `cargo test --workspace` | **617 passed / 0 failed / 38 ignored** |
+| `cargo test`（outproc features） | **344 passed / 0 failed / 13 ignored**（339 → 344・新規 5 件）|
+| fmt / clippy 2 本 | 警告なし |
+| `npm test` | **2,329 passed / 58 skipped** |
+| `npm run lint` / `typecheck:e2e` / `docs:build` | 緑 |
+| `npm run docs:check` | **1,012 verified / 0 failed**（Rust の行番号が動いたので `--fix` + 引用の中身を差し替え）|
+
+🔴 **Codex は sandbox で cargo の 29 件 / 32 件を落としていた**（`bind_localhost ... Operation not
+permitted`）。本ツリーでは **bind エラー 0 件で全緑**。「委譲先の緑は実機の緑ではない」が再現した。
+
+##### owner の裁定を仰いでいる 2 件（O3b の範囲外）
+
+Fable が **設計 §4.1 自体が 2026-09-03 の裁定を反映していない**ことを発見した:
+
+- **`pan` op が wire に無い** — §2.4b / W-18 は「wire に `pan`」と書くが §4.1 の `WireLineOp` は 3 op
+- **mono device が wire で表現できない** — §2.2 の `mix.output(3)` / §5.1 の `right: None` に対し、
+  §4.1 の `channels: [number, number]` は 2 要素必須
+
+実装は §4.1 に忠実なので**本 PR の欠陥ではない**。§4.1 の改訂自体は運用規則 6 に従い今やるべきだが、
+束の範囲を広げる判断なので owner の裁定待ち。
+
+#### 🔴 束の締め — 収束条件を満たした（2026-09-09 実測）
+
+**マージ前ゲート**（無条件の 3 行 + build）:
+
+| ゲート | 結果 |
+|---|---|
+| `npm run build` | errors 0 |
+| `bash rust/crates/orbit-std-gain/bundle-macos.sh` | `Gain.clap` 生成 |
+| `cargo test -p orbit-effect-rack-child --lib -- --ignored` | **3 passed**（実 gain プラグイン依存）|
+| `cargo test -p orbit-effect-rack-child --lib`（`--ignored` **無し**）| **16 passed**（退行検知テストが実際に走った）|
+
+**実機 gated 全件**（`npm run test:e2e:gated`・523 秒）: **29 passed / 1 failed**。
+
+🔴 **収束条件「goldens が 1 つも動かないこと」を達成**:
+
+| golden | 実測 |
+|---|---|
+| `#611 O0-1` no-bus RMS | `0.08701663328646671` / `0.0870166332956341`（2 セッション）|
+| `#611 O0-2` sum-output RMS | `0.08701663328620282` |
+| `#611 O0-3` `send(0.3)` の total/dry | **`1.300000013268198`**（= 1 + 0.3）|
+| `#611 O0-4` `effect + gain(-6)` | `effectOnly 1.9952622668994517` / `combined 0.9999999200541101` |
+
+**4 件とも通過**。`#611 O0-4`（#775 の間欠故障）も**今回は緑**で、U2 に該当するログは 0 行だった。
+
+唯一の失敗は **`steps the live playhead`**（`timed out waiting for [STEP] markers ... after 20000ms`）で、
+これは **main baseline の既知の赤**（台帳に記載済み）。**新しい赤は 0 件。**
+
+孤児プロセス（`OrbitStudio` / `orbit-audio-daemon`）の残留なしも確認した。
+
+⚠️ **ログの所在で 2 回つまずいた**: `nohup` を `dangerouslyDisableSandbox` で回すと `$TMPDIR` が
+**sandbox 内とは別のパス**（`/var/folders/…/T/`）を指すため、sandbox 内から読めない。
+**完了マーカー（`EXIT=`）を先に見て集計行が無いことに気づいた**ので、「テスト本体に到達していない」と
+判断でき、実装ではなくログの所在を疑う方向に進めた。
+
+#### 🔴 owner 裁定（2026-09-10）— §4.1 を改訂し、`pan` / mono の実装は PR-O4 へ
+
+Fable が **設計 §4.1 だけが 2026-09-03 の裁定に追従していなかった**ことを発見した。
+
+| 層 | mono `device` | `pan` op |
+|---|---|---|
+| §2.2 / §2.4b（DSL 表面・09-03 裁定）| `mix.output(3)` = L+R マージ（Q-611-5）✅ | ライン要素（Q-611-4）✅ |
+| §2.x の TS 型（`:162` `:179`）| `[number,number] \| [number]` ✅ | `{ kind: 'pan' }` ✅ |
+| §5.1 / §5.3（Rust 型・RT 式）| `Device { right: Option<usize> }` ✅ | `LineOp::Pan` と式 ✅ |
+| 🔴 **§4.1（wire）** | **2 要素固定** ❌ | **3 op のみ** ❌ |
+
+🔴 **PR-O3b の実装は §4.1 に忠実だったので、実装の欠陥ではない。**
+**正本が古いと、忠実さがそのまま欠落になる。**
+
+**裁定**: §4.1 を改訂し、**実装は両方 PR-O4（束 O-surface）で 1 回にまとめる**。
+
+**なぜ O3b でやらないか**（2 件でコストが違うので分けて判断した）:
+
+| | mono `device` | `pan` op |
+|---|---|---|
+| RT の実装 | ✅ **既にある**（`add_to_device` が `right: None` で L+R を 0.5 マージ）| ❌ **無い**（`validate_line_program` が拒否し実行側も空）|
+| 必要な作業 | wire の型と parse（約 40 行）| wire + **RT 実行**（等パワー・約 150 行）|
+
+`pan` は RT 実装を伴うので O3b に入れると**「振る舞いを変えない」という束の性格が壊れ、
+goldens の「動かないこと」という検算が使えなくなる** — O3 を O3a / O3b に割ったのは
+まさにこの検算を守るためだった。mono だけ先に足すと **wire を 2 回変える**ことになり、
+一方通行の変更回数が増える。したがって**両方を O4 で 1 回にまとめる**。
+
+⚠️ 計画 §2.1 の「1 PR で wire と DSL の両方を変えると golden の差分がどちら由来か分からない」に
+抵触するが、**`pan` については §2.4b が既に「`pan` を含む譜面の golden は再ベースライン」と
+裁定済み**（owner 受け入れ済み）なので、帰属問題はその範囲で扱える。
+
+**更新した文書**: 設計 §4.1（型・検証表 2 行・経緯の引用ブロック）/ 計画 §1.10 の PR-O4 行
+（wire + RT の `Pan`・`SetGlobalGain` の写しも O4）。
+
 #### 未検証・次の束へ
 
-- 実機 gated（**goldens が 1 つも動かないこと**）は**束の締め**で 1 回
+- 実機 gated（**goldens が 1 つも動かないこと**）は**束の締め**で 1 回 → ✅ **上記のとおり達成**
+- 🔴 **PR-O4 が引き継ぐもの**（本 PR では実装しない）: `pan` op の wire + RT / mono `device` の wire /
+  `SetGlobalGain` の master line への写し（§4.2・ramp の実効値引き継ぎ機構とセット）
 - `LineOp::Pan` の wire 表現は無い（§4.1 の `WireLineOp` に `pan` が無い・PR-O4）
 - `dest.render` は登記簿（`DeclareRender`・PR-R2）が無いので今日はすべて拒否
 

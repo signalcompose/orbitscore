@@ -417,7 +417,7 @@ the callback body was a single function, `render_block`; as of 2026-09-01 it has
 `OutputStream::render_state`).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:814-820
+// rust/crates/orbit-audio-native/src/output.rs:831-837
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
@@ -428,7 +428,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1588-1625
+// rust/crates/orbit-audio-native/src/output.rs:1605-1642
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -484,7 +484,7 @@ device"** — with the placement stage added, anything other than 2ch always pay
 placement.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1673-1763
+// rust/crates/orbit-audio-native/src/output.rs:1690-1780
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -588,7 +588,7 @@ a second buffer at device width there would be nowhere for it to land — that i
 buffer exists.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2034-2038
+// rust/crates/orbit-audio-native/src/output.rs:2054-2058
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -629,7 +629,7 @@ The device width appears in exactly one place: `place_master_into_device`, which
 `master.buffer` onto the device-width `hw`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1831-1855
+// rust/crates/orbit-audio-native/src/output.rs:1851-1875
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -668,7 +668,7 @@ old `post`) and the gain into one struct and fixes the order as **rack → gain*
 toward the target the control side (`SetGlobalGain`) wrote atomically, one block at a time.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:800-810
+// rust/crates/orbit-audio-native/src/output.rs:817-827
     /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
     /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
     /// 算術のみ（alloc/lock/syscall なし）。
@@ -690,62 +690,21 @@ shorter, the value approaches the target over several blocks.
 The point worth holding onto is that **production now has exactly one multiplication path**.
 `orbit_audio_core::Engine::set_global_gain` (the core scheduler ramp) is no longer called from
 the daemon, and `EngineWrap::set_global_gain` only stores into the `MasterLine` target.
-🔴 **#611 PR-O3b (2026-09-09) added one more step**: on an `outproc-effect` build it also rewrites the
-first `Gain` op of the master line and republishes it (inserting one before the first `Output` when the
-program has none) *before* storing into the compatibility atomic.
-
-The thing worth holding onto here is that **the handle used for that republish is the same one that
-raises `explicit_line`**. The closure returned by `MasterLine::line_program_installer` always stores
-`true` into `explicit_line` once the install succeeds
-(`rust/crates/orbit-audio-native/src/output.rs:790-798`), so even in a session that never sends
-`SetBusLine("master", …)`, **one `SetGlobalGain` (the DSL's `global.gain()`) is enough** to move the
-master render onto the `execute_master_line` branch (the branch itself is at
-`rust/crates/orbit-audio-native/src/output.rs:1719-1721`, and the path from `SetGlobalGain` to
-`EngineWrap::set_global_gain` is at `rust/crates/orbit-audio-daemon/src/session.rs:2607-2610`).
-Reading the code literally, the fixed compatibility path applies only while neither `SetGlobalGain`
-nor `SetBusLine` has arrived.
-
-> NOTE: unverified — how that path difference shows up in the output has not been measured on real
-> hardware. What the diff does show is that `MasterLine::ramp_frames` (derived from the sample rate)
-> and the default `ramp_frames` of `LineSlot::new` (a fixed 240 at
-> `rust/crates/orbit-audio-native/src/output.rs:1196`; `set_sample_rate` is only called for insert-bus
-> lines, at `:2765`) are two different values, and that `LineProgram::new` starts every gain cell at
-> 1.0, so each republish restarts the ramp from 1.0 (`:1005-1020`).
+🔴 **#611 PR-O3b deliberately did *not* copy this into the master line** (ruled during review on 2026-09-09).
+Copying it would make `LineProgram::new` restart every ramp at unity, so calling `global.gain()` twice would
+**jump to 1.0 before settling** instead of gliding from the previous effective gain — an audible pop. That
+fails design 611 §4.2's "copy it *without changing its meaning*", so the copy lands in **PR-O4**, together
+with the §5.1 mechanism that carries the effective gain across a republish.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9260-9294
-    /// マスターゲインを設定する。`outproc-effect` build では master line の最初の gain op を
-    /// 差し替えて再 publish し、未 publish の互換固定経路用 atomic にも同じ値を store する。
-    /// `orbit_audio_core::Engine::set_global_gain`（core の scheduler ramp）は production から
-    /// 呼ばない（`docs/design/611-output-line-design.md` §5.4/§5.5 row 4・乗算経路を master line
-    /// 1 本にする）。`ramp_sec` は wire 互換のため受け続けるが、native 側は構築時に確定した
-    /// 固定 ~5ms/block のランプを使う（可変長ランプは持たない）。
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9479-9488
+    /// マスターゲインを設定する。PR-O3b では従来どおり atomic だけを更新し、RT 専有の
+    /// `gain_current` を呼び出し間で連続させる。master line への写しは、TS の
+    /// `global.gain()` を `SetBusLine("master", …)` へ切り替え、再 publish 時に実効値を引き継ぐ
+    /// PR-O4 と同時に入れる。`orbit_audio_core::Engine::set_global_gain`（core の scheduler ramp）は
+    /// production から呼ばない（`docs/design/611-output-line-design.md` §4.2/§5.1）。`ramp_sec` は
+    /// wire 互換のため受け続けるが、native 側は構築時に確定した固定 ~5ms/block のランプを使う。
     pub fn set_global_gain(&self, value: f32, _ramp_sec: f64) -> Result<(), WrapError> {
-        #[cfg(feature = "outproc-effect")]
-        {
-            let mut shadow = self.master_line_program.lock().map_err(|_| {
-                WrapError::OutProcEffect("master line program mutex poisoned".into())
-            })?;
-            if let Some(gain) = shadow.iter_mut().find_map(|op| match op {
-                LineOp::Gain(gain) => Some(gain),
-                _ => None,
-            }) {
-                *gain = value;
-            } else {
-                let position = shadow
-                    .iter()
-                    .position(|op| matches!(op, LineOp::Output(_)))
-                    .unwrap_or(shadow.len());
-                shadow.insert(position, LineOp::Gain(value));
-            }
-            (self.master_line)(LineProgram::new(shadow.clone()), usize::MAX, 0).map_err(
-                |error| {
-                    WrapError::OutProcEffectRequest(format!(
-                        "SetGlobalGain master program failed validation: {error}"
-                    ))
-                },
-            )?;
-        }
         self.master_gain.store(value.to_bits(), Ordering::Relaxed);
         Ok(())
     }
@@ -761,7 +720,7 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1859-1900
+// rust/crates/orbit-audio-native/src/output.rs:1879-1920
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -812,7 +771,7 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2923-2940
+// rust/crates/orbit-audio-native/src/output.rs:2944-2961
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(
@@ -982,7 +941,7 @@ i.e. two independent measurement paths agreeing at the same tap point). These fi
 - `rust/crates/orbit-audio-daemon/src/session.rs:691-718,1272-2372` — `session::run` (handshake, writer task, UI event forwarding) and the `handle_command` match arms (source of the command table)
 - `rust/crates/orbit-audio-native/src/output.rs:254-260,581-618,662-750,1513-1556` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
 - `rust/crates/orbit-audio-native/src/output.rs:682-688,700-754,1253-1277` — `ENGINE_CHANNELS` / `MasterLine` (rack → gain) / `place_master_into_device` (#649 PR-O2)
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9260-9294` — `EngineWrap::set_global_gain` (rewrites the master line's `Gain` op and republishes it, then stores into the compatibility atomic; `ramp_sec` kept for wire compatibility only — #611 PR-O3b)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9479-9488` — `EngineWrap::set_global_gain` (PR-O3b keeps it **atomic-only**; the copy into the master line lands in PR-O4; `ramp_sec` kept for wire compatibility only)
 - `rust/crates/orbit-audio-native/src/output.rs:1926-1930,1932-1985` — `DeviceLineBuffer` / `add_to_device` (the direct device line, #611 PR-O3a)
 - PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — bundle O-wire (line-program conversion, compatibility preserved)
 - [`docs/design/611-output-line-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/design/611-output-line-design.md) §5.2-5.5 — design source of truth for the master line, the 2ch internal width, and taking the core master gain out of production
