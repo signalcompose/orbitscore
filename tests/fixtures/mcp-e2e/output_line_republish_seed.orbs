@@ -7,9 +7,19 @@
 // jumping to a fresh default (the failure mode §4.3 names: "目標が 1.0 なので ramp が存在せず
 // 1 サンプルで跳ぶ").
 //
-// RUN(), not LOOP(): RUN() is unaffected by bar-boundary quantization (core spec:
-// "影響しない: RUN()（常に即時）"), so the test can perturb the gain after a short fixed sleep
-// instead of waiting out an uncertain quantization window.
+// 🔴 LOOP + `play(1, 0, 1, 0)`（2026-09-11 に書き直した）。
+//
+// 旧版は `RUN(tone)` + `play(1)` + 固定 sleep(300ms) だった。実機で回すと **capture 0.928 s が
+// 全長すべて peak 0.00000**（無音）で、切替点が見つからず落ちた。理由は 2 つある:
+//
+//  1. `sine_440.wav` は **ちょうど 1.000 s**（実測）。`RUN` の一発では、300 ms 待って MCP で
+//     `tone.gain(0)` を評価する往復が残り 700 ms に収まる保証がない。**素材が操作より短い。**
+//  2. gated スイートで `RUN(` を使う譜面はこれ 1 本だけで、他は全部 `LOOP`。
+//     他のテストはどれも固定 sleep ではなく**音が出るのを待って**から窓を取る。
+//
+// `play(1, 0, 1, 0)` は 120 BPM / 4 拍で 1 拍 = 0.5 s なので **1.0 s 間隔**。素材が 1.000 s
+// なので隙間なく連なり、440 Hz は 1 s でちょうど 440 周期＝つなぎ目の位相も連続する。
+// gain の変更は transport ではないので小節境界に量子化されない（LOOP でも即時に効く）。
 
 var global = init GLOBAL
 global.tempo(120)
@@ -24,6 +34,6 @@ var tone = init global.seq
 tone.beat(4 by 4).length(1)
 tone.audio("sine_440.wav").chop(1)
 tone.gain(-40).output(drums611e7)
-tone.play(1)
+tone.play(1, 0, 1, 0)
 
-RUN(tone)
+LOOP(tone)

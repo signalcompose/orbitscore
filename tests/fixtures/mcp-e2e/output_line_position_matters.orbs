@@ -6,7 +6,18 @@
 // B: kickB.effect([Gain(db: -12)]).output(verb611e6, thru: true)
 //    the gain runs first, so BOTH the master path and the aux-routed copy carry it.
 //    total_B = 2g.
-// ratio total_A / total_B = (1 + g) / (2g).
+//
+// 🔴 total_A に閉じた式は無い（2026-09-11 実機で確定）。out-of-process のラックは
+//    「1 block を child へ submit し前 block の出力を読む」実装で **+1 block 遅延**する
+//    （`outproc_effect.rs` の `process` の doc）。A は aux のタップが**ラックの前**なので、
+//    aux のコピーと master のコピーが 512 frames（10.7 ms @48k）ずれる。kick は減衰する
+//    過渡音なので、この程度のずれで**部分的に打ち消し合う** — 実測 total_A/plain = 0.9814 は
+//    同相加算 (1+g)=1.2512 でも電力加算 sqrt(1+g²)=1.0311 でもない。
+//    B は aux も master もラックの後なので**揃い**、total_B/plain = 0.50238 が 2g = 0.502377 と
+//    5 桁一致する（厳密）。
+//
+//    したがってテストは「B は厳密に 2g」「A/B は振幅の三角不等式 [(1-g)/2g, (1+g)/2g] の中」
+//    の 2 本立てで見る。kickC はその plain 基準。
 //
 // Each chain is written as ONE statement (a single method chain) — design 611-o-surface-bundle
 // §3.1 froze the batch unit at "1 statement" (the `//#evalBegin/End` selection-wide frame is a
@@ -32,5 +43,10 @@ kickB.beat(4 by 4).length(1)
 kickB.audio("kick.wav").chop(1)
 kickB.effect([Gain(db: -12)]).output(verb611e6, thru: true)
 kickB.play(1, 1, 1, 1)
+
+var kickC = init global.seq
+kickC.beat(4 by 4).length(1)
+kickC.audio("kick.wav").chop(1)
+kickC.play(1, 1, 1, 1)
 
 LOOP(kickA)

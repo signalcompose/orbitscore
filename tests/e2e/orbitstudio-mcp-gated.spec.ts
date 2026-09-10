@@ -408,7 +408,7 @@ function replaceGatedPluginFixtureSymlink(sourcePath: string, fixturePath: strin
   if (!GATED_PLUGIN_FIXTURE_PATH_ALLOWLIST.has(fixturePath)) {
     throw new Error(`refusing to replace non-E2E plugin path: ${fixturePath}`)
   }
-  fs.rmSync(fixturePath, { recursive: true, force: true })
+  fs.rmSync(fixturePath, RM_TREE)
   fs.symlinkSync(sourcePath, fixturePath)
 }
 
@@ -461,6 +461,48 @@ function processExists(pid: number): boolean {
  * list: it snapshots the list before starting its engine and may signal only
  * the single PID added by that successful start.
  */
+/**
+ * ツリー削除のオプション。🔴 `force: true` は **ENOENT しか**抑えない。VS Code の agent host は
+ * teardown 中も `<user-data-dir>/.../sdk-cache/...` へ書き続けるので、`recursive` の走査中に
+ * ファイルが増えて **`ENOTEMPTY` で落ちる**（2026-09-11 実機: `#661 D-2` と `D-3` が
+ * `rmdir '.../@anthropic-ai/sdk/lib'` で赤くなった。製品ではなく後始末の競合）。
+ * Node の `maxRetries` / `retryDelay` は EBUSY・ENOTEMPTY・EPERM 等をこのために再試行する。
+ */
+const RM_TREE = { recursive: true, force: true, maxRetries: 8, retryDelay: 150 } as const
+
+/**
+ * ハーネスの一時ツリーを消す。**後始末でテストを落とさない。**
+ *
+ * `child.kill()` は SIGTERM を送るだけで、VS Code の agent host はその後も
+ * `<user-data-dir>/.../sdk-cache/...` へ書き続ける。`recursive` の走査中にファイルが増えると
+ * **`ENOTEMPTY`**（`force: true` は ENOENT しか抑えない）。2026-09-11 の実機で
+ * `#661 D-2` / `D-3` が**音の判定はすべて通ったのに後始末だけで赤くなった**。
+ *
+ * 子の終了を少し待ってから消し、それでも残ったら警告して続ける。
+ * 残骸は `/tmp/orbe2e-` 前置きなので、次回スイート開始時の掃除が拾う。
+ */
+async function removeHarnessTree(
+  tmpRoot: string,
+  child?: { killed: boolean; exitCode: number | null; signalCode: NodeJS.Signals | null; kill: () => boolean },
+): Promise<void> {
+  if (child) {
+    if (!child.killed) child.kill()
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
+      await sleep(100)
+    }
+  }
+  try {
+    fs.rmSync(tmpRoot, RM_TREE)
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[harness] left ${tmpRoot} behind (${String(error)}). ` +
+        `Cleanup only — the next run's ${HARNESS_TMP_PREFIX} sweep removes it.`,
+    )
+  }
+}
+
 function orbitAudioDaemonPids(): number[] {
   try {
     return execFileSync('pgrep', ['-f', '(^|/)orbit-audio-daemon([[:space:]]|$)'], {
@@ -696,7 +738,7 @@ async function launchIsolatedOrbitStudio({
     return { child, client, tmpRoot }
   } catch (error) {
     if (!child.killed) child.kill()
-    fs.rmSync(tmpRoot, { recursive: true, force: true })
+    fs.rmSync(tmpRoot, RM_TREE)
     throw error
   }
 }
@@ -1084,7 +1126,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     // A later setup removes and recreates only these exact allowlisted names.
     if (tmpRoot) {
       try {
-        fs.rmSync(tmpRoot, { recursive: true, force: true })
+        fs.rmSync(tmpRoot, RM_TREE)
       } catch {
         // best-effort
       }
@@ -1175,12 +1217,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           fs.copyFileSync(KICK_LOOP_FIXTURE, kickLoopWorkPath)
           // The audio the fixture's relative path must land on, mirrored at the same
           // depth from tmpRoot as it sits from REPO_ROOT.
+          //
+          // 🔴 **ディレクトリごとコピーする。1 ファイルずつ列挙しない**（2026-09-11）。
+          // 以前は `kick.wav` だけを写していた。`#611 E2E-7` が `sine_440.wav` を使う譜面を
+          // 足したところ、**素材がワークスペースに存在せず capture 20 s が全長ゼロサンプル**に
+          // なった。しかもテストは「音が出ないまま時間切れ」としか言わず、原因の特定に
+          // 実機実行を 2 本払った。列挙は必ず一段手前で止まる — 新しい fixture が新しい素材を
+          // 使うたびにここを直す設計にしない。
           workAudioDir = path.join(isolatedRoot, 'test-assets/audio')
           fs.mkdirSync(workAudioDir, { recursive: true })
-          fs.copyFileSync(
-            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
-            path.join(workAudioDir, 'kick.wav'),
-          )
+          fs.cpSync(path.join(REPO_ROOT, 'test-assets/audio'), workAudioDir, { recursive: true })
         },
       })
       tmpRoot = launched.tmpRoot
@@ -2172,9 +2218,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'routeDry643.play(1, 1, 1, 1)',
           'var routeWet643 = init global.seq',
           `routeWet643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
-          'routeWet643.output("sum643")',
-          // #611 PR-O4 で `send` は dB になった。旧 `0.5`（=50%）と同じ比を dB で書き直したもの。
+          // 🔴 send は終端 `output` より**前**（PR-O4 で行の並び順が信号順になった。
+          // `output` は `thru: false` = 終端なので、後ろに書いた send は鳴らない
+          // — 実測 sumAux/dry = 0.9992・2026-09-11）。単位も dB（旧 `0.5` と同じ比）。
           'routeWet643.send("aux643", -6)',
+          'routeWet643.output("sum643")',
           'routeWet643.gate(1)',
           'routeWet643.play(1, 1, 1, 1)',
           'LOOP(routeDry643)',
@@ -5780,7 +5828,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
-    '#611 E2E-6 pins that output(verb, thru: true) before vs. after effect([Gain]) changes the mix: total_A/total_B = (1 + g) / (2g)',
+    '#611 E2E-6 pins that output(verb, thru: true) before vs. after effect([Gain]) changes the mix: total_B is exactly 2g of plain and total_A/total_B sits inside [(1-g)/2g, (1+g)/2g]',
     async () => {
       const session = requireOutputLineSession()
       const errorsBefore = await errorBaseline(session.client)
@@ -5794,6 +5842,8 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           await captureSteady(ctx, 'totalA')
           await ctx.evaluate('kickA.stop()\nLOOP(kickB)')
           await captureSteady(ctx, 'totalB')
+          await ctx.evaluate('kickB.stop()\nLOOP(kickC)')
+          await captureSteady(ctx, 'plain')
         },
         { capture: true },
       )
@@ -5801,22 +5851,53 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       if (!result) throw new Error('E2E-6 did not return captured windows')
       const totalARms = steadyRms(result, 'totalA', STEADY_CAPTURE)
       const totalBRms = steadyRms(result, 'totalB', STEADY_CAPTURE)
+      const plainRms = steadyRms(result, 'plain', STEADY_CAPTURE)
       const ratio = totalARms / totalBRms
-      // g = 10 ** (-12 / 20): A branches off to the aux BEFORE the -12 dB rack, so only the
-      // master (dry) path is attenuated (total_A = 1 + g); B runs the rack first, so both the
-      // master path and the aux-routed copy carry it (total_B = 2g).
       const g = 10 ** (-12 / 20)
-      const expected = (1 + g) / (2 * g)
       // eslint-disable-next-line no-console
       console.log(
         '[#611 E2E-6] position-matters RMS:',
-        JSON.stringify({ totalARms, totalBRms, ratio, expected }),
+        JSON.stringify({
+          totalARms,
+          totalBRms,
+          plainRms,
+          ratio,
+          bOverPlain: totalBRms / plainRms,
+          aOverPlain: totalARms / plainRms,
+        }),
       )
+
+      // 🔴 B は厳密に言える。`[Rack, Output(verb,thru), Output(master)]` は aux も master も
+      // ラックの**後**なので、out-of-process ラックの +1 block 遅延（`outproc_effect.rs` の
+      // `process`: 1 block を child へ submit し前 block を読む）を**両方が等しく**受ける。
+      // 2 つのコピーは揃うので振幅が線形に加算され、plain 比は 2g になる。
+      // 実測 0.50238 / 理論 0.502377（2026-09-11・5 桁一致）。
       expect(
-        relativeDelta(ratio, expected),
-        `E2E-6 total_A/total_B must be (1 + g) / (2g), g = 10 ** (-12 / 20) = ${expected}; ` +
-          `actual=${ratio}`,
-      ).toBeLessThanOrEqual(0.12)
+        relativeDelta(totalBRms / plainRms, 2 * g),
+        `E2E-6 total_B must be exactly 2g of plain (both copies are post-rack, so they stay ` +
+          `aligned). want=${2 * g} got=${totalBRms / plainRms}`,
+      ).toBeLessThanOrEqual(0.06)
+
+      // 🔴 A には閉じた式が無い。aux のタップが**ラックの前**なので、aux のコピーだけが
+      // 遅延を受けず、2 つのコピーが 512 frames（10.7 ms @48k）ずれる。kick は減衰する
+      // 過渡音なので位相関係は素材のスペクトル依存で、同相加算 (1+g) にも電力加算
+      // sqrt(1+g²) にもならない（実測 A/plain = 0.9814 は**両方より小さい** = 部分的な打ち消し）。
+      //
+      // 閉じた式の代わりに**振幅の三角不等式**で挟む。2 つのコピーの振幅は 1 と g なので、
+      // 位相がどうであれ和は |1 − g| 以上 (1 + g) 以下。B は 2g なので:
+      //     (1 − g) / (2g)  <=  total_A / total_B  <=  (1 + g) / (2g)
+      //     1.4905          <=      1.9535         <=  2.4905
+      // これは実測に合わせて緩めた帯ではなく**物理的な上下限**であり、なお判別力がある:
+      // 位置が効かず A が B と同じ（ラックが両方に掛かる）なら比は 1.0 で下限を割り、
+      // A でラックが掛からない（比 2/2g = 3.98）なら上限を超える。
+      const lower = (1 - g) / (2 * g)
+      const upper = (1 + g) / (2 * g)
+      expect(
+        ratio,
+        `E2E-6 total_A/total_B must sit inside the amplitude triangle inequality ` +
+          `[${lower}, ${upper}] (position matters: A taps the aux before the rack). actual=${ratio}`,
+      ).toBeGreaterThan(lower)
+      expect(ratio).toBeLessThan(upper)
       await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-6')
     },
     TEST_TIMEOUT_MS,
@@ -5833,17 +5914,32 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         session,
         { slug, fixturePath: 'tests/fixtures/mcp-e2e/output_line_republish_seed.orbs' },
         async ({ evaluate }) => {
-          // RUN() is immediate (core spec: unaffected by bar-boundary quantization), so a short
-          // fixed sleep is enough to reach steady -40 dB playback before perturbing it.
-          await sleep(300)
+          // 🔴 固定 sleep で待たない（memory: capture の窓は音を追いかける）。旧版は
+          // `RUN` + sleep(300) で、実機の capture 0.928 s が**全長すべて無音**だった。
+          // -40 dB は peak 0.007 と小さいので、床もそれに合わせて下げる。
+          // 🔴 無音で落ちた時に**エンジンのログを添える**（規律: 実機で問題が出たら、まず
+          // ログで異常系を捕まえられるようにする）。2026-09-11 の実機では capture 20 s が
+          // 全長ゼロサンプルだったのに、テストは `timed out waiting for capture sound` としか
+          // 言わず、原因を追うのに実行を 1 本まるごと払い直すことになった。
+          try {
+            await waitForSound(capturePath, {
+              floor: 0.0015,
+              intervalMs: 100,
+              timeoutMs: 20_000,
+              label: '#611 E2E-7 -40 dB onset',
+            })
+          } catch (error) {
+            const log = (await session.client.call('get_log', { lines: 200 })).text
+            throw new Error(`${String(error)}\n--- engine log tail ---\n${log.slice(-4000)}`)
+          }
+          // 定常に落ち着かせてから触る（LOOP の 1 周目の立ち上がりを切替窓に含めない）。
+          await sleep(700)
           // 🔴 Not a fresh declaration — re-evaluating `tone.gain(...)` republishes the bus
           // line program (design 611 §4.3), which is exactly the seed/no-seed fork this test
           // exists to pin.
           await evaluate('tone.gain(0)')
-          // Keep recording past the switch long enough to include a clean post-ramp steady
-          // window, while staying inside sine_440.wav's 1 s natural duration (chop(1) plays
-          // the whole file at its natural rate — core spec chop/play semantics).
-          await sleep(500)
+          // 切替後のランプ（5 ms）が落ち着いた定常窓まで録り続ける。
+          await sleep(1_500)
         },
         { capture: true },
       )
@@ -6243,7 +6339,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           // best-effort cleanup
         }
         if (!sweepApp.killed) sweepApp.kill()
-        fs.rmSync(sweepTmpRoot, { recursive: true, force: true })
+        fs.rmSync(sweepTmpRoot, RM_TREE)
       }
     },
     TEST_TIMEOUT_MS,
@@ -6265,10 +6361,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         env: { ...process.env },
         portBase: 39500,
         prepareWorkspace: (namedTmpRoot) => {
+          // ディレクトリごと（1 ファイル列挙にしない・上の主セッションと同じ理由）。
           fs.mkdirSync(path.join(namedTmpRoot, 'test-assets/audio'), { recursive: true })
-          fs.copyFileSync(
-            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
-            path.join(namedTmpRoot, 'test-assets/audio/kick.wav'),
+          fs.cpSync(
+            path.join(REPO_ROOT, 'test-assets/audio'),
+            path.join(namedTmpRoot, 'test-assets/audio'),
+            { recursive: true },
           )
         },
       })
@@ -6317,7 +6415,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           // best-effort cleanup
         }
         if (!child.killed) child.kill()
-        fs.rmSync(tmpRoot, { recursive: true, force: true })
+        fs.rmSync(tmpRoot, RM_TREE)
       }
     },
     TEST_TIMEOUT_MS * 2,
@@ -6345,10 +6443,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         },
         portBase: 39600,
         prepareWorkspace: (faultTmpRoot) => {
+          // ディレクトリごと（1 ファイル列挙にしない・上の主セッションと同じ理由）。
           fs.mkdirSync(path.join(faultTmpRoot, 'test-assets/audio'), { recursive: true })
-          fs.copyFileSync(
-            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
-            path.join(faultTmpRoot, 'test-assets/audio/kick.wav'),
+          fs.cpSync(
+            path.join(REPO_ROOT, 'test-assets/audio'),
+            path.join(faultTmpRoot, 'test-assets/audio'),
+            { recursive: true },
           )
         },
       })
@@ -6410,8 +6510,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         } catch {
           // best-effort cleanup
         }
-        if (!faultChild.killed) faultChild.kill()
-        fs.rmSync(faultTmpRoot, { recursive: true, force: true })
+        await removeHarnessTree(faultTmpRoot, faultChild)
       }
     },
     TEST_TIMEOUT_MS * 2,
@@ -6437,10 +6536,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         },
         portBase: 39800,
         prepareWorkspace: (faultTmpRoot) => {
+          // ディレクトリごと（1 ファイル列挙にしない・上の主セッションと同じ理由）。
           fs.mkdirSync(path.join(faultTmpRoot, 'test-assets/audio'), { recursive: true })
-          fs.copyFileSync(
-            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
-            path.join(faultTmpRoot, 'test-assets/audio/kick.wav'),
+          fs.cpSync(
+            path.join(REPO_ROOT, 'test-assets/audio'),
+            path.join(faultTmpRoot, 'test-assets/audio'),
+            { recursive: true },
           )
         },
       })
@@ -6580,8 +6681,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         } catch {
           // best-effort cleanup
         }
-        if (!faultChild.killed) faultChild.kill()
-        fs.rmSync(faultTmpRoot, { recursive: true, force: true })
+        await removeHarnessTree(faultTmpRoot, faultChild)
       }
     },
     TEST_TIMEOUT_MS * 2,

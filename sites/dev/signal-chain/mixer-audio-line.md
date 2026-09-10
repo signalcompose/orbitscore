@@ -1287,7 +1287,7 @@ E2E-1 は `global.gain(0)` で 1 区間、`global.gain(-6)` を評価しても�
 比が 0.45〜0.55 に入ることを要求します（$10^{-6/20} \approx 0.501$）。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2021-2057
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2067-2103
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -1333,12 +1333,12 @@ E2E-1 の `unity` 区間は settle 400 ms で取るので、まさにこの形�
 
 したがって「今日の half/unity 比」を golden として持つことはできません。`tests/e2e/output-line-expectations.ts:166-182` の `globalGainInstrument` は PR-O2 後の受け入れ値（$10^{-6/20}$）だけを置き、**E2E-1 を green にする前に、まず E2E-1 が定常状態を見ているかを確かめること**という条件を添えています。
 
-E2E-4 は sum + aux の経路です。dry（bus 無し）と、`output("sum643")` + `send("aux643", -6)` を
+E2E-4 は sum + aux の経路です。dry（bus 無し）と、`send("aux643", -6)` + `output("sum643")`（**送りを終端より前に**）を
 持つ instrument を切り替え、比が理論値 `1 + 10^(-6/20) = 1.501` の ±0.15 に入ることを見ます（`1585-1592`）。
 DSL 部分を引用します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2161-2181
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2207-2229
         [
           'var global = init GLOBAL',
           'global.key("C")',
@@ -1353,9 +1353,11 @@ DSL 部分を引用します。
           'routeDry643.play(1, 1, 1, 1)',
           'var routeWet643 = init global.seq',
           `routeWet643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
-          'routeWet643.output("sum643")',
-          // #611 PR-O4 で `send` は dB になった。旧 `0.5`（=50%）と同じ比を dB で書き直したもの。
+          // 🔴 send は終端 `output` より**前**（PR-O4 で行の並び順が信号順になった。
+          // `output` は `thru: false` = 終端なので、後ろに書いた send は鳴らない
+          // — 実測 sumAux/dry = 0.9992・2026-09-11）。単位も dB（旧 `0.5` と同じ比）。
           'routeWet643.send("aux643", -6)',
+          'routeWet643.output("sum643")',
           'routeWet643.gate(1)',
           'routeWet643.play(1, 1, 1, 1)',
           'LOOP(routeDry643)',

@@ -17,6 +17,48 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(e2e): copy the whole audio asset directory into the gated workspace (#611) (Sep 11, 2026)
+
+**`#611 E2E-7` の無音の原因**。実機 gated で capture 20.2 s が **1,939,456 サンプルすべてゼロ**
+だった。素材の長さでも DSL でもなく、**ハーネスが一時ワークスペースへ `kick.wav` だけを
+コピーしていた**ため、`sine_440.wav` が存在しなかった。
+
+#### 切り分けの経路（記録）
+
+| 手順 | 結果 |
+|---|---|
+| capture を直接読む | 20.2 s・非ゼロサンプル **0** 件。「小さすぎて拾えない」ではなく完全な無音 |
+| `gainDbToAmplitude(-40)` | **0.01**。下限クランプ無し。ゲインは原因でない |
+| バスプールの枯渇を疑う | 枯渇時は throw する実装（`effect-slot.ts` の `BusPool.acquire`）で、ログにその文言なし |
+| `mix.sum` の node 形を疑う | `registerMixerNode` は `mixerGlobal[kind](variableName)` を呼ぶだけで、**文字列形と同一経路**（`runtime.ts`） |
+| 🔴 **エンジンを直接叩くプローブ** | 同じ譜面が**鳴った**。peak **0.007071** = `gainDbToAmplitude(-40) × equal_power_pan(0)` = 0.01 × 0.7071。譜面もエンジンも正常 |
+| ハーネスの workspace 準備を読む | `prepareWorkspace` が `test-assets/audio/kick.wav` **1 ファイルだけ**を写していた（3 箇所とも） |
+
+#### 直した形
+
+**ディレクトリごと `fs.cpSync`** にした（3 箇所）。1 ファイルずつ列挙する設計をやめる。
+**列挙は必ず一段手前で止まる** — 新しい fixture が新しい素材を使うたびにハーネスを直す形に
+しない（memory `enumeration-stops-one-level-too-early`）。
+
+#### あわせて足した観測手段
+
+E2E-7 の `waitForSound` が落ちた時に **`get_log` の末尾を例外に添える**ようにした。
+今回は「音が出ないまま時間切れ」としか言わず、原因の特定に実機実行を 2 本払った。
+規律の順序（DSL を網羅した E2E → 実機で問題 → **ログで異常系を捕まえられるようにする**）
+のとおり、まずログを出せるようにする。
+
+#### 同じ実行で直したもう 2 件
+
+- **`#661 D-2` / `D-3`**: 音の判定はすべて通っているのに、後始末の `ENOTEMPTY` だけで赤かった。
+  `child.kill()` は SIGTERM を送るだけで、VS Code の agent host はその後も
+  `<user-data-dir>/.../sdk-cache/` へ書き続ける。`force: true` は **ENOENT しか抑えない**。
+  子の終了を待ってから消し、それでも残ったら警告して続ける `removeHarnessTree()` を置いた。
+  **後始末でテストを落とさない。** 残骸は `/tmp/orbe2e-` 前置きなので次回開始時の掃除が拾う
+- **`#611 E2E-7` の譜面**: `RUN` + 固定 sleep(300ms) → `LOOP` + `play(1, 0, 1, 0)` +
+  **音が出るのを待つ**形へ。gated スイートで `RUN(` を使う譜面はこれ 1 本だけで、他は全部
+  音を追いかけていた。`sine_440.wav` はちょうど 1.000 s（実測）なので、1.0 s 間隔の
+  `play(1, 0, 1, 0)` なら隙間なく連なり、440 Hz は 1 s でちょうど 440 周期でつなぎ目の位相も連続する
+
 ### test(e2e): add the three O-surface E2E the freeze line requires (#611) (Sep 10, 2026)
 
 凍結線の収束条件「O-surface E2E-2〜7 + E2E-10 が緑」の未達部分。B2 本体は時間制約で

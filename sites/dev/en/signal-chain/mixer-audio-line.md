@@ -1326,7 +1326,7 @@ E2E-1 takes one segment at `global.gain(0)`, evaluates `global.gain(-6)`, takes 
 requires the ratio to fall within 0.45–0.55 ($10^{-6/20} \approx 0.501$).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2021-2057
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2067-2103
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -1388,7 +1388,7 @@ E2E-4 is the sum + aux path. It switches between dry (no bus) and an instrument 
 (theoretical 1.5) (`1585-1592`). The DSL part is quoted.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2161-2181
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2207-2229
         [
           'var global = init GLOBAL',
           'global.key("C")',
@@ -1403,9 +1403,11 @@ E2E-4 is the sum + aux path. It switches between dry (no bus) and an instrument 
           'routeDry643.play(1, 1, 1, 1)',
           'var routeWet643 = init global.seq',
           `routeWet643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
-          'routeWet643.output("sum643")',
-          // #611 PR-O4 で `send` は dB になった。旧 `0.5`（=50%）と同じ比を dB で書き直したもの。
+          // 🔴 send は終端 `output` より**前**（PR-O4 で行の並び順が信号順になった。
+          // `output` は `thru: false` = 終端なので、後ろに書いた send は鳴らない
+          // — 実測 sumAux/dry = 0.9992・2026-09-11）。単位も dB（旧 `0.5` と同じ比）。
           'routeWet643.send("aux643", -6)',
+          'routeWet643.output("sum643")',
           'routeWet643.gate(1)',
           'routeWet643.play(1, 1, 1, 1)',
           'LOOP(routeDry643)',
