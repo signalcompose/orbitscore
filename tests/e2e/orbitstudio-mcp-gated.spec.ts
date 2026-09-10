@@ -109,9 +109,10 @@ const UNIX_SOCKET_PATH_MAX = 103
 const IPC_SOCKET_SUFFIX_ALLOWANCE = 24
 /**
  * Identity of a harness-owned process: the `--user-data-dir` we generated. Built from
- * HARNESS_TMP_PREFIX so the launcher and the teardown can never drift apart.
+ * HARNESS_TMP_PREFIX so the launcher and the teardown can never drift apart. Extended regex,
+ * passed to `pgrep -f` the same way as the other PID oracles in this file.
  */
-const HARNESS_KILL_RE = new RegExp(`user-data-dir=\\S*/${HARNESS_TMP_PREFIX}`)
+const HARNESS_PGREP_PATTERN = `user-data-dir=[^[:space:]]*/${HARNESS_TMP_PREFIX}`
 
 const gated = Boolean(process.env[GATE_ENV])
 const appPath = process.env.ORBIT_E2E_VSCODE_APP?.trim() || DEFAULT_APP_PATH
@@ -301,29 +302,42 @@ const TEARDOWN_TIMEOUT_MS = 30_000
  *
  * Uses execFileSync (no shell, fixed argv) rather than exec/execSync.
  */
-function harnessProcessTree(): { pid: number; ppid: number }[] {
-  let listing = ''
+function harnessPids(): number[] {
   try {
-    listing = execFileSync('ps', ['-Ao', 'pid=,ppid=,command='], { encoding: 'utf8' })
+    return execFileSync('pgrep', ['-f', HARNESS_PGREP_PATTERN], { encoding: 'utf8' })
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(Number)
+      .filter((pid) => Number.isSafeInteger(pid) && pid > 0)
   } catch {
+    // pgrep exits non-zero when nothing matched — not an error here.
     return []
   }
-  const rows: { pid: number; ppid: number }[] = []
-  for (const line of listing.split('\n')) {
-    if (!HARNESS_KILL_RE.test(line)) continue
-    const match = /^\s*(\d+)\s+(\d+)\s/.exec(line)
-    if (!match) continue
-    rows.push({ pid: Number(match[1]), ppid: Number(match[2]) })
-  }
-  return rows
 }
 
-function killHarnessInstances(): void {
-  const rows = harnessProcessTree()
-  if (rows.length === 0) return
-  const pids = new Set(rows.map((row) => row.pid))
+/** Signal 0 probes liveness without touching the process and without spawning anything. */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function killHarnessInstances(): Promise<void> {
+  const owned = new Set(harnessPids())
+  if (owned.size === 0) return
   // A root is a matching process whose parent is not itself a matching process.
-  const roots = rows.filter((row) => !pids.has(row.ppid)).map((row) => row.pid)
+  const roots = [...owned].filter((pid) => {
+    try {
+      return !owned.has(parentPid(pid))
+    } catch {
+      // The process exited between the scan and this probe; treat it as gone, not as a root.
+      return false
+    }
+  })
   for (const pid of roots) {
     try {
       process.kill(pid, 'SIGTERM')
@@ -332,14 +346,19 @@ function killHarnessInstances(): void {
     }
   }
   if (roots.length === 0) return
-  // Give the roots a moment to take their helpers down, then force anything left.
-  const deadline = Date.now() + 5000
-  while (Date.now() < deadline && harnessProcessTree().length > 0) {
-    execFileSync('sleep', ['0.2'])
+  try {
+    // Give each root time to take its own helpers down through the normal shutdown path.
+    await waitUntil(() => roots.every((pid) => !isAlive(pid)), {
+      intervalMs: 200,
+      timeoutMs: 5000,
+      label: 'harness editor instances to exit',
+    })
+  } catch {
+    // Fall through: the force pass below handles whatever is left.
   }
-  for (const row of harnessProcessTree()) {
+  for (const pid of harnessPids()) {
     try {
-      process.kill(row.pid, 'SIGKILL')
+      process.kill(pid, 'SIGKILL')
     } catch {
       // already gone
     }
@@ -505,7 +524,7 @@ async function launchIsolatedOrbitStudio({
   portBase,
   prepareWorkspace,
 }: IsolatedOrbitStudioOptions): Promise<IsolatedOrbitStudio> {
-  killHarnessInstances()
+  await killHarnessInstances()
   const tmpRoot = fs.mkdtempSync(path.join(HARNESS_TMP_BASE, tmpPrefix))
   const userDataDir = path.join(tmpRoot, 'user-data')
   const extensionsDir = path.join(tmpRoot, 'extensions')
@@ -558,6 +577,8 @@ async function launchIsolatedOrbitStudio({
       // sign-in nudge. The fork we used to launch had those disabled in its product build,
       // so the harness never needed these. They are pure UI suppression: nothing about the
       // extension under test changes.
+      // Updates and telemetry are switched off twice on purpose: the flags stop the very first
+      // check, which can fire before the user settings written below are read.
       '--skip-welcome',
       '--skip-release-notes',
       '--disable-updates',
@@ -567,7 +588,14 @@ async function launchIsolatedOrbitStudio({
       // UNTRUSTED workspace. A fresh temp folder is untrusted, so without this the harness's
       // device selection silently reverts to the default and the engine fails to start. The
       // fork we used to launch had trust disabled in its product build, which is why this never
-      // surfaced before. Trust behavior of the shipped app is a separate question (#385).
+      // surfaced before.
+      //
+      // ⚠️ Known trade-off: this switches the trust mechanism off wholesale rather than marking
+      // just this temp workspace as trusted, so the harness cannot detect a regression in how
+      // the shipped app behaves in an untrusted workspace. Pre-trusting one folder would mean
+      // writing VS Code's internal `globalStorage/storage.json` layout, which is undocumented
+      // and moves between releases; the flag is the supported entry point (it is what
+      // `@vscode/test-electron` uses). Trust in the shipped app is tracked separately (#385).
       '--disable-workspace-trust',
       `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
       `--user-data-dir=${userDataDir}`,
@@ -960,7 +988,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // best-effort — the process may already be gone.
       }
     }
-    killHarnessInstances()
+    await killHarnessInstances()
     if (child && !child.killed) {
       try {
         child.kill()
