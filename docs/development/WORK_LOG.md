@@ -17,6 +17,72 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(engine): make each master effect warn, and stop audioDevice from promising a restart (#502) (Sep 10, 2026)
+
+`/code:pr-review-team` ラウンド 1（4 レビュアー）の指摘を適用した。**Critical 1 / Important 2 /
+Minor 1**、fixer は main（Codex は sandbox の EPERM で起動できなかった）。
+
+#### 🔴 Critical — 2 つ目以降のマスターエフェクトが完全に無音で失敗していた
+
+`RustEnginePlayer.addEffect` / `removeEffect` は `warnOnce('masterEffect', ...)` を
+**discriminator 無しで**呼んでいた。`warningKey` は discriminator が無いと `kind` そのものを
+キーにするので、**1 セッションにつき 1 回しか warn しない**。一方 `EffectsManager` は
+`🎛️ Global: compressor(...)` を**無条件に**出す。したがって
+
+```
+global.compressor(...)   // warn が出る
+global.limiter(...)      // ✅ に見えるログだけ出て、警告は出ない・音も変わらない
+```
+
+という普通のマスタリングチェーンで、2 つ目以降が**気づく手段なく落ちる**。
+`(操作, effect 種別)` を discriminator にした。文言も「代わりに master バスへ
+CLAP / VST3 プラグインを置け」まで言うようにした。
+
+🔴 **既存テストがこの欠陥を固定していた**。`rust-engine-player.spec.ts` の
+「master effect は 1 回 warn して no-op」は `expect(fxWarns.length).toBe(1)` で、
+**3 種類の操作をして 1 回しか warn しないこと**を期待値にしていた。期待値を反転し、
+種類ごと・操作ごとに warn すること（3 回）と、同じ操作の繰り返しは増えないことを固定した。
+
+#### Important — `global.audioDevice()` が嘘の案内をしていた
+
+`RustEnginePlayer.getCurrentOutputDevice()` は常に `undefined` を返すので、この DSL メソッドは
+必ず `⚠️ Restart the engine to change audio device` を出して**何もしない**。再起動しても
+変わらない。実際の切り替え経路は VS Code 設定 `orbitscore.audioDevice`（エンジンビュー /
+MCP の `select_audio_device`）だけで、DSL からは配線されていない。
+**行き先を名指しするメッセージ**に置き換えた。
+
+#### Minor — `sync-dist.js` の `exists()` が全エラーを「不在」に畳んでいた
+
+この判定はそのまま `fs.rm` の根拠になる。EACCES 等を不在に畳むと**正当な出力を消して
+`.vsix` からモジュールが欠ける**（#654 と同じ形）。ENOENT だけを不在として扱い、
+他は投げるようにした。
+
+#### テスト — 出荷物の中身を決めるロジックにテストが 0 本だった
+
+`pruneOrphanedOutputs()`（本束で新設）は `.vsix` に何が載るかを決めるが、
+**間違えても npm test もビルドも緑のまま**通る。`sync-dist.js` を
+`require.main === module` でガードして `require` 可能にし、
+`tests/build/sync-dist-prune.spec.ts` に 7 件足した:
+4 種類の接尾辞の削除 / `.tsx` 由来を残す / `.ts` 由来でない成果物に触らない /
+空になったディレクトリを畳む / 入れ子を post-order で畳む /
+生き残りがあれば親を残す / `sourceStemFor` の境界。
+
+#### そのほか（comment-analyzer）
+
+- `CONTRIBUTING.md` が `ORBITSCORE_ENGINE=sc` opt-out 経路を現在形で説明したままだった。
+  README / CLAUDE.md / PROJECT_RULES / INDEX / CONTEXT7_GUIDE / TESTING_GUIDE は直っていて、
+  **CONTRIBUTING.md だけ列挙から漏れていた**
+- `README.md` と `CLAUDE.md` のテスト件数が 2026-09-02 の `2165 / 2233` のままで、
+  本束が spec 7 本を消した後の値になっていなかった。**出典（日付・commit）付きで**
+  `2271 passed / 58 skipped / 2329 total` に更新した
+
+#### 指摘のうち採らなかったもの
+
+- code-reviewer: Critical 0 / Important 0（型検査・全テスト・docs ビルド・`sync-dist.js` の
+  実走まで確認した上で「配線漏れ無し」）
+- pr-test-analyzer の Important 2（`chop-timing.spec.ts` の `sampleId` 未検証は本束が
+  持ち込んだ後退ではない / docs:check 198 件は上記のとおり解消済み）
+
 ### refactor(build): prune the engine dist by source presence instead of by name (#502) (Sep 10, 2026)
 
 `/simplify`（4 エージェント）の指摘を適用した。
@@ -137,8 +203,14 @@ osc-client / scsynth-resolver / synthdef-loader / link-audio-channels / types / 
 実シグネチャ `{ sampleId }` に合わせた）。件数: 2329 passed / 58 skipped / 2387 total →
 **2261 passed / 58 skipped / 2319 total**（削除7本ぶん -68 件）。
 
-**残課題**: `npm run docs:check` が本 PR の行番号シフト（`extension.ts` -444 行等）で
-198 件失敗する（baseline 0 失敗）。`sites/` 編集は本ブリーフで禁止のため未対応・main へ引き継ぐ。
+**残課題だったもの（解消済み・2026-09-10）**: `npm run docs:check` が本 PR の行番号シフト
+（`extension.ts` -444 行等）で 198 件失敗していた。束の締めで `--fix` の再アンカーと
+引用内容の手直しを行い、**934 件検証 / 0 失敗**になった（`502-sc-removal` の
+`b9f6ded1` 時点・main 実測）。
+
+**件数の但し書き**: 上の `2261 passed / 2319 total` は #838 単体を回した時の値。
+束を締めた時点（`b9f6ded1`）の実測は **2271 passed / 58 skipped / 2329 total** で、
+差の +10 は #839 以降に入ったテスト。README と CLAUDE.md にはこちらの値と出典を書いた。
 
 ### docs(sites): follow PR #836 — the scsynth bundle is gone from the shipped .vsix (#502) (Sep 10, 2026)
 

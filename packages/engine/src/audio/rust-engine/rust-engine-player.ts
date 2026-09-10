@@ -1414,21 +1414,32 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * マスターエフェクト（compressor/limiter/normalizer）は daemon 未対応（A4 era）。
-   * 他の feature gap と同じく、見かけの parity を作らないよう 1 回 warn して no-op にする
+   * マスターエフェクト（compressor/limiter/normalizer）は daemon 未対応。
+   * 見かけの parity を作らないよう warn して no-op にする
    * （無言 drop だと `global.compressor()` 等が効いていないことに operator が気付けない）。
+   *
+   * 🔴 **discriminator を必ず渡す**（#840 レビュー指摘）。`warnOnce` のキーは
+   * discriminator が無いと `kind` そのもの（`'masterEffect'`）になるので、渡さないと
+   * **1 セッションにつき 1 回しか warn しない**。`compressor()` の後に `limiter()` を足す
+   * という普通のマスタリングチェーンで、2 つ目以降が**完全に無音で失敗する**。
+   * add と remove も別のキーにする（同じ effect の付け外しは別の出来事）。
+   *
+   * 🔴 SC バックエンドの synthdef がこの 3 つの唯一の実装だったので、#502 の削除以降
+   * **代替経路が存在しない**。仕様（DSL §Implementation Status）に警告ブロックを置いてある。
    */
   async addEffect(_target: string, effectType: string, _params: unknown): Promise<void> {
     this.warnOnce(
       'masterEffect',
-      `⚠️  [rust-engine] master effect "${effectType}" is not supported yet (A4 era) — it is a no-op on the rust engine.`,
+      `⚠️  [rust-engine] master effect "${effectType}" is not supported — it is a no-op. Put a CLAP / VST3 plugin on the master bus instead.`,
+      `add:${effectType}`,
     )
   }
 
-  async removeEffect(_target: string, _effectType: string): Promise<void> {
+  async removeEffect(_target: string, effectType: string): Promise<void> {
     this.warnOnce(
       'masterEffect',
-      `⚠️  [rust-engine] master effects are not supported yet (A4 era) — removeEffect is a no-op on the rust engine.`,
+      `⚠️  [rust-engine] master effect "${effectType}" is not supported — removeEffect is a no-op.`,
+      `remove:${effectType}`,
     )
   }
 

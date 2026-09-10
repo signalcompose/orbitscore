@@ -15,8 +15,12 @@ async function exists(target) {
   try {
     await fs.stat(target)
     return true
-  } catch {
-    return false
+  } catch (error) {
+    // 🔴 ENOENT だけを「不在」として扱う（#840 レビュー指摘）。ここの結果はそのまま
+    // `fs.rm` の根拠になるので、EACCES 等の一時的な I/O エラーを不在に畳むと
+    // **正当な出力を消して `.vsix` からモジュールが欠ける**。#654 と同じ形の障害になる。
+    if (error && error.code === 'ENOENT') return false
+    throw error
   }
 }
 
@@ -91,7 +95,14 @@ async function copyDist() {
   }
 }
 
-copyDist().catch((error) => {
-  console.error('❌ Failed to sync engine dist:', error)
-  process.exit(1)
-})
+// 直接実行された時だけ走らせる。`require()` しても副作用が無いので
+// `pruneOrphanedOutputs` をユニットテストから呼べる（出荷物 `.vsix` の中身を決めるロジックなので
+// テスト可能であること自体が要件・#840 レビュー指摘）。
+if (require.main === module) {
+  copyDist().catch((error) => {
+    console.error('❌ Failed to sync engine dist:', error)
+    process.exit(1)
+  })
+}
+
+module.exports = { pruneOrphanedOutputs, sourceStemFor, copyDist }
