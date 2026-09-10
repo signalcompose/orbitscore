@@ -388,24 +388,51 @@ async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
 export type WireDest =
   | { kind: 'master' }
   | { kind: 'bus'; name: string }
-  | { kind: 'device'; channels: [number, number] }   // 1 始まり
+  | { kind: 'device'; channels: [number, number] | [number] }  // 1 始まり。長さ 1 = mono（L+R マージ・Q-611-5）
   | { kind: 'render'; id: string }                    // 598 設計 §4
   | { kind: 'link'; channel: string }
 export type WireLineOp =
   | { op: 'rack' }
   | { op: 'gain'; gain: number }                      // 線形・有限・>= 0
+  | { op: 'pan'; pan: number }                        // -1..1（等パワー・Q-611-4）。🔴 実装は PR-O4
   | { op: 'output'; dest: WireDest; thru: boolean; gain: number }
 ```
+
+> 🔴 **`pan` op と mono `device` は PR-O4（束 O-surface）で実装する**（2026-09-09 に main が発見・
+> owner が 2026-09-10 に裁定。PR #824 のレビューで Fable が指摘）。
+>
+> **本節はそれまで 09-03 の裁定に追従していなかった。** §2.2（`mix.output(3)` = L+R マージ・Q-611-5）・
+> §2.4b（`pan` はライン要素・Q-611-4）・§2.x の TS 型（`:162` `:179`）・§5.1 の Rust 型
+> （`Device { right: Option<usize> }` / `LineOp::Pan`）・§5.3 の RT 式はすべて裁定を反映済みだったが、
+> **その間にある本節（wire）だけが取り残されていた**。PR-O3b（#824）の実装は本節に忠実だったので
+> **実装の欠陥ではない** — 正本が古いと、忠実さがそのまま欠落になる。
+>
+> **なぜ O3b ではなく O4 か**（2 件でコストが違うため分けて判断した）:
+>
+> | | mono `device` | `pan` op |
+> |---|---|---|
+> | RT の実装 | ✅ **既にある**（`add_to_device` が `right: None` で L+R を 0.5 マージ）| ❌ **無い**（`validate_line_program` が拒否し、実行側も空）|
+> | 必要な作業 | wire の型と parse | wire + **RT 実行**（等パワー）|
+>
+> `pan` は RT 実装を伴うので、O3b に入れると**「振る舞いを変えない」という束の性格が壊れ、
+> goldens の「動かないこと」という検算が使えなくなる**（O3 を O3a / O3b に割ったのはこの検算を
+> 守るためだった）。mono だけ先に足すと **wire を 2 回変える**ことになり、一方通行の変更回数が増える。
+> したがって**両方を O4 で 1 回にまとめる**。
+>
+> ⚠️ 計画 §2.1 の「1 PR で wire と DSL の両方を変えると golden の差分がどちら由来か分からない」に
+> 抵触するが、**`pan` については §2.4b が既に「`pan` を含む譜面の golden は再ベースライン」と
+> 裁定済み**（owner 受け入れ済み）なので、帰属問題はその範囲で扱える。
 
 **検証（daemon・`session.rs` に `parse_set_bus_line_params` を新設・`:203-238` と同型）**:
 
 | 規則 | エラー code |
 |---|---|
 | `bus` は非空文字列 / `"master"` | `MALFORMED_REQUEST` |
-| `line` は配列・各 `op` は 3 種のどれか・`gain` は有限かつ `>= 0` | `MALFORMED_REQUEST` |
+| `line` は配列・各 `op` は 4 種のどれか・`gain` は有限かつ `>= 0` | `MALFORMED_REQUEST` |
 | `rack` は高々 1 回 | `MALFORMED_REQUEST` |
+| **`pan` は有限かつ `-1 <= pan <= 1`**（🔴 **PR-O4**）| `PARAM_OUT_OF_RANGE` |
 | `dest.bus` は既知・**`bus` より後ろの index**（forward-only・MX.4）。kind（sum/aux）は**問わない**（裁定 ③）| `OUTPROC_EFFECT`（既存 `WrapError::OutProcEffect` 経由）|
-| `dest.device` は `1 <= a,b <= output_channels` かつ `a != b` | `PARAM_OUT_OF_RANGE` |
+| `dest.device` は `channels` が **1 要素（mono）または 2 要素**。各値は `1 <= n <= output_channels`。2 要素なら `a != b`（🔴 **1 要素は PR-O4**）| `PARAM_OUT_OF_RANGE` |
 | `dest.render` は登録済み id（598 設計）| `MALFORMED_REQUEST` |
 | `dest.link` は `link-audio` feature 時のみ・登録済み channel | `LINK_AUDIO_UNAVAILABLE` / `MALFORMED_REQUEST` |
 | `bus == "master"` の `line` に `dest.master` / `dest.bus` は不可（自己参照） | `MALFORMED_REQUEST` |
