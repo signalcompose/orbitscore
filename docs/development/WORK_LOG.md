@@ -17,6 +17,37 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(sites): drop the SuperCollider chapters and de-anchor ADR citations (#502) (Sep 10, 2026)
+
+**Issue**: #502（束の1本・PR-SC2）/ **ブランチ**: `502-sc-sites`（base `502-sc-removal`）
+
+owner 裁定（2026-09-10・#827 / #502）で SuperCollider (SC) バックエンドをコードごと削除する。
+コード削除 PR（PR-SC3a/3b）より先に、学習サイト（`sites/dev/`）が SC のコードを引用している
+箇所を外した。`sites/dev/scripts/check-citations.mjs`（`npm run docs:check`）は引用ヘッダ
+`// path:line-line` を実コードと文字単位で突合するため、コードが消えた瞬間に red になる。
+引用を先に外しておけば、コード削除 PR は docs:check を壊さずに進められる。
+
+**消したもの**: SC 専用の解説ページ2本（ja/en 各対）— `audio/supercollider.md`（旧 III-1）、
+`audio/scsynth-bundle.md`（旧 III-3）。sidebar からも該当エントリを削除し、他ページから
+これらへのリンク（12箇所）をすべて ADR への参照または地の文に置き換えた。
+
+**残したもの**: ADR-001 / ADR-003（決定の記録）。冒頭に「コードは削除決定/削除済み」の
+warning ブロックを追加し、引用ヘッダを `path:start-end` → `path Lstart-end` 形式に変えて
+`check-citations.mjs` の検査対象から外した（コード本体は1文字も変更していない）。
+`audio/audio-file-playback.md`（旧 III-2）は主題が SC 実装の詳細読解のままだが、他章から
+参照され続けているため削除せず、同様に引用を無効化した上で残した。加えて `event-queue.md` /
+`glossary.md` / `orientation/architecture-overview.md` / `orientation/what-is-orbitscore.md` /
+`editor/vscode-architecture.md` / `index.md` / `STYLE_GUIDE.md` / `sites/user/.translation-glossary.md`
+の「SC は opt-out で選べる」という現在形の記述を「削除決定（#502）」の過去形・注記に更新した
+（cutover #108 等の歴史記述はそのまま残した）。
+
+**確認**: `npm run docs:check`（936 citation(s) verified, 0 failed）／
+`npm -w @orbitscore/dev-site run docs:build`（VitePress ビルド green、dead link 0）／
+`npm test`（2329 passed, 58 skipped, 0 failed）。
+
+**やっていないこと**: `packages/` `rust/` `scripts/` `tests/` `.github/` のコード削除は本 PR の
+範囲外（PR-SC3a/3b で対応）。本 PR の時点では SC のコードはまだ存在する。
+
 ### docs(planning): record the extension-stable freeze line and the native OrbitStudio line (#827) (Sep 10, 2026)
 
 **Issue**: #827 / **ブランチ**: `827-stable-freeze-line` → main（docs のみ）

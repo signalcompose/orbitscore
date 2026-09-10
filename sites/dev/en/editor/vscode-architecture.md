@@ -260,7 +260,7 @@ function updateBundleStatus(): void {
   }
 ```
 
-Under the `rust` kind, when the daemon is found (= the normal state), the indicator is **hidden**. Only under the `sc` kind is the scsynth resolution result (`bundled` / `custom` / `not found`) shown (`extension.ts:742-766`, see [III-3](/en/audio/scsynth-bundle)). The decision to roll `env` and `explicit` into the same `custom` display is unchanged since 2026-05.
+Under the `rust` kind, when the daemon is found (= the normal state), the indicator is **hidden**. Only under the `sc` kind is the scsynth resolution result (`bundled` / `custom` / `not found`) shown (`extension.ts:742-766`, see [ADR-003 scsynth Bundle Strict Mode](/en/decisions/adr-003-scsynth-bundle); the SC path itself is scheduled for removal by the 2026-09-10 ruling #827 / #502). The decision to roll `env` and `explicit` into the same `custom` display is unchanged since 2026-05.
 
 `getConfiguredEngineKind()`, which decides the engine kind, reads the `orbitscore.engine` setting and normalizes it by borrowing the engine package's `resolveEngineKind()` via runtime `require` (`extension.ts:653-669`). This keeps the UI and engine decisions in one place.
 
@@ -519,7 +519,7 @@ The scsynth resolver is `explicit > env > bundle > throw`; the daemon resolver i
 
 `startEngine(debugMode?, agentOpts?)` actually starts the engine as a child process. The differences from 2026-05 are that it became `async` and returns a `boolean`, that the pre-check branches on the engine kind, and that it accepts `capture_wav` from MCP.
 
-The pre-check is quoted in [III-3](/en/audio/scsynth-bundle#the-call-itself-is-gated-by-the-engine-kind), so here we read from assembling args and env through the spawn.
+The pre-check is quoted in the former III-3 chapter, now removed from the site (recorded in [ADR-003](/en/decisions/adr-003-scsynth-bundle)), so here we read from assembling args and env through the spawn.
 
 ```typescript
 // packages/vscode-extension/src/extension.ts:2209-2222

@@ -16,7 +16,7 @@ The answer does not fit inside a single process. It spans at least four kinds of
 
 ## Drift since the 2026-05 edition
 
-The 2026-05-05 edition of this chapter was written around a "three processes: extension / engine / scsynth" picture. With cutover #108 on 2026-07-03 (WORK_LOG 6.179) the default audio backend switched to the Rust daemon, and that picture no longer holds for the default path. What follows is a full rewrite against the code as of 2026-09-01. The SC path itself still exists under `packages/engine/src/audio/supercollider/`, so read the SuperCollider chapters in Part III as a "historical reading of the opt-out path."
+The 2026-05-05 edition of this chapter was written around a "three processes: extension / engine / scsynth" picture. With cutover #108 on 2026-07-03 (WORK_LOG 6.179) the default audio backend switched to the Rust daemon, and that picture no longer holds for the default path. What follows is a full rewrite against the code as of 2026-09-01. The SC path itself still exists under `packages/engine/src/audio/supercollider/` as of 69dc968, but the 2026-09-10 ruling (#827 / #502) decided to remove it from the repository. The former Part III SuperCollider-only chapters (III-1, III-3) have been removed from the site; their record lives on in ADR-001 / ADR-003.
 
 Incidentally, code comments refer to the same cutover by two numbers, `#108` and `#369` (`engine-backend.ts` says `#108`; `extension.ts` and `copy-daemon-bin.sh` say `#369`).
 
@@ -531,9 +531,9 @@ fn default_rack_child_exe() -> Result<PathBuf, String> {
 
 Why isolate? Because 3rd-party plugins are untrusted code, and a crash must not take the daemon (the heart of the audio) down with it. The structure of the shm transport, the READY handshake, watchdog / respawn, and parent-process liveness monitoring (`ParentWatch`) are covered in [RE-2. OOP Children and shm Transport](/en/rust-engine/oop-children); the DSL surface (`seq.effect()` / `seq.instrument()`) in [PH-1. Plugin Hosting Overview](/en/plugin-hosting/) and [RE-3. Per-Sequence Insert Bus](/en/rust-engine/insert-bus).
 
-## SuperCollider is the Opt-Out Path
+## The SuperCollider Path (removal decided #502)
 
-When `ORBITSCORE_ENGINE=sc` is set, `createAudioEngine()` returns a `SuperColliderPlayer`, and the extension enters its `sc` branch that passes `ORBIT_SCSYNTH_PATH` via env (extension.ts:2142-2155 shown above). The mechanisms of scsynth resolution (strict mode in `scsynth-resolver.ts`), OSC over UDP, and the `orbitPlayBuf` SynthDef remain in the code, and the chapters [III-1](/en/audio/supercollider), [III-2](/en/audio/audio-file-playback), and [III-3](/en/audio/scsynth-bundle) read them. Keep in mind while reading, though, that this is not the default path.
+When `ORBITSCORE_ENGINE=sc` is set, `createAudioEngine()` returns a `SuperColliderPlayer`, and the extension enters its `sc` branch that passes `ORBIT_SCSYNTH_PATH` via env (extension.ts:2142-2155 shown above). The mechanisms of scsynth resolution (strict mode in `scsynth-resolver.ts`), OSC over UDP, and the `orbitPlayBuf` SynthDef remain in the code as of 69dc968, and [III-2. Audio File Playback](/en/audio/audio-file-playback) reads them (III-1 "Communication with SuperCollider" and III-3 "scsynth Bundle and Path Resolution" have been removed from the site as separate chapters following the 2026-09-10 ruling #827 / #502; their record lives on in [ADR-001](/en/decisions/adr-001-supercollider) and [ADR-003](/en/decisions/adr-003-scsynth-bundle)). The SC path itself is scheduled for removal from the repository by this same ruling, so keep in mind while reading that this is not the default path.
 
 Just as the `AudioEngineBackend` contract has optional methods the SC side does not implement (`selectAudioDevice` and others), the Rust path is ahead in features too (engine-backend.ts:32-33).
 
@@ -628,7 +628,7 @@ This chapter was a shallow first pass "to grasp the whole picture." The details 
 | The per-sequence insert bus of `seq.effect()` | [RE-3. Per-Sequence Insert Bus](/en/rust-engine/insert-bus) |
 | Objective verification via capture WAV | [RE-4. Capture Seam and Objective Verification](/en/rust-engine/capture-verification) |
 | The DSL surface of CLAP / VST3 hosting | [PH-1. Plugin Hosting Overview](/en/plugin-hosting/) |
-| (opt-out) OSC communication with scsynth | [III-1. Communication with SuperCollider](/en/audio/supercollider) |
+| (opt-out, removal decided #502) OSC communication with scsynth | [ADR-001 Choosing SC-based Implementation](/en/decisions/adr-001-supercollider) |
 | Extension activation, IntelliSense, flash | [IV-1. VS Code Extension Architecture](/en/editor/vscode-architecture) |
 
 ## Related Terms

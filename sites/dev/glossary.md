@@ -189,9 +189,9 @@ daemon 側で UI イベントを汲む pump。#633 で per-index / per-window �
 
 ---
 
-## オーディオ / SuperCollider 用語（opt-out 経路）
+## オーディオ / SuperCollider 用語（削除決定 #502・歴史的読解）
 
-> 以下は `ORBITSCORE_ENGINE=sc` で opt-out したときにだけ通る SuperCollider 経路の用語です。既定経路の用語は上の「Rust Engine / daemon 用語」を参照してください。
+> 以下は SuperCollider 経路（`ORBITSCORE_ENGINE=sc` での opt-out 経路）の用語です。この経路は **2026-09-10 の裁定（#827 / #502）でリポジトリからの削除が決まっています**。既定経路の用語は上の「Rust Engine / daemon 用語」を参照してください。
 
 ### Buffer (SC)
 

@@ -28,6 +28,12 @@ export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```
 :::
 
+::: warning コード引用は削除済みコードのスナップショット
+本章が引用する `packages/engine/src/audio/supercollider/` 配下のコードは、**2026-09-10 の裁定
+（#827 / #502）でリポジトリから削除**が決まっています。以下のコード引用は削除前（commit
+`58f558f5`）時点のスナップショットとして残しています。
+:::
+
 # III-2. オーディオファイル再生
 
 SC 経路で OrbitScore が音声ファイルを再生するとき、「ファイルをそのまま SuperCollider に渡す」ことはできません。scsynth は再生前にファイルを自分のバッファ空間に読み込む必要があります。本章では **BufferManager によるキャッシュ管理**、**soxi を使った尺取得**、**`/b_allocRead` での読み込み**、そして **`orbitPlayBuf` SynthDef のスライス再生ロジック** を順に見ていきます。
@@ -41,7 +47,7 @@ scsynth は内部にバッファ空間を持っています。バッファは整
 `BufferManager` はシンプルな設計です。フィールドを見てみましょう。
 
 ```typescript
-// packages/engine/src/audio/supercollider/buffer-manager.ts:11-14
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/buffer-manager.ts L11-14
 export class BufferManager {
   private bufferCache: Map<string, BufferInfo> = new Map()
   private bufferDurations: Map<number, number> = new Map()
@@ -57,7 +63,7 @@ export class BufferManager {
 `BufferInfo` 型は次のとおりです。
 
 ```typescript
-// packages/engine/src/audio/supercollider/types.ts:5-8
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/types.ts L5-8
 export interface BufferInfo {
   bufnum: number
   duration: number
@@ -69,7 +75,7 @@ export interface BufferInfo {
 `loadBuffer()` は最初にキャッシュを確認します。
 
 ```typescript
-// packages/engine/src/audio/supercollider/buffer-manager.ts:21-46
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/buffer-manager.ts L21-46
   async loadBuffer(filepath: string): Promise<BufferInfo> {
     if (this.bufferCache.has(filepath)) {
       return this.bufferCache.get(filepath)!
@@ -113,7 +119,7 @@ SC 経路で対応する音声フォーマットは、scsynth がバッファ読
 尺取得は SuperCollider を介さず、`soxi` コマンド (sox ツールチェインの一部) を直接呼びます。
 
 ```typescript
-// packages/engine/src/audio/supercollider/buffer-manager.ts:52-74
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/buffer-manager.ts L52-74
   private getAudioFileDuration(filepath: string): number {
     try {
       // Use execFileSync with separate arguments to prevent command injection
@@ -147,7 +153,7 @@ SC 経路で対応する音声フォーマットは、scsynth がバッファ読
 
 ## バッファロード: `/b_allocRead` と `/done` の待機
 
-尺が取れたら、scsynth にバッファをロードします。この処理は `OSCClient.sendBufferLoad()` 経由で行われ、callAndResponse パターン (詳細は [III-1. SuperCollider との通信](/audio/supercollider) §callAndResponse パターン) で `/done` を待ちます。
+尺が取れたら、scsynth にバッファをロードします。この処理は `OSCClient.sendBufferLoad()` 経由で行われ、callAndResponse パターン（削除済みの旧 III-1 章「SuperCollider との通信」で詳述していました。[ADR-001](/decisions/adr-001-supercollider) に記録を残しています）で `/done` を待ちます。
 
 ```mermaid
 sequenceDiagram
@@ -172,7 +178,7 @@ sequenceDiagram
 scsynth でバッファを再生する音声処理の定義が `orbitPlayBuf` SynthDef です。`setup.scd` の sclang コードを読むと、その構造が分かります。
 
 ```supercollider
-// packages/engine/supercollider/setup.scd:22-64 (writeDefFile 行を省略)
+// （削除済み・58f558f5 時点） packages/engine/supercollider/setup.scd L22-64 (writeDefFile 行を省略)
 SynthDef(\orbitPlayBuf, {
     arg out = 0, bufnum = 0, rate = 1, amp = 0.5, pan = 0, 
         startPos = 0,      // 開始位置（秒）
@@ -248,7 +254,7 @@ $$\text{fadeOut} = \min(0.008, \text{actualDuration} \times 0.04)$$
 ### スライス位置の計算
 
 ```typescript
-// packages/engine/src/audio/supercollider/event-scheduler.ts:263-281
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/event-scheduler.ts L263-281
   private calculateSlicePosition(
     filepath: string,
     sliceIndex: number,
@@ -275,7 +281,7 @@ $$\text{fadeOut} = \min(0.008, \text{actualDuration} \times 0.04)$$
 ### 再生レートの計算
 
 ```typescript
-// packages/engine/src/audio/supercollider/event-scheduler.ts:288-296
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/event-scheduler.ts L288-296
   private calculatePlaybackRate(
     sliceDurationSec: number,
     eventDurationMs: number | undefined,
@@ -296,7 +302,7 @@ $$\text{rate} = \frac{\text{sliceDuration(ms)}}{\text{eventDuration(ms)}}$$
 ### scheduleSliceEvent でのパラメータ組み立て
 
 ```typescript
-// packages/engine/src/audio/supercollider/event-scheduler.ts:317-350
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/event-scheduler.ts L317-350
   scheduleSliceEvent(
     filepath: string,
     startTimeMs: number,
