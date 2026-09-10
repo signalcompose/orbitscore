@@ -17,6 +17,35 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(native): correct the current_gains serialization table (#611) (Sep 11, 2026)
+
+束 A のレビューラウンドを閉じる前の **fix 差分再点検**（1 レビュアー・問いは
+「新しい故障モードは何か」「新コードはどの実行コンテキストで走るか」の 2 つ）で
+出た Minor 1 件を直した。Critical / Important は 0。
+
+**何が間違っていたか**: `LineControl::current_gains()` に付けた「どの mutex で
+直列化されているか」の表が、1 行目を `EngineWrap::set_global_gain` としていた。
+実際の `set_global_gain`（`engine_wrap.rs:9747`）は `master_gain` atomic へ store
+するだけで、`master_line_program` にも `LineExchange` にも触れていない。
+`current_gains()` の呼び出し元は 2 つとも `EngineWrap::set_bus_line`
+（`engine_wrap.rs:6980`）の中 — `bus == "master"` 分岐（7047）と named-bus 分岐（7141）。
+
+🔴 **なぜ実害になりうるか**: この表は「呼び手が install と直列化する契約であり
+型では強制していない」ことを将来の監査者へ伝えるために足したもの。PR-O4 はまさに
+`set_global_gain` を `SetBusLine("master", …)` へ切り替える予定なので、その担当者が
+表を読んで「既に `master_line_program` で直列化されている」と誤解しうる。
+**この PR が対処しようとした「規約を知らない 4 つ目の呼び出し元」問題を、
+コメント自身の不正確さで再生産していた。**
+
+**変更**: 表を 2 つに分けた。①`current_gains()` を呼ぶ経路（2 件・どちらも
+`set_bus_line`）②同じ `LineExchange` へ install する経路（3 件・`current_gains()` を
+呼ばない `set_bus_routing` を含む）。②が全部同じ mutex を取ることが「install どうし」も
+「読む → install」も直列化される根拠なので、①だけでは説明が閉じない。
+`set_global_gain` が現状この表に**入らない**ことと、PR-O4 で触るときに契約を新たに
+満たす必要があることを明記した。
+
+検証: `cargo fmt --check` 緑 / `cargo clippy -p orbit-audio-native --all-targets -- -D warnings` 緑。
+
 ### chore(docs): rotate WORK_LOG before closing the bundle-A review (#611) (Sep 11, 2026)
 
 `tests/docs/worklog-size.spec.ts` が **2,104 行**で赤くなった（上限 2,000）。
