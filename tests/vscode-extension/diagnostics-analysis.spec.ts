@@ -309,6 +309,66 @@ describe('analyzeOutputWithoutLinkAudio', () => {
     expect(issues).toHaveLength(1)
   })
 
+  // #611: `output()` resolves master / declared sum-aux names / "L,R" pairs BEFORE LinkAudio.
+  // Warning about LinkAudio on those tells the user their WORKING code does not work — and
+  // points them at a feature the shipped README documents as non-functional.
+  it('does not flag output("master") — the reserved word resolves first (#611 MX.2.1)', () => {
+    const text = ['var s = init global.seq', 's.audio("kick.wav").output("master")'].join('\n')
+
+    expect(analyzeOutputWithoutLinkAudio(text)).toEqual([])
+  })
+
+  it('does not flag a sum/aux name declared with the string form, even declared LATER', () => {
+    // A live-coding file is re-evaluated whole, so the declaration routinely sits below.
+    const text = [
+      's.audio("kick.wav").output("drums")',
+      't.audio("hat.wav").output("verb")',
+      'global.sum("drums")',
+      'global.aux("verb")',
+    ].join('\n')
+
+    expect(analyzeOutputWithoutLinkAudio(text)).toEqual([])
+  })
+
+  it('does not flag a sum/aux name declared as `var x = mix.sum` (the variable IS the name)', () => {
+    const text = [
+      'var drums = mix.sum',
+      'var verb = mix.aux',
+      's.audio("kick.wav").output("drums")',
+      't.audio("hat.wav").output("verb")',
+    ].join('\n')
+
+    expect(analyzeOutputWithoutLinkAudio(text)).toEqual([])
+  })
+
+  it('does not flag an "L,R" physical channel pair', () => {
+    const text = ['s.audio("kick.wav").output("3,4")', 't.audio("hat.wav").output("1, 2")'].join(
+      '\n',
+    )
+
+    expect(analyzeOutputWithoutLinkAudio(text)).toEqual([])
+  })
+
+  it('still flags a name that resolves to nothing but a LinkAudio channel', () => {
+    // The guard must stay discriminating: an undeclared name really does need linkAudio().
+    const text = [
+      'var drums = mix.sum',
+      's.audio("kick.wav").output("drums")', // declared -> fine
+      't.audio("hat.wav").output("liveRoom")', // undeclared -> LinkAudio channel
+    ].join('\n')
+
+    const issues = analyzeOutputWithoutLinkAudio(text)
+    expect(issues).toHaveLength(1)
+    expect(issues[0].line).toBe(2)
+    expect(issues[0].message).toContain('global.linkAudio()')
+  })
+
+  it('does not treat a commented-out declaration as declaring the bus', () => {
+    const text = ['// global.sum("drums")', 's.audio("kick.wav").output("drums")'].join('\n')
+
+    expect(analyzeOutputWithoutLinkAudio(text)).toHaveLength(1)
+  })
+
   it('returns no issues when there are no .output() calls at all', () => {
     const text = [
       'global.tempo(120)',

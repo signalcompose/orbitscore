@@ -17,6 +17,52 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(extension): stop warning that working output() targets have no effect (#611) (Sep 11, 2026)
+
+束 B のレビューで Fable が見つけた片翼。**出荷物の欠陥だったので、後回しにせず凍結線に含めた。**
+
+`analyzeOutputWithoutLinkAudio`（`diagnostics-analysis.ts:218`）の正規表現は
+
+```js
+/\.output\s*\(\s*["']([^"']*)["']\s*\)/g
+```
+
+で、**`"master"` も宣言済み sum/aux 名も `"3,4"` も除外していなかった**。凍結線の看板機能を書くと:
+
+```
+kick.output("master")
+      ⚠️ seq.output() requires global.linkAudio() to be declared in this file.
+         Without LinkAudio mode the channel name has no effect.
+```
+
+🔴 **同梱 README は「LinkAudio は出荷ビルドで動作せず、音も出ない」と明記している。**
+つまりエディタは、**動いているコードに「効かない」と警告し、動かない機能を指さしていた。**
+ユーザーが最初に見る面でこれが起きる。
+
+**直し方**: #611 §2.1/§3.3 の解決順（`OutputDest` → `"master"` → 宣言済み sum/aux →
+`"L,R"` 対 → LinkAudio）で **LinkAudio より前に解決する名前を除外**した。
+sum/aux の宣言は 2 形式とも拾う（`global.sum("x")` の文字列形と `var x = mix.sum` の変数形 —
+**後者は変数名がバス名**）。
+
+宣言の収集は**ファイル全体**から行う（呼び出し行より上だけではない）。ライブコーディングの
+ファイルは丸ごと再評価され、`global.sum(...)` はそれを使う sequence より**下**に書かれることが
+普通にあるため。2 行下で宣言される名前を警告するのはノイズ。
+
+**検証**（変異は `$TMPDIR` へバックアップしてから）:
+
+| 変異 | 結果 |
+|---|---|
+| `master` の除外を削除 | 1 failed |
+| sum/aux の除外を削除 | 3 failed |
+| `"L,R"` の除外を削除 | 1 failed |
+| 常に除外（警告そのものを殺す） | **5 failed** |
+| コメント行も宣言として拾う | 1 failed |
+| restore | 51 passed・baseline とバイト一致 |
+
+4 番目が効いているのが要点で、**「除外しすぎ」も捕まる**（未宣言の名前は今も警告される）。
+
+`npm test` 2,369 passed / 0 failed（+6）・lint 緑・`typecheck:e2e` 緑・引用 1,034 / 0 failed。
+
 ### refactor(dsl): apply the /simplify cleanup to the bundle-B line surface (#611) (Sep 11, 2026)
 
 束 B（PR #852）に `/simplify` を回した。4 体（reuse / simplification / efficiency / altitude）
