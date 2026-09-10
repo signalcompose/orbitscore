@@ -334,11 +334,7 @@ fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>),
                 line.push(BusLineOp::Gain(gain));
             }
             "pan" => {
-                let pan = item
-                    .get("pan")
-                    .and_then(Value::as_f64)
-                    .ok_or_else(|| set_bus_line_malformed("'line[].pan' must be a number"))?;
-                line.push(BusLineOp::Pan(validate_set_bus_line_pan(pan)?));
+                line.push(BusLineOp::Pan(parse_set_bus_line_pan(item)?));
             }
             "output" => {
                 let gain = parse_set_bus_line_gain(item, "line[].gain")?;
@@ -367,8 +363,20 @@ fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>),
     Ok((bus, line))
 }
 
+/// `parse_set_bus_line_gain` と**同じ形**にそろえてある（取得と検証を 1 関数に持つ・
+/// match アームは 1 行で呼ぶだけ）。`/simplify` simplification の指摘（2026-09-11）: 同じ役割の
+/// 数値フィールド検証が 2 通りの分割で並存すると、次に 3 つ目を足す人がどちらを踏襲すべきか
+/// 判断できない。
+///
+/// エラーコードだけは `gain`（`MALFORMED_REQUEST`）と揃えず `PARAM_OUT_OF_RANGE` のまま残す
+/// — 範囲外は「形が壊れている」のではなく「値が範囲外」で、device channels の範囲外検証も
+/// 同じコードを使っている。`gain` 側を寄せるかどうかは既存挙動を巻き込むので本 PR では触らない。
 #[cfg(feature = "outproc-effect")]
-fn validate_set_bus_line_pan(pan: f64) -> Result<f32, ProtocolError> {
+fn parse_set_bus_line_pan(item: &Value) -> Result<f32, ProtocolError> {
+    let pan = item
+        .get("pan")
+        .and_then(Value::as_f64)
+        .ok_or_else(|| set_bus_line_malformed("'line[].pan' must be a number"))?;
     if !pan.is_finite() || !(-1.0..=1.0).contains(&pan) {
         return Err(ProtocolError::new(
             "PARAM_OUT_OF_RANGE",
@@ -3894,6 +3902,57 @@ mod tests {
         }
     }
 
+    /// 設計 §11 PR-A1 が「新規 6 件」として挙げた検証のうち、**2 件が実装後に照合されないまま
+    /// 残っていた**（`/code:pr-review-team` の test-analyzer・2026-09-11）。前回の Fable 監査が
+    /// 3 件を埋めた**その一段外側**である。列挙は一段手前で止まる。
+    ///
+    /// (a) `channels` の要素数が 1 でも 2 でもない形（0 個 / 3 個以上）の拒否
+    ///     — `parse_set_bus_line_dest` の `matches!(channels.len(), 1 | 2)`
+    /// (b) **mono** の `left` が出力チャンネル数を超える場合の拒否
+    ///     — `validate_set_bus_line_device_channels` の `*left > output_channels`
+    ///     （既存テストは stereo ペアしか通しておらず、`right: None` の枝に到達していなかった）
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn set_bus_line_wire_rejects_device_channel_arity_and_mono_out_of_range() {
+        // (a) 要素数の形。ここは shape の誤りなので MALFORMED_REQUEST。
+        for channels in [json!([]), json!([1, 2, 3]), json!([1, 2, 3, 4])] {
+            let error = parse_set_bus_line_params(&json!({
+                "bus": "seq-bus-0",
+                "line": [{"op": "output", "dest": {"kind": "device", "channels": channels},
+                          "thru": false, "gain": 1.0}]
+            }))
+            .expect_err("only one- or two-element channel arrays are a valid shape");
+            eprintln!("arity {channels} -> {}", error.code);
+            assert_eq!(error.code, "MALFORMED_REQUEST");
+        }
+
+        // (b) mono の範囲。形は正しいので capacity 検証まで進み、そこで範囲外になる。
+        let (_, mono_over) = parse_set_bus_line_params(&json!({
+            "bus": "seq-bus-0",
+            "line": [{"op": "output", "dest": {"kind": "device", "channels": [5]},
+                      "thru": false, "gain": 1.0}]
+        }))
+        .expect("a one-element array is a valid shape");
+        let error = validate_set_bus_line_device_channels(&mono_over, 2)
+            .expect_err("a mono channel past the device's capacity must reject");
+        eprintln!("mono [5] on 2ch -> {}", error.code);
+        assert_eq!(error.code, "PARAM_OUT_OF_RANGE");
+
+        // mono の下限（0 は 1-based では不正）も同じ枝で拒否される。
+        let (_, mono_zero) = parse_set_bus_line_params(&json!({
+            "bus": "seq-bus-0",
+            "line": [{"op": "output", "dest": {"kind": "device", "channels": [0]},
+                      "thru": false, "gain": 1.0}]
+        }))
+        .expect("a one-element array is a valid shape");
+        assert_eq!(
+            validate_set_bus_line_device_channels(&mono_zero, 2)
+                .expect_err("channel 0 is not a valid 1-based channel")
+                .code,
+            "PARAM_OUT_OF_RANGE"
+        );
+    }
+
     #[cfg(feature = "outproc-effect")]
     #[test]
     fn set_bus_line_wire_accepts_mono_device_and_rejects_pan_out_of_range() {
@@ -3927,12 +3986,40 @@ mod tests {
             json!({"bus": "seq-bus-0", "line": [{"op": "pan", "pan": 1.5}]}),
             "PARAM_OUT_OF_RANGE",
         );
-        let nan_error = validate_set_bus_line_pan(f64::NAN).expect_err("NaN pan must reject");
+        // 🔴 旧版は `validate_set_bus_line_pan(f64::NAN)` を直接叩いて `!pan.is_finite()` の枝を
+        // 検査していた。しかし**非有限の pan は wire から到達できない**（2026-09-11 実測）:
+        // JSON に NaN / Infinity のリテラルは無く、`serde_json` は `1e400` を
+        // `Error("number out of range")` として **parse 時点で拒否**する。
+        // 到達できない入力でガードを検査しない — 実際に来る形（数値でない）を固定する。
+        // `is_finite` のガード自体は防御として残す（型が保証していないため）。
+        let nan_error = parse_set_bus_line_pan(&json!({"op": "pan", "pan": "loud"}))
+            .expect_err("a non-numeric pan must reject");
         eprintln!(
-            "mono=[3] accepted; duplicate={} pan(1.5)=PARAM_OUT_OF_RANGE pan(NaN)={}",
+            "mono=[3] accepted; duplicate={} pan(1.5)=PARAM_OUT_OF_RANGE pan(\"loud\")={}",
             duplicate_error.code, nan_error.code
         );
-        assert_eq!(nan_error.code, "PARAM_OUT_OF_RANGE");
+        assert_eq!(nan_error.code, "MALFORMED_REQUEST");
+    }
+
+    /// #611 束 A 監査（Fable Important #1）: 既存の pan wire テストは形の不正（否定側）しか見ておらず、
+    /// `..._contract_shape` の `{"op": "pan", "value": 0.0}` も MALFORMED（"pan" キーが無い形）を
+    /// 見ているだけで、受理された値の中身までは検査していない。`item.get("pan")` を
+    /// `item.get("value")` 等に取り違えても全テストが緑のまま通り得るので、肯定側を固定する:
+    /// 受理された `BusLineOp::Pan` の中身が JSON の `pan` 値と一致すること。
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn set_bus_line_wire_pan_op_is_parsed_with_its_own_value() {
+        let (_, line) = parse_set_bus_line_params(&json!({
+            "bus": "seq-bus-0",
+            "line": [{"op": "pan", "pan": 0.25}]
+        }))
+        .expect("a pan op with a valid value must be accepted");
+        match line.as_slice() {
+            [BusLineOp::Pan(pan)] => {
+                assert!((*pan - 0.25).abs() <= 1e-6, "parsed pan={pan}, want 0.25");
+            }
+            other => panic!("expected a single BusLineOp::Pan, got {other:?}"),
+        }
     }
 
     #[cfg(feature = "outproc-effect")]

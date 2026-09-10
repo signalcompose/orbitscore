@@ -23,8 +23,8 @@ use std::time::Duration;
 use orbit_audio_core::{resolve_slice_region, sanitize_rate, Engine, Sample};
 #[cfg(feature = "outproc-effect")]
 use orbit_audio_native::{
-    decode_bus_routing_sentinel, legacy_line_ops, BusSend, BusTarget, LegacyLineInstaller, LineOp,
-    LineOutput, LineProgram, LineProgramInstaller, OutputDest,
+    decode_bus_routing_sentinel, default_master_line_ops, legacy_line_ops, BusSend, BusTarget,
+    LegacyLineInstaller, LineOp, LineOutput, LineProgram, LineProgramInstaller, OutputDest,
 };
 use orbit_audio_native::{
     load_sample_resampled, LoaderError, OutputDeviceRequest, OutputError, OutputFault,
@@ -2108,32 +2108,29 @@ pub enum BusLineOp {
     },
 }
 
+/// master ラインの shadow 初期値。
+///
+/// 🔴 **`MasterLine::new` が RT へ install する program と同じ 1 関数から作る**
+/// （`default_master_line_ops` の doc を参照）。ここでリテラルを写していたときは、
+/// 1ch デバイスで `dest.right` が実体（`Some(1)` 固定）と食い違い、seed の Output 照合が
+/// 外れて既定 0.0 に落ちていた（`/code:pr-review-team` silent-failure-hunter・2026-09-11）。
+/// バス側で `legacy_line_ops` に統一したのと同じ手当てを master にも当てる。
 #[cfg(feature = "outproc-effect")]
 fn default_master_line_program(output_channels: u16) -> Vec<LineOp> {
-    vec![
-        LineOp::Rack,
-        LineOp::Gain(1.0),
-        LineOp::Output(LineOutput {
-            dest: OutputDest::Device {
-                left: 0,
-                right: (output_channels > 1).then_some(1),
-            },
-            thru: false,
-            gain: 1.0,
-        }),
-    ]
+    default_master_line_ops(output_channels)
 }
 
+/// バスが実際に走らせている初期 program。
+///
+/// 🔴 **手で同じ列を書き直さない**（`/simplify` の reuse / altitude が独立に同じ指摘・2026-09-11）。
+/// RT へ渡る初期値は `InsertBusStage` が `LineProgram::legacy(BusTarget::Master, &[])` 経由で
+/// 作る `legacy_line_ops` そのもの。ここでリテラルを写すと、`legacy_line_ops` 側だけが変わった
+/// 時に **shadow だけが旧い形のまま残り、未設定バスへの最初の `SetBusLine` が誤った seed から
+/// republish する** — 下の `initial_bus_line_shadows` のコメントが「exactly one place」と
+/// 約束しているのは、まさにこれを防ぐため。
 #[cfg(feature = "outproc-effect")]
 fn default_bus_line_program() -> Vec<LineOp> {
-    vec![
-        LineOp::Rack,
-        LineOp::Output(LineOutput {
-            dest: OutputDest::Master,
-            thru: false,
-            gain: 1.0,
-        }),
-    ]
+    legacy_line_ops(BusTarget::Master, &[])
 }
 
 /// Every bus starts at the default program, so its republish shadow starts there too.
@@ -3511,6 +3508,23 @@ mod set_bus_line_tests {
             &[0.21, 0.31, 0.41, -0.51, 0.61, 0.71, 0.81],
         );
         assert_eq!(seeds, vec![-0.51, 0.21, 0.31, 0.81, 0.41, 0.61, 0.0, 1.0]);
+    }
+
+    /// #611 束 A 監査（Fable Important #1）: 上のテストは新プログラムの Gain が
+    /// すべて旧プログラム側に対応物を持つケースだけを押さえており、
+    /// `line_republish_seeds` の `LineOp::Gain(_) => 1.0`（対応する旧 Gain が無い時の既定値）
+    /// 分岐に到達するケースが無かった。旧に Gain を一切含まない republish を単独で固定する。
+    #[test]
+    fn set_bus_line_seed_for_a_new_gain_without_a_match_defaults_to_unity() {
+        let old_ops = vec![LineOp::Rack];
+        let new_ops = vec![LineOp::Rack, LineOp::Gain(0.5)];
+        let seeds = line_republish_seeds(&new_ops, &old_ops, &[1.0]);
+        assert_eq!(
+            seeds,
+            vec![1.0, 1.0],
+            "an unmatched new Gain must seed at the default unity (1.0), \
+             not the new target (0.5) nor the Output default (0.0)"
+        );
     }
 
     #[test]

@@ -159,6 +159,19 @@ drums.effect(["Glue"]).output(master, thru: true).output(cue, db: -20)
 - `√2 · (cos θ, sin θ)` は center で `(1, 1)`（unity）、hard-left で `(√2, 0)`。発音側 center と合成すると `(1/√2·√2, 0) = (1, 0)` = **今日の発音側 hard-left と同じ**。任意の p で `event_center × line_pan(p) = event_pan(p)` が成り立つ（両者とも per-channel スカラーなので、比は `cos θ / cos(π/4)`）
 - したがって **rack を持たない譜面の `pan` golden は丸め誤差以外動かない**。動くのは「rack + pan」譜面（適用点がラック後へ移る）だけ。doc 611 §2.4b の「再ベースライン」はこの範囲に縮む
 
+**🔴 適用範囲（Fable 受け入れ監査 2026-09-10・Important #2）**: 上の「任意の p で `event_center × line_pan(p) = event_pan(p)`」が成り立つのは、**発音側の `equal_power_pan` を通った信号**、つまり scheduler が鳴らす audio event に限る。
+
+`collect_source_feeds` が集める **instrument（out-of-process プラグイン）の feed は schedule 時の pan を通らない**（`scheduler.rs` の適用は `schedule()` の中で `Engine.output_channels == 2` の時に precompute する経路だけ）。したがって instrument に対するライン上の Pan は `√2 · equal_power_pan(p)` がそのまま出る:
+
+| p | audio event（発音側 center と合成） | instrument feed（発音側 pan 無し） |
+|---|---|---|
+| 0（中央） | `(0.707, 0.707)` — pan を書かない譜面と同じ | `(1.0, 1.0)` — pan を書かない譜面と同じ |
+| ±1（両端） | `(1.0, 0)` | `(1.414, 0)` = **+3.01 dB** |
+
+**どちらも等パワー則で、中央比では同じ +3 dB** である（audio event は中央が既に −3 dB 下がっているぶん、両端が unity に着地する）。違うのは**絶対レベル**で、フルスケールの instrument を端まで振ると 0 dBFS を超える。
+
+🔴 **owner 裁定事項**: instrument feed にも中央 `1/√2` を掛けて audio event と絶対レベルをそろえるか（＝pan を書かない instrument が一律 3 dB 下がる）、現状のまま「中央 unity・両端 +3 dB」を pan 則として受け入れるか。**束 A では到達不能**（凍結版の TS は `SetBusLine` を送らない）。**束 B で `synth.pan(...)` が到達可能になる**（§5.2 の規則で instrument は必ずバスを確保してラインで pan する）ので、束 B の締めまでに決める。
+
 **ramp**: Pan は `current_gain[k]` に **pan 位置 p（−1..1）** を保持し、block ごとに `advance_ramped_gain`（`output.rs:713-717`）で目標へ寄せ、その p から `(gL, gR)` を計算する（trig は block ごと 1 回・alloc/lock 無し）。`settled` / seed の値は目標そのもの（§4.3）。Pan の位置変更でクリックを出さないため。
 
 **RT 実行**（`execute_master_line :1834` と post-loop `:2287` の `LineOp::Pan(_) => {}` を置換）:
@@ -457,6 +470,20 @@ MX.2〜MX.5 の規範本文は PR-O1 で改訂済み（`:1737-1940` 実読）。
 - **done**: `LineOp::Pan` が両ループで L/R を掛ける（`√2·equal_power_pan`・`orbit_audio_core` の関数を使う）。`current_gain` が `AtomicU32`。`set_bus_line` が bus ごとの shadow から seed を計算し、`LineProgram::with_seeds` で install。`validate_line_program` の Pan 拒否が消える
 - **検証**: cargo（新規 8 件: Pan hard-left で R=0 / center で unity / ramp が 1 block で目標へ / seed 引き継ぎ（§4.3 の 1 件）/ 対応無し Output は 0 から / Gain は 1.0 から / master line の Pan / 旧 `line_program_install_rejects_unwired_pan` の置換）+ **互換 bit 一致 4 トポロジ**（O-wire の既存テスト）が緑 + `cargo clippy --all-targets`。**main が実機**: O0-1〜O0-4 不動（束 A の締め）
 - **やらない**: `SetGlobalGain` を触らない。`explicit_line` の分岐を触らない
+
+> **🔴 監査で見つかった欠落と、その埋め合わせ（2026-09-10）**
+>
+> Fable の受け入れ監査（Important #1）が、上の 2 節が列挙したテストのうち **3 件が実在しない**ことを一次ソースで確認した。うち 2 件は「1 層だけ追従しない」退行の**検出器そのもの**だった。
+>
+> | 欠けていたもの | なぜ危ないか | 追加したテスト |
+> |---|---|---|
+> | master line の `LineOp::Pan` を通す RT テスト | `LineOp` を match する実行器は master（`execute_master_line`）と bus post-loop の **2 箇所**あり、既存テストは `render_tagged_line` 経由で **bus しか通っていなかった**。master アームを `LineOp::Pan(_) => {}` に戻しても全件緑 | `output.rs` `master_line_pan_op_positions_the_master_buffer` |
+> | wire の `{"op":"pan","pan":x}` の**肯定側** | 既存は形の不正（MALFORMED）しか見ておらず、`item.get("pan")` を `item.get("value")` に取り違えても全件緑 | `session.rs` `set_bus_line_wire_pan_op_is_parsed_with_its_own_value` |
+> | `line_republish_seeds` の「対応無し Gain → 既定 1.0」分岐 | 既存は新 Gain がすべて旧に対応物を持つケースだけを押さえていた | `engine_wrap.rs` `set_bus_line_seed_for_a_new_gain_without_a_match_defaults_to_unity` |
+>
+> 3 件とも**壊して赤・戻して緑**を実走で確認した（変異は `LineOp::Pan(_) => {}` / `get("pan")` → `get("value")` / 既定値 `1.0` → `0.0`）。
+>
+> **教訓**: 設計に「検証」として書いたテストが、実装後に**在ることを誰も照合していなかった**。次の束では、設計の検証欄をチェックリストとして機械的に突き合わせる。
 
 ### PR-B1（TS 配線）
 - **done**: `AudioLine`（§5.1 擬似コード・U1〜U13）。`Sequence` / `MixerBusHandle` が `SetBusLine` を送り `SetBusRouting` の production 呼び出し元がゼロ（`grep -rn "setBusRouting(" packages/engine/src` が `global.ts` の互換定義と `rust-engine-player.ts` の replay だけ）。`RustEnginePlayer.setBusLine` + intent cache + `reapplyBusLinesAfterRespawn`。**DSL 表面は不変**（`output(string)` / `send(name, amount)` の signature と単位はこの PR では変えない — program は今日の形）

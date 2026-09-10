@@ -208,7 +208,7 @@ that drains an `mpsc` channel. Since #474 there is one more task: it bridges the
 (`PluginUiClosed` and friends) broadcast by the watchdog threads into the session's writer queue.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:986-1013
+// rust/crates/orbit-audio-daemon/src/session.rs:994-1021
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -245,7 +245,7 @@ kept as the single point of truth, before falling through to the match — refle
 learned that keeping the same string set in two independently-maintained places drifts.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1602-1629
+// rust/crates/orbit-audio-daemon/src/session.rs:1610-1637
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,
@@ -419,7 +419,7 @@ the callback body was a single function, `render_block`; as of 2026-09-01 it has
 `OutputStream::render_state`).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:834-840
+// rust/crates/orbit-audio-native/src/output.rs:833-839
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
@@ -430,7 +430,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1654-1691
+// rust/crates/orbit-audio-native/src/output.rs:1695-1732
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -486,7 +486,7 @@ device"** — with the placement stage added, anything other than 2ch always pay
 placement.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1739-1829
+// rust/crates/orbit-audio-native/src/output.rs:1780-1870
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -590,7 +590,7 @@ a second buffer at device width there would be nowhere for it to land — that i
 buffer exists.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2133-2137
+// rust/crates/orbit-audio-native/src/output.rs:2183-2187
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -631,7 +631,7 @@ The device width appears in exactly one place: `place_master_into_device`, which
 `master.buffer` onto the device-width `hw`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1903-1927
+// rust/crates/orbit-audio-native/src/output.rs:1944-1968
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -670,7 +670,7 @@ old `post`) and the gain into one struct and fixes the order as **rack → gain*
 toward the target the control side (`SetGlobalGain`) wrote atomically, one block at a time.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:820-830
+// rust/crates/orbit-audio-native/src/output.rs:819-829
     /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
     /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
     /// 算術のみ（alloc/lock/syscall なし）。
@@ -699,7 +699,7 @@ fails design 611 §4.2's "copy it *without changing its meaning*", so the copy l
 with the §5.1 mechanism that carries the effective gain across a republish.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9727-9736
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9741-9750
     /// マスターゲインを設定する。PR-O3b では従来どおり atomic だけを更新し、RT 専有の
     /// `gain_current` を呼び出し間で連続させる。master line への写しは、TS の
     /// `global.gain()` を `SetBusLine("master", …)` へ切り替え、再 publish 時に実効値を引き継ぐ
@@ -732,7 +732,7 @@ indices** (does the bus exist, is the reference forward-only) is checked by
 the actual output width, so the dispatch sits in between and passes `engine.output_channels()`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2651-2666
+// rust/crates/orbit-audio-daemon/src/session.rs:2659-2674
         #[cfg(feature = "outproc-effect")]
         "SetBusLine" => match parse_set_bus_line_params(&params) {
             Ok((bus, line)) => {
@@ -796,7 +796,7 @@ device placement). Only once it is `true` does `execute_master_line` get called 
 published op sequence in order.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1832-1849
+// rust/crates/orbit-audio-native/src/output.rs:1873-1890
 fn execute_master_line(
     master: &mut MasterLine,
     frames: usize,
@@ -837,7 +837,7 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1931-1972
+// rust/crates/orbit-audio-native/src/output.rs:1972-2013
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -888,7 +888,7 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:3027-3044
+// rust/crates/orbit-audio-native/src/output.rs:3077-3094
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

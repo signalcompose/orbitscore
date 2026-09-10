@@ -815,7 +815,7 @@ TS 側の受け手が `RustEnginePlayer.onPluginUiClosed` です。#474 P4b（20
 **フェーズ A の受理**でしかありません。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2393-2394
+// rust/crates/orbit-audio-daemon/src/session.rs:2401-2402
                     // This is explicitly Phase A acceptance, never close completion.
                     Ok(Ok(())) => ok(&id, json!({"status": "accepted"})),
 ```
@@ -943,7 +943,7 @@ ack の照合キーは `(generation, window, evt_seq)` の三つ組になり、�
 loud に拒否されます。event frame の `PluginUiTarget` にも `window` が載りました。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10436-10449
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10450-10463
 /// WS event frame に載せる、解決済み plugin UI 宛先。
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PluginUiTarget {
