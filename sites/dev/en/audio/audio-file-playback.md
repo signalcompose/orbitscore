@@ -28,6 +28,12 @@ export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```
 :::
 
+::: warning Code citations are a snapshot of removed code
+The code under `packages/engine/src/audio/supercollider/` cited in this chapter is **scheduled
+for removal from the repository by the 2026-09-10 ruling (#827 / #502)**. The citations below
+are kept as a snapshot from before the removal (commit `58f558f5`).
+:::
+
 # III-2. Audio File Playback
 
 When OrbitScore plays an audio file on the SC path, it cannot just "hand the file as-is to SuperCollider." scsynth needs to load the file into its own buffer space before playback. This chapter looks in order at **buffer cache management by BufferManager**, **duration retrieval using soxi**, **loading via `/b_allocRead`**, and **the slice playback logic of the `orbitPlayBuf` SynthDef**.
@@ -41,7 +47,7 @@ scsynth has an internal buffer space. A buffer is identified by an integer `bufn
 `BufferManager` is a simple design. Let's look at its fields.
 
 ```typescript
-// packages/engine/src/audio/supercollider/buffer-manager.ts:11-14
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/buffer-manager.ts L11-14
 export class BufferManager {
   private bufferCache: Map<string, BufferInfo> = new Map()
   private bufferDurations: Map<number, number> = new Map()
@@ -57,7 +63,7 @@ There are three fields.
 The `BufferInfo` type is as follows.
 
 ```typescript
-// packages/engine/src/audio/supercollider/types.ts:5-8
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/types.ts L5-8
 export interface BufferInfo {
   bufnum: number
   duration: number
@@ -69,7 +75,7 @@ export interface BufferInfo {
 `loadBuffer()` first checks the cache.
 
 ```typescript
-// packages/engine/src/audio/supercollider/buffer-manager.ts:21-46
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/buffer-manager.ts L21-46
   async loadBuffer(filepath: string): Promise<BufferInfo> {
     if (this.bufferCache.has(filepath)) {
       return this.bufferCache.get(filepath)!
@@ -113,7 +119,7 @@ The audio formats supported on the SC path depend on libsndfile, which scsynth u
 Duration retrieval does not go through SuperCollider; it directly invokes the `soxi` command (part of the sox toolchain).
 
 ```typescript
-// packages/engine/src/audio/supercollider/buffer-manager.ts:52-74
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/buffer-manager.ts L52-74
   private getAudioFileDuration(filepath: string): number {
     try {
       // Use execFileSync with separate arguments to prevent command injection
@@ -147,7 +153,7 @@ On failure, it returns `0.3` seconds as a default value. This is a fallback valu
 
 ## Buffer Loading: Waiting for `/b_allocRead` and `/done`
 
-Once duration is obtained, the buffer is loaded into scsynth. This is performed via `OSCClient.sendBufferLoad()`, which uses the callAndResponse pattern (for details, see [III-1. Communication with SuperCollider](/en/audio/supercollider) §The callAndResponse Pattern) to wait for `/done`.
+Once duration is obtained, the buffer is loaded into scsynth. This is performed via `OSCClient.sendBufferLoad()`, which uses the callAndResponse pattern (detailed in the former III-1 chapter "Communication with SuperCollider," now removed from the site; recorded in [ADR-001](/en/decisions/adr-001-supercollider)) to wait for `/done`.
 
 ```mermaid
 sequenceDiagram
@@ -172,7 +178,7 @@ sequenceDiagram
 The audio processing definition that plays back a buffer in scsynth is the `orbitPlayBuf` SynthDef. Reading the sclang code in `setup.scd` reveals its structure.
 
 ```supercollider
-// packages/engine/supercollider/setup.scd:22-64 (writeDefFile 行を省略)
+// (removed, as of 58f558f5) packages/engine/supercollider/setup.scd L22-64 (writeDefFile 行を省略)
 SynthDef(\orbitPlayBuf, {
     arg out = 0, bufnum = 0, rate = 1, amp = 0.5, pan = 0, 
         startPos = 0,      // 開始位置（秒）
@@ -248,7 +254,7 @@ The `chop` DSL method splits the audio file equally and plays slices. Supporting
 ### Slice Position Calculation
 
 ```typescript
-// packages/engine/src/audio/supercollider/event-scheduler.ts:263-281
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/event-scheduler.ts L263-281
   private calculateSlicePosition(
     filepath: string,
     sliceIndex: number,
@@ -275,7 +281,7 @@ Because `sliceIndex` is passed 1-based from the DSL side, it is converted to 0-b
 ### Playback Rate Calculation
 
 ```typescript
-// packages/engine/src/audio/supercollider/event-scheduler.ts:288-296
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/event-scheduler.ts L288-296
   private calculatePlaybackRate(
     sliceDurationSec: number,
     eventDurationMs: number | undefined,
@@ -296,7 +302,7 @@ If a slice is 500 ms and the event duration is 250 ms, then `rate = 2.0` (double
 ### Parameter Assembly in scheduleSliceEvent
 
 ```typescript
-// packages/engine/src/audio/supercollider/event-scheduler.ts:317-350
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/event-scheduler.ts L317-350
   scheduleSliceEvent(
     filepath: string,
     startTimeMs: number,

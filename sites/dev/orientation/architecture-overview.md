@@ -16,7 +16,7 @@ status: draft
 
 ## 2026-05 版からの drift
 
-本章の 2026-05-05 版は「extension / engine / scsynth の 3 プロセス」という絵で書かれていました。2026-07-03 の cutover #108 (WORK_LOG 6.179) で既定の音声バックエンドが Rust daemon に切り替わり、その絵は既定経路としては成り立たなくなっています。以下は 2026-09-01 時点のコードに合わせて全面的に書き直したものです。SC 経路そのものは `packages/engine/src/audio/supercollider/` に残っているので、Part III の SuperCollider 章は「opt-out 経路の歴史的読解」として読んでください。
+本章の 2026-05-05 版は「extension / engine / scsynth の 3 プロセス」という絵で書かれていました。2026-07-03 の cutover #108 (WORK_LOG 6.179) で既定の音声バックエンドが Rust daemon に切り替わり、その絵は既定経路としては成り立たなくなっています。以下は 2026-09-01 時点のコードに合わせて全面的に書き直したものです。SC 経路そのものは 69dc968 時点で `packages/engine/src/audio/supercollider/` に残っていますが、2026-09-10 の裁定（#827 / #502）でリポジトリからの削除が決まっています。旧 Part III の SuperCollider 専用章（III-1・III-3）はサイトから削除し、ADR-001 / ADR-003 に記録を残しました。
 
 ちなみに、コードのコメントは同じ cutover を `#108` と `#369` の両方の番号で参照しています (`engine-backend.ts` は `#108`、`extension.ts` や `copy-daemon-bin.sh` は `#369`)。
 
@@ -531,9 +531,9 @@ fn default_rack_child_exe() -> Result<PathBuf, String> {
 
 なぜ隔離するのかというと、3rd-party plugin は信頼できないコードなので、crash しても daemon (音の心臓部) を道連れにしないためです。shm transport の構造、READY handshake、watchdog / respawn、親プロセスの死活監視 (`ParentWatch`) は [RE-2. OOP children と shm transport](/rust-engine/oop-children) が、DSL 面 (`seq.effect()` / `seq.instrument()`) は [PH-1. Plugin Hosting 概観](/plugin-hosting/) と [RE-3. per-sequence insert bus](/rust-engine/insert-bus) が扱います。
 
-## SuperCollider は opt-out 経路
+## SuperCollider 経路（削除決定 #502）
 
-`ORBITSCORE_ENGINE=sc` を指定すると、`createAudioEngine()` が `SuperColliderPlayer` を返し、extension も `ORBIT_SCSYNTH_PATH` を env で渡す `sc` 分岐に入ります (前掲の extension.ts:2142-2155)。scsynth の解決 (`scsynth-resolver.ts` の strict mode)、OSC over UDP、`orbitPlayBuf` SynthDef といった仕組みはコードとして残っていて、[III-1](/audio/supercollider)、[III-2](/audio/audio-file-playback)、[III-3](/audio/scsynth-bundle) の各章がそれを読んでいます。ただし、既定経路ではないことを念頭に読んでください。
+`ORBITSCORE_ENGINE=sc` を指定すると、`createAudioEngine()` が `SuperColliderPlayer` を返し、extension も `ORBIT_SCSYNTH_PATH` を env で渡す `sc` 分岐に入ります (前掲の extension.ts:2142-2155)。scsynth の解決 (`scsynth-resolver.ts` の strict mode)、OSC over UDP、`orbitPlayBuf` SynthDef といった仕組みは 69dc968 時点ではコードとして残っており、[III-2. オーディオファイル再生](/audio/audio-file-playback) がそれを読んでいます（III-1「SuperCollider との通信」と III-3「scsynth bundle と path resolution」は独立の章としては 2026-09-10 の裁定 #827 / #502 に伴いサイトから削除し、[ADR-001](/decisions/adr-001-supercollider) と [ADR-003](/decisions/adr-003-scsynth-bundle) に記録を残しています）。SC 経路自体もこの裁定でリポジトリから削除が決まっており、既定経路ではないことを念頭に読んでください。
 
 `AudioEngineBackend` の契約に SC 側が実装していない optional メソッド (`selectAudioDevice` など) があるように、機能面でも Rust 経路が先行しています (engine-backend.ts:32-33)。
 
@@ -628,7 +628,7 @@ export const DSL_VERSION = '1.1'
 | `seq.effect()` の per-sequence insert bus | [RE-3. per-sequence insert bus](/rust-engine/insert-bus) |
 | capture WAV による客観検証 | [RE-4. capture seam と客観検証](/rust-engine/capture-verification) |
 | CLAP / VST3 hosting の DSL 面 | [PH-1. Plugin Hosting 概観](/plugin-hosting/) |
-| (opt-out) scsynth との OSC 通信 | [III-1. SuperCollider との通信](/audio/supercollider) |
+| (opt-out・削除決定 #502) scsynth との OSC 通信 | [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) |
 | extension の activation、IntelliSense、flash | [IV-1. VS Code 拡張アーキテクチャ](/editor/vscode-architecture) |
 
 ## 関連用語

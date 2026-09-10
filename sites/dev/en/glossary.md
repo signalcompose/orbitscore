@@ -189,9 +189,9 @@ The feature that highlights `play()` arguments in step with the engine (#390). T
 
 ---
 
-## Audio / SuperCollider Terms (opt-out path)
+## Audio / SuperCollider Terms (removal decided #502, historical)
 
-> The terms below belong to the SuperCollider path, which is reached only by opting out with `ORBITSCORE_ENGINE=sc`. For the default path, see "Rust Engine / Daemon Terms" above.
+> The terms below belong to the SuperCollider path (the `ORBITSCORE_ENGINE=sc` opt-out path). This path is **scheduled for removal from the repository by the 2026-09-10 ruling (#827 / #502)**. For the default path, see "Rust Engine / Daemon Terms" above.
 
 ### Buffer (SC)
 

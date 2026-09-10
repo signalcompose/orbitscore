@@ -12,7 +12,7 @@ status: draft
 The scsynth bundle and the strict resolver belong to the SuperCollider path. Since cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179), this path is used **only when you opt out with `ORBITSCORE_ENGINE=sc`** (in VS Code, `orbitscore.engine: "sc"`); on the default Rust path scsynth is not even resolved. However, the "fail-loud resolver" pattern this ADR decided on is reused as-is for resolving `orbit-audio-daemon` (see "Consequences revisited (2026-09)" at the end). For the default path, see [RE-1. Daemon Architecture Overview](/en/rust-engine/).
 
 ```typescript
-// packages/engine/src/audio/create-audio-engine.ts:17-22
+// (removed, as of 58f558f5) packages/engine/src/audio/create-audio-engine.ts L17-22
 export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
   const raw = env[ENGINE_ENV_VAR]
   if (resolveEngineKind(raw) === 'supercollider') {
@@ -22,10 +22,17 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 ```
 
 ```typescript
-// packages/engine/src/audio/engine-backend.ts:54-55
+// (removed, as of 58f558f5) packages/engine/src/audio/engine-backend.ts L54-55
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
 export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```
+:::
+
+::: warning This code has been removed
+The SuperCollider-path code cited by this ADR was **removed from the repository by the
+2026-09-10 ruling (#827 / #502)**. The code snippets below are a snapshot from before the
+removal (commit `58f558f5`) and no longer exist in the current repository. This ADR remains
+as a record of the decision.
 :::
 
 # ADR-003 scsynth bundle strict mode
@@ -67,7 +74,7 @@ To solve this, in Issue #131 (Epic: v1.0 ICMC Ready Phase 1), the policy of bund
 It is clearly written in the comments of `scsynth-resolver.ts`:
 
 ```typescript
-// packages/engine/src/audio/supercollider/scsynth-resolver.ts:1-17
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/scsynth-resolver.ts L1-17
 /**
  * scsynth binary path resolver.
  *
@@ -132,7 +139,7 @@ This is the audio-binary version of the classic "works only on the dev machine" 
 Let's look at the core part of `scsynth-resolver.ts`:
 
 ```typescript
-// packages/engine/src/audio/supercollider/scsynth-resolver.ts:76-99
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/scsynth-resolver.ts L76-99
 export function resolveScsynthPath(opts: ResolveOptions = {}): ScsynthResolution {
   const searched: string[] = []
 
@@ -168,7 +175,7 @@ Priority is expressed by a chain using `??` (nullish coalescing):
 If all return `null`, `ScsynthNotFoundError` is thrown. The `searched` array contains "the list of paths that were searched but not found" and is included in the error message.
 
 ```typescript
-// packages/engine/src/audio/supercollider/scsynth-resolver.ts:34-45
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/scsynth-resolver.ts L34-45
 export class ScsynthNotFoundError extends Error {
   public readonly searched: string[]
 
@@ -188,7 +195,7 @@ The error message describes "which paths were searched" and "the workaround in t
 Let's also confirm the implementation of `bundleCandidatePath()`:
 
 ```typescript
-// packages/engine/src/audio/supercollider/scsynth-resolver.ts:57-59
+// (removed, as of 58f558f5) packages/engine/src/audio/supercollider/scsynth-resolver.ts L57-59
 function bundleCandidatePath(): string {
   return path.resolve(__dirname, '../../../scsynth/Contents/Resources/scsynth')
 }
@@ -265,7 +272,7 @@ That was the situation (for the later story about the daemon, see "Consequences 
 
 ## Use on the VS Code Extension Side
 
-As covered in [III-3](/en/audio/scsynth-bundle) and [IV-1](/en/editor/vscode-architecture), the VS Code extension calls the resolver via `resolveScsynthForUI()`. At 69dc968, however, this call happens only when `orbitscore.engine` is `sc`. The result of resolution is used to display the status bar indicator `bundleStatusItem`:
+As covered in this ADR (above) and [IV-1](/en/editor/vscode-architecture), the VS Code extension calls the resolver via `resolveScsynthForUI()`. At 69dc968, however, this call happens only when `orbitscore.engine` is `sc`. The result of resolution is used to display the status bar indicator `bundleStatusItem`:
 
 | engine kind | `resolution.source` | bundleStatusItem display |
 |---|---|---|
@@ -275,7 +282,7 @@ As covered in [III-3](/en/audio/scsynth-bundle) and [IV-1](/en/editor/vscode-arc
 | `rust` | (scsynth is not resolved) | hidden if the daemon resolves; otherwise `$(error) daemon: not found` |
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:747-771
+// (removed, as of 58f558f5) packages/vscode-extension/src/extension.ts L747-771
   bundleStatusItem.show()
   const resolution = resolveScsynthForUI()
   if (!resolution) {
@@ -339,7 +346,7 @@ Cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179) switched
 The core of this ADR — "fail loud, no silent fallback, a candidate must be an executable file" — is carried over as-is into `resolveDaemonBinaryPath()`. #306 (`docs/archive/WORK_LOG_2026-07.md` §6.185) added the `.vsix`-bundled daemon as the last candidate, and in review Round 2 of #366 (§6.186) the finding that "it only checks `existsSync` and does not look at the exec bit — asymmetric with `isExecutableFile` on the scsynth side" led to the daemon side also requiring an executable regular file. The candidate order is `explicit → env (ORBIT_AUDIO_DAEMON_PATH) → monorepo-release → monorepo-debug → extension-bundle`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:111-111
+// (removed, as of 58f558f5) packages/engine/src/audio/rust-engine/daemon-client.ts L111-111
   source: 'explicit' | 'env' | 'monorepo-release' | 'monorepo-debug' | 'extension-bundle'
 ```
 

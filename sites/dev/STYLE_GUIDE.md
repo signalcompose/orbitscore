@@ -277,7 +277,7 @@ import MyDemo from '../.vitepress/theme/components/<part>/MyDemo.vue'
 
 ## 9. リンク規約
 
-- 内部リンク: `cleanUrls: true` 設定済、`.md` 拡張子を **付けない** (`/audio/supercollider` であって `/audio/supercollider.md` ではない)
+- 内部リンク: `cleanUrls: true` 設定済、`.md` 拡張子を **付けない** (`/audio/audio-file-playback` であって `/audio/audio-file-playback.md` ではない)
 - 外部リンク: 仕様 doc は version pin、GitHub link は commit-pin (`/blob/<sha>/...`) を推奨
 - リポジトリ内 file 参照: `## Sources` で raw path、本文中で言及する時は GitHub permalink を使うと doc rot に強い
 
