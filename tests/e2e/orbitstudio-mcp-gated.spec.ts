@@ -86,6 +86,12 @@ import {
   startEngineForRun,
   waitForEngineState,
 } from './helpers/run-score'
+import {
+  IPC_SOCKET_SUFFIX_ALLOWANCE,
+  selectRootPids,
+  UNIX_SOCKET_PATH_MAX,
+  userDataDirExceedsSocketLimit,
+} from './helpers/harness-processes'
 import { OUTPUT_LINE_GOLDENS, STEADY_CAPTURE } from './output-line-expectations'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
@@ -103,10 +109,7 @@ const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
  */
 const HARNESS_TMP_BASE = '/tmp'
 const HARNESS_TMP_PREFIX = 'orbe2e-'
-/** macOS limit for a Unix domain socket path. */
-const UNIX_SOCKET_PATH_MAX = 103
-/** `<user-data-dir>/1.13-main.sock`; allow room for a longer version string. */
-const IPC_SOCKET_SUFFIX_ALLOWANCE = 24
+
 /**
  * Identity of a harness-owned process: the `--user-data-dir` we generated. Built from
  * HARNESS_TMP_PREFIX so the launcher and the teardown can never drift apart. Extended regex,
@@ -310,34 +313,45 @@ function harnessPids(): number[] {
       .filter(Boolean)
       .map(Number)
       .filter((pid) => Number.isSafeInteger(pid) && pid > 0)
-  } catch {
-    // pgrep exits non-zero when nothing matched — not an error here.
+  } catch (err) {
+    // pgrep exits 1 when nothing matched. That, and only that, is absence (policy 2).
+    if ((err as { status?: number }).status === 1) return []
+    // eslint-disable-next-line no-console
+    console.error(
+      `[harness] could not enumerate harness processes: ${String(err)}. ` +
+        'Stale editor instances may survive into the next launch.',
+    )
     return []
   }
 }
 
-/** Signal 0 probes liveness without touching the process and without spawning anything. */
+/**
+ * Signal 0 probes liveness without touching the process and without spawning anything.
+ * `EPERM` means the process exists but is not ours to signal, so it counts as alive.
+ */
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
+  } catch (err) {
+    return (err as { code?: string }).code === 'EPERM'
+  }
+}
+
+/** `undefined` when the parent cannot be determined — unknown, not "no parent" (policy 2). */
+function parentPidOrUnknown(pid: number): number | undefined {
+  try {
+    const ppid = parentPid(pid)
+    return Number.isSafeInteger(ppid) ? ppid : undefined
   } catch {
-    return false
+    return undefined
   }
 }
 
 async function killHarnessInstances(): Promise<void> {
-  const owned = new Set(harnessPids())
-  if (owned.size === 0) return
-  // A root is a matching process whose parent is not itself a matching process.
-  const roots = [...owned].filter((pid) => {
-    try {
-      return !owned.has(parentPid(pid))
-    } catch {
-      // The process exited between the scan and this probe; treat it as gone, not as a root.
-      return false
-    }
-  })
+  const pids = harnessPids()
+  if (pids.length === 0) return
+  const roots = selectRootPids(pids.map((pid) => ({ pid, ppid: parentPidOrUnknown(pid) })))
   for (const pid of roots) {
     try {
       process.kill(pid, 'SIGTERM')
@@ -345,17 +359,21 @@ async function killHarnessInstances(): Promise<void> {
       // already gone
     }
   }
-  if (roots.length === 0) return
-  try {
-    // Give each root time to take its own helpers down through the normal shutdown path.
-    await waitUntil(() => roots.every((pid) => !isAlive(pid)), {
-      intervalMs: 200,
-      timeoutMs: 5000,
-      label: 'harness editor instances to exit',
-    })
-  } catch {
-    // Fall through: the force pass below handles whatever is left.
+  if (roots.length > 0) {
+    try {
+      // Give each root time to take its own helpers down through the normal shutdown path.
+      await waitUntil(() => roots.every((pid) => !isAlive(pid)), {
+        intervalMs: 200,
+        timeoutMs: 5000,
+        label: 'harness editor instances to exit',
+      })
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[harness] ${String(err)} — forcing the remainder.`)
+    }
   }
+  // 🔴 The sweep runs unconditionally (policy 1). If root detection found nothing — every parent
+  // unknown, or an unexpected tree — the old blanket `pkill` still cleaned up; do not regress that.
   for (const pid of harnessPids()) {
     try {
       process.kill(pid, 'SIGKILL')
@@ -533,7 +551,7 @@ async function launchIsolatedOrbitStudio({
   fs.mkdirSync(extensionsDir, { recursive: true })
   fs.mkdirSync(workspaceSettingsDir, { recursive: true })
   // Fail here, with the reason, instead of 60 s later with an opaque MCP timeout.
-  if (userDataDir.length + IPC_SOCKET_SUFFIX_ALLOWANCE > UNIX_SOCKET_PATH_MAX) {
+  if (userDataDirExceedsSocketLimit(userDataDir)) {
     throw new Error(
       `--user-data-dir is too long for a macOS unix socket (${userDataDir.length} chars + ` +
         `~${IPC_SOCKET_SUFFIX_ALLOWANCE} for the socket name > ${UNIX_SOCKET_PATH_MAX}): ` +
@@ -583,20 +601,6 @@ async function launchIsolatedOrbitStudio({
       '--skip-release-notes',
       '--disable-updates',
       '--disable-telemetry',
-      // 🔴 Load-bearing, not cosmetic. `orbitscore.audioDevice` / `engineDebug` are
-      // `machine-overridable` scope, and VS Code ignores workspace settings at that scope in an
-      // UNTRUSTED workspace. A fresh temp folder is untrusted, so without this the harness's
-      // device selection silently reverts to the default and the engine fails to start. The
-      // fork we used to launch had trust disabled in its product build, which is why this never
-      // surfaced before.
-      //
-      // ⚠️ Known trade-off: this switches the trust mechanism off wholesale rather than marking
-      // just this temp workspace as trusted, so the harness cannot detect a regression in how
-      // the shipped app behaves in an untrusted workspace. Pre-trusting one folder would mean
-      // writing VS Code's internal `globalStorage/storage.json` layout, which is undocumented
-      // and moves between releases; the flag is the supported entry point (it is what
-      // `@vscode/test-electron` uses). Trust in the shipped app is tracked separately (#385).
-      '--disable-workspace-trust',
       `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
       `--user-data-dir=${userDataDir}`,
       `--extensions-dir=${extensionsDir}`,

@@ -173,7 +173,7 @@ daemon 側で UI イベントを汲む pump。#633 で per-index / per-window �
 
 ### gated E2E（`ORBIT_GATED_ORBITSTUDIO=1`）
 
-`tests/e2e/orbitstudio-mcp-gated.spec.ts`。実 OrbitStudio.app を起動し MCP tool 呼び出しだけで駆動、capture WAV の数値で判定します。`npm run test:e2e:gated` の `pretest` が daemon を自動ビルドします。ゲート env が無ければ skip。
+`tests/e2e/orbitstudio-mcp-gated.spec.ts`。実 VS Code を起動し MCP tool 呼び出しだけで駆動、capture WAV の数値で判定します（#830 で VSCodium フォークから stock VS Code へ）。`npm run test:e2e:gated` の `pretest` が daemon と engine の実行時依存を用意します。ゲート env が無ければ skip。
 
 ### coverage ratchet
 

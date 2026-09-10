@@ -497,12 +497,10 @@ flowchart LR
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:92-99
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:98-122
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
-const HARNESS_TMP_PREFIX = 'orbitstudio-'
-const HARNESS_KILL_PATTERN = `user-data-dir=[^[:space:]]*/${HARNESS_TMP_PREFIX}`
-
+// ...
 const gated = Boolean(process.env[GATE_ENV])
 const appPath = process.env.ORBIT_E2E_VSCODE_APP?.trim() || DEFAULT_APP_PATH
 const appAvailable = fs.existsSync(appPath)
@@ -515,7 +513,7 @@ const appAvailable = fs.existsSync(appPath)
 When the suite is loaded, before a single test runs, it checks the freshness of the daemon binary.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:185-195
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:208-218
   if (newest.at > builtAt) {
     throw new Error(
       'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
@@ -534,7 +532,7 @@ Which binary to inspect is not hardcoded; the guard asks `resolveDaemonBinaryPat
 **What counts as a "source"** took a second pass as well (#713). Picking up every `.rs` under `rust/` unconditionally lets an integration test — a separate cargo target, in practice `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs` — be selected as the "newest source". Such a file never enters the dependency graph of the `orbit-audio-daemon` binary, so cargo correctly reads its dependencies, builds nothing, and the binary's mtime is never refreshed. The result is an **unfixable red**: running `npm run test:e2e:gated`, exactly what the guard's message instructs, cannot clear it. The trigger is a property of mtime — `git checkout` sets a file's mtime to the checkout time, so merely moving between branches turns an integration test whose content never changed into the "newest source". In #713 this stopped the gated suite from running a single test.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:174-176
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:197-199
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
           continue
         }
@@ -546,21 +544,26 @@ And as a remedy one step stronger than the guard, the choice was made to **remov
 
 ```jsonc
 // package.json:18-19
-    "pretest:e2e:gated": "cargo build --release --manifest-path rust/Cargo.toml -p orbit-audio-daemon --features outproc-effect,outproc-instrument && npm run build",
+    "pretest:e2e:gated": "cargo build --release --manifest-path rust/Cargo.toml -p orbit-audio-daemon --features outproc-effect,outproc-instrument && npm run build && bash scripts/install-engine-deps.sh",
     "test:e2e:gated": "ORBIT_GATED_ORBITSTUDIO=1 npx vitest run --dir tests --config vitest.config.ts --globals --pool=forks --poolOptions.forks.singleFork=true e2e/orbitstudio-mcp-gated",
 ```
 
-npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` always runs cargo build and `npm run build` (which refreshes the bundled copy) beforehand. The owner's words in WORK_LOG 6.417 were: "これ手順が確実になったら手動ではない形にした方がいいですよね".
+npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` always runs cargo build, `npm run build` (which refreshes the bundled copy), and `scripts/install-engine-deps.sh` (which installs the engine's runtime dependencies into the bundle, derived from `packages/engine/package.json`) beforehand. The owner's words in WORK_LOG 6.417 were: "これ手順が確実になったら手動ではない形にした方がいいですよね".
 
-### Launching the app — the `orbs` CLI and the Extension Development Host
+### Launching the app — stock VS Code and the Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:460-481
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:589-620
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
     path.join(appPath, 'Contents/Resources/app/bin/code'),
     [
       '--new-window',
+      // ...
+      '--skip-welcome',
+      '--skip-release-notes',
+      '--disable-updates',
+      '--disable-telemetry',
       `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
       `--user-data-dir=${userDataDir}`,
       `--extensions-dir=${extensionsDir}`,
@@ -580,32 +583,65 @@ npm runs `pre<script>` automatically first, so typing `npm run test:e2e:gated` a
     if (!child.killed) child.kill()
 ```
 
-> 🔴 2026-09-05: this launch sequence was extracted into `launchIsolatedOrbitStudio()` (the `/simplify` pass on #661). One function now creates the isolated user-data, extensions and workspace-settings directories, spawns `orbs` with `--extensionDevelopmentPath`, and polls until `pollInitialize` succeeds.
+> 🔴 2026-09-05: this launch sequence was extracted into `launchIsolatedOrbitStudio()` (the `/simplify` pass on #661). One function now creates the isolated user-data, extensions and workspace-settings directories, spawns stock VS Code's executable (`Contents/Resources/app/bin/code`) with `--extensionDevelopmentPath`, and polls until `pollInitialize` succeeds. `--skip-welcome` / `--skip-release-notes` / `--disable-updates` / `--disable-telemetry` explicitly silence the welcome tab and update checks that the old rebranded fork used to disable in its product build; stock VS Code needs them spelled out.
 
 
 `--extensionDevelopmentPath` loads the extension source straight from the repository, and `--user-data-dir` / `--extensions-dir` point at temporary directories to isolate the run from the developer's own settings. The port is chosen as `39400 + Math.floor(Math.random() * 200)`, and `pollInitialize()` hits `initialize` every 2 seconds for up to 60 seconds until the connection comes up. The client (`tests/e2e/helpers/mcp-client.ts`) is raw JSON-RPC without the MCP SDK — a thin layer that just extracts `content[0].text` and `isError` from `tools/call`.
 
-The teardown repeats a safety warning.
+The isolated temp root lives under `/tmp`, not `os.tmpdir()`, with a short prefix (`HARNESS_TMP_PREFIX = 'orbe2e-'`). VS Code's main process opens a Unix domain socket at `<user-data-dir>/<version>-main.sock`, and macOS caps a socket path at 103 characters (`UNIX_SOCKET_PATH_MAX`). `os.tmpdir()` alone is 48 characters on this machine, so adding even a descriptive prefix pushed the path to 105 and the app died with `listen EINVAL` before opening a window — confirmed on real hardware (#830). All the harness sees is a 60-second MCP timeout, which reads as "the extension did not activate" and points you the wrong way. `userDataDirExceedsSocketLimit()` in `tests/e2e/helpers/harness-processes.ts` (new) checks the path length before launch and fails fast with the actual cause named.
+
+The teardown repeats a safety warning. It used to send a blanket `pkill -f` to every pid matching the pattern, but that carried a real-hardware side effect: VS Code's Electron helper processes inherit the same `--user-data-dir` argument as the main process, so a blanket `pkill -f` reaches them too. Killing a renderer out from under a still-live main process makes VS Code show "The window terminated unexpectedly (reason: 'killed', code: '15')" in a modal dialog that then **waits for a human**, which stalls an unattended gated run (#830).
+
+The fix is to signal only the roots of the process tree.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:278-284
-function killHarnessInstances(): void {
-  try {
-    execFileSync('pkill', ['-f', HARNESS_KILL_PATTERN], { stdio: 'ignore' })
-  } catch {
-    // pkill exits non-zero when no process matched — not an error here.
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:351-384
+async function killHarnessInstances(): Promise<void> {
+  const pids = harnessPids()
+  if (pids.length === 0) return
+  const roots = selectRootPids(pids.map((pid) => ({ pid, ppid: parentPidOrUnknown(pid) })))
+  for (const pid of roots) {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      // already gone
+    }
+  }
+  if (roots.length > 0) {
+    try {
+      // Give each root time to take its own helpers down through the normal shutdown path.
+      await waitUntil(() => roots.every((pid) => !isAlive(pid)), {
+        intervalMs: 200,
+        timeoutMs: 5000,
+        label: 'harness editor instances to exit',
+      })
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[harness] ${String(err)} — forcing the remainder.`)
+    }
+  }
+  // 🔴 The sweep runs unconditionally (policy 1). If root detection found nothing — every parent
+  // unknown, or an unexpected tree — the old blanket `pkill` still cleaned up; do not regress that.
+  for (const pid of harnessPids()) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // already gone
+    }
   }
 }
 ```
 
-The pattern must never be widened to `Code` or `Electron`, it says in two places. The reason is a past incident in which the user's actual VS Code was killed.
+`selectRootPids()` (`tests/e2e/helpers/harness-processes.ts`, new) takes the set of harness-owned pids and drops any whose parent is also in that set, leaving only the roots. A row whose parent could not be determined (the process vanished between the scan and the lookup, `ps` itself failed, etc.) is **treated as unknown and never counted as a root** — unknown defaults to safe. Roots get a `SIGTERM` so each main process can take its own helpers down through the normal shutdown path; if any are still alive after 5 seconds (or root detection found nothing to begin with), an unconditional `SIGKILL` sweep cleans up the rest. This classification logic can't be driven from the DSL and never shows up directly in whether the gated run succeeds, so it's pinned as a unit test in `tests/e2e/harness-processes.spec.ts` (new) — main + several helpers, two mains launched at once, an unknown parent, and a `NaN` parent.
+
+The pattern must never be widened to an app or process name, it says in more than one place. The reason is a past incident in which the user's actual VS Code was killed.
 
 ### `capture_wav` is a spawn-only option
 
 Capture can only be enabled by passing the `ORBIT_CAPTURE_WAV` environment variable at daemon spawn time. The extension auto-starts the engine during `activate()`, so the gated spec **stops the auto-started engine first**, then starts it again with capture.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1174-1179
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1313-1318
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -778,7 +814,7 @@ The onset threshold is the larger of "median window RMS × 4" and the absolute f
 The last assertion of the first test uses these onset gaps as evidence of tempo.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1785-1799
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1924-1938
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -1260,7 +1296,7 @@ function shouldFilterLine(line: string): boolean {
 The playhead reads from the raw stream, and `[STEP]` never reaches the output channel (= `get_log`). This means **the only way to observe the playhead from MCP is debug mode**. In debug mode `transcribeLog` appends `output` as-is, so `[STEP]` lines appear in `get_log`. The `#654` E2E takes exactly that shape.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2447-2457
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2586-2596
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1275,13 +1311,13 @@ The playhead reads from the raw stream, and `[STEP]` never reaches the output ch
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2460-2461
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2599-2600
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2517-2519
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2656-2658
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
@@ -1302,7 +1338,7 @@ The prerequisite is a built OrbitStudio.app on macOS (the former setup; see `doc
 npm run test:e2e:gated
 
 # アプリの場所を変える / キャプチャ WAV を残す
-ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm run test:e2e:gated
+ORBIT_E2E_VSCODE_APP=/Applications/Visual\ Studio\ Code.app ORBIT_KEEP_CAPTURES=/tmp/captures npm run test:e2e:gated
 ```
 
 Running it launches a GUI app and plays audible sound, so, as CLAUDE.md instructs, it is **not to be run unattended or unprompted**. In an ordinary `npm test` without the gate env var the whole describe is skipped, and only the ratchet and hygiene tests run every time.

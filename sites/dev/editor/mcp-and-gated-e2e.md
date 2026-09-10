@@ -497,12 +497,10 @@ flowchart LR
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:92-99
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:98-122
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
-const HARNESS_TMP_PREFIX = 'orbitstudio-'
-const HARNESS_KILL_PATTERN = `user-data-dir=[^[:space:]]*/${HARNESS_TMP_PREFIX}`
-
+// ...
 const gated = Boolean(process.env[GATE_ENV])
 const appPath = process.env.ORBIT_E2E_VSCODE_APP?.trim() || DEFAULT_APP_PATH
 const appAvailable = fs.existsSync(appPath)
@@ -515,7 +513,7 @@ const appAvailable = fs.existsSync(appPath)
 suite の読み込み時、テストを 1 本も走らせる前に daemon バイナリの鮮度を検査します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:185-195
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:208-218
   if (newest.at > builtAt) {
     throw new Error(
       'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
@@ -534,7 +532,7 @@ suite の読み込み時、テストを 1 本も走らせる前に daemon バイ
 **何を「ソース」と数えるか**にも一手が入っています（#713）。`rust/` 配下の `.rs` を無条件に拾うと、別の cargo ターゲットである統合テスト（実測では `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs`）が「最新のソース」に選ばれてしまいます。それらは `orbit-audio-daemon` のバイナリの依存グラフに入らないので、cargo は依存関係を正しく読んで何もビルドせず、バイナリの mtime も更新されません。つまりガードのメッセージが指示する `npm run test:e2e:gated` を何度打っても消えない、**解消不能な赤**になります。引き金は mtime の性質で、`git checkout` はファイルの mtime をチェックアウトした時刻へ更新するため、ブランチを行き来しただけで内容の変わっていない統合テストが「最新のソース」に化けます。#713 ではこれで実機 gated が起動段階から 1 本も走らなくなりました。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:174-176
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:197-199
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
           continue
         }
@@ -546,21 +544,26 @@ suite の読み込み時、テストを 1 本も走らせる前に daemon バイ
 
 ```jsonc
 // package.json:18-19
-    "pretest:e2e:gated": "cargo build --release --manifest-path rust/Cargo.toml -p orbit-audio-daemon --features outproc-effect,outproc-instrument && npm run build",
+    "pretest:e2e:gated": "cargo build --release --manifest-path rust/Cargo.toml -p orbit-audio-daemon --features outproc-effect,outproc-instrument && npm run build && bash scripts/install-engine-deps.sh",
     "test:e2e:gated": "ORBIT_GATED_ORBITSTUDIO=1 npx vitest run --dir tests --config vitest.config.ts --globals --pool=forks --poolOptions.forks.singleFork=true e2e/orbitstudio-mcp-gated",
 ```
 
-npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:gated` を打てば必ず cargo build と `npm run build`（同梱コピーの更新を含む）が先行します。WORK_LOG 6.417 の owner の言葉は「これ手順が確実になったら手動ではない形にした方がいいですよね」でした。
+npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:gated` を打てば必ず cargo build・`npm run build`（同梱コピーの更新を含む）・`scripts/install-engine-deps.sh`（engine の実行時依存を `packages/engine/package.json` から導出してバンドルへインストールする）が先行します。WORK_LOG 6.417 の owner の言葉は「これ手順が確実になったら手動ではない形にした方がいいですよね」でした。
 
-### アプリの起動 — `orbs` CLI と Extension Development Host
+### アプリの起動 — stock VS Code と Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:460-481
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:589-620
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
     path.join(appPath, 'Contents/Resources/app/bin/code'),
     [
       '--new-window',
+      // ...
+      '--skip-welcome',
+      '--skip-release-notes',
+      '--disable-updates',
+      '--disable-telemetry',
       `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
       `--user-data-dir=${userDataDir}`,
       `--extensions-dir=${extensionsDir}`,
@@ -580,32 +583,65 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
     if (!child.killed) child.kill()
 ```
 
-> 🔴 2026-09-05: この起動手順は `launchIsolatedOrbitStudio()` へ切り出されました（#661 の `/simplify`）。隔離した user-data / extensions / workspace 設定を作り、`orbs` を `--extensionDevelopmentPath` 付きで起動して `pollInitialize` するまでが 1 関数です。
+> 🔴 2026-09-05: この起動手順は `launchIsolatedOrbitStudio()` へ切り出されました（#661 の `/simplify`）。隔離した user-data / extensions / workspace 設定を作り、stock VS Code の実行体（`Contents/Resources/app/bin/code`）を `--extensionDevelopmentPath` 付きで起動して `pollInitialize` するまでが 1 関数です。`--skip-welcome` / `--skip-release-notes` / `--disable-updates` / `--disable-telemetry` は、以前はリブランド済みフォークの製品ビルドで無効化されていたウェルカムタブや自動更新チェックを、stock VS Code で明示的に黙らせるための旗です。
 
 
 `--extensionDevelopmentPath` でリポジトリ内の拡張ソースをそのまま読ませ、`--user-data-dir` / `--extensions-dir` を一時ディレクトリに向けて手元の設定から隔離します。ポートは `39400 + Math.floor(Math.random() * 200)` で選び、`pollInitialize()` が `initialize` を 2 秒間隔で最大 60 秒叩いて接続を待ちます。クライアント（`tests/e2e/helpers/mcp-client.ts`）は MCP SDK を使わない生の JSON-RPC で、`tools/call` の `content[0].text` と `isError` を取り出すだけの薄い層です。
 
-teardown は「安全性」の注意書きが繰り返されています。
+隔離した temp root は `os.tmpdir()` ではなく `/tmp` 直下・短い prefix（`HARNESS_TMP_PREFIX = 'orbe2e-'`）に固定されています。VS Code 本体は `<user-data-dir>/<version>-main.sock` という Unix ドメインソケットを開きますが、macOS のソケットパス上限は 103 文字（`UNIX_SOCKET_PATH_MAX`）です。`os.tmpdir()`（このマシンでは 48 文字）に説明的な prefix を足しただけで 105 文字に達し、ウィンドウを開く前に本体が `listen EINVAL` で即死したことが実機で確認されています（#830）。ハーネスが見る症状は 60 秒の MCP タイムアウトだけなので、「拡張が activate しなかった」という誤った当たりを付けてしまいます。そこで `tests/e2e/helpers/harness-processes.ts`（新設）の `userDataDirExceedsSocketLimit()` が起動前にパス長を検査し、原因を名指ししたエラーで早期に落とすようにしています。
+
+teardown は「安全性」の注意書きが繰り返されています。以前は、パターンにマッチした pid を `pkill -f` で一括して殺していましたが、これには実機で踏んだ副作用がありました。VS Code の Electron ヘルパープロセスは本体と同じ `--user-data-dir` 引数を継承するため、`pkill -f` はヘルパーにも直接届きます。生きている本体プロセスの下からレンダラーだけを殺すと、VS Code は「The window terminated unexpectedly (reason: 'killed', code: '15')」というモーダルダイアログを出して**人間の応答を待つ**状態になり、無人のゲート実行が止まります（#830）。
+
+対処は「プロセスツリーの根だけに signal する」ことです。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:278-284
-function killHarnessInstances(): void {
-  try {
-    execFileSync('pkill', ['-f', HARNESS_KILL_PATTERN], { stdio: 'ignore' })
-  } catch {
-    // pkill exits non-zero when no process matched — not an error here.
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:351-384
+async function killHarnessInstances(): Promise<void> {
+  const pids = harnessPids()
+  if (pids.length === 0) return
+  const roots = selectRootPids(pids.map((pid) => ({ pid, ppid: parentPidOrUnknown(pid) })))
+  for (const pid of roots) {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      // already gone
+    }
+  }
+  if (roots.length > 0) {
+    try {
+      // Give each root time to take its own helpers down through the normal shutdown path.
+      await waitUntil(() => roots.every((pid) => !isAlive(pid)), {
+        intervalMs: 200,
+        timeoutMs: 5000,
+        label: 'harness editor instances to exit',
+      })
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[harness] ${String(err)} — forcing the remainder.`)
+    }
+  }
+  // 🔴 The sweep runs unconditionally (policy 1). If root detection found nothing — every parent
+  // unknown, or an unexpected tree — the old blanket `pkill` still cleaned up; do not regress that.
+  for (const pid of harnessPids()) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // already gone
+    }
   }
 }
 ```
 
-パターンを `Code` や `Electron` に広げてはいけない、と 2 箇所で書かれています。ユーザーの VS Code を殺した過去の事故がその理由です。
+`selectRootPids()`（`tests/e2e/helpers/harness-processes.ts`、新設）は「ハーネス管理下の pid の集合」から「親も同じ集合に属する pid」を除いて根だけを返します。親が取得できない行（走査と取得の間にプロセスが消えた・`ps` 自体が失敗した、等）は**不明として扱い、根とはみなしません**——不明は安全側に倒す設計です。根に SIGTERM を送って通常の終了パスへヘルパーの後始末を任せ、5 秒待って生きていれば（あるいは根の検出そのものが失敗していれば）無条件の SIGKILL sweep で回収します。この分類ロジックは DSL からは駆動できず実機の成否にも直接は現れないため、`tests/e2e/harness-processes.spec.ts`（新設）でユニットテストとして固定しています（本体1+ヘルパー複数／本体を複数起動／親が不明／親が NaN、の4パターン）。
+
+パターンをアプリ名やプロセス名に広げてはいけない、と複数箇所で書かれています。ユーザーの VS Code を殺した過去の事故がその理由です。
 
 ### `capture_wav` は spawn 専用オプション
 
 キャプチャの有効化は daemon の spawn 時に `ORBIT_CAPTURE_WAV` 環境変数で渡すしかありません。拡張は `activate()` 時に engine を自動起動するので、gated spec は **自動起動した engine を一度止めてから** capture 付きで起動し直します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1174-1179
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1313-1318
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -778,7 +814,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 先頭テストの最後の assert は、この onset 間隔をテンポの証拠に使います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1785-1799
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1924-1938
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -1250,7 +1286,7 @@ function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2447-2457
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2586-2596
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1265,13 +1301,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2460-2461
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2599-2600
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2517-2519
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2656-2658
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
@@ -1292,7 +1328,7 @@ macOS で OrbitStudio.app がビルド済みであることが前提です（旧
 npm run test:e2e:gated
 
 # アプリの場所を変える / キャプチャ WAV を残す
-ORBITSTUDIO_APP=/path/to/OrbitStudio.app ORBIT_KEEP_CAPTURES=/tmp/captures npm run test:e2e:gated
+ORBIT_E2E_VSCODE_APP=/Applications/Visual\ Studio\ Code.app ORBIT_KEEP_CAPTURES=/tmp/captures npm run test:e2e:gated
 ```
 
 実行すると GUI アプリが起動して実際に音が鳴るので、CLAUDE.md の指示どおり **無人・無断で回さない**ことになっています。ゲート env が無い通常の `npm test` では describe ごと skip され、ラチェットと hygiene の 2 テストだけが常時走ります。
