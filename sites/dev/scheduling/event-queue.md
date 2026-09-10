@@ -474,7 +474,7 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
 `daemon.playAt()` は `DaemonClient` の薄いラッパーで、JSON の `PlayAt` リクエストを WebSocket で送ります。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:426-436
+// packages/engine/src/audio/rust-engine/daemon-client.ts:427-437
   async playAt(
     sampleId: string,
     timeSec: number,

@@ -202,7 +202,7 @@ spawn します。#474 以降はもう 1 本、watchdog thread が broadcast す
 （`PluginUiClosed` 等）を session の writer queue へ橋渡しする task が増えています。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:968-995
+// rust/crates/orbit-audio-daemon/src/session.rs:986-1013
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -238,7 +238,7 @@ plugin note 系 method は `plugin_note_spec` という純関数を「唯一の�
 match に落とす設計です（2 箇所で同じ文字列集合を独立管理すると drift するという教訓が反映されています）。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1584-1611
+// rust/crates/orbit-audio-daemon/src/session.rs:1602-1629
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,
@@ -405,7 +405,7 @@ SIGABRT を見てしまう — そのため `write_line_best_effort` を使う�
 callback 側の状態を引き継ぐためです（`OutputStream::render_state` のコメント参照）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:831-837
+// rust/crates/orbit-audio-native/src/output.rs:834-840
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
@@ -416,7 +416,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1605-1642
+// rust/crates/orbit-audio-native/src/output.rs:1643-1680
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -471,7 +471,7 @@ fn render_shared_block(
 （デバイス配置の段が増えたぶん、2ch 以外では配置のコストが常に乗ります）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1690-1780
+// rust/crates/orbit-audio-native/src/output.rs:1728-1818
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -575,7 +575,7 @@ master.buffer は常に 2ch なので、デバイス幅のバッファをもう 
 というのがこのバッファの理由です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2054-2058
+// rust/crates/orbit-audio-native/src/output.rs:2107-2111
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -602,7 +602,7 @@ struct DeviceLineBuffer<'a> {
 その幅は名前付きの定数として公開されています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:692-698
+// rust/crates/orbit-audio-native/src/output.rs:691-697
 /// engine 内部のチャンネル幅。**デバイス幅とは無関係に常に 2**（設計 §5.5）。
 ///
 /// events / feeds / stages / master.buffer はすべてこの幅で扱い、デバイス幅への変換は
@@ -616,7 +616,7 @@ pub const ENGINE_CHANNELS: usize = 2;
 `master.buffer` をデバイス幅の `hw` へ写します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1851-1875
+// rust/crates/orbit-audio-native/src/output.rs:1892-1916
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -655,7 +655,7 @@ gain を 1 つの構造体にまとめ、**ラック → gain** の順を固定�
 atomic に書いた目標値へ、block ごとに寄せていく形です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:817-827
+// rust/crates/orbit-audio-native/src/output.rs:820-830
     /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
     /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
     /// 算術のみ（alloc/lock/syscall なし）。
@@ -684,7 +684,7 @@ atomic に書いた目標値へ、block ごとに寄せていく形です。
 §5.1 の「再 publish 時に実効値を引き継ぐ機構」とセットで入れます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9479-9488
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9741-9750
     /// マスターゲインを設定する。PR-O3b では従来どおり atomic だけを更新し、RT 専有の
     /// `gain_current` を呼び出し間で連続させる。master line への写しは、TS の
     /// `global.gain()` を `SetBusLine("master", …)` へ切り替え、再 publish 時に実効値を引き継ぐ
@@ -716,7 +716,7 @@ wire（`SetGlobalGain`）の `ramp_sec` は互換のため受け取り続けま�
 dispatch が `engine.output_channels()` を渡して間に挟まります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2633-2648
+// rust/crates/orbit-audio-daemon/src/session.rs:2651-2666
         #[cfg(feature = "outproc-effect")]
         "SetBusLine" => match parse_set_bus_line_params(&params) {
             Ok((bus, line)) => {
@@ -759,7 +759,7 @@ publish 先は `MasterLine` が持つ専用の `LineSlot` です。ここで気�
 **publish されたかどうかを別の一方通行フラグで持っている**という点です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:749-759
+// rust/crates/orbit-audio-native/src/output.rs:748-758
     /// control が master program を **一度でも publish したか**（不可逆）。`line` の中身からは
     /// 導出できない（RT で既定値と深い比較をすることになり、かつ「既定と同じ program を明示的に
     /// publish した」場合を区別できない）。
@@ -777,7 +777,7 @@ publish 先は `MasterLine` が持つ専用の `LineSlot` です。ここで気�
 `true` になって初めて `execute_master_line` が呼ばれ、publish された op 列を順に実行します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1783-1800
+// rust/crates/orbit-audio-native/src/output.rs:1821-1838
 fn execute_master_line(
     master: &mut MasterLine,
     frames: usize,
@@ -815,7 +815,7 @@ engine render 部分の `render_engine_with_sources` は、instrument source（O
 4 通りに分かれます。source も active bus も無ければ、従来の `render_engine` に落ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1879-1920
+// rust/crates/orbit-audio-native/src/output.rs:1920-1961
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -866,7 +866,7 @@ fn render_engine_with_sources_impl(
 避けるため、scratch buffer は 1 秒分をあらかじめ確保しています）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2944-2961
+// rust/crates/orbit-audio-native/src/output.rs:3001-3018
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(
@@ -906,7 +906,7 @@ daemon 全体のアーキテクチャ確定（楽器=in-process・effects/3rd-pa
 対策は 2 段です。1 つめは、**デバイスを確定する前に捨ててよい probe stream で生存確認をする**こと。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:506-540
+// rust/crates/orbit-audio-native/src/output.rs:505-539
 fn probe_output_device(
     live: &LiveOutputDevice,
     suppress_callback: bool,
@@ -954,7 +954,7 @@ stream を drop しただけではコールバックが止まらないので、`
 `pause()` します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:677-683
+// rust/crates/orbit-audio-native/src/output.rs:676-682
 impl Drop for OutputStream {
     fn drop(&mut self) {
         // cpal 0.15.3 retains named CoreAudio streams through a reference cycle. Dropping the
@@ -972,7 +972,7 @@ callbacks/s は、`pause()` が 2 箇所とも生きていれば 94（期待値 
 分けられています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:336-343
+// rust/crates/orbit-audio-native/src/output.rs:335-342
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceFallbackPolicy {
     /// 起動経路。利用者を無音のまま放置しないので host 既定へ縮退して起動を成功させる。

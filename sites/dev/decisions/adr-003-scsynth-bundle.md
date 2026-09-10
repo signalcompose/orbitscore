@@ -339,7 +339,7 @@ ADR の形式にならって、決定後の帰結を記録します。
 本 ADR の中核だった「fail loud・silent fallback を持たない・候補は実行可能ファイルであること」は、`resolveDaemonBinaryPath()` にそのまま引き継がれています。#306 (`docs/archive/WORK_LOG_2026-07.md` §6.185) で `.vsix` 同梱 daemon を最後の候補として追加し、#366 のレビュー Round 2 (§6.186) で「`existsSync` のみで exec bit を見ていない = scsynth 側 `isExecutableFile` と非対称」という指摘を受けて、daemon 側も executable regular file を要求するよう揃えられました。候補の並びは `explicit → env (ORBIT_AUDIO_DAEMON_PATH) → monorepo-release → monorepo-debug → extension-bundle` です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:111-111
+// packages/engine/src/audio/rust-engine/daemon-client.ts:112-112
   source: 'explicit' | 'env' | 'monorepo-release' | 'monorepo-debug' | 'extension-bundle'
 ```
 

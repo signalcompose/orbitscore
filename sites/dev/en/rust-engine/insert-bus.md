@@ -56,7 +56,7 @@ event is always consumed — if it were not consumed, events tagged for an
 unattached bus would be retained forever (the landmine described below).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1370-1389
+// rust/crates/orbit-audio-native/src/output.rs:1404-1423
 /// named routing tag を受ける per-bus insert stage。sum/aux を含む mixer graph の1ノード
 /// （#459/#453・MX.1-MX.5）。
 ///
@@ -98,7 +98,7 @@ Beyond the four fields of 2026-07-17, `InsertBusStage` used to carry four mixer 
 **a single `line: LineSlot`**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1390-1392
+// rust/crates/orbit-audio-native/src/output.rs:1424-1426
     /// Published line program. Routing, sends, and rack position are all interpreted from this one
     /// ordered program by the callback post-loop.
     line: LineSlot,
@@ -109,8 +109,8 @@ fields, which only said where to sum, the program expresses where the rack runs 
 gain is applied (`Gain`), and where the signal goes (`Output`) as **one ordered program**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:988-995
-/// One operation in a bus line. `Pan` is reserved for PR-O4; this PR does not generate it.
+// rust/crates/orbit-audio-native/src/output.rs:1019-1026
+/// One operation in a bus line. Pan positions use the normalized -1..=1 wire range.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LineOp {
     Rack,
@@ -120,8 +120,12 @@ pub enum LineOp {
 }
 ```
 
-`LineOp::Pan` exists only as a type; no code in PR-O3a generates that op (wiring lands in PR-O4).
-Where a bus's output is actually summed remains the subject of the SC-2 chapter.
+`LineOp::Pan` existed only as a type through PR-O3a, rejected at install time by
+`validate_line_program` as not wired into RT. The follow-up #611 PR-O4 (this bundle) removes that
+rejection, and it now executes in both the post-loop and master-line execution (pan on a bus
+applies `√2 · equal_power_pan(p)` rather than the plain law — see the "line program" section of
+[SC-2](/en/signal-chain/mixer-audio-line)). Where a bus's output is actually summed remains the
+subject of the SC-2 chapter.
 
 ## Zero buses → bit-identical legacy path
 
@@ -130,7 +134,7 @@ The `render_engine_with_sources` seen in RE-1 falls back entirely to the legacy 
 pays nothing for the bus pool.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1913-1918
+// rust/crates/orbit-audio-native/src/output.rs:1954-1959
     if sources.is_empty() {
         if buses.iter().any(|bus| bus.active.load(Ordering::Relaxed)) {
             render_engine_with_insert_buses_and_source_outputs(
@@ -148,7 +152,7 @@ that both the marking pass and the accumulation pass reuse (loading the same ato
 let a `SetBusRouting` that lands mid-callback make the two passes see different things).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2117-2123
+// rust/crates/orbit-audio-native/src/output.rs:2170-2176
     let bs = (hw.len() / output_channels) * output_channels;
 
     // active フラグを 1 回だけ atomic load して使い回す（RT: 同じ判定を何度も load しない）。
@@ -167,7 +171,7 @@ a contract that must match the TS-side `SequenceEffectManager` both numerically
 and as a string.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2024-2032
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2027-2035
 /// 既定 insert bus プールの名前 prefix。DSL 側（TS）の per-sequence effect manager が
 /// 同じ規則（`seq-bus-<n>`）で bus 名を組み立てて `LoadPlugin.bus` / `PlayAt.bus` に
 /// 送るため、prefix を変える場合は TS 側の定数も合わせて更新すること（#434 S3）。
@@ -184,7 +188,7 @@ path) is set, it takes priority; otherwise the default pool is generated
 per `ORBIT_EFFECT_BUS_POOL`:
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2056-2068
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2059-2071
 /// bus 名の解決: `ORBIT_EFFECT_BUSES`（明示名・非空）が設定されていればそれを使う（既存 S2 挙動を
 /// 保つ）。未設定なら `ORBIT_EFFECT_BUS_POOL`（既定 8・`"0"` で無効）に従って `seq-bus-<n>` の
 /// 既定プールを生成する。両方指定は `ORBIT_EFFECT_BUSES` を優先（明示指定が常に勝つ）。
@@ -207,7 +211,7 @@ from 2026-07-17 is the added `kind: BusKind` (insert / sum / aux) and the shared
 the mixer.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2186-2208
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:2258-2280
 /// 1 本の named bus stage（insert/sum/aux 共通）を構成する部材（`build_effect_bus_stages` →
 /// `install_effect_bus_slots` の間で運ぶ・#434 S2/S3・M2 で kind/routing を追加）。
 /// effect-only / both の両起動経路で同一のライフサイクルを共有する。
@@ -469,7 +473,7 @@ The E2E that goes through the user's own path (OrbitStudio + MCP) is accumulated
 
 - `rust/crates/orbit-audio-native/src/output.rs:377-412` — the `InsertBusStage` struct (meaning of `processor`/`active` and the mixer fields)
 - `rust/crates/orbit-audio-native/src/output.rs:1252-1275` — `InsertBusStage` after PR-O3a (four mixer fields → `line: LineSlot`)
-- `rust/crates/orbit-audio-native/src/output.rs:904-929` — `OutputDest` / `LineOutput` / `LineOp` (`Pan` reserved for PR-O4)
+- `rust/crates/orbit-audio-native/src/output.rs:1001-1026` — `OutputDest` / `LineOutput` / `LineOp` (`Pan` wired in #611 PR-O4)
 - `rust/crates/orbit-audio-native/src/output.rs:709-750` — `render_engine_with_sources`'s zero-bus fallback (bit-identical path)
 - `rust/crates/orbit-audio-native/src/output.rs:823-846` — the active-flag snapshot in `render_engine_with_insert_buses_and_source_outputs`
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:1904-1948` — `DEFAULT_EFFECT_BUS_POOL_PREFIX` / `DEFAULT_EFFECT_BUS_POOL_SIZE` / `effect_buses_from_env`
