@@ -91,7 +91,22 @@ import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
-const HARNESS_TMP_PREFIX = 'orbitstudio-'
+/**
+ * 🔴 Temp roots live under `/tmp`, not `os.tmpdir()`, and the prefix is short.
+ *
+ * VS Code's main process opens a Unix domain socket at `<user-data-dir>/<version>-main.sock`,
+ * and macOS caps a socket path at 103 characters. `os.tmpdir()` alone is 48 characters here
+ * (`/var/folders/<2>/<28>/T/`), so a descriptive prefix pushed the socket path to 105 and the
+ * app died with `listen EINVAL` before opening a window. The harness saw only a 60 s MCP
+ * timeout, which reads as "the extension did not activate" and sends you looking in the wrong
+ * place. Keep this short, and keep the preflight check below.
+ */
+const HARNESS_TMP_BASE = '/tmp'
+const HARNESS_TMP_PREFIX = 'orbe2e-'
+/** macOS limit for a Unix domain socket path. */
+const UNIX_SOCKET_PATH_MAX = 103
+/** `<user-data-dir>/1.13-main.sock`; allow room for a longer version string. */
+const IPC_SOCKET_SUFFIX_ALLOWANCE = 24
 /**
  * Identity of a harness-owned process: the `--user-data-dir` we generated. Built from
  * HARNESS_TMP_PREFIX so the launcher and the teardown can never drift apart.
@@ -491,13 +506,22 @@ async function launchIsolatedOrbitStudio({
   prepareWorkspace,
 }: IsolatedOrbitStudioOptions): Promise<IsolatedOrbitStudio> {
   killHarnessInstances()
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), tmpPrefix))
+  const tmpRoot = fs.mkdtempSync(path.join(HARNESS_TMP_BASE, tmpPrefix))
   const userDataDir = path.join(tmpRoot, 'user-data')
   const extensionsDir = path.join(tmpRoot, 'extensions')
   const workspaceSettingsDir = path.join(tmpRoot, '.vscode')
   fs.mkdirSync(userDataDir, { recursive: true })
   fs.mkdirSync(extensionsDir, { recursive: true })
   fs.mkdirSync(workspaceSettingsDir, { recursive: true })
+  // Fail here, with the reason, instead of 60 s later with an opaque MCP timeout.
+  if (userDataDir.length + IPC_SOCKET_SUFFIX_ALLOWANCE > UNIX_SOCKET_PATH_MAX) {
+    throw new Error(
+      `--user-data-dir is too long for a macOS unix socket (${userDataDir.length} chars + ` +
+        `~${IPC_SOCKET_SUFFIX_ALLOWANCE} for the socket name > ${UNIX_SOCKET_PATH_MAX}): ` +
+        `${userDataDir}. VS Code dies with \`listen EINVAL\` before opening a window. ` +
+        'Shorten HARNESS_TMP_PREFIX or the per-test prefix.',
+    )
+  }
   const resolvedSettings = typeof settings === 'function' ? settings(tmpRoot) : settings
   fs.writeFileSync(
     path.join(workspaceSettingsDir, 'settings.json'),
@@ -538,6 +562,13 @@ async function launchIsolatedOrbitStudio({
       '--skip-release-notes',
       '--disable-updates',
       '--disable-telemetry',
+      // 🔴 Load-bearing, not cosmetic. `orbitscore.audioDevice` / `engineDebug` are
+      // `machine-overridable` scope, and VS Code ignores workspace settings at that scope in an
+      // UNTRUSTED workspace. A fresh temp folder is untrusted, so without this the harness's
+      // device selection silently reverts to the default and the engine fails to start. The
+      // fork we used to launch had trust disabled in its product build, which is why this never
+      // surfaced before. Trust behavior of the shipped app is a separate question (#385).
+      '--disable-workspace-trust',
       `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
       `--user-data-dir=${userDataDir}`,
       `--extensions-dir=${extensionsDir}`,
@@ -965,7 +996,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // デバイス名の存在確認をスキップするセンチネル __default__ を設定し、
       // マシン固有のデバイス名に依存せず拡張の auto-start を有効化する。
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: `${HARNESS_TMP_PREFIX}mcp-e2e-`,
+        tmpPrefix: `${HARNESS_TMP_PREFIX}main-`,
         settings: {
           'orbitscore.audioDevice': '__default__',
           'orbitscore.engineDebug': false,
@@ -5522,7 +5553,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     '#779 startup sweep unlinks orphaned outproc shm but keeps live ones',
     async () => {
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: `${HARNESS_TMP_PREFIX}shm-sweep-`,
+        tmpPrefix: `${HARNESS_TMP_PREFIX}shm-`,
         settings: {
           'orbitscore.audioDevice': '__default__',
           'orbitscore.engineDebug': false,
@@ -5596,7 +5627,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     async () => {
       let requestedName = ''
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: `${HARNESS_TMP_PREFIX}named-device-`,
+        tmpPrefix: `${HARNESS_TMP_PREFIX}dev-`,
         settings: () => {
           requestedName = defaultOutputDeviceName('#661 D-0')
           return {
@@ -5672,7 +5703,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // changing it in the shared long-running suite would invalidate all following scenarios.
       let deadRequestedName = ''
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: `${HARNESS_TMP_PREFIX}device-gate-`,
+        tmpPrefix: `${HARNESS_TMP_PREFIX}gate-`,
         settings: () => {
           deadRequestedName = defaultOutputDeviceName('#661 D-2')
           return {
@@ -5770,7 +5801,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // D-3 は**デバイス無指定で起動**し、既定デバイスを名前で要求することで本当の切替にする。
       // `dead-probe-requested` は「要求された」デバイスに効くので、その probe が死ぬ。
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: `${HARNESS_TMP_PREFIX}device-switch-`,
+        tmpPrefix: `${HARNESS_TMP_PREFIX}swap-`,
         settings: { 'orbitscore.audioDevice': '__default__', 'orbitscore.engineDebug': false },
         env: {
           ...process.env,

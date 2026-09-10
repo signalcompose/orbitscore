@@ -19,6 +19,41 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ### test(e2e): launch the gated harness from stock VS Code (#830) (Sep 10, 2026)
 
+🔴 **実機で回して 3 件の欠陥が出た。いずれも stock VS Code に切り替えて初めて現れたもので、
+CI・ユニット・机上レビューのどれにも掛からない。** 実機ゲートを置いている理由そのもの。
+
+| # | 症状 | 原因 |
+|---|---|---|
+| 1 | `The window terminated unexpectedly (reason: 'killed', code: '15')` のモーダルが出て**人待ちになる** | `pkill -f` が **Electron のヘルパーにも当たる**（同じ `--user-data-dir` 引数を継承するため。実測 1 インスタンス = 7 プロセス）。レンダラを本体より先に殺すと本体が異常終了と判断する |
+| 2 | 新規プロファイルの welcome / サインイン画面が毎回出る | stock VS Code の初回起動 UI。フォークはビルド時に無効化されていた |
+| 3 | **MCP が 60 秒立たない** | `--user-data-dir` のパスが **105 文字**で、macOS の Unix ソケット上限 **103 文字**を超えた。VS Code 本体が `listen EINVAL` で即死し、ウィンドウが一度も開かない |
+
+**3 が本体で、いちばん質が悪い。** ハーネスからは「MCP が立たない」としか見えないので、
+拡張が activation していないように読める。実際 main はそちらを 30 分調べた。
+`os.tmpdir()` だけで 48 文字（`/var/folders/<2>/<28>/T/`）あり、説明的な prefix を足すと超える。
+
+**対処**: temp root を `/tmp` へ移し prefix を短縮（`orbitstudio-` → `orbe2e-`）。加えて
+**起動前にソケット長を検査して即座に理由を出す**（60 秒待って原因不明で落ちるのを避ける）。
+
+さらに 4 件目として、**ワークスペースの信頼**が効いていた。`orbitscore.audioDevice` などは
+`machine-overridable` スコープで、**未信頼ワークスペースでは workspace 設定が無視される**。
+フォークは信頼機能が無効化されていたため表面化していなかった。ハーネスでは `--disable-workspace-trust` を渡す
+（出荷アプリの信頼の扱いは #385 の別問題）。
+
+## 🔴 `pretest:e2e:gated` が engine の実行時依存を入れていなかった
+
+診断の途中で `❌ daemon resolver failed: Cannot find module 'uuid'` が出た。
+`npm run build` の `build:copy-engine` は dist をコピーするだけで、
+`scripts/install-engine-deps.sh` を**呼んでいない**。**ビルドは緑・パッケージも成功し、
+実行時にだけ落ちる**（#654 の `yaml` と同じクラス）。`pretest:e2e:gated` に追加した。
+
+## 実機の結果
+
+**29 passed / 1 failed**（528 秒）。落ちた 1 件は
+`steps the live playhead through an instrument() sequence, rests included` で、
+**main の既知ベースラインと同一**。新しい赤は無い。
+
+
 実機 gated ハーネスの起動先を VSCodium フォークの OrbitStudio.app から stock VS Code へ切り替え、
 `--extensionDevelopmentPath` と隔離した user-data / extensions dir をそのまま使う構成にした。
 終了処理はアプリ名ではなく、ハーネス専用 `--user-data-dir` の共通接頭辞だけを対象にするため、
