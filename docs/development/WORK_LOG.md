@@ -17,6 +17,28 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow the gated harness move onto stock VS Code (#830 / PR #831) (Sep 10, 2026)
+
+**追従元**: PR [#831](https://github.com/signalcompose/orbitscore/pull/831)（マージコミット `229d638`）/ **ブランチ**: `claude/docs-sync-pr831`（docs のみ）
+
+PR #831 は CLAUDE.md・README・`docs/planning/` 系・dev サイトの引用ブロックまでは直していたが、
+**dev サイトの散文が「実 OrbitStudio.app を起動する」と言ったまま**残っていた。同じページの中で
+コードブロックは `bin/code` と `/Applications/Visual Studio Code.app` を引用しているので、
+本文と引用が食い違う状態だった。`sites/dev/glossary.md`（PR #831 で更新済み）とも矛盾していた。
+
+| 直したもの | 場所 |
+|---|---|
+| 章タイトル・目次・導入・本文の「実 OrbitStudio.app を起動」 | `sites/dev/editor/mcp-and-gated-e2e.md` + `sites/dev/en/` の同パス |
+| 「手元で走らせる」の前提が「OrbitStudio.app がビルド済み」だった（フォークのビルドスクリプトは PR #831 が削除済みで、到達できない手順） | 同上 |
+| 手動ゲートの手順（CLAUDE.md が #830 で 3 点追記したのに散文は旧 2 段のまま） | 同上 / `sites/dev/signal-chain/index.md` + en |
+| `killOrbitStudio()` → `killHarnessInstances()`（関数は PR #831 で改名済み） | 同上 |
+| 実機層の駆動対象 | `docs/testing/E2E_HARNESS_SPEC.md:57` |
+| 新設 2 ファイルを Sources に追加 | `tests/e2e/helpers/harness-processes.ts` / `tests/e2e/harness-processes.spec.ts` |
+
+**直さずに注記したもの**: 「テスト一覧」表の行番号は PR #831 以前から古い（`it` は 20 本ではなく
+30 本ある）。この PR の差分に起因しないので、行番号を機械的にずらすと**誤った番号のまま体裁だけ整う**。
+表の見出しに「その時点のもの」と明記するに留めた。
+
 ### test(e2e): launch the gated harness from stock VS Code (#830) (Sep 10, 2026)
 
 🔴 **実機で回して 3 件の欠陥が出た。いずれも stock VS Code に切り替えて初めて現れたもので、

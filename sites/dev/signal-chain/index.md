@@ -1532,7 +1532,7 @@ kick.loop
 
 評価したら、次の手順で「配線の全長」を観測します（CLAUDE.md のマージ前ゲートと同じ動線です）。
 
-1. OrbitStudio を `ORBITSCORE_MCP_PORT=39123` 付きで起動し、`get_engine_state` でエンジン起動を確認する
+1. stock VS Code を `ORBITSCORE_MCP_PORT=39123` + `--extensionDevelopmentPath=packages/vscode-extension` 付きで起動し（#830 以降。手順は CLAUDE.md「マージ前ゲート」）、`get_engine_state` でエンジン起動を確認する
 2. 上の楽譜を `evaluate_orbitscore` で評価する。**`ok` だけでは何も証明されない**ので、
    `get_log` で ERROR が増えていないことと、`[orbit-effect-rack] child spawned pid=...` の行が
    1 行だけ出ていることを確認する
@@ -1561,8 +1561,8 @@ manifest が残っています:
   {"kind":"standard","name":"Gain","params":{"db":-6.0},"enabled":true}]}
 ```
 
-> NOTE: unverified — needs confirmation: 本章の執筆環境（Linux sandbox）では OrbitStudio と
-> rack child（macOS 限定）を起動できないため、上の 4 ステップは著者が本セッションで実行して
+> NOTE: unverified — needs confirmation: 本章の執筆環境（Linux sandbox）では拡張ホスト（#830 以降は
+> stock VS Code）と rack child（macOS 限定）を起動できないため、上の 4 ステップは著者が本セッションで実行して
 > いません。各ステップで期待する観測（child が 1 つ・PID 不変・`states/` への保存）は
 > gated E2E `#628 R28` のアサーションと WORK_LOG 6.396 / 6.401 の実測に基づいています。
 

@@ -1,19 +1,19 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: 900d453
-verified-at: "2026-09-06"
+verified-against: 229d638
+verified-at: "2026-09-10"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing), #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) and the [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle (tracking through local wrappers, plus a liveness check on the ratchet itself) on 2026-09-06. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing), #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) and the [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle (tracking through local wrappers, plus a liveness check on the ratchet itself) on 2026-09-06, and #830 (PR [#831](https://github.com/signalcompose/orbitscore/pull/831), **the gated harness moving from the VSCodium-fork OrbitStudio.app to stock VS Code**) on 2026-09-10. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
 [IV-2](/en/editor/execution-feedback) followed what happens between pressing `Cmd+Enter` and the code reaching the engine. This chapter reads one layer further out: the machinery that lets an **agent** (or a test runner) operate the same extension through the same path a human would. There are three players.
 
 1. **An MCP server running inside the extension host** (`packages/vscode-extension/src/mcp-server.ts`)
-2. **A gated E2E suite that launches the real OrbitStudio.app and measures the audio**, using that server as its only control surface (`tests/e2e/orbitstudio-mcp-gated.spec.ts`)
+2. **A gated E2E suite that launches real VS Code and measures the audio**, using that server as its only control surface (`tests/e2e/orbitstudio-mcp-gated.spec.ts`)
 3. **The live playhead**, which turns the `[STEP]` lines emitted by the engine into editor highlights (`playhead.ts` and `extension.ts`)
 
 They look like three independent features, but a single line — the engine's stdout — connects them. The `[STEP]` lines of the playhead, the errors returned by `get_log`, and the completion notice of `evaluate_orbitscore` are all the result of the extension sorting that one stdout stream. Keep that line in mind as we read.
@@ -28,7 +28,7 @@ They look like three independent features, but a single line — the engine's st
 4. [What `ok` from `evaluate_orbitscore` means](#what-ok-from-evaluate_orbitscore-means)
 5. [`get_engine_state` — no longer just `running`](#get_engine_state--no-longer-just-running)
 6. [`get_log` and the ring buffer](#get_log-and-the-ring-buffer)
-7. [The gated E2E harness — driving the real OrbitStudio.app through MCP alone](#the-gated-e2e-harness--driving-the-real-orbitstudioapp-through-mcp-alone)
+7. [The gated E2E harness — driving real VS Code through MCP alone](#the-gated-e2e-harness--driving-real-vs-code-through-mcp-alone)
 8. [Capture WAV and RMS assertions](#capture-wav-and-rms-assertions)
 9. [Turning discipline into mechanism — the ratchet and assertion hygiene](#turning-discipline-into-mechanism--the-ratchet-and-assertion-hygiene)
 10. [The live playhead — from `[STEP]` lines to decorations](#the-live-playhead--from-step-lines-to-decorations)
@@ -462,9 +462,11 @@ There was a second false green hiding in this count, unrelated to the window. Th
 
 ---
 
-## The gated E2E harness — driving the real OrbitStudio.app through MCP alone
+## The gated E2E harness — driving real VS Code through MCP alone
 
-From here on is the body of the chapter. `tests/e2e/orbitstudio-mcp-gated.spec.ts` is a single file of more than 4,500 lines that launches the real OrbitStudio.app (the former VSCodium-based setup; see `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.4 for the current direction) and operates it **only through MCP tool calls**.
+From here on is the body of the chapter. `tests/e2e/orbitstudio-mcp-gated.spec.ts` is a single file of more than 5,900 lines that launches real VS Code (`/Applications/Visual Studio Code.app` by default) as an Extension Development Host and operates it **only through MCP tool calls**.
+
+🔴 **The launch target changed on 2026-09-10 (#830, PR [#831](https://github.com/signalcompose/orbitscore/pull/831)).** Before that it launched the dedicated CLI of a fork — VSCodium rebranded as OrbitStudio (`OrbitStudio.app`). The #827 ruling freezes the extension build as stable and folds the fork away, so the harness was switched to stock VS Code **before** the fork was removed, leaving no window in which the merge gate is unavailable (`docs/planning/NATIVE_MIGRATION_2026-09.md` §12.4). The "orbitstudio" left in the file name, the function names and the gate env var (`ORBIT_GATED_ORBITSTUDIO`) is a leftover from that era; the fork is no longer what gets driven.
 
 ```mermaid
 flowchart LR
@@ -677,15 +679,15 @@ export function decideStartEngineForAgent(
 }
 ```
 
-The old implementation returned `ok: true, 'engine already running'` here and silently dropped `captureWav`. The caller believed it was recording and only discovered `ENOENT` when it tried to read `capture.wav`. As the regression pin for `#528`, the gated spec asserts both "it is rejected" and "the rejection does not tear the engine down" (`tests/e2e/orbitstudio-mcp-gated.spec.ts:844-853`).
+The old implementation returned `ok: true, 'engine already running'` here and silently dropped `captureWav`. The caller believed it was recording and only discovered `ENOENT` when it tried to read `capture.wav`. As the regression pin for `#528`, the gated spec asserts both "it is rejected" and "the rejection does not tear the engine down" (`tests/e2e/orbitstudio-mcp-gated.spec.ts:1212-1222`).
 
 ### Test list
 
-As of 2026-09-01 the describe holds 20 `it`s. The first one launches the app, initialises the catalogue and starts the engine with capture; the rest assume that state (which is why WORK_LOG 6.409 records that narrowing to one test with `-t` fails with `catalogClapEffectPath` uninitialised).
+As of 2026-09-01 the describe held 20 `it`s (🔴 **the line numbers and the count in this table are from that date and have not been kept up with later additions and moves**; as of 2026-09-10 there are 30). The first one launches the app, initialises the catalogue and starts the engine with capture; the rest assume that state (which is why WORK_LOG 6.409 records that narrowing to one test with `-t` fails with `catalogClapEffectPath` uninitialised).
 
 | Line | Test name (summary) | Main oracle |
 |---|---|---|
-| 636 | The real OrbitStudio end-to-end: diagnostics-on-open, `run_selection`, live edit, capture verification | Onset gaps (120 → 180 bpm) |
+| 636 | Real VS Code end-to-end: diagnostics-on-open, `run_selection`, live edit, capture verification | Onset gaps (120 → 180 bpm) |
 | 1433–1687 | #643 E2E-1 to 7: `global.gain(-6)` / sequence rack / gap during attach / `output(sum)` + `send(aux)` / instrument replacement / slot release / instrument without a mixer declaration | Segment RMS ratios |
 | 1732, 1808 | #633 E2E-1 to 2: UI open/close on multiple identical inserts; close after an index shift | `open_plugin_ui` / `close_plugin_ui` responses |
 | 1878 | Catalogue v2 rescan, reporting a broken bundle | `rescan_plugins` failures |
@@ -1331,7 +1333,7 @@ The same `[STEP]` lines and the same `get_log` route serve humans as the playhea
 
 ## Running it locally
 
-The prerequisite is a built OrbitStudio.app on macOS (the former setup; see `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.4 for the current direction; the extension is loaded with `--extensionDevelopmentPath`).
+The prerequisite is stock VS Code installed on macOS (`/Applications/Visual Studio Code.app` by default). The extension is not installed; `--extensionDevelopmentPath` loads it straight from the repository. If the app is not found, the suite prints a console note and skips even with the gate env var set.
 
 ```bash
 # 実機 gated E2E（cargo build + npm run build が pretest で自動実行される）
@@ -1343,7 +1345,13 @@ ORBIT_E2E_VSCODE_APP=/Applications/Visual\ Studio\ Code.app ORBIT_KEEP_CAPTURES=
 
 Running it launches a GUI app and plays audible sound, so, as CLAUDE.md instructs, it is **not to be run unattended or unprompted**. In an ordinary `npm test` without the gate env var the whole describe is skipped, and only the ratchet and hygiene tests run every time.
 
-To poke at it interactively from an agent (Claude Code), launch OrbitStudio with `ORBITSCORE_MCP_PORT=39123` and register it into `.mcp.json` with the `register_mcp_server` tool or the "Register Claude Code MCP Server" command. The procedure defined in the "pre-merge gate" section of CLAUDE.md has three steps: confirm startup with `get_engine_state` → evaluate the PR's DSL with `evaluate_orbitscore` → **check for ERROR with `get_log`**. The same section carries the warning to "always quit any running OrbitStudio before launching again" (a stale extension host spawning a new daemon ends in `DaemonStartupError`).
+To poke at it interactively from an agent (Claude Code), launch stock VS Code with `ORBITSCORE_MCP_PORT=39123` and `--extensionDevelopmentPath`, then register it into `.mcp.json` with the `register_mcp_server` tool or the "Register Claude Code MCP Server" command. The procedure defined in the "pre-merge gate" section of CLAUDE.md has three steps: confirm startup with `get_engine_state` → evaluate the PR's DSL with `evaluate_orbitscore` → **check for ERROR with `get_log`**. The same section carries three cautions specific to this manual gate (revised in #830).
+
+- **Quit any dev host left over from the previous gate run.** A stale extension host spawning a new daemon ends in `DaemonStartupError`, and an isolated directory does not remove that risk — what is stale is the built extension code, not the settings. Target only harness-owned instances (`pkill -f 'user-data-dir=[^[:space:]]*/orbgate-u-'`). The everyday VS Code needs no quitting unless the orbitscore extension is installed in it
+- **Keep `--user-data-dir` a short path under `/tmp`.** The 103-character limit above applies to the manual gate too: `$TMPDIR` plus a descriptive name kills the main process before a window opens
+- **Run `bash scripts/install-engine-deps.sh` before launching.** `build:copy-engine` in `npm run build` only copies `dist`; it does not install the bundled engine's runtime dependencies (`uuid` and friends). The build stays green and only the run fails, with `daemon resolver failed: Cannot find module 'uuid'`. The `pretest` of `npm run test:e2e:gated` covers this, but the manual procedure does not go through it
+
+The manual gate also launches `Contents/MacOS/Code` directly rather than `bin/code` (`bin/code` detaches the app and exits, so the process cannot be followed locally). The gated harness keeps the child it `spawn`ed, so it uses `bin/code`; the difference is deliberate.
 
 ---
 
@@ -1367,7 +1375,7 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - Nested resolution in `findPlayArgRangeForPath()` (the descend condition for `"1.0"` and the handling of group runs), and the seam for the planned `seq.color()` in `#391` (`PlayheadColorConfig.seqColors`)
 - What happens to the hand-written rows of ledger 2 (implementation ↔ test) in `tests/e2e/dsl-coverage-ledger.ts`, and to the ratchet, once #671 stage 3 turns that ledger into something a generator derives (`E2E_HARNESS_SPEC.md` §2.1)
 - `estimateFundamentalHz()` in `analyze_audio` — how the plugin-state restore tests assert "the same measured pitch"
-- The safety envelope of `killOrbitStudio()` / `replaceGatedPluginFixtureSymlink()` (allowlists) — the boundary that keeps the harness from damaging the user's environment
+- The safety envelope of `killHarnessInstances()` / `replaceGatedPluginFixtureSymlink()` (allowlists) — the boundary that keeps the harness from damaging the user's environment
 - Improving the structure that prevents gated tests from running one at a time (WORK_LOG 6.409)
 
 ## Sources
@@ -1395,9 +1403,11 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()` (#654)
 - `packages/engine/src/core/sequence.ts:1381-1404` — note-path marker enqueueing and dedup (#654)
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-153` — env contract, stale-artifact guard
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:360-633` — describe setup, the RMS helper of `captureInstrumentScenario`, teardown
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:635-1430` — the first test (launch, catalogue, capture, run_selection, onset verification)
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2030-2136` — the #654 playhead E2E
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:538-1014` — describe setup, the RMS helper of `captureInstrumentScenario`, teardown
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1016-1942` — the first test (launch, catalogue, capture, run_selection, onset verification)
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2566-2673` — the #654 playhead E2E
+- `tests/e2e/helpers/harness-processes.ts:1-49` — the teardown containment policy, `selectRootPids()` and `userDataDirExceedsSocketLimit()` (#830)
+- `tests/e2e/harness-processes.spec.ts:1-89` — unit tests for that process classification (#830)
 - `tests/e2e/helpers/mcp-client.ts:1-174` — raw JSON-RPC client
 - `tests/e2e/gated-sources.ts:1-106` — the list of gated sources the ratchet and hygiene test read (#668 PR-E1)
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` assertions (where the seven `countErrors` definitions converged, #668 PR-E2)
@@ -1426,3 +1436,4 @@ To poke at it interactively from an agent (Claude Code), launch OrbitStudio with
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — periodic capture header patch and stale guard
 - Issue [#654](https://github.com/signalcompose/orbitscore/issues/654) — playhead not moving for instrument sequences
 - Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E foundation (PR-E1 `gated-sources.ts` / PR-E2 the shared harness layer)
+- Issue [#830](https://github.com/signalcompose/orbitscore/issues/830) — moving the gated harness onto stock VS Code (PR [#831](https://github.com/signalcompose/orbitscore/pull/831))

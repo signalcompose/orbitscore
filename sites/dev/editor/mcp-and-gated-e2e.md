@@ -1,19 +1,19 @@
 ---
 title: "IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する"
 chapter-id: "IV-3"
-verified-against: 900d453
-verified-at: "2026-09-06"
+verified-against: 229d638
+verified-at: "2026-09-10"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）、束 [#789](https://github.com/signalcompose/orbitscore/pull/789)（ローカルラッパー越しの追跡と、ラチェット自身の生存確認）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）、束 [#789](https://github.com/signalcompose/orbitscore/pull/789)（ローカルラッパー越しの追跡と、ラチェット自身の生存確認）、2026-09-10 に #830（PR [#831](https://github.com/signalcompose/orbitscore/pull/831)・**gated ハーネスの起動先が VSCodium フォークの OrbitStudio.app から stock VS Code へ**）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
 [IV-2](/editor/execution-feedback) では `Cmd+Enter` が押されてから engine にコードが届くまでを追いました。本章はその一段外側、「人間の代わりに **エージェント**（あるいはテストランナー）が同じ拡張を同じ経路で操作する」ための仕組みを読みます。登場人物は 3 つです。
 
 1. **拡張ホストの中で動く MCP サーバ**（`packages/vscode-extension/src/mcp-server.ts`）
-2. それを唯一の操作手段として **実 OrbitStudio.app を起動して音まで測る gated E2E**（`tests/e2e/orbitstudio-mcp-gated.spec.ts`）
+2. それを唯一の操作手段として **実 VS Code を起動して音まで測る gated E2E**（`tests/e2e/orbitstudio-mcp-gated.spec.ts`）
 3. engine が吐く `[STEP]` 行をエディタ上のハイライトに変える **ライブ playhead**（`playhead.ts` と `extension.ts`）
 
 3 つは独立した機能に見えますが、「engine の stdout」という 1 本の線でつながっています。playhead の `[STEP]` 行も、`get_log` が返すエラーも、`evaluate_orbitscore` の完了通知も、すべて同じ stdout を extension が読み分けた結果です。この線を意識しながら読んでいきましょう。
@@ -28,7 +28,7 @@ status: draft
 4. [`evaluate_orbitscore` の `ok` は何を意味するか](#evaluate_orbitscore-の-ok-は何を意味するか)
 5. [`get_engine_state` — もう `running` だけではない](#get_engine_state--もう-running-だけではない)
 6. [`get_log` とリングバッファ](#get_log-とリングバッファ)
-7. [gated E2E ハーネス — 実 OrbitStudio.app を MCP だけで駆動する](#gated-e2e-ハーネス--実-orbitstudioapp-を-mcp-だけで駆動する)
+7. [gated E2E ハーネス — 実 VS Code を MCP だけで駆動する](#gated-e2e-ハーネス--実-vs-code-を-mcp-だけで駆動する)
 8. [キャプチャ WAV と RMS アサーション](#キャプチャ-wav-と-rms-アサーション)
 9. [規律を仕組みに変えるテスト — ラチェットとアサーション衛生](#規律を仕組みに変えるテスト--ラチェットとアサーション衛生)
 10. [ライブ playhead — `[STEP]` 行から decoration まで](#ライブ-playhead--step-行から-decoration-まで)
@@ -462,9 +462,11 @@ export function selectLogLines(ring: readonly string[], requested?: number): str
 
 ---
 
-## gated E2E ハーネス — 実 OrbitStudio.app を MCP だけで駆動する
+## gated E2E ハーネス — 実 VS Code を MCP だけで駆動する
 
-ここからが本章の本体です。`tests/e2e/orbitstudio-mcp-gated.spec.ts` は 4,500 行を超える 1 ファイルで、実 OrbitStudio.app（VSCodium を OrbitStudio 名でリブランドした旧構成。現行方針は `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.4）を起動し、**MCP ツール呼び出しだけで**操作します。
+ここからが本章の本体です。`tests/e2e/orbitstudio-mcp-gated.spec.ts` は 5,900 行を超える 1 ファイルで、実 VS Code（既定 `/Applications/Visual Studio Code.app`）を Extension Development Host として起動し、**MCP ツール呼び出しだけで**操作します。
+
+🔴 **2026-09-10（#830・PR [#831](https://github.com/signalcompose/orbitscore/pull/831)）に起動先が変わりました。** それ以前は VSCodium を OrbitStudio 名でリブランドしたフォーク（`OrbitStudio.app`）の専用 CLI を起動していました。#827 の裁定で拡張版を stable として凍結しフォークを畳むことになったため、**フォークを畳む前に** stock VS Code へ切り替えて、マージゲートを失う期間を作らないようにしています（`docs/planning/NATIVE_MIGRATION_2026-09.md` §12.4）。ファイル名・関数名・ゲート env（`ORBIT_GATED_ORBITSTUDIO`）に残る "orbitstudio" は当時の名残で、駆動対象はフォークではありません。
 
 ```mermaid
 flowchart LR
@@ -677,15 +679,15 @@ export function decideStartEngineForAgent(
 }
 ```
 
-旧実装はここで `ok: true, 'engine already running'` を返して `captureWav` を黙って捨てていました。呼び出し側は録れていると信じ、`capture.wav` を読む段で初めて `ENOENT` に気づく — `#528` の回帰ピンとして、gated spec は「拒否されること」と「拒否しても engine が落ちないこと」の両方を assert しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:844-853`）。
+旧実装はここで `ok: true, 'engine already running'` を返して `captureWav` を黙って捨てていました。呼び出し側は録れていると信じ、`capture.wav` を読む段で初めて `ENOENT` に気づく — `#528` の回帰ピンとして、gated spec は「拒否されること」と「拒否しても engine が落ちないこと」の両方を assert しています（`tests/e2e/orbitstudio-mcp-gated.spec.ts:1212-1222`）。
 
 ### テスト一覧
 
-2026-09-01 時点で describe には 20 本の `it` があります。先頭の 1 本がアプリ起動・カタログ初期化・capture 付き engine 起動を担い、残りはその状態を前提にします（WORK_LOG 6.409 が「1 本だけを `-t` で絞ると `catalogClapEffectPath` 未初期化で落ちる」と記録しているのはこのためです）。
+2026-09-01 時点で describe には 20 本の `it` がありました（🔴 **本表の行番号と本数はその時点のもので、その後の追加・移動には追従していません**。2026-09-10 時点の実数は 30 本です）。先頭の 1 本がアプリ起動・カタログ初期化・capture 付き engine 起動を担い、残りはその状態を前提にします（WORK_LOG 6.409 が「1 本だけを `-t` で絞ると `catalogClapEffectPath` 未初期化で落ちる」と記録しているのはこのためです）。
 
 | 行 | テスト名（要約） | 主な oracle |
 |---|---|---|
-| 636 | 実 OrbitStudio を端から端まで: diagnostics-on-open・`run_selection`・live edit・capture 検証 | onset 間隔（120 → 180 bpm） |
+| 636 | 実 VS Code を端から端まで: diagnostics-on-open・`run_selection`・live edit・capture 検証 | onset 間隔（120 → 180 bpm） |
 | 1433–1687 | #643 E2E-1〜7: `global.gain(-6)` / seq rack / attach 中のギャップ / `output(sum)` + `send(aux)` / instrument 差し替え / slot 解放 / 宣言なし instrument | 区間 RMS 比 |
 | 1732, 1808 | #633 E2E-1〜2: 同一 insert 複数の UI 開閉・index シフト後の close | `open_plugin_ui` / `close_plugin_ui` 応答 |
 | 1878 | カタログ v2 再スキャン・壊れたバンドルの報告 | `rescan_plugins` の failures |
@@ -1321,7 +1323,7 @@ slot 1 と 3 が休符 `0` であることが要点です。「音符の所だ�
 
 ## 手元で走らせる
 
-macOS で OrbitStudio.app がビルド済みであることが前提です（旧構成。現行方針は `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.4。拡張は `--extensionDevelopmentPath` で読ませます）。
+macOS に stock VS Code が入っていることが前提です（既定 `/Applications/Visual Studio Code.app`。拡張はインストールせず `--extensionDevelopmentPath` でリポジトリのソースを読ませます）。アプリが見つからない場合、ゲート env を立てても console note を出して skip されます。
 
 ```bash
 # 実機 gated E2E（cargo build + npm run build が pretest で自動実行される）
@@ -1333,7 +1335,13 @@ ORBIT_E2E_VSCODE_APP=/Applications/Visual\ Studio\ Code.app ORBIT_KEEP_CAPTURES=
 
 実行すると GUI アプリが起動して実際に音が鳴るので、CLAUDE.md の指示どおり **無人・無断で回さない**ことになっています。ゲート env が無い通常の `npm test` では describe ごと skip され、ラチェットと hygiene の 2 テストだけが常時走ります。
 
-エージェント（Claude Code）から対話的に触りたい場合は、`ORBITSCORE_MCP_PORT=39123` を付けて OrbitStudio を起動し、`register_mcp_server` ツールか "Register Claude Code MCP Server" コマンドで `.mcp.json` に登録します。CLAUDE.md の「マージ前ゲート」節が定める手順は、`get_engine_state` で起動確認 → `evaluate_orbitscore` で当該 PR の DSL を評価 → **`get_log` で ERROR を確認**、の 3 段です。「起動中の OrbitStudio を必ず終了してから起動し直す」（古い extension host が新しい daemon を spawn すると `DaemonStartupError` になる）という注意も同じ節にあります。
+エージェント（Claude Code）から対話的に触りたい場合は、`ORBITSCORE_MCP_PORT=39123` を付けて stock VS Code を `--extensionDevelopmentPath` 付きで起動し、`register_mcp_server` ツールか "Register Claude Code MCP Server" コマンドで `.mcp.json` に登録します。CLAUDE.md の「マージ前ゲート」節が定める手順は、`get_engine_state` で起動確認 → `evaluate_orbitscore` で当該 PR の DSL を評価 → **`get_log` で ERROR を確認**、の 3 段です。同じ節には、この手動ゲートに固有の注意が 3 つあります（#830 で改訂）。
+
+- **前回のゲートで起動した dev host が残っていたら終了する** — 古い extension host が新しい daemon を spawn すると `DaemonStartupError` になります。隔離 dir を使っても消えません（stale なのはビルド済みの拡張コードであって設定ではないため）。対象はハーネス由来のインスタンスだけに絞ります（`pkill -f 'user-data-dir=[^[:space:]]*/orbgate-u-'`）。日常利用の VS Code は、orbitscore 拡張を入れていなければ終了不要です
+- **`--user-data-dir` は `/tmp` の短いパスにする** — 上の 103 文字問題は手動ゲートでも同じで、`$TMPDIR` + 説明的な名前だと本体がウィンドウを開く前に死にます
+- **起動前に `bash scripts/install-engine-deps.sh` を走らせる** — `npm run build` の `build:copy-engine` は dist をコピーするだけで、同梱エンジンの実行時依存（`uuid` 等）を入れません。ビルドは緑のまま、実行時にだけ `daemon resolver failed: Cannot find module 'uuid'` になります。`npm run test:e2e:gated` の `pretest` には入っていますが、手動手順はそこを通りません
+
+また、`bin/code` ではなく `Contents/MacOS/Code` を直接起動します（`bin/code` はアプリを切り離して自身は終了するので、手元でプロセスを追えません）。gated ハーネスの方は `spawn` した子を自分で保持するので `bin/code` を使っており、この差は意図的です。
 
 ---
 
@@ -1357,7 +1365,7 @@ ORBIT_E2E_VSCODE_APP=/Applications/Visual\ Studio\ Code.app ORBIT_KEEP_CAPTURES=
 - `findPlayArgRangeForPath()` のネスト解決（`"1.0"` の descend 条件と group run の扱い）と、`#391` で予定されている `seq.color()` の seam（`PlayheadColorConfig.seqColors`）
 - `tests/e2e/dsl-coverage-ledger.ts` の台帳 2（実装 ↔ テスト）が #671 段階 3 で生成器による導出に変わったあと、手書きの行とラチェットの関係がどうなるか（`E2E_HARNESS_SPEC.md` §2.1）
 - `analyze_audio` の `estimateFundamentalHz()` — plugin state 復元テストが「同じ測定ピッチ」をどう assert しているか
-- `killOrbitStudio()` / `replaceGatedPluginFixtureSymlink()` の安全域（allowlist）— ハーネスがユーザー環境を壊さないための境界
+- `killHarnessInstances()` / `replaceGatedPluginFixtureSymlink()` の安全域（allowlist）— ハーネスがユーザー環境を壊さないための境界
 - gated spec が 1 本ずつ実行できない構造（WORK_LOG 6.409）の改善案
 
 ## Sources
@@ -1385,9 +1393,11 @@ ORBIT_E2E_VSCODE_APP=/Applications/Visual\ Studio\ Code.app ORBIT_KEEP_CAPTURES=
 - `packages/engine/src/midi/midi-scheduler.ts:156-176` — `scheduleStepMarker()`（#654）
 - `packages/engine/src/core/sequence.ts:1381-1404` — note 経路の marker 積み込みとデデュープ（#654）
 - `tests/e2e/orbitstudio-mcp-gated.spec.ts:1-153` — env contract・stale artifact ガード
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:360-633` — describe のセットアップ・`captureInstrumentScenario` の RMS ヘルパ・teardown
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:635-1430` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
-- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2030-2136` — #654 playhead E2E
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:538-1014` — `launchIsolatedOrbitStudio()`・describe のセットアップ・teardown
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:1016-1942` — 先頭テスト（起動・カタログ・capture・run_selection・onset 検証）
+- `tests/e2e/orbitstudio-mcp-gated.spec.ts:2566-2673` — #654 playhead E2E
+- `tests/e2e/helpers/harness-processes.ts:1-49` — teardown の封じ込めポリシー・`selectRootPids()`・`userDataDirExceedsSocketLimit()`（#830）
+- `tests/e2e/harness-processes.spec.ts:1-89` — 上のプロセス分類のユニットテスト（#830）
 - `tests/e2e/helpers/mcp-client.ts:1-174` — 生 JSON-RPC クライアント
 - `tests/e2e/gated-sources.ts:1-106` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` の判定（`countErrors` 7 重定義の統合先・#668 PR-E2）
@@ -1416,3 +1426,4 @@ ORBIT_E2E_VSCODE_APP=/Applications/Visual\ Studio\ Code.app ORBIT_KEEP_CAPTURES=
 - Issue [#651](https://github.com/signalcompose/orbitscore/issues/651) — capture ヘッダの定期 patch と stale ガード
 - Issue [#654](https://github.com/signalcompose/orbitscore/issues/654) — instrument シーケンスで playhead が動かない
 - Issue [#668](https://github.com/signalcompose/orbitscore/issues/668) — gated E2E の基盤（PR-E1 `gated-sources.ts` / PR-E2 共有ハーネス層）
+- Issue [#830](https://github.com/signalcompose/orbitscore/issues/830) — gated ハーネスを stock VS Code 起動へ（PR [#831](https://github.com/signalcompose/orbitscore/pull/831)）
