@@ -17,6 +17,24 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(spec): the LinkAudio fallback claim was a comment, not a measurement (#502) (Sep 10, 2026)
+
+#833 で §8.1 に置いた警告ブロックは「daemon が `LINK_AUDIO_UNAVAILABLE` を返し、TS 側が
+1 回だけ warn して継続する。出力は hardware のみ」と**断定していた**。これは
+`rust-engine-player.ts` の `registerLinkAudioChannel` の**コメントの主張**であって、実測ではない。
+
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` に残っている記録によれば、2026-09-04 の main の
+実機実行では `global.linkAudio()` 下の sequence の **capture RMS = 0**、かつ `get_log` に
+`LINK_AUDIO_UNAVAILABLE` も gap 警告も出ていない。capture ベースの証明はこの理由で
+取り下げられている。つまり**音が出ず、警告も出ない**。
+
+仕様側を「設計の意図 / 実測」の 2 行表に書き換え、**どちらが正しいかは未決**であることと
+出典を明記した。ユーザー学習サイト（`sites/user/midi/link-audio.md`）は #835 で既にこの
+扱いになっており、**仕様だけが古い断定のまま残っていた**（memory
+`one-layer-of-the-spec-lags-the-ruling` と同じ型）。
+
+引用 4 件が行シフトで動いたので `--fix` で再アンカーした。
+
 ### docs(spec): record that the global mastering effects are no-ops after the SC removal (#502) (Sep 10, 2026)
 
 束 #840 を締める前の追従。`INSTRUCTION_ORBITSCORE_DSL.md` の Implementation Status は
