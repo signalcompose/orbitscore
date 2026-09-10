@@ -63,14 +63,17 @@ import {
   newErrorLines,
 } from './helpers/engine-log'
 import {
+  captureTailRms,
   captureWindowsFrom,
   createCaptureClock,
   prepareCapturePath,
   quadraticMeanRms,
   readCaptureForAnalysis,
+  readCaptureFormat,
   steadyRms,
   waitForSound,
   waitForQuiet,
+  type CaptureFormat,
   type CaptureSegment,
   type WaitForQuietDiagnostics,
   makeAwaitSoundRestart,
@@ -491,6 +494,68 @@ function analysisTailRms(
   expect(windows.length, `capture tail ${durationSec}s must contain RMS windows`).toBeGreaterThan(0)
   // 二乗平均の式は正本を 1 つに保つ（`run-score.ts:127-130` が drift しやすいと警告している式）。
   return quadraticMeanRms(windows)
+}
+
+const CAPTURE_HEADER_BYTES = 44
+const CAPTURE_BYTES_PER_SAMPLE = 4
+
+/**
+ * 1 チャンネルぶんの生 interleaved float32 PCM サンプルを `[fromSec, toSec)` の範囲で読む
+ * （#611 E2E-7）。クリック（不連続）は隣接サンプル間の 1 点の跳びとして現れ、この解析ファイル
+ * が他で使う 20ms RMS/peak 窓（1 窓 960 サンプル @48kHz）には収まらないほど短い —
+ * だから raw サンプルまで降りる必要がある。
+ */
+function readChannelSamples(
+  capturePath: string,
+  format: CaptureFormat,
+  channel: number,
+  fromSec: number,
+  toSec: number,
+): Float32Array {
+  const buffer = readCaptureForAnalysis(capturePath)
+  const bytesPerFrame = format.channels * CAPTURE_BYTES_PER_SAMPLE
+  const totalFrames = Math.floor((buffer.length - CAPTURE_HEADER_BYTES) / bytesPerFrame)
+  const fromFrame = Math.max(0, Math.floor(fromSec * format.sampleRate))
+  const toFrame = Math.min(totalFrames, Math.ceil(toSec * format.sampleRate))
+  const out = new Float32Array(Math.max(0, toFrame - fromFrame))
+  for (let i = 0; i < out.length; i += 1) {
+    out[i] = buffer.readFloatLE(
+      CAPTURE_HEADER_BYTES + (fromFrame + i) * bytesPerFrame + channel * CAPTURE_BYTES_PER_SAMPLE,
+    )
+  }
+  return out
+}
+
+/** 隣接サンプル間の絶対差の最大値 — #611 E2E-7 のクリック/不連続の指標そのもの。 */
+function maxFirstDifference(samples: Float32Array): number {
+  let max = 0
+  for (let i = 1; i < samples.length; i += 1) {
+    const diff = Math.abs(samples[i]! - samples[i - 1]!)
+    if (diff > max) max = diff
+  }
+  return max
+}
+
+/**
+ * `samples` の先頭からの相対位置で、局所エンベロープが最初に `threshold` を超えるサンプル
+ * index。#611 E2E-7 が gain(-40)→gain(0) の切替を MCP 往復の壁時計ではなく信号そのものから
+ * 見つけるために使う。
+ */
+function findEnvelopeCrossing(
+  samples: Float32Array,
+  sampleRate: number,
+  threshold: number,
+): number | undefined {
+  const blockSamples = Math.max(1, Math.round(sampleRate * 0.002))
+  for (let start = 0; start + blockSamples <= samples.length; start += blockSamples) {
+    let blockMax = 0
+    for (let i = start; i < start + blockSamples; i += 1) {
+      const abs = Math.abs(samples[i]!)
+      if (abs > blockMax) blockMax = abs
+    }
+    if (blockMax > threshold) return start
+  }
+  return undefined
 }
 
 /** Catalog drops create files here; bypass and standard-stage drops must not. */
@@ -5704,6 +5769,264 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-P')
     },
     TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-6 pins that output(verb, thru: true) before vs. after effect([Gain]) changes the mix: total_A/total_B = (1 + g) / (2g)',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        {
+          slug: '611-e2e6-position-matters',
+          fixturePath: 'tests/fixtures/mcp-e2e/output_line_position_matters.orbs',
+        },
+        async (ctx) => {
+          await captureSteady(ctx, 'totalA')
+          await ctx.evaluate('kickA.stop()\nLOOP(kickB)')
+          await captureSteady(ctx, 'totalB')
+        },
+        { capture: true },
+      )
+      expect(result, 'E2E-6 must return captured windows').toBeDefined()
+      if (!result) throw new Error('E2E-6 did not return captured windows')
+      const totalARms = steadyRms(result, 'totalA', STEADY_CAPTURE)
+      const totalBRms = steadyRms(result, 'totalB', STEADY_CAPTURE)
+      const ratio = totalARms / totalBRms
+      // g = 10 ** (-12 / 20): A branches off to the aux BEFORE the -12 dB rack, so only the
+      // master (dry) path is attenuated (total_A = 1 + g); B runs the rack first, so both the
+      // master path and the aux-routed copy carry it (total_B = 2g).
+      const g = 10 ** (-12 / 20)
+      const expected = (1 + g) / (2 * g)
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 E2E-6] position-matters RMS:',
+        JSON.stringify({ totalARms, totalBRms, ratio, expected }),
+      )
+      expect(
+        relativeDelta(ratio, expected),
+        `E2E-6 total_A/total_B must be (1 + g) / (2g), g = 10 ** (-12 / 20) = ${expected}; ` +
+          `actual=${ratio}`,
+      ).toBeLessThanOrEqual(0.12)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-6')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-7 keeps a republished bus gain seeded, so gain(-40) -> gain(0) mid-playback ramps instead of clicking',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const slug = '611-e2e7-republish-seed'
+      const capturePath = session.captureWavPath(slug)
+      const result = await runScore(
+        session,
+        { slug, fixturePath: 'tests/fixtures/mcp-e2e/output_line_republish_seed.orbs' },
+        async ({ evaluate }) => {
+          // RUN() is immediate (core spec: unaffected by bar-boundary quantization), so a short
+          // fixed sleep is enough to reach steady -40 dB playback before perturbing it.
+          await sleep(300)
+          // 🔴 Not a fresh declaration — re-evaluating `tone.gain(...)` republishes the bus
+          // line program (design 611 §4.3), which is exactly the seed/no-seed fork this test
+          // exists to pin.
+          await evaluate('tone.gain(0)')
+          // Keep recording past the switch long enough to include a clean post-ramp steady
+          // window, while staying inside sine_440.wav's 1 s natural duration (chop(1) plays
+          // the whole file at its natural rate — core spec chop/play semantics).
+          await sleep(500)
+        },
+        { capture: true },
+      )
+      expect(result, 'E2E-7 must return captured windows').toBeDefined()
+      if (!result) throw new Error('E2E-7 did not return captured windows')
+
+      const format = readCaptureFormat(capturePath)
+      // Locate the switch directly from the signal rather than trusting MCP round-trip timing:
+      // at -40 dB the sine's peak is 0.01, which never crosses 0.1, so the first crossing is
+      // the gain(0) ramp itself (design 611 §4.3's 5 ms ramp).
+      const allSamples = readChannelSamples(capturePath, format, 0, 0, Number.POSITIVE_INFINITY)
+      const crossingIdx = findEnvelopeCrossing(allSamples, format.sampleRate, 0.1)
+      expect(crossingIdx, 'E2E-7 must find the gain(0) switch inside the capture').toBeDefined()
+      if (crossingIdx === undefined) {
+        throw new Error('E2E-7 did not find the switch envelope crossing')
+      }
+
+      const guardSamples = Math.round(format.sampleRate * 0.05)
+      const switchWindow = allSamples.slice(
+        Math.max(0, crossingIdx - guardSamples),
+        Math.min(allSamples.length, crossingIdx + guardSamples),
+      )
+      // A steady window safely after the 5 ms ramp settles and safely before the file's
+      // natural end, at the same post-switch (0 dB) amplitude, with no transition inside it.
+      const steadyFromIdx = crossingIdx + Math.round(format.sampleRate * 0.15)
+      const steadyToIdx = crossingIdx + Math.round(format.sampleRate * 0.25)
+      const steadyWindow = allSamples.slice(steadyFromIdx, Math.min(allSamples.length, steadyToIdx))
+      expect(
+        steadyWindow.length,
+        'E2E-7 steady window must fit inside the captured file',
+      ).toBeGreaterThan(0)
+
+      const switchMaxDiff = maxFirstDifference(switchWindow)
+      const steadyMaxDiff = maxFirstDifference(steadyWindow)
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 E2E-7] republish seed click check:',
+        JSON.stringify({
+          switchSec: crossingIdx / format.sampleRate,
+          switchMaxDiff,
+          steadyMaxDiff,
+          ratio: switchMaxDiff / steadyMaxDiff,
+        }),
+      )
+      expect(
+        steadyMaxDiff,
+        'E2E-7 steady window must be audible enough to measure a first difference',
+      ).toBeGreaterThan(0)
+      expect(
+        switchMaxDiff,
+        `E2E-7 the switch window's first-difference peak (${switchMaxDiff}) must stay within ` +
+          `4x the steady window's (${steadyMaxDiff}) — an unseeded republish would jump close ` +
+          `to the full amplitude in a single sample instead of ramping (design 611 §4.3)`,
+      ).toBeLessThanOrEqual(steadyMaxDiff * 4)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-7')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-10 recovers steady RMS and exactly one daemon process after a daemon SIGKILL respawn',
+    async () => {
+      const session = requireOutputLineSession()
+      const slug = '611-e2e10-daemon-respawn'
+      const capturePath = session.captureWavPath(slug)
+      prepareCapturePath(capturePath)
+
+      // Reuse E2E-2's fixture (design 611 §8.1) via the same copy/open/select/run steps
+      // `runScore()` uses internally — that helper always tears the engine down at the end,
+      // but this test needs ONE continuous session so the daemon SIGKILL below exercises the
+      // real respawn path (`rust-engine-player.ts`'s `onDaemonDied` -> `respawnLoop`), not a
+      // normal stop_engine/start_engine restart.
+      const fixtureRel = 'tests/fixtures/mcp-e2e/output_line_thru_db.orbs'
+      const absFixture = path.join(REPO_ROOT, fixtureRel)
+      const fixtureContent = fs.readFileSync(absFixture, 'utf8')
+      const destDir = path.join(session.tmpRoot, path.dirname(fixtureRel))
+      fs.mkdirSync(destDir, { recursive: true })
+      const workPath = path.join(destDir, path.basename(absFixture))
+      fs.writeFileSync(workPath, fixtureContent)
+      const lineCount = fixtureContent.split('\n').length
+
+      const daemonPidsBeforeStart = new Set(orbitAudioDaemonPids())
+      await startEngineForRun(session.client, '#611 E2E-10', capturePath)
+      try {
+        const startedDaemonPids = orbitAudioDaemonPids().filter(
+          (pid) => !daemonPidsBeforeStart.has(pid),
+        )
+        expect(
+          startedDaemonPids,
+          'E2E-10 requires exactly one daemon added by its own engine start',
+        ).toHaveLength(1)
+        const daemonPidBefore = startedDaemonPids[0]!
+
+        const opened = await session.client.call('open_file', { path: workPath })
+        expect(opened.isError, opened.text).toBe(false)
+        const selected = await session.client.call('set_selection', {
+          start_line: 1,
+          start_char: 1,
+          end_line: Math.max(1, lineCount),
+          end_char: 999_999,
+        })
+        expect(selected.isError, selected.text).toBe(false)
+        const run = await session.client.call('run_selection')
+        expect(run.isError, run.text).toBe(false)
+        // The fixture's own LOOP(dry) plays an un-routed reference; switch to E2E-2's -12 dB
+        // thru/db bus chain, which is what this test measures before and after the respawn.
+        await session.client.call('evaluate_orbitscore', { code: 'dry.stop()\nLOOP(kick)' })
+
+        await waitForSound(capturePath, {
+          floor: STEADY_CAPTURE.audibleFloorRms,
+          intervalMs: 200,
+          timeoutMs: 20_000,
+          label: '#611 E2E-10 before-kill onset',
+        })
+        await sleep(2_000)
+        const beforeTail = captureTailRms(capturePath, 1.0)
+        const beforeRms = quadraticMeanRms(beforeTail.rms.map((rms) => ({ rms })))
+        expect(beforeRms, 'E2E-10 before-kill capture must be audible').toBeGreaterThan(
+          STEADY_CAPTURE.audibleFloorRms,
+        )
+
+        // SAFETY: signals only the exact PID this test's own engine start added — same pattern
+        // and rationale as #606 E2E-K3's orbitAudioDaemonPids() SAFETY note above.
+        process.kill(daemonPidBefore, 'SIGKILL')
+
+        // 🔴 capture is a daemon-side tap (ORBIT_CAPTURE_WAV): the respawned daemon recreates
+        // the file at the same path, so `beforeRms` above (already read before the kill) is
+        // the only way to keep it — one CaptureWindows spanning the kill would lose it
+        // (design 611 §8.1 note).
+        await waitUntil(
+          async () => {
+            const stillRunning = (
+              JSON.parse((await session.client.call('get_engine_state')).text) as {
+                running: boolean
+              }
+            ).running
+            const currentPids = orbitAudioDaemonPids().filter((pid) => pid !== daemonPidBefore)
+            // 🔴 待つ条件は「1 台以上に戻った」まで。**台数が 1 であること自体は下で assert する。**
+            // ここで `=== 1` を待つと、2 台で落ち着いた場合に waitUntil の timeout になり、
+            // 「台数が違う」ではなく「respawn しなかった」という誤った診断が出る
+            // （アサーションが waitUntil の条件と同語反復になり、何も区別しなくなる）。
+            return stillRunning && currentPids.length >= 1
+          },
+          { intervalMs: 300, timeoutMs: 30_000, label: '#611 E2E-10 daemon respawn' },
+        )
+        const daemonPidsAfterRespawn = orbitAudioDaemonPids().filter(
+          (pid) => pid !== daemonPidBefore,
+        )
+        expect(
+          daemonPidsAfterRespawn,
+          `E2E-10 must settle on exactly one daemon process after respawn (#624). pids=${JSON.stringify(daemonPidsAfterRespawn)}`,
+        ).toHaveLength(1)
+
+        await waitForSound(capturePath, {
+          floor: STEADY_CAPTURE.audibleFloorRms,
+          intervalMs: 200,
+          timeoutMs: 20_000,
+          label: '#611 E2E-10 after-respawn onset',
+        })
+        await sleep(2_000)
+        const afterTail = captureTailRms(capturePath, 1.0)
+        const afterRms = quadraticMeanRms(afterTail.rms.map((rms) => ({ rms })))
+        expect(afterRms, 'E2E-10 after-respawn capture must be audible').toBeGreaterThan(
+          STEADY_CAPTURE.audibleFloorRms,
+        )
+
+        // eslint-disable-next-line no-console
+        console.log(
+          '[#611 E2E-10] daemon respawn RMS:',
+          JSON.stringify({ beforeRms, afterRms, ratio: afterRms / beforeRms }),
+        )
+        expect(
+          relativeDelta(afterRms, beforeRms),
+          `E2E-10 after/before RMS must return within 5%; before=${beforeRms} after=${afterRms}`,
+        ).toBeLessThanOrEqual(0.05)
+        // 🔴 No expectNoNewErrors here on purpose: the SIGKILL above is an intentional fault
+        // injection (matching #661 D-2/D-3's precedent), and the daemon's own death is
+        // legitimately logged as an ERROR-classified line. Asserting "no new errors" would
+        // fail on the exact behavior this test intends to cause.
+      } finally {
+        try {
+          await session.client.call('evaluate_orbitscore', { code: 'global.stop()' })
+          await session.client.call('stop_engine')
+          await waitForEngineState(session.client, false, 15_000, '#611 E2E-10 engine stopped')
+        } catch (cleanupError) {
+          // eslint-disable-next-line no-console
+          console.warn('[#611 E2E-10] cleanup failed:', String(cleanupError))
+        }
+      }
+    },
+    TEST_TIMEOUT_MS * 2,
   )
 
   {
