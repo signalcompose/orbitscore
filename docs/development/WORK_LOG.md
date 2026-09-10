@@ -17,6 +17,61 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(engine): stop a benign temp-dir race from inflating the ERROR count (#855) (Sep 11, 2026)
+
+#840 のマージ前ゲートで実機 gated が 2 件落ち、うち 1 件がこれだった。
+
+```
+AssertionError: expected 9 to be less than or equal to 8
+ERROR: Failed to cleanup old directories: Error: ENOENT: no such file or directory,
+       stat '.../T/orbitscore_1789065642138_xx52jsw'
+```
+
+**原因は TOCTOU**（`temp-file-manager.ts:93-110`）。`readdirSync` で列挙してから `statSync`
+する間に、**別のエンジンインスタンスの同じ掃除**が同じディレクトリを消す。gated suite は
+エンジンを何度も起動・停止するので、複数インスタンスが同じ temp root を奪い合う。
+
+`catch` は「Ignore errors during cleanup」と書いているのに `console.warn` を出しており、
+engine の stderr 分類で **`ERROR:` 行になる**（memory `stderr-is-classified-as-error` の再発）。
+**ディレクトリが既に無いのは、このループが望んでいた結果そのもの**で失敗ではない。
+
+**副次**: `try` がループ全体を囲んでいたので、**1 件 ENOENT が出た時点で残りを見ずに抜けて**
+いた。孤児が溜まる。
+
+## 🔴 変異検証が別の穴を見つけた
+
+修正のテストに変異をかけたところ、**`orbitscore_` 接頭辞の判定を外しても全テストが緑**だった。
+この掃除は**共有の `os.tmpdir()`** を舐めて **1 時間以上前のディレクトリを消す**ので、
+接頭辞判定は**他アプリの temp を消さない唯一の歯止め**である。テストを足した。
+
+| 変異 | 結果 |
+|---|---|
+| ENOENT も含め全部握り潰す | 1 failed |
+| ENOENT も再送出（元の挙動へ戻す） | 1 failed |
+| 1 時間の条件を外す（新しい dir も消す） | 1 failed |
+| **接頭辞の判定を外す** | **最初は 4 passed（すり抜け）→ テスト追加後 1 failed** |
+| restore | 5 passed・baseline とバイト一致 |
+
+## テストはモックを使わず実物のファイルシステム条件で書いた
+
+`os.tmpdir` も `fs.statSync` も **再定義できない**（`Cannot redefine property`）ので、
+最初に書いた `vi.spyOn` 版は動かなかった。差し替えではなく**本物の条件**を作った:
+
+| 条件 | 作り方 | Node が出すもの |
+|---|---|---|
+| レース | dangling symlink | 本物の `ENOENT` |
+| レースでない失敗 | 自己参照 symlink | 本物の `ELOOP` |
+| temp root の差し替え | `process.env.TMPDIR`（POSIX は呼び出しごとに読む） | — |
+
+`chmod 444` は使えなかった — constructor 自身の `mkdirSync` が先に落ちて **cleanup に到達しない**。
+
+捏造した mock 文言を検証するのは、このプロジェクトが列挙している弱いアサーションの典型なので、
+結果的に良い方向へ転んだ。
+
+`npm test` 2,283 passed / 0 failed・lint 緑・`typecheck:e2e` 緑・引用 934 / 0 failed。
+
+Closes #855
+
 ### docs(link-audio): tell the truth about the deleted Link submodule and the unresolved fallback (#502) (Sep 10, 2026)
 
 Fable 受け入れ監査（PR #840）の指摘を適用した。**Important 2 / Minor 4**。
