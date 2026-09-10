@@ -17,6 +17,18 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(daemon): wire pan and mono device into SetBusLine, and carry effective gain across re-publish (#611) (Sep 10, 2026)
+
+`SetBusLine` の wire 契約を拡張し、`pan` と 1 要素の device channels（L+R の mono merge）を
+受理できるようにした。バスと master の RT では、発音側の center pan と重ねても音量が変わらない
+`√2 × equal-power` の係数を block ごとに計算し、pan 位置そのものを 5 ms ramp する。
+
+line の再 publish では、旧 program の実効値を atomic で読み、新旧 op を Gain/Pan の出現序数と
+Output の宛先・出現序数で対応付けて seed する。これが無いと、演奏中に send を追加しただけで既存の
+−12 dB send が一度 unity に跳ねてから戻り、約 5 ms の +12 dB burst と可聴の pop が生じるためである。
+対応の無い新 Output は 0.0 から fade-in し、Gain は 1.0、Pan は指定位置から始める。旧
+`SetBusRouting` の `LineProgram::legacy` / `settled` 経路は変更していない。
+
 ### docs(planning): record the extension-stable freeze line and the native OrbitStudio line (#827) (Sep 10, 2026)
 
 **Issue**: #827 / **ブランチ**: `827-stable-freeze-line` → main（docs のみ）

@@ -86,13 +86,14 @@ export interface AudioDeviceListEntry {
 export type WireDest =
   | { kind: 'master' }
   | { kind: 'bus'; name: string }
-  | { kind: 'device'; channels: [number, number] }
+  | { kind: 'device'; channels: [number, number] | [number] }
   | { kind: 'render'; id: string }
   | { kind: 'link'; channel: string }
 
 export type WireLineOp =
   | { op: 'rack' }
   | { op: 'gain'; gain: number }
+  | { op: 'pan'; pan: number }
   | { op: 'output'; dest: WireDest; thru: boolean; gain: number }
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 10_000

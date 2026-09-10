@@ -333,6 +333,13 @@ fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>),
                 let gain = parse_set_bus_line_gain(item, "line[].gain")?;
                 line.push(BusLineOp::Gain(gain));
             }
+            "pan" => {
+                let pan = item
+                    .get("pan")
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| set_bus_line_malformed("'line[].pan' must be a number"))?;
+                line.push(BusLineOp::Pan(validate_set_bus_line_pan(pan)?));
+            }
             "output" => {
                 let gain = parse_set_bus_line_gain(item, "line[].gain")?;
                 let thru = item
@@ -352,12 +359,23 @@ fn parse_set_bus_line_params(params: &Value) -> Result<(String, Vec<BusLineOp>),
             }
             _ => {
                 return Err(set_bus_line_malformed(
-                    "'line[].op' must be one of rack, gain, or output",
+                    "'line[].op' must be one of rack, gain, pan, or output",
                 ));
             }
         }
     }
     Ok((bus, line))
+}
+
+#[cfg(feature = "outproc-effect")]
+fn validate_set_bus_line_pan(pan: f64) -> Result<f32, ProtocolError> {
+    if !pan.is_finite() || !(-1.0..=1.0).contains(&pan) {
+        return Err(ProtocolError::new(
+            "PARAM_OUT_OF_RANGE",
+            "'line[].pan' must be finite and within -1..=1",
+        ));
+    }
+    Ok(pan as f32)
 }
 
 #[cfg(feature = "outproc-effect")]
@@ -394,10 +412,10 @@ fn parse_set_bus_line_dest(dest: &Value) -> Result<BusLineDest, ProtocolError> {
             let channels = dest
                 .get("channels")
                 .and_then(Value::as_array)
-                .filter(|channels| channels.len() == 2)
+                .filter(|channels| matches!(channels.len(), 1 | 2))
                 .ok_or_else(|| {
                     set_bus_line_malformed(
-                        "'line[].dest.channels' must be a two-element integer array",
+                        "'line[].dest.channels' must be a one- or two-element integer array",
                     )
                 })?;
             let channel = |index: usize| {
@@ -412,7 +430,7 @@ fn parse_set_bus_line_dest(dest: &Value) -> Result<BusLineDest, ProtocolError> {
             };
             Ok(BusLineDest::Device {
                 left: channel(0)?,
-                right: channel(1)?,
+                right: (channels.len() == 2).then(|| channel(1)).transpose()?,
             })
         }
         // DeclareRender（PR-R2）の登記簿がまだ無いため、今日の render id はすべて未登録。
@@ -447,15 +465,15 @@ fn validate_set_bus_line_device_channels(
             continue;
         };
         if *left == 0
-            || *right == 0
-            || left == right
             || *left > output_channels as usize
-            || *right > output_channels as usize
+            || right.is_some_and(|right| {
+                right == 0 || right == *left || right > output_channels as usize
+            })
         {
             return Err(ProtocolError::new(
                 "PARAM_OUT_OF_RANGE",
                 format!(
-                    "device channels must be distinct and within 1..={output_channels}, got [{left}, {right}]"
+                    "device channels must be within 1..={output_channels} and distinct when stereo, got left={left}, right={right:?}"
                 ),
             ));
         }
@@ -3874,6 +3892,47 @@ mod tests {
             eprintln!("set_bus_line validation code={}", error.code);
             assert_eq!(error.code, "PARAM_OUT_OF_RANGE");
         }
+    }
+
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn set_bus_line_wire_accepts_mono_device_and_rejects_pan_out_of_range() {
+        let (_, line) = parse_set_bus_line_params(&json!({
+            "bus": "seq-bus-0",
+            "line": [{"op": "output", "dest": {"kind": "device", "channels": [3]}, "thru": false, "gain": 1.0}]
+        }))
+        .expect("one device channel is a valid mono destination");
+        validate_set_bus_line_device_channels(&line, 3).expect("channel 3 is in range");
+        assert!(matches!(
+            &line[0],
+            BusLineOp::Output {
+                dest: BusLineDest::Device {
+                    left: 3,
+                    right: None
+                },
+                ..
+            }
+        ));
+
+        let (_, duplicate) = parse_set_bus_line_params(&json!({
+            "bus": "seq-bus-0",
+            "line": [{"op": "output", "dest": {"kind": "device", "channels": [3, 3]}, "thru": false, "gain": 1.0}]
+        }))
+        .expect("duplicate channels pass shape parsing");
+        let duplicate_error = validate_set_bus_line_device_channels(&duplicate, 3)
+            .expect_err("a stereo pair must be distinct");
+        assert_eq!(duplicate_error.code, "PARAM_OUT_OF_RANGE");
+
+        assert_set_bus_line_parse_code(
+            json!({"bus": "seq-bus-0", "line": [{"op": "pan", "pan": 1.5}]}),
+            "PARAM_OUT_OF_RANGE",
+        );
+        let nan_error = validate_set_bus_line_pan(f64::NAN).expect_err("NaN pan must reject");
+        eprintln!(
+            "mono=[3] accepted; duplicate={} pan(1.5)=PARAM_OUT_OF_RANGE pan(NaN)={}",
+            duplicate_error.code, nan_error.code
+        );
+        assert_eq!(nan_error.code, "PARAM_OUT_OF_RANGE");
     }
 
     #[cfg(feature = "outproc-effect")]

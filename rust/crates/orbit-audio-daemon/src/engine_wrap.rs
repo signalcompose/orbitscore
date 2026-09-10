@@ -1755,6 +1755,9 @@ pub struct EngineWrap {
     /// `SetBusLine` が complete program を publish する named-bus control seam。
     #[cfg(feature = "outproc-effect")]
     bus_line_programs: Mutex<HashMap<String, LineProgramInstaller>>,
+    /// 直前に publish した resolved ops。current_gains と対応付けて再 publish の seed を作る。
+    #[cfg(feature = "outproc-effect")]
+    bus_line_shadows: Mutex<HashMap<String, Vec<LineOp>>>,
     /// master は named bus topology の外側だが、同じ LineSlot publication を使う。
     #[cfg(feature = "outproc-effect")]
     master_line: LineProgramInstaller,
@@ -2087,7 +2090,7 @@ pub enum BusKind {
 pub enum BusLineDest {
     Master,
     Bus(String),
-    Device { left: usize, right: usize },
+    Device { left: usize, right: Option<usize> },
     Render(String),
     Link(String),
 }
@@ -2097,6 +2100,7 @@ pub enum BusLineDest {
 pub enum BusLineOp {
     Rack,
     Gain(f32),
+    Pan(f32),
     Output {
         dest: BusLineDest,
         thru: bool,
@@ -2118,6 +2122,74 @@ fn default_master_line_program(output_channels: u16) -> Vec<LineOp> {
             gain: 1.0,
         }),
     ]
+}
+
+#[cfg(feature = "outproc-effect")]
+fn default_bus_line_program() -> Vec<LineOp> {
+    vec![
+        LineOp::Rack,
+        LineOp::Output(LineOutput {
+            dest: OutputDest::Master,
+            thru: false,
+            gain: 1.0,
+        }),
+    ]
+}
+
+#[cfg(feature = "outproc-effect")]
+fn legacy_shadow_line(output_target: BusTarget, sends: &[BusSend]) -> Vec<LineOp> {
+    let mut ops = Vec::with_capacity(sends.len() + 2);
+    ops.push(LineOp::Rack);
+    ops.push(LineOp::Output(LineOutput {
+        dest: match output_target {
+            BusTarget::Master => OutputDest::Master,
+            BusTarget::Bus(index) => OutputDest::Bus(index),
+        },
+        thru: !sends.is_empty(),
+        gain: 1.0,
+    }));
+    for (index, send) in sends.iter().enumerate() {
+        ops.push(LineOp::Output(LineOutput {
+            dest: OutputDest::Bus(send.target),
+            thru: index + 1 != sends.len(),
+            gain: send.gain,
+        }));
+    }
+    ops
+}
+
+#[cfg(feature = "outproc-effect")]
+fn line_republish_seeds(new_ops: &[LineOp], old_ops: &[LineOp], old_current: &[f32]) -> Vec<f32> {
+    fn same_key(left: &LineOp, right: &LineOp) -> bool {
+        match (left, right) {
+            (LineOp::Gain(_), LineOp::Gain(_)) | (LineOp::Pan(_), LineOp::Pan(_)) => true,
+            (LineOp::Output(left), LineOp::Output(right)) => left.dest == right.dest,
+            _ => false,
+        }
+    }
+
+    new_ops
+        .iter()
+        .enumerate()
+        .map(|(new_index, op)| {
+            let ordinal = new_ops[..new_index]
+                .iter()
+                .filter(|candidate| same_key(candidate, op))
+                .count();
+            let inherited = old_ops
+                .iter()
+                .enumerate()
+                .filter(|(_, candidate)| same_key(candidate, op))
+                .nth(ordinal)
+                .and_then(|(old_index, _)| old_current.get(old_index))
+                .copied();
+            inherited.unwrap_or(match op {
+                LineOp::Rack | LineOp::Gain(_) => 1.0,
+                LineOp::Pan(target) => *target,
+                LineOp::Output(_) => 0.0,
+            })
+        })
+        .collect()
 }
 
 /// `sum-bus-<n>` 既定プールの名前 prefix。TS 側 `seq.output(sum)` が同じ規則で名前を組み立てる
@@ -3014,9 +3086,12 @@ mod set_bus_routing_tests {
 
 #[cfg(all(test, feature = "outproc-effect"))]
 mod set_bus_line_tests {
-    use super::{BusLineDest, BusLineOp, EngineWrap, LineOp, LineOutput, WrapError};
+    use super::{
+        line_republish_seeds, BusLineDest, BusLineOp, EngineWrap, LineOp, LineOutput, WrapError,
+    };
     use crate::backend::StubBackend;
     use crate::session::wrap_err_to_protocol;
+    use orbit_audio_native::LineProgramInstaller;
     use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex};
 
@@ -3029,10 +3104,13 @@ mod set_bus_line_tests {
         let recorded = installs.clone();
         wrap.bus_line_programs.lock().unwrap().insert(
             "seq-bus-0".to_owned(),
-            Arc::new(move |program, _, _| {
-                recorded.lock().unwrap().push(program.ops.to_vec());
-                Ok(())
-            }),
+            LineProgramInstaller::new(
+                move |program, _, _| {
+                    recorded.lock().unwrap().push(program.ops.to_vec());
+                    Ok(())
+                },
+                || vec![1.0, 1.0],
+            ),
         );
         (wrap, installs)
     }
@@ -3043,13 +3121,16 @@ mod set_bus_line_tests {
         let recorded = calls.clone();
         wrap.bus_line_programs.lock().unwrap().insert(
             "seq-bus-0".to_owned(),
-            Arc::new(move |program, bus_index, bus_count| {
-                recorded
-                    .lock()
-                    .unwrap()
-                    .push((program.ops.to_vec(), bus_index, bus_count));
-                Ok(())
-            }),
+            LineProgramInstaller::new(
+                move |program, bus_index, bus_count| {
+                    recorded
+                        .lock()
+                        .unwrap()
+                        .push((program.ops.to_vec(), bus_index, bus_count));
+                    Ok(())
+                },
+                || vec![1.0, 1.0],
+            ),
         );
         (wrap, calls)
     }
@@ -3060,13 +3141,16 @@ mod set_bus_line_tests {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let recorded = calls.clone();
         let wrap_mut = Arc::get_mut(&mut wrap).expect("fresh wrap must be uniquely owned");
-        wrap_mut.master_line = Arc::new(move |program, bus_index, bus_count| {
-            recorded
-                .lock()
-                .unwrap()
-                .push((program.ops.to_vec(), bus_index, bus_count));
-            Ok(())
-        });
+        wrap_mut.master_line = LineProgramInstaller::new(
+            move |program, bus_index, bus_count| {
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push((program.ops.to_vec(), bus_index, bus_count));
+                Ok(())
+            },
+            || vec![1.0, 1.0, 1.0],
+        );
         (wrap, calls)
     }
 
@@ -3110,6 +3194,7 @@ mod set_bus_line_tests {
             &[
                 BusLineOp::Rack,
                 BusLineOp::Gain(0.5),
+                BusLineOp::Pan(0.25),
                 output(BusLineDest::Bus("sum-bus-0".into()), true, 0.25),
                 output(BusLineDest::Master, false, 1.0),
             ],
@@ -3121,6 +3206,7 @@ mod set_bus_line_tests {
             &[vec![
                 LineOp::Rack,
                 LineOp::Gain(0.5),
+                LineOp::Pan(0.25),
                 LineOp::Output(LineOutput {
                     dest: orbit_audio_native::OutputDest::Bus(1),
                     thru: true,
@@ -3176,13 +3262,16 @@ mod set_bus_line_tests {
     }
 
     #[test]
-    fn set_bus_line_converts_one_based_device_channels_for_the_installer() {
+    fn set_bus_line_converts_one_based_mono_device_channel_for_the_installer() {
         let (wrap, calls) = wrap_and_install_calls();
 
         wrap.set_bus_line(
             "seq-bus-0",
             &[output(
-                BusLineDest::Device { left: 1, right: 2 },
+                BusLineDest::Device {
+                    left: 3,
+                    right: None,
+                },
                 false,
                 1.0,
             )],
@@ -3194,8 +3283,8 @@ mod set_bus_line_tests {
             &[(
                 vec![LineOp::Output(LineOutput {
                     dest: orbit_audio_native::OutputDest::Device {
-                        left: 0,
-                        right: Some(1),
+                        left: 2,
+                        right: None,
                     },
                     thru: false,
                     gain: 1.0,
@@ -3227,7 +3316,14 @@ mod set_bus_line_tests {
             &[
                 BusLineOp::Rack,
                 BusLineOp::Gain(0.5),
-                output(BusLineDest::Device { left: 1, right: 2 }, false, 0.75),
+                output(
+                    BusLineDest::Device {
+                        left: 1,
+                        right: Some(2),
+                    },
+                    false,
+                    0.75,
+                ),
             ],
         )
         .expect("valid master line must install");
@@ -3315,6 +3411,7 @@ mod set_bus_line_tests {
         wrap.set_bus_line("seq-bus-0", &before)
             .expect("initial line must install");
         let snapshot = installs.lock().unwrap().last().cloned().unwrap();
+        let shadow_before = wrap.bus_line_shadows.lock().unwrap()["seq-bus-0"].clone();
 
         let error = wrap
             .set_bus_line(
@@ -3329,6 +3426,109 @@ mod set_bus_line_tests {
         let guard = installs.lock().unwrap();
         assert_eq!(guard.len(), 1, "failed replacement must not publish");
         assert_eq!(guard[0], snapshot, "effective line must remain unchanged");
+        assert_eq!(
+            wrap.bus_line_shadows.lock().unwrap()["seq-bus-0"],
+            shadow_before,
+            "failed replacement must not mutate the seed shadow"
+        );
+    }
+
+    #[test]
+    fn set_bus_line_seed_for_a_new_output_starts_at_zero() {
+        let old_ops = vec![LineOp::Output(LineOutput {
+            dest: orbit_audio_native::OutputDest::Master,
+            thru: false,
+            gain: 0.1,
+        })];
+        let wrap = super::set_bus_routing_tests::wrap_with_three_stage_topology();
+        wrap.bus_line_shadows
+            .lock()
+            .unwrap()
+            .insert("seq-bus-0".to_owned(), old_ops);
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let recorded = captured.clone();
+        wrap.bus_line_programs.lock().unwrap().insert(
+            "seq-bus-0".to_owned(),
+            LineProgramInstaller::new(
+                move |program, _, _| {
+                    *recorded.lock().unwrap() = program
+                        .current_gain
+                        .iter()
+                        .map(|gain| f32::from_bits(gain.load(Ordering::Relaxed)))
+                        .collect();
+                    Ok(())
+                },
+                || vec![0.1],
+            ),
+        );
+        wrap.set_bus_line(
+            "seq-bus-0",
+            &[
+                output(BusLineDest::Master, true, 1.0),
+                output(BusLineDest::Bus("sum-bus-0".to_owned()), false, 0.5),
+            ],
+        )
+        .expect("matched and new outputs install atomically");
+        let seeds = captured.lock().unwrap().clone();
+        eprintln!(
+            "republish output seeds: matched={} new={}",
+            seeds[0], seeds[1]
+        );
+        assert_eq!(seeds, vec![0.1, 0.0]);
+    }
+
+    #[test]
+    fn set_bus_line_seeds_match_kind_destination_and_occurrence_ordinal() {
+        let output = |dest, gain| {
+            LineOp::Output(LineOutput {
+                dest,
+                thru: true,
+                gain,
+            })
+        };
+        let old_ops = vec![
+            LineOp::Gain(0.2),
+            output(orbit_audio_native::OutputDest::Master, 0.3),
+            LineOp::Gain(0.4),
+            LineOp::Pan(-0.5),
+            output(orbit_audio_native::OutputDest::Master, 0.6),
+            output(orbit_audio_native::OutputDest::Bus(1), 0.7),
+            LineOp::Pan(0.8),
+        ];
+        let new_ops = vec![
+            LineOp::Pan(0.0),
+            LineOp::Gain(1.0),
+            output(orbit_audio_native::OutputDest::Master, 1.0),
+            LineOp::Pan(1.0),
+            LineOp::Gain(2.0),
+            output(orbit_audio_native::OutputDest::Master, 1.0),
+            output(
+                orbit_audio_native::OutputDest::Device {
+                    left: 2,
+                    right: None,
+                },
+                1.0,
+            ),
+            LineOp::Rack,
+        ];
+        let seeds = line_republish_seeds(
+            &new_ops,
+            &old_ops,
+            &[0.21, 0.31, 0.41, -0.51, 0.61, 0.71, 0.81],
+        );
+        assert_eq!(seeds, vec![-0.51, 0.21, 0.31, 0.81, 0.41, 0.61, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn set_bus_line_rejects_non_finite_or_out_of_range_pan_before_publish() {
+        let (wrap, installs) = wrap_and_installs();
+        for pan in [f32::NAN, -1.01, 1.01] {
+            let error = wrap
+                .set_bus_line("seq-bus-0", &[BusLineOp::Pan(pan)])
+                .expect_err("invalid pan must reject");
+            assert_eq!(wrap_err_to_protocol(&error).code, "MALFORMED_REQUEST");
+        }
+        assert!(installs.lock().unwrap().is_empty());
     }
 }
 
@@ -3340,7 +3540,10 @@ pub(crate) fn test_wrap_with_three_stage_topology() -> Arc<EngineWrap> {
         .lock()
         .expect("lock generic bus lines for injection");
     for name in ["seq-bus-0", "sum-bus-0", "aux-bus-0"] {
-        bus_line_programs.insert(name.to_owned(), Arc::new(|_, _, _| Ok(())));
+        bus_line_programs.insert(
+            name.to_owned(),
+            orbit_audio_native::LineProgramInstaller::new(|_, _, _| Ok(()), || vec![1.0, 1.0]),
+        );
     }
     drop(bus_line_programs);
     wrap
@@ -5039,11 +5242,21 @@ impl EngineWrap {
             .bus_lines
             .lock()
             .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))? = bus_lines;
+        let bus_line_shadows = bus_line_programs
+            .keys()
+            .cloned()
+            .map(|name| (name, default_bus_line_program()))
+            .collect();
         *wrap
             .bus_line_programs
             .lock()
             .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))? =
             bus_line_programs;
+        *wrap
+            .bus_line_shadows
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("bus line shadow mutex poisoned".into()))? =
+            bus_line_shadows;
         *wrap
             .outproc
             .lock()
@@ -5329,11 +5542,21 @@ impl EngineWrap {
             .bus_lines
             .lock()
             .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))? = bus_lines;
+        let bus_line_shadows = bus_line_programs
+            .keys()
+            .cloned()
+            .map(|name| (name, default_bus_line_program()))
+            .collect();
         *wrap
             .bus_line_programs
             .lock()
             .map_err(|_| WrapError::OutProcEffect("bus line mutex poisoned".into()))? =
             bus_line_programs;
+        *wrap
+            .bus_line_shadows
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("bus line shadow mutex poisoned".into()))? =
+            bus_line_shadows;
         *wrap
             .outproc
             .lock()
@@ -5549,6 +5772,8 @@ impl EngineWrap {
             bus_lines: Mutex::new(HashMap::new()),
             #[cfg(feature = "outproc-effect")]
             bus_line_programs: Mutex::new(HashMap::new()),
+            #[cfg(feature = "outproc-effect")]
+            bus_line_shadows: Mutex::new(HashMap::new()),
             #[cfg(feature = "outproc-effect")]
             master_line,
             #[cfg(feature = "outproc-effect")]
@@ -6708,12 +6933,14 @@ impl EngineWrap {
     /// wire の 1 始まりチャンネル対を RT の 0 始まり `OutputDest::Device` へ写す。
     /// **master line と named bus で扱いが同一**なので 1 箇所に置く（§4.1 の `dest.device`）。
     #[cfg(feature = "outproc-effect")]
-    fn device_dest_from_wire(left: usize, right: usize) -> Result<OutputDest, WrapError> {
+    fn device_dest_from_wire(left: usize, right: Option<usize>) -> Result<OutputDest, WrapError> {
         let one_based =
             || WrapError::OutProcEffectRequest("SetBusLine device channels are 1-based".into());
         Ok(OutputDest::Device {
             left: left.checked_sub(1).ok_or_else(one_based)?,
-            right: Some(right.checked_sub(1).ok_or_else(one_based)?),
+            right: right
+                .map(|channel| channel.checked_sub(1).ok_or_else(one_based))
+                .transpose()?,
         })
     }
 
@@ -6765,12 +6992,17 @@ impl EngineWrap {
                         "SetBusLine gain must be finite and >= 0".into(),
                     ));
                 }
+                BusLineOp::Pan(pan) if !pan.is_finite() || !(-1.0..=1.0).contains(pan) => {
+                    return Err(WrapError::OutProcEffectRequest(
+                        "SetBusLine pan must be finite and within -1..=1".into(),
+                    ));
+                }
                 BusLineOp::Output { gain, .. } if !gain.is_finite() || *gain < 0.0 => {
                     return Err(WrapError::OutProcEffectRequest(
                         "SetBusLine output gain must be finite and >= 0".into(),
                     ));
                 }
-                BusLineOp::Gain(_) | BusLineOp::Output { .. } => {}
+                BusLineOp::Gain(_) | BusLineOp::Pan(_) | BusLineOp::Output { .. } => {}
             }
         }
 
@@ -6780,6 +7012,7 @@ impl EngineWrap {
                 resolved.push(match op {
                     BusLineOp::Rack => LineOp::Rack,
                     BusLineOp::Gain(gain) => LineOp::Gain(*gain),
+                    BusLineOp::Pan(pan) => LineOp::Pan(*pan),
                     BusLineOp::Output {
                         dest: BusLineDest::Device { left, right },
                         thru,
@@ -6811,13 +7044,19 @@ impl EngineWrap {
             let mut shadow = self.master_line_program.lock().map_err(|_| {
                 WrapError::OutProcEffect("master line program mutex poisoned".into())
             })?;
-            (self.master_line)(LineProgram::new(resolved.clone()), usize::MAX, 0).map_err(
-                |error| {
+            let current = self.master_line.current_gains();
+            let seeds = line_republish_seeds(&resolved, &shadow, &current);
+            self.master_line
+                .install_for_bus(
+                    LineProgram::with_seeds(resolved.clone(), seeds),
+                    usize::MAX,
+                    0,
+                )
+                .map_err(|error| {
                     WrapError::OutProcEffectRequest(format!(
                         "SetBusLine master program failed validation: {error}"
                     ))
-                },
-            )?;
+                })?;
             *shadow = resolved;
             return Ok(());
         }
@@ -6842,6 +7081,7 @@ impl EngineWrap {
             resolved.push(match op {
                 BusLineOp::Rack => LineOp::Rack,
                 BusLineOp::Gain(gain) => LineOp::Gain(*gain),
+                BusLineOp::Pan(pan) => LineOp::Pan(*pan),
                 BusLineOp::Output {
                     dest,
                     thru,
@@ -6891,11 +7131,27 @@ impl EngineWrap {
                     "SetBusLine: unknown bus '{bus}' (no registered RT line)"
                 ))
             })?;
-        installer(LineProgram::new(resolved), bus_index, bus_count).map_err(|error| {
-            WrapError::OutProcEffectRequest(format!(
-                "SetBusLine program failed validation: {error}"
-            ))
-        })?;
+        let mut shadows = self
+            .bus_line_shadows
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("bus line shadow mutex poisoned".into()))?;
+        let old_ops = shadows
+            .entry(bus.to_owned())
+            .or_insert_with(default_bus_line_program);
+        let current = installer.current_gains();
+        let seeds = line_republish_seeds(&resolved, old_ops, &current);
+        installer
+            .install_for_bus(
+                LineProgram::with_seeds(resolved.clone(), seeds),
+                bus_index,
+                bus_count,
+            )
+            .map_err(|error| {
+                WrapError::OutProcEffectRequest(format!(
+                    "SetBusLine program failed validation: {error}"
+                ))
+            })?;
+        *old_ops = resolved;
 
         for name in std::iter::once(bus).chain(referenced_buses) {
             if let Some(active) = control.bus_actives.get(name) {
@@ -7043,7 +7299,7 @@ impl EngineWrap {
         for (target_index, gain) in &resolved_sends {
             gains[send_offset(*target_index)] = *gain;
         }
-        let enabled_sends = gains
+        let enabled_sends: Vec<BusSend> = gains
             .into_iter()
             .enumerate()
             .filter(|(_, gain)| *gain != 0.0)
@@ -7052,6 +7308,11 @@ impl EngineWrap {
                 gain,
             })
             .collect();
+        let shadow = legacy_shadow_line(output_target, &enabled_sends);
+        let mut shadows = self
+            .bus_line_shadows
+            .lock()
+            .map_err(|_| WrapError::OutProcEffect("bus line shadow mutex poisoned".into()))?;
         line(
             output_target,
             enabled_sends,
@@ -7059,6 +7320,7 @@ impl EngineWrap {
             control.bus_index.len(),
         )
         .map_err(WrapError::Output)?;
+        shadows.insert(seq_bus.to_owned(), shadow);
 
         // Mirror the accepted state into the old handles. Existing Rust callers and tests can
         // continue to observe the partial-update API, while production RT reads only LineProgram.
