@@ -5012,6 +5012,56 @@ mod tests {
         );
     }
 
+    /// #611 束 A 監査（Fable Important #1）: `execute_master_line` は `LineOp::Pan` の match
+    /// アームを master（本テスト・`output.rs` 約 1883-1886）と bus post-loop（約 2351-2370）の
+    /// 2 箇所に持つ別々のコードパスで、既存の `line_program_pan_is_normalized_and_executes_in_rt`
+    /// は `render_tagged_line` 経由で bus 経路しか通っていなかった。master 側の Pan アームを
+    /// `LineOp::Pan(_) => {}` に戻しても、この既存テストだけでは検出できない穴を、master line を
+    /// 実際に走らせて数値で塞ぐ。
+    #[test]
+    fn master_line_pan_op_positions_the_master_buffer() {
+        let frames = 2;
+        let mut master = MasterLine::new(48_000, None);
+        master.ensure_buffer_len(frames * ENGINE_CHANNELS);
+        for sample in &mut master.buffer[..frames * ENGINE_CHANNELS] {
+            *sample = 1.0;
+        }
+        master
+            .line_program_installer()
+            .install_for_bus(
+                LineProgram::settled(vec![
+                    LineOp::Pan(-1.0),
+                    LineOp::Output(LineOutput {
+                        dest: OutputDest::Device {
+                            left: 0,
+                            right: Some(1),
+                        },
+                        thru: false,
+                        gain: 1.0,
+                    }),
+                ]),
+                usize::MAX,
+                0,
+            )
+            .expect("valid master pan program installs");
+
+        let mut hw = vec![0.0f32; frames * 2];
+        execute_master_line(&mut master, frames, 2, &mut hw);
+
+        // apply_line_pan(pan=-1.0) の実測ゲインは (√2, 0)。buffer をすべて 1.0 に揃えているので
+        // hw の値はそのままこのゲインになる（`LineOp::Pan(_) => {}` に戻すと hw は 1.0 のまま
+        // なので、この差で退行を検出できる）。
+        let hard_left = std::f32::consts::SQRT_2;
+        for frame in hw.as_chunks::<2>().0 {
+            assert!(
+                (frame[0] - hard_left).abs() <= 1e-6,
+                "hard-left L={}",
+                frame[0]
+            );
+            assert!(frame[1].abs() <= 1e-6, "hard-left R={}", frame[1]);
+        }
+    }
+
     /// `advance_gain` は block が ramp より長ければ 1 回で目標へ到達し、短ければ寄っていく。
     #[test]
     fn advance_gain_saturates_at_the_target_for_blocks_longer_than_the_ramp() {

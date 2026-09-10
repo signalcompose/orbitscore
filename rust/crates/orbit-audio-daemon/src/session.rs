@@ -3935,6 +3935,27 @@ mod tests {
         assert_eq!(nan_error.code, "PARAM_OUT_OF_RANGE");
     }
 
+    /// #611 束 A 監査（Fable Important #1）: 既存の pan wire テストは形の不正（否定側）しか見ておらず、
+    /// `..._contract_shape` の `{"op": "pan", "value": 0.0}` も MALFORMED（"pan" キーが無い形）を
+    /// 見ているだけで、受理された値の中身までは検査していない。`item.get("pan")` を
+    /// `item.get("value")` 等に取り違えても全テストが緑のまま通り得るので、肯定側を固定する:
+    /// 受理された `BusLineOp::Pan` の中身が JSON の `pan` 値と一致すること。
+    #[cfg(feature = "outproc-effect")]
+    #[test]
+    fn set_bus_line_wire_pan_op_is_parsed_with_its_own_value() {
+        let (_, line) = parse_set_bus_line_params(&json!({
+            "bus": "seq-bus-0",
+            "line": [{"op": "pan", "pan": 0.25}]
+        }))
+        .expect("a pan op with a valid value must be accepted");
+        match line.as_slice() {
+            [BusLineOp::Pan(pan)] => {
+                assert!((*pan - 0.25).abs() <= 1e-6, "parsed pan={pan}, want 0.25");
+            }
+            other => panic!("expected a single BusLineOp::Pan, got {other:?}"),
+        }
+    }
+
     #[cfg(feature = "outproc-effect")]
     #[tokio::test]
     async fn set_bus_line_wire_dispatch_accepts_a_complete_line() {

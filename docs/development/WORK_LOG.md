@@ -17,6 +17,43 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(daemon): add the three bundle-A tests the design listed but never got (#611) (Sep 10, 2026)
+
+Fable の受け入れ監査（束 A / PR #834）が **Important #1** として「設計 §11 が PR-A1 / PR-A2 の
+検証として列挙したテストのうち 3 件が実在しない」ことを一次ソースで確認した。うち 2 件は
+**「1 層だけ追従しない」退行の検出器そのもの**だった。
+
+| 追加 | 何を数値で見るか |
+|---|---|
+| `output.rs` `master_line_pan_op_positions_the_master_buffer` | master line を `execute_master_line` へ直接流し、`Pan(-1.0)` 後の hw が `(√2, 0)` になること。buffer を全て 1.0 に揃えているのでゲインがそのまま出る |
+| `session.rs` `set_bus_line_wire_pan_op_is_parsed_with_its_own_value` | `{"op":"pan","pan":0.25}` が受理され、`BusLineOp::Pan` の**中身が 0.25 と一致する**こと |
+| `engine_wrap.rs` `set_bus_line_seed_for_a_new_gain_without_a_match_defaults_to_unity` | 旧に Gain が無い republish で、新 Gain の seed が既定 1.0 になること（0.5 でも 0.0 でもない） |
+
+**なぜ必要だったか**: `LineOp` を match する実行器は master（`execute_master_line`）と
+bus post-loop の **2 箇所**あり、既存テストは `render_tagged_line` 経由で **bus しか通って
+いなかった**。master アームを `LineOp::Pan(_) => {}` に戻しても全件緑になる。wire 側も
+形の不正（MALFORMED）しか見ておらず、`item.get("pan")` を `item.get("value")` に
+取り違えても全件緑だった。
+
+**変異検算**（3 件とも壊して赤・戻して緑を実走）:
+
+| テスト | 変異 | 赤の実出力 |
+|---|---|---|
+| T1 | master 側 Pan アームを `LineOp::Pan(_) => {}` | `hard-left L=1` |
+| T2 | `item.get("pan")` → `item.get("value")` | `'line[].pan' must be a number`（MALFORMED） |
+| T3 | 対応無しの既定値 `1.0` → `0.0` | `left: [0.0, 0.0] / right: [1.0, 1.0]` |
+
+production コードは **0 行**（変異は都度復元・`git diff --stat` で確認）。
+
+**設計文書側も直した**: §4.1 に「√2 の合成が成り立つのは scheduler が鳴らす audio event に
+限る」という**適用範囲**を書き足した（Fable Important #2）。`collect_source_feeds` が集める
+instrument の feed は schedule 時の pan を通らないので、ライン上の Pan は
+`√2 · equal_power_pan(p)` がそのまま出て、**両端で +3.01 dB** になる。中央比では
+どちらも同じ等パワー則だが、絶対レベルが違う（audio event は中央が既に −3 dB）。
+フルスケールの instrument を端まで振ると 0 dBFS を超えるので、**束 B の締めまでに
+owner 裁定**とした（束 A では TS が `SetBusLine` を送らないので到達不能）。
+§11 には欠落の経緯と「設計の検証欄を実装後にチェックリストとして突き合わせる」教訓を残した。
+
 ### feat(daemon): wire pan and mono device into SetBusLine, and carry effective gain across re-publish (#611) (Sep 10, 2026)
 
 `SetBusLine` の wire 契約を拡張し、`pan` と 1 要素の device channels（L+R の mono merge）を

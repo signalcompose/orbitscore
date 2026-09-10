@@ -699,7 +699,7 @@ fails design 611 §4.2's "copy it *without changing its meaning*", so the copy l
 with the §5.1 mechanism that carries the effective gain across a republish.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9727-9736
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9744-9753
     /// マスターゲインを設定する。PR-O3b では従来どおり atomic だけを更新し、RT 専有の
     /// `gain_current` を呼び出し間で連続させる。master line への写しは、TS の
     /// `global.gain()` を `SetBusLine("master", …)` へ切り替え、再 publish 時に実効値を引き継ぐ

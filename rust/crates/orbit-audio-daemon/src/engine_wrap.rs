@@ -3513,6 +3513,23 @@ mod set_bus_line_tests {
         assert_eq!(seeds, vec![-0.51, 0.21, 0.31, 0.81, 0.41, 0.61, 0.0, 1.0]);
     }
 
+    /// #611 束 A 監査（Fable Important #1）: 上のテストは新プログラムの Gain が
+    /// すべて旧プログラム側に対応物を持つケースだけを押さえており、
+    /// `line_republish_seeds` の `LineOp::Gain(_) => 1.0`（対応する旧 Gain が無い時の既定値）
+    /// 分岐に到達するケースが無かった。旧に Gain を一切含まない republish を単独で固定する。
+    #[test]
+    fn set_bus_line_seed_for_a_new_gain_without_a_match_defaults_to_unity() {
+        let old_ops = vec![LineOp::Rack];
+        let new_ops = vec![LineOp::Rack, LineOp::Gain(0.5)];
+        let seeds = line_republish_seeds(&new_ops, &old_ops, &[1.0]);
+        assert_eq!(
+            seeds,
+            vec![1.0, 1.0],
+            "an unmatched new Gain must seed at the default unity (1.0), \
+             not the new target (0.5) nor the Output default (0.0)"
+        );
+    }
+
     #[test]
     fn set_bus_line_rejects_non_finite_or_out_of_range_pan_before_publish() {
         let (wrap, installs) = wrap_and_installs();

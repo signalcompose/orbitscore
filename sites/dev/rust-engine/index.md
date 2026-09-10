@@ -684,7 +684,7 @@ atomic に書いた目標値へ、block ごとに寄せていく形です。
 §5.1 の「再 publish 時に実効値を引き継ぐ機構」とセットで入れます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9727-9736
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9744-9753
     /// マスターゲインを設定する。PR-O3b では従来どおり atomic だけを更新し、RT 専有の
     /// `gain_current` を呼び出し間で連続させる。master line への写しは、TS の
     /// `global.gain()` を `SetBusLine("master", …)` へ切り替え、再 publish 時に実効値を引き継ぐ

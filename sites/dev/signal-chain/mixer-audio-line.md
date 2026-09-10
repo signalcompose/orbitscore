@@ -337,7 +337,7 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 という規則が読み取れます。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7186-7206
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7203-7223
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -370,7 +370,7 @@ daemon 側 `set_bus_routing` の検証を見ると、「output 先は自分よ�
 **受理済みの値をミラーするだけ**になりました。ハンドルの解決順にも意味があります。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7232-7247
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7249-7264
         // 3. Every compatibility handle is resolved before the one program publication, so a
         // missing slot cannot leave only part of the requested routing applied.
         let routing_handle = if resolved_output.is_some() {
@@ -791,7 +791,7 @@ bus しか指せない）を見ます。ここで気づきたいのは、`set_bu
 出口は「先の段のバス」であればよく、それが sum か aux かは問われません。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7076-7091
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7093-7108
                     let dest = match dest {
                         BusLineDest::Master => OutputDest::Master,
                         BusLineDest::Bus(name) => {
@@ -814,7 +814,7 @@ bus しか指せない）を見ます。ここで気づきたいのは、`set_bu
 途中の 1 要素が失敗したら publish には到達しないので、**前のラインがそのまま生き残ります**。
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7109-7140
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7126-7157
         let installer = self
             .bus_line_programs
             .lock()

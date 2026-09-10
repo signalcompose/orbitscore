@@ -347,7 +347,7 @@ later stage and `BusKind::Sum`", "a send target must be a later stage and `BusKi
 "if even one check fails, nothing is applied".
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7186-7206
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7203-7223
         // 1. output target を検証（反映はまだしない・部分適用を避ける）。
         let resolved_output = match output {
             Some("master") => Some(1),
@@ -380,7 +380,7 @@ Since #611 PR-O3a, this function **publishes one line program** after validation
 matters too.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7232-7247
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7249-7264
         // 3. Every compatibility handle is resolved before the one program publication, so a
         // missing slot cannot leave only part of the requested routing applied.
         let routing_handle = if resolved_output.is_some() {
@@ -814,7 +814,7 @@ has — an output target must be a sum bus, a send target must be an aux bus —
 `SetBusLine`**. An outlet only has to be a later stage; whether it is sum or aux is not asked.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7076-7091
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7093-7108
                     let dest = match dest {
                         BusLineDest::Master => OutputDest::Master,
                         BusLineDest::Bus(name) => {
@@ -837,7 +837,7 @@ The assembly — resolve everything, then publish exactly once — is the same a
 one element fails midway the publish is never reached, so **the previous line survives intact**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7109-7140
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7126-7157
         let installer = self
             .bus_line_programs
             .lock()
