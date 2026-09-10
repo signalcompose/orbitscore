@@ -76,6 +76,49 @@ Rust daemon、OOP child、plugin scanner、engine runtime dependencies、標準 
 scsynth の `verify-bundle.sh` 呼び出しだけを除いた。
 
 
+
+---
+
+### docs(sites): follow PR #833 — LinkAudio egress is not in shipped builds (#502) (Sep 10, 2026)
+
+**追従元**: PR [#833](https://github.com/signalcompose/orbitscore/pull/833)（merge commit `58b8c1c`・base `502-sc-removal`）/ **ブランチ**: `claude/docs-sync-pr833`
+
+#833 は spec と guide を直したが、**`sites/` は対象外**（PR 本文で明記）だった。#833 が §8.1 に
+書き下ろした「LinkAudio egress は出荷ビルドに入っていない」という事実は、user site / dev site の
+どちらにも届いていなかったため、そこを追従させた。
+
+**直したもの**:
+- `sites/user(/en)/midi/link-audio.md`: 冒頭に「配布版では Live に音が届かない」警告を追加。
+  前提条件から **OrbitLinkAudio.scx**（#502 で削除済み）を落とし、「送出が有効なビルド」に置換。
+  「プラグイン内で加算合成」→「送出側で加算合成」。「OrbitLinkAudio.scx プラグインがない場合」節を
+  「音声送出が使えないビルドの場合」へ改題。テンポ push も同じ feature に載るため無効である旨を追記
+- `sites/user(/en)/reference/methods.md`: `linkAudio()` / `linkAudio(SR)` / `output("name")` に
+  🔴 を付け、配布版で送出が動かないことを注記。ja 側の `midiLatency(ms)` の説明にあった
+  「SC とのタイミング合わせ」（en には無い）を「オーディオとのタイミング合わせ」へ
+- `sites/dev(/en)/rust-engine/index.md`: wire command 表の `RegisterLinkAudioChannel` /
+  `SetLinkTempo` 行に feature gate を注記し、「LinkAudio egress は出荷ビルドに入っていない」節を新設
+  （`Cargo.toml` の `[features]` と `copy-daemon-bin.sh:109` を逐語引用）。frontmatter の
+  `verified-against` を `58b8c1c` へ
+- `docs/development/TRANSLATION_STATUS.md`: #833 が足した注記は「`502-sc-sites` で進行中」と
+  書いていたが、当該 PR（[#832](https://github.com/signalcompose/orbitscore/pull/832)）は既に
+  base へ入っている。着地済みの内訳（audio 2 章は削除・ADR 2 本は残す）へ書き換え、
+  dev の表の III-1 / III-3 を `削除済み (#832)` に。章数の集計（`完了 39 章` と `総章数 29 章` が
+  矛盾していた）も揃えた
+
+**🔴 仕様と実測の食い違いを見つけた（決めていない・PR 本文に質問として出す）**:
+#833 の §8.1 は「egress が無ければ hardware へフォールバックし 1 回 warn する」と書いているが、
+`tests/e2e/orbitstudio-mcp-gated.spec.ts:5113-5119` には 2026-09-04 の実機で
+**capture RMS = 0・警告マーカーも無し**という逆の実測が記録されており、さらに
+「`global.linkAudio()` 下の dispatch は `skip` か `link` で、capture できる `hardware` には
+決してならない」とも書かれている。**どちらが正しいかは仕様の判断**なので直さず、
+両サイトには「確定していない」と明記して両論を並べた。
+
+**検証**: `npm run docs:build`（user / dev とも成功）・`npm run docs:check` **942 verified / 0 failed**
+（追従前は 936）・`npx vitest run --dir tests --globals docs/` 5 passed。
+
+
+---
+
 ### docs: retire the SuperCollider backend from the specs and guides (#502) (Sep 10, 2026)
 
 **Issue**: #502（東 `502-sc-removal` の docs サブタスク `502-sc-docs`）/ **作業ツリー**: `.claude/worktrees/502-sc-docs`
