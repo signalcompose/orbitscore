@@ -5,6 +5,8 @@ ja 元が更新されたら該当章を `outdated` に切り替え、再翻訳�
 
 詳細は [TRANSLATION_WORKFLOW.md](./TRANSLATION_WORKFLOW.md) を参照。
 
+> 🔴 SuperCollider 経路は **#502（2026-09-10）で削除**されました。`sites/dev/` の SC 関連章（`audio/supercollider.md`・`audio/scsynth-bundle.md`・`decisions/adr-001-supercollider.md`・`decisions/adr-003-scsynth-bundle.md`）の削除・書き換えは別 PR（`502-sc-sites`）で進行中。この表の該当行は `sites/` 側の変更が入り次第、状態を追従させること。
+
 ---
 
 ## sites/user/ (10 章)

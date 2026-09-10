@@ -2,7 +2,7 @@
 
 **Live-coding music DSL with a native Rust audio engine, plugin hosting, and MIDI output**
 
-Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundled native audio engine (Rust `orbit-audio-daemon`: sample playback, CLAP / VST3 plugin hosting, mixer) and MIDI output (Pitch DSL, chords, comp, Ableton Link). Version 2.0.0 is the released state; the VS Code extension is at 2.1.0. SuperCollider remains available as an opt-out backend (`ORBITSCORE_ENGINE=sc`).
+Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundled native audio engine (Rust `orbit-audio-daemon`: sample playback, CLAP / VST3 plugin hosting, mixer) and MIDI output (Pitch DSL, chords, comp, Ableton Link). Version 2.0.0 is the released state; the VS Code extension is at 2.1.0. The Rust daemon is the only audio backend; the SuperCollider opt-out path was removed in #502.
 
 ## Core Features (2.0.0)
 
@@ -120,7 +120,6 @@ The pre-audio MIDI-based implementation (Phases 1-5) is preserved for historical
 - VS Code Extension API
 - MIDI output (CoreMIDI / IAC virtual port)
 - Ableton Link (LinkAudio tempo sync, GPL-isolated crate)
-- SuperCollider (scsynth + supercolliderjs) — opt-out backend only
 
 ## Project Structure
 
@@ -246,7 +245,6 @@ In-repo USER_MANUAL files are **deprecated** (historical reference only):
 - ✅ Named-channel routing, sum / aux buses, master gain
 - ✅ Out-of-process CLAP / VST3 effect and instrument hosting, per-sequence inserts, racks
 - ✅ Realtime WAV capture seam for verification
-- ✅ SuperCollider (scsynth) retained as opt-out backend
 
 ### Transport & Timing
 
@@ -300,10 +298,10 @@ npm test
 
 **2165 passed, 68 skipped (2233 total) — 2026-09-02, macOS, on `69dc968`**
 
-Run `npm test` to see the current breakdown. Skipped tests are real-daemon / macOS / SuperCollider integration tests that require a local environment. Real-device verification runs through the gated E2E harness:
+Run `npm test` to see the current breakdown. Skipped tests are real-daemon / macOS integration tests that require a local environment. Real-device verification runs through the gated E2E harness:
 
 ```bash
-npm run test:e2e:gated   # ORBIT_GATED_ORBITSTUDIO=1; builds the daemon, drives OrbitStudio.app via MCP, asserts on captured WAV
+npm run test:e2e:gated   # ORBIT_GATED_ORBITSTUDIO=1; builds the daemon, drives VS Code via MCP, asserts on captured WAV
 ```
 
 ## Getting Started
@@ -314,7 +312,6 @@ npm run test:e2e:gated   # ORBIT_GATED_ORBITSTUDIO=1; builds the daemon, drives 
 - Node.js v22+
 - Rust toolchain (for the daemon and plugin children; `rust/rust-toolchain.toml`)
 - VS Code
-- SuperCollider — only if you want the `ORBITSCORE_ENGINE=sc` opt-out backend
 
 ### Installation
 

@@ -1,5 +1,7 @@
 # OrbitScore 実音出しテスト - チェックリスト
 
+> 🔴 **歴史的記録**: 本書は SuperCollider バックエンド時代（cutover #108 以前）のチェックリストです。SuperCollider 経路は **#502（2026-09-10）で削除**され、現在のバックエンドは Rust `orbit-audio-daemon` 単独です。現行の実機検証手順は [`docs/testing/TESTING_GUIDE.md`](testing/TESTING_GUIDE.md) と `npm run test:e2e:gated` を参照してください。
+
 **作成日**: 2025-10-10
 **目的**: USER_MANUAL.md記載の全実装済み機能の動作確認
 **担当**: AI（テストファイル作成） + ユーザー（音質確認）

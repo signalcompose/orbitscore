@@ -3,7 +3,7 @@
 OrbitScore is a live coding music DSL for VS Code with a bundled native audio engine (Rust `orbit-audio-daemon`) and MIDI output.
 
 **Current release**: OrbitScore **2.0.0** (`ENGINE_VERSION 2.0.0` / `DSL_VERSION 1.1`、VS Code 拡張 2.1.0)。
-**Audio backend**: Rust `orbit-audio-daemon` が既定（cutover #108・2026-07-03）。SuperCollider (scsynth) は `ORBITSCORE_ENGINE=sc` で opt-out できる旧既定経路。
+**Audio backend**: Rust `orbit-audio-daemon` が唯一のバックエンド（cutover #108・2026-07-03 で既定化・SuperCollider opt-out 経路と `ORBITSCORE_ENGINE` は #502（2026-09-10）で削除）。
 **Supported platforms**: macOS (Apple Silicon, arm64) **only**。Intel Mac は**非対応**。Windows / Linux is not supported.
 
 ---
@@ -210,7 +210,7 @@ CLAUDE.md の「テストの積み上げ規律」「E2E が最重要」「マー
 | [PHASE0_VERIFICATION_REPORT.md](../research/PHASE0_VERIFICATION_REPORT.md) | ✅ | Pitch DSL Phase 0 事前検証 |
 | [comping-voice-leading-design.md](../research/comping-voice-leading-design.md) | ✅ Implemented (#269, #271) | comp / voice-leading 設計 |
 
-### ICMC v1.x bundle（SuperCollider 経路・opt-out 化済）
+### ICMC v1.x bundle（SuperCollider 経路・#502 で削除済み。歴史記録）
 
 | File | Status | Description |
 |---|---|---|

@@ -4,6 +4,8 @@
 
 統括: **Epic #278**（開発側統括は #224）。本ファイルは Phase A の成果物（[Issue #279](https://github.com/signalcompose/orbitscore/issues/279)）。
 
+> 🔴 **2026-09-10 追記**: 本マトリクスは SuperCollider バックエンド時代（cutover #108 前後）の実機記録を含む。SuperCollider 経路は **#502（2026-09-10）で削除**され、現在のバックエンドは Rust `orbit-audio-daemon` 単独。`scsynth` / `.scx` に言及する項目（Link Audio・Gatekeeper 節など）は**当時の実機確認の記録**として残す（削除しない）が、同じ手順を今日再実行することはできない。
+
 **ベースライン（本マトリクス作成時に確認済 / main @ b4b513d）**:
 - `npm test` → **1090 passed | 23 skipped (1113)**, 67 test files passed / 2 skipped
 - `npm run build` → 成功（`tsc --build` + engine copy）
