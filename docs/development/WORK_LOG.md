@@ -59,7 +59,7 @@ main が `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §8 で確定した事実に�
 
 **`docs:check`**: main の §8 編集で行番号がずれた `sites/dev(/en)/signal-chain/mixer-audio-line.md`
 の引用 4 件を `node sites/dev/scripts/check-citations.mjs --fix` で再アンカーした。
-1032 citation(s) verified, 0 failed。
+本 PR 単独では 1032 verified / 0 failed、`502-sc-sites`（#832）を取り込んだ後は 936 verified / 0 failed（章の削除で引用が減ったため）。
 
 
 ---
