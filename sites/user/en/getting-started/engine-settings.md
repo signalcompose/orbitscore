@@ -11,11 +11,15 @@ configure.
 ## Starting and stopping the engine
 
 Use the **Audio Engine Settings** view in the OrbitStudio Activity Bar.
-You can also click **OrbitScore: Stopped** in the status bar (bottom right) and start it from the command list.
+Clicking **OrbitScore: Stopped** in the status bar (bottom right) opens that view.
 
-- **Start Engine** — starts the engine (always start it before live coding)
-- **Start Engine (Debug)** — starts with verbose logging (for troubleshooting)
-- **Stop Engine** — stops the engine
+While a `.orbs` file is open, the button at the top right of the editor
+(**OrbitScore: Start / Stop Engine**) toggles the engine as well. Always start it before
+live coding.
+
+To start with verbose logging (when you are investigating a problem), turn on debug mode in
+the **Audio Engine Settings** view before starting. The choice is saved to the
+`orbitscore.engineDebug` setting, and the status bar text gets a trailing 🐛.
 
 Once the engine is running, evaluating a `.orbs` file (run selection) can produce sound.
 

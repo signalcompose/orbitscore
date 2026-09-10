@@ -82,7 +82,7 @@ LOOP(drum)
 - macOS Apple Silicon（M1, M2, M3 等の Mac）
 - VS Code または Cursor（バージョン 1.99.0 以上）
 
-Intel Mac、Windows、Linux は v1 系では未対応です（一部 Intel Mac では動作する可能性がありますが未検証）。
+Intel Mac、Windows、Linux は未対応です（配布される `.vsix` は arm64 専用です）。
 
 ## 次のステップ
 

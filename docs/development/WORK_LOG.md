@@ -17,6 +17,26 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(user-site): follow PR #842 — install route, Intel support, and engine start (Sep 10, 2026)
+
+PR [#842](https://github.com/signalcompose/orbitscore/pull/842)（`841-readme-stable` → `502-sc-removal`・
+マージコミット `f90c22ce251108faa1ffe31374a9d8e5eb481afb`）が出荷 README を実測に合わせたので、
+**ユーザー学習サイト側に残っていた同じ誤り**を追従させた。ja / en 両方。
+
+| 直したもの | 旧記述 | 根拠 |
+|---|---|---|
+| Intel Mac | 「一部動作する可能性がありますが未検証」 | #842 が `release.yml` の `VSIX_TARGET: darwin-arm64` を根拠に「非対応」へ改めた。universal ではない |
+| 入手経路 | 「将来は VS Code Marketplace と Open VSX からも直接インストールできる予定です」 | Marketplace / Open VSX には出さない（owner 2026-09-10・#842 本文） |
+| エンジンの起動 | 「ステータスバーをクリックするとコマンド一覧が開くので **Start Engine** を選びます」 | ステータスバーの `command` は `orbitscore.showCommands` で、その実体は `orbitscore.engineView.focus`（`packages/vscode-extension/src/extension.ts:666-668`）。**コマンド一覧は開かず Audio Engine Settings ビューが開く**。また `Start Engine` という title のコマンドは存在せず、現在は `OrbitScore: Start / Stop Engine`（`orbitscore.toggleEngine`）である |
+| デバッグ起動 | 「**Start Engine (Debug)** を選びます」 | `orbitscore.startEngineDebug` は `contributes.menus.commandPalette` で `when: "false"` にされておりパレットに出ない。ビュー側の `engineViewToggleDebug`（`extension.ts:2112-2122`）が設定 `orbitscore.engineDebug` を切り替える経路が実体 |
+
+**変更ファイル**: `sites/user/getting-started/installation.md` / `engine-settings.md`、`sites/user/index.md`、
+および `sites/user/en/` の同じ 3 ファイル。
+
+**直さずに報告に回したもの**: `docs/user/ja/USER_MANUAL.md`（README で deprecated 宣言済み・
+scsynth 同梱と `orbitscore.scsynthPath` を今も説明しており #502 と全面的に食い違う。1 行だけ直すと
+かえって誤解を招くので触っていない）。
+
 ### test(e2e): launch the gated harness from stock VS Code (#830) (Sep 10, 2026)
 
 🔴 **実機で回して 3 件の欠陥が出た。いずれも stock VS Code に切り替えて初めて現れたもので、
