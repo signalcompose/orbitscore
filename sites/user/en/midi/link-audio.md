@@ -5,13 +5,28 @@ description: How to use global.linkAudio() and seq.output() to send OrbitScore a
 
 # LinkAudio (Streaming to Ableton Live)
 
-In OrbitScore 2.0.0, **LinkAudio** lets you send audio directly to Ableton Live. Unlike IAC-based MIDI, it streams audio signals over LAN.
+**LinkAudio** is the mechanism for sending audio directly to Ableton Live. Unlike IAC-based MIDI, it streams audio signals over LAN.
+
+::: danger Audio does not reach Live in shipped builds (as of 2026-09-10)
+**LinkAudio audio egress does not work in the shipped OrbitScore (`.vsix`).** You can still write `global.linkAudio()` and `seq.output()`, and neither raises an error, but **no channels appear on the Live side**.
+
+There are two reasons.
+
+- **OrbitLinkAudio.scx**, the SuperCollider plugin that used to carry the audio, was removed together with the whole SuperCollider path in [#502](https://github.com/signalcompose/orbitscore/issues/502) (2026-09-10)
+- Its Rust replacement (`orbit-link-audio`) is **not included in shipped builds**. Turning it on would pull Ableton Link's license (GPL-2.0-or-later) into what is shipped, and that decision has not been made yet
+
+⚠️ **What happens to the sound instead is not settled.** The spec (DSL spec §8.1) says playback falls back to hardware output and warns exactly once; a real-device measurement on 2026-09-04 found **no sound and no warning** (recorded at `tests/e2e/orbitstudio-mcp-gated.spec.ts:5113-5119`). **Until that is resolved, do not rely on LinkAudio for a performance.**
+
+Pushing `global.tempo()` to Link peers is disabled for the same reason.
+
+Read the rest of this page as **how it behaves on a build where egress is enabled**. The current state is recorded in [DSL spec §8.1](https://github.com/signalcompose/orbitscore/blob/main/docs/core/INSTRUCTION_ORBITSCORE_DSL.md).
+:::
 
 ## Prerequisites
 
 - **macOS only**
 - **Ableton Live 12.4 or later** must be running
-- **OrbitLinkAudio.scx** plugin must be installed
+- **A build with LinkAudio egress enabled** (see the warning above — shipped builds do not have it)
 - Live's session sample rate must match OrbitScore's setting (default: 48000 Hz)
 
 ---
@@ -65,7 +80,7 @@ This used to raise a runtime error. During live coding an exception would take d
 
 ### Summing to the Same Channel
 
-When multiple sequences share the same channel name, they are **summed (mixed)** inside the plugin.
+When multiple sequences share the same channel name, they are **summed (mixed)** on the egress side.
 
 ```text
 global.linkAudio()
@@ -114,6 +129,10 @@ In OrbitScore 2.0.0, **OrbitScore acts as the Link tempo leader** (#283).
 
 In practice, you manage tempo from OrbitScore and use Live as a follower.
 
+::: warning The tempo push is also disabled in shipped builds
+Pushing tempo to Link peers rides on the **same mechanism** as audio egress. In shipped builds it is therefore disabled just like the audio, and you only get the one warning (see the notice at the top of this page).
+:::
+
 ---
 
 ## MIDI and LinkAudio Coexisting
@@ -143,9 +162,13 @@ LOOP(piano, kick)
 
 ---
 
-## When OrbitLinkAudio.scx Is Not Available
+## When Egress Is Not Available in Your Build
 
-If the plugin is not loaded and `global.linkAudio()` is declared, OrbitScore falls back to hardware output on the first dispatch (playback) and shows a warning.
+Per the spec (DSL spec §8.1.3), if egress is unavailable and `global.linkAudio()` is declared, OrbitScore falls back to hardware output **on the first dispatch (playback)** and warns **exactly once**. Nothing happens at the moment you write `global.linkAudio()`.
+
+The single warning is deliberate: so that the same reason does not pile up a warning per note, the warning is emitted from **exactly one place — where the channel is registered**.
+
+⚠️ However, **this description conflicts with what was measured on real hardware**. On 2026-09-04 there was no sound (capture RMS = 0) and no warning (`tests/e2e/orbitstudio-mcp-gated.spec.ts:5113-5119`). See also the notice at the top of this page.
 
 ---
 
