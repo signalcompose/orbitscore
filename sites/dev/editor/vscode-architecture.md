@@ -71,29 +71,19 @@ OrbitScore が使っているのは 2 種類です:
 宣言は `package.json` の `engines` と `main` のあいだに置かれています。
 
 ```json
-// packages/vscode-extension/package.json:34-43
+// packages/vscode-extension/package.json:32-38
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": true,
       "description": "OrbitScore starts a native audio engine and loads the audio plugins named by the score, the same way a DAW opens a project. Evaluation works in untrusted workspaces; only the settings that choose which executable runs are restricted.",
-      "restrictedConfigurations": [
-        "orbitscore.scsynthPath",
-        "orbitscore.engine"
-      ]
+      "restrictedConfigurations": []
     }
   },
 ```
 
 `supported: true` は「未信頼でも制限しない」という宣言です。裁定の根拠は「一般的な DAW の挙動に併せて」で (`docs/design/656-release-design.md` §16 (1))、DAW はプロジェクトを開くときに信頼を問わずプラグインを読みます。OrbitScore も未信頼ワークスペースで engine を起動し、譜面の `instrument(path)` を読みます。そのため `startEngine()` の側に信頼を確かめるガードは置かれていません。ライブコーディングは評価を繰り返す行為なので、1 回の確認ダイアログが「毎回の中断」になってしまうからです。
 
-一方 `restrictedConfigurations` は `supported` の値とは独立に効きます。ここに挙げた設定キーは、未信頼ワークスペースでは**ワークスペース側の設定値が無視され、ユーザー設定の値が使われます**。基準は「ワークスペースが値を決めると別の実行ファイルが動く」ものだけ、という 1 点です。
-
-| 設定 | 入れた理由 |
-|---|---|
-| `orbitscore.scsynthPath` | 実行ファイルのパスそのもの |
-| `orbitscore.engine` | `"sc"` に倒すと `scsynthPath` を有効化する |
-
-`orbitscore.audioDevice` はこの基準に当てはまりません。デバイス名は実行対象を選ばないうえ、gated E2E のハーネスがワークスペース設定へ書き込むので、restrict すると実機テストが壊れます。
+`restrictedConfigurations` は `supported` の値とは独立に効き、挙げた設定キーは未信頼ワークスペースで**ワークスペース側の設定値が無視され、ユーザー設定の値が使われます**。かつてここには `orbitscore.scsynthPath`（実行ファイルのパスそのもの）と `orbitscore.engine`（`"sc"` に倒すと `scsynthPath` を有効化する）の 2 件が挙がっていましたが、**両方とも #502 で SC 経路ごと削除**されたため、**2026-09-10 時点では空配列**です。唯一残るバックエンド（Rust daemon）を選ぶ実行ファイルはワークスペースの設定値では変わらないため、restrict すべき設定が無くなりました。
 
 面白いのは、この宣言がコードからは一度も読まれないという点です。放っておくと「誰も読まない設定」になってしまうので、`tests/vscode-extension/untrusted-workspace-capability.spec.ts` の 6 本がマニフェストを直接読んで検査しています。`restrictedConfigurations` を配列として取り出せない形になったらその場で落とす、という書き方になっているのは、`?? []` へフォールバックすると宣言が丸ごと消えたときに `for...of` が 0 周して green になってしまうためです。
 
@@ -132,7 +122,7 @@ let mcpServerHandle: McpServerHandle | null = null
 エントリポイントは `extension.ts` の `activate()` です。VS Code が extension を読み込んだ直後に一度だけ呼ばれます。前半を見てみましょう。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:290-345
+// packages/vscode-extension/src/extension.ts:290-343
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
 
@@ -178,24 +168,22 @@ export async function activate(context: vscode.ExtensionContext) {
   statusBarItem.command = 'orbitscore.showCommands'
   statusBarItem.show()
 
-  // Bundle status indicator (priority 99 → 既存 100 の左隣に並ぶ)
+  // Bundle status indicator (priority 99 → 既存 100 の左隣に並ぶ)。daemon
+  // が解決できない時だけ表示するエラー・インジケータ（健全時は非表示）。
   bundleStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99)
-  // Click → orbitscore.scsynthPath に絞った設定画面に直接遷移
-  // (tooltip 案内と一致、maybeShowBundleNotice の "Open Settings" ボタンとも統一)
   bundleStatusItem.command = {
     command: 'workbench.action.openSettings',
-    title: 'Open scsynth settings',
-    arguments: ['orbitscore.scsynthPath'],
+    title: 'Open OrbitScore settings',
+    arguments: ['orbitscore'],
   }
   updateBundleStatus()
-  updateStatusBarEngineAction()
 ```
 
 面白いのは Output Channel の `appendLine` / `append` を **monkey-patch** している箇所です。拡張には中央のログ sink が無いので、MCP の `get_log` ツール (#388) が読めるように、Output Channel に流れる行をリングバッファ (`outputLogRing`、上限は `log-ring.ts` の `OUTPUT_LOG_RING_MAX = 1000`) にも積んでいます。
 
 `activate()` の残りは大きく 5 つの仕事です:
 
-1. 設定変更リスナー (`orbitscore.scsynthPath` / `orbitscore.engine` / `orbitscore.playheadPalette`) の登録
+1. 設定変更リスナー (`orbitscore.playheadPalette`) の登録 — SC 経路の設定 (`scsynthPath` / `engine`) は #502 で削除済み
 2. コマンドと TreeView provider の登録 (次節)
 3. IntelliSense (補完・ホバー) プロバイダの登録
 4. 診断 (`DiagnosticCollection`) の登録と、開いているドキュメントへの初期パス (#384)
@@ -204,7 +192,7 @@ export async function activate(context: vscode.ExtensionContext) {
 最後の 2 つはこう書かれています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:449-503 (MCP ツールのハンドラ表を省略)
+// packages/vscode-extension/src/extension.ts:431-484 (MCP ツールのハンドラ表を省略)
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -234,44 +222,39 @@ Status bar インジケータは **2 本** あります。priority の値が違�
 
 | 変数 | priority | 役割 | クリック時 |
 |---|---|---|---|
-| `statusBarItem` | 100 (右端) | エンジン動作状態 (`Stopped` / `Ready` / `▶️ Playing`、debug なら `🐛` 付き) | `showCommands` (`rust` なら Engine ビューを focus、`sc` なら QuickPick) |
-| `bundleStatusItem` | 99 (その左) | バイナリ解決状態 | `orbitscore.scsynthPath` 設定 |
+| `statusBarItem` | 100 (右端) | エンジン動作状態 (`Stopped` / `Ready` / `▶️ Playing`、debug なら `🐛` 付き) | `showCommands` (Engine ビューを focus) |
+| `bundleStatusItem` | 99 (その左) | daemon バイナリ解決状態 | `orbitscore` 設定 |
 
-`bundleStatusItem` の表示は `updateBundleStatus()` が決めますが、その最初の分岐が **engine kind** です。
+**2026-09-10 の裁定（#827 / #502）で SC 経路・`getConfiguredEngineKind()` による分岐は削除**されました。`bundleStatusItem` の表示を決める `updateBundleStatus()` はもう engine kind を見ず、daemon の解決結果だけを見ます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:730-746
+// packages/vscode-extension/src/extension.ts:651-664
 function updateBundleStatus(): void {
   if (!bundleStatusItem) return
-  if (getConfiguredEngineKind() === 'rust') {
-    const daemonResolution = resolveDaemonForUI()
-    if (!daemonResolution) {
-      bundleStatusItem.show()
-      bundleStatusItem.text = '$(error) daemon: not found'
-      bundleStatusItem.tooltip =
-        'orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.'
-      bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
-      return
-    }
-    // 既定（Rust・健全）ではインジケータ自体を出さない（owner 判断 2026-07-17: 常時表示の
-    // 意味がない）。daemon 不在エラーと SC バックエンド時のみ表示する。
-    bundleStatusItem.hide()
+  const daemonResolution = resolveDaemonForUI()
+  if (!daemonResolution) {
+    bundleStatusItem.show()
+    bundleStatusItem.text = '$(error) daemon: not found'
+    bundleStatusItem.tooltip =
+      'orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.'
+    bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
     return
   }
+  // 既定（健全）ではインジケータ自体を出さない（owner 判断 2026-07-17: 常時表示の意味がない）。
+  bundleStatusItem.hide()
+}
 ```
 
-`rust` kind で daemon が見つかる (= 通常の状態) ときはインジケータを **隠します**。`sc` kind のときだけ scsynth の解決結果 (`bundled` / `custom` / `not found`) を表示します (`extension.ts:742-766`、[III-3](/audio/scsynth-bundle) 参照)。`env` と `explicit` を同じ `custom` 表示にまとめている判断は 2026-05 から変わっていません。
-
-engine kind を決める `getConfiguredEngineKind()` は `orbitscore.engine` 設定を読み、engine パッケージの `resolveEngineKind()` を runtime `require` で借りて正規化します (`extension.ts:653-669`)。UI と engine の判定を 1 か所に寄せるための工夫です。
+daemon が見つかる (= 通常の状態) ときはインジケータを **隠します**。見つからない時だけ `$(error) daemon: not found` を表示します ([ADR-003 scsynth bundle strict mode](/decisions/adr-003-scsynth-bundle) 参照。ADR が扱う scsynth resolver 自体は 2026-09-10 の裁定 #827 / #502 で削除済みで、歴史的記録として残っています)。
 
 ---
 
 ## Command 登録
 
-`activate()` が登録しているコマンドを整理します。`contributes.commands` に載る 17 個と、TreeView のノードからだけ呼ばれる内部コマンド 2 個があります。
+`activate()` が登録しているコマンドを整理します。`contributes.commands` に載る 15 個と、TreeView のノードからだけ呼ばれる内部コマンド 2 個があります（`forceKillScsynth` / `selectAudioDevice` は #502 で削除）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:371-408
+// packages/vscode-extension/src/extension.ts:355-390
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -281,8 +264,6 @@ engine kind を決める `getConfiguredEngineKind()` は `orbitscore.engine` 設
     vscode.commands.registerCommand('orbitscore.restartEngine', restartEngine),
     vscode.commands.registerCommand('orbitscore.reloadWindow', reloadWindow),
     vscode.commands.registerCommand('orbitscore.startEngineDebug', startEngineDebug),
-    vscode.commands.registerCommand('orbitscore.forceKillScsynth', forceKillScsynth),
-    vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
     vscode.commands.registerCommand('orbitscore.configureFlash', configureFlash),
     vscode.commands.registerCommand('orbitscore.registerMcpServer', registerMcpServer),
     vscode.commands.registerCommand('orbitscore.rescanPlugins', rescanPlugins),
@@ -321,8 +302,6 @@ engine kind を決める `getConfiguredEngineKind()` は `orbitscore.engine` 設
 | `orbitscore.restartEngine` | `restartEngine` | stop → 2.2 秒待ち → start (recovery) | 非表示 (Engine ビューの Recovery) |
 | `orbitscore.reloadWindow` | `reloadWindow` | `workbench.action.reloadWindow` | 非表示 (Engine ビューの Recovery) |
 | `orbitscore.startEngineDebug` | `startEngineDebug` | デバッグモードで起動 | 非表示 |
-| `orbitscore.forceKillScsynth` | `forceKillScsynth` | `killall scsynth` | `orbitscore.engine == 'sc'` のみ |
-| `orbitscore.selectAudioDevice` | `selectAudioDevice` | SC 用オーディオデバイス選択 | `orbitscore.engine == 'sc'` のみ |
 | `orbitscore.configureFlash` | `configureFlash` | フラッシュエフェクト設定 | 表示 |
 | `orbitscore.registerMcpServer` | `registerMcpServer` | `.mcp.json` に Claude Code 用エントリを書く (#388) | 表示 |
 | `orbitscore.rescanPlugins` | `rescanPlugins` | plugin catalog の再スキャン (#463) | 表示 + `editor/context` |
@@ -414,7 +393,7 @@ interface MethodChainContext {
 診断 (`updateDiagnostics`) は、2026-05 時点では `onDidChangeTextDocument` だけで駆動していましたが、#384 で「開いたとき」「閉じたとき」「activation 時に既に開いていたもの」にも広がりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:418-447
+// packages/vscode-extension/src/extension.ts:400-429
   // Compute diagnostics on open and change; clear them on close (#384).
   // Diagnostics must not wait for the first edit — files opened from the CLI,
   // restored tabs, or the activation-time initial pass below all need
@@ -451,38 +430,12 @@ interface MethodChainContext {
 
 ---
 
-## バイナリ解決: scsynth と daemon
+## バイナリ解決: daemon
 
-engine を spawn する前に、拡張は「音声プロセスの実行ファイルが本当にあるか」を事前チェックします。ここに面白い実装パターンがあります。**Extension Host の JS (TypeScript にコンパイル済) が、engine パッケージの compiled JS を `require` でランタイムロードする** という構造で、scsynth と daemon の両方に同じ形の wrapper があります。
+engine を spawn する前に、拡張は「音声プロセスの実行ファイルが本当にあるか」を事前チェックします。ここに面白い実装パターンがあります。**Extension Host の JS (TypeScript にコンパイル済) が、engine パッケージの compiled JS を `require` でランタイムロードする** という構造です。**2026-09-10 の裁定（#827 / #502）で削除される前**は、この wrapper が scsynth (`resolveScsynthForUI()`) と daemon (`resolveDaemonForUI()`) の 2 つ symmetric な形で存在していましたが、SC 経路の削除により **`resolveDaemonForUI()` だけが残ります**。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:681-715
-function resolveScsynthForUI(): { path: string; source: string } | null {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-    const resolverModule = require('../engine/dist/audio/supercollider/scsynth-resolver') as {
-      resolveScsynthPath: (opts?: { explicit?: string }) => { path: string; source: string }
-    }
-    const userOverride = vscode.workspace
-      .getConfiguration('orbitscore')
-      .get<string>('scsynthPath', '')
-      .trim()
-    return resolverModule.resolveScsynthPath(userOverride ? { explicit: userOverride } : undefined)
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err)
-    outputChannel?.appendLine(`❌ scsynth resolver failed: ${reason}`)
-    return null
-  }
-}
-
-/**
- * Resolve the native Rust daemon binary via shared resolver (engine の
- * compiled JS を runtime require). Returns null on failure. Symmetric to
- * `resolveScsynthForUI()` — same runtime-require pattern, same
- * log-reason-to-outputChannel-on-failure behavior (C2). Used to pre-check
- * daemon availability under the `rust` engine kind, mirroring how
- * `resolveScsynthForUI()` pre-checks scsynth under the `sc` kind.
- */
+// packages/vscode-extension/src/extension.ts:634-642
 function resolveDaemonForUI(): { path: string; source: string } | null {
   try {
     return resolveDaemonBinaryForExtension()
@@ -511,7 +464,16 @@ export function extensionEngineFileExists(enginePath: string): boolean {
 }
 ```
 
-scsynth の resolver は `explicit > env > bundle > throw`、daemon の resolver は `explicit > env > monorepo-release > monorepo-debug > extension-bundle > throw` です。どちらも silent fallback を持たず、見つからなければ例外で fail loud します ([ADR-003](/decisions/adr-003-scsynth-bundle))。
+daemon の resolver は `explicit > env > monorepo-release > monorepo-debug > extension-bundle > throw` です。silent fallback を持たず、見つからなければ例外で fail loud します ([ADR-003](/decisions/adr-003-scsynth-bundle) — かつての scsynth resolver の意思決定記録。scsynth 側は #502 で削除済み)。
+
+::: warning scsynth 側の候補は出荷物からは引けない (#836・2026-09-10)
+[#836](https://github.com/signalcompose/orbitscore/pull/836) 以降、`packages/engine/scripts/sync-dist.js` は engine を拡張へ同期するたびに `engine/scsynth` と同期先の `dist/audio/supercollider/` を削除します。したがって出荷された `.vsix` では
+
+- `bundle` 候補のパス (`<engine root>/scsynth/Contents/Resources/scsynth`) が存在しない
+- 上のコードが `require` している `../engine/dist/audio/supercollider/scsynth-resolver` **そのものが存在しない**
+
+という状態になります。`resolveScsynthForUI()` は require 失敗を catch して `❌ scsynth resolver failed: …` を outputChannel に出し `null` を返す作りなので、`sc` kind を選んだときの挙動は「resolver が読めない」に変わっています。拡張側の TypeScript は #836 では**触られていません**（SC の TS 実装と拡張の表面の撤去は #836 本文いわく「次の PR」）。
+:::
 
 ---
 
@@ -519,10 +481,10 @@ scsynth の resolver は `explicit > env > bundle > throw`、daemon の resolver
 
 `startEngine(debugMode?, agentOpts?)` が実際に engine を子プロセスとして起動します。2026-05 との違いは、`async` になって `boolean` を返すこと、engine kind で事前チェックが分岐すること、MCP からの `capture_wav` を受け取ることです。
 
-事前チェックは [III-3](/audio/scsynth-bundle#engine-kind-で呼び出しそのものが-gate-される) に引用したので、ここでは引数と env の組み立てから spawn までを読みます。
+事前チェックは削除済みの旧 III-3 章（[ADR-003](/decisions/adr-003-scsynth-bundle) に記録）に引用したので、ここでは引数と env の組み立てから spawn までを読みます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2209-2222
+// packages/vscode-extension/src/extension.ts:1973-1986
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -542,21 +504,22 @@ scsynth の resolver は `explicit > env > bundle > throw`、daemon の resolver
 engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動され、出力デバイスは `--audio-device` 引数で渡されます (`orbitscore.audioDevice` 設定が優先、無ければ `.orbitscore.json`)。`__default__` は「OS の既定出力」を意味する番兵です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2240-2262
-  if (engineKind === 'rust') {
-    env.ORBITSCORE_ENGINE = 'rust'
-    outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
-  } else {
-    env.ORBITSCORE_ENGINE = 'sc'
-
-    // Pass scsynth path to engine via env. pre-check で解決済 (scResolution.path) を
-    // そのまま engine に渡すことで resolver の二重 fs.statSync を avoid + pre-check と
-    // engine 内部での resolution 結果ズレ (タイミング差) のリスクを排除。
-    // scResolution is guaranteed non-null here: the 'sc' branch above returns
-    // early when resolution fails.
-    env.ORBIT_SCSYNTH_PATH = scResolution!.path
-    outputChannel?.appendLine(`🔧 scsynth (${scResolution!.source}): ${scResolution!.path}`)
+// packages/vscode-extension/src/extension.ts:1982-2005
+  // Set environment
+  const env = { ...process.env }
+  if (effectiveDebugMode) {
+    env.ORBITSCORE_DEBUG = '1'
   }
+
+  // Capture seam (#307): the daemon records the master output to this WAV while
+  // the stream runs. Only set when explicitly requested (MCP start_engine tool)
+  // — inherited env stays authoritative otherwise.
+  if (agentOpts?.captureWav) {
+    env.ORBIT_CAPTURE_WAV = agentOpts.captureWav
+    outputChannel?.appendLine(`🎙️ Capture: ${agentOpts.captureWav}`)
+  }
+
+  outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native)')
 
   // Spawn engine process
   try {
@@ -568,12 +531,12 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
   } catch (err) {
 ```
 
-ここで気をつけたいのは、`ORBITSCORE_ENGINE` を **両方の分岐で明示的に set** している点です。cutover #108 で「未設定 = rust」に既定が反転したため、`delete env.ORBITSCORE_ENGINE` で SC を守る旧ロジックは常に rust になってしまう landmine でした (`docs/archive/WORK_LOG_2026-07.md` §6.186 の I1)。`sc` 分岐では事前チェックで解決済みの scsynth パスを `ORBIT_SCSYNTH_PATH` で engine に渡し、二重の `fs.statSync` と解決結果のズレを避けています。
+**2026-09-10 の裁定（#827 / #502）で `engineKind` による分岐・`ORBITSCORE_ENGINE` の明示 set・`ORBIT_SCSYNTH_PATH` の受け渡しはすべて削除**されました。唯一のバックエンドである Rust daemon 向けに、debug フラグと capture seam（#307）だけを env へ積んで spawn します。
 
 `stdio: ['pipe', 'pipe', 'pipe']` が重要です。stdin/stdout/stderr をすべて pipe にすることで、Extension Host から直接 write/read できます。spawn 直後にはハンドラを 5 本付け、`process.nextTick` を 1 回またいでから「まだ同じプロセスが生きているか」を確認します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2277-2288
+// packages/vscode-extension/src/extension.ts:2020-2031
   // Setup handlers
   setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
@@ -597,7 +560,7 @@ engine CLI (`engine/dist/cli-audio.js`) は `repl` サブコマンドで起動�
 そこで chunk 列を行へ組み直す小さなヘルパが挟まっています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1622-1642
+// packages/vscode-extension/src/extension.ts:1415-1435
 export function createLinePrefixer(emit: (line: string) => void): {
   push: (chunk: string) => void
   flush: () => void
@@ -626,7 +589,7 @@ export function createLinePrefixer(emit: (line: string) => void): {
 `setupStderrHandler` 側は、この `push` / `flush` を `logHandlerFailure` で包んで繋ぐだけになりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1658-1680
+// packages/vscode-extension/src/extension.ts:1451-1473
 export function setupStderrHandler(process: child_process.ChildProcess): void {
   const prefixer = createLinePrefixer((line) => {
     outputChannel?.appendLine(`ERROR: ${line}`)
@@ -659,7 +622,7 @@ export function setupStderrHandler(process: child_process.ChildProcess): void {
 3 つ目の `setupStdoutHandler` は、2026-09-08 の [#811](https://github.com/signalcompose/orbitscore/pull/811) (束 O-wire) で `createLinePrefixer` を使う側に回りました。それまでは chunk を `output.split('\n')` して、その場で `{"savePluginState"` / `{"pluginUi"` / `{"evalMark"` / `{"engineState"` の 4 分岐へ流していたので、**bridge の JSON 封筒が chunk 境界で割れると両方の断片が失われました**。前半は prefix チェーンのどれにも一致せず、後半は `{` で始まらないので、やはりどれにも一致しないからです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1479-1486
+// packages/vscode-extension/src/extension.ts:1272-1279
 export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
   // #773: Bridge envelopes are line-framed, but stdout data events are not.
   // Keep this buffer inside the handler so a stale process can never donate a
@@ -675,7 +638,7 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
 もう 1 つの仕掛けが `StringDecoder` です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1516-1519
+// packages/vscode-extension/src/extension.ts:1309-1312
   // Decode only the buffered bridge-dispatch path across Buffer boundaries. The log/playhead path
   // below intentionally keeps its historical per-chunk `data.toString()` timing and values.
   // stderr has the same UTF-8 boundary hazard but remains out of scope for this change.
@@ -685,7 +648,7 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
 `data.toString()` は chunk を単独で UTF-8 として解釈するので、マルチバイト文字が chunk をまたぐと **その場で `U+FFFD` に化けます**。行を繋ぎ直しても文字が壊れたあとでは戻りません。`StringDecoder` は不完全なバイト列を次の chunk まで持ち越すので、その手前で守れます。コメントが明言しているとおり、この置き換えは **bridge dispatch の経路だけ**で、ログと playhead へ渡す `output` / `lines` は従来どおり `data.toString()` のままです。既存の呼び出し規約とタイミングを変えないための線引きで、stderr 側の同じ危険はこの変更の対象外だとも書かれています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1534-1535
+// packages/vscode-extension/src/extension.ts:1327-1328
       const bridgeOutput = bridgeDecoder.write(data)
       if (bridgeOutput) bridgeLines.push(bridgeOutput)
 ```
@@ -693,7 +656,7 @@ export function setupStdoutHandler(process: child_process.ChildProcess, debugMod
 そして stderr 側と同じく、`end` で必ず吐き出します。`bridgeDecoder.end()` が先に来るのは、decoder が抱えている未完のバイト列を文字へ戻してから prefixer へ渡さないと、最後の 1 行が化けたまま emit されるからです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1578-1586
+// packages/vscode-extension/src/extension.ts:1371-1379
   process.stdout?.on('end', () => {
     try {
       const bridgeRemainder = bridgeDecoder.end()
@@ -721,7 +684,7 @@ Extension Host と engine プロセスの通信は **stdin/stdout パイプ** �
 送信部分は editor の Run Selection と MCP の `evaluate_orbitscore` が共有する `writeCodeToEngine()` に集約されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3117-3149
+// packages/vscode-extension/src/extension.ts:2708-2740
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -790,7 +753,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1537-1573 (effects の中身を一部省略)
+// packages/vscode-extension/src/extension.ts:1330-1366 (effects の中身を一部省略)
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
         clearSequence: clearPlayheadForSequence,
@@ -831,7 +794,7 @@ export function transportStatusText(state: TransportState, debugMode: boolean): 
 `stopEngine()` は SIGTERM → (2 秒後) SIGKILL という 2 段階のシャットダウンを行います。2026-05 と比べると、bridge の drain と playhead のクリアが増え、SIGKILL の条件が直っています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2302-2350
+// packages/vscode-extension/src/extension.ts:2045-2093
 export function stopEngine(): boolean {
   engineGeneration += 1
   if (engineProcess && !engineProcess.killed) {
@@ -854,7 +817,7 @@ export function stopEngine(): boolean {
     engineStateBridge.drainAll('engine was stopped before responding to //#getEngineState')
 
     // Send graceful shutdown signal (SIGTERM)
-    // This allows the engine to clean up SuperCollider properly
+    // This allows the engine to clean up the audio backend properly
     proc.kill('SIGTERM')
 
     // Force kill after 2 seconds if still running.
@@ -1003,7 +966,7 @@ flowchart TD
 
 ## Sources
 
-- `packages/vscode-extension/package.json` — version 2.1.0、`activationEvents`、`contributes.commands` (17)、`viewsContainers` / `views` / `viewsWelcome`、`walkthroughs`、`menus`、`keybindings`、`configuration` (`orbitscore.engine` / `mcpServer.port` / `playheadPalette` 等)
+- `packages/vscode-extension/package.json` — version 2.1.0、`activationEvents`、`contributes.commands` (15)、`viewsContainers` / `views` / `viewsWelcome`、`walkthroughs`、`menus`、`keybindings`、`configuration` (`mcpServer.port` / `playheadPalette` 等。`orbitscore.engine` / `orbitscore.scsynthPath` は #502 で削除)
 - `packages/vscode-extension/package.json:34-43` — `capabilities.untrustedWorkspaces` の宣言 (#385)
 - `tests/vscode-extension/untrusted-workspace-capability.spec.ts:1-125` — 宣言を検査する 6 本 (`restrictedConfigurations` を `?? []` に落とさない理由もここ)
 - `tests/helpers/vscode-extension-manifest.ts:1-53` — マニフェスト読み取りの共有ヘルパー (`readExtensionManifest()` / `declaredConfigurationKeys()`)

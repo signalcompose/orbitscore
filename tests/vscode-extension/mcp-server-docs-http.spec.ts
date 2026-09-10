@@ -43,10 +43,6 @@ function createStubHandlers(): OrbitScoreToolHandlers {
       const state: EngineState = { running: true, liveCoding: false }
       return state
     },
-    forceKillScsynth: () => {
-      const result: CommandResult = { ok: true }
-      return result
-    },
     listAudioDevices: () => {
       const result: AudioDevicesResult = { ok: true, devices: [] }
       return result

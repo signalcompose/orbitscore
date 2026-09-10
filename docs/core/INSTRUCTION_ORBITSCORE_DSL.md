@@ -12,7 +12,7 @@ All implementation, testing, and planning must strictly follow this specificatio
 
 **Last Updated**: 2026-09-01
 **Implementation Status**: ✅ OrbitScore 2.0.0 — v3.0 audio engine + v1.1 Pitch DSL (MIDI) Phases 1/2/3/R/4 implemented and tested
-**Audio backend**: Rust `orbit-audio-daemon` is the default since cutover #108 (2026-07-03); SuperCollider (scsynth) remains as an opt-out backend via `ORBITSCORE_ENGINE=sc` (`packages/engine/src/audio/create-audio-engine.ts`). Plugin hosting (PH.*), catalog (PC.*), mixer (MX.*), import (IM.*) and the rack chain ([SIGNAL_CHAIN_DSL_SPEC_v1](../specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md) SC.10) are implemented on the Rust path only.
+**Audio backend**: Rust `orbit-audio-daemon` is the only backend. It became the default at cutover #108 (2026-07-03), and the SuperCollider (scsynth) opt-out path was **removed in #502 (2026-09-10)** together with the `ORBITSCORE_ENGINE` environment variable. Plugin hosting (PH.*), catalog (PC.*), mixer (MX.*), import (IM.*) and the rack chain ([SIGNAL_CHAIN_DSL_SPEC_v1](../specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md) SC.10) are implemented on this path.
 
 > 🎯 **進行中の v1.1 拡張（Pitch DSL / MIDI・Session Log・WCTM）の仕様は [`docs/specs-v2/`](../specs-v2/) が正本**（進捗は GitHub Epic #224）。
 > ⚠️ 本番トラック（統括 [#413](https://github.com/signalcompose/orbitscore/issues/413)）: 藝大コンサート（2026-08-07）は不採択で旧「締切 2026-08-07」は失効。retarget 先だった **ICLC 提出も取り下げ**（owner 2026-09-03）。**本番トラックに締切は無く**、開発の順序は [`DEVELOPMENT_MAP.md`](../planning/DEVELOPMENT_MAP.md) §3 で決まる。Max 必須の縛りも消滅。**WCTM 本体の開発は本リポジトリでは進めない**（同・地図 §4.M）。
@@ -32,7 +32,7 @@ var global = init GLOBAL
 
 **Implementation Details**:
 - Creates an instance of the `Global` class
-- Initializes the audio backend (`createAudioEngine()` — Rust `orbit-audio-daemon` by default, SuperCollider with `ORBITSCORE_ENGINE=sc`)
+- Initializes the audio backend (`createAudioEngine()` — Rust `orbit-audio-daemon`)
 - Sets up `Transport` system for scheduling
 - Default values: tempo=120, beat=4/4
 - **Variable naming**: The variable name "global" is conventional but not required - you can use any valid identifier (e.g., `var g = init GLOBAL`, `var master = init GLOBAL`)
@@ -249,8 +249,7 @@ like SuperCollider's `PlayBuf.ar(rate:)`:
   pitch-preserving time-stretch. A `rate = 2.0` slice sounds one octave up; `rate = 0.5`
   one octave down.
 
-This is the slot-fitting behavior for **both** the SuperCollider engine and the Rust
-engine (`ORBITSCORE_ENGINE=rust`); the two stay in parity. A *pitch-preserving* fit would
+This is the slot-fitting behavior of the Rust engine. A *pitch-preserving* fit would
 require time-stretch — see `fixpitch()` / `time()` / `stretch()` in §12.
 
 #### 🔴 This section applies to `chop(n)` with **n > 1** only
@@ -263,8 +262,8 @@ require time-stretch — see `fixpitch()` / `time()` / `stretch()` in §12.
 | `chop(n > 1)` | `scheduleSliceEvent` | the slice is varispeed-fitted into its slot (above) — **pitch moves** |
 
 The branch is in `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138`
-(`if (chopDivisions && chopDivisions > 1)`) — full path, because a second `event-scheduler.ts`
-exists under `packages/engine/src/audio/supercollider/`.
+(`if (chopDivisions && chopDivisions > 1)`). The full path is a leftover from when a second
+`event-scheduler.ts` existed under the retired backend; that directory was removed in #502.
 `scheduleEvent` takes **no duration and no rate argument**, so there is nothing to scale by.
 
 **The non-chop path is a feature, not an omission.** It is how you write a one-shot that
@@ -477,7 +476,7 @@ seq1.audio("../audio/kick.wav")             // Default: chop(1)
 - `.chop(n)` divides file into n equal slices (numbered 1 to n)
 - `.chop(1)` or omitting `.chop()` = no division (entire file is slice 1)
 - Supported formats: `wav`, `aif`, `aiff`, `mp3`, `mp4`, `flac`
-- SR/bit depth follow the system hardware (scsynth default); for LinkAudio match session SR via `global.linkAudio(SR)`
+- SR/bit depth follow the system hardware (the device the daemon opens); for LinkAudio match session SR via `global.linkAudio(SR)`
 
 **Common patterns**:
 - Drum hits: Use `.chop(1)` or omit - triggers entire sample
@@ -636,11 +635,38 @@ OrbitScore は 2 系統の DAW 連携経路を持つ:
 - **Audio out → Ableton Link Audio (Live 12.4+)** ... v1.2.0 で導入。 名前付きチャンネルを LAN 上で stream する。 詳細は §8.1。
 - **MIDI out → IAC Bus**: macOS IAC Bus で routing 予定。 v1.2.0 では未実装、 別 Issue で扱う。
 
-DAW 側 (Ableton Live 等) にプラグインを別途 install する形式は採らない。 OrbitScore の出力経路は scsynth (hardware bus) または Link Audio (名前付き channel) のいずれか。
+DAW 側 (Ableton Live 等) にプラグインを別途 install する形式は採らない。 OrbitScore の出力経路は hardware (Rust daemon のデバイス出力) または Link Audio (名前付き channel) のいずれか。
 
 ### 8.1 Ableton Link Audio Output
 
 LinkAudio は Live 12.4 (2026-05-05 公開) で導入された Link の上位互換。 tempo / beat / phase / start-stop の同期に加えて、 LAN 上で名前付きの音声 channel を publish / subscribe できる。 ライセンスは GPL-2.0-or-later / proprietary commercial の dual。 OrbitScore は publisher 側 (Sink) のみを実装する。
+
+> 🔴 **出荷ビルドでの現在地（2026-09-10・#502 の SC 削除時に実測）**
+>
+> **LinkAudio egress は出荷される `.vsix` では動作しない。** DSL 表面（`global.linkAudio()` /
+> `seq.output(name)`）は従来どおり解釈されるが、音は **hardware へ出る**。
+>
+> | 実装 | 所在 | 出荷されるか |
+> |---|---|---|
+> | SC 版（`OrbitLinkAudio.scx`・scsynth プロセス内） | `packages/sc-link-audio/` | ❌ **#502 で削除**。`ORBITSCORE_ENGINE=sc` ごと撤去 |
+> | Rust 版（daemon の egress） | `rust/crates/orbit-link-audio`（GPL 隔離 crate） | ❌ daemon の feature **`link-audio` が default off** で、出荷ビルドは有効化していない（`scripts/copy-daemon-bin.sh` / `.github/workflows/release.yml` はいずれも `--features outproc-effect,outproc-instrument` のみ） |
+>
+> **なぜ有効化しないか**: Ableton Link は GPL-2.0-or-later / commercial の dual license で、
+> feature を有効にすると **GPL が出荷バイナリの依存グラフに入る**。`rust/deny.toml` の
+> 「default graph は GPL-free」不変条件はこれを assertable に保つための仕掛けであり、
+> **SC（GPL の scsynth 同梱）を削除した理由と同じ問題**をもう一度作ることになる。
+> 有効化は「そう決める」ことであって、まだ決めていない。
+>
+> **🔴 今日の挙動は未決である（設計の意図と実測が食い違っている）**
+>
+> | | 主張 | 出典 |
+> |---|---|---|
+> | 設計の意図 | daemon が `LINK_AUDIO_UNAVAILABLE` を返し、TS 側が 1 回だけ warn して継続。channel 名は tag され続けるが出力は hardware のみ | `rust-engine-player.ts` の `registerLinkAudioChannel` の**コメント** |
+> | **実測（2026-09-04・main の実機実行）** | `global.linkAudio()` 下の sequence は **capture RMS = 0**。`get_log` に `LINK_AUDIO_UNAVAILABLE` も gap 警告も**出ない** | `tests/e2e/orbitstudio-mcp-gated.spec.ts` の該当ブロック（capture ベースの証明をこの理由で取り下げた記録） |
+>
+> **コメントは実装の振る舞いの証拠ではない。** どちらが正しいかは、`link-audio` を有効化するか
+> どうかの裁定と一緒に決める。それまで **LinkAudio を前提にした演奏はしない**こと。
+> `global.tempo()` の Link への push（§8.1.4・#283）も同じ feature に依存するので同様に無効。
 
 #### 8.1.1 Global mode declaration
 
@@ -648,13 +674,13 @@ LinkAudio は Live 12.4 (2026-05-05 公開) で導入された Link の上位互
 
 ```orbs
 global.tempo(120)
-global.linkAudio()           // LinkAudio mode を有効化、 target SR は plugin が auto-detect (fallback 48000)
+global.linkAudio()           // LinkAudio mode を有効化、 target SR は egress が auto-detect (fallback 48000)
 global.linkAudio(48000)      // 明示的に target SR を指定 (override)
 ```
 
-宣言中は **全 sequence が LinkAudio 経由** に出力される。 hardware (scsynth Out.ar) との混在は不可。 宣言なしの .orbs ファイルは従来通り hardware 出力のみ。
+宣言中は **全 sequence が LinkAudio 経由** に出力される。 hardware 出力との混在は不可。 宣言なしの .orbs ファイルは従来通り hardware 出力のみ。
 
-target sample rate は plugin 内で scsynth (hardware SR) の出力をリサンプリングするための値。 LinkAudio 自身は内部リサンプリングを行わないため、 publisher と subscriber (Live) の SR が一致しないと連続的なサンプルドロップが発生する (Live default 48kHz と異なる場合は必ず明示する)。
+target sample rate は egress がエンジンの出力を LinkAudio へ渡すときのリサンプリング目標。 LinkAudio 自身は内部リサンプリングを行わないため、 publisher と subscriber (Live) の SR が一致しないと連続的なサンプルドロップが発生する (Live default 48kHz と異なる場合は必ず明示する)。
 
 #### 8.1.2 Per-sequence channel binding
 
@@ -690,11 +716,15 @@ s.audio("snare.wav").output("drums")               // kick と snare が同 chan
 
 ⚠️ **v1 の現在地**: この規範は**まだ実装されていない**。今日の `seq.output("master")` は sum にも render bus にも一致しないため **LinkAudio channel 名として記録される**（`sequence.ts:405-413`・既存契約は `tests/core/sequence-output.spec.ts:167-179`）。予約語として wire に届くのは `.master` 糖衣だけである。解決順の実装は PR-O4（MX.2.1 の注記も参照）。
 
-#### 8.1.3 Plugin lifecycle
+#### 8.1.3 Egress の所在とライフサイクル
 
-LinkAudio mode は scsynth プロセス内で動作する SC plugin (`OrbitLinkAudio.scx`、 GPL-2.0-or-later 別 artifact) に依存する。 plugin の load / unload は scsynth 起動 / 終了に紐づく。 ランタイム切替 (演奏中の LinkAudio on/off) は v1.2.0 では非対応。
+LinkAudio egress は **daemon の feature `link-audio`**（GPL 隔離 crate `orbit-link-audio`）として実装されている。 有効なビルドでは daemon の起動 / 終了に紐づき、 ランタイム切替（演奏中の LinkAudio on/off）は非対応。
 
-plugin が load されていない状態で `global.linkAudio()` を宣言した場合は hardware path にフォールバックし警告を出す。この警告は **`global.linkAudio()` 宣言時ではなく、最初のディスパッチ（再生）時**に発火する。 plugin の有無は `EventScheduler.setLinkAudioPluginAvailable()` を経由してブート pipeline (Step 4) が flip する。
+**egress が利用できないビルド**（= 出荷ビルド。§8.1 の警告ブロック参照）では、 `global.linkAudio()` を宣言しても hardware path で再生を続け、 警告を **1 回だけ**出す。 この警告は `global.linkAudio()` の宣言時ではなく、 **最初に channel を登録するとき**（= ディスパッチ時）に発火する。
+
+判定は daemon が返す `LINK_AUDIO_UNAVAILABLE` エラーコードで行う。 これは feature 未ビルドという **能力の欠落**を表すコードで、 `LINK_AUDIO_RUNTIME`（実行時の失敗）や daemon 死亡とは区別され、 後者は握り潰さず呼び出し元へ伝播する。
+
+警告の発火点は **channel 登録の 1 箇所だけ**である。 `scheduleEvent` / `scheduleSliceEvent` は同じ gap を検出しても警告せず、 登録経路を唯一の権威として扱う（実測 2026-09-10・`rust-engine-player.ts` の `'outputChannel'` GapKind を使う呼び出しは 1 箇所）。 これは「同じ理由の警告が発音のたびに増える」ことを避けるための設計である。
 
 #### 8.1.4 Live 側の操作
 
@@ -711,7 +741,7 @@ tempo / beat / phase / Start-Stop は LinkAudio に内包された Link 機能�
 - Parser must support nested `play` structures for hierarchical timing
 - IR must represent play structures as tree-like data for timing calculation
 - Scheduler must handle independent sequence tempos (polytempo) and meters (polymeter)
-- Audio engine is the Rust daemon by default (SuperCollider opt-out); both satisfy the `AudioEngineBackend` seam (`packages/engine/src/audio/engine-backend.ts`)
+- Audio engine is the Rust daemon (`packages/engine/src/audio/rust-engine/`); it satisfies the `AudioEngineBackend` seam (`packages/engine/src/audio/engine-backend.ts`)
 - Global underscore methods (_tempo, _beat) must trigger seamless parameter updates for inheriting sequences
 
 **Future Additions**:
@@ -2063,21 +2093,36 @@ Epic #224 phases 1/2/3/R/4:
 - **IR Generation**: Intermediate representation for execution
 - **Error Handling**: Graceful error reporting
 
-#### Audio Engine (Rust daemon default / SuperCollider opt-out)
-- **File Loading**: WAV / AIFF / MP3 / MP4 decoding (symphonia on the Rust path; buffer caching on the SC path)
+#### Audio Engine (Rust daemon)
+- **File Loading**: WAV / AIFF / MP3 / MP4 decoding (symphonia, on the Rust daemon — the only backend since #502)
 - **Slicing**: `chop(n)` divides audio into n equal parts with precise timing
-- **Playback**: sample-accurate `PlayAt` scheduling on the Rust daemon (SC path: 0-2ms latency via scsynth)
+- **Playback**: sample-accurate `PlayAt` scheduling on the Rust daemon
 - **Audio Control**:
   - `gain(dB)`: Real-time volume control in dB (-60 to +12, default 0) - applies immediately even during playback
   - `pan(position)`: Real-time stereo positioning (-100 to 100) - applies immediately even during playback
   - `defaultGain(dB)`: Set initial gain without triggering playback - use before `run()` or `loop()`
   - `defaultPan(position)`: Set initial pan without triggering playback - use before `run()` or `loop()`
   - Random values: `r` (full random), `r0%10` (random walk)
-- **Global Mastering Effects**:
+- **Global Mastering Effects**: 🔴 **DSL 語彙としては受理されるが、出荷ビルドでは no-op**（下の警告を読むこと）
   - `global.compressor()`: Increase perceived loudness
   - `global.limiter()`: Prevent clipping
   - `global.normalizer()`: Maximize output level
-- **Audio Device Selection**: Choose output device via command palette
+
+  > 🔴 **出荷ビルドでの現在地（2026-09-10・#502 の SC 削除時に実測）**
+  >
+  > この 3 メソッドは **`RustEnginePlayer` で実装されていない**。呼ぶと
+  > `⚠️  [rust-engine] master effect "..." is not supported yet (A4 era) — it is a no-op on the rust engine.`
+  > を **1 回だけ warn して no-op** になる（`packages/engine/src/audio/rust-engine/rust-engine-player.ts`
+  > の `addEffect` / `removeEffect`）。
+  >
+  > 実装があったのは **SC バックエンドの synthdef**（`fxCompressor` / `fxLimiter` /
+  > `fxNormalizer`）だけで、**#502 で scsynth ごと削除した**。したがって出荷される
+  > `.vsix` には**この 3 つを実行する経路が存在しない**。
+  >
+  > **代替**: master バスの処理は **CLAP / VST3 プラグインのラック**で行う
+  > （`global.effect(...)` — 「Plugin Hosting」節）。DSL 語彙から 3 メソッドを外すかどうかは
+  > **owner 裁定事項**として保留する（表面の削除は破壊的変更のため）。
+- **Audio Device Selection**: Choose output device in the **Audio Engine Settings** view (or the MCP `select_audio_device` tool). 🔴 The palette command was removed in #502, and the DSL `global.audioDevice()` does **not** switch the device — it warns and points at the setting.
 - **Default Behavior**: `chop(1)` or no chop treats file as single slice
 
 #### Object-Oriented Architecture
@@ -2144,7 +2189,7 @@ the two time/pitch axes stay orthogonal and consistent with the chop slice-fit v
   MIDI-only system is no longer supported; that implementation was removed when the v2.0
   SuperCollider audio engine landed.
 - **Not a removal of MIDI itself**: the **v1.1 Pitch DSL (MIDI Output)** above is a *different*
-  design — `seq.midi()` + symbolic degree resolution as a path that runs **alongside** the SC
+  design — `seq.midi()` + symbolic degree resolution as a path that runs **alongside** the
   audio engine, not a return of the deprecated `bus`/`channel`/`degree` syntax.
 
 ### Testing Coverage (v3.0)
@@ -2155,7 +2200,7 @@ the two time/pitch axes stay orthogonal and consistent with the chop slice-fit v
 - **Timing Tests**: 8/8 passing
 - **Pitch Tests**: 25/25 passing
 - **Audio Slicer Tests**: 9/9 passing
-- **SuperCollider Tests**: 15/15 passing
+- **SuperCollider Tests**: 15/15 passing (removed in #502, 2026-09-10, with the SC backend)
 - **Sequence Tests**: 20/20 passing
 - **Setting Sync Tests**: 13/13 passing (v3.0: RUN/LOOP buffering)
 - **Total**: 1100+ unit tests passing (count grows; see CI for latest)
@@ -2192,6 +2237,8 @@ the two time/pitch axes stay orthogonal and consistent with the chop slice-fit v
 - v2.0 (2025-01-06): SuperCollider integration, global mastering effects, dB-based gain control
   - SuperCollider audio engine for professional-grade timing
   - Global mastering: compressor, limiter, normalizer
+    （🔴 **どちらも #502 で撤去済み** — SC バックエンドと、その synthdef に依存していた
+    master effects。前者は Rust daemon に置き換わり、後者は**代替なく no-op** になった）
   - dB-based gain control (-60 to +12 dB)
 
 - v1.0 (2024-12-25): Core implementation complete with 100% test coverage

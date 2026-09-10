@@ -1,5 +1,7 @@
 # scsynth Standalone 動作検証
 
+> 🔴 **歴史的記録**: 本書が記述する scsynth / SC plugin 経路は **#502（2026-09-10）で削除**されました。現在のバックエンドは Rust `orbit-audio-daemon` 単独です（[`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](../core/INSTRUCTION_ORBITSCORE_DSL.md) §8）。
+
 **日付**: 2026-04-20
 **対象 Issue**: #133
 **関連 Epic**: #131 (v1.0 ICMC Ready Phase 1)

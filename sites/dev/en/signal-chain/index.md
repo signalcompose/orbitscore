@@ -682,7 +682,7 @@ routes it to a rebuild (design doc §2.3, the resolution of #626). On failure,
 The request type TS sends to the daemon is as follows.
 
 ```typescript
-// packages/engine/src/audio/types.ts:22-52
+// packages/engine/src/audio/types.ts:28-58
 export type EffectChainStageConfig =
   | {
       kind: 'catalog'
@@ -719,7 +719,7 @@ export interface EffectChainApplyResult {
 The daemon client sends the JSON-RPC `ApplyEffectChain` with `role: 'effect'` and `save_dropped`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:560-567
+// packages/engine/src/audio/rust-engine/daemon-client.ts:559-566
   async applyEffectChain(request: EffectChainApplyRequest): Promise<EffectChainApplyResult> {
     const result = await this.request('ApplyEffectChain', {
       role: 'effect',
@@ -734,7 +734,7 @@ The daemon client sends the JSON-RPC `ApplyEffectChain` with `role: 'effect'` an
 respawn re-issues a plan that loads every stage with `mode: 'rebuild'`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1380-1390
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1379-1389
   private async reloadEffectRacksAfterRespawn(): Promise<void> {
     for (const { bus, chain } of this.loadedEffectRacks.values()) {
       const key = RustEnginePlayer.pluginKey('effect', bus)
@@ -1323,7 +1323,7 @@ On the hardware side, `release.yml` (macos-14) builds the bundle, runs the rack 
 `.vsix`.
 
 ```yaml
-# .github/workflows/release.yml:92-98
+# .github/workflows/release.yml:84-90
           # 標準プラグイン（#628 / SC.10.8）。cdylib をビルドして .clap bundle に組む。
           bash rust/crates/orbit-std-gain/bundle-macos.sh --release
 
@@ -1334,7 +1334,7 @@ On the hardware side, `release.yml` (macos-14) builds the bundle, runs the rack 
 ```
 
 ```yaml
-# .github/workflows/release.yml:191-200
+# .github/workflows/release.yml:174-183
           # 標準プラグイン（#628 / SC.10.8）: child は自分の実行ファイルの隣の
           # `std-plugins/<name>.clap` を見て解決する。同梱が落ちると DSL の
           # `Gain(db: …)` が実行時に「解決できない」で落ちるだけで、

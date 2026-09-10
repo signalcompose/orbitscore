@@ -13,7 +13,7 @@ import { createMixerRuntimeRegistry } from '../../packages/engine/src/signal-cha
  * Phase 3 (#231) — chord values end to end (§6): the global chord namespace,
  * Sequence.play spread/removal/`^N` resolution, and the interpreter routing for
  * `import chords` / `var = [...]`. Built on the direct Global+Sequence MIDI
- * harness (the interpreter's full path needs SuperCollider and is skipped).
+ * harness (the interpreter's full path needs the audio engine and is skipped).
  */
 
 const T0 = 1_000_000

@@ -15,7 +15,7 @@ import { shouldEnableSessionLog } from './session-log-gate'
  * Start REPL mode for live coding
  *
  * This function creates a new interpreter, boots the audio engine backend
- * (default Rust daemon since cutover #108; SC via ORBITSCORE_ENGINE=sc),
+ * (the Rust daemon — the default since cutover #108 and the only one since #502),
  * and starts an interactive REPL where users can enter OrbitScore
  * commands line by line.
  *

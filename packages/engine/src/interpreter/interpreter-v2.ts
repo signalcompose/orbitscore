@@ -39,10 +39,10 @@ export class InterpreterV2 {
   private sessionHooksInstalled = false
 
   /**
-   * @param opts.audioEngine テスト/検証用に音声バックエンドを注入する（既定は env 由来の
-   *   `createAudioEngine()`）。未指定時は env 由来の既定バックエンドを使う（cutover #108 以降は
-   *   Rust daemon・`ORBITSCORE_ENGINE=sc` で SC に opt-out）。#311 の schedule 抽出ハーネスが
-   *   recording scheduler を差し込み、SC/daemon を立てずに `.orbs` を実行して interpreter の
+   * @param opts.audioEngine テスト/検証用に音声バックエンドを注入する（既定は
+   *   `createAudioEngine()`）。未指定時は唯一のバックエンドである Rust daemon を使う
+   *   （cutover #108 で既定化・#502 で他の選択肢を撤去）。#311 の schedule 抽出ハーネスが
+   *   recording scheduler を差し込み、daemon を立てずに `.orbs` を実行して interpreter の
    *   計算スケジュールを取り出すために使う。
    */
   constructor(opts?: { audioEngine?: AudioEngineBackend }) {
@@ -108,7 +108,7 @@ export class InterpreterV2 {
   }
 
   /**
-   * Boot SuperCollider server (public method for explicit boot)
+   * Boot the audio engine (public method for explicit boot)
    */
   async boot(audioDevice?: string): Promise<void> {
     if (!this.state.isBooted) {
@@ -118,7 +118,7 @@ export class InterpreterV2 {
   }
 
   /**
-   * Boot SuperCollider server (ensure it's booted)
+   * Boot the audio engine (ensure it's booted)
    */
   private async ensureBooted(): Promise<void> {
     await this.boot()
@@ -168,7 +168,7 @@ export class InterpreterV2 {
       })
     }
 
-    // Ensure SuperCollider is booted
+    // Ensure the audio engine is booted
     await this.ensureBooted()
 
     // File imports (IM.2, #456): evaluated BEFORE the entry's own declarations, in

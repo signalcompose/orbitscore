@@ -1,5 +1,7 @@
 # OrbitScore 音声テストセットアップガイド
 
+> 🔴 **歴史的記録**: 本書は SuperCollider バックエンド時代（cutover #108 以前）のセットアップガイドです。SuperCollider 経路は **#502（2026-09-10）で削除**され、現在のバックエンドは Rust `orbit-audio-daemon` 単独です。現行の実機検証手順は [`docs/testing/TESTING_GUIDE.md`](testing/TESTING_GUIDE.md) と `npm run test:e2e:gated` を参照してください。
+
 ## 概要
 
 このガイドでは、OrbitScoreの音声テスト環境のセットアップ方法と、2種類のテスト方法について説明します。
