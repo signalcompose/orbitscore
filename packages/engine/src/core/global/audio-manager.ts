@@ -126,7 +126,7 @@ export class AudioManager {
    * @param deviceName - Name of the output device to use
    */
   audioDevice(deviceName: string): this {
-    // Check if audioEngine has device selection support (SuperColliderPlayer)
+    // Check if audioEngine has device selection support
     if (this.audioEngine.getCurrentOutputDevice) {
       const currentDevice = this.audioEngine.getCurrentOutputDevice()
       if (currentDevice && currentDevice.name === deviceName) {

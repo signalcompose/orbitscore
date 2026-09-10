@@ -8,7 +8,7 @@ import { Global } from '../../packages/engine/src/core/global'
  * Phase 1 (#228) — TransportClock decoupling (§1)
  *
  * MIDI sequences schedule against a TransportClock-backed transport, not the SC
- * audio engine, so a MIDI-only session never touches SuperCollider — while
+ * audio engine, so a MIDI-only session never touches the audio backend — while
  * sharing the same Date.now() origin as audio so the two stay in sync.
  */
 

@@ -1,7 +1,7 @@
 {
   "name": "orbitscore",
   "displayName": "OrbitScore",
-  "description": "Live coding music DSL with bundled native audio engine (Rust daemon, default) — SuperCollider available as opt-out. macOS (Apple Silicon) only.",
+  "description": "Live coding music DSL with a bundled native audio engine (Rust daemon). macOS (Apple Silicon) only.",
   "publisher": "local",
   "version": "2.1.0",
   "author": "Signal compose Inc.",
@@ -35,10 +35,7 @@
     "untrustedWorkspaces": {
       "supported": true,
       "description": "OrbitScore starts a native audio engine and loads the audio plugins named by the score, the same way a DAW opens a project. Evaluation works in untrusted workspaces; only the settings that choose which executable runs are restricted.",
-      "restrictedConfigurations": [
-        "orbitscore.scsynthPath",
-        "orbitscore.engine"
-      ]
+      "restrictedConfigurations": []
     }
   },
   "main": "./dist/extension.js",
@@ -91,18 +88,6 @@
         "command": "orbitscore.reloadWindow",
         "title": "Reload Window",
         "icon": "$(refresh)",
-        "category": "OrbitScore"
-      },
-      {
-        "command": "orbitscore.forceKillScsynth",
-        "title": "Force Kill scsynth",
-        "icon": "$(close-all)",
-        "category": "OrbitScore"
-      },
-      {
-        "command": "orbitscore.selectAudioDevice",
-        "title": "Select Audio Device",
-        "icon": "$(device-desktop)",
         "category": "OrbitScore"
       },
       {
@@ -212,14 +197,6 @@
         }
       ],
       "commandPalette": [
-        {
-          "command": "orbitscore.forceKillScsynth",
-          "when": "config.orbitscore.engine == 'sc'"
-        },
-        {
-          "command": "orbitscore.selectAudioDevice",
-          "when": "config.orbitscore.engine == 'sc'"
-        },
         {
           "command": "orbitscore.toggleEngine",
           "when": "false"
@@ -374,26 +351,6 @@
           "default": "#ff6b6b",
           "description": "Custom flash color (hex format, e.g., #ff6b6b)",
           "format": "color-hex"
-        },
-        "orbitscore.scsynthPath": {
-          "type": "string",
-          "default": "",
-          "description": "Override path to the scsynth binary. Leave empty to use the bundled scsynth (recommended). Advanced users can point this at a custom SuperCollider install.",
-          "scope": "machine-overridable"
-        },
-        "orbitscore.engine": {
-          "type": "string",
-          "enum": [
-            "rust",
-            "sc"
-          ],
-          "enumDescriptions": [
-            "Native Rust audio daemon (orbit-audio-daemon) — default. Only bundled for macOS Apple Silicon (darwin-arm64); on any other platform the engine will fail to start until you build one yourself and set ORBIT_AUDIO_DAEMON_PATH.",
-            "SuperCollider (scsynth). Requires the bundled scsynth or a custom binary via orbitscore.scsynthPath."
-          ],
-          "default": "rust",
-          "description": "Audio backend to use. \"rust\" (default) is the native audio daemon (orbit-audio-daemon). \"sc\" opts into SuperCollider (requires bundled scsynth or orbitscore.scsynthPath).",
-          "scope": "machine-overridable"
         },
         "orbitscore.audioDevice": {
           "type": "string",

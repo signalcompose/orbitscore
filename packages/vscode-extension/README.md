@@ -1,6 +1,6 @@
 # OrbitScore
 
-Live coding music DSL for VS Code with a bundled native audio engine (Rust `orbit-audio-daemon`, default since 2.1.0; SuperCollider remains available as an opt-out backend).
+Live coding music DSL for VS Code with a bundled native audio engine (Rust `orbit-audio-daemon`).
 
 Write `.orbs` patches and run them line by line with `Cmd+Enter`. No separate audio-engine install required.
 
@@ -22,7 +22,7 @@ Cross-platform support is tracked as a future effort.
 2. Run **OrbitScore: Start Engine** (status bar shows `OrbitScore: Ready`)
 3. Select code (or place the cursor on a line) and press `Cmd+Enter`
 
-The status bar item `✅ engine: rust (native)` confirms the native audio daemon is in use (with `orbitscore.engine: "sc"` it shows `✅ scsynth (bundled)` instead).
+The status bar item `✅ engine: rust (native)` confirms the native audio daemon is in use.
 
 Minimal example:
 
@@ -43,7 +43,7 @@ LOOP(kick)
 - IntelliSense / hover for DSL keywords
 - Real-time syntax diagnostics
 - Status bar indicators for engine state and audio backend
-- Bundled native audio daemon (`orbit-audio-daemon`, default) + bundled `scsynth` (~11.5 MB) for the SuperCollider opt-out backend
+- Bundled native audio daemon (`orbit-audio-daemon`) + out-of-process CLAP/VST3 host children
 
 ### New in 2.0.0
 
@@ -61,16 +61,13 @@ LOOP(kick)
 | `OrbitScore: Run Selection` | Execute selected text or current block (`Cmd+Enter`) |
 | `OrbitScore: Stop Engine` | Stop the engine |
 | `OrbitScore: Start Engine (Debug)` | Boot with verbose logging |
-| `OrbitScore: Select Audio Device` | Pick an output device interactively |
-| `OrbitScore: Force Kill scsynth` | Escape hatch — force-kill any orphan `scsynth` processes |
 | `OrbitScore: Configure Flash` | Customize line-flash visual feedback |
 
 ## Settings
 
 | Setting | Default | Description |
 |---|---|---|
-| `orbitscore.scsynthPath` | `""` | Override path to a custom `scsynth` binary. Leave empty to use the bundled scsynth (recommended). |
-| `orbitscore.engine` | `rust` | Audio backend: `rust` (default, native `orbit-audio-daemon` — only bundled for macOS Apple Silicon; unavailable on any other platform until you build one yourself and set `ORBIT_AUDIO_DAEMON_PATH`) or `sc` (SuperCollider, requires bundled scsynth or `orbitscore.scsynthPath`). |
+| `orbitscore.audioDevice` | `""` | Output audio device to use. Empty means no device is selected; use `"__default__"` for the operating system default output. |
 | `orbitscore.flashCount` | `3` | Number of times to flash executed lines (1–5) |
 | `orbitscore.flashDuration` | `150` | Duration of each flash in milliseconds (50–500) |
 | `orbitscore.flashColor` | `selection` | Color theme for flash (`selection` / `error` / `warning` / `info` / `custom`) |
@@ -78,23 +75,23 @@ LOOP(kick)
 
 ## Troubleshooting
 
-### Status bar shows `❌ scsynth: not found`
+### Status bar shows `❌ daemon: not found`
 
-The bundled `scsynth` could not be located. Try:
+The bundled `orbit-audio-daemon` could not be located. Try:
 
 1. Reinstall the extension (the `.vsix` may be corrupted or partially installed)
-2. Or set `orbitscore.scsynthPath` in your VS Code settings to a system `scsynth` binary, e.g. `/Applications/SuperCollider.app/Contents/Resources/scsynth`
+2. Or build it yourself (`cd rust && cargo build --release`) and set `ORBIT_AUDIO_DAEMON_PATH` to the binary
 3. Open `View → Output → OrbitScore` to see the resolver's failure reason
 
 ### Engine starts but no sound
 
-- Run **OrbitScore: Select Audio Device** and pick the correct output device
-- The selected device is saved to `.orbitscore.json` in your workspace root
+- Open the **Audio Engine Settings** view (activity bar) and pick the correct output device
+- The selected device is saved to `orbitscore.audioDevice`
 - Restart the engine after changing the device
 
 ### Engine crashes on boot
 
-- Check `View → Output → OrbitScore` for stderr from `scsynth`
+- Check `View → Output → OrbitScore` for stderr from the engine process
 - A common cause is sample-rate mismatch when the input device differs from the output device. Forcing input channels off (`numInputBusChannels: 0`) is already enabled by default.
 
 ## Links
@@ -104,4 +101,4 @@ The bundled `scsynth` could not be located. Try:
 - 🎓 [User Learning Site (en)](https://signalcompose.github.io/orbitscore/en/)
 - 🐛 [Report an issue](https://github.com/signalcompose/orbitscore/issues)
 - 📖 [Source code](https://github.com/signalcompose/orbitscore) — Contributions welcome
-- 📜 License: Signal compose Fair Trade License (extension), GPL-3.0 (bundled SuperCollider), LGPL-2.1 (bundled libsndfile). See `engine/scsynth/NOTICE` for details.
+- 📜 License: Signal compose Fair Trade License (extension).

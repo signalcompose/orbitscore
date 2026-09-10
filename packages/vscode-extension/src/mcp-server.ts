@@ -112,7 +112,7 @@ export interface EngineState {
   statusError?: string
 }
 
-/** One SuperCollider-reported audio device (list_audio_devices / select_audio_device). */
+/** One reported audio device (list_audio_devices / select_audio_device). Not populated by the Rust engine today (list_audio_devices always errors — tracked separately, doc 662 §6 / #660); shape kept for a future rust device-enumeration API. */
 export interface AudioDeviceInfo {
   label: string
   id: number
@@ -246,7 +246,6 @@ export interface OrbitScoreToolHandlers {
   }): Promise<CommandResult> | CommandResult
   stopEngine(): Promise<CommandResult> | CommandResult
   getEngineState(): Promise<EngineState> | EngineState
-  forceKillScsynth(): Promise<CommandResult> | CommandResult
   listAudioDevices(): Promise<AudioDevicesResult> | AudioDevicesResult
   selectAudioDevice(device: string): Promise<CommandResult> | CommandResult
   configureFlash(options: FlashConfigInput): Promise<FlashConfigResult> | FlashConfigResult
@@ -613,26 +612,13 @@ function buildServer(
   )
 
   server.registerTool(
-    'force_kill_scsynth',
-    {
-      title: 'Force Kill scsynth',
-      description:
-        'Force-kill any stray scsynth processes (killall scsynth). Equivalent to the ' +
-        '"Force Kill scsynth" command — an escape hatch for orphaned processes, not ' +
-        'part of normal start/stop.',
-    },
-    async () => toToolResult(await handlers.forceKillScsynth()),
-  )
-
-  server.registerTool(
     'list_audio_devices',
     {
       title: 'List Audio Devices',
       description:
-        'List audio output devices detected via SuperCollider — the same device list ' +
-        'shown by "Select Audio Device". Not implemented for the Rust engine ' +
-        '(orbitscore.engine: "rust"); returns an error explaining that the system ' +
-        'default output is used instead.',
+        'List audio output devices. Not implemented for the Rust engine today ' +
+        '(tracked separately — doc 662 §6 / #660); returns an error explaining that ' +
+        'the system default output is used instead.',
     },
     async () => {
       const result = await handlers.listAudioDevices()
@@ -648,11 +634,10 @@ function buildServer(
     {
       title: 'Select Audio Device',
       description:
-        'Select the audio output device. For the SuperCollider backend, writes to ' +
-        '.orbitscore.json (restart the engine to apply). For the Rust engine (default), ' +
-        'selects a device and powers on the engine if it is off, switches live if it is ' +
-        'already running, and deselects/stops when the selected device is submitted again. ' +
-        'The choice is persisted to "orbitscore.audioDevice".',
+        'Select the audio output device. Selects a device and powers on the engine if ' +
+        'it is off, switches live if it is already running, and deselects/stops when ' +
+        'the selected device is submitted again. The choice is persisted to ' +
+        '"orbitscore.audioDevice".',
       inputSchema: {
         device: z.string().describe('Device name as reported by list_audio_devices'),
       },

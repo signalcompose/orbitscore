@@ -71,29 +71,19 @@ The case where this bites is a launch that opens no folder and passes a single `
 The declaration sits in `package.json` between `engines` and `main`.
 
 ```json
-// packages/vscode-extension/package.json:34-43
+// packages/vscode-extension/package.json:34-40
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": true,
       "description": "OrbitScore starts a native audio engine and loads the audio plugins named by the score, the same way a DAW opens a project. Evaluation works in untrusted workspaces; only the settings that choose which executable runs are restricted.",
-      "restrictedConfigurations": [
-        "orbitscore.scsynthPath",
-        "orbitscore.engine"
-      ]
+      "restrictedConfigurations": []
     }
   },
 ```
 
 `supported: true` declares "do not restrict me even when untrusted." The rationale of the ruling is "to match the behaviour of a typical DAW" (`docs/design/656-release-design.md` §16 (1)): a DAW loads the plugins of a project when it opens it, without asking about trust. OrbitScore likewise starts the engine in an untrusted workspace and loads the `instrument(path)` entries of the score. That is why no trust-checking guard is placed in `startEngine()`. Live coding is the act of evaluating over and over, so a single confirmation dialog turns into "an interruption every time."
 
-`restrictedConfigurations`, on the other hand, takes effect independently of the `supported` value. For the setting keys listed there, **the workspace-side value is ignored in an untrusted workspace and the user-level value is used instead**. The criterion is a single one: only settings where "the workspace deciding the value makes a different executable run."
-
-| Setting | Why it is listed |
-|---|---|
-| `orbitscore.scsynthPath` | The path of the executable itself |
-| `orbitscore.engine` | Tipping it to `"sc"` activates `scsynthPath` |
-
-`orbitscore.audioDevice` does not meet that criterion. A device name does not choose what runs, and the gated E2E harness writes it into the workspace settings, so restricting it would break the real-device tests.
+`restrictedConfigurations` takes effect independently of the `supported` value: for any key listed there, the workspace-side value is ignored in an untrusted workspace and the user-level value is used instead. It used to list two keys — `orbitscore.scsynthPath` (the path of the executable itself) and `orbitscore.engine` (tipping it to `"sc"` activated `scsynthPath`) — but **both were removed along with the SC path in #502**, so **as of 2026-09-10 it is an empty array**. With only one remaining backend (the Rust daemon), no workspace setting chooses which executable runs anymore, so there is nothing left to restrict.
 
 What is interesting is that this declaration is never read from code. Left alone it would become "a setting nobody reads," so the 6 tests in `tests/vscode-extension/untrusted-workspace-capability.spec.ts` read the manifest directly and inspect it. They are written to fail on the spot when `restrictedConfigurations` cannot be taken out as an array, because falling back to `?? []` would let `for...of` iterate zero times and go green the moment the declaration disappears entirely.
 
@@ -132,7 +122,7 @@ After this come four **bridges** that wait for JSON lines coming back on the eng
 The entry point is `activate()` in `extension.ts`. It is called once immediately after VS Code loads the extension. Let's look at the first half.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:290-345
+// packages/vscode-extension/src/extension.ts:290-343
 export async function activate(context: vscode.ExtensionContext) {
   console.log('OrbitScore Audio DSL extension activated!')
 
@@ -178,24 +168,22 @@ export async function activate(context: vscode.ExtensionContext) {
   statusBarItem.command = 'orbitscore.showCommands'
   statusBarItem.show()
 
-  // Bundle status indicator (priority 99 → 既存 100 の左隣に並ぶ)
+  // Bundle status indicator (priority 99 → 既存 100 の左隣に並ぶ)。daemon
+  // が解決できない時だけ表示するエラー・インジケータ（健全時は非表示）。
   bundleStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99)
-  // Click → orbitscore.scsynthPath に絞った設定画面に直接遷移
-  // (tooltip 案内と一致、maybeShowBundleNotice の "Open Settings" ボタンとも統一)
   bundleStatusItem.command = {
     command: 'workbench.action.openSettings',
-    title: 'Open scsynth settings',
-    arguments: ['orbitscore.scsynthPath'],
+    title: 'Open OrbitScore settings',
+    arguments: ['orbitscore'],
   }
   updateBundleStatus()
-  updateStatusBarEngineAction()
 ```
 
 What is interesting is the spot where the Output Channel's `appendLine` / `append` are **monkey-patched**. The extension has no central log sink, so in order for the MCP `get_log` tool (#388) to read it, the lines flowing into the Output Channel are also pushed to a ring buffer (`outputLogRing`, capped by `OUTPUT_LOG_RING_MAX = 1000` in `log-ring.ts`).
 
 The rest of `activate()` is roughly five jobs:
 
-1. Register configuration-change listeners (`orbitscore.scsynthPath` / `orbitscore.engine` / `orbitscore.playheadPalette`)
+1. Register configuration-change listeners (`orbitscore.playheadPalette` — the SC-path settings `scsynthPath` / `engine` were removed in #502)
 2. Register commands and TreeView providers (next section)
 3. Register IntelliSense (completion / hover) providers
 4. Register diagnostics (`DiagnosticCollection`) and run an initial pass over already-open documents (#384)
@@ -204,7 +192,7 @@ The rest of `activate()` is roughly five jobs:
 The last two are written like this.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:449-503 (MCP ツールのハンドラ表を省略)
+// packages/vscode-extension/src/extension.ts:431-484 (MCP ツールのハンドラ表を省略)
   // Optional MCP control server (Agent Bridge, #388) — dev/agent-integration
   // only, gated behind a nonzero port. The `ORBITSCORE_MCP_PORT` env var takes
   // precedence over the `orbitscore.mcpServer.port` setting so the extension can
@@ -234,44 +222,39 @@ There are **two** status bar indicators. Their priority values differ, determini
 
 | Variable | priority | Role | On click |
 |---|---|---|---|
-| `statusBarItem` | 100 (rightmost) | Engine running state (`Stopped` / `Ready` / `▶️ Playing`, with `🐛` in debug) | `showCommands` (focuses the Engine view under `rust`, a QuickPick under `sc`) |
-| `bundleStatusItem` | 99 (left of it) | Binary resolution state | `orbitscore.scsynthPath` setting |
+| `statusBarItem` | 100 (rightmost) | Engine running state (`Stopped` / `Ready` / `▶️ Playing`, with `🐛` in debug) | `showCommands` (focuses the Engine view) |
+| `bundleStatusItem` | 99 (left of it) | daemon binary resolution state | `orbitscore` setting |
 
-The display of `bundleStatusItem` is decided by `updateBundleStatus()`, and its first branch is the **engine kind**.
+**The 2026-09-10 ruling (#827 / #502) removed the SC path and the `getConfiguredEngineKind()` branch.** `updateBundleStatus()`, which decides the display of `bundleStatusItem`, no longer looks at the engine kind at all — it only looks at whether the daemon resolves.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:730-746
+// packages/vscode-extension/src/extension.ts:651-664
 function updateBundleStatus(): void {
   if (!bundleStatusItem) return
-  if (getConfiguredEngineKind() === 'rust') {
-    const daemonResolution = resolveDaemonForUI()
-    if (!daemonResolution) {
-      bundleStatusItem.show()
-      bundleStatusItem.text = '$(error) daemon: not found'
-      bundleStatusItem.tooltip =
-        'orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.'
-      bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
-      return
-    }
-    // 既定（Rust・健全）ではインジケータ自体を出さない（owner 判断 2026-07-17: 常時表示の
-    // 意味がない）。daemon 不在エラーと SC バックエンド時のみ表示する。
-    bundleStatusItem.hide()
+  const daemonResolution = resolveDaemonForUI()
+  if (!daemonResolution) {
+    bundleStatusItem.show()
+    bundleStatusItem.text = '$(error) daemon: not found'
+    bundleStatusItem.tooltip =
+      'orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.'
+    bundleStatusItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground')
     return
   }
+  // 既定（健全）ではインジケータ自体を出さない（owner 判断 2026-07-17: 常時表示の意味がない）。
+  bundleStatusItem.hide()
+}
 ```
 
-Under the `rust` kind, when the daemon is found (= the normal state), the indicator is **hidden**. Only under the `sc` kind is the scsynth resolution result (`bundled` / `custom` / `not found`) shown (`extension.ts:742-766`, see [ADR-003 scsynth Bundle Strict Mode](/en/decisions/adr-003-scsynth-bundle); the SC path itself is scheduled for removal by the 2026-09-10 ruling #827 / #502). The decision to roll `env` and `explicit` into the same `custom` display is unchanged since 2026-05.
-
-`getConfiguredEngineKind()`, which decides the engine kind, reads the `orbitscore.engine` setting and normalizes it by borrowing the engine package's `resolveEngineKind()` via runtime `require` (`extension.ts:653-669`). This keeps the UI and engine decisions in one place.
+When the daemon is found (= the normal state), the indicator is **hidden**. It is shown only as `$(error) daemon: not found` when the daemon cannot be resolved (see [ADR-003 scsynth Bundle Strict Mode](/en/decisions/adr-003-scsynth-bundle) — a historical record of the decision for the scsynth resolver this ADR covers; that resolver itself was removed in the 2026-09-10 ruling #827 / #502).
 
 ---
 
 ## Command Registration
 
-Let's organize the commands `activate()` registers. There are 17 listed in `contributes.commands`, plus 2 internal commands invoked only from TreeView nodes.
+Let's organize the commands `activate()` registers. There are 15 listed in `contributes.commands` (down from 17 — `forceKillScsynth` / `selectAudioDevice` were removed in #502), plus 2 internal commands invoked only from TreeView nodes.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:371-408
+// packages/vscode-extension/src/extension.ts:355-390
   // Register commands
   context.subscriptions.push(
     vscode.commands.registerCommand('orbitscore.toggleEngine', toggleEngine),
@@ -281,8 +264,6 @@ Let's organize the commands `activate()` registers. There are 17 listed in `cont
     vscode.commands.registerCommand('orbitscore.restartEngine', restartEngine),
     vscode.commands.registerCommand('orbitscore.reloadWindow', reloadWindow),
     vscode.commands.registerCommand('orbitscore.startEngineDebug', startEngineDebug),
-    vscode.commands.registerCommand('orbitscore.forceKillScsynth', forceKillScsynth),
-    vscode.commands.registerCommand('orbitscore.selectAudioDevice', selectAudioDevice),
     vscode.commands.registerCommand('orbitscore.configureFlash', configureFlash),
     vscode.commands.registerCommand('orbitscore.registerMcpServer', registerMcpServer),
     vscode.commands.registerCommand('orbitscore.rescanPlugins', rescanPlugins),
@@ -315,14 +296,12 @@ Let's organize the commands `activate()` registers. There are 17 listed in `cont
 | Command ID | Function | Description | Palette visibility |
 |---|---|---|---|
 | `orbitscore.toggleEngine` | `toggleEngine` | Toggle engine start/stop | hidden (`editor/title` button) |
-| `orbitscore.showCommands` | `showCommands` | `rust`: focus the Engine view / `sc`: QuickPick | (from the status bar) |
+| `orbitscore.showCommands` | `showCommands` | Focus the Engine view | (from the status bar) |
 | `orbitscore.runSelection` | `runSelection` | Execute selected code / current block (Cmd+Enter) | shown |
 | `orbitscore.stopEngine` | `stopEngine` | Stop the engine | hidden |
 | `orbitscore.restartEngine` | `restartEngine` | stop → wait 2.2 s → start (recovery) | hidden (Engine view Recovery) |
 | `orbitscore.reloadWindow` | `reloadWindow` | `workbench.action.reloadWindow` | hidden (Engine view Recovery) |
 | `orbitscore.startEngineDebug` | `startEngineDebug` | Start in debug mode | hidden |
-| `orbitscore.forceKillScsynth` | `forceKillScsynth` | `killall scsynth` | only when `orbitscore.engine == 'sc'` |
-| `orbitscore.selectAudioDevice` | `selectAudioDevice` | Audio device selection for SC | only when `orbitscore.engine == 'sc'` |
 | `orbitscore.configureFlash` | `configureFlash` | Configure flash effect | shown |
 | `orbitscore.registerMcpServer` | `registerMcpServer` | Write a Claude Code entry into `.mcp.json` (#388) | shown |
 | `orbitscore.rescanPlugins` | `rescanPlugins` | Rescan the plugin catalog (#463) | shown + `editor/context` |
@@ -414,7 +393,7 @@ The completion vocabulary is duplicated in `dsl-method-catalog.ts`, and a test e
 Diagnostics (`updateDiagnostics`) were driven only by `onDidChangeTextDocument` as of 2026-05, but #384 extended them to "when opened," "when closed," and "documents already open at activation."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:418-447
+// packages/vscode-extension/src/extension.ts:400-429
   // Compute diagnostics on open and change; clear them on close (#384).
   // Diagnostics must not wait for the first edit — files opened from the CLI,
   // restored tabs, or the activation-time initial pass below all need
@@ -451,38 +430,12 @@ There are 9 kinds of checks in total: 3 per-line plus 6 cross-line analyses. For
 
 ---
 
-## Binary Resolution: scsynth and the Daemon
+## Binary Resolution: the Daemon
 
-Before spawning the engine, the extension pre-checks "does the audio process's executable really exist?" There is an interesting implementation pattern here. It is a structure where **the JS of the Extension Host (compiled from TypeScript) runtime-loads the engine package's compiled JS via `require`**, with a wrapper of the same shape for both scsynth and the daemon.
+Before spawning the engine, the extension pre-checks "does the audio process's executable really exist?" There is an interesting implementation pattern here: **the JS of the Extension Host (compiled from TypeScript) runtime-loads the engine package's compiled JS via `require`**. Before it was removed by the **2026-09-10 ruling (#827 / #502)**, this wrapper existed in symmetric pairs for scsynth (`resolveScsynthForUI()`) and the daemon (`resolveDaemonForUI()`); with the SC path gone, **only `resolveDaemonForUI()` remains**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:681-715
-function resolveScsynthForUI(): { path: string; source: string } | null {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
-    const resolverModule = require('../engine/dist/audio/supercollider/scsynth-resolver') as {
-      resolveScsynthPath: (opts?: { explicit?: string }) => { path: string; source: string }
-    }
-    const userOverride = vscode.workspace
-      .getConfiguration('orbitscore')
-      .get<string>('scsynthPath', '')
-      .trim()
-    return resolverModule.resolveScsynthPath(userOverride ? { explicit: userOverride } : undefined)
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err)
-    outputChannel?.appendLine(`❌ scsynth resolver failed: ${reason}`)
-    return null
-  }
-}
-
-/**
- * Resolve the native Rust daemon binary via shared resolver (engine の
- * compiled JS を runtime require). Returns null on failure. Symmetric to
- * `resolveScsynthForUI()` — same runtime-require pattern, same
- * log-reason-to-outputChannel-on-failure behavior (C2). Used to pre-check
- * daemon availability under the `rust` engine kind, mirroring how
- * `resolveScsynthForUI()` pre-checks scsynth under the `sc` kind.
- */
+// packages/vscode-extension/src/extension.ts:634-642
 function resolveDaemonForUI(): { path: string; source: string } | null {
   try {
     return resolveDaemonBinaryForExtension()
@@ -511,7 +464,7 @@ export function extensionEngineFileExists(enginePath: string): boolean {
 }
 ```
 
-The scsynth resolver is `explicit > env > bundle > throw`; the daemon resolver is `explicit > env > monorepo-release > monorepo-debug > extension-bundle > throw`. Neither has a silent fallback; if nothing is found, they fail loud with an exception ([ADR-003](/en/decisions/adr-003-scsynth-bundle)).
+The daemon resolver is `explicit > env > monorepo-release > monorepo-debug > extension-bundle > throw`. It has no silent fallback; if nothing is found, it fails loud with an exception (see [ADR-003](/en/decisions/adr-003-scsynth-bundle) — a historical record of the decision for the scsynth resolver it covers; that resolver was removed in #502).
 
 ---
 
@@ -522,7 +475,7 @@ The scsynth resolver is `explicit > env > bundle > throw`; the daemon resolver i
 The pre-check is quoted in the former III-3 chapter, now removed from the site (recorded in [ADR-003](/en/decisions/adr-003-scsynth-bundle)), so here we read from assembling args and env through the spawn.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2209-2222
+// packages/vscode-extension/src/extension.ts:1973-1986
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -542,21 +495,22 @@ The pre-check is quoted in the former III-3 chapter, now removed from the site (
 The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcommand, and the output device is passed via the `--audio-device` argument (the `orbitscore.audioDevice` setting takes precedence, otherwise `.orbitscore.json`). `__default__` is a sentinel meaning "the OS default output."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2240-2262
-  if (engineKind === 'rust') {
-    env.ORBITSCORE_ENGINE = 'rust'
-    outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
-  } else {
-    env.ORBITSCORE_ENGINE = 'sc'
-
-    // Pass scsynth path to engine via env. pre-check で解決済 (scResolution.path) を
-    // そのまま engine に渡すことで resolver の二重 fs.statSync を avoid + pre-check と
-    // engine 内部での resolution 結果ズレ (タイミング差) のリスクを排除。
-    // scResolution is guaranteed non-null here: the 'sc' branch above returns
-    // early when resolution fails.
-    env.ORBIT_SCSYNTH_PATH = scResolution!.path
-    outputChannel?.appendLine(`🔧 scsynth (${scResolution!.source}): ${scResolution!.path}`)
+// packages/vscode-extension/src/extension.ts:1982-2005
+  // Set environment
+  const env = { ...process.env }
+  if (effectiveDebugMode) {
+    env.ORBITSCORE_DEBUG = '1'
   }
+
+  // Capture seam (#307): the daemon records the master output to this WAV while
+  // the stream runs. Only set when explicitly requested (MCP start_engine tool)
+  // — inherited env stays authoritative otherwise.
+  if (agentOpts?.captureWav) {
+    env.ORBIT_CAPTURE_WAV = agentOpts.captureWav
+    outputChannel?.appendLine(`🎙️ Capture: ${agentOpts.captureWav}`)
+  }
+
+  outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native)')
 
   // Spawn engine process
   try {
@@ -568,12 +522,12 @@ The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcomman
   } catch (err) {
 ```
 
-A point to note here is that `ORBITSCORE_ENGINE` is **set explicitly in both branches**. Because cutover #108 flipped the default to "unset = rust," the old logic of protecting SC with `delete env.ORBITSCORE_ENGINE` was a landmine that always produced rust (I1 in `docs/archive/WORK_LOG_2026-07.md` §6.186). In the `sc` branch, the scsynth path resolved by the pre-check is passed to the engine via `ORBIT_SCSYNTH_PATH`, avoiding a double `fs.statSync` and any mismatch in resolution results.
+**The 2026-09-10 ruling (#827 / #502) removed the `engineKind` branch entirely, along with the explicit `ORBITSCORE_ENGINE` set and the `ORBIT_SCSYNTH_PATH` hand-off.** For the sole remaining backend (the Rust daemon), only the debug flag and the capture seam (#307) are pushed into env before spawning.
 
 `stdio: ['pipe', 'pipe', 'pipe']` is important. By making stdin/stdout/stderr all pipes, the Extension Host can directly write/read them. Right after spawn, five handlers are attached, and after one `process.nextTick` it checks "is the same process still alive?"
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2277-2288
+// packages/vscode-extension/src/extension.ts:2020-2031
   // Setup handlers
   setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
@@ -597,7 +551,7 @@ Of those five, `setupStderrHandler` is the one that copies the engine's stderr i
 A small helper therefore sits in between, reassembling the chunk stream into lines.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1622-1642
+// packages/vscode-extension/src/extension.ts:1415-1435
 export function createLinePrefixer(emit: (line: string) => void): {
   push: (chunk: string) => void
   flush: () => void
@@ -626,7 +580,7 @@ There are three things to read here. The first is carrying `partial` over: a nai
 `setupStderrHandler` itself is now just `push` / `flush` wired up inside `logHandlerFailure` containment.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1658-1680
+// packages/vscode-extension/src/extension.ts:1451-1473
 export function setupStderrHandler(process: child_process.ChildProcess): void {
   const prefixer = createLinePrefixer((line) => {
     outputChannel?.appendLine(`ERROR: ${line}`)
@@ -659,7 +613,7 @@ Incidentally, there are **four** routes from "chunk stream" to "lines" across th
 The third of them, `setupStdoutHandler`, became a caller of `createLinePrefixer` on 2026-09-08 in [#811](https://github.com/signalcompose/orbitscore/pull/811) (bundle O-wire). Until then it split each chunk with `output.split('\n')` and fed the pieces straight into the four branches for `{"savePluginState"` / `{"pluginUi"` / `{"evalMark"` / `{"engineState"`, so **when a bridge JSON envelope was cut at a chunk boundary, both fragments were lost**: the first half matched none of the prefixes, and the second half did not start with `{`, so it matched none of them either.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1479-1486
+// packages/vscode-extension/src/extension.ts:1272-1279
 export function setupStdoutHandler(process: child_process.ChildProcess, debugMode: boolean): void {
   // #773: Bridge envelopes are line-framed, but stdout data events are not.
   // Keep this buffer inside the handler so a stale process can never donate a
@@ -675,7 +629,7 @@ The detail worth noticing is that `bridgeLines` is created **inside the handler*
 The other device is `StringDecoder`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1516-1519
+// packages/vscode-extension/src/extension.ts:1309-1312
   // Decode only the buffered bridge-dispatch path across Buffer boundaries. The log/playhead path
   // below intentionally keeps its historical per-chunk `data.toString()` timing and values.
   // stderr has the same UTF-8 boundary hazard but remains out of scope for this change.
@@ -685,7 +639,7 @@ The other device is `StringDecoder`.
 `data.toString()` interprets a chunk as UTF-8 on its own, so a multi-byte character straddling a chunk boundary **turns into `U+FFFD` right there**. Rejoining the lines afterwards cannot bring the character back. `StringDecoder` carries an incomplete byte sequence over to the next chunk, which guards the step before. As the comment states, the replacement covers **only the bridge dispatch path**: the `output` / `lines` handed to logging and the playhead still come from `data.toString()` as before. That is the line drawn to leave the existing calling convention and timing untouched, and it also records that the same hazard on stderr is out of scope for this change.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1534-1535
+// packages/vscode-extension/src/extension.ts:1327-1328
       const bridgeOutput = bridgeDecoder.write(data)
       if (bridgeOutput) bridgeLines.push(bridgeOutput)
 ```
@@ -693,7 +647,7 @@ The other device is `StringDecoder`.
 And, as on the stderr side, everything is flushed on `end`. `bridgeDecoder.end()` comes first because the decoder's pending bytes have to be turned back into characters before they reach the prefixer; otherwise the last line would be emitted already mangled.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1578-1586
+// packages/vscode-extension/src/extension.ts:1371-1379
   process.stdout?.on('end', () => {
     try {
       const bridgeRemainder = bridgeDecoder.end()
@@ -721,7 +675,7 @@ Communication between the Extension Host and the engine process is via **stdin/s
 The send part is consolidated into `writeCodeToEngine()`, shared by the editor's Run Selection and MCP's `evaluate_orbitscore`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3117-3149
+// packages/vscode-extension/src/extension.ts:2708-2740
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -790,7 +744,7 @@ export function classifyEngineStdoutLine(rawLine: string): EngineStdoutLineInten
 ```
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1537-1573 (effects の中身を一部省略)
+// packages/vscode-extension/src/extension.ts:1330-1366 (effects の中身を一部省略)
       applyEngineStdoutChunk(output, lines, isCurrent, {
         handleStep: handleStepLine,
         clearSequence: clearPlayheadForSequence,
@@ -831,7 +785,7 @@ Execution feedback (flashing the executed lines, the playhead, diagnostics) is c
 `stopEngine()` performs a two-stage shutdown of SIGTERM → (after 2 seconds) SIGKILL. Compared with 2026-05, draining the bridges and clearing the playhead were added, and the SIGKILL condition was fixed.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2302-2350
+// packages/vscode-extension/src/extension.ts:2045-2093
 export function stopEngine(): boolean {
   engineGeneration += 1
   if (engineProcess && !engineProcess.killed) {
@@ -854,7 +808,7 @@ export function stopEngine(): boolean {
     engineStateBridge.drainAll('engine was stopped before responding to //#getEngineState')
 
     // Send graceful shutdown signal (SIGTERM)
-    // This allows the engine to clean up SuperCollider properly
+    // This allows the engine to clean up the audio backend properly
     proc.kill('SIGTERM')
 
     // Force kill after 2 seconds if still running.

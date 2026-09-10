@@ -51,13 +51,12 @@ export interface Scheduler {
    * the playhead steps through silence the sequence is still processing.
    * `gainDb` carries the same mute/master gain the slot's notes would get,
    * letting the backend skip markers for muted sequences exactly like it
-   * skips their notes. Optional: backends without STEP emission
-   * (SuperCollider) simply omit it.
+   * skips their notes. Optional: backends without STEP emission simply omit it.
    */
   scheduleStepMarker?(time: number, sequenceName: string, argPath: string, gainDb: number): void
   getAudioDuration(filepath: string): number
   loadBuffer?(filepath: string): Promise<any>
-  // Master effects (optional, for SuperCollider)
+  // Master effects (optional; legacy master-effects hook)
   addEffect?(target: string, effectType: string, params: any): void
   removeEffect?(target: string, effectType: string): void
 }

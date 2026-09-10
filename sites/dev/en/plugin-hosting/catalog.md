@@ -578,7 +578,7 @@ this separation. Completion works as long as the file exists, even when no engin
 Two commands are registered under `contributes.commands` in `package.json`.
 
 ```json
-// packages/vscode-extension/package.json:120-131
+// packages/vscode-extension/package.json:105-116
       {
         "command": "orbitscore.rescanPlugins",
         "title": "OrbitScore: Rescan Plugin Catalog",
@@ -656,7 +656,7 @@ fresh catalog.
 MCP's `list_plugins` / `rescan_plugins` share the same `loadPluginCatalog()` / `runPluginScan()`.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1044-1054
+// packages/vscode-extension/src/mcp-server.ts:1029-1039
   server.registerTool(
     'list_plugins',
     {
@@ -773,7 +773,7 @@ after the opening quote to the cursor). When there is no catalog it returns no c
 shows a one-time hint to rescan (the `pluginCatalogHintShown` flag prevents nagging).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3859-3869
+// packages/vscode-extension/src/extension.ts:3415-3425
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -876,7 +876,7 @@ When there is no catalog, **nothing is reported**: "not scanned yet" is not evid
 wrong. And the severity is **Warning**, not Error.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4239-4255
+// packages/vscode-extension/src/extension.ts:3795-3811
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //

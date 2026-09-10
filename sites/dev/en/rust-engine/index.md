@@ -331,7 +331,7 @@ link-audio = ["dep:orbit-link-audio", "dep:rtrb"]
 And the shipping build does not enable it. The one line that produces the bundled binary reads:
 
 ```bash
-// scripts/copy-daemon-bin.sh:109-109
+// scripts/copy-daemon-bin.sh:108-108
     && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument \
 ```
 

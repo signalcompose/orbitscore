@@ -322,7 +322,7 @@ link-audio = ["dep:orbit-link-audio", "dep:rtrb"]
 そして出荷ビルドはこの feature を有効化していません。同梱バイナリを作る 1 行はこうです。
 
 ```bash
-// scripts/copy-daemon-bin.sh:109-109
+// scripts/copy-daemon-bin.sh:108-108
     && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument \
 ```
 

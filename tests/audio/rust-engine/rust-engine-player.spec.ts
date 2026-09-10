@@ -8,21 +8,19 @@
  *   - clock anchor（GetStatus uptime → StreamStats now_sec 補正）+ 定数 lookahead
  *   - feature gap（pan / slice / outputChannel）の warn-once + skip/fallback
  *   - clearSequenceEvents / stopAll の cancellation 意味論
- *   - createAudioEngine() の env 分岐
+ *   - createAudioEngine() が RustEnginePlayer を返すこと
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { gainDbToAmplitude } from '../../../packages/engine/src/audio/audio-gain-utils'
 import { createAudioEngine } from '../../../packages/engine/src/audio/create-audio-engine'
-import { resolveEngineKind } from '../../../packages/engine/src/audio/engine-backend'
 import { DaemonClient } from '../../../packages/engine/src/audio/rust-engine/daemon-client'
 import {
   fitAnchorSamples,
   audioOutputReportLines,
   RustEnginePlayer,
 } from '../../../packages/engine/src/audio/rust-engine/rust-engine-player'
-import { SuperColliderPlayer } from '../../../packages/engine/src/audio/supercollider-player'
 // クロスパッケージ契約 (#390): [STEP] marker は engine（emitter）と拡張（parser）が
 // 文字列書式だけで結合している。実 emit 行を parser に往復させ、書式ドリフトを
 // このテストで検出する（tests/ ルートは両パッケージを import できる）。
@@ -951,67 +949,11 @@ describe('RustEnginePlayer plugin all-notes-off wiring without a socket', () => 
   })
 })
 
-describe('createAudioEngine() / resolveEngineKind()', () => {
-  it('既定（未設定）で RustEnginePlayer を返す（cutover #108）', () => {
-    expect(createAudioEngine({} as NodeJS.ProcessEnv)).toBeInstanceOf(RustEnginePlayer)
-  })
-
-  it('ORBITSCORE_ENGINE=rust でも RustEnginePlayer を返す', () => {
-    expect(createAudioEngine({ ORBITSCORE_ENGINE: 'rust' } as NodeJS.ProcessEnv)).toBeInstanceOf(
-      RustEnginePlayer,
-    )
-  })
-
-  it('ORBITSCORE_ENGINE=sc / supercollider で SuperColliderPlayer に opt-out する', () => {
-    expect(createAudioEngine({ ORBITSCORE_ENGINE: 'sc' } as NodeJS.ProcessEnv)).toBeInstanceOf(
-      SuperColliderPlayer,
-    )
-    expect(
-      createAudioEngine({ ORBITSCORE_ENGINE: 'supercollider' } as NodeJS.ProcessEnv),
-    ).toBeInstanceOf(SuperColliderPlayer)
-  })
-
-  it('resolveEngineKind は sc/supercollider を opt-out・それ以外（未設定含む）を既定 rust に正規化する', () => {
-    expect(resolveEngineKind('sc')).toBe('supercollider')
-    expect(resolveEngineKind('SC')).toBe('supercollider')
-    expect(resolveEngineKind(' sc ')).toBe('supercollider')
-    expect(resolveEngineKind('supercollider')).toBe('supercollider')
-    expect(resolveEngineKind('rust')).toBe('rust')
-    expect(resolveEngineKind(undefined)).toBe('rust')
-    expect(resolveEngineKind('anything-else')).toBe('rust')
-  })
-
-  it('未設定 / 空 env では RustEnginePlayer を返し、警告は出さない', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(createAudioEngine({} as NodeJS.ProcessEnv)).toBeInstanceOf(RustEnginePlayer)
-    expect(createAudioEngine({ ORBITSCORE_ENGINE: '' } as NodeJS.ProcessEnv)).toBeInstanceOf(
-      RustEnginePlayer,
-    )
-    expect(createAudioEngine({ ORBITSCORE_ENGINE: '   ' } as NodeJS.ProcessEnv)).toBeInstanceOf(
-      RustEnginePlayer,
-    )
-    expect(warn).not.toHaveBeenCalled()
-    warn.mockRestore()
-  })
-
-  it('未認識値（sc の typo 等）は Rust にフォールバックしつつ警告する（silent fallback を observable に）', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(createAudioEngine({ ORBITSCORE_ENGINE: 'scc' } as NodeJS.ProcessEnv)).toBeInstanceOf(
-      RustEnginePlayer,
-    )
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn.mock.calls[0][0]).toContain('scc')
-    expect(warn.mock.calls[0][0]).toContain('未認識')
-    warn.mockRestore()
-  })
-
-  it('明示 rust では警告を出さない', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(createAudioEngine({ ORBITSCORE_ENGINE: 'rust' } as NodeJS.ProcessEnv)).toBeInstanceOf(
-      RustEnginePlayer,
-    )
-    expect(warn).not.toHaveBeenCalled()
-    warn.mockRestore()
+describe('createAudioEngine()', () => {
+  // ORBITSCORE_ENGINE / resolveEngineKind は #502 で撤去済み — 選べる第2のエンジンが
+  // 無いので createAudioEngine() は常に RustEnginePlayer を返す（引数を取らない）。
+  it('常に RustEnginePlayer を返す（#502: SC バックエンド削除で唯一のバックエンド）', () => {
+    expect(createAudioEngine()).toBeInstanceOf(RustEnginePlayer)
   })
 })
 
