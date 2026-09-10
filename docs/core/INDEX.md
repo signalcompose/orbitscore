@@ -267,7 +267,7 @@ CLAUDE.md の「テストの積み上げ規律」「E2E が最重要」「マー
 |---|---|
 | [RUST_ENGINE_MIGRATION_PLAN.md](../planning/post-icmc/RUST_ENGINE_MIGRATION_PLAN.md) | Rust audio engine 移行ロードマップ（cutover #108 で既定化済） |
 | [AUDIO_ENGINE_CORE_ARCHITECTURE.md](../planning/post-icmc/AUDIO_ENGINE_CORE_ARCHITECTURE.md) | 3 層分離アーキテクチャ (Core / Plugins / App) |
-| [ELECTRON_APP_PLAN.md](../planning/post-icmc/ELECTRON_APP_PLAN.md) | スタンドアロンアプリ計画（OrbitStudio は `scripts/orbitstudio/` の VSCodium ベースで進行） |
+| [ELECTRON_APP_PLAN.md](../planning/post-icmc/ELECTRON_APP_PLAN.md) | 旧スタンドアロンアプリ計画（VSCodium フォークは廃止。現行方針は [`NATIVE_MIGRATION_2026-09.md`](../planning/NATIVE_MIGRATION_2026-09.md) §12） |
 | [COLLABORATION_FEATURE_PLAN.md](../planning/post-icmc/COLLABORATION_FEATURE_PLAN.md) | マルチユーザー協調機能設計 |
 
 ### Short-term implementation plans (`docs/plans/`)

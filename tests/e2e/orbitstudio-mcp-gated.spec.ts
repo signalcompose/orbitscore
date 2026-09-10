@@ -1,8 +1,8 @@
 /**
- * REAL OrbitStudio E2E over the Agent Bridge MCP server (#388).
+ * REAL VS Code E2E over the Agent Bridge MCP server (#388).
  *
- * Launches an actual OrbitStudio.app (VSCodium-based) Extension Development
- * Host, drives it entirely through MCP tool calls (no vscode API, no
+ * Launches stock VS Code as an Extension Development Host, drives it entirely
+ * through MCP tool calls (no vscode API, no
  * keyboard/UI automation), and verifies produced audio objectively via the
  * capture-seam WAV analyzer (wav-analysis.ts) — the same "verify without
  * listening" philosophy as WORK_LOG 6.189.
@@ -13,13 +13,13 @@
  *                               skipped via describe.skipIf, so this file
  *                               always parses and collects cleanly in normal
  *                               `npm test` runs.
- *   ORBITSTUDIO_APP=<path>      Overrides the OrbitStudio.app bundle path.
- *                               Default:
- *                               /Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app
+ *   ORBIT_E2E_VSCODE_APP=<path> Overrides the VS Code.app bundle path.
+ *                               Default: /Applications/Visual Studio Code.app
  *                               If the resolved path doesn't exist, the test
  *                               is skipped with a console note (rather than
  *                               failing) even when the gate env var is set.
  *
+ * The launched profile is isolated from the user's everyday VS Code state.
  * Run gated (this launches a real GUI app and plays audible sound — do NOT
  * run unattended/unprompted):
  *
@@ -32,11 +32,10 @@
  * root, an unscoped positional pattern can glob-match stale copies under
  * .claude/worktrees/ and launch multiple real GUI apps.
  *
- * SAFETY (repeated at the kill call site too): the teardown/setup kill
- * pattern targets `OrbitStudio.app/Contents/MacOS` — a path fragment unique
- * to the OrbitStudio.app bundle. It must NEVER be broadened to something
- * that could match a general "Visual Studio Code" / Electron process —
- * killing the user's actual VS Code is a known past incident.
+ * SAFETY (repeated at the kill call site too): teardown/setup identifies only
+ * processes whose command line carries the harness-owned `--user-data-dir`
+ * temp prefix. It must NEVER use an app or executable name: an overbroad
+ * process-name match killed the user's everyday editor in a past incident.
  */
 
 import { spawn, spawnSync, execFileSync, type ChildProcess } from 'child_process'
@@ -87,22 +86,46 @@ import {
   startEngineForRun,
   waitForEngineState,
 } from './helpers/run-score'
+import {
+  IPC_SOCKET_SUFFIX_ALLOWANCE,
+  selectRootPids,
+  UNIX_SOCKET_PATH_MAX,
+  userDataDirExceedsSocketLimit,
+} from './helpers/harness-processes'
 import { OUTPUT_LINE_GOLDENS, STEADY_CAPTURE } from './output-line-expectations'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
-const DEFAULT_APP_PATH =
-  '/Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app'
+const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
+/**
+ * 🔴 Temp roots live under `/tmp`, not `os.tmpdir()`, and the prefix is short.
+ *
+ * VS Code's main process opens a Unix domain socket at `<user-data-dir>/<version>-main.sock`,
+ * and macOS caps a socket path at 103 characters. `os.tmpdir()` alone is 48 characters here
+ * (`/var/folders/<2>/<28>/T/`), so a descriptive prefix pushed the socket path to 105 and the
+ * app died with `listen EINVAL` before opening a window. The harness saw only a 60 s MCP
+ * timeout, which reads as "the extension did not activate" and sends you looking in the wrong
+ * place. Keep this short, and keep the preflight check below.
+ */
+const HARNESS_TMP_BASE = '/tmp'
+const HARNESS_TMP_PREFIX = 'orbe2e-'
+
+/**
+ * Identity of a harness-owned process: the `--user-data-dir` we generated. Built from
+ * HARNESS_TMP_PREFIX so the launcher and the teardown can never drift apart. Extended regex,
+ * passed to `pgrep -f` the same way as the other PID oracles in this file.
+ */
+const HARNESS_PGREP_PATTERN = `user-data-dir=[^[:space:]]*/${HARNESS_TMP_PREFIX}`
 
 const gated = Boolean(process.env[GATE_ENV])
-const appPath = process.env.ORBITSTUDIO_APP?.trim() || DEFAULT_APP_PATH
+const appPath = process.env.ORBIT_E2E_VSCODE_APP?.trim() || DEFAULT_APP_PATH
 const appAvailable = fs.existsSync(appPath)
 
 if (gated && !appAvailable) {
   // eslint-disable-next-line no-console
   console.log(
-    `[orbitstudio-mcp-gated] OrbitStudio app not found at ${appPath} — SKIPPING. ` +
-      'Set ORBITSTUDIO_APP to override the default path.',
+    `[orbitstudio-mcp-gated] VS Code app not found at ${appPath} — SKIPPING. ` +
+      'Set ORBIT_E2E_VSCODE_APP to override the default path.',
   )
 }
 
@@ -268,18 +291,95 @@ const TEST_TIMEOUT_MS = 120_000
 const TEARDOWN_TIMEOUT_MS = 30_000
 
 /**
- * SAFETY: this exact pattern ONLY. `OrbitStudio.app/Contents/MacOS` is a path
- * fragment unique to the OrbitStudio.app bundle — it must never be widened
- * to match "Code" / "Electron" / VSCodium generally. Killing the user's
- * actual VS Code by an overbroad pkill pattern is a known past incident.
- * Uses execFileSync (no shell, fixed argv — not a template-built command
- * string) rather than exec/execSync.
+ * SAFETY: identity comes from the `--user-data-dir` argument whose temp root begins with
+ * HARNESS_TMP_PREFIX, which only this harness creates. It must never be replaced by an
+ * app/process-name match: an overbroad pkill killed the user's everyday editor in a known
+ * past incident.
+ *
+ * 🔴 Signal only the ROOT processes, never the helpers. Electron helper processes inherit
+ * the same `--user-data-dir` argument, so a blanket `pkill -f` reaches them too. Killing a
+ * renderer out from under a live main process makes VS Code report
+ * "The window terminated unexpectedly (reason: 'killed', code: '15')" in a modal dialog,
+ * which then waits for a human. Signalling only the roots lets each main process tear its
+ * own helpers down through the normal shutdown path, so no dialog appears.
+ *
+ * Uses execFileSync (no shell, fixed argv) rather than exec/execSync.
  */
-function killOrbitStudio(): void {
+function harnessPids(): number[] {
   try {
-    execFileSync('pkill', ['-f', 'OrbitStudio.app/Contents/MacOS'], { stdio: 'ignore' })
+    return execFileSync('pgrep', ['-f', HARNESS_PGREP_PATTERN], { encoding: 'utf8' })
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(Number)
+      .filter((pid) => Number.isSafeInteger(pid) && pid > 0)
+  } catch (err) {
+    // pgrep exits 1 when nothing matched. That, and only that, is absence (policy 2).
+    if ((err as { status?: number }).status === 1) return []
+    // eslint-disable-next-line no-console
+    console.error(
+      `[harness] could not enumerate harness processes: ${String(err)}. ` +
+        'Stale editor instances may survive into the next launch.',
+    )
+    return []
+  }
+}
+
+/**
+ * Signal 0 probes liveness without touching the process and without spawning anything.
+ * `EPERM` means the process exists but is not ours to signal, so it counts as alive.
+ */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as { code?: string }).code === 'EPERM'
+  }
+}
+
+/** `undefined` when the parent cannot be determined — unknown, not "no parent" (policy 2). */
+function parentPidOrUnknown(pid: number): number | undefined {
+  try {
+    const ppid = parentPid(pid)
+    return Number.isSafeInteger(ppid) ? ppid : undefined
   } catch {
-    // pkill exits non-zero when no process matched — not an error here.
+    return undefined
+  }
+}
+
+async function killHarnessInstances(): Promise<void> {
+  const pids = harnessPids()
+  if (pids.length === 0) return
+  const roots = selectRootPids(pids.map((pid) => ({ pid, ppid: parentPidOrUnknown(pid) })))
+  for (const pid of roots) {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      // already gone
+    }
+  }
+  if (roots.length > 0) {
+    try {
+      // Give each root time to take its own helpers down through the normal shutdown path.
+      await waitUntil(() => roots.every((pid) => !isAlive(pid)), {
+        intervalMs: 200,
+        timeoutMs: 5000,
+        label: 'harness editor instances to exit',
+      })
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[harness] ${String(err)} — forcing the remainder.`)
+    }
+  }
+  // 🔴 The sweep runs unconditionally (policy 1). If root detection found nothing — every parent
+  // unknown, or an unexpected tree — the old blanket `pkill` still cleaned up; do not regress that.
+  for (const pid of harnessPids()) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // already gone
+    }
   }
 }
 
@@ -442,26 +542,65 @@ async function launchIsolatedOrbitStudio({
   portBase,
   prepareWorkspace,
 }: IsolatedOrbitStudioOptions): Promise<IsolatedOrbitStudio> {
-  killOrbitStudio()
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), tmpPrefix))
+  await killHarnessInstances()
+  const tmpRoot = fs.mkdtempSync(path.join(HARNESS_TMP_BASE, tmpPrefix))
   const userDataDir = path.join(tmpRoot, 'user-data')
   const extensionsDir = path.join(tmpRoot, 'extensions')
   const workspaceSettingsDir = path.join(tmpRoot, '.vscode')
   fs.mkdirSync(userDataDir, { recursive: true })
   fs.mkdirSync(extensionsDir, { recursive: true })
   fs.mkdirSync(workspaceSettingsDir, { recursive: true })
+  // Fail here, with the reason, instead of 60 s later with an opaque MCP timeout.
+  if (userDataDirExceedsSocketLimit(userDataDir)) {
+    throw new Error(
+      `--user-data-dir is too long for a macOS unix socket (${userDataDir.length} chars + ` +
+        `~${IPC_SOCKET_SUFFIX_ALLOWANCE} for the socket name > ${UNIX_SOCKET_PATH_MAX}): ` +
+        `${userDataDir}. VS Code dies with \`listen EINVAL\` before opening a window. ` +
+        'Shorten HARNESS_TMP_PREFIX or the per-test prefix.',
+    )
+  }
   const resolvedSettings = typeof settings === 'function' ? settings(tmpRoot) : settings
   fs.writeFileSync(
     path.join(workspaceSettingsDir, 'settings.json'),
     JSON.stringify(resolvedSettings, null, 2) + '\n',
   )
+  // User-scope settings: window restore, telemetry and the startup editor are application
+  // scope, so the workspace settings above cannot reach them. A fresh profile would
+  // otherwise open the welcome editor and, after a teardown, offer to restore windows.
+  const userSettingsDir = path.join(userDataDir, 'User')
+  fs.mkdirSync(userSettingsDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(userSettingsDir, 'settings.json'),
+    JSON.stringify(
+      {
+        'window.restoreWindows': 'none',
+        'workbench.startupEditor': 'none',
+        'telemetry.telemetryLevel': 'off',
+        'update.mode': 'none',
+        'extensions.autoUpdate': false,
+        'extensions.autoCheckUpdates': false,
+      },
+      null,
+      2,
+    ) + '\n',
+  )
   await prepareWorkspace?.(tmpRoot)
 
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
-    path.join(appPath, 'Contents/Resources/app/bin/orbs'),
+    path.join(appPath, 'Contents/Resources/app/bin/code'),
     [
       '--new-window',
+      // Stock VS Code greets a brand-new profile with the welcome tab, release notes and a
+      // sign-in nudge. The fork we used to launch had those disabled in its product build,
+      // so the harness never needed these. They are pure UI suppression: nothing about the
+      // extension under test changes.
+      // Updates and telemetry are switched off twice on purpose: the flags stop the very first
+      // check, which can fire before the user settings written below are read.
+      '--skip-welcome',
+      '--skip-release-notes',
+      '--disable-updates',
+      '--disable-telemetry',
       `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
       `--user-data-dir=${userDataDir}`,
       `--extensions-dir=${extensionsDir}`,
@@ -853,7 +992,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // best-effort — the process may already be gone.
       }
     }
-    killOrbitStudio()
+    await killHarnessInstances()
     if (child && !child.killed) {
       try {
         child.kill()
@@ -889,7 +1028,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // デバイス名の存在確認をスキップするセンチネル __default__ を設定し、
       // マシン固有のデバイス名に依存せず拡張の auto-start を有効化する。
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-mcp-e2e-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}main-`,
         settings: {
           'orbitscore.audioDevice': '__default__',
           'orbitscore.engineDebug': false,
@@ -5446,7 +5585,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     '#779 startup sweep unlinks orphaned outproc shm but keeps live ones',
     async () => {
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-shm-sweep-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}shm-`,
         settings: {
           'orbitscore.audioDevice': '__default__',
           'orbitscore.engineDebug': false,
@@ -5520,7 +5659,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     async () => {
       let requestedName = ''
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-named-device-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}dev-`,
         settings: () => {
           requestedName = defaultOutputDeviceName('#661 D-0')
           return {
@@ -5596,7 +5735,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // changing it in the shared long-running suite would invalidate all following scenarios.
       let deadRequestedName = ''
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-device-gate-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}gate-`,
         settings: () => {
           deadRequestedName = defaultOutputDeviceName('#661 D-2')
           return {
@@ -5694,7 +5833,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // D-3 は**デバイス無指定で起動**し、既定デバイスを名前で要求することで本当の切替にする。
       // `dead-probe-requested` は「要求された」デバイスに効くので、その probe が死ぬ。
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-device-switch-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}swap-`,
         settings: { 'orbitscore.audioDevice': '__default__', 'orbitscore.engineDebug': false },
         env: {
           ...process.env,

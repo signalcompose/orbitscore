@@ -11,7 +11,7 @@
 > **2026-09 の位置づけ**: 既定バックエンドは Rust `orbit-audio-daemon`（cutover #108）。本ガイドの
 > SuperCollider 節は `ORBITSCORE_ENGINE=sc` の opt-out 経路にのみ必要。実機検証の正本は
 > [E2E_HARNESS_SPEC.md](E2E_HARNESS_SPEC.md) と `npm run test:e2e:gated`（`ORBIT_GATED_ORBITSTUDIO=1`・
-> OrbitStudio.app を MCP で駆動・capture WAV アサーション）、および CLAUDE.md「マージ前ゲート」。
+> stock VS Code を MCP で駆動・capture WAV アサーション）、および CLAUDE.md「マージ前ゲート」。
 
 ## 📚 Overview
 
