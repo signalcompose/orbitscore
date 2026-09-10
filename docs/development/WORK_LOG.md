@@ -29,6 +29,72 @@ Output の宛先・出現序数で対応付けて seed する。これが無い�
 対応の無い新 Output は 0.0 から fade-in し、Gain は 1.0、Pan は指定位置から始める。旧
 `SetBusRouting` の `LineProgram::legacy` / `settled` 経路は変更していない。
 
+---
+
+### test(e2e): launch the gated harness from stock VS Code (#830) (Sep 10, 2026)
+
+🔴 **実機で回して 3 件の欠陥が出た。いずれも stock VS Code に切り替えて初めて現れたもので、
+CI・ユニット・机上レビューのどれにも掛からない。** 実機ゲートを置いている理由そのもの。
+
+| # | 症状 | 原因 |
+|---|---|---|
+| 1 | `The window terminated unexpectedly (reason: 'killed', code: '15')` のモーダルが出て**人待ちになる** | `pkill -f` が **Electron のヘルパーにも当たる**（同じ `--user-data-dir` 引数を継承するため）。レンダラを本体より先に殺すと本体が異常終了と判断する |
+| 2 | 新規プロファイルの welcome / サインイン画面が毎回出る | stock VS Code の初回起動 UI。フォークはビルド時に無効化されていた |
+| 3 | **MCP が 60 秒立たない** | `--user-data-dir` のパスが **105 文字**で、macOS の Unix ソケット上限 **103 文字**を超えた。VS Code 本体が `listen EINVAL` で即死し、ウィンドウが一度も開かない |
+
+**出典**（2026-09-10・main が本ツリーで実測。owner のスクリーンショットが発端）:
+
+- ヘルパーも一致する件: `pgrep -f 'MacOS/Code.*--user-data-dir=[^ ]*/orbitstudio-'` が
+  **7 PID** を返した（本体 1 + Electron helper 群）
+- ソケット長: 子プロセスの stderr に
+  `WARNING: IPC handle ".../orbitstudio-named-device-0IgvF5/user-data/1.13-main.sock" is longer than 103 chars`
+  と `Error: listen EINVAL` が出た。当該パスは `wc -c` で **105**。
+  上限 103 は macOS の `sys/un.h` の `sun_path[104]` に由来する
+- ⚠️ `os.tmpdir()` の長さ（ここでは 48 文字）は**マシンごとに変わる**ので、105 という数字は本機の値
+
+**3 が本体で、いちばん質が悪い。** ハーネスからは「MCP が立たない」としか見えないので、
+拡張が activation していないように読める。実際 main はそちらを 30 分調べた。
+`os.tmpdir()` だけで 48 文字（`/var/folders/<2>/<28>/T/`）あり、説明的な prefix を足すと超える。
+
+**対処**: temp root を `/tmp` へ移し prefix を短縮（`orbitstudio-` → `orbe2e-`）。加えて
+**起動前にソケット長を検査して即座に理由を出す**（60 秒待って原因不明で落ちるのを避ける）。
+
+🔴 **4 件目として「ワークスペースの信頼」を挙げていたが、実験で否定された（同日中に訂正）。**
+
+途中で `--disable-workspace-trust` を足し、「`machine-overridable` の設定が未信頼ワークスペースで
+無視されるからエンジンが起動しない」と書いた。しかし **`uuid` を入れた後にフラグを外して回すと通る**
+（`#661 D-0` が 8.5 秒で緑）。「エンジンが起動しない」の原因は**最初から依存不足**であり、
+信頼は無関係だった。フラグは削除した。
+
+**なぜ誤ったか**: フラグを足した時点でまだ `uuid` が入っておらず、**前後どちらも赤**だった。
+それを「フラグでは直らなかった」ではなく「フラグは必要」と読み、原因の説明まで書いてしまった。
+🔴 **変化しなかった変数を原因に数えない。** 監査（Fable）が VS Code の実ソースを読み
+「`machine-overridable` は未信頼でも落ちない。落ちるのは `restricted` だけ」と指摘し、
+その反証手順（フラグ無しで 1 回起動する）に従って確かめた。
+
+## 🔴 `pretest:e2e:gated` が engine の実行時依存を入れていなかった
+
+診断の途中で `❌ daemon resolver failed: Cannot find module 'uuid'` が出た。
+`npm run build` の `build:copy-engine` は dist をコピーするだけで、
+`scripts/install-engine-deps.sh` を**呼んでいない**。**ビルドは緑・パッケージも成功し、
+実行時にだけ落ちる**（#654 の `yaml` と同じクラス）。`pretest:e2e:gated` に追加した。
+
+## 実機の結果
+
+**29 passed / 1 failed**（528 秒）。落ちた 1 件は
+`steps the live playhead through an instrument() sequence, rests included` で、
+**main の既知ベースラインと同一**。新しい赤は無い。
+
+
+実機 gated ハーネスの起動先を VSCodium フォークの OrbitStudio.app から stock VS Code へ切り替え、
+`--extensionDevelopmentPath` と隔離した user-data / extensions dir をそのまま使う構成にした。
+終了処理はアプリ名ではなく、ハーネス専用 `--user-data-dir` の共通接頭辞だけを対象にするため、
+日常利用中の VS Code を巻き込まない。旧フォークのビルドスクリプトを削除し、非 archive 文書の
+参照先を現行のネイティブ移行裁定へ更新した。フォークを畳む前にマージゲートを維持するための変更で、
+実機 gated 全件の結果は main が本ツリーで実行して追記する。
+
+---
+
 ### docs(planning): record the extension-stable freeze line and the native OrbitStudio line (#827) (Sep 10, 2026)
 
 **Issue**: #827 / **ブランチ**: `827-stable-freeze-line` → main（docs のみ）
@@ -51,7 +117,7 @@ Output の宛先・出現序数で対応付けて seed する。これが無い�
 
 - 🔴 検討状況の §2.6「フォークを畳んで失うのは 47 行のスクリプトと E2E のターゲット指定のみ」→
   **そのターゲット指定がマージゲート（実機 gated）そのもの**。ただしハーネス（`orbitstudio-mcp-gated.spec.ts:460-471`）は
-  既に `--extensionDevelopmentPath` + 隔離 dir で起動しており、**フォーク固有は `bin/orbs` の 1 行だけ**。
+  既に `--extensionDevelopmentPath` + 隔離 dir で起動しており、**フォーク固有は旧専用 CLI を指す 1 行だけ**。
   VS Code の `bin/code` に変えれば足りる
 - SC 削除の影響: 実機 gated は **0 件**、ユニットは 22 ファイル（SC 専用 5 本は削除・17 は整理）
 - 「凍結線はステージ 2 完了」→ 制作に `outs:` が要らないので **O-surface 完了まで縮んだ**。

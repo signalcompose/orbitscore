@@ -160,7 +160,7 @@ orbitscore/
 │   └── user/                 # Legacy in-repo user docs
 ├── tests/                    # Vitest suite (unit / integration / e2e)
 │   └── e2e/                  # Gated real-device E2E (OrbitStudio + MCP), coverage ratchet
-├── scripts/                  # Build helpers (daemon bundling, OrbitStudio app build)
+├── scripts/                  # Build helpers (daemon bundling, engine deps)
 ├── examples/
 │   └── *.orbs                # Sample files
 └── README.md                # This file
@@ -303,7 +303,7 @@ npm test
 Run `npm test` to see the current breakdown. Skipped tests are real-daemon / macOS / SuperCollider integration tests that require a local environment. Real-device verification runs through the gated E2E harness:
 
 ```bash
-npm run test:e2e:gated   # ORBIT_GATED_ORBITSTUDIO=1; builds the daemon, drives OrbitStudio.app via MCP, asserts on captured WAV
+npm run test:e2e:gated   # ORBIT_GATED_ORBITSTUDIO=1; builds the daemon, drives stock VS Code via MCP, asserts on captured WAV
 ```
 
 ## Getting Started

@@ -173,7 +173,7 @@ The daemon-side pump that drains UI events. #633 made it per-index / per-window,
 
 ### gated E2E (`ORBIT_GATED_ORBITSTUDIO=1`)
 
-`tests/e2e/orbitstudio-mcp-gated.spec.ts`. It launches the real OrbitStudio.app, drives it through MCP tool calls only, and judges by numbers from the captured WAV. The `pretest` of `npm run test:e2e:gated` builds the daemon automatically. Without the gate env, the suite is skipped.
+`tests/e2e/orbitstudio-mcp-gated.spec.ts`. It launches real VS Code, drives it through MCP tool calls only, and judges by numbers from the captured WAV (#830 moved this off the VSCodium fork). The `pretest` of `npm run test:e2e:gated` prepares the daemon and the engine's runtime dependencies. Without the gate env, the suite is skipped.
 
 ### coverage ratchet
 

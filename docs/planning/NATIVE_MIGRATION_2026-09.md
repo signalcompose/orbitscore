@@ -104,7 +104,7 @@ cpal は macOS で既に CoreAudio（AudioUnit HAL）を呼んでいる。「Rus
 ### 2.6 VSCodium フォークを畳む
 
 - リリースパイプラインに入っていない。`release.yml` が publish するのは `.vsix` のみ（GitHub Release + VS Code Marketplace + Open VSX）
-- `scripts/orbitstudio/build_orbitstudio.sh` は47行の env ラッパーで、用途は gated E2E（`ORBIT_GATED_ORBITSTUDIO=1`）のみ
+- 旧 `build_orbitstudio.sh` は47行の env ラッパーで、用途は gated E2E（`ORBIT_GATED_ORBITSTUDIO=1`）のみ
 - claude-code 非同梱の決定により workspace trust の課題（#656 ブロッカー、`product.overrides.json` の層2）が消えた
 
 失う資産は47行のビルドスクリプトと gated E2E のターゲット指定のみ。畳むと **"OrbitStudio" という名前と `apps/OrbitStudio/` の置き場所が空く。**
@@ -216,7 +216,7 @@ protocol/                    単一スキーマと生成物
 
 #### (3) VSCodium フォークを畳む
 
-- `scripts/orbitstudio/build_orbitstudio.sh` を削除
+- 旧フォークの `build_orbitstudio.sh` を削除
 - gated E2E のターゲットを層2 の MCP へ向け直す
 - `apps/OrbitStudio/` の名前を空ける
 
@@ -485,12 +485,12 @@ WASM をどこでホストするかの選択肢:
 
 - **O-multiout**（PR-O5 `outs:` + PR-O6 旧 `SetBusRouting` の撤去）— 新ラインの**最初の束**。🔴 **PR-O6 の「O4 が実機で確かめられた後」という条件は、stable 版の制作利用がそのまま満たす**
 - ステージ 3〜7（log / render / 可視化 / ラック / plugin 境界）— 層 1 / 2 の作業なのでそのまま生きる
-- **ステージ 8（配布）は再定義**。「署名・公証済み OrbitStudio.app（VSCodium フォーク）」は §2.6 で消える。#659 / #656 / #138 はネイティブ app の配布として書き直す。作業ツリーに untracked で残っている `scripts/orbitstudio/make-local-release.sh` は役目を終える
+- **ステージ 8（配布）は再定義**。「署名・公証済み OrbitStudio.app（VSCodium フォーク）」は §2.6 で消える。#659 / #656 / #138 はネイティブ app の配布として書き直す。作業ツリーに untracked で残っている旧 `make-local-release.sh` は役目を終える
 - §5 の Phase 1〜3・§6 の engine 切り出し
 
 ### 12.4 gated ハーネスは stock VS Code 起動へ（フォークを畳む**前**に）
 
-`tests/e2e/orbitstudio-mcp-gated.spec.ts:460-471` は既に `--extensionDevelopmentPath`（拡張をソースから直接ロード）+ 隔離した `--user-data-dir` / `--extensions-dir` で起動している。**フォーク固有なのは実行ファイルのパス `Contents/Resources/app/bin/orbs` の 1 行だけ**で、VS Code の `bin/code` に変えれば足りる。vsix の入れ替えは不要で、日常の VS Code にも触れない。
+`tests/e2e/orbitstudio-mcp-gated.spec.ts:460-471` は既に `--extensionDevelopmentPath`（拡張をソースから直接ロード）+ 隔離した `--user-data-dir` / `--extensions-dir` で起動している。**フォーク固有なのは実行ファイルを旧フォーク専用 CLI に向ける 1 行だけ**で、VS Code の `bin/code` に変えれば足りる。vsix の入れ替えは不要で、日常の VS Code にも触れない。
 
 §4.1(3)「層 2 の MCP へ向け直す」は Phase 1 の成果物に依存するので、**その前にこの 1 行を変える**。これで実機 gated（マージゲート）を失う期間が無くなる。
 

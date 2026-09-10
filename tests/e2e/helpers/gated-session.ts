@@ -2,7 +2,7 @@
  * gated E2E のセッション（起動・tmpRoot・fixture・cleanup、#668 設計 §4.1）。
  *
  * `orbitstudio-mcp-gated.spec.ts` の `requireCatalogFixtures()` は suite ローカルの
- * closure（実 OrbitStudio.app を起動し、カタログを rescan した結果を保持する）で、
+ * closure（実 VS Code を起動し、カタログを rescan した結果を保持する）で、
  * export できない。ここでは戻り値の**形**だけを型として持つ — 実際にセッションを
  * 組み立てる配線は、既存 20 本のシナリオを書き換えない本 PR のスコープ外（将来 PR）。
  */

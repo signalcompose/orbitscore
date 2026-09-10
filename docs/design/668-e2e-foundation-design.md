@@ -972,7 +972,7 @@ $ grep -rn "0o000" tests/ packages/ --include=*.ts                              
 tests/vscode-extension/mcp-server-docs.spec.ts:66 / :78    tests/interpreter/file-import.spec.ts:187
 
 $ grep -rn "pgrep\|pkill" tests/ scripts/ --include=*.ts --include=*.sh             ← #624 が足す先の既存作法
-tests/e2e/orbitstudio-mcp-gated.spec.ts:231 (pkill -f OrbitStudio.app/Contents/MacOS) / :253 (pgrep -f <pluginPath>)
+tests/e2e/orbitstudio-mcp-gated.spec.ts:231 (旧 OrbitStudio bundle を対象にした pkill) / :253 (pgrep -f <pluginPath>)
 tests/audio/rust-engine/daemon-client.spec.ts:1012（コメントのみ）
 
 $ grep -n "ORBIT_KEEP_CAPTURES" tests/e2e/orbitstudio-mcp-gated.spec.ts             ← §2.3 の非対称
