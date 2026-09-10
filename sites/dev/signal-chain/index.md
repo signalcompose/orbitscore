@@ -1293,7 +1293,7 @@ WORK_LOG 6.386 によると、最初は `PARAM_DB_NAME` 定数と比較してい
 さらに packaging 後の `.vsix` の中に `std-plugins/Gain.clap` があることを確かめます。
 
 ```yaml
-# .github/workflows/release.yml:92-98
+# .github/workflows/release.yml:84-90
           # 標準プラグイン（#628 / SC.10.8）。cdylib をビルドして .clap bundle に組む。
           bash rust/crates/orbit-std-gain/bundle-macos.sh --release
 
@@ -1304,7 +1304,7 @@ WORK_LOG 6.386 によると、最初は `PARAM_DB_NAME` 定数と比較してい
 ```
 
 ```yaml
-# .github/workflows/release.yml:191-200
+# .github/workflows/release.yml:174-183
           # 標準プラグイン（#628 / SC.10.8）: child は自分の実行ファイルの隣の
           # `std-plugins/<name>.clap` を見て解決する。同梱が落ちると DSL の
           # `Gain(db: …)` が実行時に「解決できない」で落ちるだけで、
