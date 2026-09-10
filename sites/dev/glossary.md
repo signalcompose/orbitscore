@@ -255,11 +255,11 @@ VS Code が拡張を実行するための専用 Node.js プロセス。Renderer 
 
 ### StatusBarItem
 
-VS Code API。エディタ下部のステータスバーに表示するアイテム。OrbitScore は 2 本使います: engine 動作状態 (priority 100) と scsynth 解決状態 (priority 99) です。
+VS Code API。エディタ下部のステータスバーに表示するアイテム。OrbitScore は 2 本使います: engine 動作状態 (`statusBarItem`・priority 100) と、バイナリ解決に失敗したときだけ出るエラー・インジケータ (`bundleStatusItem`・priority 99) です。後者は名前のとおり scsynth bundle の解決状態を出すものでしたが、いまは daemon が解決できないときだけ表示します (`packages/vscode-extension/src/extension.ts` の `updateBundleStatus()`。scsynth 側は #502 で削除)。
 
 ### workspace trust (untrustedWorkspaces)
 
-VS Code の信頼モデル。未信頼のワークスペースでは拡張が既定で制限され `activate()` すら呼ばれません。OrbitScore は `package.json` の `capabilities.untrustedWorkspaces` で `supported: true` を宣言し (#385)、フォルダを開かない loose-file 起動でも activate します。`restrictedConfigurations` には「ワークスペースが値を決めると別の実行ファイルが動く」2 件 (`orbitscore.scsynthPath` / `orbitscore.engine`) だけを挙げています。
+VS Code の信頼モデル。未信頼のワークスペースでは拡張が既定で制限され `activate()` すら呼ばれません。OrbitScore は `package.json` の `capabilities.untrustedWorkspaces` で `supported: true` を宣言し (#385)、フォルダを開かない loose-file 起動でも activate します。`restrictedConfigurations` にはかつて「ワークスペースが値を決めると別の実行ファイルが動く」2 件 (`orbitscore.scsynthPath` / `orbitscore.engine`) を挙げていましたが、[#840](https://github.com/signalcompose/orbitscore/pull/840)（#502）で両設定が SC 経路ごと削除されたため、**現在は空配列**です。唯一残るバックエンド（Rust daemon）の実行ファイルはワークスペース設定では変わらないので、restrict すべき設定がありません。
 
 ---
 
@@ -269,7 +269,7 @@ VS Code の信頼モデル。未信頼のワークスペースでは拡張が既
 
 `ScsynthSource` の一つ。`.vsix` に同梱された scsynth バイナリを使う場合の source 識別子。`<engine root>/scsynth/Contents/Resources/scsynth` を指します。
 
-🔴 **[#836](https://github.com/signalcompose/orbitscore/pull/836)（2026-09-10）以降、この候補が当たることはありません。** `packages/engine/scripts/sync-dist.js` が engine を拡張へ同期するたびに `engine/scsynth` を削除するようになり、`.vscodeignore` の keep 指定も外れたためです。型と分岐そのものは `packages/engine/src/audio/supercollider/scsynth-resolver.ts` に残っています（SC の TS 実装の撤去は #836 の本文いわく「次の PR」）。
+🔴 **[#836](https://github.com/signalcompose/orbitscore/pull/836)（2026-09-10）以降、この候補が当たることはありません。** `packages/engine/scripts/sync-dist.js` が engine を拡張へ同期するたびに `engine/scsynth` を削除するようになり、`.vscodeignore` の keep 指定も外れたためです。続く [#838](https://github.com/signalcompose/orbitscore/pull/838)（束 [#840](https://github.com/signalcompose/orbitscore/pull/840)）で `packages/engine/src/audio/supercollider/scsynth-resolver.ts` ごと削除され、**型と分岐そのものが存在しません**。本項は歴史的な記述です。
 
 ### explicit (scsynth source)
 
@@ -337,8 +337,8 @@ scsynth が見つからなかった時に throw される Error サブクラス�
 - `docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md` — v1.0 MIDI DSL アーカイブ
 - `packages/vscode-extension/src/extension.ts` — activate(), flashLines(), updateDiagnostics()
 - `packages/vscode-extension/src/completion-context.ts` — MethodChainContext インターフェース
-- `packages/engine/src/audio/supercollider/scsynth-resolver.ts` — ScsynthResolution, ScsynthNotFoundError
-- `packages/engine/src/audio/engine-backend.ts`, `create-audio-engine.ts` — AudioEngineBackend seam, ORBITSCORE_ENGINE
+- `packages/engine/src/audio/supercollider/scsynth-resolver.ts` — ScsynthResolution, ScsynthNotFoundError（🔴 **#502 で削除済み**。SC 用語の出典としてのみ挙げる）
+- `packages/engine/src/audio/engine-backend.ts`, `create-audio-engine.ts` — AudioEngineBackend seam（`ORBITSCORE_ENGINE` と `resolveEngineKind()` は #502 で削除済み）
 - `packages/engine/src/core/global/mixer-manager.ts` — SUM_BUS_PREFIX / AUX_BUS_PREFIX / MIXER_BUS_POOL_SIZE / formatReceiverId
 - `packages/engine/src/signal-chain/rack.ts` — RackRecipe
 - `packages/vscode-extension/src/mcp-server.ts`, `extension.ts` — MCP サーバ, ORBITSCORE_MCP_PORT の優先

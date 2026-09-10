@@ -41,11 +41,10 @@ VS Code 拡張は **Extension Host** と呼ばれる専用の Node.js プロセ�
 VS Code Renderer (UI)
     └── Extension Host (Node.js)  ← 拡張コードが動く
             └── engine process (node engine/dist/cli-audio.js repl)  ← OrbitScore DSL エンジン
-                    ├── orbit-audio-daemon (Rust・既定・WebSocket)
-                    └── scsynth (SuperCollider・orbitscore.engine が "sc" のときのみ・OSC)
+                    └── orbit-audio-daemon (Rust・唯一のバックエンド・WebSocket)
 ```
 
-音声プロセスがどちらになるかは `orbitscore.engine` 設定 (既定 `"rust"`) で決まります。この分岐が本章の随所に顔を出します。
+音声プロセスは `orbit-audio-daemon` の 1 択です。かつては `orbitscore.engine` 設定 (既定 `"rust"`) で scsynth (SuperCollider・OSC) を選べ、その分岐が本章の随所に顔を出していましたが、設定・分岐とも [#840](https://github.com/signalcompose/orbitscore/pull/840)（#502）で削除されました。以下、その分岐に触れる箇所には削除済みである旨を添えています。
 
 ---
 
@@ -466,13 +465,15 @@ export function extensionEngineFileExists(enginePath: string): boolean {
 
 daemon の resolver は `explicit > env > monorepo-release > monorepo-debug > extension-bundle > throw` です。silent fallback を持たず、見つからなければ例外で fail loud します ([ADR-003](/decisions/adr-003-scsynth-bundle) — かつての scsynth resolver の意思決定記録。scsynth 側は #502 で削除済み)。
 
-::: warning scsynth 側の候補は出荷物からは引けない (#836・2026-09-10)
-[#836](https://github.com/signalcompose/orbitscore/pull/836) 以降、`packages/engine/scripts/sync-dist.js` は engine を拡張へ同期するたびに `engine/scsynth` と同期先の `dist/audio/supercollider/` を削除します。したがって出荷された `.vsix` では
+::: warning scsynth 側の resolver は拡張から消えた (#836 → #838・2026-09-10)
+まず [#836](https://github.com/signalcompose/orbitscore/pull/836) が、`packages/engine/scripts/sync-dist.js` に「engine を拡張へ同期するたびに `engine/scsynth` と同期先の `dist/audio/supercollider/` を削除する」処理を入れました。この時点で出荷された `.vsix` では
 
 - `bundle` 候補のパス (`<engine root>/scsynth/Contents/Resources/scsynth`) が存在しない
-- 上のコードが `require` している `../engine/dist/audio/supercollider/scsynth-resolver` **そのものが存在しない**
+- 拡張が `require` していた `../engine/dist/audio/supercollider/scsynth-resolver` **そのものが存在しない**
 
-という状態になります。`resolveScsynthForUI()` は require 失敗を catch して `❌ scsynth resolver failed: …` を outputChannel に出し `null` を返す作りなので、`sc` kind を選んだときの挙動は「resolver が読めない」に変わっています。拡張側の TypeScript は #836 では**触られていません**（SC の TS 実装と拡張の表面の撤去は #836 本文いわく「次の PR」）。
+という状態になり、拡張側の TypeScript は #836 では触られていなかったため、`resolveScsynthForUI()` は require 失敗を catch して `❌ scsynth resolver failed: …` を outputChannel に出し `null` を返していました。
+
+続く [#838](https://github.com/signalcompose/orbitscore/pull/838)（束 [#840](https://github.com/signalcompose/orbitscore/pull/840)）で **`resolveScsynthForUI()` は関数ごと削除**され、`packages/vscode-extension/src/` に `scsynth` の参照は 1 件も残っていません。これは `tsc` を通らない実行時 `require` だったので、engine 側のソースを消しただけでは型検査が緑のまま実行時に落ちる構造でした（#840 本文の「実行時 `require` の罠」）。いま残るバイナリ解決は daemon 側 (`resolveDaemonForUI()`) だけです。
 :::
 
 ---

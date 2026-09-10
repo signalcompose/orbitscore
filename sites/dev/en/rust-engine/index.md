@@ -290,7 +290,7 @@ arms are as follows (the notes column mentions the arms gated by a feature `cfg`
 | `SelectAudioDevice` | runtime device switch | #484 D2, delegated to the audio owner thread; #661 probes the candidate first |
 | `GetStatus` | daemon/protocol version, sample rate, `render_contentions`, etc. | #661 added `output` (the device actually playing, plus the fallback history) and `callback` (the liveness counter) |
 | `LoadSample` / `UnloadSample` | register / release an audio file | |
-| `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | 🔴 the `link-audio` feature is **default off** and is not enabled in shipped builds. When absent the daemon answers `LINK_AUDIO_UNAVAILABLE` (a missing *capability*) and the TS side warns exactly once and continues on hardware. See "LinkAudio egress is not in shipped builds" below |
+| `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | 🔴 the `link-audio` feature is **default off** and is not enabled in shipped builds. When absent the daemon answers `LINK_AUDIO_UNAVAILABLE` (a missing *capability*). "The TS side warns exactly once and continues on hardware" is the **design intent**, but that is not how it behaves on a real machine (🔴 **unresolved** — read the measurement under "LinkAudio egress is not in shipped builds" below) |
 | `LoadPlugin` | attach a plugin (`role` / `bus` / `instance` / `state`) | the in-process build requires `role` |
 | `ApplyEffectChain` | prepare-commit application of a whole rack (chain) | #628, `mode: diff / rebuild` |
 | `ReplacePlugin` | replace a slot's tenant | #618 (instrument) / #625 (effect) |

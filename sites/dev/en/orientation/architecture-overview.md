@@ -16,7 +16,7 @@ The answer does not fit inside a single process. It spans at least four kinds of
 
 ## Drift since the 2026-05 edition
 
-The 2026-05-05 edition of this chapter was written around a "three processes: extension / engine / scsynth" picture. With cutover #108 on 2026-07-03 (WORK_LOG 6.179) the default audio backend switched to the Rust daemon, and that picture no longer holds for the default path. What follows is a full rewrite against the code as of 2026-09-01. The SC path itself still exists under `packages/engine/src/audio/supercollider/` as of 69dc968, but the 2026-09-10 ruling (#827 / #502) decided to remove it from the repository. The former Part III SuperCollider-only chapters (III-1, III-3) have been removed from the site; their record lives on in ADR-001 / ADR-003.
+The 2026-05-05 edition of this chapter was written around a "three processes: extension / engine / scsynth" picture. With cutover #108 on 2026-07-03 (WORK_LOG 6.179) the default audio backend switched to the Rust daemon, and that picture no longer holds for the default path. What follows is a full rewrite against the code as of 2026-09-01. The SC path itself still existed under `packages/engine/src/audio/supercollider/` as of 69dc968, but acting on the 2026-09-10 ruling (#827 / #502), **[#840](https://github.com/signalcompose/orbitscore/pull/840) removed it from the repository**. The diagram above shows the shape after that removal (three kinds of process plus the plugin children). The former Part III SuperCollider-only chapters (III-1, III-3) have been removed from the site; their record lives on in ADR-001 / ADR-003.
 
 Incidentally, code comments refer to the same cutover by two numbers, `#108` and `#369` (`engine-backend.ts` says `#108`; `extension.ts` and `copy-daemon-bin.sh` say `#369`).
 
@@ -41,7 +41,6 @@ graph TD
     INTERP["interpreter/\n(AudioIR → method calls)"]
     CORE["core/\n(Global, Sequence, mixer)"]
     PLAYER["audio/rust-engine/\nRustEnginePlayer + DaemonClient"]
-    SC["audio/supercollider-player.ts\n(opt-out: ORBITSCORE_ENGINE=sc)"]
   end
 
   subgraph "orbit-audio-daemon (Rust)"
@@ -58,11 +57,10 @@ graph TD
 
   AGENT["external agent\n(Claude Code etc.)"] -->|"MCP (Streamable HTTP)"| MCP
   MCP --> EXT
-  EXT -->|"child_process.spawn('node', [cli-audio.js, 'repl'])\nenv.ORBITSCORE_ENGINE"| CLI
+  EXT -->|"child_process.spawn('node', [cli-audio.js, 'repl'])\nenv carries only the debug flag and the capture seam"| CLI
   EXT -->|"stdin.write(code + '\\n')"| CLI
   EXT --> RESOLVER
   CLI --> PARSER --> INTERP --> CORE --> PLAYER
-  CORE -.->|"only when ORBITSCORE_ENGINE=sc"| SC
   PLAYER -->|"spawn(orbit-audio-daemon)\nreceives the port from the stdout ready line"| WS
   PLAYER -->|"ws://127.0.0.1:port\nLoadSample / PlayAt / LoadPlugin ..."| WS
   WS --> RENDER
@@ -71,7 +69,6 @@ graph TD
   SUP -->|"spawn + shared memory (shm)"| CHILD2
   SUP -->|"spawn + shared memory (shm)"| CHILD3
   RENDER -->|"audio out"| DAC["speakers"]
-  SC -.->|"OSC over UDP"| SCSYNTH["scsynth"]
 ```
 
 > **How to read the diagram**: `RESOLVER` is the engine's build artifact (compiled JS) that the Extension Host side `require()`s and runs, so it is placed in the Extension Host subgraph rather than the engine process. It does not "intrude" into the engine process; it is a code-level dependency in which the same resolver function runs on both sides so that the results agree.
@@ -494,11 +491,13 @@ fn default_rack_child_exe() -> Result<PathBuf, String> {
 
 Why isolate? Because 3rd-party plugins are untrusted code, and a crash must not take the daemon (the heart of the audio) down with it. The structure of the shm transport, the READY handshake, watchdog / respawn, and parent-process liveness monitoring (`ParentWatch`) are covered in [RE-2. OOP Children and shm Transport](/en/rust-engine/oop-children); the DSL surface (`seq.effect()` / `seq.instrument()`) in [PH-1. Plugin Hosting Overview](/en/plugin-hosting/) and [RE-3. Per-Sequence Insert Bus](/en/rust-engine/insert-bus).
 
-## The SuperCollider Path (removal decided #502)
+## The SuperCollider Path (removed in #502)
 
-When `ORBITSCORE_ENGINE=sc` is set, `createAudioEngine()` returns a `SuperColliderPlayer`, and the extension enters its `sc` branch that passes `ORBIT_SCSYNTH_PATH` via env (extension.ts:2142-2155 shown above). The mechanisms of scsynth resolution (strict mode in `scsynth-resolver.ts`), OSC over UDP, and the `orbitPlayBuf` SynthDef remain in the code as of 69dc968, and [III-2. Audio File Playback](/en/audio/audio-file-playback) reads them (III-1 "Communication with SuperCollider" and III-3 "scsynth Bundle and Path Resolution" have been removed from the site as separate chapters following the 2026-09-10 ruling #827 / #502; their record lives on in [ADR-001](/en/decisions/adr-001-supercollider) and [ADR-003](/en/decisions/adr-003-scsynth-bundle)). The SC path itself is scheduled for removal from the repository by this same ruling, so keep in mind while reading that this is not the default path.
+Setting `ORBITSCORE_ENGINE=sc` used to make `createAudioEngine()` return a `SuperColliderPlayer`, and the extension entered its `sc` branch that passed `ORBIT_SCSYNTH_PATH` via env. The mechanisms of scsynth resolution (strict mode in `scsynth-resolver.ts`), OSC over UDP, and the `orbitPlayBuf` SynthDef were still in the code as of 69dc968, but acting on the 2026-09-10 ruling (#827 / #502), [#840](https://github.com/signalcompose/orbitscore/pull/840) **deleted all of `packages/engine/src/audio/supercollider/`, `supercollider-player.ts`, `packages/sc-link-audio/` and the synthdef assets**. The env var and VS Code settings that selected the opt-out (`ORBITSCORE_ENGINE` / `orbitscore.engine` / `orbitscore.scsynthPath`) went with them, so there is no longer any way to select a backend.
 
-Just as the `AudioEngineBackend` contract has optional methods the SC side does not implement (`selectAudioDevice` and others), the Rust path is ahead in features too (engine-backend.ts:32-33).
+A reading of the code as it stood before the removal is kept as a snapshot in [III-2. Audio File Playback](/en/audio/audio-file-playback) (III-1 "Communication with SuperCollider" and III-3 "scsynth Bundle and Path Resolution" have been removed from the site as separate chapters; their record lives on in [ADR-001](/en/decisions/adr-001-supercollider) and [ADR-003](/en/decisions/adr-003-scsynth-bundle)).
+
+Even at the point of removal, the `AudioEngineBackend` contract had optional methods the SC side did not implement (`selectAudioDevice` and others) — the Rust path was ahead in features too (engine-backend.ts:32-33).
 
 ## Data Flow from `play()` to Sound
 
