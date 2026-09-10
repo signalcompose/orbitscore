@@ -1,0 +1,36 @@
+// #611 E2E-6: position matters — output(verb, thru: true) before vs. after effect([Gain]).
+//
+// A: kickA.output(verb611e6, thru: true).effect([Gain(db: -12)])
+//    branches off to verb611e6 BEFORE the gain runs, so only the master (dry) path is
+//    attenuated — the aux copy skips it entirely. total_A = 1 + g (g = 10 ** (-12 / 20)).
+// B: kickB.effect([Gain(db: -12)]).output(verb611e6, thru: true)
+//    the gain runs first, so BOTH the master path and the aux-routed copy carry it.
+//    total_B = 2g.
+// ratio total_A / total_B = (1 + g) / (2g).
+//
+// Each chain is written as ONE statement (a single method chain) — design 611-o-surface-bundle
+// §3.1 froze the batch unit at "1 statement" (the `//#evalBegin/End` selection-wide frame is a
+// later line), so the position only carries this meaning within a single chained call.
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.start()
+
+var mix = init global.mixer
+var verb611e6 = mix.aux
+
+var kickA = init global.seq
+kickA.beat(4 by 4).length(1)
+kickA.audio("kick.wav").chop(1)
+kickA.output(verb611e6, thru: true).effect([Gain(db: -12)])
+kickA.play(1, 1, 1, 1)
+
+var kickB = init global.seq
+kickB.beat(4 by 4).length(1)
+kickB.audio("kick.wav").chop(1)
+kickB.effect([Gain(db: -12)]).output(verb611e6, thru: true)
+kickB.play(1, 1, 1, 1)
+
+LOOP(kickA)

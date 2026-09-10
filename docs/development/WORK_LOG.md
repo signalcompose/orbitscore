@@ -17,6 +17,43 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(e2e): add the three O-surface E2E the freeze line requires (#611) (Sep 10, 2026)
+
+凍結線の収束条件「O-surface E2E-2〜7 + E2E-10 が緑」の未達部分。B2 本体は時間制約で
+この 3 本を落としていた。
+
+| # | 何を固定するか | 判定式 |
+|---|---|---|
+| **E2E-6** | **位置が意味を持つこと**。`output(verb, thru: true)` を `effect([Gain(db: -12)])` の**前に**書くか**後に**書くかで混合が変わる | `g = 10^(-12/20)` として `total_A / total_B = (1 + g) / (2g)` ≈ 2.49。許容 `relativeDelta <= 0.12` |
+| **E2E-7** | **再 publish の seed**。`gain(-40)` で鳴らしている最中に `gain(0)` へ切り替えてもクリックが出ない | 切替窓（±50 ms）の `max\|x[n]−x[n−1]\|` <= 定常窓の同 × 4 |
+| **E2E-10** | daemon を `SIGKILL` しても音が戻り、**台数が 1 に収まる** | `relativeDelta(after, before) <= 0.05` かつ respawn 後の daemon PID が 1 個 |
+
+**E2E-6 がなぜ `(1+g)/(2g)` か**（テストにも導出を書いた）: A は `output(verb, thru:true)` が
+先なので **verb へ分岐した後に** Gain が掛かり、dry 側だけが減衰する → `total = g + 1`。
+B は Gain が先なので**両方に**掛かる → `total = 2g`。これは評価フレームがあって初めて成立する
+（選択範囲全体が 1 つのバッチになり、行の並び順が信号順になる）。
+
+**E2E-7 が raw PCM を読む理由**: -40 dB → 0 dB の跳びは 1 サンプルの不連続なので、
+20 ms の RMS / peak 窓では解像できない。`readCaptureForAnalysis` の float32 を直接読み、
+**信号から切替点を特定する**（peak 0.01 の -40 dB は閾値 0.1 を跨がないので、envelope crossing が
+そのまま `gain(0)` のランプ位置になる）。MCP 往復の壁時計に依存しない。
+
+**E2E-10 の判断**: `expectNoNewErrors` を**呼ばない**。`SIGKILL` は意図的な fault injection で、
+daemon の死そのものが ERROR に分類されるログを出す（既存の D-2 / D-3 も同じ扱い）。
+`runScore()` は毎回 engine を止め直すため使えず、E2E-K3 と同じ手動 open/select/run で
+1 セッションに収めた。capture は daemon 側のタップなので respawn で作り直される —
+**before の RMS は kill の前に読み切る**（設計 §8.1 の注記どおり、1 本の `CaptureWindows` に
+しない）。
+
+🔴 **main が直した点**: 台数の待ちと判定が**同語反復**になっていた。`waitUntil` が
+`currentPids.length === 1` を待ち、その後に `toHaveLength(1)` を assert していたので、
+2 台で落ち着いた場合は waitUntil の timeout になり「respawn しなかった」という**誤った診断**が
+出る。待つ条件を `>= 1` に緩め、**台数が 1 であることは assert 側で見る**ようにした。
+
+**検算**（main が sandbox 外で実行）: `npm test` **2362 passed / 67 skipped / 2429**
+（skip が 64 → 67 = 新規 3 本）・`lint` 緑・`typecheck:e2e` 緑・引用 1034 件 / 0 失敗・
+gated env 未設定で spec の 39 件すべて skip。
+
 ### test(e2e): follow the dB send unit in the #643 E2E-4 golden (#611) (Sep 10, 2026)
 
 **main が実機で回して見つけた**（委譲先の緑は実機の緑ではない）。束 B2 の実機 gated:

@@ -1,0 +1,29 @@
+// #611 E2E-7: republish seed — gain(-40) -> gain(0) mid-playback must ramp, not click.
+//
+// `tone` needs a bus (`drums611e7`) so gain() becomes a LineOp::Gain (design 611 §5.2: a
+// bus-backed sequence's fixed gain/pan move to the line, not the event side). Re-evaluating
+// `tone.gain(0)` while it is still sounding replaces the bus line program — design 611 §4.3's
+// "seed" is what keeps `LineProgram.current_gain` continuous across that replace instead of
+// jumping to a fresh default (the failure mode §4.3 names: "目標が 1.0 なので ramp が存在せず
+// 1 サンプルで跳ぶ").
+//
+// RUN(), not LOOP(): RUN() is unaffected by bar-boundary quantization (core spec:
+// "影響しない: RUN()（常に即時）"), so the test can perturb the gain after a short fixed sleep
+// instead of waiting out an uncertain quantization window.
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.start()
+
+var mix = init global.mixer
+var drums611e7 = mix.sum
+
+var tone = init global.seq
+tone.beat(4 by 4).length(1)
+tone.audio("sine_440.wav").chop(1)
+tone.gain(-40).output(drums611e7)
+tone.play(1)
+
+RUN(tone)
