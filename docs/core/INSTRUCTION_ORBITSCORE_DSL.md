@@ -1905,7 +1905,8 @@ kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要�
 - bus は起動時プールから確保（kind: insert/sum/aux）。宣言 = activation・失敗ロールバック・
   per-bus health・UNROUTABLE_EVENTS 観測は PH.2b の機構を共有
 
-> **v1 の現在地**: 🔴 **kind 制約は今日も生きている。** `SetBusRouting` は
+> **v1 の現在地**（2026-09-10・束 O-wire-b = PR [#824](https://github.com/signalcompose/orbitscore/pull/824) マージ後）:
+> 🔴 **利用者から見える kind 制約は今日も生きている。** `SetBusRouting` は
 > 「output は sum のみ・send 先は aux のみ」を検証して拒否する
 > （`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6956-6960`・send 側は同 `:6981-6985`。
 > コード側のコメントは本節 MX.4 を出典として引用している）。本節が「kind で制限しない」と
@@ -1918,6 +1919,10 @@ kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要�
 > `set_bus_line_accepts_a_forward_aux_destination`・同 `:3262-3284` が固定している）。
 > ただし **DSL からこの wire を送る経路はまだ無く**、`output()` / `send()` は `SetBusRouting`
 > のままなので、**ユーザーから見える制約は変わっていない**。切り替えは **PR-O4**。
+>
+> ⚠️ **`pan` と mono 宛先はまだ wire に無い**（設計 611 §4.1 の引用ブロック・owner 裁定 2026-09-10）。
+> §2.2 / §2.4b の裁定（`mix.output(3)` = L+R マージ・`pan` はライン要素）に **wire だけが**
+> **追従していなかった**ため、§4.1 を改訂して**実装は PR-O4 へ**割り当てた。
 
 ### MX.5 v1 制約（実装事実の開示）
 

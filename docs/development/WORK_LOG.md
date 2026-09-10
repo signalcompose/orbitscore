@@ -44,6 +44,47 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 `SetBusLine` の wire 契約を足す束。**DSL からは呼ばない**（送るのは PR-O4）ので、束の収束条件は
 O-wire と同じ「**`OUTPUT_LINE_GOLDENS` / `#611 O0-1〜4` が 1 つも動かないこと**」+ cargo 全緑 + 実機 gated 全件。
 
+### docs: follow the SetBusLine wire in the dev site and core spec (#823 追従) (Sep 8, 2026)
+
+**ブランチ**: `claude/docs-sync-pr823` → `611-line-wire-b`（docs-sync ルーチン・PR [#823](https://github.com/signalcompose/orbitscore/pull/823) 追従）
+
+マージ済み PR にドキュメントを追従させる定期ルーチンの成果物。**実装とテストは 1 行も触っていない。**
+
+#### 直したもの
+
+| 文書 | 何 |
+|---|---|
+| `sites/dev/signal-chain/mixer-audio-line.md`（+ `en/`） | `SetBusLine` の節を新設（wire 語彙・検証が session / `EngineWrap` の 2 層に分かれた理由・拒否 code の表・forward-only は残り kind 制約は無いこと・全か無かの publish・`master` も同じ publish に乗ったこと）。`verified-against` を `f6c9c37` へ |
+| `sites/dev/rust-engine/index.md`（+ `en/`） | `set_global_gain` の節の記述を訂正（下記）|
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.4 | 「v1 の現在地」の行番号が `engine_wrap.rs:5809-5813` 等で古かったので実測値へ。**wire 側の kind 制約は PR-O3b で外れたが、送信元がまだ無いので譜面から見える振る舞いは変わっていない**ことを追記 |
+
+#### 🔴 差分と食い違っていた記述を 1 件訂正した — `explicit_line`
+
+PR-O3b 本文・WORK_LOG・dev サイトの 3 箇所が「`explicit_line` は最初の `SetBusLine("master", …)` まで
+`false` なので既存譜面は従来経路をそのまま通る」と書いていた。だが差分を読むと、
+`MasterLine::line_program_installer` が返す closure は install 成功時に**無条件で**
+`explicit_line` を立てる（`rust/crates/orbit-audio-native/src/output.rs:790-798`）。
+そして `EngineWrap::set_global_gain` は `outproc-effect` build でそのハンドルを呼ぶ
+（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9284-9290`）。
+
+したがって **`SetGlobalGain`（DSL の `global.gain()`）を 1 回受けた時点で** master の render は
+`execute_master_line` 側（`output.rs:1719-1721`）へ移る。dev サイトの記述をコードに合わせて直し、
+**出力にどう出るかは実機で測っていない**ので `NOTE: unverified` を付けた。
+
+差分から読み取れる差は 2 つ（どちらも未測定）:
+
+- ランプ長の出どころ — `MasterLine::ramp_frames` は sample_rate から算出、`LineSlot::new` の既定は
+  **240 固定**（`output.rs:1196`）。`set_sample_rate` は insert bus の line にしか呼ばれない（同 `:2765`）
+- 再 publish のたびに `LineProgram::new` が gain セルを **1.0 から**始める（同 `:1005-1020`）
+
+**判断は仕様の側なので、追従作業では直していない。** #823 追従 PR の本文で質問として出している。
+
+#### 検証
+
+`npm run docs:build`（user / dev）と `npm run docs:check`（**1,026 citations verified / 0 failed**）。
+
+---
+
 ### feat(daemon): SetBusLine wire command and TS client (#611 PR-O3b) (Sep 9, 2026)
 
 **Issue**: #611 / **ブランチ**: `611-o3b-setbusline` → `611-line-wire-b`（小 PR）/
