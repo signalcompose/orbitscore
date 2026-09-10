@@ -259,12 +259,14 @@ MIDI シーケンスと MIDI 関連のグローバル設定です。詳しくは
 |---|---|---|
 | `key("C")` | MIDI シーケンスのトニック（根音）を設定する ⚠️ | `global.key("C")` |
 | `key("D3")` | 音名 + オクターブでトニックと基準レジスターを一括設定 ⚠️ | `global.key("D3")` |
-| `midiLatency(ms)` | MIDI 送信の固定オフセット（SC とのタイミング合わせ、デフォルト 0） | `global.midiLatency(20)` |
+| `midiLatency(ms)` | MIDI 送信の固定オフセット（オーディオとのタイミング合わせ、デフォルト 0） | `global.midiLatency(20)` |
 | `quantize(val)` | LOOP 起動グリッド。`"bar"`(デフォルト) / `"beat"` / `"2bar"` / `"4bar"` / `"8bar"` / `"off"` | `global.quantize("bar")` |
-| `linkAudio()` | LinkAudio モードを有効化（全オーディオ seq を Live へストリーム、macOS + Live 12.4+） | `global.linkAudio()` |
-| `linkAudio(SR)` | SR（サンプルレート）を明示指定して LinkAudio を有効化 | `global.linkAudio(48000)` |
+| `linkAudio()` | LinkAudio モードを有効化（全オーディオ seq を Live へストリーム、macOS + Live 12.4+） 🔴 | `global.linkAudio()` |
+| `linkAudio(SR)` | SR（サンプルレート）を明示指定して LinkAudio を有効化 🔴 | `global.linkAudio(48000)` |
 
 > ⚠️ `global.key()` / `seq.root()` などの root/key 系インターフェースは post-2.0 で設計見直し予定。
+>
+> 🔴 **配布版では LinkAudio の音声送出が動きません**（2026-09-10 時点）。宣言は受理されますが音はハードウェア出力に出て、警告が 1 回出ます。詳細は [LinkAudio](../midi/link-audio.md) を参照してください。
 
 ### シーケンス — MIDI 宣言
 
@@ -335,9 +337,11 @@ MIDI シーケンスと MIDI 関連のグローバル設定です。詳しくは
 
 ### シーケンス — LinkAudio
 
+🔴 **配布版では LinkAudio の音声送出が動きません**（2026-09-10 時点）。下の表は送出が有効なビルドでの動作です。詳細は [LinkAudio](../midi/link-audio.md) を参照してください。
+
 | シグネチャ | 説明 | 例 |
 |---|---|---|
-| `output("name")` | LinkAudio チャンネル名を指定（`global.linkAudio()` 宣言時必須） | `kick.output("kick")` |
+| `output("name")` | LinkAudio チャンネル名を指定（`global.linkAudio()` 宣言時必須） 🔴 | `kick.output("kick")` |
 | `quantize(val)` | このシーケンスの LOOP 起動グリッドを個別設定 | `fill.quantize("off")` |
 
 ---

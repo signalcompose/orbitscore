@@ -5,13 +5,28 @@ description: global.linkAudio() と seq.output() を使って OrbitScore の音�
 
 # LinkAudio（Ableton Live への音声出力）
 
-OrbitScore 2.0.0 では、**LinkAudio** を使って音声を Ableton Live へ直接送ることができます。IAC 経由の MIDI と異なり、オーディオ信号をそのまま LAN 上でストリームします。
+**LinkAudio** は、音声を Ableton Live へ直接送るための仕組みです。IAC 経由の MIDI と異なり、オーディオ信号をそのまま LAN 上でストリームします。
+
+::: danger 配布版では音が Live に届きません（2026-09-10 時点）
+**配布されている OrbitScore（`.vsix`）では LinkAudio の音声送出が動きません。** `global.linkAudio()` と `seq.output()` は今までどおり書けますし、エラーにもなりませんが、**Live 側にチャンネルは現れません**。
+
+理由は 2 つあります。
+
+- 音声送出を担っていた **OrbitLinkAudio.scx**（SuperCollider 用のプラグイン）は、SuperCollider 経路ごと [#502](https://github.com/signalcompose/orbitscore/issues/502)（2026-09-10）で削除されました
+- 置き換えとなる Rust 側の送出機能（`orbit-link-audio`）は、配布ビルドに**含まれていません**。有効化すると Ableton Link のライセンス（GPL-2.0-or-later）が配布物に入るため、有効にするかどうかがまだ決まっていません
+
+⚠️ **そのとき音がどうなるかは、まだ確定していません。** 仕様（DSL 仕様 §8.1）は「ハードウェア出力へフォールバックし、警告が 1 回だけ出る」と書いていますが、2026-09-04 の実機測定では**音が出ず、警告も出ませんでした**（`tests/e2e/orbitstudio-mcp-gated.spec.ts:5113-5119` に記録）。**どちらが正しいかが決まるまで、LinkAudio を前提にした演奏はしないでください。**
+
+`global.tempo()` を Link の相手に伝える機能も同じ理由で無効です。
+
+このページの以下の説明は、**送出機能が有効なビルドでの動作**として読んでください。仕様の現在地は [DSL 仕様 §8.1](https://github.com/signalcompose/orbitscore/blob/main/docs/core/INSTRUCTION_ORBITSCORE_DSL.md) に記録されています。
+:::
 
 ## 前提条件
 
 - **macOS** のみ対応
 - **Ableton Live 12.4 以降**が起動していること
-- **OrbitLinkAudio.scx** プラグインがインストール済みであること
+- **LinkAudio の音声送出が有効なビルド**であること（上の警告を参照。配布版は無効です）
 - Live のセッション SR を OrbitScore の設定に合わせること（既定: 48000 Hz）
 
 ---
@@ -65,7 +80,7 @@ snare.audio("snare.wav").output("snare")   // Live で "snare" として受信
 
 ### 同名チャンネルへの合成
 
-複数のシーケンスが同じチャンネル名を使うと、プラグイン内で**加算合成（サミング）**されます。
+複数のシーケンスが同じチャンネル名を使うと、送出側で**加算合成（サミング）**されます。
 
 ```text
 global.linkAudio()
@@ -114,6 +129,10 @@ OrbitScore 2.0.0 では **OrbitScore が Link テンポリーダー**として�
 
 実際の演奏では、OrbitScore 側でテンポを管理し、Live をフォロワーとして使う運用になります。
 
+::: warning テンポの push も配布版では無効です
+テンポを Link の相手へ送る機能は、音声送出と**同じ仕組み**の上に載っています。そのため配布版では音声と同様に無効で、警告が 1 回出るだけになります（ページ冒頭の警告を参照）。
+:::
+
 ---
 
 ## MIDI と LinkAudio の共存
@@ -143,9 +162,13 @@ LOOP(piano, kick)
 
 ---
 
-## OrbitLinkAudio.scx プラグインがない場合
+## 音声送出が使えないビルドの場合
 
-プラグインが読み込まれていない状態で `global.linkAudio()` を宣言すると、最初のディスパッチ（再生）時にハードウェア出力にフォールバックし、警告が表示されます。
+仕様（DSL 仕様 §8.1.3）では、送出機能が使えない状態で `global.linkAudio()` を宣言すると、**最初のディスパッチ（再生）時**にハードウェア出力へフォールバックし、警告が **1 回だけ**出ることになっています。`global.linkAudio()` を書いた時点では何も起きません。
+
+警告が 1 回だけなのは意図的です。発音のたびに同じ理由の警告が積み上がらないよう、警告を出すのは**チャンネルを登録する 1 箇所だけ**と決められています。
+
+⚠️ ただし、**この記述と実機の測定が食い違っています**。2026-09-04 の実機では音が出ず（capture RMS = 0）、警告も出ませんでした（`tests/e2e/orbitstudio-mcp-gated.spec.ts:5113-5119`）。ページ冒頭の警告も参照してください。
 
 ---
 
