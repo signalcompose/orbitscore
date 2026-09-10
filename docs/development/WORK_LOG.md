@@ -17,6 +17,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### chore(build): remove the bundled scsynth, its GPL plugin, and the packaging steps (#502) (Sep 10, 2026)
+
+owner 裁定（#827 / #502）に従い、拡張の出荷物から bundled scsynth と GPL の
+`OrbitLinkAudio.scx` を外した。現行 release workflow は `v*` タグを契機に Marketplace / Open VSX
+へ publish するため、GPL バイナリを含む `.vsix` が stable タグから配布される前に同梱経路を閉じる必要があった。
+
+**削除したもの**: `packages/sc-link-audio/` 全体とその2 submodule 定義、scsynth の LICENSE / NOTICE、
+bundle 抽出・検証・OSC boot-timeout patch script。root / extension の build は engine の SynthDef を
+コピーせず、engine 自身の `sync-dist.js` にあった同じコピー経路も閉じた。`.vscodeignore` も
+scsynth / SynthDef / legal の keep 指定を持たない。PR-SC3b まで source に
+残る SC backend の生成済み JS と JS OSC runtime も `.vsix` から除外した。当該 runtime は未削除
+source / test の clean build に限って必要なため devDependency へ隔離し、出荷 runtime dependencies
+からは削除した（source と test ごとの完全削除は PR-SC3b）。`sync-dist.js` は extension 向けコピー後に
+生成済み SC backend を除き、旧 root-copy / bundle が残した ignored artifact も掃除する。
+
+**release gate**: SuperCollider の install / extract / pre-package verify を削除した。post-package gate は
+Rust daemon、OOP child、plugin scanner、engine runtime dependencies、標準 CLAP の検証も担うため残し、
+scsynth の `verify-bundle.sh` 呼び出しだけを除いた。
+
+
+
+---
+
 ### docs(sites): follow PR #833 — LinkAudio egress is not in shipped builds (#502) (Sep 10, 2026)
 
 **追従元**: PR [#833](https://github.com/signalcompose/orbitscore/pull/833)（merge commit `58b8c1c`・base `502-sc-removal`）/ **ブランチ**: `claude/docs-sync-pr833`
