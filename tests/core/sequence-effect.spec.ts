@@ -48,6 +48,10 @@ function harness(loadPlugin = vi.fn().mockResolvedValue({})) {
   audio.loadPlugin = loadPlugin
   const setSourceRouting = vi.fn().mockResolvedValue(undefined)
   audio.setSourceRouting = setSourceRouting
+  // #611 §5.1: effect() now also pushes a `SetBusLine` (records the rack's position in the
+  // chain for E2E-6-style position sensitivity), so this harness needs a backend for it too.
+  const setBusLine = vi.fn().mockResolvedValue(undefined)
+  audio.setBusLine = setBusLine
   const replacePlugin = vi.fn().mockResolvedValue(REPLACE_RESULT)
   audio.replacePlugin = replacePlugin
   const applyEffectChain = installEffectChainMock(audio)
@@ -74,6 +78,7 @@ function harness(loadPlugin = vi.fn().mockResolvedValue({})) {
     replacePlugin,
     applyEffectChain,
     setSourceRouting,
+    setBusLine,
     directory,
   }
 }

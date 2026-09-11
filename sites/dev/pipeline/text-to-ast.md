@@ -377,7 +377,7 @@ export type Statement =
 面白いのは、`<識別子>.メソッド(引数)` という形の文を解析したとき、**パーサーは常に `type: 'sequence'` を返す** という設計です。
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:610-618
+// packages/engine/src/parser/parse-statement.ts:615-623
     // Note: We cannot determine if target is global or sequence at parse time
     // since variable names are arbitrary. Use 'sequence' type and let the interpreter
     // determine the actual type by checking state.globals and state.sequences.
@@ -394,7 +394,7 @@ export type Statement =
 同じ理由で、statement には「括弧付きで呼ばれたか」を表す `invocation` が付きます。`seq.drums` (ミキサーへの出力ルーティング) と `seq.TALReverb4()` (プラグイン呼び出し) を、パーサーは形の違いとして記録するだけで、意味の解決は interpreter に委ねます。
 
 ```typescript
-// packages/engine/src/parser/types.ts:261-268
+// packages/engine/src/parser/types.ts:262-269
 export type SequenceStatement = {
   type: 'sequence'
   target: string

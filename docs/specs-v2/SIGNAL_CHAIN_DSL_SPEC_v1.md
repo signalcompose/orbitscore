@@ -150,11 +150,16 @@ Status: 正本（specs-v2）/ 2026-07-18 制定 / 受け皿 issue: \#506 / 決�
 
 </div>
 
-> **v1 の現在地（規範1 の単位・規範3 のタップ位置）**: 今日の実装は **線形 `amount`・post-insert 固定**で、チェーン内の send の位置は無視される。daemon の routing state（`bus_sends`）にタップ点の表現がないため。
+> ✅ **実装済み**（束 O-surface・PR-B2・2026-09-10）: 単位は **dB**、タップ位置は
+> **チェーン上の位置がそのまま意味を持つ**（`AudioLine` が `send`/`output` を同じ要素種として
+> 位置ごと保持する。core spec MX.2/MX.3）。受け入れ基準
+> 「`.Effect().verb(-12)` と `.verb(-12).Effect()` の aux 出力が `10^(-12/20)` 倍違うこと」は
+> doc 611 E2E-6 で検証する（実機は main が回す）。
 >
-> **実装時期**: dB 化とタップ位置の反映は **#611 の PR-O3（wire: `SetBusLine`）→ PR-O4（DSL）**で同時に入る（設計正本 [`611-output-line-design.md`](../design/611-output-line-design.md)）。受け入れ基準は「`.Effect().verb(-12)` と `.verb(-12).Effect()` の aux 出力が `10^(-12/20)` 倍違うこと」。
->
-> 🔴 **移行時に静かに音が変わる**: `send("rev", 0.3)` は線形 0.3 から **+0.3 dB**（ほぼ素通し）へ読み替えられる。切り替えの前に PR-O0 の golden で差分を式として固定する（core spec MX.3）。
+> 🔴 **既存譜面の音は移行時に静かに変わった**: `send("rev", 0.3)` は旧線形 0.3（30%）ではなく
+> **+0.3 dB**（`10 ** (0.3/20) ≈ 1.0351` 倍・ほぼ素通し）へ読み替えられる。`amount:` という
+> 名前付き引数は改名されたとして loud に throw する。golden `send`
+> （`tests/e2e/output-line-expectations.ts`）は `dbTotalOverDry` へ切り替え済み。
 
 ## SC.5 ライブコーディング意味論
 

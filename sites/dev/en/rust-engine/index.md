@@ -356,7 +356,7 @@ stay silent (the registration path is treated as the single authority). The spec
 The gated E2E suite records the opposite measurement.
 
 ```ts
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:5252-5258
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5388-5394
   // **A comment is not evidence of implementation behavior** — main's real run found
   // capture RMS = 0 for `d645Live` and NO `LINK_AUDIO_UNAVAILABLE`/gap-warning marker in
   // get_log at all, meaning the assumed fallback does not actually happen (or does not

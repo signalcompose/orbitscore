@@ -1,0 +1,30 @@
+// #611 E2E-3: send(aux, db) is exactly output(aux, thru: true, db) — same magnitude either way.
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.start()
+
+var mix = init global.mixer
+var vA = mix.aux
+var vB = mix.aux
+
+var dry = init global.seq
+dry.beat(4 by 4).length(1)
+dry.audio("kick.wav").chop(1)
+dry.play(1, 1, 1, 1)
+
+var kickA = init global.seq
+kickA.beat(4 by 4).length(1)
+kickA.audio("kick.wav").chop(1)
+kickA.send(vA, -12)
+kickA.play(1, 1, 1, 1)
+
+var kickB = init global.seq
+kickB.beat(4 by 4).length(1)
+kickB.audio("kick.wav").chop(1)
+kickB.output(vB, thru: true, db: -12)
+kickB.play(1, 1, 1, 1)
+
+LOOP(dry)

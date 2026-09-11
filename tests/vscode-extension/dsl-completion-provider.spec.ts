@@ -65,7 +65,8 @@ describe('補完 provider 本体 — メソッド候補 (#495)', () => {
   it('sum("x"). の後に bus のメソッドが出る', async () => {
     const src = `${SCORE}sum("strings").`
     const labels = await complete(src, 2, 15)
-    expect(labels.sort()).toEqual(['effect', 'ui'])
+    // #611 §5.4: output/send/gain/pan joined BUS_DSL_METHODS.
+    expect(labels.sort()).toEqual(['effect', 'gain', 'output', 'pan', 'send', 'ui'])
   })
 
   it('打ちかけの文字で絞り込む', async () => {

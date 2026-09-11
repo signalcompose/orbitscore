@@ -50,7 +50,7 @@ it opens all of them.
 The implementation lives in `Sequence.ui()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:710-730
+// packages/engine/src/core/sequence.ts:859-879
   async ui(catalogName?: string, open = true): Promise<this> {
     const name = this.stateManager.getName() || 'sequence'
     if (catalogName !== undefined && typeof catalogName !== 'string') {
@@ -80,7 +80,7 @@ form enumerates every matching catalog element in the registered chain and calls
 open for each one.
 
 ```typescript
-// packages/engine/src/core/global.ts:1129-1139
+// packages/engine/src/core/global.ts:1142-1152
   async openPluginUisByName(receiverId: string, requestedName: string): Promise<void> {
     if (typeof requestedName !== 'string') {
       throw new Error(
@@ -103,7 +103,7 @@ perfectly legitimate action would turn red every time (the host-side error PH.2c
 through `openPluginUiIdempotent`, which succeeds as a no-op when the UI is already open.
 
 ```typescript
-// packages/engine/src/core/global.ts:1166-1174
+// packages/engine/src/core/global.ts:1179-1187
   async openPluginUiIdempotent(
     receiverId: string,
     index: number,
@@ -257,7 +257,7 @@ is fixed as the save target** and is never re-resolved for later close / save.
 When sending to the daemon, a window title and a **window token** are attached.
 
 ```typescript
-// packages/engine/src/core/global.ts:1244-1250
+// packages/engine/src/core/global.ts:1257-1263
     try {
       await this.audioEngine.openPluginUi(
         resolved.daemonTarget,
@@ -293,7 +293,7 @@ of a token that is in use" loudly, so even a collision does not become a silent 
 On a successful open, TS records one entry in its session ledger. The key is the window token.
 
 ```typescript
-// packages/engine/src/core/global.ts:60-66
+// packages/engine/src/core/global.ts:65-71
 type PluginUiSession = {
   window: number
   receiverId: string
@@ -313,7 +313,7 @@ The TS → daemon wire simply adds three methods to the existing JSON request/re
 target vocabulary is the same `{role, bus?, instance?}` shape as `GetPluginState`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:642-655
+// packages/engine/src/audio/rust-engine/daemon-client.ts:632-645
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,
@@ -777,7 +777,7 @@ that landed in #474 P4b (2026-07-31); it creates no new save mechanism and merel
 existing save flow from the event.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:651-679
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:654-682
   private readonly onPluginUiClosed = (raw: unknown): void => {
     this.enqueuePluginUiEvent(async () => {
       const data = wireObject(raw, 'PluginUiClosed data')
@@ -837,7 +837,7 @@ TS separately waits for the `UI_CLOSED_DONE` event frame. Moreover, it registers
 the daemon side, so DONE can overtake the ack.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:881-895
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:885-899
     try {
       // Register the DONE waiter before issuing CLOSE_UI: the event pump and
       // command response use independent tasks, so DONE may race the ack.
@@ -862,7 +862,7 @@ and "save completed" is never falsely returned (main's mutation verification in 
 found this hole and added a test).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:329-330
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:330-331
 const PLUGIN_UI_OPEN_TIMEOUT_MS = 30_000
 const PLUGIN_UI_CLOSE_TIMEOUT_MS = 20_000
 ```
@@ -1094,7 +1094,7 @@ E2E-1 of #633 inserts the same plugin twice, opens two windows with `ui("name")`
 second one first**, and then closes the first.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2302-2324
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2435-2457
       // Close the SECOND insert first. Under the old single-slot pump the
       // second open never happened, so this close has nothing to settle.
       const closeSecond = await activeClient.call('close_plugin_ui', {

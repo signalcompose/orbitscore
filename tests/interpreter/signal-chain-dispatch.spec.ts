@@ -18,6 +18,20 @@ import {
 } from '../../packages/engine/src/signal-chain/runtime'
 import { RecordingScheduler } from '../audio/verify/recording-scheduler'
 
+const rack = { op: 'rack' }
+const masterOutput = (thru: boolean) => ({
+  op: 'output',
+  dest: { kind: 'master' },
+  thru,
+  gain: 1,
+})
+const busOutput = (name: string, thru: boolean, gain = 1) => ({
+  op: 'output',
+  dest: { kind: 'bus', name },
+  thru,
+  gain,
+})
+
 function makeState(global: Global) {
   return {
     globals: new Map([['global', global]]),
@@ -244,10 +258,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       )
       // And the node variable keeps the bare name usable: it resolves to the
       // kind the variable picked, not to an error.
-      const routing = vi.spyOn(global, 'setBusRouting').mockResolvedValue(undefined)
+      const routing = vi.spyOn(global, 'setBusLine').mockResolvedValue(undefined)
       await run('kick.drum', state)
       expect(routing).toHaveBeenCalledTimes(1)
-      expect(routing).toHaveBeenCalledWith('seq-bus-0', 'sum-bus-0', [])
+      expect(routing).toHaveBeenCalledWith('seq-bus-0', [rack, busOutput('sum-bus-0', false)])
     } finally {
       warn.mockRestore()
     }
@@ -269,10 +283,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       )
 
       await run('var mix = init global.mixer\nvar drums = mix.sum', state)
-      const routing = vi.spyOn(global, 'setBusRouting').mockResolvedValue(undefined)
+      const routing = vi.spyOn(global, 'setBusLine').mockResolvedValue(undefined)
       await run('kick.drums', state)
       expect(routing).toHaveBeenCalledTimes(1)
-      expect(routing).toHaveBeenCalledWith('seq-bus-0', 'sum-bus-0', [])
+      expect(routing).toHaveBeenCalledWith('seq-bus-0', [rack, busOutput('sum-bus-0', false)])
     } finally {
       warn.mockRestore()
     }
@@ -282,18 +296,75 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
     await run(
-      'var kick = init global.seq\nvar mix = init global.mixer\nvar master = mix.output(1, 2)\nvar drums = mix.sum\nvar verb = mix.aux',
+      'var kick = init global.seq\nvar mix = init global.mixer\nvar drums = mix.sum\nvar verb = mix.aux',
       state,
     )
-    const routing = vi.spyOn(global, 'setBusRouting').mockResolvedValue(undefined)
+    const routing = vi.spyOn(global, 'setBusLine').mockResolvedValue(undefined)
 
     await run('kick.verb(0.37).drums\nkick.master', state)
 
+    // #611 §2.3/§5.1: send() is always `output(dest, thru: true)` by definition (no longer an
+    // "auto-thru-when-sends-exist" position-independent formula) and 0.37 is now dB, not
+    // linear. `.verb(0.37)` inserts a THRU aux element; `.drums` then `.master` each replace
+    // the single trailing terminal in place (§5.1's terminal-replacement rule) rather than
+    // reordering the whole array around a fixed [output, sends...] shape.
+    const auxGain = 10 ** (0.37 / 20)
     expect(routing.mock.calls).toEqual([
-      ['seq-bus-0', undefined, [{ bus: 'aux-bus-0', gain: 0.37 }]],
-      ['seq-bus-0', 'sum-bus-0', [{ bus: 'aux-bus-0', gain: 0.37 }]],
-      ['seq-bus-0', 'master', [{ bus: 'aux-bus-0', gain: 0.37 }]],
+      ['seq-bus-0', [rack, busOutput('aux-bus-0', true, auxGain), masterOutput(false)]],
+      ['seq-bus-0', [rack, busOutput('aux-bus-0', true, auxGain), busOutput('sum-bus-0', false)]],
+      ['seq-bus-0', [rack, busOutput('aux-bus-0', true, auxGain), masterOutput(false)]],
     ])
+  })
+
+  // 🔴 「トラック」と「デバイス」は別の概念（owner 2026-09-11）。
+  //
+  //   kick ──┐
+  //   snare ─┼→ master トラック: [rack][gain][pan] → output → デバイス 1,2
+  //   hat  ──┘                    ↑ ここに合流する
+  //   pad  ─────────────────────────────────→ デバイス 3,4（トラックを経由しない）
+  //
+  // 以前は `mix.output(1, 2)` を master に読み替える特例があったが、それは master トラックの
+  // 出口がたまたま 1,2 であることと、デバイスの 1,2 を混同していた。
+  it('keeps mix.output(1, 2) a DEVICE — it does not become the master track', async () => {
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run(
+      'var kick = init global.seq\nvar mix = init global.mixer\nvar mainOut = mix.output(1, 2)',
+      state,
+    )
+    const routing = vi.spyOn(global, 'setBusLine').mockResolvedValue(undefined)
+
+    await run('kick.mainOut', state)
+
+    // デバイス宛て。master ラックも global.gain() も通らない経路。
+    expect(routing).toHaveBeenCalledWith('seq-bus-0', [
+      rack,
+      { op: 'output', dest: { kind: 'device', channels: [1, 2] }, thru: false, gain: 1 },
+    ])
+  })
+
+  it('resolves master to the master TRACK even when other mixer nodes are declared', async () => {
+    // 旧実装は「明示ノードが 1 つでもあれば master を解決しない」というガードを持っており、
+    // sum を 1 つ宣言した瞬間に `kick.master` が壊れた。master が予約語になった今、
+    // 宣言順に依存する理由は無い。
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await run('var kick = init global.seq\nvar mix = init global.mixer\nvar drums = mix.sum', state)
+    const routing = vi.spyOn(global, 'setBusLine').mockResolvedValue(undefined)
+
+    await run('kick.master', state)
+
+    expect(routing).toHaveBeenCalledWith('seq-bus-0', [rack, masterOutput(false)])
+  })
+
+  it('rejects declaring a mixer node named master', async () => {
+    // 同じ名前が「トラック」と「ユーザーが宣言した別物」の両方を意味すると、`kick.master` が
+    // どちらを指すかが宣言順で決まってしまう。`global.sum("master")` は既に同じ理由で拒否済み。
+    const global = new Global(new RecordingScheduler())
+    const state = makeState(global)
+    await expect(
+      run('var mix = init global.mixer\nvar master = mix.output(1, 2)', state),
+    ).rejects.toThrow(/"master" names the master track/)
   })
 
   it('rejects routing to a declared non-master output instead of silently rerouting to master', async () => {
@@ -308,14 +379,20 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'var kick = init global.seq\nvar mix = init global.mixer\nvar hp1 = mix.output(3, 4)',
       state,
     )
-    const routing = vi.spyOn(global, 'setBusRouting').mockResolvedValue(undefined)
+    const routing = vi.spyOn(global, 'setBusLine').mockResolvedValue(undefined)
 
-    await expect(run('kick.hp1', state)).rejects.toThrow(/hp1.*3.*4.*#484 D4/s)
-    expect(routing).not.toHaveBeenCalled()
+    // #611 §2.2/§3.8: the (1, 2)-only restriction is lifted — `hp1` (channels 3, 4) now
+    // resolves structurally to a device destination instead of throwing.
+    await run('kick.hp1', state)
+    expect(routing).toHaveBeenCalledWith('seq-bus-0', [
+      rack,
+      { op: 'output', dest: { kind: 'device', channels: [3, 4] }, thru: false, gain: 1 },
+    ])
 
-    // The master endpoint (channels 1,2) is the only one allowed in S3.
-    await run('var master = mix.output(1, 2)\nkick.master', state)
-    expect(routing).toHaveBeenCalledWith('seq-bus-0', 'master', [])
+    // The (1, 2) node keeps resolving to the "master" reserved word (bit-identical to
+    // today's compat routing) instead of becoming a distinct device destination.
+    await run('kick.master', state)
+    expect(routing).toHaveBeenCalledWith('seq-bus-0', [rack, masterOutput(false)])
   })
 
   it('requires parentheses for a bare Global DSL method, but keeps transport bare', async () => {
@@ -366,18 +443,23 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'var kick = init global.seq\nvar mix = init global.mixer\nvar odd = mix.output(1, 3)',
       state,
     )
-    const routing = vi.spyOn(global, 'setBusRouting').mockResolvedValue(undefined)
+    const routing = vi.spyOn(global, 'setBusLine').mockResolvedValue(undefined)
 
-    await expect(run('kick.odd', state)).rejects.toThrow(/odd.*1.*3.*#484 D4/s)
-    expect(routing).not.toHaveBeenCalled()
+    // #611 §2.2/§3.8: `odd` (channels 1, 3 — shares master's left channel without BEING
+    // master) now resolves to a device destination instead of throwing.
+    await run('kick.odd', state)
+    expect(routing).toHaveBeenCalledWith('seq-bus-0', [
+      rack,
+      { op: 'output', dest: { kind: 'device', channels: [1, 3] }, thru: false, gain: 1 },
+    ])
   })
 
   it('supports named send arguments and routing from a mixer bus receiver', async () => {
     const scheduler = new RecordingScheduler() as RecordingScheduler & {
-      setBusRouting: ReturnType<typeof vi.fn>
+      setBusLine: ReturnType<typeof vi.fn>
       applyEffectChain: ReturnType<typeof vi.fn>
     }
-    scheduler.setBusRouting = vi.fn().mockResolvedValue(undefined)
+    scheduler.setBusLine = vi.fn().mockResolvedValue(undefined)
     scheduler.applyEffectChain = vi.fn().mockResolvedValue({
       status: 'applied',
       childPid: 1,
@@ -386,15 +468,47 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     const global = new Global(scheduler)
     const state = makeState(global)
     await run(
-      'var kick = init global.seq\nvar mix = init global.mixer\nvar master = mix.output(1, 2)\nvar drums = mix.sum\nvar verb = mix.aux',
+      'var kick = init global.seq\nvar mix = init global.mixer\nvar drums = mix.sum\nvar verb = mix.aux',
       state,
     )
-    await run('kick.verb(amount: 0.8, enabled: false)\nverb.effect("TAL Reverb 4").master', state)
+    await run('kick.verb(db: 0.8, enabled: false)\nverb.effect("TAL Reverb 4").master', state)
 
-    expect(scheduler.setBusRouting).toHaveBeenNthCalledWith(1, 'seq-bus-0', undefined, [
-      { bus: 'aux-bus-0', gain: 0 },
+    // #611 §2.3: send() is always thru: true by definition; disabled means gain 0 (not a
+    // position-dependent thru flag). The implicit master terminal is appended after it.
+    expect(scheduler.setBusLine).toHaveBeenNthCalledWith(1, 'seq-bus-0', [
+      rack,
+      busOutput('aux-bus-0', true, 0),
+      masterOutput(false),
     ])
-    expect(scheduler.setBusRouting).toHaveBeenNthCalledWith(2, 'aux-bus-0', 'master', [])
+    expect(scheduler.setBusLine).toHaveBeenNthCalledWith(2, 'aux-bus-0', [
+      rack,
+      masterOutput(false),
+    ])
+  })
+
+  it('routes direct send(db:) and rejects duplicate send levels or numeric output options', async () => {
+    const scheduler = new RecordingScheduler() as RecordingScheduler & {
+      setBusLine: ReturnType<typeof vi.fn>
+    }
+    scheduler.setBusLine = vi.fn().mockResolvedValue(undefined)
+    const global = new Global(scheduler)
+    const state = makeState(global)
+    await run('var kick = init global.seq\nvar mix = init global.mixer\nvar verb = mix.aux', state)
+
+    await run('kick.send(verb, db: -12)', state)
+    expect(scheduler.setBusLine).toHaveBeenCalledWith('seq-bus-0', [
+      rack,
+      busOutput('aux-bus-0', true, 10 ** (-12 / 20)),
+      masterOutput(false),
+    ])
+
+    await expect(run('kick.send(verb, -12, db: -6)', state)).rejects.toThrow(
+      /Remove either the second positional argument or the named db:/,
+    )
+    await expect(run('kick.output(verb, -12)', state)).rejects.toThrow(
+      /output\(dest, \{ db: -12 \}\).*send\(dest, -12\)/,
+    )
+    expect(scheduler.setBusLine).toHaveBeenCalledTimes(1)
   })
 
   it('keeps bare DSL methods on callMethod while rejecting bare plugin and kind mismatches', async () => {
@@ -435,18 +549,15 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     // `verb.master` (verb itself being the statement target, a declared mixer
     // node) was wrongly rejected as "an output, not a send."
     const scheduler = new RecordingScheduler() as RecordingScheduler & {
-      setBusRouting: ReturnType<typeof vi.fn>
+      setBusLine: ReturnType<typeof vi.fn>
     }
-    scheduler.setBusRouting = vi.fn().mockResolvedValue(undefined)
+    scheduler.setBusLine = vi.fn().mockResolvedValue(undefined)
     const global = new Global(scheduler)
     const state = makeState(global)
-    await run(
-      'var mix = init global.mixer\nvar master = mix.output(1, 2)\nvar verb = mix.aux',
-      state,
-    )
+    await run('var mix = init global.mixer\nvar verb = mix.aux', state)
 
     await run('verb.master', state)
-    expect(scheduler.setBusRouting).toHaveBeenCalledWith('aux-bus-0', 'master', [])
+    expect(scheduler.setBusLine).toHaveBeenCalledWith('aux-bus-0', [rack, masterOutput(false)])
 
     // The called form must still be rejected: master is an output, not a send.
     await expect(run('verb.master()', state)).rejects.toThrow(
@@ -461,10 +572,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     state.globals.set('g1', g1)
     state.globals.set('g2', g2)
     await run('var kick = init g1.seq\ng1.sum("drums")\ng2.sum("other")', state)
-    const routing = vi.spyOn(g1, 'setBusRouting').mockResolvedValue(undefined)
+    const routing = vi.spyOn(g1, 'setBusLine').mockResolvedValue(undefined)
 
     await run('kick.drums', state)
-    expect(routing).toHaveBeenCalledWith('seq-bus-0', 'sum-bus-0', [])
+    expect(routing).toHaveBeenCalledWith('seq-bus-0', [rack, busOutput('sum-bus-0', false)])
     await expect(run('kick.other', state)).rejects.toThrow(/Unknown chain method "other"/)
   })
 
@@ -475,12 +586,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
     await run('var kick = init global.seq\nvar mix = init global.mixer\nvar verb = mix.aux', state)
-    const routing = vi.spyOn(global, 'setBusRouting').mockResolvedValue(undefined)
+    const routing = vi.spyOn(global, 'setBusLine').mockResolvedValue(undefined)
 
-    await expect(run('kick.verb()', state)).rejects.toThrow(/requires a numeric amount/)
-    await expect(run('kick.verb(enabled: false)', state)).rejects.toThrow(
-      /requires a numeric amount/,
-    )
+    await expect(run('kick.verb()', state)).rejects.toThrow(/requires a numeric gain/)
+    await expect(run('kick.verb(enabled: false)', state)).rejects.toThrow(/requires a numeric gain/)
     expect(routing).not.toHaveBeenCalled()
 
     await run('kick.verb(0.3)', state)
@@ -495,16 +604,17 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
     await run('var kick = init global.seq\nvar mix = init global.mixer\nvar verb = mix.aux', state)
-    const routing = vi.spyOn(global, 'setBusRouting').mockResolvedValue(undefined)
+    const routing = vi.spyOn(global, 'setBusLine').mockResolvedValue(undefined)
 
-    await expect(run('kick.verb(0.3, amount: 0.9)', state)).rejects.toThrow(/duplicate.*amount/i)
-    await expect(run('kick.verb(amount: 0.9, 0.3)', state)).rejects.toThrow(/duplicate.*amount/i)
-    await expect(run('kick.verb(amount: 0.3, amount: 0.5)', state)).rejects.toThrow(
-      /duplicate.*amount/i,
-    )
+    await expect(run('kick.verb(0.3, db: 0.9)', state)).rejects.toThrow(/duplicate.*gain/i)
+    await expect(run('kick.verb(db: 0.9, 0.3)', state)).rejects.toThrow(/duplicate.*gain/i)
+    await expect(run('kick.verb(db: 0.3, db: 0.5)', state)).rejects.toThrow(/duplicate.*gain/i)
     await expect(run('kick.verb(0.3, enabled: false, enabled: true)', state)).rejects.toThrow(
       /duplicate.*enabled/i,
     )
+    // #611 §2.3: amount: was renamed to db: — a script still using it fails loudly instead of
+    // having that value silently misread as dB.
+    await expect(run('kick.verb(amount: 0.3)', state)).rejects.toThrow(/no longer accepts amount:/)
     expect(routing).not.toHaveBeenCalled()
   })
 
@@ -516,13 +626,13 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
     await run('var kick = init global.seq\nglobal.sum("drums")', state)
-    const routing = vi.spyOn(global, 'setBusRouting').mockResolvedValue(undefined)
+    const routing = vi.spyOn(global, 'setBusLine').mockResolvedValue(undefined)
 
     await run('kick.drums', state)
     await run('kick.master', state)
     expect(routing.mock.calls).toEqual([
-      ['seq-bus-0', 'sum-bus-0', []],
-      ['seq-bus-0', 'master', []],
+      ['seq-bus-0', [rack, busOutput('sum-bus-0', false)]],
+      ['seq-bus-0', [rack, masterOutput(false)]],
     ])
   })
 
@@ -544,7 +654,12 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
     await run('var mix = init global.mixer\nvar bus = mix.aux', state)
-    await expect(run('bus.gain(0.5)', state)).rejects.toThrow(/S2.*S3.*#517/)
+    // #611 §5.4: gain() moved from staged (#517) to real BUS_DSL_METHODS vocabulary — the
+    // branded-bus guard still runs (proven by reaching gain()'s OWN error, not a generic
+    // "unknown method" or a bus-gate rejection) but there is no Rust-engine backend here.
+    await expect(run('bus.gain(0.5)', state)).rejects.toThrow(
+      /Mixer bus routing requires the Rust engine backend/,
+    )
   })
 
   it('keeps the branded bus guard when a later chain hop first returns a bus', async () => {
@@ -552,8 +667,10 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     const state = makeState(global)
     const tempo = vi.spyOn(global, 'tempo')
 
+    // #611 §5.4: same reasoning as the test above — gain() is real vocabulary now, so the
+    // guard is proven by reaching gain()'s own no-backend error, not a staged one.
     await expect(run('global.tempo(120).aux("verb").gain(0.5)', state)).rejects.toThrow(
-      /S2.*S3.*#517/,
+      /Mixer bus routing requires the Rust engine backend/,
     )
     expect(tempo).toHaveBeenCalledWith(120)
   })
@@ -641,8 +758,18 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'getGlobal',
       'routeOutputFromDsl',
       'routeSendFromDsl',
-      'pushBusRouting',
-      'syncBusRouting',
+      'pushBusLine',
+      'syncBusLine',
+      // #611 §3.3/§5.2: output()/send()/gain()/pan() private plumbing — resolves string
+      // destinations (steps 2-4 of doc 611 §3.3), writes one line element + syncs, and
+      // carries a fixed gain/pan over from the event side the moment a bus first appears.
+      // Not DSL vocabulary (called only from output()/send()/gain()/pan()/effect()).
+      'resolveLineDest',
+      'applyOutputElement',
+      'stageOutputElement',
+      'ensureInsertBusForInstrument',
+      'adoptLineOnFirstBus',
+      'upsertLine',
       'isMidi',
       'isInstrument',
       // #562: index 0 が組み込みオーディオソースに占有されているかの判定。
@@ -766,6 +893,7 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
       'resolveMixerBus',
       'ownsMixerBus',
       'setBusRouting',
+      'setBusLine',
       // Transport timing and host integration.
       'pushLinkTempoIfLeading',
       'getQuantize',
