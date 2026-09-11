@@ -812,7 +812,7 @@ The onset threshold is the larger of "median window RMS × 4" and the absolute f
 The last assertion of the first test uses these onset gaps as evidence of tempo.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2052-2066
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2051-2065
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -1294,7 +1294,7 @@ function shouldFilterLine(line: string): boolean {
 The playhead reads from the raw stream, and `[STEP]` never reaches the output channel (= `get_log`). This means **the only way to observe the playhead from MCP is debug mode**. In debug mode `transcribeLog` appends `output` as-is, so `[STEP]` lines appear in `get_log`. The `#654` E2E takes exactly that shape.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2720-2730
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2719-2729
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1309,13 +1309,13 @@ The playhead reads from the raw stream, and `[STEP]` never reaches the output ch
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2733-2734
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2732-2733
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2790-2792
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2789-2791
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])
