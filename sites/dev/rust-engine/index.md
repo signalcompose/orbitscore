@@ -326,7 +326,7 @@ link-audio = ["dep:orbit-link-audio", "dep:rtrb"]
     && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument \
 ```
 
-`.github/workflows/release.yml:88` も同じ feature 集合で、`link-audio` はどちらにも入っていません。
+`.github/workflows/release.yml:90` も同じ feature 集合で、`link-audio` はどちらにも入っていません。
 つまり **`.vsix` に同梱される daemon には egress が存在しません**。
 
 なぜ有効化しないかは、feature のコメントがそのまま理由になっています。有効化すると
