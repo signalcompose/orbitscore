@@ -1,16 +1,16 @@
 ---
 title: "IV-1. VS Code Extension Architecture"
 chapter-id: "IV-1"
-verified-against: 66efda5
-verified-at: "2026-09-08"
+verified-against: 56c34c3
+verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730), the `capabilities.untrustedWorkspaces` declaration) on 2026-09-04, to the deferral of #385 layer 2 (PR [#750](https://github.com/signalcompose/orbitscore/pull/750)) on 2026-09-06, to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing) the same day, and to #773 (PR [#811](https://github.com/signalcompose/orbitscore/pull/811), line-framing the stdout bridge envelopes) on 2026-09-08. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730), the `capabilities.untrustedWorkspaces` declaration) on 2026-09-04, to the deferral of #385 layer 2 (PR [#750](https://github.com/signalcompose/orbitscore/pull/750)) on 2026-09-06, to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing) the same day, to #773 (PR [#811](https://github.com/signalcompose/orbitscore/pull/811), line-framing the stdout bridge envelopes) on 2026-09-08, and to #843 (PR [#871](https://github.com/signalcompose/orbitscore/pull/871), the bump to extension 3.0.0 — **the package-version wording only**) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-1. VS Code Extension Architecture
 
-How does OrbitScore's VS Code extension (`packages/vscode-extension`, package version 2.1.0) start up, and how is it connected to the engine? This chapter reads its internal structure in order, from the extension's activation to the communication with the engine process. What changed most since the first draft in 2026-05 is "the engine-kind branch," "the extraction of the engine lifecycle into a vscode-free module," and "the growth of peripheral features such as the MCP server, the playhead, and the Engine view"; a list of the drift is collected at the end.
+How does OrbitScore's VS Code extension (`packages/vscode-extension`, package version 3.0.0) start up, and how is it connected to the engine? This chapter reads its internal structure in order, from the extension's activation to the communication with the engine process. What changed most since the first draft in 2026-05 is "the engine-kind branch," "the extraction of the engine lifecycle into a vscode-free module," and "the growth of peripheral features such as the MCP server, the playhead, and the Engine view"; a list of the drift is collected at the end.
 
 ---
 
@@ -970,7 +970,7 @@ The first draft's "eight commands," "3 (+2) kinds of diagnostics," and "`startEn
 
 ## Sources
 
-- `packages/vscode-extension/package.json` — version 2.1.0, `activationEvents`, `contributes.commands` (17), `viewsContainers` / `views` / `viewsWelcome`, `walkthroughs`, `menus`, `keybindings`, `configuration` (`orbitscore.engine` / `mcpServer.port` / `playheadPalette`, etc.)
+- `packages/vscode-extension/package.json` — version 3.0.0, `activationEvents`, `contributes.commands` (17), `viewsContainers` / `views` / `viewsWelcome`, `walkthroughs`, `menus`, `keybindings`, `configuration` (`orbitscore.engine` / `mcpServer.port` / `playheadPalette`, etc.)
 - `packages/vscode-extension/package.json:34-43` — the `capabilities.untrustedWorkspaces` declaration (#385)
 - `tests/vscode-extension/untrusted-workspace-capability.spec.ts:1-125` — the 6 tests that inspect the declaration (including why `restrictedConfigurations` must not fall back to `?? []`)
 - `tests/helpers/vscode-extension-manifest.ts:1-53` — the shared helper for reading the manifest (`readExtensionManifest()` / `declaredConfigurationKeys()`)

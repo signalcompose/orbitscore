@@ -1,12 +1,12 @@
 ---
 title: "0-2. アーキテクチャ全景"
 chapter-id: "0-2"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 56c34c3
+verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-11 に #843（PR [#871](https://github.com/signalcompose/orbitscore/pull/871)・拡張 3.0.0 / `DSL_VERSION` 1.2 へのバンプ）まで**バージョン節だけ**追従しました。それ以外の節は 69dc968 時点の reading のままです。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # 0-2. アーキテクチャ全景
 
@@ -567,12 +567,14 @@ export const ENGINE_VERSION = '2.0.0'
 export const DSL_VERSION = '1.2'
 ```
 
-- **engine (製品) バージョン**: `2.0.0` — MIDI 出力 + Pitch DSL + session log を含む WCTM milestone
-- **DSL spec バージョン**: `1.1` — `PITCH_DSL_SPEC_v1.1` の軸 (製品バージョンとは別)
-- **VS Code 拡張の package version**: `2.1.0` (`packages/vscode-extension/package.json`)
+- **`ENGINE_VERSION`**: `2.0.0` — `.orbslog` の meta ヘッダが名乗る版。MIDI 出力 + Pitch DSL + session log を含む WCTM milestone
+- **DSL spec バージョン**: `1.2` — pitch DSL spec の軸 (`ENGINE_VERSION` とも拡張の版とも別)
+- **VS Code 拡張の package version**: `3.0.0` (`packages/vscode-extension/package.json`) — 🔴 **正本**。`.vsix` と git タグが名乗るのはこれ
 - **daemon protocol**: `v0.1` (`packages/engine/src/audio/rust-engine/index.ts:4`)
 
-なお CLAUDE.md や glossary に出てくる「DSL v3.0」は構文世代 (`sequence` → `init` の pivot、[ADR-002](/decisions/adr-002-dsl-v3-pivot)) を指す呼び名で、`DSL_VERSION = '1.1'` (pitch DSL の spec 版) とは軸が違います。
+上 3 つは **別軸で、同期しません** (`docs/design/656-release-design.md` §4.4)。`ENGINE_VERSION 2.0.0` と拡張 `3.0.0` の食い違いは事故ではなく設計です。拡張が 3.0.0 に上がったのは #843 (PR [#871](https://github.com/signalcompose/orbitscore/pull/871)) で、`DSL_VERSION` が 1.2 に上がったのは同じ PR ですが理由は別 (DSL の表面が変わったため)。
+
+なお CLAUDE.md や glossary に出てくる「DSL v3.0」は構文世代 (`sequence` → `init` の pivot、[ADR-002](/decisions/adr-002-dsl-v3-pivot)) を指す呼び名で、`DSL_VERSION = '1.2'` (pitch DSL の spec 版) とは軸が違います。
 
 ## 後続章へのナビゲーション
 
