@@ -565,7 +565,7 @@ sequenceDiagram
 export const ENGINE_VERSION = '2.0.0'
 
 /** DSL spec version (PITCH_DSL_SPEC) — a separate axis from the product version. */
-export const DSL_VERSION = '1.1'
+export const DSL_VERSION = '1.2'
 ```
 
 - **engine (製品) バージョン**: `2.0.0` — MIDI 出力 + Pitch DSL + session log を含む WCTM milestone

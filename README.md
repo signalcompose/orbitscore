@@ -2,7 +2,7 @@
 
 **Live-coding music DSL with a native Rust audio engine, plugin hosting, and MIDI output**
 
-Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundled native audio engine (Rust `orbit-audio-daemon`: sample playback, CLAP / VST3 plugin hosting, mixer) and MIDI output (Pitch DSL, chords, comp). Version 2.0.0 is the released state; the VS Code extension is at 2.1.0. The Rust daemon is the only audio backend; the opt-out path to the previous backend was removed in #502.
+Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundled native audio engine (Rust `orbit-audio-daemon`: sample playback, CLAP / VST3 plugin hosting, mixer) and MIDI output (Pitch DSL, chords, comp). The VS Code extension is at **3.0.0** (the version the `.vsix` and the git tag carry). `ENGINE_VERSION` (2.0.0, the session-log meta header) and `DSL_VERSION` (1.2, the spec version) are separate axes and are deliberately not synced to it — see `docs/design/656-release-design.md` §4.4. The Rust daemon is the only audio backend; the opt-out path to the previous backend was removed in #502.
 
 ## Core Features
 
@@ -48,7 +48,7 @@ Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundle
 **2.0.0 is released.** OrbitScore 2.0.0 is a dual-output live-coding DSL:
 
 - **MIDI output** — degrees/notes resolve to MIDI notes + velocity, emitted to a CoreMIDI / IAC virtual port
-- **Pitch DSL** — scale degrees, chords, voicing, mode, and expression (DSL_VERSION 1.1)
+- **Pitch DSL** — scale degrees, chords, voicing, mode, and expression (DSL_VERSION 1.2)
 - **comp** — automatic accompaniment: voice-leading (C1) + comp rhythm (C2a)
 - **quantize** — bar-quantized scheduling control
 - **Audio foundation** — native daemon sample playback (WAV/AIFF/MP3/MP4), `.chop()` slicing, polymeter, `RUN()`/`LOOP()`/`MUTE()` transport

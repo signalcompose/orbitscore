@@ -17,6 +17,41 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### chore(release): bump the extension to 3.0.0 and the DSL spec to 1.2 (#843) (Sep 11, 2026)
+
+owner 裁定 2026-09-11（#851 A-1）: **`v3.0.0` / DSL 1.2**。
+
+## 🔴 動かしたのは 1 つだけ — 正本は拡張の package.json
+
+`docs/design/656-release-design.md` §4.4 が版の所在を確定させている:
+
+| 場所 | 規則 | 今回 |
+|---|---|---|
+| `packages/vscode-extension/package.json` | 🔴 **正本**。`.vsix` / `.app` / タグの版はこれ | **2.1.0 → 3.0.0** |
+| `ENGINE_VERSION` | **別軸**（セッションログの meta ヘッダ）。同期しない | **2.0.0 のまま** |
+| `DSL_VERSION` | **別軸**（spec 版）。同期しない | 1.1 → **1.2**（別軸の理由で動かす） |
+| ルート `package.json` | `private: true` で配布物にならない | 触らない（裁定待ち (7)） |
+
+`DSL_VERSION` を上げたのは「拡張が 3.0.0 になったから」ではなく、**DSL の表面が変わったから**
+（`send` の dB 化・`output(dest, thru, db)` の導入・`pan` のライン要素化）。理由が別なので
+数字も揃わない。
+
+🔴 **私は一度これを間違えた。** 「拡張 package.json・`ENGINE_VERSION`・`DSL_VERSION` の 3 つを
+揃える」と報告し、`/simplify` の Altitude が §4.4 を示して正した。
+`ENGINE_VERSION 2.0.0` と拡張 `2.1.0` の食い違いは**事故ではなく設計**だった。
+
+## なぜ major か
+
+- `ORBITSCORE_ENGINE` 環境変数・`orbitscore.engine` / `scsynthPath` 設定・
+  `Force Kill scsynth` コマンド・MCP `force_kill_scsynth` を**削除**した（#502）
+- `send` が**線形係数から dB へ**変わり、既存の譜面の意味が変わる
+
+## 追従した記述
+
+root `README.md`（2 箇所）・`CLAUDE.md`・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`（2 箇所）・
+dev サイトの `version.ts` 引用 4 箇所。いずれも「3 つは別軸」と明記して、
+次に読む人が同じ取り違えをしないようにした。
+
 ### fix(clap-host): stop warning on the normal path for effects without note ports (#860) (Sep 11, 2026)
 
 束 B の最終ゲートで `auto-records and restores all five plugin receiver kinds` が落ちた。
