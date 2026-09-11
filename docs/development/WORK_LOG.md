@@ -60,6 +60,72 @@ describe 全体で `Date.now` を固定値に固定し、`startTime` の getter 
 
 Closes #869
 
+### chore(release): bump the extension to 3.0.0 and the DSL spec to 1.2 (#843) (Sep 11, 2026)
+
+owner 裁定 2026-09-11（#851 A-1）: **`v3.0.0` / DSL 1.2**。
+
+## 🔴 動かしたのは 1 つだけ — 正本は拡張の package.json
+
+`docs/design/656-release-design.md` §4.4 が版の所在を確定させている:
+
+| 場所 | 規則 | 今回 |
+|---|---|---|
+| `packages/vscode-extension/package.json` | 🔴 **正本**。`.vsix` / `.app` / タグの版はこれ | **2.1.0 → 3.0.0** |
+| `ENGINE_VERSION` | **別軸**（セッションログの meta ヘッダ）。同期しない | **2.0.0 のまま** |
+| `DSL_VERSION` | **別軸**（spec 版）。同期しない | 1.1 → **1.2**（別軸の理由で動かす） |
+| ルート `package.json` | `private: true` で配布物にならない | 触らない（裁定待ち (7)） |
+
+`DSL_VERSION` を上げたのは「拡張が 3.0.0 になったから」ではなく、**DSL の表面が変わったから**
+（`send` の dB 化・`output(dest, thru, db)` の導入・`pan` のライン要素化）。理由が別なので
+数字も揃わない。
+
+🔴 **私は一度これを間違えた。** 「拡張 package.json・`ENGINE_VERSION`・`DSL_VERSION` の 3 つを
+揃える」と報告し、`/simplify` の Altitude が §4.4 を示して正した。
+`ENGINE_VERSION 2.0.0` と拡張 `2.1.0` の食い違いは**事故ではなく設計**だった。
+
+## なぜ major か
+
+- `ORBITSCORE_ENGINE` 環境変数・`orbitscore.engine` / `scsynthPath` 設定・
+  `Force Kill scsynth` コマンド・MCP `force_kill_scsynth` を**削除**した（#502）
+- `send` が**線形係数から dB へ**変わり、既存の譜面の意味が変わる
+
+## 追従した記述
+
+root `README.md`（2 箇所）・`CLAUDE.md`・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`（2 箇所）・
+dev サイトの `version.ts` 引用 4 箇所。いずれも「3 つは別軸」と明記して、
+次に読む人が同じ取り違えをしないようにした。
+
+
+#### owner 裁定（2026-09-11）と、リリース直前の README 2 件
+
+正本 `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.7 が **未決**として残していた 2 件に
+裁定が出た。
+
+| 未決だったもの | 裁定 |
+|---|---|
+| バージョン番号 | **3.0.0 / DSL 1.2**（`send()` の dB 化で既存譜面の意味が変わるので semver では major） |
+| タグ名前空間 | **`v3.0.0`**。`ext-v*` / `app-v*` の分離はネイティブ版の新ラインで行う（§12.3）。`release.yml` のトリガーは `v*` のままでよく、ワークフローの変更は不要 |
+
+残り 3 件は裁定待ちではなく既に解消済み: SC 削除 = #840 / gated ハーネス = #831 /
+README の導線 = #842。Marketplace publish は「行わない」（owner 2026-09-10）で、
+リポジトリ変数 `PUBLISH_MARKETPLACE` が未設定のため publish ステップは skip される（実測）。
+
+**ついでに直した README 2 件** — どちらも「これから打つタグが何をするか」と食い違っていた:
+
+- `tag push で全 channel に自動 publish` → 当時の計画である旨と、現在は GitHub Release だけが
+  作られることを明記
+- 「ICMC v1.1.0 bundle release」節の見出しに historical を付け、表が挙げている scsynth 同梱は
+  #502 で削除済みで**現在の `.vsix` に scsynth は入っていない**という注記を足した
+
+出荷される `packages/vscode-extension/README.md` は元から SC 参照 0 件で、Marketplace 非公開も
+正しく書かれている（実測）。直したのはリポジトリ表紙の側。
+
+ガードの実測: `checkTagAgainstVersion('v3.0.0', '3.0.0', 'darwin-arm64')` → `{ok: true}` /
+`('v3.0.0', '2.1.0')` → 版が食い違うと fail（#853）。**バージョンバンプがタグより前に入る必要がある**
+ことをこのガードが担保している。
+
+検証: `npm test` 2,338 passed / 0 failed・`npm run lint` 緑・引用 944 / 0 failed。
+
 ### docs: land the nine routine docs-sync PRs as one roundup (#867) (Sep 11, 2026)
 
 凍結版リリース（#827）のタグを打つ前に、溜まっていたルーティン docs 追従 PR **9 本**

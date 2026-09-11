@@ -564,7 +564,7 @@ Let's sort out "which version is this about," a common source of confusion when 
 export const ENGINE_VERSION = '2.0.0'
 
 /** DSL spec version (PITCH_DSL_SPEC) — a separate axis from the product version. */
-export const DSL_VERSION = '1.1'
+export const DSL_VERSION = '1.2'
 ```
 
 - **engine (product) version**: `2.0.0` — the WCTM milestone including MIDI output + Pitch DSL + session log
