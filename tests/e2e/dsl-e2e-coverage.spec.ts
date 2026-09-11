@@ -30,6 +30,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  BUS_DSL_METHODS,
   GLOBAL_DSL_METHODS,
   SEQUENCE_DSL_METHODS,
 } from '../../packages/engine/src/signal-chain/runtime'
@@ -73,7 +74,6 @@ const SEQUENCE_UNCOVERED_BASELINE: readonly string[] = [
   'loop',
   'midi',
   'mute',
-  'pan',
   'quantize',
   'root',
   'unmute',
@@ -98,6 +98,9 @@ const GLOBAL_UNCOVERED_BASELINE: readonly string[] = [
   'normalizer',
   'quantize',
 ]
+
+/** Mixer-bus vocabulary baseline, copied from the current receiver-insensitive source scan. */
+const BUS_UNCOVERED_BASELINE: readonly string[] = []
 
 /**
  * 実機 E2E の台帳がまだ触っていない構文表面（2026-09-03 実測）。
@@ -161,6 +164,12 @@ describe('DSL coverage of the real-device E2E suite', () => {
   it('A-1 does not leave a new global method untested on real hardware', () => {
     const now = uncovered(GLOBAL_DSL_METHODS)
     const baseline = new Set(GLOBAL_UNCOVERED_BASELINE)
+    expect(now.filter((name) => !baseline.has(name))).toEqual([])
+  })
+
+  it('A-1 does not leave a new mixer-bus method untested on real hardware', () => {
+    const now = uncovered(BUS_DSL_METHODS)
+    const baseline = new Set(BUS_UNCOVERED_BASELINE)
     expect(now.filter((name) => !baseline.has(name))).toEqual([])
   })
 
@@ -252,6 +261,11 @@ describe('DSL coverage of the real-device E2E suite', () => {
   it('keeps the global baseline honest — no entry that is already covered', () => {
     const stale = GLOBAL_UNCOVERED_BASELINE.filter((name) => exercised.has(name))
     expect(stale, 'Covered now — remove from GLOBAL_UNCOVERED_BASELINE.').toEqual([])
+  })
+
+  it('keeps the mixer-bus baseline honest — no entry that is already covered', () => {
+    const stale = BUS_UNCOVERED_BASELINE.filter((name) => exercised.has(name))
+    expect(stale, 'Covered now — remove from BUS_UNCOVERED_BASELINE.').toEqual([])
   })
 
   it('reports the current coverage so the number is visible in CI', () => {

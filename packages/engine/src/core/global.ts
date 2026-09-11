@@ -3,7 +3,12 @@
  * Represents the global transport and configuration
  */
 
-import { AudioEngine, type PluginStateSaveTarget, type PluginUiTarget } from '../audio/types'
+import {
+  AudioEngine,
+  type PluginStateSaveTarget,
+  type PluginUiTarget,
+  type WireLineOp,
+} from '../audio/types'
 import { allocatePluginUiWindowToken } from '../audio/rust-engine/plugin-ui-window-token'
 import { StackElement, PlayElement } from '../parser/types'
 import { BoundValue, ChordVoice } from '../midi/chord/types'
@@ -521,6 +526,14 @@ export class Global {
       throw new Error('Mixer bus routing requires the Rust engine backend.')
     }
     await this.audioEngine.setBusRouting(seqBus, output, sends)
+  }
+
+  /** Replace one daemon bus's complete ordered audio line. @internal */
+  async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
+    if (!this.audioEngine.setBusLine) {
+      throw new Error('Mixer bus routing requires the Rust engine backend.')
+    }
+    await this.audioEngine.setBusLine(bus, line)
   }
 
   /**

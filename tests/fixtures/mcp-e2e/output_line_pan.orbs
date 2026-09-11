@@ -1,0 +1,32 @@
+// #611 E2E-P: LineOp::Pan — equal-power pan applied on the bus line (channel balance),
+// with the sqrt(2) normalization proven by comparing against a same-bus sequence with no
+// pan() call at all (design 611-o-surface-bundle §4.1).
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.start()
+
+var mix = init global.mixer
+var drms = mix.sum
+
+var noPan = init global.seq
+noPan.beat(4 by 4).length(1)
+noPan.audio("kick.wav").chop(1)
+noPan.output(drms)
+noPan.play(1, 1, 1, 1)
+
+var hardLeft = init global.seq
+hardLeft.beat(4 by 4).length(1)
+hardLeft.audio("kick.wav").chop(1)
+hardLeft.pan(-100).output(drms)
+hardLeft.play(1, 1, 1, 1)
+
+var center = init global.seq
+center.beat(4 by 4).length(1)
+center.audio("kick.wav").chop(1)
+center.pan(0).output(drms)
+center.play(1, 1, 1, 1)
+
+LOOP(noPan)

@@ -706,13 +706,65 @@ fn ensure_audio_buffer_len(buffer: &mut Vec<f32>, len: usize) {
     }
 }
 
-/// One block of the click-free gain ramp shared by the master line and generic line programs.
+/// One block's worth of a parameter ramp. `at(frame)` is the value for that frame.
+///
+/// 🔴 The block endpoint (`at(frames)`) is bit-identical to the former one-scalar-per-block
+/// implementation. Only values within the block have changed.
+#[derive(Clone, Copy)]
+struct LineRamp {
+    start: f32,
+    /// Increment per frame. Zero when settled.
+    step: f32,
+    /// Use `end` from this frame onward.
+    hold_after: usize,
+    end: f32,
+}
+
+impl LineRamp {
+    #[inline]
+    fn settled(value: f32) -> Self {
+        Self {
+            start: value,
+            step: 0.0,
+            hold_after: 0,
+            end: value,
+        }
+    }
+
+    #[inline]
+    fn is_settled(self) -> bool {
+        self.step == 0.0
+    }
+
+    #[inline]
+    fn at(self, frame: usize) -> f32 {
+        if frame >= self.hold_after {
+            self.end
+        } else {
+            self.start + self.step * frame as f32
+        }
+    }
+}
+
+/// Advance the shared master/generic-line state once and describe the values within that block.
 /// `ramp_frames` is prepared from the sample rate before the callback starts.
 #[inline]
-fn advance_ramped_gain(current: &mut f32, target: f32, frames: usize, ramp_frames: u32) -> f32 {
+fn advance_line_ramp(current: &mut f32, target: f32, frames: usize, ramp_frames: u32) -> LineRamp {
+    if *current == target {
+        return LineRamp::settled(target);
+    }
+
+    let start = *current;
     let frac = (frames as f32 / ramp_frames as f32).min(1.0);
+    // Keep this expression identical to the former block-scalar implementation. `LineRamp::at`
+    // returns this stored value at the block endpoint instead of recomputing it via `step`.
     *current += (target - *current) * frac;
-    *current
+    LineRamp {
+        start,
+        step: (target - start) / ramp_frames as f32,
+        hold_after: frames.min(ramp_frames as usize),
+        end: *current,
+    }
 }
 
 pub struct MasterLine {
@@ -816,13 +868,13 @@ impl MasterLine {
         )
     }
 
-    /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
+    /// 1 block 分ランプを進め、その block に適用する ramp を返す（設計 §5.3 `ramp()`）。
     /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
     /// 算術のみ（alloc/lock/syscall なし）。
     #[inline]
-    fn advance_gain(&mut self, frames: usize) -> f32 {
+    fn advance_gain(&mut self, frames: usize) -> LineRamp {
         let target = f32::from_bits(self.gain_target.load(Ordering::Relaxed));
-        advance_ramped_gain(&mut self.gain_current, target, frames, self.ramp_frames)
+        advance_line_ramp(&mut self.gain_current, target, frames, self.ramp_frames)
     }
 }
 
@@ -1845,16 +1897,12 @@ fn render_block_with_sources(
         if let Some(p) = master.post.as_mut() {
             p.process(&mut master.buffer[..bs]);
         }
-        let g = master.advance_gain(frames);
-        // g == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
+        let ramp = master.advance_gain(frames);
+        // gain == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
         // 「未使用 gain 経路に per-sample 乗算コストを払わない」ための最適化であり、O0 golden の
         // bit 一致は乗算そのものではなく `gain_current` が初期値 1.0 のまま変化しないことに由来する
         // （`SetGlobalGain` を一度も呼ばない譜面では target=current=1.0 が恒常的に成立する）。
-        if g != 1.0 {
-            for s in master.buffer[..bs].iter_mut() {
-                *s *= g;
-            }
-        }
+        apply_ramped_gain(&mut master.buffer[..bs], ENGINE_CHANNELS, ramp);
         // デバイス配置（設計 §5.3・row 6）: master.buffer（2ch）を hw（デバイス幅）の ch{0,1} へ置く。
         // 2ch デバイスなら memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。3ch 以上は ch2 以降が
         // 無音で残る — この分岐の Device 出口は master 固定 program の 1 本のみで、複数出口は
@@ -1908,15 +1956,11 @@ fn execute_master_line(
                 }
             }
             LineOp::Gain(target) => {
-                let gain = line_gain(program, op_index, target, frames, master.line.ramp_frames);
-                if gain != 1.0 {
-                    for sample in &mut master.buffer[..bs] {
-                        *sample *= gain;
-                    }
-                }
+                let ramp = line_ramp(program, op_index, target, frames, master.line.ramp_frames);
+                apply_ramped_gain(&mut master.buffer[..bs], ENGINE_CHANNELS, ramp);
             }
             LineOp::Output(output) => {
-                let gain = line_gain(
+                let ramp = line_ramp(
                     program,
                     op_index,
                     output.gain,
@@ -1924,7 +1968,7 @@ fn execute_master_line(
                     master.line.ramp_frames,
                 );
                 if let OutputDest::Device { left, right } = output.dest {
-                    add_to_device(&mut device, &master.buffer[..bs], frames, left, right, gain);
+                    add_to_device(&mut device, &master.buffer[..bs], frames, left, right, ramp);
                 } else {
                     // release ではこの debug_assert は no-op。到達不能を保証する唯一の境界は
                     // control 層の `set_bus_line` master 分岐であり、その検証が破れればこの出口は
@@ -1936,8 +1980,8 @@ fn execute_master_line(
                 }
             }
             LineOp::Pan(target) => {
-                let pan = line_gain(program, op_index, target, frames, master.line.ramp_frames);
-                apply_line_pan(&mut master.buffer[..bs], frames, pan);
+                let ramp = line_ramp(program, op_index, target, frames, master.line.ramp_frames);
+                apply_line_pan(&mut master.buffer[..bs], frames, ramp);
             }
         }
     }
@@ -2131,21 +2175,41 @@ fn render_engine_with_insert_buses(
 }
 
 #[inline]
-fn line_gain(
+fn line_ramp(
     program: &LineProgram,
     op_index: usize,
     target: f32,
     frames: usize,
     ramp_frames: u32,
-) -> f32 {
+) -> LineRamp {
     let current_gain = &program.current_gain[op_index];
     let mut current = f32::from_bits(current_gain.load(Ordering::Relaxed));
-    let gain = advance_ramped_gain(&mut current, target, frames, ramp_frames);
-    current_gain.store(current.to_bits(), Ordering::Relaxed);
-    gain
+    if current == target {
+        return LineRamp::settled(target);
+    }
+    let ramp = advance_line_ramp(&mut current, target, frames, ramp_frames);
+    current_gain.store(ramp.end.to_bits(), Ordering::Relaxed);
+    ramp
 }
 
-/// Apply a bus-level pan to an interleaved stereo buffer.
+#[inline]
+fn apply_ramped_gain(buf: &mut [f32], channels: usize, ramp: LineRamp) {
+    if ramp.is_settled() {
+        if ramp.end != 1.0 {
+            for sample in buf {
+                *sample *= ramp.end;
+            }
+        }
+        return;
+    }
+
+    debug_assert!(channels > 0);
+    for (sample_index, sample) in buf.iter_mut().enumerate() {
+        *sample *= ramp.at(sample_index / channels);
+    }
+}
+
+/// Return the normalized L/R coefficients for a bus-level pan.
 ///
 /// 🔴 The `√2` is **not** an extra boost — it makes this stage unity at center.
 ///
@@ -2161,7 +2225,7 @@ fn line_gain(
 /// transparent. The source side cannot drop its own center application without breaking bit
 /// identity for existing scores (design `docs/design/611-o-surface-bundle-design.md` §4.1).
 #[inline]
-fn apply_line_pan(buf: &mut [f32], frames: usize, pan: f32) {
+fn line_pan_coefficients(pan: f32) -> (f32, f32) {
     // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
     //
     // 🔴 これは丸め誤差の除去でもある。f32 では `sqrt(2) * cos(pi/4) = 0.99999994` で
@@ -2169,15 +2233,53 @@ fn apply_line_pan(buf: &mut [f32], frames: usize, pan: f32) {
     // 6e-8 だけずれる。設計 §4.1 は「center で `(1, 1)`（unity）」と書いているので、
     // 省く方が**文書どおり**になる。`LineOp::Gain` が `gain != 1.0` で同じことをしている。
     if pan == 0.0 {
-        return;
+        return (1.0, 1.0);
     }
     let (left, right) = equal_power_pan(pan);
-    let left = left * std::f32::consts::SQRT_2;
-    let right = right * std::f32::consts::SQRT_2;
+    (
+        left * std::f32::consts::SQRT_2,
+        right * std::f32::consts::SQRT_2,
+    )
+}
+
+/// Apply a bus-level pan ramp to an interleaved stereo buffer.
+#[inline]
+fn apply_line_pan(buf: &mut [f32], frames: usize, ramp: LineRamp) {
+    if ramp.is_settled() {
+        if ramp.end == 0.0 {
+            return;
+        }
+        let (left, right) = line_pan_coefficients(ramp.end);
+        for frame in 0..frames {
+            let base = frame * ENGINE_CHANNELS;
+            buf[base] *= left;
+            buf[base + 1] *= right;
+        }
+        return;
+    }
+
+    if ramp.hold_after == 0 {
+        return;
+    }
+    let (start_left, start_right) = line_pan_coefficients(ramp.start);
+    let (end_left, end_right) = line_pan_coefficients(ramp.end);
+    let coefficient_frames = ramp.hold_after as f32;
+    let left_ramp = LineRamp {
+        start: start_left,
+        step: (end_left - start_left) / coefficient_frames,
+        hold_after: ramp.hold_after,
+        end: end_left,
+    };
+    let right_ramp = LineRamp {
+        start: start_right,
+        step: (end_right - start_right) / coefficient_frames,
+        hold_after: ramp.hold_after,
+        end: end_right,
+    };
     for frame in 0..frames {
         let base = frame * ENGINE_CHANNELS;
-        buf[base] *= left;
-        buf[base + 1] *= right;
+        buf[base] *= left_ramp.at(frame);
+        buf[base + 1] *= right_ramp.at(frame);
     }
 }
 
@@ -2194,6 +2296,19 @@ fn add_scaled(dst: &mut [f32], src: &[f32], gain: f32) {
     }
 }
 
+#[inline]
+fn add_ramped_scaled(dst: &mut [f32], src: &[f32], channels: usize, ramp: LineRamp) {
+    if ramp.is_settled() {
+        add_scaled(dst, src, ramp.end);
+        return;
+    }
+
+    debug_assert!(channels > 0);
+    for (sample_index, (dst, src)) in dst.iter_mut().zip(src).enumerate() {
+        *dst += *src * ramp.at(sample_index / channels);
+    }
+}
+
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -2207,33 +2322,57 @@ fn add_to_device(
     frames: usize,
     left: usize,
     right: Option<usize>,
-    gain: f32,
+    ramp: LineRamp,
 ) {
     if !device.wrote {
         device.samples.fill(0.0);
     }
     debug_assert!(left < device.channels);
     debug_assert!(right.is_none_or(|channel| channel < device.channels));
+    if ramp.is_settled() {
+        let gain = ramp.end;
+        match right {
+            Some(right) => {
+                for frame in 0..frames {
+                    let device_base = frame * device.channels;
+                    let source_base = frame * ENGINE_CHANNELS;
+                    if gain == 1.0 {
+                        device.samples[device_base + left] += src[source_base];
+                        device.samples[device_base + right] += src[source_base + 1];
+                    } else {
+                        device.samples[device_base + left] += src[source_base] * gain;
+                        device.samples[device_base + right] += src[source_base + 1] * gain;
+                    }
+                }
+            }
+            None => {
+                for frame in 0..frames {
+                    let source_base = frame * ENGINE_CHANNELS;
+                    let merged = (src[source_base] + src[source_base + 1]) * 0.5;
+                    device.samples[frame * device.channels + left] +=
+                        if gain == 1.0 { merged } else { merged * gain };
+                }
+            }
+        }
+        device.wrote = true;
+        return;
+    }
+
     match right {
         Some(right) => {
             for frame in 0..frames {
                 let device_base = frame * device.channels;
                 let source_base = frame * ENGINE_CHANNELS;
-                if gain == 1.0 {
-                    device.samples[device_base + left] += src[source_base];
-                    device.samples[device_base + right] += src[source_base + 1];
-                } else {
-                    device.samples[device_base + left] += src[source_base] * gain;
-                    device.samples[device_base + right] += src[source_base + 1] * gain;
-                }
+                let gain = ramp.at(frame);
+                device.samples[device_base + left] += src[source_base] * gain;
+                device.samples[device_base + right] += src[source_base + 1] * gain;
             }
         }
         None => {
             for frame in 0..frames {
                 let source_base = frame * ENGINE_CHANNELS;
                 let merged = (src[source_base] + src[source_base + 1]) * 0.5;
-                device.samples[frame * device.channels + left] +=
-                    if gain == 1.0 { merged } else { merged * gain };
+                device.samples[frame * device.channels + left] += merged * ramp.at(frame);
             }
         }
     }
@@ -2413,24 +2552,16 @@ fn render_engine_with_insert_buses_and_source_outputs(
                     }
                 }
                 LineOp::Gain(target) => {
-                    let gain = line_gain(
-                        program,
-                        op_index,
-                        target,
-                        bs / output_channels,
-                        buses[i].line.ramp_frames,
-                    );
-                    if gain != 1.0 {
-                        for sample in &mut buses[i].buffer[..bs] {
-                            *sample *= gain;
-                        }
-                    }
+                    let frames = bs / output_channels;
+                    let ramp =
+                        line_ramp(program, op_index, target, frames, buses[i].line.ramp_frames);
+                    apply_ramped_gain(&mut buses[i].buffer[..bs], output_channels, ramp);
                 }
                 LineOp::Pan(target) => {
                     let frames = bs / output_channels;
-                    let pan =
-                        line_gain(program, op_index, target, frames, buses[i].line.ramp_frames);
-                    apply_line_pan(&mut buses[i].buffer[..bs], frames, pan);
+                    let ramp =
+                        line_ramp(program, op_index, target, frames, buses[i].line.ramp_frames);
+                    apply_line_pan(&mut buses[i].buffer[..bs], frames, ramp);
                 }
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
@@ -2438,23 +2569,25 @@ fn render_engine_with_insert_buses_and_source_outputs(
                         legacy_targets[i],
                         output.dest,
                     );
-                    let gain = line_gain(
+                    let frames = bs / output_channels;
+                    let ramp = line_ramp(
                         program,
                         op_index,
                         output.gain,
-                        bs / output_channels,
+                        frames,
                         buses[i].line.ramp_frames,
                     );
                     match dest {
                         OutputDest::Master => {
-                            add_scaled(hw, &buses[i].buffer[..bs], gain);
+                            add_ramped_scaled(hw, &buses[i].buffer[..bs], output_channels, ramp);
                         }
                         OutputDest::Bus(target) => {
                             let (left, right) = buses.split_at_mut(i + 1);
-                            add_scaled(
+                            add_ramped_scaled(
                                 &mut right[target - i - 1].buffer[..bs],
                                 &left[i].buffer[..bs],
-                                gain,
+                                output_channels,
+                                ramp,
                             );
                         }
                         OutputDest::Device { left, right } => {
@@ -2462,10 +2595,10 @@ fn render_engine_with_insert_buses_and_source_outputs(
                                 add_to_device(
                                     device,
                                     &buses[i].buffer[..bs],
-                                    bs / output_channels,
+                                    frames,
                                     left,
                                     right,
-                                    gain,
+                                    ramp,
                                 );
                             } else {
                                 // Unit-level engine seams have no outer master line; in that shape
@@ -2480,10 +2613,10 @@ fn render_engine_with_insert_buses_and_source_outputs(
                                 add_to_device(
                                     &mut direct,
                                     &buses[i].buffer[..bs],
-                                    bs / output_channels,
+                                    frames,
                                     left,
                                     right,
-                                    gain,
+                                    ramp,
                                 );
                             }
                         }
@@ -3926,6 +4059,59 @@ mod tests {
     }
 
     #[test]
+    fn line_ramp_endpoint_is_bit_identical_to_the_former_block_formula() {
+        fn former_endpoint(start: f32, target: f32, frames: usize, ramp_frames: u32) -> f32 {
+            let mut current = start;
+            let frac = (frames as f32 / ramp_frames as f32).min(1.0);
+            current += (target - current) * frac;
+            current
+        }
+
+        for frames in [64, 512] {
+            let start = 0.013_f32;
+            let target = 0.987_f32;
+            let expected = former_endpoint(start, target, frames, 240);
+            let mut current = start;
+            let ramp = advance_line_ramp(&mut current, target, frames, 240);
+            assert_eq!(ramp.at(frames), expected, "frames={frames}");
+            assert_eq!(current, expected, "stored endpoint for frames={frames}");
+        }
+    }
+
+    #[test]
+    fn line_ramp_interpolates_monotonically_within_a_short_block() {
+        let start = 0.01_f32;
+        let target = 1.0_f32;
+        let mut current = start;
+        let ramp = advance_line_ramp(&mut current, target, 64, 240);
+
+        assert_eq!(ramp.at(0), start);
+        assert!(ramp.at(32) > start && ramp.at(32) < ramp.end);
+        assert!(ramp.at(63) > ramp.at(32) && ramp.at(63) < ramp.end);
+    }
+
+    #[test]
+    fn line_ramp_holds_the_endpoint_after_the_ramp_duration() {
+        let mut current = 0.01_f32;
+        let ramp = advance_line_ramp(&mut current, 1.0, 512, 240);
+
+        assert_eq!(ramp.at(240), ramp.end);
+        assert_eq!(ramp.at(340), ramp.end);
+    }
+
+    #[test]
+    fn settled_line_ramp_keeps_the_target_for_every_frame() {
+        let target = 0.375_f32;
+        let mut current = target;
+        let ramp = advance_line_ramp(&mut current, target, 64, 240);
+
+        assert!(ramp.is_settled());
+        assert_eq!(ramp.at(0), target);
+        assert_eq!(ramp.at(32), target);
+        assert_eq!(ramp.at(10_000), target);
+    }
+
+    #[test]
     fn line_program_pan_is_normalized_and_executes_in_rt() {
         let baseline = render_tagged_line(
             LineProgram::settled(vec![LineOp::Output(LineOutput {
@@ -3985,10 +4171,10 @@ mod tests {
     fn line_program_pan_target_change_is_ramped_without_a_large_boundary_jump() {
         let frames = 48;
         let program = LineProgram::with_seeds(vec![LineOp::Pan(1.0)], vec![-1.0]);
-        let pan = line_gain(&program, 0, 1.0, frames, 240);
+        let ramp = line_ramp(&program, 0, 1.0, frames, 240);
         let centered = 0.5_f32.sqrt();
         let mut next_block = vec![centered; frames * 2];
-        apply_line_pan(&mut next_block, frames, pan);
+        apply_line_pan(&mut next_block, frames, ramp);
 
         let previous_frame = [1.0_f32, 0.0_f32];
         let boundary_delta = (next_block[0] - previous_frame[0])
@@ -4003,11 +4189,18 @@ mod tests {
             })
             .fold(0.0_f32, f32::max);
         eprintln!(
-            "pan ramp seed=-1 target=1 first_pan={pan} boundary_delta={boundary_delta} in_block_max_delta={in_block_delta}"
+            "pan ramp seed=-1 target=1 end_pan={} boundary_delta={boundary_delta} in_block_max_delta={in_block_delta}",
+            ramp.end
         );
-        assert!((pan - (-0.6)).abs() <= 1e-6);
-        assert!(boundary_delta < 0.35, "pan must move by one ramp fraction");
-        assert!(in_block_delta <= 1e-6, "one block uses one computed pan");
+        assert!((ramp.end - (-0.6)).abs() <= 1e-6);
+        assert!(
+            boundary_delta <= 1e-6,
+            "the first frame must retain the previous pan"
+        );
+        assert!(
+            in_block_delta > 0.0 && in_block_delta < 0.02,
+            "pan coefficients must move gradually within the block"
+        );
     }
 
     #[test]
@@ -4133,7 +4326,7 @@ mod tests {
     }
 
     #[test]
-    fn line_gain_moves_toward_target_by_block_fraction() {
+    fn line_gain_moves_toward_target_within_the_block() {
         let program = LineProgram::new(vec![
             LineOp::Rack,
             LineOp::Gain(0.0),
@@ -4145,10 +4338,14 @@ mod tests {
         ]);
         let hw = render_tagged_line(program, 48);
         let raw = 2.0_f32 * 0.5_f32.sqrt();
-        let expected = raw * 0.8;
         assert!(
-            hw.iter().all(|sample| (*sample - expected).abs() < 1e-6),
-            "first 48-frame block must use 1 + (0 - 1) * (48 / 240): {hw:?}"
+            (hw[0] - raw).abs() < 1e-6,
+            "the first frame must use the starting gain: {hw:?}"
+        );
+        assert!(hw[48] < hw[0], "gain must change within the block: {hw:?}");
+        assert!(
+            hw[94] < hw[48],
+            "later frames must be closer to the target: {hw:?}"
         );
         assert!(hw.iter().all(|sample| *sample != 0.0));
     }
@@ -4166,8 +4363,8 @@ mod tests {
             .install_for_bus(LineProgram::new(vec![old_op]), 0, 1)
             .expect("old output line installs");
         slot.visit_program_for_test(|program| {
-            let settled = line_gain(program, 0, 0.1, 240, 240);
-            assert!((settled - 0.1).abs() <= 1e-6);
+            let settled = line_ramp(program, 0, 0.1, 240, 240);
+            assert!((settled.end - 0.1).abs() <= 1e-6);
         });
         let old_current = control.current_gains();
         assert!((old_current[0] - 0.1).abs() <= 1e-6);
@@ -4186,11 +4383,11 @@ mod tests {
             .expect("seeded replacement installs");
         let mut seeded = 0.0;
         slot.visit_program_for_test(|program| {
-            seeded = line_gain(program, 0, 1.0, 24, 240);
+            seeded = line_ramp(program, 0, 1.0, 24, 240).end;
         });
 
         let unseeded_program = LineProgram::new(vec![new_op]);
-        let unseeded = line_gain(&unseeded_program, 0, 1.0, 24, 240);
+        let unseeded = line_ramp(&unseeded_program, 0, 1.0, 24, 240).end;
         eprintln!(
             "republish first block: seeded={seeded:.6} unseeded={unseeded:.6} old_current={:.6}",
             old_current[0]
@@ -5071,9 +5268,13 @@ mod tests {
             &mut hw,
         );
 
+        assert_eq!(hw[0], 0.75, "the ramp must start after the rack output");
         assert!(
-            hw.iter().all(|sample| (*sample - 0.375).abs() < 1e-6),
-            "rack -> gain -> device must execute in wire order"
+            (hw[240 * 2] - 0.375).abs() < 1e-6
+                && hw[240 * 2..]
+                    .iter()
+                    .all(|sample| (*sample - 0.375).abs() < 1e-6),
+            "rack -> ramped gain -> device must execute in wire order: {hw:?}"
         );
     }
 
@@ -5167,15 +5368,15 @@ mod tests {
             .gain_target_handle()
             .store(0.25_f32.to_bits(), Ordering::Relaxed);
         // ramp_frames は 48_000 の 5 ms = 240。512 frame block は frac = 1.0 で即時到達。
-        assert!((master.advance_gain(512) - 0.25).abs() < 1e-6);
+        assert!((master.advance_gain(512).end - 0.25).abs() < 1e-6);
 
         let mut slow = MasterLine::new(48_000, 2, None);
         slow.gain_target_handle()
             .store(0.0_f32.to_bits(), Ordering::Relaxed);
         // 64 frame block は frac = 64/240 なので 1 回では到達しない（が単調に近づく）。
-        let first = slow.advance_gain(64);
+        let first = slow.advance_gain(64).end;
         assert!(first < 1.0 && first > 0.0, "{first}");
-        let second = slow.advance_gain(64);
+        let second = slow.advance_gain(64).end;
         assert!(
             second < first,
             "gain must keep approaching the target: {first} -> {second}"
