@@ -196,24 +196,71 @@ describe('Global.sum() / Global.aux()', () => {
     expect(() => global.aux('master')).toThrow(/master.*reserved|reserved.*master/i)
   })
 
-  it('commits routing state only after the daemon accepts it, so a rejected call is not merged into a later one (#523 CRITICAL 5)', async () => {
-    // MixerManager.route() builds `next` from the last COMMITTED routing and
-    // only calls `this.routings.set(source, next)` after `setBusRouting`
-    // resolves. If that commit ever moved before the `await`, a rejected send
-    // would still be recorded, and the next (unrelated) call on the same
-    // source would silently resend it merged into its own payload.
-    const setBusRouting = vi
+  it('emits distinct gain and pan wire ops from a mixer handle', async () => {
+    const setBusLine = vi.fn().mockResolvedValue(undefined)
+    const engine = { setBusLine, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any
+    const handle = new Global(engine).sum('drum')
+
+    await handle.gain(-6)
+    await handle.pan(30)
+
+    expect(setBusLine).toHaveBeenNthCalledWith(1, 'sum-bus-0', [
+      { op: 'rack' },
+      { op: 'gain', gain: 10 ** (-6 / 20) },
+      { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
+    ])
+    expect(setBusLine).toHaveBeenNthCalledWith(2, 'sum-bus-0', [
+      { op: 'rack' },
+      { op: 'gain', gain: 10 ** (-6 / 20) },
+      { op: 'pan', pan: 0.3 },
+      { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
+    ])
+  })
+
+  it('clamps mixer-handle gain and pan with the same ranges as Sequence', async () => {
+    const setBusLine = vi.fn().mockResolvedValue(undefined)
+    const engine = { setBusLine, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any
+    const handle = new Global(engine).sum('drum')
+
+    await handle.gain(999)
+    await handle.pan(150)
+
+    expect(setBusLine).toHaveBeenLastCalledWith('sum-bus-0', [
+      { op: 'rack' },
+      { op: 'gain', gain: 10 ** (12 / 20) },
+      { op: 'pan', pan: 1 },
+      { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
+    ])
+  })
+
+  it("re-sends the full declared line (including a previously rejected element) on the next call — self-heal discipline (#611 §5.3-style, supersedes #523 CRITICAL 5's rollback)", async () => {
+    // #611: `MixerBusHandle.output()`/`.send()` treat the declared line as TS-side truth and
+    // do NOT roll it back on a rejected push (matching `Sequence`'s self-heal discipline —
+    // see `applyLineElement`'s doc comment). So a rejected send is NOT silently dropped: the
+    // next call resends the FULL current line, including that earlier (failed) element.
+    const setBusLine = vi
       .fn()
       .mockRejectedValueOnce(new Error('daemon rejected'))
       .mockResolvedValueOnce(undefined)
-    const engine = { setBusRouting, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any
+    const engine = { setBusLine, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any
     const global = new Global(engine)
     const handle = global.sum('drum')
 
-    await expect(handle.routeSend('aux-bus-0', 0.5)).rejects.toThrow('daemon rejected')
+    await expect(handle.send({ kind: 'bus', bus: 'aux-bus-0' }, 0.5)).rejects.toThrow(
+      'daemon rejected',
+    )
 
-    await handle.routeOutput('master')
+    await handle.output('master')
 
-    expect(setBusRouting).toHaveBeenNthCalledWith(2, 'sum-bus-0', 'master', [])
+    expect(setBusLine).toHaveBeenNthCalledWith(2, 'sum-bus-0', [
+      { op: 'rack' },
+      {
+        op: 'output',
+        dest: { kind: 'bus', name: 'aux-bus-0' },
+        thru: true,
+        gain: 10 ** (0.5 / 20),
+      },
+      { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
+    ])
   })
 })

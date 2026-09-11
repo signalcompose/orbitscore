@@ -22,8 +22,6 @@
     "live-coding",
     "music",
     "dsl",
-
-
     "audio",
     "polymeter",
     "orbitscore"
@@ -273,7 +271,7 @@
           {
             "id": "explorePluginHosting",
             "title": "Explore Plugin Hosting",
-            "description": "Learn how OrbitScore hosts CLAP/VST3/AU instruments and effects.\n[Open the Learning Site](command:orbitscore.openDocs)",
+            "description": "Learn how OrbitScore hosts CLAP and VST3 instruments and effects.\n[Open the Learning Site](command:orbitscore.openDocs)",
             "media": {
               "markdown": "media/walkthrough/04-plugin-hosting.md"
             }
@@ -422,8 +420,6 @@
     "build:clean": "npm run build:engine:clean && tsc -p tsconfig.json",
     "build:engine": "cd ../engine && npm run build && bash ../../scripts/install-engine-deps.sh && bash ../../scripts/copy-daemon-bin.sh",
     "build:engine:clean": "cd ../engine && npm run build:clean && bash ../../scripts/install-engine-deps.sh && bash ../../scripts/copy-daemon-bin.sh",
-
-
     "dev": "tsc -w"
   },
   "devDependencies": {

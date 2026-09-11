@@ -34,6 +34,27 @@ export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 現在のリポジトリには存在しません。ADR は決定の記録として残しています。
 :::
 
+::: warning bundle 本体も撤去済み（#836・2026-09-10）
+本 ADR が扱う **scsynth の同梱そのもの**が [#836](https://github.com/signalcompose/orbitscore/pull/836) で
+リポジトリから消えました。以下がまとめて削除されています:
+
+- `scripts/extract-scsynth-bundle.sh`（`npm run build:bundle` の実体）と
+  `scripts/verify-bundle.sh`（`npm run verify:bundle` の実体）、および両 npm script
+- `packages/vscode-extension/.vscodeignore` の `!engine/scsynth/**` / `!engine/supercollider/**` /
+  `!legal/**` keep 指定
+- `packages/vscode-extension/legal/scsynth-LICENSE.GPL-3.0` と `legal/scsynth-NOTICE`
+- `.github/workflows/release.yml` の `brew install --cask supercollider` / `build:bundle` /
+  `verify:bundle` / packaging 後の `verify-bundle.sh` 呼び出し
+
+さらに `packages/engine/scripts/sync-dist.js` は、engine を拡張へ同期するたびに
+`engine/scsynth` と `engine/supercollider`、および同期先の `dist/audio/supercollider/` と
+`dist/audio/supercollider-player.*` を**明示的に削除**するようになりました。
+したがって出荷される `.vsix` には SC 資産が 1 つも入りません（#836 本文の実測: SC 参照 0 件・
+`.vsix` は 7.4 MB で約 11.5 MB 減）。
+
+本文の「同梱する」「`build:bundle` を実行する」という記述は、以降**歴史記録として**読んでください。
+:::
+
 # ADR-003 scsynth bundle strict mode
 
 OrbitScore は v1.0 から scsynth (SuperCollider のオーディオサーバーバイナリ) を `.vsix` 拡張パッケージに同梱するようになりました。それと同時に、scsynth の path 解決ロジックから SC.app への暗黙 fallback を **意図的に削除** しています。本章ではその意思決定と実装を読み解きます。
@@ -328,6 +349,8 @@ commit `1569110` の "Dev workflow への影響" セクション:
 1. **環境変数経由**: `.zshenv` 等に `export ORBIT_SCSYNTH_PATH=/Applications/SuperCollider.app/Contents/Resources/scsynth` を追加
 2. **bundle 抽出**: `npm run build:bundle` を先に実行して `engine/scsynth/` にバイナリを置く
 
+🔴 **2 番目は [#836](https://github.com/signalcompose/orbitscore/pull/836) 以降できません。** `build:bundle` script と `scripts/extract-scsynth-bundle.sh` が削除され、`sync-dist.js` は同期のたびに `engine/scsynth` を消します。残る回避方法は 1 番目（`ORBIT_SCSYNTH_PATH`）だけです。
+
 cutover #108 以降はこれに加えて、そもそも SC 経路を選ぶために `ORBITSCORE_ENGINE=sc` (VS Code なら `orbitscore.engine: "sc"`) が必要です。
 
 ---
@@ -339,6 +362,15 @@ ADR の形式にならって、決定後の帰結を記録します。
 ### bundle は据え置き、経路は opt-out に
 
 2026-07-03 の cutover #108 (`docs/archive/WORK_LOG_2026-07.md` §6.179) で既定バックエンドが Rust に切り替わりましたが、scsynth の bundle そのものは残っています。#377 の engine-kind 分岐 (`docs/archive/WORK_LOG_2026-07.md` §6.186) は release.yml について「scsynth 関連ステップ (brew install / build:bundle / verify:bundle) は無改変で維持 (owner 暫定判断: scsynth 同梱は Phase 1 据え置き)」と記録しています。したがって `.vsix` は 69dc968 時点でも SC bundle と daemon バイナリの両方を同梱する構成です。
+
+### そして bundle は撤去された (#836・2026-09-10)
+
+「据え置き」は stable タグの前で終わりました。[#836](https://github.com/signalcompose/orbitscore/pull/836) が SC の同梱・ビルド・ライセンスをまとめて外し、`.vsix` は daemon バイナリだけを同梱する構成になりました。PR 本文が挙げている決め手は 2 つです:
+
+- **ライセンス**: 現行の `.vsix` は `.vscodeignore` の keep 指定で **GPL の scsynth を同梱**していて、`release.yml` は `v*` タグで Marketplace / Open VSX へ publish する。だから stable タグより前に外す（owner 裁定 `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.5）
+- **順序**: `build:copy-engine` が `packages/engine/supercollider` をコピーしていたので、**コピー元より先にコピーする側を外す**必要があった
+
+同時に `packages/sc-link-audio/`（GPL-2.0-or-later の SC 用 LinkAudio プラグイン）と `.gitmodules` の 2 エントリも消え、リポジトリから git submodule が無くなりました。GPL 隔離ゲートの `rust/deny.toml` は**変更されていません** — こちらの対象は Ableton Link の `orbit-link-audio` で、SC とは別物だからです。
 
 ### strict resolver のパターンは daemon に継承された
 
@@ -379,11 +411,10 @@ ADR の形式にならって、決定後の帰結を記録します。
 
 ## 次の深掘り候補
 
-- `build:bundle` スクリプト (`scripts/extract-scsynth-bundle.sh`) の実装 — scsynth を SC.app から抽出・配置する処理の詳細
+- ~~`build:bundle` スクリプト (`scripts/extract-scsynth-bundle.sh`) の実装~~ — **#836 で削除済み**。読むなら削除前の commit で
 - `scripts/copy-daemon-bin.sh` — daemon 側の同梱スクリプト。`darwin-arm64` 限定の理由と release.yml での順序保証
-- Windows / Linux での bundle 戦略 — macOS 向け universal binary 以外のプラットフォーム対応
-- SC.app バージョン up 時の bundle 更新フロー — `SCSYNTH_BUNDLE_MANIFEST.md` の Update policy (Major/Minor bump のみ re-extract)
-- bundle 同梱の GPL-3.0 ライセンス対応 — `SCSYNTH_BUNDLE_MANIFEST.md` に「GPL-3.0 aggregation 性を強く保つ」と記録されている問題の詳細
+- ~~Windows / Linux での bundle 戦略~~ / ~~SC.app バージョン up 時の bundle 更新フロー~~ — **#836 で同梱そのものが無くなったため消滅**
+- ~~bundle 同梱の GPL-3.0 ライセンス対応~~ — **#836 が同梱ごと外して解消**。`legal/scsynth-LICENSE.GPL-3.0` と `legal/scsynth-NOTICE` も削除された
 - daemon の署名 / notarize の実施状況 — §6.185 のフォローアップがその後どう扱われたか
 
 ---

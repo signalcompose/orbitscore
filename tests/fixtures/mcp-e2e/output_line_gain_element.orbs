@@ -1,0 +1,23 @@
+// #611 E2E-G: LineOp::Gain — a fixed seq.gain() applied on the bus line, not the event side.
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.start()
+
+var mix = init global.mixer
+var drms = mix.sum
+
+var dry = init global.seq
+dry.beat(4 by 4).length(1)
+dry.audio("kick.wav").chop(1)
+dry.play(1, 1, 1, 1)
+
+var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio("kick.wav").chop(1)
+kick.gain(-6).output(drms)
+kick.play(1, 1, 1, 1)
+
+LOOP(dry)

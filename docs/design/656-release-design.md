@@ -5,6 +5,9 @@
 **正本**: 本書は spec ではない。改訂対象の正本は `docs/research/CODESIGN_PIPELINE.md`（§13）と `sites/user/getting-started/installation.md`
 **状態**: 設計（実装しない）・2026-09-03・main `ca176f0` 実測
 
+> **現行方針**: VSCodium フォークの配布案は廃止済み。参照先は
+> [`NATIVE_MIGRATION_2026-09.md`](../planning/NATIVE_MIGRATION_2026-09.md) §12。
+
 ---
 
 ## 0. 裁定・確定事項（再議論しない）
@@ -49,7 +52,7 @@
 | release.yml は今も `brew install --cask supercollider` して scsynth を焼く | 同 `:62-64` / `:104-110` | §5.4（#502 と衝突・裁定待ち (6)） |
 | vsix 中身の検査は release.yml の**インライン shell にしか無い** | 同 `:116-207` | §4.5 で `scripts/verify-vsix.sh` へ切り出して両経路で共有 |
 | `make-local-release.sh` は repo に**存在しない**（tracked でも untracked でもない） | `git ls-files \| grep -i release` / `ls scripts/*release*`（§10） | §4 で新規に書く |
-| アプリのビルド作業場は **git 管理外** | `scripts/orbitstudio/README.md:21-22` / `build_orbitstudio.sh:12-20` | §5.4 の CI 化を塞いでいる（裁定待ち (3)） |
+| アプリのビルド作業場は **git 管理外** | 旧フォーク用 `README.md:21-22` / `build_orbitstudio.sh:12-20` | §5.4 の CI 化を塞いでいる（裁定待ち (3)） |
 | 署名済みバンドルから消すと署名が壊れる | `EDITOR_HOST_AND_APP_SIZE.md:226-237` | 裁定 7 |
 | 889 MB のうち 334 MB が source map | 同 `:131-151` | §4.2 段 3 |
 | **`.vsix` が機能の 100%**・アプリ側に固有実装が 1 行も無い → app 版 = 拡張版 | 同 `:286-294` | §4.4 のバージョン規則の根拠 |
@@ -59,7 +62,7 @@
 | `publisher` が `local` | `packages/vscode-extension/package.json:5` | §8（Marketplace を採る時だけ変える・一方通行） |
 | LICENSE は **source-available**（OSI ライセンスではない） | `LICENSE:1` | §8 の Open VSX 論点（#184 本文の GPL 記述は SC 時代で無効） |
 | gated E2E は `--extensionDevelopmentPath` で**ソースから**拡張を読む | `tests/e2e/orbitstudio-mcp-gated.spec.ts:741` | §12 で「インストール済み」レーンを足す |
-| app path は `ORBITSTUDIO_APP` で差し替えられる | 同 `:60-72` | §6.2 でリリース成果物を指す |
+| app path は旧 app-path override 環境変数で差し替えられる | 同 `:60-72` | §6.2 でリリース成果物を指す |
 | harness は毎回新しい `--user-data-dir` / `--extensions-dir` を作る | 同 `:642-645` | §3.5 の trust 状態の固定点 |
 | ユーザーサイトは「**他に何かをインストールする必要はありません**」と書いている | `sites/user/getting-started/installation.md:21-24` | 🔴 `node` 依存と矛盾（§6.3） |
 
@@ -134,7 +137,7 @@ if (!vscode.workspace.isTrusted) {
 
 したがって **override を repo に持ち込む**:
 
-- 新規 `scripts/orbitstudio/product.overrides.json`（tracked）
+- 新規の旧フォーク用 `product.overrides.json`（tracked）
   ```jsonc
   {
     "configurationDefaults": {
@@ -169,24 +172,24 @@ harness は毎回**新しい `--user-data-dir`** を作る（`orbitstudio-mcp-ga
 
 ### 4.1 現在地
 
-`scripts/orbitstudio/make-local-release.sh` は **この repo に存在しない**（§10 の 2 本の確認コマンド）。地図 §4.J `:1046` は「untracked で作業中」と書いているが、それは **owner のディスク上**の話で、本設計は**中身を知らない**。したがって本節は #659 本文の「手でやったこと（成立を確認済み）」9 段と `EDITOR_HOST_AND_APP_SIZE.md` §4-§5 から**書き起こす**。#659 のチェックリスト「❓ 未確認: 内容が本文の手順を満たしているか」は、**この設計を実装する時に owner の版と突き合わせて解消する**（§16 (2)）。
+旧フォーク用 `make-local-release.sh` は **この repo に存在しない**（§10 の 2 本の確認コマンド）。地図 §4.J `:1046` は「untracked で作業中」と書いているが、それは **owner のディスク上**の話で、本設計は**中身を知らない**。したがって本節は #659 本文の「手でやったこと（成立を確認済み）」9 段と `EDITOR_HOST_AND_APP_SIZE.md` §4-§5 から**書き起こす**。#659 のチェックリスト「❓ 未確認: 内容が本文の手順を満たしているか」は、**この設計を実装する時に owner の版と突き合わせて解消する**（§16 (2)）。
 
 ### 4.2 段の並び
 
 ```
-scripts/orbitstudio/make-local-release.sh [--sign] [--notarize] [--out <dir>]
+make-local-release.sh [--sign] [--notarize] [--out <dir>]  # 旧フォーク用の廃止案
 
  1 preflight   git が clean・`git rev-parse --short HEAD`・バージョン整合（§4.4）
  2 build       (cd packages/vscode-extension && npm run build)   ← 🔴 ルートの build ではない（§10）
                = install-engine-deps.sh + copy-daemon-bin.sh（`packages/vscode-extension/package.json:456`）
                + bash rust/crates/orbit-std-gain/bundle-macos.sh --release
  3 package     ワークスペース外のステージへ rsync → npm install --omit=dev → npx vsce package
-               （hoist 対策: `scripts/orbitstudio/README.md:35-39` の手順）
+               （hoist 対策: 旧フォーク用 `README.md:35-39` の手順）
  4 verify-vsix bash scripts/verify-vsix.sh <vsix>   ← §4.5。落ちたら exit 1
  5 stage-app   ditto <base OrbitStudio.app> <out>/<stamp>-<sha>-app/OrbitStudio.app
  6 trim        find <app> -name '*.map' -delete            （−334 MB・判断の余地なし）
                + 拡張の取捨（🔴 未確定 = 裁定待ち (4)。既定は**削らない**）
- 7 embed       <app>/Contents/Resources/app/bin/orbs --install-extension <vsix> --force
+ 7 embed       <旧フォーク専用 CLI> --install-extension <vsix> --force
                → 生成物を Contents/Resources/app/extensions/orbitscore/ へ ditto
  8 sign        --sign 無し: codesign --force --deep --sign - <app>（ad-hoc・トリムで壊れた署名の復旧）
                --sign 有り: §5 の Developer ID 手順（deep 署名は使わない・§5.2）
@@ -224,6 +227,17 @@ scripts/orbitstudio/make-local-release.sh [--sign] [--notarize] [--out <dir>]
 | git tag | — | `v<正本>`。`release.yml:224` が bare SemVer だけ stable と判定する |
 
 **preflight の検査（`exit 1`）**: `git describe --exact-match` があるとき、その tag が `v<拡張の version>` と一致すること。**これが無いと `vsce package` は package.json の版で焼くのに、GitHub Release は tag の版で作られ、静かにずれる**（`release.yml:114` と `:245-248` が別の値を見ている）。
+
+✅ **規則の実装は `scripts/check-release-tag-version.mjs` に在る**（#843・2026-09-11）。
+`checkTagAgainstVersion(tag, packageVersion)` / `versionCore(value)` を export しているので、
+**preflight はこれを import する**こと。🔴 **同じ規則を書き起こさない** — DRY 節が名指しする
+「同じルールが 2 箇所に別実装で存在し、片方だけ更新されてズレる」型になる。
+
+現在この関数は `release.yml` の **タグ push 後**（`Setup Node.js` の直後・`npm ci` の前）からも
+呼ばれている。preflight の方が**一段早い**（タグを作る前に止まる）ので本命だが、
+タグを手で打つ経路が残る限り CI 側も残す — **押された後の最後の砦**として。
+比較は X.Y.Z のコアのみ。既存タグの実測（`v1.1.0-rc1` / `-rc2` / `-rc3`・`v1.0.1-rc1` が
+いずれも接尾辞なしの package.json の上にあった）に基づく。
 
 🔴 **一方通行**: バージョン番号の付け方（正本をどこに置くか・app と vsix を揃えるか）は、一度リリースすると利用者の更新経路と Marketplace の版履歴に焼き付く。**裁定待ち (7)。**
 
@@ -337,7 +351,7 @@ build → trim → 内側から署名（深い順） → .app を署名 → dmg/
       - Import certificate  (secrets: APPLE_CERT_P12_BASE64 / APPLE_CERT_P12_PASSWORD → 一時 keychain)
       - Download the .vsix produced by the release job
       - Obtain the OrbitStudio base app        # ← 🔴 ここが未解決。裁定待ち (3)
-      - bash scripts/orbitstudio/make-local-release.sh --sign --notarize --out "$RUNNER_TEMP/out"
+      - bash make-local-release.sh --sign --notarize --out "$RUNNER_TEMP/out" # 旧フォーク用の廃止案
         env: ASC_KEY_P8 / ASC_KEY_ID / ASC_ISSUER_ID
       - gh release upload "$TAG" "$RUNNER_TEMP/out/**/OrbitStudio-*.dmg"
 ```
@@ -377,7 +391,7 @@ build → trim → 内側から署名（深い順） → .app を署名 → dmg/
 
 ### 6.2 同じ E2E をリリース成果物に対して回す
 
-`ORBITSTUDIO_APP` でアプリのパスを差し替えられる（`orbitstudio-mcp-gated.spec.ts:60-72`）ので、**リリース成果物を指すことは今日すでにできる**。足りないのは 1 点だけ:
+旧 app-path override 環境変数でアプリのパスを差し替えられる（`orbitstudio-mcp-gated.spec.ts:60-72`）ので、**リリース成果物を指すことは今日すでにできる**。足りないのは 1 点だけ:
 
 harness は拡張を `--extensionDevelopmentPath`（`:741`）= **リポジトリのソース**から読む。これでは「成果物に入っている拡張」を検証していない（`.app` に焼いた拡張ではなく、手元のソースを測る）。
 
@@ -479,7 +493,7 @@ const extArgs = EXT_MODE === 'dev' ? [`--extensionDevelopmentPath=${EXTENSION_DE
   → engine が daemon を解決（daemon-client.ts:246-250 = extension-bundle）→ spawn
   → daemon が 127.0.0.1:0 に bind（server.rs:19）→ child を current_exe の隣から spawn（outproc_effect.rs:453-456）
   → child が std-plugins/Gain.clap を隣から解決 → 音
-[E2E] ORBITSTUDIO_APP=<その .app> ORBIT_GATED_EXT_MODE=installed npm run test:e2e:gated
+[E2E] <旧 app-path override>=<その .app> ORBIT_GATED_EXT_MODE=installed npm run test:e2e:gated
   → start_engine({capture_wav}) → run_selection → capture WAV の RMS で判定（§12）
 ```
 
@@ -494,7 +508,7 @@ $ grep -rn '"capabilities"' packages/vscode-extension/package.json
 $ git ls-files | grep -i release
 .github/workflows/release.yml
 
-$ ls scripts/*release* scripts/orbitstudio/
+$ ls scripts/*release* <旧フォーク用スクリプトディレクトリ>/
 ls: cannot access 'scripts/*release*': No such file or directory
 README.md
 build_orbitstudio.sh
@@ -558,7 +572,7 @@ packages/vscode-extension/src/extension.ts:2159:    engineProcess = child_proces
 |---|---|---|---|
 | **E2E-D1**（#385 → **実装は #735**・🔴 **2026-09-04 に期待値を反転**） | 拡張を **installed** で入れ、`<user-data-dir>/User/settings.json` に `{"security.workspace.trust.enabled": true}` を書き、**フォルダを開かず** `.orbs` を 1 本だけ引数に渡して起動 → `open_file` → `set_selection` → `run_selection` | `ORBIT_GATED_EXT_MODE=installed` | ① `pollInitialize` が 60s 以内に応答する（= **activate した**。`extension.ts:451-456` は activate 中に bind するので、応答＝活性化の直接証拠）② `get_engine_state` の `running` が **`true`** ③ kick fixture の capture 窓 RMS が **無音でない**（> 0.05）④ `get_log` に `Workspace is not trusted` が **0 行** ⑤ ERROR 件数 `toBeLessThanOrEqual(errorsBefore + 1)` |
 | ~~**E2E-D2**（#385 の裏）~~ | ~~同じ起動を `{"security.workspace.trust.enabled": false}` で~~ | — | 🔴 **不要**（裁定 (1) で trust の有無が挙動を変えなくなったため、D1 と同じ判定になる。出どころ: §16 (1) owner 2026-09-03） |
-| **E2E-D3**（#138 cold-install） | **リリース成果物の `.app`** を新しい場所へ `ditto` し `xattr -w com.apple.quarantine "0181;0;OrbitScoreE2E;"` を付ける → 新規 `--user-data-dir` / `--extensions-dir` → `env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin` 相当で起動 | `ORBITSTUDIO_APP=<成果物> ORBIT_GATED_EXT_MODE=installed` | ① 起動して MCP が応答 ② `start_engine({capture_wav})` → `get_engine_state.running === true` ③ kick fixture の capture RMS > 無音床 ④ ERROR 件数 `<=` before ⑤ 🔴 **ここで落ちたら §6.3 の分岐へ**（PATH に node が無い環境の再現がこの項目の主眼） |
+| **E2E-D3**（#138 cold-install） | **リリース成果物の `.app`** を新しい場所へ `ditto` し `xattr -w com.apple.quarantine "0181;0;OrbitScoreE2E;"` を付ける → 新規 `--user-data-dir` / `--extensions-dir` → `env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin` 相当で起動 | `<旧 app-path override>=<成果物> ORBIT_GATED_EXT_MODE=installed` | ① 起動して MCP が応答 ② `start_engine({capture_wav})` → `get_engine_state.running === true` ③ kick fixture の capture RMS > 無音床 ④ ERROR 件数 `<=` before ⑤ 🔴 **ここで落ちたら §6.3 の分岐へ**（PATH に node が無い環境の再現がこの項目の主眼） |
 | **E2E-D4**（署名後の 3rd-party ロード） | E2E-D3 の続きで、既存の rack 期待値表（`rack-chain-gain-expectations.ts`）と同じ譜面を評価 | 同上 | ラックの RMS 比が既存の期待値表と一致（**署名が child の dlopen を妨げていないことの直接証拠**）。#656 本文「署名後に実機で音を鳴らし直す」の自動化 |
 | **E2E-D5**（成果物の同一性） | `verify-vsix.sh` を `.app` に焼かれた拡張ディレクトリ（`Contents/Resources/app/extensions/orbitscore/`）に対して実行 | — | exit 0。**vitest からではなく `make-local-release.sh` 段 10 の一部**（`.app` の中身も vsix と同じ検査を通る） |
 
@@ -608,7 +622,7 @@ exit code を信じると、拡張が入らないまま起動して **60 秒の 
 | 対象 | 改訂 |
 |---|---|
 | `docs/research/CODESIGN_PIPELINE.md` | 🔴 **全面改訂**。「決定サマリ」表（`:21-33`）の「再署名しない / Apple Developer ID 不要 / Apple secret ゼロ」は**すべて無効**（SC 退役 #502・同梱 8 個は自前）。`:271-286` の "Fallback plan" が**本線**になったので本文へ昇格。`Last verified` を更新し、**entitlements の節は §5.3 の実測結果が出るまで「未確定」と明記する**（推測の plist を書かない） |
-| `scripts/orbitstudio/README.md` | 「リリース」節（`:45-48`）を `make-local-release.sh` の使い方へ差し替え。`build_orbitstudio.sh` と `make-local-release.sh` の役割分担（前者 = ベースアプリ、後者 = 配布物）と `product.overrides.json`（§3.4）を書く |
+| 旧フォーク用 `README.md` | 「リリース」節（`:45-48`）を `make-local-release.sh` の使い方へ差し替え。`build_orbitstudio.sh` と `make-local-release.sh` の役割分担（前者 = ベースアプリ、後者 = 配布物）と `product.overrides.json`（§3.4）を書く |
 | `sites/user/getting-started/installation.md`（+ `en/`） | ① `.app` の入手経路を最上段に足す ② 🔴 `:21-24`「他に何かをインストールする必要はありません」を §6.3 の実測結果に合わせる（node が要るなら書く／要らなくなったならそのまま）。翻訳は `TRANSLATION_STATUS.md` で当該章を `outdated` に |
 | `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | **改訂なし**。本書は DSL 表面を 1 語も足さない（運用規則 7 の対象外） |
 | `docs/planning/DEVELOPMENT_MAP.md` §4.J | `make-local-release.sh` の現在地を「**repo に存在しない**」に訂正（`:1046` は「untracked で作業中」= owner のディスクの話であり、リポジトリの状態ではない） |
@@ -673,4 +687,3 @@ exit code を信じると、拡張が入らないまま起動して **60 秒の 
 | (6) | Marketplace / Open VSX へ出すか（#197 / #184） | **A** 出す（publisher 登録 + PAT 2 本 + `publisher: "local"` を実名へ・**一方通行**）/ **B** GitHub Releases だけ | 判断しない（owner「かはともかく」= 明示的に保留された）。**B のままでもリリースは成立する**（裁定 3） | `package.json:5` / repo secret / #184 本文の書き直し |
 | (7) | 🔴 **一方通行**: バージョン番号の付け方 | **A** 拡張の `version` を正本にし tag と一致を強制（§4.4）/ **B** ルート `package.json` を正本に / **C** 現状のまま（5 箇所ばらばら） | **A**。app 版 = 拡張版が構造的に成立している（`EDITOR_HOST_AND_APP_SIZE.md:292-294`）。C は「静かに別の版が出る」（§11） | `make-local-release.sh` の preflight・ルート `package.json:29` の扱い |
 | (8) | `node` をどう確保するか（**§6.3 の実測後に判断する**） | **A** `process.execPath` + `ELECTRON_RUN_AS_NODE=1`（同梱ゼロ・Node 版はアプリ依存）/ **B** node を同梱（サイズ + 署名対象 +1）/ **C** 何もせず「node が要る」と文書化 | **測ってから**。E2E-D3 が緑なら C で足り、赤なら A を推す（B は §5.1 の署名対象を増やす） | `extension.ts:2159`・`sites/user/.../installation.md:21-24` |
-

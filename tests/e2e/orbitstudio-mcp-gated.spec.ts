@@ -1,8 +1,8 @@
 /**
- * REAL OrbitStudio E2E over the Agent Bridge MCP server (#388).
+ * REAL VS Code E2E over the Agent Bridge MCP server (#388).
  *
- * Launches an actual OrbitStudio.app (VSCodium-based) Extension Development
- * Host, drives it entirely through MCP tool calls (no vscode API, no
+ * Launches stock VS Code as an Extension Development Host, drives it entirely
+ * through MCP tool calls (no vscode API, no
  * keyboard/UI automation), and verifies produced audio objectively via the
  * capture-seam WAV analyzer (wav-analysis.ts) — the same "verify without
  * listening" philosophy as WORK_LOG 6.189.
@@ -13,13 +13,13 @@
  *                               skipped via describe.skipIf, so this file
  *                               always parses and collects cleanly in normal
  *                               `npm test` runs.
- *   ORBITSTUDIO_APP=<path>      Overrides the OrbitStudio.app bundle path.
- *                               Default:
- *                               /Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app
+ *   ORBIT_E2E_VSCODE_APP=<path> Overrides the VS Code.app bundle path.
+ *                               Default: /Applications/Visual Studio Code.app
  *                               If the resolved path doesn't exist, the test
  *                               is skipped with a console note (rather than
  *                               failing) even when the gate env var is set.
  *
+ * The launched profile is isolated from the user's everyday VS Code state.
  * Run gated (this launches a real GUI app and plays audible sound — do NOT
  * run unattended/unprompted):
  *
@@ -32,11 +32,10 @@
  * root, an unscoped positional pattern can glob-match stale copies under
  * .claude/worktrees/ and launch multiple real GUI apps.
  *
- * SAFETY (repeated at the kill call site too): the teardown/setup kill
- * pattern targets `OrbitStudio.app/Contents/MacOS` — a path fragment unique
- * to the OrbitStudio.app bundle. It must NEVER be broadened to something
- * that could match a general "Visual Studio Code" / Electron process —
- * killing the user's actual VS Code is a known past incident.
+ * SAFETY (repeated at the kill call site too): teardown/setup identifies only
+ * processes whose command line carries the harness-owned `--user-data-dir`
+ * temp prefix. It must NEVER use an app or executable name: an overbroad
+ * process-name match killed the user's everyday editor in a past incident.
  */
 
 import { spawn, spawnSync, execFileSync, type ChildProcess } from 'child_process'
@@ -54,7 +53,7 @@ import {
 } from '../../packages/vscode-extension/src/wav-analysis'
 import { resolveDaemonBinaryPath } from '../../packages/engine/src/audio/rust-engine/daemon-client'
 
-import { defaultOutputDeviceName } from './helpers/audio-devices'
+import { defaultOutputDeviceName, listOutputDevices } from './helpers/audio-devices'
 import {
   countErrors,
   countLogMarker,
@@ -64,17 +63,22 @@ import {
   newErrorLines,
 } from './helpers/engine-log'
 import {
+  BYTES_PER_SAMPLE,
+  CAPTURE_HEADER_BYTES,
+  type CaptureFormat,
+  type CaptureSegment,
+  captureTailRms,
   captureWindowsFrom,
   createCaptureClock,
+  makeAwaitSoundRestart,
   prepareCapturePath,
   quadraticMeanRms,
   readCaptureForAnalysis,
+  readCaptureFormat,
   steadyRms,
-  waitForSound,
   waitForQuiet,
-  type CaptureSegment,
   type WaitForQuietDiagnostics,
-  makeAwaitSoundRestart,
+  waitForSound,
 } from './helpers/capture-windows'
 import { captureWavPath, createGatedSession, type GatedCatalog } from './helpers/gated-session'
 import { McpClient, pollInitialize, sleep, waitUntil } from './helpers/mcp-client'
@@ -87,22 +91,59 @@ import {
   startEngineForRun,
   waitForEngineState,
 } from './helpers/run-score'
+import {
+  IPC_SOCKET_SUFFIX_ALLOWANCE,
+  selectRootPids,
+  UNIX_SOCKET_PATH_MAX,
+  userDataDirExceedsSocketLimit,
+} from './helpers/harness-processes'
 import { OUTPUT_LINE_GOLDENS, STEADY_CAPTURE } from './output-line-expectations'
 import { RACK_CHAIN_GAIN_EXPECTATIONS } from './rack-chain-gain-expectations'
 
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
-const DEFAULT_APP_PATH =
-  '/Users/yamato/Src/proj_orbitscore/orbitstudio-build/vscodium/VSCode-darwin-arm64/OrbitStudio.app'
+const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
+/**
+ * 🔴 Temp roots live under `/tmp`, not `os.tmpdir()`, and the prefix is short.
+ *
+ * VS Code's main process opens a Unix domain socket at `<user-data-dir>/<version>-main.sock`,
+ * and macOS caps a socket path at 103 characters. `os.tmpdir()` alone is 48 characters here
+ * (`/var/folders/<2>/<28>/T/`), so a descriptive prefix pushed the socket path to 105 and the
+ * app died with `listen EINVAL` before opening a window. The harness saw only a 60 s MCP
+ * timeout, which reads as "the extension did not activate" and sends you looking in the wrong
+ * place. Keep this short, and keep the preflight check below.
+ */
+const HARNESS_TMP_BASE = '/tmp'
+const HARNESS_TMP_PREFIX = 'orbe2e-'
+
+/**
+ * Identity of a harness-owned process: the `--user-data-dir` we generated. Built from
+ * HARNESS_TMP_PREFIX so the launcher and the teardown can never drift apart. Extended regex,
+ * passed to `pgrep -f` the same way as the other PID oracles in this file.
+ */
+const HARNESS_PGREP_PATTERN = `user-data-dir=[^[:space:]]*/${HARNESS_TMP_PREFIX}`
 
 const gated = Boolean(process.env[GATE_ENV])
-const appPath = process.env.ORBITSTUDIO_APP?.trim() || DEFAULT_APP_PATH
+const appPath = process.env.ORBIT_E2E_VSCODE_APP?.trim() || DEFAULT_APP_PATH
 const appAvailable = fs.existsSync(appPath)
+
+/**
+ * #611 E2E-4/E2E-5 (§8.3): the first output device that can carry >= 4 channels, or
+ * `undefined` if none exists (or the daemon binary/list call fails — swallowed rather than
+ * thrown, since this runs at `describe`-time collection and must never crash the whole file).
+ */
+function outputLineMultiChannelDevice(): string | undefined {
+  try {
+    return listOutputDevices().find((device) => device.maxOutputChannels >= 4)?.name
+  } catch {
+    return undefined
+  }
+}
 
 if (gated && !appAvailable) {
   // eslint-disable-next-line no-console
   console.log(
-    `[orbitstudio-mcp-gated] OrbitStudio app not found at ${appPath} — SKIPPING. ` +
-      'Set ORBITSTUDIO_APP to override the default path.',
+    `[orbitstudio-mcp-gated] VS Code app not found at ${appPath} — SKIPPING. ` +
+      'Set ORBIT_E2E_VSCODE_APP to override the default path.',
   )
 }
 
@@ -268,18 +309,95 @@ const TEST_TIMEOUT_MS = 120_000
 const TEARDOWN_TIMEOUT_MS = 30_000
 
 /**
- * SAFETY: this exact pattern ONLY. `OrbitStudio.app/Contents/MacOS` is a path
- * fragment unique to the OrbitStudio.app bundle — it must never be widened
- * to match "Code" / "Electron" / VSCodium generally. Killing the user's
- * actual VS Code by an overbroad pkill pattern is a known past incident.
- * Uses execFileSync (no shell, fixed argv — not a template-built command
- * string) rather than exec/execSync.
+ * SAFETY: identity comes from the `--user-data-dir` argument whose temp root begins with
+ * HARNESS_TMP_PREFIX, which only this harness creates. It must never be replaced by an
+ * app/process-name match: an overbroad pkill killed the user's everyday editor in a known
+ * past incident.
+ *
+ * 🔴 Signal only the ROOT processes, never the helpers. Electron helper processes inherit
+ * the same `--user-data-dir` argument, so a blanket `pkill -f` reaches them too. Killing a
+ * renderer out from under a live main process makes VS Code report
+ * "The window terminated unexpectedly (reason: 'killed', code: '15')" in a modal dialog,
+ * which then waits for a human. Signalling only the roots lets each main process tear its
+ * own helpers down through the normal shutdown path, so no dialog appears.
+ *
+ * Uses execFileSync (no shell, fixed argv) rather than exec/execSync.
  */
-function killOrbitStudio(): void {
+function harnessPids(): number[] {
   try {
-    execFileSync('pkill', ['-f', 'OrbitStudio.app/Contents/MacOS'], { stdio: 'ignore' })
+    return execFileSync('pgrep', ['-f', HARNESS_PGREP_PATTERN], { encoding: 'utf8' })
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(Number)
+      .filter((pid) => Number.isSafeInteger(pid) && pid > 0)
+  } catch (err) {
+    // pgrep exits 1 when nothing matched. That, and only that, is absence (policy 2).
+    if ((err as { status?: number }).status === 1) return []
+    // eslint-disable-next-line no-console
+    console.error(
+      `[harness] could not enumerate harness processes: ${String(err)}. ` +
+        'Stale editor instances may survive into the next launch.',
+    )
+    return []
+  }
+}
+
+/**
+ * Signal 0 probes liveness without touching the process and without spawning anything.
+ * `EPERM` means the process exists but is not ours to signal, so it counts as alive.
+ */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as { code?: string }).code === 'EPERM'
+  }
+}
+
+/** `undefined` when the parent cannot be determined — unknown, not "no parent" (policy 2). */
+function parentPidOrUnknown(pid: number): number | undefined {
+  try {
+    const ppid = parentPid(pid)
+    return Number.isSafeInteger(ppid) ? ppid : undefined
   } catch {
-    // pkill exits non-zero when no process matched — not an error here.
+    return undefined
+  }
+}
+
+async function killHarnessInstances(): Promise<void> {
+  const pids = harnessPids()
+  if (pids.length === 0) return
+  const roots = selectRootPids(pids.map((pid) => ({ pid, ppid: parentPidOrUnknown(pid) })))
+  for (const pid of roots) {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch {
+      // already gone
+    }
+  }
+  if (roots.length > 0) {
+    try {
+      // Give each root time to take its own helpers down through the normal shutdown path.
+      await waitUntil(() => roots.every((pid) => !isAlive(pid)), {
+        intervalMs: 200,
+        timeoutMs: 5000,
+        label: 'harness editor instances to exit',
+      })
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[harness] ${String(err)} — forcing the remainder.`)
+    }
+  }
+  // 🔴 The sweep runs unconditionally (policy 1). If root detection found nothing — every parent
+  // unknown, or an unexpected tree — the old blanket `pkill` still cleaned up; do not regress that.
+  for (const pid of harnessPids()) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // already gone
+    }
   }
 }
 
@@ -292,7 +410,7 @@ function replaceGatedPluginFixtureSymlink(sourcePath: string, fixturePath: strin
   if (!GATED_PLUGIN_FIXTURE_PATH_ALLOWLIST.has(fixturePath)) {
     throw new Error(`refusing to replace non-E2E plugin path: ${fixturePath}`)
   }
-  fs.rmSync(fixturePath, { recursive: true, force: true })
+  fs.rmSync(fixturePath, RM_TREE)
   fs.symlinkSync(sourcePath, fixturePath)
 }
 
@@ -345,6 +463,53 @@ function processExists(pid: number): boolean {
  * list: it snapshots the list before starting its engine and may signal only
  * the single PID added by that successful start.
  */
+/**
+ * ツリー削除のオプション。🔴 `force: true` は **ENOENT しか**抑えない。VS Code の agent host は
+ * teardown 中も `<user-data-dir>/.../sdk-cache/...` へ書き続けるので、`recursive` の走査中に
+ * ファイルが増えて **`ENOTEMPTY` で落ちる**（2026-09-11 実機: `#661 D-2` と `D-3` が
+ * `rmdir '.../@anthropic-ai/sdk/lib'` で赤くなった。製品ではなく後始末の競合）。
+ * Node の `maxRetries` / `retryDelay` は EBUSY・ENOTEMPTY・EPERM 等をこのために再試行する。
+ */
+const RM_TREE = { recursive: true, force: true, maxRetries: 8, retryDelay: 150 } as const
+
+/**
+ * ハーネスの一時ツリーを消す。**後始末でテストを落とさない。**
+ *
+ * `child.kill()` は SIGTERM を送るだけで、VS Code の agent host はその後も
+ * `<user-data-dir>/.../sdk-cache/...` へ書き続ける。`recursive` の走査中にファイルが増えると
+ * **`ENOTEMPTY`**（`force: true` は ENOENT しか抑えない）。2026-09-11 の実機で
+ * `#661 D-2` / `D-3` が**音の判定はすべて通ったのに後始末だけで赤くなった**。
+ *
+ * 子の終了を少し待ってから消し、それでも残ったら警告して続ける。
+ * 残骸は `/tmp/orbe2e-` 前置きなので、次回スイート開始時の掃除が拾う。
+ */
+async function removeHarnessTree(
+  tmpRoot: string,
+  child?: {
+    killed: boolean
+    exitCode: number | null
+    signalCode: NodeJS.Signals | null
+    kill: () => boolean
+  },
+): Promise<void> {
+  if (child) {
+    if (!child.killed) child.kill()
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
+      await sleep(100)
+    }
+  }
+  try {
+    fs.rmSync(tmpRoot, RM_TREE)
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[harness] left ${tmpRoot} behind (${String(error)}). ` +
+        `Cleanup only — the next run's ${HARNESS_TMP_PREFIX} sweep removes it.`,
+    )
+  }
+}
+
 function orbitAudioDaemonPids(): number[] {
   try {
     return execFileSync('pgrep', ['-f', '(^|/)orbit-audio-daemon([[:space:]]|$)'], {
@@ -378,6 +543,65 @@ function analysisTailRms(
   expect(windows.length, `capture tail ${durationSec}s must contain RMS windows`).toBeGreaterThan(0)
   // 二乗平均の式は正本を 1 つに保つ（`run-score.ts:127-130` が drift しやすいと警告している式）。
   return quadraticMeanRms(windows)
+}
+
+/**
+ * 1 チャンネルぶんの生 interleaved float32 PCM サンプルを `[fromSec, toSec)` の範囲で読む
+ * （#611 E2E-7）。クリック（不連続）は隣接サンプル間の 1 点の跳びとして現れ、この解析ファイル
+ * が他で使う 20ms RMS/peak 窓（1 窓 960 サンプル @48kHz）には収まらないほど短い —
+ * だから raw サンプルまで降りる必要がある。
+ */
+function readChannelSamples(
+  capturePath: string,
+  format: CaptureFormat,
+  channel: number,
+  fromSec: number,
+  toSec: number,
+): Float32Array {
+  const buffer = readCaptureForAnalysis(capturePath)
+  const bytesPerFrame = format.channels * BYTES_PER_SAMPLE
+  const totalFrames = Math.floor((buffer.length - CAPTURE_HEADER_BYTES) / bytesPerFrame)
+  const fromFrame = Math.max(0, Math.floor(fromSec * format.sampleRate))
+  const toFrame = Math.min(totalFrames, Math.ceil(toSec * format.sampleRate))
+  const out = new Float32Array(Math.max(0, toFrame - fromFrame))
+  for (let i = 0; i < out.length; i += 1) {
+    out[i] = buffer.readFloatLE(
+      CAPTURE_HEADER_BYTES + (fromFrame + i) * bytesPerFrame + channel * BYTES_PER_SAMPLE,
+    )
+  }
+  return out
+}
+
+/** 隣接サンプル間の絶対差の最大値 — #611 E2E-7 のクリック/不連続の指標そのもの。 */
+function maxFirstDifference(samples: Float32Array): number {
+  let max = 0
+  for (let i = 1; i < samples.length; i += 1) {
+    const diff = Math.abs(samples[i]! - samples[i - 1]!)
+    if (diff > max) max = diff
+  }
+  return max
+}
+
+/**
+ * `samples` の先頭からの相対位置で、局所エンベロープが最初に `threshold` を超えるサンプル
+ * index。#611 E2E-7 が gain(-40)→gain(0) の切替を MCP 往復の壁時計ではなく信号そのものから
+ * 見つけるために使う。
+ */
+function findEnvelopeCrossing(
+  samples: Float32Array,
+  sampleRate: number,
+  threshold: number,
+): number | undefined {
+  const blockSamples = Math.max(1, Math.round(sampleRate * 0.002))
+  for (let start = 0; start + blockSamples <= samples.length; start += blockSamples) {
+    let blockMax = 0
+    for (let i = start; i < start + blockSamples; i += 1) {
+      const abs = Math.abs(samples[i]!)
+      if (abs > blockMax) blockMax = abs
+    }
+    if (blockMax > threshold) return start
+  }
+  return undefined
 }
 
 /** Catalog drops create files here; bypass and standard-stage drops must not. */
@@ -442,26 +666,65 @@ async function launchIsolatedOrbitStudio({
   portBase,
   prepareWorkspace,
 }: IsolatedOrbitStudioOptions): Promise<IsolatedOrbitStudio> {
-  killOrbitStudio()
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), tmpPrefix))
+  await killHarnessInstances()
+  const tmpRoot = fs.mkdtempSync(path.join(HARNESS_TMP_BASE, tmpPrefix))
   const userDataDir = path.join(tmpRoot, 'user-data')
   const extensionsDir = path.join(tmpRoot, 'extensions')
   const workspaceSettingsDir = path.join(tmpRoot, '.vscode')
   fs.mkdirSync(userDataDir, { recursive: true })
   fs.mkdirSync(extensionsDir, { recursive: true })
   fs.mkdirSync(workspaceSettingsDir, { recursive: true })
+  // Fail here, with the reason, instead of 60 s later with an opaque MCP timeout.
+  if (userDataDirExceedsSocketLimit(userDataDir)) {
+    throw new Error(
+      `--user-data-dir is too long for a macOS unix socket (${userDataDir.length} chars + ` +
+        `~${IPC_SOCKET_SUFFIX_ALLOWANCE} for the socket name > ${UNIX_SOCKET_PATH_MAX}): ` +
+        `${userDataDir}. VS Code dies with \`listen EINVAL\` before opening a window. ` +
+        'Shorten HARNESS_TMP_PREFIX or the per-test prefix.',
+    )
+  }
   const resolvedSettings = typeof settings === 'function' ? settings(tmpRoot) : settings
   fs.writeFileSync(
     path.join(workspaceSettingsDir, 'settings.json'),
     JSON.stringify(resolvedSettings, null, 2) + '\n',
   )
+  // User-scope settings: window restore, telemetry and the startup editor are application
+  // scope, so the workspace settings above cannot reach them. A fresh profile would
+  // otherwise open the welcome editor and, after a teardown, offer to restore windows.
+  const userSettingsDir = path.join(userDataDir, 'User')
+  fs.mkdirSync(userSettingsDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(userSettingsDir, 'settings.json'),
+    JSON.stringify(
+      {
+        'window.restoreWindows': 'none',
+        'workbench.startupEditor': 'none',
+        'telemetry.telemetryLevel': 'off',
+        'update.mode': 'none',
+        'extensions.autoUpdate': false,
+        'extensions.autoCheckUpdates': false,
+      },
+      null,
+      2,
+    ) + '\n',
+  )
   await prepareWorkspace?.(tmpRoot)
 
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
-    path.join(appPath, 'Contents/Resources/app/bin/orbs'),
+    path.join(appPath, 'Contents/Resources/app/bin/code'),
     [
       '--new-window',
+      // Stock VS Code greets a brand-new profile with the welcome tab, release notes and a
+      // sign-in nudge. The fork we used to launch had those disabled in its product build,
+      // so the harness never needed these. They are pure UI suppression: nothing about the
+      // extension under test changes.
+      // Updates and telemetry are switched off twice on purpose: the flags stop the very first
+      // check, which can fire before the user settings written below are read.
+      '--skip-welcome',
+      '--skip-release-notes',
+      '--disable-updates',
+      '--disable-telemetry',
       `--extensionDevelopmentPath=${EXTENSION_DEV_PATH}`,
       `--user-data-dir=${userDataDir}`,
       `--extensions-dir=${extensionsDir}`,
@@ -479,7 +742,7 @@ async function launchIsolatedOrbitStudio({
     return { child, client, tmpRoot }
   } catch (error) {
     if (!child.killed) child.kill()
-    fs.rmSync(tmpRoot, { recursive: true, force: true })
+    fs.rmSync(tmpRoot, RM_TREE)
     throw error
   }
 }
@@ -853,7 +1116,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         // best-effort — the process may already be gone.
       }
     }
-    killOrbitStudio()
+    await killHarnessInstances()
     if (child && !child.killed) {
       try {
         child.kill()
@@ -867,7 +1130,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     // A later setup removes and recreates only these exact allowlisted names.
     if (tmpRoot) {
       try {
-        fs.rmSync(tmpRoot, { recursive: true, force: true })
+        fs.rmSync(tmpRoot, RM_TREE)
       } catch {
         // best-effort
       }
@@ -889,7 +1152,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // デバイス名の存在確認をスキップするセンチネル __default__ を設定し、
       // マシン固有のデバイス名に依存せず拡張の auto-start を有効化する。
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-mcp-e2e-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}main-`,
         settings: {
           'orbitscore.audioDevice': '__default__',
           'orbitscore.engineDebug': false,
@@ -958,12 +1221,16 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           fs.copyFileSync(KICK_LOOP_FIXTURE, kickLoopWorkPath)
           // The audio the fixture's relative path must land on, mirrored at the same
           // depth from tmpRoot as it sits from REPO_ROOT.
+          //
+          // 🔴 **ディレクトリごとコピーする。1 ファイルずつ列挙しない**（2026-09-11）。
+          // 以前は `kick.wav` だけを写していた。`#611 E2E-7` が `sine_440.wav` を使う譜面を
+          // 足したところ、**素材がワークスペースに存在せず capture 20 s が全長ゼロサンプル**に
+          // なった。しかもテストは「音が出ないまま時間切れ」としか言わず、原因の特定に
+          // 実機実行を 2 本払った。列挙は必ず一段手前で止まる — 新しい fixture が新しい素材を
+          // 使うたびにここを直す設計にしない。
           workAudioDir = path.join(isolatedRoot, 'test-assets/audio')
           fs.mkdirSync(workAudioDir, { recursive: true })
-          fs.copyFileSync(
-            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
-            path.join(workAudioDir, 'kick.wav'),
-          )
+          fs.cpSync(path.join(REPO_ROOT, 'test-assets/audio'), workAudioDir, { recursive: true })
         },
       })
       tmpRoot = launched.tmpRoot
@@ -1753,7 +2020,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const mixerRes = await client.call('evaluate_orbitscore', {
         code: [
           'var mix = init global.mixer',
-          'var master = mix.output(1, 2)',
           'var drums = mix.sum',
           'var verb = mix.aux',
           'verb.master',
@@ -1955,8 +2221,11 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           'routeDry643.play(1, 1, 1, 1)',
           'var routeWet643 = init global.seq',
           `routeWet643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          // 🔴 send は終端 `output` より**前**（PR-O4 で行の並び順が信号順になった。
+          // `output` は `thru: false` = 終端なので、後ろに書いた send は鳴らない
+          // — 実測 sumAux/dry = 0.9992・2026-09-11）。単位も dB（旧 `0.5` と同じ比）。
+          'routeWet643.send("aux643", -6)',
           'routeWet643.output("sum643")',
-          'routeWet643.send("aux643", 0.5)',
           'routeWet643.gate(1)',
           'routeWet643.play(1, 1, 1, 1)',
           'LOOP(routeDry643)',
@@ -1973,11 +2242,14 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const sumAux = result.rms('sumAux')
       expectSegmentsSounding(result, ['dry', 'sumAux'])
       expect(dry, 'E2E-4 dry instrument must be audible').toBeGreaterThan(0.05)
+      // dry = sum のみ / sumAux = sum + aux。aux は同じ信号のコピーなので
+      // 比は `1 + 10^(-6/20) = 1.501`。許容は従来どおり ±0.15。
+      const sendLinear = Math.pow(10, -6 / 20)
       expect(
         sumAux / dry,
-        `E2E-4 sum+aux/dry RMS ratio (${sumAux}/${dry}) must include the 0.5 send`,
-      ).toBeGreaterThan(1.35)
-      expect(sumAux / dry).toBeLessThan(1.65)
+        `E2E-4 sum+aux/dry RMS ratio (${sumAux}/${dry}) must include the -6 dB send (${1 + sendLinear})`,
+      ).toBeGreaterThan(1 + sendLinear - 0.15)
+      expect(sumAux / dry).toBeLessThan(1 + sendLinear + 0.15)
     },
     TEST_TIMEOUT_MS,
   )
@@ -3049,7 +3321,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         'global.beat(4 by 4)',
         `global.audioPath(${JSON.stringify(audioSearchPath)})`,
         'var mix = init global.mixer',
-        'var master = mix.output(1, 2)',
         'var autoSnapshotSum = mix.sum',
         'var autoSnapshotAux = mix.aux',
         `global.effect(${JSON.stringify(catalog.clapEffectName)})`,
@@ -4009,6 +4280,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
             'var fx625 = init global.seq',
             'fx625.audio("kick.wav").chop(1)',
             'fx625.output("fx625out")',
+            // 🔴 #611 PR-O4 以降、`send` の第 2 引数は **dB**（旧: 0.0-1.0 の線形係数）。
+            // ここは経路を張るだけで送出量を判定していない（この block の oracle は
+            // ERROR 件数と child プロセスの有無）ので、`0.2` は「+0.2 dB ≒ ほぼ素通し」と
+            // 読み替わるだけで判定は変わらない。**値を読む時は dB として読むこと。**
             'fx625.send("fx625send", 0.2)',
             'fx625.play(1, 1, 1, 1)',
             'LOOP(fx625)',
@@ -5247,7 +5522,10 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
   )
 
   it.skipIf(!appAvailable)(
-    '#611 O0-3 pins send(0.3) as a linear coefficient: total/dry = 1 + 0.3',
+    // #611 §2.3/§7 (B2): send()'s unit changed from linear (0.0-1.0) to dB. The SAME 0.3
+    // written in the fixture is now read as +0.3 dB, so this golden MOVES on purpose —
+    // total/dry = 1 + 10 ** (0.3 / 20) instead of 1 + 0.3.
+    '#611 O0-3 pins send(0.3) as a dB coefficient: total/dry = 1 + 10 ** (0.3 / 20)',
     async () => {
       const session = requireOutputLineSession()
       const errorsBefore = await errorBaseline(session.client)
@@ -5273,8 +5551,9 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       )
       // 🔴 両区間のオンセット数は steadyRms が固定済みなので、この比は係数だけを表す。
       expect(
-        relativeDelta(totalOverDry, OUTPUT_LINE_GOLDENS.send.legacyTotalOverDry),
-        `O0-3 total/dry must be 1 + ${OUTPUT_LINE_GOLDENS.send.amountAsWritten} (linear today); actual=${totalOverDry}`,
+        relativeDelta(totalOverDry, OUTPUT_LINE_GOLDENS.send.dbTotalOverDry),
+        `O0-3 total/dry must be 1 + 10 ** (${OUTPUT_LINE_GOLDENS.send.amountAsWritten} / 20) ` +
+          `(dB, #611 §2.3); actual=${totalOverDry}`,
       ).toBeLessThanOrEqual(OUTPUT_LINE_GOLDENS.send.tolerance)
       await expectNoNewErrors(session.client, errorsBefore, '#611 O0-3')
     },
@@ -5328,6 +5607,559 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     },
     TEST_TIMEOUT_MS,
   )
+
+  // ──────────────────────────────────────────────────────────────────
+  // #611 B2 — DSL surface E2E (output(dest, thru, db) / send in dB / pan as a line element)
+  // ─────────────────────────────────────────────────────────────────
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-2 pins output(verb, thru: true, db: -12).output(master): total/dry = 1 + 10 ** (-12/20)',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        {
+          slug: '611-e2e2-thru-db',
+          fixturePath: 'tests/fixtures/mcp-e2e/output_line_thru_db.orbs',
+        },
+        async (ctx) => {
+          await captureSteady(ctx, 'dry')
+          await ctx.evaluate('dry.stop()\nLOOP(kick)')
+          await captureSteady(ctx, 'total')
+        },
+        { capture: true },
+      )
+      expect(result, 'E2E-2 must return captured windows').toBeDefined()
+      if (!result) throw new Error('E2E-2 did not return captured windows')
+      const dryRms = steadyRms(result, 'dry', STEADY_CAPTURE)
+      const totalRms = steadyRms(result, 'total', STEADY_CAPTURE)
+      const totalOverDry = totalRms / dryRms
+      const expected = 1 + 10 ** (-12 / 20)
+      // eslint-disable-next-line no-console
+      console.log('[#611 E2E-2] thru/db RMS:', JSON.stringify({ dryRms, totalRms, totalOverDry }))
+      expect(
+        relativeDelta(totalOverDry, expected),
+        `E2E-2 total/dry must be 1 + 10 ** (-12 / 20) = ${expected}; actual=${totalOverDry}`,
+      ).toBeLessThanOrEqual(0.12)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-2')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-3 proves send(aux, db) === output(aux, thru: true, db) (same magnitude)',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        {
+          slug: '611-e2e3-sugar-equivalence',
+          fixturePath: 'tests/fixtures/mcp-e2e/output_line_sugar_equivalence.orbs',
+        },
+        async (ctx) => {
+          await captureSteady(ctx, 'dry')
+          await ctx.evaluate('dry.stop()\nLOOP(kickA)')
+          await captureSteady(ctx, 'totalA')
+          await ctx.evaluate('kickA.stop()\nLOOP(kickB)')
+          await captureSteady(ctx, 'totalB')
+        },
+        { capture: true },
+      )
+      expect(result, 'E2E-3 must return captured windows').toBeDefined()
+      if (!result) throw new Error('E2E-3 did not return captured windows')
+      const dryRms = steadyRms(result, 'dry', STEADY_CAPTURE)
+      const totalARms = steadyRms(result, 'totalA', STEADY_CAPTURE)
+      const totalBRms = steadyRms(result, 'totalB', STEADY_CAPTURE)
+      const ratio = totalARms / totalBRms
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 E2E-3] send vs output(thru) RMS:',
+        JSON.stringify({ dryRms, totalARms, totalBRms, ratio }),
+      )
+      expect(
+        relativeDelta(ratio, 1),
+        `E2E-3 send() and output(thru:true) must agree within reproducibility noise; ` +
+          `totalA=${totalARms} totalB=${totalBRms}`,
+      ).toBeLessThanOrEqual(0.05)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-3')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-S/E2E-S0 pins two simultaneous sends and a disabled (gain 0) send',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        {
+          slug: '611-e2e-s-multi-send',
+          fixturePath: 'tests/fixtures/mcp-e2e/output_line_multi_send.orbs',
+        },
+        async (ctx) => {
+          await captureSteady(ctx, 'dry')
+          await ctx.evaluate('dry.stop()\nLOOP(kick)')
+          await captureSteady(ctx, 'twoSends')
+          await ctx.evaluate('kick.stop()\nLOOP(off)')
+          await captureSteady(ctx, 'disabledSend')
+        },
+        { capture: true },
+      )
+      expect(result, 'E2E-S must return captured windows').toBeDefined()
+      if (!result) throw new Error('E2E-S did not return captured windows')
+      const dryRms = steadyRms(result, 'dry', STEADY_CAPTURE)
+      const twoSendsRms = steadyRms(result, 'twoSends', STEADY_CAPTURE)
+      const disabledRms = steadyRms(result, 'disabledSend', STEADY_CAPTURE)
+      const twoSendsOverDry = twoSendsRms / dryRms
+      const disabledOverDry = disabledRms / dryRms
+      const expectedTwoSends = 1 + 10 ** (-12 / 20) + 10 ** (-6 / 20)
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 E2E-S/S0] multi-send RMS:',
+        JSON.stringify({ dryRms, twoSendsOverDry, disabledOverDry }),
+      )
+      expect(
+        relativeDelta(twoSendsOverDry, expectedTwoSends),
+        `E2E-S total/dry must be 1 + 10**(-12/20) + 10**(-6/20) = ${expectedTwoSends}; ` +
+          `actual=${twoSendsOverDry}`,
+      ).toBeLessThanOrEqual(0.12)
+      expect(
+        relativeDelta(disabledOverDry, 1),
+        `E2E-S0 a disabled send must contribute ~0 gain (total/dry ~= 1); actual=${disabledOverDry}`,
+      ).toBeLessThanOrEqual(0.05)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-S/E2E-S0')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-G pins LineOp::Gain: kick.gain(-6).output(drums) reaches the daemon-side line',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        {
+          slug: '611-e2e-g-line-gain',
+          fixturePath: 'tests/fixtures/mcp-e2e/output_line_gain_element.orbs',
+        },
+        async (ctx) => {
+          await captureSteady(ctx, 'dry')
+          await ctx.evaluate('dry.stop()\nLOOP(kick)')
+          await captureSteady(ctx, 'gained')
+        },
+        { capture: true },
+      )
+      expect(result, 'E2E-G must return captured windows').toBeDefined()
+      if (!result) throw new Error('E2E-G did not return captured windows')
+      const dryRms = steadyRms(result, 'dry', STEADY_CAPTURE)
+      const gainedRms = steadyRms(result, 'gained', STEADY_CAPTURE)
+      const gainedOverDry = gainedRms / dryRms
+      const expected = 10 ** (-6 / 20)
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 E2E-G] line gain RMS:',
+        JSON.stringify({ dryRms, gainedRms, gainedOverDry }),
+      )
+      expect(
+        relativeDelta(gainedOverDry, expected),
+        `E2E-G gained/dry must be 10 ** (-6 / 20) = ${expected}; actual=${gainedOverDry}`,
+      ).toBeLessThanOrEqual(0.12)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-G')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-P pins LineOp::Pan: hard-left silences the right channel, and center keeps the sqrt(2)-normalized level of an un-panned line',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        { slug: '611-e2e-p-pan', fixturePath: 'tests/fixtures/mcp-e2e/output_line_pan.orbs' },
+        async (ctx) => {
+          await captureSteady(ctx, 'noPan')
+          // Re-assert pan explicitly right before each measurement (also gives
+          // dsl-e2e-coverage.spec.ts's A-1 ratchet a literal `.pan(` to find — its
+          // scan reads THIS file's source, not the external fixture).
+          await ctx.evaluate('noPan.stop()\nhardLeft.pan(-100)\nLOOP(hardLeft)')
+          await captureSteady(ctx, 'hardLeft')
+          await ctx.evaluate('hardLeft.stop()\ncenter.pan(0)\nLOOP(center)')
+          await captureSteady(ctx, 'center')
+        },
+        { capture: true },
+      )
+      expect(result, 'E2E-P must return captured windows').toBeDefined()
+      if (!result) throw new Error('E2E-P did not return captured windows')
+      expect(result.analysis.format.channels, 'E2E-P requires a 2ch device').toBe(2)
+      const noPanRms = steadyRms(result, 'noPan', STEADY_CAPTURE)
+      const centerRms = steadyRms(result, 'center', STEADY_CAPTURE)
+      const hardLeftCh0 = result.channelRms('hardLeft', 0, STEADY_CAPTURE.guardSec)
+      const hardLeftCh1 = result.channelRms('hardLeft', 1, STEADY_CAPTURE.guardSec)
+      const hardLeftBalance = hardLeftCh1 / hardLeftCh0
+      const centerOverNoPan = centerRms / noPanRms
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 E2E-P] pan RMS:',
+        JSON.stringify({
+          noPanRms,
+          centerRms,
+          hardLeftCh0,
+          hardLeftCh1,
+          hardLeftBalance,
+          centerOverNoPan,
+        }),
+      )
+      expect(
+        hardLeftBalance,
+        `E2E-P hard-left must silence the right channel relative to the left; ` +
+          `ch0=${hardLeftCh0} ch1=${hardLeftCh1}`,
+      ).toBeLessThanOrEqual(0.05)
+      expect(
+        relativeDelta(centerOverNoPan, 1),
+        `E2E-P center must match an un-panned line's level (sqrt(2) normalization, not -3dB); ` +
+          `noPan=${noPanRms} center=${centerRms}`,
+      ).toBeLessThanOrEqual(0.1)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-P')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-6 pins that output(verb, thru: true) before vs. after effect([Gain]) changes the mix: total_B is exactly 2g of plain and total_A/total_B sits inside [(1-g)/2g, (1+g)/2g]',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const result = await runScore(
+        session,
+        {
+          slug: '611-e2e6-position-matters',
+          fixturePath: 'tests/fixtures/mcp-e2e/output_line_position_matters.orbs',
+        },
+        async (ctx) => {
+          await captureSteady(ctx, 'totalA')
+          await ctx.evaluate('kickA.stop()\nLOOP(kickB)')
+          await captureSteady(ctx, 'totalB')
+          await ctx.evaluate('kickB.stop()\nLOOP(kickC)')
+          await captureSteady(ctx, 'plain')
+        },
+        { capture: true },
+      )
+      expect(result, 'E2E-6 must return captured windows').toBeDefined()
+      if (!result) throw new Error('E2E-6 did not return captured windows')
+      const totalARms = steadyRms(result, 'totalA', STEADY_CAPTURE)
+      const totalBRms = steadyRms(result, 'totalB', STEADY_CAPTURE)
+      const plainRms = steadyRms(result, 'plain', STEADY_CAPTURE)
+      const ratio = totalARms / totalBRms
+      const g = 10 ** (-12 / 20)
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 E2E-6] position-matters RMS:',
+        JSON.stringify({
+          totalARms,
+          totalBRms,
+          plainRms,
+          ratio,
+          bOverPlain: totalBRms / plainRms,
+          aOverPlain: totalARms / plainRms,
+        }),
+      )
+
+      // 🔴 B は厳密に言える。`[Rack, Output(verb,thru), Output(master)]` は aux も master も
+      // ラックの**後**なので、out-of-process ラックの +1 block 遅延（`outproc_effect.rs` の
+      // `process`: 1 block を child へ submit し前 block を読む）を**両方が等しく**受ける。
+      // 2 つのコピーは揃うので振幅が線形に加算され、plain 比は 2g になる。
+      // 実測 0.50238 / 理論 0.502377（2026-09-11・5 桁一致）。
+      expect(
+        relativeDelta(totalBRms / plainRms, 2 * g),
+        `E2E-6 total_B must be exactly 2g of plain (both copies are post-rack, so they stay ` +
+          `aligned). want=${2 * g} got=${totalBRms / plainRms}`,
+      ).toBeLessThanOrEqual(0.06)
+
+      // 🔴 A には閉じた式が無い。aux のタップが**ラックの前**なので、aux のコピーだけが
+      // 遅延を受けず、2 つのコピーが 512 frames（10.7 ms @48k）ずれる。kick は減衰する
+      // 過渡音なので位相関係は素材のスペクトル依存で、同相加算 (1+g) にも電力加算
+      // sqrt(1+g²) にもならない（実測 A/plain = 0.9814 は**両方より小さい** = 部分的な打ち消し）。
+      //
+      // 閉じた式の代わりに**振幅の三角不等式**で挟む。2 つのコピーの振幅は 1 と g なので、
+      // 位相がどうであれ和は |1 − g| 以上 (1 + g) 以下。B は 2g なので:
+      //     (1 − g) / (2g)  <=  total_A / total_B  <=  (1 + g) / (2g)
+      //     1.4905          <=      1.9535         <=  2.4905
+      // これは実測に合わせて緩めた帯ではなく**物理的な上下限**であり、なお判別力がある:
+      // 位置が効かず A が B と同じ（ラックが両方に掛かる）なら比は 1.0 で下限を割り、
+      // A でラックが掛からない（比 2/2g = 3.98）なら上限を超える。
+      const lower = (1 - g) / (2 * g)
+      const upper = (1 + g) / (2 * g)
+      expect(
+        ratio,
+        `E2E-6 total_A/total_B must sit inside the amplitude triangle inequality ` +
+          `[${lower}, ${upper}] (position matters: A taps the aux before the rack). actual=${ratio}`,
+      ).toBeGreaterThan(lower)
+      expect(ratio).toBeLessThan(upper)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-6')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-7 keeps a republished bus gain seeded, so gain(-40) -> gain(0) mid-playback ramps instead of clicking',
+    async () => {
+      const session = requireOutputLineSession()
+      const errorsBefore = await errorBaseline(session.client)
+      const slug = '611-e2e7-republish-seed'
+      const capturePath = session.captureWavPath(slug)
+      const result = await runScore(
+        session,
+        { slug, fixturePath: 'tests/fixtures/mcp-e2e/output_line_republish_seed.orbs' },
+        async ({ evaluate }) => {
+          // 🔴 固定 sleep で待たない（memory: capture の窓は音を追いかける）。旧版は
+          // `RUN` + sleep(300) で、実機の capture 0.928 s が**全長すべて無音**だった。
+          // -40 dB は peak 0.007 と小さいので、床もそれに合わせて下げる。
+          // 🔴 無音で落ちた時に**エンジンのログを添える**（規律: 実機で問題が出たら、まず
+          // ログで異常系を捕まえられるようにする）。2026-09-11 の実機では capture 20 s が
+          // 全長ゼロサンプルだったのに、テストは `timed out waiting for capture sound` としか
+          // 言わず、原因を追うのに実行を 1 本まるごと払い直すことになった。
+          try {
+            await waitForSound(capturePath, {
+              floor: 0.0015,
+              intervalMs: 100,
+              timeoutMs: 20_000,
+              label: '#611 E2E-7 -40 dB onset',
+            })
+          } catch (error) {
+            const log = (await session.client.call('get_log', { lines: 200 })).text
+            throw new Error(`${String(error)}\n--- engine log tail ---\n${log.slice(-4000)}`)
+          }
+          // 定常に落ち着かせてから触る（LOOP の 1 周目の立ち上がりを切替窓に含めない）。
+          await sleep(700)
+          // 🔴 Not a fresh declaration — re-evaluating `tone.gain(...)` republishes the bus
+          // line program (design 611 §4.3), which is exactly the seed/no-seed fork this test
+          // exists to pin.
+          await evaluate('tone.gain(0)')
+          // 切替後のランプ（5 ms）が落ち着いた定常窓まで録り続ける。
+          await sleep(1_500)
+        },
+        { capture: true },
+      )
+      expect(result, 'E2E-7 must return captured windows').toBeDefined()
+      if (!result) throw new Error('E2E-7 did not return captured windows')
+
+      const format = readCaptureFormat(capturePath)
+      // Locate the switch directly from the signal rather than trusting MCP round-trip timing:
+      // at -40 dB the sine's peak is 0.01, which never crosses 0.1, so the first crossing is
+      // the gain(0) ramp itself (design 611 §4.3's 5 ms ramp).
+      const allSamples = readChannelSamples(capturePath, format, 0, 0, Number.POSITIVE_INFINITY)
+      const crossingIdx = findEnvelopeCrossing(allSamples, format.sampleRate, 0.1)
+      expect(crossingIdx, 'E2E-7 must find the gain(0) switch inside the capture').toBeDefined()
+      if (crossingIdx === undefined) {
+        throw new Error('E2E-7 did not find the switch envelope crossing')
+      }
+
+      const guardSamples = Math.round(format.sampleRate * 0.05)
+      const switchWindow = allSamples.slice(
+        Math.max(0, crossingIdx - guardSamples),
+        Math.min(allSamples.length, crossingIdx + guardSamples),
+      )
+      // A steady window safely after the 5 ms ramp settles and safely before the file's
+      // natural end, at the same post-switch (0 dB) amplitude, with no transition inside it.
+      const steadyFromIdx = crossingIdx + Math.round(format.sampleRate * 0.15)
+      const steadyToIdx = crossingIdx + Math.round(format.sampleRate * 0.25)
+      const steadyWindow = allSamples.slice(steadyFromIdx, Math.min(allSamples.length, steadyToIdx))
+      expect(
+        steadyWindow.length,
+        'E2E-7 steady window must fit inside the captured file',
+      ).toBeGreaterThan(0)
+
+      const switchMaxDiff = maxFirstDifference(switchWindow)
+      const steadyMaxDiff = maxFirstDifference(steadyWindow)
+      // eslint-disable-next-line no-console
+      console.log(
+        '[#611 E2E-7] republish seed click check:',
+        JSON.stringify({
+          switchSec: crossingIdx / format.sampleRate,
+          switchMaxDiff,
+          steadyMaxDiff,
+          ratio: switchMaxDiff / steadyMaxDiff,
+        }),
+      )
+      expect(
+        steadyMaxDiff,
+        'E2E-7 steady window must be audible enough to measure a first difference',
+      ).toBeGreaterThan(0)
+      expect(
+        switchMaxDiff,
+        `E2E-7 the switch window's first-difference peak (${switchMaxDiff}) must stay within ` +
+          `4x the steady window's (${steadyMaxDiff}) — an unseeded republish would jump close ` +
+          `to the full amplitude in a single sample instead of ramping (design 611 §4.3)`,
+      ).toBeLessThanOrEqual(steadyMaxDiff * 4)
+      await expectNoNewErrors(session.client, errorsBefore, '#611 E2E-7')
+    },
+    TEST_TIMEOUT_MS,
+  )
+
+  it.skipIf(!appAvailable)(
+    '#611 E2E-10 recovers steady RMS and exactly one daemon process after a daemon SIGKILL respawn',
+    async () => {
+      const session = requireOutputLineSession()
+      const slug = '611-e2e10-daemon-respawn'
+      const capturePath = session.captureWavPath(slug)
+      prepareCapturePath(capturePath)
+
+      // Reuse E2E-2's fixture (design 611 §8.1) via the same copy/open/select/run steps
+      // `runScore()` uses internally — that helper always tears the engine down at the end,
+      // but this test needs ONE continuous session so the daemon SIGKILL below exercises the
+      // real respawn path (`rust-engine-player.ts`'s `onDaemonDied` -> `respawnLoop`), not a
+      // normal stop_engine/start_engine restart.
+      const fixtureRel = 'tests/fixtures/mcp-e2e/output_line_thru_db.orbs'
+      const absFixture = path.join(REPO_ROOT, fixtureRel)
+      const fixtureContent = fs.readFileSync(absFixture, 'utf8')
+      const destDir = path.join(session.tmpRoot, path.dirname(fixtureRel))
+      fs.mkdirSync(destDir, { recursive: true })
+      const workPath = path.join(destDir, path.basename(absFixture))
+      fs.writeFileSync(workPath, fixtureContent)
+      const lineCount = fixtureContent.split('\n').length
+
+      const daemonPidsBeforeStart = new Set(orbitAudioDaemonPids())
+      await startEngineForRun(session.client, '#611 E2E-10', capturePath)
+      try {
+        const startedDaemonPids = orbitAudioDaemonPids().filter(
+          (pid) => !daemonPidsBeforeStart.has(pid),
+        )
+        expect(
+          startedDaemonPids,
+          'E2E-10 requires exactly one daemon added by its own engine start',
+        ).toHaveLength(1)
+        const daemonPidBefore = startedDaemonPids[0]!
+
+        const opened = await session.client.call('open_file', { path: workPath })
+        expect(opened.isError, opened.text).toBe(false)
+        const selected = await session.client.call('set_selection', {
+          start_line: 1,
+          start_char: 1,
+          end_line: Math.max(1, lineCount),
+          end_char: 999_999,
+        })
+        expect(selected.isError, selected.text).toBe(false)
+        const run = await session.client.call('run_selection')
+        expect(run.isError, run.text).toBe(false)
+        // The fixture's own LOOP(dry) plays an un-routed reference; switch to E2E-2's -12 dB
+        // thru/db bus chain, which is what this test measures before and after the respawn.
+        await session.client.call('evaluate_orbitscore', { code: 'dry.stop()\nLOOP(kick)' })
+
+        await waitForSound(capturePath, {
+          floor: STEADY_CAPTURE.audibleFloorRms,
+          intervalMs: 200,
+          timeoutMs: 20_000,
+          label: '#611 E2E-10 before-kill onset',
+        })
+        await sleep(2_000)
+        const beforeTail = captureTailRms(capturePath, 1.0)
+        const beforeRms = quadraticMeanRms(beforeTail.rms.map((rms) => ({ rms })))
+        expect(beforeRms, 'E2E-10 before-kill capture must be audible').toBeGreaterThan(
+          STEADY_CAPTURE.audibleFloorRms,
+        )
+
+        // SAFETY: signals only the exact PID this test's own engine start added — same pattern
+        // and rationale as #606 E2E-K3's orbitAudioDaemonPids() SAFETY note above.
+        process.kill(daemonPidBefore, 'SIGKILL')
+
+        // 🔴 capture is a daemon-side tap (ORBIT_CAPTURE_WAV): the respawned daemon recreates
+        // the file at the same path, so `beforeRms` above (already read before the kill) is
+        // the only way to keep it — one CaptureWindows spanning the kill would lose it
+        // (design 611 §8.1 note).
+        await waitUntil(
+          async () => {
+            const stillRunning = (
+              JSON.parse((await session.client.call('get_engine_state')).text) as {
+                running: boolean
+              }
+            ).running
+            const currentPids = orbitAudioDaemonPids().filter((pid) => pid !== daemonPidBefore)
+            // 🔴 待つ条件は「1 台以上に戻った」まで。**台数が 1 であること自体は下で assert する。**
+            // ここで `=== 1` を待つと、2 台で落ち着いた場合に waitUntil の timeout になり、
+            // 「台数が違う」ではなく「respawn しなかった」という誤った診断が出る
+            // （アサーションが waitUntil の条件と同語反復になり、何も区別しなくなる）。
+            return stillRunning && currentPids.length >= 1
+          },
+          { intervalMs: 300, timeoutMs: 30_000, label: '#611 E2E-10 daemon respawn' },
+        )
+        const daemonPidsAfterRespawn = orbitAudioDaemonPids().filter(
+          (pid) => pid !== daemonPidBefore,
+        )
+        expect(
+          daemonPidsAfterRespawn,
+          `E2E-10 must settle on exactly one daemon process after respawn (#624). pids=${JSON.stringify(daemonPidsAfterRespawn)}`,
+        ).toHaveLength(1)
+
+        await waitForSound(capturePath, {
+          floor: STEADY_CAPTURE.audibleFloorRms,
+          intervalMs: 200,
+          timeoutMs: 20_000,
+          label: '#611 E2E-10 after-respawn onset',
+        })
+        await sleep(2_000)
+        const afterTail = captureTailRms(capturePath, 1.0)
+        const afterRms = quadraticMeanRms(afterTail.rms.map((rms) => ({ rms })))
+        expect(afterRms, 'E2E-10 after-respawn capture must be audible').toBeGreaterThan(
+          STEADY_CAPTURE.audibleFloorRms,
+        )
+
+        // eslint-disable-next-line no-console
+        console.log(
+          '[#611 E2E-10] daemon respawn RMS:',
+          JSON.stringify({ beforeRms, afterRms, ratio: afterRms / beforeRms }),
+        )
+        expect(
+          relativeDelta(afterRms, beforeRms),
+          `E2E-10 after/before RMS must return within 5%; before=${beforeRms} after=${afterRms}`,
+        ).toBeLessThanOrEqual(0.05)
+        // 🔴 No expectNoNewErrors here on purpose: the SIGKILL above is an intentional fault
+        // injection (matching #661 D-2/D-3's precedent), and the daemon's own death is
+        // legitimately logged as an ERROR-classified line. Asserting "no new errors" would
+        // fail on the exact behavior this test intends to cause.
+      } finally {
+        try {
+          await session.client.call('evaluate_orbitscore', { code: 'global.stop()' })
+          await session.client.call('stop_engine')
+          await waitForEngineState(session.client, false, 15_000, '#611 E2E-10 engine stopped')
+        } catch (cleanupError) {
+          // eslint-disable-next-line no-console
+          console.warn('[#611 E2E-10] cleanup failed:', String(cleanupError))
+        }
+      }
+    },
+    TEST_TIMEOUT_MS * 2,
+  )
+
+  {
+    // #611 §8.3 (owner 2026-09-10): E2E-4 (thru: false terminates the chain) and E2E-5
+    // (a physical multi-output split is -20dB relative to master) need a >= 4ch output
+    // device. This machine has none as of the design date (2ch built-in speaker + 2ch Pro
+    // Tools Aggregate I/O only) — `it.skip` with a warning rather than writing an assertion
+    // body no device here can verify. Implement per design 611-o-surface-bundle §8.3 once a
+    // >= 4ch device exists (e.g. a Loopback.app virtual device).
+    const multiChannelDevice = appAvailable ? outputLineMultiChannelDevice() : undefined
+    if (appAvailable && multiChannelDevice === undefined) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[E2E-4/E2E-5] no >=4ch output device — install/configure one (e.g. Loopback.app) to run',
+      )
+    }
+    it.skipIf(!appAvailable || multiChannelDevice === undefined)(
+      '#611 E2E-4/E2E-5 (needs >=4ch device) — thru: false terminates the chain, and a physical multi-output split is -20dB relative to master',
+      async () => {
+        throw new Error(
+          'E2E-4/E2E-5 is unimplemented — a >=4ch device was detected but no test body exists ' +
+            'yet. Implement per design 611-o-surface-bundle-design.md §8.3.',
+        )
+      },
+      TEST_TIMEOUT_MS,
+    )
+  }
 
   // ──────────────────────────────────────────────────────────────────
   // #606 PR-K-A2 — plugin all-notes-off (T1 / E2E-K3)
@@ -5446,7 +6278,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     '#779 startup sweep unlinks orphaned outproc shm but keeps live ones',
     async () => {
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-shm-sweep-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}shm-`,
         settings: {
           'orbitscore.audioDevice': '__default__',
           'orbitscore.engineDebug': false,
@@ -5509,7 +6341,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           // best-effort cleanup
         }
         if (!sweepApp.killed) sweepApp.kill()
-        fs.rmSync(sweepTmpRoot, { recursive: true, force: true })
+        fs.rmSync(sweepTmpRoot, RM_TREE)
       }
     },
     TEST_TIMEOUT_MS,
@@ -5520,7 +6352,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
     async () => {
       let requestedName = ''
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-named-device-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}dev-`,
         settings: () => {
           requestedName = defaultOutputDeviceName('#661 D-0')
           return {
@@ -5531,10 +6363,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         env: { ...process.env },
         portBase: 39500,
         prepareWorkspace: (namedTmpRoot) => {
+          // ディレクトリごと（1 ファイル列挙にしない・上の主セッションと同じ理由）。
           fs.mkdirSync(path.join(namedTmpRoot, 'test-assets/audio'), { recursive: true })
-          fs.copyFileSync(
-            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
-            path.join(namedTmpRoot, 'test-assets/audio/kick.wav'),
+          fs.cpSync(
+            path.join(REPO_ROOT, 'test-assets/audio'),
+            path.join(namedTmpRoot, 'test-assets/audio'),
+            { recursive: true },
           )
         },
       })
@@ -5583,7 +6417,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
           // best-effort cleanup
         }
         if (!child.killed) child.kill()
-        fs.rmSync(tmpRoot, { recursive: true, force: true })
+        fs.rmSync(tmpRoot, RM_TREE)
       }
     },
     TEST_TIMEOUT_MS * 2,
@@ -5596,7 +6430,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // changing it in the shared long-running suite would invalidate all following scenarios.
       let deadRequestedName = ''
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-device-gate-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}gate-`,
         settings: () => {
           deadRequestedName = defaultOutputDeviceName('#661 D-2')
           return {
@@ -5611,10 +6445,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         },
         portBase: 39600,
         prepareWorkspace: (faultTmpRoot) => {
+          // ディレクトリごと（1 ファイル列挙にしない・上の主セッションと同じ理由）。
           fs.mkdirSync(path.join(faultTmpRoot, 'test-assets/audio'), { recursive: true })
-          fs.copyFileSync(
-            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
-            path.join(faultTmpRoot, 'test-assets/audio/kick.wav'),
+          fs.cpSync(
+            path.join(REPO_ROOT, 'test-assets/audio'),
+            path.join(faultTmpRoot, 'test-assets/audio'),
+            { recursive: true },
           )
         },
       })
@@ -5676,8 +6512,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         } catch {
           // best-effort cleanup
         }
-        if (!faultChild.killed) faultChild.kill()
-        fs.rmSync(faultTmpRoot, { recursive: true, force: true })
+        await removeHarnessTree(faultTmpRoot, faultChild)
       }
     },
     TEST_TIMEOUT_MS * 2,
@@ -5694,7 +6529,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       // D-3 は**デバイス無指定で起動**し、既定デバイスを名前で要求することで本当の切替にする。
       // `dead-probe-requested` は「要求された」デバイスに効くので、その probe が死ぬ。
       const launched = await launchIsolatedOrbitStudio({
-        tmpPrefix: 'orbitstudio-device-switch-',
+        tmpPrefix: `${HARNESS_TMP_PREFIX}swap-`,
         settings: { 'orbitscore.audioDevice': '__default__', 'orbitscore.engineDebug': false },
         env: {
           ...process.env,
@@ -5703,10 +6538,12 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         },
         portBase: 39800,
         prepareWorkspace: (faultTmpRoot) => {
+          // ディレクトリごと（1 ファイル列挙にしない・上の主セッションと同じ理由）。
           fs.mkdirSync(path.join(faultTmpRoot, 'test-assets/audio'), { recursive: true })
-          fs.copyFileSync(
-            path.join(REPO_ROOT, 'test-assets/audio/kick.wav'),
-            path.join(faultTmpRoot, 'test-assets/audio/kick.wav'),
+          fs.cpSync(
+            path.join(REPO_ROOT, 'test-assets/audio'),
+            path.join(faultTmpRoot, 'test-assets/audio'),
+            { recursive: true },
           )
         },
       })
@@ -5846,8 +6683,7 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         } catch {
           // best-effort cleanup
         }
-        if (!faultChild.killed) faultChild.kill()
-        fs.rmSync(faultTmpRoot, { recursive: true, force: true })
+        await removeHarnessTree(faultTmpRoot, faultChild)
       }
     },
     TEST_TIMEOUT_MS * 2,

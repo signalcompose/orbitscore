@@ -2,8 +2,8 @@
  * Rust audio backend adapter (post-2.0 S2 / Issue #296).
  *
  * `DaemonClient`（orbit-audio-daemon / WebSocket）を `AudioEngineBackend` 契約へ
- * ラップし、interpreter に差し込む。cutover #108 で `createAudioEngine()` の既定（唯一の）
- * バックエンド（唯一のバックエンド）。
+ * ラップし、interpreter に差し込む。cutover #108 以降、`createAudioEngine()` が返す唯一の
+ * バックエンド（#502 で SC への opt-out 経路ごと撤去した）。
  *
  * 設計（docs/development/POST_2.0_A0_RT_INTEGRATION_DESIGN.md §13 / master plan §4-A）:
  *
@@ -49,6 +49,7 @@ import type {
   PluginStateSaveTarget,
   PluginUiCloseCompletion,
   PluginUiTarget,
+  WireLineOp,
 } from '../types'
 
 import { DaemonClient } from './daemon-client'
@@ -440,6 +441,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
     string,
     { output: string | undefined; sends: { bus: string; gain: number }[] }
   >()
+  /** Complete bus-line intents replayed after daemon respawn (#611 B1). */
+  private readonly busLines = new Map<string, WireLineOp[]>()
   /**
    * 🔴 最後に設定したマスターゲイン（#643 PR-2）。daemon は respawn すると
    * **unity から始まる**ので、再送しないとマスターが黙って効かなくなる。
@@ -788,6 +791,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
           await this.reloadPluginsAfterRespawn()
           await this.reloadEffectRacksAfterRespawn()
           await this.reapplyBusRoutingAfterRespawn()
+          await this.reapplyBusLinesAfterRespawn()
           await this.reapplySourceRoutingAfterRespawn()
           await this.reapplyGlobalGainAfterRespawn()
           console.warn(
@@ -978,11 +982,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * Runtime mixer bus routing change (MX.4, #459/#453 M3). Unlike LinkAudio channel
-   * registration, there is no hardware-bus fallback for a missing sum/aux target — the
-   * daemon-side error (e.g. `UNSUPPORTED` on a non-`outproc-effect` build, or a kind/order
-   * violation) is a real failure and propagates unchanged to the caller (`Sequence`'s
-   * `output()`/`send()`, which log it via `console.warn` — see that file).
+   * Legacy `SetBusRouting` endpoint retained for wire compatibility. Since #852 the DSL no
+   * longer reaches this path: Sequence/MixerBusHandle routing uses `SetBusLine` instead, whose
+   * live respawn replay is `reapplyBusLinesAfterRespawn()`.
    */
   async setBusRouting(
     seqBus: string,
@@ -1007,11 +1009,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * Re-issues the last intended `SetBusRouting` per seq bus after a daemon respawn — the
-   * new daemon process starts with all `routing_override`/send atomics at their defaults,
-   * so without this replay every sum/aux routing silently reverts to plain per-sequence
-   * output (audio quietly goes to the wrong place). Mirrors `reloadPluginsAfterRespawn`:
-   * per-entry independent failure handling, and a failure must not fail the respawn itself.
+   * Legacy replay for callers of `setBusRouting()` above. Since #852 no DSL path populates
+   * `busRoutings`; the live DSL replay is `reapplyBusLinesAfterRespawn()`. Kept while the old
+   * daemon wire command still exists, with independent failure handling per cached entry.
    */
   private async reapplyBusRoutingAfterRespawn(): Promise<void> {
     for (const [seqBus, { output, sends }] of this.busRoutings.entries()) {
@@ -1021,6 +1021,37 @@ export class RustEnginePlayer implements AudioEngineBackend {
         // Cache entry intentionally remains: a later daemon respawn retries restoration.
         console.error(
           `❌ [rust-engine] failed to restore bus routing after daemon respawn (bus=${seqBus})`,
+          err,
+        )
+      }
+    }
+  }
+
+  /** Replace a bus line and retain transport-failure intent for respawn replay. */
+  async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
+    const prev = this.busLines.get(bus)
+    const intent = [...line]
+    this.busLines.set(bus, intent)
+    try {
+      await this.daemon.setBusLine(bus, intent)
+    } catch (err) {
+      if (err instanceof DaemonProtocolError) {
+        if (prev) this.busLines.set(bus, prev)
+        else this.busLines.delete(bus)
+      }
+      throw err
+    }
+  }
+
+  /** Reapply complete bus-line intents after the legacy routing replay. */
+  private async reapplyBusLinesAfterRespawn(): Promise<void> {
+    for (const [bus, line] of this.busLines.entries()) {
+      try {
+        await this.daemon.setBusLine(bus, line)
+      } catch (err) {
+        // Keep the intent: a later respawn gets another restoration attempt.
+        console.error(
+          `❌ [rust-engine] failed to restore bus line after daemon respawn (bus=${bus})`,
           err,
         )
       }
@@ -1414,21 +1445,32 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * マスターエフェクト（compressor/limiter/normalizer）は daemon 未対応（A4 era）。
-   * 他の feature gap と同じく、見かけの parity を作らないよう 1 回 warn して no-op にする
+   * マスターエフェクト（compressor/limiter/normalizer）は daemon 未対応。
+   * 見かけの parity を作らないよう warn して no-op にする
    * （無言 drop だと `global.compressor()` 等が効いていないことに operator が気付けない）。
+   *
+   * 🔴 **discriminator を必ず渡す**（#840 レビュー指摘）。`warnOnce` のキーは
+   * discriminator が無いと `kind` そのもの（`'masterEffect'`）になるので、渡さないと
+   * **1 セッションにつき 1 回しか warn しない**。`compressor()` の後に `limiter()` を足す
+   * という普通のマスタリングチェーンで、2 つ目以降が**完全に無音で失敗する**。
+   * add と remove も別のキーにする（同じ effect の付け外しは別の出来事）。
+   *
+   * 🔴 SC バックエンドの synthdef がこの 3 つの唯一の実装だったので、#502 の削除以降
+   * **代替経路が存在しない**。仕様（DSL §Implementation Status）に警告ブロックを置いてある。
    */
   async addEffect(_target: string, effectType: string, _params: unknown): Promise<void> {
     this.warnOnce(
       'masterEffect',
-      `⚠️  [rust-engine] master effect "${effectType}" is not supported yet (A4 era) — it is a no-op on the rust engine.`,
+      `⚠️  [rust-engine] master effect "${effectType}" is not supported — it is a no-op. Put a CLAP / VST3 plugin on the master bus instead.`,
+      `add:${effectType}`,
     )
   }
 
-  async removeEffect(_target: string, _effectType: string): Promise<void> {
+  async removeEffect(_target: string, effectType: string): Promise<void> {
     this.warnOnce(
       'masterEffect',
-      `⚠️  [rust-engine] master effects are not supported yet (A4 era) — removeEffect is a no-op on the rust engine.`,
+      `⚠️  [rust-engine] master effect "${effectType}" is not supported — removeEffect is a no-op.`,
+      `remove:${effectType}`,
     )
   }
 

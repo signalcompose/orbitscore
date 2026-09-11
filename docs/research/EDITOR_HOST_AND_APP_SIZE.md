@@ -35,9 +35,9 @@ owner の問い（原文）:
 ## 関連
 
 - **#656** — OrbitStudio.app の署名・notarization・リリース経路。§5 の再署名要件が直接効く
-- **#659** — ローカルリリーススクリプト（`scripts/orbitstudio/make-local-release.sh`）。
-  §4 のトリムをこの手順に組み込む
-- `scripts/orbitstudio/build_orbitstudio.sh` — アプリのビルド
+- **#659** — 旧フォークのローカルリリーススクリプト案（廃止。現行方針は
+  [`NATIVE_MIGRATION_2026-09.md`](../planning/NATIVE_MIGRATION_2026-09.md) §12.3）。
+- 旧フォークの `build_orbitstudio.sh`（削除。現行の gated 方針は同 §12.4）
 
 ---
 

@@ -173,7 +173,7 @@ The daemon-side pump that drains UI events. #633 made it per-index / per-window,
 
 ### gated E2E (`ORBIT_GATED_ORBITSTUDIO=1`)
 
-`tests/e2e/orbitstudio-mcp-gated.spec.ts`. It launches the real OrbitStudio.app, drives it through MCP tool calls only, and judges by numbers from the captured WAV. The `pretest` of `npm run test:e2e:gated` builds the daemon automatically. Without the gate env, the suite is skipped.
+`tests/e2e/orbitstudio-mcp-gated.spec.ts`. It launches real VS Code, drives it through MCP tool calls only, and judges by numbers from the captured WAV (#830 moved this off the VSCodium fork). The `pretest` of `npm run test:e2e:gated` prepares the daemon and the engine's runtime dependencies. Without the gate env, the suite is skipped.
 
 ### coverage ratchet
 
@@ -207,7 +207,7 @@ The name of the dedicated SynthDef that OrbitScore registers with SuperCollider.
 
 ### scsynth
 
-The SuperCollider audio server binary. It accepts control via OSC/UDP, executes SynthDefs, and produces audio output. From v1.0 onward, it is bundled inside the `.vsix`.
+The SuperCollider audio server binary. It accepts control via OSC/UDP, executes SynthDefs, and produces audio output. From v1.0 onward it was bundled inside the `.vsix`, but **[#836](https://github.com/signalcompose/orbitscore/pull/836) (2026-09-10) stopped bundling it**. The extraction script (`scripts/extract-scsynth-bundle.sh`), the verification script (`scripts/verify-bundle.sh`), the `!engine/scsynth/**` keep entry in `.vscodeignore`, and the `brew install --cask supercollider` step in `release.yml` were all deleted.
 
 ### SynthDef (SC)
 
@@ -270,6 +270,8 @@ VS Code's trust model. In an untrusted workspace an extension is restricted by d
 ### bundle (scsynth source)
 
 One of the `ScsynthSource` values. The source identifier used when the scsynth binary bundled in the `.vsix` is used. It points to `<engine root>/scsynth/Contents/Resources/scsynth`.
+
+🔴 **Since [#836](https://github.com/signalcompose/orbitscore/pull/836) (2026-09-10) this candidate can never hit.** `packages/engine/scripts/sync-dist.js` now deletes `engine/scsynth` every time it syncs the engine into the extension, and the `.vscodeignore` keep entry is gone. The type and the branch themselves still live in `packages/engine/src/audio/supercollider/scsynth-resolver.ts` — removing the SC TypeScript implementation is, per the #836 description, "the next PR".
 
 ### explicit (scsynth source)
 

@@ -164,7 +164,7 @@ git branch --show-current
 **OrbitScore** - Audio-based live coding DSL for modern music production
 - Product: OrbitScore 2.0.0 (`ENGINE_VERSION 2.0.0` / `DSL_VERSION 1.1`、拡張 2.1.0)
 - Audio Backend: Rust `orbit-audio-daemon`（唯一のバックエンド。cutover #108 で既定化・SuperCollider opt-out 経路は #502 で削除）
-- Test Status: `npm test` で 2100 件超（2026-09-02 実測・macOS: 2165 passed / 68 skipped / 2233 total。skip は macOS 実機・daemon 依存）
+- Test Status: `npm test` で 2300 件超（**2026-09-10 実測**・macOS・`b9f6ded1`: 2271 passed / 58 skipped / 2329 total。skip は macOS 実機・daemon 依存。#502 で SC 専用 spec 7 本を削除した後の値）
 - Branch Strategy: GitHub Flow (`main` + feature branches)
 
 ### Development Commands
@@ -172,7 +172,7 @@ git branch --show-current
 npm run build            # Build all packages (incremental)
 npm run build:clean      # Clean build (rebuild all files)
 npm test                 # Run all unit / integration tests (vitest)
-npm run test:e2e:gated   # 実機 gated E2E（OrbitStudio.app + MCP、daemon を自動ビルド）
+npm run test:e2e:gated   # 実機 gated E2E（stock VS Code + MCP、daemon と engine 依存を自動で用意）
 npm run dev:engine       # Run engine in development mode
 npm run lint             # ESLint + Prettier
 npm run docs:check       # dev 学習サイトの引用 (// file:start-end) を code と突合
@@ -596,7 +596,7 @@ E2E は「**振る舞いが正しいか**」を問う。**出荷するのは振�
 - **E2E は資産として積む。手で MCP を叩いて確認して終わりにしない** — 次の PR で同じ手作業を
   やり直すことになり、退行も防げない
 - 積み先は `tests/e2e/orbitstudio-mcp-gated.spec.ts`（`ORBIT_GATED_ORBITSTUDIO=1` でゲート・
-  実 OrbitStudio.app を起動し MCP tool 呼び出しだけで駆動）。**並行機構を新設しない**
+  実 VS Code を起動し MCP tool 呼び出しだけで駆動）。**並行機構を新設しない**
 - ゲート env が未設定なら **skip されること**を確認する（通常の `npm test` を壊さない）
 - **その PR が追加した観測可能な表面**を必ず1つ以上 E2E で押さえる。「挙動不変の PR だから
   E2E は既存機能の確認だけ」は**言い訳にならない** — 新しいエラー文言・新しい ID 生成・
@@ -694,9 +694,31 @@ per-PR の macOS ジョブは owner 方針（コスト）で回さない。**手
 🔴 **`--lib` は load-bearing**（#629）。付け忘れると実機オーディオデバイスを要する
 gated テストまで対象になる。
 
-1. **起動中の OrbitStudio を必ず終了してから起動し直す** — 古い extension host が新しい daemon を
-   spawn すると `DaemonStartupError: daemon exited before ready (code=null)` になる
-2. `ORBITSCORE_MCP_PORT=39123` を付けて起動（この環境変数が無いと MCP サーバーが立たない）
+1. 🔴 **前回のゲートで起動した dev host が残っていたら終了する** — 古い extension host が新しい
+   daemon を spawn すると `DaemonStartupError: daemon exited before ready (code=null)` になる。
+   隔離 dir を使っても**この危険は消えない**（stale なのはビルド済みの拡張コードであって設定ではない）。
+   ハーネス由来のインスタンスだけを対象にする: `pkill -f 'user-data-dir=[^[:space:]]*/orbe2e-'`
+   （手動ゲートで上のコマンドを使ったなら `.../orbgate-u-` を対象にする）
+   日常利用の VS Code は、**orbitscore 拡張を入れていなければ**終了不要（入れていると daemon が
+   音声デバイスを掴んで実機テストと競合しうる）
+2. リポジトリルートから **stock VS Code を `--extensionDevelopmentPath=packages/vscode-extension` で起動する**。
+   🔴 **`--user-data-dir` は `/tmp` の短いパスにする。** macOS の Unix ソケット上限は **103 文字**で、
+   VS Code は `<user-data-dir>/<version>-main.sock` を開く。`$TMPDIR`（ここでは 48 文字）+ 説明的な
+   名前だと超えて、**本体が `listen EINVAL` で即死しウィンドウが開かない**（#830 で実測 105 文字）。
+   ```bash
+   bash scripts/install-engine-deps.sh   # 🔴 npm run build は engine の実行時依存を入れない
+   ORBITSCORE_MCP_PORT=39123 '/Applications/Visual Studio Code.app/Contents/MacOS/Code' \
+     --new-window --skip-welcome --skip-release-notes \
+     --extensionDevelopmentPath="$PWD/packages/vscode-extension" \
+     --user-data-dir="$(mktemp -d /tmp/orbgate-u-XXXXXX)" \
+     --extensions-dir="$(mktemp -d /tmp/orbgate-e-XXXXXX)" "$PWD"
+   ```
+   🔴 **`Contents/MacOS/Code` を直接起動する**（`bin/code` は別プロセスとしてアプリを切り離して
+   終了するので、手元でプロセスを追えない）。
+   🔴 **`install-engine-deps.sh` を飛ばさない。** `npm run build` の `build:copy-engine` は dist を
+   コピーするだけで、同梱エンジンの実行時依存（`uuid` 等）を入れない。**ビルド緑・パッケージ成功で、
+   実行時にだけ `daemon resolver failed: Cannot find module 'uuid'` になる**（#654 の `yaml` と同型）。
+   `npm run test:e2e:gated` の前処理には入っているが、**手動のこの手順は通らない**。
 3. `mcp__orbitscore__get_engine_state` でエンジン起動を確認
 4. **その PR で追加/変更した DSL 機能を `mcp__orbitscore__evaluate_orbitscore` で実際に評価する**
 5. **`mcp__orbitscore__get_log` で ERROR が出ていないことを確認する**

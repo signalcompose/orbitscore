@@ -1,6 +1,15 @@
 {
   "compilerOptions": {
     "target": "ES2020",
+    // `target` はダウンレベル対象の**構文**を決め、`lib` は使ってよい**ランタイム API** を
+    // 決める。この repo は Node >= 22 を要求している（root package.json の engines）ので、
+    // 型面を ES2020 に絞るのは実際のランタイムより狭い宣言だった。`WeakRef`（#611 の
+    // AudioLine レジストリが、破棄された行を回収可能にするために使う）は ES2021 の
+    // ランタイムグローバルで、構文ではないのでダウンレベルは要らない。
+    //
+    // 🔴 ここに置くのは、engine だけに足すと tsconfig.tests.json など他の tsconfig で
+    // 同じ穴が開くため（実際 `npm run typecheck:e2e` が拾った）。
+    "lib": ["ES2021"],
     "module": "commonjs",
     "moduleResolution": "node",
     "strict": true,

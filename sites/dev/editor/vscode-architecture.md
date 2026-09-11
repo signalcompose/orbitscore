@@ -70,7 +70,7 @@ OrbitScore が使っているのは 2 種類です:
 宣言は `package.json` の `engines` と `main` のあいだに置かれています。
 
 ```json
-// packages/vscode-extension/package.json:34-40
+// packages/vscode-extension/package.json:32-38
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": true,
@@ -465,6 +465,15 @@ export function extensionEngineFileExists(enginePath: string): boolean {
 
 daemon の resolver は `explicit > env > monorepo-release > monorepo-debug > extension-bundle > throw` です。silent fallback を持たず、見つからなければ例外で fail loud します ([ADR-003](/decisions/adr-003-scsynth-bundle) — かつての scsynth resolver の意思決定記録。scsynth 側は #502 で削除済み)。
 
+::: warning scsynth 側の候補は出荷物からは引けない (#836・2026-09-10)
+[#836](https://github.com/signalcompose/orbitscore/pull/836) 以降、`packages/engine/scripts/sync-dist.js` は engine を拡張へ同期するたびに `engine/scsynth` と同期先の `dist/audio/supercollider/` を削除します。したがって出荷された `.vsix` では
+
+- `bundle` 候補のパス (`<engine root>/scsynth/Contents/Resources/scsynth`) が存在しない
+- 上のコードが `require` している `../engine/dist/audio/supercollider/scsynth-resolver` **そのものが存在しない**
+
+という状態になります。`resolveScsynthForUI()` は require 失敗を catch して `❌ scsynth resolver failed: …` を outputChannel に出し `null` を返す作りなので、`sc` kind を選んだときの挙動は「resolver が読めない」に変わっています。拡張側の TypeScript は #836 では**触られていません**（SC の TS 実装と拡張の表面の撤去は #836 本文いわく「次の PR」）。
+:::
+
 ---
 
 ## Engine プロセスの spawn
@@ -674,7 +683,7 @@ Extension Host と engine プロセスの通信は **stdin/stdout パイプ** �
 送信部分は editor の Run Selection と MCP の `evaluate_orbitscore` が共有する `writeCodeToEngine()` に集約されています。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2708-2740
+// packages/vscode-extension/src/extension.ts:2708-2746
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -700,6 +709,12 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
       codeToSend = setDirCommand + '\n' + codeToSend
     }
   }
+
+  // #611 §5.7: every evaluated chunk is one audio-line batch (#649 §10.2's cursor rules
+  // key off "one evaluation", not one statement) — wrap it so `repl-mode.ts` can open/close
+  // that batch on every declared line. Placed after the `//#documentDirectory` prefix (and
+  // the `setDocumentDirectory(...)` injection above) so both land inside the frame.
+  codeToSend = `//#evalBegin\n${codeToSend}\n//#evalEnd`
 
   // Debug: log what we're sending if in debug mode (check status bar text for 🐛)
   if (statusBarItem?.text.includes('🐛')) {

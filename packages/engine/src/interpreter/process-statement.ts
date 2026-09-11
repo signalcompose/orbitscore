@@ -17,6 +17,8 @@ import {
 import { Global } from '../core/global'
 import { Sequence } from '../core/sequence'
 import { isMixerBusHandle } from '../core/global/mixer-manager'
+import { physicalOutputDest } from '../core/sequence/audio-line'
+import type { OutputDest } from '../core/sequence/audio-line'
 import { resolveChainDispatch } from '../signal-chain/dispatch'
 import {
   guardBusChain,
@@ -185,34 +187,38 @@ async function applyMethodChain(
         if (invocation !== 'call') {
           throw new Error(`Aux mixer "${method}" requires parentheses because it is a send.`)
         }
-        let amount: number | undefined
+        let db: number | undefined
         let enabled = true
-        // `seen` rejects a second specification of `amount` (positional or
+        // `seen` rejects a second specification of `db` (positional or
         // named) or `enabled`, the same shape `classifyPluginArguments`
         // (dispatch.ts) uses for plugin-method arguments: reuse rather than
         // re-implement, so this loop cannot silently let one value overwrite
         // another (#523 CRITICAL 4).
-        const seen = new Set<'amount' | 'enabled'>()
+        const seen = new Set<'db' | 'enabled'>()
         for (const arg of args) {
           if (typeof arg === 'number') {
-            if (seen.has('amount')) {
-              throw new Error(
-                `Aux mixer "${method}" specifies duplicate amount (positional/amount:).`,
-              )
+            if (seen.has('db')) {
+              throw new Error(`Aux mixer "${method}" specifies duplicate gain (positional/db:).`)
             }
-            seen.add('amount')
-            amount = arg
+            seen.add('db')
+            db = arg
           } else if (arg?.type === 'named_arg' && arg.name === 'amount') {
-            if (seen.has('amount')) {
-              throw new Error(
-                `Aux mixer "${method}" specifies duplicate amount (positional/amount:).`,
-              )
+            // #611 §2.3: the send unit changed from linear 0.0-1.0 to dB; the named-arg
+            // spelling changes with it so a script still using the old name fails loudly
+            // instead of silently reading its 0.0-1.0 value as dB.
+            throw new Error(
+              `Aux mixer "${method}" no longer accepts amount: — it was renamed to db: and ` +
+                `its unit changed from linear (0.0-1.0) to decibels (#611).`,
+            )
+          } else if (arg?.type === 'named_arg' && arg.name === 'db') {
+            if (seen.has('db')) {
+              throw new Error(`Aux mixer "${method}" specifies duplicate gain (positional/db:).`)
             }
-            seen.add('amount')
+            seen.add('db')
             if (typeof arg.value !== 'number') {
-              throw new Error(`Aux mixer "${method}" amount: must be numeric.`)
+              throw new Error(`Aux mixer "${method}" db: must be numeric.`)
             }
-            amount = arg.value
+            db = arg.value
           } else if (arg?.type === 'named_arg' && arg.name === 'enabled') {
             if (seen.has('enabled')) {
               throw new Error(`Aux mixer "${method}" specifies duplicate enabled:.`)
@@ -224,35 +230,47 @@ async function applyMethodChain(
             enabled = arg.value
           } else {
             throw new Error(
-              `Aux mixer "${method}" accepts amount: and enabled: routing arguments only.`,
+              `Aux mixer "${method}" accepts db: and enabled: routing arguments only.`,
             )
           }
         }
-        if (amount === undefined) {
-          throw new Error(`Aux mixer "${method}" send requires a numeric amount.`)
+        if (db === undefined) {
+          throw new Error(`Aux mixer "${method}" send requires a numeric gain in dB.`)
         }
-        const gain = enabled ? amount : 0
+        const dest: OutputDest = { kind: 'bus', bus: dispatch.node.handle.bus }
         return receiver instanceof Sequence
-          ? receiver.routeSendFromDsl(dispatch.node.handle.bus, gain)
-          : receiver.routeSend(dispatch.node.handle.bus, gain)
+          ? receiver.routeSendFromDsl(dest, db, { enabled })
+          : receiver.send(dest, db, { enabled })
       }
       if (invocation !== 'bare') {
         throw new Error(`Mixer ${dispatch.node.kind} "${method}" is an output, not a send.`)
       }
-      if (dispatch.node.kind === 'output') {
-        const [left, right] = dispatch.node.channels
-        if (left !== 1 || right !== 2) {
-          throw new Error(
-            `Mixer output "${method}" (channels ${left}, ${right}) cannot be routed to yet: ` +
-              `only the master endpoint (channels 1, 2) is routable in S3. Physical ` +
-              `multi-output routing is staged for #484 D4.`,
-          )
-        }
-      }
-      const output = dispatch.node.kind === 'output' ? 'master' : dispatch.node.handle.bus
+      // #611 §2.2/§3.8（owner 2026-09-11）: 宛先は 3 種類ある。
+      //   master トラック / 宣言済み sum・aux トラック / 物理デバイス
+      // `mix.output(n, m)` は**常にデバイス**で、`(1, 2)` に特例は無い — それは
+      // master トラックの出口がたまたま 1,2 であることと、デバイスの 1,2 の混同だった。
+      const dest: OutputDest =
+        dispatch.node.kind === 'master'
+          ? { kind: 'master' }
+          : dispatch.node.kind === 'output'
+            ? physicalOutputDest(dispatch.node.channels)
+            : { kind: 'bus', bus: dispatch.node.handle.bus }
       return receiver instanceof Sequence
-        ? receiver.routeOutputFromDsl(output)
-        : receiver.routeOutput(output)
+        ? receiver.routeOutputFromDsl(dest)
+        : receiver.output(dest)
+    }
+    if ((method === 'output' || method === 'send') && args.length > 0) {
+      // #611 §3.8: the interpreter — not Sequence/MixerBusHandle — resolves a mixer-node
+      // VARIABLE argument (`output(cue)` where `var cue = mix.output(3, 4)`) to an
+      // `OutputDest`, because only `state.mixers.nodes` knows that mapping; the parser hands
+      // a bare identifier through as the same plain string as a literal `output("cue")`, so
+      // there is nowhere else this distinction could be made. sum/aux node arguments are left
+      // as plain strings — their declared name IS already the daemon bus name Sequence's own
+      // `resolveMixerBus()` looks up, so no interception is needed for them.
+      const node = typeof args[0] === 'string' ? state.mixers.nodes.get(args[0]) : undefined
+      if (node?.kind === 'output') {
+        args = [physicalOutputDest(node.channels), ...args.slice(1)]
+      }
     }
     const valueGlobal =
       receiver instanceof Global
