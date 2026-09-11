@@ -12,6 +12,14 @@ export type OutputDest =
   | { readonly kind: 'render'; readonly id: string }
   | { readonly kind: 'link'; readonly channel: string }
 
+/**
+ * The single runtime discriminator between a resolved destination and an options bag.
+ * Every OutputDest has `kind`; output/send options deliberately never do.
+ */
+export function isOutputDest(value: unknown): value is OutputDest {
+  return typeof value === 'object' && value !== null && 'kind' in value
+}
+
 export function destKey(dest: OutputDest): string {
   switch (dest.kind) {
     case 'master':
@@ -61,6 +69,12 @@ export function assertOutputOptions(
   call = 'output',
 ): asserts value is OutputOptions {
   if (typeof value === 'object' && value !== null && !Array.isArray(value)) return
+  if (value === null) {
+    throw new Error(
+      `${call}() received null. Only undefined omits the destination; ` +
+        `null is not a valid destination or options object.`,
+    )
+  }
   throw new Error(
     `${call}() expects an options object as its second argument. ` +
       `Did you mean output(dest, { db: -12 }) or send(dest, -12)?`,

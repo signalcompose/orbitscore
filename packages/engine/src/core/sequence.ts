@@ -36,6 +36,7 @@ import {
   resolveNamedOutputDest,
   assertOutputOptions,
   AudioLine,
+  isOutputDest,
   resolveSendLevel,
   toWire,
   type LineElement,
@@ -553,13 +554,28 @@ export class Sequence {
    *    render-bus branch below it, which #611 §14 (1) keeps as-is and does NOT fold into this
    *    resolution order)
    */
-  output(dest?: string | number | OutputDest, opts: OutputOptions = {}): this {
+  output(
+    destOrOptions?: string | number | OutputDest | OutputOptions,
+    opts: OutputOptions = {},
+  ): this {
     const name = this.stateManager.getName() || 'sequence'
-    assertOutputOptions(opts, `Sequence '${name}': output`)
+    let dest: string | number | OutputDest | undefined = destOrOptions as
+      | string
+      | number
+      | OutputDest
+      | undefined
+    let options = opts
+    if (!isOutputDest(destOrOptions) && typeof destOrOptions === 'object') {
+      assertOutputOptions(destOrOptions, `Sequence '${name}': output`)
+      dest = undefined
+      options = destOrOptions
+    } else {
+      assertOutputOptions(options, `Sequence '${name}': output`)
+    }
     // #883 §4: an omitted destination IS `output("master")` — a default argument, not an
     // implicit element. Both land on the same resolved `OutputDest`, so they share one branch.
-    if (dest === undefined || typeof dest === 'object') {
-      return this.applyOutputElement(dest ?? { kind: 'master' }, opts, 'output')
+    if (dest === undefined || isOutputDest(dest)) {
+      return this.applyOutputElement(dest ?? { kind: 'master' }, options, 'output')
     }
     const destinationName = typeof dest === 'number' ? String(dest) : dest
     if (!destinationName || !destinationName.trim()) {
@@ -571,7 +587,7 @@ export class Sequence {
     // branch below — resolveLineDest's master/"L,R"-pair branches never match a bare digit
     // string, so this is effectively the sum/aux-name check alone for a numeric `dest`.
     const resolved = this.resolveLineDest(destinationName)
-    if (resolved) return this.applyOutputElement(resolved, opts, 'output')
+    if (resolved) return this.applyOutputElement(resolved, options, 'output')
 
     if (typeof dest === 'number') {
       // 🔴 instrument の**オフラインレンダ先**は未設計（録音経路が別）なのでloudに拒否する
@@ -659,20 +675,25 @@ export class Sequence {
    */
   send(aux: string | OutputDest, dbOrOptions?: number | SendOptions, opts: SendOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
+    if (typeof aux !== 'string' && !isOutputDest(aux)) {
+      throw new Error(
+        `Sequence '${name}': send(aux, db) requires a destination; ` +
+          `null and undefined are not valid send destinations.`,
+      )
+    }
     if (typeof aux === 'string' && !aux.trim()) {
       throw new Error(`Sequence '${name}': send(aux, db) requires a non-empty aux name.`)
     }
     const level = resolveSendLevel(dbOrOptions, opts, `Sequence '${name}': send`)
-    const dest =
-      typeof aux === 'object'
-        ? aux
-        : (this.resolveLineDest(aux) ??
-          (() => {
-            throw new Error(
-              `Sequence '${name}': send("${aux}", ...) references an undeclared aux/sum bus. ` +
-                `Call global.aux("${aux}") (or global.sum("${aux}")) first.`,
-            )
-          })())
+    const dest = isOutputDest(aux)
+      ? aux
+      : (this.resolveLineDest(aux) ??
+        (() => {
+          throw new Error(
+            `Sequence '${name}': send("${aux}", ...) references an undeclared aux/sum bus. ` +
+              `Call global.aux("${aux}") (or global.sum("${aux}")) first.`,
+          )
+        })())
     return this.applyOutputElement(
       dest,
       { thru: true, db: level.enabled === false ? -Infinity : level.db },

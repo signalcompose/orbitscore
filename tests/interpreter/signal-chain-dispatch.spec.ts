@@ -523,6 +523,26 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     expect(scheduler.setBusLine).toHaveBeenCalledTimes(1)
   })
 
+  it('preserves named output options when the destination is omitted', async () => {
+    const scheduler = new RecordingScheduler() as RecordingScheduler & {
+      setBusLine: ReturnType<typeof vi.fn>
+    }
+    scheduler.setBusLine = vi.fn().mockResolvedValue(undefined)
+    const global = new Global(scheduler)
+    const state = makeState(global)
+    await run('var kick = init global.seq', state)
+
+    await run('kick.output(db: -6)', state)
+
+    expect(state.sequences.get('kick')?.getInsertBus()).toBe('seq-bus-0')
+    expect(scheduler.setBusLine).toHaveBeenCalledWith('seq-bus-0', [
+      rack,
+      { ...masterOutput(false), gain: 10 ** (-6 / 20) },
+    ])
+
+    await expect(run('kick.send(db: -6)', state)).rejects.toThrow(/requires a destination/)
+  })
+
   it('keeps bare DSL methods on callMethod while rejecting bare plugin and kind mismatches', async () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)

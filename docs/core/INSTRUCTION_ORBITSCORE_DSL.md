@@ -1762,8 +1762,12 @@ reconciliation key は名前（同名 = 同一 node・再評価は再束縛）�
 > ✅ **実装済み（束 O-surface・PR-B2・2026-09-10）。** `seq.gain(固定値)` / `seq.pan(固定値)` は
 > ライン要素（`LineOp::Gain` / `LineOp::Pan`）として位置を持つ（既定はラック後・位置は自由）。
 > ただし **daemon にラインを持たない audio シーケンス**（`_insertBus` 未確保）では、プール枯渇を
-> 避けるため発音側で同値に適用する（`effect()`/`output()`/`send()` が初めて bus を確保した瞬間、
-> ラインへ引き継ぐ）。instrument はバスを確保してラインへ（発音側の適用経路が無いため）。
+> 避けるため発音側で同値に適用する（`effect()` / **バスを要する** `output()` / `send()` が
+> 初めて bus を確保した瞬間、ラインへ引き継ぐ）。
+> 🔴 **`.output()`（素の master 宛て・`thru` なし・`db: 0`）はバスを確保しない**（#883 §2.3
+> 「実現の省略」）— 直接経路が同じ音を出せるので、`.output()` の必須化で 8 本のプールを
+> 食い潰さないため。`rack` / 非 master 宛て / `thru` / `db ≠ 0` のいずれかが現れた時点で確保する。
+> instrument は `gain()` / `pan()` を書いた時にバスを確保してラインへ（発音側の適用経路が無いため）。
 > `gain(random)` / `pan(random)` は今日どおり発音側のまま。`pan` を含む既存譜面は
 > golden を再ベースラインした（`docs/design/611-o-surface-bundle-design.md` §7）。
 
@@ -1804,9 +1808,12 @@ drums.effect(["Glue"]).output(master, thru: true).output(cue, db: -20)
 「音楽記述言語としての OrbitScore DSL は『テキストが完全な真実』であるべき」）。
 
 **出口を 1 つも書かないラインは無音になる。** 暗黙の `output(master)` は**付かない** —
-sequence も sum / aux バスも instrument も同じ規則である。エディタは出口の無い発音
-シーケンスに Warning（`output-missing`）と quick fix を出す（§11）ので、書き忘れは
-評価する前に分かる。
+sequence も sum / aux バスも instrument も同じ規則である。
+
+> ⏳ **エディタの診断は束 S で入る**（#883 設計 D7）: 出口の無い発音シーケンスに
+> Warning（`output-missing`）+ quick fix、aux 宛て `send` だけのラインに
+> Information（`dry-not-routed`）。**まだ実装されていない** — 本節の規則（spec 先行・
+> 運用規則 6）が先に確定し、診断とセマンティクスは同じリリースで出る。
 
 ```js
 kick.audio("k.wav").play()             // 🔴 無音（出口が無い）
@@ -1842,7 +1849,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 
 | 宛先 | 書き方 | 備考 |
 |---|---|---|
-| master | `master`（`mix.output(1,2)` の宣言名）/ `"master"` | 予約語。下記参照 |
+| master | `master`（`mix.output(1,2)` の宣言名）/ `"master"` / **`.output()`（引数省略）** | 予約語。下記参照。🔴 **宛先として書かれた時だけ受け取る** — 出口を書かないラインが master へ自動で流れることは無い（#883 / DSL 2.0） |
 | sum / aux | `drums` / `"drums"` | **aux も `output` で指せる**（`send` は糖衣・MX.3） |
 | 物理アウト | `cue`（`mix.output(3, 4)`）/ `"3,4"` / `mix.output(3)`（mono） | チャンネルは **1 始まり**。mono 宛ては**片側を捨てず L + R をマージする**（マージ係数は実装の裁量・設計は [`611-output-line-design.md`](../design/611-output-line-design.md) §5.3） |
 | render | `stems`（`mix.render(...)`） | [`598-render-endpoint-design.md`](../design/598-render-endpoint-design.md) |
@@ -1925,6 +1932,8 @@ P2 が未出荷のため撤回に伴う移行対象の譜面は無い。
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
+// 🔴 これだけでは master へは行かない（#883 / DSL 2.0）。dry も出すなら `.output()` を続ける:
+// kick.send(verb, -12).output()
 kick.verb(-12)                        // SC.4 の aux 名メソッドも同じ（値は dB）
 kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要素は残る）
 ```

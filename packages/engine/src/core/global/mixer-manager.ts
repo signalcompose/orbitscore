@@ -4,6 +4,7 @@ import { createStatePathFallback } from '../project-state-store'
 import {
   assertOutputOptions,
   AudioLine,
+  isOutputDest,
   resolveNamedOutputDest,
   resolveSendLevel,
   toWire,
@@ -96,7 +97,10 @@ export interface MixerBusHandle {
   ui(name?: string, open?: boolean): Promise<MixerBusHandle>
   /** #611 §2.1/§3.6: same resolution/semantics as `Sequence.output()` (minus the LinkAudio
    * fallback and the numeric render-bus branch, which are Sequence-only concepts). */
-  output(dest?: string | OutputDest, opts?: MixerOutputOptions): Promise<MixerBusHandle>
+  output(
+    destOrOptions?: string | OutputDest | MixerOutputOptions,
+    opts?: MixerOutputOptions,
+  ): Promise<MixerBusHandle>
   /** #611 §2.3/§3.6: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })`. */
   send(
     aux: string | OutputDest,
@@ -333,13 +337,25 @@ export class MixerManager {
         await this.pluginUiHandler(formatReceiverId(kind, name), catalogName, open)
         return this.makeHandle(kind, name, bus)
       },
-      output: async (dest?: string | OutputDest, opts: MixerOutputOptions = {}) => {
-        assertOutputOptions(opts, `Mixer bus '${formatReceiverId(kind, name)}': output`)
+      output: async (
+        destOrOptions?: string | OutputDest | MixerOutputOptions,
+        opts: MixerOutputOptions = {},
+      ) => {
+        const call = `Mixer bus '${formatReceiverId(kind, name)}': output`
+        let dest: string | OutputDest | undefined = destOrOptions as string | OutputDest | undefined
+        let options = opts
+        if (!isOutputDest(destOrOptions) && typeof destOrOptions === 'object') {
+          assertOutputOptions(destOrOptions, call)
+          dest = undefined
+          options = destOrOptions
+        } else {
+          assertOutputOptions(options, call)
+        }
         await this.applyLineElement(bus, {
           kind: 'output',
           dest: this.resolveDest(dest),
-          thru: opts.thru ?? false,
-          db: opts.db ?? 0,
+          thru: options.thru ?? false,
+          db: options.db ?? 0,
           sugar: 'output',
         })
         return this.makeHandle(kind, name, bus)
@@ -381,7 +397,13 @@ export class MixerManager {
     // #883 §4: an omitted destination IS `output("master")` — keep that knowledge here with
     // the rest of the destination resolution instead of leaking it into each call site.
     if (value === undefined) return { kind: 'master' }
-    if (typeof value === 'object') return value
+    if (isOutputDest(value)) return value
+    if (typeof value !== 'string') {
+      throw new Error(
+        `Mixer bus routing received null. Only undefined omits the destination; ` +
+          `null is not a valid destination.`,
+      )
+    }
     const resolved = resolveNamedOutputDest(value, (name) => this.resolveNode(name))
     if (resolved) return resolved
     throw new Error(

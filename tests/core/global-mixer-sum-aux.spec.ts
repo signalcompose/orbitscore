@@ -239,6 +239,28 @@ describe('Global.sum() / Global.aux()', () => {
     expect(omittedSetBusLine.mock.calls).toEqual(explicitSetBusLine.mock.calls)
   })
 
+  it('treats a first-argument options bag as an omitted mixer output destination', async () => {
+    const setBusLine = vi.fn().mockResolvedValue(undefined)
+    const handle = new Global({
+      setBusLine,
+      boot: vi.fn(),
+      quit: vi.fn(),
+      isRunning: true,
+    } as any).sum('drum')
+
+    await handle.output({ db: -6 })
+
+    expect(setBusLine).toHaveBeenCalledWith('sum-bus-0', [
+      { op: 'rack' },
+      {
+        op: 'output',
+        dest: { kind: 'master' },
+        thru: false,
+        gain: 10 ** (-6 / 20),
+      },
+    ])
+  })
+
   it('clamps mixer-handle gain and pan with the same ranges as Sequence', async () => {
     const setBusLine = vi.fn().mockResolvedValue(undefined)
     const engine = { setBusLine, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any

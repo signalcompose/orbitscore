@@ -1219,7 +1219,7 @@ This is where `#654` enters. According to WORK_LOG 6.421, when a new seven-layer
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1641-1651
+// packages/engine/src/core/sequence.ts:1654-1664
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {
@@ -1349,26 +1349,26 @@ The playhead reads from the raw stream, and `[STEP]` never reaches the output ch
 // tests/e2e/orbitstudio-mcp-gated.spec.ts:2730-2741
       const dslLines = [
         'var global = init GLOBAL',
+        // 🔴 この譜面は degrees（`play(1, 0, 3, 0)`）を使うので key が要る。他の instrument 譜面は
+        // 全部 `global.key("C")` を持っているが、ここだけ欠けており、**共有アプリに残った key を
+        // 継承して偶然通っていた**（#883 束 C で先行譜面を変えたら露見した）。譜面が自分の前提を
+        // 書いていない状態そのものが #883 が消そうとしているものなので、ここで自足させる。
+        'global.key("C")',
         'global.tempo(120)',
         'var ph654 = init global.seq',
         'ph654.beat(4 by 4).length(1)',
         `ph654.instrument(${JSON.stringify(catalog.clapSynthName)})`,
         'ph654.output()',
-        'ph654.octave(4)',
-        'ph654.play(1, 0, 3, 0)',
-        'global.start()',
-        'ph654.run()',
-      ]
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2744-2745
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2749-2750
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2801-2803
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2806-2808
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

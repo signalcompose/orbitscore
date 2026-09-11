@@ -18,6 +18,13 @@ import {
 } from '../../packages/engine/src/signal-chain/resolve'
 
 describe('named arguments (SC.3)', () => {
+  it('keeps the destination slot empty for output/send calls with named options only', async () => {
+    const dbOption = [{ type: 'named_arg', name: 'db', value: -6 }]
+
+    await expect(processArguments('output', dbOption)).resolves.toEqual([undefined, { db: -6 }])
+    await expect(processArguments('send', dbOption)).resolves.toEqual([undefined, { db: -6 }])
+  })
+
   it('parses number / negative / string / boolean / identifier-ref values', () => {
     const ir = parseAudioDSL(
       'kick.HogeComp(threshold: -18, mix: 0.5, preset: "Pluck 01", enabled: false, sidechain: duck)',

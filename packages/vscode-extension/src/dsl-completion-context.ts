@@ -89,7 +89,10 @@ export function detectDslCompletionContext(
   // variable (`mix.sum`, `mix.aux`, or `mix.output(...)`). Stop at the first argument:
   // options after a comma are a different completion surface.
   const outputNode = /\.output\(\s*([A-Za-z_$][\w$]*)?$/.exec(prefix)
-  if (outputNode) {
+  // A mixer-node declaration uses numeric channel arguments, not routing destinations. Reuse
+  // the receiver-aware declaration pattern below so `var cue = mix.output(` cannot be mistaken
+  // for a Sequence/MixerBusHandle output call.
+  if (outputNode && !VAR_NODE_PATTERNS.mixerNode.test(prefix)) {
     return { kind: 'output-node', typed: outputNode[1] ?? '' }
   }
 

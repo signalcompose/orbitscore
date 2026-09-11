@@ -8899,3 +8899,108 @@ CI・ユニット・机上レビューのどれにも掛からない。** 実機
 O-wire と同じ「**`OUTPUT_LINE_GOLDENS` / `#611 O0-1〜4` が 1 つも動かないこと**」+ cargo 全緑 + 実機 gated 全件。
 
 ---
+
+### refactor(engine): route buses through SetBusLine without changing the DSL surface (#611) (Sep 10, 2026)
+
+`AudioLine` に宛先・rack・gain・pan・output の型、評価バッチ内のカーソル規則、暗黙の rack / master
+補完、wire 変換を集約した。規則 2 では要素削除後に cursor を 1 つ戻し、単文先頭の終端 output は
+既存終端を同じ位置で置換する。同じ宛先の ordinal はバッチ内で数えるため、同一宛先への複数 output
+も順序どおり保持できる。
+
+`Sequence` / `Global` / `MixerBusHandle` の routing は `SetBusLine` を送るようにし、respawn 後も最後の
+line intent を再送する。`Sequence.output(string | number)`、`send(name, amount)` の線形 amount、LinkAudio
+と render bus の解決順は変更していない。送る program も従来の
+`[rack, output(sum|master, thru: sends>0), sends…]` と同じである。
+
+DSL 表面をこの段階で変えないのは、`OUTPUT_LINE_GOLDENS` / O0-1〜O0-4 が 1 つも動かないことを
+配線の検算に使うためである。線形 send の dB 化や output の新しい引数を同時に入れると、golden が
+動いた原因を「配線の誤り」と「単位・表面の変更」に切り分けられなくなるため、それらは次の PR に残した。
+
+### feat(daemon): wire pan and mono device into SetBusLine, and carry effective gain across re-publish (#611) (Sep 10, 2026)
+
+`SetBusLine` の wire 契約を拡張し、`pan` と 1 要素の device channels（L+R の mono merge）を
+受理できるようにした。バスと master の RT では、発音側の center pan と重ねても音量が変わらない
+`√2 × equal-power` の係数を block ごとに計算し、pan 位置そのものを 5 ms ramp する。
+
+line の再 publish では、旧 program の実効値を atomic で読み、新旧 op を Gain/Pan の出現序数と
+Output の宛先・出現序数で対応付けて seed する。これが無いと、演奏中に send を追加しただけで既存の
+−12 dB send が一度 unity に跳ねてから戻り、約 5 ms の +12 dB burst と可聴の pop が生じるためである。
+対応の無い新 Output は 0.0 から fade-in し、Gain は 1.0、Pan は指定位置から始める。旧
+`SetBusRouting` の `LineProgram::legacy` / `settled` 経路は変更していない。
+
+---
+### ci(release): fail a tag push whose version disagrees with the .vsix (#843) (Sep 11, 2026)
+
+**追記（`/simplify` 後・2026-09-11）**: cleanup 4 体のうち 2 体が実質的な指摘を出した。
+
+🔴 **Altitude — 正本設計が既に同じ照合を規定していた。** `docs/design/656-release-design.md`
+§4.4 が「`git describe --exact-match` があるとき、その tag が `v<拡張の version>` と一致すること」を
+**`make-local-release.sh` のローカル preflight**（= **タグを作る前**）に置く設計として確定させていた。
+私はそれを確認せずに CI 側だけを書いた。
+
+**押された後より前に止まる方が良い** — タグ push は準公開的な行為で、間違えると remote タグの
+削除と re-tag が要る。ただし手でタグを打つ経路が残る限り CI 側も**最後の砦**として意味がある。
+そこで **`checkTagAgainstVersion` / `versionCore` を export したまま**にし、
+設計文書の §4.4 に「preflight はこれを import すること・同じ規則を書き起こさないこと」を明記した。
+
+🔴 **§4.4 は私の bump 計画の誤りも正した。** 私は「拡張 package.json・`ENGINE_VERSION`・
+`DSL_VERSION` の 3 つを揃える」と書いていたが、§4.4 は明確に:
+
+| 場所 | 規則 |
+|---|---|
+| `packages/vscode-extension/package.json` | 🔴 **正本**。`.vsix` / `.app` / タグの版はこれ |
+| `ENGINE_VERSION` | **別軸**（セッションログの meta ヘッダ）。**同期しない** |
+| `DSL_VERSION` | **別軸**（spec 版）。**同期しない** |
+
+`ENGINE_VERSION 2.0.0` と拡張 `2.1.0` の食い違いは**事故ではなく設計**だった。
+
+**Simplification** — `versionCore()` を package.json 側にも適用しているのに、
+**接尾辞付きの package.json を渡すテストが 1 本も無かった**（裏づけの無い汎用性）。
+テストを 1 本足して明示した（7 → 8 件）。
+
+**Reuse / Efficiency** — 指摘なし。Reuse の Minor 1 件（テストの `REPO_ROOT` が
+`bundled-child-binaries.spec.ts` と重複）は**見送った**: 実質 2 行で、
+かつ**この PR の範囲外のファイル**に触ることになるため。
+
+
+
+`release.yml` が**タグ名と `packages/vscode-extension/package.json` の version を
+照合していなかった**。`vsce package` は資産名を package.json から取るので、`v3.0.0` を
+打っても package.json が `2.1.0` のままなら、**Release のタイトルは v3.0.0・唯一の資産は
+`orbitscore-darwin-arm64-2.1.0.vsix`** になる。どこにもエラーは出ず、
+**ダウンロードした人にしか見えない**。
+
+**照合は X.Y.Z のコアだけ**にした。既存タグを実測したところ、この repo の規約は
+「prerelease の接尾辞はタグにだけ付き、package.json は素の X.Y.Z」だった:
+
+| タグ | その時点の package.json |
+|---|---|
+| `v1.1.0-rc1` / `-rc2` / `-rc3` | `1.1.0` |
+| `v1.0.1-rc1` | `1.0.1` |
+| `v2.0.0` | `2.0.0` |
+
+タグ全体を照合すると、この規約に沿った rc タグがすべて落ちる。
+
+🔴 **ロジックをワークフローに埋めず `scripts/check-release-tag-version.mjs` へ出した。**
+埋め込むと (a) タグを打つ前に手元で確かめられない (b) テストが書けない。
+スクリプトなら `node scripts/check-release-tag-version.mjs v3.0.0` で事前に確認できる。
+
+置き場所は **Setup Node.js の直後・`npm ci` の前**。約 25 分のビルドの手前で数秒で落ちる。
+Setup Node.js より後にしたのは、runner イメージ同梱の Node ではなく**ピン留めした Node**で
+走らせるため。
+
+**検証**（変異は `$TMPDIR` へバックアップしてから実施）:
+
+| 変異 | 結果 |
+|---|---|
+| 照合を `if (false)` に無効化 | 2 failed |
+| workflow がスクリプトを呼ばなくなる | 1 failed |
+| 接尾辞の除去をやめる（rc タグが落ちる） | 2 failed |
+| エラー文から資産名を伏せる | 1 failed |
+| restore | 7 passed・両ファイル baseline とバイト一致 |
+
+🔴 **記録**: 最初の変異検証で `git checkout` を restore に使い、**新規ファイル（未追跡）は
+戻らず、tracked なワークフローは自分の未コミット編集ごと消えた**。
+`mutation-backup-must-use-tmpdir` の「コミット済みなら `git checkout --` が確実」は
+**裏を返すと未コミットなら確実に壊す**。未コミットの作業に変異をかけるなら
+`$TMPDIR` へコピーしてから。

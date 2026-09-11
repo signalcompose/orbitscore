@@ -3,6 +3,8 @@
  * Handles method calls and argument processing
  */
 
+import { isOutputDest } from '../core/sequence/audio-line'
+
 /**
  * Call a method on an object with proper argument processing
  *
@@ -140,6 +142,18 @@ export async function processArguments(methodName: string, args: any[]): Promise
     }
   }
 
-  if (sawNamedArg) processed.push(options)
+  if (sawNamedArg) {
+    processed.push(options)
+    // output/send receive `(destination, options)`. With named arguments only, the parser's
+    // options bag would otherwise occupy the destination slot. Use the same `kind`-field
+    // discriminator as the runtime call sites so the two layers cannot disagree.
+    if (
+      (methodName === 'output' || methodName === 'send') &&
+      processed.length === 1 &&
+      !isOutputDest(processed[0])
+    ) {
+      processed.unshift(undefined)
+    }
+  }
   return processed
 }

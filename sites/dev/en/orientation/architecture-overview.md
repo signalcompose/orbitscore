@@ -311,7 +311,7 @@ export type AudioIR = {
 `processStatement()` dispatches each element of `statements` by its type, and the method on the target object (Global / Sequence / mixer node) is ultimately invoked via `callMethod()`.
 
 ```typescript
-// packages/engine/src/interpreter/evaluate-method.ts:23-35
+// packages/engine/src/interpreter/evaluate-method.ts:25-37
 export async function callMethod(obj: any, methodName: string, args: any[]): Promise<any> {
   const processedArgs = await processArguments(methodName, args)
   const method = obj[methodName]

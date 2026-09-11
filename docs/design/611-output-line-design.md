@@ -160,7 +160,7 @@ effect 併用の譜面では今日「ラック前」だったものが**既定�
 |---|---|
 | `_lineOrder` は**キーの順列**で、値は各スライスに残る | `_line: LineElement[]` に**値も同居**（§3.1）。スライス（`_sumOutputBus` / `_auxSends` / `_renderBus`）は廃止 |
 | output の同一性 = 単一 | 同一性 = **宛先キー**（send と同じ・§4.A.1 の帰結）|
-| §10.4 既定ストリップ `[ラック → gain → pan → sends → output]` | `[ラック → gain → pan → sends(=output thru) → output(master)]`（**pan はライン要素**・§2.4b / §14 (4)。位置は自由）|
+| §10.4 既定ストリップ `[ラック → gain → pan → sends → output]` | `[ラック → gain → pan → sends(=output thru) → output(master)]`（**pan はライン要素**・§2.4b / §14 (4)。位置は自由）。🔴 **#883 で末尾の `output(master)` は既定ストリップから外れた**（DSL 2.0・暗黙終端の廃止）— 書かれた出口だけがラインに乗る |
 | フェーダー = `gain_override` スカラー | フェーダー = `output` の `gain`（裁定 ④）。`gain` 要素は別に残る |
 
 ---

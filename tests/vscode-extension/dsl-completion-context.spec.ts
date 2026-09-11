@@ -56,6 +56,13 @@ describe('detectDslCompletionContext', () => {
     expect(detectDslCompletionContext('seq.output(cue, ', 16)).toBeNull()
     expect(detectDslCompletionContext('seq.output()', 12)).toBeNull()
   })
+
+  it('does not offer routing destinations inside a mixer physical-output declaration', () => {
+    const declaration = 'var cue = mix.output('
+    expect(detectDslCompletionContext(declaration, declaration.length)).not.toMatchObject({
+      kind: 'output-node',
+    })
+  })
 })
 
 describe('filterDslCandidates', () => {
