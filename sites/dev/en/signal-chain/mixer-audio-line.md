@@ -1,12 +1,12 @@
 ---
 title: "SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: f6c9c37
-verified-at: "2026-09-08"
+verified-against: f23eb5d
+verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04, to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the line program of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) plus the `SetBusLine` wire of PR-O3b ([#823](https://github.com/signalcompose/orbitscore/pull/823)) on 2026-09-08. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the measurement findings of #611 PR-O0 ([#728](https://github.com/signalcompose/orbitscore/pull/728)) on 2026-09-04, to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the line program of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) plus the `SetBusLine` wire of PR-O3b ([#823](https://github.com/signalcompose/orbitscore/pull/823)) on 2026-09-08, and to the bus-level `Pan`, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain
 
@@ -79,7 +79,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1906-1908
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1907-1909
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
@@ -512,7 +512,7 @@ before they reach RT.
 The execution of an output looks like this.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2566-2590
+// rust/crates/orbit-audio-native/src/output.rs:2566-2592
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
                         &mut first_output,
@@ -538,6 +538,8 @@ The execution of an output looks like this.
                                 &left[i].buffer[..bs],
                                 output_channels,
                                 ramp,
+                            );
+                        }
 ```
 
 `OutputDest` has five variants, but only three of them — `Master` / `Bus` / `Device` — are executed
@@ -596,6 +598,31 @@ fn apply_line_pan(buf: &mut [f32], frames: usize, ramp: LineRamp) {
     }
     let (start_left, start_right) = line_pan_coefficients(ramp.start);
     let (end_left, end_right) = line_pan_coefficients(ramp.end);
+```
+
+Turning a position into L/R coefficients was factored out into `line_pan_coefficients`
+(#859, 2026-09-11). `apply_line_pan` no longer computes them itself — it just calls this function
+**at the ramp's start and end positions**.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:2227-2243
+#[inline]
+fn line_pan_coefficients(pan: f32) -> (f32, f32) {
+    // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
+    //
+    // 🔴 これは丸め誤差の除去でもある。f32 では `sqrt(2) * cos(pi/4) = 0.99999994` で
+    // **1.0 ちょうどにならない**ため、省かないと `pan(0)` を書いた譜面が書かない譜面と
+    // 6e-8 だけずれる。設計 §4.1 は「center で `(1, 1)`（unity）」と書いているので、
+    // 省く方が**文書どおり**になる。`LineOp::Gain` が `gain != 1.0` で同じことをしている。
+    if pan == 0.0 {
+        return (1.0, 1.0);
+    }
+    let (left, right) = equal_power_pan(pan);
+    (
+        left * std::f32::consts::SQRT_2,
+        right * std::f32::consts::SQRT_2,
+    )
+}
 ```
 
 The point is that this uses **`equal_power_pan` scaled by `√2`**, not the raw function. The source

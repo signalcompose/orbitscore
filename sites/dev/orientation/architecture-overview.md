@@ -16,7 +16,7 @@ status: draft
 
 ## 2026-05 版からの drift
 
-本章の 2026-05-05 版は「extension / engine / scsynth の 3 プロセス」という絵で書かれていました。2026-07-03 の cutover #108 (WORK_LOG 6.179) で既定の音声バックエンドが Rust daemon に切り替わり、その絵は既定経路としては成り立たなくなっています。以下は 2026-09-01 時点のコードに合わせて全面的に書き直したものです。SC 経路そのものは 69dc968 時点で `packages/engine/src/audio/supercollider/` に残っていますが、2026-09-10 の裁定（#827 / #502）でリポジトリからの削除が決まっています。旧 Part III の SuperCollider 専用章（III-1・III-3）はサイトから削除し、ADR-001 / ADR-003 に記録を残しました。
+本章の 2026-05-05 版は「extension / engine / scsynth の 3 プロセス」という絵で書かれていました。2026-07-03 の cutover #108 (WORK_LOG 6.179) で既定の音声バックエンドが Rust daemon に切り替わり、その絵は既定経路としては成り立たなくなっています。以下は 2026-09-01 時点のコードに合わせて全面的に書き直したものです。SC 経路そのものは 69dc968 時点では `packages/engine/src/audio/supercollider/` に残っていましたが、2026-09-10 の裁定（#827 / #502）に基づき **[#840](https://github.com/signalcompose/orbitscore/pull/840) でリポジトリから削除されました**。上の図もその後の姿（3 種のプロセス + plugin children）です。旧 Part III の SuperCollider 専用章（III-1・III-3）はサイトから削除し、ADR-001 / ADR-003 に記録を残しました。
 
 ちなみに、コードのコメントは同じ cutover を `#108` と `#369` の両方の番号で参照しています (`engine-backend.ts` は `#108`、`extension.ts` や `copy-daemon-bin.sh` は `#369`)。
 
@@ -41,7 +41,6 @@ graph TD
     INTERP["interpreter/\n(AudioIR → メソッド呼び出し)"]
     CORE["core/\n(Global, Sequence, mixer)"]
     PLAYER["audio/rust-engine/\nRustEnginePlayer + DaemonClient"]
-    SC["audio/supercollider-player.ts\n(opt-out: ORBITSCORE_ENGINE=sc)"]
   end
 
   subgraph "orbit-audio-daemon (Rust)"
@@ -58,11 +57,10 @@ graph TD
 
   AGENT["外部 agent\n(Claude Code 等)"] -->|"MCP (Streamable HTTP)"| MCP
   MCP --> EXT
-  EXT -->|"child_process.spawn('node', [cli-audio.js, 'repl'])\nenv.ORBITSCORE_ENGINE"| CLI
+  EXT -->|"child_process.spawn('node', [cli-audio.js, 'repl'])\nenv は debug フラグと capture seam のみ"| CLI
   EXT -->|"stdin.write(code + '\\n')"| CLI
   EXT --> RESOLVER
   CLI --> PARSER --> INTERP --> CORE --> PLAYER
-  CORE -.->|"ORBITSCORE_ENGINE=sc のときだけ"| SC
   PLAYER -->|"spawn(orbit-audio-daemon)\nstdout の ready line で port を受け取る"| WS
   PLAYER -->|"ws://127.0.0.1:port\nLoadSample / PlayAt / LoadPlugin ..."| WS
   WS --> RENDER
@@ -71,7 +69,6 @@ graph TD
   SUP -->|"spawn + 共有メモリ (shm)"| CHILD2
   SUP -->|"spawn + 共有メモリ (shm)"| CHILD3
   RENDER -->|"audio out"| DAC["スピーカー"]
-  SC -.->|"OSC over UDP"| SCSYNTH["scsynth"]
 ```
 
 > **図の読み方**: `RESOLVER` は engine の build artifact (compiled JS) を Extension Host 側が `require()` して実行するものなので、engine プロセスではなく Extension Host の subgraph に置いています。engine プロセスの中に「侵入」するのではなく、同じ resolver 関数を両側で走らせて結果を一致させる、という code-level の依存です。
@@ -494,11 +491,13 @@ fn default_rack_child_exe() -> Result<PathBuf, String> {
 
 なぜ隔離するのかというと、3rd-party plugin は信頼できないコードなので、crash しても daemon (音の心臓部) を道連れにしないためです。shm transport の構造、READY handshake、watchdog / respawn、親プロセスの死活監視 (`ParentWatch`) は [RE-2. OOP children と shm transport](/rust-engine/oop-children) が、DSL 面 (`seq.effect()` / `seq.instrument()`) は [PH-1. Plugin Hosting 概観](/plugin-hosting/) と [RE-3. per-sequence insert bus](/rust-engine/insert-bus) が扱います。
 
-## SuperCollider 経路（削除決定 #502）
+## SuperCollider 経路（#502 で削除済み）
 
-`ORBITSCORE_ENGINE=sc` を指定すると、`createAudioEngine()` が `SuperColliderPlayer` を返し、extension も `ORBIT_SCSYNTH_PATH` を env で渡す `sc` 分岐に入ります (前掲の extension.ts:2142-2155)。scsynth の解決 (`scsynth-resolver.ts` の strict mode)、OSC over UDP、`orbitPlayBuf` SynthDef といった仕組みは 69dc968 時点ではコードとして残っており、[III-2. オーディオファイル再生](/audio/audio-file-playback) がそれを読んでいます（III-1「SuperCollider との通信」と III-3「scsynth bundle と path resolution」は独立の章としては 2026-09-10 の裁定 #827 / #502 に伴いサイトから削除し、[ADR-001](/decisions/adr-001-supercollider) と [ADR-003](/decisions/adr-003-scsynth-bundle) に記録を残しています）。SC 経路自体もこの裁定でリポジトリから削除が決まっており、既定経路ではないことを念頭に読んでください。
+かつては `ORBITSCORE_ENGINE=sc` を指定すると `createAudioEngine()` が `SuperColliderPlayer` を返し、extension も `ORBIT_SCSYNTH_PATH` を env で渡す `sc` 分岐に入りました。scsynth の解決 (`scsynth-resolver.ts` の strict mode)、OSC over UDP、`orbitPlayBuf` SynthDef といった仕組みは 69dc968 時点ではコードとして残っていましたが、2026-09-10 の裁定（#827 / #502）に基づき [#840](https://github.com/signalcompose/orbitscore/pull/840) で **`packages/engine/src/audio/supercollider/` 一式・`supercollider-player.ts`・`packages/sc-link-audio/`・synthdef アセットごと削除されました**。opt-out を選ぶ env var と VS Code 設定（`ORBITSCORE_ENGINE` / `orbitscore.engine` / `orbitscore.scsynthPath`）も同時に撤去され、いまバックエンドを選ぶ手段はありません。
 
-`AudioEngineBackend` の契約に SC 側が実装していない optional メソッド (`selectAudioDevice` など) があるように、機能面でも Rust 経路が先行しています (engine-backend.ts:32-33)。
+削除前のコードの読解は [III-2. オーディオファイル再生](/audio/audio-file-playback) にスナップショットとして残してあります（III-1「SuperCollider との通信」と III-3「scsynth bundle と path resolution」は独立の章としてはサイトから削除し、[ADR-001](/decisions/adr-001-supercollider) と [ADR-003](/decisions/adr-003-scsynth-bundle) に記録を残しています）。
+
+削除の時点でも、`AudioEngineBackend` の契約には SC 側が実装していない optional メソッド (`selectAudioDevice` など) があり、機能面では Rust 経路が先行していました (engine-backend.ts:32-33)。
 
 ## 「play() → 音」の data flow
 
@@ -590,7 +589,7 @@ export const DSL_VERSION = '1.2'
 | `seq.effect()` の per-sequence insert bus | [RE-3. per-sequence insert bus](/rust-engine/insert-bus) |
 | capture WAV による客観検証 | [RE-4. capture seam と客観検証](/rust-engine/capture-verification) |
 | CLAP / VST3 hosting の DSL 面 | [PH-1. Plugin Hosting 概観](/plugin-hosting/) |
-| (opt-out・削除決定 #502) scsynth との OSC 通信 | [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) |
+| (opt-out・#502 で削除済み) scsynth との OSC 通信 | [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) |
 | extension の activation、IntelliSense、flash | [IV-1. VS Code 拡張アーキテクチャ](/editor/vscode-architecture) |
 
 ## 関連用語
@@ -600,7 +599,7 @@ export const DSL_VERSION = '1.2'
 - [Extension Host](/glossary#extension-host) — VS Code 拡張が動く Node.js プロセス
 - [StatusBarItem](/glossary#statusbaritem) — engine 状態・バックエンド解決状態を表示するステータスバー
 - [scsynth](/glossary#scsynth) — SuperCollider のオーディオサーバー (opt-out 経路。#502 で削除済み)
-- [OSC (Open Sound Control)](/glossary#osc-open-sound-control) — SC 経路で engine と scsynth が使う通信プロトコル
+- [OSC (Open Sound Control)](/glossary#osc-open-sound-control) — SC 経路で engine と scsynth が使っていた通信プロトコル (#502 で削除済み)
 - [strict mode (scsynth resolver)](/glossary#strict-mode-scsynth-resolver) — fail-loud の resolver 設計。daemon resolver も同じ方針
 
 ## 関連 ADR
@@ -617,14 +616,14 @@ export const DSL_VERSION = '1.2'
 - **`RustEnginePlayer` のクロックマッピング**: `StreamStats` (1Hz) で anchor を補正する仕組みと lookahead の実測値
 - **`DaemonClient` の recovery**: daemon crash 検出 → respawn → `establishSession()` の再実行の流れ (#389)
 - **MCP ツール面の全体像**: `mcp-server.ts` に登録されている 26 個の `registerTool` の分類 (engine 操作 / editor 操作 / 観測)
-- **extension ↔ engine 間の型境界**: `engine-startup-runtime.ts` と `resolveScsynthForUI()` が engine の compiled JS を `require()` する構造の管理方法
+- **extension ↔ engine 間の型境界**: `engine-startup-runtime.ts` が engine の compiled JS を `require()` する構造の管理方法 (対になっていた `resolveScsynthForUI()` は #502 で削除)
 - **daemon の graceful shutdown ギャップ (#448)**: SIGTERM ハンドラ不在と `ParentWatch` による child 側防御
 
 ## Sources
 
 - `packages/vscode-extension/src/extension.ts:286-404` — `activate()`: log ring、ステータスバー 2 本、コマンド登録
 - `packages/vscode-extension/src/extension.ts:445-470` — MCP サーバーの起動条件 (`ORBITSCORE_MCP_PORT` > 設定) とハンドラ束
-- `packages/vscode-extension/src/extension.ts:653-710` — `getConfiguredEngineKind()` / `resolveScsynthForUI()` / `resolveDaemonForUI()`: engine の compiled JS を runtime require する境界
+- `packages/vscode-extension/src/extension.ts:628-642` — `resolveDaemonForUI()`: engine の compiled JS を runtime require する境界 (`getConfiguredEngineKind()` / `resolveScsynthForUI()` は #502 で削除)
 - `packages/vscode-extension/src/extension.ts:2044-2198` — `startEngine()`: kind 判定 → pre-check → env → spawn
 - `packages/vscode-extension/src/extension.ts:3000-3032` — `writeCodeToEngine()`: メタ行 + `setDocumentDirectory` 注入と `stdin.write`
 - `packages/vscode-extension/src/extension.ts:3040-3047` — `evaluateForAgent()`: MCP evaluate が `writeCodeToEngine` を共有する

@@ -101,6 +101,12 @@ These methods adjust volume and stereo position.
 `gain()` and `pan()` apply immediately regardless of whether the underscore prefix is present. `gain(-6)` and `_gain(-6)` have the same effect.
 :::
 
+::: info A fixed gain() / pan() holds a position on the chain
+A **fixed** value such as `gain(-6)` lines up with `effect()`, `send()` and `output()` on one audio line, in the order you write them. `kick.gain(-6).effect(...)` and `kick.effect(...).gain(-6)` feed the effect a different level. See [sum and aux/send](../mixing/routing.md).
+
+A **random** value such as `gain(random(...))` is still applied per note, as before, and does not become an element of the line.
+:::
+
 #### Volume Reference
 
 | Value | Effect |
@@ -315,7 +321,7 @@ Features for hosting CLAP / VST3 plugins. For a full walkthrough, see [Playing a
 | `instrument(spec, pluginId, statePath)` | Three-argument form that specifies both a pluginId and a state | `piano.instrument("Kontakt 8.vst3", "id", "./states/piano.state")` |
 
 - Supported formats are `.clap` / `.vst3` (`.component` is not supported). Each sequence gets an independent instance; sounds are not shared.
-- `seq.effect()`, and `output()` / `send()` to a `sum` bus, work on **audio and instrument** sequences. `midi()` targets an external device, so it has no mixer output and all three raise an error.
+- `seq.effect()`, and `output()` / `send()` to a mixer destination, work on **audio and instrument** sequences. `midi()` targets an external device, so it has no mixer output and all three raise an error.
 
 ### Global / Sequence — Inserting Effects
 
@@ -368,21 +374,37 @@ Features for grouping sequences into buses. For a full walkthrough, see [sum and
 |---|---|---|
 | `global.sum(name)` | Declares a group bus (idempotent) | `global.sum("drum")` |
 | `global.aux(name)` | Declares a return bus (idempotent) | `global.aux("rev")` |
-| `sum("name")` / `aux("name")` | A reference to an already-declared bus (`.effect()` / `.ui()` can be chained) | `sum("drum").effect("GlueComp")` |
-| `seq.output(name)` | Routes the sequence's output to a group bus (audio / instrument) | `kick.output("drum")` |
+| `sum("name")` / `aux("name")` | A reference to an already-declared bus (`.effect()`, `.ui()`, `.output()`, `.send()`, `.gain()` and `.pan()` can be chained) | `sum("drum").effect("GlueComp")` |
+| `seq.output(dest)` | Routes the sequence's output to `dest` (audio / instrument). **Terminal** by default — the line ends there | `kick.output("drum")` |
+| `seq.output(dest, thru: true)` | Copies the signal to `dest` and lets the line continue (a tap) | `kick.output("rev", thru: true)` |
+| `seq.output(dest, db: n)` | Sets the level sent to `dest`, in dB | `kick.output("rev", thru: true, db: -12)` |
 | `seq.output(n)` | Numbered render bus (1–16, score mode) 🔴 **retracted in the specification** | `kick.output(1)` |
-| `seq.send(name, amount)` | Sets the amount sent to a return bus (fixed at post-fader; multiple sends allowed) | `kick.send("rev", 0.3)` |
+| `seq.send(name, db)` | Sets the level sent to a return bus, in dB (multiple sends allowed). Identical to `output(name, thru: true, db: db)` | `kick.send("rev", -12)` |
+| `seq.send(name, db, enabled: false)` | Mutes that send while keeping its position on the chain | `kick.send("rev", -12, enabled: false)` |
 
-- `sum` is a single level only (no nesting).
-- `output(name)` / `send(name, amount)` work on **audio and instrument** sequences (not with `midi()`).
-- The second argument to `send()` is a linear gain (roughly 0.0–1.0, with no hard clamp on the upper end).
+`dest` resolves in this order:
+
+| Spelling | Meaning |
+|---|---|
+| `output("master")` | The master track (a reserved word) |
+| `output("name")` | A declared `sum` or `aux` bus |
+| `output("3,4")` | Physical output channels 3 and 4 |
+| `output(variable)` | A mixer node declared as e.g. `var cue = mix.output(3, 4)` |
+| `output("name")` | A name matching none of the above is a LinkAudio channel name |
+
+- `output(name)` / `send(name, db)` work on **audio and instrument** sequences (not with `midi()`).
+- `effect()`, `gain()`, `pan()`, `send()` and `output()` **line up in the order you write them**. A different position gives a different result — see [sum and aux/send](../mixing/routing.md).
+- If you write no `output()` at all, the line is treated as if `output("master")` were written at its end.
+- `master` is a reserved word for the master track, so naming a mixer node `master` (`var master = mix.output(1, 2)`) is an error. `mix.output(1, 2)` names physical device channels 1 and 2, not the master track.
+- Writing a single channel — `mix.output(n)` — gives a mono output (L+R are merged).
 - `global.linkAudio()` cannot be combined with mixer features (sum/aux/plugin effects in general).
 
-::: warning Two rows in this table changed in the specification (the implementation has not followed yet)
-The 2026-09-03 revision (#611 / #649) decided the following two points. **Neither is implemented yet**, so what you write today is exactly what the table above says.
+::: danger The unit of the second argument to `send()` changed to dB (2026-09-10)
+It used to be a linear gain (roughly 0.0–1.0); it is now **dB** (core spec MX.3 / #611). `send("rev", 0.3)` is read as "**+0.3 dB**" (essentially unattenuated) rather than "linear 0.3", **with no error — only the sound changes**. The equivalent of linear `0.3` is `-10.5`. The named argument `amount:` has been removed and now raises an error; use `db:`.
+:::
 
-- **`seq.output(n)` (the numbered render bus) has been retracted** (core spec MX.2.3), because it does not fit the ruling that every destination is a *declared node*. Writing stems will instead take a node declared with `mix.render(...)` as the destination. Today's implementation keeps accepting `kick.output(1)`.
-- **The unit of the second argument to `send()` becomes dB** (core spec MX.3). `send("rev", 0.3)` will be re-read from "linear 0.3" to "**+0.3 dB**", **with no error — only the sound changes**. See [sum and aux/send](../mixing/routing.md) for details.
+::: warning `seq.output(n)` (the numbered render bus) is retracted in the specification
+The 2026-09-03 revision (#611 / #649) retracted it (core spec MX.2.3), because it does not fit the ruling that every destination is a *declared node*. Writing stems will instead take a node declared with `mix.render(...)` as the destination. Today's implementation keeps accepting `kick.output(1)`.
 :::
 
 ---

@@ -349,9 +349,11 @@ commit `1569110` の "Dev workflow への影響" セクション:
 1. **環境変数経由**: `.zshenv` 等に `export ORBIT_SCSYNTH_PATH=/Applications/SuperCollider.app/Contents/Resources/scsynth` を追加
 2. **bundle 抽出**: `npm run build:bundle` を先に実行して `engine/scsynth/` にバイナリを置く
 
-🔴 **2 番目は [#836](https://github.com/signalcompose/orbitscore/pull/836) 以降できません。** `build:bundle` script と `scripts/extract-scsynth-bundle.sh` が削除され、`sync-dist.js` は同期のたびに `engine/scsynth` を消します。残る回避方法は 1 番目（`ORBIT_SCSYNTH_PATH`）だけです。
+🔴 **2 番目は [#836](https://github.com/signalcompose/orbitscore/pull/836) 以降できません。** `build:bundle` script と `scripts/extract-scsynth-bundle.sh` が削除され、`sync-dist.js` は同期のたびに `engine/scsynth` を消します。この時点で残る回避方法は 1 番目（`ORBIT_SCSYNTH_PATH`）だけでした。
 
-cutover #108 以降はこれに加えて、そもそも SC 経路を選ぶために `ORBITSCORE_ENGINE=sc` (VS Code なら `orbitscore.engine: "sc"`) が必要です。
+🔴 **[#840](https://github.com/signalcompose/orbitscore/pull/840)（#502）以降は 1 番目もできません。** SC 経路そのもの（resolver・`SuperColliderPlayer`・`ORBITSCORE_ENGINE` / `orbitscore.engine`）が削除されたため、**`ORBIT_SCSYNTH_PATH` を読むコードが存在しません**。上記の回避方法は、いずれも歴史的な記述として残しています。
+
+cutover #108 から #502 までの間は、これに加えて、そもそも SC 経路を選ぶために `ORBITSCORE_ENGINE=sc` (VS Code なら `orbitscore.engine: "sc"`) が必要でした。
 
 ---
 

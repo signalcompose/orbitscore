@@ -54,7 +54,7 @@ owner 確定（2026-07-28・#543）。DSL の E2E テストは本仕様に従う
 | 層 | 役割 | 実行 | 再現性 |
 |---|---|---|---|
 | **オフライン決定論層** | 🔴 **回帰の固定**（改訂 2026-09-04） | offline render（`verify_schedule_pcm` 系・デバイス不要） | 同一 `.orbs` → ビット一致 PCM。random は seed 固定 |
-| **実機層** | 🔴 **語彙・構文表面の網羅**（改訂 2026-09-04） | MCP 経由で実 OrbitStudio を駆動（evaluate / run_selection / get_log / capture WAV） | 許容幅つき意味論 assert（実機の位相ゆらぎを前提） |
+| **実機層** | 🔴 **語彙・構文表面の網羅**（改訂 2026-09-04） | MCP 経由で実 VS Code を駆動（evaluate / run_selection / get_log / capture WAV）。🔴 起動先は #830（PR #831・2026-09-10）で VSCodium フォークの `OrbitStudio.app` から **stock VS Code** へ移行 | 許容幅つき意味論 assert（実機の位相ゆらぎを前提） |
 
 🔴 **改訂の理由（2026-09-04・#668 §19）**: 旧版は網羅をオフライン層に、実機層を
 「代表構文のみ」に割り当てていた。**これは現状と逆である。**

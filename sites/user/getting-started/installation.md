@@ -14,8 +14,8 @@ OrbitScore は VS Code の拡張機能として動作します。この章では
 | 項目 | 対応状況 |
 |---|---|
 | macOS Apple Silicon（M1 / M2 / M3 等の Mac） | 対応 |
-| macOS Intel（x86_64） | 一部動作する可能性がありますが未検証 |
-| Windows / Linux | v1 系では未対応 |
+| macOS Intel（x86_64） | 非対応（配布される `.vsix` は arm64 専用です） |
+| Windows / Linux | 非対応 |
 | VS Code または Cursor（バージョン 1.99.0 以上） | 必須 |
 
 ::: info 追加のインストールは不要です
@@ -63,7 +63,7 @@ Cursor を使っている場合は `code` の代わりに `cursor` と入力し�
 ```
 
 まずこの表示が出ます。エンジンはまだ起動していない状態です。
-クリックするとコマンド一覧が開くので、**Start Engine** を選びます。起動すると表示が変わります:
+クリックすると **Audio Engine Settings** ビューが開くので、そこでエンジンを起動します。起動すると表示が変わります:
 
 | 表示 | 意味 |
 |---|---|
@@ -77,9 +77,11 @@ Cursor を使っている場合は `code` の代わりに `cursor` と入力し�
 何も出ないのが正常な状態です。
 :::
 
-## 将来の予定
+## 入手できる場所
 
-現在は GitHub Releases から `.vsix` をダウンロードしてインストールする方法のみ対応しています。将来は VS Code Marketplace と Open VSX からも直接インストールできる予定です。
+OrbitScore の入手経路は [GitHub Releases](https://github.com/signalcompose/orbitscore/releases) の `.vsix` だけです。VS Code Marketplace と Open VSX には公開していません。
+
+更新するときも同じ手順です。新しい `.vsix` を、古いものの上からインストールしてください。
 
 ## 次のステップ
 

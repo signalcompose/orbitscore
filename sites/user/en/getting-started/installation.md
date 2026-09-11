@@ -14,8 +14,8 @@ Before you begin, please make sure your environment meets the following conditio
 | Item | Status |
 |---|---|
 | macOS Apple Silicon (Macs with M1, M2, M3, etc.) | Supported |
-| macOS Intel (x86_64) | May work in some cases, but unverified |
-| Windows / Linux | Not supported in v1 |
+| macOS Intel (x86_64) | Not supported (the released `.vsix` is arm64-only) |
+| Windows / Linux | Not supported |
 | VS Code or Cursor (version 1.99.0 or later) | Required |
 
 ::: info Nothing else to install
@@ -62,8 +62,8 @@ Once the installation is complete, the OrbitScore status is displayed in the sta
 🎵 OrbitScore: Stopped
 ```
 
-This appears first — the engine has not started yet. Click it to open the command list
-and choose **Start Engine**. Once it starts, the text changes:
+This appears first — the engine has not started yet. Click it to open the **Audio Engine
+Settings** view, and start the engine from there. Once it starts, the text changes:
 
 The contents shown in the status bar vary depending on the situation:
 
@@ -79,9 +79,11 @@ No extra indicator for the audio engine is shown while everything is fine — th
 design. Nothing appearing is the normal state.
 :::
 
-## Future Plans
+## Where to get it
 
-At present, the only supported way to install is downloading the `.vsix` file from GitHub Releases. In the future, direct installation from the VS Code Marketplace and Open VSX is planned as well.
+The only way to get OrbitScore is the `.vsix` on [GitHub Releases](https://github.com/signalcompose/orbitscore/releases). It is not published on the VS Code Marketplace or Open VSX.
+
+Updating works the same way — install the newer `.vsix` over the old one.
 
 ## Next Step
 
