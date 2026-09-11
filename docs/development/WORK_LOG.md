@@ -17,6 +17,77 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### release: tag v3.0.0 — the extension line is frozen as stable (#827) (Sep 11, 2026)
+
+owner 裁定 2026-09-10（#827・正本 `docs/planning/NATIVE_MIGRATION_2026-09.md` §12）の凍結線に到達した。
+以降のネイティブ OrbitStudio.app は新ライン。
+
+#### 裁定（2026-09-11）— §12.7 が未決として残していた 2 件
+
+| 未決だったもの | 裁定 |
+|---|---|
+| バージョン | **3.0.0 / DSL 1.2**（`send()` の dB 化で既存譜面の意味が変わるので semver では major） |
+| タグ名前空間 | **`v3.0.0`**。`ext-v*` / `app-v*` の分離は新ラインで（§12.3）。`release.yml` は `v*` トリガーのままで変更不要 |
+
+残り 3 件は裁定待ちではなく解消済み: SC 削除 = #840 / gated ハーネス = #831 / README = #842。
+Marketplace publish は「行わない」（owner 2026-09-10）で、`PUBLISH_MARKETPLACE` 未設定のため
+publish ステップは skip される（`gh variable list` で実測）。
+
+#### タグ直前の実測（main `61f947d7`）
+
+| 確認 | 結果 |
+|---|---|
+| `npm test` | **2,347 passed / 67 skipped / 0 failed** |
+| `npm run lint` | 緑 |
+| `check-citations.mjs`（素で実行） | **944 / 0 failed** |
+| `.vsix` の依存ゲート | engine 5/5・extension 2 宣言 + **3 specifier 解決** |
+| 出荷物の `scsynth` / `supercollider` 参照 | **0** |
+| タグ照合ガード（#853） | `v3.0.0` vs `3.0.0` → `{ok: true}` |
+| マージ前ゲート（`orbit-effect-rack-child`） | `--ignored` **3 passed** / 通常 **16 passed** |
+
+#### 🔴 凍結は 1 日延びた — cold install がブロッカーを出した
+
+タグを打つ直前に cold install を回したところ、**`.vsix` が activate すらできなかった**（#873）。
+
+```
+Error: Cannot find module '@modelcontextprotocol/sdk/server/mcp.js'
+```
+
+**この時点でビルド・ユニット 2,338 件・lint・引用・`release.yml` の post-package ゲート全項目が
+緑だった。** npm workspaces が拡張の実行時依存をルートへ hoist し、`vsce package` が同梱する
+`extension/node_modules` には `@types` と `undici-types` しか入っていなかった。engine 側には
+同型の事故が 2 回あり対策もあったのに（WORK_LOG 6.119 / 6.422）、**拡張自身の依存だけ無防備**だった。
+MCP サーバ（#388）が入った時点から壊れていた可能性が高い。
+
+**dev host は構造的にここを見ない**:
+
+| 経路 | dev host（`--extensionDevelopmentPath`） | cold install |
+|---|---|---|
+| daemon の解決 | `monorepo-release`（リポジトリの `rust/target/release`） | **`extension-bundle`** |
+| 拡張の実行時依存 | ルートに hoist されたものが walk-up で見つかる | **`.vsix` に入っているものだけ** |
+
+#874 で直し、**ゲートを「宣言を数える」から「出荷物の中で実際に解決する」へ変えた**。
+同一の壊れたツリー（sdk の推移依存 `express` を削除）に対して旧ゲートは exit 0、新ゲートは exit 1。
+
+#### 今日 main に入ったもの
+
+| PR | 内容 |
+|---|---|
+| #868 | ルーティン docs 追従 **9 本**を 1 本に統合（#837 / #844 / #847 / #856 / #858 / #862 / #864 / #865 / #866） |
+| #870 | `loop-quantize` の 1ms レース（CI を間欠的に赤くしていた真因） |
+| #871 | 拡張 3.0.0 / DSL 1.2 + リリース直前の README 2 件 |
+| **#874** | **`.vsix` が activate できなかったブロッカー** + それを守るゲートとテスト |
+| #876 / #872 | 上記の docs 追従 |
+
+#### 新ラインへ送ったもの
+
+| # | 内容 |
+|---|---|
+| #875 | esbuild でバンドルし、copy-a-node_modules の機構ごと退役させる |
+| #877 | cold install を再実行できる gated spec にする（#138 を #656 から切り離す） |
+| #878 | `extension.ts:2000` の `spawn('node', …)` が PATH 依存で `process.execPath` のフォールバックが無い |
+| #849 | ネイティブ macOS OrbitStudio の設計 |
+
 ### docs: follow the 3.0.0 / DSL 1.2 bump into the docs the bump missed (PR #871 追従) (Sep 11, 2026)
 
 ルーティン docs 追従。追従元は PR [#871](https://github.com/signalcompose/orbitscore/pull/871)
