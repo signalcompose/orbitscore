@@ -1,5 +1,7 @@
 # OrbitScore はじめに
 
+> ⚠️ **DEPRECATED（非推奨・2.0.0 時点）** — 本ガイドは Rust cutover（#108）以前の内容で、SuperCollider のインストールを前提としていますが、SuperCollider は opt-out バックエンドとして **#502（2026-09-10）で削除**されました。現在の OrbitScore はネイティブ Rust オーディオエンジン （`orbit-audio-daemon`）を同梱しており、外部オーディオエンジンのインストールは不要です。**最新のスタートガイドは VitePress user site（`sites/user/`）を参照**してください。本ファイルは履歴として保持しています。
+
 **OrbitScore オーディオベースライブコーディングDSLのクイックスタートガイド**
 
 ## 前提条件

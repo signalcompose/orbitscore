@@ -5,9 +5,9 @@ Signal compose の汎用 Rust audio engine ワークスペース。OrbitScore �
 
 ## Status
 
-**OrbitScore の既定バックエンド**（cutover #108・2026-07-03、WORK_LOG 6.179）。
-`packages/engine/src/audio/create-audio-engine.ts` が `ORBITSCORE_ENGINE` 未設定時に
-`orbit-audio-daemon` を選び、SuperCollider 経路は `ORBITSCORE_ENGINE=sc` の opt-out。
+**OrbitScore の唯一のバックエンド**（cutover #108・2026-07-03、WORK_LOG 6.179。
+旧 SC バックエンドは #502 で削除済み）。
+`packages/engine/src/audio/create-audio-engine.ts` が常に `orbit-audio-daemon` を選ぶ。
 `.vsix` には `scripts/copy-daemon-bin.sh` で daemon バイナリと child バイナリが同梱される
 （macOS Apple Silicon のみ）。
 

@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
 import { Sequence } from '../../packages/engine/src/core/sequence'
-import { SuperColliderPlayer } from '../../packages/engine/src/audio/supercollider-player'
+import { RustEnginePlayer } from '../../packages/engine/src/audio/rust-engine/rust-engine-player'
 
 interface ScheduledEventArgs {
   filepath: string
@@ -22,7 +22,7 @@ interface ScheduledEventArgs {
 describe('LOOP quantize startup', () => {
   let global: Global
   let seq: Sequence
-  let mockPlayer: SuperColliderPlayer
+  let mockPlayer: RustEnginePlayer
   // currentTime relative to scheduler start (set per-test).
   let elapsedMs: number
   // Captured calls to scheduleSliceEvent.

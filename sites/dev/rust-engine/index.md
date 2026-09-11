@@ -1,12 +1,12 @@
 ---
 title: "RE-1. daemon アーキテクチャ概観"
 chapter-id: "RE-1"
-verified-against: 183b612
+verified-against: 58b8c1c
 verified-at: "2026-09-10"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで、2026-09-06 に #779 の起動時 shm sweep（[#784](https://github.com/signalcompose/orbitscore/pull/784)）まで、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の直行デバイスラインまで、2026-09-10 に #611 PR-O3b（[#824](https://github.com/signalcompose/orbitscore/pull/824)）の `SetBusLine` wire 契約と master line の 2 本立てまで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-05 に #649 PR-O2（[#754](https://github.com/signalcompose/orbitscore/pull/754)）の master ライン導入まで、2026-09-06 に #779 の起動時 shm sweep（[#784](https://github.com/signalcompose/orbitscore/pull/784)）まで、2026-09-08 に #611 PR-O3a（[#811](https://github.com/signalcompose/orbitscore/pull/811)）の直行デバイスラインまで、2026-09-10 に #611 PR-O3b（[#824](https://github.com/signalcompose/orbitscore/pull/824)）の `SetBusLine` wire 契約と master line の 2 本立てまで、2026-09-10 に #502 の SC 削除（[#833](https://github.com/signalcompose/orbitscore/pull/833)）で確定した「LinkAudio egress は出荷ビルドに入っていない」まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # RE-1. daemon アーキテクチャ概観
 
@@ -283,7 +283,7 @@ arm は次のとおりです（`cfg` 列は feature で分岐する arm。`SetBu
 | `SelectAudioDevice` | ランタイム device 切替 | #484 D2・audio owner thread へ委譲。#661 で候補を先に probe する |
 | `GetStatus` | daemon/protocol version・sample rate・`render_contentions` 等 | #661 で `output`（実際に鳴っているデバイスと縮退の履歴）と `callback`（生存カウンタ）が加わった |
 | `LoadSample` / `UnloadSample` | audio file の登録 / 解除 | |
-| `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | |
+| `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | 🔴 feature `link-audio` は **default off** で、出荷ビルドでは有効化していない。無効なら `LINK_AUDIO_UNAVAILABLE`（能力の欠落）を返し、TS 側は 1 回だけ warn して hardware で続行する。詳細は下の「LinkAudio egress は出荷ビルドに入っていない」 |
 | `LoadPlugin` | plugin の attach（`role` / `bus` / `instance` / `state`） | in-process build は `role` 必須 |
 | `ApplyEffectChain` | ラック（チェーン全体）の prepare-commit 適用 | #628・`mode: diff / rebuild` |
 | `ReplacePlugin` | slot tenant の差し替え | #618（instrument）/ #625（effect） |
@@ -302,6 +302,63 @@ arm は次のとおりです（`cfg` 列は feature で分岐する arm。`SetBu
 `SetGlobalGain` の行の「#643 で修正」は、WORK_LOG 6.415 に記録された「master fader が instrument に
 効いていなかった」不具合の修正を指します。同じ command が RE-4 で扱う capture E2E で捕まった、
 という経緯は [`capture-verification`](/rust-engine/capture-verification) 章で触れます。
+
+### LinkAudio egress は出荷ビルドに入っていない
+
+`RegisterLinkAudioChannel` / `SetLinkTempo` の 2 つは、表の中で唯一「wire には居るが出荷ビルドでは
+一度も成功しない」command です。egress の実体は GPL 隔離 crate `orbit-link-audio` で、daemon 側は
+optional dependency として feature `link-audio` の裏に括られています。
+
+```toml
+// rust/crates/orbit-audio-daemon/Cargo.toml:18-23
+[features]
+# 🔴 GPL feature。**default off**。有効化すると Ableton Link(GPL-2.0-or-later)が
+# 依存グラフに入る。permissive な engine core はこの feature に依存しない。
+# rtrb は permissive(MIT/Apache)だが、reg-ring producer 型を名指すのは link-audio 経路のみ
+# なので feature に括る（default ビルドの依存グラフを増やさない）。
+link-audio = ["dep:orbit-link-audio", "dep:rtrb"]
+```
+
+そして出荷ビルドはこの feature を有効化していません。同梱バイナリを作る 1 行はこうです。
+
+```bash
+// scripts/copy-daemon-bin.sh:108-108
+    && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument \
+```
+
+`.github/workflows/release.yml:88` も同じ feature 集合で、`link-audio` はどちらにも入っていません。
+つまり **`.vsix` に同梱される daemon には egress が存在しません**。
+
+なぜ有効化しないかは、feature のコメントがそのまま理由になっています。有効化すると
+Ableton Link（GPL-2.0-or-later）が出荷バイナリの依存グラフに入り、`rust/deny.toml` の
+「default graph は GPL-free」不変条件が崩れます。これは SuperCollider（GPL の scsynth 同梱）を
+#502 で削除した理由と同じ問題です。**有効化は「そう決める」ことであって、まだ決まっていません。**
+
+無効なビルドで `RegisterLinkAudioChannel` を受けた daemon は `LINK_AUDIO_UNAVAILABLE` を返します。
+これは **能力の欠落**を表すコードで、実行時の失敗を表す `LINK_AUDIO_RUNTIME` や daemon の死とは
+区別されます。前者だけを TS 側が握り潰して hardware で続行し、後者は呼び出し元へ伝播します。
+警告を出すのは **channel 登録の 1 箇所だけ**で、`scheduleEvent` / `scheduleSliceEvent` は同じ gap を
+見ても警告しません（登録経路を唯一の権威として扱う）。仕様側の記述は
+`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §8.1 / §8.1.3 にあります。
+
+🔴 **ただし、この「hardware へフォールバックして 1 回 warn する」は実機で確認されていません。**
+gated E2E の側に、正反対の実測が記録されています。
+
+```ts
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5252-5258
+  // **A comment is not evidence of implementation behavior** — main's real run found
+  // capture RMS = 0 for `d645Live` and NO `LINK_AUDIO_UNAVAILABLE`/gap-warning marker in
+  // get_log at all, meaning the assumed fallback does not actually happen (or does not
+  // happen the way the comment describes). Capture-based proof was DROPPED for this
+  // reason — under `global.linkAudio()`, EVERY audio sequence's dispatch is either
+  // `skip` or `link` (never a real, capturable `hardware` dispatch — mixing is
+  // disallowed by design), so there is no way to hear `d645Live` here without
+```
+
+つまり 2026-09-04 の実機では **音が出ず（capture RMS = 0）、警告も出ていません**。さらにこの
+コメントは「`global.linkAudio()` 下では dispatch は `skip` か `link` のどちらかで、capture できる
+`hardware` dispatch には**決してならない**（混在は設計上禁止）」と述べており、これは §8.1 の
+「hardware へ出る」と正面から食い違います。**どちらが正しいかは本ページでは決めません。**
 
 ## boot 〜 teardown ライフサイクル
 

@@ -12,7 +12,7 @@ status: draft
 scsynth の bundle と strict resolver は SuperCollider 経路のものです。2026-07-03 の cutover #108（`docs/archive/WORK_LOG_2026-07.md` §6.179）以降、この経路は **`ORBITSCORE_ENGINE=sc`（VS Code では `orbitscore.engine: "sc"`）で opt-out したときだけ**使われ、既定の Rust 経路では scsynth は解決すらされません。ただし本 ADR が決めた「fail loud の resolver」というパターン自体は `orbit-audio-daemon` の解決にそのまま流用されています（末尾の「Consequences revisited (2026-09)」）。既定経路は [RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照してください。
 
 ```typescript
-// packages/engine/src/audio/create-audio-engine.ts:17-22
+// （削除済み・58f558f5 時点） packages/engine/src/audio/create-audio-engine.ts L17-22
 export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
   const raw = env[ENGINE_ENV_VAR]
   if (resolveEngineKind(raw) === 'supercollider') {
@@ -22,10 +22,37 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 ```
 
 ```typescript
-// packages/engine/src/audio/engine-backend.ts:54-55
+// （削除済み・58f558f5 時点） packages/engine/src/audio/engine-backend.ts L54-55
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
 export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```
+:::
+
+::: warning このコードは削除済み
+本 ADR が引用している SuperCollider 経路のコードは、**2026-09-10 の裁定（#827 / #502）で
+リポジトリから削除**されました。以下のコード片は削除前（commit `58f558f5`）のスナップショットで、
+現在のリポジトリには存在しません。ADR は決定の記録として残しています。
+:::
+
+::: warning bundle 本体も撤去済み（#836・2026-09-10）
+本 ADR が扱う **scsynth の同梱そのもの**が [#836](https://github.com/signalcompose/orbitscore/pull/836) で
+リポジトリから消えました。以下がまとめて削除されています:
+
+- `scripts/extract-scsynth-bundle.sh`（`npm run build:bundle` の実体）と
+  `scripts/verify-bundle.sh`（`npm run verify:bundle` の実体）、および両 npm script
+- `packages/vscode-extension/.vscodeignore` の `!engine/scsynth/**` / `!engine/supercollider/**` /
+  `!legal/**` keep 指定
+- `packages/vscode-extension/legal/scsynth-LICENSE.GPL-3.0` と `legal/scsynth-NOTICE`
+- `.github/workflows/release.yml` の `brew install --cask supercollider` / `build:bundle` /
+  `verify:bundle` / packaging 後の `verify-bundle.sh` 呼び出し
+
+さらに `packages/engine/scripts/sync-dist.js` は、engine を拡張へ同期するたびに
+`engine/scsynth` と `engine/supercollider`、および同期先の `dist/audio/supercollider/` と
+`dist/audio/supercollider-player.*` を**明示的に削除**するようになりました。
+したがって出荷される `.vsix` には SC 資産が 1 つも入りません（#836 本文の実測: SC 参照 0 件・
+`.vsix` は 7.4 MB で約 11.5 MB 減）。
+
+本文の「同梱する」「`build:bundle` を実行する」という記述は、以降**歴史記録として**読んでください。
 :::
 
 # ADR-003 scsynth bundle strict mode
@@ -67,7 +94,7 @@ OrbitScore が SuperCollider を採用するまでの経緯は [ADR-001](/decisi
 `scsynth-resolver.ts` のコメントに明確に書かれています:
 
 ```typescript
-// packages/engine/src/audio/supercollider/scsynth-resolver.ts:1-17
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/scsynth-resolver.ts L1-17
 /**
  * scsynth binary path resolver.
  *
@@ -132,7 +159,7 @@ fallback が**あると困る理由**を整理すると:
 `scsynth-resolver.ts` の核心部分を見てみましょう:
 
 ```typescript
-// packages/engine/src/audio/supercollider/scsynth-resolver.ts:76-99
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/scsynth-resolver.ts L76-99
 export function resolveScsynthPath(opts: ResolveOptions = {}): ScsynthResolution {
   const searched: string[] = []
 
@@ -168,7 +195,7 @@ export function resolveScsynthPath(opts: ResolveOptions = {}): ScsynthResolution
 すべてが `null` を返したら `ScsynthNotFoundError` を throw します。`searched` 配列には「検索したけど見つからなかったパスの一覧」が入り、エラーメッセージに含まれます。
 
 ```typescript
-// packages/engine/src/audio/supercollider/scsynth-resolver.ts:34-45
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/scsynth-resolver.ts L34-45
 export class ScsynthNotFoundError extends Error {
   public readonly searched: string[]
 
@@ -188,7 +215,7 @@ export class ScsynthNotFoundError extends Error {
 `bundleCandidatePath()` の実装も確認しておきましょう:
 
 ```typescript
-// packages/engine/src/audio/supercollider/scsynth-resolver.ts:57-59
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/scsynth-resolver.ts L57-59
 function bundleCandidatePath(): string {
   return path.resolve(__dirname, '../../../scsynth/Contents/Resources/scsynth')
 }
@@ -265,7 +292,7 @@ SC プロジェクトが既に Apple Developer ID + hardened runtime + notarize 
 
 ## VS Code 拡張側での使用
 
-[III-3](/audio/scsynth-bundle) と [IV-1](/editor/vscode-architecture) で扱ったように、VS Code 拡張は `resolveScsynthForUI()` で resolver を呼び出します。ただし 69dc968 時点では、この呼び出しは `orbitscore.engine` が `sc` のときだけ行われます。resolution の結果は status bar インジケータ `bundleStatusItem` の表示に使われます:
+本 ADR（上記）と [IV-1](/editor/vscode-architecture) で扱ったように、VS Code 拡張は `resolveScsynthForUI()` で resolver を呼び出します。ただし 69dc968 時点では、この呼び出しは `orbitscore.engine` が `sc` のときだけ行われます。resolution の結果は status bar インジケータ `bundleStatusItem` の表示に使われます:
 
 | engine kind | `resolution.source` | bundleStatusItem 表示 |
 |---|---|---|
@@ -275,7 +302,7 @@ SC プロジェクトが既に Apple Developer ID + hardened runtime + notarize 
 | `rust` | (scsynth は解決しない) | daemon 解決可なら非表示、不可なら `$(error) daemon: not found` |
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:747-771
+// （削除済み・58f558f5 時点） packages/vscode-extension/src/extension.ts L747-771
   bundleStatusItem.show()
   const resolution = resolveScsynthForUI()
   if (!resolution) {
@@ -322,6 +349,8 @@ commit `1569110` の "Dev workflow への影響" セクション:
 1. **環境変数経由**: `.zshenv` 等に `export ORBIT_SCSYNTH_PATH=/Applications/SuperCollider.app/Contents/Resources/scsynth` を追加
 2. **bundle 抽出**: `npm run build:bundle` を先に実行して `engine/scsynth/` にバイナリを置く
 
+🔴 **2 番目は [#836](https://github.com/signalcompose/orbitscore/pull/836) 以降できません。** `build:bundle` script と `scripts/extract-scsynth-bundle.sh` が削除され、`sync-dist.js` は同期のたびに `engine/scsynth` を消します。残る回避方法は 1 番目（`ORBIT_SCSYNTH_PATH`）だけです。
+
 cutover #108 以降はこれに加えて、そもそも SC 経路を選ぶために `ORBITSCORE_ENGINE=sc` (VS Code なら `orbitscore.engine: "sc"`) が必要です。
 
 ---
@@ -334,12 +363,21 @@ ADR の形式にならって、決定後の帰結を記録します。
 
 2026-07-03 の cutover #108 (`docs/archive/WORK_LOG_2026-07.md` §6.179) で既定バックエンドが Rust に切り替わりましたが、scsynth の bundle そのものは残っています。#377 の engine-kind 分岐 (`docs/archive/WORK_LOG_2026-07.md` §6.186) は release.yml について「scsynth 関連ステップ (brew install / build:bundle / verify:bundle) は無改変で維持 (owner 暫定判断: scsynth 同梱は Phase 1 据え置き)」と記録しています。したがって `.vsix` は 69dc968 時点でも SC bundle と daemon バイナリの両方を同梱する構成です。
 
+### そして bundle は撤去された (#836・2026-09-10)
+
+「据え置き」は stable タグの前で終わりました。[#836](https://github.com/signalcompose/orbitscore/pull/836) が SC の同梱・ビルド・ライセンスをまとめて外し、`.vsix` は daemon バイナリだけを同梱する構成になりました。PR 本文が挙げている決め手は 2 つです:
+
+- **ライセンス**: 現行の `.vsix` は `.vscodeignore` の keep 指定で **GPL の scsynth を同梱**していて、`release.yml` は `v*` タグで Marketplace / Open VSX へ publish する。だから stable タグより前に外す（owner 裁定 `docs/planning/NATIVE_MIGRATION_2026-09.md` §12.5）
+- **順序**: `build:copy-engine` が `packages/engine/supercollider` をコピーしていたので、**コピー元より先にコピーする側を外す**必要があった
+
+同時に `packages/sc-link-audio/`（GPL-2.0-or-later の SC 用 LinkAudio プラグイン）と `.gitmodules` の 2 エントリも消え、リポジトリから git submodule が無くなりました。GPL 隔離ゲートの `rust/deny.toml` は**変更されていません** — こちらの対象は Ableton Link の `orbit-link-audio` で、SC とは別物だからです。
+
 ### strict resolver のパターンは daemon に継承された
 
 本 ADR の中核だった「fail loud・silent fallback を持たない・候補は実行可能ファイルであること」は、`resolveDaemonBinaryPath()` にそのまま引き継がれています。#306 (`docs/archive/WORK_LOG_2026-07.md` §6.185) で `.vsix` 同梱 daemon を最後の候補として追加し、#366 のレビュー Round 2 (§6.186) で「`existsSync` のみで exec bit を見ていない = scsynth 側 `isExecutableFile` と非対称」という指摘を受けて、daemon 側も executable regular file を要求するよう揃えられました。候補の並びは `explicit → env (ORBIT_AUDIO_DAEMON_PATH) → monorepo-release → monorepo-debug → extension-bundle` です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:112-112
+// （削除済み・58f558f5 時点） packages/engine/src/audio/rust-engine/daemon-client.ts L111-111
   source: 'explicit' | 'env' | 'monorepo-release' | 'monorepo-debug' | 'extension-bundle'
 ```
 
@@ -373,11 +411,10 @@ ADR の形式にならって、決定後の帰結を記録します。
 
 ## 次の深掘り候補
 
-- `build:bundle` スクリプト (`scripts/extract-scsynth-bundle.sh`) の実装 — scsynth を SC.app から抽出・配置する処理の詳細
+- ~~`build:bundle` スクリプト (`scripts/extract-scsynth-bundle.sh`) の実装~~ — **#836 で削除済み**。読むなら削除前の commit で
 - `scripts/copy-daemon-bin.sh` — daemon 側の同梱スクリプト。`darwin-arm64` 限定の理由と release.yml での順序保証
-- Windows / Linux での bundle 戦略 — macOS 向け universal binary 以外のプラットフォーム対応
-- SC.app バージョン up 時の bundle 更新フロー — `SCSYNTH_BUNDLE_MANIFEST.md` の Update policy (Major/Minor bump のみ re-extract)
-- bundle 同梱の GPL-3.0 ライセンス対応 — `SCSYNTH_BUNDLE_MANIFEST.md` に「GPL-3.0 aggregation 性を強く保つ」と記録されている問題の詳細
+- ~~Windows / Linux での bundle 戦略~~ / ~~SC.app バージョン up 時の bundle 更新フロー~~ — **#836 で同梱そのものが無くなったため消滅**
+- ~~bundle 同梱の GPL-3.0 ライセンス対応~~ — **#836 が同梱ごと外して解消**。`legal/scsynth-LICENSE.GPL-3.0` と `legal/scsynth-NOTICE` も削除された
 - daemon の署名 / notarize の実施状況 — §6.185 のフォローアップがその後どう扱われたか
 
 ---

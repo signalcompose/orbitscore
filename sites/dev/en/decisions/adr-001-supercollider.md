@@ -12,7 +12,7 @@ status: draft
 The decision this ADR records — "choose SuperCollider (scsynth) as the audio backend" — was **overridden as the default** by cutover #108 on 2026-07-03 (`docs/archive/WORK_LOG_2026-07.md` §6.179). `createAudioEngine()` returns `SuperColliderPlayer` only when `ORBITSCORE_ENGINE=sc` is set explicitly; the default is the Rust `orbit-audio-daemon`. This ADR is historical reading that preserves the circumstances at the time of the decision, and "Consequences revisited (2026-09)" at the end summarizes what followed the cutover. For the default path, see [RE-1. Daemon Architecture Overview](/en/rust-engine/).
 
 ```typescript
-// packages/engine/src/audio/create-audio-engine.ts:17-22
+// (removed, as of 58f558f5) packages/engine/src/audio/create-audio-engine.ts L17-22
 export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
   const raw = env[ENGINE_ENV_VAR]
   if (resolveEngineKind(raw) === 'supercollider') {
@@ -22,10 +22,17 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 ```
 
 ```typescript
-// packages/engine/src/audio/engine-backend.ts:54-55
+// (removed, as of 58f558f5) packages/engine/src/audio/engine-backend.ts L54-55
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
 export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```
+:::
+
+::: warning This code has been removed
+The SuperCollider-path code cited by this ADR was **removed from the repository by the
+2026-09-10 ruling (#827 / #502)**. The code snippets below are a snapshot from before the
+removal (commit `58f558f5`) and no longer exist in the current repository. This ADR remains
+as a record of the decision.
 :::
 
 # ADR-001 Choosing SuperCollider as the Implementation Base
@@ -194,7 +201,7 @@ Adopting SuperCollider involves the following trade-offs:
 In particular, `fixpitch()` and `time()` (time stretching) remain planned features excluded from the completion candidates even at 69dc968 (the comment in `completion-context.ts` points to Issue #213):
 
 ```typescript
-// packages/vscode-extension/src/completion-context.ts:222-224
+// (removed, as of 58f558f5) packages/vscode-extension/src/completion-context.ts L222-224
       // Future features (planned, see GitHub issue #213):
       // - fixpitch(): Pitch shift in semitones (planned)
       // - time(): Time stretch factor (planned)
@@ -248,7 +255,7 @@ Following the ADR format, this records the consequences roughly a year and a hal
 On the code side, the factory's header comment is itself a summary of the decision.
 
 ```typescript
-// packages/engine/src/audio/create-audio-engine.ts:1-7
+// (removed, as of 58f558f5) packages/engine/src/audio/create-audio-engine.ts L1-7
 /**
  * 音声バックエンドのファクトリ（post-2.0 S2 / Issue #296・cutover #108）。
  *

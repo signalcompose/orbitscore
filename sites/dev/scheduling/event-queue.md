@@ -14,24 +14,21 @@ OrbitScore はどのように「正確なタイミング」で音を出してい
 
 ## 2026-09 時点の drift: 既定バックエンドは Rust daemon
 
-本章の 2026-05-05 版は、SuperCollider 経路の `EventScheduler` (`packages/engine/src/audio/supercollider/event-scheduler.ts`) を「イベントキューの実装」として読んでいました。2026-07-03 の cutover #108 (WORK_LOG 6.179) 以降、**既定の音声バックエンドは Rust daemon (`orbit-audio-daemon`)** で、キューを持つのは `RustEnginePlayer` (`packages/engine/src/audio/rust-engine/rust-engine-player.ts`) です。SC 経路は `ORBITSCORE_ENGINE=sc` で opt-out すると使えるように温存されています。
+本章の 2026-05-05 版は、SuperCollider 経路の `EventScheduler` (`packages/engine/src/audio/supercollider/event-scheduler.ts`) を「イベントキューの実装」として読んでいました。2026-07-03 の cutover #108 (WORK_LOG 6.179) で既定の音声バックエンドは Rust daemon (`orbit-audio-daemon`) へ切り替わり、SC 経路はしばらく `ORBITSCORE_ENGINE=sc` の opt-out として温存されていましたが、**2026-09-10 の裁定（#827 / #502）で SC 経路自体・opt-out の分岐コードごと削除**されました。キューを持つのは唯一のバックエンドである `RustEnginePlayer` (`packages/engine/src/audio/rust-engine/rust-engine-player.ts`) です。
 
-バックエンドを選ぶのは `createAudioEngine()` です。
+`createAudioEngine()` は現在、引数も環境変数も見ず、常に `RustEnginePlayer` を返します。
 
 ```typescript
-// packages/engine/src/audio/create-audio-engine.ts:17-22
-export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
-  const raw = env[ENGINE_ENV_VAR]
-  if (resolveEngineKind(raw) === 'supercollider') {
-    console.log(`🎛️ [engine] using SuperCollider backend (opt-out via ORBITSCORE_ENGINE=${raw})`)
-    return new SuperColliderPlayer()
-  }
+// packages/engine/src/audio/create-audio-engine.ts:14-16
+export function createAudioEngine(): AudioEngineBackend {
+  return new RustEnginePlayer()
+}
 ```
 
-両バックエンドは同じ契約 `AudioEngineBackend` を満たします。この interface は `Scheduler` を extends したもので、`Scheduler` の側に「イベントキュー」の面 (`scheduleEvent` / `start` / `stop` / `clearSequenceEvents` など) が定義されています。
+このバックエンドは契約 `AudioEngineBackend` を満たします。この interface は `Scheduler` を extends したもので、`Scheduler` の側に「イベントキュー」の面 (`scheduleEvent` / `start` / `stop` / `clearSequenceEvents` など) が定義されています。
 
 ```typescript
-// packages/engine/src/audio/engine-backend.ts:26-27
+// packages/engine/src/audio/engine-backend.ts:29-30
 export interface AudioEngineBackend extends Scheduler {
   boot(outputDevice?: string): Promise<void>
 ```
@@ -76,8 +73,8 @@ OrbitScore が取る戦略は、**音を鳴らす直前ではなく、少し先�
 イベントキューの各要素は `ScheduledPlay` という型で表現されています。Rust 経路の版は SC 版より平たい構造で、`options` の入れ子がなく、chop の slice 情報を `slice` にまとめて持ちます。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:169-200
-/** lean scheduler が保持する 1 発音イベント。SC `ScheduledPlay` の daemon 版。 */
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:167-198
+/** lean scheduler が保持する 1 発音イベント。 */
 export interface ScheduledPlay {
   /** 再生開始時刻（`startTime` からの相対 ms）。 */
   time: number
@@ -155,10 +152,10 @@ export interface ScheduledPlay {
 
 この区別は仕様側にも明記されています (`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §3 "Slice-to-Slot Fitting")。仕様のこの節が chop 有りの挙動しか書いていなかったため、2026-08-31 に「オーディオは常にスロットへ詰められる」という誤読が 2 つのセッションで独立に起きています (#665)。
 
-参考までに、SC 経路の `ScheduledPlay` は次の形です。`options` の入れ子の中に `startPos` / `duration` / `rate` (chop 用) を平たく持っています。
+参考までに、SC 経路の `ScheduledPlay` は次の形でした（このコードは 2026-09-10 の裁定 #827 / #502 で削除が決まっており、以下は削除前 commit `58f558f5` 時点のスナップショットです）。`options` の入れ子の中に `startPos` / `duration` / `rate` (chop 用) を平たく持っています。
 
 ```typescript
-// packages/engine/src/audio/supercollider/types.ts:10-25
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/types.ts L10-25
 export interface ScheduledPlay {
   time: number
   filepath: string
@@ -182,7 +179,7 @@ export interface ScheduledPlay {
 新しいイベントをキューに積むのは `scheduleEvent()` で、Rust 版は内部の `enqueue()` に委譲します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1438-1454
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1448-1464
   scheduleEvent(
     filepath: string,
     time: number,
@@ -196,14 +193,14 @@ export interface ScheduledPlay {
     // outputChannel の feature-gap signal は `registerLinkAudioChannel`（`sequence.output()` 経由）が
     // authoritative に出す（A4-2b-2b で egress 配線済み）。scheduleEvent は channel を tag するだけで、
     // 「egress is not wired」の旧 warn は stale なので出さない（egress 有効な daemon では誤誘導になる）。
-    // pan は daemon PlayAt で実装済み（#304・equal-power = SC Pan2 一致）。発火時に
+    // pan は daemon PlayAt で実装済み（#304・equal-power）。発火時に
     // executePlayback が DSL の -100..100 を daemon の [-1,1] へ変換して送る。
     this.enqueue({ time, filepath, gainDb, pan, sequenceName, outputChannel, argPath, insertBus })
   }
 ```
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1593-1599
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1603-1609
   private enqueue(play: ScheduledPlay): void {
     this.scheduledPlays.push(play)
     this.scheduledPlays.sort((a, b) => a.time - b.time)
@@ -229,19 +226,19 @@ flowchart LR
 スケジューラーを起動すると `setInterval(callback, POLL_INTERVAL_MS)` が始動します。定数はファイル上部にまとまっています。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:330-335
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:328-333
 const DEFAULT_LOOKAHEAD_SEC = 0.05
 const PLUGIN_UI_OPEN_TIMEOUT_MS = 30_000
 const PLUGIN_UI_CLOSE_TIMEOUT_MS = 20_000
 const POLL_INTERVAL_MS = 1
-/** SC EventScheduler と同じく、過大 drift のイベントは古い残骸として skip する閾値。 */
+/** 過大 drift のイベントは古い残骸として skip する閾値。 */
 const MAX_DRIFT_MS = 1000
 ```
 
 1ms ごとにキューを確認し、時刻が来たイベントを dispatch します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1506-1523
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1516-1533
   start(): void {
     if (this.isRunning) return
     this.isRunning = true
@@ -313,12 +310,12 @@ bulk push を「いつ」行うかも重要です。小節境界ちょうどに�
 
 ### 第 3 段: daemon への定数 lookahead (50ms)
 
-poll がイベントを検出した時点で、Rust 版は「今すぐ鳴らせ」ではなく **「daemon の transport clock で今 + 50ms に鳴らせ」** という `PlayAt` を送ります。SC 版が poll 検出で即 `/s_new` を送っていた (fire-now) のと対照的です。理由はヘッダコメントに書かれています。
+poll がイベントを検出した時点で、Rust 版は「今すぐ鳴らせ」ではなく **「daemon の transport clock で今 + 50ms に鳴らせ」** という `PlayAt` を送ります。SC 版（削除済み）が poll 検出で即 `/s_new` を送っていた (fire-now) のと対照的でした。理由はヘッダコメントに書かれています。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:16-21
- *  - **timing モデル = poll-and-fire-now + 定数 lookahead**。SC は fire-now（poll 検出で
- *    即 `/s_new`）。daemon は自前 transport clock（boot で 0 開始）上の `PlayAt{time_sec}`
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:14-19
+ *  - **timing モデル = poll-and-fire-now + 定数 lookahead**。daemon は自前 transport clock
+ *    （boot で 0 開始）上の `PlayAt{time_sec}`
  *    で schedule-ahead。poll 発火時に `playAt(daemonNowSec + lookahead)` を送ることで
  *    **相対 timing（quantize/polymeter）を保存**しつつ daemon render cursor を確実に
  *    上回らせ onset clip を避ける（絶対 latency は定数シフト＝音楽的に無影響）。lookahead は
@@ -330,7 +327,7 @@ poll がイベントを検出した時点で、Rust 版は「今すぐ鳴らせ�
 この方式には「TS の `Date.now()` と daemon の transport clock を対応づける」という新しい問題が伴います。daemon は 1Hz の `StreamStats` で自分の `now_sec` を報告し、TS 側はそれを anchor として蓄積します。#389 の機構 B で、単一 anchor から **直近 30 サンプルの最小二乗フィット**に変わりました (`ANCHOR_WINDOW`、`fitAnchorSamples()`)。dispatch のホットパスで呼ばれる `daemonNowSec()` は、そのフィットを O(1) で評価します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1755-1761
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1765-1771
   private daemonNowSec(): number {
     const fit = this.anchorFit
     if (fit) {
@@ -375,7 +372,7 @@ sequenceDiagram
 シーケンスを停止したり、`Cmd+Enter` で新しいパターンを評価した場合、既存のキューに残っているイベントをキャンセルする必要があります。`clearSequenceEvents()` がその役割を担います。Rust 版はとても短くなりました。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1570-1578
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1580-1588
   clearSequenceEvents(sequenceName: string): void {
     this.scheduledPlays = this.scheduledPlays.filter((p) => p.sequenceName !== sequenceName)
     // 集合から消すことで、まだ queue に残るイベントも poll/exec 時に skip される。
@@ -412,7 +409,7 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
 実際に daemon へ送るのは `executePlayback()` です。ここには複数の保護機構が直列に並んでいます。関数冒頭の respawn 関連のコメントは長いので、ガードの本体から引用します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1625-1669
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1635-1679
     if (this.respawning || !this.daemon.isRunning()) return
     if (play.sequenceName) {
       // poll 検出から executePlayback 実行までの microtask gap で clear された場合の skip。
@@ -474,7 +471,7 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
 `daemon.playAt()` は `DaemonClient` の薄いラッパーで、JSON の `PlayAt` リクエストを WebSocket で送ります。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:427-437
+// packages/engine/src/audio/rust-engine/daemon-client.ts:426-436
   async playAt(
     sampleId: string,
     timeSec: number,
@@ -493,7 +490,7 @@ SC 版の `clearSequenceEvents()` (`event-scheduler.ts:440-462`) は同じ構造
 `emitStepMarker()` は、エディタ拡張が `play()` の引数をハイライトする live playhead のための、機械可読な 1 行を stdout に出します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1601-1617
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1611-1627
   /**
    * #390 live playhead: machine-readable step marker for the editor extension.
    * The epoch ms is the event's GRID time (startTime + play.time — the same
@@ -531,15 +528,14 @@ audio 側と MIDI 側の両方が「グリッド時刻」を打つので、層�
 
 ## ゲインの変換: dB → amplitude
 
-daemon に渡す音量は linear amplitude 形式です。DSL で指定する gain は dB なので、変換が必要です。2026-05 版では SC の `EventScheduler` 内の `convertGainToAmplitude()` を引用していましたが、その関数はもう存在せず、**両バックエンド共通の `gainDbToAmplitude()`** に統合されています。
+daemon に渡す音量は linear amplitude 形式です。DSL で指定する gain は dB なので、変換が必要です。2026-05 版では SC の `EventScheduler` 内の `convertGainToAmplitude()` を引用していましたが、その関数（と SC 経路自体）はもう存在せず、**唯一のバックエンドである Rust daemon 経路が使う `gainDbToAmplitude()`** に統合されています。
 
 ```typescript
-// packages/engine/src/audio/audio-gain-utils.ts:1-16
+// packages/engine/src/audio/audio-gain-utils.ts:1-15
 /**
  * 音声バックエンド共通のゲイン変換ユーティリティ。
  *
- * dB → linear amplitude の単一情報源。SuperCollider 経路（EventScheduler）と
- * Rust daemon 経路（RustEnginePlayer）の両方がこれを使う。
+ * dB → linear amplitude の単一情報源。Rust daemon 経路（RustEnginePlayer）が使う。
  */
 
 /**
@@ -566,7 +562,7 @@ $$
 `stop()` はインターバルを止め、`stopAll()` はさらにキューを空にして daemon 側の発音も止めます。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1525-1552
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1535-1562
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId)
@@ -601,9 +597,9 @@ $$
 
 SC 版 (`event-scheduler.ts:395-435`) の `stopAll()` は代わりに LinkAudio の keepalive synth を解放し、チャンネル割り当てをリセットします。
 
-## SC 経路 (歴史的 / opt-out) の要点
+## SC 経路 (歴史的・削除済み) の要点
 
-`ORBITSCORE_ENGINE=sc` で選ぶ `SuperColliderPlayer` は、内部に `EventScheduler` を持ちます。2026-05 版の本章が読んでいたのはこちらです。構造は Rust 版と同じで、違いは次の点です:
+**2026-09-10 の裁定（#827 / #502）で削除される前**、`ORBITSCORE_ENGINE=sc` で選べた `SuperColliderPlayer` は内部に `EventScheduler` を持っていました。2026-05 版の本章が読んでいたのはこちらです。構造は Rust 版と同じで、違いは次の点でした:
 
 - キュー要素は `options` 入れ子の `ScheduledPlay` (上述)
 - 「生きているシーケンス」の管理は `sequenceEvents: Map<string, ScheduledPlay[]>` (Set ではなく Map)
@@ -657,12 +653,12 @@ flowchart TB
 
 ## Sources
 
-- `packages/engine/src/audio/create-audio-engine.ts:17-22` — `createAudioEngine()`: `ORBITSCORE_ENGINE` によるバックエンド選択 (既定 Rust)
+- `packages/engine/src/audio/create-audio-engine.ts:14-16` — `createAudioEngine()`: 常に `RustEnginePlayer` を返す（唯一のバックエンド。分岐は #502 で削除）
 - `packages/engine/src/audio/engine-backend.ts:26-27` — `AudioEngineBackend extends Scheduler`
 - `packages/engine/src/core/global/types.ts:10-63` — `Scheduler` interface (イベントキューの契約面、`scheduleStepMarker?` が optional)
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1-40` — ヘッダコメント: timing モデル (poll-and-fire-now + 定数 lookahead) と TS↔daemon クロックマッピング
-- `packages/engine/src/audio/rust-engine/rust-engine-player.ts:169-200` — Rust 版 `ScheduledPlay`
-- `packages/engine/src/audio/rust-engine/rust-engine-player.ts:330-335` — `DEFAULT_LOOKAHEAD_SEC` / `POLL_INTERVAL_MS` / `MAX_DRIFT_MS`
+- `packages/engine/src/audio/rust-engine/rust-engine-player.ts:167-199` — Rust 版 `ScheduledPlay`
+- `packages/engine/src/audio/rust-engine/rust-engine-player.ts:328-333` — `DEFAULT_LOOKAHEAD_SEC` / `POLL_INTERVAL_MS` / `MAX_DRIFT_MS`
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1399-1415` — `scheduleEvent()`
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1467-1513` — `start()` / `stop()` / `stopAll()`
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1515-1523` — `clearSequenceEvents()` / `reinitializeSequenceTracking()`
@@ -671,7 +667,7 @@ flowchart TB
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1564-1625` — `executePlayback()`: ガード連鎖と `playAt(daemonNowSec + lookahead)`
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1700-1706` — `daemonNowSec()`: anchor フィットの O(1) 評価
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:414-445` — `DaemonClient.playAt()`: `PlayAt` リクエストの組み立て
-- `packages/engine/src/audio/audio-gain-utils.ts:1-16` — `gainDbToAmplitude()`: 両バックエンド共通の dB → amplitude
+- `packages/engine/src/audio/audio-gain-utils.ts:1-15` — `gainDbToAmplitude()`: 唯一のバックエンド（Rust daemon 経路）が使う dB → amplitude
 - `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:70-153` — `scheduleEvents()`: 小節内イベントの一括 push と休符の marker-only 積み込み
 - `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:111-138` — `chopDivisions > 1` による `scheduleSliceEvent` / `scheduleEvent` の分岐 (#665)
 - `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:30-65` — `calculateEventGain()`: master gain を event に畳み込まない (#643)

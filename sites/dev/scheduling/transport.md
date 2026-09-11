@@ -139,7 +139,7 @@ export class TransportClock {
 最終的に `RustEnginePlayer.start()` が `setInterval(1)` を起動し、`startTime = Date.now()` で再生開始時刻を記録します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1506-1510
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1516-1520
   start(): void {
     if (this.isRunning) return
     this.isRunning = true
@@ -287,7 +287,7 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
 `Cmd+Enter` を押すと、VS Code extension はカーソル位置のブロック (または選択範囲) のテキストだけを stdin に書き込みます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3147-3147
+// packages/vscode-extension/src/extension.ts:2738-2738
   engineProcess.stdin.write(codeToSend + '\n')
 ```
 
@@ -444,7 +444,7 @@ export function nextQuantizedTime(
 重要なのは `stop()` を呼んでも `startTime` はリセットされないという点です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1525-1531
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1535-1541
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId)

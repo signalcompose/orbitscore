@@ -72,10 +72,12 @@ describe('#385 untrusted workspace capability', () => {
   })
 
   it('restricts exactly the settings that choose which executable runs', () => {
+    // #502: 旧 SC バックエンド選択用の2設定を削除した結果、実行対象を選ぶ設定は
+    // 現在存在しない — 空でよい。
     expect(
       [...restrictedConfigurations()].sort(),
       '「workspace が値を決めると別の実行ファイルが動く」ものだけを入れる',
-    ).toEqual(['orbitscore.engine', 'orbitscore.scsynthPath'])
+    ).toEqual([])
   })
 
   /**
@@ -90,7 +92,8 @@ describe('#385 untrusted workspace capability', () => {
    */
   it('restricts nothing that merely names a device, a port, or a colour', () => {
     const restricted = new Set(restrictedConfigurations())
-    const executableChoosing = new Set(['orbitscore.scsynthPath', 'orbitscore.engine'])
+    // #502: SC バックエンド選択の2設定を削除済み — 実行対象を選ぶ設定は現在存在しない。
+    const executableChoosing = new Set<string>()
     const declared = [...declaredConfigurationKeys()]
     expect(declared.length, 'contributes.configuration が空なら走査が無意味になる').toBeGreaterThan(
       0,

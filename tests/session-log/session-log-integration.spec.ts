@@ -13,7 +13,7 @@ import { readOrbsLog } from './helpers'
  * L1 (#229) integration — the interpreter is the single eval-path interceptor.
  * With session logging enabled, driving real evals through `execute()` must
  * produce a `.orbslog` whose preamble, triple stamp, multi-file `sourceFile`,
- * and per-line durability match the spec. SuperCollider is mocked away.
+ * and per-line durability match the spec. The audio engine is mocked away.
  * Spec: SESSION_LOG_SPEC_v1 (§1/§3/§3.1).
  */
 

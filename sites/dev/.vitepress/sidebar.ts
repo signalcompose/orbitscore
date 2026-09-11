@@ -65,12 +65,13 @@ export const sidebarJa: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
-    text: 'Part VII: SuperCollider 経路（opt-out・歴史的読解）',
+    text: 'Part VII: SuperCollider 経路（削除決定 #502・歴史的読解）',
     collapsed: true,
     items: [
-      { text: 'III-1. SuperCollider との通信', link: '/audio/supercollider' },
-      { text: 'III-2. オーディオファイル再生', link: '/audio/audio-file-playback' },
-      { text: 'III-3. scsynth bundle と path resolution', link: '/audio/scsynth-bundle' },
+      {
+        text: 'III-2. オーディオファイル再生（SC 経路・削除済み）',
+        link: '/audio/audio-file-playback',
+      },
     ],
   },
   {
@@ -153,12 +154,13 @@ export const sidebarEn: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
-    text: 'Part VII: SuperCollider Path (opt-out, historical)',
+    text: 'Part VII: SuperCollider Path (removal decided #502, historical)',
     collapsed: true,
     items: [
-      { text: 'III-1. Communication with SuperCollider', link: '/en/audio/supercollider' },
-      { text: 'III-2. Audio File Playback', link: '/en/audio/audio-file-playback' },
-      { text: 'III-3. scsynth Bundle and Path Resolution', link: '/en/audio/scsynth-bundle' },
+      {
+        text: 'III-2. Audio File Playback (SC path, removed)',
+        link: '/en/audio/audio-file-playback',
+      },
     ],
   },
   {

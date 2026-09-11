@@ -1,7 +1,7 @@
 {
   "name": "orbitscore",
   "displayName": "OrbitScore",
-  "description": "Live coding music DSL with bundled native audio engine (Rust daemon, default) — SuperCollider available as opt-out. macOS (Apple Silicon) only.",
+  "description": "Live coding music DSL with a bundled native audio engine (Rust daemon). macOS (Apple Silicon) only.",
   "publisher": "local",
   "version": "2.1.0",
   "author": "Signal compose Inc.",
@@ -22,8 +22,6 @@
     "live-coding",
     "music",
     "dsl",
-    "supercollider",
-    "scsynth",
     "audio",
     "polymeter",
     "orbitscore"
@@ -35,10 +33,7 @@
     "untrustedWorkspaces": {
       "supported": true,
       "description": "OrbitScore starts a native audio engine and loads the audio plugins named by the score, the same way a DAW opens a project. Evaluation works in untrusted workspaces; only the settings that choose which executable runs are restricted.",
-      "restrictedConfigurations": [
-        "orbitscore.scsynthPath",
-        "orbitscore.engine"
-      ]
+      "restrictedConfigurations": []
     }
   },
   "main": "./dist/extension.js",
@@ -91,18 +86,6 @@
         "command": "orbitscore.reloadWindow",
         "title": "Reload Window",
         "icon": "$(refresh)",
-        "category": "OrbitScore"
-      },
-      {
-        "command": "orbitscore.forceKillScsynth",
-        "title": "Force Kill scsynth",
-        "icon": "$(close-all)",
-        "category": "OrbitScore"
-      },
-      {
-        "command": "orbitscore.selectAudioDevice",
-        "title": "Select Audio Device",
-        "icon": "$(device-desktop)",
         "category": "OrbitScore"
       },
       {
@@ -213,14 +196,6 @@
       ],
       "commandPalette": [
         {
-          "command": "orbitscore.forceKillScsynth",
-          "when": "config.orbitscore.engine == 'sc'"
-        },
-        {
-          "command": "orbitscore.selectAudioDevice",
-          "when": "config.orbitscore.engine == 'sc'"
-        },
-        {
           "command": "orbitscore.toggleEngine",
           "when": "false"
         },
@@ -296,7 +271,7 @@
           {
             "id": "explorePluginHosting",
             "title": "Explore Plugin Hosting",
-            "description": "Learn how OrbitScore hosts CLAP/VST3/AU instruments and effects.\n[Open the Learning Site](command:orbitscore.openDocs)",
+            "description": "Learn how OrbitScore hosts CLAP and VST3 instruments and effects.\n[Open the Learning Site](command:orbitscore.openDocs)",
             "media": {
               "markdown": "media/walkthrough/04-plugin-hosting.md"
             }
@@ -375,26 +350,6 @@
           "description": "Custom flash color (hex format, e.g., #ff6b6b)",
           "format": "color-hex"
         },
-        "orbitscore.scsynthPath": {
-          "type": "string",
-          "default": "",
-          "description": "Override path to the scsynth binary. Leave empty to use the bundled scsynth (recommended). Advanced users can point this at a custom SuperCollider install.",
-          "scope": "machine-overridable"
-        },
-        "orbitscore.engine": {
-          "type": "string",
-          "enum": [
-            "rust",
-            "sc"
-          ],
-          "enumDescriptions": [
-            "Native Rust audio daemon (orbit-audio-daemon) — default. Only bundled for macOS Apple Silicon (darwin-arm64); on any other platform the engine will fail to start until you build one yourself and set ORBIT_AUDIO_DAEMON_PATH.",
-            "SuperCollider (scsynth). Requires the bundled scsynth or a custom binary via orbitscore.scsynthPath."
-          ],
-          "default": "rust",
-          "description": "Audio backend to use. \"rust\" (default) is the native audio daemon (orbit-audio-daemon). \"sc\" opts into SuperCollider (requires bundled scsynth or orbitscore.scsynthPath).",
-          "scope": "machine-overridable"
-        },
         "orbitscore.audioDevice": {
           "type": "string",
           "default": "",
@@ -463,10 +418,8 @@
   "scripts": {
     "build": "npm run build:engine && tsc -p tsconfig.json",
     "build:clean": "npm run build:engine:clean && tsc -p tsconfig.json",
-    "build:engine": "cd ../engine && npm run build && cp -r dist ../vscode-extension/engine/ && cp -r supercollider ../vscode-extension/engine/ && bash ../../scripts/install-engine-deps.sh && bash ../../scripts/copy-daemon-bin.sh",
-    "build:engine:clean": "cd ../engine && npm run build:clean && cp -r dist ../vscode-extension/engine/ && cp -r supercollider ../vscode-extension/engine/ && bash ../../scripts/install-engine-deps.sh && bash ../../scripts/copy-daemon-bin.sh",
-    "build:bundle": "bash ../../scripts/extract-scsynth-bundle.sh",
-    "verify:bundle": "bash ../../scripts/verify-bundle.sh",
+    "build:engine": "cd ../engine && npm run build && bash ../../scripts/install-engine-deps.sh && bash ../../scripts/copy-daemon-bin.sh",
+    "build:engine:clean": "cd ../engine && npm run build:clean && bash ../../scripts/install-engine-deps.sh && bash ../../scripts/copy-daemon-bin.sh",
     "dev": "tsc -w"
   },
   "devDependencies": {

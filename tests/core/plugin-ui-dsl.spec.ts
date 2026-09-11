@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import type { SuperColliderPlayer } from '../../packages/engine/src/audio/supercollider-player'
+import type { RustEnginePlayer } from '../../packages/engine/src/audio/rust-engine/rust-engine-player'
 import { Global } from '../../packages/engine/src/core/global'
 import { Sequence } from '../../packages/engine/src/core/sequence'
 import {
@@ -15,7 +15,7 @@ function harness(name = 'cb') {
     scheduleEvent: vi.fn(),
     scheduleSliceEvent: vi.fn(),
     getMasterGainDb: vi.fn().mockReturnValue(0),
-  } as unknown as SuperColliderPlayer
+  } as unknown as RustEnginePlayer
   const global = new Global(player)
   const sequence = new Sequence(global, player)
   sequence.setName(name)

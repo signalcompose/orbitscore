@@ -4,7 +4,7 @@ import { Global } from '../../packages/engine/src/core/global'
 import { Sequence } from '../../packages/engine/src/core/sequence'
 import { MidiManager } from '../../packages/engine/src/core/global/midi-manager'
 import { MidiOutput } from '../../packages/engine/src/midi/midi-output'
-import { SuperColliderPlayer } from '../../packages/engine/src/audio/supercollider-player'
+import { RustEnginePlayer } from '../../packages/engine/src/audio/rust-engine/rust-engine-player'
 
 function mockMidiOutput(ports: string[] = ['IACドライバ バス1']): MidiOutput {
   return {
@@ -27,7 +27,7 @@ function mockMidiOutput(ports: string[] = ['IACドライバ バス1']): MidiOutp
 describe('Sequence.output() — LinkAudio channel binding', () => {
   let global: Global
   let seq: Sequence
-  let mockPlayer: SuperColliderPlayer
+  let mockPlayer: RustEnginePlayer
   let warnSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
@@ -248,7 +248,7 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
 describe('Sequence.resolveDispatchChannel() — MIDI exemption under linkAudio (#282)', () => {
   let global: Global
   let midiOut: MidiOutput
-  let mockPlayer: SuperColliderPlayer
+  let mockPlayer: RustEnginePlayer
 
   beforeEach(() => {
     mockPlayer = {

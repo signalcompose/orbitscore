@@ -5,6 +5,18 @@ ja 元が更新されたら該当章を `outdated` に切り替え、再翻訳�
 
 詳細は [TRANSLATION_WORKFLOW.md](./TRANSLATION_WORKFLOW.md) を参照。
 
+> 🔴 SuperCollider 経路は **#502（2026-09-10）で削除**されました。`sites/dev/` 側の追従は
+> **PR [#832](https://github.com/signalcompose/orbitscore/pull/832)（`502-sc-sites`）で着地済み**です。内訳:
+>
+> | 章 | 扱い |
+> |---|---|
+> | `audio/supercollider.md`（III-1） | **削除**（ja / en とも） |
+> | `audio/scsynth-bundle.md`（III-3） | **削除**（ja / en とも） |
+> | `decisions/adr-001-supercollider.md` | **残す**（決定の記録。引用は de-anchor 済み） |
+> | `decisions/adr-003-scsynth-bundle.md` | **残す**（同上） |
+>
+> 下の `sites/dev/` の表では、削除した 2 章の行を `削除済み (#832)` として残しています（翻訳の履歴を消さないため）。
+
 ---
 
 ## sites/user/ (10 章)
@@ -26,7 +38,7 @@ ja 元が更新されたら該当章を `outdated` に切り替え、再翻訳�
 
 ---
 
-## sites/dev/ (29 章)
+## sites/dev/ (27 章 + 削除済み 2 章)
 
 | # | パス | Status | Last translated against (ja commit) | PR |
 |---|---|---|---|---|
@@ -40,9 +52,9 @@ ja 元が更新されたら該当章を `outdated` に切り替え、再翻訳�
 | II-2 | `scheduling/polymeter.md` | done | 8ba937f | - |
 | II-3 | `scheduling/event-queue.md` | done | 8ba937f | - |
 | II-4 | `scheduling/transport.md` | done | 8ba937f | - |
-| III-1 | `audio/supercollider.md` | done | 8ba937f | - |
+| III-1 | `audio/supercollider.md` | 削除済み (#832) | 8ba937f | #832 |
 | III-2 | `audio/audio-file-playback.md` | done | 8ba937f | - |
-| III-3 | `audio/scsynth-bundle.md` | done | 8ba937f | - |
+| III-3 | `audio/scsynth-bundle.md` | 削除済み (#832) | 8ba937f | #832 |
 | IV-1 | `editor/vscode-architecture.md` | done | 8ba937f | - |
 | IV-2 | `editor/execution-feedback.md` | done | 8ba937f | - |
 | ADR | `decisions/adr-001-supercollider.md` | done | 8ba937f | - |
@@ -69,9 +81,10 @@ ja 元が更新されたら該当章を `outdated` に切り替え、再翻訳�
 
 ## 全体進捗
 
-- **完了**: 39 章 (user 10 + dev 29)
+- **完了**: 37 章 (user 10 + dev 27)
 - **未着手**: 0 章
-- **総章数**: 29 章
+- **削除済み**: 2 章 (dev III-1 / III-3・#832)
+- **総章数**: 37 章
 
 ---
 
@@ -83,6 +96,7 @@ ja 元が更新されたら該当章を `outdated` に切り替え、再翻訳�
 | `in-progress` | 翻訳作業中（PR open） |
 | `done` | 翻訳完了、ja 元と整合 |
 | `outdated` | ja 元が更新されたが en が追従していない（再翻訳要） |
+| `削除済み (#N)` | 章そのものがサイトから削除された（翻訳履歴として行だけ残す） |
 
 ---
 

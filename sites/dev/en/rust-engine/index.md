@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: 183b612
+verified-against: 58b8c1c
 verified-at: "2026-09-10"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10, and to the fact — settled by the SuperCollider retirement of #502 ([#833](https://github.com/signalcompose/orbitscore/pull/833)) on 2026-09-10 — that LinkAudio egress is not in shipped builds. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-1. Daemon Architecture Overview
 
@@ -290,7 +290,7 @@ arms are as follows (the notes column mentions the arms gated by a feature `cfg`
 | `SelectAudioDevice` | runtime device switch | #484 D2, delegated to the audio owner thread; #661 probes the candidate first |
 | `GetStatus` | daemon/protocol version, sample rate, `render_contentions`, etc. | #661 added `output` (the device actually playing, plus the fallback history) and `callback` (the liveness counter) |
 | `LoadSample` / `UnloadSample` | register / release an audio file | |
-| `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | |
+| `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | 🔴 the `link-audio` feature is **default off** and is not enabled in shipped builds. When absent the daemon answers `LINK_AUDIO_UNAVAILABLE` (a missing *capability*) and the TS side warns exactly once and continues on hardware. See "LinkAudio egress is not in shipped builds" below |
 | `LoadPlugin` | attach a plugin (`role` / `bus` / `instance` / `state`) | the in-process build requires `role` |
 | `ApplyEffectChain` | prepare-commit application of a whole rack (chain) | #628, `mode: diff / rebuild` |
 | `ReplacePlugin` | replace a slot's tenant | #618 (instrument) / #625 (effect) |
@@ -310,6 +310,66 @@ The "fixed in #643" note on the `SetGlobalGain` row refers to the defect recorde
 6.415: the master fader was not affecting instruments. That the very same command was caught by
 the capture E2E is discussed in the [`capture-verification`](/en/rust-engine/capture-verification)
 chapter.
+
+### LinkAudio egress is not in shipped builds
+
+`RegisterLinkAudioChannel` / `SetLinkTempo` are the only two commands in the table that exist on
+the wire but never succeed in a shipped build. The egress itself lives in the GPL-isolated crate
+`orbit-link-audio`, and the daemon pulls it in as an optional dependency behind the `link-audio`
+feature.
+
+```toml
+// rust/crates/orbit-audio-daemon/Cargo.toml:18-23
+[features]
+# 🔴 GPL feature。**default off**。有効化すると Ableton Link(GPL-2.0-or-later)が
+# 依存グラフに入る。permissive な engine core はこの feature に依存しない。
+# rtrb は permissive(MIT/Apache)だが、reg-ring producer 型を名指すのは link-audio 経路のみ
+# なので feature に括る（default ビルドの依存グラフを増やさない）。
+link-audio = ["dep:orbit-link-audio", "dep:rtrb"]
+```
+
+And the shipping build does not enable it. The one line that produces the bundled binary reads:
+
+```bash
+// scripts/copy-daemon-bin.sh:108-108
+    && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument \
+```
+
+`.github/workflows/release.yml:88` uses the same feature set, and `link-audio` is in neither.
+So **the daemon bundled into the `.vsix` has no egress at all**.
+
+The feature's own comment is the reason it stays off: enabling it drags Ableton Link
+(GPL-2.0-or-later) into the shipped binary's dependency graph and breaks the "the default graph
+is GPL-free" invariant asserted by `rust/deny.toml`. That is the same problem that removing
+SuperCollider (which bundled the GPL scsynth) in #502 was meant to solve. **Enabling it would be
+a decision, and the decision has not been made.**
+
+A daemon without the feature answers `RegisterLinkAudioChannel` with `LINK_AUDIO_UNAVAILABLE`.
+That code means a **missing capability**, and it is distinguished from `LINK_AUDIO_RUNTIME` (a
+runtime failure) and from a dead daemon. Only the first is swallowed by the TS side so playback
+continues on hardware; the others propagate to the caller. The warning is emitted from **exactly
+one place — channel registration**; `scheduleEvent` / `scheduleSliceEvent` see the same gap and
+stay silent (the registration path is treated as the single authority). The spec side of this is
+`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §8.1 / §8.1.3.
+
+🔴 **That "falls back to hardware and warns once" has not been confirmed on real hardware.**
+The gated E2E suite records the opposite measurement.
+
+```ts
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5252-5258
+  // **A comment is not evidence of implementation behavior** — main's real run found
+  // capture RMS = 0 for `d645Live` and NO `LINK_AUDIO_UNAVAILABLE`/gap-warning marker in
+  // get_log at all, meaning the assumed fallback does not actually happen (or does not
+  // happen the way the comment describes). Capture-based proof was DROPPED for this
+  // reason — under `global.linkAudio()`, EVERY audio sequence's dispatch is either
+  // `skip` or `link` (never a real, capturable `hardware` dispatch — mixing is
+  // disallowed by design), so there is no way to hear `d645Live` here without
+```
+
+So on 2026-09-04's real run there was **no sound (capture RMS = 0) and no warning**. The comment
+further states that under `global.linkAudio()` a dispatch is either `skip` or `link` and **never**
+a capturable `hardware` dispatch (mixing being disallowed by design), which contradicts §8.1's
+"goes out to hardware" head-on. **This page does not decide which is right.**
 
 ## Boot-to-teardown lifecycle
 

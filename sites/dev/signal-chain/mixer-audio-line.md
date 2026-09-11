@@ -67,7 +67,7 @@ snare」と列挙するのではなく、kick と snare がそれぞれ `output(
 仕様の DSL サンプルも引用しておきます（spec の Markdown から逐語）。
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1782-1786
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1812-1816
 global.sum("drum")                    // group bus 宣言（冪等）
 kick.output("drum")                   // メンバーシップ = 行き先指定
 snare.output("drum")                  // 同じ宛先なので加算される
@@ -76,7 +76,7 @@ sum("drum").remove("GlueComp")        // 外す（差し替え・削除は PH.2d
 ```
 
 ```js
-// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1876-1878
+// docs/core/INSTRUCTION_ORBITSCORE_DSL.md:1906-1908
 global.aux("rev")                     // return bus 宣言
 aux("rev").effect("Reverb.clap")      // return の insert（v1 必須要素）
 kick.send(verb, -12)                  // ≡ kick.output(verb, thru: true, db: -12)
@@ -715,7 +715,7 @@ export type WireLineOp =
 DSL から実際に送るようになるのは PR-O4 からになります。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:716-719
+// packages/engine/src/audio/rust-engine/daemon-client.ts:715-718
   /** Replace one daemon bus's complete ordered audio line (#611 wire contract §4.1). */
   async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
     await this.request('SetBusLine', { bus, line })
@@ -1128,7 +1128,7 @@ capture の RMS が dry の約 1.5 倍（sum 経由 1.0 + aux 経由 0.5）に�
 `RustEnginePlayer.setGlobalGain` は「daemon の状態に関わらず先に intent を記録する」のが要点です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1286-1298
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1285-1297
   async setGlobalGain(amplitude: number, rampSec = 0): Promise<void> {
     // 🔴 daemon の状態に関わらず**先に intent を記録する**。未接続時に捨てると、
     // 接続後に復元する手がかりが消える（`Global.gain()` を再評価する経路は存在しない）。

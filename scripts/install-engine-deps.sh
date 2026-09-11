@@ -3,7 +3,7 @@
 #
 # The dependency set is derived from packages/engine/package.json so the bundle
 # never drifts from what the engine actually requires at runtime. (This script
-# previously hardcoded only supercolliderjs + wavefile and silently dropped
+# previously hardcoded a partial dependency set and silently dropped
 # @julusian/midi / uuid / ws — the v1.1 MIDI runtime deps — which crashed the
 # packaged extension with "Cannot find module '@julusian/midi'" on MIDI init.
 # See #209 / Epic #278 QA.)
@@ -61,9 +61,6 @@ if [ -z "$ENGINE_DIR" ] || [ ! -d "$ENGINE_DIR" ]; then
 fi
 rm -rf "$ENGINE_DIR/node_modules"
 mv "$DEPS_TMP/node_modules" "$ENGINE_DIR/node_modules"
-
-# Apply supercolliderjs boot timeout patch
-bash "$PROJECT_ROOT/scripts/patch-supercolliderjs.sh"
 
 # 🔴 Verify every declared dependency actually landed, and fail loudly if not.
 # The failure this guards against is invisible at build time and only surfaces

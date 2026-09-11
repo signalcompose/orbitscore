@@ -568,7 +568,7 @@ WORK_LOG 6.363 はこれを「dedup は後勝ち（PC.5）なのに resolve は�
 `package.json` の `contributes.commands` に 2 つのコマンドが登録されています。
 
 ```json
-// packages/vscode-extension/package.json:120-131
+// packages/vscode-extension/package.json:103-114
       {
         "command": "orbitscore.rescanPlugins",
         "title": "OrbitScore: Rescan Plugin Catalog",
@@ -646,7 +646,7 @@ MCP の `list_plugins` / `rescan_plugins` も同じ `loadPluginCatalog()` / `run
 共有しています。
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1044-1054
+// packages/vscode-extension/src/mcp-server.ts:1029-1039
   server.registerTool(
     'list_plugins',
     {
@@ -761,7 +761,7 @@ export function filterCatalogEntries(
 促す案内を出します（`pluginCatalogHintShown` フラグで nag を防いでいます）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3859-3869
+// packages/vscode-extension/src/extension.ts:3415-3425
         if (!pluginContext) return undefined
 
         const catalog = loadPluginCatalog()
@@ -861,7 +861,7 @@ export function analyzeUnknownPluginNames(
 証拠にならないからです。そして重大度は Error でなく **Warning** です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:4239-4255
+// packages/vscode-extension/src/extension.ts:3795-3811
   // these at evaluation time, but with 342 catalog entries a typo is the common
   // case and waiting until evaluation to learn about it is expensive.
   //

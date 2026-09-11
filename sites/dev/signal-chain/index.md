@@ -662,7 +662,7 @@ Active slot」を検分して rebuild へ倒す経路（設計書 §2.3・#626 �
 TS が daemon へ送る request の型は次のとおりです。
 
 ```typescript
-// packages/engine/src/audio/types.ts:22-52
+// packages/engine/src/audio/types.ts:28-58
 export type EffectChainStageConfig =
   | {
       kind: 'catalog'
@@ -700,7 +700,7 @@ daemon client は JSON-RPC の `ApplyEffectChain` に `role: 'effect'` と `save
 送ります。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:561-568
+// packages/engine/src/audio/rust-engine/daemon-client.ts:560-567
   async applyEffectChain(request: EffectChainApplyRequest): Promise<EffectChainApplyResult> {
     const result = await this.request('ApplyEffectChain', {
       role: 'effect',
@@ -715,7 +715,7 @@ daemon client は JSON-RPC の `ApplyEffectChain` に `role: 'effect'` と `save
 respawn 後は `mode: 'rebuild'` で全段 load の plan を再発行します。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1380-1390
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1379-1389
   private async reloadEffectRacksAfterRespawn(): Promise<void> {
     for (const { bus, chain } of this.loadedEffectRacks.values()) {
       const key = RustEnginePlayer.pluginKey('effect', bus)
@@ -1293,7 +1293,7 @@ WORK_LOG 6.386 によると、最初は `PARAM_DB_NAME` 定数と比較してい
 さらに packaging 後の `.vsix` の中に `std-plugins/Gain.clap` があることを確かめます。
 
 ```yaml
-# .github/workflows/release.yml:92-98
+# .github/workflows/release.yml:84-90
           # 標準プラグイン（#628 / SC.10.8）。cdylib をビルドして .clap bundle に組む。
           bash rust/crates/orbit-std-gain/bundle-macos.sh --release
 
@@ -1304,7 +1304,7 @@ WORK_LOG 6.386 によると、最初は `PARAM_DB_NAME` 定数と比較してい
 ```
 
 ```yaml
-# .github/workflows/release.yml:191-200
+# .github/workflows/release.yml:174-183
           # 標準プラグイン（#628 / SC.10.8）: child は自分の実行ファイルの隣の
           # `std-plugins/<name>.clap` を見て解決する。同梱が落ちると DSL の
           # `Gain(db: …)` が実行時に「解決できない」で落ちるだけで、

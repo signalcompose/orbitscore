@@ -308,7 +308,7 @@ TS → daemon の wire は既存の JSON request/response に 3 つのメソッ�
 `GetPluginState` と同じ `{role, bus?, instance?}` 形です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:643-656
+// packages/engine/src/audio/rust-engine/daemon-client.ts:642-655
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,
@@ -765,7 +765,7 @@ TS 側の受け手が `RustEnginePlayer.onPluginUiClosed` です。#474 P4b（20
 だけになっています。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:653-681
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:651-679
   private readonly onPluginUiClosed = (raw: unknown): void => {
     this.enqueuePluginUiEvent(async () => {
       const data = wireObject(raw, 'PluginUiClosed data')
@@ -825,7 +825,7 @@ TS はこれとは別に `UI_CLOSED_DONE` の event frame を待ち受けます�
 タスクなので、DONE が ack を追い抜くことがあるからです。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:883-897
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:881-895
     try {
       // Register the DONE waiter before issuing CLOSE_UI: the event pump and
       // command response use independent tasks, so DONE may race the ack.
@@ -850,7 +850,7 @@ pending が reject され、「保存完了」を偽って返すことはあり�
 変異検証がこの穴を見つけ、テストを足しています）。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:331-332
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:329-330
 const PLUGIN_UI_OPEN_TIMEOUT_MS = 30_000
 const PLUGIN_UI_CLOSE_TIMEOUT_MS = 20_000
 ```
@@ -1045,7 +1045,7 @@ struct UiEventHubCore {
 `extension.ts` の stdout ルータはこの結果行を `{"pluginUi"` の前方一致で拾います。#773（[#811](https://github.com/signalcompose/orbitscore/pull/811)）以降、この 4 分岐は `createLinePrefixer` の callback の中にあり、**行が chunk 境界で割れても失われません**（[IV-1](/editor/vscode-architecture#stdout-の-bridge-封筒も行へ戻す-773)）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1494-1498
+// packages/vscode-extension/src/extension.ts:1287-1291
     } else if (trimmedLine.startsWith('{"pluginUi"')) {
       const parsed = isCurrent && pluginUiBridge.handleLine(rawLine)
       if (!parsed && isCurrent) {

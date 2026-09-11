@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
 import { Sequence } from '../../packages/engine/src/core/sequence'
-import { SuperColliderPlayer } from '../../packages/engine/src/audio/supercollider-player'
+import { RustEnginePlayer } from '../../packages/engine/src/audio/rust-engine/rust-engine-player'
 import {
   expandHome,
   looksLikePath,
@@ -26,7 +26,7 @@ function touch(file: string): void {
   fs.writeFileSync(file, '')
 }
 
-function makePlayer(): SuperColliderPlayer {
+function makePlayer(): RustEnginePlayer {
   return {
     boot: vi.fn().mockResolvedValue(undefined),
     getCurrentTime: vi.fn().mockReturnValue(0),
@@ -296,7 +296,7 @@ describe('audio-resolver: resolveAudio', () => {
 
 describe('Global.audioPath() — variadic + array forms', () => {
   let global: Global
-  let player: SuperColliderPlayer
+  let player: RustEnginePlayer
 
   beforeEach(() => {
     player = makePlayer()

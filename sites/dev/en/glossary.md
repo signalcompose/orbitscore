@@ -89,11 +89,11 @@ The binary in `rust/crates/orbit-audio-daemon`. It receives commands from the TS
 
 ### AudioEngineBackend (backend seam)
 
-The interface in `packages/engine/src/audio/engine-backend.ts`. It is the only contract the interpreter / scheduler have with an audio backend; both `SuperColliderPlayer` and `RustEnginePlayer` satisfy it. It carries `boot` / `quit` / `loadPlugin` / `applyEffectChain` / `setGlobalGain` / `pluginNoteOn`, and so on.
+The interface in `packages/engine/src/audio/engine-backend.ts`. It is the only contract the interpreter / scheduler have with an audio backend. `RustEnginePlayer` is the sole production implementation (#502 removed the second one); the verification `RecordingScheduler` and the no-op MIDI engine also implement this face. It carries `boot` / `quit` / `loadPlugin` / `applyEffectChain` / `setGlobalGain` / `pluginNoteOn`, and so on.
 
 ### ORBITSCORE_ENGINE
 
-The environment variable that selects the backend. `sc` or `supercollider` opts out to the SuperCollider path; unset or anything else means the Rust daemon (`resolveEngineKind()` in `create-audio-engine.ts`). The VS Code setting `orbitscore.engine` maps to it.
+🔴 **Removed in #502 (2026-09-10).** It used to select the backend: `sc` or `supercollider` opted out to the SuperCollider path, anything else meant the Rust daemon. With no second backend left, `resolveEngineKind()` was deleted along with it and `createAudioEngine()` always returns `RustEnginePlayer`. The VS Code setting `orbitscore.engine` went away at the same time. **Kept here as a historical entry only.**
 
 ### RustEnginePlayer / DaemonClient
 
@@ -189,9 +189,9 @@ The feature that highlights `play()` arguments in step with the engine (#390). T
 
 ---
 
-## Audio / SuperCollider Terms (opt-out path)
+## Audio / SuperCollider Terms (removal decided #502, historical)
 
-> The terms below belong to the SuperCollider path, which is reached only by opting out with `ORBITSCORE_ENGINE=sc`. For the default path, see "Rust Engine / Daemon Terms" above.
+> The terms below belong to the SuperCollider path (the `ORBITSCORE_ENGINE=sc` opt-out path). This path is **scheduled for removal from the repository by the 2026-09-10 ruling (#827 / #502)**. For the default path, see "Rust Engine / Daemon Terms" above.
 
 ### Buffer (SC)
 
@@ -207,7 +207,7 @@ The name of the dedicated SynthDef that OrbitScore registers with SuperCollider.
 
 ### scsynth
 
-The SuperCollider audio server binary. It accepts control via OSC/UDP, executes SynthDefs, and produces audio output. From v1.0 onward, it is bundled inside the `.vsix`.
+The SuperCollider audio server binary. It accepts control via OSC/UDP, executes SynthDefs, and produces audio output. From v1.0 onward it was bundled inside the `.vsix`, but **[#836](https://github.com/signalcompose/orbitscore/pull/836) (2026-09-10) stopped bundling it**. The extraction script (`scripts/extract-scsynth-bundle.sh`), the verification script (`scripts/verify-bundle.sh`), the `!engine/scsynth/**` keep entry in `.vscodeignore`, and the `brew install --cask supercollider` step in `release.yml` were all deleted.
 
 ### SynthDef (SC)
 
@@ -268,6 +268,8 @@ VS Code's trust model. In an untrusted workspace an extension is restricted by d
 ### bundle (scsynth source)
 
 One of the `ScsynthSource` values. The source identifier used when the scsynth binary bundled in the `.vsix` is used. It points to `<engine root>/scsynth/Contents/Resources/scsynth`.
+
+🔴 **Since [#836](https://github.com/signalcompose/orbitscore/pull/836) (2026-09-10) this candidate can never hit.** `packages/engine/scripts/sync-dist.js` now deletes `engine/scsynth` every time it syncs the engine into the extension, and the `.vscodeignore` keep entry is gone. The type and the branch themselves still live in `packages/engine/src/audio/supercollider/scsynth-resolver.ts` — removing the SC TypeScript implementation is, per the #836 description, "the next PR".
 
 ### explicit (scsynth source)
 
