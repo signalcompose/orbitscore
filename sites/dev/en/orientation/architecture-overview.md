@@ -351,7 +351,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 `DaemonClient.start()` proceeds in the order "spawn → read the ready line from stdout → connect the WebSocket → receive the handshake."
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:305-343 (handshake の timeout 設定を省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:306-344 (handshake の timeout 設定を省略)
   private async doStart(options: DaemonClientOptions): Promise<void> {
     // 新しい起動サイクルでは crash 検出を再 arm する（前回 quit の意図的 close を引きずらない）。
     this.intentionalClose = false
@@ -375,7 +375,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 Seen from the engine, the daemon is a **child process**. The communication, however, is WebSocket rather than stdin/stdout; stdout is used only to receive the startup ready line (a one-line JSON containing the port number).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:895-905
+// packages/engine/src/audio/rust-engine/daemon-client.ts:896-906
   private async spawnDaemon(
     explicitPath: string | undefined,
     timeoutMs: number,
@@ -390,7 +390,7 @@ Seen from the engine, the daemon is a **child process**. The communication, howe
 ```
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:969-983
+// packages/engine/src/audio/rust-engine/daemon-client.ts:970-984
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる
@@ -415,7 +415,7 @@ The daemon-side code that writes this ready line (`run()` in `main.rs`) and the 
 The search order for the daemon binary is in `resolveDaemonBinaryPath()`: explicit → env (`ORBIT_AUDIO_DAEMON_PATH`) → monorepo release → monorepo debug → extension bundle.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:232-268 (monorepo 候補と bundle の説明コメントを省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:233-269 (monorepo 候補と bundle の説明コメントを省略)
 export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
   const searched: string[] = []
   const candidates: DaemonBinaryResolution[] = []

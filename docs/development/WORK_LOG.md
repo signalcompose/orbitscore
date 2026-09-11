@@ -17,6 +17,240 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(native): correct the current_gains serialization table (#611) (Sep 11, 2026)
+
+束 A のレビューラウンドを閉じる前の **fix 差分再点検**（1 レビュアー・問いは
+「新しい故障モードは何か」「新コードはどの実行コンテキストで走るか」の 2 つ）で
+出た Minor 1 件を直した。Critical / Important は 0。
+
+**何が間違っていたか**: `LineControl::current_gains()` に付けた「どの mutex で
+直列化されているか」の表が、1 行目を `EngineWrap::set_global_gain` としていた。
+実際の `set_global_gain`（`engine_wrap.rs:9747`）は `master_gain` atomic へ store
+するだけで、`master_line_program` にも `LineExchange` にも触れていない。
+`current_gains()` の呼び出し元は 2 つとも `EngineWrap::set_bus_line`
+（`engine_wrap.rs:6980`）の中 — `bus == "master"` 分岐（7047）と named-bus 分岐（7141）。
+
+🔴 **なぜ実害になりうるか**: この表は「呼び手が install と直列化する契約であり
+型では強制していない」ことを将来の監査者へ伝えるために足したもの。PR-O4 はまさに
+`set_global_gain` を `SetBusLine("master", …)` へ切り替える予定なので、その担当者が
+表を読んで「既に `master_line_program` で直列化されている」と誤解しうる。
+**この PR が対処しようとした「規約を知らない 4 つ目の呼び出し元」問題を、
+コメント自身の不正確さで再生産していた。**
+
+**変更**: 表を 2 つに分けた。①`current_gains()` を呼ぶ経路（2 件・どちらも
+`set_bus_line`）②同じ `LineExchange` へ install する経路（3 件・`current_gains()` を
+呼ばない `set_bus_routing` を含む）。②が全部同じ mutex を取ることが「install どうし」も
+「読む → install」も直列化される根拠なので、①だけでは説明が閉じない。
+`set_global_gain` が現状この表に**入らない**ことと、PR-O4 で触るときに契約を新たに
+満たす必要があることを明記した。
+
+検証: `cargo fmt --check` 緑 / `cargo clippy -p orbit-audio-native --all-targets -- -D warnings` 緑。
+
+### chore(docs): rotate WORK_LOG before closing the bundle-A review (#611) (Sep 11, 2026)
+
+`tests/docs/worklog-size.spec.ts` が **2,104 行**で赤くなった（上限 2,000）。
+PROJECT_RULES §1a どおりアーカイブへ回した。
+
+**移設**: `Sep 7, 2026` 以前の 18 エントリ・1,326 行を
+`docs/archive/WORK_LOG_2026-09.md` の先頭へ。本体は **2,103 → 775 行**。
+アーカイブの期間ラベルを `09-01〜09-06` → `09-01〜09-07` に更新し、本体末尾の索引と
+`docs/core/INDEX.md` の表も揃えた。
+
+🔴 **一度失敗した手順を記録しておく**（同じ落とし穴を踏まないため）。移設範囲の終端を
+`s.index("## Archived sections")` で取ったところ、**過去エントリの本文が引用している
+同じ見出し**を拾って、18 件のうち 3 件しか移らなかった。`rindex`（最後の出現）で取り直した。
+**WORK_LOG は自分自身の構造を語るので、見出し文字列は本文にも現れる。**
+
+### fix(daemon): build the master default line in exactly one place, too (#611) (Sep 11, 2026)
+
+`/code:pr-review-team` ラウンド 1（4 レビュアー）を束 A（PR #834）に回した。
+**Critical 1 / Important 4 / Minor 2**。fixer は main。
+
+#### 🔴 Critical — mono デバイスで seed が実体と食い違い、この機構が防ぐはずのポップを再導入する
+
+`MasterLine::new` は初期 program の `dest.right` を **`Some(1)` に固定**していた。一方 daemon 側の
+shadow `default_master_line_program(output_channels)` は `(output_channels > 1).then_some(1)` を
+返していた。**1ch デバイスでは `dest` が食い違う**ので、`line_republish_seeds` の Output 照合が
+外れ、新しい master Output の seed が既定の **0.0** に落ちる。鳴っていた master が一瞬無音から
+5 ms かけてフェードインし直す — 設計 §4.3 が名指ししている失敗モードそのもの。
+
+**2ch では偶然一致するので、開発機の実機検証でも顕在化しない。**
+
+さらに `add_to_device` の境界検査は `debug_assert` だけなので、**実 1ch デバイスでは
+`right: Some(1)` が RT で範囲外アクセスになる**（`device_base + 1` が mono バッファを超える）。
+
+**対処**: `default_master_line_ops(output_channels)` を `orbit-audio-native` から export し、
+`MasterLine::new` と daemon の shadow の**両方がこれを呼ぶ**ようにした。`MasterLine::new` は
+`output_channels` を受け取る（呼び出し 11 箇所・production の 1 箇所は同スコープに `channels` が居た）。
+**同じ日にバス側で `legacy_line_ops` へ統一したのと同じ手当てを master にも当てた**
+— reviewer が「是正の一貫性の欠落」として指摘したとおり。
+
+固定するテスト `master_line_starts_from_the_shared_default_ops_for_any_channel_count` を足し、
+**旧バグ（`right: Some(1)` 固定）を再現する変異で赤・戻して緑**を実走で確認した。
+
+#### Important — 設計 §11 が挙げた 6 件のうち 2 件がまだ未実装だった
+
+前回の Fable 監査が 3 件を埋めた**その一段外側**に、`channels` の要素数（0 個 / 3 個以上）の拒否と
+**mono の `left` が範囲外**の拒否が残っていた（既存テストは stereo ペアしか通しておらず
+`right: None` の枝に到達していなかった）。
+`set_bus_line_wire_rejects_device_channel_arity_and_mono_out_of_range` を追加。
+**2 種類の変異（要素数制限を外す / mono 上限を外す）で赤**を確認。
+
+**列挙は一段手前で止まる。** 同じ設計文書の同じ表で、2 回続けて起きた。
+
+#### Important — 「center は unity」を近似で検査していた
+
+`line_program_pan_is_normalized_and_executes_in_rt` の許容差は `1e-6` で、
+`apply_line_pan` の中央早期リターンを消しても `sqrt(2)*cos(pi/4)` の **6e-8** のずれが埋もれて
+**そのまま通った**。設計 §4.1 の「center は unity」は近似ではないので、**ビット一致**で見る形に
+変えた。変異で `1.4142134` と `1.4142135` の 1 ulp を捉えることを確認。
+
+#### Important — dev サイトが裁定と逆のことを書いていた（comment-analyzer の Critical）
+
+「`EngineWrap` はこのハンドルを `SetBusLine("master", …)` だけでなく **`SetGlobalGain` からも**
+呼ぶ」と書いてあったが、現在の `set_global_gain` は `master_gain.store(...)` の 1 行だけで、
+line-program installer を**呼ばない**。ユニットテスト
+`set_global_gain_only_updates_the_compatibility_atomic` が「must not republish」を assert している。
+PR #823 の時点では正しかったが、O-wire-b のレビュー修正（`9e22e427`）で戻り、裁定 F2（写さない）で
+確定していた。**文書だけが 1 層取り残されていた**（ゴールが警告している型）。ja / en とも訂正。
+
+#### そのほか
+
+- `line_republish_seeds` への行番号参照がずれていた（`2162-2193` → 実体は 2157-2188）ので、
+  **行番号をやめて関数名で参照する**ようにした
+- TS の `daemon-client-line-wire.spec.ts` が、この束が広げた型（`pan` op・mono の `channels: [number]`）を
+  **1 件も通していなかった**。設計 §11 が検証コマンドとして名指ししているファイルなのに
+  「実行はされるが変更点は通らない」状態だった。1 件追加
+- `LineControl::current_gains()` の直列化契約を、**どの mutex かまで表で明記**した
+  （code-reviewer の Minor: 「規約を知らない 4 つ目の呼び出し元が追加されると壊れる」）
+
+#### レビュアー別
+
+| | 結果 |
+|---|---|
+| code-reviewer | **Critical 0 / Important 0**（mutex 経路を追い直して UAF なしと確認・cargo で 31 件を実走） |
+| silent-failure-hunter | **Critical 1** / Important 1 / Minor 2 |
+| pr-test-analyzer | Important 3 / Minor 1 |
+| comment-analyzer | **Critical 1** / Important 2 |
+
+**検算**: `cargo test -p orbit-audio-native --lib` **84 passed** /
+`-p orbit-audio-daemon --features outproc-effect --lib` **220 passed** /
+`cargo fmt --check` 緑 / TS wire spec 2 passed。
+
+#### 持ち越し（issue 化する）
+
+silent-failure-hunter の Important #2: `LineExchange::install` は RT へ swap した**後**に
+`retired` mutex を取るので、その mutex が poison すると **RT は新 program で鳴っているのに
+呼び出し元へ Err が返る**。この束が新設した「shadow は install 成功時だけ前進する」不変条件は、
+その既存の非 atomic 失敗経路では成立しない。発生確率は低いが**ログが 1 行も出ない**。
+束 A の差分の外（既存仕様）なので **#850** に切り出した。
+
+### refactor(daemon): build the default bus line in exactly one place (#611) (Sep 11, 2026)
+
+束 A（PR #834）に `/simplify` を回した。**引き継ぎに「レビュー済み」とあったのを検算せず信じていた**
+（記録を見ると `/simplify` も `/code:pr-review-team` も痕跡が無かった）。owner の指摘で気づいた。
+memory `handoff-claims-need-primary-source-recheck` の再発である。
+
+#### 🔴 Reuse と Altitude が**独立に同じ 1 点**を指摘
+
+`default_bus_line_program()`（`engine_wrap.rs`）が `legacy_line_ops(BusTarget::Master, &[])` と
+**同じ ops 列を手書きで再定義**していた。すぐ下の `initial_bus_line_shadows` のコメントは
+
+> 🔴 The shadow is what a later `SetBusLine` seeds effective gains from. If it disagreed with
+> what the bus is actually running, seeding would restore the wrong value and reintroduce the
+> jump it exists to prevent — **so build it in exactly one place**
+
+と書いているのに、**実装は 2 箇所で作っていた**。`legacy_line_ops` 側だけが変わると shadow が
+旧い形で残り、未設定バスへの最初の `SetBusLine` が誤った seed から republish する
+— **この機構が防ごうとしているポップを、この機構自身が再導入する**。
+`legacy_line_ops` の呼び出しに置き換えた（1 行）。コメントの約束が実際に成立するようになった。
+
+#### Efficiency — 中央パンの早道
+
+`apply_line_pan` に unity の早期リターンが無く、`LineOp::Gain` が `gain != 1.0` で同じことを
+しているのと非対称だった。RT コールバックのたびに `frames × 2` 回の無駄な乗算になる。
+
+🔴 **副次的に丸め誤差が消える**。f32 では `sqrt(2) * cos(pi/4) = 0.99999994` で **1.0 ちょうどに
+ならない**（実測）。省くことで `pan(0)` を書いた譜面が書かない譜面と一致し、設計 §4.1 の
+「center で `(1, 1)`（unity）」が**文書どおり**になる。
+
+#### Simplification — wire parse の形をそろえた
+
+`pan` だけ「取得はアーム内にインライン・範囲検証は別関数」という、`gain`（1 関数）と違う分割に
+なっていた。`parse_set_bus_line_pan` に揃えてアームを 1 行にした。エラーコードは
+`PARAM_OUT_OF_RANGE` のまま残す（範囲外は「形が壊れている」ではない。`gain` 側を寄せるかは
+既存挙動を巻き込むので本 PR では触らない）。
+
+#### 🔴 到達できない入力でガードを検査していたテストを直した
+
+`!pan.is_finite()` の枝を `validate_set_bus_line_pan(f64::NAN)` で検査していたが、
+**非有限の pan は wire から到達できない**（2026-09-11 実測）: JSON に NaN / Infinity の
+リテラルは無く、`serde_json` は `1e400` を `Error("number out of range")` として
+**parse 時点で拒否する**。実際に来る形（数値でない → `MALFORMED_REQUEST`）を固定し直した。
+ガード自体は型が保証していないので防御として残す。
+
+#### 見送り
+
+`#[inline]` が無いという指摘は**誤検知**（既に付いている。差分だけを読んだため）。
+master line と bus post-loop の実行器 2 本を 1 本に畳む案は、Altitude が
+「本 PR 以前からある構造で、`Pan` はそれに素直に追従しただけ。畳むなら Gain / Output も含む
+別 PR」と判定したので見送る。
+
+**検算**: `cargo test -p orbit-audio-native --lib` **83 passed** /
+`-p orbit-audio-daemon --features outproc-effect --lib` **219 passed** /
+`cargo fmt --check` 緑 / `cargo clippy --all-targets -- -D warnings` 緑。
+
+### test(daemon): add the three bundle-A tests the design listed but never got (#611) (Sep 10, 2026)
+
+Fable の受け入れ監査（束 A / PR #834）が **Important #1** として「設計 §11 が PR-A1 / PR-A2 の
+検証として列挙したテストのうち 3 件が実在しない」ことを一次ソースで確認した。うち 2 件は
+**「1 層だけ追従しない」退行の検出器そのもの**だった。
+
+| 追加 | 何を数値で見るか |
+|---|---|
+| `output.rs` `master_line_pan_op_positions_the_master_buffer` | master line を `execute_master_line` へ直接流し、`Pan(-1.0)` 後の hw が `(√2, 0)` になること。buffer を全て 1.0 に揃えているのでゲインがそのまま出る |
+| `session.rs` `set_bus_line_wire_pan_op_is_parsed_with_its_own_value` | `{"op":"pan","pan":0.25}` が受理され、`BusLineOp::Pan` の**中身が 0.25 と一致する**こと |
+| `engine_wrap.rs` `set_bus_line_seed_for_a_new_gain_without_a_match_defaults_to_unity` | 旧に Gain が無い republish で、新 Gain の seed が既定 1.0 になること（0.5 でも 0.0 でもない） |
+
+**なぜ必要だったか**: `LineOp` を match する実行器は master（`execute_master_line`）と
+bus post-loop の **2 箇所**あり、既存テストは `render_tagged_line` 経由で **bus しか通って
+いなかった**。master アームを `LineOp::Pan(_) => {}` に戻しても全件緑になる。wire 側も
+形の不正（MALFORMED）しか見ておらず、`item.get("pan")` を `item.get("value")` に
+取り違えても全件緑だった。
+
+**変異検算**（3 件とも壊して赤・戻して緑を実走）:
+
+| テスト | 変異 | 赤の実出力 |
+|---|---|---|
+| T1 | master 側 Pan アームを `LineOp::Pan(_) => {}` | `hard-left L=1` |
+| T2 | `item.get("pan")` → `item.get("value")` | `'line[].pan' must be a number`（MALFORMED） |
+| T3 | 対応無しの既定値 `1.0` → `0.0` | `left: [0.0, 0.0] / right: [1.0, 1.0]` |
+
+production コードは **0 行**（変異は都度復元・`git diff --stat` で確認）。
+
+**設計文書側も直した**: §4.1 に「√2 の合成が成り立つのは scheduler が鳴らす audio event に
+限る」という**適用範囲**を書き足した（Fable Important #2）。`collect_source_feeds` が集める
+instrument の feed は schedule 時の pan を通らないので、ライン上の Pan は
+`√2 · equal_power_pan(p)` がそのまま出て、**両端で +3.01 dB** になる。中央比では
+どちらも同じ等パワー則だが、絶対レベルが違う（audio event は中央が既に −3 dB）。
+フルスケールの instrument を端まで振ると 0 dBFS を超えるので、**束 B の締めまでに
+owner 裁定**とした（束 A では TS が `SetBusLine` を送らないので到達不能）。
+§11 には欠落の経緯と「設計の検証欄を実装後にチェックリストとして突き合わせる」教訓を残した。
+
+### feat(daemon): wire pan and mono device into SetBusLine, and carry effective gain across re-publish (#611) (Sep 10, 2026)
+
+`SetBusLine` の wire 契約を拡張し、`pan` と 1 要素の device channels（L+R の mono merge）を
+受理できるようにした。バスと master の RT では、発音側の center pan と重ねても音量が変わらない
+`√2 × equal-power` の係数を block ごとに計算し、pan 位置そのものを 5 ms ramp する。
+
+line の再 publish では、旧 program の実効値を atomic で読み、新旧 op を Gain/Pan の出現序数と
+Output の宛先・出現序数で対応付けて seed する。これが無いと、演奏中に send を追加しただけで既存の
+−12 dB send が一度 unity に跳ねてから戻り、約 5 ms の +12 dB burst と可聴の pop が生じるためである。
+対応の無い新 Output は 0.0 から fade-in し、Gain は 1.0、Pan は指定位置から始める。旧
+`SetBusRouting` の `LineProgram::legacy` / `settled` 経路は変更していない。
+
+---
+
 ### docs(link-audio): tell the truth about the deleted Link submodule and the unresolved fallback (#502) (Sep 10, 2026)
 
 Fable 受け入れ監査（PR #840）の指摘を適用した。**Important 2 / Minor 4**。

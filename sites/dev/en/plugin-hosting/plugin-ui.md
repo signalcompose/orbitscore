@@ -313,7 +313,7 @@ The TS → daemon wire simply adds three methods to the existing JSON request/re
 target vocabulary is the same `{role, bus?, instance?}` shape as `GetPluginState`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:641-654
+// packages/engine/src/audio/rust-engine/daemon-client.ts:642-655
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,
@@ -827,7 +827,7 @@ When does the caller of `closePluginUi` return? The daemon's `ClosePluginUI` res
 **Phase A acceptance only**.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2375-2376
+// rust/crates/orbit-audio-daemon/src/session.rs:2401-2402
                     // This is explicitly Phase A acceptance, never close completion.
                     Ok(Ok(())) => ok(&id, json!({"status": "accepted"})),
 ```
@@ -957,7 +957,7 @@ The ack matching key became the triple `(generation, window, evt_seq)`; an ack c
 window is rejected loudly. The event frame's `PluginUiTarget` also gained `window`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10188-10201
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10450-10463
 /// WS event frame に載せる、解決済み plugin UI 宛先。
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct PluginUiTarget {

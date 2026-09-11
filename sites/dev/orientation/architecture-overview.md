@@ -351,7 +351,7 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 `DaemonClient.start()` は「spawn → stdout の ready line を読む → WebSocket 接続 → handshake 受信」の順に進みます。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:305-343 (handshake の timeout 設定を省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:306-344 (handshake の timeout 設定を省略)
   private async doStart(options: DaemonClientOptions): Promise<void> {
     // 新しい起動サイクルでは crash 検出を再 arm する（前回 quit の意図的 close を引きずらない）。
     this.intentionalClose = false
@@ -375,7 +375,7 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 daemon は engine から見ると **child process** です。ただし通信は stdin/stdout ではなく WebSocket で、stdout は起動時の ready line (port 番号を含む 1 行 JSON) を受け取るためだけに使います。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:895-905
+// packages/engine/src/audio/rust-engine/daemon-client.ts:896-906
   private async spawnDaemon(
     explicitPath: string | undefined,
     timeoutMs: number,
@@ -390,7 +390,7 @@ daemon は engine から見ると **child process** です。ただし通信は 
 ```
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:969-983
+// packages/engine/src/audio/rust-engine/daemon-client.ts:970-984
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる
@@ -415,7 +415,7 @@ daemon 側でこの ready line を書くコード (`main.rs` の `run()`) と、
 daemon バイナリの探索順は `resolveDaemonBinaryPath()` にあり、explicit → env (`ORBIT_AUDIO_DAEMON_PATH`) → monorepo release → monorepo debug → extension bundle の順です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:232-268 (monorepo 候補と bundle の説明コメントを省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:233-269 (monorepo 候補と bundle の説明コメントを省略)
 export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
   const searched: string[] = []
   const candidates: DaemonBinaryResolution[] = []
