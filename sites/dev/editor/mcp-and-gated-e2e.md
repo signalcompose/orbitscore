@@ -1076,7 +1076,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 ### アサーション衛生
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:577-586
+// tests/e2e/gated-assertion-hygiene.spec.ts:590-599
   it('never asserts on a bare ERROR count equality', () => {
     // `get_log` は固定 500 行窓なので、ERROR 件数の**厳密等価**は窓の外へ流れた瞬間に
     // 嘘になる（#625）。`<=` / `toBeLessThanOrEqual` を使うこと。
@@ -1098,7 +1098,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 stale ガードの 2 本（`keeps the stale guard off cargo targets it can never rebuild` と `still lets the stale guard see the sources the daemon is built from`）は**片方向ずつ**を留めるペアになっています。前者だけなら「除外を消す」退行を捕まえられますが、後者が無いと「行きすぎて `src` まで除外する」方向は素通りします。ガードの目的（古いバイナリで測らない）は `src` を見ていることに依存するので、両方向を留めて初めて線引きが固定されます。
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:705-709
+// tests/e2e/gated-assertion-hygiene.spec.ts:718-722
     expect(
       /entry\.name === 'src'/.test(source),
       'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +
@@ -1109,7 +1109,7 @@ stale ガードの 2 本（`keeps the stale guard off cargo targets it can never
 9 本目は、ラチェットそのものが**黙って空振りしていないか**を見る生存確認です。`resolveLogCountHelperNames` はヘルパの import を `moduleSpecifier.text.includes('engine-log')` という**ファイル名の文字列一致**で判定しているので、`helpers/engine-log.ts` が rename / 移動されると例外も投げずに解決結果が空になり、provenance 検出器は構造的に無力化されます。そこで「実際の gated corpus から log-count ヘルパが 1 つ以上解決できること」自体を assert しています。`gated-sources.ts` が空リストで throw するのと同じ発想で、**検出器が見えなくなったことを検出器の外側から留める**わけです。
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:718-725
+// tests/e2e/gated-assertion-hygiene.spec.ts:731-738
     const resolved = resolvedLogCountHelperNamesAcrossCorpus(entries)
     expect(
       [...resolved].sort(),
@@ -1209,7 +1209,7 @@ audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1680-1690
+// packages/engine/src/core/sequence.ts:1666-1676
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {

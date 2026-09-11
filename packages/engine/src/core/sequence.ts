@@ -34,9 +34,10 @@ import { StateManager } from './sequence/state/state-manager'
 import { scheduleEvents, scheduleEventsFromTime } from './sequence/scheduling/event-scheduler'
 import {
   resolveNamedOutputDest,
-  assertOutputOptions,
   AudioLine,
   isOutputDest,
+  isPlainMasterOutput,
+  resolveOutputArgs,
   assertSendDestination,
   resolveSendLevel,
   toWire,
@@ -556,19 +557,11 @@ export class Sequence {
     opts: OutputOptions = {},
   ): this {
     const name = this.stateManager.getName() || 'sequence'
-    let dest: string | number | OutputDest | undefined = destOrOptions as
-      | string
-      | number
-      | OutputDest
-      | undefined
-    let options = opts
-    if (!isOutputDest(destOrOptions) && typeof destOrOptions === 'object') {
-      assertOutputOptions(destOrOptions, `Sequence '${name}': output`)
-      dest = undefined
-      options = destOrOptions
-    } else {
-      assertOutputOptions(options, `Sequence '${name}': output`)
-    }
+    const { dest, options } = resolveOutputArgs<string | number | OutputDest>(
+      destOrOptions,
+      opts,
+      `Sequence '${name}': output`,
+    )
     // #883 §4: an omitted destination IS `output("master")` — a default argument, not an
     // implicit element. Both land on the same resolved `OutputDest`, so they share one branch.
     if (dest === undefined || isOutputDest(dest)) {
@@ -983,15 +976,8 @@ export class Sequence {
     // event-side realization and `ensureInsertBusForInstrument()` (kept unchanged) allocates the
     // bus. Once allocated it remains the source route for that control path.
     if (this._insertBus) return { kind: 'bus', name: this._insertBus }
-    const hasPlainMasterOutput = this._line
-      .snapshot()
-      .some(
-        (element) =>
-          element.kind === 'output' &&
-          element.dest.kind === 'master' &&
-          !element.thru &&
-          element.db === 0,
-      )
+    // 🔴 述語は `audio-line.ts` の `isPlainMasterOutput()` が唯一の定義。ここに書き写さない。
+    const hasPlainMasterOutput = this._line.snapshot().some(isPlainMasterOutput)
     return hasPlainMasterOutput ? { kind: 'master' } : { kind: 'none' }
   }
 

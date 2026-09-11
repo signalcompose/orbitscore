@@ -345,11 +345,31 @@ export function analyzeMissingOutput(text: string): OutputRoutingDiagnosticIssue
   }
 
   const issues: OutputRoutingDiagnosticIssue[] = []
+  // 🔴 パターンは**シーケンスごとに 1 度だけ**組み立てる。行ループの内側で `new RegExp` を
+  // 呼ぶと、1 打鍵あたり `シーケンス数 × 行数 × (3 + バス数)` 回のコンパイルになる
+  // （診断は `onDidChangeTextDocument` で打鍵ごとに走る）。この規律は以前この関数に
+  // 明記されていたが PR #885 で一度失われた — 同じ PR の `dsl-completion-context.ts` が
+  // `VAR_NODE_PATTERNS` で正しい形を実践しているので、そちらと揃える。
+  const escapedSumNames = [...sumNames].map((target) => [target, escapeRegExp(target)] as const)
+  const escapedAuxNames = [...auxNames].map((target) => [target, escapeRegExp(target)] as const)
   for (const name of sequenceNames) {
     const escapedName = escapeRegExp(name)
     const receiver = `\\b${escapedName}\\s*\\.\\s*`
     const chainReceiver = `\\b${escapedName}\\b[^\\n]*\\.\\s*`
-    const hasMidi = codeLines.some((line) => new RegExp(`${receiver}midi\\s*\\(`).test(line))
+    const midiPattern = new RegExp(`${receiver}midi\\s*\\(`)
+    const outputPattern = new RegExp(`${chainReceiver}output\\s*\\(`)
+    const masterPattern = new RegExp(`${receiver}master\\b`)
+    const sendPattern = new RegExp(
+      `${receiver}send\\s*\\(\\s*(?:["']([^"']+)["']|([A-Za-z_$][\\w$]*))`,
+      'g',
+    )
+    const sumPatterns = escapedSumNames.map(
+      ([target, escaped]) => [target, new RegExp(`${receiver}${escaped}\\b`)] as const,
+    )
+    const auxPatterns = escapedAuxNames.map(
+      ([target, escaped]) => [target, new RegExp(`${receiver}${escaped}\\b`)] as const,
+    )
+    const hasMidi = codeLines.some((line) => midiPattern.test(line))
     if (hasMidi) continue
 
     let hasDestination = false
@@ -359,19 +379,17 @@ export function analyzeMissingOutput(text: string): OutputRoutingDiagnosticIssue
     const sumTargets = new Set<string>()
 
     for (const line of codeLines) {
-      if (new RegExp(`${chainReceiver}output\\s*\\(`).test(line)) {
+      if (outputPattern.test(line)) {
         hasDestination = true
         hasDryTerminal = true
       }
-      if (new RegExp(`${receiver}master\\b`).test(line)) {
+      if (masterPattern.test(line)) {
         hasDestination = true
         hasDryTerminal = true
       }
 
-      const sendPattern = new RegExp(
-        `${receiver}send\\s*\\(\\s*(?:["']([^"']+)["']|([A-Za-z_$][\\w$]*))`,
-        'g',
-      )
+      // `matchAll` は species で regex を複製して複製側の lastIndex だけを進めるので、
+      // `g` 付きの共有パターンを使い回しても状態は汚れない。
       for (const match of line.matchAll(sendPattern)) {
         hasDestination = true
         const target = match[1] ?? match[2]
@@ -380,15 +398,15 @@ export function analyzeMissingOutput(text: string): OutputRoutingDiagnosticIssue
         else hasUnknownSend = true
       }
 
-      for (const target of sumNames) {
-        if (new RegExp(`${receiver}${escapeRegExp(target)}\\b`).test(line)) {
+      for (const [target, pattern] of sumPatterns) {
+        if (pattern.test(line)) {
           hasDestination = true
           hasDryTerminal = true
           sumTargets.add(target)
         }
       }
-      for (const target of auxNames) {
-        if (new RegExp(`${receiver}${escapeRegExp(target)}\\b`).test(line)) {
+      for (const [target, pattern] of auxPatterns) {
+        if (pattern.test(line)) {
           hasDestination = true
           hasDryTerminal = true
           auxTargets.add(target)

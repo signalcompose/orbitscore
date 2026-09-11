@@ -214,7 +214,7 @@ numeric render bus, or a LinkAudio channel name. The resolution order is fixed b
 > the old model** — see `docs/design/611-output-line-design.md` §2-§3 for the current design.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:540-585
+// packages/engine/src/core/sequence.ts:541-580
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
    * §3.3):
@@ -234,19 +234,11 @@ numeric render bus, or a LinkAudio channel name. The resolution order is fixed b
     opts: OutputOptions = {},
   ): this {
     const name = this.stateManager.getName() || 'sequence'
-    let dest: string | number | OutputDest | undefined = destOrOptions as
-      | string
-      | number
-      | OutputDest
-      | undefined
-    let options = opts
-    if (!isOutputDest(destOrOptions) && typeof destOrOptions === 'object') {
-      assertOutputOptions(destOrOptions, `Sequence '${name}': output`)
-      dest = undefined
-      options = destOrOptions
-    } else {
-      assertOutputOptions(options, `Sequence '${name}': output`)
-    }
+    const { dest, options } = resolveOutputArgs<string | number | OutputDest>(
+      destOrOptions,
+      opts,
+      `Sequence '${name}': output`,
+    )
     // #883 §4: an omitted destination IS `output("master")` — a default argument, not an
     // implicit element. Both land on the same resolved `OutputDest`, so they share one branch.
     if (dest === undefined || isOutputDest(dest)) {
@@ -261,6 +253,8 @@ numeric render bus, or a LinkAudio channel name. The resolution order is fixed b
     // number (e.g. `global.sum("3")` then `output(3)`) wins over the numeric render-bus
     // branch below — resolveLineDest's master/"L,R"-pair branches never match a bare digit
     // string, so this is effectively the sum/aux-name check alone for a numeric `dest`.
+    const resolved = this.resolveLineDest(destinationName)
+    if (resolved) return this.applyOutputElement(resolved, options, 'output')
 ```
 
 In the sum/aux branch, look at `applyOutputElement()` (`sequence.ts:485-495`)'s
@@ -302,7 +296,7 @@ calls fan out, and the same destination overwrites. **The unit changed from line
 dB in #611 PR-B2.**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:665-686
+// packages/engine/src/core/sequence.ts:658-679
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -1142,7 +1136,7 @@ expanded the target to the explicit three values `none / master / bus`. Regardle
 order, only the newest destination derived from the score crosses the wire.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1009-1043
+// packages/engine/src/core/sequence.ts:995-1029
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument()) return Promise.resolve()
     const target = this.instrumentSourceRoutingTarget()

@@ -1080,7 +1080,7 @@ Its limits are stated honestly too. Since it only scans the source as text, it d
 ### Assertion hygiene
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:577-586
+// tests/e2e/gated-assertion-hygiene.spec.ts:590-599
   it('never asserts on a bare ERROR count equality', () => {
     // `get_log` は固定 500 行窓なので、ERROR 件数の**厳密等価**は窓の外へ流れた瞬間に
     // 嘘になる（#625）。`<=` / `toBeLessThanOrEqual` を使うこと。
@@ -1102,7 +1102,7 @@ That tracking originally stayed **inside a single expression chain**, so a count
 The two stale-guard checks (`keeps the stale guard off cargo targets it can never rebuild` and `still lets the stale guard see the sources the daemon is built from`) form a pair that pins **one direction each**. The first alone catches the regression "the exclusion was deleted", but without the second, going too far and excluding `src` as well would pass unnoticed. The guard's purpose — never measure a stale binary — depends on it still looking at `src`, so only both directions together fix the line.
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:705-709
+// tests/e2e/gated-assertion-hygiene.spec.ts:718-722
     expect(
       /entry\.name === 'src'/.test(source),
       'The stale-binary guard must NOT skip src/: excluding it would let a stale daemon ' +
@@ -1119,7 +1119,7 @@ It is the same idea as `gated-sources.ts` throwing on an empty list: pin the det
 from outside the detector.
 
 ```typescript
-// tests/e2e/gated-assertion-hygiene.spec.ts:718-725
+// tests/e2e/gated-assertion-hygiene.spec.ts:731-738
     const resolved = resolvedLogCountHelperNamesAcrossCorpus(entries)
     expect(
       [...resolved].sort(),
@@ -1219,7 +1219,7 @@ This is where `#654` enters. According to WORK_LOG 6.421, when a new seven-layer
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1680-1690
+// packages/engine/src/core/sequence.ts:1666-1676
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {
