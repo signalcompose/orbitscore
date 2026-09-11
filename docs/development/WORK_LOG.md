@@ -375,6 +375,45 @@ prototype に見える。`ensureInsertBusForInstrument` と併せて内部 API �
 
 検証: `npm test` **2,363 passed / 67 skipped / 0 failed** / `npm run lint` 緑 /
 `npm run typecheck:e2e` 緑 / 引用 1,034 verified / 0 failed。
+### docs: follow the merged #834 in the core spec, specs-v2 and the dev site (Sep 11, 2026)
+
+マージ済み PR [#834](https://github.com/signalcompose/orbitscore/pull/834)（#611 束
+O-surface の前半・merge commit `f23eb5d`）にドキュメントを追従させた。**実装とテストは
+一切触っていない**（docs のみ）。
+
+**追従した事実**（すべて #834 の差分から読み取れるもの）:
+
+| 差分 | 直した先 |
+|---|---|
+| `SetBusLine` の op が 3 種（rack / gain / output）→ **4 種**（`pan` 追加）・`session.rs:358` のエラー文言も変わった | `sites/dev/rust-engine/index.md` と en の「op は 3 種」の段 |
+| `dest.device` の `channels` が 2 要素固定 → **1 要素（mono）も受理**（`session.rs:423` の `matches!(channels.len(), 1 \| 2)`・範囲検証は `right` があるときだけ distinct を要求） | 同上（段を新設） |
+| `validate_line_program` の `Pan` 拒否が外れ、RT で `√2 · equal_power_pan(p)` を掛けるようになった（`output.rs:2148-2182`） | 同上 + `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.4 |
+| `LineProgram::with_seeds` / `line_republish_seeds` で再 publish が実効値を引き継ぐようになった | `sites/dev/rust-engine/index.md`（master gain の節が「§5.1 の機構は PR-O4 と同時に入る」と未来形で書いていた）と en |
+| 引用行のずれ（`engine_wrap.rs:3262-3284` → `:3349-3371`・`:9479-9488` → `:9741-9750`・`daemon-client.ts:86-96` → `:86-97`） | RE-1 ja / en の本文と further-reading（**中身を base と突合して「その記述が指すもの」だと確かめられた 3 件だけ**。RE-1 / SC-2 の further-reading には #834 より前から中身と合っていない範囲が他にもあるが、機械的にずらすと**別の誤りへ移すだけ**になるので触っていない） |
+| MX.4 の ⚠️「`pan` と mono 宛先はまだ wire に無い」 | `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`（**wire には入ったが TS に呼び出し元が無い**ことを明記） |
+| SC.1 の「v1 の現在地」 | `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`（同上・現在地そのものは変わらない理由を書いた） |
+
+🔴 **「wire に入った ≠ 譜面から見える」を毎回書いた。** `packages/engine` に `setBusLine` の
+呼び出し元は 0 件（`grep -rn setBusLine packages --include=*.ts` は `daemon-client.ts` のみ）。
+`seq.pan()` は今日も発音側の `Scheduler` を通る。
+
+**あわせて直した既存の綻び**（#834 の差分起因ではない・PR 本文で開示）:
+`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.2.2 の `engine_wrap.rs:5809-5813` / `:5828` は
+**#834 より前から** `SelectAudioDevice` の stream 差し替えを指していた（WORK_LOG 2026-09-10 の
+行も「壊れていた」と記録している）。MX.4 側だけが実測値へ直され、MX.2.2 の表が取り残されていた
+ので、同じ実測値（`:7212-7216` / `:7237-7241`）へそろえた。
+
+**frontmatter**: #834 は SC-2 / RE-3 の本文を書き換えたのに `verified-against` /
+`verified-at` を据え置いていたので、4 ファイル（ja / en）を `f23eb5d` / 2026-09-11 へ更新した。
+
+**追従不要と判断したもの**: `sites/user/reference/methods.md` と
+`docs/user/ja/USER_MANUAL.md` の `pan(-100..100)`（DSL 表面は無変更）、
+`docs/design/611-o-surface-bundle-design.md`（起案時点のスナップショットなので後から直さない）。
+
+**検証**: `npm run docs:build -w @orbitscore/user-site` / `-w @orbitscore/dev-site` /
+`npm run docs:check`（936 → 引用の増減なし・0 failed）。
+
+---
 
 ### docs(native): correct the current_gains serialization table (#611) (Sep 11, 2026)
 
