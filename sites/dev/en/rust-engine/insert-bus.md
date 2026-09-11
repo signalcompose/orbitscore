@@ -1,12 +1,12 @@
 ---
 title: "RE-3. Per-Sequence Insert Bus (seq.effect())"
 chapter-id: "RE-3"
-verified-against: 66efda5
-verified-at: "2026-09-08"
+verified-against: f23eb5d
+verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the point where `LineOp::Pan` was wired into RT by the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-3. Per-Sequence Insert Bus (seq.effect())
 

@@ -1867,8 +1867,8 @@ sum / aux に `master` と名付けることは SC.2.1 規範 (7) で明示エ�
 > |---|---|
 > | `output(name)`（sum 名）・`mix.output(1, 2)` の物理アウト宣言 | ✅ **実装済み** |
 > | `output` の宛先は kind を問わない | ❌ **sum kind に限られる** — `SetBusRouting` が
->   `output '<name>' must be a sum bus` で拒否する（`engine_wrap.rs:5809-5813`）。
->   `send` 先も **aux kind に限られる**（同 `:5828` 付近） |
+>   `output '<name>' must be a sum bus` で拒否する（`engine_wrap.rs:7212-7216`）。
+>   `send` 先も **aux kind に限られる**（同 `:7237-7241`） |
 > | forward-only（順序が前向きなら許す） | ✅ 実装済み（同 `:5802-5806` が index 比較で拒否） |
 > | sum が別の sum へ出せる | ⚠️ wire の kind 検証は通るが、**DSL 側の経路は未整備**。
 >   旧 MX.5 は「sum ネスト不可」を v1 制約として挙げていた |
@@ -1938,21 +1938,31 @@ kick.send(verb, -12, enabled: false)  // ≡ db: -Infinity（送らない・要�
 > **v1 の現在地**（2026-09-10・束 O-wire-b = PR [#824](https://github.com/signalcompose/orbitscore/pull/824) マージ後）:
 > 🔴 **利用者から見える kind 制約は今日も生きている。** `SetBusRouting` は
 > 「output は sum のみ・send 先は aux のみ」を検証して拒否する
-> （`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6956-6960`・send 側は同 `:6981-6985`。
+> （`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:7212-7216`・send 側は同 `:7237-7241`。
 > コード側のコメントは本節 MX.4 を出典として引用している）。本節が「kind で制限しない」と
 > 規定するのは **到達点**である。
-> forward-only は今日も同じ規則で効いている（同 `:6951-6955`）。
+> forward-only は今日も同じ規則で効いている（同 `:7207-7211`）。
 >
 > **PR-O3 の到達点（2026-09-10・[#824](https://github.com/signalcompose/orbitscore/pull/824) マージ）**:
 > `SetBusLine` の wire は入り、その `bus` 宛ては **forward-only しか検証しない**
-> （`EngineWrap::set_bus_line`・同 `:6852-6865`。kind の照合は無く、
-> `set_bus_line_accepts_a_forward_aux_destination`・同 `:3262-3284` が固定している）。
+> （`EngineWrap::set_bus_line`・同 `:7092-7105`。kind の照合は無く、
+> `set_bus_line_accepts_a_forward_aux_destination`・同 `:3349-3371` が固定している）。
 > ただし **DSL からこの wire を送る経路はまだ無く**、`output()` / `send()` は `SetBusRouting`
 > のままなので、**ユーザーから見える制約は変わっていない**。切り替えは **PR-O4**。
 >
-> ⚠️ **`pan` と mono 宛先はまだ wire に無い**（設計 611 §4.1 の引用ブロック・owner 裁定 2026-09-10）。
-> §2.2 / §2.4b の裁定（`mix.output(3)` = L+R マージ・`pan` はライン要素）に **wire だけが**
-> **追従していなかった**ため、§4.1 を改訂して**実装は PR-O4 へ**割り当てた。
+> ⚠️ **`pan` と mono 宛先は 2026-09-10 の時点では wire に無かった**（設計 611 §4.1 の引用ブロック・
+> owner 裁定 2026-09-10）。§2.2 / §2.4b の裁定（`mix.output(3)` = L+R マージ・`pan` はライン要素）に
+> **wire だけが追従していなかった**ため、§4.1 を改訂して**実装は PR-O4 へ**割り当てた。
+>
+> **PR-O4 前半の到達点（2026-09-11・[#834](https://github.com/signalcompose/orbitscore/pull/834) マージ）**:
+> `SetBusLine` に **`pan` op（`-1..=1`）** と **1 要素 `channels`（mono デバイス宛先）** が入り、
+> どちらも RT で実行される（`validate_line_program` の `Pan` 拒否が外れた・
+> `rust/crates/orbit-audio-native/src/output.rs:1444-1450`）。バス上の pan 則は
+> **`√2 · equal_power_pan(p)`** で、発音側が center で既に `1/√2` を掛けている分を打ち消して
+> center を unity にする（同 `:2148-2182`）。🔴 **ただし TS からこの wire を送る経路は今も無い**
+> （`packages/engine/src/audio/rust-engine/daemon-client.ts:715-718` の `setBusLine` に呼び出し元が
+> 無い）。したがって **`seq.pan()` / `mix.output(3)` の譜面から見える振る舞いは今日も旧経路のまま**
+> であり、DSL 表面の切り替えは後半の束（`611-output-line`）で入る。
 
 ### MX.5 v1 制約（実装事実の開示）
 
