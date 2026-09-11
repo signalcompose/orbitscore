@@ -27,7 +27,11 @@ OrbitScore は VS Code の拡張機能として動作します。この章では
 
 ### ステップ 1: .vsix ファイルをダウンロードする
 
-[GitHub Releases](https://github.com/signalcompose/orbitscore/releases) を開き、最新バージョンの `orbitscore-*.vsix` ファイルをダウンロードします。
+[GitHub Releases](https://github.com/signalcompose/orbitscore/releases) を開き、最新バージョンの `orbitscore-darwin-arm64-*.vsix` ファイルをダウンロードします。ページ下部の **Assets** の中にあります。
+
+::: tip 最新版に直接行く
+[最新リリース](https://github.com/signalcompose/orbitscore/releases/latest) を開くと、そのページにインストール手順も載っています。
+:::
 
 ### ステップ 2: VS Code に拡張機能をインストールする
 
@@ -46,10 +50,10 @@ OrbitScore は VS Code の拡張機能として動作します。この章では
 
 #### 方法 C: コマンドライン（ターミナル）から
 
-ターミナルを開き、次のコマンドを実行します。`orbitscore-*.vsix` の部分は、実際のファイル名に書き換えてください。
+ターミナルを開き、次のコマンドを実行します。`orbitscore-darwin-arm64-*.vsix` の部分は、実際のファイル名に書き換えてください。
 
 ```text
-code --install-extension orbitscore-*.vsix
+code --install-extension orbitscore-darwin-arm64-*.vsix
 ```
 
 Cursor を使っている場合は `code` の代わりに `cursor` と入力します。

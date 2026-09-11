@@ -326,7 +326,7 @@ install it — nothing else is required. OrbitScore is not published on the VS C
 Open VSX.
 
 ```bash
-code --install-extension orbitscore-<version>.vsix
+code --install-extension orbitscore-darwin-arm64-<version>.vsix
 ```
 
 The rest of this section is for building from source.

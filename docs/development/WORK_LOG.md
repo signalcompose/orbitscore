@@ -127,6 +127,42 @@ MCP サーバ（#388）が入った時点から壊れていた可能性が高い
 通っているからではない。他社実装への暗黙の依存で、#878（`spawn('node')` が VS Code の
 シェル環境解決に救われている）と同じ形。ネイティブ `.app` のラインでは逃げ道が無く必須になる。
 
+
+#### インストール導線の実物合わせ
+
+リリース後、**利用者が実際に辿る経路**を上から見て 2 件直した。
+
+**1. GitHub Release の本文が空だった。** `release.yml` は `gh release create --generate-notes` を
+使うので、出るのは **v2.0.0 以降の全 PR 一覧（279 行）**だけだった。**利用者が最初に見る場所**が
+それでは使えないので、本文を書き直した:
+
+- 動作環境の表（arm64 専用・Intel 非対応・VS Code 1.99.0 以上）
+- インストール 3 方式（ダブルクリック / コマンドパレット / CLI）+ 更新手順
+- 最初の音を出すまでの 4 ステップ + Walkthrough への導線
+- 3 軸のバージョン（拡張 3.0.0 / `DSL_VERSION` 1.2 / `ENGINE_VERSION` 2.0.0）が同期しないこと
+- **既知の制限**（LinkAudio は出荷ビルドで無効 / `compressor()` 等は no-op / `.time()` `.fixpitch()` は未実装）
+- 変更履歴は `<details>` に畳んだ
+
+**2. ドキュメントのファイル名が実物と違った。** 資産名は `orbitscore-darwin-arm64-3.0.0.vsix` だが、
+README 2 本は `orbitscore-<version>.vsix`、ユーザーサイトは `orbitscore-*.vsix` と書いていた。
+**ターゲット接尾辞が抜けている**のが原因なので、版番号は固定せず `darwin-arm64` だけ足した
+（`orbitscore-darwin-arm64-<version>.vsix`）。版を書き込むと次のリリースで腐る。
+
+併せてユーザーサイトに [releases/latest](https://github.com/signalcompose/orbitscore/releases/latest)
+への導線と「Assets の中にある」の一言を足した。
+
+#### 実測で確かめたこと（記述が現行実装と合っているか）
+
+- 出荷 README の「Audio Engine Settings で出力デバイスを選ぶ」は**正しい**。
+  `orbit-audio-daemon --list-audio-devices` は実環境で 2 件返す（`MacBook Proのスピーカー` /
+  `Pro Tools Aggregate I/O`）。🔴 **サンドボックス内では `{"devices":[]}` を返す**ので、
+  ここを検証する時はサンドボックスを外すこと
+- MCP の `list_audio_devices` が「not supported with the Rust engine」を返すのは**別の話**で、
+  こちらは意図的な未実装（`extension.ts:2950-2956`・doc 662 §6 / #660）。UI の経路とは違う
+
+検証: 引用 944 / 0 failed・`npm test` 2,347 passed / 0 failed・lint 緑・
+`docs:build -w @orbitscore/user-site` 緑。
+
 ### docs: follow the 3.0.0 / DSL 1.2 bump into the docs the bump missed (PR #871 追従) (Sep 11, 2026)
 
 ルーティン docs 追従。追従元は PR [#871](https://github.com/signalcompose/orbitscore/pull/871)
