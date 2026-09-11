@@ -1,12 +1,12 @@
 ---
 title: "IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path"
 chapter-id: "IV-3"
-verified-against: 229d638
-verified-at: "2026-09-10"
+verified-against: a6e1f13
+verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing), #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) and the [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle (tracking through local wrappers, plus a liveness check on the ratchet itself) on 2026-09-06, and #830 (PR [#831](https://github.com/signalcompose/orbitscore/pull/831), **the gated harness moving from the VSCodium-fork OrbitStudio.app to stock VS Code**) on 2026-09-10, and to #860 (PR [#861](https://github.com/signalcompose/orbitscore/pull/861), lowering a normal-path `warn!` to `debug!`) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to #668 PR-E2 (the shared harness layer) on 2026-09-03 to #724 (#668 PR-E0, the harness-spec revision) on 2026-09-04, to #661 (PR #748, the widened `get_engine_state`) on 2026-09-05, and to #756 (PR [#776](https://github.com/signalcompose/orbitscore/pull/776), line-wise `ERROR:` prefixing), #785 (PR [#788](https://github.com/signalcompose/orbitscore/pull/788), the provenance-based log-count ratchet) and the [#789](https://github.com/signalcompose/orbitscore/pull/789) bundle (tracking through local wrappers, plus a liveness check on the ratchet itself) on 2026-09-06, and #830 (PR [#831](https://github.com/signalcompose/orbitscore/pull/831), **the gated harness moving from the VSCodium-fork OrbitStudio.app to stock VS Code**) on 2026-09-10, and to #860 (PR [#861](https://github.com/signalcompose/orbitscore/pull/861), lowering a normal-path `warn!` to `debug!`) and #855 (PR [#857](https://github.com/signalcompose/orbitscore/pull/857), the temp-sweep race that was inflating the ERROR count) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # IV-3. The MCP Server and Gated Real-Device E2E — Testing Through the User's Own Path
 
@@ -457,6 +457,31 @@ export function selectLogLines(ring: readonly string[], requested?: number): str
 Why so much care? The E2E frequently "compares the ERROR count before and after an operation". With a fixed-width window, an old ERROR scrolling out at the same moment a new ERROR scrolls in leaves the count unchanged — a **false green**. `#567` raised the cap from 500 to the actual capacity of 1000 and made truncation part of the response for this reason. The window is still finite, though, so CLAUDE.md rules that "ERROR counts must not be compared with strict equality (use `<=`)". That rule is mechanised by the hygiene test described below.
 
 There was a second false green hiding in this count, unrelated to the window. The `ERROR:` prefix is applied by `setupStderrHandler` on the extension side, and before [#756](https://github.com/signalcompose/orbitscore/issues/756) it was applied **per chunk**, so when a single chunk held several lines the second line onwards got no `ERROR:` at all. In other words the ERROR count was **structurally low** before the window ever entered the picture. Measured in practice: a device-switch failure was recorded separately by the daemon and by the engine, yet only one of the two carried an `ERROR:`. #756 changed the prefixing to be **line-wise**, via `createLinePrefixer` (see the "Turning stderr back into lines" section of [IV-1](/en/editor/vscode-architecture)). The general lesson worth keeping is the one about the instrument itself: **a broken measuring instrument can hide every judgement downstream of it**.
+
+The same count carried a distortion in the opposite direction, too. Where #756 fixed a structural **under**count, [#855](https://github.com/signalcompose/orbitscore/issues/855) (PR [#857](https://github.com/signalcompose/orbitscore/pull/857), 2026-09-11) was a structural **over**count. The engine's temp-directory sweep (`packages/engine/src/audio/slicing/temp-file-manager.ts`) runs every time a `TempFileManager` is constructed: it walks the shared `os.tmpdir()` and removes `orbitscore_*` directories older than an hour. Between `readdirSync` listing an entry and `statSync` being called on it, **another engine instance's identical sweep** can remove that same directory first. The gated suite starts and stops the engine many times, so several instances end up competing over one temp root.
+
+The directory already being gone is exactly the outcome this loop wants — it is not a failure. But the `catch` emitted a `console.warn`, and engine stderr is prefixed with `ERROR:` on the extension side, so **a benign race pushed the ERROR count up by one line**. Measured on PR #840's merge gate, this surfaced as `expected 9 to be less than or equal to 8` and failed a test with nothing to do with the race (`restores an MCP-saved non-default instrument state across an engine restart with the same measured pitch`). The fix wraps `statSync` in a per-entry `try` that **swallows ENOENT only**.
+
+```typescript
+// packages/engine/src/audio/slicing/temp-file-manager.ts:98-118
+      for (const file of files) {
+        if (!file.startsWith('orbitscore_')) continue
+        const dirPath = path.join(this.tempDir, file)
+        try {
+          const stats = fs.statSync(dirPath)
+          if (stats.isDirectory() && stats.mtimeMs < oneHourAgo) {
+            fs.rmSync(dirPath, { recursive: true, force: true })
+          }
+        } catch (error) {
+          // ...
+          if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error
+        }
+      }
+```
+
+The original shape, with one `try` around the whole loop, had a secondary problem as well: a single ENOENT abandoned the loop, so **every entry listed after it went unswept** and orphans accumulated. Anything other than ENOENT (the temp root itself being unreadable, for instance) is still reported as a single `console.warn`, since the sweep is best-effort by design.
+
+The general lesson points the same way as #756, with the sign flipped: **a single `console.warn` anywhere in the engine becomes an input to the gate that decides whether a release ships**. The ERROR-count comparisons read later in this chapter depend, implicitly, on every best-effort path in the engine staying quiet about outcomes it actually wanted.
 
 ### Line-wise prefixing has a mirror-image consequence — stop noise at the source
 
