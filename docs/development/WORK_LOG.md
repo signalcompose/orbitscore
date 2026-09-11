@@ -17,6 +17,70 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(native): interpolate gain and pan ramps inside the block (#859) (Sep 11, 2026)
+
+owner 裁定 2026-09-11（#851 B-1・**案 A**）。E2E-7 が測っていたのは**実装の欠陥**であって
+オラクルの欠陥ではなかった。
+
+## 何が壊れていたか
+
+ゲインは**ブロックあたりスカラー 1 個**として掛かっていた。`ramp_frames` は 5 ms = 240 で、
+実機のブロック長は **512**。`frac = min(512/240, 1.0) = 1.0` なので
+**ランプが 1 ブロックで完了する**（= ブロック境界の段差）。
+
+`gain(-40)` → `gain(0)` は振幅が 0.01 → 1.0 に**1 サンプルで跳ぶ**。
+実測: 切替時の一次差分 `0.6996` vs 信号自身の最大スルー `0.0407` → **17 倍**。
+
+`advance_ramped_gain` の doc は "One block of the **click-free** gain ramp" と書いていたが、
+**出荷時のバッファ長ではこの記述は偽**だった。
+
+## 🔴 私の最初の推奨（案 D）は誤りだった
+
+「出力バッファ長を env 化して E2E-7 を 64 フレームで回す」を推奨していたが、owner の
+「rampの粒度がそれでいい根拠を説明して」で一次ソースを読み直し、**2 つの理由で撤回**した。
+
+1. **出荷される振る舞いを何も変えない。** 512 で走るユーザーには段差が残る
+2. **E2E-7 すら通らない見込み。** 64 でも `frac = 64/240 = 0.2667` で 4 段の階段になり、
+   最大段差 0.264 × ピーク振幅 0.707 = **0.187** > 閾値 `4 × 0.0407 = 0.163`
+
+推奨する前にこの算数をやるべきだった。
+
+## 案 A の要点: ブロック終端をビット一致させる
+
+現行式 `current += (target - current) × min(frames/ramp_frames, 1)` は
+「ブロック先頭の距離を `ramp_frames` で割った固定ステップ」と等価なので:
+
+```
+step  = (target - start) / ramp_frames
+at(f) = end                if f >= min(frames, ramp_frames)
+        start + step * f   otherwise
+```
+
+`end` は**現行式をそのままの演算順序で 1 回だけ**計算した値。したがって
+`at(frames) == end` がブロックの長短どちらでも成り立ち、**既存の実機 goldens
+（E2E-2/3/6/G/P/S/10）は動かない**。これが検算そのもの。
+
+## コスト
+
+| 状態 | 現在 | 案 A |
+|---|---|---|
+| 定常（圧倒的多数） | 乗算 1（`gain == 1.0` なら省略） | **同じ**（`is_settled()` で同じ経路へ） |
+| ランプ中 | 乗算 1 | 乗算 1 + 加算 1 を 240 サンプル分だけ |
+
+pan は**位置ではなく L/R 係数**を線形補間する（位置を補間すると `equal_power_pan` の
+cos/sin が毎サンプルになる）。`pan == 0.0` → `(1.0, 1.0)` の unity 早道は維持したので、
+中央 pan と pan 無指定のビット一致も保たれる。
+
+## 検証（🔴 main が sandbox 外で実行）
+
+`cargo fmt --check` 緑 / `cargo clippy -p orbit-audio-native --all-targets -- -D warnings` 緑 /
+`cargo test -p orbit-audio-native --lib` **88 passed** /
+`cargo test -p orbit-audio-daemon --features outproc-effect --lib` **220 passed**。
+
+実機 E2E-7 は束 B と合わせて main が本ツリーで確認する。
+
+Closes #859
+
 ### docs(native): correct the current_gains serialization table (#611) (Sep 11, 2026)
 
 束 A のレビューラウンドを閉じる前の **fix 差分再点検**（1 レビュアー・問いは
