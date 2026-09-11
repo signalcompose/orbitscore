@@ -17,6 +17,22 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: PR #870 のドキュメント追従レビュー — 追従不要（Sep 11, 2026）
+
+マージ済み PR #870（`f56e02e7d03306f7d811b2d2edac9814baa38ee5`）に対するドキュメント追従レビュー。
+
+**ドキュメントの追従は不要**と分類した。差分 2 ファイルの内訳は
+`tests/core/loop-quantize.spec.ts`（モックの時計を固定するテストのみの変更）と
+`docs/development/WORK_LOG.md`（PR 自身が記載済み）で、出荷物・DSL の意味論・MCP の表面・
+OrbitStudio の評価経路のいずれにも差分が無い。`nextQuantizedTime()` の実装は無変更で、
+`sites/dev/scheduling/transport.md:388-410` の記述と `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:316-354`
+は現行実装と一致している。
+
+ただし**実機 E2E の穴**は残っている。この PR が固定した LOOP quantize の起動境界は、
+`tests/e2e/dsl-e2e-coverage.spec.ts` の baseline 上で今も未カバーである
+（`loop`/`quantize` が seq・global 両方に、`transport-loop` が構文側に載ったまま）。
+詳細と再現手順は本コミットの PR 本文に記載した。**baseline は編集していない。**
+
 ### test(core): freeze the clock in the loop-quantize mock (#869) (Sep 11, 2026)
 
 `tests/core/loop-quantize.spec.ts` の「snaps to the same boundary already crossed when
