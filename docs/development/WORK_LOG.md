@@ -814,6 +814,81 @@ engine の stderr 分類で **`ERROR:` 行になる**（memory `stderr-is-classi
 `npm test` 2,283 passed / 0 failed・lint 緑・`typecheck:e2e` 緑・引用 934 / 0 failed。
 
 Closes #855
+### ci(release): fail a tag push whose version disagrees with the .vsix (#843) (Sep 11, 2026)
+
+**追記（`/simplify` 後・2026-09-11）**: cleanup 4 体のうち 2 体が実質的な指摘を出した。
+
+🔴 **Altitude — 正本設計が既に同じ照合を規定していた。** `docs/design/656-release-design.md`
+§4.4 が「`git describe --exact-match` があるとき、その tag が `v<拡張の version>` と一致すること」を
+**`make-local-release.sh` のローカル preflight**（= **タグを作る前**）に置く設計として確定させていた。
+私はそれを確認せずに CI 側だけを書いた。
+
+**押された後より前に止まる方が良い** — タグ push は準公開的な行為で、間違えると remote タグの
+削除と re-tag が要る。ただし手でタグを打つ経路が残る限り CI 側も**最後の砦**として意味がある。
+そこで **`checkTagAgainstVersion` / `versionCore` を export したまま**にし、
+設計文書の §4.4 に「preflight はこれを import すること・同じ規則を書き起こさないこと」を明記した。
+
+🔴 **§4.4 は私の bump 計画の誤りも正した。** 私は「拡張 package.json・`ENGINE_VERSION`・
+`DSL_VERSION` の 3 つを揃える」と書いていたが、§4.4 は明確に:
+
+| 場所 | 規則 |
+|---|---|
+| `packages/vscode-extension/package.json` | 🔴 **正本**。`.vsix` / `.app` / タグの版はこれ |
+| `ENGINE_VERSION` | **別軸**（セッションログの meta ヘッダ）。**同期しない** |
+| `DSL_VERSION` | **別軸**（spec 版）。**同期しない** |
+
+`ENGINE_VERSION 2.0.0` と拡張 `2.1.0` の食い違いは**事故ではなく設計**だった。
+
+**Simplification** — `versionCore()` を package.json 側にも適用しているのに、
+**接尾辞付きの package.json を渡すテストが 1 本も無かった**（裏づけの無い汎用性）。
+テストを 1 本足して明示した（7 → 8 件）。
+
+**Reuse / Efficiency** — 指摘なし。Reuse の Minor 1 件（テストの `REPO_ROOT` が
+`bundled-child-binaries.spec.ts` と重複）は**見送った**: 実質 2 行で、
+かつ**この PR の範囲外のファイル**に触ることになるため。
+
+
+
+`release.yml` が**タグ名と `packages/vscode-extension/package.json` の version を
+照合していなかった**。`vsce package` は資産名を package.json から取るので、`v3.0.0` を
+打っても package.json が `2.1.0` のままなら、**Release のタイトルは v3.0.0・唯一の資産は
+`orbitscore-darwin-arm64-2.1.0.vsix`** になる。どこにもエラーは出ず、
+**ダウンロードした人にしか見えない**。
+
+**照合は X.Y.Z のコアだけ**にした。既存タグを実測したところ、この repo の規約は
+「prerelease の接尾辞はタグにだけ付き、package.json は素の X.Y.Z」だった:
+
+| タグ | その時点の package.json |
+|---|---|
+| `v1.1.0-rc1` / `-rc2` / `-rc3` | `1.1.0` |
+| `v1.0.1-rc1` | `1.0.1` |
+| `v2.0.0` | `2.0.0` |
+
+タグ全体を照合すると、この規約に沿った rc タグがすべて落ちる。
+
+🔴 **ロジックをワークフローに埋めず `scripts/check-release-tag-version.mjs` へ出した。**
+埋め込むと (a) タグを打つ前に手元で確かめられない (b) テストが書けない。
+スクリプトなら `node scripts/check-release-tag-version.mjs v3.0.0` で事前に確認できる。
+
+置き場所は **Setup Node.js の直後・`npm ci` の前**。約 25 分のビルドの手前で数秒で落ちる。
+Setup Node.js より後にしたのは、runner イメージ同梱の Node ではなく**ピン留めした Node**で
+走らせるため。
+
+**検証**（変異は `$TMPDIR` へバックアップしてから実施）:
+
+| 変異 | 結果 |
+|---|---|
+| 照合を `if (false)` に無効化 | 2 failed |
+| workflow がスクリプトを呼ばなくなる | 1 failed |
+| 接尾辞の除去をやめる（rc タグが落ちる） | 2 failed |
+| エラー文から資産名を伏せる | 1 failed |
+| restore | 7 passed・両ファイル baseline とバイト一致 |
+
+🔴 **記録**: 最初の変異検証で `git checkout` を restore に使い、**新規ファイル（未追跡）は
+戻らず、tracked なワークフローは自分の未コミット編集ごと消えた**。
+`mutation-backup-must-use-tmpdir` の「コミット済みなら `git checkout --` が確実」は
+**裏を返すと未コミットなら確実に壊す**。未コミットの作業に変異をかけるなら
+`$TMPDIR` へコピーしてから。
 
 ### docs(link-audio): tell the truth about the deleted Link submodule and the unresolved fallback (#502) (Sep 10, 2026)
 
