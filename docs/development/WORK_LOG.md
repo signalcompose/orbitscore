@@ -17,6 +17,40 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: follow the 3.0.0 / DSL 1.2 bump into the docs the bump missed (PR #871 追従) (Sep 11, 2026)
+
+ルーティン docs 追従。追従元は PR [#871](https://github.com/signalcompose/orbitscore/pull/871)
+（マージコミット `56c34c3`・head `d5decc2`）。**実装とテストは触っていない**（docs と dev サイトのみ）。
+
+#871 は正本 3 箇所（`packages/vscode-extension/package.json` = 3.0.0 /
+`packages/engine/src/version.ts` の `DSL_VERSION` = 1.2 / `ENGINE_VERSION` は据え置き）を動かし、
+`CLAUDE.md`・root `README.md`・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`・dev サイトの
+`version.ts` 引用 4 箇所を追従させた。**引用ブロックは更新されたが、その引用を説明している
+散文が 1.1 / 2.1.0 のまま残っていた**ページがある。
+
+| 直した箇所 | 何が食い違っていたか |
+|---|---|
+| `docs/core/INDEX.md:5` | 表紙が `DSL_VERSION 1.1` / 拡張 `2.1.0` を名乗ったまま |
+| `README.md:55` | `Post-2.0 (shipped on main, extension 2.1.0)` |
+| `sites/dev{,/en}/orientation/architecture-overview.md` | 引用ブロックは `1.2` なのに、直下の箇条書きが `DSL spec 1.1` / 拡張 `2.1.0` |
+| `sites/dev{,/en}/decisions/adr-002-dsl-v3-pivot.md` | 同上（Sources 行が `DSL_VERSION = '1.1'`・導入の「ちなみに」段落が v1.1 / product 2.0.0） |
+| `sites/dev{,/en}/editor/vscode-architecture.md` | 冒頭と Sources の `package version 2.1.0` |
+
+いずれも「3 つは別軸で同期しない」（`docs/design/656-release-design.md` §4.4）を本文に書き足して、
+次に読む人が #871 と同じ取り違え（WORK_LOG の「私は一度これを間違えた」）を繰り返さないようにした。
+dev サイトは日英両方。frontmatter の `verified-against` / `verified-at` を更新した 3 章（6 ファイル）は、
+Note 行に「**バージョン節だけ**追従した」と明記して、章全体を再検証したと読まれないようにしてある。
+
+**直さずに報告に回したもの**（仕様の判断であって追従作業ではない）:
+
+- `docs/specs-v2/PITCH_DSL_SPEC_v1.1.md:5` の docmeta が `"version":"1.1"`。`DSL_VERSION` は 1.2 に
+  なったが、**1.2 の spec 文書は存在しない**。spec 正本をどう扱うかは owner 裁定事項
+- `docs/specs-v2/SESSION_LOG_SPEC_v1.md:51` のメタヘッダ例が `"dslVersion":"1.1"`。同じ行の
+  `"engineVersion":"1.1.0"` は #871 と無関係に古く（§5-5 で version 自動同期は #276 deferred と明記）、
+  片方だけ直すと実在しないサンプルになる
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md:3,5` の `Product version: OrbitScore 2.0.0`。#871 で
+  `CLAUDE.md` は「Product: 拡張 3.0.0」に変わったので、「product version」という軸を残すのかが未決
+
 ### docs: PR #870 のドキュメント追従レビュー — 追従不要（Sep 11, 2026）
 
 マージ済み PR #870（`f56e02e7d03306f7d811b2d2edac9814baa38ee5`）に対するドキュメント追従レビュー。
