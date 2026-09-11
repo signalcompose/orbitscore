@@ -2005,8 +2005,10 @@ async function startEngine(
   //
   // 代わりに **VS Code 同梱の Node** を使う。拡張ホストは Electron なので `process.execPath` は
   // そのままでは Node として動かず（実測: `Unable to find helper app` で落ちる）、
-  // `ELECTRON_RUN_AS_NODE=1` が要る。実測（2026-09-12）: Node 24.18.1（要求は `>=22.0.0`）で、
-  // `@julusian/midi` の N-API prebuild も素の node と同じく読める（port count 14 で一致）。
+  // `ELECTRON_RUN_AS_NODE=1` が要る。**実測の出典: #878 / PR #889・2026-09-12・この開発機**
+  // （VS Code 1.104 系）: 同梱 Node は 24.18.1 でルートの `engines.node >=22.0.0` を満たし、
+  // `@julusian/midi` の N-API prebuild も素の node と同じく読めた（port count が一致）。
+  // 🔴 版は VS Code に従属するので、ここの数値は**その時点の観測**であって要件ではない。
   try {
     engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
       cwd: workspaceRoot,

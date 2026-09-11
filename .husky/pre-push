@@ -13,6 +13,12 @@
 #   - license/dep gate   : cargo deny check（cargo-deny 未インストール時は skip = fail-open）
 # cargo test は実行時間が長いため対象外（CI で非ゲートテストを検証・MVP・必要なら follow-on）。
 #
+# 🔴 引用チェック（`npm run docs:check`）も同じ理由でここに置く（#889）。dev サイトの引用は
+# `// <file>:<start>-<end>` で code に接地しているので、**docs を 1 文字も触らない変更でも壊れる** —
+# ソース側で行が 1 行ずれるだけで落ちる。実際 2026-09-12 に、レビュー指摘で `extension.ts` の
+# 1 行を畳んだ後に回し直さず、CI の `code-review` ジョブで 74 件落として初めて気づいた。
+# rust と違い**対象ファイルで絞らない**（どのソースを触っても壊れうるため）。
+#
 # 一時的にスキップしたい場合（非推奨）: git push --no-verify
 
 # 全 0（空含む）の OID 判定。新規ブランチ push / ブランチ削除 push の検出に使う。
@@ -45,6 +51,16 @@ rust_in_push() {
   return 1
 }
 
+# 🔴 引用チェックは **rust ゲートより前**（この後の `rust_in_push || exit 0` で素通りするし、
+# その先は `cd rust` している）。引用は code に接地しているので、**rust を 1 行も触らない push でも
+# 壊れる** — 実際 2026-09-12 に TS を 1 行畳んだだけで 74 件落ちた。CI の code-review ジョブの
+# 「Check doc citations」と同じコマンドを、ここで先回りする。
+# 🔴 `--fix` は付けない。行番号を合わせるだけで**別の関数へ着地しうる**（緑は「行が合った」証明に
+# すぎない）ので、直すのは人が着地先を見てから。
+npm run docs:check ||
+  die "docs:check failed — 'cd sites/dev && node scripts/check-citations.mjs --fix' の後、着地先を目視で照合してから push すること。"
+echo "[pre-push] ✓ doc citations verified."
+
 rust_in_push || exit 0
 
 echo "[pre-push] rust/ changed — running Rust CI checks…"
@@ -69,3 +85,4 @@ else
   echo "[pre-push] cargo-deny not installed — skipping (CI の license/dependency gate で検査される)"
   echo "[pre-push] ✓ fmt + clippy passed (cargo-deny は未実行 — CI が backstop)."
 fi
+

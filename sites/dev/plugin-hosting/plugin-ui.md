@@ -308,7 +308,7 @@ TS → daemon の wire は既存の JSON request/response に 3 つのメソッ�
 `GetPluginState` と同じ `{role, bus?, instance?}` 形です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:632-645
+// packages/engine/src/audio/rust-engine/daemon-client.ts:649-662
   /** OPEN_UI の daemon 応答は view attach 完了後にだけ返る。 */
   async openPluginUi(
     target: PluginStateSaveTarget,

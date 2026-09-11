@@ -155,7 +155,7 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
 🔴 起動するのは **VS Code 同梱の Node**（`process.execPath` を `ELECTRON_RUN_AS_NODE=1` で実行）であって、`PATH` 上の `node` ではありません（#878）。Finder / launchd から起動された VS Code の `PATH` は `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が無く、engine が `spawn node ENOENT` で起動しないためです。拡張ホストは Electron なので `process.execPath` はそのままでは Node として動かず、`ELECTRON_RUN_AS_NODE=1` が要ります。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1998-2016
+// packages/vscode-extension/src/extension.ts:1998-2017
   // Spawn engine process
   // 🔴 `node` を PATH から引かない（#878）。Finder / launchd から起動された VS Code の PATH は
   // `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が
@@ -166,21 +166,22 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
   //
   // 代わりに **VS Code 同梱の Node** を使う。拡張ホストは Electron なので `process.execPath` は
   // そのままでは Node として動かず（実測: `Unable to find helper app` で落ちる）、
-  // `ELECTRON_RUN_AS_NODE=1` が要る。実測（2026-09-12）: Node 24.18.1（要求は `>=22.0.0`）で、
-  // `@julusian/midi` の N-API prebuild も素の node と同じく読める（port count 14 で一致）。
-  const engineRuntimeEnv = { ...env, ELECTRON_RUN_AS_NODE: '1' }
+  // `ELECTRON_RUN_AS_NODE=1` が要る。**実測の出典: #878 / PR #889・2026-09-12・この開発機**
+  // （VS Code 1.104 系）: 同梱 Node は 24.18.1 でルートの `engines.node >=22.0.0` を満たし、
+  // `@julusian/midi` の N-API prebuild も素の node と同じく読めた（port count が一致）。
+  // 🔴 版は VS Code に従属するので、ここの数値は**その時点の観測**であって要件ではない。
   try {
     engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
       cwd: workspaceRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: engineRuntimeEnv,
+      env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
     })
 ```
 
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2756-2757
+// packages/vscode-extension/src/extension.ts:2757-2758
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -362,7 +363,7 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 `DaemonClient.start()` は「spawn → stdout の ready line を読む → WebSocket 接続 → handshake 受信」の順に進みます。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:296-334 (handshake の timeout 設定を省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:313-351 (handshake の timeout 設定を省略)
   private async doStart(options: DaemonClientOptions): Promise<void> {
     // 新しい起動サイクルでは crash 検出を再 arm する（前回 quit の意図的 close を引きずらない）。
     this.intentionalClose = false
@@ -386,7 +387,7 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 daemon は engine から見ると **child process** です。ただし通信は stdin/stdout ではなく WebSocket で、stdout は起動時の ready line (port 番号を含む 1 行 JSON) を受け取るためだけに使います。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:886-896
+// packages/engine/src/audio/rust-engine/daemon-client.ts:903-916
   private async spawnDaemon(
     explicitPath: string | undefined,
     timeoutMs: number,
@@ -396,12 +397,15 @@ daemon は engine から見ると **child process** です。ただし通信は 
     // `--audio-device <name>` は daemon 起動時のみ honor される（#484 D1・ランタイム切替は D2）。
     // 名前が不一致でも daemon は起動を落とさず stderr に警告して host 既定へ縮退する。
     const args = audioDevice ? ['--audio-device', audioDevice] : []
-    const child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(binary, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: daemonEnv(process.env),
+    })
     this.child = child
 ```
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:960-974
+// packages/engine/src/audio/rust-engine/daemon-client.ts:980-994
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる
@@ -426,7 +430,7 @@ daemon 側でこの ready line を書くコード (`main.rs` の `run()`) と、
 daemon バイナリの探索順は `resolveDaemonBinaryPath()` にあり、explicit → env (`ORBIT_AUDIO_DAEMON_PATH`) → monorepo release → monorepo debug → extension bundle の順です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:223-259 (monorepo 候補と bundle の説明コメントを省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:240-276 (monorepo 候補と bundle の説明コメントを省略)
 export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
   const searched: string[] = []
   const candidates: DaemonBinaryResolution[] = []

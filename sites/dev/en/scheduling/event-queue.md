@@ -471,7 +471,7 @@ Let's read them in order.
 `daemon.playAt()` is a thin wrapper in `DaemonClient` that sends a JSON `PlayAt` request over WebSocket.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:416-426
+// packages/engine/src/audio/rust-engine/daemon-client.ts:433-443
   async playAt(
     sampleId: string,
     timeSec: number,

@@ -55,7 +55,7 @@ VS Code 拡張側が「送るコードを決める」、エンジン側が「受
 まず、エンジンがどう起動しているかを確認しておきましょう。`startEngine()` では引数に `'repl'` を指定して Node プロセスを spawn します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1973-2016 (env の組み立てを省略)
+// packages/vscode-extension/src/extension.ts:1973-2017 (env の組み立てを省略)
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -91,14 +91,15 @@ VS Code 拡張側が「送るコードを決める」、エンジン側が「受
   //
   // 代わりに **VS Code 同梱の Node** を使う。拡張ホストは Electron なので `process.execPath` は
   // そのままでは Node として動かず（実測: `Unable to find helper app` で落ちる）、
-  // `ELECTRON_RUN_AS_NODE=1` が要る。実測（2026-09-12）: Node 24.18.1（要求は `>=22.0.0`）で、
-  // `@julusian/midi` の N-API prebuild も素の node と同じく読める（port count 14 で一致）。
-  const engineRuntimeEnv = { ...env, ELECTRON_RUN_AS_NODE: '1' }
+  // `ELECTRON_RUN_AS_NODE=1` が要る。**実測の出典: #878 / PR #889・2026-09-12・この開発機**
+  // （VS Code 1.104 系）: 同梱 Node は 24.18.1 でルートの `engines.node >=22.0.0` を満たし、
+  // `@julusian/midi` の N-API prebuild も素の node と同じく読めた（port count が一致）。
+  // 🔴 版は VS Code に従属するので、ここの数値は**その時点の観測**であって要件ではない。
   try {
     engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
       cwd: workspaceRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: engineRuntimeEnv,
+      env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
     })
 ```
 
@@ -143,7 +144,7 @@ Cmd+Enter で起動するのが `runSelection()` 関数です。まず「何を�
 選択テキストが空でなければシンプルにその内容を使います。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2436-2439
+// packages/vscode-extension/src/extension.ts:2437-2440
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -157,7 +158,7 @@ Cmd+Enter で起動するのが `runSelection()` 関数です。まず「何を�
 subject を判定する関数が `getLineSubject()` です。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2403-2416
+// packages/vscode-extension/src/extension.ts:2404-2417
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -185,7 +186,7 @@ subject が `null` の場合 — つまり `RUN(kick, snare)` のようなスタ
 送るコードが確定したあと、`writeCodeToEngine()` がドキュメントのディレクトリパスを 2 通りの方法で engine に伝えます。`audioPath()` / `audio()` の相対パス解決、そして `import` の基準ディレクトリ (IM.6) に使われます。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2720-2758
+// packages/vscode-extension/src/extension.ts:2721-2759
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -243,7 +244,7 @@ function writeCodeToEngine(rawCode: string, documentDir: string | undefined): bo
 `runSelection()` は `writeCodeToEngine()` の戻り値を見て、送れたときだけ視覚フィードバックを出します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2575-2582
+// packages/vscode-extension/src/extension.ts:2576-2583
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
