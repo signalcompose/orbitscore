@@ -96,16 +96,29 @@ export class TempFileManager {
       const files = fs.readdirSync(this.tempDir)
 
       for (const file of files) {
-        if (file.startsWith('orbitscore_')) {
-          const dirPath = path.join(this.tempDir, file)
+        if (!file.startsWith('orbitscore_')) continue
+        const dirPath = path.join(this.tempDir, file)
+        try {
           const stats = fs.statSync(dirPath)
           if (stats.isDirectory() && stats.mtimeMs < oneHourAgo) {
             fs.rmSync(dirPath, { recursive: true, force: true })
           }
+        } catch (error) {
+          // 🔴 TOCTOU: `readdirSync` above listed this entry, but another engine instance's
+          // own cleanup (the gated E2E suite starts and stops the engine many times against
+          // ONE temp root) can remove it before `statSync` runs. That the directory is
+          // already gone is exactly the outcome this loop wants — it is not a failure.
+          //
+          // Reporting it was not harmless: engine stderr is classified as `ERROR:` by the
+          // log reader, so a benign race inflated the ERROR count and failed whichever
+          // gated test happened to be counting at the time (measured 2026-09-11, PR #840's
+          // merge gate: "expected 9 to be less than or equal to 8").
+          if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw error
         }
       }
     } catch (error) {
-      // Ignore errors during cleanup of old directories
+      // Anything else (the temp root itself unreadable, a permission change) is still worth
+      // one line — but it must stay a warning, since cleanup is best-effort by design.
       console.warn(`Failed to cleanup old directories: ${error}`)
     }
   }

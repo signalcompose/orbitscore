@@ -16,6 +16,9 @@ import { resolveDaemonBinaryPath } from '../../../packages/engine/src/audio/rust
 export interface ListedAudioDevice {
   readonly name: string
   readonly isDefault: boolean
+  // #611 E2E-4/E2E-5: whether this device can even carry >= 4 output channels (the daemon
+  // already reports it — `main.rs`/`session.rs` `--list-audio-devices` JSON).
+  readonly maxOutputChannels: number
 }
 
 /** daemon が報告する出力デバイス。空配列もありうる（呼び出し側が判定する）。 */

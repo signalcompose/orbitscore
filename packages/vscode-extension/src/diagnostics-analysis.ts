@@ -207,12 +207,45 @@ export function analyzeAudioPathOrdering(text: string): DiagnosticIssue[] {
  * @param text ドキュメント全体のテキスト
  * @returns LinkAudio mode が `.output()` より前に宣言されていない位置
  */
+/**
+ * #611 §2.1/§3.3: the names `output("…")` resolves BEFORE it ever reaches a LinkAudio channel.
+ * A string that lands on one of these is a working mixer destination, so warning about
+ * LinkAudio on it tells the user their working code does not work.
+ *
+ * 🔴 Resolution order is normative and LinkAudio is LAST:
+ *   resolved OutputDest -> `"master"` -> declared sum/aux name -> `"L,R"` pair -> LinkAudio.
+ * Keep this in step with `Sequence.resolveLineDest()` / `resolveNamedOutputDest()`; a name that
+ * resolves earlier there but is missing here re-creates the exact defect this guard fixes.
+ */
+const PHYSICAL_PAIR_PATTERN = /^\d+\s*,\s*\d+$/
+/** `global.sum("drums")` / `global.aux("verb")` — the string form. */
+const MIXER_BUS_STRING_DECL = /\bglobal\.(?:sum|aux)\s*\(\s*["']([^"']+)["']/g
+/** `var verb = mix.aux` — the variable NAME is the bus name (#459). */
+const MIXER_BUS_VAR_DECL = /\bvar\s+([A-Za-z_$][\w$]*)\s*=\s*mix\.(?:sum|aux)\b/g
+
+/** Every mixer-bus name declared anywhere in the document, in either declaration form. */
+function declaredMixerBusNames(lines: readonly string[]): ReadonlySet<string> {
+  const names = new Set<string>()
+  for (const raw of lines) {
+    if (!raw || raw.trim().startsWith('//')) continue
+    const line = stripLineComment(raw)
+    for (const m of line.matchAll(MIXER_BUS_STRING_DECL)) names.add(m[1])
+    for (const m of line.matchAll(MIXER_BUS_VAR_DECL)) names.add(m[1])
+  }
+  return names
+}
+
 export function analyzeOutputWithoutLinkAudio(text: string): DiagnosticIssue[] {
   const issues: DiagnosticIssue[] = []
   const lines = text.split('\n')
 
   // -1 = not found anywhere. Otherwise the 0-indexed line of the first call.
   const firstLinkAudioLine = findFirstMatchingLine(lines, LINK_AUDIO_PATTERN)
+
+  // Collected over the WHOLE document, not just the lines above the call: a live-coding file is
+  // re-evaluated as a whole and `global.sum(...)` is routinely written below the sequences that
+  // target it. Flagging a name that the same file declares two lines later would be noise.
+  const mixerBuses = declaredMixerBusNames(lines)
 
   const outputCallPattern = /\.output\s*\(\s*["']([^"']*)["']\s*\)/g
   for (let i = 0; i < lines.length; i++) {
@@ -222,6 +255,11 @@ export function analyzeOutputWithoutLinkAudio(text: string): DiagnosticIssue[] {
     if (firstLinkAudioLine !== -1 && i >= firstLinkAudioLine) continue
     const line = stripLineComment(raw)
     for (const m of line.matchAll(outputCallPattern)) {
+      const target = m[1]
+      // Resolves before LinkAudio -> it works, with or without a linkAudio() declaration.
+      if (target === 'master' || mixerBuses.has(target) || PHYSICAL_PAIR_PATTERN.test(target)) {
+        continue
+      }
       const startCol = m.index ?? 0
       const message =
         firstLinkAudioLine === -1

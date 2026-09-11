@@ -1,8 +1,8 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: 58b8c1c
-verified-at: "2026-09-10"
+verified-against: e4d4199
+verified-at: "2026-09-11"
 status: draft
 ---
 
@@ -356,7 +356,7 @@ stay silent (the registration path is treated as the single authority). The spec
 The gated E2E suite records the opposite measurement.
 
 ```ts
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:5252-5258
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5388-5394
   // **A comment is not evidence of implementation behavior** — main's real run found
   // capture RMS = 0 for `d645Live` and NO `LINK_AUDIO_UNAVAILABLE`/gap-warning marker in
   // get_log at all, meaning the assumed fallback does not actually happen (or does not
@@ -479,7 +479,7 @@ the callback body was a single function, `render_block`; as of 2026-09-01 it has
 `OutputStream::render_state`).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:833-839
+// rust/crates/orbit-audio-native/src/output.rs:885-891
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
@@ -490,7 +490,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1709-1746
+// rust/crates/orbit-audio-native/src/output.rs:1761-1798
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -546,7 +546,7 @@ device"** — with the placement stage added, anything other than 2ch always pay
 placement.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1794-1884
+// rust/crates/orbit-audio-native/src/output.rs:1846-1932
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -601,16 +601,12 @@ fn render_block_with_sources(
         if let Some(p) = master.post.as_mut() {
             p.process(&mut master.buffer[..bs]);
         }
-        let g = master.advance_gain(frames);
-        // g == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
+        let ramp = master.advance_gain(frames);
+        // gain == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
         // 「未使用 gain 経路に per-sample 乗算コストを払わない」ための最適化であり、O0 golden の
         // bit 一致は乗算そのものではなく `gain_current` が初期値 1.0 のまま変化しないことに由来する
         // （`SetGlobalGain` を一度も呼ばない譜面では target=current=1.0 が恒常的に成立する）。
-        if g != 1.0 {
-            for s in master.buffer[..bs].iter_mut() {
-                *s *= g;
-            }
-        }
+        apply_ramped_gain(&mut master.buffer[..bs], ENGINE_CHANNELS, ramp);
         // デバイス配置（設計 §5.3・row 6）: master.buffer（2ch）を hw（デバイス幅）の ch{0,1} へ置く。
         // 2ch デバイスなら memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。3ch 以上は ch2 以降が
         // 無音で残る — この分岐の Device 出口は master 固定 program の 1 本のみで、複数出口は
@@ -650,7 +646,7 @@ a second buffer at device width there would be nowhere for it to land — that i
 buffer exists.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2197-2201
+// rust/crates/orbit-audio-native/src/output.rs:2312-2316
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -691,7 +687,7 @@ The device width appears in exactly one place: `place_master_into_device`, which
 `master.buffer` onto the device-width `hw`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1958-1982
+// rust/crates/orbit-audio-native/src/output.rs:2002-2026
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -727,17 +723,19 @@ storing twice per block in the RT callback.
 
 The other change is where the master gain is applied. `MasterLine` groups the master rack (the
 old `post`) and the gain into one struct and fixes the order as **rack → gain**. The gain moves
-toward the target the control side (`SetGlobalGain`) wrote atomically, one block at a time.
+toward the target the control side (`SetGlobalGain`) wrote atomically, one block at a time. Since
+#859 (2026-09-11) the return value is not a scalar but a `LineRamp`, which carries **which value
+applies to which frame inside that block**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:819-829
-    /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
+// rust/crates/orbit-audio-native/src/output.rs:871-881
+    /// 1 block 分ランプを進め、その block に適用する ramp を返す（設計 §5.3 `ramp()`）。
     /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
     /// 算術のみ（alloc/lock/syscall なし）。
     #[inline]
-    fn advance_gain(&mut self, frames: usize) -> f32 {
+    fn advance_gain(&mut self, frames: usize) -> LineRamp {
         let target = f32::from_bits(self.gain_target.load(Ordering::Relaxed));
-        advance_ramped_gain(&mut self.gain_current, target, frames, self.ramp_frames)
+        advance_line_ramp(&mut self.gain_current, target, frames, self.ramp_frames)
     }
 }
 
@@ -745,9 +743,18 @@ toward the target the control side (`SetGlobalGain`) wrote atomically, one block
 ```
 
 `ramp_frames` is the frame count for 5 ms, computed **at construction time** by
-`MasterLine::new` from the sample rate (the RT path only uses it as a divisor). When a block is
-longer than the ramp, `frac` saturates at 1.0 and the target is reached in one step; when it is
-shorter, the value approaches the target over several blocks.
+`MasterLine::new` from the sample rate (the RT path only uses it as a divisor). For the **value at
+the block endpoint**: when a block is longer than the ramp, `frac` saturates at 1.0 and the target
+is reached in one step; when it is shorter, the value approaches the target over several blocks.
+
+🔴 **Reading only the block endpoint misleads you** (fixed in #859, 2026-09-11). For a long time
+this formula was used as *one scalar for the whole block*, and with `ramp_frames` at 240
+(5 ms @48k) against a real-machine block length of **512**, `frac` always saturated at 1.0 — so
+**the ramp completed in a single block**, a step at the block boundary. Now `LineRamp::at(frame)`
+returns `start + step × frame` with `step` equal to `(target − start) / ramp_frames`, so **the ramp
+advances over `ramp_frames` samples rather than over the block length**. In a 512-frame block the
+first 240 frames interpolate and the rest hold `end`. Because **`at(frames)` is bit-identical to
+the old formula's value**, existing goldens that look at the block endpoint do not move.
 
 The point worth holding onto is that **production now has exactly one multiplication path**.
 `orbit_audio_core::Engine::set_global_gain` (the core scheduler ramp) is no longer called from
@@ -837,7 +844,7 @@ though, the publication target is a dedicated `LineSlot` owned by `MasterLine`. 
 is that **whether a publication has happened is held in a separate one-way flag**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:748-758
+// rust/crates/orbit-audio-native/src/output.rs:800-810
     /// control が master program を **一度でも publish したか**（不可逆）。`line` の中身からは
     /// 導出できない（RT で既定値と深い比較をすることになり、かつ「既定と同じ program を明示的に
     /// publish した」場合を区別できない）。
@@ -856,7 +863,7 @@ device placement). Only once it is `true` does `execute_master_line` get called 
 published op sequence in order.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1887-1904
+// rust/crates/orbit-audio-native/src/output.rs:1935-1952
 fn execute_master_line(
     master: &mut MasterLine,
     frames: usize,
@@ -897,7 +904,7 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1986-2027
+// rust/crates/orbit-audio-native/src/output.rs:2030-2071
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -948,7 +955,7 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:3091-3108
+// rust/crates/orbit-audio-native/src/output.rs:3224-3241
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(

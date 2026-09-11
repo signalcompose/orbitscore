@@ -1,6 +1,21 @@
 import type { AudioEngine } from '../../audio/types'
 import type { RackRecipe } from '../../signal-chain/rack'
 import { createStatePathFallback } from '../project-state-store'
+import {
+  assertOutputOptions,
+  AudioLine,
+  resolveNamedOutputDest,
+  resolveSendLevel,
+  toWire,
+  type LineElement,
+  type OutputDest,
+  type OutputOptions as MixerOutputOptions,
+  type SendOptions as MixerSendOptions,
+} from '../sequence/audio-line'
+import { clampGainDb } from '../sequence/parameters/gain-manager'
+import { clampPan } from '../sequence/parameters/pan-manager'
+
+export type { MixerOutputOptions, MixerSendOptions }
 
 import { AudioManager } from './audio-manager'
 import { LinkAudioManager } from './link-audio-manager'
@@ -79,8 +94,19 @@ export interface MixerBusHandle {
    * Open/close every catalog insert matching `name`. A bus has no no-argument instrument UI.
    */
   ui(name?: string, open?: boolean): Promise<MixerBusHandle>
-  routeOutput(output: string): Promise<MixerBusHandle>
-  routeSend(bus: string, amount: number): Promise<MixerBusHandle>
+  /** #611 §2.1/§3.6: same resolution/semantics as `Sequence.output()` (minus the LinkAudio
+   * fallback and the numeric render-bus branch, which are Sequence-only concepts). */
+  output(dest: string | OutputDest, opts?: MixerOutputOptions): Promise<MixerBusHandle>
+  /** #611 §2.3/§3.6: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })`. */
+  send(
+    aux: string | OutputDest,
+    dbOrOptions?: number | MixerSendOptions,
+    opts?: MixerSendOptions,
+  ): Promise<MixerBusHandle>
+  /** #611 §5.4: a fixed gain on this bus's own line (`BUS_DSL_METHODS`). */
+  gain(db: number): Promise<MixerBusHandle>
+  /** #611 §5.4: a fixed pan on this bus's own line (`BUS_DSL_METHODS`). */
+  pan(pan: number): Promise<MixerBusHandle>
 }
 
 /**
@@ -113,7 +139,7 @@ interface KindState {
  */
 export class MixerManager {
   private readonly kinds: Record<MixerKind, KindState>
-  private readonly routings = new Map<string, { output?: string; sends: Map<string, number> }>()
+  private readonly lines = new Map<string, AudioLine>()
   private hasRuntimeDeclaration = false
 
   /**
@@ -307,41 +333,74 @@ export class MixerManager {
         await this.pluginUiHandler(formatReceiverId(kind, name), catalogName, open)
         return this.makeHandle(kind, name, bus)
       },
-      routeOutput: async (output: string) => {
-        await this.route(bus, output, undefined)
+      output: async (dest: string | OutputDest, opts: MixerOutputOptions = {}) => {
+        assertOutputOptions(opts, `Mixer bus '${formatReceiverId(kind, name)}': output`)
+        await this.applyLineElement(bus, {
+          kind: 'output',
+          dest: this.resolveDest(dest),
+          thru: opts.thru ?? false,
+          db: opts.db ?? 0,
+          sugar: 'output',
+        })
         return this.makeHandle(kind, name, bus)
       },
-      routeSend: async (target: string, amount: number) => {
-        await this.route(bus, undefined, { bus: target, amount })
+      send: async (
+        aux: string | OutputDest,
+        dbOrOptions?: number | MixerSendOptions,
+        opts: MixerSendOptions = {},
+      ) => {
+        const level = resolveSendLevel(
+          dbOrOptions,
+          opts,
+          `Mixer bus '${formatReceiverId(kind, name)}': send`,
+        )
+        await this.applyLineElement(bus, {
+          kind: 'output',
+          dest: this.resolveDest(aux),
+          thru: true,
+          db: level.enabled === false ? -Infinity : level.db,
+          sugar: 'send',
+        })
+        return this.makeHandle(kind, name, bus)
+      },
+      gain: async (db: number) => {
+        await this.applyLineElement(bus, { kind: 'gain', db: clampGainDb(db) })
+        return this.makeHandle(kind, name, bus)
+      },
+      pan: async (pan: number) => {
+        await this.applyLineElement(bus, { kind: 'pan', pan: clampPan(pan) })
         return this.makeHandle(kind, name, bus)
       },
     }
   }
 
-  private async route(
-    source: string,
-    output: string | undefined,
-    send: { bus: string; amount: number } | undefined,
-  ): Promise<void> {
-    if (!this.audioEngine.setBusRouting) {
+  /** §2.1/§3.3 resolution (minus the LinkAudio/render-bus branches, which do not apply to a
+   * bus-to-bus route): an already-resolved `OutputDest`, the `"master"` reserved word, a
+   * declared sum/aux bus name, or an `"L,R"` physical-channel-pair shorthand. */
+  private resolveDest(value: string | OutputDest): OutputDest {
+    if (typeof value === 'object') return value
+    const resolved = resolveNamedOutputDest(value, (name) => this.resolveNode(name))
+    if (resolved) return resolved
+    throw new Error(
+      `Mixer bus routing target "${value}" is not "master", a declared sum/aux bus, or an ` +
+        `"L,R" channel-pair shorthand.`,
+    )
+  }
+
+  /**
+   * Write one line element for `bus` and push the updated program (#611 §5.3-style: the
+   * declared line is TS-side truth — a rejected push is NOT rolled back here, matching
+   * `Sequence`'s self-heal discipline (the next routing call resends the full program).
+   * Batch semantics live in `AudioLine.upsertAutoBatch()`.
+   */
+  private async applyLineElement(bus: string, element: LineElement): Promise<void> {
+    if (!this.audioEngine.setBusLine) {
       throw new Error('Mixer bus routing requires the Rust engine backend.')
     }
-    const current = this.routings.get(source)
-    // Build the next state without touching the stored one, and commit only after
-    // the daemon accepts it. Merging happens on every call, so a rejected push that
-    // had already been recorded would leave every later call building on a routing
-    // the daemon never applied.
-    const next = {
-      output: output !== undefined ? output : current?.output,
-      sends: new Map(current?.sends),
-    }
-    if (send !== undefined) next.sends.set(send.bus, send.amount)
-    await this.audioEngine.setBusRouting(
-      source,
-      next.output,
-      [...next.sends].map(([bus, gain]) => ({ bus, gain })),
-    )
-    this.routings.set(source, next)
+    const line = this.lines.get(bus) ?? new AudioLine()
+    line.upsertAutoBatch(element)
+    this.lines.set(bus, line)
+    await this.audioEngine.setBusLine(bus, toWire(line.program()))
   }
 
   private async effectFor(

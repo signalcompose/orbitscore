@@ -1,0 +1,25 @@
+// #611 E2E-2: kick.output(verb, thru: true, db: -12).output(master) — explicit thru/db.
+//
+// Bus name is unique within the shared gated session (see output_line_sum.orbs's note).
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.start()
+
+var mix = init global.mixer
+var verb = mix.aux
+
+var dry = init global.seq
+dry.beat(4 by 4).length(1)
+dry.audio("kick.wav").chop(1)
+dry.play(1, 1, 1, 1)
+
+var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio("kick.wav").chop(1)
+kick.output(verb, thru: true, db: -12).output(master)
+kick.play(1, 1, 1, 1)
+
+LOOP(dry)

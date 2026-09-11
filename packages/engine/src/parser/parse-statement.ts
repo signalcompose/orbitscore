@@ -465,17 +465,22 @@ export class StatementParser {
       kind,
     }
     if (kind === 'output') {
+      // #611 §2.2: `mix.output(n)` (one channel = mono, L+R merged at the daemon — Q-611-5)
+      // alongside the existing `mix.output(l, r)` physical-channel pair.
       this.pos = ParserUtils.expect(this.tokens, this.pos, 'LPAREN').newPos
       const first = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
       this.pos = first.newPos
-      this.pos = ParserUtils.expect(this.tokens, this.pos, 'COMMA').newPos
-      const second = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
-      this.pos = second.newPos
-      this.pos = ParserUtils.expect(this.tokens, this.pos, 'RPAREN').newPos
-      statement.channels = [
-        ParserUtils.parseNumber(first.token),
-        ParserUtils.parseNumber(second.token),
-      ]
+      const firstChannel = ParserUtils.parseNumber(first.token)
+      if (ParserUtils.current(this.tokens, this.pos).type === 'COMMA') {
+        this.pos = ParserUtils.advance(this.tokens, this.pos).newPos
+        const second = ParserUtils.expect(this.tokens, this.pos, 'NUMBER')
+        this.pos = second.newPos
+        this.pos = ParserUtils.expect(this.tokens, this.pos, 'RPAREN').newPos
+        statement.channels = [firstChannel, ParserUtils.parseNumber(second.token)]
+      } else {
+        this.pos = ParserUtils.expect(this.tokens, this.pos, 'RPAREN').newPos
+        statement.channels = [firstChannel]
+      }
     } else if (ParserUtils.current(this.tokens, this.pos).type === 'LPAREN') {
       throw new Error(
         `${kind} takes no arguments in a mixer declaration (SC.2.1): ` +
