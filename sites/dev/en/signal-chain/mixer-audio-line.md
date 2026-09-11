@@ -412,7 +412,7 @@ place is the second half of `render_engine_with_insert_buses_and_source_outputs`
 `output.rs`, the so-called **post-loop**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2392-2418
+// rust/crates/orbit-audio-native/src/output.rs:2531-2557
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -437,9 +437,9 @@ place is the second half of `render_engine_with_insert_buses_and_source_outputs`
                     }
                 }
                 LineOp::Gain(target) => {
-                    let gain = line_gain(
-                        program,
-                        op_index,
+                    let frames = bs / output_channels;
+                    let ramp =
+                        line_ramp(program, op_index, target, frames, buses[i].line.ramp_frames);
 ```
 
 Read it like this.
@@ -512,32 +512,32 @@ before they reach RT.
 The execution of an output looks like this.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2435-2459
+// rust/crates/orbit-audio-native/src/output.rs:2566-2590
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
                         &mut first_output,
                         legacy_targets[i],
                         output.dest,
                     );
-                    let gain = line_gain(
+                    let frames = bs / output_channels;
+                    let ramp = line_ramp(
                         program,
                         op_index,
                         output.gain,
-                        bs / output_channels,
+                        frames,
                         buses[i].line.ramp_frames,
                     );
                     match dest {
                         OutputDest::Master => {
-                            add_scaled(hw, &buses[i].buffer[..bs], gain);
+                            add_ramped_scaled(hw, &buses[i].buffer[..bs], output_channels, ramp);
                         }
                         OutputDest::Bus(target) => {
                             let (left, right) = buses.split_at_mut(i + 1);
-                            add_scaled(
+                            add_ramped_scaled(
                                 &mut right[target - i - 1].buffer[..bs],
                                 &left[i].buffer[..bs],
-                                gain,
-                            );
-                        }
+                                output_channels,
+                                ramp,
 ```
 
 `OutputDest` has five variants, but only three of them — `Master` / `Bus` / `Device` — are executed
@@ -575,27 +575,27 @@ both master-line execution (`execute_master_line`) and the post-loop with code t
 L/R.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2163-2182
+// rust/crates/orbit-audio-native/src/output.rs:2246-2265
 #[inline]
-fn apply_line_pan(buf: &mut [f32], frames: usize, pan: f32) {
-    // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
-    //
-    // 🔴 これは丸め誤差の除去でもある。f32 では `sqrt(2) * cos(pi/4) = 0.99999994` で
-    // **1.0 ちょうどにならない**ため、省かないと `pan(0)` を書いた譜面が書かない譜面と
-    // 6e-8 だけずれる。設計 §4.1 は「center で `(1, 1)`（unity）」と書いているので、
-    // 省く方が**文書どおり**になる。`LineOp::Gain` が `gain != 1.0` で同じことをしている。
-    if pan == 0.0 {
+fn apply_line_pan(buf: &mut [f32], frames: usize, ramp: LineRamp) {
+    if ramp.is_settled() {
+        if ramp.end == 0.0 {
+            return;
+        }
+        let (left, right) = line_pan_coefficients(ramp.end);
+        for frame in 0..frames {
+            let base = frame * ENGINE_CHANNELS;
+            buf[base] *= left;
+            buf[base + 1] *= right;
+        }
         return;
     }
-    let (left, right) = equal_power_pan(pan);
-    let left = left * std::f32::consts::SQRT_2;
-    let right = right * std::f32::consts::SQRT_2;
-    for frame in 0..frames {
-        let base = frame * ENGINE_CHANNELS;
-        buf[base] *= left;
-        buf[base + 1] *= right;
+
+    if ramp.hold_after == 0 {
+        return;
     }
-}
+    let (start_left, start_right) = line_pan_coefficients(ramp.start);
+    let (end_left, end_right) = line_pan_coefficients(ramp.end);
 ```
 
 The point is that this uses **`equal_power_pan` scaled by `√2`**, not the raw function. The source
@@ -608,8 +608,20 @@ amplitude. So **a pan golden for a line with no rack moves only by rounding erro
 configuration that changes is "rack, then pan" (the point of application moves behind the rack).
 
 The pan position itself is held in `current_gain` (next section) as a value in −1..1 and ramps
-toward its target with the same `advance_ramped_gain` used for gain. The trig is computed once per
-block, so a moving pan position produces no click.
+toward its target with the same `advance_line_ramp` used for gain. The trig (`equal_power_pan`) is
+computed **twice per block** — the coefficients for the start and end positions — and the **L/R
+coefficients are interpolated linearly** between them.
+
+🔴 **This section used to claim "a moving pan position produces no click". That was false**
+(corrected in #859, 2026-09-11). The ramp was applied as **one scalar per block**, and with
+`ramp_frames` at 240 (5 ms) against a real-machine block length of **512**,
+`min(frames / ramp_frames, 1)` was always 1.0 — so **the ramp completed in a single block**, a step
+at the block boundary. Measured: a `gain(-40)` → `gain(0)` switch produced a first difference
+**17x** the signal's own peak slew.
+
+The values within a block are now interpolated per sample, so the description holds. **The
+block-endpoint value is bit-identical before and after**, which is why the existing real-machine
+goldens do not move.
 
 #### Two devices for compatibility
 

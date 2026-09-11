@@ -546,7 +546,7 @@ device"** — with the placement stage added, anything other than 2ch always pay
 placement.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1794-1884
+// rust/crates/orbit-audio-native/src/output.rs:1846-1936
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -601,16 +601,12 @@ fn render_block_with_sources(
         if let Some(p) = master.post.as_mut() {
             p.process(&mut master.buffer[..bs]);
         }
-        let g = master.advance_gain(frames);
-        // g == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
+        let ramp = master.advance_gain(frames);
+        // gain == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
         // 「未使用 gain 経路に per-sample 乗算コストを払わない」ための最適化であり、O0 golden の
         // bit 一致は乗算そのものではなく `gain_current` が初期値 1.0 のまま変化しないことに由来する
         // （`SetGlobalGain` を一度も呼ばない譜面では target=current=1.0 が恒常的に成立する）。
-        if g != 1.0 {
-            for s in master.buffer[..bs].iter_mut() {
-                *s *= g;
-            }
-        }
+        apply_ramped_gain(&mut master.buffer[..bs], ENGINE_CHANNELS, ramp);
         // デバイス配置（設計 §5.3・row 6）: master.buffer（2ch）を hw（デバイス幅）の ch{0,1} へ置く。
         // 2ch デバイスなら memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。3ch 以上は ch2 以降が
         // 無音で残る — この分岐の Device 出口は master 固定 program の 1 本のみで、複数出口は
@@ -638,6 +634,10 @@ fn render_block_with_sources(
         stats.record(t0.elapsed().as_nanos() as u64);
     }
 }
+
+#[inline]
+fn execute_master_line(
+    master: &mut MasterLine,
 ```
 
 ### The direct device line — an output that skips the master
@@ -730,14 +730,14 @@ old `post`) and the gain into one struct and fixes the order as **rack → gain*
 toward the target the control side (`SetGlobalGain`) wrote atomically, one block at a time.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:819-829
-    /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
+// rust/crates/orbit-audio-native/src/output.rs:871-881
+    /// 1 block 分ランプを進め、その block に適用する ramp を返す（設計 §5.3 `ramp()`）。
     /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
     /// 算術のみ（alloc/lock/syscall なし）。
     #[inline]
-    fn advance_gain(&mut self, frames: usize) -> f32 {
+    fn advance_gain(&mut self, frames: usize) -> LineRamp {
         let target = f32::from_bits(self.gain_target.load(Ordering::Relaxed));
-        advance_ramped_gain(&mut self.gain_current, target, frames, self.ramp_frames)
+        advance_line_ramp(&mut self.gain_current, target, frames, self.ramp_frames)
     }
 }
 
