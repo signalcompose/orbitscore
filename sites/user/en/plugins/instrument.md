@@ -12,6 +12,7 @@ So far, you have covered audio file playback with `seq.audio()` and sending note
 ```text
 var piano = init global.seq
 piano.instrument("Kontakt 8")     // catalog name
+piano.output()
 piano.octave(4).vel(96).gate(0.8)
 piano.play(1, 3, 5, 0)            // values are degrees, same notation as MIDI output
 ```

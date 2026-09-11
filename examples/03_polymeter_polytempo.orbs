@@ -12,18 +12,21 @@ global.beat(4 by 4)
 var three_four = init global.seq
 three_four.beat(3 by 4).length(1)
 three_four.audio("../test-assets/audio/hihat_closed.wav").chop(3)
+three_four.output()
 three_four.play(1, 0, 1)  // Accent pattern
 
 // 4/4 pattern
 var four_four = init global.seq
 four_four.beat(4 by 4).length(1)
 four_four.audio("../test-assets/audio/kick.wav").chop(4)
+four_four.output()
 four_four.play(1, 0, 0, 1)  // Standard kick
 
 // 5/4 pattern
 var five_four = init global.seq
 five_four.beat(5 by 4).length(1)
 five_four.audio("../test-assets/audio/snare.wav").chop(5)
+five_four.output()
 five_four.play(0, 0, 1, 0, 1)  // Syncopated snare
 
 // === Example 2: Polytempo (Different Tempos) ===
@@ -33,6 +36,7 @@ var slow_bass = init global.seq
 slow_bass.tempo(60)  // Independent tempo
 slow_bass.beat(4 by 4).length(2)
 slow_bass.audio("../test-assets/audio/bass_c1.wav").chop(8)
+slow_bass.output()
 slow_bass.play(1, 0, 0, 0, 0, 0, 1, 0,
                0, 0, 0, 0, 1, 0, 0, 0)
 
@@ -41,6 +45,7 @@ var fast_hats = init global.seq
 fast_hats.tempo(240)  // Independent tempo
 fast_hats.beat(4 by 4).length(1)
 fast_hats.audio("../test-assets/audio/hihat_open.wav").chop(8)
+fast_hats.output()
 fast_hats.play(1, 0, 1, 0, 1, 0, 1, 0)
 
 // Start all patterns

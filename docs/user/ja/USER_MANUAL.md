@@ -118,6 +118,7 @@ global.audioPath("/path/to/your/audio/files")
 var kick = init global.seq
 kick.length(1)
 kick.audio("kick.wav").chop(1)
+kick.output()
 kick.play(1, 0, 0, 0)
 
 // 実行
@@ -217,6 +218,7 @@ seq.length(4)   // 4小節ループ
 // 例: length(2)で音程が1オクターブ下がる
 var arp = init global.seq
 arp.audio("arpeggio.wav").chop(4)
+arp.output()
 arp.play(1, 2, 3, 4)
 
 arp.length(1)   // 通常の音程
@@ -272,6 +274,7 @@ seq.play(1, 1, 1, 1)     // 全拍で再生
 ```orbitscore
 var arp = init global.seq
 arp.audio("arpeggio.wav").chop(4)
+arp.output()
 arp.play(1, 2, 3, 4)  // スライス1→2→3→4の順で再生
 ```
 
@@ -316,6 +319,7 @@ global.audioPath("/path/to/audio")
 
 var arp = init global.seq
 arp.audio("arpeggio_c.wav").chop(4)
+arp.output()
 
 // 基本: スライス1→2→3→4
 arp.play(1, 2, 3, 4)
@@ -480,6 +484,7 @@ var kick = init global.seq
 kick.audio("kick.wav")     // 設定のみ
 kick.chop(4)               // 設定のみ
 kick.play(1, 0, 1, 0)      // 設定のみ
+kick.output()               // master への出口を明示
 kick.gain(-3)              // 音量は即時反映（リアルタイムパラメータ）
 
 global.start()
@@ -582,6 +587,7 @@ var snare = init global.seq
   .play(0, 0, 1, 0)
   .gain(-3)
   .pan(20)
+  .output()
 ```
 
 ---
@@ -625,6 +631,7 @@ var synth = init global.seq
 synth.instrument("Surge XT")     // カタログ名（推奨）
 // または明示パス:
 // synth.instrument("~/plugins/Surge XT.vst3")
+synth.output()
 synth.octave(4).vel(100)
 synth.play(1, 3, 5, 0)  // 値は度数（Pitch DSL と同じ）
 ```

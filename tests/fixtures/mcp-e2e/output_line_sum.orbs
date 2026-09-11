@@ -10,6 +10,7 @@ global.tempo(120)
 global.beat(4 by 4)
 global.audioPath("../../../test-assets/audio")
 global.sum("o0sum611")
+sum("o0sum611").output()
 global.start()
 
 var kick = init global.seq

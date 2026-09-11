@@ -17,6 +17,80 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### feat(dsl): make output() default to master and migrate every score (#883 bundle C) (Sep 11, 2026)
+
+**Date**: 2026-09-11
+**Status**: 実装完了・main 検証中（実機 gated 未実施）
+**担当**: 実装 = Codex（`gpt-5.6-sol` / effort high・2 ラウンド）/ 検証 = main
+
+**束 C は「振る舞いを変えない」束。** 暗黙 master の廃止は束 S。
+
+#### 中身
+
+| 対象 | 変更 |
+|---|---|
+| `sequence.ts` / `mixer-manager.ts` | `output()` の宛先を省略可に（既定 `{kind:'master'}`）。**暗黙ではなく既定引数**なので要素は譜面に現れる |
+| 同 | 🔴 **実現の省略**（設計 §2.3）: ラインが「素の master 出口」だけの間は**バスを確保しない**。`.output()` 必須化がプール 8 本を食い潰すのを防ぐ（出荷 example の 4 本が 8 を超える） |
+| 拡張の補完 | `.output(` の引数位置で `master` / 宣言済み sum・aux / 物理アウトノードを候補に |
+| fixture 11 本 + 新規 2 本 | §7.1 の表どおり `.output()` を明示。**バス自身の出口も** |
+| examples 12 本 / `docs/user` / `sites/user` | 同上 |
+
+#### 🔴 main の審査で 1 件差し戻した — 完了条件 D3（E2E X2）の欠落
+
+Codex の 1 回目は inline 譜面の移行までで、**X2 を作っていなかった**。
+
+進捗ログが `kick.master` のアサーション変更を「**stale な structural assertion**」と説明していたが、
+実際には**振る舞いの変更**だった — 裸形 `.master` は今まで `seq-bus-0` を確保していたのに、
+実現の省略で確保しなくなった（テストが実装に合わせて書き換えられた形）。
+
+変更自体は設計どおりだが、**検証が無かった**:
+
+- 設計 §2.3 はこれを**確度「中」**とし、反証条件を「X2 で RMS が `noBus` golden から ±0.12 を超えて動く」としている
+- 既存 fixture は `output("master")` も裸形 `.master` も **1 つも使っていない** → 「既存 golden が動かない」が**この変更を素通りする**
+- ラチェット（`dsl-e2e-coverage`）も効かない（`output` は既に covered なので新語彙として検出されない）
+
+→ 譜面 2 本（`output_default_master_omitted.orbs` / `_explicit.orbs`）と X2 を追加させた。
+
+#### 実現の省略が安全である構造的理由（main の確認）
+
+省略が効くのは「ライン全体が素の master 出口」の場合のみ。そのとき:
+
+| ケース | 変更前 | 変更後 |
+|---|---|---|
+| 出口なし → `dry.output()` | 暗黙 master → **直接経路** | 省略 → **直接経路** |
+| `kick.gain(-6).output(drms)` | バス経路 | **バス経路**（述語が true） |
+
+**経路が変わるケースが実質無い。** 唯一変わる明示 `output("master")` は使用譜面 0 本（grep 実測）。
+
+#### 検証（main・sandbox 外）
+
+🔴 **Codex は緑を装わなかった** —「`npm test` did not exit successfully, I am not claiming all three
+acceptance checks passed」と報告。sandbox 内の失敗 4 ファイルはすべて loopback を立てるもので
+`listen EPERM`。**sandbox 外で回し直したら消えた**:
+
+```
+Test Files  160 passed | 4 skipped (164)
+     Tests  2352 passed | 68 skipped (2420)
+  Duration  23.54s        （sandbox 内は 400s — MACOS_DEV_SETUP の「遅さの 91% はスキャン」と同型）
+```
+
+`npm run lint` 緑 / `npm run docs:check` 948 引用・0 failed /
+`git diff --exit-code -- tests/e2e/output-line-expectations.ts` 無出力（**束 C の検算**）。
+
+#### 残件（レビューへ送る）
+
+- `dsl-completion-context.ts` の新規 2 関数が `lexicalStateAt(line, ...)` を**行単位**で呼んでおり、
+  同じ関数内の既存パスは `lexicalStateAt(sourceText, ...)` を**全文**で呼んでいる。
+  複数行コメント内の `var x = mix.sum` を候補に拾いうる（補完候補のみなので実害は軽微）
+- 実現の省略の述語が `sequence.ts` に inline。設計 §2.3 は `audio-line.ts` の純関数を指定しており、
+  束 S で同じ述語が要る（main のブリーフが `audio-line.ts` を範囲外にしたため。Codex の落ち度ではない）
+
+#### 関連
+
+#883 / 設計 §2.3 §4 §5.3 §7.1 §7.2 / 完了条件 D3・D9・D10
+
+---
+
 ### docs(spec): land the #883 rulings in the normative specs (bundle 0) (Sep 11, 2026)
 
 **Date**: 2026-09-11

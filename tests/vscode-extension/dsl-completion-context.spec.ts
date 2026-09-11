@@ -3,12 +3,13 @@ import { describe, expect, it } from 'vitest'
 import {
   detectDslCompletionContext,
   extractDeclaredBusNames,
+  extractDeclaredMixerNodeNames,
   extractTopLevelDeclaredNames,
   filterDslCandidates,
 } from '../../packages/vscode-extension/src/dsl-completion-context'
 
 describe('detectDslCompletionContext', () => {
-  it('detects all four completion surfaces', () => {
+  it('detects import, output-destination, and send completion surfaces', () => {
     const importNames = 'import { ki } from "./drums.orbs"'
     expect(detectDslCompletionContext(importNames, importNames.indexOf(' }'))).toMatchObject({
       kind: 'import-names',
@@ -21,8 +22,16 @@ describe('detectDslCompletionContext', () => {
       typed: './dr',
     })
     expect(detectDslCompletionContext('seq.output("dr', 14)).toMatchObject({
-      kind: 'sum-name',
+      kind: 'output-string',
       typed: 'dr',
+    })
+    expect(detectDslCompletionContext('seq.output(', 11)).toMatchObject({
+      kind: 'output-node',
+      typed: '',
+    })
+    expect(detectDslCompletionContext('seq.output(cu', 13)).toMatchObject({
+      kind: 'output-node',
+      typed: 'cu',
     })
     expect(detectDslCompletionContext('seq.send("re', 12)).toMatchObject({
       kind: 'aux-name',
@@ -41,6 +50,11 @@ describe('detectDslCompletionContext', () => {
     expect(detectDslCompletionContext(bare, bare.length)).toBeNull()
     const partial = 'seq.reoutput("dr'
     expect(detectDslCompletionContext(partial, partial.length)).toBeNull()
+  })
+
+  it('does not treat output options or a closed call as destination positions', () => {
+    expect(detectDslCompletionContext('seq.output(cue, ', 16)).toBeNull()
+    expect(detectDslCompletionContext('seq.output()', 12)).toBeNull()
   })
 })
 
@@ -61,8 +75,19 @@ describe('source extraction', () => {
   })
 
   it('extracts only declared matching mixer bus names', () => {
-    const source = `global.sum("drums")\nglobal.aux("reverb")\n// global.sum("hidden")\nseq.output("not-a-declaration")`
-    expect(extractDeclaredBusNames(source, 'sum')).toEqual(['drums'])
-    expect(extractDeclaredBusNames(source, 'aux')).toEqual(['reverb'])
+    const source = `global.sum("drums")\nglobal.aux("reverb")\nvar submix = mix.sum\nvar delay = mix.aux\n// global.sum("hidden")\n// var hiddenNode = mix.sum\nseq.output("not-a-declaration")`
+    expect(extractDeclaredBusNames(source, 'sum')).toEqual(['drums', 'submix'])
+    expect(extractDeclaredBusNames(source, 'aux')).toEqual(['reverb', 'delay'])
+  })
+
+  it('extracts declared sum, aux, and physical-output mixer node variables', () => {
+    const source = [
+      'var mix = init global.mixer',
+      'var drums = mix.sum',
+      'var verb = mix.aux',
+      'var cue = mix.output(3, 4)',
+      '// var hidden = mix.output(5, 6)',
+    ].join('\n')
+    expect(extractDeclaredMixerNodeNames(source)).toEqual(['drums', 'verb', 'cue'])
   })
 })

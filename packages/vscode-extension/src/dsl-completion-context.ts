@@ -8,7 +8,8 @@
 export type DslCompletionContext =
   | { readonly kind: 'import-names'; readonly typed: string; readonly importPath: string }
   | { readonly kind: 'import-path'; readonly typed: string }
-  | { readonly kind: 'sum-name'; readonly typed: string }
+  | { readonly kind: 'output-string'; readonly typed: string }
+  | { readonly kind: 'output-node'; readonly typed: string }
   | { readonly kind: 'aux-name'; readonly typed: string }
   /**
    * `seq.` / `global.` / `sum("x").` の後のメソッド補完（#495 第1段）。
@@ -77,12 +78,20 @@ export function detectDslCompletionContext(
   const busArg = /\.(output|send)\(\s*"([^"\n]*)$/.exec(prefix)
   if (busArg && state === 'string') {
     return {
-      kind: busArg[1] === 'output' ? 'sum-name' : 'aux-name',
+      kind: busArg[1] === 'output' ? 'output-string' : 'aux-name',
       typed: busArg[2] ?? '',
     }
   }
 
   if (state !== 'code') return null
+
+  // `.output(` accepts the reserved `master` identifier and any declared mixer-node
+  // variable (`mix.sum`, `mix.aux`, or `mix.output(...)`). Stop at the first argument:
+  // options after a comma are a different completion surface.
+  const outputNode = /\.output\(\s*([A-Za-z_$][\w$]*)?$/.exec(prefix)
+  if (outputNode) {
+    return { kind: 'output-node', typed: outputNode[1] ?? '' }
+  }
 
   // The path can be after the cursor, so inspect the whole comment-free line
   // while preserving the code-only prefix requirement above.
@@ -162,12 +171,31 @@ export function extractTopLevelDeclaredNames(sourceText: string): string[] {
   return extractVarDeclarations(sourceText)
 }
 
-/** Returns names declared by `global.sum("...")` or `global.aux("...")` before the cursor. */
+/** Returns string or variable names declared for a sum/aux bus before the cursor. */
 export function extractDeclaredBusNames(sourceText: string, kind: 'sum' | 'aux'): string[] {
   const names = new Set<string>()
   const pattern = new RegExp(`\\bglobal\\.${kind}\\(\\s*"([^"\\n]+)"`, 'g')
   for (const match of sourceText.matchAll(pattern)) {
     if (lexicalStateAt(sourceText, match.index ?? 0) === 'code' && match[1]) names.add(match[1])
+  }
+  const nodePattern = new RegExp(
+    `^\\s*var\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*[A-Za-z_$][\\w$]*\\.${kind}\\b`,
+  )
+  for (const line of sourceText.split(/\r?\n/)) {
+    const match = nodePattern.exec(line)
+    if (match?.[1] && lexicalStateAt(line, match.index) === 'code') names.add(match[1])
+  }
+  return [...names]
+}
+
+/** Returns mixer-node variables declared by `mix.sum`, `mix.aux`, or `mix.output(...)`. */
+export function extractDeclaredMixerNodeNames(sourceText: string): string[] {
+  const names = new Set<string>()
+  const pattern =
+    /^\s*var\s+([A-Za-z_$][\w$]*)\s*=\s*[A-Za-z_$][\w$]*\.(?:(?:sum|aux)\b|output\s*\()/
+  for (const line of sourceText.split(/\r?\n/)) {
+    const match = pattern.exec(line)
+    if (match?.[1] && lexicalStateAt(line, match.index) === 'code') names.add(match[1])
   }
   return [...names]
 }

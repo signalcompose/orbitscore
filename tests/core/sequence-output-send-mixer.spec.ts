@@ -114,6 +114,20 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
     expect(seq.output('drum')).toBe(seq)
   })
 
+  it('treats an omitted destination exactly like explicit master without allocating a bus', () => {
+    const omitted = harness()
+    const explicit = harness()
+
+    expect(omitted.seq.output()).toBe(omitted.seq)
+    expect(explicit.seq.output('master')).toBe(explicit.seq)
+
+    expect(omitted.seq.getState().line).toEqual(explicit.seq.getState().line)
+    expect(omitted.seq.getInsertBus()).toBeUndefined()
+    expect(explicit.seq.getInsertBus()).toBeUndefined()
+    expect(omitted.setBusLine).not.toHaveBeenCalled()
+    expect(explicit.setBusLine).not.toHaveBeenCalled()
+  })
+
   it('rejects sum routing on a note (midi) sequence', () => {
     const { global, seq } = harness()
     global.sum('drum')

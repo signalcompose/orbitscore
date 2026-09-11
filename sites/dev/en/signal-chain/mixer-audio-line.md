@@ -214,8 +214,7 @@ numeric render bus, or a LinkAudio channel name. The resolution order is fixed b
 > the old model** — see `docs/design/611-output-line-design.md` §2-§3 for the current design.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:534-563
-
+// packages/engine/src/core/sequence.ts:549-580
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
    * §3.3):
@@ -230,9 +229,12 @@ numeric render bus, or a LinkAudio channel name. The resolution order is fixed b
    *    render-bus branch below it, which #611 §14 (1) keeps as-is and does NOT fold into this
    *    resolution order)
    */
-  output(dest: string | number | OutputDest, opts: OutputOptions = {}): this {
+  output(dest?: string | number | OutputDest, opts: OutputOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
     assertOutputOptions(opts, `Sequence '${name}': output`)
+    if (dest === undefined) {
+      return this.applyOutputElement({ kind: 'master' }, opts, 'output')
+    }
     if (typeof dest === 'object') {
       return this.applyOutputElement(dest, opts, 'output')
     }
@@ -286,7 +288,7 @@ calls fan out, and the same destination overwrites. **The unit changed from line
 dB in #611 PR-B2.**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:643-656
+// packages/engine/src/core/sequence.ts:660-673
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -1114,7 +1116,7 @@ sequence holds an insert bus. Whether the order is `instrument()` → `effect()`
 passes through here.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:960-987
+// packages/engine/src/core/sequence.ts:977-1004
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
     const bus = this._insertBus
@@ -1379,7 +1381,7 @@ E2E-1 takes one segment at `global.gain(0)`, evaluates `global.gain(-6)`, takes 
 requires the ratio to fall within 0.45–0.55 ($10^{-6/20} \approx 0.501$).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2070-2106
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2070-2107
   it.skipIf(!appAvailable)(
     '#643 E2E-1 applies global.gain(-6) to a playing instrument at about half the 0 dB RMS',
     async () => {
@@ -1395,6 +1397,7 @@ requires the ratio to fall within 0.45–0.55 ($10^{-6/20} \approx 0.501$).
           'global.start()',
           'var gain643 = init global.seq',
           `gain643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'gain643.output()',
           'gain643.gate(1)',
           'gain643.play(1, 1, 1, 1)',
           'LOOP(gain643)',
@@ -1441,7 +1444,7 @@ E2E-4 is the sum + aux path. It switches between dry (no bus) and an instrument 
 (theoretical 1.5) (`1585-1592`). The DSL part is quoted.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2210-2232
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2214-2239
         [
           'var global = init GLOBAL',
           'global.key("C")',
@@ -1449,9 +1452,12 @@ E2E-4 is the sum + aux path. It switches between dry (no bus) and an instrument 
           'global.beat(4 by 4)',
           'global.sum("sum643")',
           'global.aux("aux643")',
+          'sum("sum643").output()',
+          'aux("aux643").output()',
           'global.start()',
           'var routeDry643 = init global.seq',
           `routeDry643.instrument(${JSON.stringify(catalog.clapSynthName)})`,
+          'routeDry643.output()',
           'routeDry643.gate(1)',
           'routeDry643.play(1, 1, 1, 1)',
           'var routeWet643 = init global.seq',

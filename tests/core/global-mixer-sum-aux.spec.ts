@@ -217,6 +217,28 @@ describe('Global.sum() / Global.aux()', () => {
     ])
   })
 
+  it('treats an omitted output destination exactly like explicit master', async () => {
+    const omittedSetBusLine = vi.fn().mockResolvedValue(undefined)
+    const explicitSetBusLine = vi.fn().mockResolvedValue(undefined)
+    const omitted = new Global({
+      setBusLine: omittedSetBusLine,
+      boot: vi.fn(),
+      quit: vi.fn(),
+      isRunning: true,
+    } as any).sum('drum')
+    const explicit = new Global({
+      setBusLine: explicitSetBusLine,
+      boot: vi.fn(),
+      quit: vi.fn(),
+      isRunning: true,
+    } as any).sum('drum')
+
+    await omitted.output()
+    await explicit.output('master')
+
+    expect(omittedSetBusLine.mock.calls).toEqual(explicitSetBusLine.mock.calls)
+  })
+
   it('clamps mixer-handle gain and pan with the same ranges as Sequence', async () => {
     const setBusLine = vi.fn().mockResolvedValue(undefined)
     const engine = { setBusLine, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any

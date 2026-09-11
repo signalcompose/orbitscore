@@ -99,7 +99,7 @@ graph TD
 engine の起動は `startEngine()` が担います。**2026-09-10 の裁定（#827 / #502）で SC 経路・`getConfiguredEngineKind()` による分岐は削除**され、唯一のバックエンドである Rust daemon 向けの起動だけが残りました。最初にやるのは **engine を spawn する前にバックエンドのバイナリ解決を先行させる** ことです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1941-1950
+// packages/vscode-extension/src/extension.ts:1942-1951
   const daemonResolution = resolveDaemonForUI()
   if (!daemonResolution) {
     outputChannel?.appendLine(
@@ -132,7 +132,7 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 env へ積むのは debug フラグと capture seam（#307）だけです。**バックエンド種別を伝える `ORBITSCORE_ENGINE` env・`ORBIT_SCSYNTH_PATH` の受け渡しは #502 で削除**されました（唯一のバックエンドなので伝える必要がなくなったため）。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1982-1996
+// packages/vscode-extension/src/extension.ts:1983-1997
   // Set environment
   const env = { ...process.env }
   if (effectiveDebugMode) {
@@ -153,7 +153,7 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
 そして engine プロセス本体は `child_process.spawn` で Node.js を起動します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1998-2004
+// packages/vscode-extension/src/extension.ts:1999-2005
   // Spawn engine process
   try {
     engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -166,7 +166,7 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2744-2745
+// packages/vscode-extension/src/extension.ts:2745-2746
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -194,7 +194,7 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
 起動条件は `activate()` の中にあります。env が設定より優先されるのは、Extension Development Host を CLI から立ち上げるときに設定ファイルを触らずに済ませるためです。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:437-442
+// packages/vscode-extension/src/extension.ts:438-443
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0

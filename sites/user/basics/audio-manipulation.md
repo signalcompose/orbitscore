@@ -20,6 +20,7 @@ global.start()
 
 var arp = init global.seq
 arp.audio("arpeggio.wav").chop(8)
+arp.output()
 arp.play(1, 2, 3, 4, 5, 6, 7, 8)
 
 LOOP(arp)
@@ -51,6 +52,7 @@ arp.play(3, 1, 4, 6, 2, 7)
 ```text
 var drum = init global.seq
 drum.audio("break.wav").chop(4)
+drum.output()
 
 // スライス 1 → 休符 → スライス 2 → スライス 3
 drum.play(1, 0, 2, 3)
@@ -71,6 +73,7 @@ global.start()
 
 var kick = init global.seq
 kick.audio("kick.wav").chop(1)
+kick.output()
 kick.play(1, 0, 1, 0)
 
 LOOP(kick)
@@ -84,6 +87,7 @@ LOOP(kick)
 ```text
 gong.beat(21 by 4).length(1)
 gong.audio("EAF_Gong_05.wav").chop(1)   // 17.7 秒、元の音程のまま
+gong.output()
 gong.play(1, 0, 0, 0)                    // 10.0 秒ごとに鳴らす → 約 7.7 秒が次に重なる
 ```
 :::
@@ -103,6 +107,7 @@ global.start()
 
 var phrase = init global.seq
 phrase.audio("phrase.wav").chop(4)
+phrase.output()
 phrase.play(1, 2, 3, 4)
 
 phrase.length(1)   // 1 小節で 4 スライスを再生
@@ -142,11 +147,13 @@ global.start()
 
 var kick = init global.seq
 kick.audio("kick.wav").chop(1)
+kick.output()
 kick.play(1, 0, 1, 0)
 kick.gain(-3)   // 少し小さめに
 
 var snare = init global.seq
 snare.audio("snare.wav").chop(1)
+snare.output()
 snare.play(0, 1, 0, 1)
 snare.gain(0)   // デフォルトのまま
 
@@ -178,11 +185,13 @@ global.start()
 
 var hi_l = init global.seq
 hi_l.audio("hihat_open.wav").chop(1)
+hi_l.output()
 hi_l.play(1, 0, 1, 0)
 hi_l.pan(-60)   // 左寄り
 
 var hi_r = init global.seq
 hi_r.audio("hihat_closed.wav").chop(1)
+hi_r.output()
 hi_r.play(0, 1, 0, 1)
 hi_r.pan(60)    // 右寄り
 
@@ -211,10 +220,11 @@ drum.chop(8)
 drum.play(1, 3, 5, 7, 2, 4, 6, 8)
 drum.gain(-6)
 drum.pan(-20)
+drum.output()
 
 // チェーン版（同じ意味）
 var drum2 = init global.seq
-drum2.audio("break.wav").chop(8).play(1, 3, 5, 7, 2, 4, 6, 8).gain(-6).pan(-20)
+drum2.audio("break.wav").chop(8).play(1, 3, 5, 7, 2, 4, 6, 8).gain(-6).pan(-20).output()
 
 LOOP(drum)
 ```
@@ -229,6 +239,7 @@ arp
   .play(1, 2, 3, 4, 5, 6, 7, 8)
   .gain(-3)
   .pan(0)
+  .output()
 ```
 
 `init global.seq` の直後にチェーンを続けることもできます。
@@ -241,6 +252,7 @@ var snare = init global.seq
   .play(0, 1, 0, 1)
   .gain(-3)
   .pan(20)
+  .output()
 ```
 
 ---

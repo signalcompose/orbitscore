@@ -96,7 +96,7 @@ export interface MixerBusHandle {
   ui(name?: string, open?: boolean): Promise<MixerBusHandle>
   /** #611 §2.1/§3.6: same resolution/semantics as `Sequence.output()` (minus the LinkAudio
    * fallback and the numeric render-bus branch, which are Sequence-only concepts). */
-  output(dest: string | OutputDest, opts?: MixerOutputOptions): Promise<MixerBusHandle>
+  output(dest?: string | OutputDest, opts?: MixerOutputOptions): Promise<MixerBusHandle>
   /** #611 §2.3/§3.6: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })`. */
   send(
     aux: string | OutputDest,
@@ -333,11 +333,11 @@ export class MixerManager {
         await this.pluginUiHandler(formatReceiverId(kind, name), catalogName, open)
         return this.makeHandle(kind, name, bus)
       },
-      output: async (dest: string | OutputDest, opts: MixerOutputOptions = {}) => {
+      output: async (dest?: string | OutputDest, opts: MixerOutputOptions = {}) => {
         assertOutputOptions(opts, `Mixer bus '${formatReceiverId(kind, name)}': output`)
         await this.applyLineElement(bus, {
           kind: 'output',
-          dest: this.resolveDest(dest),
+          dest: dest === undefined ? { kind: 'master' } : this.resolveDest(dest),
           thru: opts.thru ?? false,
           db: opts.db ?? 0,
           sugar: 'output',

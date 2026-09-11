@@ -62,6 +62,7 @@ var kick = init global.seq
 ```text
 var arp = init global.seq
 arp.audio("arpeggio.wav").chop(4)
+arp.output()
 
 // play slices in the order 1→2→3→4
 arp.play(1, 2, 3, 4)
@@ -179,6 +180,7 @@ var kick = init global.seq
 kick.audio("kick.wav")
 kick.chop(1)
 kick.play(1, 0, 1, 0)
+kick.output()
 
 global.start()
 
@@ -416,7 +418,7 @@ All sequence methods can be connected with `.`.
 ```text
 // chain example
 var drum = init global.seq
-drum.audio("break.wav").chop(8).play(1, 3, 5, 7, 2, 4, 6, 8).gain(-6).pan(-20)
+drum.audio("break.wav").chop(8).play(1, 3, 5, 7, 2, 4, 6, 8).gain(-6).pan(-20).output()
 
 // for long chains, break across lines and indent
 var arp = init global.seq
@@ -426,6 +428,7 @@ arp
   .play(1, 2, 3, 4, 5, 6, 7, 8)
   .gain(-3)
   .pan(0)
+  .output()
 
 // chain immediately after init
 var snare = init global.seq
@@ -435,6 +438,7 @@ var snare = init global.seq
   .play(0, 1, 0, 1)
   .gain(-3)
   .pan(20)
+  .output()
 ```
 
 The global methods can also be chained.

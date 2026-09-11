@@ -99,7 +99,7 @@ graph TD
 `startEngine()` is responsible for starting the engine. **The 2026-09-10 ruling (#827 / #502) removed the SC path and the `getConfiguredEngineKind()` branch entirely**, leaving only the startup path for the sole remaining backend, the Rust daemon. The first thing it does is **have backend binary resolution precede spawning the engine**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1941-1950
+// packages/vscode-extension/src/extension.ts:1942-1951
   const daemonResolution = resolveDaemonForUI()
   if (!daemonResolution) {
     outputChannel?.appendLine(
@@ -132,7 +132,7 @@ What is interesting is that the resolved path is not handed to the engine via en
 Only the debug flag and the capture seam (#307) go into env. **The `ORBITSCORE_ENGINE` env var and the `ORBIT_SCSYNTH_PATH` hand-off, which used to announce the backend kind, were removed in #502** — with a single backend there is nothing left to announce.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1982-1996
+// packages/vscode-extension/src/extension.ts:1983-1997
   // Set environment
   const env = { ...process.env }
   if (effectiveDebugMode) {
@@ -153,7 +153,7 @@ Only the debug flag and the capture seam (#307) go into env. **The `ORBITSCORE_E
 The engine process itself is then started with `child_process.spawn` running Node.js.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1998-2004
+// packages/vscode-extension/src/extension.ts:1999-2005
   // Spawn engine process
   try {
     engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -166,7 +166,7 @@ The engine process itself is then started with `child_process.spawn` running Nod
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2744-2745
+// packages/vscode-extension/src/extension.ts:2745-2746
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -194,7 +194,7 @@ Since #388 on 2026-07-07 (WORK_LOG 6.188-6.192), the extension hosts an MCP (Mod
 The start condition lives in `activate()`. The env var takes precedence over the setting so that an Extension Development Host launched from the CLI can have its port set without touching a settings file.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:437-442
+// packages/vscode-extension/src/extension.ts:438-443
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0

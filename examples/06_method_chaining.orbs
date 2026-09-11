@@ -13,11 +13,12 @@ kick_traditional.length(1)
 kick_traditional.audio("../test-assets/audio/kick.wav")
 kick_traditional.chop(1)
 kick_traditional.play(1, 0, 1, 0)
+kick_traditional.output()
 // RUN(kick_traditional)  // Use reserved keyword to start
 
 // === Example 2: Method Chaining (One-liner) ===
 var kick_chained = init global.seq
-kick_chained.beat(4 by 4).length(1).audio("../test-assets/audio/kick.wav").play(1, 0, 1, 0)
+kick_chained.beat(4 by 4).length(1).audio("../test-assets/audio/kick.wav").play(1, 0, 1, 0).output()
 // RUN(kick_chained)  // Use reserved keyword to start
 
 // === Example 3: Complex Pattern with Chaining ===
@@ -26,6 +27,7 @@ snare.beat(4 by 4).length(2).audio("../test-assets/audio/snare.wav").play(
   0, 0, 1, 0,           // Bar 1: backbeat
   0, 0, 1, (1, 1, 1, 1) // Bar 2: snare with roll
 )
+snare.output()
 // RUN(snare)  // Use reserved keyword to start
 
 // === Example 4: Multiple Sequences in Compact Form ===
@@ -34,9 +36,9 @@ var drums_kick = init global.seq
 var drums_snare = init global.seq  
 var drums_hihat = init global.seq
 
-drums_kick.audio("../test-assets/audio/kick.wav").play(1, 0, 0, 0)
-drums_snare.audio("../test-assets/audio/snare.wav").play(0, 0, 1, 0)
-drums_hihat.audio("../test-assets/audio/hihat_closed.wav").play(1, 1, 1, 1)
+drums_kick.audio("../test-assets/audio/kick.wav").play(1, 0, 0, 0).output()
+drums_snare.audio("../test-assets/audio/snare.wav").play(0, 0, 1, 0).output()
+drums_hihat.audio("../test-assets/audio/hihat_closed.wav").play(1, 1, 1, 1).output()
 
 // Start all drum sequences together
 RUN(drums_kick, drums_snare, drums_hihat)
@@ -47,14 +49,15 @@ bass.beat(4 by 4).length(2).audio("../test-assets/audio/bass_c1.wav").chop(8).pl
   1, 0, 0, 1, 0, 0, 1, 0,
   0, 1, 0, 1, 0, 0, 0, 0
 )
+bass.output()
 // RUN(bass)  // Use reserved keyword to start
 
 // === Example 6: Chained with Different Meters ===
 var poly3 = init global.seq
-poly3.beat(3 by 4).audio("../test-assets/audio/sine_440.wav").play(1, 1, 1)
+poly3.beat(3 by 4).audio("../test-assets/audio/sine_440.wav").play(1, 1, 1).output()
 
 var poly5 = init global.seq
-poly5.beat(5 by 4).audio("../test-assets/audio/sine_880.wav").play(1, 0, 1, 0, 1)
+poly5.beat(5 by 4).audio("../test-assets/audio/sine_880.wav").play(1, 0, 1, 0, 1).output()
 
 // Start polymeter patterns
 RUN(poly3, poly5)
@@ -64,19 +67,19 @@ RUN(poly3, poly5)
 
 // Instant kick pattern
 var quick_kick = init global.seq
-quick_kick.audio("../test-assets/audio/kick.wav").play(1, (1, 0), 1, 0)
+quick_kick.audio("../test-assets/audio/kick.wav").play(1, (1, 0), 1, 0).output()
 
 // Quick hi-hat with variations
 var quick_hat = init global.seq
 quick_hat.audio("../test-assets/audio/hihat_closed.wav").play(
   (1, 1), 1, (1, 1, 1), 1
-)
+).output()
 
 // Bass line with pitch variation
 var quick_bass = init global.seq
 quick_bass.audio("../test-assets/audio/bass_c1.wav").chop(4).play(
   1.fixpitch(0), 2.fixpitch(7), 3.fixpitch(5), 4.fixpitch(3)
-)
+).output()
 
 // Start patterns with reserved keywords
 // RUN(quick_kick, quick_hat, quick_bass)

@@ -20,14 +20,17 @@ global.start()
 
 var kick = init global.seq
 kick.audio("kick.wav")
+kick.output()
 kick.play(1, 0, 0, 0)  // beat 1 only
 
 var snare = init global.seq
 snare.audio("snare.wav")
+snare.output()
 snare.play(0, 0, 1, 0)  // beat 3 only
 
 var hihat = init global.seq
 hihat.audio("hihat.wav")
+hihat.output()
 hihat.play(1, 1, 1, 1)  // all four beats
 
 LOOP(kick, snare, hihat)
@@ -96,14 +99,17 @@ global.start()
 
 var kick = init global.seq
 kick.audio("kick.wav")
+kick.output()
 kick.play(1, 0, 0, 0)  // beat 1
 
 var snare = init global.seq
 snare.audio("snare.wav")
+snare.output()
 snare.play(0, 0, 1, 0)  // beat 3
 
 var hihat = init global.seq
 hihat.audio("hihat.wav")
+hihat.output()
 hihat.play(1, 1, 1, 1)  // quarter notes
 
 LOOP(kick, snare, hihat)
@@ -131,11 +137,13 @@ global.start()
 var kick = init global.seq
 kick.audio("kick.wav")
 kick.length(1)
+kick.output()
 kick.play(1, 0, 1, 0)  // 1-bar pattern
 
 var snare = init global.seq
 snare.audio("snare.wav")
 snare.length(2)
+snare.output()
 snare.play(
   0, 0, 1, 0,       // bar 1
   0, 0, 1, (1, 1),  // bar 2 (with a fill)

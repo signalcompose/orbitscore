@@ -1,0 +1,15 @@
+// #883 X2-A: omitted output destination must be equivalent to explicit "master".
+
+var global = init GLOBAL
+global.tempo(120)
+global.beat(4 by 4)
+global.audioPath("../../../test-assets/audio")
+global.start()
+
+var kick = init global.seq
+kick.beat(4 by 4).length(1)
+kick.audio("kick.wav").chop(1)
+kick.output()
+kick.play(1, 1, 1, 1)
+
+LOOP(kick)

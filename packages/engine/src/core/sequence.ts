@@ -472,7 +472,7 @@ export class Sequence {
    * must happen with it and in this order, whichever entry point was used:
    *
    * 1. clear a stale offline render-bus intent — §4.4.1: a live destination declaration wins
-   * 2. ensure this sequence has an insert bus
+   * 2. ensure this sequence has an insert bus when its declared line needs one
    * 3. let the successful full-program push adopt fixed gain/pan values onto that bus
    *
    * The three entries below (`applyOutputElement`, `routeOutputFromDsl`, `routeSendFromDsl`)
@@ -487,8 +487,22 @@ export class Sequence {
     sugar: 'output' | 'send',
   ): void {
     this._renderBus = undefined
-    this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
     this.upsertLine({ kind: 'output', dest, thru, db, sugar })
+    // #883 Bundle C realization elision: an explicit default master destination is score
+    // truth, but it is equivalent to today's direct path and therefore must not consume one
+    // of the eight sequence buses. Allocate only when the declared line needs processing or
+    // routing that the direct path cannot realize. Fixed gain/pan remain event-side until then.
+    const lineNeedsBus = this._line
+      .snapshot()
+      .some(
+        (element) =>
+          element.kind === 'rack' ||
+          (element.kind === 'output' &&
+            !(element.dest.kind === 'master' && !element.thru && element.db === 0)),
+      )
+    if (!this._insertBus && lineNeedsBus) {
+      this._insertBus = this.global.ensureSequenceInsertBus(name)
+    }
   }
 
   /**
@@ -546,9 +560,12 @@ export class Sequence {
    *    render-bus branch below it, which #611 §14 (1) keeps as-is and does NOT fold into this
    *    resolution order)
    */
-  output(dest: string | number | OutputDest, opts: OutputOptions = {}): this {
+  output(dest?: string | number | OutputDest, opts: OutputOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
     assertOutputOptions(opts, `Sequence '${name}': output`)
+    if (dest === undefined) {
+      return this.applyOutputElement({ kind: 'master' }, opts, 'output')
+    }
     if (typeof dest === 'object') {
       return this.applyOutputElement(dest, opts, 'output')
     }

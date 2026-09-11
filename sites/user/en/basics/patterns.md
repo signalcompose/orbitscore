@@ -29,6 +29,7 @@ global.start()
 
 var drum = init global.seq
 drum.audio("kick.wav")
+drum.output()
 drum.play(1, 1, 1, 1)  // play kick.wav on all four beats
 
 LOOP(drum)
@@ -53,10 +54,12 @@ global.start()
 
 var kick = init global.seq
 kick.audio("kick.wav")
+kick.output()
 kick.play(1, 0, 1, 0)  // kick on beats 1 and 3
 
 var snare = init global.seq
 snare.audio("snare.wav")
+snare.output()
 snare.play(0, 1, 0, 1)  // snare on beats 2 and 4
 
 LOOP(kick, snare)
@@ -71,6 +74,7 @@ If you pass eight arguments, you get a pattern subdivided into eighth notes (one
 ```text
 var hihat = init global.seq
 hihat.audio("hihat.wav")
+hihat.output()
 hihat.play(1, 1, 1, 1, 1, 1, 1, 1)  // hi-hat on every eighth note
 ```
 
@@ -102,6 +106,7 @@ global.start()
 var kick = init global.seq
 kick.audio("kick.wav")
 kick.length(2)
+kick.output()
 kick.play(
   1, 0, 0, 0,   // bar 1
   1, 0, 1, 0,   // bar 2 (with a slight variation)
