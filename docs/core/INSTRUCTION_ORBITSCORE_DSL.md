@@ -1796,19 +1796,37 @@ drums.effect(["Glue"]).output(master, thru: true).output(cue, db: -20)
 
 | 引数 | 型 | 既定 | 意味 |
 |---|---|---|---|
-| `destination` | ノード変数（`mix.output` / `mix.sum` / `mix.aux` / `mix.render`）または文字列（sum / aux 名・`"master"`・`"3,4"`） | 必須 | 解決規則は下記 |
+| `destination` | ノード変数（`mix.output` / `mix.sum` / `mix.aux` / `mix.render`）または文字列（sum / aux 名・`"master"`・`"3,4"`） | **`"master"`**（省略可・#883 / DSL 2.0） | 解決規則は下記。`.output()` ≡ `.output("master")` — 暗黙ではなく**既定引数**なので、要素は譜面に現れる |
 | `thru:` | boolean | `false` | `true` = この出口の**後ろへも信号を流す**。`false` ならここで終端 |
 | `db:` | number | `0` | **その宛先へ行く分だけ**の減衰（dB）。ラインの後続には影響しない |
 
-ラインに **`thru: false` の `output`（＝終端）が 1 つも無い** sequence は、評価時に暗黙の
-`output(master, thru: false, db: 0)` を**末尾**に持つ（従来の既定出力と同じ音）。
-🔴 **条件は「`output` が 1 つも無い」ではない。** `send` は `output(aux, thru: true, db:)` の
-糖衣（MX.3）なので、`kick.send(verb, -12)` **だけ**を書いた行にも `output` は 1 つ存在する。
-そこで「1 つも無い」を条件にすると、**センドを挿した瞬間に本流が master へ届かなくなる** —
-`thru: true` の出口は分岐であって終端ではないためである。既定ストリップが
-`[ラック → gain → pan → sends(=output thru) → output(master)]`（設計 611 §2.6）と
-**sends と終端を別々に並べている**のは、この意味である。SC.4 規範 (3)「send は分岐であり
-本流を変えない」とも一致する。
+🔴 **出口は書かれたものがすべてである**（#883・**DSL 2.0** で変更。owner 2026-09-11
+「音楽記述言語としての OrbitScore DSL は『テキストが完全な真実』であるべき」）。
+
+**出口を 1 つも書かないラインは無音になる。** 暗黙の `output(master)` は**付かない** —
+sequence も sum / aux バスも instrument も同じ規則である。エディタは出口の無い発音
+シーケンスに Warning（`output-missing`）と quick fix を出す（§11）ので、書き忘れは
+評価する前に分かる。
+
+```js
+kick.audio("k.wav").play()             // 🔴 無音（出口が無い）
+kick.audio("k.wav").play().output()    // master へ。`.output()` の引数省略 = `output("master")`
+```
+
+> **旧規則（DSL 1.2 まで・撤回）**: 「`thru: false` の `output`（＝終端）が 1 つも無い
+> sequence は暗黙の `output(master, thru: false, db: 0)` を末尾に持つ」。
+>
+> 🔴 **撤回の理由**: `send` は `output(dest, thru: true, db:)` の糖衣（MX.3）で**終端ではない**
+> ため、`kick.send(drums, -6)` に暗黙終端が付いた。`drums` が **sum（サミングバス）**の時、
+> master は「kick の dry」と「drums 経由の kick」を**両方**受け取り、`drums` に挿した
+> グルーコンプを **dry が迂回する**。設計 611 §2.1 が代替案（「`output` が 1 つも無ければ」）を
+> 却下した時、**aux（センド・リターン）しか見ておらず、sum では dry が届かない方が正しい**
+> という場合分けが視野に無かった。`send(aux)` と `send(sum)` で正しい振る舞いは**逆**である。
+>
+> 暗黙 master が残っていた 2 つの意味のうち、**(i) master ノードが宣言なしに存在すること**は
+> 維持する（SC.2.1 規範 (6)・決定 #75）。廃止したのは **(ii) ラインへの自動ルーティング**だけで、
+> `kick.audio("k.wav").play().output()` は import もマニフェストもミキサー宣言も要らないまま
+> である（素朴な 1 ファイル経路の保護）。
 
 宛先は**文字列形でも宣言できる**（ノード変数を作らない素朴な 1 ファイル経路の保護）:
 
