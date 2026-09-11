@@ -983,11 +983,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * Runtime mixer bus routing change (MX.4, #459/#453 M3). Unlike LinkAudio channel
-   * registration, there is no hardware-bus fallback for a missing sum/aux target — the
-   * daemon-side error (e.g. `UNSUPPORTED` on a non-`outproc-effect` build, or a kind/order
-   * violation) is a real failure and propagates unchanged to the caller (`Sequence`'s
-   * `output()`/`send()`, which log it via `console.warn` — see that file).
+   * Legacy `SetBusRouting` endpoint retained for wire compatibility. Since #852 the DSL no
+   * longer reaches this path: Sequence/MixerBusHandle routing uses `SetBusLine` instead, whose
+   * live respawn replay is `reapplyBusLinesAfterRespawn()`.
    */
   async setBusRouting(
     seqBus: string,
@@ -1012,11 +1010,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * Re-issues the last intended `SetBusRouting` per seq bus after a daemon respawn — the
-   * new daemon process starts with all `routing_override`/send atomics at their defaults,
-   * so without this replay every sum/aux routing silently reverts to plain per-sequence
-   * output (audio quietly goes to the wrong place). Mirrors `reloadPluginsAfterRespawn`:
-   * per-entry independent failure handling, and a failure must not fail the respawn itself.
+   * Legacy replay for callers of `setBusRouting()` above. Since #852 no DSL path populates
+   * `busRoutings`; the live DSL replay is `reapplyBusLinesAfterRespawn()`. Kept while the old
+   * daemon wire command still exists, with independent failure handling per cached entry.
    */
   private async reapplyBusRoutingAfterRespawn(): Promise<void> {
     for (const [seqBus, { output, sends }] of this.busRoutings.entries()) {

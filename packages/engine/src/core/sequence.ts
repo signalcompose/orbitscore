@@ -25,8 +25,8 @@ import { preparePlayback } from './sequence/playback/prepare-playback'
 import { runSequence } from './sequence/playback/run-sequence'
 import { loopSequence } from './sequence/playback/loop-sequence'
 import { prepareSlices as prepareSlicesUtil } from './sequence/audio/prepare-slices'
-import { GainManager } from './sequence/parameters/gain-manager'
-import { PanManager } from './sequence/parameters/pan-manager'
+import { clampGainDb, GainManager } from './sequence/parameters/gain-manager'
+import { clampPan, PanManager } from './sequence/parameters/pan-manager'
 import { TempoManager } from './sequence/parameters/tempo-manager'
 import { SequenceQuantizeManager } from './sequence/parameters/quantize-manager'
 import { QuantizeValue, nextQuantizedTime } from './global/quantize-manager'
@@ -34,7 +34,9 @@ import { StateManager } from './sequence/state/state-manager'
 import { scheduleEvents, scheduleEventsFromTime } from './sequence/scheduling/event-scheduler'
 import {
   resolveNamedOutputDest,
+  assertOutputOptions,
   AudioLine,
+  resolveSendLevel,
   toWire,
   type LineElement,
   type OutputDest,
@@ -140,8 +142,8 @@ export class Sequence {
   // or auto-allocated by `output()`/`send()` targeting a sum/aux bus — MX.4 / #459/#453 M3)
   private _insertBus?: string
 
-  // #611 B1: complete ordered routing intent. The DSL still exposes the legacy
-  // output(string)/send(name, linearAmount) surface; only the daemon command changes.
+  // #611 B1: complete ordered routing intent shared by output/send/gain/pan line writers.
+  // Every fixed declaration lands here before ownership can move away from the event side.
   private _line = new AudioLine()
   /**
    * 直近の `syncBusLine` が失敗し、TS 側の routing 宣言と daemon の実 line が乖離して
@@ -364,27 +366,28 @@ export class Sequence {
    * sequences are the one exception: they have no event-side gain path at all
    * (`scheduleMidiEvents` never reads `gainManager`), so a bus is the ONLY way `gain()` can
    * ever take effect and is allocated eagerly. A RANDOM gain always stays event-side
-   * (`calculateEventGain`) and is never mirrored onto the line.
+   * (`calculateEventGain`) and is never mirrored as a non-neutral line value; switching from
+   * fixed to random clears any previously declared fixed line element in the same call.
    */
   gain(valueDb: number | RandomValue): this {
     const isRandom = typeof valueDb === 'object' && valueDb !== null && 'type' in valueDb
     if (isRandom) {
+      const fixedElementOnBus =
+        this._insertBus !== undefined &&
+        this._line.snapshot().some((element) => element.kind === 'gain' && element.db !== 0)
+      if (fixedElementOnBus) this.upsertLine({ kind: 'gain', db: 0 })
       this.gainManager.setGain({ valueDb })
+      if (fixedElementOnBus) this.syncBusLine()
       this.seamlessParameterUpdate('gain', this.gainManager.getGainDescription())
       return this
     }
-    const { gainDb: clampedDb } = this.gainManager.setGain({ valueDb })
+    const clampedDb = clampGainDb(valueDb)
     this.upsertLine({ kind: 'gain', db: clampedDb })
+    // Until the daemon accepts the declared line, the event side remains the safe fallback.
+    this.gainManager.setGain({ valueDb: clampedDb })
     this.ensureInsertBusForInstrument()
     if (this._insertBus) {
-      this.gainManager.setGain({ valueDb: 0 })
       this.syncBusLine()
-      // instrument sequences have NO event-side gain path to conflict with the line's ramp
-      // (§5.2) — but they DO rely on seamlessParameterUpdate's immediate reschedule for an
-      // unrelated reason (clearing pending scheduled notes via the plugin scheduler's
-      // clearOwner, exercised by tests/core/sequence-instrument.spec.ts). Skip the reschedule
-      // only for the case it actually exists to avoid: an audio sequence with a bus.
-      this.seamlessParameterUpdate('gain', `${clampedDb} dB`, !this.isInstrument())
     } else {
       this.seamlessParameterUpdate('gain', this.gainManager.getGainDescription())
     }
@@ -407,18 +410,22 @@ export class Sequence {
   pan(value: number | RandomValue): this {
     const isRandom = typeof value === 'object' && value !== null && 'type' in value
     if (isRandom) {
+      const fixedElementOnBus =
+        this._insertBus !== undefined &&
+        this._line.snapshot().some((element) => element.kind === 'pan' && element.pan !== 0)
+      if (fixedElementOnBus) this.upsertLine({ kind: 'pan', pan: 0 })
       this.panManager.setPan({ value })
+      if (fixedElementOnBus) this.syncBusLine()
       this.seamlessParameterUpdate('pan', this.panManager.getPanDescription())
       return this
     }
-    const { pan: clampedPan } = this.panManager.setPan({ value })
+    const clampedPan = clampPan(value)
     this.upsertLine({ kind: 'pan', pan: clampedPan })
+    // Until the daemon accepts the declared line, the event side remains the safe fallback.
+    this.panManager.setPan({ value: clampedPan })
     this.ensureInsertBusForInstrument()
     if (this._insertBus) {
-      this.panManager.setPan({ value: 0 })
       this.syncBusLine()
-      // Same reasoning as gain() above.
-      this.seamlessParameterUpdate('pan', `${clampedPan}`, !this.isInstrument())
     } else {
       this.seamlessParameterUpdate('pan', this.panManager.getPanDescription())
     }
@@ -440,9 +447,8 @@ export class Sequence {
    * must happen with it and in this order, whichever entry point was used:
    *
    * 1. clear a stale offline render-bus intent — §4.4.1: a live destination declaration wins
-   * 2. ensure this sequence has an insert bus, remembering whether it had one already
-   * 3. `adoptLineOnFirstBus()` on the transition, so elements declared BEFORE the bus existed
-   *    (a bare `gain()`/`pan()`) reach the daemon with it
+   * 2. ensure this sequence has an insert bus
+   * 3. let the successful full-program push adopt fixed gain/pan values onto that bus
    *
    * The three entries below (`applyOutputElement`, `routeOutputFromDsl`, `routeSendFromDsl`)
    * differ only in their MIDI-guard wording and in whether they push the program fire-and-forget
@@ -456,9 +462,7 @@ export class Sequence {
     sugar: 'output' | 'send',
   ): void {
     this._renderBus = undefined
-    const hadBus = this._insertBus !== undefined
     this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
-    if (!hadBus) this.adoptLineOnFirstBus()
     this.upsertLine({ kind: 'output', dest, thru, db, sugar })
   }
 
@@ -472,6 +476,7 @@ export class Sequence {
     if (!this.isInstrument()) return
     const name = this.stateManager.getName() || 'sequence'
     this._insertBus = this._insertBus ?? this.global.ensureSequenceInsertBus(name)
+    this.syncInstrumentSourceRouting()
   }
 
   /** Write one element to `_line`. Batch semantics live in `AudioLine.upsertAutoBatch()`. */
@@ -518,6 +523,7 @@ export class Sequence {
    */
   output(dest: string | number | OutputDest, opts: OutputOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
+    assertOutputOptions(opts, `Sequence '${name}': output`)
     if (typeof dest === 'object') {
       return this.applyOutputElement(dest, opts, 'output')
     }
@@ -617,16 +623,12 @@ export class Sequence {
    * breaking change for any script still passing e.g. `send("rev", 0.3)` — that value is now
    * read as +0.3 dB, not 30%; see WORK_LOG).
    */
-  send(aux: string | OutputDest, db: number, opts: SendOptions = {}): this {
+  send(aux: string | OutputDest, dbOrOptions?: number | SendOptions, opts: SendOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
     if (typeof aux === 'string' && !aux.trim()) {
       throw new Error(`Sequence '${name}': send(aux, db) requires a non-empty aux name.`)
     }
-    if (!Number.isFinite(db)) {
-      throw new Error(
-        `Sequence '${name}': send(${JSON.stringify(aux)}, ${db}) gain must be finite (dB).`,
-      )
-    }
+    const level = resolveSendLevel(dbOrOptions, opts, `Sequence '${name}': send`)
     const dest =
       typeof aux === 'object'
         ? aux
@@ -639,7 +641,7 @@ export class Sequence {
           })())
     return this.applyOutputElement(
       dest,
-      { thru: true, db: opts.enabled === false ? -Infinity : db },
+      { thru: true, db: level.enabled === false ? -Infinity : level.db },
       'send',
     )
   }
@@ -672,10 +674,14 @@ export class Sequence {
           `MIDI is sent to an external device and therefore has no mixer output destination.`,
       )
     }
-    if (!Number.isFinite(db)) {
-      throw new Error(`Sequence '${name}': send gain must be finite (dB).`)
-    }
-    this.stageOutputElement(name, dest, true, opts.enabled === false ? -Infinity : db, 'send')
+    const level = resolveSendLevel(db, opts, `Sequence '${name}': send`)
+    this.stageOutputElement(
+      name,
+      dest,
+      true,
+      level.enabled === false ? -Infinity : level.db,
+      'send',
+    )
     await this.pushBusLine()
     await this.ensureInstrumentSourceRouting()
     return this
@@ -683,9 +689,11 @@ export class Sequence {
 
   private async pushBusLine(): Promise<void> {
     if (!this._insertBus) return
+    const program = this._line.program()
     try {
-      await this.global.setBusLine(this._insertBus, toWire(this._line.program()))
+      await this.global.setBusLine(this._insertBus, toWire(program))
       this._busLineStale = false
+      this.adoptLineOnFirstBus(program)
     } catch (error) {
       this._busLineStale = true
       throw error
@@ -701,31 +709,25 @@ export class Sequence {
   private syncBusLine(): void {
     if (!this._insertBus) return
     const bus = this._insertBus
-    void this.global.setBusLine(bus, toWire(this._line.program())).then(
-      () => {
-        this._busLineStale = false
-      },
-      (err) => {
-        // 失敗＝TS 側の routing 宣言と daemon の実 line が乖離した状態。
-        // stale フラグを立て、次の routing 呼び出しまたは再生開始時に全量再送で自己修復する
-        // （`pluginActiveByKey` の self-heal と同じ形）。
-        this._busLineStale = true
-        const name = this.stateManager.getName() || 'sequence'
-        if (err instanceof DaemonProtocolError) {
-          // daemon 側の決定的な拒否（kind/順序違反・非 outproc-effect ビルドの UNSUPPORTED 等）。
-          // 再送しても同じ結果＝スクリプト側の修正が必要なので、actionable な error で出す。
-          console.error(
-            `❌ ${name}: SetBusLine(${bus}) was rejected — routing was NOT applied. ` +
-              `Fix the declaration and re-run .output()/.send(): ${err.message}`,
-          )
-        } else {
-          console.warn(
-            `⚠️  ${name}: SetBusLine(${bus}) failed (transient) — ` +
-              `will re-sync on the next routing call or playback start: ${err}`,
-          )
-        }
-      },
-    )
+    void this.pushBusLine().catch((err) => {
+      // 失敗＝TS 側の routing 宣言と daemon の実 line が乖離した状態。
+      // stale フラグを立て、次の routing 呼び出しまたは再生開始時に全量再送で自己修復する
+      // （`pluginActiveByKey` の self-heal と同じ形）。
+      const name = this.stateManager.getName() || 'sequence'
+      if (err instanceof DaemonProtocolError) {
+        // daemon 側の決定的な拒否（kind/順序違反・非 outproc-effect ビルドの UNSUPPORTED 等）。
+        // 再送しても同じ結果＝スクリプト側の修正が必要なので、actionable な error で出す。
+        console.error(
+          `❌ ${name}: SetBusLine(${bus}) was rejected — routing was NOT applied. ` +
+            `Fix the declaration and re-run .output()/.send(): ${err.message}`,
+        )
+      } else {
+        console.warn(
+          `⚠️  ${name}: SetBusLine(${bus}) failed (transient) — ` +
+            `the declared line remains pending for the next routing call or playback start: ${err}`,
+        )
+      }
+    })
   }
 
   /**
@@ -874,36 +876,38 @@ export class Sequence {
           `MIDI is sent to an external device and therefore has no mixer output destination.`,
       )
     }
-    const hadBus = this._insertBus !== undefined
     this._insertBus = await this.global.sequenceEffect(name, value, pluginId)
     // #611 §5.1/§3.1: record the rack's position in the chain (the plugin CONTENT is already
     // loaded by sequenceEffect() above via the separate EffectChainMap/LoadPlugin path — this
     // `rack` element is only the position marker `SetBusLine` needs to place it correctly
     // relative to gain/pan/output/send, e.g. E2E-6's pre- vs. post-rack `send`).
     this.upsertLine({ kind: 'rack' })
-    if (!hadBus) this.adoptLineOnFirstBus()
     await this.pushBusLine()
     await this.ensureInstrumentSourceRouting()
     return this
   }
 
   /**
-   * #611 §5.2 "バス確保時の引き継ぎ": the moment a bus is FIRST allocated (by effect()/output()/
-   * send()), a fixed gain()/pan() already recorded on `_line` (written while this sequence had
-   * no bus, so it was still applied event-side) must stop being applied event-side too —
-   * otherwise it is double-applied (event side AND the new line) until the next bar boundary.
-   * A no-op when gain()/pan() were never called, or are random (random stays event-side always
-   * — §2.4/§5.2 — and is therefore never mirrored onto the line in the first place).
+   * #611 §5.2 "バス確保時の引き継ぎ": after a complete line has been accepted, fixed gain/pan
+   * values declared on that line leave the event side. Running this after EVERY successful
+   * push also completes a previously failed adoption when a later routing/playback retry wins.
+   * Random values remain event-side; their neutral line elements therefore do not match here.
    */
-  private adoptLineOnFirstBus(): void {
+  private adoptLineOnFirstBus(pushedProgram: readonly LineElement[]): void {
+    const fixedGainOnLine = pushedProgram.some(
+      (element) => element.kind === 'gain' && element.db !== 0,
+    )
+    const fixedPanOnLine = pushedProgram.some(
+      (element) => element.kind === 'pan' && element.pan !== 0,
+    )
     const gainState = this.gainManager.getGain()
     const panState = this.panManager.getPan()
     let changed = false
-    if (gainState.gainRandom === undefined && gainState.gainDb !== 0) {
+    if (fixedGainOnLine && gainState.gainRandom === undefined && gainState.gainDb !== 0) {
       this.gainManager.setGain({ valueDb: 0 })
       changed = true
     }
-    if (panState.panRandom === undefined && panState.pan !== 0) {
+    if (fixedPanOnLine && panState.panRandom === undefined && panState.pan !== 0) {
       this.panManager.setPan({ value: 0 })
       changed = true
     }

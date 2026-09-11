@@ -139,7 +139,7 @@ The important point here is **idempotence**. If `_isRunning` is already `true`, 
 Eventually, `RustEnginePlayer.start()` starts `setInterval(1)` and records the playback start time as `startTime = Date.now()`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1541-1545
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1537-1541
   start(): void {
     if (this.isRunning) return
     this.isRunning = true
@@ -444,7 +444,7 @@ All `ScheduledPlay.time` values are **relative times (ms)** based on the schedul
 The important point is that `startTime` is not reset even when `stop()` is called.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1560-1566
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1556-1562
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId)
@@ -502,7 +502,7 @@ started later. The handle is now held by `StateManager` as `runTimer`, and `clea
 first at the entry of `run()` / `loop()` / `stop()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2013-2041
+// packages/engine/src/core/sequence.ts:2017-2045
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()

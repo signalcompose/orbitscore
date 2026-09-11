@@ -196,6 +196,43 @@ describe('Global.sum() / Global.aux()', () => {
     expect(() => global.aux('master')).toThrow(/master.*reserved|reserved.*master/i)
   })
 
+  it('emits distinct gain and pan wire ops from a mixer handle', async () => {
+    const setBusLine = vi.fn().mockResolvedValue(undefined)
+    const engine = { setBusLine, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any
+    const handle = new Global(engine).sum('drum')
+
+    await handle.gain(-6)
+    await handle.pan(30)
+
+    expect(setBusLine).toHaveBeenNthCalledWith(1, 'sum-bus-0', [
+      { op: 'rack' },
+      { op: 'gain', gain: 10 ** (-6 / 20) },
+      { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
+    ])
+    expect(setBusLine).toHaveBeenNthCalledWith(2, 'sum-bus-0', [
+      { op: 'rack' },
+      { op: 'gain', gain: 10 ** (-6 / 20) },
+      { op: 'pan', pan: 0.3 },
+      { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
+    ])
+  })
+
+  it('clamps mixer-handle gain and pan with the same ranges as Sequence', async () => {
+    const setBusLine = vi.fn().mockResolvedValue(undefined)
+    const engine = { setBusLine, boot: vi.fn(), quit: vi.fn(), isRunning: true } as any
+    const handle = new Global(engine).sum('drum')
+
+    await handle.gain(999)
+    await handle.pan(150)
+
+    expect(setBusLine).toHaveBeenLastCalledWith('sum-bus-0', [
+      { op: 'rack' },
+      { op: 'gain', gain: 10 ** (12 / 20) },
+      { op: 'pan', pan: 1 },
+      { op: 'output', dest: { kind: 'master' }, thru: false, gain: 1 },
+    ])
+  })
+
   it("re-sends the full declared line (including a previously rejected element) on the next call — self-heal discipline (#611 §5.3-style, supersedes #523 CRITICAL 5's rollback)", async () => {
     // #611: `MixerBusHandle.output()`/`.send()` treat the declared line as TS-side truth and
     // do NOT roll it back on a rejected push (matching `Sequence`'s self-heal discipline —

@@ -141,7 +141,7 @@ describe('Sequence.output() → sum bus routing (MX.2/MX.4)', () => {
     global.sum('drum')
     expect(() => seq.output('drum')).not.toThrow()
     await vi.waitFor(() => expect(warnSpy).toHaveBeenCalled())
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('will re-sync'))
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('remains pending'))
     expect(errorSpy).not.toHaveBeenCalled()
   })
 
@@ -289,6 +289,113 @@ describe('Sequence.send() → aux bus routing (MX.3/MX.4)', () => {
     const { global, seq } = harness()
     global.aux('rev')
     expect(seq.send('rev', 0.5)).toBe(seq)
+  })
+
+  it('accepts db as a named-style option and rejects positional plus named db', async () => {
+    const { global, seq, setBusLine } = harness()
+    global.aux('rev')
+
+    expect(seq.send('rev', { db: -12 })).toBe(seq)
+    await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(1))
+    expect(setBusLine).toHaveBeenLastCalledWith('seq-bus-0', [
+      rack,
+      busOutput('aux-bus-0', true, 10 ** (-12 / 20)),
+      masterOutput(false),
+    ])
+
+    expect(() => seq.send('rev', -12, { db: -6 })).toThrow(
+      /Remove either the second positional argument or the named db:/,
+    )
+    expect(setBusLine).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('Sequence gain/pan line ownership', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(T0)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
+
+  it.each([
+    ['gain', -12, { op: 'gain', gain: 10 ** (-12 / 20) }],
+    ['pan', 30, { op: 'pan', pan: 0.3 }],
+  ] as const)(
+    'routes an instrument source when %s() alone allocates its bus',
+    async (method, value, op) => {
+      const { seq, setBusLine, setSourceRouting } = harness()
+      await seq.instrument('synth.clap')
+
+      seq[method](value)
+
+      await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(1))
+      expect(setBusLine).toHaveBeenCalledWith('seq-bus-0', [rack, op, masterOutput(false)])
+      expect(setSourceRouting).toHaveBeenCalledTimes(1)
+      expect(setSourceRouting).toHaveBeenCalledWith('plugin:kick', 0, 'seq-bus-0')
+    },
+  )
+
+  it.each([
+    ['gain', -6, { type: 'random-walk', center: -12, range: 3 }, { op: 'gain', gain: 1 }],
+    ['pan', 30, { type: 'random-walk', center: 0, range: 20 }, { op: 'pan', pan: 0 }],
+  ] as const)(
+    'clears an old fixed %s line element when switching to event-side random',
+    async (method, fixed, random, neutralOp) => {
+      const { global, seq, setBusLine } = harness()
+      global.sum('drum')
+      seq.output('drum')
+      await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(1))
+
+      seq[method](fixed)
+      await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(2))
+      seq[method](random)
+      await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(3))
+
+      expect(setBusLine.mock.calls[2]?.[1]).toContainEqual(neutralOp)
+      const state = seq.getState()
+      expect(method === 'gain' ? state.gainRandom : state.panRandom).toEqual(random)
+    },
+  )
+
+  it.each([
+    ['gain', -6, 'gainDb'],
+    ['pan', 30, 'pan'],
+  ] as const)(
+    'keeps a fixed %s event-side after a failed push, then adopts it after a successful retry',
+    async (method, value, stateKey) => {
+      const setBusLine = vi
+        .fn()
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('socket closed'))
+        .mockResolvedValueOnce(undefined)
+      const { global, seq } = harness(setBusLine)
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      global.sum('drum')
+      seq.output('drum')
+      await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(1))
+
+      seq[method](value)
+      await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(2))
+      expect(seq.getState()[stateKey]).toBe(value)
+
+      seq.output('drum')
+      await vi.waitFor(() => expect(setBusLine).toHaveBeenCalledTimes(3))
+      await vi.waitFor(() => expect(seq.getState()[stateKey]).toBe(0))
+    },
+  )
+
+  it('rejects a numeric output second argument before allocating or pushing a bus', () => {
+    const { global, seq, setBusLine } = harness()
+    global.sum('drum')
+
+    expect(() => seq.output('drum', -12 as any)).toThrow(
+      /output\(dest, \{ db: -12 \}\).*send\(dest, -12\)/,
+    )
+    expect(seq.getInsertBus()).toBeUndefined()
+    expect(setBusLine).not.toHaveBeenCalled()
   })
 })
 

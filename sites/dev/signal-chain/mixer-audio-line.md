@@ -100,7 +100,7 @@ TS 側の司令塔は `packages/engine/src/core/global/mixer-manager.ts` の `Mi
 並びます。
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:281-301
+// packages/engine/src/core/global/mixer-manager.ts:289-309
     if (name === 'master') {
       throw new Error(
         `global.${kind}("master") is reserved: "master" names the output endpoint, not a ` +
@@ -141,7 +141,7 @@ prefix と上限は TS 側の定数として置かれていて、コメントが
 明言しています。
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:27-40
+// packages/engine/src/core/global/mixer-manager.ts:31-44
 /**
  * `sum-bus-<n>` / `aux-bus-<n>` default pool prefixes. Must match
  * `DEFAULT_SUM_BUS_POOL_PREFIX` / `DEFAULT_AUX_BUS_POOL_PREFIX` in
@@ -208,7 +208,7 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
 > `docs/design/611-output-line-design.md` §2-§3 を参照してください。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:504-532
+// packages/engine/src/core/sequence.ts:509-538
 
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
@@ -226,6 +226,7 @@ sum 名なのか、数値の render bus なのか、LinkAudio channel 名なの�
    */
   output(dest: string | number | OutputDest, opts: OutputOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
+    assertOutputOptions(opts, `Sequence '${name}': output`)
     if (typeof dest === 'object') {
       return this.applyOutputElement(dest, opts, 'output')
     }
@@ -275,7 +276,7 @@ LinkAudio が出力先の時だけ** — が、ここのガード分割にその
 fan-out、同じ宛先名なら上書きです。**単位は #611 PR-B2 で線形（0.0-1.0）から dB へ変わりました。**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:612-628
+// packages/engine/src/core/sequence.ts:618-631
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -284,15 +285,12 @@ fan-out、同じ宛先名なら上書きです。**単位は #611 PR-B2 で線�
    * breaking change for any script still passing e.g. `send("rev", 0.3)` — that value is now
    * read as +0.3 dB, not 30%; see WORK_LOG).
    */
-  send(aux: string | OutputDest, db: number, opts: SendOptions = {}): this {
+  send(aux: string | OutputDest, dbOrOptions?: number | SendOptions, opts: SendOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
     if (typeof aux === 'string' && !aux.trim()) {
       throw new Error(`Sequence '${name}': send(aux, db) requires a non-empty aux name.`)
     }
-    if (!Number.isFinite(db)) {
-      throw new Error(
-        `Sequence '${name}': send(${JSON.stringify(aux)}, ${db}) gain must be finite (dB).`,
-      )
+    const level = resolveSendLevel(dbOrOptions, opts, `Sequence '${name}': send`)
 ```
 
 `_line`（`AudioLine`）が要素をキー（宛先 + 出現序数）で管理する点は覚えておいてください。
@@ -1050,7 +1048,7 @@ PR-2（TS 側）は、instrument sequence が insert bus を持った時点で
 1 箇所に集約しました。`instrument()` → `effect()` の順でも逆でも、ここを通ります。
 
 ```typescript
-// packages/engine/src/core/sequence.ts:924-951
+// packages/engine/src/core/sequence.ts:928-955
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
     const bus = this._insertBus
@@ -1130,7 +1128,7 @@ capture の RMS が dry の約 1.5 倍（sum 経由 1.0 + aux 経由 0.5）に�
 `RustEnginePlayer.setGlobalGain` は「daemon の状態に関わらず先に intent を記録する」のが要点です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1321-1333
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1317-1329
   async setGlobalGain(amplitude: number, rampSec = 0): Promise<void> {
     // 🔴 daemon の状態に関わらず**先に intent を記録する**。未接続時に捨てると、
     // 接続後に復元する手がかりが消える（`Global.gain()` を再評価する経路は存在しない）。

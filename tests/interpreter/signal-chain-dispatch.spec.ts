@@ -435,6 +435,31 @@ describe('Signal Chain runtime resolver dispatch (S2)', () => {
     ])
   })
 
+  it('routes direct send(db:) and rejects duplicate send levels or numeric output options', async () => {
+    const scheduler = new RecordingScheduler() as RecordingScheduler & {
+      setBusLine: ReturnType<typeof vi.fn>
+    }
+    scheduler.setBusLine = vi.fn().mockResolvedValue(undefined)
+    const global = new Global(scheduler)
+    const state = makeState(global)
+    await run('var kick = init global.seq\nvar mix = init global.mixer\nvar verb = mix.aux', state)
+
+    await run('kick.send(verb, db: -12)', state)
+    expect(scheduler.setBusLine).toHaveBeenCalledWith('seq-bus-0', [
+      rack,
+      busOutput('aux-bus-0', true, 10 ** (-12 / 20)),
+      masterOutput(false),
+    ])
+
+    await expect(run('kick.send(verb, -12, db: -6)', state)).rejects.toThrow(
+      /Remove either the second positional argument or the named db:/,
+    )
+    await expect(run('kick.output(verb, -12)', state)).rejects.toThrow(
+      /output\(dest, \{ db: -12 \}\).*send\(dest, -12\)/,
+    )
+    expect(scheduler.setBusLine).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps bare DSL methods on callMethod while rejecting bare plugin and kind mismatches', async () => {
     const global = new Global(new RecordingScheduler())
     const state = makeState(global)
