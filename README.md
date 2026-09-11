@@ -2,7 +2,7 @@
 
 **Live-coding music DSL with a native Rust audio engine, plugin hosting, and MIDI output**
 
-Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundled native audio engine (Rust `orbit-audio-daemon`: sample playback, CLAP / VST3 plugin hosting, mixer) and MIDI output (Pitch DSL, chords, comp). Version 2.0.0 is the released state; the VS Code extension is at 2.1.0. The Rust daemon is the only audio backend; the opt-out path to the previous backend was removed in #502.
+Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundled native audio engine (Rust `orbit-audio-daemon`: sample playback, CLAP / VST3 plugin hosting, mixer) and MIDI output (Pitch DSL, chords, comp). The VS Code extension is at **3.0.0** (the version the `.vsix` and the git tag carry). `ENGINE_VERSION` (2.0.0, the session-log meta header) and `DSL_VERSION` (1.2, the spec version) are separate axes and are deliberately not synced to it — see `docs/design/656-release-design.md` §4.4. The Rust daemon is the only audio backend; the opt-out path to the previous backend was removed in #502.
 
 ## Core Features
 
@@ -48,7 +48,7 @@ Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundle
 **2.0.0 is released.** OrbitScore 2.0.0 is a dual-output live-coding DSL:
 
 - **MIDI output** — degrees/notes resolve to MIDI notes + velocity, emitted to a CoreMIDI / IAC virtual port
-- **Pitch DSL** — scale degrees, chords, voicing, mode, and expression (DSL_VERSION 1.1)
+- **Pitch DSL** — scale degrees, chords, voicing, mode, and expression (DSL_VERSION 1.2)
 - **comp** — automatic accompaniment: voice-leading (C1) + comp rhythm (C2a)
 - **quantize** — bar-quantized scheduling control
 - **Audio foundation** — native daemon sample playback (WAV/AIFF/MP3/MP4), `.chop()` slicing, polymeter, `RUN()`/`LOOP()`/`MUTE()` transport
@@ -97,9 +97,16 @@ See [WORK_LOG.md](docs/development/WORK_LOG.md) for detailed resolution notes.
 - ✅ Explicit scheduler control (no auto-start)
 - ✅ Polymeter support (independent time signatures per sequence)
 
-### ICMC v1.1.0 bundle release (Epic #131)
+### ICMC v1.1.0 bundle release (Epic #131) — historical
 
-`.vsix` install だけで音が鳴る + tag push で全 channel に自動 publish:
+> 🔴 この節は **v1.1.0 当時の記録**です。表が挙げている scsynth / SuperCollider の同梱は
+> [#502](https://github.com/signalcompose/orbitscore/issues/502)（PR
+> [#840](https://github.com/signalcompose/orbitscore/pull/840)・2026-09-10）で**削除済み**で、
+> 現在の `.vsix` に scsynth は入っていません。唯一のバックエンドは Rust `orbit-audio-daemon` です。
+
+`.vsix` install だけで音が鳴る + tag push で自動リリース（**当時の計画**。Marketplace / Open VSX
+への publish は行わないことになり、現在は tag push が作るのは GitHub Release だけ — `release.yml`
+の `PUBLISH_MARKETPLACE` 未設定で publish ステップは skip される。owner 裁定 2026-09-10・#197）:
 
 | Issue | Status | Description |
 |-------|--------|-------------|

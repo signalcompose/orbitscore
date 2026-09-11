@@ -14,4 +14,4 @@
 export const ENGINE_VERSION = '2.0.0'
 
 /** DSL spec version (PITCH_DSL_SPEC) — a separate axis from the product version. */
-export const DSL_VERSION = '1.1'
+export const DSL_VERSION = '1.2'
