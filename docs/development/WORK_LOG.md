@@ -17,6 +17,36 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: carry the install-route fix into the legacy ja manual (PR #880 追従) (Sep 11, 2026)
+
+ルーティン docs 追従。追従元は PR [#880](https://github.com/signalcompose/orbitscore/pull/880)
+（マージコミット `4e661467b0ff8997fc67b4b9bd6f31f1ef33e8d5`・docs のみ・CI 4/4 緑）。
+
+#### 追従した 1 点
+
+PR #880 は資産名の実物合わせ（`orbitscore-<version>.vsix` → `orbitscore-darwin-arm64-<version>.vsix`）を
+**4 箇所**に入れたが、**`docs/user/ja/USER_MANUAL.md` が漏れていた**。
+
+| 直した箇所 | 旧 | 新 |
+|---|---|---|
+| `docs/user/ja/USER_MANUAL.md:59` | `orbitscore-*.vsix` | `orbitscore-darwin-arm64-*.vsix` + Assets / releases/latest の導線 |
+| 同 `:63`（CLI） | `code --install-extension orbitscore-*.vsix` | 同上のファイル名 |
+| 同 `:65` | 「将来は VS Code Marketplace と Open VSX からも install 可能になる予定」 | **公開しない**（owner 2026-09-10・#880 の WORK_LOG に記録） |
+
+接尾辞 `darwin-arm64` は `release.yml:45` の `VSIX_TARGET` を `vsce package --target` へ渡した結果であり
+（`release.yml:118`）、**リリース資産にのみ付く**。版番号は #880 の方針どおり固定していない。
+
+#### 追従不要と判断したもの
+
+| 対象 | 理由 |
+|---|---|
+| `docs/user/{ja,en}/GETTING_STARTED.md:72` の `orbitscore-0.0.1.vsix` | **ローカルビルドの `.vsix`**（直前が `npm run build`）。`--target` を渡さない `vsce package` には接尾辞が付かないので #880 の資産名は当たらない。版が古いのは別件 |
+| `docs/user/en/USER_MANUAL.md` | `.vsix` のダウンロード導線を**そもそも持たない**（build-from-source のみ）。ja と対になる記述が無い |
+| `docs/user/ja/USER_MANUAL.md:55` の scsynth 同梱 | #502 の失効範囲。冒頭バナーが既にカバーしており、#880 の差分ではない |
+| `sites/user/**`・`README.md`・`packages/vscode-extension/README.md` | #880 が ja / en とも更新済み |
+| DSL / ランタイム / OrbitStudio の各層 | #880 は **docs のみ**（5 ファイル）。構文・意味論・MCP・評価経路のいずれも触っていない |
+
+検証: `docs:build`（user / dev）緑・`docs:check` 944 / 0 failed。
 ### fix(plugin-scan): re-export vst3_scan publicly — my sed excluded digits (Sep 12, 2026)
 
 **Date**: 2026-09-12 / **ブランチ**: `888-c3-vst3-host`

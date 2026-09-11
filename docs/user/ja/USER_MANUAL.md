@@ -56,13 +56,15 @@ OrbitScore VS Code 拡張は **scsynth (~11.5 MB) を同梱**しているため�
 
 #### 推奨方法
 
-[GitHub Releases](https://github.com/signalcompose/orbitscore/releases) から最新の `orbitscore-*.vsix` をダウンロードし、以下のいずれかで install:
+[GitHub Releases](https://github.com/signalcompose/orbitscore/releases) から最新の `orbitscore-darwin-arm64-*.vsix` をダウンロードし、以下のいずれかで install:
 
 1. **`.vsix` ファイルをダブルクリック** (VS Code が開きます)
 2. VS Code で **`Extensions: Install from VSIX...`** コマンド経由
-3. CLI: **`code --install-extension orbitscore-*.vsix`**
+3. CLI: **`code --install-extension orbitscore-darwin-arm64-*.vsix`**
 
-> 将来は VS Code Marketplace と Open VSX からも install 可能になる予定です。
+> 資産はリリースページ下部の **Assets** の中にあります。[最新リリース](https://github.com/signalcompose/orbitscore/releases/latest) を開くと、そのページにインストール手順も載っています。
+
+> 🔴 **VS Code Marketplace と Open VSX には公開していません**（owner 2026-09-10・PR [#880](https://github.com/signalcompose/orbitscore/pull/880) の WORK_LOG に記録）。入手経路は GitHub Releases の `.vsix` だけです。
 
 #### 既存 SuperCollider ユーザー向け (オプション)
 
