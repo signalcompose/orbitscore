@@ -1,13 +1,15 @@
-// #611 §9 golden: send(aux, 0.3) — 0.3 is now dB (B2), not linear (was pre-#611).
+// #611 E2E-2: kick.output(verb, thru: true, db: -12).output(master) — explicit thru/db.
 //
-// 🔴 バス名は一意にする（output_line_sum.orbs の注記と同じ理由）。
+// Bus name is unique within the shared gated session (see output_line_sum.orbs's note).
 
 var global = init GLOBAL
 global.tempo(120)
 global.beat(4 by 4)
 global.audioPath("../../../test-assets/audio")
-global.aux("o0rev611")
 global.start()
+
+var mix = init global.mixer
+var verb = mix.aux
 
 var dry = init global.seq
 dry.beat(4 by 4).length(1)
@@ -17,7 +19,7 @@ dry.play(1, 1, 1, 1)
 var kick = init global.seq
 kick.beat(4 by 4).length(1)
 kick.audio("kick.wav").chop(1)
-kick.send("o0rev611", 0.3)
+kick.output(verb, thru: true, db: -12).output(master)
 kick.play(1, 1, 1, 1)
 
 LOOP(dry)

@@ -377,7 +377,7 @@ Beyond `VAR`, `parseVarDeclaration()` decides the kind of declaration by looking
 What is interesting is that when parsing a statement of the form `<identifier>.method(args)`, **the parser always returns `type: 'sequence'`**.
 
 ```typescript
-// packages/engine/src/parser/parse-statement.ts:610-618
+// packages/engine/src/parser/parse-statement.ts:615-623
     // Note: We cannot determine if target is global or sequence at parse time
     // since variable names are arbitrary. Use 'sequence' type and let the interpreter
     // determine the actual type by checking state.globals and state.sequences.
@@ -394,7 +394,7 @@ As the comment in the code explains, at parse time there is no way to determine 
 For the same reason, a statement carries an `invocation` field recording "was it called with parentheses." The parser records `seq.drums` (an output routing to the mixer) and `seq.TALReverb4()` (a plugin call) only as a difference in shape, leaving the resolution of meaning to the interpreter.
 
 ```typescript
-// packages/engine/src/parser/types.ts:261-268
+// packages/engine/src/parser/types.ts:262-269
 export type SequenceStatement = {
   type: 'sequence'
   target: string

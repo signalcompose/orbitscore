@@ -11,6 +11,19 @@ export interface AudioDevice {
   channels: number
 }
 
+export type WireDest =
+  | { kind: 'master' }
+  | { kind: 'bus'; name: string }
+  | { kind: 'device'; channels: [number, number] | [number] }
+  | { kind: 'render'; id: string }
+  | { kind: 'link'; channel: string }
+
+export type WireLineOp =
+  | { op: 'rack' }
+  | { op: 'gain'; gain: number }
+  | { op: 'pan'; pan: number }
+  | { op: 'output'; dest: WireDest; thru: boolean; gain: number }
+
 export interface PluginLoadResult {
   pluginId: string
   pluginName: string
@@ -225,6 +238,9 @@ export interface AudioEngine {
     output: string | undefined,
     sends: { bus: string; gain: number }[],
   ): Promise<void>
+
+  /** Replace one daemon bus's complete ordered audio line. */
+  setBusLine?(bus: string, line: WireLineOp[]): Promise<void>
 
   /**
    * Route one premaster source output. `source` is an opaque daemon key, `unit` is the

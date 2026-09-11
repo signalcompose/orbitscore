@@ -112,8 +112,10 @@ export type MethodChain      = { method: string; args: any[]; invocation?: 'bare
 | メソッド | audio | midi | instrument | sum/aux | output-node | 実測根拠 |
 |---|---|---|---|---|---|---|
 | `quantize` `tempo` `beat` `length` | | | | `error` | `error` | `sequence.ts:192/219/226/233` ガード無し・種に依らない。バスは `guardBusChain`（`runtime.ts:100-109`）が拒否 |
-| `gain` `defaultGain` | | 🟡`warn` R:ignore | 🟡`warn` R:ignore | `error` | `error` | 🔴 §2.3 の実測。読み手 3 箇所すべてが audio 経路 |
-| `pan` `defaultPan` | | 🟡`warn` R:ignore | 🟡`warn` R:ignore | `error` | `error` | 同上 |
+| `gain` | | 🟡`warn` R:ignore | `ok` R:apply（バス経由） | `error` | `error` | ✅ 束 O-surface・PR-B2（2026-09-10）で instrument も line 経由で適用される（`sequence.ts` `gain()`・§5.2）。audio 欄は空欄のまま（バス無しは発音側・バス有りは line、どちらも効く） |
+| `defaultGain` | | 🟡`warn` R:ignore | 🟡`warn` R:ignore | `error` | `error` | 🔴 §2.3 の実測のまま（`defaultGain`/`defaultPan` は PR-B2 のスコープ外・line と同期しない） |
+| `pan` | | 🟡`warn` R:ignore | `ok` R:apply（バス経由） | `error` | `error` | 同上（`pan()`）。`gain(random)`/`pan(random)` は今日どおり発音側のまま |
+| `defaultPan` | | 🟡`warn` R:ignore | 🟡`warn` R:ignore | `error` | `error` | 同上 |
 | `output(sum名)` | | 🔴`error` R:throw | | `error` | `error` | `sequence.ts:362-367` |
 | `output(数値)` | | 🟡`warn` R:ignore ⟨**裁定待ち §15 (1)**⟩ | 🔴`error` R:throw | `error` | `error` | `:381-386`（instrument）/ midi は素通り。core spec `:1225` と一致 |
 | `output("名前")` | | 🟡`warn` R:ignore ⟨同上⟩ | 🔴`error` R:throw | `error` | `error` | `:405-410` / core spec `:1226` |

@@ -71,13 +71,35 @@ export const SEQUENCE_DSL_METHODS: ReadonlySet<string> = new Set([
   'unmute',
 ])
 
-export const BUS_DSL_METHODS: ReadonlySet<string> = new Set(['effect', 'ui'])
+export const BUS_DSL_METHODS: ReadonlySet<string> = new Set([
+  'effect',
+  'ui',
+  'output',
+  'send',
+  'gain',
+  'pan',
+])
 
 export type MixerRuntimeNode =
   | {
+      /**
+       * #611（owner 2026-09-11）: master **トラック**。デバイスノードでも宣言済みバスでもない
+       * 第 3 の種類。`output(master)` はこのトラックの頭に合流し、そこから master のラックと
+       * `global.gain()` を通って**master が自分の出口として持っているデバイス**へ出る。
+       *
+       * 🔴 以前は `{ kind: 'output', channels: [1, 2] }` として作っていたが、それは
+       * **master トラックの出口がたまたま 1,2 であることと、デバイスの 1,2 を混同**していた。
+       * master の出口は 1,2 固定だが（owner 2026-09-11: デバイス変更で 1,2 でなくなると
+       * 困るため）、**固定であることと「1,2 という名前が master を意味する」ことは別**。
+       */
+      readonly kind: 'master'
+      readonly global: Global
+    }
+  | {
       readonly kind: 'output'
       readonly global: Global
-      readonly channels: readonly [number, number]
+      // #611 §2.2: a one-element pair is mono (L+R merged at the daemon — Q-611-5).
+      readonly channels: readonly [number, number] | readonly [number]
     }
   | {
       readonly kind: 'sum' | 'aux'
@@ -241,6 +263,19 @@ export function registerMixerNode(
     return existing
   }
 
+  // 🔴 `master` は master **トラック**を指す予約語（owner 2026-09-11）。デバイスノードや
+  // sum/aux にこの名前を付けると、同じ名前が「トラック」と「そのユーザーが宣言した別物」の
+  // 両方を意味することになり、`kick.master` がどちらを指すかが宣言順で決まってしまう。
+  // `global.sum("master")` / `global.aux("master")` は既に同じ理由で拒否している
+  // （`mixer-manager.ts`）ので、`mix.output` 経路にも同じ規則を置く。
+  if (statement.variableName === 'master') {
+    throw new Error(
+      `Mixer node "master" is reserved: "master" names the master track, which every ` +
+        `sequence and bus can already target with output("master"). Give this node another ` +
+        `name (e.g. var mainOut = mix.output(1, 2)).`,
+    )
+  }
+
   let node: MixerRuntimeNode
   if (statement.kind === 'output') {
     // `channels` is optional on the AST but the parser always populates it for
@@ -283,32 +318,48 @@ export function resolveMixerNode(
     return { kind: stringNode.kind, global, handle }
   }
   if (!global || name !== 'master') return undefined
-
-  for (const node of registry.nodes.values()) {
-    if (node.global === global) return undefined
-  }
-  return { kind: 'output', global, channels: [1, 2] as const }
+  // 🔴 `master` は**常に** master トラックを指す（owner 2026-09-11）。
+  //
+  // 以前はここに「この Global に明示ノードが 1 つでもあれば undefined」というガードがあった。
+  // それは `master` が **device ノード**（`{kind:'output', channels:[1,2]}`）だった時代の
+  // 名前衝突対策で、ユーザーが `var master = mix.output(...)` と宣言しうる前提だった。
+  // 今は `master` を予約語として宣言ごと拒否している（`registerMixerNode`）ので衝突は起きず、
+  // ガードを残すと「sum を 1 つ宣言した瞬間に `kick.master` が壊れる」という、
+  // 宣言順に依存した振る舞いだけが残る。
+  return { kind: 'master', global }
 }
 
 /**
  * The object a mixer node exposes as a statement receiver.
  *
- * Only sum/aux buses have one in v1: they are real daemon buses that already
- * accept inserts. Output endpoints — including implicit `master` on channels 1–2 —
- * have no receiver surface at any channel pair, because routing to a physical
- * output is what #484 D4 adds. Throwing for every output keeps the unimplemented
- * path loud (SC.3.3 forbids swallowing it) instead of handing back an inert
+ * Only sum/aux buses have one in v1: they are real daemon buses that already accept inserts.
+ *
+ * A physical output node (`mix.output(...)`) is never itself a receiver — it names a device,
+ * which has no insert of its own to chain onto. **`master` is not a receiver in v1 either**,
+ * for a different reason: it IS a track with its own rack and gain (the engine treats it as
+ * one — `default_master_line_program()` has the same shape as a bus), but the DSL does not
+ * hand out a handle for it yet (owner 2026-09-11: master's output stays fixed at device 1,2,
+ * so nothing in the frozen surface needs to address the track itself).
+ *
+ * Both ARE routable as a DESTINATION: pass the node as an argument to another receiver's
+ * `output()`/`send()` (`kick.output(cue)`), which the interpreter resolves structurally
+ * (#611 §3.8), or write its bare name/"L,R" form as a string. Throwing here keeps a mistaken
+ * `cue.effect(...)` loud (SC.3.3 forbids swallowing it) instead of handing back an inert
  * object that `callMethod` would silently no-op on.
  *
  * Which methods the returned bus accepts is not decided here: {@link guardBusChain}
  * decides that for every bus, however it was reached.
  */
 export function mixerNodeReceiver(node: MixerRuntimeNode): MixerBusHandle {
-  if (node.kind !== 'output') {
+  if (node.kind !== 'output' && node.kind !== 'master') {
     return node.handle
   }
+  const what =
+    node.kind === 'master'
+      ? 'The master track has no DSL handle in this release'
+      : `Mixer output endpoints (channels ${node.channels.join(', ')}) cannot receive methods`
   throw new Error(
-    `Mixer output endpoints (channels ${node.channels.join(', ')}) cannot receive methods yet: ` +
-      `routing to a physical output lands with #484 D4.`,
+    `${what} — pass this node as an output()/send() destination instead ` +
+      `(e.g. kick.output(<this node>)).`,
   )
 }

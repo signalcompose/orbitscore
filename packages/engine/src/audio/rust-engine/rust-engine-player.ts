@@ -49,6 +49,7 @@ import type {
   PluginStateSaveTarget,
   PluginUiCloseCompletion,
   PluginUiTarget,
+  WireLineOp,
 } from '../types'
 
 import { DaemonClient } from './daemon-client'
@@ -440,6 +441,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
     string,
     { output: string | undefined; sends: { bus: string; gain: number }[] }
   >()
+  /** Complete bus-line intents replayed after daemon respawn (#611 B1). */
+  private readonly busLines = new Map<string, WireLineOp[]>()
   /**
    * 🔴 最後に設定したマスターゲイン（#643 PR-2）。daemon は respawn すると
    * **unity から始まる**ので、再送しないとマスターが黙って効かなくなる。
@@ -788,6 +791,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
           await this.reloadPluginsAfterRespawn()
           await this.reloadEffectRacksAfterRespawn()
           await this.reapplyBusRoutingAfterRespawn()
+          await this.reapplyBusLinesAfterRespawn()
           await this.reapplySourceRoutingAfterRespawn()
           await this.reapplyGlobalGainAfterRespawn()
           console.warn(
@@ -978,11 +982,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * Runtime mixer bus routing change (MX.4, #459/#453 M3). Unlike LinkAudio channel
-   * registration, there is no hardware-bus fallback for a missing sum/aux target — the
-   * daemon-side error (e.g. `UNSUPPORTED` on a non-`outproc-effect` build, or a kind/order
-   * violation) is a real failure and propagates unchanged to the caller (`Sequence`'s
-   * `output()`/`send()`, which log it via `console.warn` — see that file).
+   * Legacy `SetBusRouting` endpoint retained for wire compatibility. Since #852 the DSL no
+   * longer reaches this path: Sequence/MixerBusHandle routing uses `SetBusLine` instead, whose
+   * live respawn replay is `reapplyBusLinesAfterRespawn()`.
    */
   async setBusRouting(
     seqBus: string,
@@ -1007,11 +1009,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * Re-issues the last intended `SetBusRouting` per seq bus after a daemon respawn — the
-   * new daemon process starts with all `routing_override`/send atomics at their defaults,
-   * so without this replay every sum/aux routing silently reverts to plain per-sequence
-   * output (audio quietly goes to the wrong place). Mirrors `reloadPluginsAfterRespawn`:
-   * per-entry independent failure handling, and a failure must not fail the respawn itself.
+   * Legacy replay for callers of `setBusRouting()` above. Since #852 no DSL path populates
+   * `busRoutings`; the live DSL replay is `reapplyBusLinesAfterRespawn()`. Kept while the old
+   * daemon wire command still exists, with independent failure handling per cached entry.
    */
   private async reapplyBusRoutingAfterRespawn(): Promise<void> {
     for (const [seqBus, { output, sends }] of this.busRoutings.entries()) {
@@ -1021,6 +1021,37 @@ export class RustEnginePlayer implements AudioEngineBackend {
         // Cache entry intentionally remains: a later daemon respawn retries restoration.
         console.error(
           `❌ [rust-engine] failed to restore bus routing after daemon respawn (bus=${seqBus})`,
+          err,
+        )
+      }
+    }
+  }
+
+  /** Replace a bus line and retain transport-failure intent for respawn replay. */
+  async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
+    const prev = this.busLines.get(bus)
+    const intent = [...line]
+    this.busLines.set(bus, intent)
+    try {
+      await this.daemon.setBusLine(bus, intent)
+    } catch (err) {
+      if (err instanceof DaemonProtocolError) {
+        if (prev) this.busLines.set(bus, prev)
+        else this.busLines.delete(bus)
+      }
+      throw err
+    }
+  }
+
+  /** Reapply complete bus-line intents after the legacy routing replay. */
+  private async reapplyBusLinesAfterRespawn(): Promise<void> {
+    for (const [bus, line] of this.busLines.entries()) {
+      try {
+        await this.daemon.setBusLine(bus, line)
+      } catch (err) {
+        // Keep the intent: a later respawn gets another restoration attempt.
+        console.error(
+          `❌ [rust-engine] failed to restore bus line after daemon respawn (bus=${bus})`,
           err,
         )
       }
