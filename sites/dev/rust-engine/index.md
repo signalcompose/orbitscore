@@ -345,7 +345,7 @@ Ableton Link（GPL-2.0-or-later）が出荷バイナリの依存グラフに入�
 gated E2E の側に、正反対の実測が記録されています。
 
 ```ts
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:5252-5258
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5388-5394
   // **A comment is not evidence of implementation behavior** — main's real run found
   // capture RMS = 0 for `d645Live` and NO `LINK_AUDIO_UNAVAILABLE`/gap-warning marker in
   // get_log at all, meaning the assumed fallback does not actually happen (or does not

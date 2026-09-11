@@ -41,7 +41,7 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
       // output(). Without it the existing tests still pass (optional-chained),
       // but its absence meant the output()→register wiring was never exercised.
       registerLinkAudioChannel: vi.fn().mockResolvedValue(undefined),
-      setBusRouting: vi.fn().mockResolvedValue(undefined),
+      setBusLine: vi.fn().mockResolvedValue(undefined),
     } as any
 
     global = new Global(mockPlayer)
@@ -115,12 +115,12 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
   describe('output() empty-string guard', () => {
     it('throws when called with an empty string', () => {
       global.linkAudio()
-      expect(() => seq.output('')).toThrow(/requires a non-empty channel name/)
+      expect(() => seq.output('')).toThrow(/requires a non-empty destination/)
     })
 
     it('throws when called with a whitespace-only string', () => {
       global.linkAudio()
-      expect(() => seq.output('   ')).toThrow(/requires a non-empty channel name/)
+      expect(() => seq.output('   ')).toThrow(/requires a non-empty destination/)
     })
 
     it('does not throw when called with a valid channel name (regression guard)', () => {
@@ -165,8 +165,8 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
     // `resolveDispatchChannel()` が throw して**ライブ演奏が停止する**ことを特定した。
     // `_renderBus` のフィールドコメントが宣言する不変条件とも矛盾していた。
     it('keeps the live output channel when an offline render bus is declared', () => {
-      seq.output('master')
-      expect(seq.getOutputChannel()).toBe('master')
+      seq.output('liveCh')
+      expect(seq.getOutputChannel()).toBe('liveCh')
 
       seq.output(3)
 
@@ -174,16 +174,16 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
       expect(
         seq.getOutputChannel(),
         'オフラインの宛先宣言が live routing を壊すと、LinkAudio セッションで演奏が止まる',
-      ).toBe('master')
+      ).toBe('liveCh')
     })
 
     it('clears the render bus when the same sequence is re-declared with a channel name', () => {
       seq.output(3)
       expect(seq.getRenderBus()).toBe('3')
 
-      seq.output('master')
+      seq.output('liveCh')
 
-      expect(seq.getOutputChannel()).toBe('master')
+      expect(seq.getOutputChannel()).toBe('liveCh')
       expect(
         seq.getRenderBus(),
         'output("master") で render bus が残ると、score-mode で意図しないバスへ出力される',
@@ -215,12 +215,12 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
     // 生き残った。実害: `output(10)` の typo で `output(0)` と書くと、エラーは出るが
     // その前に master ルーティングが失われ、次の再生で無音になる。
     it('leaves existing routing untouched when a numeric render bus is rejected', () => {
-      seq.output('master')
+      seq.output('liveCh')
       seq.output(3)
 
       expect(() => seq.output(0)).toThrow(/integer from 1 to 16/)
 
-      expect(seq.getOutputChannel(), '例外の前に live routing が壊れている').toBe('master')
+      expect(seq.getOutputChannel(), '例外の前に live routing が壊れている').toBe('liveCh')
       expect(seq.getRenderBus(), '例外の前に render bus が壊れている').toBe('3')
     })
 
@@ -230,7 +230,15 @@ describe('Sequence.output() — LinkAudio channel binding', () => {
 
       expect(seq.getRenderBus()).toBeUndefined()
       expect(seq.getInsertBus()).toBe('seq-bus-0')
-      expect(mockPlayer.setBusRouting).toHaveBeenCalledWith('seq-bus-0', 'sum-bus-0', [])
+      expect(mockPlayer.setBusLine).toHaveBeenCalledWith('seq-bus-0', [
+        { op: 'rack' },
+        {
+          op: 'output',
+          dest: { kind: 'bus', name: 'sum-bus-0' },
+          thru: false,
+          gain: 1,
+        },
+      ])
       expect(warnSpy).not.toHaveBeenCalled()
     })
   })

@@ -253,7 +253,7 @@ export function buildMcpServerUrl(port: number): string {
 一方で CLAUDE.md は「`evaluate_orbitscore` の `ok` に assert しても何も証明しない」「エンジン側のエラーは `get_log` にしか出ない」と繰り返し書いています。どちらが正しいのでしょうか。**両方とも、それぞれの時点で正しい**のです。`#614` の前後で `ok` の意味が変わりました。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2748-2785
+// packages/vscode-extension/src/extension.ts:2754-2791
 async function evaluateForAgent(code: string): Promise<EvaluateResult> {
   if (!isLiveCodingMode || !engineProcess || engineProcess.killed) {
     return { ok: false, error: 'engine is not running — start the engine first' }
@@ -379,7 +379,7 @@ export async function resolveEngineState(
 問い合わせの予算は 2.5 秒です。短く見えますが、これは伸ばしても意味が無いという判断の結果でした。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2878-2889
+// packages/vscode-extension/src/extension.ts:2884-2895
  * 🔴 **長くしても取れるようにはならない。** `//#getEngineState` は REPL の `handleLine` の中で
  * 処理され、`createReplSession` の `pushLine` は全行を**単一の FIFO promise チェーン**に載せる
  * （`packages/engine/src/cli/repl-mode.ts` の「直列化の根拠 — #476」）。つまり長い await
@@ -495,7 +495,7 @@ flowchart LR
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:98-122
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:103-127
 const GATE_ENV = 'ORBIT_GATED_ORBITSTUDIO'
 const DEFAULT_APP_PATH = '/Applications/Visual Studio Code.app'
 // ...
@@ -511,7 +511,7 @@ const appAvailable = fs.existsSync(appPath)
 suite の読み込み時、テストを 1 本も走らせる前に daemon バイナリの鮮度を検査します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:208-218
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:226-236
   if (newest.at > builtAt) {
     throw new Error(
       'gated E2E: the daemon binary is older than the Rust sources, so this run would measure ' +
@@ -530,7 +530,7 @@ suite の読み込み時、テストを 1 本も走らせる前に daemon バイ
 **何を「ソース」と数えるか**にも一手が入っています（#713）。`rust/` 配下の `.rs` を無条件に拾うと、別の cargo ターゲットである統合テスト（実測では `rust/crates/orbit-vst3-host/tests/spike_s_concurrent_load.rs`）が「最新のソース」に選ばれてしまいます。それらは `orbit-audio-daemon` のバイナリの依存グラフに入らないので、cargo は依存関係を正しく読んで何もビルドせず、バイナリの mtime も更新されません。つまりガードのメッセージが指示する `npm run test:e2e:gated` を何度打っても消えない、**解消不能な赤**になります。引き金は mtime の性質で、`git checkout` はファイルの mtime をチェックアウトした時刻へ更新するため、ブランチを行き来しただけで内容の変わっていない統合テストが「最新のソース」に化けます。#713 ではこれで実機 gated が起動段階から 1 本も走らなくなりました。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:197-199
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:215-217
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
           continue
         }
@@ -551,7 +551,7 @@ npm は `pre<script>` を自動で先に走らせるので、`npm run test:e2e:g
 ### アプリの起動 — stock VS Code と Extension Development Host
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:589-620
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:713-744
   const port = portBase + Math.floor(Math.random() * 200)
   const child = spawn(
     path.join(appPath, 'Contents/Resources/app/bin/code'),
@@ -593,7 +593,7 @@ teardown は「安全性」の注意書きが繰り返されています。以�
 対処は「プロセスツリーの根だけに signal する」ことです。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:351-384
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:369-402
 async function killHarnessInstances(): Promise<void> {
   const pids = harnessPids()
   if (pids.length === 0) return
@@ -639,7 +639,7 @@ async function killHarnessInstances(): Promise<void> {
 キャプチャの有効化は daemon の spawn 時に `ORBIT_CAPTURE_WAV` 環境変数で渡すしかありません。拡張は `activate()` 時に engine を自動起動するので、gated spec は **自動起動した engine を一度止めてから** capture 付きで起動し直します。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1313-1318
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:1441-1446
       const preStopRes = await client.call('stop_engine')
       expect(preStopRes.isError, preStopRes.text).toBe(false)
       await waitForEngine(false, 15_000, 'engine stopped')
@@ -812,7 +812,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 先頭テストの最後の assert は、この onset 間隔をテンポの証拠に使います。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:1924-1938
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2051-2065
       // ── 9. Objective audio verification (no listening required) ──
       const wavBuf = fs.readFileSync(captureWavFile)
       const analysis = analyzeWavBuffer(wavBuf)
@@ -837,7 +837,7 @@ onset の閾値は「窓 RMS の中央値 × 4」と絶対床 `0.01` の大き�
 🔴 かつては「各操作の壁時計時刻を記録し、capture 終了時刻から逆算して WAV 上の区間に写像する」形でした。これは #739 で撤去されています — 逆算はキャプチャ実長が壁時計より短いと負になり、`Math.max(0, …)` で **黙って 0 にクランプされてファイル先頭を指す**ためです。窓を後ろへずらすと逆に前を測る、という形で実際に事故が起きました。
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:411-416
+// tests/e2e/helpers/capture-windows.ts:417-422
 export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }>): number {
   if (windows.length === 0) throw new Error('quadraticMeanRms requires at least one window')
   return Math.sqrt(
@@ -864,7 +864,7 @@ export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }
 `unity` 窓が丸ごと無音になり、比較の分母が意味を失います。
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:662-670
+// tests/e2e/helpers/capture-windows.ts:668-676
     if (index === 0 && (soundStartSec === null || segment.fromSec < soundStartSec)) {
       throw invariantError(
         'A1',
@@ -882,7 +882,7 @@ export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }
 止めるためです。
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:609-612
+// tests/e2e/helpers/capture-windows.ts:615-618
     const expected = Math.round(
       (segment.toSec - segment.fromSec - 2 * guardSec) / ANALYSIS_BUCKET_SEC,
     )
@@ -894,7 +894,7 @@ export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }
 壊れれば区間はどこでも指せてしまうので、時計そのものへ張った検査だと言えます。
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:671-673
+// tests/e2e/helpers/capture-windows.ts:677-679
     const captureDurationSec = segment.toSec - segment.fromSec
     const wallDurationSec = (segment.toWall - segment.fromWall) / 1000
     if (Math.abs(captureDurationSec - wallDurationSec) > CLOCK_WALL_TOLERANCE_SEC) {
@@ -907,7 +907,7 @@ export function quadraticMeanRms(windows: ReadonlyArray<{ readonly rms: number }
 同じ名前を別の意図で使った瞬間に検査が静かに緩みます。
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:647-651
+// tests/e2e/helpers/capture-windows.ts:653-657
       // #643 E2E-3's boundary probe intentionally looks back 250 ms. Every overlap must
       // opt in explicitly; regular capture segments remain strictly non-overlapping.
       (previous !== undefined &&
@@ -986,7 +986,7 @@ const offendingLines = (sourceEntries: readonly SourceEntry[], pattern: RegExp):
 ### DSL 網羅率のラチェット
 
 ```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:47-57
+// tests/e2e/dsl-e2e-coverage.spec.ts:48-58
 function methodsExercisedByGatedE2E(): ReadonlySet<string> {
   // 🔴 走査先は `gated-sources.ts` が持つ（#668 §3.4・PR-E1）。ここで 1 ファイルを決め打ちすると、
   // シナリオを別ファイルへ出した時に**カバー済みの語が未カバー扱いになって red** になる。
@@ -1003,7 +1003,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 `readGatedSources()` が返す gated E2E のソース全体に `.<name>(` が現れるかどうかだけを見ます。語彙側は `packages/engine/src/signal-chain/runtime` の `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` — インタプリタの dispatch テーブルそのものです。
 
 ```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:149-159
+// tests/e2e/dsl-e2e-coverage.spec.ts:152-162
   it('A-1 does not leave a new sequence method untested on real hardware', () => {
     const now = uncovered(SEQUENCE_DSL_METHODS)
     const baseline = new Set(SEQUENCE_UNCOVERED_BASELINE)
@@ -1134,7 +1134,7 @@ export function parseStepLine(line: string): StepEvent | null {
 audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1621-1627
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1652-1658
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
       console.log(
@@ -1157,7 +1157,7 @@ audio 側の発生源は `rust-engine-player.ts` の 1 箇所です。
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1430-1440
+// packages/engine/src/core/sequence.ts:1624-1634
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {
@@ -1284,7 +1284,7 @@ function shouldFilterLine(line: string): boolean {
 playhead は raw stream から読み、出力チャネル（= `get_log`）には `[STEP]` を流しません。つまり **MCP から playhead を観測する経路は debug モードしかない**ことになります。debug モードでは `transcribeLog` が `output` をそのまま append するので、`[STEP]` 行も `get_log` に現れます。`#654` の E2E はまさにその形です。
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2586-2596
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2719-2729
       const dslLines = [
         'var global = init GLOBAL',
         'global.tempo(120)',
@@ -1299,13 +1299,13 @@ playhead は raw stream から読み、出力チャネル（= `get_log`）には
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2599-2600
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2732-2733
       const start = await activeClient.call('start_engine', { debug: true })
       expect(start.isError, start.text).toBe(false)
 ```
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:2656-2658
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:2789-2791
         // Slots 1 and 3 carry no note, so their presence is the whole point:
         // this is what a note-only marker stream would fail.
         expect([...seenSlots].sort()).toEqual(['0', '1', '2', '3'])

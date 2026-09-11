@@ -1,13 +1,14 @@
-// #611 §9 golden: send(aux, 0.3) — 0.3 is now dB (B2), not linear (was pre-#611).
-//
-// 🔴 バス名は一意にする（output_line_sum.orbs の注記と同じ理由）。
+// #611 E2E-S / E2E-S0: two simultaneous sends, and a disabled send (gain 0).
 
 var global = init GLOBAL
 global.tempo(120)
 global.beat(4 by 4)
 global.audioPath("../../../test-assets/audio")
-global.aux("o0rev611")
 global.start()
+
+var mix = init global.mixer
+var vrb = mix.aux
+var dly = mix.aux
 
 var dry = init global.seq
 dry.beat(4 by 4).length(1)
@@ -17,7 +18,13 @@ dry.play(1, 1, 1, 1)
 var kick = init global.seq
 kick.beat(4 by 4).length(1)
 kick.audio("kick.wav").chop(1)
-kick.send("o0rev611", 0.3)
+kick.send(vrb, -12).send(dly, -6)
 kick.play(1, 1, 1, 1)
+
+var off = init global.seq
+off.beat(4 by 4).length(1)
+off.audio("kick.wav").chop(1)
+off.send(vrb, -12, enabled: false)
+off.play(1, 1, 1, 1)
 
 LOOP(dry)

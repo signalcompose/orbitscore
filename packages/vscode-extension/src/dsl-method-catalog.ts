@@ -74,4 +74,4 @@ export const GLOBAL_METHODS: readonly string[] = [
 ]
 
 /** `sum("x").` / `aux("x").` の後に出る候補。engine の `BUS_DSL_METHODS` と一致すること。 */
-export const BUS_METHODS: readonly string[] = ['effect', 'ui']
+export const BUS_METHODS: readonly string[] = ['effect', 'ui', 'output', 'send', 'gain', 'pan']
