@@ -6,8 +6,14 @@ import {
   type WavAnalysis,
 } from '../../../packages/vscode-extension/src/wav-analysis'
 
-const CAPTURE_HEADER_BYTES = 44
-const BYTES_PER_SAMPLE = 4
+/**
+ * The capture WAV's fixed header size and sample width. Exported because
+ * `orbitstudio-mcp-gated.spec.ts` reads raw frames out of the same files for its
+ * sample-level oracles — a second copy of these two numbers would let the header layout and
+ * the readers drift apart silently.
+ */
+export const CAPTURE_HEADER_BYTES = 44
+export const BYTES_PER_SAMPLE = 4
 export const ANALYSIS_BUCKET_MS = 20
 const ANALYSIS_BUCKET_SEC = ANALYSIS_BUCKET_MS / 1000
 const DEFAULT_GUARD_SEC = 0.15

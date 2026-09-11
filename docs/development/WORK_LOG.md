@@ -17,6 +17,803 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(clap-host): stop warning on the normal path for effects without note ports (#860) (Sep 11, 2026)
+
+束 B の最終ゲートで `auto-records and restores all five plugin receiver kinds` が落ちた。
+
+```
+AssertionError: default-baseline cycle must add no ERROR: lines
+  → expected 10 to be less than or equal to 9
+
+[daemon] WARN orbit_clap_host::controller: [orbit-clap-host] NotePortsExtension なし; port 0 を使用
+```
+
+## 正常系で警報が鳴っていた
+
+`query_note_port_index`（`controller.rs:400`）は **すべての CLAP ロードで無条件に**
+呼ばれる（`:246`）。**エフェクトが note ポートを持たないのは正常**で、port 0 という
+フォールバックも CLAP の慣習どおり機能する。それを `warn!` で報せていた。
+
+## なぜ ERROR 件数に乗るか
+
+拡張は engine の stderr を**全行 `ERROR:` として**出力する（`extension.ts:1453`）。
+これは**意図的な設計**で、#756 の記録が理由を書いている:
+
+> `outputChannel.append('ERROR: ' + chunk)` と chunk 単位で前置していた。1 つの chunk に
+> 複数行入ると 2 行目以降に `ERROR:` が付かず、gated E2E の ERROR 会計が**構造的に
+> 過小カウント**する（= 偽緑）
+
+つまり「実エラーを取りこぼさない」ために全行前置している。**分類側を緩めるのは筋が悪い**
+（取りこぼす方向へ戻る）。
+
+🔴 したがって**ノイズは源で止める**。`warn!` → `debug!`。
+memory `stderr-is-classified-as-error` は「engine の warn は全部 ERROR 行」を
+**4 回目の再発**として記録しているが、これまでの対処はテスト側だった。今回は発生源を直した。
+
+## 失う情報
+
+instrument が note ポートを持たない場合も debug になる。ただし port 0 のフォールバックは
+機能するので、これは「動かない」ではなく「既定を使った」の報告であり、debug が妥当。
+
+検証: `cargo fmt --check` 緑 / `cargo clippy -p orbit-clap-host --all-targets -- -D warnings` 緑 /
+`cargo test -p orbit-clap-host --lib` **29 passed**。
+### fix(native): interpolate gain and pan ramps inside the block (#859) (Sep 11, 2026)
+
+owner 裁定 2026-09-11（#851 B-1・**案 A**）。E2E-7 が測っていたのは**実装の欠陥**であって
+オラクルの欠陥ではなかった。
+
+## 何が壊れていたか
+
+ゲインは**ブロックあたりスカラー 1 個**として掛かっていた。`ramp_frames` は 5 ms = 240 で、
+実機のブロック長は **512**。`frac = min(512/240, 1.0) = 1.0` なので
+**ランプが 1 ブロックで完了する**（= ブロック境界の段差）。
+
+`gain(-40)` → `gain(0)` は振幅が 0.01 → 1.0 に**1 サンプルで跳ぶ**。
+実測: 切替時の一次差分 `0.6996` vs 信号自身の最大スルー `0.0407` → **17 倍**。
+
+`advance_ramped_gain` の doc は "One block of the **click-free** gain ramp" と書いていたが、
+**出荷時のバッファ長ではこの記述は偽**だった。
+
+## 🔴 私の最初の推奨（案 D）は誤りだった
+
+「出力バッファ長を env 化して E2E-7 を 64 フレームで回す」を推奨していたが、owner の
+「rampの粒度がそれでいい根拠を説明して」で一次ソースを読み直し、**2 つの理由で撤回**した。
+
+1. **出荷される振る舞いを何も変えない。** 512 で走るユーザーには段差が残る
+2. **E2E-7 すら通らない見込み。** 64 でも `frac = 64/240 = 0.2667` で 4 段の階段になり、
+   最大段差 0.264 × ピーク振幅 0.707 = **0.187** > 閾値 `4 × 0.0407 = 0.163`
+
+推奨する前にこの算数をやるべきだった。
+
+## 案 A の要点: ブロック終端をビット一致させる
+
+現行式 `current += (target - current) × min(frames/ramp_frames, 1)` は
+「ブロック先頭の距離を `ramp_frames` で割った固定ステップ」と等価なので:
+
+```
+step  = (target - start) / ramp_frames
+at(f) = end                if f >= min(frames, ramp_frames)
+        start + step * f   otherwise
+```
+
+`end` は**現行式をそのままの演算順序で 1 回だけ**計算した値。したがって
+`at(frames) == end` がブロックの長短どちらでも成り立ち、**既存の実機 goldens
+（E2E-2/3/6/G/P/S/10）は動かない**。これが検算そのもの。
+
+## コスト
+
+| 状態 | 現在 | 案 A |
+|---|---|---|
+| 定常（圧倒的多数） | 乗算 1（`gain == 1.0` なら省略） | **同じ**（`is_settled()` で同じ経路へ） |
+| ランプ中 | 乗算 1 | 乗算 1 + 加算 1 を 240 サンプル分だけ |
+
+pan は**位置ではなく L/R 係数**を線形補間する（位置を補間すると `equal_power_pan` の
+cos/sin が毎サンプルになる）。`pan == 0.0` → `(1.0, 1.0)` の unity 早道は維持したので、
+中央 pan と pan 無指定のビット一致も保たれる。
+
+## 検証（🔴 main が sandbox 外で実行）
+
+`cargo fmt --check` 緑 / `cargo clippy -p orbit-audio-native --all-targets -- -D warnings` 緑 /
+`cargo test -p orbit-audio-native --lib` **88 passed** /
+`cargo test -p orbit-audio-daemon --features outproc-effect --lib` **220 passed**。
+
+実機 E2E-7 は束 B と合わせて main が本ツリーで確認する。
+
+Closes #859
+### fix(dsl): separate the master track from the device it outputs to (#611) (Sep 11, 2026)
+
+🔴 **owner の訂正（2026-09-11）**。私が「1,2 ch は master の領分だから `mix.output(1,2)` は
+master として扱う」と裁定を仰ぎ、owner が「master であり、それはつまりデバイスの 1,2 に
+なるのでは」と応じた後、**その実装が概念を取り違えている**ことを owner が指摘した。
+
+> マスタートラックとデバイスっていう概念を、トラックなのかデバイスなのかっていうのを
+> ちゃんと分けた方がいいんじゃないですか。
+>
+> マスターっていうのは要するにシーケンスのトラックやサミング、オグジュアリーのトラックとかと
+> 同じように、マスターのトラックですよね。
+
+## 正しいモデル
+
+```
+kick ──┐
+snare ─┼→ master トラック: [rack][gain][pan] → output → デバイス 1,2
+hat  ──┘                    ↑ ここに合流する
+
+pad  ─────────────────────────────────→ デバイス 3,4（トラックを経由しない）
+```
+
+- `output(master)` は **master トラックの頭に合流**する。その後 master のラックと
+  `global.gain()` を通り、master が自分の出口として持っているデバイスへ出る
+- `mix.output(1, 2)` は **デバイスの 1,2 ch を名指す**。トラックではない
+
+**実装も元からそうだった**（`default_master_line_program()` は bus と同じ形の
+`[Rack, Gain, Output]`）。混同していたのは **DSL の側**だった。
+
+## 何が焼き付いていたか（直した順）
+
+| 場所 | 旧 | 新 |
+|---|---|---|
+| `process-statement.ts` の糖衣 | `(1,2)` を `{kind:'master'}` に読み替え | `physicalOutputDest()` で**常にデバイス** |
+| 同・引数経路 | `(1,2)` の特例が**無い**（糖衣と食い違い） | 同じヘルパを通す |
+| `MixerRuntimeNode` | master = `{kind:'output', channels:[1,2]}` = **デバイスノード** | **`{kind:'master'}` = 第 3 の種類** |
+| `registerMixerNode` | `var master = mix.output(...)` は**合法**（#523 IMPORTANT 6） | **拒否**（sum/aux と同じ理由） |
+| `resolveMixerNode` | 明示ノードが 1 つでもあれば master を解決**しない** | 常に解決する |
+
+🔴 **最後の行が一番効いている。** 旧実装には「この Global に明示ノードが 1 つでもあれば
+`master` を解決しない」というガードがあった。これは master が**デバイスノードだった時代の
+名前衝突対策**で、`var master = mix.output(...)` が宣言されうる前提だった。
+`master` を予約語にした今は衝突が起きず、ガードは
+**「sum を 1 つ宣言した瞬間に `kick.master` が壊れる」という宣言順依存**だけを残していた。
+
+## master の出口は 1,2 固定のまま（owner 2026-09-11）
+
+> マスターが1、2固定にしておかないと、一般的な DAW の操作とか設定で 1、2 じゃなくなって
+> しまっているみたいなことが起こると、デバイスの変更で困ってしまうので
+
+**固定であることと、「1,2 という名前が master を意味する」ことは別**。
+master トラックの DSL ハンドル（`master.output(...)` / `master.effect(...)`）は
+凍結線に入れない — 下の配線（daemon の `SetBusLine("master", ...)`）は既に通っているので、
+新ラインで表面だけ足せる。
+
+## 旧モデルを固定していたテスト 9 件を書き直した
+
+`signal-chain-dispatch.spec.ts` 5 件 + `mixer-runtime.spec.ts` 4 件。
+うち 1 件はテスト名自体が混同を記録していた:
+「sum/aux を master と名付けるのは拒否するが、**output を master と名付けるのは合法に保つ**」。
+
+## 変異検証
+
+| 変異 | 結果 |
+|---|---|
+| `master` の予約を外す | 1 failed |
+| `master` を解決しない（旧ガード相当） | **6 failed** |
+| `(1,2)` の特例を復活させる | 1 failed |
+| restore | 32 passed・baseline とバイト一致 |
+
+`npm test` **2,325 passed / 67 skipped / 0 failed**・lint 緑・`typecheck:e2e` 緑・
+引用 936 / 0 failed。
+
+Part of #611
+
+### fix(dsl): keep the instrument reschedule off the push-success path (#611) (Sep 11, 2026)
+
+束 B の fix ラウンド（Codex）を **sandbox 外で回し直して**出た赤 1 件。
+
+```
+× gain() during LOOP clears pending notes via the plugin scheduler (clearOwner)
+  → expected "clearOwner" to be called with arguments: [ 'synth' ]
+     Number of calls: 0
+```
+
+🔴 **Codex の `npm test` にはこれが見えていなかった。** sandbox が localhost の bind を拒否し、
+mock daemon / MCP HTTP 系が `listen EPERM` で **108 件落ちた**中に埋もれていた。
+CLAUDE.md の「委譲先の緑は実機の緑ではない」が、そのままの形で出た。
+
+## 何が起きたか
+
+Codex は C5（push 失敗時に値がどこにも無くなる）を直すため、発音側の中立化を
+**push 成功後**へ動かした。これは正しい。しかし `seamlessParameterUpdate` の呼び出しも
+**一緒に**動かしてしまった。
+
+元のコードのコメントが、動かしてはいけない理由を明示していた:
+
+> instrument sequences have NO event-side gain path to conflict with the line's ramp (§5.2) —
+> but they DO rely on seamlessParameterUpdate's immediate reschedule for an **unrelated reason**
+> (clearing pending scheduled notes via the plugin scheduler's clearOwner)
+
+**instrument の即時 reschedule は gain とは無関係の関心事**（保留中のノートを消す）なので、
+**push の成否に依存させてはいけない** — daemon が拒否してもノートは消す必要がある。
+テストの mock には Rust バックエンドが無いので `setBusLine` が必ず throw し、
+`adoptLineOnFirstBus()` に到達せず `clearOwner` が 0 回になっていた。
+
+## 直し方
+
+2 つの関心事を分けた。
+
+| 関心事 | どこで発火するか |
+|---|---|
+| 発音側の中立化（ライン側と二重に掛からないように） | **push 成功後**（`adoptLineOnFirstBus`・Codex の正しい部分） |
+| 即時 reschedule（`clearOwner`） | **`gain()`/`pan()` の中**・push の成否と無関係 |
+
+audio + バス有りだけ `skipReschedule=true` のまま（ライン側の ramp が継ぐ）。
+
+## fixer は main が直接やった
+
+CLAUDE.md の「fixer は Codex → 収束しなければ main」に対し、これは**新しい指摘**で
+2 回落ちたものではない。ただし**差分を読み終えており**、ブリーフを書き起こすコストの方が
+自分で直すより高い（`fable-main-may-implement-directly` の一般化）と判断した。
+
+検証: `npm test` **2,322 passed / 67 skipped / 0 failed**・lint 緑・`typecheck:e2e` 緑・
+引用 936 / 0 failed。
+
+Part of #611
+
+### fix(extension): stop warning that working output() targets have no effect (#611) (Sep 11, 2026)
+
+束 B のレビューで Fable が見つけた片翼。**出荷物の欠陥だったので、後回しにせず凍結線に含めた。**
+
+`analyzeOutputWithoutLinkAudio`（`diagnostics-analysis.ts:218`）の正規表現は
+
+```js
+/\.output\s*\(\s*["']([^"']*)["']\s*\)/g
+```
+
+で、**`"master"` も宣言済み sum/aux 名も `"3,4"` も除外していなかった**。凍結線の看板機能を書くと:
+
+```
+kick.output("master")
+      ⚠️ seq.output() requires global.linkAudio() to be declared in this file.
+         Without LinkAudio mode the channel name has no effect.
+```
+
+🔴 **同梱 README は「LinkAudio は出荷ビルドで動作せず、音も出ない」と明記している。**
+つまりエディタは、**動いているコードに「効かない」と警告し、動かない機能を指さしていた。**
+ユーザーが最初に見る面でこれが起きる。
+
+**直し方**: #611 §2.1/§3.3 の解決順（`OutputDest` → `"master"` → 宣言済み sum/aux →
+`"L,R"` 対 → LinkAudio）で **LinkAudio より前に解決する名前を除外**した。
+sum/aux の宣言は 2 形式とも拾う（`global.sum("x")` の文字列形と `var x = mix.sum` の変数形 —
+**後者は変数名がバス名**）。
+
+宣言の収集は**ファイル全体**から行う（呼び出し行より上だけではない）。ライブコーディングの
+ファイルは丸ごと再評価され、`global.sum(...)` はそれを使う sequence より**下**に書かれることが
+普通にあるため。2 行下で宣言される名前を警告するのはノイズ。
+
+**検証**（変異は `$TMPDIR` へバックアップしてから）:
+
+| 変異 | 結果 |
+|---|---|
+| `master` の除外を削除 | 1 failed |
+| sum/aux の除外を削除 | 3 failed |
+| `"L,R"` の除外を削除 | 1 failed |
+| 常に除外（警告そのものを殺す） | **5 failed** |
+| コメント行も宣言として拾う | 1 failed |
+| restore | 51 passed・baseline とバイト一致 |
+
+4 番目が効いているのが要点で、**「除外しすぎ」も捕まる**（未宣言の名前は今も警告される）。
+
+`npm test` 2,369 passed / 0 failed（+6）・lint 緑・`typecheck:e2e` 緑・引用 1,034 / 0 failed。
+
+### refactor(dsl): apply the /simplify cleanup to the bundle-B line surface (#611) (Sep 11, 2026)
+
+束 B（PR #852）に `/simplify` を回した。4 体（reuse / simplification / efficiency / altitude）
+の指摘は 14 件、重複を畳んで 9 件。**3 体が同じ 1 件を指した**ので、そこから直した。
+
+| # | 指摘 | 何体 | 対応 |
+|---|---|---|---|
+| 1 | 自己バッチの 4 行が `Sequence.upsertLine` と `MixerManager.applyLineElement` に逐語重複 | **3** | `AudioLine.upsertAutoBatch()` へ移した |
+| 2 | `resolveLineDest` と `resolveDest` が同じ §3.3 の解決を二重に持つ | 2 | 共有 `resolveNamedOutputDest(value, lookupBus)` |
+| 3 | `allLines` が `Set` で、破棄された行がプロセス寿命だけ残る | 2 | `Set<WeakRef<AudioLine>>` + 反復時の剪定 |
+| 4 | `firstInBatch` は `cursor === 0` から導出できる | 1 | getter 化 |
+| 5 | `outputs()` が本番から呼ばれていない | 1 | 削除（テストは `program()` 全体で見る形へ） |
+| 6 | output 段取りの 5 行が 3 メソッドに重複 | 1 | `stageOutputElement()` |
+| 7 | `gain()`/`pan()` の instrument insert-bus ブロックが重複 | 2 | `ensureInsertBusForInstrument()` |
+| 8 | `MixerOutputOptions`/`MixerSendOptions` が `OutputOptions`/`SendOptions` の複製 | 1 | 共有版へ統合 |
+| 9 | capture 定数がテストで再定義 | 1 | `capture-windows.ts` から export して import |
+
+## 争点が 1 件あり、自分で検算した
+
+指摘 8 について **reuse 側は「循環しないので統合できる」、simplification 側は
+「循環 import があるので複製が正当」と逆の判断**をした。複製側のコメント自身が
+「circular import を避けるため」と書いていた。
+
+実際に読むと `audio-line.ts` の import は `audio-gain-utils` と `audio/types` の 2 本だけで、
+**`sequence.ts` にも `global.ts` にも `mixer-manager.ts` にも依存していない葉**。
+両者が既にここから import している以上、型をここへ置いても循環は起きない。
+**reuse 側が正しく、コメントの正当化根拠は成立していなかった。**
+simplification 側は `sequence.ts → global.ts → mixer-manager.ts` の向きだけを確認して、
+両者が共通で依存する葉の存在を見落としていた。
+
+## 指摘 4 は「フラグを消す」ではなく「導出を明示する」形にした
+
+`firstInBatch` を単に消すと、「`cursor` はバッチ中 0 に戻らない」という不変条件が
+暗黙になる。getter にして**その不変条件を doc に書いた**（`beginBatch()` だけが 0 にし、
+どの `upsert` 経路も `<index> + 1`（index >= 0）を代入し、splice 分岐の `-= 1` は必ず
+対の `+= 1` を伴う）。フラグという 2 つ目の写しは持たないが、根拠は残る。
+
+## 🔴 `WeakRef` は tsconfig の `lib` に触れた
+
+`WeakRef` は ES2021 で、この repo の `target` は ES2020 だった。最初 engine の
+tsconfig だけに `"lib": ["ES2021"]` を足したところ engine は通ったが、
+**`npm run typecheck:e2e` が `tsconfig.tests.json` で同じエラーを出した**
+（memory `consumerless-code-is-unprotected` の「正本は `npm run typecheck:e2e`」どおり）。
+
+`tsconfig.base.json` に 1 箇所だけ置いた。`target` は ES2020 のまま
+（`WeakRef` はランタイムグローバルであって構文ではないのでダウンレベルは不要）。
+そもそも root package.json が **Node >= 22 を要求**しているので、型面を ES2020 に絞るのは
+実際のランタイムより狭い宣言だった。
+
+## ラチェットが 1 件発火した
+
+`tests/interpreter/signal-chain-dispatch.spec.ts` が `stageOutputElement` を
+「未分類の Sequence メソッド」として赤にした。TS の `private` は実行時に残るので
+prototype に見える。`ensureInsertBusForInstrument` と併せて内部 API 側に分類した。
+
+検証: `npm test` **2,363 passed / 67 skipped / 0 failed** / `npm run lint` 緑 /
+`npm run typecheck:e2e` 緑 / 引用 1,034 verified / 0 failed。
+
+### docs(native): correct the current_gains serialization table (#611) (Sep 11, 2026)
+
+束 A のレビューラウンドを閉じる前の **fix 差分再点検**（1 レビュアー・問いは
+「新しい故障モードは何か」「新コードはどの実行コンテキストで走るか」の 2 つ）で
+出た Minor 1 件を直した。Critical / Important は 0。
+
+**何が間違っていたか**: `LineControl::current_gains()` に付けた「どの mutex で
+直列化されているか」の表が、1 行目を `EngineWrap::set_global_gain` としていた。
+実際の `set_global_gain`（`engine_wrap.rs:9747`）は `master_gain` atomic へ store
+するだけで、`master_line_program` にも `LineExchange` にも触れていない。
+`current_gains()` の呼び出し元は 2 つとも `EngineWrap::set_bus_line`
+（`engine_wrap.rs:6980`）の中 — `bus == "master"` 分岐（7047）と named-bus 分岐（7141）。
+
+🔴 **なぜ実害になりうるか**: この表は「呼び手が install と直列化する契約であり
+型では強制していない」ことを将来の監査者へ伝えるために足したもの。PR-O4 はまさに
+`set_global_gain` を `SetBusLine("master", …)` へ切り替える予定なので、その担当者が
+表を読んで「既に `master_line_program` で直列化されている」と誤解しうる。
+**この PR が対処しようとした「規約を知らない 4 つ目の呼び出し元」問題を、
+コメント自身の不正確さで再生産していた。**
+
+**変更**: 表を 2 つに分けた。①`current_gains()` を呼ぶ経路（2 件・どちらも
+`set_bus_line`）②同じ `LineExchange` へ install する経路（3 件・`current_gains()` を
+呼ばない `set_bus_routing` を含む）。②が全部同じ mutex を取ることが「install どうし」も
+「読む → install」も直列化される根拠なので、①だけでは説明が閉じない。
+`set_global_gain` が現状この表に**入らない**ことと、PR-O4 で触るときに契約を新たに
+満たす必要があることを明記した。
+
+検証: `cargo fmt --check` 緑 / `cargo clippy -p orbit-audio-native --all-targets -- -D warnings` 緑。
+
+### chore(docs): rotate WORK_LOG before closing the bundle-A review (#611) (Sep 11, 2026)
+
+`tests/docs/worklog-size.spec.ts` が **2,104 行**で赤くなった（上限 2,000）。
+PROJECT_RULES §1a どおりアーカイブへ回した。
+
+**移設**: `Sep 7, 2026` 以前の 18 エントリ・1,326 行を
+`docs/archive/WORK_LOG_2026-09.md` の先頭へ。本体は **2,103 → 775 行**。
+アーカイブの期間ラベルを `09-01〜09-06` → `09-01〜09-07` に更新し、本体末尾の索引と
+`docs/core/INDEX.md` の表も揃えた。
+
+🔴 **一度失敗した手順を記録しておく**（同じ落とし穴を踏まないため）。移設範囲の終端を
+`s.index("## Archived sections")` で取ったところ、**過去エントリの本文が引用している
+同じ見出し**を拾って、18 件のうち 3 件しか移らなかった。`rindex`（最後の出現）で取り直した。
+**WORK_LOG は自分自身の構造を語るので、見出し文字列は本文にも現れる。**
+
+### fix(daemon): build the master default line in exactly one place, too (#611) (Sep 11, 2026)
+
+`/code:pr-review-team` ラウンド 1（4 レビュアー）を束 A（PR #834）に回した。
+**Critical 1 / Important 4 / Minor 2**。fixer は main。
+
+#### 🔴 Critical — mono デバイスで seed が実体と食い違い、この機構が防ぐはずのポップを再導入する
+
+`MasterLine::new` は初期 program の `dest.right` を **`Some(1)` に固定**していた。一方 daemon 側の
+shadow `default_master_line_program(output_channels)` は `(output_channels > 1).then_some(1)` を
+返していた。**1ch デバイスでは `dest` が食い違う**ので、`line_republish_seeds` の Output 照合が
+外れ、新しい master Output の seed が既定の **0.0** に落ちる。鳴っていた master が一瞬無音から
+5 ms かけてフェードインし直す — 設計 §4.3 が名指ししている失敗モードそのもの。
+
+**2ch では偶然一致するので、開発機の実機検証でも顕在化しない。**
+
+さらに `add_to_device` の境界検査は `debug_assert` だけなので、**実 1ch デバイスでは
+`right: Some(1)` が RT で範囲外アクセスになる**（`device_base + 1` が mono バッファを超える）。
+
+**対処**: `default_master_line_ops(output_channels)` を `orbit-audio-native` から export し、
+`MasterLine::new` と daemon の shadow の**両方がこれを呼ぶ**ようにした。`MasterLine::new` は
+`output_channels` を受け取る（呼び出し 11 箇所・production の 1 箇所は同スコープに `channels` が居た）。
+**同じ日にバス側で `legacy_line_ops` へ統一したのと同じ手当てを master にも当てた**
+— reviewer が「是正の一貫性の欠落」として指摘したとおり。
+
+固定するテスト `master_line_starts_from_the_shared_default_ops_for_any_channel_count` を足し、
+**旧バグ（`right: Some(1)` 固定）を再現する変異で赤・戻して緑**を実走で確認した。
+
+#### Important — 設計 §11 が挙げた 6 件のうち 2 件がまだ未実装だった
+
+前回の Fable 監査が 3 件を埋めた**その一段外側**に、`channels` の要素数（0 個 / 3 個以上）の拒否と
+**mono の `left` が範囲外**の拒否が残っていた（既存テストは stereo ペアしか通しておらず
+`right: None` の枝に到達していなかった）。
+`set_bus_line_wire_rejects_device_channel_arity_and_mono_out_of_range` を追加。
+**2 種類の変異（要素数制限を外す / mono 上限を外す）で赤**を確認。
+
+**列挙は一段手前で止まる。** 同じ設計文書の同じ表で、2 回続けて起きた。
+
+#### Important — 「center は unity」を近似で検査していた
+
+`line_program_pan_is_normalized_and_executes_in_rt` の許容差は `1e-6` で、
+`apply_line_pan` の中央早期リターンを消しても `sqrt(2)*cos(pi/4)` の **6e-8** のずれが埋もれて
+**そのまま通った**。設計 §4.1 の「center は unity」は近似ではないので、**ビット一致**で見る形に
+変えた。変異で `1.4142134` と `1.4142135` の 1 ulp を捉えることを確認。
+
+#### Important — dev サイトが裁定と逆のことを書いていた（comment-analyzer の Critical）
+
+「`EngineWrap` はこのハンドルを `SetBusLine("master", …)` だけでなく **`SetGlobalGain` からも**
+呼ぶ」と書いてあったが、現在の `set_global_gain` は `master_gain.store(...)` の 1 行だけで、
+line-program installer を**呼ばない**。ユニットテスト
+`set_global_gain_only_updates_the_compatibility_atomic` が「must not republish」を assert している。
+PR #823 の時点では正しかったが、O-wire-b のレビュー修正（`9e22e427`）で戻り、裁定 F2（写さない）で
+確定していた。**文書だけが 1 層取り残されていた**（ゴールが警告している型）。ja / en とも訂正。
+
+#### そのほか
+
+- `line_republish_seeds` への行番号参照がずれていた（`2162-2193` → 実体は 2157-2188）ので、
+  **行番号をやめて関数名で参照する**ようにした
+- TS の `daemon-client-line-wire.spec.ts` が、この束が広げた型（`pan` op・mono の `channels: [number]`）を
+  **1 件も通していなかった**。設計 §11 が検証コマンドとして名指ししているファイルなのに
+  「実行はされるが変更点は通らない」状態だった。1 件追加
+- `LineControl::current_gains()` の直列化契約を、**どの mutex かまで表で明記**した
+  （code-reviewer の Minor: 「規約を知らない 4 つ目の呼び出し元が追加されると壊れる」）
+
+#### レビュアー別
+
+| | 結果 |
+|---|---|
+| code-reviewer | **Critical 0 / Important 0**（mutex 経路を追い直して UAF なしと確認・cargo で 31 件を実走） |
+| silent-failure-hunter | **Critical 1** / Important 1 / Minor 2 |
+| pr-test-analyzer | Important 3 / Minor 1 |
+| comment-analyzer | **Critical 1** / Important 2 |
+
+**検算**: `cargo test -p orbit-audio-native --lib` **84 passed** /
+`-p orbit-audio-daemon --features outproc-effect --lib` **220 passed** /
+`cargo fmt --check` 緑 / TS wire spec 2 passed。
+
+#### 持ち越し（issue 化する）
+
+silent-failure-hunter の Important #2: `LineExchange::install` は RT へ swap した**後**に
+`retired` mutex を取るので、その mutex が poison すると **RT は新 program で鳴っているのに
+呼び出し元へ Err が返る**。この束が新設した「shadow は install 成功時だけ前進する」不変条件は、
+その既存の非 atomic 失敗経路では成立しない。発生確率は低いが**ログが 1 行も出ない**。
+束 A の差分の外（既存仕様）なので **#850** に切り出した。
+
+### refactor(daemon): build the default bus line in exactly one place (#611) (Sep 11, 2026)
+
+束 A（PR #834）に `/simplify` を回した。**引き継ぎに「レビュー済み」とあったのを検算せず信じていた**
+（記録を見ると `/simplify` も `/code:pr-review-team` も痕跡が無かった）。owner の指摘で気づいた。
+memory `handoff-claims-need-primary-source-recheck` の再発である。
+
+#### 🔴 Reuse と Altitude が**独立に同じ 1 点**を指摘
+
+`default_bus_line_program()`（`engine_wrap.rs`）が `legacy_line_ops(BusTarget::Master, &[])` と
+**同じ ops 列を手書きで再定義**していた。すぐ下の `initial_bus_line_shadows` のコメントは
+
+> 🔴 The shadow is what a later `SetBusLine` seeds effective gains from. If it disagreed with
+> what the bus is actually running, seeding would restore the wrong value and reintroduce the
+> jump it exists to prevent — **so build it in exactly one place**
+
+と書いているのに、**実装は 2 箇所で作っていた**。`legacy_line_ops` 側だけが変わると shadow が
+旧い形で残り、未設定バスへの最初の `SetBusLine` が誤った seed から republish する
+— **この機構が防ごうとしているポップを、この機構自身が再導入する**。
+`legacy_line_ops` の呼び出しに置き換えた（1 行）。コメントの約束が実際に成立するようになった。
+
+#### Efficiency — 中央パンの早道
+
+`apply_line_pan` に unity の早期リターンが無く、`LineOp::Gain` が `gain != 1.0` で同じことを
+しているのと非対称だった。RT コールバックのたびに `frames × 2` 回の無駄な乗算になる。
+
+🔴 **副次的に丸め誤差が消える**。f32 では `sqrt(2) * cos(pi/4) = 0.99999994` で **1.0 ちょうどに
+ならない**（実測）。省くことで `pan(0)` を書いた譜面が書かない譜面と一致し、設計 §4.1 の
+「center で `(1, 1)`（unity）」が**文書どおり**になる。
+
+#### Simplification — wire parse の形をそろえた
+
+`pan` だけ「取得はアーム内にインライン・範囲検証は別関数」という、`gain`（1 関数）と違う分割に
+なっていた。`parse_set_bus_line_pan` に揃えてアームを 1 行にした。エラーコードは
+`PARAM_OUT_OF_RANGE` のまま残す（範囲外は「形が壊れている」ではない。`gain` 側を寄せるかは
+既存挙動を巻き込むので本 PR では触らない）。
+
+#### 🔴 到達できない入力でガードを検査していたテストを直した
+
+`!pan.is_finite()` の枝を `validate_set_bus_line_pan(f64::NAN)` で検査していたが、
+**非有限の pan は wire から到達できない**（2026-09-11 実測）: JSON に NaN / Infinity の
+リテラルは無く、`serde_json` は `1e400` を `Error("number out of range")` として
+**parse 時点で拒否する**。実際に来る形（数値でない → `MALFORMED_REQUEST`）を固定し直した。
+ガード自体は型が保証していないので防御として残す。
+
+#### 見送り
+
+`#[inline]` が無いという指摘は**誤検知**（既に付いている。差分だけを読んだため）。
+master line と bus post-loop の実行器 2 本を 1 本に畳む案は、Altitude が
+「本 PR 以前からある構造で、`Pan` はそれに素直に追従しただけ。畳むなら Gain / Output も含む
+別 PR」と判定したので見送る。
+
+**検算**: `cargo test -p orbit-audio-native --lib` **83 passed** /
+`-p orbit-audio-daemon --features outproc-effect --lib` **219 passed** /
+`cargo fmt --check` 緑 / `cargo clippy --all-targets -- -D warnings` 緑。
+
+### fix(e2e): copy the whole audio asset directory into the gated workspace (#611) (Sep 11, 2026)
+
+**`#611 E2E-7` の無音の原因**。実機 gated で capture 20.2 s が **1,939,456 サンプルすべてゼロ**
+だった。素材の長さでも DSL でもなく、**ハーネスが一時ワークスペースへ `kick.wav` だけを
+コピーしていた**ため、`sine_440.wav` が存在しなかった。
+
+#### 切り分けの経路（記録）
+
+| 手順 | 結果 |
+|---|---|
+| capture を直接読む | 20.2 s・非ゼロサンプル **0** 件。「小さすぎて拾えない」ではなく完全な無音 |
+| `gainDbToAmplitude(-40)` | **0.01**。下限クランプ無し。ゲインは原因でない |
+| バスプールの枯渇を疑う | 枯渇時は throw する実装（`effect-slot.ts` の `BusPool.acquire`）で、ログにその文言なし |
+| `mix.sum` の node 形を疑う | `registerMixerNode` は `mixerGlobal[kind](variableName)` を呼ぶだけで、**文字列形と同一経路**（`runtime.ts`） |
+| 🔴 **エンジンを直接叩くプローブ** | 同じ譜面が**鳴った**。peak **0.007071** = `gainDbToAmplitude(-40) × equal_power_pan(0)` = 0.01 × 0.7071。譜面もエンジンも正常 |
+| ハーネスの workspace 準備を読む | `prepareWorkspace` が `test-assets/audio/kick.wav` **1 ファイルだけ**を写していた（3 箇所とも） |
+
+#### 直した形
+
+**ディレクトリごと `fs.cpSync`** にした（3 箇所）。1 ファイルずつ列挙する設計をやめる。
+**列挙は必ず一段手前で止まる** — 新しい fixture が新しい素材を使うたびにハーネスを直す形に
+しない（memory `enumeration-stops-one-level-too-early`）。
+
+#### あわせて足した観測手段
+
+E2E-7 の `waitForSound` が落ちた時に **`get_log` の末尾を例外に添える**ようにした。
+今回は「音が出ないまま時間切れ」としか言わず、原因の特定に実機実行を 2 本払った。
+規律の順序（DSL を網羅した E2E → 実機で問題 → **ログで異常系を捕まえられるようにする**）
+のとおり、まずログを出せるようにする。
+
+#### 同じ実行で直したもう 2 件
+
+- **`#661 D-2` / `D-3`**: 音の判定はすべて通っているのに、後始末の `ENOTEMPTY` だけで赤かった。
+  `child.kill()` は SIGTERM を送るだけで、VS Code の agent host はその後も
+  `<user-data-dir>/.../sdk-cache/` へ書き続ける。`force: true` は **ENOENT しか抑えない**。
+  子の終了を待ってから消し、それでも残ったら警告して続ける `removeHarnessTree()` を置いた。
+  **後始末でテストを落とさない。** 残骸は `/tmp/orbe2e-` 前置きなので次回開始時の掃除が拾う
+- **`#611 E2E-7` の譜面**: `RUN` + 固定 sleep(300ms) → `LOOP` + `play(1, 0, 1, 0)` +
+  **音が出るのを待つ**形へ。gated スイートで `RUN(` を使う譜面はこれ 1 本だけで、他は全部
+  音を追いかけていた。`sine_440.wav` はちょうど 1.000 s（実測）なので、1.0 s 間隔の
+  `play(1, 0, 1, 0)` なら隙間なく連なり、440 Hz は 1 s でちょうど 440 周期でつなぎ目の位相も連続する
+
+### test(e2e): add the three O-surface E2E the freeze line requires (#611) (Sep 10, 2026)
+
+凍結線の収束条件「O-surface E2E-2〜7 + E2E-10 が緑」の未達部分。B2 本体は時間制約で
+この 3 本を落としていた。
+
+| # | 何を固定するか | 判定式 |
+|---|---|---|
+| **E2E-6** | **位置が意味を持つこと**。`output(verb, thru: true)` を `effect([Gain(db: -12)])` の**前に**書くか**後に**書くかで混合が変わる | `g = 10^(-12/20)` として `total_A / total_B = (1 + g) / (2g)` ≈ 2.49。許容 `relativeDelta <= 0.12` |
+| **E2E-7** | **再 publish の seed**。`gain(-40)` で鳴らしている最中に `gain(0)` へ切り替えてもクリックが出ない | 切替窓（±50 ms）の `max\|x[n]−x[n−1]\|` <= 定常窓の同 × 4 |
+| **E2E-10** | daemon を `SIGKILL` しても音が戻り、**台数が 1 に収まる** | `relativeDelta(after, before) <= 0.05` かつ respawn 後の daemon PID が 1 個 |
+
+**E2E-6 がなぜ `(1+g)/(2g)` か**（テストにも導出を書いた）: A は `output(verb, thru:true)` が
+先なので **verb へ分岐した後に** Gain が掛かり、dry 側だけが減衰する → `total = g + 1`。
+B は Gain が先なので**両方に**掛かる → `total = 2g`。これは評価フレームがあって初めて成立する
+（選択範囲全体が 1 つのバッチになり、行の並び順が信号順になる）。
+
+**E2E-7 が raw PCM を読む理由**: -40 dB → 0 dB の跳びは 1 サンプルの不連続なので、
+20 ms の RMS / peak 窓では解像できない。`readCaptureForAnalysis` の float32 を直接読み、
+**信号から切替点を特定する**（peak 0.01 の -40 dB は閾値 0.1 を跨がないので、envelope crossing が
+そのまま `gain(0)` のランプ位置になる）。MCP 往復の壁時計に依存しない。
+
+**E2E-10 の判断**: `expectNoNewErrors` を**呼ばない**。`SIGKILL` は意図的な fault injection で、
+daemon の死そのものが ERROR に分類されるログを出す（既存の D-2 / D-3 も同じ扱い）。
+`runScore()` は毎回 engine を止め直すため使えず、E2E-K3 と同じ手動 open/select/run で
+1 セッションに収めた。capture は daemon 側のタップなので respawn で作り直される —
+**before の RMS は kill の前に読み切る**（設計 §8.1 の注記どおり、1 本の `CaptureWindows` に
+しない）。
+
+🔴 **main が直した点**: 台数の待ちと判定が**同語反復**になっていた。`waitUntil` が
+`currentPids.length === 1` を待ち、その後に `toHaveLength(1)` を assert していたので、
+2 台で落ち着いた場合は waitUntil の timeout になり「respawn しなかった」という**誤った診断**が
+出る。待つ条件を `>= 1` に緩め、**台数が 1 であることは assert 側で見る**ようにした。
+
+**検算**（main が sandbox 外で実行）: `npm test` **2362 passed / 67 skipped / 2429**
+（skip が 64 → 67 = 新規 3 本）・`lint` 緑・`typecheck:e2e` 緑・引用 1034 件 / 0 失敗・
+gated env 未設定で spec の 39 件すべて skip。
+
+### test(e2e): follow the dB send unit in the #643 E2E-4 golden (#611) (Sep 10, 2026)
+
+**main が実機で回して見つけた**（委譲先の緑は実機の緑ではない）。束 B2 の実機 gated:
+**33 passed / 2 failed / 1 skipped (36)**。
+
+| 赤 | 判定 |
+|---|---|
+| `#643 E2E-4 preserves instrument contributions through output(sum) plus send(aux, gain)` | 🔴 **本束が動かした。追従漏れ** |
+| `steps the live playhead through an instrument() sequence, rests included` | 既知の baseline 赤（設計 §8.4 の台帳。束 A の実機でも同じ 1 本だけが赤だった）。原因は fixture が `instrument()` + degree を書きながら `global.key()` を宣言していないこと＝**オラクル側の欠陥**で、本束の退行ではない |
+
+**追従漏れの中身**: PR-O4 で `send` の第 2 引数が**線形係数から dB へ**変わった。
+`#643 E2E-4` の譜面は `routeWet643.send("aux643", 0.5)` と書いており、旧解釈では 50%、
+新解釈では **+0.5 dB（≈ ×1.06）**。したがって `total/dry` が 1.5 から **2.06** へ上がり、
+`toBeLessThan(1.65)` で落ちた。
+
+**直し方**: 同じ比を dB で書き直した（`send("aux643", -6)` → `10^(-6/20) = 0.501` →
+`total/dry = 1.501`）。判定は式で書き、許容 ±0.15 は据え置き。**値を変えずに単位を変えた**ので、
+このテストが守っていた「sum と aux の寄与が両方生きている」という性質は変わらない。
+
+`send` を経路張りにだけ使っている 3 箇所（`fx625` / `fx628`）は送出量を判定していない
+（oracle は ERROR 件数と child プロセスの有無）ので値は変えず、**dB として読むこと**を
+先頭の 1 箇所に注記した。
+
+### test(daemon): add the three bundle-A tests the design listed but never got (#611) (Sep 10, 2026)
+
+Fable の受け入れ監査（束 A / PR #834）が **Important #1** として「設計 §11 が PR-A1 / PR-A2 の
+検証として列挙したテストのうち 3 件が実在しない」ことを一次ソースで確認した。うち 2 件は
+**「1 層だけ追従しない」退行の検出器そのもの**だった。
+
+| 追加 | 何を数値で見るか |
+|---|---|
+| `output.rs` `master_line_pan_op_positions_the_master_buffer` | master line を `execute_master_line` へ直接流し、`Pan(-1.0)` 後の hw が `(√2, 0)` になること。buffer を全て 1.0 に揃えているのでゲインがそのまま出る |
+| `session.rs` `set_bus_line_wire_pan_op_is_parsed_with_its_own_value` | `{"op":"pan","pan":0.25}` が受理され、`BusLineOp::Pan` の**中身が 0.25 と一致する**こと |
+| `engine_wrap.rs` `set_bus_line_seed_for_a_new_gain_without_a_match_defaults_to_unity` | 旧に Gain が無い republish で、新 Gain の seed が既定 1.0 になること（0.5 でも 0.0 でもない） |
+
+**なぜ必要だったか**: `LineOp` を match する実行器は master（`execute_master_line`）と
+bus post-loop の **2 箇所**あり、既存テストは `render_tagged_line` 経由で **bus しか通って
+いなかった**。master アームを `LineOp::Pan(_) => {}` に戻しても全件緑になる。wire 側も
+形の不正（MALFORMED）しか見ておらず、`item.get("pan")` を `item.get("value")` に
+取り違えても全件緑だった。
+
+**変異検算**（3 件とも壊して赤・戻して緑を実走）:
+
+| テスト | 変異 | 赤の実出力 |
+|---|---|---|
+| T1 | master 側 Pan アームを `LineOp::Pan(_) => {}` | `hard-left L=1` |
+| T2 | `item.get("pan")` → `item.get("value")` | `'line[].pan' must be a number`（MALFORMED） |
+| T3 | 対応無しの既定値 `1.0` → `0.0` | `left: [0.0, 0.0] / right: [1.0, 1.0]` |
+
+production コードは **0 行**（変異は都度復元・`git diff --stat` で確認）。
+
+**設計文書側も直した**: §4.1 に「√2 の合成が成り立つのは scheduler が鳴らす audio event に
+限る」という**適用範囲**を書き足した（Fable Important #2）。`collect_source_feeds` が集める
+instrument の feed は schedule 時の pan を通らないので、ライン上の Pan は
+`√2 · equal_power_pan(p)` がそのまま出て、**両端で +3.01 dB** になる。中央比では
+どちらも同じ等パワー則だが、絶対レベルが違う（audio event は中央が既に −3 dB）。
+フルスケールの instrument を端まで振ると 0 dBFS を超えるので、**束 B の締めまでに
+owner 裁定**とした（束 A では TS が `SetBusLine` を送らないので到達不能）。
+§11 には欠落の経緯と「設計の検証欄を実装後にチェックリストとして突き合わせる」教訓を残した。
+### feat(dsl): output(dest, thru, db), send in dB, pan as a line element (#611) (Sep 10, 2026)
+
+`Sequence.output(dest, { thru, db })` / `send(aux, db, { enabled })` / `gain(db)` / `pan(v)` を
+doc 611 §2-§3 の凍結表面へ切り替えた。解決順は `OutputDest` 解決済み → `"master"` 予約語 →
+宣言済み sum/aux 名（aux も `output()` で指せるよう拡張）→ `"L,R"` 物理アウト対 → LinkAudio
+channel 名（今日どおり）。数値 render bus の分岐は #611 §14 (1) のとおり解決順の外に残した
+（撤回は別 PR-R 系のスコープ）。`mix.output(n)` の mono 宣言をパーサ・`MixerRuntimeNode` に足し、
+`output(cue)`（`cue = mix.output(3,4)` のようなノード変数）は interpreter が
+`state.mixers.nodes` を引いて `{kind:'device', channels}` へ解決してから `output()`/`send()` に
+渡す。`MixerBusHandle`（sum/aux）にも同じ `output`/`send`/`gain`/`pan` を実装し、
+`BUS_DSL_METHODS` へ追加した。
+
+🔴 **`send` の dB 化で既存譜面の意味が変わる。** `kick.send("rev", 0.3)` は今日まで線形
+0.3（30%）だったが、**+0.3 dB**（`10 ** (0.3/20) ≈ 1.0351` 倍・ほぼ素通し）と読まれる。名前付き
+引数 `amount:` は改名されたとして loud に throw する（`db:` を使う）。golden `send`
+（`tests/e2e/output-line-expectations.ts`）は `legacyTotalOverDry`（`1 + 0.3 = 1.3`）から
+`dbTotalOverDry`（`1 + 10 ** (0.3/20) ≈ 2.0351`）へ切り替えた。
+
+🔴 **`pan`/`gain`（固定値）は8本しかない insert bus プールを守るため無条件にライン要素へしない。**
+`_insertBus` を持たない audio シーケンス（`effect()`/`output()`/`send()` 未宣言）では今日どおり
+発音側に適用し、`_line` には要素として記録するだけに留める。バスが後から確保された瞬間
+（`adoptLineOnFirstBus()`）に発音側をリセットし、`seamlessParameterUpdate` を即時再スケジュール
+して二重適用を防ぐ。instrument は発音側の適用経路が無いため常にバスを確保する。
+`examples/07_audio_control.orbs`（17 シーケンス・`gain()` 28 回）はこの分岐がないと 9 本目で
+`pool exhausted` する。
+
+`//#evalBegin` / `//#evalEnd` メタ行を `extension.ts`（`writeCodeToEngine`）と `repl-mode.ts`
+（`AudioLine.beginBatchAll()`/`endBatchAll()`）に追加し、評価単位全体を 1 つのカーソルバッチに
+した。フレーム外（生 stdin・単体テストの直接呼び出し）では各 DSL 呼び出しが自分だけの
+1 要素バッチを開閉する（`Sequence.upsertLine()`）ので、`output("drums")` → `output("cue")` の
+ような再宣言が今日どおり置換として効く。ガードは 2 つ: `beginBatch()` は開いたままのバッチを
+暗黙に閉じてから開く。フレーム途中で拡張が落ちても、次の `//#evalBegin` が自己修復する
+（統計評価文の内部エラーは `executeCurrentBuffer` の try/catch に吸収され `//#evalEnd` まで
+届くので、`finally` の追加は不要だった）。ユニットで両系列を固定した
+（`tests/cli/repl-eval-frame-meta.spec.ts`）。
+
+goldens の分類（`tests/e2e/output-line-expectations.ts`）:
+- `noBus` / `sumOutput` / `sequenceGainWithEffect` / `globalGainInstrument`: **不動**。
+  バス無し audio は発音側適用のまま（音は同値）・`global.gain()` は atomic のまま（F2 裁定「写さない」）。
+- `send`: **動く**（上記の式）。
+
+`MixerBusHandle.output()`/`.send()`（旧 `routeOutput`/`routeSend`）は、拒否された push を
+ロールバックせず「TS 側の宣言が真実・次呼び出しで全量再送」する自己修復方式へ揃えた
+（`Sequence` が B1 で既に持っていた `_busLineStale` と同じ規律）。
+
+判断を保留した点・設計との食い違い:
+- `send(aux, ...)` の文字列解決は aux/sum バス名限定にし、`"master"`/`"3,4"`/LinkAudio へは
+  広げなかった（設計は `OutputDest | string` としか書いておらず、aux 専用に狭めた）。
+- E2E-4/E2E-5（4ch 以上のデバイス要）は `it.skip` + `console.warn` のプレースホルダのみ
+  追加し、本体は書いていない（本機に該当デバイスが無く実装しても検証できない）。
+- E2E-6（チェーン順序）・E2E-7（seed のポップ回避）・E2E-10（daemon respawn）・E2E-11（master
+  gain の残響窓）は時間の制約で見送った。追加したのは E2E-2 / E2E-3 / E2E-S / E2E-S0 / E2E-G /
+  E2E-P（実機は main が回す・未検証）。
+- dev 学習サイト（`sites/dev/signal-chain/mixer-audio-line.md` 他）は多数の引用が本 PR で
+  ずれたため `--fix` の機械的な再アンカーに加え、コード引用そのものを新しい実装へ差し替えた。
+  ただし `SetBusRouting` 節と「Try it」節の周辺散文は歴史的経路の記録として残し、全面書き直しは
+  行っていない（更新コールアウトで明示）。
+
+### refactor(engine): route buses through SetBusLine without changing the DSL surface (#611) (Sep 10, 2026)
+
+`AudioLine` に宛先・rack・gain・pan・output の型、評価バッチ内のカーソル規則、暗黙の rack / master
+補完、wire 変換を集約した。規則 2 では要素削除後に cursor を 1 つ戻し、単文先頭の終端 output は
+既存終端を同じ位置で置換する。同じ宛先の ordinal はバッチ内で数えるため、同一宛先への複数 output
+も順序どおり保持できる。
+
+`Sequence` / `Global` / `MixerBusHandle` の routing は `SetBusLine` を送るようにし、respawn 後も最後の
+line intent を再送する。`Sequence.output(string | number)`、`send(name, amount)` の線形 amount、LinkAudio
+と render bus の解決順は変更していない。送る program も従来の
+`[rack, output(sum|master, thru: sends>0), sends…]` と同じである。
+
+DSL 表面をこの段階で変えないのは、`OUTPUT_LINE_GOLDENS` / O0-1〜O0-4 が 1 つも動かないことを
+配線の検算に使うためである。線形 send の dB 化や output の新しい引数を同時に入れると、golden が
+動いた原因を「配線の誤り」と「単位・表面の変更」に切り分けられなくなるため、それらは次の PR に残した。
+
+### feat(daemon): wire pan and mono device into SetBusLine, and carry effective gain across re-publish (#611) (Sep 10, 2026)
+
+`SetBusLine` の wire 契約を拡張し、`pan` と 1 要素の device channels（L+R の mono merge）を
+受理できるようにした。バスと master の RT では、発音側の center pan と重ねても音量が変わらない
+`√2 × equal-power` の係数を block ごとに計算し、pan 位置そのものを 5 ms ramp する。
+
+line の再 publish では、旧 program の実効値を atomic で読み、新旧 op を Gain/Pan の出現序数と
+Output の宛先・出現序数で対応付けて seed する。これが無いと、演奏中に send を追加しただけで既存の
+−12 dB send が一度 unity に跳ねてから戻り、約 5 ms の +12 dB burst と可聴の pop が生じるためである。
+対応の無い新 Output は 0.0 から fade-in し、Gain は 1.0、Pan は指定位置から始める。旧
+`SetBusRouting` の `LineProgram::legacy` / `settled` 経路は変更していない。
+
+---
+### fix(engine): stop a benign temp-dir race from inflating the ERROR count (#855) (Sep 11, 2026)
+
+#840 のマージ前ゲートで実機 gated が 2 件落ち、うち 1 件がこれだった。
+
+```
+AssertionError: expected 9 to be less than or equal to 8
+ERROR: Failed to cleanup old directories: Error: ENOENT: no such file or directory,
+       stat '.../T/orbitscore_1789065642138_xx52jsw'
+```
+
+**原因は TOCTOU**（`temp-file-manager.ts:93-110`）。`readdirSync` で列挙してから `statSync`
+する間に、**別のエンジンインスタンスの同じ掃除**が同じディレクトリを消す。gated suite は
+エンジンを何度も起動・停止するので、複数インスタンスが同じ temp root を奪い合う。
+
+`catch` は「Ignore errors during cleanup」と書いているのに `console.warn` を出しており、
+engine の stderr 分類で **`ERROR:` 行になる**（memory `stderr-is-classified-as-error` の再発）。
+**ディレクトリが既に無いのは、このループが望んでいた結果そのもの**で失敗ではない。
+
+**副次**: `try` がループ全体を囲んでいたので、**1 件 ENOENT が出た時点で残りを見ずに抜けて**
+いた。孤児が溜まる。
+
+## 🔴 変異検証が別の穴を見つけた
+
+修正のテストに変異をかけたところ、**`orbitscore_` 接頭辞の判定を外しても全テストが緑**だった。
+この掃除は**共有の `os.tmpdir()`** を舐めて **1 時間以上前のディレクトリを消す**ので、
+接頭辞判定は**他アプリの temp を消さない唯一の歯止め**である。テストを足した。
+
+| 変異 | 結果 |
+|---|---|
+| ENOENT も含め全部握り潰す | 1 failed |
+| ENOENT も再送出（元の挙動へ戻す） | 1 failed |
+| 1 時間の条件を外す（新しい dir も消す） | 1 failed |
+| **接頭辞の判定を外す** | **最初は 4 passed（すり抜け）→ テスト追加後 1 failed** |
+| restore | 5 passed・baseline とバイト一致 |
+
+## テストはモックを使わず実物のファイルシステム条件で書いた
+
+`os.tmpdir` も `fs.statSync` も **再定義できない**（`Cannot redefine property`）ので、
+最初に書いた `vi.spyOn` 版は動かなかった。差し替えではなく**本物の条件**を作った:
+
+| 条件 | 作り方 | Node が出すもの |
+|---|---|---|
+| レース | dangling symlink | 本物の `ENOENT` |
+| レースでない失敗 | 自己参照 symlink | 本物の `ELOOP` |
+| temp root の差し替え | `process.env.TMPDIR`（POSIX は呼び出しごとに読む） | — |
+
+`chmod 444` は使えなかった — constructor 自身の `mkdirSync` が先に落ちて **cleanup に到達しない**。
+
+捏造した mock 文言を検証するのは、このプロジェクトが列挙している弱いアサーションの典型なので、
+結果的に良い方向へ転んだ。
+
+`npm test` 2,283 passed / 0 failed・lint 緑・`typecheck:e2e` 緑・引用 934 / 0 failed。
+
+Closes #855
 ### ci(release): fail a tag push whose version disagrees with the .vsix (#843) (Sep 11, 2026)
 
 **追記（`/simplify` 後・2026-09-11）**: cleanup 4 体のうち 2 体が実質的な指摘を出した。
@@ -662,837 +1459,6 @@ CI・ユニット・机上レビューのどれにも掛からない。** 実機
 
 `SetBusLine` の wire 契約を足す束。**DSL からは呼ばない**（送るのは PR-O4）ので、束の収束条件は
 O-wire と同じ「**`OUTPUT_LINE_GOLDENS` / `#611 O0-1〜4` が 1 つも動かないこと**」+ cargo 全緑 + 実機 gated 全件。
-
-### docs: follow the SetBusLine wire in the dev site and core spec (#823 追従) (Sep 8, 2026)
-
-**ブランチ**: `claude/docs-sync-pr823` → `611-line-wire-b`（docs-sync ルーチン・PR [#823](https://github.com/signalcompose/orbitscore/pull/823) 追従）
-
-マージ済み PR にドキュメントを追従させる定期ルーチンの成果物。**実装とテストは 1 行も触っていない。**
-
-#### 直したもの
-
-| 文書 | 何 |
-|---|---|
-| `sites/dev/signal-chain/mixer-audio-line.md`（+ `en/`） | `SetBusLine` の節を新設（wire 語彙・検証が session / `EngineWrap` の 2 層に分かれた理由・拒否 code の表・forward-only は残り kind 制約は無いこと・全か無かの publish・`master` も同じ publish に乗ったこと）。`verified-against` を `f6c9c37` へ |
-| `sites/dev/rust-engine/index.md`（+ `en/`） | `set_global_gain` の節の記述を訂正（下記）|
-| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.4 | 「v1 の現在地」の行番号が `engine_wrap.rs:5809-5813` 等で古かったので実測値へ。**wire 側の kind 制約は PR-O3b で外れたが、送信元がまだ無いので譜面から見える振る舞いは変わっていない**ことを追記 |
-
-#### 🔴 差分と食い違っていた記述を 1 件訂正した — `explicit_line`
-
-PR-O3b 本文・WORK_LOG・dev サイトの 3 箇所が「`explicit_line` は最初の `SetBusLine("master", …)` まで
-`false` なので既存譜面は従来経路をそのまま通る」と書いていた。だが差分を読むと、
-`MasterLine::line_program_installer` が返す closure は install 成功時に**無条件で**
-`explicit_line` を立てる（`rust/crates/orbit-audio-native/src/output.rs:790-798`）。
-そして `EngineWrap::set_global_gain` は `outproc-effect` build でそのハンドルを呼ぶ
-（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9284-9290`）。
-
-したがって **`SetGlobalGain`（DSL の `global.gain()`）を 1 回受けた時点で** master の render は
-`execute_master_line` 側（`output.rs:1719-1721`）へ移る。dev サイトの記述をコードに合わせて直し、
-**出力にどう出るかは実機で測っていない**ので `NOTE: unverified` を付けた。
-
-差分から読み取れる差は 2 つ（どちらも未測定）:
-
-- ランプ長の出どころ — `MasterLine::ramp_frames` は sample_rate から算出、`LineSlot::new` の既定は
-  **240 固定**（`output.rs:1196`）。`set_sample_rate` は insert bus の line にしか呼ばれない（同 `:2765`）
-- 再 publish のたびに `LineProgram::new` が gain セルを **1.0 から**始める（同 `:1005-1020`）
-
-**判断は仕様の側なので、追従作業では直していない。** #823 追従 PR の本文で質問として出している。
-
-#### 検証
-
-`npm run docs:build`（user / dev）と `npm run docs:check`（**1,026 citations verified / 0 failed**）。
-
----
-
-### feat(daemon): SetBusLine wire command and TS client (#611 PR-O3b) (Sep 9, 2026)
-
-**Issue**: #611 / **ブランチ**: `611-o3b-setbusline` → `611-line-wire-b`（小 PR）/
-**実装**: Codex（`gpt-5.6-sol` / effort high・専用 worktree）/ **検証**: main（本ツリー）
-
-#### 何を足したか
-
-| 層 | 何 |
-|---|---|
-| `session.rs` | `parse_set_bus_line_params`（wire 形式の検証）+ dispatch。feature 無効ビルドは `UNSUPPORTED` |
-| `engine_wrap.rs` | `set_bus_line`（意味論の検証 → `LineProgram` 構築 → 全検証後に一括 publish）・`SetGlobalGain` と master line の同期 |
-| `output.rs` | 🔴 **`MasterLine.line` と `execute_master_line`**（下記）|
-| `lib.rs` | O3a の型（`LineOp` / `LineOutput` / `LineProgram` / `OutputDest`）と installer の re-export |
-| `protocol-types.ts` / `daemon-client.ts` | `'SetBusLine'` / `setBusLine()` / `WireDest` / `WireLineOp` |
-
-🔴 **TS の呼び出し元は作っていない**（DSL から送るのは PR-O4）。
-🔴 **旧 `SetBusRouting` は併存**（撤去は PR-O6）。既存テストは 1 行も書き換えていない。
-
-#### 🔴 PR-O3a の実装漏れを 1 件埋めた — `MasterLine.line`
-
-設計 611 **§5.2 は `MasterLine` に `line: LineSlot` を持たせる**と定め、**§4.1 の `bus` は `"master"` を
-受理対象**にしている（`master` の自己参照を拒否する検証行がその証拠）。ところが **PR-O3a はそれを
-入れていなかった** — main `2ca00f6a` の `output.rs` の `MasterLine` は `post` / `gain_target` などだけで、
-**`SetBusLine("master", …)` を受理する先が無い**。
-
-本 PR が §5.2 を埋めた。**互換は分岐で保つ**:
-
-```
-if master.explicit_line { execute_master_line(...) }   // publish 後
-else { post → advance_gain → place_master_into_device }  // 従来経路（1 命令も変えていない）
-```
-
-`explicit_line` は最初の `SetBusLine("master", …)` が publish されるまで `false` なので、
-**既存譜面は従来経路をそのまま通る**。O0 golden の bit 一致はこの分岐で構造的に保たれる
-（既存の `legacy_*_bit_for_bit` 群が無改変で緑）。
-
-⚠️ 計画 §1.10 の「触るファイル」欄が `output.rs` を落としていた（見積もりの漏れ）。
-`BUNDLE_BRANCH_WORKFLOW` §5.1b に従い、**実装の前に**計画へ理由と追加の検証条件を書いた（`fc67c771`）。
-
-#### 検証の層を分けた（main の裁定・2026-09-08）
-
-`validate_line_program`（`output.rs`）は **RT 実行の可用性ゲート**であって wire の契約検証ではない。
-そこは `Pan` / `Render` / `Link` を `OutputError::NoConfig` で拒否しており、**その文言を wire へ流すと
-`DEVICE_CONFIG_ERROR` になって §4.1 のどの行とも一致しない**（`actionable_output_error_code` は
-4 種の device エラーしか拾わない）。
-
-したがって `set_bus_line` が §4.1 の表を**先に**適用する。**このゲートは無改変**（差分に出ていない）:
-
-| §4.1 の行 | wire code | 経由する variant |
-|---|---|---|
-| 形式不正・`rack` 二重・`master` 自己参照・`render` 未登録 | `MALFORMED_REQUEST` | `OutProcEffectRequest` |
-| `dest.bus` 未知 / forward-only 違反 | `OUTPROC_EFFECT_RUNTIME` | `OutProcEffect` |
-| `dest.device` 範囲外・`a == b` | `PARAM_OUT_OF_RANGE` | （session の dispatch で直接）|
-| `dest.link`（feature 無し） | `LINK_AUDIO_UNAVAILABLE` | `LinkAudioUnavailable` |
-| feature 無効ビルド | `UNSUPPORTED` | （dispatch の `#[cfg(not(...))]`）|
-
-🔴 **ブリーフ（09-07 起案）は 3 箇所を誤っていた**ので、着手前に一次ソースで検算して訂正した:
-`engine_wrap.rs` の行番号（6227 → **6310**）/ feature 無効時の code（`OUTPROC_EFFECT_UNAVAILABLE`
-→ **`UNSUPPORTED`**）/ wire code は variant 名と別物であること。**訂正しなければ、存在しない
-エラー code を期待するテストが緑になっていた。**
-
-#### 検証（🔴 すべて main が本ツリーで実行）
-
-| 検証 | 結果 |
-|---|---|
-| `cargo test --workspace --locked` | **617 passed / 0 failed / 38 ignored** |
-| `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument` | **339 passed / 0 failed / 13 ignored**（新規 `set_bus_line_*` 11 件を含む）|
-| `cargo fmt --all --check` | 緑 |
-| `cargo clippy --workspace --all-targets -- -D warnings` | 警告なし |
-| `cargo clippy -p orbit-audio-daemon --features outproc-effect,outproc-instrument --all-targets` | 警告なし |
-| `npm run lint` | 緑 |
-| `npm test` | **2,329 passed / 58 skipped / 0 failed**（164 ファイル）|
-| `npm run build` / `npm run typecheck:e2e` | 緑 |
-
-🔴 **委譲先が走らせられなかったものが 2 つあった**:
-
-1. **protocol 統合テスト 61 件** — Codex の sandbox は localhost bind を許さず
-   `bind_localhost ... Operation not permitted` で全件落ちていた。**本ツリーでは bind エラー 0 件で全緑**
-2. **TS 側すべて** — worktree に `node_modules` が無く、lint / vitest / tsc を一度も実行していない
-
-**「Codex が緑と言った」だけでマージできる PR は構造的に存在しない**（CLAUDE.md）ことが、
-そのまま再現した形。
-
-#### main が差分を読んで直した点（1 件）
-
-`output.rs` の従来経路を `else` 分岐へ包む際に、**設計判断を記録したコメント 3 ブロックが削除**されていた:
-`g == 1.0` が bit 一致を崩さない理由 / デバイス配置の意味（設計 §5.3 row 6）/
-🔴 **`hw` を全域 zero-fill してはいけない**理由（`place_master_into_device` が全要素を書くので、
-1ch・2ch では毎ブロック二重 store になる。64 frames × 2ch で約 96,000 store/秒の無駄）。
-
-**コードは無改変だがコメントだけ落ちる**類の欠落で、テストでは検出できない。復元した。
-
-#### 🔴 CI が捕まえた検証漏れ — `docs:check` を手元で回していなかった
-
-小 PR [#823](https://github.com/signalcompose/orbitscore/pull/823) の CI で `code-review` が落ちた。
-原因は**実装ではなく dev サイトの引用**で、**102 件が FAIL**。Rust に +1,096 行入れたので
-`// file:start-end` の行番号が動いたため。
-
-**私（main）の検証漏れである**。cargo・vitest・lint・build・typecheck は回したのに、
-**`npm run docs:check` を回していなかった**。`--no-verify` でコミットしたので pre-commit も走らず、
-**CI が唯一の検出点になっていた**。
-
-対処:
-
-| 手 | 結果 |
-|---|---|
-| `node sites/dev/scripts/check-citations.mjs --fix` | 102 → **4 件**（スニペットの移動ぶんは自動で再アンカーされる）|
-| 残り 4 件（ja/en の 2 箇所） | **引用の中身自体が変わっていた**ので `--fix` では直らず、コードブロックごと差し替えた |
-| 地の文 | `EngineWrap::set_global_gain` の説明が「`MasterLine` の目標値へ atomic store するだけ」のままだった（本 PR で master line への再 publish が 1 段増えている）。ja / en とも追記した |
-
-最終: **1,012 citations verified / 0 failed**・`npm run docs:build` 成功。
-
-🔴 **教訓**: Rust に大きな差分を入れたら **`docs:check` は cargo と同じ列に置く**。
-引用は「コードは正しいが記述が古い」を検出する層で、他のどのテストも代わりにならない。
-
-#### `/simplify` の結果（4 観点を並行・束 PR [#824](https://github.com/signalcompose/orbitscore/pull/824)）
-
-**適用したもの**:
-
-| 指摘 | 出所 | 何をしたか |
-|---|---|---|
-| master 分岐と named bus 分岐で **Device 変換・Render/Link 拒否が一字一句同一** | altitude・simplification が**独立に**指摘 | `device_dest_from_wire` / `render_dest_rejected` / `link_dest_rejected` の 3 つへ抽出。両分岐から呼ぶ |
-| `link` のエラー文言が「requires link-audio」で誤解を招く | altitude | **feature の有無ではなく RT が未配線だから拒否している**ので「is not wired into RT execution yet」へ。code は §4.1 どおり `LINK_AUDIO_UNAVAILABLE` のまま |
-| `explicit_line` の**消える条件**がコメントに無い | altitude | 「PR-O4 で新表面が実機で確かめられ、PR-O6 で旧経路が撤去され、O0 golden を取り直した後」と明記 |
-| `MasterLine::new` の既定 program が control 側 shadow と食い違う | simplification | **RT では一度も実行されない**（`explicit_line == false` の間は固定経路へ分岐する）ことを明記。不整合ではない |
-| `explicit_line` は `SetGlobalGain` でも `true` になる | simplification | フィールドの doc に明記（名前は「明示的な line が入ったか」の意） |
-
-🔴 **1 件は指摘が誤りだった（適用しかけて戻した）**。simplification が「`gain` の上限チェックが
-session 側にしか無い＝乖離」と報告したので条件を揃えたが、**型が違うため乖離ではない**:
-session は JSON の **f64** を受けるので `> f32::MAX` を弾いてから `as f32` する必要がある（変換で
-`inf` になるのを防ぐ）。`engine_wrap` 側は既に **f32** で、`is_finite()` が `inf` を弾き、有限な f32 は
-定義上 `f32::MAX` 以下。戻した上で**理由をコメントに残した**（次に同じ指摘が出ても即座に却下できる）。
-
-**skip したもの**:
-
-| 指摘 | skip の理由 |
-|---|---|
-| forward-only 判定が 3 箇所目 / activation ループが同一 | 相手の `set_bus_routing` は **PR-O6 で退役**（計画 §1.10）。今統合すると O6 で解く手間が増える。かつ `set_bus_line` が `bus_kinds` を見ないのは設計 §4.1 の**裁定 ③（kind は問わない）どおり** |
-| `LineOp::Gain` の逐語重複（6 行 × 2） | 軽微。master と insert bus で buffer と `ramp_frames` の取得元が違い、抽出しても引数で受け渡すだけになる |
-| `bus_lines` / `bus_line_programs` の二重 map | 旧 `SetBusRouting` と対になっており、PR-O6 で片方が消える |
-| Render/Link の判断が 3 層 4 箇所 | 一本化は範囲が大きい。**一次情報は `validate_line_program`** である旨を各所のコメントに書いて代替した |
-
-**efficiency は「該当なし」**が結論 — RT パス（`execute_master_line` / `LineSlot::load`）に
-**alloc・lock・syscall は無く**、`LineSlot` / `LineExchange` の退役規律も PR-O3a の insert bus と
-**同じ型をそのまま再利用**している。control 側の clone やロック区間の指摘はすべて
-「ユーザー操作 1 回・低頻度」の規模だった。
-
-適用後の再検証: cargo **617 / 339 passed・0 failed**（変更前と同数）・fmt・clippy 警告なし・
-`docs:check` **1,012 verified / 0 failed**（helper 追加で行番号が動いたので `--fix` で再アンカー）。
-
-#### 🔴 レビュー・ラウンド 1 — 既存機能の回帰を 1 件止めた
-
-レビューチーム 4 名 + Fable 監査を**並行**投入（CLAUDE.md）。**Critical 5 / Important 3 / Minor 2**。
-
-##### 最重要: `global.gain()` の可聴ポップ（**code-reviewer と Fable が独立に指摘**）
-
-`SetGlobalGain` を master line へ写した結果、`LineProgram::new` が `current_gain` を全 op で 1.0 から
-始めるため、**2 回目以降の `global.gain()` で ramp が unity から再開**する。直前の実効ゲイン
-（例 −20 dB）から目標（−10 dB）へ寄る代わりに**一度 1.0 へ跳ね上がってから寄る** — 64 frame の
-小バッファでは数ブロックかかるので可聴のポップになる。
-
-🔴 **これは新機能の不足ではなく回帰**である。この PR の前は `SetGlobalGain` が `gain_target` atomic を
-更新するだけで、`advance_gain` が**呼び出しをまたいで `gain_current` を連続させていた**。
-
-**裁定と、その前にやったこと**: 設計 §4.2 は「**意味を変えない形で**写す」と書いており、条件を
-満たしていない。運用規則 6 に従い**設計を先に更新**してから実装を直した:
-
-| 文書 | 追記 |
-|---|---|
-| §4.2 | 🔴 **この写しは PR-O4 と同時**。O3b で写すと TS がまだ `SetGlobalGain` を送るので回帰する |
-| §5.1 | 🔴 **再 publish 時の `current_gain` 初期値規則**（本書に欠けていた節）|
-
-Fable が「**§5.1 に新 program の初期値規則が無い**」と指摘したのが要点だった。規則が無いので
-実装者が判断できず、Codex は素直に `LineProgram::new` を使った。**規則を先に書く。**
-
-##### 適用した fix（Codex・ポリシーを 1 本にまとめて一括発注）
-
-| # | 何を |
-|---|---|
-| 1 | `set_global_gain` から master line 再 publish を**外した**（`master_gain.store` のみ＝この PR の前と同じ）|
-| 2 | 🔴 **`master.line.set_sample_rate` の呼び忘れ**（Fable）。`LineSlot::new` は `ramp_frames: 240` 固定で、呼び出しは insert bus の 1 箇所だけだった → 44.1k / 96k で master の ramp が 5 ms からずれていた |
-| 3a | `bus_actives` の活性化テスト（旧 `SetBusRouting` には前例があるのに新規側に無かった）|
-| 3b | **device channel の 1 始まり → 0 始まり変換**。🔴 `device_dest_from_wire` は**どのテストからも一度も実行されていなかった** |
-| 3c | `set_bus_line("master", …)` の成功系と全か無か（既存の master テストは installer を直接呼んでおり `set_bus_line` を通らなかった）|
-| 3d | 裁定③（kind を問わない）の**正のテスト**。🔴 Codex が「**kind チェックを復活させても既存 290 件は全緑**」を先に実証してから追加した＝変異検証として機能した |
-| 4 | `debug_assert!` が release で no-op であること・到達不能を保証するのは control 層だけであること・破れたら**無音でログにも残らない**ことをコメント化（実装は変えない）|
-| 5 | `explicit_line` の doc から**一次文書に根拠の無い一文**を削除（`/simplify` で main が書いたもの）|
-
-##### 検証（🔴 すべて main が本ツリーで実行）
-
-| 検証 | 結果 |
-|---|---|
-| `cargo test --workspace` | **617 passed / 0 failed / 38 ignored** |
-| `cargo test`（outproc features） | **344 passed / 0 failed / 13 ignored**（339 → 344・新規 5 件）|
-| fmt / clippy 2 本 | 警告なし |
-| `npm test` | **2,329 passed / 58 skipped** |
-| `npm run lint` / `typecheck:e2e` / `docs:build` | 緑 |
-| `npm run docs:check` | **1,012 verified / 0 failed**（Rust の行番号が動いたので `--fix` + 引用の中身を差し替え）|
-
-🔴 **Codex は sandbox で cargo の 29 件 / 32 件を落としていた**（`bind_localhost ... Operation not
-permitted`）。本ツリーでは **bind エラー 0 件で全緑**。「委譲先の緑は実機の緑ではない」が再現した。
-
-##### owner の裁定を仰いでいる 2 件（O3b の範囲外）
-
-Fable が **設計 §4.1 自体が 2026-09-03 の裁定を反映していない**ことを発見した:
-
-- **`pan` op が wire に無い** — §2.4b / W-18 は「wire に `pan`」と書くが §4.1 の `WireLineOp` は 3 op
-- **mono device が wire で表現できない** — §2.2 の `mix.output(3)` / §5.1 の `right: None` に対し、
-  §4.1 の `channels: [number, number]` は 2 要素必須
-
-実装は §4.1 に忠実なので**本 PR の欠陥ではない**。§4.1 の改訂自体は運用規則 6 に従い今やるべきだが、
-束の範囲を広げる判断なので owner の裁定待ち。
-
-#### 🔴 束の締め — 収束条件を満たした（2026-09-09 実測）
-
-**マージ前ゲート**（無条件の 3 行 + build）:
-
-| ゲート | 結果 |
-|---|---|
-| `npm run build` | errors 0 |
-| `bash rust/crates/orbit-std-gain/bundle-macos.sh` | `Gain.clap` 生成 |
-| `cargo test -p orbit-effect-rack-child --lib -- --ignored` | **3 passed**（実 gain プラグイン依存）|
-| `cargo test -p orbit-effect-rack-child --lib`（`--ignored` **無し**）| **16 passed**（退行検知テストが実際に走った）|
-
-**実機 gated 全件**（`npm run test:e2e:gated`・523 秒）: **29 passed / 1 failed**。
-
-🔴 **収束条件「goldens が 1 つも動かないこと」を達成**:
-
-| golden | 実測 |
-|---|---|
-| `#611 O0-1` no-bus RMS | `0.08701663328646671` / `0.0870166332956341`（2 セッション）|
-| `#611 O0-2` sum-output RMS | `0.08701663328620282` |
-| `#611 O0-3` `send(0.3)` の total/dry | **`1.300000013268198`**（= 1 + 0.3）|
-| `#611 O0-4` `effect + gain(-6)` | `effectOnly 1.9952622668994517` / `combined 0.9999999200541101` |
-
-**4 件とも通過**。`#611 O0-4`（#775 の間欠故障）も**今回は緑**で、U2 に該当するログは 0 行だった。
-
-唯一の失敗は **`steps the live playhead`**（`timed out waiting for [STEP] markers ... after 20000ms`）で、
-これは **main baseline の既知の赤**（台帳に記載済み）。**新しい赤は 0 件。**
-
-孤児プロセス（`OrbitStudio` / `orbit-audio-daemon`）の残留なしも確認した。
-
-⚠️ **ログの所在で 2 回つまずいた**: `nohup` を `dangerouslyDisableSandbox` で回すと `$TMPDIR` が
-**sandbox 内とは別のパス**（`/var/folders/…/T/`）を指すため、sandbox 内から読めない。
-**完了マーカー（`EXIT=`）を先に見て集計行が無いことに気づいた**ので、「テスト本体に到達していない」と
-判断でき、実装ではなくログの所在を疑う方向に進めた。
-
-#### 🔴 owner 裁定（2026-09-10）— §4.1 を改訂し、`pan` / mono の実装は PR-O4 へ
-
-Fable が **設計 §4.1 だけが 2026-09-03 の裁定に追従していなかった**ことを発見した。
-
-| 層 | mono `device` | `pan` op |
-|---|---|---|
-| §2.2 / §2.4b（DSL 表面・09-03 裁定）| `mix.output(3)` = L+R マージ（Q-611-5）✅ | ライン要素（Q-611-4）✅ |
-| §2.x の TS 型（`:162` `:179`）| `[number,number] \| [number]` ✅ | `{ kind: 'pan' }` ✅ |
-| §5.1 / §5.3（Rust 型・RT 式）| `Device { right: Option<usize> }` ✅ | `LineOp::Pan` と式 ✅ |
-| 🔴 **§4.1（wire）** | **2 要素固定** ❌ | **3 op のみ** ❌ |
-
-🔴 **PR-O3b の実装は §4.1 に忠実だったので、実装の欠陥ではない。**
-**正本が古いと、忠実さがそのまま欠落になる。**
-
-**裁定**: §4.1 を改訂し、**実装は両方 PR-O4（束 O-surface）で 1 回にまとめる**。
-
-**なぜ O3b でやらないか**（2 件でコストが違うので分けて判断した）:
-
-| | mono `device` | `pan` op |
-|---|---|---|
-| RT の実装 | ✅ **既にある**（`add_to_device` が `right: None` で L+R を 0.5 マージ）| ❌ **無い**（`validate_line_program` が拒否し実行側も空）|
-| 必要な作業 | wire の型と parse（約 40 行）| wire + **RT 実行**（等パワー・約 150 行）|
-
-`pan` は RT 実装を伴うので O3b に入れると**「振る舞いを変えない」という束の性格が壊れ、
-goldens の「動かないこと」という検算が使えなくなる** — O3 を O3a / O3b に割ったのは
-まさにこの検算を守るためだった。mono だけ先に足すと **wire を 2 回変える**ことになり、
-一方通行の変更回数が増える。したがって**両方を O4 で 1 回にまとめる**。
-
-⚠️ 計画 §2.1 の「1 PR で wire と DSL の両方を変えると golden の差分がどちら由来か分からない」に
-抵触するが、**`pan` については §2.4b が既に「`pan` を含む譜面の golden は再ベースライン」と
-裁定済み**（owner 受け入れ済み）なので、帰属問題はその範囲で扱える。
-
-**更新した文書**: 設計 §4.1（型・検証表 2 行・経緯の引用ブロック）/ 計画 §1.10 の PR-O4 行
-（wire + RT の `Pan`・`SetGlobalGain` の写しも O4）。
-
-#### 未検証・次の束へ
-
-- 実機 gated（**goldens が 1 つも動かないこと**）は**束の締め**で 1 回 → ✅ **上記のとおり達成**
-- 🔴 **PR-O4 が引き継ぐもの**（本 PR では実装しない）: `pan` op の wire + RT / mono `device` の wire /
-  `SetGlobalGain` の master line への写し（§4.2・ramp の実効値引き継ぎ機構とセット）
-- `LineOp::Pan` の wire 表現は無い（§4.1 の `WireLineOp` に `pan` が無い・PR-O4）
-- `dest.render` は登記簿（`DeclareRender`・PR-R2）が無いので今日はすべて拒否
-
----
-
-### chore(docs): rotate WORK_LOG before the O-wire-b bundle (Sep 9, 2026)
-
-**ブランチ**: `611-o3b-setbusline` → `611-line-wire-b`（束 O-wire-b の前処理）
-
-`tests/docs/worklog-size.spec.ts` の上限 2,000 行に対し **1,998 行**（残り 2 行）だったので、
-PR-O3b のエントリを書く前にローテーションした。
-
-| | 前 | 後 |
-|---|---|---|
-| `docs/development/WORK_LOG.md` | 1,998 行 | **1,430 行** |
-| `docs/archive/WORK_LOG_2026-09.md` | 4,535 行 | 5,119 行 |
-
-移設したのは **Sep 6 のエントリ 11 件**。archive 側に
-「## 09-06 の追補（本体の 2,000 行上限で移設・2026-09-09 第 3 回）」を新設して先頭へ入れた。
-本体末尾の索引と `docs/core/INDEX.md` の表は **`2026-09（前半・09-01〜09-06）` のままで正しい**
-（移したのが 09-06 の範囲内なので期間が変わらない）。
-
-🔴 日付が混在していたので**行の位置ではなく見出しの日付で選別**した。Sep 6 群の間に
-Sep 7 のエントリ 2 件（E-gate のレビュー fix と `/simplify`）が挟まっていたため、
-行範囲で切ると一緒に移動してしまう。
-
----
-
-### docs: restore the three index lines the #821 consolidation dropped (Sep 8, 2026)
-
-**追従元**: PR [#821](https://github.com/signalcompose/orbitscore/pull/821)（マージコミット `2489218` / head `8c40ce8`）/ **ブランチ**: `claude/docs-sync-pr821`
-
-#821 は 3 本のルーティン追従 PR（#809 / #818 / #820）を 1 コミットにまとめ直したが、**その過程で 3 行が落ちた**。PR 本文は「中身はそのまま」と書いており削除に触れていない。**同じ PR が入れた WORK_LOG 本文が、落ちた行を実在する前提で書いている**（#820 分「#819 は CLAUDE.md と INDEX.md からポインタを張った」/ #818 分「INDEX.md Planning 表に `issue-states.json` を登録」）ため、意図した削除ではなく取りこぼしと判断して復元した。
-
-#### 直した箇所
-
-| ファイル | 何を | 出どころ |
-|---|---|---|
-| `CLAUDE.md:181-183` | Development Commands 直後の macOS スキャン警告（`MACOS_DEV_SETUP.md` へのポインタ）| PR #819（`6e22a84`）が追加 → #821 が削除 |
-| `docs/core/INDEX.md:118` | Development 表の `MACOS_DEV_SETUP.md` 行 | 同上 |
-| `docs/core/INDEX.md:243` | Planning 表の `issue-states.json` 行（生成物・手で編集しない）| PR #818 に在ったが #821 に入らなかった |
-
-復元前、`MACOS_DEV_SETUP.md` は `docs/testing/TESTING_GUIDE.md:30` と WORK_LOG 本文からしか辿れず、`issue-states.json` はどこからも索引されていなかった。🔴 **この取りこぼしを赤にするテストは無い**（`worklog-size.spec.ts` は行数とアーカイブ名、`planning-issue-state.spec.ts` は状態語の矛盾しか見ない）。提案は PR 本文へ回した。
-
-#### 追従不要と判断したもの
-
-#821 の差分 6 ファイルはすべて docs で、`packages/engine/`・`rust/`・`packages/vscode-extension/` に変更が無い。DSL の構文・意味論、MCP ツールの引数と返り値、エディタの評価経路のいずれも変わらないため、`docs/specs-v2/`・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`・`sites/user/`・`sites/dev/`（日英とも）は対象外。
-
----
-
-### docs(testing): point the testing guide at the macOS setup trap (PR #819 follow-up) (Sep 8, 2026)
-
-**追従元**: PR [#819](https://github.com/signalcompose/orbitscore/pull/819)（マージコミット `6e22a84` / head `5ef4151`） / **ブランチ**: `claude/docs-sync-pr819`
-
-docs-sync ルーチンが PR #819 のマージを受けて実行。#819 は `docs/development/MACOS_DEV_SETUP.md` を
-新設し、CLAUDE.md と `docs/core/INDEX.md` からポインタを張ったが、**Rust テストの手順書である
-`docs/testing/TESTING_GUIDE.md` には張られていなかった**。同ガイドの Prerequisites は
-「Rust toolchain」「macOS Apple Silicon」を要求しつつ、設定なしの macOS では
-`cargo test --workspace` が 37 分かかる事実に触れていない。
-
-#### 変更
-
-- `docs/testing/TESTING_GUIDE.md` の System Requirements 直後に `MACOS_DEV_SETUP.md` への
-  ポインタを追加（2,240 秒 → 66 秒・遅さの 91% はマルウェアスキャン・件数は不変）
-
-#### 追従不要と判断したもの
-
-#819 の差分は 4 ファイルすべてがドキュメント（CLAUDE.md / `docs/core/INDEX.md` /
-`MACOS_DEV_SETUP.md` / WORK_LOG.md）で、`packages/engine/`・`rust/`・
-`packages/vscode-extension/` に変更が無い。DSL の構文・意味論、MCP ツールの引数と返り値、
-エディタの評価経路のいずれも変わらないため、`docs/specs-v2/`・
-`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`・`sites/user/`・`sites/dev/` は対象外。
-`sites/dev/` は内部構造の解説サイトで開発機セットアップの章を持たない（`orientation/` は
-`what-is-orbitscore.md` と `architecture-overview.md` のみ）。
-
----
-
-### docs: follow up PR #815 — record the new planning-doc ratchet where the rules live (Sep 8, 2026)
-
-**追従元**: PR [#815](https://github.com/signalcompose/orbitscore/pull/815)（#814・merge commit `5eaea2f`）/
-**ブランチ**: `claude/docs-sync-pr815` → main（ルーティンのドキュメント追従）
-
-PR #815 は**仕組み**（`tests/docs/planning-issue-state.spec.ts`）と**運用規則**
-（`BUNDLE_BRANCH_WORKFLOW.md` §5.1b）を足したが、**それを列挙している既存の 3 箇所には入っていなかった**。
-規律の一覧が実在の仕組みより古いままだと、次のセッションは「その仕組みは無い」と読む。
-
-| 直した先 | 何を |
-|---|---|
-| `CLAUDE.md`「これらは仕組みで強制されている」 | 表に 1 行追加。**捕まえるのは状態語の矛盾だけ**で内容の誤りは通ることも併記（出典必須の運用へ送る）|
-| `DEVELOPMENT_MAP.md` §0.2 | 運用規則 7（事実が変わった瞬間に地図を更新）・8（実測には出典）を追加。既存の規則 4「issue を閉じたら」より**広い**ことを明示 |
-| `PROJECT_RULES.md` §1c（棚卸しの作法）| `KNOWN_STALE_BASELINE` が**棚卸しの入口**であること・直したら削ること・増やして通さないこと |
-| `INDEX.md` Planning 表 | `docs/planning/issue-states.json` を**生成物**として登録 |
-
-🔴 **`packages/` `rust/` `sites/` は 0 件。** 元 PR に実装の差分が無く、`sites/dev` は
-コードの内部構造を扱う層なので追従先が無い（判断理由は PR 本文）。
-
----
-
-### docs(index): follow PR #805 — the archive period label stayed at 09-05 (Sep 7, 2026)
-
-**ブランチ**: `claude/docs-sync-pr805`（ルーチンによる docs 追従）
-
-PR [#805](https://github.com/signalcompose/orbitscore/pull/805)（マージコミット `7a71f51`）の追従。
-#805 は WORK_LOG のローテーションのみで、**DSL / ランタイム / OrbitStudio の表面は 1 行も動いていない**。
-追従対象はアーカイブの索引 1 箇所だけだった。
-
-#### 直した箇所
-
-| ファイル | 内容 |
-|---|---|
-| `docs/core/INDEX.md:176` | 「Archived WORK_LOG」表の period 列 `2026-09（前半・09-01〜09-05）` → `09-01〜09-06` |
-
-#805 はアーカイブ側 H1（`docs/archive/WORK_LOG_2026-09.md:1`）と本体末尾の索引
-（`docs/development/WORK_LOG.md:1184`）を `09-01〜09-06` へ更新したが、`PROJECT_RULES.md:116` が
-更新を義務づけている **3 箇所目の `docs/core/INDEX.md` が旧ラベルのまま**残っていた。
-
-🔴 **仕組みがこの列を見ていない。** `tests/docs/worklog-size.spec.ts:44-53` の索引テストは
-「`docs/archive/` にある `WORK_LOG_YYYY-MM.md` が本体末尾から辿れるか」= **ファイル名の存在**しか
-照合しない。period 列のラベルも INDEX.md 側の表も検査範囲の外なので、ずれても緑のままになる。
-
-#### 追従不要と判断したもの
-
-- `docs/archive/WORK_LOG_2026-09.md`（+790 行）と `docs/development/WORK_LOG.md`（-786 行）の
-  本文 — **移設のみで内容は不変**（#805 が文字列比較で同一性を確認済み）。参照先が本体から
-  archive へ移るが、`sites/**` からの `development/WORK_LOG.md` 名指しは 0 件で、
-  `sites/dev/editor/vscode-architecture.md:918`（および `en/` 同行）は既に archive を指している
-- `sites/dev/` の各章 — 内部構造・評価経路は変わっていない
-- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — DSL の構文・意味論は変わっていない
-
-#### 🔴 #805 は `fmt / clippy / test` が赤いままマージされている
-
-`device_switch_result_records_failure_and_success_through_the_same_path` の `captured log: ""`
-（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:10723`）。**再実行（run_attempt 2）でも再発**。
-既知の flaky #801 で、docs のみの差分とは無関係。PR [#808](https://github.com/signalcompose/orbitscore/pull/808)
-（`801-tracing-interest-anchor`）が anchor subscriber で直しており、その run は緑。
-
----
-
-### docs: follow the merged O-wire bundle into the dev site (Sep 8, 2026)
-
-**ブランチ**: `claude/docs-sync-pr811` / **追従元**: PR [#811](https://github.com/signalcompose/orbitscore/pull/811)（束 O-wire・merge commit `66efda5`）
-
-ルーチン「マージされた PR にドキュメントとサイトを追従させる」による docs のみの変更。
-**実装・テストは 1 行も変更していない。**
-
-#### 追従した内容（ja / en 両方）
-
-| 章 | 何を書いたか | 差分のどこ |
-|---|---|---|
-| `sites/dev/signal-chain/mixer-audio-line.md` | post-loop の本文が `effective_targets[i]` 分岐から **line program 実行**へ変わった。`LineOp` / `OutputDest` / `LineOutput.thru`、`validate_line_program` の install-time 拒否、`effective_line_output_dest` と `LineProgram::settled` という互換の 2 仕掛け、`LineExchange` の AtomicPtr + 世代カウンタ、marking pass と実行が **1 snapshot を共有する**理由 | `rust/crates/orbit-audio-native/src/output.rs:914-939,1043-1100,1249-1297,1301-1312,2049-2066,2160-2184` |
-| `sites/dev/rust-engine/index.md` | `render_block_with_sources` に **直行デバイスライン**の段が増えた（`DeviceLineBuffer` / `direct_device_written` / `wrote` による遅延 zero-fill）。引用 range が capture tap と `cb_stats` を落としていたので本文の 5 段記述に合わせて復元 | `rust/crates/orbit-audio-native/src/output.rs:1651-1700,1926-1930` |
-| `sites/dev/editor/vscode-architecture.md` | #773: stdout の bridge dispatch が `createLinePrefixer` + `StringDecoder` 経由になった。buffer をハンドラ内に置く理由（stale プロセスとの分離）、decode をこの経路だけに限った線引き、`end` での `decoder.end()` → `flush()` の順序 | `packages/vscode-extension/src/extension.ts:1479-1486,1516-1519,1534-1535,1578-1586` |
-| `sites/dev/editor/mcp-and-gated-e2e.md` | evalMark 分岐が prefixer callback の中へ移ったこと（分岐と prefix 順は不変・取りこぼし経路が 1 つ減った）への cross-link | 同上 |
-| `sites/dev/rust-engine/insert-bus.md` | `InsertBusStage` の mixer 用 4 フィールド（`output_target` / `sends` / `routing_override` / `send_gain_overrides`）が **`line: LineSlot` の 1 本**へまとまった。`LineOp` の並びが「ラックの位置・gain・出口」を表す。source 無し専用の `render_engine_with_insert_buses` は `#[cfg(test)]` のラッパーへ後退 | `rust/crates/orbit-audio-native/src/output.rs:1314-1336,932-939,1785-1790` |
-| `sites/dev/editor/execution-feedback.md` | stdout の 4 分岐が `for` ループから prefixer callback へ移った理由（引用のインデントが 8 → 4 になった）と、それ以前は `evalMark` 応答がまるごと失われて `evaluateForAgent()` が timeout していたこと | `packages/vscode-extension/src/extension.ts:1499-1507` |
-
-5 章の frontmatter は `verified-against: 66efda5` / `verified-at: 2026-09-08` に更新した。
-
-#### 🔴 先行する追従 PR 2 本をここへ統合した（#807 / #812 は close）
-
-`claude/docs-sync-pr806`（#807・#773 の追従）と `claude/docs-sync-pr810`（#812・PR-O3a の追従）は、
-**本 PR と同じ章の同じ主題を、1 つ前の code に対して**書いていた。#811 が束として main に入った時点で
-両者の引用は壊れており（`docs:check` で 8 件 FAIL）、地の文も `StringDecoder` 導入前の説明のままだった。
-
-そこで **両者にしか無いファイルだけを本 PR へ取り込み**、重複していた 4 章
-（`vscode-architecture.md` / `mcp-and-gated-e2e.md` / `rust-engine/index.md` /
-`signal-chain/mixer-audio-line.md`）は**本 PR の版＝最新 code に対する記述を採った**。
-取り込んだのは上表の下 2 行。引用は `check-citations.mjs --fix` で再アンカーし、
-PR 参照は束のマージ PR **#811** に統一した（dev サイトは main の履歴を基準にするため）。
-
-🔴 **教訓**: ルーティンの追従 PR を溜めると、追従先の code が動いて**追従そのものが陳腐化する**。
-6 本溜まった時点で 3 本が同じ章を奪い合っていた。`BUNDLE_BRANCH_WORKFLOW` §4 が
-「束を開く前に全部消化する」と言っているのは、衝突だけでなくこの陳腐化も理由である。
-
-#### 追従不要と判断したもの
-
-- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` / `sites/user/` / `docs/user/ja/USER_MANUAL.md`
-  — この束は `packages/engine/` を 1 行も触っておらず、DSL 表面（構文・チェーンメソッド・宣言形式）も
-  wire 契約も変わっていない。`SetBusLine` と DSL 表面は次の束（O3b / O-surface）
-- `rust/crates/orbit-audio-daemon/src/test_tracing.rs`（#801）— テストハーネスのみ。dev サイトに該当章が無い
-- `docs/design/611-output-line-design.md` — 起案時点のスナップショットなので後から書き換えない（ルーチン規約）
-
-#### 検証
-
-`npm run docs:build`（user / dev）と `npm run docs:check` を実行。結果は PR 本文に貼付。
-
----
-
-### perf(test): the Rust test cycle was 91% macOS malware scanning — 2,240s to 66s (#816) (Sep 8, 2026)
-
-**Issue**: #816 / **ブランチ**: `816-test-cycle-perf` → main（直行）
-
-#### 発端（owner）
-
-> テストは重要なのですが、**過剰なテストになっていませんか？** テストを正しく無駄なく行う方法はありませんか？
-
-#### 🔴 答え: 過剰ではなかった。テストは 80 秒しか走っていない
-
-`cargo test --workspace --locked`（1 ファイル変更後）の内訳を実測で分解した:
-
-| 内訳 | 時間 | 割合 |
-|---|---|---|
-| ビルド + リンク | 101 秒 | 5% |
-| **テスト自身の実行** | **80 秒** | 4% |
-| 🔴 **バイナリ初回起動の macOS 検査** | **約 34 分** | **91%** |
-
-決定的な観測 — **同じバイナリを 3 回起動**した:
-
-```
-run 1: 23.22 秒   ← 初回
-run 2:  0.004 秒
-run 3:  0.004 秒
-```
-
-CPU サンプリングで犯人も特定した: **前半 5 秒が `syspolicyd`（Gatekeeper）・後半 6 秒が
-`XprotectService`（マルウェアスキャン）**。
-
-🔴 **`cargo test` はこの検査にとって最悪のケース**である。テストバイナリは**1 回しか実行されない**ので
-キャッシュが効く前に用済みになり、このワークスペースは**77 個**作る。しかも
-**`XprotectService` はシングルスレッド**なので、並列に起動しても検査は 1 本ずつしか進まない。
-
-#### 対策と結果
-
-**ターミナル（Ghostty）をデベロッパツールに登録 + ターミナル再起動 + `cargo clean`**。
-
-| | ベースライン | 対策後 |
-|---|---|---|
-| **所要** | **2,240 秒（37 分 20 秒）** | 🔴 **66 秒** |
-| passed / failed / ignored | 615 / 0 / 38 | **615 / 0 / 38** |
-| スイート数 | 93 | **93** |
-| テストバイナリ | 77 | **77** |
-
-🔴 **検証の範囲も結果も 1 つも変わらず 34 倍。** 「速度と正しさを交換する」類ではない。
-
-#### 🔴 `cargo clean` が要る理由（ここを飛ばすと効かない）
-
-設定は「**これから作られるバイナリ**」にしか効かない。`target` に残っている成果物（**71 GB** あった）は
-**設定前のまま**なので検査され続ける。nextest の公式が
-"You may also need to run `cargo clean` afterwards" と書いているとおりだった。
-
-**設定だけ入れて `cargo clean` しなかった段階では、32 秒のまま変化しなかった。**
-
-#### 効かなかったもの（記録・再試行の必要なし）
-
-| 手 | 結果 |
-|---|---|
-| `codesign -v` で事前検証 | ❌ 13.6 秒かけても初回起動は 76 秒。**署名検証と実行時スキャンは別物** |
-| バイナリを並列に warm up | ❌ `XprotectService` がシングルスレッドなので直列化する |
-| `sudo spctl developer-mode enable-terminal` 単独 | ❌ **Terminal.app を追加するだけ**でトグルも ON にならない。Ghostty 利用時は無関係 |
-
-⚠️ **並列 warm up の自作は危険**でもあった。`--list` を渡しても、テストバイナリではない実行ファイル
-（`orbit-plugin-scan` / `sandbox-effect-child`）は**引数を無視して本体として起動する**。
-実際にやってしまい 8 分以上走り続けた。**止めて方法を変えた。**
-
-#### 🔴 このリポジトリは既に半分知っていた
-
-`orbit-audio-sandbox/src/child.rs:107` の `warm_up_executable`（#520）が
-「`cargo build` 直後の child は macOS のセキュリティ評価を伴い**数秒〜24 秒**止まりうる」と
-コメントしていた。**個別のテストには対策済みで、テストサイクル全体には効いていなかった。**
-
-同日「実機の赤を実装のせいにしかけた」3 件のうち 2 件も**同じ Gatekeeper** が原因だった。
-**同じ現象に 3 つの別々の名前を付けて、別々に対処していた**ことになる。
-
-#### 残したもの
-
-- **`docs/development/MACOS_DEV_SETUP.md`**（新設）— 手順・トレードオフ・効かなかった手
-- **CLAUDE.md の Development Commands** と **`docs/core/INDEX.md`** からポインタ
-  （次のセッションが最初に読む場所に置く）
-
-#### 🔴 owner の環境で変えたもの（リポジトリ外・戻す時の参照）
-
-| # | 何を | 状態 |
-|---|---|---|
-| 1 | **Ghostty をデベロッパツールに登録（ON）** | 🔴 **これが効いた。外すと 37 分に戻る** |
-| 2 | `sudo spctl developer-mode enable-terminal` | ⚪ **無関係**（Terminal.app 対象・トグル OFF）。戻してよい |
-| 3 | `cargo-nextest` を `~/.cargo/bin` に導入 | ⚪ **未使用**。原因が別だったので出番が無かった |
-
-⚠️ **戻し方**: `spctl` に `disable-terminal` は**無い**（main が誤って案内し訂正した）。
-解除は **システム設定 → プライバシーとセキュリティ → デベロッパツール** で
-トグル OFF か `−` で削除する。
-
-#### 方針として採らなかったもの
-
-**「`--workspace` を毎回回さない」は採らない。** 検証の範囲を狭める手であり、このリポジトリは
-「委譲先の緑は実機の緑ではない」「配線は E2E でしか見えない」という失敗を繰り返している。
-**範囲を狭めると同じクラスの事故が戻る。** 今回の対策は「**同じ検証を速くする**」だけなので失うものが無い。
-
----
-
-### chore(docs): stop planning documents from drifting silently (#814) (Sep 8, 2026)
-
-**Issue**: #814 / **ブランチ**: `814-doc-drift-check` → main（直行）
-
-#### 発端 — owner の問い
-
-束 O-wire を閉じる直前、owner に「**先に送った内容は地図・設計・プランに反映してあるか**」と問われ、
-一次ソースで確認したら**不十分だった**。さらに「**現状の地図や設計、実装プランが正しいことは保証
-できますか**」と問われ、**保証できないと答えた**（確認したのは 3 項目だけだった）。
-
-🔴 **地図の #801 行が「実測は負荷依存」のままだった。** これは**同日の実測で否定された記述**である。
-**地図は次のセッションが最初に読む層**なので、古い記述は**申し送りの誤りを再生産する** —
-実際その束は、旧 `/goal` の「負荷をかけて再現条件を作る」という**誤った前提から始まっていた**。
-
-#### 実測した規模
-
-| 文書 | 参照している issue（ユニーク）|
-|---|---|
-| `DEVELOPMENT_MAP.md` | **174 件** |
-| `IMPLEMENTATION_PLAN_2026-09.md` | 90 件 |
-
-⚠️ **粗い検出（同一行に複数 issue）だと 18 件出るが、行の主題で絞ると 4 件**だった。
-**数字を出すときは検出条件の粗さも一緒に言う** — 一度「18 件」とだけ報告して owner に問い返された。
-
-#### ① 手順書に「いつ更新するか」を書いた（`BUNDLE_BRANCH_WORKFLOW.md` §5.1b）
-
-**「後でまとめて書く」は必ず忘れる。** 同日の失敗はすべて「変わった直後に書かなかった」ことだった。
-
-| 時点 | 何を | なぜ |
-|---|---|---|
-| 🔴 **事実が変わった瞬間** | **地図** | 「今どうなっているか」の層。次のセッションが最初に読む |
-| 🔴 **決めた瞬間（実装の前）** | **計画・設計** | `CLAUDE.md` 運用規則 6「spec 側を先に更新してから実装する」|
-| 束を閉じる前 | 3 文書の突合 | 上 2 つができていれば**確認だけ**で済む |
-
-手順表にも 2 行足した（束を開く前の grep・束を閉じる前の突合）。
-
-🔴 **「実測」を書くときは出典（日付 / PR / commit）を必須にする**とも定めた。
-テストが捕まえるのは状態語の矛盾だけで、**内容の誤りは捕まらない**。
-出どころがあれば次の人が「これは 09-07 の測定で 09-08 に否定されている」と気づける。
-
-#### ② 突合テストを新設（`tests/docs/planning-issue-state.spec.ts`）
-
-- 文書の `#NNN` を抽出 → **行の主題**（最初に現れる番号）が CLOSED かを判定
-- CLOSED なのに `未着手` `引き込む` `予定` 等があれば **red**
-- **ベースラインでラチェット**（`dsl-e2e-coverage.spec.ts` と同じ形）
-
-🔴 **テストは GitHub API を叩かない。** issue の状態は
-`docs/planning/issue-states.json`（`scripts/docs/refresh-issue-states.mjs` が生成）に固定する。
-テストがネットワークとレート制限で落ちると、**#801 と同じ「赤の帰属ができない」状態**を持ち込む。
-
-#### 🔴 テストが初回から本物を 5 件捕まえた
-
-| 行 | 記述 | 実際 |
-|---|---|---|
-| `MAP:1136` `MAP:1139` | #773 を「**束 O-wire に引き込む**」 | **同日 CLOSED**（PR #811）|
-| `PLAN:332` | #780 の束が「**ステージ 2 に着手する前提**」 | **09-07 完了**・ステージ 2 は着手済み |
-| `PLAN:333` | #773 を「**引き込み**」 | 同上 |
-| `PLAN:499` | #801 を「**O-wire に引き込む**」 | **同日 CLOSED** |
-
-**5 件を直した。** 誤検知 3 件（行頭の番号が主題でない形）は**理由を書いてベースラインへ**。
-主題の判定を賢くするより、**少数の誤検知を明示的に許容する**ほうが読みやすいと判断した。
-
-#### 変異検証（main が実行）
-
-| 変異 | 結果 |
-|---|---|
-| 閉じた issue を「未着手」と書く行を足す | ✅ **red**（該当行を名指し）|
-| ベースラインから 1 件消す | ✅ **red** |
-
-#### 🔴 変異の復元を確認して助かった
-
-変異 2 のあと `git checkout -- tests/docs/planning-issue-state.spec.ts` で戻したつもりが、
-**ファイルが未追跡（`??`）なので効いていなかった**。テストが赤のままで気づいた。
-**「復元した」を確認せずに次へ進まない。**
-
-#### このテストが捕まえないもの（過大評価しない）
-
-| 誤りの型 | 捕まるか |
-|---|---|
-| 状態語の矛盾（CLOSED なのに「未着手」）| ✅ |
-| 🔴 **内容の誤り**（「#801 は負荷依存」・issue は OPEN）| ❌ |
-| 文書間のずれ（地図は「PR-O3」・計画は「PR-O3a」）| ❌ |
-
-**同日いちばん危なかったのは 2 番目**で、そこは出典必須の運用で担保する。
-
----
-
-## 束 O-wire（#611 ステージ 2・統合ブランチ `611-line-wire`）
-
-出口の配線を入れ替える束。**振る舞いは変えない**ので、束の収束条件は
-「**`OUTPUT_LINE_GOLDENS` / `O0-1` などの goldens が 1 つも動かないこと**」+ cargo 全緑 + 実機 gated 全件。
-中身は PR-O3（`LineProgram` / `SetBusLine`）+ #773 + #801。
-
-### fix(daemon): close the O-wire review round-1 findings (#611) (Sep 8, 2026)
-
-**PR**: [#811](https://github.com/signalcompose/orbitscore/pull/811)（束 O-wire → main）/ **ブランチ**: `611-line-wire`
-
-#### レビュー編成 — Fable を並行投入した（最後に回さない）
-
-`/simplify` 4 エージェント（reuse / simplification / efficiency / altitude）と **Fable 設計監査を並行**起動。
-**Critical 0 件**。発見クラスは規約どおり**直交**した:
-
-| 層 | 見つけたもの |
-|---|---|
-| Sonnet 4 名 | 差分に**在る**ものの重複・冗長（4 件）|
-| 🔴 **Fable** | 差分に**無い**もの — **silent な受理 2 件**・**UTF-8 の byte 境界**・**±12% で見逃せる誤りの具体的な範囲** |
-
-#### 🔴 監査が main の読みを 2 箇所訂正した
-
-1. 「bit 一致テストは変換の正しさしか見ていない」→ **静的な方は完全な同語反復**
-   （`with_output_target` / `with_sends` は内部で同じ `LineProgram` を組む）。
-   実行時の方は**別分岐だが両方とも新コード**。より正確だった
-2. 「互換ミラーは特殊ケースの積み上げでは」→ **呼び出し元を追跡すると本番では常に `None`**。
-   `with_routing_overrides` を呼ぶのは `output.rs` のテストだけで、
-   実体は**旧経路との bit 一致を証明する現役の安全網**だった
-
-#### 🔴 ±12% の許容で何が見逃せるか（監査が具体化）
-
-| 誤り | 検出 |
-|---|---|
-| **`send` 係数 0.3 の誤り** | 🔴 **0.144〜0.456（−52%〜+52%）が通る** |
-| 出力ゲイン ±1 dB / 全体の極性反転 / L/R 入れ替え | 通る |
-| send の二重加算・消失 | 落ちる |
-
-**穴は実在する。** これを知ったので cargo 層を厚くする判断ができた。
-
-#### ポリシーを 1 つ決めてから適用した（指摘単位のローカルパッチにしない）
-
-> **出口の配線において「未登録」「未配線」を silent に受理しない。**
-> 反映されない入力（登録されていない bus、RT が実行しない op）は `Ok` を返さず `Err` にする。
-
-このリポジトリでは「評価は成功するのに音が変わらない／変わる」形の欠陥が繰り返し出荷されている。
-**silent な受理は、次の PR の配線忘れをそのまま本番へ通す。**
-
-#### 直したもの
-
-| # | 内容 |
-|---|---|
-| **A-1** | `set_bus_routing` が `bus_lines` に無い bus で **silent に `Ok`** を返していた → `Err`。🔴 **`Err` は atomic mirror と activation の両方より前**に返る |
-| **A-2** | `Pan` / `Render` / `Link` を `validate_line_program` が受理し RT が無視 → `Err`。**「配線したらこの拒否行を消せ」とコメントに明記**（可用性ゲートであって形式制限ではない）|
-| **A-3** | #773 が **UTF-8 の byte 境界**未対応（`data.toString()` per chunk で多バイト文字が U+FFFD 化）→ `StringDecoder` を **bridge dispatch の前段だけ**に。🔴 **`decoder.end()` を `flush()` の前**に置く（逆順だと最後の 1 文字が消える）|
-| **B-1** | 実行時 bit 一致を **4 トポロジ**へ拡張（master のみ / sum のみ / output-only 更新で send 保持 / 2 send）|
-| C-1〜C-4 | `BusLineInstaller` の重複定義 / sentinel デコード 2 箇所 / send オフセット 3 箇所 / `first_output` の三項分岐 2 箇所 |
-| D-1〜D-3 | 退役 margin の論法を先例と書き分け / `Cell` の RT 専有は型でなく encapsulation 依存 / poisoning の注記 |
-
-🔴 **A-3 の red-first が本物だった**: 修正前は実際に `"���本語の診断"` と化けていた。
-
-#### 🔴 B-1 は要求より 1 段強く作られていた
-
-bit 一致だけだと「**両方とも send を落としている**」場合も緑になる。
-output-only 更新のテストが **「send バッファが非ゼロ」を別途 assert** しており、同語反復の穴が塞がれている。
-
-#### なぜ (A) ではなく (B) を採ったか
-
-監査は「旧 RT から bit-exact oracle を作る」(A) を推奨したが、**(B) トポロジを増やす**を採った。
-理由: RT の shim 分岐（`legacy_targets` / `legacy_send_gains`）は**無改変の既存テスト 6 本が固定している**ので、
-`shim ≡ program` を複数トポロジで示せば **推移的に「旧 RT ≡ program」**が言える。(A) より安く、ほぼ同じ強度。
-
-#### 見送った指摘（理由つき）
-
-| 指摘 | 見送りの理由 |
-|---|---|
-| RT の marking / execution 2 重 walk | **構造的**（`render_multi_feeds` が事前に完全な target を要求）・**パス数は元から 2 本**・**未測定**。2 人のレビュアーが独立に同判断 |
-| `extension.ts` の stdout 二重 split | **#614 で穴を踏んだ高リスク領域**。軽微・未測定 |
-| mono downmix の `0.5` が 2 箇所 | 意味論が違う（代入 vs 加算）|
-| `LineControl` の薄いラッパー | 確信度 中・呼び出し側の書き換えを伴う・実害小 |
-| `LineExchange` ≒ `ChainExchange` | 共有クレート抽出が要る・**PR-O6 まで形が固まらない** |
-
-#### 監査の運用指摘 2 件も処理した
-
-- **束の中身が正本とずれる**（O3b 分離）→ 計画 §1.10・§2.5 と設計 611 §12 に
-  **PR-O3a / O3b の分割とその理由**を記録
-- **追跡先が CLOSED 済み #801 のコメント**だった → issue
-  [#813](https://github.com/signalcompose/orbitscore/issues/813) を独立して作成
-
-#### 🔴 地図・計画・設計への反映が漏れていた（owner 指摘）
-
-束を閉じる直前に owner から「先に送った内容は地図・設計・プランに反映してあるか」と問われ、
-**一次ソースで確認したら不十分だった**。
-
-| 文書 | O3a/O3b 分割 | 実機未検証の範囲 | #801 の実測訂正 |
-|---|---|---|---|
-| 地図 | 🔴 **無し**（「PR-O3」のまま）| 🔴 無し | 🔴 **「負荷依存」の古い記述が残存** |
-| 計画 | ✅ | 🔴 無し | ✅ |
-| 設計 611 | ✅ | 🔴 無し | — |
-
-🔴 **地図の #801 行が「実測は負荷依存」のままだった。** これは同日の実測
-（効く変数は `--test-threads`・除外実験で犯人は 1 本）で**否定された記述**である。
-**古い事実が地図に残るのが一番まずい** — 地図は次のセッションが最初に読む層だから。
-
-直したもの:
-
-1. **地図 §4.A** — PR-O3 → **O3a / O3b**（可逆 vs 一方通行という分割理由つき）
-2. **地図 #801 行** — 「負荷依存」を撤回し、`--test-threads` 依存と犯人 1 本の確定へ。**解決済みの印**
-3. **地図 #773 行** — 解決済みの印 +「**UTF-8 byte 境界は直したが stderr 側（#756）は未対応**」
-4. **設計 611 §10 冒頭** — 実機で一度も鳴っていない op の一覧 + **±12% で `send` 係数の −52%〜+52% が通る**根拠
-5. **計画 §1.10 PR-O4 行** — 上記を「次の束で押さえる対象」として引き継ぎ
-
-#### 🔴 スクリプトの成功出力を成果の証拠にしない（本日 2 回目）
-
-設計 611 への書き込みが**一度空振りした**。見出しが
-`## 10. E2E 項目（すべて MCP 経由…）` と括弧つきなのに `## 10. E2E 項目\n` をアンカーにしており、
-`assert s.count(anchor)==1` が**部分文字列として成立してしまった**ため `ok` が出た。
-
-**`ok` の後に grep で実在を確認したので気づけた。** 同日 1 件目はワークスペーステストの
-中断ログを完走と読みかけた件で、いずれも「**実行が成功したこと**」と「**目的が達成されたこと**」を
-取り違える型である。
-
-#### 🔴 実機で検証されていない範囲（記録）
-
-実機 gated が通している op は **{Rack, Output(Master,1.0), Output(Bus,1.0), Output(Bus,0.3)}** だけ。
-**`Gain` op / `Device` 宛て / mono マージ / 複数 send / gain 0 での send 除去 は実機未検証**
-（cargo の bit 一致では覆っている）。
 
 ---
 

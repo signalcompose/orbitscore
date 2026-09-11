@@ -118,6 +118,11 @@ kick.send(verb, -12, enabled: false)   // ≡ db: -Infinity（送らない・要
 | `output(…, db:)` | その宛先へ行く分だけ | `LineOp::Output.gain` |
 | `Gain(db:)`（ラック内）| ラック内の位置 | 既存 `orbit-std-gain`（変えない）|
 
+固定値からランダム値へ切り替える時、既にバスがありライン上に固定 `gain` が残っているなら、
+その宣言を同じ呼び出しで `gain(0 dB)` へ更新して daemon へ再 publish する。ランダム値は発音側へ
+移るため、旧固定値をラインに残すと「発音ごとのランダム × ラインの固定値」の二重適用になる。
+`pan` も同様に、旧固定要素を `pan(0)` へ更新してからランダム値を発音側で扱う。
+
 🔴 **`seq.gain(固定)` の適用点が発音側 → ライン上へ移る**（#649 §14 の判断 5「高確度で音が変わる」）。
 effect 併用の譜面では今日「ラック前」だったものが**既定位置ではラック後**になる。§9 の golden で差分を明示する。
 
@@ -267,7 +272,7 @@ export interface OutputOptions { thru?: boolean; db?: number }
 /** §2.1。`dest` は解決前の値（ノード変数は interpreter が OutputDest に解決してから渡す）。 */
 output(dest: string | number | OutputDest, opts: OutputOptions = {}): this
 /** §2.3。`enabled: false` は db = -Infinity。 */
-send(aux: string | OutputDest, db: number, opts: { enabled?: boolean } = {}): this
+send(aux: string | OutputDest, dbOrOpts: number | SendOptions, opts: SendOptions = {}): this
 ```
 
 **`output()` の解決順（§2.2 を規範化・`sequence.ts:350-431` を置き換える）**:
