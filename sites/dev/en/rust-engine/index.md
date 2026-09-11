@@ -1,8 +1,8 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: 58b8c1c
-verified-at: "2026-09-10"
+verified-against: e4d4199
+verified-at: "2026-09-11"
 status: draft
 ---
 
@@ -546,7 +546,7 @@ device"** — with the placement stage added, anything other than 2ch always pay
 placement.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1846-1936
+// rust/crates/orbit-audio-native/src/output.rs:1846-1932
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -634,10 +634,6 @@ fn render_block_with_sources(
         stats.record(t0.elapsed().as_nanos() as u64);
     }
 }
-
-#[inline]
-fn execute_master_line(
-    master: &mut MasterLine,
 ```
 
 ### The direct device line — an output that skips the master
@@ -727,7 +723,9 @@ storing twice per block in the RT callback.
 
 The other change is where the master gain is applied. `MasterLine` groups the master rack (the
 old `post`) and the gain into one struct and fixes the order as **rack → gain**. The gain moves
-toward the target the control side (`SetGlobalGain`) wrote atomically, one block at a time.
+toward the target the control side (`SetGlobalGain`) wrote atomically, one block at a time. Since
+#859 (2026-09-11) the return value is not a scalar but a `LineRamp`, which carries **which value
+applies to which frame inside that block**.
 
 ```rust
 // rust/crates/orbit-audio-native/src/output.rs:871-881
@@ -745,9 +743,18 @@ toward the target the control side (`SetGlobalGain`) wrote atomically, one block
 ```
 
 `ramp_frames` is the frame count for 5 ms, computed **at construction time** by
-`MasterLine::new` from the sample rate (the RT path only uses it as a divisor). When a block is
-longer than the ramp, `frac` saturates at 1.0 and the target is reached in one step; when it is
-shorter, the value approaches the target over several blocks.
+`MasterLine::new` from the sample rate (the RT path only uses it as a divisor). For the **value at
+the block endpoint**: when a block is longer than the ramp, `frac` saturates at 1.0 and the target
+is reached in one step; when it is shorter, the value approaches the target over several blocks.
+
+🔴 **Reading only the block endpoint misleads you** (fixed in #859, 2026-09-11). For a long time
+this formula was used as *one scalar for the whole block*, and with `ramp_frames` at 240
+(5 ms @48k) against a real-machine block length of **512**, `frac` always saturated at 1.0 — so
+**the ramp completed in a single block**, a step at the block boundary. Now `LineRamp::at(frame)`
+returns `start + step × frame` with `step` equal to `(target − start) / ramp_frames`, so **the ramp
+advances over `ramp_frames` samples rather than over the block length**. In a 512-frame block the
+first 240 frames interpolate and the rest hold `end`. Because **`at(frames)` is bit-identical to
+the old formula's value**, existing goldens that look at the block endpoint do not move.
 
 The point worth holding onto is that **production now has exactly one multiplication path**.
 `orbit_audio_core::Engine::set_global_gain` (the core scheduler ramp) is no longer called from

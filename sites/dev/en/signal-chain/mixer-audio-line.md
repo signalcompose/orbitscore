@@ -1,8 +1,8 @@
 ---
 title: "SC-2. The Mixer and the Audio Line — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: f6c9c37
-verified-at: "2026-09-08"
+verified-against: e4d4199
+verified-at: "2026-09-11"
 status: draft
 ---
 
@@ -517,32 +517,34 @@ before they reach RT.
 The execution of an output looks like this.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1962-1986
-            LineOp::Output(output) => {
-                let ramp = line_ramp(
-                    program,
-                    op_index,
-                    output.gain,
-                    frames,
-                    master.line.ramp_frames,
-                );
-                if let OutputDest::Device { left, right } = output.dest {
-                    add_to_device(&mut device, &master.buffer[..bs], frames, left, right, ramp);
-                } else {
-                    // release ではこの debug_assert は no-op。到達不能を保証する唯一の境界は
-                    // control 層の `set_bus_line` master 分岐であり、その検証が破れればこの出口は
-                    // 無音のまま捨てられ、ログにも残らない。
-                    debug_assert!(false, "master line destination was not validated");
-                }
-                if !output.thru {
-                    break;
-                }
-            }
-            LineOp::Pan(target) => {
-                let ramp = line_ramp(program, op_index, target, frames, master.line.ramp_frames);
-                apply_line_pan(&mut master.buffer[..bs], frames, ramp);
-            }
-        }
+// rust/crates/orbit-audio-native/src/output.rs:2566-2592
+                LineOp::Output(output) => {
+                    let dest = effective_line_output_dest(
+                        &mut first_output,
+                        legacy_targets[i],
+                        output.dest,
+                    );
+                    let frames = bs / output_channels;
+                    let ramp = line_ramp(
+                        program,
+                        op_index,
+                        output.gain,
+                        frames,
+                        buses[i].line.ramp_frames,
+                    );
+                    match dest {
+                        OutputDest::Master => {
+                            add_ramped_scaled(hw, &buses[i].buffer[..bs], output_channels, ramp);
+                        }
+                        OutputDest::Bus(target) => {
+                            let (left, right) = buses.split_at_mut(i + 1);
+                            add_ramped_scaled(
+                                &mut right[target - i - 1].buffer[..bs],
+                                &left[i].buffer[..bs],
+                                output_channels,
+                                ramp,
+                            );
+                        }
 ```
 
 `OutputDest` has five variants, but only three of them — `Master` / `Bus` / `Device` — are executed
@@ -601,6 +603,31 @@ fn apply_line_pan(buf: &mut [f32], frames: usize, ramp: LineRamp) {
     }
     let (start_left, start_right) = line_pan_coefficients(ramp.start);
     let (end_left, end_right) = line_pan_coefficients(ramp.end);
+```
+
+Turning a position into L/R coefficients was factored out into `line_pan_coefficients`
+(#859, 2026-09-11). `apply_line_pan` no longer computes them itself — it just calls this function
+**at the ramp's start and end positions**.
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:2227-2243
+#[inline]
+fn line_pan_coefficients(pan: f32) -> (f32, f32) {
+    // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
+    //
+    // 🔴 これは丸め誤差の除去でもある。f32 では `sqrt(2) * cos(pi/4) = 0.99999994` で
+    // **1.0 ちょうどにならない**ため、省かないと `pan(0)` を書いた譜面が書かない譜面と
+    // 6e-8 だけずれる。設計 §4.1 は「center で `(1, 1)`（unity）」と書いているので、
+    // 省く方が**文書どおり**になる。`LineOp::Gain` が `gain != 1.0` で同じことをしている。
+    if pan == 0.0 {
+        return (1.0, 1.0);
+    }
+    let (left, right) = equal_power_pan(pan);
+    (
+        left * std::f32::consts::SQRT_2,
+        right * std::f32::consts::SQRT_2,
+    )
+}
 ```
 
 The point is that this uses **`equal_power_pan` scaled by `√2`**, not the raw function. The source
