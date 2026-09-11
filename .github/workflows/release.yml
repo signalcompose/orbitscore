@@ -171,34 +171,32 @@ jobs:
           fi
           echo "orbit-plugin-scan present and executable in packaged .vsix"
 
-          # 🔴 エンジンのランタイム依存（#654）: `packages/engine/package.json` の
-          # dependencies が .vsix の `engine/node_modules/` に**全部**入っているか。
+          # 🔴 バンドルされたランタイム依存（#654 / #873）: 各 package.json の
+          # dependencies が .vsix の所定の node_modules に**全部**入っているか。
           #
           # これが抜けても **ビルドは緑・パッケージングも成功・インストールも成功**し、
-          # エンジンの初回評価で `Cannot find module` になって初めて分かる。
-          # 実際 `yaml` が npm の hoist で抜けた（install-engine-deps.sh を修正済みだが、
-          # 出荷物そのものを見る検査をここにも置く）。
-          ENGINE_DEPS=$(node -e 'console.log(Object.keys(require("./packages/engine/package.json").dependencies).join(" "))')
-          for DEP in $ENGINE_DEPS; do
-            if [ ! -d "$VSIX_CHECK/extension/engine/node_modules/$DEP" ]; then
-              echo "::error::engine runtime dependency '$DEP' missing from packaged .vsix at engine/node_modules/ — the engine would crash with \"Cannot find module\" on first evaluate" >&2
-              exit 1
-            fi
-            echo "engine dependency $DEP present in packaged .vsix"
-          done
-
-          # 拡張自身の実行時依存（#873）。engine 側と同型の事故が拡張側にもあり、
-          # そちらだけ検査が無かった: npm workspaces が @modelcontextprotocol/sdk と
-          # zod をリポジトリルートへ hoist するため extension/node_modules に残らず、
-          # dist/mcp-server.js のトップレベル require が cold install で落ちて
-          # activate() がまったく走らなかった。ビルドも上の検査も全部緑のまま。
-          EXT_DEPS=$(node -e 'console.log(Object.keys(require("./packages/vscode-extension/package.json").dependencies || {}).join(" "))')
-          for DEP in $EXT_DEPS; do
-            if [ ! -d "$VSIX_CHECK/extension/dist/node_modules/$DEP" ]; then
-              echo "::error::extension runtime dependency '$DEP' missing from packaged .vsix at dist/node_modules/ — activate() would throw \"Cannot find module\" on a cold install (#873)" >&2
-              exit 1
-            fi
-            echo "extension dependency $DEP present in packaged .vsix"
+          # 利用者の実行時に `Cannot find module` になって初めて分かる。実際に 2 回起きた:
+          # engine 側は `yaml` が npm の hoist で抜けて初回評価で落ち（#654）、拡張側は
+          # `@modelcontextprotocol/sdk` が同じく抜けて **activate() がまったく走らなかった**
+          # （#873・cold install で発覚）。scripts/install-bundle-deps.sh が両方を入れるが、
+          # 出荷物そのものを見る検査をここにも置く。
+          #
+          # 拡張側の置き場所が dist/node_modules なのは、vsce がパッケージ直下の
+          # node_modules を無条件に除外するため（同スクリプトのヘッダ参照）。
+          for SPEC in "engine:packages/engine/package.json:extension/engine/node_modules" \
+                      "extension:packages/vscode-extension/package.json:extension/dist/node_modules"; do
+            LABEL="${SPEC%%:*}"
+            REST="${SPEC#*:}"
+            PKG_JSON="${REST%%:*}"
+            VSIX_SUBDIR="${REST#*:}"
+            DEPS=$(node -e 'console.log(Object.keys(require(process.argv[1]).dependencies || {}).join(" "))' "./$PKG_JSON")
+            for DEP in $DEPS; do
+              if [ ! -d "$VSIX_CHECK/$VSIX_SUBDIR/$DEP" ]; then
+                echo "::error::$LABEL runtime dependency '$DEP' missing from packaged .vsix at ${VSIX_SUBDIR#extension/}/ — it would fail at runtime with \"Cannot find module\" on a cold install (#654 / #873)" >&2
+                exit 1
+              fi
+              echo "$LABEL dependency $DEP present in packaged .vsix"
+            done
           done
 
           # 標準プラグイン（#628 / SC.10.8）: child は自分の実行ファイルの隣の

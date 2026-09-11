@@ -25,7 +25,6 @@
 # `vsce package --no-dependencies` turns that walk off; the files ship because
 # they are ordinary files under dist/.
 #
-# `--prune` is safe: dist/ is build output that nothing but the build writes to.
 
 set -e
 
@@ -33,10 +32,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 EXT_DIR="$PROJECT_ROOT/packages/vscode-extension"
 
-mkdir -p "$EXT_DIR/dist"
-
 bash "$SCRIPT_DIR/install-bundle-deps.sh" \
   extension \
   "$EXT_DIR/package.json" \
-  "$EXT_DIR/dist" \
-  --prune
+  "$EXT_DIR/dist"

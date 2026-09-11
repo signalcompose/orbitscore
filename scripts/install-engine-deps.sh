@@ -6,8 +6,6 @@
 # and the reason it is needed at all — lives in install-bundle-deps.sh, which
 # the extension's own dependencies go through too (#873).
 #
-# `--prune` is safe here: packages/vscode-extension/engine/ is created by the
-# build and nothing else writes into it.
 
 set -e
 
@@ -17,5 +15,4 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 bash "$SCRIPT_DIR/install-bundle-deps.sh" \
   engine \
   "$PROJECT_ROOT/packages/engine/package.json" \
-  "$PROJECT_ROOT/packages/vscode-extension/engine" \
-  --prune
+  "$PROJECT_ROOT/packages/vscode-extension/engine"
