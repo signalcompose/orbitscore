@@ -31,38 +31,97 @@ The processing order is "per-sequence insert (`seq.effect()`) then group bus" �
 ### Constraints on sum
 
 - `sum` is a single level only — **you cannot nest a sum inside another sum**.
-- The name you pass to `output(name)` must already be declared with `global.sum(name)`. An undeclared name is an error.
+- When `output(name)` targets a sum bus, that name must already be declared with `global.sum(name)`. Destinations other than a declared bus can also be written — see "Destinations you can pass to output()" below.
 - **Audio and instrument sequences** can be sent to a sum bus with `output(name)`. A sequence created with `seq.midi()` targets an external device, so it has no mixer output and raises an error.
 
 ## aux / send — Send Audio Down a Separate Path
 
-Declare a return bus with `global.aux(name)`, then send audio to it from each sequence with `send(name, amount)`. `send` copies the audio, so **the original signal is not removed** — it continues on to master (or its sum) as usual.
+Declare a return bus with `global.aux(name)`, then send audio to it from each sequence with `send(name, db)`. `send` copies the audio, so **the original signal is not removed** — it continues on to master (or its sum) as usual.
 
 ```text
 global.aux("rev")
 aux("rev").effect("TAL Reverb 4")
 
-kick.send("rev", 0.3)
+kick.send("rev", -12)
 ```
 
-Inserting something like a reverb on a return bus (`aux`) is a typical use case. The second argument to `send()` controls how much signal is sent (roughly 0.0–1.0, with no hard clamp on the upper end).
+Inserting something like a reverb on a return bus (`aux`) is a typical use case. The second argument to `send()` is **how much signal is sent, written in decibels (dB)**. `0` matches the original level; `-12` is roughly a quarter of the amplitude.
 
-::: danger The unit of the second argument will change to dB (decided, not yet implemented)
-The 2026-09-03 specification revision (#611 / #649) **decided that the second argument to `send()` changes from a linear amount to dB** (core spec MX.3). The implementation has not landed yet, so **what you write today is still linear**.
+::: danger The unit of the second argument changed from linear to dB (2026-09-10)
+The second argument to `send()` used to be a linear amount (roughly 0.0–1.0). It is now **dB** (core spec MX.3 / #611).
 
-Once it switches, `kick.send("rev", 0.3)` will be read as "**+0.3 dB**" (essentially unattenuated) rather than "linear 0.3 (about −10 dB)". **It will not raise an error — only the sound changes, silently.** If your existing scores use sends, wait for the switch to be announced.
+So `kick.send("rev", 0.3)` is now read as "**+0.3 dB**" (about 1.035×, essentially unattenuated) rather than the former "linear 0.3 (about −10 dB)". **It does not raise an error — only the sound changes.** If your existing scores use `send()`, rewrite the second argument in dB (the equivalent of linear `0.3` is `-10.5`).
+
+The named argument `amount:` has been **removed** and now raises an error. Use `db:` instead.
 :::
+
+To mute a send temporarily, write `enabled: false`. Its position on the chain is kept, so switching back to `true` restores it in place.
+
+```text
+kick.send("rev", -12, enabled: false)   // sends nothing; position preserved
+```
 
 A single sequence can send to multiple `aux` buses at once.
 
 ```text
-kick.send("rev", 0.3)
-kick.send("delay", 0.2)
+kick.send("rev", -12)
+kick.send("delay", -6)
 ```
 
 ::: warning send() is not available on MIDI sequences
 Just like `output()`, `send()` works on **audio and instrument sequences**. It cannot be used with `seq.midi()`.
 :::
+
+## The Order You Write Is the Order of Processing
+
+`effect()`, `gain()`, `pan()`, `send()` and `output()` line up **in the order you write them, on one audio line**. The same method placed at a different position produces a different result.
+
+```text
+kickA.output("rev", thru: true).effect([Gain(db: -12)])   // rev receives the signal BEFORE the gain
+kickB.effect([Gain(db: -12)]).output("rev", thru: true)   // rev receives the signal AFTER the gain
+```
+
+The `thru:` option on `output()` decides whether the line ends there.
+
+- `thru: false` (the default) = **terminal**. The line ends, and anything written after it is not reached
+- `thru: true` = **tap**. The signal is copied to that destination and the line continues
+
+`send(name, db)` is shorthand for `output(name, thru: true, db: db)`. Either spelling gives the same result.
+
+Both `output()` and `send()` can appear more than once on one line.
+
+```text
+kick.output("rev", thru: true, db: -12).output("master")
+```
+
+If you write no `output()` at all, the line is treated as if `output("master")` were written at its end — the behavior you already know.
+
+### Destinations you can pass to output()
+
+| Spelling | Meaning |
+|---|---|
+| `output("master")` | The master track (a reserved word) |
+| `output("name")` | A declared `sum` bus **or `aux` bus** |
+| `output("3,4")` | Physical output channels 3 and 4 |
+| `output(variable)` | A mixer node declared as e.g. `var cue = mix.output(3, 4)` |
+| `output("name")` | A name that matches none of the above is a LinkAudio channel name (when `global.linkAudio()` is declared) |
+
+Names resolve **top to bottom** in that order. LinkAudio channel names come last, so `"master"` and declared bus names cannot be used as LinkAudio channel names.
+
+::: warning A mixer node cannot be named `master`
+Writing `var master = mix.output(1, 2)` is an error: `master` is a reserved word for the master track. Use another name, for example `var mainOut = mix.output(1, 2)`.
+
+Also, `mix.output(1, 2)` names **physical device channels 1 and 2** — not the master track.
+:::
+
+## Buses Accept output() / send() / gain() / pan() Too
+
+A `sum` or `aux` bus has its own audio line, just like a sequence. Alongside `effect()` and `ui()`, it accepts `output()`, `send()`, `gain()` and `pan()`.
+
+```text
+sum("drum").gain(-3).output("master")
+sum("drum").send("rev", -18)
+```
 
 ## Honest v1 Constraints
 
@@ -72,10 +131,8 @@ This feature is still evolving. Here are the constraints worth knowing before yo
 If parallel paths (different `sum` or `aux` buses) each have effects with different latency, a small timing (phase) offset can appear between them. OrbitScore does not currently compensate for this automatically.
 :::
 
-::: warning send is fixed at post-fader (an implementation constraint)
-`send()` always sends the signal **after** the per-sequence insert (`seq.effect()`) has been applied — what a DAW would call post-fader. Switching to pre-fader (sending the signal before the insert) is not currently supported.
-
-This is now **a constraint of the current implementation, not a decision of the specification**. The 2026-09-03 revision (#611 / #649) removed "sends fixed post-fader" from the constraint list in core spec MX.5 and replaced it with: **where you write the send on the chain is where it taps** (before an effect = pre, after it = post). Position starts to matter once the implementation catches up.
+::: tip The post-fader-only constraint on send is gone (2026-09-10)
+`send()` used to be fixed at post-fader — it always sent the signal after the per-sequence insert (`seq.effect()`). As described in "The Order You Write Is the Order of Processing" above, **where you write the send on the chain is now where it taps** (before an effect = pre, after it = post).
 :::
 
 ::: warning Cannot be combined with LinkAudio

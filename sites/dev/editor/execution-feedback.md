@@ -1,8 +1,8 @@
 ---
 title: "IV-2. インライン実行とフィードバック"
 chapter-id: "IV-2"
-verified-against: 66efda5
-verified-at: "2026-09-08"
+verified-against: ded9709
+verified-at: "2026-09-11"
 status: draft
 ---
 
@@ -572,7 +572,7 @@ async function updateDiagnostics(
 | 3 | deprecated `sequence ` キーワード | `extension.ts:4029-4038` | Warning + `Deprecated` タグ |
 | 4 | `global` state-setter の once-per-file | `analyzeGlobalOncePerFile` | Warning |
 | 5 | `audioPath` ordering | `analyzeAudioPathOrdering` | Warning |
-| 6 | `.output()` が `global.linkAudio()` より前 / 不在 | `analyzeOutputWithoutLinkAudio` | Warning |
+| 6 | `.output()` が `global.linkAudio()` より前 / 不在 (ミキサー宛先は除外・#611) | `analyzeOutputWithoutLinkAudio` | Warning |
 | 7 | LinkAudio ファイルで `.output()` を持たない発音 sequence | `analyzeLinkAudioMissingOutput` | **Error** |
 | 8 | `.output("")` の空引数 | `analyzeEmptyOutputArg` | **Error** |
 | 9 | catalog に無い plugin 名 (#638) | `analyzeUnknownPluginNames` | Warning |
@@ -660,6 +660,22 @@ export type DispatchTarget =
 スキップは黙って消えるわけではなく、`logSkipOnce()` が `[ERROR] Sequence '<name>': … このシーケンスは無音でスキップします。` を出します。ループしている sequence は小節ごとに dispatch 先を解決し直すので、同じ理由のログは 1 回だけに dedup されます (`_dispatchSkipLoggedFor` が直前の reason を持ち、`.output()` が channel を設定したときにリセットされます)。
 
 診断 7 と 8 が **Error** 相当のままなのは、runtime が throw するからではなく、**LinkAudio セッションでその sequence が鳴らないから**です。編集時に気づけないと、無音の理由をログから探すことになります。
+
+#### 6 が除外する宛先 (#611)
+
+診断 6 は「`.output()` が書いてあるのに `linkAudio()` が無い」で警告しますが、#611 で `output()` の宛先集合が広がったため、**LinkAudio に届く前に解決される名前**まで巻き込むようになりました。`output("master")` や `output("drums")` (宣言済み sum/aux) は `linkAudio()` が無くても正しく動くので、そこに警告を出すと**動いているコードを「効果がない」と言う**ことになります。
+
+```typescript
+// packages/vscode-extension/src/diagnostics-analysis.ts:257-262
+    for (const m of line.matchAll(outputCallPattern)) {
+      const target = m[1]
+      // Resolves before LinkAudio -> it works, with or without a linkAudio() declaration.
+      if (target === 'master' || mixerBuses.has(target) || PHYSICAL_PAIR_PATTERN.test(target)) {
+        continue
+      }
+```
+
+除外の判定順は engine 側の解決順 (`Sequence.resolveLineDest()` / `resolveNamedOutputDest()`) と同じで、**LinkAudio が最後**です。`"master"` → 宣言済み sum/aux 名 → `"L,R"` 物理アウト対 → LinkAudio channel 名。バス名の収集はファイル全体を対象にします — ライブコーディングのファイルはまとめて再評価されるので、`global.sum(...)` が対象 sequence の**下**に書かれているのは普通だからです。
 
 ### 9. 未知の plugin 名 (Warning)
 
