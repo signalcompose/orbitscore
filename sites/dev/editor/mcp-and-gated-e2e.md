@@ -6,7 +6,7 @@ verified-at: "2026-09-10"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）、束 [#789](https://github.com/signalcompose/orbitscore/pull/789)（ローカルラッパー越しの追跡と、ラチェット自身の生存確認）、2026-09-10 に #830（PR [#831](https://github.com/signalcompose/orbitscore/pull/831)・**gated ハーネスの起動先が VSCodium フォークの OrbitStudio.app から stock VS Code へ**）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-03 に #668 PR-E2（共有ハーネス層）、2026-09-04 に #724（#668 PR-E0・ハーネス仕様の改訂）、2026-09-05 に #661（PR #748・`get_engine_state` の拡張）、2026-09-06 に #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）と #785（PR [#788](https://github.com/signalcompose/orbitscore/pull/788)・ログ件数ラチェットの provenance 化）、束 [#789](https://github.com/signalcompose/orbitscore/pull/789)（ローカルラッパー越しの追跡と、ラチェット自身の生存確認）、2026-09-10 に #830（PR [#831](https://github.com/signalcompose/orbitscore/pull/831)・**gated ハーネスの起動先が VSCodium フォークの OrbitStudio.app から stock VS Code へ**）、2026-09-11 に #860（PR [#861](https://github.com/signalcompose/orbitscore/pull/861)・正常系で鳴っていた `warn!` を `debug!` へ）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-3. MCP サーバと実機 gated E2E — ユーザーと同じ動線で検証する
 
@@ -457,6 +457,31 @@ export function selectLogLines(ring: readonly string[], requested?: number): str
 なぜここまで気を遣うのでしょうか。E2E は「操作前後の ERROR 件数を比較する」という書き方を多用します。窓が固定幅だと、古い ERROR が窓から流れ出るのと同時に新しい ERROR が入ればカウントが一致して **false green** になります。`#567` はそのために上限を 500 から実容量 1000 に引き上げ、切り詰めを応答に含めるようにしました。それでも窓は有限なので、CLAUDE.md は「ERROR 件数は厳密等価にしない（`<=` を使う）」と定めています。この規律は後述の hygiene テストで機械化されています。
 
 もう一つ、窓とは無関係の偽緑がこの計数には潜んでいました。`ERROR:` を前置しているのは拡張側の `setupStderrHandler` ですが、[#756](https://github.com/signalcompose/orbitscore/issues/756) より前はこれが **chunk 単位**の前置だったため、1 つの chunk に複数行入ると 2 行目以降に `ERROR:` が付きませんでした。つまり ERROR 件数は窓の話をする前に**構造的に過小**だったわけです。実測では、デバイス切替の失敗を daemon と engine が別々に記録したのに `ERROR:` が付いたのは片方だけでした。#756 は前置を `createLinePrefixer` 経由の**行単位**へ直しています（[IV-1](/editor/vscode-architecture) の「stderr を「行」に戻す」節）。ここで見ておきたいのは、**測定器そのものが下流の判定を丸ごと見えなくしうる**という一般則のほうです。
+
+### 行単位の前置には裏返しの帰結がある — ノイズは源で止める
+
+前置が行単位になったということは、**engine の stderr に出た行はすべて `ERROR:` になる**ということでもあります。すると engine 側が正常系で `warn!` を 1 行出しただけで、ERROR 件数を数えているテストが巻き添えになります。[#860](https://github.com/signalcompose/orbitscore/issues/860)（PR [#861](https://github.com/signalcompose/orbitscore/pull/861)）がその実例です。
+
+CLAP プラグインをロードするたびに呼ばれる `query_note_port_index` は、`NotePortsExtension` を持たないプラグインに出会うと `warn!` を上げていました。ところが**エフェクトが note ポートを持たないのは正常**で、port 0 へフォールバックする挙動も CLAP の慣習どおり機能します。つまり正常系で警報が鳴っていたわけです。巻き添えになったのはプラグイン状態の自動保存を見ている別のテストで、`default-baseline cycle must add no ERROR: lines ... expected 10 to be less than or equal to 9` という形で落ちました（`tests/e2e/orbitstudio-mcp-gated.spec.ts:3426-3430`）。増えた 1 行がこの warn です。
+
+ここで取りうる対処は 2 つあります。**分類側を緩める**（stderr の一部を `ERROR:` から外す）か、**源で止める**かです。#861 は後者を採り、`warn!` を `debug!` へ下げました。前者は #756 が塞いだばかりの「実エラーを取りこぼす」方向へ戻る道だからです。
+
+```rust
+// rust/crates/orbit-clap-host/src/controller.rs:398-420
+/// note 入力ポートインデックスを取得する（CLAP / MIDI dialect を優先）。
+/// plugin が NotePortsExtension を持たない場合は 0 を返す。
+fn query_note_port_index(instance: &mut PluginInstance<OrbitClapHost>) -> u16 {
+    let mut handle = instance.plugin_handle();
+    let Some(note_ports) = handle.get_extension::<PluginNotePorts>() else {
+// ...
+        tracing::debug!("[orbit-clap-host] NotePortsExtension なし; port 0 を使用");
+        return 0;
+    };
+```
+
+失う情報もあります。instrument が note ポートを持たない場合も `debug!` になるため、既定モードのログには出てきません。ただし port 0 のフォールバックは実際に機能するので、これは「動かない」の報告ではなく「既定を使った」の報告であり、`debug!` が妥当という判断です。
+
+この節と #756 の節を並べると、ERROR 会計という 1 本の計測系に入口が 2 つあることが見えてきます。**測定器の側**（前置が行単位か chunk 単位か）と、**被測定側**（engine がどのログレベルで喋るか）です。前者が壊れると件数は構造的に少なくなり、後者が緩むと件数は正常系で増えます。どちらも「ERROR 件数」という同じ数字を狂わせますが、直す場所は正反対にあります。
 
 ---
 
@@ -1400,6 +1425,7 @@ ORBIT_E2E_VSCODE_APP=/Applications/Visual\ Studio\ Code.app ORBIT_KEEP_CAPTURES=
 - `tests/e2e/gated-sources.ts:1-106` — ラチェットと衛生検査が読む gated ソースの一覧（#668 PR-E1）
 - `tests/e2e/helpers/engine-log.ts:1-74` — `get_log` の判定（`countErrors` 7 重定義の統合先・#668 PR-E2）
 - `packages/vscode-extension/src/extension.ts:1567-1657` — `ERROR:` 前置を chunk 単位から行単位へ直した `createLinePrefixer` / `setupStderrHandler`（#756・PR [#776](https://github.com/signalcompose/orbitscore/pull/776)）
+- `rust/crates/orbit-clap-host/src/controller.rs:398-420` — `query_note_port_index`。正常系で鳴っていた `warn!` を `debug!` へ下げた（#860・PR [#861](https://github.com/signalcompose/orbitscore/pull/861)）
 - `tests/e2e/helpers/gated-session.ts:1-65` — `GatedSession` と `captureWavPath()`
 - `tests/e2e/helpers/capture-windows.ts:1-489` — キャプチャ時計・音の検出・区間 → バケット写像と不変条件 A1 / U1 / U2 / U3（#739）
 - `tests/e2e/helpers/run-score.ts:1-272` — 譜面を work copy にして実機で評価する 1 関数
