@@ -97,9 +97,16 @@ See [WORK_LOG.md](docs/development/WORK_LOG.md) for detailed resolution notes.
 - ✅ Explicit scheduler control (no auto-start)
 - ✅ Polymeter support (independent time signatures per sequence)
 
-### ICMC v1.1.0 bundle release (Epic #131)
+### ICMC v1.1.0 bundle release (Epic #131) — historical
 
-`.vsix` install だけで音が鳴る + tag push で全 channel に自動 publish:
+> 🔴 この節は **v1.1.0 当時の記録**です。表が挙げている scsynth / SuperCollider の同梱は
+> [#502](https://github.com/signalcompose/orbitscore/issues/502)（PR
+> [#840](https://github.com/signalcompose/orbitscore/pull/840)・2026-09-10）で**削除済み**で、
+> 現在の `.vsix` に scsynth は入っていません。唯一のバックエンドは Rust `orbit-audio-daemon` です。
+
+`.vsix` install だけで音が鳴る + tag push で自動リリース（**当時の計画**。Marketplace / Open VSX
+への publish は行わないことになり、現在は tag push が作るのは GitHub Release だけ — `release.yml`
+の `PUBLISH_MARKETPLACE` 未設定で publish ステップは skip される。owner 裁定 2026-09-10・#197）:
 
 | Issue | Status | Description |
 |-------|--------|-------------|
