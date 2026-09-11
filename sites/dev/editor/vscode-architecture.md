@@ -1,12 +1,12 @@
 ---
 title: "IV-1. VS Code 拡張アーキテクチャ"
 chapter-id: "IV-1"
-verified-against: 56c34c3
+verified-against: a2ac724
 verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで、2026-09-08 に #773（PR [#811](https://github.com/signalcompose/orbitscore/pull/811)・stdout bridge 封筒の行単位化）まで、2026-09-11 に #843（PR [#871](https://github.com/signalcompose/orbitscore/pull/871)・拡張 3.0.0 へのバンプ。**package version の表記だけ**）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
+> **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡で、2026-09-04 に #385（PR [#730](https://github.com/signalcompose/orbitscore/pull/730)・`capabilities.untrustedWorkspaces` の宣言）まで、2026-09-06 に #385 層 2 の繰り延べ（PR [#750](https://github.com/signalcompose/orbitscore/pull/750)）と #756（PR [#776](https://github.com/signalcompose/orbitscore/pull/776)・`ERROR:` 前置の行単位化）まで、2026-09-08 に #773（PR [#811](https://github.com/signalcompose/orbitscore/pull/811)・stdout bridge 封筒の行単位化）まで、2026-09-11 に #873（PR [#874](https://github.com/signalcompose/orbitscore/pull/874)・拡張自身の実行時依存の同梱）と #843（PR [#871](https://github.com/signalcompose/orbitscore/pull/871)・拡張 3.0.0 へのバンプ。**package version の表記だけ**）まで追従しました。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 # IV-1. VS Code 拡張アーキテクチャ
 
@@ -212,6 +212,51 @@ export async function activate(context: vscode.ExtensionContext) {
 ```
 
 省略したブロックが `startOrbitScoreMcpServer()` に 25 個のハンドラ (`evaluate` / `startEngine` / `getLog` / `analyzeAudio` / `listPlugins` …) を渡す表です。MCP サーバの中身と gated E2E は [IV-3. MCP サーバと実機 gated E2E](/editor/mcp-and-gated-e2e) に譲ります。`autoStartConfiguredRustEngine()` は `rust` kind で出力デバイスが保存済みなら engine を自動起動し、5 秒後に生存確認をします (`extension.ts:1699-1723`)。
+
+### 出荷物では `activate()` の手前で落ちていた (#873)
+
+ここまで読んできた `activate()` ですが、素の VS Code に `.vsix` を入れた状態では **1 行も走っていませんでした**。PR [#874](https://github.com/signalcompose/orbitscore/pull/874) が cold install — `--extensionDevelopmentPath` を使わず、インストール済みの拡張として起動する形 — を試して見つけた不具合です。例外は `activate()` の中身ではなく、モジュールの読み込みそのもので出ます。
+
+```
+Error: Cannot find module '@modelcontextprotocol/sdk/server/mcp.js'
+  at Object.<anonymous> (.../local.orbitscore-3.0.0/dist/extension.js:74:22)
+```
+
+なぜ読み込みの時点なのでしょうか。`extension.ts` は `./mcp-server` から import していて (`extension.ts:43`)、その `mcp-server.ts` は MCP SDK をトップレベルの `require` で読み込むからです。
+
+```typescript
+// packages/vscode-extension/src/mcp-server.ts:52-58
+/* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires */
+const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js') as {
+  McpServer: new (info: { name: string; version: string }) => McpServerLike
+}
+const { StreamableHTTPServerTransport } =
+  require('@modelcontextprotocol/sdk/server/streamableHttp.js') as {
+    StreamableHTTPServerTransport: new (opts: {
+```
+
+`require` は関数の中ではなくファイルのトップレベルに置かれているので、MCP サーバの起動 (前節の 5 番目の仕事) まで遅延されることはありません。SDK が同梱から抜けていれば、`activate()` は最初の 1 行に到達する前に例外で終わります。MCP の port が 0 でも、`.orbs` を 1 本も開いていなくても同じです。
+
+抜けた理由は npm workspaces の hoisting でした。`packages/vscode-extension/package.json` は `@modelcontextprotocol/sdk` と `zod` を実行時依存として宣言していますが、どちらもリポジトリルートへ hoist されます。`.vscodeignore` は `../../**` と `../*/**` でパッケージの外を全部落とすので、`vsce package` が同梱した `extension/node_modules` は `@types` と `undici-types` の 2 つだけだった、というのが #874 の実測です。
+
+対策は、ビルドの最後に拡張自身の依存を同梱先へ入れ直すことです。
+
+```json
+// packages/vscode-extension/package.json:419-421
+    "build": "npm run build:engine && tsc -p tsconfig.json && bash ../../scripts/install-extension-deps.sh",
+    "build:clean": "npm run build:engine:clean && tsc -p tsconfig.json && bash ../../scripts/install-extension-deps.sh",
+    "build:engine": "cd ../engine && npm run build && bash ../../scripts/install-engine-deps.sh && bash ../../scripts/copy-daemon-bin.sh",
+```
+
+`install-engine-deps.sh` (engine 用) と `install-extension-deps.sh` (拡張用) はどちらも薄い wrapper で、実体は共有の `scripts/install-bundle-deps.sh` です。やっていることは「ワークスペース root を持たない一時ディレクトリで `npm install` し、できた `node_modules` を同梱先へ移す」— hoist 先が無い場所で入れるので、宣言した依存が必ずローカルに書かれます。同型の事故は engine 側で 2 度起きていて (WORK_LOG 6.119 の `@julusian/midi` / `uuid` / `ws`、6.422 の `yaml`)、拡張側だけが無防備だった、という位置づけです。
+
+面白いのは**置き場所**で、拡張の依存は `dist/node_modules` に入ります (`install-extension-deps.sh:37-40`)。理由は 2 つあると script のヘッダに書かれています。1 つは `vsce package` がパッケージ直下の `node_modules` を無条件に除外し、`.vscodeignore` の `!node_modules/**` では上書きできないこと (入れ子の `engine/node_modules` や `dist/node_modules` は普通に入ります)。もう 1 つは Node の解決順で、`dist/mcp-server.js` から見て `dist/node_modules` が最初の候補になるため、パスの書き換えが要らないことです。あわせて `vsce package` には `--no-dependencies` が付き、hoist 先を返してくる依存探索そのものを止めてあります (`.github/workflows/release.yml:118`)。
+
+退行を捕まえる側も入れ替わりました。`release.yml` の post-package 検証は、以前は `packages/engine/package.json` の依存名を数えてディレクトリの有無を見るだけでしたが、いまは `node scripts/check-vsix-bundled-deps.mjs` が**出荷物の中の実ファイルを起点に解決**します。保証の深さが一様でないことは script 自身が明記していて、depth 1 は本物の `require.resolve()` (壊れた `exports` map やエントリポイント欠落もここで落ちる)、depth > 1 は Node と同じ歩き方でディレクトリを探すだけ (ESM-only の transitive package は present なら通る) です。全 edge を本気で解決する案は、CJS 側が一度も require しない ESM-only の transitive package でリリースを赤くするため棄却され、`import` グラフそのものを歩く esbuild への移行が #875 に切られました。
+
+::: warning この経路は gated E2E では踏めません
+実機 gated E2E は `--extensionDevelopmentPath` で VS Code を起動します (`tests/e2e/orbitstudio-mcp-gated.spec.ts:728`)。この形だと依存は常にリポジトリルートの hoist 先から解決できてしまうので、**同梱が空でも緑になります**。cold install でしか通らない経路がここにもう 1 つある、ということです (もう 1 つは daemon の `extension-bundle` 分岐 — `--extensionDevelopmentPath` ではリポジトリの `rust/target/release` を引くので、やはり踏めません)。#874 の cold install 検証は手で行われ、自動テストとしては積まれていません。
+:::
 
 ---
 
@@ -934,6 +979,7 @@ flowchart TD
 | `//#evalMark` による評価結果の相関 (`EvalMarkBridge`)、stdout の独立分岐 | #614 | `eval-mark-bridge.ts:1-23`、`extension.ts:1501-1509` |
 | `browsePlugins` コマンドと未知プラグイン名の診断 | #638 | §6.412 (2026-08-29)、`extension.ts:2285-2298`、`extension.ts:4095-4112` → [PH-3](/plugin-hosting/catalog) |
 | `capabilities.untrustedWorkspaces` の宣言 (`supported: true`・`restrictedConfigurations` は 2 件)。フォルダ無しの loose-file 起動でも activate する | #385 (PR [#730](https://github.com/signalcompose/orbitscore/pull/730)) | `docs/archive/WORK_LOG_2026-09.md` "fix(studio): declare untrusted-workspace capability (#385 PR-S-T1)"（本体はローテーション済み）、`package.json:34-43` |
+| 拡張自身の実行時依存 (`@modelcontextprotocol/sdk` / `zod`) を `dist/node_modules` へ同梱。cold install では hoist によりこれらが `.vsix` に入らず、`activate()` がモジュール読み込みの時点で落ちていた | #873 (PR [#874](https://github.com/signalcompose/orbitscore/pull/874)) | `docs/development/WORK_LOG.md` "fix(release): ship the extension's own runtime deps so the .vsix can activate (#873)"、`packages/vscode-extension/package.json:419-420`、`scripts/install-bundle-deps.sh` |
 
 初稿の「8 つのコマンド」「診断は 3 種 (+2)」「`startEngine` は同期で scsynth 必須」はいずれも 69dc968 では成り立ちません。
 
@@ -998,6 +1044,13 @@ flowchart TD
 - `packages/vscode-extension/src/dsl-method-catalog.ts:1-14` — 補完語彙の複製とテストによる一致強制
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — `//#evalMark` の設計理由 (FIFO)
 - `packages/vscode-extension/src/log-ring.ts:20-24` — `OUTPUT_LOG_RING_MAX = 1000` / `DEFAULT_LOG_LINES = 50`
+- `packages/vscode-extension/src/mcp-server.ts:52-80` — MCP SDK と `zod` のトップレベル `require`。`activate()` より前に評価されるので、同梱漏れは activation 全体を落とす (#873)
+- `packages/vscode-extension/package.json:419-420` — `build` / `build:clean` の末尾に付いた `install-extension-deps.sh` (#873)
+- `scripts/install-bundle-deps.sh:13-37` — hoist 問題そのものの説明と、engine 2 件 / 拡張 1 件の事故の対応表、esbuild への移行 (#875) を stopgap と呼ぶ理由
+- `scripts/install-extension-deps.sh:10-28` — 同梱先が `dist/node_modules` である 2 つの理由と、`--no-dependencies` に至った経緯
+- `scripts/check-vsix-bundled-deps.mjs:83-98` — post-package ゲートの保証が depth 1 と depth > 1 で一様でないことの明示
+- `.github/workflows/release.yml:118` / `:188` — `vsce package --no-dependencies` と、出荷物から解決する依存ゲートの呼び出し
+- Issue [#873](https://github.com/signalcompose/orbitscore/issues/873) / PR [#874](https://github.com/signalcompose/orbitscore/pull/874) — cold install で `activate()` がまったく走らなかった不具合
 - `packages/engine/src/audio/supercollider/scsynth-resolver.ts:91-98` — `explicit > env > bundle > throw` 優先順位チェーン（**#502 でファイルごと削除**。commit `58f558f5` 以前の位置。現存する対応物は次行の daemon resolver）
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:221-250` — daemon 側の 5 候補チェーン
 - `docs/archive/WORK_LOG_2026-07.md` §6.185-6.187, §6.188-6.192, §6.194-6.197, §6.260-6.261, §6.266, §6.271, §6.279-6.283, §6.295-6.301 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — drift 表の出典
