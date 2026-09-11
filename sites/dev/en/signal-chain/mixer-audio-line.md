@@ -472,7 +472,7 @@ place", it now "executes a per-stage sequence of operations from the top". The o
 these three.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1000-1025
+// rust/crates/orbit-audio-native/src/output.rs:1052-1077
 /// A resolved output destination for one line operation. Bus and channel names are converted to
 /// stable indices on the control thread before a program is published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -546,7 +546,7 @@ as an `Output`. `Render` / `Link` are still **rejected at install time** (`Pan` 
 it directly into RT. Details in the next heading).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1415-1427
+// rust/crates/orbit-audio-native/src/output.rs:1467-1479
     for op in &program.ops {
         match op {
             // These arms are availability gates, not permanent format restrictions. Remove the
@@ -619,7 +619,7 @@ devices are in place to preserve the semantics of the old API.
 The first is `effective_line_output_dest`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1457-1468
+// rust/crates/orbit-audio-native/src/output.rs:1509-1520
 fn effective_line_output_dest(
     first_output: &mut bool,
     legacy_target: Option<OutputDest>,
@@ -651,7 +651,7 @@ replacement becomes a question. `LineExchange`'s answer is "RT does one Acquire 
 belongs to control".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1172-1177
+// rust/crates/orbit-audio-native/src/output.rs:1224-1229
 struct LineExchange {
     live: AtomicPtr<LineProgram>,
     retired: Mutex<Vec<RetiredLineProgram>>,
@@ -670,7 +670,7 @@ What is interesting here is that the **marking pass (computing `render_targets`)
 share the same pointer snapshot**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2320-2337
+// rust/crates/orbit-audio-native/src/output.rs:2459-2476
         // SAFETY: the line generation is not completed until after execution below. Control keeps
         // any replaced box retired for two later completed generations.
         let program = unsafe { &*programs[i] };
@@ -912,7 +912,7 @@ tracked by `explicit_line` (the branch is at
 Here is the install handle.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:805-817
+// rust/crates/orbit-audio-native/src/output.rs:857-869
     pub fn line_program_installer(&self) -> LineProgramInstaller {
         let control = self.line.line_control();
         let current = control.clone();
@@ -965,7 +965,7 @@ native) does not know what an instrument is; it holds only the abstraction "some
 back N blocks when rendered".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:848-861
+// rust/crates/orbit-audio-native/src/output.rs:900-913
 /// A callback-owned source which renders one or more interleaved output units.
 pub trait BlockSource: Send {
     fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
@@ -991,7 +991,7 @@ Feed collection is done by `collect_source_feeds` (`output.rs:772-801`), which m
 `SourceDest` to the core's `FeedDest`. Only the mapping is quoted here.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2096-2106
+// rust/crates/orbit-audio-native/src/output.rs:2140-2150
             let dest = match slot.dests[unit].load() {
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
@@ -1306,7 +1306,7 @@ commutes, so either order yields the same value). The invariant is therefore unm
 a DSL-level E2E, and the sole guard is a unit test whose rack stub **generates** sound.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:5024-5029
+// rust/crates/orbit-audio-native/src/output.rs:5221-5226
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(
