@@ -107,7 +107,8 @@ export type MixerNodeDecl = {
   variableName: string
   base: string
   kind: 'output' | 'sum' | 'aux'
-  channels?: [number, number] // output only
+  // #611 §2.2: a one-element pair is mono (L+R merged at the daemon — Q-611-5).
+  channels?: [number, number] | [number] // output only
 }
 
 /**

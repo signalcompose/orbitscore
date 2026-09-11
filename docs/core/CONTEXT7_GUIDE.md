@@ -18,7 +18,7 @@ Context7は**外部ライブラリ・フレームワークのドキュメント�
 - **TypeScript** - 言語仕様・型システム
 - **Node.js** - ランタイムAPI
 - **VS Code Extension API** - 拡張機能開発
-- **SuperCollider** - オーディオエンジン（scsynth）
+- **Rust** - オーディオエンジン（`orbit-audio-daemon`。cpal / symphonia / rubato）
 - **Web Audio API** - ブラウザオーディオ（将来的に）
 
 ## 使用手順
@@ -54,8 +54,8 @@ context7-get-library-docs(libraryID, topic="decorators")
 2. プロジェクト内の類似実装をSerenaで検索
 3. 実装
 
-### 例3: SuperColliderとの連携を改善
-1. Context7でSuperCollider APIを確認
+### 例3: Rustオーディオエンジンとの連携を改善
+1. Context7でcpal / symphonia APIを確認
 2. Serenaで現在の統合コードを分析
 3. 改善実装
 

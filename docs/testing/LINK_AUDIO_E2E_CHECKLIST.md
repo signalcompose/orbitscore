@@ -1,5 +1,8 @@
 # Link Audio End-to-End テスト - チェックリスト
 
+> 🔴 **歴史的記録**: 本書が記述する scsynth / SC plugin (`OrbitLinkAudio.scx`) 経路は **#502（2026-09-10）で削除**されました。現在のバックエンドは Rust `orbit-audio-daemon` 単独です（[`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`](../core/INSTRUCTION_ORBITSCORE_DSL.md) §8）。
+> 🔴 **LinkAudio egress は出荷ビルドで無効**です。Rust 版の egress（`orbit-link-audio` crate）は daemon の `link-audio` feature が default off のため、出荷される `.vsix` では有効化されていません（同 §8.1 参照）。
+
 **作成日**: 2026-05-07
 **目的**: Epic #187 / Step 2 + Step 3.x 着地後の Live 12.4+ 連携の動作確認
 **担当**: AI（テストファイル作成） + ユーザー（Live 操作と音質確認）

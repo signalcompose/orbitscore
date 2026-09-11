@@ -3,7 +3,12 @@
  * Represents the global transport and configuration
  */
 
-import { AudioEngine, type PluginStateSaveTarget, type PluginUiTarget } from '../audio/types'
+import {
+  AudioEngine,
+  type PluginStateSaveTarget,
+  type PluginUiTarget,
+  type WireLineOp,
+} from '../audio/types'
 import { allocatePluginUiWindowToken } from '../audio/rust-engine/plugin-ui-window-token'
 import { StackElement, PlayElement } from '../parser/types'
 import { BoundValue, ChordVoice } from '../midi/chord/types'
@@ -127,8 +132,8 @@ export class Global {
   private mixerManager: MixerManager
   // Shared transport clock — the single Date.now() origin for both the audio
   // scheduler and the MIDI scheduler, so they stay in sync (§1). MIDI sequences
-  // schedule against `midiTransport` (TransportClock-backed) instead of the SC
-  // audio engine, so a MIDI-only session never touches SuperCollider.
+  // schedule against `midiTransport` (TransportClock-backed) instead of the
+  // audio engine, so a MIDI-only session never touches the audio backend.
   private transportClock = new TransportClock()
   private midiTransport = new MidiTransportScheduler(this.transportClock)
 
@@ -154,7 +159,7 @@ export class Global {
   constructor(audioEngine: AudioEngine, midiManager?: MidiManager) {
     this.audioEngine = audioEngine
     // Type assertion: AudioEngine implementations must also implement Scheduler
-    // This is true for SuperColliderPlayer
+    // This is true for RustEnginePlayer
     this.globalScheduler = audioEngine as unknown as Scheduler
 
     // Initialize managers
@@ -282,7 +287,7 @@ export class Global {
 
   /**
    * Set the global MIDI send latency in milliseconds (§1). Applied to every
-   * MIDI send to align the MIDI path against the SuperCollider audio path.
+   * MIDI send to align the MIDI path against the audio path.
    */
   midiLatency(ms: number): this {
     this.midiManager.midiLatency(ms)
@@ -521,6 +526,14 @@ export class Global {
       throw new Error('Mixer bus routing requires the Rust engine backend.')
     }
     await this.audioEngine.setBusRouting(seqBus, output, sends)
+  }
+
+  /** Replace one daemon bus's complete ordered audio line. @internal */
+  async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
+    if (!this.audioEngine.setBusLine) {
+      throw new Error('Mixer bus routing requires the Rust engine backend.')
+    }
+    await this.audioEngine.setBusLine(bus, line)
   }
 
   /**
@@ -787,9 +800,9 @@ export class Global {
 
   /**
    * Get the MIDI transport scheduler — a TransportClock-backed Scheduler that
-   * MIDI sequences use instead of the SC audio engine. Shares the same
+   * MIDI sequences use instead of the audio engine. Shares the same
    * Date.now() origin as the audio scheduler (set at `start()`), so audio and
-   * MIDI stay in sync while MIDI stays free of SuperCollider.
+   * MIDI stay in sync while MIDI stays free of the audio backend.
    */
   getMidiTransport(): Scheduler {
     return this.midiTransport

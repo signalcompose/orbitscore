@@ -61,11 +61,6 @@ function createStubHandlers(overrides: Partial<OrbitScoreToolHandlers> = {}): {
       const state: EngineState = { running: true, liveCoding: false }
       return state
     },
-    forceKillScsynth: () => {
-      record('forceKillScsynth', [])
-      const result: CommandResult = { ok: true }
-      return result
-    },
     listAudioDevices: () => {
       record('listAudioDevices', [])
       const result: AudioDevicesResult = { ok: true, devices: [] }
@@ -398,7 +393,7 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
     expect((res.headers['mcp-session-id'] as string).length).toBeGreaterThan(0)
   })
 
-  it('tools/list contains all 20 tools; evaluate_orbitscore requires code:string', async () => {
+  it('tools/list contains all 19 tools; evaluate_orbitscore requires code:string', async () => {
     const { handlers } = createStubHandlers()
     handle = await startTestServer(handlers)
     const client = new McpTestClient(handle.port)
@@ -423,7 +418,6 @@ describe('OrbitScore MCP server (real HTTP, stub handlers)', () => {
       'get_editor_state',
       'save_file',
       'get_document_text',
-      'force_kill_scsynth',
       'list_audio_devices',
       'select_audio_device',
       'configure_flash',

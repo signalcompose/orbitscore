@@ -55,11 +55,48 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
  * // args2 === [[1, 2, 3]]
  * ```
  */
+/**
+ * #611 §3.8: methods that fold one or more `name:` arguments into a single trailing options
+ * object instead of the staged-error path below. `output`/`send` are the only ones today
+ * (`{ thru, db }` / `{ db, enabled }`) — every other DSL method's named args stay staged.
+ */
+const NAMED_ARG_SCHEMA: Readonly<Record<string, Readonly<Record<string, 'boolean' | 'number'>>>> = {
+  output: { thru: 'boolean', db: 'number' },
+  send: { db: 'number', enabled: 'boolean' },
+}
+
 export async function processArguments(methodName: string, args: any[]): Promise<any[]> {
   const processed: any[] = []
+  const schema = NAMED_ARG_SCHEMA[methodName]
+  const options: Record<string, unknown> = {}
+  let sawNamedArg = false
 
   for (const arg of args) {
     if (arg && typeof arg === 'object' && arg.type === 'named_arg') {
+      // #611 §2.1/§2.3: `amount:` was the pre-#611 send() unit (linear 0.0-1.0); it was
+      // renamed to `db:` and its unit changed to decibels. A script still writing `amount:`
+      // must fail loudly instead of having that value silently misread as dB.
+      if (methodName === 'send' && arg.name === 'amount') {
+        throw new Error(
+          `send() no longer accepts amount: — it was renamed to db: and its unit changed ` +
+            `from linear (0.0-1.0) to decibels (#611).`,
+        )
+      }
+      if (schema && arg.name in schema) {
+        const expectedType = schema[arg.name]
+        if (typeof arg.value !== expectedType) {
+          throw new Error(
+            `${methodName}() named argument "${arg.name}:" must be a ${expectedType}, got ` +
+              `${typeof arg.value}.`,
+          )
+        }
+        if (arg.name in options) {
+          throw new Error(`${methodName}() specifies duplicate "${arg.name}:".`)
+        }
+        options[arg.name] = arg.value
+        sawNamedArg = true
+        continue
+      }
       // Plugin-name dispatch handles selectors before reaching this function.
       // Any named argument that arrives here belongs to a DSL method and must
       // receive an explicit staged error (SC.3.3).
@@ -103,5 +140,6 @@ export async function processArguments(methodName: string, args: any[]): Promise
     }
   }
 
+  if (sawNamedArg) processed.push(options)
   return processed
 }

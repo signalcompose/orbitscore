@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
-import { SuperColliderPlayer } from '../../packages/engine/src/audio/supercollider-player'
+import { RustEnginePlayer } from '../../packages/engine/src/audio/rust-engine/rust-engine-player'
 
 describe('Global.linkAudio() — Link Audio mode declaration', () => {
   let global: Global
-  let mockPlayer: SuperColliderPlayer
+  let mockPlayer: RustEnginePlayer
 
   beforeEach(() => {
     mockPlayer = {
@@ -120,7 +120,7 @@ describe('Global.linkAudio() — Link Audio mode declaration', () => {
 
 describe('Global — Link tempo leader (#283)', () => {
   let global: Global
-  let mockPlayer: SuperColliderPlayer
+  let mockPlayer: RustEnginePlayer
   let setLinkTempo: ReturnType<typeof vi.fn>
 
   beforeEach(() => {

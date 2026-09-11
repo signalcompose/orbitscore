@@ -3,8 +3,8 @@
  *
  * MIDI sequences reuse the audio scheduling machinery (preparePlayback /
  * loopSequence / runSequence), which is parameterised over a {@link Scheduler}.
- * Rather than handing them the SuperCollider audio engine (which entangles MIDI
- * with SC), they get this thin adapter: it exposes the shared transport origin
+ * Rather than handing them the audio engine (which entangles MIDI with
+ * the audio backend), they get this thin adapter: it exposes the shared transport origin
  * (`startTime`) and running flag via {@link TransportClock}, and no-ops every
  * audio-specific method. The actual MIDI scheduling goes through MidiScheduler /
  * MidiOutput; per-sequence event clearing goes through MidiScheduler.clearOwner

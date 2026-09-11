@@ -4,9 +4,8 @@
 #
 # Bundles the native `orbit-audio-daemon` binary into the VS Code extension's
 # engine/ directory so a packaged .vsix can resolve it with zero configuration
-# (Issue #306). Since cutover #369, rust is the *default* audio backend
-# (ORBITSCORE_ENGINE unset == "rust"); SuperCollider is reachable only via
-# explicit opt-out (ORBITSCORE_ENGINE=sc or the orbitscore.engine="sc" setting).
+# (Issue #306). Since cutover #369, rust is the *only* audio backend
+# (the SC backend was removed in #502).
 #
 # Scope (bounded, first version): darwin-arm64 only. Adding another platform
 # means building `orbit-audio-daemon` for that target and adding another

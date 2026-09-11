@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: 183b612
-verified-at: "2026-09-10"
+verified-against: e4d4199
+verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10, and to the fact — settled by the SuperCollider retirement of #502 ([#833](https://github.com/signalcompose/orbitscore/pull/833)) on 2026-09-10 — that LinkAudio egress is not in shipped builds. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-1. Daemon Architecture Overview
 
@@ -208,7 +208,7 @@ that drains an `mpsc` channel. Since #474 there is one more task: it bridges the
 (`PluginUiClosed` and friends) broadcast by the watchdog threads into the session's writer queue.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:968-995
+// rust/crates/orbit-audio-daemon/src/session.rs:994-1021
 pub async fn run(
     ws: WebSocketStream<TcpStream>,
     engine: Arc<EngineWrap>,
@@ -245,7 +245,7 @@ kept as the single point of truth, before falling through to the match — refle
 learned that keeping the same string set in two independently-maintained places drifts.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:1584-1611
+// rust/crates/orbit-audio-daemon/src/session.rs:1610-1637
 async fn handle_command(
     cmd: Command,
     engine: &Arc<EngineWrap>,
@@ -290,7 +290,7 @@ arms are as follows (the notes column mentions the arms gated by a feature `cfg`
 | `SelectAudioDevice` | runtime device switch | #484 D2, delegated to the audio owner thread; #661 probes the candidate first |
 | `GetStatus` | daemon/protocol version, sample rate, `render_contentions`, etc. | #661 added `output` (the device actually playing, plus the fallback history) and `callback` (the liveness counter) |
 | `LoadSample` / `UnloadSample` | register / release an audio file | |
-| `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | |
+| `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | 🔴 the `link-audio` feature is **default off** and is not enabled in shipped builds. When absent the daemon answers `LINK_AUDIO_UNAVAILABLE` (a missing *capability*) and the TS side warns exactly once and continues on hardware. See "LinkAudio egress is not in shipped builds" below |
 | `LoadPlugin` | attach a plugin (`role` / `bus` / `instance` / `state`) | the in-process build requires `role` |
 | `ApplyEffectChain` | prepare-commit application of a whole rack (chain) | #628, `mode: diff / rebuild` |
 | `ReplacePlugin` | replace a slot's tenant | #618 (instrument) / #625 (effect) |
@@ -310,6 +310,66 @@ The "fixed in #643" note on the `SetGlobalGain` row refers to the defect recorde
 6.415: the master fader was not affecting instruments. That the very same command was caught by
 the capture E2E is discussed in the [`capture-verification`](/en/rust-engine/capture-verification)
 chapter.
+
+### LinkAudio egress is not in shipped builds
+
+`RegisterLinkAudioChannel` / `SetLinkTempo` are the only two commands in the table that exist on
+the wire but never succeed in a shipped build. The egress itself lives in the GPL-isolated crate
+`orbit-link-audio`, and the daemon pulls it in as an optional dependency behind the `link-audio`
+feature.
+
+```toml
+// rust/crates/orbit-audio-daemon/Cargo.toml:18-23
+[features]
+# 🔴 GPL feature。**default off**。有効化すると Ableton Link(GPL-2.0-or-later)が
+# 依存グラフに入る。permissive な engine core はこの feature に依存しない。
+# rtrb は permissive(MIT/Apache)だが、reg-ring producer 型を名指すのは link-audio 経路のみ
+# なので feature に括る（default ビルドの依存グラフを増やさない）。
+link-audio = ["dep:orbit-link-audio", "dep:rtrb"]
+```
+
+And the shipping build does not enable it. The one line that produces the bundled binary reads:
+
+```bash
+// scripts/copy-daemon-bin.sh:108-108
+    && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument \
+```
+
+`.github/workflows/release.yml:88` uses the same feature set, and `link-audio` is in neither.
+So **the daemon bundled into the `.vsix` has no egress at all**.
+
+The feature's own comment is the reason it stays off: enabling it drags Ableton Link
+(GPL-2.0-or-later) into the shipped binary's dependency graph and breaks the "the default graph
+is GPL-free" invariant asserted by `rust/deny.toml`. That is the same problem that removing
+SuperCollider (which bundled the GPL scsynth) in #502 was meant to solve. **Enabling it would be
+a decision, and the decision has not been made.**
+
+A daemon without the feature answers `RegisterLinkAudioChannel` with `LINK_AUDIO_UNAVAILABLE`.
+That code means a **missing capability**, and it is distinguished from `LINK_AUDIO_RUNTIME` (a
+runtime failure) and from a dead daemon. Only the first is swallowed by the TS side so playback
+continues on hardware; the others propagate to the caller. The warning is emitted from **exactly
+one place — channel registration**; `scheduleEvent` / `scheduleSliceEvent` see the same gap and
+stay silent (the registration path is treated as the single authority). The spec side of this is
+`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §8.1 / §8.1.3.
+
+🔴 **That "falls back to hardware and warns once" has not been confirmed on real hardware.**
+The gated E2E suite records the opposite measurement.
+
+```ts
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:5388-5394
+  // **A comment is not evidence of implementation behavior** — main's real run found
+  // capture RMS = 0 for `d645Live` and NO `LINK_AUDIO_UNAVAILABLE`/gap-warning marker in
+  // get_log at all, meaning the assumed fallback does not actually happen (or does not
+  // happen the way the comment describes). Capture-based proof was DROPPED for this
+  // reason — under `global.linkAudio()`, EVERY audio sequence's dispatch is either
+  // `skip` or `link` (never a real, capturable `hardware` dispatch — mixing is
+  // disallowed by design), so there is no way to hear `d645Live` here without
+```
+
+So on 2026-09-04's real run there was **no sound (capture RMS = 0) and no warning**. The comment
+further states that under `global.linkAudio()` a dispatch is either `skip` or `link` and **never**
+a capturable `hardware` dispatch (mixing being disallowed by design), which contradicts §8.1's
+"goes out to hardware" head-on. **This page does not decide which is right.**
 
 ## Boot-to-teardown lifecycle
 
@@ -419,7 +479,7 @@ the callback body was a single function, `render_block`; as of 2026-09-01 it has
 `OutputStream::render_state`).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:831-837
+// rust/crates/orbit-audio-native/src/output.rs:885-891
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
@@ -430,7 +490,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1605-1642
+// rust/crates/orbit-audio-native/src/output.rs:1761-1798
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -486,7 +546,7 @@ device"** — with the placement stage added, anything other than 2ch always pay
 placement.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1690-1780
+// rust/crates/orbit-audio-native/src/output.rs:1846-1932
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -541,16 +601,12 @@ fn render_block_with_sources(
         if let Some(p) = master.post.as_mut() {
             p.process(&mut master.buffer[..bs]);
         }
-        let g = master.advance_gain(frames);
-        // g == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
+        let ramp = master.advance_gain(frames);
+        // gain == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
         // 「未使用 gain 経路に per-sample 乗算コストを払わない」ための最適化であり、O0 golden の
         // bit 一致は乗算そのものではなく `gain_current` が初期値 1.0 のまま変化しないことに由来する
         // （`SetGlobalGain` を一度も呼ばない譜面では target=current=1.0 が恒常的に成立する）。
-        if g != 1.0 {
-            for s in master.buffer[..bs].iter_mut() {
-                *s *= g;
-            }
-        }
+        apply_ramped_gain(&mut master.buffer[..bs], ENGINE_CHANNELS, ramp);
         // デバイス配置（設計 §5.3・row 6）: master.buffer（2ch）を hw（デバイス幅）の ch{0,1} へ置く。
         // 2ch デバイスなら memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。3ch 以上は ch2 以降が
         // 無音で残る — この分岐の Device 出口は master 固定 program の 1 本のみで、複数出口は
@@ -590,7 +646,7 @@ a second buffer at device width there would be nowhere for it to land — that i
 buffer exists.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2054-2058
+// rust/crates/orbit-audio-native/src/output.rs:2312-2316
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -617,7 +673,7 @@ everything from the engine through the bus graph runs at **exactly two channels 
 many the device has**. That width is published as a named constant.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:692-698
+// rust/crates/orbit-audio-native/src/output.rs:691-697
 /// engine 内部のチャンネル幅。**デバイス幅とは無関係に常に 2**（設計 §5.5）。
 ///
 /// events / feeds / stages / master.buffer はすべてこの幅で扱い、デバイス幅への変換は
@@ -631,7 +687,7 @@ The device width appears in exactly one place: `place_master_into_device`, which
 `master.buffer` onto the device-width `hw`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1851-1875
+// rust/crates/orbit-audio-native/src/output.rs:2002-2026
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -667,17 +723,19 @@ storing twice per block in the RT callback.
 
 The other change is where the master gain is applied. `MasterLine` groups the master rack (the
 old `post`) and the gain into one struct and fixes the order as **rack → gain**. The gain moves
-toward the target the control side (`SetGlobalGain`) wrote atomically, one block at a time.
+toward the target the control side (`SetGlobalGain`) wrote atomically, one block at a time. Since
+#859 (2026-09-11) the return value is not a scalar but a `LineRamp`, which carries **which value
+applies to which frame inside that block**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:817-827
-    /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
+// rust/crates/orbit-audio-native/src/output.rs:871-881
+    /// 1 block 分ランプを進め、その block に適用する ramp を返す（設計 §5.3 `ramp()`）。
     /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
     /// 算術のみ（alloc/lock/syscall なし）。
     #[inline]
-    fn advance_gain(&mut self, frames: usize) -> f32 {
+    fn advance_gain(&mut self, frames: usize) -> LineRamp {
         let target = f32::from_bits(self.gain_target.load(Ordering::Relaxed));
-        advance_ramped_gain(&mut self.gain_current, target, frames, self.ramp_frames)
+        advance_line_ramp(&mut self.gain_current, target, frames, self.ramp_frames)
     }
 }
 
@@ -685,9 +743,18 @@ toward the target the control side (`SetGlobalGain`) wrote atomically, one block
 ```
 
 `ramp_frames` is the frame count for 5 ms, computed **at construction time** by
-`MasterLine::new` from the sample rate (the RT path only uses it as a divisor). When a block is
-longer than the ramp, `frac` saturates at 1.0 and the target is reached in one step; when it is
-shorter, the value approaches the target over several blocks.
+`MasterLine::new` from the sample rate (the RT path only uses it as a divisor). For the **value at
+the block endpoint**: when a block is longer than the ramp, `frac` saturates at 1.0 and the target
+is reached in one step; when it is shorter, the value approaches the target over several blocks.
+
+🔴 **Reading only the block endpoint misleads you** (fixed in #859, 2026-09-11). For a long time
+this formula was used as *one scalar for the whole block*, and with `ramp_frames` at 240
+(5 ms @48k) against a real-machine block length of **512**, `frac` always saturated at 1.0 — so
+**the ramp completed in a single block**, a step at the block boundary. Now `LineRamp::at(frame)`
+returns `start + step × frame` with `step` equal to `(target − start) / ramp_frames`, so **the ramp
+advances over `ramp_frames` samples rather than over the block length**. In a 512-frame block the
+first 240 frames interpolate and the rest hold `end`. Because **`at(frames)` is bit-identical to
+the old formula's value**, existing goldens that look at the block endpoint do not move.
 
 The point worth holding onto is that **production now has exactly one multiplication path**.
 `orbit_audio_core::Engine::set_global_gain` (the core scheduler ramp) is no longer called from
@@ -699,7 +766,7 @@ fails design 611 §4.2's "copy it *without changing its meaning*", so the copy l
 with the §5.1 mechanism that carries the effective gain across a republish.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9479-9488
+// rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9741-9750
     /// マスターゲインを設定する。PR-O3b では従来どおり atomic だけを更新し、RT 専有の
     /// `gain_current` を呼び出し間で連続させる。master line への写しは、TS の
     /// `global.gain()` を `SetBusLine("master", …)` へ切り替え、再 publish 時に実効値を引き継ぐ
@@ -732,7 +799,7 @@ indices** (does the bus exist, is the reference forward-only) is checked by
 the actual output width, so the dispatch sits in between and passes `engine.output_channels()`.
 
 ```rust
-// rust/crates/orbit-audio-daemon/src/session.rs:2633-2648
+// rust/crates/orbit-audio-daemon/src/session.rs:2659-2674
         #[cfg(feature = "outproc-effect")]
         "SetBusLine" => match parse_set_bus_line_params(&params) {
             Ok((bus, line)) => {
@@ -777,7 +844,7 @@ though, the publication target is a dedicated `LineSlot` owned by `MasterLine`. 
 is that **whether a publication has happened is held in a separate one-way flag**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:749-759
+// rust/crates/orbit-audio-native/src/output.rs:800-810
     /// control が master program を **一度でも publish したか**（不可逆）。`line` の中身からは
     /// 導出できない（RT で既定値と深い比較をすることになり、かつ「既定と同じ program を明示的に
     /// publish した」場合を区別できない）。
@@ -796,7 +863,7 @@ device placement). Only once it is `true` does `execute_master_line` get called 
 published op sequence in order.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1783-1800
+// rust/crates/orbit-audio-native/src/output.rs:1935-1952
 fn execute_master_line(
     master: &mut MasterLine,
     frames: usize,
@@ -837,7 +904,7 @@ and whether any insert bus is active. With no
 source and no active bus it falls back to the legacy `render_engine`.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1879-1920
+// rust/crates/orbit-audio-native/src/output.rs:2030-2071
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -888,7 +955,7 @@ variants render into a pre-allocated scratch buffer before quantizing (the scrat
 pre-sized for one second up front, avoiding heap allocation on the RT hot path).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2944-2961
+// rust/crates/orbit-audio-native/src/output.rs:3224-3241
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(
@@ -933,7 +1000,7 @@ The countermeasure has two parts. The first is to **check liveness on a throwawa
 before committing to the device**.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:506-540
+// rust/crates/orbit-audio-native/src/output.rs:505-539
 fn probe_output_device(
     live: &LiveOutputDevice,
     suppress_callback: bool,
@@ -982,7 +1049,7 @@ stream you meant to discard does not stop its callbacks, so `OutputStream` pause
 `Drop` as well.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:677-683
+// rust/crates/orbit-audio-native/src/output.rs:676-682
 impl Drop for OutputStream {
     fn drop(&mut self) {
         // cpal 0.15.3 retains named CoreAudio streams through a reference cycle. Dropping the
@@ -1001,7 +1068,7 @@ What is interesting is that the **fallback policy is inverted between the startu
 live-switch path**. That distinction is carried by a type.
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:336-343
+// rust/crates/orbit-audio-native/src/output.rs:335-342
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeviceFallbackPolicy {
     /// 起動経路。利用者を無音のまま放置しないので host 既定へ縮退して起動を成功させる。

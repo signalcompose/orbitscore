@@ -20,6 +20,7 @@ interface FakeDaemon {
   savePluginState: ReturnType<typeof vi.fn>
   applyEffectChain: ReturnType<typeof vi.fn>
   setBusRouting: ReturnType<typeof vi.fn>
+  setBusLine: ReturnType<typeof vi.fn>
   setSourceRouting: ReturnType<typeof vi.fn>
   setGlobalGain: ReturnType<typeof vi.fn>
   quit: ReturnType<typeof vi.fn>
@@ -55,6 +56,7 @@ function createHarness() {
       dropped: [],
     }),
     setBusRouting: vi.fn().mockResolvedValue(undefined),
+    setBusLine: vi.fn().mockResolvedValue(undefined),
     setSourceRouting: vi.fn().mockResolvedValue(undefined),
     setGlobalGain: vi.fn().mockResolvedValue(undefined),
     quit: vi.fn().mockResolvedValue(undefined),
@@ -737,6 +739,82 @@ describe('RustEnginePlayer bus routing recovery after daemon respawn (MX.4 M3)',
       expect.stringContaining('failed to restore bus routing'),
       expect.any(Error),
     )
+  })
+})
+
+describe('RustEnginePlayer bus line recovery after daemon respawn (#611 B1)', () => {
+  const players: RustEnginePlayer[] = []
+  const masterLine = [
+    { op: 'rack' as const },
+    {
+      op: 'output' as const,
+      dest: { kind: 'master' as const },
+      thru: false,
+      gain: 1,
+    },
+  ]
+  const sumLine = [
+    { op: 'rack' as const },
+    {
+      op: 'output' as const,
+      dest: { kind: 'bus' as const, name: 'sum-bus-0' },
+      thru: false,
+      gain: 1,
+    },
+  ]
+
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await Promise.all(players.splice(0).map((player) => player.quit()))
+  })
+
+  it('replays the last intended SetBusLine per bus after legacy routing replay', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setBusLine('seq-bus-0', sumLine)
+    await player.setBusLine('seq-bus-1', masterLine)
+    daemon.setBusLine.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setBusLine.mock.calls).toEqual([
+      ['seq-bus-0', sumLine],
+      ['seq-bus-1', masterLine],
+    ])
+  })
+
+  it('keeps a transport-failure intent for the next respawn replay', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    daemon.setBusLine.mockRejectedValueOnce(new Error('socket closed'))
+    await expect(player.setBusLine('seq-bus-0', sumLine)).rejects.toThrow('socket closed')
+    daemon.setBusLine.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setBusLine).toHaveBeenCalledWith('seq-bus-0', sumLine)
+  })
+
+  it('rethrows LINK_AUDIO_UNAVAILABLE and reverts the rejected line intent', async () => {
+    const { player, daemon } = createHarness()
+    players.push(player)
+    await player.setBusLine('seq-bus-0', masterLine)
+    daemon.setBusLine.mockRejectedValueOnce(
+      new DaemonProtocolError('LINK_AUDIO_UNAVAILABLE', 'link output is unavailable'),
+    )
+
+    await expect(player.setBusLine('seq-bus-0', sumLine)).rejects.toMatchObject({
+      code: 'LINK_AUDIO_UNAVAILABLE',
+    })
+    daemon.setBusLine.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await (player as any).respawnLoop()
+
+    expect(daemon.setBusLine).toHaveBeenCalledTimes(1)
+    expect(daemon.setBusLine).toHaveBeenCalledWith('seq-bus-0', masterLine)
   })
 })
 

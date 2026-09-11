@@ -1,8 +1,7 @@
 /**
  * 音声バックエンド共通のゲイン変換ユーティリティ。
  *
- * dB → linear amplitude の単一情報源。SuperCollider 経路（EventScheduler）と
- * Rust daemon 経路（RustEnginePlayer）の両方がこれを使う。
+ * dB → linear amplitude の単一情報源。Rust daemon 経路（RustEnginePlayer）が使う。
  */
 
 /**

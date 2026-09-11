@@ -89,7 +89,7 @@ export class EffectsManager {
       this._masterEffects.push({ type: effectType, params })
     }
 
-    // Send OSC message to SuperCollider
+    // Notify the audio engine
     if (this.globalScheduler.addEffect) {
       this.globalScheduler.addEffect('master', effectType, params)
     }

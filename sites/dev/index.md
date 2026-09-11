@@ -21,12 +21,15 @@ LLM (Claude Code 等) を主要な実装担当として運用している現状�
 - **Part IV. Signal Chain / Mixer** — ラック（SC.10）、sum / aux / send / output、master gain
 - **Part V. Plugin Hosting** — CLAP / VST3 hosting、プラグイン UI、カタログと差し替え
 - **Part VI. Editor Integration** — VS Code 拡張、インライン実行、MCP サーバと実機 gated E2E
-- **Part VII. SuperCollider 経路** — `ORBITSCORE_ENGINE=sc` で opt-out できる旧既定経路の歴史的読解
+- **Part VII. SuperCollider 経路（削除決定 #502）** — `ORBITSCORE_ENGINE=sc` で opt-out できた旧既定経路の歴史的読解（コード自体は 2026-09-10 の裁定 #827 / #502 でリポジトリから削除が決まっている）
 - **Part VIII. ADR / Glossary** — 設計判断と用語集
 
-2026-09-01 に全章を commit `69dc968` に対して再検証しました。SuperCollider 経路の章は消さずに残し、
-各章冒頭の warning で「opt-out 経路である」ことを明記しています（drift は document するが解消しない、
-という本サイトの artifact framing）。
+2026-09-01 に全章を commit `69dc968` に対して再検証しました。2026-09-10 の裁定（#827 / #502）で
+SuperCollider 経路の削除が決まったのを受け、SC 専用章（旧 III-1「SuperCollider との通信」・旧 III-3
+「scsynth bundle と path resolution」）はサイトから削除し、決定の記録として ADR-001 / ADR-003 に
+warning 付きで残しています。SC を横断的に扱う III-2「オーディオファイル再生」は当面残し、
+コード引用は削除前 (commit `58f558f5`) のスナップショットとして注記しています
+（drift は document するが解消しない、という本サイトの artifact framing）。
 
 ### 引用の機械検証
 

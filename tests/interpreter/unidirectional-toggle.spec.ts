@@ -9,7 +9,7 @@ describe('DSL v3.0: Unidirectional Toggle (片記号方式)', () => {
   beforeEach(async () => {
     interpreter = new InterpreterV2()
 
-    // Mock SuperCollider methods to avoid boot timeout
+    // Mock audio engine methods to avoid boot timeout
     const audioEngine = interpreter.audioEngine as any
     audioEngine.boot = vi.fn().mockResolvedValue(undefined)
     audioEngine.getCurrentTime = vi.fn().mockReturnValue(0)

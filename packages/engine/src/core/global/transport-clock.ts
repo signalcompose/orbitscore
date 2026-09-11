@@ -1,7 +1,7 @@
 /**
  * TransportClock — the single wall-clock origin for the engine transport.
  *
- * Both the SuperCollider audio scheduler and the MIDI scheduler are driven by
+ * Both the audio scheduler and the MIDI scheduler are driven by
  * `Date.now()` polling loops; what makes audio and MIDI play in sync is that
  * they share the SAME time origin. This clock owns that origin: it is started
  * once at `global.start()` and read by every scheduling path.
@@ -9,12 +9,12 @@
  * Spec: PITCH_DSL_SPEC §1 ("SC オーディオ経路との併走は可"); the audio scheduler
  * and MidiScheduler both reference this origin so events scheduled for the same
  * musical time fire at the same `Date.now()` moment. The remaining audible
- * offset is purely downstream latency (SC audio buffer vs MIDI send), corrected
+ * offset is purely downstream latency (audio buffer vs MIDI send), corrected
  * by `global.midiLatency()` + per-port lead (§9), not here.
  *
  * Decoupling rationale: the MIDI path uses this clock rather than reading
  * `startTime`/`isRunning` off the audio engine object, so a MIDI-only session
- * never touches SuperCollider while staying clock-aligned with audio when both
+ * never touches the audio backend while staying clock-aligned with audio when both
  * run together.
  */
 export class TransportClock {

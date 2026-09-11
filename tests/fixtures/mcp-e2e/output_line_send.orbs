@@ -1,4 +1,4 @@
-// #611 §9 golden: send(aux, 0.3) uses today's linear amount.
+// #611 §9 golden: send(aux, 0.3) — 0.3 is now dB (B2), not linear (was pre-#611).
 //
 // 🔴 バス名は一意にする（output_line_sum.orbs の注記と同じ理由）。
 

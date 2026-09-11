@@ -3,7 +3,26 @@
  * Maintained for backward compatibility
  */
 
-import type { AudioDevice } from './supercollider/types'
+/** An audio input/output device, as reported by an engine backend. Engine-agnostic (moved here from the removed SC-backend module, #502). */
+export interface AudioDevice {
+  id: number
+  name: string
+  type: 'input' | 'output'
+  channels: number
+}
+
+export type WireDest =
+  | { kind: 'master' }
+  | { kind: 'bus'; name: string }
+  | { kind: 'device'; channels: [number, number] | [number] }
+  | { kind: 'render'; id: string }
+  | { kind: 'link'; channel: string }
+
+export type WireLineOp =
+  | { op: 'rack' }
+  | { op: 'gain'; gain: number }
+  | { op: 'pan'; pan: number }
+  | { op: 'output'; dest: WireDest; thru: boolean; gain: number }
 
 export interface PluginLoadResult {
   pluginId: string
@@ -79,7 +98,7 @@ export interface PluginStateSaveResult {
 
 /**
  * Audio engine interface
- * Defines the common interface for audio engines (currently SuperCollider)
+ * Defines the common interface for audio engines (the Rust orbit-audio-daemon)
  */
 export interface AudioEngine {
   /**
@@ -220,6 +239,9 @@ export interface AudioEngine {
     sends: { bus: string; gain: number }[],
   ): Promise<void>
 
+  /** Replace one daemon bus's complete ordered audio line. */
+  setBusLine?(bus: string, line: WireLineOp[]): Promise<void>
+
   /**
    * Route one premaster source output. `source` is an opaque daemon key, `unit` is the
    * format-neutral audio-output index, and `target: null` means Master (#643).
@@ -229,8 +251,7 @@ export interface AudioEngine {
 
 /**
  * Audio slice interface
- * Note: SuperCollider uses file paths and slice numbers directly,
- * but this interface is kept for backward compatibility with the Sequence API
+ * Note: kept for backward compatibility with the Sequence API
  */
 export interface AudioSlice {
   /** Slice number (0-based) */
@@ -239,7 +260,7 @@ export interface AudioSlice {
   startTime: number
   /** Duration in seconds */
   duration: number
-  /** File path (for SuperCollider) */
+  /** File path */
   filepath?: string
 }
 

@@ -2,12 +2,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 import { Global } from '../../packages/engine/src/core/global'
 import { Sequence } from '../../packages/engine/src/core/sequence'
-import { SuperColliderPlayer } from '../../packages/engine/src/audio/supercollider-player'
+import { RustEnginePlayer } from '../../packages/engine/src/audio/rust-engine/rust-engine-player'
 
 /**
  * Step 3.2 (Issue #192) + strict-mode follow-up: integration check that the
  * LinkAudio outputChannel is forwarded from Sequence → scheduling pipeline →
- * SuperColliderPlayer scheduleEvent based on Global mode + sequence .output()
+ * RustEnginePlayer scheduleEvent based on Global mode + sequence .output()
  * state.
  *
  * The wiring rule (resolveDispatchChannel), post-#645 PR-D0:
@@ -24,7 +24,7 @@ import { SuperColliderPlayer } from '../../packages/engine/src/audio/supercollid
 describe('Sequence → scheduler dispatch wiring (LinkAudio)', () => {
   let global: Global
   let seq: Sequence
-  let mockPlayer: SuperColliderPlayer
+  let mockPlayer: RustEnginePlayer
 
   beforeEach(() => {
     mockPlayer = {

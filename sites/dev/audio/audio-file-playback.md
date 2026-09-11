@@ -9,10 +9,10 @@ status: draft
 > **Note**: 本ページは 2026-09-01 時点での著者の reading の足跡です。code が真実、本ページはその時点の理解の snapshot に過ぎません。
 
 ::: warning 2026-09 時点の位置づけ
-本章の `BufferManager` / `orbitPlayBuf` / `EventScheduler`（`packages/engine/src/audio/supercollider/`）は SuperCollider 経路のコードで、2026-07-03 の cutover #108（`docs/archive/WORK_LOG_2026-07.md` §6.179）以降は **既定ではなく `ORBITSCORE_ENGINE=sc` で opt-out したときだけ**使われます。既定の Rust daemon 経路ではファイルのデコードとスライス再生を daemon 側が担います（[RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照）。本章の引用は 69dc968 時点の実コードと一致しますが、歴史的読解として読んでください。
+本章の `BufferManager` / `orbitPlayBuf` / `EventScheduler`（`packages/engine/src/audio/supercollider/`）は SuperCollider 経路のコードでした。2026-07-03 の cutover #108（`docs/archive/WORK_LOG_2026-07.md` §6.179）で既定は Rust daemon 経路へ切り替わり、SC 経路は `ORBITSCORE_ENGINE=sc` の opt-out としてのみ残っていましたが、**2026-09-10 の裁定（#827 / #502）で SC 経路自体・opt-out の分岐コードごと削除**されました。`createAudioEngine()` は現在、引数も環境変数も見ず常に `RustEnginePlayer` を返します。ファイルのデコードとスライス再生は daemon 側が担います（[RE-1. daemon アーキテクチャ概観](/rust-engine/) を参照）。以下は削除前（commit `58f558f5`）時点の、opt-out 分岐コードのスナップショットです。
 
 ```typescript
-// packages/engine/src/audio/create-audio-engine.ts:17-22
+// （削除済み・58f558f5 時点） packages/engine/src/audio/create-audio-engine.ts L17-22
 export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
   const raw = env[ENGINE_ENV_VAR]
   if (resolveEngineKind(raw) === 'supercollider') {
@@ -22,10 +22,16 @@ export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEn
 ```
 
 ```typescript
-// packages/engine/src/audio/engine-backend.ts:54-55
+// （削除済み・58f558f5 時点） packages/engine/src/audio/engine-backend.ts L54-55
 /** バックエンド選択 env。既定（未設定）は Rust daemon 経路。`sc` / `supercollider` で SC に opt-out。 */
 export const ENGINE_ENV_VAR = 'ORBITSCORE_ENGINE'
 ```
+:::
+
+::: warning コード引用は削除済みコードのスナップショット
+本章が引用する `packages/engine/src/audio/supercollider/` 配下のコードは、**2026-09-10 の裁定
+（#827 / #502）でリポジトリから削除**が決まっています。以下のコード引用は削除前（commit
+`58f558f5`）時点のスナップショットとして残しています。
 :::
 
 # III-2. オーディオファイル再生
@@ -41,7 +47,7 @@ scsynth は内部にバッファ空間を持っています。バッファは整
 `BufferManager` はシンプルな設計です。フィールドを見てみましょう。
 
 ```typescript
-// packages/engine/src/audio/supercollider/buffer-manager.ts:11-14
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/buffer-manager.ts L11-14
 export class BufferManager {
   private bufferCache: Map<string, BufferInfo> = new Map()
   private bufferDurations: Map<number, number> = new Map()
@@ -57,7 +63,7 @@ export class BufferManager {
 `BufferInfo` 型は次のとおりです。
 
 ```typescript
-// packages/engine/src/audio/supercollider/types.ts:5-8
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/types.ts L5-8
 export interface BufferInfo {
   bufnum: number
   duration: number
@@ -69,7 +75,7 @@ export interface BufferInfo {
 `loadBuffer()` は最初にキャッシュを確認します。
 
 ```typescript
-// packages/engine/src/audio/supercollider/buffer-manager.ts:21-46
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/buffer-manager.ts L21-46
   async loadBuffer(filepath: string): Promise<BufferInfo> {
     if (this.bufferCache.has(filepath)) {
       return this.bufferCache.get(filepath)!
@@ -106,6 +112,8 @@ export interface BufferInfo {
 
 SC 経路で対応する音声フォーマットは、scsynth がバッファ読み込みに使う libsndfile に依存します。`.vsix` に同梱される `libsndfile.dylib` のサポート範囲が事実上の対応フォーマットになります。
 
+> 🔴 **[#836](https://github.com/signalcompose/orbitscore/pull/836)（2026-09-10）以降、`libsndfile.dylib` は `.vsix` に入りません。** scsynth bundle（バイナリ・plugins・libsndfile・LICENSE/NOTICE を丸ごと）を同梱していたのは `.vscodeignore` の `!engine/scsynth/**` keep 指定と `scripts/extract-scsynth-bundle.sh` で、どちらも削除されました。本節は SC 経路の歴史的読解として残しています。
+
 > NOTE: unverified — WAV / AIFF については libsndfile の標準サポートで確認できますが、MP3 / MP4 は libsndfile のビルドオプションと version に依存します。同梱 `libsndfile.dylib` (約 4.9 MB) の具体的な version と MP3 サポート有無は別途確認が必要です。
 
 ## soxi による尺取得: scsynth とは独立したコードパス
@@ -113,7 +121,7 @@ SC 経路で対応する音声フォーマットは、scsynth がバッファ読
 尺取得は SuperCollider を介さず、`soxi` コマンド (sox ツールチェインの一部) を直接呼びます。
 
 ```typescript
-// packages/engine/src/audio/supercollider/buffer-manager.ts:52-74
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/buffer-manager.ts L52-74
   private getAudioFileDuration(filepath: string): number {
     try {
       // Use execFileSync with separate arguments to prevent command injection
@@ -147,7 +155,7 @@ SC 経路で対応する音声フォーマットは、scsynth がバッファ読
 
 ## バッファロード: `/b_allocRead` と `/done` の待機
 
-尺が取れたら、scsynth にバッファをロードします。この処理は `OSCClient.sendBufferLoad()` 経由で行われ、callAndResponse パターン (詳細は [III-1. SuperCollider との通信](/audio/supercollider) §callAndResponse パターン) で `/done` を待ちます。
+尺が取れたら、scsynth にバッファをロードします。この処理は `OSCClient.sendBufferLoad()` 経由で行われ、callAndResponse パターン（削除済みの旧 III-1 章「SuperCollider との通信」で詳述していました。[ADR-001](/decisions/adr-001-supercollider) に記録を残しています）で `/done` を待ちます。
 
 ```mermaid
 sequenceDiagram
@@ -172,7 +180,7 @@ sequenceDiagram
 scsynth でバッファを再生する音声処理の定義が `orbitPlayBuf` SynthDef です。`setup.scd` の sclang コードを読むと、その構造が分かります。
 
 ```supercollider
-// packages/engine/supercollider/setup.scd:22-64 (writeDefFile 行を省略)
+// （削除済み・58f558f5 時点） packages/engine/supercollider/setup.scd L22-64 (writeDefFile 行を省略)
 SynthDef(\orbitPlayBuf, {
     arg out = 0, bufnum = 0, rate = 1, amp = 0.5, pan = 0, 
         startPos = 0,      // 開始位置（秒）
@@ -248,7 +256,7 @@ $$\text{fadeOut} = \min(0.008, \text{actualDuration} \times 0.04)$$
 ### スライス位置の計算
 
 ```typescript
-// packages/engine/src/audio/supercollider/event-scheduler.ts:263-281
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/event-scheduler.ts L263-281
   private calculateSlicePosition(
     filepath: string,
     sliceIndex: number,
@@ -275,7 +283,7 @@ $$\text{fadeOut} = \min(0.008, \text{actualDuration} \times 0.04)$$
 ### 再生レートの計算
 
 ```typescript
-// packages/engine/src/audio/supercollider/event-scheduler.ts:288-296
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/event-scheduler.ts L288-296
   private calculatePlaybackRate(
     sliceDurationSec: number,
     eventDurationMs: number | undefined,
@@ -296,7 +304,7 @@ $$\text{rate} = \frac{\text{sliceDuration(ms)}}{\text{eventDuration(ms)}}$$
 ### scheduleSliceEvent でのパラメータ組み立て
 
 ```typescript
-// packages/engine/src/audio/supercollider/event-scheduler.ts:317-350
+// （削除済み・58f558f5 時点） packages/engine/src/audio/supercollider/event-scheduler.ts L317-350
   scheduleSliceEvent(
     filepath: string,
     startTimeMs: number,

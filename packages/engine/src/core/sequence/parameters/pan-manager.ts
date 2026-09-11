@@ -8,6 +8,11 @@ import { PanOptions } from '../types'
 
 import { generateRandomValue } from './random-utils'
 
+/** Shared fixed-pan range rule for sequence and mixer-bus line writers. */
+export function clampPan(value: number): number {
+  return Math.max(-100, Math.min(100, value))
+}
+
 /**
  * Pan parameter manager
  */
@@ -33,7 +38,7 @@ export class PanManager {
     } else {
       // Fixed value
       this._panRandom = undefined
-      this._pan = Math.max(-100, Math.min(100, value))
+      this._pan = clampPan(value)
     }
 
     return {

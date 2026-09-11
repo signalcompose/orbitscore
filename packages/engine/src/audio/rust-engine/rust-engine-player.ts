@@ -2,19 +2,17 @@
  * Rust audio backend adapter (post-2.0 S2 / Issue #296).
  *
  * `DaemonClient`（orbit-audio-daemon / WebSocket）を `AudioEngineBackend` 契約へ
- * ラップし、`SuperColliderPlayer` の sibling として interpreter に差し込めるようにする。
- * cutover #108 で `createAudioEngine()` の既定バックエンド。SC 経路は温存し
- * `ORBITSCORE_ENGINE=sc` で opt-out できる（SC parity 到達済み）。
+ * ラップし、interpreter に差し込む。cutover #108 以降、`createAudioEngine()` が返す唯一の
+ * バックエンド（#502 で SC への opt-out 経路ごと撤去した）。
  *
  * 設計（docs/development/POST_2.0_A0_RT_INTEGRATION_DESIGN.md §13 / master plan §4-A）:
  *
  *  - **musical timing は TS 側に残す**（Epic #105 原則）。本クラスは EventScheduler の
  *    1ms poll モデルを mirror した *lean* scheduler を持ち、発火時に daemon へ
- *    `loadSample`+`playAt` する。SC の EventScheduler は LinkAudio/bufnum/`/s_new` 結合が
- *    重いので再利用せず、独立実装にして SC 経路への波及を断つ。
+ *    `loadSample`+`playAt` する。
  *
- *  - **timing モデル = poll-and-fire-now + 定数 lookahead**。SC は fire-now（poll 検出で
- *    即 `/s_new`）。daemon は自前 transport clock（boot で 0 開始）上の `PlayAt{time_sec}`
+ *  - **timing モデル = poll-and-fire-now + 定数 lookahead**。daemon は自前 transport clock
+ *    （boot で 0 開始）上の `PlayAt{time_sec}`
  *    で schedule-ahead。poll 発火時に `playAt(daemonNowSec + lookahead)` を送ることで
  *    **相対 timing（quantize/polymeter）を保存**しつつ daemon render cursor を確実に
  *    上回らせ onset clip を避ける（絶対 latency は定数シフト＝音楽的に無影響）。lookahead は
@@ -25,23 +23,23 @@
  *    フォールバック）。これで anchor を毎秒補正し audio/wall drift を吸収する。boot 直後は
  *    `GetStatus.uptime_sec`(≈transport) で暫定 anchor を置き、初回 StreamStats で精緻化する。
  *
- *  - **pan は #304 で実装済み**（daemon PlayAt の pan・equal-power = SC `Pan2` 一致）。
+ *  - **pan は #304 で実装済み**（daemon PlayAt の pan・equal-power）。
  *    発火時に DSL の -100..100 を daemon の [-1,1] へ変換して送る。
  *
  *  - **slice（chop 領域再生）は #304 で実装済み**（offset/duration の領域読み）。
  *    rate≠1.0（slice 尺をイベントスロット尺へ詰める varispeed）は #319 で実装済み（daemon
- *    PlayAt の rate・SC `PlayBuf.ar(rate:)` 一致＝ピッチも動く）。pitch-preserving な
+ *    PlayAt の rate。ピッチも動く）。pitch-preserving な
  *    time-stretch（fixpitch/time）は別物で #213 へ defer。
  *
  *  - **残る feature gap は boundary で明示**（見かけの parity を作らない・A0 方針）:
- *    outputChannel(LinkAudio) → 1回 warn して hardware 発音（SC の plugin-missing fallback と同形）/
+ *    outputChannel(LinkAudio) → 1回 warn して hardware 発音 /
  *    master effects（compressor/limiter/normalizer）→ 1回 warn して no-op。いずれも A4 era。
  */
 
 import { gainDbToAmplitude } from '../audio-gain-utils'
 import type { AudioEngineBackend } from '../engine-backend'
-import type { AudioDevice } from '../supercollider/types'
 import type {
+  AudioDevice,
   EffectChainApplyRequest,
   EffectChainApplyResult,
   EffectChainStageConfig,
@@ -51,6 +49,7 @@ import type {
   PluginStateSaveTarget,
   PluginUiCloseCompletion,
   PluginUiTarget,
+  WireLineOp,
 } from '../types'
 
 import { DaemonClient } from './daemon-client'
@@ -166,7 +165,7 @@ export interface SliceSpec {
   eventDurationMs?: number
 }
 
-/** lean scheduler が保持する 1 発音イベント。SC `ScheduledPlay` の daemon 版。 */
+/** lean scheduler が保持する 1 発音イベント。 */
 export interface ScheduledPlay {
   /** 再生開始時刻（`startTime` からの相対 ms）。 */
   time: number
@@ -216,7 +215,7 @@ export interface DaemonPlayParams {
   durationSec: number
   /**
    * varispeed レート（1.0 = 自然尺）。chop slice 尺をイベントスロット尺へ詰める際に
-   * `rate = sliceDuration / eventSlotDuration` を送る（SC `calculatePlaybackRate` 一致）。
+   * `rate = sliceDuration / eventSlotDuration` を送る。
    * >1 = 速く短く高ピッチ、<1 = 遅く長く低ピッチ（pitch も動く varispeed）。
    */
   rate: number
@@ -331,7 +330,7 @@ const DEFAULT_LOOKAHEAD_SEC = 0.05
 const PLUGIN_UI_OPEN_TIMEOUT_MS = 30_000
 const PLUGIN_UI_CLOSE_TIMEOUT_MS = 20_000
 const POLL_INTERVAL_MS = 1
-/** SC EventScheduler と同じく、過大 drift のイベントは古い残骸として skip する閾値。 */
+/** 過大 drift のイベントは古い残骸として skip する閾値。 */
 const MAX_DRIFT_MS = 1000
 /** daemon が死んだとき respawn を試みる最大回数。枯渇したら recovery を断念し poll を止める。 */
 const MAX_RESPAWN_ATTEMPTS = 5
@@ -384,7 +383,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
   private readonly lookaheadSec: number
   private readonly onDispatch?: (info: DispatchInfo) => void
 
-  // --- lean scheduler state（SC EventScheduler の mirror） ---
+  // --- lean scheduler state ---
   private scheduledPlays: ScheduledPlay[] = []
   /** 生きているシーケンス名の集合。clear/mute されると消え、queue 残存イベントが skip される。 */
   private readonly liveSequences = new Set<string>()
@@ -442,6 +441,8 @@ export class RustEnginePlayer implements AudioEngineBackend {
     string,
     { output: string | undefined; sends: { bus: string; gain: number }[] }
   >()
+  /** Complete bus-line intents replayed after daemon respawn (#611 B1). */
+  private readonly busLines = new Map<string, WireLineOp[]>()
   /**
    * 🔴 最後に設定したマスターゲイン（#643 PR-2）。daemon は respawn すると
    * **unity から始まる**ので、再送しないとマスターが黙って効かなくなる。
@@ -790,6 +791,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
           await this.reloadPluginsAfterRespawn()
           await this.reloadEffectRacksAfterRespawn()
           await this.reapplyBusRoutingAfterRespawn()
+          await this.reapplyBusLinesAfterRespawn()
           await this.reapplySourceRoutingAfterRespawn()
           await this.reapplyGlobalGainAfterRespawn()
           console.warn(
@@ -911,7 +913,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
 
   /**
    * cpal output device 一覧を daemon から取得する（#484 D1）。`AudioEngineBackend` の同期
-   * `getAvailableDevices()`/`setAvailableDevices()` は SC 経路向けの既存 shape で rust 経路には
+   * `getAvailableDevices()`/`setAvailableDevices()` は旧同期 shape のままで rust 経路には
    * まだ配線されていない（S2 の既知ギャップ）— このメソッドはそれとは別に、daemon の非同期
    * `ListAudioDevices` RPC への直接の passthrough を提供する。
    */
@@ -941,8 +943,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * LinkAudio チャンネル登録（#209・A4-2b-2）。daemon に登録を要求し、成功すればその channel に
    * tag された再生が LinkAudio egress 経由で送出される。daemon が feature `link-audio` 無効
    * ビルド（既定の permissive daemon）の場合は LINK_AUDIO_UNAVAILABLE で reject されるので、**throw せず**
-   * 1 回 warn して継続する（channel は tag され続けるが出力は hardware のみ）。`scheduleEvent` /
-   * `scheduleSliceEvent` と同じ `'outputChannel'` GapKind を共有し first-wins で 1 回だけ出す。
+   * 1 回 warn して継続する（channel は tag され続けるが出力は hardware のみ）。この warnOnce の
+   * 呼び出しはここ 1 箇所だけ — `scheduleEvent` / `scheduleSliceEvent` は「outputChannel の
+   * feature-gap signal はここが authoritative」として意図的に警告しない（重複 warn を避ける）。
    */
   async registerLinkAudioChannel(channelName: string): Promise<void> {
     try {
@@ -979,11 +982,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * Runtime mixer bus routing change (MX.4, #459/#453 M3). Unlike LinkAudio channel
-   * registration, there is no hardware-bus fallback for a missing sum/aux target — the
-   * daemon-side error (e.g. `UNSUPPORTED` on a non-`outproc-effect` build, or a kind/order
-   * violation) is a real failure and propagates unchanged to the caller (`Sequence`'s
-   * `output()`/`send()`, which log it via `console.warn` — see that file).
+   * Legacy `SetBusRouting` endpoint retained for wire compatibility. Since #852 the DSL no
+   * longer reaches this path: Sequence/MixerBusHandle routing uses `SetBusLine` instead, whose
+   * live respawn replay is `reapplyBusLinesAfterRespawn()`.
    */
   async setBusRouting(
     seqBus: string,
@@ -1008,11 +1009,9 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * Re-issues the last intended `SetBusRouting` per seq bus after a daemon respawn — the
-   * new daemon process starts with all `routing_override`/send atomics at their defaults,
-   * so without this replay every sum/aux routing silently reverts to plain per-sequence
-   * output (audio quietly goes to the wrong place). Mirrors `reloadPluginsAfterRespawn`:
-   * per-entry independent failure handling, and a failure must not fail the respawn itself.
+   * Legacy replay for callers of `setBusRouting()` above. Since #852 no DSL path populates
+   * `busRoutings`; the live DSL replay is `reapplyBusLinesAfterRespawn()`. Kept while the old
+   * daemon wire command still exists, with independent failure handling per cached entry.
    */
   private async reapplyBusRoutingAfterRespawn(): Promise<void> {
     for (const [seqBus, { output, sends }] of this.busRoutings.entries()) {
@@ -1022,6 +1021,37 @@ export class RustEnginePlayer implements AudioEngineBackend {
         // Cache entry intentionally remains: a later daemon respawn retries restoration.
         console.error(
           `❌ [rust-engine] failed to restore bus routing after daemon respawn (bus=${seqBus})`,
+          err,
+        )
+      }
+    }
+  }
+
+  /** Replace a bus line and retain transport-failure intent for respawn replay. */
+  async setBusLine(bus: string, line: WireLineOp[]): Promise<void> {
+    const prev = this.busLines.get(bus)
+    const intent = [...line]
+    this.busLines.set(bus, intent)
+    try {
+      await this.daemon.setBusLine(bus, intent)
+    } catch (err) {
+      if (err instanceof DaemonProtocolError) {
+        if (prev) this.busLines.set(bus, prev)
+        else this.busLines.delete(bus)
+      }
+      throw err
+    }
+  }
+
+  /** Reapply complete bus-line intents after the legacy routing replay. */
+  private async reapplyBusLinesAfterRespawn(): Promise<void> {
+    for (const [bus, line] of this.busLines.entries()) {
+      try {
+        await this.daemon.setBusLine(bus, line)
+      } catch (err) {
+        // Keep the intent: a later respawn gets another restoration attempt.
+        console.error(
+          `❌ [rust-engine] failed to restore bus line after daemon respawn (bus=${bus})`,
           err,
         )
       }
@@ -1415,21 +1445,32 @@ export class RustEnginePlayer implements AudioEngineBackend {
   }
 
   /**
-   * マスターエフェクト（compressor/limiter/normalizer）は daemon 未対応（A4 era）。
-   * 他の feature gap と同じく、見かけの parity を作らないよう 1 回 warn して no-op にする
+   * マスターエフェクト（compressor/limiter/normalizer）は daemon 未対応。
+   * 見かけの parity を作らないよう warn して no-op にする
    * （無言 drop だと `global.compressor()` 等が効いていないことに operator が気付けない）。
+   *
+   * 🔴 **discriminator を必ず渡す**（#840 レビュー指摘）。`warnOnce` のキーは
+   * discriminator が無いと `kind` そのもの（`'masterEffect'`）になるので、渡さないと
+   * **1 セッションにつき 1 回しか warn しない**。`compressor()` の後に `limiter()` を足す
+   * という普通のマスタリングチェーンで、2 つ目以降が**完全に無音で失敗する**。
+   * add と remove も別のキーにする（同じ effect の付け外しは別の出来事）。
+   *
+   * 🔴 SC バックエンドの synthdef がこの 3 つの唯一の実装だったので、#502 の削除以降
+   * **代替経路が存在しない**。仕様（DSL §Implementation Status）に警告ブロックを置いてある。
    */
   async addEffect(_target: string, effectType: string, _params: unknown): Promise<void> {
     this.warnOnce(
       'masterEffect',
-      `⚠️  [rust-engine] master effect "${effectType}" is not supported yet (A4 era) — it is a no-op on the rust engine.`,
+      `⚠️  [rust-engine] master effect "${effectType}" is not supported — it is a no-op. Put a CLAP / VST3 plugin on the master bus instead.`,
+      `add:${effectType}`,
     )
   }
 
-  async removeEffect(_target: string, _effectType: string): Promise<void> {
+  async removeEffect(_target: string, effectType: string): Promise<void> {
     this.warnOnce(
       'masterEffect',
-      `⚠️  [rust-engine] master effects are not supported yet (A4 era) — removeEffect is a no-op on the rust engine.`,
+      `⚠️  [rust-engine] master effect "${effectType}" is not supported — removeEffect is a no-op.`,
+      `remove:${effectType}`,
     )
   }
 
@@ -1448,7 +1489,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     // outputChannel の feature-gap signal は `registerLinkAudioChannel`（`sequence.output()` 経由）が
     // authoritative に出す（A4-2b-2b で egress 配線済み）。scheduleEvent は channel を tag するだけで、
     // 「egress is not wired」の旧 warn は stale なので出さない（egress 有効な daemon では誤誘導になる）。
-    // pan は daemon PlayAt で実装済み（#304・equal-power = SC Pan2 一致）。発火時に
+    // pan は daemon PlayAt で実装済み（#304・equal-power）。発火時に
     // executePlayback が DSL の -100..100 を daemon の [-1,1] へ変換して送る。
     this.enqueue({ time, filepath, gainDb, pan, sequenceName, outputChannel, argPath, insertBus })
   }
@@ -1462,7 +1503,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * ここでは slice 仕様（index/total/eventDurationMs）だけ保持する。
    *
    * rate≠1.0（slice 尺をイベントスロット尺へ詰める）は `rate = sliceDuration / eventSlotDuration`
-   * で varispeed 発音（SC `PlayBuf.ar(rate:)` 一致・ピッチも動く）。per-slice gain は各 slice の
+   * で varispeed 発音（ピッチも動く）。per-slice gain は各 slice の
    * gainDb がそのまま効く。pitch-preserving な time-stretch（fixpitch/time）は別物で #213 へ defer。
    */
   scheduleSliceEvent(
@@ -1583,7 +1624,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     return { sampleId }
   }
 
-  /** getAudioDuration は SC では slice 経路のみが使う。daemon 版はキャッシュ値（未ロードは 0）。 */
+  /** getAudioDuration はキャッシュ値を返す（未ロードは 0）。 */
   getAudioDuration(filepath: string): number {
     return this.durations.get(filepath) ?? 0
   }
@@ -1768,7 +1809,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
    * 尺が未取得（lazy load で frames/SR が 0）の場合は全体再生にフォールバックする。
    *
    * varispeed: slice 自然尺をイベントスロット尺へ詰める `rate = sliceDuration / eventSlotDuration`
-   * を返す（SC `calculatePlaybackRate` 一致・>1 で速く高ピッチ、<1 で遅く低ピッチ）。
+   * を返す（>1 で速く高ピッチ、<1 で遅く低ピッチ）。
    * `eventDurationMs` 未指定 / 0 以下なら自然尺（rate=1.0）。
    */
   private resolveSliceRegion(play: ScheduledPlay): {
@@ -1786,7 +1827,7 @@ export class RustEnginePlayer implements AudioEngineBackend {
     }
     const sliceDuration = totalDuration / spec.total
     const offsetSec = (spec.index - 1) * sliceDuration
-    // varispeed レート（SC calculatePlaybackRate と同形）。eventDurationMs 不在 / 0 以下は自然尺。
+    // varispeed レート。eventDurationMs 不在 / 0 以下は自然尺。
     const rate =
       spec.eventDurationMs && spec.eventDurationMs > 0
         ? (sliceDuration * 1000) / spec.eventDurationMs
