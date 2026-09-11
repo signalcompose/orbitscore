@@ -17,6 +17,49 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### test(core): freeze the clock in the loop-quantize mock (#869) (Sep 11, 2026)
+
+`tests/core/loop-quantize.spec.ts` の「snaps to the same boundary already crossed when
+currentTime equals a boundary」が CI で間欠的に落ちていた（PR #847 の `code-review` ジョブ・
+run 34560570537）。**#847 は docs 7 ファイルのみ**で、コードに触れていない。
+
+#### 原因は `Date.now()` を 2 回呼んでいたこと
+
+モックの `startTime` が getter で、アクセスのたびに `Date.now() - elapsedMs` を再計算していた。
+呼ぶ側（`prepare-playback.ts:73-75`）はその直後に**別の `Date.now()`** を呼ぶ。この 2 回の間に
+ミリ秒が繰り上がると `currentTime = elapsedMs + 1` になる。
+
+このテストだけが **`elapsedMs = 2000`（小節境界ちょうど）** を突くので、+1ms で
+`nextQuantizedTime` が「境界を過ぎた」と判定し、次の境界 **4000** を返す。他のテストは境界の
+途中（1500 等）なので 1ms では判定が変わらない。
+
+**プロダクションコードの欠陥ではない。** 実機の `startTime` は保存された数値で、読むたびに
+動いたりしない。壊れていたのはモックの側。
+
+#### 4000 には犯人候補が 2 つあった
+
+`expected 4000 to be close to 2000` は、**(a) +1ms で次の小節**でも
+**(b) 直前のテストの `global.quantize('2bar')` が漏れた**でも同じ値になる。(b) を潰してある:
+`QuantizeManager._value` は private なインスタンスフィールド（既定 `'bar'`）で、`beforeEach` が
+`Global` ごと作り直すため漏れる経路が無い（`packages/engine/src/core/global/quantize-manager.ts:75-76`）。
+
+#### 機構の実測
+
+旧モックと同じ 2 回読みを 500 万回回すと、**109 回**（0.0022%）で
+`currentTime !== elapsedMs` になった。手元ではこの頻度だが、負荷のかかった CI runner では
+2 回の `Date.now()` の間隔が広がるので、実際の発火率はこれより高い。
+
+#### 直したもの
+
+describe 全体で `Date.now` を固定値に固定し、`startTime` の getter も同じ定数から引く。
+**両方が揃って初めて成立する** — getter だけ定数にして `Date.now` を生かすと、
+`currentTime` が巨大な値になる。`afterEach` の `vi.restoreAllMocks()` が復元する。
+
+検証: `npm test` **2,338 passed / 67 skipped / 0 failed** / `npm run lint` 緑 /
+引用 938 / 0 failed。
+
+Closes #869
+
 ### docs(sites): re-anchor three citations #859 left pointing at the wrong code (Sep 11, 2026)
 
 PR [#860](https://github.com/signalcompose/orbitscore/pull/860)（merge `e4d4199`）の追従。
