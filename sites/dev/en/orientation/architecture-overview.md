@@ -16,7 +16,7 @@ The answer does not fit inside a single process. It spans at least four kinds of
 
 ## Drift since the 2026-05 edition
 
-The 2026-05-05 edition of this chapter was written around a "three processes: extension / engine / scsynth" picture. With cutover #108 on 2026-07-03 (WORK_LOG 6.179) the default audio backend switched to the Rust daemon, and that picture no longer holds for the default path. What follows is a full rewrite against the code as of 2026-09-01. The SC path itself still existed under `packages/engine/src/audio/supercollider/` as of 69dc968, but the 2026-09-10 ruling (#827 / #502) removed it from the repository (PR [#838](https://github.com/signalcompose/orbitscore/pull/838)). The former Part III SuperCollider-only chapters (III-1, III-3) have been removed from the site; their record lives on in ADR-001 / ADR-003.
+The 2026-05-05 edition of this chapter was written around a "three processes: extension / engine / scsynth" picture. With cutover #108 on 2026-07-03 (WORK_LOG 6.179) the default audio backend switched to the Rust daemon, and that picture no longer holds for the default path. What follows is a full rewrite against the code as of 2026-09-01. The SC path itself still existed under `packages/engine/src/audio/supercollider/` as of 69dc968, but acting on the 2026-09-10 ruling (#827 / #502), **[#840](https://github.com/signalcompose/orbitscore/pull/840) removed it from the repository**. The diagram above shows the shape after that removal (three kinds of process plus the plugin children). The former Part III SuperCollider-only chapters (III-1, III-3) have been removed from the site; their record lives on in ADR-001 / ADR-003.
 
 Incidentally, code comments refer to the same cutover by two numbers, `#108` and `#369` (`engine-backend.ts` says `#108`; `extension.ts` and `copy-daemon-bin.sh` say `#369`).
 
@@ -57,7 +57,7 @@ graph TD
 
   AGENT["external agent\n(Claude Code etc.)"] -->|"MCP (Streamable HTTP)"| MCP
   MCP --> EXT
-  EXT -->|"child_process.spawn('node', [cli-audio.js, 'repl'])"| CLI
+  EXT -->|"child_process.spawn('node', [cli-audio.js, 'repl'])\nenv carries only the debug flag and the capture seam"| CLI
   EXT -->|"stdin.write(code + '\\n')"| CLI
   EXT --> RESOLVER
   CLI --> PARSER --> INTERP --> CORE --> PLAYER
@@ -493,11 +493,11 @@ Why isolate? Because 3rd-party plugins are untrusted code, and a crash must not 
 
 ## The SuperCollider Path (removed in #502)
 
-Setting `ORBITSCORE_ENGINE=sc` used to make `createAudioEngine()` return a `SuperColliderPlayer`, and the extension entered its `sc` branch that passed `ORBIT_SCSYNTH_PATH` via env. The mechanisms of scsynth resolution (strict mode in `scsynth-resolver.ts`), OSC over UDP, and the `orbitPlayBuf` SynthDef remained in the code as of 69dc968, and [III-2. Audio File Playback](/en/audio/audio-file-playback) reads them (III-1 "Communication with SuperCollider" and III-3 "scsynth Bundle and Path Resolution" have been removed from the site as separate chapters following the 2026-09-10 ruling #827 / #502; their record lives on in [ADR-001](/en/decisions/adr-001-supercollider) and [ADR-003](/en/decisions/adr-003-scsynth-bundle)).
+Setting `ORBITSCORE_ENGINE=sc` used to make `createAudioEngine()` return a `SuperColliderPlayer`, and the extension entered its `sc` branch that passed `ORBIT_SCSYNTH_PATH` via env. The mechanisms of scsynth resolution (strict mode in `scsynth-resolver.ts`), OSC over UDP, and the `orbitPlayBuf` SynthDef were still in the code as of 69dc968, but acting on the 2026-09-10 ruling (#827 / #502), [#840](https://github.com/signalcompose/orbitscore/pull/840) **deleted all of `packages/engine/src/audio/supercollider/`, `supercollider-player.ts`, `packages/sc-link-audio/` and the synthdef assets**. The env var and VS Code settings that selected the opt-out (`ORBITSCORE_ENGINE` / `orbitscore.engine` / `orbitscore.scsynthPath`) went with them, so there is no longer any way to select a backend.
 
-**The SC path was removed from the repository by the 2026-09-10 ruling (#827 / #502).** The env var, the setting key, `SuperColliderPlayer` and everything under `packages/engine/src/audio/supercollider/` are gone from the current tree, and III-2's code citations are snapshots taken before the removal (commit `58f558f5`).
+A reading of the code as it stood before the removal is kept as a snapshot in [III-2. Audio File Playback](/en/audio/audio-file-playback) (III-1 "Communication with SuperCollider" and III-3 "scsynth Bundle and Path Resolution" have been removed from the site as separate chapters; their record lives on in [ADR-001](/en/decisions/adr-001-supercollider) and [ADR-003](/en/decisions/adr-003-scsynth-bundle)).
 
-Even before the removal, the `AudioEngineBackend` contract had optional methods the SC side did not implement (`selectAudioDevice` and others) — the Rust path was ahead in features too.
+Even at the point of removal, the `AudioEngineBackend` contract had optional methods the SC side did not implement (`selectAudioDevice` and others) — the Rust path was ahead in features too (engine-backend.ts:32-33).
 
 ## Data Flow from `play()` to Sound
 

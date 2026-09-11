@@ -41,10 +41,10 @@ VS Code extensions run on a dedicated Node.js process called the **Extension Hos
 VS Code Renderer (UI)
     └── Extension Host (Node.js)  ← extension code runs
             └── engine process (node engine/dist/cli-audio.js repl)  ← OrbitScore DSL engine
-                    └── orbit-audio-daemon (Rust, WebSocket)
+                    └── orbit-audio-daemon (Rust, the only backend, WebSocket)
 ```
 
-There is only **one** kind of audio process: orbit-audio-daemon. The `orbitscore.engine` setting (default `"rust"`) used to let you switch to scsynth (SuperCollider, over OSC), and that branch showed up throughout this chapter, but **the 2026-09-10 ruling (#827 / [#502](https://github.com/signalcompose/orbitscore/issues/502)) removed the SC path together with the setting key**.
+There is only one audio process: `orbit-audio-daemon`. The `orbitscore.engine` setting (default `"rust"`) used to let you pick scsynth (SuperCollider, OSC) instead, and that branch showed up throughout the chapter, but both the setting and the branch were removed in [#840](https://github.com/signalcompose/orbitscore/pull/840) (#502). Where the text below touches that branch, it now says so.
 
 ---
 
@@ -465,13 +465,15 @@ export function extensionEngineFileExists(enginePath: string): boolean {
 
 The daemon resolver is `explicit > env > monorepo-release > monorepo-debug > extension-bundle > throw`. It has no silent fallback; if nothing is found, it fails loud with an exception (see [ADR-003](/en/decisions/adr-003-scsynth-bundle) — a historical record of the decision for the scsynth resolver it covers; that resolver was removed in #502).
 
-::: warning The scsynth candidates cannot be reached from a shipped build (#836, 2026-09-10)
-Since [#836](https://github.com/signalcompose/orbitscore/pull/836), `packages/engine/scripts/sync-dist.js` deletes `engine/scsynth` and the synced `dist/audio/supercollider/` every time it syncs the engine into the extension. So in a shipped `.vsix`:
+::: warning The scsynth resolver is gone from the extension (#836 → #838, 2026-09-10)
+First, [#836](https://github.com/signalcompose/orbitscore/pull/836) made `packages/engine/scripts/sync-dist.js` delete `engine/scsynth` and the synced `dist/audio/supercollider/` every time it syncs the engine into the extension. From that point, in a shipped `.vsix`:
 
-- the `bundle` candidate path (`<engine root>/scsynth/Contents/Resources/scsynth`) does not exist
-- **the very module** the code above `require`s — `../engine/dist/audio/supercollider/scsynth-resolver` — does not exist either
+- the `bundle` candidate path (`<engine root>/scsynth/Contents/Resources/scsynth`) did not exist
+- **the very module** the extension `require`d — `../engine/dist/audio/supercollider/scsynth-resolver` — did not exist either
 
-`resolveScsynthForUI()` catches the require failure, writes `❌ scsynth resolver failed: …` to the outputChannel and returns `null`, so what happens under the `sc` kind is now "the resolver cannot be loaded". The extension's TypeScript was **not** touched by #836 — removing the SC TypeScript implementation and the extension surface is, per the #836 description, "the next PR".
+The extension's TypeScript was not touched by #836, so `resolveScsynthForUI()` caught the require failure, wrote `❌ scsynth resolver failed: …` to the outputChannel and returned `null`.
+
+Then [#838](https://github.com/signalcompose/orbitscore/pull/838) (part of bundle [#840](https://github.com/signalcompose/orbitscore/pull/840)) **deleted `resolveScsynthForUI()` outright**, and no reference to `scsynth` remains anywhere under `packages/vscode-extension/src/`. Because that was a runtime `require` that never goes through `tsc`, deleting the engine-side source alone would have left type-checking green while the code failed at runtime (the "runtime `require` trap" in the #840 description). The only binary resolution left is the daemon side, `resolveDaemonForUI()`.
 :::
 
 ---

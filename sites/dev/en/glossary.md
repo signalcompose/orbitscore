@@ -255,11 +255,11 @@ An interface in `completion-context.ts`. Represents the state of the method chai
 
 ### StatusBarItem
 
-A VS Code API. Items displayed in the status bar at the bottom of the editor. OrbitScore uses two: engine state (`statusBarItem`, priority 100) and daemon binary resolution state (`bundleStatusItem`, priority 99). The latter used to show the scsynth resolution state; after the SC path was removed in #502 it only looks at the daemon (and hides itself entirely when the daemon resolves).
+A VS Code API. Items displayed in the status bar at the bottom of the editor. OrbitScore uses two: engine state (`statusBarItem`, priority 100) and an error indicator that appears only when binary resolution fails (`bundleStatusItem`, priority 99). The latter, as its name says, used to show the scsynth bundle resolution state; it now appears only when the daemon cannot be resolved (`updateBundleStatus()` in `packages/vscode-extension/src/extension.ts` — the scsynth side was removed in #502).
 
 ### workspace trust (untrustedWorkspaces)
 
-VS Code's trust model. In an untrusted workspace an extension is restricted by default and `activate()` is never called. OrbitScore declares `supported: true` under `capabilities.untrustedWorkspaces` in `package.json` (#385), so it activates even in a folder-less loose-file launch. `restrictedConfigurations` used to list only the 2 settings where "the workspace deciding the value makes a different executable run" (`orbitscore.scsynthPath` / `orbitscore.engine`), but **both were removed in #502**, so it is an empty array today.
+VS Code's trust model. In an untrusted workspace an extension is restricted by default and `activate()` is never called. OrbitScore declares `supported: true` under `capabilities.untrustedWorkspaces` in `package.json` (#385), so it activates even in a folder-less loose-file launch. `restrictedConfigurations` used to list the 2 settings where "the workspace deciding the value makes a different executable run" (`orbitscore.scsynthPath` / `orbitscore.engine`), but [#840](https://github.com/signalcompose/orbitscore/pull/840) (#502) deleted both settings along with the SC path, so it is **now an empty array**. The executable of the one remaining backend (the Rust daemon) does not change with a workspace setting, so there is nothing left to restrict.
 
 ---
 
@@ -271,7 +271,7 @@ VS Code's trust model. In an untrusted workspace an extension is restricted by d
 
 One of the `ScsynthSource` values. The source identifier used when the scsynth binary bundled in the `.vsix` is used. It points to `<engine root>/scsynth/Contents/Resources/scsynth`.
 
-🔴 **Since [#836](https://github.com/signalcompose/orbitscore/pull/836) (2026-09-10) this candidate can never hit.** `packages/engine/scripts/sync-dist.js` now deletes `engine/scsynth` every time it syncs the engine into the extension, and the `.vscodeignore` keep entry is gone. The type and the branch themselves still live in `packages/engine/src/audio/supercollider/scsynth-resolver.ts` — removing the SC TypeScript implementation is, per the #836 description, "the next PR".
+🔴 **Since [#836](https://github.com/signalcompose/orbitscore/pull/836) (2026-09-10) this candidate can never hit.** `packages/engine/scripts/sync-dist.js` now deletes `engine/scsynth` every time it syncs the engine into the extension, and the `.vscodeignore` keep entry is gone. Then [#838](https://github.com/signalcompose/orbitscore/pull/838) (part of bundle [#840](https://github.com/signalcompose/orbitscore/pull/840)) deleted `packages/engine/src/audio/supercollider/scsynth-resolver.ts` itself, so **the type and the branch no longer exist**. This entry is historical.
 
 ### explicit (scsynth source)
 

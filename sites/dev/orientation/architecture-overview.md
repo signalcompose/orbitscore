@@ -16,7 +16,7 @@ status: draft
 
 ## 2026-05 版からの drift
 
-本章の 2026-05-05 版は「extension / engine / scsynth の 3 プロセス」という絵で書かれていました。2026-07-03 の cutover #108 (WORK_LOG 6.179) で既定の音声バックエンドが Rust daemon に切り替わり、その絵は既定経路としては成り立たなくなっています。以下は 2026-09-01 時点のコードに合わせて全面的に書き直したものです。SC 経路そのものは 69dc968 時点では `packages/engine/src/audio/supercollider/` に残っていましたが、2026-09-10 の裁定（#827 / #502）でリポジトリから削除されました（PR [#838](https://github.com/signalcompose/orbitscore/pull/838)）。旧 Part III の SuperCollider 専用章（III-1・III-3）はサイトから削除し、ADR-001 / ADR-003 に記録を残しました。
+本章の 2026-05-05 版は「extension / engine / scsynth の 3 プロセス」という絵で書かれていました。2026-07-03 の cutover #108 (WORK_LOG 6.179) で既定の音声バックエンドが Rust daemon に切り替わり、その絵は既定経路としては成り立たなくなっています。以下は 2026-09-01 時点のコードに合わせて全面的に書き直したものです。SC 経路そのものは 69dc968 時点では `packages/engine/src/audio/supercollider/` に残っていましたが、2026-09-10 の裁定（#827 / #502）に基づき **[#840](https://github.com/signalcompose/orbitscore/pull/840) でリポジトリから削除されました**。上の図もその後の姿（3 種のプロセス + plugin children）です。旧 Part III の SuperCollider 専用章（III-1・III-3）はサイトから削除し、ADR-001 / ADR-003 に記録を残しました。
 
 ちなみに、コードのコメントは同じ cutover を `#108` と `#369` の両方の番号で参照しています (`engine-backend.ts` は `#108`、`extension.ts` や `copy-daemon-bin.sh` は `#369`)。
 
@@ -57,7 +57,7 @@ graph TD
 
   AGENT["外部 agent\n(Claude Code 等)"] -->|"MCP (Streamable HTTP)"| MCP
   MCP --> EXT
-  EXT -->|"child_process.spawn('node', [cli-audio.js, 'repl'])"| CLI
+  EXT -->|"child_process.spawn('node', [cli-audio.js, 'repl'])\nenv は debug フラグと capture seam のみ"| CLI
   EXT -->|"stdin.write(code + '\\n')"| CLI
   EXT --> RESOLVER
   CLI --> PARSER --> INTERP --> CORE --> PLAYER
@@ -493,11 +493,11 @@ fn default_rack_child_exe() -> Result<PathBuf, String> {
 
 ## SuperCollider 経路（#502 で削除済み）
 
-かつては `ORBITSCORE_ENGINE=sc` を指定すると `createAudioEngine()` が `SuperColliderPlayer` を返し、extension も `ORBIT_SCSYNTH_PATH` を env で渡す `sc` 分岐に入りました。scsynth の解決 (`scsynth-resolver.ts` の strict mode)、OSC over UDP、`orbitPlayBuf` SynthDef といった仕組みは 69dc968 時点ではコードとして残っており、[III-2. オーディオファイル再生](/audio/audio-file-playback) がそれを読んでいます（III-1「SuperCollider との通信」と III-3「scsynth bundle と path resolution」は独立の章としては 2026-09-10 の裁定 #827 / #502 に伴いサイトから削除し、[ADR-001](/decisions/adr-001-supercollider) と [ADR-003](/decisions/adr-003-scsynth-bundle) に記録を残しています）。
+かつては `ORBITSCORE_ENGINE=sc` を指定すると `createAudioEngine()` が `SuperColliderPlayer` を返し、extension も `ORBIT_SCSYNTH_PATH` を env で渡す `sc` 分岐に入りました。scsynth の解決 (`scsynth-resolver.ts` の strict mode)、OSC over UDP、`orbitPlayBuf` SynthDef といった仕組みは 69dc968 時点ではコードとして残っていましたが、2026-09-10 の裁定（#827 / #502）に基づき [#840](https://github.com/signalcompose/orbitscore/pull/840) で **`packages/engine/src/audio/supercollider/` 一式・`supercollider-player.ts`・`packages/sc-link-audio/`・synthdef アセットごと削除されました**。opt-out を選ぶ env var と VS Code 設定（`ORBITSCORE_ENGINE` / `orbitscore.engine` / `orbitscore.scsynthPath`）も同時に撤去され、いまバックエンドを選ぶ手段はありません。
 
-**SC 経路は 2026-09-10 の裁定（#827 / #502）でリポジトリから削除されました。** env・設定キー・`SuperColliderPlayer`・`packages/engine/src/audio/supercollider/` 配下はいずれも現在のツリーに存在せず、III-2 のコード引用は削除前 (commit `58f558f5`) のスナップショットです。
+削除前のコードの読解は [III-2. オーディオファイル再生](/audio/audio-file-playback) にスナップショットとして残してあります（III-1「SuperCollider との通信」と III-3「scsynth bundle と path resolution」は独立の章としてはサイトから削除し、[ADR-001](/decisions/adr-001-supercollider) と [ADR-003](/decisions/adr-003-scsynth-bundle) に記録を残しています）。
 
-削除前の時点でも、`AudioEngineBackend` の契約に SC 側が実装していない optional メソッド (`selectAudioDevice` など) があり、機能面では Rust 経路が先行していました。
+削除の時点でも、`AudioEngineBackend` の契約には SC 側が実装していない optional メソッド (`selectAudioDevice` など) があり、機能面では Rust 経路が先行していました (engine-backend.ts:32-33)。
 
 ## 「play() → 音」の data flow
 

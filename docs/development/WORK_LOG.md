@@ -913,6 +913,52 @@ Setup Node.js より後にしたのは、runner イメージ同梱の Node で�
 `mutation-backup-must-use-tmpdir` の「コミット済みなら `git checkout --` が確実」は
 **裏を返すと未コミットなら確実に壊す**。未コミットの作業に変異をかけるなら
 `$TMPDIR` へコピーしてから。
+### docs(sites): follow #840 — the SC path is deleted, not "scheduled for deletion" (#502) (Sep 10, 2026)
+
+束 [#840](https://github.com/signalcompose/orbitscore/pull/840) のマージ後追従（docs のみ・コードとテストは触っていない）。
+束の中で docs 追従は概ね済んでいたが、**「削除が決まっている」で止まっていた記述**と、
+**束の途中で自分の前半コミットに追い越された記述**が残っていた。
+
+#### 図が prose と食い違っていた（0-2 アーキテクチャ全景）
+
+`sites/dev/orientation/architecture-overview.md` は本文で「#502 で削除された」と書きながら、
+**Mermaid の図は `audio/supercollider-player.ts` ノード・`env.ORBITSCORE_ENGINE` の spawn ラベル・
+`ORBITSCORE_ENGINE=sc のときだけ` の点線・`scsynth` ノードを描いたまま**だった。
+本章の図は「4 種類のプロセス」を説明する主役なので、prose だけ直しても読者は図を信じる。
+図から SC を落とし、§「SuperCollider 経路」を過去形へ書き直した（ja / en）。
+
+#### 束の中で自分に追い越された記述
+
+| 記述 | 何が起きたか |
+|---|---|
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` の master effects 警告ブロック | `94cfbfc` で置いた「`... not supported yet (A4 era) ...` を **1 回だけ** warn」が、同じ束の `7ce7afa`（warnOnce のキーを `(操作, effect 種別)` にした fix）で**古くなっていた**。新しい文言と、`compressor()` の次の `limiter()` が無言で失敗していた欠陥の記録に差し替え |
+| `sites/dev/editor/vscode-architecture.md` の #836 warning ブロック | 「拡張側の TypeScript は #836 では触られていません（撤去は次の PR）」— その「次の PR」が同じ束の #838 で、`resolveScsynthForUI()` は関数ごと消えている |
+| `sites/dev/glossary.md` の `bundle`(scsynth source) | 「型と分岐そのものは `scsynth-resolver.ts` に残っています」— #838 でファイルごと削除済み |
+
+#### 実態と食い違っていた 3 件
+
+- **`restrictedConfigurations`**: glossary が「2 件挙げている」と書いていたが、`package.json` は
+  **空配列**（`orbitscore.scsynthPath` / `orbitscore.engine` が消えたため）。
+  `vscode-architecture.md` は束の中で正しく直っていたので、glossary だけが取り残されていた
+- **status bar item**: 「scsynth 解決状態 (priority 99)」→ `bundleStatusItem` は現在
+  **daemon** が解決できないときだけ出る（`extension.ts` の `updateBundleStatus()`）
+- **ADR-003 の回避方法**: 「残る回避方法は `ORBIT_SCSYNTH_PATH` だけ」→ #840 でそれを読むコードが
+  無くなったので、**回避方法は残っていない**
+
+#### LinkAudio — 表の 1 行だけが断定に戻っていた
+
+`sites/dev/rust-engine/index.md` の command 表は `LINK_AUDIO_UNAVAILABLE` について
+「TS 側は 1 回だけ warn して hardware で続行する」と断定していた。同じ章の本文は
+`4d5aca0` の訂正（コメントが出典・実機では capture RMS 0 で警告も無し）を既に載せている。
+**要約表が本文と反対のことを言っていた**ので、「設計の意図。実機ではそう振る舞っていない（未決）」へ。
+
+#### やっていないこと
+
+- `packages/` `rust/` の実装・テストは**一切変更していない**（`dsl-e2e-coverage.spec.ts` の baseline を含む）
+- `docs/archive/WORK_LOG_*.md` は起案時点の記録なので触っていない
+- `docs/specs-v2/` は SC / `ORBITSCORE_ENGINE` / master effects の記述を持たないため追従不要
+
+---
 
 ### docs(link-audio): tell the truth about the deleted Link submodule and the unresolved fallback (#502) (Sep 10, 2026)
 

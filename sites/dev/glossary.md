@@ -255,11 +255,11 @@ VS Code が拡張を実行するための専用 Node.js プロセス。Renderer 
 
 ### StatusBarItem
 
-VS Code API。エディタ下部のステータスバーに表示するアイテム。OrbitScore は 2 本使います: engine 動作状態 (`statusBarItem`・priority 100) と daemon バイナリ解決状態 (`bundleStatusItem`・priority 99) です。後者はかつて scsynth の解決状態を出していましたが、#502 で SC 経路が削除された後は daemon だけを見ます（解決できたときはインジケータ自体を隠します）。
+VS Code API。エディタ下部のステータスバーに表示するアイテム。OrbitScore は 2 本使います: engine 動作状態 (`statusBarItem`・priority 100) と、バイナリ解決に失敗したときだけ出るエラー・インジケータ (`bundleStatusItem`・priority 99) です。後者は名前のとおり scsynth bundle の解決状態を出すものでしたが、いまは daemon が解決できないときだけ表示します (`packages/vscode-extension/src/extension.ts` の `updateBundleStatus()`。scsynth 側は #502 で削除)。
 
 ### workspace trust (untrustedWorkspaces)
 
-VS Code の信頼モデル。未信頼のワークスペースでは拡張が既定で制限され `activate()` すら呼ばれません。OrbitScore は `package.json` の `capabilities.untrustedWorkspaces` で `supported: true` を宣言し (#385)、フォルダを開かない loose-file 起動でも activate します。`restrictedConfigurations` にはかつて「ワークスペースが値を決めると別の実行ファイルが動く」2 件 (`orbitscore.scsynthPath` / `orbitscore.engine`) を挙げていましたが、**両方とも #502 で削除**されたため、現在は空配列です。
+VS Code の信頼モデル。未信頼のワークスペースでは拡張が既定で制限され `activate()` すら呼ばれません。OrbitScore は `package.json` の `capabilities.untrustedWorkspaces` で `supported: true` を宣言し (#385)、フォルダを開かない loose-file 起動でも activate します。`restrictedConfigurations` にはかつて「ワークスペースが値を決めると別の実行ファイルが動く」2 件 (`orbitscore.scsynthPath` / `orbitscore.engine`) を挙げていましたが、[#840](https://github.com/signalcompose/orbitscore/pull/840)（#502）で両設定が SC 経路ごと削除されたため、**現在は空配列**です。唯一残るバックエンド（Rust daemon）の実行ファイルはワークスペース設定では変わらないので、restrict すべき設定がありません。
 
 ---
 
@@ -271,7 +271,7 @@ VS Code の信頼モデル。未信頼のワークスペースでは拡張が既
 
 `ScsynthSource` の一つ。`.vsix` に同梱された scsynth バイナリを使う場合の source 識別子。`<engine root>/scsynth/Contents/Resources/scsynth` を指します。
 
-🔴 **[#836](https://github.com/signalcompose/orbitscore/pull/836)（2026-09-10）以降、この候補が当たることはありません。** `packages/engine/scripts/sync-dist.js` が engine を拡張へ同期するたびに `engine/scsynth` を削除するようになり、`.vscodeignore` の keep 指定も外れたためです。型と分岐そのものは `packages/engine/src/audio/supercollider/scsynth-resolver.ts` に残っています（SC の TS 実装の撤去は #836 の本文いわく「次の PR」）。
+🔴 **[#836](https://github.com/signalcompose/orbitscore/pull/836)（2026-09-10）以降、この候補が当たることはありません。** `packages/engine/scripts/sync-dist.js` が engine を拡張へ同期するたびに `engine/scsynth` を削除するようになり、`.vscodeignore` の keep 指定も外れたためです。続く [#838](https://github.com/signalcompose/orbitscore/pull/838)（束 [#840](https://github.com/signalcompose/orbitscore/pull/840)）で `packages/engine/src/audio/supercollider/scsynth-resolver.ts` ごと削除され、**型と分岐そのものが存在しません**。本項は歴史的な記述です。
 
 ### explicit (scsynth source)
 

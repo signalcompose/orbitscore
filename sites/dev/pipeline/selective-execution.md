@@ -22,7 +22,7 @@ Cmd+Enter でコードの一部だけを実行する — これが OrbitScore �
 - **「未完の入力か」の判定は parse エラーの `\bEOF\b` だけ** になった (2026-08 の #607 / #612)。2026-05 版の `Expected RPAREN` 一致は「行の途中の本物の構文エラー」まで未完扱いにしてセッションを沈黙させていました
 - **メタ行の語彙が増えた**: `//#selectAudioDevice` (#484)、`//#savePluginState` (#562)、`//#pluginUi` (#474)、`//#evalMark` (#614)。いずれも DSL バッファには積まず、即時処理して相関 ID 付きの 1 行 JSON を stdout に返します
 - **評価結果が呼び出し元に返る** ようになった (#614)。parse / runtime の診断を `pendingDiagnostics` に溜め、`//#evalMark` の到達時にまとめて返します。MCP の `evaluate_orbitscore` はこれを待ってから `ok` を決めます
-- **engine の spawn は `ORBITSCORE_ENGINE` env を必ず明示する** ようになりました (cutover 後の #377)。ただしこの env は **#502（2026-09-10）で SC 経路ごと削除**され、現在は積んでいません。`repl` サブコマンドの起動シーケンス自体は一貫して変わっていません
+- **engine の spawn が env に積むのは debug フラグと capture seam（#307）だけ** になった。cutover 後の #377 で `ORBITSCORE_ENGINE` を必ず明示する形になっていましたが、[#840](https://github.com/signalcompose/orbitscore/pull/840)（#502）が SC 経路ごとこの env var を撤去しました。バックエンドは Rust daemon の 1 択で、`repl` サブコマンドの起動シーケンスは変わりません
 
 ## 全体の流れ
 
@@ -74,7 +74,7 @@ VS Code 拡張側が「送るコードを決める」、エンジン側が「受
     })
 ```
 
-`stdio: ['pipe', 'pipe', 'pipe']` がポイントです。stdin、stdout、stderr がすべてパイプで接続されるため、拡張側から `engineProcess.stdin.write(...)` でコードを流し込めます。省略した部分ではかつて `env.ORBITSCORE_ENGINE` にバックエンド種別を明示していましたが、**#502 で SC 経路ごと削除**され、いまは debug フラグと capture seam（#307）だけを積みます ([0-2](/orientation/architecture-overview) 参照)。`repl` サブコマンドを受けたエンジンは `startREPLMode()` を呼び出します。
+`stdio: ['pipe', 'pipe', 'pipe']` がポイントです。stdin、stdout、stderr がすべてパイプで接続されるため、拡張側から `engineProcess.stdin.write(...)` でコードを流し込めます。省略した部分で組み立てている `env` には、debug フラグと capture seam（#307）だけが載ります。バックエンド種別を伝えていた `ORBITSCORE_ENGINE` は #502 で撤去されました ([0-2](/orientation/architecture-overview) 参照)。`repl` サブコマンドを受けたエンジンは `startREPLMode()` を呼び出します。
 
 ```typescript
 // packages/engine/src/cli/repl-mode.ts:31-54

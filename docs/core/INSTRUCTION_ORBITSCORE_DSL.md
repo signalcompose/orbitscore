@@ -2100,10 +2100,18 @@ Epic #224 phases 1/2/3/R/4:
   > 🔴 **出荷ビルドでの現在地（2026-09-10・#502 の SC 削除時に実測）**
   >
   > この 3 メソッドは **`RustEnginePlayer` で実装されていない**。呼ぶと
-  > `⚠️  [rust-engine] master effect "..." is not supported yet (A4 era) — it is a no-op on the rust engine.`
-  > を **1 回だけ warn して no-op** になる（`packages/engine/src/audio/rust-engine/rust-engine-player.ts`
-  > の `addEffect` / `removeEffect`）。
+  > `⚠️  [rust-engine] master effect "<種別>" is not supported — it is a no-op. Put a CLAP / VST3 plugin on the master bus instead.`
+  > を warn して no-op になる（`packages/engine/src/audio/rust-engine/rust-engine-player.ts`
+  > の `addEffect` / `removeEffect`）。`removeEffect` 側の文言は
+  > `⚠️  [rust-engine] master effect "<種別>" is not supported — removeEffect is a no-op.`。
   >
+  > 警告は **`(操作, effect 種別)` ごとに 1 回**出る（`add:compressor` / `remove:compressor` /
+  > `add:limiter` … が別々のキー）。#840 のレビューで直すまでは discriminator を渡しておらず
+  > `masterEffect` という kind 名そのものがキーになっていたため、**1 セッションにつき 1 回**しか
+  > warn しなかった。`global.compressor()` の後に `global.limiter()` を足すと、2 つ目以降は
+  > `🎛️ Global: limiter(...)` という成功に見えるログだけが出て**完全に無音で失敗**していた。
+  >
+
   > 実装があったのは **SC バックエンドの synthdef**（`fxCompressor` / `fxLimiter` /
   > `fxNormalizer`）だけで、**#502 で scsynth ごと削除した**。したがって出荷される
   > `.vsix` には**この 3 つを実行する経路が存在しない**。

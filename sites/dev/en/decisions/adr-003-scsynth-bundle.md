@@ -351,9 +351,11 @@ Two workarounds:
 1. **Via environment variable**: add `export ORBIT_SCSYNTH_PATH=/Applications/SuperCollider.app/Contents/Resources/scsynth` to `.zshenv` or similar
 2. **Bundle extraction**: run `npm run build:bundle` first to place the binary in `engine/scsynth/`
 
-🔴 **The second one is impossible since [#836](https://github.com/signalcompose/orbitscore/pull/836).** The `build:bundle` script and `scripts/extract-scsynth-bundle.sh` were deleted, and `sync-dist.js` wipes `engine/scsynth` on every sync. The only remaining workaround is the first one (`ORBIT_SCSYNTH_PATH`).
+🔴 **The second one is impossible since [#836](https://github.com/signalcompose/orbitscore/pull/836).** The `build:bundle` script and `scripts/extract-scsynth-bundle.sh` were deleted, and `sync-dist.js` wipes `engine/scsynth` on every sync. At that point the only remaining workaround was the first one (`ORBIT_SCSYNTH_PATH`).
 
-Since cutover #108, in addition to this, `ORBITSCORE_ENGINE=sc` (`orbitscore.engine: "sc"` in VS Code) is needed just to select the SC path in the first place.
+🔴 **Since [#840](https://github.com/signalcompose/orbitscore/pull/840) (#502) the first one is impossible too.** The SC path itself — the resolver, `SuperColliderPlayer`, `ORBITSCORE_ENGINE` / `orbitscore.engine` — was deleted, so **no code reads `ORBIT_SCSYNTH_PATH` any more**. Both workarounds above are kept as a historical record.
+
+Between cutover #108 and #502, in addition to this, `ORBITSCORE_ENGINE=sc` (`orbitscore.engine: "sc"` in VS Code) was needed just to select the SC path in the first place.
 
 ---
 

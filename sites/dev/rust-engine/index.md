@@ -283,7 +283,7 @@ arm は次のとおりです（`cfg` 列は feature で分岐する arm。`SetBu
 | `SelectAudioDevice` | ランタイム device 切替 | #484 D2・audio owner thread へ委譲。#661 で候補を先に probe する |
 | `GetStatus` | daemon/protocol version・sample rate・`render_contentions` 等 | #661 で `output`（実際に鳴っているデバイスと縮退の履歴）と `callback`（生存カウンタ）が加わった |
 | `LoadSample` / `UnloadSample` | audio file の登録 / 解除 | |
-| `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | 🔴 feature `link-audio` は **default off** で、出荷ビルドでは有効化していない。無効なら `LINK_AUDIO_UNAVAILABLE`（能力の欠落）を返し、TS 側は 1 回だけ warn して hardware で続行する。詳細は下の「LinkAudio egress は出荷ビルドに入っていない」 |
+| `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | 🔴 feature `link-audio` は **default off** で、出荷ビルドでは有効化していない。無効なら `LINK_AUDIO_UNAVAILABLE`（能力の欠落）を返す。TS 側は「1 回だけ warn して hardware で続行する」**設計の意図**だが、実機ではそう振る舞っていない（🔴 **未決** — 下の「LinkAudio egress は出荷ビルドに入っていない」の実測を読むこと） |
 | `LoadPlugin` | plugin の attach（`role` / `bus` / `instance` / `state`） | in-process build は `role` 必須 |
 | `ApplyEffectChain` | ラック（チェーン全体）の prepare-commit 適用 | #628・`mode: diff / rebuild` |
 | `ReplacePlugin` | slot tenant の差し替え | #618（instrument）/ #625（effect） |
