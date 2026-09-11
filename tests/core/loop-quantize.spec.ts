@@ -28,7 +28,15 @@ describe('LOOP quantize startup', () => {
   // Captured calls to scheduleSliceEvent.
   const captured: ScheduledEventArgs[] = []
 
+  // The wall clock is frozen for the whole describe (#869). `startTime` below is
+  // derived from the same constant, so `Date.now() - scheduler.startTime` is
+  // exactly `elapsedMs` — a real clock ticking between those two reads made
+  // currentTime one millisecond late, which moved the "already on a boundary"
+  // test a whole bar (2000 → 4000).
+  const FROZEN_NOW = 1_700_000_000_000
+
   beforeEach(() => {
+    vi.spyOn(Date, 'now').mockReturnValue(FROZEN_NOW)
     captured.length = 0
     elapsedMs = 0
 
@@ -48,9 +56,10 @@ describe('LOOP quantize startup', () => {
       reinitializeSequenceTracking: vi.fn(),
       isRunning: true,
       // Force the wall clock to read scheduler-relative `elapsedMs` so
-      // sequence.loop() sees `currentTime = elapsedMs`.
+      // sequence.loop() sees `currentTime = elapsedMs` exactly. Deriving this
+      // from FROZEN_NOW rather than a live Date.now() is what makes it exact.
       get startTime() {
-        return Date.now() - elapsedMs
+        return FROZEN_NOW - elapsedMs
       },
       loadBuffer: vi.fn().mockResolvedValue(undefined),
     } as any
