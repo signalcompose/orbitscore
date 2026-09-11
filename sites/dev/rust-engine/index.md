@@ -1,8 +1,8 @@
 ---
 title: "RE-1. daemon アーキテクチャ概観"
 chapter-id: "RE-1"
-verified-against: 58b8c1c
-verified-at: "2026-09-10"
+verified-against: e4d4199
+verified-at: "2026-09-11"
 status: draft
 ---
 
@@ -528,7 +528,7 @@ fn render_shared_block(
 （デバイス配置の段が増えたぶん、2ch 以外では配置のコストが常に乗ります）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1846-1936
+// rust/crates/orbit-audio-native/src/output.rs:1846-1932
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -616,10 +616,6 @@ fn render_block_with_sources(
         stats.record(t0.elapsed().as_nanos() as u64);
     }
 }
-
-#[inline]
-fn execute_master_line(
-    master: &mut MasterLine,
 ```
 
 ### 直行デバイスライン — master を通さない出口
@@ -709,7 +705,8 @@ store することになります。
 
 もうひとつの変更は master gain の適用点です。`MasterLine` は master ラック（旧 `post`）と
 gain を 1 つの構造体にまとめ、**ラック → gain** の順を固定します。gain は control（`SetGlobalGain`）が
-atomic に書いた目標値へ、block ごとに寄せていく形です。
+atomic に書いた目標値へ、block ごとに寄せていく形です。返り値は #859（2026-09-11）以降
+スカラーではなく `LineRamp` で、**その block の中でどのフレームにどの値を掛けるか**を持ちます。
 
 ```rust
 // rust/crates/orbit-audio-native/src/output.rs:871-881
@@ -727,8 +724,17 @@ atomic に書いた目標値へ、block ごとに寄せていく形です。
 ```
 
 `ramp_frames` は 5 ms 相当のフレーム数で、`MasterLine::new` が sample_rate から**構築時に**
-算出します（RT では割り算の分母として使うだけです）。block が ramp より長ければ `frac` が
-1.0 に飽和して 1 回で目標へ到達し、短ければ何 block かかけて寄っていきます。
+算出します（RT では割り算の分母として使うだけです）。**block 終端の値**は block が ramp より
+長ければ `frac` が 1.0 に飽和して 1 回で目標へ到達し、短ければ何 block かかけて寄っていきます。
+
+🔴 **block 終端だけを見ていると読み違えます**（#859・2026-09-11 に修正）。この式は長らく
+「その block 全体に掛けるスカラー 1 個」として使われており、`ramp_frames` が 240（5 ms @48k）
+なのに実機のブロック長が **512** だったため、`frac` が常に 1.0 に飽和して **ランプが 1 ブロックで
+完了**していました（= ブロック境界の段差）。いまは `LineRamp::at(frame)` が
+`start + step × frame` を返し、`step` は `(target − start) / ramp_frames` なので、
+**ランプは block 長ではなく `ramp_frames` サンプルかけて進みます**。512 frame の block なら
+先頭 240 frame が補間で、残りは `end` を保持します。**`at(frames)` は旧式の値とビット一致する**
+ので、block 終端を見ている既存の golden は動きません。
 
 ここで押さえておきたいのは、**production の乗算経路がこの 1 本になった**という点です。
 `orbit_audio_core::Engine::set_global_gain`（core の scheduler ramp）は daemon から呼ばれなくなり、

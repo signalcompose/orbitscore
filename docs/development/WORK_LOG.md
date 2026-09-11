@@ -17,6 +17,29 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs(sites): re-anchor three citations #859 left pointing at the wrong code (Sep 11, 2026)
+
+PR [#860](https://github.com/signalcompose/orbitscore/pull/860)（merge `e4d4199`）の追従。
+#860 自身が `34e12b3` で dev サイトを更新しているが、**引用の再アンカーが 3 箇所ずれていた**。
+`check-citations.mjs` は「引用文字列が実ファイルと一致するか」しか見ないので、
+**別の関数に一致してしまった引用は緑のまま通る**。
+
+| 箇所 | 何が起きていたか |
+|---|---|
+| `sites/dev{,/en}/signal-chain/mixer-audio-line.md` | bus post-loop の `LineOp::Output` 腕を引用していたはずが、`execute_master_line`（master 側）の `LineOp::Output` 腕に再アンカーされていた。直後の本文「`Output` として実行されるのは `Master` / `Bus` / `Device` の 3 つ」と引用が食い違う（master 側は `Device` 以外を `debug_assert!(false)` で落とす）。`output.rs:2566-2592` へ戻した |
+| 同上（pan 節） | `apply_line_pan` の引用が切り詰められ、直後の本文が指す **`√2`** が引用内に無くなっていた。`√2` は #859 で `line_pan_coefficients` へ切り出されたので、その関数（`output.rs:2227-2243`）の引用を足した |
+| `sites/dev{,/en}/rust-engine/index.md` | `render_block_with_sources` の引用が 4 行はみ出して `execute_master_line` のシグネチャを含んでいた。`1846-1932`（関数の閉じ括弧）で止めた |
+
+あわせて、#859 が**コード引用だけ更新して本文を更新しなかった**箇所を直した
+（`sites/dev{,/en}/rust-engine/index.md` の `advance_gain` 節）。旧本文の
+「block が ramp より長ければ 1 回で目標へ到達」は、いまはブロック**終端**の値の話であって、
+ブロック内は `ramp_frames` サンプルかけて補間される。これは #859 が直した欠陥そのものなので、
+そのまま残すと修正前の振る舞いを説明する文が残ることになる。
+
+4 章の `verified-against` / `verified-at` を `e4d4199` / 2026-09-11 に更新。
+
+検証: `npm run docs:check` **938 citations / 0 failed** / `docs:build`（user / dev）両方緑。
+
 ### fix(clap-host): stop warning on the normal path for effects without note ports (#860) (Sep 11, 2026)
 
 束 B の最終ゲートで `auto-records and restores all five plugin receiver kinds` が落ちた。
@@ -57,6 +80,7 @@ instrument が note ポートを持たない場合も debug になる。ただ�
 
 検証: `cargo fmt --check` 緑 / `cargo clippy -p orbit-clap-host --all-targets -- -D warnings` 緑 /
 `cargo test -p orbit-clap-host --lib` **29 passed**。
+
 ### fix(native): interpolate gain and pan ramps inside the block (#859) (Sep 11, 2026)
 
 owner 裁定 2026-09-11（#851 B-1・**案 A**）。E2E-7 が測っていたのは**実装の欠陥**であって

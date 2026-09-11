@@ -1,8 +1,8 @@
 ---
 title: "SC-2. ミキサーとオーディオライン — sum / aux / send / output / master gain"
 chapter-id: "SC-2"
-verified-against: f6c9c37
-verified-at: "2026-09-08"
+verified-against: e4d4199
+verified-at: "2026-09-11"
 status: draft
 ---
 
@@ -494,7 +494,7 @@ pub enum LineOp {
 出口の実行部分はこうなっています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2566-2590
+// rust/crates/orbit-audio-native/src/output.rs:2566-2592
                 LineOp::Output(output) => {
                     let dest = effective_line_output_dest(
                         &mut first_output,
@@ -520,6 +520,8 @@ pub enum LineOp {
                                 &left[i].buffer[..bs],
                                 output_channels,
                                 ramp,
+                            );
+                        }
 ```
 
 `OutputDest` は 5 値ありますが、`Output` として実行されるのは `Master` / `Bus` / `Device` の
@@ -576,6 +578,30 @@ fn apply_line_pan(buf: &mut [f32], frames: usize, ramp: LineRamp) {
     }
     let (start_left, start_right) = line_pan_coefficients(ramp.start);
     let (end_left, end_right) = line_pan_coefficients(ramp.end);
+```
+
+位置から L/R 係数を作るのは `line_pan_coefficients` に切り出されています（#859・2026-09-11）。
+`apply_line_pan` はもうここを直接計算せず、**ランプの始点と終点でこの関数を呼ぶだけ**です。
+
+```rust
+// rust/crates/orbit-audio-native/src/output.rs:2227-2243
+#[inline]
+fn line_pan_coefficients(pan: f32) -> (f32, f32) {
+    // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
+    //
+    // 🔴 これは丸め誤差の除去でもある。f32 では `sqrt(2) * cos(pi/4) = 0.99999994` で
+    // **1.0 ちょうどにならない**ため、省かないと `pan(0)` を書いた譜面が書かない譜面と
+    // 6e-8 だけずれる。設計 §4.1 は「center で `(1, 1)`（unity）」と書いているので、
+    // 省く方が**文書どおり**になる。`LineOp::Gain` が `gain != 1.0` で同じことをしている。
+    if pan == 0.0 {
+        return (1.0, 1.0);
+    }
+    let (left, right) = equal_power_pan(pan);
+    (
+        left * std::f32::consts::SQRT_2,
+        right * std::f32::consts::SQRT_2,
+    )
+}
 ```
 
 要点は `equal_power_pan` そのものではなく **`√2` を掛けた値**を使っていることです。発音側の
