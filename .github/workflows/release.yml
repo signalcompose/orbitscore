@@ -105,7 +105,13 @@ jobs:
 
       - name: Package .vsix
         working-directory: packages/vscode-extension
-        run: npx vsce package --target "$VSIX_TARGET" --no-yarn
+        # 🔴 --no-dependencies is load-bearing (#873). vsce's dependency walk cannot
+        # be used under npm workspaces: `npm list` resolves each runtime dependency
+        # at both the hoisted repo root and the package, and vsce maps the two source
+        # paths onto one .vsix entry, which the VSIX format rejects. The extension's
+        # dependencies are placed in dist/node_modules by the build instead
+        # (scripts/install-extension-deps.sh) and ship as ordinary files.
+        run: npx vsce package --target "$VSIX_TARGET" --no-yarn --no-dependencies
 
       - name: Verify .vsix native runtime integrity (post-package gate)
         run: |
@@ -179,6 +185,20 @@ jobs:
               exit 1
             fi
             echo "engine dependency $DEP present in packaged .vsix"
+          done
+
+          # 拡張自身の実行時依存（#873）。engine 側と同型の事故が拡張側にもあり、
+          # そちらだけ検査が無かった: npm workspaces が @modelcontextprotocol/sdk と
+          # zod をリポジトリルートへ hoist するため extension/node_modules に残らず、
+          # dist/mcp-server.js のトップレベル require が cold install で落ちて
+          # activate() がまったく走らなかった。ビルドも上の検査も全部緑のまま。
+          EXT_DEPS=$(node -e 'console.log(Object.keys(require("./packages/vscode-extension/package.json").dependencies || {}).join(" "))')
+          for DEP in $EXT_DEPS; do
+            if [ ! -d "$VSIX_CHECK/extension/dist/node_modules/$DEP" ]; then
+              echo "::error::extension runtime dependency '$DEP' missing from packaged .vsix at dist/node_modules/ — activate() would throw \"Cannot find module\" on a cold install (#873)" >&2
+              exit 1
+            fi
+            echo "extension dependency $DEP present in packaged .vsix"
           done
 
           # 標準プラグイン（#628 / SC.10.8）: child は自分の実行ファイルの隣の

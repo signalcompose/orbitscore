@@ -416,8 +416,8 @@
     }
   },
   "scripts": {
-    "build": "npm run build:engine && tsc -p tsconfig.json",
-    "build:clean": "npm run build:engine:clean && tsc -p tsconfig.json",
+    "build": "npm run build:engine && tsc -p tsconfig.json && bash ../../scripts/install-extension-deps.sh",
+    "build:clean": "npm run build:engine:clean && tsc -p tsconfig.json && bash ../../scripts/install-extension-deps.sh",
     "build:engine": "cd ../engine && npm run build && bash ../../scripts/install-engine-deps.sh && bash ../../scripts/copy-daemon-bin.sh",
     "build:engine:clean": "cd ../engine && npm run build:clean && bash ../../scripts/install-engine-deps.sh && bash ../../scripts/copy-daemon-bin.sh",
     "dev": "tsc -w"

@@ -17,6 +17,80 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(release): ship the extension's own runtime deps so the .vsix can activate (#873) (Sep 11, 2026)
+
+🔴 **凍結版リリースのブロッカー。** cold install（#138・ゴールの最終段）で発見した。
+素の VS Code に `.vsix` を入れると、**拡張が activate せずに落ちていた**。
+
+```
+Error: Cannot find module '@modelcontextprotocol/sdk/server/mcp.js'
+  at Object.<anonymous> (.../local.orbitscore-3.0.0/dist/extension.js:74:22)
+```
+
+#### 原因 — npm workspaces の hoisting
+
+`packages/vscode-extension/package.json` は `@modelcontextprotocol/sdk` と `zod` を実行時依存として
+宣言しているが、どちらも npm workspaces が**リポジトリルートへ hoist** する。`.vscodeignore` は
+`../../**` と `../*/**` でパッケージ外を全部落とすので、`vsce package` が同梱する
+`extension/node_modules` は **`@types` と `undici-types` の 2 つだけ**だった（実測）。
+
+`require` は遅延ではない: `dist/extension.js:74` → `require("./mcp-server")` →
+`dist/mcp-server.js:51-53` がトップレベルで SDK と zod を要求する。よって activate が無条件に落ちる。
+
+#### engine 側では 2 回起きていた事故が、拡張側だけ無防備だった
+
+| Issue | 欠けた依存 | 症状 |
+|---|---|---|
+| #209 | `@julusian/midi` / `uuid` / `ws` | engine が MIDI 初期化で落ちる |
+| #654 | `yaml` | engine が最初の evaluate で落ちる |
+| **#873** | **`@modelcontextprotocol/sdk`** | **activate() がそもそも走らない** |
+
+対策の `scripts/install-engine-deps.sh` は **engine の依存しか見ていなかった**。ロジックを
+`scripts/install-bundle-deps.sh` へ抽出し、engine と拡張の両方がそこを通るようにした（DRY）。
+
+#### 置き場所が `dist/node_modules` なのには理由が 2 つある
+
+1. **`vsce package` はパッケージ直下の `node_modules` を無条件に除外する。**
+   `.vscodeignore` に `!node_modules/**` と書いても**上書きできない**（実測）。
+   `engine/node_modules` や `dist/node_modules` のような入れ子は特別扱いされず普通に入る
+2. **Node の解決順で最初に当たる。** `dist/mcp-server.js` から見て `dist/node_modules` は
+   1 つ目の候補なので、パスの書き換えが要らない
+
+パッケージ直下へ入れると**パッケージング自体が壊れる**: 依存が hoist 先とローカルの 2 箇所で
+解決できるようになり、`vsce` の依存探索が 1 つの `.vsix` エントリに 2 つの元パスを出して
+`the following files have the same case insensitive path` で失敗する。だから
+`vsce package` には **`--no-dependencies`** を付け、探索そのものを止めてある。
+
+#### CI が捕まえられなかった理由と、足したゲート
+
+`release.yml` の post-package 検証は `packages/engine/package.json` の依存しか突合していなかった。
+同型の検査を**拡張自身の依存**にも足した（`extension/dist/node_modules/<dep>` の実在確認）。
+この PR は `packages/vscode-extension/**` と `release.yml` の両方を触るので、
+release smoke が本 PR 上で実際に `.vsix` を作ってこのゲートを通す。
+
+#### 検証 — cold install で音が出るところまで
+
+空の `--extensions-dir` に `.vsix` を入れ、**`--extensionDevelopmentPath` を使わず**
+インストール済み拡張として素の VS Code を起動し、MCP だけで駆動した。
+
+| 確認 | 結果 |
+|---|---|
+| activate | ✅ `Cannot find module` 0 件 |
+| MCP サーバ | ✅ 2 秒で listen |
+| daemon の解決 | ✅ `/private/tmp/orbcold-e-*/local.orbitscore-3.0.0/engine/bin/darwin-arm64/orbit-audio-daemon` |
+| 評価 | ✅ `ok` |
+| **音** | ✅ capture 36.10 s・非ゼロ **46.7%**・**RMS 0.053537**・peak 1.133490 |
+
+🔴 **daemon が拡張バンドルから解決された**ことが、cold install でしか通らない経路の確認にあたる。
+dev host（`--extensionDevelopmentPath`）はリポジトリの `rust/target/release` を引くため、
+`extension-bundle` 分岐を一度も通らない。#138 がここまで「⏳ Pending」だった穴がこれ。
+
+検証: `npm test` 2,338 passed / 0 failed・`npm run lint` 緑・引用 944 / 0 failed
+（`release.yml` に行を足したので `signal-chain/index.md` の `184-193` を `204-213` へ再アンカー。
+着地先が標準プラグイン同梱ゲートであることを目視で確認済み）。
+
+Closes #873
+
 ### chore(release): bump the extension to 3.0.0 and the DSL spec to 1.2 (#843) (Sep 11, 2026)
 
 owner 裁定 2026-09-11（#851 A-1）: **`v3.0.0` / DSL 1.2**。

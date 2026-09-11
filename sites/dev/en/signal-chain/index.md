@@ -1334,7 +1334,7 @@ On the hardware side, `release.yml` (macos-14) builds the bundle, runs the rack 
 ```
 
 ```yaml
-# .github/workflows/release.yml:184-193
+# .github/workflows/release.yml:204-213
           # 標準プラグイン（#628 / SC.10.8）: child は自分の実行ファイルの隣の
           # `std-plugins/<name>.clap` を見て解決する。同梱が落ちると DSL の
           # `Gain(db: …)` が実行時に「解決できない」で落ちるだけで、
