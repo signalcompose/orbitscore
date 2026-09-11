@@ -52,7 +52,7 @@ Write `.orbs` patches and play them with `Cmd+Enter`. OrbitScore drives a bundle
 - **comp** — automatic accompaniment: voice-leading (C1) + comp rhythm (C2a)
 - **quantize** — bar-quantized scheduling control
 - **Audio foundation** — native daemon sample playback (WAV/AIFF/MP3/MP4), `.chop()` slicing, polymeter, `RUN()`/`LOOP()`/`MUTE()` transport
-- **Post-2.0 (shipped on `main`, extension 2.1.0)** — Rust engine as default (#108), out-of-process CLAP/VST3 hosting (#340–#424), per-sequence inserts (#434), plugin UI (#474), catalog (#463), replacement (#618/#625), racks + standard `Gain` (#628), mixer foundation (#643), live playhead (#390/#654). See [WORK_LOG.md](docs/development/WORK_LOG.md).
+- **Post-2.0 (shipped on `main`, extension 3.0.0)** — Rust engine as default (#108), out-of-process CLAP/VST3 hosting (#340–#424), per-sequence inserts (#434), plugin UI (#474), catalog (#463), replacement (#618/#625), racks + standard `Gain` (#628), mixer foundation (#643), live playhead (#390/#654). See [WORK_LOG.md](docs/development/WORK_LOG.md).
 
 > ⚠️ **Ableton Link / LinkAudio is not enabled in released builds, and nothing is audible under
 > `global.linkAudio()`.** Ableton Link is dual-licensed GPL-2.0-or-later / commercial, so the
@@ -326,7 +326,7 @@ install it — nothing else is required. OrbitScore is not published on the VS C
 Open VSX.
 
 ```bash
-code --install-extension orbitscore-<version>.vsix
+code --install-extension orbitscore-darwin-arm64-<version>.vsix
 ```
 
 The rest of this section is for building from source.

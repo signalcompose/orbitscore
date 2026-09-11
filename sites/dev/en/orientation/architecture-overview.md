@@ -1,12 +1,12 @@
 ---
 title: "0-2. Architecture Overview"
 chapter-id: "0-2"
-verified-against: 69dc968
-verified-at: "2026-09-01"
+verified-against: 56c34c3
+verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, with **only the version section** brought up to #843 (PR [#871](https://github.com/signalcompose/orbitscore/pull/871), the bump to extension 3.0.0 / `DSL_VERSION` 1.2) on 2026-09-11. Every other section is still the reading as of 69dc968. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # 0-2. Architecture Overview
 
@@ -567,12 +567,14 @@ export const ENGINE_VERSION = '2.0.0'
 export const DSL_VERSION = '1.2'
 ```
 
-- **engine (product) version**: `2.0.0` — the WCTM milestone including MIDI output + Pitch DSL + session log
-- **DSL spec version**: `1.1` — the `PITCH_DSL_SPEC_v1.1` axis (separate from the product version)
-- **VS Code extension package version**: `2.1.0` (`packages/vscode-extension/package.json`)
+- **`ENGINE_VERSION`**: `2.0.0` — the version the `.orbslog` meta header carries; the WCTM milestone including MIDI output + Pitch DSL + session log
+- **DSL spec version**: `1.2` — the pitch DSL spec axis (separate from both `ENGINE_VERSION` and the extension version)
+- **VS Code extension package version**: `3.0.0` (`packages/vscode-extension/package.json`) — 🔴 the **source of truth**: this is what the `.vsix` and the git tag carry
 - **daemon protocol**: `v0.1` (`packages/engine/src/audio/rust-engine/index.ts:4`)
 
-Note that the "DSL v3.0" that appears in CLAUDE.md and the glossary names the syntax generation (the `sequence` → `init` pivot, [ADR-002](/en/decisions/adr-002-dsl-v3-pivot)); it is a different axis from `DSL_VERSION = '1.1'` (the pitch DSL spec version).
+Those three are **separate axes and are deliberately not synced** (`docs/design/656-release-design.md` §4.4). The mismatch between `ENGINE_VERSION 2.0.0` and the extension's `3.0.0` is by design, not an accident. The extension went to 3.0.0 in #843 (PR [#871](https://github.com/signalcompose/orbitscore/pull/871)); `DSL_VERSION` went to 1.2 in the same PR but for a different reason (the DSL surface changed).
+
+Note that the "DSL v3.0" that appears in CLAUDE.md and the glossary names the syntax generation (the `sequence` → `init` pivot, [ADR-002](/en/decisions/adr-002-dsl-v3-pivot)); it is a different axis from `DSL_VERSION = '1.2'` (the pitch DSL spec version).
 
 ## Navigating to Later Chapters
 
