@@ -102,7 +102,7 @@ impl ScheduledSample {
 /// 等パワー（equal-power）パン則。SC の `Pan2` と同じく pan=0（中央）で各チャンネル
 /// 1/√2 (≈0.707, -3dB)、pan=-1 で左 unity・右 0、pan=+1 で逆。`pan` は範囲外を clamp。
 /// 戻り値は (左ゲイン, 右ゲイン)。ステレオ出力以外では呼び出し側で適用しない。
-fn equal_power_pan(pan: f32) -> (f32, f32) {
+pub fn equal_power_pan(pan: f32) -> (f32, f32) {
     let pan01 = (pan.clamp(-1.0, 1.0) + 1.0) * 0.5; // [-1,1] -> [0,1]
     let angle = pan01 * std::f32::consts::FRAC_PI_2;
     (angle.cos(), angle.sin())

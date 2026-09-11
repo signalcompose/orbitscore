@@ -34,7 +34,7 @@ device"; the presence of capture does not change the output samples themselves (
 it does not mutate).
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1690-1713
+// rust/crates/orbit-audio-native/src/output.rs:1846-1869
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -226,7 +226,7 @@ range**. On real hardware in #739 this produced six false detections. The fix is
 declared size to zero, so the analysis sees the whole of the physical bytes.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:88-95
+// tests/e2e/helpers/capture-windows.ts:94-101
 export function readCaptureForAnalysis(capturePath: string): Buffer {
   const capture = fs.readFileSync(capturePath)
   if (capture.toString('ascii', 36, 40) !== 'data') {
@@ -255,7 +255,7 @@ The awkward part is how that failure reaches the test: as a **seemingly unrelate
 as far as suspecting the capture path. The preparation is therefore folded into one function.
 
 ```typescript
-// tests/e2e/helpers/capture-windows.ts:71-74
+// tests/e2e/helpers/capture-windows.ts:77-80
 export function prepareCapturePath(capturePath: string): void {
   fs.mkdirSync(path.dirname(capturePath), { recursive: true })
   fs.rmSync(capturePath, { force: true })
@@ -354,7 +354,7 @@ guarantee the sequence "stream stops (callback stops) → writer drains
 remaining ring contents and finalizes".
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:609-618
+// rust/crates/orbit-audio-native/src/output.rs:608-617
 /// 生きている間はストリームを保持する RAII ハンドル。
 pub struct OutputStream {
     _stream: Stream,
@@ -454,7 +454,7 @@ under `rust/`, it fails before running a single test. Some directories are exclu
 walk, which the next subsection covers (#713).
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:200-214
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:218-232
         walk(full)
       } else if (entry.name.endsWith('.rs') || entry.name === 'Cargo.toml') {
         const at = fs.statSync(full).mtimeMs
@@ -504,7 +504,7 @@ test at startup.
 So three directories, `tests` / `benches` / `examples`, were dropped from the walk.
 
 ```typescript
-// tests/e2e/orbitstudio-mcp-gated.spec.ts:195-199
+// tests/e2e/orbitstudio-mcp-gated.spec.ts:213-217
         // ⚠️ **`src/` は除外しない。** daemon が依存するコードが新しければ、
         // ガードは本来の役目どおり赤くなるべきである（CLAUDE.md「実機テストは最新ビルドで走る」）。
         if (entry.name === 'tests' || entry.name === 'benches' || entry.name === 'examples') {
