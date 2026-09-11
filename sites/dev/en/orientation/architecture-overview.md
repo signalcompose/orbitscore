@@ -12,11 +12,11 @@ status: draft
 
 You write `seq.play(1, 2, 3)` in an `.orbs` file, press `Cmd+Enter`, and a moment later you hear sound. What happens in between? That is the question of this chapter.
 
-The answer does not fit inside a single process. It spans at least four kinds of processes: the **VS Code Extension Host**, the **engine** (the Node.js DSL runtime), **orbit-audio-daemon** (the Rust audio daemon), and the **plugin children** (out-of-process plugin hosts) that the daemon in turn spawns. SuperCollider (scsynth) is outside this picture; it is an opt-out path that only appears when you select it explicitly with `ORBITSCORE_ENGINE=sc`.
+The answer does not fit inside a single process. It spans at least four kinds of processes: the **VS Code Extension Host**, the **engine** (the Node.js DSL runtime), **orbit-audio-daemon** (the Rust audio daemon), and the **plugin children** (out-of-process plugin hosts) that the daemon in turn spawns. SuperCollider (scsynth) is outside this picture. It used to be an opt-out path selectable explicitly with `ORBITSCORE_ENGINE=sc`, but it was **removed by the 2026-09-10 ruling (#827 / #502)**.
 
 ## Drift since the 2026-05 edition
 
-The 2026-05-05 edition of this chapter was written around a "three processes: extension / engine / scsynth" picture. With cutover #108 on 2026-07-03 (WORK_LOG 6.179) the default audio backend switched to the Rust daemon, and that picture no longer holds for the default path. What follows is a full rewrite against the code as of 2026-09-01. The SC path itself still exists under `packages/engine/src/audio/supercollider/`, so read the SuperCollider chapters in Part III as a "historical reading of the opt-out path."
+The 2026-05-05 edition of this chapter was written around a "three processes: extension / engine / scsynth" picture. With cutover #108 on 2026-07-03 (WORK_LOG 6.179) the default audio backend switched to the Rust daemon, and that picture no longer holds for the default path. What follows is a full rewrite against the code as of 2026-09-01. The SC path itself still exists under `packages/engine/src/audio/supercollider/` as of 69dc968, but the 2026-09-10 ruling (#827 / #502) decided to remove it from the repository. The former Part III SuperCollider-only chapters (III-1, III-3) have been removed from the site; their record lives on in ADR-001 / ADR-003.
 
 Incidentally, code comments refer to the same cutover by two numbers, `#108` and `#369` (`engine-backend.ts` says `#108`; `extension.ts` and `copy-daemon-bin.sh` say `#369`).
 
@@ -84,7 +84,6 @@ graph TD
 | **engine** | Node.js (`cli-audio.js repl`) | TypeScript | Parses the DSL, interprets the AudioIR, computes musical timing (scheduler), sends commands to the daemon |
 | **orbit-audio-daemon** | native (Rust) | Rust | Receives commands over WebSocket, renders audio in the cpal realtime callback, supervises plugin children |
 | **plugin child** | native (Rust, child of the daemon) | Rust | Hosts the actual CLAP / VST3 plugin in an isolated process; exchanges audio with the daemon over shared memory |
-| (opt-out) **scsynth** | native (C++) | C++ | Takes over DSP from the daemon only when `ORBITSCORE_ENGINE=sc` |
 
 **Input** is received by the extension, **meaning** is interpreted by the engine, **sound** is produced by the daemon, and **untrusted code (3rd-party plugins)** is isolated in children — that is the division of labor.
 
@@ -100,30 +99,20 @@ graph TD
 
 ### Starting the engine: pre-check → env → spawn
 
-`startEngine()` is responsible for starting the engine. The first thing it does is decide "which backend to use," normalizing the `orbitscore.engine` setting with the engine-side `resolveEngineKind` (loaded from compiled JS via a runtime require).
+`startEngine()` is responsible for starting the engine. **The 2026-09-10 ruling (#827 / #502) removed the SC path and the `getConfiguredEngineKind()` branch entirely**, leaving only the startup path for the sole remaining backend, the Rust daemon. The first thing it does is **have backend binary resolution precede spawning the engine**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2151-2154
-  // engine kind (#377): scsynth is only relevant under the 'sc' kind. Under
-  // 'rust' (default since cutover #369), skip the scsynth pre-check entirely —
-  // the native daemon doesn't need scsynth to be resolvable.
-  const engineKind = getConfiguredEngineKind()
-```
-
-A point to note here is that **backend binary resolution always precedes spawning the engine**. Under the default `rust` kind it pre-checks the daemon binary.
-
-```typescript
-// packages/vscode-extension/src/extension.ts:2176-2185
-    const daemonResolution = resolveDaemonForUI()
-    if (!daemonResolution) {
-      outputChannel?.appendLine(
-        '❌ orbit-audio-daemon not found — engine cannot start with the rust backend.',
-      )
-      vscode.window.showErrorMessage(
-        '⚠️ orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.',
-      )
-      return false
-    }
+// packages/vscode-extension/src/extension.ts:1941-1950
+  const daemonResolution = resolveDaemonForUI()
+  if (!daemonResolution) {
+    outputChannel?.appendLine(
+      '❌ orbit-audio-daemon not found — engine cannot start with the rust backend.',
+    )
+    vscode.window.showErrorMessage(
+      '⚠️ orbit-audio-daemon not found. Reinstall the extension, build it via `cd rust && cargo build --release`, or set ORBIT_AUDIO_DAEMON_PATH to a custom binary.',
+    )
+    return false
+  }
 ```
 
 If the daemon cannot be found, the engine is not started at all. The reason is in the comment: if the engine were started first and the daemon spawn failed inside it, an "Engine started" success toast would appear before the failure log caught up — a false-success UX.
@@ -141,32 +130,33 @@ export function resolveDaemonBinaryForExtension(): EngineBinaryResolution {
 }
 ```
 
-What is interesting is that the resolved path is not handed to the engine via env. The spawned engine CLI runs the same `resolveDaemonBinaryPath()` itself, so the result is deterministically identical and there is no reason to re-inject it, as the comment states explicitly (extension.ts:2075-2077).
+What is interesting is that the resolved path is not handed to the engine via env. The spawned engine CLI runs the same `resolveDaemonBinaryPath()` itself, so the result is deterministically identical and there is no reason to re-inject it.
 
-The backend kind is **always set explicitly** on the engine through the `ORBITSCORE_ENGINE` env var.
+Only the debug flag and the capture seam (#307) go into env. **The `ORBITSCORE_ENGINE` env var and the `ORBIT_SCSYNTH_PATH` hand-off, which used to announce the backend kind, were removed in #502** — with a single backend there is nothing left to announce.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2240-2253
-  if (engineKind === 'rust') {
-    env.ORBITSCORE_ENGINE = 'rust'
-    outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native, default)')
-  } else {
-    env.ORBITSCORE_ENGINE = 'sc'
-
-    // Pass scsynth path to engine via env. pre-check で解決済 (scResolution.path) を
-    // そのまま engine に渡すことで resolver の二重 fs.statSync を avoid + pre-check と
-    // engine 内部での resolution 結果ズレ (タイミング差) のリスクを排除。
-    // scResolution is guaranteed non-null here: the 'sc' branch above returns
-    // early when resolution fails.
-    env.ORBIT_SCSYNTH_PATH = scResolution!.path
-    outputChannel?.appendLine(`🔧 scsynth (${scResolution!.source}): ${scResolution!.path}`)
+// packages/vscode-extension/src/extension.ts:1982-1996
+  // Set environment
+  const env = { ...process.env }
+  if (effectiveDebugMode) {
+    env.ORBITSCORE_DEBUG = '1'
   }
+
+  // Capture seam (#307): the daemon records the master output to this WAV while
+  // the stream runs. Only set when explicitly requested (MCP start_engine tool)
+  // — inherited env stays authoritative otherwise.
+  if (agentOpts?.captureWav) {
+    env.ORBIT_CAPTURE_WAV = agentOpts.captureWav
+    outputChannel?.appendLine(`🎙️ Capture: ${agentOpts.captureWav}`)
+  }
+
+  outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native)')
 ```
 
 The engine process itself is then started with `child_process.spawn` running Node.js.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2255-2261
+// packages/vscode-extension/src/extension.ts:1998-2004
   // Spawn engine process
   try {
     engineProcess = child_process.spawn('node', [enginePath, ...args], {
@@ -179,7 +169,7 @@ The engine process itself is then started with `child_process.spawn` running Nod
 `stdio: ['pipe', 'pipe', 'pipe']` means all three of stdin / stdout / stderr become pipes the parent (the extension) can touch. DSL text reaches the engine by being **written to stdin**.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3153-3154
+// packages/vscode-extension/src/extension.ts:2744-2745
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -207,7 +197,7 @@ Since #388 on 2026-07-07 (WORK_LOG 6.188-6.192), the extension hosts an MCP (Mod
 The start condition lives in `activate()`. The env var takes precedence over the setting so that an Extension Development Host launched from the CLI can have its port set without touching a settings file.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:455-460
+// packages/vscode-extension/src/extension.ts:437-442
   const envMcpPort = Number(process.env.ORBITSCORE_MCP_PORT)
   const mcpPort =
     Number.isInteger(envMcpPort) && envMcpPort > 0
@@ -219,7 +209,7 @@ The start condition lives in `activate()`. The env var takes precedence over the
 The server binds only to loopback.
 
 ```typescript
-// packages/vscode-extension/src/mcp-server.ts:1365-1369
+// packages/vscode-extension/src/mcp-server.ts:1350-1354
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject)
     httpServer.listen(port, '127.0.0.1', () => resolve())
@@ -286,43 +276,16 @@ Create one `InterpreterV2`, `boot()` it, enter the REPL. These three steps are u
 
 ### Backend selection: `createAudioEngine()`
 
-`createAudioEngine()` looks at the env and returns either a `RustEnginePlayer` or a `SuperColliderPlayer`. The default is Rust.
+`createAudioEngine()` used to look at the env (`ORBITSCORE_ENGINE`) and return either a `RustEnginePlayer` or a `SuperColliderPlayer`. **The 2026-09-10 ruling (#827 / #502) removed the SC path and the `resolveEngineKind()` branch entirely**; it now takes no arguments and always returns `RustEnginePlayer`.
 
 ```typescript
-// packages/engine/src/audio/create-audio-engine.ts:17-36
-export function createAudioEngine(env: NodeJS.ProcessEnv = process.env): AudioEngineBackend {
-  const raw = env[ENGINE_ENV_VAR]
-  if (resolveEngineKind(raw) === 'supercollider') {
-    console.log(`🎛️ [engine] using SuperCollider backend (opt-out via ORBITSCORE_ENGINE=${raw})`)
-    return new SuperColliderPlayer()
-  }
-  // 既定は Rust。ただし raw が「未設定/空」でも 'rust' でもない未認識値のときは、
-  // SC のつもりの typo（例: ORBITSCORE_ENGINE=scc）が黙って Rust 起動に落ちるのを
-  // warn で observable にする（未設定と誤入力を区別する）。
-  const normalized = raw?.trim().toLowerCase() ?? ''
-  if (normalized !== '' && normalized !== 'rust') {
-    console.warn(
-      `⚠️  [engine] ORBITSCORE_ENGINE=${JSON.stringify(raw)} は未認識 — ` +
-        `'rust' / 'sc' / 'supercollider' を想定。既定の Rust にフォールバック`,
-    )
-  }
-  const source = normalized === '' ? 'default since cutover #108' : `ORBITSCORE_ENGINE=${raw}`
-  console.log(`🦀 [engine] using rust orbit-audio-daemon backend (${source})`)
+// packages/engine/src/audio/create-audio-engine.ts:14-16
+export function createAudioEngine(): AudioEngineBackend {
   return new RustEnginePlayer()
 }
 ```
 
-`resolveEngineKind()` returns only two values, and everything other than `sc` / `supercollider` falls to `rust`.
-
-```typescript
-// packages/engine/src/audio/engine-backend.ts:67-70
-export function resolveEngineKind(raw: string | undefined): EngineKind {
-  const v = raw?.trim().toLowerCase()
-  return v === 'sc' || v === 'supercollider' ? 'supercollider' : 'rust'
-}
-```
-
-The contract both backends satisfy is the `AudioEngineBackend` interface: `Scheduler` (musical timing) plus `boot` / `quit` / device operations / plugin operations (engine-backend.ts:26-50). The interpreter and `Global` see only this contract surface, so **the DSL semantics are unaffected by swapping the backend**.
+The contract this backend satisfies is the `AudioEngineBackend` interface: `Scheduler` (musical timing) plus `boot` / `quit` / device operations / plugin operations (engine-backend.ts:26-50). The interpreter and `Global` see only this contract surface, so **the DSL semantics are unaffected by the backend's implementation**.
 
 ### parse → execute
 
@@ -374,7 +337,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 `RustEnginePlayer` is the boundary on the engine side. Its `boot()` calls `DaemonClient.start()` and then establishes the transport clock anchor.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:581-588
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:579-586
   async boot(outputDevice?: string): Promise<void> {
     await this.daemon.start({
       daemonPath: this.daemonPath,
@@ -388,7 +351,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 `DaemonClient.start()` proceeds in the order "spawn → read the ready line from stdout → connect the WebSocket → receive the handshake."
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:297-335 (handshake の timeout 設定を省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:296-334 (handshake の timeout 設定を省略)
   private async doStart(options: DaemonClientOptions): Promise<void> {
     // 新しい起動サイクルでは crash 検出を再 arm する（前回 quit の意図的 close を引きずらない）。
     this.intentionalClose = false
@@ -412,7 +375,7 @@ When `seq.play()` is called, for example, a playback event is eventually queued 
 Seen from the engine, the daemon is a **child process**. The communication, however, is WebSocket rather than stdin/stdout; stdout is used only to receive the startup ready line (a one-line JSON containing the port number).
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:887-897
+// packages/engine/src/audio/rust-engine/daemon-client.ts:886-896
   private async spawnDaemon(
     explicitPath: string | undefined,
     timeoutMs: number,
@@ -427,7 +390,7 @@ Seen from the engine, the daemon is a **child process**. The communication, howe
 ```
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:961-975
+// packages/engine/src/audio/rust-engine/daemon-client.ts:960-974
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる
@@ -452,7 +415,7 @@ The daemon-side code that writes this ready line (`run()` in `main.rs`) and the 
 The search order for the daemon binary is in `resolveDaemonBinaryPath()`: explicit → env (`ORBIT_AUDIO_DAEMON_PATH`) → monorepo release → monorepo debug → extension bundle.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:224-260 (monorepo 候補と bundle の説明コメントを省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:223-259 (monorepo 候補と bundle の説明コメントを省略)
 export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
   const searched: string[] = []
   const candidates: DaemonBinaryResolution[] = []
@@ -479,7 +442,7 @@ Like the scsynth resolver, it is built to **fail loud**, throwing once the candi
 Placing the daemon at `<extension>/engine/bin/<platform>/`, the location pointed to by the last candidate `extension-bundle`, is the job of `scripts/copy-daemon-bin.sh`, which `npm run build` calls through `build:copy-engine`.
 
 ```bash
-# scripts/copy-daemon-bin.sh:121-132
+# scripts/copy-daemon-bin.sh:120-131
 copy_binary "orbit-audio-daemon"
 # #628: rack effect child。daemon は `outproc_effect.rs` で自分の隣の
 # `orbit-effect-rack-child` を探す。**これが無いと effect 宣言そのものが起動に失敗する。**
@@ -531,9 +494,9 @@ fn default_rack_child_exe() -> Result<PathBuf, String> {
 
 Why isolate? Because 3rd-party plugins are untrusted code, and a crash must not take the daemon (the heart of the audio) down with it. The structure of the shm transport, the READY handshake, watchdog / respawn, and parent-process liveness monitoring (`ParentWatch`) are covered in [RE-2. OOP Children and shm Transport](/en/rust-engine/oop-children); the DSL surface (`seq.effect()` / `seq.instrument()`) in [PH-1. Plugin Hosting Overview](/en/plugin-hosting/) and [RE-3. Per-Sequence Insert Bus](/en/rust-engine/insert-bus).
 
-## SuperCollider is the Opt-Out Path
+## The SuperCollider Path (removal decided #502)
 
-When `ORBITSCORE_ENGINE=sc` is set, `createAudioEngine()` returns a `SuperColliderPlayer`, and the extension enters its `sc` branch that passes `ORBIT_SCSYNTH_PATH` via env (extension.ts:2142-2155 shown above). The mechanisms of scsynth resolution (strict mode in `scsynth-resolver.ts`), OSC over UDP, and the `orbitPlayBuf` SynthDef remain in the code, and the chapters [III-1](/en/audio/supercollider), [III-2](/en/audio/audio-file-playback), and [III-3](/en/audio/scsynth-bundle) read them. Keep in mind while reading, though, that this is not the default path.
+When `ORBITSCORE_ENGINE=sc` is set, `createAudioEngine()` returns a `SuperColliderPlayer`, and the extension enters its `sc` branch that passes `ORBIT_SCSYNTH_PATH` via env (extension.ts:2142-2155 shown above). The mechanisms of scsynth resolution (strict mode in `scsynth-resolver.ts`), OSC over UDP, and the `orbitPlayBuf` SynthDef remain in the code as of 69dc968, and [III-2. Audio File Playback](/en/audio/audio-file-playback) reads them (III-1 "Communication with SuperCollider" and III-3 "scsynth Bundle and Path Resolution" have been removed from the site as separate chapters following the 2026-09-10 ruling #827 / #502; their record lives on in [ADR-001](/en/decisions/adr-001-supercollider) and [ADR-003](/en/decisions/adr-003-scsynth-bundle)). The SC path itself is scheduled for removal from the repository by this same ruling, so keep in mind while reading that this is not the default path.
 
 Just as the `AudioEngineBackend` contract has optional methods the SC side does not implement (`selectAudioDevice` and others), the Rust path is ahead in features too (engine-backend.ts:32-33).
 
@@ -572,14 +535,13 @@ sequenceDiagram
 The timing model of `RustEnginePlayer` is condensed in the comment at the top of the file.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:11-21
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:10-19
  *  - **musical timing は TS 側に残す**（Epic #105 原則）。本クラスは EventScheduler の
  *    1ms poll モデルを mirror した *lean* scheduler を持ち、発火時に daemon へ
- *    `loadSample`+`playAt` する。SC の EventScheduler は LinkAudio/bufnum/`/s_new` 結合が
- *    重いので再利用せず、独立実装にして SC 経路への波及を断つ。
+ *    `loadSample`+`playAt` する。
  *
- *  - **timing モデル = poll-and-fire-now + 定数 lookahead**。SC は fire-now（poll 検出で
- *    即 `/s_new`）。daemon は自前 transport clock（boot で 0 開始）上の `PlayAt{time_sec}`
+ *  - **timing モデル = poll-and-fire-now + 定数 lookahead**。daemon は自前 transport clock
+ *    （boot で 0 開始）上の `PlayAt{time_sec}`
  *    で schedule-ahead。poll 発火時に `playAt(daemonNowSec + lookahead)` を送ることで
  *    **相対 timing（quantize/polymeter）を保存**しつつ daemon render cursor を確実に
  *    上回らせ onset clip を避ける（絶対 latency は定数シフト＝音楽的に無影響）。lookahead は
@@ -628,7 +590,7 @@ This chapter was a shallow first pass "to grasp the whole picture." The details 
 | The per-sequence insert bus of `seq.effect()` | [RE-3. Per-Sequence Insert Bus](/en/rust-engine/insert-bus) |
 | Objective verification via capture WAV | [RE-4. Capture Seam and Objective Verification](/en/rust-engine/capture-verification) |
 | The DSL surface of CLAP / VST3 hosting | [PH-1. Plugin Hosting Overview](/en/plugin-hosting/) |
-| (opt-out) OSC communication with scsynth | [III-1. Communication with SuperCollider](/en/audio/supercollider) |
+| (opt-out, removal decided #502) OSC communication with scsynth | [ADR-001 Choosing SC-based Implementation](/en/decisions/adr-001-supercollider) |
 | Extension activation, IntelliSense, flash | [IV-1. VS Code Extension Architecture](/en/editor/vscode-architecture) |
 
 ## Related Terms
@@ -637,7 +599,7 @@ See the [Glossary](/en/glossary) for the terms used in this chapter. The main on
 
 - [Extension Host](/en/glossary#extension-host) — the Node.js process in which VS Code extensions run
 - [StatusBarItem](/en/glossary#statusbaritem) — the status bar items showing engine state and backend resolution state
-- [scsynth](/en/glossary#scsynth) — the SuperCollider audio server (opt-out path)
+- [scsynth](/en/glossary#scsynth) — the SuperCollider audio server (the opt-out path; removed in #502)
 - [OSC (Open Sound Control)](/en/glossary#osc-open-sound-control) — the protocol the engine and scsynth use on the SC path
 - [strict mode (scsynth resolver)](/en/glossary#strict-mode-scsynth-resolver) — the fail-loud resolver design; the daemon resolver follows the same policy
 
@@ -673,7 +635,7 @@ Topics worth reading one level deeper from here. Each is expected to be filed as
 - `packages/engine/src/cli/execute-command.ts:105-113` — routing of the `repl` subcommand
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()`: create interpreter → boot → start REPL
 - `packages/engine/src/interpreter/interpreter-v2.ts:48-64` — `InterpreterV2` constructor: `createAudioEngine()` and state initialization
-- `packages/engine/src/audio/create-audio-engine.ts:17-36` — backend selection (default Rust, opt-out with `sc`)
+- `packages/engine/src/audio/create-audio-engine.ts:14-16` — always returns `RustEnginePlayer` (sole backend; the branch was removed in #502)
 - `packages/engine/src/audio/engine-backend.ts:26-68` — the `AudioEngineBackend` contract and `resolveEngineKind()`
 - `packages/engine/src/parser/types.ts:49-59` — `AudioIR` (including `fileImports`)
 - `packages/engine/src/interpreter/evaluate-method.ts:23-35` — `callMethod()`

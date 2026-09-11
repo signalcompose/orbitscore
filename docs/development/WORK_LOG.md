@@ -17,6 +17,59 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(dsl): keep the instrument reschedule off the push-success path (#611) (Sep 11, 2026)
+
+束 B の fix ラウンド（Codex）を **sandbox 外で回し直して**出た赤 1 件。
+
+```
+× gain() during LOOP clears pending notes via the plugin scheduler (clearOwner)
+  → expected "clearOwner" to be called with arguments: [ 'synth' ]
+     Number of calls: 0
+```
+
+🔴 **Codex の `npm test` にはこれが見えていなかった。** sandbox が localhost の bind を拒否し、
+mock daemon / MCP HTTP 系が `listen EPERM` で **108 件落ちた**中に埋もれていた。
+CLAUDE.md の「委譲先の緑は実機の緑ではない」が、そのままの形で出た。
+
+## 何が起きたか
+
+Codex は C5（push 失敗時に値がどこにも無くなる）を直すため、発音側の中立化を
+**push 成功後**へ動かした。これは正しい。しかし `seamlessParameterUpdate` の呼び出しも
+**一緒に**動かしてしまった。
+
+元のコードのコメントが、動かしてはいけない理由を明示していた:
+
+> instrument sequences have NO event-side gain path to conflict with the line's ramp (§5.2) —
+> but they DO rely on seamlessParameterUpdate's immediate reschedule for an **unrelated reason**
+> (clearing pending scheduled notes via the plugin scheduler's clearOwner)
+
+**instrument の即時 reschedule は gain とは無関係の関心事**（保留中のノートを消す）なので、
+**push の成否に依存させてはいけない** — daemon が拒否してもノートは消す必要がある。
+テストの mock には Rust バックエンドが無いので `setBusLine` が必ず throw し、
+`adoptLineOnFirstBus()` に到達せず `clearOwner` が 0 回になっていた。
+
+## 直し方
+
+2 つの関心事を分けた。
+
+| 関心事 | どこで発火するか |
+|---|---|
+| 発音側の中立化（ライン側と二重に掛からないように） | **push 成功後**（`adoptLineOnFirstBus`・Codex の正しい部分） |
+| 即時 reschedule（`clearOwner`） | **`gain()`/`pan()` の中**・push の成否と無関係 |
+
+audio + バス有りだけ `skipReschedule=true` のまま（ライン側の ramp が継ぐ）。
+
+## fixer は main が直接やった
+
+CLAUDE.md の「fixer は Codex → 収束しなければ main」に対し、これは**新しい指摘**で
+2 回落ちたものではない。ただし**差分を読み終えており**、ブリーフを書き起こすコストの方が
+自分で直すより高い（`fable-main-may-implement-directly` の一般化）と判断した。
+
+検証: `npm test` **2,322 passed / 67 skipped / 0 failed**・lint 緑・`typecheck:e2e` 緑・
+引用 936 / 0 failed。
+
+Part of #611
+
 ### fix(extension): stop warning that working output() targets have no effect (#611) (Sep 11, 2026)
 
 束 B のレビューで Fable が見つけた片翼。**出荷物の欠陥だったので、後回しにせず凍結線に含めた。**
@@ -530,6 +583,450 @@ Output の宛先・出現序数で対応付けて seed する。これが無い�
 
 ---
 
+### docs(link-audio): tell the truth about the deleted Link submodule and the unresolved fallback (#502) (Sep 10, 2026)
+
+Fable 受け入れ監査（PR #840）の指摘を適用した。**Important 2 / Minor 4**。
+
+#### 🔴 Important — 消した submodule を案内し続ける build script
+
+`rust/crates/orbit-link-audio/build.rs` は Link のヘッダを
+`packages/sc-link-audio/external_libraries/link` に既定で探し、無ければ
+`git submodule update --init packages/sc-link-audio/external_libraries/link` を案内していた。
+本束は `.gitmodules` と gitlink を消したので、**その案内はもう "no submodule mapping" で失敗する**。
+
+`build.rs` の冒頭コメント自身が「Link submodule は **SC plugin と共有**する」と書いており、
+**SC 専用ではなかった**。owner 裁定（`NATIVE_MIGRATION_2026-09.md` §12.5）は
+`packages/sc-link-audio` を「**SC 専用なら**同時に削除」としていたので、共有物を消す判断は
+明示的にはされていない。
+
+| | |
+|---|---|
+| 出荷ビルド | **影響なし**。`link-audio` feature は default off |
+| 新規クローン | `--features link-audio` が build.rs の panic で落ちる（実測: 新しい worktree に `link/include/ableton/LinkAudio.hpp` が存在しない） |
+| 既存クローン | **成功してしまう**。gitlink を消しても git は submodule の作業ディレクトリを消さない。**手元の緑は証拠にならない** |
+| CI | 検出不能。`rust-ci.yml` は ubuntu で、`build.rs` は `target_os != macos` で先に panic する |
+
+**対処**: panic 文言を実態（`ORBIT_LINK_DIR` で Link の checkout を指す）に直し、
+crate の扱いそのものを **#845** の裁定事項として立てた（main の推奨は crate の退役）。
+
+#### 🔴 Important — リファレンス表が仕様と逆のことを書いていた
+
+`sites/user/reference/methods.md`（ja / en）は LinkAudio 無効時に
+「音はハードウェア出力に出て、警告が 1 回出ます」と**事実として断定**していた。
+一方 spec §8.1 と `sites/user/midi/link-audio.md` は「設計の意図と実測が食い違っていて未決・
+LinkAudio を前提にした演奏はしないこと」と書いている。**同じ束の中で矛盾していた。**
+リファレンス側を「未決」に揃えた。
+
+#### Minor
+
+- **行番号での出典が既にずれていた**（`orbitstudio-mcp-gated.spec.ts:5113-5119` → 実際は 5252-5256）。
+  main を merge するたびにずれるので、**行番号をやめて文言で参照する**ようにした
+  （「A comment is not evidence of implementation behavior」で始まるコメント）。5 箇所
+- 仕様の消し残し 3 件: 削除済みディレクトリを理由にフルパス表記を要求していた記述 /
+  「Choose output device via command palette」（コマンドは本束で削除・現在は Engine view と MCP）/
+  「buffer caching on the SC path」
+- `sites/dev` の glossary（ja / en）が `ORBITSCORE_ENGINE` を**現行の環境変数として定義**し、
+  `AudioEngineBackend` を「`SuperColliderPlayer` と `RustEnginePlayer` の両方が満たす」と
+  書いていた。両方直した
+- `sites/dev/**` の散文には同種が **107 行 / 20 ファイル**残っている。引用ブロックは
+  付け替え済みで `docs:check` は緑だが散文が現在形。束の外へ切り出した（**#846**）
+- 出荷 README の `✅ engine: rust (native)` と `numInputBusChannels` の記述は **#842 で解消済み**
+
+#### 監査が「無し」と確認した主なもの
+
+削除された識別子・設定キー・コマンド ID・MCP ツール名の残存参照（`build.rs` を除き 0）/
+型検査を通らない経路（実行時 `require` は実在するモジュールのみ）/ `contributes.commands` 15 件 ⊆
+`registerCommand` 18 件 / 旧 `SuperColliderPlayer` の public 面 19 メソッドの突合（Rust に無いのは
+master effects・LinkAudio・device の 3 スタブで、いずれも本束が文書化済み）/ `sync-dist.js` の
+写像（`rootDir: ./src` / `outDir: ./dist` と整合・read-only 実走で kept 440 / orphans 0）
+
+### fix(engine): make each master effect warn, and stop audioDevice from promising a restart (#502) (Sep 10, 2026)
+
+`/code:pr-review-team` ラウンド 1（4 レビュアー）の指摘を適用した。**Critical 1 / Important 2 /
+Minor 1**、fixer は main（Codex は sandbox の EPERM で起動できなかった）。
+
+#### 🔴 Critical — 2 つ目以降のマスターエフェクトが完全に無音で失敗していた
+
+`RustEnginePlayer.addEffect` / `removeEffect` は `warnOnce('masterEffect', ...)` を
+**discriminator 無しで**呼んでいた。`warningKey` は discriminator が無いと `kind` そのものを
+キーにするので、**1 セッションにつき 1 回しか warn しない**。一方 `EffectsManager` は
+`🎛️ Global: compressor(...)` を**無条件に**出す。したがって
+
+```
+global.compressor(...)   // warn が出る
+global.limiter(...)      // ✅ に見えるログだけ出て、警告は出ない・音も変わらない
+```
+
+という普通のマスタリングチェーンで、2 つ目以降が**気づく手段なく落ちる**。
+`(操作, effect 種別)` を discriminator にした。文言も「代わりに master バスへ
+CLAP / VST3 プラグインを置け」まで言うようにした。
+
+🔴 **既存テストがこの欠陥を固定していた**。`rust-engine-player.spec.ts` の
+「master effect は 1 回 warn して no-op」は `expect(fxWarns.length).toBe(1)` で、
+**3 種類の操作をして 1 回しか warn しないこと**を期待値にしていた。期待値を反転し、
+種類ごと・操作ごとに warn すること（3 回）と、同じ操作の繰り返しは増えないことを固定した。
+
+#### Important — `global.audioDevice()` が嘘の案内をしていた
+
+`RustEnginePlayer.getCurrentOutputDevice()` は常に `undefined` を返すので、この DSL メソッドは
+必ず `⚠️ Restart the engine to change audio device` を出して**何もしない**。再起動しても
+変わらない。実際の切り替え経路は VS Code 設定 `orbitscore.audioDevice`（エンジンビュー /
+MCP の `select_audio_device`）だけで、DSL からは配線されていない。
+**行き先を名指しするメッセージ**に置き換えた。
+
+#### Minor — `sync-dist.js` の `exists()` が全エラーを「不在」に畳んでいた
+
+この判定はそのまま `fs.rm` の根拠になる。EACCES 等を不在に畳むと**正当な出力を消して
+`.vsix` からモジュールが欠ける**（#654 と同じ形）。ENOENT だけを不在として扱い、
+他は投げるようにした。
+
+#### テスト — 出荷物の中身を決めるロジックにテストが 0 本だった
+
+`pruneOrphanedOutputs()`（本束で新設）は `.vsix` に何が載るかを決めるが、
+**間違えても npm test もビルドも緑のまま**通る。`sync-dist.js` を
+`require.main === module` でガードして `require` 可能にし、
+`tests/build/sync-dist-prune.spec.ts` に 7 件足した:
+4 種類の接尾辞の削除 / `.tsx` 由来を残す / `.ts` 由来でない成果物に触らない /
+空になったディレクトリを畳む / 入れ子を post-order で畳む /
+生き残りがあれば親を残す / `sourceStemFor` の境界。
+
+#### そのほか（comment-analyzer）
+
+- `CONTRIBUTING.md` が `ORBITSCORE_ENGINE=sc` opt-out 経路を現在形で説明したままだった。
+  README / CLAUDE.md / PROJECT_RULES / INDEX / CONTEXT7_GUIDE / TESTING_GUIDE は直っていて、
+  **CONTRIBUTING.md だけ列挙から漏れていた**
+- `README.md` と `CLAUDE.md` のテスト件数が 2026-09-02 の `2165 / 2233` のままで、
+  本束が spec 7 本を消した後の値になっていなかった。**出典（日付・commit）付きで**
+  `2271 passed / 58 skipped / 2329 total` に更新した
+
+#### 指摘のうち採らなかったもの
+
+- code-reviewer: Critical 0 / Important 0（型検査・全テスト・docs ビルド・`sync-dist.js` の
+  実走まで確認した上で「配線漏れ無し」）
+- pr-test-analyzer の Important 2（`chop-timing.spec.ts` の `sampleId` 未検証は本束が
+  持ち込んだ後退ではない / docs:check 198 件は上記のとおり解消済み）
+
+### refactor(build): prune the engine dist by source presence instead of by name (#502) (Sep 10, 2026)
+
+`/simplify`（4 エージェント）の指摘を適用した。
+
+**採用（altitude + efficiency の合流点）**: `packages/engine/scripts/sync-dist.js` の
+`removeRetiredBackend()` は `audio/supercollider` / `supercollider-player.*` という
+**SC 固有のファイル名を汎用ビルド道具の中に埋め込んでいた**。守りたかったのは
+「`tsc --build` の増分は、ソースを消しても出力を消さない」ことであって SC ではない。
+**`src` に対応する `.ts`（`.tsx`）が在るかで判定する `pruneOrphanedOutputs()`** に置き換えた。
+次に何を消してもこのスクリプトを直す必要がない。1 ディレクトリ内は `Promise.all` で並行に
+処理し、空になったディレクトリは畳む。`.ts` 以外から来た成果物には触らない。
+
+旧 root-copy / bundle 経路が `engine/` 直下へ置いた `supercollider/` `scsynth/`
+`audio/supercollider` は `tsc` の出力ではないので突き合わせでは拾えない。
+**一度きりの移行掃除**として明示的に消す（コメントでそう書いた）。
+
+**採用（消し残し）**: `ORBITSCORE_ENGINE=sc で SC に opt-out` を説明したままのコメントが
+3 箇所残っていた（`interpreter-v2.ts` / `cli/repl-mode.ts` / `audio/rust-engine/index.ts`）。
+env var も `resolveEngineKind()` も本束で消えているので、**存在しない経路を説明していた**。
+`rust-engine-player.ts` の冒頭コメントは機械置換の跡で「既定（唯一の）バックエンド
+（唯一のバックエンド）」と二重化していた。あわせて直した。
+`packages/vscode-extension/package.json` は `keywords` と `scripts` から要素を消した跡が
+空行 5 行として残っていたので削除した。
+
+**見送り（理由を残す）**: `AudioDevice` 型（`audio/types.ts`）は `RustEnginePlayer` の
+3 つのスタブ（常に `undefined` / `[]` / no-op）でしか使われておらず、同種の型が
+`daemon-client.ts` の `AudioDeviceListEntry` と `mcp-server.ts` の `AudioDeviceInfo` にもある。
+3 系統あるのは確かに冗長だが、**削除は `AudioEngine` インターフェースの変更**になり
+凍結線の直前に入れる変更ではない。`AudioEngineBackend` の継ぎ目も、ネイティブ
+OrbitStudio の新ライン（#827）で第 2 実装が来る見込みなので残す。
+
+**検算**: `npm run build` 緑（`sync-dist.js` を実走）・`npm run lint` 緑・
+`npm test` **2271 passed / 58 skipped / 2329**・引用チェック 934 件 / 0 失敗
+（行シフト 4 件を `--fix` で再アンカー）。
+
+### docs(spec): the LinkAudio fallback claim was a comment, not a measurement (#502) (Sep 10, 2026)
+
+#833 で §8.1 に置いた警告ブロックは「daemon が `LINK_AUDIO_UNAVAILABLE` を返し、TS 側が
+1 回だけ warn して継続する。出力は hardware のみ」と**断定していた**。これは
+`rust-engine-player.ts` の `registerLinkAudioChannel` の**コメントの主張**であって、実測ではない。
+
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` に残っている記録によれば、2026-09-04 の main の
+実機実行では `global.linkAudio()` 下の sequence の **capture RMS = 0**、かつ `get_log` に
+`LINK_AUDIO_UNAVAILABLE` も gap 警告も出ていない。capture ベースの証明はこの理由で
+取り下げられている。つまり**音が出ず、警告も出ない**。
+
+仕様側を「設計の意図 / 実測」の 2 行表に書き換え、**どちらが正しいかは未決**であることと
+出典を明記した。ユーザー学習サイト（`sites/user/midi/link-audio.md`）は #835 で既にこの
+扱いになっており、**仕様だけが古い断定のまま残っていた**（memory
+`one-layer-of-the-spec-lags-the-ruling` と同じ型）。
+
+引用 4 件が行シフトで動いたので `--fix` で再アンカーした。
+
+### docs(readme): rewrite the shipped README for the stable GitHub Release (#841) (Sep 10, 2026)
+
+拡張版 stable リリース（#827 §12）の手順 4。`.vsix` に同梱される
+`packages/vscode-extension/README.md` と root `README.md` を、**出荷物の実態**に合わせた。
+
+**直した事実誤り 3 件**（いずれも出荷物に対して偽だった）:
+
+| 箇所 | 旧記述 | 実測 |
+|---|---|---|
+| LinkAudio | 「OrbitScore acts as the Link tempo leader; Ableton Live follows OrbitScore's tempo」 | daemon の feature `link-audio` が default off。`copy-daemon-bin.sh` も `release.yml` も `--features outproc-effect,outproc-instrument` のみ。egress も §8.1.4 の tempo push も同じ feature に依存する |
+| Intel Mac | 「Untested (bundled binary is universal but not actively verified)」 | `release.yml` の `VSIX_TARGET: darwin-arm64`。universal ではない。方針も Apple Silicon のみ |
+| time-stretch / pitch shift | root README が `.time()` / `.fixpitch()` を Core Features に列挙 | `parser/types.ts:493` に「'time' and 'fixpitch' removed - not yet implemented」。#213 で defer 中 |
+
+**追加**: `global.compressor()` / `limiter()` / `normalizer()` が native engine で no-op であることを
+「Not in this build」表に明記した（#502 で唯一の実装だった SC synthdef が消えたため）。
+
+**🔴 LinkAudio の記述を実測に合わせ直した（自分の初稿の誤り）**: 最初「音は hardware へ出る」と
+書いたが、これは `rust-engine-player.ts` の**コメントの主張**であって実測ではない。
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` の記録によれば、2026-09-04 の実機実行では
+`global.linkAudio()` 下の sequence の **capture RMS = 0**、かつ `get_log` に
+`LINK_AUDIO_UNAVAILABLE` も gap 警告も出ていない。つまり**音が出ず警告も出ない**。
+仕様（§8.1）とどちらが正しいかは未決なので、README には「未決であり LinkAudio を前提にした
+演奏はしないこと」と書いた。ユーザー学習サイト（`sites/user/midi/link-audio.md`）は
+#835 で既に同じ扱いになっていた。
+
+**AU ホスティングの偽記載を削除**: walkthrough ステップ 4 が ja / en とも
+「CLAP / VST3 / AU をホストできます」と書いていたが、`PluginFormat::from_env_value` は
+`clap` / `vst3` **以外を Err で弾く**（`outproc_effect.rs:338-346`）。AU の child バイナリも
+crate も存在しない。walkthrough の md と `package.json` の step description の両方を直した。
+🔴 **walkthrough は `.vsix` に同梱されるので、これは出荷物の偽記載だった。**
+
+**その他の追従**: `✅ engine: rust (native)` ステータスバー表示は #108 以降存在しない
+（健全時はインジケータを出さない・`updateBundleStatus`）。コマンド一覧が 5 件しか載っておらず
+プラグイン系・walkthrough・MCP 登録が抜けていた。設定一覧が 5 件で `engineDebug` /
+`mcpServer.port` / `playheadPalette` が抜けていた。いずれも `package.json` の `contributes` から
+実体を引いて書き直した。
+
+**入手経路**: Marketplace / Open VSX には出さない（owner 2026-09-10）ので、
+両 README とも **GitHub Release の `.vsix`** を先頭に置いた。
+
+**版番号は据え置き**: 見出しから `(2.0.0)` を外して版に依存しない形にした。実際の版番号更新は
+手順 5（owner 裁定）で行う。
+
+### docs(spec): record that the global mastering effects are no-ops after the SC removal (#502) (Sep 10, 2026)
+
+束 #840 を締める前の追従。`INSTRUCTION_ORBITSCORE_DSL.md` の Implementation Status は
+`global.compressor()` / `limiter()` / `normalizer()` を **Completed Features ✅** に載せていたが、
+実装は **SC の synthdef（`fxCompressor` / `fxLimiter` / `fxNormalizer`）だけ**で、#502 で
+scsynth ごと削除した。`RustEnginePlayer.addEffect` は最初から
+`⚠️  [rust-engine] master effect "..." is not supported yet (A4 era)` を 1 回 warn して
+no-op に倒す実装で、**出荷される `.vsix` にはこの 3 つを実行する経路が無い**。
+
+DSL 語彙（`signal-chain/runtime.ts` の `GLOBAL_DSL_METHODS`）には残っているため
+**構文としては受理される**。表面から外すのは破壊的変更なので owner 裁定事項として保留し、
+仕様側に警告ブロックを置いた（LinkAudio egress と同じ扱い）。代替は
+CLAP / VST3 プラグインのラック（`global.effect(...)`）。
+
+v2.0 の変更履歴側にも「SC と master effects はどちらも #502 で撤去、前者は Rust daemon に
+置き換わり後者は代替なく no-op」を追記した。
+
+**検算**: `sites/user/**` の compressor/limiter への言及は 2 件ともプラグイン effect
+（`seq.effect()` / `sum("bus").effect()`）の話で、`global.compressor()` ではない。誤記なし。
+
+### docs(readme): drop the deleted SuperCollider paths from the repository tree (#502) (Sep 10, 2026)
+
+束 #840 を締める前の追従。root `README.md` のディレクトリ図が
+`packages/engine/src/audio/supercollider/`・`packages/engine/supercollider/`・
+`packages/sc-link-audio/` を**現存するものとして**描いていたため、実体に合わせた
+（3 経路とも #838 / #836 で削除済み）。`vscode-extension/` が `packages/` の末子に
+なったので罫線も直した。
+
+残る `SuperCollider` の語（Phase 7 の完了表・#136 の merged 表・冒頭の「#502 で削除された」）は
+**履歴の記述**なので残す。README 全体の書き換えは stable リリースの手順 4 で別途行う。
+
+### refactor(engine): remove the SuperCollider backend implementation and its editor surface (#502) (Sep 10, 2026)
+
+owner 裁定（#827 / #502・`NATIVE_MIGRATION_2026-09.md` §12.5）に従い、SC バックエンドの
+TypeScript 実装と拡張の編集表面を削除した（PR-SC3b・PR-SC3a の同梱まわり削除の続き）。
+
+**削除**: `packages/engine/src/audio/supercollider/`（event-scheduler / buffer-manager /
+osc-client / scsynth-resolver / synthdef-loader / link-audio-channels / types / index）・
+`supercollider-player.ts`・`packages/engine/supercollider/`（synthdef アセット）・未参照の
+`test-sc-*.js` スクラッチ9本・孤立 `packages/engine/package-lock.json`・テスト7本
+（SC専用5本 + `link-audio-dispatch`/`link-audio-channels`。後ろ2本は `EventScheduler` 等を
+直接 import しており import 整理では済まなかった）。
+
+**🔴 `AudioDevice` 型の退避**: エンジン非依存の共有型だったため、ディレクトリ削除前に
+`supercollider/types.ts` から `audio/types.ts` へ移した。
+
+**🔴 実行時 require の罠**: `extension.ts` の `resolveScsynthForUI()` は
+`require('.../supercollider/scsynth-resolver')` を実行時に呼んでおり、`tsc` の型検査を
+通らない経路（戻り値を `as` で型付け）だったためソースを消しても緑のまま実行時に落ちる。
+この関数ごと削除した。
+
+**`ORBITSCORE_ENGINE` を完全に撤去**: 選べる第2エンジンが無い以上、1択を選ぶ env var は
+死んだ分岐。`EngineKind`/`resolveEngineKind()` を撤去し `createAudioEngine()` は常に
+`RustEnginePlayer` を返す。`orbitscore.engine`/`orbitscore.scsynthPath` 設定・
+`Force Kill scsynth` コマンド・SC gated だった `Select Audio Device` コマンド・MCP
+`force_kill_scsynth` ツールを削除（`restrictedConfigurations` は空配列に）。`extension.ts` の
+`getConfiguredEngineKind()` 各種ガードと SC 専用関数群を撤去し Rust 経路のみへ折り畳んだ。
+
+`rust-engine-player.ts:945` 付近のコメントを実態に合わせた（`warnOnce('outputChannel', ...)`
+の呼び出しは1箇所のみ — 旧コメントは `scheduleEvent`/`scheduleSliceEvent` も呼ぶと誤記していた）。
+`supercolliderjs` devDependency も削除（SC の TS 実装が無くなったため）。
+
+**テスト**: `SuperColliderPlayer` をモックに使っていたテスト16本を `RustEnginePlayer` 基準へ
+書き換え（`chop-timing.spec.ts` は実インスタンス化のため `loadBuffer` の mock 戻り値も
+実シグネチャ `{ sampleId }` に合わせた）。件数: 2329 passed / 58 skipped / 2387 total →
+**2261 passed / 58 skipped / 2319 total**（削除7本ぶん -68 件）。
+
+**残課題だったもの（解消済み・2026-09-10）**: `npm run docs:check` が本 PR の行番号シフト
+（`extension.ts` -444 行等）で 198 件失敗していた。束の締めで `--fix` の再アンカーと
+引用内容の手直しを行い、**934 件検証 / 0 失敗**になった（`502-sc-removal` の
+`b9f6ded1` 時点・main 実測）。
+
+**件数の但し書き**: 上の `2261 passed / 2319 total` は #838 単体を回した時の値。
+束を締めた時点（`b9f6ded1`）の実測は **2271 passed / 58 skipped / 2329 total** で、
+差の +10 は #839 以降に入ったテスト。README と CLAUDE.md にはこちらの値と出典を書いた。
+
+### docs(sites): follow PR #836 — the scsynth bundle is gone from the shipped .vsix (#502) (Sep 10, 2026)
+
+**追従元**: PR [#836](https://github.com/signalcompose/orbitscore/pull/836)（merge `f2fa0cf`・base `502-sc-removal`）/ **ブランチ**: `claude/docs-sync-pr836`
+
+#836 は同梱・ビルド・ライセンスだけを扱い `sites/` は対象外だったため、dev site に残っていた「scsynth は `.vsix` に同梱される」という**現在形の記述**を ja / en 両方で追従させた。`glossary.md`（`scsynth` と `bundle (scsynth source)` の 2 項。後者は `sync-dist.js` が同期のたびに `engine/scsynth` を消すため当たらない）・`decisions/adr-003-scsynth-bundle.md`（撤去 warning を冒頭に新設・回避策 2「`npm run build:bundle`」の失効・Consequences revisited に「そして bundle は撤去された」節・深掘り候補 4 件を取り消し線）・`editor/vscode-architecture.md`（出荷 `.vsix` には `bundle` 候補パスだけでなく `require` 対象の `scsynth-resolver` モジュール自体が無い）・`audio/audio-file-playback.md`（`libsndfile.dylib` 非同梱）。
+
+`packages/` `rust/` `tests/` は不変（ルーチンの禁止事項）。`verified-against` は据え置き（章全体を再検証していないため・STYLE_GUIDE の更新ポリシー）。
+
+### chore(build): remove the bundled scsynth, its GPL plugin, and the packaging steps (#502) (Sep 10, 2026)
+
+owner 裁定（#827 / #502）に従い、拡張の出荷物から bundled scsynth と GPL の
+`OrbitLinkAudio.scx` を外した。現行 release workflow は `v*` タグを契機に Marketplace / Open VSX
+へ publish するため、GPL バイナリを含む `.vsix` が stable タグから配布される前に同梱経路を閉じる必要があった。
+
+**削除したもの**: `packages/sc-link-audio/` 全体とその2 submodule 定義、scsynth の LICENSE / NOTICE、
+bundle 抽出・検証・OSC boot-timeout patch script。root / extension の build は engine の SynthDef を
+コピーせず、engine 自身の `sync-dist.js` にあった同じコピー経路も閉じた。`.vscodeignore` も
+scsynth / SynthDef / legal の keep 指定を持たない。PR-SC3b まで source に
+残る SC backend の生成済み JS と JS OSC runtime も `.vsix` から除外した。当該 runtime は未削除
+source / test の clean build に限って必要なため devDependency へ隔離し、出荷 runtime dependencies
+からは削除した（source と test ごとの完全削除は PR-SC3b）。`sync-dist.js` は extension 向けコピー後に
+生成済み SC backend を除き、旧 root-copy / bundle が残した ignored artifact も掃除する。
+
+**release gate**: SuperCollider の install / extract / pre-package verify を削除した。post-package gate は
+Rust daemon、OOP child、plugin scanner、engine runtime dependencies、標準 CLAP の検証も担うため残し、
+scsynth の `verify-bundle.sh` 呼び出しだけを除いた。
+
+
+
+---
+
+### docs(sites): follow PR #833 — LinkAudio egress is not in shipped builds (#502) (Sep 10, 2026)
+
+**追従元**: PR [#833](https://github.com/signalcompose/orbitscore/pull/833)（merge commit `58b8c1c`・base `502-sc-removal`）/ **ブランチ**: `claude/docs-sync-pr833`
+
+#833 は spec と guide を直したが、**`sites/` は対象外**（PR 本文で明記）だった。#833 が §8.1 に
+書き下ろした「LinkAudio egress は出荷ビルドに入っていない」という事実は、user site / dev site の
+どちらにも届いていなかったため、そこを追従させた。
+
+**直したもの**:
+- `sites/user(/en)/midi/link-audio.md`: 冒頭に「配布版では Live に音が届かない」警告を追加。
+  前提条件から **OrbitLinkAudio.scx**（#502 で削除済み）を落とし、「送出が有効なビルド」に置換。
+  「プラグイン内で加算合成」→「送出側で加算合成」。「OrbitLinkAudio.scx プラグインがない場合」節を
+  「音声送出が使えないビルドの場合」へ改題。テンポ push も同じ feature に載るため無効である旨を追記
+- `sites/user(/en)/reference/methods.md`: `linkAudio()` / `linkAudio(SR)` / `output("name")` に
+  🔴 を付け、配布版で送出が動かないことを注記。ja 側の `midiLatency(ms)` の説明にあった
+  「SC とのタイミング合わせ」（en には無い）を「オーディオとのタイミング合わせ」へ
+- `sites/dev(/en)/rust-engine/index.md`: wire command 表の `RegisterLinkAudioChannel` /
+  `SetLinkTempo` 行に feature gate を注記し、「LinkAudio egress は出荷ビルドに入っていない」節を新設
+  （`Cargo.toml` の `[features]` と `copy-daemon-bin.sh:109` を逐語引用）。frontmatter の
+  `verified-against` を `58b8c1c` へ
+- `docs/development/TRANSLATION_STATUS.md`: #833 が足した注記は「`502-sc-sites` で進行中」と
+  書いていたが、当該 PR（[#832](https://github.com/signalcompose/orbitscore/pull/832)）は既に
+  base へ入っている。着地済みの内訳（audio 2 章は削除・ADR 2 本は残す）へ書き換え、
+  dev の表の III-1 / III-3 を `削除済み (#832)` に。章数の集計（`完了 39 章` と `総章数 29 章` が
+  矛盾していた）も揃えた
+
+**🔴 仕様と実測の食い違いを見つけた（決めていない・PR 本文に質問として出す）**:
+#833 の §8.1 は「egress が無ければ hardware へフォールバックし 1 回 warn する」と書いているが、
+`tests/e2e/orbitstudio-mcp-gated.spec.ts` の「**A comment is not evidence of implementation behavior**」で始まるコメントには、2026-09-04 の実機で
+**capture RMS = 0・警告マーカーも無し**という逆の実測が記録されており、さらに
+「`global.linkAudio()` 下の dispatch は `skip` か `link` で、capture できる `hardware` には
+決してならない」とも書かれている。**どちらが正しいかは仕様の判断**なので直さず、
+両サイトには「確定していない」と明記して両論を並べた。
+
+**検証**: `npm run docs:build`（user / dev とも成功）・`npm run docs:check` **942 verified / 0 failed**
+（追従前は 936）・`npx vitest run --dir tests --globals docs/` 5 passed。
+
+
+---
+
+### docs: retire the SuperCollider backend from the specs and guides (#502) (Sep 10, 2026)
+
+**Issue**: #502（東 `502-sc-removal` の docs サブタスク `502-sc-docs`）/ **作業ツリー**: `.claude/worktrees/502-sc-docs`
+
+main が `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` §8 で確定した事実に、他の docs の文言を揃えた。
+
+**確定した事実**（main の §8 編集より）:
+- **Rust `orbit-audio-daemon` が唯一のバックエンド**。SuperCollider (scsynth) opt-out 経路と
+  `ORBITSCORE_ENGINE` 環境変数は #502（2026-09-10）で削除された（cutover #108 で既定化されてから
+  約2ヶ月後）
+- 🔴 **LinkAudio egress は出荷ビルドで動作しない**。SC 版（`OrbitLinkAudio.scx`）は #502 で削除、
+  Rust 版（`orbit-link-audio` crate・GPL 隔離）は daemon の feature `link-audio` が default off の
+  ため `scripts/copy-daemon-bin.sh` / `.github/workflows/release.yml` のどちらの出荷ビルドにも
+  含まれていない。理由は Ableton Link が GPL-2.0-or-later で、有効化すると GPL が出荷バイナリの
+  依存グラフに入り、SC を削除した理由と同じ問題を作るため
+
+**やったこと**:
+- `README.md` / `CLAUDE.md` / `docs/core/PROJECT_RULES.md` / `docs/core/INDEX.md` /
+  `docs/core/CONTEXT7_GUIDE.md` / `docs/testing/TESTING_GUIDE.md` の現在形の可用性主張
+  （「SuperCollider は opt-out backend」等）を実態に合わせて修正。`PROJECT_RULES.md` の
+  「SuperCollider Integration Tests」節（削除される `tests/audio/supercollider-gain-pan.spec.ts`
+  を名指し）は節ごと落として番号を詰めた
+- `docs/research/SCSYNTH_BUNDLE_MANIFEST.md` / `SCSYNTH_STANDALONE.md` / `LINK_AUDIO_API.md`・
+  `docs/testing/LINK_AUDIO_E2E_CHECKLIST.md` の冒頭に歴史記録ヘッダを追加（本文は不変）
+- `docs/AUDIO_TEST_CHECKLIST.md` / `AUDIO_TEST_SETUP.md` / `docs/testing/PERFORMANCE_TEST.md`
+  （cutover #108 以前の SC セットアップ手順で INDEX.md からリンクされていた）・
+  `docs/testing/QA_2.0.0.md` / `QA_2.0.0_HUMAN_RUNBOOK.md`（SC 依存の実機手順を含む QA 記録）・
+  `docs/user/en(ja)/GETTING_STARTED.md`（SC インストールを前提とする現行リンクのガイド）に
+  同様の歴史記録／非推奨の注記を追加。既存の `USER_MANUAL.md` の DEPRECATED 表記はそのまま
+- `docs/development/TRANSLATION_STATUS.md` に、`sites/dev/` の SC 関連章の削除・書き換えが
+  別 PR（`502-sc-sites`）で進行中であることを明記
+- `examples/22_rust_engine_parity.orbs` のコメント（`ORBITSCORE_ENGINE=sc` を使う旧手順）を
+  Rust 単独運用に合わせて修正。`.orbs` の実行行は変更していない
+
+**歴史記述は残した**: README の Phase 7 Achievements・ICMC v1.x bundle 節、
+`docs/development/POST_2.0_*` / `docs/planning/` / `docs/design/` の移行計画・設計分析
+（`NATIVE_MIGRATION_2026-09.md` §12.5 の「#502 実測と順序」を含む）は、現在形の可用性主張ではなく
+決定の記録なので変更していない。`docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.md`（Epic #224 管理下）
+と `sites/` は対象外（前者は本タスクの範囲外・後者は別 PR）。
+
+**`docs:check`**: main の §8 編集で行番号がずれた `sites/dev(/en)/signal-chain/mixer-audio-line.md`
+の引用 4 件を `node sites/dev/scripts/check-citations.mjs --fix` で再アンカーした。
+本 PR 単独では 1032 verified / 0 failed、`502-sc-sites`（#832）を取り込んだ後は 936 verified / 0 failed（章の削除で引用が減ったため）。
+
+
+---
+
+### docs(sites): drop the SuperCollider chapters and de-anchor ADR citations (#502) (Sep 10, 2026)
+
+**Issue**: #502（束の1本・PR-SC2）/ **ブランチ**: `502-sc-sites`（base `502-sc-removal`）
+
+owner 裁定（2026-09-10・#827 / #502）で SuperCollider (SC) バックエンドをコードごと削除する。
+コード削除 PR（PR-SC3a/3b）より先に、学習サイト（`sites/dev/`）が SC のコードを引用している
+箇所を外した。`sites/dev/scripts/check-citations.mjs`（`npm run docs:check`）は引用ヘッダ
+`// path:line-line` を実コードと文字単位で突合するため、コードが消えた瞬間に red になる。
+引用を先に外しておけば、コード削除 PR は docs:check を壊さずに進められる。
+
+**消したもの**: SC 専用の解説ページ2本（ja/en 各対）— `audio/supercollider.md`（旧 III-1）、
+`audio/scsynth-bundle.md`（旧 III-3）。sidebar からも該当エントリを削除し、他ページから
+これらへのリンク（12箇所）をすべて ADR への参照または地の文に置き換えた。
+
+**残したもの**: ADR-001 / ADR-003（決定の記録）。冒頭に「コードは削除決定/削除済み」の
+warning ブロックを追加し、引用ヘッダを `path:start-end` → `path Lstart-end` 形式に変えて
+`check-citations.mjs` の検査対象から外した（コード本体は1文字も変更していない）。
+`audio/audio-file-playback.md`（旧 III-2）は主題が SC 実装の詳細読解のままだが、他章から
+参照され続けているため削除せず、同様に引用を無効化した上で残した。加えて `event-queue.md` /
+`glossary.md` / `orientation/architecture-overview.md` / `orientation/what-is-orbitscore.md` /
+`editor/vscode-architecture.md` / `index.md` / `STYLE_GUIDE.md` / `sites/user/.translation-glossary.md`
+の「SC は opt-out で選べる」という現在形の記述を「削除決定（#502）」の過去形・注記に更新した
+（cutover #108 等の歴史記述はそのまま残した）。
+
+**確認**: `npm run docs:check`（936 citation(s) verified, 0 failed）／
+`npm -w @orbitscore/dev-site run docs:build`（VitePress ビルド green、dead link 0）／
+`npm test`（2329 passed, 58 skipped, 0 failed）。
+
+**やっていないこと**: `packages/` `rust/` `scripts/` `tests/` `.github/` のコード削除は本 PR の
+範囲外（PR-SC3a/3b で対応）。本 PR の時点では SC のコードはまだ存在する。
+
 ### test(e2e): launch the gated harness from stock VS Code (#830) (Sep 10, 2026)
 
 🔴 **実機で回して 3 件の欠陥が出た。いずれも stock VS Code に切り替えて初めて現れたもので、
@@ -593,7 +1090,6 @@ CI・ユニット・机上レビューのどれにも掛からない。** 実機
 実機 gated 全件の結果は main が本ツリーで実行して追記する。
 
 ---
-
 ### docs(planning): record the extension-stable freeze line and the native OrbitStudio line (#827) (Sep 10, 2026)
 
 **Issue**: #827 / **ブランチ**: `827-stable-freeze-line` → main（docs のみ）
@@ -657,430 +1153,6 @@ CI・ユニット・机上レビューのどれにも掛からない。** 実機
 `SetBusLine` の wire 契約を足す束。**DSL からは呼ばない**（送るのは PR-O4）ので、束の収束条件は
 O-wire と同じ「**`OUTPUT_LINE_GOLDENS` / `#611 O0-1〜4` が 1 つも動かないこと**」+ cargo 全緑 + 実機 gated 全件。
 
-### docs: follow the SetBusLine wire in the dev site and core spec (#823 追従) (Sep 8, 2026)
-
-**ブランチ**: `claude/docs-sync-pr823` → `611-line-wire-b`（docs-sync ルーチン・PR [#823](https://github.com/signalcompose/orbitscore/pull/823) 追従）
-
-マージ済み PR にドキュメントを追従させる定期ルーチンの成果物。**実装とテストは 1 行も触っていない。**
-
-#### 直したもの
-
-| 文書 | 何 |
-|---|---|
-| `sites/dev/signal-chain/mixer-audio-line.md`（+ `en/`） | `SetBusLine` の節を新設（wire 語彙・検証が session / `EngineWrap` の 2 層に分かれた理由・拒否 code の表・forward-only は残り kind 制約は無いこと・全か無かの publish・`master` も同じ publish に乗ったこと）。`verified-against` を `f6c9c37` へ |
-| `sites/dev/rust-engine/index.md`（+ `en/`） | `set_global_gain` の節の記述を訂正（下記）|
-| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.4 | 「v1 の現在地」の行番号が `engine_wrap.rs:5809-5813` 等で古かったので実測値へ。**wire 側の kind 制約は PR-O3b で外れたが、送信元がまだ無いので譜面から見える振る舞いは変わっていない**ことを追記 |
-
-#### 🔴 差分と食い違っていた記述を 1 件訂正した — `explicit_line`
-
-PR-O3b 本文・WORK_LOG・dev サイトの 3 箇所が「`explicit_line` は最初の `SetBusLine("master", …)` まで
-`false` なので既存譜面は従来経路をそのまま通る」と書いていた。だが差分を読むと、
-`MasterLine::line_program_installer` が返す closure は install 成功時に**無条件で**
-`explicit_line` を立てる（`rust/crates/orbit-audio-native/src/output.rs:790-798`）。
-そして `EngineWrap::set_global_gain` は `outproc-effect` build でそのハンドルを呼ぶ
-（`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9284-9290`）。
-
-したがって **`SetGlobalGain`（DSL の `global.gain()`）を 1 回受けた時点で** master の render は
-`execute_master_line` 側（`output.rs:1719-1721`）へ移る。dev サイトの記述をコードに合わせて直し、
-**出力にどう出るかは実機で測っていない**ので `NOTE: unverified` を付けた。
-
-差分から読み取れる差は 2 つ（どちらも未測定）:
-
-- ランプ長の出どころ — `MasterLine::ramp_frames` は sample_rate から算出、`LineSlot::new` の既定は
-  **240 固定**（`output.rs:1196`）。`set_sample_rate` は insert bus の line にしか呼ばれない（同 `:2765`）
-- 再 publish のたびに `LineProgram::new` が gain セルを **1.0 から**始める（同 `:1005-1020`）
-
-**判断は仕様の側なので、追従作業では直していない。** #823 追従 PR の本文で質問として出している。
-
-#### 検証
-
-`npm run docs:build`（user / dev）と `npm run docs:check`（**1,026 citations verified / 0 failed**）。
-
----
-
-### feat(daemon): SetBusLine wire command and TS client (#611 PR-O3b) (Sep 9, 2026)
-
-**Issue**: #611 / **ブランチ**: `611-o3b-setbusline` → `611-line-wire-b`（小 PR）/
-**実装**: Codex（`gpt-5.6-sol` / effort high・専用 worktree）/ **検証**: main（本ツリー）
-
-#### 何を足したか
-
-| 層 | 何 |
-|---|---|
-| `session.rs` | `parse_set_bus_line_params`（wire 形式の検証）+ dispatch。feature 無効ビルドは `UNSUPPORTED` |
-| `engine_wrap.rs` | `set_bus_line`（意味論の検証 → `LineProgram` 構築 → 全検証後に一括 publish）・`SetGlobalGain` と master line の同期 |
-| `output.rs` | 🔴 **`MasterLine.line` と `execute_master_line`**（下記）|
-| `lib.rs` | O3a の型（`LineOp` / `LineOutput` / `LineProgram` / `OutputDest`）と installer の re-export |
-| `protocol-types.ts` / `daemon-client.ts` | `'SetBusLine'` / `setBusLine()` / `WireDest` / `WireLineOp` |
-
-🔴 **TS の呼び出し元は作っていない**（DSL から送るのは PR-O4）。
-🔴 **旧 `SetBusRouting` は併存**（撤去は PR-O6）。既存テストは 1 行も書き換えていない。
-
-#### 🔴 PR-O3a の実装漏れを 1 件埋めた — `MasterLine.line`
-
-設計 611 **§5.2 は `MasterLine` に `line: LineSlot` を持たせる**と定め、**§4.1 の `bus` は `"master"` を
-受理対象**にしている（`master` の自己参照を拒否する検証行がその証拠）。ところが **PR-O3a はそれを
-入れていなかった** — main `2ca00f6a` の `output.rs` の `MasterLine` は `post` / `gain_target` などだけで、
-**`SetBusLine("master", …)` を受理する先が無い**。
-
-本 PR が §5.2 を埋めた。**互換は分岐で保つ**:
-
-```
-if master.explicit_line { execute_master_line(...) }   // publish 後
-else { post → advance_gain → place_master_into_device }  // 従来経路（1 命令も変えていない）
-```
-
-`explicit_line` は最初の `SetBusLine("master", …)` が publish されるまで `false` なので、
-**既存譜面は従来経路をそのまま通る**。O0 golden の bit 一致はこの分岐で構造的に保たれる
-（既存の `legacy_*_bit_for_bit` 群が無改変で緑）。
-
-⚠️ 計画 §1.10 の「触るファイル」欄が `output.rs` を落としていた（見積もりの漏れ）。
-`BUNDLE_BRANCH_WORKFLOW` §5.1b に従い、**実装の前に**計画へ理由と追加の検証条件を書いた（`fc67c771`）。
-
-#### 検証の層を分けた（main の裁定・2026-09-08）
-
-`validate_line_program`（`output.rs`）は **RT 実行の可用性ゲート**であって wire の契約検証ではない。
-そこは `Pan` / `Render` / `Link` を `OutputError::NoConfig` で拒否しており、**その文言を wire へ流すと
-`DEVICE_CONFIG_ERROR` になって §4.1 のどの行とも一致しない**（`actionable_output_error_code` は
-4 種の device エラーしか拾わない）。
-
-したがって `set_bus_line` が §4.1 の表を**先に**適用する。**このゲートは無改変**（差分に出ていない）:
-
-| §4.1 の行 | wire code | 経由する variant |
-|---|---|---|
-| 形式不正・`rack` 二重・`master` 自己参照・`render` 未登録 | `MALFORMED_REQUEST` | `OutProcEffectRequest` |
-| `dest.bus` 未知 / forward-only 違反 | `OUTPROC_EFFECT_RUNTIME` | `OutProcEffect` |
-| `dest.device` 範囲外・`a == b` | `PARAM_OUT_OF_RANGE` | （session の dispatch で直接）|
-| `dest.link`（feature 無し） | `LINK_AUDIO_UNAVAILABLE` | `LinkAudioUnavailable` |
-| feature 無効ビルド | `UNSUPPORTED` | （dispatch の `#[cfg(not(...))]`）|
-
-🔴 **ブリーフ（09-07 起案）は 3 箇所を誤っていた**ので、着手前に一次ソースで検算して訂正した:
-`engine_wrap.rs` の行番号（6227 → **6310**）/ feature 無効時の code（`OUTPROC_EFFECT_UNAVAILABLE`
-→ **`UNSUPPORTED`**）/ wire code は variant 名と別物であること。**訂正しなければ、存在しない
-エラー code を期待するテストが緑になっていた。**
-
-#### 検証（🔴 すべて main が本ツリーで実行）
-
-| 検証 | 結果 |
-|---|---|
-| `cargo test --workspace --locked` | **617 passed / 0 failed / 38 ignored** |
-| `cargo test -p orbit-audio-daemon --features outproc-effect,outproc-instrument` | **339 passed / 0 failed / 13 ignored**（新規 `set_bus_line_*` 11 件を含む）|
-| `cargo fmt --all --check` | 緑 |
-| `cargo clippy --workspace --all-targets -- -D warnings` | 警告なし |
-| `cargo clippy -p orbit-audio-daemon --features outproc-effect,outproc-instrument --all-targets` | 警告なし |
-| `npm run lint` | 緑 |
-| `npm test` | **2,329 passed / 58 skipped / 0 failed**（164 ファイル）|
-| `npm run build` / `npm run typecheck:e2e` | 緑 |
-
-🔴 **委譲先が走らせられなかったものが 2 つあった**:
-
-1. **protocol 統合テスト 61 件** — Codex の sandbox は localhost bind を許さず
-   `bind_localhost ... Operation not permitted` で全件落ちていた。**本ツリーでは bind エラー 0 件で全緑**
-2. **TS 側すべて** — worktree に `node_modules` が無く、lint / vitest / tsc を一度も実行していない
-
-**「Codex が緑と言った」だけでマージできる PR は構造的に存在しない**（CLAUDE.md）ことが、
-そのまま再現した形。
-
-#### main が差分を読んで直した点（1 件）
-
-`output.rs` の従来経路を `else` 分岐へ包む際に、**設計判断を記録したコメント 3 ブロックが削除**されていた:
-`g == 1.0` が bit 一致を崩さない理由 / デバイス配置の意味（設計 §5.3 row 6）/
-🔴 **`hw` を全域 zero-fill してはいけない**理由（`place_master_into_device` が全要素を書くので、
-1ch・2ch では毎ブロック二重 store になる。64 frames × 2ch で約 96,000 store/秒の無駄）。
-
-**コードは無改変だがコメントだけ落ちる**類の欠落で、テストでは検出できない。復元した。
-
-#### 🔴 CI が捕まえた検証漏れ — `docs:check` を手元で回していなかった
-
-小 PR [#823](https://github.com/signalcompose/orbitscore/pull/823) の CI で `code-review` が落ちた。
-原因は**実装ではなく dev サイトの引用**で、**102 件が FAIL**。Rust に +1,096 行入れたので
-`// file:start-end` の行番号が動いたため。
-
-**私（main）の検証漏れである**。cargo・vitest・lint・build・typecheck は回したのに、
-**`npm run docs:check` を回していなかった**。`--no-verify` でコミットしたので pre-commit も走らず、
-**CI が唯一の検出点になっていた**。
-
-対処:
-
-| 手 | 結果 |
-|---|---|
-| `node sites/dev/scripts/check-citations.mjs --fix` | 102 → **4 件**（スニペットの移動ぶんは自動で再アンカーされる）|
-| 残り 4 件（ja/en の 2 箇所） | **引用の中身自体が変わっていた**ので `--fix` では直らず、コードブロックごと差し替えた |
-| 地の文 | `EngineWrap::set_global_gain` の説明が「`MasterLine` の目標値へ atomic store するだけ」のままだった（本 PR で master line への再 publish が 1 段増えている）。ja / en とも追記した |
-
-最終: **1,012 citations verified / 0 failed**・`npm run docs:build` 成功。
-
-🔴 **教訓**: Rust に大きな差分を入れたら **`docs:check` は cargo と同じ列に置く**。
-引用は「コードは正しいが記述が古い」を検出する層で、他のどのテストも代わりにならない。
-
-#### `/simplify` の結果（4 観点を並行・束 PR [#824](https://github.com/signalcompose/orbitscore/pull/824)）
-
-**適用したもの**:
-
-| 指摘 | 出所 | 何をしたか |
-|---|---|---|
-| master 分岐と named bus 分岐で **Device 変換・Render/Link 拒否が一字一句同一** | altitude・simplification が**独立に**指摘 | `device_dest_from_wire` / `render_dest_rejected` / `link_dest_rejected` の 3 つへ抽出。両分岐から呼ぶ |
-| `link` のエラー文言が「requires link-audio」で誤解を招く | altitude | **feature の有無ではなく RT が未配線だから拒否している**ので「is not wired into RT execution yet」へ。code は §4.1 どおり `LINK_AUDIO_UNAVAILABLE` のまま |
-| `explicit_line` の**消える条件**がコメントに無い | altitude | 「PR-O4 で新表面が実機で確かめられ、PR-O6 で旧経路が撤去され、O0 golden を取り直した後」と明記 |
-| `MasterLine::new` の既定 program が control 側 shadow と食い違う | simplification | **RT では一度も実行されない**（`explicit_line == false` の間は固定経路へ分岐する）ことを明記。不整合ではない |
-| `explicit_line` は `SetGlobalGain` でも `true` になる | simplification | フィールドの doc に明記（名前は「明示的な line が入ったか」の意） |
-
-🔴 **1 件は指摘が誤りだった（適用しかけて戻した）**。simplification が「`gain` の上限チェックが
-session 側にしか無い＝乖離」と報告したので条件を揃えたが、**型が違うため乖離ではない**:
-session は JSON の **f64** を受けるので `> f32::MAX` を弾いてから `as f32` する必要がある（変換で
-`inf` になるのを防ぐ）。`engine_wrap` 側は既に **f32** で、`is_finite()` が `inf` を弾き、有限な f32 は
-定義上 `f32::MAX` 以下。戻した上で**理由をコメントに残した**（次に同じ指摘が出ても即座に却下できる）。
-
-**skip したもの**:
-
-| 指摘 | skip の理由 |
-|---|---|
-| forward-only 判定が 3 箇所目 / activation ループが同一 | 相手の `set_bus_routing` は **PR-O6 で退役**（計画 §1.10）。今統合すると O6 で解く手間が増える。かつ `set_bus_line` が `bus_kinds` を見ないのは設計 §4.1 の**裁定 ③（kind は問わない）どおり** |
-| `LineOp::Gain` の逐語重複（6 行 × 2） | 軽微。master と insert bus で buffer と `ramp_frames` の取得元が違い、抽出しても引数で受け渡すだけになる |
-| `bus_lines` / `bus_line_programs` の二重 map | 旧 `SetBusRouting` と対になっており、PR-O6 で片方が消える |
-| Render/Link の判断が 3 層 4 箇所 | 一本化は範囲が大きい。**一次情報は `validate_line_program`** である旨を各所のコメントに書いて代替した |
-
-**efficiency は「該当なし」**が結論 — RT パス（`execute_master_line` / `LineSlot::load`）に
-**alloc・lock・syscall は無く**、`LineSlot` / `LineExchange` の退役規律も PR-O3a の insert bus と
-**同じ型をそのまま再利用**している。control 側の clone やロック区間の指摘はすべて
-「ユーザー操作 1 回・低頻度」の規模だった。
-
-適用後の再検証: cargo **617 / 339 passed・0 failed**（変更前と同数）・fmt・clippy 警告なし・
-`docs:check` **1,012 verified / 0 failed**（helper 追加で行番号が動いたので `--fix` で再アンカー）。
-
-#### 🔴 レビュー・ラウンド 1 — 既存機能の回帰を 1 件止めた
-
-レビューチーム 4 名 + Fable 監査を**並行**投入（CLAUDE.md）。**Critical 5 / Important 3 / Minor 2**。
-
-##### 最重要: `global.gain()` の可聴ポップ（**code-reviewer と Fable が独立に指摘**）
-
-`SetGlobalGain` を master line へ写した結果、`LineProgram::new` が `current_gain` を全 op で 1.0 から
-始めるため、**2 回目以降の `global.gain()` で ramp が unity から再開**する。直前の実効ゲイン
-（例 −20 dB）から目標（−10 dB）へ寄る代わりに**一度 1.0 へ跳ね上がってから寄る** — 64 frame の
-小バッファでは数ブロックかかるので可聴のポップになる。
-
-🔴 **これは新機能の不足ではなく回帰**である。この PR の前は `SetGlobalGain` が `gain_target` atomic を
-更新するだけで、`advance_gain` が**呼び出しをまたいで `gain_current` を連続させていた**。
-
-**裁定と、その前にやったこと**: 設計 §4.2 は「**意味を変えない形で**写す」と書いており、条件を
-満たしていない。運用規則 6 に従い**設計を先に更新**してから実装を直した:
-
-| 文書 | 追記 |
-|---|---|
-| §4.2 | 🔴 **この写しは PR-O4 と同時**。O3b で写すと TS がまだ `SetGlobalGain` を送るので回帰する |
-| §5.1 | 🔴 **再 publish 時の `current_gain` 初期値規則**（本書に欠けていた節）|
-
-Fable が「**§5.1 に新 program の初期値規則が無い**」と指摘したのが要点だった。規則が無いので
-実装者が判断できず、Codex は素直に `LineProgram::new` を使った。**規則を先に書く。**
-
-##### 適用した fix（Codex・ポリシーを 1 本にまとめて一括発注）
-
-| # | 何を |
-|---|---|
-| 1 | `set_global_gain` から master line 再 publish を**外した**（`master_gain.store` のみ＝この PR の前と同じ）|
-| 2 | 🔴 **`master.line.set_sample_rate` の呼び忘れ**（Fable）。`LineSlot::new` は `ramp_frames: 240` 固定で、呼び出しは insert bus の 1 箇所だけだった → 44.1k / 96k で master の ramp が 5 ms からずれていた |
-| 3a | `bus_actives` の活性化テスト（旧 `SetBusRouting` には前例があるのに新規側に無かった）|
-| 3b | **device channel の 1 始まり → 0 始まり変換**。🔴 `device_dest_from_wire` は**どのテストからも一度も実行されていなかった** |
-| 3c | `set_bus_line("master", …)` の成功系と全か無か（既存の master テストは installer を直接呼んでおり `set_bus_line` を通らなかった）|
-| 3d | 裁定③（kind を問わない）の**正のテスト**。🔴 Codex が「**kind チェックを復活させても既存 290 件は全緑**」を先に実証してから追加した＝変異検証として機能した |
-| 4 | `debug_assert!` が release で no-op であること・到達不能を保証するのは control 層だけであること・破れたら**無音でログにも残らない**ことをコメント化（実装は変えない）|
-| 5 | `explicit_line` の doc から**一次文書に根拠の無い一文**を削除（`/simplify` で main が書いたもの）|
-
-##### 検証（🔴 すべて main が本ツリーで実行）
-
-| 検証 | 結果 |
-|---|---|
-| `cargo test --workspace` | **617 passed / 0 failed / 38 ignored** |
-| `cargo test`（outproc features） | **344 passed / 0 failed / 13 ignored**（339 → 344・新規 5 件）|
-| fmt / clippy 2 本 | 警告なし |
-| `npm test` | **2,329 passed / 58 skipped** |
-| `npm run lint` / `typecheck:e2e` / `docs:build` | 緑 |
-| `npm run docs:check` | **1,012 verified / 0 failed**（Rust の行番号が動いたので `--fix` + 引用の中身を差し替え）|
-
-🔴 **Codex は sandbox で cargo の 29 件 / 32 件を落としていた**（`bind_localhost ... Operation not
-permitted`）。本ツリーでは **bind エラー 0 件で全緑**。「委譲先の緑は実機の緑ではない」が再現した。
-
-##### owner の裁定を仰いでいる 2 件（O3b の範囲外）
-
-Fable が **設計 §4.1 自体が 2026-09-03 の裁定を反映していない**ことを発見した:
-
-- **`pan` op が wire に無い** — §2.4b / W-18 は「wire に `pan`」と書くが §4.1 の `WireLineOp` は 3 op
-- **mono device が wire で表現できない** — §2.2 の `mix.output(3)` / §5.1 の `right: None` に対し、
-  §4.1 の `channels: [number, number]` は 2 要素必須
-
-実装は §4.1 に忠実なので**本 PR の欠陥ではない**。§4.1 の改訂自体は運用規則 6 に従い今やるべきだが、
-束の範囲を広げる判断なので owner の裁定待ち。
-
-#### 🔴 束の締め — 収束条件を満たした（2026-09-09 実測）
-
-**マージ前ゲート**（無条件の 3 行 + build）:
-
-| ゲート | 結果 |
-|---|---|
-| `npm run build` | errors 0 |
-| `bash rust/crates/orbit-std-gain/bundle-macos.sh` | `Gain.clap` 生成 |
-| `cargo test -p orbit-effect-rack-child --lib -- --ignored` | **3 passed**（実 gain プラグイン依存）|
-| `cargo test -p orbit-effect-rack-child --lib`（`--ignored` **無し**）| **16 passed**（退行検知テストが実際に走った）|
-
-**実機 gated 全件**（`npm run test:e2e:gated`・523 秒）: **29 passed / 1 failed**。
-
-🔴 **収束条件「goldens が 1 つも動かないこと」を達成**:
-
-| golden | 実測 |
-|---|---|
-| `#611 O0-1` no-bus RMS | `0.08701663328646671` / `0.0870166332956341`（2 セッション）|
-| `#611 O0-2` sum-output RMS | `0.08701663328620282` |
-| `#611 O0-3` `send(0.3)` の total/dry | **`1.300000013268198`**（= 1 + 0.3）|
-| `#611 O0-4` `effect + gain(-6)` | `effectOnly 1.9952622668994517` / `combined 0.9999999200541101` |
-
-**4 件とも通過**。`#611 O0-4`（#775 の間欠故障）も**今回は緑**で、U2 に該当するログは 0 行だった。
-
-唯一の失敗は **`steps the live playhead`**（`timed out waiting for [STEP] markers ... after 20000ms`）で、
-これは **main baseline の既知の赤**（台帳に記載済み）。**新しい赤は 0 件。**
-
-孤児プロセス（`OrbitStudio` / `orbit-audio-daemon`）の残留なしも確認した。
-
-⚠️ **ログの所在で 2 回つまずいた**: `nohup` を `dangerouslyDisableSandbox` で回すと `$TMPDIR` が
-**sandbox 内とは別のパス**（`/var/folders/…/T/`）を指すため、sandbox 内から読めない。
-**完了マーカー（`EXIT=`）を先に見て集計行が無いことに気づいた**ので、「テスト本体に到達していない」と
-判断でき、実装ではなくログの所在を疑う方向に進めた。
-
-#### 🔴 owner 裁定（2026-09-10）— §4.1 を改訂し、`pan` / mono の実装は PR-O4 へ
-
-Fable が **設計 §4.1 だけが 2026-09-03 の裁定に追従していなかった**ことを発見した。
-
-| 層 | mono `device` | `pan` op |
-|---|---|---|
-| §2.2 / §2.4b（DSL 表面・09-03 裁定）| `mix.output(3)` = L+R マージ（Q-611-5）✅ | ライン要素（Q-611-4）✅ |
-| §2.x の TS 型（`:162` `:179`）| `[number,number] \| [number]` ✅ | `{ kind: 'pan' }` ✅ |
-| §5.1 / §5.3（Rust 型・RT 式）| `Device { right: Option<usize> }` ✅ | `LineOp::Pan` と式 ✅ |
-| 🔴 **§4.1（wire）** | **2 要素固定** ❌ | **3 op のみ** ❌ |
-
-🔴 **PR-O3b の実装は §4.1 に忠実だったので、実装の欠陥ではない。**
-**正本が古いと、忠実さがそのまま欠落になる。**
-
-**裁定**: §4.1 を改訂し、**実装は両方 PR-O4（束 O-surface）で 1 回にまとめる**。
-
-**なぜ O3b でやらないか**（2 件でコストが違うので分けて判断した）:
-
-| | mono `device` | `pan` op |
-|---|---|---|
-| RT の実装 | ✅ **既にある**（`add_to_device` が `right: None` で L+R を 0.5 マージ）| ❌ **無い**（`validate_line_program` が拒否し実行側も空）|
-| 必要な作業 | wire の型と parse（約 40 行）| wire + **RT 実行**（等パワー・約 150 行）|
-
-`pan` は RT 実装を伴うので O3b に入れると**「振る舞いを変えない」という束の性格が壊れ、
-goldens の「動かないこと」という検算が使えなくなる** — O3 を O3a / O3b に割ったのは
-まさにこの検算を守るためだった。mono だけ先に足すと **wire を 2 回変える**ことになり、
-一方通行の変更回数が増える。したがって**両方を O4 で 1 回にまとめる**。
-
-⚠️ 計画 §2.1 の「1 PR で wire と DSL の両方を変えると golden の差分がどちら由来か分からない」に
-抵触するが、**`pan` については §2.4b が既に「`pan` を含む譜面の golden は再ベースライン」と
-裁定済み**（owner 受け入れ済み）なので、帰属問題はその範囲で扱える。
-
-**更新した文書**: 設計 §4.1（型・検証表 2 行・経緯の引用ブロック）/ 計画 §1.10 の PR-O4 行
-（wire + RT の `Pan`・`SetGlobalGain` の写しも O4）。
-
-#### 未検証・次の束へ
-
-- 実機 gated（**goldens が 1 つも動かないこと**）は**束の締め**で 1 回 → ✅ **上記のとおり達成**
-- 🔴 **PR-O4 が引き継ぐもの**（本 PR では実装しない）: `pan` op の wire + RT / mono `device` の wire /
-  `SetGlobalGain` の master line への写し（§4.2・ramp の実効値引き継ぎ機構とセット）
-- `LineOp::Pan` の wire 表現は無い（§4.1 の `WireLineOp` に `pan` が無い・PR-O4）
-- `dest.render` は登記簿（`DeclareRender`・PR-R2）が無いので今日はすべて拒否
-
----
-
-### chore(docs): rotate WORK_LOG before the O-wire-b bundle (Sep 9, 2026)
-
-**ブランチ**: `611-o3b-setbusline` → `611-line-wire-b`（束 O-wire-b の前処理）
-
-`tests/docs/worklog-size.spec.ts` の上限 2,000 行に対し **1,998 行**（残り 2 行）だったので、
-PR-O3b のエントリを書く前にローテーションした。
-
-| | 前 | 後 |
-|---|---|---|
-| `docs/development/WORK_LOG.md` | 1,998 行 | **1,430 行** |
-| `docs/archive/WORK_LOG_2026-09.md` | 4,535 行 | 5,119 行 |
-
-移設したのは **Sep 6 のエントリ 11 件**。archive 側に
-「## 09-06 の追補（本体の 2,000 行上限で移設・2026-09-09 第 3 回）」を新設して先頭へ入れた。
-本体末尾の索引と `docs/core/INDEX.md` の表は **`2026-09（前半・09-01〜09-06）` のままで正しい**
-（移したのが 09-06 の範囲内なので期間が変わらない）。
-
-🔴 日付が混在していたので**行の位置ではなく見出しの日付で選別**した。Sep 6 群の間に
-Sep 7 のエントリ 2 件（E-gate のレビュー fix と `/simplify`）が挟まっていたため、
-行範囲で切ると一緒に移動してしまう。
-
----
-
-### docs: restore the three index lines the #821 consolidation dropped (Sep 8, 2026)
-
-**追従元**: PR [#821](https://github.com/signalcompose/orbitscore/pull/821)（マージコミット `2489218` / head `8c40ce8`）/ **ブランチ**: `claude/docs-sync-pr821`
-
-#821 は 3 本のルーティン追従 PR（#809 / #818 / #820）を 1 コミットにまとめ直したが、**その過程で 3 行が落ちた**。PR 本文は「中身はそのまま」と書いており削除に触れていない。**同じ PR が入れた WORK_LOG 本文が、落ちた行を実在する前提で書いている**（#820 分「#819 は CLAUDE.md と INDEX.md からポインタを張った」/ #818 分「INDEX.md Planning 表に `issue-states.json` を登録」）ため、意図した削除ではなく取りこぼしと判断して復元した。
-
-#### 直した箇所
-
-| ファイル | 何を | 出どころ |
-|---|---|---|
-| `CLAUDE.md:181-183` | Development Commands 直後の macOS スキャン警告（`MACOS_DEV_SETUP.md` へのポインタ）| PR #819（`6e22a84`）が追加 → #821 が削除 |
-| `docs/core/INDEX.md:118` | Development 表の `MACOS_DEV_SETUP.md` 行 | 同上 |
-| `docs/core/INDEX.md:243` | Planning 表の `issue-states.json` 行（生成物・手で編集しない）| PR #818 に在ったが #821 に入らなかった |
-
-復元前、`MACOS_DEV_SETUP.md` は `docs/testing/TESTING_GUIDE.md:30` と WORK_LOG 本文からしか辿れず、`issue-states.json` はどこからも索引されていなかった。🔴 **この取りこぼしを赤にするテストは無い**（`worklog-size.spec.ts` は行数とアーカイブ名、`planning-issue-state.spec.ts` は状態語の矛盾しか見ない）。提案は PR 本文へ回した。
-
-#### 追従不要と判断したもの
-
-#821 の差分 6 ファイルはすべて docs で、`packages/engine/`・`rust/`・`packages/vscode-extension/` に変更が無い。DSL の構文・意味論、MCP ツールの引数と返り値、エディタの評価経路のいずれも変わらないため、`docs/specs-v2/`・`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`・`sites/user/`・`sites/dev/`（日英とも）は対象外。
-
----
-
-### docs(testing): point the testing guide at the macOS setup trap (PR #819 follow-up) (Sep 8, 2026)
-
-**追従元**: PR [#819](https://github.com/signalcompose/orbitscore/pull/819)（マージコミット `6e22a84` / head `5ef4151`） / **ブランチ**: `claude/docs-sync-pr819`
-
-docs-sync ルーチンが PR #819 のマージを受けて実行。#819 は `docs/development/MACOS_DEV_SETUP.md` を
-新設し、CLAUDE.md と `docs/core/INDEX.md` からポインタを張ったが、**Rust テストの手順書である
-`docs/testing/TESTING_GUIDE.md` には張られていなかった**。同ガイドの Prerequisites は
-「Rust toolchain」「macOS Apple Silicon」を要求しつつ、設定なしの macOS では
-`cargo test --workspace` が 37 分かかる事実に触れていない。
-
-#### 変更
-
-- `docs/testing/TESTING_GUIDE.md` の System Requirements 直後に `MACOS_DEV_SETUP.md` への
-  ポインタを追加（2,240 秒 → 66 秒・遅さの 91% はマルウェアスキャン・件数は不変）
-
-#### 追従不要と判断したもの
-
-#819 の差分は 4 ファイルすべてがドキュメント（CLAUDE.md / `docs/core/INDEX.md` /
-`MACOS_DEV_SETUP.md` / WORK_LOG.md）で、`packages/engine/`・`rust/`・
-`packages/vscode-extension/` に変更が無い。DSL の構文・意味論、MCP ツールの引数と返り値、
-エディタの評価経路のいずれも変わらないため、`docs/specs-v2/`・
-`docs/core/INSTRUCTION_ORBITSCORE_DSL.md`・`sites/user/`・`sites/dev/` は対象外。
-`sites/dev/` は内部構造の解説サイトで開発機セットアップの章を持たない（`orientation/` は
-`what-is-orbitscore.md` と `architecture-overview.md` のみ）。
-
----
-
-### docs: follow up PR #815 — record the new planning-doc ratchet where the rules live (Sep 8, 2026)
-
-**追従元**: PR [#815](https://github.com/signalcompose/orbitscore/pull/815)（#814・merge commit `5eaea2f`）/
-**ブランチ**: `claude/docs-sync-pr815` → main（ルーティンのドキュメント追従）
-
-PR #815 は**仕組み**（`tests/docs/planning-issue-state.spec.ts`）と**運用規則**
-（`BUNDLE_BRANCH_WORKFLOW.md` §5.1b）を足したが、**それを列挙している既存の 3 箇所には入っていなかった**。
-規律の一覧が実在の仕組みより古いままだと、次のセッションは「その仕組みは無い」と読む。
-
-| 直した先 | 何を |
-|---|---|
-| `CLAUDE.md`「これらは仕組みで強制されている」 | 表に 1 行追加。**捕まえるのは状態語の矛盾だけ**で内容の誤りは通ることも併記（出典必須の運用へ送る）|
-| `DEVELOPMENT_MAP.md` §0.2 | 運用規則 7（事実が変わった瞬間に地図を更新）・8（実測には出典）を追加。既存の規則 4「issue を閉じたら」より**広い**ことを明示 |
-| `PROJECT_RULES.md` §1c（棚卸しの作法）| `KNOWN_STALE_BASELINE` が**棚卸しの入口**であること・直したら削ること・増やして通さないこと |
-| `INDEX.md` Planning 表 | `docs/planning/issue-states.json` を**生成物**として登録 |
-
-🔴 **`packages/` `rust/` `sites/` は 0 件。** 元 PR に実装の差分が無く、`sites/dev` は
-コードの内部構造を扱う層なので追従先が無い（判断理由は PR 本文）。
-
 ---
 
 ## Archived sections
@@ -1095,4 +1167,4 @@ Older entries have been archived by month for readability:
 - [2026-06](../archive/WORK_LOG_2026-06.md)
 - [2026-07](../archive/WORK_LOG_2026-07.md)
 - [2026-08](../archive/WORK_LOG_2026-08.md)
-- [2026-09（前半・09-01〜09-07）](../archive/WORK_LOG_2026-09.md)
+- [2026-09（前半・09-01〜09-08）](../archive/WORK_LOG_2026-09.md)

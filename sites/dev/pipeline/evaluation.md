@@ -110,7 +110,7 @@ export interface InterpreterState {
 
 ```typescript
 // packages/engine/src/interpreter/interpreter-v2.ts:171-230 (file import の本体と session-log hook の設置を省略)
-    // Ensure SuperCollider is booted
+    // Ensure the audio engine is booted
     await this.ensureBooted()
 
     // File imports (IM.2, #456): evaluated BEFORE the entry's own declarations, in
@@ -147,7 +147,7 @@ export interface InterpreterState {
 
 順序をまとめると:
 
-1. `ensureBooted()` — 音声バックエンドが起動済みか確認し、未起動なら起動 (コメントは「SuperCollider」のままですが、既定では Rust daemon が起動します)
+1. `ensureBooted()` — 音声バックエンドが起動済みか確認し、未起動なら起動 (唯一のバックエンドである Rust daemon が起動する)
 2. `processFileImports()` — `import { ... } from "./x.orbs"` を entry 自身の宣言より先に評価 (存在する場合のみ)
 3. `processGlobalInit()` — `var global = init GLOBAL` の処理 (存在する場合のみ)
 4. `setDocumentDirectory()` — `documentDirectory` オプションがあれば Global に設定

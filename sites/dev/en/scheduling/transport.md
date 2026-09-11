@@ -139,7 +139,7 @@ The important point here is **idempotence**. If `_isRunning` is already `true`, 
 Eventually, `RustEnginePlayer.start()` starts `setInterval(1)` and records the playback start time as `startTime = Date.now()`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1537-1541
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1547-1551
   start(): void {
     if (this.isRunning) return
     this.isRunning = true
@@ -287,7 +287,7 @@ In the 2026-05 version this was hard-coded as `audioEngine: new SuperColliderPla
 When `Cmd+Enter` is pressed, the VS Code extension writes only the text of the block at the cursor (or the selection) to stdin.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:3153-3153
+// packages/vscode-extension/src/extension.ts:2744-2744
   engineProcess.stdin.write(codeToSend + '\n')
 ```
 
@@ -444,7 +444,7 @@ All `ScheduledPlay.time` values are **relative times (ms)** based on the schedul
 The important point is that `startTime` is not reset even when `stop()` is called.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1556-1562
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1566-1572
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId)
@@ -502,7 +502,7 @@ started later. The handle is now held by `StateManager` as `runTimer`, and `clea
 first at the entry of `run()` / `loop()` / `stop()`.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:2017-2045
+// packages/engine/src/core/sequence.ts:2026-2054
   stop(): this {
     const sequenceName = this.stateManager.getName()
     const wasLooping = this.stateManager.isLooping()

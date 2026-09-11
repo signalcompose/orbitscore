@@ -1,5 +1,7 @@
 # Getting Started with OrbitScore
 
+> ⚠️ **DEPRECATED (as of 2.0.0)** — This guide predates the Rust cutover (#108) and instructs installing SuperCollider, which was removed as an opt-out backend in **#502 (2026-09-10)**. OrbitScore now ships a bundled native Rust audio engine (`orbit-audio-daemon`) — no external audio engine install is required. See the **VitePress user site (`sites/user/`)** for current getting-started documentation. Kept for history.
+
 **Quick start guide for OrbitScore audio-based live coding DSL**
 
 ## Prerequisites

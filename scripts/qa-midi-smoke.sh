@@ -3,7 +3,7 @@
 # qa-midi-smoke.sh — parse/schedule health smoke for MIDI .orbs examples (Epic #278, Phase B).
 #
 # Runs each example through the REAL engine path via the midi-run CLI (parser →
-# degree resolution → MidiScheduler → MidiOutput → IAC) WITHOUT SuperCollider, then
+# degree resolution → MidiScheduler → MidiOutput → IAC) WITHOUT booting the audio engine, then
 # checks that it reached the running state AND actually scheduled its sequences AND
 # emitted no swallowed engine error.
 #

@@ -163,8 +163,8 @@ git branch --show-current
 ### Project Overview
 **OrbitScore** - Audio-based live coding DSL for modern music production
 - Product: OrbitScore 2.0.0 (`ENGINE_VERSION 2.0.0` / `DSL_VERSION 1.1`、拡張 2.1.0)
-- Audio Backend: Rust `orbit-audio-daemon`（既定・cutover #108）。SuperCollider は `ORBITSCORE_ENGINE=sc` で opt-out
-- Test Status: `npm test` で 2100 件超（2026-09-02 実測・macOS: 2165 passed / 68 skipped / 2233 total。skip は macOS 実機・daemon 依存）
+- Audio Backend: Rust `orbit-audio-daemon`（唯一のバックエンド。cutover #108 で既定化・SuperCollider opt-out 経路は #502 で削除）
+- Test Status: `npm test` で 2300 件超（**2026-09-10 実測**・macOS・`b9f6ded1`: 2271 passed / 58 skipped / 2329 total。skip は macOS 実機・daemon 依存。#502 で SC 専用 spec 7 本を削除した後の値）
 - Branch Strategy: GitHub Flow (`main` + feature branches)
 
 ### Development Commands
@@ -186,9 +186,9 @@ npm run docs:check       # dev 学習サイトの引用 (// file:start-end) を 
 
 ### Technology Stack Summary
 - **Frontend/DSL**: TypeScript, VS Code Extension API（拡張内に MCP サーバも同居）
-- **Audio Backend**: Rust `orbit-audio-daemon`（cpal / WebSocket IPC）+ out-of-process CLAP / VST3 children。SuperCollider (scsynth) は opt-out 経路
+- **Audio Backend**: Rust `orbit-audio-daemon`（cpal / WebSocket IPC）+ out-of-process CLAP / VST3 children（唯一のバックエンド。SuperCollider opt-out 経路は #502 で削除）
 - **Testing**: Vitest (Unit + Integration) + 実機 gated E2E（MCP 駆動・capture WAV アサーション） + cargo test
-- **Key Features**: Audio File Playback (WAV/AIFF/MP3/MP4), Polymeter, Pitch DSL / MIDI, Plugin Hosting (CLAP/VST3・UI・ラック), Mixer (sum/aux/send), LinkAudio
+- **Key Features**: Audio File Playback (WAV/AIFF/MP3/MP4), Polymeter, Pitch DSL / MIDI, Plugin Hosting (CLAP/VST3・UI・ラック), Mixer (sum/aux/send), LinkAudio（🔴 egress は出荷ビルドでは無効。daemon の `link-audio` feature が default off）
 
 **Details**: See [`docs/INDEX.md`](docs/INDEX.md)
 

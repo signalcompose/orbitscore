@@ -388,6 +388,13 @@ export class Sequence {
     this.ensureInsertBusForInstrument()
     if (this._insertBus) {
       this.syncBusLine()
+      // 🔴 instrument は、gain とは**無関係の理由**で即時 reschedule を必要とする: プラグイン
+      // スケジューラの `clearOwner` で保留中のノートを消すため（`sequence-instrument.spec.ts`
+      // の "gain() during LOOP clears pending notes" が固定している）。したがってこれは
+      // **push の成否に依存させてはいけない** — daemon が拒否してもノートは消す必要がある。
+      // 発音側の中立化（push 成功後）とは別の関心事なので、`adoptLineOnFirstBus()` ではなく
+      // ここで発火させる。audio + バス有りだけは skipReschedule=true（ライン側の ramp が継ぐ）。
+      this.seamlessParameterUpdate('gain', `${clampedDb} dB`, !this.isInstrument())
     } else {
       this.seamlessParameterUpdate('gain', this.gainManager.getGainDescription())
     }
@@ -426,6 +433,8 @@ export class Sequence {
     this.ensureInsertBusForInstrument()
     if (this._insertBus) {
       this.syncBusLine()
+      // gain() と同じ理由（上のコメント）。
+      this.seamlessParameterUpdate('pan', `${clampedPan}`, !this.isInstrument())
     } else {
       this.seamlessParameterUpdate('pan', this.panManager.getPanDescription())
     }
@@ -745,8 +754,8 @@ export class Sequence {
   /**
    * Declare this sequence as a MIDI output (§1). `play()` values are then
    * interpreted as degrees, not slice numbers. Cannot be combined with
-   * `audio()` / `chop()` / `instrument()`. Coexists with the SuperCollider
-   * audio path (no LinkAudio-style exclusion).
+   * `audio()` / `chop()` / `instrument()`. Coexists with the audio path
+   * (no LinkAudio-style exclusion).
    *
    * @param portName CoreMIDI output port (case-insensitive substring, e.g.
    *                 "iac" matches "IACドライバ バス1"). Resolved eagerly so an
@@ -1132,10 +1141,10 @@ export class Sequence {
     return this
   }
 
-  // Note: Audio loading is now handled by SuperCollider's buffer manager
+  // Note: Audio loading is now handled by the audio engine's buffer manager
   // This method is kept for backward compatibility but does nothing
   async loadAudio(): Promise<void> {
-    // SuperCollider handles audio loading internally via loadBuffer()
+    // The audio engine handles audio loading internally via loadBuffer()
     // No action needed here
   }
 
@@ -1197,7 +1206,7 @@ export class Sequence {
 
   /**
    * The scheduler this sequence schedules against: the MIDI transport (a shared
-   * TransportClock, no SuperCollider) for MIDI sequences, the SC audio engine
+   * TransportClock, no audio engine) for MIDI sequences, the audio engine
    * for audio sequences. Both share the same Date.now() origin, so audio and
    * MIDI stay in sync (§1).
    */
