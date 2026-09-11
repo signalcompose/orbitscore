@@ -242,7 +242,7 @@
 | PR-S-R4 | `feat(release): sign and notarize OrbitStudio.app` | **#656** 署名・公証（entitlements は実測後・`disable-library-validation` の記述は repo に無い）| `make-local-release.sh` +90・plist・`CODESIGN_PIPELINE.md` | PR-S-R3 | E2E-D4（署名済み `.app` で 3rd-party が鳴る）・停止条件あり | 🔴 W-14 |
 | PR-S-R5 | `ci(release): publish the signed app on tag push` | #656 CI（app ジョブを足す）| `release.yml`（+45）| PR-S-R4・裁定 (3) | tag で 1 回通す | 配布物名 |
 | PR-S-C1 | `test(e2e): run the gated suite against the release artifact` | **#138**（`ORBIT_GATED_EXT_MODE=installed`・既存アサーションをそのまま成果物へ）| gated spec（+80）| PR-S-R3 | E2E-D3（PATH を絞って落ちるか）| — |
-| PR-S-C2 | `feat(studio): bundle node with the app and spawn the engine with it` | #138 の新規基準（owner 2026-09-03: **node を同梱**。PATH の node にはフォールバック + 警告）| `extension.ts`（+40）・`make-local-release.sh`（同梱 + 署名対象 +1）| PR-S-R3 | E2E-D3（PATH を絞っても起動する）| W-22 |
+| PR-S-C2 | `feat(studio): bundle node with the app and spawn the engine with it` | 🔴 **拡張線は PR #889 で完了**（`process.execPath` + `ELECTRON_RUN_AS_NODE=1`・同梱ゼロ）。本行は**ネイティブ `.app` 向けにのみ残る**（借りる VS Code が無い・`656-release-design.md` §6.3 Q-656-8b）。🔴 ネイティブの JS ランタイムを Node にするかは未決（`NATIVE_MIGRATION_2026-09.md` は Bun も候補に挙げている）ので、**「node 同梱」は placeholder** | `make-local-release.sh`（同梱 + 署名対象 +1）。**`extension.ts` は対象外**（拡張線は完了）| PR-S-R3 | `npm run test:e2e:cold-install`（拡張線・完了）/ ネイティブは未定 | W-22 |
 
 **先に着手できる**: PR-S-T1 / R1 / R2（裁定待ち 0）。
 

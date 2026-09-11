@@ -2006,8 +2006,10 @@ async function startEngine(
   // 代わりに **VS Code 同梱の Node** を使う。拡張ホストは Electron なので `process.execPath` は
   // そのままでは Node として動かず（実測: `Unable to find helper app` で落ちる）、
   // `ELECTRON_RUN_AS_NODE=1` が要る。**実測の出典: #878 / PR #889・2026-09-12・この開発機**
-  // （VS Code 1.104 系）: 同梱 Node は 24.18.1 でルートの `engines.node >=22.0.0` を満たし、
-  // `@julusian/midi` の N-API prebuild も素の node と同じく読めた（port count が一致）。
+  // （VS Code **1.134.0** / Electron 42.8.1）: 同梱 Node は 24.18.1 でルートの
+  // `engines.node >=22.0.0` を満たし、`@julusian/midi` の prebuild も素の node と同じく読めた
+  // （port count が一致）。後者は偶然ではない — `pkg-prebuilds` のローダは **N-API の時
+  // Electron 判定へ入らず** `node-napi-v7.node` に決定論的に落ちる（`pkg-prebuilds/bindings.js`）。
   // 🔴 版は VS Code に従属するので、ここの数値は**その時点の観測**であって要件ではない。
   //
   // 🔴 「Electron の `runAsNode` fuse を将来 VS Code が無効化したら、`spawn` は成功するのに
@@ -2020,7 +2022,12 @@ async function startEngine(
     engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
       cwd: workspaceRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
+      // `ELECTRON_NO_ASAR` は**素の node との意味論差を消すため**に併記する。
+      // `ELECTRON_RUN_AS_NODE` の子では Electron の asar フックが生きており、`fs` が
+      // 「`.asar` で終わるディレクトリ」をアーカイブとして扱う（Electron docs）。engine は
+      // 利用者の与えたパス（`global.audioPath(...)`）を読むので、そこに `.asar` が現れた時だけ
+      // 素の node と挙動が変わる。踏む確率は低いが、消すコストがゼロなら消しておく。
+      env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
     })
   } catch (err) {
     // spawn threw before engineProcess was assigned, so no engine state was dirtied.

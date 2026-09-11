@@ -58,13 +58,18 @@ import {
  * daemon へ渡す環境変数。**Node からネイティブ側への唯一の受け渡し地点**なので、
  * Node 実行のためだけの変数はここで落とす。
  *
- * 🔴 `ELECTRON_RUN_AS_NODE` は、拡張が VS Code 同梱の Node で engine を起動するために立てる
- * もの（#878）。Electron がプロセス初期化時に読んだ時点で役目は終わっており、**engine の子に
- * 引き継ぐ意味が無い**。落とさないと Rust の daemon がそのまま継承し、daemon は
- * out-of-process のプラグイン子プロセスを `Command::new` で起動する際に `env_clear` /
- * `env_remove` を一切呼んでいない（実測 0 件）ので、**第三者のプラグインホストまで Electron
- * 由来の変数が届く**。今日それを読むコードは無いが、`ps eww` やクラッシュレポートに説明の
- * 付かない変数が乗り続けるのは、意図した受け渡しではない。
+ * 🔴 根拠は **「自分が足したものを、自分の出口で戻す」**である。`ELECTRON_RUN_AS_NODE` は
+ * 拡張が VS Code 同梱の Node で engine を起動するために**足した**もので（#878）、Electron が
+ * プロセス初期化時に読んだ時点で役目は終わっている。engine の子に引き継ぐ意味が無い。
+ *
+ * 落とさないと Rust の daemon がそのまま継承する。daemon は out-of-process のプラグイン
+ * 子プロセスを `Command::new` で起動する際に `env_clear` / `env_remove` を一切呼んでいない
+ * （実測 0 件）ので、**第三者のプラグインホストまで届く**。
+ *
+ * 🔴 **「ホスト由来の変数を第三者へ渡さない」を根拠にしてはいけない** — それなら不十分である。
+ * 拡張ホストの env には `VSCODE_*` や他の `ELECTRON_*` も乗っており（VS Code 自身は端末を
+ * 起こす時に `sanitizeProcessEnvironment` で `/^(ELECTRON|VSCODE)_.+$/` を丸ごと落とす）、
+ * ここはそれらを素通しする。**そこまでやるなら別の設計判断**で、本関数の責務ではない。
  */
 export function daemonEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const { ELECTRON_RUN_AS_NODE: _dropped, ...rest } = source

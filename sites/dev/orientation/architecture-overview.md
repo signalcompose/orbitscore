@@ -155,7 +155,7 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
 🔴 起動するのは **VS Code 同梱の Node**（`process.execPath` を `ELECTRON_RUN_AS_NODE=1` で実行）であって、`PATH` 上の `node` ではありません（#878）。Finder / launchd から起動された VS Code の `PATH` は `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が無く、engine が `spawn node ENOENT` で起動しないためです。拡張ホストは Electron なので `process.execPath` はそのままでは Node として動かず、`ELECTRON_RUN_AS_NODE=1` が要ります。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1998-2024
+// packages/vscode-extension/src/extension.ts:1998-2031
   // Spawn engine process
   // 🔴 `node` を PATH から引かない（#878）。Finder / launchd から起動された VS Code の PATH は
   // `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が
@@ -167,8 +167,10 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
   // 代わりに **VS Code 同梱の Node** を使う。拡張ホストは Electron なので `process.execPath` は
   // そのままでは Node として動かず（実測: `Unable to find helper app` で落ちる）、
   // `ELECTRON_RUN_AS_NODE=1` が要る。**実測の出典: #878 / PR #889・2026-09-12・この開発機**
-  // （VS Code 1.104 系）: 同梱 Node は 24.18.1 でルートの `engines.node >=22.0.0` を満たし、
-  // `@julusian/midi` の N-API prebuild も素の node と同じく読めた（port count が一致）。
+  // （VS Code **1.134.0** / Electron 42.8.1）: 同梱 Node は 24.18.1 でルートの
+  // `engines.node >=22.0.0` を満たし、`@julusian/midi` の prebuild も素の node と同じく読めた
+  // （port count が一致）。後者は偶然ではない — `pkg-prebuilds` のローダは **N-API の時
+  // Electron 判定へ入らず** `node-napi-v7.node` に決定論的に落ちる（`pkg-prebuilds/bindings.js`）。
   // 🔴 版は VS Code に従属するので、ここの数値は**その時点の観測**であって要件ではない。
   //
   // 🔴 「Electron の `runAsNode` fuse を将来 VS Code が無効化したら、`spawn` は成功するのに
@@ -181,14 +183,19 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
     engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
       cwd: workspaceRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...env, ELECTRON_RUN_AS_NODE: '1' },
+      // `ELECTRON_NO_ASAR` は**素の node との意味論差を消すため**に併記する。
+      // `ELECTRON_RUN_AS_NODE` の子では Electron の asar フックが生きており、`fs` が
+      // 「`.asar` で終わるディレクトリ」をアーカイブとして扱う（Electron docs）。engine は
+      // 利用者の与えたパス（`global.audioPath(...)`）を読むので、そこに `.asar` が現れた時だけ
+      // 素の node と挙動が変わる。踏む確率は低いが、消すコストがゼロなら消しておく。
+      env: { ...env, ELECTRON_RUN_AS_NODE: '1', ELECTRON_NO_ASAR: '1' },
     })
 ```
 
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2764-2765
+// packages/vscode-extension/src/extension.ts:2771-2772
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
@@ -370,7 +377,7 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 `DaemonClient.start()` は「spawn → stdout の ready line を読む → WebSocket 接続 → handshake 受信」の順に進みます。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:313-351 (handshake の timeout 設定を省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:318-356 (handshake の timeout 設定を省略)
   private async doStart(options: DaemonClientOptions): Promise<void> {
     // 新しい起動サイクルでは crash 検出を再 arm する（前回 quit の意図的 close を引きずらない）。
     this.intentionalClose = false
@@ -394,7 +401,7 @@ export async function callMethod(obj: any, methodName: string, args: any[]): Pro
 daemon は engine から見ると **child process** です。ただし通信は stdin/stdout ではなく WebSocket で、stdout は起動時の ready line (port 番号を含む 1 行 JSON) を受け取るためだけに使います。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:903-916
+// packages/engine/src/audio/rust-engine/daemon-client.ts:908-921
   private async spawnDaemon(
     explicitPath: string | undefined,
     timeoutMs: number,
@@ -412,7 +419,7 @@ daemon は engine から見ると **child process** です。ただし通信は 
 ```
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:980-994
+// packages/engine/src/audio/rust-engine/daemon-client.ts:985-999
       // 現行 daemon は stdout の先頭行に ready JSON のみを書き、log は stderr に
       // 分離している (docs/research/ENGINE_DAEMON_PROTOCOL.md)。しかし将来の daemon
       // 実装で log banner 等が stdout に混入しても壊れないよう、JSON parse できる
@@ -437,7 +444,7 @@ daemon 側でこの ready line を書くコード (`main.rs` の `run()`) と、
 daemon バイナリの探索順は `resolveDaemonBinaryPath()` にあり、explicit → env (`ORBIT_AUDIO_DAEMON_PATH`) → monorepo release → monorepo debug → extension bundle の順です。
 
 ```typescript
-// packages/engine/src/audio/rust-engine/daemon-client.ts:240-276 (monorepo 候補と bundle の説明コメントを省略)
+// packages/engine/src/audio/rust-engine/daemon-client.ts:245-281 (monorepo 候補と bundle の説明コメントを省略)
 export function resolveDaemonBinaryPath(explicitPath?: string): DaemonBinaryResolution {
   const searched: string[] = []
   const candidates: DaemonBinaryResolution[] = []
