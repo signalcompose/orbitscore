@@ -65,7 +65,7 @@ export const sidebarJa: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
-    text: 'Part VII: SuperCollider 経路（削除決定 #502・歴史的読解）',
+    text: 'Part VII: SuperCollider 経路（#502 で削除済み・歴史的読解）',
     collapsed: true,
     items: [
       {
@@ -154,7 +154,7 @@ export const sidebarEn: DefaultTheme.SidebarItem[] = [
     ],
   },
   {
-    text: 'Part VII: SuperCollider Path (removal decided #502, historical)',
+    text: 'Part VII: SuperCollider Path (removed in #502, historical)',
     collapsed: true,
     items: [
       {

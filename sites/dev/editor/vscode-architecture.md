@@ -21,10 +21,10 @@ OrbitScore の VS Code 拡張 (`packages/vscode-extension`、package version 2.1
 3. [workspace trust と untrustedWorkspaces](#workspace-trust-と-untrustedworkspaces)
 4. [モジュールレベルの状態](#モジュールレベルの状態)
 5. [`activate()` 関数の全体像](#activate-関数の全体像)
-6. [Status Bar: 2 本のインジケータと engine kind](#status-bar-2-本のインジケータと-engine-kind)
+6. [Status Bar: 2 本のインジケータ](#status-bar-2-本のインジケータ)
 7. [Command 登録](#command-登録)
 8. [IntelliSense と診断の登録](#intellisense-と診断の登録)
-9. [バイナリ解決: scsynth と daemon](#バイナリ解決-scsynth-と-daemon)
+9. [バイナリ解決: daemon](#バイナリ解決-daemon)
 10. [Engine プロセスの spawn](#engine-プロセスの-spawn)
 11. [Engine との通信プロトコル](#engine-との通信プロトコル)
 12. [Engine の停止とライフサイクルの識別ガード](#engine-の停止とライフサイクルの識別ガード)
@@ -41,11 +41,10 @@ VS Code 拡張は **Extension Host** と呼ばれる専用の Node.js プロセ�
 VS Code Renderer (UI)
     └── Extension Host (Node.js)  ← 拡張コードが動く
             └── engine process (node engine/dist/cli-audio.js repl)  ← OrbitScore DSL エンジン
-                    ├── orbit-audio-daemon (Rust・既定・WebSocket)
-                    └── scsynth (SuperCollider・orbitscore.engine が "sc" のときのみ・OSC)
+                    └── orbit-audio-daemon (Rust・WebSocket)
 ```
 
-音声プロセスがどちらになるかは `orbitscore.engine` 設定 (既定 `"rust"`) で決まります。この分岐が本章の随所に顔を出します。
+音声プロセスは **orbit-audio-daemon の 1 種類だけ**です。かつては `orbitscore.engine` 設定 (既定 `"rust"`) で scsynth (SuperCollider・OSC) に切り替えられ、その分岐が本章の随所に顔を出していましたが、**2026-09-10 の裁定（#827 / [#502](https://github.com/signalcompose/orbitscore/issues/502)）で SC 経路・設定キーごと削除**されました。
 
 ---
 
@@ -216,7 +215,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
 ---
 
-## Status Bar: 2 本のインジケータと engine kind
+## Status Bar: 2 本のインジケータ
 
 Status bar インジケータは **2 本** あります。priority の値が違い、右端から並ぶ順が決まります:
 
@@ -889,17 +888,15 @@ flowchart TD
     subgraph ExtHost["Extension Host (Node.js)"]
         B["activate()"]
         B --> C["StatusBarItem × 2"]
-        B --> D["Command 19 個 + TreeView 2 つ"]
+        B --> D["Command 17 個 + TreeView 2 つ"]
         B --> E["IntelliSense providers\n(chain / pitch scope / plugin catalog)"]
         B --> F["DiagnosticCollection\n(open / change / close / 初期パス)"]
-        B --> G["getConfiguredEngineKind()"]
         B --> MCP["MCP server\n(port 非ゼロ時のみ)"]
         LC["engine-lifecycle.ts\n(純関数・identity guard)"]
         BR["bridges × 4\n(FIFO / timeout / drain)"]
     end
 
-    G -->|"rust"| H1["resolveDaemonForUI()\n→ engine/dist/.../daemon-client.js"]
-    G -->|"sc"| H2["resolveScsynthForUI()\n→ engine/dist/.../scsynth-resolver.js"]
+    B --> H1["resolveDaemonForUI()\n→ engine/dist/.../daemon-client.js"]
 
     D -->|"startEngine()"| N["child_process.spawn\n(node engine/dist/cli-audio.js repl)"]
     N -->|"stdin: DSL + //# メタ行"| O["Engine Process\n(OrbitScore REPL)"]
@@ -907,8 +904,7 @@ flowchart TD
     LC --> P["Output Channel + log ring"]
     LC --> BR
     LC --> PH["playhead decorations"]
-    O -->|"WebSocket"| Q1["orbit-audio-daemon\n(既定)"]
-    O -->|"OSC/UDP"| Q2["scsynth\n(sc のみ)"]
+    O -->|"WebSocket"| Q1["orbit-audio-daemon\n(唯一のバックエンド)"]
     MCP -->|"evaluate / run_selection / get_log …"| B
 ```
 
@@ -945,19 +941,19 @@ flowchart TD
 
 - [activate() / deactivate()](/glossary#activate--deactivate) — VS Code 拡張のライフサイクル関数。本章で詳説する `activate()` がすべての登録を行う
 - [activationEvents](/glossary#activationevents) — `"onStartupFinished"` と `"onLanguage:orbitscore"` の 2 種類で常時起動を実現
-- [workspace trust (untrustedWorkspaces)](/glossary#workspace-trust-untrustedworkspaces) — 未信頼ワークスペースで activate してよいかの宣言。`supported: true` と 2 件の `restrictedConfigurations`
+- [workspace trust (untrustedWorkspaces)](/glossary#workspace-trust-untrustedworkspaces) — 未信頼ワークスペースで activate してよいかの宣言。`supported: true` と、#502 以降は**空**の `restrictedConfigurations`
 - [Extension Host](/glossary#extension-host) — 拡張コードが動く Node.js プロセス。engine プロセスの親プロセス
 - [StatusBarItem](/glossary#statusbaritem) — `statusBarItem` (priority 100) と `bundleStatusItem` (priority 99) の 2 本を管理
 - [language ID (orbitscore)](/glossary#language-id-orbitscore) — `.orbs` ファイルに割り当てた言語 ID。IntelliSense・診断・キーバインドがすべてこの ID でフィルタリング
 - [DiagnosticCollection](/glossary#diagnosticcollection) — `updateDiagnostics()` が書き込む診断コレクション。open / change / close で更新
-- [scsynth](/glossary#scsynth) — `sc` kind のときだけ `resolveScsynthForUI()` が起動前に解決するオーディオサーバーバイナリ
-- [strict mode (scsynth resolver)](/glossary#strict-mode-scsynth-resolver) — バイナリが見つからなければ spawn 自体をキャンセルする fail-loud 設計。daemon 側にも継承
+- [scsynth](/glossary#scsynth) — `sc` kind のときだけ `resolveScsynthForUI()` が起動前に解決していたオーディオサーバーバイナリ。#502 で解決経路ごと削除済み（歴史的読解）
+- [strict mode (scsynth resolver)](/glossary#strict-mode-scsynth-resolver) — バイナリが見つからなければ spawn 自体をキャンセルする fail-loud 設計。scsynth 側の実装は #502 で削除されたが、daemon resolver がこの方針を継いでいる
 - [MethodChainContext](/glossary#methodchaincontext) — IntelliSense が文脈に応じた補完候補を出すためのメソッドチェーン状態表現
 
 ## 関連 ADR
 
 - [ADR-001 SuperCollider ベース実装の選択](/decisions/adr-001-supercollider) — engine の音声バックエンドの経緯と cutover #108 後の位置づけ
-- [ADR-003 scsynth bundle strict mode](/decisions/adr-003-scsynth-bundle) — `resolveScsynthForUI()` / `resolveDaemonForUI()` の fail-loud 設計の意思決定
+- [ADR-003 scsynth bundle strict mode](/decisions/adr-003-scsynth-bundle) — `resolveScsynthForUI()` / `resolveDaemonForUI()` の fail-loud 設計の意思決定。scsynth 側は #502 で削除され、いまは `resolveDaemonForUI()` だけがこの設計を実装している
 
 ## 次の深掘り候補
 
@@ -980,9 +976,9 @@ flowchart TD
 - `packages/vscode-extension/src/extension.ts:150-284` — live playhead の decoration 管理 (#390)
 - `packages/vscode-extension/src/extension.ts:286-498` — `activate()` 全体: log ring の monkey-patch・status bar・設定リスナー・command / TreeView 登録・診断・MCP サーバ・auto-start
 - `packages/vscode-extension/src/extension.ts:500-521` — `deactivate()`
-- `packages/vscode-extension/src/extension.ts:653-710` — `getConfiguredEngineKind()` / `resolveScsynthForUI()` / `resolveDaemonForUI()`
-- `packages/vscode-extension/src/extension.ts:725-798` — `updateBundleStatus()` / `maybeShowBundleNotice()`
-- `packages/vscode-extension/src/extension.ts:800-883` — `showCommands()` (engine kind で分岐) / `restartEngine()` / `reloadWindow()`
+- `packages/vscode-extension/src/extension.ts:628-642` — `resolveDaemonForUI()` (`getConfiguredEngineKind()` / `resolveScsynthForUI()` は #502 で削除)
+- `packages/vscode-extension/src/extension.ts:644-664` — `updateBundleStatus()` (`maybeShowBundleNotice()` は scsynth 専用だったため #502 で削除)
+- `packages/vscode-extension/src/extension.ts:666-683` — `showCommands()` (engine kind による分岐は #502 で削除・常に Engine ビューを focus) / `restartEngine()` / `reloadWindow()`
 - `packages/vscode-extension/src/extension.ts:1479-1587` — `setupStdoutHandler()`: `createLinePrefixer` + `StringDecoder` による bridge 振り分けと `applyEngineStdoutChunk` 呼び出し (#773)
 - `packages/vscode-extension/src/extension.ts:1589-1642` — `createLinePrefixer()`: chunk 列を行へ戻す (`partial` の持ち越し・`flush()`・空行を emit しない) と、実装コメントによる「chunk → 行」4 経路の列挙 (#756 / #773)
 - `packages/vscode-extension/src/extension.ts:1644-1680` — `setupStderrHandler()`: `ERROR:` の行単位前置と `end` での flush
@@ -1000,7 +996,7 @@ flowchart TD
 - `packages/vscode-extension/src/dsl-method-catalog.ts:1-14` — 補完語彙の複製とテストによる一致強制
 - `packages/vscode-extension/src/eval-mark-bridge.ts:1-23` — `//#evalMark` の設計理由 (FIFO)
 - `packages/vscode-extension/src/log-ring.ts:20-24` — `OUTPUT_LOG_RING_MAX = 1000` / `DEFAULT_LOG_LINES = 50`
-- `packages/engine/src/audio/supercollider/scsynth-resolver.ts:91-98` — `explicit > env > bundle > throw` 優先順位チェーン
+- `packages/engine/src/audio/supercollider/scsynth-resolver.ts:91-98` — `explicit > env > bundle > throw` 優先順位チェーン（**#502 でファイルごと削除**。commit `58f558f5` 以前の位置。現存する対応物は次行の daemon resolver）
 - `packages/engine/src/audio/rust-engine/daemon-client.ts:221-250` — daemon 側の 5 候補チェーン
 - `docs/archive/WORK_LOG_2026-07.md` §6.185-6.187, §6.188-6.192, §6.194-6.197, §6.260-6.261, §6.266, §6.271, §6.279-6.283, §6.295-6.301 / `docs/archive/WORK_LOG_2026-08.md` §6.412 — drift 表の出典
 - PR [#155](https://github.com/signalcompose/orbitscore/pull/155) — scsynth strict mode 採用・二重通知防止のコードレビューコメント

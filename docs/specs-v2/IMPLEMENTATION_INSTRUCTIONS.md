@@ -34,6 +34,7 @@
 
 - ROADMAP_2026.md の v1.1 “MIDI Integration”(Epic \#132)が Stage 1 の親。EventRouter は 2026-06 時点で未実装(grep 確認済み)。
 - パッケージ: `packages/engine`(supercolliderjs, uuid, wavefile, ws / Node 22 / CommonJS)、`packages/sc-link-audio`、`packages/vscode-extension`。
+  - 🔴 **2026-09-10 時点で失効**(#502): `packages/sc-link-audio` は PR [#836](https://github.com/signalcompose/orbitscore/pull/836)、`supercolliderjs` 依存は PR [#838](https://github.com/signalcompose/orbitscore/pull/838) で削除済み。現在のパッケージは `packages/engine`(`@julusian/midi`, uuid, wavefile, ws, yaml)と `packages/vscode-extension` の 2 つ。
 - LinkAudio 統合(Epic \#187)は直近の完了作業。`docs/research/LINK_AUDIO_API.md` に設計決定。**MIDI に LinkAudio 型の排他は適用しない**(SC オーディオと併走可)。
 - `docs/archive/DSL_SPECIFICATION_v1.0_MIDI.md`: 初期 MIDI 設計。`^`/`~` 修飾と度数0=休符は継承、クロマチック度数と丸括弧和音 `(1,5,8)` は**継承しない**(丸括弧は v3.0 で時間分割に割当済み)。
 - タイミング計算は `TimingCalculator`(再帰、`TimedEvent { sliceNumber, startTime, duration, depth }`)。ピッチ DSL では型拡張が必要(spec §7-0 厳守)。

@@ -1,4 +1,6 @@
 > ⚠️ **DEPRECATED（非推奨・2.0.0 時点）** — 本マニュアルは pre-2.0（audio-only）の内容で、2.0.0 の新機能（MIDI 出力 / Pitch DSL / comp / LinkAudio / quantize）を含みません。**最新のユーザー向けドキュメントは VitePress user site（`sites/user/`）を参照**してください。本ファイルは履歴として保持しています（#237）。
+>
+> 🔴 **さらに、以下の SuperCollider / scsynth に関する記述はすべて失効しています（#502・2026-09-10）。** オーディオバックエンドは Rust の `orbit-audio-daemon` 一本になり、scsynth の同梱・`orbitscore.scsynthPath` 設定・`orbitscore.engine` 設定・コマンド `Force Kill scsynth` / `Select Audio Device`・MCP ツール `force_kill_scsynth`・環境変数 `ORBITSCORE_ENGINE` は**いずれも削除**されました。SynthDef の再生成手順（`setup.scd` / `sclang`）も同様に失効しています。
 
 # OrbitScore ユーザーマニュアル
 

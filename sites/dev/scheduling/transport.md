@@ -16,7 +16,7 @@ status: draft
 
 本章の 2026-05-05 版は「`Global.start()` → `TransportControl.start()` → SC の `EventScheduler.start()`」という 3 段の連鎖として transport を読んでいました。2026-09-01 (69dc968) の code では、次の点が変わっています:
 
-- **既定の音声バックエンドは Rust daemon** (cutover #108、2026-07-03)。`Global` が `start()` を呼ぶ `globalScheduler` は `AudioEngineBackend` 型で、既定では `RustEnginePlayer`、`ORBITSCORE_ENGINE=sc` のときだけ `SuperColliderPlayer` (内部に `EventScheduler`) です。連鎖の形は同じで、末端のクラスが差し替わりました
+- **音声バックエンドは Rust daemon** (cutover #108、2026-07-03 で既定化)。`Global` が `start()` を呼ぶ `globalScheduler` は `AudioEngineBackend` 型で、実体は `RustEnginePlayer` です。かつては `ORBITSCORE_ENGINE=sc` のときだけ `SuperColliderPlayer` (内部に `EventScheduler`) になりましたが、**#502（2026-09-10）で SC 経路ごと削除**されました。連鎖の形は同じで、末端のクラスが差し替わりました
 - **`TransportClock` が時刻原点の唯一の持ち主**になりました。audio スケジューラーと MIDI スケジューラーが同じ `Date.now()` 原点を共有するために、`Global.start()` は `transportControl.start()` の**前に** `transportClock.start()` を打ちます
 - **`Global.start()` / `stop()` が太りました**: MIDI マネージャの起動・停止、session log (§L1、2.0.0 では dormant) の hook、Link テンポの再主張 (#283)、stop 時のプラグイン状態の自動スナップショットが加わっています
 - **launch quantize** (`global.quantize()` / `seq.quantize()`、#212 / PR #215): `seq.loop()` の起動と LOOP 中の `play()` 差し替えは、既定でグローバルの次の小節境界まで待ちます。`global.start()` 自体は待ちません
@@ -32,7 +32,7 @@ OrbitScore における transport の責務は **4 つのレイヤー** に分�
 | VS Code extension | `extension.ts` | ユーザー操作 (Cmd+Enter / stop ボタン) の受付、DSL テキストの stdin 送信 |
 | engine / REPL | `InterpreterV2` | DSL の解釈と実行、`Global` / `Sequence` オブジェクトの状態管理 |
 | Global | `TransportClock` + `TransportControl` + `MidiManager` | 時刻原点の確定、シーケンスの一括停止、MIDI スケジューラーの起動/停止 |
-| scheduler | `RustEnginePlayer` (既定) / `EventScheduler` (SC) | `setInterval(1ms)` の起動/停止、イベントキューの管理 |
+| scheduler | `RustEnginePlayer` (#502 以降は唯一の実装) | `setInterval(1ms)` の起動/停止、イベントキューの管理 |
 
 これらが連携することで「音を出す / 止める」という操作が実現されます。
 
@@ -43,7 +43,7 @@ flowchart LR
   GLOBAL --> CLK["TransportClock\ntransport-clock.ts"]
   GLOBAL --> TC["TransportControl\ntransport-control.ts"]
   GLOBAL --> MIDI["MidiManager\n→ MidiScheduler"]
-  TC --> SCHED["Scheduler\nRustEnginePlayer (既定)\nEventScheduler (sc)"]
+  TC --> SCHED["Scheduler\nRustEnginePlayer"]
   SCHED -->|"WebSocket PlayAt"| D["orbit-audio-daemon"]
 ```
 
@@ -280,7 +280,7 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
   }
 ```
 
-2026-05 版では `audioEngine: new SuperColliderPlayer()` と直書きでしたが、いまは `createAudioEngine()` (env で Rust / SC を選ぶ) か、テスト用に注入された `opts.audioEngine` です。`globals` と `sequences` は `Map<string, Global>` / `Map<string, Sequence>` で、一度作成されたオブジェクトはマップに蓄積され、後続の評価でも同じオブジェクトが使われます。`mixers` (#643 のミキサー DSL) と `engineT0` (session log の壁時計原点) が増えています。
+2026-05 版では `audioEngine: new SuperColliderPlayer()` と直書きでしたが、いまは `createAudioEngine()` (#502 以降は env も引数も見ず常に `RustEnginePlayer` を返す) か、テスト用に注入された `opts.audioEngine` です。`globals` と `sequences` は `Map<string, Global>` / `Map<string, Sequence>` で、一度作成されたオブジェクトはマップに蓄積され、後続の評価でも同じオブジェクトが使われます。`mixers` (#643 のミキサー DSL) と `engineT0` (session log の壁時計原点) が増えています。
 
 ## Selective Execution: 部分評価と state 引き継ぎ
 
@@ -600,7 +600,7 @@ OrbitScore の transport は「DSL テキストを stdin に送り込む」と�
 - [MUTE / UNMUTE](/glossary#mute--unmute) — 片記号方式のミュートコマンド。`muteGroup` Set で管理
 - [片記号方式](/glossary#片記号方式) — `RUN()` / `LOOP()` / `MUTE()` が「現在のグループを完全置換」するセマンティクス
 - [init](/glossary#init) — `var seq = init global.seq` で InterpreterV2 に Sequence を登録する構文
-- [scsynth](/glossary#scsynth) — `ORBITSCORE_ENGINE=sc` の opt-out 経路で EventScheduler が OSC 経由に `/s_new` を送る先
+- [scsynth](/glossary#scsynth) — `ORBITSCORE_ENGINE=sc` の opt-out 経路で EventScheduler が OSC 経由に `/s_new` を送っていた先 (#502 で削除済み)
 - [OSC (Open Sound Control)](/glossary#osc-open-sound-control) — SC 経路の engine → scsynth 通信プロトコル。Rust 経路では WebSocket + JSON
 - [subject-based block evaluation](/glossary#subject-based-block-evaluation) — selective execution が利用する、カーソル行の subject に基づくブロック収集方式
 
@@ -635,7 +635,7 @@ OrbitScore の transport は「DSL テキストを stdin に送り込む」と�
 - `packages/engine/src/core/global/quantize-manager.ts:56-73` — `nextQuantizedTime()`: 次の quantize 境界
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1467-1471` — `RustEnginePlayer.start()`: `startTime = Date.now()` の記録
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1486-1492` — `RustEnginePlayer.stop()`: `startTime` を保持したまま interval のみ止める
-- `packages/engine/src/audio/supercollider/event-scheduler.ts:355-361` — SC 版 `EventScheduler.start()` (opt-out 経路)
+- `packages/engine/src/audio/supercollider/event-scheduler.ts:355-361` — SC 版 `EventScheduler.start()` (opt-out 経路。**#502 でファイルごと削除**・commit `58f558f5` 以前の位置)
 - `packages/engine/src/interpreter/interpreter-v2.ts:48-64` — `InterpreterV2` constructor: `createAudioEngine()` と `globals` / `sequences` Map の初期化
 - `packages/engine/src/interpreter/interpreter-v2.ts:133-230` — `InterpreterV2.execute()`: `skipTransportCommands` オプション
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()`: 単一 `globalInterpreter` インスタンスの生成と REPL への引き渡し

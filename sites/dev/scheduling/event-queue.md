@@ -636,7 +636,7 @@ flowchart TB
 
 ## 関連用語
 
-- [scsynth](/glossary#scsynth) — SuperCollider のオーディオサーバーバイナリ。`ORBITSCORE_ENGINE=sc` の opt-out 経路で OSC 経由にイベントを受け取る
+- [scsynth](/glossary#scsynth) — SuperCollider のオーディオサーバーバイナリ。`ORBITSCORE_ENGINE=sc` の opt-out 経路で OSC 経由にイベントを受け取っていた (#502 で削除済み)
 - [OSC (Open Sound Control)](/glossary#osc-open-sound-control) — SC 経路の engine と scsynth の通信プロトコル。Rust 経路では WebSocket + JSON (`PlayAt`) に置き換わる
 - [orbitPlayBuf](/glossary#orbitplaybuf) — SC 経路の SynthDef 名。Rust 経路には対応物がなく、daemon がサンプルを直接 render する
 - [chop](/glossary#chop) — オーディオファイルを等分割するメソッド。`scheduleSliceEvent()` が `slice` 情報を積み、発火時に `resolveSliceRegion()` が領域を計算する
@@ -673,10 +673,10 @@ flowchart TB
 - `packages/engine/src/core/sequence/scheduling/event-scheduler.ts:30-65` — `calculateEventGain()`: master gain を event に畳み込まない (#643)
 - `packages/engine/src/core/sequence/playback/loop-sequence.ts:3-14` — `LOOP_TIMER_LEAD_MS` (look-ahead 第 2 段)
 - `packages/engine/src/midi/midi-scheduler.ts:157-176` — MIDI 側の `scheduleStepMarker()` (#654)
-- `packages/engine/src/audio/supercollider/event-scheduler.ts:355-390` — SC 版 `start()` (歴史的 / opt-out 経路)
+- `packages/engine/src/audio/supercollider/event-scheduler.ts:355-390` — SC 版 `start()` (歴史的 / opt-out 経路。**#502 でファイルごと削除**・以下 3 行と合わせて commit `58f558f5` 以前の位置)
 - `packages/engine/src/audio/supercollider/event-scheduler.ts:440-462` — SC 版 `clearSequenceEvents()`
 - `packages/engine/src/audio/supercollider/event-scheduler.ts:476-509` — SC 版 `executePlayback()` (fire-now)
-- `packages/engine/src/audio/supercollider/types.ts:10-25` — SC 版 `ScheduledPlay`
+- `packages/engine/src/audio/supercollider/types.ts:10-25` — SC 版 `ScheduledPlay` (**#502 でファイルごと削除**)
 - `docs/archive/WORK_LOG_2026-07.md` 6.179 — cutover #108 (2026-07-03)
 - `docs/archive/WORK_LOG_2026-07.md` 6.194 / 6.198 — #390 `[STEP]` マーカー / #389 timing jitter の 2 機構と実測
 - `docs/archive/WORK_LOG_2026-08.md` 6.421 — #654 MIDI 側 playhead
