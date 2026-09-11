@@ -55,7 +55,7 @@ The VS Code extension side "decides what code to send," and the engine side "rec
 First, let's confirm how the engine boots. `startEngine()` spawns a Node process with `'repl'` as an argument.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1973-2004 (env の組み立てを省略)
+// packages/vscode-extension/src/extension.ts:1973-2016 (env の組み立てを省略)
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -64,13 +64,41 @@ First, let's confirm how the engine boots. `startEngine()` spawns a Node process
   if (effectiveDebugMode) {
     args.push('--debug')
   }
-  // ...
+
+  // Set environment
+  const env = { ...process.env }
+  if (effectiveDebugMode) {
+    env.ORBITSCORE_DEBUG = '1'
+  }
+
+  // Capture seam (#307): the daemon records the master output to this WAV while
+  // the stream runs. Only set when explicitly requested (MCP start_engine tool)
+  // — inherited env stays authoritative otherwise.
+  if (agentOpts?.captureWav) {
+    env.ORBIT_CAPTURE_WAV = agentOpts.captureWav
+    outputChannel?.appendLine(`🎙️ Capture: ${agentOpts.captureWav}`)
+  }
+
+  outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native)')
+
   // Spawn engine process
+  // 🔴 `node` を PATH から引かない（#878）。Finder / launchd から起動された VS Code の PATH は
+  // `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が
+  // 無い。engine は `spawn node ENOENT` で起動せず、症状は「エンジンが起動しない」だけなので
+  // 原因が PATH だと利用者には分からない。VS Code がログインシェルの環境を解決してくれる時は
+  // 通るが、それは実装詳細への暗黙の依存で、2026-09-12 に通らない条件を実測で特定した
+  // （cold install した `.vsix` を CLI ラッパ経由 + 最小 PATH で起動すると確定で ENOENT）。
+  //
+  // 代わりに **VS Code 同梱の Node** を使う。拡張ホストは Electron なので `process.execPath` は
+  // そのままでは Node として動かず（実測: `Unable to find helper app` で落ちる）、
+  // `ELECTRON_RUN_AS_NODE=1` が要る。実測（2026-09-12）: Node 24.18.1（要求は `>=22.0.0`）で、
+  // `@julusian/midi` の N-API prebuild も素の node と同じく読める（port count 14 で一致）。
+  const engineRuntimeEnv = { ...env, ELECTRON_RUN_AS_NODE: '1' }
   try {
-    engineProcess = child_process.spawn('node', [enginePath, ...args], {
+    engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
       cwd: workspaceRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env,
+      env: engineRuntimeEnv,
     })
 ```
 
@@ -115,7 +143,7 @@ The function triggered by Cmd+Enter is `runSelection()`. Let's first look at the
 If the selected text is non-empty, its content is used as-is.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2424-2427
+// packages/vscode-extension/src/extension.ts:2436-2439
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -129,7 +157,7 @@ When there is no selection, the "subject" of the cursor line is identified, and 
 The function that determines the subject is `getLineSubject()`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2391-2404
+// packages/vscode-extension/src/extension.ts:2403-2416
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -157,7 +185,7 @@ When the subject is `null` — that is, a stand-alone command like `RUN(kick, sn
 After the code to send is determined, `writeCodeToEngine()` tells the engine the document's directory path in two ways. It is used to resolve relative paths in `audioPath()` / `audio()` and as the base directory for `import` (IM.6).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2708-2746
+// packages/vscode-extension/src/extension.ts:2720-2758
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -215,7 +243,7 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 `runSelection()` looks at the return value of `writeCodeToEngine()` and gives visual feedback only when the code was actually sent.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2563-2570
+// packages/vscode-extension/src/extension.ts:2575-2582
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }

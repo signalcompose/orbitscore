@@ -17,6 +17,92 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### fix(extension): start the engine with VS Code's own Node instead of PATH (#878) (Sep 12, 2026)
+
+**Date**: 2026-09-12
+**ブランチ**: `878-engine-spawn-without-path`（base = `main`）
+**担当**: 実測・実装・検証 = main
+
+#883 の cold install 検証（4.0.0 のリリース前倒し確認）の副産物として、**#878 が確定で再現する条件を
+特定した**ので直した。
+
+#### 何が壊れていたか
+
+`extension.ts` は engine をこう起動していた:
+
+```ts
+child_process.spawn('node', [enginePath, ...args], { ... })
+```
+
+**`node` を PATH から引いている。** Finder / launchd から起動された VS Code の PATH は `/etc/paths` の
+最小構成で、`nodenv` / Homebrew で node を入れている環境（珍しくない）ではそこに node が無い。
+engine は `spawn node ENOENT` で起動せず、**症状は「エンジンが起動しない」だけ**なので原因が PATH だとは
+利用者にまず分からない。
+
+#878 は「VS Code のシェル環境解決に救われて**実際には通った**」と記録されていた。本日、**通らない条件**を
+実測で特定した:
+
+| 起動のしかた | 結果 |
+|---|---|
+| `Contents/MacOS/Code`（Finder 相当） | 音が出る |
+| `bin/code`（CLI ラッパ）+ node の無い PATH | 🔴 **`spawn node ENOENT`** |
+| `bin/code` + `SHELL` あり + node の無い PATH | 🔴 **同じく起動しない** |
+
+CLI ラッパ経由だと VS Code は**ログインシェルの環境解決を省く**（端末から引き継ぐ前提）。
+`code .` を、nodenv を初期化しないログインシェルから叩けば同じ条件になる。
+
+#### 直し方 — 🔴 裁定を更新した（Q-656-8b）
+
+`docs/design/656-release-design.md` §6.3 は同じ問題に対して **(A) `process.execPath` +
+`ELECTRON_RUN_AS_NODE=1`** と **(B) node を同梱** を挙げ、**2026-09-03 に owner が B を裁定**していた。
+
+**その裁定の前提は 2026-09-10（#827）で変わっている。** 当時の配布物は VSCodium フォークの `.app` で、
+指定された同梱先も `.app/Contents/...` だった。フォークを畳んで**拡張線は `.vsix` のみ**になった今、
+`.vsix` は Node を持っているホスト（VS Code）の中で動くので、B は 50MB 超の同梱と署名対象 +1 を払って
+**ホストが既に持っているもの**を二重に運ぶことになる。
+
+→ owner 裁定（2026-09-12・**Q-656-8b**）: **拡張線は A**。B は**ネイティブ `.app` 向けとして残る**
+（借りる VS Code が無いのでそちらでは A が使えない）。配布物が違うので矛盾しない。
+
+#### A が成立することの実測（仮定していない）
+
+| 確かめたこと | 結果 |
+|---|---|
+| `process.execPath` は素のままで Node か | ❌ **ならない**（`Unable to find helper app` で落ちる）→ `ELECTRON_RUN_AS_NODE=1` が要る |
+| VS Code 同梱の Node 版 | **24.18.1**（本リポジトリの要求は `>=22.0.0`）✅ |
+| ネイティブアドオン（`@julusian/midi` の N-API v7 prebuild）が読めるか | ✅ **素の node と同じ**（port count 14 で一致）。`electron-` prefix の prebuild は無いので事前に疑ったが、実際には解決された |
+| PATH 依存の spawn が他に無いか | ✅ **1 箇所だけ**（`fork()` も Rust 側からの node 起動も無し） |
+
+#### 積んだテスト
+
+- `tests/vscode-extension/engine-spawn-runtime.spec.ts`（3 本・ユニット）— 何を spawn したか。
+  「絶対パスであること」だけを見ると `/usr/local/bin/node` 決め打ちでも通るので、**`process.execPath`
+  そのもの**であることと `ELECTRON_RUN_AS_NODE=1` を見る
+- 🔴 `tests/e2e/vsix-cold-install-gated.spec.ts`（2 本・`ORBIT_GATED_COLD_INSTALL=1` でゲート）—
+  **dev host はこの層を構造的に通らない**（`dev-host-is-blind-to-the-packaged-artifact`）。
+  空の extensions-dir へ `.vsix` を入れ、`--extensionDevelopmentPath` **無し**で起動して
+  **capture WAV の RMS まで**見る。**strict**（CLI ラッパ + node の無い PATH + `SHELL` 無し）が #878 を、
+  **finder**（app 本体を直接起動）が #873 を守る
+
+#### 変異検証（実走・自己申告ではない）
+
+| | 結果 |
+|---|---|
+| 変異（`process.execPath` → `'node'`・env を戻す）→ 再パッケージ → strict | 🔴 **red**（`🛑 Engine process error: spawn node ENOENT`） |
+| 復元 → 再パッケージ → 2 本とも | ✅ **green**（19.4 s） |
+
+#### ゲート
+
+`npm test` **2,350 passed / 69 skipped / 0 failed**・`typecheck:e2e` 緑・lint 緑・
+引用 948 / 0 failed・**cold install 2/2**（strict / finder）。
+
+dev サイトの 6 箇所は `--fix` では直らなかった（行番号ではなく**中身**が変わったため）ので、
+引用ブロックと本文・mermaid ラベルを手で追従させた。
+
+Closes #878
+
+---
+
 ### docs: follow the dev site to the .vsix dependency bundling fix (PR #874) (Sep 11, 2026)
 
 マージ済み PR [#874](https://github.com/signalcompose/orbitscore/pull/874)（merge commit `a2ac724`）へのドキュメント追従。**コード・テストは一切変更していない。**

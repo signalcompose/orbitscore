@@ -1996,11 +1996,23 @@ async function startEngine(
   outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native)')
 
   // Spawn engine process
+  // 🔴 `node` を PATH から引かない（#878）。Finder / launchd から起動された VS Code の PATH は
+  // `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が
+  // 無い。engine は `spawn node ENOENT` で起動せず、症状は「エンジンが起動しない」だけなので
+  // 原因が PATH だと利用者には分からない。VS Code がログインシェルの環境を解決してくれる時は
+  // 通るが、それは実装詳細への暗黙の依存で、2026-09-12 に通らない条件を実測で特定した
+  // （cold install した `.vsix` を CLI ラッパ経由 + 最小 PATH で起動すると確定で ENOENT）。
+  //
+  // 代わりに **VS Code 同梱の Node** を使う。拡張ホストは Electron なので `process.execPath` は
+  // そのままでは Node として動かず（実測: `Unable to find helper app` で落ちる）、
+  // `ELECTRON_RUN_AS_NODE=1` が要る。実測（2026-09-12）: Node 24.18.1（要求は `>=22.0.0`）で、
+  // `@julusian/midi` の N-API prebuild も素の node と同じく読める（port count 14 で一致）。
+  const engineRuntimeEnv = { ...env, ELECTRON_RUN_AS_NODE: '1' }
   try {
-    engineProcess = child_process.spawn('node', [enginePath, ...args], {
+    engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
       cwd: workspaceRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env,
+      env: engineRuntimeEnv,
     })
   } catch (err) {
     // spawn threw before engineProcess was assigned, so no engine state was dirtied.

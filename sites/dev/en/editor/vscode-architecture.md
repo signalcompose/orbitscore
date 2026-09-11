@@ -550,7 +550,7 @@ The pre-check is quoted in the former III-3 chapter, now removed from the site (
 The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcommand, and the output device is passed via the `--audio-device` argument (the `orbitscore.audioDevice` setting takes precedence, otherwise `.orbitscore.json`). `__default__` is a sentinel meaning "the OS default output."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1982-2005
+// packages/vscode-extension/src/extension.ts:1982-2016
   // Set environment
   const env = { ...process.env }
   if (effectiveDebugMode) {
@@ -568,13 +568,24 @@ The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcomman
   outputChannel?.appendLine('🦀 Audio backend: rust (orbit-audio-daemon, native)')
 
   // Spawn engine process
+  // 🔴 `node` を PATH から引かない（#878）。Finder / launchd から起動された VS Code の PATH は
+  // `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が
+  // 無い。engine は `spawn node ENOENT` で起動せず、症状は「エンジンが起動しない」だけなので
+  // 原因が PATH だと利用者には分からない。VS Code がログインシェルの環境を解決してくれる時は
+  // 通るが、それは実装詳細への暗黙の依存で、2026-09-12 に通らない条件を実測で特定した
+  // （cold install した `.vsix` を CLI ラッパ経由 + 最小 PATH で起動すると確定で ENOENT）。
+  //
+  // 代わりに **VS Code 同梱の Node** を使う。拡張ホストは Electron なので `process.execPath` は
+  // そのままでは Node として動かず（実測: `Unable to find helper app` で落ちる）、
+  // `ELECTRON_RUN_AS_NODE=1` が要る。実測（2026-09-12）: Node 24.18.1（要求は `>=22.0.0`）で、
+  // `@julusian/midi` の N-API prebuild も素の node と同じく読める（port count 14 で一致）。
+  const engineRuntimeEnv = { ...env, ELECTRON_RUN_AS_NODE: '1' }
   try {
-    engineProcess = child_process.spawn('node', [enginePath, ...args], {
+    engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
       cwd: workspaceRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env,
+      env: engineRuntimeEnv,
     })
-  } catch (err) {
 ```
 
 **The 2026-09-10 ruling (#827 / #502) removed the `engineKind` branch entirely, along with the explicit `ORBITSCORE_ENGINE` set and the `ORBIT_SCSYNTH_PATH` hand-off.** For the sole remaining backend (the Rust daemon), only the debug flag and the capture seam (#307) are pushed into env before spawning.
@@ -582,7 +593,7 @@ The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcomman
 `stdio: ['pipe', 'pipe', 'pipe']` is important. By making stdin/stdout/stderr all pipes, the Extension Host can directly write/read them. Right after spawn, five handlers are attached, and after one `process.nextTick` it checks "is the same process still alive?"
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2020-2031
+// packages/vscode-extension/src/extension.ts:2032-2043
   // Setup handlers
   setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
@@ -730,7 +741,7 @@ Communication between the Extension Host and the engine process is via **stdin/s
 The send part is consolidated into `writeCodeToEngine()`, shared by the editor's Run Selection and MCP's `evaluate_orbitscore`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2708-2746
+// packages/vscode-extension/src/extension.ts:2720-2758
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -846,7 +857,7 @@ Execution feedback (flashing the executed lines, the playhead, diagnostics) is c
 `stopEngine()` performs a two-stage shutdown of SIGTERM → (after 2 seconds) SIGKILL. Compared with 2026-05, draining the bridges and clearing the playhead were added, and the SIGKILL condition was fixed.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2045-2093
+// packages/vscode-extension/src/extension.ts:2057-2105
 export function stopEngine(): boolean {
   engineGeneration += 1
   if (engineProcess && !engineProcess.killed) {

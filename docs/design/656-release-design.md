@@ -415,7 +415,27 @@ const extArgs = EXT_MODE === 'dev' ? [`--extensionDevelopmentPath=${EXTENSION_DE
 
 **まず測る**（設計で決め打たない）: E2E-D3（§12）で PATH を launchd 既定相当（`/usr/bin:/bin:/usr/sbin:/sbin`）に絞って起動し、engine が起動するかを見る。
 
-✅ **owner 裁定（2026-09-03 Q-656-8）: B node を同梱する**（サイズ + 署名対象 +1）。E2E-D3 は「同梱 node で起動する」ことの確認に読み替え、PATH の node には依存しない。同梱先は `.app/Contents/Resources/app/extensions/orbitscore/engine/bin/node`（`enginePath` の隣・§4.3 の成果物一覧に追加）、`extension.ts:2159` の `spawn('node', …)` を同梱パスへ（無ければ PATH へフォールバックし警告）。署名は §5.1 の内側リストに +1。以下の表は裁定前の分岐の記録:
+🔴 **裁定の更新（2026-09-12 Q-656-8b）: 拡張線（`.vsix`）は A（VS Code 同梱の Node）**。
+下の 2026-09-03 裁定（B）は**ネイティブ `.app` 向けとして残る** — 借りる VS Code が無いのでそちらでは
+A が使えない。**両者は配布物が違うので矛盾しない。**
+
+> **なぜ変えたか**: 2026-09-03 の裁定は配布物が **VSCodium フォークの `.app`** だった時のもので、
+> 同梱先も `.app/Contents/Resources/app/extensions/...` と指定されていた。**2026-09-10（#827）で
+> フォークを畳み、拡張線は `.vsix` のみ**になった。`.vsix` は Node を持っているホスト（VS Code）の
+> 中で動くので、B は 50MB 超の同梱と署名対象 +1 を払って**ホストが既に持っているもの**を二重に運ぶ
+> ことになる。
+>
+> **A の検証（2026-09-12・実測）**: VS Code 同梱の Electron は **Node 24.18.1**（本リポジトリの要求は
+> `>=22.0.0`）。`@julusian/midi` の N-API prebuild も素の node と同じく読める（port count 14 で一致）。
+> node の無い PATH かつシェル環境解決が効かない条件で cold install した `.vsix` から**音が出る**ところまで
+> 確認し、変異（`process.execPath` → `'node'`）で赤・復元で緑を実走した（`tests/e2e/vsix-cold-install-gated.spec.ts`）。
+>
+> **「どちらに転んでも今すぐやること」として挙げていた node の pre-check は不要になった** — A では
+> ランタイムが必ず存在するので、検査すべき不在が無い。
+
+---
+
+✅ **owner 裁定（2026-09-03 Q-656-8・🔴 拡張線については上の Q-656-8b で置換。ネイティブ `.app` 向けとしては有効）: B node を同梱する**（サイズ + 署名対象 +1）。E2E-D3 は「同梱 node で起動する」ことの確認に読み替え、PATH の node には依存しない。同梱先は `.app/Contents/Resources/app/extensions/orbitscore/engine/bin/node`（`enginePath` の隣・§4.3 の成果物一覧に追加）、`extension.ts:2159` の `spawn('node', …)` を同梱パスへ（無ければ PATH へフォールバックし警告）。署名は §5.1 の内側リストに +1。以下の表は裁定前の分岐の記録:
 
 | 結果 | 取る手 |
 |---|---|

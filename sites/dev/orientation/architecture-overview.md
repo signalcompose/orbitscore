@@ -57,7 +57,7 @@ graph TD
 
   AGENT["外部 agent\n(Claude Code 等)"] -->|"MCP (Streamable HTTP)"| MCP
   MCP --> EXT
-  EXT -->|"child_process.spawn('node', [cli-audio.js, 'repl'])\nenv は debug フラグと capture seam のみ"| CLI
+  EXT -->|"child_process.spawn(process.execPath, [cli-audio.js, 'repl'])\nELECTRON_RUN_AS_NODE=1 — PATH の node は引かない (#878)"| CLI
   EXT -->|"stdin.write(code + '\\n')"| CLI
   EXT --> RESOLVER
   CLI --> PARSER --> INTERP --> CORE --> PLAYER
@@ -152,21 +152,35 @@ env へ積むのは debug フラグと capture seam（#307）だけです。**�
 
 そして engine プロセス本体は `child_process.spawn` で Node.js を起動します。
 
+🔴 起動するのは **VS Code 同梱の Node**（`process.execPath` を `ELECTRON_RUN_AS_NODE=1` で実行）であって、`PATH` 上の `node` ではありません（#878）。Finder / launchd から起動された VS Code の `PATH` は `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が無く、engine が `spawn node ENOENT` で起動しないためです。拡張ホストは Electron なので `process.execPath` はそのままでは Node として動かず、`ELECTRON_RUN_AS_NODE=1` が要ります。
+
 ```typescript
-// packages/vscode-extension/src/extension.ts:1998-2004
+// packages/vscode-extension/src/extension.ts:1998-2016
   // Spawn engine process
+  // 🔴 `node` を PATH から引かない（#878）。Finder / launchd から起動された VS Code の PATH は
+  // `/etc/paths` の最小構成で、`nodenv` / Homebrew で node を入れている環境ではそこに node が
+  // 無い。engine は `spawn node ENOENT` で起動せず、症状は「エンジンが起動しない」だけなので
+  // 原因が PATH だと利用者には分からない。VS Code がログインシェルの環境を解決してくれる時は
+  // 通るが、それは実装詳細への暗黙の依存で、2026-09-12 に通らない条件を実測で特定した
+  // （cold install した `.vsix` を CLI ラッパ経由 + 最小 PATH で起動すると確定で ENOENT）。
+  //
+  // 代わりに **VS Code 同梱の Node** を使う。拡張ホストは Electron なので `process.execPath` は
+  // そのままでは Node として動かず（実測: `Unable to find helper app` で落ちる）、
+  // `ELECTRON_RUN_AS_NODE=1` が要る。実測（2026-09-12）: Node 24.18.1（要求は `>=22.0.0`）で、
+  // `@julusian/midi` の N-API prebuild も素の node と同じく読める（port count 14 で一致）。
+  const engineRuntimeEnv = { ...env, ELECTRON_RUN_AS_NODE: '1' }
   try {
-    engineProcess = child_process.spawn('node', [enginePath, ...args], {
+    engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
       cwd: workspaceRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env,
+      env: engineRuntimeEnv,
     })
 ```
 
 `stdio: ['pipe', 'pipe', 'pipe']` は、stdin / stdout / stderr の 3 本すべてを親プロセス (extension) から触れるパイプにする、という意味です。DSL テキストは **stdin に書き込む** ことで engine に渡します。
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2744-2745
+// packages/vscode-extension/src/extension.ts:2756-2757
   engineProcess.stdin.write(codeToSend + '\n')
   return true
 ```
