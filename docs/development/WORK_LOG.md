@@ -17,6 +17,89 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### design: explicit output routing — drop the implicit master terminal (#883) (Sep 11, 2026)
+
+**Date**: 2026-09-11
+**Status**: 設計完了・裁定 6 件すべて確定（実装未着手）
+**成果物**: `docs/design/883-explicit-output-routing-design.md`（493 行）
+
+#### 発端
+
+LinkAudio の標準プラグイン化を検討する中で、`thru:` の意味論を追ったところ
+**暗黙 master 終端の欠陥**が出た。owner 裁定で LinkAudio より先にこちらを片付けることにした。
+
+🔴 **実測した欠陥**: `send()` は sum バスも受け取る（`sequence.ts:661-665`）。
+`send` は `output(dest, thru: true)` の糖衣で**終端ではない**ので暗黙 master が付く。結果、
+
+```js
+global.sum("drums")
+kick.send(drums, -6)
+snare.send(drums, -6)
+```
+
+で master が受け取るのは **kick の dry + snare の dry + (kick+snare の合算)** =
+**各素材が 2 回**。`drums` に挿したグルーコンプを **dry が迂回する**。
+
+#### owner 裁定（grand truth）
+
+> 音楽記述言語としての OrbitScore DSL は「**テキストが完全な真実**」であるべき
+
+暗黙終端を**完全に廃止**する（P3）。「出口を 1 つも書かなければ暗黙」案（P2）も却下
+— `kick.play()` は鳴るのに `.send(verb,-12)` を 1 つ足した瞬間に master への dry が消える
+**不連続**が残るため。譜面の下位互換は担保しない（owner「そっちを直せばいい」）。
+
+#### 設計が覆した #883 の前提
+
+| # | 訂正 |
+|---|---|
+| 1 | 暗黙 master の実体は **1 箇所ではなく 4 箇所**（`program()` の合成 / バス無し audio の直接描画 / daemon のバス既定ライン / instrument の `target:null`）。A だけ消しても `kick.play()` は鳴り続ける |
+| 2 | `.output()` 必須化は **9 本目で throw**（`SEQUENCE_EFFECT_BUS_POOL_SIZE = 8`）。出荷 example の **4 本**が 8 を超える（17 / 16 / 13 / 12） |
+| 3 | `program()` は `elements` に完全には畳まない（`[rack]` の位置マーカーは routing ではない） |
+
+#### main の審査で出た指摘（4 件・すべて反映）
+
+1. 🔴 **固定上限は「避けるもの」ではなく「撤廃が裁定済みのもの」**（owner「実害ではない。正しく治すだけ」）。
+   Q-598-5「マシンの上限まで使える」/ doc 662 §10「上限を決めない対象に**トラック / インスト**を含む」/ #663。
+   → instrument の常時バス確保を撤回し、`SetSourceRouting.target` を明示 3 値へ（固定上限への依存が 1 行も増えない形）
+2. skip は `resolveDispatchChannel()` の **`isNoteSequence()` 早期 return より後ろ**に置く。
+   前に置くと **MIDI が無音**（同じ箇所のコメントが #282 で一度踏んだと記録）
+3. `send(aux)` と `send(sum)` で**正しい振る舞いが逆**（aux は dry が残るのが正しい / sum は誤り）。
+   611 §2.1 が P2 を却下した時に見落としていた場合分け
+4. 🔴 **失敗時の向きが「鳴る」になっている** — 横断規則を 1 つ置いた:
+   「routing 状態が未設定・表現不能・失われた時、その信号はどこにも加算されない」。
+   適用 6 箇所（`encode` / `decode` / daemon 既定ライン / `FeedDest` 変換 2 / スロット解放）。
+   副産物として **F2（TS の push 順序が狂うと鳴る）が消滅**した — 最悪の状態が無音になったため
+
+#### 裁定 6 件（owner 2026-09-11）
+
+`[rack]` 前置は残す / `output-missing` = Warning / `dry-not-routed` = Information /
+`SetSourceRouting.target` を明示 3 値へ（一方通行）/ 実現の省略を採る /
+🔴 **master トラックは `global` が所有する**。
+
+最後の 1 件は owner 逐語「マスタートラックは global が持っている、でいいのでは？」。
+`master.output(...)` / `master.effect(...)` という表面は**作らない**。マスタリングは
+`global.effect(["Comp", Gain(db: -3), "Limiter"])` で今日すでに書ける（`global.ts:445`・PH.2）。
+違う出力を使いたければ aux を作ってそちらへ集める（owner 同日）。
+
+🔴 **この裁定は `SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.2 規範 (4) と逆を向いている**
+（今日は「マスターもレシーバである」と書いてある）。**束 0 で書き換える**。
+
+#### 版
+
+**4.0.0 / `DSL_VERSION` 2.0**。3.0.0 を major にした理由（`send()` の dB 化で譜面の意味が変わる）と
+同じクラス — `kick.play()` が「鳴る」→「鳴らない」に変わる。
+
+#### 束
+
+**0**（spec 先行・main 直行）→ **C**（振る舞いを変えない）→ **S**（振る舞いを変える）。
+C を先に置くのは「**golden が 1 つも動かない**」ことでしか C を検算できないため。
+
+#### 関連
+
+#883 / #663（プール上限の撤廃）/ #611（出力ライン設計・§2.1 に撤回追記）/ #282（MIDI の skip 誤爆）
+
+---
+
 ### docs: follow the dev site to the .vsix dependency bundling fix (PR #874) (Sep 11, 2026)
 
 マージ済み PR [#874](https://github.com/signalcompose/orbitscore/pull/874)（merge commit `a2ac724`）へのドキュメント追従。**コード・テストは一切変更していない。**
