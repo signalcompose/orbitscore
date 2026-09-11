@@ -550,7 +550,7 @@ The pre-check is quoted in the former III-3 chapter, now removed from the site (
 The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcommand, and the output device is passed via the `--audio-device` argument (the `orbitscore.audioDevice` setting takes precedence, otherwise `.orbitscore.json`). `__default__` is a sentinel meaning "the OS default output."
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1982-2017
+// packages/vscode-extension/src/extension.ts:1982-2024
   // Set environment
   const env = { ...process.env }
   if (effectiveDebugMode) {
@@ -581,6 +581,13 @@ The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcomman
   // （VS Code 1.104 系）: 同梱 Node は 24.18.1 でルートの `engines.node >=22.0.0` を満たし、
   // `@julusian/midi` の N-API prebuild も素の node と同じく読めた（port count が一致）。
   // 🔴 版は VS Code に従属するので、ここの数値は**その時点の観測**であって要件ではない。
+  //
+  // 🔴 「Electron の `runAsNode` fuse を将来 VS Code が無効化したら、`spawn` は成功するのに
+  // Node として動かず、ENOENT も出ないまま偽の『起動した』になるのでは」— レビューで出た問い。
+  // **VS Code はこの fuse を無効化できない**: 自身の CLI が
+  // `ELECTRON_RUN_AS_NODE=1 "$ELECTRON" "$CLI"` で動いており（`Contents/Resources/app/bin/code`）、
+  // 拡張ホストの fork（`out/bootstrap-fork.js`）も同じ変数に依存している。無効化すれば
+  // `code` コマンド自体が壊れる。つまりこの経路は **VS Code 自身と同じ土台**に乗っている。
   try {
     engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
       cwd: workspaceRoot,
@@ -594,7 +601,7 @@ The engine CLI (`engine/dist/cli-audio.js`) is started with the `repl` subcomman
 `stdio: ['pipe', 'pipe', 'pipe']` is important. By making stdin/stdout/stderr all pipes, the Extension Host can directly write/read them. Right after spawn, five handlers are attached, and after one `process.nextTick` it checks "is the same process still alive?"
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2033-2044
+// packages/vscode-extension/src/extension.ts:2040-2051
   // Setup handlers
   setupStdoutHandler(engineProcess, effectiveDebugMode)
   setupStderrHandler(engineProcess)
@@ -742,7 +749,7 @@ Communication between the Extension Host and the engine process is via **stdin/s
 The send part is consolidated into `writeCodeToEngine()`, shared by the editor's Run Selection and MCP's `evaluate_orbitscore`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2721-2759
+// packages/vscode-extension/src/extension.ts:2728-2766
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -858,7 +865,7 @@ Execution feedback (flashing the executed lines, the playhead, diagnostics) is c
 `stopEngine()` performs a two-stage shutdown of SIGTERM → (after 2 seconds) SIGKILL. Compared with 2026-05, draining the bridges and clearing the playhead were added, and the SIGKILL condition was fixed.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2058-2106
+// packages/vscode-extension/src/extension.ts:2065-2113
 export function stopEngine(): boolean {
   engineGeneration += 1
   if (engineProcess && !engineProcess.killed) {

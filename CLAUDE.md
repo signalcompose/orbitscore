@@ -688,6 +688,20 @@ cargo test --manifest-path rust/Cargo.toml -p orbit-effect-rack-child --lib
 条件付きの手動手順は飛ばされるのがこの repo の実測クラス（列挙が一段手前で止まる型）で、
 無条件 19〜67 秒の方が条件判定の認知コストより安い。
 
+```bash
+# 🔴 出荷 `.vsix` の cold install（#873 / #878・2026-09-12 追加）
+npm run test:e2e:cold-install
+```
+
+**dev host（`--extensionDevelopmentPath`）はこの層を構造的に一度も通らない**
+（daemon の `extension-bundle` 解決・拡張自身の同梱依存・engine を起動する Node ランタイムの選び方）。
+v3.0.0 では `activate()` すら走らない `.vsix` が凍結タグ直前まで残り（#873）、#878 は
+「node が PATH に無い環境で engine が起動しない」という形で**同じ層に**いた。
+
+**なぜ CI に任せられないか**: GitHub の macOS runner には **VS Code が入っておらず**、
+音声デバイスも無い（`release.yml` は `.vsix` を作るが、それを**インストールして鳴らす**ことはできない）。
+`test:e2e:gated` と同じく**手元がこのテストの唯一の実行経路**である。
+
 **なぜ CI に任せられないか**: `rust-ci.yml` は全ジョブ ubuntu で、この 3 件は
 `#[cfg(target_os = "macos")]` なので**存在すらしない**。`release.yml` は macos-14 だが
 `pull_request` の paths フィルタに **`rust/**` が無い**ため、**rust だけを触る PR では走らない**。

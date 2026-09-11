@@ -717,15 +717,18 @@ describe('DaemonClient audioDevice spawn args (#484 D1)', () => {
   let tmpDir: string
   let recorderBin: string
   let argvFile: string
+  let envFile: string
 
   beforeAll(async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'daemon-audio-device-'))
     argvFile = path.join(tmpDir, 'argv.txt')
+    envFile = path.join(tmpDir, 'env.txt')
     recorderBin = await createWarmExecutable(
       tmpDir,
       'orbit-audio-daemon',
       `#!/bin/sh
 printf '%s\n' "$@" > "${argvFile}"
+env > "${envFile}"
 exit 1
 `,
     )
@@ -737,8 +740,9 @@ exit 1
 
   beforeEach(() => {
     client = new DaemonClient()
-    // warm up の空 spawn が書いた argv を持ち越さない。各 it は自分の spawn の結果だけを見る。
+    // warm up の空 spawn が書いた argv / env を持ち越さない。各 it は自分の spawn の結果だけを見る。
     fs.rmSync(argvFile, { force: true })
+    fs.rmSync(envFile, { force: true })
   })
 
   afterEach(async () => {
@@ -767,6 +771,33 @@ exit 1
       await vi.waitFor(() => expect(fs.existsSync(argvFile)).toBe(true))
       const argv = fs.readFileSync(argvFile, 'utf-8')
       expect(argv.trim()).toBe('')
+    },
+    SPAWN_TEST_TIMEOUT_MS,
+  )
+
+  // 🔴 **配線のテスト**。`daemonEnv()` 自体は純関数として別に検証しているが、
+  // **呼び出し側がそれを使うのをやめても純関数のテストは緑のまま**である（実際、レビューで
+  // `env: daemonEnv(process.env)` を `env: process.env` に戻す変異を当てたら 62 件すべて
+  // 通った）。このリポジトリで最も出荷されている欠陥の型なので、実 spawn で子の env を見る。
+  it(
+    'daemon の子プロセスへ ELECTRON_RUN_AS_NODE を渡さない (#878)',
+    async () => {
+      const previous = process.env.ELECTRON_RUN_AS_NODE
+      process.env.ELECTRON_RUN_AS_NODE = '1'
+      try {
+        await expect(client.start({ daemonPath: recorderBin })).rejects.toThrow(
+          /daemon exited before ready/,
+        )
+        await vi.waitFor(() => expect(fs.existsSync(envFile)).toBe(true))
+        const childEnv = fs.readFileSync(envFile, 'utf-8')
+
+        expect(childEnv).not.toMatch(/^ELECTRON_RUN_AS_NODE=/m)
+        // 🔴 「無いこと」だけを見ると、env ごと空にする実装でも通る。**他が届いている**ことまで見る。
+        expect(childEnv).toMatch(/^PATH=/m)
+      } finally {
+        if (previous === undefined) delete process.env.ELECTRON_RUN_AS_NODE
+        else process.env.ELECTRON_RUN_AS_NODE = previous
+      }
     },
     SPAWN_TEST_TIMEOUT_MS,
   )

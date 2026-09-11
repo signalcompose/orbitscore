@@ -59,6 +59,12 @@ export function fakeSpawnedProcess(): FakeSpawnedProcess {
  *
  * 🔴 **`beforeEach` で呼ぶ。** ここを 1 本でも取りこぼすと、`startEngine()` が
  * `statusBarItem!` 等で落ちるのではなく**前のテストの状態を引き継いで**通ってしまう。
+ *
+ * 🔴 **これは「engine 起動を駆動するのに要る 4 本」であって、`__set*ForTest` の全部ではない。**
+ * `__setLiveCodingModeForTest` と `__setPlayheadActiveRangeForTest` は
+ * `tests/vscode-extension/extension-wiring.spec.ts` だけが使っており、そちらは本 helper を通らない。
+ * 🔴 **完全性を強制する仕組みは無い** — 新しい hook を足した時、ここに足し忘れても型は通る。
+ * 足す側が、その hook を使うテストの `beforeEach` を自分で確認すること。
  */
 export function resetExtensionEngineTestState(ext: ExtensionTestHooks): void {
   ext.__setEngineProcessForTest(null)

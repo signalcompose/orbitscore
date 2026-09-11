@@ -2009,6 +2009,13 @@ async function startEngine(
   // （VS Code 1.104 系）: 同梱 Node は 24.18.1 でルートの `engines.node >=22.0.0` を満たし、
   // `@julusian/midi` の N-API prebuild も素の node と同じく読めた（port count が一致）。
   // 🔴 版は VS Code に従属するので、ここの数値は**その時点の観測**であって要件ではない。
+  //
+  // 🔴 「Electron の `runAsNode` fuse を将来 VS Code が無効化したら、`spawn` は成功するのに
+  // Node として動かず、ENOENT も出ないまま偽の『起動した』になるのでは」— レビューで出た問い。
+  // **VS Code はこの fuse を無効化できない**: 自身の CLI が
+  // `ELECTRON_RUN_AS_NODE=1 "$ELECTRON" "$CLI"` で動いており（`Contents/Resources/app/bin/code`）、
+  // 拡張ホストの fork（`out/bootstrap-fork.js`）も同じ変数に依存している。無効化すれば
+  // `code` コマンド自体が壊れる。つまりこの経路は **VS Code 自身と同じ土台**に乗っている。
   try {
     engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
       cwd: workspaceRoot,

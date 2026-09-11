@@ -55,7 +55,7 @@ The VS Code extension side "decides what code to send," and the engine side "rec
 First, let's confirm how the engine boots. `startEngine()` spawns a Node process with `'repl'` as an argument.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:1973-2017 (env の組み立てを省略)
+// packages/vscode-extension/src/extension.ts:1973-2024 (env の組み立てを省略)
   // Build args
   const args = ['repl']
   if (audioDevice && audioDevice !== '__default__') {
@@ -95,6 +95,13 @@ First, let's confirm how the engine boots. `startEngine()` spawns a Node process
   // （VS Code 1.104 系）: 同梱 Node は 24.18.1 でルートの `engines.node >=22.0.0` を満たし、
   // `@julusian/midi` の N-API prebuild も素の node と同じく読めた（port count が一致）。
   // 🔴 版は VS Code に従属するので、ここの数値は**その時点の観測**であって要件ではない。
+  //
+  // 🔴 「Electron の `runAsNode` fuse を将来 VS Code が無効化したら、`spawn` は成功するのに
+  // Node として動かず、ENOENT も出ないまま偽の『起動した』になるのでは」— レビューで出た問い。
+  // **VS Code はこの fuse を無効化できない**: 自身の CLI が
+  // `ELECTRON_RUN_AS_NODE=1 "$ELECTRON" "$CLI"` で動いており（`Contents/Resources/app/bin/code`）、
+  // 拡張ホストの fork（`out/bootstrap-fork.js`）も同じ変数に依存している。無効化すれば
+  // `code` コマンド自体が壊れる。つまりこの経路は **VS Code 自身と同じ土台**に乗っている。
   try {
     engineProcess = child_process.spawn(process.execPath, [enginePath, ...args], {
       cwd: workspaceRoot,
@@ -144,7 +151,7 @@ The function triggered by Cmd+Enter is `runSelection()`. Let's first look at the
 If the selected text is non-empty, its content is used as-is.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2437-2440
+// packages/vscode-extension/src/extension.ts:2444-2447
   if (!selection.isEmpty) {
     text = editor.document.getText(selection)
     executionRange = new vscode.Range(selection.start, selection.end)
@@ -158,7 +165,7 @@ When there is no selection, the "subject" of the cursor line is identified, and 
 The function that determines the subject is `getLineSubject()`.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2404-2417
+// packages/vscode-extension/src/extension.ts:2411-2424
 function getLineSubject(lineText: string): string | null {
   const trimmed = lineText.trim()
   if (!trimmed || trimmed.startsWith('//')) return null
@@ -186,7 +193,7 @@ When the subject is `null` — that is, a stand-alone command like `RUN(kick, sn
 After the code to send is determined, `writeCodeToEngine()` tells the engine the document's directory path in two ways. It is used to resolve relative paths in `audioPath()` / `audio()` and as the base directory for `import` (IM.6).
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2721-2759
+// packages/vscode-extension/src/extension.ts:2728-2766
 function writeCodeToEngine(rawCode: string, documentDir: string | undefined): boolean {
   if (!engineProcess || !engineProcess.stdin || !engineProcess.stdin.writable) {
     // 呼び出し側ガード通過後に engine が死んだ稀な競合。黙って no-op すると
@@ -244,7 +251,7 @@ There is no fallback to `process.cwd()` on the engine side (Issue #168). If docu
 `runSelection()` looks at the return value of `writeCodeToEngine()` and gives visual feedback only when the code was actually sent.
 
 ```typescript
-// packages/vscode-extension/src/extension.ts:2576-2583
+// packages/vscode-extension/src/extension.ts:2583-2590
   if (!writeCodeToEngine(trimmedText, path.dirname(editor.document.uri.fsPath))) {
     return // stdin 不達（engine 死の競合）— 送れていないのに flash で「実行した」と見せない
   }
