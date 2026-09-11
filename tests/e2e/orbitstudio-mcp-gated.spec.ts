@@ -2020,7 +2020,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
       const mixerRes = await client.call('evaluate_orbitscore', {
         code: [
           'var mix = init global.mixer',
-          'var master = mix.output(1, 2)',
           'var drums = mix.sum',
           'var verb = mix.aux',
           'verb.master',
@@ -3322,7 +3321,6 @@ describe.skipIf(!gated)('OrbitStudio Agent Bridge MCP E2E (gated, real app)', ()
         'global.beat(4 by 4)',
         `global.audioPath(${JSON.stringify(audioSearchPath)})`,
         'var mix = init global.mixer',
-        'var master = mix.output(1, 2)',
         'var autoSnapshotSum = mix.sum',
         'var autoSnapshotAux = mix.aux',
         `global.effect(${JSON.stringify(catalog.clapEffectName)})`,
