@@ -57,6 +57,14 @@ trap 'rm -rf "$DEPS_TMP"' EXIT
 # every range replaced by the exact version resolved in the root lockfile. This
 # makes the shipped versions the same ones the repository tests. The same pass
 # prints the names, so the source list is derived once rather than re-read.
+#
+# 🔴 This pins the DECLARED dependencies only. The temp install has no lockfile of
+# its own, so everything below them is re-resolved from ranges and can still drift
+# from what `npm test` exercised. Before this the drift reached the declared layer
+# too (shipped sdk 1.30.0 / zod 4.6.2 against a lockfile saying 1.29.0 / 4.4.3),
+# which is the layer a score's behaviour actually hangs off. Pinning the whole
+# graph needs a synthesized lockfile; it is filed with the bundler migration (#875)
+# rather than attempted immediately before the stable freeze.
 DEP_NAMES=$(node -e '
   const fs = require("fs");
   const path = require("path");

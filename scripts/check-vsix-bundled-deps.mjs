@@ -84,6 +84,18 @@ function dependencyManifestFrom(packageManifest, dependency) {
  * Resolve every required edge below a root specifier. `resolve()` alone proves the root
  * entry exists; walking each package's dependency table also catches a missing transitive
  * package without executing extension code or dependency install hooks.
+ *
+ * 🔴 The guarantee is not uniform with depth, and saying so is the point:
+ *   depth 1  — real `require.resolve()`, so a broken `exports` map or a missing entry
+ *              point fails here.
+ *   depth >1 — the package directory is located the way Node would (walking up
+ *              `node_modules`), but its entry point is NOT resolved. A transitive
+ *              package that is present yet unrequirable — ESM-only, or an `exports`
+ *              map with no `require` condition — still passes.
+ * Resolving every edge for real was tried and rejected: it fails on ESM-only
+ * transitive packages that the CJS code never actually requires, which would redden
+ * the release for a non-problem. #875 (bundling with esbuild) removes the question
+ * by walking the real import graph instead of dependency tables.
  */
 function assertPackageDependencyGraphResolves(manifestPath, visited) {
   if (visited.has(manifestPath)) return
@@ -132,8 +144,12 @@ export function findMissingBundledDeps(vsixRoot, spec) {
     try {
       const resolvedFile = requireFromRuntimeFile.resolve(specifier)
       assertDependencyGraphResolves(resolvedFile, new Set())
-    } catch {
-      unresolvedSpecifiers.push(specifier)
+    } catch (error) {
+      // Keep the inner reason. A failure several edges down names a transitive
+      // package the caller has never heard of, and without it the CI log would
+      // only say the top-level specifier failed — leaving the next incident to
+      // be diagnosed by local reproduction instead of by reading the log.
+      unresolvedSpecifiers.push({ specifier, reason: error.message })
     }
   }
 
@@ -159,10 +175,10 @@ function main() {
           `::error::${spec.label} runtime dependency '${dependency}' missing from packaged .vsix at ${spec.nodeModulesPath}`,
         )
       }
-      for (const specifier of result.unresolvedSpecifiers) {
+      for (const { specifier, reason } of result.unresolvedSpecifiers) {
         failed = true
         console.error(
-          `::error::${spec.label} runtime specifier '${specifier}' cannot be resolved from ${spec.resolveFromPath} in the packaged .vsix`,
+          `::error::${spec.label} runtime specifier '${specifier}' cannot be resolved from ${spec.resolveFromPath} in the packaged .vsix — ${reason}`,
         )
       }
       if (result.missingDependencies.length === 0 && result.unresolvedSpecifiers.length === 0) {

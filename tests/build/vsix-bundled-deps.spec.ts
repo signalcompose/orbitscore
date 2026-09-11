@@ -148,10 +148,12 @@ describe('packaged .vsix runtime dependency gate (#874)', () => {
       fs.rmSync(path.join(fixture.root, fixture.spec.nodeModulesPath, 'transitive'), {
         recursive: true,
       })
-      expect(findMissingBundledDeps(fixture.root, fixture.spec)).toEqual({
-        missingDependencies: [],
-        unresolvedSpecifiers: ['direct'],
-      })
+      const result = findMissingBundledDeps(fixture.root, fixture.spec)
+      expect(result.missingDependencies).toEqual([])
+      expect(result.unresolvedSpecifiers.map((entry) => entry.specifier)).toEqual(['direct'])
+      // The reported reason must name the transitive package that actually went
+      // missing, not just the top-level specifier the caller asked about.
+      expect(result.unresolvedSpecifiers[0]!.reason).toContain('transitive')
     } finally {
       fs.rmSync(fixture.root, { recursive: true, force: true })
     }

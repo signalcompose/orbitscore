@@ -197,6 +197,50 @@ MCP 4 秒 / `evaluate` ok / **engine ログの `ERROR:` 0 行** / capture 16.04 
 - **#875**: esbuild でバンドルして本機構ごと退役させる（宣言されていない import は今の機構では
   原理的に見えない）
 
+
+#### fix 差分の再点検（ラウンドを閉じる前・1 レビュアー）
+
+問いは 2 つだけ: 「この修正が導入する新しい故障モードは何か」「新コードはどの実行コンテキストで走るか」。
+**Critical 0 / Important 3**。いずれも同じ向き — **保証が深さ 1 では本物で、深さ 2 以上で宣言検査へ退化する**。
+
+🔴 **加えて、main 自身が 1 件見つけた**: `.vscodeignore` に**未コミットの変更が残っていた**。
+`git commit` した**後**に Codex が書いたもので、「完了通知は稼働終了を意味しない」の実例。
+内容は `!engine/node_modules/**` の削除で、理由として「入れ子は普通に入る」と書かれていた。
+
+**実測したら理由が誤りだった**: 否定指定を外すと `engine/node_modules` の同梱が **422 → 317 件**へ減る。
+つまり否定指定は load-bearing で、`**/*.ts` 等の一般規則が効いているのを打ち消していた。
+ただし失われる 105 件の内訳は **`.ts` が 104 個とスタンプ 1 件**で、`.js` / `.node` /
+パッケージの `package.json` は 1 つも落ちない。**変更自体は実害のないサイズ削減**（9.4 → 9.34 MB）
+なので採用し、**コメントを実態に書き直した**（数字つきで）。
+
+| 指摘 | 対応 |
+|---|---|
+| 推移依存の版が固定されていない（temp install に lockfile が無く range で再解決される） | **限界として明記**。宣言層の乖離（sdk 1.30.0 / zod 4.6.2 対 lockfile の 1.29.0 / 4.4.3）は潰れており、そこが譜面の振る舞いに効く層。グラフ全体の固定は lockfile の合成が要るので #875 へ |
+| 深さ 2 以上は `require.resolve` ではなくディレクトリ探索（存在すれば通る） | **限界として明記**。全辺を実解決する案は**試して却下**されている — CJS が実際には require しない ESM-only の推移パッケージで**偽の赤**になり、リリースを理由なく止める |
+| `catch {}` が内側のエラーを捨て、どの推移パッケージが欠けたか分からない | **直した**。`reason` を持ち回って診断に出す |
+
+再点検後の実測 — `dist/node_modules/express`（sdk の推移依存）を削除:
+
+```
+::error::extension runtime specifier '@modelcontextprotocol/sdk/server/mcp.js' cannot be
+resolved from extension/dist/mcp-server.js in the packaged .vsix
+  — express cannot be resolved from .../node_modules/@modelcontextprotocol/sdk/package.json
+```
+
+**どの推移パッケージが欠けたかがログだけで分かる。** 以前は最上位の specifier しか出なかった。
+
+`npm test` 2,347 passed / 0 failed・lint 緑・引用 944 / 0 failed・ゲートは実 `.vsix` で exit 0。
+
+#### 🔴 CI が 3 回走っていなかった
+
+`f83aa658` / `b99c1d04` / `af19ac93` の push で CI が 1 度も起動していなかった。原因は
+**PR が `DIRTY`**（main と衝突）だったこと — GitHub は merge commit を計算できない PR では
+`pull_request` ワークフローを走らせない。**緑でも赤でもなく「無」だったので、`gh pr checks` は
+`no checks reported` としか言わない。** main をマージして解消した。
+
+**教訓**: `gh pr checks` が「no checks reported」と言う時は、待つのではなく
+`gh pr view --json mergeStateStatus` を見る。
+
 ### test(core): freeze the clock in the loop-quantize mock (#869) (Sep 11, 2026)
 
 `tests/core/loop-quantize.spec.ts` の「snaps to the same boundary already crossed when
