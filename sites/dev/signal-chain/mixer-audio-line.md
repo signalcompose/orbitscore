@@ -405,7 +405,7 @@ daemon が atomic に書いた routing を、native の render callback はど�
 **post-loop** がその場所です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2392-2418
+// rust/crates/orbit-audio-native/src/output.rs:2531-2557
     let feeds = collect_source_feeds(sources, rendered_units, &bus_positions, bs);
     engine.render_multi_feeds(hw, &mut targets, &feeds);
     drop(targets);
@@ -430,9 +430,9 @@ daemon が atomic に書いた routing を、native の render callback はど�
                     }
                 }
                 LineOp::Gain(target) => {
-                    let gain = line_gain(
-                        program,
-                        op_index,
+                    let frames = bs / output_channels;
+                    let ramp =
+                        line_ramp(program, op_index, target, frames, buses[i].line.ramp_frames);
 ```
 
 読み方はこうです。
@@ -460,7 +460,7 @@ post-loop の中身が「`effective_targets[i]` を見て 1 箇所に足す」�
 「stage ごとの命令列を頭から実行する」へ置き換わりました。命令の型はこの 3 つです。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1000-1025
+// rust/crates/orbit-audio-native/src/output.rs:1052-1077
 /// A resolved output destination for one line operation. Bus and channel names are converted to
 /// stable indices on the control thread before a program is published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -499,32 +499,32 @@ pub enum LineOp {
 出口の実行部分はこうなっています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2435-2459
-                LineOp::Output(output) => {
-                    let dest = effective_line_output_dest(
-                        &mut first_output,
-                        legacy_targets[i],
-                        output.dest,
-                    );
-                    let gain = line_gain(
-                        program,
-                        op_index,
-                        output.gain,
-                        bs / output_channels,
-                        buses[i].line.ramp_frames,
-                    );
-                    match dest {
-                        OutputDest::Master => {
-                            add_scaled(hw, &buses[i].buffer[..bs], gain);
-                        }
-                        OutputDest::Bus(target) => {
-                            let (left, right) = buses.split_at_mut(i + 1);
-                            add_scaled(
-                                &mut right[target - i - 1].buffer[..bs],
-                                &left[i].buffer[..bs],
-                                gain,
-                            );
-                        }
+// rust/crates/orbit-audio-native/src/output.rs:1962-1986
+            LineOp::Output(output) => {
+                let ramp = line_ramp(
+                    program,
+                    op_index,
+                    output.gain,
+                    frames,
+                    master.line.ramp_frames,
+                );
+                if let OutputDest::Device { left, right } = output.dest {
+                    add_to_device(&mut device, &master.buffer[..bs], frames, left, right, ramp);
+                } else {
+                    // release ではこの debug_assert は no-op。到達不能を保証する唯一の境界は
+                    // control 層の `set_bus_line` master 分岐であり、その検証が破れればこの出口は
+                    // 無音のまま捨てられ、ログにも残らない。
+                    debug_assert!(false, "master line destination was not validated");
+                }
+                if !output.thru {
+                    break;
+                }
+            }
+            LineOp::Pan(target) => {
+                let ramp = line_ramp(program, op_index, target, frames, master.line.ramp_frames);
+                apply_line_pan(&mut master.buffer[..bs], frames, ramp);
+            }
+        }
 ```
 
 `OutputDest` は 5 値ありますが、`Output` として実行されるのは `Master` / `Bus` / `Device` の
@@ -533,7 +533,7 @@ pub enum LineOp {
 詳しくは次の見出し）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1415-1427
+// rust/crates/orbit-audio-native/src/output.rs:1467-1479
     for op in &program.ops {
         match op {
             // These arms are availability gates, not permanent format restrictions. Remove the
@@ -560,27 +560,27 @@ pub enum LineOp {
 両方にある `LineOp::Pan(_)` 腕を、実際に L/R を掛ける処理へ置き換えます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2163-2182
+// rust/crates/orbit-audio-native/src/output.rs:2246-2265
 #[inline]
-fn apply_line_pan(buf: &mut [f32], frames: usize, pan: f32) {
-    // 中央は定義上ちょうど unity なので、乗算ごと省く（`/simplify` efficiency・2026-09-11）。
-    //
-    // 🔴 これは丸め誤差の除去でもある。f32 では `sqrt(2) * cos(pi/4) = 0.99999994` で
-    // **1.0 ちょうどにならない**ため、省かないと `pan(0)` を書いた譜面が書かない譜面と
-    // 6e-8 だけずれる。設計 §4.1 は「center で `(1, 1)`（unity）」と書いているので、
-    // 省く方が**文書どおり**になる。`LineOp::Gain` が `gain != 1.0` で同じことをしている。
-    if pan == 0.0 {
+fn apply_line_pan(buf: &mut [f32], frames: usize, ramp: LineRamp) {
+    if ramp.is_settled() {
+        if ramp.end == 0.0 {
+            return;
+        }
+        let (left, right) = line_pan_coefficients(ramp.end);
+        for frame in 0..frames {
+            let base = frame * ENGINE_CHANNELS;
+            buf[base] *= left;
+            buf[base + 1] *= right;
+        }
         return;
     }
-    let (left, right) = equal_power_pan(pan);
-    let left = left * std::f32::consts::SQRT_2;
-    let right = right * std::f32::consts::SQRT_2;
-    for frame in 0..frames {
-        let base = frame * ENGINE_CHANNELS;
-        buf[base] *= left;
-        buf[base + 1] *= right;
+
+    if ramp.hold_after == 0 {
+        return;
     }
-}
+    let (start_left, start_right) = line_pan_coefficients(ramp.start);
+    let (end_left, end_right) = line_pan_coefficients(ramp.end);
 ```
 
 要点は `equal_power_pan` そのものではなく **`√2` を掛けた値**を使っていることです。発音側の
@@ -593,8 +593,18 @@ golden は丸め誤差以外動かず**、動くのは「rack を挟んでから
 後ろへ移る）だけです。
 
 `pan` の位置そのものは `current_gain`（後述）に −1..1 の値として保持され、`gain` と同じ
-`advance_ramped_gain` でブロックごとに目標へ ramp します。三角関数の計算はブロックにつき
-1 回だけで、位置が動いてもクリックは出ません。
+`advance_line_ramp` で目標へ ramp します。三角関数（`equal_power_pan`）の計算は
+**ブロックにつき 2 回**（開始位置と終了位置の係数）だけで、その間は **L/R 係数を線形補間**します。
+
+🔴 **この節は以前「位置が動いてもクリックは出ません」と書いていたが、それは偽だった**
+（#859・2026-09-11 に訂正）。ランプは**ブロックあたりスカラー 1 個**として掛かっており、
+`ramp_frames` が 240（5 ms）なのに実機のブロック長が **512** だったため、
+`min(frames / ramp_frames, 1)` が常に 1.0 になって**ランプが 1 ブロックで完了**していた
+（= ブロック境界の段差）。実測では `gain(-40)` → `gain(0)` の切替で一次差分が
+信号自身の最大スルーの **17 倍**に跳んでいる。
+
+今はブロック内をサンプル単位で補間するので記述どおりになった。**ブロック終端の値は
+補間の前後でビット一致する**ので、既存の実機 goldens は動かない。
 
 #### 互換のための 2 つの仕掛け
 
@@ -604,7 +614,7 @@ golden は丸め誤差以外動かず**、動くのは「rack を挟んでから
 1 つめが `effective_line_output_dest` です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1457-1468
+// rust/crates/orbit-audio-native/src/output.rs:1509-1520
 fn effective_line_output_dest(
     first_output: &mut bool,
     legacy_target: Option<OutputDest>,
@@ -636,7 +646,7 @@ line program は control スレッドが作って RT スレッドが読むので
 回収は control 側」です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1172-1177
+// rust/crates/orbit-audio-native/src/output.rs:1224-1229
 struct LineExchange {
     live: AtomicPtr<LineProgram>,
     retired: Mutex<Vec<RetiredLineProgram>>,
@@ -655,7 +665,7 @@ callback の最後に `finish_generation()` で世代を進めます。**alloc /
 共有している**点です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2320-2337
+// rust/crates/orbit-audio-native/src/output.rs:2459-2476
         // SAFETY: the line generation is not completed until after execution below. Control keeps
         // any replaced box retired for two later completed generations.
         let program = unsafe { &*programs[i] };
@@ -887,7 +897,7 @@ verb 宛ての `Output` が 1.0 から目標（例えば 0.25）まで数 ms か
 その install ハンドルがこれです。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:805-817
+// rust/crates/orbit-audio-native/src/output.rs:857-869
     pub fn line_program_installer(&self) -> LineProgramInstaller {
         let control = self.line.line_control();
         let current = control.clone();
@@ -941,7 +951,7 @@ instrument が何かを知らず、「render すると N 本の block をくれ�
 持ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:848-861
+// rust/crates/orbit-audio-native/src/output.rs:900-913
 /// A callback-owned source which renders one or more interleaved output units.
 pub trait BlockSource: Send {
     fn render(&mut self, frames: usize, transport: &BlockTransport) -> usize;
@@ -967,7 +977,7 @@ feed の収集は `collect_source_feeds`（`output.rs:772-801`）が行い、uni
 core の `FeedDest` に写します。写像の部分だけ引用します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2096-2106
+// rust/crates/orbit-audio-native/src/output.rs:2140-2150
             let dest = match slot.dests[unit].load() {
                 SourceDest::Master => FeedDest::Hardware,
                 SourceDest::Bus(index) => bus_positions
@@ -1268,7 +1278,7 @@ master gain の**手前**に来ます。
 ラックが**音を生成する**スタブを使うユニットテストが唯一の守り手になっています。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:5024-5029
+// rust/crates/orbit-audio-native/src/output.rs:5221-5226
         // 0.75（ラックが生成）× 0.5（master gain）= 0.375。
         // 順序が逆なら 0.75 のまま（gain は無音に掛かるだけ）。
         assert!(

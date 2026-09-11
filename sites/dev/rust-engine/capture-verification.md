@@ -30,7 +30,7 @@ capture は `render_block_with_sources`（[RE-1](/rust-engine/) 参照）の中�
 変わりません（読むだけで mutation ではない）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1794-1817
+// rust/crates/orbit-audio-native/src/output.rs:1846-1869
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,

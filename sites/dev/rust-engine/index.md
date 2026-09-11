@@ -462,7 +462,7 @@ SIGABRT を見てしまう — そのため `write_line_best_effort` を使う�
 callback 側の状態を引き継ぐためです（`OutputStream::render_state` のコメント参照）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:833-839
+// rust/crates/orbit-audio-native/src/output.rs:885-891
 pub struct RenderState {
     link: Option<LinkEgress>,
     insert_buses: Vec<InsertBusStage>,
@@ -473,7 +473,7 @@ pub struct RenderState {
 ```
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1709-1746
+// rust/crates/orbit-audio-native/src/output.rs:1761-1798
 /// 1 callback 分の処理（計測 + engine render + master-bus post-processor）。
 #[inline]
 fn render_shared_block(
@@ -528,7 +528,7 @@ fn render_shared_block(
 （デバイス配置の段が増えたぶん、2ch 以外では配置のコストが常に乗ります）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1794-1884
+// rust/crates/orbit-audio-native/src/output.rs:1846-1936
 fn render_block_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -583,16 +583,12 @@ fn render_block_with_sources(
         if let Some(p) = master.post.as_mut() {
             p.process(&mut master.buffer[..bs]);
         }
-        let g = master.advance_gain(frames);
-        // g == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
+        let ramp = master.advance_gain(frames);
+        // gain == 1.0 は IEEE754 の乗算恒等元で bit 一致を崩さない（`x * 1.0 == x`）。分岐は
         // 「未使用 gain 経路に per-sample 乗算コストを払わない」ための最適化であり、O0 golden の
         // bit 一致は乗算そのものではなく `gain_current` が初期値 1.0 のまま変化しないことに由来する
         // （`SetGlobalGain` を一度も呼ばない譜面では target=current=1.0 が恒常的に成立する）。
-        if g != 1.0 {
-            for s in master.buffer[..bs].iter_mut() {
-                *s *= g;
-            }
-        }
+        apply_ramped_gain(&mut master.buffer[..bs], ENGINE_CHANNELS, ramp);
         // デバイス配置（設計 §5.3・row 6）: master.buffer（2ch）を hw（デバイス幅）の ch{0,1} へ置く。
         // 2ch デバイスなら memcpy 相当（O0-1/O0-2 の bit 一致はここで成立）。3ch 以上は ch2 以降が
         // 無音で残る — この分岐の Device 出口は master 固定 program の 1 本のみで、複数出口は
@@ -620,6 +616,10 @@ fn render_block_with_sources(
         stats.record(t0.elapsed().as_nanos() as u64);
     }
 }
+
+#[inline]
+fn execute_master_line(
+    master: &mut MasterLine,
 ```
 
 ### 直行デバイスライン — master を通さない出口
@@ -632,7 +632,7 @@ master.buffer は常に 2ch なので、デバイス幅のバッファをもう 
 というのがこのバッファの理由です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:2197-2201
+// rust/crates/orbit-audio-native/src/output.rs:2312-2316
 struct DeviceLineBuffer<'a> {
     samples: &'a mut [f32],
     channels: usize,
@@ -673,7 +673,7 @@ pub const ENGINE_CHANNELS: usize = 2;
 `master.buffer` をデバイス幅の `hw` へ写します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1958-1982
+// rust/crates/orbit-audio-native/src/output.rs:2002-2026
 fn place_master_into_device(buf: &[f32], frames: usize, device_channels: usize, hw: &mut [f32]) {
     match device_channels {
         0 => {}
@@ -712,14 +712,14 @@ gain を 1 つの構造体にまとめ、**ラック → gain** の順を固定�
 atomic に書いた目標値へ、block ごとに寄せていく形です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:819-829
-    /// 1 block 分ランプを進め、その block に適用する gain を返す（設計 §5.3 `ramp()`）。
+// rust/crates/orbit-audio-native/src/output.rs:871-881
+    /// 1 block 分ランプを進め、その block に適用する ramp を返す（設計 §5.3 `ramp()`）。
     /// `current += (target - current) * min(1, frames / ramp_frames)`。RT: atomic load 1 回 +
     /// 算術のみ（alloc/lock/syscall なし）。
     #[inline]
-    fn advance_gain(&mut self, frames: usize) -> f32 {
+    fn advance_gain(&mut self, frames: usize) -> LineRamp {
         let target = f32::from_bits(self.gain_target.load(Ordering::Relaxed));
-        advance_ramped_gain(&mut self.gain_current, target, frames, self.ramp_frames)
+        advance_line_ramp(&mut self.gain_current, target, frames, self.ramp_frames)
     }
 }
 
@@ -816,7 +816,7 @@ publish 先は `MasterLine` が持つ専用の `LineSlot` です。ここで気�
 **publish されたかどうかを別の一方通行フラグで持っている**という点です。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:748-758
+// rust/crates/orbit-audio-native/src/output.rs:800-810
     /// control が master program を **一度でも publish したか**（不可逆）。`line` の中身からは
     /// 導出できない（RT で既定値と深い比較をすることになり、かつ「既定と同じ program を明示的に
     /// publish した」場合を区別できない）。
@@ -834,7 +834,7 @@ publish 先は `MasterLine` が持つ専用の `LineSlot` です。ここで気�
 `true` になって初めて `execute_master_line` が呼ばれ、publish された op 列を順に実行します。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1887-1904
+// rust/crates/orbit-audio-native/src/output.rs:1935-1952
 fn execute_master_line(
     master: &mut MasterLine,
     frames: usize,
@@ -872,7 +872,7 @@ engine render 部分の `render_engine_with_sources` は、instrument source（O
 4 通りに分かれます。source も active bus も無ければ、従来の `render_engine` に落ちます。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:1986-2027
+// rust/crates/orbit-audio-native/src/output.rs:2030-2071
 fn render_engine_with_sources(
     engine: &Engine,
     link: &mut Option<LinkEgress>,
@@ -923,7 +923,7 @@ fn render_engine_with_sources_impl(
 避けるため、scratch buffer は 1 秒分をあらかじめ確保しています）。
 
 ```rust
-// rust/crates/orbit-audio-native/src/output.rs:3091-3108
+// rust/crates/orbit-audio-native/src/output.rs:3224-3241
     let stream = match sample_format {
         SampleFormat::F32 => device
             .build_output_stream(
