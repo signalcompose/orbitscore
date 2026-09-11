@@ -82,7 +82,7 @@ You can also open chapter 9 (Reference) or chapter 10 (Troubleshooting) on their
 - macOS Apple Silicon (Macs with M1, M2, M3, etc.)
 - VS Code or Cursor (version 1.99.0 or later)
 
-Intel Mac, Windows, and Linux are not supported in v1. (Some Intel Macs may work, but this is unverified.)
+Intel Mac, Windows, and Linux are not supported. (The released `.vsix` is arm64-only.)
 
 ## Next Step
 
