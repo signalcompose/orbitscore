@@ -61,6 +61,48 @@ ja / en の両方に節を追加（STYLE_GUIDE のバイリンガル必須）。
 
 検証: `npm run docs:build`（user / dev）緑 / `npm run docs:check` 緑。
 
+### docs: follow PR #852 in the user site and the diagnostics chapter (Sep 11, 2026)
+
+マージ済み PR [#852](https://github.com/signalcompose/orbitscore/pull/852)（束 B・`611-dsl-surface` →
+main・merge commit `ded9709`）の追従。**ドキュメントのみ**の変更で、`packages/` `rust/` `tests/` は触っていない。
+
+#852 は core spec（`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.2 / MX.3 / MX.4 / MX.5）と
+specs-v2（`SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.4）を自分で更新していたが、**ユーザー向けの 3 ファイルが
+旧仕様のまま残っていた** — いずれも「dB 化は決まったが未実装」「send は post-fader 固定」と書いており、
+実装済みの今は**読んだ人が逆の行動を取る**記述になっていた。
+
+## 直したもの
+
+| ファイル | 何が古かったか |
+|---|---|
+| `sites/user/mixing/routing.md` / `en/` | `send(name, amount)` が線形・dB 化は未実装・post-fader 固定 |
+| `sites/user/reference/methods.md` / `en/` | 同上 + `output()` の宛先が sum のみ・`thru:` / `db:` 不在 |
+| `docs/user/ja/USER_MANUAL.md` | `output()` / `send()` の宛先を「sum バス」と書いていた |
+| `sites/dev/editor/execution-feedback.md` / `en/` | 診断 6 がミキサー宛先を除外するようになったこと（#852 の `diagnostics-analysis.ts:257-262`）が未記載 |
+
+追記した利用者から見える表面（すべて #852 の差分から読み取れるもの）:
+
+- `send(aux, db)` の単位が **dB**（線形 `0.3` 相当は `-10.5`）。`amount:` は loud に throw
+- `send(aux, db, enabled: false)` はチェーン上の位置を保持したまま送出を止める
+- `output(dest, thru:, db:)`。`thru: false`（既定）が終端・`thru: true` がタップ
+- `send(name, db)` ≡ `output(name, thru: true, db: db)`
+- 宛先の解決順: 解決済みノード → `"master"` → 宣言済み sum/aux → `"L,R"` → LinkAudio channel
+- `effect()` / `gain()` / `pan()` / `send()` / `output()` は**書いた順に 1 本の線**に並ぶ
+- `sum` / `aux` バスも `output()` / `send()` / `gain()` / `pan()` を受ける（`BUS_DSL_METHODS`）
+- `master` はミキサーノード名として予約・`mix.output(1, 2)` はデバイスであって master ではない
+- `mix.output(n)` の 1 引数形はモノラル（L+R マージ）
+
+## 書かなかったこと（PR 本文の「確認してほしい点」へ回した）
+
+- core spec MX.5 の「sum ネスト不可」と、同 PR が MX.2.2 に書いた「sum が別の sum へ出せる ✅」が
+  **食い違って見える**。どちらが正しいかは仕様の判断なので追従作業では直さない
+- `gain()` / `pan()` の固定値が**バス未確保の audio シーケンスでは発音側に留まる**という条件分岐は、
+  ユーザー向けページには書いていない（内部の割り当て事情で、書くと「位置が効かない場合がある」と
+  読めてしまう）
+
+検証: `npm run docs:build -w @orbitscore/user-site` 緑 / `-w @orbitscore/dev-site` 緑 /
+`npm run docs:check` **938 citations verified, 0 failed**。
+
 ### fix(clap-host): stop warning on the normal path for effects without note ports (#860) (Sep 11, 2026)
 
 束 B の最終ゲートで `auto-records and restores all five plugin receiver kinds` が落ちた。
