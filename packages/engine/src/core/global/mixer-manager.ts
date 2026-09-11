@@ -2,14 +2,18 @@ import type { AudioEngine } from '../../audio/types'
 import type { RackRecipe } from '../../signal-chain/rack'
 import { createStatePathFallback } from '../project-state-store'
 import {
+  assertOutputOptions,
   AudioLine,
   resolveNamedOutputDest,
+  resolveSendLevel,
   toWire,
   type LineElement,
   type OutputDest,
   type OutputOptions as MixerOutputOptions,
   type SendOptions as MixerSendOptions,
 } from '../sequence/audio-line'
+import { clampGainDb } from '../sequence/parameters/gain-manager'
+import { clampPan } from '../sequence/parameters/pan-manager'
 
 export type { MixerOutputOptions, MixerSendOptions }
 
@@ -94,7 +98,11 @@ export interface MixerBusHandle {
    * fallback and the numeric render-bus branch, which are Sequence-only concepts). */
   output(dest: string | OutputDest, opts?: MixerOutputOptions): Promise<MixerBusHandle>
   /** #611 §2.3/§3.6: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })`. */
-  send(aux: string | OutputDest, db: number, opts?: MixerSendOptions): Promise<MixerBusHandle>
+  send(
+    aux: string | OutputDest,
+    dbOrOptions?: number | MixerSendOptions,
+    opts?: MixerSendOptions,
+  ): Promise<MixerBusHandle>
   /** #611 §5.4: a fixed gain on this bus's own line (`BUS_DSL_METHODS`). */
   gain(db: number): Promise<MixerBusHandle>
   /** #611 §5.4: a fixed pan on this bus's own line (`BUS_DSL_METHODS`). */
@@ -326,6 +334,7 @@ export class MixerManager {
         return this.makeHandle(kind, name, bus)
       },
       output: async (dest: string | OutputDest, opts: MixerOutputOptions = {}) => {
+        assertOutputOptions(opts, `Mixer bus '${formatReceiverId(kind, name)}': output`)
         await this.applyLineElement(bus, {
           kind: 'output',
           dest: this.resolveDest(dest),
@@ -335,22 +344,31 @@ export class MixerManager {
         })
         return this.makeHandle(kind, name, bus)
       },
-      send: async (aux: string | OutputDest, db: number, opts: MixerSendOptions = {}) => {
+      send: async (
+        aux: string | OutputDest,
+        dbOrOptions?: number | MixerSendOptions,
+        opts: MixerSendOptions = {},
+      ) => {
+        const level = resolveSendLevel(
+          dbOrOptions,
+          opts,
+          `Mixer bus '${formatReceiverId(kind, name)}': send`,
+        )
         await this.applyLineElement(bus, {
           kind: 'output',
           dest: this.resolveDest(aux),
           thru: true,
-          db: opts.enabled === false ? -Infinity : db,
+          db: level.enabled === false ? -Infinity : level.db,
           sugar: 'send',
         })
         return this.makeHandle(kind, name, bus)
       },
       gain: async (db: number) => {
-        await this.applyLineElement(bus, { kind: 'gain', db })
+        await this.applyLineElement(bus, { kind: 'gain', db: clampGainDb(db) })
         return this.makeHandle(kind, name, bus)
       },
       pan: async (pan: number) => {
-        await this.applyLineElement(bus, { kind: 'pan', pan })
+        await this.applyLineElement(bus, { kind: 'pan', pan: clampPan(pan) })
         return this.makeHandle(kind, name, bus)
       },
     }

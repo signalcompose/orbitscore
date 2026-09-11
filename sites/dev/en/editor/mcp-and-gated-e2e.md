@@ -992,7 +992,7 @@ const offendingLines = (sourceEntries: readonly SourceEntry[], pattern: RegExp):
 ### The DSL coverage ratchet
 
 ```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:47-57
+// tests/e2e/dsl-e2e-coverage.spec.ts:48-58
 function methodsExercisedByGatedE2E(): ReadonlySet<string> {
   // 🔴 走査先は `gated-sources.ts` が持つ（#668 §3.4・PR-E1）。ここで 1 ファイルを決め打ちすると、
   // シナリオを別ファイルへ出した時に**カバー済みの語が未カバー扱いになって red** になる。
@@ -1009,7 +1009,7 @@ function methodsExercisedByGatedE2E(): ReadonlySet<string> {
 It only checks whether `.<name>(` appears anywhere in the gated E2E sources returned by `readGatedSources()`. The vocabulary side is `SEQUENCE_DSL_METHODS` / `GLOBAL_DSL_METHODS` from `packages/engine/src/signal-chain/runtime` — the interpreter's dispatch table itself.
 
 ```typescript
-// tests/e2e/dsl-e2e-coverage.spec.ts:148-158
+// tests/e2e/dsl-e2e-coverage.spec.ts:152-162
   it('A-1 does not leave a new sequence method untested on real hardware', () => {
     const now = uncovered(SEQUENCE_DSL_METHODS)
     const baseline = new Set(SEQUENCE_UNCOVERED_BASELINE)
@@ -1146,7 +1146,7 @@ export function parseStepLine(line: string): StepEvent | null {
 The audio-side source is a single place in `rust-engine-player.ts`.
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1646-1652
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1642-1648
   private emitStepMarker(play: ScheduledPlay): void {
     if (play.sequenceName && play.argPath !== undefined) {
       console.log(
@@ -1169,7 +1169,7 @@ This is where `#654` enters. According to WORK_LOG 6.421, when a new seven-layer
 ```
 
 ```typescript
-// packages/engine/src/core/sequence.ts:1588-1598
+// packages/engine/src/core/sequence.ts:1592-1602
     if (owner) {
       const markedSlots = new Set<string>()
       for (const ev of timedEvents) {

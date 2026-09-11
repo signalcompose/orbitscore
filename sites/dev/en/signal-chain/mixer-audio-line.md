@@ -103,7 +103,7 @@ empty-name check, three steps line up: reserving the bus name, the LinkAudio exc
 acquisition from the pool.
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:281-301
+// packages/engine/src/core/global/mixer-manager.ts:289-309
     if (name === 'master') {
       throw new Error(
         `global.${kind}("master") is reserved: "master" names the output endpoint, not a ` +
@@ -144,7 +144,7 @@ prefix and the cap are constants on the TS side, and the comment states explicit
 must match the Rust side.
 
 ```typescript
-// packages/engine/src/core/global/mixer-manager.ts:27-40
+// packages/engine/src/core/global/mixer-manager.ts:31-44
 /**
  * `sum-bus-<n>` / `aux-bus-<n>` default pool prefixes. Must match
  * `DEFAULT_SUM_BUS_POOL_PREFIX` / `DEFAULT_AUX_BUS_POOL_PREFIX` in
@@ -214,7 +214,7 @@ numeric render bus, or a LinkAudio channel name. The resolution order is fixed b
 > the old model** — see `docs/design/611-output-line-design.md` §2-§3 for the current design.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:504-532
+// packages/engine/src/core/sequence.ts:509-538
 
   /**
    * §2.1: route this sequence's audio line to `dest`. Resolution order is normative (doc 611
@@ -232,6 +232,7 @@ numeric render bus, or a LinkAudio channel name. The resolution order is fixed b
    */
   output(dest: string | number | OutputDest, opts: OutputOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
+    assertOutputOptions(opts, `Sequence '${name}': output`)
     if (typeof dest === 'object') {
       return this.applyOutputElement(dest, opts, 'output')
     }
@@ -285,7 +286,7 @@ calls fan out, and the same destination overwrites. **The unit changed from line
 dB in #611 PR-B2.**
 
 ```typescript
-// packages/engine/src/core/sequence.ts:612-628
+// packages/engine/src/core/sequence.ts:618-631
   /**
    * §2.3: `send(aux, db, opts)` ≡ `output(aux, { thru: true, db })` (doc 611 §2.3). `enabled:
    * false` lowers the wire gain to 0 (`db = -Infinity`) while KEEPING the element in the line
@@ -294,15 +295,12 @@ dB in #611 PR-B2.**
    * breaking change for any script still passing e.g. `send("rev", 0.3)` — that value is now
    * read as +0.3 dB, not 30%; see WORK_LOG).
    */
-  send(aux: string | OutputDest, db: number, opts: SendOptions = {}): this {
+  send(aux: string | OutputDest, dbOrOptions?: number | SendOptions, opts: SendOptions = {}): this {
     const name = this.stateManager.getName() || 'sequence'
     if (typeof aux === 'string' && !aux.trim()) {
       throw new Error(`Sequence '${name}': send(aux, db) requires a non-empty aux name.`)
     }
-    if (!Number.isFinite(db)) {
-      throw new Error(
-        `Sequence '${name}': send(${JSON.stringify(aux)}, ${db}) gain must be finite (dB).`,
-      )
+    const level = resolveSendLevel(dbOrOptions, opts, `Sequence '${name}': send`)
 ```
 
 Keep in mind that `_line` (an `AudioLine`) tracks elements by a key (destination + occurrence
@@ -1077,7 +1075,7 @@ sequence holds an insert bus. Whether the order is `instrument()` → `effect()`
 passes through here.
 
 ```typescript
-// packages/engine/src/core/sequence.ts:924-951
+// packages/engine/src/core/sequence.ts:928-955
   private ensureInstrumentSourceRouting(): Promise<void> {
     if (!this.isInstrument() || !this._insertBus) return Promise.resolve()
     const bus = this._insertBus
@@ -1158,7 +1156,7 @@ is optional, so nothing happens on the SC backend. The essential point of
 `RustEnginePlayer.setGlobalGain` is "record the intent first, regardless of the daemon's state".
 
 ```typescript
-// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1321-1333
+// packages/engine/src/audio/rust-engine/rust-engine-player.ts:1317-1329
   async setGlobalGain(amplitude: number, rampSec = 0): Promise<void> {
     // 🔴 daemon の状態に関わらず**先に intent を記録する**。未接続時に捨てると、
     // 接続後に復元する手がかりが消える（`Global.gain()` を再評価する経路は存在しない）。

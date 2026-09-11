@@ -49,12 +49,44 @@ export interface OutputOptions {
   readonly db?: number
 }
 
-/**
- * #611 §2.3: `send()` / `MixerBusHandle.send()` の options。dB は**位置引数**で渡すので
- * ここには置かない（`send(aux, db, { enabled })`）。`enabled: false` は -Infinity dB。
- */
+/** #611 MX.3: `db` may be positional or named, but never both. */
 export interface SendOptions {
+  readonly db?: number
   readonly enabled?: boolean
+}
+
+/** Reject the legacy-looking numeric second argument before it can be silently ignored. */
+export function assertOutputOptions(
+  value: unknown,
+  call = 'output',
+): asserts value is OutputOptions {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) return
+  throw new Error(
+    `${call}() expects an options object as its second argument. ` +
+      `Did you mean output(dest, { db: -12 }) or send(dest, -12)?`,
+  )
+}
+
+/** Resolve the one normative dB value accepted by `send`: positional or named. */
+export function resolveSendLevel(
+  dbOrOptions: number | SendOptions | undefined,
+  trailingOptions: SendOptions = {},
+  call = 'send',
+): { db: number; enabled: boolean | undefined } {
+  const positionalDb = typeof dbOrOptions === 'number' ? dbOrOptions : undefined
+  const options =
+    typeof dbOrOptions === 'object' && dbOrOptions !== null ? dbOrOptions : trailingOptions
+  if (positionalDb !== undefined && trailingOptions.db !== undefined) {
+    throw new Error(
+      `${call}() received both a positional db value and db:. ` +
+        `Remove either the second positional argument or the named db:.`,
+    )
+  }
+  const db = positionalDb ?? options.db
+  if (!Number.isFinite(db)) {
+    throw new Error(`${call}() gain must be finite (dB).`)
+  }
+  return { db: db as number, enabled: options.enabled }
 }
 
 /**

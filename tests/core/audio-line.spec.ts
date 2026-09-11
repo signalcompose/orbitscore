@@ -78,6 +78,26 @@ describe('AudioLine', () => {
     expect(line.program()).toEqual([{ kind: 'gain', db: -12 }, { kind: 'rack' }, master()])
   })
 
+  it('keeps two existing elements and the cursor stable when a later batch upserts them left-to-right', () => {
+    const line = new AudioLine()
+    batch(line, [{ kind: 'rack' }, { kind: 'gain', db: -6 }])
+
+    line.beginBatch()
+    line.upsert({ kind: 'rack' })
+    line.upsert({ kind: 'gain', db: -12 })
+    // A third insertion observes the cursor left by the second upsert. With `index > cursor`,
+    // gain moves before rack and pan is then inserted between them.
+    line.upsert({ kind: 'pan', pan: 30 })
+    line.endBatch()
+
+    expect(line.program()).toEqual([
+      { kind: 'rack' },
+      { kind: 'gain', db: -12 },
+      { kind: 'pan', pan: 30 },
+      master(),
+    ])
+  })
+
   it('U8 replaces an existing terminal when a batch starts with another terminal', () => {
     const line = new AudioLine()
     batch(line, [bus('drums', false)])
