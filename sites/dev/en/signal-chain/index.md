@@ -1651,7 +1651,7 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - `rust/crates/orbit-std-gain/tests/contract.rs:114-145,159-215` — contract tests pinning the param name and processing a real buffer
 - `rust/crates/orbit-std-gain/bundle-macos.sh:1-45` — assembling the `.clap` bundle
 - `scripts/copy-daemon-bin.sh:131-132` — bundling `std-plugins/Gain.clap`
-- `.github/workflows/release.yml:86-98,191-200` — the real Gain test and the bundling gate inside the `.vsix`
+- `.github/workflows/release.yml:88-100,184-193` — the real Gain test and the bundling gate inside the `.vsix`
 - `rust/crates/orbit-effect-rack-child/src/tests.rs:646-654,670-676` — the #780 fix (`line!()` replaced by a `static AtomicU64` counter) and the regression test on uniqueness itself
 - `CLAUDE.md:658-674` — the three lines of the pre-merge gate (when `--ignored` is used, when it is not, and why)
 - Issue [#780](https://github.com/signalcompose/orbitscore/issues/780) / PR [#789](https://github.com/signalcompose/orbitscore/pull/789) — the intermittent SIGBUS in the unconditional gate and the hole in the `--ignored` filter

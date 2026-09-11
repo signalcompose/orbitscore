@@ -196,6 +196,42 @@ engine の stderr 分類で **`ERROR:` 行になる**（memory `stderr-is-classi
 
 Closes #855
 
+### docs(sites): re-anchor the release.yml line references shifted by #853 (Sep 11, 2026)
+
+PR [#853](https://github.com/signalcompose/orbitscore/pull/853)（タグと `.vsix` の版を照合する
+release ガード）が `.github/workflows/release.yml` の `Setup Node.js` の直後に **10 行**挿入した。
+旧 58 行目以降がすべて **+10** ずれている。
+
+## #853 が直したもの・残したもの
+
+| 種別 | 追従状況 |
+|---|---|
+| ` ```yaml // .github/workflows/release.yml:84-90` 形式の引用ブロック 2 箇所 | ✅ #853 が `94-100` / `184-193` へ更新済み（`docs:check` が突合するため) |
+| 本文中の散文的な行参照 | ❌ 取り残された。`docs:check` はフェンス付き引用しか見ないので red にならない |
+
+## 直した 4 行
+
+| ファイル | 変更 | 参照先の実体（現行 release.yml） |
+|---|---|---|
+| `sites/dev/rust-engine/index.md:329` | `:88` → `:90` | `cargo build ... --features outproc-effect,outproc-instrument` |
+| `sites/dev/en/rust-engine/index.md:338` | 同上 | 同上 |
+| `sites/dev/signal-chain/index.md:1616` | `:86-98,191-200` → `:88-100,184-193` | 実 Gain テストのステップ / `.vsix` 内 `std-plugins/Gain.clap` の同梱ゲート |
+| `sites/dev/en/signal-chain/index.md:1653` | 同上 | 同上 |
+
+いずれも**執筆時点では正しかった**（`28606fa` 時点で `release.yml:88` は features 行、
+`84a29a5` 時点で `86-98` / `191-200` は当該ステップ）。行ドリフトで腐っただけで、
+記述の内容そのものは変わっていない。したがって章の `verified-against` / `verified-at` は
+**更新していない** — 章全体を検証し直してはいないため。
+
+## 追従不要と判断したもの
+
+- `docs/design/656-release-design.md` の行参照（`:114` `:224` `:245-248` 等）も +10 ずれているが、
+  **設計書は起案時点のスナップショット**なので書き換えない（routine 規則）。報告のみ
+- `docs/planning/IMPLEMENTATION_PLAN_2026-09.md:239` の `release.yml:116-207` も同様に +10 ずれ（→ `126-217`）。計画文書なので報告のみ
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — #853 は DSL の構文も意味論も
+  変えていない（`packages/engine/` に差分なし）
+- `sites/user/` / `docs/user/ja/USER_MANUAL.md` — ユーザーが書く語に変更なし
+
 ### fix(clap-host): stop warning on the normal path for effects without note ports (#860) (Sep 11, 2026)
 
 束 B の最終ゲートで `auto-records and restores all five plugin receiver kinds` が落ちた。

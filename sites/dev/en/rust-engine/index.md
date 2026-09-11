@@ -335,7 +335,7 @@ And the shipping build does not enable it. The one line that produces the bundle
     && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument \
 ```
 
-`.github/workflows/release.yml:88` uses the same feature set, and `link-audio` is in neither.
+`.github/workflows/release.yml:90` uses the same feature set, and `link-audio` is in neither.
 So **the daemon bundled into the `.vsix` has no egress at all**.
 
 The feature's own comment is the reason it stays off: enabling it drags Ableton Link
