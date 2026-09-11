@@ -88,6 +88,45 @@ MCP サーバ（#388）が入った時点から壊れていた可能性が高い
 | #878 | `extension.ts:2000` の `spawn('node', …)` が PATH 依存で `process.execPath` のフォールバックが無い |
 | #849 | ネイティブ macOS OrbitStudio の設計 |
 
+
+#### 収束条件の最終確認 — **公開された資産**で cold install
+
+ローカルビルドではなく **GitHub Release からダウンロードした `.vsix`**（利用者が受け取るもの）で検証した。
+
+| 検証 | 結果 |
+|---|---|
+| 資産の版 vs タグ | `3.0.0` = `v3.0.0` |
+| 依存ゲート（`check-vsix-bundled-deps.mjs`） | engine 5/5・extension 2 宣言 + **3 specifier 解決** |
+| `scsynth` / `supercollider` の参照 | **0** |
+| activate | `Cannot find module` **0 件** |
+| MCP サーバ | **4 秒**で listen |
+| engine ログ | `ERROR:` **0 行** |
+| **音** | capture **34.09 s**・非ゼロ **24.2%**・**RMS 0.038183**・peak 1.133490 |
+
+🔴 **起動は Finder 相当の最小 PATH で行った**
+（`/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin`）。
+`extension.ts:2000` の `spawn('node', …)` が PATH 依存なので（#878）、シェルから起動すると
+この条件を検証したことにならない。
+
+**`--extensionDevelopmentPath` は使っていない。** dev host はリポジトリの
+`rust/target/release` から daemon を引き、依存もルートの hoist 先から walk-up で見つけるため、
+**`extension-bundle` 解決と同梱依存のどちらも通らない**。#873 はまさにそこに隠れていた。
+
+#### 🔴 署名・公証の実測（#881 を起票）
+
+同梱ネイティブバイナリ 8 個は **ad-hoc 署名のみ**（`linker-signed` / `TeamIdentifier=not set`）。
+
+| 確認 | 結果 |
+|---|---|
+| `spctl -a -vv -t execute` | **rejected** |
+| quarantine を付けて実行 | **exit 137（SIGKILL）**+ 「Apple は…検証できませんでした」ダイアログ |
+| VS Code の `--install-extension` 後の `xattr` | **0 件** → 実行 exit 0 |
+| `ditto -x -k` / `/usr/bin/unzip` で展開 | **quarantine が伝播する** |
+
+**動いているのは、VS Code の `.vsix` 展開が quarantine を付けないから**であって、署名が
+通っているからではない。他社実装への暗黙の依存で、#878（`spawn('node')` が VS Code の
+シェル環境解決に救われている）と同じ形。ネイティブ `.app` のラインでは逃げ道が無く必須になる。
+
 ### docs: follow the 3.0.0 / DSL 1.2 bump into the docs the bump missed (PR #871 追従) (Sep 11, 2026)
 
 ルーティン docs 追従。追従元は PR [#871](https://github.com/signalcompose/orbitscore/pull/871)
