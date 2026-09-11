@@ -1293,7 +1293,7 @@ WORK_LOG 6.386 によると、最初は `PARAM_DB_NAME` 定数と比較してい
 さらに packaging 後の `.vsix` の中に `std-plugins/Gain.clap` があることを確かめます。
 
 ```yaml
-# .github/workflows/release.yml:94-100
+# .github/workflows/release.yml:98-104
           # 標準プラグイン（#628 / SC.10.8）。cdylib をビルドして .clap bundle に組む。
           bash rust/crates/orbit-std-gain/bundle-macos.sh --release
 
@@ -1304,7 +1304,7 @@ WORK_LOG 6.386 によると、最初は `PARAM_DB_NAME` 定数と比較してい
 ```
 
 ```yaml
-# .github/workflows/release.yml:184-193
+# .github/workflows/release.yml:190-199
           # 標準プラグイン（#628 / SC.10.8）: child は自分の実行ファイルの隣の
           # `std-plugins/<name>.clap` を見て解決する。同梱が落ちると DSL の
           # `Gain(db: …)` が実行時に「解決できない」で落ちるだけで、
@@ -1613,7 +1613,7 @@ WORK_LOG 6.396 には `LOOP` を止め忘れて音が鳴り続けた記録があ
 - `rust/crates/orbit-std-gain/tests/contract.rs:114-145,159-215` — param 名の固定と実バッファ処理の契約テスト
 - `rust/crates/orbit-std-gain/bundle-macos.sh:1-45` — `.clap` bundle の組み立て
 - `scripts/copy-daemon-bin.sh:131-132` — `std-plugins/Gain.clap` の同梱
-- `.github/workflows/release.yml:88-100,184-193` — 実 Gain テストと `.vsix` 内の同梱ゲート
+- `.github/workflows/release.yml:98-104,190-199` — 実 Gain テストと `.vsix` 内の同梱ゲート
 - `rust/crates/orbit-effect-rack-child/src/tests.rs:646-654,670-676` — #780 の修正（`line!()` を `static AtomicU64` の連番へ）と、一意性そのものへの退行検知テスト
 - `CLAUDE.md:658-674` — マージ前ゲートの 3 行（`--ignored` 付き / 無しの使い分けとその理由）
 - Issue [#780](https://github.com/signalcompose/orbitscore/issues/780) / PR [#789](https://github.com/signalcompose/orbitscore/pull/789) — 無条件ゲートの間欠 SIGBUS と `--ignored` フィルタの穴
