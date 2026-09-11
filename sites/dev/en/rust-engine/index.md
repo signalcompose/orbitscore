@@ -1,12 +1,12 @@
 ---
 title: "RE-1. Daemon Architecture Overview"
 chapter-id: "RE-1"
-verified-against: e4d4199
+verified-against: f23eb5d
 verified-at: "2026-09-11"
 status: draft
 ---
 
-> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10, and to the fact — settled by the SuperCollider retirement of #502 ([#833](https://github.com/signalcompose/orbitscore/pull/833)) on 2026-09-10 — that LinkAudio egress is not in shipped builds. The code is the truth; this page is only a snapshot of understanding at that time.
+> **Note**: This page is a trace of the author's reading as of 2026-09-01, brought up to the master line introduced by #649 PR-O2 ([#754](https://github.com/signalcompose/orbitscore/pull/754)) on 2026-09-05, and to the startup shm sweep of #779 ([#784](https://github.com/signalcompose/orbitscore/pull/784)) on 2026-09-06, and to the direct device line of #611 PR-O3a ([#811](https://github.com/signalcompose/orbitscore/pull/811)) on 2026-09-08, and to the `SetBusLine` wire contract and the two master line paths of #611 PR-O3b ([#824](https://github.com/signalcompose/orbitscore/pull/824)) on 2026-09-10, and to the fact — settled by the SuperCollider retirement of #502 ([#833](https://github.com/signalcompose/orbitscore/pull/833)) on 2026-09-10 — that LinkAudio egress is not in shipped builds, and to the `pan` op, the mono device destination and the republish seed of the first half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) on 2026-09-11. The code is the truth; this page is only a snapshot of understanding at that time.
 
 # RE-1. Daemon Architecture Overview
 
@@ -290,7 +290,7 @@ arms are as follows (the notes column mentions the arms gated by a feature `cfg`
 | `SelectAudioDevice` | runtime device switch | #484 D2, delegated to the audio owner thread; #661 probes the candidate first |
 | `GetStatus` | daemon/protocol version, sample rate, `render_contentions`, etc. | #661 added `output` (the device actually playing, plus the fallback history) and `callback` (the liveness counter) |
 | `LoadSample` / `UnloadSample` | register / release an audio file | |
-| `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | 🔴 the `link-audio` feature is **default off** and is not enabled in shipped builds. When absent the daemon answers `LINK_AUDIO_UNAVAILABLE` (a missing *capability*) and the TS side warns exactly once and continues on hardware. See "LinkAudio egress is not in shipped builds" below |
+| `RegisterLinkAudioChannel` / `SetLinkTempo` | LinkAudio egress | 🔴 the `link-audio` feature is **default off** and is not enabled in shipped builds. When absent the daemon answers `LINK_AUDIO_UNAVAILABLE` (a missing *capability*). "The TS side warns exactly once and continues on hardware" is the **design intent**, but that is not how it behaves on a real machine (🔴 **unresolved** — read the measurement under "LinkAudio egress is not in shipped builds" below) |
 | `LoadPlugin` | attach a plugin (`role` / `bus` / `instance` / `state`) | the in-process build requires `role` |
 | `ApplyEffectChain` | prepare-commit application of a whole rack (chain) | #628, `mode: diff / rebuild` |
 | `ReplacePlugin` | replace a slot's tenant | #618 (instrument) / #625 (effect) |
@@ -335,7 +335,7 @@ And the shipping build does not enable it. The one line that produces the bundle
     && cargo build --release -p orbit-audio-daemon --features outproc-effect,outproc-instrument \
 ```
 
-`.github/workflows/release.yml:88` uses the same feature set, and `link-audio` is in neither.
+`.github/workflows/release.yml:90` uses the same feature set, and `link-audio` is in neither.
 So **the daemon bundled into the `.vsix` has no egress at all**.
 
 The feature's own comment is the reason it stays off: enabling it drags Ableton Link
@@ -765,6 +765,17 @@ Copying it would make `LineProgram::new` restart every ramp at unity, so calling
 fails design 611 §4.2's "copy it *without changing its meaning*", so the copy lands in **PR-O4**, together
 with the §5.1 mechanism that carries the effective gain across a republish.
 
+🔴 **Where this stands on 2026-09-11**: of those two, **only the latter (the §5.1 mechanism) has
+landed**. The first half of #611 PR-O4
+([#834](https://github.com/signalcompose/orbitscore/pull/834)) added `LineProgram::with_seeds` and
+`line_republish_seeds`, so a `SetBusLine` republish now continues from the old program's effective
+values (see "A republish carries the effective gain across" in
+[SC-2](/en/signal-chain/mixer-audio-line)). **`set_global_gain` itself is still not copied** — as
+the quotation below shows, it stores one atomic and does not call the line-program installer. What
+remains is the TS-side switch (the second bundle, `611-output-line`), which will have to newly
+satisfy the serialization contract named in the doc comment on `LineControl::current_gains()`
+(`rust/crates/orbit-audio-native/src/output.rs:1254-1293`).
+
 ```rust
 // rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9741-9750
     /// マスターゲインを設定する。PR-O3b では従来どおり atomic だけを更新し、RT 専有の
@@ -788,8 +799,16 @@ chain side is covered in [SC-2](/en/signal-chain/mixer-audio-line).
 #611 PR-O3b added one more arm to the command table: `SetBusLine`. Where the old `SetBusRouting`
 fills in a **fixed frame** ("one output target plus a set of sends"), `SetBusLine` sends
 `{ bus, line: [op, op, …] }` — **the ordered op sequence itself** — and replaces that bus's line
-wholesale. There are three ops: `rack` (run the rack), `gain` (linear gain) and `output` (an
-exit), and the array order is the signal order.
+wholesale. There are four ops: `rack` (run the rack), `gain` (linear gain), `pan` (stereo
+position) and `output` (an exit), and the array order is the signal order.
+
+`pan` was absent from the wire as of PR-O3b, and the `LineOp::Pan` that existed as a type was
+rejected by `validate_line_program` on the grounds that RT could not execute it. The first half of
+#611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) removed both: a `pan` op
+in `-1..=1` is now on the wire and RT executes it. The pan law on a bus is not the raw equal-power
+one but `√2 · equal_power_pan(p)`; the reason (the source side already applies `1/√2` at center)
+is in the "`Pan` — equal-power panning on a bus" section of
+[SC-2](/en/signal-chain/mixer-audio-line).
 
 Validation is split across two layers, which is the thing worth noticing when reading it. The
 **JSON shape** (spelling of `op`, a duplicated `rack`, the range of `gain`, the shape of `dest`)
@@ -829,13 +848,23 @@ but only the first three are accepted. `render` is rejected as unregistered beca
 cannot execute a Link exit. The code comments are explicit that neither is a different rule: both
 are the same §4.1 rule applied to the state of the tree as it stands.
 
+The `channels` of a `device` destination were a fixed two-element L/R pair under PR-O3b. The first
+half of #611 PR-O4 ([#834](https://github.com/signalcompose/orbitscore/pull/834)) made **a
+one-element (mono) array acceptable too**: the shape check became
+`matches!(channels.len(), 1 | 2)`, and the range check became "`left` is within
+`1..=output_channels`, and only when a `right` exists must it be non-zero and distinct from
+`left`". Zero or three-plus elements are `MALFORMED_REQUEST`; a well-shaped but out-of-range
+channel is `PARAM_OUT_OF_RANGE` — both are pinned by
+`set_bus_line_wire_rejects_device_channel_arity_and_mono_out_of_range`
+(`rust/crates/orbit-audio-daemon/src/session.rs:3916-3954`).
+
 One more difference from `SetBusRouting` is worth holding onto: the **kind constraint on
 destinations**. `SetBusRouting` validates and rejects unless "the output target is a sum bus and
 send targets are aux buses", whereas `set_bus_line` only checks forward-only-ness (the target must
 be a later index) for a `bus` destination and **does not constrain the kind**. That matches the
 ruling in design 611 (reject cycles only, do not constrain by kind), and
 `set_bus_line_accepts_a_forward_aux_destination`
-(`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:3262-3284`) pins the behaviour down.
+(`rust/crates/orbit-audio-daemon/src/engine_wrap.rs:3349-3371`) pins the behaviour down.
 
 ### Two master line paths
 
@@ -1125,12 +1154,12 @@ i.e. two independent measurement paths agreeing at the same tap point). These fi
 - `rust/crates/orbit-audio-daemon/src/session.rs:691-718,1272-2372` — `session::run` (handshake, writer task, UI event forwarding) and the `handle_command` match arms (source of the command table)
 - `rust/crates/orbit-audio-native/src/output.rs:254-260,581-618,662-750,1513-1556` — `RenderState` / `render_shared_block` / `render_block_with_sources` / `render_engine_with_sources` / `build_stream`
 - `rust/crates/orbit-audio-native/src/output.rs:682-688,700-754,1253-1277` — `ENGINE_CHANNELS` / `MasterLine` (rack → gain) / `place_master_into_device` (#649 PR-O2)
-- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9479-9488` — `EngineWrap::set_global_gain` (PR-O3b keeps it **atomic-only**; the copy into the master line lands in PR-O4; `ramp_sec` kept for wire compatibility only)
+- `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:9741-9750` — `EngineWrap::set_global_gain` (PR-O3b keeps it **atomic-only**; the copy into the master line lands in PR-O4; `ramp_sec` kept for wire compatibility only)
 - `rust/crates/orbit-audio-native/src/output.rs:1926-1930,1932-1985` — `DeviceLineBuffer` / `add_to_device` (the direct device line, #611 PR-O3a)
 - `rust/crates/orbit-audio-daemon/src/session.rs:306-361,2633-2648` — `parse_set_bus_line_params` (wire-shape validation) and the `SetBusLine` dispatch arm (#611 PR-O3b)
 - `rust/crates/orbit-audio-daemon/src/engine_wrap.rs:6753-6906` — `EngineWrap::set_bus_line` (name → RT index resolution, published exactly once after every check)
 - `rust/crates/orbit-audio-native/src/output.rs:739-759,1783-1841` — `MasterLine.line` / `explicit_line` / `execute_master_line` (#611 PR-O3b)
-- `packages/engine/src/audio/rust-engine/daemon-client.ts:86-96,715-718` — `WireDest` / `WireLineOp` / `DaemonClient.setBusLine` (the caller arrives in PR-O4)
+- `packages/engine/src/audio/rust-engine/daemon-client.ts:86-97,715-718` — `WireDest` / `WireLineOp` / `DaemonClient.setBusLine` (the caller arrives in PR-O4)
 - PR [#811](https://github.com/signalcompose/orbitscore/pull/811) — bundle O-wire (line-program conversion, compatibility preserved)
 - PR [#824](https://github.com/signalcompose/orbitscore/pull/824) — bundle O-wire-b (the `SetBusLine` wire contract; the DSL never calls it)
 - [`docs/design/611-output-line-design.md`](https://github.com/signalcompose/orbitscore/blob/main/docs/design/611-output-line-design.md) §5.2-5.5 — design source of truth for the master line, the 2ch internal width, and taking the core master gain out of production

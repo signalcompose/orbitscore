@@ -17,6 +17,43 @@ A design and implementation project for a new music DSL (Domain Specific Languag
 
 ## Recent Work
 
+### docs: land the nine routine docs-sync PRs as one roundup (#867) (Sep 11, 2026)
+
+凍結版リリース（#827）のタグを打つ前に、溜まっていたルーティン docs 追従 PR **9 本**
+（#837 / #844 / #847 / #856 / #858 / #862 / #864 / #865 / #866）を統合ブランチ
+`867-docs-sync-roundup` で 1 本にまとめて main へ入れた。**docs のみ**で `packages/` `rust/`
+`tests/` `.github/` は触っていない。学習サイトはリリースの一部なので、タグ前に反映させる必要がある
+（owner 2026-09-11）。
+
+#### なぜ 1 本にまとめたか — 逐次マージだと兄弟の内容が消える
+
+9 本すべてが `WORK_LOG.md` を触り、#844 と #856 は 13 ファイルを共有、#837 / #862 / #865 は
+`sites/dev/editor/mcp-and-gated-e2e.md` の**同じ Note 行と同じ節**に追記していた。1 本ずつ main へ
+入れると残り 8 本を毎回再同期することになり、しかも従来の解決規則「WORK_LOG は両側・他は追従側を
+採る」は、**main 側に兄弟 PR の内容が入った後では兄弟の内容を落とす**（規則が前提にしていた
+「main 側 = 古い baseline」が成り立たなくなるため）。
+
+#### 衝突の解決（全 22 hunk・いずれも同じ事実の別表現か、同じアンカーへの独立追記）
+
+| 種別 | 解決 |
+|---|---|
+| WORK_LOG の同一アンカーへの独立エントリ（4 箇所） | 両方残す |
+| #844 × #856 の SC 削除記述（11 ファイル・18 hunk） | hunk ごとに**情報量の多い側**を採る。`glossary.md` の Sources 一覧（ja/en）と `index.md` の Part VII 行（ja/en）は #844 側（#836 / #838 の粒度と `daemon-client.ts` の行がある）、残りは #856 側 |
+| `mcp-and-gated-e2e.md` の Note 追従リスト（ja/en） | #830・#860・#855 の 3 件を**合併**。frontmatter は最新の `a6e1f13` / 2026-09-11 |
+| 同じ章の新設節（#862 の `###` 節 × #865 の散文） | 両方残す。#865 の散文を先（直前の #756 段落から続く）、#862 の `###` 節を後 |
+
+🔴 **1 件だけ「両方残す」では壊れた**: #865 は #857 の WORK_LOG エントリを Recent Work の先頭へ
+**移動**していたので、素朴に両側を残すと同じエントリが 2 箇所に出る。移動先を残して旧位置
+（54 行）を削除した。**「両側を残す」は追記には正しく、移動には正しくない。**
+
+#### 検証
+
+`node sites/dev/scripts/check-citations.mjs` **944 citations verified / 0 failed**（`--fix` は
+使わず素で実行）/ `npm test` **2,338 passed / 67 skipped / 0 failed** / `npm run lint` 緑 /
+`docs:build` dev・user 両方緑。
+
+Closes #867
+
 ### docs(sites): re-anchor three citations #859 left pointing at the wrong code (Sep 11, 2026)
 
 PR [#860](https://github.com/signalcompose/orbitscore/pull/860)（merge `e4d4199`）の追従。
@@ -39,6 +76,198 @@ PR [#860](https://github.com/signalcompose/orbitscore/pull/860)（merge `e4d4199
 4 章の `verified-against` / `verified-at` を `e4d4199` / 2026-09-11 に更新。
 
 検証: `npm run docs:check` **938 citations / 0 failed** / `docs:build`（user / dev）両方緑。
+### docs(sites): follow PR #861 — record the mirror-image consequence of line-wise ERROR prefixing (Sep 11, 2026)
+
+PR [#861](https://github.com/signalcompose/orbitscore/pull/861)（#860・merge `5ed3ce5`）の追従。
+
+IV-3 章（`sites/dev/editor/mcp-and-gated-e2e.md`）は #756 の「`ERROR:` 前置が chunk 単位
+だったので ERROR 件数が**構造的に過小**だった」までを書いていたが、**その裏返し**を
+書いていなかった。行単位になったということは「engine の stderr に出た行はすべて `ERROR:`」
+であり、**正常系の `warn!` 1 行で件数テストが巻き添えになる**。#861 はまさにそれで、
+`query_note_port_index` の warn が `default-baseline cycle must add no ERROR: lines`
+（`tests/e2e/orbitstudio-mcp-gated.spec.ts:3426-3430`）を落としていた。
+
+ja / en の両方に節を追加（STYLE_GUIDE のバイリンガル必須）。ERROR 会計という 1 本の
+計測系に**測定器の側**（前置の粒度）と**被測定側**（engine のログレベル）の 2 つの入口が
+あり、**直す場所が正反対**であることを本文に残した。
+
+`verified-against` は据え置き。1 節の追記であって章本文の書き直しではなく、STYLE_GUIDE
+§4「小規模 cross-link / 体裁修正のみは更新しない」と「実質的に書き直したとき」の中間に
+あたるため、章冒頭の Note（この章が従来から追従履歴を書いている場所）に #861 を追記する
+方式を採った。
+
+検証: `npm run docs:build`（user / dev）緑 / `npm run docs:check` 緑。
+
+### docs: follow PR #852 in the user site and the diagnostics chapter (Sep 11, 2026)
+
+マージ済み PR [#852](https://github.com/signalcompose/orbitscore/pull/852)（束 B・`611-dsl-surface` →
+main・merge commit `ded9709`）の追従。**ドキュメントのみ**の変更で、`packages/` `rust/` `tests/` は触っていない。
+
+#852 は core spec（`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.2 / MX.3 / MX.4 / MX.5）と
+specs-v2（`SIGNAL_CHAIN_DSL_SPEC_v1.md` SC.4）を自分で更新していたが、**ユーザー向けの 3 ファイルが
+旧仕様のまま残っていた** — いずれも「dB 化は決まったが未実装」「send は post-fader 固定」と書いており、
+実装済みの今は**読んだ人が逆の行動を取る**記述になっていた。
+
+## 直したもの
+
+| ファイル | 何が古かったか |
+|---|---|
+| `sites/user/mixing/routing.md` / `en/` | `send(name, amount)` が線形・dB 化は未実装・post-fader 固定 |
+| `sites/user/reference/methods.md` / `en/` | 同上 + `output()` の宛先が sum のみ・`thru:` / `db:` 不在 |
+| `docs/user/ja/USER_MANUAL.md` | `output()` / `send()` の宛先を「sum バス」と書いていた |
+| `sites/dev/editor/execution-feedback.md` / `en/` | 診断 6 がミキサー宛先を除外するようになったこと（#852 の `diagnostics-analysis.ts:257-262`）が未記載 |
+
+追記した利用者から見える表面（すべて #852 の差分から読み取れるもの）:
+
+- `send(aux, db)` の単位が **dB**（線形 `0.3` 相当は `-10.5`）。`amount:` は loud に throw
+- `send(aux, db, enabled: false)` はチェーン上の位置を保持したまま送出を止める
+- `output(dest, thru:, db:)`。`thru: false`（既定）が終端・`thru: true` がタップ
+- `send(name, db)` ≡ `output(name, thru: true, db: db)`
+- 宛先の解決順: 解決済みノード → `"master"` → 宣言済み sum/aux → `"L,R"` → LinkAudio channel
+- `effect()` / `gain()` / `pan()` / `send()` / `output()` は**書いた順に 1 本の線**に並ぶ
+- `sum` / `aux` バスも `output()` / `send()` / `gain()` / `pan()` を受ける（`BUS_DSL_METHODS`）
+- `master` はミキサーノード名として予約・`mix.output(1, 2)` はデバイスであって master ではない
+- `mix.output(n)` の 1 引数形はモノラル（L+R マージ）
+
+## 書かなかったこと（PR 本文の「確認してほしい点」へ回した）
+
+- core spec MX.5 の「sum ネスト不可」と、同 PR が MX.2.2 に書いた「sum が別の sum へ出せる ✅」が
+  **食い違って見える**。どちらが正しいかは仕様の判断なので追従作業では直さない
+- `gain()` / `pan()` の固定値が**バス未確保の audio シーケンスでは発音側に留まる**という条件分岐は、
+  ユーザー向けページには書いていない（内部の割り当て事情で、書くと「位置が効かない場合がある」と
+  読めてしまう）
+
+検証: `npm run docs:build -w @orbitscore/user-site` 緑 / `-w @orbitscore/dev-site` 緑 /
+`npm run docs:check` **938 citations verified, 0 failed**。
+
+### docs(sites): follow PR #857 — a benign warn is an input to the release gate (#855) (Sep 11, 2026)
+
+マージ済み PR [#857](https://github.com/signalcompose/orbitscore/pull/857)（merge commit `a6e1f13`）への
+ドキュメント追従。**実装とテストは変更していない。**
+
+## 追従先
+
+**`sites/dev/editor/mcp-and-gated-e2e.md` / `sites/dev/en/editor/mcp-and-gated-e2e.md`**（ja/en 両方）。
+
+この PR が直したのは engine 内部の TOCTOU だが、**観測可能な表面は ERROR 件数**である。
+IV-3 の「`get_log` とリングバッファ」節は、この計数が信用できない理由を 2 つ挙げていた
+（固定窓による false green・#756 以前の chunk 単位前置による**構造的な過小**）。#855 は
+その 3 つ目で、向きが逆の**構造的な過大**にあたるので、同じ節に並べて書いた。
+
+- `temp-file-manager.ts:98-118` を引用し、per-entry の `try` が ENOENT だけを飲む形を示す
+- #840 のマージ前ゲートで `expected 9 to be less than or equal to 8` として出た実測を明記
+- ループ全体を囲む `try` だと ENOENT 1 件で残りが掃除されない副次問題も残す
+- 一般則を #756 と対にして締める:
+  **engine のどこかの `console.warn` 1 行が、そのままリリース可否ゲートの入力になる**
+
+frontmatter は `verified-against: a6e1f13` / `verified-at: 2026-09-11` へ更新し、
+冒頭 Note の追従リストにも #855 を足した。
+
+## WORK_LOG の並びを直した
+
+#857 の WORK_LOG エントリ（Sep 11）が、マージ時のコンフリクト解消（`1c3056a`）で
+**Sep 10 の #611 エントリ群の間**に入っていた。本文は変えず、位置だけ Recent Work の
+先頭へ移した。#857 は #860 / #852 より後のマージなので、そこが時系列上の正しい位置になる。
+
+## 追従不要と判断したもの
+
+| 対象 | 理由 |
+|---|---|
+| `docs/specs-v2/` `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` | DSL の構文・意味論・`.orbslog` 形式に変更が無い |
+| `sites/user/` `docs/user/ja/USER_MANUAL.md` | ユーザーが書く語に変更が無い。temp 掃除は DSL から不可視 |
+| `rust/` 側の章 | diff は TypeScript の engine のみ。MCP ツールの引数・返り値・エラー挙動は不変 |
+| `sites/dev/audio/audio-file-playback.md` | slicing 章だが SC 経路の歴史的読解で、`TempFileManager` を扱っていない |
+
+### fix(engine): stop a benign temp-dir race from inflating the ERROR count (#855) (Sep 11, 2026)
+
+#840 のマージ前ゲートで実機 gated が 2 件落ち、うち 1 件がこれだった。
+
+```
+AssertionError: expected 9 to be less than or equal to 8
+ERROR: Failed to cleanup old directories: Error: ENOENT: no such file or directory,
+       stat '.../T/orbitscore_1789065642138_xx52jsw'
+```
+
+**原因は TOCTOU**（`temp-file-manager.ts:93-110`）。`readdirSync` で列挙してから `statSync`
+する間に、**別のエンジンインスタンスの同じ掃除**が同じディレクトリを消す。gated suite は
+エンジンを何度も起動・停止するので、複数インスタンスが同じ temp root を奪い合う。
+
+`catch` は「Ignore errors during cleanup」と書いているのに `console.warn` を出しており、
+engine の stderr 分類で **`ERROR:` 行になる**（memory `stderr-is-classified-as-error` の再発）。
+**ディレクトリが既に無いのは、このループが望んでいた結果そのもの**で失敗ではない。
+
+**副次**: `try` がループ全体を囲んでいたので、**1 件 ENOENT が出た時点で残りを見ずに抜けて**
+いた。孤児が溜まる。
+
+## 🔴 変異検証が別の穴を見つけた
+
+修正のテストに変異をかけたところ、**`orbitscore_` 接頭辞の判定を外しても全テストが緑**だった。
+この掃除は**共有の `os.tmpdir()`** を舐めて **1 時間以上前のディレクトリを消す**ので、
+接頭辞判定は**他アプリの temp を消さない唯一の歯止め**である。テストを足した。
+
+| 変異 | 結果 |
+|---|---|
+| ENOENT も含め全部握り潰す | 1 failed |
+| ENOENT も再送出（元の挙動へ戻す） | 1 failed |
+| 1 時間の条件を外す（新しい dir も消す） | 1 failed |
+| **接頭辞の判定を外す** | **最初は 4 passed（すり抜け）→ テスト追加後 1 failed** |
+| restore | 5 passed・baseline とバイト一致 |
+
+## テストはモックを使わず実物のファイルシステム条件で書いた
+
+`os.tmpdir` も `fs.statSync` も **再定義できない**（`Cannot redefine property`）ので、
+最初に書いた `vi.spyOn` 版は動かなかった。差し替えではなく**本物の条件**を作った:
+
+| 条件 | 作り方 | Node が出すもの |
+|---|---|---|
+| レース | dangling symlink | 本物の `ENOENT` |
+| レースでない失敗 | 自己参照 symlink | 本物の `ELOOP` |
+| temp root の差し替え | `process.env.TMPDIR`（POSIX は呼び出しごとに読む） | — |
+
+`chmod 444` は使えなかった — constructor 自身の `mkdirSync` が先に落ちて **cleanup に到達しない**。
+
+捏造した mock 文言を検証するのは、このプロジェクトが列挙している弱いアサーションの典型なので、
+結果的に良い方向へ転んだ。
+
+`npm test` 2,283 passed / 0 failed・lint 緑・`typecheck:e2e` 緑・引用 934 / 0 failed。
+
+Closes #855
+
+### docs(sites): re-anchor the release.yml line references shifted by #853 (Sep 11, 2026)
+
+PR [#853](https://github.com/signalcompose/orbitscore/pull/853)（タグと `.vsix` の版を照合する
+release ガード）が `.github/workflows/release.yml` の `Setup Node.js` の直後に **10 行**挿入した。
+旧 58 行目以降がすべて **+10** ずれている。
+
+## #853 が直したもの・残したもの
+
+| 種別 | 追従状況 |
+|---|---|
+| ` ```yaml // .github/workflows/release.yml:84-90` 形式の引用ブロック 2 箇所 | ✅ #853 が `94-100` / `184-193` へ更新済み（`docs:check` が突合するため) |
+| 本文中の散文的な行参照 | ❌ 取り残された。`docs:check` はフェンス付き引用しか見ないので red にならない |
+
+## 直した 4 行
+
+| ファイル | 変更 | 参照先の実体（現行 release.yml） |
+|---|---|---|
+| `sites/dev/rust-engine/index.md:329` | `:88` → `:90` | `cargo build ... --features outproc-effect,outproc-instrument` |
+| `sites/dev/en/rust-engine/index.md:338` | 同上 | 同上 |
+| `sites/dev/signal-chain/index.md:1616` | `:86-98,191-200` → `:88-100,184-193` | 実 Gain テストのステップ / `.vsix` 内 `std-plugins/Gain.clap` の同梱ゲート |
+| `sites/dev/en/signal-chain/index.md:1653` | 同上 | 同上 |
+
+いずれも**執筆時点では正しかった**（`28606fa` 時点で `release.yml:88` は features 行、
+`84a29a5` 時点で `86-98` / `191-200` は当該ステップ）。行ドリフトで腐っただけで、
+記述の内容そのものは変わっていない。したがって章の `verified-against` / `verified-at` は
+**更新していない** — 章全体を検証し直してはいないため。
+
+## 追従不要と判断したもの
+
+- `docs/design/656-release-design.md` の行参照（`:114` `:224` `:245-248` 等）も +10 ずれているが、
+  **設計書は起案時点のスナップショット**なので書き換えない（routine 規則）。報告のみ
+- `docs/planning/IMPLEMENTATION_PLAN_2026-09.md:239` の `release.yml:116-207` も同様に +10 ずれ（→ `126-217`）。計画文書なので報告のみ
+- `docs/specs-v2/` / `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — #853 は DSL の構文も意味論も
+  変えていない（`packages/engine/` に差分なし）
+- `sites/user/` / `docs/user/ja/USER_MANUAL.md` — ユーザーが書く語に変更なし
 
 ### fix(clap-host): stop warning on the normal path for effects without note ports (#860) (Sep 11, 2026)
 
@@ -375,6 +604,45 @@ prototype に見える。`ensureInsertBusForInstrument` と併せて内部 API �
 
 検証: `npm test` **2,363 passed / 67 skipped / 0 failed** / `npm run lint` 緑 /
 `npm run typecheck:e2e` 緑 / 引用 1,034 verified / 0 failed。
+### docs: follow the merged #834 in the core spec, specs-v2 and the dev site (Sep 11, 2026)
+
+マージ済み PR [#834](https://github.com/signalcompose/orbitscore/pull/834)（#611 束
+O-surface の前半・merge commit `f23eb5d`）にドキュメントを追従させた。**実装とテストは
+一切触っていない**（docs のみ）。
+
+**追従した事実**（すべて #834 の差分から読み取れるもの）:
+
+| 差分 | 直した先 |
+|---|---|
+| `SetBusLine` の op が 3 種（rack / gain / output）→ **4 種**（`pan` 追加）・`session.rs:358` のエラー文言も変わった | `sites/dev/rust-engine/index.md` と en の「op は 3 種」の段 |
+| `dest.device` の `channels` が 2 要素固定 → **1 要素（mono）も受理**（`session.rs:423` の `matches!(channels.len(), 1 \| 2)`・範囲検証は `right` があるときだけ distinct を要求） | 同上（段を新設） |
+| `validate_line_program` の `Pan` 拒否が外れ、RT で `√2 · equal_power_pan(p)` を掛けるようになった（`output.rs:2148-2182`） | 同上 + `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.4 |
+| `LineProgram::with_seeds` / `line_republish_seeds` で再 publish が実効値を引き継ぐようになった | `sites/dev/rust-engine/index.md`（master gain の節が「§5.1 の機構は PR-O4 と同時に入る」と未来形で書いていた）と en |
+| 引用行のずれ（`engine_wrap.rs:3262-3284` → `:3349-3371`・`:9479-9488` → `:9741-9750`・`daemon-client.ts:86-96` → `:86-97`） | RE-1 ja / en の本文と further-reading（**中身を base と突合して「その記述が指すもの」だと確かめられた 3 件だけ**。RE-1 / SC-2 の further-reading には #834 より前から中身と合っていない範囲が他にもあるが、機械的にずらすと**別の誤りへ移すだけ**になるので触っていない） |
+| MX.4 の ⚠️「`pan` と mono 宛先はまだ wire に無い」 | `docs/core/INSTRUCTION_ORBITSCORE_DSL.md`（**wire には入ったが TS に呼び出し元が無い**ことを明記） |
+| SC.1 の「v1 の現在地」 | `docs/specs-v2/SIGNAL_CHAIN_DSL_SPEC_v1.md`（同上・現在地そのものは変わらない理由を書いた） |
+
+🔴 **「wire に入った ≠ 譜面から見える」を毎回書いた。** `packages/engine` に `setBusLine` の
+呼び出し元は 0 件（`grep -rn setBusLine packages --include=*.ts` は `daemon-client.ts` のみ）。
+`seq.pan()` は今日も発音側の `Scheduler` を通る。
+
+**あわせて直した既存の綻び**（#834 の差分起因ではない・PR 本文で開示）:
+`docs/core/INSTRUCTION_ORBITSCORE_DSL.md` MX.2.2 の `engine_wrap.rs:5809-5813` / `:5828` は
+**#834 より前から** `SelectAudioDevice` の stream 差し替えを指していた（WORK_LOG 2026-09-10 の
+行も「壊れていた」と記録している）。MX.4 側だけが実測値へ直され、MX.2.2 の表が取り残されていた
+ので、同じ実測値（`:7212-7216` / `:7237-7241`）へそろえた。
+
+**frontmatter**: #834 は SC-2 / RE-3 の本文を書き換えたのに `verified-against` /
+`verified-at` を据え置いていたので、4 ファイル（ja / en）を `f23eb5d` / 2026-09-11 へ更新した。
+
+**追従不要と判断したもの**: `sites/user/reference/methods.md` と
+`docs/user/ja/USER_MANUAL.md` の `pan(-100..100)`（DSL 表面は無変更）、
+`docs/design/611-o-surface-bundle-design.md`（起案時点のスナップショットなので後から直さない）。
+
+**検証**: `npm run docs:build -w @orbitscore/user-site` / `-w @orbitscore/dev-site` /
+`npm run docs:check`（936 → 引用の増減なし・0 failed）。
+
+---
 
 ### docs(native): correct the current_gains serialization table (#611) (Sep 11, 2026)
 
@@ -784,60 +1052,6 @@ Output の宛先・出現序数で対応付けて seed する。これが無い�
 `SetBusRouting` の `LineProgram::legacy` / `settled` 経路は変更していない。
 
 ---
-### fix(engine): stop a benign temp-dir race from inflating the ERROR count (#855) (Sep 11, 2026)
-
-#840 のマージ前ゲートで実機 gated が 2 件落ち、うち 1 件がこれだった。
-
-```
-AssertionError: expected 9 to be less than or equal to 8
-ERROR: Failed to cleanup old directories: Error: ENOENT: no such file or directory,
-       stat '.../T/orbitscore_1789065642138_xx52jsw'
-```
-
-**原因は TOCTOU**（`temp-file-manager.ts:93-110`）。`readdirSync` で列挙してから `statSync`
-する間に、**別のエンジンインスタンスの同じ掃除**が同じディレクトリを消す。gated suite は
-エンジンを何度も起動・停止するので、複数インスタンスが同じ temp root を奪い合う。
-
-`catch` は「Ignore errors during cleanup」と書いているのに `console.warn` を出しており、
-engine の stderr 分類で **`ERROR:` 行になる**（memory `stderr-is-classified-as-error` の再発）。
-**ディレクトリが既に無いのは、このループが望んでいた結果そのもの**で失敗ではない。
-
-**副次**: `try` がループ全体を囲んでいたので、**1 件 ENOENT が出た時点で残りを見ずに抜けて**
-いた。孤児が溜まる。
-
-## 🔴 変異検証が別の穴を見つけた
-
-修正のテストに変異をかけたところ、**`orbitscore_` 接頭辞の判定を外しても全テストが緑**だった。
-この掃除は**共有の `os.tmpdir()`** を舐めて **1 時間以上前のディレクトリを消す**ので、
-接頭辞判定は**他アプリの temp を消さない唯一の歯止め**である。テストを足した。
-
-| 変異 | 結果 |
-|---|---|
-| ENOENT も含め全部握り潰す | 1 failed |
-| ENOENT も再送出（元の挙動へ戻す） | 1 failed |
-| 1 時間の条件を外す（新しい dir も消す） | 1 failed |
-| **接頭辞の判定を外す** | **最初は 4 passed（すり抜け）→ テスト追加後 1 failed** |
-| restore | 5 passed・baseline とバイト一致 |
-
-## テストはモックを使わず実物のファイルシステム条件で書いた
-
-`os.tmpdir` も `fs.statSync` も **再定義できない**（`Cannot redefine property`）ので、
-最初に書いた `vi.spyOn` 版は動かなかった。差し替えではなく**本物の条件**を作った:
-
-| 条件 | 作り方 | Node が出すもの |
-|---|---|---|
-| レース | dangling symlink | 本物の `ENOENT` |
-| レースでない失敗 | 自己参照 symlink | 本物の `ELOOP` |
-| temp root の差し替え | `process.env.TMPDIR`（POSIX は呼び出しごとに読む） | — |
-
-`chmod 444` は使えなかった — constructor 自身の `mkdirSync` が先に落ちて **cleanup に到達しない**。
-
-捏造した mock 文言を検証するのは、このプロジェクトが列挙している弱いアサーションの典型なので、
-結果的に良い方向へ転んだ。
-
-`npm test` 2,283 passed / 0 failed・lint 緑・`typecheck:e2e` 緑・引用 934 / 0 failed。
-
-Closes #855
 ### ci(release): fail a tag push whose version disagrees with the .vsix (#843) (Sep 11, 2026)
 
 **追記（`/simplify` 後・2026-09-11）**: cleanup 4 体のうち 2 体が実質的な指摘を出した。
@@ -913,6 +1127,52 @@ Setup Node.js より後にしたのは、runner イメージ同梱の Node で�
 `mutation-backup-must-use-tmpdir` の「コミット済みなら `git checkout --` が確実」は
 **裏を返すと未コミットなら確実に壊す**。未コミットの作業に変異をかけるなら
 `$TMPDIR` へコピーしてから。
+### docs(sites): follow #840 — the SC path is deleted, not "scheduled for deletion" (#502) (Sep 10, 2026)
+
+束 [#840](https://github.com/signalcompose/orbitscore/pull/840) のマージ後追従（docs のみ・コードとテストは触っていない）。
+束の中で docs 追従は概ね済んでいたが、**「削除が決まっている」で止まっていた記述**と、
+**束の途中で自分の前半コミットに追い越された記述**が残っていた。
+
+#### 図が prose と食い違っていた（0-2 アーキテクチャ全景）
+
+`sites/dev/orientation/architecture-overview.md` は本文で「#502 で削除された」と書きながら、
+**Mermaid の図は `audio/supercollider-player.ts` ノード・`env.ORBITSCORE_ENGINE` の spawn ラベル・
+`ORBITSCORE_ENGINE=sc のときだけ` の点線・`scsynth` ノードを描いたまま**だった。
+本章の図は「4 種類のプロセス」を説明する主役なので、prose だけ直しても読者は図を信じる。
+図から SC を落とし、§「SuperCollider 経路」を過去形へ書き直した（ja / en）。
+
+#### 束の中で自分に追い越された記述
+
+| 記述 | 何が起きたか |
+|---|---|
+| `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` の master effects 警告ブロック | `94cfbfc` で置いた「`... not supported yet (A4 era) ...` を **1 回だけ** warn」が、同じ束の `7ce7afa`（warnOnce のキーを `(操作, effect 種別)` にした fix）で**古くなっていた**。新しい文言と、`compressor()` の次の `limiter()` が無言で失敗していた欠陥の記録に差し替え |
+| `sites/dev/editor/vscode-architecture.md` の #836 warning ブロック | 「拡張側の TypeScript は #836 では触られていません（撤去は次の PR）」— その「次の PR」が同じ束の #838 で、`resolveScsynthForUI()` は関数ごと消えている |
+| `sites/dev/glossary.md` の `bundle`(scsynth source) | 「型と分岐そのものは `scsynth-resolver.ts` に残っています」— #838 でファイルごと削除済み |
+
+#### 実態と食い違っていた 3 件
+
+- **`restrictedConfigurations`**: glossary が「2 件挙げている」と書いていたが、`package.json` は
+  **空配列**（`orbitscore.scsynthPath` / `orbitscore.engine` が消えたため）。
+  `vscode-architecture.md` は束の中で正しく直っていたので、glossary だけが取り残されていた
+- **status bar item**: 「scsynth 解決状態 (priority 99)」→ `bundleStatusItem` は現在
+  **daemon** が解決できないときだけ出る（`extension.ts` の `updateBundleStatus()`）
+- **ADR-003 の回避方法**: 「残る回避方法は `ORBIT_SCSYNTH_PATH` だけ」→ #840 でそれを読むコードが
+  無くなったので、**回避方法は残っていない**
+
+#### LinkAudio — 表の 1 行だけが断定に戻っていた
+
+`sites/dev/rust-engine/index.md` の command 表は `LINK_AUDIO_UNAVAILABLE` について
+「TS 側は 1 回だけ warn して hardware で続行する」と断定していた。同じ章の本文は
+`4d5aca0` の訂正（コメントが出典・実機では capture RMS 0 で警告も無し）を既に載せている。
+**要約表が本文と反対のことを言っていた**ので、「設計の意図。実機ではそう振る舞っていない（未決）」へ。
+
+#### やっていないこと
+
+- `packages/` `rust/` の実装・テストは**一切変更していない**（`dsl-e2e-coverage.spec.ts` の baseline を含む）
+- `docs/archive/WORK_LOG_*.md` は起案時点の記録なので触っていない
+- `docs/specs-v2/` は SC / `ORBITSCORE_ENGINE` / master effects の記述を持たないため追従不要
+
+---
 
 ### docs(link-audio): tell the truth about the deleted Link submodule and the unresolved fallback (#502) (Sep 10, 2026)
 
@@ -1163,6 +1423,41 @@ v2.0 の変更履歴側にも「SC と master effects はどちらも #502 で�
 
 残る `SuperCollider` の語（Phase 7 の完了表・#136 の merged 表・冒頭の「#502 で削除された」）は
 **履歴の記述**なので残す。README 全体の書き換えは stable リリースの手順 4 で別途行う。
+### docs: follow PR #838 in the dev site, the core spec and the user manuals (#502) (Sep 10, 2026)
+
+PR [#838](https://github.com/signalcompose/orbitscore/pull/838)（merge commit `585f495`）に
+ドキュメントを追従させた。**実装・テストは一切変更していない**（docs のみ）。
+
+**直したもの**（いずれも #838 の差分で「現存する」記述が偽になった箇所）:
+
+- `sites/dev/editor/vscode-architecture.md` — プロセスツリー図から scsynth 分岐を削除、
+  全体図の mermaid から `getConfiguredEngineKind()` / `resolveScsynthForUI()` / scsynth ノードを削除、
+  目次と見出し 2 件（アンカー切れの修正を含む）、Sources の `extension.ts` 行番号を実測値へ
+  （`:653-710` → `:628-642` ほか）
+- `sites/dev/glossary.md` — `ORBITSCORE_ENGINE` / `AudioEngineBackend` / StatusBarItem /
+  workspace trust の各項と、SC 用語・scsynth resolver 用語のセクション見出しを「削除済み」へ
+- `sites/dev/orientation/architecture-overview.md` — 全体図から SC ノードと
+  `env.ORBITSCORE_ENGINE` エッジを削除、§SuperCollider 経路を過去形へ
+- `sites/dev/{index,README}.md` / `.vitepress/sidebar.ts` /
+  `orientation/what-is-orbitscore.md` — Part VII の「削除決定」→「削除済み」
+- `sites/dev/pipeline/selective-execution.md` / `scheduling/{transport,event-queue}.md` —
+  spawn 時の env・`createAudioEngine()` の意味論・削除済みファイルへの Sources 参照
+- `docs/core/INSTRUCTION_ORBITSCORE_DSL.md` — 「`supercollider/` にもう 1 つ
+  `event-scheduler.ts` が**ある**からフルパスで書く」という根拠が失効した旨へ書き換え
+- `docs/specs-v2/IMPLEMENTATION_INSTRUCTIONS.md` §2 — パッケージ一覧に失効注記
+  （`packages/sc-link-audio` は #836、`supercolliderjs` は #838 で削除済み）
+- `docs/user/{ja,en}/USER_MANUAL.md` — DEPRECATED バナーに、SC / scsynth 記述が
+  全て失効した旨（`orbitscore.scsynthPath` / `orbitscore.engine` / `Force Kill scsynth` /
+  `Select Audio Device` / `force_kill_scsynth` / `ORBITSCORE_ENGINE`）を追記
+- 🔴 **日英両方**を更新（`sites/dev/en/` 配下の同一パス）
+
+**検証**: `npm run docs:check` = **934 verified / 0 failed**（#838 merge 時点と同値）。
+user-site / dev-site の `docs:build` はいずれも成功。`docs:check` を壊さないため
+`INSTRUCTION_ORBITSCORE_DSL.md` の書き換えは**行数を保った**（+1 行で
+`mixer-audio-line.md` の引用 4 件が落ちることを実測して回避）。
+
+**注**: #838 の WORK_LOG 項目の「残課題」は「`docs:check` が 198 件失敗・未対応」と書いているが、
+merge 時点では 0 failed で、当該作業は #838 内（`c18a962` ほか）で完了している。
 
 ### refactor(engine): remove the SuperCollider backend implementation and its editor surface (#502) (Sep 10, 2026)
 
@@ -1357,6 +1652,48 @@ warning ブロックを追加し、引用ヘッダを `path:start-end` → `path
 
 **やっていないこと**: `packages/` `rust/` `scripts/` `tests/` `.github/` のコード削除は本 PR の
 範囲外（PR-SC3a/3b で対応）。本 PR の時点では SC のコードはまだ存在する。
+
+### docs: follow the gated harness move onto stock VS Code (#830 / PR #831) (Sep 10, 2026)
+
+**追従元**: PR [#831](https://github.com/signalcompose/orbitscore/pull/831)（マージコミット `229d638`）/ **ブランチ**: `claude/docs-sync-pr831`（docs のみ）
+
+PR #831 は CLAUDE.md・README・`docs/planning/` 系・dev サイトの引用ブロックまでは直していたが、
+**dev サイトの散文が「実 OrbitStudio.app を起動する」と言ったまま**残っていた。同じページの中で
+コードブロックは `bin/code` と `/Applications/Visual Studio Code.app` を引用しているので、
+本文と引用が食い違う状態だった。`sites/dev/glossary.md`（PR #831 で更新済み）とも矛盾していた。
+
+| 直したもの | 場所 |
+|---|---|
+| 章タイトル・目次・導入・本文の「実 OrbitStudio.app を起動」 | `sites/dev/editor/mcp-and-gated-e2e.md` + `sites/dev/en/` の同パス |
+| 「手元で走らせる」の前提が「OrbitStudio.app がビルド済み」だった（フォークのビルドスクリプトは PR #831 が削除済みで、到達できない手順） | 同上 |
+| 手動ゲートの手順（CLAUDE.md が #830 で 3 点追記したのに散文は旧 2 段のまま） | 同上 / `sites/dev/signal-chain/index.md` + en |
+| `killOrbitStudio()` → `killHarnessInstances()`（関数は PR #831 で改名済み） | 同上 |
+| 実機層の駆動対象 | `docs/testing/E2E_HARNESS_SPEC.md:57` |
+| 新設 2 ファイルを Sources に追加 | `tests/e2e/helpers/harness-processes.ts` / `tests/e2e/harness-processes.spec.ts` |
+
+**直さずに注記したもの**: 「テスト一覧」表の行番号は PR #831 以前から古い（`it` は 20 本ではなく
+30 本ある）。この PR の差分に起因しないので、行番号を機械的にずらすと**誤った番号のまま体裁だけ整う**。
+表の見出しに「その時点のもの」と明記するに留めた。
+
+### docs(user-site): follow PR #842 — install route, Intel support, and engine start (Sep 10, 2026)
+
+PR [#842](https://github.com/signalcompose/orbitscore/pull/842)（`841-readme-stable` → `502-sc-removal`・
+マージコミット `f90c22ce251108faa1ffe31374a9d8e5eb481afb`）が出荷 README を実測に合わせたので、
+**ユーザー学習サイト側に残っていた同じ誤り**を追従させた。ja / en 両方。
+
+| 直したもの | 旧記述 | 根拠 |
+|---|---|---|
+| Intel Mac | 「一部動作する可能性がありますが未検証」 | #842 が `release.yml` の `VSIX_TARGET: darwin-arm64` を根拠に「非対応」へ改めた。universal ではない |
+| 入手経路 | 「将来は VS Code Marketplace と Open VSX からも直接インストールできる予定です」 | Marketplace / Open VSX には出さない（owner 2026-09-10・#842 本文） |
+| エンジンの起動 | 「ステータスバーをクリックするとコマンド一覧が開くので **Start Engine** を選びます」 | ステータスバーの `command` は `orbitscore.showCommands` で、その実体は `orbitscore.engineView.focus`（`packages/vscode-extension/src/extension.ts:666-668`）。**コマンド一覧は開かず Audio Engine Settings ビューが開く**。また `Start Engine` という title のコマンドは存在せず、現在は `OrbitScore: Start / Stop Engine`（`orbitscore.toggleEngine`）である |
+| デバッグ起動 | 「**Start Engine (Debug)** を選びます」 | `orbitscore.startEngineDebug` は `contributes.menus.commandPalette` で `when: "false"` にされておりパレットに出ない。ビュー側の `engineViewToggleDebug`（`extension.ts:2112-2122`）が設定 `orbitscore.engineDebug` を切り替える経路が実体 |
+
+**変更ファイル**: `sites/user/getting-started/installation.md` / `engine-settings.md`、`sites/user/index.md`、
+および `sites/user/en/` の同じ 3 ファイル。
+
+**直さずに報告に回したもの**: `docs/user/ja/USER_MANUAL.md`（README で deprecated 宣言済み・
+scsynth 同梱と `orbitscore.scsynthPath` を今も説明しており #502 と全面的に食い違う。1 行だけ直すと
+かえって誤解を招くので触っていない）。
 
 ### test(e2e): launch the gated harness from stock VS Code (#830) (Sep 10, 2026)
 

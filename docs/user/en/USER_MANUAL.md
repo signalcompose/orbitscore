@@ -1,4 +1,4 @@
-> ⚠️ **DEPRECATED (as of 2.0.0)** — This manual covers the pre-2.0 (audio-only) DSL and does NOT include the 2.0.0 features (MIDI output / Pitch DSL / comp / LinkAudio / quantize). See the **VitePress user site (`sites/user/`)** for current user documentation. Kept for history (#237). Note: the "brew install supercollider" step below is obsolete — 2.0.0 bundles scsynth.
+> ⚠️ **DEPRECATED (as of 2.0.0)** — This manual covers the pre-2.0 (audio-only) DSL and does NOT include the 2.0.0 features (MIDI output / Pitch DSL / comp / LinkAudio / quantize). See the **VitePress user site (`sites/user/`)** for current user documentation. Kept for history (#237). Note: the "brew install supercollider" step below is obsolete, and so is every other SuperCollider / scsynth instruction here — the SuperCollider backend (along with the bundled scsynth, the `orbitscore.scsynthPath` and `orbitscore.engine` settings, the `Force Kill scsynth` / `Select Audio Device` commands, the `force_kill_scsynth` MCP tool and the `ORBITSCORE_ENGINE` environment variable) was removed in #502 (2026-09-10). The audio backend is now the Rust `orbit-audio-daemon` alone.
 
 # OrbitScore User Manual
 

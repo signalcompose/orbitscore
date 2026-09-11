@@ -22,7 +22,7 @@ The first edition of this chapter was written against the 2026-05-05 snapshot (0
 - **The "is the input incomplete" decision is now only `\bEOF\b` on parse errors** (#607 / #612 in 2026-08). The 2026-05 edition's `Expected RPAREN` match also treated "a genuine syntax error in the middle of a line" as incomplete and silenced the session
 - **The meta-line vocabulary grew**: `//#selectAudioDevice` (#484), `//#savePluginState` (#562), `//#pluginUi` (#474), `//#evalMark` (#614). None of them is queued into the DSL buffer; each is processed immediately and answered with a one-line JSON carrying a correlation id on stdout
 - **Evaluation results now return to the caller** (#614). Parse / runtime diagnostics accumulate in `pendingDiagnostics` and are returned together when `//#evalMark` is reached. The MCP `evaluate_orbitscore` waits for this before deciding `ok`
-- **Spawning the engine now always sets `ORBITSCORE_ENGINE` explicitly** (#377, after the cutover). The default is the Rust daemon; the boot sequence of the `repl` subcommand is unchanged
+- **Spawning the engine now puts only the debug flag and the capture seam (#307) into env**. After the cutover, #377 had made it set `ORBITSCORE_ENGINE` explicitly, but [#840](https://github.com/signalcompose/orbitscore/pull/840) (#502) removed that env var along with the SC path. The Rust daemon is the only backend; the boot sequence of the `repl` subcommand is unchanged
 
 ## The Big Picture
 
@@ -74,7 +74,7 @@ First, let's confirm how the engine boots. `startEngine()` spawns a Node process
     })
 ```
 
-The point is `stdio: ['pipe', 'pipe', 'pipe']`. Because stdin, stdout, and stderr are all pipe-connected, the extension can pump code in via `engineProcess.stdin.write(...)`. The omitted part sets the backend kind explicitly on `env.ORBITSCORE_ENGINE` (see [0-2](/en/orientation/architecture-overview)). On receiving the `repl` subcommand, the engine calls `startREPLMode()`.
+The point is `stdio: ['pipe', 'pipe', 'pipe']`. Because stdin, stdout, and stderr are all pipe-connected, the extension can pump code in via `engineProcess.stdin.write(...)`. The `env` assembled in the omitted part carries only the debug flag and the capture seam (#307); `ORBITSCORE_ENGINE`, which used to announce the backend kind, was removed in #502 (see [0-2](/en/orientation/architecture-overview)). On receiving the `repl` subcommand, the engine calls `startREPLMode()`.
 
 ```typescript
 // packages/engine/src/cli/repl-mode.ts:31-54

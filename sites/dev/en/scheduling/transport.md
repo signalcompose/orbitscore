@@ -16,7 +16,7 @@ When the user writes `global.start()`, what happens inside OrbitScore? And when 
 
 The 2026-05-05 version of this chapter read transport as the three-stage chain "`Global.start()` → `TransportControl.start()` → the SC `EventScheduler.start()`." In the code at 2026-09-01 (69dc968), the following has changed:
 
-- **The default audio backend is the Rust daemon** (cutover #108, 2026-07-03). The `globalScheduler` whose `start()` `Global` calls is of type `AudioEngineBackend`: by default a `RustEnginePlayer`, and a `SuperColliderPlayer` (holding an `EventScheduler` inside) only with `ORBITSCORE_ENGINE=sc`. The shape of the chain is the same; the class at the end was swapped
+- **The audio backend is the Rust daemon** (made the default by cutover #108, 2026-07-03). The `globalScheduler` whose `start()` `Global` calls is of type `AudioEngineBackend`, and its implementation is `RustEnginePlayer`. It used to become a `SuperColliderPlayer` (holding an `EventScheduler` inside) with `ORBITSCORE_ENGINE=sc`, but **that path was removed in #502 (2026-09-10)**. The shape of the chain is the same; the class at the end was swapped
 - **`TransportClock` became the sole owner of the time origin.** So that the audio scheduler and the MIDI scheduler share the same `Date.now()` origin, `Global.start()` stamps `transportClock.start()` **before** `transportControl.start()`
 - **`Global.start()` / `stop()` grew**: starting/stopping the MIDI manager, the session-log hooks (§L1, dormant in 2.0.0), re-asserting Link tempo (#283), and an automatic plugin-state snapshot on stop were added
 - **Launch quantize** (`global.quantize()` / `seq.quantize()`, #212 / PR #215): starting `seq.loop()` and swapping `play()` during LOOP wait, by default, until the next global bar boundary. `global.start()` itself does not wait
@@ -32,7 +32,7 @@ The responsibilities of transport in OrbitScore are distributed across **four la
 | VS Code extension | `extension.ts` | Accepting user actions (Cmd+Enter / stop button), sending DSL text to stdin |
 | engine / REPL | `InterpreterV2` | Interpreting and executing the DSL, managing the state of `Global` / `Sequence` objects |
 | Global | `TransportClock` + `TransportControl` + `MidiManager` | Fixing the time origin, stopping all sequences at once, starting/stopping the MIDI scheduler |
-| scheduler | `RustEnginePlayer` (default) / `EventScheduler` (SC) | Starting/stopping `setInterval(1ms)`, managing the event queue |
+| scheduler | `RustEnginePlayer` (the only implementation since #502) | Starting/stopping `setInterval(1ms)`, managing the event queue |
 
 These working in concert realize the operations of "produce sound / stop sound."
 
@@ -43,7 +43,7 @@ flowchart LR
   GLOBAL --> CLK["TransportClock\ntransport-clock.ts"]
   GLOBAL --> TC["TransportControl\ntransport-control.ts"]
   GLOBAL --> MIDI["MidiManager\n→ MidiScheduler"]
-  TC --> SCHED["Scheduler\nRustEnginePlayer (default)\nEventScheduler (sc)"]
+  TC --> SCHED["Scheduler\nRustEnginePlayer"]
   SCHED -->|"WebSocket PlayAt"| D["orbit-audio-daemon"]
 ```
 
@@ -280,7 +280,7 @@ export async function startREPLMode(options: REPLOptions = {}): Promise<void> {
   }
 ```
 
-In the 2026-05 version this was hard-coded as `audioEngine: new SuperColliderPlayer()`; now it is `createAudioEngine()` (which selects Rust / SC via env) or the `opts.audioEngine` injected for tests. `globals` and `sequences` are `Map<string, Global>` / `Map<string, Sequence>`; once an object is created, it accumulates in the map and is reused in subsequent evaluations. `mixers` (the #643 mixer DSL) and `engineT0` (the wall-clock origin of the session log) are new.
+In the 2026-05 version this was hard-coded as `audioEngine: new SuperColliderPlayer()`; now it is `createAudioEngine()` (which since #502 reads neither env nor arguments and always returns `RustEnginePlayer`) or the `opts.audioEngine` injected for tests. `globals` and `sequences` are `Map<string, Global>` / `Map<string, Sequence>`; once an object is created, it accumulates in the map and is reused in subsequent evaluations. `mixers` (the #643 mixer DSL) and `engineT0` (the wall-clock origin of the session log) are new.
 
 ## Selective Execution: Partial Evaluation and State Carryover
 
@@ -601,7 +601,7 @@ OrbitScore's transport runs on the simple input model of "feed DSL text into std
 - [MUTE / UNMUTE](/en/glossary#mute--unmute) — the unidirectional-toggle mute command. Managed by the `muteGroup` Set
 - [Unidirectional Toggle](/en/glossary#unidirectional-toggle-single-side-toggle) — the semantics that "completely replace the current group" of `RUN()` / `LOOP()` / `MUTE()`
 - [init](/en/glossary#init) — the syntax `var seq = init global.seq` that registers a Sequence with InterpreterV2
-- [scsynth](/en/glossary#scsynth) — the destination to which EventScheduler sends `/s_new` via OSC on the `ORBITSCORE_ENGINE=sc` opt-out path
+- [scsynth](/en/glossary#scsynth) — the destination to which EventScheduler sent `/s_new` via OSC on the `ORBITSCORE_ENGINE=sc` opt-out path (removed in #502)
 - [OSC (Open Sound Control)](/en/glossary#osc-open-sound-control) — the engine → scsynth protocol on the SC path. WebSocket + JSON on the Rust path
 - [subject-based block evaluation](/en/glossary#subject-based-block-evaluation) — the cursor-line subject-based block collection scheme used by selective execution
 
@@ -636,7 +636,7 @@ OrbitScore's transport runs on the simple input model of "feed DSL text into std
 - `packages/engine/src/core/global/quantize-manager.ts:56-73` — `nextQuantizedTime()`: the next quantize boundary
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1467-1471` — `RustEnginePlayer.start()`: recording `startTime = Date.now()`
 - `packages/engine/src/audio/rust-engine/rust-engine-player.ts:1486-1492` — `RustEnginePlayer.stop()`: stopping only the interval while preserving `startTime`
-- `packages/engine/src/audio/supercollider/event-scheduler.ts:355-361` — the SC `EventScheduler.start()` (opt-out path)
+- `packages/engine/src/audio/supercollider/event-scheduler.ts:355-361` — the SC `EventScheduler.start()` (opt-out path; **the whole file was deleted in #502** — this is its location as of commit `58f558f5`)
 - `packages/engine/src/interpreter/interpreter-v2.ts:48-64` — `InterpreterV2` constructor: `createAudioEngine()` and initialization of the `globals` / `sequences` Maps
 - `packages/engine/src/interpreter/interpreter-v2.ts:133-230` — `InterpreterV2.execute()`: the `skipTransportCommands` option
 - `packages/engine/src/cli/repl-mode.ts:30-53` — `startREPLMode()`: creating a single `globalInterpreter` instance and handing it to the REPL
