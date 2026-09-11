@@ -10,20 +10,22 @@
 # 🔴 The destination is dist/node_modules, not the package's own node_modules,
 # and that is load-bearing for two separate reasons:
 #
-#   1. `vsce package` excludes the package-root `node_modules` unconditionally.
-#      A `!node_modules/**` negation in .vscodeignore does NOT override it
-#      (measured). Nested ones like engine/node_modules and dist/node_modules
-#      are not special-cased and ship normally.
+#   1. Under `vsce package --no-dependencies`, vsce excludes the package-root
+#      `node_modules`; a `!node_modules/**` negation in .vscodeignore does NOT
+#      override it (measured). With the dependency walk enabled, directories
+#      returned by `npm list` are globbed individually and can ship from there.
+#      Nested ones like engine/node_modules and dist/node_modules ship normally.
 #   2. Node resolves `require('@modelcontextprotocol/sdk/...')` from
 #      dist/mcp-server.js by walking up from that file, so dist/node_modules is
 #      the FIRST directory it looks in — no path rewriting needed.
 #
-# Installing into the package root instead also breaks packaging outright: npm
-# would then have the dependency at two resolvable paths (hoisted root + local),
-# vsce's dependency walk emits both onto one .vsix entry, and the VSIX format
-# rejects it with "the following files have the same case insensitive path".
-# `vsce package --no-dependencies` turns that walk off; the files ship because
-# they are ordinary files under dist/.
+# The original cold-install failure happened first: `npm list --parseable`
+# returned hoisted repo-root paths, `path.relative(cwd, ...)` turned them into
+# `../../node_modules/...`, and .vscodeignore's `../../**` silently dropped them.
+# Installing duplicates into the package root was then tried and exposed a
+# second failure: root and local copies mapped to the same .vsix entry, which
+# VSIX rejects as a duplicate case-insensitive path. `--no-dependencies` turns
+# that walk off; the files ship because they are ordinary files under dist/.
 #
 
 set -e

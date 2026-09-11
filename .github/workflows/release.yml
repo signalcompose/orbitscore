@@ -31,6 +31,10 @@ on:
       - 'packages/vscode-extension/**'
       - 'packages/engine/**'
       - 'scripts/copy-daemon-bin.sh'
+      - 'scripts/install-bundle-deps.sh'
+      - 'scripts/install-engine-deps.sh'
+      - 'scripts/install-extension-deps.sh'
+      - 'scripts/check-vsix-bundled-deps.mjs'
 
 permissions:
   contents: write # required for gh release create
@@ -105,12 +109,12 @@ jobs:
 
       - name: Package .vsix
         working-directory: packages/vscode-extension
-        # 🔴 --no-dependencies is load-bearing (#873). vsce's dependency walk cannot
-        # be used under npm workspaces: `npm list` resolves each runtime dependency
-        # at both the hoisted repo root and the package, and vsce maps the two source
-        # paths onto one .vsix entry, which the VSIX format rejects. The extension's
-        # dependencies are placed in dist/node_modules by the build instead
-        # (scripts/install-extension-deps.sh) and ship as ordinary files.
+        # 🔴 --no-dependencies is load-bearing (#873). The original dependency walk
+        # returned hoisted root paths as ../../node_modules/..., which .vscodeignore
+        # silently excluded. Putting local duplicates beside the package then made
+        # vsce map root + local sources onto one .vsix entry, which VSIX rejects.
+        # With the walk disabled, install-extension-deps.sh puts dependencies in
+        # dist/node_modules and vsce ships them as ordinary files.
         run: npx vsce package --target "$VSIX_TARGET" --no-yarn --no-dependencies
 
       - name: Verify .vsix native runtime integrity (post-package gate)
@@ -171,33 +175,17 @@ jobs:
           fi
           echo "orbit-plugin-scan present and executable in packaged .vsix"
 
-          # 🔴 バンドルされたランタイム依存（#654 / #873）: 各 package.json の
-          # dependencies が .vsix の所定の node_modules に**全部**入っているか。
+          # 🔴 バンドルされたランタイム依存（WORK_LOG 6.119 / 6.422 / #873）。
+          # 宣言を数えるだけでなく、出荷物内の実際の require 起点から解決する。
           #
           # これが抜けても **ビルドは緑・パッケージングも成功・インストールも成功**し、
-          # 利用者の実行時に `Cannot find module` になって初めて分かる。実際に 2 回起きた:
-          # engine 側は `yaml` が npm の hoist で抜けて初回評価で落ち（#654）、拡張側は
+          # 利用者の実行時に `Cannot find module` になって初めて分かる。engine 側では
+          # WORK_LOG 6.119 と 6.422、拡張側では #873 で実際に起きた。拡張側は
           # `@modelcontextprotocol/sdk` が同じく抜けて **activate() がまったく走らなかった**
-          # （#873・cold install で発覚）。scripts/install-bundle-deps.sh が両方を入れるが、
-          # 出荷物そのものを見る検査をここにも置く。
+          # （cold install で発覚）。install-engine-deps.sh と
+          # install-extension-deps.sh が共有スクリプト経由でそれぞれを入れる。
           #
-          # 拡張側の置き場所が dist/node_modules なのは、vsce がパッケージ直下の
-          # node_modules を無条件に除外するため（同スクリプトのヘッダ参照）。
-          for SPEC in "engine:packages/engine/package.json:extension/engine/node_modules" \
-                      "extension:packages/vscode-extension/package.json:extension/dist/node_modules"; do
-            LABEL="${SPEC%%:*}"
-            REST="${SPEC#*:}"
-            PKG_JSON="${REST%%:*}"
-            VSIX_SUBDIR="${REST#*:}"
-            DEPS=$(node -e 'console.log(Object.keys(require(process.argv[1]).dependencies || {}).join(" "))' "./$PKG_JSON")
-            for DEP in $DEPS; do
-              if [ ! -d "$VSIX_CHECK/$VSIX_SUBDIR/$DEP" ]; then
-                echo "::error::$LABEL runtime dependency '$DEP' missing from packaged .vsix at ${VSIX_SUBDIR#extension/}/ — it would fail at runtime with \"Cannot find module\" on a cold install (#654 / #873)" >&2
-                exit 1
-              fi
-              echo "$LABEL dependency $DEP present in packaged .vsix"
-            done
-          done
+          node scripts/check-vsix-bundled-deps.mjs "$VSIX_CHECK"
 
           # 標準プラグイン（#628 / SC.10.8）: child は自分の実行ファイルの隣の
           # `std-plugins/<name>.clap` を見て解決する。同梱が落ちると DSL の

@@ -39,10 +39,10 @@ Error: Cannot find module '@modelcontextprotocol/sdk/server/mcp.js'
 
 #### engine 側では 2 回起きていた事故が、拡張側だけ無防備だった
 
-| Issue | 欠けた依存 | 症状 |
+| 出典 | 欠けた依存 | 症状 |
 |---|---|---|
-| #209 | `@julusian/midi` / `uuid` / `ws` | engine が MIDI 初期化で落ちる |
-| #654 | `yaml` | engine が最初の evaluate で落ちる |
+| WORK_LOG 6.119 (Jun 17, 2026) | `@julusian/midi` / `uuid` / `ws` | engine が MIDI 初期化で落ちる |
+| WORK_LOG 6.422 (Aug 30, 2026) | `yaml` | #654 の実機ゲートで発見。engine が最初の evaluate で落ちる |
 | **#873** | **`@modelcontextprotocol/sdk`** | **activate() がそもそも走らない** |
 
 対策の `scripts/install-engine-deps.sh` は **engine の依存しか見ていなかった**。ロジックを
@@ -119,6 +119,83 @@ Closes #873
 
 CI ゲートの**負の確認**も取れている: 修正前の `.vsix` を展開したディレクトリに同じループを当てると
 `::error::extension runtime dependency '@modelcontextprotocol/sdk' missing` で exit 1 になった。
+
+
+#### レビューラウンド 1（4 レビュアー + Fable 監査を並行）と、その fix
+
+**Critical 2 件はどちらも main（自分）の手が原因だった。**
+
+| # | 誰が | 指摘 |
+|---|---|---|
+| C1 | silent-failure-hunter | `/simplify` で 2 つのループを 1 本に畳んだ際に足した `|| {}` が、**`dependencies` を読めない時に「何も検査せず緑」**を作っていた。旧 engine 版には `|| {}` が無く `TypeError` → `set -e` で落ちていた。`package.json` の typo 1 つで、この PR が塞いだ欠陥クラスがゲート側に復活する |
+| C2 | comment-analyzer | 出典の `#209` / `#654` が**無関係の issue**（#209 = LinkAudio の feature、#654 = playhead の修正）。既存コメントの誤帰属を「3 回刺さった」という目立つ表へ増幅していた |
+
+**Fable が Sonnet 4 体と直交して見つけたもの:**
+
+- ゲートは**宣言された最上位の依存しか見ない**。sdk の推移依存 17 個が欠けても緑のまま MCP が落ちる
+- **出荷版が lockfile と乖離**（sdk 1.29.0→1.30.0 / zod 4.4.3→4.6.2 / yaml 2.8.3→2.9.0 / midi 3.6.1→3.8.1）。**テストしたのと別の版を凍結版として出す**ことになっていた
+- **ゲート自身を守るテストが無い**。同型の child バイナリのゲートには `bundled-child-binaries.spec.ts` があり、台帳照合とゲートの bash 実走の両方をやっている
+- `release.yml` の `pull_request.paths` に install スクリプトが無く、それだけを触る PR は smoke が走らない
+
+一方 **`vsce` の挙動についての実測クレームは、vsce 2.32.0 のソースで裏付けが取れた**（`collectAllFiles` が `.vscodeignore` 適用**前**に `node_modules/**` をハードコード除外し、そのパターンは入れ子にマッチしない）。ただし「無条件」は `--no-dependencies` 下でのみ真。
+
+#### 設計パス（指摘ごとのローカルパッチにしない）
+
+> **ゲートは「宣言を数える」のではなく「出荷物の中で実際に解決できるか」を検査する。
+> チェックリストが空になったら「依存が無い」ではなく「読み方を間違えた」として loud に落とす。
+> そしてゲート自身を守るテストを同じ PR に置く。**
+
+`scripts/check-vsix-bundled-deps.mjs` を新設（前例: `check-release-tag-version.mjs`）。`release.yml` の
+インライン 14 行はその呼び出し 1 行になり、**C1 の `|| {}` ごと消えた**。検査は
+`createRequire(<出荷物内の実 require 元>).resolve(<実 specifier>)` で、解決した各パッケージの
+`dependencies` を再帰的に辿る（コードは実行しない）。
+
+#### 受け入れ検証（main が sandbox 外で実走・自己申告は根拠にしない）
+
+🔴 **同一の壊れたツリーに対する新旧の比較**（`dist/node_modules/express` = sdk の推移依存を削除）:
+
+| ゲート | 結果 |
+|---|---|
+| 旧（宣言された最上位ディレクトリのみ） | `all declared dependencies present — PASS` / **exit 0** |
+| 新（出荷物内で実際に解決） | **exit 1** |
+
+**検出力が名目でなく実際に増えている。**
+
+壊し方を 3 通り試して全部 exit=1（原因を名指し）: 宣言依存の削除（`zod`）/ **推移依存の削除（`express`）** / engine 依存の削除（`yaml`）。
+
+C1 の変異: `dependencies` → `dependencyes`（#873 と同型の typo）で **exit=1**、戻して **exit=0**。
+
+lockfile 固定の実測 — 7 件すべて一致し、`uuid` は罠を回避（`packages/engine/node_modules/uuid` の
+**13.0.2**。`node_modules/mermaid/node_modules/uuid` の 11.1.1 ではない）:
+
+| 依存 | lockfile | 出荷 | 修正前 |
+|---|---|---|---|
+| `@modelcontextprotocol/sdk` | 1.29.0 | **1.29.0** | 1.30.0 |
+| `zod` | 4.4.3 | **4.4.3** | 4.6.2 |
+| `uuid` | 13.0.2 | **13.0.2** | — |
+| `yaml` | 2.8.3 | **2.8.3** | 2.9.0 |
+| `@julusian/midi` | 3.6.1 | **3.6.1** | 3.8.1 |
+
+cold install をやり直し（**Finder 相当の最小 PATH** で起動）: activate ✅ / `Cannot find module` 0 件 /
+MCP 4 秒 / `evaluate` ok / **engine ログの `ERROR:` 0 行** / capture 16.04 s・非ゼロ **42.7%**・
+**RMS 0.050784**。
+
+`npm test` **2,347 passed / 67 skipped / 0 failed**（+9）・lint 緑・`typecheck:e2e` 緑・
+引用 944 / 0 failed（`release.yml` の行が動いたので 4 件を再アンカーし、着地先が
+「実 Gain テスト」と「標準プラグイン同梱ゲート」であることを目視確認。散文の行参照も追従させた）。
+
+#### 見送り・切り出し
+
+- **wrapper 2 本を 1 本に畳む** — `install-engine-deps.sh` は外部が名前で呼ぶので残す必要があり、
+  `install-extension-deps.sh` を消すと「なぜ `dist/node_modules` なのか」という実測 2 件の知識を
+  置く場所が無くなる
+- **#877**: cold install を再実行できる gated spec にする（#138 を #656 へ吸収する計画から切り離す —
+  #656 はネイティブ `.app` 配布で別物・後の話）
+- **#878**: `extension.ts:2000` の `spawn('node', …)` が PATH 依存で `process.execPath` の
+  フォールバックが無い。実測では VS Code の shell 環境解決に救われて通ったが、**出荷の前提が
+  他社実装の詳細に乗っている**
+- **#875**: esbuild でバンドルして本機構ごと退役させる（宣言されていない import は今の機構では
+  原理的に見えない）
 
 ### chore(release): bump the extension to 3.0.0 and the DSL spec to 1.2 (#843) (Sep 11, 2026)
 

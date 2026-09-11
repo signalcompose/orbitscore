@@ -1323,7 +1323,7 @@ On the hardware side, `release.yml` (macos-14) builds the bundle, runs the rack 
 `.vsix`.
 
 ```yaml
-# .github/workflows/release.yml:94-100
+# .github/workflows/release.yml:98-104
           # 標準プラグイン（#628 / SC.10.8）。cdylib をビルドして .clap bundle に組む。
           bash rust/crates/orbit-std-gain/bundle-macos.sh --release
 
@@ -1334,7 +1334,7 @@ On the hardware side, `release.yml` (macos-14) builds the bundle, runs the rack 
 ```
 
 ```yaml
-# .github/workflows/release.yml:202-211
+# .github/workflows/release.yml:190-199
           # 標準プラグイン（#628 / SC.10.8）: child は自分の実行ファイルの隣の
           # `std-plugins/<name>.clap` を見て解決する。同梱が落ちると DSL の
           # `Gain(db: …)` が実行時に「解決できない」で落ちるだけで、
@@ -1651,7 +1651,7 @@ unit. WORK_LOG 6.396 records a `LOOP` left running with the sound going on.
 - `rust/crates/orbit-std-gain/tests/contract.rs:114-145,159-215` — contract tests pinning the param name and processing a real buffer
 - `rust/crates/orbit-std-gain/bundle-macos.sh:1-45` — assembling the `.clap` bundle
 - `scripts/copy-daemon-bin.sh:131-132` — bundling `std-plugins/Gain.clap`
-- `.github/workflows/release.yml:88-100,202-211` — the real Gain test and the bundling gate inside the `.vsix`
+- `.github/workflows/release.yml:98-104,190-199` — the real Gain test and the bundling gate inside the `.vsix`
 - `rust/crates/orbit-effect-rack-child/src/tests.rs:646-654,670-676` — the #780 fix (`line!()` replaced by a `static AtomicU64` counter) and the regression test on uniqueness itself
 - `CLAUDE.md:658-674` — the three lines of the pre-merge gate (when `--ignored` is used, when it is not, and why)
 - Issue [#780](https://github.com/signalcompose/orbitscore/issues/780) / PR [#789](https://github.com/signalcompose/orbitscore/pull/789) — the intermittent SIGBUS in the unconditional gate and the hole in the `--ignored` filter
